@@ -2,8 +2,8 @@ import { pool } from '../db/pool.js';
 import { decrypt } from '../security/encryption.js';
 import {
   CapitalSession,
+  acquireCapitalSession,
   fetchCapitalMarketQuote,
-  openCapitalSession,
 } from './capitalCom.js';
 
 export type SenderKind = 'capital_com' | 'fx_reference' | 'catalog_pulse';
@@ -60,7 +60,6 @@ type SessionCache = {
   expiresAt: number;
 };
 
-const sessionCache = new Map<number, SessionCache>();
 const senderHealth = new Map<
   string,
   {
@@ -125,19 +124,6 @@ async function getCapitalSession(connectionId: number): Promise<
   | { ok: true; session: CapitalSession }
   | { ok: false; detail: string }
 > {
-  const cached = sessionCache.get(connectionId);
-  if (cached && cached.expiresAt > Date.now()) {
-    return { ok: true, session: cached.session };
-  }
-  if (cached) {
-    try {
-      await cached.session.close();
-    } catch {
-      /* ignore */
-    }
-    sessionCache.delete(connectionId);
-  }
-
   const { rows } = await pool.query(
     `SELECT id, broker_name, environment, identifier, enabled
      FROM broker_connections WHERE id = $1`,
@@ -163,18 +149,14 @@ async function getCapitalSession(connectionId: number): Promise<
     return { ok: false, detail: 'Missing Capital.com credentials' };
   }
 
-  const opened = await openCapitalSession({
+  // Shared pool with Robot Desk — one login per Capital identity
+  const opened = await acquireCapitalSession({
     environment: conn.environment,
     apiKey,
     identifier,
     password,
   });
   if (!opened.ok) return { ok: false, detail: opened.result.detail };
-
-  sessionCache.set(connectionId, {
-    session: opened.session,
-    expiresAt: Date.now() + 50_000,
-  });
   return { ok: true, session: opened.session };
 }
 
@@ -506,10 +488,6 @@ async function readCapitalSender(
     const quote = await fetchCapitalMarketQuote(opened.session, epic);
     const latency_ms = Date.now() - t0;
     if (!quote.raw_ok) {
-      // Drop bad session from cache so next cycle re-auths
-      if (quote.detail?.includes('HTTP 401') || quote.detail?.includes('HTTP 403')) {
-        sessionCache.delete(sender.connection_id);
-      }
       touchHealth(sender.sender_id, {
         status: 'ERROR',
         ok: false,
@@ -554,7 +532,6 @@ async function readCapitalSender(
   } catch (err) {
     const latency_ms = Date.now() - t0;
     const detail = err instanceof Error ? err.message : String(err);
-    sessionCache.delete(sender.connection_id);
     touchHealth(sender.sender_id, { status: 'ERROR', ok: false, last_error: detail, latency_ms });
     return {
       ...base,

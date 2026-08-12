@@ -324,6 +324,10 @@ type PooledCapital = {
 };
 
 const capitalSessionPool = new Map<string, PooledCapital>();
+let loginChain: Promise<void> = Promise.resolve();
+let lastLoginAt = 0;
+const MIN_LOGIN_GAP_MS = 4000;
+const COOLDOWN_429_MS = 120_000;
 
 function capitalPoolKey(input: {
   environment: string;
@@ -333,8 +337,26 @@ function capitalPoolKey(input: {
   return `${(input.environment || 'demo').toLowerCase()}|${input.apiKey.trim()}|${input.identifier.trim()}`;
 }
 
+async function withLoginThrottle<T>(fn: () => Promise<T>): Promise<T> {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const prev = loginChain;
+  loginChain = prev.then(() => gate);
+  await prev;
+  try {
+    const wait = Math.max(0, MIN_LOGIN_GAP_MS - (Date.now() - lastLoginAt));
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    lastLoginAt = Date.now();
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
 /**
- * Reuse Capital.com CST/security token across robot ticks.
+ * Reuse Capital.com CST/security token across robot / orbit / trading.
  * Avoids login spam → HTTP 429 too-many-requests (which freezes the whole desk).
  */
 export async function acquireCapitalSession(input: {
@@ -355,7 +377,7 @@ export async function acquireCapitalSession(input: {
         ok: false,
         status: 429,
         errorCode: 'error.too-many.requests',
-        detail: `Capital.com rate-limit cooldown ${waitSec}s — pausing new logins (reuse sessions; do not spam Test/Robot).`,
+        detail: `Capital.com rate-limit cooldown ${waitSec}s — client robot waiting (no login spam).`,
       },
     };
   }
@@ -373,7 +395,7 @@ export async function acquireCapitalSession(input: {
   }
   capitalSessionPool.delete(key);
 
-  const opened = await openCapitalSession(input);
+  const opened = await withLoginThrottle(() => openCapitalSession(input));
   if (!opened.ok) {
     const tooMany =
       opened.result.status === 429 ||
@@ -384,7 +406,7 @@ export async function acquireCapitalSession(input: {
         session: null,
         raw: null,
         expiresAt: 0,
-        cooldownUntil: now + 90_000,
+        cooldownUntil: Date.now() + COOLDOWN_429_MS,
       });
     }
     return opened;
@@ -401,10 +423,23 @@ export async function acquireCapitalSession(input: {
   capitalSessionPool.set(key, {
     session: pooled,
     raw,
-    expiresAt: now + 8 * 60_000,
+    expiresAt: Date.now() + 8 * 60_000,
     cooldownUntil: 0,
   });
   return { ok: true, session: pooled };
+}
+
+/** Drop a pooled session (e.g. after HTTP 401) so next acquire re-logins. */
+export function invalidateCapitalSession(input: {
+  environment: string;
+  apiKey: string;
+  identifier: string;
+}): void {
+  const key = capitalPoolKey(input);
+  const cached = capitalSessionPool.get(key);
+  if (!cached) return;
+  void cached.raw?.close().catch(() => undefined);
+  capitalSessionPool.delete(key);
 }
 
 export async function testCapitalComSession(input: {

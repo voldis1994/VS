@@ -3,7 +3,7 @@ import { pool } from '../db/pool.js';
 import { decrypt } from '../security/encryption.js';
 import { logAudit } from '../services/audit.js';
 import { getInstrumentById } from '../config/instruments.js';
-import { fetchAllCapitalMarkets, openCapitalSession, createCapitalPosition } from '../services/capitalCom.js';
+import { fetchAllCapitalMarkets, acquireCapitalSession, createCapitalPosition } from '../services/capitalCom.js';
 
 export async function ensureBrokerAccount(connectionId: number, displayName: string): Promise<number> {
   const existing = await pool.query(
@@ -229,7 +229,7 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
         });
       }
 
-      const opened = await openCapitalSession({
+      const opened = await acquireCapitalSession({
         environment: conn.environment,
         apiKey,
         identifier,
@@ -239,12 +239,7 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
         return reply.code(400).send({ error: opened.result.detail, message: opened.result.detail });
       }
 
-      let markets;
-      try {
-        markets = await fetchAllCapitalMarkets(opened.session);
-      } finally {
-        await opened.session.close();
-      }
+      const markets = await fetchAllCapitalMarkets(opened.session);
 
       if (markets.length === 0) {
         return reply.code(502).send({
@@ -529,7 +524,7 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
         });
       }
 
-      const opened = await openCapitalSession({
+      const opened = await acquireCapitalSession({
         environment: conn.environment,
         apiKey,
         identifier,
@@ -539,18 +534,13 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
         return reply.code(400).send({ error: opened.result.detail, message: opened.result.detail });
       }
 
-      let result;
-      try {
-        result = await createCapitalPosition(opened.session, {
-          epic,
-          direction: direction as 'BUY' | 'SELL',
-          size,
-          stopLevel: body.stop_level,
-          profitLevel: body.profit_level,
-        });
-      } finally {
-        await opened.session.close();
-      }
+      const result = await createCapitalPosition(opened.session, {
+        epic,
+        direction: direction as 'BUY' | 'SELL',
+        size,
+        stopLevel: body.stop_level,
+        profitLevel: body.profit_level,
+      });
 
       if (!result.ok) {
         return reply.code(400).send({
