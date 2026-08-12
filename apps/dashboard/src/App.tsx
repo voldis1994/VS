@@ -1,4 +1,4 @@
-import { Routes, Route, NavLink } from 'react-router-dom';
+import { Routes, Route } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { OverviewPage } from './pages/OverviewPage';
 import { MarketReaderPage } from './pages/MarketReaderPage';
@@ -36,5 +36,3 @@ export default function App() {
     </Layout>
   );
 }
-
-export { NavLink };

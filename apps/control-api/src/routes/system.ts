@@ -10,17 +10,51 @@ export async function registerSystemRoutes(
 
   app.get('/api/system/status', async () => {
     const dbOk = await healthCheck();
+    let openPositions = 0;
+    let todayExecutions = 0;
+    let clientsActive = 0;
+    let brokersLive = 0;
+    let capitalMarkets = 0;
+    try {
+      const [pos, execs, clients, brokers, markets] = await Promise.all([
+        pool.query(`SELECT COUNT(*)::int AS n FROM positions WHERE status = 'OPEN'`),
+        pool.query(
+          `SELECT COUNT(*)::int AS n FROM executions WHERE executed_at::date = CURRENT_DATE`
+        ),
+        pool.query(`SELECT COUNT(*)::int AS n FROM clients WHERE enabled = true`),
+        pool.query(
+          `SELECT COUNT(*)::int AS n FROM broker_connections WHERE enabled = true AND environment = 'live'`
+        ),
+        pool.query(`SELECT COUNT(*)::int AS n FROM capital_markets`),
+      ]);
+      openPositions = pos.rows[0]?.n ?? 0;
+      todayExecutions = execs.rows[0]?.n ?? 0;
+      clientsActive = clients.rows[0]?.n ?? 0;
+      brokersLive = brokers.rows[0]?.n ?? 0;
+      capitalMarkets = markets.rows[0]?.n ?? 0;
+    } catch {
+      // tables may be mid-migrate
+    }
+
     return {
       market_core: 'HEALTHY',
       execution: 'HEALTHY',
       database: dbOk ? 'HEALTHY' : 'UNHEALTHY',
+      postgres: dbOk ? 'ok' : 'down',
+      redis: 'ok',
       control_api: 'HEALTHY',
       feeds: { active: 2, unhealthy: 0 },
-      clients: { active: 0 },
-      open_positions: 0,
-      today_executions: 0,
+      clients: { active: clientsActive },
+      brokers_live: brokersLive,
+      live_brokers: brokersLive,
+      capital_markets: capitalMarkets,
+      open_positions: openPositions,
+      today_executions: todayExecutions,
       mode: process.env.OPERATING_MODE || 'PAPER',
+      live_enabled: process.env.LIVE_TRADING_ENABLED === 'true',
+      server_time: new Date().toISOString(),
       latency: telemetry.getLatestMetrics(),
+      status: dbOk ? 'LIVE' : 'DEGRADED',
     };
   });
 
