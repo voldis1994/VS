@@ -56,7 +56,7 @@ The script:
 1. Checks Git, CMake, Node, npm, Docker, PowerShell, and MSVC (`cl`).
 2. Sets or bootstraps `VCPKG_ROOT` (`%USERPROFILE%\vcpkg` if unset).
 3. Copies `.env.example` → `.env` when `.env` is absent (never overwrites).
-4. Runs `vcpkg install --triplet x64-windows`.
+4. Sets `vcpkg.json` `builtin-baseline` to the local vcpkg HEAD commit (must be a 40-char SHA, not a date), then runs `vcpkg install --triplet x64-windows`.
 5. Configures and builds **windows-debug** and **windows-release** CMake presets.
 6. Runs `npm install` in `apps\control-api` and `apps\dashboard`.
 7. Starts `docker compose up -d postgres redis`.
