@@ -21,17 +21,30 @@ export async function registerRobotReaderRoutes(app: FastifyInstance): Promise<v
   app.get('/api/robot-reader/epics', async (request) => {
     const q = request.query as { limit?: string; q?: string };
     const limit = q.limit ? parseInt(q.limit, 10) : 40;
-    let rows = await suggestOrbitEpics(Number.isFinite(limit) ? limit : 40);
-    const needle = (q.q || '').trim().toLowerCase();
-    if (needle) {
-      rows = rows.filter(
-        (r) =>
-          r.display_name.toLowerCase().includes(needle) ||
-          r.epic.toLowerCase().includes(needle) ||
-          r.category.toLowerCase().includes(needle),
-      );
-    }
-    return rows;
+    const n = Number.isFinite(limit) ? Math.min(Math.max(limit, 1), 80) : 40;
+    const needle = (q.q || '').trim();
+    if (!needle) return suggestOrbitEpics(n);
+
+    const { pool } = await import('../db/pool.js');
+    const { rows } = await pool.query(
+      `SELECT epic, display_name, category, broker_connection_id as connection_id
+       FROM (
+         SELECT DISTINCT ON (epic)
+                epic, display_name, category, broker_connection_id, updated_at
+         FROM capital_markets
+         WHERE epic ILIKE $1 OR symbol ILIKE $1 OR display_name ILIKE $1
+         ORDER BY epic, updated_at DESC
+       ) t
+       ORDER BY display_name ASC
+       LIMIT $2`,
+      [`%${needle}%`, n]
+    );
+    return rows.map((r) => ({
+      epic: r.epic as string,
+      display_name: r.display_name as string,
+      category: r.category as string,
+      connection_id: r.connection_id as number,
+    }));
   });
 
   app.get('/api/robot-reader/scan', async (request, reply) => {
