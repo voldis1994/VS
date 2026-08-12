@@ -462,6 +462,106 @@ export async function resolveEpicViaSearch(
   return best && best.score >= 60 ? best.epic : String(markets[0].epic || '') || null;
 }
 
+export type CapitalOpenPosition = {
+  deal_id: string;
+  deal_reference: string | null;
+  epic: string;
+  direction: 'BUY' | 'SELL';
+  size: number;
+  open_level: number | null;
+  upl: number | null;
+};
+
+/** All open Capital.com positions (REST). */
+export async function listCapitalOpenPositions(
+  session: CapitalSession
+): Promise<{ ok: boolean; positions: CapitalOpenPosition[]; detail: string }> {
+  const res = await session.get('/api/v1/positions');
+  if (!res.ok) {
+    return {
+      ok: false,
+      positions: [],
+      detail: `Capital.com positions HTTP ${res.status}: ${
+        res.json?.errorCode || res.json?.message || res.text.slice(0, 160)
+      }`,
+    };
+  }
+  const raw = Array.isArray(res.json?.positions) ? res.json.positions : [];
+  const positions: CapitalOpenPosition[] = [];
+  for (const row of raw) {
+    const pos = (row?.position || row || {}) as Record<string, unknown>;
+    const market = (row?.market || {}) as Record<string, unknown>;
+    const dealId = String(pos.dealId || pos.deal_id || '').trim();
+    const epic = String(market.epic || pos.epic || '').trim();
+    if (!dealId || !epic) continue;
+    const dirRaw = String(pos.direction || '').toUpperCase();
+    const direction: 'BUY' | 'SELL' = dirRaw === 'SELL' ? 'SELL' : 'BUY';
+    positions.push({
+      deal_id: dealId,
+      deal_reference: strOrNull(pos.dealReference),
+      epic,
+      direction,
+      size: numOrNull(pos.size) ?? 0,
+      open_level: numOrNull(pos.level ?? pos.openLevel ?? pos.averagePrice),
+      upl: numOrNull(pos.upl ?? pos.unrealizedProfit ?? pos.profit),
+    });
+  }
+  return { ok: true, positions, detail: `${positions.length} open` };
+}
+
+/** Resolve dealReference → dealId after open. */
+export async function confirmCapitalDeal(
+  session: CapitalSession,
+  dealReference: string
+): Promise<{ ok: boolean; deal_id?: string; detail: string }> {
+  const ref = dealReference.trim();
+  if (!ref) return { ok: false, detail: 'Empty dealReference' };
+  const res = await session.get(`/api/v1/confirms/${encodeURIComponent(ref)}`);
+  if (!res.ok) {
+    return {
+      ok: false,
+      detail: `Confirm HTTP ${res.status}: ${res.json?.errorCode || res.json?.message || res.text.slice(0, 120)}`,
+    };
+  }
+  const dealId = String(
+    res.json?.dealId || res.json?.affectedDeals?.[0]?.dealId || ''
+  ).trim();
+  if (!dealId) {
+    return { ok: false, detail: `Confirm OK but no dealId for ${ref}` };
+  }
+  return { ok: true, deal_id: dealId, detail: `Confirmed dealId=${dealId}` };
+}
+
+/** Close one open position by dealId. */
+export async function closeCapitalPosition(
+  session: CapitalSession,
+  dealId: string
+): Promise<{ ok: boolean; deal_reference?: string; detail: string; status: number; json: any }> {
+  const id = dealId.trim();
+  if (!id) {
+    return { ok: false, status: 0, json: {}, detail: 'dealId required to close' };
+  }
+  const res = await session.del(`/api/v1/positions/${encodeURIComponent(id)}`);
+  if (!res.ok) {
+    return {
+      ok: false,
+      status: res.status,
+      json: res.json,
+      detail: `Capital.com close ${id} failed HTTP ${res.status}: ${
+        res.json?.errorCode || res.json?.message || res.text.slice(0, 240)
+      }`,
+    };
+  }
+  const dealRef = String(res.json?.dealReference || res.json?.dealId || '');
+  return {
+    ok: true,
+    status: res.status,
+    json: res.json,
+    deal_reference: dealRef || undefined,
+    detail: dealRef ? `Closed dealId=${id} dealRef=${dealRef}` : `Closed dealId=${id}`,
+  };
+}
+
 export async function createCapitalPosition(
   session: CapitalSession,
   input: {

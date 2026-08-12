@@ -1,14 +1,19 @@
 import { pool } from '../db/pool.js';
 import { decrypt } from '../security/encryption.js';
 import {
+  closeCapitalPosition,
+  confirmCapitalDeal,
   createCapitalPosition,
   fetchCapitalMarketQuote,
+  listCapitalOpenPositions,
   openCapitalSession,
+  type CapitalOpenPosition,
+  type CapitalSession,
 } from './capitalCom.js';
 
 export type RobotTick = {
   at: string;
-  phase: 'READ' | 'DECIDE' | 'ORDER' | 'WAIT' | 'ERROR' | 'INFO';
+  phase: 'READ' | 'DECIDE' | 'ORDER' | 'WAIT' | 'ERROR' | 'INFO' | 'MANAGE' | 'EXIT';
   bid: number | null;
   ask: number | null;
   mid: number | null;
@@ -31,14 +36,28 @@ export type RobotSession = {
   last_quote_at: string | null;
   last_mid: number | null;
   last_deal_reference: string | null;
+  deal_id: string | null;
+  entry_price: number | null;
+  entry_at: string | null;
+  mfe: number;
+  mae: number;
+  peak_retention: number | null;
+  unrealized: number | null;
+  mode: 'FLAT' | 'MANAGE' | 'ENTRY';
   orders_placed: number;
+  exits_done: number;
   reads_ok: number;
   reads_fail: number;
   open_side: 'BUY' | 'SELL' | null;
   error: string | null;
 };
 
-type Internal = RobotSession & { timer: ReturnType<typeof setInterval> | null; connection_id: number };
+type Internal = RobotSession & {
+  timer: ReturnType<typeof setInterval> | null;
+  connection_id: number;
+  closed_at_ms: number;
+  peak_favorable: number;
+};
 
 const sessions = new Map<string, Internal>();
 const MAX_TICKS = 200;
@@ -77,8 +96,43 @@ function pushTick(s: Internal, tick: Omit<RobotTick, 'at'>) {
 }
 
 function publicSession(s: Internal): RobotSession {
-  const { timer: _t, connection_id: _c, ...rest } = s;
+  const {
+    timer: _t,
+    connection_id: _c,
+    closed_at_ms: _closed,
+    peak_favorable: _peak,
+    ...rest
+  } = s;
   return rest;
+}
+
+function clearTradeState(s: Internal) {
+  s.open_side = null;
+  s.deal_id = null;
+  s.entry_price = null;
+  s.entry_at = null;
+  s.mfe = 0;
+  s.mae = 0;
+  s.peak_favorable = 0;
+  s.peak_retention = null;
+  s.unrealized = null;
+  s.mode = 'FLAT';
+}
+
+function favorableMove(side: 'BUY' | 'SELL', entry: number, mid: number): number {
+  return side === 'BUY' ? mid - entry : entry - mid;
+}
+
+function updateExcursion(s: Internal, mid: number) {
+  if (!s.open_side || s.entry_price == null) return;
+  const fav = favorableMove(s.open_side, s.entry_price, mid);
+  s.unrealized = fav;
+  if (fav > s.mfe) {
+    s.mfe = fav;
+    s.peak_favorable = mid;
+  }
+  if (fav < s.mae) s.mae = fav;
+  s.peak_retention = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
 }
 
 /** Exact id only — never returns a different robot */
@@ -104,7 +158,6 @@ export function resolveRobotSession(opts: {
     const key = robotIdFor(accountId, epic);
     const s = sessions.get(key);
     if (s) return publicSession(s);
-    // Also match if epic was normalized differently but same account+epic stored
     for (const sess of sessions.values()) {
       if (sess.account_id === accountId && sess.epic === epic) return publicSession(sess);
     }
@@ -136,6 +189,274 @@ export async function stopRobotSession(id: string): Promise<RobotSession | null>
     detail: 'ROBOT STOPPED by operator',
   });
   return publicSession(s);
+}
+
+function matchOpenOnEpic(
+  positions: CapitalOpenPosition[],
+  epic: string
+): CapitalOpenPosition | null {
+  const want = epic.trim().toLowerCase();
+  return (
+    positions.find((p) => p.epic.trim().toLowerCase() === want) ||
+    positions.find((p) => p.deal_id === epic) ||
+    null
+  );
+}
+
+async function resolveDealId(
+  session: CapitalSession,
+  s: Internal,
+  dealRef: string | undefined
+): Promise<string | null> {
+  if (s.deal_id) return s.deal_id;
+  if (dealRef) {
+    const conf = await confirmCapitalDeal(session, dealRef);
+    if (conf.ok && conf.deal_id) {
+      s.deal_id = conf.deal_id;
+      pushTick(s, {
+        phase: 'INFO',
+        bid: null,
+        ask: null,
+        mid: s.last_mid,
+        detail: conf.detail,
+      });
+      return conf.deal_id;
+    }
+  }
+  const listed = await listCapitalOpenPositions(session);
+  if (listed.ok) {
+    const hit = matchOpenOnEpic(listed.positions, s.epic);
+    if (hit) {
+      s.deal_id = hit.deal_id;
+      return hit.deal_id;
+    }
+  }
+  return null;
+}
+
+/**
+ * Best-outcome exit (aligned with exit-policy / PositionManager spirit):
+ * - PeakProtection: gave back >50% of MFE
+ * - Target: lock solid favorable move
+ * - HardInvalidation: adverse beyond stop
+ * - TimeDecay: long hold with tiny/flat edge → realize best available
+ */
+function decideBestOutcomeExit(s: Internal, mid: number): { exit: boolean; reason: string } {
+  if (!s.open_side || s.entry_price == null) return { exit: false, reason: '' };
+
+  const entry = s.entry_price;
+  const fav = favorableMove(s.open_side, entry, mid);
+  const absEntry = Math.max(Math.abs(entry), 1e-9);
+  const tp = Math.max(absEntry * 0.0008, 0.05); // ~0.08% or 5c floor
+  const sl = Math.max(absEntry * 0.0012, 0.08); // hard stop
+  const mfeFloor = Math.max(absEntry * 0.00025, 0.02);
+
+  if (fav <= -sl) {
+    return { exit: true, reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}` };
+  }
+
+  if (s.mfe >= mfeFloor && s.peak_retention != null && s.peak_retention < 0.5) {
+    return {
+      exit: true,
+      reason: `PeakProtection · retention ${(s.peak_retention * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} → lock best`,
+    };
+  }
+
+  if (fav >= tp) {
+    return {
+      exit: true,
+      reason: `Target / best outcome · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)}`,
+    };
+  }
+
+  // After meaningful MFE, if giving back and still green → take best available
+  if (s.mfe >= mfeFloor && fav > 0 && s.peak_retention != null && s.peak_retention < 0.7) {
+    return {
+      exit: true,
+      reason: `BestOutcome harvest · UPL ${fav.toFixed(5)} after MFE ${s.mfe.toFixed(5)} (ret ${(s.peak_retention * 100).toFixed(0)}%)`,
+    };
+  }
+
+  const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
+  if (heldMs > 180_000 && fav >= 0 && s.mfe >= mfeFloor * 0.5) {
+    return {
+      exit: true,
+      reason: `TimeDecay · held ${Math.round(heldMs / 1000)}s · realize non-negative best UPL ${fav.toFixed(5)}`,
+    };
+  }
+
+  return { exit: false, reason: '' };
+}
+
+async function exitTrade(
+  session: CapitalSession,
+  s: Internal,
+  quote: { bid: number | null; ask: number | null; mid: number | null },
+  reason: string
+) {
+  const dealId = await resolveDealId(session, s, s.last_deal_reference || undefined);
+  if (!dealId) {
+    pushTick(s, {
+      phase: 'ERROR',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: 'EXIT blocked — no dealId (cannot close). Will keep MANAGE, no new entry.',
+    });
+    s.mode = 'MANAGE';
+    return;
+  }
+
+  pushTick(s, {
+    phase: 'DECIDE',
+    bid: quote.bid,
+    ask: quote.ask,
+    mid: quote.mid,
+    detail: `EXIT NOW · ${reason}`,
+  });
+
+  const result = await closeCapitalPosition(session, dealId);
+  if (!result.ok) {
+    s.error = result.detail;
+    pushTick(s, {
+      phase: 'ERROR',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `CLOSE FAIL: ${result.detail}`,
+    });
+    return;
+  }
+
+  s.exits_done += 1;
+  s.last_deal_reference = result.deal_reference || s.last_deal_reference;
+  s.closed_at_ms = Date.now();
+  s.error = null;
+  pushTick(s, {
+    phase: 'EXIT',
+    bid: quote.bid,
+    ask: quote.ask,
+    mid: quote.mid,
+    detail: `CLOSED ${s.open_side} ${s.display_name} · ${result.detail} · ${reason}`,
+  });
+
+  try {
+    await pool.query(
+      `UPDATE positions SET status = 'CLOSED', closed_at = NOW()
+       WHERE broker_account_id = $1 AND status = 'OPEN'
+         AND instrument_id IN (
+           SELECT id FROM capital_markets WHERE broker_connection_id = $2 AND epic = $3
+         )`,
+      [s.account_id, s.connection_id, s.epic]
+    );
+  } catch {
+    /* best effort */
+  }
+
+  clearTradeState(s);
+}
+
+async function enterTrade(
+  session: CapitalSession,
+  s: Internal,
+  direction: 'BUY' | 'SELL',
+  quote: { bid: number | null; ask: number | null; mid: number | null },
+  reason: string
+) {
+  // HARD RULE: never entry while any trade open on this epic
+  const listed = await listCapitalOpenPositions(session);
+  if (listed.ok) {
+    const existing = matchOpenOnEpic(listed.positions, s.epic);
+    if (existing) {
+      s.open_side = existing.direction;
+      s.deal_id = existing.deal_id;
+      s.entry_price = existing.open_level ?? quote.mid;
+      s.entry_at = s.entry_at || new Date().toISOString();
+      s.mode = 'MANAGE';
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `ONE TRADE ONLY — broker already open ${existing.direction} dealId=${existing.deal_id} · no new entry`,
+      });
+      return;
+    }
+  }
+
+  pushTick(s, {
+    phase: 'DECIDE',
+    bid: quote.bid,
+    ask: quote.ask,
+    mid: quote.mid,
+    detail: `ENTRY ${direction} · ${reason} · lot=${s.lot_size}`,
+  });
+
+  const result = await createCapitalPosition(session, {
+    epic: s.epic,
+    direction,
+    size: s.lot_size,
+  });
+
+  if (!result.ok) {
+    s.error = result.detail;
+    pushTick(s, {
+      phase: 'ERROR',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `ORDER FAIL ${direction}: ${result.detail}`,
+    });
+    return;
+  }
+
+  s.orders_placed += 1;
+  s.open_side = direction;
+  s.mode = 'MANAGE';
+  s.last_deal_reference = result.deal_reference || null;
+  s.entry_price = quote.mid;
+  s.entry_at = new Date().toISOString();
+  s.mfe = 0;
+  s.mae = 0;
+  s.peak_favorable = quote.mid ?? 0;
+  s.peak_retention = null;
+  s.unrealized = 0;
+  s.error = null;
+
+  const dealId = await resolveDealId(session, s, result.deal_reference);
+  if (dealId) s.deal_id = dealId;
+
+  pushTick(s, {
+    phase: 'ORDER',
+    bid: quote.bid,
+    ask: quote.ask,
+    mid: quote.mid,
+    detail: `ORDER ENTRY ${direction} ${s.display_name} lot=${s.lot_size} · ${result.detail}${
+      dealId ? ` · dealId=${dealId}` : ''
+    }`,
+  });
+
+  try {
+    const m = await pool.query(
+      `SELECT id FROM capital_markets
+       WHERE broker_connection_id = $1 AND epic = $2 LIMIT 1`,
+      [s.connection_id, s.epic]
+    );
+    await pool.query(
+      `INSERT INTO positions
+       (broker_account_id, instrument_id, direction, entry_price, quantity, status)
+       VALUES ($1, $2, $3, $4, $5, 'OPEN')`,
+      [
+        s.account_id,
+        m.rows[0]?.id || 0,
+        direction === 'BUY' ? 'LONG' : 'SHORT',
+        quote.mid || 0,
+        s.lot_size,
+      ]
+    );
+  } catch {
+    /* Capital order already live */
+  }
 }
 
 async function robotCycle(s: Internal) {
@@ -212,12 +533,52 @@ async function robotCycle(s: Internal) {
       s.epic = quote.epic;
     }
 
+    // Sync truth from broker — source of ONE TRADE ONLY
+    const listed = await listCapitalOpenPositions(opened.session);
+    let brokerOpen: CapitalOpenPosition | null = null;
+    if (listed.ok) {
+      brokerOpen = matchOpenOnEpic(listed.positions, s.epic);
+      if (brokerOpen) {
+        s.open_side = brokerOpen.direction;
+        s.deal_id = brokerOpen.deal_id;
+        if (s.entry_price == null) s.entry_price = brokerOpen.open_level ?? quote.mid;
+        if (!s.entry_at) s.entry_at = new Date().toISOString();
+        s.mode = 'MANAGE';
+        if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
+      } else if (s.open_side) {
+        // Local thought open but broker flat → treat as closed
+        pushTick(s, {
+          phase: 'INFO',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
+        });
+        s.closed_at_ms = Date.now();
+        clearTradeState(s);
+      }
+    } else {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `Position sync warn: ${listed.detail} · holding ONE TRADE rule (no new entry if unsure)`,
+      });
+    }
+
+    if (quote.mid != null && s.open_side && s.entry_price != null) {
+      updateExcursion(s, quote.mid);
+    }
+
     pushTick(s, {
       phase: 'READ',
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `READ ${s.display_name} · bid=${quote.bid} ask=${quote.ask} mid=${quote.mid} · lot=${s.lot_size}`,
+      detail: `READ ${s.display_name} · bid=${quote.bid} ask=${quote.ask} mid=${quote.mid} · mode=${s.mode} · side=${
+        s.open_side || 'FLAT'
+      } · UPL=${s.unrealized != null ? s.unrealized.toFixed(5) : '—'} · MFE=${s.mfe.toFixed(5)}`,
     });
 
     if (!s.trading_enabled) {
@@ -231,109 +592,83 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // Simple visible strategy: first good quote opens BUY once; later flips on mid move
+    // ——— MANAGE open trade: never send entry ———
+    if (s.open_side || brokerOpen) {
+      s.mode = 'MANAGE';
+      if (quote.mid == null) return;
+
+      const decision = decideBestOutcomeExit(s, quote.mid);
+      if (decision.exit) {
+        await exitTrade(opened.session, s, quote, decision.reason);
+        return;
+      }
+
+      pushTick(s, {
+        phase: 'MANAGE',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `ONE TRADE · manage ${s.open_side} · UPL ${
+          s.unrealized != null ? s.unrealized.toFixed(5) : '—'
+        } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
+          s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
+        } · no new orders`,
+      });
+      return;
+    }
+
+    // ——— FLAT: entry only after close ———
+    s.mode = 'ENTRY';
+    const sinceClose = Date.now() - (s.closed_at_ms || 0);
+    if (s.closed_at_ms > 0 && sinceClose < 20_000) {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `FLAT cooldown ${Math.ceil((20_000 - sinceClose) / 1000)}s after close · then next entry`,
+      });
+      return;
+    }
+
+    if (quote.mid == null) return;
+
     let direction: 'BUY' | 'SELL' | null = null;
     let reason = '';
 
-    if (!s.open_side && quote.mid != null) {
+    if (s.orders_placed === 0 && s.exits_done === 0) {
       direction = 'BUY';
-      reason = 'First live quote → open BUY with selected lot';
-    } else if (s.open_side && prevMid != null && quote.mid != null) {
+      reason = 'First flat cycle → ONE TRADE entry BUY';
+    } else if (prevMid != null) {
       const move = quote.mid - prevMid;
-      const thr = Math.max(Math.abs(prevMid) * 0.00015, 0.01);
-      if (s.open_side === 'BUY' && move < -thr) {
-        direction = 'SELL';
-        reason = `Mid dropped ${move.toFixed(5)} → reverse SELL`;
-      } else if (s.open_side === 'SELL' && move > thr) {
+      const thr = Math.max(Math.abs(prevMid) * 0.0002, 0.015);
+      if (move <= -thr) {
         direction = 'BUY';
-        reason = `Mid rose ${move.toFixed(5)} → reverse BUY`;
+        reason = `Flat signal · mid dropped ${move.toFixed(5)} → BUY entry`;
+      } else if (move >= thr) {
+        direction = 'SELL';
+        reason = `Flat signal · mid rose ${move.toFixed(5)} → SELL entry`;
       } else {
         pushTick(s, {
           phase: 'DECIDE',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `HOLD ${s.open_side} · Δmid=${move.toFixed(5)} (need ±${thr.toFixed(5)})`,
+          detail: `FLAT wait · |Δmid|=${Math.abs(move).toFixed(5)} < ${thr.toFixed(5)} · no entry`,
         });
       }
-    }
-
-    if (!direction) return;
-
-    // Cooldown: at most 1 order / 45s
-    const lastOrder = s.ticks.find((t) => t.phase === 'ORDER' && t.detail.includes('dealRef'));
-    if (lastOrder) {
-      const age = Date.now() - new Date(lastOrder.at).getTime();
-      if (age < 45_000) {
-        pushTick(s, {
-          phase: 'WAIT',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `Cooldown: wait ${Math.ceil((45_000 - age) / 1000)}s before next order`,
-        });
-        return;
-      }
-    }
-
-    pushTick(s, {
-      phase: 'DECIDE',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `${reason} · size=${s.lot_size}`,
-    });
-
-    const result = await createCapitalPosition(opened.session, {
-      epic: s.epic,
-      direction,
-      size: s.lot_size,
-    });
-
-    if (!result.ok) {
+    } else {
       pushTick(s, {
-        phase: 'ERROR',
+        phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `ORDER FAIL ${direction}: ${result.detail}`,
+        detail: 'FLAT · waiting next mid sample for entry signal',
       });
-      s.error = result.detail;
-      return;
     }
 
-    s.orders_placed += 1;
-    s.open_side = direction;
-    s.last_deal_reference = result.deal_reference || null;
-    pushTick(s, {
-      phase: 'ORDER',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `ORDER ${direction} ${s.display_name} lot=${s.lot_size} · ${result.detail}`,
-    });
-
-    try {
-      const m = await pool.query(
-        `SELECT id FROM capital_markets
-         WHERE broker_connection_id = $1 AND epic = $2 LIMIT 1`,
-        [s.connection_id, s.epic]
-      );
-      await pool.query(
-        `INSERT INTO positions
-         (broker_account_id, instrument_id, direction, entry_price, quantity, status)
-         VALUES ($1, $2, $3, $4, $5, 'OPEN')`,
-        [
-          s.account_id,
-          m.rows[0]?.id || 0,
-          direction === 'BUY' ? 'LONG' : 'SHORT',
-          quote.mid || 0,
-          s.lot_size,
-        ]
-      );
-    } catch {
-      /* Capital order already live */
-    }
+    if (!direction) return;
+    await enterTrade(opened.session, s, direction, quote, reason);
   } catch (err) {
     s.reads_fail += 1;
     const detail = err instanceof Error ? err.message : String(err);
@@ -372,7 +707,6 @@ export async function startRobotSession(input: {
   let epic = input.epic.trim();
   if (!epic) throw new Error('epic required');
 
-  // Prefer exact epic match; never invent wrong market
   const exact = await pool.query(
     `SELECT epic, display_name FROM capital_markets
      WHERE broker_connection_id = $1 AND epic = $2
@@ -399,7 +733,6 @@ export async function startRobotSession(input: {
   const lot = Number(input.lot_size);
   if (!Number.isFinite(lot) || lot <= 0) throw new Error('lot_size must be > 0');
 
-  // Stable id — same account+epic always same robot; restart replaces ONLY this one
   const id = robotIdFor(acc.id, epic);
   const existing = sessions.get(id);
   if (existing?.running) {
@@ -424,35 +757,43 @@ export async function startRobotSession(input: {
     last_quote_at: null,
     last_mid: null,
     last_deal_reference: null,
+    deal_id: null,
+    entry_price: null,
+    entry_at: null,
+    mfe: 0,
+    mae: 0,
+    peak_retention: null,
+    unrealized: null,
+    mode: 'FLAT',
     orders_placed: 0,
+    exits_done: 0,
     reads_ok: 0,
     reads_fail: 0,
     open_side: null,
     error: null,
     timer: null,
+    closed_at_ms: 0,
+    peak_favorable: 0,
   };
 
-  const others = [...sessions.values()].filter((s) => s.running && s.id !== id).length;
+  const others = [...sessions.values()].filter((x) => x.running && x.id !== id).length;
   pushTick(session, {
     phase: 'INFO',
     bid: null,
     ask: null,
     mid: null,
-    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · trading ${
-      session.trading_enabled ? 'ON' : 'OFF'
-    } · other robots running: ${others}`,
+    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · ONE TRADE ONLY · best-outcome exit · other robots: ${others}`,
   });
   pushTick(session, {
     phase: 'INFO',
     bid: null,
     ask: null,
     mid: null,
-    detail: `Independent robot — only this account+instrument; other clients keep their robots`,
+    detail:
+      'Rules: max 1 open trade on this instrument · while open → MANAGE only (no new entry) · entry only when FLAT after close',
   });
 
   sessions.set(id, session);
-
-  // Immediate first cycle, then every 4s
   void robotCycle(session);
   session.timer = setInterval(() => void robotCycle(session), 4000);
 

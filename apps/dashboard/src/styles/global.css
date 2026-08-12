@@ -1003,6 +1003,9 @@ tr:hover td { background: rgba(168, 85, 247, 0.06); }
 .robot-log-line.phase-order .badge { color: var(--success); border-color: rgba(57,255,20,0.45); }
 .robot-log-line.phase-error .badge { color: var(--danger); border-color: rgba(255,59,107,0.45); }
 .robot-log-line.phase-decide .badge { color: var(--warning); border-color: rgba(251,191,36,0.4); }
+.robot-log-line.phase-manage .badge { color: #5eead4; border-color: rgba(94,234,212,0.45); }
+.robot-log-line.phase-exit .badge { color: var(--success); border-color: rgba(57,255,20,0.55); }
+.robot-log-line.phase-wait .badge { color: var(--text-secondary); border-color: rgba(148,163,184,0.35); }
 @media (max-width: 1200px) {
   .robot-status-grid { grid-template-columns: repeat(3, 1fr); }
 }

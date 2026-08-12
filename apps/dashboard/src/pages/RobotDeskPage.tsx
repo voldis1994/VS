@@ -27,7 +27,16 @@ type RobotSession = {
   last_quote_at: string | null;
   last_mid: number | null;
   last_deal_reference: string | null;
+  deal_id: string | null;
+  entry_price: number | null;
+  entry_at: string | null;
+  mfe: number;
+  mae: number;
+  peak_retention: number | null;
+  unrealized: number | null;
+  mode: 'FLAT' | 'MANAGE' | 'ENTRY';
   orders_placed: number;
+  exits_done: number;
   reads_ok: number;
   reads_fail: number;
   open_side: string | null;
@@ -223,11 +232,11 @@ export function RobotDeskPage() {
       <div className="robot-desk robot-desk-fs">
         <div className="robot-desk-head">
           <div>
-            <div className="orbit-kicker">INDEPENDENT FULLSCREEN ROBOT</div>
+            <div className="orbit-kicker">ONE TRADE ONLY · BEST OUTCOME EXIT</div>
             <h1 className="page-title">ROBOT DESK</h1>
             <p className="page-subtitle">
-              Katrs robots = viens konts + viens instruments. Citi klienti / tirgi strādā
-              paralēli. ID stabils — refresh nekad nejauc sesijas.
+              Max 1 atvērts treids uz instrumentu. Kamēr atvērts — tikai MANAGE (bez jauniem
+              entry). Entry tikai kad FLAT pēc aizvēršanas ar best outcome.
             </p>
           </div>
           <div className="actions">
@@ -309,26 +318,42 @@ export function RobotDeskPage() {
                 <div className="value pos">{fmt(session.last_mid)}</div>
               </div>
               <div className="robot-status-card">
-                <div className="label">ORDERS</div>
-                <div className="value">{session.orders_placed}</div>
+                <div className="label">MODE</div>
+                <div className="value" style={{ fontSize: 16 }}>
+                  {session.mode || (session.open_side ? 'MANAGE' : 'FLAT')}
+                </div>
               </div>
               <div className="robot-status-card">
-                <div className="label">READS OK/FAIL</div>
+                <div className="label">UPL / MFE</div>
                 <div className="value" style={{ fontSize: 16 }}>
-                  {session.reads_ok}/{session.reads_fail}
+                  {fmt(session.unrealized)} / {fmt(session.mfe)}
                 </div>
               </div>
             </div>
 
             <div className="robot-fs-grid">
               <div className="robot-panel">
-                <div className="section-title">SESSION</div>
+                <div className="section-title">SESSION · ONE TRADE</div>
                 <div className="mono" style={{ lineHeight: 1.7 }}>
                   <div>Account: {session.account_name}</div>
                   <div>Env: {session.environment.toUpperCase()}</div>
                   <div>Trading: {session.trading_enabled ? 'ON' : 'OFF'}</div>
                   <div>Side: {session.open_side || 'FLAT'}</div>
-                  <div>Deal: {session.last_deal_reference || '—'}</div>
+                  <div>Entry: {fmt(session.entry_price)}</div>
+                  <div>DealId: {session.deal_id || '—'}</div>
+                  <div>DealRef: {session.last_deal_reference || '—'}</div>
+                  <div>
+                    Peak ret:{' '}
+                    {session.peak_retention != null
+                      ? `${Math.round(session.peak_retention * 100)}%`
+                      : '—'}
+                  </div>
+                  <div>
+                    Entries/Exits: {session.orders_placed}/{session.exits_done ?? 0}
+                  </div>
+                  <div>
+                    Reads OK/FAIL: {session.reads_ok}/{session.reads_fail}
+                  </div>
                   <div>Started: {new Date(session.started_at).toLocaleTimeString()}</div>
                   <div>
                     Last quote:{' '}
