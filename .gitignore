@@ -48,6 +48,7 @@ Thumbs.db
 # Test artifacts
 test-results/
 benchmark-results/
+!benchmark-results/.gitkeep
 coverage/
 
 # Secrets
