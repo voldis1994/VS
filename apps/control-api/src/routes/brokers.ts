@@ -3,6 +3,22 @@ import { pool } from '../db/pool.js';
 import { encrypt, maskSecret } from '../security/encryption.js';
 import { logAudit } from '../services/audit.js';
 
+async function ensureClientId(preferredId: number | undefined, fallbackName: string): Promise<number> {
+  if (preferredId && Number.isFinite(preferredId) && preferredId > 0) {
+    const existing = await pool.query('SELECT id FROM clients WHERE id = $1', [preferredId]);
+    if (existing.rows.length > 0) return preferredId;
+  }
+
+  const any = await pool.query('SELECT id FROM clients WHERE enabled = true ORDER BY id ASC LIMIT 1');
+  if (any.rows.length > 0) return any.rows[0].id as number;
+
+  const created = await pool.query(
+    'INSERT INTO clients (name) VALUES ($1) RETURNING id',
+    [fallbackName || 'Default Client']
+  );
+  return created.rows[0].id as number;
+}
+
 export async function registerBrokerRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/brokers', async () => {
     const { rows } = await pool.query(
@@ -28,49 +44,76 @@ export async function registerBrokerRoutes(app: FastifyInstance): Promise<void> 
     return { ...rows[0], credentials: creds.rows };
   });
 
-  app.post('/api/brokers', async (request) => {
-    const body = request.body as {
-      client_id: number;
-      broker_name: string;
-      environment: string;
-      identifier?: string;
-      api_key?: string;
-      password?: string;
-    };
+  app.post('/api/brokers', async (request, reply) => {
+    try {
+      const body = request.body as {
+        client_id?: number;
+        broker_name: string;
+        environment: string;
+        identifier?: string;
+        api_key?: string;
+        password?: string;
+      };
 
-    const { rows } = await pool.query(
-      `INSERT INTO broker_connections (client_id, broker_name, environment, identifier)
-       VALUES ($1, $2, $3, $4) RETURNING *`,
-      [body.client_id, body.broker_name, body.environment, body.identifier]
-    );
+      if (!body.broker_name?.trim()) {
+        return reply.code(400).send({ error: 'broker_name is required' });
+      }
+      if (!body.environment?.trim()) {
+        return reply.code(400).send({ error: 'environment is required' });
+      }
+      if (!body.api_key?.trim() && !body.password?.trim() && body.broker_name !== 'paper') {
+        return reply.code(400).send({ error: 'API key or password is required for Capital.com' });
+      }
 
-    const conn = rows[0];
-
-    if (body.api_key) {
-      const enc = encrypt(body.api_key);
-      await pool.query(
-        `INSERT INTO api_credential_metadata
-         (broker_connection_id, credential_type, ciphertext, iv, tag, masked_value)
-         VALUES ($1, 'api_key', $2, $3, $4, $5)`,
-        [conn.id, enc.ciphertext, enc.iv, enc.tag, maskSecret(body.api_key)]
+      const clientId = await ensureClientId(
+        body.client_id !== undefined ? Number(body.client_id) : undefined,
+        body.identifier?.trim() || 'Default Client'
       );
-    }
-    if (body.password) {
-      const enc = encrypt(body.password);
-      await pool.query(
-        `INSERT INTO api_credential_metadata
-         (broker_connection_id, credential_type, ciphertext, iv, tag, masked_value)
-         VALUES ($1, 'password', $2, $3, $4, $5)`,
-        [conn.id, enc.ciphertext, enc.iv, enc.tag, maskSecret(body.password)]
+
+      const { rows } = await pool.query(
+        `INSERT INTO broker_connections (client_id, broker_name, environment, identifier)
+         VALUES ($1, $2, $3, $4) RETURNING *`,
+        [clientId, body.broker_name, body.environment, body.identifier || null]
       );
+
+      const conn = rows[0];
+
+      if (body.api_key) {
+        const enc = encrypt(body.api_key);
+        await pool.query(
+          `INSERT INTO api_credential_metadata
+           (broker_connection_id, credential_type, ciphertext, iv, tag, masked_value)
+           VALUES ($1, 'api_key', $2, $3, $4, $5)`,
+          [conn.id, enc.ciphertext, enc.iv, enc.tag, maskSecret(body.api_key)]
+        );
+      }
+      if (body.password) {
+        const enc = encrypt(body.password);
+        await pool.query(
+          `INSERT INTO api_credential_metadata
+           (broker_connection_id, credential_type, ciphertext, iv, tag, masked_value)
+           VALUES ($1, 'password', $2, $3, $4, $5)`,
+          [conn.id, enc.ciphertext, enc.iv, enc.tag, maskSecret(body.password)]
+        );
+      }
+
+      await logAudit('admin', 'broker_added', 'broker_connection', String(conn.id), null, {
+        broker_name: body.broker_name,
+        environment: body.environment,
+        client_id: clientId,
+      });
+
+      const client = await pool.query('SELECT name FROM clients WHERE id = $1', [clientId]);
+      return {
+        ...conn,
+        client_name: client.rows[0]?.name || 'Default Client',
+        credentials: [],
+      };
+    } catch (err) {
+      request.log.error(err);
+      const message = err instanceof Error ? err.message : 'Failed to save broker connection';
+      return reply.code(500).send({ error: message });
     }
-
-    await logAudit('admin', 'broker_added', 'broker_connection', String(conn.id), null, {
-      broker_name: body.broker_name,
-      environment: body.environment,
-    });
-
-    return { ...conn, credentials: [] };
   });
 
   app.post('/api/brokers/:id/test', async (request) => {
