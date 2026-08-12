@@ -11,6 +11,7 @@ import { FeedsPage } from './pages/FeedsPage';
 import { SystemPage } from './pages/SystemPage';
 import { LogsPage } from './pages/LogsPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { TradingPage } from './pages/TradingPage';
 import { useWebSocket } from './hooks/useWebSocket';
 
 export default function App() {
@@ -21,6 +22,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<OverviewPage />} />
         <Route path="/market" element={<MarketReaderPage />} />
+        <Route path="/trading" element={<TradingPage />} />
         <Route path="/evidence/:instrumentId?" element={<EvidencePage />} />
         <Route path="/positions" element={<PositionsPage />} />
         <Route path="/clients" element={<ClientsPage />} />

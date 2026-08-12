@@ -3,6 +3,7 @@ import { pool } from '../db/pool.js';
 import { encrypt, decrypt, maskSecret } from '../security/encryption.js';
 import { logAudit } from '../services/audit.js';
 import { testCapitalComSession } from '../services/capitalCom.js';
+import { ensureBrokerAccount, seedAccountInstruments } from './trading.js';
 
 async function ensureClientId(preferredId: number | undefined, fallbackName: string): Promise<number> {
   if (preferredId && Number.isFinite(preferredId) && preferredId > 0) {
@@ -136,9 +137,17 @@ export async function registerBrokerRoutes(app: FastifyInstance): Promise<void> 
       });
 
       const client = await pool.query('SELECT name FROM clients WHERE id = $1', [clientId]);
+      const clientName = (client.rows[0]?.name as string) || 'Default Client';
+      const accountId = await ensureBrokerAccount(
+        conn.id as number,
+        `${clientName} / ${body.broker_name} (${body.environment})`
+      );
+      await seedAccountInstruments(accountId);
+
       return {
         ...conn,
-        client_name: client.rows[0]?.name || 'Default Client',
+        client_name: clientName,
+        account_id: accountId,
         credentials: [],
       };
     } catch (err) {
