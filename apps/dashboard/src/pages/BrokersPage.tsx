@@ -27,6 +27,8 @@ export function BrokersPage() {
     password: '',
   });
   const [testing, setTesting] = useState<number | null>(null);
+  const [testMessage, setTestMessage] = useState<string | null>(null);
+  const [testOk, setTestOk] = useState<boolean | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveOk, setSaveOk] = useState(false);
@@ -74,8 +76,8 @@ export function BrokersPage() {
           broker_name: form.broker_name,
           environment: form.environment,
           identifier: form.identifier.trim(),
-          api_key: form.api_key,
-          password: form.password,
+          api_key: form.api_key.trim(),
+          password: form.password.trim(),
         }),
       });
       setForm((prev) => ({ ...prev, api_key: '', password: '' }));
@@ -91,17 +93,23 @@ export function BrokersPage() {
 
   const handleTest = async (id: number) => {
     setTesting(id);
+    setTestMessage(null);
+    setTestOk(null);
     try {
       const result = await apiFetch<{ success?: boolean; message?: string; error?: string }>(
         `/api/brokers/${id}/test`,
         { method: 'POST' }
       );
-      if (result && result.success === false) {
-        throw new Error(result.error || 'Connection test failed');
+      if (!result?.success) {
+        setTestOk(false);
+        setTestMessage(result?.error || 'Connection test failed');
+        return;
       }
-      alert(result.message || 'Connection test successful');
+      setTestOk(true);
+      setTestMessage(result.message || 'Connection test successful');
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'Connection test failed');
+      setTestOk(false);
+      setTestMessage(e instanceof Error ? e.message : 'Connection test failed');
     } finally {
       setTesting(null);
     }
@@ -202,6 +210,20 @@ export function BrokersPage() {
           Identifier = account email. Do not put email into API Key.
         </p>
       </div>
+      {testMessage && (
+        <div
+          className="card"
+          style={{
+            marginBottom: 16,
+            borderColor: testOk ? 'var(--success)' : 'var(--danger)',
+          }}
+        >
+          <div className="section-title">{testOk ? 'Test OK' : 'Test failed'}</div>
+          <p style={{ fontSize: 13, whiteSpace: 'pre-wrap', color: testOk ? 'var(--success)' : 'var(--danger)' }}>
+            {testMessage}
+          </p>
+        </div>
+      )}
       <div className="card">
         <table>
           <thead>
