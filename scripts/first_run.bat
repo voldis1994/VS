@@ -194,7 +194,7 @@ cd /d "%ROOT%"
 echo [OK] npm done
 
 echo.
-echo [6/9] Docker Postgres ...
+echo [6/9] Docker Postgres + Redis ...
 docker info >nul 2>&1
 if errorlevel 1 (
   color 0C
@@ -202,8 +202,32 @@ if errorlevel 1 (
   echo        Start Docker Desktop, wait until green, retry.
   goto :fail
 )
+
+REM Reuse existing Market Reader containers when possible.
+docker start market-reader-postgres >nul 2>&1
+docker start market-reader-redis >nul 2>&1
+
 docker compose up -d postgres redis
-if errorlevel 1 goto :fail
+if errorlevel 1 (
+  echo [WARN] docker compose failed. Common cause: port 5432 or 6379 already used.
+  echo        You do NOT need to delete all Docker images/volumes.
+  echo        Retrying with alternate host ports 15432 / 16379 ...
+  docker rm -f market-reader-postgres market-reader-redis >nul 2>&1
+  call :set_env_kv DB_PORT 15432
+  call :set_env_kv REDIS_PORT 16379
+  docker compose up -d postgres redis
+  if errorlevel 1 (
+    color 0C
+    echo [FAIL] Docker still cannot start Postgres/Redis.
+    echo        Free the busy ports ^(do NOT wipe all Docker^):
+    echo          docker ps
+    echo          docker stop ^<container that uses 5432 or 6379^>
+    echo        Then run START_HERE.bat again.
+    goto :fail
+  )
+  echo [OK] started with DB_PORT=15432 REDIS_PORT=16379 ^(saved in .env^)
+)
+
 set "READY=0"
 for /L %%i in (1,1,40) do (
   docker compose exec -T postgres pg_isready -U market_reader -d market_reader >nul 2>&1
@@ -360,4 +384,9 @@ exit /b 0
 
 :log
 >>"%LOG%" echo [%DATE% %TIME%] %*
+goto :eof
+
+:set_env_kv
+REM %1=KEY  %2=VALUE  — upsert into %ROOT%\.env
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='!ROOT!\.env'; $k='%~1'; $v='%~2'; if (-not (Test-Path -LiteralPath $p)) { Set-Content -LiteralPath $p -Value ($k+'='+$v) -NoNewline; exit 0 }; $c=Get-Content -LiteralPath $p -Raw; if ($null -eq $c) { $c='' }; if ($c -match ('(?m)^'+[regex]::Escape($k)+'=')) { $c=[regex]::Replace($c,('(?m)^'+[regex]::Escape($k)+'=.*'),($k+'='+$v)) } else { if ($c.Length -gt 0 -and -not $c.EndsWith(\"`n\")) { $c+=\"`r`n\" }; $c+=($k+'='+$v+\"`r`n\") }; Set-Content -LiteralPath $p -Value $c -NoNewline"
 goto :eof

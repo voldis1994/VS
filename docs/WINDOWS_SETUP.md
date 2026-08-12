@@ -59,7 +59,7 @@ The script:
 4. Sets `vcpkg.json` `builtin-baseline` to the local vcpkg HEAD commit (must be a 40-char SHA, not a date), then runs `vcpkg install --triplet x64-windows` for **core** packages (Google Benchmark is optional and not required for first run).
 5. Configures and builds **windows-debug** and **windows-release** CMake presets.
 6. Runs `npm install` in `apps\control-api` and `apps\dashboard`.
-7. Starts `docker compose up -d postgres redis`.
+7. Starts `docker compose up -d postgres redis`. If host ports `5432`/`6379` are already taken, first run retries on `15432`/`16379` and updates `.env` (you do **not** need to wipe all Docker images).
 8. Runs control-api migrations (`npm run migrate`).
 9. Executes `ctest` in `build\windows-debug`.
 
