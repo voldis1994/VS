@@ -43,7 +43,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 - CMake, Ninja
 - Node.js 20+
 - Docker
-- Development libraries: fmt, spdlog, yaml-cpp, nlohmann-json, openssl, curl, gtest, benchmark
+- Development libraries: fmt, spdlog, yaml-cpp, nlohmann-json, openssl, curl, gtest, zlib (optional: Google Benchmark via `vcpkg` feature `benchmarks`)
 
 ## Quick Start (Windows)
 

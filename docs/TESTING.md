@@ -25,7 +25,7 @@ CMake target tree under `tests/`:
 | Execution | `tests/execution` | Duplicate intent blocking, paper broker fills |
 | Replay | `tests/replay` | `.mrev` write/read deterministic playback |
 | Security | `tests/security` | `.env.example` placeholders, `.gitignore` covers `.env` |
-| Performance | `tests/performance` | Google Benchmark: feature update, pipeline slice (`bench_pipeline`) |
+| Performance | `tests/performance` | Hot-path / load benches always; `bench_pipeline` needs optional vcpkg feature `benchmarks` |
 | Regression | `tests/regression` | Reserved suite wiring |
 
 Linux/CI style:

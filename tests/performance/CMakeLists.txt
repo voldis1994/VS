@@ -1,8 +1,11 @@
-add_executable(bench_pipeline bench_pipeline.cpp)
-target_link_libraries(bench_pipeline PRIVATE
-    mr::feature_engine mr::market_state mr::regime_engine
-    benchmark::benchmark)
-add_test(NAME bench_pipeline COMMAND bench_pipeline --benchmark_min_time=0.1)
+# Google Benchmark is optional (vcpkg feature "benchmarks"). Hot-path benches do not need it.
+if(MR_BUILD_BENCHMARKS AND TARGET benchmark::benchmark)
+  add_executable(bench_pipeline bench_pipeline.cpp)
+  target_link_libraries(bench_pipeline PRIVATE
+      mr::feature_engine mr::market_state mr::regime_engine
+      benchmark::benchmark)
+  add_test(NAME bench_pipeline COMMAND bench_pipeline --benchmark_min_time=0.1)
+endif()
 
 add_executable(bench_hot_path bench_hot_path.cpp)
 target_include_directories(bench_hot_path PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

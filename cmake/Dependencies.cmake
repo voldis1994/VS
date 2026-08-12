@@ -50,13 +50,23 @@ if(MR_BUILD_TESTS)
 endif()
 
 if(MR_BUILD_BENCHMARKS)
-  find_package(benchmark)
+  find_package(benchmark CONFIG QUIET)
+  if(NOT benchmark_FOUND)
+    find_package(benchmark QUIET)
+  endif()
   if(NOT benchmark_FOUND)
     find_library(BENCHMARK_LIB benchmark)
     find_path(BENCHMARK_INCLUDE benchmark/benchmark.h)
-    add_library(benchmark::benchmark UNKNOWN IMPORTED)
-    set_target_properties(benchmark::benchmark PROPERTIES
-      IMPORTED_LOCATION "${BENCHMARK_LIB}"
-      INTERFACE_INCLUDE_DIRECTORIES "${BENCHMARK_INCLUDE}")
+    if(BENCHMARK_LIB AND BENCHMARK_INCLUDE)
+      add_library(benchmark::benchmark UNKNOWN IMPORTED)
+      set_target_properties(benchmark::benchmark PROPERTIES
+        IMPORTED_LOCATION "${BENCHMARK_LIB}"
+        INTERFACE_INCLUDE_DIRECTORIES "${BENCHMARK_INCLUDE}")
+      set(benchmark_FOUND TRUE)
+    endif()
+  endif()
+  if(NOT benchmark_FOUND AND NOT TARGET benchmark::benchmark)
+    message(WARNING "Google Benchmark not found; disabling MR_BUILD_BENCHMARKS (core app does not need it).")
+    set(MR_BUILD_BENCHMARKS OFF CACHE BOOL "Build benchmarks" FORCE)
   endif()
 endif()
