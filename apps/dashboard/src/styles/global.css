@@ -1245,6 +1245,29 @@ tr:hover td { background: rgba(57, 255, 20, 0.06); }
   padding: 4px 8px;
   font-size: 10px;
 }
+.robot-ctrl {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.robot-ctrl .btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.robot-ctrl-lg .btn {
+  min-width: 88px;
+  padding: 8px 14px;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+}
+.robot-board-focus-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
 .robot-board-focus {
   margin-top: 4px;
   max-height: 340px;

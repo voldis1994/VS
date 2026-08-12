@@ -52,6 +52,7 @@ function fmt(n: number | null | undefined, d = 5) {
 }
 
 function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'flat' | 'entry' } {
+  if (!s.running && !s.open_side) return { label: 'STOPPED', kind: 'flat' };
   if (s.open_side === 'BUY') return { label: 'BUY LONG', kind: 'long' };
   if (s.open_side === 'SELL') return { label: 'SELL SCALP', kind: 'short' };
   if (s.mode === 'ENTRY' || (s.running && !s.open_side)) return { label: 'WAIT ENTRY', kind: 'entry' };
@@ -224,8 +225,32 @@ export function RobotDeskPage() {
       .finally(() => setBusy(false));
   };
 
+  const startOne = async (s: RobotSession) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await apiFetch<{ session: RobotSession }>('/api/robot-desk/start', {
+        method: 'POST',
+        body: JSON.stringify({
+          account_id: s.account_id,
+          epic: s.epic,
+          display_name: s.display_name,
+          lot_size: s.lot_size,
+          trading_enabled: true,
+        }),
+      });
+      setFocusId(res.session.id);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Start failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const stopOne = async (s: RobotSession) => {
     setBusy(true);
+    setError(null);
     try {
       await apiFetch(`/api/robot-desk/${encodeURIComponent(s.id)}/stop`, {
         method: 'POST',
@@ -343,11 +368,18 @@ export function RobotDeskPage() {
             const p = posture(s);
             const active = focusId === s.id;
             return (
-              <button
+              <div
                 key={s.id}
-                type="button"
+                role="button"
+                tabIndex={0}
                 className={`robot-mini ${p.kind} ${s.running ? 'on' : 'off'} ${active ? 'active' : ''}`}
                 onClick={() => setFocusId(s.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setFocusId(s.id);
+                  }
+                }}
               >
                 <div className="robot-mini-head">
                   <span className="robot-mini-client">
@@ -371,45 +403,69 @@ export function RobotDeskPage() {
                     {s.lot_size} / {fmt(s.safety_sl)}
                   </strong>
                 </div>
-                <div className="robot-mini-mode">{s.mode}</div>
+                <div className="robot-mini-mode">
+                  {s.running ? s.mode : 'STOPPED'}
+                </div>
                 <div className="robot-mini-log mono">{lastLog(s)}</div>
                 <div className="robot-mini-actions">
                   <span className="mono">{s.environment.toUpperCase()}</span>
-                  <span
-                    className="btn btn-stop"
-                    role="button"
-                    tabIndex={0}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void stopOne(s);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.stopPropagation();
-                        void stopOne(s);
-                      }
-                    }}
-                  >
-                    STOP
-                  </span>
+                  <div className="robot-ctrl" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      className="btn btn-go"
+                      disabled={busy || s.running}
+                      onClick={() => void startOne(s)}
+                    >
+                      START
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-stop"
+                      disabled={busy || !s.running}
+                      onClick={() => void stopOne(s)}
+                    >
+                      STOP
+                    </button>
+                  </div>
                 </div>
-              </button>
+              </div>
             );
           })}
         </div>
 
         {focused && (
           <div className="robot-board-focus robot-hud-panel">
-            <div className="section-title">
-              FOCUS · {(focused.client_name || focused.account_name).toUpperCase()} ·{' '}
-              {focused.display_name}
+            <div className="robot-board-focus-head">
+              <div className="section-title" style={{ margin: 0 }}>
+                FOCUS · {(focused.client_name || focused.account_name).toUpperCase()} ·{' '}
+                {focused.display_name}
+              </div>
+              <div className="robot-ctrl robot-ctrl-lg">
+                <button
+                  type="button"
+                  className="btn btn-go"
+                  disabled={busy || focused.running}
+                  onClick={() => void startOne(focused)}
+                >
+                  START
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-stop"
+                  disabled={busy || !focused.running}
+                  onClick={() => void stopOne(focused)}
+                >
+                  STOP
+                </button>
+              </div>
             </div>
             <div className="robot-board-focus-grid">
               <div className="mono" style={{ lineHeight: 1.7 }}>
+                <div>STATUS · {focused.running ? 'ONLINE' : 'STOPPED'}</div>
                 <div>ID · {focused.id}</div>
                 <div>ACCOUNT · {focused.account_name}</div>
                 <div>POSTURE · {posture(focused).label}</div>
-                <div>MODE · {focused.mode}</div>
+                <div>MODE · {focused.running ? focused.mode : 'STOPPED'}</div>
                 <div>ENTRY · {fmt(focused.entry_price)}</div>
                 <div>SAFETY SL · {fmt(focused.safety_sl)}</div>
                 <div>DEAL · {focused.deal_id || '—'}</div>
