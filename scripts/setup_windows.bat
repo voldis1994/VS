@@ -45,6 +45,14 @@ if not exist .env (
 )
 
 echo.
+echo Aligning vcpkg.json builtin-baseline to local vcpkg HEAD ...
+set "VCPKG_BASELINE="
+for /f "usebackq delims=" %%H in (`git -C "%VCPKG_ROOT%" rev-parse HEAD`) do set "VCPKG_BASELINE=%%H"
+if defined VCPKG_BASELINE (
+  echo Using builtin-baseline=!VCPKG_BASELINE!
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='vcpkg.json'; $sha='!VCPKG_BASELINE!'; $c=Get-Content -LiteralPath $p -Raw; $c=[regex]::Replace($c,'\"builtin-baseline\"\s*:\s*\"[^\"]*\"',('\"builtin-baseline\": \"'+$sha+'\"')); Set-Content -LiteralPath $p -Value $c -NoNewline"
+)
+
 echo Installing vcpkg dependencies...
 "%VCPKG_ROOT%\vcpkg.exe" install --triplet x64-windows
 if %ERRORLEVEL% neq 0 set /a ERRORS+=1

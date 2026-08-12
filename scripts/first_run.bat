@@ -120,12 +120,31 @@ if not exist "%VCPKG_ROOT%\vcpkg.exe" (
 )
 echo [OK] vcpkg.exe found
 
+REM builtin-baseline must be a 40-char git SHA ^(not a date like 2024.08.15^).
+REM Align manifest to the cloned vcpkg HEAD so ZIP + fresh clone always match.
+echo Aligning vcpkg.json builtin-baseline to local vcpkg HEAD ...
+set "VCPKG_BASELINE="
+for /f "usebackq delims=" %%H in (`git -C "%VCPKG_ROOT%" rev-parse HEAD`) do set "VCPKG_BASELINE=%%H"
+if not defined VCPKG_BASELINE (
+  color 0C
+  echo [FAIL] could not read vcpkg HEAD commit from %VCPKG_ROOT%
+  goto :fail
+)
+echo Using builtin-baseline=!VCPKG_BASELINE!
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='!ROOT!\vcpkg.json'; $sha='!VCPKG_BASELINE!'; $c=Get-Content -LiteralPath $p -Raw; $c=[regex]::Replace($c,'\"builtin-baseline\"\s*:\s*\"[^\"]*\"',('\"builtin-baseline\": \"'+$sha+'\"')); Set-Content -LiteralPath $p -Value $c -NoNewline"
+if errorlevel 1 (
+  color 0C
+  echo [FAIL] could not patch vcpkg.json builtin-baseline
+  goto :fail
+)
+
 echo Installing C++ packages ^(long step^)...
 "%VCPKG_ROOT%\vcpkg.exe" install --triplet x64-windows
 if errorlevel 1 (
   color 0C
   echo [FAIL] vcpkg install failed.
-  echo        Often: not enough disk, antivirus lock, or broken MSVC.
+  echo        Check for invalid builtin-baseline, disk space, antivirus, or MSVC.
+  echo        Log tip: open %LOG%
   goto :fail
 )
 echo [OK] vcpkg packages installed
