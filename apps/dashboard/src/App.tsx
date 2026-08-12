@@ -22,15 +22,14 @@ function Desk({ children }: { children: ReactNode }) {
   return <Layout>{children}</Layout>;
 }
 
+/** Admin desk app (port 5173). Client share URL uses main.client.tsx instead. */
 export default function App() {
   useWebSocket();
 
   return (
     <Routes>
-      {/* Always fullscreen — outside desk Layout; independent per client window */}
       <Route path="/robot" element={<RobotDeskPage />} />
       <Route path="/client" element={<ClientPanelPage />} />
-
       <Route path="/" element={<Desk><OverviewPage /></Desk>} />
       <Route path="/orbit" element={<Desk><OrbitReaderPage /></Desk>} />
       <Route path="/market" element={<Desk><MarketReaderPage /></Desk>} />

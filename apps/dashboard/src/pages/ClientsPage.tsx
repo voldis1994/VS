@@ -148,9 +148,21 @@ export function ClientsPage() {
     <div>
       <h1 className="page-title">Clients</h1>
       <p className="page-subtitle">
-        Client desks + Client Control Panel access · public panel at{' '}
-        <Link to="/client">/client</Link>
+        Client desks + access codes. Send clients this link (not the admin desk):
       </p>
+      <div className="card" style={{ marginBottom: 16, padding: '12px 16px' }}>
+        <div className="section-title" style={{ marginBottom: 8 }}>
+          Client panel URL (share this)
+        </div>
+        <p className="mono" style={{ fontSize: 14, wordBreak: 'break-all' }}>
+          {import.meta.env.VITE_CLIENT_PANEL_URL ||
+            `${window.location.protocol}//${window.location.hostname}:5174/`}
+        </p>
+        <p style={{ marginTop: 8, fontSize: 12, opacity: 0.7 }}>
+          Start with <code>npm run dev:client</code> in <code>apps/dashboard</code> · also available
+          on admin at <Link to="/client">/client</Link>
+        </p>
+      </div>
 
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="section-title">Add Client</div>
