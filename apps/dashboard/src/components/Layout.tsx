@@ -35,6 +35,8 @@ export function Layout({ children }: { children: ReactNode }) {
   const [accounts, setAccounts] = useState<DeskAccount[]>([]);
   const [selectedClientId, setSelectedClientId] = useState<number | null>(null);
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
+  const [railCollapsed, setRailCollapsed] = useState(false);
+  const [isFs, setIsFs] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -85,6 +87,24 @@ export function Layout({ children }: { children: ReactNode }) {
     });
   }, [accounts, selectedClientId]);
 
+  useEffect(() => {
+    const onFs = () => setIsFs(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', onFs);
+    return () => document.removeEventListener('fullscreenchange', onFs);
+  }, []);
+
+  const toggleFullscreen = async () => {
+    try {
+      if (!document.fullscreenElement) {
+        await document.documentElement.requestFullscreen();
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch {
+      /* browser blocked fullscreen */
+    }
+  };
+
   const liveOk = (status?.database || '').toUpperCase() === 'HEALTHY';
   const markets = status?.capital_markets ?? 0;
   const openTrades = status?.open_positions ?? 0;
@@ -116,10 +136,20 @@ export function Layout({ children }: { children: ReactNode }) {
 
   return (
     <DeskContext.Provider value={deskValue}>
-      <div className="desk-shell">
+      <div className={`desk-shell${railCollapsed ? ' rail-collapsed' : ''}${isFs ? ' is-fs' : ''}`}>
         <header className="desk-header">
+          <div className="header-chrome">
+            <button
+              type="button"
+              className="btn"
+              title="Collapse / expand left rail"
+              onClick={() => setRailCollapsed((v) => !v)}
+            >
+              {railCollapsed ? '☰' : '◀'}
+            </button>
+          </div>
           <div className="desk-brand">
-            <Logo size={36} />
+            <Logo size={28} />
             <div>
               <div className="desk-brand-title">MARKET READER</div>
               <div className="desk-brand-sub">{pageTitle}</div>
@@ -137,7 +167,7 @@ export function Layout({ children }: { children: ReactNode }) {
               POSITIONS {openTrades > 0 ? 'OPEN' : 'FLAT'}
             </span>
             <span className={`status-pill ${status?.live_enabled ? 'warn' : ''}`}>
-              MODE {(status?.mode ?? 'PAPER').toUpperCase()}
+              MODE {(status?.mode ?? 'LIVE').toUpperCase()}
             </span>
           </div>
 
@@ -151,21 +181,27 @@ export function Layout({ children }: { children: ReactNode }) {
               <div className="desk-stat-value">{Math.max(clients.length, clientCount(status))}</div>
             </div>
             <div className="desk-stat">
-              <div className="desk-stat-label">OPEN TRADES</div>
+              <div className="desk-stat-label">OPEN</div>
               <div className="desk-stat-value">{openTrades}</div>
             </div>
             <div className="desk-stat">
-              <div className="desk-stat-label">TODAY FILLS</div>
+              <div className="desk-stat-label">FILLS</div>
               <div className="desk-stat-value up">{fills}</div>
             </div>
             <div className="desk-stat">
               <div className="desk-stat-label">SERVER</div>
-              <div className="desk-stat-value" style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+              <div className="desk-stat-value" style={{ fontFamily: 'var(--font-mono)', fontSize: 10 }}>
                 {status?.server_time
                   ? new Date(status.server_time).toLocaleTimeString()
                   : '--:--:--'}
               </div>
             </div>
+          </div>
+
+          <div className="header-chrome">
+            <button type="button" className="btn btn-primary" onClick={() => void toggleFullscreen()}>
+              {isFs ? 'EXIT FS' : 'FULL SCREEN'}
+            </button>
           </div>
         </header>
 
@@ -230,12 +266,9 @@ export function Layout({ children }: { children: ReactNode }) {
             </div>
 
             <div className="rail-section">
-              <div className="rail-title">MARKETS CACHED</div>
-              <div className="metric-value" style={{ fontSize: 18 }}>
+              <div className="rail-title">MARKETS</div>
+              <div className="metric-value" style={{ fontSize: 14 }}>
                 {markets.toLocaleString()}
-              </div>
-              <div className="account-chip-meta" style={{ marginTop: 6 }}>
-                Selected desk: {clientAccounts.length} linked account(s)
               </div>
             </div>
           </aside>
@@ -244,12 +277,9 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
 
         <footer className="footer-strip desk-footer">
-          <span>ALL CONTROL IN YOUR HANDS</span>
-          <span>REAL-TIME DATA</span>
-          <span>AI POWERED</span>
-          <span>VISUAL ANALYSIS</span>
-          <span>FULL AUTOMATION</span>
-          <strong>MARKET READER TRADING SYSTEM</strong>
+          <span>FULL SCREEN DESK</span>
+          <span>REAL-TIME</span>
+          <strong>MARKET READER</strong>
         </footer>
       </div>
     </DeskContext.Provider>

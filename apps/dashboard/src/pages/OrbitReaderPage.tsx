@@ -111,7 +111,7 @@ export function OrbitReaderPage() {
     return list.map((s, i) => {
       const angle = (360 / list.length) * i + spinDeg;
       const rad = (angle * Math.PI) / 180;
-      const r = 152;
+  const r = 118;
       return {
         ...s,
         x: Math.cos(rad) * r,
