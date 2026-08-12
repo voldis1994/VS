@@ -26,6 +26,10 @@ export function MarketReaderPage() {
   return (
     <div>
       <h1 className="page-title">Market Reader</h1>
+      <p className="page-subtitle">
+        Legacy regime grid (stub). For real multi-sender Capital quotes open{' '}
+        <Link to="/orbit">Orbit Reader</Link>.
+      </p>
       <div className="card" style={{ overflow: 'auto' }}>
         <table>
           <thead>
