@@ -60,7 +60,30 @@ type Internal = RobotSession & {
   connection_id: number;
   closed_at_ms: number;
   peak_favorable: number;
+  /** Last time we logged "market closed" (throttle ticks) */
+  last_market_closed_tick_ms: number;
+  cadence_ms: number;
 };
+
+const ACTIVE_CADENCE_MS = 6_000;
+const CLOSED_MARKET_CADENCE_MS = 90_000;
+const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
+
+function marketAllowsTrading(status: string | null | undefined): boolean {
+  const s = String(status || '')
+    .trim()
+    .toUpperCase();
+  // Missing status → do not park (Capital sometimes omits it)
+  if (!s) return true;
+  return s === 'TRADEABLE' || s === 'OPEN';
+}
+
+function setRobotCadence(s: Internal, ms: number) {
+  if (s.timer && s.cadence_ms === ms) return;
+  if (s.timer) clearInterval(s.timer);
+  s.cadence_ms = ms;
+  s.timer = setInterval(() => void robotCycle(s), ms);
+}
 
 const sessions = new Map<string, Internal>();
 const MAX_TICKS = 200;
@@ -104,6 +127,8 @@ function publicSession(s: Internal): RobotSession {
     connection_id: _c,
     closed_at_ms: _closed,
     peak_favorable: _peak,
+    last_market_closed_tick_ms: _lmc,
+    cadence_ms: _cad,
     ...rest
   } = s;
   return rest;
@@ -727,10 +752,7 @@ async function robotCycle(s: Internal) {
         : `Session fail: ${opened.result.detail}`,
     });
     // Slow this robot while cooling down so control panel stays usable
-    if (rateLimited && s.timer) {
-      clearInterval(s.timer);
-      s.timer = setInterval(() => void robotCycle(s), 20_000);
-    }
+    if (rateLimited) setRobotCadence(s, 20_000);
     return;
   }
 
@@ -752,16 +774,33 @@ async function robotCycle(s: Internal) {
     s.reads_ok += 1;
     s.error = null;
     s.last_quote_at = new Date().toISOString();
-    // Restore normal cadence after a successful read (may have been slowed by 429)
-    if (s.timer) {
-      clearInterval(s.timer);
-      s.timer = setInterval(() => void robotCycle(s), 6000);
-    }
-    const prevMid = s.last_mid;
-    s.last_mid = quote.mid;
     if (quote.epic && quote.epic !== s.epic) {
       s.epic = quote.epic;
     }
+
+    // Market closed / offline → park: no positions sync, no MANAGE, no entry (anti-spam Capital)
+    if (!marketAllowsTrading(quote.market_status)) {
+      setRobotCadence(s, CLOSED_MARKET_CADENCE_MS);
+      const now = Date.now();
+      if (now - s.last_market_closed_tick_ms >= CLOSED_MARKET_TICK_EVERY_MS) {
+        s.last_market_closed_tick_ms = now;
+        pushTick(s, {
+          phase: 'WAIT',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `MARKET ${quote.market_status || 'CLOSED'} — park robot (no manage / no entry / no position spam) · poll ${
+            CLOSED_MARKET_CADENCE_MS / 1000
+          }s until TRADEABLE`,
+        });
+      }
+      return;
+    }
+
+    // Restore normal cadence after a successful tradeable read (may have been slowed by 429 / closed)
+    setRobotCadence(s, ACTIVE_CADENCE_MS);
+    const prevMid = s.last_mid;
+    s.last_mid = quote.mid;
 
     // Sync truth from broker — source of ONE TRADE ONLY
     const listed = await listCapitalOpenPositions(opened.session);
@@ -1009,6 +1048,8 @@ export async function startRobotSession(input: {
     timer: null,
     closed_at_ms: 0,
     peak_favorable: 0,
+    last_market_closed_tick_ms: 0,
+    cadence_ms: 0,
   };
 
   const others = [...sessions.values()].filter((x) => x.running && x.id !== id).length;
@@ -1025,13 +1066,13 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: max 1 open trade · MANAGE with best-outcome · Capital SAFETY SL at dealing-rules minimum (tightest legal) · entry only when FLAT',
+      'Rules: max 1 open trade · MANAGE with best-outcome · Capital SAFETY SL at dealing-rules minimum · park when market closed (no Capital spam) · entry only when FLAT',
   });
 
   sessions.set(id, session);
   void robotCycle(session);
-  // 6s cadence — with pooled session this avoids Capital login storms
-  session.timer = setInterval(() => void robotCycle(session), 6000);
+  // 6s when TRADEABLE; auto-slows to 90s when market closed
+  setRobotCadence(session, ACTIVE_CADENCE_MS);
 
   return publicSession(session);
 }
