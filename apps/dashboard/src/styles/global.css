@@ -1010,3 +1010,84 @@ tr:hover td { background: rgba(168, 85, 247, 0.06); }
   .robot-status-grid { grid-template-columns: repeat(2, 1fr); }
   .robot-log-line { grid-template-columns: 1fr; }
 }
+
+/* —— Fullscreen independent robot shell (outside Layout) —— */
+.robot-fs-shell {
+  min-height: 100dvh;
+  width: 100vw;
+  margin: 0;
+  padding: 0;
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(168, 85, 247, 0.18), transparent 55%),
+    radial-gradient(900px 500px at 90% 0%, rgba(57, 255, 20, 0.08), transparent 50%),
+    #07060c;
+  color: var(--text-primary);
+  overflow: auto;
+}
+.robot-desk-fs {
+  min-height: 100dvh;
+  width: 100%;
+  max-width: none;
+  padding: 14px 16px 20px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.robot-fs-grid {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.9fr) minmax(0, 1.6fr);
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+}
+.robot-panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(12, 10, 20, 0.92);
+  min-height: 0;
+}
+.robot-panel-log {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.robot-desk-fs .robot-log {
+  flex: 1;
+  max-height: none;
+  min-height: 280px;
+}
+.robot-empty {
+  border: 1px dashed rgba(168, 85, 247, 0.35);
+  border-radius: 8px;
+  padding: 24px;
+  background: rgba(12, 10, 20, 0.7);
+}
+.robot-sibling-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.robot-sibling {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+  background: rgba(16, 12, 28, 0.85);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 11px;
+}
+.robot-sibling.active {
+  border-color: rgba(57, 255, 20, 0.55);
+  box-shadow: var(--neon-green);
+}
+.robot-sibling.off {
+  opacity: 0.65;
+}
+@media (max-width: 900px) {
+  .robot-fs-grid { grid-template-columns: 1fr; }
+}

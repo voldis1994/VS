@@ -1,3 +1,4 @@
+import { ReactNode } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { OverviewPage } from './pages/OverviewPage';
@@ -16,27 +17,31 @@ import { OrbitReaderPage } from './pages/OrbitReaderPage';
 import { RobotDeskPage } from './pages/RobotDeskPage';
 import { useWebSocket } from './hooks/useWebSocket';
 
+function Desk({ children }: { children: ReactNode }) {
+  return <Layout>{children}</Layout>;
+}
+
 export default function App() {
   useWebSocket();
 
   return (
-    <Layout>
-      <Routes>
-        <Route path="/" element={<OverviewPage />} />
-        <Route path="/robot" element={<RobotDeskPage />} />
-        <Route path="/orbit" element={<OrbitReaderPage />} />
-        <Route path="/market" element={<MarketReaderPage />} />
-        <Route path="/trading" element={<TradingPage />} />
-        <Route path="/evidence/:instrumentId?" element={<EvidencePage />} />
-        <Route path="/positions" element={<PositionsPage />} />
-        <Route path="/clients" element={<ClientsPage />} />
-        <Route path="/brokers" element={<BrokersPage />} />
-        <Route path="/trades" element={<TradesPage />} />
-        <Route path="/feeds" element={<FeedsPage />} />
-        <Route path="/system" element={<SystemPage />} />
-        <Route path="/logs" element={<LogsPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
-      </Routes>
-    </Layout>
+    <Routes>
+      {/* Always fullscreen — outside desk Layout; independent per client window */}
+      <Route path="/robot" element={<RobotDeskPage />} />
+
+      <Route path="/" element={<Desk><OverviewPage /></Desk>} />
+      <Route path="/orbit" element={<Desk><OrbitReaderPage /></Desk>} />
+      <Route path="/market" element={<Desk><MarketReaderPage /></Desk>} />
+      <Route path="/trading" element={<Desk><TradingPage /></Desk>} />
+      <Route path="/evidence/:instrumentId?" element={<Desk><EvidencePage /></Desk>} />
+      <Route path="/positions" element={<Desk><PositionsPage /></Desk>} />
+      <Route path="/clients" element={<Desk><ClientsPage /></Desk>} />
+      <Route path="/brokers" element={<Desk><BrokersPage /></Desk>} />
+      <Route path="/trades" element={<Desk><TradesPage /></Desk>} />
+      <Route path="/feeds" element={<Desk><FeedsPage /></Desk>} />
+      <Route path="/system" element={<Desk><SystemPage /></Desk>} />
+      <Route path="/logs" element={<Desk><LogsPage /></Desk>} />
+      <Route path="/settings" element={<Desk><SettingsPage /></Desk>} />
+    </Routes>
   );
 }

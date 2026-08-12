@@ -2,29 +2,70 @@ import { FastifyInstance } from 'fastify';
 import {
   getRobotSession,
   listRobotSessions,
+  resolveRobotSession,
+  robotIdFor,
   startRobotSession,
   stopRobotSession,
 } from '../services/robotDesk.js';
 
 export async function registerRobotDeskRoutes(app: FastifyInstance): Promise<void> {
-  app.get('/api/robot-desk', async () => ({
-    active: getRobotSession(),
-    sessions: listRobotSessions(),
-  }));
+  app.get('/api/robot-desk', async (request) => {
+    const q = request.query as {
+      id?: string;
+      account_id?: string;
+      epic?: string;
+    };
+    const accountId = q.account_id ? Number(q.account_id) : null;
+    const resolved = resolveRobotSession({
+      id: q.id,
+      account_id: accountId,
+      epic: q.epic,
+    });
+    return {
+      active: resolved,
+      sessions: listRobotSessions(),
+      expected_id:
+        accountId && q.epic && Number.isFinite(accountId)
+          ? robotIdFor(accountId, q.epic)
+          : null,
+    };
+  });
 
   app.get('/api/robot-desk/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
-    const s = getRobotSession(id);
-    if (!s || s.id !== id) {
-      // allow "active" alias
-      if (id === 'active') {
-        const a = getRobotSession();
-        if (!a) return reply.code(404).send({ error: 'No active robot' });
-        return a;
+    const q = request.query as { account_id?: string; epic?: string };
+    const accountId = q.account_id ? Number(q.account_id) : null;
+
+    if (id === 'active' || id === 'resolve') {
+      const resolved = resolveRobotSession({
+        account_id: accountId,
+        epic: q.epic,
+      });
+      if (!resolved) {
+        return reply.code(404).send({
+          error: 'No robot for this account+epic',
+          message: 'No robot for this account+epic',
+          expected_id:
+            accountId && q.epic && Number.isFinite(accountId)
+              ? robotIdFor(accountId, q.epic)
+              : null,
+        });
       }
-      return reply.code(404).send({ error: 'Robot session not found' });
+      return resolved;
     }
-    return s;
+
+    const s = getRobotSession(id);
+    if (s) return s;
+
+    // Fallback: if URL id stale but account+epic present, resolve correctly
+    const fallback = resolveRobotSession({ account_id: accountId, epic: q.epic });
+    if (fallback) return fallback;
+
+    return reply.code(404).send({
+      error: 'Robot session not found',
+      message: 'Robot session not found',
+      id,
+    });
   });
 
   app.post('/api/robot-desk/start', async (request, reply) => {
@@ -58,10 +99,29 @@ export async function registerRobotDeskRoutes(app: FastifyInstance): Promise<voi
 
   app.post('/api/robot-desk/:id/stop', async (request, reply) => {
     const { id } = request.params as { id: string };
-    const target = id === 'active' ? getRobotSession()?.id : id;
-    if (!target) return reply.code(404).send({ error: 'No active robot' });
+    const q = (request.body || {}) as { account_id?: number; epic?: string };
+    let target = id !== 'active' ? id : null;
+    if (!target || !getRobotSession(target)) {
+      const resolved = resolveRobotSession({
+        id: target,
+        account_id: q.account_id,
+        epic: q.epic,
+      });
+      target = resolved?.id || null;
+    }
+    if (!target) {
+      return reply.code(404).send({
+        error: 'Robot session not found',
+        message: 'Robot session not found',
+      });
+    }
     const session = await stopRobotSession(target);
-    if (!session) return reply.code(404).send({ error: 'Robot session not found' });
+    if (!session) {
+      return reply.code(404).send({
+        error: 'Robot session not found',
+        message: 'Robot session not found',
+      });
+    }
     return { success: true, session };
   });
 }

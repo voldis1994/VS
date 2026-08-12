@@ -43,6 +43,17 @@ type Internal = RobotSession & { timer: ReturnType<typeof setInterval> | null; c
 const sessions = new Map<string, Internal>();
 const MAX_TICKS = 200;
 
+/** Stable robot id from account + epic — never Date.now(), never random */
+export function robotIdFor(accountId: number, epic: string): string {
+  const safe = String(epic)
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
+    .slice(0, 80);
+  return `r${accountId}_${safe || 'market'}`;
+}
+
 async function loadCreds(connectionId: number): Promise<Record<string, string>> {
   const { rows } = await pool.query(
     `SELECT credential_type, ciphertext, iv, tag
@@ -70,14 +81,41 @@ function publicSession(s: Internal): RobotSession {
   return rest;
 }
 
+/** Exact id only — never returns a different robot */
 export function getRobotSession(id?: string | null): RobotSession | null {
-  if (id && sessions.has(id)) return publicSession(sessions.get(id)!);
-  const first = [...sessions.values()].find((s) => s.running) || [...sessions.values()][0];
-  return first ? publicSession(first) : null;
+  const key = String(id || '').trim();
+  if (!key || key === 'active') return null;
+  const s = sessions.get(key);
+  return s ? publicSession(s) : null;
+}
+
+/** Resolve by stable id OR account_id+epic — never confuses robots */
+export function resolveRobotSession(opts: {
+  id?: string | null;
+  account_id?: number | null;
+  epic?: string | null;
+}): RobotSession | null {
+  const byId = getRobotSession(opts.id);
+  if (byId) return byId;
+
+  const accountId = Number(opts.account_id);
+  const epic = String(opts.epic || '').trim();
+  if (Number.isFinite(accountId) && accountId > 0 && epic) {
+    const key = robotIdFor(accountId, epic);
+    const s = sessions.get(key);
+    if (s) return publicSession(s);
+    // Also match if epic was normalized differently but same account+epic stored
+    for (const sess of sessions.values()) {
+      if (sess.account_id === accountId && sess.epic === epic) return publicSession(sess);
+    }
+  }
+  return null;
 }
 
 export function listRobotSessions(): RobotSession[] {
-  return [...sessions.values()].map(publicSession);
+  return [...sessions.values()]
+    .sort((a, b) => b.started_at.localeCompare(a.started_at))
+    .map(publicSession);
 }
 
 export async function stopRobotSession(id: string): Promise<RobotSession | null> {
@@ -313,11 +351,6 @@ export async function startRobotSession(input: {
   lot_size: number;
   trading_enabled?: boolean;
 }): Promise<RobotSession> {
-  // Stop other running sessions — one focused robot desk
-  for (const [id, s] of sessions) {
-    if (s.running) await stopRobotSession(id);
-  }
-
   const { rows } = await pool.query(
     `SELECT ba.id, ba.display_name, bc.id as connection_id, bc.environment, bc.broker_name
      FROM broker_accounts ba
@@ -337,22 +370,43 @@ export async function startRobotSession(input: {
 
   let displayName = (input.display_name || '').trim();
   let epic = input.epic.trim();
-  const m = await pool.query(
+  if (!epic) throw new Error('epic required');
+
+  // Prefer exact epic match; never invent wrong market
+  const exact = await pool.query(
     `SELECT epic, display_name FROM capital_markets
-     WHERE broker_connection_id = $1 AND (epic = $2 OR display_name ILIKE $3)
+     WHERE broker_connection_id = $1 AND epic = $2
      ORDER BY updated_at DESC LIMIT 1`,
-    [acc.connection_id, epic, epic]
+    [acc.connection_id, epic]
   );
-  if (m.rows.length) {
-    epic = m.rows[0].epic as string;
-    displayName = (m.rows[0].display_name as string) || displayName || epic;
+  if (exact.rows.length) {
+    epic = exact.rows[0].epic as string;
+    displayName = (exact.rows[0].display_name as string) || displayName || epic;
+  } else {
+    const byName = await pool.query(
+      `SELECT epic, display_name FROM capital_markets
+       WHERE broker_connection_id = $1 AND display_name ILIKE $2
+       ORDER BY updated_at DESC LIMIT 1`,
+      [acc.connection_id, epic]
+    );
+    if (byName.rows.length) {
+      epic = byName.rows[0].epic as string;
+      displayName = (byName.rows[0].display_name as string) || displayName || epic;
+    }
   }
   if (!displayName) displayName = epic;
 
   const lot = Number(input.lot_size);
   if (!Number.isFinite(lot) || lot <= 0) throw new Error('lot_size must be > 0');
 
-  const id = `robot-${Date.now()}`;
+  // Stable id — same account+epic always same robot; restart replaces ONLY this one
+  const id = robotIdFor(acc.id, epic);
+  const existing = sessions.get(id);
+  if (existing?.running) {
+    await stopRobotSession(id);
+  }
+  sessions.delete(id);
+
   const session: Internal = {
     id,
     account_id: acc.id,
@@ -378,14 +432,22 @@ export async function startRobotSession(input: {
     timer: null,
   };
 
+  const others = [...sessions.values()].filter((s) => s.running && s.id !== id).length;
   pushTick(session, {
     phase: 'INFO',
     bid: null,
     ask: null,
     mid: null,
-    detail: `ROBOT START · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · trading ${
+    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · trading ${
       session.trading_enabled ? 'ON' : 'OFF'
-    }`,
+    } · other robots running: ${others}`,
+  });
+  pushTick(session, {
+    phase: 'INFO',
+    bid: null,
+    ask: null,
+    mid: null,
+    detail: `Independent robot — only this account+instrument; other clients keep their robots`,
   });
 
   sessions.set(id, session);

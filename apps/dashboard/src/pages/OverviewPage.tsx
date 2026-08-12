@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { EquityCurve, DailyBars } from '../components/Charts';
 import { useDesk } from '../components/DeskContext';
 import { apiFetch } from '../hooks/useApi';
+import { openRobotWindow } from './RobotDeskPage';
 
 type Position = {
   id: number;
@@ -139,9 +140,21 @@ export function OverviewPage() {
       return;
     }
     const name = selectedMarket?.display_name || marketEpic;
-    navigate(
-      `/robot?account_id=${selectedAccountId}&epic=${encodeURIComponent(marketEpic)}&lot=${lot}&name=${encodeURIComponent(name)}`,
-    );
+    // Named window per account+epic — same client/instrument reuses window; others stay independent
+    const w = openRobotWindow({
+      accountId: selectedAccountId,
+      epic: marketEpic,
+      lot,
+      name,
+    });
+    if (!w) {
+      // Popup blocked → same-tab fullscreen robot route
+      navigate(
+        `/robot?account_id=${selectedAccountId}&epic=${encodeURIComponent(marketEpic)}&lot=${lot}&name=${encodeURIComponent(name)}`,
+      );
+    } else {
+      setMsg(`Robot logs opened · ${name} · lot ${lot} (independent fullscreen)`);
+    }
   };
 
   const selectedAccount = accounts.find((a) => a.account_id === selectedAccountId) || null;
