@@ -65,6 +65,17 @@ scripts\run_dev.bat
 Dashboard: http://localhost:5173  
 Control API: http://localhost:3000
 
+### Daily restart + update + client link
+
+Double-click **`VS_RESTART.exe`** (or `VS_RESTART.bat`):
+
+1. Stops the stack  
+2. Pulls latest `main` from GitHub  
+3. Starts API, admin desk, client panel, market-core bridge  
+4. Opens a Cloudflare tunnel window — send that `https://….trycloudflare.com` URL + access code to the client  
+
+See [docs/VS_RESTART.md](docs/VS_RESTART.md).
+
 ## Build
 
 ```bat
