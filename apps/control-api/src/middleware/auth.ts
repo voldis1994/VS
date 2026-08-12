@@ -13,7 +13,7 @@ export async function authMiddleware(
   const expected = process.env.API_ADMIN_TOKEN;
 
   if (!expected || expected === 'CHANGE_ME_ADMIN_TOKEN') {
-  if (process.env.NODE_ENV === 'production') {
+    if (process.env.NODE_ENV === 'production') {
       reply.code(401).send({ error: 'API token not configured' });
       return;
     }

@@ -20,6 +20,8 @@ export function ClientsPage() {
       await apiFetch('/api/clients', { method: 'POST', body: JSON.stringify({ name }) });
       setName('');
       refresh();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Failed to create client');
     } finally {
       setSubmitting(false);
     }
