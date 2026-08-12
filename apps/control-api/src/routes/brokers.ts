@@ -222,11 +222,13 @@ export async function registerBrokerRoutes(app: FastifyInstance): Promise<void> 
       });
 
       if (!result.ok) {
-        return reply.code(400).send({
+        // 200 + success:false so UI always receives the detailed error body
+        return {
           success: false,
           error: result.detail,
           status: result.status,
-        });
+          errorCode: result.errorCode,
+        };
       }
 
       return {
