@@ -38,7 +38,7 @@ export function TradingPage() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [msgOk, setMsgOk] = useState(true);
-  const [orderEpic, setOrderEpic] = useState('GOLD');
+  const [orderEpic, setOrderEpic] = useState('');
   const [orderSize, setOrderSize] = useState('0.1');
   const [orderBusy, setOrderBusy] = useState(false);
 
@@ -66,6 +66,21 @@ export function TradingPage() {
     if (accountId) void loadInstruments(accountId);
   }, [accountId]);
 
+  useEffect(() => {
+    if (!instruments.length) {
+      setOrderEpic('');
+      return;
+    }
+    setOrderEpic((prev) =>
+      prev && instruments.some((i) => (i.epic || i.symbol) === prev)
+        ? prev
+        : instruments[0].epic || instruments[0].symbol,
+    );
+    if (!orderSize || orderSize === '0.1') {
+      setOrderSize(String(instruments[0].lot_size || instruments[0].min_lot || 0.1));
+    }
+  }, [instruments]);
+
   const categories = useMemo(() => {
     const set = new Set(instruments.map((i) => i.category).filter(Boolean));
     return ['all', ...[...set].sort()];
@@ -84,7 +99,7 @@ export function TradingPage() {
     });
   }, [instruments, filter, category]);
 
-  const source = instruments[0]?.source || 'local_fallback';
+  const source = instruments[0]?.source || (instruments.length ? 'capital_com' : 'empty');
   const selected = accounts?.find((a) => a.account_id === accountId);
 
   const syncAccounts = async () => {
@@ -212,7 +227,7 @@ export function TradingPage() {
     <div>
       <h1 className="page-title">Trading</h1>
       <p className="page-subtitle">
-        Real Capital.com markets · lot size · LIVE BUY/SELL orders
+        Only real Capital.com market names · lot size · LIVE BUY/SELL
       </p>
 
       <div className="card" style={{ marginBottom: 16 }}>
@@ -251,34 +266,40 @@ export function TradingPage() {
             {msg}
           </p>
         )}
-        {source === 'local_fallback' && (
+        {source === 'empty' && accountId && (
           <p className="error-state" style={{ marginTop: 10 }}>
-            Showing temporary local list. Click <strong>Pull ALL Capital.com markets</strong> to load
-            real epics/names from your {selected?.environment || 'broker'} account (can take minutes).
+            Nav Capital.com tirgu. Spied <strong>Pull ALL Capital.com markets</strong> — bez tā
+            rādās tukšs (fake katalogs izslēgts).
           </p>
         )}
         {source === 'capital_com' && (
           <p style={{ marginTop: 10, fontSize: 12, color: 'var(--success)', fontFamily: 'var(--font-mono)' }}>
-            Source: Capital.com · {instruments.length} markets loaded
+            Source: Capital.com · {instruments.length} real markets
           </p>
         )}
       </div>
 
       {accountId && (
         <div className="card" style={{ marginBottom: 16 }}>
-          <div className="section-title">LIVE ORDER (Capital.com)</div>
+          <div className="section-title">LIVE ORDER (Capital.com name)</div>
           <p className="hint-line" style={{ marginBottom: 10 }}>
-            Opens a real market position on the selected account. Use exact epic (e.g. GOLD) or a name
-            Capital can resolve. Brokers Test must be OK.
+            Izvēlies tirgu no ielādētā Capital.com kataloga (īsts display name). Brokers Test = OK.
           </p>
           <div className="actions">
-            <input
+            <select
               className="input"
-              style={{ maxWidth: 220 }}
-              placeholder="Epic / name (GOLD)"
+              style={{ maxWidth: 420 }}
               value={orderEpic}
               onChange={(e) => setOrderEpic(e.target.value)}
-            />
+              disabled={!instruments.length}
+            >
+              {instruments.length === 0 && <option value="">Pull markets first</option>}
+              {instruments.map((i) => (
+                <option key={i.instrument_id} value={i.epic || i.symbol}>
+                  {i.display_name} · {i.epic || i.symbol}
+                </option>
+              ))}
+            </select>
             <input
               className="input"
               style={{ maxWidth: 120 }}
@@ -311,7 +332,7 @@ export function TradingPage() {
             <input
               className="input"
               style={{ maxWidth: 260 }}
-              placeholder="Search epic / name..."
+              placeholder="Search Capital.com name / epic..."
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
             />

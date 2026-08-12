@@ -665,12 +665,18 @@ export async function runOrbitScan(epicsInput: string[]): Promise<OrbitScanResul
 export async function suggestOrbitEpics(limit = 12): Promise<
   Array<{ epic: string; display_name: string; category: string; connection_id: number }>
 > {
+  const n = Math.min(Math.max(limit, 1), 80);
   const { rows } = await pool.query(
-    `SELECT DISTINCT ON (epic) epic, display_name, category, broker_connection_id as connection_id
-     FROM capital_markets
-     ORDER BY epic, updated_at DESC
+    `SELECT epic, display_name, category, broker_connection_id as connection_id
+     FROM (
+       SELECT DISTINCT ON (epic)
+              epic, display_name, category, broker_connection_id, updated_at
+       FROM capital_markets
+       ORDER BY epic, updated_at DESC
+     ) t
+     ORDER BY display_name ASC
      LIMIT $1`,
-    [Math.min(Math.max(limit, 1), 40)]
+    [n]
   );
   return rows.map((r) => ({
     epic: r.epic as string,

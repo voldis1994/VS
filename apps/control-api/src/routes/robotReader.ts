@@ -19,9 +19,19 @@ export async function registerRobotReaderRoutes(app: FastifyInstance): Promise<v
   });
 
   app.get('/api/robot-reader/epics', async (request) => {
-    const q = request.query as { limit?: string };
-    const limit = q.limit ? parseInt(q.limit, 10) : 16;
-    return suggestOrbitEpics(Number.isFinite(limit) ? limit : 16);
+    const q = request.query as { limit?: string; q?: string };
+    const limit = q.limit ? parseInt(q.limit, 10) : 40;
+    let rows = await suggestOrbitEpics(Number.isFinite(limit) ? limit : 40);
+    const needle = (q.q || '').trim().toLowerCase();
+    if (needle) {
+      rows = rows.filter(
+        (r) =>
+          r.display_name.toLowerCase().includes(needle) ||
+          r.epic.toLowerCase().includes(needle) ||
+          r.category.toLowerCase().includes(needle),
+      );
+    }
+    return rows;
   });
 
   app.get('/api/robot-reader/scan', async (request, reply) => {

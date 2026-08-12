@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { pool } from '../db/pool.js';
 import { decrypt } from '../security/encryption.js';
 import { logAudit } from '../services/audit.js';
-import { getEnabledInstruments, getInstrumentById } from '../config/instruments.js';
+import { getInstrumentById } from '../config/instruments.js';
 import { fetchAllCapitalMarkets, openCapitalSession, createCapitalPosition } from '../services/capitalCom.js';
 
 export async function ensureBrokerAccount(connectionId: number, displayName: string): Promise<number> {
@@ -53,18 +53,7 @@ export async function seedAccountInstruments(accountId: number): Promise<void> {
     return;
   }
 
-  for (const inst of getEnabledInstruments()) {
-    await pool.query(
-      `INSERT INTO account_instrument_settings
-       (broker_account_id, instrument_id, symbol, lot_size, enabled, trading_enabled)
-       VALUES ($1, $2, $3, $4, true, true)
-       ON CONFLICT (broker_account_id, instrument_id) DO UPDATE SET
-         enabled = true,
-         trading_enabled = true,
-         updated_at = NOW()`,
-      [accountId, inst.id, inst.symbol, inst.min_lot]
-    );
-  }
+  // No local fake catalog — Capital.com markets must be pulled first.
 }
 
 async function loadCredentialMap(brokerConnectionId: number): Promise<Record<string, string>> {
@@ -86,7 +75,78 @@ async function loadCredentialMap(brokerConnectionId: number): Promise<Record<str
 }
 
 export async function registerTradingRoutes(app: FastifyInstance): Promise<void> {
-  app.get('/api/instruments', async () => getEnabledInstruments());
+  app.get('/api/instruments', async () => {
+    const { rows } = await pool.query(
+      `SELECT DISTINCT ON (epic) epic as symbol, display_name, category, id,
+              min_lot, max_lot, lot_step
+       FROM capital_markets
+       ORDER BY epic, updated_at DESC
+       LIMIT 500`
+    );
+    if (rows.length === 0) {
+      return {
+        source: 'empty',
+        message: 'No Capital.com markets cached. Trading → Pull ALL Capital.com markets.',
+        instruments: [],
+      };
+    }
+    return {
+      source: 'capital_com',
+      instruments: rows.map((r) => ({
+        id: r.id,
+        symbol: r.symbol,
+        display_name: r.display_name,
+        category: r.category,
+        min_lot: Number(r.min_lot),
+        max_lot: Number(r.max_lot),
+        lot_step: Number(r.lot_step),
+        enabled: true,
+      })),
+    };
+  });
+
+  /** Search real Capital.com cached markets by name/epic (no local fake names). */
+  app.get('/api/trading/markets', async (request) => {
+    const q = request.query as { q?: string; limit?: string; connection_id?: string };
+    const limit = Math.min(Math.max(parseInt(q.limit || '50', 10) || 50, 1), 200);
+    const needle = (q.q || '').trim();
+    const params: unknown[] = [];
+    let where = '';
+    if (q.connection_id) {
+      params.push(parseInt(q.connection_id, 10));
+      where += ` AND broker_connection_id = $${params.length}`;
+    }
+    if (needle) {
+      params.push(`%${needle}%`);
+      where += ` AND (epic ILIKE $${params.length} OR symbol ILIKE $${params.length} OR display_name ILIKE $${params.length})`;
+    }
+    params.push(limit);
+    const { rows } = await pool.query(
+      `SELECT DISTINCT ON (epic) id, epic, symbol, display_name, category, instrument_type,
+              min_lot, max_lot, lot_step, broker_connection_id
+       FROM capital_markets
+       WHERE 1=1 ${where}
+       ORDER BY epic, updated_at DESC, display_name ASC
+       LIMIT $${params.length}`,
+      params
+    );
+    return {
+      source: 'capital_com',
+      count: rows.length,
+      markets: rows.map((r) => ({
+        id: r.id,
+        epic: r.epic,
+        symbol: r.symbol,
+        display_name: r.display_name,
+        category: r.category,
+        instrument_type: r.instrument_type,
+        min_lot: Number(r.min_lot),
+        max_lot: Number(r.max_lot),
+        lot_step: Number(r.lot_step),
+        connection_id: r.broker_connection_id,
+      })),
+    };
+  });
 
   app.get('/api/trading/accounts', async () => {
     const { rows } = await pool.query(
@@ -316,27 +376,8 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
       return rows;
     }
 
-    // Fallback only until Capital.com pull has been run.
-    const catalog = getEnabledInstruments();
-    return catalog.map((inst) => {
-      const row = settingsById.get(inst.id);
-      return {
-        instrument_id: inst.id,
-        epic: inst.symbol,
-        symbol: inst.symbol,
-        display_name: inst.display_name,
-        category: inst.category,
-        instrument_type: inst.category,
-        min_lot: inst.min_lot,
-        max_lot: inst.max_lot,
-        lot_step: inst.lot_step,
-        lot_size: row ? Number(row.lot_size) : inst.min_lot,
-        enabled: row ? Boolean(row.enabled) : true,
-        trading_enabled: row ? Boolean(row.trading_enabled) : true,
-        configured: Boolean(row),
-        source: 'local_fallback' as const,
-      };
-    });
+    // Never return fake local EURUSD/XAUUSD catalog for Capital accounts.
+    return [];
   });
 
   app.put('/api/trading/accounts/:accountId/instruments/:instrumentId', async (request, reply) => {

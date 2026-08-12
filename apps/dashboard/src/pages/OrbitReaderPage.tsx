@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { apiFetch } from '../hooks/useApi';
 
 type Sender = {
@@ -57,7 +58,7 @@ function fmt(n: number | null | undefined, digits = 5) {
 export function OrbitReaderPage() {
   const [epics, setEpics] = useState<string[]>([]);
   const [options, setOptions] = useState<EpicOpt[]>([]);
-  const [custom, setCustom] = useState('');
+  const [search, setSearch] = useState('');
   const [scan, setScan] = useState<Scan | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(true);
@@ -69,16 +70,36 @@ export function OrbitReaderPage() {
     return () => clearInterval(id);
   }, []);
 
-  useEffect(() => {
-    void apiFetch<EpicOpt[]>('/api/robot-reader/epics?limit=24')
-      .then((rows) => {
-        setOptions(rows);
-        if (rows.length && epics.length === 0) {
-          setEpics(rows.slice(0, 3).map((r) => r.epic));
-        }
-      })
-      .catch(() => undefined);
+  const loadOptions = useCallback(async (q = '') => {
+    const qs = q.trim()
+      ? `?limit=60&q=${encodeURIComponent(q.trim())}`
+      : '?limit=60';
+    try {
+      const rows = await apiFetch<EpicOpt[]>(`/api/robot-reader/epics${qs}`);
+      setOptions(rows);
+      setEpics((prev) => {
+        if (prev.length) return prev.filter((e) => rows.some((r) => r.epic === e) || prev.includes(e));
+        return rows.slice(0, 3).map((r) => r.epic);
+      });
+    } catch {
+      setOptions([]);
+    }
   }, []);
+
+  useEffect(() => {
+    void loadOptions();
+  }, [loadOptions]);
+
+  useEffect(() => {
+    const t = setTimeout(() => void loadOptions(search), 250);
+    return () => clearTimeout(t);
+  }, [search, loadOptions]);
+
+  const nameByEpic = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const o of options) m.set(o.epic, o.display_name);
+    return m;
+  }, [options]);
 
   const tick = useCallback(async () => {
     if (!running) return;
@@ -107,11 +128,25 @@ export function OrbitReaderPage() {
   const capitalCount = senders.filter((s) => s.kind === 'capital_com').length;
 
   const nodes = useMemo(() => {
-    const list = senders.length ? senders : [{ sender_id: 'idle', name: 'Waiting', kind: 'idle', trust: '', status: 'IDLE', latency_ms: null, last_error: null, reads_ok: 0, reads_fail: 0 }];
+    const list = senders.length
+      ? senders
+      : [
+          {
+            sender_id: 'idle',
+            name: 'Waiting',
+            kind: 'idle',
+            trust: '',
+            status: 'IDLE',
+            latency_ms: null,
+            last_error: null,
+            reads_ok: 0,
+            reads_fail: 0,
+          },
+        ];
     return list.map((s, i) => {
       const angle = (360 / list.length) * i + spinDeg;
       const rad = (angle * Math.PI) / 180;
-  const r = 118;
+      const r = 118;
       return {
         ...s,
         x: Math.cos(rad) * r,
@@ -121,24 +156,23 @@ export function OrbitReaderPage() {
   }, [senders, spinDeg]);
 
   const focusConsensus = scan?.consensus?.[0];
-  const focusReads = (scan?.reads || []).filter((r) => r.epic === (scan?.epics?.[0] || r.epic));
+  const focusEpic = scan?.epics?.[0] || epics[0] || '';
+  const focusName = nameByEpic.get(focusEpic) || focusEpic || '—';
 
-  const addCustom = () => {
-    const e = custom.trim();
-    if (!e) return;
-    setEpics((prev) => (prev.includes(e) ? prev : [...prev, e].slice(0, 6)));
-    setCustom('');
+  const toggleEpic = (epic: string) => {
+    setEpics((prev) =>
+      prev.includes(epic) ? prev.filter((x) => x !== epic) : [...prev, epic].slice(0, 6),
+    );
   };
 
   return (
     <div className="orbit-page">
       <div className="orbit-hero">
         <div>
-          <div className="orbit-kicker">MULTI-SENDER · TRUSTED ONLY</div>
+          <div className="orbit-kicker">CAPITAL.COM NAMES ONLY</div>
           <h1 className="page-title">ORBIT READER</h1>
           <p className="page-subtitle">
-            Robots lasa reālus kotējumus no vairākiem sūtītājiem vienlaikus — Capital.com (katrs brokeris =
-            sūtītājs), ECB FX reference, kataloga pulse. Nekādu random cenu.
+            Watchlist no īstā Capital.com kataloga (display name + epic). Nekādu fake EURUSD/XAUUSD.
           </p>
         </div>
         <div className="orbit-hero-stats">
@@ -151,73 +185,67 @@ export function OrbitReaderPage() {
             <strong className="pos">{liveCount}</strong>
           </div>
           <div className="orbit-stat">
-            <span>Scan</span>
-            <strong>{busy ? 'READING' : running ? 'ORBITING' : 'PAUSED'}</strong>
+            <span>Catalog</span>
+            <strong>{options.length}</strong>
           </div>
         </div>
       </div>
 
       {error && <div className="error-state" style={{ marginBottom: 12 }}>{error}</div>}
+      {options.length === 0 && (
+        <div className="error-state" style={{ marginBottom: 12 }}>
+          Nav Capital.com tirgu katalogā. Ej uz <Link to="/trading">Trading</Link> →{' '}
+          <strong>Pull ALL Capital.com markets</strong> (Broker Test jābūt OK).
+        </div>
+      )}
       {scan?.note && <div className="orbit-note">{scan.note}</div>}
 
       <div className="orbit-controls card">
-        <div className="section-title">WATCHLIST (max 6)</div>
+        <div className="section-title">WATCHLIST — Capital.com names (max 6)</div>
         <div className="orbit-chips">
           {epics.map((e) => (
             <button
               key={e}
               type="button"
               className="orbit-chip on"
-              onClick={() => setEpics((prev) => prev.filter((x) => x !== e))}
-              title="Remove"
+              onClick={() => toggleEpic(e)}
+              title={e}
             >
-              {e} ×
+              {nameByEpic.get(e) || e} ×
             </button>
           ))}
         </div>
-        <div className="orbit-chips" style={{ marginTop: 8 }}>
-          {options.slice(0, 16).map((o) => (
-            <button
-              key={o.epic}
-              type="button"
-              className={`orbit-chip ${epics.includes(o.epic) ? 'on' : ''}`}
-              onClick={() =>
-                setEpics((prev) =>
-                  prev.includes(o.epic)
-                    ? prev.filter((x) => x !== o.epic)
-                    : [...prev, o.epic].slice(0, 6),
-                )
-              }
-            >
-              {o.display_name}
-            </button>
-          ))}
-        </div>
-        <div className="actions" style={{ marginTop: 12 }}>
+        <div className="actions" style={{ marginTop: 8 }}>
           <input
             className="input"
-            style={{ maxWidth: 280 }}
-            placeholder="Custom epic (e.g. EURUSD)"
-            value={custom}
-            onChange={(e) => setCustom(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && addCustom()}
+            style={{ maxWidth: 320 }}
+            placeholder="Search Capital.com name / epic…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
           />
-          <button className="btn" type="button" onClick={addCustom}>
-            Add epic
-          </button>
           <button className="btn btn-primary" type="button" onClick={() => void tick()} disabled={busy}>
             Scan now
           </button>
           <button className="btn" type="button" onClick={() => setRunning((v) => !v)}>
             {running ? 'Pause orbit' : 'Resume orbit'}
           </button>
-          <a className="btn btn-go" href="/trading">
-            Open Trading → BUY/SELL
-          </a>
+          <Link className="btn btn-go" to="/trading">
+            Trading BUY/SELL
+          </Link>
         </div>
-        <div className="hint-line" style={{ marginTop: 10 }}>
-          Orbit tikai lasa cenas. Orderi: Trading → LIVE ORDER. Watchlist izmanto īsto epic (piem.
-          GOLD), nevis &quot;gold x&quot;.
+        <div className="orbit-chips" style={{ marginTop: 8, maxHeight: 140, overflow: 'auto' }}>
+          {options.map((o) => (
+            <button
+              key={o.epic}
+              type="button"
+              className={`orbit-chip ${epics.includes(o.epic) ? 'on' : ''}`}
+              onClick={() => toggleEpic(o.epic)}
+              title={`epic: ${o.epic}`}
+            >
+              {o.display_name}
+              <span style={{ opacity: 0.55, marginLeft: 6 }}>{o.epic}</span>
+            </button>
+          ))}
         </div>
       </div>
 
@@ -227,7 +255,8 @@ export function OrbitReaderPage() {
           <div className="orbit-ring orbit-ring-2" style={{ transform: `rotate(${-spinDeg * 1.4}deg)` }} />
           <div className="orbit-core">
             <div className="orbit-core-label">CONSENSUS</div>
-            <div className="orbit-core-epic">{scan?.epics?.[0] || '—'}</div>
+            <div className="orbit-core-epic">{focusName}</div>
+            <div className="mono" style={{ fontSize: 9, opacity: 0.7 }}>{focusEpic || '—'}</div>
             <div className="orbit-core-mid">
               {focusConsensus?.mid_avg != null ? fmt(focusConsensus.mid_avg) : '· · ·'}
             </div>
@@ -304,7 +333,7 @@ export function OrbitReaderPage() {
                 <thead>
                   <tr>
                     <th>Sender</th>
-                    <th>Epic</th>
+                    <th>Capital name / epic</th>
                     <th>Bid</th>
                     <th>Ask</th>
                     <th>Mid</th>
@@ -316,7 +345,10 @@ export function OrbitReaderPage() {
                   {(scan?.reads || []).map((r, i) => (
                     <tr key={`${r.sender_id}-${r.epic}-${i}`} className={r.ok ? '' : 'row-bad'}>
                       <td>{r.name}</td>
-                      <td className="mono">{r.epic}</td>
+                      <td>
+                        <div>{nameByEpic.get(r.epic) || r.epic}</div>
+                        <div className="mono">{r.epic}</div>
+                      </td>
                       <td className="mono">{fmt(r.bid)}</td>
                       <td className="mono">{fmt(r.ask)}</td>
                       <td className="mono">{fmt(r.mid)}</td>
@@ -329,16 +361,12 @@ export function OrbitReaderPage() {
                   {!scan?.reads?.length && (
                     <tr>
                       <td colSpan={7} className="mono">
-                        Orbiting… waiting for first trusted read
+                        Orbiting… waiting for Capital quotes
                       </td>
                     </tr>
                   )}
                 </tbody>
               </table>
-            </div>
-            <div className="hint-line" style={{ marginTop: 8 }}>
-              Focus epic reads: {focusReads.filter((r) => r.ok).length}/{focusReads.length} ok · last scan{' '}
-              {scan?.scanned_at ? new Date(scan.scanned_at).toLocaleTimeString() : '—'}
             </div>
           </div>
         </div>
