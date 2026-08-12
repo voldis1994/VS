@@ -5,6 +5,7 @@ import { useSystemStatus } from '../hooks/useApi';
 const NAV = [
   { to: '/', label: 'Overview' },
   { to: '/market', label: 'Market Reader' },
+  { to: '/trading', label: 'Trading' },
   { to: '/evidence', label: 'Live Evidence' },
   { to: '/positions', label: 'Positions' },
   { to: '/clients', label: 'Clients' },

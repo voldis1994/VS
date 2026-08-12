@@ -152,8 +152,8 @@ export function BrokersPage() {
               value={form.environment}
               onChange={(e) => setForm({ ...form, environment: e.target.value })}
             >
-              <option value="demo">Demo</option>
-              <option value="live">Live</option>
+<option value="demo">Demo</option>
+            <option value="live">Live (real money)</option>
             </select>
           </label>
           <label style={{ display: 'grid', gap: 4 }}>

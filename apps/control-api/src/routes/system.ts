@@ -29,11 +29,17 @@ export async function registerSystemRoutes(
     live_enabled: process.env.LIVE_TRADING_ENABLED === 'true',
   }));
 
-  app.post('/api/system/mode', async (request) => {
+  app.post('/api/system/mode', async (request, reply) => {
     const body = request.body as { mode: string };
     const prev = process.env.OPERATING_MODE;
+    const allowed = ['REPLAY', 'PAPER', 'DEMO', 'LIVE'];
+    if (!allowed.includes(body.mode)) {
+      return reply.code(400).send({ error: `Invalid mode. Use: ${allowed.join(', ')}` });
+    }
     if (body.mode === 'LIVE' && process.env.LIVE_TRADING_ENABLED !== 'true') {
-      return { error: 'LIVE mode requires LIVE_TRADING_ENABLED=true' };
+      return reply.code(400).send({
+        error: 'LIVE mode requires LIVE trading gate ON (Settings → Enable LIVE trading)',
+      });
     }
     process.env.OPERATING_MODE = body.mode;
     return { mode: body.mode, previous: prev };

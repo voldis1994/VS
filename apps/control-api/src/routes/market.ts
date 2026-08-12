@@ -1,46 +1,41 @@
 import { FastifyInstance } from 'fastify';
 import { TelemetryBroadcaster } from '../ws/telemetry.js';
+import { getEnabledInstruments } from '../config/instruments.js';
 
-const mockInstruments = [
-  {
-    instrument_id: 1,
-    symbol: 'EURUSD',
-    regime: 'PULLBACK_UPTREND',
-    setup: 'CONTINUATION',
-    evidence_state: 'BUILDING',
-    direction_pressure: 0.65,
-    probability: 0.58,
-    expected_edge: 0.00012,
-    data_quality: 0.92,
-    feed_consensus: 0.88,
-    entry_state: 'NO_TRADE',
-    last_update: new Date().toISOString(),
-  },
-  {
-    instrument_id: 2,
-    symbol: 'GBPUSD',
-    regime: 'RANGE',
-    setup: null,
-    evidence_state: null,
-    direction_pressure: 0.1,
-    probability: 0.5,
-    expected_edge: 0,
-    data_quality: 0.95,
-    feed_consensus: 0.91,
-    entry_state: 'NO_TRADE',
-    last_update: new Date().toISOString(),
-  },
-];
+function buildMarketRows() {
+  const regimes = ['PULLBACK_UPTREND', 'RANGE', 'BREAKOUT', 'TREND_DOWN', 'COMPRESSION'];
+  return getEnabledInstruments().map((inst, idx) => {
+    const regime = regimes[idx % regimes.length];
+    const pressure = Number((Math.sin(idx + 1) * 0.4 + 0.2).toFixed(2));
+    return {
+      instrument_id: inst.id,
+      symbol: inst.symbol,
+      display_name: inst.display_name,
+      category: inst.category,
+      regime,
+      setup: regime === 'RANGE' ? null : 'CONTINUATION',
+      evidence_state: regime === 'RANGE' ? null : 'BUILDING',
+      direction_pressure: pressure,
+      probability: Number((0.5 + Math.abs(pressure) * 0.2).toFixed(2)),
+      expected_edge: Number((Math.abs(pressure) * 0.0002).toFixed(6)),
+      data_quality: 0.9,
+      feed_consensus: 0.85,
+      entry_state: 'NO_TRADE',
+      last_update: new Date().toISOString(),
+    };
+  });
+}
 
 export async function registerMarketRoutes(
   app: FastifyInstance,
   telemetry: TelemetryBroadcaster
 ): Promise<void> {
-  app.get('/api/market/instruments', async () => mockInstruments);
+  app.get('/api/market/instruments', async () => buildMarketRows());
 
   app.get('/api/market/instruments/:id', async (request) => {
     const { id } = request.params as { id: string };
-    const inst = mockInstruments.find((i) => i.instrument_id === parseInt(id, 10));
+    const rows = buildMarketRows();
+    const inst = rows.find((i) => i.instrument_id === parseInt(id, 10));
     if (!inst) return { error: 'Not found' };
     return {
       ...inst,
@@ -101,7 +96,7 @@ export async function registerMarketRoutes(
   setInterval(() => {
     telemetry.broadcast({
       type: 'market_update',
-      instruments: mockInstruments,
+      instruments: buildMarketRows(),
       timestamp: new Date().toISOString(),
     });
   }, 2000);

@@ -12,6 +12,7 @@ import { registerTradeRoutes } from './routes/trades.js';
 import { registerMarketRoutes } from './routes/market.js';
 import { registerAuditRoutes } from './routes/audit.js';
 import { registerSettingsRoutes } from './routes/settings.js';
+import { registerTradingRoutes } from './routes/trading.js';
 import { TelemetryBroadcaster } from './ws/telemetry.js';
 import { authMiddleware } from './middleware/auth.js';
 
@@ -39,6 +40,7 @@ async function main() {
   await registerAccountRoutes(app);
   await registerTradeRoutes(app);
   await registerMarketRoutes(app, telemetry);
+  await registerTradingRoutes(app);
   await registerAuditRoutes(app);
   await registerSettingsRoutes(app);
 
