@@ -13,6 +13,7 @@ vcpkg_installed/
 # Node
 node_modules/
 dist/
+dist-client/
 *.tsbuildinfo
 .npm
 
