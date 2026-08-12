@@ -49,6 +49,7 @@ export type RobotSession = {
   reads_ok: number;
   reads_fail: number;
   open_side: 'BUY' | 'SELL' | null;
+  safety_sl: number | null;
   error: string | null;
 };
 
@@ -116,7 +117,33 @@ function clearTradeState(s: Internal) {
   s.peak_favorable = 0;
   s.peak_retention = null;
   s.unrealized = null;
+  s.safety_sl = null;
   s.mode = 'FLAT';
+}
+
+/** Broker-visible Capital.com stop as safety cushion (wider than robot best-outcome exits). */
+function safetyStopLevel(
+  direction: 'BUY' | 'SELL',
+  mid: number,
+  bid: number | null,
+  ask: number | null
+): number {
+  const ref =
+    direction === 'BUY'
+      ? bid != null && Number.isFinite(bid)
+        ? bid
+        : mid
+      : ask != null && Number.isFinite(ask)
+        ? ask
+        : mid;
+  const abs = Math.max(Math.abs(ref), 1e-9);
+  // ~0.25% cushion (min floors so tiny FX/indices still get a real stop)
+  const dist = Math.max(abs * 0.0025, abs >= 100 ? 0.5 : abs >= 10 ? 0.05 : 0.0005);
+  const raw = direction === 'BUY' ? ref - dist : ref + dist;
+  // Keep sensible decimals for Capital
+  if (abs >= 100) return Math.round(raw * 100) / 100;
+  if (abs >= 1) return Math.round(raw * 10000) / 10000;
+  return Math.round(raw * 1e6) / 1e6;
 }
 
 function favorableMove(side: 'BUY' | 'SELL', entry: number, mid: number): number {
@@ -392,11 +419,49 @@ async function enterTrade(
     detail: `ENTRY ${direction} · ${reason} · lot=${s.lot_size}`,
   });
 
-  const result = await createCapitalPosition(session, {
+  const mid = quote.mid;
+  if (mid == null || !Number.isFinite(mid)) {
+    pushTick(s, {
+      phase: 'ERROR',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: 'ENTRY blocked — no mid for safety SL',
+    });
+    return;
+  }
+
+  const stopLevel = safetyStopLevel(direction, mid, quote.bid, quote.ask);
+  pushTick(s, {
+    phase: 'INFO',
+    bid: quote.bid,
+    ask: quote.ask,
+    mid: quote.mid,
+    detail: `Capital SAFETY SL ${stopLevel} (broker-visible cushion · robot still manages best-outcome first)`,
+  });
+
+  let result = await createCapitalPosition(session, {
     epic: s.epic,
     direction,
     size: s.lot_size,
+    stopLevel,
   });
+
+  // If market rejects stopLevel, still open — then warn (client asked for visible SL when possible)
+  if (!result.ok && /stop|validation|reject/i.test(result.detail)) {
+    pushTick(s, {
+      phase: 'WAIT',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `Safety SL rejected by Capital (${result.detail}) — retrying entry without SL`,
+    });
+    result = await createCapitalPosition(session, {
+      epic: s.epic,
+      direction,
+      size: s.lot_size,
+    });
+  }
 
   if (!result.ok) {
     s.error = result.detail;
@@ -414,13 +479,14 @@ async function enterTrade(
   s.open_side = direction;
   s.mode = 'MANAGE';
   s.last_deal_reference = result.deal_reference || null;
-  s.entry_price = quote.mid;
+  s.entry_price = mid;
   s.entry_at = new Date().toISOString();
   s.mfe = 0;
   s.mae = 0;
-  s.peak_favorable = quote.mid ?? 0;
+  s.peak_favorable = mid;
   s.peak_retention = null;
   s.unrealized = 0;
+  s.safety_sl = stopLevel;
   s.error = null;
 
   const dealId = await resolveDealId(session, s, result.deal_reference);
@@ -431,7 +497,7 @@ async function enterTrade(
     bid: quote.bid,
     ask: quote.ask,
     mid: quote.mid,
-    detail: `ORDER ENTRY ${direction} ${s.display_name} lot=${s.lot_size} · ${result.detail}${
+    detail: `ORDER ENTRY ${direction} ${s.display_name} lot=${s.lot_size} · SL ${stopLevel} · ${result.detail}${
       dealId ? ` · dealId=${dealId}` : ''
     }`,
   });
@@ -792,6 +858,7 @@ export async function startRobotSession(input: {
     reads_ok: 0,
     reads_fail: 0,
     open_side: null,
+    safety_sl: null,
     error: null,
     timer: null,
     closed_at_ms: 0,
@@ -812,7 +879,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: max 1 open trade on this instrument · while open → MANAGE only (no new entry) · entry only when FLAT after close',
+      'Rules: max 1 open trade · MANAGE with best-outcome · Capital SAFETY SL on entry (visible in app) · entry only when FLAT',
   });
 
   sessions.set(id, session);

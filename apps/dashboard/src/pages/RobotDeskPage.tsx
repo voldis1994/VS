@@ -41,6 +41,7 @@ type RobotSession = {
   reads_ok: number;
   reads_fail: number;
   open_side: string | null;
+  safety_sl: number | null;
   error: string | null;
 };
 
@@ -336,7 +337,8 @@ export function RobotDeskPage() {
               <div className="robot-arena-kicker">VS SYSTEM // COMBAT UNIT</div>
               <h1 className="robot-arena-title">ROBOT ARENA</h1>
               <p className="robot-arena-sub">
-                ONE TRADE ONLY · best-outcome exit · live Capital feed locked to your instrument
+                ONE TRADE ONLY · best-outcome manage · Capital SAFETY SL visible in app · live feed
+                locked to your instrument
               </p>
             </div>
           </div>
@@ -537,6 +539,7 @@ export function RobotDeskPage() {
                 <div>ENV · {session.environment.toUpperCase()}</div>
                 <div>SIDE · {session.open_side || 'FLAT'}</div>
                 <div>ENTRY · {fmt(session.entry_price)}</div>
+                <div>SAFETY SL · {fmt(session.safety_sl)}</div>
                 <div>DEAL · {session.deal_id || '—'}</div>
                 <div>REF · {session.last_deal_reference || '—'}</div>
                 <div>

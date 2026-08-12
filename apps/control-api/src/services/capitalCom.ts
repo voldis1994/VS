@@ -812,14 +812,16 @@ export async function createCapitalPosition(
     };
   }
   const dealRef = String(res.json?.dealReference || res.json?.dealId || '');
+  const slNote =
+    input.stopLevel != null && Number.isFinite(input.stopLevel) ? ` stop=${input.stopLevel}` : '';
   return {
     ok: true,
     status: res.status,
     json: res.json,
     deal_reference: dealRef || undefined,
     detail: dealRef
-      ? `Opened ${input.direction} ${epic} size=${input.size} dealRef=${dealRef}`
-      : `Opened ${input.direction} ${epic} size=${input.size}`,
+      ? `Opened ${input.direction} ${epic} size=${input.size}${slNote} dealRef=${dealRef}`
+      : `Opened ${input.direction} ${epic} size=${input.size}${slNote}`,
   };
 }
 
