@@ -22,9 +22,14 @@ export interface CapitalSession {
   cst: string;
   securityToken: string;
   accountType?: string;
+  currentAccountId?: string | null;
   close: () => Promise<void>;
   get: (path: string) => Promise<{ ok: boolean; status: number; json: any; text: string }>;
   post: (
+    path: string,
+    body?: unknown
+  ) => Promise<{ ok: boolean; status: number; json: any; text: string }>;
+  put: (
     path: string,
     body?: unknown
   ) => Promise<{ ok: boolean; status: number; json: any; text: string }>;
@@ -283,6 +288,12 @@ export async function openCapitalSession(input: {
       cst,
       securityToken: sec,
       accountType: typeof json.accountType === 'string' ? json.accountType : undefined,
+      currentAccountId:
+        typeof json.currentAccountId === 'string'
+          ? json.currentAccountId
+          : typeof json.accountId === 'string'
+            ? json.accountId
+            : null,
       async close() {
         try {
           await fetch(`${base}/api/v1/session`, {
@@ -299,6 +310,7 @@ export async function openCapitalSession(input: {
       },
       get: (path: string) => request('GET', path),
       post: (path: string, body?: unknown) => request('POST', path, body ?? {}),
+      put: (path: string, body?: unknown) => request('PUT', path, body ?? {}),
       del: (path: string) => request('DELETE', path),
     };
 
@@ -321,20 +333,18 @@ type PooledCapital = {
   raw: CapitalSession | null;
   expiresAt: number;
   cooldownUntil: number;
+  activeCapitalAccountId: string | null;
 };
 
 const capitalSessionPool = new Map<string, PooledCapital>();
 let loginChain: Promise<void> = Promise.resolve();
 let lastLoginAt = 0;
-const MIN_LOGIN_GAP_MS = 4000;
+const MIN_LOGIN_GAP_MS = 3500;
 const COOLDOWN_429_MS = 120_000;
 
-function capitalPoolKey(input: {
-  environment: string;
-  apiKey: string;
-  identifier: string;
-}): string {
-  return `${(input.environment || 'demo').toLowerCase()}|${input.apiKey.trim()}|${input.identifier.trim()}`;
+/** Isolate pool per broker connection so multi-client never shares sessions. */
+function capitalPoolKey(connectionId: number): string {
+  return `conn:${connectionId}`;
 }
 
 async function withLoginThrottle<T>(fn: () => Promise<T>): Promise<T> {
@@ -355,19 +365,74 @@ async function withLoginThrottle<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+export async function listCapitalAccounts(
+  session: CapitalSession
+): Promise<{ ok: boolean; accounts: Array<{ accountId: string; accountName: string; accountType?: string }>; detail: string }> {
+  const res = await session.get('/api/v1/accounts');
+  if (!res.ok) {
+    return {
+      ok: false,
+      accounts: [],
+      detail: `accounts HTTP ${res.status}: ${res.json?.errorCode || res.json?.message || res.text.slice(0, 120)}`,
+    };
+  }
+  const raw = Array.isArray(res.json?.accounts) ? res.json.accounts : [];
+  const accounts = raw
+    .map((a: any) => ({
+      accountId: String(a.accountId || a.account_id || '').trim(),
+      accountName: String(a.accountName || a.name || a.accountId || '').trim(),
+      accountType: a.accountType ? String(a.accountType) : undefined,
+    }))
+    .filter((a: { accountId: string }) => a.accountId);
+  return { ok: true, accounts, detail: `${accounts.length} accounts` };
+}
+
+export async function switchCapitalAccount(
+  session: CapitalSession,
+  capitalAccountId: string
+): Promise<{ ok: boolean; detail: string }> {
+  const id = capitalAccountId.trim();
+  if (!id) return { ok: false, detail: 'capital accountId required' };
+  if (session.currentAccountId && session.currentAccountId === id) {
+    return { ok: true, detail: `Already on account ${id}` };
+  }
+  const res = await session.put('/api/v1/session', { accountId: id });
+  if (!res.ok) {
+    return {
+      ok: false,
+      detail: `Switch account ${id} failed HTTP ${res.status}: ${
+        res.json?.errorCode || res.json?.message || res.text.slice(0, 160)
+      }`,
+    };
+  }
+  session.currentAccountId = id;
+  return { ok: true, detail: `Switched to Capital account ${id}` };
+}
+
 /**
- * Reuse Capital.com CST/security token across robot / orbit / trading.
- * Avoids login spam → HTTP 429 too-many-requests (which freezes the whole desk).
+ * Reuse Capital.com session per broker connection (multi-client safe).
+ * Optionally switches to the correct Capital accountId for that desk account.
  */
 export async function acquireCapitalSession(input: {
   environment: string;
   apiKey: string;
   identifier: string;
   password: string;
+  connectionId: number;
+  capitalAccountId?: string | null;
 }): Promise<{ ok: true; session: CapitalSession } | { ok: false; result: CapitalComSessionResult }> {
-  const key = capitalPoolKey(input);
+  const connectionId = Number(input.connectionId);
+  if (!Number.isFinite(connectionId) || connectionId <= 0) {
+    return {
+      ok: false,
+      result: { ok: false, status: 0, detail: 'connectionId required for multi-account session pool' },
+    };
+  }
+
+  const key = capitalPoolKey(connectionId);
   const now = Date.now();
   const cached = capitalSessionPool.get(key);
+  const wantedAccount = (input.capitalAccountId || '').trim() || null;
 
   if (cached && cached.cooldownUntil > now) {
     const waitSec = Math.ceil((cached.cooldownUntil - now) / 1000);
@@ -377,65 +442,84 @@ export async function acquireCapitalSession(input: {
         ok: false,
         status: 429,
         errorCode: 'error.too-many.requests',
-        detail: `Capital.com rate-limit cooldown ${waitSec}s — client robot waiting (no login spam).`,
+        detail: `Capital.com rate-limit cooldown ${waitSec}s on connection #${connectionId} — other clients keep their own sessions.`,
       },
     };
   }
 
+  let session: CapitalSession | null = null;
+  let raw: CapitalSession | null = null;
+
   if (cached?.session && cached.expiresAt > now) {
-    return { ok: true, session: cached.session };
+    session = cached.session;
+    raw = cached.raw;
+  } else {
+    if (cached?.raw) {
+      try {
+        await cached.raw.close();
+      } catch {
+        /* ignore */
+      }
+    }
+    capitalSessionPool.delete(key);
+
+    const opened = await withLoginThrottle(() =>
+      openCapitalSession({
+        environment: input.environment,
+        apiKey: input.apiKey,
+        identifier: input.identifier,
+        password: input.password,
+      })
+    );
+    if (!opened.ok) {
+      const tooMany =
+        opened.result.status === 429 ||
+        /too-many|rate.?limit/i.test(opened.result.detail || '') ||
+        /too-many/i.test(opened.result.errorCode || '');
+      if (tooMany) {
+        capitalSessionPool.set(key, {
+          session: null,
+          raw: null,
+          expiresAt: 0,
+          cooldownUntil: Date.now() + COOLDOWN_429_MS,
+          activeCapitalAccountId: null,
+        });
+      }
+      return opened;
+    }
+
+    raw = opened.session;
+    session = {
+      ...raw,
+      close: async () => {
+        /* no-op — pool owns lifetime */
+      },
+    };
   }
 
-  if (cached?.raw) {
-    try {
-      await cached.raw.close();
-    } catch {
-      /* ignore */
+  if (wantedAccount && session) {
+    const sw = await switchCapitalAccount(session, wantedAccount);
+    if (!sw.ok) {
+      return {
+        ok: false,
+        result: { ok: false, status: 400, detail: sw.detail },
+      };
     }
   }
-  capitalSessionPool.delete(key);
-
-  const opened = await withLoginThrottle(() => openCapitalSession(input));
-  if (!opened.ok) {
-    const tooMany =
-      opened.result.status === 429 ||
-      /too-many|rate.?limit/i.test(opened.result.detail || '') ||
-      /too-many/i.test(opened.result.errorCode || '');
-    if (tooMany) {
-      capitalSessionPool.set(key, {
-        session: null,
-        raw: null,
-        expiresAt: 0,
-        cooldownUntil: Date.now() + COOLDOWN_429_MS,
-      });
-    }
-    return opened;
-  }
-
-  const raw = opened.session;
-  const pooled: CapitalSession = {
-    ...raw,
-    close: async () => {
-      /* no-op — pool owns lifetime */
-    },
-  };
 
   capitalSessionPool.set(key, {
-    session: pooled,
+    session,
     raw,
     expiresAt: Date.now() + 8 * 60_000,
     cooldownUntil: 0,
+    activeCapitalAccountId: wantedAccount || session?.currentAccountId || null,
   });
-  return { ok: true, session: pooled };
+  return { ok: true, session: session! };
 }
 
-/** Drop a pooled session (e.g. after HTTP 401) so next acquire re-logins. */
-export function invalidateCapitalSession(input: {
-  environment: string;
-  apiKey: string;
-  identifier: string;
-}): void {
-  const key = capitalPoolKey(input);
+/** Drop a pooled session for one broker connection (e.g. after HTTP 401). */
+export function invalidateCapitalSession(connectionId: number): void {
+  const key = capitalPoolKey(connectionId);
   const cached = capitalSessionPool.get(key);
   if (!cached) return;
   void cached.raw?.close().catch(() => undefined);

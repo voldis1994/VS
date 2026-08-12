@@ -144,12 +144,13 @@ async function getCapitalSession(connectionId: number): Promise<
     return { ok: false, detail: 'Missing Capital.com credentials' };
   }
 
-  // Shared pool with Robot Desk — one login per Capital identity
+  // Shared pool with Robot Desk — isolated per broker connection (multi-client safe)
   const opened = await acquireCapitalSession({
     environment: conn.environment,
     apiKey,
     identifier,
     password,
+    connectionId,
   });
   if (!opened.ok) return { ok: false, detail: opened.result.detail };
   return { ok: true, session: opened.session };

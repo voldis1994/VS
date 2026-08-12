@@ -490,11 +490,20 @@ async function robotCycle(s: Internal) {
   }
 
   const creds = await loadCreds(s.connection_id);
+  const accRow = await pool.query(
+    `SELECT external_account_id FROM broker_accounts WHERE id = $1`,
+    [s.account_id]
+  );
+  const capitalAccountId =
+    (accRow.rows[0]?.external_account_id as string | null | undefined) || null;
+
   const opened = await acquireCapitalSession({
     environment: conn.environment,
     apiKey: creds.api_key || '',
     identifier: (conn.identifier || '').trim(),
     password: creds.password || '',
+    connectionId: s.connection_id,
+    capitalAccountId,
   });
   if (!opened.ok) {
     s.reads_fail += 1;

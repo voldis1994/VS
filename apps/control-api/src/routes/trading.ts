@@ -234,6 +234,7 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
         apiKey,
         identifier,
         password,
+        connectionId: conn.connection_id,
       });
       if (!opened.ok) {
         return reply.code(400).send({ error: opened.result.detail, message: opened.result.detail });
@@ -493,7 +494,8 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
 
     try {
       const { rows } = await pool.query(
-        `SELECT ba.id as account_id, ba.display_name, bc.id as connection_id, bc.broker_name, bc.environment, bc.identifier
+        `SELECT ba.id as account_id, ba.display_name, ba.external_account_id,
+                bc.id as connection_id, bc.broker_name, bc.environment, bc.identifier
          FROM broker_accounts ba
          JOIN broker_connections bc ON bc.id = ba.broker_connection_id
          WHERE ba.id = $1`,
@@ -508,6 +510,7 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
         environment: string;
         identifier: string | null;
         display_name: string;
+        external_account_id: string | null;
       };
       if (conn.broker_name !== 'capital_com') {
         return reply.code(400).send({ error: 'Only Capital.com accounts can place live orders' });
@@ -529,6 +532,8 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
         apiKey,
         identifier,
         password,
+        connectionId: conn.connection_id,
+        capitalAccountId: conn.external_account_id,
       });
       if (!opened.ok) {
         return reply.code(400).send({ error: opened.result.detail, message: opened.result.detail });

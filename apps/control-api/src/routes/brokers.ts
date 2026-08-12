@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { pool } from '../db/pool.js';
 import { encrypt, decrypt, maskSecret } from '../security/encryption.js';
 import { logAudit } from '../services/audit.js';
-import { testCapitalComSession } from '../services/capitalCom.js';
+import { acquireCapitalSession, listCapitalAccounts, testCapitalComSession } from '../services/capitalCom.js';
 import { ensureBrokerAccount, seedAccountInstruments } from './trading.js';
 
 async function ensureClientId(preferredId: number | undefined, fallbackName: string): Promise<number> {
@@ -231,10 +231,70 @@ export async function registerBrokerRoutes(app: FastifyInstance): Promise<void> 
         };
       }
 
+      // Sync Capital.com multi-accounts onto this connection (external_account_id)
+      let syncedAccounts: Array<{ accountId: string; accountName: string }> = [];
+      try {
+        const opened = await acquireCapitalSession({
+          environment: conn.environment,
+          apiKey,
+          identifier,
+          password,
+          connectionId: conn.id,
+        });
+        if (opened.ok) {
+          const listed = await listCapitalAccounts(opened.session);
+          if (listed.ok && listed.accounts.length) {
+            syncedAccounts = listed.accounts.map((a) => ({
+              accountId: a.accountId,
+              accountName: a.accountName,
+            }));
+            for (const a of listed.accounts) {
+              const existing = await pool.query(
+                `SELECT id FROM broker_accounts
+                 WHERE broker_connection_id = $1 AND external_account_id = $2`,
+                [conn.id, a.accountId]
+              );
+              if (existing.rows.length) {
+                await pool.query(
+                  `UPDATE broker_accounts SET display_name = $1 WHERE id = $2`,
+                  [a.accountName || a.accountId, existing.rows[0].id]
+                );
+              } else {
+                // Prefer filling the first account row if it has no external id yet
+                const blank = await pool.query(
+                  `SELECT id FROM broker_accounts
+                   WHERE broker_connection_id = $1 AND (external_account_id IS NULL OR external_account_id = '')
+                   ORDER BY id ASC LIMIT 1`,
+                  [conn.id]
+                );
+                if (blank.rows.length) {
+                  await pool.query(
+                    `UPDATE broker_accounts
+                     SET external_account_id = $1, display_name = COALESCE(NULLIF(display_name,''), $2)
+                     WHERE id = $3`,
+                    [a.accountId, a.accountName || a.accountId, blank.rows[0].id]
+                  );
+                } else {
+                  await pool.query(
+                    `INSERT INTO broker_accounts (broker_connection_id, external_account_id, display_name, enabled)
+                     VALUES ($1, $2, $3, true)`,
+                    [conn.id, a.accountId, a.accountName || a.accountId]
+                  );
+                }
+              }
+            }
+          }
+        }
+      } catch {
+        /* test already OK — sync is best-effort */
+      }
+
       return {
         success: true,
         message: result.detail,
         accountType: result.accountType,
+        capital_accounts: syncedAccounts,
+        multi_account: syncedAccounts.length > 1,
       };
     } catch (err) {
       request.log.error(err);
