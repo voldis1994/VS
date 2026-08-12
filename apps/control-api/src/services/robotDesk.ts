@@ -1025,7 +1025,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: max 1 open trade · MANAGE with best-outcome · Capital SAFETY SL on entry (visible in app) · entry only when FLAT',
+      'Rules: max 1 open trade · MANAGE with best-outcome · Capital SAFETY SL at dealing-rules minimum (tightest legal) · entry only when FLAT',
   });
 
   sessions.set(id, session);
