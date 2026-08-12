@@ -24,6 +24,11 @@ export interface CapitalSession {
   accountType?: string;
   close: () => Promise<void>;
   get: (path: string) => Promise<{ ok: boolean; status: number; json: any; text: string }>;
+  post: (
+    path: string,
+    body?: unknown
+  ) => Promise<{ ok: boolean; status: number; json: any; text: string }>;
+  del: (path: string) => Promise<{ ok: boolean; status: number; json: any; text: string }>;
 }
 
 export interface CapitalMarket {
@@ -247,6 +252,31 @@ export async function openCapitalSession(input: {
       continue;
     }
 
+    const authHeaders = {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'X-CAP-API-KEY': apiKey,
+      CST: cst,
+      'X-SECURITY-TOKEN': sec,
+    };
+
+    const request = async (method: string, path: string, body?: unknown) => {
+      const url = path.startsWith('http') ? path : `${base}${path}`;
+      const r = await fetch(url, {
+        method,
+        headers: authHeaders,
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      const t = await r.text();
+      let j: any = {};
+      try {
+        j = t ? JSON.parse(t) : {};
+      } catch {
+        j = {};
+      }
+      return { ok: r.ok, status: r.status, json: j, text: t };
+    };
+
     const session: CapitalSession = {
       base,
       apiKey,
@@ -267,26 +297,9 @@ export async function openCapitalSession(input: {
           // ignore
         }
       },
-      async get(path: string) {
-        const url = path.startsWith('http') ? path : `${base}${path}`;
-        const r = await fetch(url, {
-          method: 'GET',
-          headers: {
-            Accept: 'application/json',
-            'X-CAP-API-KEY': apiKey,
-            CST: cst,
-            'X-SECURITY-TOKEN': sec,
-          },
-        });
-        const t = await r.text();
-        let j: any = {};
-        try {
-          j = t ? JSON.parse(t) : {};
-        } catch {
-          j = {};
-        }
-        return { ok: r.ok, status: r.status, json: j, text: t };
-      },
+      get: (path: string) => request('GET', path),
+      post: (path: string, body?: unknown) => request('POST', path, body ?? {}),
+      del: (path: string) => request('DELETE', path),
     };
 
     return { ok: true, session };
@@ -358,47 +371,145 @@ export async function fetchCapitalMarketQuote(
     };
   }
 
-  const res = await session.get(`/api/v1/markets/${encodeURIComponent(clean)}`);
+  const tryEpic = async (candidate: string): Promise<CapitalMarketQuote> => {
+    const res = await session.get(`/api/v1/markets/${encodeURIComponent(candidate)}`);
+    if (!res.ok) {
+      return {
+        epic: candidate,
+        bid: null,
+        ask: null,
+        mid: null,
+        spread: null,
+        market_status: null,
+        update_time: null,
+        percentage_change: null,
+        high: null,
+        low: null,
+        raw_ok: false,
+        detail: `Capital.com markets/${candidate} HTTP ${res.status}: ${
+          res.json?.errorCode || res.json?.message || res.text.slice(0, 160)
+        }`,
+      };
+    }
+
+    const snap = (res.json?.snapshot || res.json?.marketSnapshot || {}) as Record<string, unknown>;
+    const bid = numOrNull(snap.bid ?? snap.bidPrice);
+    const ask = numOrNull(snap.offer ?? snap.ask ?? snap.offerPrice);
+    let mid: number | null = null;
+    if (bid != null && ask != null) mid = (bid + ask) / 2;
+    else mid = numOrNull(snap.mid ?? snap.lastTraded);
+    const spread = bid != null && ask != null ? ask - bid : null;
+
+    return {
+      epic: candidate,
+      bid,
+      ask,
+      mid,
+      spread,
+      market_status: strOrNull(snap.marketStatus ?? res.json?.instrument?.marketStatus),
+      update_time: strOrNull(snap.updateTime ?? snap.updateTimeUTC ?? snap.binaryUpdateTime),
+      percentage_change: numOrNull(snap.percentageChange),
+      high: numOrNull(snap.high),
+      low: numOrNull(snap.low),
+      raw_ok: bid != null || ask != null || mid != null,
+      detail: bid == null && ask == null ? 'Snapshot returned without bid/offer' : undefined,
+    };
+  };
+
+  let quote = await tryEpic(clean);
+  if (quote.raw_ok) return quote;
+
+  // Resolve human names like "gold" / "gold x" via Capital search
+  const resolved = await resolveEpicViaSearch(session, clean);
+  if (resolved && resolved !== clean) {
+    quote = await tryEpic(resolved);
+    if (quote.raw_ok) {
+      quote.detail = `Resolved "${clean}" → epic ${resolved}`;
+      return quote;
+    }
+  }
+  return quote;
+}
+
+/** Search Capital.com markets API for an epic/name (e.g. gold → GOLD). */
+export async function resolveEpicViaSearch(
+  session: CapitalSession,
+  query: string
+): Promise<string | null> {
+  const q = query.trim();
+  if (!q) return null;
+  const res = await session.get(`/api/v1/markets?searchTerm=${encodeURIComponent(q)}`);
+  if (!res.ok) return null;
+  const markets = Array.isArray(res.json?.markets) ? res.json.markets : [];
+  if (markets.length === 0) return null;
+
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const qn = norm(q);
+  let best: { epic: string; score: number } | null = null;
+  for (const m of markets) {
+    const epic = String(m.epic || '').trim();
+    if (!epic) continue;
+    const name = String(m.instrumentName || m.displayName || m.name || '');
+    const en = norm(epic);
+    const nn = norm(name);
+    let score = 0;
+    if (en === qn || nn === qn) score = 100;
+    else if (en.includes(qn) || nn.includes(qn) || qn.includes(en)) score = 70;
+    else if (qn.includes('gold') && (en.includes('gold') || nn.includes('gold') || en.includes('xau')))
+      score = 60;
+    if (!best || score > best.score) best = { epic, score };
+  }
+  return best && best.score >= 60 ? best.epic : String(markets[0].epic || '') || null;
+}
+
+export async function createCapitalPosition(
+  session: CapitalSession,
+  input: {
+    epic: string;
+    direction: 'BUY' | 'SELL';
+    size: number;
+    stopLevel?: number;
+    profitLevel?: number;
+  }
+): Promise<{ ok: boolean; deal_reference?: string; detail: string; status: number; json: any }> {
+  let epic = input.epic.trim();
+  const quote = await fetchCapitalMarketQuote(session, epic);
+  if (quote.raw_ok && quote.epic) epic = quote.epic;
+  else if (!quote.raw_ok) {
+    const resolved = await resolveEpicViaSearch(session, epic);
+    if (resolved) epic = resolved;
+  }
+
+  const body: Record<string, unknown> = {
+    epic,
+    direction: input.direction,
+    size: input.size,
+  };
+  if (input.stopLevel != null && Number.isFinite(input.stopLevel)) body.stopLevel = input.stopLevel;
+  if (input.profitLevel != null && Number.isFinite(input.profitLevel)) {
+    body.profitLevel = input.profitLevel;
+  }
+
+  const res = await session.post('/api/v1/positions', body);
   if (!res.ok) {
     return {
-      epic: clean,
-      bid: null,
-      ask: null,
-      mid: null,
-      spread: null,
-      market_status: null,
-      update_time: null,
-      percentage_change: null,
-      high: null,
-      low: null,
-      raw_ok: false,
-      detail: `Capital.com markets/${clean} HTTP ${res.status}: ${
-        res.json?.errorCode || res.json?.message || res.text.slice(0, 160)
+      ok: false,
+      status: res.status,
+      json: res.json,
+      detail: `Capital.com open ${input.direction} ${epic} failed HTTP ${res.status}: ${
+        res.json?.errorCode || res.json?.message || res.text.slice(0, 240)
       }`,
     };
   }
-
-  const snap = (res.json?.snapshot || res.json?.marketSnapshot || {}) as Record<string, unknown>;
-  const bid = numOrNull(snap.bid ?? snap.bidPrice);
-  const ask = numOrNull(snap.offer ?? snap.ask ?? snap.offerPrice);
-  let mid: number | null = null;
-  if (bid != null && ask != null) mid = (bid + ask) / 2;
-  else mid = numOrNull(snap.mid ?? snap.lastTraded);
-  const spread = bid != null && ask != null ? ask - bid : null;
-
+  const dealRef = String(res.json?.dealReference || res.json?.dealId || '');
   return {
-    epic: clean,
-    bid,
-    ask,
-    mid,
-    spread,
-    market_status: strOrNull(snap.marketStatus ?? res.json?.instrument?.marketStatus),
-    update_time: strOrNull(snap.updateTime ?? snap.updateTimeUTC ?? snap.binaryUpdateTime),
-    percentage_change: numOrNull(snap.percentageChange),
-    high: numOrNull(snap.high),
-    low: numOrNull(snap.low),
-    raw_ok: bid != null || ask != null || mid != null,
-    detail: bid == null && ask == null ? 'Snapshot returned without bid/offer' : undefined,
+    ok: true,
+    status: res.status,
+    json: res.json,
+    deal_reference: dealRef || undefined,
+    detail: dealRef
+      ? `Opened ${input.direction} ${epic} size=${input.size} dealRef=${dealRef}`
+      : `Opened ${input.direction} ${epic} size=${input.size}`,
   };
 }
 

@@ -211,13 +211,14 @@ export function OrbitReaderPage() {
           <button className="btn" type="button" onClick={() => setRunning((v) => !v)}>
             {running ? 'Pause orbit' : 'Resume orbit'}
           </button>
+          <a className="btn btn-go" href="/trading">
+            Open Trading → BUY/SELL
+          </a>
         </div>
-        {options.length === 0 && (
-          <div className="hint-line" style={{ marginTop: 10 }}>
-            Nav kataloga — Brokers → Test, tad Trading → Pull ALL Capital.com markets. Vairāki broker
-            savienojumi = vairāki sūtītāji.
-          </div>
-        )}
+        <div className="hint-line" style={{ marginTop: 10 }}>
+          Orbit tikai lasa cenas. Orderi: Trading → LIVE ORDER. Watchlist izmanto īsto epic (piem.
+          GOLD), nevis &quot;gold x&quot;.
+        </div>
       </div>
 
       <div className="orbit-stage">
@@ -260,9 +261,9 @@ export function OrbitReaderPage() {
                   <tr>
                     <th>Name</th>
                     <th>Kind</th>
-                    <th>Trust</th>
                     <th>Status</th>
                     <th>OK/Fail</th>
+                    <th>Error</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -270,7 +271,6 @@ export function OrbitReaderPage() {
                     <tr key={s.sender_id}>
                       <td>{s.name}</td>
                       <td className="mono">{s.kind}</td>
-                      <td className="mono">{s.trust}</td>
                       <td>
                         <span
                           className={`badge ${
@@ -286,6 +286,9 @@ export function OrbitReaderPage() {
                       </td>
                       <td className="mono">
                         {s.reads_ok}/{s.reads_fail}
+                      </td>
+                      <td className="mono" style={{ maxWidth: 280, whiteSpace: 'normal' }}>
+                        {s.last_error || '—'}
                       </td>
                     </tr>
                   ))}

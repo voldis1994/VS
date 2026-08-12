@@ -366,10 +366,18 @@ async function readCatalogPulse(epic: string): Promise<SenderRead> {
        FROM capital_markets cm
        JOIN broker_connections bc ON bc.id = cm.broker_connection_id
        JOIN clients c ON c.id = bc.client_id
-       WHERE cm.epic = $1 OR cm.symbol = $1
-       ORDER BY cm.updated_at DESC
-       LIMIT 5`,
-      [epic]
+       WHERE cm.epic ILIKE $1
+          OR cm.symbol ILIKE $1
+          OR cm.display_name ILIKE $2
+       ORDER BY
+         CASE
+           WHEN lower(cm.epic) = lower($3) THEN 0
+           WHEN lower(cm.symbol) = lower($3) THEN 1
+           ELSE 2
+         END,
+         cm.updated_at DESC
+       LIMIT 8`,
+      [epic, `%${epic}%`, epic]
     );
     const latency_ms = Date.now() - t0;
     if (rows.length === 0) {
@@ -532,6 +540,7 @@ async function readCapitalSender(
     });
     return {
       ...base,
+      epic: quote.epic || epic,
       ok: true,
       bid: quote.bid,
       ask: quote.ask,
@@ -540,6 +549,7 @@ async function readCapitalSender(
       market_status: quote.market_status,
       source_time: quote.update_time || now,
       latency_ms,
+      detail: quote.detail,
     };
   } catch (err) {
     const latency_ms = Date.now() - t0;
@@ -563,10 +573,30 @@ async function readCapitalSender(
 
 function buildConsensus(epics: string[], reads: SenderRead[]) {
   return epics.map((epic) => {
+    const q = epic.toLowerCase();
     const mids = reads
-      .filter((r) => r.epic === epic && r.ok && r.mid != null && r.kind === 'capital_com')
+      .filter(
+        (r) =>
+          r.ok &&
+          r.mid != null &&
+          r.kind === 'capital_com' &&
+          (r.epic.toLowerCase() === q ||
+            r.epic.toLowerCase().includes(q) ||
+            q.includes(r.epic.toLowerCase()) ||
+            (r.detail || '').toLowerCase().includes(q)),
+      )
       .map((r) => r.mid as number);
-    if (mids.length === 0) {
+    // Fallback: any successful capital mid from this scan if only one epic requested
+    const midsFallback =
+      mids.length > 0
+        ? mids
+        : epics.length === 1
+          ? reads
+              .filter((r) => r.ok && r.mid != null && r.kind === 'capital_com')
+              .map((r) => r.mid as number)
+          : [];
+    const use = midsFallback;
+    if (use.length === 0) {
       return {
         epic,
         contributing: 0,
@@ -575,16 +605,15 @@ function buildConsensus(epics: string[], reads: SenderRead[]) {
         agreement: 'INSUFFICIENT' as const,
       };
     }
-    const avg = mids.reduce((a, b) => a + b, 0) / mids.length;
-    const span = Math.max(...mids) - Math.min(...mids);
+    const avg = use.reduce((a, b) => a + b, 0) / use.length;
+    const span = Math.max(...use) - Math.min(...use);
     const rel = avg !== 0 ? span / Math.abs(avg) : span;
     let agreement: 'STRONG' | 'OK' | 'DIVERGENT' | 'INSUFFICIENT' = 'OK';
-    if (mids.length >= 2 && rel < 0.0005) agreement = 'STRONG';
-    else if (mids.length >= 2 && rel > 0.005) agreement = 'DIVERGENT';
-    else if (mids.length < 2) agreement = 'INSUFFICIENT';
+    if (use.length >= 2 && rel < 0.0005) agreement = 'STRONG';
+    else if (use.length >= 2 && rel > 0.005) agreement = 'DIVERGENT';
     return {
       epic,
-      contributing: mids.length,
+      contributing: use.length,
       mid_avg: avg,
       mid_span: span,
       agreement,

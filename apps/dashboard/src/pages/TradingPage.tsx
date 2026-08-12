@@ -38,6 +38,9 @@ export function TradingPage() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [msgOk, setMsgOk] = useState(true);
+  const [orderEpic, setOrderEpic] = useState('GOLD');
+  const [orderSize, setOrderSize] = useState('0.1');
+  const [orderBusy, setOrderBusy] = useState(false);
 
   useEffect(() => {
     if (!accounts || accounts.length === 0) {
@@ -176,6 +179,32 @@ export function TradingPage() {
     }
   };
 
+  const placeOrder = async (direction: 'BUY' | 'SELL') => {
+    if (!accountId) return;
+    setOrderBusy(true);
+    setMsg(null);
+    try {
+      const res = await apiFetch<{ detail: string; deal_reference?: string }>(
+        `/api/trading/accounts/${accountId}/orders`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            epic: orderEpic.trim(),
+            direction,
+            size: Number(orderSize),
+          }),
+        },
+      );
+      setMsgOk(true);
+      setMsg(res.detail + (res.deal_reference ? ` · ${res.deal_reference}` : ''));
+    } catch (e) {
+      setMsgOk(false);
+      setMsg(e instanceof Error ? e.message : 'Order failed');
+    } finally {
+      setOrderBusy(false);
+    }
+  };
+
   if (loading) return <div className="empty-state">LOADING TRADE DESK...</div>;
   if (error) return <div className="error-state">{error}</div>;
 
@@ -183,7 +212,7 @@ export function TradingPage() {
     <div>
       <h1 className="page-title">Trading</h1>
       <p className="page-subtitle">
-        Real Capital.com markets · lot size · auto-trade ON by default (no daily limits)
+        Real Capital.com markets · lot size · LIVE BUY/SELL orders
       </p>
 
       <div className="card" style={{ marginBottom: 16 }}>
@@ -234,6 +263,46 @@ export function TradingPage() {
           </p>
         )}
       </div>
+
+      {accountId && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div className="section-title">LIVE ORDER (Capital.com)</div>
+          <p className="hint-line" style={{ marginBottom: 10 }}>
+            Opens a real market position on the selected account. Use exact epic (e.g. GOLD) or a name
+            Capital can resolve. Brokers Test must be OK.
+          </p>
+          <div className="actions">
+            <input
+              className="input"
+              style={{ maxWidth: 220 }}
+              placeholder="Epic / name (GOLD)"
+              value={orderEpic}
+              onChange={(e) => setOrderEpic(e.target.value)}
+            />
+            <input
+              className="input"
+              style={{ maxWidth: 120 }}
+              placeholder="Size"
+              value={orderSize}
+              onChange={(e) => setOrderSize(e.target.value)}
+            />
+            <button
+              className="btn btn-go"
+              disabled={orderBusy || !orderEpic.trim()}
+              onClick={() => void placeOrder('BUY')}
+            >
+              BUY
+            </button>
+            <button
+              className="btn btn-stop"
+              disabled={orderBusy || !orderEpic.trim()}
+              onClick={() => void placeOrder('SELL')}
+            >
+              SELL
+            </button>
+          </div>
+        </div>
+      )}
 
       {accountId && (
         <div className="card">

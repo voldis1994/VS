@@ -3,7 +3,7 @@ import { pool } from '../db/pool.js';
 import { decrypt } from '../security/encryption.js';
 import { logAudit } from '../services/audit.js';
 import { getEnabledInstruments, getInstrumentById } from '../config/instruments.js';
-import { fetchAllCapitalMarkets, openCapitalSession } from '../services/capitalCom.js';
+import { fetchAllCapitalMarkets, openCapitalSession, createCapitalPosition } from '../services/capitalCom.js';
 
 export async function ensureBrokerAccount(connectionId: number, displayName: string): Promise<number> {
   const existing = await pool.query(
@@ -429,5 +429,134 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
       rows[0]
     );
     return rows[0];
+  });
+
+  /** Open a real Capital.com market order (BUY/SELL). */
+  app.post('/api/trading/accounts/:accountId/orders', async (request, reply) => {
+    const { accountId } = request.params as { accountId: string };
+    const body = (request.body || {}) as {
+      epic?: string;
+      direction?: string;
+      size?: number;
+      stop_level?: number;
+      profit_level?: number;
+    };
+
+    const epic = String(body.epic || '').trim();
+    const direction = String(body.direction || '').toUpperCase();
+    const size = Number(body.size);
+    if (!epic) {
+      return reply.code(400).send({ error: 'epic required', message: 'epic required' });
+    }
+    if (direction !== 'BUY' && direction !== 'SELL') {
+      return reply.code(400).send({ error: 'direction must be BUY or SELL', message: 'direction must be BUY or SELL' });
+    }
+    if (!Number.isFinite(size) || size <= 0) {
+      return reply.code(400).send({ error: 'size must be > 0', message: 'size must be > 0' });
+    }
+
+    try {
+      const { rows } = await pool.query(
+        `SELECT ba.id as account_id, ba.display_name, bc.id as connection_id, bc.broker_name, bc.environment, bc.identifier
+         FROM broker_accounts ba
+         JOIN broker_connections bc ON bc.id = ba.broker_connection_id
+         WHERE ba.id = $1`,
+        [accountId]
+      );
+      if (rows.length === 0) {
+        return reply.code(404).send({ error: 'Trading account not found' });
+      }
+      const conn = rows[0] as {
+        connection_id: number;
+        broker_name: string;
+        environment: string;
+        identifier: string | null;
+        display_name: string;
+      };
+      if (conn.broker_name !== 'capital_com') {
+        return reply.code(400).send({ error: 'Only Capital.com accounts can place live orders' });
+      }
+
+      const creds = await loadCredentialMap(conn.connection_id);
+      const apiKey = creds.api_key || '';
+      const password = creds.password || '';
+      const identifier = (conn.identifier || '').trim();
+      if (!apiKey || !password || !identifier) {
+        return reply.code(400).send({
+          error: 'Missing Capital.com credentials. Re-save Brokers and Test.',
+          message: 'Missing Capital.com credentials. Re-save Brokers and Test.',
+        });
+      }
+
+      const opened = await openCapitalSession({
+        environment: conn.environment,
+        apiKey,
+        identifier,
+        password,
+      });
+      if (!opened.ok) {
+        return reply.code(400).send({ error: opened.result.detail, message: opened.result.detail });
+      }
+
+      let result;
+      try {
+        result = await createCapitalPosition(opened.session, {
+          epic,
+          direction: direction as 'BUY' | 'SELL',
+          size,
+          stopLevel: body.stop_level,
+          profitLevel: body.profit_level,
+        });
+      } finally {
+        await opened.session.close();
+      }
+
+      if (!result.ok) {
+        return reply.code(400).send({
+          error: result.detail,
+          message: result.detail,
+          status: result.status,
+          broker: result.json,
+        });
+      }
+
+      await logAudit('admin', 'capital_order_opened', 'broker_account', String(accountId), null, {
+        epic,
+        direction,
+        size,
+        deal_reference: result.deal_reference,
+        environment: conn.environment,
+      });
+
+      // Local open position for desk (best-effort)
+      try {
+        const m = await pool.query(
+          `SELECT id FROM capital_markets
+           WHERE broker_connection_id = $1 AND (epic = $2 OR epic ILIKE $2 OR display_name ILIKE $3)
+           ORDER BY updated_at DESC LIMIT 1`,
+          [conn.connection_id, epic, `%${epic}%`]
+        );
+        const instrumentId = (m.rows[0]?.id as number) || 0;
+        await pool.query(
+          `INSERT INTO positions
+           (broker_account_id, instrument_id, direction, entry_price, quantity, status)
+           VALUES ($1, $2, $3, 0, $4, 'OPEN')`,
+          [accountId, instrumentId, direction === 'BUY' ? 'LONG' : 'SHORT', size]
+        );
+      } catch {
+        /* Capital order still live even if local row fails */
+      }
+
+      return {
+        success: true,
+        deal_reference: result.deal_reference,
+        detail: result.detail,
+        account: conn.display_name,
+        environment: conn.environment,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Order failed';
+      return reply.code(500).send({ error: message, message });
+    }
   });
 }
