@@ -22,7 +22,12 @@ const HOST = process.env.CONTROL_API_HOST || '0.0.0.0';
 async function main() {
   await runMigrations();
 
-  const app = Fastify({ logger: true });
+  const app = Fastify({
+    logger: true,
+    connectionTimeout: 0,
+    requestTimeout: 0,
+    keepAliveTimeout: 650_000,
+  });
   const telemetry = new TelemetryBroadcaster();
 
   await app.register(cors, {
