@@ -1,0 +1,5 @@
+add_library(mr_setup_engine src/setup_engine.cpp)
+add_library(mr::setup_engine ALIAS mr_setup_engine)
+target_include_directories(mr_setup_engine PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_link_libraries(mr_setup_engine PUBLIC mr::regime_engine mr::market_state)
+target_compile_features(mr_setup_engine PUBLIC cxx_std_20)

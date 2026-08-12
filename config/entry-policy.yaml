@@ -1,0 +1,8 @@
+entry_policy:
+  intent_ttl_ms: 2000
+  min_probability: 0.55
+  min_ev_after_costs: 0.0
+  require_confirmed_setup: true
+  require_valid_evidence: true
+  block_on_stale_data: true
+  include_spread_in_costs: true

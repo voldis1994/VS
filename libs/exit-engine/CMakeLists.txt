@@ -1,0 +1,5 @@
+add_library(mr_exit_engine src/exit_engine.cpp)
+add_library(mr::exit_engine ALIAS mr_exit_engine)
+target_include_directories(mr_exit_engine PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_link_libraries(mr_exit_engine PUBLIC mr::position_engine)
+target_compile_features(mr_exit_engine PUBLIC cxx_std_20)

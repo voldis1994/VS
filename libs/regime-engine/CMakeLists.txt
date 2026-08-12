@@ -1,0 +1,5 @@
+add_library(mr_regime_engine src/regime_engine.cpp)
+add_library(mr::regime_engine ALIAS mr_regime_engine)
+target_include_directories(mr_regime_engine PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_link_libraries(mr_regime_engine PUBLIC mr::market_state)
+target_compile_features(mr_regime_engine PUBLIC cxx_std_20)

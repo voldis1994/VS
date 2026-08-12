@@ -1,0 +1,25 @@
+brokers:
+  - name: capital_com
+    display_name: Capital.com
+    environments:
+      demo:
+        base_url: https://demo-api-capital.backend-capital.com
+      live:
+        base_url: https://api-capital.backend-capital.com
+    capabilities:
+      market_order: true
+      limit_order: true
+      stop_loss: true
+      take_profit: true
+      trailing_stop: false
+      partial_close: false
+      websocket_quotes: false
+  - name: paper
+    display_name: Paper Trading
+    environments:
+      internal:
+        base_url: internal://paper
+    capabilities:
+      market_order: true
+      stop_loss: true
+      take_profit: true

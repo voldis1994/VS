@@ -1,0 +1,5 @@
+add_library(mr_execution_router src/execution_router.cpp)
+add_library(mr::execution_router ALIAS mr_execution_router)
+target_include_directories(mr_execution_router PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_link_libraries(mr_execution_router PUBLIC mr::entry_engine mr::position_engine)
+target_compile_features(mr_execution_router PUBLIC cxx_std_20)
