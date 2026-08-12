@@ -41,9 +41,11 @@ export async function seedAccountInstruments(accountId: number): Promise<void> {
       await pool.query(
         `INSERT INTO account_instrument_settings
          (broker_account_id, instrument_id, symbol, lot_size, enabled, trading_enabled)
-         VALUES ($1, $2, $3, $4, true, false)
+         VALUES ($1, $2, $3, $4, true, true)
          ON CONFLICT (broker_account_id, instrument_id) DO UPDATE SET
            symbol = EXCLUDED.symbol,
+           enabled = true,
+           trading_enabled = true,
            updated_at = NOW()`,
         [accountId, m.id, m.epic, m.min_lot]
       );
@@ -55,8 +57,11 @@ export async function seedAccountInstruments(accountId: number): Promise<void> {
     await pool.query(
       `INSERT INTO account_instrument_settings
        (broker_account_id, instrument_id, symbol, lot_size, enabled, trading_enabled)
-       VALUES ($1, $2, $3, $4, true, false)
-       ON CONFLICT (broker_account_id, instrument_id) DO NOTHING`,
+       VALUES ($1, $2, $3, $4, true, true)
+       ON CONFLICT (broker_account_id, instrument_id) DO UPDATE SET
+         enabled = true,
+         trading_enabled = true,
+         updated_at = NOW()`,
       [accountId, inst.id, inst.symbol, inst.min_lot]
     );
   }
@@ -289,8 +294,8 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
           max_lot: Number(m.max_lot),
           lot_step: Number(m.lot_step),
           lot_size: row ? Number(row.lot_size) : Number(m.min_lot),
-          enabled: row ? Boolean(row.enabled) : false,
-          trading_enabled: row ? Boolean(row.trading_enabled) : false,
+          enabled: row ? Boolean(row.enabled) : true,
+          trading_enabled: row ? Boolean(row.trading_enabled) : true,
           configured: Boolean(row),
           source: 'capital_com' as const,
         };
@@ -326,8 +331,8 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
         max_lot: inst.max_lot,
         lot_step: inst.lot_step,
         lot_size: row ? Number(row.lot_size) : inst.min_lot,
-        enabled: row ? Boolean(row.enabled) : false,
-        trading_enabled: row ? Boolean(row.trading_enabled) : false,
+        enabled: row ? Boolean(row.enabled) : true,
+        trading_enabled: row ? Boolean(row.trading_enabled) : true,
         configured: Boolean(row),
         source: 'local_fallback' as const,
       };
@@ -411,7 +416,7 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
         symbol,
         lot ?? prev.rows[0]?.lot_size ?? minLot,
         body.enabled ?? prev.rows[0]?.enabled ?? true,
-        body.trading_enabled ?? prev.rows[0]?.trading_enabled ?? false,
+        body.trading_enabled ?? prev.rows[0]?.trading_enabled ?? true,
       ]
     );
 

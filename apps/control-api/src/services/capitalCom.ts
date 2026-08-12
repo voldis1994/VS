@@ -320,6 +320,99 @@ export async function testCapitalComSession(input: {
   };
 }
 
+export interface CapitalMarketQuote {
+  epic: string;
+  bid: number | null;
+  ask: number | null;
+  mid: number | null;
+  spread: number | null;
+  market_status: string | null;
+  update_time: string | null;
+  percentage_change: number | null;
+  high: number | null;
+  low: number | null;
+  raw_ok: boolean;
+  detail?: string;
+}
+
+/** Live Capital.com market snapshot for one epic (REST). No synthetic values. */
+export async function fetchCapitalMarketQuote(
+  session: CapitalSession,
+  epic: string
+): Promise<CapitalMarketQuote> {
+  const clean = epic.trim();
+  if (!clean) {
+    return {
+      epic: '',
+      bid: null,
+      ask: null,
+      mid: null,
+      spread: null,
+      market_status: null,
+      update_time: null,
+      percentage_change: null,
+      high: null,
+      low: null,
+      raw_ok: false,
+      detail: 'Empty epic',
+    };
+  }
+
+  const res = await session.get(`/api/v1/markets/${encodeURIComponent(clean)}`);
+  if (!res.ok) {
+    return {
+      epic: clean,
+      bid: null,
+      ask: null,
+      mid: null,
+      spread: null,
+      market_status: null,
+      update_time: null,
+      percentage_change: null,
+      high: null,
+      low: null,
+      raw_ok: false,
+      detail: `Capital.com markets/${clean} HTTP ${res.status}: ${
+        res.json?.errorCode || res.json?.message || res.text.slice(0, 160)
+      }`,
+    };
+  }
+
+  const snap = (res.json?.snapshot || res.json?.marketSnapshot || {}) as Record<string, unknown>;
+  const bid = numOrNull(snap.bid ?? snap.bidPrice);
+  const ask = numOrNull(snap.offer ?? snap.ask ?? snap.offerPrice);
+  let mid: number | null = null;
+  if (bid != null && ask != null) mid = (bid + ask) / 2;
+  else mid = numOrNull(snap.mid ?? snap.lastTraded);
+  const spread = bid != null && ask != null ? ask - bid : null;
+
+  return {
+    epic: clean,
+    bid,
+    ask,
+    mid,
+    spread,
+    market_status: strOrNull(snap.marketStatus ?? res.json?.instrument?.marketStatus),
+    update_time: strOrNull(snap.updateTime ?? snap.updateTimeUTC ?? snap.binaryUpdateTime),
+    percentage_change: numOrNull(snap.percentageChange),
+    high: numOrNull(snap.high),
+    low: numOrNull(snap.low),
+    raw_ok: bid != null || ask != null || mid != null,
+    detail: bid == null && ask == null ? 'Snapshot returned without bid/offer' : undefined,
+  };
+}
+
+function numOrNull(v: unknown): number | null {
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
+function strOrNull(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const s = v.trim();
+  return s ? s : null;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }

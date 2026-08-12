@@ -11,6 +11,7 @@ export type DeskStatus = {
   clients?: { active?: number } | number;
   brokers_live?: number;
   capital_markets?: number;
+  capital_senders?: number;
   server_time?: string;
   feeds?: { active?: number; unhealthy?: number };
 };

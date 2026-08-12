@@ -183,7 +183,7 @@ export function TradingPage() {
     <div>
       <h1 className="page-title">Trading</h1>
       <p className="page-subtitle">
-        Real Capital.com markets · lot size · auto-trade
+        Real Capital.com markets · lot size · auto-trade ON by default (no daily limits)
       </p>
 
       <div className="card" style={{ marginBottom: 16 }}>

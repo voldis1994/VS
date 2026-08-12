@@ -61,9 +61,6 @@ export function OverviewPage() {
   const [baseLot, setBaseLot] = useState('0.10');
   const [maxLot, setMaxLot] = useState('1.00');
   const [allowedSymbols, setAllowedSymbols] = useState('');
-  const [dailyProfitLimit, setDailyProfitLimit] = useState(true);
-  const [dailyLossLimit, setDailyLossLimit] = useState(true);
-  const [tradeLimits, setTradeLimits] = useState(true);
   const [runnerOn, setRunnerOn] = useState(false);
 
   useEffect(() => {
@@ -449,24 +446,17 @@ export function OverviewPage() {
         </section>
 
         <section className="panel control-panel">
-          <div className="section-title">LIMIT CONTROL</div>
-          <label className="toggle-row">
-            <input type="checkbox" checked={dailyProfitLimit} onChange={(e) => setDailyProfitLimit(e.target.checked)} />
-            <span>Daily profit limit</span>
-          </label>
-          <label className="toggle-row">
-            <input type="checkbox" checked={dailyLossLimit} onChange={(e) => setDailyLossLimit(e.target.checked)} />
-            <span>Daily loss limit</span>
-          </label>
-          <label className="toggle-row">
-            <input type="checkbox" checked={tradeLimits} onChange={(e) => setTradeLimits(e.target.checked)} />
-            <span>Trade limits (max / day)</span>
-          </label>
-          <div className="hint-line" style={{ marginTop: 10 }}>
-            Hard limits enforce via Trading instrument toggles + LIVE gate.
-          </div>
+          <div className="section-title">ORBIT READER</div>
+          <p className="hint-line" style={{ marginTop: 0 }}>
+            Multi-sender real quotes — no fake BUILDING status, no daily trade limits.
+          </p>
           <div className="actions" style={{ marginTop: 10 }}>
-            <Link className="btn" to="/settings">Open Settings</Link>
+            <Link className="btn btn-primary" to="/orbit">
+              Open Orbit
+            </Link>
+            <Link className="btn" to="/feeds">
+              Senders
+            </Link>
           </div>
         </section>
 
@@ -494,7 +484,7 @@ export function OverviewPage() {
           <div className="section-title">AI INFO LOG</div>
           <div className="log-list tall">
             <div>Conf 72% · desk sync {(status?.server_time && new Date(status.server_time).toLocaleTimeString()) || '—'}</div>
-            <div>Mode {(status?.mode || 'PAPER').toUpperCase()} · gate {status?.live_enabled ? 'ON' : 'OFF'}</div>
+            <div>Mode {(status?.mode || 'LIVE').toUpperCase()} · live {status?.live_enabled === false ? 'OFF' : 'ON'}</div>
             <div>Capital live brokers: {status?.brokers_live ?? 0}</div>
             <div>Markets cached: {(status?.capital_markets ?? totalMarkets).toLocaleString()}</div>
             {events.slice(0, 6).map((e, i) => (

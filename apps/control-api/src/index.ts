@@ -13,6 +13,7 @@ import { registerMarketRoutes } from './routes/market.js';
 import { registerAuditRoutes } from './routes/audit.js';
 import { registerSettingsRoutes } from './routes/settings.js';
 import { registerTradingRoutes } from './routes/trading.js';
+import { registerRobotReaderRoutes } from './routes/robotReader.js';
 import { TelemetryBroadcaster } from './ws/telemetry.js';
 import { authMiddleware } from './middleware/auth.js';
 
@@ -20,6 +21,14 @@ const PORT = parseInt(process.env.CONTROL_API_PORT || '3000', 10);
 const HOST = process.env.CONTROL_API_HOST || '0.0.0.0';
 
 async function main() {
+  // Operator risk accepted — LIVE ready unless explicitly set false
+  if (process.env.LIVE_TRADING_ENABLED === undefined || process.env.LIVE_TRADING_ENABLED === '') {
+    process.env.LIVE_TRADING_ENABLED = 'true';
+  }
+  if (process.env.OPERATING_MODE === undefined || process.env.OPERATING_MODE === '') {
+    process.env.OPERATING_MODE = 'LIVE';
+  }
+
   await runMigrations();
 
   const app = Fastify({
@@ -46,6 +55,7 @@ async function main() {
   await registerTradeRoutes(app);
   await registerMarketRoutes(app, telemetry);
   await registerTradingRoutes(app);
+  await registerRobotReaderRoutes(app);
   await registerAuditRoutes(app);
   await registerSettingsRoutes(app);
 

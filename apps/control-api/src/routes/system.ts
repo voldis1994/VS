@@ -2,6 +2,12 @@ import { FastifyInstance } from 'fastify';
 import { pool, healthCheck } from '../db/pool.js';
 import { TelemetryBroadcaster } from '../ws/telemetry.js';
 
+function liveEnabled(): boolean {
+  const v = process.env.LIVE_TRADING_ENABLED;
+  if (v === undefined || v === '') return true;
+  return v !== 'false' && v !== '0';
+}
+
 export async function registerSystemRoutes(
   app: FastifyInstance,
   telemetry: TelemetryBroadcaster
@@ -15,6 +21,9 @@ export async function registerSystemRoutes(
     let clientsActive = 0;
     let brokersLive = 0;
     let capitalMarkets = 0;
+    let feedActive = 0;
+    let feedUnhealthy = 0;
+    let capitalSenders = 0;
     try {
       const [pos, execs, clients, brokers, markets] = await Promise.all([
         pool.query(`SELECT COUNT(*)::int AS n FROM positions WHERE status = 'OPEN'`),
@@ -35,6 +44,15 @@ export async function registerSystemRoutes(
     } catch {
       // tables may be mid-migrate
     }
+    try {
+      const { listDataSenders } = await import('../services/robotReader.js');
+      const senders = await listDataSenders();
+      capitalSenders = senders.filter((s) => s.kind === 'capital_com').length;
+      feedActive = senders.filter((s) => s.status === 'LIVE').length;
+      feedUnhealthy = senders.filter((s) => s.status === 'ERROR').length;
+    } catch {
+      /* robot reader optional on first boot */
+    }
 
     return {
       market_core: 'HEALTHY',
@@ -43,15 +61,16 @@ export async function registerSystemRoutes(
       postgres: dbOk ? 'ok' : 'down',
       redis: 'ok',
       control_api: 'HEALTHY',
-      feeds: { active: 2, unhealthy: 0 },
+      feeds: { active: feedActive, unhealthy: feedUnhealthy },
       clients: { active: clientsActive },
       brokers_live: brokersLive,
       live_brokers: brokersLive,
+      capital_senders: capitalSenders,
       capital_markets: capitalMarkets,
       open_positions: openPositions,
       today_executions: todayExecutions,
-      mode: process.env.OPERATING_MODE || 'PAPER',
-      live_enabled: process.env.LIVE_TRADING_ENABLED === 'true',
+      mode: process.env.OPERATING_MODE || 'LIVE',
+      live_enabled: liveEnabled(),
       server_time: new Date().toISOString(),
       latency: telemetry.getLatestMetrics(),
       status: dbOk ? 'LIVE' : 'DEGRADED',
@@ -59,8 +78,8 @@ export async function registerSystemRoutes(
   });
 
   app.get('/api/system/mode', async () => ({
-    mode: process.env.OPERATING_MODE || 'PAPER',
-    live_enabled: process.env.LIVE_TRADING_ENABLED === 'true',
+    mode: process.env.OPERATING_MODE || 'LIVE',
+    live_enabled: liveEnabled(),
   }));
 
   app.post('/api/system/mode', async (request, reply) => {
@@ -70,13 +89,12 @@ export async function registerSystemRoutes(
     if (!allowed.includes(body.mode)) {
       return reply.code(400).send({ error: `Invalid mode. Use: ${allowed.join(', ')}` });
     }
-    if (body.mode === 'LIVE' && process.env.LIVE_TRADING_ENABLED !== 'true') {
-      return reply.code(400).send({
-        error: 'LIVE mode requires LIVE trading gate ON (Settings → Enable LIVE trading)',
-      });
-    }
+    // No LIVE gate — operator accepts risk
     process.env.OPERATING_MODE = body.mode;
-    return { mode: body.mode, previous: prev };
+    if (body.mode === 'LIVE') {
+      process.env.LIVE_TRADING_ENABLED = 'true';
+    }
+    return { mode: body.mode, previous: prev, live_enabled: liveEnabled() };
   });
 
   app.get('/api/system/metrics', async () => telemetry.getLatestMetrics());
