@@ -358,8 +358,8 @@ export function TradingPage() {
             </button>
           </div>
           <p className="hint-line" style={{ marginTop: 8 }}>
-            START ROBOT atver fullscreen Robot Desk šim tirgum (ONE TRADE ONLY). Tabula “TRADING ON”
-            bez START ROBOT robots nesāk.
+            START ROBOT atver fullscreen Robot Desk šim tirgum (ONE TRADE ONLY). Tabula FLAG nav
+            robots — spied START ROBOT rindā vai šeit augšā.
           </p>
         </div>
       )}
