@@ -14,6 +14,7 @@ import { registerAuditRoutes } from './routes/audit.js';
 import { registerSettingsRoutes } from './routes/settings.js';
 import { registerTradingRoutes } from './routes/trading.js';
 import { registerRobotReaderRoutes } from './routes/robotReader.js';
+import { registerRobotDeskRoutes } from './routes/robotDesk.js';
 import { TelemetryBroadcaster } from './ws/telemetry.js';
 import { authMiddleware } from './middleware/auth.js';
 
@@ -56,6 +57,7 @@ async function main() {
   await registerMarketRoutes(app, telemetry);
   await registerTradingRoutes(app);
   await registerRobotReaderRoutes(app);
+  await registerRobotDeskRoutes(app);
   await registerAuditRoutes(app);
   await registerSettingsRoutes(app);
 

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { EquityCurve, DailyBars } from '../components/Charts';
 import { useDesk } from '../components/DeskContext';
 import { apiFetch } from '../hooks/useApi';
@@ -42,7 +42,17 @@ function seedBars(seed: number, len: number): number[] {
   });
 }
 
+type MarketOpt = {
+  instrument_id: number;
+  epic?: string;
+  symbol: string;
+  display_name: string;
+  min_lot: number;
+  lot_size: number;
+};
+
 export function OverviewPage() {
+  const navigate = useNavigate();
   const {
     status,
     clients,
@@ -57,10 +67,10 @@ export function OverviewPage() {
   const [events, setEvents] = useState<SystemEvent[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
-  const [lotMode, setLotMode] = useState<'auto' | 'fixed'>('auto');
-  const [baseLot, setBaseLot] = useState('0.10');
-  const [maxLot, setMaxLot] = useState('1.00');
-  const [allowedSymbols, setAllowedSymbols] = useState('');
+  const [markets, setMarkets] = useState<MarketOpt[]>([]);
+  const [marketEpic, setMarketEpic] = useState('');
+  const [lotSize, setLotSize] = useState('0.1');
+  const [marketFilter, setMarketFilter] = useState('');
   const [runnerOn, setRunnerOn] = useState(false);
 
   useEffect(() => {
@@ -84,6 +94,55 @@ export function OverviewPage() {
   useEffect(() => {
     setRunnerOn(Boolean(status?.live_enabled) && (status?.mode || '').toUpperCase() === 'LIVE');
   }, [status?.live_enabled, status?.mode]);
+
+  useEffect(() => {
+    if (!selectedAccountId) {
+      setMarkets([]);
+      setMarketEpic('');
+      return;
+    }
+    void apiFetch<MarketOpt[]>(`/api/trading/accounts/${selectedAccountId}/instruments`)
+      .then((rows) => {
+        setMarkets(rows);
+        if (rows[0]) {
+          setMarketEpic(rows[0].epic || rows[0].symbol);
+          setLotSize(String(rows[0].lot_size || rows[0].min_lot || 0.1));
+        } else {
+          setMarketEpic('');
+        }
+      })
+      .catch(() => setMarkets([]));
+  }, [selectedAccountId]);
+
+  const filteredMarkets = useMemo(() => {
+    const q = marketFilter.trim().toLowerCase();
+    if (!q) return markets.slice(0, 200);
+    return markets
+      .filter(
+        (m) =>
+          m.display_name.toLowerCase().includes(q) ||
+          (m.epic || m.symbol).toLowerCase().includes(q),
+      )
+      .slice(0, 200);
+  }, [markets, marketFilter]);
+
+  const selectedMarket = markets.find((m) => (m.epic || m.symbol) === marketEpic) || null;
+
+  const startRobotTrading = () => {
+    if (!selectedAccountId || !marketEpic) {
+      setMsg('Izvēlies account + Capital.com tirgu (Pull markets Trading lapā, ja tukšs)');
+      return;
+    }
+    const lot = Number(lotSize);
+    if (!Number.isFinite(lot) || lot <= 0) {
+      setMsg('Lot size must be > 0');
+      return;
+    }
+    const name = selectedMarket?.display_name || marketEpic;
+    navigate(
+      `/robot?account_id=${selectedAccountId}&epic=${encodeURIComponent(marketEpic)}&lot=${lot}&name=${encodeURIComponent(name)}`,
+    );
+  };
 
   const selectedAccount = accounts.find((a) => a.account_id === selectedAccountId) || null;
   const deskAccounts = useMemo(() => {
@@ -415,47 +474,74 @@ export function OverviewPage() {
         </section>
 
         <section className="panel control-panel">
-          <div className="section-title">SETTINGS &amp; PARAMETERS</div>
-          <label className="field-label">Lot size mode</label>
-          <select className="input" value={lotMode} onChange={(e) => setLotMode(e.target.value as 'auto' | 'fixed')}>
-            <option value="auto">Auto</option>
-            <option value="fixed">Fixed</option>
-          </select>
-          <div className="metric-row" style={{ marginTop: 8 }}>
-            <div>
-              <label className="field-label">Base lot</label>
-              <input className="input" value={baseLot} onChange={(e) => setBaseLot(e.target.value)} />
+          <div className="section-title">START ROBOT</div>
+          <p className="hint-line" style={{ marginTop: 0, marginBottom: 8 }}>
+            Izvēlies Capital.com tirgu + lot → TRADING ON → atveras Robot Desk (redzams live log).
+          </p>
+          {!selectedAccountId && (
+            <div className="error-state">Vispirms izvēlies account kreisajā rail / Accounts Status.</div>
+          )}
+          {selectedAccountId && markets.length === 0 && (
+            <div className="error-state" style={{ marginBottom: 8 }}>
+              Nav tirgu. <Link to="/trading">Trading</Link> → Pull ALL Capital.com markets.
             </div>
-            <div>
-              <label className="field-label">Max lot</label>
-              <input className="input" value={maxLot} onChange={(e) => setMaxLot(e.target.value)} />
-            </div>
-          </div>
-          <label className="field-label">Allowed symbols / epics</label>
+          )}
+          <label className="field-label">Search market</label>
           <input
             className="input"
-            placeholder="e.g. EURUSD, XAUUSD, Capital epics…"
-            value={allowedSymbols}
-            onChange={(e) => setAllowedSymbols(e.target.value)}
+            placeholder="Capital.com name…"
+            value={marketFilter}
+            onChange={(e) => setMarketFilter(e.target.value)}
+            disabled={!markets.length}
+          />
+          <label className="field-label">Market</label>
+          <select
+            className="input"
+            value={marketEpic}
+            onChange={(e) => {
+              setMarketEpic(e.target.value);
+              const m = markets.find((x) => (x.epic || x.symbol) === e.target.value);
+              if (m) setLotSize(String(m.lot_size || m.min_lot || 0.1));
+            }}
+            disabled={!markets.length}
+          >
+            {filteredMarkets.length === 0 && <option value="">No markets</option>}
+            {filteredMarkets.map((m) => (
+              <option key={m.instrument_id} value={m.epic || m.symbol}>
+                {m.display_name} · {m.epic || m.symbol}
+              </option>
+            ))}
+          </select>
+          <label className="field-label">Lot size</label>
+          <input
+            className="input"
+            value={lotSize}
+            onChange={(e) => setLotSize(e.target.value)}
+            disabled={!markets.length}
           />
           <div className="actions" style={{ marginTop: 10 }}>
-            <Link className="btn btn-primary" to="/trading">
-              Apply in Trading
-            </Link>
+            <button
+              className="btn btn-go"
+              disabled={busy || !marketEpic || !selectedAccountId}
+              onClick={startRobotTrading}
+            >
+              TRADING ON → ROBOT
+            </button>
           </div>
+          {msg && <div className="hint-line" style={{ marginTop: 8 }}>{msg}</div>}
         </section>
 
         <section className="panel control-panel">
           <div className="section-title">ORBIT READER</div>
           <p className="hint-line" style={{ marginTop: 0 }}>
-            Multi-sender real quotes — no fake BUILDING status, no daily trade limits.
+            Multi-sender quotes (read-only).
           </p>
           <div className="actions" style={{ marginTop: 10 }}>
             <Link className="btn btn-primary" to="/orbit">
               Open Orbit
             </Link>
-            <Link className="btn" to="/feeds">
-              Senders
+            <Link className="btn" to="/robot">
+              Robot Desk
             </Link>
           </div>
         </section>

@@ -13,6 +13,7 @@ import { LogsPage } from './pages/LogsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { TradingPage } from './pages/TradingPage';
 import { OrbitReaderPage } from './pages/OrbitReaderPage';
+import { RobotDeskPage } from './pages/RobotDeskPage';
 import { useWebSocket } from './hooks/useWebSocket';
 
 export default function App() {
@@ -22,6 +23,7 @@ export default function App() {
     <Layout>
       <Routes>
         <Route path="/" element={<OverviewPage />} />
+        <Route path="/robot" element={<RobotDeskPage />} />
         <Route path="/orbit" element={<OrbitReaderPage />} />
         <Route path="/market" element={<MarketReaderPage />} />
         <Route path="/trading" element={<TradingPage />} />

@@ -944,3 +944,69 @@ tr:hover td { background: rgba(168, 85, 247, 0.06); }
   .orbit-stage { grid-template-columns: 1fr; }
   .orbit-ring-wrap { height: 380px; }
 }
+
+/* —— Robot Desk —— */
+.robot-desk-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
+.robot-status-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+.robot-status-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: rgba(16, 12, 28, 0.9);
+}
+.robot-status-card.on {
+  border-color: rgba(57, 255, 20, 0.55);
+  box-shadow: var(--neon-green);
+}
+.robot-status-card.off {
+  border-color: rgba(255, 59, 107, 0.4);
+}
+.robot-status-card .label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  color: var(--text-secondary);
+}
+.robot-status-card .value {
+  font-family: var(--font-display);
+  font-size: 20px;
+  margin-top: 4px;
+}
+.robot-log {
+  max-height: calc(100vh - 320px);
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.robot-log-line {
+  display: grid;
+  grid-template-columns: 72px 72px 1fr;
+  gap: 8px;
+  align-items: start;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(168, 85, 247, 0.1);
+}
+.robot-log-line .time { color: var(--text-secondary); }
+.robot-log-line .detail { color: var(--text-primary); white-space: normal; }
+.robot-log-line.phase-read .badge { color: var(--accent); border-color: rgba(168,85,247,0.4); }
+.robot-log-line.phase-order .badge { color: var(--success); border-color: rgba(57,255,20,0.45); }
+.robot-log-line.phase-error .badge { color: var(--danger); border-color: rgba(255,59,107,0.45); }
+.robot-log-line.phase-decide .badge { color: var(--warning); border-color: rgba(251,191,36,0.4); }
+@media (max-width: 1200px) {
+  .robot-status-grid { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 700px) {
+  .robot-status-grid { grid-template-columns: repeat(2, 1fr); }
+  .robot-log-line { grid-template-columns: 1fr; }
+}
