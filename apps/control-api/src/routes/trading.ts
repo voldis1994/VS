@@ -53,21 +53,26 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
     return rows;
   });
 
-  app.post('/api/trading/accounts/sync', async () => {
-    const { rows: connections } = await pool.query(
-      `SELECT bc.id, bc.broker_name, bc.environment, bc.identifier, c.name as client_name
-       FROM broker_connections bc
-       JOIN clients c ON c.id = bc.client_id
-       WHERE bc.enabled = true`
-    );
-    const created: number[] = [];
-    for (const conn of connections) {
-      const name = `${conn.client_name} / ${conn.broker_name} (${conn.environment})`;
-      const accountId = await ensureBrokerAccount(conn.id as number, name);
-      await seedAccountInstruments(accountId);
-      created.push(accountId);
+  app.post('/api/trading/accounts/sync', async (_request, reply) => {
+    try {
+      const { rows: connections } = await pool.query(
+        `SELECT bc.id, bc.broker_name, bc.environment, bc.identifier, c.name as client_name
+         FROM broker_connections bc
+         JOIN clients c ON c.id = bc.client_id
+         WHERE bc.enabled = true`
+      );
+      const created: number[] = [];
+      for (const conn of connections) {
+        const name = `${conn.client_name} / ${conn.broker_name} (${conn.environment})`;
+        const accountId = await ensureBrokerAccount(conn.id as number, name);
+        await seedAccountInstruments(accountId);
+        created.push(accountId);
+      }
+      return { synced_accounts: created.length, account_ids: created };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Sync failed';
+      return reply.code(500).send({ error: message, message });
     }
-    return { synced_accounts: created.length, account_ids: created };
   });
 
   app.get('/api/trading/accounts/:accountId/instruments', async (request) => {

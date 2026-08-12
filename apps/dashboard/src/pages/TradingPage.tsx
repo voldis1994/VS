@@ -73,9 +73,11 @@ export function TradingPage() {
     try {
       const res = await apiFetch<{ synced_accounts: number }>('/api/trading/accounts/sync', {
         method: 'POST',
+        body: JSON.stringify({}),
       });
       setMsg(`Synced ${res.synced_accounts} account(s). Markets + lot size ready below.`);
       refresh();
+      if (accountId) await loadInstruments(accountId);
     } catch (e) {
       setMsg(e instanceof Error ? e.message : 'Sync failed');
     } finally {
@@ -153,7 +155,20 @@ export function TradingPage() {
             Sync accounts & markets
           </button>
         </div>
-        {msg && <p style={{ marginTop: 8, fontSize: 13, color: 'var(--accent)' }}>{msg}</p>}
+        {msg && (
+          <p
+            style={{
+              marginTop: 8,
+              fontSize: 13,
+              fontFamily: 'var(--font-mono)',
+              color: msg.toLowerCase().includes('sync') || msg.toLowerCase().includes('ready')
+                ? 'var(--accent)'
+                : 'var(--danger)',
+            }}
+          >
+            {msg}
+          </p>
+        )}
         {(accounts || []).length === 0 && (
           <p className="error-state" style={{ marginTop: 8 }}>
             No broker account yet. Save a Capital.com Live connection under Brokers, then Sync.
