@@ -56,6 +56,8 @@ export type RobotSession = {
   open_side: 'BUY' | 'SELL' | null;
   safety_sl: number | null;
   error: string | null;
+  /** When false, robot never invents entries — pipeline fan-out only */
+  entry_enabled: boolean;
 };
 
 type Internal = RobotSession & {
@@ -921,7 +923,20 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // ——— FLAT: entry only after close ———
+    // ——— FLAT: entry only after close (and only if entry_enabled) ———
+    if (!s.entry_enabled) {
+      s.mode = s.open_side ? 'MANAGE' : 'FLAT';
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail:
+          'MANAGE-ONLY · waiting for central pipeline intent (no local BUY/SELL brain)',
+      });
+      return;
+    }
+
     s.mode = 'ENTRY';
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
     if (s.closed_at_ms > 0 && sinceClose < 20_000) {
@@ -988,6 +1003,8 @@ export async function startRobotSession(input: {
   display_name?: string;
   lot_size: number;
   trading_enabled?: boolean;
+  /** Default true for Admin Robot Board; Client Panel manage-only uses false */
+  entry_enabled?: boolean;
 }): Promise<RobotSession> {
   const { rows } = await pool.query(
     `SELECT ba.id, ba.display_name, ba.external_account_id,
@@ -1082,6 +1099,7 @@ export async function startRobotSession(input: {
     open_side: null,
     safety_sl: null,
     error: null,
+    entry_enabled: input.entry_enabled !== false,
     timer: null,
     closed_at_ms: 0,
     peak_favorable: 0,
@@ -1120,4 +1138,42 @@ export async function startRobotSession(input: {
   setRobotCadence(session, ACTIVE_CADENCE_MS);
 
   return publicSession(session);
+}
+
+
+/** Attach manage-only session after pipeline/broker-confirmed fill (no entry brain). */
+export async function attachManageOnlyRobot(input: {
+  account_id: number;
+  epic: string;
+  display_name: string;
+  lot_size: number;
+  side: 'BUY' | 'SELL';
+  entry_price: number | null;
+  deal_reference?: string | null;
+}): Promise<RobotSession> {
+  const session = await startRobotSession({
+    account_id: input.account_id,
+    epic: input.epic,
+    display_name: input.display_name,
+    lot_size: input.lot_size,
+    trading_enabled: true,
+    entry_enabled: false,
+  });
+  const internal = sessions.get(session.id);
+  if (internal) {
+    internal.open_side = input.side;
+    internal.entry_price = input.entry_price;
+    internal.entry_at = new Date().toISOString();
+    internal.mode = 'MANAGE';
+    internal.last_deal_reference = input.deal_reference || null;
+    internal.orders_placed = Math.max(internal.orders_placed, 1);
+    pushTick(internal, {
+      phase: 'ORDER',
+      bid: null,
+      ask: null,
+      mid: input.entry_price,
+      detail: `PIPELINE FILL ${input.side} ${input.display_name} lot=${input.lot_size} · manage-only attached`,
+    });
+  }
+  return getRobotSession(session.id) || session;
 }

@@ -17,6 +17,7 @@ import { registerRobotReaderRoutes } from './routes/robotReader.js';
 import { registerRobotDeskRoutes } from './routes/robotDesk.js';
 import { registerClientAuthRoutes } from './routes/clientAuth.js';
 import { registerClientPanelRoutes } from './routes/clientPanel.js';
+import { registerPipelineRoutes } from './routes/pipeline.js';
 import { TelemetryBroadcaster } from './ws/telemetry.js';
 import { ClientEventHub, setClientEventHub } from './services/clientEvents.js';
 import { authMiddleware } from './middleware/auth.js';
@@ -41,8 +42,18 @@ function corsOrigins(): boolean | string | string[] {
   return list.length === 1 ? list[0]! : list;
 }
 
+function trustProxyOption(): boolean | string | string[] | number {
+  const raw = (process.env.TRUST_PROXY || '').trim();
+  if (!raw || raw === 'false' || raw === '0') return false;
+  if (raw === 'true' || raw === '1') return true;
+  if (/^\d+$/.test(raw)) return parseInt(raw, 10);
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 async function main() {
-  // Operator risk accepted — LIVE ready unless explicitly set false
   if (process.env.LIVE_TRADING_ENABLED === undefined || process.env.LIVE_TRADING_ENABLED === '') {
     process.env.LIVE_TRADING_ENABLED = 'true';
   }
@@ -54,6 +65,7 @@ async function main() {
 
   const app = Fastify({
     logger: true,
+    trustProxy: trustProxyOption(),
     connectionTimeout: 0,
     requestTimeout: 0,
     keepAliveTimeout: 650_000,
@@ -82,6 +94,7 @@ async function main() {
   await registerRobotDeskRoutes(app);
   await registerClientAuthRoutes(app);
   await registerClientPanelRoutes(app);
+  await registerPipelineRoutes(app);
   await registerAuditRoutes(app);
   await registerSettingsRoutes(app);
 
@@ -90,12 +103,36 @@ async function main() {
     socket.on('close', () => telemetry.removeClient(socket));
   });
 
+  // Prefer HttpOnly cookie. Optional first-message auth — never put token in URL.
   app.get('/ws/client', { websocket: true }, async (socket, request) => {
-    const q = request.query as { token?: string };
-    const token =
-      (typeof q.token === 'string' && q.token) || extractClientToken(request) || null;
-    const session = await resolveClientSession(token);
-    if (!session || !session.client_enabled || !session.access_enabled) {
+    const tryAuth = async (token: string | null) => {
+      const session = await resolveClientSession(token);
+      if (!session || !session.client_enabled || !session.access_enabled) return null;
+      return session;
+    };
+
+    let session = await tryAuth(extractClientToken(request));
+    if (!session) {
+      const authed = await new Promise<Awaited<ReturnType<typeof tryAuth>>>((resolve) => {
+        const timer = setTimeout(() => resolve(null), 3000);
+        socket.once('message', async (raw) => {
+          clearTimeout(timer);
+          try {
+            const msg = JSON.parse(String(raw)) as { type?: string; token?: string };
+            if (msg.type === 'auth' && msg.token) {
+              resolve(await tryAuth(msg.token));
+              return;
+            }
+          } catch {
+            /* ignore */
+          }
+          resolve(null);
+        });
+      });
+      session = authed;
+    }
+
+    if (!session) {
       socket.send(
         JSON.stringify({
           type: 'error',
@@ -106,6 +143,7 @@ async function main() {
       socket.close();
       return;
     }
+
     const clientId = session.client_id;
     clientEvents.add(clientId, socket);
     socket.send(

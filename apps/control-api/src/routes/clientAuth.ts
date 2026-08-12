@@ -32,8 +32,7 @@ async function recordAttempt(ip: string, success: boolean): Promise<void> {
 }
 
 function clientIp(request: FastifyRequest): string {
-  const xf = request.headers['x-forwarded-for'];
-  if (typeof xf === 'string' && xf.trim()) return xf.split(',')[0]!.trim();
+  // Use Fastify-resolved IP only (respects trustProxy). Never trust raw X-Forwarded-For.
   return request.ip || 'unknown';
 }
 

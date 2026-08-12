@@ -1737,6 +1737,7 @@ tr:hover td { background: rgba(57, 255, 20, 0.06); }
 }
 .ccp-conn.on { color: #b4ff00; }
 .ccp-conn.off { color: #ff8da8; border-color: rgba(255, 80, 120, 0.35); }
+.ccp-conn.warn { color: #ffc857; border-color: rgba(255, 200, 87, 0.45); }
 .ccp-dot {
   width: 8px;
   height: 8px;

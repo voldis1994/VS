@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { validateLotSize, assertNoSecrets } from '../services/clientPanel.js';
-import { mapTradeType } from '../services/tradePresentation.js';
+import { formatTradeLabel } from '../services/tradePresentation.js';
 import { hashSessionToken, parseCookieHeader } from './clientSession.js';
 
 describe('client panel helpers', () => {
-  it('maps trade types from real sides only', () => {
-    expect(mapTradeType('BUY')).toBe('BUY LONG');
-    expect(mapTradeType('SELL')).toBe('SELL SCALP');
-    expect(mapTradeType(null)).toBeNull();
+  it('maps trade labels honestly (BUY/SELL only)', () => {
+    expect(formatTradeLabel('BUY')).toBe('BUY');
+    expect(formatTradeLabel('SELL')).toBe('SELL');
+    expect(formatTradeLabel(null)).toBeNull();
   });
 
   it('validates lot size against min/max/step', () => {

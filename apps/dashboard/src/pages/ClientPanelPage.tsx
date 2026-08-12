@@ -27,8 +27,12 @@ type LiveTrade = {
 type Status = {
   client_id: number;
   client_name: string;
-  connection_ok: boolean;
+  connection_ok?: boolean;
+  connection_status?: 'ONLINE' | 'LOST' | 'ERROR';
   robot_status: 'RUNNING' | 'STOPPED';
+  broker_status?: 'CONNECTED' | 'DEGRADED' | 'UNKNOWN';
+  last_broker_ok_at?: string | null;
+  broker_error?: string | null;
   market: string | null;
   display_name: string | null;
   lot_size: number | null;
@@ -275,9 +279,21 @@ export function ClientPanelPage() {
             <div className="ccp-top-title">VS CONTROL PANEL</div>
             <div className="ccp-client">{status?.client_name || '…'}</div>
           </div>
-          <div className={`ccp-conn ${online ? 'on' : 'off'}`}>
+          <div
+            className={`ccp-conn ${
+              !online || status?.connection_status === 'LOST'
+                ? 'off'
+                : status?.connection_status === 'ERROR' || status?.broker_status === 'DEGRADED'
+                  ? 'warn'
+                  : 'on'
+            }`}
+          >
             <span className="ccp-dot" />
-            {online ? 'SYSTEM ONLINE' : 'CONNECTION LOST'}
+            {!online || status?.connection_status === 'LOST'
+              ? 'CONNECTION LOST'
+              : status?.connection_status === 'ERROR' || status?.broker_status === 'DEGRADED'
+                ? 'BROKER ERROR'
+                : 'SYSTEM ONLINE'}
           </div>
         </header>
 

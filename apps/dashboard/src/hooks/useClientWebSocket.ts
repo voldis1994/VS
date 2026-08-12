@@ -22,19 +22,19 @@ export function useClientWebSocket(
       return;
     }
     const token = getClientToken();
-    if (!token) {
-      setOnline(false);
-      return;
-    }
     let closed = false;
     let ws: WebSocket | null = null;
     let timer: ReturnType<typeof setTimeout>;
 
     const connect = () => {
       if (closed) return;
-      const url = `${WS_BASE}${WS_BASE.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
-      ws = new WebSocket(url);
-      ws.onopen = () => setOnline(true);
+      // No token in URL — cookie (same-origin) or first-message auth
+      ws = new WebSocket(WS_BASE);
+      ws.onopen = () => {
+        if (token) {
+          ws?.send(JSON.stringify({ type: 'auth', token }));
+        }
+      };
       ws.onclose = () => {
         setOnline(false);
         if (!closed) timer = setTimeout(connect, 3000);

@@ -15,11 +15,12 @@
 - APIs: `/api/instruments`, `/api/trading/markets`, `/api/trading/accounts/:id/instruments`.
 - Legacy `/api/market/instruments` is empty/stub — **not** SoT.
 
-### START / STOP runtime (what Client Panel must call)
-- Operator “START ROBOT” → `POST /api/robot-desk/start` → `startRobotSession({ account_id, epic, lot_size })`.
-- Runtime is **in-memory per `account_id + epic`** (`robotIdFor`), already multi-client isolated.
-- Robot talks Capital.com via pooled sessions; ONE TRADE ONLY + best-outcome manage.
-- C++ market-core / TradeIntent / ExecutionRouter path exists in architecture but is **not** the path the current Robot Board uses. Client Panel must reuse **Robot Desk**, not invent a parallel engine.
+### START / STOP runtime (updated)
+
+- **Client Panel START** → activates `account_instrument_settings` subscription only (no robotDesk entry brain).
+- **Pipeline intents** → `POST /api/pipeline/intents` → `intentFanout` routes to RUNNING subscribers with each account’s lot size via Capital.
+- **Admin Robot Board** may still use `robotDesk` (separate path); Client Panel must not.
+- See `docs/CLIENT_PANEL_PIPELINE_FIX.md`.
 
 ### Positions / trades
 - Robot writes `positions` on entry/exit (best effort).

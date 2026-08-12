@@ -1,12 +1,13 @@
 import { pool } from '../db/pool.js';
-import {
-  listRobotSessions,
-  startRobotSession,
-  stopRobotSession,
-  type RobotSession,
-} from './robotDesk.js';
+import { listRobotSessions } from './robotDesk.js';
 import { emitToClient } from './clientEvents.js';
-import { mapTradeType } from './tradePresentation.js';
+import { formatTradeLabel } from './tradePresentation.js';
+import {
+  activateSubscription,
+  deactivateSubscription,
+  getBrokerHealth,
+} from './clientSubscriptions.js';
+import { stopEntryRobotsForAccount } from './intentFanout.js';
 
 export type ClientMarket = {
   instrument_id: number;
@@ -32,14 +33,20 @@ export type ClientLiveTrade = {
 export type ClientPanelStatus = {
   client_id: number;
   client_name: string;
-  connection_ok: boolean;
+  /** WebSocket / API reachability from client UI perspective is separate; this is backend health */
+  connection_status: 'ONLINE' | 'LOST' | 'ERROR';
   robot_status: 'RUNNING' | 'STOPPED';
+  broker_status: 'CONNECTED' | 'DEGRADED' | 'UNKNOWN';
+  last_broker_ok_at: string | null;
+  broker_error: string | null;
   market: string | null;
   display_name: string | null;
   lot_size: number | null;
   account_id: number | null;
   live_trade: ClientLiveTrade;
   last_seen_at: string | null;
+  /** @deprecated use connection_status */
+  connection_ok: boolean;
 };
 
 export function validateLotSize(
@@ -156,7 +163,7 @@ async function loadMarketForClient(
   };
 }
 
-function robotForAccount(accountId: number, epic?: string | null): RobotSession | null {
+function robotForAccount(accountId: number, epic?: string | null) {
   const all = listRobotSessions().filter((s) => s.account_id === accountId);
   if (epic) {
     const exact = all.find((s) => s.epic === epic && s.running);
@@ -167,7 +174,8 @@ function robotForAccount(accountId: number, epic?: string | null): RobotSession 
 
 export async function getClientPanelStatus(clientId: number): Promise<ClientPanelStatus> {
   const { rows } = await pool.query(
-    `SELECT id, name, panel_epic, panel_display_name, panel_lot_size, last_seen_at
+    `SELECT id, name, panel_epic, panel_display_name, panel_lot_size,
+            panel_robot_requested, last_seen_at
      FROM clients WHERE id = $1`,
     [clientId]
   );
@@ -178,36 +186,45 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
     panel_epic: string | null;
     panel_display_name: string | null;
     panel_lot_size: string | number | null;
+    panel_robot_requested: string;
     last_seen_at: Date | string | null;
   };
   const account = await resolveClientTradingAccount(clientId);
+  const requestedRunning = String(c.panel_robot_requested || '').toUpperCase() === 'RUNNING';
   const robot = account ? robotForAccount(account.account_id, c.panel_epic) : null;
-  const running = Boolean(robot?.running);
+  const health = getBrokerHealth(clientId);
+
   let live_trade: ClientLiveTrade = null;
   if (robot?.running && robot.open_side) {
+    const side = robot.open_side as 'BUY' | 'SELL';
     live_trade = {
       market: robot.epic,
       display_name: robot.display_name,
-      side: robot.open_side as 'BUY' | 'SELL',
-      trade_type: mapTradeType(robot.open_side as 'BUY' | 'SELL') || robot.open_side,
+      side,
+      trade_type: formatTradeLabel(side) || side,
       lot_size: robot.lot_size,
       entry_price: robot.entry_price,
       status: 'OPEN',
     };
   }
 
+  let connection_status: ClientPanelStatus['connection_status'] = 'ONLINE';
+  if (health.broker_status === 'DEGRADED' || health.last_error) {
+    connection_status = requestedRunning ? 'ERROR' : 'ONLINE';
+  }
+
   return {
     client_id: c.id,
     client_name: c.name,
-    connection_ok: true,
-    robot_status: running ? 'RUNNING' : 'STOPPED',
-    market: running ? robot!.epic : c.panel_epic,
-    display_name: running ? robot!.display_name : c.panel_display_name,
-    lot_size: running
-      ? robot!.lot_size
-      : c.panel_lot_size != null
-        ? Number(c.panel_lot_size)
-        : null,
+    connection_status,
+    connection_ok: connection_status === 'ONLINE',
+    robot_status: requestedRunning ? 'RUNNING' : 'STOPPED',
+    broker_status: health.broker_status,
+    last_broker_ok_at: health.last_ok_at,
+    broker_error: health.last_error,
+    market: c.panel_epic,
+    display_name: c.panel_display_name,
+    lot_size: c.panel_lot_size != null ? Number(c.panel_lot_size) : null,
     account_id: account?.account_id ?? null,
     live_trade,
     last_seen_at: c.last_seen_at ? new Date(c.last_seen_at).toISOString() : null,
@@ -243,6 +260,10 @@ export async function saveClientConfig(
   return getClientPanelStatus(clientId);
 }
 
+/**
+ * Client START = activate subscription for pipeline fan-out.
+ * Does NOT start robotDesk entry strategy.
+ */
 export async function startClientRobot(clientId: number): Promise<ClientPanelStatus> {
   const { rows } = await pool.query(
     `SELECT panel_epic, panel_display_name, panel_lot_size, enabled, access_enabled
@@ -272,25 +293,17 @@ export async function startClientRobot(clientId: number): Promise<ClientPanelSta
   const account = await resolveClientTradingAccount(clientId);
   if (!account) throw new Error('No broker account linked to this client');
 
-  // Stop other robots for this account so Client Panel stays one-active-market
-  for (const s of listRobotSessions()) {
-    if (s.account_id === account.account_id && s.running && s.epic !== market.epic) {
-      await stopRobotSession(s.id);
-    }
-  }
+  // Kill any robotDesk entry brain for this account — Client Panel is remote control only
+  await stopEntryRobotsForAccount(account.account_id);
 
-  await startRobotSession({
-    account_id: account.account_id,
+  await activateSubscription({
+    clientId,
+    accountId: account.account_id,
+    instrumentId: market.instrument_id,
     epic: market.epic,
-    display_name: market.display_name,
-    lot_size: lot,
-    trading_enabled: true,
+    displayName: market.display_name,
+    lotSize: lot,
   });
-
-  await pool.query(
-    `UPDATE clients SET panel_robot_requested = 'RUNNING', updated_at = NOW() WHERE id = $1`,
-    [clientId]
-  );
 
   const status = await getClientPanelStatus(clientId);
   emitToClient(clientId, {
@@ -299,6 +312,7 @@ export async function startClientRobot(clientId: number): Promise<ClientPanelSta
     display_name: status.display_name,
     lot_size: status.lot_size,
     robot_status: status.robot_status,
+    mode: 'subscription',
   });
   emitToClient(clientId, { type: 'client_status', ...status });
   return status;
@@ -306,17 +320,29 @@ export async function startClientRobot(clientId: number): Promise<ClientPanelSta
 
 export async function stopClientRobot(clientId: number): Promise<ClientPanelStatus> {
   const account = await resolveClientTradingAccount(clientId);
-  if (account) {
-    for (const s of listRobotSessions()) {
-      if (s.account_id === account.account_id && s.running) {
-        await stopRobotSession(s.id);
-      }
-    }
-  }
-  await pool.query(
-    `UPDATE clients SET panel_robot_requested = 'STOPPED', updated_at = NOW() WHERE id = $1`,
+  const { rows } = await pool.query(
+    `SELECT panel_epic FROM clients WHERE id = $1`,
     [clientId]
   );
+  const epic = rows[0]?.panel_epic as string | null;
+  let instrumentId: number | null = null;
+  if (account && epic) {
+    const m = await loadMarketForClient(clientId, epic);
+    instrumentId = m?.instrument_id ?? null;
+  }
+  if (account) {
+    await stopEntryRobotsForAccount(account.account_id);
+    await deactivateSubscription({
+      clientId,
+      accountId: account.account_id,
+      instrumentId,
+    });
+  } else {
+    await pool.query(
+      `UPDATE clients SET panel_robot_requested = 'STOPPED', updated_at = NOW() WHERE id = $1`,
+      [clientId]
+    );
+  }
   const status = await getClientPanelStatus(clientId);
   emitToClient(clientId, {
     type: 'robot_stopped',
@@ -326,7 +352,6 @@ export async function stopClientRobot(clientId: number): Promise<ClientPanelStat
   return status;
 }
 
-/** Strip any credential-like keys from objects returned to Client API. */
 export function assertNoSecrets(payload: unknown): void {
   const forbidden = [
     'password',
