@@ -98,7 +98,7 @@ export function BrokersPage() {
     try {
       const result = await apiFetch<{ success?: boolean; message?: string; error?: string }>(
         `/api/brokers/${id}/test`,
-        { method: 'POST' }
+        { method: 'POST', body: JSON.stringify({}) }
       );
       if (!result?.success) {
         setTestOk(false);
