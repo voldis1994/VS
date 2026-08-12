@@ -315,21 +315,39 @@ export function RobotDeskPage() {
     setSession(s);
   };
 
+  const mode =
+    session?.mode ||
+    (session?.open_side ? 'MANAGE' : session ? 'FLAT' : 'STANDBY');
+  const mfePct = Math.min(100, Math.abs(session?.mfe || 0) * 800);
+  const uplPct = Math.min(
+    100,
+    Math.max(0, ((session?.unrealized || 0) / Math.max(Math.abs(session?.mfe || 0.0001), 0.0001)) * 100),
+  );
+  const retPct =
+    session?.peak_retention != null ? Math.round(session.peak_retention * 100) : 0;
+
   return (
     <div className="robot-fs-shell" ref={shellRef}>
       <div className="robot-desk robot-desk-fs">
-        <div className="robot-desk-head">
-          <div className="robot-brand-block">
-            <Logo size={56} />
+        <div className="robot-arena-top">
+          <div className="robot-arena-brand">
+            <Logo size={96} />
             <div>
-              <div className="orbit-kicker">ONE TRADE ONLY · BEST OUTCOME EXIT</div>
-              <h1 className="page-title">ROBOT DESK</h1>
-              <p className="page-subtitle">
-                Max 1 atvērts treids uz instrumentu. Kamēr atvērts — tikai MANAGE (bez jauniem
-                entry). Entry tikai kad FLAT pēc aizvēršanas ar best outcome.
+              <div className="robot-arena-kicker">VS SYSTEM // COMBAT UNIT</div>
+              <h1 className="robot-arena-title">ROBOT ARENA</h1>
+              <p className="robot-arena-sub">
+                ONE TRADE ONLY · best-outcome exit · live Capital feed locked to your instrument
               </p>
             </div>
           </div>
+
+          <div
+            className={`robot-mode-banner ${String(mode).toLowerCase()}`}
+          >
+            <div className="label">ACTIVE MODE</div>
+            <div className="value">{mode}</div>
+          </div>
+
           <div className="actions">
             {!isFs && (
               <button className="btn" type="button" onClick={() => void enterFs()}>
@@ -337,14 +355,14 @@ export function RobotDeskPage() {
               </button>
             )}
             <Link className="btn" to="/">
-              ← Main
+              ← BASE
             </Link>
             <button
               className="btn btn-stop"
               disabled={busy || !session?.running}
               onClick={() => void stop()}
             >
-              STOP THIS ROBOT
+              ABORT ROBOT
             </button>
           </div>
         </div>
@@ -373,16 +391,20 @@ export function RobotDeskPage() {
             {error}
           </div>
         )}
+
         {!session && !busy && (
           <div className="robot-empty">
-            <p style={{ marginBottom: 12 }}>
-              Nav aktīva robota šim logam. Sāc šeit — vai no Trading / Main ar{' '}
-              <strong>START ROBOT</strong>.
+            <div className="robot-arena-kicker">DEPLOY UNIT</div>
+            <h2 className="robot-arena-title" style={{ fontSize: 24, marginBottom: 10 }}>
+              NO ACTIVE COMBAT BOT
+            </h2>
+            <p style={{ marginBottom: 14, color: 'var(--text-secondary)' }}>
+              Lock a Capital.com market and deploy. One trade max — manage until best exit.
             </p>
 
             {siblings.some((s) => s.running) && (
               <div style={{ marginBottom: 14 }}>
-                <div className="section-title">RUNNING ROBOTS</div>
+                <div className="section-title">LIVE UNITS</div>
                 <div className="robot-sibling-bar" style={{ marginTop: 8 }}>
                   {siblings
                     .filter((s) => s.running)
@@ -402,7 +424,7 @@ export function RobotDeskPage() {
               </div>
             )}
 
-            <div className="section-title">START ROBOT HERE</div>
+            <div className="section-title">DEPLOY CONTROLS</div>
             <div className="actions" style={{ marginTop: 8, marginBottom: 8, flexWrap: 'wrap' }}>
               <select
                 className="input"
@@ -435,7 +457,9 @@ export function RobotDeskPage() {
                   if (m) setLaunchLot(String(m.lot_size || m.min_lot || 0.1));
                 }}
               >
-                {filteredLaunch.length === 0 && <option value="">Pull markets in Trading first</option>}
+                {filteredLaunch.length === 0 && (
+                  <option value="">Pull markets in Trading first</option>
+                )}
                 {filteredLaunch.map((m) => (
                   <option key={m.instrument_id} value={m.epic || m.symbol}>
                     {m.display_name} · {m.epic || m.symbol}
@@ -454,115 +478,101 @@ export function RobotDeskPage() {
                 disabled={!launchAccountId || !launchEpic}
                 onClick={startFromLauncher}
               >
-                TRADING ON → START ROBOT
+                DEPLOY ROBOT
               </button>
             </div>
-            <p className="hint-line">
-              Piezīme: Trading tabulas “TRADING ON” karodziņš ≠ robots. Robots sākas tikai ar START
-              ROBOT (šeit / Main / Trading).
-            </p>
           </div>
         )}
+
         {busy && !session && (
-          <div className="robot-empty mono">Starting robot…</div>
+          <div className="robot-empty mono">Booting VS combat unit…</div>
         )}
 
         {session && (
-          <>
-            <div className="robot-status-grid">
-              <div className={`robot-status-card ${session.running ? 'on' : 'off'}`}>
-                <div className="label">STATUS</div>
-                <div className="value">{session.running ? 'RUNNING' : 'STOPPED'}</div>
-                <div className="mono">{session.id}</div>
-              </div>
-              <div className="robot-status-card">
-                <div className="label">MARKET</div>
-                <div className="value" style={{ fontSize: 16 }}>
-                  {session.display_name}
-                </div>
-                <div className="mono">{session.epic}</div>
-              </div>
-              <div className="robot-status-card">
-                <div className="label">LOT SIZE</div>
-                <div className="value">{session.lot_size}</div>
-              </div>
-              <div className="robot-status-card">
-                <div className="label">LAST MID</div>
-                <div className="value pos">{fmt(session.last_mid)}</div>
-              </div>
-              <div className="robot-status-card">
-                <div className="label">MODE</div>
-                <div className="value" style={{ fontSize: 16 }}>
-                  {session.mode || (session.open_side ? 'MANAGE' : 'FLAT')}
+          <div className="robot-arena-stage">
+            <div className="robot-hud-panel">
+              <div className="section-title">TARGET LOCK</div>
+              <div className="robot-radar">
+                <div className="robot-radar-sweep" />
+                <div className="robot-radar-core">
+                  <div className="mid">{fmt(session.last_mid)}</div>
+                  <div className="meta">{session.display_name}</div>
+                  <div className="meta">{session.open_side || 'FLAT'} · LOT {session.lot_size}</div>
                 </div>
               </div>
-              <div className="robot-status-card">
-                <div className="label">UPL / MFE</div>
-                <div className="value" style={{ fontSize: 16 }}>
-                  {fmt(session.unrealized)} / {fmt(session.mfe)}
+              <div className="robot-power">
+                <div className="robot-power-row">
+                  <span>MFE</span>
+                  <div className="robot-power-bar">
+                    <div className="robot-power-fill" style={{ width: `${mfePct}%` }} />
+                  </div>
+                  <span>{fmt(session.mfe)}</span>
+                </div>
+                <div className="robot-power-row">
+                  <span>UPL</span>
+                  <div className="robot-power-bar">
+                    <div
+                      className={`robot-power-fill${(session.unrealized || 0) < 0 ? ' bad' : ''}`}
+                      style={{ width: `${Math.max(8, uplPct)}%` }}
+                    />
+                  </div>
+                  <span>{fmt(session.unrealized)}</span>
+                </div>
+                <div className="robot-power-row">
+                  <span>PEAK</span>
+                  <div className="robot-power-bar">
+                    <div className="robot-power-fill" style={{ width: `${retPct}%` }} />
+                  </div>
+                  <span>{retPct}%</span>
                 </div>
               </div>
             </div>
 
-            <div className="robot-fs-grid">
-              <div className="robot-panel">
-                <div className="section-title">SESSION · ONE TRADE</div>
-                <div className="mono" style={{ lineHeight: 1.7 }}>
-                  <div>Account: {session.account_name}</div>
-                  <div>Env: {session.environment.toUpperCase()}</div>
-                  <div>Trading: {session.trading_enabled ? 'ON' : 'OFF'}</div>
-                  <div>Side: {session.open_side || 'FLAT'}</div>
-                  <div>Entry: {fmt(session.entry_price)}</div>
-                  <div>DealId: {session.deal_id || '—'}</div>
-                  <div>DealRef: {session.last_deal_reference || '—'}</div>
-                  <div>
-                    Peak ret:{' '}
-                    {session.peak_retention != null
-                      ? `${Math.round(session.peak_retention * 100)}%`
-                      : '—'}
-                  </div>
-                  <div>
-                    Entries/Exits: {session.orders_placed}/{session.exits_done ?? 0}
-                  </div>
-                  <div>
-                    Reads OK/FAIL: {session.reads_ok}/{session.reads_fail}
-                  </div>
-                  <div>Started: {new Date(session.started_at).toLocaleTimeString()}</div>
-                  <div>
-                    Last quote:{' '}
-                    {session.last_quote_at
-                      ? new Date(session.last_quote_at).toLocaleTimeString()
-                      : '—'}
-                  </div>
+            <div className="robot-hud-panel">
+              <div className="section-title">UNIT STATUS</div>
+              <div className="mono" style={{ lineHeight: 1.85, fontSize: 13 }}>
+                <div>STATUS · {session.running ? 'ONLINE' : 'OFFLINE'}</div>
+                <div>ID · {session.id}</div>
+                <div>ACCOUNT · {session.account_name}</div>
+                <div>ENV · {session.environment.toUpperCase()}</div>
+                <div>SIDE · {session.open_side || 'FLAT'}</div>
+                <div>ENTRY · {fmt(session.entry_price)}</div>
+                <div>DEAL · {session.deal_id || '—'}</div>
+                <div>REF · {session.last_deal_reference || '—'}</div>
+                <div>
+                  SCORE · IN {session.orders_placed} / OUT {session.exits_done ?? 0}
                 </div>
-                {session.error && (
-                  <div className="error-state" style={{ marginTop: 8 }}>
-                    {session.error}
-                  </div>
-                )}
+                <div>
+                  READS · {session.reads_ok}/{session.reads_fail}
+                </div>
+                <div>BOOT · {new Date(session.started_at).toLocaleTimeString()}</div>
               </div>
-              <div className="robot-panel robot-panel-log">
-                <div className="section-title">LIVE ACTIVITY LOG</div>
-                <div className="robot-log">
-                  {session.ticks.length === 0 && (
-                    <div className="mono">Waiting for first Capital read…</div>
-                  )}
-                  {session.ticks.map((t, i) => (
-                    <div
-                      key={`${t.at}-${i}`}
-                      className={`robot-log-line phase-${t.phase.toLowerCase()}`}
-                    >
-                      <span className="mono time">
-                        {new Date(t.at).toLocaleTimeString()}
-                      </span>
-                      <span className="badge phase">{t.phase}</span>
-                      <span className="detail">{t.detail}</span>
-                    </div>
-                  ))}
+              {session.error && (
+                <div className="error-state" style={{ marginTop: 10 }}>
+                  {session.error}
                 </div>
+              )}
+            </div>
+
+            <div className="robot-hud-panel">
+              <div className="section-title">COMBAT FEED</div>
+              <div className="robot-feed">
+                {session.ticks.length === 0 && (
+                  <div className="mono">Awaiting first Capital ping…</div>
+                )}
+                {session.ticks.map((t, i) => (
+                  <div
+                    key={`${t.at}-${i}`}
+                    className={`robot-feed-line phase-${t.phase.toLowerCase()}`}
+                  >
+                    <span className="mono time">{new Date(t.at).toLocaleTimeString()}</span>
+                    <span className="badge phase">{t.phase}</span>
+                    <span className="detail">{t.detail}</span>
+                  </div>
+                ))}
               </div>
             </div>
-          </>
+          </div>
         )}
       </div>
     </div>

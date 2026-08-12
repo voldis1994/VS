@@ -233,11 +233,12 @@ export function OverviewPage() {
     <div className="main-dash">
       <div className="dash-head">
         <div className="dash-brand-hero">
-          <Logo size={72} />
+          <Logo size={96} wordmark />
           <div>
+            <div className="orbit-kicker">VS SYSTEM // COMMAND</div>
             <h1 className="page-title">MAIN DASHBOARD</h1>
             <p className="page-subtitle">
-              Prop desk control // accounts · risk · automation · live Capital.com
+              Tactical desk · accounts · risk · Capital.com live combat feed
             </p>
           </div>
         </div>

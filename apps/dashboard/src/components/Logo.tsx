@@ -1,25 +1,29 @@
 export function Logo({
-  size = 40,
+  size = 48,
   className,
+  wordmark = false,
 }: {
   size?: number;
   className?: string;
+  wordmark?: boolean;
 }) {
   return (
-    <img
-      src="/logo.svg"
-      width={size}
-      height={size}
-      alt=""
-      className={className ? `brand-logo ${className}` : 'brand-logo'}
-      draggable={false}
-      style={{
-        width: size,
-        height: size,
-        display: 'block',
-        objectFit: 'contain',
-        filter: 'drop-shadow(0 0 12px rgba(57, 255, 20, 0.45))',
-      }}
-    />
+    <span className={className ? `vs-logo-wrap ${className}` : 'vs-logo-wrap'}>
+      <img
+        src="/logo.svg"
+        width={size}
+        height={size}
+        alt=""
+        className="vs-logo-mark"
+        draggable={false}
+        style={{ width: size, height: size }}
+      />
+      {wordmark && (
+        <span className="vs-wordmark" aria-hidden={false}>
+          <span className="vs-wordmark-main">VS SYSTEM</span>
+          <span className="vs-wordmark-sub">TACTICAL DESK</span>
+        </span>
+      )}
+    </span>
   );
 }

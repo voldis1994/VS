@@ -10,9 +10,9 @@ import {
 } from './DeskContext';
 
 const NAV = [
-  { to: '/', label: 'MAIN DASHBOARD', end: true },
-  { to: '/robot', label: 'ROBOT DESK' },
-  { to: '/orbit', label: 'ORBIT READER' },
+  { to: '/', label: 'COMMAND', end: true },
+  { to: '/robot', label: 'ROBOT ARENA' },
+  { to: '/orbit', label: 'ORBIT GRID' },
   { to: '/trading', label: 'TRADING' },
   { to: '/brokers', label: 'BROKERS' },
   { to: '/clients', label: 'CLIENTS' },
@@ -150,7 +150,7 @@ export function Layout({ children }: { children: ReactNode }) {
             </button>
           </div>
           <div className="desk-brand">
-            <Logo size={34} />
+            <Logo size={52} wordmark />
             <div className="desk-brand-sub">{pageTitle}</div>
           </div>
 
@@ -275,10 +275,10 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
 
         <footer className="footer-strip desk-footer">
-          <span>FULL SCREEN DESK</span>
-          <span>REAL-TIME</span>
+          <span>VS SYSTEM // ONLINE</span>
+          <span>REAL-TIME COMBAT DESK</span>
           <span className="footer-logo-wrap">
-            <Logo size={16} />
+            <Logo size={18} />
           </span>
         </footer>
       </div>

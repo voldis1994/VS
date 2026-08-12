@@ -170,12 +170,12 @@ export function OrbitReaderPage() {
     <div className="orbit-page">
       <div className="orbit-hero">
         <div className="dash-brand-hero">
-          <Logo size={64} />
+          <Logo size={80} wordmark />
           <div>
-            <div className="orbit-kicker">CAPITAL.COM NAMES ONLY</div>
+            <div className="orbit-kicker">VS SYSTEM // SENSOR GRID</div>
             <h1 className="page-title">ORBIT READER</h1>
             <p className="page-subtitle">
-              Watchlist no īstā Capital.com kataloga (display name + epic). Nekādu fake EURUSD/XAUUSD.
+              Capital.com name lock · multi-sender watch · real quotes only
             </p>
           </div>
         </div>
