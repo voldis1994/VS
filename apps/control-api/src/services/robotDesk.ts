@@ -7,6 +7,7 @@ import {
   createCapitalPosition,
   fetchCapitalMarketQuote,
   listCapitalOpenPositions,
+  type CapitalMarketQuote,
   type CapitalOpenPosition,
   type CapitalSession,
 } from './capitalCom.js';
@@ -122,12 +123,15 @@ function clearTradeState(s: Internal) {
   s.mode = 'FLAT';
 }
 
-/** Broker-visible Capital.com stop as safety cushion (wider than robot best-outcome exits). */
+/** Tightest broker-visible Capital SL — dealing-rules min (or just over spread). */
 function safetyStopLevel(
   direction: 'BUY' | 'SELL',
   mid: number,
   bid: number | null,
-  ask: number | null
+  ask: number | null,
+  spread: number | null,
+  minStopDistance: number | null,
+  loosen = 1
 ): number {
   const ref =
     direction === 'BUY'
@@ -138,13 +142,48 @@ function safetyStopLevel(
         ? ask
         : mid;
   const abs = Math.max(Math.abs(ref), 1e-9);
-  // ~0.25% cushion (min floors so tiny FX/indices still get a real stop)
-  const dist = Math.max(abs * 0.0025, abs >= 100 ? 0.5 : abs >= 10 ? 0.05 : 0.0005);
+  const spr =
+    spread != null && Number.isFinite(spread) && spread > 0
+      ? spread
+      : bid != null && ask != null
+        ? Math.max(ask - bid, 0)
+        : abs * 0.00005;
+
+  // Prefer Capital min stop; else just over spread — never the old 0.25% far cushion
+  const brokerMin =
+    minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
+      ? minStopDistance
+      : spr * 1.05;
+  const floor = abs >= 1000 ? 0.1 : abs >= 100 ? 0.05 : abs >= 10 ? 0.01 : abs >= 1 ? 0.0001 : 0.00001;
+  const dist = Math.max(brokerMin, spr * 1.02, floor) * Math.max(loosen, 1);
+
   const raw = direction === 'BUY' ? ref - dist : ref + dist;
-  // Keep sensible decimals for Capital
+  if (abs >= 1000) return Math.round(raw * 10) / 10;
   if (abs >= 100) return Math.round(raw * 100) / 100;
   if (abs >= 1) return Math.round(raw * 10000) / 10000;
   return Math.round(raw * 1e6) / 1e6;
+}
+
+function expectedStopFromDistance(
+  direction: 'BUY' | 'SELL',
+  mid: number,
+  bid: number | null,
+  ask: number | null,
+  stopDistancePts: number,
+  pointSize: number | null
+): number | null {
+  const ref =
+    direction === 'BUY'
+      ? bid != null && Number.isFinite(bid)
+        ? bid
+        : mid
+      : ask != null && Number.isFinite(ask)
+        ? ask
+        : mid;
+  const ps = pointSize != null && pointSize > 0 ? pointSize : null;
+  if (ps == null) return null;
+  const dist = stopDistancePts * ps;
+  return direction === 'BUY' ? ref - dist : ref + dist;
 }
 
 function favorableMove(side: 'BUY' | 'SELL', entry: number, mid: number): number {
@@ -388,7 +427,7 @@ async function enterTrade(
   session: CapitalSession,
   s: Internal,
   direction: 'BUY' | 'SELL',
-  quote: { bid: number | null; ask: number | null; mid: number | null },
+  quote: CapitalMarketQuote,
   reason: string
 ) {
   // HARD RULE: never entry while any trade open on this epic
@@ -401,6 +440,7 @@ async function enterTrade(
       s.entry_price = existing.open_level ?? quote.mid;
       s.entry_at = s.entry_at || new Date().toISOString();
       s.mode = 'MANAGE';
+      if (existing.stop_level != null) s.safety_sl = existing.stop_level;
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
@@ -432,36 +472,120 @@ async function enterTrade(
     return;
   }
 
-  const stopLevel = safetyStopLevel(direction, mid, quote.bid, quote.ask);
-  pushTick(s, {
-    phase: 'INFO',
-    bid: quote.bid,
-    ask: quote.ask,
-    mid: quote.mid,
-    detail: `Capital SAFETY SL ${stopLevel} (broker-visible cushion · robot still manages best-outcome first)`,
-  });
+  // Prefer Capital stopDistance at dealing-rules minimum (tightest legal).
+  // If rejected, loosen slightly; then try absolute stopLevel; last resort: no SL.
+  const minPts = quote.min_stop_points;
+  const minPrice = quote.min_stop_distance ?? null;
+  const unit = (quote.min_stop_unit || 'POINTS').toUpperCase();
+  const useDistance = minPts != null && minPts > 0 && !unit.includes('PERCENT');
+  const loosenSteps = [1, 1.1, 1.25, 1.45, 1.75, 2.2];
 
-  let result = await createCapitalPosition(session, {
-    epic: s.epic,
-    direction,
-    size: s.lot_size,
-    stopLevel,
-  });
+  let stopLevel: number | null = null;
+  let usedStopDistance: number | null = null;
+  let result: Awaited<ReturnType<typeof createCapitalPosition>> | null = null;
 
-  // If market rejects stopLevel, still open — then warn (client asked for visible SL when possible)
-  if (!result.ok && /stop|validation|reject/i.test(result.detail)) {
+  if (useDistance) {
+    for (const loosen of loosenSteps) {
+      const distPts = Math.max(minPts!, 0.01) * loosen;
+      // Keep whole points when Capital uses integer distances
+      const stopDistance =
+        distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
+      const expect = expectedStopFromDistance(
+        direction,
+        mid,
+        quote.bid,
+        quote.ask,
+        stopDistance,
+        quote.point_size ?? null
+      );
+      pushTick(s, {
+        phase: 'INFO',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `Capital SAFETY SL try stopDistance=${stopDistance} pts (min=${minPts} · unit=${unit} · ~level ${
+          expect ?? 'n/a'
+        } · x${loosen})`,
+      });
+      result = await createCapitalPosition(session, {
+        epic: s.epic,
+        direction,
+        size: s.lot_size,
+        stopDistance,
+      });
+      if (result.ok) {
+        usedStopDistance = stopDistance;
+        stopLevel = expect;
+        break;
+      }
+      if (!/stop|distance|validation|reject|attached|level/i.test(result.detail)) break;
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `SL distance rejected — loosen x${loosen}: ${result.detail}`,
+      });
+    }
+  }
+
+  if (!result?.ok) {
+    for (const loosen of loosenSteps) {
+      const level = safetyStopLevel(
+        direction,
+        mid,
+        quote.bid,
+        quote.ask,
+        quote.spread ?? null,
+        minPrice,
+        loosen
+      );
+      const dist = direction === 'BUY' ? mid - level : level - mid;
+      pushTick(s, {
+        phase: 'INFO',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `Capital SAFETY SL try stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
+          minPrice ?? 'n/a'
+        } · spread=${quote.spread ?? 'n/a'} · x${loosen})`,
+      });
+      result = await createCapitalPosition(session, {
+        epic: s.epic,
+        direction,
+        size: s.lot_size,
+        stopLevel: level,
+      });
+      if (result.ok) {
+        stopLevel = level;
+        break;
+      }
+      if (!/stop|distance|validation|reject|attached|level/i.test(result.detail)) break;
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `SL level rejected — loosen x${loosen}: ${result.detail}`,
+      });
+    }
+  }
+
+  if (!result?.ok) {
     pushTick(s, {
       phase: 'WAIT',
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `Safety SL rejected by Capital (${result.detail}) — retrying entry without SL`,
+      detail: `Safety SL not accepted — entry without SL (${result?.detail || 'unknown'})`,
     });
     result = await createCapitalPosition(session, {
       epic: s.epic,
       direction,
       size: s.lot_size,
     });
+    stopLevel = null;
+    usedStopDistance = null;
   }
 
   if (!result.ok) {
@@ -487,18 +611,33 @@ async function enterTrade(
   s.peak_favorable = mid;
   s.peak_retention = null;
   s.unrealized = 0;
-  s.safety_sl = stopLevel;
+  s.safety_sl = stopLevel != null && Number.isFinite(stopLevel) ? stopLevel : null;
   s.error = null;
 
   const dealId = await resolveDealId(session, s, result.deal_reference);
   if (dealId) s.deal_id = dealId;
+
+  // Prefer broker-reported stopLevel when available
+  if (dealId) {
+    try {
+      const again = await listCapitalOpenPositions(session);
+      const pos = again.ok ? matchOpenOnEpic(again.positions, s.epic) : null;
+      if (pos?.stop_level != null && Number.isFinite(pos.stop_level)) {
+        s.safety_sl = pos.stop_level;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
 
   pushTick(s, {
     phase: 'ORDER',
     bid: quote.bid,
     ask: quote.ask,
     mid: quote.mid,
-    detail: `ORDER ENTRY ${direction} ${s.display_name} lot=${s.lot_size} · SL ${stopLevel} · ${result.detail}${
+    detail: `ORDER ENTRY ${direction} ${s.display_name} lot=${s.lot_size} · SL ${
+      s.safety_sl ?? 'none'
+    }${usedStopDistance != null ? ` (dist ${usedStopDistance}pts)` : ''} · ${result.detail}${
       dealId ? ` · dealId=${dealId}` : ''
     }`,
   });
@@ -525,6 +664,7 @@ async function enterTrade(
     /* Capital order already live */
   }
 }
+
 
 async function robotCycle(s: Internal) {
   if (!s.running) return;

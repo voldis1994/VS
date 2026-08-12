@@ -556,6 +556,82 @@ export interface CapitalMarketQuote {
   low: number | null;
   raw_ok: boolean;
   detail?: string;
+  /** Raw Capital dealing-rules min stop (POINTS or PERCENTAGE) — use with stopDistance */
+  min_stop_points?: number | null;
+  min_stop_unit?: string | null;
+  /** One instrument point in price units (for stopLevel calc) */
+  point_size?: number | null;
+  /** Minimum stop distance in PRICE units */
+  min_stop_distance?: number | null;
+}
+
+function inferPointSize(json: any, mid: number | null): number {
+  const snap = (json?.snapshot || json?.marketSnapshot || {}) as Record<string, unknown>;
+  const rules = (json?.dealingRules || json?.dealing_rules || {}) as Record<string, any>;
+  const decimalPlaces =
+    numOrNull(snap.decimalPlacesFactor) ??
+    numOrNull((json?.instrument as any)?.decimalPlacesFactor);
+  const scaling = numOrNull(snap.scalingFactor) ?? 1;
+  if (decimalPlaces != null && decimalPlaces >= 0 && decimalPlaces <= 8) {
+    return Math.pow(10, -decimalPlaces) * (scaling > 0 ? scaling : 1);
+  }
+  const stepRaw = rules.minStepDistance;
+  const stepVal = numOrNull(stepRaw?.value ?? stepRaw);
+  const stepUnit = String(stepRaw?.unit || '').toUpperCase();
+  if (stepVal != null && stepVal > 0 && !stepUnit.includes('PERCENT')) {
+    // When Capital quotes minStep in POINTS, value is often already the price increment
+    return stepVal;
+  }
+  const m = mid != null && Number.isFinite(mid) ? Math.abs(mid) : 1;
+  if (m >= 1000) return 0.1;
+  if (m >= 100) return 0.1;
+  if (m >= 10) return 0.01;
+  if (m >= 1) return 0.0001;
+  return 0.00001;
+}
+
+function parseStopRules(
+  json: any,
+  mid: number | null
+): {
+  min_stop_points: number | null;
+  min_stop_unit: string | null;
+  point_size: number;
+  min_stop_distance: number | null;
+} {
+  const rules = (json?.dealingRules || json?.dealing_rules || {}) as Record<string, any>;
+  const raw =
+    rules.minStopOrProfitDistance ||
+    rules.minNormalStopOrLimitDistance ||
+    rules.minStopDistance ||
+    rules.minControlledRiskStopDistance;
+  const pts = numOrNull(raw?.value ?? raw);
+  const unit = String(raw?.unit || 'POINTS').toUpperCase();
+  const pointSize = inferPointSize(json, mid);
+  if (pts == null || pts <= 0) {
+    return {
+      min_stop_points: null,
+      min_stop_unit: null,
+      point_size: pointSize,
+      min_stop_distance: null,
+    };
+  }
+  if (unit.includes('PERCENT')) {
+    const m = mid != null && Number.isFinite(mid) ? Math.abs(mid) : 1;
+    return {
+      min_stop_points: pts,
+      min_stop_unit: unit,
+      point_size: pointSize,
+      min_stop_distance: (m * pts) / 100,
+    };
+  }
+  // POINTS → price via instrument point size
+  return {
+    min_stop_points: pts,
+    min_stop_unit: unit,
+    point_size: pointSize,
+    min_stop_distance: pts * pointSize,
+  };
 }
 
 /** Live Capital.com market snapshot for one epic (REST). No synthetic values. */
@@ -609,6 +685,7 @@ export async function fetchCapitalMarketQuote(
     if (bid != null && ask != null) mid = (bid + ask) / 2;
     else mid = numOrNull(snap.mid ?? snap.lastTraded);
     const spread = bid != null && ask != null ? ask - bid : null;
+    const stops = parseStopRules(res.json, mid);
 
     return {
       epic: candidate,
@@ -622,6 +699,10 @@ export async function fetchCapitalMarketQuote(
       high: numOrNull(snap.high),
       low: numOrNull(snap.low),
       raw_ok: bid != null || ask != null || mid != null,
+      min_stop_points: stops.min_stop_points,
+      min_stop_unit: stops.min_stop_unit,
+      point_size: stops.point_size,
+      min_stop_distance: stops.min_stop_distance,
       detail: bid == null && ask == null ? 'Snapshot returned without bid/offer' : undefined,
     };
   };
@@ -680,6 +761,7 @@ export type CapitalOpenPosition = {
   size: number;
   open_level: number | null;
   upl: number | null;
+  stop_level: number | null;
 };
 
 /** All open Capital.com positions (REST). */
@@ -714,6 +796,7 @@ export async function listCapitalOpenPositions(
       size: numOrNull(pos.size) ?? 0,
       open_level: numOrNull(pos.level ?? pos.openLevel ?? pos.averagePrice),
       upl: numOrNull(pos.upl ?? pos.unrealizedProfit ?? pos.profit),
+      stop_level: numOrNull(pos.stopLevel ?? pos.stop_level),
     });
   }
   return { ok: true, positions, detail: `${positions.length} open` };
@@ -778,7 +861,10 @@ export async function createCapitalPosition(
     epic: string;
     direction: 'BUY' | 'SELL';
     size: number;
+    /** Absolute price stop (Capital stopLevel) */
     stopLevel?: number;
+    /** Distance in Capital POINTS — preferred for tightest legal SL */
+    stopDistance?: number;
     profitLevel?: number;
   }
 ): Promise<{ ok: boolean; deal_reference?: string; detail: string; status: number; json: any }> {
@@ -795,7 +881,12 @@ export async function createCapitalPosition(
     direction: input.direction,
     size: input.size,
   };
-  if (input.stopLevel != null && Number.isFinite(input.stopLevel)) body.stopLevel = input.stopLevel;
+  // Capital accepts only one of stopLevel / stopDistance — prefer distance for min legal SL
+  if (input.stopDistance != null && Number.isFinite(input.stopDistance) && input.stopDistance > 0) {
+    body.stopDistance = input.stopDistance;
+  } else if (input.stopLevel != null && Number.isFinite(input.stopLevel)) {
+    body.stopLevel = input.stopLevel;
+  }
   if (input.profitLevel != null && Number.isFinite(input.profitLevel)) {
     body.profitLevel = input.profitLevel;
   }
@@ -813,7 +904,11 @@ export async function createCapitalPosition(
   }
   const dealRef = String(res.json?.dealReference || res.json?.dealId || '');
   const slNote =
-    input.stopLevel != null && Number.isFinite(input.stopLevel) ? ` stop=${input.stopLevel}` : '';
+    input.stopDistance != null && Number.isFinite(input.stopDistance)
+      ? ` stopDist=${input.stopDistance}`
+      : input.stopLevel != null && Number.isFinite(input.stopLevel)
+        ? ` stop=${input.stopLevel}`
+        : '';
   return {
     ok: true,
     status: res.status,
