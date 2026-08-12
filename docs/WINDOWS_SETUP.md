@@ -2,6 +2,25 @@
 
 Target platform: Windows 11 x64. Use the automated bootstrap script as the primary path.
 
+## First-time start (recommended)
+
+From the repository root, double-click:
+
+```bat
+START_HERE.bat
+```
+
+This is the supported one-shot path for a clean Windows 11 machine. It will not overwrite an existing `.env`.
+
+If a step fails, read the on-screen message, fix that one dependency, and re-run `START_HERE.bat`.
+
+## Manual alternative
+
+```bat
+scripts\setup_windows.bat
+scripts\run_dev.bat
+```
+
 ## Prerequisites
 
 | Tool | Notes |

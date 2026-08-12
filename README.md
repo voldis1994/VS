@@ -36,7 +36,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 - CMake 3.24+
 - Node.js 20+
 - Docker Desktop
-- vcpkg (bootstrapped by setup script)
+- vcpkg (bootstrapped by `START_HERE.bat`)
 
 ### Linux (development/CI)
 - GCC 13+ or Clang 16+
@@ -47,8 +47,18 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 
 ## Quick Start (Windows)
 
+**First time — one double-click:**
+
 ```bat
-scripts\setup_windows.bat
+START_HERE.bat
+```
+
+This checks tools, builds C++, starts PostgreSQL, runs migrations, launches all services, and opens http://localhost:5173.  
+If a step fails, it stops with a clear message (`logs\first_run.log`). Fix that issue and run `START_HERE.bat` again.
+
+Already set up:
+
+```bat
 scripts\run_dev.bat
 ```
 
