@@ -201,18 +201,14 @@ export function TradingPage() {
       setMsg('Izvēlies account + tirgu');
       return;
     }
-    const w = openRobotWindow({
+    openRobotWindow({
       accountId,
       epic,
       lot,
       name: displayName,
     });
-    if (!w) {
-      window.location.href = `/robot?account_id=${accountId}&epic=${encodeURIComponent(epic)}&lot=${lot}&name=${encodeURIComponent(displayName)}`;
-    } else {
-      setMsgOk(true);
-      setMsg(`Robot started · ${displayName} · lot ${lot}`);
-    }
+    setMsgOk(true);
+    setMsg(`Robot board · ${displayName} · lot ${lot}`);
   };
 
   const placeOrder = async (direction: 'BUY' | 'SELL') => {

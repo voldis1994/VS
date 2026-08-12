@@ -24,6 +24,7 @@ export type RobotSession = {
   id: string;
   account_id: number;
   account_name: string;
+  client_name: string;
   environment: string;
   epic: string;
   display_name: string;
@@ -775,9 +776,12 @@ export async function startRobotSession(input: {
   trading_enabled?: boolean;
 }): Promise<RobotSession> {
   const { rows } = await pool.query(
-    `SELECT ba.id, ba.display_name, bc.id as connection_id, bc.environment, bc.broker_name
+    `SELECT ba.id, ba.display_name, ba.external_account_id,
+            bc.id as connection_id, bc.environment, bc.broker_name,
+            c.name as client_name
      FROM broker_accounts ba
      JOIN broker_connections bc ON bc.id = ba.broker_connection_id
+     JOIN clients c ON c.id = bc.client_id
      WHERE ba.id = $1`,
     [input.account_id]
   );
@@ -788,6 +792,7 @@ export async function startRobotSession(input: {
     connection_id: number;
     environment: string;
     broker_name: string;
+    client_name: string;
   };
   if (acc.broker_name !== 'capital_com') throw new Error('Only Capital.com accounts supported');
 
@@ -832,6 +837,7 @@ export async function startRobotSession(input: {
     id,
     account_id: acc.id,
     account_name: acc.display_name,
+    client_name: acc.client_name || acc.display_name,
     environment: acc.environment,
     connection_id: acc.connection_id,
     epic,

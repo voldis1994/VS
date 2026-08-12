@@ -16,6 +16,7 @@ type RobotSession = {
   id: string;
   account_id: number;
   account_name: string;
+  client_name?: string;
   environment: string;
   epic: string;
   display_name: string;
@@ -50,136 +51,75 @@ function fmt(n: number | null | undefined, d = 5) {
   return n.toLocaleString(undefined, { maximumFractionDigits: d });
 }
 
-function stableRobotWindowName(accountId: string, epic: string) {
-  const safe = epic.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 60);
-  return `mr_robot_${accountId}_${safe}`;
+function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'flat' | 'entry' } {
+  if (s.open_side === 'BUY') return { label: 'BUY LONG', kind: 'long' };
+  if (s.open_side === 'SELL') return { label: 'SELL SCALP', kind: 'short' };
+  if (s.mode === 'ENTRY' || (s.running && !s.open_side)) return { label: 'WAIT ENTRY', kind: 'entry' };
+  return { label: 'FLAT', kind: 'flat' };
+}
+
+function lastLog(s: RobotSession): string {
+  const t = s.ticks?.[0];
+  if (!t) return 'Booting…';
+  return t.detail;
 }
 
 export function RobotDeskPage() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
-  const [session, setSession] = useState<RobotSession | null>(null);
-  const [siblings, setSiblings] = useState<RobotSession[]>([]);
+  const [sessions, setSessions] = useState<RobotSession[]>([]);
+  const [focusId, setFocusId] = useState<string | null>(params.get('id'));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [booted, setBooted] = useState(false);
-  const [isFs, setIsFs] = useState(false);
   const shellRef = useRef<HTMLDivElement>(null);
+
   const [launchAccounts, setLaunchAccounts] = useState<
-    { account_id: number; client_name: string; broker_name: string; environment: string; capital_market_count?: number }[]
+    {
+      account_id: number;
+      client_name: string;
+      broker_name: string;
+      environment: string;
+      capital_market_count?: number;
+    }[]
   >([]);
   const [launchAccountId, setLaunchAccountId] = useState<number | null>(null);
   const [launchMarkets, setLaunchMarkets] = useState<
-    { instrument_id: number; epic?: string; symbol: string; display_name: string; lot_size: number; min_lot: number }[]
+    {
+      instrument_id: number;
+      epic?: string;
+      symbol: string;
+      display_name: string;
+      lot_size: number;
+      min_lot: number;
+    }[]
   >([]);
   const [launchFilter, setLaunchFilter] = useState('');
   const [launchEpic, setLaunchEpic] = useState('');
   const [launchLot, setLaunchLot] = useState('0.1');
+  const [showDeploy, setShowDeploy] = useState(false);
 
   const accountId = params.get('account_id');
   const epic = params.get('epic');
   const lot = params.get('lot');
   const name = params.get('name');
-  const idParam = params.get('id');
-
-  const buildQuery = useCallback(
-    (s: RobotSession) => {
-      const q = new URLSearchParams();
-      q.set('id', s.id);
-      q.set('account_id', String(s.account_id));
-      q.set('epic', s.epic);
-      q.set('lot', String(s.lot_size));
-      q.set('name', s.display_name);
-      return q.toString();
-    },
-    [],
-  );
 
   const refresh = useCallback(async () => {
     try {
-      const q = new URLSearchParams();
-      if (idParam) q.set('id', idParam);
-      if (accountId) q.set('account_id', accountId);
-      if (epic) q.set('epic', epic);
-
-      const list = await apiFetch<{
-        active: RobotSession | null;
-        sessions: RobotSession[];
-      }>(`/api/robot-desk?${q.toString()}`);
-
-      setSiblings(list.sessions || []);
-
-      let s = list.active;
-      if (!s && idParam) {
-        try {
-          const pathQ = new URLSearchParams();
-          if (accountId) pathQ.set('account_id', accountId);
-          if (epic) pathQ.set('epic', epic);
-          s = await apiFetch<RobotSession>(
-            `/api/robot-desk/${encodeURIComponent(idParam)}?${pathQ.toString()}`,
-          );
-        } catch {
-          s = null;
-        }
-      }
-      if (!s && accountId && epic) {
-        try {
-          const pathQ = new URLSearchParams({
-            account_id: accountId,
-            epic,
-          });
-          s = await apiFetch<RobotSession>(`/api/robot-desk/resolve?${pathQ.toString()}`);
-        } catch {
-          s = null;
-        }
-      }
-
-      if (s) {
-        setSession(s);
-        setError(null);
-        // Keep URL keyed by account+epic+id so refresh never loses the robot
-        const next = buildQuery(s);
-        const cur = params.toString();
-        if (next !== cur) {
-          navigate(`/robot?${next}`, { replace: true });
-        }
-      } else if (!busy) {
-        // Bare /robot — attach to first running robot if any
-        const running = (list.sessions || []).find((x) => x.running);
-        if (running && !accountId && !epic && !idParam) {
-          setSession(running);
-          setError(null);
-          navigate(`/robot?${buildQuery(running)}`, { replace: true });
-        } else {
-          setSession(null);
-        }
-      }
+      const list = await apiFetch<{ sessions: RobotSession[] }>('/api/robot-desk');
+      const rows = list.sessions || [];
+      setSessions(rows);
+      setError(null);
+      setFocusId((prev) => {
+        if (prev && rows.some((r) => r.id === prev)) return prev;
+        return rows.find((r) => r.running)?.id || rows[0]?.id || null;
+      });
     } catch (e) {
-      // Soft — never flash opaque id errors while starting
-      if (!busy) setError(e instanceof Error ? e.message : 'Robot sync failed');
+      setError(e instanceof Error ? e.message : 'Board sync failed');
     }
-  }, [accountId, epic, idParam, params, navigate, buildQuery, busy]);
-
-  // Auto fullscreen — robot is always full viewport / client window
-  useEffect(() => {
-    const onFs = () => setIsFs(Boolean(document.fullscreenElement));
-    document.addEventListener('fullscreenchange', onFs);
-    onFs();
-    const el = shellRef.current;
-    const tryFs = async () => {
-      try {
-        if (el && !document.fullscreenElement) {
-          await el.requestFullscreen();
-        }
-      } catch {
-        /* browser may block until gesture — UI still 100dvh */
-      }
-    };
-    void tryFs();
-    return () => document.removeEventListener('fullscreenchange', onFs);
   }, []);
 
-  // Auto-start from query once
+  // Auto-start from query once, then stay on board
   useEffect(() => {
     if (booted) return;
     if (accountId && epic && lot) {
@@ -196,65 +136,36 @@ export function RobotDeskPage() {
         }),
       })
         .then((res) => {
-          setSession(res.session);
-          setError(null);
-          navigate(`/robot?${buildQuery(res.session)}`, { replace: true });
+          setFocusId(res.session.id);
+          navigate('/robot', { replace: true });
         })
         .catch((e) => setError(e instanceof Error ? e.message : 'Start failed'))
-        .finally(() => setBusy(false));
+        .finally(() => {
+          setBusy(false);
+          void refresh();
+        });
       return;
     }
     setBooted(true);
     void refresh();
-  }, [booted, accountId, epic, lot, name, navigate, buildQuery, refresh]);
+  }, [booted, accountId, epic, lot, name, navigate, refresh]);
 
   useEffect(() => {
     const t = setInterval(() => void refresh(), 2000);
     return () => clearInterval(t);
   }, [refresh]);
 
-  const enterFs = async () => {
-    try {
-      if (shellRef.current && !document.fullscreenElement) {
-        await shellRef.current.requestFullscreen();
-      }
-    } catch {
-      /* ignore */
-    }
-  };
-
-  const stop = async () => {
-    if (!session) return;
-    setBusy(true);
-    try {
-      await apiFetch(`/api/robot-desk/${encodeURIComponent(session.id)}/stop`, {
-        method: 'POST',
-        body: JSON.stringify({
-          account_id: session.account_id,
-          epic: session.epic,
-        }),
-      });
-      await refresh();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Stop failed');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Load launcher catalogs when empty
   useEffect(() => {
-    if (session || busy) return;
     void apiFetch<typeof launchAccounts>('/api/trading/accounts')
       .then((rows) => {
         setLaunchAccounts(rows || []);
         if (!launchAccountId && rows?.[0]) setLaunchAccountId(rows[0].account_id);
       })
       .catch(() => setLaunchAccounts([]));
-  }, [session, busy, launchAccountId]);
+  }, [launchAccountId]);
 
   useEffect(() => {
-    if (!launchAccountId || session) return;
+    if (!launchAccountId) return;
     void apiFetch<typeof launchMarkets>(`/api/trading/accounts/${launchAccountId}/instruments`)
       .then((rows) => {
         setLaunchMarkets(rows || []);
@@ -264,13 +175,12 @@ export function RobotDeskPage() {
         }
       })
       .catch(() => setLaunchMarkets([]));
-  }, [launchAccountId, session]);
+  }, [launchAccountId]);
 
   const filteredLaunch = useMemo(() => {
     const q = launchFilter.trim().toLowerCase();
-    const rows = launchMarkets;
-    if (!q) return rows.slice(0, 200);
-    return rows
+    if (!q) return launchMarkets.slice(0, 200);
+    return launchMarkets
       .filter(
         (m) =>
           m.display_name.toLowerCase().includes(q) ||
@@ -279,18 +189,20 @@ export function RobotDeskPage() {
       .slice(0, 200);
   }, [launchMarkets, launchFilter]);
 
-  const startFromLauncher = () => {
+  const focused = sessions.find((s) => s.id === focusId) || null;
+  const runningCount = sessions.filter((s) => s.running).length;
+
+  const deploy = () => {
     if (!launchAccountId || !launchEpic) {
-      setError('Izvēlies account + Capital.com tirgu');
+      setError('Izvēlies account + tirgu');
       return;
     }
     const lotN = Number(launchLot);
     if (!Number.isFinite(lotN) || lotN <= 0) {
-      setError('Lot size must be > 0');
+      setError('Lot > 0');
       return;
     }
     const m = launchMarkets.find((x) => (x.epic || x.symbol) === launchEpic);
-    const display = m?.display_name || launchEpic;
     setBusy(true);
     setError(null);
     void apiFetch<{ session: RobotSession }>('/api/robot-desk/start', {
@@ -298,160 +210,98 @@ export function RobotDeskPage() {
       body: JSON.stringify({
         account_id: launchAccountId,
         epic: launchEpic,
-        display_name: display,
+        display_name: m?.display_name || launchEpic,
         lot_size: lotN,
         trading_enabled: true,
       }),
     })
       .then((res) => {
-        setSession(res.session);
-        navigate(`/robot?${buildQuery(res.session)}`, { replace: true });
+        setFocusId(res.session.id);
+        setShowDeploy(false);
+        void refresh();
       })
-      .catch((e) => setError(e instanceof Error ? e.message : 'Start failed'))
+      .catch((e) => setError(e instanceof Error ? e.message : 'Deploy failed'))
       .finally(() => setBusy(false));
   };
 
-  const switchRobot = (s: RobotSession) => {
-    navigate(`/robot?${buildQuery(s)}`);
-    setSession(s);
+  const stopOne = async (s: RobotSession) => {
+    setBusy(true);
+    try {
+      await apiFetch(`/api/robot-desk/${encodeURIComponent(s.id)}/stop`, {
+        method: 'POST',
+        body: JSON.stringify({ account_id: s.account_id, epic: s.epic }),
+      });
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Stop failed');
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const mode =
-    session?.mode ||
-    (session?.open_side ? 'MANAGE' : session ? 'FLAT' : 'STANDBY');
-  const mfePct = Math.min(100, Math.abs(session?.mfe || 0) * 800);
-  const uplPct = Math.min(
-    100,
-    Math.max(0, ((session?.unrealized || 0) / Math.max(Math.abs(session?.mfe || 0.0001), 0.0001)) * 100),
-  );
-  const retPct =
-    session?.peak_retention != null ? Math.round(session.peak_retention * 100) : 0;
-
   return (
-    <div className="robot-fs-shell" ref={shellRef}>
-      <div className="robot-desk robot-desk-fs">
-        <div className="robot-arena-top">
+    <div className="robot-fs-shell robot-board-shell" ref={shellRef}>
+      <div className="robot-desk robot-desk-fs robot-board">
+        <div className="robot-board-top">
           <div className="robot-arena-brand">
-            <Logo size={96} />
+            <Logo size={72} wordmark />
             <div>
-              <div className="robot-arena-kicker">VS SYSTEM // COMBAT UNIT</div>
-              <h1 className="robot-arena-title">ROBOT ARENA</h1>
+              <div className="robot-arena-kicker">VS SYSTEM // MULTI-CLIENT BOARD</div>
+              <h1 className="robot-arena-title">ROBOT COMMAND</h1>
               <p className="robot-arena-sub">
-                ONE TRADE ONLY · best-outcome manage · Capital SAFETY SL visible in app · live feed
-                locked to your instrument
+                Visi klientu roboti vienā lapā · BUY LONG / SELL SCALP · mini live log katram
               </p>
             </div>
           </div>
-
-          <div
-            className={`robot-mode-banner ${String(mode).toLowerCase()}`}
-          >
-            <div className="label">ACTIVE MODE</div>
-            <div className="value">{mode}</div>
+          <div className="robot-board-stats">
+            <div className="robot-mode-banner entry">
+              <div className="label">UNITS</div>
+              <div className="value">{sessions.length}</div>
+            </div>
+            <div className={`robot-mode-banner ${runningCount ? 'manage' : 'flat'}`}>
+              <div className="label">ONLINE</div>
+              <div className="value">{runningCount}</div>
+            </div>
           </div>
-
           <div className="actions">
-            {!isFs && (
-              <button className="btn" type="button" onClick={() => void enterFs()}>
-                FULLSCREEN
-              </button>
-            )}
+            <button className="btn btn-primary" type="button" onClick={() => setShowDeploy((v) => !v)}>
+              {showDeploy ? 'CLOSE DEPLOY' : '+ DEPLOY'}
+            </button>
             <Link className="btn" to="/">
               ← BASE
             </Link>
-            <button
-              className="btn btn-stop"
-              disabled={busy || !session?.running}
-              onClick={() => void stop()}
-            >
-              ABORT ROBOT
-            </button>
           </div>
         </div>
 
-        {siblings.length > 1 && (
-          <div className="robot-sibling-bar">
-            {siblings.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                className={`robot-sibling ${session?.id === s.id ? 'active' : ''} ${
-                  s.running ? 'on' : 'off'
-                }`}
-                onClick={() => switchRobot(s)}
-              >
-                <span className="mono">{s.account_name}</span>
-                <span>{s.display_name}</span>
-                <span className="mono">{s.running ? 'ON' : 'OFF'}</span>
-              </button>
-            ))}
-          </div>
-        )}
+        {error && <div className="error-state">{error}</div>}
+        {busy && <div className="mono" style={{ color: 'var(--cyan)' }}>Syncing combat units…</div>}
 
-        {error && (
-          <div className="error-state" style={{ marginBottom: 10 }}>
-            {error}
-          </div>
-        )}
-
-        {!session && !busy && (
-          <div className="robot-empty">
-            <div className="robot-arena-kicker">DEPLOY UNIT</div>
-            <h2 className="robot-arena-title" style={{ fontSize: 24, marginBottom: 10 }}>
-              NO ACTIVE COMBAT BOT
-            </h2>
-            <p style={{ marginBottom: 14, color: 'var(--text-secondary)' }}>
-              Lock a Capital.com market and deploy. One trade max — manage until best exit.
-            </p>
-
-            {siblings.some((s) => s.running) && (
-              <div style={{ marginBottom: 14 }}>
-                <div className="section-title">LIVE UNITS</div>
-                <div className="robot-sibling-bar" style={{ marginTop: 8 }}>
-                  {siblings
-                    .filter((s) => s.running)
-                    .map((s) => (
-                      <button
-                        key={s.id}
-                        type="button"
-                        className="robot-sibling on"
-                        onClick={() => switchRobot(s)}
-                      >
-                        <span className="mono">{s.account_name}</span>
-                        <span>{s.display_name}</span>
-                        <span className="mono">OPEN</span>
-                      </button>
-                    ))}
-                </div>
-              </div>
-            )}
-
-            <div className="section-title">DEPLOY CONTROLS</div>
-            <div className="actions" style={{ marginTop: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+        {showDeploy && (
+          <div className="robot-empty robot-deploy-bar">
+            <div className="section-title">DEPLOY CLIENT ROBOT</div>
+            <div className="actions" style={{ marginTop: 8, flexWrap: 'wrap' }}>
               <select
                 className="input"
-                style={{ maxWidth: 360 }}
+                style={{ maxWidth: 320 }}
                 value={launchAccountId ?? ''}
                 onChange={(e) => setLaunchAccountId(Number(e.target.value))}
               >
-                {launchAccounts.length === 0 && <option value="">No accounts</option>}
                 {launchAccounts.map((a) => (
                   <option key={a.account_id} value={a.account_id}>
-                    #{a.account_id} {a.client_name} / {a.broker_name} ({a.environment})
-                    {a.capital_market_count != null ? ` · ${a.capital_market_count}` : ''}
+                    {a.client_name} · #{a.account_id} ({a.environment})
                   </option>
                 ))}
               </select>
               <input
                 className="input"
-                style={{ maxWidth: 200 }}
+                style={{ maxWidth: 180 }}
                 placeholder="Search market…"
                 value={launchFilter}
                 onChange={(e) => setLaunchFilter(e.target.value)}
               />
               <select
                 className="input"
-                style={{ maxWidth: 360 }}
+                style={{ maxWidth: 320 }}
                 value={launchEpic}
                 onChange={(e) => {
                   setLaunchEpic(e.target.value);
@@ -459,9 +309,6 @@ export function RobotDeskPage() {
                   if (m) setLaunchLot(String(m.lot_size || m.min_lot || 0.1));
                 }}
               >
-                {filteredLaunch.length === 0 && (
-                  <option value="">Pull markets in Trading first</option>
-                )}
                 {filteredLaunch.map((m) => (
                   <option key={m.instrument_id} value={m.epic || m.symbol}>
                     {m.display_name} · {m.epic || m.symbol}
@@ -470,109 +317,119 @@ export function RobotDeskPage() {
               </select>
               <input
                 className="input"
-                style={{ maxWidth: 100 }}
+                style={{ maxWidth: 90 }}
                 value={launchLot}
                 onChange={(e) => setLaunchLot(e.target.value)}
               />
-              <button
-                className="btn btn-primary"
-                type="button"
-                disabled={!launchAccountId || !launchEpic}
-                onClick={startFromLauncher}
-              >
-                DEPLOY ROBOT
+              <button className="btn btn-go" type="button" disabled={busy} onClick={deploy}>
+                DEPLOY
               </button>
             </div>
           </div>
         )}
 
-        {busy && !session && (
-          <div className="robot-empty mono">Booting VS combat unit…</div>
+        {sessions.length === 0 && !busy && (
+          <div className="robot-empty">
+            <div className="robot-arena-kicker">EMPTY BOARD</div>
+            <p style={{ marginBottom: 12 }}>Vēl nav robotu. Spied + DEPLOY vai Trading → START ROBOT.</p>
+            <button className="btn btn-primary" type="button" onClick={() => setShowDeploy(true)}>
+              + DEPLOY FIRST UNIT
+            </button>
+          </div>
         )}
 
-        {session && (
-          <div className="robot-arena-stage">
-            <div className="robot-hud-panel">
-              <div className="section-title">TARGET LOCK</div>
-              <div className="robot-radar">
-                <div className="robot-radar-sweep" />
-                <div className="robot-radar-core">
-                  <div className="mid">{fmt(session.last_mid)}</div>
-                  <div className="meta">{session.display_name}</div>
-                  <div className="meta">{session.open_side || 'FLAT'} · LOT {session.lot_size}</div>
+        <div className="robot-board-grid">
+          {sessions.map((s) => {
+            const p = posture(s);
+            const active = focusId === s.id;
+            return (
+              <button
+                key={s.id}
+                type="button"
+                className={`robot-mini ${p.kind} ${s.running ? 'on' : 'off'} ${active ? 'active' : ''}`}
+                onClick={() => setFocusId(s.id)}
+              >
+                <div className="robot-mini-head">
+                  <span className="robot-mini-client">
+                    {(s.client_name || s.account_name).toUpperCase()}
+                  </span>
+                  <span className={`robot-mini-dot ${s.running ? 'on' : 'off'}`} />
                 </div>
-              </div>
-              <div className="robot-power">
-                <div className="robot-power-row">
-                  <span>MFE</span>
-                  <div className="robot-power-bar">
-                    <div className="robot-power-fill" style={{ width: `${mfePct}%` }} />
-                  </div>
-                  <span>{fmt(session.mfe)}</span>
+                <div className="robot-mini-market">{s.display_name}</div>
+                <div className={`robot-mini-posture ${p.kind}`}>{p.label}</div>
+                <div className="robot-mini-row">
+                  <span>MID</span>
+                  <strong>{fmt(s.last_mid)}</strong>
                 </div>
-                <div className="robot-power-row">
+                <div className="robot-mini-row">
                   <span>UPL</span>
-                  <div className="robot-power-bar">
-                    <div
-                      className={`robot-power-fill${(session.unrealized || 0) < 0 ? ' bad' : ''}`}
-                      style={{ width: `${Math.max(8, uplPct)}%` }}
-                    />
-                  </div>
-                  <span>{fmt(session.unrealized)}</span>
+                  <strong className={(s.unrealized || 0) >= 0 ? 'pos' : 'neg'}>{fmt(s.unrealized)}</strong>
                 </div>
-                <div className="robot-power-row">
-                  <span>PEAK</span>
-                  <div className="robot-power-bar">
-                    <div className="robot-power-fill" style={{ width: `${retPct}%` }} />
-                  </div>
-                  <span>{retPct}%</span>
+                <div className="robot-mini-row">
+                  <span>LOT / SL</span>
+                  <strong>
+                    {s.lot_size} / {fmt(s.safety_sl)}
+                  </strong>
                 </div>
-              </div>
-            </div>
-
-            <div className="robot-hud-panel">
-              <div className="section-title">UNIT STATUS</div>
-              <div className="mono" style={{ lineHeight: 1.85, fontSize: 13 }}>
-                <div>STATUS · {session.running ? 'ONLINE' : 'OFFLINE'}</div>
-                <div>ID · {session.id}</div>
-                <div>ACCOUNT · {session.account_name}</div>
-                <div>ENV · {session.environment.toUpperCase()}</div>
-                <div>SIDE · {session.open_side || 'FLAT'}</div>
-                <div>ENTRY · {fmt(session.entry_price)}</div>
-                <div>SAFETY SL · {fmt(session.safety_sl)}</div>
-                <div>DEAL · {session.deal_id || '—'}</div>
-                <div>REF · {session.last_deal_reference || '—'}</div>
-                <div>
-                  SCORE · IN {session.orders_placed} / OUT {session.exits_done ?? 0}
-                </div>
-                <div>
-                  READS · {session.reads_ok}/{session.reads_fail}
-                </div>
-                <div>BOOT · {new Date(session.started_at).toLocaleTimeString()}</div>
-              </div>
-              {session.error && (
-                <div className="error-state" style={{ marginTop: 10 }}>
-                  {session.error}
-                </div>
-              )}
-            </div>
-
-            <div className="robot-hud-panel">
-              <div className="section-title">COMBAT FEED</div>
-              <div className="robot-feed">
-                {session.ticks.length === 0 && (
-                  <div className="mono">Awaiting first Capital ping…</div>
-                )}
-                {session.ticks.map((t, i) => (
-                  <div
-                    key={`${t.at}-${i}`}
-                    className={`robot-feed-line phase-${t.phase.toLowerCase()}`}
+                <div className="robot-mini-mode">{s.mode}</div>
+                <div className="robot-mini-log mono">{lastLog(s)}</div>
+                <div className="robot-mini-actions">
+                  <span className="mono">{s.environment.toUpperCase()}</span>
+                  <span
+                    className="btn btn-stop"
+                    role="button"
+                    tabIndex={0}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void stopOne(s);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.stopPropagation();
+                        void stopOne(s);
+                      }
+                    }}
                   >
+                    STOP
+                  </span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        {focused && (
+          <div className="robot-board-focus robot-hud-panel">
+            <div className="section-title">
+              FOCUS · {(focused.client_name || focused.account_name).toUpperCase()} ·{' '}
+              {focused.display_name}
+            </div>
+            <div className="robot-board-focus-grid">
+              <div className="mono" style={{ lineHeight: 1.7 }}>
+                <div>ID · {focused.id}</div>
+                <div>ACCOUNT · {focused.account_name}</div>
+                <div>POSTURE · {posture(focused).label}</div>
+                <div>MODE · {focused.mode}</div>
+                <div>ENTRY · {fmt(focused.entry_price)}</div>
+                <div>SAFETY SL · {fmt(focused.safety_sl)}</div>
+                <div>DEAL · {focused.deal_id || '—'}</div>
+                <div>
+                  SCORE · IN {focused.orders_placed} / OUT {focused.exits_done ?? 0}
+                </div>
+                <div>
+                  READS · {focused.reads_ok}/{focused.reads_fail}
+                </div>
+                {focused.error && <div className="error-state" style={{ marginTop: 8 }}>{focused.error}</div>}
+              </div>
+              <div className="robot-feed">
+                {focused.ticks.slice(0, 40).map((t, i) => (
+                  <div key={`${t.at}-${i}`} className={`robot-feed-line phase-${t.phase.toLowerCase()}`}>
                     <span className="mono time">{new Date(t.at).toLocaleTimeString()}</span>
                     <span className="badge phase">{t.phase}</span>
                     <span className="detail">{t.detail}</span>
                   </div>
                 ))}
+                {focused.ticks.length === 0 && <div className="mono">Waiting for feed…</div>}
               </div>
             </div>
           </div>
@@ -582,7 +439,7 @@ export function RobotDeskPage() {
   );
 }
 
-/** Open / reuse a named window per account+epic (for multi-client desks) */
+/** Start robot and open/focus the shared multi-client board (one page). */
 export function openRobotWindow(opts: {
   accountId: number;
   epic: string;
@@ -595,15 +452,7 @@ export function openRobotWindow(opts: {
     lot: String(opts.lot),
     name: opts.name,
   });
-  const winName = stableRobotWindowName(String(opts.accountId), opts.epic);
-  const features = 'noopener,noreferrer';
-  const w = window.open(`/robot?${q.toString()}`, winName, features);
-  if (w) {
-    try {
-      w.focus();
-    } catch {
-      /* ignore */
-    }
-  }
-  return w;
+  // Same tab board — all clients visible together
+  window.location.href = `/robot?${q.toString()}`;
+  return null;
 }

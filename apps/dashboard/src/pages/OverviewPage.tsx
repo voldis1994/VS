@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { EquityCurve, DailyBars } from '../components/Charts';
 import { useDesk } from '../components/DeskContext';
 import { apiFetch } from '../hooks/useApi';
@@ -54,7 +54,6 @@ type MarketOpt = {
 };
 
 export function OverviewPage() {
-  const navigate = useNavigate();
   const {
     status,
     clients,
@@ -149,12 +148,9 @@ export function OverviewPage() {
       name,
     });
     if (!w) {
-      // Popup blocked → same-tab fullscreen robot route
-      navigate(
-        `/robot?account_id=${selectedAccountId}&epic=${encodeURIComponent(marketEpic)}&lot=${lot}&name=${encodeURIComponent(name)}`,
-      );
+      setMsg(`Robot board · ${name} · lot ${lot}`);
     } else {
-      setMsg(`Robot logs opened · ${name} · lot ${lot} (independent fullscreen)`);
+      setMsg(`Robot board · ${name} · lot ${lot}`);
     }
   };
 

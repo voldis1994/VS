@@ -1112,6 +1112,157 @@ tr:hover td { background: rgba(57, 255, 20, 0.06); }
   .robot-fs-grid { grid-template-columns: 1fr; }
 }
 
+/* ========== MULTI-CLIENT COMMAND BOARD ========== */
+.robot-board-shell {
+  overflow: auto;
+}
+.robot-board {
+  gap: 14px;
+}
+.robot-board-top {
+  display: grid;
+  grid-template-columns: 1.4fr auto auto;
+  gap: 14px;
+  align-items: center;
+}
+.robot-board-stats {
+  display: flex;
+  gap: 10px;
+}
+.robot-board-stats .robot-mode-banner {
+  min-width: 110px;
+  padding: 10px 16px;
+}
+.robot-board-stats .value {
+  font-size: 22px;
+}
+.robot-deploy-bar {
+  padding: 16px;
+}
+.robot-board-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+.robot-mini {
+  text-align: left;
+  border: 1px solid rgba(180, 255, 0, 0.28);
+  background: rgba(4, 10, 4, 0.9);
+  color: var(--text-primary);
+  padding: 12px;
+  cursor: pointer;
+  clip-path: var(--clip-panel);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 210px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+.robot-mini:hover {
+  border-color: rgba(180, 255, 0, 0.65);
+  transform: translateY(-1px);
+}
+.robot-mini.active {
+  border-color: var(--cyan);
+  box-shadow: var(--neon-cyan);
+}
+.robot-mini.on {
+  border-color: rgba(180, 255, 0, 0.55);
+}
+.robot-mini.off {
+  opacity: 0.72;
+}
+.robot-mini-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.robot-mini-client {
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--cyan);
+}
+.robot-mini-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+}
+.robot-mini-dot.on {
+  background: var(--accent);
+  box-shadow: var(--neon-green);
+}
+.robot-mini-market {
+  font-family: var(--font-sans);
+  font-size: 16px;
+  font-weight: 700;
+}
+.robot-mini-posture {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  padding: 6px 0;
+}
+.robot-mini-posture.long { color: var(--accent); text-shadow: var(--neon-green); }
+.robot-mini-posture.short { color: #ff8da8; text-shadow: 0 0 10px rgba(255, 59, 107, 0.45); }
+.robot-mini-posture.entry { color: var(--cyan); text-shadow: var(--neon-cyan); }
+.robot-mini-posture.flat { color: var(--text-secondary); }
+.robot-mini-row {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  gap: 8px;
+}
+.robot-mini-row span { color: var(--text-secondary); }
+.robot-mini-row .pos { color: var(--accent); }
+.robot-mini-row .neg { color: var(--danger); }
+.robot-mini-mode {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  color: var(--accent-2);
+}
+.robot-mini-log {
+  font-size: 10px;
+  color: var(--text-secondary);
+  line-height: 1.35;
+  max-height: 34px;
+  overflow: hidden;
+  border-top: 1px solid rgba(180, 255, 0, 0.12);
+  padding-top: 6px;
+}
+.robot-mini-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: auto;
+  gap: 8px;
+}
+.robot-mini-actions .btn {
+  padding: 4px 8px;
+  font-size: 10px;
+}
+.robot-board-focus {
+  margin-top: 4px;
+  max-height: 340px;
+}
+.robot-board-focus-grid {
+  display: grid;
+  grid-template-columns: 0.9fr 1.4fr;
+  gap: 12px;
+  min-height: 0;
+}
+.robot-board-focus .robot-feed {
+  max-height: 260px;
+}
+@media (max-width: 900px) {
+  .robot-board-top { grid-template-columns: 1fr; }
+  .robot-board-focus-grid { grid-template-columns: 1fr; }
+}
+
 /* ========== VS SYSTEM GAMER LAYER ========== */
 .vs-logo-wrap {
   display: inline-flex;
