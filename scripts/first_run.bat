@@ -77,6 +77,10 @@ if not exist "%ROOT%\.env" (
 ) else (
   echo [OK] .env exists ^(not overwritten^)
 )
+REM Ungate LIVE for this machine (operator accepts risk)
+call :upsert_env OPERATING_MODE LIVE
+call :upsert_env LIVE_TRADING_ENABLED true
+echo [OK] OPERATING_MODE=LIVE LIVE_TRADING_ENABLED=true
 
 echo.
 echo [3/9] vcpkg ...

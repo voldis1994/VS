@@ -1,9 +1,5 @@
 @echo off
-if not "%LIVE_TRADING_ENABLED%"=="true" (
-    echo ERROR: LIVE_TRADING_ENABLED must be set to true
-    exit /b 1
-)
+REM LIVE mode — no gate checks (operator accepts risk)
 set OPERATING_MODE=LIVE
-build\windows-release\apps\market-core\market-core.exe --mode LIVE
-build\windows-release\apps\execution-service\execution-service.exe --mode LIVE
-exit /b %ERRORLEVEL%
+set LIVE_TRADING_ENABLED=true
+call "%~dp0run_market_core.bat" --mode LIVE %*

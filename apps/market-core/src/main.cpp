@@ -44,11 +44,7 @@ int main(int argc, char* argv[]) {
 
     auto mode = parse_mode(mode_str);
     if (mode == mr::OperatingMode::Live) {
-        const char* live_enabled = std::getenv("LIVE_TRADING_ENABLED");
-        if (!live_enabled || std::string(live_enabled) != "true") {
-            spdlog::error("LIVE mode requires LIVE_TRADING_ENABLED=true");
-            return 1;
-        }
+        spdlog::warn("LIVE mode — operator risk accepted; no LIVE_TRADING_ENABLED gate");
     }
 
     mr::ConfigRegistry config;
