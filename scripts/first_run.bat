@@ -385,3 +385,8 @@ exit /b 0
 :log
 >>"%LOG%" echo [%DATE% %TIME%] %*
 goto :eof
+
+:set_env_kv
+REM %1=KEY  %2=VALUE  — upsert into %ROOT%\.env
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='!ROOT!\.env'; $k='%~1'; $v='%~2'; if (-not (Test-Path -LiteralPath $p)) { Set-Content -LiteralPath $p -Value ($k+'='+$v) -NoNewline; exit 0 }; $c=Get-Content -LiteralPath $p -Raw; if ($null -eq $c) { $c='' }; if ($c -match ('(?m)^'+[regex]::Escape($k)+'=')) { $c=[regex]::Replace($c,('(?m)^'+[regex]::Escape($k)+'=.*'),($k+'='+$v)) } else { if ($c.Length -gt 0 -and -not $c.EndsWith(\"`n\")) { $c+=\"`r`n\" }; $c+=($k+'='+$v+\"`r`n\") }; Set-Content -LiteralPath $p -Value $c -NoNewline"
+goto :eof

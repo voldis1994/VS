@@ -89,7 +89,16 @@ cd ..\..
 
 echo.
 echo Starting database...
+docker start market-reader-postgres >nul 2>&1
+docker start market-reader-redis >nul 2>&1
 docker compose up -d postgres redis
+if %ERRORLEVEL% neq 0 (
+    echo [WARN] Port conflict likely. Retrying on 15432/16379 ...
+    docker rm -f market-reader-postgres market-reader-redis >nul 2>&1
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='.env'; $c=Get-Content $p -Raw; $c=[regex]::Replace($c,'(?m)^DB_PORT=.*','DB_PORT=15432'); $c=[regex]::Replace($c,'(?m)^REDIS_PORT=.*','REDIS_PORT=16379'); Set-Content $p $c -NoNewline"
+    docker compose up -d postgres redis
+    if %ERRORLEVEL% neq 0 set /a ERRORS+=1
+)
 timeout /t 5 /nobreak >nul
 
 echo Running migrations...
