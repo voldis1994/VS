@@ -8,13 +8,16 @@ interface TradingAccount {
   environment: string;
   client_name: string;
   identifier: string | null;
+  capital_market_count?: number;
 }
 
 interface InstrumentRow {
   instrument_id: number;
+  epic?: string;
   symbol: string;
   display_name: string;
   category: string;
+  instrument_type?: string;
   min_lot: number;
   max_lot: number;
   lot_step: number;
@@ -22,6 +25,7 @@ interface InstrumentRow {
   enabled: boolean;
   trading_enabled: boolean;
   configured: boolean;
+  source?: 'capital_com' | 'local_fallback';
 }
 
 export function TradingPage() {
@@ -33,6 +37,7 @@ export function TradingPage() {
   const [category, setCategory] = useState('all');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [msgOk, setMsgOk] = useState(true);
 
   useEffect(() => {
     if (!accounts || accounts.length === 0) {
@@ -58,14 +63,26 @@ export function TradingPage() {
     if (accountId) void loadInstruments(accountId);
   }, [accountId]);
 
+  const categories = useMemo(() => {
+    const set = new Set(instruments.map((i) => i.category).filter(Boolean));
+    return ['all', ...[...set].sort()];
+  }, [instruments]);
+
   const filtered = useMemo(() => {
     return instruments.filter((i) => {
       if (category !== 'all' && i.category !== category) return false;
       if (!filter.trim()) return true;
       const q = filter.toLowerCase();
-      return i.symbol.toLowerCase().includes(q) || i.display_name.toLowerCase().includes(q);
+      return (
+        i.symbol.toLowerCase().includes(q) ||
+        i.display_name.toLowerCase().includes(q) ||
+        (i.epic || '').toLowerCase().includes(q)
+      );
     });
   }, [instruments, filter, category]);
+
+  const source = instruments[0]?.source || 'local_fallback';
+  const selected = accounts?.find((a) => a.account_id === accountId);
 
   const syncAccounts = async () => {
     setBusy(true);
@@ -75,11 +92,42 @@ export function TradingPage() {
         method: 'POST',
         body: JSON.stringify({}),
       });
-      setMsg(`Synced ${res.synced_accounts} account(s). Markets + lot size ready below.`);
+      setMsgOk(true);
+      setMsg(`Synced ${res.synced_accounts} account(s).`);
       refresh();
       if (accountId) await loadInstruments(accountId);
     } catch (e) {
+      setMsgOk(false);
       setMsg(e instanceof Error ? e.message : 'Sync failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const pullCapitalMarkets = async () => {
+    if (!accountId) return;
+    setBusy(true);
+    setMsgOk(true);
+    setMsg(
+      'Pulling ALL Capital.com markets (real epics + names). This can take 1–3 minutes — do not close the tab...'
+    );
+    try {
+      const res = await apiFetch<{ count: number; sample?: Array<{ epic: string; name: string }> }>(
+        `/api/trading/accounts/${accountId}/pull-capital-markets`,
+        { method: 'POST', body: JSON.stringify({}) }
+      );
+      setMsgOk(true);
+      setMsg(
+        `Loaded ${res.count} Capital.com markets` +
+          (res.sample?.length
+            ? ` · e.g. ${res.sample.map((s) => s.name).slice(0, 4).join(', ')}`
+            : '')
+      );
+      refresh();
+      await loadInstruments(accountId);
+    } catch (e) {
+      setMsgOk(false);
+      setMsg(e instanceof Error ? e.message : 'Pull Capital.com markets failed');
     } finally {
       setBusy(false);
     }
@@ -99,6 +147,7 @@ export function TradingPage() {
       });
       await loadInstruments(accountId);
     } catch (e) {
+      setMsgOk(false);
       setMsg(e instanceof Error ? e.message : 'Update failed');
     } finally {
       setBusy(false);
@@ -116,62 +165,72 @@ export function TradingPage() {
           body: JSON.stringify({ enabled: true, trading_enabled: on, lot_size: row.lot_size }),
         });
       }
+      setMsgOk(true);
       setMsg(on ? 'Auto-trade ON for filtered markets' : 'Auto-trade OFF for filtered markets');
       await loadInstruments(accountId);
     } catch (e) {
+      setMsgOk(false);
       setMsg(e instanceof Error ? e.message : 'Bulk update failed');
     } finally {
       setBusy(false);
     }
   };
 
-  if (loading) return <div className="empty-state">Loading trading accounts...</div>;
+  if (loading) return <div className="empty-state">LOADING TRADE DESK...</div>;
   if (error) return <div className="error-state">{error}</div>;
 
   return (
     <div>
       <h1 className="page-title">Trading</h1>
       <p className="page-subtitle">
-        Markets · lot size · auto-trade // LIVE requires Brokers Live + Settings gate
+        Real Capital.com markets · lot size · auto-trade
       </p>
 
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="section-title">Account</div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div className="actions">
           <select
             className="input"
             style={{ maxWidth: 420 }}
             value={accountId ?? ''}
             onChange={(e) => setAccountId(parseInt(e.target.value, 10))}
           >
-            {(accounts || []).length === 0 && <option value="">No accounts — click Sync</option>}
+            {(accounts || []).length === 0 && <option value="">No accounts — Sync first</option>}
             {(accounts || []).map((a) => (
               <option key={a.account_id} value={a.account_id}>
                 #{a.account_id} {a.client_name} / {a.broker_name} ({a.environment})
+                {typeof a.capital_market_count === 'number' ? ` · ${a.capital_market_count} markets` : ''}
               </option>
             ))}
           </select>
-          <button className="btn btn-primary" onClick={syncAccounts} disabled={busy}>
-            Sync accounts & markets
+          <button className="btn" onClick={syncAccounts} disabled={busy}>
+            Sync accounts
+          </button>
+          <button className="btn btn-primary" onClick={pullCapitalMarkets} disabled={busy || !accountId}>
+            Pull ALL Capital.com markets
           </button>
         </div>
         {msg && (
           <p
             style={{
-              marginTop: 8,
+              marginTop: 10,
               fontSize: 13,
               fontFamily: 'var(--font-mono)',
-              color: msg.toLowerCase().includes('sync') || msg.toLowerCase().includes('ready')
-                ? 'var(--accent)'
-                : 'var(--danger)',
+              color: msgOk ? 'var(--accent)' : 'var(--danger)',
             }}
           >
             {msg}
           </p>
         )}
-        {(accounts || []).length === 0 && (
-          <p className="error-state" style={{ marginTop: 8 }}>
-            No broker account yet. Save a Capital.com Live connection under Brokers, then Sync.
+        {source === 'local_fallback' && (
+          <p className="error-state" style={{ marginTop: 10 }}>
+            Showing temporary local list. Click <strong>Pull ALL Capital.com markets</strong> to load
+            real epics/names from your {selected?.environment || 'broker'} account (can take minutes).
+          </p>
+        )}
+        {source === 'capital_com' && (
+          <p style={{ marginTop: 10, fontSize: 12, color: 'var(--success)', fontFamily: 'var(--font-mono)' }}>
+            Source: Capital.com · {instruments.length} markets loaded
           </p>
         )}
       </div>
@@ -179,22 +238,25 @@ export function TradingPage() {
       {accountId && (
         <div className="card">
           <div className="section-title">Markets & lot size</div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+          <div className="actions" style={{ marginBottom: 12 }}>
             <input
               className="input"
-              style={{ maxWidth: 240 }}
-              placeholder="Search symbol..."
+              style={{ maxWidth: 260 }}
+              placeholder="Search epic / name..."
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
             />
-            <select className="input" style={{ maxWidth: 160 }} value={category}
-              onChange={(e) => setCategory(e.target.value)}>
-              <option value="all">All categories</option>
-              <option value="fx">FX</option>
-              <option value="metals">Metals</option>
-              <option value="energy">Energy</option>
-              <option value="indices">Indices</option>
-              <option value="crypto">Crypto</option>
+            <select
+              className="input"
+              style={{ maxWidth: 180 }}
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+            >
+              {categories.map((c) => (
+                <option key={c} value={c}>
+                  {c === 'all' ? 'All categories' : c}
+                </option>
+              ))}
             </select>
             <button className="btn" disabled={busy} onClick={() => enableAllVisibleTrading(true)}>
               Auto-trade ON (filtered)
@@ -202,13 +264,17 @@ export function TradingPage() {
             <button className="btn" disabled={busy} onClick={() => enableAllVisibleTrading(false)}>
               Auto-trade OFF (filtered)
             </button>
+            <span className="mono" style={{ color: 'var(--text-secondary)' }}>
+              showing {filtered.length} / {instruments.length}
+            </span>
           </div>
           {instError && <div className="error-state">{instError}</div>}
-          <div style={{ overflow: 'auto' }}>
+          <div className="table-wrap" style={{ maxHeight: '65vh' }}>
             <table>
               <thead>
                 <tr>
-                  <th>Market</th>
+                  <th>Epic</th>
+                  <th>Capital.com name</th>
                   <th>Category</th>
                   <th>Watch</th>
                   <th>Lot size</th>
@@ -218,11 +284,16 @@ export function TradingPage() {
               <tbody>
                 {filtered.map((row) => (
                   <tr key={row.instrument_id}>
+                    <td className="mono">{row.epic || row.symbol}</td>
                     <td>
-                      <strong>{row.symbol}</strong>
-                      <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{row.display_name}</div>
+                      <strong>{row.display_name}</strong>
+                      {row.instrument_type && (
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                          {row.instrument_type}
+                        </div>
+                      )}
                     </td>
-                    <td>{row.category}</td>
+                    <td className="mono">{row.category}</td>
                     <td>
                       <input
                         type="checkbox"
@@ -252,10 +323,7 @@ export function TradingPage() {
                         onBlur={(e) => {
                           const v = parseFloat(e.target.value);
                           if (!Number.isFinite(v)) return;
-                          void updateRow(row.instrument_id, {
-                            lot_size: v,
-                            enabled: true,
-                          });
+                          void updateRow(row.instrument_id, { lot_size: v, enabled: true });
                         }}
                       />
                     </td>
@@ -279,7 +347,7 @@ export function TradingPage() {
               </tbody>
             </table>
           </div>
-          {filtered.length === 0 && <div className="empty-state">No markets match filter</div>}
+          {filtered.length === 0 && <div className="empty-state">NO MARKETS MATCH FILTER</div>}
         </div>
       )}
     </div>
