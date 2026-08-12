@@ -11,6 +11,8 @@ import {
   type CapitalOpenPosition,
   type CapitalSession,
 } from './capitalCom.js';
+import { emitToClient } from './clientEvents.js';
+import { mapTradeType } from './tradePresentation.js';
 
 export type RobotTick = {
   at: string;
@@ -24,6 +26,7 @@ export type RobotTick = {
 export type RobotSession = {
   id: string;
   account_id: number;
+  client_id: number;
   account_name: string;
   client_name: string;
   environment: string;
@@ -280,6 +283,14 @@ export async function stopRobotSession(id: string): Promise<RobotSession | null>
     mid: s.last_mid,
     detail: 'ROBOT STOPPED by operator',
   });
+  if (s.client_id) {
+    emitToClient(s.client_id, {
+      type: 'robot_stopped',
+      robot_id: s.id,
+      market: s.epic,
+      robot_status: 'STOPPED',
+    });
+  }
   return publicSession(s);
 }
 
@@ -431,6 +442,18 @@ async function exitTrade(
     mid: quote.mid,
     detail: `CLOSED ${s.open_side} ${s.display_name} · ${result.detail} · ${reason}`,
   });
+  if (s.client_id) {
+    emitToClient(s.client_id, {
+      type: 'trade_closed',
+      robot_id: s.id,
+      market: s.epic,
+      display_name: s.display_name,
+      side: s.open_side,
+      trade_type: mapTradeType(s.open_side),
+      lot_size: s.lot_size,
+      reason,
+    });
+  }
 
   try {
     await pool.query(
@@ -666,6 +689,18 @@ async function enterTrade(
       dealId ? ` · dealId=${dealId}` : ''
     }`,
   });
+  if (s.client_id) {
+    emitToClient(s.client_id, {
+      type: 'trade_opened',
+      robot_id: s.id,
+      market: s.epic,
+      display_name: s.display_name,
+      side: direction,
+      trade_type: mapTradeType(direction),
+      lot_size: s.lot_size,
+      entry_price: s.entry_price,
+    });
+  }
 
   try {
     const m = await pool.query(
@@ -957,7 +992,7 @@ export async function startRobotSession(input: {
   const { rows } = await pool.query(
     `SELECT ba.id, ba.display_name, ba.external_account_id,
             bc.id as connection_id, bc.environment, bc.broker_name,
-            c.name as client_name
+            c.id as client_id, c.name as client_name
      FROM broker_accounts ba
      JOIN broker_connections bc ON bc.id = ba.broker_connection_id
      JOIN clients c ON c.id = bc.client_id
@@ -971,6 +1006,7 @@ export async function startRobotSession(input: {
     connection_id: number;
     environment: string;
     broker_name: string;
+    client_id: number;
     client_name: string;
   };
   if (acc.broker_name !== 'capital_com') throw new Error('Only Capital.com accounts supported');
@@ -1015,6 +1051,7 @@ export async function startRobotSession(input: {
   const session: Internal = {
     id,
     account_id: acc.id,
+    client_id: acc.client_id,
     account_name: acc.display_name,
     client_name: acc.client_name || acc.display_name,
     environment: acc.environment,
@@ -1070,6 +1107,14 @@ export async function startRobotSession(input: {
   });
 
   sessions.set(id, session);
+  emitToClient(acc.client_id, {
+    type: 'robot_started',
+    robot_id: id,
+    market: epic,
+    display_name: displayName,
+    lot_size: lot,
+    robot_status: 'RUNNING',
+  });
   void robotCycle(session);
   // 6s when TRADEABLE; auto-slows to 90s when market closed
   setRobotCadence(session, ACTIVE_CADENCE_MS);

@@ -15,11 +15,31 @@ import { registerSettingsRoutes } from './routes/settings.js';
 import { registerTradingRoutes } from './routes/trading.js';
 import { registerRobotReaderRoutes } from './routes/robotReader.js';
 import { registerRobotDeskRoutes } from './routes/robotDesk.js';
+import { registerClientAuthRoutes } from './routes/clientAuth.js';
+import { registerClientPanelRoutes } from './routes/clientPanel.js';
 import { TelemetryBroadcaster } from './ws/telemetry.js';
+import { ClientEventHub, setClientEventHub } from './services/clientEvents.js';
 import { authMiddleware } from './middleware/auth.js';
+import {
+  extractClientToken,
+  resolveClientSession,
+} from './security/clientSession.js';
 
 const PORT = parseInt(process.env.CONTROL_API_PORT || '3000', 10);
 const HOST = process.env.CONTROL_API_HOST || '0.0.0.0';
+
+function corsOrigins(): boolean | string | string[] {
+  const raw = [process.env.CORS_ORIGIN, process.env.CLIENT_CORS_ORIGIN]
+    .filter(Boolean)
+    .join(',');
+  if (!raw) return 'http://localhost:5173';
+  const list = raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (list.includes('*')) return true;
+  return list.length === 1 ? list[0]! : list;
+}
 
 async function main() {
   // Operator risk accepted — LIVE ready unless explicitly set false
@@ -39,9 +59,11 @@ async function main() {
     keepAliveTimeout: 650_000,
   });
   const telemetry = new TelemetryBroadcaster();
+  const clientEvents = new ClientEventHub();
+  setClientEventHub(clientEvents);
 
   await app.register(cors, {
-    origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+    origin: corsOrigins(),
     credentials: true,
   });
 
@@ -58,12 +80,43 @@ async function main() {
   await registerTradingRoutes(app);
   await registerRobotReaderRoutes(app);
   await registerRobotDeskRoutes(app);
+  await registerClientAuthRoutes(app);
+  await registerClientPanelRoutes(app);
   await registerAuditRoutes(app);
   await registerSettingsRoutes(app);
 
   app.get('/ws', { websocket: true }, (socket) => {
     telemetry.addClient(socket);
     socket.on('close', () => telemetry.removeClient(socket));
+  });
+
+  app.get('/ws/client', { websocket: true }, async (socket, request) => {
+    const q = request.query as { token?: string };
+    const token =
+      (typeof q.token === 'string' && q.token) || extractClientToken(request) || null;
+    const session = await resolveClientSession(token);
+    if (!session || !session.client_enabled || !session.access_enabled) {
+      socket.send(
+        JSON.stringify({
+          type: 'error',
+          message: 'Unauthorized client websocket',
+          timestamp: new Date().toISOString(),
+        })
+      );
+      socket.close();
+      return;
+    }
+    const clientId = session.client_id;
+    clientEvents.add(clientId, socket);
+    socket.send(
+      JSON.stringify({
+        type: 'connection_status',
+        client_id: clientId,
+        status: 'ONLINE',
+        timestamp: new Date().toISOString(),
+      })
+    );
+    socket.on('close', () => clientEvents.remove(clientId, socket));
   });
 
   app.addHook('onClose', async () => {

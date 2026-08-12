@@ -15,6 +15,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { TradingPage } from './pages/TradingPage';
 import { OrbitReaderPage } from './pages/OrbitReaderPage';
 import { RobotDeskPage } from './pages/RobotDeskPage';
+import { ClientPanelPage } from './pages/ClientPanelPage';
 import { useWebSocket } from './hooks/useWebSocket';
 
 function Desk({ children }: { children: ReactNode }) {
@@ -28,6 +29,7 @@ export default function App() {
     <Routes>
       {/* Always fullscreen — outside desk Layout; independent per client window */}
       <Route path="/robot" element={<RobotDeskPage />} />
+      <Route path="/client" element={<ClientPanelPage />} />
 
       <Route path="/" element={<Desk><OverviewPage /></Desk>} />
       <Route path="/orbit" element={<Desk><OrbitReaderPage /></Desk>} />

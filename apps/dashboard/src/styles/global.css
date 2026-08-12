@@ -1661,3 +1661,277 @@ tr:hover td { background: rgba(57, 255, 20, 0.06); }
   border-color: rgba(180, 255, 0, 0.7);
   box-shadow: var(--neon-green);
 }
+
+/* ========== CLIENT CONTROL PANEL (mobile-first) ========== */
+.ccp-shell {
+  min-height: 100dvh;
+  min-height: -webkit-fill-available;
+  background:
+    radial-gradient(120% 80% at 50% 0%, rgba(180, 255, 0, 0.12), transparent 55%),
+    linear-gradient(180deg, #050805 0%, #020402 100%);
+  display: flex;
+  justify-content: center;
+  padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0)
+    env(safe-area-inset-left, 0);
+  color: #e8ffe8;
+  overflow-x: hidden;
+}
+.ccp-phone {
+  width: 100%;
+  max-width: 430px;
+  min-height: 100dvh;
+  padding: 18px 18px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-sizing: border-box;
+}
+.ccp-login {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+}
+.ccp-brand {
+  font-family: var(--font-display, 'Orbitron', sans-serif);
+  font-size: 42px;
+  letter-spacing: 0.18em;
+  color: #b4ff00;
+  font-weight: 700;
+}
+.ccp-title {
+  font-size: 13px;
+  letter-spacing: 0.28em;
+  color: rgba(200, 255, 160, 0.7);
+  margin-bottom: 18px;
+}
+.ccp-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+.ccp-top-title {
+  font-size: 12px;
+  letter-spacing: 0.22em;
+  color: #b4ff00;
+  font-weight: 700;
+}
+.ccp-client {
+  font-size: 12px;
+  color: rgba(200, 255, 180, 0.65);
+  margin-top: 4px;
+}
+.ccp-conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  padding: 6px 8px;
+  border: 1px solid rgba(180, 255, 0, 0.25);
+  white-space: nowrap;
+}
+.ccp-conn.on { color: #b4ff00; }
+.ccp-conn.off { color: #ff8da8; border-color: rgba(255, 80, 120, 0.35); }
+.ccp-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+}
+.ccp-block { display: flex; flex-direction: column; gap: 8px; }
+.ccp-label {
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  color: rgba(180, 255, 0, 0.75);
+}
+.ccp-input,
+.ccp-select {
+  width: 100%;
+  min-height: 52px;
+  border: 1px solid rgba(180, 255, 0, 0.35);
+  background: rgba(0, 0, 0, 0.45);
+  color: #e8ffe8;
+  font-size: 16px;
+  padding: 12px 14px;
+  border-radius: 0;
+  box-sizing: border-box;
+}
+.ccp-login-btn {
+  margin-top: 8px;
+  width: 100%;
+  min-height: 54px;
+  border: 0;
+  background: #b4ff00;
+  color: #031003;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  font-size: 15px;
+}
+.ccp-lot {
+  display: grid;
+  grid-template-columns: 72px 1fr 72px;
+  gap: 10px;
+  align-items: center;
+}
+.ccp-lot-btn {
+  min-height: 64px;
+  font-size: 28px;
+  border: 1px solid rgba(180, 255, 0, 0.4);
+  background: rgba(0, 12, 0, 0.55);
+  color: #b4ff00;
+}
+.ccp-lot-btn:disabled,
+.ccp-select:disabled,
+.ccp-login-btn:disabled,
+.ccp-logo-btn:disabled {
+  opacity: 0.4;
+}
+.ccp-lot-val {
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  font-weight: 700;
+  border: 1px solid rgba(180, 255, 0, 0.35);
+  background: rgba(0, 0, 0, 0.4);
+  letter-spacing: 0.04em;
+}
+.ccp-lot-meta {
+  font-size: 11px;
+  color: rgba(180, 220, 160, 0.55);
+}
+.ccp-start {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0 4px;
+}
+.ccp-logo-btn {
+  width: 180px;
+  height: 180px;
+  border-radius: 50%;
+  border: 2px solid rgba(180, 255, 0, 0.25);
+  background: radial-gradient(circle at 40% 30%, rgba(40, 60, 20, 0.5), rgba(0, 0, 0, 0.85));
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+.ccp-logo-btn.stopped {
+  filter: grayscale(0.35) brightness(0.72);
+}
+.ccp-logo-btn.running {
+  border-color: #b4ff00;
+  box-shadow: 0 0 28px rgba(180, 255, 0, 0.35), inset 0 0 24px rgba(180, 255, 0, 0.12);
+}
+.ccp-logo-spin {
+  display: inline-flex;
+  transition: transform 0.4s ease;
+}
+.ccp-logo-spin.on {
+  animation: ccpSpin 7s linear infinite;
+}
+@keyframes ccpSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.ccp-status {
+  font-size: 18px;
+  letter-spacing: 0.28em;
+  font-weight: 800;
+}
+.ccp-status.run { color: #b4ff00; text-shadow: 0 0 12px rgba(180, 255, 0, 0.45); }
+.ccp-status.stop { color: rgba(200, 220, 180, 0.55); }
+.ccp-hint {
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  color: rgba(180, 220, 160, 0.55);
+}
+.ccp-live {
+  flex: 1;
+  min-height: 180px;
+  border: 1px solid rgba(180, 255, 0, 0.3);
+  background: rgba(0, 8, 0, 0.55);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ccp-live.flash-open {
+  animation: ccpPulse 1.4s ease;
+  box-shadow: 0 0 28px rgba(180, 255, 0, 0.35);
+}
+.ccp-live.flash-close {
+  animation: ccpPulse 1.4s ease;
+  border-color: rgba(255, 140, 160, 0.5);
+}
+@keyframes ccpPulse {
+  0% { box-shadow: 0 0 0 rgba(180, 255, 0, 0); }
+  35% { box-shadow: 0 0 32px rgba(180, 255, 0, 0.45); }
+  100% { box-shadow: 0 0 0 rgba(180, 255, 0, 0); }
+}
+.ccp-live-title {
+  font-size: 12px;
+  letter-spacing: 0.24em;
+  color: rgba(180, 255, 0, 0.7);
+}
+.ccp-live-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+}
+.ccp-live-state {
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  color: #b4ff00;
+}
+.ccp-live-market {
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+.ccp-live-type {
+  font-size: 22px;
+  color: #b4ff00;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+}
+.ccp-live-lot {
+  font-size: 18px;
+  letter-spacing: 0.12em;
+}
+.ccp-live-entry {
+  font-size: 13px;
+  color: rgba(200, 255, 180, 0.6);
+  margin-top: 4px;
+}
+.ccp-live-wait {
+  font-size: 18px;
+  letter-spacing: 0.14em;
+  color: rgba(180, 255, 0, 0.75);
+}
+.ccp-live-wait.dim { color: rgba(180, 200, 160, 0.4); }
+.ccp-error {
+  color: #ff8da8;
+  font-size: 13px;
+  text-align: center;
+}
+.ccp-logout {
+  min-height: 44px;
+  border: 1px solid rgba(180, 255, 0, 0.2);
+  background: transparent;
+  color: rgba(200, 220, 180, 0.65);
+  letter-spacing: 0.16em;
+  font-size: 12px;
+}

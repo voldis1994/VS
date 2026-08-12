@@ -1,13 +1,20 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
 
-const PUBLIC_PATHS = ['/health', '/api/system/status', '/api/system/mode'];
+const PUBLIC_PATHS = [
+  '/health',
+  '/api/system/status',
+  '/api/system/mode',
+  '/api/client-auth/',
+  '/api/client/',
+  '/ws/client',
+];
 
 export async function authMiddleware(
   request: FastifyRequest,
   reply: FastifyReply
 ): Promise<void> {
   const path = request.url.split('?')[0];
-  if (PUBLIC_PATHS.some((p) => path.startsWith(p))) return;
+  if (PUBLIC_PATHS.some((p) => path === p || path.startsWith(p))) return;
 
   const token = request.headers['x-admin-token'] as string | undefined;
   const expected = process.env.API_ADMIN_TOKEN;

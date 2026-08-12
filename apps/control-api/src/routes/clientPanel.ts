@@ -1,0 +1,85 @@
+import { FastifyInstance } from 'fastify';
+import { requireClientSession } from './clientAuth.js';
+import {
+  assertNoSecrets,
+  getClientPanelStatus,
+  listClientMarkets,
+  saveClientConfig,
+  startClientRobot,
+  stopClientRobot,
+} from '../services/clientPanel.js';
+
+export async function registerClientPanelRoutes(app: FastifyInstance): Promise<void> {
+  app.get('/api/client/status', async (request, reply) => {
+    const session = await requireClientSession(request, reply);
+    if (!session) return;
+    const status = await getClientPanelStatus(session.client_id);
+    assertNoSecrets(status);
+    return status;
+  });
+
+  app.get('/api/client/markets', async (request, reply) => {
+    const session = await requireClientSession(request, reply);
+    if (!session) return;
+    const markets = await listClientMarkets(session.client_id);
+    assertNoSecrets(markets);
+    return { source: 'capital_com', markets };
+  });
+
+  app.put('/api/client/config', async (request, reply) => {
+    const session = await requireClientSession(request, reply);
+    if (!session) return;
+    const body = (request.body || {}) as { epic?: string; lot_size?: number };
+    if (!body.epic || body.lot_size == null) {
+      return reply.code(400).send({
+        error: 'epic and lot_size required',
+        message: 'epic and lot_size required',
+      });
+    }
+    try {
+      const status = await saveClientConfig(session.client_id, {
+        epic: String(body.epic),
+        lot_size: Number(body.lot_size),
+      });
+      assertNoSecrets(status);
+      return { success: true, status };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Config failed';
+      return reply.code(400).send({ error: message, message });
+    }
+  });
+
+  app.post('/api/client/start', async (request, reply) => {
+    const session = await requireClientSession(request, reply);
+    if (!session) return;
+    // Ignore any client_id in body — session is source of truth
+    try {
+      const status = await startClientRobot(session.client_id);
+      assertNoSecrets(status);
+      if (status.robot_status !== 'RUNNING') {
+        return reply.code(409).send({
+          error: 'Robot did not confirm RUNNING',
+          message: 'Robot did not confirm RUNNING',
+          status,
+        });
+      }
+      return { success: true, status };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Start failed';
+      return reply.code(400).send({ error: message, message });
+    }
+  });
+
+  app.post('/api/client/stop', async (request, reply) => {
+    const session = await requireClientSession(request, reply);
+    if (!session) return;
+    try {
+      const status = await stopClientRobot(session.client_id);
+      assertNoSecrets(status);
+      return { success: true, status };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Stop failed';
+      return reply.code(400).send({ error: message, message });
+    }
+  });
+}

@@ -62,3 +62,7 @@ Design intent: keep the hot path lock-light and single-threaded per instrument p
 ## Operating modes
 
 `REPLAY` | `PAPER` | `DEMO` | `LIVE` (`mr::OperatingMode`). LIVE requires `LIVE_TRADING_ENABLED=true`.
+
+## Client Control Panel
+
+Public mobile panel at dashboard `/client`. Auth is a separate boundary (`/api/client-auth/*`, `/api/client/*`, `/ws/client`) from admin `x-admin-token`. START/STOP reuses Robot Desk per linked broker account. See `docs/CLIENT_CONTROL_PANEL.md`.
