@@ -8,20 +8,21 @@ import {
   notePipelineHeartbeat,
 } from '../services/pipelineBridge.js';
 
-function requirePipelineAuth(request: { headers: Record<string, unknown> }, reply: {
-  code: (n: number) => { send: (b: unknown) => unknown };
-}): boolean {
+function requirePipelineAuth(
+  request: { headers: Record<string, unknown> },
+  reply: { code: (n: number) => { send: (b: unknown) => unknown } }
+): boolean {
   if (authorizePipelineRequest(request.headers as Record<string, unknown>)) return true;
   reply.code(401).send({
     error: 'Unauthorized',
-    message: 'Pipeline requires x-pipeline-token or x-admin-token',
+    message: 'Pipeline requires x-pipeline-token',
   });
   return false;
 }
 
 /**
- * Pipeline intent ingest — service/admin auth only (not public).
- * market-core LIVE bridge publishes EntryReady here.
+ * INTERNAL service routes — Market Core only (x-pipeline-token).
+ * Never accept client session or admin browser as Market Core identity.
  */
 export async function registerPipelineRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/pipeline/subscribed-epics', async (request, reply) => {
@@ -59,6 +60,7 @@ export async function registerPipelineRoutes(app: FastifyInstance): Promise<void
   });
 
   app.post('/api/pipeline/intents', async (request, reply) => {
+    // Auth FIRST — never reach fanout without valid service token
     if (!requirePipelineAuth(request, reply)) return;
     const body = (request.body || {}) as {
       epic?: string;

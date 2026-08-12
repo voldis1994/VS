@@ -15,17 +15,18 @@ export async function authMiddleware(
   reply: FastifyReply
 ): Promise<void> {
   const path = request.url.split('?')[0];
-  if (PUBLIC_PATHS.some((p) => path === p || path.startsWith(p))) return;
 
-  // Pipeline: admin token OR dedicated service token (market-core bridge)
+  // INTERNAL SERVICE — not client session, not admin browser identity
   if (path === '/api/pipeline' || path.startsWith('/api/pipeline/')) {
     if (authorizePipelineRequest(request.headers as Record<string, unknown>)) return;
     reply.code(401).send({
       error: 'Unauthorized',
-      message: 'Pipeline requires x-pipeline-token or x-admin-token',
+      message: 'Pipeline requires x-pipeline-token',
     });
     return;
   }
+
+  if (PUBLIC_PATHS.some((p) => path === p || path.startsWith(p))) return;
 
   const token = request.headers['x-admin-token'] as string | undefined;
   const expected = process.env.API_ADMIN_TOKEN;

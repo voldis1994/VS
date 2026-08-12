@@ -86,9 +86,9 @@ static std::string env_or(const char* key, const std::string& fallback = {}) {
 /** LIVE bridge: Capital quotes → EntryEngine → POST /api/pipeline/intents */
 static int run_live_bridge(mr::MarketCorePipeline& pipeline) {
     const std::string api = env_or("CONTROL_API_URL", "http://127.0.0.1:3000");
-    const std::string token = env_or("PIPELINE_SERVICE_TOKEN", env_or("API_ADMIN_TOKEN"));
-    if (token.empty() || token == "CHANGE_ME_ADMIN_TOKEN") {
-        spdlog::error("Set PIPELINE_SERVICE_TOKEN or API_ADMIN_TOKEN for LIVE bridge");
+    const std::string token = env_or("PIPELINE_TOKEN", env_or("PIPELINE_SERVICE_TOKEN"));
+    if (token.empty() || token == "CHANGE_ME_PIPELINE_TOKEN" || token == "CHANGE_ME_ADMIN_TOKEN") {
+        spdlog::error("Set PIPELINE_TOKEN or PIPELINE_SERVICE_TOKEN for LIVE bridge");
         return 1;
     }
 

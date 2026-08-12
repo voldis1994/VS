@@ -1832,6 +1832,11 @@ tr:hover td { background: rgba(57, 255, 20, 0.06); }
   border-color: rgba(255, 200, 87, 0.65);
   box-shadow: 0 0 18px rgba(255, 200, 87, 0.2);
 }
+.ccp-logo-btn.error {
+  border-color: rgba(255, 141, 168, 0.65);
+  box-shadow: 0 0 16px rgba(255, 80, 120, 0.18);
+  filter: grayscale(0.2) brightness(0.85);
+}
 .ccp-logo-btn.running {
   border-color: #b4ff00;
   box-shadow: 0 0 28px rgba(180, 255, 0, 0.35), inset 0 0 24px rgba(180, 255, 0, 0.12);
@@ -1843,9 +1848,16 @@ tr:hover td { background: rgba(57, 255, 20, 0.06); }
 .ccp-logo-spin.on {
   animation: ccpSpin 7s linear infinite;
 }
+.ccp-logo-spin.pulse {
+  animation: ccpPulseLogo 1.4s ease-in-out infinite;
+}
 @keyframes ccpSpin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+@keyframes ccpPulseLogo {
+  0%, 100% { opacity: 0.55; transform: scale(0.96); }
+  50% { opacity: 1; transform: scale(1.03); }
 }
 .ccp-status {
   font-size: 18px;

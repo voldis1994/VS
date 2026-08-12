@@ -59,9 +59,30 @@ export type ClientPanelStatus = {
   account_id: number | null;
   live_trade: ClientLiveTrade;
   last_seen_at: string | null;
+  /** Human-readable reason for STARTING/ERROR */
+  status_reason?: string | null;
   /** @deprecated use connection_status */
   connection_ok: boolean;
 };
+
+export function computeClientRobotStatus(input: {
+  requestedRunning: boolean;
+  hasAccount: boolean;
+  hasEpic: boolean;
+  bridgeHealthy: boolean;
+  marketAnalyzed: boolean;
+}): { robot_status: ClientPanelStatus['robot_status']; status_reason: string | null } {
+  if (!input.requestedRunning) return { robot_status: 'STOPPED', status_reason: null };
+  if (!input.hasAccount) return { robot_status: 'ERROR', status_reason: 'No broker account' };
+  if (!input.hasEpic) return { robot_status: 'ERROR', status_reason: 'No market selected' };
+  if (!input.bridgeHealthy) {
+    return { robot_status: 'ERROR', status_reason: 'Market Core heartbeat unavailable' };
+  }
+  if (!input.marketAnalyzed) {
+    return { robot_status: 'STARTING', status_reason: 'Waiting for Market Core to analyze market' };
+  }
+  return { robot_status: 'RUNNING', status_reason: null };
+}
 
 export function validateLotSize(
   lot: number,
@@ -291,19 +312,21 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
     }
   }
 
-  let robot_status: ClientPanelStatus['robot_status'] = 'STOPPED';
-  if (!requestedRunning) {
-    robot_status = 'STOPPED';
-  } else if (!account || !c.panel_epic) {
-    robot_status = 'ERROR';
-  } else if (!bridge.healthy || !marketAnalyzed) {
-    robot_status = 'STARTING';
-  } else {
-    robot_status = 'RUNNING';
-  }
+  const computed = computeClientRobotStatus({
+    requestedRunning,
+    hasAccount: Boolean(account),
+    hasEpic: Boolean(c.panel_epic),
+    bridgeHealthy: bridge.healthy,
+    marketAnalyzed,
+  });
+  const robot_status = computed.robot_status;
+  const status_reason =
+    robot_status === 'ERROR' && bridge.last_error && !bridge.healthy
+      ? bridge.last_error
+      : computed.status_reason;
 
   let connection_status: ClientPanelStatus['connection_status'] = 'ONLINE';
-  if (health.broker_status === 'DEGRADED' || health.last_error) {
+  if (robot_status === 'ERROR' || health.broker_status === 'DEGRADED' || health.last_error) {
     connection_status = requestedRunning ? 'ERROR' : 'ONLINE';
   }
 
@@ -318,7 +341,8 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
     pipeline_healthy: bridge.healthy,
     market_analyzed: marketAnalyzed,
     last_broker_ok_at: health.last_ok_at,
-    broker_error: health.last_error,
+    broker_error: health.last_error || status_reason,
+    status_reason,
     market: c.panel_epic,
     display_name: c.panel_display_name,
     lot_size: c.panel_lot_size != null ? Number(c.panel_lot_size) : null,

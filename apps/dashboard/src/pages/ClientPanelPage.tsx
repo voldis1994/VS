@@ -37,6 +37,7 @@ type Status = {
   broker_status?: 'CONNECTED' | 'DEGRADED' | 'UNKNOWN';
   last_broker_ok_at?: string | null;
   broker_error?: string | null;
+  status_reason?: string | null;
   market: string | null;
   display_name: string | null;
   lot_size: number | null;
@@ -363,20 +364,28 @@ export function ClientPanelPage() {
         <section className="ccp-start">
           <button
             type="button"
-            className={`ccp-logo-btn ${confirmedRunning ? 'running' : starting ? 'starting' : 'stopped'}`}
+            className={`ccp-logo-btn ${
+              confirmedRunning ? 'running' : starting ? 'starting' : errorState ? 'error' : 'stopped'
+            }`}
             disabled={busy}
             onClick={() => void toggleRobot()}
             aria-label={requestedActive ? 'Stop robot' : 'Start robot'}
           >
-            <span className={`ccp-logo-spin ${confirmedRunning ? 'on' : ''}`}>
+            <span
+              className={`ccp-logo-spin ${
+                confirmedRunning ? 'on' : starting ? 'pulse' : ''
+              }`}
+            >
               <Logo size={132} />
             </span>
           </button>
           <div className={`ccp-status ${statusClass}`}>{statusLabel}</div>
           <div className="ccp-hint">
-            {starting
-              ? 'WAITING FOR MARKET READER'
-              : hintLabel}
+            {errorState
+              ? status?.broker_error || status?.status_reason || 'SYSTEM ERROR — TAP TO STOP'
+              : starting
+                ? 'WAITING FOR MARKET READER'
+                : hintLabel}
           </div>
         </section>
 
@@ -403,6 +412,10 @@ export function ClientPanelPage() {
           ) : starting ? (
             <div className="ccp-live-body">
               <div className="ccp-live-wait">CONNECTING PIPELINE</div>
+            </div>
+          ) : errorState ? (
+            <div className="ccp-live-body">
+              <div className="ccp-live-wait">PIPELINE ERROR</div>
             </div>
           ) : (
             <div className="ccp-live-body">

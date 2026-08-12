@@ -81,11 +81,22 @@ export async function executePipelineIntent(
     throw new Error('Only EntryReady intents are executable');
   }
 
+  const idem =
+    intent.idempotency_key && String(intent.idempotency_key).trim()
+      ? String(intent.idempotency_key).trim().slice(0, 190)
+      : null;
+
   const subs = await listActiveSubscriptionsForEpic(epic);
   const executed: FanoutResult['executed'] = [];
 
   for (const sub of subs) {
-    const row = await executeForSubscription(sub, direction, setupType, intent.reference_price);
+    const row = await executeForSubscription(
+      sub,
+      direction,
+      setupType,
+      intent.reference_price,
+      idem
+    );
     executed.push(row);
   }
 
@@ -98,13 +109,84 @@ export async function executePipelineIntent(
   };
 }
 
+type ExecRow = FanoutResult['executed'][number];
+
+/** Claim execution slot once per (idempotency_key, client, account). Concurrent-safe. */
+async function claimExecution(
+  idem: string,
+  clientId: number,
+  accountId: number
+): Promise<'acquired' | 'duplicate'> {
+  const ins = await pool.query(
+    `INSERT INTO pipeline_execution_claims
+       (idempotency_key, client_id, account_id, status)
+     VALUES ($1, $2, $3, 'claimed')
+     ON CONFLICT (idempotency_key, client_id, account_id) DO NOTHING
+     RETURNING client_id`,
+    [idem, clientId, accountId]
+  );
+  return ins.rows.length ? 'acquired' : 'duplicate';
+}
+
+async function completeExecutionClaim(
+  idem: string,
+  clientId: number,
+  accountId: number,
+  summary: ExecRow
+): Promise<void> {
+  await pool.query(
+    `UPDATE pipeline_execution_claims
+     SET status = 'completed', result_summary = $4, completed_at = NOW()
+     WHERE idempotency_key = $1 AND client_id = $2 AND account_id = $3`,
+    [idem, clientId, accountId, JSON.stringify(summary)]
+  );
+}
+
 async function executeForSubscription(
   sub: ActiveSubscription,
   direction: 'BUY' | 'SELL',
   setupType: string | null,
-  referencePrice: number | null | undefined
-): Promise<FanoutResult['executed'][number]> {
+  referencePrice: number | null | undefined,
+  idempotencyKey: string | null
+): Promise<ExecRow> {
+  let claimed = false;
+  const finish = async (row: ExecRow): Promise<ExecRow> => {
+    if (claimed && idempotencyKey) {
+      try {
+        await completeExecutionClaim(idempotencyKey, sub.client_id, sub.account_id, row);
+      } catch {
+        /* best-effort */
+      }
+    }
+    return row;
+  };
+
   try {
+    // Per client/account idempotency — claim BEFORE Capital (blocks concurrent duplicates)
+    if (idempotencyKey) {
+      const claim = await claimExecution(idempotencyKey, sub.client_id, sub.account_id);
+      if (claim === 'duplicate') {
+        const prev = await pool.query(
+          `SELECT status, result_summary FROM pipeline_execution_claims
+           WHERE idempotency_key = $1 AND client_id = $2 AND account_id = $3`,
+          [idempotencyKey, sub.client_id, sub.account_id]
+        );
+        const summary = prev.rows[0]?.result_summary as ExecRow | undefined;
+        if (summary && typeof summary === 'object' && 'ok' in summary) {
+          return summary;
+        }
+        return {
+          client_id: sub.client_id,
+          account_id: sub.account_id,
+          lot_size: sub.lot_size,
+          ok: false,
+          detail: 'Duplicate intent — already processed',
+          entry_price: null,
+        };
+      }
+      claimed = true;
+    }
+
     // Security boundary: account must still belong to this client and be enabled
     const own = await pool.query(
       `SELECT ba.id
@@ -114,14 +196,14 @@ async function executeForSubscription(
       [sub.account_id, sub.client_id]
     );
     if (!own.rows.length) {
-      return {
+      return finish({
         client_id: sub.client_id,
         account_id: sub.account_id,
         lot_size: sub.lot_size,
         ok: false,
         detail: 'Account ownership check failed',
         entry_price: null,
-      };
+      });
     }
 
     // ONE TRADE: skip if broker already open on this epic
@@ -130,14 +212,14 @@ async function executeForSubscription(
       [sub.connection_id]
     );
     if (!connRow.rows.length || connRow.rows[0].broker_name !== 'capital_com') {
-      return {
+      return finish({
         client_id: sub.client_id,
         account_id: sub.account_id,
         lot_size: sub.lot_size,
         ok: false,
         detail: 'Not Capital.com',
         entry_price: null,
-      };
+      });
     }
     const creds = await loadCreds(sub.connection_id);
     const acc = await pool.query(
@@ -159,14 +241,14 @@ async function executeForSubscription(
         message: opened.result.detail,
         robot_status: 'RUNNING',
       });
-      return {
+      return finish({
         client_id: sub.client_id,
         account_id: sub.account_id,
         lot_size: sub.lot_size,
         ok: false,
         detail: opened.result.detail,
         entry_price: null,
-      };
+      });
     }
 
     const listed = await listCapitalOpenPositions(opened.session);
@@ -176,14 +258,14 @@ async function executeForSubscription(
       );
       if (existing) {
         noteBrokerOk(sub.client_id);
-        return {
+        return finish({
           client_id: sub.client_id,
           account_id: sub.account_id,
           lot_size: sub.lot_size,
           ok: false,
           detail: 'Already open on epic — skip',
           entry_price: existing.open_level,
-        };
+        });
       }
     }
 
@@ -200,14 +282,14 @@ async function executeForSubscription(
         message: result.detail,
       });
       // NO trade_opened on failure
-      return {
+      return finish({
         client_id: sub.client_id,
         account_id: sub.account_id,
         lot_size: sub.lot_size,
         ok: false,
         detail: result.detail,
         entry_price: null,
-      };
+      });
     }
 
     noteBrokerOk(sub.client_id);
@@ -259,25 +341,25 @@ async function executeForSubscription(
       /* manage attach best-effort */
     }
 
-    return {
+    return finish({
       client_id: sub.client_id,
       account_id: sub.account_id,
       lot_size: sub.lot_size,
       ok: true,
       detail: result.detail,
       entry_price: entry,
-    };
+    });
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     noteBrokerError(sub.client_id, detail);
-    return {
+    return finish({
       client_id: sub.client_id,
       account_id: sub.account_id,
       lot_size: sub.lot_size,
       ok: false,
       detail,
       entry_price: null,
-    };
+    });
   }
 }
 
@@ -289,14 +371,38 @@ export async function ingestAndExecuteIntent(
       ? String(intent.idempotency_key).trim().slice(0, 190)
       : null;
 
+  // Claim intent slot early (before Capital) so concurrent HTTP retries share one fanout
   if (idem) {
-    const existing = await pool.query(
-      `SELECT idempotency_key, fanout_summary FROM pipeline_intent_dedupe WHERE idempotency_key = $1`,
+    const claimed = await pool.query(
+      `INSERT INTO pipeline_intent_dedupe (idempotency_key, fanout_summary)
+       VALUES ($1, NULL)
+       ON CONFLICT (idempotency_key) DO NOTHING
+       RETURNING idempotency_key`,
       [idem]
     );
-    if (existing.rows.length) {
-      const prev = existing.rows[0].fanout_summary as FanoutResult;
-      return { intent_id: null, fanout: prev, deduped: true };
+    if (!claimed.rows.length) {
+      for (let i = 0; i < 20; i++) {
+        const existing = await pool.query(
+          `SELECT fanout_summary FROM pipeline_intent_dedupe WHERE idempotency_key = $1`,
+          [idem]
+        );
+        const prev = existing.rows[0]?.fanout_summary as FanoutResult | null;
+        if (prev && typeof prev === 'object' && Array.isArray(prev.executed)) {
+          return { intent_id: null, fanout: prev, deduped: true };
+        }
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      return {
+        intent_id: null,
+        fanout: {
+          epic: String(intent.epic || ''),
+          direction: intent.direction === 'SELL' ? 'SELL' : 'BUY',
+          setup_type: intent.setup_type ? String(intent.setup_type) : null,
+          subscribers: 0,
+          executed: [],
+        },
+        deduped: true,
+      };
     }
   }
 
@@ -337,9 +443,9 @@ export async function ingestAndExecuteIntent(
   if (idem) {
     try {
       await pool.query(
-        `INSERT INTO pipeline_intent_dedupe (idempotency_key, fanout_summary)
-         VALUES ($1, $2)
-         ON CONFLICT (idempotency_key) DO NOTHING`,
+        `UPDATE pipeline_intent_dedupe
+         SET fanout_summary = $2
+         WHERE idempotency_key = $1`,
         [idem, JSON.stringify(fanout)]
       );
     } catch {
