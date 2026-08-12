@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { capitalComBaseUrl } from './capitalCom.js';
+import { capitalComBaseUrl, testCapitalComSession } from './capitalCom.js';
 
 describe('capitalComBaseUrl', () => {
   it('uses live host for live', () => {
@@ -9,5 +9,18 @@ describe('capitalComBaseUrl', () => {
   it('defaults to demo host otherwise', () => {
     expect(capitalComBaseUrl('demo')).toBe('https://demo-api-capital.backend-capital.com');
     expect(capitalComBaseUrl('other')).toBe('https://demo-api-capital.backend-capital.com');
+  });
+});
+
+describe('testCapitalComSession validation', () => {
+  it('rejects email used as API key without calling network', async () => {
+    const result = await testCapitalComSession({
+      environment: 'live',
+      apiKey: 'user@inbox.lv',
+      identifier: 'user@inbox.lv',
+      password: 'secret',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.detail.toLowerCase()).toContain('email');
   });
 });
