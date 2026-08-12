@@ -72,7 +72,10 @@ void MarketCorePipeline::process_event(const MarketEvent& event) {
         auto intent = entry_engine_.evaluate(setup, evidence, state, regime,
                                               quote, consensus.spread);
         if (intent.decision == EntryDecision::EntryReady) {
-            pending_intents_.push_back(intent);
+            // Bound pending intents for memory safety; consumers drain this queue.
+            if (pending_intents_.size() < 1024) {
+                pending_intents_.push_back(intent);
+            }
         }
     }
 

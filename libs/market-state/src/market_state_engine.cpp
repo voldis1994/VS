@@ -51,6 +51,11 @@ MarketState MarketStateEngine::update(
 
     latest_[instrument] = state;
     snapshots_[state.snapshot_id] = state;
+    if (snapshots_.size() > 4096) {
+        snapshots_.clear();
+        snapshots_[state.snapshot_id] = state;
+        latest_[instrument] = state;
+    }
     return state;
 }
 

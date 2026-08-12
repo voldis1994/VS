@@ -1,4 +1,5 @@
 #include "mr/evidence_engine/evidence_engine.hpp"
+#include <algorithm>
 
 namespace mr {
 
@@ -9,62 +10,57 @@ void EvidenceEngine::detect_evidence(
     auto& seq = sequences_[setup_id];
     seq.setup_id = setup_id;
 
-    EvidenceEvent ev;
-    ev.timestamp = state.timestamp;
+    auto push_unique = [&](EvidenceType type, double strength, Direction direction) {
+        if (!seq.events.empty() && seq.events.back().type == type &&
+            seq.events.back().direction == direction) {
+            // Refresh strength of the latest matching event instead of appending duplicates.
+            seq.events.back().strength = std::max(seq.events.back().strength, strength);
+            seq.events.back().timestamp = state.timestamp;
+            return;
+        }
+        EvidenceEvent ev;
+        ev.type = type;
+        ev.timestamp = state.timestamp;
+        ev.strength = strength;
+        ev.direction = direction;
+        seq.events.push_back(ev);
+    };
 
     if (setup.direction == Direction::Long) {
         if (state.features.price.acceleration > 0 && state.features.price.velocity < 0) {
-            ev.type = EvidenceType::SellingDeceleration;
-            ev.strength = std::abs(state.features.price.acceleration);
-            ev.direction = Direction::Long;
-            seq.events.push_back(ev);
+            push_unique(EvidenceType::SellingDeceleration,
+                        std::abs(state.features.price.acceleration), Direction::Long);
         }
         if (state.flow.net_flow > 0) {
-            ev.type = EvidenceType::BuyResponse;
-            ev.strength = state.flow.net_flow;
-            ev.direction = Direction::Long;
-            seq.events.push_back(ev);
+            push_unique(EvidenceType::BuyResponse, state.flow.net_flow, Direction::Long);
         }
         if (state.features.price.velocity > 0 && state.structure.range_position > 0.5) {
-            ev.type = EvidenceType::Acceptance;
-            ev.strength = state.features.price.velocity;
-            ev.direction = Direction::Long;
-            seq.events.push_back(ev);
+            push_unique(EvidenceType::Acceptance, state.features.price.velocity, Direction::Long);
         }
     } else if (setup.direction == Direction::Short) {
         if (state.features.price.acceleration < 0 && state.features.price.velocity > 0) {
-            ev.type = EvidenceType::BuyingDeceleration;
-            ev.strength = std::abs(state.features.price.acceleration);
-            ev.direction = Direction::Short;
-            seq.events.push_back(ev);
+            push_unique(EvidenceType::BuyingDeceleration,
+                        std::abs(state.features.price.acceleration), Direction::Short);
         }
         if (state.flow.net_flow < 0) {
-            ev.type = EvidenceType::SellResponse;
-            ev.strength = std::abs(state.flow.net_flow);
-            ev.direction = Direction::Short;
-            seq.events.push_back(ev);
+            push_unique(EvidenceType::SellResponse, std::abs(state.flow.net_flow), Direction::Short);
         }
     }
 
     if (state.multi_feed.consensus_confidence > 0.7) {
-        ev.type = EvidenceType::MultiFeedConfirmation;
-        ev.strength = state.multi_feed.consensus_confidence;
-        ev.direction = setup.direction;
-        seq.events.push_back(ev);
+        push_unique(EvidenceType::MultiFeedConfirmation,
+                    state.multi_feed.consensus_confidence, setup.direction);
     }
 
     if (state.data_quality.stale) {
-        ev.type = EvidenceType::StaleFeed;
-        ev.strength = 1.0;
-        seq.events.push_back(ev);
+        push_unique(EvidenceType::StaleFeed, 1.0, Direction::Flat);
     }
 
-    if (seq.events.size() > 50) {
+    while (seq.events.size() > 50) {
         seq.events.pop_front();
     }
 
-    seq.sequence_quality = static_cast<double>(seq.events.size()) / 10.0;
-    if (seq.sequence_quality > 1.0) seq.sequence_quality = 1.0;
+    seq.sequence_quality = std::min(1.0, static_cast<double>(seq.events.size()) / 10.0);
 }
 
 void EvidenceEngine::observe(SetupId setup_id, const MarketState& state,

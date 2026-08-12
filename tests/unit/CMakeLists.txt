@@ -21,3 +21,16 @@ target_link_libraries(test_exit_quality PRIVATE
     mr::exit_engine mr::position_engine
     GTest::gtest GTest::gtest_main)
 add_test(NAME test_exit_quality COMMAND test_exit_quality)
+
+add_executable(test_entry_hot_path test_entry_hot_path.cpp)
+target_link_libraries(test_entry_hot_path PRIVATE
+    mr::entry_engine mr::evidence_engine mr::setup_engine
+    mr::market_state mr::regime_engine mr::feature_engine mr::data_quality
+    GTest::gtest GTest::gtest_main)
+add_test(NAME test_entry_hot_path COMMAND test_entry_hot_path)
+
+add_executable(test_exit_hot_path test_exit_hot_path.cpp)
+target_link_libraries(test_exit_hot_path PRIVATE
+    mr::exit_engine mr::position_engine
+    GTest::gtest GTest::gtest_main)
+add_test(NAME test_exit_hot_path COMMAND test_exit_hot_path)

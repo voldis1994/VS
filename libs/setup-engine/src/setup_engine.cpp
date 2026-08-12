@@ -64,7 +64,6 @@ std::vector<SetupCandidate> SetupEngine::update(
     std::vector<SetupCandidate> new_setups;
 
     SetupCandidate candidate;
-    candidate.id = setup_ids_.generate();
     candidate.instrument = instrument;
     candidate.created_at = state.timestamp;
     candidate.expiry = Timestamp(state.timestamp.count() + static_cast<long long>(horizon_ns_));
@@ -74,15 +73,27 @@ std::vector<SetupCandidate> SetupEngine::update(
     bool found = detect_continuation_setup(state, regime, candidate)
               || detect_pullback_setup(state, regime, candidate);
 
-    if (found && candidate.confidence > 0.3) {
-        candidate.lifecycle = SetupLifecycle::Building;
-        if (candidate.confidence > 0.6) {
-            candidate.lifecycle = SetupLifecycle::Confirmed;
-        }
-        setups_[instrument].push_back(candidate);
-        new_setups.push_back(candidate);
+    if (!found || candidate.confidence <= 0.3) {
+        return new_setups;
     }
 
+    // Do not spawn duplicate active setups of the same type/direction.
+    for (const auto& existing : setups_[instrument]) {
+        if ((existing.lifecycle == SetupLifecycle::Building ||
+             existing.lifecycle == SetupLifecycle::Confirmed) &&
+            existing.setup_type == candidate.setup_type &&
+            existing.direction == candidate.direction) {
+            return new_setups;
+        }
+    }
+
+    candidate.id = setup_ids_.generate();
+    candidate.lifecycle = SetupLifecycle::Building;
+    if (candidate.confidence > 0.6) {
+        candidate.lifecycle = SetupLifecycle::Confirmed;
+    }
+    setups_[instrument].push_back(candidate);
+    new_setups.push_back(candidate);
     return new_setups;
 }
 
