@@ -99,4 +99,10 @@ std::vector<TradeIntent> MarketCorePipeline::pending_intents() const {
     return pending_intents_;
 }
 
+std::vector<TradeIntent> MarketCorePipeline::drain_pending_intents() {
+    std::vector<TradeIntent> out;
+    out.swap(pending_intents_);
+    return out;
+}
+
 }  // namespace mr

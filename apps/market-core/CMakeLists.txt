@@ -12,5 +12,6 @@ target_link_libraries(mr_market_core_pipeline PUBLIC
 add_executable(market-core src/main.cpp)
 target_include_directories(market-core PRIVATE include)
 target_link_libraries(market-core PRIVATE
-    mr::market_core_pipeline mr::market_data mr::replay spdlog::spdlog
+    mr::market_core_pipeline mr::market_data mr::replay mr::broker_adapters
+    spdlog::spdlog CURL::libcurl nlohmann_json::nlohmann_json
 )

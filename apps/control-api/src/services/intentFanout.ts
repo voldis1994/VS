@@ -29,6 +29,8 @@ export type PipelineIntentInput = {
   decision?: string;
   explanation?: string | null;
   reason_codes?: unknown;
+  /** Stable id from Market Reader — prevents double execution on transport retry */
+  idempotency_key?: string | null;
 };
 
 export type FanoutResult = {
@@ -103,6 +105,25 @@ async function executeForSubscription(
   referencePrice: number | null | undefined
 ): Promise<FanoutResult['executed'][number]> {
   try {
+    // Security boundary: account must still belong to this client and be enabled
+    const own = await pool.query(
+      `SELECT ba.id
+       FROM broker_accounts ba
+       JOIN broker_connections bc ON bc.id = ba.broker_connection_id
+       WHERE ba.id = $1 AND bc.client_id = $2 AND ba.enabled = true AND bc.enabled = true`,
+      [sub.account_id, sub.client_id]
+    );
+    if (!own.rows.length) {
+      return {
+        client_id: sub.client_id,
+        account_id: sub.account_id,
+        lot_size: sub.lot_size,
+        ok: false,
+        detail: 'Account ownership check failed',
+        entry_price: null,
+      };
+    }
+
     // ONE TRADE: skip if broker already open on this epic
     const connRow = await pool.query(
       `SELECT environment, identifier, broker_name FROM broker_connections WHERE id = $1`,
@@ -262,7 +283,23 @@ async function executeForSubscription(
 
 export async function ingestAndExecuteIntent(
   intent: PipelineIntentInput
-): Promise<{ intent_id: number | null; fanout: FanoutResult }> {
+): Promise<{ intent_id: number | null; fanout: FanoutResult; deduped?: boolean }> {
+  const idem =
+    intent.idempotency_key && String(intent.idempotency_key).trim()
+      ? String(intent.idempotency_key).trim().slice(0, 190)
+      : null;
+
+  if (idem) {
+    const existing = await pool.query(
+      `SELECT idempotency_key, fanout_summary FROM pipeline_intent_dedupe WHERE idempotency_key = $1`,
+      [idem]
+    );
+    if (existing.rows.length) {
+      const prev = existing.rows[0].fanout_summary as FanoutResult;
+      return { intent_id: null, fanout: prev, deduped: true };
+    }
+  }
+
   let intentId: number | null = null;
   try {
     const ins = await pool.query(
@@ -297,8 +334,24 @@ export async function ingestAndExecuteIntent(
     );
   }
 
+  if (idem) {
+    try {
+      await pool.query(
+        `INSERT INTO pipeline_intent_dedupe (idempotency_key, fanout_summary)
+         VALUES ($1, $2)
+         ON CONFLICT (idempotency_key) DO NOTHING`,
+        [idem, JSON.stringify(fanout)]
+      );
+    } catch {
+      /* ignore */
+    }
+  }
+
   return { intent_id: intentId, fanout };
 }
+
+/** Alias matching Client Panel docs / E2E trace naming. */
+export const fanoutEntryIntent = ingestAndExecuteIntent;
 
 /** Stop robotDesk entry brains for this account (Client Panel must not use them). */
 export async function stopEntryRobotsForAccount(accountId: number): Promise<void> {

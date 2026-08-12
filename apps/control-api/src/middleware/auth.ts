@@ -1,4 +1,5 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
+import { authorizePipelineRequest } from '../services/pipelineBridge.js';
 
 const PUBLIC_PATHS = [
   '/health',
@@ -15,6 +16,16 @@ export async function authMiddleware(
 ): Promise<void> {
   const path = request.url.split('?')[0];
   if (PUBLIC_PATHS.some((p) => path === p || path.startsWith(p))) return;
+
+  // Pipeline: admin token OR dedicated service token (market-core bridge)
+  if (path === '/api/pipeline' || path.startsWith('/api/pipeline/')) {
+    if (authorizePipelineRequest(request.headers as Record<string, unknown>)) return;
+    reply.code(401).send({
+      error: 'Unauthorized',
+      message: 'Pipeline requires x-pipeline-token or x-admin-token',
+    });
+    return;
+  }
 
   const token = request.headers['x-admin-token'] as string | undefined;
   const expected = process.env.API_ADMIN_TOKEN;

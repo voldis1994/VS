@@ -56,10 +56,11 @@ export async function registerClientPanelRoutes(app: FastifyInstance): Promise<v
     try {
       const status = await startClientRobot(session.client_id);
       assertNoSecrets(status);
-      if (status.robot_status !== 'RUNNING') {
+      // Confirm RUNNING only after subscription is active — bridge may still be STARTING
+      if (status.robot_status !== 'RUNNING' && status.robot_status !== 'STARTING') {
         return reply.code(409).send({
-          error: 'Robot did not confirm RUNNING',
-          message: 'Robot did not confirm RUNNING',
+          error: 'Subscription not confirmed',
+          message: status.broker_error || 'Robot did not confirm RUNNING/STARTING',
           status,
         });
       }

@@ -3,6 +3,8 @@
 #include "mr/broker_adapters/broker_adapter.hpp"
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
+#include <unordered_map>
+#include <string>
 
 namespace mr {
 

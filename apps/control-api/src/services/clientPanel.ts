@@ -6,8 +6,19 @@ import {
   activateSubscription,
   deactivateSubscription,
   getBrokerHealth,
+  noteBrokerError,
+  noteBrokerOk,
 } from './clientSubscriptions.js';
 import { stopEntryRobotsForAccount } from './intentFanout.js';
+import {
+  getPipelineBridgeStatus,
+  isEpicBeingAnalyzed,
+} from './pipelineBridge.js';
+import {
+  acquireCapitalSession,
+  listCapitalOpenPositions,
+} from './capitalCom.js';
+import { decrypt } from '../security/encryption.js';
 
 export type ClientMarket = {
   instrument_id: number;
@@ -33,10 +44,13 @@ export type ClientLiveTrade = {
 export type ClientPanelStatus = {
   client_id: number;
   client_name: string;
-  /** WebSocket / API reachability from client UI perspective is separate; this is backend health */
   connection_status: 'ONLINE' | 'LOST' | 'ERROR';
-  robot_status: 'RUNNING' | 'STOPPED';
+  /** REQUESTED vs CONFIRMED: STARTING until Market Reader bridge analyzes the epic */
+  robot_status: 'RUNNING' | 'STARTING' | 'STOPPED' | 'ERROR';
+  requested_status: 'RUNNING' | 'STOPPED';
   broker_status: 'CONNECTED' | 'DEGRADED' | 'UNKNOWN';
+  pipeline_healthy: boolean;
+  market_analyzed: boolean;
   last_broker_ok_at: string | null;
   broker_error: string | null;
   market: string | null;
@@ -193,6 +207,8 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
   const requestedRunning = String(c.panel_robot_requested || '').toUpperCase() === 'RUNNING';
   const robot = account ? robotForAccount(account.account_id, c.panel_epic) : null;
   const health = getBrokerHealth(clientId);
+  const bridge = getPipelineBridgeStatus();
+  const marketAnalyzed = isEpicBeingAnalyzed(c.panel_epic);
 
   let live_trade: ClientLiveTrade = null;
   if (robot?.running && robot.open_side) {
@@ -208,6 +224,84 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
     };
   }
 
+  // Authoritative open trade from Capital (survives refresh / WS loss)
+  if (!live_trade && account && c.panel_epic) {
+    try {
+      const conn = await pool.query(
+        `SELECT environment, identifier, broker_name FROM broker_connections WHERE id = $1`,
+        [account.connection_id]
+      );
+      if (conn.rows[0]?.broker_name === 'capital_com') {
+        const credRows = await pool.query(
+          `SELECT credential_type, ciphertext, iv, tag FROM api_credential_metadata
+           WHERE broker_connection_id = $1`,
+          [account.connection_id]
+        );
+        const creds: Record<string, string> = {};
+        for (const row of credRows.rows) {
+          creds[row.credential_type as string] = decrypt(
+            row.ciphertext as string,
+            row.iv as string,
+            row.tag as string
+          );
+        }
+        const accExt = await pool.query(
+          `SELECT external_account_id FROM broker_accounts WHERE id = $1`,
+          [account.account_id]
+        );
+        const opened = await acquireCapitalSession({
+          environment: conn.rows[0].environment as string,
+          apiKey: creds.api_key || '',
+          identifier: String(conn.rows[0].identifier || '').trim(),
+          password: creds.password || '',
+          connectionId: account.connection_id,
+          capitalAccountId: (accExt.rows[0]?.external_account_id as string | null) || null,
+        });
+        if (opened.ok) {
+          noteBrokerOk(clientId);
+          const listed = await listCapitalOpenPositions(opened.session);
+          const match = listed.ok
+            ? listed.positions.find(
+                (p) => p.epic.toUpperCase() === String(c.panel_epic).toUpperCase()
+              )
+            : null;
+          if (match) {
+            const side = match.direction;
+            live_trade = {
+              market: match.epic,
+              display_name: c.panel_display_name || match.epic,
+              side,
+              trade_type: formatTradeLabel(side) || side,
+              lot_size:
+                match.size > 0
+                  ? match.size
+                  : c.panel_lot_size != null
+                    ? Number(c.panel_lot_size)
+                    : 0,
+              entry_price: match.open_level,
+              status: 'OPEN',
+            };
+          }
+        } else {
+          noteBrokerError(clientId, opened.result.detail);
+        }
+      }
+    } catch (err) {
+      noteBrokerError(clientId, err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  let robot_status: ClientPanelStatus['robot_status'] = 'STOPPED';
+  if (!requestedRunning) {
+    robot_status = 'STOPPED';
+  } else if (!account || !c.panel_epic) {
+    robot_status = 'ERROR';
+  } else if (!bridge.healthy || !marketAnalyzed) {
+    robot_status = 'STARTING';
+  } else {
+    robot_status = 'RUNNING';
+  }
+
   let connection_status: ClientPanelStatus['connection_status'] = 'ONLINE';
   if (health.broker_status === 'DEGRADED' || health.last_error) {
     connection_status = requestedRunning ? 'ERROR' : 'ONLINE';
@@ -218,8 +312,11 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
     client_name: c.name,
     connection_status,
     connection_ok: connection_status === 'ONLINE',
-    robot_status: requestedRunning ? 'RUNNING' : 'STOPPED',
+    robot_status,
+    requested_status: requestedRunning ? 'RUNNING' : 'STOPPED',
     broker_status: health.broker_status,
+    pipeline_healthy: bridge.healthy,
+    market_analyzed: marketAnalyzed,
     last_broker_ok_at: health.last_ok_at,
     broker_error: health.last_error,
     market: c.panel_epic,

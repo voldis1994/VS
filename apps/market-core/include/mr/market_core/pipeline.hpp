@@ -27,6 +27,8 @@ public:
     [[nodiscard]] RegimeState latest_regime(InstrumentId instrument) const;
     [[nodiscard]] std::vector<SetupCandidate> active_setups(InstrumentId instrument) const;
     [[nodiscard]] std::vector<TradeIntent> pending_intents() const;
+    /** Return EntryReady intents and clear the pending queue (for publishers). */
+    std::vector<TradeIntent> drain_pending_intents();
     [[nodiscard]] ClockEngine& clock() { return clock_; }
     [[nodiscard]] TelemetryHub& telemetry() { return telemetry_; }
     [[nodiscard]] HealthManager& health() { return health_; }

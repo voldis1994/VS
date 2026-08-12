@@ -1,12 +1,65 @@
 import { FastifyInstance } from 'fastify';
-import { ingestAndExecuteIntent, routeIntentToSubscriptions } from '../services/intentFanout.js';
+import { pool } from '../db/pool.js';
+import { fanoutEntryIntent, routeIntentToSubscriptions } from '../services/intentFanout.js';
+import {
+  authorizePipelineRequest,
+  getPipelineBridgeStatus,
+  notePipelineBridgeError,
+  notePipelineHeartbeat,
+} from '../services/pipelineBridge.js';
+
+function requirePipelineAuth(request: { headers: Record<string, unknown> }, reply: {
+  code: (n: number) => { send: (b: unknown) => unknown };
+}): boolean {
+  if (authorizePipelineRequest(request.headers as Record<string, unknown>)) return true;
+  reply.code(401).send({
+    error: 'Unauthorized',
+    message: 'Pipeline requires x-pipeline-token or x-admin-token',
+  });
+  return false;
+}
 
 /**
- * Pipeline intent ingest — admin/internal only (x-admin-token).
- * Client Panel never invents intents; market-core / operators publish EntryReady here.
+ * Pipeline intent ingest — service/admin auth only (not public).
+ * market-core LIVE bridge publishes EntryReady here.
  */
 export async function registerPipelineRoutes(app: FastifyInstance): Promise<void> {
+  app.get('/api/pipeline/subscribed-epics', async (request, reply) => {
+    if (!requirePipelineAuth(request, reply)) return;
+    const { rows } = await pool.query(
+      `SELECT DISTINCT c.panel_epic as epic, c.panel_display_name as display_name
+       FROM clients c
+       WHERE c.enabled = true
+         AND c.access_enabled = true
+         AND c.panel_robot_requested = 'RUNNING'
+         AND c.panel_epic IS NOT NULL
+         AND length(trim(c.panel_epic)) > 0
+       ORDER BY epic ASC`
+    );
+    return {
+      epics: rows.map((r) => ({
+        epic: String(r.epic),
+        display_name: r.display_name ? String(r.display_name) : String(r.epic),
+      })),
+      bridge: getPipelineBridgeStatus(),
+    };
+  });
+
+  app.post('/api/pipeline/heartbeat', async (request, reply) => {
+    if (!requirePipelineAuth(request, reply)) return;
+    const body = (request.body || {}) as { epics?: string[]; error?: string };
+    if (body.error) notePipelineBridgeError(String(body.error));
+    notePipelineHeartbeat(Array.isArray(body.epics) ? body.epics.map(String) : []);
+    return { success: true, bridge: getPipelineBridgeStatus() };
+  });
+
+  app.get('/api/pipeline/bridge-status', async (request, reply) => {
+    if (!requirePipelineAuth(request, reply)) return;
+    return getPipelineBridgeStatus();
+  });
+
   app.post('/api/pipeline/intents', async (request, reply) => {
+    if (!requirePipelineAuth(request, reply)) return;
     const body = (request.body || {}) as {
       epic?: string;
       direction?: string;
@@ -17,13 +70,13 @@ export async function registerPipelineRoutes(app: FastifyInstance): Promise<void
       decision?: string;
       explanation?: string | null;
       reason_codes?: unknown;
-      // Ignore any client_id spoofing
+      idempotency_key?: string;
+      intent_id?: number | string;
       client_id?: unknown;
     };
 
-    if (body.client_id != null) {
-      // Explicitly ignore — routing is subscription-based only
-    }
+    // Ignore spoofed client_id — routing is subscription-based only
+    void body.client_id;
 
     const epic = String(body.epic || '').trim();
     const directionRaw = String(body.direction || '').toUpperCase();
@@ -36,8 +89,12 @@ export async function registerPipelineRoutes(app: FastifyInstance): Promise<void
       });
     }
 
+    const idem =
+      body.idempotency_key ||
+      (body.intent_id != null ? `mr-intent-${body.intent_id}-${epic}` : null);
+
     try {
-      const result = await ingestAndExecuteIntent({
+      const result = await fanoutEntryIntent({
         epic,
         direction: (buy || direction) as 'BUY' | 'SELL',
         instrument_id: body.instrument_id ?? null,
@@ -47,6 +104,7 @@ export async function registerPipelineRoutes(app: FastifyInstance): Promise<void
         decision: body.decision || 'ENTRY_READY',
         explanation: body.explanation ?? null,
         reason_codes: body.reason_codes,
+        idempotency_key: idem,
       });
       return { success: true, ...result };
     } catch (err) {
@@ -55,8 +113,8 @@ export async function registerPipelineRoutes(app: FastifyInstance): Promise<void
     }
   });
 
-  /** Test helper documentation endpoint — routing preview without execution */
   app.post('/api/pipeline/route-preview', async (request, reply) => {
+    if (!requirePipelineAuth(request, reply)) return;
     const body = (request.body || {}) as {
       epic?: string;
       subscriptions?: Array<{

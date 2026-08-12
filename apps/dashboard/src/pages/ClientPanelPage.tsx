@@ -29,7 +29,11 @@ type Status = {
   client_name: string;
   connection_ok?: boolean;
   connection_status?: 'ONLINE' | 'LOST' | 'ERROR';
-  robot_status: 'RUNNING' | 'STOPPED';
+  /** CONFIRMED runtime — green logo only when RUNNING */
+  robot_status: 'RUNNING' | 'STARTING' | 'STOPPED' | 'ERROR';
+  requested_status?: 'RUNNING' | 'STOPPED';
+  pipeline_healthy?: boolean;
+  market_analyzed?: boolean;
   broker_status?: 'CONNECTED' | 'DEGRADED' | 'UNKNOWN';
   last_broker_ok_at?: string | null;
   broker_error?: string | null;
@@ -69,7 +73,12 @@ export function ClientPanelPage() {
     [markets, epic]
   );
 
-  const running = status?.robot_status === 'RUNNING';
+  const confirmedRunning = status?.robot_status === 'RUNNING';
+  const starting = status?.robot_status === 'STARTING';
+  const errorState = status?.robot_status === 'ERROR';
+  /** Client requested START — lock config / allow STOP while confirming */
+  const requestedActive =
+    status?.requested_status === 'RUNNING' || confirmedRunning || starting || errorState;
 
   const refresh = useCallback(async () => {
     const st = await clientFetch<Status>('/api/client/status');
@@ -106,12 +115,13 @@ export function ClientPanelPage() {
   }, [token, refresh, loadMarkets]);
 
   useEffect(() => {
-    if (!token || !running) return;
+    // Poll while STARTING or RUNNING so bridge confirmation flips to green logo
+    if (!token || !requestedActive) return;
     const t = setInterval(() => {
       void refresh().catch(() => undefined);
-    }, 4000);
+    }, 3000);
     return () => clearInterval(t);
-  }, [token, running, refresh]);
+  }, [token, requestedActive, refresh]);
 
   const { online } = useClientWebSocket(Boolean(token), (msg) => {
     if (msg.type === 'trade_opened') {
@@ -174,7 +184,7 @@ export function ClientPanelPage() {
   };
 
   const bumpLot = async (dir: -1 | 1) => {
-    if (!selected || running) return;
+    if (!selected || requestedActive) return;
     const step = selected.lot_step || 0.01;
     const next = Math.min(
       selected.max_lot,
@@ -190,7 +200,7 @@ export function ClientPanelPage() {
   };
 
   const onMarketChange = async (value: string) => {
-    if (running) return;
+    if (requestedActive) return;
     const m = markets.find((x) => x.epic === value);
     if (!m) return;
     setEpic(m.epic);
@@ -208,7 +218,7 @@ export function ClientPanelPage() {
     setBusy(true);
     setError(null);
     try {
-      if (!running) {
+      if (!requestedActive) {
         if (!epic) throw new Error('Select a market first');
         await persistConfig(epic, lot);
         const res = await clientFetch<{ status: Status }>('/api/client/start', {
@@ -216,6 +226,9 @@ export function ClientPanelPage() {
           body: JSON.stringify({}),
         });
         setStatus(res.status);
+        if (res.status.robot_status === 'ERROR') {
+          setError(res.status.broker_error || 'Start failed — check account / market');
+        }
       } else {
         const res = await clientFetch<{ status: Status }>('/api/client/stop', {
           method: 'POST',
@@ -269,7 +282,21 @@ export function ClientPanelPage() {
   }
 
   const live = status?.live_trade;
-  const confirmedRunning = status?.robot_status === 'RUNNING';
+  const statusClass = confirmedRunning
+    ? 'run'
+    : starting
+      ? 'starting'
+      : errorState
+        ? 'error'
+        : 'stop';
+  const statusLabel = confirmedRunning
+    ? 'RUNNING'
+    : starting
+      ? 'STARTING'
+      : errorState
+        ? 'ERROR'
+        : 'STOPPED';
+  const hintLabel = requestedActive ? 'TAP TO STOP' : 'TAP TO START';
 
   return (
     <div className="ccp-shell">
@@ -302,7 +329,7 @@ export function ClientPanelPage() {
           <select
             className="ccp-select"
             value={epic}
-            disabled={confirmedRunning || busy || markets.length === 0}
+            disabled={requestedActive || busy || markets.length === 0}
             onChange={(e) => void onMarketChange(e.target.value)}
           >
             {markets.length === 0 && <option value="">No markets — ask admin to pull Capital markets</option>}
@@ -317,11 +344,11 @@ export function ClientPanelPage() {
         <section className="ccp-block">
           <div className="ccp-label">LOT SIZE</div>
           <div className="ccp-lot">
-            <button type="button" className="ccp-lot-btn" disabled={confirmedRunning || busy} onClick={() => void bumpLot(-1)}>
+            <button type="button" className="ccp-lot-btn" disabled={requestedActive || busy} onClick={() => void bumpLot(-1)}>
               −
             </button>
             <div className="ccp-lot-val">{fmtLot(lot)}</div>
-            <button type="button" className="ccp-lot-btn" disabled={confirmedRunning || busy} onClick={() => void bumpLot(1)}>
+            <button type="button" className="ccp-lot-btn" disabled={requestedActive || busy} onClick={() => void bumpLot(1)}>
               +
             </button>
           </div>
@@ -336,19 +363,21 @@ export function ClientPanelPage() {
         <section className="ccp-start">
           <button
             type="button"
-            className={`ccp-logo-btn ${confirmedRunning ? 'running' : 'stopped'}`}
+            className={`ccp-logo-btn ${confirmedRunning ? 'running' : starting ? 'starting' : 'stopped'}`}
             disabled={busy}
             onClick={() => void toggleRobot()}
-            aria-label={confirmedRunning ? 'Stop robot' : 'Start robot'}
+            aria-label={requestedActive ? 'Stop robot' : 'Start robot'}
           >
             <span className={`ccp-logo-spin ${confirmedRunning ? 'on' : ''}`}>
               <Logo size={132} />
             </span>
           </button>
-          <div className={`ccp-status ${confirmedRunning ? 'run' : 'stop'}`}>
-            {confirmedRunning ? 'RUNNING' : 'STOPPED'}
+          <div className={`ccp-status ${statusClass}`}>{statusLabel}</div>
+          <div className="ccp-hint">
+            {starting
+              ? 'WAITING FOR MARKET READER'
+              : hintLabel}
           </div>
-          <div className="ccp-hint">{confirmedRunning ? 'TAP TO STOP' : 'TAP TO START'}</div>
         </section>
 
         <section className={`ccp-live ${flash === 'opened' ? 'flash-open' : ''} ${flash === 'closed' ? 'flash-close' : ''}`}>
@@ -370,6 +399,10 @@ export function ClientPanelPage() {
           ) : confirmedRunning ? (
             <div className="ccp-live-body">
               <div className="ccp-live-wait">WAITING FOR TRADE</div>
+            </div>
+          ) : starting ? (
+            <div className="ccp-live-body">
+              <div className="ccp-live-wait">CONNECTING PIPELINE</div>
             </div>
           ) : (
             <div className="ccp-live-body">
