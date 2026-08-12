@@ -138,20 +138,22 @@ if errorlevel 1 (
   goto :fail
 )
 
-echo Installing C++ packages ^(long step^)...
+echo Installing C++ packages ^(long step; core deps only, no Google Benchmark^)...
 "%VCPKG_ROOT%\vcpkg.exe" install --triplet x64-windows
 if errorlevel 1 (
   color 0C
   echo [FAIL] vcpkg install failed.
-  echo        Check for invalid builtin-baseline, disk space, antivirus, or MSVC.
-  echo        Log tip: open %LOG%
+  echo        Check disk space ^(15+ GB free^), antivirus locks, and MSVC C++ tools.
+  echo        Also open the newest log under: %VCPKG_ROOT%\buildtrees\
+  echo        Example: %VCPKG_ROOT%\buildtrees\*\install-x64-windows-*-out.log
+  echo        Project log: %LOG%
   goto :fail
 )
 echo [OK] vcpkg packages installed
 
 echo.
 echo [4/9] CMake configure + build ...
-cmake --preset windows-debug
+cmake --preset windows-debug -DMR_BUILD_BENCHMARKS=OFF
 if errorlevel 1 (
   color 0C
   echo [FAIL] cmake configure failed.

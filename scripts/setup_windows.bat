@@ -53,13 +53,13 @@ if defined VCPKG_BASELINE (
   powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='vcpkg.json'; $sha='!VCPKG_BASELINE!'; $c=Get-Content -LiteralPath $p -Raw; $c=[regex]::Replace($c,'\"builtin-baseline\"\s*:\s*\"[^\"]*\"',('\"builtin-baseline\": \"'+$sha+'\"')); Set-Content -LiteralPath $p -Value $c -NoNewline"
 )
 
-echo Installing vcpkg dependencies...
+echo Installing vcpkg dependencies ^(core packages; Google Benchmark is optional^)...
 "%VCPKG_ROOT%\vcpkg.exe" install --triplet x64-windows
 if %ERRORLEVEL% neq 0 set /a ERRORS+=1
 
 echo.
 echo Configuring CMake Debug...
-cmake --preset windows-debug
+cmake --preset windows-debug -DMR_BUILD_BENCHMARKS=OFF
 if %ERRORLEVEL% neq 0 set /a ERRORS+=1
 
 echo Building Debug...
