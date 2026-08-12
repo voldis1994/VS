@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiFetch } from '../hooks/useApi';
+import { Logo } from '../components/Logo';
 
 type RobotTick = {
   at: string;
@@ -231,13 +232,16 @@ export function RobotDeskPage() {
     <div className="robot-fs-shell" ref={shellRef}>
       <div className="robot-desk robot-desk-fs">
         <div className="robot-desk-head">
-          <div>
-            <div className="orbit-kicker">ONE TRADE ONLY · BEST OUTCOME EXIT</div>
-            <h1 className="page-title">ROBOT DESK</h1>
-            <p className="page-subtitle">
-              Max 1 atvērts treids uz instrumentu. Kamēr atvērts — tikai MANAGE (bez jauniem
-              entry). Entry tikai kad FLAT pēc aizvēršanas ar best outcome.
-            </p>
+          <div className="robot-brand-block">
+            <Logo size={56} />
+            <div>
+              <div className="orbit-kicker">ONE TRADE ONLY · BEST OUTCOME EXIT</div>
+              <h1 className="page-title">ROBOT DESK</h1>
+              <p className="page-subtitle">
+                Max 1 atvērts treids uz instrumentu. Kamēr atvērts — tikai MANAGE (bez jauniem
+                entry). Entry tikai kad FLAT pēc aizvēršanas ar best outcome.
+              </p>
+            </div>
           </div>
           <div className="actions">
             {!isFs && (

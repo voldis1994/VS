@@ -4,6 +4,7 @@ import { EquityCurve, DailyBars } from '../components/Charts';
 import { useDesk } from '../components/DeskContext';
 import { apiFetch } from '../hooks/useApi';
 import { openRobotWindow } from './RobotDeskPage';
+import { Logo } from '../components/Logo';
 
 type Position = {
   id: number;
@@ -231,11 +232,14 @@ export function OverviewPage() {
   return (
     <div className="main-dash">
       <div className="dash-head">
-        <div>
-          <h1 className="page-title">MAIN DASHBOARD</h1>
-          <p className="page-subtitle">
-            Prop desk control // accounts · risk · automation · live Capital.com
-          </p>
+        <div className="dash-brand-hero">
+          <Logo size={72} />
+          <div>
+            <h1 className="page-title">MAIN DASHBOARD</h1>
+            <p className="page-subtitle">
+              Prop desk control // accounts · risk · automation · live Capital.com
+            </p>
+          </div>
         </div>
         {msg && <div className={msg.includes('Failed') ? 'error-state' : 'ok-state'}>{msg}</div>}
       </div>

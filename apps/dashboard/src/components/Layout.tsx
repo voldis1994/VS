@@ -150,11 +150,8 @@ export function Layout({ children }: { children: ReactNode }) {
             </button>
           </div>
           <div className="desk-brand">
-            <Logo size={28} />
-            <div>
-              <div className="desk-brand-title">MARKET READER</div>
-              <div className="desk-brand-sub">{pageTitle}</div>
-            </div>
+            <Logo size={34} />
+            <div className="desk-brand-sub">{pageTitle}</div>
           </div>
 
           <div className="desk-status-row">
@@ -280,7 +277,9 @@ export function Layout({ children }: { children: ReactNode }) {
         <footer className="footer-strip desk-footer">
           <span>FULL SCREEN DESK</span>
           <span>REAL-TIME</span>
-          <strong>MARKET READER</strong>
+          <span className="footer-logo-wrap">
+            <Logo size={16} />
+          </span>
         </footer>
       </div>
     </DeskContext.Provider>

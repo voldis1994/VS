@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { apiFetch } from '../hooks/useApi';
+import { Logo } from '../components/Logo';
 
 type Sender = {
   sender_id: string;
@@ -168,12 +169,15 @@ export function OrbitReaderPage() {
   return (
     <div className="orbit-page">
       <div className="orbit-hero">
-        <div>
-          <div className="orbit-kicker">CAPITAL.COM NAMES ONLY</div>
-          <h1 className="page-title">ORBIT READER</h1>
-          <p className="page-subtitle">
-            Watchlist no īstā Capital.com kataloga (display name + epic). Nekādu fake EURUSD/XAUUSD.
-          </p>
+        <div className="dash-brand-hero">
+          <Logo size={64} />
+          <div>
+            <div className="orbit-kicker">CAPITAL.COM NAMES ONLY</div>
+            <h1 className="page-title">ORBIT READER</h1>
+            <p className="page-subtitle">
+              Watchlist no īstā Capital.com kataloga (display name + epic). Nekādu fake EURUSD/XAUUSD.
+            </p>
+          </div>
         </div>
         <div className="orbit-hero-stats">
           <div className="orbit-stat">
