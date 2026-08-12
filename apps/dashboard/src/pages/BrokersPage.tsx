@@ -185,11 +185,13 @@ export function BrokersPage() {
             />
           </label>
           <label style={{ display: 'grid', gap: 4 }}>
-            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>API Password</span>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+              API Password (custom password from key creation — NOT 2FA code, NOT account password)
+            </span>
             <input
               className="input"
               type="password"
-              placeholder="Capital.com API password"
+              placeholder="API key custom password"
               value={form.password}
               onChange={(e) => setForm({ ...form, password: e.target.value })}
               autoComplete="off"
@@ -202,12 +204,14 @@ export function BrokersPage() {
         {saveError && <p className="error-state" style={{ marginTop: 8 }}>{saveError}</p>}
         {saveOk && (
           <p style={{ fontSize: 13, color: 'var(--success)', marginTop: 8 }}>
-            Saved. Use Test on the row below. Prefer Demo until credentials verify.
+            Saved. Use Test on the row below.
           </p>
         )}
         <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>
-          Capital.com → Settings → API: create key for <strong>Demo</strong> or <strong>Live</strong> separately.
-          Identifier = account email. Do not put email into API Key.
+          <strong>2FA:</strong> needed only when generating the API key on Capital.com website.
+          Do not put the authenticator code in this form.
+          Password field = the <strong>custom API password</strong> you chose when creating the key
+          (Settings → API integrations), for <strong>Live</strong> or <strong>Demo</strong> separately.
         </p>
       </div>
       {testMessage && (
