@@ -316,6 +316,97 @@ export async function openCapitalSession(input: {
   };
 }
 
+type PooledCapital = {
+  session: CapitalSession | null;
+  raw: CapitalSession | null;
+  expiresAt: number;
+  cooldownUntil: number;
+};
+
+const capitalSessionPool = new Map<string, PooledCapital>();
+
+function capitalPoolKey(input: {
+  environment: string;
+  apiKey: string;
+  identifier: string;
+}): string {
+  return `${(input.environment || 'demo').toLowerCase()}|${input.apiKey.trim()}|${input.identifier.trim()}`;
+}
+
+/**
+ * Reuse Capital.com CST/security token across robot ticks.
+ * Avoids login spam → HTTP 429 too-many-requests (which freezes the whole desk).
+ */
+export async function acquireCapitalSession(input: {
+  environment: string;
+  apiKey: string;
+  identifier: string;
+  password: string;
+}): Promise<{ ok: true; session: CapitalSession } | { ok: false; result: CapitalComSessionResult }> {
+  const key = capitalPoolKey(input);
+  const now = Date.now();
+  const cached = capitalSessionPool.get(key);
+
+  if (cached && cached.cooldownUntil > now) {
+    const waitSec = Math.ceil((cached.cooldownUntil - now) / 1000);
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        status: 429,
+        errorCode: 'error.too-many.requests',
+        detail: `Capital.com rate-limit cooldown ${waitSec}s — pausing new logins (reuse sessions; do not spam Test/Robot).`,
+      },
+    };
+  }
+
+  if (cached?.session && cached.expiresAt > now) {
+    return { ok: true, session: cached.session };
+  }
+
+  if (cached?.raw) {
+    try {
+      await cached.raw.close();
+    } catch {
+      /* ignore */
+    }
+  }
+  capitalSessionPool.delete(key);
+
+  const opened = await openCapitalSession(input);
+  if (!opened.ok) {
+    const tooMany =
+      opened.result.status === 429 ||
+      /too-many|rate.?limit/i.test(opened.result.detail || '') ||
+      /too-many/i.test(opened.result.errorCode || '');
+    if (tooMany) {
+      capitalSessionPool.set(key, {
+        session: null,
+        raw: null,
+        expiresAt: 0,
+        cooldownUntil: now + 90_000,
+      });
+    }
+    return opened;
+  }
+
+  const raw = opened.session;
+  const pooled: CapitalSession = {
+    ...raw,
+    close: async () => {
+      /* no-op — pool owns lifetime */
+    },
+  };
+
+  capitalSessionPool.set(key, {
+    session: pooled,
+    raw,
+    expiresAt: now + 8 * 60_000,
+    cooldownUntil: 0,
+  });
+  return { ok: true, session: pooled };
+}
+
 export async function testCapitalComSession(input: {
   environment: string;
   apiKey: string;

@@ -1,12 +1,12 @@
 import { pool } from '../db/pool.js';
 import { decrypt } from '../security/encryption.js';
 import {
+  acquireCapitalSession,
   closeCapitalPosition,
   confirmCapitalDeal,
   createCapitalPosition,
   fetchCapitalMarketQuote,
   listCapitalOpenPositions,
-  openCapitalSession,
   type CapitalOpenPosition,
   type CapitalSession,
 } from './capitalCom.js';
@@ -490,7 +490,7 @@ async function robotCycle(s: Internal) {
   }
 
   const creds = await loadCreds(s.connection_id);
-  const opened = await openCapitalSession({
+  const opened = await acquireCapitalSession({
     environment: conn.environment,
     apiKey: creds.api_key || '',
     identifier: (conn.identifier || '').trim(),
@@ -499,13 +499,22 @@ async function robotCycle(s: Internal) {
   if (!opened.ok) {
     s.reads_fail += 1;
     s.error = opened.result.detail;
+    const rateLimited =
+      opened.result.status === 429 || /rate-limit|too-many|cooldown/i.test(opened.result.detail);
     pushTick(s, {
-      phase: 'ERROR',
+      phase: rateLimited ? 'WAIT' : 'ERROR',
       bid: null,
       ask: null,
       mid: null,
-      detail: `Session fail: ${opened.result.detail}`,
+      detail: rateLimited
+        ? `RATE LIMIT — ${opened.result.detail}`
+        : `Session fail: ${opened.result.detail}`,
     });
+    // Slow this robot while cooling down so control panel stays usable
+    if (rateLimited && s.timer) {
+      clearInterval(s.timer);
+      s.timer = setInterval(() => void robotCycle(s), 20_000);
+    }
     return;
   }
 
@@ -527,6 +536,11 @@ async function robotCycle(s: Internal) {
     s.reads_ok += 1;
     s.error = null;
     s.last_quote_at = new Date().toISOString();
+    // Restore normal cadence after a successful read (may have been slowed by 429)
+    if (s.timer) {
+      clearInterval(s.timer);
+      s.timer = setInterval(() => void robotCycle(s), 6000);
+    }
     const prevMid = s.last_mid;
     s.last_mid = quote.mid;
     if (quote.epic && quote.epic !== s.epic) {
@@ -674,9 +688,8 @@ async function robotCycle(s: Internal) {
     const detail = err instanceof Error ? err.message : String(err);
     s.error = detail;
     pushTick(s, { phase: 'ERROR', bid: null, ask: null, mid: null, detail });
-  } finally {
-    await opened.session.close();
   }
+  // Do NOT close pooled Capital session each tick — that caused HTTP 429 login spam
 }
 
 export async function startRobotSession(input: {
@@ -795,7 +808,8 @@ export async function startRobotSession(input: {
 
   sessions.set(id, session);
   void robotCycle(session);
-  session.timer = setInterval(() => void robotCycle(session), 4000);
+  // 6s cadence — with pooled session this avoids Capital login storms
+  session.timer = setInterval(() => void robotCycle(session), 6000);
 
   return publicSession(session);
 }
