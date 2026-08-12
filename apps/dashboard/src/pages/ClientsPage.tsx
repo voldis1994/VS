@@ -156,11 +156,13 @@ export function ClientsPage() {
         </div>
         <p className="mono" style={{ fontSize: 14, wordBreak: 'break-all' }}>
           {import.meta.env.VITE_CLIENT_PANEL_URL ||
-            `${window.location.protocol}//${window.location.hostname}:5174/`}
+            'Run scripts\\share_client_panel.bat → https://….trycloudflare.com'}
         </p>
         <p style={{ marginTop: 8, fontSize: 12, opacity: 0.7 }}>
-          Start with <code>npm run dev:client</code> in <code>apps/dashboard</code> · also available
-          on admin at <Link to="/client">/client</Link>
+          Client is <strong>not</strong> on your Wi‑Fi — do not send a 192.168.x.x IP. Start{' '}
+          <code>npm run dev:client</code>, then <code>scripts\share_client_panel.bat</code>, and
+          send the https tunnel link + access code. Admin preview:{' '}
+          <Link to="/client">/client</Link>
         </p>
       </div>
 

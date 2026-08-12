@@ -1,44 +1,62 @@
-# Client Control Panel — shareable URL
+# Client Control Panel — shareable URL (REMOTE clients)
 
-## What to send to a client
+## Important
 
-**Client-only app (recommended):**
+If the client is **not on your Wi‑Fi**, a LAN IP (`192.168.x.x`) will **not** work.
+
+You need a **public HTTPS link** (tunnel or hosted server).
+
+---
+
+## Fast path — Cloudflare tunnel (recommended)
+
+### 1. Start your stack (on your PC)
+
+```bat
+REM Control API (port 3000) — however you normally start it
+REM then:
+cd apps\dashboard
+npm run dev:client
+```
+
+Client panel listens on `http://127.0.0.1:5174` (local only).
+
+### 2. Open a public tunnel
+
+Double-click or run:
+
+```bat
+scripts\share_client_panel.bat
+```
+
+It prints a URL like:
 
 ```text
-http://YOUR-LAN-IP:5174/
+https://random-words-xxxx.trycloudflare.com
 ```
 
-or production:
+### 3. Send to the client
 
-```text
-https://client.your-domain.com/
-```
+1. That **https://…trycloudflare.com** link  
+2. Their **access code** (from admin `/clients`)
 
-This is a **separate** web app from the admin desk (`:5173`). No admin menu, no trading desk — only login + market + lot + START/STOP.
+Client can be anywhere with internet. Keep the tunnel window open.
 
-## How to start (local)
+---
 
-```bash
-# Terminal A — Control API
-cd apps/control-api && npm run dev
+## What this is
 
-# Terminal B — Admin desk (you)
-cd apps/dashboard && npm run dev
-# → http://localhost:5173/
+| Role | URL |
+|------|-----|
+| You (admin desk) | `http://localhost:5173/` — keep private |
+| Client (share) | Cloudflare `https://….trycloudflare.com` → your `:5174` panel |
 
-# Terminal C — Client panel (send this to clients)
-cd apps/dashboard && npm run dev:client
-# → http://localhost:5174/
-# → http://<your-pc-lan-ip>:5174/   (phone / other device on same Wi‑Fi)
-```
+The client app has **no admin desk**. API + WebSocket go through the same public URL (Vite proxy) — phones never call your `localhost`.
 
-## Access for the client
+---
 
-1. Admin creates client + generates **access code** (`/clients` on admin desk).
-2. Send client: **panel URL** + **access code**.
-3. Client opens URL → LOGIN → choose market/lot → START.
+## Production (stable domain)
 
-## Production
-
-- Host `npm run build:client` output (`apps/dashboard/dist-client`) on a dedicated host/subdomain.
-- Set `VITE_CLIENT_PANEL_URL` and include that origin in `CLIENT_CORS_ORIGIN`.
+- Host `npm run build:client` (`dist-client`) behind HTTPS on e.g. `https://client.your-domain.com`
+- Proxy `/api` and `/ws` to Control API
+- Set `VITE_CLIENT_PANEL_URL=https://client.your-domain.com/`

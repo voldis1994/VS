@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { getClientToken } from './useClientApi';
 
-const WS_BASE =
-  import.meta.env.VITE_CLIENT_WS_URL ||
-  import.meta.env.VITE_WS_URL?.replace(/\/ws$/, '/ws/client') ||
-  `ws://${window.location.hostname}:3000/ws/client`;
+/** Same-origin by default so public tunnels (cloudflared/ngrok) work for remote clients. */
+function clientWsUrl(): string {
+  const forced = import.meta.env.VITE_CLIENT_WS_URL;
+  if (forced && String(forced).trim()) return String(forced).trim();
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${proto}//${window.location.host}/ws/client`;
+}
 
 type WsMessage = { type: string; [key: string]: unknown };
 
@@ -28,8 +31,7 @@ export function useClientWebSocket(
 
     const connect = () => {
       if (closed) return;
-      // No token in URL — cookie (same-origin) or first-message auth
-      ws = new WebSocket(WS_BASE);
+      ws = new WebSocket(clientWsUrl());
       ws.onopen = () => {
         if (token) {
           ws?.send(JSON.stringify({ type: 'auth', token }));

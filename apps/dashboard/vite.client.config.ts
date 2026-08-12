@@ -2,11 +2,13 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 /**
- * Standalone Client Control Panel.
- * Share this URL with clients — no admin desk.
+ * Standalone Client Control Panel for REMOTE clients (not same Wi‑Fi).
  *
- * Local:  http://<your-lan-ip>:5174/
- * Start:  npm run dev:client
+ * Local listen: http://localhost:5174/
+ * Public share: run scripts/share_client_panel.bat (Cloudflare tunnel)
+ *   → https://xxxx.trycloudflare.com
+ *
+ * API + WS go same-origin via Vite proxy (required for tunnels).
  */
 export default defineConfig({
   plugins: [
@@ -22,6 +24,10 @@ export default defineConfig({
   ],
   define: {
     'import.meta.env.VITE_APP_MODE': JSON.stringify('client'),
+    // Force same-origin — never point remote phones at localhost:3000
+    'import.meta.env.VITE_API_URL': JSON.stringify(''),
+    'import.meta.env.VITE_CLIENT_WS_URL': JSON.stringify(''),
+    'import.meta.env.VITE_WS_URL': JSON.stringify(''),
   },
   server: {
     port: 5174,
