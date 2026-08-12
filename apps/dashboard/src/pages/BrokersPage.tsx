@@ -56,10 +56,15 @@ export function BrokersPage() {
     setSaveOk(false);
     try {
       if (!form.identifier.trim()) {
-        throw new Error('Identifier / email is required');
+        throw new Error('Identifier (login email) is required');
       }
-      if (form.broker_name !== 'paper' && (!form.api_key.trim() || !form.password.trim())) {
-        throw new Error('API Key and Password are both required for Capital.com');
+      if (form.broker_name === 'capital_com') {
+        if (!form.api_key.trim() || !form.password.trim()) {
+          throw new Error('Capital.com needs API Key and API Password from Settings → API');
+        }
+        if (form.api_key.includes('@')) {
+          throw new Error('API Key looks like an email — put email in Identifier, API key in API Key');
+        }
       }
       const clientId = await ensureClient();
       await apiFetch('/api/brokers', {
@@ -87,10 +92,16 @@ export function BrokersPage() {
   const handleTest = async (id: number) => {
     setTesting(id);
     try {
-      await apiFetch(`/api/brokers/${id}/test`, { method: 'POST' });
-      alert('Connection test successful');
-    } catch {
-      alert('Connection test failed');
+      const result = await apiFetch<{ success?: boolean; message?: string; error?: string }>(
+        `/api/brokers/${id}/test`,
+        { method: 'POST' }
+      );
+      if (result && result.success === false) {
+        throw new Error(result.error || 'Connection test failed');
+      }
+      alert(result.message || 'Connection test successful');
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Connection test failed');
     } finally {
       setTesting(null);
     }
@@ -108,56 +119,74 @@ export function BrokersPage() {
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="section-title">Add Broker Connection</div>
         <div className="grid grid-2" style={{ gap: 12 }}>
-          <select
-            className="input"
-            value={form.client_id}
-            onChange={(e) => setForm({ ...form, client_id: e.target.value })}
-          >
-            {clientOptions.length === 0 && <option value="">Will create Default Client</option>}
-            {clientOptions.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name} (#{c.id})
-              </option>
-            ))}
-          </select>
-          <select
-            className="input"
-            value={form.broker_name}
-            onChange={(e) => setForm({ ...form, broker_name: e.target.value })}
-          >
-            <option value="capital_com">Capital.com</option>
-            <option value="paper">Paper</option>
-          </select>
-          <select
-            className="input"
-            value={form.environment}
-            onChange={(e) => setForm({ ...form, environment: e.target.value })}
-          >
-            <option value="demo">Demo</option>
-            <option value="live">Live</option>
-          </select>
-          <input
-            className="input"
-            placeholder="Identifier / Email"
-            value={form.identifier}
-            onChange={(e) => setForm({ ...form, identifier: e.target.value })}
-          />
-          <input
-            className="input"
-            type="password"
-            placeholder="API Key"
-            value={form.api_key}
-            onChange={(e) => setForm({ ...form, api_key: e.target.value })}
-            autoComplete="off"
-          />
-          <input
-            className="input"
-            type="password"
-            placeholder="Password"
-            value={form.password}
-            onChange={(e) => setForm({ ...form, password: e.target.value })}
-            autoComplete="off"
-          />
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Client</span>
+            <select
+              className="input"
+              value={form.client_id}
+              onChange={(e) => setForm({ ...form, client_id: e.target.value })}
+            >
+              {clientOptions.length === 0 && <option value="">Will create Default Client</option>}
+              {clientOptions.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name} (#{c.id})
+                </option>
+              ))}
+            </select>
+          </label>
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Broker</span>
+            <select
+              className="input"
+              value={form.broker_name}
+              onChange={(e) => setForm({ ...form, broker_name: e.target.value })}
+            >
+              <option value="capital_com">Capital.com</option>
+              <option value="paper">Paper</option>
+            </select>
+          </label>
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Environment</span>
+            <select
+              className="input"
+              value={form.environment}
+              onChange={(e) => setForm({ ...form, environment: e.target.value })}
+            >
+              <option value="demo">Demo</option>
+              <option value="live">Live</option>
+            </select>
+          </label>
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Identifier (login email)</span>
+            <input
+              className="input"
+              placeholder="you@email.com"
+              value={form.identifier}
+              onChange={(e) => setForm({ ...form, identifier: e.target.value })}
+            />
+          </label>
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>API Key (not email)</span>
+            <input
+              className="input"
+              type="password"
+              placeholder="Capital.com API key"
+              value={form.api_key}
+              onChange={(e) => setForm({ ...form, api_key: e.target.value })}
+              autoComplete="off"
+            />
+          </label>
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>API Password</span>
+            <input
+              className="input"
+              type="password"
+              placeholder="Capital.com API password"
+              value={form.password}
+              onChange={(e) => setForm({ ...form, password: e.target.value })}
+              autoComplete="off"
+            />
+          </label>
         </div>
         <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={handleSave} disabled={saving}>
           {saving ? 'Saving...' : 'Save Connection'}
@@ -165,12 +194,12 @@ export function BrokersPage() {
         {saveError && <p className="error-state" style={{ marginTop: 8 }}>{saveError}</p>}
         {saveOk && (
           <p style={{ fontSize: 13, color: 'var(--success)', marginTop: 8 }}>
-            Saved. Connection appears in the table below.
+            Saved. Use Test on the row below. Prefer Demo until credentials verify.
           </p>
         )}
         <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>
-          Secrets are encrypted server-side. After save, only masked values are shown.
-          Prefer <strong>Demo</strong> until Capital.com credentials are verified.
+          Capital.com → Settings → API: create key for <strong>Demo</strong> or <strong>Live</strong> separately.
+          Identifier = account email. Do not put email into API Key.
         </p>
       </div>
       <div className="card">
@@ -203,7 +232,7 @@ export function BrokersPage() {
                     onClick={() => handleTest(Number(b.id))}
                     disabled={testing === Number(b.id)}
                   >
-                    Test
+                    {testing === Number(b.id) ? 'Testing...' : 'Test'}
                   </button>
                 </td>
               </tr>
