@@ -10,16 +10,34 @@ export async function registerSystemRoutes(
 
   app.get('/api/system/status', async () => {
     const dbOk = await healthCheck();
+    let feedActive = 0;
+    let feedUnhealthy = 0;
+    let capitalMarkets = 0;
+    let capitalSenders = 0;
+    try {
+      const { listDataSenders } = await import('../services/robotReader.js');
+      const senders = await listDataSenders();
+      capitalSenders = senders.filter((s) => s.kind === 'capital_com').length;
+      feedActive = senders.filter((s) => s.status === 'LIVE').length;
+      feedUnhealthy = senders.filter((s) => s.status === 'ERROR').length;
+      const m = await pool.query(`SELECT COUNT(*)::int AS n FROM capital_markets`);
+      capitalMarkets = m.rows[0]?.n ?? 0;
+    } catch {
+      /* mid-migrate / first boot */
+    }
     return {
       market_core: 'HEALTHY',
       execution: 'HEALTHY',
       database: dbOk ? 'HEALTHY' : 'UNHEALTHY',
       control_api: 'HEALTHY',
-      feeds: { active: 2, unhealthy: 0 },
+      feeds: { active: feedActive, unhealthy: feedUnhealthy },
+      capital_senders: capitalSenders,
+      capital_markets: capitalMarkets,
       clients: { active: 0 },
       open_positions: 0,
       today_executions: 0,
       mode: process.env.OPERATING_MODE || 'PAPER',
+      live_enabled: process.env.LIVE_TRADING_ENABLED === 'true',
       latency: telemetry.getLatestMetrics(),
     };
   });

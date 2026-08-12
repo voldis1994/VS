@@ -5,6 +5,7 @@ import { Logo } from './Logo';
 
 const NAV = [
   { to: '/', label: 'Overview' },
+  { to: '/orbit', label: 'Orbit Reader' },
   { to: '/market', label: 'Markets' },
   { to: '/trading', label: 'Trading' },
   { to: '/evidence', label: 'Evidence' },
@@ -20,6 +21,7 @@ const NAV = [
 
 const TITLES: Record<string, string> = {
   '/': 'Command Overview',
+  '/orbit': 'Orbit Reader',
   '/market': 'Market Reader',
   '/trading': 'Trade Desk',
   '/evidence': 'Live Evidence',

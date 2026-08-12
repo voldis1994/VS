@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { TelemetryBroadcaster } from '../ws/telemetry.js';
 import { getEnabledInstruments } from '../config/instruments.js';
+import { listFeedHealthRows } from './robotReader.js';
 
 function buildMarketRows() {
   const regimes = ['PULLBACK_UPTREND', 'RANGE', 'BREAKOUT', 'TREND_DOWN', 'COMPRESSION'];
@@ -22,6 +23,8 @@ function buildMarketRows() {
       feed_consensus: 0.85,
       entry_state: 'NO_TRADE',
       last_update: new Date().toISOString(),
+      data_plane: 'legacy_stub',
+      note: 'Use Orbit Reader (/orbit) for real multi-sender Capital.com quotes',
     };
   });
 }
@@ -64,40 +67,14 @@ export async function registerMarketRoutes(
     };
   });
 
-  app.get('/api/feeds', async () => [
-    {
-      source_id: 1,
-      name: 'synthetic-primary',
-      status: 'HEALTHY',
-      latency_ms: 2.1,
-      jitter_ms: 0.5,
-      stale_rate: 0.001,
-      sequence_gaps: 0,
-      divergence: 0.00001,
-      reliability: 0.99,
-      predictive_score: 0.75,
-      last_event: new Date().toISOString(),
-    },
-    {
-      source_id: 2,
-      name: 'synthetic-reference',
-      status: 'HEALTHY',
-      latency_ms: 3.4,
-      jitter_ms: 0.8,
-      stale_rate: 0.002,
-      sequence_gaps: 0,
-      divergence: 0.00002,
-      reliability: 0.97,
-      predictive_score: 0.68,
-      last_event: new Date().toISOString(),
-    },
-  ]);
+  app.get('/api/feeds', async () => listFeedHealthRows());
 
   setInterval(() => {
     telemetry.broadcast({
       type: 'market_update',
       instruments: buildMarketRows(),
       timestamp: new Date().toISOString(),
+      note: 'legacy_stub — prefer /api/robot-reader/scan',
     });
   }, 2000);
 }
