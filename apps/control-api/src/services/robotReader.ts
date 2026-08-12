@@ -55,11 +55,6 @@ export interface OrbitScanResult {
   note: string;
 }
 
-type SessionCache = {
-  session: CapitalSession;
-  expiresAt: number;
-};
-
 const senderHealth = new Map<
   string,
   {
