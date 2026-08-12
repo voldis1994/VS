@@ -245,10 +245,45 @@ export async function registerBrokerRoutes(app: FastifyInstance): Promise<void> 
     }
   });
 
-  app.delete('/api/brokers/:id', async (request) => {
+  app.delete('/api/brokers/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
+    const query = request.query as { hard?: string };
+    const prev = await pool.query('SELECT * FROM broker_connections WHERE id = $1', [id]);
+    if (prev.rows.length === 0) {
+      return reply.code(404).send({ error: 'Broker connection not found' });
+    }
+
+    if (query.hard === '1' || query.hard === 'true') {
+      const db = await pool.connect();
+      try {
+        await db.query('BEGIN');
+        const accounts = await db.query(
+          'SELECT id FROM broker_accounts WHERE broker_connection_id = $1',
+          [id]
+        );
+        const accountIds = accounts.rows.map((r) => r.id as number);
+        if (accountIds.length > 0) {
+          await db.query('DELETE FROM account_instrument_settings WHERE broker_account_id = ANY($1::int[])', [accountIds]);
+          await db.query('DELETE FROM positions WHERE broker_account_id = ANY($1::int[])', [accountIds]);
+          await db.query('DELETE FROM executions WHERE broker_account_id = ANY($1::int[])', [accountIds]);
+          await db.query('DELETE FROM trades WHERE broker_account_id = ANY($1::int[])', [accountIds]);
+          await db.query('DELETE FROM broker_accounts WHERE id = ANY($1::int[])', [accountIds]);
+        }
+        await db.query('DELETE FROM api_credential_metadata WHERE broker_connection_id = $1', [id]);
+        await db.query('DELETE FROM broker_connections WHERE id = $1', [id]);
+        await db.query('COMMIT');
+      } catch (err) {
+        await db.query('ROLLBACK');
+        throw err;
+      } finally {
+        db.release();
+      }
+      await logAudit('admin', 'broker_deleted', 'broker_connection', id, prev.rows[0], { deleted: true });
+      return { success: true, hard: true };
+    }
+
     await pool.query('UPDATE broker_connections SET enabled = false WHERE id = $1', [id]);
-    await logAudit('admin', 'broker_disabled', 'broker_connection', id, null, { enabled: false });
-    return { success: true };
+    await logAudit('admin', 'broker_disabled', 'broker_connection', id, prev.rows[0], { enabled: false });
+    return { success: true, hard: false };
   });
 }

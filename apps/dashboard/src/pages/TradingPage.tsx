@@ -129,9 +129,8 @@ export function TradingPage() {
   return (
     <div>
       <h1 className="page-title">Trading</h1>
-      <p style={{ color: 'var(--text-secondary)', marginBottom: 16, maxWidth: 820 }}>
-        Choose markets, set lot size, and turn auto-trade on per market.
-        For LIVE: Brokers → Capital.com <strong>Live</strong> + Settings → Enable LIVE + mode LIVE.
+      <p className="page-subtitle">
+        Markets · lot size · auto-trade // LIVE requires Brokers Live + Settings gate
       </p>
 
       <div className="card" style={{ marginBottom: 16 }}>

@@ -115,7 +115,23 @@ export function BrokersPage() {
     }
   };
 
-  if (loading) return <div className="empty-state">Loading brokers...</div>;
+  const handleDelete = async (b: BrokerRow) => {
+    const ok = window.confirm(
+      `DELETE broker #${b.id} (${b.broker_name} / ${b.environment})?\n\nRemoves credentials and linked trading account settings.`
+    );
+    if (!ok) return;
+    try {
+      await apiFetch(`/api/brokers/${b.id}?hard=true`, { method: 'DELETE' });
+      setTestOk(true);
+      setTestMessage(`Deleted broker connection #${b.id}`);
+      refresh();
+    } catch (e) {
+      setTestOk(false);
+      setTestMessage(e instanceof Error ? e.message : 'Delete failed');
+    }
+  };
+
+  if (loading) return <div className="empty-state">LOADING BROKERS...</div>;
   if (error) return <div className="error-state">{error}</div>;
 
   const brokers = data || [];
@@ -123,7 +139,8 @@ export function BrokersPage() {
 
   return (
     <div>
-      <h1 className="page-title">Broker Connections</h1>
+      <h1 className="page-title">Brokers</h1>
+      <p className="page-subtitle">Capital.com Live / Demo session links</p>
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="section-title">Add Broker Connection</div>
         <div className="grid grid-2" style={{ gap: 12 }}>
@@ -229,6 +246,8 @@ export function BrokersPage() {
         </div>
       )}
       <div className="card">
+        <div className="section-title">Connections</div>
+        <div className="table-wrap">
         <table>
           <thead>
             <tr>
@@ -243,29 +262,39 @@ export function BrokersPage() {
           <tbody>
             {brokers.map((b) => (
               <tr key={String(b.id)}>
-                <td>{String(b.id)}</td>
+                <td className="mono">#{String(b.id)}</td>
                 <td>{String(b.client_name)}</td>
-                <td>{String(b.broker_name)}</td>
-                <td>{String(b.environment)}</td>
+                <td className="mono">{String(b.broker_name)}</td>
+                <td>
+                  <span className={`badge ${b.environment === 'live' ? 'badge-unhealthy' : 'badge-mode'}`}>
+                    {String(b.environment)}
+                  </span>
+                </td>
                 <td>
                   <span className={`badge ${b.enabled ? 'badge-healthy' : 'badge-unhealthy'}`}>
                     {b.enabled ? 'ENABLED' : 'DISABLED'}
                   </span>
                 </td>
                 <td>
-                  <button
-                    className="btn"
-                    onClick={() => handleTest(Number(b.id))}
-                    disabled={testing === Number(b.id)}
-                  >
-                    {testing === Number(b.id) ? 'Testing...' : 'Test'}
-                  </button>
+                  <div className="actions">
+                    <button
+                      className="btn"
+                      onClick={() => handleTest(Number(b.id))}
+                      disabled={testing === Number(b.id)}
+                    >
+                      {testing === Number(b.id) ? 'Testing...' : 'Test'}
+                    </button>
+                    <button className="btn btn-danger" onClick={() => handleDelete(b)}>
+                      Delete
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
-        {brokers.length === 0 && <div className="empty-state">No broker connections</div>}
+        </div>
+        {brokers.length === 0 && <div className="empty-state">NO BROKER CONNECTIONS</div>}
       </div>
     </div>
   );
