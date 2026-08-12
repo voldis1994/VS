@@ -22,5 +22,6 @@ export async function authMiddleware(
 
   if (token !== expected) {
     reply.code(401).send({ error: 'Unauthorized' });
+    return;
   }
 }
