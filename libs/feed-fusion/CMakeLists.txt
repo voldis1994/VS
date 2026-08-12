@@ -1,0 +1,5 @@
+add_library(mr_feed_fusion src/feed_fusion_engine.cpp)
+add_library(mr::feed_fusion ALIAS mr_feed_fusion)
+target_include_directories(mr_feed_fusion PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_link_libraries(mr_feed_fusion PUBLIC mr::common mr::data_quality)
+target_compile_features(mr_feed_fusion PUBLIC cxx_std_20)

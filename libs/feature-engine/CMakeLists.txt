@@ -1,0 +1,5 @@
+add_library(mr_feature_engine src/feature_engine.cpp)
+add_library(mr::feature_engine ALIAS mr_feature_engine)
+target_include_directories(mr_feature_engine PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_link_libraries(mr_feature_engine PUBLIC mr::common mr::normalization)
+target_compile_features(mr_feature_engine PUBLIC cxx_std_20)

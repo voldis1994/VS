@@ -1,0 +1,19 @@
+regimes:
+  primary_horizon_ms: 10000
+  transition_smoothing: 0.1
+  confidence_threshold: 0.5
+  supported:
+    - UNKNOWN
+    - RANGE
+    - TREND_UP
+    - TREND_DOWN
+    - PULLBACK_UPTREND
+    - PULLBACK_DOWNTREND
+    - COMPRESSION
+    - EXPANSION
+    - BREAKOUT_UP
+    - BREAKOUT_DOWN
+    - FAILED_BREAKOUT_UP
+    - FAILED_BREAKOUT_DOWN
+    - REVERSAL_CANDIDATE
+    - TRANSITION

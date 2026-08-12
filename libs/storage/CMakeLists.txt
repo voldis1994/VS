@@ -1,0 +1,5 @@
+add_library(mr_storage src/raw_event_storage.cpp)
+add_library(mr::storage ALIAS mr_storage)
+target_include_directories(mr_storage PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_link_libraries(mr_storage PUBLIC mr::common)
+target_compile_features(mr_storage PUBLIC cxx_std_20)

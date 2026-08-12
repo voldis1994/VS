@@ -1,0 +1,5 @@
+add_library(mr_normalization src/normalization_engine.cpp)
+add_library(mr::normalization ALIAS mr_normalization)
+target_include_directories(mr_normalization PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_link_libraries(mr_normalization PUBLIC mr::common mr::clock)
+target_compile_features(mr_normalization PUBLIC cxx_std_20)

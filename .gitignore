@@ -1,0 +1,56 @@
+# Build
+build/
+out/
+cmake-build-*/
+.vs/
+*.user
+*.suo
+*.sln.docstates
+
+# vcpkg
+vcpkg_installed/
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+.npm
+
+# Environment
+.env
+!.env.example
+
+# Data
+data/raw/**
+data/normalized/**
+data/replay/**
+data/exports/**
+!data/raw/.gitkeep
+!data/normalized/.gitkeep
+!data/replay/.gitkeep
+!data/exports/.gitkeep
+!data/models/.gitkeep
+
+# Logs
+logs/
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+test-results/
+benchmark-results/
+coverage/
+
+# Secrets
+*.pem
+*.key
+credentials.json

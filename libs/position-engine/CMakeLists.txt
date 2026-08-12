@@ -1,0 +1,5 @@
+add_library(mr_position_engine src/position_manager.cpp)
+add_library(mr::position_engine ALIAS mr_position_engine)
+target_include_directories(mr_position_engine PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_link_libraries(mr_position_engine PUBLIC mr::entry_engine)
+target_compile_features(mr_position_engine PUBLIC cxx_std_20)

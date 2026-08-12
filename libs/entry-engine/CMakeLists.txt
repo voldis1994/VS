@@ -1,0 +1,5 @@
+add_library(mr_entry_engine src/entry_engine.cpp)
+add_library(mr::entry_engine ALIAS mr_entry_engine)
+target_include_directories(mr_entry_engine PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_link_libraries(mr_entry_engine PUBLIC mr::evidence_engine)
+target_compile_features(mr_entry_engine PUBLIC cxx_std_20)

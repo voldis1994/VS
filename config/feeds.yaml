@@ -1,0 +1,17 @@
+feeds:
+  - id: 1
+    name: synthetic-primary
+    provider: synthetic
+    connection_type: internal
+    instruments: [1, 2, 3]
+    stale_threshold_ms: 500
+    max_spread_ticks: 50
+    enabled: true
+  - id: 2
+    name: synthetic-reference
+    provider: synthetic
+    connection_type: internal
+    instruments: [1, 2, 3]
+    stale_threshold_ms: 500
+    max_spread_ticks: 50
+    enabled: true

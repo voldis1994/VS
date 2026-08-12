@@ -1,0 +1,5 @@
+add_library(mr_replay src/replay_engine.cpp)
+add_library(mr::replay ALIAS mr_replay)
+target_include_directories(mr_replay PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_link_libraries(mr_replay PUBLIC mr::market_data mr::storage)
+target_compile_features(mr_replay PUBLIC cxx_std_20)

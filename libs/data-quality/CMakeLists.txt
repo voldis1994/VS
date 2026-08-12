@@ -1,0 +1,5 @@
+add_library(mr_data_quality src/data_quality_engine.cpp)
+add_library(mr::data_quality ALIAS mr_data_quality)
+target_include_directories(mr_data_quality PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_link_libraries(mr_data_quality PUBLIC mr::common mr::normalization)
+target_compile_features(mr_data_quality PUBLIC cxx_std_20)

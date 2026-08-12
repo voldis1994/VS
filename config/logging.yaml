@@ -1,0 +1,14 @@
+logging:
+  level: info
+  directory: ./logs
+  format: json
+  correlation_ids:
+    - setup_id
+    - evidence_report_id
+    - trade_intent_id
+    - execution_id
+    - position_id
+    - trade_id
+  rotation:
+    max_size_mb: 100
+    max_files: 10

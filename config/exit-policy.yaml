@@ -1,0 +1,12 @@
+exit_policy:
+  horizon_ms: 10000
+  peak_retention_threshold: 0.5
+  remaining_rr_threshold: 0.5
+  time_decay_seconds: 1.0
+  thesis_failure_enabled: true
+  reversal_evidence_enabled: true
+  actions:
+    - HOLD
+    - EXIT_NOW
+    - TRAIL
+    - TAKE_PROFIT

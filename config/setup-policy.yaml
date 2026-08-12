@@ -1,0 +1,9 @@
+setup_policy:
+  horizon_ms: 10000
+  min_confidence: 0.3
+  confirm_confidence: 0.6
+  expiry_ms: 30000
+  types:
+    - CONTINUATION
+    - PULLBACK
+    - BREAKOUT
