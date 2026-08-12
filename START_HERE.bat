@@ -1,8 +1,11 @@
 @echo off
 cd /d "%~dp0"
-title Market Reader Launcher
+title MARKET READER - Launcher
 echo.
-echo Opening Market Reader setup window...
+echo ===============================================
+echo   THIS MUST SAY: MARKET READER
+echo   If you see BOSH / RUI / MISE / MGRR - WRONG FOLDER
+echo ===============================================
 echo.
-start "Market Reader First Run" cmd /k call "%~dp0scripts\first_run.bat"
+start "MARKET READER First Run" cmd /k call "%~dp0scripts\first_run.bat"
 exit /b 0
