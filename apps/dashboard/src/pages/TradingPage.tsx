@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useApi, apiFetch } from '../hooks/useApi';
+import { openRobotWindow } from './RobotDeskPage';
 
 interface TradingAccount {
   account_id: number;
@@ -194,6 +195,26 @@ export function TradingPage() {
     }
   };
 
+  const startRobotFor = (epic: string, lot: number, displayName: string) => {
+    if (!accountId || !epic) {
+      setMsgOk(false);
+      setMsg('Izvēlies account + tirgu');
+      return;
+    }
+    const w = openRobotWindow({
+      accountId,
+      epic,
+      lot,
+      name: displayName,
+    });
+    if (!w) {
+      window.location.href = `/robot?account_id=${accountId}&epic=${encodeURIComponent(epic)}&lot=${lot}&name=${encodeURIComponent(displayName)}`;
+    } else {
+      setMsgOk(true);
+      setMsg(`Robot started · ${displayName} · lot ${lot}`);
+    }
+  };
+
   const placeOrder = async (direction: 'BUY' | 'SELL') => {
     if (!accountId) return;
     setOrderBusy(true);
@@ -321,7 +342,25 @@ export function TradingPage() {
             >
               SELL
             </button>
+            <button
+              className="btn btn-primary"
+              disabled={!orderEpic.trim() || !accountId}
+              onClick={() => {
+                const row = instruments.find((i) => (i.epic || i.symbol) === orderEpic);
+                startRobotFor(
+                  orderEpic.trim(),
+                  Number(orderSize) || row?.lot_size || 0.1,
+                  row?.display_name || orderEpic,
+                );
+              }}
+            >
+              START ROBOT
+            </button>
           </div>
+          <p className="hint-line" style={{ marginTop: 8 }}>
+            START ROBOT atver fullscreen Robot Desk šim tirgum (ONE TRADE ONLY). Tabula “TRADING ON”
+            bez START ROBOT robots nesāk.
+          </p>
         </div>
       )}
 
@@ -368,7 +407,8 @@ export function TradingPage() {
                   <th>Category</th>
                   <th>Watch</th>
                   <th>Lot size</th>
-                  <th>Auto-trade</th>
+                  <th>Flag</th>
+                  <th>Robot</th>
                 </tr>
               </thead>
               <tbody>
@@ -429,7 +469,18 @@ export function TradingPage() {
                           })
                         }
                       >
-                        {row.trading_enabled ? 'TRADING ON' : 'OFF'}
+                        {row.trading_enabled ? 'FLAG ON' : 'FLAG OFF'}
+                      </button>
+                    </td>
+                    <td>
+                      <button
+                        className="btn btn-go"
+                        disabled={busy || !accountId}
+                        onClick={() =>
+                          startRobotFor(row.epic || row.symbol, row.lot_size, row.display_name)
+                        }
+                      >
+                        START ROBOT
                       </button>
                     </td>
                   </tr>

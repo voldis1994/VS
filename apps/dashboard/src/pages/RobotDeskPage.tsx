@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiFetch } from '../hooks/useApi';
 import { Logo } from '../components/Logo';
@@ -64,6 +64,16 @@ export function RobotDeskPage() {
   const [booted, setBooted] = useState(false);
   const [isFs, setIsFs] = useState(false);
   const shellRef = useRef<HTMLDivElement>(null);
+  const [launchAccounts, setLaunchAccounts] = useState<
+    { account_id: number; client_name: string; broker_name: string; environment: string; capital_market_count?: number }[]
+  >([]);
+  const [launchAccountId, setLaunchAccountId] = useState<number | null>(null);
+  const [launchMarkets, setLaunchMarkets] = useState<
+    { instrument_id: number; epic?: string; symbol: string; display_name: string; lot_size: number; min_lot: number }[]
+  >([]);
+  const [launchFilter, setLaunchFilter] = useState('');
+  const [launchEpic, setLaunchEpic] = useState('');
+  const [launchLot, setLaunchLot] = useState('0.1');
 
   const accountId = params.get('account_id');
   const epic = params.get('epic');
@@ -133,7 +143,15 @@ export function RobotDeskPage() {
           navigate(`/robot?${next}`, { replace: true });
         }
       } else if (!busy) {
-        setSession(null);
+        // Bare /robot — attach to first running robot if any
+        const running = (list.sessions || []).find((x) => x.running);
+        if (running && !accountId && !epic && !idParam) {
+          setSession(running);
+          setError(null);
+          navigate(`/robot?${buildQuery(running)}`, { replace: true });
+        } else {
+          setSession(null);
+        }
       }
     } catch (e) {
       // Soft — never flash opaque id errors while starting
@@ -223,6 +241,75 @@ export function RobotDeskPage() {
     }
   };
 
+  // Load launcher catalogs when empty
+  useEffect(() => {
+    if (session || busy) return;
+    void apiFetch<typeof launchAccounts>('/api/trading/accounts')
+      .then((rows) => {
+        setLaunchAccounts(rows || []);
+        if (!launchAccountId && rows?.[0]) setLaunchAccountId(rows[0].account_id);
+      })
+      .catch(() => setLaunchAccounts([]));
+  }, [session, busy, launchAccountId]);
+
+  useEffect(() => {
+    if (!launchAccountId || session) return;
+    void apiFetch<typeof launchMarkets>(`/api/trading/accounts/${launchAccountId}/instruments`)
+      .then((rows) => {
+        setLaunchMarkets(rows || []);
+        if (rows?.[0]) {
+          setLaunchEpic(rows[0].epic || rows[0].symbol);
+          setLaunchLot(String(rows[0].lot_size || rows[0].min_lot || 0.1));
+        }
+      })
+      .catch(() => setLaunchMarkets([]));
+  }, [launchAccountId, session]);
+
+  const filteredLaunch = useMemo(() => {
+    const q = launchFilter.trim().toLowerCase();
+    const rows = launchMarkets;
+    if (!q) return rows.slice(0, 200);
+    return rows
+      .filter(
+        (m) =>
+          m.display_name.toLowerCase().includes(q) ||
+          (m.epic || m.symbol).toLowerCase().includes(q),
+      )
+      .slice(0, 200);
+  }, [launchMarkets, launchFilter]);
+
+  const startFromLauncher = () => {
+    if (!launchAccountId || !launchEpic) {
+      setError('Izvēlies account + Capital.com tirgu');
+      return;
+    }
+    const lotN = Number(launchLot);
+    if (!Number.isFinite(lotN) || lotN <= 0) {
+      setError('Lot size must be > 0');
+      return;
+    }
+    const m = launchMarkets.find((x) => (x.epic || x.symbol) === launchEpic);
+    const display = m?.display_name || launchEpic;
+    setBusy(true);
+    setError(null);
+    void apiFetch<{ session: RobotSession }>('/api/robot-desk/start', {
+      method: 'POST',
+      body: JSON.stringify({
+        account_id: launchAccountId,
+        epic: launchEpic,
+        display_name: display,
+        lot_size: lotN,
+        trading_enabled: true,
+      }),
+    })
+      .then((res) => {
+        setSession(res.session);
+        navigate(`/robot?${buildQuery(res.session)}`, { replace: true });
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : 'Start failed'))
+      .finally(() => setBusy(false));
+  };
+
   const switchRobot = (s: RobotSession) => {
     navigate(`/robot?${buildQuery(s)}`);
     setSession(s);
@@ -288,10 +375,92 @@ export function RobotDeskPage() {
         )}
         {!session && !busy && (
           <div className="robot-empty">
-            <p style={{ marginBottom: 10 }}>Nav aktīva robota šim logam.</p>
-            <Link className="btn btn-primary" to="/">
-              Izvēlies tirgu Main lapā → TRADING ON
-            </Link>
+            <p style={{ marginBottom: 12 }}>
+              Nav aktīva robota šim logam. Sāc šeit — vai no Trading / Main ar{' '}
+              <strong>START ROBOT</strong>.
+            </p>
+
+            {siblings.some((s) => s.running) && (
+              <div style={{ marginBottom: 14 }}>
+                <div className="section-title">RUNNING ROBOTS</div>
+                <div className="robot-sibling-bar" style={{ marginTop: 8 }}>
+                  {siblings
+                    .filter((s) => s.running)
+                    .map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        className="robot-sibling on"
+                        onClick={() => switchRobot(s)}
+                      >
+                        <span className="mono">{s.account_name}</span>
+                        <span>{s.display_name}</span>
+                        <span className="mono">OPEN</span>
+                      </button>
+                    ))}
+                </div>
+              </div>
+            )}
+
+            <div className="section-title">START ROBOT HERE</div>
+            <div className="actions" style={{ marginTop: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+              <select
+                className="input"
+                style={{ maxWidth: 360 }}
+                value={launchAccountId ?? ''}
+                onChange={(e) => setLaunchAccountId(Number(e.target.value))}
+              >
+                {launchAccounts.length === 0 && <option value="">No accounts</option>}
+                {launchAccounts.map((a) => (
+                  <option key={a.account_id} value={a.account_id}>
+                    #{a.account_id} {a.client_name} / {a.broker_name} ({a.environment})
+                    {a.capital_market_count != null ? ` · ${a.capital_market_count}` : ''}
+                  </option>
+                ))}
+              </select>
+              <input
+                className="input"
+                style={{ maxWidth: 200 }}
+                placeholder="Search market…"
+                value={launchFilter}
+                onChange={(e) => setLaunchFilter(e.target.value)}
+              />
+              <select
+                className="input"
+                style={{ maxWidth: 360 }}
+                value={launchEpic}
+                onChange={(e) => {
+                  setLaunchEpic(e.target.value);
+                  const m = launchMarkets.find((x) => (x.epic || x.symbol) === e.target.value);
+                  if (m) setLaunchLot(String(m.lot_size || m.min_lot || 0.1));
+                }}
+              >
+                {filteredLaunch.length === 0 && <option value="">Pull markets in Trading first</option>}
+                {filteredLaunch.map((m) => (
+                  <option key={m.instrument_id} value={m.epic || m.symbol}>
+                    {m.display_name} · {m.epic || m.symbol}
+                  </option>
+                ))}
+              </select>
+              <input
+                className="input"
+                style={{ maxWidth: 100 }}
+                value={launchLot}
+                onChange={(e) => setLaunchLot(e.target.value)}
+              />
+              <button
+                className="btn btn-primary"
+                type="button"
+                disabled={!launchAccountId || !launchEpic}
+                onClick={startFromLauncher}
+              >
+                TRADING ON → START ROBOT
+              </button>
+            </div>
+            <p className="hint-line">
+              Piezīme: Trading tabulas “TRADING ON” karodziņš ≠ robots. Robots sākas tikai ar START
+              ROBOT (šeit / Main / Trading).
+            </p>
           </div>
         )}
         {busy && !session && (
