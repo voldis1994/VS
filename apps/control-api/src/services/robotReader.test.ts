@@ -5,15 +5,27 @@ import {
   pickOhlcMid,
 } from './robotReader.js';
 
-describe('multi-feed OHLC mid pick', () => {
-  it('prefers MULTI when ≥2 feeds agree', () => {
+describe('multi-feed OHLC mid pick (Capital-anchored)', () => {
+  it('uses MULTI blend when multi mid is near Capital local', () => {
     const p = pickOhlcMid(2000, {
       mid: 2000.4,
       contributing: 3,
       agreement: 'STRONG',
+      anchored_to_capital: true,
     });
     expect(p.source).toBe('MULTI');
-    expect(p.mid).toBe(2000.4);
+    expect(p.mid).toBeCloseTo(2000 * 0.65 + 2000.4 * 0.35, 5);
+  });
+
+  it('keeps LOCAL when public/multi mid is far from Capital', () => {
+    const p = pickOhlcMid(2338, {
+      mid: 4420,
+      contributing: 2,
+      agreement: 'OK',
+      anchored_to_capital: false,
+    });
+    expect(p.source).toBe('LOCAL');
+    expect(p.mid).toBe(2338);
   });
 
   it('falls back to LOCAL when only one feed or divergent', () => {
@@ -39,33 +51,43 @@ describe('multi-feed OHLC mid pick', () => {
 });
 
 describe('multi-feed owns OHLC / entry gate', () => {
-  it('owns OHLC only when ≥2 providers agree', () => {
-    expect(multiFeedOwnsOhlc({ contributing: 2, agreement: 'OK' })).toBe(true);
-    expect(multiFeedOwnsOhlc({ contributing: 2, agreement: 'STRONG' })).toBe(true);
-    expect(multiFeedOwnsOhlc({ contributing: 2, agreement: 'DIVERGENT' })).toBe(false);
-    expect(multiFeedOwnsOhlc({ contributing: 1, agreement: 'INSUFFICIENT' })).toBe(false);
-    expect(multiFeedOwnsOhlc(null)).toBe(false);
-  });
-
-  it('allows entry on single provider (degraded LOCAL)', () => {
-    expect(allowEntryFromFeeds({ contributing: 1, sender_count: 1, agreement: 'INSUFFICIENT' }).ok).toBe(
-      true
-    );
-  });
-
-  it('blocks entry when several providers configured but not agreeing', () => {
+  it('owns OHLC only when Capital is in the cluster', () => {
     expect(
-      allowEntryFromFeeds({ contributing: 1, sender_count: 3, agreement: 'INSUFFICIENT' }).ok
-    ).toBe(false);
+      multiFeedOwnsOhlc({
+        contributing: 2,
+        agreement: 'OK',
+        capital_contributing: 1,
+        anchored_to_capital: true,
+      })
+    ).toBe(true);
     expect(
-      allowEntryFromFeeds({ contributing: 2, sender_count: 2, agreement: 'DIVERGENT' }).ok
+      multiFeedOwnsOhlc({
+        contributing: 2,
+        agreement: 'OK',
+        capital_contributing: 0,
+        anchored_to_capital: false,
+      })
     ).toBe(false);
   });
 
-  it('allows entry when multi-provider consensus is OK/STRONG', () => {
-    expect(allowEntryFromFeeds({ contributing: 2, sender_count: 2, agreement: 'OK' }).ok).toBe(true);
-    expect(allowEntryFromFeeds({ contributing: 3, sender_count: 3, agreement: 'STRONG' }).ok).toBe(
-      true
-    );
+  it('never freezes entry due to public-only sender_count', () => {
+    expect(
+      allowEntryFromFeeds({
+        contributing: 0,
+        sender_count: 4,
+        agreement: 'INSUFFICIENT',
+        capital_contributing: 1,
+        capital_sender_count: 1,
+      }).ok
+    ).toBe(true);
+    expect(
+      allowEntryFromFeeds({
+        contributing: 2,
+        sender_count: 2,
+        agreement: 'DIVERGENT',
+        capital_contributing: 0,
+        capital_sender_count: 0,
+      }).ok
+    ).toBe(true);
   });
 });

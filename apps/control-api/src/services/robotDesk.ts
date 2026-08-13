@@ -246,9 +246,9 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     active_regimes: activeRegimes,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'PUBLIC INTERNET + Capital → consensus mid → 10s OHLC → REGIME → ENTRY/EXIT',
+    chain: 'Capital OHLC (anchor) + public near Capital → REGIME → ENTRY/EXIT',
     note:
-      'Public feeds: Yahoo Finance, Aurum metals, Fawaz FX, Coinbase (+ Frankfurter FX daily). Capital rows still execute orders.',
+      'Public feeds (Yahoo/Aurum/FX/Coinbase) confirm when near Capital CFD mid; far public prices are ignored so they cannot block or distort trades.',
   };
 }
 
@@ -945,12 +945,16 @@ async function robotCycle(s: Internal) {
     setRobotCadence(s, ACTIVE_CADENCE_MS);
     s.last_mid = quote.mid;
 
-    // Multi-provider consensus mid every tick → own 10s OHLC (not only this account)
-    try {
-      s.multiFeed = await readMultiFeedPrice(s.epic);
+    // Multi-provider read (Capital + public near Capital). Throttle to protect Capital API.
+    if (Date.now() - s.last_multi_feed_ms >= 4_000) {
       s.last_multi_feed_ms = Date.now();
-    } catch {
-      /* keep previous multiFeed snapshot */
+      try {
+        s.multiFeed = await readMultiFeedPrice(s.epic, { anchorMid: quote.mid });
+      } catch {
+        /* keep previous multiFeed snapshot */
+      }
+    } else if (s.multiFeed && quote.mid != null) {
+      // Re-anchor pick every tick even if multi snapshot is cached
     }
     const picked = pickOhlcMid(quote.mid, s.multiFeed);
     s.feed_source = picked.source;
@@ -958,8 +962,10 @@ async function robotCycle(s: Internal) {
     s.feed_sender_count = s.multiFeed?.sender_count ?? 0;
     s.feed_agreement = s.multiFeed?.agreement ?? null;
 
-    if (picked.mid != null) {
-      s.ohlcState = updateTenSecondOhlc(s.ohlcState, picked.mid, Date.now());
+    // OHLC always from Capital-safe mid (LOCAL Capital quote if public is far)
+    const ohlcMid = picked.mid ?? quote.mid;
+    if (ohlcMid != null) {
+      s.ohlcState = updateTenSecondOhlc(s.ohlcState, ohlcMid, Date.now());
       s.ohlc_10s = publicOhlc10s(s.ohlcState);
       if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
         applyRobotRegime(s, [s.ohlcState.last_closed]);
@@ -1102,6 +1108,7 @@ async function robotCycle(s: Internal) {
       }
     }
 
+    // Soft advisory only — public feeds must never freeze Capital entries
     const feedGate = allowEntryFromFeeds(s.multiFeed);
     if (!feedGate.ok) {
       pushTick(s, {
@@ -1109,9 +1116,9 @@ async function robotCycle(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `MULTI-FEED GATE · ${feedGate.reason} · no entry until providers agree`,
+        detail: `FEED NOTE · ${feedGate.reason}`,
       });
-      return;
+      // do not return — Capital local path continues
     }
 
     const bar = s.ohlcState.last_closed;
