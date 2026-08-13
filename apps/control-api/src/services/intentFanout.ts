@@ -292,7 +292,7 @@ async function executeForSubscription(
       });
     }
 
-    // SAFETY SL cushion (~0.25%), not broker minimum
+    // SAFETY SL cushion (~0.20%), not broker minimum
     const q = await fetchCapitalMarketQuote(opened.session, sub.epic);
     const mid =
       q.mid != null && Number.isFinite(q.mid)
