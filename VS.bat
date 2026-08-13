@@ -1,7 +1,8 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
-REM Re-launch from %%TEMP%% so git pull can update VS.bat on disk.
+REM Always run the GitHub main launcher so a stale VS.bat on disk cannot
+REM still tunnel Cloudflare into Vite (allowedHosts 403).
 if /I "%~1"=="_INNER" (
   set "ROOT=%~2"
   if not defined ROOT set "ROOT=%CD%"
@@ -11,8 +12,14 @@ if /I "%~1"=="_INNER" (
 
 cd /d "%~dp0"
 set "ROOT=%CD%"
-copy /Y "%~f0" "%TEMP%\VS_launch.bat" >nul
-call "%TEMP%\VS_launch.bat" _INNER "%ROOT%"
+echo [0/5] Nemu jaunako VS.bat no GitHub...
+curl.exe -fsSL -o "%TEMP%\VS_from_github.bat" "https://raw.githubusercontent.com/voldis1994/VS/main/VS.bat"
+if exist "%TEMP%\VS_from_github.bat" (
+  call "%TEMP%\VS_from_github.bat" _INNER "%ROOT%"
+  exit /b %ERRORLEVEL%
+)
+echo [WARN] GitHub bat neizdevas lejupieladet - turpinu ar lokalo.
+call "%~f0" _INNER "%ROOT%"
 exit /b %ERRORLEVEL%
 
 :body
@@ -22,101 +29,81 @@ cd /d "%ROOT%"
 
 echo.
 echo ============================================================
-echo   VS  -  VIENS PALAISANAS FAILS
-echo   Aptur veco  ^|  GitHub main  ^|  Palais sistemu  ^|  Klienta tunelis
+echo   VS  -  KLIENTA PANELIS CAUR :18080  (NE VITE)
 echo ============================================================
 echo   Mape: %ROOT%
 echo.
 
 if not exist "%ROOT%\apps\dashboard\package.json" (
   color 0C
-  echo [KLUDA] Sis nav VS mape. Ieliec VS.bat ieksha GitHub VS mapes.
-  echo         Jabut mapei: apps\dashboard
-  pause
-  exit /b 1
-)
-if not exist "%ROOT%\apps\market-core\CMakeLists.txt" (
-  color 0C
-  echo [KLUDA] apps\market-core nav. Lejupielade:
-  echo         https://github.com/voldis1994/VS
+  echo [KLUDA] Sis nav VS mape. https://github.com/voldis1994/VS
   pause
   exit /b 1
 )
 
-echo [1/5] Apturu vecos procesus...
+echo [1/5] Apturu vecos procesus + Vite...
 taskkill /F /FI "WINDOWTITLE eq MR-*" >nul 2>&1
 taskkill /F /IM market-core.exe >nul 2>&1
 taskkill /F /IM execution-service.exe >nul 2>&1
 taskkill /F /IM cloudflared.exe >nul 2>&1
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and ($_.CommandLine -match 'vite') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":3000 " ^| findstr LISTENING') do taskkill /F /PID %%P >nul 2>&1
 for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":5173 " ^| findstr LISTENING') do taskkill /F /PID %%P >nul 2>&1
 for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":5174 " ^| findstr LISTENING') do taskkill /F /PID %%P >nul 2>&1
 for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":5175 " ^| findstr LISTENING') do taskkill /F /PID %%P >nul 2>&1
+for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":18080 " ^| findstr LISTENING') do taskkill /F /PID %%P >nul 2>&1
 echo [OK]
 echo.
-
-if /I "%~3"=="SKIPPULL" goto :after_pull
 
 echo [2/5] Lejupieladeju jaunako GitHub main...
 where git >nul 2>&1
 if errorlevel 1 (
   color 0C
-  echo [KLUDA] Git nav instalets.
-  echo         winget install -e --id Git.Git
+  echo [KLUDA] Git nav. winget install -e --id Git.Git
   pause
   exit /b 1
 )
-if not exist "%ROOT%\.git" (
-  echo [WARN] Sis mape nav git clone - izlaidisu git pull.
-  echo        Ieteikums: git clone https://github.com/voldis1994/VS.git
-  goto :after_pull
+if exist "%ROOT%\.git" (
+  cd /d "%ROOT%"
+  git fetch origin main
+  if errorlevel 1 (
+    color 0C
+    echo [KLUDA] git fetch neizdevas.
+    pause
+    exit /b 1
+  )
+  git checkout -f main
+  git reset --hard origin/main
+  if errorlevel 1 (
+    color 0C
+    echo [KLUDA] git reset neizdevas.
+    pause
+    exit /b 1
+  )
+  for /f "delims=" %%H in ('git rev-parse --short HEAD') do echo [OK] main  %%H
+) else (
+  echo [WARN] nav git clone - kods var but vecs.
 )
-cd /d "%ROOT%"
-git fetch origin main
-if errorlevel 1 (
-  color 0C
-  echo [KLUDA] git fetch neizdevas. Parbaudi internetu.
-  pause
-  exit /b 1
-)
-git checkout -f main
-git reset --hard origin/main
-if errorlevel 1 (
-  color 0C
-  echo [KLUDA] git reset neizdevas.
-  pause
-  exit /b 1
-)
-for /f "delims=" %%H in ('git rev-parse --short HEAD') do echo [OK] main  %%H
 echo.
 
-REM Continue with the freshly pulled VS.bat so launch logic stays current.
-if exist "%ROOT%\VS.bat" (
-  copy /Y "%ROOT%\VS.bat" "%TEMP%\VS_launch.bat" >nul
-  call "%TEMP%\VS_launch.bat" _INNER "%ROOT%" SKIPPULL
-  exit /b %ERRORLEVEL%
-)
-
-:after_pull
-echo [3/5] Datubaze + npm...
+echo [3/5] Datubaze + npm + client build...
 where node >nul 2>&1
 if errorlevel 1 (
   color 0C
-  echo [KLUDA] Node.js nav. winget install -e --id OpenJS.NodeJS.LTS
+  echo [KLUDA] Node.js nav.
   pause
   exit /b 1
 )
 docker info >nul 2>&1
 if errorlevel 1 (
   color 0C
-  echo [KLUDA] Docker Desktop NAV ieslegts. Iesledz Docker un palaid VS.bat velreiz.
+  echo [KLUDA] Docker Desktop NAV ieslegts.
   pause
   exit /b 1
 )
 
 if not exist "%ROOT%\.env" (
   copy /Y "%ROOT%\.env.example" "%ROOT%\.env" >nul
-  echo [OK] izveidots .env
 )
 call :upsert_env OPERATING_MODE LIVE
 call :upsert_env LIVE_TRADING_ENABLED true
@@ -139,7 +126,7 @@ if errorlevel 1 (
 call npm run migrate
 if errorlevel 1 (
   color 0C
-  echo [KLUDA] DB migrate. Parbaudi .env DB_PASSWORD un Docker.
+  echo [KLUDA] DB migrate
   pause
   exit /b 1
 )
@@ -151,22 +138,24 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-echo [..] buveju client panel (bez Vite host check)...
 call npx --yes vite build --config vite.client.config.ts
 if errorlevel 1 (
   color 0C
-  echo [KLUDA] client panel vite build
+  echo [KLUDA] client panel build
   pause
   exit /b 1
 )
 cd /d "%ROOT%"
-echo [OK] API + dashboard + client build
+echo [OK]
 echo.
 
-echo [4/5] Palaisu sistemu...
+echo [4/5] Palaisu API + publisko paneli :18080 ...
 set "LIVE_TRADING_ENABLED=true"
 set "OPERATING_MODE=LIVE"
 set "MARKET_CORE_BRIDGE=1"
+set "CLIENT_PANEL_DIST=%ROOT%\apps\dashboard\dist-client"
+set "CLIENT_DIST=%ROOT%\apps\dashboard\dist-client"
+set "CLIENT_PUBLIC_PORT=18080"
 
 set "MC=%ROOT%\build\windows-debug\apps\market-core\market-core.exe"
 if not exist "%MC%" set "MC=%ROOT%\build\windows-release\apps\market-core\market-core.exe"
@@ -176,14 +165,11 @@ if not exist "%MC%" (
   set "MC=%ROOT%\build\windows-debug\apps\market-core\market-core.exe"
   if not exist "!MC!" set "MC=%ROOT%\build\windows-release\apps\market-core\market-core.exe"
 )
-
 if exist "%MC%" (
   start "MR-MarketCore" /D "%ROOT%" cmd /k set MARKET_CORE_BRIDGE=1^& set OPERATING_MODE=LIVE^& set LIVE_TRADING_ENABLED=true^& "%MC%" --mode LIVE --bridge
-  echo [OK] market-core LIVE --bridge
+  echo [OK] market-core
 ) else (
-  echo [WARN] market-core.exe nav. Client Panel startes, bet live setup vajag C++ build.
-  echo        cmake --preset windows-debug
-  echo        cmake --build build\windows-debug --config Debug
+  echo [WARN] market-core.exe nav
 )
 
 set "EX=%ROOT%\build\windows-debug\apps\execution-service\execution-service.exe"
@@ -191,37 +177,50 @@ if not exist "%EX%" set "EX=%ROOT%\build\windows-release\apps\execution-service\
 if exist "%EX%" start "MR-Execution" /D "%ROOT%" cmd /k "%EX%" --mode LIVE
 
 start "MR-ControlAPI" /D "%ROOT%\apps\control-api" cmd /k set CLIENT_PANEL_DIST=%ROOT%\apps\dashboard\dist-client^& npm run dev
-echo [..] gaidu API + client panel :3000 ...
+echo [..] gaidu API :3000 ...
 call :wait_port 3000 40
-start "MR-Dashboard" /D "%ROOT%\apps\dashboard" cmd /k npm run dev
-start http://localhost:5173/clients
-echo [OK] admin  http://localhost:5173/
-echo [OK] klientu kodi: http://localhost:5173/clients
-echo [OK] klienta tunelis iet uz API :3000 (NE Vite)
+
+if exist "%ROOT%\tools\client-public.mjs" (
+  start "MR-ClientPublic" /D "%ROOT%" cmd /k set CLIENT_PUBLIC_PORT=18080^& set CLIENT_DIST=%ROOT%\apps\dashboard\dist-client^& node tools\client-public.mjs
+) else (
+  echo [WARN] tools\client-public.mjs nav - nemu no GitHub...
+  curl.exe -fsSL -o "%TEMP%\vs-client-public.mjs" "https://raw.githubusercontent.com/voldis1994/VS/main/tools/client-public.mjs"
+  start "MR-ClientPublic" /D "%ROOT%" cmd /k set CLIENT_PUBLIC_PORT=18080^& set CLIENT_DIST=%ROOT%\apps\dashboard\dist-client^& node "%TEMP%\vs-client-public.mjs"
+)
+echo [..] gaidu publisko paneli :18080 ...
+call :wait_port 18080 40
+
+echo [..] parbaudu ka tas NAV Vite allowedHosts...
+node -e "http=require('http');http.get({hostname:'127.0.0.1',port:18080,path:'/',headers:{host:'monsters-lions-korean-royal.trycloudflare.com'}},r=>{let d='';r.on('data',c=>d+=c);r.on('end',()=>{const p=r.headers['x-vs-panel']||'';if(/allowedHosts|Blocked request/.test(d)){console.error('VITE_FINGERPRINT');process.exit(9)}if(!String(p).includes('vs-public')){console.error('BAD_PANEL',p);process.exit(8)}console.log('PANEL_OK',p);process.exit(0)})}).on('error',e=>{console.error(e);process.exit(7)})"
+if errorlevel 1 (
+  color 0C
+  echo [KLUDA] Ports 18080 joprojam atbild ka Vite. Tuneli NEATVERU.
+  echo         Aizver visus node/vite logus un palaid VS.bat velreiz.
+  pause
+  exit /b 1
+)
+echo [OK] publiskais panelis nav Vite
 echo.
 
-echo [5/5] Klienta tunelis - SUTI SO SAITI KLIENTAM
+start "MR-Dashboard" /D "%ROOT%\apps\dashboard" cmd /k npm run dev
+start http://localhost:5173/clients
+echo [OK] admin lokali http://localhost:5173/  (klientam NESUTI)
+echo.
+
+echo [5/5] Klienta tunelis uz :18080  (NE Vite, NE :5173, NE :5174)
 echo.
 echo ============================================================
 echo   NEAIZVER SO LOGU
-echo   Zemak paradisies:  https://....trycloudflare.com
-echo   To + access code (Clients lapa)  -^>  klientam
+echo   Suti klientam TIKAI so https://....trycloudflare.com
 echo ============================================================
 echo.
 
 where cloudflared >nul 2>&1
 if not errorlevel 1 (
-  cloudflared tunnel --url http://127.0.0.1:3000
+  cloudflared tunnel --url http://127.0.0.1:18080
   goto :eof
 )
-where npm >nul 2>&1
-if errorlevel 1 (
-  color 0C
-  echo [KLUDA] Nav cloudflared un nav npm - tuneli nevar atvert.
-  pause
-  exit /b 1
-)
-npx --yes cloudflared tunnel --url http://127.0.0.1:3000
+npx --yes cloudflared tunnel --url http://127.0.0.1:18080
 exit /b %ERRORLEVEL%
 
 :wait_port
@@ -241,14 +240,13 @@ ping -n 2 127.0.0.1 >nul
 goto :wait_port_loop
 
 :upsert_env
-REM %1=KEY  %2=VALUE
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='!ROOT!\.env'; $k='%~1'; $v='%~2'; if (-not (Test-Path -LiteralPath $p)) { Set-Content -LiteralPath $p -Value ($k+'='+$v) ; exit 0 }; $c=Get-Content -LiteralPath $p -Raw; if ($null -eq $c) { $c='' }; if ($c -match ('(?m)^'+[regex]::Escape($k)+'=')) { $c=[regex]::Replace($c,('(?m)^'+[regex]::Escape($k)+'=.*'),($k+'='+$v)) } else { if ($c.Length -gt 0 -and -not $c.EndsWith(\"`n\")) { $c+=\"`r`n\" }; $c+=($k+'='+$v+\"`r`n\") }; Set-Content -LiteralPath $p -Value $c -NoNewline"
 exit /b 0
 
 :try_build_core
 where cmake >nul 2>&1
 if errorlevel 1 (
-  echo [WARN] CMake nav PATH - izlaidisu C++ build.
+  echo [WARN] CMake nav PATH
   exit /b 1
 )
 set "VSWHERE=%SystemDrive%\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -262,9 +260,6 @@ if exist "!VSWHERE!" (
 if not defined VCPKG_ROOT if exist "%USERPROFILE%\vcpkg\vcpkg.exe" set "VCPKG_ROOT=%USERPROFILE%\vcpkg"
 cd /d "%ROOT%"
 cmake --preset windows-debug -DMR_BUILD_BENCHMARKS=OFF
-if errorlevel 1 (
-  echo [WARN] cmake configure neizdevas
-  exit /b 1
-)
+if errorlevel 1 exit /b 1
 cmake --build build\windows-debug --config Debug --target market-core
 exit /b %ERRORLEVEL%

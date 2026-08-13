@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [allowTunnelHosts(), react()],
   server: {
     port: 5173,
-    host: true,
+    host: '127.0.0.1',
     allowedHosts: true,
     proxy: {
       '/api': {
