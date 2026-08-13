@@ -38,6 +38,10 @@ type RobotSession = {
   unrealized: number | null;
   mode: 'FLAT' | 'MANAGE' | 'ENTRY';
   regime?: string;
+  feed_source?: 'MULTI' | 'LOCAL' | 'NONE';
+  feed_contributing?: number;
+  feed_sender_count?: number;
+  feed_agreement?: string | null;
   ohlc_10s?: {
     last_o: number | null;
     last_h: number | null;
