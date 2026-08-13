@@ -29,15 +29,18 @@ export async function registerRobotDeskRoutes(app: FastifyInstance): Promise<voi
       active: resolved,
       sessions,
       board: robotBoardMeta(sessions),
-      senders: senders.map((s) => ({
-        sender_id: s.sender_id,
-        name: s.name,
-        kind: s.kind,
-        status: s.status,
-        trust: s.trust,
-        environment: s.environment,
-        latency_ms: s.latency_ms,
-      })),
+      senders: senders
+        .filter((s) => s.kind === 'capital_com')
+        .map((s) => ({
+          sender_id: s.sender_id,
+          name: s.name,
+          kind: s.kind,
+          status: s.status,
+          trust: s.trust,
+          environment: s.environment,
+          latency_ms: s.latency_ms,
+          enabled: s.enabled !== false,
+        })),
       expected_id:
         accountId && q.epic && Number.isFinite(accountId)
           ? robotIdFor(accountId, q.epic)

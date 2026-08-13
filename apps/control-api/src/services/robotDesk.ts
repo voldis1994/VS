@@ -25,6 +25,8 @@ import {
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
 import { decideEntryFrom10sRegime } from './entryFromRegime.js';
 import {
+  allowEntryFromFeeds,
+  multiFeedOwnsOhlc,
   pickOhlcMid,
   readMultiFeedPrice,
   type MultiFeedPrice,
@@ -244,7 +246,11 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     active_regimes: activeRegimes,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'FEEDS → 10s OHLC → REGIME → ENTRY/EXIT',
+    chain: 'DATA PROVIDERS → consensus mid → 10s OHLC → REGIME → ENTRY/EXIT',
+    note:
+      maxFeeds < 2
+        ? 'Add ≥2 enabled Capital.com broker rows (Brokers) as separate data providers for multi-feed OHLC'
+        : 'Multi-provider OHLC active when ≥2 Capital rows agree (STRONG/OK)',
   };
 }
 
@@ -941,14 +947,12 @@ async function robotCycle(s: Internal) {
     setRobotCadence(s, ACTIVE_CADENCE_MS);
     s.last_mid = quote.mid;
 
-    // Multi-feed consensus mid for 10s OHLC — not only this account's Capital row
-    if (Date.now() - s.last_multi_feed_ms >= 4_000) {
+    // Multi-provider consensus mid every tick → own 10s OHLC (not only this account)
+    try {
+      s.multiFeed = await readMultiFeedPrice(s.epic);
       s.last_multi_feed_ms = Date.now();
-      try {
-        s.multiFeed = await readMultiFeedPrice(s.epic);
-      } catch {
-        /* keep previous multiFeed snapshot */
-      }
+    } catch {
+      /* keep previous multiFeed snapshot */
     }
     const picked = pickOhlcMid(quote.mid, s.multiFeed);
     s.feed_source = picked.source;
@@ -1077,7 +1081,9 @@ async function robotCycle(s: Internal) {
 
     if (quote.mid == null) return;
 
-    if (Date.now() - s.last_second_fetch_ms >= 8_000) {
+    // Seed from this account's SECOND candles only when multi-provider OHLC is NOT in charge.
+    // Otherwise a single Capital row would overwrite consensus bars used for regime/entry.
+    if (!multiFeedOwnsOhlc(s.multiFeed) && Date.now() - s.last_second_fetch_ms >= 8_000) {
       s.last_second_fetch_ms = Date.now();
       const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 40);
       if (sec.ok && sec.candles.length >= 10) {
@@ -1098,12 +1104,24 @@ async function robotCycle(s: Internal) {
       }
     }
 
+    const feedGate = allowEntryFromFeeds(s.multiFeed);
+    if (!feedGate.ok) {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `MULTI-FEED GATE · ${feedGate.reason} · no entry until providers agree`,
+      });
+      return;
+    }
+
     const bar = s.ohlcState.last_closed;
     const ohlc = s.ohlc_10s;
     const ohlcLine = bar
       ? `10s O=${bar.open.toFixed(2)} H=${bar.high.toFixed(2)} L=${bar.low.toFixed(2)} C=${bar.close.toFixed(2)} ${s.regime} · feeds ${
           s.feed_contributing || 0
-        }/${s.feed_sender_count || 0} ${s.feed_source || 'LOCAL'}`
+        }/${s.feed_sender_count || 0} ${s.feed_source || 'LOCAL'} ${s.feed_agreement || ''}`
       : `10s OHLC seeding · feeds ${s.feed_contributing || 0}/${s.feed_sender_count || 0}`;
 
     let direction: 'BUY' | 'SELL' | null = null;

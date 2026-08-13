@@ -16,6 +16,8 @@ export interface DataSender {
   environment?: string;
   connection_id?: number;
   client_name?: string;
+  /** Broker connection enabled flag (Capital rows only). */
+  enabled?: boolean;
   status: 'LIVE' | 'IDLE' | 'ERROR' | 'STALE';
   last_ok_at: string | null;
   last_error: string | null;
@@ -181,6 +183,7 @@ export async function listDataSenders(): Promise<DataSender[]> {
       environment: env,
       connection_id: r.id as number,
       client_name: r.client_name as string,
+      enabled: Boolean(r.enabled),
       status,
       last_ok_at: health?.last_ok_at ?? null,
       last_error: health?.last_error ?? null,
@@ -706,8 +709,8 @@ export type MultiFeedPrice = {
 };
 
 /**
- * Read one epic across ALL Capital.com senders and fuse a consensus mid.
- * Used by robot 10s OHLC so it does not lean on a single broker row.
+ * Read one epic across ALL enabled Capital.com data providers and fuse a consensus mid.
+ * Used by robot 10s OHLC so regime/entry are not built from a single broker row.
  */
 export async function readMultiFeedPrice(epicInput: string): Promise<MultiFeedPrice> {
   const epic = String(epicInput || '').trim();
@@ -725,7 +728,10 @@ export async function readMultiFeedPrice(epicInput: string): Promise<MultiFeedPr
   }
 
   const senders = await listDataSenders();
-  const capitalSenders = senders.filter((s) => s.kind === 'capital_com' && s.connection_id);
+  // Only enabled Capital rows count as live price providers for OHLC fusion.
+  const capitalSenders = senders.filter(
+    (s) => s.kind === 'capital_com' && s.connection_id && s.enabled !== false
+  );
   if (capitalSenders.length === 0) {
     return {
       epic,
@@ -735,7 +741,7 @@ export async function readMultiFeedPrice(epicInput: string): Promise<MultiFeedPr
       agreement: 'NONE',
       mids: [],
       legs: [],
-      detail: 'No Capital senders configured',
+      detail: 'No enabled Capital data providers',
     };
   }
 
@@ -761,13 +767,19 @@ export async function readMultiFeedPrice(epicInput: string): Promise<MultiFeedPr
       agreement: 'INSUFFICIENT',
       mids: [],
       legs,
-      detail: `0/${capitalSenders.length} Capital feeds returned a mid`,
+      detail: `0/${capitalSenders.length} Capital providers returned a mid`,
     };
   }
 
-  const avg = mids.reduce((a, b) => a + b, 0) / mids.length;
-  const span = Math.max(...mids) - Math.min(...mids);
-  const rel = avg !== 0 ? span / Math.abs(avg) : span;
+  // Median is more robust than mean when one provider spikes.
+  const sorted = [...mids].sort((a, b) => a - b);
+  const midIdx = Math.floor(sorted.length / 2);
+  const consensus =
+    sorted.length % 2 === 1
+      ? sorted[midIdx]!
+      : (sorted[midIdx - 1]! + sorted[midIdx]!) / 2;
+  const span = sorted[sorted.length - 1]! - sorted[0]!;
+  const rel = consensus !== 0 ? span / Math.abs(consensus) : span;
   let agreement: MultiFeedPrice['agreement'] = 'OK';
   if (mids.length === 1) agreement = 'INSUFFICIENT';
   else if (rel < 0.0005) agreement = 'STRONG';
@@ -775,17 +787,17 @@ export async function readMultiFeedPrice(epicInput: string): Promise<MultiFeedPr
 
   return {
     epic,
-    mid: avg,
+    mid: consensus,
     contributing: mids.length,
     sender_count: capitalSenders.length,
     agreement,
     mids,
     legs,
-    detail: `${mids.length}/${capitalSenders.length} feeds · ${agreement} · span=${span.toFixed(5)}`,
+    detail: `${mids.length}/${capitalSenders.length} providers · ${agreement} · span=${span.toFixed(5)} · mid=${consensus.toFixed(5)}`,
   };
 }
 
-/** Prefer multi-feed mid when ≥2 Capital feeds agree; else fall back to local mid. */
+/** Prefer multi-provider mid when ≥2 Capital feeds agree; else fall back to local mid. */
 export function pickOhlcMid(
   localMid: number | null | undefined,
   multi: Pick<MultiFeedPrice, 'mid' | 'contributing' | 'agreement'> | null | undefined
@@ -806,4 +818,44 @@ export function pickOhlcMid(
     return { mid: multi.mid, source: 'MULTI' };
   }
   return { mid: null, source: 'NONE' };
+}
+
+/** True when ≥2 providers agree enough to own the 10s OHLC / regime path. */
+export function multiFeedOwnsOhlc(
+  multi: Pick<MultiFeedPrice, 'contributing' | 'agreement'> | null | undefined
+): boolean {
+  return (
+    !!multi &&
+    multi.contributing >= 2 &&
+    (multi.agreement === 'STRONG' || multi.agreement === 'OK')
+  );
+}
+
+/**
+ * When several data providers are configured, entry must wait for their consensus.
+ * Single-provider setups stay allowed (degraded LOCAL path).
+ */
+export function allowEntryFromFeeds(
+  multi: Pick<MultiFeedPrice, 'contributing' | 'sender_count' | 'agreement'> | null | undefined
+): { ok: boolean; reason: string } {
+  const configured = multi?.sender_count ?? 0;
+  if (configured < 2) {
+    return { ok: true, reason: 'single provider — LOCAL OHLC' };
+  }
+  if (!multi) {
+    return { ok: false, reason: 'waiting multi-provider read' };
+  }
+  if (multi.contributing < 2) {
+    return {
+      ok: false,
+      reason: `only ${multi.contributing}/${multi.sender_count} providers live — wait for consensus`,
+    };
+  }
+  if (multi.agreement === 'DIVERGENT') {
+    return { ok: false, reason: 'providers DIVERGENT — no entry until they agree' };
+  }
+  if (multi.agreement !== 'STRONG' && multi.agreement !== 'OK') {
+    return { ok: false, reason: `agreement ${multi.agreement} — wait` };
+  }
+  return { ok: true, reason: `${multi.contributing}/${multi.sender_count} ${multi.agreement}` };
 }

@@ -141,7 +141,7 @@ export function BrokersPage() {
     <div>
       <h1 className="page-title">Brokers</h1>
       <p className="page-subtitle">
-        Capital.com Live / Demo — add several rows for multi-sender Orbit Reader (each connection = one sender)
+        Capital.com Live / Demo — each enabled connection = one independent data provider for multi-feed 10s OHLC (add ≥2 for consensus → regime → entry)
       </p>
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="section-title">Add Broker Connection</div>
