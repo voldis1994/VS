@@ -15,6 +15,8 @@ import { computeClientRobotStatus } from './clientPanel.js';
 const createCapitalPosition = vi.fn();
 const acquireCapitalSession = vi.fn();
 const listCapitalOpenPositions = vi.fn();
+const fetchCapitalMarketQuote = vi.fn();
+const fetchCapitalMinutePrices = vi.fn();
 const emitToClient = vi.fn();
 const listActiveSubscriptionsForEpic = vi.fn();
 const poolQuery = vi.fn();
@@ -27,6 +29,10 @@ vi.mock('./capitalCom.js', () => ({
   createCapitalPosition: (...a: unknown[]) => createCapitalPosition(...a),
   acquireCapitalSession: (...a: unknown[]) => acquireCapitalSession(...a),
   listCapitalOpenPositions: (...a: unknown[]) => listCapitalOpenPositions(...a),
+  fetchCapitalMarketQuote: (...a: unknown[]) => fetchCapitalMarketQuote(...a),
+  fetchCapitalMinutePrices: (...a: unknown[]) => fetchCapitalMinutePrices(...a),
+  computeSafetyCushionStopLevel: () => 1995,
+  isLateMoveOnOneMinute: () => false,
 }));
 
 vi.mock('./clientEvents.js', () => ({
@@ -149,6 +155,20 @@ beforeEach(() => {
 
   acquireCapitalSession.mockResolvedValue({ ok: true, session: { token: 't' } });
   listCapitalOpenPositions.mockResolvedValue({ ok: true, positions: [] });
+  fetchCapitalMarketQuote.mockResolvedValue({
+    epic: 'XAUUSD',
+    bid: 2000,
+    ask: 2000.5,
+    mid: 2000.25,
+    spread: 0.5,
+    min_stop_distance: 0.5,
+    raw_ok: true,
+  });
+  fetchCapitalMinutePrices.mockResolvedValue({
+    ok: true,
+    candles: [{ open: 2000, high: 2000.2, low: 1999.8, close: 2000.05 }],
+    detail: '1',
+  });
   createCapitalPosition.mockResolvedValue({
     ok: true,
     detail: 'filled',

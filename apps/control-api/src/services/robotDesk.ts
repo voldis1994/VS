@@ -6,6 +6,8 @@ import {
   confirmCapitalDeal,
   createCapitalPosition,
   fetchCapitalMarketQuote,
+  fetchCapitalMinutePrices,
+  isLateMoveOnOneMinute,
   listCapitalOpenPositions,
   type CapitalMarketQuote,
   type CapitalOpenPosition,
@@ -153,7 +155,11 @@ function clearTradeState(s: Internal) {
   s.mode = 'FLAT';
 }
 
-/** Tightest broker-visible Capital SL — dealing-rules min (or just over spread). */
+/**
+ * SAFETY SL as a true cushion — NOT dealing-rules minimum.
+ * Target ~0.25% of price, at least 3× broker min / wide vs spread,
+ * so noise does not stop every trade.
+ */
 function safetyStopLevel(
   direction: 'BUY' | 'SELL',
   mid: number,
@@ -179,19 +185,36 @@ function safetyStopLevel(
         ? Math.max(ask - bid, 0)
         : abs * 0.00005;
 
-  // Prefer Capital min stop; else just over spread — never the old 0.25% far cushion
+  const pctCushion = abs * 0.0025; // 0.25% safety cushion
   const brokerMin =
     minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
       ? minStopDistance
-      : spr * 1.05;
-  const floor = abs >= 1000 ? 0.1 : abs >= 100 ? 0.05 : abs >= 10 ? 0.01 : abs >= 1 ? 0.0001 : 0.00001;
-  const dist = Math.max(brokerMin, spr * 1.02, floor) * Math.max(loosen, 1);
+      : 0;
+  const floor = abs >= 1000 ? 0.5 : abs >= 100 ? 0.25 : abs >= 10 ? 0.05 : abs >= 1 ? 0.0005 : 0.00005;
+  const dist =
+    Math.max(pctCushion, brokerMin * 3, spr * 10, floor) * Math.max(loosen, 1);
 
   const raw = direction === 'BUY' ? ref - dist : ref + dist;
   if (abs >= 1000) return Math.round(raw * 10) / 10;
   if (abs >= 100) return Math.round(raw * 100) / 100;
   if (abs >= 1) return Math.round(raw * 10000) / 10000;
   return Math.round(raw * 1e6) / 1e6;
+}
+
+/** Cushion stopDistance in Capital POINTS (≥ 3× min, ~0.25% of price when point size known). */
+function safetyStopDistancePts(
+  mid: number,
+  minPts: number,
+  pointSize: number | null
+): number {
+  const abs = Math.max(Math.abs(mid), 1e-9);
+  const pct = abs * 0.0025;
+  let fromPct = minPts * 3;
+  if (pointSize != null && pointSize > 0) {
+    fromPct = Math.max(fromPct, pct / pointSize);
+  }
+  const distPts = Math.max(minPts * 3, fromPct, minPts + 1e-9);
+  return distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
 }
 
 function expectedStopFromDistance(
@@ -340,11 +363,8 @@ async function resolveDealId(
 }
 
 /**
- * Best-outcome exit (aligned with exit-policy / PositionManager spirit):
- * - PeakProtection: gave back >50% of MFE
- * - Target: lock solid favorable move
- * - HardInvalidation: adverse beyond stop
- * - TimeDecay: long hold with tiny/flat edge → realize best available
+ * Manage exit — give the trade room to develop (~10s scalp with breathing room).
+ * Broker SAFETY SL is the hard cushion; this is best-outcome management only.
  */
 function decideBestOutcomeExit(s: Internal, mid: number): { exit: boolean; reason: string } {
   if (!s.open_side || s.entry_price == null) return { exit: false, reason: '' };
@@ -352,15 +372,17 @@ function decideBestOutcomeExit(s: Internal, mid: number): { exit: boolean; reaso
   const entry = s.entry_price;
   const fav = favorableMove(s.open_side, entry, mid);
   const absEntry = Math.max(Math.abs(entry), 1e-9);
-  const tp = Math.max(absEntry * 0.0008, 0.05); // ~0.08% or 5c floor
-  const sl = Math.max(absEntry * 0.0012, 0.08); // hard stop
-  const mfeFloor = Math.max(absEntry * 0.00025, 0.02);
+  // Wider targets — was ~0.08% / ~0.12% and clipped every trade
+  const tp = Math.max(absEntry * 0.0035, 0.35); // ~0.35% take profit
+  const sl = Math.max(absEntry * 0.0022, 0.22); // soft manage stop (~0.22%)
+  const mfeFloor = Math.max(absEntry * 0.0012, 0.12); // need real MFE before peak logic
 
   if (fav <= -sl) {
     return { exit: true, reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}` };
   }
 
-  if (s.mfe >= mfeFloor && s.peak_retention != null && s.peak_retention < 0.5) {
+  // Only protect peak after meaningful excursion; allow ~70% giveback before exit
+  if (s.mfe >= mfeFloor && s.peak_retention != null && s.peak_retention < 0.3) {
     return {
       exit: true,
       reason: `PeakProtection · retention ${(s.peak_retention * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} → lock best`,
@@ -374,8 +396,8 @@ function decideBestOutcomeExit(s: Internal, mid: number): { exit: boolean; reaso
     };
   }
 
-  // After meaningful MFE, if giving back and still green → take best available
-  if (s.mfe >= mfeFloor && fav > 0 && s.peak_retention != null && s.peak_retention < 0.7) {
+  // Harvest only after large giveback while still green
+  if (s.mfe >= mfeFloor && fav > 0 && s.peak_retention != null && s.peak_retention < 0.4) {
     return {
       exit: true,
       reason: `BestOutcome harvest · UPL ${fav.toFixed(5)} after MFE ${s.mfe.toFixed(5)} (ret ${(s.peak_retention * 100).toFixed(0)}%)`,
@@ -383,7 +405,8 @@ function decideBestOutcomeExit(s: Internal, mid: number): { exit: boolean; reaso
   }
 
   const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
-  if (heldMs > 180_000 && fav >= 0 && s.mfe >= mfeFloor * 0.5) {
+  // ~10s horizon with room: don't time-decay until 8 minutes
+  if (heldMs > 480_000 && fav >= 0 && s.mfe >= mfeFloor * 0.5) {
     return {
       exit: true,
       reason: `TimeDecay · held ${Math.round(heldMs / 1000)}s · realize non-negative best UPL ${fav.toFixed(5)}`,
@@ -522,13 +545,12 @@ async function enterTrade(
     return;
   }
 
-  // Prefer Capital stopDistance at dealing-rules minimum (tightest legal).
-  // If rejected, loosen slightly; then try absolute stopLevel; last resort: no SL.
+  // SAFETY SL cushion (~0.25% / ≥3× min) — not dealing-rules minimum
   const minPts = quote.min_stop_points;
   const minPrice = quote.min_stop_distance ?? null;
   const unit = (quote.min_stop_unit || 'POINTS').toUpperCase();
   const useDistance = minPts != null && minPts > 0 && !unit.includes('PERCENT');
-  const loosenSteps = [1, 1.1, 1.25, 1.45, 1.75, 2.2];
+  const loosenSteps = [1, 1.15, 1.35, 1.6, 2.0];
 
   let stopLevel: number | null = null;
   let usedStopDistance: number | null = null;
@@ -536,8 +558,8 @@ async function enterTrade(
 
   if (useDistance) {
     for (const loosen of loosenSteps) {
-      const distPts = Math.max(minPts!, 0.01) * loosen;
-      // Keep whole points when Capital uses integer distances
+      const basePts = safetyStopDistancePts(mid, minPts!, quote.point_size ?? null);
+      const distPts = Math.max(basePts * loosen, minPts! * 3);
       const stopDistance =
         distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
       const expect = expectedStopFromDistance(
@@ -553,7 +575,7 @@ async function enterTrade(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `Capital SAFETY SL try stopDistance=${stopDistance} pts (min=${minPts} · unit=${unit} · ~level ${
+        detail: `Capital SAFETY SL cushion stopDistance=${stopDistance} pts (min=${minPts} · ~level ${
           expect ?? 'n/a'
         } · x${loosen})`,
       });
@@ -956,17 +978,24 @@ async function robotCycle(s: Internal) {
     let reason = '';
 
     if (s.orders_placed === 0 && s.exits_done === 0) {
-      direction = 'BUY';
-      reason = 'First flat cycle → ONE TRADE entry BUY';
+      // No forced first BUY — wait for a real mid-move setup sample
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: 'FLAT · seeding mid sample (no random first BUY)',
+      });
     } else if (prevMid != null) {
       const move = quote.mid - prevMid;
-      const thr = Math.max(Math.abs(prevMid) * 0.0002, 0.015);
+      // Stronger impulse than noise (~0.06%) for ~10s scalp
+      const thr = Math.max(Math.abs(prevMid) * 0.0006, 0.04);
       if (move <= -thr) {
         direction = 'BUY';
-        reason = `Flat signal · mid dropped ${move.toFixed(5)} → BUY entry`;
+        reason = `Pullback setup · mid dropped ${move.toFixed(5)} → BUY`;
       } else if (move >= thr) {
         direction = 'SELL';
-        reason = `Flat signal · mid rose ${move.toFixed(5)} → SELL entry`;
+        reason = `Pullback setup · mid rose ${move.toFixed(5)} → SELL`;
       } else {
         pushTick(s, {
           phase: 'DECIDE',
@@ -984,6 +1013,20 @@ async function robotCycle(s: Internal) {
         mid: quote.mid,
         detail: 'FLAT · waiting next mid sample for entry signal',
       });
+    }
+
+    if (direction) {
+      const hist = await fetchCapitalMinutePrices(opened.session, s.epic, 3);
+      if (hist.ok && isLateMoveOnOneMinute(direction, hist.candles)) {
+        pushTick(s, {
+          phase: 'WAIT',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `SKIP · late on 1m candle (end of move) · ${direction}`,
+        });
+        direction = null;
+      }
     }
 
     if (!direction) return;

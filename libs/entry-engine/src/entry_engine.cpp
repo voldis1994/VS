@@ -1,5 +1,6 @@
 #include "mr/entry_engine/entry_engine.hpp"
 #include <sstream>
+#include <cmath>
 
 namespace mr {
 
@@ -10,6 +11,11 @@ double BaselineProbabilityModel::probability_target_before_invalidation(
     base += state.multi_feed.consensus_confidence * 0.15;
     if (direction == Direction::Long && state.flow.net_flow > 0) base += 0.1;
     if (direction == Direction::Short && state.flow.net_flow < 0) base += 0.1;
+    // Early in range (not chasing) → boost; late extreme → cut
+    if (direction == Direction::Long && state.structure.range_position < 0.55) base += 0.08;
+    if (direction == Direction::Short && state.structure.range_position > 0.45) base += 0.08;
+    if (direction == Direction::Long && state.structure.range_position > 0.88) base -= 0.25;
+    if (direction == Direction::Short && state.structure.range_position < 0.12) base -= 0.25;
     if (state.data_quality.stale) base -= 0.3;
     return std::clamp(base, 0.0, 1.0);
 }
@@ -66,9 +72,14 @@ TradeIntent EntryEngine::evaluate(
         return intent;
     }
 
-    if (setup.lifecycle != SetupLifecycle::Confirmed) {
+    // Trade on setup sight: Building allowed when confidence is real; Confirmed always ok.
+    // Do NOT wait for every confirmation if setup is already actionable.
+    const bool setup_ok =
+        setup.lifecycle == SetupLifecycle::Confirmed ||
+        (setup.lifecycle == SetupLifecycle::Building && setup.confidence >= 0.5);
+    if (!setup_ok) {
         intent.decision = EntryDecision::NoTrade;
-        intent.reason_codes.push_back("SETUP_NOT_CONFIRMED");
+        intent.reason_codes.push_back("SETUP_NOT_ACTIONABLE");
         intent.human_explanation = build_explanation(setup, evidence, regime, intent.decision);
         return intent;
     }
@@ -86,10 +97,27 @@ TradeIntent EntryEngine::evaluate(
         return intent;
     }
 
+    // End-of-move filter — do not chase extremes on ~10s scalp
+    const double rp = state.structure.range_position;
+    const double vel = state.features.price.velocity;
+    if (setup.direction == Direction::Long && rp > 0.88 && vel > 0) {
+        intent.decision = EntryDecision::NoTrade;
+        intent.reason_codes.push_back("LATE_MOVE_LONG");
+        intent.human_explanation = build_explanation(setup, evidence, regime, intent.decision);
+        return intent;
+    }
+    if (setup.direction == Direction::Short && rp < 0.12 && vel < 0) {
+        intent.decision = EntryDecision::NoTrade;
+        intent.reason_codes.push_back("LATE_MOVE_SHORT");
+        intent.human_explanation = build_explanation(setup, evidence, regime, intent.decision);
+        return intent;
+    }
+
     intent.reference_price = (quote.bid + quote.ask) / 2.0;
     intent.acceptable_entry_min = quote.bid;
     intent.acceptable_entry_max = quote.ask;
-    intent.expected_favorable_move = state.liquidity.spread * 3.0;
+    // Asymmetric R:R for quality setups (need clearer edge than noise)
+    intent.expected_favorable_move = state.liquidity.spread * 5.0;
     intent.expected_adverse_move = state.liquidity.spread * 2.0;
     intent.initial_invalidation = intent.reference_price -
         (setup.direction == Direction::Long ? intent.expected_adverse_move
@@ -110,10 +138,15 @@ TradeIntent EntryEngine::evaluate(
         intent.expected_adverse_move,
         intent.expected_costs);
 
+    // High-precision gate (~aim for selective real setups; model scale ~0.5–0.95)
+    constexpr double kMinProb = 0.72;
     if (intent.expected_value_after_costs > 0 &&
-        intent.probability_target_before_invalidation > 0.55) {
+        intent.probability_target_before_invalidation >= kMinProb) {
         intent.decision = EntryDecision::EntryReady;
-        intent.reason_codes.push_back("POSITIVE_EV");
+        intent.reason_codes.push_back("POSITIVE_EV_HIGH_PRECISION");
+        if (setup.lifecycle == SetupLifecycle::Building) {
+            intent.reason_codes.push_back("SETUP_SIGHT_ENTRY");
+        }
     } else {
         intent.decision = EntryDecision::NoTrade;
         intent.reason_codes.push_back("INSUFFICIENT_EDGE");

@@ -920,6 +920,106 @@ export async function createCapitalPosition(
   };
 }
 
+/** ~0.25% cushion stopLevel (≥3× broker min) — safety pillow, not min legal SL. */
+export function computeSafetyCushionStopLevel(
+  direction: 'BUY' | 'SELL',
+  mid: number,
+  opts?: {
+    bid?: number | null;
+    ask?: number | null;
+    spread?: number | null;
+    minStopDistance?: number | null;
+  }
+): number {
+  const bid = opts?.bid ?? null;
+  const ask = opts?.ask ?? null;
+  const ref =
+    direction === 'BUY'
+      ? bid != null && Number.isFinite(bid)
+        ? bid
+        : mid
+      : ask != null && Number.isFinite(ask)
+        ? ask
+        : mid;
+  const abs = Math.max(Math.abs(ref), 1e-9);
+  const spr =
+    opts?.spread != null && opts.spread > 0
+      ? opts.spread
+      : bid != null && ask != null
+        ? Math.max(ask - bid, 0)
+        : abs * 0.00005;
+  const brokerMin =
+    opts?.minStopDistance != null && opts.minStopDistance > 0 ? opts.minStopDistance : 0;
+  const pctCushion = abs * 0.0025;
+  const floor = abs >= 1000 ? 0.5 : abs >= 100 ? 0.25 : abs >= 10 ? 0.05 : 0.0005;
+  const dist = Math.max(pctCushion, brokerMin * 3, spr * 10, floor);
+  const raw = direction === 'BUY' ? ref - dist : ref + dist;
+  if (abs >= 1000) return Math.round(raw * 10) / 10;
+  if (abs >= 100) return Math.round(raw * 100) / 100;
+  if (abs >= 1) return Math.round(raw * 10000) / 10000;
+  return Math.round(raw * 1e6) / 1e6;
+}
+
+export type CapitalPriceCandle = {
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+};
+
+/** Capital 1m OHLC — guidance for ~10s scalp (avoid chasing end of 1m move). */
+export async function fetchCapitalMinutePrices(
+  session: CapitalSession,
+  epic: string,
+  max = 5
+): Promise<{ ok: boolean; candles: CapitalPriceCandle[]; detail: string }> {
+  const encoded = encodeURIComponent(epic.trim());
+  const q = new URLSearchParams({
+    resolution: 'MINUTE',
+    max: String(Math.min(Math.max(max, 1), 20)),
+  });
+  // Capital variants: /prices/{epic} or /prices?epic=
+  let res = await session.get(`/api/v1/prices/${encoded}?${q.toString()}`);
+  if (!res.ok) {
+    q.set('epic', epic.trim());
+    res = await session.get(`/api/v1/prices?${q.toString()}`);
+  }
+  if (!res.ok) {
+    res = await session.get(
+      `/api/v1/history/prices?epic=${encoded}&resolution=MINUTE&max=${Math.min(Math.max(max, 1), 20)}`
+    );
+  }
+  const prices = (res.json?.prices || res.json?.candles || []) as any[];
+  const candles: CapitalPriceCandle[] = [];
+  for (const p of prices) {
+    const open = numOrNull(p.openPrice?.bid ?? p.openPrice?.ask ?? p.open ?? p.o);
+    const high = numOrNull(p.highPrice?.bid ?? p.highPrice?.ask ?? p.high ?? p.h);
+    const low = numOrNull(p.lowPrice?.bid ?? p.lowPrice?.ask ?? p.low ?? p.l);
+    const close = numOrNull(p.closePrice?.bid ?? p.closePrice?.ask ?? p.close ?? p.c);
+    if (open == null || high == null || low == null || close == null) continue;
+    candles.push({ open, high, low, close });
+  }
+  return { ok: candles.length > 0, candles, detail: `${candles.length} minute candles` };
+}
+
+/**
+ * True if the latest 1m candle already moved hard in trade direction (~end of move).
+ * Threshold ~0.12% of price — block chase entries.
+ */
+export function isLateMoveOnOneMinute(
+  direction: 'BUY' | 'SELL',
+  candles: CapitalPriceCandle[]
+): boolean {
+  if (!candles.length) return false;
+  const last = candles[candles.length - 1]!;
+  const mid = Math.max(Math.abs(last.open), 1e-9);
+  const move = last.close - last.open;
+  const thr = Math.max(mid * 0.0012, 0.05);
+  if (direction === 'BUY' && move >= thr) return true;
+  if (direction === 'SELL' && move <= -thr) return true;
+  return false;
+}
+
 function numOrNull(v: unknown): number | null {
   const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
   return Number.isFinite(n) ? n : null;

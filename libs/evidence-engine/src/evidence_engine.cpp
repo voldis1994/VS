@@ -105,15 +105,19 @@ EvidenceReport EvidenceEngine::evaluate(
     }
 
     report.evidence_strength = support_sum - contradict_sum;
-    report.is_valid = report.evidence_strength > 0.5 &&
-                      report.supporting.size() >= 2 &&
+    // Real setup: strong single confirmation OR classic multi-evidence
+    const bool strong_one =
+        report.supporting.size() >= 1 && report.evidence_strength > 0.75;
+    const bool multi =
+        report.supporting.size() >= 2 && report.evidence_strength > 0.5;
+    report.is_valid = (strong_one || multi) &&
                       report.feed_quality > 0.5 &&
                       !state.data_quality.stale;
 
     if (state.data_quality.stale) {
         report.invalidation_reasons.push_back("STALE_DATA");
     }
-    if (report.supporting.size() < 2) {
+    if (!strong_one && report.supporting.size() < 2) {
         report.invalidation_reasons.push_back("INSUFFICIENT_EVIDENCE");
     }
     if (contradict_sum > support_sum) {

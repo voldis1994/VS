@@ -6,14 +6,17 @@ SetupEngine::SetupEngine(IdGenerator& setup_ids) : setup_ids_(setup_ids) {}
 
 bool SetupEngine::detect_continuation_setup(
     const MarketState& state, const RegimeState& regime, SetupCandidate& setup) const {
-    if (regime.current == Regime::PullbackUptrend && state.flow.net_flow > 0) {
+    // Do not spawn continuation at range extremes (end of move)
+    if (regime.current == Regime::PullbackUptrend && state.flow.net_flow > 0 &&
+        state.structure.range_position < 0.85) {
         setup.setup_type = "CONTINUATION";
         setup.direction = Direction::Long;
         setup.regime = regime.current;
         setup.confidence = regime.confidence;
         return true;
     }
-    if (regime.current == Regime::PullbackDowntrend && state.flow.net_flow < 0) {
+    if (regime.current == Regime::PullbackDowntrend && state.flow.net_flow < 0 &&
+        state.structure.range_position > 0.15) {
         setup.setup_type = "CONTINUATION";
         setup.direction = Direction::Short;
         setup.regime = regime.current;
@@ -25,18 +28,21 @@ bool SetupEngine::detect_continuation_setup(
 
 bool SetupEngine::detect_pullback_setup(
     const MarketState& state, const RegimeState& regime, SetupCandidate& setup) const {
-    if (regime.current == Regime::TrendUp && state.structure.range_position < 0.4) {
+    // Pullback toward value — not chasing a finished impulse
+    if (regime.current == Regime::TrendUp && state.structure.range_position < 0.4 &&
+        state.structure.range_position > 0.05) {
         setup.setup_type = "PULLBACK";
         setup.direction = Direction::Long;
         setup.regime = regime.current;
-        setup.confidence = regime.confidence * 0.8;
+        setup.confidence = regime.confidence * 0.85;
         return true;
     }
-    if (regime.current == Regime::TrendDown && state.structure.range_position > 0.6) {
+    if (regime.current == Regime::TrendDown && state.structure.range_position > 0.6 &&
+        state.structure.range_position < 0.95) {
         setup.setup_type = "PULLBACK";
         setup.direction = Direction::Short;
         setup.regime = regime.current;
-        setup.confidence = regime.confidence * 0.8;
+        setup.confidence = regime.confidence * 0.85;
         return true;
     }
     return false;
