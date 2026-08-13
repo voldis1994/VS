@@ -72,7 +72,7 @@ export function styleFromClassification(
 ): TradeStyle | null {
   const setup = String(setupType || '').trim().toUpperCase();
   if (setup === 'CONTINUATION' || setup === 'PULLBACK') return 'LONG';
-  if (setup === 'BREAKOUT') return 'SCALP';
+  if (setup === 'BREAKOUT' || setup === 'FADE' || setup === 'REVERSAL') return 'SCALP';
   const r = String(regime || '').trim().toUpperCase();
   if (LONG_REGIMES.has(r)) return 'LONG';
   if (SCALP_REGIMES.has(r)) return 'SCALP';

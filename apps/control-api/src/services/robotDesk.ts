@@ -22,9 +22,9 @@ import {
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
+import { decideEntryFrom10sRegime } from './entryFromRegime.js';
 import {
   aggregateSecondsToTen,
-  decideFromClosed10s,
   emptyTenSecState,
   publicOhlc10s,
   updateTenSecondOhlc,
@@ -508,7 +508,8 @@ async function enterTrade(
   s: Internal,
   direction: 'BUY' | 'SELL',
   quote: CapitalMarketQuote,
-  reason: string
+  reason: string,
+  setupType?: string | null
 ) {
   // HARD RULE: never entry while any trade open on this epic
   const listed = await listCapitalOpenPositions(session);
@@ -727,7 +728,7 @@ async function enterTrade(
       market: s.epic,
       display_name: s.display_name,
       side: direction,
-      trade_type: mapTradeType(direction, null, s.regime),
+      trade_type: mapTradeType(direction, setupType, s.regime),
       lot_size: s.lot_size,
       entry_price: s.entry_price,
     });
@@ -949,7 +950,7 @@ async function robotCycle(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `ONE TRADE · manage ${s.open_side} · UPL ${
+        detail: `ONE TRADE · manage ${s.open_side} · ${s.regime} · UPL ${
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
@@ -1016,11 +1017,13 @@ async function robotCycle(s: Internal) {
 
     let direction: 'BUY' | 'SELL' | null = null;
     let reason = '';
+    let setupType: string | null = null;
 
     if (s.ohlcState.just_closed && bar) {
-      const sig = decideFromClosed10s(bar);
+      const sig = decideEntryFrom10sRegime(bar, s.regime);
       if (sig) {
         direction = sig.direction;
+        setupType = sig.setup;
         reason = sig.reason;
       } else {
         pushTick(s, {
@@ -1028,7 +1031,7 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${ohlcLine} · closed bar quiet · wait next 10s candle (not tick FLAT)`,
+          detail: `${ohlcLine} · ${s.regime} not suitable on this 10s close · wait next candle`,
         });
       }
     } else {
@@ -1056,7 +1059,7 @@ async function robotCycle(s: Internal) {
     }
 
     if (!direction) return;
-    await enterTrade(opened.session, s, direction, quote, reason);
+    await enterTrade(opened.session, s, direction, quote, reason, setupType);
   } catch (err) {
     s.reads_fail += 1;
     const detail = err instanceof Error ? err.message : String(err);
