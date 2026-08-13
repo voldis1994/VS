@@ -151,8 +151,16 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+echo [..] buveju client panel (bez Vite host check)...
+call npx --yes vite build --config vite.client.config.ts
+if errorlevel 1 (
+  color 0C
+  echo [KLUDA] client panel vite build
+  pause
+  exit /b 1
+)
 cd /d "%ROOT%"
-echo [OK] API + dashboard
+echo [OK] API + dashboard + client build
 echo.
 
 echo [4/5] Palaisu sistemu...
@@ -187,10 +195,7 @@ echo [..] gaidu API :3000 ...
 call :wait_port 3000 40
 start "MR-Dashboard" /D "%ROOT%\apps\dashboard" cmd /k npm run dev
 start "MR-ClientPanel" /D "%ROOT%\apps\dashboard" cmd /k npm run dev:client
-echo [..] gaidu Vite client :5175 ...
-call :wait_port 5175 50
-start "MR-ClientGateway" /D "%ROOT%\apps\dashboard" cmd /k npm run dev:client:gateway
-echo [..] gaidu client gateway :5174 ...
+echo [..] gaidu client panel :5174 ...
 call :wait_port 5174 40
 start http://localhost:5173/clients
 echo [OK] admin  http://localhost:5173/
