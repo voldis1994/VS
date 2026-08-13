@@ -313,14 +313,21 @@ export function RobotDeskPage() {
   const capitalSenders = senders.filter(
     (s) => s.kind === 'capital_com' && s.enabled !== false,
   );
-  const feedCount = board?.feed_sender_count ?? capitalSenders.length;
+  const publicSenders = senders.filter(
+    (s) =>
+      s.kind === 'yahoo_finance' ||
+      s.kind === 'aurum_metals' ||
+      s.kind === 'fx_live' ||
+      s.kind === 'coinbase' ||
+      s.kind === 'fx_reference',
+  );
+  const feedCount = board?.feed_sender_count ?? capitalSenders.length + publicSenders.length;
   const feedOk = board?.feed_contributing ?? 0;
-  const chainLabel = board?.chain || 'DATA PROVIDERS → consensus mid → 10s OHLC → REGIME → ENTRY/EXIT';
+  const chainLabel =
+    board?.chain || 'PUBLIC INTERNET + Capital → consensus mid → 10s OHLC → REGIME → ENTRY/EXIT';
   const boardNote =
     board?.note ||
-    (feedCount < 2
-      ? 'Pievieno ≥2 enabled Capital.com brokerus (Brokers) kā atsevišķus data providers'
-      : 'Multi-provider OHLC: consensus mid → 10s bars → regime → entry');
+    'Public feeds: Yahoo, Aurum, Fawaz FX, Coinbase — fused with Capital for 10s OHLC';
   const tradeTypes = board?.trade_types || ['BUY LONG', 'SELL LONG', 'BUY SCALP', 'SELL SCALP'];
   const focusLegs = focused?.feed_legs || [];
   const focusChain = focused?.decision_chain;
@@ -465,18 +472,38 @@ export function RobotDeskPage() {
             })}
           </div>
           <div className="robot-wire-feeds">
-            <div className="robot-arena-kicker">DATA PROVIDERS · CAPITAL (enabled)</div>
+            <div className="robot-arena-kicker">PUBLIC INTERNET FEEDS</div>
             <div className="mono robot-wire-empty" style={{ marginBottom: 6 }}>
               {boardNote}
             </div>
+            <div className="robot-feed-legs">
+              {publicSenders.map((s) => (
+                <div
+                  key={s.sender_id}
+                  className={`robot-feed-leg ${s.status === 'LIVE' || s.status === 'ok' || s.status === 'live' ? 'ok' : ''}`}
+                >
+                  <strong>{s.name}</strong>
+                  <span className="mono">
+                    {s.kind} · {s.status} · {s.trust}
+                    {s.latency_ms != null ? ` · ${s.latency_ms}ms` : ''}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="robot-arena-kicker" style={{ marginTop: 10 }}>
+              CAPITAL EXECUTION PROVIDERS
+            </div>
             {capitalSenders.length === 0 && (
               <div className="mono robot-wire-empty">
-                Nav enabled Capital providers — Brokers → pievieno vairākus Capital.com kontus.
+                Nav enabled Capital — orderiem vajag brokeri (Brokers). OHLC joprojām var nākt no public feeds.
               </div>
             )}
             <div className="robot-feed-legs">
               {capitalSenders.map((s) => (
-                <div key={s.sender_id} className={`robot-feed-leg ${s.status === 'LIVE' || s.status === 'ok' || s.status === 'live' ? 'ok' : ''}`}>
+                <div
+                  key={s.sender_id}
+                  className={`robot-feed-leg ${s.status === 'LIVE' || s.status === 'ok' || s.status === 'live' ? 'ok' : ''}`}
+                >
                   <strong>{s.name}</strong>
                   <span className="mono">
                     {s.kind} · {s.status} · {s.trust}
