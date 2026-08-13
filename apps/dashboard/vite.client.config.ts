@@ -5,8 +5,8 @@ import { allowTunnelHosts } from './vite.allow-tunnels';
 /**
  * Standalone Client Control Panel for REMOTE clients (not same Wi‑Fi).
  *
- * Local listen: http://localhost:5174/
- * Public share: double-click VS.bat (Cloudflare tunnel in that window)
+ * Local listen: http://127.0.0.1:5175/ (Vite, localhost Host only)
+ * Public share: client-gateway.mjs on :5174 → Cloudflare tunnel
  *   → https://xxxx.trycloudflare.com
  *
  * API + WS go same-origin via Vite proxy (required for tunnels).
@@ -32,10 +32,11 @@ export default defineConfig({
     'import.meta.env.VITE_WS_URL': JSON.stringify(''),
   },
   server: {
-    port: 5174,
+    port: 5175,
     strictPort: true,
-    host: true,
+    host: '127.0.0.1',
     allowedHosts: true,
+    hmr: false,
     proxy: {
       '/api': {
         target: 'http://localhost:3000',
@@ -46,9 +47,9 @@ export default defineConfig({
     },
   },
   preview: {
-    port: 5174,
+    port: 5175,
     strictPort: true,
-    host: true,
+    host: '127.0.0.1',
     allowedHosts: true,
   },
   build: {

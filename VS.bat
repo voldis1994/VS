@@ -51,6 +51,7 @@ taskkill /F /IM cloudflared.exe >nul 2>&1
 for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":3000 " ^| findstr LISTENING') do taskkill /F /PID %%P >nul 2>&1
 for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":5173 " ^| findstr LISTENING') do taskkill /F /PID %%P >nul 2>&1
 for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":5174 " ^| findstr LISTENING') do taskkill /F /PID %%P >nul 2>&1
+for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":5175 " ^| findstr LISTENING') do taskkill /F /PID %%P >nul 2>&1
 echo [OK]
 echo.
 
@@ -186,8 +187,11 @@ echo [..] gaidu API :3000 ...
 call :wait_port 3000 40
 start "MR-Dashboard" /D "%ROOT%\apps\dashboard" cmd /k npm run dev
 start "MR-ClientPanel" /D "%ROOT%\apps\dashboard" cmd /k npm run dev:client
-echo [..] gaidu client panel :5174 ...
-call :wait_port 5174 50
+echo [..] gaidu Vite client :5175 ...
+call :wait_port 5175 50
+start "MR-ClientGateway" /D "%ROOT%\apps\dashboard" cmd /k npm run dev:client:gateway
+echo [..] gaidu client gateway :5174 ...
+call :wait_port 5174 40
 start http://localhost:5173/clients
 echo [OK] admin  http://localhost:5173/
 echo [OK] klientu kodi: http://localhost:5173/clients
