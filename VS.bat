@@ -67,22 +67,24 @@ if exist "%ROOT%\.git" (
   cd /d "%ROOT%"
   git fetch origin main
   if errorlevel 1 (
-    color 0C
-    echo [KLUDA] git fetch neizdevas.
-    pause
-    exit /b 1
+    echo [WARN] git fetch neizdevas. Turpinu ar kodu, kas jau ir uz diska.
+  ) else (
+    git checkout -f main
+    git reset --hard origin/main
+    if errorlevel 1 (
+      echo [WARN] git reset neizdevas. Turpinu ar kodu, kas jau ir uz diska.
+    ) else (
+      for /f "delims=" %%H in ('git rev-parse --short HEAD') do echo [OK] main  %%H
+    )
   )
-  git checkout -f main
-  git reset --hard origin/main
-  if errorlevel 1 (
-    color 0C
-    echo [KLUDA] git reset neizdevas.
-    pause
-    exit /b 1
-  )
-  for /f "delims=" %%H in ('git rev-parse --short HEAD') do echo [OK] main  %%H
 ) else (
   echo [WARN] nav git clone - kods var but vecs.
+)
+if not exist "%ROOT%\apps\dashboard\package.json" (
+  color 0C
+  echo [KLUDA] Trukst projekta failu pec git. https://github.com/voldis1994/VS
+  pause
+  exit /b 1
 )
 echo.
 
@@ -94,10 +96,9 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-docker info >nul 2>&1
+call :ensure_docker
 if errorlevel 1 (
   color 0C
-  echo [KLUDA] Docker Desktop NAV ieslegts.
   pause
   exit /b 1
 )
@@ -112,7 +113,18 @@ call :upsert_env MARKET_CORE_BRIDGE 1
 docker start market-reader-postgres >nul 2>&1
 docker start market-reader-redis >nul 2>&1
 docker compose up -d postgres redis
-if errorlevel 1 docker compose up -d postgres redis
+if errorlevel 1 docker-compose up -d postgres redis
+if errorlevel 1 (
+  docker inspect -f "{{.State.Running}}" market-reader-postgres 2>nul | findstr /I "true" >nul
+  if errorlevel 1 (
+    color 0C
+    echo [KLUDA] postgres/redis nestarteja. Atver Docker Desktop - Containers.
+    docker compose ps
+    pause
+    exit /b 1
+  )
+  echo [WARN] compose kluda, bet postgres jau darbojas - turpinu.
+)
 ping -n 5 127.0.0.1 >nul
 
 set "npm_config_registry=https://registry.npmjs.org/"
@@ -195,19 +207,50 @@ echo [..] gaidu publisko paneli :18080 ...
 call :wait_port 18080 40
 
 echo [..] parbaudu ka tas NAV Vite allowedHosts...
-node -e "http=require('http');http.get({hostname:'127.0.0.1',port:18080,path:'/',headers:{host:'monsters-lions-korean-royal.trycloudflare.com'}},r=>{let d='';r.on('data',c=>d+=c);r.on('end',()=>{const p=r.headers['x-vs-panel']||'';if(/allowedHosts|Blocked request/.test(d)){console.error('VITE_FINGERPRINT');process.exit(9)}if(!String(p).includes('vs-public')){console.error('BAD_PANEL',p);process.exit(8)}console.log('PANEL_OK',p);process.exit(0)})}).on('error',e=>{console.error(e);process.exit(7)})"
-if errorlevel 1 (
-  color 0C
-  echo [KLUDA] Ports 18080 joprojam atbild ka Vite. Tuneli NEATVERU.
-  echo         Aizver visus node/vite logus un palaid VS.bat velreiz.
-  pause
-  exit /b 1
+if not exist "%ROOT%\tools\check-public.mjs" (
+  mkdir "%ROOT%\tools" >nul 2>&1
+  curl.exe -fsSL -o "%ROOT%\tools\check-public.mjs" "https://raw.githubusercontent.com/voldis1994/VS/main/tools/check-public.mjs"
 )
-echo [OK] publiskais panelis nav Vite
+set "PUBLIC_OK=0"
+set /a _h=0
+:health_loop
+node "%ROOT%\tools\check-public.mjs"
+if not errorlevel 1 (
+  set "PUBLIC_OK=1"
+  goto :health_done
+)
+set /a _h+=1
+if !_h! GEQ 15 goto :health_done
+echo [..] gaidu paneli :18080 ... !_h!/15
+ping -n 3 127.0.0.1 >nul
+goto :health_loop
+:health_done
+if not "!PUBLIC_OK!"=="1" (
+  node "%ROOT%\tools\check-public.mjs"
+  if !ERRORLEVEL! EQU 9 (
+    color 0C
+    echo [KLUDA] Ports 18080 atbild ka Vite. Tuneli NEATVERU.
+    echo         Aizver visus MR-* un cloudflared logus, tad palaid VS.bat velreiz.
+    pause
+    exit /b 1
+  )
+  netstat -ano 2>nul | findstr ":18080 " | findstr LISTENING >nul
+  if errorlevel 1 (
+    color 0C
+    echo [KLUDA] Ports 18080 nav atverts. Skaties logu MR-ClientPublic.
+    pause
+    exit /b 1
+  )
+  echo [WARN] veselibas parbaude neizdevas, bet :18080 klausas - atveru tuneli.
+) else (
+  echo [OK] publiskais panelis nav Vite
+)
 echo.
 
 start "MR-Dashboard" /D "%ROOT%\apps\dashboard" cmd /k npm run dev
+start "" "http://127.0.0.1:18080"
 start http://localhost:5173/clients
+echo [OK] lokali panelis http://127.0.0.1:18080
 echo [OK] admin lokali http://localhost:5173/  (klientam NESUTI)
 echo.
 
@@ -227,10 +270,52 @@ if not errorlevel 1 (
 npx --yes cloudflared tunnel --url http://127.0.0.1:18080
 exit /b %ERRORLEVEL%
 
+:ensure_docker
+where docker >nul 2>&1
+if errorlevel 1 (
+  if exist "%ProgramFiles%\Docker\Docker\resources\bin\docker.exe" (
+    set "PATH=%ProgramFiles%\Docker\Docker\resources\bin;%PATH%"
+    echo [OK] Atrada docker.exe
+  )
+)
+where docker >nul 2>&1
+if errorlevel 1 (
+  echo [KLUDA] docker.exe nav PATH. Instale Docker Desktop un restarte datoru.
+  exit /b 1
+)
+docker info >nul 2>&1
+if not errorlevel 1 (
+  echo [OK] Docker Engine darbojas
+  exit /b 0
+)
+echo [..] Docker Desktop var but atverts, bet Engine vel startejas. Gaidu lidz 2 min...
+if exist "%ProgramFiles%\Docker\Docker\Docker Desktop.exe" (
+  start "" "%ProgramFiles%\Docker\Docker\Docker Desktop.exe"
+)
+set /a _d=0
+:docker_wait
+docker info >nul 2>&1
+if not errorlevel 1 (
+  echo [OK] Docker Engine darbojas
+  exit /b 0
+)
+set /a _d+=1
+if !_d! GEQ 24 (
+  echo [KLUDA] Docker CLI neatbild. Desktop ieslegts != Engine running.
+  echo         Uzgaidi kamer Docker saka Engine running, tad palaid VS.bat velreiz.
+  echo         Settings - General - Use the WSL 2 based engine.
+  echo.
+  docker info
+  exit /b 1
+)
+echo [..] gaidu Docker Engine... !_d!/24
+ping -n 6 127.0.0.1 >nul
+goto :docker_wait
+
 :wait_port
 set "_PORT=%~1"
 set "_MAX=%~2"
-if not defined _MAX set "_MAX=30"
+if not defined _MAX set "_MAX=60"
 set /a _N=0
 :wait_port_loop
 netstat -ano 2>nul | findstr ":%_PORT% " | findstr LISTENING >nul
