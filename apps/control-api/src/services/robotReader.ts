@@ -175,15 +175,22 @@ async function getCapitalSession(connectionId: number): Promise<
 }
 
 export async function listDataSenders(): Promise<DataSender[]> {
-  const { rows } = await pool.query(
-    `SELECT bc.id, bc.broker_name, bc.environment, bc.enabled, bc.identifier,
-            c.name as client_name,
-            (SELECT COUNT(*)::int FROM capital_markets cm WHERE cm.broker_connection_id = bc.id) as markets
-     FROM broker_connections bc
-     JOIN clients c ON c.id = bc.client_id
-     WHERE bc.broker_name = 'capital_com'
-     ORDER BY bc.id ASC`
-  );
+  let rows: Array<Record<string, unknown>> = [];
+  try {
+    const q = await pool.query(
+      `SELECT bc.id, bc.broker_name, bc.environment, bc.enabled, bc.identifier,
+              c.name as client_name,
+              (SELECT COUNT(*)::int FROM capital_markets cm WHERE cm.broker_connection_id = bc.id) as markets
+       FROM broker_connections bc
+       JOIN clients c ON c.id = bc.client_id
+       WHERE bc.broker_name = 'capital_com'
+       ORDER BY bc.id ASC`
+    );
+    rows = q.rows as Array<Record<string, unknown>>;
+  } catch {
+    // DB down — still return public internet senders so OHLC fusion can run
+    rows = [];
+  }
 
   const senders: DataSender[] = rows.map((r) => {
     const sender_id = `capital-${r.id}`;

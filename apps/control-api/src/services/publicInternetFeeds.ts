@@ -31,6 +31,7 @@ export const PUBLIC_SENDERS: Array<{
   kind: PublicFeedKind;
 }> = [
   { sender_id: 'yahoo-finance', name: 'Yahoo Finance (public)', kind: 'yahoo_finance' },
+  { sender_id: 'yahoo-etf-proxy', name: 'Yahoo ETF proxy (public)', kind: 'yahoo_finance' },
   { sender_id: 'aurum-metals', name: 'Aurum metals spot (public)', kind: 'aurum_metals' },
   { sender_id: 'fx-live-fawaz', name: 'Fawaz FX live (public)', kind: 'fx_live' },
   { sender_id: 'coinbase-spot', name: 'Coinbase spot (public)', kind: 'coinbase' },
@@ -89,6 +90,17 @@ export function epicToFxPair(epic: string): { from: string; to: string } | null 
       if (s.includes(a + b)) return { from: a, to: b };
     }
   }
+  return null;
+}
+
+/** ETF / liquid proxy when index cash needs a second public leg (not metals — scale differs). */
+export function epicToYahooEtfProxy(epic: string): string | null {
+  const s = norm(epic);
+  if (/US500|SPX|SP500|SPY/.test(s)) return 'SPY';
+  if (/US100|NDX|NAS100|USTECH/.test(s)) return 'QQQ';
+  if (/US30|DJ30|DOW|DJI/.test(s)) return 'DIA';
+  if (/DE40|DAX/.test(s)) return 'DAX';
+  if (/UK100|FTSE/.test(s)) return 'ISF.L';
   return null;
 }
 
