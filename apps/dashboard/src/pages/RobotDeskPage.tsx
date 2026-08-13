@@ -454,7 +454,11 @@ export function RobotDeskPage() {
                   </strong>
                 </div>
                 <div className="robot-mini-mode">
-                  {s.running ? `${s.mode} · ${s.regime || 'UNKNOWN'}` : 'STOPPED'}
+                  {s.running
+                    ? `${s.mode} · ${s.regime || 'UNKNOWN'} · feeds ${s.feed_contributing ?? 0}/${
+                        s.feed_sender_count ?? 0
+                      }`
+                    : 'STOPPED'}
                 </div>
                 <div className="robot-mini-log mono">{lastLog(s)}</div>
                 <div className="robot-mini-actions">
@@ -522,6 +526,10 @@ export function RobotDeskPage() {
                 </div>
                 <div>MODE · {focused.running ? focused.mode : 'STOPPED'}</div>
                 <div>REGIME · {(focused.regime || 'UNKNOWN').toUpperCase()}</div>
+                <div>
+                  FEEDS · {focused.feed_contributing ?? 0}/{focused.feed_sender_count ?? 0}{' '}
+                  {focused.feed_agreement || ''} · {focused.feed_source || '—'}
+                </div>
                 <div>ENTRY · {fmt(focused.entry_price)}</div>
                 <div>SAFETY SL · {fmt(focused.safety_sl)}</div>
                 <div>DEAL · {focused.deal_id || '—'}</div>

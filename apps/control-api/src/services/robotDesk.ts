@@ -23,6 +23,7 @@ import {
 } from './regimes.js';
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
 import { decideEntryFrom10sRegime } from './entryFromRegime.js';
+import { pickOhlcMid, readMultiFeedPrice, type MultiFeedPrice } from './robotReader.js';
 import {
   aggregateSecondsToTen,
   emptyTenSecState,
@@ -86,6 +87,10 @@ export type RobotSession = {
     body_pct: number | null;
     market: 'MOVING' | 'QUIET' | 'SEEDING';
   };
+  feed_source?: 'MULTI' | 'LOCAL' | 'NONE';
+  feed_contributing?: number;
+  feed_sender_count?: number;
+  feed_agreement?: string | null;
 };
 
 type Internal = RobotSession & {
@@ -100,6 +105,8 @@ type Internal = RobotSession & {
   last_second_fetch_ms: number;
   last_closed_bar_key: string;
   closedBars: TenSecBar[];
+  last_multi_feed_ms: number;
+  multiFeed: MultiFeedPrice | null;
 };
 
 const ACTIVE_CADENCE_MS = 2_000;
@@ -170,9 +177,18 @@ function publicSession(s: Internal): RobotSession {
     last_second_fetch_ms: _sec,
     last_closed_bar_key: _bar,
     closedBars: _bars,
+    last_multi_feed_ms: _mf,
+    multiFeed: _multi,
     ...rest
   } = s;
-  return { ...rest, ohlc_10s: publicOhlc10s(s.ohlcState) };
+  return {
+    ...rest,
+    ohlc_10s: publicOhlc10s(s.ohlcState),
+    feed_source: rest.feed_source,
+    feed_contributing: s.multiFeed?.contributing ?? rest.feed_contributing ?? 0,
+    feed_sender_count: s.multiFeed?.sender_count ?? rest.feed_sender_count ?? 0,
+    feed_agreement: s.multiFeed?.agreement ?? rest.feed_agreement ?? null,
+  };
 }
 
 function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
@@ -867,8 +883,24 @@ async function robotCycle(s: Internal) {
     // Restore normal cadence after a successful tradeable read (may have been slowed by 429 / closed)
     setRobotCadence(s, ACTIVE_CADENCE_MS);
     s.last_mid = quote.mid;
-    if (quote.mid != null) {
-      s.ohlcState = updateTenSecondOhlc(s.ohlcState, quote.mid, Date.now());
+
+    // Multi-feed consensus mid for 10s OHLC — not only this account's Capital row
+    if (Date.now() - s.last_multi_feed_ms >= 4_000) {
+      s.last_multi_feed_ms = Date.now();
+      try {
+        s.multiFeed = await readMultiFeedPrice(s.epic);
+      } catch {
+        /* keep previous multiFeed snapshot */
+      }
+    }
+    const picked = pickOhlcMid(quote.mid, s.multiFeed);
+    s.feed_source = picked.source;
+    s.feed_contributing = s.multiFeed?.contributing ?? 0;
+    s.feed_sender_count = s.multiFeed?.sender_count ?? 0;
+    s.feed_agreement = s.multiFeed?.agreement ?? null;
+
+    if (picked.mid != null) {
+      s.ohlcState = updateTenSecondOhlc(s.ohlcState, picked.mid, Date.now());
       s.ohlc_10s = publicOhlc10s(s.ohlcState);
       if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
         applyRobotRegime(s, [s.ohlcState.last_closed]);
@@ -1012,8 +1044,10 @@ async function robotCycle(s: Internal) {
     const bar = s.ohlcState.last_closed;
     const ohlc = s.ohlc_10s;
     const ohlcLine = bar
-      ? `10s O=${bar.open.toFixed(2)} H=${bar.high.toFixed(2)} L=${bar.low.toFixed(2)} C=${bar.close.toFixed(2)} ${s.regime}`
-      : '10s OHLC seeding from quotes + Capital SECOND';
+      ? `10s O=${bar.open.toFixed(2)} H=${bar.high.toFixed(2)} L=${bar.low.toFixed(2)} C=${bar.close.toFixed(2)} ${s.regime} · feeds ${
+          s.feed_contributing || 0
+        }/${s.feed_sender_count || 0} ${s.feed_source || 'LOCAL'}`
+      : `10s OHLC seeding · feeds ${s.feed_contributing || 0}/${s.feed_sender_count || 0}`;
 
     let direction: 'BUY' | 'SELL' | null = null;
     let reason = '';
@@ -1181,6 +1215,12 @@ export async function startRobotSession(input: {
     last_second_fetch_ms: 0,
     last_closed_bar_key: '',
     closedBars: [],
+    last_multi_feed_ms: 0,
+    multiFeed: null,
+    feed_source: 'NONE',
+    feed_contributing: 0,
+    feed_sender_count: 0,
+    feed_agreement: null,
     regime: 'UNKNOWN',
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
@@ -1191,7 +1231,7 @@ export async function startRobotSession(input: {
     bid: null,
     ask: null,
     mid: null,
-    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · 10s OHLC entry (same TF as Capital 10s chart) · ONE TRADE ONLY · other robots: ${others}`,
+    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · 10s OHLC from multi-feed consensus · ONE TRADE ONLY · other robots: ${others}`,
   });
   pushTick(session, {
     phase: 'INFO',
@@ -1199,7 +1239,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: max 1 open trade · MANAGE with best-outcome · 10s OHLC entry (Capital 10s TF) · park when market closed',
+      'Rules: max 1 open trade · MANAGE with best-outcome · 10s OHLC from ALL Capital feeds when they agree · park when market closed',
   });
 
   sessions.set(id, session);

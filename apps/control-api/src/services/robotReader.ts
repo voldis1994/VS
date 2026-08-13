@@ -684,3 +684,104 @@ export function feedsFromSenders(senders: DataSender[]) {
     };
   });
 }
+
+export type MultiFeedPrice = {
+  epic: string;
+  mid: number | null;
+  contributing: number;
+  sender_count: number;
+  agreement: 'STRONG' | 'OK' | 'DIVERGENT' | 'INSUFFICIENT' | 'NONE';
+  mids: number[];
+  detail: string;
+};
+
+/**
+ * Read one epic across ALL Capital.com senders and fuse a consensus mid.
+ * Used by robot 10s OHLC so it does not lean on a single broker row.
+ */
+export async function readMultiFeedPrice(epicInput: string): Promise<MultiFeedPrice> {
+  const epic = String(epicInput || '').trim();
+  if (!epic) {
+    return {
+      epic: '',
+      mid: null,
+      contributing: 0,
+      sender_count: 0,
+      agreement: 'NONE',
+      mids: [],
+      detail: 'epic required',
+    };
+  }
+
+  const senders = await listDataSenders();
+  const capitalSenders = senders.filter((s) => s.kind === 'capital_com' && s.connection_id);
+  if (capitalSenders.length === 0) {
+    return {
+      epic,
+      mid: null,
+      contributing: 0,
+      sender_count: 0,
+      agreement: 'NONE',
+      mids: [],
+      detail: 'No Capital senders configured',
+    };
+  }
+
+  const reads = await Promise.all(capitalSenders.map((s) => readCapitalSender(s, epic)));
+  const mids = reads
+    .filter((r) => r.ok && r.mid != null && Number.isFinite(r.mid))
+    .map((r) => r.mid as number);
+
+  if (mids.length === 0) {
+    return {
+      epic,
+      mid: null,
+      contributing: 0,
+      sender_count: capitalSenders.length,
+      agreement: 'INSUFFICIENT',
+      mids: [],
+      detail: `0/${capitalSenders.length} Capital feeds returned a mid`,
+    };
+  }
+
+  const avg = mids.reduce((a, b) => a + b, 0) / mids.length;
+  const span = Math.max(...mids) - Math.min(...mids);
+  const rel = avg !== 0 ? span / Math.abs(avg) : span;
+  let agreement: MultiFeedPrice['agreement'] = 'OK';
+  if (mids.length === 1) agreement = 'INSUFFICIENT';
+  else if (rel < 0.0005) agreement = 'STRONG';
+  else if (rel > 0.005) agreement = 'DIVERGENT';
+
+  return {
+    epic,
+    mid: avg,
+    contributing: mids.length,
+    sender_count: capitalSenders.length,
+    agreement,
+    mids,
+    detail: `${mids.length}/${capitalSenders.length} feeds · ${agreement} · span=${span.toFixed(5)}`,
+  };
+}
+
+/** Prefer multi-feed mid when ≥2 Capital feeds agree; else fall back to local mid. */
+export function pickOhlcMid(
+  localMid: number | null | undefined,
+  multi: Pick<MultiFeedPrice, 'mid' | 'contributing' | 'agreement'> | null | undefined
+): { mid: number | null; source: 'MULTI' | 'LOCAL' | 'NONE' } {
+  if (
+    multi &&
+    multi.mid != null &&
+    Number.isFinite(multi.mid) &&
+    multi.contributing >= 2 &&
+    (multi.agreement === 'STRONG' || multi.agreement === 'OK')
+  ) {
+    return { mid: multi.mid, source: 'MULTI' };
+  }
+  if (localMid != null && Number.isFinite(localMid)) {
+    return { mid: localMid, source: 'LOCAL' };
+  }
+  if (multi?.mid != null && Number.isFinite(multi.mid)) {
+    return { mid: multi.mid, source: 'MULTI' };
+  }
+  return { mid: null, source: 'NONE' };
+}
