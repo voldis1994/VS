@@ -419,7 +419,7 @@ export async function startClientRobot(clientId: number): Promise<ClientPanelSta
   const account = await resolveClientTradingAccount(clientId);
   if (!account) throw new Error('No broker account linked to this client');
 
-  // Kill any robotDesk entry brain for this account — Client Panel is remote control only
+  // Kill entry brains only — keep manage-only robot if a trade is already open
   await stopEntryRobotsForAccount(account.account_id);
 
   await activateSubscription({
