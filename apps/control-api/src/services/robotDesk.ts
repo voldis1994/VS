@@ -19,11 +19,17 @@ import { mapTradeType } from './tradePresentation.js';
 import {
   observeClosedBars,
   normalizeRegime,
+  REGIME_NAMES,
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
 import { decideEntryFrom10sRegime } from './entryFromRegime.js';
-import { pickOhlcMid, readMultiFeedPrice, type MultiFeedPrice } from './robotReader.js';
+import {
+  pickOhlcMid,
+  readMultiFeedPrice,
+  type MultiFeedPrice,
+  type MultiFeedLeg,
+} from './robotReader.js';
 import {
   aggregateSecondsToTen,
   emptyTenSecState,
@@ -91,6 +97,14 @@ export type RobotSession = {
   feed_contributing?: number;
   feed_sender_count?: number;
   feed_agreement?: string | null;
+  feed_legs?: MultiFeedLeg[];
+  decision_chain?: {
+    feeds: string;
+    ohlc: string;
+    regime: string;
+    setup: string | null;
+    action: string;
+  };
 };
 
 type Internal = RobotSession & {
@@ -188,6 +202,49 @@ function publicSession(s: Internal): RobotSession {
     feed_contributing: s.multiFeed?.contributing ?? rest.feed_contributing ?? 0,
     feed_sender_count: s.multiFeed?.sender_count ?? rest.feed_sender_count ?? 0,
     feed_agreement: s.multiFeed?.agreement ?? rest.feed_agreement ?? null,
+    feed_legs: s.multiFeed?.legs ?? rest.feed_legs ?? [],
+    decision_chain: buildDecisionChain(s),
+  };
+}
+
+function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_chain']> {
+  const ohlc = publicOhlc10s(s.ohlcState);
+  const ohlcLine =
+    ohlc.last_c != null
+      ? `O${Number(ohlc.last_o).toFixed(2)}→C${Number(ohlc.last_c).toFixed(2)} ${ohlc.market}`
+      : 'SEEDING';
+  const feeds = `${s.multiFeed?.contributing ?? s.feed_contributing ?? 0}/${
+    s.multiFeed?.sender_count ?? s.feed_sender_count ?? 0
+  } ${s.feed_source || 'NONE'} ${s.multiFeed?.agreement || s.feed_agreement || ''}`.trim();
+  let action = 'WAIT';
+  if (!s.running) action = 'STOPPED';
+  else if (s.open_side) action = `MANAGE ${s.open_side}`;
+  else if (s.mode === 'ENTRY') action = 'SCAN ENTRY';
+  return {
+    feeds,
+    ohlc: ohlcLine,
+    regime: s.regime || 'UNKNOWN',
+    setup: null,
+    action,
+  };
+}
+
+export function robotBoardMeta(sessions: RobotSession[]) {
+  const activeRegimes = [
+    ...new Set(sessions.filter((s) => s.running).map((s) => s.regime || 'UNKNOWN')),
+  ];
+  const maxFeeds = sessions.reduce(
+    (n, s) => Math.max(n, s.feed_sender_count || 0, s.feed_legs?.length || 0),
+    0
+  );
+  const contributing = sessions.reduce((n, s) => Math.max(n, s.feed_contributing || 0), 0);
+  return {
+    regimes: [...REGIME_NAMES],
+    trade_types: ['BUY LONG', 'SELL LONG', 'BUY SCALP', 'SELL SCALP'],
+    active_regimes: activeRegimes,
+    feed_sender_count: maxFeeds,
+    feed_contributing: contributing,
+    chain: 'FEEDS → 10s OHLC → REGIME → ENTRY/EXIT',
   };
 }
 

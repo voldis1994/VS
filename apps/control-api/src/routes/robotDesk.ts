@@ -3,10 +3,12 @@ import {
   getRobotSession,
   listRobotSessions,
   resolveRobotSession,
+  robotBoardMeta,
   robotIdFor,
   startRobotSession,
   stopRobotSession,
 } from '../services/robotDesk.js';
+import { listDataSenders } from '../services/robotReader.js';
 
 export async function registerRobotDeskRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/robot-desk', async (request) => {
@@ -16,14 +18,26 @@ export async function registerRobotDeskRoutes(app: FastifyInstance): Promise<voi
       epic?: string;
     };
     const accountId = q.account_id ? Number(q.account_id) : null;
+    const sessions = listRobotSessions();
     const resolved = resolveRobotSession({
       id: q.id,
       account_id: accountId,
       epic: q.epic,
     });
+    const senders = await listDataSenders().catch(() => []);
     return {
       active: resolved,
-      sessions: listRobotSessions(),
+      sessions,
+      board: robotBoardMeta(sessions),
+      senders: senders.map((s) => ({
+        sender_id: s.sender_id,
+        name: s.name,
+        kind: s.kind,
+        status: s.status,
+        trust: s.trust,
+        environment: s.environment,
+        latency_ms: s.latency_ms,
+      })),
       expected_id:
         accountId && q.epic && Number.isFinite(accountId)
           ? robotIdFor(accountId, q.epic)

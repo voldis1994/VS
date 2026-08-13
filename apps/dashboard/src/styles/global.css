@@ -1128,13 +1128,125 @@ tr:hover td { background: rgba(57, 255, 20, 0.06); }
 .robot-board-stats {
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .robot-board-stats .robot-mode-banner {
-  min-width: 110px;
-  padding: 10px 16px;
+  min-width: 96px;
+  padding: 10px 14px;
 }
 .robot-board-stats .value {
   font-size: 22px;
+}
+.robot-wire-panel {
+  border: 1px solid rgba(0, 229, 255, 0.28);
+  background: linear-gradient(180deg, rgba(0, 40, 48, 0.55), rgba(4, 10, 4, 0.85));
+  padding: 12px 14px;
+  clip-path: var(--clip-panel);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.robot-wire-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.robot-wire-chain {
+  color: var(--cyan);
+  letter-spacing: 0.06em;
+  font-size: 12px;
+}
+.robot-wire-regimes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.robot-regime-chip {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  padding: 4px 8px;
+  border: 1px solid rgba(180, 255, 0, 0.22);
+  color: rgba(220, 255, 200, 0.55);
+  background: rgba(0, 0, 0, 0.35);
+}
+.robot-regime-chip.live {
+  color: var(--lime, #b4ff00);
+  border-color: rgba(180, 255, 0, 0.65);
+  background: rgba(180, 255, 0, 0.08);
+}
+.robot-regime-chip.focus {
+  color: #041004;
+  background: var(--cyan);
+  border-color: var(--cyan);
+}
+.robot-wire-feeds .robot-arena-kicker {
+  margin-bottom: 6px;
+}
+.robot-wire-empty {
+  color: rgba(220, 255, 200, 0.55);
+  font-size: 12px;
+}
+.robot-feed-legs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 6px;
+}
+.robot-feed-leg {
+  border: 1px solid rgba(180, 255, 0, 0.2);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: rgba(0, 0, 0, 0.35);
+}
+.robot-feed-leg.ok {
+  border-color: rgba(0, 229, 255, 0.45);
+}
+.robot-feed-leg strong {
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.robot-feed-leg .mono {
+  font-size: 10px;
+  color: rgba(220, 255, 200, 0.6);
+}
+.robot-mini-regime {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--cyan);
+}
+.robot-mini-legs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: 10px;
+  color: rgba(220, 255, 200, 0.65);
+}
+.robot-mini-legs .ok {
+  color: var(--lime, #b4ff00);
+}
+.robot-mini-legs .bad {
+  color: #ff6b6b;
+}
+.robot-focus-chain {
+  color: var(--cyan);
+}
+.robot-focus-legs {
+  margin: 6px 0 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+}
+.robot-focus-legs .ok {
+  color: var(--lime, #b4ff00);
+}
+.robot-focus-legs .bad {
+  color: #ff6b6b;
 }
 .robot-deploy-bar {
   padding: 16px;

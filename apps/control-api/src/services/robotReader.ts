@@ -685,6 +685,15 @@ export function feedsFromSenders(senders: DataSender[]) {
   });
 }
 
+export type MultiFeedLeg = {
+  sender_id: string;
+  name: string;
+  ok: boolean;
+  mid: number | null;
+  latency_ms: number;
+  detail?: string;
+};
+
 export type MultiFeedPrice = {
   epic: string;
   mid: number | null;
@@ -692,6 +701,7 @@ export type MultiFeedPrice = {
   sender_count: number;
   agreement: 'STRONG' | 'OK' | 'DIVERGENT' | 'INSUFFICIENT' | 'NONE';
   mids: number[];
+  legs: MultiFeedLeg[];
   detail: string;
 };
 
@@ -709,6 +719,7 @@ export async function readMultiFeedPrice(epicInput: string): Promise<MultiFeedPr
       sender_count: 0,
       agreement: 'NONE',
       mids: [],
+      legs: [],
       detail: 'epic required',
     };
   }
@@ -723,12 +734,21 @@ export async function readMultiFeedPrice(epicInput: string): Promise<MultiFeedPr
       sender_count: 0,
       agreement: 'NONE',
       mids: [],
+      legs: [],
       detail: 'No Capital senders configured',
     };
   }
 
   const reads = await Promise.all(capitalSenders.map((s) => readCapitalSender(s, epic)));
-  const mids = reads
+  const legs: MultiFeedLeg[] = reads.map((r) => ({
+    sender_id: r.sender_id,
+    name: r.name,
+    ok: r.ok && r.mid != null,
+    mid: r.mid,
+    latency_ms: r.latency_ms,
+    detail: r.detail,
+  }));
+  const mids = legs
     .filter((r) => r.ok && r.mid != null && Number.isFinite(r.mid))
     .map((r) => r.mid as number);
 
@@ -740,6 +760,7 @@ export async function readMultiFeedPrice(epicInput: string): Promise<MultiFeedPr
       sender_count: capitalSenders.length,
       agreement: 'INSUFFICIENT',
       mids: [],
+      legs,
       detail: `0/${capitalSenders.length} Capital feeds returned a mid`,
     };
   }
@@ -759,6 +780,7 @@ export async function readMultiFeedPrice(epicInput: string): Promise<MultiFeedPr
     sender_count: capitalSenders.length,
     agreement,
     mids,
+    legs,
     detail: `${mids.length}/${capitalSenders.length} feeds · ${agreement} · span=${span.toFixed(5)}`,
   };
 }
