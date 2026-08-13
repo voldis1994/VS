@@ -967,18 +967,19 @@ export type CapitalPriceCandle = {
   close: number;
 };
 
-/** Capital 1m OHLC — guidance for ~10s scalp (avoid chasing end of 1m move). */
-export async function fetchCapitalMinutePrices(
+/** Capital OHLC — SECOND for 10s bars, MINUTE for chase filter. */
+export async function fetchCapitalPrices(
   session: CapitalSession,
   epic: string,
+  resolution: 'SECOND' | 'MINUTE' = 'MINUTE',
   max = 5
 ): Promise<{ ok: boolean; candles: CapitalPriceCandle[]; detail: string }> {
   const encoded = encodeURIComponent(epic.trim());
+  const cap = resolution === 'SECOND' ? 50 : 20;
   const q = new URLSearchParams({
-    resolution: 'MINUTE',
-    max: String(Math.min(Math.max(max, 1), 20)),
+    resolution,
+    max: String(Math.min(Math.max(max, 1), cap)),
   });
-  // Capital variants: /prices/{epic} or /prices?epic=
   let res = await session.get(`/api/v1/prices/${encoded}?${q.toString()}`);
   if (!res.ok) {
     q.set('epic', epic.trim());
@@ -986,7 +987,7 @@ export async function fetchCapitalMinutePrices(
   }
   if (!res.ok) {
     res = await session.get(
-      `/api/v1/history/prices?epic=${encoded}&resolution=MINUTE&max=${Math.min(Math.max(max, 1), 20)}`
+      `/api/v1/history/prices?epic=${encoded}&resolution=${resolution}&max=${Math.min(Math.max(max, 1), cap)}`
     );
   }
   const prices = (res.json?.prices || res.json?.candles || []) as any[];
@@ -999,7 +1000,15 @@ export async function fetchCapitalMinutePrices(
     if (open == null || high == null || low == null || close == null) continue;
     candles.push({ open, high, low, close });
   }
-  return { ok: candles.length > 0, candles, detail: `${candles.length} minute candles` };
+  return { ok: candles.length > 0, candles, detail: `${candles.length} ${resolution} candles` };
+}
+
+export async function fetchCapitalMinutePrices(
+  session: CapitalSession,
+  epic: string,
+  max = 5
+): Promise<{ ok: boolean; candles: CapitalPriceCandle[]; detail: string }> {
+  return fetchCapitalPrices(session, epic, 'MINUTE', max);
 }
 
 /**

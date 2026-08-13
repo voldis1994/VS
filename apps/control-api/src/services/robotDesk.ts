@@ -7,6 +7,7 @@ import {
   createCapitalPosition,
   fetchCapitalMarketQuote,
   fetchCapitalMinutePrices,
+  fetchCapitalPrices,
   isLateMoveOnOneMinute,
   listCapitalOpenPositions,
   type CapitalMarketQuote,
@@ -15,6 +16,14 @@ import {
 } from './capitalCom.js';
 import { emitToClient } from './clientEvents.js';
 import { mapTradeType } from './tradePresentation.js';
+import {
+  aggregateSecondsToTen,
+  decideFromClosed10s,
+  emptyTenSecState,
+  publicOhlc10s,
+  updateTenSecondOhlc,
+  type TenSecState,
+} from './tenSecondOhlc.js';
 
 export type RobotTick = {
   at: string;
@@ -60,6 +69,15 @@ export type RobotSession = {
   error: string | null;
   /** When false, robot never invents entries — pipeline fan-out only */
   entry_enabled: boolean;
+  ohlc_10s: {
+    last_o: number | null;
+    last_h: number | null;
+    last_l: number | null;
+    last_c: number | null;
+    forming_c: number | null;
+    body_pct: number | null;
+    market: 'MOVING' | 'QUIET' | 'SEEDING';
+  };
 };
 
 type Internal = RobotSession & {
@@ -70,9 +88,12 @@ type Internal = RobotSession & {
   /** Last time we logged "market closed" (throttle ticks) */
   last_market_closed_tick_ms: number;
   cadence_ms: number;
+  ohlcState: TenSecState;
+  last_second_fetch_ms: number;
+  last_closed_bar_key: string;
 };
 
-const ACTIVE_CADENCE_MS = 6_000;
+const ACTIVE_CADENCE_MS = 2_000;
 const CLOSED_MARKET_CADENCE_MS = 90_000;
 const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
 
@@ -136,9 +157,12 @@ function publicSession(s: Internal): RobotSession {
     peak_favorable: _peak,
     last_market_closed_tick_ms: _lmc,
     cadence_ms: _cad,
+    ohlcState: _ohlc,
+    last_second_fetch_ms: _sec,
+    last_closed_bar_key: _bar,
     ...rest
   } = s;
-  return rest;
+  return { ...rest, ohlc_10s: publicOhlc10s(s.ohlcState) };
 }
 
 function clearTradeState(s: Internal) {
@@ -858,8 +882,11 @@ async function robotCycle(s: Internal) {
 
     // Restore normal cadence after a successful tradeable read (may have been slowed by 429 / closed)
     setRobotCadence(s, ACTIVE_CADENCE_MS);
-    const prevMid = s.last_mid;
     s.last_mid = quote.mid;
+    if (quote.mid != null) {
+      s.ohlcState = updateTenSecondOhlc(s.ohlcState, quote.mid, Date.now());
+      s.ohlc_10s = publicOhlc10s(s.ohlcState);
+    }
 
     // Sync truth from broker — source of ONE TRADE ONLY
     const listed = await listCapitalOpenPositions(opened.session);
@@ -967,42 +994,54 @@ async function robotCycle(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `FLAT cooldown ${Math.ceil((20_000 - sinceClose) / 1000)}s after close · then next entry`,
+        detail: `10s OHLC cooldown ${Math.ceil((20_000 - sinceClose) / 1000)}s after close · then next bar`,
       });
       return;
     }
 
     if (quote.mid == null) return;
 
+    if (Date.now() - s.last_second_fetch_ms >= 8_000) {
+      s.last_second_fetch_ms = Date.now();
+      const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 40);
+      if (sec.ok && sec.candles.length >= 10) {
+        const bars = aggregateSecondsToTen(sec.candles);
+        const last = bars[bars.length - 1];
+        if (last) {
+          const key = `${last.open.toFixed(4)}:${last.close.toFixed(4)}:${last.high.toFixed(4)}`;
+          const isNew = key !== s.last_closed_bar_key;
+          s.ohlcState = {
+            forming: s.ohlcState.forming,
+            last_closed: last,
+            just_closed: isNew,
+          };
+          if (isNew) s.last_closed_bar_key = key;
+          s.ohlc_10s = publicOhlc10s(s.ohlcState);
+        }
+      }
+    }
+
+    const bar = s.ohlcState.last_closed;
+    const ohlc = s.ohlc_10s;
+    const ohlcLine = bar
+      ? `10s O=${bar.open.toFixed(2)} H=${bar.high.toFixed(2)} L=${bar.low.toFixed(2)} C=${bar.close.toFixed(2)} ${ohlc.market}`
+      : '10s OHLC seeding from quotes + Capital SECOND';
+
     let direction: 'BUY' | 'SELL' | null = null;
     let reason = '';
 
-    if (s.orders_placed === 0 && s.exits_done === 0) {
-      // No forced first BUY — wait for a real mid-move setup sample
-      pushTick(s, {
-        phase: 'WAIT',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: 'FLAT · seeding mid sample (no random first BUY)',
-      });
-    } else if (prevMid != null) {
-      const move = quote.mid - prevMid;
-      // Stronger impulse than noise (~0.06%) for ~10s scalp
-      const thr = Math.max(Math.abs(prevMid) * 0.0006, 0.04);
-      if (move <= -thr) {
-        direction = 'BUY';
-        reason = `Pullback setup · mid dropped ${move.toFixed(5)} → BUY`;
-      } else if (move >= thr) {
-        direction = 'SELL';
-        reason = `Pullback setup · mid rose ${move.toFixed(5)} → SELL`;
+    if (s.ohlcState.just_closed && bar) {
+      const sig = decideFromClosed10s(bar);
+      if (sig) {
+        direction = sig.direction;
+        reason = sig.reason;
       } else {
         pushTick(s, {
           phase: 'DECIDE',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `FLAT wait · |Δmid|=${Math.abs(move).toFixed(5)} < ${thr.toFixed(5)} · no entry`,
+          detail: `${ohlcLine} · closed bar quiet · wait next 10s candle (not tick FLAT)`,
         });
       }
     } else {
@@ -1011,7 +1050,7 @@ async function robotCycle(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: 'FLAT · waiting next mid sample for entry signal',
+        detail: `${ohlcLine} · forming C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'} · wait bar close`,
       });
     }
 
@@ -1148,6 +1187,10 @@ export async function startRobotSession(input: {
     peak_favorable: 0,
     last_market_closed_tick_ms: 0,
     cadence_ms: 0,
+    ohlcState: emptyTenSecState(),
+    last_second_fetch_ms: 0,
+    last_closed_bar_key: '',
+    ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
 
   const others = [...sessions.values()].filter((x) => x.running && x.id !== id).length;
@@ -1156,7 +1199,7 @@ export async function startRobotSession(input: {
     bid: null,
     ask: null,
     mid: null,
-    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · ONE TRADE ONLY · best-outcome exit · other robots: ${others}`,
+    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · 10s OHLC entry (same TF as Capital 10s chart) · ONE TRADE ONLY · other robots: ${others}`,
   });
   pushTick(session, {
     phase: 'INFO',
@@ -1164,7 +1207,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: max 1 open trade · MANAGE with best-outcome · Capital SAFETY SL at dealing-rules minimum · park when market closed (no Capital spam) · entry only when FLAT',
+      'Rules: max 1 open trade · MANAGE with best-outcome · 10s OHLC entry (Capital 10s TF) · park when market closed',
   });
 
   sessions.set(id, session);

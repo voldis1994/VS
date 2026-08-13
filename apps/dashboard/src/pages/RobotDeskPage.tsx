@@ -37,6 +37,15 @@ type RobotSession = {
   peak_retention: number | null;
   unrealized: number | null;
   mode: 'FLAT' | 'MANAGE' | 'ENTRY';
+  ohlc_10s?: {
+    last_o: number | null;
+    last_h: number | null;
+    last_l: number | null;
+    last_c: number | null;
+    forming_c: number | null;
+    body_pct: number | null;
+    market: 'MOVING' | 'QUIET' | 'SEEDING';
+  };
   orders_placed: number;
   exits_done: number;
   reads_ok: number;
@@ -55,7 +64,12 @@ function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'fl
   if (!s.running && !s.open_side) return { label: 'STOPPED', kind: 'flat' };
   if (s.open_side === 'BUY') return { label: 'BUY LONG', kind: 'long' };
   if (s.open_side === 'SELL') return { label: 'SELL SCALP', kind: 'short' };
-  if (s.mode === 'ENTRY' || (s.running && !s.open_side)) return { label: 'WAIT ENTRY', kind: 'entry' };
+  if (s.running && !s.open_side) {
+    const m = s.ohlc_10s?.market;
+    if (m === 'MOVING') return { label: 'WAIT ENTRY · 10s MOVING', kind: 'entry' };
+    if (m === 'QUIET') return { label: 'WAIT ENTRY · 10s QUIET', kind: 'entry' };
+    return { label: 'WAIT ENTRY · 10s', kind: 'entry' };
+  }
   return { label: 'FLAT', kind: 'flat' };
 }
 
@@ -394,6 +408,14 @@ export function RobotDeskPage() {
                   <strong>{fmt(s.last_mid)}</strong>
                 </div>
                 <div className="robot-mini-row">
+                  <span>10s</span>
+                  <strong>
+                    {s.ohlc_10s?.last_c != null
+                      ? `${fmt(s.ohlc_10s.last_o, 2)}→${fmt(s.ohlc_10s.last_c, 2)} ${s.ohlc_10s.market}`
+                      : 'SEEDING'}
+                  </strong>
+                </div>
+                <div className="robot-mini-row">
                   <span>UPL</span>
                   <strong className={(s.unrealized || 0) >= 0 ? 'pos' : 'neg'}>{fmt(s.unrealized)}</strong>
                 </div>
@@ -465,6 +487,11 @@ export function RobotDeskPage() {
                 <div>ID · {focused.id}</div>
                 <div>ACCOUNT · {focused.account_name}</div>
                 <div>POSTURE · {posture(focused).label}</div>
+                <div>
+                  10s OHLC · O {fmt(focused.ohlc_10s?.last_o, 2)} H {fmt(focused.ohlc_10s?.last_h, 2)} L{' '}
+                  {fmt(focused.ohlc_10s?.last_l, 2)} C {fmt(focused.ohlc_10s?.last_c, 2)} ·{' '}
+                  {focused.ohlc_10s?.market || 'SEEDING'}
+                </div>
                 <div>MODE · {focused.running ? focused.mode : 'STOPPED'}</div>
                 <div>ENTRY · {fmt(focused.entry_price)}</div>
                 <div>SAFETY SL · {fmt(focused.safety_sl)}</div>

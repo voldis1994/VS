@@ -23,4 +23,7 @@ Capital **1m OHLC** remains an extra chase filter on the Node fanout path.
 
 ## Path
 
-Quotes (~500ms) → FeatureEngine 10s OHLC → Setup/Evidence/Entry → pipeline intents
+Quotes (~500ms–2s) + Capital SECOND prices → 10s OHLC → Setup/Evidence/Entry
+
+Robot Desk no longer treats the market as FLAT from tick-to-tick mid noise.
+It waits for a **closed 10s candle** (same TF as Capital.com 10s chart).
