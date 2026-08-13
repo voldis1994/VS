@@ -33,6 +33,8 @@ export default defineConfig({
     port: 5174,
     strictPort: true,
     host: true,
+    // Cloudflare tunnel host changes every launch (*.trycloudflare.com)
+    allowedHosts: true,
     proxy: {
       '/api': {
         target: 'http://localhost:3000',
@@ -46,6 +48,7 @@ export default defineConfig({
     port: 5174,
     strictPort: true,
     host: true,
+    allowedHosts: true,
   },
   build: {
     outDir: 'dist-client',
