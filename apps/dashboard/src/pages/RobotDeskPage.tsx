@@ -53,6 +53,7 @@ type BoardMeta = {
   feed_sender_count: number;
   feed_contributing: number;
   chain: string;
+  note?: string;
 };
 
 type DataSender = {
@@ -63,6 +64,7 @@ type DataSender = {
   trust: string;
   environment: string;
   latency_ms: number | null;
+  enabled?: boolean;
 };
 
 type RobotSession = {
@@ -308,10 +310,17 @@ export function RobotDeskPage() {
       : sessions.filter((s) => s.running).map((s) => s.regime || 'UNKNOWN')
     ).map((r) => r.toUpperCase()),
   );
-  const capitalSenders = senders.filter((s) => s.kind === 'capital_com');
+  const capitalSenders = senders.filter(
+    (s) => s.kind === 'capital_com' && s.enabled !== false,
+  );
   const feedCount = board?.feed_sender_count ?? capitalSenders.length;
   const feedOk = board?.feed_contributing ?? 0;
-  const chainLabel = board?.chain || 'FEEDS → 10s OHLC → REGIME → ENTRY/EXIT';
+  const chainLabel = board?.chain || 'DATA PROVIDERS → consensus mid → 10s OHLC → REGIME → ENTRY/EXIT';
+  const boardNote =
+    board?.note ||
+    (feedCount < 2
+      ? 'Pievieno ≥2 enabled Capital.com brokerus (Brokers) kā atsevišķus data providers'
+      : 'Multi-provider OHLC: consensus mid → 10s bars → regime → entry');
   const tradeTypes = board?.trade_types || ['BUY LONG', 'SELL LONG', 'BUY SCALP', 'SELL SCALP'];
   const focusLegs = focused?.feed_legs || [];
   const focusChain = focused?.decision_chain;
@@ -456,13 +465,18 @@ export function RobotDeskPage() {
             })}
           </div>
           <div className="robot-wire-feeds">
-            <div className="robot-arena-kicker">DATA FEEDS · CAPITAL SENDERS</div>
-            {capitalSenders.length === 0 && senders.length === 0 && (
-              <div className="mono robot-wire-empty">Nav pieslēgtu senderu — pievieno Capital feed Settings / Orbit.</div>
+            <div className="robot-arena-kicker">DATA PROVIDERS · CAPITAL (enabled)</div>
+            <div className="mono robot-wire-empty" style={{ marginBottom: 6 }}>
+              {boardNote}
+            </div>
+            {capitalSenders.length === 0 && (
+              <div className="mono robot-wire-empty">
+                Nav enabled Capital providers — Brokers → pievieno vairākus Capital.com kontus.
+              </div>
             )}
             <div className="robot-feed-legs">
-              {(capitalSenders.length ? capitalSenders : senders).map((s) => (
-                <div key={s.sender_id} className={`robot-feed-leg ${s.status === 'ok' || s.status === 'live' ? 'ok' : ''}`}>
+              {capitalSenders.map((s) => (
+                <div key={s.sender_id} className={`robot-feed-leg ${s.status === 'LIVE' || s.status === 'ok' || s.status === 'live' ? 'ok' : ''}`}>
                   <strong>{s.name}</strong>
                   <span className="mono">
                     {s.kind} · {s.status} · {s.trust}
