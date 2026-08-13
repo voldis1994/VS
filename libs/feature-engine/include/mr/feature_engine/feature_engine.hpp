@@ -77,6 +77,33 @@ struct StructureFeatures {
     double reversal_candidate{0};
 };
 
+/** Native ~10s OHLC built from live quotes (not Capital 1m). */
+struct OhlcBar {
+    Timestamp open_time{};
+    double open{0};
+    double high{0};
+    double low{0};
+    double close{0};
+    std::uint32_t ticks{0};
+    bool closed{false};
+
+    [[nodiscard]] double body() const { return close - open; }
+    [[nodiscard]] double range() const { return high - low; }
+    [[nodiscard]] double body_pct() const {
+        const double mid = std::max(std::abs(open), 1e-9);
+        return body() / mid;
+    }
+};
+
+struct TenSecondOhlcState {
+    OhlcBar forming{};
+    OhlcBar last_closed{};
+    bool has_forming{false};
+    bool has_closed{false};
+    /** How far through the current 10s bucket [0,1] */
+    double bucket_progress{0};
+};
+
 struct MultiFeedFeatures {
     double consensus{0};
     double disagreement{0};
@@ -93,6 +120,7 @@ struct FeatureSnapshot {
     MicrostructureFeatures microstructure;
     StructureFeatures structure;
     MultiFeedFeatures multi_feed;
+    TenSecondOhlcState ohlc_10s{};
     Timestamp timestamp{};
 };
 
@@ -130,7 +158,10 @@ private:
     void update_microstructure(const NormalizedEvent& event);
     void update_structure(double price);
     void update_multi_feed(double consensus, double divergence, double lead_lag);
+    void update_ten_second_ohlc(double price, Timestamp ts);
     [[nodiscard]] std::vector<double> prices_in_window(std::uint64_t window_ms) const;
+
+    static constexpr std::uint64_t kTenSecNs = 10'000'000'000ULL;
 };
 
 }  // namespace mr

@@ -1,6 +1,7 @@
 #include "mr/feature_engine/feature_engine.hpp"
 #include <numeric>
 #include <algorithm>
+#include <cmath>
 
 namespace mr {
 
@@ -116,6 +117,61 @@ void FeatureEngine::update_structure(double price) {
     current_.structure.expansion = current_.volatility.expansion;
 }
 
+void FeatureEngine::update_ten_second_ohlc(double price, Timestamp ts) {
+    const auto ns = static_cast<std::uint64_t>(ts.count());
+    const auto bucket = (ns / kTenSecNs) * kTenSecNs;
+    auto& o = current_.ohlc_10s;
+
+    if (!o.has_forming || static_cast<std::uint64_t>(o.forming.open_time.count()) != bucket) {
+        // Close previous forming bar into last_closed
+        if (o.has_forming && o.forming.ticks > 0) {
+            o.forming.closed = true;
+            o.last_closed = o.forming;
+            o.has_closed = true;
+
+            // Structure cues from completed 10s bar
+            const double bp = o.last_closed.body_pct();
+            if (bp > 0.0004) {
+                current_.structure.continuation_pressure = std::min(1.0, std::abs(bp) * 200.0);
+                current_.structure.acceptance = current_.structure.continuation_pressure;
+                current_.structure.rejection = 0;
+            } else if (bp < -0.0004) {
+                current_.structure.continuation_pressure = -std::min(1.0, std::abs(bp) * 200.0);
+                current_.structure.rejection = std::min(1.0, std::abs(bp) * 200.0);
+                current_.structure.acceptance = 0;
+            } else {
+                current_.structure.continuation_pressure *= 0.5;
+            }
+            // Pullback depth: opposite body vs prior short-horizon momentum
+            if (current_.price.short_horizon_momentum > 0 && bp < 0) {
+                current_.structure.pullback_depth = std::min(1.0, std::abs(bp) * 250.0);
+            } else if (current_.price.short_horizon_momentum < 0 && bp > 0) {
+                current_.structure.pullback_depth = std::min(1.0, std::abs(bp) * 250.0);
+            } else {
+                current_.structure.pullback_depth *= 0.7;
+            }
+        }
+
+        o.forming = {};
+        o.forming.open_time = Timestamp(static_cast<long long>(bucket));
+        o.forming.open = price;
+        o.forming.high = price;
+        o.forming.low = price;
+        o.forming.close = price;
+        o.forming.ticks = 1;
+        o.forming.closed = false;
+        o.has_forming = true;
+    } else {
+        o.forming.high = std::max(o.forming.high, price);
+        o.forming.low = std::min(o.forming.low, price);
+        o.forming.close = price;
+        o.forming.ticks += 1;
+    }
+
+    const auto age = ns - bucket;
+    o.bucket_progress = std::clamp(static_cast<double>(age) / static_cast<double>(kTenSecNs), 0.0, 1.0);
+}
+
 void FeatureEngine::update_multi_feed(double consensus, double divergence, double lead_lag) {
     current_.multi_feed.consensus = consensus;
     current_.multi_feed.divergence = divergence;
@@ -145,7 +201,19 @@ void FeatureEngine::update(const NormalizedEvent& event, double consensus_mid,
     update_volatility();
     update_microstructure(event);
     update_structure(price);
+    update_ten_second_ohlc(price, event.normalized_timestamp);
     update_multi_feed(consensus_mid, feed_divergence, lead_lag_prob);
+
+    // 10s momentum from last closed bar (primary TF for scalp)
+    if (current_.ohlc_10s.has_closed) {
+        current_.price.short_horizon_momentum = current_.ohlc_10s.last_closed.body();
+    } else {
+        auto prices_10s = prices_in_window(10000);
+        if (prices_10s.size() >= 2) {
+            current_.price.short_horizon_momentum =
+                prices_10s.back() - prices_10s.front();
+        }
+    }
 }
 
 FeatureSnapshot FeatureEngine::snapshot() const {

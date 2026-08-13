@@ -97,7 +97,25 @@ TradeIntent EntryEngine::evaluate(
         return intent;
     }
 
-    // End-of-move filter — do not chase extremes on ~10s scalp
+    // End-of-move filter using native 10s OHLC (preferred) + range extremes
+    const auto& ohlc = state.features.ohlc_10s;
+    if (ohlc.has_closed) {
+        const double bp = ohlc.last_closed.body_pct();
+        constexpr double kLateBody = 0.0008; // ~0.08% already run in last closed 10s bar
+        if (setup.direction == Direction::Long && bp >= kLateBody) {
+            intent.decision = EntryDecision::NoTrade;
+            intent.reason_codes.push_back("LATE_MOVE_10S_LONG");
+            intent.human_explanation = build_explanation(setup, evidence, regime, intent.decision);
+            return intent;
+        }
+        if (setup.direction == Direction::Short && bp <= -kLateBody) {
+            intent.decision = EntryDecision::NoTrade;
+            intent.reason_codes.push_back("LATE_MOVE_10S_SHORT");
+            intent.human_explanation = build_explanation(setup, evidence, regime, intent.decision);
+            return intent;
+        }
+    }
+
     const double rp = state.structure.range_position;
     const double vel = state.features.price.velocity;
     if (setup.direction == Direction::Long && rp > 0.88 && vel > 0) {

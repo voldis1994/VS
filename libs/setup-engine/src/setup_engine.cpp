@@ -1,4 +1,5 @@
 #include "mr/setup_engine/setup_engine.hpp"
+#include <algorithm>
 
 namespace mr {
 
@@ -6,7 +7,28 @@ SetupEngine::SetupEngine(IdGenerator& setup_ids) : setup_ids_(setup_ids) {}
 
 bool SetupEngine::detect_continuation_setup(
     const MarketState& state, const RegimeState& regime, SetupCandidate& setup) const {
-    // Do not spawn continuation at range extremes (end of move)
+    const auto& ohlc = state.features.ohlc_10s;
+    // Prefer reading closed 10s bar: continuation = bar in trend direction, not exhausted
+    if (ohlc.has_closed) {
+        const double bp = ohlc.last_closed.body_pct();
+        if (regime.current == Regime::PullbackUptrend && state.flow.net_flow > 0 &&
+            bp > 0.0 && bp < 0.0008 && state.structure.range_position < 0.85) {
+            setup.setup_type = "CONTINUATION";
+            setup.direction = Direction::Long;
+            setup.regime = regime.current;
+            setup.confidence = std::min(1.0, regime.confidence + 0.1);
+            return true;
+        }
+        if (regime.current == Regime::PullbackDowntrend && state.flow.net_flow < 0 &&
+            bp < 0.0 && bp > -0.0008 && state.structure.range_position > 0.15) {
+            setup.setup_type = "CONTINUATION";
+            setup.direction = Direction::Short;
+            setup.regime = regime.current;
+            setup.confidence = std::min(1.0, regime.confidence + 0.1);
+            return true;
+        }
+    }
+    // Fallback without closed bar yet
     if (regime.current == Regime::PullbackUptrend && state.flow.net_flow > 0 &&
         state.structure.range_position < 0.85) {
         setup.setup_type = "CONTINUATION";
@@ -28,7 +50,27 @@ bool SetupEngine::detect_continuation_setup(
 
 bool SetupEngine::detect_pullback_setup(
     const MarketState& state, const RegimeState& regime, SetupCandidate& setup) const {
-    // Pullback toward value — not chasing a finished impulse
+    const auto& ohlc = state.features.ohlc_10s;
+    // Pullback = last closed 10s bar against trend (dip-buy / rally-sell)
+    if (ohlc.has_closed) {
+        const double bp = ohlc.last_closed.body_pct();
+        if (regime.current == Regime::TrendUp && bp < -0.00015 &&
+            state.structure.range_position < 0.55 && state.structure.range_position > 0.05) {
+            setup.setup_type = "PULLBACK";
+            setup.direction = Direction::Long;
+            setup.regime = regime.current;
+            setup.confidence = std::min(1.0, regime.confidence * 0.9 + 0.1);
+            return true;
+        }
+        if (regime.current == Regime::TrendDown && bp > 0.00015 &&
+            state.structure.range_position > 0.45 && state.structure.range_position < 0.95) {
+            setup.setup_type = "PULLBACK";
+            setup.direction = Direction::Short;
+            setup.regime = regime.current;
+            setup.confidence = std::min(1.0, regime.confidence * 0.9 + 0.1);
+            return true;
+        }
+    }
     if (regime.current == Regime::TrendUp && state.structure.range_position < 0.4 &&
         state.structure.range_position > 0.05) {
         setup.setup_type = "PULLBACK";

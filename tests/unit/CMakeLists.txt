@@ -34,3 +34,8 @@ target_link_libraries(test_exit_hot_path PRIVATE
     mr::exit_engine mr::position_engine
     GTest::gtest GTest::gtest_main)
 add_test(NAME test_exit_hot_path COMMAND test_exit_hot_path)
+
+add_executable(test_ten_second_ohlc test_ten_second_ohlc.cpp)
+target_link_libraries(test_ten_second_ohlc PRIVATE
+    mr::feature_engine mr::common GTest::gtest GTest::gtest_main)
+add_test(NAME test_ten_second_ohlc COMMAND test_ten_second_ohlc)
