@@ -282,8 +282,8 @@ function clearTradeState(s: Internal) {
 
 /**
  * SAFETY SL as a true cushion — NOT dealing-rules minimum.
- * Target ~0.25% of price, at least 3× broker min / wide vs spread,
- * so noise does not stop every trade.
+ * Target ~0.20% of price, at least ~2.5× broker min / wide vs spread,
+ * so noise does not stop every trade (slightly tighter than 0.25%).
  */
 function safetyStopLevel(
   direction: 'BUY' | 'SELL',
@@ -310,14 +310,14 @@ function safetyStopLevel(
         ? Math.max(ask - bid, 0)
         : abs * 0.00005;
 
-  const pctCushion = abs * 0.0025; // 0.25% safety cushion
+  const pctCushion = abs * 0.002; // 0.20% safety cushion (was 0.25%)
   const brokerMin =
     minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
       ? minStopDistance
       : 0;
   const floor = abs >= 1000 ? 0.5 : abs >= 100 ? 0.25 : abs >= 10 ? 0.05 : abs >= 1 ? 0.0005 : 0.00005;
   const dist =
-    Math.max(pctCushion, brokerMin * 3, spr * 10, floor) * Math.max(loosen, 1);
+    Math.max(pctCushion, brokerMin * 2.5, spr * 8, floor) * Math.max(loosen, 1);
 
   const raw = direction === 'BUY' ? ref - dist : ref + dist;
   if (abs >= 1000) return Math.round(raw * 10) / 10;
@@ -326,19 +326,19 @@ function safetyStopLevel(
   return Math.round(raw * 1e6) / 1e6;
 }
 
-/** Cushion stopDistance in Capital POINTS (≥ 3× min, ~0.25% of price when point size known). */
+/** Cushion stopDistance in Capital POINTS (≥ 2.5× min, ~0.20% of price when point size known). */
 function safetyStopDistancePts(
   mid: number,
   minPts: number,
   pointSize: number | null
 ): number {
   const abs = Math.max(Math.abs(mid), 1e-9);
-  const pct = abs * 0.0025;
-  let fromPct = minPts * 3;
+  const pct = abs * 0.002;
+  let fromPct = minPts * 2.5;
   if (pointSize != null && pointSize > 0) {
     fromPct = Math.max(fromPct, pct / pointSize);
   }
-  const distPts = Math.max(minPts * 3, fromPct, minPts + 1e-9);
+  const distPts = Math.max(minPts * 2.5, fromPct, minPts + 1e-9);
   return distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
 }
 
@@ -631,7 +631,7 @@ async function enterTrade(
     return;
   }
 
-  // SAFETY SL cushion (~0.25% / ≥3× min) — not dealing-rules minimum
+  // SAFETY SL cushion (~0.20% / ≥2.5× min) — not dealing-rules minimum
   const minPts = quote.min_stop_points;
   const minPrice = quote.min_stop_distance ?? null;
   const unit = (quote.min_stop_unit || 'POINTS').toUpperCase();
