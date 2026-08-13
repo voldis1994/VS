@@ -1,37 +1,36 @@
 # Windows 11 Setup
 
-Target platform: Windows 11 x64. Use the automated bootstrap script as the primary path.
+Target platform: Windows 11 x64.
 
-## First-time start (recommended)
+## Start (only launcher)
 
 From the repository root, double-click:
 
 ```bat
-START_HERE.bat
+VS.bat
 ```
 
-This is the supported one-shot path for a clean Windows 11 machine. It will not overwrite an existing `.env`.
+That one file:
 
-If a step fails, read the on-screen message, fix that one dependency, and re-run `START_HERE.bat`.
+1. Stops old VS processes
+2. `git fetch` + `git reset --hard origin/main` (latest GitHub)
+3. Starts Docker Postgres/Redis, `npm install`, migrations
+4. Starts market-core (LIVE `--bridge`), execution-service, control-api, admin desk, client panel
+5. Opens a Cloudflare tunnel to the client panel in **the same window**
 
-## Manual alternative
-
-```bat
-scripts\setup_windows.bat
-scripts\run_dev.bat
-```
+Do not close the `VS.bat` window. Copy `https://….trycloudflare.com` plus the access code from http://localhost:5173/clients
 
 ## Prerequisites
 
 | Tool | Notes |
 |------|--------|
-| Git | Required |
-| Visual Studio 2022 Build Tools | C++ workload (`cl.exe` on PATH) |
+| Git | Required for GitHub update |
+| Visual Studio 2022 Build Tools | C++ workload (`cl.exe`) — needed if `market-core.exe` is not built yet |
 | CMake 3.24+ | Presets in `CMakePresets.json` |
 | Node.js 20+ | control-api + dashboard |
 | Docker Desktop | Postgres + Redis |
 | PowerShell | Built-in |
-| vcpkg | Bootstrapped by setup if missing |
+| vcpkg | Optional; used when CMake configures C++ |
 
 Suggested installs via winget:
 
@@ -43,63 +42,24 @@ winget install Docker.DockerDesktop
 winget install Microsoft.VisualStudio.2022.BuildTools
 ```
 
-## Run setup
-
-From the repository root:
+## Manual C++ build (only if `VS.bat` warns that market-core.exe is missing)
 
 ```bat
-scripts\setup_windows.bat
-```
-
-The script:
-
-1. Checks Git, CMake, Node, npm, Docker, PowerShell, and MSVC (`cl`).
-2. Sets or bootstraps `VCPKG_ROOT` (`%USERPROFILE%\vcpkg` if unset).
-3. Copies `.env.example` → `.env` when `.env` is absent (never overwrites).
-4. Sets `vcpkg.json` `builtin-baseline` to the local vcpkg HEAD commit (must be a 40-char SHA, not a date), then runs `vcpkg install --triplet x64-windows` for **core** packages (Google Benchmark is optional and not required for first run).
-5. Configures and builds **windows-debug** and **windows-release** CMake presets.
-6. Runs `npm install` in `apps\control-api` and `apps\dashboard`.
-7. Starts `docker compose up -d postgres redis`. If host ports `5432`/`6379` are already taken, first run retries on `15432`/`16379` and updates `.env` (you do **not** need to wipe all Docker images).
-8. Runs control-api migrations (`npm run migrate`).
-9. Executes `ctest` in `build\windows-debug`.
-
-Exit code is the count of failed steps. Fix reported `[MISSING]` tools and re-run.
-
-## After setup
-
-```bat
-scripts\run_dev.bat
-```
-
-- Dashboard: http://localhost:5173  
-- Control API: http://localhost:3000  
-
-Other entry points:
-
-| Script | Purpose |
-|--------|---------|
-| `scripts\run_paper.bat` | Paper market-core + execution-service |
-| `scripts\run_replay.bat <file.mrev>` | Deterministic replay |
-| `scripts\run_demo.bat` | Demo mode |
-| `scripts\run_live.bat` | Live (requires `LIVE_TRADING_ENABLED=true`) |
-| `scripts\doctor.bat` | Prerequisite / build health check |
-| `scripts\test.bat` | Rebuild debug + ctest |
-| `scripts\stop.bat` | Kill core processes, stop compose |
-
-## Manual build (optional)
-
-```bat
-cmake --preset windows-debug
+cmake --preset windows-debug -DMR_BUILD_BENCHMARKS=OFF
 cmake --build build/windows-debug --config Debug
+```
 
+Release:
+
+```bat
 cmake --preset windows-release
 cmake --build build/windows-release --config Release
 ```
 
 ## Environment
 
-Edit `.env` after first copy:
+Edit `.env` after first copy (VS.bat copies `.env.example` if `.env` is absent, and does not overwrite secrets):
 
-- Set `MASTER_ENCRYPTION_KEY`, `API_ADMIN_TOKEN`, DB password.
-- Keep `LIVE_TRADING_ENABLED=false` until credentials and risk controls are verified.
-- Ensure Docker Desktop is running before compose/migrate steps.
+- Set `MASTER_ENCRYPTION_KEY`, `API_ADMIN_TOKEN`, DB password, `PIPELINE_TOKEN`.
+- `VS.bat` sets `OPERATING_MODE=LIVE` and `LIVE_TRADING_ENABLED=true`.
+- Ensure Docker Desktop is running.

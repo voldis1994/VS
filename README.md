@@ -36,7 +36,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 - CMake 3.24+
 - Node.js 20+
 - Docker Desktop
-- vcpkg (bootstrapped by `START_HERE.bat`)
+- vcpkg (used by CMake if `market-core.exe` is missing on first `VS.bat` run)
 
 ### Linux (development/CI)
 - GCC 13+ or Clang 16+
@@ -47,41 +47,22 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 
 ## Quick Start (Windows)
 
-**First time — one double-click:**
+**Vienīgais fails — dubultklikšķis:**
 
 ```bat
-START_HERE.bat
+VS.bat
 ```
 
-This checks tools, builds C++, starts PostgreSQL, runs migrations, launches all services, and opens http://localhost:5173.  
-If a step fails, it stops with a clear message (`logs\first_run.log`). Fix that issue and run `START_HERE.bat` again.
+Lejupielādē jaunāko `main`, palaiž sistēmu, **šajā logā** parāda klienta `https://….trycloudflare.com` saiti.  
+Neaizver to logu. Admin: http://localhost:5173/
 
-Already set up:
-
-```bat
-scripts\run_dev.bat
-```
-
-Dashboard: http://localhost:5173  
-Control API: http://localhost:3000
-
-### Daily restart + update + client link
-
-Double-click **`VS_RESTART.exe`** (or `VS_RESTART.bat`):
-
-1. Stops the stack  
-2. Pulls latest `main` from GitHub  
-3. Starts API, admin desk, client panel, market-core bridge  
-4. Opens a Cloudflare tunnel window — send that `https://….trycloudflare.com` URL + access code to the client  
-
-See [docs/VS_RESTART.md](docs/VS_RESTART.md).
+Skatīt [docs/VS_RESTART.md](docs/VS_RESTART.md).
 
 ## Build
 
 ```bat
-scripts\build.bat          REM Debug
-cmake --preset windows-release
-cmake --build build/windows-release
+cmake --preset windows-debug
+cmake --build build/windows-debug
 ```
 
 Linux:
@@ -108,17 +89,7 @@ OPERATING_MODE=LIVE
 ## Run
 
 ```bat
-scripts\run_paper.bat
-scripts\run_replay.bat data\replay\events.mrev
-scripts\run_demo.bat
-scripts\run_live.bat       REM requires LIVE_TRADING_ENABLED=true
-```
-
-## Tests
-
-```bat
-scripts\test.bat
-scripts\benchmark.bat
+VS.bat
 ```
 
 Backend tests:
@@ -133,9 +104,9 @@ apps/           market-core, execution-service, control-api, dashboard
 libs/           C++ engine libraries (clock, features, regime, evidence, etc.)
 config/         YAML configuration
 data/           raw, normalized, replay recordings
-scripts/        Windows automation
 tests/          unit, integration, replay, execution, security, performance
 docs/           architecture and operations documentation
+VS.bat          one-click launcher (git pull, stack, client tunnel)
 ```
 
 ## Security

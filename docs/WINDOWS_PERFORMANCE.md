@@ -6,19 +6,15 @@
 
 This Cloud Agent run executes on **Ubuntu Linux / GCC**, not Windows 11 x64 / MSVC.
 
-Windows/MSVC Release numbers must be produced by:
+Windows/MSVC Release numbers must be produced from a VS Build Tools x64 prompt:
 
 ```bat
-scripts\verify_windows_release.bat
+cmake --preset windows-release -DMR_BUILD_BENCHMARKS=ON
+cmake --build build\windows-release --config Release
+ctest --test-dir build\windows-release -C Release --output-on-failure
 ```
 
-or:
-
-```bat
-scripts\benchmark_windows_release.bat
-```
-
-Results are written to `benchmark-results\windows-msvc-release.txt`.
+Write results to `benchmark-results\windows-msvc-release.txt`.
 
 ## Required report fields (fill after Windows run)
 

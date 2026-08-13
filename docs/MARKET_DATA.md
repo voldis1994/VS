@@ -58,4 +58,4 @@ Default config enables two synthetic feeds (`synthetic-primary`, `synthetic-refe
 - Event type + presence flags for bid/ask/last
 - Prices, sizes, sequence, quality bitmask
 
-`RawEventWriter` appends records (mutex-protected). `RawEventReader` streams them back. market-core records to `data/raw/events.mrev` by default when not in REPLAY mode (`--record` overrides path). Replay: `scripts\run_replay.bat data\replay\events.mrev`.
+`RawEventWriter` appends records (mutex-protected). `RawEventReader` streams them back. market-core records to `data/raw/events.mrev` by default when not in REPLAY mode (`--record` overrides path). Replay: `market-core.exe --mode REPLAY --file data\replay\events.mrev`.

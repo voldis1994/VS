@@ -23,9 +23,9 @@ func main() {
 	}
 	fmt.Println("  Repo:", root)
 
-	bat := filepath.Join(root, "scripts", "vs_restart_full.bat")
+	bat := filepath.Join(root, "VS.bat")
 	if _, err := os.Stat(bat); err != nil {
-		fail("scripts\\vs_restart_full.bat not found in " + root)
+		fail("VS.bat not found in " + root)
 		return
 	}
 
@@ -69,14 +69,14 @@ func findRepoRoot() (string, error) {
 			cur = parent
 		}
 	}
-	return "", fmt.Errorf("could not find VS repo (need apps\\market-core). Put VS_RESTART.exe inside the cloned github.com/voldis1994/VS folder")
+	return "", fmt.Errorf("could not find VS repo. Put VS_RESTART.exe next to VS.bat")
 }
 
 func isRepo(dir string) bool {
 	markers := []string{
 		filepath.Join(dir, "apps", "market-core", "CMakeLists.txt"),
 		filepath.Join(dir, "apps", "dashboard", "package.json"),
-		filepath.Join(dir, "scripts", "vs_restart_full.bat"),
+		filepath.Join(dir, "VS.bat"),
 	}
 	for _, m := range markers {
 		if _, err := os.Stat(m); err != nil {

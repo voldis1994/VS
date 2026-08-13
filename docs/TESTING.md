@@ -2,16 +2,19 @@
 
 ## Quick run (Windows)
 
+From a VS Build Tools x64 prompt at the repo root:
+
 ```bat
-scripts\test.bat
+cmake --preset windows-debug -DMR_BUILD_BENCHMARKS=OFF
+cmake --build build\windows-debug --config Debug
+ctest --test-dir build\windows-debug --output-on-failure
 ```
 
-Configures/builds `windows-debug` and runs `ctest --output-on-failure` in `build\windows-debug`.
-
-Benchmarks:
+C++ benchmarks (optional Google Benchmark feature):
 
 ```bat
-scripts\benchmark.bat
+cmake --preset windows-release -DMR_BUILD_BENCHMARKS=ON
+cmake --build build\windows-release --config Release
 ```
 
 ## C++ suites

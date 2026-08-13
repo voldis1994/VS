@@ -5,7 +5,7 @@ import react from '@vitejs/plugin-react';
  * Standalone Client Control Panel for REMOTE clients (not same Wi‑Fi).
  *
  * Local listen: http://localhost:5174/
- * Public share: run scripts/share_client_panel.bat (Cloudflare tunnel)
+ * Public share: double-click VS.bat (Cloudflare tunnel in that window)
  *   → https://xxxx.trycloudflare.com
  *
  * API + WS go same-origin via Vite proxy (required for tunnels).
