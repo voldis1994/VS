@@ -32,6 +32,7 @@ import {
   type MultiFeedPrice,
   type MultiFeedLeg,
 } from './robotReader.js';
+import { buildFresherRefs, detectStaleQuoteAdverse } from './staleQuoteGuard.js';
 import {
   aggregateSecondsToTen,
   emptyTenSecState,
@@ -1167,6 +1168,30 @@ async function robotCycle(s: Internal) {
           ask: quote.ask,
           mid: quote.mid,
           detail: `SKIP · late on 1m candle (end of move) · ${direction}`,
+        });
+        direction = null;
+      }
+    }
+
+    // Capital button lag vs already-printed drop/rally (chart/public/10s OHLC)
+    if (direction && quote.mid != null) {
+      const publicNear = (s.multiFeed?.legs || [])
+        .filter((l) => l.ok && l.mid != null && Number.isFinite(l.mid))
+        .filter((l) => !String(l.detail || '').includes('FAR from Capital'))
+        .map((l) => ({ name: l.name, mid: l.mid as number }));
+      const refs = buildFresherRefs({
+        publicNearMids: publicNear,
+        ohlcClose: s.ohlcState.last_closed?.close ?? s.ohlc_10s?.last_c ?? null,
+        formingClose: s.ohlcState.forming?.close ?? s.ohlc_10s?.forming_c ?? null,
+      });
+      const lag = detectStaleQuoteAdverse(direction, quote.mid, refs);
+      if (lag.block) {
+        pushTick(s, {
+          phase: 'WAIT',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `SKIP · ${lag.reason}`,
         });
         direction = null;
       }
