@@ -12,6 +12,7 @@ import {
 const NAV = [
   { to: '/', label: 'COMMAND', end: true },
   { to: '/robot', label: 'ROBOT BOARD' },
+  { to: '/market', label: 'REGIMES' },
   { to: '/orbit', label: 'ORBIT GRID' },
   { to: '/trading', label: 'TRADING' },
   { to: '/brokers', label: 'BROKERS' },

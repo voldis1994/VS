@@ -12,6 +12,7 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
   app.get('/api/settings', async () => ({
     operating_mode: process.env.OPERATING_MODE || 'LIVE',
     live_trading_enabled: liveEnabled(),
+    operating_modes: ['REPLAY', 'PAPER', 'DEMO', 'LIVE'],
     primary_horizon_ms: 10000,
     entry_ttl_ms: 2000,
     log_level: process.env.LOG_LEVEL || 'info',

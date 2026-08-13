@@ -37,6 +37,7 @@ type RobotSession = {
   peak_retention: number | null;
   unrealized: number | null;
   mode: 'FLAT' | 'MANAGE' | 'ENTRY';
+  regime?: string;
   ohlc_10s?: {
     last_o: number | null;
     last_h: number | null;
@@ -62,15 +63,42 @@ function fmt(n: number | null | undefined, d = 5) {
 
 function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'flat' | 'entry' } {
   if (!s.running && !s.open_side) return { label: 'STOPPED', kind: 'flat' };
-  if (s.open_side === 'BUY') return { label: 'BUY LONG', kind: 'long' };
-  if (s.open_side === 'SELL') return { label: 'SELL SCALP', kind: 'short' };
+  if (s.open_side === 'BUY') {
+    const t = tradeLabel(s);
+    return { label: t, kind: t.includes('SCALP') ? 'short' : 'long' };
+  }
+  if (s.open_side === 'SELL') {
+    const t = tradeLabel(s);
+    return { label: t, kind: t.includes('LONG') ? 'long' : 'short' };
+  }
   if (s.running && !s.open_side) {
-    const m = s.ohlc_10s?.market;
-    if (m === 'MOVING') return { label: 'WAIT ENTRY · 10s MOVING', kind: 'entry' };
-    if (m === 'QUIET') return { label: 'WAIT ENTRY · 10s QUIET', kind: 'entry' };
-    return { label: 'WAIT ENTRY · 10s', kind: 'entry' };
+    const r = (s.regime || 'UNKNOWN').toUpperCase();
+    return { label: `WAIT ENTRY · ${r}`, kind: 'entry' };
   }
   return { label: 'FLAT', kind: 'flat' };
+}
+
+function tradeLabel(s: RobotSession): string {
+  if (!s.open_side) return 'FLAT';
+  const r = (s.regime || '').toUpperCase();
+  const long =
+    r === 'TREND_UP' ||
+    r === 'TREND_DOWN' ||
+    r === 'PULLBACK_UPTREND' ||
+    r === 'PULLBACK_DOWNTREND';
+  const scalp =
+    r === 'BREAKOUT_UP' ||
+    r === 'BREAKOUT_DOWN' ||
+    r === 'FAILED_BREAKOUT_UP' ||
+    r === 'FAILED_BREAKOUT_DOWN' ||
+    r === 'COMPRESSION' ||
+    r === 'EXPANSION' ||
+    r === 'RANGE' ||
+    r === 'REVERSAL_CANDIDATE' ||
+    r === 'TRANSITION';
+  if (long) return `${s.open_side} LONG`;
+  if (scalp) return `${s.open_side} SCALP`;
+  return s.open_side;
 }
 
 function lastLog(s: RobotSession): string {
@@ -288,7 +316,7 @@ export function RobotDeskPage() {
               <div className="robot-arena-kicker">VS SYSTEM // MULTI-CLIENT BOARD</div>
               <h1 className="robot-arena-title">ROBOT COMMAND</h1>
               <p className="robot-arena-sub">
-                Visi klientu roboti vienā lapā · BUY LONG / SELL SCALP · mini live log katram
+                Visi 14 režīmi · BUY LONG / SELL LONG / BUY SCALP / SELL SCALP · mini live log katram
               </p>
             </div>
           </div>
@@ -426,7 +454,7 @@ export function RobotDeskPage() {
                   </strong>
                 </div>
                 <div className="robot-mini-mode">
-                  {s.running ? s.mode : 'STOPPED'}
+                  {s.running ? `${s.mode} · ${s.regime || 'UNKNOWN'}` : 'STOPPED'}
                 </div>
                 <div className="robot-mini-log mono">{lastLog(s)}</div>
                 <div className="robot-mini-actions">
@@ -493,6 +521,7 @@ export function RobotDeskPage() {
                   {focused.ohlc_10s?.market || 'SEEDING'}
                 </div>
                 <div>MODE · {focused.running ? focused.mode : 'STOPPED'}</div>
+                <div>REGIME · {(focused.regime || 'UNKNOWN').toUpperCase()}</div>
                 <div>ENTRY · {fmt(focused.entry_price)}</div>
                 <div>SAFETY SL · {fmt(focused.safety_sl)}</div>
                 <div>DEAL · {focused.deal_id || '—'}</div>

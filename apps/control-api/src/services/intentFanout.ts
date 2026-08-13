@@ -17,6 +17,7 @@ import {
   type ActiveSubscription,
 } from './clientSubscriptions.js';
 import { formatTradeLabel } from './tradePresentation.js';
+import { notePipelineRegime } from './regimes.js';
 import {
   attachManageOnlyRobot,
   listRobotSessions,
@@ -29,6 +30,7 @@ export type PipelineIntentInput = {
   instrument_id?: number | null;
   setup_id?: number | null;
   setup_type?: string | null;
+  regime?: string | null;
   reference_price?: number | null;
   decision?: string;
   explanation?: string | null;
@@ -41,6 +43,7 @@ export type FanoutResult = {
   epic: string;
   direction: 'BUY' | 'SELL';
   setup_type: string | null;
+  regime: string | null;
   subscribers: number;
   executed: Array<{
     client_id: number;
@@ -79,8 +82,9 @@ export async function executePipelineIntent(
   const epic = String(intent.epic || '').trim();
   const direction = intent.direction === 'SELL' ? 'SELL' : 'BUY';
   const setupType = intent.setup_type ? String(intent.setup_type) : null;
-
+  const regime = intent.regime ? String(intent.regime) : null;
   if (!epic) throw new Error('epic required');
+  if (regime) notePipelineRegime(epic, regime);
   if (intent.decision && String(intent.decision).toUpperCase() !== 'ENTRY_READY') {
     throw new Error('Only EntryReady intents are executable');
   }
@@ -98,6 +102,7 @@ export async function executePipelineIntent(
       sub,
       direction,
       setupType,
+      regime,
       intent.reference_price,
       idem
     );
@@ -108,6 +113,7 @@ export async function executePipelineIntent(
     epic,
     direction,
     setup_type: setupType,
+    regime,
     subscribers: subs.length,
     executed,
   };
@@ -150,6 +156,7 @@ async function executeForSubscription(
   sub: ActiveSubscription,
   direction: 'BUY' | 'SELL',
   setupType: string | null,
+  regime: string | null,
   referencePrice: number | null | undefined,
   idempotencyKey: string | null
 ): Promise<ExecRow> {
@@ -356,11 +363,12 @@ async function executeForSubscription(
       market: sub.epic,
       display_name: sub.display_name,
       side: direction,
-      trade_type: formatTradeLabel(direction, setupType),
+      trade_type: formatTradeLabel(direction, setupType, regime),
       lot_size: sub.lot_size,
       entry_price: entry,
       account_id: sub.account_id,
       setup_type: setupType,
+      regime,
     });
 
     // Manage-only robot: exits / health reads — no entry brain
@@ -373,6 +381,8 @@ async function executeForSubscription(
         side: direction,
         entry_price: entry,
         deal_reference: result.deal_reference || null,
+        regime,
+        setup_type: setupType,
       });
     } catch {
       /* manage attach best-effort */
@@ -435,6 +445,7 @@ export async function ingestAndExecuteIntent(
           epic: String(intent.epic || ''),
           direction: intent.direction === 'SELL' ? 'SELL' : 'BUY',
           setup_type: intent.setup_type ? String(intent.setup_type) : null,
+          regime: intent.regime ? String(intent.regime) : null,
           subscribers: 0,
           executed: [],
         },
@@ -448,8 +459,8 @@ export async function ingestAndExecuteIntent(
     const ins = await pool.query(
       `INSERT INTO trade_intents
          (setup_id, instrument_id, direction, decision, reference_price,
-          explanation, reason_codes, epic, setup_type, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'PENDING')
+          explanation, reason_codes, epic, setup_type, regime, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'PENDING')
        RETURNING id`,
       [
         intent.setup_id ?? 0,
@@ -461,6 +472,7 @@ export async function ingestAndExecuteIntent(
         intent.reason_codes ? JSON.stringify(intent.reason_codes) : null,
         intent.epic,
         intent.setup_type ?? null,
+        intent.regime ?? null,
       ]
     );
     intentId = Number(ins.rows[0].id);

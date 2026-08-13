@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { pool } from '../db/pool.js';
 import { fanoutEntryIntent, routeIntentToSubscriptions } from '../services/intentFanout.js';
+import { parseRegimeFromExplanation } from '../services/regimes.js';
 import {
   authorizePipelineRequest,
   getPipelineBridgeStatus,
@@ -68,6 +69,7 @@ export async function registerPipelineRoutes(app: FastifyInstance): Promise<void
       instrument_id?: number;
       setup_id?: number;
       setup_type?: string | null;
+      regime?: string | null;
       reference_price?: number | null;
       decision?: string;
       explanation?: string | null;
@@ -102,6 +104,7 @@ export async function registerPipelineRoutes(app: FastifyInstance): Promise<void
         instrument_id: body.instrument_id ?? null,
         setup_id: body.setup_id ?? null,
         setup_type: body.setup_type ?? null,
+        regime: body.regime || parseRegimeFromExplanation(body.explanation ?? null),
         reference_price: body.reference_price ?? null,
         decision: body.decision || 'ENTRY_READY',
         explanation: body.explanation ?? null,

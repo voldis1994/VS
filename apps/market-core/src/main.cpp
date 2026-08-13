@@ -192,6 +192,10 @@ static int run_live_bridge(mr::MarketCorePipeline& pipeline) {
             body["intent_id"] = static_cast<int>(intent.id);
             body["idempotency_key"] = "mc-" + std::to_string(intent.id) + "-" + epic;
             body["reason_codes"] = intent.reason_codes;
+            body["setup_type"] = intent.setup_type;
+            body["regime"] = intent.regime.empty()
+                ? mr::regime_name(pipeline.latest_regime(intent.instrument).current)
+                : intent.regime;
             nlohmann::json resp;
             if (http_json("POST", api + "/api/pipeline/intents", "x-pipeline-token", token, body,
                           &resp)) {

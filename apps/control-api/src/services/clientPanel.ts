@@ -2,6 +2,7 @@ import { pool } from '../db/pool.js';
 import { listRobotSessions } from './robotDesk.js';
 import { emitToClient } from './clientEvents.js';
 import { formatTradeLabel } from './tradePresentation.js';
+import { currentRegime } from './regimes.js';
 import {
   activateSubscription,
   deactivateSubscription,
@@ -36,6 +37,7 @@ export type ClientLiveTrade = {
   display_name: string;
   side: 'BUY' | 'SELL';
   trade_type: string;
+  regime: string | null;
   lot_size: number;
   entry_price: number | null;
   status: 'OPEN';
@@ -234,11 +236,13 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
   let live_trade: ClientLiveTrade = null;
   if (robot?.running && robot.open_side) {
     const side = robot.open_side as 'BUY' | 'SELL';
+    const regime = robot.regime || currentRegime(robot.epic)?.current || null;
     live_trade = {
       market: robot.epic,
       display_name: robot.display_name,
       side,
-      trade_type: formatTradeLabel(side) || side,
+      trade_type: formatTradeLabel(side, null, regime) || side,
+      regime,
       lot_size: robot.lot_size,
       entry_price: robot.entry_price,
       status: 'OPEN',
@@ -288,11 +292,13 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
             : null;
           if (match) {
             const side = match.direction;
+            const regime = currentRegime(match.epic)?.current || null;
             live_trade = {
               market: match.epic,
               display_name: c.panel_display_name || match.epic,
               side,
-              trade_type: formatTradeLabel(side) || side,
+              trade_type: formatTradeLabel(side, null, regime) || side,
+              regime,
               lot_size:
                 match.size > 0
                   ? match.size

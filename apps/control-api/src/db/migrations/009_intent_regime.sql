@@ -1,0 +1,2 @@
+ALTER TABLE trade_intents
+  ADD COLUMN IF NOT EXISTS regime VARCHAR(40);

@@ -19,6 +19,7 @@ type LiveTrade = {
   display_name: string;
   side: 'BUY' | 'SELL';
   trade_type: string;
+  regime?: string | null;
   lot_size: number;
   entry_price: number | null;
   status: 'OPEN';
@@ -400,6 +401,9 @@ export function ClientPanelPage() {
               <div className="ccp-live-state">TRADE OPENED</div>
               <div className="ccp-live-market">{live.display_name || live.market}</div>
               <div className="ccp-live-type">{live.trade_type}</div>
+              {live.regime && live.regime !== 'UNKNOWN' && (
+                <div className="ccp-live-regime">{live.regime}</div>
+              )}
               <div className="ccp-live-lot">{fmtLot(live.lot_size)} LOT</div>
               {live.entry_price != null && (
                 <div className="ccp-live-entry">ENTRY {live.entry_price}</div>

@@ -64,6 +64,8 @@ TradeIntent EntryEngine::evaluate(
     intent.evidence_report_id = evidence.id;
     intent.market_state_snapshot_id = state.snapshot_id;
     intent.model_version = model_.model_version();
+    intent.setup_type = setup.setup_type;
+    intent.regime = regime_name(regime.current);
 
     if (!evidence.is_valid) {
         intent.decision = EntryDecision::NoTrade;

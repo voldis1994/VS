@@ -80,6 +80,7 @@ export async function registerSystemRoutes(
   app.get('/api/system/mode', async () => ({
     mode: process.env.OPERATING_MODE || 'LIVE',
     live_enabled: liveEnabled(),
+    allowed: ['REPLAY', 'PAPER', 'DEMO', 'LIVE'],
   }));
 
   app.post('/api/system/mode', async (request, reply) => {

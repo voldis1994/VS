@@ -53,6 +53,8 @@ type MarketOpt = {
   lot_size: number;
 };
 
+const OPERATING_MODES = ['REPLAY', 'PAPER', 'DEMO', 'LIVE'] as const;
+
 export function OverviewPage() {
   const {
     status,
@@ -176,6 +178,24 @@ export function OverviewPage() {
   const profitFactor =
     dailySeries.filter((v) => v > 0).reduce((s, v) => s + v, 0) /
       Math.max(1, Math.abs(dailySeries.filter((v) => v < 0).reduce((s, v) => s + v, 0))) || 0;
+
+  const applyOperatingMode = async (mode: string) => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      await apiFetch('/api/system/mode', {
+        method: 'POST',
+        body: JSON.stringify({ mode }),
+      });
+      setRunnerOn(mode === 'LIVE');
+      setMsg(`Operating mode → ${mode}`);
+      refreshDesk();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Mode change failed');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const startRunner = async () => {
     setBusy(true);
@@ -301,13 +321,30 @@ export function OverviewPage() {
           </div>
           <div className="metric-row" style={{ marginTop: 8 }}>
             <div className="metric-box">
-              <div className="label">Brain mode</div>
-              <div className="value" style={{ fontSize: 12 }}>BALANCED</div>
+              <div className="label">Operating mode</div>
+              <div className="value" style={{ fontSize: 12 }}>
+                {(status?.mode || 'LIVE').toUpperCase()}
+              </div>
             </div>
             <div className="metric-box">
               <div className="label">Risk level</div>
               <div className="value" style={{ fontSize: 12 }}>MEDIUM</div>
             </div>
+          </div>
+          <div className="regime-catalog" style={{ marginTop: 10 }}>
+            {OPERATING_MODES.map((m) => (
+              <button
+                key={m}
+                type="button"
+                className={`regime-chip ${
+                  (status?.mode || 'LIVE').toUpperCase() === m ? 'on up' : 'flat'
+                }`}
+                disabled={busy}
+                onClick={() => void applyOperatingMode(m)}
+              >
+                {m}
+              </button>
+            ))}
           </div>
           <div className="actions" style={{ marginTop: 12, justifyContent: 'center' }}>
             <button className="btn btn-go" disabled={busy || runnerOn} onClick={() => void startRunner()}>

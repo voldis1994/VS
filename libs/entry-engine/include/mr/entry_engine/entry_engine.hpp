@@ -49,6 +49,8 @@ struct TradeIntent {
     std::vector<std::string> reason_codes;
     std::string human_explanation;
     std::string model_version;
+    std::string setup_type;
+    std::string regime;
 };
 
 struct BrokerQuote {

@@ -34,7 +34,7 @@ describe('intent fan-out routing isolation', () => {
 });
 
 describe('honest trade labels', () => {
-  it('shows BUY/SELL only — never invents LONG/SCALP from direction', () => {
+  it('shows BUY/SELL only when no regime/setup — never invents LONG/SCALP from direction', () => {
     expect(formatTradeSide('BUY')).toBe('BUY');
     expect(formatTradeSide('SELL')).toBe('SELL');
     expect(formatTradeLabel('BUY')).toBe('BUY');
@@ -43,8 +43,10 @@ describe('honest trade labels', () => {
     expect(formatTradeLabel('SELL')).not.toMatch(/SCALP/);
   });
 
-  it('appends real setup_type from pipeline when present', () => {
-    expect(formatTradeLabel('BUY', 'CONTINUATION')).toBe('BUY · CONTINUATION');
-    expect(formatTradeLabel('SELL', 'PULLBACK')).toBe('SELL · PULLBACK');
+  it('uses all four original trade-type names from real classification', () => {
+    expect(formatTradeLabel('BUY', 'CONTINUATION')).toBe('BUY LONG');
+    expect(formatTradeLabel('SELL', 'PULLBACK')).toBe('SELL LONG');
+    expect(formatTradeLabel('BUY', null, 'BREAKOUT_UP')).toBe('BUY SCALP');
+    expect(formatTradeLabel('SELL', null, 'COMPRESSION')).toBe('SELL SCALP');
   });
 });

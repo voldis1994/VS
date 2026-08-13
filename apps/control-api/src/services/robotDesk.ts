@@ -17,11 +17,17 @@ import {
 import { emitToClient } from './clientEvents.js';
 import { mapTradeType } from './tradePresentation.js';
 import {
+  observeClosedBars,
+  normalizeRegime,
+  type RegimeName,
+} from './regimes.js';
+import {
   aggregateSecondsToTen,
   decideFromClosed10s,
   emptyTenSecState,
   publicOhlc10s,
   updateTenSecondOhlc,
+  type TenSecBar,
   type TenSecState,
 } from './tenSecondOhlc.js';
 
@@ -60,6 +66,7 @@ export type RobotSession = {
   peak_retention: number | null;
   unrealized: number | null;
   mode: 'FLAT' | 'MANAGE' | 'ENTRY';
+  regime: RegimeName;
   orders_placed: number;
   exits_done: number;
   reads_ok: number;
@@ -91,6 +98,7 @@ type Internal = RobotSession & {
   ohlcState: TenSecState;
   last_second_fetch_ms: number;
   last_closed_bar_key: string;
+  closedBars: TenSecBar[];
 };
 
 const ACTIVE_CADENCE_MS = 2_000;
@@ -160,9 +168,23 @@ function publicSession(s: Internal): RobotSession {
     ohlcState: _ohlc,
     last_second_fetch_ms: _sec,
     last_closed_bar_key: _bar,
+    closedBars: _bars,
     ...rest
   } = s;
   return { ...rest, ohlc_10s: publicOhlc10s(s.ohlcState) };
+}
+
+function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
+  const incoming = bars?.length
+    ? bars
+    : s.ohlcState.last_closed
+      ? [s.ohlcState.last_closed]
+      : [];
+  if (incoming.length) {
+    const snap = observeClosedBars(s.epic, incoming, s.display_name);
+    s.regime = snap.current;
+    if (bars?.length) s.closedBars = bars.slice(-24);
+  }
 }
 
 function clearTradeState(s: Internal) {
@@ -498,7 +520,7 @@ async function exitTrade(
       market: s.epic,
       display_name: s.display_name,
       side: s.open_side,
-      trade_type: mapTradeType(s.open_side),
+      trade_type: mapTradeType(s.open_side, null, s.regime),
       lot_size: s.lot_size,
       reason,
     });
@@ -744,7 +766,7 @@ async function enterTrade(
       market: s.epic,
       display_name: s.display_name,
       side: direction,
-      trade_type: mapTradeType(direction),
+      trade_type: mapTradeType(direction, null, s.regime),
       lot_size: s.lot_size,
       entry_price: s.entry_price,
     });
@@ -886,6 +908,9 @@ async function robotCycle(s: Internal) {
     if (quote.mid != null) {
       s.ohlcState = updateTenSecondOhlc(s.ohlcState, quote.mid, Date.now());
       s.ohlc_10s = publicOhlc10s(s.ohlcState);
+      if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
+        applyRobotRegime(s, [s.ohlcState.last_closed]);
+      }
     }
 
     // Sync truth from broker — source of ONE TRADE ONLY
@@ -1017,6 +1042,7 @@ async function robotCycle(s: Internal) {
           };
           if (isNew) s.last_closed_bar_key = key;
           s.ohlc_10s = publicOhlc10s(s.ohlcState);
+          applyRobotRegime(s, bars);
         }
       }
     }
@@ -1024,7 +1050,7 @@ async function robotCycle(s: Internal) {
     const bar = s.ohlcState.last_closed;
     const ohlc = s.ohlc_10s;
     const ohlcLine = bar
-      ? `10s O=${bar.open.toFixed(2)} H=${bar.high.toFixed(2)} L=${bar.low.toFixed(2)} C=${bar.close.toFixed(2)} ${ohlc.market}`
+      ? `10s O=${bar.open.toFixed(2)} H=${bar.high.toFixed(2)} L=${bar.low.toFixed(2)} C=${bar.close.toFixed(2)} ${s.regime}`
       : '10s OHLC seeding from quotes + Capital SECOND';
 
     let direction: 'BUY' | 'SELL' | null = null;
@@ -1190,6 +1216,8 @@ export async function startRobotSession(input: {
     ohlcState: emptyTenSecState(),
     last_second_fetch_ms: 0,
     last_closed_bar_key: '',
+    closedBars: [],
+    regime: 'UNKNOWN',
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
 
@@ -1236,6 +1264,8 @@ export async function attachManageOnlyRobot(input: {
   side: 'BUY' | 'SELL';
   entry_price: number | null;
   deal_reference?: string | null;
+  regime?: string | null;
+  setup_type?: string | null;
 }): Promise<RobotSession> {
   const session = await startRobotSession({
     account_id: input.account_id,
@@ -1253,12 +1283,15 @@ export async function attachManageOnlyRobot(input: {
     internal.mode = 'MANAGE';
     internal.last_deal_reference = input.deal_reference || null;
     internal.orders_placed = Math.max(internal.orders_placed, 1);
+    if (input.regime) internal.regime = normalizeRegime(input.regime);
     pushTick(internal, {
       phase: 'ORDER',
       bid: null,
       ask: null,
       mid: input.entry_price,
-      detail: `PIPELINE FILL ${input.side} ${input.display_name} lot=${input.lot_size} · manage-only attached`,
+      detail: `PIPELINE FILL ${input.side} ${input.display_name} lot=${input.lot_size} · ${
+        internal.regime
+      } · manage-only attached`,
     });
   }
   return getRobotSession(session.id) || session;

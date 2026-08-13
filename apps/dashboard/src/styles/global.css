@@ -1926,6 +1926,11 @@ tr:hover td { background: rgba(57, 255, 20, 0.06); }
   letter-spacing: 0.08em;
   font-weight: 700;
 }
+.ccp-live-regime {
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  color: rgba(0, 229, 255, 0.85);
+}
 .ccp-live-lot {
   font-size: 18px;
   letter-spacing: 0.12em;
@@ -1953,4 +1958,40 @@ tr:hover td { background: rgba(57, 255, 20, 0.06); }
   color: rgba(200, 220, 180, 0.65);
   letter-spacing: 0.16em;
   font-size: 12px;
+}
+
+.regime-catalog {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.regime-chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(180, 255, 0, 0.22);
+  background: rgba(8, 14, 8, 0.7);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  padding: 6px 10px;
+  cursor: default;
+}
+button.regime-chip { cursor: pointer; }
+.regime-chip.on {
+  color: #f2ffe0;
+  border-color: rgba(180, 255, 0, 0.7);
+  box-shadow: var(--neon);
+}
+.regime-chip.up.on, .regime-chip.up {
+  border-color: rgba(180, 255, 0, 0.45);
+}
+.regime-chip.down.on, .regime-chip.down {
+  border-color: rgba(255, 59, 107, 0.45);
+}
+.regime-chip.scalp.on, .regime-chip.scalp {
+  border-color: rgba(0, 229, 255, 0.45);
+}
+.regime-chip.flat.on {
+  border-color: rgba(200, 200, 180, 0.4);
 }

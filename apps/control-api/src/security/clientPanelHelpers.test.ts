@@ -4,10 +4,12 @@ import { formatTradeLabel } from '../services/tradePresentation.js';
 import { hashSessionToken, parseCookieHeader } from './clientSession.js';
 
 describe('client panel helpers', () => {
-  it('maps trade labels honestly (BUY/SELL only)', () => {
+  it('maps trade labels honestly (BUY/SELL only without classification)', () => {
     expect(formatTradeLabel('BUY')).toBe('BUY');
     expect(formatTradeLabel('SELL')).toBe('SELL');
     expect(formatTradeLabel(null)).toBeNull();
+    expect(formatTradeLabel('BUY', null, 'TREND_UP')).toBe('BUY LONG');
+    expect(formatTradeLabel('SELL', null, 'BREAKOUT_DOWN')).toBe('SELL SCALP');
   });
 
   it('validates lot size against min/max/step', () => {
