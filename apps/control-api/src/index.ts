@@ -18,6 +18,7 @@ import { registerRobotDeskRoutes } from './routes/robotDesk.js';
 import { registerClientAuthRoutes } from './routes/clientAuth.js';
 import { registerClientPanelRoutes } from './routes/clientPanel.js';
 import { registerPipelineRoutes } from './routes/pipeline.js';
+import { registerClientPanelStatic } from './services/clientPanelStatic.js';
 import { TelemetryBroadcaster } from './ws/telemetry.js';
 import { ClientEventHub, setClientEventHub } from './services/clientEvents.js';
 import { authMiddleware } from './middleware/auth.js';
@@ -97,6 +98,7 @@ async function main() {
   await registerPipelineRoutes(app);
   await registerAuditRoutes(app);
   await registerSettingsRoutes(app);
+  await registerClientPanelStatic(app);
 
   app.get('/ws', { websocket: true }, (socket) => {
     telemetry.addClient(socket);

@@ -190,16 +190,14 @@ set "EX=%ROOT%\build\windows-debug\apps\execution-service\execution-service.exe"
 if not exist "%EX%" set "EX=%ROOT%\build\windows-release\apps\execution-service\execution-service.exe"
 if exist "%EX%" start "MR-Execution" /D "%ROOT%" cmd /k "%EX%" --mode LIVE
 
-start "MR-ControlAPI" /D "%ROOT%\apps\control-api" cmd /k npm run dev
-echo [..] gaidu API :3000 ...
+start "MR-ControlAPI" /D "%ROOT%\apps\control-api" cmd /k set CLIENT_PANEL_DIST=%ROOT%\apps\dashboard\dist-client^& npm run dev
+echo [..] gaidu API + client panel :3000 ...
 call :wait_port 3000 40
 start "MR-Dashboard" /D "%ROOT%\apps\dashboard" cmd /k npm run dev
-start "MR-ClientPanel" /D "%ROOT%\apps\dashboard" cmd /k npm run dev:client
-echo [..] gaidu client panel :5174 ...
-call :wait_port 5174 40
 start http://localhost:5173/clients
 echo [OK] admin  http://localhost:5173/
 echo [OK] klientu kodi: http://localhost:5173/clients
+echo [OK] klienta tunelis iet uz API :3000 (NE Vite)
 echo.
 
 echo [5/5] Klienta tunelis - SUTI SO SAITI KLIENTAM
@@ -213,7 +211,7 @@ echo.
 
 where cloudflared >nul 2>&1
 if not errorlevel 1 (
-  cloudflared tunnel --url http://127.0.0.1:5174
+  cloudflared tunnel --url http://127.0.0.1:3000
   goto :eof
 )
 where npm >nul 2>&1
@@ -223,7 +221,7 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-npx --yes cloudflared tunnel --url http://127.0.0.1:5174
+npx --yes cloudflared tunnel --url http://127.0.0.1:3000
 exit /b %ERRORLEVEL%
 
 :wait_port

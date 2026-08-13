@@ -10,6 +10,17 @@ const PUBLIC_PATHS = [
   '/ws/client',
 ];
 
+/** Static client panel (GET / /assets /logo.svg) is public — not Vite, not admin. */
+export function isPublicUnauthedPath(method: string, urlPath: string): boolean {
+  const path = urlPath.split('?')[0] || '/';
+  if (PUBLIC_PATHS.some((p) => path === p || path.startsWith(p))) return true;
+  const m = method.toUpperCase();
+  if ((m === 'GET' || m === 'HEAD') && !path.startsWith('/api') && !path.startsWith('/ws')) {
+    return true;
+  }
+  return false;
+}
+
 export async function authMiddleware(
   request: FastifyRequest,
   reply: FastifyReply
@@ -26,7 +37,7 @@ export async function authMiddleware(
     return;
   }
 
-  if (PUBLIC_PATHS.some((p) => path === p || path.startsWith(p))) return;
+  if (isPublicUnauthedPath(request.method, path)) return;
 
   const token = request.headers['x-admin-token'] as string | undefined;
   const expected = process.env.API_ADMIN_TOKEN;
