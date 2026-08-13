@@ -3,6 +3,24 @@ import { robotIdFor } from '../services/robotDesk.js';
 import { isPublicUnauthedPath } from '../middleware/auth.js';
 
 describe('multi-client isolation invariants', () => {
+  it('STOP kills entry brains only — manage-only open trade on same account survives', () => {
+    const robots = [
+      { id: 'a-entry', account_id: 1, running: true, entry_enabled: true, open_side: null },
+      { id: 'a-manage', account_id: 1, running: true, entry_enabled: false, open_side: 'BUY' as const },
+      { id: 'b-manage', account_id: 2, running: true, entry_enabled: false, open_side: 'SELL' as const },
+    ];
+    const stopEntry = robots
+      .filter((s) => s.account_id === 1 && s.running && s.entry_enabled)
+      .map((s) => s.id);
+    const stopFlat = robots
+      .filter((s) => s.account_id === 1 && s.running && !s.entry_enabled && !s.open_side)
+      .map((s) => s.id);
+    expect(stopEntry).toEqual(['a-entry']);
+    expect(stopFlat).toEqual([]);
+    expect(robots.find((s) => s.id === 'a-manage')?.open_side).toBe('BUY');
+    expect(robots.find((s) => s.id === 'b-manage')?.running).toBe(true);
+  });
+
   it('robot ids are per account+epic (Client A ≠ Client B)', () => {
     const aGold = robotIdFor(17, 'GOLD');
     const bGold = robotIdFor(18, 'GOLD');

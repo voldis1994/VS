@@ -21,6 +21,7 @@ import {
   normalizeRegime,
   type RegimeName,
 } from './regimes.js';
+import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
 import {
   aggregateSecondsToTen,
   decideFromClosed10s,
@@ -285,10 +286,6 @@ function expectedStopFromDistance(
   return direction === 'BUY' ? ref - dist : ref + dist;
 }
 
-function favorableMove(side: 'BUY' | 'SELL', entry: number, mid: number): number {
-  return side === 'BUY' ? mid - entry : entry - mid;
-}
-
 function updateExcursion(s: Internal, mid: number) {
   if (!s.open_side || s.entry_price == null) return;
   const fav = favorableMove(s.open_side, s.entry_price, mid);
@@ -335,6 +332,24 @@ export function listRobotSessions(): RobotSession[] {
   return [...sessions.values()]
     .sort((a, b) => b.started_at.localeCompare(a.started_at))
     .map(publicSession);
+}
+
+/** Stop only entry brains — never kill a manage-only robot sitting on an open trade. */
+export async function stopEntryRobotsForAccount(accountId: number): Promise<void> {
+  for (const s of [...sessions.values()]) {
+    if (s.account_id === accountId && s.running && s.entry_enabled) {
+      await stopRobotSession(s.id);
+    }
+  }
+}
+
+/** Stop manage-only robots that are already flat (client STOP, no open trade). */
+export async function stopFlatManageRobotsForAccount(accountId: number): Promise<void> {
+  for (const s of [...sessions.values()]) {
+    if (s.account_id === accountId && s.running && !s.entry_enabled && !s.open_side) {
+      await stopRobotSession(s.id);
+    }
+  }
 }
 
 export async function stopRobotSession(id: string): Promise<RobotSession | null> {
@@ -406,60 +421,6 @@ async function resolveDealId(
     }
   }
   return null;
-}
-
-/**
- * Manage exit — give the trade room to develop (~10s scalp with breathing room).
- * Broker SAFETY SL is the hard cushion; this is best-outcome management only.
- */
-function decideBestOutcomeExit(s: Internal, mid: number): { exit: boolean; reason: string } {
-  if (!s.open_side || s.entry_price == null) return { exit: false, reason: '' };
-
-  const entry = s.entry_price;
-  const fav = favorableMove(s.open_side, entry, mid);
-  const absEntry = Math.max(Math.abs(entry), 1e-9);
-  // Wider targets — was ~0.08% / ~0.12% and clipped every trade
-  const tp = Math.max(absEntry * 0.0035, 0.35); // ~0.35% take profit
-  const sl = Math.max(absEntry * 0.0022, 0.22); // soft manage stop (~0.22%)
-  const mfeFloor = Math.max(absEntry * 0.0012, 0.12); // need real MFE before peak logic
-
-  if (fav <= -sl) {
-    return { exit: true, reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}` };
-  }
-
-  // Only protect peak after meaningful excursion; allow ~70% giveback before exit
-  if (s.mfe >= mfeFloor && s.peak_retention != null && s.peak_retention < 0.3) {
-    return {
-      exit: true,
-      reason: `PeakProtection · retention ${(s.peak_retention * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} → lock best`,
-    };
-  }
-
-  if (fav >= tp) {
-    return {
-      exit: true,
-      reason: `Target / best outcome · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)}`,
-    };
-  }
-
-  // Harvest only after large giveback while still green
-  if (s.mfe >= mfeFloor && fav > 0 && s.peak_retention != null && s.peak_retention < 0.4) {
-    return {
-      exit: true,
-      reason: `BestOutcome harvest · UPL ${fav.toFixed(5)} after MFE ${s.mfe.toFixed(5)} (ret ${(s.peak_retention * 100).toFixed(0)}%)`,
-    };
-  }
-
-  const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
-  // ~10s horizon with room: don't time-decay until 8 minutes
-  if (heldMs > 480_000 && fav >= 0 && s.mfe >= mfeFloor * 0.5) {
-    return {
-      exit: true,
-      reason: `TimeDecay · held ${Math.round(heldMs / 1000)}s · realize non-negative best UPL ${fav.toFixed(5)}`,
-    };
-  }
-
-  return { exit: false, reason: '' };
 }
 
 async function exitTrade(
@@ -1267,6 +1228,30 @@ export async function attachManageOnlyRobot(input: {
   regime?: string | null;
   setup_type?: string | null;
 }): Promise<RobotSession> {
+  const id = robotIdFor(input.account_id, input.epic);
+  const existing = sessions.get(id);
+  if (existing?.running) {
+    existing.entry_enabled = false;
+    existing.trading_enabled = true;
+    existing.open_side = input.side;
+    existing.mode = 'MANAGE';
+    if (existing.entry_price == null) existing.entry_price = input.entry_price;
+    if (!existing.entry_at) existing.entry_at = new Date().toISOString();
+    if (input.deal_reference) existing.last_deal_reference = input.deal_reference;
+    if (input.regime) existing.regime = normalizeRegime(input.regime);
+    existing.orders_placed = Math.max(existing.orders_placed, 1);
+    pushTick(existing, {
+      phase: 'ORDER',
+      bid: null,
+      ask: null,
+      mid: input.entry_price,
+      detail: `PIPELINE FILL ${input.side} ${input.display_name} lot=${input.lot_size} · ${
+        existing.regime
+      } · manage-only (kept MFE ${existing.mfe.toFixed(5)})`,
+    });
+    return publicSession(existing);
+  }
+
   const session = await startRobotSession({
     account_id: input.account_id,
     epic: input.epic,

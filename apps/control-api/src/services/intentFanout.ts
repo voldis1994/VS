@@ -18,11 +18,9 @@ import {
 } from './clientSubscriptions.js';
 import { formatTradeLabel } from './tradePresentation.js';
 import { notePipelineRegime } from './regimes.js';
-import {
-  attachManageOnlyRobot,
-  listRobotSessions,
-  stopRobotSession,
-} from './robotDesk.js';
+import { attachManageOnlyRobot } from './robotDesk.js';
+
+export { stopEntryRobotsForAccount } from './robotDesk.js';
 
 export type PipelineIntentInput = {
   epic: string;
@@ -507,15 +505,6 @@ export async function ingestAndExecuteIntent(
 
 /** Alias matching Client Panel docs / E2E trace naming. */
 export const fanoutEntryIntent = ingestAndExecuteIntent;
-
-/** Stop robotDesk entry brains for this account (Client Panel must not use them). */
-export async function stopEntryRobotsForAccount(accountId: number): Promise<void> {
-  for (const s of listRobotSessions()) {
-    if (s.account_id === accountId && s.running) {
-      await stopRobotSession(s.id);
-    }
-  }
-}
 
 /** Pure routing helper for tests — mirrors ExecutionRouter filters. */
 export function routeIntentToSubscriptions(

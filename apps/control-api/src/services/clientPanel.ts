@@ -1,5 +1,5 @@
 import { pool } from '../db/pool.js';
-import { listRobotSessions } from './robotDesk.js';
+import { listRobotSessions, stopEntryRobotsForAccount, stopFlatManageRobotsForAccount } from './robotDesk.js';
 import { emitToClient } from './clientEvents.js';
 import { formatTradeLabel } from './tradePresentation.js';
 import { currentRegime } from './regimes.js';
@@ -10,7 +10,6 @@ import {
   noteBrokerError,
   noteBrokerOk,
 } from './clientSubscriptions.js';
-import { stopEntryRobotsForAccount } from './intentFanout.js';
 import {
   getPipelineBridgeStatus,
   isEpicBeingAnalyzed,
@@ -459,6 +458,7 @@ export async function stopClientRobot(clientId: number): Promise<ClientPanelStat
   }
   if (account) {
     await stopEntryRobotsForAccount(account.account_id);
+    await stopFlatManageRobotsForAccount(account.account_id);
     await deactivateSubscription({
       clientId,
       accountId: account.account_id,
