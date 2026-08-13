@@ -12,6 +12,59 @@ type RobotTick = {
   detail: string;
 };
 
+const ALL_REGIMES = [
+  'UNKNOWN',
+  'RANGE',
+  'TREND_UP',
+  'TREND_DOWN',
+  'PULLBACK_UPTREND',
+  'PULLBACK_DOWNTREND',
+  'COMPRESSION',
+  'EXPANSION',
+  'BREAKOUT_UP',
+  'BREAKOUT_DOWN',
+  'FAILED_BREAKOUT_UP',
+  'FAILED_BREAKOUT_DOWN',
+  'REVERSAL_CANDIDATE',
+  'TRANSITION',
+] as const;
+
+type FeedLeg = {
+  sender_id: string;
+  name: string;
+  ok: boolean;
+  mid: number | null;
+  latency_ms: number;
+  detail?: string;
+};
+
+type DecisionChain = {
+  feeds: string;
+  ohlc: string;
+  regime: string;
+  setup: string | null;
+  action: string;
+};
+
+type BoardMeta = {
+  regimes: string[];
+  trade_types: string[];
+  active_regimes: string[];
+  feed_sender_count: number;
+  feed_contributing: number;
+  chain: string;
+};
+
+type DataSender = {
+  sender_id: string;
+  name: string;
+  kind: string;
+  status: string;
+  trust: string;
+  environment: string;
+  latency_ms: number | null;
+};
+
 type RobotSession = {
   id: string;
   account_id: number;
@@ -42,6 +95,8 @@ type RobotSession = {
   feed_contributing?: number;
   feed_sender_count?: number;
   feed_agreement?: string | null;
+  feed_legs?: FeedLeg[];
+  decision_chain?: DecisionChain;
   ohlc_10s?: {
     last_o: number | null;
     last_h: number | null;
@@ -115,6 +170,8 @@ export function RobotDeskPage() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const [sessions, setSessions] = useState<RobotSession[]>([]);
+  const [board, setBoard] = useState<BoardMeta | null>(null);
+  const [senders, setSenders] = useState<DataSender[]>([]);
   const [focusId, setFocusId] = useState<string | null>(params.get('id'));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -153,9 +210,15 @@ export function RobotDeskPage() {
 
   const refresh = useCallback(async () => {
     try {
-      const list = await apiFetch<{ sessions: RobotSession[] }>('/api/robot-desk');
+      const list = await apiFetch<{
+        sessions: RobotSession[];
+        board?: BoardMeta;
+        senders?: DataSender[];
+      }>('/api/robot-desk');
       const rows = list.sessions || [];
       setSessions(rows);
+      setBoard(list.board || null);
+      setSenders(list.senders || []);
       setError(null);
       setFocusId((prev) => {
         if (prev && rows.some((r) => r.id === prev)) return prev;
@@ -238,6 +301,20 @@ export function RobotDeskPage() {
 
   const focused = sessions.find((s) => s.id === focusId) || null;
   const runningCount = sessions.filter((s) => s.running).length;
+  const regimes = board?.regimes?.length ? board.regimes : [...ALL_REGIMES];
+  const activeRegimes = new Set(
+    (board?.active_regimes?.length
+      ? board.active_regimes
+      : sessions.filter((s) => s.running).map((s) => s.regime || 'UNKNOWN')
+    ).map((r) => r.toUpperCase()),
+  );
+  const capitalSenders = senders.filter((s) => s.kind === 'capital_com');
+  const feedCount = board?.feed_sender_count ?? capitalSenders.length;
+  const feedOk = board?.feed_contributing ?? 0;
+  const chainLabel = board?.chain || 'FEEDS → 10s OHLC → REGIME → ENTRY/EXIT';
+  const tradeTypes = board?.trade_types || ['BUY LONG', 'SELL LONG', 'BUY SCALP', 'SELL SCALP'];
+  const focusLegs = focused?.feed_legs || [];
+  const focusChain = focused?.decision_chain;
 
   const deploy = () => {
     if (!launchAccountId || !launchEpic) {
@@ -320,7 +397,7 @@ export function RobotDeskPage() {
               <div className="robot-arena-kicker">VS SYSTEM // MULTI-CLIENT BOARD</div>
               <h1 className="robot-arena-title">ROBOT COMMAND</h1>
               <p className="robot-arena-sub">
-                Visi 14 režīmi · BUY LONG / SELL LONG / BUY SCALP / SELL SCALP · mini live log katram
+                {chainLabel} · {tradeTypes.join(' · ')}
               </p>
             </div>
           </div>
@@ -332,6 +409,16 @@ export function RobotDeskPage() {
             <div className={`robot-mode-banner ${runningCount ? 'manage' : 'flat'}`}>
               <div className="label">ONLINE</div>
               <div className="value">{runningCount}</div>
+            </div>
+            <div className={`robot-mode-banner ${feedCount ? 'manage' : 'flat'}`}>
+              <div className="label">FEEDS</div>
+              <div className="value">
+                {feedOk}/{feedCount || '—'}
+              </div>
+            </div>
+            <div className="robot-mode-banner entry">
+              <div className="label">REGIMES</div>
+              <div className="value">{regimes.length}</div>
             </div>
           </div>
           <div className="actions">
@@ -346,6 +433,46 @@ export function RobotDeskPage() {
 
         {error && <div className="error-state">{error}</div>}
         {busy && <div className="mono" style={{ color: 'var(--cyan)' }}>Syncing combat units…</div>}
+
+        <div className="robot-wire-panel">
+          <div className="robot-wire-head">
+            <div className="robot-arena-kicker">WIRED CHAIN</div>
+            <div className="robot-wire-chain mono">{chainLabel}</div>
+          </div>
+          <div className="robot-wire-regimes">
+            {regimes.map((r) => {
+              const name = r.toUpperCase();
+              const live = activeRegimes.has(name);
+              const focusHit = (focused?.regime || '').toUpperCase() === name;
+              return (
+                <span
+                  key={name}
+                  className={`robot-regime-chip ${live ? 'live' : ''} ${focusHit ? 'focus' : ''}`}
+                  title={live ? 'Active on a running robot' : 'Catalog regime'}
+                >
+                  {name}
+                </span>
+              );
+            })}
+          </div>
+          <div className="robot-wire-feeds">
+            <div className="robot-arena-kicker">DATA FEEDS · CAPITAL SENDERS</div>
+            {capitalSenders.length === 0 && senders.length === 0 && (
+              <div className="mono robot-wire-empty">Nav pieslēgtu senderu — pievieno Capital feed Settings / Orbit.</div>
+            )}
+            <div className="robot-feed-legs">
+              {(capitalSenders.length ? capitalSenders : senders).map((s) => (
+                <div key={s.sender_id} className={`robot-feed-leg ${s.status === 'ok' || s.status === 'live' ? 'ok' : ''}`}>
+                  <strong>{s.name}</strong>
+                  <span className="mono">
+                    {s.kind} · {s.status} · {s.trust}
+                    {s.latency_ms != null ? ` · ${s.latency_ms}ms` : ''}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
 
         {showDeploy && (
           <div className="robot-empty robot-deploy-bar">
@@ -435,6 +562,7 @@ export function RobotDeskPage() {
                 </div>
                 <div className="robot-mini-market">{s.display_name}</div>
                 <div className={`robot-mini-posture ${p.kind}`}>{p.label}</div>
+                <div className="robot-mini-regime mono">{(s.regime || 'UNKNOWN').toUpperCase()}</div>
                 <div className="robot-mini-row">
                   <span>MID</span>
                   <strong>{fmt(s.last_mid)}</strong>
@@ -445,6 +573,12 @@ export function RobotDeskPage() {
                     {s.ohlc_10s?.last_c != null
                       ? `${fmt(s.ohlc_10s.last_o, 2)}→${fmt(s.ohlc_10s.last_c, 2)} ${s.ohlc_10s.market}`
                       : 'SEEDING'}
+                  </strong>
+                </div>
+                <div className="robot-mini-row">
+                  <span>FEEDS</span>
+                  <strong>
+                    {s.feed_contributing ?? 0}/{s.feed_sender_count ?? 0} {s.feed_source || '—'}
                   </strong>
                 </div>
                 <div className="robot-mini-row">
@@ -459,11 +593,20 @@ export function RobotDeskPage() {
                 </div>
                 <div className="robot-mini-mode">
                   {s.running
-                    ? `${s.mode} · ${s.regime || 'UNKNOWN'} · feeds ${s.feed_contributing ?? 0}/${
-                        s.feed_sender_count ?? 0
-                      }`
+                    ? s.decision_chain
+                      ? `${s.decision_chain.feeds} → ${s.decision_chain.regime} → ${s.decision_chain.action}`
+                      : `${s.mode} · ${s.regime || 'UNKNOWN'}`
                     : 'STOPPED'}
                 </div>
+                {(s.feed_legs?.length ?? 0) > 0 && (
+                  <div className="robot-mini-legs mono">
+                    {s.feed_legs!.slice(0, 4).map((leg) => (
+                      <span key={leg.sender_id} className={leg.ok ? 'ok' : 'bad'}>
+                        {leg.name}:{leg.ok ? fmt(leg.mid, 2) : '×'}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 <div className="robot-mini-log mono">{lastLog(s)}</div>
                 <div className="robot-mini-actions">
                   <span className="mono">{s.environment.toUpperCase()}</span>
@@ -523,6 +666,12 @@ export function RobotDeskPage() {
                 <div>ID · {focused.id}</div>
                 <div>ACCOUNT · {focused.account_name}</div>
                 <div>POSTURE · {posture(focused).label}</div>
+                <div className="robot-focus-chain">
+                  CHAIN ·{' '}
+                  {focusChain
+                    ? `${focusChain.feeds} → ${focusChain.ohlc} → ${focusChain.regime} → ${focusChain.action}`
+                    : chainLabel}
+                </div>
                 <div>
                   10s OHLC · O {fmt(focused.ohlc_10s?.last_o, 2)} H {fmt(focused.ohlc_10s?.last_h, 2)} L{' '}
                   {fmt(focused.ohlc_10s?.last_l, 2)} C {fmt(focused.ohlc_10s?.last_c, 2)} ·{' '}
@@ -534,6 +683,16 @@ export function RobotDeskPage() {
                   FEEDS · {focused.feed_contributing ?? 0}/{focused.feed_sender_count ?? 0}{' '}
                   {focused.feed_agreement || ''} · {focused.feed_source || '—'}
                 </div>
+                {focusLegs.length > 0 && (
+                  <div className="robot-focus-legs">
+                    {focusLegs.map((leg) => (
+                      <div key={leg.sender_id} className={leg.ok ? 'ok' : 'bad'}>
+                        {leg.name} · {leg.ok ? fmt(leg.mid, 2) : 'FAIL'} · {leg.latency_ms}ms
+                        {leg.detail ? ` · ${leg.detail}` : ''}
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div>ENTRY · {fmt(focused.entry_price)}</div>
                 <div>SAFETY SL · {fmt(focused.safety_sl)}</div>
                 <div>DEAL · {focused.deal_id || '—'}</div>
