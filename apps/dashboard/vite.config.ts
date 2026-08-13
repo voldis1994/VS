@@ -1,8 +1,9 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { allowTunnelHosts } from './vite.allow-tunnels';
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [allowTunnelHosts(), react()],
   server: {
     port: 5173,
     host: true,

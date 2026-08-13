@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { allowTunnelHosts } from './vite.allow-tunnels';
 
 /**
  * Standalone Client Control Panel for REMOTE clients (not same Wi‑Fi).
@@ -12,6 +13,7 @@ import react from '@vitejs/plugin-react';
  */
 export default defineConfig({
   plugins: [
+    allowTunnelHosts(),
     react(),
     {
       name: 'client-entry',
@@ -33,7 +35,6 @@ export default defineConfig({
     port: 5174,
     strictPort: true,
     host: true,
-    // Cloudflare tunnel host changes every launch (*.trycloudflare.com)
     allowedHosts: true,
     proxy: {
       '/api': {
