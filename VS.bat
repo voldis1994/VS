@@ -115,8 +115,12 @@ docker compose up -d postgres redis
 if errorlevel 1 docker compose up -d postgres redis
 ping -n 5 127.0.0.1 >nul
 
+set "npm_config_registry=https://registry.npmjs.org/"
+set "npm_config_always_auth=false"
+set "npm_config_//registry.npmjs.org/:_authToken="
+
 cd /d "%ROOT%\apps\control-api"
-call npm install
+call npm install --registry https://registry.npmjs.org/ --userconfig "%ROOT%\.npmrc"
 if errorlevel 1 (
   color 0C
   echo [KLUDA] control-api npm install
@@ -131,7 +135,7 @@ if errorlevel 1 (
   exit /b 1
 )
 cd /d "%ROOT%\apps\dashboard"
-call npm install
+call npm install --registry https://registry.npmjs.org/ --userconfig "%ROOT%\.npmrc"
 if errorlevel 1 (
   color 0C
   echo [KLUDA] dashboard npm install
