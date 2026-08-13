@@ -246,11 +246,9 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     active_regimes: activeRegimes,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'DATA PROVIDERS → consensus mid → 10s OHLC → REGIME → ENTRY/EXIT',
+    chain: 'PUBLIC INTERNET + Capital → consensus mid → 10s OHLC → REGIME → ENTRY/EXIT',
     note:
-      maxFeeds < 2
-        ? 'Add ≥2 enabled Capital.com broker rows (Brokers) as separate data providers for multi-feed OHLC'
-        : 'Multi-provider OHLC active when ≥2 Capital rows agree (STRONG/OK)',
+      'Public feeds: Yahoo Finance, Aurum metals, Fawaz FX, Coinbase (+ Frankfurter FX daily). Capital rows still execute orders.',
   };
 }
 

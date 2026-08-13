@@ -5,8 +5,24 @@ import {
   acquireCapitalSession,
   fetchCapitalMarketQuote,
 } from './capitalCom.js';
+import {
+  PUBLIC_SENDERS,
+  epicToFxPair,
+  fusePriceMids,
+  readAllPublicFeeds,
+  type PublicFeedRead,
+} from './publicInternetFeeds.js';
 
-export type SenderKind = 'capital_com' | 'fx_reference' | 'catalog_pulse';
+export { epicToFxPair } from './publicInternetFeeds.js';
+
+export type SenderKind =
+  | 'capital_com'
+  | 'fx_reference'
+  | 'catalog_pulse'
+  | 'yahoo_finance'
+  | 'aurum_metals'
+  | 'fx_live'
+  | 'coinbase';
 
 export interface DataSender {
   sender_id: string;
@@ -221,20 +237,24 @@ export async function listDataSenders(): Promise<DataSender[]> {
     reads_fail: catHealth?.reads_fail ?? 0,
   });
 
-  return senders;
-}
-
-/** Map Capital epic / symbol heuristics to ISO FX pair for Frankfurter. */
-export function epicToFxPair(epic: string): { from: string; to: string } | null {
-  const s = epic.toUpperCase().replace(/[^A-Z]/g, '');
-  const majors = ['EUR', 'USD', 'GBP', 'JPY', 'CHF', 'AUD', 'CAD', 'NZD'];
-  for (const a of majors) {
-    for (const b of majors) {
-      if (a === b) continue;
-      if (s.includes(a + b)) return { from: a, to: b };
-    }
+  for (const p of PUBLIC_SENDERS) {
+    const health = senderHealth.get(p.sender_id);
+    senders.push({
+      sender_id: p.sender_id,
+      name: p.name,
+      kind: p.kind,
+      trust: 'public_ref',
+      enabled: true,
+      status: health?.status || 'IDLE',
+      last_ok_at: health?.last_ok_at ?? null,
+      last_error: health?.last_error ?? null,
+      latency_ms: health?.latency_ms ?? null,
+      reads_ok: health?.reads_ok ?? 0,
+      reads_fail: health?.reads_fail ?? 0,
+    });
   }
-  return null;
+
+  return senders;
 }
 
 async function readFxReference(epic: string): Promise<SenderRead> {
@@ -547,7 +567,43 @@ async function readCapitalSender(
   }
 }
 
+function publicReadToSenderRead(r: PublicFeedRead): SenderRead {
+  return {
+    sender_id: r.sender_id,
+    name: r.name,
+    kind: r.kind,
+    epic: r.epic,
+    ok: r.ok,
+    bid: r.bid,
+    ask: r.ask,
+    mid: r.mid,
+    spread: r.spread,
+    market_status: r.market_status,
+    source_time: r.source_time,
+    latency_ms: r.latency_ms,
+    detail: r.detail,
+  };
+}
+
+function touchFromPublic(r: PublicFeedRead) {
+  touchHealth(r.sender_id, {
+    status: r.ok ? 'LIVE' : r.detail?.includes('mapping') || r.detail?.includes('only') ? 'IDLE' : 'ERROR',
+    ok: r.ok,
+    last_ok_at: r.ok ? new Date().toISOString() : undefined,
+    last_error: r.ok ? null : r.detail || 'fail',
+    latency_ms: r.latency_ms,
+  });
+}
+
 function buildConsensus(epics: string[], reads: SenderRead[]) {
+  const priceKinds = new Set<SenderKind>([
+    'capital_com',
+    'yahoo_finance',
+    'aurum_metals',
+    'fx_live',
+    'coinbase',
+    'fx_reference',
+  ]);
   return epics.map((epic) => {
     const q = epic.toLowerCase();
     const mids = reads
@@ -555,20 +611,19 @@ function buildConsensus(epics: string[], reads: SenderRead[]) {
         (r) =>
           r.ok &&
           r.mid != null &&
-          r.kind === 'capital_com' &&
+          priceKinds.has(r.kind) &&
           (r.epic.toLowerCase() === q ||
             r.epic.toLowerCase().includes(q) ||
             q.includes(r.epic.toLowerCase()) ||
             (r.detail || '').toLowerCase().includes(q)),
       )
       .map((r) => r.mid as number);
-    // Fallback: any successful capital mid from this scan if only one epic requested
     const midsFallback =
       mids.length > 0
         ? mids
         : epics.length === 1
           ? reads
-              .filter((r) => r.ok && r.mid != null && r.kind === 'capital_com')
+              .filter((r) => r.ok && r.mid != null && priceKinds.has(r.kind))
               .map((r) => r.mid as number)
           : [];
     const use = midsFallback;
@@ -581,18 +636,16 @@ function buildConsensus(epics: string[], reads: SenderRead[]) {
         agreement: 'INSUFFICIENT' as const,
       };
     }
-    const avg = use.reduce((a, b) => a + b, 0) / use.length;
-    const span = Math.max(...use) - Math.min(...use);
-    const rel = avg !== 0 ? span / Math.abs(avg) : span;
-    let agreement: 'STRONG' | 'OK' | 'DIVERGENT' | 'INSUFFICIENT' = 'OK';
-    if (use.length >= 2 && rel < 0.0005) agreement = 'STRONG';
-    else if (use.length >= 2 && rel > 0.005) agreement = 'DIVERGENT';
+    const mixedPublic = reads.some(
+      (r) => r.ok && r.mid != null && r.kind !== 'capital_com' && priceKinds.has(r.kind)
+    );
+    const fused = fusePriceMids(use, { mixedPublic });
     return {
       epic,
-      contributing: use.length,
-      mid_avg: avg,
-      mid_span: span,
-      agreement,
+      contributing: fused.contributing,
+      mid_avg: fused.mid,
+      mid_span: fused.span,
+      agreement: fused.agreement === 'NONE' ? ('INSUFFICIENT' as const) : fused.agreement,
     };
   });
 }
@@ -600,7 +653,9 @@ function buildConsensus(epics: string[], reads: SenderRead[]) {
 export async function runOrbitScan(epicsInput: string[]): Promise<OrbitScanResult> {
   const epics = [...new Set(epicsInput.map((e) => e.trim()).filter(Boolean))].slice(0, 6);
   const senders = await listDataSenders();
-  const capitalSenders = senders.filter((s) => s.kind === 'capital_com' && s.connection_id);
+  const capitalSenders = senders.filter(
+    (s) => s.kind === 'capital_com' && s.connection_id && s.enabled !== false
+  );
 
   if (epics.length === 0) {
     return {
@@ -622,8 +677,19 @@ export async function runOrbitScan(epicsInput: string[]): Promise<OrbitScanResul
     jobs.push(readCatalogPulse(epic));
   }
 
-  const reads = await Promise.all(jobs);
+  const publicJobs = epics.map(async (epic) => {
+    const rows = await readAllPublicFeeds(epic);
+    for (const r of rows) touchFromPublic(r);
+    return rows.map(publicReadToSenderRead);
+  });
+
+  const [capitalish, publicBatches] = await Promise.all([
+    Promise.all(jobs),
+    Promise.all(publicJobs),
+  ]);
+  const reads: SenderRead[] = [...capitalish, ...publicBatches.flat()];
   const refreshed = await listDataSenders();
+  const publicCount = PUBLIC_SENDERS.length;
 
   return {
     scanned_at: new Date().toISOString(),
@@ -631,10 +697,7 @@ export async function runOrbitScan(epicsInput: string[]): Promise<OrbitScanResul
     senders: refreshed,
     reads,
     consensus: buildConsensus(epics, reads),
-    note:
-      capitalSenders.length === 0
-        ? 'No Capital.com broker connections — add Brokers (can add several Live/Demo rows). Orbit still runs catalog + FX reference.'
-        : `Scanning ${epics.length} epic(s) across ${capitalSenders.length} Capital sender(s) + FX ref + catalog pulse.`,
+    note: `Scanning ${epics.length} epic(s) across ${capitalSenders.length} Capital + ${publicCount} public internet providers + FX ref + catalog.`,
   };
 }
 
@@ -709,8 +772,8 @@ export type MultiFeedPrice = {
 };
 
 /**
- * Read one epic across ALL enabled Capital.com data providers and fuse a consensus mid.
- * Used by robot 10s OHLC so regime/entry are not built from a single broker row.
+ * Read one epic across enabled Capital.com rows + public internet providers,
+ * then fuse a consensus mid for 10s OHLC / regime / entry.
  */
 export async function readMultiFeedPrice(epicInput: string): Promise<MultiFeedPrice> {
   const epic = String(epicInput || '').trim();
@@ -728,25 +791,38 @@ export async function readMultiFeedPrice(epicInput: string): Promise<MultiFeedPr
   }
 
   const senders = await listDataSenders();
-  // Only enabled Capital rows count as live price providers for OHLC fusion.
   const capitalSenders = senders.filter(
     (s) => s.kind === 'capital_com' && s.connection_id && s.enabled !== false
   );
-  if (capitalSenders.length === 0) {
-    return {
-      epic,
-      mid: null,
-      contributing: 0,
-      sender_count: 0,
-      agreement: 'NONE',
-      mids: [],
-      legs: [],
-      detail: 'No enabled Capital data providers',
-    };
-  }
 
-  const reads = await Promise.all(capitalSenders.map((s) => readCapitalSender(s, epic)));
-  const legs: MultiFeedLeg[] = reads.map((r) => ({
+  const [capitalReads, publicReads, fxRead] = await Promise.all([
+    Promise.all(capitalSenders.map((s) => readCapitalSender(s, epic))),
+    readAllPublicFeeds(epic),
+    readFxReference(epic),
+  ]);
+
+  for (const r of publicReads) touchFromPublic(r);
+
+  const publicConfiguredForEpic = publicReads.filter((r) => {
+    const d = (r.detail || '').toLowerCase();
+    const na =
+      d.includes('no yahoo mapping') ||
+      d.includes('only prices') ||
+      d.includes('only for major') ||
+      d.includes('fx live only') ||
+      d.includes('coinbase only');
+    return !na;
+  }).length;
+
+  const fxApplicable = !(fxRead.detail || '').toLowerCase().includes('only applies');
+
+  const allReads: SenderRead[] = [
+    ...capitalReads,
+    ...publicReads.map(publicReadToSenderRead),
+    ...(fxApplicable ? [fxRead] : []),
+  ];
+
+  const legs: MultiFeedLeg[] = allReads.map((r) => ({
     sender_id: r.sender_id,
     name: r.name,
     ok: r.ok && r.mid != null,
@@ -754,46 +830,41 @@ export async function readMultiFeedPrice(epicInput: string): Promise<MultiFeedPr
     latency_ms: r.latency_ms,
     detail: r.detail,
   }));
+
   const mids = legs
     .filter((r) => r.ok && r.mid != null && Number.isFinite(r.mid))
     .map((r) => r.mid as number);
+
+  const sender_count =
+    capitalSenders.length + publicConfiguredForEpic + (fxApplicable ? 1 : 0);
 
   if (mids.length === 0) {
     return {
       epic,
       mid: null,
       contributing: 0,
-      sender_count: capitalSenders.length,
-      agreement: 'INSUFFICIENT',
+      sender_count,
+      agreement: sender_count === 0 ? 'NONE' : 'INSUFFICIENT',
       mids: [],
       legs,
-      detail: `0/${capitalSenders.length} Capital providers returned a mid`,
+      detail: `0/${sender_count} providers returned a mid (Capital ${capitalSenders.length} + public internet)`,
     };
   }
 
-  // Median is more robust than mean when one provider spikes.
-  const sorted = [...mids].sort((a, b) => a - b);
-  const midIdx = Math.floor(sorted.length / 2);
-  const consensus =
-    sorted.length % 2 === 1
-      ? sorted[midIdx]!
-      : (sorted[midIdx - 1]! + sorted[midIdx]!) / 2;
-  const span = sorted[sorted.length - 1]! - sorted[0]!;
-  const rel = consensus !== 0 ? span / Math.abs(consensus) : span;
-  let agreement: MultiFeedPrice['agreement'] = 'OK';
-  if (mids.length === 1) agreement = 'INSUFFICIENT';
-  else if (rel < 0.0005) agreement = 'STRONG';
-  else if (rel > 0.005) agreement = 'DIVERGENT';
+  const mixedPublic = publicReads.some((r) => r.ok && r.mid != null) || (fxApplicable && fxRead.ok);
+  const fused = fusePriceMids(mids, { mixedPublic });
 
   return {
     epic,
-    mid: consensus,
-    contributing: mids.length,
-    sender_count: capitalSenders.length,
-    agreement,
-    mids,
+    mid: fused.mid,
+    contributing: fused.contributing,
+    sender_count,
+    agreement: fused.agreement,
+    mids: fused.inliers,
     legs,
-    detail: `${mids.length}/${capitalSenders.length} providers · ${agreement} · span=${span.toFixed(5)} · mid=${consensus.toFixed(5)}`,
+    detail: `${fused.contributing}/${sender_count} providers · ${fused.agreement} · span=${fused.span.toFixed(5)} · mid=${
+      fused.mid != null ? fused.mid.toFixed(5) : '—'
+    } · public+capital`,
   };
 }
 

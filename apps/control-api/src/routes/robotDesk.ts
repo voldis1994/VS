@@ -30,7 +30,7 @@ export async function registerRobotDeskRoutes(app: FastifyInstance): Promise<voi
       sessions,
       board: robotBoardMeta(sessions),
       senders: senders
-        .filter((s) => s.kind === 'capital_com')
+        .filter((s) => s.kind !== 'catalog_pulse')
         .map((s) => ({
           sender_id: s.sender_id,
           name: s.name,
