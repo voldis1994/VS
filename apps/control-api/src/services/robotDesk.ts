@@ -24,7 +24,7 @@ import {
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
-import { decideEntryFrom10sRegime, denyWithTrendEntry, resolveTrendBias, type TrendBias } from './entryFromRegime.js';
+import { decideEntryFrom10sRegime, denyWithTrendEntry, resolveTrendBias, TREND_LOOKBACK_10S, type TrendBias } from './entryFromRegime.js';
 import {
   allowEntryFromFeeds,
   multiFeedOwnsOhlc,
@@ -280,7 +280,9 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
     if (same) continue;
     s.closedBars.push(bar);
   }
-  if (s.closedBars.length > 24) s.closedBars.splice(0, s.closedBars.length - 24);
+  if (s.closedBars.length > TREND_LOOKBACK_10S) {
+    s.closedBars.splice(0, s.closedBars.length - TREND_LOOKBACK_10S);
+  }
 }
 
 function clearTradeState(s: Internal) {
@@ -1150,7 +1152,7 @@ async function robotCycle(s: Internal) {
     // Otherwise a single Capital row would overwrite consensus bars used for regime/entry.
     if (!multiFeedOwnsOhlc(s.multiFeed) && Date.now() - s.last_second_fetch_ms >= 8_000) {
       s.last_second_fetch_ms = Date.now();
-      const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 150);
+      const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 180);
       if (sec.ok && sec.candles.length >= 10) {
         const bars = aggregateSecondsToTen(sec.candles);
         const last = bars[bars.length - 1];
@@ -1187,7 +1189,7 @@ async function robotCycle(s: Internal) {
     if (Date.now() - s.last_minute_fetch_ms >= 30_000) {
       s.last_minute_fetch_ms = Date.now();
       try {
-        const hist = await fetchCapitalMinutePrices(opened.session, s.epic, 20);
+        const hist = await fetchCapitalMinutePrices(opened.session, s.epic, 3);
         if (hist.ok) s.minuteCandles = hist.candles;
       } catch {
         /* keep previous 1m snapshot */

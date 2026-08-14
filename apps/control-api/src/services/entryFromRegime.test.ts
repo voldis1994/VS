@@ -104,17 +104,30 @@ describe('with-trend bias — no SELL SCALP into a climb, no BUY LONG into a dum
     expect(trendBiasFromBars([bar(2000, 2000.1), bar(2000.1, 2000.05)])).toBe('FLAT');
   });
 
-  it('1m lasting climb stays UP even if the last minutes are mixed RANGE chop', () => {
-    const climb = Array.from({ length: 16 }, (_, i) => ({
+  it('1m climb over 3 minutes is UP', () => {
+    const climb = Array.from({ length: 3 }, (_, i) => ({
       open: 2000 + i * 1.2,
       close: 2000 + i * 1.2 + 0.8,
     }));
     expect(trendBiasFromMinuteCandles(climb)).toBe('UP');
-    const dump = Array.from({ length: 16 }, (_, i) => ({
+    const dump = Array.from({ length: 3 }, (_, i) => ({
       open: 2000 - i * 1.2,
       close: 2000 - i * 1.2 - 0.8,
     }));
     expect(trendBiasFromMinuteCandles(dump)).toBe('DOWN');
+  });
+
+  it('ignores a 20-minute dump if the last 3 minutes climbed', () => {
+    const oldDump = Array.from({ length: 17 }, (_, i) => ({
+      open: 2100 - i * 2,
+      close: 2100 - i * 2 - 1.5,
+    }));
+    const last3Up = [
+      { open: 2060, close: 2062 },
+      { open: 2062, close: 2064 },
+      { open: 2064, close: 2067 },
+    ];
+    expect(trendBiasFromMinuteCandles([...oldDump, ...last3Up])).toBe('UP');
   });
 
   it('lasting 1m trend wins over a short 10s pullback', () => {

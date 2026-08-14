@@ -11,6 +11,10 @@ export type RegimeEntry = {
 
 export type TrendBias = 'UP' | 'DOWN' | 'FLAT';
 
+/** Robot trend horizon — 10s scalp, not a 20-minute swing. */
+export const TREND_LOOKBACK_MINUTES = 3;
+export const TREND_LOOKBACK_10S = TREND_LOOKBACK_MINUTES * 6;
+
 function movingOrNull(bar: TenSecBar): boolean {
   return isMoving10s(bar);
 }
@@ -38,9 +42,9 @@ function netAndPersist(
   return { net: (lastClose - firstOpen) / denom, persist: n > 0 ? (upN - downN) / n : 0 };
 }
 
-/** Higher-horizon bias from recent 10s bars — blocks SELL-into-climb / BUY-into-dump. */
+/** Bias from recent 10s bars — last 3 minutes only. */
 export function trendBiasFromBars(bars: TenSecBar[]): TrendBias {
-  const w = bars.filter((b) => b && Number.isFinite(b.close)).slice(-24);
+  const w = bars.filter((b) => b && Number.isFinite(b.close)).slice(-TREND_LOOKBACK_10S);
   if (w.length < 4) return 'FLAT';
   const bodies = w.map(bodyPct);
   const upN = bodies.filter((v) => v > 0.00008).length;
@@ -59,12 +63,14 @@ export function trendBiasFromBars(bars: TenSecBar[]): TrendBias {
   return 'FLAT';
 }
 
-/** Lasting climb/dump from 1m candles — RANGE chop at the top of a rally still counts as UP. */
+/** Climb/dump from the last 3 one-minute candles only. */
 export function trendBiasFromMinuteCandles(
   candles: Array<{ open: number; close: number }>
 ): TrendBias {
-  const w = candles.filter((c) => c && Number.isFinite(c.open) && Number.isFinite(c.close)).slice(-20);
-  if (w.length < 8) return 'FLAT';
+  const w = candles
+    .filter((c) => c && Number.isFinite(c.open) && Number.isFinite(c.close))
+    .slice(-TREND_LOOKBACK_MINUTES);
+  if (w.length < 3) return 'FLAT';
   const upN = w.filter((c) => c.close > c.open).length;
   const downN = w.filter((c) => c.close < c.open).length;
   const { net, persist } = netAndPersist(w[0]!.open, w[w.length - 1]!.close, upN, downN, w.length);
@@ -183,13 +189,15 @@ export function decideExhaustionEntry(bars: TenSecBar[]): RegimeEntry | null {
   return null;
 }
 
-/** Last 1m closed opposite to a lasting climb/dump — enough confirmation to fade. */
+/** Last 3×1m: opposite close after a short burst — enough confirmation to fade. */
 export function minuteExhaustionConfirmed(
   direction: 'BUY' | 'SELL',
   candles: Array<{ open: number; close: number }>
 ): boolean {
-  const w = candles.filter((c) => c && Number.isFinite(c.open) && Number.isFinite(c.close));
-  if (w.length < 8) return false;
+  const w = candles
+    .filter((c) => c && Number.isFinite(c.open) && Number.isFinite(c.close))
+    .slice(-TREND_LOOKBACK_MINUTES);
+  if (w.length < 3) return false;
   const last = w[w.length - 1]!;
   const prev = w[w.length - 2]!;
   const first = w[0]!;

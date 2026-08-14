@@ -279,8 +279,8 @@ async function executeForSubscription(
       }
     }
 
-    // Avoid chasing end of 1m move + never sell a lasting climb / buy a lasting dump
-    const hist = await fetchCapitalMinutePrices(opened.session, sub.epic, 20);
+    // 3-minute trend only (not 20m) + skip chase at the end of the last 1m
+    const hist = await fetchCapitalMinutePrices(opened.session, sub.epic, 3);
     if (hist.ok && isLateMoveOnOneMinute(direction, hist.candles)) {
       noteBrokerOk(sub.client_id);
       return finish({
