@@ -168,8 +168,8 @@ func TestLoadDotEnv(t *testing.T) {
 }
 
 func TestParseVSExeManifest(t *testing.T) {
-	h, n := parseVSExeManifest("abcDEF\n6020608\nbridge75a0\n")
-	if h != "abcdef" || n != 6020608 {
+	h, n := parseVSExeManifest("abcDEF\n8700416\nsl20-1600\n")
+	if h != "abcdef" || n != 8700416 {
 		t.Fatalf("got %s %d", h, n)
 	}
 }

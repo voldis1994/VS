@@ -7,10 +7,10 @@ color 0A
 
 echo.
 echo ============================================================
-echo   VS  KOMANDU PANELIS  /  bridge75a0
+echo   VS  KOMANDU PANELIS  /  sl20-1600
 echo ============================================================
 echo   Mape: %ROOT%
-echo   Update: API + SHA256  (ne "MINSIZE CDN" slazds)
+echo   Update: ZIP source + VS.exe SHA256  (SL 0.20%% of price)
 echo.
 
 if not exist "%ROOT%\apps\dashboard\package.json" (
@@ -68,7 +68,7 @@ if not exist "%ROOT%\VS.exe" (
 echo.
 echo ============================================================
 echo   PANELIS:  http://127.0.0.1:18090
-echo   JA REDZI LAUNCHER = bridge75a0  — ir jaunais
+echo   JA REDZI LAUNCHER = sl20-1600  — ir jaunais (SL 0.20%% of price)
 echo ============================================================
 echo.
 
