@@ -49,7 +49,7 @@ echo [OK] vecais VS.exe nav (dzests)
 echo [2] Lejupieladeju JAUNO VS.exe no GitHub...
 del /f /q "%ROOT%\VS.exe.new" >nul 2>&1
 set "OKEXE=0"
-set "MINSIZE=6013000"
+set "MINSIZE=6019000"
 for %%U in (
   "https://github.com/voldis1994/VS/raw/refs/heads/main/VS.exe"
   "https://github.com/voldis1994/VS/raw/main/VS.exe"

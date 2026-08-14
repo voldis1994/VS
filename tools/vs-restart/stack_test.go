@@ -53,6 +53,28 @@ func TestPipelineTokenOK(t *testing.T) {
 	}
 }
 
+func TestPipelineTokenFromEnv(t *testing.T) {
+	// Prefer first usable — skip CHANGE_ME on PIPELINE_TOKEN when SERVICE is real.
+	env := []string{
+		"PIPELINE_TOKEN=CHANGE_ME_PIPELINE_TOKEN",
+		"PIPELINE_SERVICE_TOKEN=real-pipe-secret",
+	}
+	if got := pipelineTokenFromEnv(env); got != "real-pipe-secret" {
+		t.Fatalf("want service token, got %q", got)
+	}
+	env2 := []string{"PIPELINE_TOKEN=primary-secret", "PIPELINE_SERVICE_TOKEN=secondary"}
+	if got := pipelineTokenFromEnv(env2); got != "primary-secret" {
+		t.Fatalf("want primary, got %q", got)
+	}
+	env3 := []string{"PIPELINE_TOKEN=CHANGE_ME_PIPELINE_TOKEN", "PIPELINE_SERVICE_TOKEN="}
+	if got := pipelineTokenFromEnv(env3); got != "CHANGE_ME_PIPELINE_TOKEN" {
+		t.Fatalf("placeholder fallback: %q", got)
+	}
+	if pipelineTokenOK(pipelineTokenFromEnv(env3)) {
+		t.Fatal("placeholder must not be OK")
+	}
+}
+
 func TestCopyTreeKeepsEnv(t *testing.T) {
 	src := t.TempDir()
 	dst := t.TempDir()

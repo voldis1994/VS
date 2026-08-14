@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiFetch } from '../hooks/useApi';
 import { Logo } from '../components/Logo';
@@ -230,6 +230,8 @@ export function RobotDeskPage() {
   const [launchLot, setLaunchLot] = useState('0.1');
   const [showDeploy, setShowDeploy] = useState(true);
   const [isFs, setIsFs] = useState(false);
+  const [shellH, setShellH] = useState<number | null>(null);
+  const dragRef = useRef<{ startY: number; startH: number } | null>(null);
 
   const accountId = params.get('account_id');
   const epic = params.get('epic');
@@ -321,6 +323,32 @@ export function RobotDeskPage() {
       }
     } catch {
       setError('Spied F11 pārlūkā — pilnekrāns');
+    }
+  };
+
+  const onResizeDown = (ev: ReactPointerEvent<HTMLDivElement>) => {
+    ev.preventDefault();
+    const el = shellRef.current;
+    if (!el) return;
+    const startH = shellH ?? el.getBoundingClientRect().height;
+    dragRef.current = { startY: ev.clientY, startH };
+    ev.currentTarget.setPointerCapture(ev.pointerId);
+  };
+
+  const onResizeMove = (ev: ReactPointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    if (!d) return;
+    const next = Math.max(480, d.startH + (ev.clientY - d.startY));
+    setShellH(next);
+  };
+
+  const onResizeUp = (ev: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    try {
+      ev.currentTarget.releasePointerCapture(ev.pointerId);
+    } catch {
+      /* already released */
     }
   };
 
@@ -457,7 +485,11 @@ export function RobotDeskPage() {
   };
 
   return (
-    <div className="robot-fs-shell robot-board-shell" ref={shellRef}>
+    <div
+      className={`robot-fs-shell robot-board-shell${shellH ? ' robot-fs-resized' : ''}`}
+      ref={shellRef}
+      style={shellH ? { height: shellH, minHeight: shellH } : undefined}
+    >
       <div className="robot-desk robot-desk-fs robot-board">
         <div className="robot-board-top">
           <div className="robot-arena-brand">
@@ -855,6 +887,17 @@ export function RobotDeskPage() {
           </div>
         )}
       </div>
+      <div
+        className="robot-resize-handle"
+        title="Velc uz leju — palielina paneļa augstumu"
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Resize panel height"
+        onPointerDown={onResizeDown}
+        onPointerMove={onResizeMove}
+        onPointerUp={onResizeUp}
+        onPointerCancel={onResizeUp}
+      />
     </div>
   );
 }

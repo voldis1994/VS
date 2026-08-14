@@ -236,17 +236,28 @@ int main(int argc, char* argv[]) {
     }
 
     auto mode = parse_mode(mode_str);
-    if (mode == mr::OperatingMode::Live) {
-        spdlog::warn("LIVE mode — operator risk accepted");
-    }
-
     mr::MarketCorePipeline pipeline;
 
-    // Client Panel production path: Capital quotes → EntryEngine → control-api fanout
-    if (bridge || (mode == mr::OperatingMode::Live && env_or("MARKET_CORE_BRIDGE", "0") == "1")) {
+    // Client Panel / optional C++ path: Capital quotes → EntryEngine → control-api fanout
+    // Fail closed BEFORE "LIVE mode" noise if bridge was requested without a real token.
+    const bool want_bridge =
+        bridge || (mode == mr::OperatingMode::Live && env_or("MARKET_CORE_BRIDGE", "0") == "1");
+    if (want_bridge) {
+        const std::string token = env_or("PIPELINE_TOKEN", env_or("PIPELINE_SERVICE_TOKEN"));
+        if (token.empty() || token == "CHANGE_ME_PIPELINE_TOKEN" || token == "CHANGE_ME_ADMIN_TOKEN") {
+            spdlog::error("LIVE bridge refused: set a real PIPELINE_TOKEN or PIPELINE_SERVICE_TOKEN in .env");
+            spdlog::error("Node robotDesk does not need this token — leave MARKET_CORE_BRIDGE=0");
+            curl_global_cleanup();
+            return 1;
+        }
+        spdlog::warn("LIVE mode — operator risk accepted");
         int rc = run_live_bridge(pipeline);
         curl_global_cleanup();
         return rc;
+    }
+
+    if (mode == mr::OperatingMode::Live) {
+        spdlog::warn("LIVE mode — operator risk accepted");
     }
 
     mr::ConfigRegistry config;

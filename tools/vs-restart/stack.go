@@ -73,7 +73,7 @@ func (a *App) fullRestart() error {
 	upsertEnv(a.root, map[string]string{
 		"OPERATING_MODE":       "LIVE",
 		"LIVE_TRADING_ENABLED": "true",
-		"MARKET_CORE_BRIDGE":   "1",
+		"MARKET_CORE_BRIDGE":   "0",
 		"BUILD_SHA":            readLocalSHA(a.root),
 		"DB_HOST":              ipv4LocalDBHost(a.root),
 	})
@@ -356,45 +356,68 @@ func (a *App) startServices() error {
 	sha := readLocalSHA(a.root)
 	dist := filepath.Join(a.root, "apps", "dashboard", "dist-client")
 	applyDotEnv(a.root)
-	env := a.childEnv(map[string]string{
+
+	// Base env for Node stack. C++ LIVE bridge is opt-in only when tokens are real.
+	baseExtra := map[string]string{
 		"LIVE_TRADING_ENABLED": "true",
 		"OPERATING_MODE":       "LIVE",
-		"MARKET_CORE_BRIDGE":   "1",
+		"MARKET_CORE_BRIDGE":   "0",
 		"BUILD_SHA":            sha,
 		"CLIENT_PANEL_DIST":    dist,
 		"CLIENT_DIST":          dist,
 		"CLIENT_PUBLIC_PORT":   "18080",
 		"CONTROL_API_URL":      "http://127.0.0.1:3000",
-	})
+	}
+	env := a.childEnv(baseExtra)
+	pipeTok := pipelineTokenFromEnv(env)
+	capKey := envVal(env, "CAPITAL_API_KEY")
+	capPass := envVal(env, "CAPITAL_API_PASSWORD")
+	capID := envVal(env, "CAPITAL_IDENTIFIER")
+	cppBridgeOK := pipelineTokenOK(pipeTok) &&
+		looksRealSecret(capKey) &&
+		looksRealSecret(capPass) &&
+		looksRealSecret(capID)
 
 	mc := firstExisting(
 		filepath.Join(a.root, "build", "windows-debug", "apps", "market-core", "market-core.exe"),
 		filepath.Join(a.root, "build", "windows-release", "apps", "market-core", "market-core.exe"),
 	)
-	pipeTok := pipelineTokenFromEnv(env)
-	capKey := envVal(env, "CAPITAL_API_KEY")
-	if mc != "" && pipelineTokenOK(pipeTok) && looksRealSecret(capKey) {
-		a.spawn(mc, a.root, env, "--mode", "LIVE", "--bridge")
-		a.log("[OK] market-core bridge")
+	if cppBridgeOK && mc != "" {
+		bridgeEnv := a.childEnv(map[string]string{
+			"LIVE_TRADING_ENABLED":   "true",
+			"OPERATING_MODE":         "LIVE",
+			"MARKET_CORE_BRIDGE":     "1",
+			"BUILD_SHA":              sha,
+			"CONTROL_API_URL":        "http://127.0.0.1:3000",
+			"PIPELINE_TOKEN":         pipeTok,
+			"PIPELINE_SERVICE_TOKEN": pipeTok, // alias — same secret both names
+		})
+		a.spawn(mc, a.root, bridgeEnv, "--mode", "LIVE", "--bridge")
+		a.log("[OK] C++ market-core LIVE bridge (PIPELINE_TOKEN ok)")
 	} else {
-		a.log("[WARN] C++ market-core IZLAISTS — LIVE bridge vajag PIPELINE_TOKEN. Darbi iet caur Node robotDesk.")
+		// Never leave a half-started C++ bridge that only prints PIPELINE_TOKEN errors.
+		_ = exec.Command("taskkill", "/F", "/IM", "market-core.exe").Run()
+		_ = exec.Command("taskkill", "/F", "/IM", "execution-service.exe").Run()
+		a.log("[OK] C++ LIVE bridge IZLAISTS — tirgošana iet caur Node robotDesk + Capital (DB)")
+		if !pipelineTokenOK(pipeTok) {
+			a.log("  PIPELINE_TOKEN/.env: tukšs vai CHANGE_ME — ieliec īsto tokenu TIKAI ja gribi C++ bridge")
+			a.log("  Node robotDesk NEVAJAG PIPELINE_TOKEN (Capital atslēgas ir Brokers/DB)")
+		}
 		if mc == "" {
-			a.log("  iemesls: market-core.exe nav uzbuivets")
-		} else if !pipelineTokenOK(pipeTok) {
-			a.log("  iemesls: PIPELINE_TOKEN / PIPELINE_SERVICE_TOKEN tukss vai CHANGE_ME")
-		} else if !looksRealSecret(capKey) {
-			a.log("  iemesls: CAPITAL_API_KEY .env tukss — Capital atslēgas ir datubāzē, ne C++ env")
+			a.log("  market-core.exe nav uzbūvēts (nav vajadzīgs Node ceļam)")
+		} else if pipelineTokenOK(pipeTok) && !cppBridgeOK {
+			a.log("  C++ bridge vajag arī CAPITAL_API_KEY/PASSWORD/IDENTIFIER .env (ne tikai DB)")
 		}
 	}
+
+	// execution-service.exe is a one-shot PAPER demo (hardcoded quote) — never start it in LIVE stack.
 	ex := firstExisting(
 		filepath.Join(a.root, "build", "windows-debug", "apps", "execution-service", "execution-service.exe"),
 		filepath.Join(a.root, "build", "windows-release", "apps", "execution-service", "execution-service.exe"),
 	)
-	if ex != "" && pipelineTokenOK(pipeTok) {
-		a.spawn(ex, a.root, env, "--mode", "LIVE")
-		a.log("[OK] execution-service")
-	} else if ex != "" {
-		a.log("[WARN] C++ execution-service IZLAISTS — darbi caur Node robotDesk + Capital")
+	if ex != "" {
+		_ = exec.Command("taskkill", "/F", "/IM", "execution-service.exe").Run()
+		a.log("[OK] C++ execution-service IZLAISTS — tas ir demo one-shot, ne Capital LIVE")
 	}
 
 	npm := npmBin()
@@ -810,6 +833,14 @@ func looksRealSecret(v string) bool {
 }
 
 func pipelineTokenFromEnv(env []string) string {
+	// Prefer the first *usable* value — do not stick on CHANGE_ME_PIPELINE_TOKEN
+	// when PIPELINE_SERVICE_TOKEN holds the real secret.
+	for _, key := range []string{"PIPELINE_TOKEN", "PIPELINE_SERVICE_TOKEN"} {
+		t := strings.TrimSpace(envVal(env, key))
+		if pipelineTokenOK(t) {
+			return t
+		}
+	}
 	t := strings.TrimSpace(envVal(env, "PIPELINE_TOKEN"))
 	if t == "" {
 		t = strings.TrimSpace(envVal(env, "PIPELINE_SERVICE_TOKEN"))
