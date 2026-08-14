@@ -36,10 +36,10 @@ export function rangePct(bar: Pick<TenSecBar, 'open' | 'high' | 'low'>): number 
   return (bar.high - bar.low) / mid;
 }
 
-/** Visible on a Capital 10s chart — not tick-to-tick noise. */
+/** Visible on a Capital 10s chart — Gold ~0.05% ≈ 2 pts at 4000; was 0.015% and parked QUIET forever. */
 export function isMoving10s(bar: TenSecBar | null | undefined): boolean {
   if (!bar) return false;
-  return Math.abs(bodyPct(bar)) >= 0.00015 || rangePct(bar) >= 0.00025;
+  return Math.abs(bodyPct(bar)) >= 0.00005 || rangePct(bar) >= 0.0001;
 }
 
 export function emptyTenSecState(): TenSecState {

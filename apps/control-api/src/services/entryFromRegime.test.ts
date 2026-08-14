@@ -40,25 +40,27 @@ function dumpBars(n = 12, start = 2000, step = 0.4): TenSecBar[] {
 }
 
 describe('10s + 14-regime suitable entry', () => {
-  it('UNKNOWN / COMPRESSION / TRANSITION wait without bias, but trade with clear with-trend bias', () => {
-    expect(decideEntryFrom10sRegime(dip, 'UNKNOWN')).toBeNull();
-    expect(decideEntryFrom10sRegime(dip, 'COMPRESSION')).toBeNull();
-    expect(decideEntryFrom10sRegime(rally, 'TRANSITION')).toBeNull();
+  it('UNKNOWN unlocks with bias OR bar-implied direction (no hard UNKNOWN block)', () => {
     expect(decideEntryFrom10sRegime(dip, 'UNKNOWN', 'UP')?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(dip, 'COMPRESSION', 'UP')?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(dip, 'UNKNOWN', 'DOWN')?.direction).toBe('SELL');
-    expect(decideEntryFrom10sRegime(rally, 'UNKNOWN', 'UP')).toBeNull();
+    // FLAT + red bar → implied DOWN → follow dump
+    expect(decideEntryFrom10sRegime(dip, 'UNKNOWN', 'FLAT')?.direction).toBe('SELL');
+    // FLAT + green bar → implied UP → follow
+    expect(decideEntryFrom10sRegime(rally, 'UNKNOWN', 'FLAT')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(rally, 'UNKNOWN', 'UP')?.direction).toBe('BUY');
   });
 
-  it('TREND_UP only dip-buys — never sells the rally', () => {
+  it('TREND_UP dip-buys even when bias calculator is still FLAT (regime carries UP)', () => {
     expect(decideEntryFrom10sRegime(dip, 'TREND_UP', 'UP')?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(dip, 'TREND_UP', 'UP')?.setup).toBe('PULLBACK');
     expect(decideEntryFrom10sRegime(rally, 'TREND_UP', 'UP')).toBeNull();
-    expect(decideEntryFrom10sRegime(dip, 'TREND_UP')).toBeNull();
+    expect(decideEntryFrom10sRegime(dip, 'TREND_UP', 'FLAT')?.direction).toBe('BUY');
   });
 
   it('TREND_DOWN follows the dump (red) — never sells a green breakout', () => {
     expect(decideEntryFrom10sRegime(dip, 'TREND_DOWN', 'DOWN')?.direction).toBe('SELL');
+    expect(decideEntryFrom10sRegime(dip, 'TREND_DOWN', 'FLAT')?.direction).toBe('SELL');
     expect(decideEntryFrom10sRegime(rally, 'TREND_DOWN', 'DOWN')).toBeNull();
     expect(decideEntryFrom10sRegime(rally, 'TREND_DOWN')).toBeNull();
   });
@@ -86,18 +88,32 @@ describe('10s + 14-regime suitable entry', () => {
     expect(decideEntryFrom10sRegime(rally, 'FAILED_BREAKOUT_DOWN')).toBeNull();
   });
 
-  it('quiet bar is never a trade in any regime', () => {
+  it('truly flat micro-noise bar is never a trade', () => {
     const quiet: TenSecBar = {
       open_time_ms: 0,
       open: 2000,
-      high: 2000.1,
-      low: 1999.95,
-      close: 2000.05,
+      high: 2000.02,
+      low: 1999.99,
+      close: 2000.01,
       ticks: 8,
     };
     expect(decideEntryFrom10sRegime(quiet, 'TREND_UP')).toBeNull();
     expect(decideEntryFrom10sRegime(quiet, 'RANGE')).toBeNull();
     expect(decideEntryFrom10sRegime(quiet, 'BREAKOUT_UP')).toBeNull();
+  });
+
+  it('Gold-sized 0.33pt dump is a tradeable dip (was QUIET forever at old thresholds)', () => {
+    const goldDump: TenSecBar = {
+      open_time_ms: 0,
+      open: 4383.98,
+      high: 4383.98,
+      low: 4383.65,
+      close: 4383.65,
+      ticks: 12,
+    };
+    expect(decideEntryFrom10sRegime(goldDump, 'TREND_DOWN', 'DOWN')?.direction).toBe('SELL');
+    expect(decideEntryFrom10sRegime(goldDump, 'TREND_DOWN', 'FLAT')?.direction).toBe('SELL');
+    expect(decideEntryFrom10sRegime(goldDump, 'UNKNOWN', 'FLAT')?.direction).toBe('SELL');
   });
 });
 

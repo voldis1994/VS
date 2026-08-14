@@ -24,7 +24,7 @@ import {
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
-import { decideEntryFrom10sRegime, denyWithTrendEntry, resolveTrendBias, TREND_LOOKBACK_10S, type TrendBias } from './entryFromRegime.js';
+import { decideEntryFrom10sRegime, denyWithTrendEntry, effectiveBias, resolveTrendBias, TREND_LOOKBACK_10S, type TrendBias } from './entryFromRegime.js';
 import { runtimeBuildInfo } from './runtimeBuild.js';
 import {
   allowEntryFromFeeds,
@@ -213,7 +213,7 @@ function publicSession(s: Internal): RobotSession {
     feed_contributing: s.multiFeed?.contributing ?? rest.feed_contributing ?? 0,
     feed_sender_count: s.multiFeed?.sender_count ?? rest.feed_sender_count ?? 0,
     feed_agreement: s.multiFeed?.agreement ?? rest.feed_agreement ?? null,
-    feed_legs: s.multiFeed?.legs ?? rest.feed_legs ?? [],
+    feed_legs: s.feed_legs ?? s.multiFeed?.legs ?? rest.feed_legs ?? [],
     decision_chain: buildDecisionChain(s),
   };
 }
@@ -978,6 +978,52 @@ async function robotCycle(s: Internal) {
       s.epic = quote.epic;
     }
 
+    // Multi-provider + LOCAL feed snapshot ALWAYS (even when market closed) —
+    // otherwise closed epics stay stuck at 0/0 NONE on the board.
+    if (Date.now() - s.last_multi_feed_ms >= 4_000) {
+      s.last_multi_feed_ms = Date.now();
+      try {
+        s.multiFeed = await readMultiFeedPrice(s.epic, { anchorMid: quote.mid });
+      } catch {
+        /* keep previous */
+      }
+    }
+    const pickedClosed = pickOhlcMid(quote.mid, s.multiFeed);
+    s.feed_source = pickedClosed.source;
+    s.feed_contributing = s.multiFeed?.contributing ?? 0;
+    s.feed_sender_count = s.multiFeed?.sender_count ?? 0;
+    s.feed_agreement = s.multiFeed?.agreement ?? null;
+    // Local Capital quote alone is still a feed — never leave the board at 0/0 NONE.
+    if (quote.mid != null && (s.feed_contributing || 0) < 1) {
+      s.feed_source = 'LOCAL';
+      s.feed_contributing = 1;
+      s.feed_sender_count = Math.max(1, s.feed_sender_count || 0);
+      s.feed_agreement = s.feed_agreement || 'INSUFFICIENT';
+      s.feed_legs = [
+        {
+          sender_id: `local-${s.account_id}`,
+          name: `${s.account_name || 'Capital'} LOCAL`,
+          ok: true,
+          mid: quote.mid,
+          latency_ms: 0,
+          detail: 'session quote (market may be closed)',
+        },
+        ...(s.multiFeed?.legs || []).filter((l) => l.sender_id !== `local-${s.account_id}`),
+      ];
+    } else {
+      s.feed_legs = s.multiFeed?.legs ?? s.feed_legs ?? [];
+    }
+
+    // Keep OHLC/regime warm even when closed so board is not stuck on SEEDING 0/0
+    const ohlcMidWarm = pickedClosed.mid ?? quote.mid;
+    if (ohlcMidWarm != null) {
+      s.ohlcState = updateTenSecondOhlc(s.ohlcState, ohlcMidWarm, Date.now());
+      s.ohlc_10s = publicOhlc10s(s.ohlcState);
+      if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
+        applyRobotRegime(s, [s.ohlcState.last_closed]);
+      }
+    }
+
     // Market closed / offline → park: no positions sync, no MANAGE, no entry (anti-spam Capital)
     if (!marketAllowsTrading(quote.market_status)) {
       setRobotCadence(s, CLOSED_MARKET_CADENCE_MS);
@@ -989,9 +1035,9 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `MARKET ${quote.market_status || 'CLOSED'} — park robot (no manage / no entry / no position spam) · poll ${
-            CLOSED_MARKET_CADENCE_MS / 1000
-          }s until TRADEABLE`,
+          detail: `MARKET ${quote.market_status || 'CLOSED'} — park robot (no manage / no entry / no position spam) · feeds ${
+            s.feed_contributing
+          }/${s.feed_sender_count} ${s.feed_source} · poll ${CLOSED_MARKET_CADENCE_MS / 1000}s until TRADEABLE`,
         });
       }
       return;
@@ -1001,22 +1047,12 @@ async function robotCycle(s: Internal) {
     setRobotCadence(s, ACTIVE_CADENCE_MS);
     s.last_mid = quote.mid;
 
-    // Multi-provider read (Capital + public near Capital). Throttle to protect Capital API.
-    if (Date.now() - s.last_multi_feed_ms >= 4_000) {
-      s.last_multi_feed_ms = Date.now();
-      try {
-        s.multiFeed = await readMultiFeedPrice(s.epic, { anchorMid: quote.mid });
-      } catch {
-        /* keep previous multiFeed snapshot */
-      }
-    } else if (s.multiFeed && quote.mid != null) {
-      // Re-anchor pick every tick even if multi snapshot is cached
-    }
     const picked = pickOhlcMid(quote.mid, s.multiFeed);
     s.feed_source = picked.source;
-    s.feed_contributing = s.multiFeed?.contributing ?? 0;
-    s.feed_sender_count = s.multiFeed?.sender_count ?? 0;
-    s.feed_agreement = s.multiFeed?.agreement ?? null;
+    s.feed_contributing = Math.max(s.feed_contributing || 0, s.multiFeed?.contributing ?? 0);
+    s.feed_sender_count = Math.max(s.feed_sender_count || 0, s.multiFeed?.sender_count ?? 0);
+    s.feed_agreement = s.multiFeed?.agreement ?? s.feed_agreement ?? null;
+    if (s.multiFeed?.legs?.length) s.feed_legs = s.multiFeed.legs;
 
     // OHLC always from Capital-safe mid (LOCAL Capital quote if public is far)
     const ohlcMid = picked.mid ?? quote.mid;
@@ -1231,11 +1267,11 @@ async function robotCycle(s: Internal) {
       }
     }
     const bias = resolveTrendBias(s.closedBars, s.minuteCandles);
-    s.trend_bias = bias;
+    s.trend_bias = effectiveBias(s.regime, bias, bar);
     applyBiasRegimeUnlock(s);
     const regimeLabel = effectiveRegimeName(s);
     const ohlcLine = bar
-      ? `10s O=${bar.open.toFixed(2)} H=${bar.high.toFixed(2)} L=${bar.low.toFixed(2)} C=${bar.close.toFixed(2)} ${regimeLabel} · bias ${bias} · feeds ${
+      ? `10s O=${bar.open.toFixed(2)} H=${bar.high.toFixed(2)} L=${bar.low.toFixed(2)} C=${bar.close.toFixed(2)} ${regimeLabel} · bias ${s.trend_bias} · feeds ${
           s.feed_contributing || 0
         }/${s.feed_sender_count || 0} ${s.feed_source || 'LOCAL'} ${s.feed_agreement || ''}`
       : `10s OHLC seeding · feeds ${s.feed_contributing || 0}/${s.feed_sender_count || 0}`;
@@ -1245,7 +1281,7 @@ async function robotCycle(s: Internal) {
     let setupType: string | null = null;
 
     if (s.ohlcState.just_closed && bar) {
-      const sig = decideEntryFrom10sRegime(bar, s.regime, bias, s.closedBars);
+      const sig = decideEntryFrom10sRegime(bar, s.regime, s.trend_bias, s.closedBars);
       if (sig) {
         direction = sig.direction;
         setupType = sig.setup;
@@ -1257,9 +1293,9 @@ async function robotCycle(s: Internal) {
           s.regime === 'FAILED_BREAKOUT_DOWN' ||
           s.regime === 'REVERSAL_CANDIDATE'
             ? 'WAIT (need confirm after large move — no SELL on the impulse bar)'
-            : bias === 'UP'
+            : s.trend_bias === 'UP'
               ? 'only BUY on dip (with-trend)'
-              : bias === 'DOWN'
+              : s.trend_bias === 'DOWN'
                 ? 'only SELL on dump (with-trend)'
                 : 'wait with-trend bias or exhaustion confirm';
         pushTick(s, {
@@ -1319,7 +1355,7 @@ async function robotCycle(s: Internal) {
     }
 
     if (direction) {
-      const deny = denyWithTrendEntry(direction, bar, bias, s.closedBars, {
+      const deny = denyWithTrendEntry(direction, bar, s.trend_bias || 'FLAT', s.closedBars, {
         exhaustion: setupType === 'FADE',
       });
       if (deny) {
