@@ -32,6 +32,16 @@ describe('detectStaleQuoteAdverse', () => {
     expect(v.reason).toMatch(/SELL blocked/);
   });
 
+  it('does not block SELL when Yahoo/Aurum sit on a structural Gold basis (~1.3%)', () => {
+    // Live board: Capital ~4378, Yahoo ~4435 — must not veto every with-trend SELL
+    const v = detectStaleQuoteAdverse('SELL', 4377.95, [
+      { label: 'Yahoo Finance (public)', mid: 4435 },
+      { label: 'Aurum metals spot (public)', mid: 4434.5 },
+      { label: '10s OHLC close', mid: 4378.07 },
+    ]);
+    expect(v.block).toBe(false);
+  });
+
   it('buildFresherRefs pulls OHLC + public', () => {
     const refs = buildFresherRefs({
       publicNearMids: [{ name: 'Aurum', mid: 4346 }],

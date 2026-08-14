@@ -1349,14 +1349,20 @@ async function robotCycle(s: Internal) {
       }
     }
 
-    // Capital button lag vs already-printed drop/rally (chart/public/10s OHLC)
+    // Capital button lag vs already-printed drop/rally (chart / near Capital refs / 10s OHLC).
+    // Distant public spot (Yahoo/Aurum basis) is filtered inside detectStaleQuoteAdverse.
     if (direction && quote.mid != null) {
+      const capitalPeerMids = (s.multiFeed?.legs || [])
+        .filter((l) => l.ok && l.mid != null && Number.isFinite(l.mid))
+        .filter((l) => /capital\.com|capital_com/i.test(`${l.name} ${l.sender_id} ${l.detail || ''}`))
+        .map((l) => ({ name: l.name, mid: l.mid as number }));
       const publicNear = (s.multiFeed?.legs || [])
         .filter((l) => l.ok && l.mid != null && Number.isFinite(l.mid))
         .filter((l) => !String(l.detail || '').includes('FAR from Capital'))
+        .filter((l) => !/capital\.com|capital_com/i.test(`${l.name} ${l.sender_id}`))
         .map((l) => ({ name: l.name, mid: l.mid as number }));
       const refs = buildFresherRefs({
-        publicNearMids: publicNear,
+        publicNearMids: [...capitalPeerMids, ...publicNear],
         ohlcClose: s.ohlcState.last_closed?.close ?? s.ohlc_10s?.last_c ?? null,
         formingClose: s.ohlcState.forming?.close ?? s.ohlc_10s?.forming_c ?? null,
       });

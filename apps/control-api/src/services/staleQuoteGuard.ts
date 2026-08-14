@@ -3,6 +3,9 @@
  *
  * Classic fail: chart / public / 10s OHLC already dropped, but Capital BUY
  * button still shows the pre-drop ask — robot would open BUY into the dump.
+ *
+ * Public spot (Yahoo/Aurum) can sit 0.5–1.5% away from Capital CFD on Gold —
+ * that is basis, not lag. Only refs near Capital are used for this veto.
  */
 
 export type PriceRef = { label: string; mid: number };
@@ -17,6 +20,8 @@ export type StaleQuoteVerdict = {
 };
 
 const DEFAULT_MIN_REL = 0.0012; // 0.12% ≈ ~5pts on Gold 4350 (screenshot was ~8pts)
+/** Ignore venue-basis noise (Yahoo/Aurum vs Capital CFD often 0.5–1.5% on Gold). */
+const DEFAULT_MAX_BASIS_REL = 0.0035; // 0.35%
 
 function relMove(from: number, to: number): number {
   if (!Number.isFinite(from) || !Number.isFinite(to) || from === 0) return 0;
@@ -31,9 +36,10 @@ export function detectStaleQuoteAdverse(
   direction: 'BUY' | 'SELL',
   capitalMid: number | null | undefined,
   refs: PriceRef[],
-  opts?: { minRel?: number }
+  opts?: { minRel?: number; maxBasisRel?: number }
 ): StaleQuoteVerdict {
   const minRel = opts?.minRel ?? DEFAULT_MIN_REL;
+  const maxBasis = opts?.maxBasisRel ?? DEFAULT_MAX_BASIS_REL;
   if (capitalMid == null || !Number.isFinite(capitalMid)) {
     return {
       block: false,
@@ -45,11 +51,14 @@ export function detectStaleQuoteAdverse(
     };
   }
 
-  const usable = refs.filter((r) => r.mid != null && Number.isFinite(r.mid));
+  const usable = refs.filter((r) => {
+    if (r.mid == null || !Number.isFinite(r.mid)) return false;
+    return Math.abs(relMove(capitalMid, r.mid)) <= maxBasis;
+  });
   if (usable.length === 0) {
     return {
       block: false,
-      reason: 'no fresher refs',
+      reason: 'no near-Capital fresher refs (distant public basis ignored)',
       capital_mid: capitalMid,
       lead_mid: null,
       lead_label: null,
