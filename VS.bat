@@ -51,9 +51,9 @@ del /f /q "%ROOT%\VS.exe.new" >nul 2>&1
 set "OKEXE=0"
 set "MINSIZE=6013000"
 for %%U in (
+  "https://github.com/voldis1994/VS/raw/refs/heads/main/VS.exe"
   "https://github.com/voldis1994/VS/raw/main/VS.exe"
   "https://raw.githubusercontent.com/voldis1994/VS/main/VS.exe"
-  "https://cdn.jsdelivr.net/gh/voldis1994/VS@main/VS.exe"
 ) do (
   if not "!OKEXE!"=="1" (
     echo [..] %%~U

@@ -12,9 +12,9 @@ import (
 	"time"
 )
 
-const githubVSExe = "https://github.com/voldis1994/VS/raw/main/VS.exe"
-const githubVSExeAlt = "https://raw.githubusercontent.com/voldis1994/VS/main/VS.exe"
-const githubVSExeCDN = "https://cdn.jsdelivr.net/gh/voldis1994/VS@main/VS.exe"
+const githubVSExe = "https://github.com/voldis1994/VS/raw/refs/heads/main/VS.exe"
+const githubVSExeAlt = "https://github.com/voldis1994/VS/raw/main/VS.exe"
+const githubVSExeCDN = "https://raw.githubusercontent.com/voldis1994/VS/main/VS.exe"
 
 // maybeSelfUpdate downloads latest VS.exe. If different from this process, replaces and restarts.
 // Returns true when this process should exit (new exe was spawned).
