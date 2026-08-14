@@ -48,27 +48,27 @@ echo [OK] vecais VS.exe nav (dzests)
 
 echo [2] Lejupieladeju JAUNO VS.exe no GitHub...
 del /f /q "%ROOT%\VS.exe.new" >nul 2>&1
-curl.exe -fL --retry 5 --retry-delay 2 -o "%ROOT%\VS.exe.new" "https://raw.githubusercontent.com/voldis1994/VS/main/VS.exe"
 set "OKEXE=0"
-if exist "%ROOT%\VS.exe.new" (
-  for %%A in ("%ROOT%\VS.exe.new") do (
-    echo      lejupielade: %%~zA bytes
-    if %%~zA GEQ 1000000 set "OKEXE=1"
-  )
-)
-if not "!OKEXE!"=="1" (
-  echo [..] raw neizdevas — meginu github.com/raw ...
-  curl.exe -fL --retry 5 --retry-delay 2 -o "%ROOT%\VS.exe.new" "https://github.com/voldis1994/VS/raw/main/VS.exe"
-  if exist "%ROOT%\VS.exe.new" (
-    for %%A in ("%ROOT%\VS.exe.new") do (
-      echo      lejupielade: %%~zA bytes
-      if %%~zA GEQ 1000000 set "OKEXE=1"
+set "MINSIZE=6013000"
+for %%U in (
+  "https://github.com/voldis1994/VS/raw/main/VS.exe"
+  "https://raw.githubusercontent.com/voldis1994/VS/main/VS.exe"
+  "https://cdn.jsdelivr.net/gh/voldis1994/VS@main/VS.exe"
+) do (
+  if not "!OKEXE!"=="1" (
+    echo [..] %%~U
+    curl.exe -fL --retry 4 --retry-delay 1 -H "Cache-Control: no-cache" -o "%ROOT%\VS.exe.new" "%%~U?t=!RANDOM!"
+    if exist "%ROOT%\VS.exe.new" (
+      for %%A in ("%ROOT%\VS.exe.new") do (
+        echo      bytes=%%~zA  (vajag >= !MINSIZE!)
+        if %%~zA GEQ !MINSIZE! set "OKEXE=1"
+      )
     )
   )
 )
 if not "!OKEXE!"=="1" (
   color 0C
-  echo [KLUDA] VS.exe lejupielade FAIL — parbaudi internetu. VECU exe NEPALAIZU.
+  echo [KLUDA] VS.exe lejupielade FAIL vai CDN deve veco failu. VECU exe NEPALAIZU.
   pause
   exit /b 1
 )
