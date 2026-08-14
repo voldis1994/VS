@@ -23,14 +23,16 @@ func (a *App) fullRestart() error {
 
 	a.log("[1/5] Apturu vecos procesus — gaidu līdz node.exe NAV...")
 	killStack(a.root, a.log)
-	killNodeUntilGone(a.log)
+	if err := requireNoNode(a.log); err != nil {
+		return err
+	}
 
-	a.log("[2/5] vispirms Postgres (pirms ZIP, lai palikušais tsx nesit pret tukšu :5432)...")
+	a.log("[2/5] Postgres + Redis (pirms jebkāda failu rakstīšanas)...")
 	if err := a.ensureDocker(); err != nil {
 		return err
 	}
 
-	a.log("[3/5] GitHub update (ZIP, git nav vajadzigs)...")
+	a.log("[3/5] GitHub update...")
 	gh, err := fetchGithubSHA()
 	if err != nil {
 		a.log("[WARN] GitHub SHA: %s", err.Error())
@@ -38,9 +40,21 @@ func (a *App) fullRestart() error {
 		a.set(func(s *Status) { s.GithubSHA = gh })
 		a.log("GitHub main = %s", gh)
 	}
-	if err := updateFromZip(a.root, a.log); err != nil {
-		a.log("[WARN] update: %s — turpinu ar esošo mapi", err.Error())
+	local := readLocalSHA(a.root)
+	if shouldSkipZip(local, gh) {
+		a.log("[OK] jau %s — ZIP NERALU (failus nepārrakstu → tsx neuzmodinās)", gh)
+		a.set(func(s *Status) {
+			s.LocalSHA = local
+			s.Updated = true
+		})
 	} else {
+		if err := requireNoNode(a.log); err != nil {
+			return err
+		}
+		a.log("[..] SHA atšķiras (lokāli=%s) — ņemu ZIP...", local)
+		if err := updateFromZip(a.root, a.log); err != nil {
+			return fmt.Errorf("GitHub ZIP update: %w", err)
+		}
 		if gh != "" {
 			_ = os.WriteFile(filepath.Join(a.root, shaFile), []byte(gh+"\n"), 0644)
 		}
@@ -49,11 +63,11 @@ func (a *App) fullRestart() error {
 			s.Updated = s.LocalSHA != "" && s.LocalSHA == s.GithubSHA
 		})
 		a.log("[OK] mape atjaunota")
+		a.log("[..] pēc ZIP vēlreiz pārbaudu, ka node.exe NAV...")
+		if err := requireNoNode(a.log); err != nil {
+			return err
+		}
 	}
-
-	a.log("[..] ZIP var uzmodināt veco tsx — apturu Node vēlreiz...")
-	killStack(a.root, a.log)
-	killNodeUntilGone(a.log)
 
 	upsertEnv(a.root, map[string]string{
 		"OPERATING_MODE":       "LIVE",
@@ -63,21 +77,31 @@ func (a *App) fullRestart() error {
 		"DB_HOST":              ipv4LocalDBHost(a.root),
 	})
 	applyDotEnv(a.root)
-	a.log("[..] npm + migrate (Postgres jau klausās)...")
+
+	if !portUp("127.0.0.1:5432") {
+		a.log("[..] Postgres pazuda — ceļu vēlreiz...")
+		if err := a.ensureDocker(); err != nil {
+			return err
+		}
+	}
+
+	a.log("[..] npm + migrate (tikai ja :5432 klausās)...")
 	if err := a.npmSetup(); err != nil {
 		return err
 	}
 
 	a.log("[4/5] Palaisu API + paneli...")
 	freeServicePorts(a.log)
-	killNodeUntilGone(a.log)
+	if err := requireNoNode(a.log); err != nil {
+		return err
+	}
 	if err := a.startServices(); err != nil {
 		return err
 	}
 
 	a.log("[5/5] Gaidu portus...")
 	if !waitPortBool("127.0.0.1:5432", 20, a.log) {
-		return fmt.Errorf("Postgres :5432 pazuda pēc starta")
+		return fmt.Errorf("Postgres :5432 pazuda pēc starta — atver Docker Desktop")
 	}
 	if !waitPortBool("127.0.0.1:3000", 40, a.log) {
 		return fmt.Errorf("API :3000 neklausās — skaties logu virs šīs rindas")
@@ -108,23 +132,28 @@ func killNodeUntilGone(logfn func(string, ...any)) {
 	if logfn == nil {
 		logfn = func(string, ...any) {}
 	}
-	for i := 1; i <= 15; i++ {
+	for i := 1; i <= 20; i++ {
 		killMatchingNode("")
 		pids := listNodePIDs()
 		if len(pids) == 0 {
 			logfn("[OK] node.exe nav palicis")
 			return
 		}
-		logfn("[..] vēl node PID %s — nogalinu koku (%d/15)", strings.Join(pids, ","), i)
+		logfn("[..] vēl node PID %s — nogalinu koku (%d/20)", strings.Join(pids, ","), i)
 		for _, pid := range pids {
 			killPIDTree(pid)
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+func requireNoNode(logfn func(string, ...any)) error {
+	killNodeUntilGone(logfn)
 	left := listNodePIDs()
-	if len(left) > 0 {
-		logfn("[WARN] node joprojām dzīvs: %s — Postgres jau ir augšā, migrate nedrīkst krist", strings.Join(left, ","))
+	if len(left) == 0 {
+		return nil
 	}
+	return fmt.Errorf("nevaru apturēt node.exe (PID %s). Task Manager → End task visiem node.exe, tad spied PALAIST / RESTARTĒT", strings.Join(left, ", "))
 }
 
 // freeServicePorts kills whoever holds API/panel ports and waits until free.
@@ -794,6 +823,12 @@ func pipelineTokenOK(v string) bool {
 		return false
 	}
 	return looksRealSecret(s)
+}
+
+func shouldSkipZip(local, github string) bool {
+	local = strings.TrimSpace(local)
+	github = strings.TrimSpace(github)
+	return local != "" && github != "" && local == github
 }
 
 func ipv4LocalDBHost(root string) string {
