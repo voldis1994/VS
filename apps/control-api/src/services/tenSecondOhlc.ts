@@ -105,19 +105,19 @@ export function decideFromClosed10s(
   const bp = bodyPct(bar);
   const rng = rangePct(bar);
   if (!isMoving10s(bar)) return null;
-  if (bp <= -0.00015) {
-    return {
-      direction: 'BUY',
-      reason: `10s OHLC pullback O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} body=${(bp * 100).toFixed(3)}% range=${(rng * 100).toFixed(3)}% → BUY`,
-    };
-  }
+  // With the 10s bar — never fade (dip-buy / rally-sell is RANGE fade and is not used).
   if (bp >= 0.00015) {
     return {
-      direction: 'SELL',
-      reason: `10s OHLC rally O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} body=${(bp * 100).toFixed(3)}% range=${(rng * 100).toFixed(3)}% → SELL`,
+      direction: 'BUY',
+      reason: `10s OHLC with-trend O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} body=${(bp * 100).toFixed(3)}% range=${(rng * 100).toFixed(3)}% → BUY`,
     };
   }
-  // Wick/range without directional body — still not FLAT, but no fade signal
+  if (bp <= -0.00015) {
+    return {
+      direction: 'SELL',
+      reason: `10s OHLC with-trend O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} body=${(bp * 100).toFixed(3)}% range=${(rng * 100).toFixed(3)}% → SELL`,
+    };
+  }
   return null;
 }
 

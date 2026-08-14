@@ -131,9 +131,17 @@ function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'fl
     return { label: `${t} · ${regime}`, kind: t.includes('SCALP') ? 'short' : 'long' };
   }
   if (s.running && !s.open_side) {
+    const fade =
+      regime === 'RANGE' ||
+      regime === 'FAILED_BREAKOUT_UP' ||
+      regime === 'FAILED_BREAKOUT_DOWN' ||
+      regime === 'REVERSAL_CANDIDATE' ||
+      regime === 'COMPRESSION' ||
+      regime === 'TRANSITION';
+    if (fade) return { label: `WAIT · ${regime} · no fade`, kind: 'entry' };
     const bias = String(s.trend_bias || s.decision_chain?.setup || '').toUpperCase();
     const only =
-      bias.includes('UP') ? ' · bias UP · only BUY' : bias.includes('DOWN') ? ' · bias DOWN · only SELL' : '';
+      bias.includes('UP') ? ' · bias UP · only BUY' : bias.includes('DOWN') ? ' · bias DOWN · only SELL' : ' · with-trend';
     return { label: `WAIT · ${regime}${only}`, kind: 'entry' };
   }
   return { label: `FLAT · ${regime}`, kind: 'flat' };
@@ -413,7 +421,7 @@ export function RobotDeskPage() {
               <div className="robot-arena-kicker">VS SYSTEM // MULTI-CLIENT BOARD</div>
               <h1 className="robot-arena-title">ROBOT COMMAND</h1>
               <p className="robot-arena-sub">
-                {chainLabel} · {tradeTypes.join(' · ')}
+                WITH-TREND ONLY · kāpums = BUY · kritums = SELL · RANGE negaidā fade
               </p>
             </div>
           </div>
@@ -452,9 +460,9 @@ export function RobotDeskPage() {
 
         <div className="robot-wire-panel">
           <div className="robot-wire-head">
-            <div className="robot-arena-kicker">14 TIRGUS REŽĪMI — VISI VIENMĒR REDZAMI</div>
+            <div className="robot-arena-kicker">WITH-TREND ONLY — RANGE / FADE / REVERSAL NEGAIDĀ</div>
             <div className="robot-wire-chain mono">
-              {tradeTypes.join(' · ')} · SL cushion 0.20%
+              Kāpums = tikai BUY · kritums = tikai SELL · nekādu SELL SCALP pret kāpumu
             </div>
           </div>
           <div className="robot-regime-grid">

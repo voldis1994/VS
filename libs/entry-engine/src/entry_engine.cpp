@@ -118,6 +118,21 @@ TradeIntent EntryEngine::evaluate(
         }
     }
 
+    // Never short a climb or long a dump (RANGE fade is not a setup).
+    const persist = state.features.price.directional_persistence;
+    if (setup.direction == Direction::Short && persist > 0.25) {
+        intent.decision = EntryDecision::NoTrade;
+        intent.reason_codes.push_back("COUNTERTREND_SHORT");
+        intent.human_explanation = build_explanation(setup, evidence, regime, intent.decision);
+        return intent;
+    }
+    if (setup.direction == Direction::Long && persist < -0.25) {
+        intent.decision = EntryDecision::NoTrade;
+        intent.reason_codes.push_back("COUNTERTREND_LONG");
+        intent.human_explanation = build_explanation(setup, evidence, regime, intent.decision);
+        return intent;
+    }
+
     const double rp = state.structure.range_position;
     const double vel = state.features.price.velocity;
     if (setup.direction == Direction::Long && rp > 0.88 && vel > 0) {

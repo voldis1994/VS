@@ -67,14 +67,16 @@ describe('10s + 14-regime suitable entry', () => {
     expect(decideEntryFrom10sRegime(dip, 'BREAKOUT_UP')).toBeNull();
   });
 
-  it('FAILED_BREAKOUT_UP fades — SELL, not chase', () => {
-    expect(decideEntryFrom10sRegime(dip, 'FAILED_BREAKOUT_UP')?.direction).toBe('SELL');
+  it('FAILED_BREAKOUT / RANGE / REVERSAL never enter — those were the SELL SCALP / BUY LONG fades', () => {
+    expect(decideEntryFrom10sRegime(dip, 'FAILED_BREAKOUT_UP')).toBeNull();
     expect(decideEntryFrom10sRegime(rally, 'FAILED_BREAKOUT_UP')).toBeNull();
-  });
-
-  it('RANGE still mean-reverts on a real 10s body when bias is flat', () => {
-    expect(decideEntryFrom10sRegime(dip, 'RANGE')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(rally, 'RANGE')?.direction).toBe('SELL');
+    expect(decideEntryFrom10sRegime(dip, 'RANGE')).toBeNull();
+    expect(decideEntryFrom10sRegime(rally, 'RANGE')).toBeNull();
+    expect(decideEntryFrom10sRegime(dip, 'RANGE', 'UP')).toBeNull();
+    expect(decideEntryFrom10sRegime(rally, 'RANGE', 'DOWN')).toBeNull();
+    expect(decideEntryFrom10sRegime(dip, 'REVERSAL_CANDIDATE')).toBeNull();
+    expect(decideEntryFrom10sRegime(rally, 'REVERSAL_CANDIDATE')).toBeNull();
+    expect(decideEntryFrom10sRegime(rally, 'FAILED_BREAKOUT_DOWN')).toBeNull();
   });
 
   it('quiet bar is never a trade in any regime', () => {
@@ -121,12 +123,12 @@ describe('with-trend bias — no SELL SCALP into a climb, no BUY LONG into a dum
 
   it('RANGE rally is not SELL SCALP while the market is climbing', () => {
     expect(decideEntryFrom10sRegime(rally, 'RANGE', 'UP')).toBeNull();
-    expect(decideEntryFrom10sRegime(dip, 'RANGE', 'UP')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(dip, 'RANGE', 'UP')).toBeNull();
   });
 
   it('RANGE dip is not BUY LONG while the market is dumping', () => {
     expect(decideEntryFrom10sRegime(dip, 'RANGE', 'DOWN')).toBeNull();
-    expect(decideEntryFrom10sRegime(rally, 'RANGE', 'DOWN')?.direction).toBe('SELL');
+    expect(decideEntryFrom10sRegime(rally, 'RANGE', 'DOWN')).toBeNull();
   });
 
   it('FAILED_BREAKOUT / REVERSAL cannot sell a climb or buy a dump', () => {

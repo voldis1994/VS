@@ -46,12 +46,12 @@ export function trendBiasFromBars(bars: TenSecBar[]): TrendBias {
   const upN = bodies.filter((v) => v > 0.00008).length;
   const downN = bodies.filter((v) => v < -0.00008).length;
   const { net, persist } = netAndPersist(w[0]!.open, w[w.length - 1]!.close, upN, downN, w.length);
-  if (net > 0.0007 && persist >= 0) return 'UP';
-  if (net < -0.0007 && persist <= 0) return 'DOWN';
-  if (net > 0.0012) return 'UP';
-  if (net < -0.0012) return 'DOWN';
-  if (persist > 0.35 && net > 0) return 'UP';
-  if (persist < -0.35 && net < 0) return 'DOWN';
+  if (net > 0.0003 && persist >= 0) return 'UP';
+  if (net < -0.0003 && persist <= 0) return 'DOWN';
+  if (net > 0.0006) return 'UP';
+  if (net < -0.0006) return 'DOWN';
+  if (persist > 0.25 && net > 0) return 'UP';
+  if (persist < -0.25 && net < 0) return 'DOWN';
   return 'FLAT';
 }
 
@@ -64,12 +64,12 @@ export function trendBiasFromMinuteCandles(
   const upN = w.filter((c) => c.close > c.open).length;
   const downN = w.filter((c) => c.close < c.open).length;
   const { net, persist } = netAndPersist(w[0]!.open, w[w.length - 1]!.close, upN, downN, w.length);
-  if (net > 0.002 && persist >= 0) return 'UP';
-  if (net < -0.002 && persist <= 0) return 'DOWN';
-  if (net > 0.0035) return 'UP';
-  if (net < -0.0035) return 'DOWN';
-  if (persist > 0.25 && net > 0.001) return 'UP';
-  if (persist < -0.25 && net < -0.001) return 'DOWN';
+  if (net > 0.0008 && persist >= 0) return 'UP';
+  if (net < -0.0008 && persist <= 0) return 'DOWN';
+  if (net > 0.0015) return 'UP';
+  if (net < -0.0015) return 'DOWN';
+  if (persist > 0.2 && net > 0.0004) return 'UP';
+  if (persist < -0.2 && net < -0.0004) return 'DOWN';
   return 'FLAT';
 }
 
@@ -93,6 +93,11 @@ function allowsBias(direction: 'BUY' | 'SELL', bias: TrendBias): boolean {
   return direction === 'SELL';
 }
 
+/** True when an order would sell a climb or buy a dump. */
+export function isCountertrendSide(direction: 'BUY' | 'SELL', bias: TrendBias): boolean {
+  return !allowsBias(direction, bias);
+}
+
 function gate(hit: RegimeEntry | null, bias: TrendBias): RegimeEntry | null {
   if (!hit) return null;
   if (!allowsBias(hit.direction, bias)) return null;
@@ -101,7 +106,7 @@ function gate(hit: RegimeEntry | null, bias: TrendBias): RegimeEntry | null {
 
 /**
  * Suitable entry for the current 10s regime. Returns null = WAIT.
- * Respects higher-horizon bias: no SELL SCALP into a climb, no BUY LONG into a dump.
+ * With-trend only: never fade RANGE, never sell a climb, never buy a dump.
  */
 export function decideEntryFrom10sRegime(
   bar: TenSecBar,
@@ -111,8 +116,16 @@ export function decideEntryFrom10sRegime(
   const r: RegimeName = normalizeRegime(regime);
   const candle = describe(bar);
 
-  if (r === 'UNKNOWN' || r === 'TRANSITION') return null;
-  if (r === 'COMPRESSION') return null;
+  if (r === 'UNKNOWN' || r === 'TRANSITION' || r === 'COMPRESSION') return null;
+  // Countertrend by definition — WAIT, do not hunt SELL SCALP / BUY LONG against the move.
+  if (
+    r === 'RANGE' ||
+    r === 'FAILED_BREAKOUT_UP' ||
+    r === 'FAILED_BREAKOUT_DOWN' ||
+    r === 'REVERSAL_CANDIDATE'
+  ) {
+    return null;
+  }
 
   if (r === 'TREND_UP') {
     if (!movingOrNull(bar) || !dip(bar)) return null;
@@ -147,50 +160,13 @@ export function decideEntryFrom10sRegime(
     return gate({ direction: 'SELL', setup: 'BREAKOUT', reason: `${r} follow · ${candle}` }, bias);
   }
 
-  if (r === 'FAILED_BREAKOUT_UP') {
-    if (!movingOrNull(bar) || !dip(bar)) return null;
-    return gate(
-      { direction: 'SELL', setup: 'FADE', reason: `${r} fade failed long · ${candle}` },
-      bias
-    );
-  }
-  if (r === 'FAILED_BREAKOUT_DOWN') {
-    if (!movingOrNull(bar) || !rally(bar)) return null;
-    return gate(
-      { direction: 'BUY', setup: 'FADE', reason: `${r} fade failed short · ${candle}` },
-      bias
-    );
-  }
-
-  if (r === 'REVERSAL_CANDIDATE') {
-    if (!movingOrNull(bar)) return null;
-    if (dip(bar)) {
-      return gate({ direction: 'SELL', setup: 'REVERSAL', reason: `${r} · ${candle}` }, bias);
-    }
-    if (rally(bar)) {
-      return gate({ direction: 'BUY', setup: 'REVERSAL', reason: `${r} · ${candle}` }, bias);
-    }
-    return null;
-  }
-
   if (r === 'EXPANSION') {
-    if (!movingOrNull(bar)) return null;
+    if (!movingOrNull(bar) || bias === 'FLAT') return null;
     if (rally(bar)) {
       return gate({ direction: 'BUY', setup: 'BREAKOUT', reason: `${r} follow up · ${candle}` }, bias);
     }
     if (dip(bar)) {
       return gate({ direction: 'SELL', setup: 'BREAKOUT', reason: `${r} follow down · ${candle}` }, bias);
-    }
-    return null;
-  }
-
-  if (r === 'RANGE') {
-    if (!movingOrNull(bar)) return null;
-    if (dip(bar)) {
-      return gate({ direction: 'BUY', setup: 'FADE', reason: `${r} fade dip · ${candle}` }, bias);
-    }
-    if (rally(bar)) {
-      return gate({ direction: 'SELL', setup: 'FADE', reason: `${r} fade rally · ${candle}` }, bias);
     }
     return null;
   }

@@ -254,9 +254,9 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     active_regimes: activeRegimes,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'Capital OHLC (anchor) + public near Capital → REGIME → ENTRY/EXIT',
+    chain: '10s OHLC → REGIME → WITH-TREND ENTRY (no RANGE fade)',
     note:
-      'Public feeds (Yahoo/Aurum/FX/Coinbase) confirm when near Capital CFD mid; far public prices are ignored so they cannot block or distort trades.',
+      'WITH-TREND ONLY: RANGE/fade/reversal wait. Climb = BUY only. Dump = SELL only. Public feeds stay near Capital.',
   };
 }
 
@@ -1213,7 +1213,16 @@ async function robotCycle(s: Internal) {
         reason = sig.reason;
       } else {
         const only =
-          bias === 'UP' ? 'only BUY (climb — no SELL SCALP)' : bias === 'DOWN' ? 'only SELL (dump — no BUY LONG)' : 'wait';
+          s.regime === 'RANGE' ||
+          s.regime === 'FAILED_BREAKOUT_UP' ||
+          s.regime === 'FAILED_BREAKOUT_DOWN' ||
+          s.regime === 'REVERSAL_CANDIDATE'
+            ? 'WAIT (no fade / no SELL SCALP into climb / no BUY LONG into dump)'
+            : bias === 'UP'
+              ? 'only BUY (climb — no SELL SCALP)'
+              : bias === 'DOWN'
+                ? 'only SELL (dump — no BUY LONG)'
+                : 'wait with-trend';
         pushTick(s, {
           phase: 'DECIDE',
           bid: quote.bid,
@@ -1421,7 +1430,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: max 1 open trade · with-trend only (no SELL SCALP into a climb, no BUY LONG into a dump) · MANAGE with best-outcome · park when market closed',
+      'Rules: WITH-TREND ONLY · RANGE/fade/reversal never enter · no SELL SCALP into a climb · no BUY LONG into a dump · max 1 open · park when closed',
   });
 
   sessions.set(id, session);

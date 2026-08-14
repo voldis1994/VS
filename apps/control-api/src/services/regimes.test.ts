@@ -149,6 +149,15 @@ describe('classifyRegime from 10s OHLC', () => {
     expect(['RANGE', 'TRANSITION', 'UNKNOWN']).toContain(r);
   });
 
+  it('slow grind up inside a wide envelope is TREND_UP, not RANGE fade-bait', () => {
+    const bars = [0, 1, 2, 3, 4, 5, 6, 7].map((i) => {
+      const o = 2000 + i * 0.35;
+      const c = o + 0.28;
+      return bar(o, c + 0.15, o - 0.08, c, i);
+    });
+    expect(classifyRegime(bars)).toBe('TREND_UP');
+  });
+
   it('REVERSAL_CANDIDATE after TREND_UP with a violent opposite bar still inside range', () => {
     const bars = [
       bar(100.0, 101.0, 99.6, 100.7, 0),
@@ -202,7 +211,8 @@ describe('four trade-type names from real classification', () => {
     expect(formatTradeLabel('SELL', null, 'RANGE')).toBe('SELL SCALP');
     expect(formatTradeLabel('BUY', null, 'TREND_UP')).toBe('BUY LONG');
     expect(formatTradeLabel('SELL', null, 'TREND_DOWN')).toBe('SELL LONG');
-    expect(formatTradeLabel('SELL', null, 'TREND_UP')).toBe('SELL LONG');
+    expect(formatTradeLabel('SELL', null, 'TREND_UP')).toBe('SELL');
+    expect(formatTradeLabel('BUY', null, 'TREND_DOWN')).toBe('BUY');
     expect(formatTradeLabel('BUY', null, 'BREAKOUT_UP')).toBe('BUY SCALP');
   });
 

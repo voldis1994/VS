@@ -35,7 +35,7 @@ describe('10s OHLC', () => {
     expect(isMoving10s(bar)).toBe(true);
     expect(bodyPct(bar)).toBeLessThan(-0.002);
     const d = decideFromClosed10s(bar);
-    expect(d?.direction).toBe('BUY');
+    expect(d?.direction).toBe('SELL');
   });
 
   it('does not call a 0.06% tick-to-tick twitch a setup', () => {

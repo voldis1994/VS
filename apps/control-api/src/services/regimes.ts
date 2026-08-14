@@ -68,12 +68,17 @@ export function normalizeRegime(value: string | null | undefined): RegimeName {
 
 export function styleFromClassification(
   regime?: string | null,
-  setupType?: string | null
+  setupType?: string | null,
+  side?: string | null
 ): TradeStyle | null {
   const setup = String(setupType || '').trim().toUpperCase();
+  const dir = String(side || '').trim().toUpperCase();
+  const r = String(regime || '').trim().toUpperCase();
+  // Do not stamp LONG onto a SELL in an uptrend (or BUY in a downtrend).
+  if (dir === 'SELL' && (r === 'TREND_UP' || r === 'PULLBACK_UPTREND')) return null;
+  if (dir === 'BUY' && (r === 'TREND_DOWN' || r === 'PULLBACK_DOWNTREND')) return null;
   if (setup === 'CONTINUATION' || setup === 'PULLBACK') return 'LONG';
   if (setup === 'BREAKOUT' || setup === 'FADE' || setup === 'REVERSAL') return 'SCALP';
-  const r = String(regime || '').trim().toUpperCase();
   if (LONG_REGIMES.has(r)) return 'LONG';
   if (SCALP_REGIMES.has(r)) return 'SCALP';
   return null;
@@ -165,6 +170,11 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   if (trendingUp) return 'TREND_UP';
   if (trendingDown) return 'TREND_DOWN';
   if (reversal) return 'REVERSAL_CANDIDATE';
+  const first = window[0]!;
+  const net = (last.close - first.open) / Math.max(Math.abs(first.open), 1e-9);
+  // Slow grind still in the last-8 envelope is a trend, not RANGE fade-bait.
+  if (net > 0.0008 && persistence > 0.15) return 'TREND_UP';
+  if (net < -0.0008 && persistence < -0.15) return 'TREND_DOWN';
   if (inRange) return 'RANGE';
   if (previous !== 'UNKNOWN' && previous !== 'RANGE') return 'TRANSITION';
   return 'UNKNOWN';

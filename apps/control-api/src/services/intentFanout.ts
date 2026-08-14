@@ -19,6 +19,7 @@ import {
 import { formatTradeLabel } from './tradePresentation.js';
 import { notePipelineRegime } from './regimes.js';
 import { attachManageOnlyRobot } from './robotDesk.js';
+import { isCountertrendSide, trendBiasFromMinuteCandles } from './entryFromRegime.js';
 
 export { stopEntryRobotsForAccount } from './robotDesk.js';
 
@@ -278,8 +279,8 @@ async function executeForSubscription(
       }
     }
 
-    // Avoid chasing end of 1m move (10s scalp guided by Capital 1m OHLC)
-    const hist = await fetchCapitalMinutePrices(opened.session, sub.epic, 3);
+    // Avoid chasing end of 1m move + never sell a lasting climb / buy a lasting dump
+    const hist = await fetchCapitalMinutePrices(opened.session, sub.epic, 20);
     if (hist.ok && isLateMoveOnOneMinute(direction, hist.candles)) {
       noteBrokerOk(sub.client_id);
       return finish({
@@ -290,6 +291,20 @@ async function executeForSubscription(
         detail: 'Skip entry — late on 1m candle (end of move)',
         entry_price: null,
       });
+    }
+    if (hist.ok) {
+      const bias = trendBiasFromMinuteCandles(hist.candles);
+      if (isCountertrendSide(direction, bias)) {
+        noteBrokerOk(sub.client_id);
+        return finish({
+          client_id: sub.client_id,
+          account_id: sub.account_id,
+          lot_size: sub.lot_size,
+          ok: false,
+          detail: `Skip entry — countertrend ${direction} vs lasting ${bias} (no SELL into climb / no BUY into dump)`,
+          entry_price: null,
+        });
+      }
     }
 
     // SAFETY SL cushion (~0.20%), not broker minimum

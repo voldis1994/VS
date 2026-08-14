@@ -18,7 +18,7 @@ export function formatTradeLabel(
 ): string | null {
   const s = formatTradeSide(side);
   if (!s) return null;
-  const style = styleFromClassification(regime, setupType);
+  const style = styleFromClassification(regime, setupType, s);
   if (style) return `${s} ${style}`;
   const setup = String(setupType || '').trim().toUpperCase();
   if (setup === 'CONTINUATION' || setup === 'PULLBACK' || setup === 'BREAKOUT') {
