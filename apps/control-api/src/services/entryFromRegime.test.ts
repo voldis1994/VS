@@ -46,25 +46,27 @@ describe('10s + 14-regime suitable entry', () => {
   });
 
   it('TREND_UP only dip-buys — never sells the rally', () => {
-    expect(decideEntryFrom10sRegime(dip, 'TREND_UP')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(dip, 'TREND_UP')?.setup).toBe('PULLBACK');
-    expect(decideEntryFrom10sRegime(rally, 'TREND_UP')).toBeNull();
+    expect(decideEntryFrom10sRegime(dip, 'TREND_UP', 'UP')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(dip, 'TREND_UP', 'UP')?.setup).toBe('PULLBACK');
+    expect(decideEntryFrom10sRegime(rally, 'TREND_UP', 'UP')).toBeNull();
+    expect(decideEntryFrom10sRegime(dip, 'TREND_UP')).toBeNull();
   });
 
-  it('TREND_DOWN only rally-sells — never buys the dump', () => {
-    expect(decideEntryFrom10sRegime(rally, 'TREND_DOWN')?.direction).toBe('SELL');
-    expect(decideEntryFrom10sRegime(dip, 'TREND_DOWN')).toBeNull();
+  it('TREND_DOWN follows the dump (red) — never sells a green breakout', () => {
+    expect(decideEntryFrom10sRegime(dip, 'TREND_DOWN', 'DOWN')?.direction).toBe('SELL');
+    expect(decideEntryFrom10sRegime(rally, 'TREND_DOWN', 'DOWN')).toBeNull();
+    expect(decideEntryFrom10sRegime(rally, 'TREND_DOWN')).toBeNull();
   });
 
   it('PULLBACK_UPTREND resumes long on the turn-up bar', () => {
-    expect(decideEntryFrom10sRegime(rally, 'PULLBACK_UPTREND')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(rally, 'PULLBACK_UPTREND')?.setup).toBe('CONTINUATION');
-    expect(decideEntryFrom10sRegime(dip, 'PULLBACK_UPTREND')).toBeNull();
+    expect(decideEntryFrom10sRegime(rally, 'PULLBACK_UPTREND', 'UP')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(rally, 'PULLBACK_UPTREND', 'UP')?.setup).toBe('CONTINUATION');
+    expect(decideEntryFrom10sRegime(dip, 'PULLBACK_UPTREND', 'UP')).toBeNull();
   });
 
   it('BREAKOUT_UP follows up, not the failed red bar', () => {
-    expect(decideEntryFrom10sRegime(rally, 'BREAKOUT_UP')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(dip, 'BREAKOUT_UP')).toBeNull();
+    expect(decideEntryFrom10sRegime(rally, 'BREAKOUT_UP', 'UP')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(dip, 'BREAKOUT_UP', 'UP')).toBeNull();
   });
 
   it('FAILED_BREAKOUT / RANGE / REVERSAL never enter — those were the SELL SCALP / BUY LONG fades', () => {
@@ -138,8 +140,24 @@ describe('with-trend bias — no SELL SCALP into a climb, no BUY LONG into a dum
     expect(decideEntryFrom10sRegime(rally, 'REVERSAL_CANDIDATE', 'DOWN')).toBeNull();
   });
 
-  it('does not buy a TREND_UP dip if lasting bias is DOWN', () => {
-    expect(decideEntryFrom10sRegime(dip, 'TREND_UP', 'DOWN')).toBeNull();
-    expect(decideEntryFrom10sRegime(rally, 'TREND_DOWN', 'UP')).toBeNull();
+  it('never SELLs a green 10s bar — that was the circled sell into the gold climb', () => {
+    const regimes = [
+      'TREND_UP',
+      'TREND_DOWN',
+      'PULLBACK_UPTREND',
+      'PULLBACK_DOWNTREND',
+      'BREAKOUT_UP',
+      'BREAKOUT_DOWN',
+      'EXPANSION',
+      'RANGE',
+      'FAILED_BREAKOUT_UP',
+      'REVERSAL_CANDIDATE',
+    ];
+    for (const r of regimes) {
+      for (const bias of ['UP', 'DOWN', 'FLAT'] as const) {
+        const hit = decideEntryFrom10sRegime(rally, r, bias);
+        expect(hit?.direction, `${r} bias ${bias}`).not.toBe('SELL');
+      }
+    }
   });
 });

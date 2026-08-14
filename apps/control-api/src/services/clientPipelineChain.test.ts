@@ -166,8 +166,13 @@ beforeEach(() => {
   });
   fetchCapitalMinutePrices.mockResolvedValue({
     ok: true,
-    candles: [{ open: 2000, high: 2000.2, low: 1999.8, close: 2000.05 }],
-    detail: '1',
+    candles: Array.from({ length: 16 }, (_, i) => ({
+      open: 2000 + i * 0.5,
+      high: 2000 + i * 0.5 + 0.4,
+      low: 2000 + i * 0.5 - 0.1,
+      close: 2000 + i * 0.5 + 0.35,
+    })),
+    detail: '16',
   });
   createCapitalPosition.mockResolvedValue({
     ok: true,

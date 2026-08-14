@@ -24,7 +24,7 @@ import {
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
-import { decideEntryFrom10sRegime, resolveTrendBias, type TrendBias } from './entryFromRegime.js';
+import { decideEntryFrom10sRegime, denyWithTrendEntry, resolveTrendBias, type TrendBias } from './entryFromRegime.js';
 import {
   allowEntryFromFeeds,
   multiFeedOwnsOhlc,
@@ -1274,6 +1274,20 @@ async function robotCycle(s: Internal) {
           ask: quote.ask,
           mid: quote.mid,
           detail: `SKIP · ${lag.reason}`,
+        });
+        direction = null;
+      }
+    }
+
+    if (direction) {
+      const deny = denyWithTrendEntry(direction, bar, bias, s.closedBars);
+      if (deny) {
+        pushTick(s, {
+          phase: 'WAIT',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `SKIP · ${deny}`,
         });
         direction = null;
       }

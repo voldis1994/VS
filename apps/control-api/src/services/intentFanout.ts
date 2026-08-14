@@ -294,17 +294,35 @@ async function executeForSubscription(
     }
     if (hist.ok) {
       const bias = trendBiasFromMinuteCandles(hist.candles);
-      if (isCountertrendSide(direction, bias)) {
+      const first = hist.candles[0];
+      const last = hist.candles[hist.candles.length - 1];
+      const net =
+        first && last
+          ? (last.close - first.open) / Math.max(Math.abs(first.open), 1e-9)
+          : 0;
+      const sellIntoClimb = direction === 'SELL' && net > 0;
+      const buyIntoDump = direction === 'BUY' && net < 0;
+      if (isCountertrendSide(direction, bias) || sellIntoClimb || buyIntoDump) {
         noteBrokerOk(sub.client_id);
         return finish({
           client_id: sub.client_id,
           account_id: sub.account_id,
           lot_size: sub.lot_size,
           ok: false,
-          detail: `Skip entry — countertrend ${direction} vs lasting ${bias} (no SELL into climb / no BUY into dump)`,
+          detail: `Skip entry — countertrend ${direction} vs lasting ${bias} net=${(net * 100).toFixed(3)}% (no SELL into climb / no BUY into dump)`,
           entry_price: null,
         });
       }
+    } else if (direction === 'SELL' || direction === 'BUY') {
+      noteBrokerOk(sub.client_id);
+      return finish({
+        client_id: sub.client_id,
+        account_id: sub.account_id,
+        lot_size: sub.lot_size,
+        ok: false,
+        detail: 'Skip entry — no 1m trend, will not guess SELL/BUY',
+        entry_price: null,
+      });
     }
 
     // SAFETY SL cushion (~0.20%), not broker minimum
