@@ -1308,7 +1308,7 @@ async function robotCycle(s: Internal) {
           s.regime === 'REVERSAL_CANDIDATE'
             ? 'WAIT (need confirm after large move — no SELL on the impulse bar)'
             : s.trend_bias === 'UP'
-              ? 'only BUY on dip (with-trend)'
+              ? 'only BUY with-trend (dip or follow)'
               : s.trend_bias === 'DOWN'
                 ? 'only SELL on dump (with-trend)'
                 : 'wait with-trend bias or exhaustion confirm';
