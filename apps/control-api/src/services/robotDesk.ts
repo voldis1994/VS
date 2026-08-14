@@ -25,6 +25,7 @@ import {
 } from './regimes.js';
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
 import { decideEntryFrom10sRegime, denyWithTrendEntry, effectiveBias, resolveTrendBias, TREND_LOOKBACK_10S, type TrendBias } from './entryFromRegime.js';
+import { DecisionCodes, type DecisionCode } from './decisionCodes.js';
 import { runtimeBuildInfo } from './runtimeBuild.js';
 import {
   allowEntryFromFeeds,
@@ -51,6 +52,8 @@ export type RobotTick = {
   ask: number | null;
   mid: number | null;
   detail: string;
+  /** Machine reason — required for WAIT/ERROR when known. Never invent UNKNOWN. */
+  code?: DecisionCode;
 };
 
 export type RobotSession = {
@@ -198,7 +201,11 @@ async function loadCreds(connectionId: number): Promise<Record<string, string>> 
 }
 
 function pushTick(s: Internal, tick: Omit<RobotTick, 'at'>) {
-  s.ticks.unshift({ ...tick, at: new Date().toISOString() });
+  const detail =
+    tick.code && !String(tick.detail || '').startsWith(`[${tick.code}]`)
+      ? `[${tick.code}] ${tick.detail}`
+      : tick.detail;
+  s.ticks.unshift({ ...tick, detail, at: new Date().toISOString() });
   if (s.ticks.length > MAX_TICKS) s.ticks.length = MAX_TICKS;
 }
 
@@ -679,6 +686,7 @@ async function enterTrade(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
+        code: DecisionCodes.DUPLICATE_PREVENTED,
         detail: `ONE TRADE ONLY — broker already open ${existing.direction} dealId=${existing.deal_id} · no new entry`,
       });
       return;
@@ -690,6 +698,7 @@ async function enterTrade(
     bid: quote.bid,
     ask: quote.ask,
     mid: quote.mid,
+    code: DecisionCodes.SIGNAL_CREATED,
     detail: `ENTRY ${direction} · ${reason} · lot=${s.lot_size}`,
   });
 
@@ -867,6 +876,7 @@ async function enterTrade(
     bid: quote.bid,
     ask: quote.ask,
     mid: quote.mid,
+    code: DecisionCodes.FILLED,
     detail: `ORDER ENTRY ${direction} ${s.display_name} lot=${s.lot_size} · SL ${
       s.safety_sl ?? 'none'
     }${usedStopDistance != null ? ` (dist ${usedStopDistance}pts)` : ''} · ${result.detail}${
@@ -966,6 +976,7 @@ async function robotCycle(s: Internal) {
       bid: null,
       ask: null,
       mid: null,
+      code: rateLimited ? DecisionCodes.RATE_LIMITED : DecisionCodes.ERROR_SESSION,
       detail: rateLimited
         ? `RATE LIMIT — ${opened.result.detail}`
         : `Session fail: ${opened.result.detail}`,
@@ -985,6 +996,7 @@ async function robotCycle(s: Internal) {
         bid: null,
         ask: null,
         mid: null,
+        code: DecisionCodes.ERROR_NO_QUOTE,
         detail: quote.detail || `No quote for ${s.display_name} (${s.epic})`,
       });
       return;
@@ -1057,6 +1069,7 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
+          code: DecisionCodes.WAIT_MARKET_CLOSED,
           detail: formatCapitalParkDetail(
             s.epic,
             quote.market_status,
@@ -1204,6 +1217,7 @@ async function robotCycle(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
+        code: DecisionCodes.WAIT_TRADING_OFF,
         detail: 'Trading OFF — reading only (open trades still managed above)',
       });
       return;
@@ -1217,6 +1231,7 @@ async function robotCycle(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
+        code: DecisionCodes.WAIT_MANAGE_ONLY,
         detail:
           'MANAGE-ONLY · waiting for central pipeline intent (no local BUY/SELL brain)',
       });
@@ -1231,6 +1246,7 @@ async function robotCycle(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
+        code: DecisionCodes.WAIT_COOLDOWN,
         detail: `10s OHLC cooldown ${Math.ceil((20_000 - sinceClose) / 1000)}s after close · then next bar`,
       });
       return;
@@ -1306,22 +1322,24 @@ async function robotCycle(s: Internal) {
         setupType = sig.setup;
         reason = sig.reason;
       } else {
-        const only =
+        const fadeBlock =
           s.regime === 'RANGE' ||
           s.regime === 'FAILED_BREAKOUT_UP' ||
           s.regime === 'FAILED_BREAKOUT_DOWN' ||
-          s.regime === 'REVERSAL_CANDIDATE'
-            ? 'WAIT (need confirm after large move — no SELL on the impulse bar)'
-            : s.trend_bias === 'UP'
-              ? 'only BUY with-trend (dip or follow)'
-              : s.trend_bias === 'DOWN'
-                ? 'only SELL on dump (with-trend)'
-                : 'wait with-trend bias or exhaustion confirm';
+          s.regime === 'REVERSAL_CANDIDATE';
+        const only = fadeBlock
+          ? 'WAIT (need confirm after large move — no SELL on the impulse bar)'
+          : s.trend_bias === 'UP'
+            ? 'only BUY with-trend (dip or follow)'
+            : s.trend_bias === 'DOWN'
+              ? 'only SELL on dump (with-trend)'
+              : 'wait with-trend bias or exhaustion confirm';
         pushTick(s, {
           phase: 'DECIDE',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
+          code: fadeBlock ? DecisionCodes.WAIT_NO_FADE : DecisionCodes.WAIT_NO_SETUP,
           detail: `${ohlcLine} · ${regimeLabel} not with-trend on this 10s close · ${only}`,
         });
       }
@@ -1331,6 +1349,7 @@ async function robotCycle(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
+        code: DecisionCodes.WAIT_BAR_FORMING,
         detail: `${ohlcLine} · forming C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'} · wait bar close`,
       });
     }
@@ -1343,6 +1362,7 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
+          code: DecisionCodes.WAIT_LATE_MOVE,
           detail: `SKIP · late on 1m candle (end of move) · ${direction}`,
         });
         direction = null;
@@ -1373,6 +1393,7 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
+          code: DecisionCodes.WAIT_STALE_FEED,
           detail: `SKIP · ${lag.reason}`,
         });
         direction = null;
@@ -1389,6 +1410,7 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
+          code: DecisionCodes.WAIT_COUNTERTREND,
           detail: `SKIP · ${deny}`,
         });
         direction = null;
