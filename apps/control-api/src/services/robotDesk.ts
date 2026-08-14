@@ -1441,7 +1441,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: with-trend, or SELL/BUY after a large move only with next-bar confirm (never sell the impulse 10s) · max 1 open · park when closed',
+      'Rules: SL = Capital min+10% · 3-min trend · with-trend or confirmed fade after large move · max 1 open',
   });
 
   sessions.set(id, session);
