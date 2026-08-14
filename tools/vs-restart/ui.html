@@ -66,7 +66,7 @@
     <div>
       <div class="brand">VS LAUNCHER // 127.0.0.1:18090</div>
       <h1>KOMANDU PANELIS</h1>
-      <div class="sub">Šis ir VS palaišanas panelis. Viena poga aizver visu (arī palikušo Node/tsx), ņem GitHub un palaiž no jauna. Postgres :5432 jābūt OK pirms API. Šo logu neaizver.</div>
+      <div class="sub">Šis ir VS palaišanas panelis. Viena poga aizver visu (Node/tsx), atbrīvo :3000, ņem GitHub un palaiž no jauna. Postgres :5432 jābūt OK pirms API. Šo logu neaizver.</div>
     </div>
     <div class="grid">
       <div class="card" id="c-sha"><div class="k">BUILD</div><div class="v" id="sha">…</div></div>
@@ -90,7 +90,7 @@
     const errEl = document.getElementById('err');
     const btn = document.getElementById('btn');
     function lineClass(t) {
-      if (/\[KLUDA\]|FAIL|error|ECONNREFUSED|AggregateError/i.test(t)) return 'e';
+      if (/\[KLUDA\]|FAIL|error|ECONNREFUSED|EADDRINUSE|AggregateError/i.test(t)) return 'e';
       if (/\[WARN\]|warn/i.test(t)) return 'w';
       return '';
     }

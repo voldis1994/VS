@@ -67,6 +67,8 @@ func (a *App) fullRestart() error {
 	}
 
 	a.log("[4/5] Palaisu API + paneli...")
+	a.log("[..] atbrīvoju :3000 / :18080 / :5173 pirms starta...")
+	freeServicePorts(a.log)
 	if err := a.startServices(); err != nil {
 		return err
 	}
@@ -93,6 +95,38 @@ func killStack(root string, logfn func(string, ...any)) {
 	}
 	logfn("[..] apturu Node/tsx (lai migrate nesit pret tukšu :5432)...")
 	killMatchingNode(root)
+}
+
+// freeServicePorts kills whoever holds API/panel ports and waits until free.
+// Fixes EADDRINUSE when orphaned node survived VS.exe restart or tsx watch double-bind.
+func freeServicePorts(logfn func(string, ...any)) {
+	if logfn == nil {
+		logfn = func(string, ...any) {}
+	}
+	ports := []string{"3000", "5173", "5174", "5175", "18080"}
+	for attempt := 1; attempt <= 8; attempt++ {
+		busy := false
+		for _, p := range ports {
+			killPort(p)
+		}
+		killMatchingNode("")
+		time.Sleep(400 * time.Millisecond)
+		for _, p := range ports {
+			addr := "127.0.0.1:" + p
+			if portUp(addr) {
+				busy = true
+				if attempt == 1 || attempt%2 == 0 {
+					logfn("[..] ports %s vēl aizņemts — atbrīvoju (%d/8)", addr, attempt)
+				}
+			}
+		}
+		if !busy {
+			logfn("[OK] porti 3000/18080/5173 brīvi")
+			return
+		}
+		time.Sleep(600 * time.Millisecond)
+	}
+	logfn("[WARN] kāds ports vēl aizņemts — mēģinu startēt tik un tā")
 }
 
 func (a *App) ensureDocker() error {
@@ -277,17 +311,17 @@ func (a *App) startServices() error {
 		filepath.Join(a.root, "build", "windows-debug", "apps", "market-core", "market-core.exe"),
 		filepath.Join(a.root, "build", "windows-release", "apps", "market-core", "market-core.exe"),
 	)
-	pipeTok := envVal(env, "PIPELINE_TOKEN")
+	pipeTok := pipelineTokenFromEnv(env)
 	capKey := envVal(env, "CAPITAL_API_KEY")
-	if mc != "" && looksRealSecret(pipeTok) && looksRealSecret(capKey) {
+	if mc != "" && pipelineTokenOK(pipeTok) && looksRealSecret(capKey) {
 		a.spawn(mc, a.root, env, "--mode", "LIVE", "--bridge")
 		a.log("[OK] market-core bridge")
 	} else {
-		a.log("[WARN] C++ market-core IZLAISTS — tas krita ar API key/token. Darbi iet caur Node robotDesk.")
+		a.log("[WARN] C++ market-core IZLAISTS — LIVE bridge vajag PIPELINE_TOKEN. Darbi iet caur Node robotDesk.")
 		if mc == "" {
 			a.log("  iemesls: market-core.exe nav uzbuivets")
-		} else if !looksRealSecret(pipeTok) {
-			a.log("  iemesls: PIPELINE_TOKEN .env ir tukss vai CHANGE_ME")
+		} else if !pipelineTokenOK(pipeTok) {
+			a.log("  iemesls: PIPELINE_TOKEN / PIPELINE_SERVICE_TOKEN tukss vai CHANGE_ME")
 		} else if !looksRealSecret(capKey) {
 			a.log("  iemesls: CAPITAL_API_KEY .env tukss — Capital atslēgas ir datubāzē, ne C++ env")
 		}
@@ -301,7 +335,8 @@ func (a *App) startServices() error {
 	}
 
 	npm := npmBin()
-	a.spawn(npm, filepath.Join(a.root, "apps", "control-api"), env, "run", "dev")
+	// serve = tsx WITHOUT watch — watch double-bind → EADDRINUSE :3000 after ZIP/restart
+	a.spawn(npm, filepath.Join(a.root, "apps", "control-api"), env, "run", "serve")
 	a.spawn("node", a.root, env, filepath.Join(a.root, "tools", "client-public.mjs"))
 	a.spawn(npm, filepath.Join(a.root, "apps", "dashboard"), env, "run", "dev")
 
@@ -703,6 +738,26 @@ func looksRealSecret(v string) bool {
 	}
 	u := strings.ToUpper(s)
 	return !strings.Contains(u, "CHANGE_ME")
+}
+
+func pipelineTokenFromEnv(env []string) string {
+	t := strings.TrimSpace(envVal(env, "PIPELINE_TOKEN"))
+	if t == "" {
+		t = strings.TrimSpace(envVal(env, "PIPELINE_SERVICE_TOKEN"))
+	}
+	return t
+}
+
+// Same rules as apps/market-core LIVE bridge — do not start C++ if it will just error.
+func pipelineTokenOK(v string) bool {
+	s := strings.TrimSpace(v)
+	if s == "" {
+		return false
+	}
+	if s == "CHANGE_ME_PIPELINE_TOKEN" || s == "CHANGE_ME_ADMIN_TOKEN" {
+		return false
+	}
+	return looksRealSecret(s)
 }
 
 func ipv4LocalDBHost(root string) string {
