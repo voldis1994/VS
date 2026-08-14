@@ -123,20 +123,16 @@ function fmt(n: number | null | undefined, d = 5) {
 }
 
 function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'flat' | 'entry' } {
-  if (!s.running && !s.open_side) return { label: 'STOPPED', kind: 'flat' };
-  if (s.open_side === 'BUY') {
+  const regime = (s.regime || 'UNKNOWN').toUpperCase();
+  if (!s.running && !s.open_side) return { label: `STOPPED · ${regime}`, kind: 'flat' };
+  if (s.open_side === 'BUY' || s.open_side === 'SELL') {
     const t = tradeLabel(s);
-    return { label: t, kind: t.includes('SCALP') ? 'short' : 'long' };
-  }
-  if (s.open_side === 'SELL') {
-    const t = tradeLabel(s);
-    return { label: t, kind: t.includes('LONG') ? 'long' : 'short' };
+    return { label: `${t} · ${regime}`, kind: t.includes('SCALP') ? 'short' : 'long' };
   }
   if (s.running && !s.open_side) {
-    const r = (s.regime || 'UNKNOWN').toUpperCase();
-    return { label: `WAIT ENTRY · ${r}`, kind: 'entry' };
+    return { label: `WAIT · ${regime}`, kind: 'entry' };
   }
-  return { label: 'FLAT', kind: 'flat' };
+  return { label: `FLAT · ${regime}`, kind: 'flat' };
 }
 
 function tradeLabel(s: RobotSession): string {
@@ -303,7 +299,6 @@ export function RobotDeskPage() {
 
   const focused = sessions.find((s) => s.id === focusId) || null;
   const runningCount = sessions.filter((s) => s.running).length;
-  const regimes = board?.regimes?.length ? board.regimes : [...ALL_REGIMES];
   const activeRegimes = new Set(
     (board?.active_regimes?.length
       ? board.active_regimes
@@ -434,7 +429,7 @@ export function RobotDeskPage() {
             </div>
             <div className="robot-mode-banner entry">
               <div className="label">REGIMES</div>
-              <div className="value">{regimes.length}</div>
+              <div className="value">14</div>
             </div>
           </div>
           <div className="actions">
@@ -452,24 +447,38 @@ export function RobotDeskPage() {
 
         <div className="robot-wire-panel">
           <div className="robot-wire-head">
-            <div className="robot-arena-kicker">WIRED CHAIN</div>
-            <div className="robot-wire-chain mono">{chainLabel}</div>
+            <div className="robot-arena-kicker">14 TIRGUS REŽĪMI — VISI VIENMĒR REDZAMI</div>
+            <div className="robot-wire-chain mono">
+              {tradeTypes.join(' · ')} · SL cushion 0.20%
+            </div>
           </div>
-          <div className="robot-wire-regimes">
-            {regimes.map((r) => {
+          <div className="robot-regime-grid">
+            {([...ALL_REGIMES] as string[]).map((r) => {
               const name = r.toUpperCase();
               const live = activeRegimes.has(name);
               const focusHit = (focused?.regime || '').toUpperCase() === name;
               return (
-                <span
+                <div
                   key={name}
-                  className={`robot-regime-chip ${live ? 'live' : ''} ${focusHit ? 'focus' : ''}`}
-                  title={live ? 'Active on a running robot' : 'Catalog regime'}
+                  className={`robot-regime-tile ${live ? 'live' : ''} ${focusHit ? 'focus' : ''}`}
                 >
-                  {name}
-                </span>
+                  <span className="robot-regime-tile-name">{name}</span>
+                  <span className="robot-regime-tile-state">
+                    {focusHit ? 'FOCUS' : live ? 'LIVE' : 'CATALOG'}
+                  </span>
+                </div>
               );
             })}
+          </div>
+          <div className="robot-trade-types">
+            {tradeTypes.map((t) => (
+              <span key={t} className="robot-trade-chip">
+                {t}
+              </span>
+            ))}
+          </div>
+          <div className="robot-wire-chain mono" style={{ marginTop: 8 }}>
+            {chainLabel}
           </div>
           <div className="robot-wire-feeds">
             <div className="robot-arena-kicker">PUBLIC INTERNET FEEDS</div>
@@ -630,6 +639,9 @@ export function RobotDeskPage() {
                   <span>LOT / SL</span>
                   <strong>
                     {s.lot_size} / {fmt(s.safety_sl)}
+                    {s.safety_sl != null && s.entry_price
+                      ? ` (${(((Math.abs(s.entry_price - s.safety_sl) / Math.abs(s.entry_price)) * 100) || 0).toFixed(2)}%)`
+                      : ''}
                   </strong>
                 </div>
                 <div className="robot-mini-mode">

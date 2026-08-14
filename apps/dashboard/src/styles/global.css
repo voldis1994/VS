@@ -1164,6 +1164,58 @@ tr:hover td { background: rgba(57, 255, 20, 0.06); }
   flex-wrap: wrap;
   gap: 6px;
 }
+.robot-regime-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 6px;
+}
+.robot-regime-tile {
+  border: 1px solid rgba(180, 255, 0, 0.22);
+  background: rgba(0, 0, 0, 0.4);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 48px;
+}
+.robot-regime-tile-name {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: rgba(220, 255, 200, 0.75);
+}
+.robot-regime-tile-state {
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  color: rgba(220, 255, 200, 0.4);
+}
+.robot-regime-tile.live {
+  border-color: rgba(180, 255, 0, 0.7);
+  background: rgba(180, 255, 0, 0.1);
+}
+.robot-regime-tile.live .robot-regime-tile-name {
+  color: var(--lime, #b4ff00);
+}
+.robot-regime-tile.focus {
+  border-color: var(--cyan);
+  box-shadow: var(--neon-cyan);
+}
+.robot-regime-tile.focus .robot-regime-tile-name {
+  color: var(--cyan);
+}
+.robot-trade-types {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.robot-trade-chip {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  padding: 5px 10px;
+  border: 1px solid rgba(0, 229, 255, 0.4);
+  color: var(--cyan);
+}
 .robot-regime-chip {
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 10px;

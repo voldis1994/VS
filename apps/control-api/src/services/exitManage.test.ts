@@ -70,7 +70,7 @@ describe('decideBestOutcomeExit', () => {
     expect(buy.exit).toBe(false);
   });
 
-  it('hard invalidation on ~0.22% adverse', () => {
+  it('hard invalidation on ~0.18% adverse', () => {
     const d = decideBestOutcomeExit(snap({ open_side: 'BUY', entry_price: 2000, regime: 'RANGE' }), 1994);
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/HardInvalidation/);
