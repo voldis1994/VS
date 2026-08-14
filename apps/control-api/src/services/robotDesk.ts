@@ -1206,7 +1206,7 @@ async function robotCycle(s: Internal) {
     let setupType: string | null = null;
 
     if (s.ohlcState.just_closed && bar) {
-      const sig = decideEntryFrom10sRegime(bar, s.regime, bias);
+      const sig = decideEntryFrom10sRegime(bar, s.regime, bias, s.closedBars);
       if (sig) {
         direction = sig.direction;
         setupType = sig.setup;
@@ -1217,12 +1217,12 @@ async function robotCycle(s: Internal) {
           s.regime === 'FAILED_BREAKOUT_UP' ||
           s.regime === 'FAILED_BREAKOUT_DOWN' ||
           s.regime === 'REVERSAL_CANDIDATE'
-            ? 'WAIT (no fade / no SELL SCALP into climb / no BUY LONG into dump)'
+            ? 'WAIT (need confirm after large move — no SELL on the impulse bar)'
             : bias === 'UP'
-              ? 'only BUY (climb — no SELL SCALP)'
+              ? 'only BUY, or SELL after large-up + red 10s confirm'
               : bias === 'DOWN'
-                ? 'only SELL (dump — no BUY LONG)'
-                : 'wait with-trend';
+                ? 'only SELL, or BUY after large-down + green 10s confirm'
+                : 'wait with-trend or exhaustion confirm';
         pushTick(s, {
           phase: 'DECIDE',
           bid: quote.bid,
@@ -1280,7 +1280,9 @@ async function robotCycle(s: Internal) {
     }
 
     if (direction) {
-      const deny = denyWithTrendEntry(direction, bar, bias, s.closedBars);
+      const deny = denyWithTrendEntry(direction, bar, bias, s.closedBars, {
+        exhaustion: setupType === 'FADE',
+      });
       if (deny) {
         pushTick(s, {
           phase: 'WAIT',
@@ -1444,7 +1446,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: WITH-TREND ONLY · RANGE/fade/reversal never enter · no SELL SCALP into a climb · no BUY LONG into a dump · max 1 open · park when closed',
+      'Rules: with-trend, or SELL/BUY after a large move only with next-bar confirm (never sell the impulse 10s) · max 1 open · park when closed',
   });
 
   sessions.set(id, session);

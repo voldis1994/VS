@@ -110,16 +110,20 @@ export function denyWithTrendEntry(
   direction: 'BUY' | 'SELL',
   bar: TenSecBar | null | undefined,
   bias: TrendBias,
-  recent?: TenSecBar[] | null
+  recent?: TenSecBar[] | null,
+  opts?: { exhaustion?: boolean }
 ): string | null {
+  if (bar && Number.isFinite(bar.open) && Number.isFinite(bar.close)) {
+    if (direction === 'SELL' && rally(bar)) return 'no SELL on green 10s (would sell the climb)';
+    if (direction === 'BUY' && dip(bar) && !opts?.exhaustion && bias !== 'UP') {
+      return 'no BUY on red 10s without UP bias';
+    }
+  }
+  if (opts?.exhaustion) return null;
   if (isCountertrendSide(direction, bias)) {
     return direction === 'SELL'
       ? `no SELL unless lasting DOWN (bias ${bias})`
       : `no BUY unless lasting UP (bias ${bias})`;
-  }
-  if (bar && Number.isFinite(bar.open) && Number.isFinite(bar.close)) {
-    if (direction === 'SELL' && rally(bar)) return 'no SELL on green 10s (would sell the climb)';
-    if (direction === 'BUY' && dip(bar) && bias !== 'UP') return 'no BUY on red 10s without UP bias';
   }
   const w = (recent || []).filter((b) => b && Number.isFinite(b.close));
   if (w.length >= 4) {
@@ -128,6 +132,75 @@ export function denyWithTrendEntry(
     if (direction === 'BUY' && net < 0) return 'no BUY, 10s net still down';
   }
   return null;
+}
+
+function withBar(recent: TenSecBar[] | null | undefined, bar: TenSecBar): TenSecBar[] {
+  const w = (recent || []).filter((b) => b && Number.isFinite(b.close));
+  const last = w[w.length - 1];
+  const same =
+    last &&
+    Math.abs(last.open - bar.open) < 1e-9 &&
+    Math.abs(last.close - bar.close) < 1e-9;
+  if (!same) w.push(bar);
+  return w;
+}
+
+/**
+ * SELL/BUY after a large move — only with confirmation on the NEXT closed 10s.
+ * Does not sell the impulse candle itself (the circled gold sell).
+ */
+export function decideExhaustionEntry(bars: TenSecBar[]): RegimeEntry | null {
+  const w = bars.filter((b) => b && Number.isFinite(b.close));
+  if (w.length < 3) return null;
+  const cur = w[w.length - 1]!;
+  const prev = w[w.length - 2]!;
+  if (!isMoving10s(cur)) return null;
+
+  const prior = w.slice(0, -1).slice(-8);
+  const priorNet =
+    (prev.close - prior[0]!.open) / Math.max(Math.abs(prior[0]!.open), 1e-9);
+  const prevBody = bodyPct(prev);
+
+  const largeUp = prevBody >= 0.0008 || priorNet >= 0.0015;
+  const largeDown = prevBody <= -0.0008 || priorNet <= -0.0015;
+
+  // Confirm SELL: after the up-move, a red 10s that closes below the prior close.
+  if (largeUp && priorNet > 0 && dip(cur) && cur.close < prev.close) {
+    return {
+      direction: 'SELL',
+      setup: 'FADE',
+      reason: `EXHAUSTION confirm after large up · prev body=${(prevBody * 100).toFixed(3)}% priorNet=${(priorNet * 100).toFixed(3)}% · ${describe(cur)}`,
+    };
+  }
+  // Confirm BUY: after the dump, a green 10s that closes above the prior close.
+  if (largeDown && priorNet < 0 && rally(cur) && cur.close > prev.close) {
+    return {
+      direction: 'BUY',
+      setup: 'FADE',
+      reason: `EXHAUSTION confirm after large down · prev body=${(prevBody * 100).toFixed(3)}% priorNet=${(priorNet * 100).toFixed(3)}% · ${describe(cur)}`,
+    };
+  }
+  return null;
+}
+
+/** Last 1m closed opposite to a lasting climb/dump — enough confirmation to fade. */
+export function minuteExhaustionConfirmed(
+  direction: 'BUY' | 'SELL',
+  candles: Array<{ open: number; close: number }>
+): boolean {
+  const w = candles.filter((c) => c && Number.isFinite(c.open) && Number.isFinite(c.close));
+  if (w.length < 8) return false;
+  const last = w[w.length - 1]!;
+  const prev = w[w.length - 2]!;
+  const first = w[0]!;
+  const priorNet = (prev.close - first.open) / Math.max(Math.abs(first.open), 1e-9);
+  if (direction === 'SELL') {
+    return priorNet >= 0.0012 && last.close < last.open && last.close < prev.close;
+  }
+  if (direction === 'BUY') {
+    return priorNet <= -0.0012 && last.close > last.open && last.close > prev.close;
+  }
+  return false;
 }
 
 function gate(hit: RegimeEntry | null, bias: TrendBias, bar: TenSecBar): RegimeEntry | null {
@@ -144,8 +217,12 @@ function gate(hit: RegimeEntry | null, bias: TrendBias, bar: TenSecBar): RegimeE
 export function decideEntryFrom10sRegime(
   bar: TenSecBar,
   regime?: string | null,
-  bias: TrendBias = 'FLAT'
+  bias: TrendBias = 'FLAT',
+  recent?: TenSecBar[] | null
 ): RegimeEntry | null {
+  const exhaustion = decideExhaustionEntry(withBar(recent, bar));
+  if (exhaustion) return { ...exhaustion, reason: `${exhaustion.reason} · bias ${bias}` };
+
   const r: RegimeName = normalizeRegime(regime);
   const candle = describe(bar);
 

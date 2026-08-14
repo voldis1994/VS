@@ -19,7 +19,7 @@ import {
 import { formatTradeLabel } from './tradePresentation.js';
 import { notePipelineRegime } from './regimes.js';
 import { attachManageOnlyRobot } from './robotDesk.js';
-import { isCountertrendSide, trendBiasFromMinuteCandles } from './entryFromRegime.js';
+import { isCountertrendSide, minuteExhaustionConfirmed, trendBiasFromMinuteCandles } from './entryFromRegime.js';
 
 export { stopEntryRobotsForAccount } from './robotDesk.js';
 
@@ -302,7 +302,8 @@ async function executeForSubscription(
           : 0;
       const sellIntoClimb = direction === 'SELL' && net > 0;
       const buyIntoDump = direction === 'BUY' && net < 0;
-      if (isCountertrendSide(direction, bias) || sellIntoClimb || buyIntoDump) {
+      const confirmedFade = minuteExhaustionConfirmed(direction, hist.candles);
+      if (!confirmedFade && (isCountertrendSide(direction, bias) || sellIntoClimb || buyIntoDump)) {
         noteBrokerOk(sub.client_id);
         return finish({
           client_id: sub.client_id,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   decideEntryFrom10sRegime,
+  decideExhaustionEntry,
   mergeTrendBias,
   trendBiasFromBars,
   trendBiasFromMinuteCandles,
@@ -159,5 +160,36 @@ describe('with-trend bias — no SELL SCALP into a climb, no BUY LONG into a dum
         expect(hit?.direction, `${r} bias ${bias}`).not.toBe('SELL');
       }
     }
+  });
+});
+
+describe('exhaustion SELL/BUY after a large move needs confirmation', () => {
+  it('does not sell the large green impulse bar itself', () => {
+    const impulse = bar(2000, 2004); // 0.20% up
+    const climb = [...climbBars(8, 1996, 0.3), impulse];
+    expect(decideExhaustionEntry(climb)).toBeNull();
+    expect(decideEntryFrom10sRegime(impulse, 'RANGE', 'UP', climb)?.direction).not.toBe('SELL');
+  });
+
+  it('sells only after a red 10s that closes below the impulse close', () => {
+    const impulse = bar(2000, 2004);
+    const confirm = bar(2004, 2001.5);
+    const bars = [...climbBars(6, 1996, 0.4), impulse, confirm];
+    const hit = decideExhaustionEntry(bars);
+    expect(hit?.direction).toBe('SELL');
+    expect(hit?.setup).toBe('FADE');
+    expect(decideEntryFrom10sRegime(confirm, 'RANGE', 'UP', bars)?.direction).toBe('SELL');
+  });
+
+  it('does not sell a tiny red twitch without a large prior move', () => {
+    const bars = [bar(2000, 2000.2), bar(2000.2, 2000.35), bar(2000.35, 2000.2)];
+    expect(decideExhaustionEntry(bars)).toBeNull();
+  });
+
+  it('buys only after a green 10s that closes above the dump close', () => {
+    const impulse = bar(2000, 1996);
+    const confirm = bar(1996, 1998.5);
+    const bars = [...dumpBars(6, 2004, 0.4), impulse, confirm];
+    expect(decideExhaustionEntry(bars)?.direction).toBe('BUY');
   });
 });
