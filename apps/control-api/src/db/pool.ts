@@ -44,9 +44,9 @@ export async function waitForDatabase(attempts = 30, delayMs = 2000): Promise<vo
     } catch (err) {
       last = err;
       const retry = isRetryableDbError(err);
-      console.warn(
-        `Postgres nav gatavs (${i}/${attempts}): ${err instanceof Error ? err.message : err}`
-      );
+      if (i === 1 || i % 5 === 0 || i === attempts) {
+        console.warn(`[..] gaidu Postgres ${i}/${attempts} — konteineris vēl ceļas`);
+      }
       if (!retry && i >= 3) throw err;
       await sleep(delayMs);
     }

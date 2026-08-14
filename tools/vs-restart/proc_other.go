@@ -28,3 +28,11 @@ func killMatchingNode(root string) {
 	_ = exec.Command("pkill", "-f", "apps/dashboard").Run()
 	_ = exec.Command("pkill", "-f", "client-public.mjs").Run()
 }
+
+func listNodePIDs() []string { return nil }
+
+func killPIDTree(pid string) { _ = pid }
+
+func trackChild(pid int) { _ = pid }
+
+func terminateJob() {}

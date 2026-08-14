@@ -19,9 +19,11 @@ if not exist "%ROOT%\apps\dashboard\package.json" (
   exit /b 1
 )
 
-echo [..] Apturu veco VS.exe, lai var ielikt jauno (fails citadi paliek aizslēgts)...
-taskkill /F /IM VS.exe >nul 2>&1
-timeout /t 2 /nobreak >nul
+echo [..] Apturu veco VS.exe UN palikušo Node/tsx (process tree)...
+taskkill /F /T /IM VS.exe >nul 2>&1
+taskkill /F /T /IM node.exe >nul 2>&1
+taskkill /F /T /IM npm.exe >nul 2>&1
+timeout /t 3 /nobreak >nul
 
 echo [..] Nemu jaunako VS.exe no GitHub uz so mapi...
 curl.exe -fL --retry 3 -o "%ROOT%\VS.exe.new" "https://raw.githubusercontent.com/voldis1994/VS/main/VS.exe"

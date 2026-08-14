@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/csv"
 	"strings"
 )
 
@@ -13,16 +14,10 @@ func listeningPIDs(netstatOut, port string) []string {
 			continue
 		}
 		fields := strings.Fields(line)
-		// Windows: TCP  0.0.0.0:3000  0.0.0.0:0  LISTENING  1234
-		// Linux:   tcp  0.0.0.0:3000  0.0.0.0:*   LISTEN     1234/node
 		if len(fields) < 4 {
 			continue
 		}
 		local := fields[1]
-		if strings.Contains(local, "://") && len(fields) > 3 {
-			// rare alternate formats — keep scanning fields for host:port
-			local = fields[1]
-		}
 		if !localAddrHasPort(local, port) {
 			continue
 		}
@@ -45,10 +40,36 @@ func localAddrHasPort(local, port string) bool {
 	if local == "" || port == "" {
 		return false
 	}
-	// Exact suffix :3000 — not :30001
-	if strings.HasSuffix(local, ":"+port) {
-		return true
+	return strings.HasSuffix(local, ":"+port)
+}
+
+func parseTasklistCSV(out string) []string {
+	s := strings.TrimSpace(out)
+	if s == "" || strings.HasPrefix(strings.ToUpper(s), "INFO:") {
+		return nil
 	}
-	// IPv6 [::]:3000 already covered by ":"+port when written as [::]:3000
-	return false
+	r := csv.NewReader(strings.NewReader(s))
+	r.FieldsPerRecord = -1
+	seen := map[string]bool{}
+	var pids []string
+	for {
+		rec, err := r.Read()
+		if err != nil {
+			break
+		}
+		if len(rec) < 2 {
+			continue
+		}
+		name := strings.ToLower(strings.TrimSpace(rec[0]))
+		if name != "node.exe" && name != "npm.exe" && name != "tsx.exe" {
+			continue
+		}
+		pid := strings.TrimSpace(rec[1])
+		if pid == "" || pid == "0" || seen[pid] {
+			continue
+		}
+		seen[pid] = true
+		pids = append(pids, pid)
+	}
+	return pids
 }

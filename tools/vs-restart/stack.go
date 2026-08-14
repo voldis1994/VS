@@ -19,11 +19,18 @@ const githubSHA = "https://api.github.com/repos/voldis1994/VS/commits/main"
 const shaFile = ".vs-build-sha"
 
 func (a *App) fullRestart() error {
-	a.log("[1/5] Apturu vecos procesus (Node/tsx ieskaitot)...")
-	killStack(a.root, a.log)
-	time.Sleep(1200 * time.Millisecond)
+	applyDotEnv(a.root)
 
-	a.log("[2/5] GitHub update (ZIP, git nav vajadzigs)...")
+	a.log("[1/5] Apturu vecos procesus — gaidu līdz node.exe NAV...")
+	killStack(a.root, a.log)
+	killNodeUntilGone(a.log)
+
+	a.log("[2/5] vispirms Postgres (pirms ZIP, lai palikušais tsx nesit pret tukšu :5432)...")
+	if err := a.ensureDocker(); err != nil {
+		return err
+	}
+
+	a.log("[3/5] GitHub update (ZIP, git nav vajadzigs)...")
 	gh, err := fetchGithubSHA()
 	if err != nil {
 		a.log("[WARN] GitHub SHA: %s", err.Error())
@@ -44,16 +51,10 @@ func (a *App) fullRestart() error {
 		a.log("[OK] mape atjaunota")
 	}
 
-	// ZIP overwrite wakes leftover tsx watch → migrate against a downed :5432.
-	a.log("[..] vēlreiz apturu Node, ja ZIP uzmodināja tsx...")
+	a.log("[..] ZIP var uzmodināt veco tsx — apturu Node vēlreiz...")
 	killStack(a.root, a.log)
-	time.Sleep(800 * time.Millisecond)
+	killNodeUntilGone(a.log)
 
-	applyDotEnv(a.root)
-	a.log("[3/5] Docker + npm...")
-	if err := a.ensureDocker(); err != nil {
-		return err
-	}
 	upsertEnv(a.root, map[string]string{
 		"OPERATING_MODE":       "LIVE",
 		"LIVE_TRADING_ENABLED": "true",
@@ -62,19 +63,25 @@ func (a *App) fullRestart() error {
 		"DB_HOST":              ipv4LocalDBHost(a.root),
 	})
 	applyDotEnv(a.root)
+	a.log("[..] npm + migrate (Postgres jau klausās)...")
 	if err := a.npmSetup(); err != nil {
 		return err
 	}
 
 	a.log("[4/5] Palaisu API + paneli...")
-	a.log("[..] atbrīvoju :3000 / :18080 / :5173 pirms starta...")
 	freeServicePorts(a.log)
+	killNodeUntilGone(a.log)
 	if err := a.startServices(); err != nil {
 		return err
 	}
 
 	a.log("[5/5] Gaidu portus...")
-	waitPort("127.0.0.1:3000", 40, a.log)
+	if !waitPortBool("127.0.0.1:5432", 20, a.log) {
+		return fmt.Errorf("Postgres :5432 pazuda pēc starta")
+	}
+	if !waitPortBool("127.0.0.1:3000", 40, a.log) {
+		return fmt.Errorf("API :3000 neklausās — skaties logu virs šīs rindas")
+	}
 	waitPort("127.0.0.1:18080", 40, a.log)
 	openBrowser("http://127.0.0.1:18080")
 	openBrowser("http://localhost:5173/clients")
@@ -93,8 +100,31 @@ func killStack(root string, logfn func(string, ...any)) {
 	for _, port := range []string{"3000", "5173", "5174", "5175", "18080"} {
 		killPort(port)
 	}
-	logfn("[..] apturu Node/tsx (lai migrate nesit pret tukšu :5432)...")
+	logfn("[..] apturu Node/tsx (taskkill /T + Job)...")
 	killMatchingNode(root)
+}
+
+func killNodeUntilGone(logfn func(string, ...any)) {
+	if logfn == nil {
+		logfn = func(string, ...any) {}
+	}
+	for i := 1; i <= 15; i++ {
+		killMatchingNode("")
+		pids := listNodePIDs()
+		if len(pids) == 0 {
+			logfn("[OK] node.exe nav palicis")
+			return
+		}
+		logfn("[..] vēl node PID %s — nogalinu koku (%d/15)", strings.Join(pids, ","), i)
+		for _, pid := range pids {
+			killPIDTree(pid)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	left := listNodePIDs()
+	if len(left) > 0 {
+		logfn("[WARN] node joprojām dzīvs: %s — Postgres jau ir augšā, migrate nedrīkst krist", strings.Join(left, ","))
+	}
 }
 
 // freeServicePorts kills whoever holds API/panel ports and waits until free.
@@ -359,6 +389,9 @@ func (a *App) spawn(bin, dir string, env []string, args ...string) *exec.Cmd {
 		a.log("[KLUDA] %s: %s", bin, err.Error())
 		return nil
 	}
+	if cmd.Process != nil {
+		trackChild(cmd.Process.Pid)
+	}
 	go pipeLines(stdout, func(s string) {
 		a.log("%s", s)
 		if u := tunnelURL(s); u != "" {
@@ -385,6 +418,9 @@ func (a *App) run(bin, dir string, args ...string) error {
 	stderr, _ := cmd.StderrPipe()
 	if err := cmd.Start(); err != nil {
 		return err
+	}
+	if cmd.Process != nil {
+		trackChild(cmd.Process.Pid)
 	}
 	go pipeLines(stdout, func(s string) { a.log("%s", s) })
 	go pipeLines(stderr, func(s string) { a.log("%s", s) })

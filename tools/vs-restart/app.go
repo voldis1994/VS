@@ -91,7 +91,7 @@ func (a *App) snapshot() Status {
 	st.Redis = portUp("127.0.0.1:6379")
 	st.API = portUp("127.0.0.1:3000")
 	st.Panel = portUp("127.0.0.1:18080")
-	st.Running = st.API || st.Panel
+	st.Running = !st.Busy && st.Phase == "DARBOJAS" && st.API && st.Postgres
 	return st
 }
 
