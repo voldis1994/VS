@@ -18,7 +18,7 @@ import {
 } from './clientSubscriptions.js';
 import { formatTradeLabel } from './tradePresentation.js';
 import { notePipelineRegime } from './regimes.js';
-import { attachManageOnlyRobot } from './robotDesk.js';
+import { attachManageOnlyRobot, hasEntryEnabledRobot } from './robotDesk.js';
 import { isCountertrendSide, minuteExhaustionConfirmed, trendBiasFromMinuteCandles } from './entryFromRegime.js';
 
 export { stopEntryRobotsForAccount } from './robotDesk.js';
@@ -172,6 +172,17 @@ async function executeForSubscription(
   };
 
   try {
+    if (hasEntryEnabledRobot(sub.account_id, sub.epic)) {
+      return finish({
+        client_id: sub.client_id,
+        account_id: sub.account_id,
+        lot_size: sub.lot_size,
+        ok: true,
+        detail: 'SKIP · Node robotDesk owns entries',
+        entry_price: null,
+      });
+    }
+
     // Per client/account idempotency — claim BEFORE Capital (blocks concurrent duplicates)
     if (idempotencyKey) {
       const claim = await claimExecution(idempotencyKey, sub.client_id, sub.account_id);

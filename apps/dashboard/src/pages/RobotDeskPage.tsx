@@ -54,6 +54,8 @@ type BoardMeta = {
   feed_contributing: number;
   chain: string;
   note?: string;
+  git_sha?: string;
+  entry_brain?: string;
 };
 
 type DataSender = {
@@ -418,7 +420,9 @@ export function RobotDeskPage() {
           <div className="robot-arena-brand">
             <Logo size={72} wordmark />
             <div>
-              <div className="robot-arena-kicker">VS SYSTEM // MULTI-CLIENT BOARD</div>
+              <div className="robot-arena-kicker">
+                VS SYSTEM // BUILD {board?.git_sha || '…'} // NODE BRAIN
+              </div>
               <h1 className="robot-arena-title">ROBOT COMMAND</h1>
               <p className="robot-arena-sub">
                 WITH-TREND ONLY · kāpums = BUY · kritums = SELL · RANGE negaidā fade

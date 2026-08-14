@@ -11,7 +11,7 @@ export function SystemPage() {
         <div className="card">
           <div className="section-title">Process Health</div>
           <div className="grid grid-2" style={{ gap: 8 }}>
-            {['market_core', 'execution', 'database', 'control_api'].map((k) => (
+            {['market_core', 'execution', 'database', 'control_api', 'git_sha', 'entry_brain', 'sl'].map((k) => (
               <div key={k}>
                 <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>{k}</span>
                 <div style={{ fontWeight: 600 }}>{String(status?.[k] ?? '—')}</div>

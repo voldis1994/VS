@@ -14,6 +14,10 @@ export type DeskStatus = {
   capital_senders?: number;
   server_time?: string;
   feeds?: { active?: number; unhealthy?: number };
+  git_sha?: string;
+  entry_brain?: string;
+  sl?: string;
+  trend_minutes?: number;
 };
 
 export type DeskClient = {

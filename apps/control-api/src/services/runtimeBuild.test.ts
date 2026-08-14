@@ -1,0 +1,12 @@
+import { describe, expect, it } from 'vitest';
+import { runtimeBuildInfo } from './runtimeBuild.js';
+
+describe('runtimeBuildInfo', () => {
+  it('reports Node robotDesk as the entry brain and min+10% SL', () => {
+    const info = runtimeBuildInfo();
+    expect(info.entry_brain).toBe('node-robot-desk');
+    expect(info.sl).toBe('capital-min+10%');
+    expect(info.trend_minutes).toBe(3);
+    expect(info.git_sha).toMatch(/^[0-9a-f]{7,40}$|^unknown$/);
+  });
+});
