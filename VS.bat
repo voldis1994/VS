@@ -63,14 +63,23 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-if not exist "%ROOT%\.git" (
-  color 0C
-  echo [KLUDA] nav git clone - nevar uzlikt jaunako main.
-  echo         Klone https://github.com/voldis1994/VS
-  pause
-  exit /b 1
-)
 cd /d "%ROOT%"
+if not exist "%ROOT%\.git" (
+  echo [..] C:\VS-main ir ZIP mape, nav git clone. Pievienoju GitHub...
+  git init
+  if errorlevel 1 (
+    color 0C
+    echo [KLUDA] git init neizdevas.
+    pause
+    exit /b 1
+  )
+)
+git remote get-url origin >nul 2>&1
+if errorlevel 1 (
+  git remote add origin https://github.com/voldis1994/VS.git
+) else (
+  git remote set-url origin https://github.com/voldis1994/VS.git
+)
 git fetch origin main
 if errorlevel 1 (
   color 0C
@@ -78,8 +87,11 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-git checkout -f main
-git reset --hard origin/main
+git checkout -f -B main origin/main
+if errorlevel 1 (
+  git checkout -f main
+  git reset --hard origin/main
+)
 if errorlevel 1 (
   color 0C
   echo [KLUDA] git reset neizdevas. NE turpinu ar veco disku.
