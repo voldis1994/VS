@@ -1,6 +1,7 @@
-# FIX.ps1 — recovery (Admin PowerShell). Prefer API, not raw CDN:
+# FIX.ps1 — recovery (Admin PowerShell). Download-to-file, never iex(byte[]):
 #   cd C:\VS-main
-#   iex (iwr -UseBasicParsing -Headers @{Accept='application/vnd.github.raw';'User-Agent'='VS'} https://api.github.com/repos/voldis1994/VS/contents/FIX.ps1?ref=main).Content
+#   iwr -UseBasicParsing -Headers @{Accept='application/vnd.github.raw';'User-Agent'='VS'} -Uri https://api.github.com/repos/voldis1994/VS/contents/FIX.ps1?ref=main -OutFile FIX.ps1
+#   powershell -NoProfile -ExecutionPolicy Bypass -File .\FIX.ps1
 $ErrorActionPreference = 'Stop'
 $root = (Get-Location).Path
 if (-not (Test-Path -LiteralPath (Join-Path $root 'apps\dashboard\package.json'))) {

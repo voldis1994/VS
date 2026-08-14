@@ -44,9 +44,10 @@ if errorlevel 1 (
   echo.
   echo [KLUDA] Update neizdevas — skaties iemeslu augstak.
   echo.
-  echo Plan B (PowerShell Admin) — API, NE raw CDN:
+  echo Plan B (PowerShell Admin) — lejupielade FAILA, ne iex:
   echo   cd C:\VS-main
-  echo   iex (iwr -UseBasicParsing -Headers @{Accept='application/vnd.github.raw';'User-Agent'='VS'} https://api.github.com/repos/voldis1994/VS/contents/FIX.ps1?ref=main^).Content
+  echo   iwr -UseBasicParsing -Headers @{Accept='application/vnd.github.raw';'User-Agent'='VS'} -Uri https://api.github.com/repos/voldis1994/VS/contents/FIX.ps1?ref=main -OutFile FIX.ps1
+  echo   powershell -NoProfile -ExecutionPolicy Bypass -File .\FIX.ps1
   echo.
   if exist "%ROOT%\VS.exe" (
     echo [..] paliek iepriekseja VS.exe — megina palaist to.

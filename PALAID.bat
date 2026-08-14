@@ -4,7 +4,8 @@ cd /d "%~dp0"
 if not exist "%~dp0VS.exe" (
   echo NAV VS.exe — PowerShell Admin:
   echo   cd C:\VS-main
-  echo   iex (iwr -UseBasicParsing -Headers @{Accept='application/vnd.github.raw';'User-Agent'='VS'} https://api.github.com/repos/voldis1994/VS/contents/FIX.ps1?ref=main^).Content
+  echo   iwr -UseBasicParsing -Headers @{Accept='application/vnd.github.raw';'User-Agent'='VS'} -Uri https://api.github.com/repos/voldis1994/VS/contents/FIX.ps1?ref=main -OutFile FIX.ps1
+  echo   powershell -NoProfile -ExecutionPolicy Bypass -File .\FIX.ps1
   pause
   exit /b 1
 )
