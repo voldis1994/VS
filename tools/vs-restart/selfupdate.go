@@ -46,9 +46,10 @@ func maybeSelfUpdate(root string, logfn func(string, ...any)) bool {
 		return false
 	}
 	st, err := os.Stat(tmp)
-	if err != nil || st.Size() < 6_013_000 {
+	// 5 MB floor rejects HTML error pages; do not require exact latest byte size (CDN lag).
+	if err != nil || st.Size() < 5_000_000 {
 		_ = os.Remove(tmp)
-		logfn("[WARN] self-update: lejupielāde pārāk maza / CDN vecs fails (%v)", err)
+		logfn("[WARN] self-update: lejupielāde pārāk maza / nav exe (%v size=%d)", err, sizeOr0(st))
 		return false
 	}
 	newSum, newSize, err := fileSHA256(tmp)
@@ -102,4 +103,11 @@ func fileSHA256(path string) (string, int64, error) {
 		return "", 0, err
 	}
 	return hex.EncodeToString(h.Sum(nil)), n, nil
+}
+
+func sizeOr0(st os.FileInfo) int64 {
+	if st == nil {
+		return 0
+	}
+	return st.Size()
 }
