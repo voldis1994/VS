@@ -19,9 +19,9 @@ const githubSHA = "https://api.github.com/repos/voldis1994/VS/commits/main"
 const shaFile = ".vs-build-sha"
 
 func (a *App) fullRestart() error {
-	a.log("[1/5] Apturu vecos procesus...")
-	killStack(a.root)
-	time.Sleep(800 * time.Millisecond)
+	a.log("[1/5] Apturu vecos procesus (Node/tsx ieskaitot)...")
+	killStack(a.root, a.log)
+	time.Sleep(1200 * time.Millisecond)
 
 	a.log("[2/5] GitHub update (ZIP, git nav vajadzigs)...")
 	gh, err := fetchGithubSHA()
@@ -44,6 +44,12 @@ func (a *App) fullRestart() error {
 		a.log("[OK] mape atjaunota")
 	}
 
+	// ZIP overwrite wakes leftover tsx watch → migrate against a downed :5432.
+	a.log("[..] vēlreiz apturu Node, ja ZIP uzmodināja tsx...")
+	killStack(a.root, a.log)
+	time.Sleep(800 * time.Millisecond)
+
+	applyDotEnv(a.root)
 	a.log("[3/5] Docker + npm...")
 	if err := a.ensureDocker(); err != nil {
 		return err
@@ -53,6 +59,7 @@ func (a *App) fullRestart() error {
 		"LIVE_TRADING_ENABLED": "true",
 		"MARKET_CORE_BRIDGE":   "1",
 		"BUILD_SHA":            readLocalSHA(a.root),
+		"DB_HOST":              ipv4LocalDBHost(a.root),
 	})
 	applyDotEnv(a.root)
 	if err := a.npmSetup(); err != nil {
@@ -72,7 +79,10 @@ func (a *App) fullRestart() error {
 	return nil
 }
 
-func killStack(root string) {
+func killStack(root string, logfn func(string, ...any)) {
+	if logfn == nil {
+		logfn = func(string, ...any) {}
+	}
 	names := []string{"market-core.exe", "execution-service.exe", "cloudflared.exe"}
 	for _, n := range names {
 		_ = exec.Command("taskkill", "/F", "/IM", n).Run()
@@ -81,6 +91,7 @@ func killStack(root string) {
 	for _, port := range []string{"3000", "5173", "5174", "5175", "18080"} {
 		killPort(port)
 	}
+	logfn("[..] apturu Node/tsx (lai migrate nesit pret tukšu :5432)...")
 	killMatchingNode(root)
 }
 
@@ -111,23 +122,101 @@ func (a *App) ensureDocker() error {
 	}
 	_ = exec.Command(docker, "start", "market-reader-postgres").Run()
 	_ = exec.Command(docker, "start", "market-reader-redis").Run()
-	cmd := exec.Command(docker, "compose", "up", "-d", "postgres", "redis")
-	cmd.Dir = a.root
-	if out, err := cmd.CombinedOutput(); err != nil {
-		a.log("[WARN] compose: %s", strings.TrimSpace(string(out)))
-		cmd2 := exec.Command(docker, "compose", "up", "-d", "postgres", "redis")
-		cmd2.Dir = a.root
-		_ = cmd2.Run()
-	}
-	a.log("[..] gaidu Postgres :5432 un Redis :6379 ...")
-	if !waitPortBool("127.0.0.1:5432", 40, a.log) {
-		return fmt.Errorf("Postgres (:5432) nav. Atver Docker Desktop — jābūt zaļam Engine running. Tad spied PALAIST / RESTARTĒT")
+	a.composeUp(docker, true)
+	a.log("[..] gaidu līdz Postgres PATIEŠĀM pieņem savienojumus (Engine OK ≠ :5432)...")
+	if !a.waitPostgresReady(docker, 90) {
+		a.dumpPostgresLogs(docker)
+		return fmt.Errorf("Postgres (:5432) nav. Atver Docker Desktop — Engine running + konteineris market-reader-postgres. Tad spied PALAIST / RESTARTĒT")
 	}
 	if !waitPortBool("127.0.0.1:6379", 40, a.log) {
 		return fmt.Errorf("Redis (:6379) nav. Docker Desktop jābūt ieslēgtam. Tad spied PALAIST / RESTARTĒT")
 	}
-	a.log("[OK] Postgres + Redis klausās")
+	a.log("[OK] Postgres + Redis klausās — tikai tagad migrate")
 	return nil
+}
+
+func (a *App) composeUp(docker string, withWait bool) {
+	argsList := [][]string{}
+	if withWait {
+		argsList = append(argsList, []string{"compose", "up", "-d", "--wait", "--wait-timeout", "120", "postgres", "redis"})
+	}
+	argsList = append(argsList, []string{"compose", "up", "-d", "postgres", "redis"})
+	for i, args := range argsList {
+		cmd := exec.Command(docker, args...)
+		cmd.Dir = a.root
+		hideWindow(cmd)
+		out, err := cmd.CombinedOutput()
+		txt := strings.TrimSpace(string(out))
+		if txt != "" {
+			a.log("%s", txt)
+		}
+		if err == nil {
+			return
+		}
+		if i+1 < len(argsList) {
+			a.log("[WARN] compose %s — mēģinu bez --wait", err.Error())
+			continue
+		}
+		a.log("[WARN] compose: %s", err.Error())
+	}
+}
+
+func (a *App) waitPostgresReady(docker string, tries int) bool {
+	user := strings.TrimSpace(os.Getenv("DB_USER"))
+	if user == "" {
+		user = "market_reader"
+	}
+	db := strings.TrimSpace(os.Getenv("DB_NAME"))
+	if db == "" {
+		db = "market_reader"
+	}
+	portOK := 0
+	for i := 0; i < tries; i++ {
+		if pgIsReady(docker, user, db) {
+			a.log("[OK] pg_isready accepting connections")
+			return true
+		}
+		if portUp("127.0.0.1:5432") {
+			portOK++
+			if portOK >= 5 {
+				a.log("[OK] 127.0.0.1:5432 klausās")
+				return true
+			}
+		} else {
+			portOK = 0
+		}
+		if i%5 == 4 {
+			a.log("[..] gaidu Postgres :5432 ... %d/%d", i+1, tries)
+		}
+		time.Sleep(time.Second)
+	}
+	return false
+}
+
+func pgIsReady(docker, user, db string) bool {
+	cmd := exec.Command(docker, "exec", "market-reader-postgres", "pg_isready", "-U", user, "-d", db)
+	hideWindow(cmd)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return false
+	}
+	s := strings.ToLower(string(out))
+	return strings.Contains(s, "accepting")
+}
+
+func (a *App) dumpPostgresLogs(docker string) {
+	cmd := exec.Command(docker, "logs", "--tail", "40", "market-reader-postgres")
+	hideWindow(cmd)
+	out, _ := cmd.CombinedOutput()
+	txt := strings.TrimSpace(string(out))
+	if txt != "" {
+		a.log("Postgres logi:\n%s", txt)
+	}
+	ps := exec.Command(docker, "ps", "-a", "--filter", "name=market-reader-postgres")
+	hideWindow(ps)
+	if o, err := ps.CombinedOutput(); err == nil {
+		a.log("docker ps: %s", strings.TrimSpace(string(o)))
+	}
 }
 
 func (a *App) npmSetup() error {
@@ -141,13 +230,14 @@ func (a *App) npmSetup() error {
 	if err := a.run(npm, api, "install", "--registry", "https://registry.npmjs.org/", "--userconfig", rc); err != nil {
 		return fmt.Errorf("control-api npm install: %w", err)
 	}
+	a.log("[..] DB migrate (gaida Postgres, ja vēl ceļas)...")
 	var migErr error
-	for i := 1; i <= 5; i++ {
+	for i := 1; i <= 8; i++ {
 		migErr = a.run(npm, api, "run", "migrate")
 		if migErr == nil {
 			break
 		}
-		a.log("[WARN] migrate %d/5: %s", i, migErr.Error())
+		a.log("[WARN] migrate %d/8: %s", i, migErr.Error())
 		time.Sleep(3 * time.Second)
 	}
 	if migErr != nil {
@@ -581,6 +671,9 @@ func (a *App) childEnv(extra map[string]string) []string {
 	for k, v := range loadDotEnv(a.root) {
 		merged[k] = v
 	}
+	if host, ok := merged["DB_HOST"]; !ok || host == "" || strings.EqualFold(host, "localhost") {
+		merged["DB_HOST"] = "127.0.0.1"
+	}
 	for k, v := range extra {
 		if v != "" {
 			merged[k] = v
@@ -610,4 +703,12 @@ func looksRealSecret(v string) bool {
 	}
 	u := strings.ToUpper(s)
 	return !strings.Contains(u, "CHANGE_ME")
+}
+
+func ipv4LocalDBHost(root string) string {
+	h := strings.TrimSpace(loadDotEnv(root)["DB_HOST"])
+	if h == "" || strings.EqualFold(h, "localhost") {
+		return "127.0.0.1"
+	}
+	return h
 }
