@@ -29,6 +29,9 @@ const ALL_REGIMES = [
   'TRANSITION',
 ] as const;
 
+/** Catalog shown on the board — UNKNOWN is seeding only, not a trade mode. */
+const BOARD_REGIMES = ALL_REGIMES.filter((r) => r !== 'UNKNOWN');
+
 type FeedLeg = {
   sender_id: string;
   name: string;
@@ -120,13 +123,22 @@ type RobotSession = {
   error: string | null;
 };
 
+function displayRegime(s: Pick<RobotSession, 'regime' | 'trend_bias' | 'ohlc_10s'>): string {
+  const r = String(s.regime || '').toUpperCase();
+  if (r && r !== 'UNKNOWN') return r;
+  if (s.trend_bias === 'UP') return 'TREND_UP';
+  if (s.trend_bias === 'DOWN') return 'TREND_DOWN';
+  if (s.ohlc_10s?.market === 'SEEDING') return 'SEEDING';
+  return 'SEEDING';
+}
+
 function fmt(n: number | null | undefined, d = 5) {
   if (n == null || !Number.isFinite(n)) return '—';
   return n.toLocaleString(undefined, { maximumFractionDigits: d });
 }
 
 function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'flat' | 'entry' } {
-  const regime = (s.regime || 'UNKNOWN').toUpperCase();
+  const regime = displayRegime(s);
   if (!s.running && !s.open_side) return { label: `STOPPED · ${regime}`, kind: 'flat' };
   if (s.open_side === 'BUY' || s.open_side === 'SELL') {
     const t = tradeLabel(s);
@@ -139,8 +151,10 @@ function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'fl
       regime === 'FAILED_BREAKOUT_DOWN' ||
       regime === 'REVERSAL_CANDIDATE' ||
       regime === 'COMPRESSION' ||
-      regime === 'TRANSITION';
-    if (fade) return { label: `WAIT · ${regime} · no fade`, kind: 'entry' };
+      regime === 'TRANSITION' ||
+      regime === 'SEEDING';
+    if (fade && regime !== 'SEEDING') return { label: `WAIT · ${regime} · no fade`, kind: 'entry' };
+    if (regime === 'SEEDING') return { label: 'WAIT · SEEDING 10s', kind: 'entry' };
     const bias = String(s.trend_bias || s.decision_chain?.setup || '').toUpperCase();
     const only =
       bias.includes('UP') ? ' · bias UP · only BUY' : bias.includes('DOWN') ? ' · bias DOWN · only SELL' : ' · with-trend';
@@ -214,7 +228,8 @@ export function RobotDeskPage() {
   const [launchFilter, setLaunchFilter] = useState('');
   const [launchEpic, setLaunchEpic] = useState('');
   const [launchLot, setLaunchLot] = useState('0.1');
-  const [showDeploy, setShowDeploy] = useState(false);
+  const [showDeploy, setShowDeploy] = useState(true);
+  const [isFs, setIsFs] = useState(false);
 
   const accountId = params.get('account_id');
   const epic = params.get('epic');
@@ -288,13 +303,39 @@ export function RobotDeskPage() {
   }, [launchAccountId]);
 
   useEffect(() => {
+    const onFs = () => setIsFs(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', onFs);
+    return () => document.removeEventListener('fullscreenchange', onFs);
+  }, []);
+
+  useEffect(() => {
+    if (sessions.length === 0) setShowDeploy(true);
+  }, [sessions.length]);
+
+  const goFullscreen = async () => {
+    try {
+      if (!document.fullscreenElement) {
+        await (shellRef.current || document.documentElement).requestFullscreen();
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch {
+      setError('Spied F11 pārlūkā — pilnekrāns');
+    }
+  };
+
+  useEffect(() => {
     if (!launchAccountId) return;
     void apiFetch<typeof launchMarkets>(`/api/trading/accounts/${launchAccountId}/instruments`)
       .then((rows) => {
-        setLaunchMarkets(rows || []);
-        if (rows?.[0]) {
-          setLaunchEpic(rows[0].epic || rows[0].symbol);
-          setLaunchLot(String(rows[0].lot_size || rows[0].min_lot || 0.1));
+        const list = rows || [];
+        setLaunchMarkets(list);
+        const gold =
+          list.find((m) => /gold|xau/i.test(`${m.display_name} ${m.epic || ''} ${m.symbol}`)) ||
+          list[0];
+        if (gold) {
+          setLaunchEpic(gold.epic || gold.symbol);
+          setLaunchLot(String(gold.lot_size || gold.min_lot || 0.1));
         }
       })
       .catch(() => setLaunchMarkets([]));
@@ -317,8 +358,10 @@ export function RobotDeskPage() {
   const activeRegimes = new Set(
     (board?.active_regimes?.length
       ? board.active_regimes
-      : sessions.filter((s) => s.running).map((s) => s.regime || 'UNKNOWN')
-    ).map((r) => r.toUpperCase()),
+      : sessions.filter((s) => s.running).map((s) => displayRegime(s))
+    )
+      .map((r) => r.toUpperCase())
+      .filter((r) => r && r !== 'UNKNOWN' && r !== 'SEEDING'),
   );
   const capitalSenders = senders.filter(
     (s) => s.kind === 'capital_com' && s.enabled !== false,
@@ -446,10 +489,13 @@ export function RobotDeskPage() {
             </div>
             <div className="robot-mode-banner entry">
               <div className="label">REGIMES</div>
-              <div className="value">14</div>
+              <div className="value">{BOARD_REGIMES.length}</div>
             </div>
           </div>
           <div className="actions">
+            <button className="btn btn-primary" type="button" onClick={() => void goFullscreen()}>
+              {isFs ? 'EXIT FS' : 'PILNEKRĀNS'}
+            </button>
             <button className="btn btn-primary" type="button" onClick={() => setShowDeploy((v) => !v)}>
               {showDeploy ? 'CLOSE DEPLOY' : '+ DEPLOY'}
             </button>
@@ -470,10 +516,10 @@ export function RobotDeskPage() {
             </div>
           </div>
           <div className="robot-regime-grid">
-            {([...ALL_REGIMES] as string[]).map((r) => {
+            {BOARD_REGIMES.map((r) => {
               const name = r.toUpperCase();
               const live = activeRegimes.has(name);
-              const focusHit = (focused?.regime || '').toUpperCase() === name;
+              const focusHit = displayRegime(focused || { regime: '', trend_bias: 'FLAT' }) === name;
               return (
                 <div
                   key={name}
@@ -481,7 +527,7 @@ export function RobotDeskPage() {
                 >
                   <span className="robot-regime-tile-name">{name}</span>
                   <span className="robot-regime-tile-state">
-                    {focusHit ? 'FOCUS' : live ? 'LIVE' : 'CATALOG'}
+                    {focusHit ? 'FOCUS' : live ? 'LIVE' : 'READY'}
                   </span>
                 </div>
               );
@@ -500,7 +546,9 @@ export function RobotDeskPage() {
           <div className="robot-wire-feeds">
             <div className="robot-arena-kicker">PUBLIC INTERNET FEEDS</div>
             <div className="mono robot-wire-empty" style={{ marginBottom: 6 }}>
-              {boardNote}
+              {sessions.length === 0
+                ? 'NAV ROBOTA — feedi gaida DEPLOY. Bez unit netirgo.'
+                : boardNote}
             </div>
             <div className="robot-feed-legs">
               {publicSenders.map((s) => (
@@ -595,9 +643,18 @@ export function RobotDeskPage() {
 
         {sessions.length === 0 && !busy && (
           <div className="robot-empty">
-            <div className="robot-arena-kicker">EMPTY BOARD</div>
-            <p style={{ marginBottom: 12 }}>Vēl nav robotu. Spied + DEPLOY vai Trading → START ROBOT.</p>
-            <button className="btn btn-primary" type="button" onClick={() => setShowDeploy(true)}>
+            <div className="robot-arena-kicker">EMPTY BOARD — NETIRGO</div>
+            <p style={{ marginBottom: 12 }}>
+              Units = 0. Izvēlies account + Gold, spied <b>DEPLOY</b>. Tikai tad robotš lasa cenas un ieiet.
+            </p>
+            <button
+              className="btn btn-primary"
+              type="button"
+              onClick={() => {
+                setShowDeploy(true);
+                void goFullscreen();
+              }}
+            >
               + DEPLOY FIRST UNIT
             </button>
           </div>
@@ -629,7 +686,7 @@ export function RobotDeskPage() {
                 </div>
                 <div className="robot-mini-market">{s.display_name}</div>
                 <div className={`robot-mini-posture ${p.kind}`}>{p.label}</div>
-                <div className="robot-mini-regime mono">{(s.regime || 'UNKNOWN').toUpperCase()}</div>
+                <div className="robot-mini-regime mono">{displayRegime(s)}</div>
                 <div className="robot-mini-row">
                   <span>MID</span>
                   <strong>{fmt(s.last_mid)}</strong>
@@ -667,7 +724,7 @@ export function RobotDeskPage() {
                       ? `${s.decision_chain.feeds} → ${s.decision_chain.regime} → ${
                           s.decision_chain.setup || s.trend_bias || 'bias —'
                         } → ${s.decision_chain.action}`
-                      : `${s.mode} · ${s.regime || 'UNKNOWN'}`
+                      : `${s.mode} · ${displayRegime(s)}`
                     : 'STOPPED'}
                 </div>
                 {(s.feed_legs?.length ?? 0) > 0 && (
@@ -750,7 +807,7 @@ export function RobotDeskPage() {
                   {focused.ohlc_10s?.market || 'SEEDING'}
                 </div>
                 <div>MODE · {focused.running ? focused.mode : 'STOPPED'}</div>
-                <div>REGIME · {(focused.regime || 'UNKNOWN').toUpperCase()}</div>
+                <div>REGIME · {displayRegime(focused)}</div>
                 <div>
                   BIAS · {(focused.trend_bias || 'FLAT').toUpperCase()}
                   {focused.trend_bias === 'UP'

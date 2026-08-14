@@ -259,7 +259,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     git_sha: build.git_sha,
     entry_brain: build.entry_brain,
     chain: '10s OHLC → REGIME → WITH-TREND ENTRY (no RANGE fade) · Node robotDesk',
-    note: `BUILD ${build.git_sha} · NODE BRAIN · UNKNOWN+bias unlock · SL=min+10% · ${build.trend_minutes}-min trend`,
+    note: `BUILD ${build.git_sha} · NODE BRAIN · with-trend · SL=min+10% · ${build.trend_minutes}-min`,
   };
 }
 
