@@ -42,14 +42,23 @@ echo [2] Lejupieladeju JAUNO VS.exe no GitHub...
 del /f /q "%ROOT%\VS.exe.new" >nul 2>&1
 del /f /q "%ROOT%\VS.exe.zip" >nul 2>&1
 set "OKEXE=0"
-REM 5 MB = atmet HTML kludas lapas; neatsakam CDN, ja bytes nedaudz mazaks par jaunako build
+REM 5 MB = atmet HTML; neprasa precizu jaunako byte size (raw CDN biezi atpaliek)
 set "MINSIZE=5000000"
 
+REM 1) GitHub API raw — apiež novecojušu raw.githubusercontent.com CDN
+if not "!OKEXE!"=="1" (
+  echo [..] api.github.com raw contents
+  del /f /q "%ROOT%\VS.exe.new" >nul 2>&1
+  curl.exe -fL --retry 5 --retry-delay 2 --connect-timeout 20 --max-time 600 -A "VS-bat" -H "Accept: application/vnd.github.raw" -H "User-Agent: VS-bat" -o "%ROOT%\VS.exe.new" "https://api.github.com/repos/voldis1994/VS/contents/VS.exe?ref=main"
+  call :check_exe "%ROOT%\VS.exe.new"
+)
+
+REM 2) Commit-pinned + branch raw (CDN uz /main biezi atpaliek)
 for %%U in (
+  "https://raw.githubusercontent.com/voldis1994/VS/5828745/VS.exe"
+  "https://github.com/voldis1994/VS/raw/5828745/VS.exe"
   "https://github.com/voldis1994/VS/raw/refs/heads/main/VS.exe"
-  "https://github.com/voldis1994/VS/raw/main/VS.exe"
   "https://raw.githubusercontent.com/voldis1994/VS/main/VS.exe"
-  "https://raw.githubusercontent.com/voldis1994/VS/refs/heads/main/VS.exe"
 ) do (
   if not "!OKEXE!"=="1" (
     echo [..] %%~U
@@ -59,9 +68,9 @@ for %%U in (
   )
 )
 
-REM Fallback: izvelk VS.exe no GitHub ZIP (ja raw CDN dod HTML / tuksu)
+REM 3) ZIP fallback
 if not "!OKEXE!"=="1" (
-  echo [..] ZIP fallback — https://codeload.github.com/voldis1994/VS/zip/refs/heads/main
+  echo [..] ZIP fallback — codeload main
   curl.exe -fL --retry 5 --retry-delay 2 --connect-timeout 20 --max-time 600 -A "VS-bat" -o "%ROOT%\VS.exe.zip" "https://codeload.github.com/voldis1994/VS/zip/refs/heads/main"
   if exist "%ROOT%\VS.exe.zip" (
     powershell -NoProfile -ExecutionPolicy Bypass -Command ^
@@ -82,7 +91,13 @@ if not "!OKEXE!"=="1" (
     echo [..] paliek esošais VS.exe — megina palaist to.
     goto launch_existing
   )
-  echo [KLUDA] VS.exe nav — parbaudi internetu / firewall un megini velreiz.
+  echo.
+  echo Dari TAGAD PowerShell ka Administrators:
+  echo   cd C:\VS-main
+  echo   curl.exe -fL -H "Accept: application/vnd.github.raw" -o VS.exe "https://api.github.com/repos/voldis1994/VS/contents/VS.exe?ref=main"
+  echo   curl.exe -fL -o VS.bat "https://raw.githubusercontent.com/voldis1994/VS/main/VS.bat"
+  echo   .\VS.exe
+  echo.
   pause
   exit /b 1
 )
@@ -133,7 +148,6 @@ for %%A in ("%CAND%") do (
   echo      bytes=%%~zA  (vajag >= !MINSIZE! + MZ)
   if %%~zA LSS !MINSIZE! goto :eof
 )
-REM PE/MZ header — atmet HTML error pages
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$b=Get-Content -LiteralPath '%CAND%' -Encoding Byte -TotalCount 2 -ErrorAction SilentlyContinue;" ^
   "if ($b -and $b.Length -ge 2 -and $b[0]-eq 0x4D -and $b[1]-eq 0x5A) { exit 0 } else { exit 1 }"

@@ -605,7 +605,15 @@ func findVSRoot(unp string) string {
 
 func downloadFile(url, dest string) error {
 	c := &http.Client{Timeout: 3 * time.Minute}
-	res, err := c.Get(url)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "VS-launcher")
+	if strings.Contains(url, "api.github.com") {
+		req.Header.Set("Accept", "application/vnd.github.raw")
+	}
+	res, err := c.Do(req)
 	if err != nil {
 		return err
 	}

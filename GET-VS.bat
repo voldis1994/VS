@@ -1,11 +1,11 @@
 @echo off
-REM Emergency bootstrap — lejupielade VS.exe + VS.bat bez MINSIZE slazda
+REM Emergency bootstrap — apiež raw CDN (biezi atpaliek no main)
 setlocal EnableExtensions
 cd /d "%~dp0"
-echo [GET] VS.exe + VS.bat no GitHub main...
-curl.exe -fL --retry 5 -o "%CD%\VS.exe.new" "https://github.com/voldis1994/VS/raw/refs/heads/main/VS.exe"
+echo [GET] VS.exe caur GitHub API (ne raw CDN)...
+curl.exe -fL --retry 5 -A "VS-get" -H "Accept: application/vnd.github.raw" -o "%CD%\VS.exe.new" "https://api.github.com/repos/voldis1994/VS/contents/VS.exe?ref=main"
 if not exist "%CD%\VS.exe.new" (
-  curl.exe -fL --retry 5 -o "%CD%\VS.exe.new" "https://raw.githubusercontent.com/voldis1994/VS/main/VS.exe"
+  curl.exe -fL --retry 5 -o "%CD%\VS.exe.new" "https://raw.githubusercontent.com/voldis1994/VS/5828745/VS.exe"
 )
 if not exist "%CD%\VS.exe.new" (
   echo FAIL — nevar lejupieladet VS.exe
