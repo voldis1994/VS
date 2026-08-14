@@ -234,15 +234,39 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
   return {
     feeds,
     ohlc: ohlcLine,
-    regime: s.regime || 'UNKNOWN',
+    regime: effectiveRegimeName(s),
     setup: s.trend_bias ? `bias ${s.trend_bias}` : null,
     action,
   };
 }
 
+/** UI/chain: never show UNKNOWN when with-trend bias already unlocked the book. */
+export function effectiveRegimeName(s: {
+  regime?: string | null;
+  trend_bias?: TrendBias | string | null;
+}): string {
+  const r = String(s.regime || 'UNKNOWN').toUpperCase();
+  if (r && r !== 'UNKNOWN') return r;
+  if (s.trend_bias === 'UP') return 'TREND_UP';
+  if (s.trend_bias === 'DOWN') return 'TREND_DOWN';
+  return r || 'UNKNOWN';
+}
+
+/** Persist bias unlock onto session.regime so board/logs/chain stay consistent. */
+function applyBiasRegimeUnlock(s: Internal) {
+  if (s.regime && s.regime !== 'UNKNOWN') return;
+  if (s.trend_bias === 'UP') s.regime = 'TREND_UP';
+  else if (s.trend_bias === 'DOWN') s.regime = 'TREND_DOWN';
+}
+
 export function robotBoardMeta(sessions: RobotSession[]) {
   const activeRegimes = [
-    ...new Set(sessions.filter((s) => s.running).map((s) => s.regime || 'UNKNOWN')),
+    ...new Set(
+      sessions
+        .filter((s) => s.running)
+        .map((s) => effectiveRegimeName(s))
+        .filter((r) => r && r !== 'UNKNOWN' && r !== 'SEEDING'),
+    ),
   ];
   const maxFeeds = sessions.reduce(
     (n, s) => Math.max(n, s.feed_sender_count || 0, s.feed_legs?.length || 0),
@@ -1208,8 +1232,10 @@ async function robotCycle(s: Internal) {
     }
     const bias = resolveTrendBias(s.closedBars, s.minuteCandles);
     s.trend_bias = bias;
+    applyBiasRegimeUnlock(s);
+    const regimeLabel = effectiveRegimeName(s);
     const ohlcLine = bar
-      ? `10s O=${bar.open.toFixed(2)} H=${bar.high.toFixed(2)} L=${bar.low.toFixed(2)} C=${bar.close.toFixed(2)} ${s.regime} · bias ${bias} · feeds ${
+      ? `10s O=${bar.open.toFixed(2)} H=${bar.high.toFixed(2)} L=${bar.low.toFixed(2)} C=${bar.close.toFixed(2)} ${regimeLabel} · bias ${bias} · feeds ${
           s.feed_contributing || 0
         }/${s.feed_sender_count || 0} ${s.feed_source || 'LOCAL'} ${s.feed_agreement || ''}`
       : `10s OHLC seeding · feeds ${s.feed_contributing || 0}/${s.feed_sender_count || 0}`;
@@ -1241,7 +1267,7 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${ohlcLine} · ${s.regime} not with-trend on this 10s close · ${only}`,
+          detail: `${ohlcLine} · ${regimeLabel} not with-trend on this 10s close · ${only}`,
         });
       }
     } else {

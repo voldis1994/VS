@@ -763,7 +763,12 @@ export function RobotDeskPage() {
                   <div className="robot-mini-legs mono">
                     {s.feed_legs!.slice(0, 4).map((leg) => (
                       <span key={leg.sender_id} className={leg.ok ? 'ok' : 'bad'}>
-                        {leg.name}:{leg.ok ? fmt(leg.mid, 2) : '×'}
+                        {leg.name}:
+                        {leg.ok
+                          ? fmt(leg.mid, 2)
+                          : leg.mid != null
+                            ? `${fmt(leg.mid, 2)}·FAR`
+                            : '×'}
                       </span>
                     ))}
                   </div>
@@ -856,7 +861,13 @@ export function RobotDeskPage() {
                   <div className="robot-focus-legs">
                     {focusLegs.map((leg) => (
                       <div key={leg.sender_id} className={leg.ok ? 'ok' : 'bad'}>
-                        {leg.name} · {leg.ok ? fmt(leg.mid, 2) : 'FAIL'} · {leg.latency_ms}ms
+                        {leg.name} ·{' '}
+                        {leg.ok
+                          ? fmt(leg.mid, 2)
+                          : leg.mid != null
+                            ? `${fmt(leg.mid, 2)} FAR`
+                            : 'FAIL'}{' '}
+                        · {leg.latency_ms}ms
                         {leg.detail ? ` · ${leg.detail}` : ''}
                       </div>
                     ))}

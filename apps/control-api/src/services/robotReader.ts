@@ -785,7 +785,7 @@ export type MultiFeedPrice = {
   anchored_to_capital?: boolean;
 };
 
-const ANCHOR_MAX_REL = 0.008; // 0.8% — public must be near Capital CFD mid
+const ANCHOR_MAX_REL = 0.015; // 1.5% — Capital CFD vs public spot/futures often diverge >0.8% on Gold
 
 function nearAnchor(mid: number, anchor: number, maxRel = ANCHOR_MAX_REL): boolean {
   if (!Number.isFinite(mid) || !Number.isFinite(anchor) || anchor === 0) return false;
@@ -899,6 +899,19 @@ export async function readMultiFeedPrice(
       latency_ms: r.latency_ms,
       detail: `${r.detail || ''} · FAR from Capital (${effectiveAnchor?.toFixed(2)}) — ignored for OHLC`.trim(),
     })),
+    // Show hard-failed public providers (no mid) so the board explains the ×
+    ...publicReads
+      .filter((r) => !r.ok || r.mid == null)
+      .filter((r) => !publicNear.some((p) => p.sender_id === r.sender_id))
+      .filter((r) => !publicFar.some((p) => p.sender_id === r.sender_id))
+      .map((r) => ({
+        sender_id: r.sender_id,
+        name: r.name,
+        ok: false,
+        mid: null as number | null,
+        latency_ms: r.latency_ms,
+        detail: r.detail || 'public feed failed',
+      })),
   ];
 
   const sender_count =
