@@ -24,6 +24,12 @@ taskkill /F /T /IM VS.exe >nul 2>&1
 taskkill /F /T /IM node.exe >nul 2>&1
 taskkill /F /T /IM npm.exe >nul 2>&1
 timeout /t 3 /nobreak >nul
+tasklist /FI "IMAGENAME eq node.exe" 2>nul | find /I "node.exe" >nul
+if not errorlevel 1 (
+  echo [..] node.exe vel dzivs — velreiz taskkill...
+  taskkill /F /T /IM node.exe >nul 2>&1
+  timeout /t 2 /nobreak >nul
+)
 
 echo [..] Nemu jaunako VS.exe no GitHub uz so mapi...
 curl.exe -fL --retry 3 -o "%ROOT%\VS.exe.new" "https://raw.githubusercontent.com/voldis1994/VS/main/VS.exe"

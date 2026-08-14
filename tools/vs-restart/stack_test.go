@@ -102,6 +102,15 @@ func TestUnzip(t *testing.T) {
 	}
 }
 
+func TestShouldSkipZip(t *testing.T) {
+	if !shouldSkipZip("86de128", "86de128") {
+		t.Fatal("same sha must skip")
+	}
+	if shouldSkipZip("abc", "def") || shouldSkipZip("", "def") {
+		t.Fatal("must update when different or empty local")
+	}
+}
+
 func TestLooksRealSecret(t *testing.T) {
 	if looksRealSecret("") || looksRealSecret("CHANGE_ME_PIPELINE_TOKEN") {
 		t.Fatal("placeholders must be rejected")
