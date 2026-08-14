@@ -7,7 +7,7 @@ color 0A
 
 echo.
 echo ============================================================
-echo   VS  -  KOMANDU PANELIS  (ne PowerShell, ne Expand-Archive)
+echo   VS  KOMANDU PANELIS
 echo ============================================================
 echo   Mape: %ROOT%
 echo.
@@ -19,35 +19,45 @@ if not exist "%ROOT%\apps\dashboard\package.json" (
   exit /b 1
 )
 
-echo [..] Nemu jaunako VS.exe no GitHub...
-curl.exe -fL --retry 3 -o "%TEMP%\VS-app.exe" "https://raw.githubusercontent.com/voldis1994/VS/main/VS.exe"
+echo [..] Nemu jaunako VS.exe no GitHub uz so mapi...
+curl.exe -fL --retry 3 -o "%ROOT%\VS.exe.new" "https://raw.githubusercontent.com/voldis1994/VS/main/VS.exe"
 set "OKEXE=0"
-if exist "%TEMP%\VS-app.exe" (
-  for %%A in ("%TEMP%\VS-app.exe") do if %%~zA GEQ 1000000 set "OKEXE=1"
+if exist "%ROOT%\VS.exe.new" (
+  for %%A in ("%ROOT%\VS.exe.new") do if %%~zA GEQ 1000000 set "OKEXE=1"
 )
 if not "!OKEXE!"=="1" (
-  curl.exe -fL --retry 3 -o "%TEMP%\VS-app.exe" "https://github.com/voldis1994/VS/raw/main/VS.exe"
-  if exist "%TEMP%\VS-app.exe" (
-    for %%A in ("%TEMP%\VS-app.exe") do if %%~zA GEQ 1000000 set "OKEXE=1"
+  curl.exe -fL --retry 3 -o "%ROOT%\VS.exe.new" "https://github.com/voldis1994/VS/raw/main/VS.exe"
+  if exist "%ROOT%\VS.exe.new" (
+    for %%A in ("%ROOT%\VS.exe.new") do if %%~zA GEQ 1000000 set "OKEXE=1"
   )
 )
 if "!OKEXE!"=="1" (
-  echo [OK] palaižu paneli
-  start "" "%TEMP%\VS-app.exe" "%ROOT%"
-  exit /b 0
-)
-if exist "%ROOT%\VS.exe" (
-  echo [WARN] GitHub exe neizdevas - palaižu lokalo VS.exe
-  start "" "%ROOT%\VS.exe" "%ROOT%"
-  exit /b 0
-)
-if exist "%ROOT%\VS_RESTART.exe" (
-  echo [WARN] palaižu VS_RESTART.exe
-  start "" "%ROOT%\VS_RESTART.exe" "%ROOT%"
-  exit /b 0
+  copy /Y "%ROOT%\VS.exe.new" "%ROOT%\VS.exe" >nul
+  del /f /q "%ROOT%\VS.exe.new" >nul 2>&1
 )
 
-color 0C
-echo [KLUDA] VS.exe nav. Internets vajadzigs pirmajai reizei.
+if not exist "%ROOT%\VS.exe" (
+  color 0C
+  echo [KLUDA] VS.exe nav. Parbaudi internetu.
+  pause
+  exit /b 1
+)
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Unblock-File -LiteralPath '%ROOT%\VS.exe' } catch {}" >nul 2>&1
+
+echo.
+echo ============================================================
+echo   PANELIS:  http://127.0.0.1:18090
+echo   Ja Chrome neatveras — IEKOPĒ TO ADRESI PĀRLŪKĀ.
+echo   SO LOGU NEAIZVER lidz panelis ir redzams.
+echo ============================================================
+echo.
+
+start "" "%ROOT%\VS.exe" "%ROOT%"
+timeout /t 3 /nobreak >nul
+start "" "http://127.0.0.1:18090"
+
+echo [OK] VS.exe palaisa. Panelis: http://127.0.0.1:18090
+echo.
 pause
-exit /b 1
+exit /b 0

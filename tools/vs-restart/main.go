@@ -15,6 +15,12 @@ func main() {
 		writeFatal(err.Error())
 		return
 	}
+	fmt.Println("============================================================")
+	fmt.Println("  VS LAUNCHER")
+	fmt.Println("  Panelis: http://127.0.0.1:18090")
+	fmt.Println("  Mape:   ", root)
+	fmt.Println("  NEAIZVER SO LOGU")
+	fmt.Println("============================================================")
 	app := newApp(root)
 	app.log("Mape: %s", root)
 	app.set(func(s *Status) {

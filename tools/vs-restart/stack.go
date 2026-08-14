@@ -140,6 +140,11 @@ func (a *App) npmSetup() error {
 	if err := a.run(npx, dash, "--yes", "vite", "build", "--config", "vite.client.config.ts"); err != nil {
 		return fmt.Errorf("client panel build: %w", err)
 	}
+	idx := filepath.Join(dash, "dist-client", "index.html")
+	if _, err := os.Stat(idx); err != nil {
+		return fmt.Errorf("dist-client/index.html nav — client build neizdevas")
+	}
+	a.log("[OK] dist-client gatavs")
 	return nil
 }
 

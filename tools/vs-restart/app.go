@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -146,8 +147,14 @@ func (a *App) serve() error {
 	if err != nil {
 		return err
 	}
-	a.log("VS panelis http://127.0.0.1:%s", appPort)
-	go openBrowser("http://127.0.0.1:" + appPort)
+	a.log("VS panelis http://127.0.0.1:%s  (neaizver so programmu)", appPort)
+	_ = os.WriteFile(filepath.Join(a.root, "vs-panel.txt"), []byte("http://127.0.0.1:"+appPort+"\n"), 0644)
+	go func() {
+		time.Sleep(600 * time.Millisecond)
+		openBrowser("http://127.0.0.1:" + appPort)
+		a.log("Automātiski palaižu sistēmu...")
+		a.runCycle()
+	}()
 	return http.Serve(ln, mux)
 }
 
