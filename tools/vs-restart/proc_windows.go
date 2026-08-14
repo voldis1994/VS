@@ -90,7 +90,25 @@ func tasklistBin() string {
 }
 
 func openBrowser(url string) {
-	_ = noWindow("cmd", "/c", "start", "", url).Start()
+	// Prefer a dedicated fullscreen app window so the panel fills the screen.
+	browsers := []struct {
+		path string
+		args []string
+	}{
+		{`C:\Program Files\Google\Chrome\Application\chrome.exe`, []string{"--start-fullscreen", "--app=" + url}},
+		{`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`, []string{"--start-fullscreen", "--app=" + url}},
+		{`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`, []string{"--start-fullscreen", "--app=" + url}},
+		{`C:\Program Files\Microsoft\Edge\Application\msedge.exe`, []string{"--start-fullscreen", "--app=" + url}},
+	}
+	for _, b := range browsers {
+		if _, err := os.Stat(b.path); err == nil {
+			cmd := exec.Command(b.path, b.args...)
+			if err := cmd.Start(); err == nil {
+				return
+			}
+		}
+	}
+	_ = exec.Command("cmd", "/c", "start", "", url).Start()
 }
 
 func killPort(port string) {

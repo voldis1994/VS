@@ -2,7 +2,7 @@
 <html lang="lv">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>VS SISTĒMA</title>
   <style>
     :root {
@@ -18,55 +18,135 @@
     }
     * { box-sizing: border-box; }
     html, body {
-      margin: 0; height: 100%;
-      background: var(--bg); color: var(--text);
-      font-family: ui-sans-serif, "Segoe UI", sans-serif;
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background:
+        radial-gradient(1200px 600px at 10% -10%, rgba(180, 255, 0, 0.07), transparent 55%),
+        radial-gradient(900px 500px at 100% 0%, rgba(57, 255, 20, 0.05), transparent 50%),
+        var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", ui-sans-serif, sans-serif;
     }
-    .wrap {
-      max-width: 980px; margin: 0 auto; padding: 20px 18px 28px;
-      display: flex; flex-direction: column; min-height: 100%; gap: 14px;
+    .shell {
+      width: 100vw;
+      height: 100vh;
+      height: 100dvh;
+      padding: 12px 14px 14px;
+      display: grid;
+      grid-template-rows: auto auto auto auto auto minmax(0, 1fr);
+      gap: 10px;
+    }
+    .top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
     }
     .brand { letter-spacing: 0.28em; color: var(--accent); font-size: 12px; font-weight: 700; }
-    h1 { margin: 4px 0 0; font-size: 28px; letter-spacing: 0.08em; }
-    .sub { color: var(--dim); font-size: 13px; margin-top: 4px; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+    h1 { margin: 4px 0 0; font-size: clamp(22px, 3.2vw, 34px); letter-spacing: 0.08em; }
+    .sub { color: var(--dim); font-size: 13px; margin-top: 4px; max-width: 70ch; }
+    .top-actions { display: flex; gap: 8px; flex-shrink: 0; }
+    button.fs, button.go {
+      border: 1px solid var(--accent);
+      background: #142014;
+      color: var(--accent);
+      font-weight: 800;
+      cursor: pointer;
+      letter-spacing: 0.12em;
+    }
+    button.fs {
+      font-size: 13px;
+      padding: 12px 14px;
+      white-space: nowrap;
+    }
+    button.fs:hover, button.go:hover { background: #1c2c14; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+    @media (max-width: 1100px) {
+      .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (max-width: 720px) {
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .shell { padding: 8px; gap: 8px; }
+      h1 { font-size: 22px; }
+    }
     .card {
-      border: 1px solid var(--line); background: var(--panel); padding: 12px 14px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      padding: 10px 12px;
+      min-width: 0;
     }
     .card .k { font-size: 10px; letter-spacing: 0.16em; color: var(--dim); }
-    .card .v { font-size: 18px; margin-top: 6px; font-family: ui-monospace, Consolas, monospace; }
+    .card .v {
+      font-size: clamp(15px, 1.6vw, 20px);
+      margin-top: 6px;
+      font-family: ui-monospace, Consolas, monospace;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .card.bad .v { color: var(--err); }
     .card.ok .v { color: var(--ok); }
     .card.warn .v { color: var(--warn); }
     button.go {
-      width: 100%; border: 1px solid var(--accent); background: #142014;
-      color: var(--accent); font-size: 22px; letter-spacing: 0.18em; font-weight: 800;
-      padding: 22px 16px; cursor: pointer;
+      width: 100%;
+      font-size: clamp(18px, 2.4vw, 26px);
+      letter-spacing: 0.18em;
+      padding: 18px 16px;
     }
-    button.go:hover { background: #1c2c14; }
     button.go:disabled { opacity: 0.45; cursor: wait; }
     .errbox {
-      display: none; border: 1px solid var(--err); color: var(--err);
-      padding: 10px 12px; white-space: pre-wrap; font-family: ui-monospace, Consolas, monospace;
+      display: none;
+      border: 1px solid var(--err);
+      color: var(--err);
+      padding: 10px 12px;
+      white-space: pre-wrap;
+      font-family: ui-monospace, Consolas, monospace;
       font-size: 13px;
+      max-height: 18vh;
+      overflow: auto;
     }
+    .links {
+      font-size: 13px;
+      color: var(--dim);
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    a { color: var(--accent); }
     .log {
-      flex: 1; min-height: 280px; overflow: auto; border: 1px solid var(--line);
-      background: #050805; padding: 10px 12px; font-family: ui-monospace, Consolas, monospace;
-      font-size: 12px; line-height: 1.45; white-space: pre-wrap;
+      min-height: 0;
+      height: 100%;
+      overflow: auto;
+      border: 1px solid var(--line);
+      background: #050805;
+      padding: 12px 14px;
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: clamp(12px, 1.15vw, 14px);
+      line-height: 1.45;
+      white-space: pre-wrap;
     }
     .log .e { color: var(--err); }
     .log .w { color: var(--warn); }
-    a { color: var(--accent); }
-    .links { font-size: 13px; color: var(--dim); display: flex; gap: 16px; flex-wrap: wrap; }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div>
-      <div class="brand">VS LAUNCHER // 127.0.0.1:18090</div>
-      <h1>KOMANDU PANELIS</h1>
-      <div class="sub">Kartīte <b>LAUNCHER</b> rāda VS.exe ID. Ja tās nav / ir “dev” — tu vēl esi uz vecā exe. Šo logu neaizver.</div>
+  <div class="shell">
+    <div class="top">
+      <div>
+        <div class="brand">VS LAUNCHER // 127.0.0.1:18090 // PILNEKRĀNS</div>
+        <h1>KOMANDU PANELIS</h1>
+        <div class="sub">LAUNCHER = <b>force75a0</b> (ja cits / tukšs — vecais exe). Logs aizņem visu atlikušo ekrānu.</div>
+      </div>
+      <div class="top-actions">
+        <button class="fs" id="fs" type="button">PILNEKRĀNS</button>
+      </div>
     </div>
     <div class="grid">
       <div class="card" id="c-launch"><div class="k">LAUNCHER</div><div class="v" id="launch">…</div></div>
@@ -76,12 +156,14 @@
       <div class="card" id="c-pg"><div class="k">POSTGRES :5432</div><div class="v" id="pg">…</div></div>
       <div class="card" id="c-rd"><div class="k">REDIS :6379</div><div class="v" id="rd">…</div></div>
       <div class="card" id="c-api"><div class="k">API :3000</div><div class="v" id="api">…</div></div>
+      <div class="card" id="c-panel"><div class="k">PANELIS :18080</div><div class="v" id="panel">…</div></div>
     </div>
     <button class="go" id="btn" type="button">PALAIST / RESTARTĒT</button>
     <div class="errbox" id="err"></div>
     <div class="links">
       <a href="http://127.0.0.1:18080" target="_blank">Klienta panelis :18080</a>
       <a href="http://localhost:5173/clients" target="_blank">Admin klienti :5173</a>
+      <a href="http://localhost:5173/robot" target="_blank">Robot Command</a>
       <span id="tunnel"></span>
     </div>
     <div class="log" id="log">Gaidu…\n</div>
@@ -90,8 +172,9 @@
     const logEl = document.getElementById('log');
     const errEl = document.getElementById('err');
     const btn = document.getElementById('btn');
+    const fsBtn = document.getElementById('fs');
     function lineClass(t) {
-      if (/gaidu Postgres|node.exe nav palicis|ZIP NERALU|jau jaunākais/i.test(t)) return 'w';
+      if (/gaidu Postgres|node.exe nav palicis|ZIP NERALU|jau jaunākais|LAUNCHER id=/i.test(t)) return 'w';
       if (/\[KLUDA\]|EADDRINUSE|AggregateError|ECONNREFUSED/i.test(t) && !/gaidu Postgres/i.test(t)) return 'e';
       if (/\bFAIL(?:ED|URE)?\b/i.test(t) && !/failus/i.test(t)) return 'e';
       if (/\[WARN\]|npm warn/i.test(t)) return 'w';
@@ -104,6 +187,24 @@
       logEl.appendChild(d);
       logEl.scrollTop = logEl.scrollHeight;
     }
+    async function goFullscreen() {
+      const el = document.documentElement;
+      try {
+        if (!document.fullscreenElement) {
+          await el.requestFullscreen();
+          fsBtn.textContent = 'IZIET NO PILNEKRĀNA';
+        } else {
+          await document.exitFullscreen();
+          fsBtn.textContent = 'PILNEKRĀNS';
+        }
+      } catch (_) {
+        fsBtn.textContent = 'F11 = PILNEKRĀNS';
+      }
+    }
+    fsBtn.onclick = () => { void goFullscreen(); };
+    document.addEventListener('fullscreenchange', () => {
+      fsBtn.textContent = document.fullscreenElement ? 'IZIET NO PILNEKRĀNA' : 'PILNEKRĀNS';
+    });
     async function refresh() {
       const s = await fetch('/api/status').then((r) => r.json());
       const launch = document.getElementById('launch');
@@ -133,6 +234,7 @@
       pill('pg', 'c-pg', s.postgres, 'OK', 'NAV');
       pill('rd', 'c-rd', s.redis, 'OK', 'NAV');
       pill('api', 'c-api', s.api, 'OK', 'NAV');
+      pill('panel', 'c-panel', s.panel, 'OK', 'NAV');
       const tun = document.getElementById('tunnel');
       tun.innerHTML = s.tunnel ? '<a href="'+s.tunnel+'" target="_blank">Tunelis '+s.tunnel+'</a>' : '';
     }
@@ -140,6 +242,9 @@
     es.onmessage = (ev) => addLog(ev.data);
     btn.onclick = async () => {
       btn.disabled = true;
+      if (!document.fullscreenElement) {
+        try { await document.documentElement.requestFullscreen(); } catch (_) {}
+      }
       await fetch('/api/run', { method: 'POST' });
       refresh();
     };
