@@ -337,7 +337,7 @@ async function executeForSubscription(
       });
     }
 
-    // Tight SL at Capital min + 10%
+    // Safety SL at Capital min + 20%
     const q = await fetchCapitalMarketQuote(opened.session, sub.epic);
     const mid =
       q.mid != null && Number.isFinite(q.mid)

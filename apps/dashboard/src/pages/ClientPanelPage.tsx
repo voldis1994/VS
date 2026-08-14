@@ -311,7 +311,7 @@ export function ClientPanelPage() {
             <div className="ccp-client">{status?.client_name || '…'}</div>
             {status?.git_sha && (
               <div className="ccp-build">
-                BUILD {status.git_sha} · {status.entry_brain || 'node-robot-desk'} · SL min+10%
+                BUILD {status.git_sha} · {status.entry_brain || 'node-robot-desk'} · SL min+20%
               </div>
             )}
           </div>

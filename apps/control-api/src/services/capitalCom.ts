@@ -943,7 +943,7 @@ export async function createCapitalPosition(
   };
 }
 
-/** Tight SL at Capital min + 10% — not a % of instrument price. */
+/** Safety SL at Capital min + 20% — not a % of instrument price. */
 export function computeSafetyCushionStopLevel(
   direction: 'BUY' | 'SELL',
   mid: number,
@@ -975,7 +975,7 @@ export function computeSafetyCushionStopLevel(
     opts?.minStopDistance != null && opts.minStopDistance > 0 ? opts.minStopDistance : 0;
   const fallback = abs * 0.0006;
   const floor = abs >= 1000 ? 0.2 : abs >= 100 ? 0.1 : abs >= 10 ? 0.04 : 0.0004;
-  const dist = Math.max(brokerMin * 1.1, spr * 1.25, brokerMin > 0 ? 0 : fallback, floor);
+  const dist = Math.max(brokerMin * 1.2, spr * 1.25, brokerMin > 0 ? 0 : fallback, floor);
   const raw = direction === 'BUY' ? ref - dist : ref + dist;
   if (abs >= 1000) return Math.round(raw * 10) / 10;
   if (abs >= 100) return Math.round(raw * 100) / 100;

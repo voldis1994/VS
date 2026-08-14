@@ -52,7 +52,7 @@ func newApp(root string) *App {
 		st: Status{
 			Phase:      "GAIDA",
 			EntryBrain: "node-robot-desk",
-			SL:         "capital-min+10%",
+			SL:         "capital-min+20%",
 			LocalSHA:   readLocalSHA(root),
 			Launcher:   LauncherID,
 		},
