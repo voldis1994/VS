@@ -21,7 +21,8 @@ func killPort(port string) {
 		return
 	}
 	for _, pid := range listeningPIDs(string(out), port) {
-		_ = exec.Command("taskkill", "/F", "/PID", pid).Run()
+		// /T = kill process tree (npm → node → tsx)
+		_ = exec.Command("taskkill", "/F", "/T", "/PID", pid).Run()
 	}
 }
 
@@ -31,4 +32,5 @@ func killMatchingNode(root string) {
 	_ = root
 	_ = exec.Command("taskkill", "/F", "/IM", "node.exe").Run()
 	_ = exec.Command("taskkill", "/F", "/IM", "npm.exe").Run()
+	_ = exec.Command("taskkill", "/F", "/IM", "tsx.exe").Run()
 }

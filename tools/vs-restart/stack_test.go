@@ -10,10 +10,35 @@ import (
 func TestListeningPIDs(t *testing.T) {
 	out := "" +
 		"TCP    127.0.0.1:3000    0.0.0.0:0    LISTENING    4242\r\n" +
-		"TCP    0.0.0.0:18080      0.0.0.0:0    LISTENING    99\r\n"
+		"TCP    0.0.0.0:18080      0.0.0.0:0    LISTENING    99\r\n" +
+		"TCP    0.0.0.0:30001     0.0.0.0:0    LISTENING    777\r\n"
 	got := listeningPIDs(out, "3000")
 	if len(got) != 1 || got[0] != "4242" {
 		t.Fatalf("got %#v", got)
+	}
+	if n := listeningPIDs(out, "30001"); len(n) != 1 || n[0] != "777" {
+		t.Fatalf("30001: %#v", n)
+	}
+}
+
+func TestLocalAddrHasPort(t *testing.T) {
+	if !localAddrHasPort("0.0.0.0:3000", "3000") {
+		t.Fatal("0.0.0.0:3000")
+	}
+	if localAddrHasPort("0.0.0.0:30001", "3000") {
+		t.Fatal("must not match :30001 as :3000")
+	}
+	if !localAddrHasPort("[::]:3000", "3000") {
+		t.Fatal("[::]:3000")
+	}
+}
+
+func TestPipelineTokenOK(t *testing.T) {
+	if pipelineTokenOK("") || pipelineTokenOK("CHANGE_ME_PIPELINE_TOKEN") {
+		t.Fatal("placeholders")
+	}
+	if !pipelineTokenOK("live-pipe-secret") {
+		t.Fatal("real token")
 	}
 }
 
