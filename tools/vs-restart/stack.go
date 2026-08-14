@@ -109,7 +109,7 @@ func (a *App) fullRestart() error {
 	}
 	waitPort("127.0.0.1:18080", 40, a.log)
 	openBrowser("http://127.0.0.1:18080")
-	openBrowser("http://localhost:5173/clients")
+	openBrowser("http://localhost:5173/robot")
 	return nil
 }
 
