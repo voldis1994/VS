@@ -24,7 +24,7 @@ import {
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
-import { decideEntryFrom10sRegime } from './entryFromRegime.js';
+import { decideEntryFrom10sRegime, resolveTrendBias, type TrendBias } from './entryFromRegime.js';
 import {
   allowEntryFromFeeds,
   multiFeedOwnsOhlc,
@@ -79,6 +79,7 @@ export type RobotSession = {
   unrealized: number | null;
   mode: 'FLAT' | 'MANAGE' | 'ENTRY';
   regime: RegimeName;
+  trend_bias?: TrendBias;
   orders_placed: number;
   exits_done: number;
   reads_ok: number;
@@ -123,6 +124,8 @@ type Internal = RobotSession & {
   last_second_fetch_ms: number;
   last_closed_bar_key: string;
   closedBars: TenSecBar[];
+  last_minute_fetch_ms: number;
+  minuteCandles: Array<{ open: number; close: number }>;
   last_multi_feed_ms: number;
   multiFeed: MultiFeedPrice | null;
   sl_tighten_done: boolean;
@@ -196,6 +199,8 @@ function publicSession(s: Internal): RobotSession {
     last_second_fetch_ms: _sec,
     last_closed_bar_key: _bar,
     closedBars: _bars,
+    last_minute_fetch_ms: _minFetch,
+    minuteCandles: _mins,
     last_multi_feed_ms: _mf,
     multiFeed: _multi,
     ...rest
@@ -229,7 +234,7 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
     feeds,
     ohlc: ohlcLine,
     regime: s.regime || 'UNKNOWN',
-    setup: null,
+    setup: s.trend_bias ? `bias ${s.trend_bias}` : null,
     action,
   };
 }
@@ -261,11 +266,21 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
     : s.ohlcState.last_closed
       ? [s.ohlcState.last_closed]
       : [];
-  if (incoming.length) {
-    const snap = observeClosedBars(s.epic, incoming, s.display_name);
-    s.regime = snap.current;
-    if (bars?.length) s.closedBars = bars.slice(-24);
+  if (!incoming.length) return;
+  const snap = observeClosedBars(s.epic, incoming, s.display_name);
+  s.regime = snap.current;
+  for (const bar of incoming) {
+    if (!bar || !Number.isFinite(bar.close)) continue;
+    const last = s.closedBars[s.closedBars.length - 1];
+    const same =
+      last &&
+      Math.abs(last.open - bar.open) < 1e-9 &&
+      Math.abs(last.close - bar.close) < 1e-9 &&
+      Math.abs(last.high - bar.high) < 1e-9;
+    if (same) continue;
+    s.closedBars.push(bar);
   }
+  if (s.closedBars.length > 24) s.closedBars.splice(0, s.closedBars.length - 24);
 }
 
 function clearTradeState(s: Internal) {
@@ -1135,7 +1150,7 @@ async function robotCycle(s: Internal) {
     // Otherwise a single Capital row would overwrite consensus bars used for regime/entry.
     if (!multiFeedOwnsOhlc(s.multiFeed) && Date.now() - s.last_second_fetch_ms >= 8_000) {
       s.last_second_fetch_ms = Date.now();
-      const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 40);
+      const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 150);
       if (sec.ok && sec.candles.length >= 10) {
         const bars = aggregateSecondsToTen(sec.candles);
         const last = bars[bars.length - 1];
@@ -1169,8 +1184,19 @@ async function robotCycle(s: Internal) {
 
     const bar = s.ohlcState.last_closed;
     const ohlc = s.ohlc_10s;
+    if (Date.now() - s.last_minute_fetch_ms >= 30_000) {
+      s.last_minute_fetch_ms = Date.now();
+      try {
+        const hist = await fetchCapitalMinutePrices(opened.session, s.epic, 20);
+        if (hist.ok) s.minuteCandles = hist.candles;
+      } catch {
+        /* keep previous 1m snapshot */
+      }
+    }
+    const bias = resolveTrendBias(s.closedBars, s.minuteCandles);
+    s.trend_bias = bias;
     const ohlcLine = bar
-      ? `10s O=${bar.open.toFixed(2)} H=${bar.high.toFixed(2)} L=${bar.low.toFixed(2)} C=${bar.close.toFixed(2)} ${s.regime} · feeds ${
+      ? `10s O=${bar.open.toFixed(2)} H=${bar.high.toFixed(2)} L=${bar.low.toFixed(2)} C=${bar.close.toFixed(2)} ${s.regime} · bias ${bias} · feeds ${
           s.feed_contributing || 0
         }/${s.feed_sender_count || 0} ${s.feed_source || 'LOCAL'} ${s.feed_agreement || ''}`
       : `10s OHLC seeding · feeds ${s.feed_contributing || 0}/${s.feed_sender_count || 0}`;
@@ -1180,18 +1206,20 @@ async function robotCycle(s: Internal) {
     let setupType: string | null = null;
 
     if (s.ohlcState.just_closed && bar) {
-      const sig = decideEntryFrom10sRegime(bar, s.regime);
+      const sig = decideEntryFrom10sRegime(bar, s.regime, bias);
       if (sig) {
         direction = sig.direction;
         setupType = sig.setup;
         reason = sig.reason;
       } else {
+        const only =
+          bias === 'UP' ? 'only BUY (climb — no SELL SCALP)' : bias === 'DOWN' ? 'only SELL (dump — no BUY LONG)' : 'wait';
         pushTick(s, {
           phase: 'DECIDE',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${ohlcLine} · ${s.regime} not suitable on this 10s close · wait next candle`,
+          detail: `${ohlcLine} · ${s.regime} not with-trend on this 10s close · ${only}`,
         });
       }
     } else {
@@ -1365,6 +1393,8 @@ export async function startRobotSession(input: {
     last_second_fetch_ms: 0,
     last_closed_bar_key: '',
     closedBars: [],
+    last_minute_fetch_ms: 0,
+    minuteCandles: [],
     last_multi_feed_ms: 0,
     multiFeed: null,
     sl_tighten_done: false,
@@ -1373,6 +1403,7 @@ export async function startRobotSession(input: {
     feed_sender_count: 0,
     feed_agreement: null,
     regime: 'UNKNOWN',
+    trend_bias: 'FLAT',
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
 
@@ -1390,7 +1421,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: max 1 open trade · MANAGE with best-outcome · 10s OHLC from ALL Capital feeds when they agree · park when market closed',
+      'Rules: max 1 open trade · with-trend only (no SELL SCALP into a climb, no BUY LONG into a dump) · MANAGE with best-outcome · park when market closed',
   });
 
   sessions.set(id, session);

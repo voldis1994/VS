@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { decideEntryFrom10sRegime } from './entryFromRegime.js';
+import {
+  decideEntryFrom10sRegime,
+  mergeTrendBias,
+  trendBiasFromBars,
+  trendBiasFromMinuteCandles,
+} from './entryFromRegime.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 
 function bar(open: number, close: number): TenSecBar {
@@ -10,6 +15,28 @@ function bar(open: number, close: number): TenSecBar {
 
 const dip = bar(2000, 1996); // ~0.2% down — moving
 const rally = bar(2000, 2004);
+
+function climbBars(n = 12, start = 2000, step = 0.4): TenSecBar[] {
+  const out: TenSecBar[] = [];
+  let px = start;
+  for (let i = 0; i < n; i++) {
+    const next = px + step;
+    out.push(bar(px, next));
+    px = next;
+  }
+  return out;
+}
+
+function dumpBars(n = 12, start = 2000, step = 0.4): TenSecBar[] {
+  const out: TenSecBar[] = [];
+  let px = start;
+  for (let i = 0; i < n; i++) {
+    const next = px - step;
+    out.push(bar(px, next));
+    px = next;
+  }
+  return out;
+}
 
 describe('10s + 14-regime suitable entry', () => {
   it('waits in UNKNOWN / COMPRESSION / TRANSITION', () => {
@@ -45,7 +72,7 @@ describe('10s + 14-regime suitable entry', () => {
     expect(decideEntryFrom10sRegime(rally, 'FAILED_BREAKOUT_UP')).toBeNull();
   });
 
-  it('RANGE still mean-reverts on a real 10s body', () => {
+  it('RANGE still mean-reverts on a real 10s body when bias is flat', () => {
     expect(decideEntryFrom10sRegime(dip, 'RANGE')?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(rally, 'RANGE')?.direction).toBe('SELL');
   });
@@ -62,5 +89,55 @@ describe('10s + 14-regime suitable entry', () => {
     expect(decideEntryFrom10sRegime(quiet, 'TREND_UP')).toBeNull();
     expect(decideEntryFrom10sRegime(quiet, 'RANGE')).toBeNull();
     expect(decideEntryFrom10sRegime(quiet, 'BREAKOUT_UP')).toBeNull();
+  });
+});
+
+describe('with-trend bias — no SELL SCALP into a climb, no BUY LONG into a dump', () => {
+  it('reads a lasting 10s climb as UP and a dump as DOWN', () => {
+    expect(trendBiasFromBars(climbBars())).toBe('UP');
+    expect(trendBiasFromBars(dumpBars())).toBe('DOWN');
+    expect(trendBiasFromBars([bar(2000, 2000.1), bar(2000.1, 2000.05)])).toBe('FLAT');
+  });
+
+  it('1m lasting climb stays UP even if the last minutes are mixed RANGE chop', () => {
+    const climb = Array.from({ length: 16 }, (_, i) => ({
+      open: 2000 + i * 1.2,
+      close: 2000 + i * 1.2 + 0.8,
+    }));
+    expect(trendBiasFromMinuteCandles(climb)).toBe('UP');
+    const dump = Array.from({ length: 16 }, (_, i) => ({
+      open: 2000 - i * 1.2,
+      close: 2000 - i * 1.2 - 0.8,
+    }));
+    expect(trendBiasFromMinuteCandles(dump)).toBe('DOWN');
+  });
+
+  it('lasting 1m trend wins over a short 10s pullback', () => {
+    expect(mergeTrendBias('DOWN', 'UP')).toBe('UP');
+    expect(mergeTrendBias('UP', 'DOWN')).toBe('DOWN');
+    expect(mergeTrendBias('UP', 'FLAT')).toBe('UP');
+    expect(mergeTrendBias('FLAT', 'DOWN')).toBe('DOWN');
+  });
+
+  it('RANGE rally is not SELL SCALP while the market is climbing', () => {
+    expect(decideEntryFrom10sRegime(rally, 'RANGE', 'UP')).toBeNull();
+    expect(decideEntryFrom10sRegime(dip, 'RANGE', 'UP')?.direction).toBe('BUY');
+  });
+
+  it('RANGE dip is not BUY LONG while the market is dumping', () => {
+    expect(decideEntryFrom10sRegime(dip, 'RANGE', 'DOWN')).toBeNull();
+    expect(decideEntryFrom10sRegime(rally, 'RANGE', 'DOWN')?.direction).toBe('SELL');
+  });
+
+  it('FAILED_BREAKOUT / REVERSAL cannot sell a climb or buy a dump', () => {
+    expect(decideEntryFrom10sRegime(dip, 'FAILED_BREAKOUT_UP', 'UP')).toBeNull();
+    expect(decideEntryFrom10sRegime(rally, 'FAILED_BREAKOUT_DOWN', 'DOWN')).toBeNull();
+    expect(decideEntryFrom10sRegime(dip, 'REVERSAL_CANDIDATE', 'UP')).toBeNull();
+    expect(decideEntryFrom10sRegime(rally, 'REVERSAL_CANDIDATE', 'DOWN')).toBeNull();
+  });
+
+  it('does not buy a TREND_UP dip if lasting bias is DOWN', () => {
+    expect(decideEntryFrom10sRegime(dip, 'TREND_UP', 'DOWN')).toBeNull();
+    expect(decideEntryFrom10sRegime(rally, 'TREND_DOWN', 'UP')).toBeNull();
   });
 });

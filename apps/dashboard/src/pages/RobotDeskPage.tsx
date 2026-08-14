@@ -93,6 +93,7 @@ type RobotSession = {
   unrealized: number | null;
   mode: 'FLAT' | 'MANAGE' | 'ENTRY';
   regime?: string;
+  trend_bias?: 'UP' | 'DOWN' | 'FLAT';
   feed_source?: 'MULTI' | 'LOCAL' | 'NONE';
   feed_contributing?: number;
   feed_sender_count?: number;
@@ -130,7 +131,10 @@ function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'fl
     return { label: `${t} · ${regime}`, kind: t.includes('SCALP') ? 'short' : 'long' };
   }
   if (s.running && !s.open_side) {
-    return { label: `WAIT · ${regime}`, kind: 'entry' };
+    const bias = String(s.trend_bias || s.decision_chain?.setup || '').toUpperCase();
+    const only =
+      bias.includes('UP') ? ' · bias UP · only BUY' : bias.includes('DOWN') ? ' · bias DOWN · only SELL' : '';
+    return { label: `WAIT · ${regime}${only}`, kind: 'entry' };
   }
   return { label: `FLAT · ${regime}`, kind: 'flat' };
 }
@@ -138,11 +142,13 @@ function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'fl
 function tradeLabel(s: RobotSession): string {
   if (!s.open_side) return 'FLAT';
   const r = (s.regime || '').toUpperCase();
-  const long =
-    r === 'TREND_UP' ||
-    r === 'TREND_DOWN' ||
-    r === 'PULLBACK_UPTREND' ||
-    r === 'PULLBACK_DOWNTREND';
+  const side = String(s.open_side).toUpperCase();
+  if (r === 'TREND_UP' || r === 'PULLBACK_UPTREND') {
+    return side === 'BUY' ? 'BUY LONG' : 'SELL SCALP';
+  }
+  if (r === 'TREND_DOWN' || r === 'PULLBACK_DOWNTREND') {
+    return side === 'SELL' ? 'SELL LONG' : 'BUY SCALP';
+  }
   const scalp =
     r === 'BREAKOUT_UP' ||
     r === 'BREAKOUT_DOWN' ||
@@ -153,9 +159,8 @@ function tradeLabel(s: RobotSession): string {
     r === 'RANGE' ||
     r === 'REVERSAL_CANDIDATE' ||
     r === 'TRANSITION';
-  if (long) return `${s.open_side} LONG`;
-  if (scalp) return `${s.open_side} SCALP`;
-  return s.open_side;
+  if (scalp) return `${side} SCALP`;
+  return side;
 }
 
 function lastLog(s: RobotSession): string {
@@ -647,7 +652,9 @@ export function RobotDeskPage() {
                 <div className="robot-mini-mode">
                   {s.running
                     ? s.decision_chain
-                      ? `${s.decision_chain.feeds} → ${s.decision_chain.regime} → ${s.decision_chain.action}`
+                      ? `${s.decision_chain.feeds} → ${s.decision_chain.regime} → ${
+                          s.decision_chain.setup || s.trend_bias || 'bias —'
+                        } → ${s.decision_chain.action}`
                       : `${s.mode} · ${s.regime || 'UNKNOWN'}`
                     : 'STOPPED'}
                 </div>
@@ -732,6 +739,14 @@ export function RobotDeskPage() {
                 </div>
                 <div>MODE · {focused.running ? focused.mode : 'STOPPED'}</div>
                 <div>REGIME · {(focused.regime || 'UNKNOWN').toUpperCase()}</div>
+                <div>
+                  BIAS · {(focused.trend_bias || 'FLAT').toUpperCase()}
+                  {focused.trend_bias === 'UP'
+                    ? ' · only BUY (no SELL SCALP)'
+                    : focused.trend_bias === 'DOWN'
+                      ? ' · only SELL (no BUY LONG)'
+                      : ''}
+                </div>
                 <div>
                   FEEDS · {focused.feed_contributing ?? 0}/{focused.feed_sender_count ?? 0}{' '}
                   {focused.feed_agreement || ''} · {focused.feed_source || '—'}
