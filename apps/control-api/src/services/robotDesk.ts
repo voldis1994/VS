@@ -1024,18 +1024,7 @@ async function robotCycle(s: Internal) {
       } · UPL=${s.unrealized != null ? s.unrealized.toFixed(5) : '—'} · MFE=${s.mfe.toFixed(5)}`,
     });
 
-    if (!s.trading_enabled) {
-      pushTick(s, {
-        phase: 'WAIT',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: 'Trading OFF — reading only',
-      });
-      return;
-    }
-
-    // ——— MANAGE open trade: never send entry ———
+    // ——— MANAGE open trade even if new entries are OFF ———
     if (s.open_side || brokerOpen) {
       s.mode = 'MANAGE';
       if (quote.mid == null) return;
@@ -1098,6 +1087,17 @@ async function robotCycle(s: Internal) {
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
         } · no new orders`,
+      });
+      return;
+    }
+
+    if (!s.trading_enabled) {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: 'Trading OFF — reading only (open trades still managed above)',
       });
       return;
     }
