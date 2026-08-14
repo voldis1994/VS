@@ -151,8 +151,6 @@ function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'fl
       regime === 'FAILED_BREAKOUT_UP' ||
       regime === 'FAILED_BREAKOUT_DOWN' ||
       regime === 'REVERSAL_CANDIDATE' ||
-      regime === 'COMPRESSION' ||
-      regime === 'TRANSITION' ||
       regime === 'SEEDING';
     if (fade && regime !== 'SEEDING') return { label: `WAIT · ${regime} · no fade`, kind: 'entry' };
     if (regime === 'SEEDING') return { label: 'WAIT · SEEDING 10s', kind: 'entry' };

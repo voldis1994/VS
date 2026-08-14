@@ -51,11 +51,25 @@ describe('10s + 14-regime suitable entry', () => {
     expect(decideEntryFrom10sRegime(rally, 'UNKNOWN', 'UP')?.direction).toBe('BUY');
   });
 
-  it('TREND_UP dip-buys even when bias calculator is still FLAT (regime carries UP)', () => {
+  it('TREND_UP dip-buys OR follows the climb (kāpums = BUY)', () => {
     expect(decideEntryFrom10sRegime(dip, 'TREND_UP', 'UP')?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(dip, 'TREND_UP', 'UP')?.setup).toBe('PULLBACK');
-    expect(decideEntryFrom10sRegime(rally, 'TREND_UP', 'UP')).toBeNull();
+    expect(decideEntryFrom10sRegime(rally, 'TREND_UP', 'UP')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(rally, 'TREND_UP', 'UP')?.setup).toBe('CONTINUATION');
     expect(decideEntryFrom10sRegime(dip, 'TREND_UP', 'FLAT')?.direction).toBe('BUY');
+  });
+
+  it('COMPRESSION quiet Gold green still BUYs with UP bias (was IN=0 forever)', () => {
+    const quietGreen: TenSecBar = {
+      open_time_ms: 0,
+      open: 4374.9,
+      high: 4375.05,
+      low: 4374.9,
+      close: 4375.0,
+      ticks: 8,
+    };
+    expect(decideEntryFrom10sRegime(quietGreen, 'COMPRESSION', 'UP')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(quietGreen, 'COMPRESSION', 'DOWN')).toBeNull();
   });
 
   it('TREND_DOWN follows the dump (red) — never sells a green breakout', () => {

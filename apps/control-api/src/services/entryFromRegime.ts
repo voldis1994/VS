@@ -19,13 +19,22 @@ function movingOrNull(bar: TenSecBar): boolean {
   return isMoving10s(bar);
 }
 
-/** Softer than before — Gold 10s often moves ~0.3–1.0 pts (~0.007–0.02%). */
+/** Softer than before — Gold 10s often moves ~0.1–1.0 pts (~0.002–0.02%). */
 function dip(bar: TenSecBar): boolean {
-  return bodyPct(bar) <= -0.00005 || (bar.close < bar.open && rangePct(bar) >= 0.00008);
+  return bodyPct(bar) <= -0.00003 || (bar.close < bar.open && rangePct(bar) >= 0.00004);
 }
 
 function rally(bar: TenSecBar): boolean {
-  return bodyPct(bar) >= 0.00005 || (bar.close > bar.open && rangePct(bar) >= 0.00008);
+  return bodyPct(bar) >= 0.00003 || (bar.close > bar.open && rangePct(bar) >= 0.00004);
+}
+
+/** Any red/green close — COMPRESSION is quiet by definition; hard isMoving would deadlock IN=0. */
+function softDip(bar: TenSecBar): boolean {
+  return bar.close < bar.open || bodyPct(bar) <= -0.00002;
+}
+
+function softRally(bar: TenSecBar): boolean {
+  return bar.close > bar.open || bodyPct(bar) >= 0.00002;
 }
 
 function describe(bar: TenSecBar): string {
@@ -268,9 +277,9 @@ export function decideEntryFrom10sRegime(
   const b = effectiveBias(r, bias, bar);
   const candle = describe(bar);
 
-  // UNKNOWN / COMPRESSION / TRANSITION — unlocked by effective bias (regime or bar).
+  // UNKNOWN / COMPRESSION / TRANSITION — bias unlocks; quiet Gold bars still trade with-trend.
   if (r === 'UNKNOWN' || r === 'TRANSITION' || r === 'COMPRESSION') {
-    if (b === 'UP' && movingOrNull(bar) && dip(bar)) {
+    if (b === 'UP' && softDip(bar)) {
       return gate(
         { direction: 'BUY', setup: 'PULLBACK', reason: `${r}+bias UP dip-buy · ${candle}` },
         b,
@@ -278,7 +287,7 @@ export function decideEntryFrom10sRegime(
         r
       );
     }
-    if (b === 'UP' && movingOrNull(bar) && rally(bar)) {
+    if (b === 'UP' && softRally(bar)) {
       return gate(
         { direction: 'BUY', setup: 'BREAKOUT', reason: `${r}+bias UP follow · ${candle}` },
         b,
@@ -286,7 +295,7 @@ export function decideEntryFrom10sRegime(
         r
       );
     }
-    if (b === 'DOWN' && movingOrNull(bar) && dip(bar)) {
+    if (b === 'DOWN' && softDip(bar)) {
       return gate(
         { direction: 'SELL', setup: 'PULLBACK', reason: `${r}+bias DOWN follow dump · ${candle}` },
         b,
@@ -308,8 +317,14 @@ export function decideEntryFrom10sRegime(
   }
 
   if (r === 'TREND_UP') {
-    if (!movingOrNull(bar) || !dip(bar)) return null;
-    return gate({ direction: 'BUY', setup: 'PULLBACK', reason: `${r} dip-buy · ${candle}` }, b, bar, r);
+    // kāpums = BUY: dip-buy OR follow green (not only pullbacks)
+    if (movingOrNull(bar) && dip(bar)) {
+      return gate({ direction: 'BUY', setup: 'PULLBACK', reason: `${r} dip-buy · ${candle}` }, b, bar, r);
+    }
+    if (movingOrNull(bar) && rally(bar)) {
+      return gate({ direction: 'BUY', setup: 'CONTINUATION', reason: `${r} follow climb · ${candle}` }, b, bar, r);
+    }
+    return null;
   }
   if (r === 'TREND_DOWN') {
     if (!movingOrNull(bar) || !dip(bar)) return null;
