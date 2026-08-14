@@ -23,6 +23,17 @@ describe('10s OHLC', () => {
     expect(s.forming?.open).toBe(4370);
   });
 
+  it('clears just_closed on a second tick in the new bucket (robot must update OHLC once/cycle)', () => {
+    let s = emptyTenSecState();
+    const t0 = 1_700_000_010_000;
+    s = updateTenSecondOhlc(s, 4380, t0);
+    s = updateTenSecondOhlc(s, 4370, t0 + 10_000);
+    expect(s.just_closed).toBe(true);
+    s = updateTenSecondOhlc(s, 4371, t0 + 10_050);
+    expect(s.just_closed).toBe(false);
+    expect(s.last_closed?.close).toBe(4380);
+  });
+
   it('treats a Capital-style 10s spike as MOVING, not flat tick noise', () => {
     const bar = {
       open_time_ms: 0,

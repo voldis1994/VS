@@ -1029,18 +1029,20 @@ async function robotCycle(s: Internal) {
       s.feed_legs = s.multiFeed?.legs ?? s.feed_legs ?? [];
     }
 
-    // Keep OHLC/regime warm even when closed so board is not stuck on SEEDING 0/0
-    const ohlcMidWarm = pickedClosed.mid ?? quote.mid;
-    if (ohlcMidWarm != null) {
-      s.ohlcState = updateTenSecondOhlc(s.ohlcState, ohlcMidWarm, Date.now());
+    // OHLC must update at most once per cycle. A second updateTenSecondOhlc in the
+    // same 10s bucket clears just_closed → entry forever stuck on "wait bar close".
+    const pushOhlcTick = (mid: number | null | undefined) => {
+      if (mid == null || !Number.isFinite(mid)) return;
+      s.ohlcState = updateTenSecondOhlc(s.ohlcState, mid, Date.now());
       s.ohlc_10s = publicOhlc10s(s.ohlcState);
       if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
         applyRobotRegime(s, [s.ohlcState.last_closed]);
       }
-    }
+    };
 
     // Capital marketStatus not TRADEABLE/OPEN → park (price can still stream when CLOSED)
     if (!marketAllowsTrading(quote.market_status)) {
+      pushOhlcTick(pickedClosed.mid ?? quote.mid);
       setRobotCadence(s, CLOSED_MARKET_CADENCE_MS);
       const now = Date.now();
       if (now - s.last_market_closed_tick_ms >= CLOSED_MARKET_TICK_EVERY_MS) {
@@ -1073,15 +1075,8 @@ async function robotCycle(s: Internal) {
     s.feed_agreement = s.multiFeed?.agreement ?? s.feed_agreement ?? null;
     if (s.multiFeed?.legs?.length) s.feed_legs = s.multiFeed.legs;
 
-    // OHLC always from Capital-safe mid (LOCAL Capital quote if public is far)
-    const ohlcMid = picked.mid ?? quote.mid;
-    if (ohlcMid != null) {
-      s.ohlcState = updateTenSecondOhlc(s.ohlcState, ohlcMid, Date.now());
-      s.ohlc_10s = publicOhlc10s(s.ohlcState);
-      if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
-        applyRobotRegime(s, [s.ohlcState.last_closed]);
-      }
-    }
+    // Single OHLC tick for this cycle (Capital-safe mid)
+    pushOhlcTick(picked.mid ?? quote.mid);
 
     // Sync truth from broker — source of ONE TRADE ONLY
     const listed = await listCapitalOpenPositions(opened.session);
