@@ -53,8 +53,8 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 VS.bat
 ```
 
-Lejupielādē jaunāko `main`, palaiž sistēmu, **šajā logā** parāda klienta `https://….trycloudflare.com` saiti.  
-Neaizver to logu. Admin: http://localhost:5173/
+Atver **VS paneli** (`http://127.0.0.1:18090`). Viena poga palaiž / restartē sistēmu no GitHub.  
+Neaizver to paneli. Admin: http://localhost:5173/
 
 Skatīt [docs/VS_RESTART.md](docs/VS_RESTART.md).
 

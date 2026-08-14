@@ -1,18 +1,17 @@
-# VS.bat — vienīgais palaišanas fails
+# VS palaišana
 
-Dubultklikšķis uz **`VS.bat`** (VS mapes saknē).
+Dubultklikšķis uz **`VS.bat`** (mapes saknē). Tas lejupielādē **`VS.exe`** un atver paneli:
 
-1. Aptur veco sistēmu  
-2. `git pull` jaunāko **main**  
-3. Palaiž Docker, API, admin, client panel, market-core  
-4. **Šajā pašā logā** atver klienta tuneli  
+http://127.0.0.1:18090
 
-**Neaizver to logu.** Meklē rindu:
+Tur ir **viena poga** `PALAIST / RESTARTĒT`:
 
-```text
-https://….trycloudflare.com
-```
+1. Aizver vecos procesus  
+2. Ņem jaunāko **GitHub ZIP** (git nav vajadzīgs)  
+3. Palaiž Docker, API, admin, klienta paneli  
+4. Panelī rāda BUILD, vai atjaunināts, un visas kļūdas  
 
-To + access code (`http://localhost:5173/clients`) sūti klientam.
+Neaizver VS paneli. Klienta tunelis parādās turpat, kad Cloudflare dod `https://….trycloudflare.com`.
 
-Admin: `http://localhost:5173/`
+Admin: http://localhost:5173/  
+Klienta panelis: http://127.0.0.1:18080

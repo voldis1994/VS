@@ -10,13 +10,7 @@ From the repository root, double-click:
 VS.bat
 ```
 
-That one file:
-
-1. Stops old VS processes
-2. `git fetch` + `git reset --hard origin/main` (latest GitHub)
-3. Starts Docker Postgres/Redis, `npm install`, migrations
-4. Starts market-core (LIVE `--bridge`), execution-service, control-api, admin desk, client panel
-5. Opens a Cloudflare tunnel to the client panel in **the same window**
+That one file opens the **VS dashboard** (`http://127.0.0.1:18090`). One button stops the old stack, pulls the latest GitHub ZIP (no git clone), and starts Docker / API / panels. Logs and errors stay in that window.
 
 Do not close the `VS.bat` window. Copy `https://….trycloudflare.com` plus the access code from http://localhost:5173/clients
 
