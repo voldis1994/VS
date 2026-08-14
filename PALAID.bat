@@ -2,7 +2,8 @@
 REM Tikai palaiž ESOŠO VS.exe — neko nelejumielade
 cd /d "%~dp0"
 if not exist "%~dp0VS.exe" (
-  echo NAV VS.exe — palaid PowerShell:
+  echo NAV VS.exe — PowerShell:
+  echo   cd C:\VS-main
   echo   irm https://raw.githubusercontent.com/voldis1994/VS/main/FIX.ps1 ^| iex
   pause
   exit /b 1

@@ -10,6 +10,7 @@ echo ============================================================
 echo   VS  KOMANDU PANELIS  /  bridge75a0
 echo ============================================================
 echo   Mape: %ROOT%
+echo   Update: API + SHA256  (ne "MINSIZE CDN" slazds)
 echo.
 
 if not exist "%ROOT%\apps\dashboard\package.json" (
@@ -19,7 +20,7 @@ if not exist "%ROOT%\apps\dashboard\package.json" (
   exit /b 1
 )
 
-echo [1] Apturu vecos VS / Node procesus...
+echo [1] Apturu vecos VS / Node procesus (VS.exe FAILU NEZDESU)...
 taskkill /F /T /IM VS.exe >nul 2>&1
 taskkill /F /T /IM VS_RESTART.exe >nul 2>&1
 taskkill /F /T /IM node.exe >nul 2>&1
@@ -27,62 +28,40 @@ taskkill /F /T /IM npm.exe >nul 2>&1
 taskkill /F /T /IM tsx.exe >nul 2>&1
 timeout /t 2 /nobreak >nul
 
-echo [2] Lejupieladeju VS.exe caur PowerShell + GitHub API...
-echo     ^(nezdesu veco exe, kamer jaunais nav gatavs^)
+echo [2] Lejupielade + validacija (Fetch-VSExe.ps1)...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ErrorActionPreference='Stop';" ^
   "$root='%ROOT%';" ^
-  "$tmp=Join-Path $root 'VS.exe.new';" ^
-  "$dst=Join-Path $root 'VS.exe';" ^
-  "function Ok([string]$p){ if(!(Test-Path $p)){return $false}; $i=Get-Item $p; if($i.Length -lt 5000000){return $false}; $b=[IO.File]::ReadAllBytes($p)[0..1]; return ($b[0]-eq 0x4D -and $b[1]-eq 0x5A) };" ^
-  "Remove-Item $tmp -Force -EA SilentlyContinue;" ^
-  "$headers=@{ Accept='application/vnd.github.raw'; 'User-Agent'='VS-bat-bridge75a0' };" ^
-  "$urls=@(" ^
-  " 'https://api.github.com/repos/voldis1994/VS/contents/VS.exe?ref=main'," ^
-  " 'https://raw.githubusercontent.com/voldis1994/VS/94624a2/VS.exe'," ^
-  " 'https://github.com/voldis1994/VS/raw/refs/heads/main/VS.exe'" ^
-  ");" ^
-  "$ok=$false;" ^
-  "foreach($u in $urls){" ^
-  "  try {" ^
-  "    Write-Host ('[..] '+$u);" ^
-  "    Invoke-WebRequest -Uri $u -Headers $headers -OutFile $tmp -UseBasicParsing -TimeoutSec 600;" ^
-  "    if(Ok $tmp){ Write-Host ('[OK] bytes='+(Get-Item $tmp).Length); $ok=$true; break }" ^
-  "    Write-Host '[..] noraidu — nav derigs PE'; Remove-Item $tmp -Force -EA SilentlyContinue" ^
-  "  } catch { Write-Host ('[WARN] '+$_.Exception.Message) }" ^
-  "};" ^
-  "if(-not $ok){" ^
-  "  Write-Host '[..] ZIP fallback...';" ^
-  "  $z=Join-Path $root 'VS.exe.zip';" ^
-  "  Invoke-WebRequest -Uri 'https://codeload.github.com/voldis1994/VS/zip/refs/heads/main' -OutFile $z -UseBasicParsing -TimeoutSec 600;" ^
-  "  $d=Join-Path $env:TEMP ('vs-'+[guid]::NewGuid()); New-Item -ItemType Directory -Path $d | Out-Null;" ^
-  "  try {" ^
-  "    Expand-Archive -LiteralPath $z -DestinationPath $d -Force;" ^
-  "    $exe=Get-ChildItem $d -Recurse -Filter VS.exe | Select-Object -First 1;" ^
-  "    if($exe){ Copy-Item $exe.FullName $tmp -Force }" ^
-  "  } finally { Remove-Item $d -Recurse -Force -EA SilentlyContinue; Remove-Item $z -Force -EA SilentlyContinue }" ^
-  "  if(Ok $tmp){ $ok=$true; Write-Host ('[OK] ZIP bytes='+(Get-Item $tmp).Length) }" ^
-  "};" ^
-  "if(-not $ok){ if(Ok $dst){ Write-Host '[WARN] lejupielade fail — palaižu ESOŠO VS.exe'; exit 2 }; Write-Host '[KLUDA] nav VS.exe'; exit 1 };" ^
-  "Move-Item -LiteralPath $tmp -Destination $dst -Force;" ^
-  "try{ Unblock-File -LiteralPath $dst }catch{};" ^
-  "Write-Host '[OK] VS.exe gatavs'; exit 0"
+  "$dir=Join-Path $root 'tools\windows';" ^
+  "$ps1=Join-Path $dir 'Fetch-VSExe.ps1';" ^
+  "New-Item -ItemType Directory -Force -Path $dir | Out-Null;" ^
+  "Write-Host '[..] atjauninu Fetch-VSExe.ps1 no GitHub';" ^
+  "Invoke-WebRequest -UseBasicParsing -TimeoutSec 120 -Headers @{ 'User-Agent'='VS-bat'; 'Cache-Control'='no-cache' } -Uri 'https://raw.githubusercontent.com/voldis1994/VS/main/tools/windows/Fetch-VSExe.ps1' -OutFile $ps1;" ^
+  "& $ps1 -Root $root; exit $LASTEXITCODE"
 
-set "FETCH=%ERRORLEVEL%"
-if "%FETCH%"=="1" (
+if errorlevel 1 (
   color 0C
   echo.
-  echo [KLUDA] Nevar lejupieladet VS.exe.
-  echo Atver PowerShell un ielime SIENU komandu:
+  echo [KLUDA] Update neizdevas — skaties iemeslu augstak.
   echo.
-  echo cd C:\VS-main
-  echo irm https://raw.githubusercontent.com/voldis1994/VS/main/FIX.ps1 ^| iex
+  echo Plan B (PowerShell Admin):
+  echo   cd C:\VS-main
+  echo   irm https://raw.githubusercontent.com/voldis1994/VS/main/FIX.ps1 ^| iex
   echo.
+  if exist "%ROOT%\VS.exe" (
+    echo [..] paliek iepriekseja VS.exe — megina palaist to.
+    goto launch
+  )
   pause
   exit /b 1
 )
-if "%FETCH%"=="2" (
-  echo [..] turpinu ar esošo VS.exe
+
+:launch
+if not exist "%ROOT%\VS.exe" (
+  color 0C
+  echo [KLUDA] VS.exe nav.
+  pause
+  exit /b 1
 )
 
 echo.

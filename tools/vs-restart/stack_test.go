@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -163,5 +164,45 @@ func TestLoadDotEnv(t *testing.T) {
 	m := loadDotEnv(dir)
 	if m["PIPELINE_TOKEN"] != "abc" || m["DB_PASSWORD"] != "secret" {
 		t.Fatalf("%v", m)
+	}
+}
+
+func TestParseVSExeManifest(t *testing.T) {
+	h, n := parseVSExeManifest("abcDEF\n6020608\nbridge75a0\n")
+	if h != "abcdef" || n != 6020608 {
+		t.Fatalf("got %s %d", h, n)
+	}
+}
+
+func TestValidateDownloadedVSExe(t *testing.T) {
+	dir := t.TempDir()
+	html := filepath.Join(dir, "html")
+	_ = os.WriteFile(html, []byte("<html>not exe</html>"), 0644)
+	if r := validateDownloadedVSExe(html, ""); !strings.Contains(r, "SIZE_INVALID") {
+		t.Fatalf("html: %s", r)
+	}
+	pe := filepath.Join(dir, "pe")
+	buf := make([]byte, 1_500_000)
+	buf[0], buf[1] = 'M', 'Z'
+	_ = os.WriteFile(pe, buf, 0644)
+	sum, _, err := fileSHA256(pe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := validateDownloadedVSExe(pe, ""); r != "" {
+		t.Fatalf("pe ok: %s", r)
+	}
+	if r := validateDownloadedVSExe(pe, "deadbeef"); !strings.Contains(r, "SHA256_MISMATCH") {
+		t.Fatalf("mismatch: %s", r)
+	}
+	if r := validateDownloadedVSExe(pe, sum); r != "" {
+		t.Fatalf("match: %s", r)
+	}
+	bad := filepath.Join(dir, "bad")
+	buf2 := make([]byte, 1_500_000)
+	buf2[0], buf2[1] = 'X', 'Y'
+	_ = os.WriteFile(bad, buf2, 0644)
+	if r := validateDownloadedVSExe(bad, ""); !strings.Contains(r, "NOT_VALID_PE") {
+		t.Fatalf("bad pe: %s", r)
 	}
 }
