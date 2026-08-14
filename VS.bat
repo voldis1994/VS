@@ -55,51 +55,30 @@ for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":18080 " ^| findstr L
 echo [OK]
 echo.
 
-echo [2/5] Lejupieladeju jaunako GitHub main...
-where git >nul 2>&1
-if errorlevel 1 (
-  color 0C
-  echo [KLUDA] Git nav. winget install -e --id Git.Git
-  pause
-  exit /b 1
-)
+echo [2/5] Atjauninu pilno mapi (ZIP, git NAV vajadzigs)...
 cd /d "%ROOT%"
-if not exist "%ROOT%\.git" (
-  echo [..] C:\VS-main ir ZIP mape, nav git clone. Pievienoju GitHub...
-  git init
-  if errorlevel 1 (
-    color 0C
-    echo [KLUDA] git init neizdevas.
-    pause
-    exit /b 1
+set "UPDATED=0"
+if exist "%ROOT%\.git" (
+  where git >nul 2>&1
+  if not errorlevel 1 (
+    git remote get-url origin >nul 2>&1
+    if errorlevel 1 git remote add origin https://github.com/voldis1994/VS.git
+    git fetch origin main
+    if not errorlevel 1 (
+      git checkout -f -B main origin/main
+      if not errorlevel 1 set "UPDATED=1"
+    )
   )
 )
-git remote get-url origin >nul 2>&1
-if errorlevel 1 (
-  git remote add origin https://github.com/voldis1994/VS.git
-) else (
-  git remote set-url origin https://github.com/voldis1994/VS.git
+if not "!UPDATED!"=="1" (
+  call :update_from_zip
+  if not errorlevel 1 set "UPDATED=1"
 )
-git fetch origin main
-if errorlevel 1 (
-  color 0C
-  echo [KLUDA] git fetch neizdevas. NE turpinu ar veco kodu. Parbaudi internetu un palaid VS.bat velreiz.
-  pause
-  exit /b 1
+if not "!UPDATED!"=="1" (
+  echo [WARN] Jauno mapi neizdevas lejupieladet. Turpinu ar to, kas jau ir: %ROOT%
 )
-git checkout -f -B main origin/main
-if errorlevel 1 (
-  git checkout -f main
-  git reset --hard origin/main
-)
-if errorlevel 1 (
-  color 0C
-  echo [KLUDA] git reset neizdevas. NE turpinu ar veco disku.
-  pause
-  exit /b 1
-)
-for /f "delims=" %%H in ('git rev-parse --short HEAD') do set "BUILD_SHA=%%H"
-if not defined BUILD_SHA set "BUILD_SHA=unknown"
+call :read_build_sha
+if not defined BUILD_SHA set "BUILD_SHA=local"
 echo.
 echo ============================================================
 echo   BUILD  !BUILD_SHA!
@@ -110,7 +89,7 @@ echo ============================================================
 echo.
 if not exist "%ROOT%\apps\dashboard\package.json" (
   color 0C
-  echo [KLUDA] Trukst projekta failu pec git. https://github.com/voldis1994/VS
+  echo [KLUDA] Trukst projekta failu. https://github.com/voldis1994/VS
   pause
   exit /b 1
 )
@@ -202,7 +181,7 @@ set "CLIENT_PANEL_DIST=%ROOT%\apps\dashboard\dist-client"
 set "CLIENT_DIST=%ROOT%\apps\dashboard\dist-client"
 set "CLIENT_PUBLIC_PORT=18080"
 if not defined BUILD_SHA (
-  for /f "delims=" %%H in ('git rev-parse --short HEAD') do set "BUILD_SHA=%%H"
+  call :read_build_sha
 )
 
 set "MC=%ROOT%\build\windows-debug\apps\market-core\market-core.exe"
@@ -362,6 +341,62 @@ goto :wait_port_loop
 
 :upsert_env
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='!ROOT!\.env'; $k='%~1'; $v='%~2'; if (-not (Test-Path -LiteralPath $p)) { Set-Content -LiteralPath $p -Value ($k+'='+$v) ; exit 0 }; $c=Get-Content -LiteralPath $p -Raw; if ($null -eq $c) { $c='' }; if ($c -match ('(?m)^'+[regex]::Escape($k)+'=')) { $c=[regex]::Replace($c,('(?m)^'+[regex]::Escape($k)+'=.*'),($k+'='+$v)) } else { if ($c.Length -gt 0 -and -not $c.EndsWith(\"`n\")) { $c+=\"`r`n\" }; $c+=($k+'='+$v+\"`r`n\") }; Set-Content -LiteralPath $p -Value $c -NoNewline"
+exit /b 0
+
+:read_build_sha
+set "BUILD_SHA="
+if exist "%ROOT%\.git" (
+  where git >nul 2>&1
+  if not errorlevel 1 (
+    for /f "delims=" %%H in ('git -C "%ROOT%" rev-parse --short HEAD 2^>nul') do set "BUILD_SHA=%%H"
+  )
+)
+if defined BUILD_SHA exit /b 0
+for /f "delims=" %%H in ('powershell -NoProfile -Command "try { (Invoke-RestMethod -Uri 'https://api.github.com/repos/voldis1994/VS/commits/main').sha.Substring(0,7) } catch { '' }"') do set "BUILD_SHA=%%H"
+if defined BUILD_SHA exit /b 0
+set "BUILD_SHA=local"
+exit /b 0
+
+:update_from_zip
+echo [..] Lejupieladeju pilno VS mapi ka ZIP (ne git clone)...
+set "ZIP=%TEMP%\vs-src.zip"
+set "UNP=%TEMP%\vs-unpack"
+del /f /q "%ZIP%" >nul 2>&1
+rmdir /s /q "%UNP%" >nul 2>&1
+mkdir "%UNP%" >nul 2>&1
+curl.exe -fL --retry 3 -o "%ZIP%" "https://codeload.github.com/voldis1994/VS/zip/refs/heads/main"
+if errorlevel 1 (
+  echo [WARN] ZIP lejupielade neizdevas.
+  exit /b 1
+)
+if not exist "%ZIP%" (
+  echo [WARN] ZIP fails nav.
+  exit /b 1
+)
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath '%ZIP%' -DestinationPath '%UNP%' -Force"
+if errorlevel 1 (
+  tar -xf "%ZIP%" -C "%UNP%" 2>nul
+)
+set "SRC="
+for /d %%D in ("%UNP%\*") do if exist "%%D\apps\dashboard\package.json" set "SRC=%%D"
+if not defined SRC (
+  echo [WARN] ZIP saturs nav VS mape.
+  exit /b 1
+)
+echo [..] Rakstu failus uz %ROOT%  (.env paliek)
+if exist "%ROOT%\.env" copy /Y "%ROOT%\.env" "%TEMP%\vs-env-keep" >nul
+robocopy "%SRC%" "%ROOT%" /E /NFL /NDL /NJH /NJS /nc /ns /np /XD .git node_modules /XF .env >nul
+set "_rc=%ERRORLEVEL%"
+if exist "%TEMP%\vs-env-keep" copy /Y "%TEMP%\vs-env-keep" "%ROOT%\.env" >nul
+if !_rc! GEQ 8 (
+  echo [WARN] ZIP kopija neizdevas (robocopy !_rc!).
+  exit /b 1
+)
+if not exist "%ROOT%\apps\dashboard\package.json" (
+  echo [WARN] pec ZIP nav projekta failu.
+  exit /b 1
+)
+echo [OK] pilna mape atjaunota no ZIP
 exit /b 0
 
 :try_build_core
