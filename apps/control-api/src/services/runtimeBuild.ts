@@ -36,5 +36,7 @@ export function runtimeBuildInfo() {
     sl: 'capital-min+10%',
     trend_minutes: TREND_LOOKBACK_MINUTES,
     entry_brain: 'node-robot-desk',
+    /** Proof this Node build unlocks with-trend entries when classifier says UNKNOWN. */
+    unknown_bias_unlock: true,
   };
 }

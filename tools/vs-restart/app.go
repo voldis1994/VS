@@ -30,6 +30,7 @@ type Status struct {
 	Tunnel     string `json:"tunnel"`
 	EntryBrain string `json:"entry_brain"`
 	SL         string `json:"sl"`
+	Launcher   string `json:"launcher"`
 	Postgres   bool   `json:"postgres"`
 	Redis      bool   `json:"redis"`
 	API        bool   `json:"api"`
@@ -53,6 +54,7 @@ func newApp(root string) *App {
 			EntryBrain: "node-robot-desk",
 			SL:         "capital-min+10%",
 			LocalSHA:   readLocalSHA(root),
+			Launcher:   LauncherID,
 		},
 	}
 	lf, err := os.OpenFile(root+"/vs-launcher.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
@@ -91,6 +93,9 @@ func (a *App) snapshot() Status {
 	st.Redis = portUp("127.0.0.1:6379")
 	st.API = portUp("127.0.0.1:3000")
 	st.Panel = portUp("127.0.0.1:18080")
+	if st.Launcher == "" {
+		st.Launcher = LauncherID
+	}
 	st.Running = !st.Busy && st.Phase == "DARBOJAS" && st.API && st.Postgres
 	return st
 }
