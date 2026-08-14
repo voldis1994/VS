@@ -1232,10 +1232,10 @@ async function robotCycle(s: Internal) {
           s.regime === 'REVERSAL_CANDIDATE'
             ? 'WAIT (need confirm after large move — no SELL on the impulse bar)'
             : bias === 'UP'
-              ? 'only BUY, or SELL after large-up + red 10s confirm'
+              ? 'only BUY on dip (with-trend)'
               : bias === 'DOWN'
-                ? 'only SELL, or BUY after large-down + green 10s confirm'
-                : 'wait with-trend or exhaustion confirm';
+                ? 'only SELL on dump (with-trend)'
+                : 'wait with-trend bias or exhaustion confirm';
         pushTick(s, {
           phase: 'DECIDE',
           bid: quote.bid,

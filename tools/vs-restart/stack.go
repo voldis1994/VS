@@ -389,8 +389,11 @@ func (a *App) startServices() error {
 		filepath.Join(a.root, "build", "windows-debug", "apps", "execution-service", "execution-service.exe"),
 		filepath.Join(a.root, "build", "windows-release", "apps", "execution-service", "execution-service.exe"),
 	)
-	if ex != "" {
+	if ex != "" && pipelineTokenOK(pipeTok) {
 		a.spawn(ex, a.root, env, "--mode", "LIVE")
+		a.log("[OK] execution-service")
+	} else if ex != "" {
+		a.log("[WARN] C++ execution-service IZLAISTS — darbi caur Node robotDesk + Capital")
 	}
 
 	npm := npmBin()

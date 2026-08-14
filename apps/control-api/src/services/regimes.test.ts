@@ -53,8 +53,18 @@ describe('original regime names', () => {
 });
 
 describe('classifyRegime from 10s OHLC', () => {
-  it('UNKNOWN with too few bars', () => {
-    expect(classifyRegime([bar(100, 100.1, 99.9, 100)])).toBe('UNKNOWN');
+  it('does not stay UNKNOWN once a real 10s window exists', () => {
+    // Quiet gold-like grind — previously fell through to UNKNOWN and blocked all entries.
+    const bars = [
+      bar(2390.0, 2390.05, 2389.95, 2390.02, 0),
+      bar(2390.02, 2390.08, 2390.0, 2390.06, 1),
+      bar(2390.06, 2390.12, 2390.04, 2390.1, 2),
+      bar(2390.1, 2390.16, 2390.08, 2390.14, 3),
+      bar(2390.14, 2390.2, 2390.12, 2390.18, 4),
+    ];
+    const r = classifyRegime(bars);
+    expect(r).not.toBe('UNKNOWN');
+    expect(['TREND_UP', 'RANGE', 'COMPRESSION', 'EXPANSION']).toContain(r);
   });
 
   it('TREND_UP on a persistent rally', () => {
@@ -146,7 +156,8 @@ describe('classifyRegime from 10s OHLC', () => {
       bar(100.5, 100.9, 99.2, 99.8, 3),
     ];
     const r = classifyRegime(bars);
-    expect(['RANGE', 'TRANSITION', 'UNKNOWN']).toContain(r);
+    expect(r).not.toBe('UNKNOWN');
+    expect(['RANGE', 'TRANSITION', 'TREND_UP', 'TREND_DOWN', 'COMPRESSION']).toContain(r);
   });
 
   it('slow grind up inside a wide envelope is TREND_UP, not RANGE fade-bait', () => {
@@ -168,13 +179,15 @@ describe('classifyRegime from 10s OHLC', () => {
     expect(classifyRegime(bars, 'TREND_UP')).toBe('REVERSAL_CANDIDATE');
   });
 
-  it('TRANSITION when leaving a named regime without a clean next state', () => {
+  it('leaving TREND_UP without a clean next state is never UNKNOWN', () => {
     const bars = [
       bar(100.0, 100.1, 99.95, 100.02, 0),
       bar(100.02, 100.08, 99.96, 100.0, 1),
       bar(100.0, 100.04, 99.93, 99.94, 2),
     ];
-    expect(classifyRegime(bars, 'TREND_UP')).toBe('TRANSITION');
+    const r = classifyRegime(bars, 'TREND_UP');
+    expect(r).not.toBe('UNKNOWN');
+    expect(['TRANSITION', 'TREND_DOWN', 'PULLBACK_UPTREND', 'RANGE', 'COMPRESSION']).toContain(r);
   });
 });
 

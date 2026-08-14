@@ -155,29 +155,37 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
     (previous === 'TREND_UP' && lastVel < -0.0012 && lastRange > avgRange && !breakoutDown) ||
     (previous === 'TREND_DOWN' && lastVel > 0.0012 && lastRange > avgRange && !breakoutUp);
 
-  if (previous === 'BREAKOUT_UP' && inRange && lastVel < 0) return 'FAILED_BREAKOUT_UP';
-  if (previous === 'BREAKOUT_DOWN' && inRange && lastVel > 0) return 'FAILED_BREAKOUT_DOWN';
-  if (compressed && inRange) return 'COMPRESSION';
-  if (expanding && breakoutUp && (trendingUp || lastVel > 0)) return 'BREAKOUT_UP';
-  if (expanding && breakoutDown && (trendingDown || lastVel < 0)) return 'BREAKOUT_DOWN';
-  if (expanding) return 'EXPANSION';
-  if (previous === 'TREND_UP' && lastVel < -0.00008 && persistence > 0.15) {
-    return 'PULLBACK_UPTREND';
-  }
-  if (previous === 'TREND_DOWN' && lastVel > 0.00008 && persistence < -0.15) {
-    return 'PULLBACK_DOWNTREND';
-  }
-  if (trendingUp) return 'TREND_UP';
-  if (trendingDown) return 'TREND_DOWN';
-  if (reversal) return 'REVERSAL_CANDIDATE';
-  const first = window[0]!;
-  const net = (last.close - first.open) / Math.max(Math.abs(first.open), 1e-9);
-  // Slow grind still in the last-8 envelope is a trend, not RANGE fade-bait.
-  if (net > 0.0008 && persistence > 0.15) return 'TREND_UP';
-  if (net < -0.0008 && persistence < -0.15) return 'TREND_DOWN';
-  if (inRange) return 'RANGE';
-  if (previous !== 'UNKNOWN' && previous !== 'RANGE') return 'TRANSITION';
-  return 'UNKNOWN';
+	if (previous === 'BREAKOUT_UP' && inRange && lastVel < 0) return 'FAILED_BREAKOUT_UP';
+	if (previous === 'BREAKOUT_DOWN' && inRange && lastVel > 0) return 'FAILED_BREAKOUT_DOWN';
+	if (compressed && inRange) return 'COMPRESSION';
+	if (expanding && breakoutUp && (trendingUp || lastVel > 0)) return 'BREAKOUT_UP';
+	if (expanding && breakoutDown && (trendingDown || lastVel < 0)) return 'BREAKOUT_DOWN';
+	if (expanding) return 'EXPANSION';
+	if (previous === 'TREND_UP' && lastVel < -0.00008 && persistence > 0.15) {
+		return 'PULLBACK_UPTREND';
+	}
+	if (previous === 'TREND_DOWN' && lastVel > 0.00008 && persistence < -0.15) {
+		return 'PULLBACK_DOWNTREND';
+	}
+	if (trendingUp) return 'TREND_UP';
+	if (trendingDown) return 'TREND_DOWN';
+	if (reversal) return 'REVERSAL_CANDIDATE';
+	const first = window[0]!;
+	const net = (last.close - first.open) / Math.max(Math.abs(first.open), 1e-9);
+	// Soft grind (Gold 10s) — persistence alone is enough; do not stay UNKNOWN forever.
+	if (persistence > 0.15 && net >= -0.00015) return 'TREND_UP';
+	if (persistence < -0.15 && net <= 0.00015) return 'TREND_DOWN';
+	if (net > 0.00035 && persistence >= 0) return 'TREND_UP';
+	if (net < -0.00035 && persistence <= 0) return 'TREND_DOWN';
+	if (inRange) return 'RANGE';
+	if (previous !== 'UNKNOWN' && previous !== 'RANGE') return 'TRANSITION';
+	// With a real 10s window, never park on UNKNOWN — pick trend from net or RANGE.
+	if (window.length >= 4) {
+		if (net > 0.0001) return 'TREND_UP';
+		if (net < -0.0001) return 'TREND_DOWN';
+		return 'RANGE';
+	}
+	return 'UNKNOWN';
 }
 
 function confidenceFrom(bars: TenSecBar[], regime: RegimeName): number {

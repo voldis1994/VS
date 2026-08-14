@@ -40,10 +40,14 @@ function dumpBars(n = 12, start = 2000, step = 0.4): TenSecBar[] {
 }
 
 describe('10s + 14-regime suitable entry', () => {
-  it('waits in UNKNOWN / COMPRESSION / TRANSITION', () => {
+  it('UNKNOWN / COMPRESSION / TRANSITION wait without bias, but trade with clear with-trend bias', () => {
     expect(decideEntryFrom10sRegime(dip, 'UNKNOWN')).toBeNull();
     expect(decideEntryFrom10sRegime(dip, 'COMPRESSION')).toBeNull();
     expect(decideEntryFrom10sRegime(rally, 'TRANSITION')).toBeNull();
+    expect(decideEntryFrom10sRegime(dip, 'UNKNOWN', 'UP')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(dip, 'COMPRESSION', 'UP')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(dip, 'UNKNOWN', 'DOWN')?.direction).toBe('SELL');
+    expect(decideEntryFrom10sRegime(rally, 'UNKNOWN', 'UP')).toBeNull();
   });
 
   it('TREND_UP only dip-buys — never sells the rally', () => {
