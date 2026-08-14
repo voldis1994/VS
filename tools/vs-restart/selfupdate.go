@@ -12,8 +12,9 @@ import (
 	"time"
 )
 
-const githubVSExe = "https://raw.githubusercontent.com/voldis1994/VS/main/VS.exe"
-const githubVSExeAlt = "https://github.com/voldis1994/VS/raw/main/VS.exe"
+const githubVSExe = "https://github.com/voldis1994/VS/raw/main/VS.exe"
+const githubVSExeAlt = "https://raw.githubusercontent.com/voldis1994/VS/main/VS.exe"
+const githubVSExeCDN = "https://cdn.jsdelivr.net/gh/voldis1994/VS@main/VS.exe"
 
 // maybeSelfUpdate downloads latest VS.exe. If different from this process, replaces and restarts.
 // Returns true when this process should exit (new exe was spawned).
@@ -40,14 +41,14 @@ func maybeSelfUpdate(root string, logfn func(string, ...any)) bool {
 	tmp := filepath.Join(root, "VS.exe.next")
 	_ = os.Remove(tmp)
 	logfn("[..] lejupielādēju jaunāko VS.exe (lai palaižējs nebūtu vecāks par kodu)...")
-	if err := downloadFilePrefer(tmp, githubVSExe, githubVSExeAlt); err != nil {
+	if err := downloadFilePrefer(tmp, githubVSExe, githubVSExeAlt, githubVSExeCDN); err != nil {
 		logfn("[WARN] self-update: %s — turpinu ar esošo VS.exe", err.Error())
 		return false
 	}
 	st, err := os.Stat(tmp)
-	if err != nil || st.Size() < 1_000_000 {
+	if err != nil || st.Size() < 6_013_000 {
 		_ = os.Remove(tmp)
-		logfn("[WARN] self-update: lejupielāde pārāk maza")
+		logfn("[WARN] self-update: lejupielāde pārāk maza / CDN vecs fails (%v)", err)
 		return false
 	}
 	newSum, newSize, err := fileSHA256(tmp)
