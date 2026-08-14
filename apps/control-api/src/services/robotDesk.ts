@@ -735,7 +735,7 @@ async function enterTrade(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `SL TIGHT stopDistance=${stopDistance} pts (Capital min=${minPts} · ~level ${
+        detail: `SL 0.20% stopDistance=${stopDistance} pts (Capital min=${minPts} · ~level ${
           expect ?? 'n/a'
         } · x${loosen})`,
       });
@@ -778,7 +778,7 @@ async function enterTrade(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `SL TIGHT try stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
+        detail: `SL 0.20% try stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
           minPrice ?? 'n/a'
         } · spread=${quote.spread ?? 'n/a'} · x${loosen})`,
       });
