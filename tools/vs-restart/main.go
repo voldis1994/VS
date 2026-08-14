@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// Set at build: -ldflags "-X main.LauncherID=<gitsha>"
+var LauncherID = "dev"
+
 func main() {
 	root, err := findRepoRoot()
 	if err != nil {
@@ -16,17 +19,21 @@ func main() {
 		return
 	}
 	fmt.Println("============================================================")
-	fmt.Println("  VS LAUNCHER")
+	fmt.Println("  VS LAUNCHER  id=" + LauncherID)
 	fmt.Println("  Panelis: http://127.0.0.1:18090")
 	fmt.Println("  Mape:   ", root)
 	fmt.Println("  NEAIZVER SO LOGU")
 	fmt.Println("============================================================")
 	app := newApp(root)
 	app.log("Mape: %s", root)
+	app.log("LAUNCHER id=%s  (ja nav redzams panelī — šis NAV jaunais VS.exe)", LauncherID)
+	_ = os.WriteFile(filepath.Join(root, ".vs-launcher-id"), []byte(LauncherID+"\n"), 0644)
+	app.set(func(s *Status) { s.Launcher = LauncherID })
 	if maybeSelfUpdate(root, app.log) {
 		os.Exit(0)
 	}
 	app.set(func(s *Status) {
+		s.Launcher = LauncherID
 		s.GithubSHA, _ = fetchGithubSHA()
 		s.LocalSHA = readLocalSHA(root)
 		s.Updated = s.LocalSHA != "" && s.LocalSHA == s.GithubSHA

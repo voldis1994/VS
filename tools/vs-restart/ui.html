@@ -66,9 +66,10 @@
     <div>
       <div class="brand">VS LAUNCHER // 127.0.0.1:18090</div>
       <h1>KOMANDU PANELIS</h1>
-      <div class="sub">Ja SHA jau sakrīt — failus NEPĀRRAKSTA. Vispirms Postgres, tikai tad API. Šo logu neaizver.</div>
+      <div class="sub">Kartīte <b>LAUNCHER</b> rāda VS.exe ID. Ja tās nav / ir “dev” — tu vēl esi uz vecā exe. Šo logu neaizver.</div>
     </div>
     <div class="grid">
+      <div class="card" id="c-launch"><div class="k">LAUNCHER</div><div class="v" id="launch">…</div></div>
       <div class="card" id="c-sha"><div class="k">BUILD</div><div class="v" id="sha">…</div></div>
       <div class="card" id="c-upd"><div class="k">GITHUB UPDATE</div><div class="v" id="upd">…</div></div>
       <div class="card" id="c-run"><div class="k">SISTĒMA</div><div class="v" id="run">…</div></div>
@@ -105,6 +106,11 @@
     }
     async function refresh() {
       const s = await fetch('/api/status').then((r) => r.json());
+      const launch = document.getElementById('launch');
+      const claunch = document.getElementById('c-launch');
+      const lid = (s.launcher || '').trim();
+      launch.textContent = lid || 'VECS EXE';
+      claunch.className = !lid || lid === 'dev' ? 'card bad' : 'card ok';
       document.getElementById('sha').textContent = s.local_sha || '—';
       const same = s.local_sha && s.github_sha && s.local_sha === s.github_sha;
       const upd = document.getElementById('upd');

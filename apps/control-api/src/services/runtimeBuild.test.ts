@@ -7,6 +7,7 @@ describe('runtimeBuildInfo', () => {
     expect(info.entry_brain).toBe('node-robot-desk');
     expect(info.sl).toBe('capital-min+10%');
     expect(info.trend_minutes).toBe(3);
+    expect(info.unknown_bias_unlock).toBe(true);
     expect(info.git_sha).toMatch(/^[0-9a-f]{7,40}$|^unknown$/);
   });
 });

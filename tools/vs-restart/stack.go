@@ -22,6 +22,7 @@ func (a *App) fullRestart() error {
 	applyDotEnv(a.root)
 
 	a.log("[1/5] Apturu vecos procesus — gaidu līdz node.exe NAV...")
+	a.log("LAUNCHER id=%s · soļu kārtība: Postgres → ZIP(ja vajag) → API", LauncherID)
 	killStack(a.root, a.log)
 	if err := requireNoNode(a.log); err != nil {
 		return err
