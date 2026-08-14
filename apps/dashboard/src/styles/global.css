@@ -1554,6 +1554,8 @@ tr:hover td { background: rgba(57, 255, 20, 0.06); }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.robot-op-focus-meta .pos { color: var(--accent); }
+.robot-op-focus-meta .neg { color: var(--danger); }
 .robot-focus-chain {
   color: var(--cyan);
   font-size: 10px;

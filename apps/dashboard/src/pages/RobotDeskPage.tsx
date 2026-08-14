@@ -88,6 +88,7 @@ type RobotSession = {
   ticks: RobotTick[];
   last_quote_at: string | null;
   last_mid: number | null;
+  capital_market_status?: string | null;
   last_deal_reference: string | null;
   deal_id: string | null;
   entry_price: number | null;
@@ -703,6 +704,19 @@ export function RobotDeskPage() {
                     <div className={`robot-mini-posture ${p.kind}`}>{p.label}</div>
                     <div className="robot-mini-regime mono">{displayRegime(s)}</div>
                     <div className="robot-mini-row">
+                      <span>CAPITAL</span>
+                      <strong
+                        className={
+                          String(s.capital_market_status || '').toUpperCase() === 'TRADEABLE' ||
+                          String(s.capital_market_status || '').toUpperCase() === 'OPEN'
+                            ? 'pos'
+                            : 'neg'
+                        }
+                      >
+                        {s.capital_market_status || '—'}
+                      </strong>
+                    </div>
+                    <div className="robot-mini-row">
                       <span>MID</span>
                       <strong>{fmt(s.last_mid)}</strong>
                     </div>
@@ -820,6 +834,19 @@ export function RobotDeskPage() {
                   <div>
                     <span>STATUS</span>
                     <strong>{focused.running ? 'ONLINE' : 'STOPPED'}</strong>
+                  </div>
+                  <div>
+                    <span>CAPITAL</span>
+                    <strong
+                      className={
+                        String(focused.capital_market_status || '').toUpperCase() === 'TRADEABLE' ||
+                        String(focused.capital_market_status || '').toUpperCase() === 'OPEN'
+                          ? 'pos'
+                          : 'neg'
+                      }
+                    >
+                      {focused.capital_market_status || '—'} · {focused.epic}
+                    </strong>
                   </div>
                   <div>
                     <span>MID</span>

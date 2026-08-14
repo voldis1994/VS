@@ -70,6 +70,8 @@ export type RobotSession = {
   ticks: RobotTick[];
   last_quote_at: string | null;
   last_mid: number | null;
+  /** Raw Capital.com snapshot.marketStatus for this epic (TRADEABLE/CLOSED/…). */
+  capital_market_status: string | null;
   last_deal_reference: string | null;
   deal_id: string | null;
   entry_price: number | null;
@@ -136,6 +138,7 @@ const ACTIVE_CADENCE_MS = 2_000;
 const CLOSED_MARKET_CADENCE_MS = 90_000;
 const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
 
+/** Capital LIVE quote ≠ TRADEABLE. Only these statuses allow entries/manage. */
 function marketAllowsTrading(status: string | null | undefined): boolean {
   const s = String(status || '')
     .trim()
@@ -143,6 +146,17 @@ function marketAllowsTrading(status: string | null | undefined): boolean {
   // Missing status → do not park (Capital sometimes omits it)
   if (!s) return true;
   return s === 'TRADEABLE' || s === 'OPEN';
+}
+
+function formatCapitalParkDetail(
+  epic: string,
+  status: string | null | undefined,
+  feeds: string,
+): string {
+  const st = String(status || 'UNKNOWN').trim().toUpperCase() || 'UNKNOWN';
+  return (
+    `Capital ${epic} marketStatus=${st} — park (LIVE cena ≠ TRADEABLE; orderi tikai TRADEABLE/OPEN) · ${feeds}`
+  );
 }
 
 function setRobotCadence(s: Internal, ms: number) {
@@ -974,6 +988,7 @@ async function robotCycle(s: Internal) {
     s.reads_ok += 1;
     s.error = null;
     s.last_quote_at = new Date().toISOString();
+    s.capital_market_status = quote.market_status;
     if (quote.epic && quote.epic !== s.epic) {
       s.epic = quote.epic;
     }
@@ -1024,7 +1039,7 @@ async function robotCycle(s: Internal) {
       }
     }
 
-    // Market closed / offline → park: no positions sync, no MANAGE, no entry (anti-spam Capital)
+    // Capital marketStatus not TRADEABLE/OPEN → park (price can still stream when CLOSED)
     if (!marketAllowsTrading(quote.market_status)) {
       setRobotCadence(s, CLOSED_MARKET_CADENCE_MS);
       const now = Date.now();
@@ -1035,9 +1050,13 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `MARKET ${quote.market_status || 'CLOSED'} — park robot (no manage / no entry / no position spam) · feeds ${
-            s.feed_contributing
-          }/${s.feed_sender_count} ${s.feed_source} · poll ${CLOSED_MARKET_CADENCE_MS / 1000}s until TRADEABLE`,
+          detail: formatCapitalParkDetail(
+            s.epic,
+            quote.market_status,
+            `feeds ${s.feed_contributing}/${s.feed_sender_count} ${s.feed_source} · poll ${
+              CLOSED_MARKET_CADENCE_MS / 1000
+            }s`,
+          ),
         });
       }
       return;
@@ -1467,6 +1486,7 @@ export async function startRobotSession(input: {
     ticks: [],
     last_quote_at: null,
     last_mid: null,
+    capital_market_status: null,
     last_deal_reference: null,
     deal_id: null,
     entry_price: null,
