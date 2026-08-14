@@ -343,7 +343,7 @@ describe('Node robotDesk owns entries', () => {
     });
 
     expect(createCapitalPosition).not.toHaveBeenCalled();
-    expect(result.executed[0]?.detail).toMatch(/Node robotDesk owns entries/);
+    expect(result.fanout.executed[0]?.detail).toMatch(/Node robotDesk owns entries/);
     hasEntryEnabledRobot.mockReturnValue(false);
   });
 });
