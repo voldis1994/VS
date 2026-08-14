@@ -72,6 +72,9 @@
       <div class="card" id="c-sha"><div class="k">BUILD</div><div class="v" id="sha">…</div></div>
       <div class="card" id="c-upd"><div class="k">GITHUB UPDATE</div><div class="v" id="upd">…</div></div>
       <div class="card" id="c-run"><div class="k">SISTĒMA</div><div class="v" id="run">…</div></div>
+      <div class="card" id="c-pg"><div class="k">POSTGRES :5432</div><div class="v" id="pg">…</div></div>
+      <div class="card" id="c-rd"><div class="k">REDIS :6379</div><div class="v" id="rd">…</div></div>
+      <div class="card" id="c-api"><div class="k">API :3000</div><div class="v" id="api">…</div></div>
     </div>
     <button class="go" id="btn" type="button">PALAIST / RESTARTĒT</button>
     <div class="errbox" id="err"></div>
@@ -115,6 +118,13 @@
       else { errEl.style.display = 'none'; errEl.textContent = ''; }
       btn.disabled = !!s.busy;
       btn.textContent = s.busy ? 'STRĀDĀ…' : 'PALAIST / RESTARTĒT';
+      function pill(id, card, ok, yes, no) {
+        document.getElementById(id).textContent = ok ? yes : no;
+        document.getElementById(card).className = ok ? 'card ok' : 'card bad';
+      }
+      pill('pg', 'c-pg', s.postgres, 'OK', 'NAV');
+      pill('rd', 'c-rd', s.redis, 'OK', 'NAV');
+      pill('api', 'c-api', s.api, 'OK', 'NAV');
       const tun = document.getElementById('tunnel');
       tun.innerHTML = s.tunnel ? '<a href="'+s.tunnel+'" target="_blank">Tunelis '+s.tunnel+'</a>' : '';
     }

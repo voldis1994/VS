@@ -114,8 +114,18 @@ func (a *App) ensureDocker() error {
 	cmd.Dir = a.root
 	if out, err := cmd.CombinedOutput(); err != nil {
 		a.log("[WARN] compose: %s", strings.TrimSpace(string(out)))
+		cmd2 := exec.Command(docker, "compose", "up", "-d", "postgres", "redis")
+		cmd2.Dir = a.root
+		_ = cmd2.Run()
 	}
-	time.Sleep(4 * time.Second)
+	a.log("[..] gaidu Postgres :5432 un Redis :6379 ...")
+	if !waitPortBool("127.0.0.1:5432", 40, a.log) {
+		return fmt.Errorf("Postgres (:5432) nav. Atver Docker Desktop — jābūt zaļam Engine running. Tad spied PALAIST / RESTARTĒT")
+	}
+	if !waitPortBool("127.0.0.1:6379", 40, a.log) {
+		return fmt.Errorf("Redis (:6379) nav. Docker Desktop jābūt ieslēgtam. Tad spied PALAIST / RESTARTĒT")
+	}
+	a.log("[OK] Postgres + Redis klausās")
 	return nil
 }
 
@@ -130,8 +140,17 @@ func (a *App) npmSetup() error {
 	if err := a.run(npm, api, "install", "--registry", "https://registry.npmjs.org/", "--userconfig", rc); err != nil {
 		return fmt.Errorf("control-api npm install: %w", err)
 	}
-	if err := a.run(npm, api, "run", "migrate"); err != nil {
-		return fmt.Errorf("DB migrate: %w", err)
+	var migErr error
+	for i := 1; i <= 5; i++ {
+		migErr = a.run(npm, api, "run", "migrate")
+		if migErr == nil {
+			break
+		}
+		a.log("[WARN] migrate %d/5: %s", i, migErr.Error())
+		time.Sleep(3 * time.Second)
+	}
+	if migErr != nil {
+		return fmt.Errorf("DB migrate: %w", migErr)
 	}
 	if err := a.run(npm, dash, "install", "--registry", "https://registry.npmjs.org/", "--userconfig", rc); err != nil {
 		return fmt.Errorf("dashboard npm install: %w", err)
@@ -438,14 +457,19 @@ func upsertEnv(root string, kv map[string]string) {
 }
 
 func waitPort(addr string, tries int, logfn func(string, ...any)) {
+	_ = waitPortBool(addr, tries, logfn)
+}
+
+func waitPortBool(addr string, tries int, logfn func(string, ...any)) bool {
 	for i := 0; i < tries; i++ {
 		if portUp(addr) {
 			logfn("[OK] %s", addr)
-			return
+			return true
 		}
 		time.Sleep(time.Second)
 	}
 	logfn("[WARN] %s vel nav", addr)
+	return false
 }
 
 func tunnelURL(s string) string {

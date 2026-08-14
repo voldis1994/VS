@@ -30,6 +30,10 @@ type Status struct {
 	Tunnel     string `json:"tunnel"`
 	EntryBrain string `json:"entry_brain"`
 	SL         string `json:"sl"`
+	Postgres   bool   `json:"postgres"`
+	Redis      bool   `json:"redis"`
+	API        bool   `json:"api"`
+	Panel      bool   `json:"panel"`
 }
 
 type App struct {
@@ -81,8 +85,14 @@ func (a *App) set(fn func(*Status)) {
 
 func (a *App) snapshot() Status {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.st
+	st := a.st
+	a.mu.Unlock()
+	st.Postgres = portUp("127.0.0.1:5432")
+	st.Redis = portUp("127.0.0.1:6379")
+	st.API = portUp("127.0.0.1:3000")
+	st.Panel = portUp("127.0.0.1:18080")
+	st.Running = st.API || st.Panel
+	return st
 }
 
 func (a *App) serve() error {
@@ -98,7 +108,6 @@ func (a *App) serve() error {
 	})
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		st := a.snapshot()
-		st.Running = portUp("127.0.0.1:3000") || portUp("127.0.0.1:18080")
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(st)
 	})
