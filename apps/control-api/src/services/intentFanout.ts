@@ -337,7 +337,7 @@ async function executeForSubscription(
       });
     }
 
-    // Safety SL at Capital min + 20%
+    // Safety SL = 0.20% of price
     const q = await fetchCapitalMarketQuote(opened.session, sub.epic);
     const mid =
       q.mid != null && Number.isFinite(q.mid)

@@ -33,7 +33,7 @@ function gitShortSha(): string {
 export function runtimeBuildInfo() {
   return {
     git_sha: gitShortSha(),
-    sl: 'capital-min+20%',
+    sl: '0.20%-of-price',
     trend_minutes: TREND_LOOKBACK_MINUTES,
     entry_brain: 'node-robot-desk',
     /** Proof this Node build unlocks with-trend entries when classifier says UNKNOWN. */
