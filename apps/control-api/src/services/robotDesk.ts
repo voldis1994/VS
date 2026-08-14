@@ -10,6 +10,7 @@ import {
   fetchCapitalPrices,
   isLateMoveOnOneMinute,
   listCapitalOpenPositions,
+  updateCapitalStop,
   type CapitalMarketQuote,
   type CapitalOpenPosition,
   type CapitalSession,
@@ -124,6 +125,7 @@ type Internal = RobotSession & {
   closedBars: TenSecBar[];
   last_multi_feed_ms: number;
   multiFeed: MultiFeedPrice | null;
+  sl_tighten_done: boolean;
 };
 
 const ACTIVE_CADENCE_MS = 2_000;
@@ -278,6 +280,7 @@ function clearTradeState(s: Internal) {
   s.unrealized = null;
   s.safety_sl = null;
   s.mode = 'FLAT';
+  s.sl_tighten_done = false;
 }
 
 /**
@@ -645,7 +648,7 @@ async function enterTrade(
   if (useDistance) {
     for (const loosen of loosenSteps) {
       const basePts = safetyStopDistancePts(mid, minPts!, quote.point_size ?? null);
-      const distPts = Math.max(basePts * loosen, minPts! * 3);
+      const distPts = Math.max(basePts * loosen, minPts! * 2.5);
       const stopDistance =
         distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
       const expect = expectedStopFromDistance(
@@ -1037,6 +1040,48 @@ async function robotCycle(s: Internal) {
       s.mode = 'MANAGE';
       if (quote.mid == null) return;
 
+      // One-shot: pull broker SL a little closer on already-open trades (new 0.20% cushion)
+      if (!s.sl_tighten_done && s.deal_id && s.open_side && quote.mid != null) {
+        s.sl_tighten_done = true;
+        const tighter = safetyStopLevel(
+          s.open_side,
+          quote.mid,
+          quote.bid ?? null,
+          quote.ask ?? null,
+          quote.spread ?? null,
+          quote.min_stop_distance ?? null,
+          1
+        );
+        const cur = s.safety_sl;
+        const px = quote.mid;
+        const canTighten =
+          cur != null &&
+          Number.isFinite(cur) &&
+          ((s.open_side === 'BUY' && tighter > cur && tighter < px) ||
+            (s.open_side === 'SELL' && tighter < cur && tighter > px));
+        if (canTighten) {
+          const upd = await updateCapitalStop(opened.session, s.deal_id, tighter);
+          if (upd.ok) {
+            s.safety_sl = tighter;
+            pushTick(s, {
+              phase: 'INFO',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `SAFETY SL tightened ${cur} → ${tighter} (~0.20%)`,
+            });
+          } else {
+            pushTick(s, {
+              phase: 'WAIT',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `SL tighten skipped: ${upd.detail}`,
+            });
+          }
+        }
+      }
+
       const decision = decideBestOutcomeExit(s, quote.mid);
       if (decision.exit) {
         await exitTrade(opened.session, s, quote, decision.reason);
@@ -1322,6 +1367,7 @@ export async function startRobotSession(input: {
     closedBars: [],
     last_multi_feed_ms: 0,
     multiFeed: null,
+    sl_tighten_done: false,
     feed_source: 'NONE',
     feed_contributing: 0,
     feed_sender_count: 0,

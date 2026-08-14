@@ -855,6 +855,29 @@ export async function closeCapitalPosition(
   };
 }
 
+/** Tighten/set stop on an already-open Capital position (PUT stopLevel). */
+export async function updateCapitalStop(
+  session: CapitalSession,
+  dealId: string,
+  stopLevel: number
+): Promise<{ ok: boolean; detail: string; status: number }> {
+  const id = dealId.trim();
+  if (!id || !Number.isFinite(stopLevel)) {
+    return { ok: false, status: 0, detail: 'dealId + stopLevel required' };
+  }
+  const res = await session.put(`/api/v1/positions/${encodeURIComponent(id)}`, { stopLevel });
+  if (!res.ok) {
+    return {
+      ok: false,
+      status: res.status,
+      detail: `Capital stop update ${id} failed HTTP ${res.status}: ${
+        res.json?.errorCode || res.json?.message || res.text.slice(0, 240)
+      }`,
+    };
+  }
+  return { ok: true, status: res.status, detail: `Updated stopLevel=${stopLevel} dealId=${id}` };
+}
+
 export async function createCapitalPosition(
   session: CapitalSession,
   input: {

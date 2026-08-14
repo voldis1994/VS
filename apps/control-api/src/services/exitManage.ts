@@ -63,7 +63,7 @@ export function decideBestOutcomeExit(
   const fav = favorableMove(s.open_side, entry, mid);
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   const tp = Math.max(absEntry * 0.0035, 0.35);
-  const sl = Math.max(absEntry * 0.0022, 0.22);
+  const sl = Math.max(absEntry * 0.0018, 0.18);
   const mfeFloor = Math.max(absEntry * 0.0012, 0.12);
 
   if (fav <= -sl) {
