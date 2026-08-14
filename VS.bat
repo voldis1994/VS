@@ -28,15 +28,15 @@ taskkill /F /T /IM npm.exe >nul 2>&1
 taskkill /F /T /IM tsx.exe >nul 2>&1
 timeout /t 2 /nobreak >nul
 
-echo [2] Lejupielade + validacija (Fetch-VSExe.ps1)...
+echo [2] Lejupielade + validacija (Fetch-VSExe.ps1 via GitHub API)...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ErrorActionPreference='Stop';" ^
   "$root='%ROOT%';" ^
   "$dir=Join-Path $root 'tools\windows';" ^
   "$ps1=Join-Path $dir 'Fetch-VSExe.ps1';" ^
   "New-Item -ItemType Directory -Force -Path $dir | Out-Null;" ^
-  "Write-Host '[..] atjauninu Fetch-VSExe.ps1 no GitHub';" ^
-  "Invoke-WebRequest -UseBasicParsing -TimeoutSec 120 -Headers @{ 'User-Agent'='VS-bat'; 'Cache-Control'='no-cache' } -Uri 'https://raw.githubusercontent.com/voldis1994/VS/main/tools/windows/Fetch-VSExe.ps1' -OutFile $ps1;" ^
+  "Write-Host '[..] atjauninu Fetch-VSExe.ps1 caur api.github.com';" ^
+  "Invoke-WebRequest -UseBasicParsing -TimeoutSec 120 -Headers @{ Accept='application/vnd.github.raw'; 'User-Agent'='VS-bat'; 'Cache-Control'='no-cache' } -Uri 'https://api.github.com/repos/voldis1994/VS/contents/tools/windows/Fetch-VSExe.ps1?ref=main' -OutFile $ps1;" ^
   "& $ps1 -Root $root; exit $LASTEXITCODE"
 
 if errorlevel 1 (
@@ -44,9 +44,9 @@ if errorlevel 1 (
   echo.
   echo [KLUDA] Update neizdevas — skaties iemeslu augstak.
   echo.
-  echo Plan B (PowerShell Admin):
+  echo Plan B (PowerShell Admin) — API, NE raw CDN:
   echo   cd C:\VS-main
-  echo   irm https://raw.githubusercontent.com/voldis1994/VS/main/FIX.ps1 ^| iex
+  echo   iex (iwr -UseBasicParsing -Headers @{Accept='application/vnd.github.raw';'User-Agent'='VS'} https://api.github.com/repos/voldis1994/VS/contents/FIX.ps1?ref=main^).Content
   echo.
   if exist "%ROOT%\VS.exe" (
     echo [..] paliek iepriekseja VS.exe — megina palaist to.

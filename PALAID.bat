@@ -2,9 +2,9 @@
 REM Tikai palaiž ESOŠO VS.exe — neko nelejumielade
 cd /d "%~dp0"
 if not exist "%~dp0VS.exe" (
-  echo NAV VS.exe — PowerShell:
+  echo NAV VS.exe — PowerShell Admin:
   echo   cd C:\VS-main
-  echo   irm https://raw.githubusercontent.com/voldis1994/VS/main/FIX.ps1 ^| iex
+  echo   iex (iwr -UseBasicParsing -Headers @{Accept='application/vnd.github.raw';'User-Agent'='VS'} https://api.github.com/repos/voldis1994/VS/contents/FIX.ps1?ref=main^).Content
   pause
   exit /b 1
 )
