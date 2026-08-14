@@ -7,6 +7,17 @@ import (
 	"testing"
 )
 
+func TestParseTasklistCSV(t *testing.T) {
+	out := `"node.exe","4242","Console","1","50,000 K"` + "\n" +
+		`"npm.exe","99","Console","1","10,000 K"` + "\n"
+	got := parseTasklistCSV(out)
+	if len(got) != 2 || got[0] != "4242" || got[1] != "99" {
+		t.Fatalf("%#v", got)
+	}
+	if parseTasklistCSV("INFO: No tasks are running which match the specified criteria.\r\n") != nil {
+		t.Fatal("empty info")
+	}
+}
 func TestListeningPIDs(t *testing.T) {
 	out := "" +
 		"TCP    127.0.0.1:3000    0.0.0.0:0    LISTENING    4242\r\n" +
