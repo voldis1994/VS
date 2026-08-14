@@ -46,9 +46,8 @@ export function thesisFailureReason(
 }
 
 /**
- * Manage exit — give the trade room to develop (~10s scalp with breathing room).
- * Broker SAFETY SL is the hard cushion; this is best-outcome + thesis management.
- * Isolated: caller must pass ONE robot's snapshot (never mix clients).
+ * Manage exit — lock the best available outcome.
+ * Never give a printed plus back to minus. Broker SAFETY SL is last resort.
  */
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
@@ -62,21 +61,37 @@ export function decideBestOutcomeExit(
   const entry = s.entry_price;
   const fav = favorableMove(s.open_side, entry, mid);
   const absEntry = Math.max(Math.abs(entry), 1e-9);
-  const tp = Math.max(absEntry * 0.0035, 0.35);
-  const sl = Math.max(absEntry * 0.0018, 0.18);
-  const mfeFloor = Math.max(absEntry * 0.0012, 0.12);
+  const tp = Math.max(absEntry * 0.0022, 0.22);
+  const sl = Math.max(absEntry * 0.0015, 0.15);
+  /** Any plus that counts as "had a winner" — Gold ~2pts, FX ~0.08 */
+  const lockFloor = Math.max(absEntry * 0.00045, 0.08);
+  const retention = s.peak_retention;
 
-  if (fav <= -sl) {
-    return { exit: true, reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}` };
-  }
-
-  if (s.mfe >= mfeFloor && s.peak_retention != null && s.peak_retention < 0.3) {
+  // 1) Had plus → never ride it into minus
+  if (s.mfe >= lockFloor && fav <= 0) {
     return {
       exit: true,
-      reason: `PeakProtection · retention ${(s.peak_retention * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} → lock best`,
+      reason: `GaveBackPlus · MFE ${s.mfe.toFixed(5)} now UPL ${fav.toFixed(5)} → lock, do not wait for minus`,
     };
   }
 
+  // 2) Trail: keep ~half of best once a real plus existed
+  if (s.mfe >= lockFloor && retention != null && retention < 0.5) {
+    return {
+      exit: true,
+      reason: `PeakProtection · retention ${(retention * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} → lock best`,
+    };
+  }
+
+  // 3) Still green but fading — harvest remaining plus
+  if (s.mfe >= lockFloor && fav > 0 && retention != null && retention < 0.62) {
+    return {
+      exit: true,
+      reason: `BestOutcome harvest · UPL ${fav.toFixed(5)} after MFE ${s.mfe.toFixed(5)} (ret ${(retention * 100).toFixed(0)}%)`,
+    };
+  }
+
+  // 4) Take the plus when target is hit (do not wait for a bigger dream)
   if (fav >= tp) {
     return {
       exit: true,
@@ -84,18 +99,22 @@ export function decideBestOutcomeExit(
     };
   }
 
-  if (s.mfe >= mfeFloor && fav > 0 && s.peak_retention != null && s.peak_retention < 0.4) {
-    return {
-      exit: true,
-      reason: `BestOutcome harvest · UPL ${fav.toFixed(5)} after MFE ${s.mfe.toFixed(5)} (ret ${(s.peak_retention * 100).toFixed(0)}%)`,
-    };
+  // 5) Last-resort hard invalidation (no plus was ever locked)
+  if (fav <= -sl) {
+    return { exit: true, reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}` };
   }
 
   const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
-  if (heldMs > 480_000 && fav >= 0 && s.mfe >= mfeFloor * 0.5) {
+  if (heldMs > 90_000 && fav > 0 && s.mfe >= lockFloor * 0.6) {
     return {
       exit: true,
-      reason: `TimeDecay · held ${Math.round(heldMs / 1000)}s · realize non-negative best UPL ${fav.toFixed(5)}`,
+      reason: `TimeDecay · held ${Math.round(heldMs / 1000)}s · take plus ${fav.toFixed(5)}`,
+    };
+  }
+  if (heldMs > 180_000 && fav >= 0) {
+    return {
+      exit: true,
+      reason: `TimeDecay · held ${Math.round(heldMs / 1000)}s · flatten non-negative ${fav.toFixed(5)}`,
     };
   }
 

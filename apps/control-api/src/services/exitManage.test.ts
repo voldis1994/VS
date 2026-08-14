@@ -70,13 +70,28 @@ describe('decideBestOutcomeExit', () => {
     expect(buy.exit).toBe(false);
   });
 
-  it('hard invalidation on ~0.18% adverse', () => {
+  it('hard invalidation on ~0.15% adverse', () => {
     const d = decideBestOutcomeExit(snap({ open_side: 'BUY', entry_price: 2000, regime: 'RANGE' }), 1994);
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/HardInvalidation/);
   });
 
-  it('peak protection after meaningful MFE giveback', () => {
+  it('never gives a printed plus back to minus', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        regime: 'TREND_UP',
+        mfe: 2.5,
+        peak_retention: 0,
+      }),
+      1999.8
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/GaveBackPlus/);
+  });
+
+  it('peak protection after ~half of best is given back', () => {
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -91,10 +106,10 @@ describe('decideBestOutcomeExit', () => {
     expect(d.reason).toMatch(/PeakProtection/);
   });
 
-  it('target at ~0.35%', () => {
+  it('target at ~0.22%', () => {
     const d = decideBestOutcomeExit(
       snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_UP', mfe: 8 }),
-      2008
+      2005
     );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/Target/);
