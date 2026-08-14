@@ -24,4 +24,7 @@ func killPort(port string) {
 
 func killMatchingNode(root string) {
 	_ = root
+	_ = exec.Command("pkill", "-f", "apps/control-api").Run()
+	_ = exec.Command("pkill", "-f", "apps/dashboard").Run()
+	_ = exec.Command("pkill", "-f", "client-public.mjs").Run()
 }

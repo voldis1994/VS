@@ -25,7 +25,10 @@ func killPort(port string) {
 	}
 }
 
+// killMatchingNode stops leftover tsx/vite/npm. PALAIST = aizver visu Node.
+// Port-only kill misses tsx that is still inside migrate() and not listening on :3000.
 func killMatchingNode(root string) {
-	// Port kills cover leftover npm/tsx. Extra: stop node that still holds our tools.
 	_ = root
+	_ = exec.Command("taskkill", "/F", "/IM", "node.exe").Run()
+	_ = exec.Command("taskkill", "/F", "/IM", "npm.exe").Run()
 }

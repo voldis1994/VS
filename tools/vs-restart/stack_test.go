@@ -75,6 +75,21 @@ func TestLooksRealSecret(t *testing.T) {
 	}
 }
 
+func TestIpv4LocalDBHost(t *testing.T) {
+	dir := t.TempDir()
+	if got := ipv4LocalDBHost(dir); got != "127.0.0.1" {
+		t.Fatalf("empty env: %s", got)
+	}
+	_ = os.WriteFile(filepath.Join(dir, ".env"), []byte("DB_HOST=localhost\n"), 0644)
+	if got := ipv4LocalDBHost(dir); got != "127.0.0.1" {
+		t.Fatalf("localhost: %s", got)
+	}
+	_ = os.WriteFile(filepath.Join(dir, ".env"), []byte("DB_HOST=10.0.0.5\n"), 0644)
+	if got := ipv4LocalDBHost(dir); got != "10.0.0.5" {
+		t.Fatalf("remote: %s", got)
+	}
+}
+
 func TestLoadDotEnv(t *testing.T) {
 	dir := t.TempDir()
 	_ = os.WriteFile(filepath.Join(dir, ".env"), []byte("PIPELINE_TOKEN=abc\n# c\nDB_PASSWORD=secret\n"), 0644)
