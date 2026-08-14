@@ -462,7 +462,7 @@ export function RobotDeskPage() {
           <div className="robot-wire-head">
             <div className="robot-arena-kicker">WITH-TREND ONLY — RANGE / FADE / REVERSAL NEGAIDĀ</div>
             <div className="robot-wire-chain mono">
-              Kāpums = tikai BUY · kritums = tikai SELL · nekādu SELL SCALP pret kāpumu
+              SL = Capital min + 10% · 3 min trend · kāpums = BUY · kritums = SELL
             </div>
           </div>
           <div className="robot-regime-grid">

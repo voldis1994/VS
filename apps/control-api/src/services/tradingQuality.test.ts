@@ -5,7 +5,7 @@ import {
 } from './capitalCom.js';
 
 describe('safety SL cushion', () => {
-  it('places BUY stop ~0.12% below mid — smaller than the old 0.20% pillow', () => {
+  it('places BUY stop at Capital min+10%, not 0.12–0.20% of price', () => {
     const mid = 2000;
     const level = computeSafetyCushionStopLevel('BUY', mid, {
       bid: 1999.8,
@@ -14,9 +14,9 @@ describe('safety SL cushion', () => {
       minStopDistance: 0.5,
     });
     const dist = mid - level;
-    expect(dist).toBeGreaterThanOrEqual(mid * 0.0012 - 0.01);
-    expect(dist).toBeLessThan(mid * 0.0016 + 0.05);
-    expect(dist).toBeLessThan(mid * 0.002);
+    expect(dist).toBeGreaterThanOrEqual(0.5);
+    expect(dist).toBeLessThan(1.2);
+    expect(dist).toBeLessThan(mid * 0.001);
   });
 });
 

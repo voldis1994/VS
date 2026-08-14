@@ -256,7 +256,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: '10s OHLC → REGIME → WITH-TREND ENTRY (no RANGE fade)',
     note:
-      'WITH-TREND ONLY: RANGE/fade/reversal wait. Climb = BUY only. Dump = SELL only. Public feeds stay near Capital.',
+      'WITH-TREND · SL = Capital min+10% (not 0.20% of price) · 3-min trend · public feeds near Capital.',
   };
 }
 
@@ -301,8 +301,8 @@ function clearTradeState(s: Internal) {
 }
 
 /**
- * SAFETY SL as a true cushion — NOT dealing-rules minimum.
- * Target ~0.12% of price (10s scalp). 0.20% was still too wide (~9pts on Gold).
+ * Tight SL: Capital dealing-rules minimum + small buffer.
+ * Do NOT size SL as % of Gold price — that kept stops ~9pts and looked unchanged.
  */
 function safetyStopLevel(
   direction: 'BUY' | 'SELL',
@@ -329,14 +329,14 @@ function safetyStopLevel(
         ? Math.max(ask - bid, 0)
         : abs * 0.00005;
 
-  const pctCushion = abs * 0.0012; // 0.12%
   const brokerMin =
     minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
       ? minStopDistance
       : 0;
-  const floor = abs >= 1000 ? 0.3 : abs >= 100 ? 0.15 : abs >= 10 ? 0.05 : abs >= 1 ? 0.0005 : 0.00005;
+  const fallback = abs * 0.0006; // 0.06% only if Capital sent no min
+  const floor = abs >= 1000 ? 0.2 : abs >= 100 ? 0.1 : abs >= 10 ? 0.04 : 0.0004;
   const dist =
-    Math.max(pctCushion, brokerMin * 2, spr * 4, floor) * Math.max(loosen, 1);
+    Math.max(brokerMin * 1.1, spr * 1.25, brokerMin > 0 ? 0 : fallback, floor) * Math.max(loosen, 1);
 
   const raw = direction === 'BUY' ? ref - dist : ref + dist;
   if (abs >= 1000) return Math.round(raw * 10) / 10;
@@ -345,19 +345,13 @@ function safetyStopLevel(
   return Math.round(raw * 1e6) / 1e6;
 }
 
-/** Cushion stopDistance in Capital POINTS (≥ 2× min, ~0.12% of price when point size known). */
+/** Tight stopDistance: ~1.1× Capital min points — not 0.12% of price converted to points. */
 function safetyStopDistancePts(
-  mid: number,
+  _mid: number,
   minPts: number,
-  pointSize: number | null
+  _pointSize: number | null
 ): number {
-  const abs = Math.max(Math.abs(mid), 1e-9);
-  const pct = abs * 0.0012;
-  let fromPct = minPts * 2;
-  if (pointSize != null && pointSize > 0) {
-    fromPct = Math.max(fromPct, pct / pointSize);
-  }
-  const distPts = Math.max(minPts * 2, fromPct, minPts + 1e-9);
+  const distPts = Math.max(minPts * 1.1, minPts + (minPts >= 10 ? 1 : 0.1));
   return distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
 }
 
@@ -650,12 +644,12 @@ async function enterTrade(
     return;
   }
 
-  // SAFETY SL cushion (~0.12% / ≥2× min) — smaller for 10s scalp
+  // Tight SL: Capital min + 10% — not % of Gold price
   const minPts = quote.min_stop_points;
   const minPrice = quote.min_stop_distance ?? null;
   const unit = (quote.min_stop_unit || 'POINTS').toUpperCase();
   const useDistance = minPts != null && minPts > 0 && !unit.includes('PERCENT');
-  const loosenSteps = [1, 1.15, 1.35, 1.6, 2.0];
+  const loosenSteps = [1, 1.08, 1.16, 1.28];
 
   let stopLevel: number | null = null;
   let usedStopDistance: number | null = null;
@@ -664,7 +658,7 @@ async function enterTrade(
   if (useDistance) {
     for (const loosen of loosenSteps) {
       const basePts = safetyStopDistancePts(mid, minPts!, quote.point_size ?? null);
-      const distPts = Math.max(basePts * loosen, minPts! * 2);
+      const distPts = Math.max(basePts * loosen, minPts! * 1.05);
       const stopDistance =
         distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
       const expect = expectedStopFromDistance(
@@ -680,7 +674,7 @@ async function enterTrade(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `Capital SAFETY SL cushion stopDistance=${stopDistance} pts (min=${minPts} · ~level ${
+        detail: `SL TIGHT stopDistance=${stopDistance} pts (Capital min=${minPts} · ~level ${
           expect ?? 'n/a'
         } · x${loosen})`,
       });
@@ -723,7 +717,7 @@ async function enterTrade(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `Capital SAFETY SL try stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
+        detail: `SL TIGHT try stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
           minPrice ?? 'n/a'
         } · spread=${quote.spread ?? 'n/a'} · x${loosen})`,
       });
@@ -1045,7 +1039,7 @@ async function robotCycle(s: Internal) {
       s.mode = 'MANAGE';
       if (quote.mid == null) return;
 
-      // One-shot: pull broker SL closer on already-open trades (0.12% cushion)
+      // One-shot: pull already-open SL in to Capital min+10%
       if (!s.sl_tighten_done && s.deal_id && s.open_side && quote.mid != null) {
         s.sl_tighten_done = true;
         const tighter = safetyStopLevel(
@@ -1073,7 +1067,7 @@ async function robotCycle(s: Internal) {
               bid: quote.bid,
               ask: quote.ask,
               mid: quote.mid,
-              detail: `SAFETY SL tightened ${cur} → ${tighter} (~0.12%)`,
+              detail: `SL tightened ${cur} → ${tighter} (Capital min+10%)`,
             });
           } else {
             pushTick(s, {
