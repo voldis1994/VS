@@ -16,11 +16,25 @@ echo [0/5] Nemu jaunako VS.bat no GitHub...
 curl.exe -fsSL -o "%TEMP%\VS_from_github.bat" "https://raw.githubusercontent.com/voldis1994/VS/main/VS.bat"
 if exist "%TEMP%\VS_from_github.bat" (
   call "%TEMP%\VS_from_github.bat" _INNER "%ROOT%"
-  exit /b %ERRORLEVEL%
+  set "ERR=!ERRORLEVEL!"
+  if not "!ERR!"=="0" (
+    color 0C
+    echo.
+    echo [KLUDA] VS.bat apstajas. Logs paliek atverts - nosuti so tekstu.
+    pause
+  )
+  exit /b !ERR!
 )
 echo [WARN] GitHub bat neizdevas lejupieladet - turpinu ar lokalo.
 call "%~f0" _INNER "%ROOT%"
-exit /b %ERRORLEVEL%
+set "ERR=!ERRORLEVEL!"
+if not "!ERR!"=="0" (
+  color 0C
+  echo.
+    echo [KLUDA] VS.bat apstajas. Logs paliek atverts - nosuti so tekstu.
+  pause
+)
+exit /b !ERR!
 
 :body
 title VS - palaisana (NEAIZVER SO LOGU)
@@ -276,9 +290,15 @@ echo.
 where cloudflared >nul 2>&1
 if not errorlevel 1 (
   cloudflared tunnel --url http://127.0.0.1:18080
+  echo.
+  echo [VS] tunelis beidzas. Logs paliek atverts.
+  pause
   goto :eof
 )
 npx --yes cloudflared tunnel --url http://127.0.0.1:18080
+echo.
+echo [VS] tunelis beidzas. Logs paliek atverts.
+pause
 exit /b %ERRORLEVEL%
 
 :ensure_docker
@@ -352,9 +372,7 @@ if exist "%ROOT%\.git" (
   )
 )
 if defined BUILD_SHA exit /b 0
-for /f "delims=" %%H in ('powershell -NoProfile -Command "try { (Invoke-RestMethod -Uri 'https://api.github.com/repos/voldis1994/VS/commits/main').sha.Substring(0,7) } catch { '' }"') do set "BUILD_SHA=%%H"
-if defined BUILD_SHA exit /b 0
-set "BUILD_SHA=local"
+set "BUILD_SHA=zip"
 exit /b 0
 
 :update_from_zip
@@ -366,34 +384,42 @@ rmdir /s /q "%UNP%" >nul 2>&1
 mkdir "%UNP%" >nul 2>&1
 curl.exe -fL --retry 3 -o "%ZIP%" "https://codeload.github.com/voldis1994/VS/zip/refs/heads/main"
 if errorlevel 1 (
-  echo [WARN] ZIP lejupielade neizdevas.
+  echo [WARN] ZIP lejupielade neizdevas - palaisu to mapi kas jau ir.
   exit /b 1
 )
 if not exist "%ZIP%" (
-  echo [WARN] ZIP fails nav.
+  echo [WARN] ZIP fails nav - palaisu to mapi kas jau ir.
   exit /b 1
 )
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath '%ZIP%' -DestinationPath '%UNP%' -Force"
+echo [..] Izpaku ar tar (ne PowerShell Expand-Archive)...
+where tar >nul 2>&1
 if errorlevel 1 (
-  tar -xf "%ZIP%" -C "%UNP%" 2>nul
+  echo [WARN] tar.exe nav - palaisu to mapi kas jau ir.
+  exit /b 1
 )
+tar.exe -xf "%ZIP%" -C "%UNP%"
+if errorlevel 1 (
+  echo [WARN] tar izpakosana neizdevas - palaisu to mapi kas jau ir.
+  exit /b 1
+)
+echo [OK] ZIP izpakots
 set "SRC="
 for /d %%D in ("%UNP%\*") do if exist "%%D\apps\dashboard\package.json" set "SRC=%%D"
 if not defined SRC (
-  echo [WARN] ZIP saturs nav VS mape.
+  echo [WARN] ZIP saturs nav VS mape - palaisu to mapi kas jau ir.
   exit /b 1
 )
-echo [..] Rakstu failus uz %ROOT%  (.env paliek)
+echo [..] Rakstu failus uz %ROOT%  (.env paliek, 1s retry ja Explorer tur failu)
 if exist "%ROOT%\.env" copy /Y "%ROOT%\.env" "%TEMP%\vs-env-keep" >nul
-robocopy "%SRC%" "%ROOT%" /E /NFL /NDL /NJH /NJS /nc /ns /np /XD .git node_modules /XF .env >nul
-set "_rc=%ERRORLEVEL%"
+robocopy "%SRC%" "%ROOT%" /E /R:1 /W:1 /NFL /NDL /NJH /NJS /nc /ns /np /XD .git node_modules /XF .env >nul
+set "_rc=!ERRORLEVEL!"
 if exist "%TEMP%\vs-env-keep" copy /Y "%TEMP%\vs-env-keep" "%ROOT%\.env" >nul
 if !_rc! GEQ 8 (
-  echo [WARN] ZIP kopija neizdevas (robocopy !_rc!).
+  echo [WARN] ZIP kopija daleja (robocopy !_rc!) - turpinu ar to, kas ir.
   exit /b 1
 )
 if not exist "%ROOT%\apps\dashboard\package.json" (
-  echo [WARN] pec ZIP nav projekta failu.
+  echo [WARN] pec ZIP nav projekta failu - palaisu to mapi kas jau ir.
   exit /b 1
 )
 echo [OK] pilna mape atjaunota no ZIP
