@@ -23,6 +23,9 @@ func main() {
 	fmt.Println("============================================================")
 	app := newApp(root)
 	app.log("Mape: %s", root)
+	if maybeSelfUpdate(root, app.log) {
+		os.Exit(0)
+	}
 	app.set(func(s *Status) {
 		s.GithubSHA, _ = fetchGithubSHA()
 		s.LocalSHA = readLocalSHA(root)

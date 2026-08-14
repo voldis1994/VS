@@ -90,10 +90,10 @@
     const errEl = document.getElementById('err');
     const btn = document.getElementById('btn');
     function lineClass(t) {
-      if (/gaidu Postgres|node.exe nav palicis/i.test(t)) return 'w';
-      if (/\[KLUDA\]|FAIL|EADDRINUSE|AggregateError/i.test(t) && !/gaidu Postgres/i.test(t)) return 'e';
-      if (/ECONNREFUSED/i.test(t) && !/gaidu Postgres/i.test(t)) return 'e';
-      if (/\[WARN\]|warn/i.test(t)) return 'w';
+      if (/gaidu Postgres|node.exe nav palicis|ZIP NERALU|jau jaunākais/i.test(t)) return 'w';
+      if (/\[KLUDA\]|EADDRINUSE|AggregateError|ECONNREFUSED/i.test(t) && !/gaidu Postgres/i.test(t)) return 'e';
+      if (/\bFAIL(?:ED|URE)?\b/i.test(t) && !/failus/i.test(t)) return 'e';
+      if (/\[WARN\]|npm warn/i.test(t)) return 'w';
       return '';
     }
     function addLog(t) {

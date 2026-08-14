@@ -231,11 +231,29 @@ export function decideEntryFrom10sRegime(
   const exhaustion = decideExhaustionEntry(withBar(recent, bar));
   if (exhaustion) return { ...exhaustion, reason: `${exhaustion.reason} · bias ${bias}` };
 
-  const r: RegimeName = normalizeRegime(regime);
-  const candle = describe(bar);
+	const r: RegimeName = normalizeRegime(regime);
+	const candle = describe(bar);
 
-  if (r === 'UNKNOWN' || r === 'TRANSITION' || r === 'COMPRESSION') return null;
-  // Countertrend by definition — WAIT, do not hunt SELL SCALP / BUY LONG against the move.
+	// Clear lasting bias unlocks with-trend entries even if classifier still says
+	// UNKNOWN / COMPRESSION / TRANSITION — that was the "WAIT · UNKNOWN forever" deadlock.
+	if (r === 'UNKNOWN' || r === 'TRANSITION' || r === 'COMPRESSION') {
+		if (bias === 'UP' && movingOrNull(bar) && dip(bar)) {
+			return gate(
+				{ direction: 'BUY', setup: 'PULLBACK', reason: `${r}+bias UP dip-buy · ${candle}` },
+				bias,
+				bar
+			);
+		}
+		if (bias === 'DOWN' && movingOrNull(bar) && dip(bar)) {
+			return gate(
+				{ direction: 'SELL', setup: 'PULLBACK', reason: `${r}+bias DOWN follow dump · ${candle}` },
+				bias,
+				bar
+			);
+		}
+		return null;
+	}
+	// Countertrend by definition — WAIT, do not hunt SELL SCALP / BUY LONG against the move.
   if (
     r === 'RANGE' ||
     r === 'FAILED_BREAKOUT_UP' ||
