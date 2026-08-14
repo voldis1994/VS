@@ -65,3 +65,21 @@ func TestUnzip(t *testing.T) {
 		t.Fatal("did not find VS root")
 	}
 }
+
+func TestLooksRealSecret(t *testing.T) {
+	if looksRealSecret("") || looksRealSecret("CHANGE_ME_PIPELINE_TOKEN") {
+		t.Fatal("placeholders must be rejected")
+	}
+	if !looksRealSecret("real-token-value") {
+		t.Fatal("real secret rejected")
+	}
+}
+
+func TestLoadDotEnv(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, ".env"), []byte("PIPELINE_TOKEN=abc\n# c\nDB_PASSWORD=secret\n"), 0644)
+	m := loadDotEnv(dir)
+	if m["PIPELINE_TOKEN"] != "abc" || m["DB_PASSWORD"] != "secret" {
+		t.Fatalf("%v", m)
+	}
+}

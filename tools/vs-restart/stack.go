@@ -54,6 +54,7 @@ func (a *App) fullRestart() error {
 		"MARKET_CORE_BRIDGE":   "1",
 		"BUILD_SHA":            readLocalSHA(a.root),
 	})
+	applyDotEnv(a.root)
 	if err := a.npmSetup(); err != nil {
 		return err
 	}
@@ -170,25 +171,36 @@ func (a *App) npmSetup() error {
 func (a *App) startServices() error {
 	sha := readLocalSHA(a.root)
 	dist := filepath.Join(a.root, "apps", "dashboard", "dist-client")
-	env := append(os.Environ(),
-		"LIVE_TRADING_ENABLED=true",
-		"OPERATING_MODE=LIVE",
-		"MARKET_CORE_BRIDGE=1",
-		"BUILD_SHA="+sha,
-		"CLIENT_PANEL_DIST="+dist,
-		"CLIENT_DIST="+dist,
-		"CLIENT_PUBLIC_PORT=18080",
-	)
+	applyDotEnv(a.root)
+	env := a.childEnv(map[string]string{
+		"LIVE_TRADING_ENABLED": "true",
+		"OPERATING_MODE":       "LIVE",
+		"MARKET_CORE_BRIDGE":   "1",
+		"BUILD_SHA":            sha,
+		"CLIENT_PANEL_DIST":    dist,
+		"CLIENT_DIST":          dist,
+		"CLIENT_PUBLIC_PORT":   "18080",
+		"CONTROL_API_URL":      "http://127.0.0.1:3000",
+	})
 
 	mc := firstExisting(
 		filepath.Join(a.root, "build", "windows-debug", "apps", "market-core", "market-core.exe"),
 		filepath.Join(a.root, "build", "windows-release", "apps", "market-core", "market-core.exe"),
 	)
-	if mc != "" {
+	pipeTok := envVal(env, "PIPELINE_TOKEN")
+	capKey := envVal(env, "CAPITAL_API_KEY")
+	if mc != "" && looksRealSecret(pipeTok) && looksRealSecret(capKey) {
 		a.spawn(mc, a.root, env, "--mode", "LIVE", "--bridge")
-		a.log("[OK] market-core")
+		a.log("[OK] market-core bridge")
 	} else {
-		a.log("[WARN] market-core.exe nav — Node robotDesk tik un ta palaižas")
+		a.log("[WARN] C++ market-core IZLAISTS — tas krita ar API key/token. Darbi iet caur Node robotDesk.")
+		if mc == "" {
+			a.log("  iemesls: market-core.exe nav uzbuivets")
+		} else if !looksRealSecret(pipeTok) {
+			a.log("  iemesls: PIPELINE_TOKEN .env ir tukss vai CHANGE_ME")
+		} else if !looksRealSecret(capKey) {
+			a.log("  iemesls: CAPITAL_API_KEY .env tukss — Capital atslēgas ir datubāzē, ne C++ env")
+		}
 	}
 	ex := firstExisting(
 		filepath.Join(a.root, "build", "windows-debug", "apps", "execution-service", "execution-service.exe"),
@@ -242,6 +254,7 @@ func (a *App) spawn(bin, dir string, env []string, args ...string) *exec.Cmd {
 func (a *App) run(bin, dir string, args ...string) error {
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = dir
+	cmd.Env = a.childEnv(nil)
 	hideWindow(cmd)
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
@@ -522,4 +535,79 @@ func firstExisting(paths ...string) string {
 		}
 	}
 	return ""
+}
+
+func loadDotEnv(root string) map[string]string {
+	out := map[string]string{}
+	b, err := os.ReadFile(filepath.Join(root, ".env"))
+	if err != nil {
+		return out
+	}
+	for _, line := range strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(v)
+		v = strings.Trim(v, `"'`)
+		if k != "" {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+func applyDotEnv(root string) {
+	for k, v := range loadDotEnv(root) {
+		if os.Getenv(k) == "" {
+			_ = os.Setenv(k, v)
+		}
+	}
+}
+
+func (a *App) childEnv(extra map[string]string) []string {
+	merged := map[string]string{}
+	for _, e := range os.Environ() {
+		k, v, ok := strings.Cut(e, "=")
+		if ok {
+			merged[k] = v
+		}
+	}
+	for k, v := range loadDotEnv(a.root) {
+		merged[k] = v
+	}
+	for k, v := range extra {
+		if v != "" {
+			merged[k] = v
+		}
+	}
+	out := make([]string, 0, len(merged))
+	for k, v := range merged {
+		out = append(out, k+"="+v)
+	}
+	return out
+}
+
+func envVal(env []string, key string) string {
+	prefix := key + "="
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			return strings.TrimPrefix(e, prefix)
+		}
+	}
+	return ""
+}
+
+func looksRealSecret(v string) bool {
+	s := strings.TrimSpace(v)
+	if s == "" {
+		return false
+	}
+	u := strings.ToUpper(s)
+	return !strings.Contains(u, "CHANGE_ME")
 }

@@ -1,9 +1,12 @@
 import { readFileSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { config as loadEnv } from 'dotenv';
 import { pool } from './pool.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+loadEnv({ path: join(__dirname, '../../../../.env') });
+loadEnv();
 
 export async function runMigrations(): Promise<void> {
   const migrationsDir = join(__dirname, 'migrations');
