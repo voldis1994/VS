@@ -42,6 +42,8 @@ type Status = {
   market: string | null;
   display_name: string | null;
   lot_size: number | null;
+  git_sha?: string;
+  entry_brain?: string;
   live_trade: LiveTrade;
 };
 
@@ -307,6 +309,11 @@ export function ClientPanelPage() {
           <div>
             <div className="ccp-top-title">VS CONTROL PANEL</div>
             <div className="ccp-client">{status?.client_name || '…'}</div>
+            {status?.git_sha && (
+              <div className="ccp-build">
+                BUILD {status.git_sha} · {status.entry_brain || 'node-robot-desk'} · SL min+10%
+              </div>
+            )}
           </div>
           <div
             className={`ccp-conn ${
@@ -385,7 +392,7 @@ export function ClientPanelPage() {
             {errorState
               ? status?.broker_error || status?.status_reason || 'SYSTEM ERROR — TAP TO STOP'
               : starting
-                ? 'WAITING FOR MARKET READER'
+                ? status?.status_reason || 'STARTING NODE ROBOT'
                 : hintLabel}
           </div>
         </section>

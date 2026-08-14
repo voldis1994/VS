@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { pool, healthCheck } from '../db/pool.js';
 import { TelemetryBroadcaster } from '../ws/telemetry.js';
+import { runtimeBuildInfo } from '../services/runtimeBuild.js';
 
 function liveEnabled(): boolean {
   const v = process.env.LIVE_TRADING_ENABLED;
@@ -12,7 +13,7 @@ export async function registerSystemRoutes(
   app: FastifyInstance,
   telemetry: TelemetryBroadcaster
 ): Promise<void> {
-  app.get('/health', async () => ({ status: 'ok' }));
+  app.get('/health', async () => ({ status: 'ok', ...runtimeBuildInfo() }));
 
   app.get('/api/system/status', async () => {
     const dbOk = await healthCheck();
@@ -74,6 +75,7 @@ export async function registerSystemRoutes(
       server_time: new Date().toISOString(),
       latency: telemetry.getLatestMetrics(),
       status: dbOk ? 'LIVE' : 'DEGRADED',
+      ...runtimeBuildInfo(),
     };
   });
 

@@ -53,10 +53,15 @@ vi.mock('../security/encryption.js', () => ({
   decrypt: () => 'secret',
 }));
 
+const { hasEntryEnabledRobot } = vi.hoisted(() => ({
+  hasEntryEnabledRobot: vi.fn(() => false),
+}));
+
 vi.mock('./robotDesk.js', () => ({
   attachManageOnlyRobot: vi.fn(async () => undefined),
   listRobotSessions: () => [],
   stopRobotSession: vi.fn(async () => undefined),
+  hasEntryEnabledRobot: (accountId: number, epic: string) => hasEntryEnabledRobot(accountId, epic),
 }));
 
 function sub(partial: {
@@ -83,6 +88,7 @@ function claimKey(idem: string, clientId: number, accountId: number) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  hasEntryEnabledRobot.mockReturnValue(false);
   resetPipelineBridgeForTests();
   claimedKeys.clear();
   claimRows.clear();
@@ -321,25 +327,43 @@ describe('Client isolation', () => {
   });
 });
 
+describe('Node robotDesk owns entries', () => {
+  it('skips C++/pipeline Capital orders when Node entry robot is running', async () => {
+    hasEntryEnabledRobot.mockReturnValue(true);
+    const { fanoutEntryIntent } = await import('./intentFanout.js');
+    listActiveSubscriptionsForEpic.mockResolvedValue([
+      sub({ client_id: 17, account_id: 170, epic: 'XAUUSD', lot_size: 0.1 }),
+    ]);
+
+    const result = await fanoutEntryIntent({
+      epic: 'XAUUSD',
+      direction: 'SELL',
+      decision: 'ENTRY_READY',
+      idempotency_key: 'cpp-must-not-trade',
+    });
+
+    expect(createCapitalPosition).not.toHaveBeenCalled();
+    expect(result.executed[0]?.detail).toMatch(/Node robotDesk owns entries/);
+    hasEntryEnabledRobot.mockReturnValue(false);
+  });
+});
+
 describe('Heartbeat / runtime status', () => {
-  it('START + healthy MC analyzing epic → RUNNING', () => {
-    notePipelineHeartbeat(['XAUUSD']);
-    expect(getPipelineBridgeStatus().healthy).toBe(true);
-    expect(isEpicBeingAnalyzed('XAUUSD')).toBe(true);
+  it('START + Node entry robot running (even without Market Core) → RUNNING', () => {
     expect(
       computeClientRobotStatus({
         requestedRunning: true,
         hasAccount: true,
         hasEpic: true,
-        bridgeHealthy: true,
-        marketAnalyzed: true,
+        bridgeHealthy: false,
+        marketAnalyzed: false,
+        nodeEntryRunning: true,
       }).robot_status
     ).toBe('RUNNING');
   });
 
-  it('START while MC unavailable → NOT RUNNING (ERROR)', () => {
+  it('START while Node entry robot not yet up → STARTING, not green RUNNING', () => {
     resetPipelineBridgeForTests();
-    expect(getPipelineBridgeStatus().healthy).toBe(false);
     expect(
       computeClientRobotStatus({
         requestedRunning: true,
@@ -348,10 +372,10 @@ describe('Heartbeat / runtime status', () => {
         bridgeHealthy: false,
         marketAnalyzed: false,
       }).robot_status
-    ).toBe('ERROR');
+    ).toBe('STARTING');
   });
 
-  it('healthy bridge, epic not yet listed → STARTING', () => {
+  it('healthy bridge, epic not yet listed, no Node robot → STARTING', () => {
     notePipelineHeartbeat(['EURUSD']);
     expect(
       computeClientRobotStatus({
@@ -364,7 +388,7 @@ describe('Heartbeat / runtime status', () => {
     ).toBe('STARTING');
   });
 
-  it('heartbeat restored with epic → RUNNING', () => {
+  it('heartbeat restored is not enough — Node robot must be running', () => {
     notePipelineHeartbeat(['XAUUSD']);
     expect(
       computeClientRobotStatus({
@@ -374,7 +398,7 @@ describe('Heartbeat / runtime status', () => {
         bridgeHealthy: getPipelineBridgeStatus().healthy,
         marketAnalyzed: isEpicBeingAnalyzed('XAUUSD'),
       }).robot_status
-    ).toBe('RUNNING');
+    ).toBe('STARTING');
   });
 });
 
@@ -387,10 +411,10 @@ describe('UI status contract', () => {
       requestedRunning: true, hasAccount: true, hasEpic: true, bridgeHealthy: true, marketAnalyzed: false,
     }).robot_status).toBe('STARTING');
     expect(computeClientRobotStatus({
-      requestedRunning: true, hasAccount: true, hasEpic: true, bridgeHealthy: true, marketAnalyzed: true,
+      requestedRunning: true, hasAccount: true, hasEpic: true, bridgeHealthy: true, marketAnalyzed: true, nodeEntryRunning: true,
     }).robot_status).toBe('RUNNING');
     expect(computeClientRobotStatus({
       requestedRunning: true, hasAccount: true, hasEpic: true, bridgeHealthy: false, marketAnalyzed: false,
-    }).robot_status).toBe('ERROR');
+    }).robot_status).toBe('STARTING');
   });
 });

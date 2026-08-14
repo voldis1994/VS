@@ -41,12 +41,12 @@ if not exist "%ROOT%\apps\dashboard\package.json" (
   exit /b 1
 )
 
-echo [1/5] Apturu vecos procesus + Vite...
+echo [1/5] Apturu vecos procesus + Vite + veco API...
 taskkill /F /FI "WINDOWTITLE eq MR-*" >nul 2>&1
 taskkill /F /IM market-core.exe >nul 2>&1
 taskkill /F /IM execution-service.exe >nul 2>&1
 taskkill /F /IM cloudflared.exe >nul 2>&1
-powershell -NoProfile -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and ($_.CommandLine -match 'vite') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and ($_.CommandLine -match 'vite' -or $_.CommandLine -match 'apps\\control-api' -or $_.CommandLine -match 'tsx watch' -or $_.CommandLine -match 'client-public') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":3000 " ^| findstr LISTENING') do taskkill /F /PID %%P >nul 2>&1
 for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":5173 " ^| findstr LISTENING') do taskkill /F /PID %%P >nul 2>&1
 for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":5174 " ^| findstr LISTENING') do taskkill /F /PID %%P >nul 2>&1
@@ -63,23 +63,39 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-if exist "%ROOT%\.git" (
-  cd /d "%ROOT%"
-  git fetch origin main
-  if errorlevel 1 (
-    echo [WARN] git fetch neizdevas. Turpinu ar kodu, kas jau ir uz diska.
-  ) else (
-    git checkout -f main
-    git reset --hard origin/main
-    if errorlevel 1 (
-      echo [WARN] git reset neizdevas. Turpinu ar kodu, kas jau ir uz diska.
-    ) else (
-      for /f "delims=" %%H in ('git rev-parse --short HEAD') do echo [OK] main  %%H
-    )
-  )
-) else (
-  echo [WARN] nav git clone - kods var but vecs.
+if not exist "%ROOT%\.git" (
+  color 0C
+  echo [KLUDA] nav git clone - nevar uzlikt jaunako main.
+  echo         Klone https://github.com/voldis1994/VS
+  pause
+  exit /b 1
 )
+cd /d "%ROOT%"
+git fetch origin main
+if errorlevel 1 (
+  color 0C
+  echo [KLUDA] git fetch neizdevas. NE turpinu ar veco kodu. Parbaudi internetu un palaid VS.bat velreiz.
+  pause
+  exit /b 1
+)
+git checkout -f main
+git reset --hard origin/main
+if errorlevel 1 (
+  color 0C
+  echo [KLUDA] git reset neizdevas. NE turpinu ar veco disku.
+  pause
+  exit /b 1
+)
+for /f "delims=" %%H in ('git rev-parse --short HEAD') do set "BUILD_SHA=%%H"
+if not defined BUILD_SHA set "BUILD_SHA=unknown"
+echo.
+echo ============================================================
+echo   BUILD  !BUILD_SHA!
+echo   ENTRY  Node robotDesk  ^(NE C++ market-core lemumi^)
+echo   SL     Capital min + 10%%
+echo   TREND  3 minutes
+echo ============================================================
+echo.
 if not exist "%ROOT%\apps\dashboard\package.json" (
   color 0C
   echo [KLUDA] Trukst projekta failu pec git. https://github.com/voldis1994/VS
@@ -109,6 +125,7 @@ if not exist "%ROOT%\.env" (
 call :upsert_env OPERATING_MODE LIVE
 call :upsert_env LIVE_TRADING_ENABLED true
 call :upsert_env MARKET_CORE_BRIDGE 1
+if defined BUILD_SHA call :upsert_env BUILD_SHA !BUILD_SHA!
 
 docker start market-reader-postgres >nul 2>&1
 docker start market-reader-redis >nul 2>&1
@@ -172,6 +189,9 @@ set "MARKET_CORE_BRIDGE=1"
 set "CLIENT_PANEL_DIST=%ROOT%\apps\dashboard\dist-client"
 set "CLIENT_DIST=%ROOT%\apps\dashboard\dist-client"
 set "CLIENT_PUBLIC_PORT=18080"
+if not defined BUILD_SHA (
+  for /f "delims=" %%H in ('git rev-parse --short HEAD') do set "BUILD_SHA=%%H"
+)
 
 set "MC=%ROOT%\build\windows-debug\apps\market-core\market-core.exe"
 if not exist "%MC%" set "MC=%ROOT%\build\windows-release\apps\market-core\market-core.exe"
@@ -192,7 +212,7 @@ set "EX=%ROOT%\build\windows-debug\apps\execution-service\execution-service.exe"
 if not exist "%EX%" set "EX=%ROOT%\build\windows-release\apps\execution-service\execution-service.exe"
 if exist "%EX%" start "MR-Execution" /D "%ROOT%" cmd /k "%EX%" --mode LIVE
 
-start "MR-ControlAPI" /D "%ROOT%\apps\control-api" cmd /k set CLIENT_PANEL_DIST=%ROOT%\apps\dashboard\dist-client^& npm run dev
+start "MR-ControlAPI" /D "%ROOT%\apps\control-api" cmd /k set BUILD_SHA=!BUILD_SHA!^& set CLIENT_PANEL_DIST=%ROOT%\apps\dashboard\dist-client^& npm run dev
 echo [..] gaidu API :3000 ...
 call :wait_port 3000 40
 

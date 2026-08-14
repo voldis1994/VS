@@ -1,5 +1,12 @@
 import { pool } from '../db/pool.js';
-import { listRobotSessions, stopEntryRobotsForAccount, stopFlatManageRobotsForAccount } from './robotDesk.js';
+import {
+  hasEntryEnabledRobot,
+  listRobotSessions,
+  startRobotSession,
+  stopEntryRobotsForAccount,
+  stopFlatManageRobotsForAccount,
+} from './robotDesk.js';
+import { runtimeBuildInfo } from './runtimeBuild.js';
 import { emitToClient } from './clientEvents.js';
 import { formatTradeLabel } from './tradePresentation.js';
 import { currentRegime } from './regimes.js';
@@ -62,6 +69,8 @@ export type ClientPanelStatus = {
   last_seen_at: string | null;
   /** Human-readable reason for STARTING/ERROR */
   status_reason?: string | null;
+  git_sha?: string;
+  entry_brain?: string;
   /** @deprecated use connection_status */
   connection_ok: boolean;
 };
@@ -72,17 +81,20 @@ export function computeClientRobotStatus(input: {
   hasEpic: boolean;
   bridgeHealthy: boolean;
   marketAnalyzed: boolean;
+  /** Node robotDesk entry session is live — this is the real trading brain. */
+  nodeEntryRunning?: boolean;
 }): { robot_status: ClientPanelStatus['robot_status']; status_reason: string | null } {
   if (!input.requestedRunning) return { robot_status: 'STOPPED', status_reason: null };
   if (!input.hasAccount) return { robot_status: 'ERROR', status_reason: 'No broker account' };
   if (!input.hasEpic) return { robot_status: 'ERROR', status_reason: 'No market selected' };
+  if (input.nodeEntryRunning) return { robot_status: 'RUNNING', status_reason: null };
   if (!input.bridgeHealthy) {
-    return { robot_status: 'ERROR', status_reason: 'Market Core heartbeat unavailable' };
+    return { robot_status: 'STARTING', status_reason: 'Starting Node entry robot' };
   }
   if (!input.marketAnalyzed) {
-    return { robot_status: 'STARTING', status_reason: 'Waiting for Market Core to analyze market' };
+    return { robot_status: 'STARTING', status_reason: 'Starting Node entry robot' };
   }
-  return { robot_status: 'RUNNING', status_reason: null };
+  return { robot_status: 'STARTING', status_reason: 'Starting Node entry robot' };
 }
 
 export function validateLotSize(
@@ -317,12 +329,45 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
     }
   }
 
+  const nodeEntryRunning = Boolean(
+    account && c.panel_epic && hasEntryEnabledRobot(account.account_id, c.panel_epic)
+  );
+
+  if (
+    requestedRunning &&
+    account &&
+    c.panel_epic &&
+    !nodeEntryRunning &&
+    !(robot?.running && robot.open_side)
+  ) {
+    try {
+      const lot = c.panel_lot_size != null ? Number(c.panel_lot_size) : 0;
+      if (Number.isFinite(lot) && lot > 0) {
+        await startRobotSession({
+          account_id: account.account_id,
+          epic: c.panel_epic,
+          display_name: c.panel_display_name || undefined,
+          lot_size: lot,
+          trading_enabled: true,
+          entry_enabled: true,
+        });
+      }
+    } catch {
+      /* status below reports STARTING until START succeeds */
+    }
+  }
+
+  const nodeNow = Boolean(
+    account && c.panel_epic && hasEntryEnabledRobot(account.account_id, c.panel_epic)
+  );
+
   const computed = computeClientRobotStatus({
     requestedRunning,
     hasAccount: Boolean(account),
     hasEpic: Boolean(c.panel_epic),
     bridgeHealthy: bridge.healthy,
     marketAnalyzed,
+    nodeEntryRunning: nodeNow,
   });
   const robot_status = computed.robot_status;
   const status_reason =
@@ -354,6 +399,8 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
     account_id: account?.account_id ?? null,
     live_trade,
     last_seen_at: c.last_seen_at ? new Date(c.last_seen_at).toISOString() : null,
+    git_sha: runtimeBuildInfo().git_sha,
+    entry_brain: runtimeBuildInfo().entry_brain,
   };
 }
 
@@ -387,8 +434,8 @@ export async function saveClientConfig(
 }
 
 /**
- * Client START = activate subscription for pipeline fan-out.
- * Does NOT start robotDesk entry strategy.
+ * Client START = Node robotDesk entry brain (same rules as Robot Command).
+ * C++ market-core intents are ignored while that session is running.
  */
 export async function startClientRobot(clientId: number): Promise<ClientPanelStatus> {
   const { rows } = await pool.query(
@@ -419,7 +466,7 @@ export async function startClientRobot(clientId: number): Promise<ClientPanelSta
   const account = await resolveClientTradingAccount(clientId);
   if (!account) throw new Error('No broker account linked to this client');
 
-  // Kill entry brains only — keep manage-only robot if a trade is already open
+  // Mark RUNNING in DB first, then start Node 10s robot (the code VS.bat actually runs).
   await stopEntryRobotsForAccount(account.account_id);
 
   await activateSubscription({
@@ -431,6 +478,15 @@ export async function startClientRobot(clientId: number): Promise<ClientPanelSta
     lotSize: lot,
   });
 
+  await startRobotSession({
+    account_id: account.account_id,
+    epic: market.epic,
+    display_name: market.display_name,
+    lot_size: lot,
+    trading_enabled: true,
+    entry_enabled: true,
+  });
+
   const status = await getClientPanelStatus(clientId);
   emitToClient(clientId, {
     type: 'robot_started',
@@ -438,7 +494,8 @@ export async function startClientRobot(clientId: number): Promise<ClientPanelSta
     display_name: status.display_name,
     lot_size: status.lot_size,
     robot_status: status.robot_status,
-    mode: 'subscription',
+    mode: 'node-robot-desk',
+    git_sha: status.git_sha,
   });
   emitToClient(clientId, { type: 'client_status', ...status });
   return status;

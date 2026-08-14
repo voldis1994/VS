@@ -25,6 +25,7 @@ import {
 } from './regimes.js';
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
 import { decideEntryFrom10sRegime, denyWithTrendEntry, resolveTrendBias, TREND_LOOKBACK_10S, type TrendBias } from './entryFromRegime.js';
+import { runtimeBuildInfo } from './runtimeBuild.js';
 import {
   allowEntryFromFeeds,
   multiFeedOwnsOhlc,
@@ -248,15 +249,17 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     0
   );
   const contributing = sessions.reduce((n, s) => Math.max(n, s.feed_contributing || 0), 0);
+  const build = runtimeBuildInfo();
   return {
     regimes: [...REGIME_NAMES],
     trade_types: ['BUY LONG', 'SELL LONG', 'BUY SCALP', 'SELL SCALP'],
     active_regimes: activeRegimes,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: '10s OHLC → REGIME → WITH-TREND ENTRY (no RANGE fade)',
-    note:
-      'WITH-TREND · SL = Capital min+10% (not 0.20% of price) · 3-min trend · public feeds near Capital.',
+    git_sha: build.git_sha,
+    entry_brain: build.entry_brain,
+    chain: '10s OHLC → REGIME → WITH-TREND ENTRY (no RANGE fade) · Node robotDesk',
+    note: `BUILD ${build.git_sha} · NODE BRAIN · WITH-TREND · SL = Capital min+10% · ${build.trend_minutes}-min trend · public feeds near Capital.`,
   };
 }
 
@@ -425,7 +428,22 @@ export function listRobotSessions(): RobotSession[] {
     .map(publicSession);
 }
 
-/** Stop only entry brains — never kill a manage-only robot sitting on an open trade. */
+/** True when Node robotDesk is the entry brain for this account+epic (ignore stale C++ intents). */
+export function hasEntryEnabledRobot(accountId: number, epic: string): boolean {
+  const want = String(epic || '').trim().toUpperCase();
+  for (const s of sessions.values()) {
+    if (
+      s.account_id === accountId &&
+      s.running &&
+      s.entry_enabled &&
+      String(s.epic || '').toUpperCase() === want
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export async function stopEntryRobotsForAccount(accountId: number): Promise<void> {
   for (const s of [...sessions.values()]) {
     if (s.account_id === accountId && s.running && s.entry_enabled) {
@@ -1433,7 +1451,7 @@ export async function startRobotSession(input: {
     bid: null,
     ask: null,
     mid: null,
-    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · 10s OHLC from multi-feed consensus · ONE TRADE ONLY · other robots: ${others}`,
+    detail: `ROBOT START · BUILD ${runtimeBuildInfo().git_sha} · NODE BRAIN · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · 10s OHLC from multi-feed consensus · ONE TRADE ONLY · other robots: ${others}`,
   });
   pushTick(session, {
     phase: 'INFO',
@@ -1441,7 +1459,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: SL = Capital min+10% · 3-min trend · with-trend or confirmed fade after large move · max 1 open',
+      'Rules: Node robotDesk (not C++ market-core) · SL = Capital min+10% · 3-min trend · with-trend or confirmed fade after large move · max 1 open',
   });
 
   sessions.set(id, session);

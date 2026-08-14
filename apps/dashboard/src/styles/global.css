@@ -1889,6 +1889,13 @@ tr:hover td { background: rgba(57, 255, 20, 0.06); }
   color: rgba(200, 255, 180, 0.65);
   margin-top: 4px;
 }
+.ccp-build {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: rgba(180, 255, 0, 0.55);
+  margin-top: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
 .ccp-conn {
   display: inline-flex;
   align-items: center;
