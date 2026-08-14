@@ -94,15 +94,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Unblock-File -Lite
 
 echo.
 echo ============================================================
-echo   PANELIS:  http://127.0.0.1:18090
-echo   Kartina LAUNCHER jabut ID (ne tuksam).
-echo   Ja redzi veco [2/5] GitHub update PIRMS Postgres — tas VEL ir vecais exe.
+echo   PANELIS PILNEKRANA:  http://127.0.0.1:18090
+echo   Kartina LAUNCHER = force75a0
+echo   Spied PILNEKRANS panelī, ja Chrome neatveras fullscreen.
 echo ============================================================
 echo.
 
 start "" "%ROOT%\VS.exe" "%ROOT%"
 timeout /t 4 /nobreak >nul
-start "" "http://127.0.0.1:18090"
+
+REM Meginam atvert paneli uzreiz fullscreen (Chrome / Edge)
+if exist "%ProgramFiles%\Google\Chrome\Application\chrome.exe" (
+  start "" "%ProgramFiles%\Google\Chrome\Application\chrome.exe" --start-fullscreen --app=http://127.0.0.1:18090
+) else if exist "%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe" (
+  start "" "%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe" --start-fullscreen --app=http://127.0.0.1:18090
+) else (
+  start "" "http://127.0.0.1:18090"
+)
 
 echo [OK] palaisa. NEAIZVER so logu lidz panelis radaa LAUNCHER.
 echo.
