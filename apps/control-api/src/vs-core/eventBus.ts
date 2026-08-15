@@ -19,6 +19,7 @@ export type VsEventType =
   | 'ComponentFailed'
   | 'IncidentRaised'
   | 'IncidentResolved'
+  | 'ClientAuthenticated'
   | 'ClientTradingStarted'
   | 'ClientTradingStopped'
   | 'ReconcileCompleted'

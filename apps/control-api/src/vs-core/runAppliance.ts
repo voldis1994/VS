@@ -5,6 +5,11 @@
 
 import { bootVsCore } from './boot.js';
 import { probe } from './readiness.js';
+import {
+  probeStrategyRuntime,
+  probeRiskRuntime,
+  probeExecutionRuntime,
+} from './runtimeHealth.js';
 import { CORE_VERSION, STRATEGY_VERSION, STRATEGY_BASELINE_STATUS } from './versions.js';
 import { healthCheck } from '../db/pool.js';
 import { runMigrations } from '../db/migrate.js';
@@ -35,9 +40,9 @@ async function main() {
       ),
     marketCheck: async () =>
       probe('MARKET', 'WARNING', 'awaiting first Capital quote', 'MARKET_WAITING'),
-    strategyCheck: async () => probe('STRATEGY', 'OK', 'strategy core modules loaded'),
-    riskCheck: async () => probe('RISK', 'OK', 'risk core loaded'),
-    executionCheck: async () => probe('EXECUTION', 'OK', 'execution core loaded'),
+    strategyCheck: async () => probeStrategyRuntime(),
+    riskCheck: async () => probeRiskRuntime(),
+    executionCheck: async () => probeExecutionRuntime(false),
     reconcileCheck: async () =>
       probe('RECONCILIATION', 'WARNING', 'awaiting broker connect', 'RECONCILE_PENDING'),
   });

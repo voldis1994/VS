@@ -1041,37 +1041,26 @@ export function multiFeedOwnsOhlc(
  * Entry gate is Capital-first: public internet must never freeze trading.
  * Only block when multiple Capital brokers disagree with each other.
  */
+/**
+ * Legacy multi-feed helper — NOT the money-path authority.
+ * Money path uses allowEntryFromPrimaryFeed(FeedManager).
+ * Here: require at least one LIVE Capital (PRIMARY) contributor; REFERENCE alone never allows.
+ */
 export function allowEntryFromFeeds(
   multi: Pick<
     MultiFeedPrice,
     'contributing' | 'sender_count' | 'agreement' | 'capital_contributing' | 'capital_sender_count'
   > | null | undefined
 ): { ok: boolean; reason: string } {
-  const capitalConfigured = multi?.capital_sender_count ?? 0;
-  const capitalLive = multi?.capital_contributing ?? 0;
-
-  // No / single Capital row → always trade on local Capital quote
-  if (capitalConfigured < 2) {
-    return { ok: true, reason: 'Capital-anchored — public feeds advisory only' };
-  }
-
   if (!multi) {
-    return { ok: true, reason: 'multi snapshot missing — use Capital local' };
+    return { ok: false, reason: 'BLOCKED_TECHNICAL · PRIMARY_FEED_UNVERIFIED' };
   }
-
-  // Multiple Capital rows but none live — still allow local robot quote (caller has it)
-  if (capitalLive === 0) {
-    return { ok: true, reason: 'Capital peers offline — local Capital quote OK' };
+  const capitalLive = multi.capital_contributing ?? 0;
+  if (capitalLive < 1) {
+    return { ok: false, reason: 'BLOCKED_TECHNICAL · PRIMARY_FEED_OFFLINE' };
   }
-
-  if (capitalLive >= 2 && multi.agreement === 'DIVERGENT' && (multi.capital_contributing ?? 0) >= 2) {
-    // Only if divergence is among Capital — check capital-only would need separate field;
-    // be conservative: do not block — public can inflate DIVERGENT. Allow with note.
-    return { ok: true, reason: 'Capital live — entry allowed (public advisory)' };
-  }
-
   return {
     ok: true,
-    reason: `Capital ${capitalLive}/${capitalConfigured} · public advisory`,
+    reason: `PRIMARY Capital live=${capitalLive}/${multi.capital_sender_count ?? 0}`,
   };
 }

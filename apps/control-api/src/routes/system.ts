@@ -5,8 +5,9 @@ import { runtimeBuildInfo } from '../services/runtimeBuild.js';
 
 function liveEnabled(): boolean {
   const v = process.env.LIVE_TRADING_ENABLED;
-  if (v === undefined || v === '') return true;
-  return v !== 'false' && v !== '0';
+  // FAIL CLOSED: unset/empty = LIVE off
+  if (v === undefined || v === '') return false;
+  return v === 'true' || v === '1';
 }
 
 export async function registerSystemRoutes(
@@ -70,17 +71,17 @@ export async function registerSystemRoutes(
       capital_markets: capitalMarkets,
       open_positions: openPositions,
       today_executions: todayExecutions,
-      mode: process.env.OPERATING_MODE || 'LIVE',
+      mode: process.env.OPERATING_MODE || 'DEMO',
       live_enabled: liveEnabled(),
       server_time: new Date().toISOString(),
       latency: telemetry.getLatestMetrics(),
-      status: dbOk ? 'LIVE' : 'DEGRADED',
+      status: dbOk ? (liveEnabled() ? 'LIVE' : 'DEMO') : 'DEGRADED',
       ...runtimeBuildInfo(),
     };
   });
 
   app.get('/api/system/mode', async () => ({
-    mode: process.env.OPERATING_MODE || 'LIVE',
+    mode: process.env.OPERATING_MODE || 'DEMO',
     live_enabled: liveEnabled(),
     allowed: ['REPLAY', 'PAPER', 'DEMO', 'LIVE'],
   }));

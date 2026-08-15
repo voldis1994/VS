@@ -1,5 +1,5 @@
 VS CORE PREVIOUS MASTER TASK FINAL GATE
-git_sha=e1d0e9701d1f011a8353f3f3706945a163636c8c
+git_sha=ded968c9777dd7e1d6dd27a32d0018cb8bbc6d5a
 previous_master_task_complete=true
 live_readiness=NOT READY
 PASS=24 FAIL=0 EXTERNAL_BLOCKER=3

@@ -70,7 +70,7 @@ describe('multi-feed owns OHLC / entry gate', () => {
     ).toBe(false);
   });
 
-  it('never freezes entry due to public-only sender_count', () => {
+  it('PRIMARY Capital live allows; REFERENCE-only / Capital offline blocks', () => {
     expect(
       allowEntryFromFeeds({
         contributing: 0,
@@ -88,6 +88,7 @@ describe('multi-feed owns OHLC / entry gate', () => {
         capital_contributing: 0,
         capital_sender_count: 0,
       }).ok
-    ).toBe(true);
+    ).toBe(false);
+    expect(allowEntryFromFeeds(null).ok).toBe(false);
   });
 });

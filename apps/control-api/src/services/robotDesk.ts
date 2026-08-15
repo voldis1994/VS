@@ -63,7 +63,7 @@ import { allowEntryFromPrimaryFeed } from '../vs-core/primaryFeedGate.js';
 export type RobotTick = {
   at: string;
   /** SCAN = reading market, no setup yet. WAIT is legacy alias only — not a trading mode. */
-  phase: 'READ' | 'DECIDE' | 'ORDER' | 'SCAN' | 'WAIT' | 'ERROR' | 'INFO' | 'MANAGE' | 'EXIT';
+  phase: 'READ' | 'DECIDE' | 'ORDER' | 'SCAN' | 'ERROR' | 'INFO' | 'MANAGE' | 'EXIT';
   bid: number | null;
   ask: number | null;
   mid: number | null;
@@ -277,23 +277,19 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
   };
 }
 
-/** UI/chain: never show UNKNOWN when with-trend bias already unlocked the book. */
+/** Regime field only — never invent TREND_* from bias alone. */
 export function effectiveRegimeName(s: {
   regime?: string | null;
   trend_bias?: TrendBias | string | null;
 }): string {
+  void s.trend_bias;
   const r = String(s.regime || 'UNKNOWN').toUpperCase();
-  if (r && r !== 'UNKNOWN') return r;
-  if (s.trend_bias === 'UP') return 'TREND_UP';
-  if (s.trend_bias === 'DOWN') return 'TREND_DOWN';
   return r || 'UNKNOWN';
 }
 
-/** Persist bias unlock onto session.regime so board/logs/chain stay consistent. */
-function applyBiasRegimeUnlock(s: Internal) {
-  if (s.regime && s.regime !== 'UNKNOWN') return;
-  if (s.trend_bias === 'UP') s.regime = 'TREND_UP';
-  else if (s.trend_bias === 'DOWN') s.regime = 'TREND_DOWN';
+/** Bias unlock must not rewrite UNKNOWN regime into TREND_* (keep bias separate). */
+function applyBiasRegimeUnlock(_s: Internal) {
+  // no-op: regime stays authoritative; trend_bias is a separate field
 }
 
 export function robotBoardMeta(sessions: RobotSession[]) {
@@ -798,8 +794,8 @@ async function enterTrade(
     quote,
     feedManager: s.feedManager,
     orderStore,
-    // Session was acquired OK this cycle (enterTrade only called after acquire)
-    session_healthy: true,
+    // Session acquired for this enterTrade — CST + security token required (fail closed if missing)
+    session_healthy: Boolean(session?.cst && session?.securityToken),
     reconcile_clean: listed.ok,
     has_open_position: !!existing,
     stop_attached: stopAttached,
@@ -1945,14 +1941,17 @@ export function setRobotsTradingEnabled(
   clientId: number,
   accountId: number | null | undefined,
   enabled: boolean
-): void {
+): number {
+  let n = 0;
   for (const s of sessions.values()) {
     if (!s.running || s.client_id !== clientId) continue;
     if (accountId != null && s.account_id !== accountId) continue;
     s.trading_enabled = enabled;
     s.entry_enabled = enabled;
+    n += 1;
   }
   const reg = getClientTradingRegistry();
   if (enabled) reg.start(clientId, accountId ?? null);
   else reg.stop(clientId, accountId ?? null);
+  return n;
 }

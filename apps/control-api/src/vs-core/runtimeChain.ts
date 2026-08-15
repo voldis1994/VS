@@ -21,6 +21,8 @@ import { getIncidentCenter } from './incidentCenter.js';
 import { getEventBus } from './eventBus.js';
 import type { TenSecBar } from '../services/tenSecondOhlc.js';
 import { CONFIG_VERSION, STRATEGY_VERSION } from './versions.js';
+import { checkTimeSync } from './timeSync.js';
+import { marketStatusAllowsTrading } from './moneyPathRisk.js';
 
 export type ChainStep = {
   name: string;
@@ -28,8 +30,13 @@ export type ChainStep = {
   detail: string;
 };
 
+/** Explicit outcome — BLOCKED_TECHNICAL is not an execution PASS. */
+export type ChainOutcome = 'EXECUTED' | 'NO_SETUP' | 'BLOCKED_TECHNICAL' | 'FAILED';
+
 export type RuntimeChainResult = {
+  /** True only when a trade was executed (POSITION_OPEN / FILLED path). */
   ok: boolean;
+  outcome: ChainOutcome;
   steps: ChainStep[];
   decision: StrategyDecision | null;
   intent: TradeIntent | null;
@@ -52,10 +59,32 @@ export type RuntimeChainInput = {
   trading_enabled: boolean;
   broker?: ExecutionDeps['submit'];
   reconcile?: ExecutionDeps['reconcile'];
+  confirm?: ExecutionDeps['confirm'];
   local_positions?: LocalPosition[];
   broker_positions?: BrokerPosition[];
   orderStore?: OrderStore;
+  /** Test override — default from checkTimeSync() */
+  time_sync_ok?: boolean;
+  session_healthy?: boolean;
+  reconcile_clean?: boolean;
 };
+
+function blocked(
+  steps: ChainStep[],
+  reason: string,
+  extras?: Partial<RuntimeChainResult>
+): RuntimeChainResult {
+  return {
+    ok: false,
+    outcome: 'BLOCKED_TECHNICAL',
+    steps,
+    decision: extras?.decision ?? null,
+    intent: extras?.intent ?? null,
+    order: extras?.order ?? null,
+    broker_submits: extras?.broker_submits ?? 0,
+    blocked_reason: reason,
+  };
+}
 
 export async function runRuntimeChain(input: RuntimeChainInput): Promise<RuntimeChainResult> {
   const steps: ChainStep[] = [];
@@ -93,7 +122,7 @@ export async function runRuntimeChain(input: RuntimeChainInput): Promise<Runtime
   const feedSnap = feeds.snapshot(input.epic);
   steps.push({
     name: 'FEED_MANAGER',
-    ok: true,
+    ok: feedSnap.allows_execution && feedSnap.primary_status === 'LIVE',
     detail: `primary=${feedSnap.primary_status} exec=${feedSnap.allows_execution} block=${feedSnap.block_reason || 'none'}`,
   });
   await bus.emit('MarketTickReceived', {
@@ -124,7 +153,8 @@ export async function runRuntimeChain(input: RuntimeChainInput): Promise<Runtime
     steps.push({ name: 'MARKET_CORE_QUALITY', ok: false, detail: 'OFFLINE' });
   }
 
-  const marketAllows = market.allowsTrading(input.epic) && feedSnap.allows_execution;
+  const marketStatusOk = marketStatusAllowsTrading(input.primary.market_status || 'TRADEABLE');
+  const marketAllows = market.allowsTrading(input.epic) && feedSnap.allows_execution && marketStatusOk;
   steps.push({
     name: 'MARKET_STATE',
     ok: marketAllows,
@@ -132,7 +162,7 @@ export async function runRuntimeChain(input: RuntimeChainInput): Promise<Runtime
   });
 
   if (!feedSnap.allows_execution || !marketAllows) {
-    const reason = feedSnap.block_reason || `MARKET_${tickQuality}`;
+    const reason = feedSnap.block_reason || (marketStatusOk ? `MARKET_${tickQuality}` : 'MARKET_STATUS_UNVERIFIED');
     incidents.raise({
       severity: 'WARNING',
       component: 'runtime-chain',
@@ -141,23 +171,15 @@ export async function runRuntimeChain(input: RuntimeChainInput): Promise<Runtime
       reason: 'New entry blocked by feed/market quality',
       recovery_action: 'wait for PRIMARY LIVE',
     });
-    return {
-      ok: true, // chain executed correctly by blocking
-      steps,
-      decision: null,
-      intent: null,
-      order: null,
-      broker_submits: 0,
-      blocked_reason: reason,
-    };
+    return blocked(steps, reason);
   }
 
-  // 3) STRATEGY (features/regime/setup embedded in evaluateStrategy → entryFromRegime)
+  // 3) STRATEGY
   const decision = evaluateStrategy({
     epic: input.epic,
     market_snapshot_id: `chain_${Date.now()}`,
     market_open: true,
-    feed_fresh: true,
+    feed_fresh: feedSnap.primary_status === 'LIVE',
     bar_closed: true,
     closed_bar: input.closed_bar,
     bars: input.bars,
@@ -176,8 +198,10 @@ export async function runRuntimeChain(input: RuntimeChainInput): Promise<Runtime
   });
 
   if (decision.code !== 'ENTER_LONG' && decision.code !== 'ENTER_SHORT') {
+    const isBlocked = decision.code === 'BLOCKED_TECHNICAL';
     return {
-      ok: true,
+      ok: false,
+      outcome: isBlocked ? 'BLOCKED_TECHNICAL' : 'NO_SETUP',
       steps,
       decision,
       intent: null,
@@ -202,7 +226,13 @@ export async function runRuntimeChain(input: RuntimeChainInput): Promise<Runtime
   };
   steps.push({ name: 'TRADE_INTENT', ok: true, detail: intent.intent_id });
 
-  // Duplicate protection: open intents on same epic/account
+  const timeOk = input.time_sync_ok ?? checkTimeSync().ok;
+  const sessionOk = input.session_healthy ?? true;
+  const reconClean = input.reconcile_clean ?? true;
+  if (!timeOk) return blocked(steps, 'TIME_SYNC_ERROR', { decision, intent });
+  if (!sessionOk) return blocked(steps, 'SESSION_HEALTH_UNVERIFIED', { decision, intent });
+  if (!reconClean) return blocked(steps, 'RECONCILIATION_NOT_CLEAN', { decision, intent });
+
   const dup = orderStore.openIntents(input.account_id, input.epic).length > 0;
   const riskCtx: RiskContext = {
     client_id: input.client_id,
@@ -212,15 +242,15 @@ export async function runRuntimeChain(input: RuntimeChainInput): Promise<Runtime
     size: intent.size,
     client_trading_enabled: input.trading_enabled,
     market_open: true,
-    feed_fresh: true,
-    feed_offline: false,
+    feed_fresh: feedSnap.primary_status === 'LIVE',
+    feed_offline: feedSnap.primary_status === 'OFFLINE' || feedSnap.primary_status === 'MISSING',
     spread: input.primary.ask - input.primary.bid,
     max_spread: null,
     has_open_position: (input.broker_positions || []).some((p) => p.epic === input.epic),
     has_duplicate_intent: dup,
-    session_healthy: true,
-    time_sync_ok: true,
-    reconcile_clean: true,
+    session_healthy: sessionOk,
+    time_sync_ok: timeOk,
+    reconcile_clean: reconClean,
     stop_attached: intent.stop_level != null || intent.stop_distance != null,
     operating_mode: 'DEMO',
     live_trading_enabled: false,
@@ -237,15 +267,7 @@ export async function runRuntimeChain(input: RuntimeChainInput): Promise<Runtime
       client_id: input.client_id,
       payload: { detail: risk.code },
     });
-    return {
-      ok: true,
-      steps,
-      decision,
-      intent,
-      order: null,
-      broker_submits: 0,
-      blocked_reason: risk.code,
-    };
+    return blocked(steps, risk.code, { decision, intent });
   }
 
   const exec = await executeTradeIntent(intent, riskCtx, {
@@ -264,10 +286,11 @@ export async function runRuntimeChain(input: RuntimeChainInput): Promise<Runtime
       if (input.reconcile) return input.reconcile(i, cid);
       return { found: false, detail: 'not found' };
     },
+    confirm: input.confirm,
   });
   steps.push({
     name: 'EXECUTION',
-    ok: exec.ok,
+    ok: exec.ok && exec.code === 'POSITION_OPEN',
     detail: exec.ok ? exec.code : `${exec.code}: ${exec.reason}`,
   });
   steps.push({
@@ -276,10 +299,23 @@ export async function runRuntimeChain(input: RuntimeChainInput): Promise<Runtime
     detail: exec.order?.state || 'none',
   });
 
+  if (!exec.ok) {
+    return {
+      ok: false,
+      outcome: 'FAILED',
+      steps,
+      decision,
+      intent,
+      order: exec.order || null,
+      broker_submits,
+      blocked_reason: exec.reason,
+    };
+  }
+
   // Position + reconciliation
   const local = input.local_positions || [];
   const broker = input.broker_positions || [];
-  if (exec.ok && exec.order) {
+  if (exec.code === 'POSITION_OPEN' && exec.order) {
     broker.push({
       epic: input.epic,
       direction: intent.direction,
@@ -302,14 +338,28 @@ export async function runRuntimeChain(input: RuntimeChainInput): Promise<Runtime
     detail: recon.code,
   });
 
+  if (exec.code !== 'POSITION_OPEN') {
+    return {
+      ok: false,
+      outcome: 'BLOCKED_TECHNICAL',
+      steps,
+      decision,
+      intent,
+      order: exec.order || null,
+      broker_submits,
+      blocked_reason: exec.code,
+    };
+  }
+
   return {
     ok: exec.ok && recon.clean,
+    outcome: exec.ok && recon.clean ? 'EXECUTED' : 'FAILED',
     steps,
     decision,
     intent,
     order: exec.order || null,
     broker_submits,
-    blocked_reason: exec.ok ? null : exec.reason,
+    blocked_reason: exec.ok && recon.clean ? null : recon.code,
   };
 }
 
@@ -350,29 +400,24 @@ export async function runDuplicateProtectionTest(): Promise<{
       orderStore: store,
       broker: async () => {
         submits += 1;
-        // tiny delay to allow race
         await new Promise((r) => setTimeout(r, 5));
         return { ok: true, deal_reference: 'R1', deal_id: 'D1', detail: 'ok' };
       },
     });
 
   const [a, b] = await Promise.all([mk(), mk()]);
-  // At least one succeeds; total submits must be 1 if duplicate gate works via shared store.
-  // Note: race may allow 2 if both pass risk before either puts SIGNAL — OrderStore put happens inside executeTradeIntent after risk.
-  // Strengthen: sequential second call must block.
   submits = 0;
   const first = await mk();
   const second = await mk();
   const sequentialOk =
     first.broker_submits + second.broker_submits === 1 ||
-    (first.ok && second.blocked_reason === 'RISK_REJECTED_DUPLICATE_INTENT') ||
+    (first.outcome === 'EXECUTED' && second.blocked_reason === 'RISK_REJECTED_DUPLICATE_INTENT') ||
     second.broker_submits === 0;
 
-  // Count from store open intents / results
   const totalSubmits = (first.broker_submits || 0) + (second.broker_submits || 0);
   return {
     ok: sequentialOk && totalSubmits <= 1,
     submits: totalSubmits,
-    detail: `first_block=${first.blocked_reason} second_block=${second.blocked_reason} submits=${totalSubmits} concurrent_a=${a.broker_submits} b=${b.broker_submits}`,
+    detail: `first_block=${first.blocked_reason} second_block=${second.blocked_reason} submits=${totalSubmits} concurrent_a=${a.broker_submits} b=${b.broker_submits} outcomes=${first.outcome}/${second.outcome}`,
   };
 }

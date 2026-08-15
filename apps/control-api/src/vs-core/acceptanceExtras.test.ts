@@ -30,6 +30,11 @@ describe('CapitalSessionManager', () => {
     const red = CapitalSessionManager.redact(s);
     expect(JSON.stringify(red)).not.toContain('SECRET_CST');
     expect(red.has_tokens).toBe(true);
+    const pub = mgr.getPublicState(1, 10)!;
+    expect(JSON.stringify(pub)).not.toContain('SECRET_CST');
+    expect(JSON.stringify(pub)).not.toContain('SECRET_TOK');
+    expect(JSON.stringify(pub)).not.toContain('pw');
+    expect(pub.secrets_exposed).toBe(false);
   });
 
   it('handles 429 without claiming CONNECTED', async () => {

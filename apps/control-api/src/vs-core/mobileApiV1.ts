@@ -10,10 +10,10 @@ import { getIncidentCenter } from './incidentCenter.js';
 import { evaluateReadiness, type ProbeResult } from './readiness.js';
 import { versionBundle, CORE_VERSION, STRATEGY_VERSION } from './versions.js';
 import { getEventBus } from './eventBus.js';
+import { setRobotsTradingEnabled } from '../services/robotDesk.js';
 
 export type MobileApiDeps = {
   auth: MobileAuthService;
-  /** Admin vs client — admin sees hardware/all clients; client only own instance. */
   isAdmin?: (clientId: number) => boolean;
   getProbes?: () => ProbeResult[] | Promise<ProbeResult[]>;
   getMarket?: (clientId: number) => Promise<{
@@ -55,7 +55,7 @@ export async function registerMobileApiV1(app: FastifyInstance, deps: MobileApiD
       ip: req.ip,
     });
     if (!result.ok) return reply.code(401).send(result);
-    await bus.emit('ClientTradingStarted', {
+    await bus.emit('ClientAuthenticated', {
       source: 'mobile-api',
       client_id: body.client_id,
       payload: { action: 'login', device_id: body.device_id },
@@ -66,7 +66,6 @@ export async function registerMobileApiV1(app: FastifyInstance, deps: MobileApiD
       refresh_token: result.refresh_token,
       expires_at: result.expires_at,
       session_id: result.session_id,
-      // Never return Capital credentials
     };
   });
 
@@ -103,7 +102,6 @@ export async function registerMobileApiV1(app: FastifyInstance, deps: MobileApiD
     const report = evaluateReadiness(probes);
     const admin = deps.isAdmin?.(session.client_id) === true;
     if (!admin) {
-      // Client sees only their trading readiness slice — not hardware/all clients
       return {
         ok: true,
         role: 'client',
@@ -128,7 +126,7 @@ export async function registerMobileApiV1(app: FastifyInstance, deps: MobileApiD
     if (!session) return;
     const m = deps.getMarket
       ? await deps.getMarket(session.client_id)
-      : { bid: null, ask: null, spread: null, status: 'UNKNOWN' };
+      : { bid: null, ask: null, spread: null, status: 'NO_DATA' };
     return { ok: true, ...m };
   });
 
@@ -173,25 +171,36 @@ export async function registerMobileApiV1(app: FastifyInstance, deps: MobileApiD
   app.post('/api/v1/trading/start', async (req, reply) => {
     const session = await requireSession(req, reply);
     if (!session) return;
-    const state = reg.start(session.client_id);
+    const body = (req.body || {}) as { account_id?: number };
+    const accountId = body.account_id ?? null;
+    const state = reg.start(session.client_id, accountId);
+    const robots = setRobotsTradingEnabled(session.client_id, accountId, true);
     await bus.emit('ClientTradingStarted', {
       source: 'mobile-api',
       client_id: session.client_id,
-      payload: { state },
+      payload: { state, robots_enabled: robots, account_id: accountId },
     });
-    return { ok: true, state };
+    return { ok: true, state, robots_enabled: robots };
   });
 
   app.post('/api/v1/trading/stop', async (req, reply) => {
     const session = await requireSession(req, reply);
     if (!session) return;
-    const state = reg.stop(session.client_id);
+    const body = (req.body || {}) as { account_id?: number };
+    const accountId = body.account_id ?? null;
+    const state = reg.stop(session.client_id, accountId);
+    const robots = setRobotsTradingEnabled(session.client_id, accountId, false);
     await bus.emit('ClientTradingStopped', {
       source: 'mobile-api',
       client_id: session.client_id,
-      payload: { state, position_policy: state.stop_position_policy },
+      payload: {
+        state,
+        robots_disabled: robots,
+        account_id: accountId,
+        position_policy: state.stop_position_policy,
+      },
     });
-    return { ok: true, state };
+    return { ok: true, state, robots_disabled: robots };
   });
 
   app.get('/api/v1/incidents', async (req, reply) => {
@@ -210,12 +219,12 @@ export async function registerMobileApiV1(app: FastifyInstance, deps: MobileApiD
     const admin = deps.isAdmin?.(session.client_id) === true;
     const events = bus.recent(100).filter((e) => {
       if (admin) return true;
-      return e.client_id === session.client_id || e.client_id == null;
+      // Client: only own client_id — never global null client_id system events
+      return e.client_id === session.client_id;
     });
     return { ok: true, events };
   });
 
-  /** Explicitly reject arbitrary broker order construction from mobile. */
   app.post('/api/v1/broker/order', async (req, reply) => {
     const session = await requireSession(req, reply);
     if (!session) return;
@@ -227,7 +236,6 @@ export async function registerMobileApiV1(app: FastifyInstance, deps: MobileApiD
     });
   });
 
-  /** Client isolation: refuse accessing another client by id in path. */
   app.get('/api/v1/clients/:clientId/status', async (req, reply) => {
     const session = await requireSession(req, reply);
     if (!session) return;

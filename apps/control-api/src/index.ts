@@ -32,6 +32,11 @@ import { pool as dbPool } from './db/pool.js';
 import { verifyAccessCode } from './security/accessCode.js';
 import { probe } from './vs-core/readiness.js';
 import { registerAdminAgentRoutes } from './vs-core/adminAgent.js';
+import {
+  probeStrategyRuntime,
+  probeRiskRuntime,
+  probeExecutionRuntime,
+} from './vs-core/runtimeHealth.js';
 
 const PORT = parseInt(process.env.CONTROL_API_PORT || '3000', 10);
 const HOST = process.env.CONTROL_API_HOST || '0.0.0.0';
@@ -61,11 +66,24 @@ function trustProxyOption(): boolean | string | string[] | number {
 }
 
 async function main() {
+  // FAIL CLOSED: LIVE never defaults on
   if (process.env.LIVE_TRADING_ENABLED === undefined || process.env.LIVE_TRADING_ENABLED === '') {
-    process.env.LIVE_TRADING_ENABLED = 'true';
+    process.env.LIVE_TRADING_ENABLED = 'false';
   }
   if (process.env.OPERATING_MODE === undefined || process.env.OPERATING_MODE === '') {
-    process.env.OPERATING_MODE = 'LIVE';
+    process.env.OPERATING_MODE = 'DEMO';
+  }
+  if (process.env.LIVE_TRADING_ENABLED === 'true') {
+    const badSecrets = [
+      !process.env.MASTER_ENCRYPTION_KEY || process.env.MASTER_ENCRYPTION_KEY.includes('CHANGE_ME'),
+      !process.env.DB_PASSWORD || process.env.DB_PASSWORD === 'CHANGE_ME',
+      !process.env.API_ADMIN_TOKEN || process.env.API_ADMIN_TOKEN === 'CHANGE_ME_ADMIN_TOKEN',
+    ].some(Boolean);
+    if (badSecrets) {
+      throw new Error(
+        'LIVE_STARTUP_FAIL: default/CHANGE_ME secrets present — refuse LIVE start'
+      );
+    }
   }
 
   await runMigrations();
@@ -122,9 +140,9 @@ async function main() {
     probe('DATABASE', (await healthCheck()) ? 'OK' : 'ERROR', 'pg'),
     probe('MARKET', 'WARNING', 'probe via robotDesk runtime', 'MARKET_RUNTIME'),
     probe('CAPITAL', 'ERROR', 'Capital session not verified at API boot', 'CAPITAL_UNVERIFIED'),
-    probe('STRATEGY', 'OK', 'strategy core loaded'),
-    probe('RISK', 'OK', 'risk core loaded'),
-    probe('EXECUTION', 'OK', 'execution core loaded'),
+    probeStrategyRuntime(),
+    probeRiskRuntime(),
+    probeExecutionRuntime(false),
     probe('RECONCILIATION', 'WARNING', 'in-cycle reconcile', 'RECONCILE_RUNTIME'),
     probe('CONTROL_API', 'OK', 'listening'),
   ];

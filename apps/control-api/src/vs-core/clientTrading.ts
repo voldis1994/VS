@@ -1,6 +1,6 @@
 /**
- * Per-client trading state — START/STOP does not restart VS Core processes.
- * STOP blocks new entries; open positions policy is separate (never accidental close).
+ * Per-client / per-account trading state — START/STOP scoped.
+ * STOP one account must not stop other accounts of the same client.
  */
 
 export type StopPositionPolicy = 'LEAVE_OPEN' | 'MANAGE_ONLY';
@@ -17,16 +17,25 @@ export type ClientTradingState = {
   updated_at: string;
 };
 
-export class ClientTradingRegistry {
-  private byClient = new Map<number, ClientTradingState>();
+function key(clientId: number, accountId: number | null | undefined): string {
+  return `${clientId}:${accountId ?? 'any'}`;
+}
 
-  ensure(clientId: number, defaults?: Partial<ClientTradingState>): ClientTradingState {
-    let s = this.byClient.get(clientId);
+export class ClientTradingRegistry {
+  private byKey = new Map<string, ClientTradingState>();
+
+  ensure(
+    clientId: number,
+    accountId?: number | null,
+    defaults?: Partial<ClientTradingState>
+  ): ClientTradingState {
+    const k = key(clientId, accountId ?? null);
+    let s = this.byKey.get(k);
     if (!s) {
       const now = new Date().toISOString();
       s = {
         client_id: clientId,
-        account_id: defaults?.account_id ?? null,
+        account_id: accountId ?? defaults?.account_id ?? null,
         strategy_profile: defaults?.strategy_profile || 'default',
         risk_profile: defaults?.risk_profile || 'default',
         trading_enabled: false,
@@ -35,13 +44,13 @@ export class ClientTradingRegistry {
         stopped_at: null,
         updated_at: now,
       };
-      this.byClient.set(clientId, s);
+      this.byKey.set(k, s);
     }
     return s;
   }
 
-  start(clientId: number): ClientTradingState {
-    const s = this.ensure(clientId);
+  start(clientId: number, accountId?: number | null): ClientTradingState {
+    const s = this.ensure(clientId, accountId ?? null);
     const now = new Date().toISOString();
     s.trading_enabled = true;
     s.started_at = now;
@@ -51,12 +60,11 @@ export class ClientTradingRegistry {
   }
 
   /**
-   * STOP: immediately block new entries for this client.
-   * Does NOT close open positions unless policy explicitly says so (not implemented here —
-   * accidental UI close forbidden; LEAVE_OPEN / MANAGE_ONLY only).
+   * STOP scoped to client+account. Omitting accountId stops only the `any` bucket,
+   * not every account for the client.
    */
-  stop(clientId: number): ClientTradingState {
-    const s = this.ensure(clientId);
+  stop(clientId: number, accountId?: number | null): ClientTradingState {
+    const s = this.ensure(clientId, accountId ?? null);
     const now = new Date().toISOString();
     s.trading_enabled = false;
     s.stopped_at = now;
@@ -64,12 +72,17 @@ export class ClientTradingRegistry {
     return { ...s };
   }
 
-  get(clientId: number): ClientTradingState | undefined {
-    return this.byClient.get(clientId);
+  get(clientId: number, accountId?: number | null): ClientTradingState | undefined {
+    return (
+      this.byKey.get(key(clientId, accountId ?? null)) ||
+      (accountId != null ? this.byKey.get(key(clientId, null)) : undefined)
+    );
   }
 
-  isTradingEnabled(clientId: number): boolean {
-    return this.byClient.get(clientId)?.trading_enabled === true;
+  isTradingEnabled(clientId: number, accountId?: number | null): boolean {
+    const scoped = this.get(clientId, accountId);
+    if (scoped) return scoped.trading_enabled === true;
+    return false;
   }
 }
 

@@ -889,6 +889,8 @@ export async function createCapitalPosition(
     /** Distance in Capital POINTS — preferred for tightest legal SL */
     stopDistance?: number;
     profitLevel?: number;
+    /** Local durable correlation id — persisted in ledger; sent when API allows */
+    clientOrderId?: string;
   }
 ): Promise<{ ok: boolean; deal_reference?: string; detail: string; status: number; json: any }> {
   let epic = input.epic.trim();
@@ -912,6 +914,10 @@ export async function createCapitalPosition(
   }
   if (input.profitLevel != null && Number.isFinite(input.profitLevel)) {
     body.profitLevel = input.profitLevel;
+  }
+  // Correlation for local ledger / operator logs (Capital may ignore unknown fields)
+  if (input.clientOrderId) {
+    body.clientOrderId = input.clientOrderId;
   }
 
   const res = await session.post('/api/v1/positions', body);

@@ -7,9 +7,11 @@ const PUBLIC_PATHS = [
   '/api/system/mode',
   '/api/client-auth/',
   '/api/client/',
-  '/api/v1/',
   '/ws/client',
 ];
+
+/** Explicit public /api/v1 endpoints only — not the whole prefix. */
+const PUBLIC_API_V1 = new Set(['/api/v1/login', '/api/v1/refresh']);
 
 // /api/v1/admin/* uses its own x-admin-token check inside Admin Agent.
 
@@ -17,6 +19,7 @@ const PUBLIC_PATHS = [
 export function isPublicUnauthedPath(method: string, urlPath: string): boolean {
   const path = urlPath.split('?')[0] || '/';
   if (PUBLIC_PATHS.some((p) => path === p || path.startsWith(p))) return true;
+  if (PUBLIC_API_V1.has(path)) return true;
   const m = method.toUpperCase();
   if ((m === 'GET' || m === 'HEAD') && !path.startsWith('/api') && !path.startsWith('/ws')) {
     return true;

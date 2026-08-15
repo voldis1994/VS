@@ -7,6 +7,11 @@
 
 import { collectHostSystemSnapshot } from './hostTelemetry.js';
 import { evaluateReadiness, probe } from './readiness.js';
+import {
+  probeStrategyRuntime,
+  probeRiskRuntime,
+  probeExecutionRuntime,
+} from './runtimeHealth.js';
 import { getEventBus } from './eventBus.js';
 import { getIncidentCenter } from './incidentCenter.js';
 import { FeedManager } from './feedManager.js';
@@ -24,9 +29,9 @@ async function buildFrame(feeds: FeedManager) {
     probe('DATABASE', dbOk ? 'OK' : 'ERROR', dbOk ? 'pg ok' : 'pg down', dbOk ? null : 'DATABASE_DOWN'),
     probe('MARKET', 'WARNING', 'awaiting live quote evidence', 'MARKET_WAITING'),
     probe('CAPITAL', 'ERROR', 'session not verified', 'CAPITAL_UNVERIFIED'),
-    probe('STRATEGY', 'OK', 'modules loaded'),
-    probe('RISK', 'OK', 'modules loaded'),
-    probe('EXECUTION', 'OK', 'modules loaded'),
+    probeStrategyRuntime(),
+    probeRiskRuntime(),
+    probeExecutionRuntime(false),
     probe('RECONCILIATION', 'WARNING', 'pending broker', 'RECONCILE_PENDING'),
     probe('CONTROL_API', 'OK', 'agent process'),
   ];

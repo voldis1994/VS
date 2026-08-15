@@ -103,15 +103,20 @@ export class CapitalSessionManager {
     });
   }
 
-  getPublicState(clientId: number, accountId: number): Omit<ManagedSession, never> & {
-    has_credentials: boolean;
-    /** Explicitly never expose secrets */
-    secrets_exposed: false;
-  } | null {
+  getPublicState(clientId: number, accountId: number): Record<string, unknown> | null {
     const s = this.sessions.get(this.key(clientId, accountId));
     if (!s) return null;
+    // Never spread ManagedSession — tokens/passwords/keys must never appear here
     return {
-      ...s,
+      connected: s.health === 'CONNECTED',
+      authenticated: s.health === 'CONNECTED' && s.tokens != null,
+      health: s.health,
+      error_code: s.last_error,
+      account_id: s.account_id,
+      connection_id: s.connection_id,
+      environment: s.environment,
+      last_successful_operation_at: s.last_verified_at,
+      session_age_ms: s.last_verified_at != null ? Date.now() - s.last_verified_at : null,
       has_credentials: this.creds.has(this.key(clientId, accountId)),
       secrets_exposed: false,
     };

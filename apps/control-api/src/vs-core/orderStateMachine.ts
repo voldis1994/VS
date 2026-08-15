@@ -151,6 +151,10 @@ export class OrderStore {
     return [...this.byIntent.values()].filter((o) => o.client_id === clientId);
   }
 
+  listAll(): OrderRecord[] {
+    return [...this.byIntent.values()];
+  }
+
   /** Find open-ish orders for epic+account to prevent duplicates. */
   openIntents(accountId: number, epic: string): OrderRecord[] {
     const open: OrderState[] = [
