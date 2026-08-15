@@ -1,9 +1,11 @@
 /**
- * Role authorization — WireGuard alone is never enough.
+ * Role + service gates — delegates fine-grained checks to permissions.ts.
+ * WireGuard alone is never enough.
  */
 
 import type { VsRole } from './networkConstants.js';
 import type { DeviceRecord } from './deviceRegistry.js';
+import { assertPermission, assertResourceScope, type Permission } from './permissions.js';
 
 export type NetworkService =
   | 'ADMIN_SERVICE'
@@ -11,6 +13,14 @@ export type NetworkService =
   | 'DEVICE_HEARTBEAT'
   | 'NETWORK_DIAGNOSTICS'
   | 'DEVICE_MANAGEMENT';
+
+const SERVICE_PERMISSION: Record<NetworkService, Permission | null> = {
+  ADMIN_SERVICE: 'server.read',
+  CLIENT_SERVICE: 'own.profile.read',
+  DEVICE_HEARTBEAT: null, // any ACTIVE device
+  NETWORK_DIAGNOSTICS: 'network.manage',
+  DEVICE_MANAGEMENT: 'devices.manage',
+};
 
 const ALLOW: Record<VsRole, NetworkService[]> = {
   SERVER: [
@@ -22,7 +32,7 @@ const ALLOW: Record<VsRole, NetworkService[]> = {
   ],
   OWNER_ADMIN: [
     'ADMIN_SERVICE',
-    'CLIENT_SERVICE', // admin may manage client accounts via admin APIs
+    'CLIENT_SERVICE',
     'DEVICE_HEARTBEAT',
     'NETWORK_DIAGNOSTICS',
     'DEVICE_MANAGEMENT',
@@ -54,6 +64,17 @@ export function assertServiceAccess(
       reason: `${device.role} cannot access ${service}`,
     };
   }
+  const perm = SERVICE_PERMISSION[service];
+  if (perm) {
+    // CLIENT_SERVICE uses own.profile.read which CLIENT has; ADMIN has server.read for ADMIN_SERVICE
+    if (service === 'CLIENT_SERVICE' && (device.role === 'OWNER_ADMIN' || device.role === 'SERVER')) {
+      return { ok: true };
+    }
+    if (service === 'ADMIN_SERVICE') {
+      return assertPermission(device, 'server.read');
+    }
+    return assertPermission(device, perm);
+  }
   return { ok: true };
 }
 
@@ -62,12 +83,8 @@ export function assertClientScope(
   device: DeviceRecord,
   targetClientId: number
 ): { ok: true } | { ok: false; code: string; reason: string } {
-  if (device.role === 'OWNER_ADMIN' || device.role === 'SERVER') return { ok: true };
-  if (device.role !== 'CLIENT') {
-    return { ok: false, code: 'ROLE_DENIED', reason: 'Not a client device' };
-  }
-  if (device.client_id == null || device.client_id !== targetClientId) {
-    return { ok: false, code: 'CLIENT_ISOLATION', reason: 'Cross-client access denied' };
-  }
-  return { ok: true };
+  return assertResourceScope(device, { client_id: targetClientId });
 }
+
+export { assertPermission, assertResourceScope };
+export type { Permission };

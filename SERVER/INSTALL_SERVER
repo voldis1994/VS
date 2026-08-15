@@ -43,6 +43,10 @@ id -u vs-core >/dev/null 2>&1 || useradd --system --home "$DATA" --shell /usr/sb
 
 mkdir -p "$PREFIX" "$DATA" "$LOG" "$DATA/market" "$DATA/backup" "$DATA/updates" "$DATA/orders" "$DATA/admin" \
   "$DATA/network" "$DATA/network/keys" "$DATA/network/issued"
+# Idempotent: never wipe existing registry/keys on re-install
+if [[ -f "$DATA/network/device-registry.json" ]]; then
+  echo "INFO: existing device registry preserved (idempotent INSTALL_SERVER)"
+fi
 rsync -a --delete \
   --exclude .git \
   --exclude node_modules \
@@ -91,6 +95,9 @@ CONTROL_API_HOST=10.77.0.1
 CONTROL_API_PORT=3000
 VS_WG_INTERFACE=vs0
 VS_WG_LISTEN_PORT=51820
+VS_SERVER_ID=VS-CORE-01
+# DDNS / public hostname foundation (not hardcoded public IP):
+# VS_SERVER_ENDPOINT_HOSTNAME=vs-core-01.example.com
 # Set a strong token before enabling management:
 # API_ADMIN_TOKEN=
 EOF
@@ -99,5 +106,7 @@ EOF
 fi
 
 echo "SUCCESS: VS SERVER installed at $PREFIX"
-echo "Next: edit $DATA/server.env then START_SERVER or systemctl start vs-server"
+echo "Next: $PREFIX/network/SETUP_PRIVATE_NETWORK  then edit $DATA/server.env"
+echo "Then: APPLY_FIREWALL → UP_WIREGUARD → START_SERVER"
+echo "NOTE: VS_PRIVATE_NETWORK=1 is fail-closed — WG must be READY (no public HTTP fallback)"
 exit 0

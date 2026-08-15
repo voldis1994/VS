@@ -39,8 +39,8 @@ chmod 600 "$TMP"
 
 ip link add dev "$IFACE" type wireguard 2>/dev/null || true
 wg setconf "$IFACE" "$TMP"
-ip address replace 10.77.0.1/16 dev "$IFACE" 2>/dev/null || ip addr add 10.77.0.1/16 dev "$IFACE" || true
+ip address replace 10.77.0.1/24 dev "$IFACE" 2>/dev/null || ip addr add 10.77.0.1/24 dev "$IFACE" || true
 ip link set "$IFACE" up
 rm -f "$TMP"
-echo "SUCCESS: ${IFACE} up on 10.77.0.1"
+echo "SUCCESS: ${IFACE} up on 10.77.0.1/24"
 wg show "$IFACE"

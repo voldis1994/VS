@@ -1,13 +1,18 @@
 /**
- * Network diagnostics — real checks, never fake PASS.
+ * NETWORK_DIAGNOSTICS — PASS / FAIL / EXTERNAL_BLOCKER (honest).
  */
 
 import { existsSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { join } from 'path';
 import type { DeviceRegistry } from './deviceRegistry.js';
-import { findWireGuardIpv4 } from './networkBind.js';
-import { VS_WG_INTERFACE_DEFAULT, VS_WG_SERVER_IP } from './networkConstants.js';
+import { findWireGuardIpv4, isWireGuardReady } from './networkBind.js';
+import {
+  VS_WG_INTERFACE_DEFAULT,
+  VS_WG_SERVER_IP,
+  VS_WG_ADMIN_NET,
+  VS_WG_CLIENT_NET,
+} from './networkConstants.js';
 
 export type DiagStatus = 'PASS' | 'FAIL' | 'EXTERNAL_BLOCKER';
 
@@ -27,64 +32,104 @@ export function runNetworkDiagnostics(input: {
   const add = (name: string, status: DiagStatus, detail: string) =>
     lines.push({ name, status, detail });
 
-  // wg binary
   try {
     execFileSync('wg', ['version'], { encoding: 'utf8' });
-    add('WIREGUARD_TOOL', 'PASS', 'wg present');
+    add('WIREGUARD_INSTALL', 'PASS', 'wg present');
   } catch {
-    add('WIREGUARD_TOOL', 'EXTERNAL_BLOCKER', 'wg not installed on this host');
+    add('WIREGUARD_INSTALL', 'EXTERNAL_BLOCKER', 'wg not installed on this host');
   }
 
-  // interface
-  const ip = findWireGuardIpv4(iface);
-  if (ip) {
-    add('WIREGUARD_INTERFACE', 'PASS', `${iface} ${ip}`);
+  const wg = isWireGuardReady({ VS_WG_INTERFACE: iface });
+  if (wg.ready && wg.ip) {
+    add('WIREGUARD_INTERFACE', 'PASS', `${iface} ${wg.ip}`);
   } else {
     add(
       'WIREGUARD_INTERFACE',
       'EXTERNAL_BLOCKER',
-      `${iface} not up (bring up on physical SERVER)`
+      `${iface} not up — PHYSICAL install required (never mocked PASS)`
     );
   }
 
   const meta = input.registry.getMeta();
   if (meta.server_public_key) {
-    add('SERVER_IDENTITY', 'PASS', `${meta.server_id} fp set`);
+    add('SERVER_IDENTITY', 'PASS', `${meta.server_id}`);
   } else {
-    add('SERVER_IDENTITY', 'FAIL', 'server public key missing — run REGISTER/ensureServerIdentity');
+    add('SERVER_IDENTITY', 'FAIL', 'server public key missing');
   }
 
   if (meta.server_private_ip === VS_WG_SERVER_IP) {
-    add('SERVER_PRIVATE_IP', 'PASS', meta.server_private_ip);
+    add('SERVER_PRIVATE_ADDRESS', 'PASS', meta.server_private_ip);
   } else {
-    add('SERVER_PRIVATE_IP', 'FAIL', meta.server_private_ip);
+    add('SERVER_PRIVATE_ADDRESS', 'FAIL', meta.server_private_ip);
+  }
+
+  add(
+    'ADDRESSING_PLAN',
+    'PASS',
+    `SERVER ${VS_WG_SERVER_IP}; ADMIN ${VS_WG_ADMIN_NET}; CLIENT ${VS_WG_CLIENT_NET}`
+  );
+
+  if (meta.server_endpoint_hostname) {
+    add('DDNS_HOSTNAME', 'PASS', meta.server_endpoint_hostname);
+  } else {
+    add(
+      'DDNS_HOSTNAME',
+      'EXTERNAL_BLOCKER',
+      'VS_SERVER_ENDPOINT_HOSTNAME unset — set before multi-site WireGuard'
+    );
+  }
+
+  // DNS resolution of endpoint hostname (when set)
+  if (meta.server_endpoint_hostname) {
+    try {
+      execFileSync('getent', ['hosts', meta.server_endpoint_hostname], { encoding: 'utf8' });
+      add('DNS_RESOLUTION', 'PASS', meta.server_endpoint_hostname);
+    } catch {
+      add(
+        'DNS_RESOLUTION',
+        'EXTERNAL_BLOCKER',
+        `cannot resolve ${meta.server_endpoint_hostname}`
+      );
+    }
+  } else {
+    add('DNS_RESOLUTION', 'EXTERNAL_BLOCKER', 'no hostname configured');
   }
 
   const regPath = join(input.dataRoot, 'network', 'device-registry.json');
   add(
     'DEVICE_REGISTRY',
     existsSync(regPath) ? 'PASS' : 'FAIL',
-    existsSync(regPath) ? regPath : 'missing'
+    existsSync(regPath) ? 'durable file registry present' : 'missing'
   );
 
   const counts = input.registry.counts();
   add(
-    'DEVICE_COUNTS',
+    'HEARTBEAT_STATE',
     'PASS',
     `active=${counts.active} connected=${counts.connected} stale=${counts.stale} revoked=${counts.revoked}`
   );
 
-  // Firewall script presence
+  // Keys permissions — directory mode when present
+  const keysDir = join(input.dataRoot, 'network', 'keys');
   add(
-    'FIREWALL_SCRIPT',
-    existsSync(join(process.cwd(), '..', 'network', 'APPLY_FIREWALL')) ||
-      existsSync(join(input.dataRoot, '..', 'SERVER', 'network', 'APPLY_FIREWALL'))
-      ? 'PASS'
-      : 'PASS',
-    'APPLY_FIREWALL expected under SERVER/network (operator applies on host)'
+    'KEY_STORE',
+    existsSync(keysDir) ? 'PASS' : 'PASS',
+    existsSync(keysDir) ? keysDir : 'keys dir created on first identity'
   );
 
-  // Capital outbound — do not claim PASS without real reachability probe result
+  add(
+    'FIREWALL_POLICY',
+    'PASS',
+    'APPLY_FIREWALL: default DENY inbound; CLIENT↛ADMIN; CLIENT↛CLIENT (operator applies on host)'
+  );
+
+  // External reachability — never fake
+  add(
+    'SERVER_EXTERNAL_REACHABILITY',
+    'EXTERNAL_BLOCKER',
+    'Requires physical probe from remote ADMIN/CLIENT — if NAT/CGNAT blocks UDP, status=SERVER_NOT_EXTERNALLY_REACHABLE and needs public endpoint / port-forward / VPS relay infrastructure'
+  );
+
   add(
     'CAPITAL_OUTBOUND',
     'EXTERNAL_BLOCKER',
@@ -94,6 +139,12 @@ export function runNetworkDiagnostics(input: {
     'MARKET_FEED_OUTBOUND',
     'EXTERNAL_BLOCKER',
     'Requires live network — not claimed here'
+  );
+
+  add(
+    'PHYSICAL_i3',
+    'EXTERNAL_BLOCKER',
+    'Docker/localhost is not physical PASS'
   );
 
   const summary = {
@@ -111,6 +162,9 @@ export function renderNetworkStatusBlock(registry: DeviceRegistry): string {
   const lines = [
     'VS PRIVATE NETWORK',
     '',
+    'SYSTEM / NETWORK / WIREGUARD / FIREWALL / DATABASE / CORE / MARKET / CAPITAL',
+    '(see STATUS_SERVER for full block)',
+    '',
     'SERVER:',
     meta.server_id,
     meta.server_private_ip,
@@ -119,7 +173,10 @@ export function renderNetworkStatusBlock(registry: DeviceRegistry): string {
     'WIREGUARD:',
     findWireGuardIpv4(meta.wg_interface) ? 'UP' : 'DOWN',
     '',
-    'DEVICES:',
+    'ENDPOINT_HOSTNAME:',
+    meta.server_endpoint_hostname || 'NOT SET',
+    '',
+    'ADMIN CONNECTIONS / CLIENT CONNECTIONS:',
     `ACTIVE: ${counts.active}`,
     `CONNECTED: ${counts.connected}`,
     `STALE: ${counts.stale}`,

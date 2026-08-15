@@ -54,10 +54,23 @@ console.log('SERVER_IDENTITY', id.server_id, id.public_key.slice(0, 12) + '…')
   exit 1
 }
 
-# Optional: bring up WireGuard if requested and running as root
-if [[ "${VS_PRIVATE_NETWORK:-}" == "1" && "${VS_WG_UP:-1}" == "1" && "$(id -u)" -eq 0 ]]; then
-  if [[ -x "$ROOT/network/UP_WIREGUARD" ]]; then
-    "$ROOT/network/UP_WIREGUARD" || echo "WARN: UP_WIREGUARD failed — continue with app bind checks"
+# Fail closed: VS_PRIVATE_NETWORK=1 requires WireGuard READY — never fallback to public HTTP
+if [[ "${VS_PRIVATE_NETWORK:-}" == "1" ]]; then
+  if [[ "${VS_WG_UP:-1}" == "1" && "$(id -u)" -eq 0 && -x "$ROOT/network/UP_WIREGUARD" ]]; then
+    "$ROOT/network/UP_WIREGUARD" || {
+      echo "FAIL: UP_WIREGUARD failed — management NOT READY (no public HTTP fallback)" >&2
+      exit 1
+    }
+  fi
+  WG_IFACE="${VS_WG_INTERFACE:-vs0}"
+  if ! ip -4 addr show dev "$WG_IFACE" 2>/dev/null | grep -q 'inet '; then
+    if [[ "${VS_PRIVATE_NETWORK_ALLOW_UNBOUND:-}" == "1" ]]; then
+      echo "WARN: VS_PRIVATE_NETWORK_ALLOW_UNBOUND=1 — test/dev only"
+    else
+      echo "FAIL: WIREGUARD_NOT_READY — interface $WG_IFACE down; management NOT READY" >&2
+      echo "FAIL: never falling back to public 0.0.0.0 / open HTTP" >&2
+      exit 1
+    fi
   fi
 fi
 

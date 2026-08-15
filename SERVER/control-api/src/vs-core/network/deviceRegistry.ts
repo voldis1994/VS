@@ -1,5 +1,6 @@
 /**
  * Durable device registry — public keys only. Private keys never stored here.
+ * File-backed (persistent) authority; Postgres migration mirrors production schema.
  */
 
 import { createHash } from 'crypto';
@@ -13,13 +14,19 @@ import {
   VS_WG_SERVER_IP,
   VS_WG_ADMIN_POOL_START,
   VS_WG_ADMIN_POOL_END,
-  VS_WG_CLIENT_PREFIX,
   VS_WG_CLIENT_POOL_START,
   VS_WG_CLIENT_POOL_END,
+  VS_DEFAULT_SERVER_ID,
   STALE_AFTER_MS,
   DISCONNECT_AFTER_MS,
+  adminHostIndexToIp,
+  clientHostIndexToIp,
 } from './networkConstants.js';
 import { fingerprintPublicKey } from './wireguardKeys.js';
+import {
+  permissionsForRole,
+  type Permission,
+} from './permissions.js';
 
 export type DeviceRecord = {
   device_id: string;
@@ -27,15 +34,20 @@ export type DeviceRecord = {
   device_type: DeviceType;
   public_key: string;
   key_fingerprint: string;
+  private_address: string;
+  /** @deprecated alias of private_address for Phase-1 callers */
   private_ip: string;
   client_id: number | null;
   account_id: number | null;
+  owner_scope: string | null;
   role: VsRole;
+  permissions: Permission[];
   status: DeviceStatus;
   created_at: string;
   approved_at: string | null;
   last_seen: string | null;
   revoked_at: string | null;
+  key_version: number;
   connection_state: ConnectionState;
   session_id: string | null;
   connected_at: string | null;
@@ -44,16 +56,35 @@ export type DeviceRecord = {
   device_token_hash: string | null;
 };
 
+type EnrollmentRecord = {
+  token_hash: string;
+  enrollment_id: string;
+  device_type: 'ADMIN' | 'CLIENT';
+  device_id: string | null;
+  client_id: number | null;
+  account_id: number | null;
+  created_at: string;
+  expires_at: string;
+  used_at: string | null;
+  revoked_at: string | null;
+  created_by: string;
+};
+
 type RegistryFile = {
-  version: 1;
+  version: 2;
   server_id: string;
   server_public_key: string | null;
   server_private_ip: string;
+  /** DDNS / public hostname foundation — never hardcode only raw public IP */
+  server_endpoint_hostname: string | null;
   wg_listen_port: number;
   wg_interface: string;
   devices: DeviceRecord[];
+  enrollments: EnrollmentRecord[];
   next_admin_ip: number;
   next_client_ip: number;
+  /** command_id → result for state-changing dedupe */
+  command_dedupe: Record<string, { result: unknown; at: string; device_id: string }>;
 };
 
 function nowIso(): string {
@@ -64,6 +95,18 @@ function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 
+function normalizeDevice(d: DeviceRecord & { private_ip?: string }): DeviceRecord {
+  const addr = d.private_address || d.private_ip || '';
+  return {
+    ...d,
+    private_address: addr,
+    private_ip: addr,
+    permissions: d.permissions?.length ? d.permissions : [...permissionsForRole(d.role)],
+    key_version: d.key_version ?? 1,
+    owner_scope: d.owner_scope ?? (d.client_id != null ? `client:${d.client_id}` : null),
+  };
+}
+
 export class DeviceRegistry {
   private filePath: string;
   private data: RegistryFile;
@@ -71,18 +114,42 @@ export class DeviceRegistry {
   constructor(dataRoot: string, opts?: { serverId?: string; listenPort?: number; iface?: string }) {
     this.filePath = join(dataRoot, 'network', 'device-registry.json');
     if (existsSync(this.filePath)) {
-      this.data = JSON.parse(readFileSync(this.filePath, 'utf8')) as RegistryFile;
+      const raw = JSON.parse(readFileSync(this.filePath, 'utf8')) as RegistryFile & {
+        version?: number;
+        enrollments?: EnrollmentRecord[];
+        command_dedupe?: RegistryFile['command_dedupe'];
+        server_endpoint_hostname?: string | null;
+      };
+      this.data = {
+        version: 2,
+        server_id: raw.server_id || opts?.serverId || VS_DEFAULT_SERVER_ID,
+        server_public_key: raw.server_public_key,
+        server_private_ip: raw.server_private_ip || VS_WG_SERVER_IP,
+        server_endpoint_hostname: raw.server_endpoint_hostname ?? null,
+        wg_listen_port: raw.wg_listen_port || opts?.listenPort || 51820,
+        wg_interface: raw.wg_interface || opts?.iface || 'vs0',
+        devices: (raw.devices || []).map((d) => normalizeDevice(d as DeviceRecord)),
+        enrollments: raw.enrollments || [],
+        next_admin_ip: raw.next_admin_ip ?? VS_WG_ADMIN_POOL_START,
+        next_client_ip: raw.next_client_ip ?? VS_WG_CLIENT_POOL_START,
+        command_dedupe: raw.command_dedupe || {},
+      };
+      // Migrate legacy 10.77.0.x admin addresses only when empty registry — leave existing physical installs
+      this.persist();
     } else {
       this.data = {
-        version: 1,
-        server_id: opts?.serverId || 'VS-CORE-01',
+        version: 2,
+        server_id: opts?.serverId || VS_DEFAULT_SERVER_ID,
         server_public_key: null,
         server_private_ip: VS_WG_SERVER_IP,
+        server_endpoint_hostname: process.env.VS_SERVER_ENDPOINT_HOSTNAME || null,
         wg_listen_port: opts?.listenPort || 51820,
         wg_interface: opts?.iface || 'vs0',
         devices: [],
+        enrollments: [],
         next_admin_ip: VS_WG_ADMIN_POOL_START,
         next_client_ip: VS_WG_CLIENT_POOL_START,
+        command_dedupe: {},
       };
       this.persist();
     }
@@ -95,9 +162,18 @@ export class DeviceRegistry {
     renameSync(tmp, this.filePath);
   }
 
-  getMeta(): Omit<RegistryFile, 'devices'> & { device_count: number } {
-    const { devices, ...meta } = this.data;
+  getMeta(): Omit<RegistryFile, 'devices' | 'enrollments' | 'command_dedupe'> & {
+    device_count: number;
+  } {
+    const { devices, enrollments, command_dedupe, ...meta } = this.data;
+    void enrollments;
+    void command_dedupe;
     return { ...meta, device_count: devices.length };
+  }
+
+  setEndpointHostname(hostname: string | null): void {
+    this.data.server_endpoint_hostname = hostname;
+    this.persist();
   }
 
   list(): DeviceRecord[] {
@@ -105,7 +181,8 @@ export class DeviceRegistry {
   }
 
   get(deviceId: string): DeviceRecord | undefined {
-    return this.data.devices.find((d) => d.device_id === deviceId);
+    const d = this.data.devices.find((x) => x.device_id === deviceId);
+    return d ? { ...d } : undefined;
   }
 
   setServerPublicKey(publicKey: string): void {
@@ -115,8 +192,8 @@ export class DeviceRegistry {
 
   private allocAdminIp(): string {
     for (let n = this.data.next_admin_ip; n <= VS_WG_ADMIN_POOL_END; n++) {
-      const ip = `10.77.0.${n}`;
-      if (!this.data.devices.some((d) => d.private_ip === ip)) {
+      const ip = adminHostIndexToIp(n);
+      if (!this.data.devices.some((d) => d.private_address === ip || d.private_ip === ip)) {
         this.data.next_admin_ip = n + 1;
         return ip;
       }
@@ -126,8 +203,8 @@ export class DeviceRegistry {
 
   private allocClientIp(): string {
     for (let n = this.data.next_client_ip; n <= VS_WG_CLIENT_POOL_END; n++) {
-      const ip = `${VS_WG_CLIENT_PREFIX}${n}`;
-      if (!this.data.devices.some((d) => d.private_ip === ip)) {
+      const ip = clientHostIndexToIp(n);
+      if (!this.data.devices.some((d) => d.private_address === ip || d.private_ip === ip)) {
         this.data.next_client_ip = n + 1;
         return ip;
       }
@@ -143,28 +220,36 @@ export class DeviceRegistry {
     client_id?: number | null;
     account_id?: number | null;
     device_token: string;
+    owner_scope?: string | null;
   }): DeviceRecord {
     if (this.get(input.device_id)) throw new Error('DEVICE_ID_EXISTS');
     if (this.data.devices.some((d) => d.public_key === input.public_key)) {
       throw new Error('PUBLIC_KEY_EXISTS');
     }
-    const private_ip =
+    const private_address =
       input.device_type === 'ADMIN' ? this.allocAdminIp() : this.allocClientIp();
+    const role: VsRole = input.device_type === 'ADMIN' ? 'OWNER_ADMIN' : 'CLIENT';
     const rec: DeviceRecord = {
       device_id: input.device_id,
       device_name: input.device_name,
       device_type: input.device_type,
       public_key: input.public_key,
       key_fingerprint: fingerprintPublicKey(input.public_key),
-      private_ip,
+      private_address,
+      private_ip: private_address,
       client_id: input.client_id ?? null,
       account_id: input.account_id ?? null,
-      role: input.device_type === 'ADMIN' ? 'OWNER_ADMIN' : 'CLIENT',
+      owner_scope:
+        input.owner_scope ??
+        (input.client_id != null ? `client:${input.client_id}` : role === 'OWNER_ADMIN' ? 'owner' : null),
+      role,
+      permissions: [...permissionsForRole(role)],
       status: 'PENDING_APPROVAL',
       created_at: nowIso(),
       approved_at: null,
       last_seen: null,
       revoked_at: null,
+      key_version: 1,
       connection_state: 'DISCONNECTED',
       session_id: null,
       connected_at: null,
@@ -177,7 +262,7 @@ export class DeviceRegistry {
   }
 
   approve(deviceId: string): DeviceRecord {
-    const d = this.get(deviceId);
+    const d = this.data.devices.find((x) => x.device_id === deviceId);
     if (!d) throw new Error('DEVICE_NOT_FOUND');
     if (d.status === 'REVOKED') throw new Error('DEVICE_REVOKED');
     d.status = 'ACTIVE';
@@ -187,7 +272,7 @@ export class DeviceRegistry {
   }
 
   revoke(deviceId: string): DeviceRecord {
-    const d = this.get(deviceId);
+    const d = this.data.devices.find((x) => x.device_id === deviceId);
     if (!d) throw new Error('DEVICE_NOT_FOUND');
     d.status = 'REVOKED';
     d.revoked_at = nowIso();
@@ -198,7 +283,7 @@ export class DeviceRegistry {
   }
 
   rotatePublicKey(deviceId: string, newPublicKey: string, newDeviceToken: string): DeviceRecord {
-    const d = this.get(deviceId);
+    const d = this.data.devices.find((x) => x.device_id === deviceId);
     if (!d) throw new Error('DEVICE_NOT_FOUND');
     if (d.status === 'REVOKED') throw new Error('DEVICE_REVOKED');
     if (this.data.devices.some((x) => x.public_key === newPublicKey && x.device_id !== deviceId)) {
@@ -207,6 +292,7 @@ export class DeviceRegistry {
     d.public_key = newPublicKey;
     d.key_fingerprint = fingerprintPublicKey(newPublicKey);
     d.device_token_hash = hashToken(newDeviceToken);
+    d.key_version = (d.key_version || 1) + 1;
     d.session_id = null;
     d.connection_state = 'DISCONNECTED';
     this.persist();
@@ -214,7 +300,7 @@ export class DeviceRegistry {
   }
 
   verifyDeviceToken(deviceId: string, token: string): boolean {
-    const d = this.get(deviceId);
+    const d = this.data.devices.find((x) => x.device_id === deviceId);
     if (!d || d.status !== 'ACTIVE') return false;
     if (!d.device_token_hash) return false;
     return d.device_token_hash === hashToken(token);
@@ -224,7 +310,7 @@ export class DeviceRegistry {
     deviceId: string,
     opts?: { session_id?: string; latency_ms?: number | null }
   ): DeviceRecord {
-    const d = this.get(deviceId);
+    const d = this.data.devices.find((x) => x.device_id === deviceId);
     if (!d) throw new Error('DEVICE_NOT_FOUND');
     if (d.status === 'REVOKED') {
       d.connection_state = 'REVOKED';
@@ -242,7 +328,6 @@ export class DeviceRegistry {
     return { ...d };
   }
 
-  /** Recompute CONNECTED/STALE/DISCONNECTED from last_seen. */
   refreshConnectionStates(nowMs = Date.now()): void {
     let changed = false;
     for (const d of this.data.devices) {
@@ -294,15 +379,86 @@ export class DeviceRegistry {
     };
   }
 
-  /** Public wireguard peer list for ACTIVE devices (no private keys). */
   activePeers(): Array<{ public_key: string; private_ip: string; device_id: string }> {
     return this.data.devices
       .filter((d) => d.status === 'ACTIVE')
       .map((d) => ({
         public_key: d.public_key,
-        private_ip: d.private_ip,
+        private_ip: d.private_address || d.private_ip,
         device_id: d.device_id,
       }));
+  }
+
+  // ── Enrollment ──────────────────────────────────────────────
+
+  createEnrollment(input: {
+    token: string;
+    device_type: 'ADMIN' | 'CLIENT';
+    device_id?: string | null;
+    client_id?: number | null;
+    account_id?: number | null;
+    ttl_ms: number;
+    created_by: string;
+  }): { enrollment_id: string; expires_at: string } {
+    const enrollment_id = `ENR-${createHash('sha256').update(input.token).digest('hex').slice(0, 12)}`;
+    const expires_at = new Date(Date.now() + input.ttl_ms).toISOString();
+    this.data.enrollments.push({
+      token_hash: hashToken(input.token),
+      enrollment_id,
+      device_type: input.device_type,
+      device_id: input.device_id ?? null,
+      client_id: input.client_id ?? null,
+      account_id: input.account_id ?? null,
+      created_at: nowIso(),
+      expires_at,
+      used_at: null,
+      revoked_at: null,
+      created_by: input.created_by,
+    });
+    this.persist();
+    return { enrollment_id, expires_at };
+  }
+
+  getEnrollmentByToken(token: string): EnrollmentRecord | undefined {
+    const h = hashToken(token);
+    return this.data.enrollments.find((e) => e.token_hash === h);
+  }
+
+  revokeEnrollment(enrollmentId: string): void {
+    const e = this.data.enrollments.find((x) => x.enrollment_id === enrollmentId);
+    if (!e) throw new Error('ENROLLMENT_NOT_FOUND');
+    e.revoked_at = nowIso();
+    this.persist();
+  }
+
+  consumeEnrollment(token: string): EnrollmentRecord {
+    const e = this.getEnrollmentByToken(token);
+    if (!e) throw new Error('ENROLLMENT_INVALID');
+    if (e.revoked_at) throw new Error('ENROLLMENT_REVOKED');
+    if (e.used_at) throw new Error('ENROLLMENT_USED');
+    if (Date.parse(e.expires_at) < Date.now()) throw new Error('ENROLLMENT_EXPIRED');
+    e.used_at = nowIso();
+    this.persist();
+    return { ...e };
+  }
+
+  listEnrollments(): EnrollmentRecord[] {
+    return this.data.enrollments.map((e) => ({ ...e }));
+  }
+
+  // ── Command idempotency ─────────────────────────────────────
+
+  getCommandResult(commandId: string): unknown | undefined {
+    return this.data.command_dedupe[commandId]?.result;
+  }
+
+  putCommandResult(commandId: string, deviceId: string, result: unknown): void {
+    this.data.command_dedupe[commandId] = {
+      result,
+      at: nowIso(),
+      device_id: deviceId,
+    };
+    this.persist();
   }
 }
 
@@ -321,6 +477,6 @@ export function getDeviceRegistry(dataRoot?: string): DeviceRegistry {
 }
 
 export function resetDeviceRegistryForTests(dataRoot: string): DeviceRegistry {
-  shared = new DeviceRegistry(dataRoot, { serverId: 'VS-CORE-01' });
+  shared = new DeviceRegistry(dataRoot, { serverId: VS_DEFAULT_SERVER_ID });
   return shared;
 }

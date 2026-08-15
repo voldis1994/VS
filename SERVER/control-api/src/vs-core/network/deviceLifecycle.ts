@@ -1,6 +1,7 @@
 /**
- * Device registration helpers — REGISTER_ADMIN / REGISTER_CLIENT_DEVICE.
- * Private keys written only under dataRoot/network/keys (outside git).
+ * Device registration helpers — bootstrap + enrollment-aware lifecycle.
+ * Prefer enrollment.ts for product path (keys generated on device).
+ * Private keys written only under dataRoot/network/keys (outside git) when SERVER generates for bootstrap.
  */
 
 import { writeFileSync, mkdirSync } from 'fs';
@@ -14,6 +15,8 @@ import {
 } from './wireguardKeys.js';
 import { renderPeerWgConf, buildServerConfFromRegistry } from './wireguardConfig.js';
 import { invalidateDeviceSessions } from './deviceAuth.js';
+import { nextAdminId, nextClientId } from './enrollment.js';
+import { appendNetworkAudit } from './networkAudit.js';
 
 export function registerAdminDevice(
   registry: DeviceRegistry,
@@ -22,10 +25,10 @@ export function registerAdminDevice(
 ): {
   device_id: string;
   private_ip: string;
+  private_address: string;
   public_key: string;
   device_token: string;
   peer_config_path: string;
-  /** Returned once — caller must store securely; SERVER keeps only private key file for SERVER identity */
   private_key_once: string;
 } {
   assertPathOutsideRepo(dataRoot);
@@ -43,23 +46,30 @@ export function registerAdminDevice(
   if (input?.auto_approve !== false) {
     registry.approve(device_id);
   }
-  // Peer private key: write to outbound delivery file under dataRoot/issued (not git)
   const issuedDir = join(dataRoot, 'network', 'issued');
   mkdirSync(issuedDir, { recursive: true });
-  const keyPath = writePrivateKeyFile(dataRoot, device_id, pair.privateKey);
-  void keyPath;
+  writePrivateKeyFile(dataRoot, device_id, pair.privateKey);
   const meta = registry.getMeta();
+  const endpointHost = meta.server_endpoint_hostname || 'VS-CORE-01';
   const conf = renderPeerWgConf({
     devicePrivateKeyPlaceholder: pair.privateKey,
-    devicePrivateIp: rec.private_ip,
+    devicePrivateIp: rec.private_address,
     serverPublicKey: meta.server_public_key || '<SERVER_PUBLIC_KEY>',
-    serverEndpoint: `SERVER_PUBLIC_HOST:${meta.wg_listen_port}`,
+    serverEndpoint: `${endpointHost}:${meta.wg_listen_port}`,
   });
   const peer_config_path = join(issuedDir, `${device_id}.conf`);
   writeFileSync(peer_config_path, conf, { mode: 0o600 });
+  appendNetworkAudit(dataRoot, {
+    action: 'DEVICE_CREATED',
+    actor: 'SERVER',
+    device_id,
+    result: 'OK',
+    detail: { device_type: 'ADMIN', private_address: rec.private_address },
+  });
   return {
     device_id,
-    private_ip: rec.private_ip,
+    private_ip: rec.private_address,
+    private_address: rec.private_address,
     public_key: pair.publicKey,
     device_token,
     peer_config_path,
@@ -80,6 +90,7 @@ export function registerClientDevice(
 ): {
   device_id: string;
   private_ip: string;
+  private_address: string;
   public_key: string;
   device_token: string;
   peer_config_path: string;
@@ -106,17 +117,26 @@ export function registerClientDevice(
   mkdirSync(issuedDir, { recursive: true });
   writePrivateKeyFile(dataRoot, device_id, pair.privateKey);
   const meta = registry.getMeta();
+  const endpointHost = meta.server_endpoint_hostname || 'VS-CORE-01';
   const conf = renderPeerWgConf({
     devicePrivateKeyPlaceholder: pair.privateKey,
-    devicePrivateIp: rec.private_ip,
+    devicePrivateIp: rec.private_address,
     serverPublicKey: meta.server_public_key || '<SERVER_PUBLIC_KEY>',
-    serverEndpoint: `SERVER_PUBLIC_HOST:${meta.wg_listen_port}`,
+    serverEndpoint: `${endpointHost}:${meta.wg_listen_port}`,
   });
   const peer_config_path = join(issuedDir, `${device_id}.conf`);
   writeFileSync(peer_config_path, conf, { mode: 0o600 });
+  appendNetworkAudit(dataRoot, {
+    action: 'DEVICE_CREATED',
+    actor: 'SERVER',
+    device_id,
+    result: 'OK',
+    detail: { device_type: 'CLIENT', client_id: input.client_id },
+  });
   return {
     device_id,
-    private_ip: rec.private_ip,
+    private_ip: rec.private_address,
+    private_address: rec.private_address,
     public_key: pair.publicKey,
     device_token,
     peer_config_path,
@@ -125,40 +145,79 @@ export function registerClientDevice(
   };
 }
 
-export function revokeDevice(registry: DeviceRegistry, deviceId: string): void {
+export function revokeDevice(registry: DeviceRegistry, deviceId: string, dataRoot?: string): void {
   registry.revoke(deviceId);
   invalidateDeviceSessions(deviceId);
+  if (dataRoot) {
+    appendNetworkAudit(dataRoot, {
+      action: 'DEVICE_REVOKED',
+      actor: 'ADMIN',
+      device_id: deviceId,
+      result: 'OK',
+    });
+  }
 }
 
 export function rotateDeviceKey(
   registry: DeviceRegistry,
   dataRoot: string,
   deviceId: string
-): { public_key: string; device_token: string; private_key_once: string; peer_config_path: string } {
+): { public_key: string; device_token: string; private_key_once: string; peer_config_path: string; key_version: number } {
   assertPathOutsideRepo(dataRoot);
   const existing = registry.get(deviceId);
   if (!existing) throw new Error('DEVICE_NOT_FOUND');
   const pair = generateWgKeyPair();
   const device_token = randomDeviceToken();
-  registry.rotatePublicKey(deviceId, pair.publicKey, device_token);
+  const updated = registry.rotatePublicKey(deviceId, pair.publicKey, device_token);
   invalidateDeviceSessions(deviceId);
   writePrivateKeyFile(dataRoot, deviceId, pair.privateKey);
   const meta = registry.getMeta();
+  const endpointHost = meta.server_endpoint_hostname || 'VS-CORE-01';
   const conf = renderPeerWgConf({
     devicePrivateKeyPlaceholder: pair.privateKey,
-    devicePrivateIp: existing.private_ip,
+    devicePrivateIp: existing.private_address || existing.private_ip,
     serverPublicKey: meta.server_public_key || '<SERVER_PUBLIC_KEY>',
-    serverEndpoint: `SERVER_PUBLIC_HOST:${meta.wg_listen_port}`,
+    serverEndpoint: `${endpointHost}:${meta.wg_listen_port}`,
   });
   const peer_config_path = join(dataRoot, 'network', 'issued', `${deviceId}.conf`);
   mkdirSync(join(dataRoot, 'network', 'issued'), { recursive: true });
   writeFileSync(peer_config_path, conf, { mode: 0o600 });
+  appendNetworkAudit(dataRoot, {
+    action: 'KEY_ROTATED',
+    actor: 'ADMIN',
+    device_id: deviceId,
+    result: 'OK',
+    detail: { key_version: updated.key_version },
+  });
   return {
     public_key: pair.publicKey,
     device_token,
     private_key_once: pair.privateKey,
     peer_config_path,
+    key_version: updated.key_version,
   };
+}
+
+/**
+ * Preferred product rotation: device supplies new public key; SERVER never sees private key.
+ */
+export function rotateDevicePublicKeyOnServer(
+  registry: DeviceRegistry,
+  dataRoot: string,
+  deviceId: string,
+  newPublicKey: string
+): { device_token: string; key_version: number } {
+  const device_token = randomDeviceToken();
+  const updated = registry.rotatePublicKey(deviceId, newPublicKey, device_token);
+  invalidateDeviceSessions(deviceId);
+  appendNetworkAudit(dataRoot, {
+    action: 'KEY_ROTATED',
+    actor: 'DEVICE',
+    device_id: deviceId,
+    result: 'OK',
+    detail: { key_version: updated.key_version, on_device: true },
+  });
+  return { device_token, key_version: updated.key_version };
 }
 
 export function ensureServerIdentity(
@@ -173,19 +232,8 @@ export function ensureServerIdentity(
   const pair = generateWgKeyPair();
   writePrivateKeyFile(dataRoot, meta.server_id, pair.privateKey);
   registry.setServerPublicKey(pair.publicKey);
-  // Refresh server wg conf template (placeholder private key)
   const conf = buildServerConfFromRegistry(registry);
   mkdirSync(join(dataRoot, 'network'), { recursive: true });
   writeFileSync(join(dataRoot, 'network', 'server.wg.conf.template'), conf);
   return { public_key: pair.publicKey, server_id: meta.server_id };
-}
-
-function nextAdminId(registry: DeviceRegistry): string {
-  const n = registry.list().filter((d) => d.device_type === 'ADMIN').length + 1;
-  return `VS-ADMIN-${String(n).padStart(2, '0')}`;
-}
-
-function nextClientId(registry: DeviceRegistry): string {
-  const n = registry.list().filter((d) => d.device_type === 'CLIENT').length + 1;
-  return `VS-CLIENT-${String(n).padStart(4, '0')}`;
 }
