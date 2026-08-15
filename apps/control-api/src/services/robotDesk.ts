@@ -24,11 +24,10 @@ import {
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
-import { decideEntryFrom10sRegime, denyWithTrendEntry, effectiveBias, resolveTrendBias, TREND_LOOKBACK_10S, type TrendBias } from './entryFromRegime.js';
+import { effectiveBias, resolveTrendBias, TREND_LOOKBACK_10S, type TrendBias } from './entryFromRegime.js';
 import { DecisionCodes, type DecisionCode } from './decisionCodes.js';
 import { runtimeBuildInfo } from './runtimeBuild.js';
 import {
-  allowEntryFromFeeds,
   multiFeedOwnsOhlc,
   pickOhlcMid,
   readMultiFeedPrice,
@@ -45,7 +44,6 @@ import {
   type TenSecState,
 } from './tenSecondOhlc.js';
 import { evaluateRisk } from '../vs-core/riskCore.js';
-import { OrderStore } from '../vs-core/orderStateMachine.js';
 import {
   executeTradeIntent,
   newDecisionId,
@@ -53,6 +51,14 @@ import {
 } from '../vs-core/executionCore.js';
 import { STRATEGY_VERSION, CONFIG_VERSION } from '../vs-core/versions.js';
 import { getClientTradingRegistry } from '../vs-core/clientTrading.js';
+import { evaluateStrategy, strategyToDecisionCode } from '../vs-core/strategyCore.js';
+import { FeedManager } from '../vs-core/feedManager.js';
+import { getDurableOrderStore } from '../vs-core/durableOrderStore.js';
+import {
+  buildMoneyPathRisk,
+  marketStatusAllowsTrading,
+} from '../vs-core/moneyPathRisk.js';
+import { allowEntryFromPrimaryFeed } from '../vs-core/primaryFeedGate.js';
 
 export type RobotTick = {
   at: string;
@@ -145,20 +151,18 @@ type Internal = RobotSession & {
   last_multi_feed_ms: number;
   multiFeed: MultiFeedPrice | null;
   sl_tighten_done: boolean;
+  /** Prevent overlapping robotCycle runs on the same session */
+  cycle_in_flight: boolean;
+  feedManager: FeedManager;
 };
 
 const ACTIVE_CADENCE_MS = 2_000;
 const CLOSED_MARKET_CADENCE_MS = 90_000;
 const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
 
-/** Capital LIVE quote ≠ TRADEABLE. Only these statuses allow entries/manage. */
+/** Capital LIVE quote ≠ TRADEABLE. Only these statuses allow entries/manage. FAIL CLOSED. */
 function marketAllowsTrading(status: string | null | undefined): boolean {
-  const s = String(status || '')
-    .trim()
-    .toUpperCase();
-  // Missing status → do not park (Capital sometimes omits it)
-  if (!s) return true;
-  return s === 'TRADEABLE' || s === 'OPEN';
+  return marketStatusAllowsTrading(status);
 }
 
 function formatCapitalParkDetail(
@@ -235,6 +239,8 @@ function publicSession(s: Internal): RobotSession {
     minuteCandles: _mins,
     last_multi_feed_ms: _mf,
     multiFeed: _multi,
+    cycle_in_flight: _cif,
+    feedManager: _fm,
     ...rest
   } = s;
   return {
@@ -258,7 +264,7 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
   const feeds = `${s.multiFeed?.contributing ?? s.feed_contributing ?? 0}/${
     s.multiFeed?.sender_count ?? s.feed_sender_count ?? 0
   } ${s.feed_source || 'NONE'} ${s.multiFeed?.agreement || s.feed_agreement || ''}`.trim();
-  let action = 'WAIT';
+  let action = 'SCAN';
   if (!s.running) action = 'STOPPED';
   else if (s.open_side) action = `MANAGE ${s.open_side}`;
   else if (s.mode === 'ENTRY') action = 'SCAN ENTRY';
@@ -533,7 +539,7 @@ export async function stopRobotSession(id: string): Promise<RobotSession | null>
     s.timer = null;
   }
   if (s.client_id) {
-    getClientTradingRegistry().stop(s.client_id);
+    getClientTradingRegistry().stop(s.client_id, s.account_id);
   }
   pushTick(s, {
     phase: 'INFO',
@@ -740,11 +746,11 @@ async function enterTrade(
   }
 
   // Mobile STOP blocks new entries even if robot process still runs.
-  // Absent registry row → fall back to robot entry_enabled only.
   const clientTrading = getClientTradingRegistry();
-  const regState = s.client_id > 0 ? clientTrading.get(s.client_id) : undefined;
   const clientEnabled =
-    regState != null ? regState.trading_enabled && s.entry_enabled : s.entry_enabled;
+    s.client_id > 0
+      ? clientTrading.isTradingEnabled(s.client_id, s.account_id) && s.entry_enabled
+      : s.entry_enabled;
 
   // Pre-compute stop — Risk forbids entry without stop; never fall back to naked order.
   const minPts = quote.min_stop_points;
@@ -780,28 +786,41 @@ async function enterTrade(
   }
 
   const stopAttached = plannedStopDistance != null || plannedStopLevel != null;
-  const risk = evaluateRisk({
+  const existing = matchOpenOnEpic(listed.positions, s.epic);
+  const orderStore = getDurableOrderStore();
+  const riskBuild = buildMoneyPathRisk({
     client_id: s.client_id,
     account_id: s.account_id,
     epic: s.epic,
     direction,
     size: s.lot_size,
     client_trading_enabled: clientEnabled,
-    market_open: marketAllowsTrading(quote.market_status),
-    feed_fresh: true,
-    feed_offline: false,
-    spread: quote.spread ?? null,
-    max_spread: null,
-    has_open_position: false,
-    has_duplicate_intent: false,
+    quote,
+    feedManager: s.feedManager,
+    orderStore,
+    // Session was acquired OK this cycle (enterTrade only called after acquire)
     session_healthy: true,
-    time_sync_ok: true,
-    reconcile_clean: true,
+    reconcile_clean: listed.ok,
+    has_open_position: !!existing,
     stop_attached: stopAttached,
     operating_mode: String(s.environment || '').toLowerCase() === 'live' ? 'LIVE' : 'DEMO',
     live_trading_enabled: process.env.LIVE_TRADING_ENABLED === 'true',
+    max_spread: null,
   });
-  if (!risk.ok) {
+  if (riskBuild.ok === false) {
+    pushTick(s, {
+      phase: 'ERROR',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      code: DecisionCodes.BLOCKED_TECHNICAL,
+      detail: `BLOCKED_TECHNICAL · ${riskBuild.code}: ${riskBuild.reason}`,
+    });
+    return;
+  }
+  const riskCtx = riskBuild.ctx;
+  const risk = evaluateRisk(riskCtx);
+  if (risk.ok === false) {
     pushTick(s, {
       phase: 'ERROR',
       bid: quote.bid,
@@ -826,7 +845,6 @@ async function enterTrade(
   let usedStopDistance: number | null = null;
   let submitTimedOut = false;
 
-  const orderStore = new OrderStore();
   const intentId = newIntentId();
   const decisionId = newDecisionId();
   /** Box avoids TS control-flow narrowing of closed-over lets after await. */
@@ -834,13 +852,15 @@ async function enterTrade(
     current: Awaited<ReturnType<typeof createCapitalPosition>> | null;
   } = { current: null };
   const trySubmit = async (
-    params: { stopDistance?: number; stopLevel?: number }
+    params: { stopDistance?: number; stopLevel?: number },
+    clientOrderId: string
   ): Promise<Awaited<ReturnType<typeof createCapitalPosition>>> => {
     try {
       return await createCapitalPosition(session, {
         epic: s.epic,
         direction,
         size: s.lot_size,
+        clientOrderId,
         ...params,
       });
     } catch (e) {
@@ -855,7 +875,7 @@ async function enterTrade(
     }
   };
 
-  // Execution via order state machine — timeout triggers reconcile, not blind retry of same payload.
+  // Execution via durable order store — confirm before POSITION_OPEN.
   const exec = await executeTradeIntent(
     {
       intent_id: intentId,
@@ -871,30 +891,10 @@ async function enterTrade(
       config_version: CONFIG_VERSION,
       market_snapshot_id: `desk_${s.id}_${Date.now()}`,
     },
-    {
-      client_id: s.client_id,
-      account_id: s.account_id,
-      epic: s.epic,
-      direction,
-      size: s.lot_size,
-      client_trading_enabled: clientEnabled,
-      market_open: marketAllowsTrading(quote.market_status),
-      feed_fresh: true,
-      feed_offline: false,
-      spread: quote.spread ?? null,
-      max_spread: null,
-      has_open_position: false,
-      has_duplicate_intent: orderStore.openIntents(s.account_id, s.epic).length > 0,
-      session_healthy: true,
-      time_sync_ok: true,
-      reconcile_clean: true,
-      stop_attached: stopAttached,
-      operating_mode: String(s.environment || '').toLowerCase() === 'live' ? 'LIVE' : 'DEMO',
-      live_trading_enabled: process.env.LIVE_TRADING_ENABLED === 'true',
-    },
+    riskCtx,
     {
       orderStore,
-      submit: async (intent, _clientOrderId) => {
+      submit: async (intent, clientOrderId) => {
         // SL distance attempts (loosen only on stop-validation rejects — not network timeout)
         if (useDistance && intent.stop_distance != null) {
           for (const loosen of loosenSteps) {
@@ -921,7 +921,7 @@ async function enterTrade(
                 expect ?? 'n/a'
               } · x${loosen})`,
             });
-            brokerBox.current = await trySubmit({ stopDistance });
+            brokerBox.current = await trySubmit({ stopDistance }, clientOrderId);
             if (brokerBox.current.ok) {
               usedStopDistance = stopDistance;
               stopLevel = expect;
@@ -969,7 +969,7 @@ async function enterTrade(
               minPrice ?? 'n/a'
             } · spread=${quote.spread ?? 'n/a'} · x${loosen})`,
           });
-          brokerBox.current = await trySubmit({ stopLevel: level });
+          brokerBox.current = await trySubmit({ stopLevel: level }, clientOrderId);
           if (brokerBox.current.ok) {
             stopLevel = level;
             return {
@@ -1013,10 +1013,27 @@ async function enterTrade(
           detail: `reconciled dealId=${pos.deal_id}`,
         };
       },
+      confirm: async (_intent, _coid, dealRef) => {
+        if (!dealRef) return { ok: false, status: 'UNKNOWN', detail: 'no dealRef' };
+        const conf = await confirmCapitalDeal(session, dealRef);
+        if (!conf.ok) {
+          return { ok: false, status: 'UNKNOWN', detail: conf.detail };
+        }
+        if (conf.deal_id) {
+          return {
+            ok: true,
+            status: 'ACCEPTED',
+            deal_id: conf.deal_id,
+            deal_reference: dealRef,
+            detail: conf.detail,
+          };
+        }
+        return { ok: false, status: 'PENDING', detail: conf.detail || 'confirm pending' };
+      },
     }
   );
 
-  if (!exec.ok) {
+  if (exec.ok === false) {
     s.error = exec.reason;
     pushTick(s, {
       phase: 'ERROR',
@@ -1034,8 +1051,24 @@ async function enterTrade(
     return;
   }
 
-  // Prefer broker-reported fields from successful submit / reconcile.
-  // Note: timeout→reconcile can yield exec.ok with brokerResult still failed/null.
+  // HTTP OK / BROKER_ACCEPTED alone is not a fill — require POSITION_OPEN (confirm evidence).
+  if (exec.code !== 'POSITION_OPEN') {
+    s.last_deal_reference =
+      exec.order.broker_deal_reference || brokerBox.current?.deal_reference || s.last_deal_reference;
+    pushTick(s, {
+      phase: 'INFO',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      code: DecisionCodes.ORDER_SUBMITTING,
+      detail: `BROKER_ACCEPTED pending confirm · ${direction} · ${
+        exec.order.broker_deal_reference || brokerBox.current?.deal_reference || 'no dealRef'
+      } · do not claim position without deal evidence`,
+    });
+    return;
+  }
+
+  // Prefer broker-reported fields from successful submit / reconcile / confirm.
   let finalBroker: {
     ok: boolean;
     detail: string;
@@ -1046,7 +1079,7 @@ async function enterTrade(
   if ((!finalBroker || !finalBroker.ok) && exec.order.broker_deal_id) {
     finalBroker = {
       ok: true,
-      detail: 'reconciled after timeout',
+      detail: 'confirmed / reconciled after submit',
       deal_reference: exec.order.broker_deal_reference || undefined,
       status: 200,
       json: null,
@@ -1148,6 +1181,17 @@ async function enterTrade(
 
 async function robotCycle(s: Internal) {
   if (!s.running) return;
+  if (s.cycle_in_flight) return;
+  s.cycle_in_flight = true;
+  try {
+    await robotCycleBody(s);
+  } finally {
+    s.cycle_in_flight = false;
+  }
+}
+
+async function robotCycleBody(s: Internal) {
+  if (!s.running) return;
 
   const { rows } = await pool.query(
     `SELECT bc.id, bc.environment, bc.identifier, bc.broker_name
@@ -1192,13 +1236,13 @@ async function robotCycle(s: Internal) {
     connectionId: s.connection_id,
     capitalAccountId,
   });
-  if (!opened.ok) {
+  if (opened.ok === false) {
     s.reads_fail += 1;
     s.error = opened.result.detail;
     const rateLimited =
       opened.result.status === 429 || /rate-limit|too-many|cooldown/i.test(opened.result.detail);
     pushTick(s, {
-      phase: rateLimited ? 'WAIT' : 'ERROR',
+      phase: 'ERROR',
       bid: null,
       ask: null,
       mid: null,
@@ -1235,6 +1279,15 @@ async function robotCycle(s: Internal) {
     if (quote.epic && quote.epic !== s.epic) {
       s.epic = quote.epic;
     }
+
+    // PRIMARY Capital quote → FeedManager (money-path authority)
+    s.feedManager.ingest({
+      source: 'capital',
+      epic: s.epic,
+      bid: quote.bid,
+      ask: quote.ask,
+      source_timestamp: s.last_quote_at,
+    });
 
     // Multi-provider + LOCAL feed snapshot ALWAYS (even when market closed) —
     // otherwise closed epics stay stuck at 0/0 NONE on the board.
@@ -1355,6 +1408,7 @@ async function robotCycle(s: Internal) {
         code: DecisionCodes.BLOCKED_TECHNICAL,
         detail: `BLOCKED_TECHNICAL · Position sync warn: ${listed.detail} · holding no-new-entry while unsure`,
       });
+      return;
     }
 
     if (quote.mid != null && s.open_side && s.entry_price != null) {
@@ -1493,17 +1547,18 @@ async function robotCycle(s: Internal) {
       }
     }
 
-    // Soft advisory only — public feeds must never freeze Capital entries
-    const feedGate = allowEntryFromFeeds(s.multiFeed);
+    // PRIMARY feed gate — REFERENCE never authorizes execution alone
+    const feedGate = allowEntryFromPrimaryFeed(s.feedManager, s.epic);
     if (!feedGate.ok) {
       pushTick(s, {
-        phase: 'SCAN',
+        phase: 'ERROR',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `FEED NOTE · ${feedGate.reason}`,
+        code: DecisionCodes.BLOCKED_TECHNICAL,
+        detail: `BLOCKED_TECHNICAL · ${feedGate.reason}`,
       });
-      // do not return — Capital local path continues
+      return;
     }
 
     const bar = s.ohlcState.last_closed;
@@ -1527,46 +1582,65 @@ async function robotCycle(s: Internal) {
         }/${s.feed_sender_count || 0} ${s.feed_source || 'LOCAL'} ${s.feed_agreement || ''}`
       : `10s OHLC seeding · feeds ${s.feed_contributing || 0}/${s.feed_sender_count || 0}`;
 
+    const primarySnap = s.feedManager.snapshot(s.epic);
+    const decision = evaluateStrategy({
+      epic: s.epic,
+      market_snapshot_id: `desk_${s.id}_${s.last_quote_at || Date.now()}`,
+      market_open: marketAllowsTrading(quote.market_status),
+      feed_fresh: primarySnap.primary_status === 'LIVE' && primarySnap.allows_execution,
+      bar_closed: !!(s.ohlcState.just_closed && bar),
+      closed_bar: bar || null,
+      bars: s.closedBars,
+      regime: s.regime,
+      minute_candles: s.minuteCandles,
+      trading_enabled: s.trading_enabled && s.entry_enabled,
+      manage_only: !s.entry_enabled,
+    });
+
     let direction: 'BUY' | 'SELL' | null = null;
     let reason = '';
     let setupType: string | null = null;
 
-    if (s.ohlcState.just_closed && bar) {
-      const sig = decideEntryFrom10sRegime(bar, s.regime, s.trend_bias, s.closedBars);
-      if (sig) {
-        direction = sig.direction;
-        setupType = sig.setup;
-        reason = sig.reason;
-      } else {
-        const fadeBlock =
-          s.regime === 'RANGE' ||
-          s.regime === 'FAILED_BREAKOUT_UP' ||
-          s.regime === 'FAILED_BREAKOUT_DOWN' ||
-          s.regime === 'REVERSAL_CANDIDATE';
-        const only = fadeBlock
-          ? 'NO_SETUP (fade/reversal forbidden on this regime)'
-          : s.trend_bias === 'UP'
-            ? 'only BUY with-trend (dip or follow)'
-            : s.trend_bias === 'DOWN'
-              ? 'only SELL on dump (with-trend)'
-              : 'no with-trend setup on this close';
-        pushTick(s, {
-          phase: 'SCAN',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          code: DecisionCodes.NO_SETUP,
-          detail: `${ohlcLine} · ${regimeLabel} · ${only}`,
-        });
-      }
-    } else {
+    if (decision.code === 'NO_SETUP') {
       pushTick(s, {
         phase: 'SCAN',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
         code: DecisionCodes.NO_SETUP,
-        detail: `${ohlcLine} · forming C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'} · no closed bar yet`,
+        detail: `${ohlcLine} · ${decision.reason}${
+          !bar || !s.ohlcState.just_closed
+            ? ` · forming C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'}`
+            : ''
+        }`,
+      });
+      return;
+    }
+
+    if (decision.code === 'BLOCKED_TECHNICAL') {
+      pushTick(s, {
+        phase: 'ERROR',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        code: DecisionCodes.BLOCKED_TECHNICAL,
+        detail: `BLOCKED_TECHNICAL · ${decision.block_reason || decision.reason}`,
+      });
+      return;
+    }
+
+    if (decision.code === 'ENTER_LONG' || decision.code === 'ENTER_SHORT') {
+      direction = decision.direction;
+      setupType = decision.setup;
+      reason = decision.reason;
+      s.trend_bias = decision.bias;
+      pushTick(s, {
+        phase: 'DECIDE',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        code: strategyToDecisionCode(decision),
+        detail: `${ohlcLine} · ${decision.code} · ${reason}`,
       });
     }
 
@@ -1611,23 +1685,6 @@ async function robotCycle(s: Internal) {
           mid: quote.mid,
           code: DecisionCodes.BLOCKED_TECHNICAL,
           detail: `BLOCKED_TECHNICAL · ${lag.reason}`,
-        });
-        direction = null;
-      }
-    }
-
-    if (direction) {
-      const deny = denyWithTrendEntry(direction, bar, s.trend_bias || 'FLAT', s.closedBars, {
-        exhaustion: setupType === 'FADE',
-      });
-      if (deny) {
-        pushTick(s, {
-          phase: 'SCAN',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          code: DecisionCodes.NO_SETUP,
-          detail: `NO_SETUP · ${deny}`,
         });
         direction = null;
       }
@@ -1762,6 +1819,12 @@ export async function startRobotSession(input: {
     last_multi_feed_ms: 0,
     multiFeed: null,
     sl_tighten_done: false,
+    cycle_in_flight: false,
+    feedManager: (() => {
+      const fm = new FeedManager();
+      fm.defineSource('capital', 'PRIMARY');
+      return fm;
+    })(),
     feed_source: 'NONE',
     feed_contributing: 0,
     feed_sender_count: 0,
@@ -1773,8 +1836,8 @@ export async function startRobotSession(input: {
 
   if (session.entry_enabled && acc.client_id) {
     const reg = getClientTradingRegistry();
-    reg.ensure(acc.client_id, { account_id: acc.id });
-    reg.start(acc.client_id);
+    reg.ensure(acc.client_id, acc.id);
+    reg.start(acc.client_id, acc.id);
   }
 
   const others = [...sessions.values()].filter((x) => x.running && x.id !== id).length;
@@ -1875,4 +1938,21 @@ export async function attachManageOnlyRobot(input: {
     });
   }
   return getRobotSession(session.id) || session;
+}
+
+/** Toggle trading/entry flags on matching running robots (account-scoped when provided). */
+export function setRobotsTradingEnabled(
+  clientId: number,
+  accountId: number | null | undefined,
+  enabled: boolean
+): void {
+  for (const s of sessions.values()) {
+    if (!s.running || s.client_id !== clientId) continue;
+    if (accountId != null && s.account_id !== accountId) continue;
+    s.trading_enabled = enabled;
+    s.entry_enabled = enabled;
+  }
+  const reg = getClientTradingRegistry();
+  if (enabled) reg.start(clientId, accountId ?? null);
+  else reg.stop(clientId, accountId ?? null);
 }
