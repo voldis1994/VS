@@ -288,7 +288,19 @@ export function minuteExhaustionConfirmed(
   return false;
 }
 
-/** RANGE setup family: rejection at measured prior-window edges (existing OHLC only). */
+/**
+ * RANGE setup family: rejection at measured prior-window edges (existing OHLC only).
+ *
+ * Evidence used (deterministic, no invented broker levels):
+ *   - prior closed-bar window high/low as provisional range bounds
+ *   - rejection candle (dip at upper / rally at lower) with moving body
+ *
+ * Missing for higher-fidelity RANGE_REJECTION (report only — not invented here):
+ *   - session/day structural range from dedicated market-state feature
+ *   - multi-touch validation of the same boundary
+ *   - volume/order-flow confirmation
+ * When bounds span is too small relative to price → return null (NO_SETUP), do not invent edges.
+ */
 export function decideRangeRejection(
   bar: TenSecBar,
   recent: TenSecBar[] | null | undefined

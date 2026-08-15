@@ -83,6 +83,43 @@ describe('REGIME_CONTEXT_ARCHITECTURE', () => {
     expect(d.setup_type).toBe('PULLBACK');
   });
 
+  it('TREND_DOWN + no valid setup → NO_SETUP', () => {
+    const q = quietBar();
+    const d = evaluateStrategy({
+      ...base,
+      bar_closed: true,
+      closed_bar: q,
+      bars: [quietBar(2000, 1), quietBar(2000, 2), q],
+      regime: 'TREND_DOWN',
+    });
+    expect(d.code).toBe('NO_SETUP');
+  });
+
+  it('TREND_DOWN + valid dump follow → ENTER_SHORT', () => {
+    const bars = [
+      bar(2000, 1999.7, 1),
+      bar(1999.7, 1999.4, 2),
+      bar(1999.4, 1999.1, 3),
+      bar(1999.1, 1988.8, 4),
+    ];
+    // Fix last bar to be a mild dump (not typo 1988)
+    bars[3] = bar(1999.1, 1998.7, 4);
+    const d = evaluateStrategy({
+      ...base,
+      bar_closed: true,
+      closed_bar: bars[3]!,
+      bars,
+      regime: 'TREND_DOWN',
+      minute_candles: [
+        { open: 2000.2, close: 2000.0 },
+        { open: 2000.0, close: 1999.7 },
+        { open: 1999.7, close: 1999.4 },
+      ],
+    });
+    expect(d.code).toBe('ENTER_SHORT');
+    expect(d.direction).toBe('SELL');
+  });
+
   it('RANGE + no evidence → NO_SETUP', () => {
     const flat = [quietBar(2000, 1), quietBar(2000.02, 2), quietBar(2000.01, 3)];
     const d = evaluateStrategy({
@@ -159,6 +196,31 @@ describe('REGIME_CONTEXT_ARCHITECTURE', () => {
     expect(d.setup_type).toBe('FAILED_BREAKOUT');
   });
 
+  it('FAILED_BREAKOUT_DOWN + valid confirmation → ENTER_LONG', () => {
+    const prior: TenSecBar[] = [
+      { open_time_ms: 1, open: 2000, high: 2002, low: 1998, close: 2000, ticks: 8 },
+      { open_time_ms: 2, open: 2000, high: 2001.5, low: 1998.2, close: 1999, ticks: 8 },
+      { open_time_ms: 3, open: 1999, high: 2000.5, low: 1998, close: 1998.5, ticks: 8 },
+    ];
+    const confirm: TenSecBar = {
+      open_time_ms: 4,
+      open: 1998.3,
+      high: 2000.2,
+      low: 1998.0,
+      close: 2000.0,
+      ticks: 12,
+    };
+    const d = evaluateStrategy({
+      ...base,
+      bar_closed: true,
+      closed_bar: confirm,
+      bars: [...prior, confirm],
+      regime: 'FAILED_BREAKOUT_DOWN',
+    });
+    expect(d.code).toBe('ENTER_LONG');
+    expect(d.setup_type).toBe('FAILED_BREAKOUT');
+  });
+
   it('REVERSAL_CANDIDATE + no confirmation → NO_SETUP', () => {
     const bars = [quietBar(2000, 1), quietBar(2000.02, 2), quietBar(2000.01, 3)];
     const d = evaluateStrategy({
@@ -205,6 +267,52 @@ describe('REGIME_CONTEXT_ARCHITECTURE', () => {
     });
     expect(d.code).toBe('ENTER_SHORT');
     expect(d.setup).toBe('FADE');
+  });
+
+  it('countertrend without exhaustion confirmation → NO_SETUP', () => {
+    // Climbing market, try to SELL a green bar under TREND_UP — no FADE evidence
+    const bars = [
+      bar(2000, 2000.3, 1),
+      bar(2000.3, 2000.55, 2),
+      bar(2000.55, 2000.7, 3),
+    ];
+    const green = bar(2000.7, 2001.0, 4);
+    const d = evaluateStrategy({
+      ...base,
+      bar_closed: true,
+      closed_bar: green,
+      bars: [...bars, green],
+      regime: 'TREND_UP',
+    });
+    // TREND_UP + green may CONTINUATION BUY, never countertrend SELL without FADE
+    expect(d.direction).not.toBe('SELL');
+    if (d.code === 'ENTER_SHORT') {
+      throw new Error('countertrend SELL without FADE must not ENTER');
+    }
+  });
+
+  it('look-ahead: Strategy uses only closed_bar + prior bars (no future bar field)', () => {
+    const bars = [
+      bar(2000, 2000.3, 1),
+      bar(2000.3, 2000.55, 2),
+      bar(2000.55, 2000.7, 3),
+      bar(2000.7, 2000.85, 4),
+    ];
+    const dipBar = bar(2000.85, 2000.5, 5);
+    const input = {
+      ...base,
+      bar_closed: true as const,
+      closed_bar: dipBar,
+      bars: [...bars, dipBar],
+      regime: 'TREND_UP',
+    };
+    const a = evaluateStrategy(input);
+    // Append a future bar that would reverse the signal if look-ahead leaked
+    const future = bar(2000.5, 2010, 6);
+    const b = evaluateStrategy({ ...input, bars: [...input.bars, future] });
+    // closed_bar unchanged → decision must not depend on future-only tip unless it becomes closed_bar
+    expect(a.code).toBe(b.code);
+    expect(a.direction).toBe(b.direction);
   });
 
   it('UNKNOWN + valid evidence → may ENTER', () => {

@@ -78,6 +78,30 @@ export type StrategyInput = {
   reference_price?: number | null;
 };
 
+function sameBar(a: TenSecBar, b: TenSecBar): boolean {
+  return (
+    Math.abs(a.open - b.open) < 1e-9 &&
+    Math.abs(a.close - b.close) < 1e-9 &&
+    Math.abs(a.high - b.high) < 1e-9 &&
+    Math.abs(a.low - b.low) < 1e-9
+  );
+}
+
+/**
+ * Truncate history to the decision closed_bar — never consume future bars (no look-ahead).
+ */
+export function barsAtOrBeforeClosed(
+  bars: TenSecBar[],
+  closed: TenSecBar | null
+): TenSecBar[] {
+  const clean = (bars || []).filter((b) => b && Number.isFinite(b.close));
+  if (!closed) return clean;
+  const idx = clean.findIndex((b) => sameBar(b, closed));
+  if (idx >= 0) return clean.slice(0, idx + 1);
+  // Decision bar not in list — append as the last known closed bar
+  return [...clean, closed];
+}
+
 /**
  * Pure strategy evaluate — uses entryFromRegime / bias as CONTEXT.
  * Does NOT call broker. Does NOT apply artificial trading limits.
@@ -99,12 +123,14 @@ export function evaluateStrategy(input: StrategyInput): StrategyDecision {
 
   void input.in_cooldown; // artificial — never blocks
 
-  const bias = resolveTrendBias(input.bars, input.minute_candles);
+  // Closed-bar determinism: never use bars after the decision closed_bar (no look-ahead).
+  const barsForDecision = barsAtOrBeforeClosed(input.bars, input.closed_bar);
+  const bias = resolveTrendBias(barsForDecision, input.minute_candles);
   const regime = normalizeRegime(input.regime);
   const refPx =
     input.reference_price ??
     input.closed_bar?.close ??
-    (input.bars.length ? input.bars[input.bars.length - 1]!.close : null);
+    (barsForDecision.length ? barsForDecision[barsForDecision.length - 1]!.close : null);
 
   const fail = (
     code: StrategyDecisionCode,
@@ -162,7 +188,7 @@ export function evaluateStrategy(input: StrategyInput): StrategyDecision {
 
   const bar = input.closed_bar;
   const eff = effectiveBias(regime, bias, bar);
-  const entry = decideEntryFrom10sRegime(bar, regime, eff, input.bars);
+  const entry = decideEntryFrom10sRegime(bar, regime, eff, barsForDecision);
 
   if (!entry) {
     return fail('NO_SETUP', 'No valid setup found for current market evidence', {
@@ -173,7 +199,7 @@ export function evaluateStrategy(input: StrategyInput): StrategyDecision {
   }
 
   // Propagate FADE / countertrend-allowed context into with-trend veto
-  const deny = denyWithTrendEntry(entry.direction, bar, eff, input.bars, {
+  const deny = denyWithTrendEntry(entry.direction, bar, eff, barsForDecision, {
     exhaustion: Boolean(entry.exhaustion),
     allowCountertrend: Boolean(entry.allow_countertrend || entry.exhaustion),
   });
@@ -237,6 +263,7 @@ export function evaluateStrategy(input: StrategyInput): StrategyDecision {
         high: bar.high,
         low: bar.low,
         close: bar.close,
+        open_time_ms: bar.open_time_ms,
       },
     },
   };

@@ -61,7 +61,7 @@ export async function registerMarketRoutes(
       expected_edge: 0,
       data_quality: row.bar_count >= 2 ? 1 : 0.3,
       feed_consensus: 1,
-      entry_state: row.current === 'UNKNOWN' ? 'NO_SETUP' : 'CLASSIFIED',
+      entry_state: row.current === 'UNKNOWN' ? 'UNCLASSIFIED' : 'CLASSIFIED',
       last_update: row.last_update,
       last_mid: row.last_mid,
       confidence: row.confidence,
