@@ -24,16 +24,29 @@ export interface CapitalSession {
   accountType?: string;
   currentAccountId?: string | null;
   close: () => Promise<void>;
-  get: (path: string) => Promise<{ ok: boolean; status: number; json: any; text: string }>;
+  applyAuthHeaders?: (tokens: { cst: string; securityToken: string }) => void;
+  get: (path: string) => Promise<{
+    ok: boolean;
+    status: number;
+    json: any;
+    text: string;
+    headers: Headers;
+  }>;
   post: (
     path: string,
     body?: unknown
-  ) => Promise<{ ok: boolean; status: number; json: any; text: string }>;
+  ) => Promise<{ ok: boolean; status: number; json: any; text: string; headers: Headers }>;
   put: (
     path: string,
     body?: unknown
-  ) => Promise<{ ok: boolean; status: number; json: any; text: string }>;
-  del: (path: string) => Promise<{ ok: boolean; status: number; json: any; text: string }>;
+  ) => Promise<{ ok: boolean; status: number; json: any; text: string; headers: Headers }>;
+  del: (path: string) => Promise<{
+    ok: boolean;
+    status: number;
+    json: any;
+    text: string;
+    headers: Headers;
+  }>;
 }
 
 export interface CapitalMarket {
@@ -257,7 +270,7 @@ export async function openCapitalSession(input: {
       continue;
     }
 
-    const authHeaders = {
+    const authHeaders: Record<string, string> = {
       Accept: 'application/json',
       'Content-Type': 'application/json',
       'X-CAP-API-KEY': apiKey,
@@ -279,7 +292,7 @@ export async function openCapitalSession(input: {
       } catch {
         j = {};
       }
-      return { ok: r.ok, status: r.status, json: j, text: t };
+      return { ok: r.ok, status: r.status, json: j, text: t, headers: r.headers };
     };
 
     const session: CapitalSession = {
@@ -294,14 +307,20 @@ export async function openCapitalSession(input: {
           : typeof json.accountId === 'string'
             ? json.accountId
             : null,
+      applyAuthHeaders(tokens) {
+        authHeaders.CST = tokens.cst;
+        authHeaders['X-SECURITY-TOKEN'] = tokens.securityToken;
+        session.cst = tokens.cst;
+        session.securityToken = tokens.securityToken;
+      },
       async close() {
         try {
           await fetch(`${base}/api/v1/session`, {
             method: 'DELETE',
             headers: {
               'X-CAP-API-KEY': apiKey,
-              CST: cst,
-              'X-SECURITY-TOKEN': sec,
+              CST: authHeaders.CST,
+              'X-SECURITY-TOKEN': authHeaders['X-SECURITY-TOKEN'],
             },
           });
         } catch {
@@ -404,6 +423,17 @@ export async function switchCapitalAccount(
         res.json?.errorCode || res.json?.message || res.text.slice(0, 160)
       }`,
     };
+  }
+  // Capital may rotate CST / X-SECURITY-TOKEN on account switch — apply if present.
+  const hdrs = res.headers;
+  if (hdrs) {
+    const cst = hdrs.get('CST') || hdrs.get('cst');
+    const sec = hdrs.get('X-SECURITY-TOKEN') || hdrs.get('x-security-token');
+    if (cst) session.cst = cst;
+    if (sec) session.securityToken = sec;
+    if (typeof session.applyAuthHeaders === 'function') {
+      session.applyAuthHeaders({ cst: session.cst, securityToken: session.securityToken });
+    }
   }
   session.currentAccountId = id;
   return { ok: true, detail: `Switched to Capital account ${id}` };

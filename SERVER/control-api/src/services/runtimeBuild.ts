@@ -29,14 +29,37 @@ function gitShortSha(): string {
   return cachedSha;
 }
 
+const STRATEGY_VERSION = 'with-trend-10s-sl020-v1';
+
+function buildTimeIso(): string {
+  const env = String(process.env.BUILD_TIME || '').trim();
+  if (env) return env;
+  return new Date().toISOString();
+}
+
+function packageVersion(): string {
+  const env = String(process.env.VS_VERSION || process.env.npm_package_version || '').trim();
+  return env || '1.0.0';
+}
+
 /** Visible proof that VS.bat actually booted this code — not a stale process. */
 export function runtimeBuildInfo() {
+  const git = gitShortSha();
   return {
-    git_sha: gitShortSha(),
+    VERSION: packageVersion(),
+    GIT_COMMIT: git,
+    BUILD_TIME: buildTimeIso(),
+    STRATEGY_VERSION,
+    version: packageVersion(),
+    git_sha: git,
+    build_time: buildTimeIso(),
+    strategy_version: STRATEGY_VERSION,
     sl: '0.20%-of-price',
     trend_minutes: TREND_LOOKBACK_MINUTES,
     entry_brain: 'node-robot-desk',
     /** Proof this Node build unlocks with-trend entries when classifier says UNKNOWN. */
     unknown_bias_unlock: true,
+    /** HISTORICAL STRATEGY NOT PROVEN — no .vs-build-sha for exact host runtime. */
+    historical_strategy: 'NOT_PROVEN' as const,
   };
 }

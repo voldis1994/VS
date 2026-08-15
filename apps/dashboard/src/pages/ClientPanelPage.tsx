@@ -71,6 +71,8 @@ export function ClientPanelPage() {
   const [flash, setFlash] = useState<'opened' | 'closed' | null>(null);
   const [closedBanner, setClosedBanner] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<'home' | 'logs' | 'settings'>('home');
+  const [clientLogs, setClientLogs] = useState<string[]>([]);
 
   const selected = useMemo(
     () => markets.find((m) => m.epic === epic) || null,
@@ -233,12 +235,20 @@ export function ClientPanelPage() {
         if (res.status.robot_status === 'ERROR') {
           setError(res.status.broker_error || 'Start failed — check account / market');
         }
+        setClientLogs((prev) => [
+          `${new Date().toISOString()} START → ${res.status.robot_status}`,
+          ...prev,
+        ].slice(0, 40));
       } else {
         const res = await clientFetch<{ status: Status }>('/api/client/stop', {
           method: 'POST',
           body: JSON.stringify({}),
         });
         setStatus(res.status);
+        setClientLogs((prev) => [
+          `${new Date().toISOString()} STOP → ${res.status.robot_status}`,
+          ...prev,
+        ].slice(0, 40));
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Action failed');
@@ -259,9 +269,9 @@ export function ClientPanelPage() {
           <div className="ccp-login">
             <Logo size={88} />
             <div className="ccp-brand">VS</div>
-            <div className="ccp-title">CLIENT CONTROL</div>
+            <div className="ccp-title">CONTROL PANEL</div>
             <label className="ccp-label" htmlFor="ccp-code">
-              Access Code
+              ACCESS CODE
             </label>
             <input
               id="ccp-code"
@@ -333,6 +343,21 @@ export function ClientPanelPage() {
           </div>
         </header>
 
+        <nav className="ccp-nav" aria-label="Control sections">
+          {(['home', 'logs', 'settings'] as const).map((t) => (
+            <button
+              key={t}
+              type="button"
+              className={`ccp-nav-btn ${tab === t ? 'on' : ''}`}
+              onClick={() => setTab(t)}
+            >
+              {t === 'home' ? 'HOME' : t === 'logs' ? 'LOGS' : 'SETTINGS'}
+            </button>
+          ))}
+        </nav>
+
+        {tab === 'home' && (
+          <>
         <section className="ccp-block">
           <div className="ccp-label">MARKET</div>
           <select
@@ -434,6 +459,37 @@ export function ClientPanelPage() {
             </div>
           )}
         </section>
+          </>
+        )}
+
+        {tab === 'logs' && (
+          <section className="ccp-block">
+            <div className="ccp-label">LOGS</div>
+            <div className="ccp-logs">
+              {clientLogs.length === 0 && (
+                <div className="ccp-lot-meta">Remote status only — trading engine runs in Node, not browser.</div>
+              )}
+              {clientLogs.map((line, i) => (
+                <div key={i} className="ccp-log-line">
+                  {line}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {tab === 'settings' && (
+          <section className="ccp-block">
+            <div className="ccp-label">SETTINGS</div>
+            <div className="ccp-lot-meta">
+              Engine isolation: closing this browser does not stop Node robotDesk.
+              START/STOP only toggles entry submissions on the server.
+            </div>
+            <div className="ccp-lot-meta" style={{ marginTop: 8 }}>
+              BUILD {status?.git_sha || '—'} · {status?.entry_brain || 'node-robot-desk'}
+            </div>
+          </section>
+        )}
 
         {error && <div className="ccp-error">{error}</div>}
 

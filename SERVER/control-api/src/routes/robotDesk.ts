@@ -92,6 +92,7 @@ export async function registerRobotDeskRoutes(app: FastifyInstance): Promise<voi
       display_name?: string;
       lot_size?: number;
       trading_enabled?: boolean;
+      entry_enabled?: boolean;
     };
     if (!body.account_id || !body.epic || body.lot_size == null) {
       return reply.code(400).send({
@@ -106,6 +107,7 @@ export async function registerRobotDeskRoutes(app: FastifyInstance): Promise<voi
         display_name: body.display_name,
         lot_size: Number(body.lot_size),
         trading_enabled: body.trading_enabled !== false,
+        entry_enabled: body.entry_enabled !== false,
       });
       return { success: true, session };
     } catch (err) {

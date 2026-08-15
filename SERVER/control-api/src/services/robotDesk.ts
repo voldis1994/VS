@@ -510,6 +510,17 @@ export function listRobotSessions(): RobotSession[] {
     .map(publicSession);
 }
 
+/** For System Health — Capital connection of first running robot. */
+export function getPrimaryRobotConnectionId(): number | null {
+  for (const s of sessions.values()) {
+    if (s.running && s.connection_id > 0) return s.connection_id;
+  }
+  for (const s of sessions.values()) {
+    if (s.connection_id > 0) return s.connection_id;
+  }
+  return null;
+}
+
 /** True when Node robotDesk is the entry brain for this account+epic (ignore stale C++ intents). */
 export function hasEntryEnabledRobot(accountId: number, epic: string): boolean {
   const want = String(epic || '').trim().toUpperCase();

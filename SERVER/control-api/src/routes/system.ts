@@ -2,6 +2,8 @@ import { FastifyInstance } from 'fastify';
 import { pool, healthCheck } from '../db/pool.js';
 import { TelemetryBroadcaster } from '../ws/telemetry.js';
 import { runtimeBuildInfo } from '../services/runtimeBuild.js';
+import { buildSystemHealth } from '../services/systemHealth.js';
+import { getPrimaryRobotConnectionId } from '../services/robotDesk.js';
 
 function liveEnabled(): boolean {
   const v = process.env.LIVE_TRADING_ENABLED;
@@ -15,6 +17,10 @@ export async function registerSystemRoutes(
   telemetry: TelemetryBroadcaster
 ): Promise<void> {
   app.get('/health', async () => ({ status: 'ok', ...runtimeBuildInfo() }));
+
+  app.get('/api/system/health', async () => {
+    return buildSystemHealth({ primaryConnectionId: getPrimaryRobotConnectionId() });
+  });
 
   app.get('/api/system/status', async () => {
     const dbOk = await healthCheck();
