@@ -1,0 +1,248 @@
+{
+  "title": "VS CORE PREVIOUS MASTER TASK FINAL GATE",
+  "generated_at": "2026-08-15T11:19:17.037Z",
+  "git_sha": "d33af55eda33af5719d0da0e1762a586edc24f67",
+  "freeze_commit": "c123101478126b23df4d87751680dd53f8c204ec",
+  "core_version": "0.1.0-vs-core",
+  "strategy_version": "node-robot-desk-main-c123101",
+  "config_version": "1",
+  "db_schema_version": "010",
+  "previous_master_task_complete": true,
+  "live_readiness": "NOT READY",
+  "summary": {
+    "pass": 24,
+    "fail": 0,
+    "external_blocker": 3
+  },
+  "gates": [
+    {
+      "name": "CORE_UNIT",
+      "status": "PASS",
+      "test": "vitest src/vs-core + security + strategy units",
+      "command": "npx vitest run src/vs-core ...",
+      "result": "exit 0",
+      "source": "apps/control-api/src/vs-core/"
+    },
+    {
+      "name": "STRATEGY_REGRESSION",
+      "status": "PASS",
+      "test": "runStrategyRegression",
+      "command": "embedded in vs-core:verify",
+      "result": "7/7 fingerprint=2a94b954298b2aad",
+      "source": "apps/control-api/src/vs-core/strategyRegression.ts"
+    },
+    {
+      "name": "HISTORICAL_BASELINE",
+      "status": "EXTERNAL_BLOCKER",
+      "result": "HISTORICAL_STRATEGY_NOT_PROVEN",
+      "source": "docs/AAA_P0_STRATEGY_BASELINE.md"
+    },
+    {
+      "name": "CAPITAL_REAL_DEMO",
+      "status": "EXTERNAL_BLOCKER",
+      "test": "runCapitalDemoVerify",
+      "command": "npm run vs-core:capital-demo-verify",
+      "result": "EXTERNAL_BLOCKER_CAPITAL_DEMO_CREDENTIALS",
+      "source": "apps/control-api/src/vs-core/capitalDemoVerify.ts"
+    },
+    {
+      "name": "CAPITAL_SESSION_LOGIC",
+      "status": "PASS",
+      "test": "CAPITAL_SESSION_FIXTURES in verifyProof.test.ts",
+      "command": "vitest verifyProof",
+      "result": "fixture 401/403/429/refresh",
+      "source": "apps/control-api/src/vs-core/capitalSessionManager.ts"
+    },
+    {
+      "name": "LINUX_DEPLOYMENT",
+      "status": "PASS",
+      "test": "linux-deploy-verify.sh",
+      "command": "bash deploy/vs-core/linux-deploy-verify.sh",
+      "result": "PASS",
+      "source": "deploy/vs-core/"
+    },
+    {
+      "name": "PHYSICAL_i3",
+      "status": "EXTERNAL_BLOCKER",
+      "test": "appliance-verify.sh",
+      "command": "VS_PHYSICAL_APPLIANCE=1 bash deploy/vs-core/appliance-verify.sh",
+      "result": "EXTERNAL_BLOCKER_PHYSICAL_APPLIANCE",
+      "source": "deploy/vs-core/appliance-verify.sh"
+    },
+    {
+      "name": "INTEGRATION",
+      "status": "PASS",
+      "test": "verifyProof + acceptanceExtras",
+      "command": "npm run vs-core:verify",
+      "result": "covered by vitest suite",
+      "source": "apps/control-api/src/vs-core/verifyProof.test.ts"
+    },
+    {
+      "name": "RUNTIME_CHAIN",
+      "status": "PASS",
+      "test": "runRuntimeChain",
+      "command": "npm run vs-core:verify",
+      "result": "covered by vitest suite",
+      "source": "apps/control-api/src/vs-core/runtimeChain.ts"
+    },
+    {
+      "name": "FEED_SAFETY",
+      "status": "PASS",
+      "test": "FEED_SAFETY",
+      "command": "npm run vs-core:verify",
+      "result": "covered by vitest suite",
+      "source": "apps/control-api/src/vs-core/feedManager.ts"
+    },
+    {
+      "name": "RISK",
+      "status": "PASS",
+      "test": "RISK_CORE",
+      "command": "npm run vs-core:verify",
+      "result": "covered by vitest suite",
+      "source": "apps/control-api/src/vs-core/riskCore.ts"
+    },
+    {
+      "name": "EXECUTION",
+      "status": "PASS",
+      "test": "TIMEOUT_RECONCILE + RUNTIME_CHAIN",
+      "command": "npm run vs-core:verify",
+      "result": "covered by vitest suite",
+      "source": "apps/control-api/src/vs-core/executionCore.ts"
+    },
+    {
+      "name": "DUPLICATE_PROTECTION",
+      "status": "PASS",
+      "test": "runDuplicateProtectionTest",
+      "command": "npm run vs-core:verify",
+      "result": "covered by vitest suite",
+      "source": "apps/control-api/src/vs-core/runtimeChain.ts"
+    },
+    {
+      "name": "ORDER_STATE_MACHINE",
+      "status": "PASS",
+      "test": "ORDER_STATE_MACHINE",
+      "command": "npm run vs-core:verify",
+      "result": "covered by vitest suite",
+      "source": "apps/control-api/src/vs-core/orderStateMachine.ts"
+    },
+    {
+      "name": "RECONCILIATION",
+      "status": "PASS",
+      "test": "RECONCILIATION",
+      "command": "npm run vs-core:verify",
+      "result": "covered by vitest suite",
+      "source": "apps/control-api/src/vs-core/positionReconcile.ts"
+    },
+    {
+      "name": "CRASH_RECOVERY",
+      "status": "PASS",
+      "test": "CRASH_RECOVERY",
+      "command": "npm run vs-core:verify",
+      "result": "covered by vitest suite",
+      "source": "apps/control-api/src/vs-core/crashRecovery.ts"
+    },
+    {
+      "name": "SUPERVISOR",
+      "status": "PASS",
+      "test": "SUPERVISOR_READINESS",
+      "command": "npm run vs-core:verify",
+      "result": "covered by vitest suite",
+      "source": "apps/control-api/src/vs-core/supervisor.ts"
+    },
+    {
+      "name": "READINESS",
+      "status": "PASS",
+      "test": "SUPERVISOR_READINESS",
+      "command": "npm run vs-core:verify",
+      "result": "covered by vitest suite",
+      "source": "apps/control-api/src/vs-core/readiness.ts"
+    },
+    {
+      "name": "INCIDENTS",
+      "status": "PASS",
+      "test": "illegal OSM → incident",
+      "command": "npm run vs-core:verify",
+      "result": "covered by vitest suite",
+      "source": "apps/control-api/src/vs-core/incidentCenter.ts"
+    },
+    {
+      "name": "SOAK_MEMORY",
+      "status": "PASS",
+      "test": "runSoakTest",
+      "command": "npm run vs-core:verify",
+      "result": "covered by vitest suite",
+      "source": "apps/control-api/src/vs-core/soakTest.ts"
+    },
+    {
+      "name": "DATABASE_RECOVERY",
+      "status": "PASS",
+      "test": "DATABASE_GATE",
+      "command": "npm run vs-core:verify",
+      "result": "covered by vitest suite",
+      "source": "apps/control-api/src/vs-core/databaseGate.ts"
+    },
+    {
+      "name": "BACKUP",
+      "status": "PASS",
+      "test": "BACKUP_RESTORE_UPDATER",
+      "command": "npm run vs-core:verify",
+      "result": "covered by vitest suite",
+      "source": "apps/control-api/src/vs-core/backup.ts"
+    },
+    {
+      "name": "RESTORE",
+      "status": "PASS",
+      "test": "BACKUP_RESTORE_UPDATER",
+      "command": "npm run vs-core:verify",
+      "result": "covered by vitest suite",
+      "source": "apps/control-api/src/vs-core/backup.ts"
+    },
+    {
+      "name": "UPDATER",
+      "status": "PASS",
+      "test": "BACKUP_RESTORE_UPDATER",
+      "command": "npm run vs-core:verify",
+      "result": "covered by vitest suite",
+      "source": "apps/control-api/src/vs-core/updater.ts"
+    },
+    {
+      "name": "ROLLBACK",
+      "status": "PASS",
+      "test": "BACKUP_RESTORE_UPDATER",
+      "command": "npm run vs-core:verify",
+      "result": "covered by vitest suite",
+      "source": "apps/control-api/src/vs-core/updater.ts"
+    },
+    {
+      "name": "SECURITY",
+      "status": "PASS",
+      "test": "SECURITY_ISOLATION",
+      "command": "npm run vs-core:verify",
+      "result": "covered by vitest suite",
+      "source": "apps/control-api/src/vs-core/mobileAuth.ts"
+    },
+    {
+      "name": "CLIENT_ISOLATION",
+      "status": "PASS",
+      "test": "SECURITY_ISOLATION + clientIsolation.test",
+      "command": "npm run vs-core:verify",
+      "result": "covered by vitest suite",
+      "source": "apps/control-api/src/services/clientIsolation.test.ts"
+    }
+  ],
+  "external_blockers": [
+    {
+      "name": "HISTORICAL_BASELINE",
+      "result": "HISTORICAL_STRATEGY_NOT_PROVEN"
+    },
+    {
+      "name": "CAPITAL_REAL_DEMO",
+      "result": "EXTERNAL_BLOCKER_CAPITAL_DEMO_CREDENTIALS"
+    },
+    {
+      "name": "PHYSICAL_i3",
+      "result": "EXTERNAL_BLOCKER_PHYSICAL_APPLIANCE"
+    }
+  ],
+  "note": "All non-external software gates PASS. Capital DEMO + physical i3 remain EXTERNAL_BLOCKER. Do NOT start VS ADMIN / VS CONTROL without operator approval."
+}

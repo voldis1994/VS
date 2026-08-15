@@ -12,7 +12,9 @@
     "test": "vitest run",
     "vs-core:boot": "tsx src/vs-core/runAppliance.ts",
     "vs-core:acceptance": "tsx src/vs-core/runAcceptance.ts",
-    "vs-core:tui": "tsx src/vs-core/runTui.ts"
+    "vs-core:tui": "tsx src/vs-core/runTui.ts",
+    "vs-core:verify": "tsx src/vs-core/runVerify.ts",
+    "vs-core:capital-demo-verify": "tsx src/vs-core/runCapitalDemoCli.ts"
   },
   "dependencies": {
     "@fastify/cors": "^9.0.1",

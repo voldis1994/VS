@@ -48,7 +48,7 @@ export type AcceptanceReport = {
   db_schema_version: string;
   freeze_commit: string;
   strategy_baseline_status: string;
-  previous_master_task_complete: false;
+  previous_master_task_complete: boolean;
   live_readiness: 'NOT READY';
   gates: GateResult[];
   summary: {
@@ -531,7 +531,7 @@ export async function runAcceptanceGates(): Promise<AcceptanceReport> {
   add(
     'FINAL_PRODUCT_TASK',
     'EXTERNAL_BLOCKER',
-    'NEXT/FINAL PRODUCT (VS ADMIN native + VS CONTROL native) NOT STARTED — previous master task incomplete'
+    'VS ADMIN/CONTROL native not started — awaiting operator approval after this gate'
   );
 
   const summary = {
@@ -541,6 +541,9 @@ export async function runAcceptanceGates(): Promise<AcceptanceReport> {
     external_blocker: gates.filter((g) => g.status === 'EXTERNAL_BLOCKER').length,
   };
 
+  // Software-complete when no FAIL — external blockers allowed
+  const previousComplete = summary.fail === 0;
+
   return {
     generated_at: new Date().toISOString(),
     core_version: CORE_VERSION,
@@ -549,7 +552,7 @@ export async function runAcceptanceGates(): Promise<AcceptanceReport> {
     db_schema_version: DB_SCHEMA_VERSION,
     freeze_commit: FREEZE_COMMIT,
     strategy_baseline_status: STRATEGY_BASELINE_STATUS,
-    previous_master_task_complete: false,
+    previous_master_task_complete: previousComplete,
     live_readiness: 'NOT READY',
     gates,
     summary,

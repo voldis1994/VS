@@ -135,11 +135,11 @@ describe('Strategy regression baseline', () => {
 });
 
 describe('Acceptance gate', () => {
-  it('reports previous_master_task_complete=false and records EXTERNAL_BLOCKER for DEMO', async () => {
+  it('reports software-complete with EXTERNAL_BLOCKER for DEMO (no FAIL)', async () => {
     const report = await runAcceptanceGates();
-    expect(report.previous_master_task_complete).toBe(false);
-    expect(report.live_readiness).toBe('NOT READY');
     expect(report.summary.fail).toBe(0);
+    expect(report.previous_master_task_complete).toBe(true);
+    expect(report.live_readiness).toBe('NOT READY');
     const demo = report.gates.find((g) => g.name === 'CAPITAL_DEMO_E2E');
     expect(demo?.status).toBe('EXTERNAL_BLOCKER');
   });

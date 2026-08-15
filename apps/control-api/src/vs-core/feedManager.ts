@@ -68,16 +68,24 @@ export class FeedManager {
     let status: FeedStatus = input.force_status || 'LIVE';
     let detail = input.detail ?? null;
 
-    if (status === 'LIVE') {
+  if (status === 'LIVE') {
       if (bid == null || ask == null || !Number.isFinite(bid) || !Number.isFinite(ask) || ask < bid) {
         status = 'ERROR';
         detail = 'malformed bid/ask';
       } else {
         const srcTs = input.source_timestamp ? Date.parse(input.source_timestamp) : now;
-        const age = Number.isFinite(srcTs) ? Math.max(0, now - srcTs) : 0;
-        if (age > this.staleMs) {
-          status = 'STALE';
-          detail = `age ${age}ms`;
+        if (!Number.isFinite(srcTs)) {
+          status = 'ERROR';
+          detail = 'invalid source_timestamp';
+        } else if (srcTs - now > 2000) {
+          status = 'ERROR';
+          detail = 'future timestamp';
+        } else {
+          const age = Math.max(0, now - srcTs);
+          if (age > this.staleMs) {
+            status = 'STALE';
+            detail = `age ${age}ms`;
+          }
         }
       }
     }
