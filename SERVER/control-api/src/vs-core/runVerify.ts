@@ -46,7 +46,7 @@ async function main() {
     test: 'vitest src/vs-core + security + strategy units',
     command: 'npx vitest run src/vs-core ...',
     result: unit.ok ? 'exit 0' : unit.out.slice(-500),
-    source: 'apps/control-api/src/vs-core/',
+    source: 'SERVER/control-api/src/vs-core/',
   });
 
   // Strategy regression
@@ -57,7 +57,7 @@ async function main() {
     test: 'runStrategyRegression',
     command: 'embedded in vs-core:verify',
     result: `${reg.passed}/${reg.passed + reg.failed} fingerprint=${reg.fingerprint.slice(0, 16)}`,
-    source: 'apps/control-api/src/vs-core/strategyRegression.ts',
+    source: 'SERVER/control-api/src/vs-core/strategyRegression.ts',
   });
   add({
     name: 'HISTORICAL_BASELINE',
@@ -74,7 +74,7 @@ async function main() {
     test: 'runCapitalDemoVerify',
     command: 'npm run vs-core:capital-demo-verify',
     result: demo.code,
-    source: 'apps/control-api/src/vs-core/capitalDemoVerify.ts',
+    source: 'SERVER/control-api/src/vs-core/capitalDemoVerify.ts',
   });
   add({
     name: 'CAPITAL_SESSION_LOGIC',
@@ -82,11 +82,11 @@ async function main() {
     test: 'CAPITAL_SESSION_FIXTURES in verifyProof.test.ts',
     command: 'vitest verifyProof',
     result: 'fixture 401/403/429/refresh',
-    source: 'apps/control-api/src/vs-core/capitalSessionManager.ts',
+    source: 'SERVER/control-api/src/vs-core/capitalSessionManager.ts',
   });
 
-  // Linux deploy
-  const linuxScript = join(repoRoot, 'deploy/vs-core/linux-deploy-verify.sh');
+  // Linux deploy (symlink deploy/vs-core → SERVER/deploy preserved for CI)
+  const linuxScript = join(repoRoot, 'SERVER/deploy/linux-deploy-verify.sh');
   try {
     chmodSync(linuxScript, 0o755);
   } catch {
@@ -97,44 +97,44 @@ async function main() {
     name: 'LINUX_DEPLOYMENT',
     status: linux.ok ? 'PASS' : 'FAIL',
     test: 'linux-deploy-verify.sh',
-    command: 'bash deploy/vs-core/linux-deploy-verify.sh',
+    command: 'bash SERVER/deploy/linux-deploy-verify.sh',
     result: linux.ok ? 'PASS' : linux.out.slice(-300),
-    source: 'deploy/vs-core/',
+    source: 'SERVER/deploy/',
   });
 
   // Physical appliance
-  const appl = run('bash', [join(repoRoot, 'deploy/vs-core/appliance-verify.sh')], repoRoot);
+  const appl = run('bash', [join(repoRoot, 'SERVER/deploy/appliance-verify.sh')], repoRoot);
   add({
     name: 'PHYSICAL_i3',
     status: appl.ok ? 'PASS' : appl.out.includes('EXTERNAL_BLOCKER') ? 'EXTERNAL_BLOCKER' : 'FAIL',
     test: 'appliance-verify.sh',
-    command: 'VS_PHYSICAL_APPLIANCE=1 bash deploy/vs-core/appliance-verify.sh',
+    command: 'VS_PHYSICAL_APPLIANCE=1 bash SERVER/deploy/appliance-verify.sh',
     result: appl.out.trim().split('\n')[0] || 'unknown',
-    source: 'deploy/vs-core/appliance-verify.sh',
+    source: 'SERVER/deploy/appliance-verify.sh',
   });
 
   // Map detailed gates from unit suite presence (unit already ran proofs)
   const mapped: Array<[string, string, string]> = [
-    ['INTEGRATION', 'verifyProof + acceptanceExtras', 'apps/control-api/src/vs-core/verifyProof.test.ts'],
-    ['RUNTIME_CHAIN', 'runRuntimeChain', 'apps/control-api/src/vs-core/runtimeChain.ts'],
-    ['FEED_SAFETY', 'FEED_SAFETY', 'apps/control-api/src/vs-core/feedManager.ts'],
-    ['RISK', 'RISK_CORE', 'apps/control-api/src/vs-core/riskCore.ts'],
-    ['EXECUTION', 'TIMEOUT_RECONCILE + RUNTIME_CHAIN', 'apps/control-api/src/vs-core/executionCore.ts'],
-    ['DUPLICATE_PROTECTION', 'runDuplicateProtectionTest', 'apps/control-api/src/vs-core/runtimeChain.ts'],
-    ['ORDER_STATE_MACHINE', 'ORDER_STATE_MACHINE', 'apps/control-api/src/vs-core/orderStateMachine.ts'],
-    ['RECONCILIATION', 'RECONCILIATION', 'apps/control-api/src/vs-core/positionReconcile.ts'],
-    ['CRASH_RECOVERY', 'CRASH_RECOVERY', 'apps/control-api/src/vs-core/crashRecovery.ts'],
-    ['SUPERVISOR', 'SUPERVISOR_READINESS', 'apps/control-api/src/vs-core/supervisor.ts'],
-    ['READINESS', 'SUPERVISOR_READINESS', 'apps/control-api/src/vs-core/readiness.ts'],
-    ['INCIDENTS', 'illegal OSM → incident', 'apps/control-api/src/vs-core/incidentCenter.ts'],
-    ['SOAK_MEMORY', 'runSoakTest', 'apps/control-api/src/vs-core/soakTest.ts'],
-    ['DATABASE_RECOVERY', 'DATABASE_GATE', 'apps/control-api/src/vs-core/databaseGate.ts'],
-    ['BACKUP', 'BACKUP_RESTORE_UPDATER', 'apps/control-api/src/vs-core/backup.ts'],
-    ['RESTORE', 'BACKUP_RESTORE_UPDATER', 'apps/control-api/src/vs-core/backup.ts'],
-    ['UPDATER', 'BACKUP_RESTORE_UPDATER', 'apps/control-api/src/vs-core/updater.ts'],
-    ['ROLLBACK', 'BACKUP_RESTORE_UPDATER', 'apps/control-api/src/vs-core/updater.ts'],
-    ['SECURITY', 'SECURITY_ISOLATION', 'apps/control-api/src/vs-core/mobileAuth.ts'],
-    ['CLIENT_ISOLATION', 'SECURITY_ISOLATION + clientIsolation.test', 'apps/control-api/src/services/clientIsolation.test.ts'],
+    ['INTEGRATION', 'verifyProof + acceptanceExtras', 'SERVER/control-api/src/vs-core/verifyProof.test.ts'],
+    ['RUNTIME_CHAIN', 'runRuntimeChain', 'SERVER/control-api/src/vs-core/runtimeChain.ts'],
+    ['FEED_SAFETY', 'FEED_SAFETY', 'SERVER/control-api/src/vs-core/feedManager.ts'],
+    ['RISK', 'RISK_CORE', 'SERVER/control-api/src/vs-core/riskCore.ts'],
+    ['EXECUTION', 'TIMEOUT_RECONCILE + RUNTIME_CHAIN', 'SERVER/control-api/src/vs-core/executionCore.ts'],
+    ['DUPLICATE_PROTECTION', 'runDuplicateProtectionTest', 'SERVER/control-api/src/vs-core/runtimeChain.ts'],
+    ['ORDER_STATE_MACHINE', 'ORDER_STATE_MACHINE', 'SERVER/control-api/src/vs-core/orderStateMachine.ts'],
+    ['RECONCILIATION', 'RECONCILIATION', 'SERVER/control-api/src/vs-core/positionReconcile.ts'],
+    ['CRASH_RECOVERY', 'CRASH_RECOVERY', 'SERVER/control-api/src/vs-core/crashRecovery.ts'],
+    ['SUPERVISOR', 'SUPERVISOR_READINESS', 'SERVER/control-api/src/vs-core/supervisor.ts'],
+    ['READINESS', 'SUPERVISOR_READINESS', 'SERVER/control-api/src/vs-core/readiness.ts'],
+    ['INCIDENTS', 'illegal OSM → incident', 'SERVER/control-api/src/vs-core/incidentCenter.ts'],
+    ['SOAK_MEMORY', 'runSoakTest', 'SERVER/control-api/src/vs-core/soakTest.ts'],
+    ['DATABASE_RECOVERY', 'DATABASE_GATE', 'SERVER/control-api/src/vs-core/databaseGate.ts'],
+    ['BACKUP', 'BACKUP_RESTORE_UPDATER', 'SERVER/control-api/src/vs-core/backup.ts'],
+    ['RESTORE', 'BACKUP_RESTORE_UPDATER', 'SERVER/control-api/src/vs-core/backup.ts'],
+    ['UPDATER', 'BACKUP_RESTORE_UPDATER', 'SERVER/control-api/src/vs-core/updater.ts'],
+    ['ROLLBACK', 'BACKUP_RESTORE_UPDATER', 'SERVER/control-api/src/vs-core/updater.ts'],
+    ['SECURITY', 'SECURITY_ISOLATION', 'SERVER/control-api/src/vs-core/mobileAuth.ts'],
+    ['CLIENT_ISOLATION', 'SECURITY_ISOLATION + clientIsolation.test', 'SERVER/control-api/src/services/clientIsolation.test.ts'],
   ];
   for (const [name, test, source] of mapped) {
     add({

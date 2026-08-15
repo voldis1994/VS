@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# START_SERVER — runtime launcher / diagnostics. NOT an installer.
+# Validates config + health; starts supervisor/services; optionally opens TUI.
+# Closing TUI must NOT stop trading (TUI is separate process).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+DATA="${VS_SERVER_DATA:-${VS_CORE_DATA:-$ROOT/../data/vs-server}}"
+LOG="${VS_SERVER_LOG:-${VS_CORE_LOG:-$ROOT/../data/vs-server/logs}}"
+export VS_CORE_DATA="${VS_CORE_DATA:-$DATA}"
+export VS_CORE_ROOT="${VS_CORE_ROOT:-$ROOT}"
+export NODE_ENV="${NODE_ENV:-production}"
+export OPERATING_MODE="${OPERATING_MODE:-DEMO}"
+export LIVE_TRADING_ENABLED="${LIVE_TRADING_ENABLED:-false}"
+
+# Default: localhost only. LAN bind only with explicit ADMIN_BIND=lan + real token.
+if [[ "${ADMIN_BIND:-}" == "lan" ]]; then
+  if [[ -z "${API_ADMIN_TOKEN:-}" || "${API_ADMIN_TOKEN}" == "CHANGE_ME_ADMIN_TOKEN" ]]; then
+    echo "FAIL: ADMIN_BIND=lan requires non-default API_ADMIN_TOKEN" >&2
+    exit 1
+  fi
+  export CONTROL_API_HOST="${CONTROL_API_HOST:-0.0.0.0}"
+else
+  export CONTROL_API_HOST="${CONTROL_API_HOST:-127.0.0.1}"
+fi
+export CONTROL_API_PORT="${CONTROL_API_PORT:-3000}"
+
+mkdir -p "$DATA" "$LOG" "$DATA/market" "$DATA/backup" "$DATA/updates" "$DATA/orders"
+
+echo "VS SERVER START"
+echo "ROOT=$ROOT DATA=$DATA HOST=$CONTROL_API_HOST PORT=$CONTROL_API_PORT MODE=$OPERATING_MODE LIVE=$LIVE_TRADING_ENABLED"
+
+# Validate Node package present
+if [[ ! -f "$ROOT/control-api/package.json" ]]; then
+  echo "FAIL: SERVER/control-api missing — run from repo SERVER/ or after INSTALL_SERVER" >&2
+  exit 1
+fi
+
+cd "$ROOT/control-api"
+if [[ ! -d node_modules ]]; then
+  echo "FAIL: node_modules missing — run INSTALL_SERVER or npm ci in SERVER/control-api" >&2
+  exit 1
+fi
+
+# LIVE + default secrets → refuse
+if [[ "$LIVE_TRADING_ENABLED" == "true" ]]; then
+  if [[ -z "${MASTER_ENCRYPTION_KEY:-}" || "${MASTER_ENCRYPTION_KEY}" == *CHANGE_ME* ]]; then
+    echo "FAIL: LIVE_STARTUP_FAIL — default MASTER_ENCRYPTION_KEY" >&2
+    exit 1
+  fi
+  if [[ -z "${API_ADMIN_TOKEN:-}" || "${API_ADMIN_TOKEN}" == "CHANGE_ME_ADMIN_TOKEN" ]]; then
+    echo "FAIL: LIVE_STARTUP_FAIL — default API_ADMIN_TOKEN" >&2
+    exit 1
+  fi
+fi
+
+WITH_TUI="${WITH_TUI:-0}"
+PID_FILE="$DATA/vs-server.pid"
+
+# Start appliance (HTTP + robotDesk) in background if not already
+if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+  echo "INFO: SERVER already running pid=$(cat "$PID_FILE")"
+else
+  nohup node --import tsx src/vs-core/runAppliance.ts >>"$LOG/server.out" 2>&1 &
+  echo $! >"$PID_FILE"
+  echo "STARTED pid=$(cat "$PID_FILE")"
+fi
+
+# Health wait
+ok=0
+for i in $(seq 1 30); do
+  if curl -fsS "http://127.0.0.1:${CONTROL_API_PORT}/health" >/dev/null 2>&1; then
+    ok=1
+    break
+  fi
+  sleep 0.5
+done
+if [[ "$ok" -ne 1 ]]; then
+  echo "FAIL: SERVER health endpoint not responding on :$CONTROL_API_PORT" >&2
+  echo "See $LOG/server.out" >&2
+  exit 1
+fi
+
+echo "SUCCESS: VS SERVER listening (health OK)"
+echo "NOTE: LIVE_READY is NOT claimed — Capital DEMO + physical i3 remain EXTERNAL_BLOCKER"
+
+if [[ "$WITH_TUI" == "1" ]]; then
+  echo "Starting TUI (closing TUI does not stop SERVER)…"
+  exec node --import tsx src/vs-core/runTui.ts
+fi
+exit 0

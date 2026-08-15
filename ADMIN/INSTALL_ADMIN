@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# INSTALL_ADMIN — prepare VS ADMIN diagnostic client on personal PC.
+# Does not install SERVER. Does not write secrets into the repo.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+echo "VS ADMIN INSTALL"
+cd "$ROOT"
+if ! command -v node >/dev/null; then
+  echo "FAIL: Node.js required" >&2
+  exit 1
+fi
+npm install
+mkdir -p config
+if [[ ! -f config/admin.connection.json ]]; then
+  cat >config/admin.connection.json <<'EOF'
+{
+  "baseUrl": "http://127.0.0.1:3000",
+  "adminToken": ""
+}
+EOF
+  echo "Wrote config/admin.connection.json — set adminToken locally (never commit secrets)"
+fi
+chmod +x INSTALL_ADMIN START_ADMIN 2>/dev/null || true
+echo "SUCCESS: VS ADMIN installed"
+exit 0

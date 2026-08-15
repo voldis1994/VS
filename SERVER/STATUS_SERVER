@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# STATUS_SERVER — report process + health. Never invent READY.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+DATA="${VS_SERVER_DATA:-${VS_CORE_DATA:-$ROOT/../data/vs-server}}"
+PID_FILE="$DATA/vs-server.pid"
+PORT="${CONTROL_API_PORT:-3000}"
+TOKEN="${API_ADMIN_TOKEN:-}"
+
+echo "VS SERVER STATUS"
+
+running=0
+if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+  running=1
+  echo "PROCESS=RUNNING pid=$(cat "$PID_FILE")"
+elif systemctl is-active --quiet vs-server.service 2>/dev/null; then
+  running=1
+  echo "PROCESS=RUNNING (systemd)"
+else
+  echo "PROCESS=STOPPED"
+fi
+
+if curl -fsS "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
+  echo "HEALTH=OK"
+else
+  echo "HEALTH=NOT_READY"
+fi
+
+if [[ -n "$TOKEN" && "$TOKEN" != "CHANGE_ME_ADMIN_TOKEN" ]]; then
+  snap="$(curl -fsS -H "x-admin-token: $TOKEN" "http://127.0.0.1:${PORT}/api/v1/admin/snapshot" 2>/dev/null || true)"
+  if [[ -n "$snap" ]]; then
+    echo "ADMIN_SNAPSHOT=OK"
+    echo "$snap" | head -c 500
+    echo
+  else
+    echo "ADMIN_SNAPSHOT=NOT_READY"
+  fi
+else
+  echo "ADMIN_SNAPSHOT=SKIPPED (set API_ADMIN_TOKEN)"
+fi
+
+if [[ "$running" -eq 1 ]]; then
+  echo "RESULT=SUCCESS"
+  exit 0
+fi
+echo "RESULT=FAIL: SERVER not running"
+exit 1

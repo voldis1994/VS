@@ -56,3 +56,5 @@ coverage/
 *.pem
 *.key
 credentials.json
+ADMIN/config/admin.connection.json
+data/vs-server/

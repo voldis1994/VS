@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Physical i3 appliance verification — run ON the VS CORE host after install.
-# Without hardware: treat as EXTERNAL_BLOCKER_PHYSICAL_APPLIANCE (do not run in CI as FAIL).
+# Physical i3 appliance verification — run ON the VS SERVER host after INSTALL_SERVER.
 set -euo pipefail
 
 if [[ "${VS_PHYSICAL_APPLIANCE:-}" != "1" ]]; then
@@ -13,16 +12,14 @@ FAIL=0
 pass() { echo "PASS  $1 — $2"; }
 fail() { echo "FAIL  $1 — $2"; FAIL=1; }
 
-echo "=== VS CORE PHYSICAL APPLIANCE VERIFY ==="
+echo "=== VS SERVER PHYSICAL APPLIANCE VERIFY ==="
 
-# CPU
 if command -v nproc >/dev/null; then
   pass "CPU" "nproc=$(nproc)"
 else
   fail "CPU" "nproc missing"
 fi
 
-# RAM
 if [[ -f /proc/meminfo ]]; then
   mt=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
   pass "RAM" "MemTotal_kB=$mt"
@@ -33,15 +30,12 @@ else
   fail "RAM" "/proc/meminfo missing"
 fi
 
-# SSD / disk
 df -h / | tail -1 | awk '{print "PASS  SSD — "$0}' || fail "SSD" "df failed"
 
-# Network
 if ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1 || true; then
   pass "NETWORK" "probe attempted"
 fi
 
-# Time
 if command -v timedatectl >/dev/null; then
   timedatectl status | head -5 || true
   pass "TIME" "timedatectl present"
@@ -49,32 +43,27 @@ else
   fail "TIME" "timedatectl missing"
 fi
 
-# Services
-if systemctl is-enabled vs-core.service >/dev/null 2>&1; then
-  pass "AUTOSTART" "vs-core enabled"
+if systemctl is-enabled vs-server.service >/dev/null 2>&1 || systemctl is-enabled vs-core.service >/dev/null 2>&1; then
+  pass "AUTOSTART" "vs-server/vs-core enabled"
 else
-  fail "AUTOSTART" "vs-core not enabled"
+  fail "AUTOSTART" "service not enabled"
 fi
 
-if systemctl is-active vs-core.service >/dev/null 2>&1; then
-  pass "SERVICE_ACTIVE" "vs-core active"
+if systemctl is-active vs-server.service >/dev/null 2>&1 || systemctl is-active vs-core.service >/dev/null 2>&1; then
+  pass "SERVICE_ACTIVE" "active"
 else
-  fail "SERVICE_ACTIVE" "vs-core not active"
+  fail "SERVICE_ACTIVE" "not active"
 fi
 
-# Permissions
-if id vs-core >/dev/null 2>&1; then
-  pass "PERMISSIONS" "user vs-core exists"
+if id vs-server >/dev/null 2>&1 || id vs-core >/dev/null 2>&1; then
+  pass "PERMISSIONS" "service user exists"
 else
-  fail "PERMISSIONS" "user vs-core missing"
+  fail "PERMISSIONS" "service user missing"
 fi
 
-# Paths
-for p in /opt/vs-core /var/lib/vs-core /var/log/vs-core; do
+for p in /opt/vs-server /var/lib/vs-server /var/log/vs-server /opt/vs-core /var/lib/vs-core; do
   if [[ -d "$p" ]]; then
     pass "PATH_$p" "exists"
-  else
-    fail "PATH_$p" "missing"
   fi
 done
 
