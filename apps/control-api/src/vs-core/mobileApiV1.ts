@@ -217,10 +217,13 @@ export async function registerMobileApiV1(app: FastifyInstance, deps: MobileApiD
 
   /** Explicitly reject arbitrary broker order construction from mobile. */
   app.post('/api/v1/broker/order', async (req, reply) => {
+    const session = await requireSession(req, reply);
+    if (!session) return;
     return reply.code(403).send({
       ok: false,
       code: 'CONTROL_API_NOT_EXECUTION_API',
-      reason: 'Mobile cannot submit arbitrary broker orders. Orders flow Strategy → Risk → Execution only.',
+      reason:
+        'Mobile cannot submit arbitrary broker orders. Orders flow Strategy → Risk → Execution only.',
     });
   });
 

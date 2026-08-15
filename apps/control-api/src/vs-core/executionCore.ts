@@ -106,6 +106,14 @@ export async function executeTradeIntent(
   const submitted = await deps.submit(intent, clientOrderId);
 
   if (submitted.timed_out) {
+    // Ambiguous broker result — NOT Strategy UNKNOWN. Stop duplicate submit; reconcile.
+    order = transitionOrder(
+      order,
+      'BROKER_RESULT_UNRESOLVED',
+      'Submit timeout — broker result unresolved'
+    );
+    deps.orderStore.put(order);
+
     const recon = await deps.reconcile(intent, clientOrderId);
     if (recon.found) {
       order = transitionOrder(order, 'BROKER_ACCEPTED', recon.detail);
@@ -114,7 +122,7 @@ export async function executeTradeIntent(
         broker_deal_reference: recon.deal_reference || null,
         broker_deal_id: recon.deal_id || null,
       };
-      order = transitionOrder(order, 'FILLED', 'Reconciled after timeout — no blind retry');
+      order = transitionOrder(order, 'FILLED', 'Reconciled after unresolved — no blind retry');
       order = transitionOrder(order, 'POSITION_OPEN');
       deps.orderStore.put(order);
       return { ok: true, order, code: 'POSITION_OPEN' };
@@ -122,14 +130,14 @@ export async function executeTradeIntent(
     order = transitionOrder(
       order,
       'REJECTED',
-      `Timeout + not found at broker: ${recon.detail}`
+      `BROKER_RESULT_UNRESOLVED + not found at broker: ${recon.detail}`
     );
     order = { ...order, reject_reason: recon.detail };
     deps.orderStore.put(order);
     return {
       ok: false,
       order,
-      code: 'NETWORK_TIMEOUT',
+      code: 'BROKER_RESULT_UNRESOLVED',
       reason: `Submit timeout — reconciled, order not at broker (${recon.detail})`,
     };
   }

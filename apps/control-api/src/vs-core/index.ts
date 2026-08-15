@@ -31,4 +31,6 @@ export * from './adminAgent.js';
 export * from './runtimeChain.js';
 export * from './soakTest.js';
 export * from './databaseGate.js';
+export * from './runtimeHealth.js';
+export * from './decisionCompat.js';
 export * from './capitalDemoVerify.js';

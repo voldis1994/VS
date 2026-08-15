@@ -218,7 +218,6 @@ export async function runRuntimeChain(input: RuntimeChainInput): Promise<Runtime
     max_spread: null,
     has_open_position: (input.broker_positions || []).some((p) => p.epic === input.epic),
     has_duplicate_intent: dup,
-    in_cooldown: false,
     session_healthy: true,
     time_sync_ok: true,
     reconcile_clean: true,

@@ -15,6 +15,11 @@ import { getEventBus } from './eventBus.js';
 import { CORE_VERSION, STRATEGY_VERSION, versionBundle } from './versions.js';
 import { checkTimeSync, type TimeSyncResult } from './timeSync.js';
 import { checkStorageHealth } from './storageHealth.js';
+import {
+  probeStrategyRuntime,
+  probeRiskRuntime,
+  probeExecutionRuntime,
+} from './runtimeHealth.js';
 
 export type BootOptions = {
   dataRoot: string;
@@ -79,13 +84,15 @@ export async function bootVsCore(opts: BootOptions): Promise<BootResult> {
     await orDefault(opts.databaseCheck, 'DATABASE', 'database ok'),
     await orDefault(opts.marketCheck, 'MARKET', 'market core ok'),
     await orDefault(opts.capitalCheck, 'CAPITAL', 'capital session not verified in this boot'),
-    await orDefault(opts.strategyCheck, 'STRATEGY', 'strategy core loaded'),
-    await orDefault(opts.riskCheck, 'RISK', 'risk core loaded'),
-    await orDefault(opts.executionCheck, 'EXECUTION', 'execution core loaded'),
+    opts.strategyCheck ? await opts.strategyCheck() : probeStrategyRuntime(),
+    opts.riskCheck ? await opts.riskCheck() : probeRiskRuntime(),
+    opts.executionCheck
+      ? await opts.executionCheck()
+      : probeExecutionRuntime(false),
     await orDefault(opts.reconcileCheck, 'RECONCILIATION', 'reconcile clean'),
   ];
 
-  // Capital default above says "ok" — for honesty, if no capitalCheck provided, mark UNKNOWN not OK
+  // Capital: never claim OK without a real verification callback
   if (!opts.capitalCheck) {
     const idx = probes.findIndex((p) => p.name === 'CAPITAL');
     if (idx >= 0) {
@@ -97,6 +104,8 @@ export async function bootVsCore(opts: BootOptions): Promise<BootResult> {
       );
     }
   }
+
+  // STRATEGY/RISK/EXECUTION defaults above are runtime probes — never "module loaded" fake OK.
 
   const report = evaluateReadiness(probes);
   if (report.state === 'READY') {

@@ -696,12 +696,12 @@ async function enterTrade(
       s.mode = 'MANAGE';
       if (existing.stop_level != null) s.safety_sl = existing.stop_level;
       pushTick(s, {
-        phase: 'WAIT',
+        phase: 'ERROR',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
         code: DecisionCodes.DUPLICATE_PREVENTED,
-        detail: `ONE TRADE ONLY — broker already open ${existing.direction} dealId=${existing.deal_id} · no new entry`,
+        detail: `BLOCKED_TECHNICAL · duplicate — broker already open ${existing.direction} dealId=${existing.deal_id} · no new entry`,
       });
       return;
     }
@@ -794,7 +794,6 @@ async function enterTrade(
     max_spread: null,
     has_open_position: false,
     has_duplicate_intent: false,
-    in_cooldown: false,
     session_healthy: true,
     time_sync_ok: true,
     reconcile_clean: true,
@@ -886,7 +885,6 @@ async function enterTrade(
       max_spread: null,
       has_open_position: false,
       has_duplicate_intent: orderStore.openIntents(s.account_id, s.epic).length > 0,
-      in_cooldown: false,
       session_healthy: true,
       time_sync_ok: true,
       reconcile_clean: true,
@@ -940,7 +938,7 @@ async function enterTrade(
               return { ok: false, detail: brokerBox.current.detail };
             }
             pushTick(s, {
-              phase: 'WAIT',
+              phase: 'INFO',
               bid: quote.bid,
               ask: quote.ask,
               mid: quote.mid,
@@ -987,7 +985,7 @@ async function enterTrade(
             return { ok: false, detail: brokerBox.current.detail };
           }
           pushTick(s, {
-            phase: 'WAIT',
+            phase: 'INFO',
             bid: quote.bid,
             ask: quote.ask,
             mid: quote.mid,
@@ -1026,11 +1024,11 @@ async function enterTrade(
       ask: quote.ask,
       mid: quote.mid,
       code:
-        exec.code === 'NETWORK_TIMEOUT'
-          ? DecisionCodes.NETWORK_TIMEOUT
+        exec.code === 'BROKER_RESULT_UNRESOLVED' || exec.code === 'NETWORK_TIMEOUT'
+          ? DecisionCodes.BROKER_RESULT_UNRESOLVED
           : exec.code === 'BROKER_REJECTED'
             ? DecisionCodes.BROKER_REJECTED
-            : DecisionCodes.RISK_REJECTED,
+            : DecisionCodes.BLOCKED_TECHNICAL,
       detail: `ORDER FAIL ${direction}: ${exec.reason}`,
     });
     return;
@@ -1350,11 +1348,12 @@ async function robotCycle(s: Internal) {
       }
     } else {
       pushTick(s, {
-        phase: 'WAIT',
+        phase: 'ERROR',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `Position sync warn: ${listed.detail} · holding ONE TRADE rule (no new entry if unsure)`,
+        code: DecisionCodes.BLOCKED_TECHNICAL,
+        detail: `BLOCKED_TECHNICAL · Position sync warn: ${listed.detail} · holding no-new-entry while unsure`,
       });
     }
 
@@ -1409,7 +1408,7 @@ async function robotCycle(s: Internal) {
             });
           } else {
             pushTick(s, {
-              phase: 'WAIT',
+              phase: 'INFO',
               bid: quote.bid,
               ask: quote.ask,
               mid: quote.mid,
@@ -1498,7 +1497,7 @@ async function robotCycle(s: Internal) {
     const feedGate = allowEntryFromFeeds(s.multiFeed);
     if (!feedGate.ok) {
       pushTick(s, {
-        phase: 'WAIT',
+        phase: 'SCAN',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
