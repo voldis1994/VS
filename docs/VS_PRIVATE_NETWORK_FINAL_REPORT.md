@@ -1,6 +1,7 @@
 # VS PRIVATE NETWORK — PRODUCT READY FOR PHYSICAL INSTALLATION
 
 PR: https://github.com/voldis1994/VS/pull/52  
+HEAD: `c186f24dc3254cb26eb4272a394231953fdd7140`
 **LIVE_READY: false** — PHYSICAL_i3 / CAPITAL_REAL_DEMO / HISTORICAL_BASELINE remain EXTERNAL_BLOCKER (never mocked)
 
 ## Product architecture (not Phase 1)
