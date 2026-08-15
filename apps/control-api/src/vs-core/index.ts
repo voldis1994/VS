@@ -25,3 +25,6 @@ export * from './feedManager.js';
 export * from './crashRecovery.js';
 export * from './strategyRegression.js';
 export * from './acceptanceGate.js';
+export * from './hostTelemetry.js';
+export * from './coreTui.js';
+export * from './adminAgent.js';

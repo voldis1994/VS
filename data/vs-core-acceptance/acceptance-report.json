@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-15T10:30:01.614Z",
+  "generated_at": "2026-08-15T11:03:36.986Z",
   "core_version": "0.1.0-vs-core",
   "strategy_version": "node-robot-desk-main-c123101",
   "config_version": "1",
@@ -113,12 +113,22 @@
       "name": "BOOT_AUTOMATION_LOGIC",
       "status": "PASS",
       "detail": "deploy/vs-core + boot.ts present (host install EXTERNAL)"
+    },
+    {
+      "name": "HOST_TELEMETRY_REAL",
+      "status": "PASS",
+      "detail": "ram=0.9 GB/15.6 GB disk=18.2 GB/251.9 GB"
+    },
+    {
+      "name": "FINAL_PRODUCT_TASK",
+      "status": "EXTERNAL_BLOCKER",
+      "detail": "NEXT/FINAL PRODUCT (VS ADMIN native + VS CONTROL native) NOT STARTED — previous master task incomplete"
     }
   ],
   "summary": {
-    "pass": 18,
+    "pass": 19,
     "fail": 0,
     "partial": 0,
-    "external_blocker": 3
+    "external_blocker": 4
   }
 }

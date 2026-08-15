@@ -11,6 +11,8 @@ const PUBLIC_PATHS = [
   '/ws/client',
 ];
 
+// /api/v1/admin/* uses its own x-admin-token check inside Admin Agent.
+
 /** Static client panel (GET / /assets /logo.svg) is public — not Vite, not admin. */
 export function isPublicUnauthedPath(method: string, urlPath: string): boolean {
   const path = urlPath.split('?')[0] || '/';

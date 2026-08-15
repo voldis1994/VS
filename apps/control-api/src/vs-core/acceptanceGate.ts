@@ -512,6 +512,28 @@ export async function runAcceptanceGates(): Promise<AcceptanceReport> {
   // Boot logic present
   add('BOOT_AUTOMATION_LOGIC', 'PASS', 'deploy/vs-core + boot.ts present (host install EXTERNAL)');
 
+  // Host telemetry — real OS sample (no hardcoded reference-image numbers)
+  try {
+    const { collectHostSystemSnapshot } = await import('./hostTelemetry.js');
+    const host = collectHostSystemSnapshot({ cpuSampleMs: 40, probeNetwork: false });
+    const ok =
+      host.ram_total_bytes != null &&
+      host.ram_total_bytes > 0 &&
+      host.ssd_total_bytes != null &&
+      host.cpu_percent != null &&
+      host.uptime_human !== '18d 07h 42m';
+    add('HOST_TELEMETRY_REAL', ok ? 'PASS' : 'FAIL', host.detail);
+  } catch (e) {
+    add('HOST_TELEMETRY_REAL', 'FAIL', e instanceof Error ? e.message : String(e));
+  }
+
+  // FINAL PRODUCT master task must not be claimed started while previous incomplete
+  add(
+    'FINAL_PRODUCT_TASK',
+    'EXTERNAL_BLOCKER',
+    'NEXT/FINAL PRODUCT (VS ADMIN native + VS CONTROL native) NOT STARTED — previous master task incomplete'
+  );
+
   const summary = {
     pass: gates.filter((g) => g.status === 'PASS').length,
     fail: gates.filter((g) => g.status === 'FAIL').length,

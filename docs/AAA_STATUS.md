@@ -2,25 +2,22 @@
 
 ## PREVIOUS MASTER TASK COMPLETE?
 
-**NO** — see `docs/VS_CORE_PREVIOUS_TASK_STATUS.md`
+**NO**
 
-Do not start VS ADMIN / VS CONTROL native product work yet.
+## FINAL PRODUCT MASTER TASK STARTED?
 
-## P0 RESULT
+**NO** — waiting for previous DoD + `PRE_VS_CORE_MIGRATION_BASELINE`.
 
-**HISTORICAL STRATEGY NOT PROVEN**
+## Evidence
 
-## Automated evidence (this revision)
-
-* Unit: **158 PASS**
-* Acceptance gate: **18 PASS / 0 FAIL / 3 EXTERNAL_BLOCKER**
-* Reports: `docs/VS_CORE_ACCEPTANCE_REPORT.json`
+* Unit: **161 PASS**
+* Acceptance: **19 PASS / 0 FAIL / 4 EXTERNAL_BLOCKER**
+* TUI: `npm run vs-core:tui` (real OS metrics; honest NO DATA / NOT READY)
+* Admin Agent API only (no native Admin/Control apps yet)
 
 ## EXTERNAL BLOCKERS
 
-* Capital DEMO credentials
-* Physical appliance
-* Host strategy SHA proof
+Capital DEMO credentials · physical appliance · host strategy SHA · final-product gated on previous complete
 
 ## LIVE READINESS
 

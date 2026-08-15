@@ -2,61 +2,49 @@
 
 **Date:** 2026-08-15  
 **Branch:** `cursor/vs-core-os-master-0bd7`  
-**Question:** PREVIOUS MASTER TASK COMPLETE?
+**Tip:** see `git rev-parse HEAD`
 
-## Answer
+## PREVIOUS MASTER TASK COMPLETE?
 
 # **NO**
 
-Do **not** start NEXT MASTER TASK (VS ADMIN native desktop + VS CONTROL native mobile).
+## FINAL PRODUCT MASTER TASK (VS CORE TUI polish + VS ADMIN native + VS CONTROL native) STARTED?
 
-Do **not** create `MIGRATION_BASELINE` tag claiming the previous task is done.
+# **NO**
+
+`PRE_VS_CORE_MIGRATION_BASELINE` tag/commit **not created** — previous Definition of Done not met.
 
 ---
 
-## What is proven (automated)
-
-Acceptance gate (`npm run vs-core:acceptance`):
+## Acceptance (latest)
 
 | Metric | Value |
 | --- | --- |
-| PASS | 18 |
-| FAIL | 0 |
-| PARTIAL | 0 |
-| EXTERNAL_BLOCKER | 3 |
+| Unit tests | **161 PASS** |
+| Acceptance PASS | 19 |
+| Acceptance FAIL | 0 |
+| EXTERNAL_BLOCKER | 4 |
 
-Unit tests: **158 PASS**
+Blockers:
 
-Artifacts:
+1. CAPITAL_DEMO_E2E — credentials requested via environment setup  
+2. HARDWARE_APPLIANCE — physical i3  
+3. STRATEGY_HISTORICAL_PROOF — need `.vs-build-sha`  
+4. FINAL_PRODUCT_TASK — explicitly blocked until previous complete  
 
-* `data/vs-core-acceptance/acceptance-report.json`
-* `data/vs-core-acceptance/acceptance-report.txt`
+Artifacts: `docs/VS_CORE_ACCEPTANCE_REPORT.*`
 
-## EXTERNAL BLOCKERS (honest)
+## Continued previous-task work (this revision)
 
-1. **CAPITAL_DEMO_E2E** — no `CAPITAL_DEMO_*` credentials in this environment  
-2. **HARDWARE_APPLIANCE** — no physical i3 VS CORE host  
-3. **STRATEGY_HISTORICAL_PROOF** — still `HISTORICAL_STRATEGY_NOT_PROVEN` (need operator `.vs-build-sha`)
+* Real host telemetry (`hostTelemetry.ts`) — CPU/RAM/SSD from `/proc` + filesystem  
+* VS CORE TUI (`coreTui.ts`, `npm run vs-core:tui`) — monospace, shows **NO DATA** when unknown, never reference-image fake P/L  
+* Admin Agent HTTP (`/api/v1/admin/health`, `/api/v1/admin/tui`) — **not** native VS ADMIN app  
 
-## HIGH known defects / incompleteness (not hidden)
+## What is still required before PRE_VS_CORE_MIGRATION_BASELINE
 
-1. Full service extraction from `robotDesk` monolith incomplete (Risk/Execution wired on entry; manage/exit still in desk).  
-2. Host firewall / NTP / non-root user install requires physical server (`deploy/vs-core/install.sh` ready, not executed on appliance).  
-3. Capital DEMO end-to-end broker order path not exercised against live DEMO API.
+* Capital DEMO E2E PASS  
+* Operator strategy SHA proof (or accepted HISTORICAL_NOT_PROVEN with documented waiver)  
+* Appliance boot on real hardware (or accepted EXTERNAL with waiver)  
+* Zero HIGH defects per previous DoD  
 
-## Versions pinned
-
-| Pin | Value |
-| --- | --- |
-| FREEZE_COMMIT | `c123101478126b23df4d87751680dd53f8c204ec` |
-| STRATEGY_VERSION | `node-robot-desk-main-c123101` |
-| CONFIG_VERSION | `1` |
-| DB_SCHEMA_VERSION | `010` |
-| REPLAY_BASELINE_ID | `vs-strategy-replay-baseline-v1` |
-| REGRESSION_FINGERPRINT | see acceptance / `runStrategyRegression()` |
-
-## Next correct action
-
-1. Operator provides Capital DEMO credentials **or** host SHA proof as needed.  
-2. Continue previous-task gaps that are not blocked.  
-3. Only when Definition of Done from the **previous** master spec is met → then create migration baseline → then start VS ADMIN / VS CONTROL native products.
+Until then: **do not start** VS ADMIN Electron/Tauri desktop or VS CONTROL React Native/Flutter mobile.
