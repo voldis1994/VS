@@ -1,7 +1,9 @@
 # VS 3-PART ARCHITECTURE REPORT
 
 Branch: `cursor/vs-architecture-server-admin-client-0bd7`  
+Architecture HEAD: `f3064c26c4eee34b3cd9e67cd98fa9bb1742d20c`  
 Base P0 HEAD: `d1f09f9eeaca6dbe52d17379ee23d8928ed564da`  
+PR: https://github.com/voldis1994/VS/pull/52  
 **LIVE_READY: false** (Capital DEMO + physical i3 remain EXTERNAL_BLOCKER — never mocked)
 
 ## Gate table
