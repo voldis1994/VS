@@ -78,7 +78,15 @@ export function styleFromClassification(
   if (dir === 'SELL' && (r === 'TREND_UP' || r === 'PULLBACK_UPTREND')) return null;
   if (dir === 'BUY' && (r === 'TREND_DOWN' || r === 'PULLBACK_DOWNTREND')) return null;
   if (setup === 'CONTINUATION' || setup === 'PULLBACK') return 'LONG';
-  if (setup === 'BREAKOUT' || setup === 'FADE' || setup === 'REVERSAL') return 'SCALP';
+  if (
+    setup === 'BREAKOUT' ||
+    setup === 'FADE' ||
+    setup === 'REVERSAL' ||
+    setup === 'FAILED_BREAKOUT' ||
+    setup === 'RANGE_REJECTION'
+  ) {
+    return 'SCALP';
+  }
   if (LONG_REGIMES.has(r)) return 'LONG';
   if (SCALP_REGIMES.has(r)) return 'SCALP';
   return null;

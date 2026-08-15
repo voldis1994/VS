@@ -8,7 +8,7 @@ import { evaluateStrategy, type StrategyDecision } from './strategyCore.js';
 import type { TenSecBar } from '../services/tenSecondOhlc.js';
 import { STRATEGY_VERSION, CONFIG_VERSION, FREEZE_COMMIT } from './versions.js';
 
-export const REPLAY_BASELINE_ID = 'vs-strategy-replay-baseline-v1';
+export const REPLAY_BASELINE_ID = 'vs-strategy-replay-baseline-v2-regime-context';
 export const BASELINE_COMMIT = FREEZE_COMMIT;
 
 export type BaselineCase = {
@@ -91,7 +91,7 @@ export function strategyReplayBaselineCases(): BaselineCase[] {
       expect_direction: null,
     },
     {
-      id: 'range_no_fade',
+      id: 'range_no_evidence',
       input: {
         epic: 'GOLD',
         market_snapshot_id: 'b4',
@@ -155,10 +155,11 @@ export function strategyReplayBaselineCases(): BaselineCase[] {
         bars: dump,
         regime: 'TREND_DOWN',
         trading_enabled: true,
+        // Mild 1m DOWN bias — not late-move magnitude (Strategy owns late-move invalidation)
         minute_candles: [
-          { open: 2405, close: 2402 },
-          { open: 2402, close: 2399 },
-          { open: 2399, close: 2396 },
+          { open: 2405, close: 2404.6 },
+          { open: 2404.6, close: 2404.1 },
+          { open: 2404.1, close: 2403.7 },
         ],
       },
       expect_code: 'ENTER_SHORT',

@@ -1,12 +1,29 @@
-/** 10s OHLC + 14-regime entry — regime is the classifier; this picks the suitable setup. */
+/**
+ * 10s OHLC + regime-as-CONTEXT entry.
+ * Regime selects/reweights setup families — it does NOT grant or deny permission to trade.
+ * NO_SETUP = no valid setup evidence found (never "regime forbidden").
+ */
 import type { RegimeName } from './regimes.js';
 import { normalizeRegime } from './regimes.js';
 import { bodyPct, isMoving10s, rangePct, type TenSecBar } from './tenSecondOhlc.js';
 
+export type SetupType =
+  | 'CONTINUATION'
+  | 'PULLBACK'
+  | 'BREAKOUT'
+  | 'FAILED_BREAKOUT'
+  | 'RANGE_REJECTION'
+  | 'FADE'
+  | 'REVERSAL';
+
 export type RegimeEntry = {
   direction: 'BUY' | 'SELL';
-  setup: 'CONTINUATION' | 'PULLBACK' | 'BREAKOUT' | 'FADE' | 'REVERSAL';
+  setup: SetupType;
   reason: string;
+  /** Confirmed exhaustion/reversal — may be counter-trend by design */
+  exhaustion?: boolean;
+  /** Setup family allows counter-trend (FADE / range rejection / failed breakout / reversal) */
+  allow_countertrend?: boolean;
 };
 
 export type TrendBias = 'UP' | 'DOWN' | 'FLAT';
@@ -61,7 +78,6 @@ export function trendBiasFromBars(bars: TenSecBar[]): TrendBias {
   const downN = bodies.filter((v) => v < -0.00004).length;
   const { net, persist } = netAndPersist(w[0]!.open, w[w.length - 1]!.close, upN, downN, w.length);
   const last = w[w.length - 1]!;
-  // A green continuation with non-negative net is a climb — never call it DOWN.
   if (bodyPct(last) > 0.00004 && net >= 0) return 'UP';
   if (bodyPct(last) < -0.00004 && net <= 0) return 'DOWN';
   if (net > 0.0002 && persist >= 0) return 'UP';
@@ -70,13 +86,11 @@ export function trendBiasFromBars(bars: TenSecBar[]): TrendBias {
   if (net < -0.0004) return 'DOWN';
   if (persist > 0.2 && net > 0) return 'UP';
   if (persist < -0.2 && net < 0) return 'DOWN';
-  // Last bar paints the short bias when net is muddled — kills FLAT deadlock.
   if (dip(last) && persist <= 0) return 'DOWN';
   if (rally(last) && persist >= 0) return 'UP';
   return 'FLAT';
 }
 
-/** Climb/dump from the last 3 one-minute candles only. */
 export function trendBiasFromMinuteCandles(
   candles: Array<{ open: number; close: number }>
 ): TrendBias {
@@ -101,7 +115,6 @@ export function trendBiasFromMinuteCandles(
   return 'FLAT';
 }
 
-/** 1m (lasting) wins on conflict — a pullback in an uptrend is still only-BUY. */
 export function mergeTrendBias(shortTf: TrendBias, lasting: TrendBias): TrendBias {
   if (shortTf === lasting) return shortTf;
   if (lasting !== 'FLAT') return lasting;
@@ -115,7 +128,7 @@ export function resolveTrendBias(
   return mergeTrendBias(trendBiasFromBars(tenSec), trendBiasFromMinuteCandles(minutes || []));
 }
 
-/** Regime carries direction when bias calculator is still FLAT. */
+/** Regime carries direction when bias calculator is still FLAT — does NOT rewrite regime. */
 export function effectiveBias(
   regime: string | null | undefined,
   bias: TrendBias,
@@ -138,26 +151,37 @@ function allowsBias(direction: 'BUY' | 'SELL', bias: TrendBias): boolean {
   return direction === 'SELL';
 }
 
-/** True when an order would sell a climb or buy a dump (FLAT does not guess). */
 export function isCountertrendSide(direction: 'BUY' | 'SELL', bias: TrendBias): boolean {
   return !allowsBias(direction, bias);
 }
 
-/** Last-line veto: never SELL a green 10s, never SELL unless lasting DOWN, never BUY unless lasting UP. */
+/**
+ * With-trend veto. When opts.exhaustion / allowCountertrend: skip counter-trend + net vetoes
+ * (confirmed FADE/reversal/range rejection may be counter-trend by design).
+ * Still never SELL a green impulse bar / BUY a red impulse without UP (unless exhaustion BUY confirm).
+ */
 export function denyWithTrendEntry(
   direction: 'BUY' | 'SELL',
   bar: TenSecBar | null | undefined,
   bias: TrendBias,
   recent?: TenSecBar[] | null,
-  opts?: { exhaustion?: boolean }
+  opts?: { exhaustion?: boolean; allowCountertrend?: boolean }
 ): string | null {
+  const ctOk = Boolean(opts?.exhaustion || opts?.allowCountertrend);
   if (bar && Number.isFinite(bar.open) && Number.isFinite(bar.close)) {
-    if (direction === 'SELL' && rally(bar)) return 'no SELL on green 10s (would sell the climb)';
+    if (direction === 'SELL' && rally(bar) && !ctOk) {
+      return 'no SELL on green 10s (would sell the climb)';
+    }
+    // FADE SELL confirm is a red bar — OK. FADE BUY confirm is green after dump — OK with exhaustion.
     if (direction === 'BUY' && dip(bar) && !opts?.exhaustion && bias !== 'UP') {
       return 'no BUY on red 10s without UP bias';
     }
+    if (direction === 'SELL' && rally(bar) && opts?.exhaustion) {
+      // Exhaustion SELL must be on rejection (red), not green
+      return 'no FADE SELL on green 10s';
+    }
   }
-  if (opts?.exhaustion) return null;
+  if (ctOk) return null;
   if (isCountertrendSide(direction, bias)) {
     return direction === 'SELL'
       ? `no SELL unless lasting DOWN (bias ${bias})`
@@ -183,9 +207,29 @@ function withBar(recent: TenSecBar[] | null | undefined, bar: TenSecBar): TenSec
   return w;
 }
 
+/** Prior-window high/low from existing OHLC — range edges without inventing new thresholds. */
+export function rangeBoundsFromBars(
+  bars: TenSecBar[]
+): { hi: number; lo: number; span: number } | null {
+  const prior = bars.filter((b) => b && Number.isFinite(b.close)).slice(0, -1).slice(-8);
+  if (prior.length < 3) return null;
+  const hi = Math.max(...prior.map((b) => b.high));
+  const lo = Math.min(...prior.map((b) => b.low));
+  const span = hi - lo;
+  if (!(span > 0) || !Number.isFinite(span)) return null;
+  return { hi, lo, span };
+}
+
+function nearUpper(bar: TenSecBar, bounds: { hi: number; lo: number; span: number }): boolean {
+  return bar.high >= bounds.hi - bounds.span * 0.2 || bar.close >= bounds.hi - bounds.span * 0.25;
+}
+
+function nearLower(bar: TenSecBar, bounds: { hi: number; lo: number; span: number }): boolean {
+  return bar.low <= bounds.lo + bounds.span * 0.2 || bar.close <= bounds.lo + bounds.span * 0.25;
+}
+
 /**
  * SELL/BUY after a large move — only with confirmation on the NEXT closed 10s.
- * Does not sell the impulse candle itself (the circled gold sell).
  */
 export function decideExhaustionEntry(bars: TenSecBar[]): RegimeEntry | null {
   const w = bars.filter((b) => b && Number.isFinite(b.close));
@@ -202,26 +246,27 @@ export function decideExhaustionEntry(bars: TenSecBar[]): RegimeEntry | null {
   const largeUp = prevBody >= 0.0005 || priorNet >= 0.001;
   const largeDown = prevBody <= -0.0005 || priorNet <= -0.001;
 
-  // Confirm SELL: after the up-move, a red 10s that closes below the prior close.
   if (largeUp && priorNet > 0 && dip(cur) && cur.close < prev.close) {
     return {
       direction: 'SELL',
       setup: 'FADE',
+      exhaustion: true,
+      allow_countertrend: true,
       reason: `EXHAUSTION confirm after large up · prev body=${(prevBody * 100).toFixed(3)}% priorNet=${(priorNet * 100).toFixed(3)}% · ${describe(cur)}`,
     };
   }
-  // Confirm BUY: after the dump, a green 10s that closes above the prior close.
   if (largeDown && priorNet < 0 && rally(cur) && cur.close > prev.close) {
     return {
       direction: 'BUY',
       setup: 'FADE',
+      exhaustion: true,
+      allow_countertrend: true,
       reason: `EXHAUSTION confirm after large down · prev body=${(prevBody * 100).toFixed(3)}% priorNet=${(priorNet * 100).toFixed(3)}% · ${describe(cur)}`,
     };
   }
   return null;
 }
 
-/** Last 3×1m: opposite close after a short burst — enough confirmation to fade. */
 export function minuteExhaustionConfirmed(
   direction: 'BUY' | 'SELL',
   candles: Array<{ open: number; close: number }>
@@ -243,23 +288,140 @@ export function minuteExhaustionConfirmed(
   return false;
 }
 
-function gate(
+/** RANGE setup family: rejection at measured prior-window edges (existing OHLC only). */
+export function decideRangeRejection(
+  bar: TenSecBar,
+  recent: TenSecBar[] | null | undefined
+): RegimeEntry | null {
+  const bars = withBar(recent, bar);
+  const bounds = rangeBoundsFromBars(bars);
+  if (!bounds) return null;
+  // Insufficient edge structure — do not invent precision
+  if (bounds.span / Math.max(Math.abs(bounds.hi), 1e-9) < 0.00015) return null;
+
+  if (nearUpper(bar, bounds) && dip(bar) && bar.close < bar.open && movingOrNull(bar)) {
+    return {
+      direction: 'SELL',
+      setup: 'RANGE_REJECTION',
+      allow_countertrend: true,
+      reason: `RANGE_REJECTION at upper edge H=${bounds.hi.toFixed(2)} · ${describe(bar)}`,
+    };
+  }
+  if (nearLower(bar, bounds) && rally(bar) && bar.close > bar.open && movingOrNull(bar)) {
+    return {
+      direction: 'BUY',
+      setup: 'RANGE_REJECTION',
+      allow_countertrend: true,
+      reason: `RANGE_REJECTION at lower edge L=${bounds.lo.toFixed(2)} · ${describe(bar)}`,
+    };
+  }
+  return null;
+}
+
+/** FAILED_BREAKOUT_* — candidate only; require return-into-range confirmation on closed bar. */
+export function decideFailedBreakout(
+  bar: TenSecBar,
+  regime: RegimeName,
+  recent: TenSecBar[] | null | undefined
+): RegimeEntry | null {
+  const bars = withBar(recent, bar);
+  const bounds = rangeBoundsFromBars(bars);
+  if (!bounds) return null;
+
+  if (regime === 'FAILED_BREAKOUT_UP') {
+    // Failed upside: rejection back into/below prior high
+    if (dip(bar) && movingOrNull(bar) && bar.close <= bounds.hi && bar.close < bar.open) {
+      return {
+        direction: 'SELL',
+        setup: 'FAILED_BREAKOUT',
+        allow_countertrend: true,
+        reason: `FAILED_BREAKOUT_UP confirmed · back ≤ H=${bounds.hi.toFixed(2)} · ${describe(bar)}`,
+      };
+    }
+    return null;
+  }
+  if (regime === 'FAILED_BREAKOUT_DOWN') {
+    if (rally(bar) && movingOrNull(bar) && bar.close >= bounds.lo && bar.close > bar.open) {
+      return {
+        direction: 'BUY',
+        setup: 'FAILED_BREAKOUT',
+        allow_countertrend: true,
+        reason: `FAILED_BREAKOUT_DOWN confirmed · back ≥ L=${bounds.lo.toFixed(2)} · ${describe(bar)}`,
+      };
+    }
+    return null;
+  }
+  return null;
+}
+
+/** REVERSAL_CANDIDATE — candidate only; require opposite confirm after directional prior. */
+export function decideReversalConfirm(
+  bar: TenSecBar,
+  recent: TenSecBar[] | null | undefined
+): RegimeEntry | null {
+  const w = withBar(recent, bar);
+  if (w.length < 4) return null;
+  const prior = w.slice(0, -1).slice(-6);
+  const first = prior[0]!;
+  const prev = prior[prior.length - 1]!;
+  const priorNet = (prev.close - first.open) / Math.max(Math.abs(first.open), 1e-9);
+  const bodies = prior.map(bodyPct);
+  const persist =
+    bodies.filter((v) => v > 0.00004).length - bodies.filter((v) => v < -0.00004).length;
+
+  // Prior climb → confirmed SELL reversal
+  if (
+    priorNet > 0.0004 &&
+    persist > 0 &&
+    dip(bar) &&
+    movingOrNull(bar) &&
+    bar.close < prev.close
+  ) {
+    return {
+      direction: 'SELL',
+      setup: 'REVERSAL',
+      allow_countertrend: true,
+      reason: `REVERSAL confirmed after up priorNet=${(priorNet * 100).toFixed(3)}% · ${describe(bar)}`,
+    };
+  }
+  // Prior dump → confirmed BUY reversal
+  if (
+    priorNet < -0.0004 &&
+    persist < 0 &&
+    rally(bar) &&
+    movingOrNull(bar) &&
+    bar.close > prev.close
+  ) {
+    return {
+      direction: 'BUY',
+      setup: 'REVERSAL',
+      allow_countertrend: true,
+      reason: `REVERSAL confirmed after down priorNet=${(priorNet * 100).toFixed(3)}% · ${describe(bar)}`,
+    };
+  }
+  return null;
+}
+
+function gateWithTrend(
   hit: RegimeEntry | null,
   bias: TrendBias,
   bar: TenSecBar,
+  recent: TenSecBar[] | null | undefined,
   regime?: string | null
 ): RegimeEntry | null {
   if (!hit) return null;
   const b = effectiveBias(regime, bias, bar);
-  const deny = denyWithTrendEntry(hit.direction, bar, b);
+  const deny = denyWithTrendEntry(hit.direction, bar, b, recent, {
+    exhaustion: hit.exhaustion,
+    allowCountertrend: hit.allow_countertrend,
+  });
   if (deny) return null;
   return { ...hit, reason: `${hit.reason} · bias ${b}` };
 }
 
 /**
- * Suitable entry for the current 10s regime. Returns null = WAIT.
- * With-trend only: never fade RANGE, never sell a climb, never buy a dump.
- * UNKNOWN / FLAT no longer hard-block — regime or bar implies direction.
+ * Suitable entry for the current 10s regime context.
+ * Returns null = no valid setup evidence (NO_SETUP) — never "regime forbidden".
  */
 export function decideEntryFrom10sRegime(
   bar: TenSecBar,
@@ -267,7 +429,8 @@ export function decideEntryFrom10sRegime(
   bias: TrendBias = 'FLAT',
   recent?: TenSecBar[] | null
 ): RegimeEntry | null {
-  const exhaustion = decideExhaustionEntry(withBar(recent, bar));
+  const bars = withBar(recent, bar);
+  const exhaustion = decideExhaustionEntry(bars);
   if (exhaustion) {
     const b = effectiveBias(regime, bias, bar);
     return { ...exhaustion, reason: `${exhaustion.reason} · bias ${b}` };
@@ -277,103 +440,150 @@ export function decideEntryFrom10sRegime(
   const b = effectiveBias(r, bias, bar);
   const candle = describe(bar);
 
-  // UNKNOWN / COMPRESSION / TRANSITION — bias unlocks; quiet Gold bars still trade with-trend.
+  // --- Setup families selected by regime context (not permission) ---
+
+  if (r === 'RANGE') {
+    const rr = decideRangeRejection(bar, bars);
+    if (rr) return gateWithTrend(rr, b, bar, bars, r);
+    // Also allow exhaustion already handled; no with-trend invent
+    return null;
+  }
+
+  if (r === 'FAILED_BREAKOUT_UP' || r === 'FAILED_BREAKOUT_DOWN') {
+    const fb = decideFailedBreakout(bar, r, bars);
+    if (fb) return gateWithTrend(fb, b, bar, bars, r);
+    return null;
+  }
+
+  if (r === 'REVERSAL_CANDIDATE') {
+    const rev = decideReversalConfirm(bar, bars);
+    if (rev) return gateWithTrend(rev, b, bar, bars, r);
+    return null;
+  }
+
+  // UNKNOWN / COMPRESSION / TRANSITION — use available evidence; do not invent regime
   if (r === 'UNKNOWN' || r === 'TRANSITION' || r === 'COMPRESSION') {
     if (b === 'UP' && softDip(bar)) {
-      return gate(
+      return gateWithTrend(
         { direction: 'BUY', setup: 'PULLBACK', reason: `${r}+bias UP dip-buy · ${candle}` },
         b,
         bar,
+        bars,
         r
       );
     }
     if (b === 'UP' && softRally(bar)) {
-      return gate(
+      return gateWithTrend(
         { direction: 'BUY', setup: 'BREAKOUT', reason: `${r}+bias UP follow · ${candle}` },
         b,
         bar,
+        bars,
         r
       );
     }
     if (b === 'DOWN' && softDip(bar)) {
-      return gate(
+      return gateWithTrend(
         { direction: 'SELL', setup: 'PULLBACK', reason: `${r}+bias DOWN follow dump · ${candle}` },
         b,
         bar,
+        bars,
         r
       );
     }
     return null;
   }
 
-  // Countertrend-by-definition regimes — WAIT (no fade hunt).
-  if (
-    r === 'RANGE' ||
-    r === 'FAILED_BREAKOUT_UP' ||
-    r === 'FAILED_BREAKOUT_DOWN' ||
-    r === 'REVERSAL_CANDIDATE'
-  ) {
-    return null;
-  }
-
   if (r === 'TREND_UP') {
-    // kāpums = BUY: dip-buy OR follow green (not only pullbacks)
     if (movingOrNull(bar) && dip(bar)) {
-      return gate({ direction: 'BUY', setup: 'PULLBACK', reason: `${r} dip-buy · ${candle}` }, b, bar, r);
+      return gateWithTrend(
+        { direction: 'BUY', setup: 'PULLBACK', reason: `${r} dip-buy · ${candle}` },
+        b,
+        bar,
+        bars,
+        r
+      );
     }
     if (movingOrNull(bar) && rally(bar)) {
-      return gate({ direction: 'BUY', setup: 'CONTINUATION', reason: `${r} follow climb · ${candle}` }, b, bar, r);
+      return gateWithTrend(
+        { direction: 'BUY', setup: 'CONTINUATION', reason: `${r} follow climb · ${candle}` },
+        b,
+        bar,
+        bars,
+        r
+      );
     }
     return null;
   }
   if (r === 'TREND_DOWN') {
     if (!movingOrNull(bar) || !dip(bar)) return null;
-    return gate(
+    return gateWithTrend(
       { direction: 'SELL', setup: 'PULLBACK', reason: `${r} follow dump · ${candle}` },
       b,
       bar,
+      bars,
       r
     );
   }
 
   if (r === 'PULLBACK_UPTREND') {
     if (!movingOrNull(bar) || !rally(bar)) return null;
-    return gate(
+    return gateWithTrend(
       { direction: 'BUY', setup: 'CONTINUATION', reason: `${r} resume long · ${candle}` },
       b,
       bar,
+      bars,
       r
     );
   }
   if (r === 'PULLBACK_DOWNTREND') {
     if (!movingOrNull(bar) || !dip(bar)) return null;
-    return gate(
+    return gateWithTrend(
       { direction: 'SELL', setup: 'CONTINUATION', reason: `${r} resume short · ${candle}` },
       b,
       bar,
+      bars,
       r
     );
   }
 
   if (r === 'BREAKOUT_UP') {
     if (!movingOrNull(bar) || dip(bar) || !rally(bar)) return null;
-    return gate({ direction: 'BUY', setup: 'BREAKOUT', reason: `${r} follow · ${candle}` }, b, bar, r);
+    return gateWithTrend(
+      { direction: 'BUY', setup: 'BREAKOUT', reason: `${r} follow · ${candle}` },
+      b,
+      bar,
+      bars,
+      r
+    );
   }
   if (r === 'BREAKOUT_DOWN') {
     if (!movingOrNull(bar) || rally(bar) || !dip(bar)) return null;
-    return gate({ direction: 'SELL', setup: 'BREAKOUT', reason: `${r} follow · ${candle}` }, b, bar, r);
+    return gateWithTrend(
+      { direction: 'SELL', setup: 'BREAKOUT', reason: `${r} follow · ${candle}` },
+      b,
+      bar,
+      bars,
+      r
+    );
   }
 
   if (r === 'EXPANSION') {
     if (!movingOrNull(bar) || b === 'FLAT') return null;
     if (rally(bar)) {
-      return gate({ direction: 'BUY', setup: 'BREAKOUT', reason: `${r} follow up · ${candle}` }, b, bar, r);
+      return gateWithTrend(
+        { direction: 'BUY', setup: 'BREAKOUT', reason: `${r} follow up · ${candle}` },
+        b,
+        bar,
+        bars,
+        r
+      );
     }
     if (dip(bar)) {
-      return gate(
+      return gateWithTrend(
         { direction: 'SELL', setup: 'BREAKOUT', reason: `${r} follow down · ${candle}` },
         b,
         bar,
+        bars,
         r
       );
     }

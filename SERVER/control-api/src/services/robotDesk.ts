@@ -8,7 +8,6 @@ import {
   fetchCapitalMarketQuote,
   fetchCapitalMinutePrices,
   fetchCapitalPrices,
-  isLateMoveOnOneMinute,
   listCapitalOpenPositions,
   updateCapitalStop,
   type CapitalMarketQuote,
@@ -315,8 +314,8 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     git_sha: build.git_sha,
     entry_brain: build.entry_brain,
-    chain: '10s OHLC → REGIME → WITH-TREND ENTRY (no RANGE fade) · Node robotDesk',
-    note: `BUILD ${build.git_sha} · NODE BRAIN · with-trend · SL=0.20% of price · ${build.trend_minutes}-min`,
+    chain: '10s OHLC → REGIME(context) → SETUP EVIDENCE → evaluateStrategy · Node robotDesk',
+    note: `BUILD ${build.git_sha} · NODE BRAIN · regime=context · SL=0.20% of price · ${build.trend_minutes}-min`,
   };
 }
 
@@ -1640,20 +1639,8 @@ async function robotCycleBody(s: Internal) {
       });
     }
 
-    if (direction) {
-      const hist = await fetchCapitalMinutePrices(opened.session, s.epic, 3);
-      if (hist.ok && isLateMoveOnOneMinute(direction, hist.candles)) {
-        pushTick(s, {
-          phase: 'SCAN',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          code: DecisionCodes.NO_SETUP,
-          detail: `NO_SETUP · late on 1m candle (end of move) · ${direction}`,
-        });
-        direction = null;
-      }
-    }
+    // Late-move / setup invalidation is owned solely by evaluateStrategy (minute_candles).
+    // Desk must not apply a second market-analysis Strategy gate after ENTER_*.
 
     // Capital button lag vs already-printed drop/rally (chart / near Capital refs / 10s OHLC).
     // Distant public spot (Yahoo/Aurum basis) is filtered inside detectStaleQuoteAdverse.
