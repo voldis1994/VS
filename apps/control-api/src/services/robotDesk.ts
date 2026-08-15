@@ -6,6 +6,7 @@ import {
   fetchCapitalMarketQuote,
   fetchCapitalMinutePrices,
   fetchCapitalPrices,
+  invalidateCapitalSession,
   isLateMoveOnOneMinute,
   listCapitalOpenPositions,
   updateCapitalStop,
@@ -22,6 +23,7 @@ import {
   reconcileBeforeSubmit,
   submitManagedOrder,
 } from './orderLifecycle.js';
+import { runTradePipeline } from './tradePipeline.js';
 import { emitToClient } from './clientEvents.js';
 import { mapTradeType } from './tradePresentation.js';
 import {
@@ -31,7 +33,7 @@ import {
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
-import { decideEntryFrom10sRegime, denyWithTrendEntry, effectiveBias, resolveTrendBias, TREND_LOOKBACK_10S, type TrendBias } from './entryFromRegime.js';
+import { effectiveBias, resolveTrendBias, TREND_LOOKBACK_10S, type TrendBias } from './entryFromRegime.js';
 import { DecisionCodes, type DecisionCode } from './decisionCodes.js';
 import { runtimeBuildInfo } from './runtimeBuild.js';
 import {
@@ -42,7 +44,7 @@ import {
   type MultiFeedPrice,
   type MultiFeedLeg,
 } from './robotReader.js';
-import { buildFresherRefs, detectStaleQuoteAdverse } from './staleQuoteGuard.js';
+import { buildFresherRefs } from './staleQuoteGuard.js';
 import {
   aggregateSecondsToTen,
   emptyTenSecState,
@@ -1101,8 +1103,32 @@ async function robotCycle(s: Internal) {
     return;
   }
 
+  let session = opened.session;
+
   try {
-    const quote = await fetchCapitalMarketQuote(opened.session, s.epic);
+    let quote = await fetchCapitalMarketQuote(session, s.epic);
+    // P2 session recovery: HTTP/auth failure on market data → invalidate + reconnect once
+    if (
+      !quote.raw_ok &&
+      /401|unauthor|security.?token|session|expired/i.test(quote.detail || '')
+    ) {
+      invalidateCapitalSession(s.connection_id);
+      const refreshed = await ensureCapitalSession(
+        {
+          environment: conn.environment,
+          apiKey: creds.api_key || '',
+          identifier: (conn.identifier || '').trim(),
+          password: creds.password || '',
+          connectionId: s.connection_id,
+          capitalAccountId,
+        },
+        { forceRefresh: true }
+      );
+      if (refreshed.ok) {
+        session = refreshed.session;
+        quote = await fetchCapitalMarketQuote(session, s.epic);
+      }
+    }
     if (!quote.raw_ok) {
       s.reads_fail += 1;
       s.error = quote.detail || 'No quote';
@@ -1213,7 +1239,7 @@ async function robotCycle(s: Internal) {
     pushOhlcTick(picked.mid ?? quote.mid);
 
     // Sync truth from broker — source of ONE TRADE ONLY
-    const listed = await listCapitalOpenPositions(opened.session);
+    const listed = await listCapitalOpenPositions(session);
     let brokerOpen: CapitalOpenPosition | null = null;
     if (listed.ok) {
       brokerOpen = matchOpenOnEpic(listed.positions, s.epic);
@@ -1286,7 +1312,7 @@ async function robotCycle(s: Internal) {
           ((s.open_side === 'BUY' && tighter > cur && tighter < px) ||
             (s.open_side === 'SELL' && tighter < cur && tighter > px));
         if (canTighten) {
-          const upd = await updateCapitalStop(opened.session, s.deal_id, tighter);
+          const upd = await updateCapitalStop(session, s.deal_id, tighter);
           if (upd.ok) {
             s.safety_sl = tighter;
             pushTick(s, {
@@ -1310,7 +1336,7 @@ async function robotCycle(s: Internal) {
 
       const decision = decideBestOutcomeExit(s, quote.mid);
       if (decision.exit) {
-        await exitTrade(opened.session, s, quote, decision.reason);
+        await exitTrade(session, s, quote, decision.reason);
         return;
       }
 
@@ -1375,7 +1401,7 @@ async function robotCycle(s: Internal) {
     // Otherwise a single Capital row would overwrite consensus bars used for regime/entry.
     if (!multiFeedOwnsOhlc(s.multiFeed) && Date.now() - s.last_second_fetch_ms >= 8_000) {
       s.last_second_fetch_ms = Date.now();
-      const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 180);
+      const sec = await fetchCapitalPrices(session, s.epic, 'SECOND', 180);
       if (sec.ok && sec.candles.length >= 10) {
         const bars = aggregateSecondsToTen(sec.candles);
         const last = bars[bars.length - 1];
@@ -1412,7 +1438,7 @@ async function robotCycle(s: Internal) {
     if (Date.now() - s.last_minute_fetch_ms >= 30_000) {
       s.last_minute_fetch_ms = Date.now();
       try {
-        const hist = await fetchCapitalMinutePrices(opened.session, s.epic, 3);
+        const hist = await fetchCapitalMinutePrices(session, s.epic, 3);
         if (hist.ok) s.minuteCandles = hist.candles;
       } catch {
         /* keep previous 1m snapshot */
@@ -1428,114 +1454,79 @@ async function robotCycle(s: Internal) {
         }/${s.feed_sender_count || 0} ${s.feed_source || 'LOCAL'} ${s.feed_agreement || ''}`
       : `10s OHLC seeding · feeds ${s.feed_contributing || 0}/${s.feed_sender_count || 0}`;
 
-    let direction: 'BUY' | 'SELL' | null = null;
-    let reason = '';
-    let setupType: string | null = null;
+    // P3 sole entry path: market → normalize → strategy → setup → decision → risk → TradeIntent
+    const capitalPeerMids = (s.multiFeed?.legs || [])
+      .filter((l) => l.ok && l.mid != null && Number.isFinite(l.mid))
+      .filter((l) => /capital\.com|capital_com/i.test(`${l.name} ${l.sender_id} ${l.detail || ''}`))
+      .map((l) => ({ name: l.name, mid: l.mid as number }));
+    const publicNear = (s.multiFeed?.legs || [])
+      .filter((l) => l.ok && l.mid != null && Number.isFinite(l.mid))
+      .filter((l) => !String(l.detail || '').includes('FAR from Capital'))
+      .filter((l) => !/capital\.com|capital_com/i.test(`${l.name} ${l.sender_id}`))
+      .map((l) => ({ name: l.name, mid: l.mid as number }));
+    const fresherRefs = buildFresherRefs({
+      publicNearMids: [...capitalPeerMids, ...publicNear],
+      ohlcClose: s.ohlcState.last_closed?.close ?? s.ohlc_10s?.last_c ?? null,
+      formingClose: s.ohlcState.forming?.close ?? s.ohlc_10s?.forming_c ?? null,
+    });
 
+    let lateMove = false;
     if (s.ohlcState.just_closed && bar) {
-      const sig = decideEntryFrom10sRegime(bar, s.regime, s.trend_bias, s.closedBars);
-      if (sig) {
-        direction = sig.direction;
-        setupType = sig.setup;
-        reason = sig.reason;
-      } else {
-        const fadeBlock =
-          s.regime === 'RANGE' ||
-          s.regime === 'FAILED_BREAKOUT_UP' ||
-          s.regime === 'FAILED_BREAKOUT_DOWN' ||
-          s.regime === 'REVERSAL_CANDIDATE';
-        const only = fadeBlock
-          ? 'WAIT (need confirm after large move — no SELL on the impulse bar)'
-          : s.trend_bias === 'UP'
-            ? 'only BUY with-trend (dip or follow)'
-            : s.trend_bias === 'DOWN'
-              ? 'only SELL on dump (with-trend)'
-              : 'wait with-trend bias or exhaustion confirm';
-        pushTick(s, {
-          phase: 'DECIDE',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          code: fadeBlock ? DecisionCodes.WAIT_NO_FADE : DecisionCodes.WAIT_NO_SETUP,
-          detail: `${ohlcLine} · ${regimeLabel} not with-trend on this 10s close · ${only}`,
-        });
+      // Probe late-move for the bias-aligned side before intent (pipeline needs boolean)
+      const probeDir: 'BUY' | 'SELL' | null =
+        s.trend_bias === 'UP' ? 'BUY' : s.trend_bias === 'DOWN' ? 'SELL' : null;
+      if (probeDir) {
+        const hist = await fetchCapitalMinutePrices(session, s.epic, 3);
+        if (hist.ok && isLateMoveOnOneMinute(probeDir, hist.candles)) lateMove = true;
       }
-    } else {
+    }
+
+    const pipe = runTradePipeline({
+      quote,
+      epic: s.epic,
+      lot_size: s.lot_size,
+      regime: s.regime,
+      just_closed_bar: s.ohlcState.just_closed && bar ? bar : null,
+      recent_bars: s.closedBars,
+      bar_forming: !(s.ohlcState.just_closed && bar),
+      trend_bias: s.trend_bias || 'FLAT',
+      trading_enabled: s.trading_enabled,
+      entry_enabled: s.entry_enabled,
+      feed_age_ms: 0,
+      fresher_refs: fresherRefs,
+      late_move: lateMove,
+      open_position: Boolean(s.open_side),
+      stopped: !s.trading_enabled,
+    });
+
+    if (!pipe.ok) {
       pushTick(s, {
-        phase: 'WAIT',
+        phase: pipe.code.startsWith('WAIT_') ? 'WAIT' : pipe.code.startsWith('ERROR_') ? 'ERROR' : 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        code: DecisionCodes.WAIT_BAR_FORMING,
-        detail: `${ohlcLine} · forming C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'} · wait bar close`,
+        code: pipe.code,
+        detail: `${ohlcLine} · [${pipe.stage}] ${pipe.detail}`,
       });
+      return;
     }
 
-    if (direction) {
-      const hist = await fetchCapitalMinutePrices(opened.session, s.epic, 3);
-      if (hist.ok && isLateMoveOnOneMinute(direction, hist.candles)) {
-        pushTick(s, {
-          phase: 'WAIT',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          code: DecisionCodes.WAIT_LATE_MOVE,
-          detail: `SKIP · late on 1m candle (end of move) · ${direction}`,
-        });
-        direction = null;
-      }
-    }
-
-    // Capital button lag vs already-printed drop/rally (chart / near Capital refs / 10s OHLC).
-    // Distant public spot (Yahoo/Aurum basis) is filtered inside detectStaleQuoteAdverse.
-    if (direction && quote.mid != null) {
-      const capitalPeerMids = (s.multiFeed?.legs || [])
-        .filter((l) => l.ok && l.mid != null && Number.isFinite(l.mid))
-        .filter((l) => /capital\.com|capital_com/i.test(`${l.name} ${l.sender_id} ${l.detail || ''}`))
-        .map((l) => ({ name: l.name, mid: l.mid as number }));
-      const publicNear = (s.multiFeed?.legs || [])
-        .filter((l) => l.ok && l.mid != null && Number.isFinite(l.mid))
-        .filter((l) => !String(l.detail || '').includes('FAR from Capital'))
-        .filter((l) => !/capital\.com|capital_com/i.test(`${l.name} ${l.sender_id}`))
-        .map((l) => ({ name: l.name, mid: l.mid as number }));
-      const refs = buildFresherRefs({
-        publicNearMids: [...capitalPeerMids, ...publicNear],
-        ohlcClose: s.ohlcState.last_closed?.close ?? s.ohlc_10s?.last_c ?? null,
-        formingClose: s.ohlcState.forming?.close ?? s.ohlc_10s?.forming_c ?? null,
-      });
-      const lag = detectStaleQuoteAdverse(direction, quote.mid, refs);
-      if (lag.block) {
-        pushTick(s, {
-          phase: 'WAIT',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          code: DecisionCodes.WAIT_STALE_FEED,
-          detail: `SKIP · ${lag.reason}`,
-        });
-        direction = null;
-      }
-    }
-
-    if (direction) {
-      const deny = denyWithTrendEntry(direction, bar, s.trend_bias || 'FLAT', s.closedBars, {
-        exhaustion: setupType === 'FADE',
-      });
-      if (deny) {
-        pushTick(s, {
-          phase: 'WAIT',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          code: DecisionCodes.WAIT_COUNTERTREND,
-          detail: `SKIP · ${deny}`,
-        });
-        direction = null;
-      }
-    }
-
-    if (!direction) return;
-    await enterTrade(opened.session, s, direction, quote, reason, setupType);
+    pushTick(s, {
+      phase: 'DECIDE',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      code: pipe.code,
+      detail: `${ohlcLine} · TradeIntent ${pipe.intent.direction} · ${pipe.intent.reason}`,
+    });
+    await enterTrade(
+      session,
+      s,
+      pipe.intent.direction,
+      quote,
+      pipe.intent.reason,
+      pipe.intent.setup_type
+    );
   } catch (err) {
     s.reads_fail += 1;
     const detail = err instanceof Error ? err.message : String(err);

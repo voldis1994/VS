@@ -6,7 +6,11 @@
 import { healthCheck } from '../db/pool.js';
 import { runtimeBuildInfo } from './runtimeBuild.js';
 import { listRobotSessions } from './robotDesk.js';
-import { getCapitalSessionHealth, type CapitalSessionHealthLevel } from './capitalSessionManager.js';
+import {
+  getCapitalSessionHealth,
+  recordCapitalSessionError,
+  type CapitalSessionHealthLevel,
+} from './capitalSessionManager.js';
 import { DecisionCodes } from './decisionCodes.js';
 import { listManagedOrders } from './orderLifecycle.js';
 
@@ -31,6 +35,15 @@ export type SystemHealthReport = {
   build: ReturnType<typeof runtimeBuildInfo>;
   subsystems: HealthSubsystem[];
 };
+
+/** Safe diagnostic inject for P6 reality checks (no broker side-effects). */
+export function injectSafeDiagnosticFault(connectionId: number, reason: string): void {
+  recordCapitalSessionError(
+    connectionId,
+    `[DIAGNOSTIC_INJECT] ${reason || 'safe test fault'}`,
+    undefined
+  );
+}
 
 function worst(a: HealthLevel, b: HealthLevel): HealthLevel {
   const rank: Record<HealthLevel, number> = { OK: 0, WARNING: 1, ERROR: 2, CRITICAL: 3 };

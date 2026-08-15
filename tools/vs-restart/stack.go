@@ -108,8 +108,10 @@ func (a *App) fullRestart() error {
 		return fmt.Errorf("API :3000 neklausās — skaties logu virs šīs rindas")
 	}
 	waitPort("127.0.0.1:18080", 40, a.log)
-	openBrowser("http://127.0.0.1:18080")
-	openBrowser("http://localhost:5173/robot")
+	// P5: galvenais UI ir VS.exe :18090 — ne Vite admin dashboard, ne client browser kā primārais.
+	// Client panel :18080 paliek remote-control (P7); neatveram to automātiski.
+	a.log("[OK] Desktop: http://127.0.0.1:18090  (galvenais UI)")
+	a.log("[OK] Client remote panel: http://127.0.0.1:18080  (nav obligāts)")
 	return nil
 }
 
@@ -424,7 +426,8 @@ func (a *App) startServices() error {
 	// serve = tsx WITHOUT watch — watch double-bind → EADDRINUSE :3000 after ZIP/restart
 	a.spawn(npm, filepath.Join(a.root, "apps", "control-api"), env, "run", "serve")
 	a.spawn("node", a.root, env, filepath.Join(a.root, "tools", "client-public.mjs"))
-	a.spawn(npm, filepath.Join(a.root, "apps", "dashboard"), env, "run", "dev")
+	// P5: do NOT spawn Vite admin dashboard (:5173) — VS.exe :18090 is the primary desktop UI.
+	a.log("[OK] Vite admin dashboard IZLAISTS — galvenais UI ir VS.exe :18090")
 
 	if cf, err := exec.LookPath("cloudflared"); err == nil {
 		a.spawn(cf, a.root, env, "tunnel", "--url", "http://127.0.0.1:18080")
