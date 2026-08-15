@@ -1,0 +1,33 @@
+[Unit]
+Description=VS CORE appliance
+After=network-online.target postgresql.service docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vs-core
+Group=vs-core
+WorkingDirectory=/opt/vs-core
+Environment=VS_CORE_ROOT=/opt/vs-core
+Environment=VS_CORE_DATA=/var/lib/vs-core
+Environment=NODE_ENV=production
+Environment=OPERATING_MODE=DEMO
+Environment=LIVE_TRADING_ENABLED=false
+Environment=CONTROL_API_HOST=127.0.0.1
+Environment=CONTROL_API_PORT=3000
+ExecStart=/opt/vs-core/deploy/vs-core/boot.sh
+Restart=on-failure
+RestartSec=5
+# Resource limits — one bad process must not eat the i3 box
+MemoryMax=4G
+CPUQuota=200%
+LimitNOFILE=65535
+
+# Least privilege
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/vs-core /var/log/vs-core /opt/vs-core
+
+[Install]
+WantedBy=multi-user.target

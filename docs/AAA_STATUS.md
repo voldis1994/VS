@@ -1,31 +1,23 @@
-# VS AAA — interim status (P0–P1)
+# VS AAA / VS CORE — status
 
-## P0 RESULT
+## PREVIOUS MASTER TASK COMPLETE?
 
-**HISTORICAL STRATEGY NOT PROVEN**
+**NO**
 
-No Windows host `.vs-build-sha` / `vs-launcher.log` / decision DB dump in this agent VM.
-Git wall-clock candidates only — see `docs/AAA_P0_STRATEGY_BASELINE.md`.
+## FINAL PRODUCT MASTER TASK STARTED?
 
-Operator must paste:
+**NO** — waiting for previous DoD + `PRE_VS_CORE_MIGRATION_BASELINE`.
 
-```
-Get-Content C:\VS-main\.vs-build-sha
-Get-Content C:\VS-main\vs-launcher.log -Tail 80
-```
+## Evidence
 
-## P1 RESULT
+* Unit: **161 PASS**
+* Acceptance: **19 PASS / 0 FAIL / 4 EXTERNAL_BLOCKER**
+* TUI: `npm run vs-core:tui` (real OS metrics; honest NO DATA / NOT READY)
+* Admin Agent API only (no native Admin/Control apps yet)
 
-Declared single production graph: **Node `robotDesk`** — see `docs/AAA_P1_PRODUCTION_GRAPH.md`.
+## EXTERNAL BLOCKERS
 
-## CODE LANDED THIS STEP
-
-* `decisionCodes.ts` — WAIT_*/ERROR_*/order lifecycle codes (no UNKNOWN decision)
-* `robotDesk` ticks now carry `code` + `[CODE]` prefix when gates fire
-
-## NOT DONE (honest)
-
-P2–P9: session manager module, risk engine, order lifecycle store, reconciliation, native desktop, health UI, updater redesign, Capital DEMO acceptance.
+Capital DEMO credentials · physical appliance · host strategy SHA · final-product gated on previous complete
 
 ## LIVE READINESS
 

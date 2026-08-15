@@ -1,0 +1,10 @@
+[Unit]
+Description=VS CORE watchdog timer
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=30
+Unit=vs-watchdog.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,134 @@
+{
+  "generated_at": "2026-08-15T11:03:36.986Z",
+  "core_version": "0.1.0-vs-core",
+  "strategy_version": "node-robot-desk-main-c123101",
+  "config_version": "1",
+  "db_schema_version": "010",
+  "freeze_commit": "c123101478126b23df4d87751680dd53f8c204ec",
+  "strategy_baseline_status": "HISTORICAL_STRATEGY_NOT_PROVEN",
+  "previous_master_task_complete": false,
+  "live_readiness": "NOT READY",
+  "gates": [
+    {
+      "name": "STRATEGY_REGRESSION",
+      "status": "PASS",
+      "detail": "PASS 7/7 fingerprint=2a94b954298b"
+    },
+    {
+      "name": "ORDER_SAFETY_RISK",
+      "status": "PASS",
+      "detail": "stale/closed/nostop/stop/dup gates"
+    },
+    {
+      "name": "NO_BLIND_RETRY",
+      "status": "PASS",
+      "detail": "submits=1 ok=true"
+    },
+    {
+      "name": "ORDER_LIFECYCLE",
+      "status": "PASS",
+      "detail": "POSITION_OPEN"
+    },
+    {
+      "name": "PRIMARY_FEED_GUARD",
+      "status": "PASS",
+      "detail": "PRIMARY_FEED_OFFLINE"
+    },
+    {
+      "name": "MARKET_STALE_BLOCKS",
+      "status": "PASS",
+      "detail": "STALE"
+    },
+    {
+      "name": "REPLAY_ISOLATION",
+      "status": "PASS",
+      "detail": "orders=0"
+    },
+    {
+      "name": "RECONCILIATION",
+      "status": "PASS",
+      "detail": "clean=true mismatch=POSITION_STATE_MISMATCH"
+    },
+    {
+      "name": "SUPERVISOR",
+      "status": "PASS",
+      "detail": "READY"
+    },
+    {
+      "name": "NO_FAKE_READY",
+      "status": "PASS",
+      "detail": "NOT_READY"
+    },
+    {
+      "name": "MOBILE_API_SECURITY",
+      "status": "PASS",
+      "detail": "password/isolation/revoke/stop"
+    },
+    {
+      "name": "UPDATE_ROLLBACK",
+      "status": "PASS",
+      "detail": "{\"ok\":true,\"version\":\"9.9.9\",\"rolled_back\":true,\"reason\":\"fail\"}"
+    },
+    {
+      "name": "BACKUP_RESTORE",
+      "status": "PASS",
+      "detail": "ok"
+    },
+    {
+      "name": "CRASH_RECOVERY",
+      "status": "PASS",
+      "detail": "READY"
+    },
+    {
+      "name": "CRASH_RECOVERY_BLOCKS_DIRTY",
+      "status": "PASS",
+      "detail": "POSITION_STATE_MISMATCH"
+    },
+    {
+      "name": "FAILURE_INJECT_429",
+      "status": "PASS",
+      "detail": "RATE_LIMITED"
+    },
+    {
+      "name": "FAILURE_INJECT_SESSION_EXPIRY",
+      "status": "PASS",
+      "detail": "CONNECTED"
+    },
+    {
+      "name": "CAPITAL_DEMO_E2E",
+      "status": "EXTERNAL_BLOCKER",
+      "detail": "CAPITAL_DEMO_* credentials not present — cannot claim DEMO acceptance"
+    },
+    {
+      "name": "HARDWARE_APPLIANCE",
+      "status": "EXTERNAL_BLOCKER",
+      "detail": "No physical i3 host in this environment"
+    },
+    {
+      "name": "STRATEGY_HISTORICAL_PROOF",
+      "status": "EXTERNAL_BLOCKER",
+      "detail": "HISTORICAL_STRATEGY_NOT_PROVEN"
+    },
+    {
+      "name": "BOOT_AUTOMATION_LOGIC",
+      "status": "PASS",
+      "detail": "deploy/vs-core + boot.ts present (host install EXTERNAL)"
+    },
+    {
+      "name": "HOST_TELEMETRY_REAL",
+      "status": "PASS",
+      "detail": "ram=0.9 GB/15.6 GB disk=18.2 GB/251.9 GB"
+    },
+    {
+      "name": "FINAL_PRODUCT_TASK",
+      "status": "EXTERNAL_BLOCKER",
+      "detail": "NEXT/FINAL PRODUCT (VS ADMIN native + VS CONTROL native) NOT STARTED — previous master task incomplete"
+    }
+  ],
+  "summary": {
+    "pass": 19,
+    "fail": 0,
+    "partial": 0,
+    "external_blocker": 4
+  }
+}

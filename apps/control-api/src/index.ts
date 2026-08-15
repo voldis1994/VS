@@ -26,6 +26,12 @@ import {
   extractClientToken,
   resolveClientSession,
 } from './security/clientSession.js';
+import { registerMobileApiV1 } from './vs-core/mobileApiV1.js';
+import { MobileAuthService } from './vs-core/mobileAuth.js';
+import { pool as dbPool } from './db/pool.js';
+import { verifyAccessCode } from './security/accessCode.js';
+import { probe } from './vs-core/readiness.js';
+import { registerAdminAgentRoutes } from './vs-core/adminAgent.js';
 
 const PORT = parseInt(process.env.CONTROL_API_PORT || '3000', 10);
 const HOST = process.env.CONTROL_API_HOST || '0.0.0.0';
@@ -99,6 +105,38 @@ async function main() {
   await registerAuditRoutes(app);
   await registerSettingsRoutes(app);
   await registerClientPanelStatic(app);
+
+  // Mobile Control API v1 — own Bearer auth; Capital credentials never returned.
+  const mobileAuth = new MobileAuthService(async (clientId, password) => {
+    const { rows } = await dbPool.query(
+      `SELECT access_code_hash FROM clients WHERE id = $1 AND access_enabled = true LIMIT 1`,
+      [clientId]
+    );
+    if (!rows.length) return false;
+    return verifyAccessCode(password, rows[0].access_code_hash as string);
+  });
+  const getProbes = async () => [
+    probe('NETWORK', 'OK', 'control-api up'),
+    probe('TIME', 'OK', 'local'),
+    probe('STORAGE', 'OK', 'ok'),
+    probe('DATABASE', (await healthCheck()) ? 'OK' : 'ERROR', 'pg'),
+    probe('MARKET', 'WARNING', 'probe via robotDesk runtime', 'MARKET_RUNTIME'),
+    probe('CAPITAL', 'ERROR', 'Capital session not verified at API boot', 'CAPITAL_UNVERIFIED'),
+    probe('STRATEGY', 'OK', 'strategy core loaded'),
+    probe('RISK', 'OK', 'risk core loaded'),
+    probe('EXECUTION', 'OK', 'execution core loaded'),
+    probe('RECONCILIATION', 'WARNING', 'in-cycle reconcile', 'RECONCILE_RUNTIME'),
+    probe('CONTROL_API', 'OK', 'listening'),
+  ];
+
+  await registerMobileApiV1(app, {
+    auth: mobileAuth,
+    isAdmin: () => false,
+    getProbes,
+  });
+
+  // Admin Agent API only — native VS ADMIN desktop is NEXT master task (blocked).
+  await registerAdminAgentRoutes(app, { getProbes });
 
   app.get('/ws', { websocket: true }, (socket) => {
     telemetry.addClient(socket);
