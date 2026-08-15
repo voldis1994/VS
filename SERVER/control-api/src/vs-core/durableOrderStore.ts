@@ -7,6 +7,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs';
 import { dirname, join } from 'path';
 import {
   OrderStore,
+  transitionOrder,
   type OrderRecord,
   type OrderState,
 } from './orderStateMachine.js';
@@ -26,6 +27,7 @@ export type SubmissionLedgerRow = {
     | 'BROKER_RESULT_UNRESOLVED'
     | 'FILLED'
     | 'POSITION_OPEN'
+    | 'POSITION_CLOSED'
     | 'REJECTED';
   deal_reference: string | null;
   deal_id: string | null;
@@ -135,6 +137,31 @@ export class DurableOrderStore extends OrderStore {
         L.state === 'BROKER_RESULT_UNRESOLVED' ||
         L.state === 'BROKER_ACCEPTED'
     );
+  }
+
+  /**
+   * Mark open POSITION_OPEN ledger/order as POSITION_CLOSED after broker flat confirmation.
+   * Idempotent — already-closed rows are left alone. Returns how many orders transitioned.
+   */
+  markPositionClosed(accountId: number, epic: string, detail?: string): number {
+    let n = 0;
+    for (const order of this.openIntents(accountId, epic)) {
+      if (order.state !== 'POSITION_OPEN') continue;
+      try {
+        const closed = transitionOrder(order, 'POSITION_CLOSED', detail);
+        this.put(closed);
+        this.updateLedger(order.client_order_id, { state: 'POSITION_CLOSED' });
+        n += 1;
+      } catch {
+        /* illegal transition — leave as-is */
+      }
+    }
+    for (const L of this.openLedger(accountId, epic)) {
+      if (L.state === 'POSITION_OPEN') {
+        this.updateLedger(L.client_order_id, { state: 'POSITION_CLOSED' });
+      }
+    }
+    return n;
   }
 }
 

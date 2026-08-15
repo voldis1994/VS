@@ -1,6 +1,25 @@
-/** Live Capital exit manager — per-robot, best-outcome + thesis failure from regime. */
+/** Live Capital exit manager — per-robot, best-outcome + thesis invalidation.
+
+ * Strategy owns ENTRY. Exit owns management of an EXISTING position.
+ * Exit must NOT re-run entry permission via live regime gates.
+ */
 
 export type ExitSide = 'BUY' | 'SELL';
+
+/** Setup families where opposite live regime is expected / not automatic invalidation. */
+export const COUNTERTREND_EXIT_SETUPS = new Set([
+  'FADE',
+  'REVERSAL',
+  'FAILED_BREAKOUT',
+  'RANGE_REJECTION',
+]);
+
+/** With-trend families — opposite live regime may invalidate the entry thesis. */
+export const WITH_TREND_EXIT_SETUPS = new Set([
+  'PULLBACK',
+  'CONTINUATION',
+  'BREAKOUT',
+]);
 
 export type ExitSnapshot = {
   open_side: ExitSide | null;
@@ -9,18 +28,35 @@ export type ExitSnapshot = {
   mfe: number;
   mae: number;
   peak_retention: number | null;
+  /** Live regime (market context for manage) — not entry permission. */
   regime?: string | null;
+  /** Immutable Strategy setup family at entry (persisted). */
+  entry_setup?: string | null;
+  /** Immutable regime observed at entry (persisted). */
+  entry_regime?: string | null;
 };
 
 export function favorableMove(side: ExitSide, entry: number, mid: number): number {
   return side === 'BUY' ? mid - entry : entry - mid;
 }
 
-/** Opposite regime vs open side — original PositionManager thesis failure. */
+/**
+ * Opposite live regime vs open side — ONLY for with-trend entry setups.
+ * Counter-trend setups (FADE / REVERSAL / FAILED_BREAKOUT / RANGE_REJECTION)
+ * must not be killed by re-applying opposite-regime as entry permission.
+ * Missing entry_setup → no ThesisFailure (HardInvalidation / trail still apply).
+ */
 export function thesisFailureReason(
   side: ExitSide,
-  regime?: string | null
+  regime?: string | null,
+  entrySetup?: string | null
 ): string | null {
+  const setup = String(entrySetup || '')
+    .trim()
+    .toUpperCase();
+  if (!setup || COUNTERTREND_EXIT_SETUPS.has(setup)) return null;
+  if (!WITH_TREND_EXIT_SETUPS.has(setup)) return null;
+
   const r = String(regime || '')
     .trim()
     .toUpperCase();
@@ -32,7 +68,7 @@ export function thesisFailureReason(
       r === 'PULLBACK_DOWNTREND' ||
       r === 'FAILED_BREAKOUT_UP'
     ) {
-      return `ThesisFailure · BUY vs ${r}`;
+      return `ThesisFailure · BUY ${setup} vs ${r}`;
     }
   } else if (
     r === 'TREND_UP' ||
@@ -40,7 +76,7 @@ export function thesisFailureReason(
     r === 'PULLBACK_UPTREND' ||
     r === 'FAILED_BREAKOUT_DOWN'
   ) {
-    return `ThesisFailure · SELL vs ${r}`;
+    return `ThesisFailure · SELL ${setup} vs ${r}`;
   }
   return null;
 }
@@ -48,14 +84,18 @@ export function thesisFailureReason(
 /**
  * Manage exit — lock the best available outcome.
  * Never give a printed plus back to minus. Broker SAFETY SL is last resort.
+ *
+ * @param nowMs Evaluation clock — must be wall time at T (injectable for tests; no look-ahead).
  */
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
-  mid: number
+  mid: number,
+  nowMs: number = Date.now()
 ): { exit: boolean; reason: string } {
   if (!s.open_side || s.entry_price == null) return { exit: false, reason: '' };
+  if (!Number.isFinite(mid)) return { exit: false, reason: '' };
 
-  const thesis = thesisFailureReason(s.open_side, s.regime);
+  const thesis = thesisFailureReason(s.open_side, s.regime, s.entry_setup);
   if (thesis) return { exit: true, reason: thesis };
 
   const entry = s.entry_price;
@@ -104,7 +144,8 @@ export function decideBestOutcomeExit(
     return { exit: true, reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}` };
   }
 
-  const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
+  const entryMs = s.entry_at ? new Date(s.entry_at).getTime() : NaN;
+  const heldMs = Number.isFinite(entryMs) ? Math.max(0, nowMs - entryMs) : 0;
   if (heldMs > 90_000 && fav > 0 && s.mfe >= lockFloor * 0.6) {
     return {
       exit: true,

@@ -23,6 +23,7 @@ import {
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
+import { canIssueClose, decideCloseFinalize } from './exitLifecycle.js';
 import { effectiveBias, resolveTrendBias, TREND_LOOKBACK_10S, type TrendBias } from './entryFromRegime.js';
 import { DecisionCodes, type DecisionCode } from './decisionCodes.js';
 import { runtimeBuildInfo } from './runtimeBuild.js';
@@ -108,6 +109,12 @@ export type RobotSession = {
   open_side: 'BUY' | 'SELL' | null;
   safety_sl: number | null;
   error: string | null;
+  /** Immutable Strategy setup family at entry — Exit contract. */
+  entry_setup: string | null;
+  /** Immutable regime at entry — Exit contract. */
+  entry_regime: string | null;
+  /** Strategy reason string at entry (audit). */
+  entry_reason: string | null;
   /** When false, robot never invents entries — pipeline fan-out only */
   entry_enabled: boolean;
   ohlc_10s: {
@@ -152,6 +159,10 @@ type Internal = RobotSession & {
   sl_tighten_done: boolean;
   /** Prevent overlapping robotCycle runs on the same session */
   cycle_in_flight: boolean;
+  /** Close request submitted; awaiting broker flat before POSITION_CLOSED */
+  close_pending: boolean;
+  /** In-process close call (duplicate close prevention within/aside cycle) */
+  close_in_flight: boolean;
   feedManager: FeedManager;
 };
 
@@ -239,6 +250,8 @@ function publicSession(s: Internal): RobotSession {
     last_multi_feed_ms: _mf,
     multiFeed: _multi,
     cycle_in_flight: _cif,
+    close_pending: _cp,
+    close_in_flight: _cifClose,
     feedManager: _fm,
     ...rest
   } = s;
@@ -349,6 +362,9 @@ function clearTradeState(s: Internal) {
   s.deal_id = null;
   s.entry_price = null;
   s.entry_at = null;
+  s.entry_setup = null;
+  s.entry_regime = null;
+  s.entry_reason = null;
   s.mfe = 0;
   s.mae = 0;
   s.peak_favorable = 0;
@@ -357,6 +373,8 @@ function clearTradeState(s: Internal) {
   s.safety_sl = null;
   s.mode = 'FLAT';
   s.sl_tighten_done = false;
+  s.close_pending = false;
+  s.close_in_flight = false;
 }
 
 /**
@@ -597,12 +615,94 @@ async function resolveDealId(
   return null;
 }
 
+async function finalizeLocalClose(
+  s: Internal,
+  quote: { bid: number | null; ask: number | null; mid: number | null },
+  reason: string,
+  brokerDetail: string
+) {
+  s.exits_done += 1;
+  s.closed_at_ms = Date.now();
+  s.error = null;
+  pushTick(s, {
+    phase: 'EXIT',
+    bid: quote.bid,
+    ask: quote.ask,
+    mid: quote.mid,
+    code: DecisionCodes.POSITION_CLOSED,
+    detail: `CLOSED ${s.open_side} ${s.display_name} · ${brokerDetail} · ${reason}`,
+  });
+  if (s.client_id) {
+    emitToClient(s.client_id, {
+      type: 'trade_closed',
+      robot_id: s.id,
+      market: s.epic,
+      display_name: s.display_name,
+      side: s.open_side,
+      trade_type: mapTradeType(s.open_side, s.entry_setup, s.entry_regime || s.regime),
+      lot_size: s.lot_size,
+      reason,
+    });
+  }
+
+  try {
+    getDurableOrderStore().markPositionClosed(
+      s.account_id,
+      s.epic,
+      `broker flat · ${reason}`
+    );
+  } catch {
+    /* best effort durable */
+  }
+
+  try {
+    await pool.query(
+      `UPDATE positions SET status = 'CLOSED', closed_at = NOW()
+       WHERE broker_account_id = $1 AND status = 'OPEN'
+         AND instrument_id IN (
+           SELECT id FROM capital_markets WHERE broker_connection_id = $2 AND epic = $3
+         )`,
+      [s.account_id, s.connection_id, s.epic]
+    );
+  } catch {
+    /* best effort */
+  }
+
+  clearTradeState(s);
+}
+
 async function exitTrade(
   session: CapitalSession,
   s: Internal,
   quote: { bid: number | null; ask: number | null; mid: number | null },
   reason: string
 ) {
+  const gate = canIssueClose(s);
+  if (!gate.issue) {
+    if (gate.reason === 'CLOSE_PENDING') {
+      // Verify flat without re-issuing close
+      const listed = await listCapitalOpenPositions(session);
+      const still = listed.ok ? matchOpenOnEpic(listed.positions, s.epic) : null;
+      const fin = decideCloseFinalize({
+        closeHttpOk: true,
+        brokerListOk: listed.ok,
+        stillOpenOnBroker: listed.ok ? !!still : null,
+      });
+      if (fin.action === 'FINALIZE_CLOSED') {
+        await finalizeLocalClose(s, quote, reason, fin.reason);
+      } else {
+        pushTick(s, {
+          phase: 'MANAGE',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `CLOSE PENDING · ${fin.reason} · no duplicate close`,
+        });
+      }
+    }
+    return;
+  }
+
   const dealId = await resolveDealId(session, s, s.last_deal_reference || undefined);
   if (!dealId) {
     pushTick(s, {
@@ -624,9 +724,17 @@ async function exitTrade(
     detail: `EXIT NOW · ${reason}`,
   });
 
-  const result = await closeCapitalPosition(session, dealId);
+  s.close_in_flight = true;
+  let result: Awaited<ReturnType<typeof closeCapitalPosition>>;
+  try {
+    result = await closeCapitalPosition(session, dealId);
+  } finally {
+    s.close_in_flight = false;
+  }
+
   if (!result.ok) {
     s.error = result.detail;
+    s.close_pending = false;
     pushTick(s, {
       phase: 'ERROR',
       bid: quote.bid,
@@ -637,44 +745,32 @@ async function exitTrade(
     return;
   }
 
-  s.exits_done += 1;
   s.last_deal_reference = result.deal_reference || s.last_deal_reference;
-  s.closed_at_ms = Date.now();
-  s.error = null;
+
+  // HTTP close OK ≠ POSITION_CLOSED — require broker flat confirmation.
+  const listed = await listCapitalOpenPositions(session);
+  const still = listed.ok ? matchOpenOnEpic(listed.positions, s.epic) : null;
+  const fin = decideCloseFinalize({
+    closeHttpOk: true,
+    closeDetail: result.detail,
+    brokerListOk: listed.ok,
+    stillOpenOnBroker: listed.ok ? !!still : null,
+  });
+
+  if (fin.action === 'FINALIZE_CLOSED') {
+    await finalizeLocalClose(s, quote, reason, result.detail);
+    return;
+  }
+
+  s.close_pending = true;
+  s.mode = 'MANAGE';
   pushTick(s, {
-    phase: 'EXIT',
+    phase: 'INFO',
     bid: quote.bid,
     ask: quote.ask,
     mid: quote.mid,
-    detail: `CLOSED ${s.open_side} ${s.display_name} · ${result.detail} · ${reason}`,
+    detail: `CLOSE SUBMITTED · awaiting broker flat · ${fin.reason} · not POSITION_CLOSED yet`,
   });
-  if (s.client_id) {
-    emitToClient(s.client_id, {
-      type: 'trade_closed',
-      robot_id: s.id,
-      market: s.epic,
-      display_name: s.display_name,
-      side: s.open_side,
-      trade_type: mapTradeType(s.open_side, null, s.regime),
-      lot_size: s.lot_size,
-      reason,
-    });
-  }
-
-  try {
-    await pool.query(
-      `UPDATE positions SET status = 'CLOSED', closed_at = NOW()
-       WHERE broker_account_id = $1 AND status = 'OPEN'
-         AND instrument_id IN (
-           SELECT id FROM capital_markets WHERE broker_connection_id = $2 AND epic = $3
-         )`,
-      [s.account_id, s.connection_id, s.epic]
-    );
-  } catch {
-    /* best effort */
-  }
-
-  clearTradeState(s);
 }
 
 async function enterTrade(
@@ -1100,6 +1196,9 @@ async function enterTrade(
   s.last_deal_reference = finalBroker.deal_reference || exec.order.broker_deal_reference || null;
   s.entry_price = mid;
   s.entry_at = new Date().toISOString();
+  s.entry_setup = setupType ? String(setupType) : null;
+  s.entry_regime = String(s.regime || 'UNKNOWN');
+  s.entry_reason = reason || null;
   s.mfe = 0;
   s.mae = 0;
   s.peak_favorable = mid;
@@ -1107,6 +1206,8 @@ async function enterTrade(
   s.unrealized = 0;
   s.safety_sl = stopLevel != null && Number.isFinite(stopLevel) ? stopLevel : null;
   s.error = null;
+  s.close_pending = false;
+  s.close_in_flight = false;
 
   const dealId =
     exec.order.broker_deal_id ||
@@ -1383,14 +1484,26 @@ async function robotCycleBody(s: Internal) {
         s.mode = 'MANAGE';
         if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
       } else if (s.open_side) {
-        // Local thought open but broker flat → treat as closed
+        // Local thought open but broker flat → treat as closed (external / pending close confirmed)
         pushTick(s, {
           phase: 'INFO',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
+          code: DecisionCodes.POSITION_CLOSED,
+          detail: s.close_pending
+            ? 'Broker flat — close confirmed · POSITION_CLOSED'
+            : 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
         });
+        try {
+          getDurableOrderStore().markPositionClosed(
+            s.account_id,
+            s.epic,
+            s.close_pending ? 'close pending → broker flat' : 'external flat'
+          );
+        } catch {
+          /* ignore */
+        }
         s.closed_at_ms = Date.now();
         clearTradeState(s);
       }
@@ -1467,7 +1580,26 @@ async function robotCycleBody(s: Internal) {
         }
       }
 
-      const decision = decideBestOutcomeExit(s, quote.mid);
+      // Pending close: verify broker flat only — do not re-run exit decision / duplicate close
+      if (s.close_pending) {
+        await exitTrade(opened.session, s, quote, 'close pending · verify broker flat');
+        return;
+      }
+
+      const decision = decideBestOutcomeExit(
+        {
+          open_side: s.open_side,
+          entry_price: s.entry_price,
+          entry_at: s.entry_at,
+          mfe: s.mfe,
+          mae: s.mae,
+          peak_retention: s.peak_retention,
+          regime: s.regime,
+          entry_setup: s.entry_setup,
+          entry_regime: s.entry_regime,
+        },
+        quote.mid
+      );
       if (decision.exit) {
         await exitTrade(opened.session, s, quote, decision.reason);
         return;
@@ -1478,7 +1610,7 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `ONE TRADE · manage ${s.open_side} · ${s.regime} · UPL ${
+        detail: `ONE TRADE · manage ${s.open_side} · setup ${s.entry_setup || '—'} · ${s.regime} · UPL ${
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
@@ -1775,6 +1907,9 @@ export async function startRobotSession(input: {
     deal_id: null,
     entry_price: null,
     entry_at: null,
+    entry_setup: null,
+    entry_regime: null,
+    entry_reason: null,
     mfe: 0,
     mae: 0,
     peak_retention: null,
@@ -1803,6 +1938,8 @@ export async function startRobotSession(input: {
     multiFeed: null,
     sl_tighten_done: false,
     cycle_in_flight: false,
+    close_pending: false,
+    close_in_flight: false,
     feedManager: (() => {
       const fm = new FeedManager();
       fm.defineSource('capital', 'PRIMARY');
@@ -1880,15 +2017,20 @@ export async function attachManageOnlyRobot(input: {
     if (!existing.entry_at) existing.entry_at = new Date().toISOString();
     if (input.deal_reference) existing.last_deal_reference = input.deal_reference;
     if (input.regime) existing.regime = normalizeRegime(input.regime);
+    if (input.setup_type) existing.entry_setup = String(input.setup_type);
+    if (input.regime && !existing.entry_regime) {
+      existing.entry_regime = normalizeRegime(input.regime);
+    }
+    existing.close_pending = false;
     existing.orders_placed = Math.max(existing.orders_placed, 1);
     pushTick(existing, {
       phase: 'ORDER',
       bid: null,
       ask: null,
       mid: input.entry_price,
-      detail: `PIPELINE FILL ${input.side} ${input.display_name} lot=${input.lot_size} · ${
-        existing.regime
-      } · manage-only (kept MFE ${existing.mfe.toFixed(5)})`,
+      detail: `PIPELINE FILL ${input.side} ${input.display_name} lot=${input.lot_size} · setup ${
+        existing.entry_setup || '—'
+      } · ${existing.regime} · manage-only (kept MFE ${existing.mfe.toFixed(5)})`,
     });
     return publicSession(existing);
   }
@@ -1910,14 +2052,19 @@ export async function attachManageOnlyRobot(input: {
     internal.last_deal_reference = input.deal_reference || null;
     internal.orders_placed = Math.max(internal.orders_placed, 1);
     if (input.regime) internal.regime = normalizeRegime(input.regime);
+    internal.entry_setup = input.setup_type ? String(input.setup_type) : null;
+    internal.entry_regime = input.regime
+      ? normalizeRegime(input.regime)
+      : String(internal.regime || 'UNKNOWN');
+    internal.close_pending = false;
     pushTick(internal, {
       phase: 'ORDER',
       bid: null,
       ask: null,
       mid: input.entry_price,
-      detail: `PIPELINE FILL ${input.side} ${input.display_name} lot=${input.lot_size} · ${
-        internal.regime
-      } · manage-only attached`,
+      detail: `PIPELINE FILL ${input.side} ${input.display_name} lot=${input.lot_size} · setup ${
+        internal.entry_setup || '—'
+      } · ${internal.regime} · manage-only attached`,
     });
   }
   return getRobotSession(session.id) || session;
