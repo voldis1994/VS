@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# START_SERVER — runtime launcher / diagnostics. NOT an installer.
+# Validates config + health; starts supervisor/services; optionally opens TUI.
+# Closing TUI must NOT stop trading (TUI is separate process).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+DATA="${VS_SERVER_DATA:-${VS_CORE_DATA:-$ROOT/../data/vs-server}}"
+LOG="${VS_SERVER_LOG:-${VS_CORE_LOG:-$ROOT/../data/vs-server/logs}}"
+export VS_CORE_DATA="${VS_CORE_DATA:-$DATA}"
+export VS_CORE_ROOT="${VS_CORE_ROOT:-$ROOT}"
+export NODE_ENV="${NODE_ENV:-production}"
+export OPERATING_MODE="${OPERATING_MODE:-DEMO}"
+export LIVE_TRADING_ENABLED="${LIVE_TRADING_ENABLED:-false}"
+
+# Default: localhost only. Production private net: bind VS WireGuard IP (never public 0.0.0.0).
+if [[ "${VS_PRIVATE_NETWORK:-}" == "1" ]]; then
+  export VS_PRIVATE_NETWORK=1
+  export CONTROL_API_HOST="${CONTROL_API_HOST:-10.77.0.1}"
+elif [[ "${ADMIN_BIND:-}" == "lan" ]]; then
+  echo "FAIL: ADMIN_BIND=lan is retired — use VS_PRIVATE_NETWORK=1 (WireGuard) instead of public bind" >&2
+  exit 1
+else
+  export CONTROL_API_HOST="${CONTROL_API_HOST:-127.0.0.1}"
+fi
+export CONTROL_API_PORT="${CONTROL_API_PORT:-3000}"
+
+mkdir -p "$DATA" "$LOG" "$DATA/market" "$DATA/backup" "$DATA/updates" "$DATA/orders" "$DATA/network/keys" "$DATA/network/issued"
+
+echo "VS SERVER START"
+echo "ROOT=$ROOT DATA=$DATA HOST=$CONTROL_API_HOST PORT=$CONTROL_API_PORT MODE=$OPERATING_MODE LIVE=$LIVE_TRADING_ENABLED"
+
+# Validate Node package present
+if [[ ! -f "$ROOT/control-api/package.json" ]]; then
+  echo "FAIL: SERVER/control-api missing — run from repo SERVER/ or after INSTALL_SERVER" >&2
+  exit 1
+fi
+
+cd "$ROOT/control-api"
+if [[ ! -d node_modules ]]; then
+  echo "FAIL: node_modules missing — run INSTALL_SERVER or npm ci in SERVER/control-api" >&2
+  exit 1
+fi
+
+# Ensure SERVER WireGuard identity (public key in registry; private key only under DATA)
+VS_SERVER_DATA="$DATA" VS_CORE_DATA="$DATA" npx tsx -e "
+import { getDeviceRegistry } from './src/vs-core/network/deviceRegistry.ts';
+import { ensureServerIdentity } from './src/vs-core/network/deviceLifecycle.ts';
+const root = process.env.VS_SERVER_DATA!;
+const id = ensureServerIdentity(getDeviceRegistry(root), root);
+console.log('SERVER_IDENTITY', id.server_id, id.public_key.slice(0, 12) + '…');
+" || {
+  echo "FAIL: could not ensure SERVER identity" >&2
+  exit 1
+}
+
+# Fail closed: VS_PRIVATE_NETWORK=1 requires WireGuard READY — never fallback to public HTTP
+if [[ "${VS_PRIVATE_NETWORK:-}" == "1" ]]; then
+  if [[ "${VS_WG_UP:-1}" == "1" && "$(id -u)" -eq 0 && -x "$ROOT/network/UP_WIREGUARD" ]]; then
+    "$ROOT/network/UP_WIREGUARD" || {
+      echo "FAIL: UP_WIREGUARD failed — management NOT READY (no public HTTP fallback)" >&2
+      exit 1
+    }
+  fi
+  WG_IFACE="${VS_WG_INTERFACE:-vs0}"
+  if ! ip -4 addr show dev "$WG_IFACE" 2>/dev/null | grep -q 'inet '; then
+    if [[ "${VS_PRIVATE_NETWORK_ALLOW_UNBOUND:-}" == "1" ]]; then
+      echo "WARN: VS_PRIVATE_NETWORK_ALLOW_UNBOUND=1 — test/dev only"
+    else
+      echo "FAIL: WIREGUARD_NOT_READY — interface $WG_IFACE down; management NOT READY" >&2
+      echo "FAIL: never falling back to public 0.0.0.0 / open HTTP" >&2
+      exit 1
+    fi
+  fi
+fi
+
+# LIVE + default secrets → refuse
+if [[ "$LIVE_TRADING_ENABLED" == "true" ]]; then
+  if [[ -z "${MASTER_ENCRYPTION_KEY:-}" || "${MASTER_ENCRYPTION_KEY}" == *CHANGE_ME* ]]; then
+    echo "FAIL: LIVE_STARTUP_FAIL — default MASTER_ENCRYPTION_KEY" >&2
+    exit 1
+  fi
+  if [[ -z "${API_ADMIN_TOKEN:-}" || "${API_ADMIN_TOKEN}" == "CHANGE_ME_ADMIN_TOKEN" ]]; then
+    echo "FAIL: LIVE_STARTUP_FAIL — default API_ADMIN_TOKEN" >&2
+    exit 1
+  fi
+fi
+
+WITH_TUI="${WITH_TUI:-0}"
+PID_FILE="$DATA/vs-server.pid"
+
+# Start appliance (HTTP + robotDesk) in background if not already
+if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+  echo "INFO: SERVER already running pid=$(cat "$PID_FILE")"
+else
+  nohup node --import tsx src/vs-core/runAppliance.ts >>"$LOG/server.out" 2>&1 &
+  echo $! >"$PID_FILE"
+  echo "STARTED pid=$(cat "$PID_FILE")"
+fi
+
+# Health wait — probe bind address (localhost fallback when private IP not yet routed in this shell)
+ok=0
+HEALTH_HOST="$CONTROL_API_HOST"
+if [[ "$HEALTH_HOST" == "0.0.0.0" || "$HEALTH_HOST" == "::" ]]; then
+  HEALTH_HOST="127.0.0.1"
+fi
+for i in $(seq 1 30); do
+  if curl -fsS "http://${HEALTH_HOST}:${CONTROL_API_PORT}/health" >/dev/null 2>&1 \
+    || curl -fsS "http://127.0.0.1:${CONTROL_API_PORT}/health" >/dev/null 2>&1; then
+    ok=1
+    break
+  fi
+  sleep 0.5
+done
+if [[ "$ok" -ne 1 ]]; then
+  echo "FAIL: SERVER health endpoint not responding on ${HEALTH_HOST}:$CONTROL_API_PORT" >&2
+  echo "See $LOG/server.out" >&2
+  exit 1
+fi
+
+echo "SUCCESS: VS SERVER listening (health OK)"
+echo "NOTE: LIVE_READY is NOT claimed — Capital DEMO + physical i3 remain EXTERNAL_BLOCKER"
+
+if [[ "$WITH_TUI" == "1" ]]; then
+  echo "Starting TUI (closing TUI does not stop SERVER)…"
+  exec node --import tsx src/vs-core/runTui.ts
+fi
+exit 0

@@ -1,7 +1,7 @@
 {
   "title": "VS CORE PREVIOUS MASTER TASK FINAL GATE",
-  "generated_at": "2026-08-15T11:32:36.834Z",
-  "git_sha": "3bc6eda11c5f9b36469bdd02048041f8f5dd8617",
+  "generated_at": "2026-08-15T18:33:55.078Z",
+  "git_sha": "67ffb444f75add7def5abb07d9d135132d09895b",
   "freeze_commit": "c123101478126b23df4d87751680dd53f8c204ec",
   "core_version": "0.1.0-vs-core",
   "strategy_version": "node-robot-desk-main-c123101",
@@ -21,15 +21,15 @@
       "test": "vitest src/vs-core + security + strategy units",
       "command": "npx vitest run src/vs-core ...",
       "result": "exit 0",
-      "source": "apps/control-api/src/vs-core/"
+      "source": "SERVER/control-api/src/vs-core/"
     },
     {
       "name": "STRATEGY_REGRESSION",
       "status": "PASS",
       "test": "runStrategyRegression",
       "command": "embedded in vs-core:verify",
-      "result": "7/7 fingerprint=2a94b954298b2aad",
-      "source": "apps/control-api/src/vs-core/strategyRegression.ts"
+      "result": "7/7 fingerprint=6bc8aed81575baa5",
+      "source": "SERVER/control-api/src/vs-core/strategyRegression.ts"
     },
     {
       "name": "HISTORICAL_BASELINE",
@@ -43,7 +43,7 @@
       "test": "runCapitalDemoVerify",
       "command": "npm run vs-core:capital-demo-verify",
       "result": "EXTERNAL_BLOCKER_CAPITAL_DEMO_CREDENTIALS",
-      "source": "apps/control-api/src/vs-core/capitalDemoVerify.ts"
+      "source": "SERVER/control-api/src/vs-core/capitalDemoVerify.ts"
     },
     {
       "name": "CAPITAL_SESSION_LOGIC",
@@ -51,23 +51,23 @@
       "test": "CAPITAL_SESSION_FIXTURES in verifyProof.test.ts",
       "command": "vitest verifyProof",
       "result": "fixture 401/403/429/refresh",
-      "source": "apps/control-api/src/vs-core/capitalSessionManager.ts"
+      "source": "SERVER/control-api/src/vs-core/capitalSessionManager.ts"
     },
     {
       "name": "LINUX_DEPLOYMENT",
       "status": "PASS",
       "test": "linux-deploy-verify.sh",
-      "command": "bash deploy/vs-core/linux-deploy-verify.sh",
+      "command": "bash SERVER/deploy/linux-deploy-verify.sh",
       "result": "PASS",
-      "source": "deploy/vs-core/"
+      "source": "SERVER/deploy/"
     },
     {
       "name": "PHYSICAL_i3",
       "status": "EXTERNAL_BLOCKER",
       "test": "appliance-verify.sh",
-      "command": "VS_PHYSICAL_APPLIANCE=1 bash deploy/vs-core/appliance-verify.sh",
+      "command": "VS_PHYSICAL_APPLIANCE=1 bash SERVER/deploy/appliance-verify.sh",
       "result": "EXTERNAL_BLOCKER_PHYSICAL_APPLIANCE",
-      "source": "deploy/vs-core/appliance-verify.sh"
+      "source": "SERVER/deploy/appliance-verify.sh"
     },
     {
       "name": "INTEGRATION",
@@ -75,7 +75,7 @@
       "test": "verifyProof + acceptanceExtras",
       "command": "npm run vs-core:verify",
       "result": "covered by vitest suite",
-      "source": "apps/control-api/src/vs-core/verifyProof.test.ts"
+      "source": "SERVER/control-api/src/vs-core/verifyProof.test.ts"
     },
     {
       "name": "RUNTIME_CHAIN",
@@ -83,7 +83,7 @@
       "test": "runRuntimeChain",
       "command": "npm run vs-core:verify",
       "result": "covered by vitest suite",
-      "source": "apps/control-api/src/vs-core/runtimeChain.ts"
+      "source": "SERVER/control-api/src/vs-core/runtimeChain.ts"
     },
     {
       "name": "FEED_SAFETY",
@@ -91,7 +91,7 @@
       "test": "FEED_SAFETY",
       "command": "npm run vs-core:verify",
       "result": "covered by vitest suite",
-      "source": "apps/control-api/src/vs-core/feedManager.ts"
+      "source": "SERVER/control-api/src/vs-core/feedManager.ts"
     },
     {
       "name": "RISK",
@@ -99,7 +99,7 @@
       "test": "RISK_CORE",
       "command": "npm run vs-core:verify",
       "result": "covered by vitest suite",
-      "source": "apps/control-api/src/vs-core/riskCore.ts"
+      "source": "SERVER/control-api/src/vs-core/riskCore.ts"
     },
     {
       "name": "EXECUTION",
@@ -107,7 +107,7 @@
       "test": "TIMEOUT_RECONCILE + RUNTIME_CHAIN",
       "command": "npm run vs-core:verify",
       "result": "covered by vitest suite",
-      "source": "apps/control-api/src/vs-core/executionCore.ts"
+      "source": "SERVER/control-api/src/vs-core/executionCore.ts"
     },
     {
       "name": "DUPLICATE_PROTECTION",
@@ -115,7 +115,7 @@
       "test": "runDuplicateProtectionTest",
       "command": "npm run vs-core:verify",
       "result": "covered by vitest suite",
-      "source": "apps/control-api/src/vs-core/runtimeChain.ts"
+      "source": "SERVER/control-api/src/vs-core/runtimeChain.ts"
     },
     {
       "name": "ORDER_STATE_MACHINE",
@@ -123,7 +123,7 @@
       "test": "ORDER_STATE_MACHINE",
       "command": "npm run vs-core:verify",
       "result": "covered by vitest suite",
-      "source": "apps/control-api/src/vs-core/orderStateMachine.ts"
+      "source": "SERVER/control-api/src/vs-core/orderStateMachine.ts"
     },
     {
       "name": "RECONCILIATION",
@@ -131,7 +131,7 @@
       "test": "RECONCILIATION",
       "command": "npm run vs-core:verify",
       "result": "covered by vitest suite",
-      "source": "apps/control-api/src/vs-core/positionReconcile.ts"
+      "source": "SERVER/control-api/src/vs-core/positionReconcile.ts"
     },
     {
       "name": "CRASH_RECOVERY",
@@ -139,7 +139,7 @@
       "test": "CRASH_RECOVERY",
       "command": "npm run vs-core:verify",
       "result": "covered by vitest suite",
-      "source": "apps/control-api/src/vs-core/crashRecovery.ts"
+      "source": "SERVER/control-api/src/vs-core/crashRecovery.ts"
     },
     {
       "name": "SUPERVISOR",
@@ -147,7 +147,7 @@
       "test": "SUPERVISOR_READINESS",
       "command": "npm run vs-core:verify",
       "result": "covered by vitest suite",
-      "source": "apps/control-api/src/vs-core/supervisor.ts"
+      "source": "SERVER/control-api/src/vs-core/supervisor.ts"
     },
     {
       "name": "READINESS",
@@ -155,7 +155,7 @@
       "test": "SUPERVISOR_READINESS",
       "command": "npm run vs-core:verify",
       "result": "covered by vitest suite",
-      "source": "apps/control-api/src/vs-core/readiness.ts"
+      "source": "SERVER/control-api/src/vs-core/readiness.ts"
     },
     {
       "name": "INCIDENTS",
@@ -163,7 +163,7 @@
       "test": "illegal OSM → incident",
       "command": "npm run vs-core:verify",
       "result": "covered by vitest suite",
-      "source": "apps/control-api/src/vs-core/incidentCenter.ts"
+      "source": "SERVER/control-api/src/vs-core/incidentCenter.ts"
     },
     {
       "name": "SOAK_MEMORY",
@@ -171,7 +171,7 @@
       "test": "runSoakTest",
       "command": "npm run vs-core:verify",
       "result": "covered by vitest suite",
-      "source": "apps/control-api/src/vs-core/soakTest.ts"
+      "source": "SERVER/control-api/src/vs-core/soakTest.ts"
     },
     {
       "name": "DATABASE_RECOVERY",
@@ -179,7 +179,7 @@
       "test": "DATABASE_GATE",
       "command": "npm run vs-core:verify",
       "result": "covered by vitest suite",
-      "source": "apps/control-api/src/vs-core/databaseGate.ts"
+      "source": "SERVER/control-api/src/vs-core/databaseGate.ts"
     },
     {
       "name": "BACKUP",
@@ -187,7 +187,7 @@
       "test": "BACKUP_RESTORE_UPDATER",
       "command": "npm run vs-core:verify",
       "result": "covered by vitest suite",
-      "source": "apps/control-api/src/vs-core/backup.ts"
+      "source": "SERVER/control-api/src/vs-core/backup.ts"
     },
     {
       "name": "RESTORE",
@@ -195,7 +195,7 @@
       "test": "BACKUP_RESTORE_UPDATER",
       "command": "npm run vs-core:verify",
       "result": "covered by vitest suite",
-      "source": "apps/control-api/src/vs-core/backup.ts"
+      "source": "SERVER/control-api/src/vs-core/backup.ts"
     },
     {
       "name": "UPDATER",
@@ -203,7 +203,7 @@
       "test": "BACKUP_RESTORE_UPDATER",
       "command": "npm run vs-core:verify",
       "result": "covered by vitest suite",
-      "source": "apps/control-api/src/vs-core/updater.ts"
+      "source": "SERVER/control-api/src/vs-core/updater.ts"
     },
     {
       "name": "ROLLBACK",
@@ -211,7 +211,7 @@
       "test": "BACKUP_RESTORE_UPDATER",
       "command": "npm run vs-core:verify",
       "result": "covered by vitest suite",
-      "source": "apps/control-api/src/vs-core/updater.ts"
+      "source": "SERVER/control-api/src/vs-core/updater.ts"
     },
     {
       "name": "SECURITY",
@@ -219,7 +219,7 @@
       "test": "SECURITY_ISOLATION",
       "command": "npm run vs-core:verify",
       "result": "covered by vitest suite",
-      "source": "apps/control-api/src/vs-core/mobileAuth.ts"
+      "source": "SERVER/control-api/src/vs-core/mobileAuth.ts"
     },
     {
       "name": "CLIENT_ISOLATION",
@@ -227,7 +227,7 @@
       "test": "SECURITY_ISOLATION + clientIsolation.test",
       "command": "npm run vs-core:verify",
       "result": "covered by vitest suite",
-      "source": "apps/control-api/src/services/clientIsolation.test.ts"
+      "source": "SERVER/control-api/src/services/clientIsolation.test.ts"
     }
   ],
   "external_blockers": [

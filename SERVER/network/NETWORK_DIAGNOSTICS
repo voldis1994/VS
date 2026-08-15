@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# NETWORK_DIAGNOSTICS — PASS/FAIL/EXTERNAL_BLOCKER (never fake PHYSICAL PASS).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+DATA="${VS_SERVER_DATA:-${VS_CORE_DATA:-/var/lib/vs-server}}"
+export VS_SERVER_DATA="$DATA"
+export VS_CORE_DATA="$DATA"
+
+cd "$ROOT/control-api"
+npx tsx -e "
+import { getDeviceRegistry } from './src/vs-core/network/deviceRegistry.ts';
+import { runNetworkDiagnostics, renderNetworkStatusBlock } from './src/vs-core/network/networkDiagnostics.ts';
+const root = process.env.VS_SERVER_DATA!;
+const reg = getDeviceRegistry(root);
+console.log(renderNetworkStatusBlock(reg));
+console.log('---');
+const diag = runNetworkDiagnostics({ dataRoot: root, registry: reg });
+for (const l of diag.lines) {
+  console.log(l.status.padEnd(18), l.name, '—', l.detail);
+}
+console.log('SUMMARY', diag.summary);
+process.exit(diag.summary.fail ? 1 : 0);
+"

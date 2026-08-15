@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# STATUS_SERVER — one real status block for product operations.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+DATA="${VS_SERVER_DATA:-${VS_CORE_DATA:-$ROOT/../data/vs-server}}"
+PID_FILE="$DATA/vs-server.pid"
+PORT="${CONTROL_API_PORT:-3000}"
+TOKEN="${API_ADMIN_TOKEN:-}"
+WG_IFACE="${VS_WG_INTERFACE:-vs0}"
+
+echo "VS SERVER STATUS"
+echo "================"
+echo "SYSTEM"
+if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+  echo "  PROCESS=RUNNING pid=$(cat "$PID_FILE")"
+elif systemctl is-active --quiet vs-server.service 2>/dev/null; then
+  echo "  PROCESS=RUNNING (systemd)"
+else
+  echo "  PROCESS=STOPPED"
+fi
+
+echo "NETWORK / WIREGUARD"
+if ip -4 addr show dev "$WG_IFACE" 2>/dev/null | grep -q 'inet '; then
+  echo "  WIREGUARD=UP $(ip -4 -o addr show dev "$WG_IFACE" | awk '{print $4}')"
+else
+  echo "  WIREGUARD=DOWN"
+fi
+
+echo "FIREWALL"
+if command -v nft >/dev/null 2>&1 && nft list table inet vs_private >/dev/null 2>&1; then
+  echo "  FIREWALL=vs_private PRESENT"
+elif command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi active; then
+  echo "  FIREWALL=ufw ACTIVE"
+else
+  echo "  FIREWALL=NOT_VERIFIED"
+fi
+
+echo "DATABASE"
+if curl -fsS "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
+  echo "  HEALTH=OK"
+else
+  echo "  HEALTH=NOT_READY"
+fi
+
+echo "CORE / MARKET / CAPITAL / ADMIN / CLIENT / INCIDENTS"
+if [[ -n "$TOKEN" && "$TOKEN" != "CHANGE_ME_ADMIN_TOKEN" ]]; then
+  snap="$(curl -fsS -H "x-admin-token: $TOKEN" "http://127.0.0.1:${PORT}/api/v1/admin/snapshot" 2>/dev/null || true)"
+  if [[ -n "$snap" ]]; then
+    echo "$snap" | head -c 1200
+    echo
+  else
+    echo "  ADMIN_SNAPSHOT=NOT_READY"
+  fi
+else
+  echo "  ADMIN_SNAPSHOT=SKIPPED (set API_ADMIN_TOKEN)"
+fi
+
+if [[ -f "$DATA/network/device-registry.json" ]]; then
+  echo "DEVICE_REGISTRY=PRESENT"
+else
+  echo "DEVICE_REGISTRY=MISSING"
+fi
+
+echo "RESULT=see lines above (never invent READY)"
+exit 0

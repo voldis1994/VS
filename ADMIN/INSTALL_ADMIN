@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# INSTALL_ADMIN — product foundation: app deps, local device identity, enrollment, Connection Manager.
+# End user does NOT manually edit WireGuard conf or type :3000.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+DATA="${VS_ADMIN_DATA:-$ROOT/../data/vs-admin}"
+echo "VS ADMIN INSTALL"
+echo "DATA=$DATA"
+cd "$ROOT"
+
+if ! command -v node >/dev/null; then
+  echo "FAIL: Node.js required" >&2
+  exit 1
+fi
+
+npm install
+mkdir -p "$DATA/keys" config
+
+# Product connection config — SERVER_ID only (no ports for end users)
+if [[ ! -f config/admin.connection.json ]]; then
+  cat >config/admin.connection.json <<'EOF'
+{
+  "server_id": "VS-CORE-01",
+  "device_id": "VS-ADMIN-01",
+  "device_token": "",
+  "enrollment_code": "",
+  "note": "Enter enrollment_code once. Connection Manager resolves SERVER services — never type :3000 in product UI."
+}
+EOF
+  echo "Wrote config/admin.connection.json"
+fi
+
+# Generate local device keypair if missing (private key stays on ADMIN device)
+if [[ ! -f "$DATA/keys/device.private" ]]; then
+  node --input-type=module -e "
+import { generateKeyPairSync, createHash, randomBytes } from 'crypto';
+import { writeFileSync, mkdirSync } from 'fs';
+const dir = process.env.DATA + '/keys';
+mkdirSync(dir, { recursive: true });
+const { privateKey, publicKey } = generateKeyPairSync('x25519');
+const privDer = privateKey.export({ type: 'pkcs8', format: 'der' });
+const pubDer = publicKey.export({ type: 'spki', format: 'der' });
+const priv = Buffer.from(privDer).subarray(privDer.length - 32).toString('base64');
+const pub = Buffer.from(pubDer).subarray(pubDer.length - 32).toString('base64');
+writeFileSync(dir + '/device.private', priv + '\n', { mode: 0o600 });
+writeFileSync(dir + '/device.public', pub + '\n', { mode: 0o600 });
+console.log('LOCAL_DEVICE_PUBLIC_KEY', pub.slice(0, 16) + '…');
+" DATA="$DATA"
+  echo "Generated local device identity under $DATA/keys (never commit)"
+fi
+
+chmod +x INSTALL_ADMIN START_ADMIN STOP_ADMIN STATUS_ADMIN 2>/dev/null || true
+echo "SUCCESS: VS ADMIN installed"
+echo "Next: put enrollment_code from SERVER SETUP_PRIVATE_NETWORK into config/admin.connection.json"
+echo "Then START_ADMIN — Connection Manager uses server_id=VS-CORE-01"
+exit 0

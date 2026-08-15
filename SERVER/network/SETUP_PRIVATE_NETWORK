@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# SETUP_PRIVATE_NETWORK — interactive assistant for product private network init.
+# Does not require editing 20 config files by hand.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+DATA="${VS_SERVER_DATA:-${VS_CORE_DATA:-$ROOT/../data/vs-server}}"
+mkdir -p "$DATA/network/keys" "$DATA/network/issued"
+
+echo "========================================"
+echo " VS PRIVATE NETWORK — SETUP ASSISTANT"
+echo "========================================"
+echo "DATA=$DATA"
+echo
+
+if [[ ! -d "$ROOT/control-api/node_modules" ]]; then
+  echo "Installing control-api deps…"
+  (cd "$ROOT/control-api" && npm ci)
+fi
+
+LAN_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true)"
+echo "DETECTED_LAN_IP=${LAN_IP:-UNKNOWN}"
+
+PUBLIC_HINT="$(curl -4 -fsS --max-time 3 https://ifconfig.me 2>/dev/null || true)"
+if [[ -n "$PUBLIC_HINT" ]]; then
+  echo "DETECTED_PUBLIC_IP_HINT=$PUBLIC_HINT"
+  echo "NAT_NOTE: If SERVER is behind NAT/CGNAT without UDP port-forward to WG,"
+  echo "          diagnostics report SERVER_NOT_EXTERNALLY_REACHABLE."
+  echo "          Required: public UDP endpoint, DDNS hostname, or reachable infrastructure."
+else
+  echo "DETECTED_PUBLIC_IP_HINT=UNAVAILABLE"
+  echo "EXTERNAL_BLOCKER candidate: cannot probe public IP from this host"
+fi
+
+if [[ -n "${VS_SETUP_NONINTERACTIVE:-}" ]]; then
+  HOSTNAME_IN="${VS_SERVER_ENDPOINT_HOSTNAME:-VS-CORE-01}"
+  DO_ADMIN="${VS_SETUP_CREATE_ADMIN:-Y}"
+else
+  read -r -p "SERVER endpoint hostname (DDNS / FQDN) [VS-CORE-01]: " HOSTNAME_IN || true
+  HOSTNAME_IN="${HOSTNAME_IN:-VS-CORE-01}"
+  read -r -p "Create ADMIN enrollment now? [Y/n]: " DO_ADMIN || true
+  DO_ADMIN="${DO_ADMIN:-Y}"
+fi
+
+export VS_SERVER_ENDPOINT_HOSTNAME="$HOSTNAME_IN"
+export VS_SETUP_DO_ADMIN="$DO_ADMIN"
+
+cd "$ROOT/control-api"
+VS_SERVER_DATA="$DATA" VS_CORE_DATA="$DATA" \
+  VS_SERVER_ENDPOINT_HOSTNAME="$HOSTNAME_IN" \
+  VS_SETUP_DO_ADMIN="$DO_ADMIN" \
+  npx tsx <<'TS'
+import { getDeviceRegistry } from './src/vs-core/network/deviceRegistry.ts';
+import { ensureServerIdentity } from './src/vs-core/network/deviceLifecycle.ts';
+import { issueEnrollmentPackage } from './src/vs-core/network/enrollment.ts';
+import { writeFileSync, mkdirSync } from 'fs';
+import { join } from 'path';
+
+const root = process.env.VS_SERVER_DATA!;
+const reg = getDeviceRegistry(root);
+reg.setEndpointHostname(process.env.VS_SERVER_ENDPOINT_HOSTNAME || 'VS-CORE-01');
+const id = ensureServerIdentity(reg, root);
+const meta = reg.getMeta();
+console.log('');
+console.log('SERVER_IDENTITY');
+console.log('  id=', id.server_id);
+console.log('  private_address=', meta.server_private_ip);
+console.log('  public_key_fp=', id.public_key.slice(0, 16) + '…');
+console.log('  endpoint_hostname=', meta.server_endpoint_hostname);
+console.log('  wg_port=', meta.wg_listen_port);
+console.log('');
+
+const doAdmin = (process.env.VS_SETUP_DO_ADMIN || 'Y').toUpperCase().startsWith('Y');
+if (doAdmin) {
+  const pkg = issueEnrollmentPackage(reg, {
+    device_type: 'ADMIN',
+    device_id: 'VS-ADMIN-01',
+    created_by: 'SETUP_PRIVATE_NETWORK',
+  });
+  const out = join(root, 'network', 'issued', 'ADMIN_ENROLLMENT.json');
+  mkdirSync(join(root, 'network', 'issued'), { recursive: true });
+  writeFileSync(out, JSON.stringify(pkg, null, 2), { mode: 0o600 });
+  console.log('ADMIN_ENROLLMENT');
+  console.log('  enrollment_id=', pkg.enrollment_id);
+  console.log('  device_id=', pkg.device_id);
+  console.log('  expires_at=', pkg.expires_at);
+  console.log('  package_file=', out);
+  console.log('  enrollment_code=', pkg.enrollment_code);
+  console.log('');
+  console.log('Next: on ADMIN PC run INSTALL_ADMIN and enter/scan enrollment_code.');
+  console.log('Do NOT type management ports — Connection Manager uses SERVER_ID.');
+}
+TS
+
+echo
+echo "Next steps:"
+echo "  1) Apply firewall:  sudo $ROOT/network/APPLY_FIREWALL"
+echo "  2) Bring WireGuard: sudo $ROOT/network/UP_WIREGUARD"
+echo "  3) Start SERVER:    $ROOT/START_SERVER  (fail-closed if WG down + VS_PRIVATE_NETWORK=1)"
+echo "  4) Diagnostics:     $ROOT/network/NETWORK_DIAGNOSTICS"
+echo
+echo "SUCCESS: network foundation initialized (software)."
+echo "PHYSICAL_i3 remains EXTERNAL_BLOCKER until real hardware install."

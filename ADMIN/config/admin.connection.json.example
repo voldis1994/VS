@@ -1,0 +1,7 @@
+{
+  "server_id": "VS-CORE-01",
+  "device_id": "VS-ADMIN-01",
+  "device_token": "",
+  "enrollment_code": "",
+  "note": "Product UX: SERVER identity only. Connection Manager resolves internal endpoints. Never commit tokens or WireGuard private keys. Ports are internal — not typed by end users."
+}

@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# APPLY_FIREWALL — SERVER host firewall for VS Private Network (product).
+# DEFAULT INBOUND DENY.
+# Allow WireGuard UDP only as public ingress.
+# Application services only from VS private / localhost.
+# CLIENT subnet must not reach ADMIN subnet; CLIENT ↛ CLIENT.
+set -euo pipefail
+
+WG_IFACE="${VS_WG_INTERFACE:-vs0}"
+WG_PORT="${VS_WG_LISTEN_PORT:-51820}"
+API_PORT="${CONTROL_API_PORT:-3000}"
+SUPERNET="${VS_WG_SUBNET:-10.77.0.0/16}"
+ADMIN_NET="${VS_WG_ADMIN_NET:-10.77.1.0/24}"
+CLIENT_NET="${VS_WG_CLIENT_NET:-10.77.10.0/20}"
+SERVER_IP="${VS_WG_SERVER_IP:-10.77.0.1}"
+
+echo "VS SERVER FIREWALL (product)"
+echo "IFACE=$WG_IFACE PORT=$WG_PORT API=$API_PORT"
+echo "SUPERNET=$SUPERNET ADMIN=$ADMIN_NET CLIENT=$CLIENT_NET SERVER=$SERVER_IP"
+
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "FAIL: APPLY_FIREWALL requires root" >&2
+  exit 1
+fi
+
+if command -v ufw >/dev/null 2>&1; then
+  ufw --force reset || true
+  ufw default deny incoming
+  ufw default allow outgoing
+  ufw allow OpenSSH || true
+  ufw allow "${WG_PORT}/udp" comment 'VS WireGuard transport only'
+  # Management/API only from VS private supernet (not public internet)
+  ufw allow from "$SUPERNET" to any port "$API_PORT" proto tcp comment 'VS private API'
+  ufw --force enable
+  echo "SUCCESS: ufw default deny + WG UDP + private API"
+  echo "NOTE: CLIENT↛ADMIN / CLIENT↛CLIENT also enforced in nft path and app auth"
+  # Prefer nft for forward segmentation when available
+fi
+
+if command -v nft >/dev/null 2>&1; then
+  nft delete table inet vs_private 2>/dev/null || true
+  nft -f - <<EOF
+table inet vs_private {
+  chain input {
+    type filter hook input priority 0; policy drop;
+    ct state established,related accept
+    iif lo accept
+    udp dport ${WG_PORT} accept
+    ip saddr ${SUPERNET} tcp dport ${API_PORT} accept
+    tcp dport 22 accept
+  }
+  chain forward {
+    type filter hook forward priority 0; policy drop;
+    ct state established,related accept
+    # ADMIN may reach SERVER infrastructure
+    ip saddr ${ADMIN_NET} ip daddr ${SERVER_IP} accept
+    # CLIENT may reach SERVER only (not ADMIN devices, not other clients)
+    ip saddr ${CLIENT_NET} ip daddr ${SERVER_IP} accept
+    # Explicit deny CLIENT → ADMIN
+    ip saddr ${CLIENT_NET} ip daddr ${ADMIN_NET} drop
+    # Explicit deny CLIENT → CLIENT
+    ip saddr ${CLIENT_NET} ip daddr ${CLIENT_NET} drop
+  }
+}
+EOF
+  echo "SUCCESS: nftables vs_private applied (CLIENT↛ADMIN, CLIENT↛CLIENT)"
+  exit 0
+fi
+
+if command -v ufw >/dev/null 2>&1; then
+  exit 0
+fi
+
+echo "FAIL: neither ufw nor nft available" >&2
+exit 1

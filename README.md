@@ -1,22 +1,20 @@
-# Market Reader
+# Market Reader / VS
 
-Real-time multi-source market intelligence engine for event-driven scalping (~10 second horizon).
+Real-time multi-source market intelligence + VS SERVER trading appliance.
 
-## What This Is
+## Product boundaries
 
-Market Reader is **not** an RSI/EMA/MACD bot. It is a layered system that:
+```
+VS/
+├── SERVER/     # Authoritative brain (i3) — INSTALL_SERVER / START_SERVER
+├── ADMIN/      # Management client (personal PC) — INSTALL_ADMIN / START_ADMIN
+└── CLIENT/     # Device app build — BUILD_CLIENT (native UI deferred)
+```
 
-1. Ingests multi-source market data (tick, quote, trade, order-book)
-2. Normalizes timestamps and assesses data quality
-3. Fuses multiple feeds with lead/lag analysis
-4. Computes incremental features on rolling windows (10ms–60s)
-5. Builds structured Market State snapshots
-6. Classifies market regimes
-7. Discovers setup hypotheses
-8. Accumulates sequential evidence
-9. Generates explainable TradeIntents with EV calculation
-10. Routes execution to multiple broker accounts
-11. Manages positions independently via Exit Engine
+Money path lives under `SERVER/control-api` (verified P0). Compatibility symlinks:
+`apps/control-api` → `SERVER/control-api`, `deploy/vs-core` → `SERVER/deploy`.
+
+**LIVE_READY is NOT claimed** until Capital DEMO + physical i3 are proven on real hardware.
 
 ## Architecture
 
@@ -26,7 +24,7 @@ MARKET DATA → INGESTION → NORMALIZATION → DATA QUALITY → FEED FUSION
   → ENTRY → EXECUTION ROUTER → BROKER → POSITION MANAGER → EXIT
 ```
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/VS_ARCHITECTURE_INVENTORY.md](docs/VS_ARCHITECTURE_INVENTORY.md).
 
 ## Prerequisites
 

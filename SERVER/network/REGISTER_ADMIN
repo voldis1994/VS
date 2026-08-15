@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# REGISTER_ADMIN — create VS-ADMIN device on SERVER; write peer config under data dir (not git).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+DATA="${VS_SERVER_DATA:-${VS_CORE_DATA:-/var/lib/vs-server}}"
+export VS_SERVER_DATA="$DATA"
+export VS_CORE_DATA="$DATA"
+NAME="${1:-VS-ADMIN-01}"
+
+mkdir -p "$DATA"
+cd "$ROOT/control-api"
+exec npx tsx -e "
+import { getDeviceRegistry } from './src/vs-core/network/deviceRegistry.ts';
+import { ensureServerIdentity, registerAdminDevice } from './src/vs-core/network/deviceLifecycle.ts';
+const root = process.env.VS_SERVER_DATA!;
+const reg = getDeviceRegistry(root);
+ensureServerIdentity(reg, root);
+const issued = registerAdminDevice(reg, root, { device_id: '${NAME}', device_name: '${NAME}' });
+console.log(JSON.stringify({
+  ok: true,
+  device_id: issued.device_id,
+  private_ip: issued.private_ip,
+  peer_config_path: issued.peer_config_path,
+  device_token: issued.device_token,
+  note: 'Copy peer_config_path to ADMIN securely; do not commit private keys'
+}, null, 2));
+"
