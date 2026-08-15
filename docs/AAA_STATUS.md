@@ -1,32 +1,25 @@
-# VS AAA — interim status (P0–P1)
+# VS AAA / VS CORE — status
 
 ## P0 RESULT
 
-**HISTORICAL STRATEGY NOT PROVEN**
-
-No Windows host `.vs-build-sha` / `vs-launcher.log` / decision DB dump in this agent VM.
-Git wall-clock candidates only — see `docs/AAA_P0_STRATEGY_BASELINE.md`.
-
-Operator must paste:
-
-```
-Get-Content C:\VS-main\.vs-build-sha
-Get-Content C:\VS-main\vs-launcher.log -Tail 80
-```
+**HISTORICAL STRATEGY NOT PROVEN** — see `docs/AAA_P0_STRATEGY_BASELINE.md` and `docs/VS_CORE_PHASE_A_AUDIT.md`.
 
 ## P1 RESULT
 
 Declared single production graph: **Node `robotDesk`** — see `docs/AAA_P1_PRODUCTION_GRAPH.md`.
 
-## CODE LANDED THIS STEP
+## VS CORE (this branch)
 
-* `decisionCodes.ts` — WAIT_*/ERROR_*/order lifecycle codes (no UNKNOWN decision)
-* `robotDesk` ticks now carry `code` + `[CODE]` prefix when gates fire
+Implemented Phase A–K **foundation in code** (not docs-only):
 
-## NOT DONE (honest)
+* `apps/control-api/src/vs-core/**` — Market, Strategy wrap, Risk, Execution, Order SM, Replay, Supervisor, Readiness, Incidents, Updater, Backup, Mobile Auth/API v1
+* `robotDesk.enterTrade` — Risk gate + Order SM + **no naked SL** + timeout→reconcile
+* `deploy/vs-core/` — Linux boot + systemd + watchdog
+* Migration `010_vs_core.sql`
+* Tests: **150 PASS** (28 new CORE)
 
-P2–P9: session manager module, risk engine, order lifecycle store, reconciliation, native desktop, health UI, updater redesign, Capital DEMO acceptance.
+Full matrix: `docs/VS_CORE_RELEASE_REPORT.md`
 
 ## LIVE READINESS
 
-**NOT READY**
+**NOT READY** — Capital DEMO E2E and physical appliance remain EXTERNAL BLOCKERS.

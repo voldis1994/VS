@@ -2,14 +2,15 @@
 
 **Generated:** 2026-08-15  
 **Branch:** `cursor/vs-core-os-master-0bd7`  
-**Freeze (Phase A):** `c123101478126b23df4d87751680dd53f8c204ec`
+**Freeze (Phase A):** `c123101478126b23df4d87751680dd53f8c204ec`  
+**Implementation commit:** `c4b3bf2c9f6348b391d4133f183ef9baf2f6fc66`
 
 ## VERSIONS
 
 | Field | Value |
 | --- | --- |
 | CORE VERSION | `0.1.0-vs-core` |
-| GIT COMMIT | (this branch tip — see git) |
+| GIT COMMIT | `c4b3bf2c9f6348b391d4133f183ef9baf2f6fc66` |
 | STRATEGY VERSION | `node-robot-desk-main-c123101` |
 | CONFIG VERSION | `1` |
 | DB VERSION | `010` (migration `010_vs_core.sql`) |
