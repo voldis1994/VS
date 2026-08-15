@@ -7,6 +7,7 @@ const PUBLIC_PATHS = [
   '/api/system/mode',
   '/api/client-auth/',
   '/api/client/',
+  '/api/v1/',
   '/ws/client',
 ];
 

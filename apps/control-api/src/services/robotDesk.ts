@@ -44,6 +44,15 @@ import {
   type TenSecBar,
   type TenSecState,
 } from './tenSecondOhlc.js';
+import { evaluateRisk } from '../vs-core/riskCore.js';
+import { OrderStore } from '../vs-core/orderStateMachine.js';
+import {
+  executeTradeIntent,
+  newDecisionId,
+  newIntentId,
+} from '../vs-core/executionCore.js';
+import { STRATEGY_VERSION, CONFIG_VERSION } from '../vs-core/versions.js';
+import { getClientTradingRegistry } from '../vs-core/clientTrading.js';
 
 export type RobotTick = {
   at: string;
@@ -516,10 +525,14 @@ export async function stopRobotSession(id: string): Promise<RobotSession | null>
   if (!s) return null;
   s.running = false;
   s.trading_enabled = false;
+  s.entry_enabled = false;
   s.stopped_at = new Date().toISOString();
   if (s.timer) {
     clearInterval(s.timer);
     s.timer = null;
+  }
+  if (s.client_id) {
+    getClientTradingRegistry().stop(s.client_id);
   }
   pushTick(s, {
     phase: 'INFO',
@@ -691,6 +704,16 @@ async function enterTrade(
       });
       return;
     }
+  } else {
+    pushTick(s, {
+      phase: 'WAIT',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      code: DecisionCodes.WAIT_RISK_LIMIT,
+      detail: `ENTRY blocked — cannot reconcile positions before order (${listed.detail || 'list failed'})`,
+    });
+    return;
   }
 
   pushTick(s, {
@@ -709,134 +732,337 @@ async function enterTrade(
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
+      code: DecisionCodes.ERROR_NO_QUOTE,
       detail: 'ENTRY blocked — no mid for safety SL',
     });
     return;
   }
 
-  // Safety SL: 0.20% of price
+  // Mobile STOP blocks new entries even if robot process still runs.
+  // Absent registry row → fall back to robot entry_enabled only.
+  const clientTrading = getClientTradingRegistry();
+  const regState = s.client_id > 0 ? clientTrading.get(s.client_id) : undefined;
+  const clientEnabled =
+    regState != null ? regState.trading_enabled && s.entry_enabled : s.entry_enabled;
+
+  // Pre-compute stop — Risk forbids entry without stop; never fall back to naked order.
   const minPts = quote.min_stop_points;
   const minPrice = quote.min_stop_distance ?? null;
   const unit = (quote.min_stop_unit || 'POINTS').toUpperCase();
   const useDistance = minPts != null && minPts > 0 && !unit.includes('PERCENT');
   const loosenSteps = [1, 1.08, 1.16, 1.28];
 
-  let stopLevel: number | null = null;
-  let usedStopDistance: number | null = null;
-  let result: Awaited<ReturnType<typeof createCapitalPosition>> | null = null;
-
+  let plannedStopDistance: number | null = null;
+  let plannedStopLevel: number | null = null;
   if (useDistance) {
-    for (const loosen of loosenSteps) {
-      const basePts = safetyStopDistancePts(mid, minPts!, quote.point_size ?? null);
-      const distPts = Math.max(basePts * loosen, minPts! * 2.5);
-      const stopDistance =
-        distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
-      const expect = expectedStopFromDistance(
-        direction,
-        mid,
-        quote.bid,
-        quote.ask,
-        stopDistance,
-        quote.point_size ?? null
-      );
-      pushTick(s, {
-        phase: 'INFO',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `SL 0.20% stopDistance=${stopDistance} pts (Capital min=${minPts} · ~level ${
-          expect ?? 'n/a'
-        } · x${loosen})`,
-      });
-      result = await createCapitalPosition(session, {
-        epic: s.epic,
-        direction,
-        size: s.lot_size,
-        stopDistance,
-      });
-      if (result.ok) {
-        usedStopDistance = stopDistance;
-        stopLevel = expect;
-        break;
-      }
-      if (!/stop|distance|validation|reject|attached|level/i.test(result.detail)) break;
-      pushTick(s, {
-        phase: 'WAIT',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `SL distance rejected — loosen x${loosen}: ${result.detail}`,
-      });
-    }
+    const basePts = safetyStopDistancePts(mid, minPts!, quote.point_size ?? null);
+    const distPts = Math.max(basePts, minPts! * 2.5);
+    plannedStopDistance = distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
+    plannedStopLevel = expectedStopFromDistance(
+      direction,
+      mid,
+      quote.bid,
+      quote.ask,
+      plannedStopDistance,
+      quote.point_size ?? null
+    );
+  } else {
+    plannedStopLevel = safetyStopLevel(
+      direction,
+      mid,
+      quote.bid,
+      quote.ask,
+      quote.spread ?? null,
+      minPrice,
+      1
+    );
   }
 
-  if (!result?.ok) {
-    for (const loosen of loosenSteps) {
-      const level = safetyStopLevel(
-        direction,
-        mid,
-        quote.bid,
-        quote.ask,
-        quote.spread ?? null,
-        minPrice,
-        loosen
-      );
-      const dist = direction === 'BUY' ? mid - level : level - mid;
-      pushTick(s, {
-        phase: 'INFO',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `SL 0.20% try stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
-          minPrice ?? 'n/a'
-        } · spread=${quote.spread ?? 'n/a'} · x${loosen})`,
-      });
-      result = await createCapitalPosition(session, {
-        epic: s.epic,
-        direction,
-        size: s.lot_size,
-        stopLevel: level,
-      });
-      if (result.ok) {
-        stopLevel = level;
-        break;
-      }
-      if (!/stop|distance|validation|reject|attached|level/i.test(result.detail)) break;
-      pushTick(s, {
-        phase: 'WAIT',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `SL level rejected — loosen x${loosen}: ${result.detail}`,
-      });
-    }
-  }
-
-  if (!result?.ok) {
+  const stopAttached = plannedStopDistance != null || plannedStopLevel != null;
+  const risk = evaluateRisk({
+    client_id: s.client_id,
+    account_id: s.account_id,
+    epic: s.epic,
+    direction,
+    size: s.lot_size,
+    client_trading_enabled: clientEnabled,
+    market_open: marketAllowsTrading(quote.market_status),
+    feed_fresh: true,
+    feed_offline: false,
+    spread: quote.spread ?? null,
+    max_spread: null,
+    has_open_position: false,
+    has_duplicate_intent: false,
+    in_cooldown: false,
+    session_healthy: true,
+    time_sync_ok: true,
+    reconcile_clean: true,
+    stop_attached: stopAttached,
+    operating_mode: String(s.environment || '').toLowerCase() === 'live' ? 'LIVE' : 'DEMO',
+    live_trading_enabled: process.env.LIVE_TRADING_ENABLED === 'true',
+  });
+  if (!risk.ok) {
     pushTick(s, {
       phase: 'WAIT',
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `Safety SL not accepted — entry without SL (${result?.detail || 'unknown'})`,
+      code: DecisionCodes.RISK_REJECTED,
+      detail: `${risk.code}: ${risk.reason}`,
     });
-    result = await createCapitalPosition(session, {
+    return;
+  }
+
+  pushTick(s, {
+    phase: 'INFO',
+    bid: quote.bid,
+    ask: quote.ask,
+    mid: quote.mid,
+    code: DecisionCodes.RISK_ACCEPTED,
+    detail: `RISK_ACCEPTED · ${direction} lot=${s.lot_size}`,
+  });
+
+  let stopLevel: number | null = null;
+  let usedStopDistance: number | null = null;
+  let submitTimedOut = false;
+
+  const orderStore = new OrderStore();
+  const intentId = newIntentId();
+  const decisionId = newDecisionId();
+  /** Box avoids TS control-flow narrowing of closed-over lets after await. */
+  const brokerBox: {
+    current: Awaited<ReturnType<typeof createCapitalPosition>> | null;
+  } = { current: null };
+  const trySubmit = async (
+    params: { stopDistance?: number; stopLevel?: number }
+  ): Promise<Awaited<ReturnType<typeof createCapitalPosition>>> => {
+    try {
+      return await createCapitalPosition(session, {
+        epic: s.epic,
+        direction,
+        size: s.lot_size,
+        ...params,
+      });
+    } catch (e) {
+      submitTimedOut = true;
+      return {
+        ok: false,
+        detail: e instanceof Error ? e.message : String(e),
+        deal_reference: undefined,
+        status: 0,
+        json: null,
+      };
+    }
+  };
+
+  // Execution via order state machine — timeout triggers reconcile, not blind retry of same payload.
+  const exec = await executeTradeIntent(
+    {
+      intent_id: intentId,
+      decision_id: decisionId,
+      client_id: s.client_id,
+      account_id: s.account_id,
       epic: s.epic,
       direction,
       size: s.lot_size,
-    });
-    stopLevel = null;
-    usedStopDistance = null;
-  }
+      stop_distance: plannedStopDistance,
+      stop_level: plannedStopLevel,
+      strategy_version: STRATEGY_VERSION,
+      config_version: CONFIG_VERSION,
+      market_snapshot_id: `desk_${s.id}_${Date.now()}`,
+    },
+    {
+      client_id: s.client_id,
+      account_id: s.account_id,
+      epic: s.epic,
+      direction,
+      size: s.lot_size,
+      client_trading_enabled: clientEnabled,
+      market_open: marketAllowsTrading(quote.market_status),
+      feed_fresh: true,
+      feed_offline: false,
+      spread: quote.spread ?? null,
+      max_spread: null,
+      has_open_position: false,
+      has_duplicate_intent: orderStore.openIntents(s.account_id, s.epic).length > 0,
+      in_cooldown: false,
+      session_healthy: true,
+      time_sync_ok: true,
+      reconcile_clean: true,
+      stop_attached: stopAttached,
+      operating_mode: String(s.environment || '').toLowerCase() === 'live' ? 'LIVE' : 'DEMO',
+      live_trading_enabled: process.env.LIVE_TRADING_ENABLED === 'true',
+    },
+    {
+      orderStore,
+      submit: async (intent, _clientOrderId) => {
+        // SL distance attempts (loosen only on stop-validation rejects — not network timeout)
+        if (useDistance && intent.stop_distance != null) {
+          for (const loosen of loosenSteps) {
+            if (submitTimedOut) break;
+            const basePts = safetyStopDistancePts(mid, minPts!, quote.point_size ?? null);
+            const distPts = Math.max(basePts * loosen, minPts! * 2.5);
+            const stopDistance =
+              distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
+            const expect = expectedStopFromDistance(
+              direction,
+              mid,
+              quote.bid,
+              quote.ask,
+              stopDistance,
+              quote.point_size ?? null
+            );
+            pushTick(s, {
+              phase: 'INFO',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              code: DecisionCodes.ORDER_SUBMITTING,
+              detail: `SL 0.20% stopDistance=${stopDistance} pts (Capital min=${minPts} · ~level ${
+                expect ?? 'n/a'
+              } · x${loosen})`,
+            });
+            brokerBox.current = await trySubmit({ stopDistance });
+            if (brokerBox.current.ok) {
+              usedStopDistance = stopDistance;
+              stopLevel = expect;
+              return {
+                ok: true,
+                deal_reference: brokerBox.current.deal_reference,
+                detail: brokerBox.current.detail,
+              };
+            }
+            if (submitTimedOut) {
+              return { ok: false, timed_out: true, detail: brokerBox.current.detail };
+            }
+            if (!/stop|distance|validation|reject|attached|level/i.test(brokerBox.current.detail)) {
+              return { ok: false, detail: brokerBox.current.detail };
+            }
+            pushTick(s, {
+              phase: 'WAIT',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `SL distance rejected — loosen x${loosen}: ${brokerBox.current.detail}`,
+            });
+          }
+        }
 
-  if (!result.ok) {
-    s.error = result.detail;
+        for (const loosen of loosenSteps) {
+          if (submitTimedOut) break;
+          const level = safetyStopLevel(
+            direction,
+            mid,
+            quote.bid,
+            quote.ask,
+            quote.spread ?? null,
+            minPrice,
+            loosen
+          );
+          const dist = direction === 'BUY' ? mid - level : level - mid;
+          pushTick(s, {
+            phase: 'INFO',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            code: DecisionCodes.ORDER_SUBMITTING,
+            detail: `SL 0.20% try stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
+              minPrice ?? 'n/a'
+            } · spread=${quote.spread ?? 'n/a'} · x${loosen})`,
+          });
+          brokerBox.current = await trySubmit({ stopLevel: level });
+          if (brokerBox.current.ok) {
+            stopLevel = level;
+            return {
+              ok: true,
+              deal_reference: brokerBox.current.deal_reference,
+              detail: brokerBox.current.detail,
+            };
+          }
+          if (submitTimedOut) {
+            return { ok: false, timed_out: true, detail: brokerBox.current.detail };
+          }
+          if (!/stop|distance|validation|reject|attached|level/i.test(brokerBox.current.detail)) {
+            return { ok: false, detail: brokerBox.current.detail };
+          }
+          pushTick(s, {
+            phase: 'WAIT',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `SL level rejected — loosen x${loosen}: ${brokerBox.current.detail}`,
+          });
+        }
+
+        // VS CORE: never open without SL
+        return {
+          ok: false,
+          detail: `RISK_REJECTED_NO_STOP — safety SL not accepted (${brokerBox.current?.detail || 'unknown'})`,
+        };
+      },
+      reconcile: async () => {
+        const again = await listCapitalOpenPositions(session);
+        if (!again.ok) {
+          return { found: false, detail: again.detail || 'reconcile list failed' };
+        }
+        const pos = matchOpenOnEpic(again.positions, s.epic);
+        if (!pos) return { found: false, detail: 'no position at broker after timeout' };
+        return {
+          found: true,
+          deal_id: pos.deal_id,
+          direction: pos.direction,
+          detail: `reconciled dealId=${pos.deal_id}`,
+        };
+      },
+    }
+  );
+
+  if (!exec.ok) {
+    s.error = exec.reason;
     pushTick(s, {
       phase: 'ERROR',
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `ORDER FAIL ${direction}: ${result.detail}`,
+      code:
+        exec.code === 'NETWORK_TIMEOUT'
+          ? DecisionCodes.NETWORK_TIMEOUT
+          : exec.code === 'BROKER_REJECTED'
+            ? DecisionCodes.BROKER_REJECTED
+            : DecisionCodes.RISK_REJECTED,
+      detail: `ORDER FAIL ${direction}: ${exec.reason}`,
+    });
+    return;
+  }
+
+  // Prefer broker-reported fields from successful submit / reconcile.
+  // Note: timeout→reconcile can yield exec.ok with brokerResult still failed/null.
+  let finalBroker: {
+    ok: boolean;
+    detail: string;
+    deal_reference?: string;
+    status: number;
+    json: unknown;
+  } | null = brokerBox.current;
+  if ((!finalBroker || !finalBroker.ok) && exec.order.broker_deal_id) {
+    finalBroker = {
+      ok: true,
+      detail: 'reconciled after timeout',
+      deal_reference: exec.order.broker_deal_reference || undefined,
+      status: 200,
+      json: null,
+    };
+  }
+
+  if (!finalBroker || !finalBroker.ok) {
+    s.error = 'ORDER FAIL — no broker result after RISK_ACCEPTED path';
+    pushTick(s, {
+      phase: 'ERROR',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      code: DecisionCodes.BROKER_REJECTED,
+      detail: `ORDER FAIL ${direction}: no broker result after accepted execution`,
     });
     return;
   }
@@ -844,7 +1070,7 @@ async function enterTrade(
   s.orders_placed += 1;
   s.open_side = direction;
   s.mode = 'MANAGE';
-  s.last_deal_reference = result.deal_reference || null;
+  s.last_deal_reference = finalBroker.deal_reference || exec.order.broker_deal_reference || null;
   s.entry_price = mid;
   s.entry_at = new Date().toISOString();
   s.mfe = 0;
@@ -855,10 +1081,11 @@ async function enterTrade(
   s.safety_sl = stopLevel != null && Number.isFinite(stopLevel) ? stopLevel : null;
   s.error = null;
 
-  const dealId = await resolveDealId(session, s, result.deal_reference);
+  const dealId =
+    exec.order.broker_deal_id ||
+    (await resolveDealId(session, s, finalBroker.deal_reference));
   if (dealId) s.deal_id = dealId;
 
-  // Prefer broker-reported stopLevel when available
   if (dealId) {
     try {
       const again = await listCapitalOpenPositions(session);
@@ -879,9 +1106,9 @@ async function enterTrade(
     code: DecisionCodes.FILLED,
     detail: `ORDER ENTRY ${direction} ${s.display_name} lot=${s.lot_size} · SL ${
       s.safety_sl ?? 'none'
-    }${usedStopDistance != null ? ` (dist ${usedStopDistance}pts)` : ''} · ${result.detail}${
+    }${usedStopDistance != null ? ` (dist ${usedStopDistance}pts)` : ''} · ${finalBroker.detail}${
       dealId ? ` · dealId=${dealId}` : ''
-    }`,
+    } · intent=${intentId}`,
   });
   if (s.client_id) {
     emitToClient(s.client_id, {
@@ -1554,6 +1781,12 @@ export async function startRobotSession(input: {
     trend_bias: 'FLAT',
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
+
+  if (session.entry_enabled && acc.client_id) {
+    const reg = getClientTradingRegistry();
+    reg.ensure(acc.client_id, { account_id: acc.id });
+    reg.start(acc.client_id);
+  }
 
   const others = [...sessions.values()].filter((x) => x.running && x.id !== id).length;
   pushTick(session, {
