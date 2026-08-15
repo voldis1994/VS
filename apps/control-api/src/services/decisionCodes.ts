@@ -15,6 +15,7 @@ export const DecisionCodes = {
   WAIT_SPREAD_TOO_HIGH: 'WAIT_SPREAD_TOO_HIGH',
   WAIT_INSUFFICIENT_EVIDENCE: 'WAIT_INSUFFICIENT_EVIDENCE',
   WAIT_RISK_LIMIT: 'WAIT_RISK_LIMIT',
+  WAIT_RISK_REJECTED: 'WAIT_RISK_REJECTED',
   WAIT_MANAGE_ONLY: 'WAIT_MANAGE_ONLY',
   WAIT_TRADING_OFF: 'WAIT_TRADING_OFF',
   WAIT_COUNTERTREND: 'WAIT_COUNTERTREND',
@@ -27,6 +28,7 @@ export const DecisionCodes = {
   BROKER_ACCEPTED: 'BROKER_ACCEPTED',
   BROKER_REJECTED: 'BROKER_REJECTED',
   FILLED: 'FILLED',
+  PARTIAL_FILL: 'PARTIAL_FILL',
   POSITION_OPEN: 'POSITION_OPEN',
   POSITION_CLOSED: 'POSITION_CLOSED',
 
@@ -95,6 +97,12 @@ export function humanDecision(code: DecisionCode): string {
       return 'Countertrend / with-trend veto';
     case DecisionCodes.WAIT_NO_FADE:
       return 'RANGE/fade/reversal — ieeja aizliegta';
+    case DecisionCodes.WAIT_RISK_REJECTED:
+      return 'Risk noraidīja ieeju';
+    case DecisionCodes.WAIT_SPREAD_TOO_HIGH:
+      return 'Spread pārāk plats';
+    case DecisionCodes.PARTIAL_FILL:
+      return 'Daļējs fill';
     case DecisionCodes.ERROR_STATE_UNRESOLVED:
       return 'Stāvoklis nav atrisināts — ERROR';
     case DecisionCodes.ERROR_NO_QUOTE:

@@ -76,16 +76,27 @@ func maybeSelfUpdate(root string, logfn func(string, ...any)) bool {
 	dest := filepath.Join(root, "VS.exe")
 	bak := filepath.Join(root, "VS.exe.bak")
 	_ = copyFile(dest, bak)
+	// Persist build stamp next to exe for About / health (P8)
+	_ = os.WriteFile(filepath.Join(root, "VS.exe.version.json"), []byte(fmt.Sprintf(
+		`{"VERSION":%q,"GIT_COMMIT":%q,"BUILD_TIME":%q,"STRATEGY_VERSION":%q,"SHA256":%q,"SIZE":%d}`+"\n",
+		Version, func() string {
+			if GitCommit != "" {
+				return GitCommit
+			}
+			return LauncherID
+		}(), BuildTime, StrategyVersion, newSum, newSize,
+	)), 0644)
 	cmd := exec.Command("cmd", "/c",
 		fmt.Sprintf("timeout /t 2 /nobreak >nul & move /y \"%s\" \"%s\" >nul & start \"\" \"%s\" \"%s\"",
 			tmp, dest, dest, root))
 	hideWindow(cmd)
 	if err := cmd.Start(); err != nil {
-		logfn("[WARN] self-update restart: %s", err.Error())
+		logfn("[WARN] self-update restart: %s — ROLLBACK no VS.exe.bak", err.Error())
+		_ = copyFile(bak, dest)
 		_ = os.Remove(tmp)
 		return false
 	}
-	logfn("[OK] jaunais VS.exe startēsies pēc 2s — aizveru veco")
+	logfn("[OK] jaunais VS.exe startēsies pēc 2s — aizveru veco (bak=%s)", bak)
 	time.Sleep(400 * time.Millisecond)
 	return true
 }

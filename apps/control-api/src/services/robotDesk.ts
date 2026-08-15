@@ -1,10 +1,8 @@
 import { pool } from '../db/pool.js';
 import { decrypt } from '../security/encryption.js';
 import {
-  acquireCapitalSession,
   closeCapitalPosition,
   confirmCapitalDeal,
-  createCapitalPosition,
   fetchCapitalMarketQuote,
   fetchCapitalMinutePrices,
   fetchCapitalPrices,
@@ -15,6 +13,15 @@ import {
   type CapitalOpenPosition,
   type CapitalSession,
 } from './capitalCom.js';
+import {
+  ensureCapitalSession,
+  recordCapitalFeedTick,
+} from './capitalSessionManager.js';
+import {
+  createManagedOrder,
+  reconcileBeforeSubmit,
+  submitManagedOrder,
+} from './orderLifecycle.js';
 import { emitToClient } from './clientEvents.js';
 import { mapTradeType } from './tradePresentation.js';
 import {
@@ -201,6 +208,20 @@ async function loadCreds(connectionId: number): Promise<Record<string, string>> 
 }
 
 function pushTick(s: Internal, tick: Omit<RobotTick, 'at'>) {
+  // NEVER leave WAIT/ERROR without a machine code — UNKNOWN is forbidden.
+  // Unknown wait reason is not WAIT — it is ERROR_STATE_UNRESOLVED.
+  if (tick.phase === 'WAIT' && !tick.code) {
+    tick = {
+      ...tick,
+      phase: 'ERROR',
+      code: DecisionCodes.ERROR_STATE_UNRESOLVED,
+      detail: tick.detail
+        ? `ERROR_STATE_UNRESOLVED · ${tick.detail}`
+        : 'ERROR_STATE_UNRESOLVED — wait without reason code',
+    };
+  } else if (tick.phase === 'ERROR' && !tick.code) {
+    tick = { ...tick, code: DecisionCodes.ERROR_STATE_UNRESOLVED };
+  }
   const detail =
     tick.code && !String(tick.detail || '').startsWith(`[${tick.code}]`)
       ? `[${tick.code}] ${tick.detail}`
@@ -478,6 +499,17 @@ export function listRobotSessions(): RobotSession[] {
     .map(publicSession);
 }
 
+/** For System Health — Capital connection of first running robot. */
+export function getPrimaryRobotConnectionId(): number | null {
+  for (const s of sessions.values()) {
+    if (s.running && s.connection_id > 0) return s.connection_id;
+  }
+  for (const s of sessions.values()) {
+    if (s.connection_id > 0) return s.connection_id;
+  }
+  return null;
+}
+
 /** True when Node robotDesk is the entry brain for this account+epic (ignore stale C++ intents). */
 export function hasEntryEnabledRobot(accountId: number, epic: string): boolean {
   const want = String(epic || '').trim().toUpperCase();
@@ -693,6 +725,25 @@ async function enterTrade(
     }
   }
 
+  // P4: reconcile in-flight / timeout before any new Capital POST
+  const gate = await reconcileBeforeSubmit(session, s.account_id, s.epic);
+  if (!gate.allow_submit) {
+    if (gate.broker_position) {
+      s.open_side = gate.broker_position.direction;
+      s.deal_id = gate.broker_position.deal_id;
+      s.mode = 'MANAGE';
+    }
+    pushTick(s, {
+      phase: 'WAIT',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      code: DecisionCodes.DUPLICATE_PREVENTED,
+      detail: gate.reason,
+    });
+    return;
+  }
+
   pushTick(s, {
     phase: 'DECIDE',
     bid: quote.bid,
@@ -709,6 +760,7 @@ async function enterTrade(
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
+      code: DecisionCodes.ERROR_NO_QUOTE,
       detail: 'ENTRY blocked — no mid for safety SL',
     });
     return;
@@ -721,9 +773,8 @@ async function enterTrade(
   const useDistance = minPts != null && minPts > 0 && !unit.includes('PERCENT');
   const loosenSteps = [1, 1.08, 1.16, 1.28];
 
-  let stopLevel: number | null = null;
-  let usedStopDistance: number | null = null;
-  let result: Awaited<ReturnType<typeof createCapitalPosition>> | null = null;
+  let stopLevel: number | undefined;
+  let usedStopDistance: number | undefined;
 
   if (useDistance) {
     for (const loosen of loosenSteps) {
@@ -748,103 +799,165 @@ async function enterTrade(
           expect ?? 'n/a'
         } · x${loosen})`,
       });
-      result = await createCapitalPosition(session, {
+      const order = createManagedOrder({
+        account_id: s.account_id,
         epic: s.epic,
         direction,
         size: s.lot_size,
-        stopDistance,
+        stop_distance: stopDistance,
       });
-      if (result.ok) {
+      const submitted = await submitManagedOrder(session, order);
+      if (submitted.ok) {
         usedStopDistance = stopDistance;
-        stopLevel = expect;
-        break;
+        stopLevel = expect ?? undefined;
+        await finalizeEnteredTrade(session, s, direction, quote, mid, stopLevel, usedStopDistance, order, setupType, reason);
+        return;
       }
-      if (!/stop|distance|validation|reject|attached|level/i.test(result.detail)) break;
-      pushTick(s, {
-        phase: 'WAIT',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `SL distance rejected — loosen x${loosen}: ${result.detail}`,
-      });
-    }
-  }
-
-  if (!result?.ok) {
-    for (const loosen of loosenSteps) {
-      const level = safetyStopLevel(
-        direction,
-        mid,
-        quote.bid,
-        quote.ask,
-        quote.spread ?? null,
-        minPrice,
-        loosen
-      );
-      const dist = direction === 'BUY' ? mid - level : level - mid;
+      if (submitted.duplicate_prevented) {
+        pushTick(s, {
+          phase: 'WAIT',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          code: DecisionCodes.DUPLICATE_PREVENTED,
+          detail: submitted.detail,
+        });
+        return;
+      }
+      if (!/stop|distance|validation|reject|attached|level/i.test(submitted.detail)) {
+        s.error = submitted.detail;
+        pushTick(s, {
+          phase: 'ERROR',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          code: DecisionCodes.BROKER_REJECTED,
+          detail: `ORDER FAIL ${direction}: ${submitted.detail}`,
+        });
+        return;
+      }
       pushTick(s, {
         phase: 'INFO',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `SL 0.20% try stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
-          minPrice ?? 'n/a'
-        } · spread=${quote.spread ?? 'n/a'} · x${loosen})`,
+        detail: `SL distance rejected — loosen x${loosen}: ${submitted.detail}`,
       });
-      result = await createCapitalPosition(session, {
-        epic: s.epic,
-        direction,
-        size: s.lot_size,
-        stopLevel: level,
-      });
-      if (result.ok) {
-        stopLevel = level;
-        break;
-      }
-      if (!/stop|distance|validation|reject|attached|level/i.test(result.detail)) break;
+    }
+  }
+
+  for (const loosen of loosenSteps) {
+    const level = safetyStopLevel(
+      direction,
+      mid,
+      quote.bid,
+      quote.ask,
+      quote.spread ?? null,
+      minPrice,
+      loosen
+    );
+    const dist = direction === 'BUY' ? mid - level : level - mid;
+    pushTick(s, {
+      phase: 'INFO',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `SL 0.20% try stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
+        minPrice ?? 'n/a'
+      } · spread=${quote.spread ?? 'n/a'} · x${loosen})`,
+    });
+    const order = createManagedOrder({
+      account_id: s.account_id,
+      epic: s.epic,
+      direction,
+      size: s.lot_size,
+      stop_level: level,
+    });
+    const submitted = await submitManagedOrder(session, order);
+    if (submitted.ok) {
+      stopLevel = level;
+      await finalizeEnteredTrade(session, s, direction, quote, mid, stopLevel, undefined, order, setupType, reason);
+      return;
+    }
+    if (submitted.duplicate_prevented) {
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `SL level rejected — loosen x${loosen}: ${result.detail}`,
+        code: DecisionCodes.DUPLICATE_PREVENTED,
+        detail: submitted.detail,
       });
+      return;
     }
-  }
-
-  if (!result?.ok) {
+    if (!/stop|distance|validation|reject|attached|level/i.test(submitted.detail)) {
+      s.error = submitted.detail;
+      pushTick(s, {
+        phase: 'ERROR',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        code: DecisionCodes.BROKER_REJECTED,
+        detail: `ORDER FAIL ${direction}: ${submitted.detail}`,
+      });
+      return;
+    }
     pushTick(s, {
-      phase: 'WAIT',
+      phase: 'INFO',
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `Safety SL not accepted — entry without SL (${result?.detail || 'unknown'})`,
+      detail: `SL level rejected — loosen x${loosen}: ${submitted.detail}`,
     });
-    result = await createCapitalPosition(session, {
-      epic: s.epic,
-      direction,
-      size: s.lot_size,
-    });
-    stopLevel = null;
-    usedStopDistance = null;
   }
 
-  if (!result.ok) {
-    s.error = result.detail;
+  pushTick(s, {
+    phase: 'INFO',
+    bid: quote.bid,
+    ask: quote.ask,
+    mid: quote.mid,
+    detail: 'Safety SL not accepted — entry without SL',
+  });
+  const bare = createManagedOrder({
+    account_id: s.account_id,
+    epic: s.epic,
+    direction,
+    size: s.lot_size,
+  });
+  const bareSubmit = await submitManagedOrder(session, bare);
+  if (!bareSubmit.ok) {
+    s.error = bareSubmit.detail;
     pushTick(s, {
       phase: 'ERROR',
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `ORDER FAIL ${direction}: ${result.detail}`,
+      code: bareSubmit.duplicate_prevented
+        ? DecisionCodes.DUPLICATE_PREVENTED
+        : DecisionCodes.BROKER_REJECTED,
+      detail: `ORDER FAIL ${direction}: ${bareSubmit.detail}`,
     });
     return;
   }
+  await finalizeEnteredTrade(session, s, direction, quote, mid, null, null, bare, setupType, reason);
+}
 
+async function finalizeEnteredTrade(
+  session: CapitalSession,
+  s: Internal,
+  direction: 'BUY' | 'SELL',
+  quote: CapitalMarketQuote,
+  mid: number,
+  stopLevel: number | null | undefined,
+  usedStopDistance: number | null | undefined,
+  order: { client_order_id: string; deal_reference: string | null; deal_id: string | null; broker_detail: string | null },
+  setupType: string | null | undefined,
+  _reason: string
+) {
   s.orders_placed += 1;
   s.open_side = direction;
   s.mode = 'MANAGE';
-  s.last_deal_reference = result.deal_reference || null;
+  s.last_deal_reference = order.deal_reference || null;
   s.entry_price = mid;
   s.entry_at = new Date().toISOString();
   s.mfe = 0;
@@ -854,12 +967,14 @@ async function enterTrade(
   s.unrealized = 0;
   s.safety_sl = stopLevel != null && Number.isFinite(stopLevel) ? stopLevel : null;
   s.error = null;
+  s.deal_id = order.deal_id;
 
-  const dealId = await resolveDealId(session, s, result.deal_reference);
-  if (dealId) s.deal_id = dealId;
+  if (!s.deal_id && order.deal_reference) {
+    const dealId = await resolveDealId(session, s, order.deal_reference);
+    if (dealId) s.deal_id = dealId;
+  }
 
-  // Prefer broker-reported stopLevel when available
-  if (dealId) {
+  if (s.deal_id) {
     try {
       const again = await listCapitalOpenPositions(session);
       const pos = again.ok ? matchOpenOnEpic(again.positions, s.epic) : null;
@@ -877,10 +992,10 @@ async function enterTrade(
     ask: quote.ask,
     mid: quote.mid,
     code: DecisionCodes.FILLED,
-    detail: `ORDER ENTRY ${direction} ${s.display_name} lot=${s.lot_size} · SL ${
+    detail: `ORDER ENTRY ${direction} ${s.display_name} lot=${s.lot_size} · client_order_id=${order.client_order_id} · SL ${
       s.safety_sl ?? 'none'
-    }${usedStopDistance != null ? ` (dist ${usedStopDistance}pts)` : ''} · ${result.detail}${
-      dealId ? ` · dealId=${dealId}` : ''
+    }${usedStopDistance != null ? ` (dist ${usedStopDistance}pts)` : ''} · ${order.broker_detail || ''}${
+      s.deal_id ? ` · dealId=${s.deal_id}` : ''
     }`,
   });
   if (s.client_id) {
@@ -958,7 +1073,7 @@ async function robotCycle(s: Internal) {
   const capitalAccountId =
     (accRow.rows[0]?.external_account_id as string | null | undefined) || null;
 
-  const opened = await acquireCapitalSession({
+  const opened = await ensureCapitalSession({
     environment: conn.environment,
     apiKey: creds.api_key || '',
     identifier: (conn.identifier || '').trim(),
@@ -1002,6 +1117,7 @@ async function robotCycle(s: Internal) {
       return;
     }
 
+    recordCapitalFeedTick(s.connection_id);
     s.reads_ok += 1;
     s.error = null;
     s.last_quote_at = new Date().toISOString();
@@ -1126,6 +1242,7 @@ async function robotCycle(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
+        code: DecisionCodes.ERROR_BROKER,
         detail: `Position sync warn: ${listed.detail} · holding ONE TRADE rule (no new entry if unsure)`,
       });
     }
@@ -1181,7 +1298,7 @@ async function robotCycle(s: Internal) {
             });
           } else {
             pushTick(s, {
-              phase: 'WAIT',
+              phase: 'INFO',
               bid: quote.bid,
               ask: quote.ask,
               mid: quote.mid,
@@ -1281,7 +1398,7 @@ async function robotCycle(s: Internal) {
     const feedGate = allowEntryFromFeeds(s.multiFeed);
     if (!feedGate.ok) {
       pushTick(s, {
-        phase: 'WAIT',
+        phase: 'INFO',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,

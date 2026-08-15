@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -116,6 +117,10 @@ func (a *App) serve() error {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(st)
 	})
+	mux.HandleFunc("/api/build", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(buildStamp())
+	})
 	mux.HandleFunc("/api/run", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST", 405)
@@ -123,6 +128,54 @@ func (a *App) serve() error {
 		}
 		go a.runCycle()
 		w.WriteHeader(202)
+	})
+	// P5: proxy trading desk / health to control-api (engine stays in Node)
+	mux.HandleFunc("/api/desk/", func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/api/desk")
+		switch {
+		case path == "" || path == "/":
+			path = "/api/robot-desk"
+		case path == "/health":
+			path = "/api/system/health"
+		case path == "/start":
+			path = "/api/robot-desk/start"
+		case strings.HasPrefix(path, "/stop/"):
+			id := strings.TrimPrefix(path, "/stop/")
+			path = "/api/robot-desk/" + id + "/stop"
+		default:
+			path = "/api/robot-desk" + path
+		}
+		url := "http://127.0.0.1:3000" + path
+		if r.URL.RawQuery != "" {
+			url += "?" + r.URL.RawQuery
+		}
+		req, err := http.NewRequest(r.Method, url, r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
+		for k, vv := range r.Header {
+			for _, v := range vv {
+				req.Header.Add(k, v)
+			}
+		}
+		client := &http.Client{Timeout: 20 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			http.Error(w, "control-api unreachable: "+err.Error(), 502)
+			return
+		}
+		defer resp.Body.Close()
+		for k, vv := range resp.Header {
+			for _, v := range vv {
+				w.Header().Add(k, v)
+			}
+		}
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+	})
+	mux.HandleFunc("/api/desk", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/api/desk/", http.StatusTemporaryRedirect)
 	})
 	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, r *http.Request) {
 		fl, ok := w.(http.Flusher)
@@ -143,7 +196,7 @@ func (a *App) serve() error {
 			a.mu.Unlock()
 			close(ch)
 		}()
-		fmt.Fprintf(w, "data: %s\n\n", "VS launcher gatavs. Spied PALAIST / RESTARTET.")
+		fmt.Fprintf(w, "data: %s\n\n", "VS desktop gatavs. START = robotDesk · Settings = stack restart.")
 		fl.Flush()
 		notify := r.Context().Done()
 		for {
@@ -161,7 +214,7 @@ func (a *App) serve() error {
 	if err != nil {
 		return err
 	}
-	a.log("VS panelis http://127.0.0.1:%s  (neaizver so programmu)", appPort)
+	a.log("VS desktop http://127.0.0.1:%s  (neaizver so programmu)", appPort)
 	_ = os.WriteFile(filepath.Join(a.root, "vs-panel.txt"), []byte("http://127.0.0.1:"+appPort+"\n"), 0644)
 	go func() {
 		time.Sleep(600 * time.Millisecond)
