@@ -62,10 +62,10 @@
       "test": "DUPLICATE_PROTECTION in verifyProof.test.ts"
     },
     "timeout_unknown_broker": {
-      "scenario": "VS submit → broker accepts but response times out",
+      "scenario": "VS submit \u2192 broker accepts but response times out",
       "second_blind_submit_occurred": "NO",
       "broker_submits": 1,
-      "reconciliation_result": "found at broker → POSITION_OPEN",
+      "reconciliation_result": "found at broker \u2192 POSITION_OPEN",
       "result": "PASS",
       "source": "apps/control-api/src/vs-core/executionCore.ts",
       "test": "TIMEOUT_RECONCILE in verifyProof.test.ts"
@@ -74,8 +74,8 @@
       "crash_points_tested": [
         "dirty local vs broker position mismatch after restart path",
         "clean empty positions recovery path",
-        "timeout mid-submit → reconcile (executionCore)",
-        "illegal OSM transition → incident"
+        "timeout mid-submit \u2192 reconcile (executionCore)",
+        "illegal OSM transition \u2192 incident"
       ],
       "recovered_states": [
         "entries_allowed=false on POSITION_STATE_MISMATCH",
@@ -103,9 +103,15 @@
       "test": "BACKUP_RESTORE_UPDATER in verifyProof.test.ts"
     },
     "security_isolation": {
-      "unauthorized_tests": ["bad password login"],
+      "unauthorized_tests": [
+        "bad password login"
+      ],
       "client_a_to_client_b_access": "BLOCKED",
-      "token_tests": ["login fail", "revoke clears session", "assertClientAccess cross-client false"],
+      "token_tests": [
+        "login fail",
+        "revoke clears session",
+        "assertClientAccess cross-client false"
+      ],
       "result": "PASS",
       "source": "apps/control-api/src/vs-core/mobileAuth.ts + src/services/clientIsolation.test.ts"
     },
@@ -141,6 +147,8 @@
   "unresolved_software_failures": "NONE",
   "previous_master_task_complete": true,
   "live_readiness": "NOT READY",
-  "secrets_in_diff": "NONE_PRODUCTION — only test fixture placeholders (k/p/good/bad) and process.env reads",
-  "note": "Do NOT start VS ADMIN / VS CONTROL. PR remains draft for code review."
+  "secrets_in_diff": "NONE_PRODUCTION \u2014 only test fixture placeholders (k/p/good/bad) and process.env reads",
+  "note": "HEAD e8a943f is docs pin of FINAL GATE from verify on 738c471 (same code tree). Do NOT start VS ADMIN / VS CONTROL. PR remains draft for code review.",
+  "head_sha": "e8a943f48c0fd5034ac95c9c28bf2602d5af1a64",
+  "verified_source_sha": "738c47144164f19d7cf7f939be5f63c54bc4f840"
 }
