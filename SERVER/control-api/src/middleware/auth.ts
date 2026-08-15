@@ -45,6 +45,10 @@ export async function authMiddleware(
 
   if (isPublicUnauthedPath(request.method, path)) return;
 
+  // VS Private Network device channel — application session auth inside networkApi
+  // (WireGuard ≠ authorization). Do not require x-admin-token here.
+  if (path === '/api/v1/network' || path.startsWith('/api/v1/network/')) return;
+
   const token = request.headers['x-admin-token'] as string | undefined;
   const expected = process.env.API_ADMIN_TOKEN;
 

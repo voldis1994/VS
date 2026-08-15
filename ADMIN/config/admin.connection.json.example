@@ -1,4 +1,8 @@
 {
-  "baseUrl": "http://127.0.0.1:3000",
-  "adminToken": ""
+  "server_id": "VS-CORE-01",
+  "baseUrl": "http://10.77.0.1:3000",
+  "adminToken": "",
+  "device_id": "VS-ADMIN-01",
+  "device_token": "",
+  "note": "Production uses VS private IP — never commit tokens or WireGuard private keys"
 }

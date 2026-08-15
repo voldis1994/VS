@@ -37,9 +37,19 @@ import {
   probeRiskRuntime,
   probeExecutionRuntime,
 } from './vs-core/runtimeHealth.js';
+import { resolveManagementBind } from './vs-core/network/networkBind.js';
+import { registerPrivateNetworkRoutes } from './vs-core/network/networkApi.js';
 
 const PORT = parseInt(process.env.CONTROL_API_PORT || '3000', 10);
-const HOST = process.env.CONTROL_API_HOST || '0.0.0.0';
+// Production default is localhost / VS private IP — never silent 0.0.0.0
+const HOST = (() => {
+  try {
+    return resolveManagementBind(process.env).host;
+  } catch (e) {
+    console.error(e instanceof Error ? e.message : e);
+    process.exit(1);
+  }
+})();
 
 function corsOrigins(): boolean | string | string[] {
   const raw = [process.env.CORS_ORIGIN, process.env.CLIENT_CORS_ORIGIN]
@@ -155,6 +165,9 @@ async function main() {
 
   // Admin Agent API only — native VS ADMIN desktop is NEXT master task (blocked).
   await registerAdminAgentRoutes(app, { getProbes });
+
+  // VS Private Network device registry / heartbeat / registration
+  await registerPrivateNetworkRoutes(app);
 
   app.get('/ws', { websocket: true }, (socket) => {
     telemetry.addClient(socket);

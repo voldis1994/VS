@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# APPLY_FIREWALL — SERVER host firewall for VS Private Network.
+# Default DENY inbound. Allow WireGuard UDP + VS private subnet to management ports.
+set -euo pipefail
+
+WG_IFACE="${VS_WG_INTERFACE:-vs0}"
+WG_PORT="${VS_WG_LISTEN_PORT:-51820}"
+API_PORT="${CONTROL_API_PORT:-3000}"
+SUBNET="${VS_WG_SUBNET:-10.77.0.0/16}"
+
+echo "VS SERVER FIREWALL"
+echo "IFACE=$WG_IFACE PORT=$WG_PORT API=$API_PORT SUBNET=$SUBNET"
+
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "FAIL: APPLY_FIREWALL requires root" >&2
+  exit 1
+fi
+
+if command -v ufw >/dev/null 2>&1; then
+  ufw --force reset || true
+  ufw default deny incoming
+  ufw default allow outgoing
+  ufw allow OpenSSH || true
+  ufw allow "${WG_PORT}/udp" comment 'VS WireGuard'
+  # Management API only from VS private network (not public)
+  ufw allow from "$SUBNET" to any port "$API_PORT" proto tcp comment 'VS private API'
+  ufw --force enable
+  echo "SUCCESS: ufw policy applied (default deny inbound)"
+  exit 0
+fi
+
+if command -v nft >/dev/null 2>&1; then
+  nft delete table inet vs_private 2>/dev/null || true
+  nft -f - <<EOF
+table inet vs_private {
+  chain input {
+    type filter hook input priority 0; policy drop;
+    ct state established,related accept
+    iif lo accept
+    udp dport ${WG_PORT} accept
+    ip saddr ${SUBNET} tcp dport ${API_PORT} accept
+    tcp dport 22 accept
+  }
+}
+EOF
+  echo "SUCCESS: nftables vs_private applied"
+  exit 0
+fi
+
+echo "FAIL: neither ufw nor nft available" >&2
+exit 1

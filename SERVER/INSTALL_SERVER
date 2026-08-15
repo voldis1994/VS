@@ -41,12 +41,18 @@ id -u vs-server >/dev/null 2>&1 || useradd --system --home "$DATA" --shell /usr/
 # compat alias user
 id -u vs-core >/dev/null 2>&1 || useradd --system --home "$DATA" --shell /usr/sbin/nologin vs-core
 
-mkdir -p "$PREFIX" "$DATA" "$LOG" "$DATA/market" "$DATA/backup" "$DATA/updates" "$DATA/orders" "$DATA/admin"
+mkdir -p "$PREFIX" "$DATA" "$LOG" "$DATA/market" "$DATA/backup" "$DATA/updates" "$DATA/orders" "$DATA/admin" \
+  "$DATA/network" "$DATA/network/keys" "$DATA/network/issued"
 rsync -a --delete \
   --exclude .git \
   --exclude node_modules \
   --exclude '**/node_modules' \
   "$ROOT/" "$PREFIX/"
+
+# WireGuard tools (soft requirement — EXTERNAL until installed)
+if ! command -v wg >/dev/null 2>&1; then
+  echo "WARN: wireguard-tools not installed — install wireguard wireguard-tools before UP_WIREGUARD"
+fi
 
 # Install control-api deps into prefix
 if [[ -f "$PREFIX/control-api/package.json" ]]; then
@@ -68,7 +74,8 @@ if [[ -d "$UNIT_SRC" ]]; then
 fi
 
 chmod +x "$PREFIX/INSTALL_SERVER" "$PREFIX/START_SERVER" "$PREFIX/STOP_SERVER" "$PREFIX/STATUS_SERVER" \
-  "$PREFIX/deploy/boot.sh" 2>/dev/null || true
+  "$PREFIX/deploy/boot.sh" \
+  "$PREFIX/network/"* 2>/dev/null || true
 
 systemctl daemon-reload
 systemctl enable vs-server.service vs-server-watchdog.timer 2>/dev/null || true
@@ -79,11 +86,13 @@ if [[ ! -f "$DATA/server.env" ]]; then
 # VS SERVER runtime env — edit on host; never commit secrets
 OPERATING_MODE=DEMO
 LIVE_TRADING_ENABLED=false
-CONTROL_API_HOST=127.0.0.1
+VS_PRIVATE_NETWORK=1
+CONTROL_API_HOST=10.77.0.1
 CONTROL_API_PORT=3000
-# Set a strong token before enabling LAN admin access:
+VS_WG_INTERFACE=vs0
+VS_WG_LISTEN_PORT=51820
+# Set a strong token before enabling management:
 # API_ADMIN_TOKEN=
-# ADMIN_BIND=lan   # only then START_SERVER may bind non-localhost
 EOF
   chown vs-server:vs-server "$DATA/server.env"
   chmod 0600 "$DATA/server.env"
