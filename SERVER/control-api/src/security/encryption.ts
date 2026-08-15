@@ -1,10 +1,33 @@
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'crypto';
 
 const ALGORITHM = 'aes-256-gcm';
+const UNSAFE_DEFAULT = 'CHANGE_ME_32_BYTE_HEX_OR_BASE64_KEY_HERE';
+
+export class EncryptionKeyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'EncryptionKeyError';
+  }
+}
+
+/** True when key is missing or a known unsafe placeholder. Never log the key. */
+export function isUnsafeMasterEncryptionKey(secret: string | undefined | null): boolean {
+  const s = String(secret || '').trim();
+  if (!s) return true;
+  if (s === UNSAFE_DEFAULT) return true;
+  if (s.includes('CHANGE_ME')) return true;
+  if (s.length < 16) return true;
+  return false;
+}
 
 function getKey(): Buffer {
-  const secret = process.env.MASTER_ENCRYPTION_KEY || 'CHANGE_ME_32_BYTE_HEX_OR_BASE64_KEY_HERE';
-  return scryptSync(secret, 'market-reader-salt', 32);
+  const secret = process.env.MASTER_ENCRYPTION_KEY;
+  if (isUnsafeMasterEncryptionKey(secret)) {
+    throw new EncryptionKeyError(
+      'MASTER_ENCRYPTION_KEY_REQUIRED: set a strong unique MASTER_ENCRYPTION_KEY (refusing default/CHANGE_ME/short key)'
+    );
+  }
+  return scryptSync(String(secret).trim(), 'market-reader-salt', 32);
 }
 
 export function encrypt(plaintext: string): { ciphertext: string; iv: string; tag: string } {

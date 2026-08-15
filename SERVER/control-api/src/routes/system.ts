@@ -93,10 +93,17 @@ export async function registerSystemRoutes(
     if (!allowed.includes(body.mode)) {
       return reply.code(400).send({ error: `Invalid mode. Use: ${allowed.join(', ')}` });
     }
-    // No LIVE gate — operator accepts risk
-    process.env.OPERATING_MODE = body.mode;
+    // B7: ordinary ADMIN API cannot enable LIVE money execution
     if (body.mode === 'LIVE') {
-      process.env.LIVE_TRADING_ENABLED = 'true';
+      return reply.code(403).send({
+        error: 'LIVE_ENABLE_DENIED',
+        message:
+          'LIVE mode cannot be enabled via /api/system/mode — set LIVE_TRADING_ENABLED only via controlled process environment + restart with safe secrets',
+      });
+    }
+    process.env.OPERATING_MODE = body.mode;
+    if (body.mode !== 'LIVE') {
+      process.env.LIVE_TRADING_ENABLED = 'false';
     }
     return { mode: body.mode, previous: prev, live_enabled: liveEnabled() };
   });

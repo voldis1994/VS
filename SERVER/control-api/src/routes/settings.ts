@@ -18,7 +18,7 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     log_level: process.env.LOG_LEVEL || 'info',
   }));
 
-  app.put('/api/settings', async (request) => {
+  app.put('/api/settings', async (request, reply) => {
     const body = request.body as {
       log_level?: string;
       live_trading_enabled?: boolean;
@@ -29,30 +29,54 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       process.env.LOG_LEVEL = body.log_level;
     }
 
-    if (typeof body.live_trading_enabled === 'boolean') {
-      process.env.LIVE_TRADING_ENABLED = body.live_trading_enabled ? 'true' : 'false';
+    // B7: ordinary ADMIN settings must not enable LIVE money execution
+    if (body.live_trading_enabled === true) {
       await logAudit(
         'admin',
-        body.live_trading_enabled ? 'live_enabled' : 'live_disabled',
+        'live_enable_denied',
         'settings',
         'LIVE_TRADING_ENABLED',
         null,
-        { live_trading_enabled: body.live_trading_enabled }
+        { attempted: true }
+      );
+      return reply.code(403).send({
+        error: 'LIVE_ENABLE_DENIED',
+        message:
+          'LIVE_TRADING_ENABLED cannot be enabled via ADMIN settings API — require controlled process environment + restart with safe secrets',
+        live_trading_enabled: liveEnabled(),
+      });
+    }
+
+    if (body.live_trading_enabled === false) {
+      process.env.LIVE_TRADING_ENABLED = 'false';
+      await logAudit(
+        'admin',
+        'live_disabled',
+        'settings',
+        'LIVE_TRADING_ENABLED',
+        null,
+        { live_trading_enabled: false }
       );
     }
 
     if (typeof body.operating_mode === 'string') {
       const allowed = ['REPLAY', 'PAPER', 'DEMO', 'LIVE'];
-      if (allowed.includes(body.operating_mode)) {
-        process.env.OPERATING_MODE = body.operating_mode;
+      if (!allowed.includes(body.operating_mode)) {
+        return reply.code(400).send({ error: 'Invalid operating_mode' });
       }
+      if (body.operating_mode === 'LIVE') {
+        return reply.code(403).send({
+          error: 'LIVE_ENABLE_DENIED',
+          message: 'OPERATING_MODE=LIVE cannot be set via ADMIN settings API',
+        });
+      }
+      process.env.OPERATING_MODE = body.operating_mode;
     }
 
     return {
-      success: true,
+      ok: true,
       operating_mode: process.env.OPERATING_MODE || 'DEMO',
       live_trading_enabled: liveEnabled(),
-      log_level: process.env.LOG_LEVEL || 'info',
     };
   });
 }

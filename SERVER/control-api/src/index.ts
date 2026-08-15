@@ -83,6 +83,15 @@ async function main() {
   if (process.env.OPERATING_MODE === undefined || process.env.OPERATING_MODE === '') {
     process.env.OPERATING_MODE = 'DEMO';
   }
+
+  // B6: refuse missing/default encryption key for ALL modes (broker secrets)
+  const { isUnsafeMasterEncryptionKey } = await import('./security/encryption.js');
+  if (isUnsafeMasterEncryptionKey(process.env.MASTER_ENCRYPTION_KEY)) {
+    throw new Error(
+      'BOOT_FAIL: MASTER_ENCRYPTION_KEY missing or unsafe (CHANGE_ME/default/short) — refuse start'
+    );
+  }
+
   if (process.env.LIVE_TRADING_ENABLED === 'true') {
     const badSecrets = [
       !process.env.MASTER_ENCRYPTION_KEY || process.env.MASTER_ENCRYPTION_KEY.includes('CHANGE_ME'),
@@ -97,6 +106,21 @@ async function main() {
   }
 
   await runMigrations();
+
+  // B5: durable money-path recovery BEFORE trading routes accept opens
+  const { runBootMoneyPathRecovery, moneyPathStatusPayload } = await import(
+    './vs-core/bootMoneyPathRecovery.js'
+  );
+  const { markServiceRunning } = await import('./vs-core/moneyPathGate.js');
+  markServiceRunning();
+  const recovery = runBootMoneyPathRecovery();
+  if (!recovery.ok) {
+    console.error(
+      `MONEY_PATH_RECOVERY_BLOCKED code=${recovery.reason_code} · ${recovery.detail} · entries disabled`
+    );
+  } else {
+    console.log(`MONEY_PATH_RECOVERY_OK · ${recovery.detail}`);
+  }
 
   const app = Fastify({
     logger: true,
@@ -117,6 +141,9 @@ async function main() {
   await app.register(websocket);
 
   app.addHook('onRequest', authMiddleware);
+
+  // Distinguish service-up vs money-path-ready
+  app.get('/api/system/money-path', async () => moneyPathStatusPayload());
 
   await registerSystemRoutes(app, telemetry);
   await registerClientRoutes(app);

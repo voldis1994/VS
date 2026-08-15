@@ -27,6 +27,7 @@ export type SubmissionLedgerRow = {
     | 'BROKER_RESULT_UNRESOLVED'
     | 'FILLED'
     | 'POSITION_OPEN'
+    | 'CLOSE_PENDING'
     | 'POSITION_CLOSED'
     | 'REJECTED';
   deal_reference: string | null;
@@ -46,11 +47,14 @@ const OPEN_LEDGER: SubmissionLedgerRow['state'][] = [
   'BROKER_RESULT_UNRESOLVED',
   'FILLED',
   'POSITION_OPEN',
+  'CLOSE_PENDING',
 ];
 
 export class DurableOrderStore extends OrderStore {
   private ledger = new Map<string, SubmissionLedgerRow>();
   private filePath: string;
+  private loadError: string | null = null;
+  private loading = false;
 
   constructor(filePath: string) {
     super();
@@ -58,18 +62,32 @@ export class DurableOrderStore extends OrderStore {
     this.load();
   }
 
+  /** Non-null when durable file existed but failed to parse — FAIL CLOSED signal. */
+  getLoadError(): string | null {
+    return this.loadError;
+  }
+
   private load(): void {
+    this.loadError = null;
     try {
       if (!existsSync(this.filePath)) return;
       const raw = JSON.parse(readFileSync(this.filePath, 'utf8')) as PersistShape;
+      if (!raw || typeof raw !== 'object') {
+        this.loadError = 'DURABLE_CORRUPT: root not object';
+        return;
+      }
+      this.loading = true;
       for (const o of raw.orders || []) this.put(o);
       for (const L of raw.ledger || []) this.ledger.set(L.client_order_id, L);
-    } catch {
-      /* corrupt → start empty; caller should raise incident */
+      this.loading = false;
+    } catch (e) {
+      this.loading = false;
+      this.loadError = `DURABLE_CORRUPT: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 
   private persist(): void {
+    if (this.loading) return;
     mkdirSync(dirname(this.filePath), { recursive: true });
     const all = this.listAll();
     const payload: PersistShape = {
@@ -135,13 +153,70 @@ export class DurableOrderStore extends OrderStore {
       (L) =>
         L.state === 'SUBMITTING' ||
         L.state === 'BROKER_RESULT_UNRESOLVED' ||
-        L.state === 'BROKER_ACCEPTED'
+        L.state === 'BROKER_ACCEPTED' ||
+        L.state === 'CLOSE_PENDING'
     );
   }
 
+  isClosePending(accountId: number, epic: string): boolean {
+    return [...this.ledger.values()].some(
+      (L) =>
+        L.account_id === accountId &&
+        L.epic === epic &&
+        L.state === 'CLOSE_PENDING'
+    );
+  }
+
+  listClosePending(): SubmissionLedgerRow[] {
+    return [...this.ledger.values()].filter((L) => L.state === 'CLOSE_PENDING');
+  }
+
   /**
-   * Mark open POSITION_OPEN ledger/order as POSITION_CLOSED after broker flat confirmation.
-   * Idempotent — already-closed rows are left alone. Returns how many orders transitioned.
+   * Persist CLOSE_PENDING so restart does not lose close-in-progress.
+   * Idempotent for account+epic.
+   */
+  markClosePending(input: {
+    account_id: number;
+    epic: string;
+    client_id?: number;
+    direction?: 'BUY' | 'SELL';
+    deal_id?: string | null;
+    deal_reference?: string | null;
+    detail?: string;
+  }): SubmissionLedgerRow {
+    const existing = [...this.ledger.values()].find(
+      (L) =>
+        L.account_id === input.account_id &&
+        L.epic === input.epic &&
+        (L.state === 'POSITION_OPEN' || L.state === 'CLOSE_PENDING')
+    );
+    if (existing) {
+      this.updateLedger(existing.client_order_id, {
+        state: 'CLOSE_PENDING',
+        deal_id: input.deal_id ?? existing.deal_id,
+        deal_reference: input.deal_reference ?? existing.deal_reference,
+      });
+      return this.getLedger(existing.client_order_id)!;
+    }
+    const id = `close_${input.account_id}_${input.epic}_${Date.now()}`;
+    return this.beginSubmission({
+      client_order_id: id,
+      intent_id: id,
+      setup_id: input.detail || 'close_pending',
+      client_id: input.client_id ?? 0,
+      account_id: input.account_id,
+      epic: input.epic,
+      direction: input.direction || 'BUY',
+      size: 0,
+      state: 'CLOSE_PENDING',
+      deal_reference: input.deal_reference ?? null,
+      deal_id: input.deal_id ?? null,
+    });
+  }
+
+  /**
+   * Mark open POSITION_OPEN / CLOSE_PENDING as POSITION_CLOSED after broker flat.
+   * Idempotent.
    */
   markPositionClosed(accountId: number, epic: string, detail?: string): number {
     let n = 0;
@@ -156,9 +231,14 @@ export class DurableOrderStore extends OrderStore {
         /* illegal transition — leave as-is */
       }
     }
-    for (const L of this.openLedger(accountId, epic)) {
-      if (L.state === 'POSITION_OPEN') {
+    for (const L of [...this.ledger.values()]) {
+      if (
+        L.account_id === accountId &&
+        L.epic === epic &&
+        (L.state === 'POSITION_OPEN' || L.state === 'CLOSE_PENDING')
+      ) {
         this.updateLedger(L.client_order_id, { state: 'POSITION_CLOSED' });
+        n += 1;
       }
     }
     return n;

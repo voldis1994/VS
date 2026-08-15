@@ -250,48 +250,41 @@ describe('Pipeline authentication', () => {
   });
 });
 
-describe('Idempotency', () => {
-  it('same idempotency_key twice → exactly ONE Capital execution', async () => {
+describe('Idempotency / B3 alternate opener disabled', () => {
+  it('same idempotency_key twice → ZERO Capital executions (fanout fail-closed)', async () => {
     const { fanoutEntryIntent } = await import('./intentFanout.js');
     listActiveSubscriptionsForEpic.mockResolvedValue([
       sub({ client_id: 17, account_id: 170, epic: 'XAUUSD', lot_size: 0.1 }),
     ]);
 
-    await fanoutEntryIntent({
+    const r1 = await fanoutEntryIntent({
       epic: 'XAUUSD',
       direction: 'BUY',
       decision: 'ENTRY_READY',
       idempotency_key: 'mc-once-1',
     });
-    await fanoutEntryIntent({
+    const r2 = await fanoutEntryIntent({
       epic: 'XAUUSD',
       direction: 'BUY',
       decision: 'ENTRY_READY',
       idempotency_key: 'mc-once-1',
     });
 
-    expect(createCapitalPosition).toHaveBeenCalledTimes(1);
+    expect(createCapitalPosition).not.toHaveBeenCalled();
+    expect(r1.fanout.executed[0]?.ok).toBe(false);
+    expect(r1.fanout.executed[0]?.detail).toMatch(/ALTERNATE_OPENER_DISABLED/);
+    expect(r2.fanout.executed[0]?.detail).toMatch(/ALTERNATE_OPENER_DISABLED|Duplicate|already/);
     const opened = emitToClient.mock.calls.filter(
       (c: unknown[]) => (c[1] as { type: string }).type === 'trade_opened'
     );
-    expect(opened).toHaveLength(1);
+    expect(opened).toHaveLength(0);
   });
 
-  it('concurrent same key → exactly ONE Capital execution', async () => {
+  it('concurrent same key → still ZERO Capital opens (fail-closed)', async () => {
     const { fanoutEntryIntent } = await import('./intentFanout.js');
     listActiveSubscriptionsForEpic.mockResolvedValue([
       sub({ client_id: 17, account_id: 170, epic: 'XAUUSD', lot_size: 0.1 }),
     ]);
-
-    // Slow Capital so both enter before complete
-    let release!: () => void;
-    const gate = new Promise<void>((r) => {
-      release = r;
-    });
-    createCapitalPosition.mockImplementation(async () => {
-      await gate;
-      return { ok: true, detail: 'filled', deal_reference: 'DR-1' };
-    });
 
     const p1 = fanoutEntryIntent({
       epic: 'XAUUSD',
@@ -299,7 +292,6 @@ describe('Idempotency', () => {
       decision: 'ENTRY_READY',
       idempotency_key: 'mc-conc-1',
     });
-    // Let first claim win
     await new Promise((r) => setTimeout(r, 10));
     const p2 = fanoutEntryIntent({
       epic: 'XAUUSD',
@@ -307,10 +299,9 @@ describe('Idempotency', () => {
       decision: 'ENTRY_READY',
       idempotency_key: 'mc-conc-1',
     });
-    release();
     await Promise.all([p1, p2]);
 
-    expect(createCapitalPosition).toHaveBeenCalledTimes(1);
+    expect(createCapitalPosition).not.toHaveBeenCalled();
   });
 });
 

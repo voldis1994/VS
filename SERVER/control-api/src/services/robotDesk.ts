@@ -53,6 +53,9 @@ import { STRATEGY_VERSION, CONFIG_VERSION } from '../vs-core/versions.js';
 import { getClientTradingRegistry } from '../vs-core/clientTrading.js';
 import { evaluateStrategy, strategyToDecisionCode } from '../vs-core/strategyCore.js';
 import { FeedManager } from '../vs-core/feedManager.js';
+import {
+  assertEntriesAllowed,
+} from '../vs-core/moneyPathGate.js';
 import { getDurableOrderStore } from '../vs-core/durableOrderStore.js';
 import {
   buildMoneyPathRisk,
@@ -764,6 +767,19 @@ async function exitTrade(
 
   s.close_pending = true;
   s.mode = 'MANAGE';
+  try {
+    getDurableOrderStore().markClosePending({
+      account_id: s.account_id,
+      epic: s.epic,
+      client_id: s.client_id,
+      direction: s.open_side || undefined,
+      deal_id: s.deal_id,
+      deal_reference: s.last_deal_reference,
+      detail: reason,
+    });
+  } catch {
+    /* durable best-effort — in-memory close_pending still set */
+  }
   pushTick(s, {
     phase: 'INFO',
     bid: quote.bid,
@@ -781,6 +797,19 @@ async function enterTrade(
   reason: string,
   setupType?: string | null
 ) {
+  const entryGate = assertEntriesAllowed();
+  if (!entryGate.allowed) {
+    pushTick(s, {
+      phase: 'ERROR',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      code: DecisionCodes.BLOCKED_TECHNICAL,
+      detail: `BLOCKED_TECHNICAL · ${entryGate.code} · ${entryGate.reason}`,
+    });
+    return;
+  }
+
   // HARD RULE: never entry while any trade open on this epic
   const listed = await listCapitalOpenPositions(session);
   if (listed.ok) {
@@ -1483,6 +1512,14 @@ async function robotCycleBody(s: Internal) {
         if (!s.entry_at) s.entry_at = new Date().toISOString();
         s.mode = 'MANAGE';
         if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
+        // Restore durable CLOSE_PENDING across restart — do not issue a fresh close blindly
+        try {
+          if (getDurableOrderStore().isClosePending(s.account_id, s.epic)) {
+            s.close_pending = true;
+          }
+        } catch {
+          /* ignore */
+        }
       } else if (s.open_side) {
         // Local thought open but broker flat → treat as closed (external / pending close confirmed)
         pushTick(s, {

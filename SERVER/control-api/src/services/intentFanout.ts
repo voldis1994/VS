@@ -1,25 +1,12 @@
 import { pool } from '../db/pool.js';
-import { decrypt } from '../security/encryption.js';
-import {
-  acquireCapitalSession,
-  createCapitalPosition,
-  listCapitalOpenPositions,
-  fetchCapitalMarketQuote,
-  fetchCapitalMinutePrices,
-  computeSafetyCushionStopLevel,
-  isLateMoveOnOneMinute,
-} from './capitalCom.js';
-import { emitToClient } from './clientEvents.js';
 import {
   listActiveSubscriptionsForEpic,
   noteBrokerError,
-  noteBrokerOk,
   type ActiveSubscription,
 } from './clientSubscriptions.js';
-import { formatTradeLabel } from './tradePresentation.js';
 import { notePipelineRegime } from './regimes.js';
-import { attachManageOnlyRobot, hasEntryEnabledRobot } from './robotDesk.js';
-import { isCountertrendSide, minuteExhaustionConfirmed, trendBiasFromMinuteCandles } from './entryFromRegime.js';
+import { hasEntryEnabledRobot } from './robotDesk.js';
+import { assertAuthoritativeOpener } from '../vs-core/moneyPathGate.js';
 
 export { stopEntryRobotsForAccount } from './robotDesk.js';
 
@@ -54,26 +41,10 @@ export type FanoutResult = {
   }>;
 };
 
-async function loadCreds(connectionId: number): Promise<Record<string, string>> {
-  const { rows } = await pool.query(
-    `SELECT credential_type, ciphertext, iv, tag
-     FROM api_credential_metadata WHERE broker_connection_id = $1`,
-    [connectionId]
-  );
-  const out: Record<string, string> = {};
-  for (const row of rows) {
-    out[row.credential_type as string] = decrypt(
-      row.ciphertext as string,
-      row.iv as string,
-      row.tag as string
-    );
-  }
-  return out;
-}
-
 /**
  * ExecutionRouter equivalent (Node): EntryReady intent → subscribed RUNNING clients only.
  * Lot size from each subscription. No decision logic here.
+ * Broker opens are FAIL-CLOSED (B3) — sole opener is robotDesk durable path.
  */
 export async function executePipelineIntent(
   intent: PipelineIntentInput
@@ -227,217 +198,16 @@ async function executeForSubscription(
       });
     }
 
-    // ONE TRADE: skip if broker already open on this epic
-    const connRow = await pool.query(
-      `SELECT environment, identifier, broker_name FROM broker_connections WHERE id = $1`,
-      [sub.connection_id]
-    );
-    if (!connRow.rows.length || connRow.rows[0].broker_name !== 'capital_com') {
-      return finish({
-        client_id: sub.client_id,
-        account_id: sub.account_id,
-        lot_size: sub.lot_size,
-        ok: false,
-        detail: 'Not Capital.com',
-        entry_price: null,
-      });
-    }
-    const creds = await loadCreds(sub.connection_id);
-    const acc = await pool.query(
-      `SELECT external_account_id FROM broker_accounts WHERE id = $1`,
-      [sub.account_id]
-    );
-    const opened = await acquireCapitalSession({
-      environment: connRow.rows[0].environment as string,
-      apiKey: creds.api_key || '',
-      identifier: String(connRow.rows[0].identifier || '').trim(),
-      password: creds.password || '',
-      connectionId: sub.connection_id,
-      capitalAccountId: (acc.rows[0]?.external_account_id as string | null) || null,
-    });
-    if (!opened.ok) {
-      noteBrokerError(sub.client_id, opened.result.detail);
-      emitToClient(sub.client_id, {
-        type: 'error',
-        message: opened.result.detail,
-        robot_status: 'RUNNING',
-      });
-      return finish({
-        client_id: sub.client_id,
-        account_id: sub.account_id,
-        lot_size: sub.lot_size,
-        ok: false,
-        detail: opened.result.detail,
-        entry_price: null,
-      });
-    }
-
-    const listed = await listCapitalOpenPositions(opened.session);
-    if (listed.ok) {
-      const existing = listed.positions.find(
-        (p) => p.epic.toUpperCase() === sub.epic.toUpperCase()
-      );
-      if (existing) {
-        noteBrokerOk(sub.client_id);
-        return finish({
-          client_id: sub.client_id,
-          account_id: sub.account_id,
-          lot_size: sub.lot_size,
-          ok: false,
-          detail: 'Already open on epic — skip',
-          entry_price: existing.open_level,
-        });
-      }
-    }
-
-    // 3-minute trend only (not 20m) + skip chase at the end of the last 1m
-    const hist = await fetchCapitalMinutePrices(opened.session, sub.epic, 3);
-    if (hist.ok && isLateMoveOnOneMinute(direction, hist.candles)) {
-      noteBrokerOk(sub.client_id);
-      return finish({
-        client_id: sub.client_id,
-        account_id: sub.account_id,
-        lot_size: sub.lot_size,
-        ok: false,
-        detail: 'Skip entry — late on 1m candle (end of move)',
-        entry_price: null,
-      });
-    }
-    if (hist.ok) {
-      const bias = trendBiasFromMinuteCandles(hist.candles);
-      const first = hist.candles[0];
-      const last = hist.candles[hist.candles.length - 1];
-      const net =
-        first && last
-          ? (last.close - first.open) / Math.max(Math.abs(first.open), 1e-9)
-          : 0;
-      const sellIntoClimb = direction === 'SELL' && net > 0;
-      const buyIntoDump = direction === 'BUY' && net < 0;
-      const confirmedFade = minuteExhaustionConfirmed(direction, hist.candles);
-      if (!confirmedFade && (isCountertrendSide(direction, bias) || sellIntoClimb || buyIntoDump)) {
-        noteBrokerOk(sub.client_id);
-        return finish({
-          client_id: sub.client_id,
-          account_id: sub.account_id,
-          lot_size: sub.lot_size,
-          ok: false,
-          detail: `Skip entry — countertrend ${direction} vs lasting ${bias} net=${(net * 100).toFixed(3)}% (no SELL into climb / no BUY into dump)`,
-          entry_price: null,
-        });
-      }
-    } else if (direction === 'SELL' || direction === 'BUY') {
-      noteBrokerOk(sub.client_id);
-      return finish({
-        client_id: sub.client_id,
-        account_id: sub.account_id,
-        lot_size: sub.lot_size,
-        ok: false,
-        detail: 'Skip entry — no 1m trend, will not guess SELL/BUY',
-        entry_price: null,
-      });
-    }
-
-    // Safety SL = 0.20% of price
-    const q = await fetchCapitalMarketQuote(opened.session, sub.epic);
-    const mid =
-      q.mid != null && Number.isFinite(q.mid)
-        ? q.mid
-        : referencePrice != null && Number.isFinite(referencePrice)
-          ? Number(referencePrice)
-          : null;
-    let stopLevel: number | undefined;
-    if (mid != null) {
-      stopLevel = computeSafetyCushionStopLevel(direction, mid, {
-        bid: q.bid,
-        ask: q.ask,
-        spread: q.spread,
-        minStopDistance: q.min_stop_distance,
-      });
-    }
-
-    const result = await createCapitalPosition(opened.session, {
-      epic: sub.epic,
-      direction,
-      size: sub.lot_size,
-      ...(stopLevel != null ? { stopLevel } : {}),
-    });
-
-    if (!result.ok) {
-      noteBrokerError(sub.client_id, result.detail);
-      emitToClient(sub.client_id, {
-        type: 'error',
-        message: result.detail,
-      });
-      // NO trade_opened on failure
-      return finish({
-        client_id: sub.client_id,
-        account_id: sub.account_id,
-        lot_size: sub.lot_size,
-        ok: false,
-        detail: result.detail,
-        entry_price: null,
-      });
-    }
-
-    noteBrokerOk(sub.client_id);
-    const entry =
-      referencePrice != null && Number.isFinite(referencePrice) ? Number(referencePrice) : null;
-
-    // Persist execution/position best-effort
-    try {
-      await pool.query(
-        `INSERT INTO positions
-         (broker_account_id, instrument_id, direction, entry_price, quantity, status)
-         VALUES ($1, $2, $3, $4, $5, 'OPEN')`,
-        [
-          sub.account_id,
-          sub.instrument_id,
-          direction === 'BUY' ? 'LONG' : 'SHORT',
-          entry ?? 0,
-          sub.lot_size,
-        ]
-      );
-    } catch {
-      /* ignore */
-    }
-
-    emitToClient(sub.client_id, {
-      type: 'trade_opened',
-      market: sub.epic,
-      display_name: sub.display_name,
-      side: direction,
-      trade_type: formatTradeLabel(direction, setupType, regime),
-      lot_size: sub.lot_size,
-      entry_price: entry,
-      account_id: sub.account_id,
-      setup_type: setupType,
-      regime,
-    });
-
-    // Manage-only robot: exits / health reads — no entry brain
-    try {
-      await attachManageOnlyRobot({
-        account_id: sub.account_id,
-        epic: sub.epic,
-        display_name: sub.display_name,
-        lot_size: sub.lot_size,
-        side: direction,
-        entry_price: entry,
-        deal_reference: result.deal_reference || null,
-        regime,
-        setup_type: setupType,
-      });
-    } catch {
-      /* manage attach best-effort */
-    }
-
+    // B3: refuse broker open outside robotDesk durable Strategy path (before Capital session)
+    const gate = assertAuthoritativeOpener('intentFanout');
+    noteBrokerError(sub.client_id, gate.reason);
     return finish({
       client_id: sub.client_id,
       account_id: sub.account_id,
       lot_size: sub.lot_size,
-      ok: true,
-      detail: result.detail,
-      entry_price: entry,
+      ok: false,
+      detail: `${gate.code} · ${gate.reason}`,
+      entry_price: null,
     });
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);

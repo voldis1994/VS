@@ -3,7 +3,10 @@ import { pool } from '../db/pool.js';
 import { decrypt } from '../security/encryption.js';
 import { logAudit } from '../services/audit.js';
 import { getInstrumentById } from '../config/instruments.js';
-import { fetchAllCapitalMarkets, acquireCapitalSession, createCapitalPosition } from '../services/capitalCom.js';
+import { assertAuthoritativeOpener } from '../vs-core/moneyPathGate.js';
+import {
+  fetchAllCapitalMarkets, acquireCapitalSession
+} from '../services/capitalCom.js';
 
 export async function ensureBrokerAccount(connectionId: number, displayName: string): Promise<number> {
   const existing = await pool.query(
@@ -539,57 +542,20 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
         return reply.code(400).send({ error: opened.result.detail, message: opened.result.detail });
       }
 
-      const result = await createCapitalPosition(opened.session, {
-        epic,
-        direction: direction as 'BUY' | 'SELL',
-        size,
-        stopLevel: body.stop_level,
-        profitLevel: body.profit_level,
-      });
-
-      if (!result.ok) {
-        return reply.code(400).send({
-          error: result.detail,
-          message: result.detail,
-          status: result.status,
-          broker: result.json,
-        });
-      }
-
-      await logAudit('admin', 'capital_order_opened', 'broker_account', String(accountId), null, {
+      // B3: admin direct Capital open bypasses Strategy → durable → confirm. Fail closed.
+      const gate = assertAuthoritativeOpener('admin_trading_orders');
+      await logAudit('admin', 'capital_order_blocked', 'broker_account', String(accountId), null, {
         epic,
         direction,
         size,
-        deal_reference: result.deal_reference,
+        code: gate.code,
         environment: conn.environment,
       });
-
-      // Local open position for desk (best-effort)
-      try {
-        const m = await pool.query(
-          `SELECT id FROM capital_markets
-           WHERE broker_connection_id = $1 AND (epic = $2 OR epic ILIKE $2 OR display_name ILIKE $3)
-           ORDER BY updated_at DESC LIMIT 1`,
-          [conn.connection_id, epic, `%${epic}%`]
-        );
-        const instrumentId = (m.rows[0]?.id as number) || 0;
-        await pool.query(
-          `INSERT INTO positions
-           (broker_account_id, instrument_id, direction, entry_price, quantity, status)
-           VALUES ($1, $2, $3, 0, $4, 'OPEN')`,
-          [accountId, instrumentId, direction === 'BUY' ? 'LONG' : 'SHORT', size]
-        );
-      } catch {
-        /* Capital order still live even if local row fails */
-      }
-
-      return {
-        success: true,
-        deal_reference: result.deal_reference,
-        detail: result.detail,
-        account: conn.display_name,
-        environment: conn.environment,
-      };
+      return reply.code(403).send({
+        error: gate.code,
+        message: gate.reason,
+        code: gate.code,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Order failed';
       return reply.code(500).send({ error: message, message });
