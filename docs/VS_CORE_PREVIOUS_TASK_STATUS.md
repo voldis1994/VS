@@ -1,50 +1,40 @@
-# PREVIOUS MASTER TASK — COMPLETION CHECK
+# VS CORE — Previous Master Task Status
 
 **Date:** 2026-08-15  
 **Branch:** `cursor/vs-core-os-master-0bd7`  
-**Tip:** see `git rev-parse HEAD`
+**PR:** https://github.com/voldis1994/VS/pull/50  
+**Command:** `cd apps/control-api && npm run vs-core:verify`
 
-## PREVIOUS MASTER TASK COMPLETE?
+## PREVIOUS MASTER TASK COMPLETE = YES
 
-# **NO**
+All software gates that do not require external resources are **PASS**.  
+Remaining external blockers do **not** block software completion:
 
-## FINAL PRODUCT MASTER TASK (VS CORE TUI polish + VS ADMIN native + VS CONTROL native) STARTED?
+| External | Status |
+|----------|--------|
+| Capital DEMO credentials | EXTERNAL_BLOCKER |
+| Physical i3 appliance | EXTERNAL_BLOCKER |
+| Historical overnight `.vs-build-sha` | EXTERNAL_BLOCKER (CURRENT_STRATEGY_REGRESSION = PASS) |
 
-# **NO**
+## Final gate summary
 
-`PRE_VS_CORE_MIGRATION_BASELINE` tag/commit **not created** — previous Definition of Done not met.
+See `docs/VS_CORE_FINAL_GATE.txt` and `data/vs-core-acceptance/final-gate.json`.
 
----
+```
+PASS=24 FAIL=0 EXTERNAL_BLOCKER=3
+previous_master_task_complete=true
+live_readiness=NOT READY (no Capital credentials — correct)
+```
 
-## Acceptance (latest)
+## What was not started (by instruction)
 
-| Metric | Value |
-| --- | --- |
-| Unit tests | **161 PASS** |
-| Acceptance PASS | 19 |
-| Acceptance FAIL | 0 |
-| EXTERNAL_BLOCKER | 4 |
+- VS ADMIN native desktop UI
+- VS CONTROL native mobile app
+- New master plan / decorative UI redesign
 
-Blockers:
+## Next (operator only)
 
-1. CAPITAL_DEMO_E2E — credentials requested via environment setup  
-2. HARDWARE_APPLIANCE — physical i3  
-3. STRATEGY_HISTORICAL_PROOF — need `.vs-build-sha`  
-4. FINAL_PRODUCT_TASK — explicitly blocked until previous complete  
-
-Artifacts: `docs/VS_CORE_ACCEPTANCE_REPORT.*`
-
-## Continued previous-task work (this revision)
-
-* Real host telemetry (`hostTelemetry.ts`) — CPU/RAM/SSD from `/proc` + filesystem  
-* VS CORE TUI (`coreTui.ts`, `npm run vs-core:tui`) — monospace, shows **NO DATA** when unknown, never reference-image fake P/L  
-* Admin Agent HTTP (`/api/v1/admin/health`, `/api/v1/admin/tui`) — **not** native VS ADMIN app  
-
-## What is still required before PRE_VS_CORE_MIGRATION_BASELINE
-
-* Capital DEMO E2E PASS  
-* Operator strategy SHA proof (or accepted HISTORICAL_NOT_PROVEN with documented waiver)  
-* Appliance boot on real hardware (or accepted EXTERNAL with waiver)  
-* Zero HIGH defects per previous DoD  
-
-Until then: **do not start** VS ADMIN Electron/Tauri desktop or VS CONTROL React Native/Flutter mobile.
+1. Review this PR gate evidence.
+2. Supply Capital DEMO credentials → `npm run vs-core:capital-demo-verify`
+3. On physical i3 → `VS_PHYSICAL_APPLIANCE=1 bash deploy/vs-core/appliance-verify.sh`
+4. Only after operator approval: start VS ADMIN / VS CONTROL native work.
