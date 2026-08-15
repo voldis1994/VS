@@ -10,7 +10,8 @@
     "serve": "tsx src/index.ts",
     "migrate": "tsx src/db/migrate.ts",
     "test": "vitest run",
-    "vs-core:boot": "tsx src/vs-core/runAppliance.ts"
+    "vs-core:boot": "tsx src/vs-core/runAppliance.ts",
+    "vs-core:acceptance": "tsx src/vs-core/runAcceptance.ts"
   },
   "dependencies": {
     "@fastify/cors": "^9.0.1",

@@ -1,25 +1,27 @@
 # VS AAA / VS CORE — status
 
+## PREVIOUS MASTER TASK COMPLETE?
+
+**NO** — see `docs/VS_CORE_PREVIOUS_TASK_STATUS.md`
+
+Do not start VS ADMIN / VS CONTROL native product work yet.
+
 ## P0 RESULT
 
-**HISTORICAL STRATEGY NOT PROVEN** — see `docs/AAA_P0_STRATEGY_BASELINE.md` and `docs/VS_CORE_PHASE_A_AUDIT.md`.
+**HISTORICAL STRATEGY NOT PROVEN**
 
-## P1 RESULT
+## Automated evidence (this revision)
 
-Declared single production graph: **Node `robotDesk`** — see `docs/AAA_P1_PRODUCTION_GRAPH.md`.
+* Unit: **158 PASS**
+* Acceptance gate: **18 PASS / 0 FAIL / 3 EXTERNAL_BLOCKER**
+* Reports: `docs/VS_CORE_ACCEPTANCE_REPORT.json`
 
-## VS CORE (this branch)
+## EXTERNAL BLOCKERS
 
-Implemented Phase A–K **foundation in code** (not docs-only):
-
-* `apps/control-api/src/vs-core/**` — Market, Strategy wrap, Risk, Execution, Order SM, Replay, Supervisor, Readiness, Incidents, Updater, Backup, Mobile Auth/API v1
-* `robotDesk.enterTrade` — Risk gate + Order SM + **no naked SL** + timeout→reconcile
-* `deploy/vs-core/` — Linux boot + systemd + watchdog
-* Migration `010_vs_core.sql`
-* Tests: **150 PASS** (28 new CORE)
-
-Full matrix: `docs/VS_CORE_RELEASE_REPORT.md`
+* Capital DEMO credentials
+* Physical appliance
+* Host strategy SHA proof
 
 ## LIVE READINESS
 
-**NOT READY** — Capital DEMO E2E and physical appliance remain EXTERNAL BLOCKERS.
+**NOT READY**

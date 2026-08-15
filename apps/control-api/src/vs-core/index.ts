@@ -20,3 +20,8 @@ export * from './mobileApiV1.js';
 export * from './boot.js';
 export * from './timeSync.js';
 export * from './storageHealth.js';
+export * from './capitalSessionManager.js';
+export * from './feedManager.js';
+export * from './crashRecovery.js';
+export * from './strategyRegression.js';
+export * from './acceptanceGate.js';
