@@ -1,7 +1,7 @@
 # VS PRIVATE NETWORK FINAL REPORT
 
 PR: https://github.com/voldis1994/VS/pull/52  
-HEAD: (see git after push)  
+HEAD: `8d69a6e2ecec30e04da7dbfc2f1fd40fdcdb2fb9`  
 **LIVE_READY: false** — PHYSICAL_i3 / CAPITAL_REAL_DEMO remain EXTERNAL_BLOCKER (never mocked)
 
 ## Results
