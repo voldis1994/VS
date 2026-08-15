@@ -1,24 +1,40 @@
 /**
- * Production decision / wait / block reason codes.
- * UI may only display these when the matching runtime gate actually fired.
- * UNKNOWN as a decision outcome is forbidden — use ERROR_STATE_UNRESOLVED.
+ * Production decision codes.
+ *
+ * Decision model:
+ *   TRADE INTENT  → SIGNAL_CREATED / ENTER path (BUY|SELL)
+ *   NO TRADE      → NO_SETUP (not an error, not a WAIT trading mode)
+ *   SYSTEM PROBLEM → BLOCKED_TECHNICAL + precise reason (via risk/detail)
+ *
+ * UNKNOWN as a decision outcome is forbidden.
+ * Artificial WAIT_* trading modes (cooldown, daily loss, max trades) are forbidden.
+ *
+ * Legacy WAIT_* codes remain only as aliases for older ticks / regression migration;
+ * new code paths must emit NO_SETUP or BLOCKED_TECHNICAL.
  */
 
 export const DecisionCodes = {
-  // Wait (strategy / market — not errors)
-  WAIT_NO_SETUP: 'WAIT_NO_SETUP',
-  WAIT_BAR_FORMING: 'WAIT_BAR_FORMING',
-  WAIT_COOLDOWN: 'WAIT_COOLDOWN',
-  WAIT_MARKET_CLOSED: 'WAIT_MARKET_CLOSED',
-  WAIT_STALE_FEED: 'WAIT_STALE_FEED',
-  WAIT_LATE_MOVE: 'WAIT_LATE_MOVE',
-  WAIT_SPREAD_TOO_HIGH: 'WAIT_SPREAD_TOO_HIGH',
-  WAIT_INSUFFICIENT_EVIDENCE: 'WAIT_INSUFFICIENT_EVIDENCE',
-  WAIT_RISK_LIMIT: 'WAIT_RISK_LIMIT',
-  WAIT_MANAGE_ONLY: 'WAIT_MANAGE_ONLY',
-  WAIT_TRADING_OFF: 'WAIT_TRADING_OFF',
-  WAIT_COUNTERTREND: 'WAIT_COUNTERTREND',
-  WAIT_NO_FADE: 'WAIT_NO_FADE',
+  /** No valid strategy setup on this event — continue scanning next market event. */
+  NO_SETUP: 'NO_SETUP',
+  /** Technical safety blocked execution — not a strategy judgment. */
+  BLOCKED_TECHNICAL: 'BLOCKED_TECHNICAL',
+
+  // Legacy aliases (prefer NO_SETUP / BLOCKED_TECHNICAL)
+  WAIT_NO_SETUP: 'NO_SETUP',
+  WAIT_BAR_FORMING: 'NO_SETUP',
+  WAIT_NO_FADE: 'NO_SETUP',
+  WAIT_COUNTERTREND: 'NO_SETUP',
+  WAIT_LATE_MOVE: 'NO_SETUP',
+  WAIT_INSUFFICIENT_EVIDENCE: 'NO_SETUP',
+  /** @deprecated artificial — must not block execution */
+  WAIT_COOLDOWN: 'BLOCKED_TECHNICAL',
+  WAIT_MARKET_CLOSED: 'BLOCKED_TECHNICAL',
+  WAIT_STALE_FEED: 'BLOCKED_TECHNICAL',
+  WAIT_SPREAD_TOO_HIGH: 'BLOCKED_TECHNICAL',
+  /** @deprecated was misused for reconcile failure — use BLOCKED_TECHNICAL */
+  WAIT_RISK_LIMIT: 'BLOCKED_TECHNICAL',
+  WAIT_MANAGE_ONLY: 'BLOCKED_TECHNICAL',
+  WAIT_TRADING_OFF: 'BLOCKED_TECHNICAL',
 
   // Entry progression
   SIGNAL_CREATED: 'SIGNAL_CREATED',
@@ -54,8 +70,25 @@ export type DecisionEvent = {
   account_id?: number;
 };
 
-export function isWaitCode(code: DecisionCode): boolean {
-  return code.startsWith('WAIT_');
+/** @deprecated WAIT is not a trading mode — use isNoSetup / isTechnicalBlock */
+export function isWaitCode(code: DecisionCode | string): boolean {
+  return code === DecisionCodes.NO_SETUP || String(code).startsWith('WAIT_');
+}
+
+export function isNoSetup(code: DecisionCode | string): boolean {
+  return code === DecisionCodes.NO_SETUP || code === 'WAIT_NO_SETUP' || code === 'WAIT_BAR_FORMING' || code === 'WAIT_NO_FADE' || code === 'WAIT_COUNTERTREND' || code === 'WAIT_LATE_MOVE';
+}
+
+export function isTechnicalBlock(code: DecisionCode | string): boolean {
+  return (
+    code === DecisionCodes.BLOCKED_TECHNICAL ||
+    code === DecisionCodes.RISK_REJECTED ||
+    code === DecisionCodes.DUPLICATE_PREVENTED ||
+    code === DecisionCodes.STALE_PRICE ||
+    code === DecisionCodes.MARKET_CLOSED ||
+    code === DecisionCodes.RATE_LIMITED ||
+    String(code).startsWith('RISK_REJECTED_')
+  );
 }
 
 export function isErrorCode(code: DecisionCode): boolean {
@@ -68,33 +101,39 @@ export function isErrorCode(code: DecisionCode): boolean {
     code === DecisionCodes.STALE_PRICE ||
     code === DecisionCodes.RISK_REJECTED ||
     code === DecisionCodes.MARKET_CLOSED ||
-    code === DecisionCodes.DUPLICATE_PREVENTED
+    code === DecisionCodes.DUPLICATE_PREVENTED ||
+    code === DecisionCodes.BLOCKED_TECHNICAL
   );
 }
 
 /** Human Latvian/EN short line for operators — never invent status. */
-export function humanDecision(code: DecisionCode): string {
+export function humanDecision(code: DecisionCode | string): string {
   switch (code) {
-    case DecisionCodes.WAIT_NO_SETUP:
-      return 'Gaida setup — šajā 10s close nav with-trend ieejas';
-    case DecisionCodes.WAIT_BAR_FORMING:
-      return 'Gaida 10s sveces close';
-    case DecisionCodes.WAIT_COOLDOWN:
-      return 'Cooldownoldown pēc close';
-    case DecisionCodes.WAIT_MARKET_CLOSED:
+    case DecisionCodes.NO_SETUP:
+    case 'WAIT_NO_SETUP':
+      return 'Nav setup — turpina lasīt nākamo market event';
+    case 'WAIT_BAR_FORMING':
+      return 'Nav closed 10s bar — nav setup';
+    case DecisionCodes.BLOCKED_TECHNICAL:
+    case 'WAIT_COOLDOWN':
+    case 'WAIT_RISK_LIMIT':
+      return 'Tehniski bloķēts — skaties error code';
+    case 'WAIT_MARKET_CLOSED':
+    case DecisionCodes.MARKET_CLOSED:
       return 'Capital marketStatus nav TRADEABLE/OPEN';
-    case DecisionCodes.WAIT_STALE_FEED:
-      return 'Capital kotācija atpaliek no fresher refs';
-    case DecisionCodes.WAIT_LATE_MOVE:
-      return '1m svece jau aizskrējusi trade virzienā';
-    case DecisionCodes.WAIT_MANAGE_ONLY:
+    case 'WAIT_STALE_FEED':
+    case DecisionCodes.STALE_PRICE:
+      return 'PRIMARY feed stale/offline';
+    case 'WAIT_LATE_MOVE':
+      return '1m svece jau aizskrējusi trade virzienā — nav valid setup';
+    case 'WAIT_MANAGE_ONLY':
       return 'Manage-only — lokālais entry brain izslēgts';
-    case DecisionCodes.WAIT_TRADING_OFF:
+    case 'WAIT_TRADING_OFF':
       return 'Trading OFF — tikai lasīšana';
-    case DecisionCodes.WAIT_COUNTERTREND:
-      return 'Countertrend / with-trend veto';
-    case DecisionCodes.WAIT_NO_FADE:
-      return 'RANGE/fade/reversal — ieeja aizliegta';
+    case 'WAIT_COUNTERTREND':
+      return 'Countertrend / with-trend veto — nav valid setup';
+    case 'WAIT_NO_FADE':
+      return 'RANGE/fade/reversal — ieeja aizliegta (strategy)';
     case DecisionCodes.ERROR_STATE_UNRESOLVED:
       return 'Stāvoklis nav atrisināts — ERROR';
     case DecisionCodes.ERROR_NO_QUOTE:
@@ -104,16 +143,16 @@ export function humanDecision(code: DecisionCode): string {
     case DecisionCodes.RATE_LIMITED:
       return 'Capital rate limit';
     case DecisionCodes.DUPLICATE_PREVENTED:
-      return 'ONE TRADE ONLY — jau ir atvērta pozīcija';
+      return 'Duplicate / open position — jauns orderis bloķēts';
     case DecisionCodes.BROKER_REJECTED:
       return 'Capital noraidīja orderi';
     case DecisionCodes.SIGNAL_CREATED:
-      return 'Setup → signal';
+      return 'Valid setup → trade intent';
     case DecisionCodes.ORDER_SUBMITTING:
       return 'Sūta orderi uz Capital';
     case DecisionCodes.FILLED:
       return 'Fill / pozīcija atvērta';
     default:
-      return code;
+      return String(code);
   }
 }

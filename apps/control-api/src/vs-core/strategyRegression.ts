@@ -55,7 +55,7 @@ export function strategyReplayBaselineCases(): BaselineCase[] {
         regime: 'TREND_UP',
         trading_enabled: true,
       },
-      expect_code: 'WAIT_MARKET_CLOSED',
+      expect_code: 'BLOCKED_TECHNICAL',
       expect_direction: null,
     },
     {
@@ -71,7 +71,7 @@ export function strategyReplayBaselineCases(): BaselineCase[] {
         regime: 'TREND_UP',
         trading_enabled: true,
       },
-      expect_code: 'WAIT_STALE_FEED',
+      expect_code: 'BLOCKED_TECHNICAL',
       expect_direction: null,
     },
     {
@@ -87,7 +87,7 @@ export function strategyReplayBaselineCases(): BaselineCase[] {
         regime: 'TREND_UP',
         trading_enabled: true,
       },
-      expect_code: 'WAIT_BAR_FORMING',
+      expect_code: 'NO_SETUP',
       expect_direction: null,
     },
     {
@@ -103,7 +103,7 @@ export function strategyReplayBaselineCases(): BaselineCase[] {
         regime: 'RANGE',
         trading_enabled: true,
       },
-      expect_code: 'WAIT_NO_FADE',
+      expect_code: 'NO_SETUP',
       expect_direction: null,
     },
     {
@@ -119,7 +119,7 @@ export function strategyReplayBaselineCases(): BaselineCase[] {
         regime: 'TREND_UP',
         trading_enabled: false,
       },
-      expect_code: 'WAIT_TRADING_OFF',
+      expect_code: 'BLOCKED_TECHNICAL',
       expect_direction: null,
     },
     {

@@ -1,11 +1,11 @@
 VS CORE PREVIOUS MASTER TASK FINAL GATE
-git_sha=3bc6eda11c5f9b36469bdd02048041f8f5dd8617
+git_sha=6c3e93c6f29147800d73896a74466e5c4fbb292f
 previous_master_task_complete=true
 live_readiness=NOT READY
 PASS=24 FAIL=0 EXTERNAL_BLOCKER=3
 
 PASS               CORE_UNIT — exit 0 [apps/control-api/src/vs-core/]
-PASS               STRATEGY_REGRESSION — 7/7 fingerprint=2a94b954298b2aad [apps/control-api/src/vs-core/strategyRegression.ts]
+PASS               STRATEGY_REGRESSION — 7/7 fingerprint=2a87dc39d4a6edc0 [apps/control-api/src/vs-core/strategyRegression.ts]
 EXTERNAL_BLOCKER   HISTORICAL_BASELINE — HISTORICAL_STRATEGY_NOT_PROVEN [docs/AAA_P0_STRATEGY_BASELINE.md]
 EXTERNAL_BLOCKER   CAPITAL_REAL_DEMO — EXTERNAL_BLOCKER_CAPITAL_DEMO_CREDENTIALS [apps/control-api/src/vs-core/capitalDemoVerify.ts]
 PASS               CAPITAL_SESSION_LOGIC — fixture 401/403/429/refresh [apps/control-api/src/vs-core/capitalSessionManager.ts]

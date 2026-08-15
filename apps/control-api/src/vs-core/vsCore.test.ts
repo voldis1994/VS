@@ -274,7 +274,7 @@ describe('Strategy Core', () => {
     expect(d.decision_id).toBeTruthy();
   });
 
-  it('WAIT_MARKET_CLOSED when closed', () => {
+  it('BLOCKED_TECHNICAL when market closed', () => {
     const d = evaluateStrategy({
       epic: 'GOLD',
       market_snapshot_id: 'snap1',
@@ -286,7 +286,7 @@ describe('Strategy Core', () => {
       regime: 'TREND_UP',
       trading_enabled: true,
     });
-    expect(d.code).toBe('WAIT_MARKET_CLOSED');
+    expect(d.code).toBe('BLOCKED_TECHNICAL');
   });
 });
 

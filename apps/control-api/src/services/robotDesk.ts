@@ -56,12 +56,13 @@ import { getClientTradingRegistry } from '../vs-core/clientTrading.js';
 
 export type RobotTick = {
   at: string;
-  phase: 'READ' | 'DECIDE' | 'ORDER' | 'WAIT' | 'ERROR' | 'INFO' | 'MANAGE' | 'EXIT';
+  /** SCAN = reading market, no setup yet. WAIT is legacy alias only — not a trading mode. */
+  phase: 'READ' | 'DECIDE' | 'ORDER' | 'SCAN' | 'WAIT' | 'ERROR' | 'INFO' | 'MANAGE' | 'EXIT';
   bid: number | null;
   ask: number | null;
   mid: number | null;
   detail: string;
-  /** Machine reason — required for WAIT/ERROR when known. Never invent UNKNOWN. */
+  /** Machine reason — NO_SETUP / BLOCKED_TECHNICAL / SIGNAL_*. Never invent UNKNOWN. */
   code?: DecisionCode;
 };
 
@@ -706,12 +707,12 @@ async function enterTrade(
     }
   } else {
     pushTick(s, {
-      phase: 'WAIT',
+      phase: 'ERROR',
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      code: DecisionCodes.WAIT_RISK_LIMIT,
-      detail: `ENTRY blocked — cannot reconcile positions before order (${listed.detail || 'list failed'})`,
+      code: DecisionCodes.BLOCKED_TECHNICAL,
+      detail: `BLOCKED_TECHNICAL · cannot reconcile positions before order (${listed.detail || 'list failed'})`,
     });
     return;
   }
@@ -803,12 +804,12 @@ async function enterTrade(
   });
   if (!risk.ok) {
     pushTick(s, {
-      phase: 'WAIT',
+      phase: 'ERROR',
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      code: DecisionCodes.RISK_REJECTED,
-      detail: `${risk.code}: ${risk.reason}`,
+      code: DecisionCodes.BLOCKED_TECHNICAL,
+      detail: `BLOCKED_TECHNICAL · ${risk.code}: ${risk.reason}`,
     });
     return;
   }
@@ -1292,11 +1293,11 @@ async function robotCycle(s: Internal) {
       if (now - s.last_market_closed_tick_ms >= CLOSED_MARKET_TICK_EVERY_MS) {
         s.last_market_closed_tick_ms = now;
         pushTick(s, {
-          phase: 'WAIT',
+          phase: 'SCAN',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          code: DecisionCodes.WAIT_MARKET_CLOSED,
+          code: DecisionCodes.BLOCKED_TECHNICAL,
           detail: formatCapitalParkDetail(
             s.epic,
             quote.market_status,
@@ -1440,12 +1441,12 @@ async function robotCycle(s: Internal) {
 
     if (!s.trading_enabled) {
       pushTick(s, {
-        phase: 'WAIT',
+        phase: 'SCAN',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        code: DecisionCodes.WAIT_TRADING_OFF,
-        detail: 'Trading OFF — reading only (open trades still managed above)',
+        code: DecisionCodes.BLOCKED_TECHNICAL,
+        detail: 'BLOCKED_TECHNICAL · Trading OFF — reading only (open trades still managed above)',
       });
       return;
     }
@@ -1454,30 +1455,19 @@ async function robotCycle(s: Internal) {
     if (!s.entry_enabled) {
       s.mode = s.open_side ? 'MANAGE' : 'FLAT';
       pushTick(s, {
-        phase: 'WAIT',
+        phase: 'SCAN',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        code: DecisionCodes.WAIT_MANAGE_ONLY,
+        code: DecisionCodes.BLOCKED_TECHNICAL,
         detail:
-          'MANAGE-ONLY · waiting for central pipeline intent (no local BUY/SELL brain)',
+          'BLOCKED_TECHNICAL · MANAGE-ONLY · waiting for central pipeline intent (no local BUY/SELL brain)',
       });
       return;
     }
 
     s.mode = 'ENTRY';
-    const sinceClose = Date.now() - (s.closed_at_ms || 0);
-    if (s.closed_at_ms > 0 && sinceClose < 20_000) {
-      pushTick(s, {
-        phase: 'WAIT',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        code: DecisionCodes.WAIT_COOLDOWN,
-        detail: `10s OHLC cooldown ${Math.ceil((20_000 - sinceClose) / 1000)}s after close · then next bar`,
-      });
-      return;
-    }
+    // No artificial post-close cooldown — proven strategy reacts on the next valid setup.
 
     if (quote.mid == null) return;
 
@@ -1555,29 +1545,29 @@ async function robotCycle(s: Internal) {
           s.regime === 'FAILED_BREAKOUT_DOWN' ||
           s.regime === 'REVERSAL_CANDIDATE';
         const only = fadeBlock
-          ? 'WAIT (need confirm after large move — no SELL on the impulse bar)'
+          ? 'NO_SETUP (fade/reversal forbidden on this regime)'
           : s.trend_bias === 'UP'
             ? 'only BUY with-trend (dip or follow)'
             : s.trend_bias === 'DOWN'
               ? 'only SELL on dump (with-trend)'
-              : 'wait with-trend bias or exhaustion confirm';
+              : 'no with-trend setup on this close';
         pushTick(s, {
-          phase: 'DECIDE',
+          phase: 'SCAN',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          code: fadeBlock ? DecisionCodes.WAIT_NO_FADE : DecisionCodes.WAIT_NO_SETUP,
-          detail: `${ohlcLine} · ${regimeLabel} not with-trend on this 10s close · ${only}`,
+          code: DecisionCodes.NO_SETUP,
+          detail: `${ohlcLine} · ${regimeLabel} · ${only}`,
         });
       }
     } else {
       pushTick(s, {
-        phase: 'WAIT',
+        phase: 'SCAN',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        code: DecisionCodes.WAIT_BAR_FORMING,
-        detail: `${ohlcLine} · forming C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'} · wait bar close`,
+        code: DecisionCodes.NO_SETUP,
+        detail: `${ohlcLine} · forming C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'} · no closed bar yet`,
       });
     }
 
@@ -1585,12 +1575,12 @@ async function robotCycle(s: Internal) {
       const hist = await fetchCapitalMinutePrices(opened.session, s.epic, 3);
       if (hist.ok && isLateMoveOnOneMinute(direction, hist.candles)) {
         pushTick(s, {
-          phase: 'WAIT',
+          phase: 'SCAN',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          code: DecisionCodes.WAIT_LATE_MOVE,
-          detail: `SKIP · late on 1m candle (end of move) · ${direction}`,
+          code: DecisionCodes.NO_SETUP,
+          detail: `NO_SETUP · late on 1m candle (end of move) · ${direction}`,
         });
         direction = null;
       }
@@ -1616,12 +1606,12 @@ async function robotCycle(s: Internal) {
       const lag = detectStaleQuoteAdverse(direction, quote.mid, refs);
       if (lag.block) {
         pushTick(s, {
-          phase: 'WAIT',
+          phase: 'ERROR',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          code: DecisionCodes.WAIT_STALE_FEED,
-          detail: `SKIP · ${lag.reason}`,
+          code: DecisionCodes.BLOCKED_TECHNICAL,
+          detail: `BLOCKED_TECHNICAL · ${lag.reason}`,
         });
         direction = null;
       }
@@ -1633,12 +1623,12 @@ async function robotCycle(s: Internal) {
       });
       if (deny) {
         pushTick(s, {
-          phase: 'WAIT',
+          phase: 'SCAN',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          code: DecisionCodes.WAIT_COUNTERTREND,
-          detail: `SKIP · ${deny}`,
+          code: DecisionCodes.NO_SETUP,
+          detail: `NO_SETUP · ${deny}`,
         });
         direction = null;
       }
