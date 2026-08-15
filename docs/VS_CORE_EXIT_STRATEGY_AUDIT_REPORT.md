@@ -3,7 +3,7 @@
 **Repository:** voldis1994/VS  
 **Working PR:** [#52](https://github.com/voldis1994/VS/pull/52)  
 **Starting HEAD:** `c5048cac7d04f617a8ba0ba711042418b4e92d86`  
-**Final HEAD:** `71f2a4cf30a7fd3457e400b45f303dbad0959bde`
+**Final HEAD:** `4c51262264a5f6e4d183c30c1f1a854655d882fc` (fix commit `71f2a4cf30a7fd3457e400b45f303dbad0959bde`)
 
 ## 1. Starting HEAD
 
@@ -11,7 +11,8 @@
 
 ## 2. Final HEAD
 
-`71f2a4cf30a7fd3457e400b45f303dbad0959bde`
+`4c51262264a5f6e4d183c30c1f1a854655d882fc`  
+Exit fix: `71f2a4cf30a7fd3457e400b45f303dbad0959bde`
 
 ## 3. Exit architecture discovered
 
