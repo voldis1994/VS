@@ -57,6 +57,13 @@ export function buildMoneyPathRisk(input: MoneyPathRiskInput): MoneyPathRiskBuil
       reason: feed.block_reason || 'PRIMARY_FEED_OFFLINE',
     };
   }
+  if (feed.primary_status === 'ERROR') {
+    return {
+      ok: false,
+      code: 'RISK_REJECTED_FEED_OFFLINE',
+      reason: feed.block_reason || 'PRIMARY_FEED_ERROR',
+    };
+  }
   if (feed.primary_status === 'STALE' || !feed.allows_execution) {
     return {
       ok: false,
@@ -119,7 +126,8 @@ export function buildMoneyPathRisk(input: MoneyPathRiskInput): MoneyPathRiskBuil
     client_trading_enabled: input.client_trading_enabled,
     market_open: true,
     feed_fresh: feed.primary_status === 'LIVE',
-    feed_offline: feed.primary_status === 'OFFLINE' || feed.primary_status === 'MISSING',
+    // OFFLINE/MISSING/ERROR already returned above — surviving path is never offline.
+    feed_offline: false,
     spread: input.quote.spread ?? null,
     max_spread: input.max_spread ?? null,
     has_open_position: input.has_open_position,

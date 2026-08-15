@@ -802,11 +802,11 @@ export async function listCapitalOpenPositions(
   return { ok: true, positions, detail: `${positions.length} open` };
 }
 
-/** Resolve dealReference → dealId after open. */
+/** Resolve dealReference → dealId after open. Reject Capital dealStatus failures. */
 export async function confirmCapitalDeal(
   session: CapitalSession,
   dealReference: string
-): Promise<{ ok: boolean; deal_id?: string; detail: string }> {
+): Promise<{ ok: boolean; deal_id?: string; deal_status?: string; detail: string }> {
   const ref = dealReference.trim();
   if (!ref) return { ok: false, detail: 'Empty dealReference' };
   const res = await session.get(`/api/v1/confirms/${encodeURIComponent(ref)}`);
@@ -816,13 +816,39 @@ export async function confirmCapitalDeal(
       detail: `Confirm HTTP ${res.status}: ${res.json?.errorCode || res.json?.message || res.text.slice(0, 120)}`,
     };
   }
+  const dealStatus = String(res.json?.dealStatus || res.json?.status || '')
+    .trim()
+    .toUpperCase();
+  if (
+    dealStatus === 'REJECTED' ||
+    dealStatus === 'CANCELLED' ||
+    dealStatus === 'DELETED' ||
+    dealStatus === 'FAILED'
+  ) {
+    return {
+      ok: false,
+      deal_status: dealStatus,
+      detail: `Confirm ${dealStatus} for ${ref}${
+        res.json?.reason || res.json?.errorCode ? `: ${res.json?.reason || res.json?.errorCode}` : ''
+      }`,
+    };
+  }
   const dealId = String(
     res.json?.dealId || res.json?.affectedDeals?.[0]?.dealId || ''
   ).trim();
   if (!dealId) {
-    return { ok: false, detail: `Confirm OK but no dealId for ${ref}` };
+    return {
+      ok: false,
+      deal_status: dealStatus || undefined,
+      detail: `Confirm OK but no dealId for ${ref}${dealStatus ? ` (status=${dealStatus})` : ''}`,
+    };
   }
-  return { ok: true, deal_id: dealId, detail: `Confirmed dealId=${dealId}` };
+  return {
+    ok: true,
+    deal_id: dealId,
+    deal_status: dealStatus || 'ACCEPTED',
+    detail: `Confirmed dealId=${dealId}${dealStatus ? ` status=${dealStatus}` : ''}`,
+  };
 }
 
 /** Close one open position by dealId. */
