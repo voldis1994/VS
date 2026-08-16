@@ -7,6 +7,21 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 DATA="${VS_SERVER_DATA:-${VS_CORE_DATA:-$ROOT/../data/vs-server}}"
 LOG="${VS_SERVER_LOG:-${VS_CORE_LOG:-$ROOT/../data/vs-server/logs}}"
+
+# Load durable host env if present (secrets never committed)
+if [[ -f "$DATA/server.env" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$DATA/server.env"
+  set +a
+fi
+if [[ -f "$ROOT/control-api/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$ROOT/control-api/.env"
+  set +a
+fi
+
 export VS_CORE_DATA="${VS_CORE_DATA:-$DATA}"
 export VS_CORE_ROOT="${VS_CORE_ROOT:-$ROOT}"
 export NODE_ENV="${NODE_ENV:-production}"

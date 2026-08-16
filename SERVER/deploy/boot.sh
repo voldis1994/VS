@@ -6,13 +6,29 @@ set -euo pipefail
 ROOT="${VS_SERVER_ROOT:-${VS_CORE_ROOT:-/opt/vs-server}}"
 DATA="${VS_SERVER_DATA:-${VS_CORE_DATA:-/var/lib/vs-server}}"
 LOG="${VS_SERVER_LOG:-${VS_CORE_LOG:-/var/log/vs-server}}"
+
+if [[ -f "$DATA/server.env" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$DATA/server.env"
+  set +a
+fi
+if [[ -f "$ROOT/control-api/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$ROOT/control-api/.env"
+  set +a
+fi
+
 export NODE_ENV="${NODE_ENV:-production}"
 export OPERATING_MODE="${OPERATING_MODE:-DEMO}"
 export LIVE_TRADING_ENABLED="${LIVE_TRADING_ENABLED:-false}"
-export CONTROL_API_HOST="${CONTROL_API_HOST:-127.0.0.1}"
+export CONTROL_API_HOST="${CONTROL_API_HOST:-10.77.0.1}"
 export CONTROL_API_PORT="${CONTROL_API_PORT:-3000}"
 export VS_CORE_DATA="$DATA"
 export VS_CORE_ROOT="$ROOT"
+export VS_SERVER_DATA="$DATA"
+export VS_SERVER_ROOT="$ROOT"
 
 mkdir -p "$DATA" "$LOG" "$DATA/market" "$DATA/backup" "$DATA/updates" "$DATA/orders"
 

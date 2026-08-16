@@ -8,6 +8,7 @@ Type=simple
 User=vs-server
 Group=vs-server
 WorkingDirectory=/opt/vs-server
+EnvironmentFile=-/var/lib/vs-server/server.env
 Environment=VS_SERVER_ROOT=/opt/vs-server
 Environment=VS_CORE_ROOT=/opt/vs-server
 Environment=VS_SERVER_DATA=/var/lib/vs-server
@@ -15,7 +16,7 @@ Environment=VS_CORE_DATA=/var/lib/vs-server
 Environment=NODE_ENV=production
 Environment=OPERATING_MODE=DEMO
 Environment=LIVE_TRADING_ENABLED=false
-Environment=CONTROL_API_HOST=127.0.0.1
+Environment=CONTROL_API_HOST=10.77.0.1
 Environment=CONTROL_API_PORT=3000
 ExecStart=/opt/vs-server/deploy/boot.sh
 Restart=on-failure

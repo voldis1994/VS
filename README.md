@@ -16,6 +16,17 @@ Money path lives under `SERVER/control-api` (verified P0). Compatibility symlink
 
 **LIVE_READY is NOT claimed** until Capital DEMO + physical i3 are proven on real hardware.
 
+## First boot (Debian 13 / i3 SERVER)
+
+On the appliance (root), from a git checkout:
+
+```bash
+sudo WIFI_SSID='YourWifi' WIFI_PASSWORD='YourPass' ./SERVER/FIRST_BOOT_DEBIAN
+```
+
+This installs packages, repairs WiFi, starts Postgres, installs VS SERVER, brings up WireGuard, and starts `vs-server` in **DEMO** (`LIVE=false`).  
+WiFi-only repair: `sudo ./SERVER/FIX_WIFI`.
+
 ## Architecture
 
 ```

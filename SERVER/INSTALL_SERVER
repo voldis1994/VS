@@ -75,9 +75,15 @@ if [[ -d "$UNIT_SRC" ]]; then
     "$UNIT_SRC/vs-watchdog.service" >/etc/systemd/system/vs-server-watchdog.service
   sed "s|vs-watchdog|vs-server-watchdog|g; s|vs-core|vs-server|g" \
     "$UNIT_SRC/vs-watchdog.timer" >/etc/systemd/system/vs-server-watchdog.timer
+  # Always load durable secrets/runtime from data dir
+  if ! grep -q 'EnvironmentFile=.*server.env' /etc/systemd/system/vs-server.service; then
+    sed -i '/\[Service\]/a EnvironmentFile=-/var/lib/vs-server/server.env' \
+      /etc/systemd/system/vs-server.service
+  fi
 fi
 
 chmod +x "$PREFIX/INSTALL_SERVER" "$PREFIX/START_SERVER" "$PREFIX/STOP_SERVER" "$PREFIX/STATUS_SERVER" \
+  "$PREFIX/FIX_WIFI" "$PREFIX/FIRST_BOOT_DEBIAN" \
   "$PREFIX/deploy/boot.sh" \
   "$PREFIX/network/"* 2>/dev/null || true
 
@@ -98,15 +104,18 @@ VS_WG_LISTEN_PORT=51820
 VS_SERVER_ID=VS-CORE-01
 # DDNS / public hostname foundation (not hardcoded public IP):
 # VS_SERVER_ENDPOINT_HOSTNAME=vs-core-01.example.com
-# Set a strong token before enabling management:
+# Required before START_SERVER (FIRST_BOOT_DEBIAN generates these):
+# MASTER_ENCRYPTION_KEY=
 # API_ADMIN_TOKEN=
+# DB_HOST=127.0.0.1
+# DB_PASSWORD=
 EOF
   chown vs-server:vs-server "$DATA/server.env"
   chmod 0600 "$DATA/server.env"
 fi
 
 echo "SUCCESS: VS SERVER installed at $PREFIX"
-echo "Next: $PREFIX/network/SETUP_PRIVATE_NETWORK  then edit $DATA/server.env"
-echo "Then: APPLY_FIREWALL → UP_WIREGUARD → START_SERVER"
+echo "Preferred first boot: sudo $PREFIX/FIRST_BOOT_DEBIAN"
+echo "Or manual: SETUP_PRIVATE_NETWORK → APPLY_FIREWALL → UP_WIREGUARD → START_SERVER"
 echo "NOTE: VS_PRIVATE_NETWORK=1 is fail-closed — WG must be READY (no public HTTP fallback)"
 exit 0
