@@ -1,7 +1,7 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-  Install VS ADMIN on Windows MSI — deps, keys, LAN discovery, enrollment, verify snapshot.
+  Install VS ADMIN on Windows MSI - deps, keys, LAN discovery, enrollment, verify snapshot.
   End user: double-click INSTALL_ADMIN.bat (no Bash).
 #>
 $ErrorActionPreference = "Stop"
@@ -9,10 +9,13 @@ $AdminRoot = Split-Path -Parent $PSScriptRoot
 $RepoRoot = Split-Path -Parent $AdminRoot
 Set-Location $AdminRoot
 
-function Write-Step([string]$msg) { Write-Host $msg }
+function Write-Step {
+  param([string]$Message)
+  Write-Host $Message
+}
 
 Write-Step "========================================"
-Write-Step " VS ADMIN INSTALL — Windows"
+Write-Step " VS ADMIN INSTALL - Windows"
 Write-Step "========================================"
 
 if ($env:OS -notmatch "Windows") {
@@ -28,8 +31,10 @@ if (-not $node) {
   Write-Host "  Or: winget install OpenJS.NodeJS.LTS"
   exit 1
 }
-$verRaw = (& node -v) -replace '^v', ''
-$major = [int]($verRaw.Split('.')[0])
+
+$verRaw = (& node -v)
+$verRaw = $verRaw -replace '^v', ''
+$major = [int](($verRaw.Split('.'))[0])
 if ($major -lt 20) {
   Write-Host "FAIL: Node.js $verRaw found; need 20+"
   Write-Host "  Upgrade from https://nodejs.org/ then re-run INSTALL_ADMIN.bat"
@@ -40,20 +45,31 @@ Write-Step "Node.js v$verRaw OK"
 # --- npm deps: ADMIN + dashboard ---
 Write-Step "Installing ADMIN npm dependencies..."
 npm install
-if ($LASTEXITCODE -ne 0) { Write-Host "FAIL: ADMIN npm install"; exit 1 }
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "FAIL: ADMIN npm install"
+  exit 1
+}
 
 $Dash = Join-Path $RepoRoot "apps\dashboard"
-if (Test-Path (Join-Path $Dash "package.json")) {
-  Write-Step "Installing Control Panel (apps/dashboard) dependencies..."
-  Push-Location $Dash
-  try {
-    npm install
-    if ($LASTEXITCODE -ne 0) { Write-Host "FAIL: dashboard npm install"; exit 1 }
-  } finally {
-    Pop-Location
+$DashPkg = Join-Path $Dash "package.json"
+if (-not (Test-Path $DashPkg)) {
+  Write-Host "FAIL: apps/dashboard missing - Control Panel UI required"
+  exit 1
+}
+
+Write-Step "Installing Control Panel (apps/dashboard) dependencies..."
+Push-Location $Dash
+$dashOk = $true
+try {
+  npm install
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "FAIL: dashboard npm install"
+    $dashOk = $false
   }
-} else {
-  Write-Host "FAIL: apps/dashboard missing — Control Panel UI required"
+} finally {
+  Pop-Location
+}
+if (-not $dashOk) {
   exit 1
 }
 
@@ -65,13 +81,15 @@ New-Item -ItemType Directory -Force -Path (Join-Path $dataDir "keys") | Out-Null
 
 # Restrict ACL on data dir (best-effort)
 try {
+  $user = [string]$env:USERNAME
   icacls $dataDir /inheritance:r | Out-Null
-  icacls $dataDir /grant:r "${env:USERNAME}:(OI)(CI)F" | Out-Null
+  icacls $dataDir /grant:r ($user + ":(OI)(CI)F") | Out-Null
 } catch {
-  Write-Host "WARN: could not tighten ACL on $dataDir"
+  Write-Host ("WARN: could not tighten ACL on " + $dataDir)
 }
 
 # --- Orchestrated install (discover + enroll + verify) ---
+# LAN-first: does NOT require WireGuard / 10.77.0.1 when home LAN reaches i3
 Write-Step "Discovering VS-CORE-01 on LAN (WireGuard NOT required for home ADMIN)..."
 npx --yes tsx app/installAdmin.ts
 if ($LASTEXITCODE -ne 0) {
@@ -82,9 +100,12 @@ if ($LASTEXITCODE -ne 0) {
 $envFile = Join-Path $AdminRoot "config\control-panel.env"
 if (Test-Path $envFile) {
   try {
+    $user = [string]$env:USERNAME
     icacls $envFile /inheritance:r | Out-Null
-    icacls $envFile /grant:r "${env:USERNAME}:F" | Out-Null
-  } catch { }
+    icacls $envFile /grant:r ($user + ":F") | Out-Null
+  } catch {
+    # best-effort ACL; ignore failures
+  }
 }
 
 Write-Step ""
