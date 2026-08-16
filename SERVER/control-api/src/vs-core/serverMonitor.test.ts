@@ -30,6 +30,20 @@ const probesOk = () => [
   probe('CONTROL_API', 'OK', 'up'),
 ];
 
+const procOnline = async () => ({
+  status: 'ONLINE' as const,
+  latency_ms: null,
+  detail: 'test process',
+  error: null,
+});
+
+const procOffline = async () => ({
+  status: 'OFFLINE' as const,
+  latency_ms: null,
+  detail: 'stopped',
+  error: 'stopped',
+});
+
 describe('serverMonitor builder', () => {
   let dataRoot: string;
   const prevLan = process.env.VS_LAN_MANAGEMENT;
@@ -55,25 +69,45 @@ describe('serverMonitor builder', () => {
       getProbes: probesOk,
       apiSelfOnline: true,
       dataRoot,
+      checkServerProcess: procOnline,
       checkPostgres: async () => ({ ok: true, detail: 'ok' }),
       checkRedis: async () => ({ ok: true, detail: 'PONG' }),
       checkWireguard: async () => ({ state: 'ONLINE', detail: 'vs0 UP' }),
     });
     expect(s.services.server.state).toBe('ONLINE');
     expect(s.services.api.state).toBe('ONLINE');
+    expect(s.api.status).toBe('ONLINE');
+    expect(s.database.status).toBe('ONLINE');
     expect(s.services.postgres.state).toBe('ONLINE');
     expect(s.services.redis.state).toBe('ONLINE');
     expect(s.services.wireguard.state).toBe('ONLINE');
+    expect(s.strategy.status).toBe('OK');
     expect(s.live_trading_enabled).toBe(false);
     expect(s.trading.enabled).toBe(false);
     expect(s.market.state).toBe('UNKNOWN'); // WARNING must not become OPEN
   });
 
-  it('reports server/API OFFLINE when apiSelfOnline=false', async () => {
+  it('keeps SERVER PROCESS independent from CONTROL API', async () => {
     const s = await buildServerMonitorSnapshot({
       getProbes: probesOk,
       apiSelfOnline: false,
       dataRoot,
+      checkServerProcess: procOnline,
+      checkPostgres: async () => ({ ok: true, detail: 'ok' }),
+      checkRedis: async () => ({ ok: true, detail: 'PONG' }),
+      checkWireguard: async () => ({ state: 'ONLINE', detail: 'vs0' }),
+    });
+    expect(s.server_process.status).toBe('ONLINE');
+    expect(s.api.status).toBe('OFFLINE');
+    expect(s.ok).toBe(false);
+  });
+
+  it('reports API OFFLINE when apiSelfOnline=false', async () => {
+    const s = await buildServerMonitorSnapshot({
+      getProbes: probesOk,
+      apiSelfOnline: false,
+      dataRoot,
+      checkServerProcess: procOffline,
       checkPostgres: async () => ({ ok: true, detail: 'ok' }),
       checkRedis: async () => ({ ok: true, detail: 'PONG' }),
       checkWireguard: async () => ({ state: 'ONLINE', detail: 'vs0' }),
@@ -87,6 +121,7 @@ describe('serverMonitor builder', () => {
     const s = await buildServerMonitorSnapshot({
       getProbes: probesOk,
       dataRoot,
+      checkServerProcess: procOnline,
       checkPostgres: async () => ({
         ok: false,
         detail: 'PostgreSQL connection refused',
@@ -95,6 +130,7 @@ describe('serverMonitor builder', () => {
       checkWireguard: async () => ({ state: 'ONLINE', detail: 'vs0' }),
     });
     expect(s.services.postgres.state).toBe('OFFLINE');
+    expect(s.database.status).toBe('OFFLINE');
     expect(s.last_error).toContain('POSTGRES');
     expect(s.errors.some((e) => /PostgreSQL connection refused/.test(e))).toBe(true);
   });
@@ -155,7 +191,7 @@ describe('serverMonitor builder', () => {
       checkRedis: async () => ({ ok: true, detail: 'PONG' }),
       checkWireguard: async () => ({ state: 'ONLINE', detail: 'vs0' }),
     });
-    expect(none.admin.state).toBe('UNKNOWN');
+    expect(none.admin.status).toBe('UNKNOWN');
     expect(none.admin.transport).toBe('NONE');
 
     const reg = getDeviceRegistry(dataRoot);
@@ -177,25 +213,27 @@ describe('serverMonitor builder', () => {
     });
     expect(disc.admin.device_id).toBe(d.device_id);
     expect(disc.admin.connected).toBe(false);
-    expect(disc.admin.state).toBe('OFFLINE');
+    expect(disc.admin.status).toBe('OFFLINE');
     expect(disc.admin.transport).toBe('LAN');
 
     reg.heartbeat(d.device_id, {});
     const up = await buildServerMonitorSnapshot({
       getProbes: probesOk,
       dataRoot,
+      checkServerProcess: procOnline,
       checkPostgres: async () => ({ ok: true, detail: 'ok' }),
       checkRedis: async () => ({ ok: true, detail: 'PONG' }),
       checkWireguard: async () => ({ state: 'ONLINE', detail: 'vs0' }),
     });
     expect(up.admin.connected).toBe(true);
-    expect(up.admin.state).toBe('ONLINE');
+    expect(up.admin.status).toBe('ONLINE');
     expect(up.admin.transport).toBe('LAN');
   });
 
   it('offline snapshot keeps UNKNOWN — never ONLINE', () => {
     const s = offlineServerMonitorSnapshot('ECONNREFUSED');
     expect(s.services.api.state).toBe('OFFLINE');
+    expect(s.api.status).toBe('OFFLINE');
     expect(s.services.postgres.state).toBe('UNKNOWN');
     expect(s.services.redis.state).toBe('UNKNOWN');
     expect(s.market.state).toBe('UNKNOWN');
@@ -203,13 +241,15 @@ describe('serverMonitor builder', () => {
     const frame = renderServerMonitorFrame(s);
     expect(frame).toContain('VS CORE SERVER');
     expect(frame).toContain('OFFLINE');
-    expect(frame).not.toMatch(/POSTGRES\s+ONLINE/);
+    expect(frame).toContain('READ-ONLY');
+    expect(frame).not.toMatch(/POSTGRES\s+●\s+ONLINE/);
   });
 
   it('MARKET WARNING stays UNKNOWN not OPEN', async () => {
     const s = await buildServerMonitorSnapshot({
       getProbes: () => [probe('MARKET', 'WARNING', 'waiting', 'MARKET_WAITING')],
       dataRoot,
+      checkServerProcess: procOnline,
       checkPostgres: async () => ({ ok: true, detail: 'ok' }),
       checkRedis: async () => ({ ok: true, detail: 'PONG' }),
       checkWireguard: async () => ({ state: 'ONLINE', detail: 'vs0' }),
@@ -253,10 +293,10 @@ describe('GET /api/v1/server/monitor', () => {
     expect(body.role).toBe('server_monitor');
     expect(body.server_id).toBeTruthy();
     expect(body.server_version).toBeTruthy();
-    expect(body.services.api).toBeTruthy();
-    expect(body.services.postgres).toBeTruthy();
-    expect(body.services.redis).toBeTruthy();
-    expect(body.services.wireguard).toBeTruthy();
+    expect(body.api).toBeTruthy();
+    expect(body.database).toBeTruthy();
+    expect(body.strategy).toBeTruthy();
+    expect(body.wireguard.listen_port).toBeTruthy();
     expect(body.admin).toBeTruthy();
     expect(body.clients).toBeTruthy();
     expect(body.market).toBeTruthy();
@@ -274,6 +314,6 @@ describe('GET /api/v1/server/monitor', () => {
     expect(res.statusCode).toBe(200);
     expect(String(res.headers['content-type'])).toMatch(/text\/plain/);
     expect(res.body).toContain('VS CORE SERVER');
-    expect(res.body).toContain('READ-ONLY MONITOR');
+    expect(res.body).toContain('READ-ONLY');
   });
 });

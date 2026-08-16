@@ -47,6 +47,8 @@ export type DeskContextValue = {
   selectedAccountId: number | null;
   setSelectedAccountId: (id: number | null) => void;
   refreshDesk: () => void;
+  /** Authoritative i3 monitor contract (may be null if offline) */
+  monitor?: import('../types/serverMonitor').ServerMonitor | null;
 };
 
 export const DeskContext = createContext<DeskContextValue>({
@@ -58,6 +60,7 @@ export const DeskContext = createContext<DeskContextValue>({
   selectedAccountId: null,
   setSelectedAccountId: () => undefined,
   refreshDesk: () => undefined,
+  monitor: null,
 });
 
 export function useDesk() {

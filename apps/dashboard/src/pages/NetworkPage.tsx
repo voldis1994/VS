@@ -42,6 +42,21 @@ export function NetworkPage() {
     8000,
   );
   const { data: snap } = useApi<Snapshot>('/api/v1/admin/snapshot', 5000);
+  const { data: mon } = useApi<{
+    wireguard?: { status: string; listen_port: number; peers: number; peers_active: number };
+    clients?: {
+      total: number;
+      online: number;
+      offline: number;
+      devices: Array<{
+        device_id: string;
+        connection_state: string;
+        transport: string;
+        last_seen_human?: string | null;
+      }>;
+    };
+    network?: { status: string; lan_ip: string | null };
+  }>('/api/v1/server/monitor', 5000);
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [lastCode, setLastCode] = useState<string | null>(null);
@@ -138,6 +153,16 @@ export function NetworkPage() {
             WG port: {net?.meta?.wg_listen_port ?? '—'} · endpoint host:{' '}
             {net?.meta?.server_endpoint_hostname || '—'}
           </div>
+          {mon?.wireguard && (
+            <div style={{ marginTop: 8, fontFamily: 'var(--font-mono)', fontSize: 13 }}>
+              MONITOR WG {mon.wireguard.status} · peers {mon.wireguard.peers} · active{' '}
+              {mon.wireguard.peers_active}
+              <br />
+              NETWORK {mon.network?.status} {mon.network?.lan_ip || ''}
+              <br />
+              CLIENTS online {mon.clients?.online ?? 0}/{mon.clients?.total ?? 0}
+            </div>
+          )}
         </div>
         <div className="card">
           <div className="section-title">CREATE ENROLLMENT</div>

@@ -24,6 +24,29 @@ export async function registerSystemRoutes(
 
   app.get('/api/system/status', async () => {
     const dbOk = await healthCheck();
+    // Redis: real TCP probe — never hardcode ok
+    let redisOk: boolean | null = null;
+    try {
+      const { createConnection } = await import('net');
+      redisOk = await new Promise<boolean>((resolve) => {
+        const port = Number(process.env.REDIS_PORT || 6379);
+        const sock = createConnection({ host: '127.0.0.1', port });
+        const done = (ok: boolean) => {
+          try {
+            sock.destroy();
+          } catch {
+            /* ignore */
+          }
+          resolve(ok);
+        };
+        sock.setTimeout(800);
+        sock.once('connect', () => done(true));
+        sock.once('timeout', () => done(false));
+        sock.once('error', () => done(false));
+      });
+    } catch {
+      redisOk = null;
+    }
     let openPositions = 0;
     let todayExecutions = 0;
     let clientsActive = 0;
@@ -62,12 +85,13 @@ export async function registerSystemRoutes(
       /* robot reader optional on first boot */
     }
 
+    // Do not invent HEALTHY for market/execution — unknown until proven via monitor/snapshot
     return {
-      market_core: 'HEALTHY',
-      execution: 'HEALTHY',
+      market_core: 'UNKNOWN',
+      execution: 'UNKNOWN',
       database: dbOk ? 'HEALTHY' : 'UNHEALTHY',
       postgres: dbOk ? 'ok' : 'down',
-      redis: 'ok',
+      redis: redisOk === true ? 'ok' : redisOk === false ? 'down' : 'unknown',
       control_api: 'HEALTHY',
       feeds: { active: feedActive, unhealthy: feedUnhealthy },
       clients: { active: clientsActive },

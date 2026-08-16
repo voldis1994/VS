@@ -1,151 +1,177 @@
 import { useApi } from '../hooks/useApi';
+import type { ServerMonitor } from '../types/serverMonitor';
 
-type AdminSnapshot = {
-  ok?: boolean;
-  connection?: string;
-  server_id?: string;
-  hostname?: string;
-  uptime_human?: string;
-  host?: {
-    cpu_percent?: number | null;
-    ram_used_bytes?: number | null;
-    ram_total_bytes?: number | null;
-    ssd_used_bytes?: number | null;
-    ssd_total_bytes?: number | null;
-    network_online?: boolean;
-    network_status?: string;
-  };
-  core?: { state?: string; live_ready?: boolean; reason_code?: string | null };
-  market?: { status?: string; primary_feed?: string };
-  strategy?: { status?: string };
-  risk?: { status?: string };
-  execution?: { status?: string };
-  capital?: { status?: string };
-  live_ready?: boolean;
-};
-
-function fmtBytes(n: number | null | undefined): string {
-  if (n == null || !Number.isFinite(n)) return '—';
-  return `${(n / 1024 ** 3).toFixed(1)} GB`;
+function Cell({
+  label,
+  status,
+  extra,
+}: {
+  label: string;
+  status: string;
+  extra?: string;
+}) {
+  const st = (status || 'UNKNOWN').toUpperCase();
+  const cls =
+    st === 'ONLINE' || st === 'OK' || st === 'CONNECTED'
+      ? 'on'
+      : st === 'WARNING' || st === 'STARTING'
+        ? 'warn'
+        : st === 'UNKNOWN' || st === 'NOT_INSTALLED'
+          ? ''
+          : 'off';
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '6px 0' }}>
+      <span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{label}</span>
+      <span style={{ fontWeight: 600, fontFamily: 'var(--font-mono)', fontSize: 13 }}>
+        <span className={`dot ${cls}`} style={{ marginRight: 8 }} />
+        {st}
+        {extra ? `  ${extra}` : ''}
+      </span>
+    </div>
+  );
 }
 
 export function SystemPage() {
   const {
-    data: status,
-    error: statusErr,
-    loading: statusLoading,
-  } = useApi<Record<string, unknown>>('/api/system/status', 3000);
-  const { data: snap, error: snapErr } = useApi<AdminSnapshot>('/api/v1/admin/snapshot', 3000);
+    data: mon,
+    error: monErr,
+    loading,
+  } = useApi<ServerMonitor>('/api/v1/server/monitor', 3000);
   const { data: settings } = useApi<Record<string, unknown>>('/api/settings');
 
-  const offline = Boolean(statusErr && snapErr);
+  const offline = Boolean(monErr && !mon);
 
   return (
     <div>
-      <h1 className="page-title">System</h1>
+      <h1 className="page-title">Server</h1>
+      <p style={{ color: 'var(--text-secondary)', marginTop: -8, marginBottom: 16 }}>
+        Authoritative status from i3 <code>/api/v1/server/monitor</code> — same contract as the
+        physical console monitor. No demo values.
+      </p>
 
       {offline && (
         <div className="card" style={{ marginBottom: 16, borderColor: 'var(--danger, #c44)' }}>
           <div className="section-title">SERVER OFFLINE</div>
-          <div>Cannot reach i3 VS-CORE-01. No cached READY/LIVE is shown.</div>
-          <div style={{ color: 'var(--text-secondary)', marginTop: 8 }}>
-            {statusErr || snapErr}
+          <div>Cannot reach i3 VS-CORE-01 monitor API.</div>
+          <div style={{ color: 'var(--text-secondary)', marginTop: 8 }}>{monErr}</div>
+        </div>
+      )}
+
+      {loading && !mon && <div className="card">Loading server monitor…</div>}
+
+      {mon && (
+        <div className="grid grid-2" style={{ marginBottom: 16, gap: 16 }}>
+          <div className="card">
+            <div className="section-title">
+              {mon.server_id} — CORE SERVICES
+            </div>
+            <Cell label="SERVER PROCESS" status={mon.server_process.status} />
+            <Cell label="CONTROL API" status={mon.api.status} extra={`:${mon.api.port}`} />
+            <Cell label="POSTGRES" status={mon.database.status} />
+            <Cell label="REDIS" status={mon.redis.status} />
+            <Cell
+              label="WIREGUARD"
+              status={mon.wireguard.status}
+              extra={`UDP :${mon.wireguard.listen_port} · peers ${mon.wireguard.peers}`}
+            />
+            <Cell
+              label="NETWORK"
+              status={mon.network.status}
+              extra={mon.network.lan_ip || undefined}
+            />
+          </div>
+
+          <div className="card">
+            <div className="section-title">ADMIN / CLIENTS</div>
+            <Cell
+              label="MSI CONTROL"
+              status={mon.admin.connected ? 'CONNECTED' : mon.admin.device_id ? 'DISCONNECTED' : 'UNKNOWN'}
+            />
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 8 }}>
+              TRANSPORT {mon.admin.transport} · DEVICE {mon.admin.device_name || mon.admin.device_id || '—'}
+              <br />
+              LAST SEEN {mon.admin.last_seen_human || mon.admin.last_seen || '—'}
+            </div>
+            <Cell label="CLIENTS TOTAL" status={String(mon.clients.total)} />
+            <div style={{ fontSize: 13 }}>
+              Online {mon.clients.online} · Offline {mon.clients.offline}
+            </div>
+            {mon.clients.devices.slice(0, 8).map((d) => (
+              <Cell
+                key={d.device_id}
+                label={d.device_id}
+                status={
+                  d.connection_state === 'CONNECTED' || d.connection_state === 'ONLINE'
+                    ? 'ONLINE'
+                    : 'OFFLINE'
+                }
+                extra={d.transport}
+              />
+            ))}
+          </div>
+
+          <div className="card">
+            <div className="section-title">TRADING</div>
+            <Cell label="MARKET" status={mon.market.state} />
+            <Cell
+              label="LIVE TRADING"
+              status={mon.trading.enabled ? 'ENABLED' : 'DISABLED'}
+            />
+            <Cell label="STRATEGY" status={mon.strategy.status} />
+            <Cell label="RISK" status={mon.risk.status} />
+            <Cell label="EXECUTION" status={mon.execution.status} />
+            <Cell label="RECONCILIATION" status={mon.reconciliation.status} />
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>
+              Mode {mon.operating_mode} · readiness {mon.trading.readiness}
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="section-title">SYSTEM</div>
+            <Cell
+              label="CPU"
+              status={mon.system.cpu_percent != null ? `${mon.system.cpu_percent}%` : 'UNKNOWN'}
+            />
+            <Cell
+              label="RAM"
+              status={mon.system.ram_percent != null ? `${mon.system.ram_percent}%` : 'UNKNOWN'}
+            />
+            <Cell
+              label="DISK"
+              status={mon.system.disk_percent != null ? `${mon.system.disk_percent}%` : 'UNKNOWN'}
+            />
+            <div style={{ fontSize: 13, marginTop: 8 }}>
+              Uptime {mon.uptime_human}
+              <br />
+              Version {mon.server_version}
+              <br />
+              Updated {mon.timestamp}
+            </div>
+            <div className="section-title" style={{ marginTop: 16 }}>
+              LAST ERROR
+            </div>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }}>
+              {mon.last_error || 'NONE'}
+            </div>
           </div>
         </div>
       )}
 
-      <div className="grid grid-2" style={{ marginBottom: 16 }}>
+      {settings && (
         <div className="card">
-          <div className="section-title">SERVER (ADMIN SNAPSHOT)</div>
-          {!snap && snapErr && <div>SERVER OFFLINE / {snapErr}</div>}
-          {snap && (
-            <div className="grid grid-2" style={{ gap: 8 }}>
-              <div>
-                <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>server_id</span>
-                <div style={{ fontWeight: 600 }}>{snap.server_id || '—'}</div>
-              </div>
-              <div>
-                <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>connection</span>
-                <div style={{ fontWeight: 600 }}>{snap.connection || '—'}</div>
-              </div>
-              <div>
-                <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>uptime</span>
-                <div style={{ fontWeight: 600 }}>{snap.uptime_human || '—'}</div>
-              </div>
-              <div>
-                <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>core</span>
-                <div style={{ fontWeight: 600 }}>{snap.core?.state || '—'}</div>
-              </div>
-              <div>
-                <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>CPU</span>
-                <div style={{ fontWeight: 600 }}>
-                  {snap.host?.cpu_percent != null ? `${snap.host.cpu_percent}%` : '—'}
-                </div>
-              </div>
-              <div>
-                <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>RAM</span>
-                <div style={{ fontWeight: 600 }}>
-                  {fmtBytes(snap.host?.ram_used_bytes)} / {fmtBytes(snap.host?.ram_total_bytes)}
-                </div>
-              </div>
-              <div>
-                <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>Disk</span>
-                <div style={{ fontWeight: 600 }}>
-                  {fmtBytes(snap.host?.ssd_used_bytes)} / {fmtBytes(snap.host?.ssd_total_bytes)}
-                </div>
-              </div>
-              <div>
-                <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>Network</span>
-                <div style={{ fontWeight: 600 }}>{snap.host?.network_status || '—'}</div>
-              </div>
-              <div>
-                <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>Market</span>
-                <div style={{ fontWeight: 600 }}>{snap.market?.status || '—'}</div>
-              </div>
-              <div>
-                <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>Strategy</span>
-                <div style={{ fontWeight: 600 }}>{snap.strategy?.status || '—'}</div>
-              </div>
-              <div>
-                <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>Execution</span>
-                <div style={{ fontWeight: 600 }}>{snap.execution?.status || '—'}</div>
-              </div>
-              <div>
-                <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>Capital</span>
-                <div style={{ fontWeight: 600 }}>{snap.capital?.status || '—'}</div>
-              </div>
-              <div>
-                <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>LIVE_READY</span>
-                <div style={{ fontWeight: 600 }}>
-                  {snap.live_ready === true || snap.core?.live_ready === true ? 'true' : 'false'}
-                </div>
-              </div>
-            </div>
-          )}
+          <div className="section-title">SETTINGS (read)</div>
+          <pre style={{ fontSize: 11, overflow: 'auto' }}>
+            {JSON.stringify(
+              {
+                mode: settings.mode ?? settings.operating_mode,
+                live_enabled: settings.live_enabled,
+              },
+              null,
+              2,
+            )}
+          </pre>
         </div>
-        <div className="card">
-          <div className="section-title">Process Health {statusLoading ? '…' : ''}</div>
-          {statusErr && !status ? (
-            <div>SERVER OFFLINE</div>
-          ) : (
-            <div className="grid grid-2" style={{ gap: 8 }}>
-              {['market_core', 'execution', 'database', 'control_api', 'mode', 'git_sha'].map((k) => (
-                <div key={k}>
-                  <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>{k}</span>
-                  <div style={{ fontWeight: 600 }}>{String(status?.[k] ?? '—')}</div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="section-title">Configuration (server-reported)</div>
-        <pre style={{ fontSize: 12, overflow: 'auto' }}>
-          {settings ? JSON.stringify(settings, null, 2) : statusErr ? 'SERVER OFFLINE' : '—'}
-        </pre>
-      </div>
+      )}
     </div>
   );
 }

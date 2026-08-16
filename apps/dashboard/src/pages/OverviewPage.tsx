@@ -27,23 +27,6 @@ type SystemEvent = {
   payload?: unknown;
 };
 
-function seedSeries(seed: number, len: number, base = 10000): number[] {
-  const out: number[] = [];
-  let v = base + (seed % 500);
-  for (let i = 0; i < len; i++) {
-    v += Math.sin(i / 2.4 + seed) * 40 + ((seed * (i + 3)) % 17) - 8;
-    out.push(Math.max(100, v));
-  }
-  return out;
-}
-
-function seedBars(seed: number, len: number): number[] {
-  return Array.from({ length: len }, (_, i) => {
-    const n = Math.sin(i * 0.9 + seed) * 180 + ((seed * (i + 1)) % 90) - 40;
-    return Math.round(n);
-  });
-}
-
 type MarketOpt = {
   instrument_id: number;
   epic?: string;
@@ -56,15 +39,8 @@ type MarketOpt = {
 const OPERATING_MODES = ['REPLAY', 'PAPER', 'DEMO', 'LIVE'] as const;
 
 export function OverviewPage() {
-  const {
-    status,
-    clients,
-    accounts,
-    selectedClientId,
-    selectedAccountId,
-    setSelectedAccountId,
-    refreshDesk,
-  } = useDesk();
+  const { status, clients, accounts, selectedClientId, selectedAccountId, setSelectedAccountId, refreshDesk, monitor } =
+    useDesk();
 
   const [positions, setPositions] = useState<Position[]>([]);
   const [events, setEvents] = useState<SystemEvent[]>([]);
@@ -163,21 +139,13 @@ export function OverviewPage() {
     return filtered.length ? filtered : accounts;
   }, [accounts, selectedClientId]);
 
-  const equitySeries = useMemo(
-    () => seedSeries((selectedAccountId || 1) * 17 + accounts.length, 28, 11000),
-    [selectedAccountId, accounts.length],
-  );
-  const dailySeries = useMemo(
-    () => seedBars((selectedAccountId || 3) * 11 + (status?.today_executions || 0), 14),
-    [selectedAccountId, status?.today_executions],
-  );
+  const equitySeries = useMemo(() => [] as number[], []);
+  const dailySeries = useMemo(() => [] as number[], []);
 
   const totalMarkets = accounts.reduce((s, a) => s + (a.capital_market_count || 0), 0);
   const liveAccounts = accounts.filter((a) => a.environment === 'live').length;
-  const floatingHint = dailySeries.reduce((s, v) => s + v, 0);
-  const profitFactor =
-    dailySeries.filter((v) => v > 0).reduce((s, v) => s + v, 0) /
-      Math.max(1, Math.abs(dailySeries.filter((v) => v < 0).reduce((s, v) => s + v, 0))) || 0;
+  const floatingHint = 0;
+  const profitFactor = 0;
 
   const applyOperatingMode = async (mode: string) => {
     setBusy(true);
@@ -261,6 +229,39 @@ export function OverviewPage() {
         {msg && <div className={msg.includes('Failed') ? 'error-state' : 'ok-state'}>{msg}</div>}
       </div>
 
+      {monitor && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div className="section-title">
+            SERVER {monitor.server_id} · {monitor.api.status === 'ONLINE' ? '● ONLINE' : `● ${monitor.api.status}`}
+          </div>
+          <div className="grid grid-2" style={{ gap: 8, fontSize: 13, fontFamily: 'var(--font-mono)' }}>
+            <div>API {monitor.api.status} :{monitor.api.port}</div>
+            <div>DATABASE {monitor.database.status}</div>
+            <div>REDIS {monitor.redis.status}</div>
+            <div>
+              WIREGUARD {monitor.wireguard.status} UDP :{monitor.wireguard.listen_port}
+            </div>
+            <div>
+              CLIENTS {monitor.clients.online}/{monitor.clients.total} online
+            </div>
+            <div>
+              MARKET {monitor.market.state} · LIVE{' '}
+              {monitor.live_trading_enabled ? 'ENABLED' : 'DISABLED'}
+            </div>
+            <div>CPU {monitor.system.cpu_percent ?? '—'}%</div>
+            <div>RAM {monitor.system.ram_percent ?? '—'}%</div>
+          </div>
+          {monitor.last_error && (
+            <div style={{ marginTop: 8, color: 'var(--danger, #c44)' }}>
+              LAST ERROR: {monitor.last_error}
+            </div>
+          )}
+          <div style={{ marginTop: 8 }}>
+            <Link to="/system">Open SERVER page →</Link>
+          </div>
+        </div>
+      )}
+
       <div className="dash-grid dash-top">
         <section className="panel">
           <div className="section-title">OVERVIEW</div>
@@ -307,6 +308,17 @@ export function OverviewPage() {
         <section className="panel">
           <div className="section-title">EQUITY CURVE</div>
           <EquityCurve values={equitySeries} />
+          {equitySeries.length === 0 && (
+            <div style={{ color: 'var(--text-secondary)', fontSize: 13, marginTop: 8 }}>
+              No real equity series from server — chart left empty (no synthetic demo curve).
+            </div>
+          )}
+          <DailyBars values={dailySeries} />
+          {dailySeries.length === 0 && (
+            <div style={{ color: 'var(--text-secondary)', fontSize: 13, marginTop: 8 }}>
+              No real daily P/L bars — empty until broker evidence exists.
+            </div>
+          )}
           <div className="section-title" style={{ marginTop: 12 }}>
             DAILY PROFIT
           </div>

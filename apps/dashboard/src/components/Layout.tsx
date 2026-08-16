@@ -8,6 +8,8 @@ import {
   DeskContext,
   DeskStatus,
 } from './DeskContext';
+import type { ServerMonitor } from '../types/serverMonitor';
+import { infraHealthy, isOnline } from '../types/serverMonitor';
 
 const NAV = [
   { to: '/', label: 'COMMAND', end: true },
@@ -21,7 +23,7 @@ const NAV = [
   { to: '/positions', label: 'POSITIONS' },
   { to: '/trades', label: 'TRADES' },
   { to: '/feeds', label: 'FEEDS' },
-  { to: '/system', label: 'SYSTEM' },
+  { to: '/system', label: 'SERVER' },
   { to: '/settings', label: 'SETTINGS' },
 ];
 
@@ -34,6 +36,7 @@ function clientCount(status: DeskStatus | null): number {
 export function Layout({ children }: { children: ReactNode }) {
   const location = useLocation();
   const [status, setStatus] = useState<DeskStatus | null>(null);
+  const [monitor, setMonitor] = useState<ServerMonitor | null>(null);
   const [clients, setClients] = useState<DeskClient[]>([]);
   const [accounts, setAccounts] = useState<DeskAccount[]>([]);
   const [selectedClientId, setSelectedClientId] = useState<number | null>(null);
@@ -41,27 +44,24 @@ export function Layout({ children }: { children: ReactNode }) {
   const [railCollapsed, setRailCollapsed] = useState(false);
   const [isFs, setIsFs] = useState(false);
   const [serverOnline, setServerOnline] = useState<boolean | null>(null);
-  const [serverId, setServerId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [s, c, a, snap] = await Promise.all([
-        apiFetch<DeskStatus>('/api/system/status'),
+      const [s, c, a, mon] = await Promise.all([
+        apiFetch<DeskStatus>('/api/system/status').catch(() => null),
         apiFetch<DeskClient[]>('/api/clients').catch(() => [] as DeskClient[]),
         apiFetch<DeskAccount[]>('/api/trading/accounts').catch(() => [] as DeskAccount[]),
-        apiFetch<{ server_id?: string; connection?: string }>('/api/v1/admin/snapshot').catch(
-          () => null,
-        ),
+        apiFetch<ServerMonitor>('/api/v1/server/monitor'),
       ]);
       setStatus(s);
       setClients(c);
       setAccounts(a);
-      setServerOnline(true);
-      if (snap?.server_id) setServerId(snap.server_id);
+      setMonitor(mon);
+      setServerOnline(isOnline(mon.api.status));
     } catch {
-      // Do not keep presenting stale LIVE/READY — clear desk data
       setServerOnline(false);
       setStatus(null);
+      setMonitor(null);
       setClients([]);
       setAccounts([]);
     }
@@ -69,7 +69,7 @@ export function Layout({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void load();
-    const t = setInterval(() => void load(), 8000);
+    const t = setInterval(() => void load(), 5000);
     return () => clearInterval(t);
   }, [load]);
 
@@ -119,20 +119,14 @@ export function Layout({ children }: { children: ReactNode }) {
     }
   };
 
-  const liveOk = serverOnline === true && (status?.database || '').toUpperCase() === 'HEALTHY';
-  const markets = serverOnline ? (status?.capital_markets ?? 0) : 0;
+  const healthy = infraHealthy(monitor);
   const openTrades = serverOnline ? (status?.open_positions ?? 0) : 0;
   const fills = serverOnline ? (status?.today_executions ?? 0) : 0;
-  const brokersLive = serverOnline ? (status?.brokers_live ?? 0) : 0;
+  const markets = serverOnline ? (status?.capital_markets ?? 0) : 0;
 
   const pageTitle =
     NAV.find((n) => (n.end ? location.pathname === n.to : location.pathname.startsWith(n.to)))
       ?.label ?? 'CONTROL';
-
-  const clientAccounts = useMemo(() => {
-    if (!selectedClientId) return accounts;
-    return accounts.filter((a) => a.client_id === selectedClientId);
-  }, [accounts, selectedClientId]);
 
   const deskValue = useMemo(
     () => ({
@@ -144,8 +138,9 @@ export function Layout({ children }: { children: ReactNode }) {
       selectedAccountId,
       setSelectedAccountId,
       refreshDesk: () => void load(),
+      monitor,
     }),
-    [status, clients, accounts, selectedClientId, selectedAccountId, load],
+    [status, clients, accounts, selectedClientId, selectedAccountId, load, monitor],
   );
 
   return (
@@ -168,24 +163,47 @@ export function Layout({ children }: { children: ReactNode }) {
           </div>
 
           <div className="desk-status-row">
-            <span className={`status-pill ${serverOnline === false ? 'bad' : liveOk ? '' : 'warn'}`}>
+            <span className={`status-pill ${serverOnline === false ? 'bad' : healthy ? '' : 'warn'}`}>
               {serverOnline === false
                 ? 'SERVER OFFLINE'
-                : `SYSTEM ${liveOk ? 'HEALTHY' : 'DEGRADED'}`}
+                : `VS ADMIN · ${healthy ? 'INFRA OK' : 'DEGRADED'}`}
             </span>
             <span className={`status-pill ${serverOnline === false ? 'bad' : ''}`}>
-              {serverId || 'VS-CORE-01'}
+              {monitor?.server_id || 'VS-CORE-01'}
+              {serverOnline ? ' ●' : ''}
             </span>
-            {serverOnline !== false && (
+            {monitor && serverOnline !== false && (
               <>
-                <span className={`status-pill ${brokersLive > 0 ? '' : 'warn'}`}>
-                  CAPITAL {brokersLive > 0 ? 'CONNECTED' : 'IDLE'}
+                <span className={`status-pill ${isOnline(monitor.api.status) ? '' : 'bad'}`}>
+                  API {monitor.api.status}
                 </span>
-                <span className={`status-pill ${openTrades > 0 ? '' : 'warn'}`}>
-                  POSITIONS {openTrades > 0 ? 'OPEN' : 'FLAT'}
+                <span className={`status-pill ${isOnline(monitor.database.status) ? '' : 'bad'}`}>
+                  DB {monitor.database.status}
                 </span>
-                <span className={`status-pill ${status?.live_enabled ? 'warn' : ''}`}>
-                  MODE {(status?.mode ?? 'PAPER').toUpperCase()}
+                <span
+                  className={`status-pill ${
+                    isOnline(monitor.redis.status)
+                      ? ''
+                      : monitor.redis.status === 'WARNING'
+                        ? 'warn'
+                        : 'bad'
+                  }`}
+                >
+                  REDIS {monitor.redis.status}
+                </span>
+                <span
+                  className={`status-pill ${
+                    isOnline(monitor.wireguard.status)
+                      ? ''
+                      : monitor.wireguard.status === 'WARNING'
+                        ? 'warn'
+                        : 'bad'
+                  }`}
+                >
+                  WG {monitor.wireguard.status}
+                </span>
+                <span className={`status-pill ${monitor.live_trading_enabled ? 'warn' : ''}`}>
+                  LIVE {monitor.live_trading_enabled ? 'ON' : 'OFF'}
                 </span>
               </>
             )}
@@ -193,12 +211,14 @@ export function Layout({ children }: { children: ReactNode }) {
 
           <div className="desk-stats">
             <div className="desk-stat">
-              <div className="desk-stat-label">ACCOUNTS</div>
-              <div className="desk-stat-value">{accounts.length}</div>
+              <div className="desk-stat-label">WG CLIENTS</div>
+              <div className="desk-stat-value">
+                {monitor ? `${monitor.clients.online}/${monitor.clients.total}` : '—'}
+              </div>
             </div>
             <div className="desk-stat">
-              <div className="desk-stat-label">CLIENTS</div>
-              <div className="desk-stat-value">{Math.max(clients.length, clientCount(status))}</div>
+              <div className="desk-stat-label">ACCOUNTS</div>
+              <div className="desk-stat-value">{accounts.length}</div>
             </div>
             <div className="desk-stat">
               <div className="desk-stat-label">OPEN</div>
@@ -209,11 +229,9 @@ export function Layout({ children }: { children: ReactNode }) {
               <div className="desk-stat-value up">{fills}</div>
             </div>
             <div className="desk-stat">
-              <div className="desk-stat-label">SERVER</div>
-              <div className="desk-stat-value" style={{ fontFamily: 'var(--font-mono)', fontSize: 10 }}>
-                {status?.server_time
-                  ? new Date(status.server_time).toLocaleTimeString()
-                  : '--:--:--'}
+              <div className="desk-stat-label">CPU</div>
+              <div className="desk-stat-value" style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                {monitor?.system.cpu_percent != null ? `${monitor.system.cpu_percent}%` : '—'}
               </div>
             </div>
           </div>
@@ -229,7 +247,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <aside className="desk-rail">
             <div className="rail-section">
               <div className="rail-title rail-title-row">
-                <span>ACCOUNTS ({clients.length})</span>
+                <span>ACCOUNTS ({Math.max(clients.length, clientCount(status))})</span>
                 <NavLink to="/clients" className="rail-add">
                   + ADD
                 </NavLink>
@@ -253,7 +271,9 @@ export function Layout({ children }: { children: ReactNode }) {
                       <span className={`dot ${c.enabled ? 'on' : 'off'}`} />
                     </div>
                     <div className="account-chip-meta account-chip-meta-row">
-                      <span>{c.enabled ? 'ACTIVE' : 'OFF'} · {accs.length} acct</span>
+                      <span>
+                        {c.enabled ? 'ACTIVE' : 'OFF'} · {accs.length} acct
+                      </span>
                       <span>{marketsN.toLocaleString()} mkts</span>
                     </div>
                   </button>
@@ -300,7 +320,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <span>
             {serverOnline === false
               ? 'SERVER OFFLINE — no live telemetry'
-              : `CONNECTED // ${serverId || 'VS-CORE-01'}`}
+              : `CONNECTED // ${monitor?.server_id || 'VS-CORE-01'}`}
           </span>
           <span>ADMIN CONTROL PANEL (MSI) → i3 SERVER</span>
           <span className="footer-logo-wrap">
