@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# vs-broker-status — read-only broker config classification. Never places trades.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+DATA="${VS_SERVER_DATA:-/var/lib/vs-server}"
+if [[ -f "$DATA/server.env" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$DATA/server.env"
+  set +a
+fi
+cd "$ROOT/SERVER/control-api"
+node --import tsx -e "
+import { classifyBrokerConfig } from '../../broker-gateway/capital/health.ts';
+const h = classifyBrokerConfig();
+console.log(JSON.stringify(h, null, 2));
+process.exit(h.state === 'CONFIG_REQUIRED' ? 2 : 0);
+"

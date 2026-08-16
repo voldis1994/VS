@@ -29,6 +29,9 @@ export const API_V1_INVENTORY = [
   { method: 'GET', path: '/api/v1/server/monitor', auth: 'x-admin-token', isolation: 'admin-only', notes: 'unified server monitor' },
   { method: 'GET', path: '/api/v1/server/monitor/text', auth: 'x-admin-token', isolation: 'admin-only', notes: 'monitor plaintext frame' },
   { method: 'GET', path: '/api/v1/system/supervisor', auth: 'x-admin-token', isolation: 'admin-only', notes: 'process vs trading readiness' },
+  { method: 'GET', path: '/api/v1/system/kill-switch', auth: 'x-admin-token', isolation: 'admin-only', notes: 'kill switch state' },
+  { method: 'POST', path: '/api/v1/system/kill-switch', auth: 'x-admin-token', isolation: 'admin-only', notes: 'kill switch set' },
+  { method: 'GET', path: '/api/v1/broker/health', auth: 'x-admin-token', isolation: 'admin-only', notes: 'broker CONFIG_REQUIRED/health' },
 ] as const;
 
 async function buildApp() {

@@ -1,200 +1,132 @@
+# VS — QUICK START
+
+## SERVER / i3 Debian 13
+
+1. Copy release package (`dist/VS-SERVER`) or clone repo to the i3
+2. Run `sudo bash SERVER/install/INSTALL_SERVER.sh`
+3. Configure external required values in `/var/lib/vs-server/server.env` (Capital credentials, `PUBLIC_HOST_OR_IP`, admin token)
+4. Run `sudo bash SERVER/FINAL_ACCEPTANCE.sh`
+5. Run `sudo bash SERVER/SHOW_DASHBOARD.sh` (or `sudo bash SERVER/INSTALL_MONITOR` for autostart)
+
+## ADMIN / MSI Windows 11
+
+1. Run `ADMIN\INSTALL_ADMIN.bat`
+2. Run `ADMIN\START_ADMIN.bat`
+3. Optional: `ADMIN\FINAL_ACCEPTANCE.bat`
+
+LAN/Wi-Fi to Control API (default `http://192.168.0.10:3000`). WireGuard is **not** required for home ADMIN.
+
+## CLIENT / remote Windows
+
+1. Create enrollment from ADMIN (Network / devices)
+2. Deliver CLIENT installer + enrollment package securely
+3. Run `CLIENT\INSTALL_CLIENT.bat` (or enrollment installer)
+4. Run `CLIENT\FINAL_ACCEPTANCE.bat` / `CLIENT\VERIFY_CLIENT.bat`
+5. Run `CLIENT\START_CLIENT.bat` if packaged
+
+Remote path: Internet → WireGuard UDP 51820 → VS-CORE-01 → Client API. Clients never talk to the broker.
+
+---
+
 # Market Reader / VS
 
 Real-time multi-source market intelligence + VS SERVER trading appliance.
-
-## HOW TO INSTALL
-
-### i3 (VS-CORE-01)
-
-```bash
-cd /root/VS && git pull origin main
-sudo bash SERVER/install/INSTALL_SERVER.sh
-sudo bash SERVER/STATUS_SERVER
-sudo bash SERVER/INSTALL_MONITOR   # physical read-only console
-```
-
-### MSI (ADMIN)
-
-```bat
-cd ADMIN
-INSTALL_ADMIN.bat
-START_ADMIN.bat
-```
-
-LAN/Wi-Fi to `http://192.168.0.10:3000` — WireGuard not required for home ADMIN.
-
-### Remote CLIENT
-
-Enroll via ADMIN NETWORK page → WireGuard peer → Client API on VPN. Never Postgres/Redis.
-
-See `DOCS/ARCHITECTURE.md`, `DOCS/LEGACY_AUDIT.md`, `DOCS/IMPLEMENTATION_REPORT.md`.
 
 ## Product boundaries
 
 ```
 VS/
-├── SERVER/     # Authoritative brain (i3) — INSTALL_I3_SERVER
-├── ADMIN/      # Control Panel + diagnostic client (MSI PC)
-├── CLIENT/     # Device app build — BUILD_CLIENT
-├── DOCS/       # Architecture + install docs
+├── SERVER/     # Authoritative brain (i3) — INSTALL_SERVER / INSTALL_I3_SERVER
+├── ADMIN/      # Control Panel only (MSI) — no broker/Postgres/Redis
+├── CLIENT/     # Remote app + WireGuard
+├── DOCS/       # Architecture + audits + FINAL_PRODUCT_REPORT
 ├── TESTS/      # Cross-cutting unit tests
+├── dist/       # Release packages from scripts/BUILD_RELEASE.sh
 └── legacy-review/  # Frozen archives (not imported by production)
 ```
 
 Money path lives under `SERVER/control-api` (verified P0). Compatibility symlinks:
 `apps/control-api` → `SERVER/control-api`, `deploy/vs-core` → `SERVER/deploy`.
 
-**LIVE trading stays fail-closed** (`LIVE_TRADING_ENABLED=false`) until Capital DEMO + production gates are satisfied on real hardware.
+**LIVE trading stays fail-closed** (`LIVE_TRADING_ENABLED=false`) until Capital credentials + production gates are satisfied on real hardware.
 
-## Deployment — three machines
+## Architecture roles
+
+| Role | Machine | Contents |
+|------|---------|----------|
+| Brain | i3 Debian 13 `VS-CORE-01` | Supervisor, Postgres, Redis, market/indicators/regime/strategy/signal/risk/execution, broker gateway, APIs, WireGuard, local dashboard |
+| Admin | MSI Windows 11 | VS ADMIN Control Panel only |
+| Client | Customer Windows | VS CLIENT + WireGuard; Client API only |
+
+See `DOCS/ARCHITECTURE.md`, `DOCS/FINAL_GAP_AUDIT.md`, `DOCS/FINAL_PRODUCT_REPORT.md`, `DOCS/PORTS.md`.
+
+## Deployment detail
 
 ### [i3 SERVER] — VS-CORE-01
 
 ```bash
-git clone https://github.com/voldis1994/VS.git /root/VS
-cd /root/VS
-sudo bash SERVER/INSTALL_I3_SERVER
+# from repo or release package
+sudo bash SERVER/install/INSTALL_SERVER.sh
 sudo bash SERVER/STATUS_SERVER
+sudo bash SERVER/INSTALL_MONITOR   # optional physical console
+sudo bash SERVER/FINAL_ACCEPTANCE.sh
 ```
 
-Postgres, Redis, Control API, trading backend, WireGuard, and enrollment stay on the i3 only.
+Safe broker probes (never place trades):
 
-### [MSI WINDOWS ADMIN] — Control Panel (not the server)
+```bash
+bash SERVER/broker-gateway/capital/vs-broker-status
+bash SERVER/broker-gateway/capital/vs-broker-test-auth
+bash SERVER/broker-gateway/capital/vs-broker-test-market
+```
+
+Backup:
+
+```bash
+sudo bash SERVER/BACKUP_SERVER.sh
+sudo bash SERVER/LIST_BACKUPS.sh
+sudo bash SERVER/VERIFY_BACKUP.sh /var/lib/vs-server/backup/vs-pg-….sql.gz
+# restore requires CONFIRM:
+# sudo bash SERVER/RESTORE_SERVER.sh <file> CONFIRM
+```
+
+### [MSI WINDOWS ADMIN]
 
 ```bat
 cd ADMIN
 INSTALL_ADMIN.bat
 START_ADMIN.bat
+FINAL_ACCEPTANCE.bat
 ```
 
-Requires Node.js 20+ and `API_ADMIN_TOKEN` once (file `ADMIN_TOKEN.txt` or from i3 `server.env`).  
-Discovers VS-CORE-01 on **LAN first** (WireGuard not required at home). Opens http://127.0.0.1:5173 against the real i3 API.  
-If the server is down, UI shows **SERVER OFFLINE** — no mock READY.
-
-Linux admin workstation: `bash ADMIN/INSTALL_ADMIN` then `bash ADMIN/START_ADMIN`.
+Requires Node.js 20+ and `API_ADMIN_TOKEN`. Discovers VS-CORE-01 on **LAN first**. If the server is down, UI shows **SERVER OFFLINE** — no mock READY.
 
 ### [REMOTE CLIENT]
 
-1. On MSI → Control Panel → **NETWORK** → create CLIENT enrollment.
-2. On the client PC: complete enrollment (local keypair); import WireGuard peer config.
-3. Router: forward UDP **51820** to i3. Clients use private `10.77.0.1` — any ISP/NAT.
+1. ADMIN → NETWORK → create CLIENT enrollment.
+2. Client PC: install WireGuard + enrollment; Client API via `10.77.0.1`.
+3. Router: forward UDP **51820** WAN → VS-CORE-01 LAN IP.
+4. Set `PUBLIC_HOST_OR_IP` on server to the **reachable** public endpoint (not `192.168.x.x` for remote ISPs).
 
-See [START_3_FILES.txt](START_3_FILES.txt).
+## Release packages
 
-## Architecture
-
-```
-MARKET DATA → INGESTION → NORMALIZATION → DATA QUALITY → FEED FUSION
-  → FEATURE ENGINE → MARKET STATE → REGIME → SETUP → EVIDENCE
-  → ENTRY → EXECUTION ROUTER → BROKER → POSITION MANAGER → EXIT
-```
-
-```
-REMOTE CLIENT ──(Internet / WireGuard)──► i3 VS-CORE-01 ──► authenticated VS API
-MSI ADMIN     ──(home LAN or WireGuard)──► i3 VS-CORE-01 ──► admin API + snapshot
-```
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/VS_ARCHITECTURE_INVENTORY.md](docs/VS_ARCHITECTURE_INVENTORY.md).
-
-## Prerequisites
-
-### Windows 11 x64 (MSI ADMIN)
-- Git
-- Node.js 20+
-- (Optional) WireGuard for off-LAN admin
-
-### Windows 11 x64 (optional full local market-core build)
-- Visual Studio 2022 Build Tools (C++ workload)
-- CMake 3.24+
-- Docker Desktop
-- vcpkg (used by CMake if `market-core.exe` is missing on first `VS.bat` run)
-
-### Linux (i3 SERVER / CI)
-- GCC 13+ or Clang 16+
-- CMake, Ninja
-- Node.js 20+
-- Docker
-- Development libraries: fmt, spdlog, yaml-cpp, nlohmann-json, openssl, curl, gtest, zlib (optional: Google Benchmark via `vcpkg` feature `benchmarks`)
-
-## Quick Start (legacy single-PC Windows)
-
-**Vienīgais fails — dubultklikšķis:**
-
-```bat
-VS.bat
-```
-
-Atver **VS paneli** (`http://127.0.0.1:18090`). Viena poga palaiž / restartē sistēmu no GitHub.  
-Neaizver to paneli. Admin: http://localhost:5173/
-
-For **production multi-PC**, use the three-machine section above — do not run the server on the MSI.
-
-Skatīt [docs/VS_RESTART.md](docs/VS_RESTART.md).
-## Build
-
-```bat
-cmake --preset windows-debug
-cmake --build build/windows-debug
-```
-
-Linux:
 ```bash
-cmake --preset linux-debug
-cmake --build build/linux-debug
+bash scripts/BUILD_RELEASE.sh
+# produces dist/VS-SERVER, dist/VS-ADMIN, dist/VS-CLIENT
 ```
 
-## Operating Modes
+## Tests
 
-| Mode | Description |
-|------|-------------|
-| REPLAY | Deterministic playback of recorded events |
-| PAPER | Simulated execution (default) |
-| DEMO | Broker demo environment |
-| LIVE | Real trading (disabled by default) |
-
-Enable LIVE:
-```
-LIVE_TRADING_ENABLED=true
-OPERATING_MODE=LIVE
-```
-
-## Run
-
-```bat
-VS.bat
-```
-
-Backend tests:
 ```bash
-cd apps/control-api && npm test
-```
-
-ADMIN client tests:
-```bash
+cd SERVER/control-api && npm test
+cd TESTS && npm test
 cd ADMIN && npm test
 ```
 
-## Project Structure
+## Docs index
 
-```
-apps/           market-core, execution-service, control-api, dashboard
-libs/           C++ engine libraries (clock, features, regime, evidence, etc.)
-config/         YAML configuration
-SERVER/         i3 appliance install + control-api source of truth
-ADMIN/          MSI Control Panel (INSTALL_ADMIN.bat / START_ADMIN.bat)
-CLIENT/         remote client package / enrollment foundation
-data/           raw, normalized, replay recordings
-tests/          unit, integration, replay, execution, security, performance
-docs/           architecture and operations documentation
-VS.bat          legacy single-PC launcher (not the multi-PC production path)
-```
-## Security
-
-- API credentials encrypted at rest (AES-256-GCM)
-- Secrets never in frontend, git, or plaintext DB
-- Masked credential display in dashboard
-- Admin token required for API (production)
-
-## License
-
-Proprietary. All rights reserved.
+- `DOCS/FINAL_GAP_AUDIT.md` — requirement vs source truth
+- `DOCS/NO_FAKE_AUDIT.md` — fake/mock/demo classification
+- `DOCS/PORTS.md` — firewall / exposure
+- `DOCS/FINAL_PRODUCT_REPORT.md` — subsystem status matrix
+- `DOCS/IMPLEMENTATION_REPORT.md` / `DOCS/ACCEPTANCE_REPORT.md`

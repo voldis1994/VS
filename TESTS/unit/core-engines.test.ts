@@ -75,7 +75,7 @@ describe('regime classifier', () => {
       killSwitch: false,
     });
     expect(r.regime).toBe('NO_TRADE');
-    expect(r.no_trade_reasons).toContain('MARKET_FEED_UNAVAILABLE');
+    expect(r.no_trade_reasons).toContain('MARKET_OFFLINE');
   });
 
   it('trend up on rising series', () => {

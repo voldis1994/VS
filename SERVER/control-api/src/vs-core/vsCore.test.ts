@@ -75,6 +75,12 @@ describe('VS CORE versions', () => {
 });
 
 describe('Risk Core', () => {
+  it('denies when kill switch active', () => {
+    const r = evaluateRisk(baseRisk({ kill_switch_active: true }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe('RISK_REJECTED_KILL_SWITCH');
+  });
+
   it('accepts clean DEMO intent', () => {
     const r = evaluateRisk(baseRisk());
     expect(r.ok).toBe(true);

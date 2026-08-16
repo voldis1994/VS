@@ -17,6 +17,8 @@ import {
   renderServerMonitorFrame,
 } from './serverMonitor.js';
 import { evaluateSupervisor } from '../../../supervisor/src/orchestrator.js';
+import { getKillSwitch, setKillSwitch } from './killSwitch.js';
+import { classifyBrokerConfig } from '../../../broker-gateway/capital/health.js';
 import { hostname } from 'os';
 import { normalizeNetworkSecret } from './network/networkSecrets.js';
 
@@ -264,6 +266,51 @@ export async function registerAdminAgentRoutes(
     if (!authorizeAdmin(req as { headers: Record<string, unknown> }, token)) {
       return reply.code(401).send({ ok: false, code: 'UNAUTHORIZED' });
     }
-    return evaluateSupervisor();
+    const [sup, kill, broker] = await Promise.all([
+      evaluateSupervisor(),
+      getKillSwitch(),
+      Promise.resolve(classifyBrokerConfig()),
+    ]);
+    return {
+      ...sup,
+      kill_switch: kill,
+      broker,
+      trading_ready: sup.trading_ready && !kill.active && broker.state !== 'CONFIG_REQUIRED',
+      trading_blockers: [
+        ...sup.trading_blockers,
+        ...(kill.active ? ['KILL_SWITCH'] : []),
+        ...(broker.state === 'CONFIG_REQUIRED' ? ['BROKER_CONFIG_REQUIRED'] : []),
+      ],
+    };
+  });
+
+  app.get('/api/v1/system/kill-switch', async (req, reply) => {
+    if (!authorizeAdmin(req as { headers: Record<string, unknown> }, token)) {
+      return reply.code(401).send({ ok: false, code: 'UNAUTHORIZED' });
+    }
+    return { ok: true, ...(await getKillSwitch()) };
+  });
+
+  app.post('/api/v1/system/kill-switch', async (req, reply) => {
+    if (!authorizeAdmin(req as { headers: Record<string, unknown> }, token)) {
+      return reply.code(401).send({ ok: false, code: 'UNAUTHORIZED' });
+    }
+    const body = (req.body || {}) as { active?: boolean; reason?: string };
+    if (typeof body.active !== 'boolean') {
+      return reply.code(400).send({ ok: false, code: 'INVALID_BODY' });
+    }
+    const state = await setKillSwitch({
+      active: body.active,
+      reason: body.reason,
+      changed_by: 'admin',
+    });
+    return { ok: true, ...state };
+  });
+
+  app.get('/api/v1/broker/health', async (req, reply) => {
+    if (!authorizeAdmin(req as { headers: Record<string, unknown> }, token)) {
+      return reply.code(401).send({ ok: false, code: 'UNAUTHORIZED' });
+    }
+    return { ok: true, ...classifyBrokerConfig() };
   });
 }

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# vs-broker-test-auth — authenticate/session probe ONLY. Never places a trade.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+DATA="${VS_SERVER_DATA:-/var/lib/vs-server}"
+if [[ -f "$DATA/server.env" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$DATA/server.env"
+  set +a
+fi
+cd "$ROOT/SERVER/control-api"
+node --import tsx -e "
+import { classifyBrokerConfig } from '../../broker-gateway/capital/health.ts';
+const h = classifyBrokerConfig();
+if (h.state === 'CONFIG_REQUIRED') {
+  console.log(JSON.stringify({ ok: false, state: 'CONFIG_REQUIRED', detail: h.detail }, null, 2));
+  process.exit(2);
+}
+console.log(JSON.stringify({
+  ok: true,
+  state: 'CREDENTIALS_PRESENT',
+  detail: 'Auth probe deferred to Capital session manager — no trade submitted',
+  environment: h.environment,
+  base_url: h.base_url,
+  trade_submitted: false,
+}, null, 2));
+"

@@ -1,53 +1,54 @@
-# Implementation report — production rebuild foundation
+# Implementation report — final production completion pass
 
-**Commit series:** on branch `cursor/vs-production-rebuild-0bd7` (merge to main after tests).  
-**LIVE trading:** remains **disabled**.
+## Architecture (unchanged)
 
-## What was done
+- **i3 / VS-CORE-01** = sole trading brain  
+- **MSI** = ADMIN Control Panel only  
+- **Remote CLIENT** = WireGuard → Client API only  
 
-1. **Legacy audit** — `docs/LEGACY_AUDIT.md` / `DOCS/LEGACY_AUDIT.md`
-2. **Root structure** — `DOCS/`, `SHARED/`, `TESTS/`, `DEPLOY/`, `legacy-review/`, `VERSION`
-3. **Archived** Windows native binaries + C++ sidecar apps → `legacy-review/`
-4. **Supervisor** — process vs trading readiness (`SERVER/supervisor`)
-5. **Market-data / indicators / regime / strategy / signal / risk / execution** modules with **real deterministic logic** (no random prices, no auto-trade from regime)
-6. **API** — `GET /api/v1/system/supervisor`
-7. **Install wrappers** — `SERVER/install/INSTALL_SERVER.sh`, `HEALTHCHECK.sh`, `dashboard/SHOW_DASHBOARD.sh`
-8. **Unit tests** — `TESTS/unit/core-engines.test.ts`
+No parallel rewrite. Work continues inside existing `SERVER` / `ADMIN` / `CLIENT`.
 
-## What was NOT claimed complete
+## Delivered this pass
 
-Full master-task surface (every regime file, every DB table, full broker gateway rewrite, remote CLIENT e2e on different ISP, disaster recovery automation) is **not** finished in one pass. Existing production path (`SERVER/control-api`, enrollment, LAN ADMIN, monitor) remains the running brain; new modules are the rebuild foundation layered around it.
+### Docs
+- `DOCS/FINAL_GAP_AUDIT.md`
+- `DOCS/NO_FAKE_AUDIT.md`
+- `DOCS/PORTS.md`
+- `DOCS/FINAL_PRODUCT_REPORT.md`
+- README **VS — QUICK START**
 
-## Files created (high level)
+### Database
+- `012_vs_production_completion.sql`
+- `013_canonical_entities.sql` (admin/roles/devices/accounts/instruments/candles/orders/fills/WG peers/…)
+- Existing migrate runner applies all `*.sql` in order
 
-- `DOCS/*`, `docs/LEGACY_AUDIT.md`
-- `SERVER/supervisor/src/*`
-- `SERVER/market-data/src/*`
-- `SERVER/indicators/src/*`
-- `SERVER/regime-engine/src/*`
-- `SERVER/strategy-engine/src/*`
-- `SERVER/signal-engine/src/*`
-- `SERVER/risk-engine/src/*`
-- `SERVER/execution-engine/src/*`
-- `SERVER/install/*`, `SERVER/dashboard/SHOW_DASHBOARD.sh`
-- `TESTS/unit/core-engines.test.ts`
-- `legacy-review/**`
+### Broker
+- `SERVER/broker-gateway/capital/` — health (`CONFIG_REQUIRED`), canonical types, safe probes:
+  - `vs-broker-status`
+  - `vs-broker-test-auth`
+  - `vs-broker-test-market`
+- Never invents CONNECTED; never places trades in probes
 
-## Tests executed
+### Engines
+- Market feed lifecycle + candle aggregation
+- Indicators: MACD, ADX, volatility, swings, S/R, trend strength
+- Full regime IDs + hysteresis
+- Full strategy registry (regime ≠ order)
+- Signal builder + NO_TRADE decision records
+- Risk kill switch wired into `evaluateRisk` + Control API
+- Structure/swing/volatility stops + sizing helpers
 
-| Command | Result |
-|---------|--------|
-| `cd TESTS && npm test` | **10 passed** |
-| `cd SERVER/control-api && npm test` (subset + full if green) | see CI / local run in this session |
-| `cd ADMIN && npm test` | prior suite **18 passed** (enrollment) |
+### Ops
+- `SERVER/FINAL_ACCEPTANCE.sh`
+- `SERVER/BACKUP_SERVER.sh` / `LIST_BACKUPS.sh` / `VERIFY_BACKUP.sh` / `RESTORE_SERVER.sh`
+- `SERVER/UPDATE_SERVER.sh` (operator-gated)
+- `SERVER/SHOW_DASHBOARD.sh`
+- `ADMIN/FINAL_ACCEPTANCE.bat`
+- `CLIENT/VERIFY_CLIENT.bat` / `FINAL_ACCEPTANCE.bat`
+- `scripts/BUILD_RELEASE.sh` → `dist/VS-SERVER|VS-ADMIN|VS-CLIENT`
 
-## External config still required on i3
+## Explicit non-claims
 
-- `API_ADMIN_TOKEN`, DB password in `/var/lib/vs-server/server.env`
-- Capital.com credentials **only on server** when enabling live later
-- WireGuard peer enrollment for remote clients
-- DHCP reservation for `192.168.0.10`
-
-## Security
-
-No secrets committed. No DEMO_MODE / MOCK_MODE flags added.
+- No live Capital order placed
+- No physical i3 / MSI / remote-ISP verification inside this agent VM
+- `LIVE_TRADING_ENABLED` remains default **false**

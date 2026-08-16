@@ -31,7 +31,8 @@ export type RiskRejectCode =
   | 'RISK_REJECTED_CLIENT_STOPPED'
   | 'RISK_REJECTED_FEED_OFFLINE'
   | 'RISK_REJECTED_UNAUTHORIZED_MARKET'
-  | 'RISK_REJECTED_LOT_OUT_OF_RANGE';
+  | 'RISK_REJECTED_LOT_OUT_OF_RANGE'
+  | 'RISK_REJECTED_KILL_SWITCH';
 
 export type RiskDecision =
   | { ok: true; code: 'RISK_ACCEPTED' }
@@ -78,6 +79,8 @@ export type RiskContext = {
   consecutive_losses?: number | null;
   profit_target_hit?: boolean;
   arbitrary_risk_pct?: number | null;
+  /** Global kill switch — blocks new entries when true. */
+  kill_switch_active?: boolean;
 };
 
 export function evaluateRisk(ctx: RiskContext): RiskDecision {
@@ -91,6 +94,13 @@ export function evaluateRisk(ctx: RiskContext): RiskDecision {
   void ctx.profit_target_hit;
   void ctx.arbitrary_risk_pct;
 
+  if (ctx.kill_switch_active) {
+    return {
+      ok: false,
+      code: 'RISK_REJECTED_KILL_SWITCH',
+      reason: 'KILL_SWITCH ACTIVE — new positions blocked',
+    };
+  }
   if (ctx.operating_mode === 'REPLAY') {
     return {
       ok: false,

@@ -67,6 +67,7 @@ export type RuntimeChainInput = {
   time_sync_ok?: boolean;
   session_healthy?: boolean;
   reconcile_clean?: boolean;
+  kill_switch_active?: boolean;
 };
 
 function blocked(
@@ -254,6 +255,7 @@ export async function runRuntimeChain(input: RuntimeChainInput): Promise<Runtime
     stop_attached: intent.stop_level != null || intent.stop_distance != null,
     operating_mode: 'DEMO',
     live_trading_enabled: false,
+    kill_switch_active: input.kill_switch_active === true,
   };
   const risk = evaluateRisk(riskCtx);
   steps.push({

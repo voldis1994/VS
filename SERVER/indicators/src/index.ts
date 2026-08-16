@@ -109,3 +109,113 @@ export function momentum(values: number[], period: number): number | null {
   if (values.length <= period) return null;
   return values[values.length - 1] - values[values.length - 1 - period];
 }
+
+export function macd(
+  values: number[],
+  fast = 12,
+  slow = 26,
+  signalPeriod = 9
+): { macd: number; signal: number; histogram: number } | null {
+  if (values.length < slow + signalPeriod) return null;
+  const macdSeries: number[] = [];
+  for (let i = slow; i <= values.length; i++) {
+    const slice = values.slice(0, i);
+    const f = ema(slice, fast);
+    const s = ema(slice, slow);
+    if (f == null || s == null) continue;
+    macdSeries.push(f - s);
+  }
+  if (macdSeries.length < signalPeriod) return null;
+  const signal = ema(macdSeries, signalPeriod);
+  if (signal == null) return null;
+  const macdVal = macdSeries[macdSeries.length - 1];
+  return { macd: macdVal, signal, histogram: macdVal - signal };
+}
+
+/** Simplified ADX from DX of +DM/-DM over period (deterministic). */
+export function adx(
+  highs: number[],
+  lows: number[],
+  closes: number[],
+  period: number
+): number | null {
+  if (period < 1 || highs.length < period + 1) return null;
+  const dxList: number[] = [];
+  for (let i = 1; i < highs.length; i++) {
+    const up = highs[i] - highs[i - 1];
+    const down = lows[i - 1] - lows[i];
+    const plusDM = up > down && up > 0 ? up : 0;
+    const minusDM = down > up && down > 0 ? down : 0;
+    const tr = Math.max(
+      highs[i] - lows[i],
+      Math.abs(highs[i] - closes[i - 1]),
+      Math.abs(lows[i] - closes[i - 1])
+    );
+    if (tr <= 0) continue;
+    const plusDI = (plusDM / tr) * 100;
+    const minusDI = (minusDM / tr) * 100;
+    const sum = plusDI + minusDI;
+    const dx = sum === 0 ? 0 : (Math.abs(plusDI - minusDI) / sum) * 100;
+    dxList.push(dx);
+  }
+  return sma(dxList, period);
+}
+
+/** Realized volatility = stdev of log returns over period. */
+export function volatility(closes: number[], period: number): number | null {
+  if (period < 2 || closes.length < period + 1) return null;
+  const rets: number[] = [];
+  for (let i = closes.length - period; i < closes.length; i++) {
+    const prev = closes[i - 1];
+    if (!(prev > 0) || !(closes[i] > 0)) return null;
+    rets.push(Math.log(closes[i] / prev));
+  }
+  const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
+  const variance = rets.reduce((a, r) => a + (r - mean) ** 2, 0) / rets.length;
+  return Math.sqrt(variance);
+}
+
+export function swingHighs(highs: number[], lookback: number): number[] {
+  if (lookback < 1 || highs.length < lookback * 2 + 1) return [];
+  const out: number[] = [];
+  for (let i = lookback; i < highs.length - lookback; i++) {
+    const window = highs.slice(i - lookback, i + lookback + 1);
+    if (highs[i] === Math.max(...window)) out.push(highs[i]);
+  }
+  return out;
+}
+
+export function swingLows(lows: number[], lookback: number): number[] {
+  if (lookback < 1 || lows.length < lookback * 2 + 1) return [];
+  const out: number[] = [];
+  for (let i = lookback; i < lows.length - lookback; i++) {
+    const window = lows.slice(i - lookback, i + lookback + 1);
+    if (lows[i] === Math.min(...window)) out.push(lows[i]);
+  }
+  return out;
+}
+
+export function supportResistance(
+  highs: number[],
+  lows: number[],
+  lookback: number
+): { support: number | null; resistance: number | null } {
+  const sh = swingHighs(highs, lookback);
+  const sl = swingLows(lows, lookback);
+  return {
+    resistance: sh.length ? Math.max(...sh) : null,
+    support: sl.length ? Math.min(...sl) : null,
+  };
+}
+
+/** Trend strength proxy: |slope| normalized by ATR when available. */
+export function trendStrength(
+  closes: number[],
+  period: number,
+  atrValue: number | null
+): number | null {
+  const s = slope(closes, period);
+  if (s == null) return null;
+  if (atrValue != null && atrValue > 0) return Math.abs(s) / atrValue;
+  return Math.abs(s);
+}
