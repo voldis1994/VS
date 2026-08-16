@@ -31,10 +31,16 @@ TMP="$(mktemp)"
 PRIV_KEY="$(tr -d '\n' < "$PRIV")"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT/control-api"
-CONF="$(VS_SERVER_DATA="$DATA" npx tsx -e "
+if [[ ! -x node_modules/.bin/tsx ]]; then
+  echo "FAIL: control-api node_modules missing — run INSTALL_SERVER" >&2
+  exit 1
+fi
+CONF="$(VS_SERVER_DATA="$DATA" ./node_modules/.bin/tsx -e "
 import { getDeviceRegistry } from './src/vs-core/network/deviceRegistry.ts';
 import { buildServerConfFromRegistry } from './src/vs-core/network/wireguardConfig.ts';
-const reg = getDeviceRegistry(process.env.VS_SERVER_DATA!);
+const root = process.env.VS_SERVER_DATA || '';
+if (!root) throw new Error('VS_SERVER_DATA required');
+const reg = getDeviceRegistry(root);
 process.stdout.write(buildServerConfFromRegistry(reg, '___PRIV___'));
 ")"
 # wg setconf rejects wg-quick-only keys (Address, DNS, MTU, SaveConfig, Pre*/Post*)

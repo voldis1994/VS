@@ -10,10 +10,15 @@ NAME="${1:-VS-ADMIN-01}"
 
 mkdir -p "$DATA"
 cd "$ROOT/control-api"
-exec npx tsx -e "
+if [[ ! -x node_modules/.bin/tsx ]]; then
+  echo "FAIL: control-api deps missing — run INSTALL_SERVER" >&2
+  exit 1
+fi
+exec ./node_modules/.bin/tsx -e "
 import { getDeviceRegistry } from './src/vs-core/network/deviceRegistry.ts';
 import { ensureServerIdentity, registerAdminDevice } from './src/vs-core/network/deviceLifecycle.ts';
-const root = process.env.VS_SERVER_DATA!;
+const root = process.env.VS_SERVER_DATA || '';
+if (!root) throw new Error('VS_SERVER_DATA required');
 const reg = getDeviceRegistry(root);
 ensureServerIdentity(reg, root);
 const issued = registerAdminDevice(reg, root, { device_id: '${NAME}', device_name: '${NAME}' });

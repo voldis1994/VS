@@ -10,10 +10,15 @@ CLIENT_ID="${1:?client_id required}"
 NAME="${2:-}"
 
 cd "$ROOT/control-api"
-exec npx tsx -e "
+if [[ ! -x node_modules/.bin/tsx ]]; then
+  echo "FAIL: control-api deps missing — run INSTALL_SERVER" >&2
+  exit 1
+fi
+exec ./node_modules/.bin/tsx -e "
 import { getDeviceRegistry } from './src/vs-core/network/deviceRegistry.ts';
 import { ensureServerIdentity, registerClientDevice } from './src/vs-core/network/deviceLifecycle.ts';
-const root = process.env.VS_SERVER_DATA!;
+const root = process.env.VS_SERVER_DATA || '';
+if (!root) throw new Error('VS_SERVER_DATA required');
 const reg = getDeviceRegistry(root);
 ensureServerIdentity(reg, root);
 const issued = registerClientDevice(reg, root, {

@@ -342,13 +342,14 @@ echo "==> START_SERVER"
 load_runtime_env
 
 # Ensure WireGuard identity keys exist (START_SERVER does this; dry-run identity only)
-if [[ -x "$PREFIX/control-api/node_modules/.bin/tsx" ]] || [[ -d "$PREFIX/control-api/node_modules" ]]; then
+if [[ -x "$PREFIX/control-api/node_modules/.bin/tsx" ]]; then
   (
     cd "$PREFIX/control-api"
-    VS_SERVER_DATA="$DATA" VS_CORE_DATA="$DATA" npx tsx -e "
+    VS_SERVER_DATA="$DATA" VS_CORE_DATA="$DATA" ./node_modules/.bin/tsx -e "
 import { getDeviceRegistry } from './src/vs-core/network/deviceRegistry.ts';
 import { ensureServerIdentity } from './src/vs-core/network/deviceLifecycle.ts';
-const root = process.env.VS_SERVER_DATA!;
+const root = process.env.VS_SERVER_DATA || '';
+if (!root) throw new Error('VS_SERVER_DATA required');
 const id = ensureServerIdentity(getDeviceRegistry(root), root);
 console.log('SERVER_IDENTITY', id.server_id);
 " || true

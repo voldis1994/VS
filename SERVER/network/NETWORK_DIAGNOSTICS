@@ -8,10 +8,15 @@ export VS_SERVER_DATA="$DATA"
 export VS_CORE_DATA="$DATA"
 
 cd "$ROOT/control-api"
-npx tsx -e "
+if [[ ! -x node_modules/.bin/tsx ]]; then
+  echo "FAIL: control-api deps missing — run INSTALL_SERVER" >&2
+  exit 1
+fi
+./node_modules/.bin/tsx -e "
 import { getDeviceRegistry } from './src/vs-core/network/deviceRegistry.ts';
 import { runNetworkDiagnostics, renderNetworkStatusBlock } from './src/vs-core/network/networkDiagnostics.ts';
-const root = process.env.VS_SERVER_DATA!;
+const root = process.env.VS_SERVER_DATA || '';
+if (!root) throw new Error('VS_SERVER_DATA required');
 const reg = getDeviceRegistry(root);
 console.log(renderNetworkStatusBlock(reg));
 console.log('---');

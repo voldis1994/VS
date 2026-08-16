@@ -46,17 +46,23 @@ export VS_SERVER_ENDPOINT_HOSTNAME="$HOSTNAME_IN"
 export VS_SETUP_DO_ADMIN="$DO_ADMIN"
 
 cd "$ROOT/control-api"
+if [[ ! -x node_modules/.bin/tsx ]]; then
+  echo "Installing control-api deps…"
+  npm ci
+fi
+TSX="$ROOT/control-api/node_modules/.bin/tsx"
 VS_SERVER_DATA="$DATA" VS_CORE_DATA="$DATA" \
   VS_SERVER_ENDPOINT_HOSTNAME="$HOSTNAME_IN" \
   VS_SETUP_DO_ADMIN="$DO_ADMIN" \
-  npx tsx <<'TS'
+  "$TSX" - <<'TS'
 import { getDeviceRegistry } from './src/vs-core/network/deviceRegistry.ts';
 import { ensureServerIdentity } from './src/vs-core/network/deviceLifecycle.ts';
 import { issueEnrollmentPackage } from './src/vs-core/network/enrollment.ts';
 import { writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 
-const root = process.env.VS_SERVER_DATA!;
+const root = process.env.VS_SERVER_DATA || '';
+if (!root) throw new Error('VS_SERVER_DATA required');
 const reg = getDeviceRegistry(root);
 reg.setEndpointHostname(process.env.VS_SERVER_ENDPOINT_HOSTNAME || 'VS-CORE-01');
 const id = ensureServerIdentity(reg, root);
