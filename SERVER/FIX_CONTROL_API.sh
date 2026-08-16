@@ -67,8 +67,8 @@ echo "==> sync DB password (fix 28P01 auth_failed)"
 bash "$HERE/deploy/fix-db-password.sh"
 
 # --- 2) Sync critical runtime from git tree (no full wipe) ---
-echo "==> sync control-api + deploy from git → $PREFIX"
-mkdir -p "$PREFIX" "$DATA" "$LOG" "$API"
+echo "==> sync control-api + core + deploy from git → $PREFIX"
+mkdir -p "$PREFIX" "$DATA" "$LOG" "$API" "$PREFIX/core"
 id -u "$RUN_USER" >/dev/null 2>&1 || useradd --system --home "$DATA" --shell /usr/sbin/nologin "$RUN_USER"
 
 rsync -a \
@@ -76,7 +76,7 @@ rsync -a \
   --exclude dist \
   --exclude data \
   "$HERE/control-api/" "$API/"
-
+rsync -a --exclude node_modules --exclude dist "$HERE/core/" "$PREFIX/core/"
 mkdir -p "$PREFIX/deploy" "$PREFIX/network"
 rsync -a "$HERE/deploy/" "$PREFIX/deploy/"
 rsync -a "$HERE/network/" "$PREFIX/network/" 2>/dev/null || true
@@ -89,6 +89,11 @@ chmod +x "$PREFIX/deploy/"*.sh "$PREFIX/MONITOR_SERVER" "$PREFIX/deploy/boot.sh"
   "$PREFIX/deploy/ensure-postgres.sh" 2>/dev/null || true
 
 install -m 0755 "$HERE/deploy/vs-monitor" /usr/local/bin/vs-monitor
+
+if ! grep -q 'buildMarketStateVector' "$PREFIX/core/market-intelligence/src/marketState.ts" 2>/dev/null; then
+  echo "FAIL: core/market-intelligence not synced (buildMarketStateVector missing)" >&2
+  exit 1
+fi
 
 # --- 3) Force LAN bind in every env file ---
 echo "==> force CONTROL_API_HOST=0.0.0.0"

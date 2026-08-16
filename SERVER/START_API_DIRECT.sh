@@ -50,8 +50,9 @@ fi
 
 # Sync minimal runtime from git tree if present
 if [[ -d "$HERE/control-api/src" ]]; then
-  mkdir -p "$API"
+  mkdir -p "$API" "$PREFIX/core"
   rsync -a --exclude node_modules --exclude dist --exclude data "$HERE/control-api/" "$API/"
+  rsync -a --exclude node_modules --exclude dist "$HERE/core/" "$PREFIX/core/"
   mkdir -p "$PREFIX/deploy"
   rsync -a "$HERE/deploy/" "$PREFIX/deploy/"
   chmod +x "$PREFIX/deploy/"*.sh 2>/dev/null || true

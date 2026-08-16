@@ -46,12 +46,29 @@ mkdir -p "$PREFIX" "$DATA" "$LOG" "$API"
 id -u "$RUN_USER" >/dev/null 2>&1 || useradd --system --home "$DATA" --shell /usr/sbin/nologin "$RUN_USER"
 usermod -aG docker "$RUN_USER" 2>/dev/null || true
 
-# Sync code
+# Sync code — control-api + core engines (required for market-intelligence exports)
 rsync -a --exclude node_modules --exclude dist --exclude data "$HERE/control-api/" "$API/"
+rsync -a --exclude node_modules --exclude dist "$HERE/core/" "$PREFIX/core/"
 rsync -a "$HERE/deploy/" "$PREFIX/deploy/"
+# supervisor / broker helpers used by control-api imports
+if [[ -d "$HERE/../SHARED" ]]; then
+  rsync -a "$HERE/../SHARED/" "$PREFIX/../SHARED/" 2>/dev/null || true
+fi
 chmod +x "$PREFIX/deploy/"*.sh
 cp -a "$HERE/MONITOR_SERVER" "$PREFIX/MONITOR_SERVER"
 install -m 0755 "$HERE/deploy/vs-monitor" /usr/local/bin/vs-monitor
+
+# Prove market-intelligence export exists on disk before boot
+if ! grep -q 'buildMarketStateVector' "$PREFIX/core/market-intelligence/src/marketState.ts" 2>/dev/null; then
+  echo "FAIL: $PREFIX/core/market-intelligence missing buildMarketStateVector after sync" >&2
+  ls -la "$PREFIX/core/market-intelligence/src/" >&2 || true
+  exit 1
+fi
+if ! grep -q "marketState" "$PREFIX/core/market-intelligence/src/index.ts" 2>/dev/null; then
+  echo "FAIL: market-intelligence index does not re-export marketState" >&2
+  cat "$PREFIX/core/market-intelligence/src/index.ts" >&2 || true
+  exit 1
+fi
 
 # --- ONE password, write to EVERY env file BEFORE creating DB ---
 DB_USER=market_reader
