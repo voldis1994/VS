@@ -16,6 +16,7 @@ import {
   buildServerMonitorSnapshot,
   renderServerMonitorFrame,
 } from './serverMonitor.js';
+import { evaluateSupervisor } from '../../../supervisor/src/orchestrator.js';
 import { hostname } from 'os';
 import { normalizeNetworkSecret } from './network/networkSecrets.js';
 
@@ -256,5 +257,13 @@ export async function registerAdminAgentRoutes(
     });
     reply.header('content-type', 'text/plain; charset=utf-8');
     return renderServerMonitorFrame(snap);
+  });
+
+  /** Supervisor: process_ready vs trading_ready (fail-closed). */
+  app.get('/api/v1/system/supervisor', async (req, reply) => {
+    if (!authorizeAdmin(req as { headers: Record<string, unknown> }, token)) {
+      return reply.code(401).send({ ok: false, code: 'UNAUTHORIZED' });
+    }
+    return evaluateSupervisor();
   });
 }

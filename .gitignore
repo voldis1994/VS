@@ -68,3 +68,4 @@ SERVER/control-api/data/
 **/VS-CLIENT-*.conf
 apps/dashboard/.env.local
 apps/dashboard/.env.*.local
+TESTS/node_modules/
