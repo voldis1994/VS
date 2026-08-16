@@ -103,6 +103,7 @@ EOF
 ║  ADMIN                ○ UNKNOWN                            ║
 ║  CLIENTS              ○ UNKNOWN                            ║
 ║  LAST ERROR: cannot reach $BASE/health
+║  FIX: sudo bash SERVER/FIX_CONTROL_API.sh
 ║  $(date -u '+%Y-%m-%d %H:%M:%S UTC')
 ║  READ-ONLY — closing this does not stop the server         ║
 ╚════════════════════════════════════════════════════════════╝

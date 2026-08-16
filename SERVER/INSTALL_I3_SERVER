@@ -548,8 +548,17 @@ echo "Export USB pack: sudo bash $PREFIX/2_EXPORT_USB"
 echo "==================================="
 
 if [[ "$ok" -ne 1 || "$SELF_FAIL" -ne 0 ]]; then
-  echo "FAIL: INSTALL incomplete — journalctl -u vs-server -e" >&2
+  echo "FAIL: INSTALL incomplete — trying FIX_CONTROL_API recovery" >&2
   journalctl -u vs-server -n 40 --no-pager >&2 || true
+  if [[ -x "$HERE/FIX_CONTROL_API.sh" ]]; then
+    bash "$HERE/FIX_CONTROL_API.sh" || true
+  fi
+  if curl -fsS "http://127.0.0.1:3000/health" >/dev/null 2>&1; then
+    echo "SUCCESS: recovered via FIX_CONTROL_API"
+    echo "NEXT: run  vs-monitor"
+    exit 0
+  fi
+  echo "FAIL: still down — sudo bash SERVER/FIX_CONTROL_API.sh && journalctl -u vs-server -e" >&2
   exit 1
 fi
 

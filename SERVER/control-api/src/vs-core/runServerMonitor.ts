@@ -37,7 +37,11 @@ async function fetchMonitor(): Promise<ServerMonitorSnapshot> {
       return offlineServerMonitorSnapshot(`/health HTTP ${h.status}`);
     }
   } catch (e) {
-    const msg = e instanceof Error ? e.message : 'fetch failed';
+    const raw = e instanceof Error ? e.message : 'fetch failed';
+    const msg =
+      /fetch failed|ECONNREFUSED|NetworkError|aborted/i.test(raw)
+        ? `OFFLINE ${BASE}/health (${raw}) — run: sudo bash SERVER/FIX_CONTROL_API.sh`
+        : raw;
     return offlineServerMonitorSnapshot(msg);
   }
 

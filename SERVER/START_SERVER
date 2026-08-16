@@ -33,15 +33,20 @@ export NODE_ENV="${NODE_ENV:-production}"
 export OPERATING_MODE="${OPERATING_MODE:-DEMO}"
 export LIVE_TRADING_ENABLED="${LIVE_TRADING_ENABLED:-false}"
 
-# Default: localhost only. Production private net: bind VS WireGuard IP (never public 0.0.0.0).
-if [[ "${VS_PRIVATE_NETWORK:-}" == "1" ]]; then
-  export VS_PRIVATE_NETWORK=1
-  export CONTROL_API_HOST="${CONTROL_API_HOST:-10.77.0.1}"
+# LAN management (appliance): always 0.0.0.0 so MSI + localhost work.
+# Never default to WireGuard-only 10.77.0.1 (breaks monitor + MSI LAN).
+export VS_LAN_MANAGEMENT="${VS_LAN_MANAGEMENT:-1}"
+if [[ "${VS_LAN_MANAGEMENT}" == "1" || "${VS_LAN_MANAGEMENT}" == "true" ]]; then
+  export CONTROL_API_HOST=0.0.0.0
 elif [[ "${ADMIN_BIND:-}" == "lan" ]]; then
-  echo "FAIL: ADMIN_BIND=lan is retired — use VS_PRIVATE_NETWORK=1 (WireGuard) instead of public bind" >&2
+  echo "FAIL: ADMIN_BIND=lan is retired — use VS_LAN_MANAGEMENT=1" >&2
   exit 1
 else
   export CONTROL_API_HOST="${CONTROL_API_HOST:-127.0.0.1}"
+  if [[ "${CONTROL_API_HOST}" == "10.77.0.1" ]]; then
+    echo "WARN: refusing WG-only bind — forcing 127.0.0.1" >&2
+    export CONTROL_API_HOST=127.0.0.1
+  fi
 fi
 export CONTROL_API_PORT="${CONTROL_API_PORT:-3000}"
 
@@ -80,8 +85,9 @@ console.log('SERVER_IDENTITY', id.server_id, id.public_key.slice(0, 12) + '…')
   exit 1
 }
 
-# Fail closed: VS_PRIVATE_NETWORK=1 requires WireGuard READY — never fallback to public HTTP
-if [[ "${VS_PRIVATE_NETWORK:-}" == "1" ]]; then
+# Fail closed: WireGuard required for remote CLIENT path only.
+# LAN ADMIN works with VS_LAN_MANAGEMENT=1 even if WG is down.
+if [[ "${VS_PRIVATE_NETWORK:-}" == "1" && "${VS_LAN_MANAGEMENT:-}" != "1" && "${VS_LAN_MANAGEMENT:-}" != "true" ]]; then
   if [[ "${VS_WG_UP:-1}" == "1" && "$(id -u)" -eq 0 && -x "$ROOT/network/UP_WIREGUARD" ]]; then
     "$ROOT/network/UP_WIREGUARD" || {
       echo "FAIL: UP_WIREGUARD failed — management NOT READY (no public HTTP fallback)" >&2
