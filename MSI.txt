@@ -1,13 +1,32 @@
 MSI — VIENA KOMANDA
 ===================
 
-1) ADMIN\config\SERVER_IP.txt  — viena rinda, i3 IP, piemēram:
-   192.168.0.53
+NEDRĪKSTI palaist no C:\Users\voldi
+Tur NAV VS repo → tāpēc "path not found" / "not a git repository".
 
-2) Palaid:
-   cd C:\VS-main
-   git pull
+1) Atver CMD un ieej VS mapē (parasti C:\VS-main):
+
+   cd /d C:\VS-main
+   dir START_MSI.bat
+
+   Ja faila nav — meklē:
+   dir /s /b C:\START_MSI.bat
+   un cd uz to mapi kur tas atrasts.
+
+2) i3 IP (no i3: hostname -I) — VIENA rinda failā:
+
+   mkdir ADMIN\config 2>nul
+   echo 192.168.0.10> ADMIN\config\SERVER_IP.txt
+
+   (liec IEVESĪTO i3 IP — nevis random 192.168.8.x ja i3 ir 192.168.0.10)
+
+3) Palaid:
+
+   git pull origin main
    START_MSI.bat
 
-3) ADMIN → CLIENTS → CREATE WEB LOGIN
-   Klients atver http://<i3-IP>:3000/
+4) Pārbaude:
+
+   curl.exe -s http://192.168.0.10:3000/health
+
+Ja curl neiet — uz i3: sudo bash SERVER/OPEN_LAN_FOR_MSI.sh
