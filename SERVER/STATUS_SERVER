@@ -38,6 +38,16 @@ else
   fail "PROCESS" "stopped"
 fi
 
+# LOCAL MONITOR (observational — failure does not fail infrastructure READY)
+echo "MONITOR"
+if systemctl is-active --quiet vs-server-monitor.service 2>/dev/null; then
+  pass "CONSOLE" "vs-server-monitor active (read-only)"
+elif systemctl list-unit-files vs-server-monitor.service >/dev/null 2>&1; then
+  deg "CONSOLE" "vs-server-monitor installed but not active"
+else
+  info "CONSOLE" "unit not installed (run INSTALL_I3_SERVER)"
+fi
+
 # DATABASE
 echo "DATABASE"
 if docker exec market-reader-postgres pg_isready -U "${DB_USER:-market_reader}" -d "${DB_NAME:-market_reader}" >/dev/null 2>&1; then
@@ -108,8 +118,8 @@ echo "PORTS"
 ss -lntu 2>/dev/null | grep -E ":${PORT}|:5432|:6379|:51820" || netstat -lntu 2>/dev/null | grep -E ":${PORT}|:5432|:6379" || true
 
 if [[ -n "$TOKEN" && "$TOKEN" != "CHANGE_ME_ADMIN_TOKEN" && "$API_OK" -eq 1 ]]; then
-  echo "ADMIN_SNAPSHOT"
-  curl -fsS -H "x-admin-token: $TOKEN" "http://127.0.0.1:${PORT}/api/v1/admin/snapshot" 2>/dev/null | head -c 800 || true
+  echo "SERVER_MONITOR"
+  curl -fsS -H "x-admin-token: $TOKEN" "http://127.0.0.1:${PORT}/api/v1/server/monitor" 2>/dev/null | head -c 1200 || true
   echo
 fi
 

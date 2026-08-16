@@ -15,8 +15,14 @@ sudo bash SERVER/START_SERVER
 sudo bash SERVER/STOP_SERVER
 sudo bash SERVER/RESTART_SERVER
 sudo bash SERVER/STATUS_SERVER
+sudo bash SERVER/START_MONITOR
+sudo bash SERVER/STOP_MONITOR
 sudo bash SERVER/2_EXPORT_USB
 ```
+
+Local physical monitor (read-only, auto-starts via `vs-server-monitor.service` on `/dev/tty1`):
+- Closing the monitor does **not** stop API / Postgres / Redis / WireGuard.
+- Same status contract as MSI: `GET /api/v1/server/monitor` (x-admin-token).
 
 MSI reaches API on LAN (example): `http://192.168.0.10:3000`  
 Reserve a DHCP lease for the i3 on your router.

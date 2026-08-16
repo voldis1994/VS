@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# START_MONITOR — start local read-only i3 console monitor (does not start backend).
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+if systemctl list-unit-files vs-server-monitor.service >/dev/null 2>&1; then
+  systemctl start vs-server-monitor.service
+  systemctl --no-pager -l status vs-server-monitor | head -20 || true
+  exit 0
+fi
+echo "INFO: systemd unit missing — running MONITOR_SERVER in foreground"
+exec "$ROOT/MONITOR_SERVER"

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# STOP_MONITOR — stop local console monitor only (backend keeps running).
+set -euo pipefail
+if systemctl list-unit-files vs-server-monitor.service >/dev/null 2>&1; then
+  systemctl stop vs-server-monitor.service || true
+  echo "SUCCESS: vs-server-monitor stopped (vs-server / Postgres / Redis / WG unchanged)"
+  exit 0
+fi
+echo "INFO: no vs-server-monitor unit — nothing to stop"
+exit 0

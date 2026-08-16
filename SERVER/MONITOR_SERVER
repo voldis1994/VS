@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# MONITOR_SERVER — local read-only physical status display for i3 console.
+# Closing this does NOT stop vs-server, Postgres, Redis, or WireGuard.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+DATA="${VS_SERVER_DATA:-${VS_CORE_DATA:-/var/lib/vs-server}}"
+API="${VS_SERVER_ROOT:-$ROOT}/control-api"
+if [[ ! -d "$API" && -d "$ROOT/control-api" ]]; then
+  API="$ROOT/control-api"
+fi
+
+if [[ -f "$DATA/server.env" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$DATA/server.env"
+  set +a
+fi
+if [[ -f "$API/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$API/.env"
+  set +a
+fi
+
+export VS_SERVER_DATA="${VS_SERVER_DATA:-$DATA}"
+export VS_CORE_DATA="${VS_CORE_DATA:-$DATA}"
+export LIVE_TRADING_ENABLED="${LIVE_TRADING_ENABLED:-false}"
+export CONTROL_API_PORT="${CONTROL_API_PORT:-3000}"
+export VS_MONITOR_API_URL="${VS_MONITOR_API_URL:-http://127.0.0.1:${CONTROL_API_PORT}}"
+export VS_MONITOR_REFRESH_MS="${VS_MONITOR_REFRESH_MS:-2000}"
+
+if [[ ! -f "$API/package.json" ]]; then
+  echo "FAIL: control-api missing at $API" >&2
+  exit 1
+fi
+cd "$API"
+if [[ ! -x node_modules/.bin/tsx ]]; then
+  echo "FAIL: tsx missing — run INSTALL_I3_SERVER / npm ci in control-api" >&2
+  exit 1
+fi
+
+exec ./node_modules/.bin/tsx src/vs-core/runServerMonitor.ts

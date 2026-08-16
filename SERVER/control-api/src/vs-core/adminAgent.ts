@@ -12,6 +12,10 @@ import { getEventBus } from './eventBus.js';
 import { versionBundle } from './versions.js';
 import { renderCoreTui, servicesFromProbes, type CoreTuiModel } from './coreTui.js';
 import { FeedManager } from './feedManager.js';
+import {
+  buildServerMonitorSnapshot,
+  renderServerMonitorFrame,
+} from './serverMonitor.js';
 import { hostname } from 'os';
 import { normalizeNetworkSecret } from './network/networkSecrets.js';
 
@@ -226,5 +230,31 @@ export async function registerAdminAgentRoutes(
     const text = renderCoreTui(model);
     reply.header('content-type', 'text/plain; charset=utf-8');
     return text;
+  });
+
+  /**
+   * Unified health/status contract for MSI ADMIN + i3 local SERVER MONITOR.
+   * Auth: x-admin-token. Never returns secrets. Never invents ONLINE.
+   */
+  app.get('/api/v1/server/monitor', async (req, reply) => {
+    if (!authorizeAdmin(req as { headers: Record<string, unknown> }, token)) {
+      return reply.code(401).send({ ok: false, code: 'UNAUTHORIZED' });
+    }
+    return buildServerMonitorSnapshot({
+      getProbes: deps.getProbes,
+      apiSelfOnline: true,
+    });
+  });
+
+  app.get('/api/v1/server/monitor/text', async (req, reply) => {
+    if (!authorizeAdmin(req as { headers: Record<string, unknown> }, token)) {
+      return reply.code(401).send({ ok: false, code: 'UNAUTHORIZED' });
+    }
+    const snap = await buildServerMonitorSnapshot({
+      getProbes: deps.getProbes,
+      apiSelfOnline: true,
+    });
+    reply.header('content-type', 'text/plain; charset=utf-8');
+    return renderServerMonitorFrame(snap);
   });
 }

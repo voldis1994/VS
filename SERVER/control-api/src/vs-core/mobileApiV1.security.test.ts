@@ -26,6 +26,8 @@ export const API_V1_INVENTORY = [
   { method: 'GET', path: '/api/v1/clients/:clientId/status', auth: 'bearer', isolation: 'strict', notes: 'A→B denied' },
   { method: 'GET', path: '/api/v1/admin/health', auth: 'x-admin-token', isolation: 'admin-only', notes: 'admin agent' },
   { method: 'GET', path: '/api/v1/admin/tui', auth: 'x-admin-token', isolation: 'admin-only', notes: 'admin tui text' },
+  { method: 'GET', path: '/api/v1/server/monitor', auth: 'x-admin-token', isolation: 'admin-only', notes: 'unified server monitor' },
+  { method: 'GET', path: '/api/v1/server/monitor/text', auth: 'x-admin-token', isolation: 'admin-only', notes: 'monitor plaintext frame' },
 ] as const;
 
 async function buildApp() {

@@ -28,6 +28,7 @@ export * from './acceptanceGate.js';
 export * from './hostTelemetry.js';
 export * from './coreTui.js';
 export * from './adminAgent.js';
+export * from './serverMonitor.js';
 export * from './runtimeChain.js';
 export * from './soakTest.js';
 export * from './databaseGate.js';

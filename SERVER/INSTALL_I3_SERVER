@@ -253,7 +253,7 @@ test -x "$API/node_modules/.bin/tsx"
 # 6) Private network foundation + firewall + WireGuard
 # ---------------------------------------------------------------------------
 chmod +x "$PREFIX"/INSTALL_* "$PREFIX"/START_* "$PREFIX"/STOP_* "$PREFIX"/STATUS_* \
-  "$PREFIX"/RESTART_* "$PREFIX"/network/* "$PREFIX"/deploy/*.sh 2>/dev/null || true
+  "$PREFIX"/RESTART_* "$PREFIX"/MONITOR_* "$PREFIX"/network/* "$PREFIX"/deploy/*.sh 2>/dev/null || true
 
 set -a
 # shellcheck disable=SC1090
@@ -322,6 +322,29 @@ cp -a "$HERE/START_SERVER" "$PREFIX/START_SERVER"
 cp -a "$HERE/STOP_SERVER" "$PREFIX/STOP_SERVER"
 cp -a "$HERE/STATUS_SERVER" "$PREFIX/STATUS_SERVER"
 cp -a "$HERE/RESTART_SERVER" "$PREFIX/RESTART_SERVER" 2>/dev/null || true
+cp -a "$HERE/MONITOR_SERVER" "$PREFIX/MONITOR_SERVER"
+cp -a "$HERE/START_MONITOR" "$PREFIX/START_MONITOR" 2>/dev/null || true
+cp -a "$HERE/STOP_MONITOR" "$PREFIX/STOP_MONITOR" 2>/dev/null || true
+chmod +x "$PREFIX/MONITOR_SERVER" "$PREFIX/START_MONITOR" "$PREFIX/STOP_MONITOR" 2>/dev/null || true
+
+# Local read-only physical console monitor (independent of vs-server lifecycle)
+install -m 0644 "$HERE/deploy/systemd/vs-server-monitor.service" \
+  /etc/systemd/system/vs-server-monitor.service
+# Rewrite paths for this PREFIX/DATA
+sed -i "s|/opt/vs-server|${PREFIX}|g; s|/var/lib/vs-server|${DATA}|g" \
+  /etc/systemd/system/vs-server-monitor.service
+# Headless / no console: drop TTY binding so the unit still runs to the journal
+if [[ ! -e /dev/tty1 ]]; then
+  sed -i \
+    -e '/^TTYPath=/d' \
+    -e '/^StandardInput=/d' \
+    -e '/^StandardOutput=/d' \
+    -e '/^TTYReset=/d' \
+    -e '/^TTYVHangup=/d' \
+    /etc/systemd/system/vs-server-monitor.service
+  printf '%s\n' 'StandardOutput=journal' 'StandardError=journal' \
+    >>/etc/systemd/system/vs-server-monitor.service
+fi
 
 systemctl daemon-reload
 systemctl enable vs-server.service
@@ -337,6 +360,10 @@ for i in $(seq 1 60); do
   sleep 1
 done
 
+# Enable + start monitor AFTER API is up (observational only; crash must not stop API)
+systemctl enable vs-server-monitor.service
+systemctl restart vs-server-monitor.service || true
+
 echo
 "$PREFIX/STATUS_SERVER" || true
 echo
@@ -345,6 +372,7 @@ echo "Server LAN URL:  http://${LAN_IP:-<i3-lan-ip>}:3000"
 echo "Reserve DHCP lease for this MAC/IP on your router."
 echo "API_ADMIN_TOKEN is in $SERVER_ENV (not printed)."
 echo "WireGuard UDP:   ${VS_WG_LISTEN_PORT:-51820} (remote clients)"
+echo "Local monitor:   systemctl status vs-server-monitor  (console /dev/tty1)"
 echo "Export USB pack: sudo bash $PREFIX/2_EXPORT_USB"
 echo "==================================="
 
