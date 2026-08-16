@@ -1,21 +1,13 @@
 #!/usr/bin/env bash
-# INSTALL_CONTROL_PANEL — MSI / admin PC: web Control Panel (apps/dashboard) + ADMIN CLI.
+# INSTALL_CONTROL_PANEL — MSI / admin PC: ADMIN desktop UI + CLI.
 # Does NOT install Postgres/Redis/backend.
-#
-#   bash ADMIN/INSTALL_CONTROL_PANEL
-#   # optional:
-#   VS_SERVER_URL=http://192.168.0.53:3000 bash ADMIN/INSTALL_CONTROL_PANEL
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$ROOT/.." && pwd)"
-if [[ -d "$ROOT/apps/dashboard-v2" ]]; then
-  DASH="$ROOT/apps/dashboard-v2"
-else
-  DASH="$REPO/Old-system/apps/dashboard"
-fi
+DASH="$ROOT/desktop"
 CFG_DIR="$ROOT/config"
-DATA="${VS_ADMIN_DATA:-$REPO/Old-system/data/vs-admin}"
+DATA="${VS_ADMIN_DATA:-$REPO/data/vs-admin}"
 SERVER_URL="${VS_SERVER_URL:-http://192.168.0.10:3000}"
 
 echo "========================================"
@@ -28,9 +20,13 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
+if [[ ! -d "$DASH" ]]; then
+  echo "FAIL: ADMIN/desktop missing" >&2
+  exit 1
+fi
+
 mkdir -p "$CFG_DIR" "$DATA"
 
-# Writable config — DHCP may change; edit this file, do not hard-code forever
 cat >"$CFG_DIR/control-panel.env" <<EOF
 # VS Control Panel → i3 SERVER
 # Prefer a DHCP reservation for the i3 on your router.
@@ -38,26 +34,17 @@ VS_SERVER_URL=${SERVER_URL}
 VITE_API_URL=${SERVER_URL}
 VITE_WS_URL=${SERVER_URL/http/ws}/ws
 API_ADMIN_TOKEN=
-# Optional enrollment (WireGuard remote path)
 VS_ENROLLMENT_CODE=
 EOF
 chmod 600 "$CFG_DIR/control-panel.env"
 
-# ADMIN CLI deps (tsx must be a runtime dependency)
 cd "$ROOT"
 npm install
-# ensure tsx present for start scripts
 npm install tsx --save
 
-# Dashboard (Control Panel UI)
-if [[ -d "$DASH" ]]; then
-  cd "$DASH"
-  npm install
-else
-  echo "WARN: dashboard UI missing — CLI ADMIN only"
-fi
+cd "$DASH"
+npm install
 
-# Connection JSON for CLI ADMIN
 if [[ ! -f "$CFG_DIR/admin.connection.json" ]]; then
   cat >"$CFG_DIR/admin.connection.json" <<EOF
 {

@@ -11,12 +11,10 @@
 $ErrorActionPreference = "Continue"
 $AdminRoot = Split-Path -Parent $PSScriptRoot
 $RepoRoot = Split-Path -Parent $AdminRoot
-$DashV2 = Join-Path $AdminRoot "apps\dashboard-v2"
-$DashLegacy = Join-Path $RepoRoot "Old-system\apps\dashboard"
-if (Test-Path (Join-Path $DashV2 "package.json")) {
-  $Dash = $DashV2
-} else {
-  $Dash = $DashLegacy
+$Dash = Join-Path $AdminRoot "desktop"
+if (-not (Test-Path (Join-Path $Dash "package.json"))) {
+  Write-Host "FAIL: ADMIN/desktop missing — run INSTALL_ADMIN.bat"
+  exit 1
 }
 $Cfg = Join-Path $AdminRoot "config\control-panel.env"
 $PidFile = Join-Path $env:LOCALAPPDATA "VS\admin\control-panel.pid"

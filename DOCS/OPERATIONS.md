@@ -5,7 +5,7 @@ Daily:
 ```bash
 sudo bash SERVER/STATUS_SERVER
 sudo bash SERVER/install/HEALTHCHECK.sh
-sudo bash SERVER/SHOW_DASHBOARD_V2.sh
+sudo bash SERVER/SHOW_DASHBOARD.sh
 ```
 
 ADMIN: `START_ADMIN.bat`  

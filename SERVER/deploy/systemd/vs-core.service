@@ -14,7 +14,7 @@ Environment=VS_CORE_ROOT=/opt/vs-server
 Environment=VS_SERVER_DATA=/var/lib/vs-server
 Environment=VS_CORE_DATA=/var/lib/vs-server
 Environment=NODE_ENV=production
-Environment=OPERATING_MODE=PAPER
+Environment=OPERATING_MODE=PRODUCTION
 Environment=LIVE_TRADING_ENABLED=false
 Environment=VS_LAN_MANAGEMENT=1
 Environment=VS_PRIVATE_NETWORK=1

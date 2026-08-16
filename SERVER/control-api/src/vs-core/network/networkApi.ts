@@ -187,6 +187,22 @@ export async function registerPrivateNetworkRoutes(app: FastifyInstance): Promis
       session_id: auth.session.session_id,
       latency_ms: body.latency_ms ?? null,
     });
+    // Mirror into presence registry so i3 monitor can show APP CONNECTED
+    try {
+      const { heartbeatPresence } = await import('../presenceRegistry.js');
+      heartbeatPresence({
+        device_id: auth.device.device_id,
+        display_name: auth.device.device_name || auth.device.device_id,
+        role: auth.device.device_type === 'ADMIN' ? 'ADMIN' : 'CLIENT',
+        transport: 'WIREGUARD',
+        vpn_ip: auth.device.private_address || null,
+        session_id: auth.session.session_id,
+        app_version: 'vs-client',
+        wg_connected: true,
+      });
+    } catch {
+      /* presence optional */
+    }
     return { ok: true, connection_state: d.connection_state, last_seen: d.last_seen };
   });
 

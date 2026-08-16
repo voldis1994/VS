@@ -3,13 +3,13 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-REPO="$(cd "$ROOT/.." && pwd)"
-if [[ -d "$ROOT/apps/dashboard-v2" ]]; then
-  DASH="$ROOT/apps/dashboard-v2"
-else
-  DASH="$REPO/Old-system/apps/dashboard"
-fi
+DASH="$ROOT/desktop"
 CFG="$ROOT/config/control-panel.env"
+
+if [[ ! -d "$DASH" ]]; then
+  echo "FAIL: ADMIN/desktop missing" >&2
+  exit 1
+fi
 
 if [[ -f "$CFG" ]]; then
   set -a
@@ -28,21 +28,18 @@ echo "VS CONTROL PANEL"
 echo "  API = $VITE_API_URL"
 echo "  WS  = $VITE_WS_URL"
 
-# Probe server (LAN)
 if ! curl -fsS --max-time 5 "$SERVER_URL/health" >/dev/null 2>&1; then
   echo "FAIL: cannot reach $SERVER_URL/health" >&2
   echo "  - Is i3 SERVER running?  (STATUS_SERVER on i3)" >&2
   echo "  - Same Wi-Fi? Update VS_SERVER_URL in $CFG" >&2
-  echo "  - Firewall allowing LAN → :3000?" >&2
   exit 1
 fi
 echo "  health OK"
 
 if [[ ! -d "$DASH/node_modules" ]]; then
-  echo "FAIL: run INSTALL_CONTROL_PANEL first" >&2
+  echo "FAIL: run INSTALL_ADMIN / INSTALL_CONTROL_PANEL first" >&2
   exit 1
 fi
 
 cd "$DASH"
-# Bind panel to localhost on MSI only; API calls go to i3 LAN IP via VITE_API_URL
 exec npx vite --host 127.0.0.1 --port 5173

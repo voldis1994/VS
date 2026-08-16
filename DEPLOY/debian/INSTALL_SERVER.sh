@@ -1,1 +1,1 @@
-../SERVER/install/INSTALL_SERVER.sh
+../../SERVER/install/INSTALL_SERVER.sh

@@ -1,40 +1,19 @@
 #!/usr/bin/env bash
-# BUILD_CLIENT — build VS CLIENT package for device install.
+# BUILD_CLIENT — build VS CLIENT desktop UI for device install.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-REPO="$(cd "$ROOT/.." && pwd)"
 echo "VS CLIENT BUILD"
 
-# Prefer client-v2
-if [[ -f "$ROOT/apps/client-v2/package.json" ]]; then
-  cd "$ROOT/apps/client-v2"
+if [[ -f "$ROOT/desktop/package.json" ]]; then
+  cd "$ROOT/desktop"
   if [[ ! -d node_modules ]]; then
     npm ci || npm install
   fi
   npm run build
-  echo "SUCCESS: CLIENT apps/client-v2 built"
+  echo "SUCCESS: CLIENT/desktop built"
   exit 0
 fi
 
-if [[ -f "$ROOT/app/package.json" ]]; then
-  cd "$ROOT/app"
-  npm ci || npm install
-  npm run build
-  echo "SUCCESS: CLIENT app built"
-  exit 0
-fi
-
-if [[ -f "$REPO/Old-system/apps/dashboard/package.json" ]]; then
-  cd "$REPO/Old-system/apps/dashboard"
-  if [[ ! -d node_modules ]]; then
-    npm ci || npm install
-  fi
-  if npm run build:client; then
-    echo "SUCCESS: legacy CLIENT panel built (Old-system/apps/dashboard)"
-    exit 0
-  fi
-fi
-
-echo "FAIL: no CLIENT app build target"
+echo "FAIL: CLIENT/desktop missing"
 exit 1

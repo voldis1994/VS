@@ -33,17 +33,9 @@ describe('P6 diagnostics inject', () => {
     );
     expect(capital!.retry_count).toBeGreaterThanOrEqual(1);
     expect(report.checked_at).toMatch(/^\d{4}-/);
-    // Desktop ui.html (archived under Old-system) maps SYSTEM HEALTH fields
-    const ui = readFileSync(
-      join(process.cwd(), '../../Old-system/tools/vs-restart/ui.html'),
-      'utf8'
-    );
-    expect(ui).toContain('s.name');
-    expect(ui).toContain('s.level');
-    expect(ui).toContain('s.code');
-    expect(ui).toContain('s.detail');
-    expect(ui).toContain('s.retry_count');
-    expect(ui).toContain('/api/desk/health');
+    // Health payload contract (no dependency on archived desktop HTML)
+    expect(report).toHaveProperty('subsystems');
+    expect(Array.isArray(report.subsystems)).toBe(true);
   });
 });
 

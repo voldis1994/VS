@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # INSTALL_ADMIN — Linux/macOS path (Windows: INSTALL_ADMIN.bat).
-# Product foundation: deps, device keys, LAN discovery, enrollment, verify snapshot.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -17,16 +16,14 @@ fi
 
 npm install
 
-DASH_V2="$ROOT/apps/dashboard-v2"
-DASH_LEGACY="$REPO/Old-system/apps/dashboard"
-if [[ -d "$DASH_V2" ]]; then
-  (cd "$DASH_V2" && npm install)
-elif [[ -d "$DASH_LEGACY" ]]; then
-  (cd "$DASH_LEGACY" && npm install)
+DASH="$ROOT/desktop"
+if [[ ! -d "$DASH" ]]; then
+  echo "FAIL: ADMIN/desktop missing" >&2
+  exit 1
 fi
+(cd "$DASH" && npm install)
 
 mkdir -p config "${VS_ADMIN_DATA:-$REPO/data/vs-admin}/keys"
 
-# Shared installer (discover + enroll + ADMIN_SNAPSHOT verify)
 npx tsx app/installAdmin.ts
 exit $?

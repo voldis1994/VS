@@ -1,13 +1,9 @@
-# Screenshots (from implemented v2 UI builds)
+# Screenshots
 
-Captured via headless Chrome against built/static assets in the agent environment
-(no live VS-CORE connection — honesty states: CONNECTION LOST / DISCONNECTED / SERVER_OFFLINE / NO DATA).
+| File | Source |
+|------|--------|
+| `i3-server-panel.png` | `SERVER/monitor` |
+| `msi-admin-dashboard.png` | `ADMIN/desktop` |
+| `client-home.png` | `CLIENT/desktop` |
 
-| File | Product |
-|------|---------|
-| `i3-server-panel.png` | SERVER/dashboard-v2 |
-| `msi-admin-dashboard.png` | ADMIN/apps/dashboard-v2 |
-| `client-home.png` | CLIENT/apps/client-v2 |
-
-Physical i3/MSI/live CLIENT screenshots still required for hardware acceptance.
-See `VISUAL_DIFF.md`.
+Offline honesty states (CONNECTION LOST / DISCONNECTED / NO DATA) are valid evidence when server is unreachable. Live connected captures require physical hardware.

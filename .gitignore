@@ -21,7 +21,7 @@ dist-client/
 .env
 !.env.example
 
-# Data
+# Data / runtime
 data/raw/**
 data/normalized/**
 data/replay/**
@@ -31,6 +31,8 @@ data/exports/**
 !data/replay/.gitkeep
 !data/exports/.gitkeep
 !data/models/.gitkeep
+data/vs-server/
+data/vs-admin/
 
 # Logs
 logs/
@@ -60,18 +62,16 @@ ADMIN/config/admin.connection.json
 ADMIN/config/control-panel.env
 ADMIN/ADMIN_TOKEN.txt
 ADMIN_TOKEN.txt
-data/vs-server/
-data/vs-admin/
 SERVER/control-api/data/
 **/device.private
 **/VS-ADMIN-*.conf
 **/VS-CLIENT-*.conf
-apps/dashboard/.env.local
-apps/dashboard/.env.*.local
+
+# Product UI build outputs / deps
+ADMIN/desktop/node_modules/
+CLIENT/desktop/node_modules/
+ADMIN/desktop/dist/
+CLIENT/desktop/dist/
 TESTS/node_modules/
 SERVER/client-api/node_modules/
-
-ADMIN/apps/dashboard-v2/node_modules/
-CLIENT/apps/client-v2/node_modules/
-ADMIN/apps/dashboard-v2/dist/
-CLIENT/apps/client-v2/dist/
+SERVER/monitor/public/config.js

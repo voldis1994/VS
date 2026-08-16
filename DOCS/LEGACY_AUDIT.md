@@ -1,19 +1,9 @@
-# VS Legacy / Old-system Audit
+# Legacy audit (superseded)
 
-**Date:** 2026-08-16  
+Canonical archive location is now **`legacy-review/`** (formerly `Old-system/`).
 
-## Saknes struktūra
+See:
 
-| Mape | Statuss |
-|------|---------|
-| `SERVER/` | AKTUĀLS — VS CORE |
-| `ADMIN/` | AKTUĀLS — VS ADMIN |
-| `CLIENT/` | AKTUĀLS — VS CLIENT |
-| `Old-system/` | NEAKTUĀLS — viss vēsturiskais |
-| `DOCS/`, `TESTS/`, `SHARED/`, `scripts/` | AKTUĀLS atbalsts |
-
-## Kas pārcelts uz `Old-system/`
-
-`apps/`, `libs/`, `legacy-review/`, `docs/`, `cmake/`, CMake faili, `tests/`, `tools/`, `deploy/`, `DEPLOY/`, `data/`, `vcpkg.json`, `START_3_FILES.txt`
-
-Produkcijas Node runtime **neimportē** `Old-system`.
+- `DOCS/FINAL_REPOSITORY_AUDIT.md`
+- `legacy-review/README.md`
+- `TESTS/unit/no-legacy-ui-imports.test.ts`

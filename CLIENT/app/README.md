@@ -1,1 +1,0 @@
-# Native CLIENT app deferred

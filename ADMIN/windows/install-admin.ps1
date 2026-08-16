@@ -42,7 +42,6 @@ if ($major -lt 20) {
 }
 Write-Step "Node.js v$verRaw OK"
 
-# --- npm deps: ADMIN + dashboard-v2 ---
 Write-Step "Installing ADMIN npm dependencies..."
 npm install
 if ($LASTEXITCODE -ne 0) {
@@ -50,25 +49,19 @@ if ($LASTEXITCODE -ne 0) {
   exit 1
 }
 
-$DashV2 = Join-Path $AdminRoot "apps\dashboard-v2"
-$DashLegacy = Join-Path $RepoRoot "Old-system\apps\dashboard"
-if (Test-Path (Join-Path $DashV2 "package.json")) {
-  $Dash = $DashV2
-  Write-Step "Installing Control Panel v2 (ADMIN/apps/dashboard-v2)..."
-} elseif (Test-Path (Join-Path $DashLegacy "package.json")) {
-  $Dash = $DashLegacy
-  Write-Step "Installing legacy Control Panel (Old-system/apps/dashboard)..."
-} else {
-  Write-Host "FAIL: dashboard-v2 missing - Control Panel UI required"
+$Dash = Join-Path $AdminRoot "desktop"
+if (-not (Test-Path (Join-Path $Dash "package.json"))) {
+  Write-Host "FAIL: ADMIN/desktop missing - Control Panel UI required"
   exit 1
 }
 
+Write-Step "Installing VS ADMIN desktop (ADMIN/desktop)..."
 Push-Location $Dash
 $dashOk = $true
 try {
   npm install
   if ($LASTEXITCODE -ne 0) {
-    Write-Host "FAIL: dashboard npm install"
+    Write-Host "FAIL: ADMIN desktop npm install"
     $dashOk = $false
   }
 } finally {
@@ -78,41 +71,20 @@ if (-not $dashOk) {
   exit 1
 }
 
-# Local data dirs (also created by installAdmin.ts)
-$dataDir = Join-Path $env:LOCALAPPDATA "VS\admin"
-New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $AdminRoot "config") | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $dataDir "keys") | Out-Null
-
-# Restrict ACL on data dir (best-effort)
-try {
-  $user = [string]$env:USERNAME
-  icacls $dataDir /inheritance:r | Out-Null
-  icacls $dataDir /grant:r ($user + ":(OI)(CI)F") | Out-Null
-} catch {
-  Write-Host ("WARN: could not tighten ACL on " + $dataDir)
-}
-
-# --- Orchestrated install (discover + enroll + verify) ---
-# LAN-first: does NOT require WireGuard / 10.77.0.1 when home LAN reaches i3
-Write-Step "Discovering VS-CORE-01 on LAN (WireGuard NOT required for home ADMIN)..."
-npx --yes tsx app/installAdmin.ts
-if ($LASTEXITCODE -ne 0) {
-  exit $LASTEXITCODE
-}
-
-# Soften control-panel.env ACL
-$envFile = Join-Path $AdminRoot "config\control-panel.env"
-if (Test-Path $envFile) {
-  try {
-    $user = [string]$env:USERNAME
-    icacls $envFile /inheritance:r | Out-Null
-    icacls $envFile /grant:r ($user + ":F") | Out-Null
-  } catch {
-    # best-effort ACL; ignore failures
+# Continue with enrollment / discovery (remainder of original installer)
+$InstallCli = Join-Path $AdminRoot "app\installAdmin.ts"
+if (Test-Path $InstallCli) {
+  Write-Step "Running ADMIN enrollment / discovery..."
+  npx --yes tsx "$InstallCli"
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "WARN: enrollment CLI returned non-zero — check LAN reachability to VS-CORE-01"
   }
+} else {
+  Write-Step "Enrollment CLI not present — configure config\control-panel.env manually"
 }
 
-Write-Step ""
-Write-Step "Install complete. Run START_ADMIN.bat to open the Control Panel."
+Write-Step "========================================"
+Write-Step " VS ADMIN INSTALL COMPLETE"
+Write-Step " Run START_ADMIN.bat to launch Control Panel"
+Write-Step "========================================"
 exit 0

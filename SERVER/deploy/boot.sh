@@ -41,14 +41,8 @@ if command -v timedatectl >/dev/null 2>&1; then
   timedatectl show -p NTPSynchronized --value 2>/dev/null || true
 fi
 
-# Prefer new layout; optional Old-system fallback only if control-api missing
+# Authoritative control-api only — no legacy fallbacks
 API_DIR="$ROOT/control-api"
-if [[ ! -d "$API_DIR" && -d "$ROOT/../Old-system/apps/control-api" ]]; then
-  API_DIR="$ROOT/../Old-system/apps/control-api"
-fi
-if [[ ! -d "$API_DIR" && -d "$ROOT/apps/control-api" ]]; then
-  API_DIR="$ROOT/apps/control-api"
-fi
 if [[ ! -d "$API_DIR" ]]; then
   echo "FAIL: control-api not found under $ROOT" >&2
   exit 1

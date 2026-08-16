@@ -34,22 +34,17 @@ VS SERVER $VER — Debian 13 (VS-CORE-01)
 2. sudo bash SERVER/install/INSTALL_SERVER.sh
 3. Configure Capital + PUBLIC_HOST_OR_IP in server.env as needed
 4. sudo bash SERVER/FINAL_ACCEPTANCE.sh
-5. sudo bash SERVER/SHOW_DASHBOARD.sh   # or INSTALL_MONITOR
+5. sudo bash SERVER/SHOW_DASHBOARD.sh   # i3 monitor (SERVER/monitor)
 EOF
 
 copy_tree "$ROOT/ADMIN" "$DIST/VS-ADMIN/ADMIN"
-if [[ -d "$ROOT/ADMIN/apps/dashboard-v2" ]]; then
-  copy_tree "$ROOT/ADMIN/apps/dashboard-v2" "$DIST/VS-ADMIN/ADMIN/apps/dashboard-v2"
-elif [[ -d "$ROOT/Old-system/apps/dashboard" ]]; then
-  copy_tree "$ROOT/Old-system/apps/dashboard" "$DIST/VS-ADMIN/apps/dashboard"
-fi
 cp -a "$ROOT/VERSION" "$DIST/VS-ADMIN/" 2>/dev/null || true
 cat >"$DIST/VS-ADMIN/INSTALL.txt" <<EOF
 VS ADMIN $VER — Windows 11 MSI
 1. Run ADMIN\\INSTALL_ADMIN.bat
 2. Run ADMIN\\START_ADMIN.bat
 3. Run ADMIN\\FINAL_ACCEPTANCE.bat
-LAN target: http://192.168.0.10:3000 (configure if different)
+LAN target: discover VS-CORE-01 (configure VS_SERVER_URL if DHCP differs)
 EOF
 
 copy_tree "$ROOT/CLIENT" "$DIST/VS-CLIENT/CLIENT"
