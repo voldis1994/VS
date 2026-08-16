@@ -197,13 +197,59 @@ compose() {
   fi
 }
 
+# Stable project name so re-installs adopt the same stack
+export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-vs-server}"
+
+ensure_named_container() {
+  local name="$1"
+  if docker inspect "$name" >/dev/null 2>&1; then
+    local st
+    st="$(docker inspect -f '{{.State.Status}}' "$name" 2>/dev/null || echo missing)"
+    if [[ "$st" != "running" ]]; then
+      echo "INFO: starting existing container $name (was $st)"
+      docker start "$name" >/dev/null
+    else
+      echo "INFO: reusing running container $name"
+    fi
+    return 0
+  fi
+  return 1
+}
+
 echo "==> docker compose up -d (postgres+redis on 127.0.0.1)"
-compose up -d
+# Prefer reuse of already-created appliance containers (common on re-install)
+pg_exists=0
+rd_exists=0
+ensure_named_container market-reader-postgres && pg_exists=1 || true
+ensure_named_container market-reader-redis && rd_exists=1 || true
+
+compose_err="$(mktemp)"
+set +e
+compose up -d >"$compose_err" 2>&1
+compose_rc=$?
+set -e
+if [[ "$compose_rc" -ne 0 ]]; then
+  if grep -qiE 'already in use|Conflict' "$compose_err"; then
+    echo "WARN: docker name conflict — adopting existing market-reader-* containers"
+    cat "$compose_err" | tail -20 || true
+    docker start market-reader-postgres >/dev/null 2>&1 || true
+    docker start market-reader-redis >/dev/null 2>&1 || true
+  else
+    echo "FAIL: docker compose up failed:" >&2
+    cat "$compose_err" >&2
+    rm -f "$compose_err"
+    exit 1
+  fi
+else
+  cat "$compose_err" || true
+fi
+rm -f "$compose_err"
 
 # Persist compose files for reboot (systemd ExecStartPre)
 cp -a "$REPO/docker-compose.yml" "$DATA/docker-compose.yml"
 cp -a "$ENV_ROOT" "$DATA/compose.env"
 chmod 600 "$DATA/compose.env"
+chown root:"$RUN_USER" "$DATA/compose.env" 2>/dev/null || true
 
 echo "==> waiting for Postgres readiness"
 ok_pg=0
