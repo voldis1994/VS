@@ -173,12 +173,40 @@ if ! docker exec -e PGPASSWORD="$DB_PASSWORD" "$CONTAINER" \
 fi
 echo "OK: Postgres accepts DB_PASSWORD on database $DB_NAME"
 
-# npm if needed
+# --- Build CLIENT web portal (market / lot / START STOP) ---
+CLIENT_SRC="$REPO/CLIENT/desktop"
+CLIENT_DIST="$PREFIX/client-panel"
+echo "==> build CLIENT web panel → $CLIENT_DIST"
+if [[ -f "$CLIENT_SRC/package.json" ]]; then
+  mkdir -p "$CLIENT_DIST" "$PREFIX/client-panel-src"
+  rsync -a --delete --exclude node_modules --exclude dist "$CLIENT_SRC/" "$PREFIX/client-panel-src/"
+  chown -R "$RUN_USER:$RUN_USER" "$PREFIX/client-panel-src" "$CLIENT_DIST"
+  sudo -u "$RUN_USER" bash -lc "cd '$PREFIX/client-panel-src' && (npm ci || npm install) && npm run build"
+  rsync -a --delete "$PREFIX/client-panel-src/dist/" "$CLIENT_DIST/"
+  chown -R "$RUN_USER:$RUN_USER" "$CLIENT_DIST"
+  for f in "$DATA/server.env" "$API/.env"; do
+    force_kv "$f" CLIENT_PANEL_DIST "$CLIENT_DIST"
+  done
+  echo "OK: CLIENT panel built"
+else
+  echo "WARN: CLIENT/desktop missing — portal UI not built"
+fi
+
+# npm if needed for control-api
 if [[ ! -x "$API/node_modules/.bin/tsx" ]]; then
   chown -R "$RUN_USER:$RUN_USER" "$API"
   sudo -u "$RUN_USER" bash -lc "cd '$API' && (npm ci || npm install) && npm install tsx@^4.19.0 --save"
 fi
 chown -R "$RUN_USER:$RUN_USER" "$DATA" "$LOG" "$PREFIX"
+
+# Firewall so MSI LAN can reach :3000
+if [[ -x "$HERE/network/APPLY_FIREWALL" ]]; then
+  echo "==> APPLY_FIREWALL"
+  bash "$HERE/network/APPLY_FIREWALL" || true
+else
+  ufw allow from 192.168.0.0/16 to any port 3000 proto tcp 2>/dev/null || true
+  ufw allow from 10.77.0.0/16 to any port 3000 proto tcp 2>/dev/null || true
+fi
 
 # Rewrite systemd (unmask, real file, root prestart)
 rm -f /etc/systemd/system/vs-server.service
@@ -210,6 +238,7 @@ Environment=DB_PORT=5432
 Environment=DB_NAME=${DB_NAME}
 Environment=DB_USER=${DB_USER}
 Environment=DB_PASSWORD=${DB_PASSWORD}
+Environment=CLIENT_PANEL_DIST=${PREFIX}/client-panel
 ExecStartPre=+${PREFIX}/deploy/ensure-postgres.sh
 ExecStart=${PREFIX}/deploy/boot.sh
 Restart=on-failure
@@ -262,10 +291,20 @@ fi
 
 LAN_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true)"
 echo
-echo "======== SUCCESS ========"
+echo "======== SUCCESS — VS SERVER READY ========"
 curl -fsS http://127.0.0.1:3000/health; echo
 ss -lntp | grep 3000 || true
-echo "LAN IP: $LAN_IP"
-echo "MSI:    VS_SERVER_URL=http://${LAN_IP}:3000"
-echo "Next:   vs-monitor"
+echo
+echo "i3 LAN IP:     $LAN_IP"
+echo "Control API:   http://${LAN_IP}:3000/health"
+echo "CLIENT portal: http://${LAN_IP}:3000/   (login from ADMIN → CLIENTS)"
+echo "WireGuard:     http://10.77.0.1:3000/  (remote clients)"
+echo
+echo "MSI next:"
+echo "  1) git pull"
+echo "  2) ADMIN\\START_EVERYTHING.bat"
+echo "  3) In ADMIN → CLIENTS → CREATE WEB LOGIN"
+echo "  4) Give client the URL + password shown"
+echo
+echo "Monitor: vs-monitor"
 exit 0
