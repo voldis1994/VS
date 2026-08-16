@@ -38,8 +38,10 @@ VS SERVER $VER — Debian 13 (VS-CORE-01)
 EOF
 
 copy_tree "$ROOT/ADMIN" "$DIST/VS-ADMIN/ADMIN"
-if [[ -d "$ROOT/apps/dashboard" ]]; then
-  copy_tree "$ROOT/apps/dashboard" "$DIST/VS-ADMIN/apps/dashboard"
+if [[ -d "$ROOT/ADMIN/apps/dashboard-v2" ]]; then
+  copy_tree "$ROOT/ADMIN/apps/dashboard-v2" "$DIST/VS-ADMIN/ADMIN/apps/dashboard-v2"
+elif [[ -d "$ROOT/Old-system/apps/dashboard" ]]; then
+  copy_tree "$ROOT/Old-system/apps/dashboard" "$DIST/VS-ADMIN/apps/dashboard"
 fi
 cp -a "$ROOT/VERSION" "$DIST/VS-ADMIN/" 2>/dev/null || true
 cat >"$DIST/VS-ADMIN/INSTALL.txt" <<EOF

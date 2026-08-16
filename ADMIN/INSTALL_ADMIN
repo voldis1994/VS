@@ -17,9 +17,12 @@ fi
 
 npm install
 
-DASH="$REPO/apps/dashboard"
-if [[ -d "$DASH" ]]; then
-  (cd "$DASH" && npm install)
+DASH_V2="$ROOT/apps/dashboard-v2"
+DASH_LEGACY="$REPO/Old-system/apps/dashboard"
+if [[ -d "$DASH_V2" ]]; then
+  (cd "$DASH_V2" && npm install)
+elif [[ -d "$DASH_LEGACY" ]]; then
+  (cd "$DASH_LEGACY" && npm install)
 fi
 
 mkdir -p config "${VS_ADMIN_DATA:-$REPO/data/vs-admin}/keys"

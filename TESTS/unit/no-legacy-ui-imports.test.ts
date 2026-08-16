@@ -6,7 +6,7 @@ const ROOT = join(import.meta.dirname, '../..');
 
 function walk(dir: string, acc: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
-    if (name === 'node_modules' || name === 'dist' || name === 'legacy-review') continue;
+    if (name === 'node_modules' || name === 'dist' || name === 'legacy-review' || name === 'Old-system') continue;
     const p = join(dir, name);
     const st = statSync(p);
     if (st.isDirectory()) walk(p, acc);
@@ -26,7 +26,7 @@ describe('production UI must not import legacy-review', () => {
     for (const r of roots) {
       for (const file of walk(r)) {
         const src = readFileSync(file, 'utf8');
-        if (/legacy-review/.test(src)) offenders.push(file);
+        if (/legacy-review|Old-system\//.test(src)) offenders.push(file);
       }
     }
     expect(offenders).toEqual([]);

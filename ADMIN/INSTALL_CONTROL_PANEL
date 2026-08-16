@@ -9,9 +9,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$ROOT/.." && pwd)"
-DASH="$REPO/apps/dashboard"
+if [[ -d "$ROOT/apps/dashboard-v2" ]]; then
+  DASH="$ROOT/apps/dashboard-v2"
+else
+  DASH="$REPO/Old-system/apps/dashboard"
+fi
 CFG_DIR="$ROOT/config"
-DATA="${VS_ADMIN_DATA:-$REPO/data/vs-admin}"
+DATA="${VS_ADMIN_DATA:-$REPO/Old-system/data/vs-admin}"
 SERVER_URL="${VS_SERVER_URL:-http://192.168.0.10:3000}"
 
 echo "========================================"
@@ -50,7 +54,7 @@ if [[ -d "$DASH" ]]; then
   cd "$DASH"
   npm install
 else
-  echo "WARN: apps/dashboard missing — CLI ADMIN only"
+  echo "WARN: dashboard UI missing — CLI ADMIN only"
 fi
 
 # Connection JSON for CLI ADMIN

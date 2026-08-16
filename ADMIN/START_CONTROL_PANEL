@@ -4,7 +4,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$ROOT/.." && pwd)"
-DASH="$REPO/apps/dashboard"
+if [[ -d "$ROOT/apps/dashboard-v2" ]]; then
+  DASH="$ROOT/apps/dashboard-v2"
+else
+  DASH="$REPO/Old-system/apps/dashboard"
+fi
 CFG="$ROOT/config/control-panel.env"
 
 if [[ -f "$CFG" ]]; then

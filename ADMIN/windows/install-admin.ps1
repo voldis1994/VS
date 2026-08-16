@@ -51,13 +51,13 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $DashV2 = Join-Path $AdminRoot "apps\dashboard-v2"
-$DashLegacy = Join-Path $RepoRoot "apps\dashboard"
+$DashLegacy = Join-Path $RepoRoot "Old-system\apps\dashboard"
 if (Test-Path (Join-Path $DashV2 "package.json")) {
   $Dash = $DashV2
   Write-Step "Installing Control Panel v2 (ADMIN/apps/dashboard-v2)..."
 } elseif (Test-Path (Join-Path $DashLegacy "package.json")) {
   $Dash = $DashLegacy
-  Write-Step "Installing legacy Control Panel (apps/dashboard)..."
+  Write-Step "Installing legacy Control Panel (Old-system/apps/dashboard)..."
 } else {
   Write-Host "FAIL: dashboard-v2 missing - Control Panel UI required"
   exit 1

@@ -12,7 +12,7 @@ $ErrorActionPreference = "Continue"
 $AdminRoot = Split-Path -Parent $PSScriptRoot
 $RepoRoot = Split-Path -Parent $AdminRoot
 $DashV2 = Join-Path $AdminRoot "apps\dashboard-v2"
-$DashLegacy = Join-Path $RepoRoot "apps\dashboard"
+$DashLegacy = Join-Path $RepoRoot "Old-system\apps\dashboard"
 if (Test-Path (Join-Path $DashV2 "package.json")) {
   $Dash = $DashV2
 } else {

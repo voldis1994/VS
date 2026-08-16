@@ -1,31 +1,40 @@
 #!/usr/bin/env bash
 # BUILD_CLIENT — build VS CLIENT package for device install.
-# Client backend remains on SERVER; this only builds the client app artifact.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$ROOT/.." && pwd)"
 echo "VS CLIENT BUILD"
 
-# Prefer future CLIENT/app; fall back to legacy dashboard client build
+# Prefer client-v2
+if [[ -f "$ROOT/apps/client-v2/package.json" ]]; then
+  cd "$ROOT/apps/client-v2"
+  if [[ ! -d node_modules ]]; then
+    npm ci || npm install
+  fi
+  npm run build
+  echo "SUCCESS: CLIENT apps/client-v2 built"
+  exit 0
+fi
+
 if [[ -f "$ROOT/app/package.json" ]]; then
   cd "$ROOT/app"
-  npm ci
+  npm ci || npm install
   npm run build
   echo "SUCCESS: CLIENT app built"
   exit 0
 fi
 
-if [[ -f "$REPO/apps/dashboard/package.json" ]]; then
-  cd "$REPO/apps/dashboard"
+if [[ -f "$REPO/Old-system/apps/dashboard/package.json" ]]; then
+  cd "$REPO/Old-system/apps/dashboard"
   if [[ ! -d node_modules ]]; then
     npm ci || npm install
   fi
   if npm run build:client; then
-    echo "SUCCESS: legacy CLIENT panel built (apps/dashboard) — native CLIENT UI deferred"
+    echo "SUCCESS: legacy CLIENT panel built (Old-system/apps/dashboard)"
     exit 0
   fi
 fi
 
-echo "FAIL: no CLIENT app build target yet (native UI deferred; structure only)"
+echo "FAIL: no CLIENT app build target"
 exit 1

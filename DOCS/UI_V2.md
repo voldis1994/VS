@@ -10,7 +10,7 @@
 | MSI ADMIN | `ADMIN/apps/dashboard-v2/` | `ADMIN\INSTALL_ADMIN.bat` → `START_ADMIN.bat` (prefers v2) |
 | CLIENT | `CLIENT/apps/client-v2/` | `scripts/BUILD_CLIENT_PACKAGE.sh` + `CLIENT\windows\INSTALL_CLIENT.bat` |
 
-Old UI archived under `legacy-review/ui/dashboard` — **not imported** by v2 (test: `TESTS/unit/no-legacy-ui-imports.test.ts`).
+Old UI archived under `Old-system/apps/dashboard` — **not imported** by v2 (test: `TESTS/unit/no-legacy-ui-imports.test.ts`).
 
 ## Presence
 

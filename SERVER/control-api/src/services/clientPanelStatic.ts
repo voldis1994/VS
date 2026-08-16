@@ -20,8 +20,8 @@ export function clientPanelDistDir(): string {
   const fromEnv = process.env.CLIENT_PANEL_DIST?.trim();
   if (fromEnv) return path.resolve(fromEnv);
   const here = path.dirname(fileURLToPath(import.meta.url));
-  // src/services → apps/dashboard/dist-client
-  return path.resolve(here, '../../../dashboard/dist-client');
+  // Prefer CLIENT v2 dist; optional env override; legacy Old-system panel last
+  return path.resolve(here, '../../../../CLIENT/apps/client-v2/dist');
 }
 
 function safeJoin(root: string, urlPath: string): string | null {

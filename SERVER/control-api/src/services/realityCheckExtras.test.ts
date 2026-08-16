@@ -33,8 +33,11 @@ describe('P6 diagnostics inject', () => {
     );
     expect(capital!.retry_count).toBeGreaterThanOrEqual(1);
     expect(report.checked_at).toMatch(/^\d{4}-/);
-    // Desktop ui.html SYSTEM HEALTH tab maps these exact fields
-    const ui = readFileSync(join(process.cwd(), '../../tools/vs-restart/ui.html'), 'utf8');
+    // Desktop ui.html (archived under Old-system) maps SYSTEM HEALTH fields
+    const ui = readFileSync(
+      join(process.cwd(), '../../Old-system/tools/vs-restart/ui.html'),
+      'utf8'
+    );
     expect(ui).toContain('s.name');
     expect(ui).toContain('s.level');
     expect(ui).toContain('s.code');
