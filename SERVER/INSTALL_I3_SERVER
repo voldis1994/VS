@@ -386,6 +386,19 @@ VS_SERVER_DATA="$DATA" "$PREFIX/network/UP_WIREGUARD" || true
 # ---------------------------------------------------------------------------
 # 7) systemd
 # ---------------------------------------------------------------------------
+# Masked units are a symlink to /dev/null — writing the unit without unmask
+# silently discards the file into /dev/null and leaves API dead.
+systemctl stop vs-server.service 2>/dev/null || true
+systemctl disable vs-server.service 2>/dev/null || true
+systemctl unmask vs-server.service 2>/dev/null || true
+systemctl unmask vs-server-monitor.service 2>/dev/null || true
+rm -f /etc/systemd/system/vs-server.service
+rm -rf /etc/systemd/system/vs-server.service.d 2>/dev/null || true
+# If still a symlink somehow, force-remove
+if [[ -L /etc/systemd/system/vs-server.service ]]; then
+  rm -f /etc/systemd/system/vs-server.service
+fi
+
 cat >/etc/systemd/system/vs-server.service <<EOF
 [Unit]
 Description=VS SERVER appliance
@@ -410,7 +423,6 @@ Environment=VS_LAN_MANAGEMENT=1
 Environment=VS_PRIVATE_NETWORK=1
 Environment=CONTROL_API_HOST=0.0.0.0
 Environment=CONTROL_API_PORT=3000
-# ensure-postgres.sh — do NOT inline $vars here (unquoted heredoc + set -u breaks install)
 ExecStartPre=${PREFIX}/deploy/ensure-postgres.sh
 ExecStart=${PREFIX}/deploy/boot.sh
 Restart=on-failure
@@ -425,6 +437,18 @@ ReadWritePaths=${DATA} ${LOG} ${PREFIX}
 [Install]
 WantedBy=multi-user.target
 EOF
+
+# Refuse to continue if unit file is still a symlink / missing
+if [[ -L /etc/systemd/system/vs-server.service ]] || [[ ! -f /etc/systemd/system/vs-server.service ]]; then
+  echo "FAIL: vs-server.service was not written as a real file (still masked?)" >&2
+  ls -la /etc/systemd/system/vs-server.service >&2 || true
+  exit 1
+fi
+if ! grep -q 'ExecStart=.*/deploy/boot.sh' /etc/systemd/system/vs-server.service; then
+  echo "FAIL: vs-server.service content incomplete" >&2
+  cat /etc/systemd/system/vs-server.service >&2
+  exit 1
+fi
 
 # Convenience wrappers on PATH-ish locations
 ln -sfn "$PREFIX/INSTALL_I3_SERVER" /usr/local/sbin/INSTALL_I3_SERVER 2>/dev/null || true

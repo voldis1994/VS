@@ -126,8 +126,17 @@ if [[ ! -x "$API/node_modules/.bin/tsx" && ! -d "$API/node_modules/tsx" ]]; then
   sudo -u "$RUN_USER" bash -lc "cd '$API' && (npm ci || npm install) && npm install tsx@^4.19.0 --save"
 fi
 
-# --- 5) Rewrite systemd unit (NO \$C in heredoc) ---
+# --- 5) Rewrite systemd unit (unmask first — masked = symlink to /dev/null) ---
 echo "==> rewrite vs-server.service"
+systemctl stop vs-server.service 2>/dev/null || true
+systemctl disable vs-server.service 2>/dev/null || true
+systemctl unmask vs-server.service 2>/dev/null || true
+systemctl unmask vs-server-monitor.service 2>/dev/null || true
+rm -f /etc/systemd/system/vs-server.service
+if [[ -L /etc/systemd/system/vs-server.service ]]; then
+  rm -f /etc/systemd/system/vs-server.service
+fi
+
 cat >/etc/systemd/system/vs-server.service <<UNIT
 [Unit]
 Description=VS SERVER appliance
@@ -166,6 +175,12 @@ ReadWritePaths=${DATA} ${LOG} ${PREFIX}
 [Install]
 WantedBy=multi-user.target
 UNIT
+
+if [[ -L /etc/systemd/system/vs-server.service ]] || [[ ! -s /etc/systemd/system/vs-server.service ]]; then
+  echo "FAIL: could not write real vs-server.service (masked symlink?)" >&2
+  ls -la /etc/systemd/system/vs-server.service >&2 || true
+  exit 1
+fi
 
 systemctl daemon-reload
 systemctl enable vs-server.service
