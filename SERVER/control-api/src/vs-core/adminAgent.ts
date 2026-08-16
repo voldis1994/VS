@@ -13,6 +13,7 @@ import { versionBundle } from './versions.js';
 import { renderCoreTui, servicesFromProbes, type CoreTuiModel } from './coreTui.js';
 import { FeedManager } from './feedManager.js';
 import { hostname } from 'os';
+import { normalizeNetworkSecret } from './network/networkSecrets.js';
 
 export type AdminAgentDeps = {
   getProbes: () => ProbeResult[] | Promise<ProbeResult[]>;
@@ -33,12 +34,13 @@ export type AdminAgentDeps = {
 };
 
 function authorizeAdmin(req: { headers: Record<string, unknown> }, expected?: string): boolean {
-  if (!expected || expected === 'CHANGE_ME_ADMIN_TOKEN') {
+  const want = normalizeNetworkSecret(expected ?? process.env.API_ADMIN_TOKEN);
+  if (!want || want === 'CHANGE_ME_ADMIN_TOKEN') {
     // Dev only — production must set API_ADMIN_TOKEN
     return process.env.NODE_ENV !== 'production';
   }
-  const token = String(req.headers['x-admin-token'] || '');
-  return token === expected;
+  const token = normalizeNetworkSecret(String(req.headers['x-admin-token'] || ''));
+  return token === want;
 }
 
 function probeStatus(

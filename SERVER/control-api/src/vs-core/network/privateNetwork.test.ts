@@ -428,7 +428,16 @@ describe('VS_PRIVATE_NETWORK_PRODUCT', () => {
       await registerPrivateNetworkRoutes(app);
 
       const denied = await app.inject({ method: 'GET', url: '/api/v1/network/devices' });
-      expect(denied.statusCode).toBe(403);
+      expect(denied.statusCode).toBe(401);
+      expect(denied.json().code).toBe('ADMIN_TOKEN_REQUIRED');
+
+      const badTok = await app.inject({
+        method: 'GET',
+        url: '/api/v1/network/devices',
+        headers: { 'x-admin-token': 'wrong' },
+      });
+      expect(badTok.statusCode).toBe(401);
+      expect(badTok.json().code).toBe('INVALID_ADMIN_TOKEN');
 
       const devices = await app.inject({
         method: 'GET',
@@ -454,6 +463,16 @@ describe('VS_PRIVATE_NETWORK_PRODUCT', () => {
       });
       expect(created.statusCode).toBe(200);
       expect(created.json().enrollment_code).toBeTruthy();
+
+      // Quoted / CRLF token still accepted (Windows ADMIN_TOKEN.txt)
+      process.env.API_ADMIN_TOKEN = '"test-msi-admin-token"\r';
+      const created2 = await app.inject({
+        method: 'POST',
+        url: '/api/v1/network/enrollment/create',
+        headers: { 'x-admin-token': 'test-msi-admin-token\r\n' },
+        payload: { device_type: 'ADMIN', device_id: 'VS-ADMIN-99' },
+      });
+      expect(created2.statusCode).toBe(200);
 
       await app.close();
     } finally {

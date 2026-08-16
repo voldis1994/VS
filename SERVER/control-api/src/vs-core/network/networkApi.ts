@@ -35,6 +35,9 @@ import { appendNetworkAudit } from './networkAudit.js';
 import { raiseNetworkIncident } from './networkIncidents.js';
 import { generateWgKeyPair } from './wireguardKeys.js';
 import { VS_INTERNAL_SERVICES } from './networkConstants.js';
+import { normalizeNetworkSecret } from './networkSecrets.js';
+
+export { normalizeNetworkSecret } from './networkSecrets.js';
 
 function dataRoot(): string {
   return (
@@ -50,11 +53,71 @@ function sessionHeader(req: { headers: Record<string, unknown> }): string | unde
 }
 
 function bootAdmin(req: { headers: Record<string, unknown> }): boolean {
-  return (
-    String(req.headers['x-admin-token'] || '') === process.env.API_ADMIN_TOKEN &&
-    !!process.env.API_ADMIN_TOKEN &&
-    process.env.API_ADMIN_TOKEN !== 'CHANGE_ME_ADMIN_TOKEN'
-  );
+  const expected = normalizeNetworkSecret(process.env.API_ADMIN_TOKEN);
+  const got = normalizeNetworkSecret(String(req.headers['x-admin-token'] || ''));
+  return !!expected && expected !== 'CHANGE_ME_ADMIN_TOKEN' && got.length > 0 && got === expected;
+}
+
+/**
+ * Device-management auth: device session OR bootstrap admin token.
+ * Never report EXPIRED_SESSION when the caller simply omitted a session and
+ * intended to use x-admin-token (fresh MSI INSTALL_ADMIN path).
+ */
+function requireDeviceManagement(
+  reg: ReturnType<typeof getDeviceRegistry>,
+  req: { headers: Record<string, unknown> }
+):
+  | { ok: true; actor: string }
+  | { ok: false; status: number; body: { ok: false; code: string; reason: string } } {
+  const auth = authorizeSession(reg, sessionHeader(req), 'DEVICE_MANAGEMENT');
+  if (auth.ok) return { ok: true, actor: auth.device.device_id };
+  if (bootAdmin(req)) return { ok: true, actor: 'BOOTSTRAP_ADMIN' };
+
+  const presented = normalizeNetworkSecret(String(req.headers['x-admin-token'] || ''));
+  if (presented) {
+    return {
+      ok: false,
+      status: 401,
+      body: {
+        ok: false,
+        code: 'INVALID_ADMIN_TOKEN',
+        reason: 'x-admin-token does not match server API_ADMIN_TOKEN',
+      },
+    };
+  }
+  if (!sessionHeader(req)) {
+    return {
+      ok: false,
+      status: 401,
+      body: {
+        ok: false,
+        code: 'ADMIN_TOKEN_REQUIRED',
+        reason: 'provide x-admin-token (INSTALL_ADMIN) or x-vs-session',
+      },
+    };
+  }
+  return {
+    ok: false,
+    status: 403,
+    body: {
+      ok: false,
+      code: auth.ok === false ? auth.code : 'FORBIDDEN',
+      reason: auth.ok === false ? auth.reason : 'forbidden',
+    },
+  };
+}
+
+function requireNetworkDiagnostics(
+  reg: ReturnType<typeof getDeviceRegistry>,
+  req: { headers: Record<string, unknown> }
+):
+  | { ok: true }
+  | { ok: false; status: number; body: { ok: false; code: string; reason: string } } {
+  const auth = authorizeSession(reg, sessionHeader(req), 'NETWORK_DIAGNOSTICS');
+  if (auth.ok || bootAdmin(req)) return { ok: true };
+  const dm = requireDeviceManagement(reg, req);
+  if (!dm.ok) return dm;
+  return { ok: true };
 }
 
 export async function registerPrivateNetworkRoutes(app: FastifyInstance): Promise<void> {
@@ -142,10 +205,8 @@ export async function registerPrivateNetworkRoutes(app: FastifyInstance): Promis
 
   app.get('/api/v1/network/status', async (req, reply) => {
     const reg = getDeviceRegistry(root);
-    const auth = authorizeSession(reg, sessionHeader(req), 'NETWORK_DIAGNOSTICS');
-    if (!auth.ok && !bootAdmin(req)) {
-      return reply.code(403).send(auth.ok === false ? auth : { ok: false });
-    }
+    const gate = requireNetworkDiagnostics(reg, req as { headers: Record<string, unknown> });
+    if (!gate.ok) return reply.code(gate.status).send(gate.body);
     return {
       ok: true,
       text: renderNetworkStatusBlock(reg),
@@ -170,10 +231,8 @@ export async function registerPrivateNetworkRoutes(app: FastifyInstance): Promis
 
   app.post('/api/v1/network/enrollment/create', async (req, reply) => {
     const reg = getDeviceRegistry(root);
-    const auth = authorizeSession(reg, sessionHeader(req), 'DEVICE_MANAGEMENT');
-    if (!auth.ok && !bootAdmin(req)) {
-      return reply.code(403).send(auth.ok === false ? auth : { ok: false });
-    }
+    const gate = requireDeviceManagement(reg, req as { headers: Record<string, unknown> });
+    if (!gate.ok) return reply.code(gate.status).send(gate.body);
     ensureServerIdentity(reg, root);
     const body = (req.body || {}) as {
       device_type?: 'ADMIN' | 'CLIENT';
@@ -192,11 +251,11 @@ export async function registerPrivateNetworkRoutes(app: FastifyInstance): Promis
         client_id: body.client_id,
         account_id: body.account_id,
         ttl_ms: body.ttl_ms,
-        created_by: auth.ok ? auth.device.device_id : 'BOOTSTRAP_ADMIN',
+        created_by: gate.actor,
       });
       appendNetworkAudit(root, {
         action: 'ENROLLMENT_CREATED',
-        actor: auth.ok ? auth.device.device_id : 'BOOTSTRAP',
+        actor: gate.actor,
         device_id: pkg.device_id,
         result: 'OK',
         detail: { enrollment_id: pkg.enrollment_id, device_type: pkg.device_type },
@@ -267,16 +326,14 @@ export async function registerPrivateNetworkRoutes(app: FastifyInstance): Promis
 
   app.post('/api/v1/network/enrollment/revoke', async (req, reply) => {
     const reg = getDeviceRegistry(root);
-    const auth = authorizeSession(reg, sessionHeader(req), 'DEVICE_MANAGEMENT');
-    if (!auth.ok && !bootAdmin(req)) {
-      return reply.code(403).send(auth.ok === false ? auth : { ok: false });
-    }
+    const gate = requireDeviceManagement(reg, req as { headers: Record<string, unknown> });
+    if (!gate.ok) return reply.code(gate.status).send(gate.body);
     const body = (req.body || {}) as { enrollment_id?: string };
     if (!body.enrollment_id) return reply.code(400).send({ ok: false, code: 'INVALID_REQUEST' });
     revokeEnrollmentPackage(reg, body.enrollment_id);
     appendNetworkAudit(root, {
       action: 'ENROLLMENT_REVOKED',
-      actor: auth.ok ? auth.device.device_id : 'BOOTSTRAP_ADMIN',
+      actor: gate.actor,
       result: 'OK',
       detail: { enrollment_id: body.enrollment_id },
     });
@@ -286,10 +343,8 @@ export async function registerPrivateNetworkRoutes(app: FastifyInstance): Promis
   /** Pending / recent enrollments — MSI Control Panel (admin token or device session). */
   app.get('/api/v1/network/enrollments', async (req, reply) => {
     const reg = getDeviceRegistry(root);
-    const auth = authorizeSession(reg, sessionHeader(req), 'DEVICE_MANAGEMENT');
-    if (!auth.ok && !bootAdmin(req)) {
-      return reply.code(403).send(auth.ok === false ? auth : { ok: false });
-    }
+    const gate = requireDeviceManagement(reg, req as { headers: Record<string, unknown> });
+    if (!gate.ok) return reply.code(gate.status).send(gate.body);
     return {
       ok: true,
       enrollments: reg.listEnrollments().map((e) => {
@@ -314,10 +369,8 @@ export async function registerPrivateNetworkRoutes(app: FastifyInstance): Promis
   // Legacy bootstrap register (still available for INSTALL assistants)
   app.post('/api/v1/network/admin/register', async (req, reply) => {
     const reg = getDeviceRegistry(root);
-    const auth = authorizeSession(reg, sessionHeader(req), 'DEVICE_MANAGEMENT');
-    if (!auth.ok && !bootAdmin(req)) {
-      return reply.code(403).send(auth.ok === false ? auth : { ok: false });
-    }
+    const gate = requireDeviceManagement(reg, req as { headers: Record<string, unknown> });
+    if (!gate.ok) return reply.code(gate.status).send(gate.body);
     ensureServerIdentity(reg, root);
     const body = (req.body || {}) as { device_name?: string; device_id?: string };
     const issued = registerAdminDevice(reg, root, body);
@@ -336,10 +389,8 @@ export async function registerPrivateNetworkRoutes(app: FastifyInstance): Promis
 
   app.post('/api/v1/network/client/register', async (req, reply) => {
     const reg = getDeviceRegistry(root);
-    const auth = authorizeSession(reg, sessionHeader(req), 'DEVICE_MANAGEMENT');
-    if (!auth.ok && !bootAdmin(req)) {
-      return reply.code(403).send(auth.ok === false ? auth : { ok: false });
-    }
+    const gate = requireDeviceManagement(reg, req as { headers: Record<string, unknown> });
+    if (!gate.ok) return reply.code(gate.status).send(gate.body);
     const body = (req.body || {}) as {
       client_id?: number;
       account_id?: number;
@@ -371,10 +422,8 @@ export async function registerPrivateNetworkRoutes(app: FastifyInstance): Promis
 
   app.post('/api/v1/network/device/revoke', async (req, reply) => {
     const reg = getDeviceRegistry(root);
-    const auth = authorizeSession(reg, sessionHeader(req), 'DEVICE_MANAGEMENT');
-    if (!auth.ok && !bootAdmin(req)) {
-      return reply.code(403).send(auth.ok === false ? auth : { ok: false });
-    }
+    const gate = requireDeviceManagement(reg, req as { headers: Record<string, unknown> });
+    if (!gate.ok) return reply.code(gate.status).send(gate.body);
     const body = (req.body || {}) as { device_id?: string };
     if (!body.device_id) return reply.code(400).send({ ok: false, code: 'INVALID_REQUEST' });
     revokeDevice(reg, body.device_id, root);
@@ -383,23 +432,18 @@ export async function registerPrivateNetworkRoutes(app: FastifyInstance): Promis
 
   app.post('/api/v1/network/device/lost', async (req, reply) => {
     const reg = getDeviceRegistry(root);
-    const auth = authorizeSession(reg, sessionHeader(req), 'DEVICE_MANAGEMENT');
-    if (!auth.ok && !bootAdmin(req)) {
-      return reply.code(403).send(auth.ok === false ? auth : { ok: false });
-    }
+    const gate = requireDeviceManagement(reg, req as { headers: Record<string, unknown> });
+    if (!gate.ok) return reply.code(gate.status).send(gate.body);
     const body = (req.body || {}) as { device_id?: string };
     if (!body.device_id) return reply.code(400).send({ ok: false, code: 'INVALID_REQUEST' });
-    const actor = auth.ok ? auth.device.device_id : 'BOOTSTRAP_ADMIN';
-    const pkg = replaceLostDevice(reg, body.device_id, actor);
+    const pkg = replaceLostDevice(reg, body.device_id, gate.actor);
     return { ok: true, revoked: body.device_id, enrollment: pkg };
   });
 
   app.post('/api/v1/network/device/rotate-key', async (req, reply) => {
     const reg = getDeviceRegistry(root);
-    const auth = authorizeSession(reg, sessionHeader(req), 'DEVICE_MANAGEMENT');
-    if (!auth.ok && !bootAdmin(req)) {
-      return reply.code(403).send(auth.ok === false ? auth : { ok: false });
-    }
+    const gate = requireDeviceManagement(reg, req as { headers: Record<string, unknown> });
+    if (!gate.ok) return reply.code(gate.status).send(gate.body);
     const body = (req.body || {}) as { device_id?: string; public_key?: string };
     if (!body.device_id) return reply.code(400).send({ ok: false, code: 'INVALID_REQUEST' });
     if (body.public_key) {
@@ -538,18 +582,16 @@ export async function registerPrivateNetworkRoutes(app: FastifyInstance): Promis
 
   app.get('/api/v1/network/diagnostics', async (req, reply) => {
     const reg = getDeviceRegistry(root);
-    const auth = authorizeSession(reg, sessionHeader(req), 'NETWORK_DIAGNOSTICS');
-    if (!auth.ok && !bootAdmin(req)) {
-      return reply.code(403).send(auth.ok === false ? auth : { ok: false });
-    }
+    const gate = requireNetworkDiagnostics(reg, req as { headers: Record<string, unknown> });
+    if (!gate.ok) return reply.code(gate.status).send(gate.body);
     const diag = runNetworkDiagnostics({ dataRoot: root, registry: reg });
     return { ok: diag.summary.fail === 0, ...diag };
   });
 
   app.get('/api/v1/network/wg/server-template', async (req, reply) => {
     const reg = getDeviceRegistry(root);
-    const auth = authorizeSession(reg, sessionHeader(req), 'DEVICE_MANAGEMENT');
-    if (!auth.ok) return reply.code(403).send(auth);
+    const gate = requireDeviceManagement(reg, req as { headers: Record<string, unknown> });
+    if (!gate.ok) return reply.code(gate.status).send(gate.body);
     return {
       ok: true,
       conf: buildServerConfFromRegistry(reg),
@@ -559,10 +601,8 @@ export async function registerPrivateNetworkRoutes(app: FastifyInstance): Promis
 
   app.get('/api/v1/network/devices', async (req, reply) => {
     const reg = getDeviceRegistry(root);
-    const auth = authorizeSession(reg, sessionHeader(req), 'DEVICE_MANAGEMENT');
-    if (!auth.ok && !bootAdmin(req)) {
-      return reply.code(403).send(auth.ok === false ? auth : { ok: false });
-    }
+    const gate = requireDeviceManagement(reg, req as { headers: Record<string, unknown> });
+    if (!gate.ok) return reply.code(gate.status).send(gate.body);
     return {
       ok: true,
       devices: reg.list().map((d) => ({

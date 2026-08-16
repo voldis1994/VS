@@ -1,6 +1,7 @@
 /**
  * ADMIN install orchestration — used by Windows INSTALL_ADMIN.bat and Linux INSTALL_ADMIN.
- * Discovers VS-CORE-01, ensures keys, enrolls device, verifies real ADMIN_SNAPSHOT.
+ * Discovers VS-CORE-01 on LAN, authenticates with API_ADMIN_TOKEN, creates a FRESH
+ * enrollment session, enrolls this device, verifies ADMIN API.
  */
 
 import { mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync } from 'fs';
@@ -9,12 +10,15 @@ import { fileURLToPath } from 'url';
 import { discoverVsServer, isWireGuardUrl } from '../connection/discoverServer.js';
 import {
   ensureDeviceKeys,
-  completeAdminEnrollment,
-  createAdminEnrollment,
-  replaceLostAdminDevice,
   renderAdminPeerWgConf,
   publicKeyFingerprint,
 } from '../connection/enrollAdmin.js';
+import {
+  enrollAdminDevice,
+  normalizeAdminSecret,
+  verifyAdminToken,
+  InstallStageError,
+} from '../connection/installEnrollment.js';
 import { AdminConnectionClient } from '../connection/adminConnectionClient.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -69,15 +73,16 @@ function writeSecure(path: string, content: string): void {
 }
 
 function resolveAdminToken(paths: InstallPaths, fileCfg: Record<string, unknown>): string {
-  const fromEnv = (process.env.API_ADMIN_TOKEN || process.env.VITE_API_ADMIN_TOKEN || '').trim();
+  const fromEnv = normalizeAdminSecret(
+    process.env.API_ADMIN_TOKEN || process.env.VITE_API_ADMIN_TOKEN || ''
+  );
   if (fromEnv && fromEnv !== 'CHANGE_ME_ADMIN_TOKEN') return fromEnv;
   if (existsSync(paths.secureTokenPath)) {
-    const t = readFileSync(paths.secureTokenPath, 'utf8').trim();
+    const t = normalizeAdminSecret(readFileSync(paths.secureTokenPath, 'utf8'));
     if (t) return t;
   }
-  const fromFile = String(fileCfg.adminToken || '').trim();
+  const fromFile = normalizeAdminSecret(String(fileCfg.adminToken || ''));
   if (fromFile && fromFile !== 'CHANGE_ME_ADMIN_TOKEN') return fromFile;
-  // Token files from USB / Desktop (Windows)
   const candidates = [
     join(ADMIN_ROOT, 'ADMIN_TOKEN.txt'),
     join(REPO_ROOT, 'ADMIN_TOKEN.txt'),
@@ -93,103 +98,28 @@ function resolveAdminToken(paths: InstallPaths, fileCfg: Record<string, unknown>
     const text = readFileSync(c, 'utf8');
     for (const line of text.split(/\r?\n/)) {
       const m = line.match(/^\s*API_ADMIN_TOKEN\s*=\s*(.+)\s*$/i);
-      if (m) return m[1].trim();
+      if (m) return normalizeAdminSecret(m[1]);
     }
   }
   return '';
 }
 
-async function enrollOrReuse(
-  baseUrl: string,
-  adminToken: string,
-  publicKey: string,
-  existing: Record<string, unknown>,
-  enrollmentCodeHint: string
-): Promise<{
-  device_id: string;
-  device_token: string;
-  private_address?: string;
-  server_public_key?: string | null;
-  wg_endpoint?: string | null;
-}> {
-  const existingToken = String(existing.device_token || '').trim();
-  const existingId = String(existing.device_id || 'VS-ADMIN-01');
-  if (existingToken) {
-    // Verify device auth still works
-    try {
-      const res = await fetch(`${baseUrl}/api/v1/network/device/auth`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ device_id: existingId, device_token: existingToken }),
-      });
-      if (res.ok) {
-        return { device_id: existingId, device_token: existingToken };
-      }
-    } catch {
-      /* re-enroll below */
-    }
-  }
+function stage(name: string, detail?: string): void {
+  if (detail) console.log(`${name}: ${detail}`);
+  else console.log(name);
+}
 
-  let code = enrollmentCodeHint || String(existing.enrollment_code || '').trim();
-  if (!code) {
-    try {
-      const created = await createAdminEnrollment({
-        baseUrl,
-        adminToken,
-        device_id: 'VS-ADMIN-01',
-      });
-      code = created.enrollment_code;
-    } catch {
-      // Device may already be registered — issue replacement enrollment
-      const lost = await replaceLostAdminDevice({
-        baseUrl,
-        adminToken,
-        device_id: 'VS-ADMIN-01',
-      });
-      code = lost.enrollment_code;
-    }
-  }
-
-  if (!code) throw new Error('NO_ENROLLMENT_CODE');
-
-  try {
-    const done = await completeAdminEnrollment({
-      baseUrl,
-      enrollment_code: code,
-      public_key: publicKey,
-      device_name: 'VS-ADMIN-01',
-    });
-    return {
-      device_id: done.device_id,
-      device_token: done.device_token,
-      private_address: done.private_address,
-      server_public_key: done.server_public_key,
-      wg_endpoint: done.wg_endpoint,
-    };
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    if (msg.includes('DEVICE_ID_EXISTS') || msg.includes('PUBLIC_KEY_EXISTS')) {
-      const lost = await replaceLostAdminDevice({
-        baseUrl,
-        adminToken,
-        device_id: 'VS-ADMIN-01',
-      });
-      const done = await completeAdminEnrollment({
-        baseUrl,
-        enrollment_code: lost.enrollment_code,
-        public_key: publicKey,
-        device_name: 'VS-ADMIN-01',
-      });
-      return {
-        device_id: done.device_id,
-        device_token: done.device_token,
-        private_address: done.private_address,
-        server_public_key: done.server_public_key,
-        wg_endpoint: done.wg_endpoint,
-      };
-    }
-    throw e;
-  }
+/**
+ * Windows Node/libuv: abrupt process.exit while fetch sockets close triggers
+ * UV_HANDLE_CLOSING assertions. Delay a single exit after setting exitCode.
+ */
+function exitOnce(code: number): void {
+  if ((globalThis as { __vsAdminExiting?: boolean }).__vsAdminExiting) return;
+  (globalThis as { __vsAdminExiting?: boolean }).__vsAdminExiting = true;
+  process.exitCode = code;
+  setTimeout(() => {
+    process.exit(code);
+  }, process.platform === 'win32' ? 200 : 50);
 }
 
 export async function runAdminInstall(): Promise<number> {
@@ -205,7 +135,6 @@ export async function runAdminInstall(): Promise<number> {
   const keys = ensureDeviceKeys(paths.keysDir);
   console.log(`DEVICE_KEY fp=${publicKeyFingerprint(keys.publicKey)}`);
 
-  // WireGuard only if an ADMIN peer profile already exists (off-LAN), never required on home Wi-Fi
   const allowWireGuard =
     process.env.VS_ADMIN_TRANSPORT === 'wireguard' ||
     process.env.VS_ADMIN_ALLOW_WIREGUARD === '1' ||
@@ -219,49 +148,58 @@ export async function runAdminInstall(): Promise<number> {
     wireguardCandidates: savedUrl && isWireGuardUrl(savedUrl) ? [savedUrl] : undefined,
   });
   if (!discovered) {
-    console.error('FAIL: could not discover VS-CORE-01 on LAN');
-    console.error('  Expected home-LAN reachability (example): http://192.168.0.10:3000/health');
-    console.error('  [i3 SERVER] sudo bash SERVER/STATUS_SERVER');
-    console.error('  MSI and i3 must be on the same Wi-Fi/LAN');
-    if (!allowWireGuard) {
-      console.error('  WireGuard is NOT required for ADMIN on home LAN (and was not probed)');
-    } else {
-      console.error('  LAN failed; WireGuard profile present but http://10.77.0.1:3000 also unreachable');
-    }
+    console.error('FAIL STAGE=SERVER_DISCOVER');
+    console.error('  could not discover VS-CORE-01 on LAN');
+    console.error('  example: http://192.168.0.10:3000/health');
+    console.error('  WireGuard is NOT required for home ADMIN');
     return 1;
   }
   const baseUrl = discovered.baseUrl;
   const transport = discovered.via === 'lan' ? 'LAN' : 'WIREGUARD';
-  console.log(`DISCOVERED ${baseUrl} TRANSPORT=${transport} server_id=${discovered.server_id || '?'}`);
-  if (savedUrl && isWireGuardUrl(savedUrl) && discovered.via === 'lan') {
-    console.log('NOTE: ignoring stale WireGuard URL — LAN is available');
-  }
+  stage('SERVER DISCOVERED', `${baseUrl} TRANSPORT=${transport} server_id=${discovered.server_id || 'VS-CORE-01'}`);
+
   const adminToken = resolveAdminToken(paths, existing);
   if (!adminToken) {
-    console.error('FAIL: API_ADMIN_TOKEN required');
+    console.error('FAIL STAGE=ADMIN_AUTH code=ADMIN_TOKEN_REQUIRED');
     console.error('  On i3: sudo grep API_ADMIN_TOKEN /var/lib/vs-server/server.env');
-    console.error('  Or place ADMIN_TOKEN.txt next to INSTALL_ADMIN.bat / on Desktop');
+    console.error('  Or place ADMIN_TOKEN.txt next to INSTALL_ADMIN.bat');
     console.error('  Format: API_ADMIN_TOKEN=<token>');
     return 1;
   }
   writeSecure(paths.secureTokenPath, adminToken + '\n');
 
-  let enroll: Awaited<ReturnType<typeof enrollOrReuse>>;
   try {
-    enroll = await enrollOrReuse(
-      baseUrl,
-      adminToken,
-      keys.publicKey,
-      existing,
-      (process.env.VS_ENROLLMENT_CODE || '').trim()
-    );
-    console.log(`ENROLLED device_id=${enroll.device_id}`);
+    await verifyAdminToken(baseUrl, adminToken);
+    stage('ADMIN AUTH OK');
   } catch (e) {
-    console.error('FAIL: enrollment', e instanceof Error ? e.message : e);
+    const err = e instanceof InstallStageError ? e : null;
+    console.error(`FAIL STAGE=${err?.stage || 'ADMIN_AUTH'} code=${err?.code || 'ERROR'}`);
+    if (err?.message) console.error(`  ${err.message}`);
+    console.error('  Token is never printed. Re-copy API_ADMIN_TOKEN from i3 server.env');
     return 1;
   }
 
-  // Optional WG peer conf for later off-LAN use — does NOT switch ADMIN transport to WG
+  let enroll;
+  try {
+    // Never reuse stale enrollment_code from local config — only optional fresh env override
+    const override = normalizeAdminSecret(process.env.VS_ENROLLMENT_CODE || '');
+    enroll = await enrollAdminDevice({
+      baseUrl,
+      adminToken,
+      publicKey: keys.publicKey,
+      deviceId: 'VS-ADMIN-01',
+      existingDeviceToken: String(existing.device_token || ''),
+      enrollmentCodeOverride: override || undefined,
+      log: (s, d) => stage(s.replace(/_/g, ' '), d),
+    });
+  } catch (e) {
+    const err = e instanceof InstallStageError ? e : null;
+    console.error(`FAIL STAGE=${err?.stage || 'ENROLLMENT'} code=${err?.code || 'ERROR'}`);
+    if (err?.message) console.error(`  ${err.message}`);
+    console.error('  No secrets printed. Re-run INSTALL_ADMIN after fixing the stage above.');
+    return 1;
+  }
+
   if (enroll.private_address && enroll.server_public_key && enroll.wg_endpoint) {
     const conf = renderAdminPeerWgConf({
       privateKey: keys.privateKey,
@@ -270,7 +208,7 @@ export async function runAdminInstall(): Promise<number> {
       endpoint: enroll.wg_endpoint,
     });
     writeSecure(paths.wgConfPath, conf);
-    console.log(`WIREGUARD_CONF ${paths.wgConfPath} (optional remote ADMIN; LAN remains primary at home)`);
+    stage('WIREGUARD CONF WRITTEN', '(optional remote ADMIN; LAN remains primary at home)');
   }
 
   const connection = {
@@ -278,10 +216,10 @@ export async function runAdminInstall(): Promise<number> {
     device_id: enroll.device_id || 'VS-ADMIN-01',
     baseUrl,
     transport: discovered.via,
-    adminToken: '', // never store plaintext token in JSON if we have secure path
+    adminToken: '',
     device_token: enroll.device_token,
     enrollment_code: '',
-    note: 'Tokens live under data dir; Control Panel reads control-panel.env. Prefer LAN when available.',
+    note: 'Never reuse enrollment_code from this file. Tokens under data dir / control-panel.env.',
   };
   writeSecure(paths.connectionPath, JSON.stringify(connection, null, 2) + '\n');
 
@@ -303,22 +241,21 @@ export async function runAdminInstall(): Promise<number> {
   const snap = await client.fetchSnapshot();
   const st = client.getStatus();
   if (st.state !== 'CONNECTED' || !snap) {
-    console.error('FAIL: authenticated ADMIN_SNAPSHOT failed');
+    console.error('FAIL STAGE=ADMIN_API_VERIFY');
     console.error(`  state=${st.state} error=${st.last_error || 'none'}`);
-    console.error(`  SERVER_URL=${baseUrl} TRANSPORT=${transport}`);
     return 1;
   }
+  stage('ADMIN API VERIFIED', `core=${snap.core?.state || 'NO_DATA'}`);
 
   console.log('');
-  console.log('VS ADMIN INSTALLED');
+  stage('INSTALL SUCCESS');
   console.log(`SERVER: ${snap.server_id || discovered.server_id || 'VS-CORE-01'}`);
   console.log(`TRANSPORT: ${transport}`);
   console.log(`SERVER_URL: ${baseUrl}`);
   console.log('AUTH: OK');
   console.log('CONNECTION: CONNECTED');
-  console.log(`SNAPSHOT: ok core=${snap.core?.state || 'NO_DATA'}`);
   console.log('');
-  console.log('Next: START_ADMIN.bat  (opens Control Panel → real i3 API over LAN)');
+  console.log('Next: START_ADMIN.bat');
   return 0;
 }
 
@@ -328,9 +265,9 @@ const isMain =
 
 if (isMain) {
   runAdminInstall()
-    .then((code) => process.exit(code))
+    .then((code) => exitOnce(code))
     .catch((e) => {
-      console.error('FAIL', e);
-      process.exit(1);
+      console.error('FAIL STAGE=INSTALL', e instanceof Error ? e.message : e);
+      exitOnce(1);
     });
 }
