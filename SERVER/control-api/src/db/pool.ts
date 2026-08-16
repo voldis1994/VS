@@ -39,13 +39,22 @@ export async function waitForDatabase(attempts = 30, delayMs = 2000): Promise<vo
   for (let i = 1; i <= attempts; i++) {
     try {
       await pool.query('SELECT 1');
-      if (i > 1) console.log(`Postgres gatavs pēc ${i} mēģinājumiem`);
+      if (i > 1) console.log(`Postgres ready after ${i} attempts`);
       return;
     } catch (err) {
       last = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      const code = (err as { code?: string })?.code;
+      // 28P01 = invalid_password — retrying forever hides the real fix
+      if (code === '28P01' || /password authentication failed/i.test(msg)) {
+        throw new Error(
+          'DB_AUTH_FAILED (28P01): password in server.env does not match Postgres volume. ' +
+            'Fix: sudo bash SERVER/deploy/fix-db-password.sh && sudo bash SERVER/FIX_CONTROL_API.sh'
+        );
+      }
       const retry = isRetryableDbError(err);
       if (i === 1 || i % 5 === 0 || i === attempts) {
-        console.warn(`[..] gaidu Postgres ${i}/${attempts} — konteineris vēl ceļas`);
+        console.warn(`[db] waiting for Postgres ${i}/${attempts}`);
       }
       if (!retry && i >= 3) throw err;
       await sleep(delayMs);

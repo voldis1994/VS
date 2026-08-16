@@ -62,6 +62,10 @@ else
   fi
 fi
 
+# --- 1b) Fix 28P01: sync Postgres role password to server.env ---
+echo "==> sync DB password (fix 28P01 auth_failed)"
+bash "$HERE/deploy/fix-db-password.sh"
+
 # --- 2) Sync critical runtime from git tree (no full wipe) ---
 echo "==> sync control-api + deploy from git → $PREFIX"
 mkdir -p "$PREFIX" "$DATA" "$LOG" "$API"

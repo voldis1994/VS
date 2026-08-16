@@ -41,6 +41,13 @@ else
   docker start market-reader-postgres market-reader-redis || true
 fi
 
+echo "==> sync DB password"
+if [[ -x "$HERE/deploy/fix-db-password.sh" ]]; then
+  bash "$HERE/deploy/fix-db-password.sh"
+elif [[ -x "$PREFIX/deploy/fix-db-password.sh" ]]; then
+  bash "$PREFIX/deploy/fix-db-password.sh"
+fi
+
 # Sync minimal runtime from git tree if present
 if [[ -d "$HERE/control-api/src" ]]; then
   mkdir -p "$API"
