@@ -72,6 +72,7 @@ ADMIN/desktop/node_modules/
 CLIENT/desktop/node_modules/
 ADMIN/desktop/dist/
 CLIENT/desktop/dist/
+ADMIN/desktop/public/runtime-config.js
 TESTS/node_modules/
 SERVER/client-api/node_modules/
 SERVER/monitor/public/config.js

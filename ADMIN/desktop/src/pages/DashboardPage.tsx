@@ -20,6 +20,10 @@ export function DashboardPage({ live }: { live: LiveState }) {
           </div>
         </div>
         <div className="card">
+          <div className="label">OPEN POSITIONS</div>
+          <div className="value muted">{live.openPositions == null ? 'NO DATA' : live.openPositions}</div>
+        </div>
+        <div className="card">
           <div className="label">TOTAL P/L TODAY</div>
           <div className="value muted">{live.totalPnlToday == null ? 'NO DATA' : live.totalPnlToday}</div>
         </div>
@@ -76,7 +80,18 @@ export function DashboardPage({ live }: { live: LiveState }) {
         </div>
         <div className="panel">
           <h3>INCIDENTS</h3>
-          {live.lastError ? (
+          {live.incidents.length > 0 ? (
+            <table>
+              <tbody>
+                {live.incidents.slice(0, 6).map((inc, i) => (
+                  <tr key={i}>
+                    <td>{inc.severity || 'INFO'}</td>
+                    <td>{inc.message || inc.code || 'UNKNOWN'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : live.lastError ? (
             <div style={{ color: 'var(--red)' }}>{live.lastError}</div>
           ) : (
             <div className="empty">NO OPEN INCIDENTS</div>
@@ -84,7 +99,34 @@ export function DashboardPage({ live }: { live: LiveState }) {
         </div>
         <div className="panel">
           <h3>RECENT ORDERS</h3>
-          <div className="empty">NO DATA</div>
+          {live.orders.length === 0 ? (
+            <div className="empty">NO DATA</div>
+          ) : (
+            <table>
+              <thead>
+                <tr><th>ORDER</th><th>STATUS</th></tr>
+              </thead>
+              <tbody>
+                {live.orders.slice(0, 8).map((o, i) => (
+                  <tr key={i}>
+                    <td>{String(o.id || o.symbol || '—')}</td>
+                    <td>{String(o.status || 'UNKNOWN')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+        <div className="panel">
+          <h3>SYSTEM LOAD</h3>
+          <table>
+            <tbody>
+              <tr><td>CPU</td><td>{live.cpu == null ? 'UNAVAILABLE' : `${live.cpu}%`}</td></tr>
+              <tr><td>RAM</td><td>{live.ram == null ? 'UNAVAILABLE' : `${live.ram}%`}</td></tr>
+              <tr><td>SSD</td><td>{live.disk == null ? 'UNAVAILABLE' : `${live.disk}%`}</td></tr>
+              <tr><td>Connection</td><td>{live.connected ? 'CONNECTED' : 'DISCONNECTED'}</td></tr>
+            </tbody>
+          </table>
         </div>
         <div className="panel">
           <h3>QUICK ACTIONS</h3>
