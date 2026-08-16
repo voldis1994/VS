@@ -2,11 +2,13 @@
  * ADMIN endpoint discovery — LAN first, WireGuard only as explicit fallback.
  *
  * Priority:
- * 1. Reach VS-CORE-01 on trusted home LAN
- * 2. Authenticated ADMIN uses that LAN URL
- * 3. WireGuard (10.77.0.1) only when LAN unavailable AND an ADMIN WG profile is configured
+ * 1. Saved / configured verified server address
+ * 2. Extra LAN candidates (env, SERVER_IP)
+ * 3. Known home-LAN candidates + controlled subnet probe (caller may pass)
+ * 4. WireGuard only when allowWireGuard
  *
- * Remote CLIENTS remain WireGuard-based; this module is for ADMIN only.
+ * A random HTTP service on :3000 is NEVER accepted — /health must return
+ * service=VS-CORE and a server_id.
  */
 
 export type Transport = 'lan' | 'wireguard';
@@ -15,6 +17,9 @@ export type DiscoverResult = {
   baseUrl: string;
   server_id: string | null;
   via: Transport;
+  service: 'VS-CORE';
+  build_commit?: string | null;
+  version?: string | null;
 };
 
 export type DiscoverOptions = {
@@ -84,32 +89,52 @@ function buildWgCandidates(extra?: string[]): string[] {
   return out;
 }
 
-async function probeHealth(
+export type VsCoreIdentity = {
+  ok: boolean;
+  server_id: string | null;
+  build_commit: string | null;
+  version: string | null;
+};
+
+/**
+ * Accept only hosts whose /health proves VS-CORE identity (non-secret fields).
+ */
+export async function probeVsCoreIdentity(
   baseUrl: string,
   timeoutMs: number,
   fetchImpl: typeof fetch
-): Promise<{ ok: boolean; server_id: string | null }> {
+): Promise<VsCoreIdentity> {
+  const fail: VsCoreIdentity = {
+    ok: false,
+    server_id: null,
+    build_commit: null,
+    version: null,
+  };
   try {
-    const health = await fetchImpl(`${baseUrl}/health`, {
+    const health = await fetchImpl(`${normalizeBase(baseUrl)}/health`, {
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!health.ok) return { ok: false, server_id: null };
-
-    let server_id: string | null = null;
-    try {
-      const cat = await fetchImpl(`${baseUrl}/api/v1/network/catalog`, {
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      if (cat.ok) {
-        const body = (await cat.json()) as { server_id?: string };
-        server_id = body.server_id || null;
-      }
-    } catch {
-      /* catalog optional for reachability */
-    }
-    return { ok: true, server_id };
+    if (!health.ok) return fail;
+    const body = (await health.json()) as {
+      service?: string;
+      server_id?: string;
+      build_commit?: string;
+      git_sha?: string;
+      version?: string;
+      VERSION?: string;
+      status?: string;
+    };
+    if (body.service !== 'VS-CORE') return fail;
+    const server_id = typeof body.server_id === 'string' && body.server_id.trim() ? body.server_id.trim() : null;
+    if (!server_id) return fail;
+    return {
+      ok: true,
+      server_id,
+      build_commit: body.build_commit || body.git_sha || null,
+      version: body.version || body.VERSION || null,
+    };
   } catch {
-    return { ok: false, server_id: null };
+    return fail;
   }
 }
 
@@ -120,15 +145,22 @@ async function probeList(
   timeoutMs: number,
   fetchImpl: typeof fetch
 ): Promise<DiscoverResult | null> {
-  let fallback: DiscoverResult | null = null;
   for (const base of candidates) {
-    const r = await probeHealth(base, timeoutMs, fetchImpl);
-    if (!r.ok) continue;
-    const hit: DiscoverResult = { baseUrl: base, server_id: r.server_id, via };
-    if (r.server_id === expected) return hit;
-    if (!fallback) fallback = hit;
+    const r = await probeVsCoreIdentity(base, timeoutMs, fetchImpl);
+    if (!r.ok || !r.server_id) continue;
+    // Prefer exact server_id match; still accept other VS-CORE hosts on LAN
+    // only when expected is wildcard-empty (never accept non-VS-CORE).
+    if (expected && r.server_id !== expected) continue;
+    return {
+      baseUrl: normalizeBase(base),
+      server_id: r.server_id,
+      via,
+      service: 'VS-CORE',
+      build_commit: r.build_commit,
+      version: r.version,
+    };
   }
-  return fallback;
+  return null;
 }
 
 /**

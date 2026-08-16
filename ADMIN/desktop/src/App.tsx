@@ -56,8 +56,16 @@ export function App() {
             </div>
           </div>
           <div className="topbar-right">
-            <span className={`pill ${live.connected ? 'on' : 'off'}`}>
-              {live.connected ? 'CONNECTED' : 'DISCONNECTED'}
+            <span
+              className={`pill ${
+                live.connectionPhase === 'CONNECTED'
+                  ? 'on'
+                  : live.connectionPhase === 'DISCONNECTED'
+                    ? 'off'
+                    : ''
+              }`}
+            >
+              {live.connectionPhase}
             </span>
             <span className="pill">TRANSPORT: {live.transport}</span>
             <span className="muted" style={{ fontSize: 12 }}>

@@ -191,7 +191,7 @@ describe('serverMonitor builder', () => {
       checkRedis: async () => ({ ok: true, detail: 'PONG' }),
       checkWireguard: async () => ({ state: 'ONLINE', detail: 'vs0' }),
     });
-    expect(none.admin.status).toBe('UNKNOWN');
+    expect(none.admin.status).toBe('NOT_CONFIGURED');
     expect(none.admin.transport).toBe('NONE');
 
     const reg = getDeviceRegistry(dataRoot);
@@ -230,17 +230,21 @@ describe('serverMonitor builder', () => {
     expect(up.admin.transport).toBe('LAN');
   });
 
-  it('offline snapshot keeps UNKNOWN — never ONLINE', () => {
+  it('offline snapshot never invents ONLINE; build identity present', () => {
     const s = offlineServerMonitorSnapshot('ECONNREFUSED');
     expect(s.services.api.state).toBe('OFFLINE');
     expect(s.api.status).toBe('OFFLINE');
     expect(s.services.postgres.state).toBe('UNKNOWN');
     expect(s.services.redis.state).toBe('UNKNOWN');
     expect(s.market.state).toBe('UNKNOWN');
+    expect(s.strategy.status).toBe('OFFLINE');
+    expect(s.build.service).toBe('VS-CORE');
+    expect(s.build.build_commit).toBeTruthy();
     expect(s.ok).toBe(false);
     const frame = renderServerMonitorFrame(s);
     expect(frame).toContain('VS CORE SERVER');
     expect(frame).toContain('OFFLINE');
+    expect(frame).toContain('BUILD / VERSION');
     expect(frame).toContain('READ-ONLY');
     expect(frame).not.toMatch(/POSTGRES\s+●\s+ONLINE/);
   });

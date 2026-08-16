@@ -15,6 +15,7 @@ import { CORE_VERSION, versionBundle } from './versions.js';
 import { hostname } from 'os';
 import { join } from 'path';
 import { getAdminPresence, listPresence } from './presenceRegistry.js';
+import { runtimeBuildInfo } from '../services/runtimeBuild.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -24,8 +25,15 @@ export type MonitorState =
   | 'WARNING'
   | 'UNKNOWN'
   | 'NOT_INSTALLED'
+  | 'NOT_CONFIGURED'
+  | 'NOT_READY'
   | 'STARTING'
-  | 'ERROR';
+  | 'ERROR'
+  | 'STALE'
+  | 'DEGRADED'
+  | 'AUTH_FAILED'
+  | 'HEALTHY'
+  | 'CONNECTING';
 
 export type ServiceCell = {
   status: MonitorState;
@@ -143,6 +151,16 @@ export type ServerMonitorSnapshot = {
 
   last_error: string | null;
   errors: string[];
+
+  /** Non-secret build identity — shown on i3 monitor BUILD/VERSION */
+  build: {
+    service: 'VS-CORE';
+    server_id: string;
+    version: string;
+    build_commit: string;
+    build_time: string;
+    api_version: string;
+  };
 };
 
 function dataRootDefault(): string {
@@ -197,7 +215,7 @@ function probeNamed(
   name: string
 ): { status: string; detail: string } {
   const p = probes.find((x) => x.name === name);
-  if (!p) return { status: 'UNKNOWN', detail: 'NO_DATA' };
+  if (!p) return { status: 'NOT_READY', detail: 'probe not run' };
   return { status: String(p.status), detail: p.detail || '' };
 }
 
@@ -516,7 +534,7 @@ export function offlineServerMonitorSnapshot(reason: string): ServerMonitorSnaps
       network: { state: 'UNKNOWN', detail: 'not probed (API down)' },
     },
     admin: {
-      status: 'UNKNOWN',
+      status: 'OFFLINE',
       connected: false,
       device_id: null,
       device_name: null,
@@ -525,23 +543,23 @@ export function offlineServerMonitorSnapshot(reason: string): ServerMonitorSnaps
       last_seen_human: null,
     },
     clients: { total: 0, online: 0, offline: 0, devices: [] },
-    market: { status: 'UNKNOWN', state: 'UNKNOWN', detail: 'API unavailable' },
+    market: { status: 'OFFLINE', state: 'UNKNOWN', detail: 'API unavailable' },
     feeds: {
-      capital: { status: 'UNKNOWN', detail: 'API unavailable' },
-      yahoo: { status: 'UNKNOWN', detail: 'NO_DATA' },
-      ecb: { status: 'UNKNOWN', detail: 'NO_DATA' },
-      metals: { status: 'UNKNOWN', detail: 'NO_DATA' },
+      capital: { status: 'OFFLINE', detail: 'API unavailable' },
+      yahoo: { status: 'NOT_CONFIGURED', detail: 'API unavailable' },
+      ecb: { status: 'NOT_CONFIGURED', detail: 'API unavailable' },
+      metals: { status: 'NOT_CONFIGURED', detail: 'API unavailable' },
     },
     trading: {
       enabled: process.env.LIVE_TRADING_ENABLED === 'true',
-      readiness: 'UNKNOWN',
+      readiness: 'NOT_READY',
       mode: process.env.OPERATING_MODE || 'PAPER',
       detail: 'status unavailable while API offline',
     },
-    strategy: { status: 'UNKNOWN', detail: 'API unavailable' },
-    risk: { status: 'UNKNOWN', detail: 'API unavailable' },
-    execution: { status: 'UNKNOWN', detail: 'API unavailable' },
-    reconciliation: { status: 'UNKNOWN', detail: 'API unavailable' },
+    strategy: { status: 'OFFLINE', detail: 'API unavailable' },
+    risk: { status: 'OFFLINE', detail: 'API unavailable' },
+    execution: { status: 'OFFLINE', detail: 'API unavailable' },
+    reconciliation: { status: 'OFFLINE', detail: 'API unavailable' },
     system: {
       cpu_percent: host?.cpu_percent ?? null,
       ram_percent: host ? pct(host.ram_used_bytes, host.ram_total_bytes) : null,
@@ -556,6 +574,17 @@ export function offlineServerMonitorSnapshot(reason: string): ServerMonitorSnaps
     },
     last_error: `API: ${detail}`,
     errors: [`API: ${detail}`],
+    build: (() => {
+      const b = runtimeBuildInfo();
+      return {
+        service: 'VS-CORE' as const,
+        server_id: b.server_id,
+        version: b.version,
+        build_commit: b.build_commit,
+        build_time: b.build_time,
+        api_version: b.api_version,
+      };
+    })(),
   };
   return snap;
 }
@@ -770,7 +799,7 @@ export async function buildServerMonitorSnapshot(
         };
       }
       return {
-        status: adminConnected ? ('ONLINE' as const) : adminDeviceId ? ('OFFLINE' as const) : ('UNKNOWN' as const),
+        status: adminConnected ? ('ONLINE' as const) : adminDeviceId ? ('OFFLINE' as const) : ('NOT_CONFIGURED' as const),
         connected: adminConnected,
         device_id: adminDeviceId,
         device_name: adminDeviceName,
@@ -796,13 +825,13 @@ export async function buildServerMonitorSnapshot(
     },
     feeds: {
       capital,
-      yahoo: yahoo.status === 'UNKNOWN' ? { status: 'UNKNOWN', detail: 'NO_DATA' } : yahoo,
-      ecb: ecb.status === 'UNKNOWN' ? { status: 'UNKNOWN', detail: 'NO_DATA' } : ecb,
-      metals: metals.status === 'UNKNOWN' ? { status: 'UNKNOWN', detail: 'NO_DATA' } : metals,
+      yahoo: yahoo.status === 'NOT_READY' ? { status: 'NOT_CONFIGURED', detail: 'NO_DATA' } : yahoo,
+      ecb: ecb.status === 'NOT_READY' ? { status: 'NOT_CONFIGURED', detail: 'NO_DATA' } : ecb,
+      metals: metals.status === 'NOT_READY' ? { status: 'NOT_CONFIGURED', detail: 'NO_DATA' } : metals,
     },
     trading: {
       enabled: liveEnabled,
-      readiness: readiness.state || 'UNKNOWN',
+      readiness: readiness.state || 'NOT_READY',
       mode,
       detail: liveEnabled
         ? 'LIVE_TRADING_ENABLED=true'
@@ -826,6 +855,17 @@ export async function buildServerMonitorSnapshot(
     },
     last_error,
     errors,
+    build: (() => {
+      const b = runtimeBuildInfo();
+      return {
+        service: 'VS-CORE' as const,
+        server_id: b.server_id,
+        version: b.version,
+        build_commit: b.build_commit,
+        build_time: b.build_time,
+        api_version: b.api_version,
+      };
+    })(),
   };
 }
 
@@ -926,10 +966,25 @@ export function renderServerMonitorFrame(s: ServerMonitorSnapshot): string {
   lines.push(`║  [ MARKET FEEDS ]${' '.repeat(W - 18)}║`);
   // Honest statuses from probes — never invent LIVE
   const feedStatus = (st: string) => {
-    const u = String(st || 'UNKNOWN').toUpperCase();
-    if (u === 'OK' || u === 'ONLINE' || u === 'OPEN' || u === 'LIVE') return u === 'LIVE' ? 'OK' : u;
-    if (u === 'WARNING' || u === 'ERROR' || u === 'CRITICAL' || u === 'OFFLINE') return u;
-    return 'UNKNOWN';
+    const u = String(st || 'NOT_READY').toUpperCase();
+    if (u === 'OK' || u === 'ONLINE' || u === 'OPEN' || u === 'LIVE' || u === 'HEALTHY') {
+      return u === 'LIVE' ? 'OK' : u;
+    }
+    if (
+      u === 'WARNING' ||
+      u === 'ERROR' ||
+      u === 'CRITICAL' ||
+      u === 'OFFLINE' ||
+      u === 'NOT_CONFIGURED' ||
+      u === 'NOT_READY' ||
+      u === 'STALE' ||
+      u === 'DEGRADED' ||
+      u === 'CONNECTING' ||
+      u === 'AUTH_FAILED'
+    ) {
+      return u;
+    }
+    return 'NOT_READY';
   };
   const feeds = s.feeds || {
     capital: { status: 'UNKNOWN', detail: 'NO_DATA' },
@@ -1007,6 +1062,23 @@ export function renderServerMonitorFrame(s: ServerMonitorSnapshot): string {
     }
   }
   lines.push(`║${pad(`  LAST ERROR           ${s.last_error || 'NONE'}`, W)}║`);
+
+  const build = s.build || {
+    service: 'VS-CORE' as const,
+    server_id: s.server_id,
+    version: s.server_version,
+    build_commit: 'unknown',
+    build_time: 'unknown',
+    api_version: 'v1',
+  };
+  lines.push(`╠${bar('═')}╣`);
+  lines.push(`║  [ BUILD / VERSION ]${' '.repeat(W - 21)}║`);
+  lines.push(`║${pad(`  SERVICE              ${build.service}`, W)}║`);
+  lines.push(`║${pad(`  SERVER ID            ${build.server_id}`, W)}║`);
+  lines.push(`║${pad(`  VERSION              ${build.version}`, W)}║`);
+  lines.push(`║${pad(`  BUILD COMMIT         ${build.build_commit}`, W)}║`);
+  lines.push(`║${pad(`  BUILD TIME           ${build.build_time}`, W)}║`);
+  lines.push(`║${pad(`  API VERSION          ${build.api_version}`, W)}║`);
 
   lines.push(`╠${bar('═')}╣`);
   lines.push(`║${pad(`  Last update: ${s.timestamp}`, W)}║`);

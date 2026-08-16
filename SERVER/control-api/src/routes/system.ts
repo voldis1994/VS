@@ -88,13 +88,13 @@ export async function registerSystemRoutes(
       /* robot reader optional on first boot */
     }
 
-    // Do not invent HEALTHY for market/execution — unknown until proven via monitor/snapshot
+    // Do not invent HEALTHY for market/execution — NOT READY until proven
     return {
-      market_core: 'UNKNOWN',
-      execution: 'UNKNOWN',
+      market_core: 'NOT_READY',
+      execution: 'NOT_READY',
       database: dbOk ? 'HEALTHY' : 'UNHEALTHY',
       postgres: dbOk ? 'ok' : 'down',
-      redis: redisOk === true ? 'ok' : redisOk === false ? 'down' : 'unknown',
+      redis: redisOk === true ? 'ok' : redisOk === false ? 'down' : 'not_configured',
       control_api: 'HEALTHY',
       feeds: { active: feedActive, unhealthy: feedUnhealthy },
       clients: { active: clientsActive },

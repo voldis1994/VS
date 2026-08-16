@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 export type LiveState = {
   connected: boolean;
+  connectionPhase: 'CONNECTED' | 'RECONNECTING' | 'DEGRADED' | 'DISCONNECTED';
   serverId: string;
   adminName: string;
   transport: 'LAN' | 'UNKNOWN';
@@ -77,12 +78,13 @@ function applyRuntimeBootstrap() {
 
 const empty: LiveState = {
   connected: false,
+  connectionPhase: 'DISCONNECTED',
   serverId: 'VS-CORE-01',
   adminName: 'VS-ADMIN-01',
   transport: 'UNKNOWN',
   heartbeatAgeSec: null,
   uptime: null,
-  health: 'UNKNOWN',
+  health: 'FAILED',
   clientsRegistered: 0,
   clientsOnline: 0,
   openPositions: null,
@@ -90,7 +92,7 @@ const empty: LiveState = {
   cpu: null,
   ram: null,
   disk: null,
-  marketStatus: 'UNKNOWN',
+  marketStatus: 'NOT_READY',
   marketDetail: 'NO DATA',
   marketBid: null,
   marketAsk: null,
@@ -234,6 +236,7 @@ export function useAdminLive(): LiveState {
         setLastOkAt(okAt);
         setState({
           connected: true,
+          connectionPhase: 'CONNECTED',
           serverId: String(snap.server_id || window.VS_ADMIN_RUNTIME?.serverId || 'VS-CORE-01'),
           adminName: deviceId(),
           transport: transport(),
@@ -277,12 +280,27 @@ export function useAdminLive(): LiveState {
         backoff = 1500;
       } catch {
         if (stop) return;
-        setState((s) => ({
-          ...s,
-          connected: false,
-          health: 'UNKNOWN',
-          heartbeatAgeSec: lastOkAt == null ? null : Math.max(0, Math.round((Date.now() - lastOkAt) / 1000)),
-        }));
+        setState((s) => {
+          const age =
+            lastOkAt == null ? null : Math.max(0, Math.round((Date.now() - lastOkAt) / 1000));
+          // CONNECTED → reconnecting/degraded → DISCONNECTED (never fake CONNECTED)
+          let connectionPhase: LiveState['connectionPhase'] = 'DISCONNECTED';
+          let health: LiveState['health'] = 'FAILED';
+          if (lastOkAt != null && age != null && age < 15) {
+            connectionPhase = 'RECONNECTING';
+            health = 'DEGRADED';
+          } else if (lastOkAt != null && age != null && age < 45) {
+            connectionPhase = 'DEGRADED';
+            health = 'DEGRADED';
+          }
+          return {
+            ...s,
+            connected: false,
+            connectionPhase,
+            health,
+            heartbeatAgeSec: age,
+          };
+        });
         backoff = Math.min(backoff * 2, 12000);
       }
     }
