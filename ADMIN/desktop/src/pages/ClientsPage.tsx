@@ -18,7 +18,20 @@ type ProvisionResult = {
   login: string;
   password: string;
   panel_url: string;
+  panel_url_vpn?: string;
+  panel_url_lan?: string;
   message?: string;
+  wg_warning?: string | null;
+  wireguard?: {
+    enrollment_code?: string;
+    device_id?: string;
+    expires_at?: string;
+    server_endpoint_hostname?: string | null;
+    wg_listen_port?: number;
+    vpn_panel_url?: string;
+    note?: string;
+    steps?: string[];
+  } | null;
 };
 
 function apiBase(): string {
@@ -79,13 +92,7 @@ export function ClientsPage({ live }: { live: LiveState }) {
         setMsg(String(body.message || body.error || `HTTP ${res.status}`));
         return;
       }
-      setCreds({
-        client_id: body.client_id,
-        login: body.login,
-        password: body.password,
-        panel_url: body.panel_url,
-        message: body.message,
-      });
+      setCreds(body as ProvisionResult);
       setName('');
       await load();
     } catch {
@@ -113,7 +120,8 @@ export function ClientsPage({ live }: { live: LiveState }) {
         client_id: id,
         login: client?.name || String(id),
         password: body.access_code,
-        panel_url: (localStorage.getItem('VS_API_BASE') || 'http://127.0.0.1:3000').replace(/\/$/, '') + '/',
+        panel_url: 'http://10.77.0.1:3000/',
+        panel_url_vpn: 'http://10.77.0.1:3000/',
         message: body.message,
       });
       await load();
@@ -153,7 +161,8 @@ export function ClientsPage({ live }: { live: LiveState }) {
     <div className="panel">
       <h3>CLIENTS</h3>
       <p className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
-        Create a web login for the customer. They open the panel URL, sign in, choose market, set lot, START/STOP robot.
+        Outside Wi‑Fi customers need WireGuard first, then web login. They choose market + lot and START/STOP
+        robot.
       </p>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
@@ -181,20 +190,61 @@ export function ClientsPage({ live }: { live: LiveState }) {
           disabled={busy || !live.connected || !name.trim()}
           onClick={() => void createWebClient()}
         >
-          CREATE WEB LOGIN
+          CREATE REMOTE CLIENT
         </button>
       </div>
 
-      {msg ? <div className="empty" style={{ marginBottom: 12 }}>{msg}</div> : null}
+      {msg ? (
+        <div className="empty" style={{ marginBottom: 12 }}>
+          {msg}
+        </div>
+      ) : null}
 
       {creds ? (
         <div className="empty" style={{ marginBottom: 16, textAlign: 'left' }}>
           <strong style={{ color: 'var(--green)' }}>SAVE NOW — password shown once</strong>
-          <div style={{ marginTop: 8 }}>URL: {creds.panel_url}</div>
-          <div>Login: {creds.login}</div>
-          <div>Password: {creds.password}</div>
+          <div style={{ marginTop: 10 }}>
+            <div>
+              <strong>Login:</strong> {creds.login}
+            </div>
+            <div>
+              <strong>Password:</strong> {creds.password}
+            </div>
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <strong>Remote URL (after WireGuard):</strong> {creds.panel_url_vpn || creds.panel_url}
+          </div>
+          {creds.panel_url_lan ? (
+            <div className="muted" style={{ fontSize: 12 }}>
+              LAN only (same Wi‑Fi): {creds.panel_url_lan}
+            </div>
+          ) : null}
+          {creds.wireguard ? (
+            <div style={{ marginTop: 12 }}>
+              <strong>WireGuard enrollment (remote):</strong>
+              <div style={{ wordBreak: 'break-all' }}>Code: {creds.wireguard.enrollment_code}</div>
+              <div>Device: {creds.wireguard.device_id}</div>
+              <div>
+                Endpoint:{' '}
+                {creds.wireguard.server_endpoint_hostname
+                  ? `${creds.wireguard.server_endpoint_hostname}:${creds.wireguard.wg_listen_port}`
+                  : `NOT SET — configure PUBLIC_HOST_OR_IP on i3 + UDP ${creds.wireguard.wg_listen_port} forward`}
+              </div>
+              <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+                {creds.wireguard.note}
+              </div>
+              <ol style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: 12 }}>
+                {(creds.wireguard.steps || []).map((s) => (
+                  <li key={s}>{s}</li>
+                ))}
+              </ol>
+            </div>
+          ) : null}
+          {creds.wg_warning ? (
+            <div style={{ color: 'var(--red)', marginTop: 8 }}>WG warning: {creds.wg_warning}</div>
+          ) : null}
           <div className="muted" style={{ marginTop: 8, fontSize: 11 }}>
-            {creds.message || 'Share only over a secure channel.'}
+            {creds.message}
           </div>
           <button type="button" className="primary" style={{ marginTop: 10 }} onClick={() => setCreds(null)}>
             Cleared / Saved
@@ -203,7 +253,7 @@ export function ClientsPage({ live }: { live: LiveState }) {
       ) : null}
 
       {rows.length === 0 ? (
-        <div className="empty">0 CLIENTS — create a web login above</div>
+        <div className="empty">0 CLIENTS — create a remote client above</div>
       ) : (
         <table>
           <thead>
@@ -221,9 +271,7 @@ export function ClientsPage({ live }: { live: LiveState }) {
               <tr key={r.id}>
                 <td>{r.name}</td>
                 <td>
-                  <span
-                    className={`dot ${r.access_enabled && r.has_access_code ? 'on' : 'off'}`}
-                  />
+                  <span className={`dot ${r.access_enabled && r.has_access_code ? 'on' : 'off'}`} />
                   {r.access_enabled ? 'ENABLED' : 'REVOKED'}
                 </td>
                 <td>{r.robot_status || 'STOPPED'}</td>

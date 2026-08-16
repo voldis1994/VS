@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify';
+import { join } from 'path';
 import { pool } from '../db/pool.js';
 import { logAudit } from '../services/audit.js';
 import { generateAccessCode, hashAccessCode } from '../security/accessCode.js';
@@ -7,6 +8,10 @@ import {
   getClientPanelStatus,
   stopClientRobot,
 } from '../services/clientPanel.js';
+import { getDeviceRegistry } from '../vs-core/network/deviceRegistry.js';
+import { issueEnrollmentPackage } from '../vs-core/network/enrollment.js';
+import { ensureServerIdentity } from '../vs-core/network/deviceLifecycle.js';
+import { VS_WG_SERVER_IP } from '../vs-core/network/networkConstants.js';
 
 async function hardDeleteClient(clientId: string): Promise<void> {
   const db = await pool.connect();
@@ -149,7 +154,7 @@ export async function registerClientRoutes(app: FastifyInstance): Promise<void> 
     return rows[0];
   });
 
-  /** Create client + issue password (access code) in one step for web portal. */
+  /** Create client + web password + remote WireGuard enrollment (outside home Wi‑Fi). */
   app.post('/api/clients/provision-web', async (request, reply) => {
     const body = (request.body || {}) as { name?: string };
     const name = String(body.name || '').trim();
@@ -177,22 +182,78 @@ export async function registerClientRoutes(app: FastifyInstance): Promise<void> 
       `UPDATE clients SET access_code_hash = $2, access_enabled = true, updated_at = NOW() WHERE id = $1`,
       [clientId, hash]
     );
+
+    const lanHost =
+      process.env.VS_PUBLIC_CLIENT_URL ||
+      process.env.VS_LAN_URL ||
+      (process.env.VS_SERVER_LAN_IP
+        ? `http://${process.env.VS_SERVER_LAN_IP}:${process.env.CONTROL_API_PORT || 3000}`
+        : `http://127.0.0.1:${process.env.CONTROL_API_PORT || 3000}`);
+    const panel_url_lan = lanHost.replace(/\/$/, '') + '/';
+    const panel_url_vpn = `http://${VS_WG_SERVER_IP}:${process.env.CONTROL_API_PORT || 3000}/`;
+
+    let wireguard: Record<string, unknown> | null = null;
+    let wg_warning: string | null = null;
+    try {
+      const root =
+        process.env.VS_SERVER_DATA ||
+        process.env.VS_CORE_DATA ||
+        join(process.cwd(), 'data');
+      const reg = getDeviceRegistry(root);
+      ensureServerIdentity(reg, root);
+      const pkg = issueEnrollmentPackage(reg, {
+        device_type: 'CLIENT',
+        client_id: clientId,
+        created_by: 'admin-provision-web',
+      });
+      const endpointHost =
+        pkg.server_endpoint_hostname ||
+        process.env.VS_SERVER_ENDPOINT_HOSTNAME ||
+        process.env.PUBLIC_HOST_OR_IP ||
+        null;
+      wireguard = {
+        required_for_remote: true,
+        enrollment_code: pkg.enrollment_code,
+        enrollment_id: pkg.enrollment_id,
+        device_id: pkg.device_id,
+        expires_at: pkg.expires_at,
+        server_endpoint_hostname: endpointHost,
+        wg_listen_port: pkg.wg_listen_port,
+        vpn_panel_url: panel_url_vpn,
+        steps: [
+          'On customer PC: install WireGuard',
+          'Complete enrollment with enrollment_code (CLIENT/windows/INSTALL_CLIENT.bat or Connection Manager)',
+          `Open VPN panel URL: ${panel_url_vpn}`,
+          'Sign in with login + password from this screen',
+          'Select market, set lot size, START/STOP robot',
+        ],
+        note: endpointHost
+          ? `Router must forward UDP ${pkg.wg_listen_port} → i3. Endpoint: ${endpointHost}:${pkg.wg_listen_port}`
+          : `Set PUBLIC_HOST_OR_IP / VS_SERVER_ENDPOINT_HOSTNAME on i3 and forward UDP ${pkg.wg_listen_port}. Without public endpoint, remote WireGuard is BLOCKED (CGNAT/home ISP).`,
+      };
+    } catch (err) {
+      wg_warning = err instanceof Error ? err.message : 'WireGuard enrollment failed';
+    }
+
     await logAudit('admin', 'client_provision_web', 'client', String(clientId), null, {
       name,
       access_enabled: true,
+      wireguard: Boolean(wireguard),
     });
-    const host =
-      process.env.VS_PUBLIC_CLIENT_URL ||
-      process.env.VS_LAN_URL ||
-      `http://127.0.0.1:${process.env.CONTROL_API_PORT || 3000}`;
+
     return {
       success: true,
       client_id: clientId,
       login: name,
       password: code,
-      panel_url: host.replace(/\/$/, '') + '/',
+      /** Prefer VPN URL for customers outside home Wi‑Fi */
+      panel_url: panel_url_vpn,
+      panel_url_vpn,
+      panel_url_lan,
+      wireguard,
+      wg_warning,
       message:
-        'Save login and password now — password will not be shown again. Share panel_url with the client.',
+        'Save login + password now (password shown once). Outside Wi‑Fi: customer must connect WireGuard first, then open panel_url_vpn.',
     };
   });
 

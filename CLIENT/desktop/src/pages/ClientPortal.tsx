@@ -31,9 +31,16 @@ type Status = {
   } | null;
 };
 
+const LOT_PRESETS = [0.01, 0.05, 0.1, 0.5, 1];
+
 function roundLot(n: number, step: number) {
   const s = step > 0 ? step : 0.01;
   return Math.round(n / s) * s;
+}
+
+function clampLot(n: number, m: Market | null) {
+  if (!m) return n;
+  return Math.min(m.max_lot, Math.max(m.min_lot, roundLot(n, m.lot_step || 0.01)));
 }
 
 export function ClientPortal() {
@@ -47,6 +54,7 @@ export function ClientPortal() {
   const [epic, setEpic] = useState('');
   const [lot, setLot] = useState(0.1);
   const [error, setError] = useState<string | null>(null);
+  const [savedHint, setSavedHint] = useState<string | null>(null);
 
   const selected = useMemo(() => markets.find((m) => m.epic === epic) || null, [markets, epic]);
   const running = status?.robot_status === 'RUNNING';
@@ -58,7 +66,7 @@ export function ClientPortal() {
     const st = await clientFetch<Status>('/api/client/status');
     setStatus(st);
     if (st.market) setEpic(st.market);
-    if (st.lot_size != null) setLot(st.lot_size);
+    if (st.lot_size != null) setLot(Number(st.lot_size));
     return st;
   }, []);
 
@@ -131,15 +139,13 @@ export function ClientPortal() {
       body: JSON.stringify({ epic: nextEpic, lot_size: nextLot }),
     });
     await refresh();
+    setSavedHint('Market + lot saved');
+    setTimeout(() => setSavedHint(null), 2000);
   };
 
-  const bumpLot = async (dir: -1 | 1) => {
-    if (!selected || locked) return;
-    const step = selected.lot_step || 0.01;
-    const next = Math.min(
-      selected.max_lot,
-      Math.max(selected.min_lot, roundLot(lot + dir * step, step))
-    );
+  const applyLot = async (raw: number) => {
+    if (locked || !selected) return;
+    const next = clampLot(raw, selected);
     setLot(next);
     setError(null);
     try {
@@ -152,8 +158,8 @@ export function ClientPortal() {
   const onMarketChange = async (next: string) => {
     if (locked) return;
     setEpic(next);
-    const m = markets.find((x) => x.epic === next);
-    const nextLot = m ? Math.max(m.min_lot, Math.min(m.max_lot, lot)) : lot;
+    const m = markets.find((x) => x.epic === next) || null;
+    const nextLot = clampLot(lot, m);
     setLot(nextLot);
     setError(null);
     try {
@@ -191,7 +197,7 @@ export function ClientPortal() {
         <div className="card">
           <div className="welcome">LOGIN</div>
           <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-            Use the login and password created for you in VS ADMIN.
+            Outside home Wi‑Fi: connect WireGuard first, then open http://10.77.0.1:3000/
           </p>
           <label className="field">
             <span>Login</span>
@@ -216,7 +222,12 @@ export function ClientPortal() {
             />
           </label>
           {loginError ? <div className="err">{loginError}</div> : null}
-          <button className="primary" type="button" disabled={busy || !login || !password} onClick={() => void doLogin()}>
+          <button
+            className="primary"
+            type="button"
+            disabled={busy || !login || !password}
+            onClick={() => void doLogin()}
+          >
             {busy ? '…' : 'SIGN IN'}
           </button>
         </div>
@@ -229,15 +240,12 @@ export function ClientPortal() {
       <div className="brand">VS</div>
       <div className="sub">CONTROL PANEL</div>
       <div className={`conn ${running ? 'ok' : starting ? 'warn' : 'bad'}`}>
-        {status?.robot_status || (busy ? 'LOADING' : 'STOPPED')}
+        ROBOT {status?.robot_status || (busy ? 'LOADING' : 'STOPPED')}
       </div>
 
       <div className="card">
         <div className="welcome">WELCOME</div>
         <div className="name">{status?.client_name || 'Client'}</div>
-        <div className={`status ${running ? '' : 'off'}`}>
-          ● ROBOT {status?.robot_status || 'STOPPED'}
-        </div>
         {status?.status_reason || status?.broker_error ? (
           <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>
             {status.status_reason || status.broker_error}
@@ -247,10 +255,12 @@ export function ClientPortal() {
 
       <div className="card">
         <div className="muted" style={{ fontSize: 11, letterSpacing: '0.12em' }}>
-          MARKET
+          1. SELECT MARKET
         </div>
         {markets.length === 0 ? (
-          <div className="empty">NO MARKETS — broker account not linked for this client</div>
+          <div className="empty">
+            NO MARKETS — ask admin to link a broker account to your login
+          </div>
         ) : (
           <select
             className="select"
@@ -258,6 +268,7 @@ export function ClientPortal() {
             disabled={locked || busy}
             onChange={(e) => void onMarketChange(e.target.value)}
           >
+            {!epic ? <option value="">— choose market —</option> : null}
             {markets.map((m) => (
               <option key={m.epic} value={m.epic}>
                 {m.display_name || m.symbol || m.epic}
@@ -266,29 +277,58 @@ export function ClientPortal() {
           </select>
         )}
         <div className="row" style={{ marginTop: 10 }}>
-          <span>Selected</span>
-          <span>{status?.display_name || selected?.display_name || epic || '—'}</span>
+          <span>Active</span>
+          <span>{status?.display_name || selected?.display_name || '—'}</span>
         </div>
       </div>
 
       <div className="card">
         <div className="muted" style={{ fontSize: 11, letterSpacing: '0.12em' }}>
-          LOT SIZE
+          2. LOT SIZE
         </div>
         <div className="lot">
-          <button type="button" disabled={locked || !selected} onClick={() => void bumpLot(-1)}>
+          <button
+            type="button"
+            disabled={locked || !selected}
+            onClick={() => void applyLot(lot - (selected?.lot_step || 0.01))}
+          >
             −
           </button>
-          <div className="val">{lot.toFixed(2)}</div>
-          <button type="button" disabled={locked || !selected} onClick={() => void bumpLot(1)}>
+          <div className="val">{Number(lot).toFixed(2)}</div>
+          <button
+            type="button"
+            disabled={locked || !selected}
+            onClick={() => void applyLot(lot + (selected?.lot_step || 0.01))}
+          >
             +
           </button>
         </div>
+        <div className="presets">
+          {LOT_PRESETS.map((p) => (
+            <button
+              key={p}
+              type="button"
+              className={Math.abs(lot - p) < 1e-9 ? 'on' : ''}
+              disabled={locked || !selected || p < (selected?.min_lot || 0) || p > (selected?.max_lot || 999)}
+              onClick={() => void applyLot(p)}
+            >
+              {p.toFixed(2)}
+            </button>
+          ))}
+        </div>
+        {selected ? (
+          <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>
+            Range {selected.min_lot} – {selected.max_lot} (step {selected.lot_step})
+          </div>
+        ) : null}
+        {savedHint ? <div className="conn ok">{savedHint}</div> : null}
       </div>
 
       {status?.live_trade ? (
         <div className="card">
-          <div className="muted" style={{ fontSize: 11 }}>OPEN POSITION</div>
+          <div className="muted" style={{ fontSize: 11 }}>
+            OPEN POSITION
+          </div>
           <div className="row">
             <span>{status.live_trade.display_name}</span>
             <span>
@@ -308,7 +348,7 @@ export function ClientPortal() {
         <button
           type="button"
           className={`start ${locked ? 'stop' : ''}`}
-          disabled={busy || (!locked && markets.length === 0)}
+          disabled={busy || (!locked && (!epic || markets.length === 0))}
           onClick={() => void toggleRobot()}
         >
           <div>
@@ -317,7 +357,7 @@ export function ClientPortal() {
           </div>
         </button>
       </div>
-      <div className="conn">START turns the robot on for your account — not an instant market click.</div>
+      <div className="conn">3. START robot — uses your selected market + lot</div>
 
       <button className="link" type="button" onClick={() => void logout()}>
         Sign out

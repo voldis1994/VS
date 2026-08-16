@@ -1,43 +1,43 @@
-# CLIENT — Web portal (simple)
+# CLIENT — remote web portal (outside home Wi‑Fi)
 
-Customers do **not** need Git, Node, or a Windows installer for normal use.
+Customers are **not** on your home Wi‑Fi. They need:
 
-## What the customer gets
+1. **WireGuard** tunnel to i3  
+2. Then browser → `http://10.77.0.1:3000/`  
+3. Login + password from ADMIN  
+4. Select **market** + **lot size** → START/STOP robot  
 
-1. Web address (from ADMIN), e.g. `http://192.168.x.x:3000/`
-2. Login + password (created once in VS ADMIN → CLIENTS)
+## ADMIN (MSI)
 
-## What they can do after login
+1. `ADMIN\START_ADMIN.bat`  
+2. **CLIENTS** → enter login name → **CREATE REMOTE CLIENT**  
+3. Copy once:
+   - Login / Password  
+   - WireGuard enrollment code  
+   - Remote URL: `http://10.77.0.1:3000/`  
 
-- Choose market
-- Change lot size
-- START / STOP robot
+4. Link a Capital/broker account to that client (otherwise market list is empty).
 
-Access works only while ADMIN has enabled the client (credentials issued, not revoked).
+## Customer PC
 
-## ADMIN steps (MSI)
+1. Install WireGuard  
+2. Complete enrollment with the code (e.g. `CLIENT\windows\INSTALL_CLIENT.bat`)  
+3. Open `http://10.77.0.1:3000/`  
+4. Sign in → choose market → set lot → START  
 
-1. Open VS ADMIN → **CLIENTS**
-2. Enter login name → **CREATE WEB LOGIN**
-3. Copy **URL / Login / Password** (password shown once)
-4. Send to customer securely
-5. Link a broker account to that client before markets appear (Capital connection on i3)
-
-## Server requirement
-
-Control API serves `CLIENT/desktop/dist` at `/`.
-
-On i3 after install / update:
+## i3 network (required for remote)
 
 ```bash
-cd /opt/vs-server/../CLIENT/desktop   # or repo CLIENT/desktop
-npm ci || npm install
-npm run build
-sudo bash SERVER/RESTART_SERVER.sh
+# Public hostname or IP for WireGuard endpoint
+# In /var/lib/vs-server/server.env:
+PUBLIC_HOST_OR_IP=your.ddns.example
+VS_SERVER_ENDPOINT_HOSTNAME=your.ddns.example
 ```
 
-Installer should build this automatically when Node is available.
+Router: forward **UDP 51820** → i3.
 
-## Optional WireGuard path
+If CGNAT blocks inbound UDP, remote WireGuard is **BLOCKED** until you have a public endpoint (VPS relay / different ISP / etc.).
 
-Remote customers over the internet still need a reachable URL (LAN only works on home Wi‑Fi; remote needs public host / reverse proxy / VPN). WireGuard remains available for private-network access, but the product UX is the web portal + login.
+## LAN-only test
+
+Same Wi‑Fi as i3: `http://<i3-LAN-IP>:3000/` (no WG). Real customers outside Wi‑Fi must use VPN URL.
