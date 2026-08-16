@@ -1,12 +1,12 @@
 # Final Acceptance Report
 
 **Generated:** 2026-08-16  
-**Git commit SHA:** `bf1054f3b088621d3476338e7d7e0663e1c5a0de`  
+**Git commit SHA:** `72ab5373cd900b23f1f6b7a5438e01dc1732abc9`  
 **Environment:** Cursor cloud agent — **no physical i3 / MSI / remote CLIENT**
 
 ## 1. Commit
 
-`bf1054f3b088621d3476338e7d7e0663e1c5a0de`
+`72ab5373cd900b23f1f6b7a5438e01dc1732abc9`
 
 ## 2. Repository cleanup summary
 
