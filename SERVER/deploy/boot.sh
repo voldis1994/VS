@@ -57,4 +57,14 @@ if [[ ! -d node_modules ]]; then
   exit 1
 fi
 
-exec node --import tsx src/vs-core/runAppliance.ts
+if [[ -x "$API_DIR/node_modules/.bin/tsx" ]]; then
+  exec "$API_DIR/node_modules/.bin/tsx" src/vs-core/runAppliance.ts
+fi
+
+# Fallback if tsx binary path odd but package present
+if [[ -d "$API_DIR/node_modules/tsx" ]]; then
+  exec node --import tsx src/vs-core/runAppliance.ts
+fi
+
+echo "FAIL: tsx missing — run: cd $API_DIR && npm install tsx" >&2
+exit 1

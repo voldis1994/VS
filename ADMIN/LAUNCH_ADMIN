@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# LAUNCH_ADMIN — one shot: install ADMIN, enroll from SERVER file or env, start diagnostic.
+#
+# On ADMIN PC (or same i3 for local test), as normal user OR root:
+#   export API_ADMIN_TOKEN='…'          # from server.env
+#   export VS_ENROLLMENT_CODE='…'       # optional if json not shared
+#   bash ADMIN/LAUNCH_ADMIN
+#
+# If run ON the SERVER host, auto-reads:
+#   /var/lib/vs-server/server.env
+#   /var/lib/vs-server/network/issued/ADMIN_ENROLLMENT.json
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$ROOT/.." && pwd)"
+DATA="${VS_ADMIN_DATA:-$REPO/data/vs-admin}"
+SERVER_DATA="${VS_SERVER_DATA:-/var/lib/vs-server}"
+
+echo "========================================"
+echo " VS ADMIN — LAUNCH_ADMIN"
+echo "========================================"
+
+cd "$ROOT"
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "FAIL: install Node.js 20+ first" >&2
+  exit 1
+fi
+
+# Auto-load token + enrollment when on SERVER host
+if [[ -f "$SERVER_DATA/server.env" ]]; then
+  # shellcheck disable=SC1090
+  set -a; source "$SERVER_DATA/server.env"; set +a
+fi
+if [[ -z "${API_ADMIN_TOKEN:-}" && -f "$SERVER_DATA/server.env" ]]; then
+  API_ADMIN_TOKEN="$(grep -E '^API_ADMIN_TOKEN=' "$SERVER_DATA/server.env" | cut -d= -f2-)"
+  export API_ADMIN_TOKEN
+fi
+if [[ -z "${VS_ENROLLMENT_CODE:-}" && -f "$SERVER_DATA/network/issued/ADMIN_ENROLLMENT.json" ]]; then
+  VS_ENROLLMENT_CODE="$(jq -r '.enrollment_code // empty' "$SERVER_DATA/network/issued/ADMIN_ENROLLMENT.json" 2>/dev/null || true)"
+  export VS_ENROLLMENT_CODE
+fi
+
+if [[ -z "${API_ADMIN_TOKEN:-}" || "$API_ADMIN_TOKEN" == *CHANGE_ME* ]]; then
+  echo "FAIL: set API_ADMIN_TOKEN (from SERVER /var/lib/vs-server/server.env)" >&2
+  exit 1
+fi
+
+./INSTALL_ADMIN
+
+mkdir -p config "$DATA"
+CFG="$ROOT/config/admin.connection.json"
+CODE="${VS_ENROLLMENT_CODE:-}"
+if [[ -z "$CODE" && -f "$CFG" ]]; then
+  CODE="$(jq -r '.enrollment_code // empty' "$CFG" 2>/dev/null || true)"
+fi
+
+# Write connection config
+BASE_URL="${VS_SERVER_URL:-http://10.77.0.1:3000}"
+cat >"$CFG" <<EOF
+{
+  "server_id": "VS-CORE-01",
+  "device_id": "VS-ADMIN-01",
+  "device_token": "",
+  "enrollment_code": "${CODE}",
+  "baseUrl": "${BASE_URL}",
+  "adminToken": "${API_ADMIN_TOKEN}",
+  "note": "Auto-written by LAUNCH_ADMIN"
+}
+EOF
+chmod 600 "$CFG"
+echo "Wrote $CFG"
+echo "  baseUrl=$BASE_URL"
+echo "  enrollment_code=${CODE:-(empty — paste into config if needed)}"
+
+# Reachability
+if ! curl -fsS --max-time 5 "$BASE_URL/health" >/dev/null 2>&1; then
+  echo "WARN: cannot reach $BASE_URL/health — join WireGuard or set VS_SERVER_URL" >&2
+  echo "      Trying anyway…"
+fi
+
+export VS_SERVER_URL="$BASE_URL"
+export API_ADMIN_TOKEN
+echo "==> START_ADMIN --once"
+./START_ADMIN --once || ./START_ADMIN --once
+
+echo "SUCCESS: ADMIN connected (or see diagnostic above)"
+echo "For continuous monitor:  API_ADMIN_TOKEN=… VS_SERVER_URL=$BASE_URL ./START_ADMIN"
+exit 0
