@@ -278,7 +278,7 @@ if (-not $adminToken) { $adminToken = "" }
 $env:VS_SERVER_URL = $serverUrl
 $env:VITE_API_URL = $serverUrl
 $env:VITE_WS_URL = ($serverUrl -replace '^http', 'ws') + "/ws"
-$env:VS_ADMIN_TRANSPORT = "lan"
+$env:VS_ADMIN_TRANSPORT = $transport.ToLower()
 $env:VITE_API_ADMIN_TOKEN = $adminToken
 $env:API_ADMIN_TOKEN = $adminToken
 
@@ -290,8 +290,11 @@ Get-Content $Cfg | ForEach-Object {
   if ($row -match '^\s*VS_SERVER_URL=') { [void]$newLines.Add("VS_SERVER_URL=$serverUrl"); $seenUrl = $true; return }
   if ($row -match '^\s*VITE_API_URL=') { [void]$newLines.Add("VITE_API_URL=$serverUrl"); return }
   if ($row -match '^\s*VITE_WS_URL=') { [void]$newLines.Add("VITE_WS_URL=$($env:VITE_WS_URL)"); return }
-  if ($row -match '^\s*VS_ADMIN_TRANSPORT=') { [void]$newLines.Add("VS_ADMIN_TRANSPORT=lan"); return }
-  if ($row -match '^\s*VS_LAN_SERVER_URL=') { [void]$newLines.Add("VS_LAN_SERVER_URL=$serverUrl"); return }
+  if ($row -match '^\s*VS_ADMIN_TRANSPORT=') { [void]$newLines.Add("VS_ADMIN_TRANSPORT=$($transport.ToLower())"); return }
+  if ($row -match '^\s*VS_LAN_SERVER_URL=') {
+    if ($transport -eq "LAN") { [void]$newLines.Add("VS_LAN_SERVER_URL=$serverUrl") }
+    return
+  }
   [void]$newLines.Add($row)
 }
 if (-not $seenUrl) { [void]$newLines.Add("VS_SERVER_URL=$serverUrl") }
@@ -307,7 +310,7 @@ window.VS_ADMIN_RUNTIME = {
   serverId: "VS-CORE-01",
   apiBase: "$serverUrl",
   adminToken: "$adminToken",
-  transport: "LAN",
+  transport: "$transport",
   deviceId: "VS-ADMIN-01",
   startedAt: "$(Get-Date -Format o)"
 };

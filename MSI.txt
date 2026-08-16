@@ -2,31 +2,24 @@ MSI — VIENA KOMANDA
 ===================
 
 NEDRĪKSTI palaist no C:\Users\voldi
-Tur NAV VS repo → tāpēc "path not found" / "not a git repository".
 
-1) Atver CMD un ieej VS mapē (parasti C:\VS-main):
-
-   cd /d C:\VS-main
+1) cd /d C:\VS-main
    dir START_MSI.bat
 
-   Ja faila nav — meklē:
-   dir /s /b C:\START_MSI.bat
-   un cd uz to mapi kur tas atrasts.
-
-2) i3 IP (no i3: hostname -I) — VIENA rinda failā:
-
+2) i3 IP (no i3 hostname -I), piemēram 192.168.0.10:
    mkdir ADMIN\config 2>nul
    echo 192.168.0.10> ADMIN\config\SERVER_IP.txt
-
-   (liec IEVESĪTO i3 IP — nevis random 192.168.8.x ja i3 ir 192.168.0.10)
-
-3) Palaid:
-
    git pull origin main
-   START_MSI.bat
 
-4) Pārbaude:
+3) Vispirms DIAGNOZE (nevis uzreiz START):
+   ADMIN\PROVE_LAN.bat
 
-   curl.exe -s http://192.168.0.10:3000/health
+   - ja ping FAIL = cita WiFi / Guest / AP isolation (NAV VS kļūda)
+   - ja curl OK = tad START_MSI.bat
 
-Ja curl neiet — uz i3: sudo bash SERVER/OPEN_LAN_FOR_MSI.sh
+4) START_MSI.bat
+
+Ja WiFi bloķē laptop↔laptop:
+  - izslēdz router AP/client isolation
+  - VAI ethernet
+  - VAI WireGuard → tad ADMIN izmanto http://10.77.0.1:3000
