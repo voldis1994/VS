@@ -1,14 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { sma, ema, atr, rsi, slope } from '../../SERVER/indicators/src/index.ts';
-import { validateTick, isStale } from '../../SERVER/market-data/src/types.ts';
-import { classifyRegime } from '../../SERVER/regime-engine/src/classifier.ts';
-import { atrStop, riskRewardTarget, positionSize } from '../../SERVER/risk-engine/src/stops/atrStop.ts';
+import { sma, ema, atr, rsi, slope } from '../../SERVER/core/indicators/src/index.ts';
+import { validateTick, isStale } from '../../SERVER/core/market-data/src/types.ts';
+import { classifyRegime } from '../../SERVER/core/regime/src/classifier.ts';
+import { atrStop, riskRewardTarget, positionSize } from '../../SERVER/core/risk/src/stops/atrStop.ts';
 import {
   evaluateTradingReady,
   evaluateProcessReady,
   createInitialRegistry,
   setSubsystem,
-} from '../../SERVER/supervisor/src/state.ts';
+} from '../../SERVER/core/supervisor/src/state.ts';
 
 describe('indicators', () => {
   it('sma / ema / slope are deterministic', () => {

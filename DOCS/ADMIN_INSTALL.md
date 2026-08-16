@@ -1,21 +1,15 @@
-# ADMIN install (MSI Windows)
-
-LAN/Wi-Fi to i3 — WireGuard **not** required for home ADMIN.
+# ADMIN install (MSI / Windows 11)
 
 ```bat
-cd C:\VS-main
-git pull origin main
-cd ADMIN
-INSTALL_ADMIN.bat
-START_ADMIN.bat
-STATUS_ADMIN.bat
-STOP_ADMIN.bat
+ADMIN\windows\INSTALL_ADMIN.bat
+ADMIN\windows\START_ADMIN.bat
+ADMIN\windows\STATUS_ADMIN.bat
 ```
 
-Put `ADMIN_TOKEN.txt` next to the bat files:
+Or from `ADMIN\INSTALL_ADMIN.bat` / `START_ADMIN.bat`.
 
-```
-API_ADMIN_TOKEN=<from i3 /var/lib/vs-server/server.env>
-```
+Requires Node.js 20+ and `API_ADMIN_TOKEN` matching i3 `server.env`.
 
-Expected: `TRANSPORT=LAN`, `INSTALL SUCCESS`, Control Panel at `http://127.0.0.1:5173`.
+Discovery: trusted LAN first (default `http://192.168.0.10:3000`). WireGuard not required for home ADMIN.
+
+ADMIN never contains broker/strategy/execution engines.

@@ -1,1 +1,1 @@
-export * from './classifier.js';
+export * from '../../core/regime/src/index.js';

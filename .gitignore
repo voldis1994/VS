@@ -69,3 +69,4 @@ SERVER/control-api/data/
 apps/dashboard/.env.local
 apps/dashboard/.env.*.local
 TESTS/node_modules/
+SERVER/client-api/node_modules/

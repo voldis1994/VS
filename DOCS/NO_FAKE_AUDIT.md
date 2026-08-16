@@ -14,7 +14,7 @@
 | `/api/system/status` redis/market HEALTHY hardcode | system.ts | FIXED earlier | Redis TCP probe; market UNKNOWN |
 | `Math.random` market ticks in SERVER engines | market-data/indicators/regime/strategy/signal/risk/broker-gateway | NONE | Forbidden |
 | `DEMO_MODE` / `MOCK_MODE` / `FAKE_MODE` flags | — | NONE | Do not add |
-| Broker without credentials | `broker-gateway/capital/health.ts` | FIXED | Returns `CONFIG_REQUIRED`, never CONNECTED |
+| Broker without credentials | `core/broker/capital/health.ts` | FIXED | Returns `CONFIG_REQUIRED`, never CONNECTED |
 | Acceptance scripts | FINAL_ACCEPTANCE* | SAFE | FAIL/CONFIG_REQUIRED when unchecked |
 | `TODO`/`FIXME` in hot paths | sparse | TRACK | No auth/risk bypass TODOs in enrollment/monitor |
 

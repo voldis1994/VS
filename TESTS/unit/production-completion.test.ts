@@ -1,19 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { classifyBrokerConfig } from '../../SERVER/broker-gateway/capital/health.ts';
-import { mapCapitalError } from '../../SERVER/broker-gateway/capital/canonical.ts';
-import { classifyRegime, applyHysteresis } from '../../SERVER/regime-engine/src/classifier.ts';
+import { classifyBrokerConfig } from '../../SERVER/core/broker/capital/health.ts';
+import { mapCapitalError } from '../../SERVER/core/broker/capital/canonical.ts';
+import { classifyRegime, applyHysteresis } from '../../SERVER/core/regime/src/classifier.ts';
 import {
   macd,
   adx,
   volatility,
   supportResistance,
   trendStrength,
-} from '../../SERVER/indicators/src/index.ts';
-import { atrStop, structureStop, positionSize } from '../../SERVER/risk-engine/src/index.ts';
-import { eligibleStrategies, STRATEGY_REGISTRY } from '../../SERVER/strategy-engine/src/index.ts';
-import { transition } from '../../SERVER/execution-engine/src/orderStateMachine.ts';
-import { MarketFeedBook, aggregateCandles } from '../../SERVER/market-data/src/index.ts';
-import { buildSignal, recordNoTrade, isSignalExpired } from '../../SERVER/signal-engine/src/index.ts';
+} from '../../SERVER/core/indicators/src/index.ts';
+import { atrStop, structureStop, positionSize } from '../../SERVER/core/risk/src/index.ts';
+import { eligibleStrategies, STRATEGY_REGISTRY } from '../../SERVER/core/strategy/src/index.ts';
+import { transition } from '../../SERVER/core/execution/src/orderStateMachine.ts';
+import { MarketFeedBook, aggregateCandles } from '../../SERVER/core/market-data/src/index.ts';
+import { buildSignal, recordNoTrade, isSignalExpired } from '../../SERVER/core/signal/src/index.ts';
 import { evaluateRisk } from '../../SERVER/control-api/src/vs-core/riskCore.ts';
 
 describe('broker CONFIG_REQUIRED', () => {

@@ -1,53 +1,29 @@
 # Acceptance report
 
-**Environment note:** This cloud agent cannot power-cycle the physical i3/MSI or a remote client ISP. Results below are from **repository tests** and scripts. Physical gates are operator-run.
+**Environment:** cloud agent — physical i3/MSI/remote ISP **NOT TESTED** here.
 
-## Automated (this pass)
+## Automated
 
-| Gate | Result |
+| Test | Result |
 |------|--------|
-| control-api vitest | PASS (306) |
-| TESTS unit (core + production-completion) | PASS |
-| ADMIN connection tests | PASS (18) |
-| Broker without secrets → CONFIG_REQUIRED | PASS |
-| Kill switch denies risk | PASS |
-| Regime hysteresis / strategy eligibility | PASS |
-| Market feed duplicate rejection | PASS |
-| LIVE default false | PASS (unchanged fail-closed) |
+| control-api vitest | RUN in CI/agent (see summary) |
+| TESTS unit core + production | RUN |
+| ADMIN connection | RUN |
+| client-api auth boundary | RUN |
+| Broker without secrets → CONFIG_REQUIRED | PASS (unit) |
+| Kill switch denies risk | PASS (unit) |
 
-## Operator physical commands
+## Physical (operator)
 
-**i3**
+| ID | Test | Result |
+|----|------|--------|
+| A | Reboot i3 → auto start | NOT TESTED |
+| B | i3 local monitor real status | NOT TESTED |
+| C | MSI START_ADMIN LAN | NOT TESTED |
+| D | CLIENT different ISP WG | NOT TESTED |
+| E | CLIENT → ADMIN endpoint denied | NOT TESTED (unit covers client-api 403) |
+| F | MSI off → CORE continues | NOT TESTED |
+| G | CLIENT disconnect → CORE continues | NOT TESTED |
+| H | Broker unavailable → TRADING_READY false, no fake broker | NOT TESTED (unit CONFIG_REQUIRED) |
 
-```bash
-sudo bash SERVER/install/INSTALL_SERVER.sh
-sudo bash SERVER/FINAL_ACCEPTANCE.sh
-sudo bash SERVER/SHOW_DASHBOARD.sh
-```
-
-**MSI**
-
-```bat
-ADMIN\INSTALL_ADMIN.bat
-ADMIN\START_ADMIN.bat
-ADMIN\FINAL_ACCEPTANCE.bat
-```
-
-**Remote CLIENT**
-
-```bat
-CLIENT\VERIFY_CLIENT.bat
-CLIENT\FINAL_ACCEPTANCE.bat
-```
-
-## Known external configuration required
-
-- Capital.com credentials on VS-CORE-01
-- `PUBLIC_HOST_OR_IP` + UDP 51820 port forward for remote clients
-- `API_ADMIN_TOKEN` / DB secrets
-
-## Known blockers to live trading
-
-- `LIVE_TRADING_ENABLED=false` by default (intentional)
-- Broker session proof requires credentials + operator verification
-- Reconciliation must be clean before TRADING_READY
+Never fabricate physical PASS.

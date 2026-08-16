@@ -16,9 +16,9 @@ import {
   buildServerMonitorSnapshot,
   renderServerMonitorFrame,
 } from './serverMonitor.js';
-import { evaluateSupervisor } from '../../../supervisor/src/orchestrator.js';
+import { evaluateSupervisor } from '../../../core/supervisor/src/orchestrator.js';
 import { getKillSwitch, setKillSwitch } from './killSwitch.js';
-import { classifyBrokerConfig } from '../../../broker-gateway/capital/health.js';
+import { classifyBrokerConfig } from '../../../core/broker/capital/health.js';
 import { hostname } from 'os';
 import { normalizeNetworkSecret } from './network/networkSecrets.js';
 

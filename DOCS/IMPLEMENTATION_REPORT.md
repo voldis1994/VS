@@ -1,54 +1,36 @@
-# Implementation report — final production completion pass
+# Implementation report — clean production architecture
 
-## Architecture (unchanged)
+**Branch:** `cursor/vs-core-production-rebuild-0bd7`  
+**LIVE_TRADING_ENABLED default:** false  
 
-- **i3 / VS-CORE-01** = sole trading brain  
-- **MSI** = ADMIN Control Panel only  
-- **Remote CLIENT** = WireGuard → Client API only  
+| Subsystem | State | Source |
+|-----------|-------|--------|
+| Legacy audit | IMPLEMENTED | `DOCS/LEGACY_AUDIT.md` |
+| Clean tree `SERVER/core/*` | IMPLEMENTED | engines relocated + shims |
+| Database migrations | IMPLEMENTED | `SERVER/database/migrations` (001–013) |
+| Redis | PARTIAL | Docker + probes; not sole authority |
+| Supervisor PROCESS/SYSTEM/TRADING | PARTIAL | `SERVER/core/supervisor` + Control API |
+| Control API | IMPLEMENTED | `SERVER/control-api` |
+| Client API (separate package) | PARTIAL | `SERVER/client-api` auth boundary + routes; session store wiring PARTIAL |
+| Market data | IMPLEMENTED | `SERVER/core/market-data` |
+| Indicators | IMPLEMENTED | `SERVER/core/indicators` |
+| Regime | IMPLEMENTED | `SERVER/core/regime` |
+| Strategy | IMPLEMENTED | `SERVER/core/strategy` |
+| Signal | IMPLEMENTED | `SERVER/core/signal` |
+| Risk + kill switch | IMPLEMENTED | `riskCore` + `SERVER/core/risk` + killSwitch API |
+| Execution OSM | IMPLEMENTED | `SERVER/core/execution` |
+| Broker gateway | PARTIAL | Capital health/canonical/probes; full session lifecycle in control-api services |
+| Positions | PARTIAL | `SERVER/core/positions` façade + existing control-api services |
+| Reconciliation | PARTIAL | `SERVER/core/reconciliation` + gates |
+| Incidents / audit | PARTIAL | core helpers + existing vs_incidents/audit |
+| WireGuard | PARTIAL | network scripts + docs |
+| i3 monitor | IMPLEMENTED | MONITOR_SERVER + API |
+| ADMIN MSI | PARTIAL | bats + dashboard; real API wired |
+| CLIENT app | PARTIAL | installers/VERIFY; desktop packaging incomplete |
+| Backup/restore/update | IMPLEMENTED | install scripts |
+| Installers | PARTIAL | INSTALL_SERVER + ADMIN/CLIENT windows |
+| Systemd templates | PARTIAL | `SERVER/systemd/*` (+ deploy units) |
+| Docs | IMPLEMENTED | required DOCS/* set |
+| Fake production state | NOT PRESENT | fail-closed / CONFIG_REQUIRED |
 
-No parallel rewrite. Work continues inside existing `SERVER` / `ADMIN` / `CLIENT`.
-
-## Delivered this pass
-
-### Docs
-- `DOCS/FINAL_GAP_AUDIT.md`
-- `DOCS/NO_FAKE_AUDIT.md`
-- `DOCS/PORTS.md`
-- `DOCS/FINAL_PRODUCT_REPORT.md`
-- README **VS — QUICK START**
-
-### Database
-- `012_vs_production_completion.sql`
-- `013_canonical_entities.sql` (admin/roles/devices/accounts/instruments/candles/orders/fills/WG peers/…)
-- Existing migrate runner applies all `*.sql` in order
-
-### Broker
-- `SERVER/broker-gateway/capital/` — health (`CONFIG_REQUIRED`), canonical types, safe probes:
-  - `vs-broker-status`
-  - `vs-broker-test-auth`
-  - `vs-broker-test-market`
-- Never invents CONNECTED; never places trades in probes
-
-### Engines
-- Market feed lifecycle + candle aggregation
-- Indicators: MACD, ADX, volatility, swings, S/R, trend strength
-- Full regime IDs + hysteresis
-- Full strategy registry (regime ≠ order)
-- Signal builder + NO_TRADE decision records
-- Risk kill switch wired into `evaluateRisk` + Control API
-- Structure/swing/volatility stops + sizing helpers
-
-### Ops
-- `SERVER/FINAL_ACCEPTANCE.sh`
-- `SERVER/BACKUP_SERVER.sh` / `LIST_BACKUPS.sh` / `VERIFY_BACKUP.sh` / `RESTORE_SERVER.sh`
-- `SERVER/UPDATE_SERVER.sh` (operator-gated)
-- `SERVER/SHOW_DASHBOARD.sh`
-- `ADMIN/FINAL_ACCEPTANCE.bat`
-- `CLIENT/VERIFY_CLIENT.bat` / `FINAL_ACCEPTANCE.bat`
-- `scripts/BUILD_RELEASE.sh` → `dist/VS-SERVER|VS-ADMIN|VS-CLIENT`
-
-## Explicit non-claims
-
-- No live Capital order placed
-- No physical i3 / MSI / remote-ISP verification inside this agent VM
-- `LIVE_TRADING_ENABLED` remains default **false**
+**Not DONE** for physical topology. No silent DEMO fallback. No invented READY.

@@ -1,46 +1,41 @@
-# VS Architecture (production rebuild)
+# VS Architecture
 
-## Authority
+## Physical products
 
-**VS-CORE-01** (i3 Debian) is the only trading brain.
+1. **VS CORE SERVER** — i3 Debian 13 (`VS-CORE-01`) — sole trading brain  
+2. **VS ADMIN** — MSI Windows 11 — Control Panel only (LAN)  
+3. **VS CLIENT** — customer Windows — WireGuard → Client API  
 
-- Capital.com / broker credentials: **SERVER ONLY**
-- ADMIN (MSI): Control Panel over **LAN** → Control API
-- CLIENT (remote): WireGuard → Client API
-- ADMIN/CLIENT never talk to Capital.com
+## Data flow
 
-## Process vs trading readiness
+```
+CAPITAL.COM
+    ↕ REST/WS
+BROKER GATEWAY (SERVER/core/broker)
+    ↕
+VS CORE (i3)
+  market-data → indicators → regime → strategy → signal → risk → execution
+  positions / reconciliation / audit / incidents
+  PostgreSQL + Redis
+  CONTROL API  ←LAN←  MSI ADMIN
+  CLIENT API   ←WG←   CLIENT (10.77.0.1)
+  local monitor (optional UI; closing does not stop server)
+```
+
+## Readiness
 
 | Flag | Meaning |
 |------|---------|
-| `process_ready` | Config + Postgres + Control API answering |
-| `trading_ready` | All live gates + operator auth (default **false**) |
+| PROCESS_READY | systemd + Control API process |
+| SYSTEM_READY | process + DB + Client API reachable |
+| TRADING_READY | system + broker + market + risk + execution + reconciliation gates |
 
-`LIVE_TRADING_ENABLED` defaults to **false**. Never invent TRADING_READY.
+Broker credentials absent ⇒ `BROKER_READY=false`, `TRADING_READY=false`. Server is **not** “dead”.
 
-## Status contract
+## Authority
 
-Both i3 console monitor and MSI dashboard use:
+Authoritative state lives only on i3. MSI/CLIENT offline must not stop VS CORE.
 
-`GET /api/v1/server/monitor` (admin token)
+## Repository map
 
-Supervisor view:
-
-`GET /api/v1/system/supervisor`
-
-## Module map
-
-| Folder | Role |
-|--------|------|
-| `SERVER/control-api` | Runtime API + vs-core engines |
-| `SERVER/supervisor` | Boot/readiness evaluation |
-| `SERVER/market-data` | Tick validation (no invented prices) |
-| `SERVER/indicators` | Deterministic indicators |
-| `SERVER/regime-engine` | Regime classification (no auto-orders) |
-| `SERVER/strategy-engine` | Eligibility only |
-| `SERVER/signal-engine` | Signal ≠ order |
-| `SERVER/risk-engine` | Stops / sizing |
-| `SERVER/execution-engine` | Order state machine |
-| `legacy-review/` | Frozen / archived — **no production imports** |
-
-See `DOCS/LEGACY_AUDIT.md`.
+See `DOCS/LEGACY_AUDIT.md` and tree under `SERVER/core/`, `SERVER/control-api/`, `SERVER/client-api/`.

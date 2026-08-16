@@ -1,22 +1,22 @@
-# Server install (i3 / Debian)
+# Server install (i3 / Debian 13)
 
 ```bash
-cd /root/VS   # or ~/VS-new
-git pull origin main
+cd /root/VS
 sudo bash SERVER/install/INSTALL_SERVER.sh
-# equivalent: sudo bash SERVER/INSTALL_I3_SERVER
-```
-
-Ops:
-
-```bash
-sudo bash SERVER/START_SERVER
-sudo bash SERVER/STOP_SERVER
-sudo bash SERVER/RESTART_SERVER
-sudo bash SERVER/STATUS_SERVER
 sudo bash SERVER/install/HEALTHCHECK.sh
-sudo bash SERVER/dashboard/SHOW_DASHBOARD.sh   # or START_MONITOR
-sudo bash SERVER/INSTALL_MONITOR              # if unit missing
+sudo bash SERVER/FINAL_ACCEPTANCE.sh
+sudo bash SERVER/SHOW_DASHBOARD.sh   # optional monitor
 ```
 
-LIVE trading remains **disabled** after install.
+Idempotent. Does not destroy DB/secrets on re-run.
+
+Normal reboot: systemd starts `vs-server` — no terminal login required.
+
+Configure `/var/lib/vs-server/server.env`:
+
+- `API_ADMIN_TOKEN`
+- Capital credentials (optional until trading)
+- `PUBLIC_HOST_OR_IP` / `WIREGUARD_PORT` for remote clients
+- `LIVE_TRADING_ENABLED=false` (default)
+
+Backup/restore: `SERVER/install/BACKUP_SERVER.sh`, `RESTORE_SERVER.sh` (requires `CONFIRM`).
