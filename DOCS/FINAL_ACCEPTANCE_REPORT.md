@@ -1,12 +1,12 @@
 # Final Acceptance Report
 
 **Generated:** 2026-08-16  
-**Git commit SHA:** bd9d1d0d2603e545d1e586cd1ac82ff2127b79f7  
+**Git commit SHA:** `2a6edbecded9c7caa7063ac7e6d6c50699dc771f`
 **Environment:** Cursor cloud agent — **no physical i3 / MSI / remote CLIENT**
 
 ## 1. Commit
 
-bd9d1d0d2603e545d1e586cd1ac82ff2127b79f7
+`2a6edbecded9c7caa7063ac7e6d6c50699dc771f`
 
 ## 2. Final directory tree (production)
 
