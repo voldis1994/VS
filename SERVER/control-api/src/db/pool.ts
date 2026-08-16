@@ -49,7 +49,7 @@ export async function waitForDatabase(attempts = 30, delayMs = 2000): Promise<vo
       if (code === '28P01' || /password authentication failed/i.test(msg)) {
         throw new Error(
           'DB_AUTH_FAILED (28P01): password in server.env does not match Postgres volume. ' +
-            'Fix: sudo bash SERVER/deploy/fix-db-password.sh && sudo bash SERVER/FIX_CONTROL_API.sh'
+            'Fix: sudo bash SERVER/MAKE_IT_WORK.sh'
         );
       }
       const retry = isRetryableDbError(err);
