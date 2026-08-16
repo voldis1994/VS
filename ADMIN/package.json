@@ -3,9 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "VS ADMIN \u2014 diagnostic management client for VS SERVER (not AAA UI yet)",
+  "description": "VS ADMIN — Control Panel client + diagnostic for VS SERVER (runs on MSI, not i3)",
   "scripts": {
     "start": "tsx app/startAdmin.ts",
+    "install:admin": "tsx app/installAdmin.ts",
     "test": "vitest run connection"
   },
   "dependencies": {

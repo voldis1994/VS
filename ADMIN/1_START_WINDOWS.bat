@@ -1,14 +1,15 @@
 @echo off
 REM =============================================================================
-REM 1_START_WINDOWS.bat — VIENS fails: palaid VS ADMIN uz Windows
-REM =============================================================================
-REM Pirms tam:
-REM   1) WireGuard Activate ar VS-ADMIN-01.conf (Endpoint = i3 LAN IP)
-REM   2) ping 10.77.0.1  OK
-REM   3) ADMIN_TOKEN.txt blakus vai ievadi tokenu
+REM 1_START_WINDOWS.bat — compatibility wrapper
+REM Prefer: INSTALL_ADMIN.bat once, then START_ADMIN.bat (Control Panel).
+REM This file still starts the CLI diagnostic if you need it.
 REM =============================================================================
 setlocal EnableExtensions
 cd /d "%~dp0"
+
+echo NOTE: Preferred Windows path is INSTALL_ADMIN.bat then START_ADMIN.bat
+echo Continuing with CLI diagnostic...
+echo.
 
 where node >nul 2>&1
 if errorlevel 1 (

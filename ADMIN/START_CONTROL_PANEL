@@ -14,7 +14,7 @@ if [[ -f "$CFG" ]]; then
   set +a
 fi
 
-SERVER_URL="${VS_SERVER_URL:-${VITE_API_URL:-http://192.168.0.53:3000}}"
+SERVER_URL="${VS_SERVER_URL:-${VITE_API_URL:-http://192.168.0.10:3000}}"
 export VITE_API_URL="$SERVER_URL"
 export VITE_WS_URL="${VITE_WS_URL:-${SERVER_URL/http/ws}/ws}"
 export VITE_API_ADMIN_TOKEN="${API_ADMIN_TOKEN:-${VITE_API_ADMIN_TOKEN:-}}"

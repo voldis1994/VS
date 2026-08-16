@@ -12,7 +12,7 @@ REPO="$(cd "$ROOT/.." && pwd)"
 DASH="$REPO/apps/dashboard"
 CFG_DIR="$ROOT/config"
 DATA="${VS_ADMIN_DATA:-$REPO/data/vs-admin}"
-SERVER_URL="${VS_SERVER_URL:-http://192.168.0.53:3000}"
+SERVER_URL="${VS_SERVER_URL:-http://192.168.0.10:3000}"
 
 echo "========================================"
 echo " VS CONTROL PANEL — INSTALL"

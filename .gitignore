@@ -57,4 +57,13 @@ coverage/
 *.key
 credentials.json
 ADMIN/config/admin.connection.json
+ADMIN/config/control-panel.env
+ADMIN/ADMIN_TOKEN.txt
+ADMIN_TOKEN.txt
 data/vs-server/
+data/vs-admin/
+**/device.private
+**/VS-ADMIN-*.conf
+**/VS-CLIENT-*.conf
+apps/dashboard/.env.local
+apps/dashboard/.env.*.local

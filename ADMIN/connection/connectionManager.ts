@@ -21,6 +21,7 @@ export function resolveAdminBaseUrl(serverId: string, override?: string): string
   const lan = (process.env.VS_SERVER_URL || process.env.VS_LAN_SERVER_URL || '').trim();
   if (lan) return lan.replace(/\/$/, '');
   void serverId;
+  // Prefer WireGuard private host when on tunnel; LAN discovery sets override/env
   return `http://${INTERNAL.private_host}:${INTERNAL.private_port}`;
 }
 

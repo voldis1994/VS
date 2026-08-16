@@ -143,7 +143,9 @@ export async function registerPrivateNetworkRoutes(app: FastifyInstance): Promis
   app.get('/api/v1/network/status', async (req, reply) => {
     const reg = getDeviceRegistry(root);
     const auth = authorizeSession(reg, sessionHeader(req), 'NETWORK_DIAGNOSTICS');
-    if (!auth.ok) return reply.code(403).send(auth);
+    if (!auth.ok && !bootAdmin(req)) {
+      return reply.code(403).send(auth.ok === false ? auth : { ok: false });
+    }
     return {
       ok: true,
       text: renderNetworkStatusBlock(reg),
@@ -159,6 +161,7 @@ export async function registerPrivateNetworkRoutes(app: FastifyInstance): Promis
         client_id: d.client_id,
         key_fingerprint: d.key_fingerprint,
         key_version: d.key_version,
+        last_seen: d.last_seen ?? d.connected_at ?? null,
       })),
     };
   });
@@ -265,17 +268,47 @@ export async function registerPrivateNetworkRoutes(app: FastifyInstance): Promis
   app.post('/api/v1/network/enrollment/revoke', async (req, reply) => {
     const reg = getDeviceRegistry(root);
     const auth = authorizeSession(reg, sessionHeader(req), 'DEVICE_MANAGEMENT');
-    if (!auth.ok) return reply.code(403).send(auth);
+    if (!auth.ok && !bootAdmin(req)) {
+      return reply.code(403).send(auth.ok === false ? auth : { ok: false });
+    }
     const body = (req.body || {}) as { enrollment_id?: string };
     if (!body.enrollment_id) return reply.code(400).send({ ok: false, code: 'INVALID_REQUEST' });
     revokeEnrollmentPackage(reg, body.enrollment_id);
     appendNetworkAudit(root, {
       action: 'ENROLLMENT_REVOKED',
-      actor: auth.device.device_id,
+      actor: auth.ok ? auth.device.device_id : 'BOOTSTRAP_ADMIN',
       result: 'OK',
       detail: { enrollment_id: body.enrollment_id },
     });
     return { ok: true };
+  });
+
+  /** Pending / recent enrollments — MSI Control Panel (admin token or device session). */
+  app.get('/api/v1/network/enrollments', async (req, reply) => {
+    const reg = getDeviceRegistry(root);
+    const auth = authorizeSession(reg, sessionHeader(req), 'DEVICE_MANAGEMENT');
+    if (!auth.ok && !bootAdmin(req)) {
+      return reply.code(403).send(auth.ok === false ? auth : { ok: false });
+    }
+    return {
+      ok: true,
+      enrollments: reg.listEnrollments().map((e) => {
+        let status = 'PENDING';
+        if (e.revoked_at) status = 'REVOKED';
+        else if (e.used_at) status = 'USED';
+        else if (Date.parse(e.expires_at) < Date.now()) status = 'EXPIRED';
+        return {
+          enrollment_id: e.enrollment_id,
+          device_type: e.device_type,
+          device_id: e.device_id,
+          status,
+          expires_at: e.expires_at,
+          client_id: e.client_id,
+          created_by: e.created_by,
+          // Never return enrollment_code / token hash material
+        };
+      }),
+    };
   });
 
   // Legacy bootstrap register (still available for INSTALL assistants)
@@ -339,7 +372,9 @@ export async function registerPrivateNetworkRoutes(app: FastifyInstance): Promis
   app.post('/api/v1/network/device/revoke', async (req, reply) => {
     const reg = getDeviceRegistry(root);
     const auth = authorizeSession(reg, sessionHeader(req), 'DEVICE_MANAGEMENT');
-    if (!auth.ok) return reply.code(403).send(auth);
+    if (!auth.ok && !bootAdmin(req)) {
+      return reply.code(403).send(auth.ok === false ? auth : { ok: false });
+    }
     const body = (req.body || {}) as { device_id?: string };
     if (!body.device_id) return reply.code(400).send({ ok: false, code: 'INVALID_REQUEST' });
     revokeDevice(reg, body.device_id, root);
@@ -349,17 +384,22 @@ export async function registerPrivateNetworkRoutes(app: FastifyInstance): Promis
   app.post('/api/v1/network/device/lost', async (req, reply) => {
     const reg = getDeviceRegistry(root);
     const auth = authorizeSession(reg, sessionHeader(req), 'DEVICE_MANAGEMENT');
-    if (!auth.ok) return reply.code(403).send(auth);
+    if (!auth.ok && !bootAdmin(req)) {
+      return reply.code(403).send(auth.ok === false ? auth : { ok: false });
+    }
     const body = (req.body || {}) as { device_id?: string };
     if (!body.device_id) return reply.code(400).send({ ok: false, code: 'INVALID_REQUEST' });
-    const pkg = replaceLostDevice(reg, body.device_id, auth.device.device_id);
+    const actor = auth.ok ? auth.device.device_id : 'BOOTSTRAP_ADMIN';
+    const pkg = replaceLostDevice(reg, body.device_id, actor);
     return { ok: true, revoked: body.device_id, enrollment: pkg };
   });
 
   app.post('/api/v1/network/device/rotate-key', async (req, reply) => {
     const reg = getDeviceRegistry(root);
     const auth = authorizeSession(reg, sessionHeader(req), 'DEVICE_MANAGEMENT');
-    if (!auth.ok) return reply.code(403).send(auth);
+    if (!auth.ok && !bootAdmin(req)) {
+      return reply.code(403).send(auth.ok === false ? auth : { ok: false });
+    }
     const body = (req.body || {}) as { device_id?: string; public_key?: string };
     if (!body.device_id) return reply.code(400).send({ ok: false, code: 'INVALID_REQUEST' });
     if (body.public_key) {
@@ -520,7 +560,9 @@ export async function registerPrivateNetworkRoutes(app: FastifyInstance): Promis
   app.get('/api/v1/network/devices', async (req, reply) => {
     const reg = getDeviceRegistry(root);
     const auth = authorizeSession(reg, sessionHeader(req), 'DEVICE_MANAGEMENT');
-    if (!auth.ok) return reply.code(403).send(auth);
+    if (!auth.ok && !bootAdmin(req)) {
+      return reply.code(403).send(auth.ok === false ? auth : { ok: false });
+    }
     return {
       ok: true,
       devices: reg.list().map((d) => ({

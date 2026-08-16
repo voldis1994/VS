@@ -416,6 +416,52 @@ describe('VS_PRIVATE_NETWORK_PRODUCT', () => {
     void reg;
   });
 
+  it('HTTP: MSI admin token (bootAdmin) can list devices and enrollments', async () => {
+    const prev = process.env.API_ADMIN_TOKEN;
+    process.env.API_ADMIN_TOKEN = 'test-msi-admin-token';
+    try {
+      const reg = resetDeviceRegistryForTests(root);
+      ensureServerIdentity(reg, root);
+      registerAdminDevice(reg, root, { device_id: 'VS-ADMIN-01' });
+
+      const app = Fastify({ logger: false });
+      await registerPrivateNetworkRoutes(app);
+
+      const denied = await app.inject({ method: 'GET', url: '/api/v1/network/devices' });
+      expect(denied.statusCode).toBe(403);
+
+      const devices = await app.inject({
+        method: 'GET',
+        url: '/api/v1/network/devices',
+        headers: { 'x-admin-token': 'test-msi-admin-token' },
+      });
+      expect(devices.statusCode).toBe(200);
+      expect(devices.json().devices.length).toBeGreaterThanOrEqual(1);
+
+      const enrollments = await app.inject({
+        method: 'GET',
+        url: '/api/v1/network/enrollments',
+        headers: { 'x-admin-token': 'test-msi-admin-token' },
+      });
+      expect(enrollments.statusCode).toBe(200);
+      expect(Array.isArray(enrollments.json().enrollments)).toBe(true);
+
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/v1/network/enrollment/create',
+        headers: { 'x-admin-token': 'test-msi-admin-token' },
+        payload: { device_type: 'CLIENT', client_id: 7 },
+      });
+      expect(created.statusCode).toBe(200);
+      expect(created.json().enrollment_code).toBeTruthy();
+
+      await app.close();
+    } finally {
+      if (prev === undefined) delete process.env.API_ADMIN_TOKEN;
+      else process.env.API_ADMIN_TOKEN = prev;
+    }
+  });
+
   it('audit never stores private keys/tokens', () => {
     const secret = 'SUPER_SECRET_PRIVATE_KEY_MATERIAL_xyz';
     appendNetworkAudit(root, {

@@ -16,20 +16,38 @@ Money path lives under `SERVER/control-api` (verified P0). Compatibility symlink
 
 **LIVE trading stays fail-closed** (`LIVE_TRADING_ENABLED=false`) until Capital DEMO + production gates are satisfied on real hardware.
 
-## Clean install (Debian i3 SERVER)
+## Deployment — three machines
+
+### [i3 SERVER] — VS-CORE-01
 
 ```bash
+git clone https://github.com/voldis1994/VS.git /root/VS
+cd /root/VS
 sudo bash SERVER/INSTALL_I3_SERVER
 sudo bash SERVER/STATUS_SERVER
 ```
 
-MSI Control Panel:
-```bash
-export VS_SERVER_URL=http://192.168.0.53:3000   # your i3 LAN IP
-bash ADMIN/INSTALL_CONTROL_PANEL
-# edit ADMIN/config/control-panel.env → API_ADMIN_TOKEN
-bash ADMIN/START_CONTROL_PANEL
+Postgres, Redis, Control API, trading backend, WireGuard, and enrollment stay on the i3 only.
+
+### [MSI WINDOWS ADMIN] — Control Panel (not the server)
+
+```bat
+cd ADMIN
+INSTALL_ADMIN.bat
+START_ADMIN.bat
 ```
+
+Requires Node.js 20+ and `API_ADMIN_TOKEN` once (file `ADMIN_TOKEN.txt` or from i3 `server.env`).  
+Discovers VS-CORE-01 on LAN automatically. Opens http://127.0.0.1:5173 against the real i3 API.  
+If the server is down, UI shows **SERVER OFFLINE** — no mock READY.
+
+Linux admin workstation: `bash ADMIN/INSTALL_ADMIN` then `bash ADMIN/START_ADMIN`.
+
+### [REMOTE CLIENT]
+
+1. On MSI → Control Panel → **NETWORK** → create CLIENT enrollment.
+2. On the client PC: complete enrollment (local keypair); import WireGuard peer config.
+3. Router: forward UDP **51820** to i3. Clients use private `10.77.0.1` — any ISP/NAT.
 
 See [START_3_FILES.txt](START_3_FILES.txt).
 
@@ -41,26 +59,34 @@ MARKET DATA → INGESTION → NORMALIZATION → DATA QUALITY → FEED FUSION
   → ENTRY → EXECUTION ROUTER → BROKER → POSITION MANAGER → EXIT
 ```
 
+```
+REMOTE CLIENT ──(Internet / WireGuard)──► i3 VS-CORE-01 ──► authenticated VS API
+MSI ADMIN     ──(home LAN or WireGuard)──► i3 VS-CORE-01 ──► admin API + snapshot
+```
+
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/VS_ARCHITECTURE_INVENTORY.md](docs/VS_ARCHITECTURE_INVENTORY.md).
 
 ## Prerequisites
 
-### Windows 11 x64
+### Windows 11 x64 (MSI ADMIN)
 - Git
+- Node.js 20+
+- (Optional) WireGuard for off-LAN admin
+
+### Windows 11 x64 (optional full local market-core build)
 - Visual Studio 2022 Build Tools (C++ workload)
 - CMake 3.24+
-- Node.js 20+
 - Docker Desktop
 - vcpkg (used by CMake if `market-core.exe` is missing on first `VS.bat` run)
 
-### Linux (development/CI)
+### Linux (i3 SERVER / CI)
 - GCC 13+ or Clang 16+
 - CMake, Ninja
 - Node.js 20+
 - Docker
 - Development libraries: fmt, spdlog, yaml-cpp, nlohmann-json, openssl, curl, gtest, zlib (optional: Google Benchmark via `vcpkg` feature `benchmarks`)
 
-## Quick Start (Windows)
+## Quick Start (legacy single-PC Windows)
 
 **Vienīgais fails — dubultklikšķis:**
 
@@ -71,8 +97,9 @@ VS.bat
 Atver **VS paneli** (`http://127.0.0.1:18090`). Viena poga palaiž / restartē sistēmu no GitHub.  
 Neaizver to paneli. Admin: http://localhost:5173/
 
-Skatīt [docs/VS_RESTART.md](docs/VS_RESTART.md).
+For **production multi-PC**, use the three-machine section above — do not run the server on the MSI.
 
+Skatīt [docs/VS_RESTART.md](docs/VS_RESTART.md).
 ## Build
 
 ```bat
@@ -112,18 +139,25 @@ Backend tests:
 cd apps/control-api && npm test
 ```
 
+ADMIN client tests:
+```bash
+cd ADMIN && npm test
+```
+
 ## Project Structure
 
 ```
 apps/           market-core, execution-service, control-api, dashboard
 libs/           C++ engine libraries (clock, features, regime, evidence, etc.)
 config/         YAML configuration
+SERVER/         i3 appliance install + control-api source of truth
+ADMIN/          MSI Control Panel (INSTALL_ADMIN.bat / START_ADMIN.bat)
+CLIENT/         remote client package / enrollment foundation
 data/           raw, normalized, replay recordings
 tests/          unit, integration, replay, execution, security, performance
 docs/           architecture and operations documentation
-VS.bat          one-click launcher (git pull, stack, client tunnel)
+VS.bat          legacy single-PC launcher (not the multi-PC production path)
 ```
-
 ## Security
 
 - API credentials encrypted at rest (AES-256-GCM)

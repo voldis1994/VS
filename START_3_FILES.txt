@@ -1,6 +1,7 @@
-# VS — two computers
+# VS — three machines
 
-## COMPUTER 1 — i3 SERVER (Sony)
+## [i3 SERVER] — Sony / VS-CORE-01 (always-on)
+
 ```bash
 git clone https://github.com/voldis1994/VS.git /root/VS
 cd /root/VS
@@ -10,36 +11,55 @@ sudo bash SERVER/STATUS_SERVER
 
 After install:
 ```bash
-sudo bash SERVER/START_SERVER    # usually already via systemd
+sudo bash SERVER/START_SERVER
 sudo bash SERVER/STOP_SERVER
 sudo bash SERVER/RESTART_SERVER
 sudo bash SERVER/STATUS_SERVER
-sudo bash SERVER/2_EXPORT_USB    # WireGuard pack for remote / optional
+sudo bash SERVER/2_EXPORT_USB
 ```
 
-MSI reaches API on LAN: `http://<i3-lan-ip>:3000` (e.g. `http://192.168.0.53:3000`).  
+MSI reaches API on LAN (example): `http://192.168.0.10:3000`  
 Reserve a DHCP lease for the i3 on your router.
 
-## COMPUTER 2 — MSI CONTROL PANEL
-```bash
-git clone https://github.com/voldis1994/VS.git
-cd VS
-# set your i3 LAN IP:
-export VS_SERVER_URL=http://192.168.0.53:3000
-bash ADMIN/INSTALL_CONTROL_PANEL
-# put API_ADMIN_TOKEN into ADMIN/config/control-panel.env (from i3 server.env)
-bash ADMIN/START_CONTROL_PANEL
+Copy `API_ADMIN_TOKEN` from i3 (`/var/lib/vs-server/server.env`) onto the MSI as `ADMIN_TOKEN.txt` next to the bat files, or paste when INSTALL prompts via file:
 ```
-Open http://127.0.0.1:5173
+API_ADMIN_TOKEN=<token from i3>
+```
 
-Windows: `ADMIN\1_START_WINDOWS.bat` (CLI) or Git Bash for Control Panel scripts.
+## [MSI WINDOWS ADMIN] — Control Panel only (NOT the server)
 
-## Remote clients (different ISPs)
-WireGuard UDP **51820** → i3 (router port-forward).  
-Peer Endpoint = public IP or DDNS (not 192.168.x.x).  
-Private API: `http://10.77.0.1:3000` inside the tunnel.
+```bat
+git clone https://github.com/voldis1994/VS.git
+cd VS\ADMIN
+INSTALL_ADMIN.bat
+START_ADMIN.bat
+```
+
+That is the full Windows path. No Bash, no `export`, no manual `:3000`.
+
+- `INSTALL_ADMIN.bat` discovers VS-CORE-01 on LAN, enrolls this PC, verifies real `ADMIN_SNAPSHOT`
+- `START_ADMIN.bat` opens Control Panel at http://127.0.0.1:5173 against the i3 API
+- `STOP_ADMIN.bat` / `STATUS_ADMIN.bat` as needed
+
+If the i3 is stopped, the panel shows **SERVER OFFLINE** (no mock READY).
+
+Linux admin PC (dev): `bash ADMIN/INSTALL_ADMIN` then `bash ADMIN/START_ADMIN`.
+
+## [REMOTE CLIENT] — any ISP / NAT
+
+1. On MSI Control Panel → **NETWORK**: create CLIENT enrollment (binds `client_id`).
+2. On client device: complete enrollment with the code (device generates keys locally).
+3. Import generated WireGuard peer config (Endpoint = public IP/DDNS of i3, UDP **51820** forwarded on router).
+4. Client talks to private API `http://10.77.0.1:3000` inside the tunnel — never needs MSI Wi-Fi.
+
+Build client package (when packaging):
+```bash
+# [i3 SERVER] or build machine
+bash CLIENT/BUILD_CLIENT
+```
 
 ## Security
-- LIVE_TRADING_ENABLED=false until you explicitly enable after Capital verification
-- Postgres/Redis bound to 127.0.0.1 only
+- LIVE_TRADING_ENABLED=false until Capital verification on real hardware
+- Postgres/Redis bound to 127.0.0.1 only on i3
 - Control API firewalled to LAN CIDR + WireGuard supernet
+- Private keys stay on each device; never commit tokens

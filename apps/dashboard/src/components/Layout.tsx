@@ -17,6 +17,7 @@ const NAV = [
   { to: '/trading', label: 'TRADING' },
   { to: '/brokers', label: 'BROKERS' },
   { to: '/clients', label: 'CLIENTS' },
+  { to: '/network', label: 'NETWORK' },
   { to: '/positions', label: 'POSITIONS' },
   { to: '/trades', label: 'TRADES' },
   { to: '/feeds', label: 'FEEDS' },
@@ -39,19 +40,30 @@ export function Layout({ children }: { children: ReactNode }) {
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
   const [railCollapsed, setRailCollapsed] = useState(false);
   const [isFs, setIsFs] = useState(false);
+  const [serverOnline, setServerOnline] = useState<boolean | null>(null);
+  const [serverId, setServerId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [s, c, a] = await Promise.all([
+      const [s, c, a, snap] = await Promise.all([
         apiFetch<DeskStatus>('/api/system/status'),
         apiFetch<DeskClient[]>('/api/clients').catch(() => [] as DeskClient[]),
         apiFetch<DeskAccount[]>('/api/trading/accounts').catch(() => [] as DeskAccount[]),
+        apiFetch<{ server_id?: string; connection?: string }>('/api/v1/admin/snapshot').catch(
+          () => null,
+        ),
       ]);
       setStatus(s);
       setClients(c);
       setAccounts(a);
+      setServerOnline(true);
+      if (snap?.server_id) setServerId(snap.server_id);
     } catch {
-      /* keep last snapshot */
+      // Do not keep presenting stale LIVE/READY — clear desk data
+      setServerOnline(false);
+      setStatus(null);
+      setClients([]);
+      setAccounts([]);
     }
   }, []);
 
@@ -107,11 +119,11 @@ export function Layout({ children }: { children: ReactNode }) {
     }
   };
 
-  const liveOk = (status?.database || '').toUpperCase() === 'HEALTHY';
-  const markets = status?.capital_markets ?? 0;
-  const openTrades = status?.open_positions ?? 0;
-  const fills = status?.today_executions ?? 0;
-  const brokersLive = status?.brokers_live ?? 0;
+  const liveOk = serverOnline === true && (status?.database || '').toUpperCase() === 'HEALTHY';
+  const markets = serverOnline ? (status?.capital_markets ?? 0) : 0;
+  const openTrades = serverOnline ? (status?.open_positions ?? 0) : 0;
+  const fills = serverOnline ? (status?.today_executions ?? 0) : 0;
+  const brokersLive = serverOnline ? (status?.brokers_live ?? 0) : 0;
 
   const pageTitle =
     NAV.find((n) => (n.end ? location.pathname === n.to : location.pathname.startsWith(n.to)))
@@ -156,18 +168,27 @@ export function Layout({ children }: { children: ReactNode }) {
           </div>
 
           <div className="desk-status-row">
-            <span className={`status-pill ${liveOk ? '' : 'bad'}`}>
-              SYSTEM {liveOk ? 'LIVE' : 'DEGRADED'}
+            <span className={`status-pill ${serverOnline === false ? 'bad' : liveOk ? '' : 'warn'}`}>
+              {serverOnline === false
+                ? 'SERVER OFFLINE'
+                : `SYSTEM ${liveOk ? 'HEALTHY' : 'DEGRADED'}`}
             </span>
-            <span className={`status-pill ${brokersLive > 0 ? '' : 'warn'}`}>
-              CAPITAL {brokersLive > 0 ? 'LIVE' : 'IDLE'}
+            <span className={`status-pill ${serverOnline === false ? 'bad' : ''}`}>
+              {serverId || 'VS-CORE-01'}
             </span>
-            <span className={`status-pill ${openTrades > 0 ? '' : 'warn'}`}>
-              POSITIONS {openTrades > 0 ? 'OPEN' : 'FLAT'}
-            </span>
-            <span className={`status-pill ${status?.live_enabled ? 'warn' : ''}`}>
-              MODE {(status?.mode ?? 'LIVE').toUpperCase()}
-            </span>
+            {serverOnline !== false && (
+              <>
+                <span className={`status-pill ${brokersLive > 0 ? '' : 'warn'}`}>
+                  CAPITAL {brokersLive > 0 ? 'CONNECTED' : 'IDLE'}
+                </span>
+                <span className={`status-pill ${openTrades > 0 ? '' : 'warn'}`}>
+                  POSITIONS {openTrades > 0 ? 'OPEN' : 'FLAT'}
+                </span>
+                <span className={`status-pill ${status?.live_enabled ? 'warn' : ''}`}>
+                  MODE {(status?.mode ?? 'PAPER').toUpperCase()}
+                </span>
+              </>
+            )}
           </div>
 
           <div className="desk-stats">
@@ -276,8 +297,12 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
 
         <footer className="footer-strip desk-footer">
-          <span>VS SYSTEM // ONLINE</span>
-          <span>REAL-TIME COMBAT DESK</span>
+          <span>
+            {serverOnline === false
+              ? 'SERVER OFFLINE — no live telemetry'
+              : `CONNECTED // ${serverId || 'VS-CORE-01'}`}
+          </span>
+          <span>ADMIN CONTROL PANEL (MSI) → i3 SERVER</span>
           <span className="footer-logo-wrap">
             <Logo size={18} />
           </span>
