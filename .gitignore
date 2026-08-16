@@ -62,6 +62,7 @@ ADMIN/ADMIN_TOKEN.txt
 ADMIN_TOKEN.txt
 data/vs-server/
 data/vs-admin/
+SERVER/control-api/data/
 **/device.private
 **/VS-ADMIN-*.conf
 **/VS-CLIENT-*.conf
