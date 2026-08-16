@@ -82,20 +82,22 @@ done
 echo "==> ALTER USER $DB_USER password inside $CONTAINER"
 # Escape single quotes for SQL
 SQL_PASS="${DB_PASSWORD//\'/\'\'}"
-docker exec -u postgres "$CONTAINER" psql -v ON_ERROR_STOP=1 -c \
-  "DO \$\$BEGIN
-     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${DB_USER}') THEN
-       CREATE ROLE ${DB_USER} LOGIN PASSWORD '${SQL_PASS}';
-     ELSE
-       ALTER ROLE ${DB_USER} WITH LOGIN PASSWORD '${SQL_PASS}';
-     END IF;
-   END\$\$;"
+docker exec -u postgres "$CONTAINER" psql -v ON_ERROR_STOP=1 <<SQL
+DO \$\$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${DB_USER}') THEN
+    CREATE ROLE ${DB_USER} LOGIN PASSWORD '${SQL_PASS}';
+  ELSE
+    ALTER ROLE ${DB_USER} WITH LOGIN PASSWORD '${SQL_PASS}';
+  END IF;
+END
+\$\$;
+SELECT 1 FROM pg_database WHERE datname = '${DB_NAME}';
+SQL
 
-docker exec -u postgres "$CONTAINER" psql -v ON_ERROR_STOP=1 -c \
-  "SELECT 'CREATE DATABASE ${DB_NAME} OWNER ${DB_USER}'
-   WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '${DB_NAME}')\gexec" \
-  2>/dev/null || docker exec -u postgres "$CONTAINER" psql -c \
-  "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};" 2>/dev/null || true
+# Create DB if missing (ignore "already exists")
+docker exec -u postgres "$CONTAINER" psql -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};" 2>/dev/null || true
+docker exec -u postgres "$CONTAINER" psql -c "GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${DB_USER};" 2>/dev/null || true
 
 # Prove password works from host via TCP (same path as Node)
 export PGPASSWORD="$DB_PASSWORD"

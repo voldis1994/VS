@@ -278,6 +278,8 @@ for i in $(seq 1 90); do
 done
 [[ "$ok_pg" -eq 1 ]] || { echo "FAIL: Postgres not ready" >&2; exit 1; }
 echo "SUCCESS: Postgres READY"
+echo "==> sync DB password into volume (prevent 28P01)"
+bash "$HERE/deploy/fix-db-password.sh"
 
 ok_rd=0
 for i in $(seq 1 30); do

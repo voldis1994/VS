@@ -23,15 +23,11 @@ vs-monitor
 
 Check: `ss -lntp | grep 3000` must show **`0.0.0.0:3000`** (not only `10.77.0.1`).
 
-If monitor shows `API: fetch failed` / OFFLINE:
+If `/health` fails with DB auth / `28P01`:
 
 ```bash
+sudo bash SERVER/deploy/fix-db-password.sh
 sudo bash SERVER/FIX_CONTROL_API.sh
-# if still down:
-sudo bash SERVER/START_API_DIRECT.sh
-curl -sS http://127.0.0.1:3000/health
-hostname -I
-vs-monitor
 ```
 
 MSI needs the **real** i3 LAN IP (not only 192.168.0.10). After API is up:
