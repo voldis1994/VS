@@ -88,6 +88,7 @@ for f in "$DATA/server.env" "$DATA/compose.env" "$API/.env" "$PREFIX/.env" "$REP
   force_kv "$f" DB_USER "$DB_USER"
   force_kv "$f" DB_PASSWORD "$DB_PASSWORD"
   force_kv "$f" VS_LAN_MANAGEMENT 1
+  force_kv "$f" VS_LAN_TRUST_ADMIN 1
   force_kv "$f" VS_PRIVATE_NETWORK 1
   force_kv "$f" CONTROL_API_HOST 0.0.0.0
   force_kv "$f" CONTROL_API_PORT 3000
@@ -238,6 +239,7 @@ Environment=NODE_ENV=production
 Environment=OPERATING_MODE=PRODUCTION
 Environment=LIVE_TRADING_ENABLED=false
 Environment=VS_LAN_MANAGEMENT=1
+Environment=VS_LAN_TRUST_ADMIN=1
 Environment=VS_PRIVATE_NETWORK=1
 Environment=CONTROL_API_HOST=0.0.0.0
 Environment=CONTROL_API_PORT=3000

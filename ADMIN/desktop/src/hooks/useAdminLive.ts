@@ -70,7 +70,15 @@ declare global {
 function applyRuntimeBootstrap() {
   const rt = typeof window !== 'undefined' ? window.VS_ADMIN_RUNTIME : undefined;
   if (!rt) return;
-  if (rt.apiBase) localStorage.setItem('VS_API_BASE', rt.apiBase.replace(/\/$/, ''));
+  if (rt.apiBase) {
+    const base = rt.apiBase.replace(/\/$/, '');
+    // Never keep MSI localhost as API — Control API is on i3
+    if (!/^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/i.test(base)) {
+      localStorage.setItem('VS_API_BASE', base);
+    } else if (!localStorage.getItem('VS_API_BASE')) {
+      localStorage.setItem('VS_API_BASE', base);
+    }
+  }
   if (rt.adminToken) localStorage.setItem('VS_ADMIN_TOKEN', rt.adminToken);
   if (rt.deviceId) localStorage.setItem('VS_ADMIN_DEVICE_ID', rt.deviceId);
   if (rt.transport) localStorage.setItem('VS_ADMIN_TRANSPORT', rt.transport);
@@ -81,7 +89,7 @@ const empty: LiveState = {
   connectionPhase: 'DISCONNECTED',
   serverId: 'VS-CORE-01',
   adminName: 'VS-ADMIN-01',
-  transport: 'UNKNOWN',
+  transport: 'LAN',
   heartbeatAgeSec: null,
   uptime: null,
   health: 'FAILED',
@@ -115,10 +123,15 @@ const empty: LiveState = {
 function apiBase(): string {
   applyRuntimeBootstrap();
   const fromLs = localStorage.getItem('VS_API_BASE');
-  if (fromLs) return fromLs.replace(/\/$/, '');
+  if (fromLs && !/^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/i.test(fromLs)) {
+    return fromLs.replace(/\/$/, '');
+  }
+  const rt = typeof window !== 'undefined' ? window.VS_ADMIN_RUNTIME?.apiBase : undefined;
+  if (rt) return rt.replace(/\/$/, '');
   const vite = (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL;
   if (vite) return vite.replace(/\/$/, '');
-  return 'http://127.0.0.1:3000';
+  if (fromLs) return fromLs.replace(/\/$/, '');
+  return '';
 }
 function token(): string {
   applyRuntimeBootstrap();
@@ -137,8 +150,12 @@ function deviceId(): string {
   return id;
 }
 function transport(): LiveState['transport'] {
-  const t = localStorage.getItem('VS_ADMIN_TRANSPORT') || window.VS_ADMIN_RUNTIME?.transport || 'LAN';
-  return t === 'LAN' ? 'LAN' : 'UNKNOWN';
+  const t = (
+    localStorage.getItem('VS_ADMIN_TRANSPORT') ||
+    window.VS_ADMIN_RUNTIME?.transport ||
+    'LAN'
+  ).toUpperCase();
+  return t === 'UNKNOWN' ? 'UNKNOWN' : 'LAN';
 }
 
 async function safeJson(url: string, headers: HeadersInit): Promise<Record<string, unknown> | null> {
@@ -191,9 +208,17 @@ export function useAdminLive(): LiveState {
 
     async function tick() {
       try {
-        await heartbeat();
         const base = apiBase();
+        if (!base) throw new Error('NO_API_BASE — runtime-config.js missing apiBase');
         const h = headers();
+
+        // Prove link with /health first (no token) — surfaces real CONNECTED even if token empty
+        const healthRes = await fetch(base + '/health', { signal: AbortSignal.timeout(5000) });
+        if (!healthRes.ok) throw new Error('HEALTH HTTP ' + healthRes.status);
+        const healthBody = (await healthRes.json()) as { service?: string; server_id?: string };
+        if (healthBody.service !== 'VS-CORE') throw new Error('NOT_VS_CORE');
+
+        await heartbeat();
         const res = await fetch(base + '/api/v1/server/monitor', { headers: h });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const snap = (await res.json()) as Record<string, unknown>;
@@ -237,7 +262,9 @@ export function useAdminLive(): LiveState {
         setState({
           connected: true,
           connectionPhase: 'CONNECTED',
-          serverId: String(snap.server_id || window.VS_ADMIN_RUNTIME?.serverId || 'VS-CORE-01'),
+          serverId: String(
+            snap.server_id || healthBody.server_id || window.VS_ADMIN_RUNTIME?.serverId || 'VS-CORE-01'
+          ),
           adminName: deviceId(),
           transport: transport(),
           heartbeatAgeSec: 0,

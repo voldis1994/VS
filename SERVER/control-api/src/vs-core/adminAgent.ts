@@ -45,14 +45,54 @@ export type AdminAgentDeps = {
       }>;
 };
 
-function authorizeAdmin(req: { headers: Record<string, unknown> }, expected?: string): boolean {
+function isPrivateClientIp(req: {
+  ip?: string;
+  ips?: string[];
+  headers?: Record<string, unknown>;
+  socket?: { remoteAddress?: string };
+}): boolean {
+  const candidates = [
+    req.ip,
+    ...(Array.isArray(req.ips) ? req.ips : []),
+    req.socket?.remoteAddress,
+    typeof req.headers?.['x-forwarded-for'] === 'string'
+      ? String(req.headers['x-forwarded-for']).split(',')[0]?.trim()
+      : undefined,
+  ].filter(Boolean) as string[];
+  for (const raw of candidates) {
+    const ip = raw.replace(/^::ffff:/, '');
+    if (ip === '127.0.0.1' || ip === '::1') return true;
+    if (/^10\./.test(ip)) return true;
+    if (/^192\.168\./.test(ip)) return true;
+    if (/^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(ip)) return true;
+  }
+  return false;
+}
+
+function lanTrustAdminEnabled(): boolean {
+  const v = String(process.env.VS_LAN_TRUST_ADMIN || '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes';
+}
+
+function authorizeAdmin(
+  req: {
+    headers: Record<string, unknown>;
+    ip?: string;
+    ips?: string[];
+    socket?: { remoteAddress?: string };
+  },
+  expected?: string
+): boolean {
   const want = normalizeNetworkSecret(expected ?? process.env.API_ADMIN_TOKEN);
   if (!want || want === 'CHANGE_ME_ADMIN_TOKEN') {
     // Dev only — production must set API_ADMIN_TOKEN
     return process.env.NODE_ENV !== 'production';
   }
   const token = normalizeNetworkSecret(String(req.headers['x-admin-token'] || ''));
-  return token === want;
+  if (token === want) return true;
+  // Home appliance: MSI on private LAN may read monitor / heartbeat without copying token first
+  if (lanTrustAdminEnabled() && isPrivateClientIp(req)) return true;
+  return false;
 }
 
 /** Physical i3 console only — never expose on LAN/WireGuard clients. */
@@ -186,6 +226,27 @@ export async function registerAdminAgentRoutes(
       server_id: host.server_id || hostname(),
       time_utc: new Date().toISOString(),
       uptime_seconds: host.uptime_seconds,
+    };
+  });
+
+  /**
+   * Home LAN bootstrap for MSI ADMIN — only when VS_LAN_TRUST_ADMIN=1 and caller is private IP.
+   * Returns non-secret identity + API_ADMIN_TOKEN so MSI can write control-panel.env.
+   */
+  app.get('/api/v1/admin/lan-bootstrap', async (req, reply) => {
+    if (!lanTrustAdminEnabled() || !isPrivateClientIp(req as Parameters<typeof isPrivateClientIp>[0])) {
+      return reply.code(403).send({ ok: false, code: 'LAN_TRUST_REQUIRED' });
+    }
+    const want = normalizeNetworkSecret(token || process.env.API_ADMIN_TOKEN || '');
+    if (!want || want === 'CHANGE_ME_ADMIN_TOKEN') {
+      return reply.code(503).send({ ok: false, code: 'TOKEN_NOT_CONFIGURED' });
+    }
+    return {
+      ok: true,
+      service: 'VS-CORE',
+      server_id: process.env.VS_SERVER_ID || 'VS-CORE-01',
+      api_admin_token: want,
+      control_api_port: Number(process.env.CONTROL_API_PORT || 3000),
     };
   });
 

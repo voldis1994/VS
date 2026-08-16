@@ -17,4 +17,8 @@ describe('auth public monitor console', () => {
   it('keeps /health public', () => {
     expect(isPublicUnauthedPath('GET', '/health')).toBe(true);
   });
+
+  it('allows LAN bootstrap path (handler still enforces VS_LAN_TRUST_ADMIN)', () => {
+    expect(isPublicUnauthedPath('GET', '/api/v1/admin/lan-bootstrap')).toBe(true);
+  });
 });

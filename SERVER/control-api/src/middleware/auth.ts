@@ -18,9 +18,32 @@ const PUBLIC_API_V1 = new Set([
   // i3 physical console monitor — localhost-only enforced in adminAgent handlers
   '/api/v1/server/monitor/console',
   '/api/v1/server/monitor/console/text',
+  // Home LAN bootstrap for MSI ADMIN (token only when VS_LAN_TRUST_ADMIN=1 + private IP)
+  '/api/v1/admin/lan-bootstrap',
 ]);
 
-// /api/v1/admin/* uses its own x-admin-token check inside Admin Agent.
+function lanTrustEnabled(): boolean {
+  const v = String(process.env.VS_LAN_TRUST_ADMIN || '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes';
+}
+
+function isPrivateIp(ip: string): boolean {
+  const n = ip.replace(/^::ffff:/, '');
+  if (n === '127.0.0.1' || n === '::1') return true;
+  if (/^10\./.test(n)) return true;
+  if (/^192\.168\./.test(n)) return true;
+  if (/^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(n)) return true;
+  return false;
+}
+
+function requestFromPrivateLan(request: FastifyRequest): boolean {
+  const candidates = [
+    request.ip,
+    ...(Array.isArray(request.ips) ? request.ips : []),
+    request.socket?.remoteAddress,
+  ].filter(Boolean) as string[];
+  return candidates.some(isPrivateIp);
+}
 
 /** Static client panel (GET / /assets /logo.svg) is public — not Vite, not admin. */
 export function isPublicUnauthedPath(method: string, urlPath: string): boolean {
@@ -55,6 +78,15 @@ export async function authMiddleware(
   // VS Private Network device channel — application session auth inside networkApi
   // (WireGuard ≠ authorization). Do not require x-admin-token here.
   if (path === '/api/v1/network' || path.startsWith('/api/v1/network/')) return;
+
+  // Home appliance: MSI on LAN may use ADMIN read/heartbeat APIs without copying token first
+  if (
+    lanTrustEnabled() &&
+    requestFromPrivateLan(request) &&
+    (path.startsWith('/api/v1/') || path.startsWith('/api/system/'))
+  ) {
+    return;
+  }
 
   const token = request.headers['x-admin-token'] as string | undefined;
   const expected = process.env.API_ADMIN_TOKEN;

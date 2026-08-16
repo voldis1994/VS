@@ -336,7 +336,11 @@ window.VS_ADMIN_RUNTIME = {
   startedAt: "$(Get-Date -Format o)"
 };
 "@
-Set-Content -Path (Join-Path $PublicDir "runtime-config.js") -Value $runtime -Encoding utf8
+# CRITICAL: no UTF-8 BOM — BOM breaks browser parse → falls back to 127.0.0.1:3000 → DISCONNECTED
+$runtimePath = Join-Path $PublicDir "runtime-config.js"
+$utf8NoBom = New-Object System.Text.UTF8Encoding $false
+[System.IO.File]::WriteAllText($runtimePath, $runtime, $utf8NoBom)
+Write-Host ("Wrote runtime-config.js apiBase=" + $serverUrl + " tokenLen=" + $adminToken.Length)
 
 # Kill old tactical (:5173) and previous admin (:5188)
 Stop-PortListeners 5173

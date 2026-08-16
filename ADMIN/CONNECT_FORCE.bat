@@ -73,15 +73,22 @@ mkdir ADMIN\config 2>nul
 echo %IP%> ADMIN\config\SERVER_IP.txt
 echo Wrote ADMIN\config\SERVER_IP.txt = %IP%
 
-REM seed control-panel.env
+REM Fetch admin token from i3 LAN bootstrap (VS_LAN_TRUST_ADMIN=1)
+echo === LAN bootstrap token ===
+curl.exe -sS --connect-timeout 5 --max-time 8 "%URL%/api/v1/admin/lan-bootstrap" -o "%TEMP%\vs-lan-boot.json"
+if exist "%TEMP%\vs-lan-boot.json" (
+  type "%TEMP%\vs-lan-boot.json"
+  echo.
+  powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$j=Get-Content $env:TEMP\vs-lan-boot.json -Raw | ConvertFrom-Json; if($j.api_admin_token){ $t=[string]$j.api_admin_token; $p='ADMIN\config\control-panel.env'; if(-not(Test-Path $p)){ New-Item -ItemType File -Path $p -Force | Out-Null }; $c=@(Get-Content $p -ErrorAction SilentlyContinue); $m=@{}; foreach($l in $c){ if($l -match '^([^=]+)=(.*)$'){ $m[$matches[1]]=$matches[2] } }; $m['VS_SERVER_URL']='%URL%'; $m['VITE_API_URL']='%URL%'; $m['VS_LAN_SERVER_URL']='%URL%'; $m['VS_ADMIN_TRANSPORT']='lan'; $m['API_ADMIN_TOKEN']=$t; $m['VITE_API_ADMIN_TOKEN']=$t; $m.GetEnumerator() | ForEach-Object { $_.Key+'='+$_.Value } | Set-Content $p -Encoding ascii; Write-Host ('Wrote API_ADMIN_TOKEN len=' + $t.Length) } else { Write-Host 'WARN: lan-bootstrap missing token — enable VS_LAN_TRUST_ADMIN on i3' }"
+)
+
+REM seed control-panel.env URL at minimum
 if not exist "ADMIN\config\control-panel.env" (
   echo VS_SERVER_URL=%URL%> ADMIN\config\control-panel.env
   echo VITE_API_URL=%URL%>> ADMIN\config\control-panel.env
   echo VS_LAN_SERVER_URL=%URL%>> ADMIN\config\control-panel.env
   echo VS_ADMIN_TRANSPORT=lan>> ADMIN\config\control-panel.env
-) else (
-  powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$p='ADMIN\config\control-panel.env'; $u='%URL%'; $c=Get-Content $p -ErrorAction SilentlyContinue; if(-not $c){$c=@()}; $m=@{}; foreach($l in $c){ if($l -match '^([^=]+)=(.*)$'){ $m[$matches[1]]=$matches[2] } }; $m['VS_SERVER_URL']=$u; $m['VITE_API_URL']=$u; $m['VS_LAN_SERVER_URL']=$u; $m['VS_ADMIN_TRANSPORT']='lan'; $m.GetEnumerator() | ForEach-Object { $_.Key+'='+$_.Value } | Set-Content $p -Encoding ascii"
 )
 
 REM Skip rediscovery in START_ADMIN — LAN already proved by curl above
