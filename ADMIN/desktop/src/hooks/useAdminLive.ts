@@ -4,6 +4,8 @@ export type LiveState = {
   connected: boolean;
   serverId: string;
   adminName: string;
+  transport: 'LAN' | 'UNKNOWN';
+  heartbeatAgeSec: number | null;
   uptime: string | null;
   health: 'HEALTHY' | 'DEGRADED' | 'FAILED' | 'UNKNOWN';
   clientsRegistered: number;
@@ -50,10 +52,35 @@ export type LiveState = {
   backupHint: string | null;
 };
 
+type RuntimeCfg = {
+  apiBase?: string;
+  adminToken?: string;
+  deviceId?: string;
+  transport?: string;
+  serverId?: string;
+};
+
+declare global {
+  interface Window {
+    VS_ADMIN_RUNTIME?: RuntimeCfg;
+  }
+}
+
+function applyRuntimeBootstrap() {
+  const rt = typeof window !== 'undefined' ? window.VS_ADMIN_RUNTIME : undefined;
+  if (!rt) return;
+  if (rt.apiBase) localStorage.setItem('VS_API_BASE', rt.apiBase.replace(/\/$/, ''));
+  if (rt.adminToken) localStorage.setItem('VS_ADMIN_TOKEN', rt.adminToken);
+  if (rt.deviceId) localStorage.setItem('VS_ADMIN_DEVICE_ID', rt.deviceId);
+  if (rt.transport) localStorage.setItem('VS_ADMIN_TRANSPORT', rt.transport);
+}
+
 const empty: LiveState = {
   connected: false,
   serverId: 'VS-CORE-01',
   adminName: 'VS-ADMIN-01',
+  transport: 'UNKNOWN',
+  heartbeatAgeSec: null,
   uptime: null,
   health: 'UNKNOWN',
   clientsRegistered: 0,
@@ -84,18 +111,32 @@ const empty: LiveState = {
 };
 
 function apiBase(): string {
-  return localStorage.getItem('VS_API_BASE') || 'http://127.0.0.1:3000';
+  applyRuntimeBootstrap();
+  const fromLs = localStorage.getItem('VS_API_BASE');
+  if (fromLs) return fromLs.replace(/\/$/, '');
+  const vite = (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL;
+  if (vite) return vite.replace(/\/$/, '');
+  return 'http://127.0.0.1:3000';
 }
 function token(): string {
-  return localStorage.getItem('VS_ADMIN_TOKEN') || '';
+  applyRuntimeBootstrap();
+  const fromLs = localStorage.getItem('VS_ADMIN_TOKEN');
+  if (fromLs) return fromLs;
+  const vite = (import.meta as { env?: { VITE_API_ADMIN_TOKEN?: string } }).env?.VITE_API_ADMIN_TOKEN;
+  return vite || '';
 }
 function deviceId(): string {
+  applyRuntimeBootstrap();
   let id = localStorage.getItem('VS_ADMIN_DEVICE_ID');
   if (!id) {
     id = 'VS-ADMIN-01';
     localStorage.setItem('VS_ADMIN_DEVICE_ID', id);
   }
   return id;
+}
+function transport(): LiveState['transport'] {
+  const t = localStorage.getItem('VS_ADMIN_TRANSPORT') || window.VS_ADMIN_RUNTIME?.transport || 'LAN';
+  return t === 'LAN' ? 'LAN' : 'UNKNOWN';
 }
 
 async function safeJson(url: string, headers: HeadersInit): Promise<Record<string, unknown> | null> {
@@ -110,10 +151,18 @@ async function safeJson(url: string, headers: HeadersInit): Promise<Record<strin
 
 export function useAdminLive(): LiveState {
   const [state, setState] = useState<LiveState>(empty);
+  const [lastOkAt, setLastOkAt] = useState<number | null>(null);
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => {
     let stop = false;
     let backoff = 1500;
+    applyRuntimeBootstrap();
 
     const headers = (): HeadersInit => {
       const h: Record<string, string> = { 'content-type': 'application/json' };
@@ -146,21 +195,49 @@ export function useAdminLive(): LiveState {
         const res = await fetch(base + '/api/v1/server/monitor', { headers: h });
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const snap = (await res.json()) as Record<string, unknown>;
-        const [presence, supervisor, broker, market] = await Promise.all([
+        const [presence, supervisor, broker, market, position, incidents] = await Promise.all([
           safeJson(base + '/api/v1/presence', h),
           safeJson(base + '/api/v1/system/supervisor', h),
           safeJson(base + '/api/v1/broker/health', h),
           safeJson(base + '/api/v1/market', h),
+          safeJson(base + '/api/v1/position', h),
+          safeJson(base + '/api/v1/incidents', h),
         ]);
         if (stop) return;
         const sys = (snap.system || {}) as Record<string, unknown>;
         const clients = (snap.clients || {}) as Record<string, unknown>;
         const marketSnap = (snap.market || {}) as Record<string, unknown>;
         const m = market || {};
+        const posList = Array.isArray(position?.positions)
+          ? (position!.positions as LiveState['positions'])
+          : Array.isArray(position?.items)
+            ? (position!.items as LiveState['positions'])
+            : [];
+        const openCount =
+          typeof position?.open_count === 'number'
+            ? (position!.open_count as number)
+            : posList.length > 0
+              ? posList.length
+              : null;
+        const pnlToday =
+          typeof position?.pnl_today === 'number'
+            ? (position!.pnl_today as number)
+            : typeof position?.total_pnl_today === 'number'
+              ? (position!.total_pnl_today as number)
+              : null;
+        const incidentList = Array.isArray(incidents?.incidents)
+          ? (incidents!.incidents as LiveState['incidents'])
+          : Array.isArray(incidents?.items)
+            ? (incidents!.items as LiveState['incidents'])
+            : [];
+        const okAt = Date.now();
+        setLastOkAt(okAt);
         setState({
           connected: true,
-          serverId: String(snap.server_id || 'VS-CORE-01'),
+          serverId: String(snap.server_id || window.VS_ADMIN_RUNTIME?.serverId || 'VS-CORE-01'),
           adminName: deviceId(),
+          transport: transport(),
+          heartbeatAgeSec: 0,
           uptime: (snap.uptime_human as string) || null,
           health:
             (snap.api as { status?: string })?.status === 'ONLINE' &&
@@ -171,8 +248,8 @@ export function useAdminLive(): LiveState {
                 : 'FAILED',
           clientsRegistered: Number(clients.total ?? 0),
           clientsOnline: Number(clients.online ?? 0),
-          openPositions: null,
-          totalPnlToday: null,
+          openPositions: openCount,
+          totalPnlToday: pnlToday,
           cpu: (sys.cpu_percent as number) ?? null,
           ram: (sys.ram_percent as number) ?? null,
           disk: (sys.disk_percent as number) ?? null,
@@ -183,7 +260,7 @@ export function useAdminLive(): LiveState {
           marketSpread: typeof m.spread === 'number' ? m.spread : null,
           marketFreshness: (m.freshness as string) || (marketSnap.freshness as string) || null,
           devices: (clients.devices as LiveState['devices']) || [],
-          presenceClients: ((presence?.clients as LiveState['presenceClients']) || []),
+          presenceClients: (presence?.clients as LiveState['presenceClients']) || [],
           lastError: (snap.last_error as string) || null,
           raw: snap,
           supervisor: (supervisor as LiveState['supervisor']) || null,
@@ -191,16 +268,21 @@ export function useAdminLive(): LiveState {
             ? { state: String(broker.state || broker.status || 'UNKNOWN'), detail: String(broker.detail || '') }
             : null,
           accounts: [],
-          positions: [],
+          positions: posList,
           orders: [],
-          incidents: [],
+          incidents: incidentList,
           events: [],
           backupHint: null,
         });
         backoff = 1500;
       } catch {
         if (stop) return;
-        setState((s) => ({ ...s, connected: false, health: 'UNKNOWN' }));
+        setState((s) => ({
+          ...s,
+          connected: false,
+          health: 'UNKNOWN',
+          heartbeatAgeSec: lastOkAt == null ? null : Math.max(0, Math.round((Date.now() - lastOkAt) / 1000)),
+        }));
         backoff = Math.min(backoff * 2, 12000);
       }
     }
@@ -213,7 +295,14 @@ export function useAdminLive(): LiveState {
     return () => {
       stop = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return useMemo(() => state, [state]);
+  return useMemo(() => {
+    const age =
+      state.connected && lastOkAt != null
+        ? Math.max(0, Math.round((now - lastOkAt) / 1000))
+        : state.heartbeatAgeSec;
+    return { ...state, heartbeatAgeSec: age };
+  }, [state, lastOkAt, now]);
 }

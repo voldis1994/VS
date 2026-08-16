@@ -2,20 +2,19 @@
 $ErrorActionPreference = "Continue"
 $PidFile = Join-Path $env:LOCALAPPDATA "VS\admin\control-panel.pid"
 
-Write-Host "VS ADMIN STOP"
+Write-Host "VS ADMIN STOP — killing canonical UI (:5188) and any stale tactical (:5173)"
 
-# Vite / node on 5173
-try {
-  $conns = Get-NetTCPConnection -LocalPort 5173 -ErrorAction SilentlyContinue |
-    Where-Object { $_.State -eq "Listen" }
-  foreach ($c in @($conns)) {
-    if ($c.OwningProcess) {
-      Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue
-      Write-Host ("Stopped PID " + $c.OwningProcess + " (port 5173)")
+foreach ($Port in @(5188, 5173)) {
+  try {
+    $conns = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue |
+      Where-Object { $_.State -eq "Listen" }
+    foreach ($c in @($conns)) {
+      if ($c.OwningProcess) {
+        Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue
+        Write-Host ("Stopped PID " + $c.OwningProcess + " (port " + $Port + ")")
+      }
     }
-  }
-} catch {
-  # Fallback to pid file below
+  } catch { }
 }
 
 if (Test-Path $PidFile) {
