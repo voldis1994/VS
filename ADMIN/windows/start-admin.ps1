@@ -117,11 +117,18 @@ function Get-LocalLanProbeUrls {
   $list = New-Object System.Collections.Generic.List[string]
   try {
     $addrs = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-      Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" -and $_.IPAddress -notlike "10.77.*" }
+      Where-Object {
+        $_.IPAddress -notlike "127.*" -and
+        $_.IPAddress -notlike "169.254.*" -and
+        $_.IPAddress -notlike "10.77.*" -and
+        # Skip Docker / Hyper-V / WSL NAT bridges (172.16-31.x) — not home LAN to i3
+        $_.IPAddress -notmatch '^172\.(1[6-9]|2[0-9]|3[0-1])\.'
+      }
     foreach ($a in @($addrs)) {
       $parts = $a.IPAddress.Split(".")
       if ($parts.Count -eq 4) {
         $prefix = $parts[0] + "." + $parts[1] + "." + $parts[2]
+        # Prefer common router/AP/server hosts only — short list, not a scan of the subnet
         foreach ($hostOct in @(1, 2, 10, 20, 50, 53, 100, 101, 200)) {
           [void]$list.Add("http://${prefix}.${hostOct}:3000")
         }
@@ -133,6 +140,7 @@ function Get-LocalLanProbeUrls {
 
 function Resolve-LanServerUrl {
   $candidates = New-Object System.Collections.Generic.List[string]
+  # 1) Explicit saved / env (highest priority)
   foreach ($k in @("VS_SERVER_URL", "VITE_API_URL", "VS_LAN_SERVER_URL")) {
     $v = Get-CfgValue $Cfg $k
     if ($v -and $v -notmatch '10\.77\.') { [void]$candidates.Add($v.TrimEnd("/")) }
@@ -150,7 +158,7 @@ function Resolve-LanServerUrl {
       }
     }
   }
-  foreach ($c in (Get-LocalLanProbeUrls)) { [void]$candidates.Add($c) }
+  # 2) Known home LAN defaults
   foreach ($c in @(
       "http://192.168.0.10:3000",
       "http://192.168.0.53:3000",
@@ -158,13 +166,25 @@ function Resolve-LanServerUrl {
     )) {
     [void]$candidates.Add($c)
   }
+  # 3) Controlled local subnet probe (no Docker 172.x)
+  foreach ($c in (Get-LocalLanProbeUrls)) { [void]$candidates.Add($c) }
+
   $seen = @{}
+  $n = 0
   foreach ($c in $candidates) {
     if (-not $c) { continue }
     if ($seen.ContainsKey($c)) { continue }
     $seen[$c] = $true
-    Write-Host ("  probe " + $c + " (VS-CORE identity) ...")
-    if (Test-VsCoreIdentity $c) { return $c }
+    $n++
+    if ($n -le 12) {
+      Write-Host ("  probe " + $c + " ...")
+    } elseif ($n -eq 13) {
+      Write-Host "  ... probing remaining LAN candidates silently ..."
+    }
+    if (Test-VsCoreIdentity $c) {
+      Write-Host ("  OK VS-CORE at " + $c)
+      return $c
+    }
   }
   return $null
 }

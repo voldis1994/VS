@@ -11,6 +11,7 @@ import { evaluateReadiness, type ProbeResult } from './readiness.js';
 import { versionBundle, CORE_VERSION, STRATEGY_VERSION } from './versions.js';
 import { getEventBus } from './eventBus.js';
 import { setRobotsTradingEnabled } from '../services/robotDesk.js';
+import { normalizeNetworkSecret } from './network/networkSecrets.js';
 
 export type MobileApiDeps = {
   auth: MobileAuthService;
@@ -204,13 +205,24 @@ export async function registerMobileApiV1(app: FastifyInstance, deps: MobileApiD
   });
 
   app.get('/api/v1/incidents', async (req, reply) => {
+    // MSI ADMIN uses x-admin-token; mobile CLIENT uses Bearer session.
+    // Single owner of this path — never also register in canonicalV1.
+    const want = normalizeNetworkSecret(process.env.API_ADMIN_TOKEN || '');
+    const got = normalizeNetworkSecret(String(req.headers['x-admin-token'] || ''));
+    if (want && want !== 'CHANGE_ME_ADMIN_TOKEN' && got && got === want) {
+      return {
+        ok: true,
+        incidents: incidents.list({ unresolved_only: true }),
+        status: 'AVAILABLE',
+      };
+    }
     const session = await requireSession(req, reply);
     if (!session) return;
     const admin = deps.isAdmin?.(session.client_id) === true;
     const list = admin
       ? incidents.list({ unresolved_only: true })
       : incidents.list({ unresolved_only: true, client_id: session.client_id });
-    return { ok: true, incidents: list };
+    return { ok: true, incidents: list, status: 'AVAILABLE' };
   });
 
   app.get('/api/v1/logs', async (req, reply) => {

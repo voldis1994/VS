@@ -66,7 +66,7 @@ function pushUnique(out: string[], u: string | undefined | null): void {
 function buildLanCandidates(extra?: string[]): string[] {
   const out: string[] = [];
   for (const e of extra || []) {
-    if (!isWireGuardUrl(e)) pushUnique(out, e);
+    if (!isWireGuardUrl(e) && !isDockerNatUrl(e)) pushUnique(out, e);
   }
   pushUnique(out, process.env.VS_LAN_SERVER_URL);
   // VS_SERVER_URL only if it is LAN (ignore stale WG URL during LAN pass)
@@ -75,6 +75,17 @@ function buildLanCandidates(extra?: string[]): string[] {
   }
   for (const c of KNOWN_LAN_CANDIDATES) pushUnique(out, c);
   return out;
+}
+
+/** Docker / Hyper-V / WSL NAT — not the home LAN path to i3. */
+export function isDockerNatUrl(url: string | null | undefined): boolean {
+  if (!url) return false;
+  try {
+    const host = new URL(normalizeBase(url)).hostname;
+    return /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host);
+  } catch {
+    return false;
+  }
 }
 
 function buildWgCandidates(extra?: string[]): string[] {

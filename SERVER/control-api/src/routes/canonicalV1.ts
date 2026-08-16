@@ -6,7 +6,6 @@
 import type { FastifyInstance } from 'fastify';
 import { pool, healthCheck } from '../db/pool.js';
 import { collectHostSystemSnapshot } from '../vs-core/hostTelemetry.js';
-import { getIncidentCenter } from '../vs-core/incidentCenter.js';
 import { getEventBus } from '../vs-core/eventBus.js';
 import { buildAdminSnapshot, type AdminAgentDeps } from '../vs-core/adminAgent.js';
 import { normalizeNetworkSecret } from '../vs-core/network/networkSecrets.js';
@@ -220,11 +219,8 @@ export async function registerCanonicalV1Routes(
     };
   });
 
-  app.get('/api/v1/incidents', async (req, reply) => {
-    if (!authorizeAdmin(req as { headers: Record<string, unknown> }, token)) return deny(reply);
-    const open = getIncidentCenter().list({ unresolved_only: true });
-    return { ok: true, incidents: open, status: 'AVAILABLE' };
-  });
+  // NOTE: GET /api/v1/incidents is owned by mobileApiV1 (client + admin token).
+  // Do NOT re-register here — Fastify FST_ERR_DUPLICATED_ROUTE crashes boot.
 
   app.get('/api/v1/events', async (req, reply) => {
     if (!authorizeAdmin(req as { headers: Record<string, unknown> }, token)) return deny(reply);
