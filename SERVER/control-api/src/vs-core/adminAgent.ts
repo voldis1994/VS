@@ -19,6 +19,11 @@ import {
 import { evaluateSupervisor } from '../../../core/supervisor/src/orchestrator.js';
 import { getKillSwitch, setKillSwitch } from './killSwitch.js';
 import { classifyBrokerConfig } from '../../../core/broker/capital/health.js';
+import {
+  heartbeatPresence,
+  getAdminPresence,
+  listPresence,
+} from './presenceRegistry.js';
 import { hostname } from 'os';
 import { normalizeNetworkSecret } from './network/networkSecrets.js';
 
@@ -312,5 +317,93 @@ export async function registerAdminAgentRoutes(
       return reply.code(401).send({ ok: false, code: 'UNAUTHORIZED' });
     }
     return { ok: true, ...classifyBrokerConfig() };
+  });
+
+  /** ADMIN / CLIENT presence heartbeat — drives i3 CONNECTED/DISCONNECTED. */
+  app.post('/api/v1/presence/heartbeat', async (req, reply) => {
+    if (!authorizeAdmin(req as { headers: Record<string, unknown> }, token)) {
+      return reply.code(401).send({ ok: false, code: 'UNAUTHORIZED' });
+    }
+    const body = (req.body || {}) as {
+      device_id?: string;
+      display_name?: string;
+      role?: 'ADMIN' | 'CLIENT' | 'MONITOR';
+      transport?: 'LAN' | 'WIREGUARD' | 'NONE' | 'UNKNOWN';
+      source_ip?: string;
+      vpn_ip?: string;
+      app_version?: string;
+      session_id?: string;
+      wg_connected?: boolean;
+    };
+    if (!body.device_id || !body.role) {
+      return reply.code(400).send({ ok: false, code: 'INVALID_BODY' });
+    }
+    const rec = heartbeatPresence({
+      device_id: body.device_id,
+      display_name: body.display_name,
+      role: body.role,
+      transport: body.transport,
+      source_ip: body.source_ip ?? null,
+      vpn_ip: body.vpn_ip ?? null,
+      app_version: body.app_version ?? null,
+      session_id: body.session_id ?? null,
+      wg_connected: body.wg_connected ?? null,
+    });
+    return { ok: true, presence: rec };
+  });
+
+  app.get('/api/v1/presence', async (req, reply) => {
+    if (!authorizeAdmin(req as { headers: Record<string, unknown> }, token)) {
+      return reply.code(401).send({ ok: false, code: 'UNAUTHORIZED' });
+    }
+    return {
+      ok: true,
+      admin: getAdminPresence(),
+      admins: listPresence('ADMIN'),
+      clients: listPresence('CLIENT'),
+      monitors: listPresence('MONITOR'),
+    };
+  });
+
+  /** SSE event stream for server panel / admin live updates. */
+  app.get('/api/v1/events/stream', async (req, reply) => {
+    if (!authorizeAdmin(req as { headers: Record<string, unknown> }, token)) {
+      return reply.code(401).send({ ok: false, code: 'UNAUTHORIZED' });
+    }
+    reply.hijack();
+    const res = reply.raw;
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    const send = async () => {
+      try {
+        const snap = await buildServerMonitorSnapshot({
+          getProbes: deps.getProbes,
+          apiSelfOnline: true,
+        });
+        const admin = getAdminPresence();
+        const payload = JSON.stringify({
+          type: 'snapshot',
+          at: new Date().toISOString(),
+          monitor: snap,
+          presence: {
+            admin,
+            clients: listPresence('CLIENT'),
+          },
+        });
+        res.write(`event: snapshot\ndata: ${payload}\n\n`);
+      } catch (e) {
+        res.write(
+          `event: error\ndata: ${JSON.stringify({ message: e instanceof Error ? e.message : 'error' })}\n\n`
+        );
+      }
+    };
+    await send();
+    const timer = setInterval(send, 2000);
+    req.raw.on('close', () => {
+      clearInterval(timer);
+    });
   });
 }

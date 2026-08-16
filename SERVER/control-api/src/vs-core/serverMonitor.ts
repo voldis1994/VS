@@ -14,6 +14,7 @@ import { healthCheck } from '../db/pool.js';
 import { CORE_VERSION, versionBundle } from './versions.js';
 import { hostname } from 'os';
 import { join } from 'path';
+import { getAdminPresence, listPresence } from './presenceRegistry.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -78,7 +79,21 @@ export type ServerMonitorSnapshot = {
     transport: 'LAN' | 'WIREGUARD' | 'NONE' | 'UNKNOWN';
     last_seen: string | null;
     last_seen_human: string | null;
+    heartbeat_age_ms?: number | null;
+    source_ip?: string | null;
+    connected_since?: string | null;
   };
+
+  /** Live presence heartbeats (CLIENT role) — independent of DB enrollment */
+  presence_clients?: Array<{
+    device_id: string;
+    display_name: string;
+    status: string;
+    app_connected: boolean;
+    wg_connected: boolean | null;
+    last_heartbeat: string | null;
+    heartbeat_age_ms: number | null;
+  }>;
 
   clients: {
     total: number;
@@ -717,15 +732,41 @@ export async function buildServerMonitorSnapshot(
       wireguard: { state: wgCell.status, detail: wgCell.detail },
       network: { state: netCell.status, detail: netCell.detail },
     },
-    admin: {
-      status: adminConnected ? 'ONLINE' : adminDeviceId ? 'OFFLINE' : 'UNKNOWN',
-      connected: adminConnected,
-      device_id: adminDeviceId,
-      device_name: adminDeviceName,
-      transport: adminDeviceId ? adminTransport : 'NONE',
-      last_seen: adminLastSeen,
-      last_seen_human: ago(adminLastSeen),
-    },
+    admin: (() => {
+      const presence = getAdminPresence();
+      if (presence) {
+        return {
+          status:
+            presence.status === 'ONLINE'
+              ? ('ONLINE' as const)
+              : presence.status === 'DEGRADED'
+                ? ('WARNING' as const)
+                : ('OFFLINE' as const),
+          connected: presence.app_connected,
+          device_id: presence.device_id,
+          device_name: presence.display_name,
+          transport: presence.transport,
+          last_seen: presence.last_heartbeat,
+          last_seen_human: ago(presence.last_heartbeat),
+          heartbeat_age_ms: presence.heartbeat_age_ms,
+          source_ip: presence.source_ip,
+          connected_since: presence.connected_at,
+        };
+      }
+      return {
+        status: adminConnected ? ('ONLINE' as const) : adminDeviceId ? ('OFFLINE' as const) : ('UNKNOWN' as const),
+        connected: adminConnected,
+        device_id: adminDeviceId,
+        device_name: adminDeviceName,
+        transport: adminDeviceId ? adminTransport : ('NONE' as const),
+        last_seen: adminLastSeen,
+        last_seen_human: ago(adminLastSeen),
+        heartbeat_age_ms: null as number | null,
+        source_ip: null as string | null,
+        connected_since: null as string | null,
+      };
+    })(),
+    presence_clients: listPresence('CLIENT'),
     clients: {
       total: clientsTotal,
       online: clientsOnline,

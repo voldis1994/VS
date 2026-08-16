@@ -70,3 +70,8 @@ apps/dashboard/.env.local
 apps/dashboard/.env.*.local
 TESTS/node_modules/
 SERVER/client-api/node_modules/
+
+ADMIN/apps/dashboard-v2/node_modules/
+CLIENT/apps/client-v2/node_modules/
+ADMIN/apps/dashboard-v2/dist/
+CLIENT/apps/client-v2/dist/

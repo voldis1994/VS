@@ -42,7 +42,7 @@ if ($major -lt 20) {
 }
 Write-Step "Node.js v$verRaw OK"
 
-# --- npm deps: ADMIN + dashboard ---
+# --- npm deps: ADMIN + dashboard-v2 ---
 Write-Step "Installing ADMIN npm dependencies..."
 npm install
 if ($LASTEXITCODE -ne 0) {
@@ -50,14 +50,19 @@ if ($LASTEXITCODE -ne 0) {
   exit 1
 }
 
-$Dash = Join-Path $RepoRoot "apps\dashboard"
-$DashPkg = Join-Path $Dash "package.json"
-if (-not (Test-Path $DashPkg)) {
-  Write-Host "FAIL: apps/dashboard missing - Control Panel UI required"
+$DashV2 = Join-Path $AdminRoot "apps\dashboard-v2"
+$DashLegacy = Join-Path $RepoRoot "apps\dashboard"
+if (Test-Path (Join-Path $DashV2 "package.json")) {
+  $Dash = $DashV2
+  Write-Step "Installing Control Panel v2 (ADMIN/apps/dashboard-v2)..."
+} elseif (Test-Path (Join-Path $DashLegacy "package.json")) {
+  $Dash = $DashLegacy
+  Write-Step "Installing legacy Control Panel (apps/dashboard)..."
+} else {
+  Write-Host "FAIL: dashboard-v2 missing - Control Panel UI required"
   exit 1
 }
 
-Write-Step "Installing Control Panel (apps/dashboard) dependencies..."
 Push-Location $Dash
 $dashOk = $true
 try {

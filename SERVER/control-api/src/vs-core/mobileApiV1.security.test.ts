@@ -32,6 +32,9 @@ export const API_V1_INVENTORY = [
   { method: 'GET', path: '/api/v1/system/kill-switch', auth: 'x-admin-token', isolation: 'admin-only', notes: 'kill switch state' },
   { method: 'POST', path: '/api/v1/system/kill-switch', auth: 'x-admin-token', isolation: 'admin-only', notes: 'kill switch set' },
   { method: 'GET', path: '/api/v1/broker/health', auth: 'x-admin-token', isolation: 'admin-only', notes: 'broker CONFIG_REQUIRED/health' },
+  { method: 'POST', path: '/api/v1/presence/heartbeat', auth: 'x-admin-token', isolation: 'admin-only', notes: 'admin/client presence heartbeat' },
+  { method: 'GET', path: '/api/v1/presence', auth: 'x-admin-token', isolation: 'admin-only', notes: 'presence list' },
+  { method: 'GET', path: '/api/v1/events/stream', auth: 'x-admin-token', isolation: 'admin-only', notes: 'SSE monitor stream' },
 ] as const;
 
 async function buildApp() {
