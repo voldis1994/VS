@@ -94,6 +94,9 @@ if ! grep -q 'buildMarketStateVector' "$PREFIX/core/market-intelligence/src/mark
   echo "FAIL: core/market-intelligence not synced (buildMarketStateVector missing)" >&2
   exit 1
 fi
+chmod +x "$PREFIX/deploy/validate-mi-contract.sh" 2>/dev/null || true
+echo "==> validate market-intelligence ESM contract"
+bash "$PREFIX/deploy/validate-mi-contract.sh"
 
 # --- 3) Force LAN bind in every env file ---
 echo "==> force CONTROL_API_HOST=0.0.0.0"

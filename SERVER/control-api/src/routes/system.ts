@@ -16,7 +16,10 @@ export async function registerSystemRoutes(
   app: FastifyInstance,
   telemetry: TelemetryBroadcaster
 ): Promise<void> {
-  app.get('/health', async () => ({ status: 'ok', ...runtimeBuildInfo() }));
+  app.get('/health', async () => ({
+    status: 'ok',
+    ...runtimeBuildInfo(),
+  }));
 
   app.get('/api/system/health', async () => {
     return buildSystemHealth({ primaryConnectionId: getPrimaryRobotConnectionId() });

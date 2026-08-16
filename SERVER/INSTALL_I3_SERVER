@@ -334,6 +334,19 @@ if ! sudo -u "$RUN_USER" bash -lc "cd '$API' && ./node_modules/.bin/tsx --versio
 fi
 echo "SUCCESS: local tsx runtime OK ($API/node_modules/.bin/tsx)"
 
+echo "==> validate market-intelligence contract before client build / systemd"
+chmod +x "$PREFIX/deploy/validate-mi-contract.sh" 2>/dev/null || true
+bash "$PREFIX/deploy/validate-mi-contract.sh"
+
+# Record build identity for /health
+BUILD_SHA="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+force_kv "$SERVER_ENV" BUILD_SHA "$BUILD_SHA"
+force_kv "$SERVER_ENV" BUILD_TIME "$BUILD_TIME"
+force_kv "$SERVER_ENV" VS_SERVER_ID VS-CORE-01
+force_kv "$API/.env" BUILD_SHA "$BUILD_SHA"
+force_kv "$API/.env" BUILD_TIME "$BUILD_TIME"
+
 # Client web portal (login / market / lot / robot) — served at http://SERVER:3000/
 CLIENT_SRC="$REPO/CLIENT/desktop"
 CLIENT_DIST="$PREFIX/client-panel"

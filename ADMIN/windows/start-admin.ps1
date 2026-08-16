@@ -98,6 +98,39 @@ Get-Content $Cfg | ForEach-Object {
   Set-Item -Path ("Env:" + $k) -Value $v
 }
 
+function Test-VsCoreIdentity([string]$Url) {
+  if (-not $Url) { return $false }
+  $u = $Url.TrimEnd("/")
+  try {
+    $r = Invoke-WebRequest -Uri ($u + "/health") -UseBasicParsing -TimeoutSec 4
+    if ($r.StatusCode -lt 200 -or $r.StatusCode -ge 300) { return $false }
+    $j = $r.Content | ConvertFrom-Json
+    if ($j.service -ne "VS-CORE") { return $false }
+    if (-not $j.server_id) { return $false }
+    return $true
+  } catch {
+    return $false
+  }
+}
+
+function Get-LocalLanProbeUrls {
+  $list = New-Object System.Collections.Generic.List[string]
+  try {
+    $addrs = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+      Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" -and $_.IPAddress -notlike "10.77.*" }
+    foreach ($a in @($addrs)) {
+      $parts = $a.IPAddress.Split(".")
+      if ($parts.Count -eq 4) {
+        $prefix = $parts[0] + "." + $parts[1] + "." + $parts[2]
+        foreach ($hostOct in @(1, 2, 10, 20, 50, 53, 100, 101, 200)) {
+          [void]$list.Add("http://${prefix}.${hostOct}:3000")
+        }
+      }
+    }
+  } catch { }
+  return $list
+}
+
 function Resolve-LanServerUrl {
   $candidates = New-Object System.Collections.Generic.List[string]
   foreach ($k in @("VS_SERVER_URL", "VITE_API_URL", "VS_LAN_SERVER_URL")) {
@@ -107,6 +140,17 @@ function Resolve-LanServerUrl {
   if ($env:VS_SERVER_URL -and $env:VS_SERVER_URL -notmatch '10\.77\.') {
     [void]$candidates.Add($env:VS_SERVER_URL.TrimEnd("/"))
   }
+  $ipFile = Join-Path $AdminRoot "config\SERVER_IP.txt"
+  if (Test-Path $ipFile) {
+    $manualIp = (Get-Content -LiteralPath $ipFile -TotalCount 1 -ErrorAction SilentlyContinue)
+    if ($manualIp) {
+      $manualIp = $manualIp.Trim()
+      if ($manualIp -match '^\d+\.\d+\.\d+\.\d+$') {
+        [void]$candidates.Add("http://${manualIp}:3000")
+      }
+    }
+  }
+  foreach ($c in (Get-LocalLanProbeUrls)) { [void]$candidates.Add($c) }
   foreach ($c in @(
       "http://192.168.0.10:3000",
       "http://192.168.0.53:3000",
@@ -119,8 +163,8 @@ function Resolve-LanServerUrl {
     if (-not $c) { continue }
     if ($seen.ContainsKey($c)) { continue }
     $seen[$c] = $true
-    Write-Host ("  probe " + $c + " ...")
-    if (Test-VsHealth $c) { return $c }
+    Write-Host ("  probe " + $c + " (VS-CORE identity) ...")
+    if (Test-VsCoreIdentity $c) { return $c }
   }
   return $null
 }
@@ -154,13 +198,13 @@ if (-not $serverUrl) {
     if ($manualIp -match '^\d+\.\d+\.\d+\.\d+$') {
       $manualUrl = "http://${manualIp}:3000"
       Write-Host ("Trying SERVER_IP.txt -> " + $manualUrl)
-      if (Test-VsHealth $manualUrl) {
+      if (Test-VsCoreIdentity $manualUrl) {
         $serverUrl = $manualUrl
       }
     }
   }
   if (-not $serverUrl -and $env:VS_SERVER_URL) {
-    if (Test-VsHealth $env:VS_SERVER_URL) { $serverUrl = $env:VS_SERVER_URL.TrimEnd("/") }
+    if (Test-VsCoreIdentity $env:VS_SERVER_URL) { $serverUrl = $env:VS_SERVER_URL.TrimEnd("/") }
   }
   if (-not $serverUrl) { exit 1 }
 }

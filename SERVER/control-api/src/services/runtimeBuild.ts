@@ -45,15 +45,22 @@ function packageVersion(): string {
 /** Visible proof that VS.bat actually booted this code — not a stale process. */
 export function runtimeBuildInfo() {
   const git = gitShortSha();
+  const serverId = String(process.env.VS_SERVER_ID || 'VS-CORE-01').trim() || 'VS-CORE-01';
   return {
+    // Identity — MSI discovery must validate these (non-secret)
+    service: 'VS-CORE' as const,
+    server_id: serverId,
+    api_version: 'v1',
     VERSION: packageVersion(),
     GIT_COMMIT: git,
     BUILD_TIME: buildTimeIso(),
     STRATEGY_VERSION,
     version: packageVersion(),
     git_sha: git,
+    build_commit: git,
     build_time: buildTimeIso(),
     strategy_version: STRATEGY_VERSION,
+    status: 'ok',
     sl: '0.20%-of-price',
     trend_minutes: TREND_LOOKBACK_MINUTES,
     entry_brain: 'node-robot-desk',

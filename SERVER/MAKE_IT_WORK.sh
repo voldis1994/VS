@@ -59,16 +59,19 @@ cp -a "$HERE/MONITOR_SERVER" "$PREFIX/MONITOR_SERVER"
 install -m 0755 "$HERE/deploy/vs-monitor" /usr/local/bin/vs-monitor
 
 # Prove market-intelligence export exists on disk before boot
-if ! grep -q 'buildMarketStateVector' "$PREFIX/core/market-intelligence/src/marketState.ts" 2>/dev/null; then
+if ! grep -q 'buildMarketStateVector' "$PREFIX/core/market-intelligence/src/index.ts" 2>/dev/null; then
   echo "FAIL: $PREFIX/core/market-intelligence missing buildMarketStateVector after sync" >&2
   ls -la "$PREFIX/core/market-intelligence/src/" >&2 || true
   exit 1
 fi
-if ! grep -q "marketState" "$PREFIX/core/market-intelligence/src/index.ts" 2>/dev/null; then
-  echo "FAIL: market-intelligence index does not re-export marketState" >&2
+if ! grep -q "export { buildMarketStateVector }" "$PREFIX/core/market-intelligence/src/index.ts" 2>/dev/null; then
+  echo "FAIL: index must explicitly export { buildMarketStateVector } (export * is broken under tsx)" >&2
   cat "$PREFIX/core/market-intelligence/src/index.ts" >&2 || true
   exit 1
 fi
+chmod +x "$PREFIX/deploy/validate-mi-contract.sh" 2>/dev/null || true
+echo "==> validate market-intelligence ESM contract (runtime import)"
+bash "$PREFIX/deploy/validate-mi-contract.sh"
 
 # --- ONE password, write to EVERY env file BEFORE creating DB ---
 DB_USER=market_reader

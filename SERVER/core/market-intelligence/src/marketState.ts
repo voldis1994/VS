@@ -3,7 +3,7 @@
  * Label is UI-only interpretation derived from scores.
  */
 
-import { atr, slope, sma, swingHighs, swingLows, trendStrength } from '../../indicators/src/index.ts';
+import { atr, slope, sma, swingHighs, swingLows, trendStrength } from '../../indicators/src/index.js';
 import type { Candle10s, MarketStateVector } from './types.js';
 import { candlesAvailableAt } from './ohlc10s.js';
 
