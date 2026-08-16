@@ -1,0 +1,13 @@
+MSI — VIENA KOMANDA
+===================
+
+1) ADMIN\config\SERVER_IP.txt  — viena rinda, i3 IP, piemēram:
+   192.168.0.53
+
+2) Palaid:
+   cd C:\VS-main
+   git pull
+   START_MSI.bat
+
+3) ADMIN → CLIENTS → CREATE WEB LOGIN
+   Klients atver http://<i3-IP>:3000/

@@ -1,0 +1,13 @@
+I3 — VIENA KOMANDA
+==================
+
+cd ~/VS-new/VS
+git pull origin main
+sudo bash START_I3
+
+Pēc SUCCESS:
+  curl http://127.0.0.1:3000/health
+  hostname -I
+  vs-monitor
+
+MSI IP = pirmais no hostname -I

@@ -1,39 +1,21 @@
 # VS — i3 SERVER · MSI ADMIN · CLIENT
 
-One system. One source of truth: **i3 VS-CORE-01**.
+## VIENA KOMANDA
 
-## What runs where
-
-| Machine | Role | Canonical path |
-|---|---|---|
-| **i3 Debian 13** | Complete server | `SERVER/` Control API :3000, DB, engines, `vs-monitor` |
-| **MSI Windows** | ADMIN control panel only | `ADMIN/desktop` → `http://127.0.0.1:5188/` |
-| **Remote CLIENT** | Web portal | WireGuard → `http://10.77.0.1:3000/` |
-
-## Install
-
-### i3 (one command)
-
+**i3:**
 ```bash
-cd ~/VS-new/VS
-git pull origin main
-sudo bash SERVER/START_I3.sh
+cd ~/VS-new/VS && git pull origin main && sudo bash START_I3
 ```
 
-### MSI (one command)
-
+**MSI:** (iepriekš `ADMIN\config\SERVER_IP.txt` = i3 IP)
 ```bat
 git pull
-ADMIN\START_EVERYTHING.bat
+START_MSI.bat
 ```
 
-If LAN IP wrong, put i3 IP in `ADMIN\config\SERVER_IP.txt` then re-run.
+**Klients:** ADMIN → CLIENTS → CREATE WEB LOGIN → `http://<i3-IP>:3000/`
 
-### CLIENT
-
-ADMIN → CLIENTS → CREATE WEB LOGIN → open printed URL → market + lot + START/STOP.
-
-See `DOCS/ONE_SHOT_START.md`.
+Skatīt arī `I3.txt` un `MSI.txt` repo saknē.
 
 ## Status
 
