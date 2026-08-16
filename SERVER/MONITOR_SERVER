@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # MONITOR_SERVER — local read-only physical status display for i3 console.
 # Closing this does NOT stop vs-server, Postgres, Redis, or WireGuard.
+#
+# Prefer:
+#   sudo bash SERVER/SHOW_LIVE_MONITOR.sh
+# (server.env is root-only; sudo is required to read API_ADMIN_TOKEN)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -10,18 +14,34 @@ if [[ ! -d "$API" && -d "$ROOT/control-api" ]]; then
   API="$ROOT/control-api"
 fi
 
-if [[ -f "$DATA/server.env" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$DATA/server.env"
-  set +a
-fi
-if [[ -f "$API/.env" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$API/.env"
-  set +a
-fi
+load_env_file() {
+  local f="$1"
+  [[ -f "$f" ]] || return 0
+  if [[ -r "$f" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$f"
+    set +a
+    return 0
+  fi
+  # server.env is usually 600 root:vs-server — load via sudo without printing secrets
+  if command -v sudo >/dev/null 2>&1 && sudo -n test -r "$f" 2>/dev/null; then
+    set -a
+    # shellcheck disable=SC1090
+    source <(sudo -n cat "$f")
+    set +a
+    return 0
+  fi
+  if [[ "$(id -u)" -ne 0 ]] && command -v sudo >/dev/null 2>&1; then
+    echo "INFO: $f is not readable by $(id -un) — re-running monitor with sudo..." >&2
+    exec sudo --preserve-env=VS_MONITOR_REFRESH_MS,VS_MONITOR_API_URL,CONTROL_API_PORT \
+      bash "$ROOT/MONITOR_SERVER"
+  fi
+  echo "WARN: cannot read $f — monitor may show OFFLINE without API_ADMIN_TOKEN" >&2
+}
+
+load_env_file "$DATA/server.env"
+load_env_file "$API/.env"
 
 export VS_SERVER_DATA="${VS_SERVER_DATA:-$DATA}"
 export VS_CORE_DATA="${VS_CORE_DATA:-$DATA}"
@@ -31,8 +51,13 @@ export VS_MONITOR_API_URL="${VS_MONITOR_API_URL:-http://127.0.0.1:${CONTROL_API_
 export VS_MONITOR_REFRESH_MS="${VS_MONITOR_REFRESH_MS:-800}"
 
 if [[ ! -f "$API/package.json" ]]; then
-  echo "FAIL: control-api missing at $API" >&2
-  exit 1
+  # Installed tree under /opt/vs-server
+  if [[ -f /opt/vs-server/control-api/package.json ]]; then
+    API=/opt/vs-server/control-api
+  else
+    echo "FAIL: control-api missing at $API" >&2
+    exit 1
+  fi
 fi
 cd "$API"
 if [[ ! -x node_modules/.bin/tsx ]]; then
