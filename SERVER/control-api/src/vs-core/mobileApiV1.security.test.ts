@@ -28,6 +28,8 @@ export const API_V1_INVENTORY = [
   { method: 'GET', path: '/api/v1/admin/tui', auth: 'x-admin-token', isolation: 'admin-only', notes: 'admin tui text' },
   { method: 'GET', path: '/api/v1/server/monitor', auth: 'x-admin-token', isolation: 'admin-only', notes: 'unified server monitor' },
   { method: 'GET', path: '/api/v1/server/monitor/text', auth: 'x-admin-token', isolation: 'admin-only', notes: 'monitor plaintext frame' },
+  { method: 'GET', path: '/api/v1/server/monitor/console', auth: 'localhost-only', isolation: 'loopback', notes: 'i3 console JSON no secrets' },
+  { method: 'GET', path: '/api/v1/server/monitor/console/text', auth: 'localhost-only', isolation: 'loopback', notes: 'i3 console text no secrets' },
   { method: 'GET', path: '/api/v1/system/supervisor', auth: 'x-admin-token', isolation: 'admin-only', notes: 'process vs trading readiness' },
   { method: 'GET', path: '/api/v1/system/kill-switch', auth: 'x-admin-token', isolation: 'admin-only', notes: 'kill switch state' },
   { method: 'POST', path: '/api/v1/system/kill-switch', auth: 'x-admin-token', isolation: 'admin-only', notes: 'kill switch set' },

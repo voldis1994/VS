@@ -111,6 +111,12 @@ export type ServerMonitorSnapshot = {
   };
 
   market: { status: string; state: 'OPEN' | 'CLOSED' | 'UNKNOWN'; detail: string };
+  feeds?: {
+    capital: { status: string; detail: string };
+    yahoo: { status: string; detail: string };
+    ecb: { status: string; detail: string };
+    metals: { status: string; detail: string };
+  };
   trading: {
     enabled: boolean;
     readiness: string;
@@ -520,6 +526,12 @@ export function offlineServerMonitorSnapshot(reason: string): ServerMonitorSnaps
     },
     clients: { total: 0, online: 0, offline: 0, devices: [] },
     market: { status: 'UNKNOWN', state: 'UNKNOWN', detail: 'API unavailable' },
+    feeds: {
+      capital: { status: 'UNKNOWN', detail: 'API unavailable' },
+      yahoo: { status: 'UNKNOWN', detail: 'NO_DATA' },
+      ecb: { status: 'UNKNOWN', detail: 'NO_DATA' },
+      metals: { status: 'UNKNOWN', detail: 'NO_DATA' },
+    },
     trading: {
       enabled: process.env.LIVE_TRADING_ENABLED === 'true',
       readiness: 'UNKNOWN',
@@ -648,6 +660,10 @@ export async function buildServerMonitorSnapshot(
   const risk = probeNamed(probes, 'RISK');
   const execution = probeNamed(probes, 'EXECUTION');
   const reconciliation = probeNamed(probes, 'RECONCILIATION');
+  const capital = probeNamed(probes, 'CAPITAL');
+  const yahoo = probeNamed(probes, 'YAHOO');
+  const ecb = probeNamed(probes, 'ECB');
+  const metals = probeNamed(probes, 'METALS');
 
   const redisState: MonitorState = redis.ok
     ? 'ONLINE'
@@ -778,6 +794,12 @@ export async function buildServerMonitorSnapshot(
       state: market.state,
       detail: market.detail,
     },
+    feeds: {
+      capital,
+      yahoo: yahoo.status === 'UNKNOWN' ? { status: 'UNKNOWN', detail: 'NO_DATA' } : yahoo,
+      ecb: ecb.status === 'UNKNOWN' ? { status: 'UNKNOWN', detail: 'NO_DATA' } : ecb,
+      metals: metals.status === 'UNKNOWN' ? { status: 'UNKNOWN', detail: 'NO_DATA' } : metals,
+    },
     trading: {
       enabled: liveEnabled,
       readiness: readiness.state || 'UNKNOWN',
@@ -827,73 +849,37 @@ export function renderServerMonitorFrame(s: ServerMonitorSnapshot): string {
     return extra ? `${left} ${extra}` : left;
   };
   const lines: string[] = [];
+  const overall =
+    s.api.status === 'ONLINE' && s.database.status === 'ONLINE'
+      ? 'ONLINE'
+      : s.api.status === 'ONLINE'
+        ? 'DEGRADED'
+        : 'OFFLINE';
+  const adminLabel = s.admin.connected
+    ? 'CONNECTED'
+    : s.admin.device_id
+      ? 'DISCONNECTED'
+      : 'DISCONNECTED';
+  const presenceOnline = (s.presence_clients || []).filter((c) => c.app_connected).length;
+  const clientsConnected = Math.max(s.clients.online, presenceOnline);
+
   lines.push(`╔${bar('═')}╗`);
   lines.push(`║${'VS CORE SERVER'.padStart(37).padEnd(W)}║`);
-  lines.push(`║${s.server_id.padStart(Math.floor((W + s.server_id.length) / 2)).padEnd(W)}║`);
+  lines.push(`║${'CORE SERVER — MAIN BRAIN'.padStart(42).padEnd(W)}║`);
   lines.push(`╠${bar('═')}╣`);
-  lines.push(`║  CORE SERVICES${' '.repeat(W - 16)}║`);
-  lines.push(`║${' '.repeat(W)}║`);
-  const coreRows = [
-    row('SERVER PROCESS', s.server_process.status, s.server_process.detail.slice(0, 18)),
-    row('CONTROL API', s.api.status, `:${s.api.port}`),
-    row('POSTGRES', s.database.status),
-    row('REDIS', s.redis.status),
-    row(
-      'WIREGUARD',
-      s.wireguard.status,
-      `UDP :${s.wireguard.listen_port}`
-    ),
-    row('NETWORK', s.network.status, s.network.lan_ip || ''),
-  ];
-  for (const r of coreRows) lines.push(`║${pad(r, W)}║`);
+  lines.push(`║${pad(`  SERVER ID: ${s.server_id}`, W)}║`);
+  lines.push(`║${pad(`  UPTIME:    ${s.uptime_human}`, W)}║`);
+  lines.push(`║${pad(`  UTC TIME:  ${s.timestamp}`, W)}║`);
+  lines.push(`║${pad(`  STATUS:    ${overall}`, W)}║`);
+
   lines.push(`╠${bar('═')}╣`);
-  lines.push(`║  ADMIN${' '.repeat(W - 8)}║`);
-  lines.push(`║${' '.repeat(W)}║`);
+  lines.push(`║  [ SYSTEM ]${' '.repeat(W - 12)}║`);
   lines.push(
     `║${pad(
-      row(
-        'MSI CONTROL PANEL',
-        s.admin.connected ? 'CONNECTED' : s.admin.device_id ? 'DISCONNECTED' : 'UNKNOWN'
-      ),
+      `  OS                   ${process.platform || 'UNKNOWN'}`,
       W
     )}║`
   );
-  lines.push(`║${pad(`  TRANSPORT            ${s.admin.transport}`, W)}║`);
-  lines.push(
-    `║${pad(`  DEVICE               ${s.admin.device_name || s.admin.device_id || '-'}`, W)}║`
-  );
-  lines.push(
-    `║${pad(`  LAST SEEN            ${s.admin.last_seen_human || s.admin.last_seen || '-'}`, W)}║`
-  );
-  lines.push(`╠${bar('═')}╣`);
-  lines.push(`║  CLIENTS${' '.repeat(W - 10)}║`);
-  lines.push(`║${' '.repeat(W)}║`);
-  lines.push(`║${pad(`  TOTAL                ${s.clients.total}`, W)}║`);
-  lines.push(`║${pad(`  ONLINE               ${s.clients.online}`, W)}║`);
-  lines.push(`║${pad(`  OFFLINE              ${s.clients.offline}`, W)}║`);
-  for (const d of s.clients.devices.slice(0, 6)) {
-    const st =
-      d.connection_state === 'CONNECTED' || d.connection_state === 'ONLINE'
-        ? 'ONLINE'
-        : 'OFFLINE';
-    lines.push(
-      `║${pad(`  ${pad(d.device_id, 18)} ${dot(st)} ${pad(st, 8)} ${d.transport}`, W)}║`
-    );
-  }
-  lines.push(`╠${bar('═')}╣`);
-  lines.push(`║  TRADING${' '.repeat(W - 10)}║`);
-  lines.push(`║${' '.repeat(W)}║`);
-  lines.push(`║${pad(`  MARKET               ${s.market.state}`, W)}║`);
-  lines.push(
-    `║${pad(`  LIVE TRADING         ${s.trading.enabled ? 'ENABLED' : 'DISABLED'}`, W)}║`
-  );
-  lines.push(`║${pad(`  STRATEGY             ${s.strategy.status}`, W)}║`);
-  lines.push(`║${pad(`  RISK                 ${s.risk.status}`, W)}║`);
-  lines.push(`║${pad(`  EXECUTION            ${s.execution.status}`, W)}║`);
-  lines.push(`║${pad(`  RECONCILIATION       ${s.reconciliation.status}`, W)}║`);
-  lines.push(`╠${bar('═')}╣`);
-  lines.push(`║  SYSTEM${' '.repeat(W - 9)}║`);
-  lines.push(`║${' '.repeat(W)}║`);
   lines.push(
     `║${pad(
       `  CPU                  ${s.system.cpu_percent != null ? `${s.system.cpu_percent}%` : 'UNKNOWN'}`,
@@ -908,16 +894,120 @@ export function renderServerMonitorFrame(s: ServerMonitorSnapshot): string {
   );
   lines.push(
     `║${pad(
-      `  DISK                 ${s.system.disk_percent != null ? `${s.system.disk_percent}%` : 'UNKNOWN'}`,
+      `  SSD                  ${s.system.disk_percent != null ? `${s.system.disk_percent}%` : 'UNKNOWN'}`,
       W
     )}║`
   );
-  lines.push(`║${pad(`  UPTIME               ${s.uptime_human}`, W)}║`);
-  lines.push(`║${pad(`  SERVER VERSION       ${s.server_version}`, W)}║`);
+  lines.push(
+    `║${pad(
+      row('NETWORK', s.network.status, s.network.lan_ip || ''),
+      W
+    )}║`
+  );
+  lines.push(`║${pad(`  TIME SYNC            ${s.services.network.state === 'ONLINE' ? 'OK' : 'UNKNOWN'}`, W)}║`);
+
   lines.push(`╠${bar('═')}╣`);
-  lines.push(`║  LAST ERROR${' '.repeat(W - 13)}║`);
-  lines.push(`║${' '.repeat(W)}║`);
-  lines.push(`║${pad(`  ${s.last_error || 'NONE'}`, W)}║`);
+  lines.push(`║  [ CORE SERVICES ]${' '.repeat(W - 19)}║`);
+  for (const r of [
+    row('SUPERVISOR', s.server_process.status, s.server_process.detail.slice(0, 16)),
+    row('DATABASE', s.database.status),
+    row('REDIS', s.redis.status),
+    row('MARKET CORE', s.market.status || s.market.state),
+    row('STRATEGY CORE', s.strategy.status),
+    row('RISK CORE', s.risk.status),
+    row('EXECUTION CORE', s.execution.status),
+    row('RECONCILIATION', s.reconciliation.status),
+    row('CONTROL API', s.api.status, `:${s.api.port}`),
+  ]) {
+    lines.push(`║${pad(r, W)}║`);
+  }
+
+  lines.push(`╠${bar('═')}╣`);
+  lines.push(`║  [ MARKET FEEDS ]${' '.repeat(W - 18)}║`);
+  // Honest statuses from probes — never invent LIVE
+  const feedStatus = (st: string) => {
+    const u = String(st || 'UNKNOWN').toUpperCase();
+    if (u === 'OK' || u === 'ONLINE' || u === 'OPEN' || u === 'LIVE') return u === 'LIVE' ? 'OK' : u;
+    if (u === 'WARNING' || u === 'ERROR' || u === 'CRITICAL' || u === 'OFFLINE') return u;
+    return 'UNKNOWN';
+  };
+  const feeds = s.feeds || {
+    capital: { status: 'UNKNOWN', detail: 'NO_DATA' },
+    yahoo: { status: 'UNKNOWN', detail: 'NO_DATA' },
+    ecb: { status: 'UNKNOWN', detail: 'NO_DATA' },
+    metals: { status: 'UNKNOWN', detail: 'NO_DATA' },
+  };
+  lines.push(`║${pad(row('CAPITAL', feedStatus(feeds.capital.status), feeds.capital.detail.slice(0, 16)), W)}║`);
+  lines.push(`║${pad(row('YAHOO', feedStatus(feeds.yahoo.status), feeds.yahoo.detail.slice(0, 16)), W)}║`);
+  lines.push(`║${pad(row('ECB', feedStatus(feeds.ecb.status), feeds.ecb.detail.slice(0, 16)), W)}║`);
+  lines.push(`║${pad(row('METALS', feedStatus(feeds.metals.status), feeds.metals.detail.slice(0, 16)), W)}║`);
+  lines.push(`║${pad(`  MARKET STATE         ${s.market.state}  ${s.market.detail.slice(0, 20)}`, W)}║`);
+
+  lines.push(`╠${bar('═')}╣`);
+  lines.push(`║  [ CAPITAL.COM ]${' '.repeat(W - 17)}║`);
+  lines.push(`║${pad(`  CONNECTION           ${feedStatus(feeds.capital.status)}`, W)}║`);
+  lines.push(`║${pad(`  ACCOUNTS             NO DATA`, W)}║`);
+  lines.push(`║${pad(`  POSITIONS            NO DATA`, W)}║`);
+  lines.push(`║${pad(`  ORDERS               NO DATA`, W)}║`);
+  lines.push(`║${pad(`  LAST SYNC            UNKNOWN`, W)}║`);
+
+  lines.push(`╠${bar('═')}╣`);
+  lines.push(`║  [ CLIENTS ]${' '.repeat(W - 13)}║`);
+  lines.push(`║${pad(`  REGISTERED           ${s.clients.total}`, W)}║`);
+  lines.push(`║${pad(`  CONNECTED            ${clientsConnected}`, W)}║`);
+  lines.push(`║${pad(`  TRADING              UNKNOWN`, W)}║`);
+  lines.push(`║${pad(`  PAUSED               UNKNOWN`, W)}║`);
+  lines.push(`║${pad(`  DISABLED             UNKNOWN`, W)}║`);
+  for (const d of s.clients.devices.slice(0, 4)) {
+    const st =
+      d.connection_state === 'CONNECTED' || d.connection_state === 'ONLINE'
+        ? 'ONLINE'
+        : 'OFFLINE';
+    lines.push(
+      `║${pad(`  ${pad(d.device_id, 18)} ${dot(st)} ${pad(st, 8)} ${d.transport}`, W)}║`
+    );
+  }
+  for (const c of (s.presence_clients || []).slice(0, 4)) {
+    const st = c.app_connected ? 'ONLINE' : 'OFFLINE';
+    lines.push(
+      `║${pad(`  ${pad(c.display_name || c.device_id, 18)} ${dot(st)} ${pad(st, 8)} presence`, W)}║`
+    );
+  }
+
+  lines.push(`╠${bar('═')}╣`);
+  lines.push(`║  [ ADMIN ]${' '.repeat(W - 11)}║`);
+  lines.push(`║${pad(row('MSI ADMIN', adminLabel), W)}║`);
+  lines.push(`║${pad(`  TRANSPORT            ${s.admin.transport}`, W)}║`);
+  lines.push(`║${pad(`  IP                   ${s.admin.source_ip || 'UNKNOWN'}`, W)}║`);
+  lines.push(
+    `║${pad(
+      `  LAST HEARTBEAT       ${s.admin.last_seen_human || s.admin.last_seen || 'NONE'}`,
+      W
+    )}║`
+  );
+  lines.push(
+    `║${pad(`  DEVICE               ${s.admin.device_name || s.admin.device_id || '-'}`, W)}║`
+  );
+
+  lines.push(`╠${bar('═')}╣`);
+  lines.push(`║  [ INCIDENTS ]${' '.repeat(W - 15)}║`);
+  const errCount = s.errors.length;
+  lines.push(`║${pad(`  CRITICAL             ${s.last_error && /CRITICAL/i.test(s.last_error) ? 1 : 0}`, W)}║`);
+  lines.push(`║${pad(`  ERROR                ${errCount}`, W)}║`);
+  lines.push(`║${pad(`  WARNING              0`, W)}║`);
+  lines.push(`║${pad(`  INFO                 0`, W)}║`);
+
+  lines.push(`╠${bar('═')}╣`);
+  lines.push(`║  [ RECENT EVENTS ]${' '.repeat(W - 19)}║`);
+  if (s.errors.length === 0) {
+    lines.push(`║${pad('  (no recent errors)', W)}║`);
+  } else {
+    for (const e of s.errors.slice(-4)) {
+      lines.push(`║${pad(`  ${e}`, W)}║`);
+    }
+  }
+  lines.push(`║${pad(`  LAST ERROR           ${s.last_error || 'NONE'}`, W)}║`);
+
   lines.push(`╠${bar('═')}╣`);
   lines.push(`║${pad(`  Last update: ${s.timestamp}`, W)}║`);
   lines.push(`║${pad('  READ-ONLY — closing does not stop VS', W)}║`);
