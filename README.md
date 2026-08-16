@@ -38,7 +38,7 @@ START_ADMIN.bat
 ```
 
 Requires Node.js 20+ and `API_ADMIN_TOKEN` once (file `ADMIN_TOKEN.txt` or from i3 `server.env`).  
-Discovers VS-CORE-01 on LAN automatically. Opens http://127.0.0.1:5173 against the real i3 API.  
+Discovers VS-CORE-01 on **LAN first** (WireGuard not required at home). Opens http://127.0.0.1:5173 against the real i3 API.  
 If the server is down, UI shows **SERVER OFFLINE** — no mock READY.
 
 Linux admin workstation: `bash ADMIN/INSTALL_ADMIN` then `bash ADMIN/START_ADMIN`.

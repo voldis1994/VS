@@ -55,8 +55,8 @@ if [[ -z "$CODE" && -f "$CFG" ]]; then
   CODE="$(jq -r '.enrollment_code // empty' "$CFG" 2>/dev/null || true)"
 fi
 
-# Write connection config
-BASE_URL="${VS_SERVER_URL:-http://10.77.0.1:3000}"
+# Write connection config — LAN default for home ADMIN (WireGuard not required)
+BASE_URL="${VS_SERVER_URL:-${VS_LAN_SERVER_URL:-http://192.168.0.10:3000}}"
 cat >"$CFG" <<EOF
 {
   "server_id": "VS-CORE-01",
@@ -65,7 +65,7 @@ cat >"$CFG" <<EOF
   "enrollment_code": "${CODE}",
   "baseUrl": "${BASE_URL}",
   "adminToken": "${API_ADMIN_TOKEN}",
-  "note": "Auto-written by LAUNCH_ADMIN"
+  "note": "Auto-written by LAUNCH_ADMIN — prefer LAN; WireGuard only off-LAN"
 }
 EOF
 chmod 600 "$CFG"
@@ -75,7 +75,8 @@ echo "  enrollment_code=${CODE:-(empty — paste into config if needed)}"
 
 # Reachability
 if ! curl -fsS --max-time 5 "$BASE_URL/health" >/dev/null 2>&1; then
-  echo "WARN: cannot reach $BASE_URL/health — join WireGuard or set VS_SERVER_URL" >&2
+  echo "WARN: cannot reach $BASE_URL/health — same Wi-Fi as i3? set VS_SERVER_URL" >&2
+  echo "      WireGuard is NOT required for home ADMIN" >&2
   echo "      Trying anyway…"
 fi
 

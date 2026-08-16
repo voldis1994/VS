@@ -28,6 +28,8 @@ API_ADMIN_TOKEN=<token from i3>
 
 ## [MSI WINDOWS ADMIN] — Control Panel only (NOT the server)
 
+Same home Wi-Fi/LAN as i3 — **WireGuard is NOT required** for ADMIN.
+
 ```bat
 git clone https://github.com/voldis1994/VS.git
 cd VS\ADMIN
@@ -37,13 +39,19 @@ START_ADMIN.bat
 
 That is the full Windows path. No Bash, no `export`, no manual `:3000`.
 
-- `INSTALL_ADMIN.bat` discovers VS-CORE-01 on LAN, enrolls this PC, verifies real `ADMIN_SNAPSHOT`
-- `START_ADMIN.bat` opens Control Panel at http://127.0.0.1:5173 against the i3 API
-- `STOP_ADMIN.bat` / `STATUS_ADMIN.bat` as needed
+- `INSTALL_ADMIN.bat` discovers VS-CORE-01 on **LAN first** (e.g. `http://192.168.0.10:3000`), enrolls this PC, verifies real `ADMIN_SNAPSHOT`
+- WireGuard (`10.77.0.1`) is only used if LAN is down **and** an ADMIN WG profile was explicitly configured
+- `START_ADMIN.bat` opens Control Panel at http://127.0.0.1:5173 against the selected endpoint
+- If the i3 is stopped, the panel shows **SERVER OFFLINE** (no mock READY)
 
-If the i3 is stopped, the panel shows **SERVER OFFLINE** (no mock READY).
-
-Linux admin PC (dev): `bash ADMIN/INSTALL_ADMIN` then `bash ADMIN/START_ADMIN`.
+Expected on this network:
+```
+SERVER: VS-CORE-01
+TRANSPORT: LAN
+SERVER_URL: http://192.168.0.10:3000
+AUTH: OK
+CONNECTION: CONNECTED
+```
 
 ## [REMOTE CLIENT] — any ISP / NAT
 

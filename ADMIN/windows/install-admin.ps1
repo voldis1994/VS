@@ -72,7 +72,7 @@ try {
 }
 
 # --- Orchestrated install (discover + enroll + verify) ---
-Write-Step "Discovering VS-CORE-01 and completing enrollment..."
+Write-Step "Discovering VS-CORE-01 on LAN (WireGuard NOT required for home ADMIN)..."
 npx --yes tsx app/installAdmin.ts
 if ($LASTEXITCODE -ne 0) {
   exit $LASTEXITCODE

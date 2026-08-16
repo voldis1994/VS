@@ -9,20 +9,31 @@ export type AdminProductConfig = {
   enrollment_code?: string;
 };
 
-/** Internal catalog — LAN MSI uses configured baseUrl; WG peers use private host. */
+/** Internal catalog — WG private host is FALLBACK only when LAN URL unset and tunnel ready. */
 const INTERNAL = {
   private_host: '10.77.0.1',
   private_port: 3000,
 };
 
+/**
+ * Resolve ADMIN HTTP base URL.
+ * Prefer explicit override / LAN env. Never silently force WireGuard when a LAN URL is configured.
+ */
 export function resolveAdminBaseUrl(serverId: string, override?: string): string {
   if (override) return override.replace(/\/$/, '');
-  // Optional LAN URL from env (same Wi-Fi as i3) — not 127.0.0.1
-  const lan = (process.env.VS_SERVER_URL || process.env.VS_LAN_SERVER_URL || '').trim();
+  const lan = (
+    process.env.VS_LAN_SERVER_URL ||
+    process.env.VS_SERVER_URL ||
+    ''
+  ).trim();
   if (lan) return lan.replace(/\/$/, '');
   void serverId;
-  // Prefer WireGuard private host when on tunnel; LAN discovery sets override/env
-  return `http://${INTERNAL.private_host}:${INTERNAL.private_port}`;
+  // Last resort for enrolled remote ADMIN with active tunnel — not used for home-LAN MSI
+  if (process.env.VS_ADMIN_TRANSPORT === 'wireguard') {
+    return `http://${INTERNAL.private_host}:${INTERNAL.private_port}`;
+  }
+  // Do not default to WireGuard for home ADMIN — caller must discover LAN first
+  return '';
 }
 
 export type ManagerState = 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED' | 'WIREGUARD_NOT_READY' | 'AUTH_FAILED';

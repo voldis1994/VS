@@ -57,17 +57,18 @@ if "%API_ADMIN_TOKEN%"=="" (
   set /p API_ADMIN_TOKEN=API_ADMIN_TOKEN=
 )
 
-if "%VS_SERVER_URL%"=="" set "VS_SERVER_URL=http://10.77.0.1:3000"
+if "%VS_SERVER_URL%"=="" set "VS_SERVER_URL=http://192.168.0.10:3000"
 
 echo.
-echo Checking WireGuard path %VS_SERVER_URL%/health ...
-curl.exe -fsS "%VS_SERVER_URL%/health"
+echo Checking LAN path %VS_SERVER_URL%/health ...
+curl.exe -fsS --max-time 5 "%VS_SERVER_URL%/health"
 if errorlevel 1 (
   echo.
-  echo FAIL: nevar sasniegt SERVER.
-  echo  - WireGuard Activate?
-  echo  - Endpoint = i3 LAN IP:51820  ne VS-CORE-01?
-  echo  - ping 10.77.0.1
+  echo FAIL: cannot reach SERVER on LAN.
+  echo  - Is i3 running?  STATUS_SERVER
+  echo  - Same Wi-Fi as MSI?
+  echo  - Prefer INSTALL_ADMIN.bat / START_ADMIN.bat (LAN-first discovery)
+  echo  - WireGuard is NOT required for home ADMIN
   pause
   exit /b 1
 )

@@ -46,15 +46,15 @@ if (-not $env:API_ADMIN_TOKEN) {
   $env:API_ADMIN_TOKEN = Read-Host "API_ADMIN_TOKEN"
 }
 if (-not $env:VS_SERVER_URL) {
-  $env:VS_SERVER_URL = "http://10.77.0.1:3000"
+  $env:VS_SERVER_URL = "http://192.168.0.10:3000"
 }
 
-Write-Host "Health $($env:VS_SERVER_URL)/health"
+Write-Host "Health $($env:VS_SERVER_URL)/health (LAN-first; WireGuard not required)"
 try {
-  $h = curl.exe -fsS "$($env:VS_SERVER_URL)/health"
+  $h = curl.exe -fsS --max-time 5 "$($env:VS_SERVER_URL)/health"
   Write-Host $h
 } catch {
-  Write-Host "FAIL: WireGuard Activate? Endpoint = LAN IP:51820 ?"
+  Write-Host "FAIL: cannot reach SERVER on LAN. Prefer INSTALL_ADMIN.bat / START_ADMIN.bat"
   exit 1
 }
 
