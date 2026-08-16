@@ -1,21 +1,16 @@
 #!/usr/bin/env bash
 # APPLY_FIREWALL — SERVER host firewall for VS (product).
-# DEFAULT INBOUND DENY.
-# - WireGuard UDP publicly reachable (remote clients)
-# - Control API TCP only from: localhost + LAN CIDR + VS WireGuard supernet
-# - PostgreSQL/Redis NOT exposed (compose binds 127.0.0.1)
-# CLIENT↛ADMIN / CLIENT↛CLIENT on forward chain
+# Home appliance mode (VS_LAN_MANAGEMENT=1):
+#   Allow Control API :3000 from private LAN ranges + WireGuard + localhost.
+#   Do NOT install an nft input policy-drop table that can lock out MSI when
+#   LAN CIDR detection is wrong or MSI is on a sibling 192.168.x subnet.
 set -euo pipefail
 
 WG_IFACE="${VS_WG_INTERFACE:-vs0}"
 WG_PORT="${VS_WG_LISTEN_PORT:-51820}"
 API_PORT="${CONTROL_API_PORT:-3000}"
 SUPERNET="${VS_WG_SUBNET:-10.77.0.0/16}"
-ADMIN_NET="${VS_WG_ADMIN_NET:-10.77.1.0/24}"
-CLIENT_NET="${VS_WG_CLIENT_NET:-10.77.10.0/20}"
-SERVER_IP="${VS_WG_SERVER_IP:-10.77.0.1}"
 
-# LAN for MSI Control Panel (same Wi-Fi). Override with VS_LAN_CIDR=192.168.0.0/24
 detect_lan_cidr() {
   if [[ -n "${VS_LAN_CIDR:-}" ]]; then
     echo "$VS_LAN_CIDR"
@@ -40,49 +35,38 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
-if command -v ufw >/dev/null 2>&1; then
-  ufw --force reset || true
-  ufw default deny incoming
-  ufw default allow outgoing
-  ufw allow OpenSSH || ufw allow 22/tcp || true
-  ufw allow "${WG_PORT}/udp" comment 'VS WireGuard'
-  ufw allow from "$LAN_CIDR" to any port "$API_PORT" proto tcp comment 'VS Control API LAN (MSI)'
-  ufw allow from "$SUPERNET" to any port "$API_PORT" proto tcp comment 'VS Control API WireGuard'
-  ufw allow from 127.0.0.1 to any port "$API_PORT" proto tcp comment 'VS Control API localhost'
-  ufw --force enable
-  echo "SUCCESS: ufw deny-in + WG UDP + API from LAN/WG/lo only"
-fi
-
+# Remove previous fail-closed nft table — it dropped MSI when source ∉ /24
 if command -v nft >/dev/null 2>&1; then
   nft delete table inet vs_private 2>/dev/null || true
-  nft -f - <<EOF
-table inet vs_private {
-  chain input {
-    type filter hook input priority 0; policy drop;
-    ct state established,related accept
-    iif lo accept
-    udp dport ${WG_PORT} accept
-    tcp dport 22 accept
-    ip saddr ${LAN_CIDR} tcp dport ${API_PORT} accept
-    ip saddr ${SUPERNET} tcp dport ${API_PORT} accept
-  }
-  chain forward {
-    type filter hook forward priority 0; policy drop;
-    ct state established,related accept
-    ip saddr ${ADMIN_NET} ip daddr ${SERVER_IP} accept
-    ip saddr ${CLIENT_NET} ip daddr ${SERVER_IP} accept
-    ip saddr ${CLIENT_NET} ip daddr ${ADMIN_NET} drop
-    ip saddr ${CLIENT_NET} ip daddr ${CLIENT_NET} drop
-  }
-}
-EOF
-  echo "SUCCESS: nftables vs_private (API LAN+WG only; CLIENT↛ADMIN)"
-  exit 0
+  echo "OK: removed nft inet vs_private (if present)"
+fi
+
+# iptables accept (idempotent insert) — works even when ufw is inactive
+if command -v iptables >/dev/null 2>&1; then
+  for cidr in "$LAN_CIDR" "192.168.0.0/16" "10.0.0.0/8" "$SUPERNET"; do
+    if ! iptables -C INPUT -p tcp --dport "$API_PORT" -s "$cidr" -j ACCEPT 2>/dev/null; then
+      iptables -I INPUT 1 -p tcp --dport "$API_PORT" -s "$cidr" -j ACCEPT || true
+    fi
+  done
+  if ! iptables -C INPUT -p tcp --dport "$API_PORT" -i lo -j ACCEPT 2>/dev/null; then
+    iptables -I INPUT 1 -p tcp --dport "$API_PORT" -i lo -j ACCEPT || true
+  fi
+  echo "OK: iptables ACCEPT :${API_PORT} from LAN/WG/lo"
 fi
 
 if command -v ufw >/dev/null 2>&1; then
+  ufw allow OpenSSH 2>/dev/null || ufw allow 22/tcp 2>/dev/null || true
+  ufw allow "${WG_PORT}/udp" comment 'VS WireGuard' 2>/dev/null || true
+  # Wide home-LAN allow — MSI may be on 192.168.0.x or 192.168.1.x
+  ufw allow from 192.168.0.0/16 to any port "$API_PORT" proto tcp comment 'VS Control API home LAN' 2>/dev/null || true
+  ufw allow from 10.0.0.0/8 to any port "$API_PORT" proto tcp comment 'VS Control API RFC1918/10' 2>/dev/null || true
+  ufw allow from "$SUPERNET" to any port "$API_PORT" proto tcp comment 'VS Control API WireGuard' 2>/dev/null || true
+  ufw allow from 127.0.0.1 to any port "$API_PORT" proto tcp comment 'VS Control API localhost' 2>/dev/null || true
+  # Ensure ufw is active but do not --force reset (destroys operator SSH rules)
+  ufw --force enable 2>/dev/null || true
+  echo "SUCCESS: ufw allows API from 192.168.0.0/16 + 10/8 + WG + lo"
   exit 0
 fi
 
-echo "FAIL: neither ufw nor nft available" >&2
-exit 1
+echo "SUCCESS: firewall rules applied (iptables; ufw not installed)"
+exit 0

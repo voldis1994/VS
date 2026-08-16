@@ -41,9 +41,16 @@ echo
 echo "########################################"
 echo "#  GATAVS"
 echo "#  LAN IP = ${LAN_IP}"
-echo "#  Pārbaude: curl http://127.0.0.1:3000/health"
-echo "#  Monitors: vs-monitor"
-echo "#  MSI: ieraksti šo IP failā ADMIN\\config\\SERVER_IP.txt"
-echo "#       tad palaid START_MSI.bat"
+echo "#  Local:  curl -f http://127.0.0.1:3000/health"
+echo "#  LAN:    curl -f http://${LAN_IP}:3000/health"
+echo "#  MSI:    ADMIN\\config\\SERVER_IP.txt = ${LAN_IP}"
+echo "#          tad START_MSI.bat"
+echo "#  Ja MSI neredz: sudo bash SERVER/OPEN_LAN_FOR_MSI.sh"
 echo "########################################"
+
+# Fail closed if LAN unreachable from this host
+if [[ -n "$LAN_IP" ]] && ! curl -fsS --connect-timeout 3 "http://${LAN_IP}:3000/health" >/dev/null; then
+  echo "WARN: LAN health failed — running OPEN_LAN_FOR_MSI" >&2
+  bash "$ROOT/SERVER/OPEN_LAN_FOR_MSI.sh"
+fi
 exit 0

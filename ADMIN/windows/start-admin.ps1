@@ -101,8 +101,22 @@ Get-Content $Cfg | ForEach-Object {
 function Test-VsCoreIdentity([string]$Url) {
   if (-not $Url) { return $false }
   $u = $Url.TrimEnd("/")
+  $health = $u + "/health"
+  # Prefer curl.exe — PowerShell Invoke-WebRequest is unreliable / aliased to curl
+  if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
+    try {
+      $out = & curl.exe -fsS --connect-timeout 3 --max-time 5 $health 2>$null
+      if (-not $out) { return $false }
+      $j = $out | ConvertFrom-Json
+      if ($j.service -ne "VS-CORE") { return $false }
+      if (-not $j.server_id) { return $false }
+      return $true
+    } catch {
+      return $false
+    }
+  }
   try {
-    $r = Invoke-WebRequest -Uri ($u + "/health") -UseBasicParsing -TimeoutSec 4
+    $r = Invoke-WebRequest -Uri $health -UseBasicParsing -TimeoutSec 4
     if ($r.StatusCode -lt 200 -or $r.StatusCode -ge 300) { return $false }
     $j = $r.Content | ConvertFrom-Json
     if ($j.service -ne "VS-CORE") { return $false }
@@ -110,6 +124,14 @@ function Test-VsCoreIdentity([string]$Url) {
     return $true
   } catch {
     return $false
+  }
+}
+
+function Show-ProbeDetail([string]$Url) {
+  $health = $Url.TrimEnd("/") + "/health"
+  if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
+    Write-Host ("  detail " + $health)
+    & curl.exe -sS -o NUL -w "  HTTP %{http_code} time=%{time_total}s err=%{errormsg}\n" --connect-timeout 3 --max-time 5 $health 2>&1 | ForEach-Object { Write-Host $_ }
   }
 }
 
@@ -122,7 +144,9 @@ function Get-LocalLanProbeUrls {
         $_.IPAddress -notlike "169.254.*" -and
         $_.IPAddress -notlike "10.77.*" -and
         # Skip Docker / Hyper-V / WSL NAT bridges (172.16-31.x) — not home LAN to i3
-        $_.IPAddress -notmatch '^172\.(1[6-9]|2[0-9]|3[0-1])\.'
+        $_.IPAddress -notmatch '^172\.(1[6-9]|2[0-9]|3[0-1])\.' -and
+        # Skip Tailscale CGNAT
+        $_.IPAddress -notmatch '^100\.'
       }
     foreach ($a in @($addrs)) {
       $parts = $a.IPAddress.Split(".")
@@ -201,23 +225,25 @@ $transport = "LAN"
 if (-not $serverUrl) {
   Write-Host "SERVER OFFLINE — cannot reach VS-CORE-01 on LAN"
   Write-Host ""
-  Write-Host "On i3 first:"
-  Write-Host "  sudo bash SERVER/FIX_CONTROL_API.sh"
-  Write-Host "  curl http://127.0.0.1:3000/health"
+  Write-Host "On i3 (API is local-ok but MSI needs LAN):"
+  Write-Host "  sudo bash SERVER/OPEN_LAN_FOR_MSI.sh"
+  Write-Host "  curl -f http://127.0.0.1:3000/health"
+  Write-Host "  curl -f http://192.168.0.10:3000/health"
   Write-Host "  hostname -I"
   Write-Host ""
-  Write-Host "Then set the real i3 LAN IP in ADMIN\config\control-panel.env :"
-  Write-Host "  VS_SERVER_URL=http://<i3-lan-ip>:3000"
-  Write-Host "Or set env and retry:"
-  Write-Host "  set VS_SERVER_URL=http://<i3-lan-ip>:3000"
-  Write-Host "  ADMIN\START_ADMIN.bat"
-  # Manual IP file (operator writes one line: 192.168.x.y)
+  Write-Host "On MSI create ADMIN\config\SERVER_IP.txt with ONE line = i3 LAN IP"
+  Write-Host "  example: 192.168.0.10"
+  Write-Host "Then: START_MSI.bat"
+  Write-Host ""
+  # Show why the primary candidate failed
+  Show-ProbeDetail "http://192.168.0.10:3000"
   $ipFile = Join-Path $AdminRoot "config\SERVER_IP.txt"
   if (Test-Path $ipFile) {
     $manualIp = (Get-Content -LiteralPath $ipFile -TotalCount 1).Trim()
     if ($manualIp -match '^\d+\.\d+\.\d+\.\d+$') {
       $manualUrl = "http://${manualIp}:3000"
       Write-Host ("Trying SERVER_IP.txt -> " + $manualUrl)
+      Show-ProbeDetail $manualUrl
       if (Test-VsCoreIdentity $manualUrl) {
         $serverUrl = $manualUrl
       }

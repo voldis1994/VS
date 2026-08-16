@@ -241,9 +241,20 @@ fi
 
 LAN_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true)"
 echo
+echo "==> open LAN firewall for MSI"
+bash "$HERE/network/APPLY_FIREWALL" || true
+if [[ -n "$LAN_IP" ]]; then
+  if ! curl -fsS --connect-timeout 3 "http://${LAN_IP}:3000/health" >/dev/null; then
+    echo "WARN: LAN health failed — OPEN_LAN_FOR_MSI" >&2
+    bash "$HERE/OPEN_LAN_FOR_MSI.sh" || true
+  fi
+  curl -fsS --connect-timeout 3 "http://${LAN_IP}:3000/health" || true
+  echo
+fi
 echo "SUCCESS: Control API listening"
 echo "  Local:  http://127.0.0.1:3000/health"
 echo "  LAN:    http://${LAN_IP:-<lan-ip>}:3000/health"
-echo "  MSI:    set VS_SERVER_URL=http://${LAN_IP}:3000 in ADMIN\\config\\control-panel.env"
+echo "  MSI:    ADMIN\\config\\SERVER_IP.txt = ${LAN_IP}"
+echo "          then START_MSI.bat"
 echo "NEXT:     vs-monitor"
 exit 0

@@ -307,12 +307,30 @@ echo "i3 LAN IP:     $LAN_IP"
 echo "Control API:   http://${LAN_IP}:3000/health"
 echo "CLIENT portal: http://${LAN_IP}:3000/   (login from ADMIN → CLIENTS)"
 echo "WireGuard:     http://10.77.0.1:3000/  (remote clients)"
+
+# Mandatory: LAN must work — localhost-only bind is a FAIL for MSI
+if [[ -n "$LAN_IP" ]]; then
+  if ! curl -fsS --connect-timeout 3 "http://${LAN_IP}:3000/health" >/dev/null; then
+    echo "WARN: LAN /health failed — opening firewall + rechecking" >&2
+    bash "$HERE/network/APPLY_FIREWALL" || true
+    sleep 1
+    if ! curl -fsS --connect-timeout 3 "http://${LAN_IP}:3000/health" >/dev/null; then
+      echo "FAIL: API up on 127.0.0.1 but NOT on LAN ${LAN_IP}:3000 — MSI cannot connect" >&2
+      ss -lntp | grep 3000 >&2 || true
+      echo "Run: sudo bash SERVER/OPEN_LAN_FOR_MSI.sh" >&2
+      exit 1
+    fi
+  fi
+  echo "OK LAN health: http://${LAN_IP}:3000/health"
+fi
+
 echo
 echo "MSI next:"
 echo "  1) git pull"
-echo "  2) ADMIN\\START_EVERYTHING.bat"
-echo "  3) In ADMIN → CLIENTS → CREATE WEB LOGIN"
-echo "  4) Give client the URL + password shown"
+echo "  2) Write ONE line into ADMIN\\config\\SERVER_IP.txt :"
+echo "       ${LAN_IP}"
+echo "  3) START_MSI.bat"
+echo "  4) Test: curl.exe -s http://${LAN_IP}:3000/health"
 echo
 echo "Monitor: vs-monitor"
 exit 0
