@@ -2,13 +2,43 @@
 
 Real-time multi-source market intelligence + VS SERVER trading appliance.
 
+## HOW TO INSTALL
+
+### i3 (VS-CORE-01)
+
+```bash
+cd /root/VS && git pull origin main
+sudo bash SERVER/install/INSTALL_SERVER.sh
+sudo bash SERVER/STATUS_SERVER
+sudo bash SERVER/INSTALL_MONITOR   # physical read-only console
+```
+
+### MSI (ADMIN)
+
+```bat
+cd ADMIN
+INSTALL_ADMIN.bat
+START_ADMIN.bat
+```
+
+LAN/Wi-Fi to `http://192.168.0.10:3000` — WireGuard not required for home ADMIN.
+
+### Remote CLIENT
+
+Enroll via ADMIN NETWORK page → WireGuard peer → Client API on VPN. Never Postgres/Redis.
+
+See `DOCS/ARCHITECTURE.md`, `DOCS/LEGACY_AUDIT.md`, `DOCS/IMPLEMENTATION_REPORT.md`.
+
 ## Product boundaries
 
 ```
 VS/
 ├── SERVER/     # Authoritative brain (i3) — INSTALL_I3_SERVER
 ├── ADMIN/      # Control Panel + diagnostic client (MSI PC)
-└── CLIENT/     # Device app build — BUILD_CLIENT (native UI deferred)
+├── CLIENT/     # Device app build — BUILD_CLIENT
+├── DOCS/       # Architecture + install docs
+├── TESTS/      # Cross-cutting unit tests
+└── legacy-review/  # Frozen archives (not imported by production)
 ```
 
 Money path lives under `SERVER/control-api` (verified P0). Compatibility symlinks:
