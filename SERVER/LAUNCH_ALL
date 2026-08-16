@@ -91,9 +91,16 @@ cur_master="$(grep -E '^MASTER_ENCRYPTION_KEY=' "$ENV_FILE" 2>/dev/null | cut -d
 cur_admin="$(grep -E '^API_ADMIN_TOKEN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
 [[ -z "$cur_master" || "$cur_master" == *CHANGE_ME* || ${#cur_master} -lt 16 ]] && put MASTER_ENCRYPTION_KEY "$MASTER"
 [[ -z "$cur_admin" || "$cur_admin" == *CHANGE_ME* || ${#cur_admin} -lt 8 ]] && put API_ADMIN_TOKEN "$ADMIN"
-put JWT_SECRET "$(grep -E '^JWT_SECRET=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- | grep -v CHANGE_ME || echo "$JWT")"
-# force JWT if still placeholder
-grep -q 'CHANGE_ME' <<<"$(grep JWT_SECRET "$ENV_FILE" || true)" && put JWT_SECRET "$JWT"
+put JWT_SECRET "$JWT"
+# keep existing non-placeholder JWT
+cur_jwt="$(grep -E '^JWT_SECRET=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
+if [[ -n "$cur_jwt" && "$cur_jwt" != *CHANGE_ME* && ${#cur_jwt} -ge 8 ]]; then
+  : # already set by put above if empty — re-read after first put
+fi
+# Prefer preserving strong existing JWT written earlier in file history:
+if [[ -n "$cur_jwt" && "$cur_jwt" != *CHANGE_ME* && ${#cur_jwt} -ge 16 ]]; then
+  put JWT_SECRET "$cur_jwt"
+fi
 
 put DB_HOST 127.0.0.1
 put DB_PORT 5432
@@ -132,6 +139,11 @@ fi
 sleep 1
 PGPASSWORD="$DB_PASS" psql -h 127.0.0.1 -U market_reader -d market_reader -c 'SELECT 1' >/dev/null
 echo "SUCCESS: Postgres OK"
+
+# Ensure tsx exists (INSTALL may use --omit=dev)
+if [[ ! -x "$REPO/SERVER/control-api/node_modules/.bin/tsx" ]]; then
+  (cd "$REPO/SERVER/control-api" && npm install --no-save tsx)
+fi
 
 # -------------------------------------------------------------------------
 # 5) INSTALL_SERVER

@@ -59,8 +59,9 @@ if ! command -v wg >/dev/null 2>&1; then
 fi
 
 # Install control-api deps into prefix
+# NOTE: runtime still executes TypeScript via tsx — do NOT omit it (not a pure build artifact yet).
 if [[ -f "$PREFIX/control-api/package.json" ]]; then
-  (cd "$PREFIX/control-api" && npm ci --omit=dev)
+  (cd "$PREFIX/control-api" && npm ci --omit=dev && npm install --no-save --no-package-lock tsx)
 fi
 
 chown -R vs-server:vs-server "$DATA" "$LOG"
@@ -83,7 +84,7 @@ if [[ -d "$UNIT_SRC" ]]; then
 fi
 
 chmod +x "$PREFIX/INSTALL_SERVER" "$PREFIX/START_SERVER" "$PREFIX/STOP_SERVER" "$PREFIX/STATUS_SERVER" \
-  "$PREFIX/FIX_WIFI" "$PREFIX/FIRST_BOOT_DEBIAN" \
+  "$PREFIX/FIX_WIFI" "$PREFIX/FIRST_BOOT_DEBIAN" "$PREFIX/LAUNCH_ALL" \
   "$PREFIX/deploy/boot.sh" \
   "$PREFIX/network/"* 2>/dev/null || true
 
