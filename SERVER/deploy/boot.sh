@@ -20,6 +20,14 @@ if [[ -f "$ROOT/control-api/.env" ]]; then
   set +a
 fi
 
+# CRITICAL: server.env wins for DB_* (control-api/.env often has stale password → 28P01)
+if [[ -f "$DATA/server.env" ]]; then
+  # shellcheck disable=SC1090
+  set -a
+  source <(grep -E '^DB_(HOST|PORT|NAME|USER|PASSWORD)=' "$DATA/server.env" | sed 's/\r$//')
+  set +a
+fi
+
 export NODE_ENV="${NODE_ENV:-production}"
 export OPERATING_MODE="${OPERATING_MODE:-DEMO}"
 export LIVE_TRADING_ENABLED="${LIVE_TRADING_ENABLED:-false}"

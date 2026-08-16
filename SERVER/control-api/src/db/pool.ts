@@ -5,8 +5,12 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { config as loadEnv } from 'dotenv';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+// Appliance: prefer durable server.env DB_* over any stale control-api/.env
+loadEnv({ path: '/var/lib/vs-server/server.env', override: true });
 loadEnv({ path: join(__dirname, '../../../../.env') });
 loadEnv();
+// Re-apply server.env DB last so 28P01 cannot come from a stale dotenv file
+loadEnv({ path: '/var/lib/vs-server/server.env', override: true });
 
 const { Pool } = pg;
 
