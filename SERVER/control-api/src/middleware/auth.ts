@@ -12,7 +12,13 @@ const PUBLIC_PATHS = [
 ];
 
 /** Explicit public /api/v1 endpoints only — not the whole prefix. */
-const PUBLIC_API_V1 = new Set(['/api/v1/login', '/api/v1/refresh']);
+const PUBLIC_API_V1 = new Set([
+  '/api/v1/login',
+  '/api/v1/refresh',
+  // i3 physical console monitor — localhost-only enforced in adminAgent handlers
+  '/api/v1/server/monitor/console',
+  '/api/v1/server/monitor/console/text',
+]);
 
 // /api/v1/admin/* uses its own x-admin-token check inside Admin Agent.
 

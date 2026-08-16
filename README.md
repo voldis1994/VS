@@ -1,59 +1,42 @@
-# VS CORE — Production System
+# VS — i3 SERVER · MSI ADMIN · CLIENT
 
-## Products
+One system. One source of truth: **i3 VS-CORE-01**.
 
-1. **VS CORE SERVER** — Debian 13 on i3 (`VS-CORE-01`)
-2. **VS ADMIN** — Windows MSI Control Panel only (`VS-ADMIN-01`)
-3. **VS CLIENT** — Customer **web portal** (login + market + lot + robot)
+## What runs where
 
-```
-CUSTOMER browser  --->  http://<i3-ip>:3000/  (login from ADMIN)
-MSI ADMIN (LAN)   --->  i3 Control API
-```
+| Machine | Role | Canonical path |
+|---|---|---|
+| **i3 Debian 13** | Complete server | `SERVER/` Control API :3000, DB, engines, `vs-monitor` |
+| **MSI Windows** | ADMIN control panel only | `ADMIN/desktop` → `http://127.0.0.1:5188/` |
+| **Remote CLIENT** | Web portal | WireGuard → `http://10.77.0.1:3000/` |
 
-i3 remains authoritative if MSI or all clients disconnect.
+## Install
 
-## Repository
-
-```
-SERVER/         i3 brain (control-api, core, monitor, install)
-ADMIN/          MSI Control Panel
-CLIENT/desktop  Customer web UI (served by i3 at :3000)
-SHARED/         Contracts
-DEPLOY/         Deploy asset index
-TESTS/ DOCS/ legacy-review/ scripts/
-```
-
-## i3 install
+### i3
 
 ```bash
-git clone <repo>
-cd VS
-sudo bash SERVER/install/INSTALL_SERVER.sh
-sudo bash SERVER/install/HEALTHCHECK.sh
-bash SERVER/SHOW_DASHBOARD.sh
+cd ~/VS-new/VS
+git pull origin main
+sudo bash SERVER/install/INSTALL_I3_SERVER.sh
+vs-monitor
 ```
 
-## MSI ADMIN
+Check: `ss -lntp | grep 3000` must show **`0.0.0.0:3000`** (not only `10.77.0.1`).
+
+### MSI
 
 ```bat
+git pull origin main
 ADMIN\INSTALL_ADMIN.bat
 ADMIN\START_ADMIN.bat
 ```
 
-Then: **CLIENTS → CREATE WEB LOGIN** → copy URL + login + password for the customer.
+### CLIENT
 
-## Customer CLIENT
+ADMIN → CLIENTS → create remote login → WireGuard → open portal URL.
 
-1. Open the URL from ADMIN (example: `http://192.168.0.10:3000/`)
-2. Sign in with login + password
-3. Choose market, set lot, START/STOP robot
+## Status
 
-No Git / Node / installer required for the customer. Details: `DOCS/CLIENT_INSTALL.md`.
+See `DOCS/PHYSICAL_ACCEPTANCE.md` and `DOCS/FINAL_ACCEPTANCE_REPORT.md`.
 
-## Rules
-
-- No fake LIVE / CONNECTED / prices / P/L in production UI
-- `LIVE_TRADING_ENABLED=false` by default
-- ADMIN API ≠ CLIENT API
-- Documentation: `DOCS/`
+**Current formal status: NOT PRODUCTION ACCEPTED** until physical chain is retested.

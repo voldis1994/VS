@@ -1,113 +1,85 @@
-# Final Acceptance Report
+# Final acceptance report
 
-**Generated:** 2026-08-16  
-**Git commit SHA:** `72ab5373cd900b23f1f6b7a5438e01dc1732abc9`  
-**Environment:** Cursor cloud agent — **no physical i3 / MSI / remote CLIENT**
+## FINAL STATUS
 
-## 1. Commit
+**NOT PRODUCTION ACCEPTED**
 
-`72ab5373cd900b23f1f6b7a5438e01dc1732abc9`
+Reason: physical i3/MSI/CLIENT hardware retest still required after Control API bind + monitor auth + installer fixes.
 
-## 2. Repository cleanup summary
+## 1. FINAL ARCHITECTURE
 
-- Renamed `Old-system/` → `legacy-review/`
-- Renamed UIs: `SERVER/monitor`, `ADMIN/desktop`, `CLIENT/desktop` (removed `-v2` parallel naming)
-- Deleted compatibility engine shims (`SERVER/*-engine`, `market-data`, `indicators`, `supervisor`, `broker-gateway`)
-- Deleted empty CLIENT stub folders and empty SERVER placeholder dirs
-- Removed `boot.sh` legacy fallbacks
-- Fixed `DEPLOY/` symlinks
-- README describes only final three-product architecture
+```
+VS/
+├── SERVER/          # i3 authoritative (control-api :3000, core, db, monitor, install)
+├── ADMIN/desktop    # MSI Control Panel :5188
+├── CLIENT/          # remote web portal via WireGuard
+├── SHARED/
+├── TESTS/
+├── DOCS/
+└── legacy-review/   # non-production only
+```
 
-## 3. Deleted / archived
+Chain:
 
-| Action | Items |
-|--------|-------|
-| ARCHIVED | Entire former `Old-system/` tree → `legacy-review/` |
-| DELETED | Engine shim trees; CLIENT README stubs; `SERVER/dashboard` shim |
-| MIGRATED | UI paths, installers, packaging scripts, presence CLIENT heartbeat mirror |
+```
+MARKET → i3 VS-CORE-01 → Control API
+              ├─ LAN → MSI ADMIN
+              └─ WireGuard → CLIENT
+```
 
-## 4. Final tree
+## 2. REMOVED / NEUTRALIZED LEGACY
 
-See `DOCS/FINAL_REPOSITORY_MAP.md`.
+- Production START refuses tactical desk / :5173
+- Old UI under `legacy-review/` only
+- Stale WG-only API bind overridden by LAN management bind policy
 
-## 5. Server services (repo)
+## 3. SERVER
 
-| Service | Status |
-|---------|--------|
-| Control API | PASS (code + 306 tests) |
-| Client API package | PASS boundary |
-| Supervisor PROCESS≠TRADING | PASS |
-| Monitor (`SERVER/monitor` + MONITOR_SERVER) | PASS code / physical BLOCKED |
-| systemd `vs-core.service`, `vs-server-monitor.service`, `vs-monitor.service` | PASS present |
-| WireGuard scripts | PASS present |
-| EXPORT_CLIENT.sh | PASS present |
+- `vs-server.service` → `deploy/boot.sh` → control-api (`0.0.0.0:3000` when VS_LAN_MANAGEMENT=1)
+- docker `market-reader-postgres`, `market-reader-redis` (adopt-on-conflict)
+- `vs-monitor` / SHOW_LIVE_MONITOR (localhost console API)
 
-## 6. Database migrations
+## 4. DATABASE
 
-`SERVER/database/migrations/` 001–013 — PASS (repository). Hardware apply: **BLOCKED**.
+Migrations through `014_market_intelligence.sql` (ticks, candles_10s, market_states, setups, …)
 
-## 7. API
+## 5. MARKET PIPELINE
 
-ADMIN + CLIENT routes under `/api/v1/*` — documented in `DOCS/API.md`. Security tests PASS.
+```
+FEED → tick validate → normalize → 10s OHLC
+  → intelligence vector → strategy setup PASS/FAIL
+  → SL/BE/TP/exit → OSM → reconcile
+```
 
-## 8–10. Install results
+## 6. ADMIN
 
-| Target | Result |
-|--------|--------|
-| i3 INSTALL_SERVER | **BLOCKED** (no Debian host) |
-| systemd after reboot | **BLOCKED** |
-| MSI INSTALL_ADMIN | **BLOCKED** (no Windows host) |
-| CLIENT package | Folder package PASS; `VS_CLIENT_SETUP.exe` **BLOCKED** (needs Windows packager) |
+`ADMIN\INSTALL_ADMIN.bat` / `REPAIR_ADMIN.bat` / `UPDATE_ADMIN.bat` → `START_ADMIN.bat` → `ADMIN/desktop` :5188 → i3 LAN API
 
-## 11. Automated tests
+## 7. CLIENT
 
-| Suite | Result |
-|-------|--------|
-| SERVER/control-api | **306 PASS** |
-| TESTS | **32 PASS** |
-| ADMIN | **18 PASS** |
-| SERVER/client-api | **3 PASS** |
-| ADMIN/desktop build | **PASS** |
-| CLIENT/desktop build | **PASS** |
+ADMIN provisions login → WireGuard → `http://10.77.0.1:3000/`
 
-## 12–13. Physical tests
+## 8. TESTS
 
-| Test | Result |
-|------|--------|
-| MSI ↔ i3 LAN | **BLOCKED** |
-| Remote CLIENT different ISP | **BLOCKED** |
+| Suite | Status |
+|---|---|
+| privateNetwork / bind | PASS (software) |
+| auth public monitor | PASS (software) |
+| canonical /api/v1 | PASS (software) |
+| serverMonitor | PASS (software) |
+| Physical A–D | **BLOCKED** |
 
-## 14–16. Market / Broker / Trading
+## 9. PHYSICAL ACCEPTANCE
 
-| Item | Status |
-|------|--------|
-| Market | **NOT_CONFIGURED / UNAVAILABLE** without provider |
-| Broker | **CONFIG_REQUIRED** without Capital secrets |
-| PROCESS_READY | code path PASS; physical **BLOCKED** |
-| TRADING_READY | **NO** (fail-closed) |
+See `DOCS/PHYSICAL_ACCEPTANCE.md`.
 
-## 17. Screenshots
+## 10. KNOWN REMAINING ISSUES
 
-`DOCS/screenshots/*.png` — offline honesty states. Live hardware shots: **BLOCKED**.
+- Hardware retest pending
+- LIVE trading fail-closed without broker secrets/evidence
+- Strategy module set incomplete vs full master list
+- Dual route prefixes (`/api/*` and `/api/v1/*`) — v1 aliases added; full cleanup later
 
-## 18. Remaining blockers
+## 11. FINAL STATUS
 
-1. Physical i3 Debian install + reboot + monitor TTY  
-2. Physical MSI LAN ADMIN + presence  
-3. Remote CLIENT + `PUBLIC_HOST_OR_IP` + UDP 51820 (CGNAT may block)  
-4. Capital credentials  
-5. Live market provider  
-6. Windows `VS_CLIENT_SETUP.exe` CI packager  
-7. Operator LIVE enablement after gates  
-
-## Requirement marks
-
-| Requirement | Mark |
-|-------------|------|
-| ONE server / ADMIN / CLIENT architecture | PASS |
-| No production legacy imports | PASS (0) |
-| Compatibility shims removed | PASS |
-| Automated tests | PASS |
-| No production fake prices/clients | PASS |
-| i3 / MSI / remote physical | BLOCKED |
-| TRADING READY | NO |
+**NOT PRODUCTION ACCEPTED**

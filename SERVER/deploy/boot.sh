@@ -23,12 +23,25 @@ fi
 export NODE_ENV="${NODE_ENV:-production}"
 export OPERATING_MODE="${OPERATING_MODE:-DEMO}"
 export LIVE_TRADING_ENABLED="${LIVE_TRADING_ENABLED:-false}"
-export CONTROL_API_HOST="${CONTROL_API_HOST:-10.77.0.1}"
 export CONTROL_API_PORT="${CONTROL_API_PORT:-3000}"
 export VS_CORE_DATA="$DATA"
 export VS_CORE_ROOT="$ROOT"
 export VS_SERVER_DATA="$DATA"
 export VS_SERVER_ROOT="$ROOT"
+export VS_LAN_MANAGEMENT="${VS_LAN_MANAGEMENT:-1}"
+export VS_PRIVATE_NETWORK="${VS_PRIVATE_NETWORK:-1}"
+
+# CRITICAL: after sourcing stale .env, force LAN-reachable bind.
+# Never default to WireGuard-only 10.77.0.1 (breaks 127.0.0.1 + MSI LAN).
+if [[ "${VS_LAN_MANAGEMENT}" == "1" || "${VS_LAN_MANAGEMENT}" == "true" ]]; then
+  export CONTROL_API_HOST=0.0.0.0
+else
+  export CONTROL_API_HOST="${CONTROL_API_HOST:-127.0.0.1}"
+  if [[ "${CONTROL_API_HOST}" == "10.77.0.1" ]]; then
+    echo "WARN: CONTROL_API_HOST=10.77.0.1 without LAN management — forcing 127.0.0.1" >&2
+    export CONTROL_API_HOST=127.0.0.1
+  fi
+fi
 
 mkdir -p "$DATA" "$LOG" "$DATA/market" "$DATA/backup" "$DATA/updates" "$DATA/orders"
 
@@ -36,9 +49,18 @@ echo "VS SERVER"
 echo "BOOTING"
 echo "SERVER_ROOT=$ROOT"
 echo "DATA=$DATA"
+echo "CONTROL_API_HOST=$CONTROL_API_HOST"
+echo "CONTROL_API_PORT=$CONTROL_API_PORT"
+echo "VS_LAN_MANAGEMENT=$VS_LAN_MANAGEMENT"
 
 if command -v timedatectl >/dev/null 2>&1; then
   timedatectl show -p NTPSynchronized --value 2>/dev/null || true
+fi
+
+# Bring up WireGuard if configured (non-fatal for LAN-only ADMIN)
+if [[ -x "$ROOT/network/UP_WIREGUARD" ]]; then
+  VS_SERVER_DATA="$DATA" "$ROOT/network/UP_WIREGUARD" >/dev/null 2>&1 || \
+    echo "WARN: UP_WIREGUARD failed — LAN ADMIN still works if CONTROL_API_HOST=0.0.0.0"
 fi
 
 # Authoritative control-api only — no legacy fallbacks

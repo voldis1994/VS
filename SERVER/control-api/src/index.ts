@@ -33,6 +33,7 @@ import { pool as dbPool } from './db/pool.js';
 import { verifyAccessCode } from './security/accessCode.js';
 import { probe } from './vs-core/readiness.js';
 import { registerAdminAgentRoutes } from './vs-core/adminAgent.js';
+import { registerCanonicalV1Routes } from './routes/canonicalV1.js';
 import {
   probeStrategyRuntime,
   probeRiskRuntime,
@@ -56,7 +57,7 @@ function corsOrigins(): boolean | string | string[] {
   const raw = [process.env.CORS_ORIGIN, process.env.CLIENT_CORS_ORIGIN]
     .filter(Boolean)
     .join(',');
-  if (!raw) return 'http://localhost:5173';
+  if (!raw) return 'http://127.0.0.1:5188';
   const list = raw
     .split(',')
     .map((s) => s.trim())
@@ -192,8 +193,9 @@ async function main() {
     getProbes,
   });
 
-  // Admin Agent API only — native VS ADMIN desktop is NEXT master task (blocked).
+  // Admin Agent API + canonical /api/v1 read surfaces for MSI ADMIN.
   await registerAdminAgentRoutes(app, { getProbes });
+  await registerCanonicalV1Routes(app, { getProbes });
 
   // VS Private Network device registry / heartbeat / registration
   await registerPrivateNetworkRoutes(app);

@@ -1,56 +1,44 @@
-# Final Repository Audit
+# Final repository audit
 
-**Date:** 2026-08-16  
-**Branch:** `cursor/vs-final-consolidation-0bd7`
+Generated for FINAL PHYSICAL PRODUCTION COMPLETION.
 
-## Classification summary
+## Classification legend
 
-| Path | Class | Notes |
-|------|-------|-------|
-| `SERVER/control-api` | PRODUCTION | Authoritative appliance + ADMIN/CLIENT HTTP |
-| `SERVER/client-api` | PRODUCTION | Client boundary package |
-| `SERVER/core/*` | PRODUCTION | Domain libraries (market, indicators, regime, strategy, risk, execution, broker, supervisor) |
-| `SERVER/database` | PRODUCTION | Migrations authority |
-| `SERVER/monitor` | PRODUCTION | Graphical i3 panel (was dashboard-v2) |
-| `SERVER/install`, `SERVER/deploy`, `SERVER/network` | PRODUCTION | Install/systemd/WG |
-| `SERVER/MONITOR_SERVER` | PRODUCTION | Console monitor |
-| Former `SERVER/*-engine` shims | DELETED | Re-exports removed; use `SERVER/core` |
-| `ADMIN/desktop` | PRODUCTION | MSI UI (was apps/dashboard-v2) |
-| `ADMIN/app`, `ADMIN/connection`, `ADMIN/windows` | PRODUCTION | Install/CLI/discovery |
-| `CLIENT/desktop` | PRODUCTION | Customer UI (was apps/client-v2) |
-| `CLIENT/windows`, `CLIENT/connection` | PRODUCTION | Installers + enrollment helper |
-| `CLIENT` stub folders (home/market/…) | DELETED | Empty README stubs |
-| `SHARED/` | PRODUCTION | Contracts |
-| `DEPLOY/` | PRODUCTION | Corrected symlinks |
-| `TESTS/` | TEST-ONLY | |
-| `DOCS/` | PRODUCTION docs | |
-| `legacy-review/` | ARCHIVE | Was `Old-system/` |
-| Root `docker-compose.yml` | PRODUCTION | Postgres+Redis for local/dev appliance deps |
-| `dist/` | GENERATED | gitignored |
+- **KEEP** — canonical production
+- **REWRITE** — keep role, fix implementation
+- **MOVE_TO_LEGACY_REVIEW** — useful history, not started in production
+- **DELETE** — safe to remove when confirmed unused (prefer move first)
 
-## Authoritative vs obsolete
+## Major components
 
-| Concern | AUTHORITATIVE | OBSOLETE |
-|---------|---------------|----------|
-| Server API | `SERVER/control-api` | `legacy-review/apps/control-api` |
-| Engines | `SERVER/core/*` (+ vs-core money path inside control-api) | top-level `*-engine` shims (removed) |
-| Admin UI | `ADMIN/desktop` | `legacy-review/apps/dashboard` |
-| Client UI | `CLIENT/desktop` | stub folders / old dashboard CLIENT mode |
-| Monitor | `SERVER/monitor` + `MONITOR_SERVER` | old dashboard |
-| Legacy C++ | none in production | `legacy-review/libs` |
+| Component | Path | Class | Notes |
+|---|---|---|---|
+| Control API | `SERVER/control-api` | KEEP | :3000 authoritative |
+| Canonical v1 reads | `SERVER/control-api/src/routes/canonicalV1.ts` | KEEP | MSI contracts |
+| Core engines | `SERVER/core/**` | KEEP | market-intelligence, strategies, supervisor |
+| Database migrations | `SERVER/control-api/src/db/migrations` | KEEP | |
+| i3 install | `SERVER/INSTALL_I3_SERVER`, `SERVER/install/*` | KEEP | |
+| Boot / systemd | `SERVER/deploy/boot.sh` | KEEP | forces LAN bind |
+| Live monitor | `SERVER/SHOW_LIVE_MONITOR.sh`, `vs-monitor` | KEEP | |
+| ADMIN desktop | `ADMIN/desktop` | KEEP | :5188 only |
+| ADMIN windows | `ADMIN/windows/*.ps1`, `ADMIN/*.bat` | KEEP | |
+| CLIENT portal | served from control-api + `CLIENT/` | KEEP | WireGuard |
+| Shared contracts | `SHARED/` | KEEP | |
+| Tests | `TESTS/`, `**/…test.ts` | KEEP | |
+| Legacy dashboards | `legacy-review/` | MOVE_TO_LEGACY_REVIEW | never START |
+| dist packs | `dist/` | REWRITE | regenerate; do not hand-edit |
+| Old :5173 tactical | under legacy-review | MOVE_TO_LEGACY_REVIEW | blocked by START |
 
-## Migrated functionality
+## One production path
 
-- UI v2 → final `desktop` / `monitor` paths
-- Presence heartbeat mirrored from CLIENT network device heartbeat
-- ADMIN pages bound to real monitor/supervisor/broker/market endpoints (honest NO DATA)
-- CLIENT START/STOP calls `/api/v1/trading/start|stop`
-- boot.sh no longer falls back to Old-system
-- DEPLOY symlinks repaired
+1. i3: `sudo bash SERVER/install/INSTALL_I3_SERVER.sh` → `vs-monitor`
+2. MSI: `ADMIN\INSTALL_ADMIN.bat` → `ADMIN\START_ADMIN.bat` → :5188
+3. CLIENT: WireGuard → i3 portal
 
-## Remaining gaps (honest)
+No second Control API. No second ADMIN UI in production launchers.
 
-- Physical i3/MSI/remote CLIENT tests require hardware
-- `VS_CLIENT_SETUP.exe` requires Windows packager CI
-- Capital/market credentials → NOT_CONFIGURED until supplied
-- control-api `vs-core` money path coexists with `SERVER/core` libraries (single runtime process; libraries shared for tests)
+## Fake-data scan (production)
+
+Production server sources must not use Math.random for market/trading values.
+Test fixtures under `*.test.ts` / `TESTS/fixtures` are allowed.
+Unavailable → `UNAVAILABLE` / `UNKNOWN`, never invented ONLINE/LIVE.

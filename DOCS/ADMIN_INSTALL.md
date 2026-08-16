@@ -7,12 +7,16 @@ ADMIN\INSTALL_ADMIN.bat
 ADMIN\START_ADMIN.bat
 ADMIN\STOP_ADMIN.bat
 ADMIN\STATUS_ADMIN.bat
+ADMIN\REPAIR_ADMIN.bat
+ADMIN\UPDATE_ADMIN.bat
 ```
 
 Or the `ADMIN\windows\` wrappers (same target).
 
 **UI:** `ADMIN/desktop` (`@vs/admin-desktop`) on **`http://127.0.0.1:5188/`**  
 **Never:** `legacy-review/apps/dashboard`, port **5173**, VS SYSTEM / TACTICAL DESK.
+
+Installer uses `Set-StrictMode` and never calls `Get-Content` with a null path (legacy-scan paths are validated before read).
 
 ## Requirements
 

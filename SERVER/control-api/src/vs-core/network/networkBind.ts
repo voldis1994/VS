@@ -55,23 +55,12 @@ export function resolveManagementBind(env: NodeJS.ProcessEnv = process.env): Bin
   const wg = isWireGuardReady(env);
 
   // Appliance: MSI on same Wi-Fi + remote clients on WireGuard.
-  // Bind all interfaces; nftables/ufw MUST restrict TCP API to LAN+WG+lo.
+  // ALWAYS bind 0.0.0.0 when LAN management is on — never honor a stale
+  // CONTROL_API_HOST=10.77.0.1 from older installs (WG-only bind breaks LAN+localhost).
   if (lanMgmt) {
-    const host =
-      explicit && explicit !== '' && explicit !== '127.0.0.1'
-        ? explicit
-        : '0.0.0.0';
-    if (host === '0.0.0.0' || host === '::') {
-      return {
-        host,
-        reason: 'LAN_MANAGEMENT_FIREWALL_ENFORCED',
-        public_management_exposure: 'LAN_FIREWALL_REQUIRED',
-        wireguard_ready: wg.ready,
-      };
-    }
     return {
-      host,
-      reason: 'LAN_MANAGEMENT_EXPLICIT_HOST',
+      host: '0.0.0.0',
+      reason: 'LAN_MANAGEMENT_FIREWALL_ENFORCED',
       public_management_exposure: 'LAN_FIREWALL_REQUIRED',
       wireguard_ready: wg.ready,
     };

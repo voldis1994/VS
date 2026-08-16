@@ -310,6 +310,14 @@ describe('VS_PRIVATE_NETWORK_PRODUCT', () => {
     });
     expect(lan.host).toBe('0.0.0.0');
     expect(lan.public_management_exposure).toBe('LAN_FIREWALL_REQUIRED');
+    // Stale WG-only CONTROL_API_HOST must NOT win under LAN management
+    const lanIgnoreWg = resolveManagementBind({
+      NODE_ENV: 'production',
+      VS_LAN_MANAGEMENT: '1',
+      CONTROL_API_HOST: '10.77.0.1',
+    });
+    expect(lanIgnoreWg.host).toBe('0.0.0.0');
+    expect(lanIgnoreWg.reason).toBe('LAN_MANAGEMENT_FIREWALL_ENFORCED');
     expect(() =>
       resolveManagementBind({
         VS_PRIVATE_NETWORK: '1',

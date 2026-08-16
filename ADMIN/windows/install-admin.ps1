@@ -5,6 +5,10 @@
   Discovers VS-CORE-01 on LAN, enrolls ADMIN, installs deps, builds UI.
   Never installs or references legacy-review tactical desk.
 #>
+param(
+  [switch]$Repair
+)
+Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $AdminRoot = Split-Path -Parent $PSScriptRoot
 $RepoRoot = Split-Path -Parent $AdminRoot
@@ -18,7 +22,11 @@ function Write-Fail([string]$Message) {
 }
 
 Write-Step "========================================"
-Write-Step " VS ADMIN INSTALL — CANONICAL DESKTOP"
+if ($Repair) {
+  Write-Step " VS ADMIN REPAIR — CANONICAL DESKTOP"
+} else {
+  Write-Step " VS ADMIN INSTALL — CANONICAL DESKTOP"
+}
 Write-Step " UI PATH = ADMIN\desktop"
 Write-Step " NEVER = legacy-review / tactical desk / :5173"
 Write-Step "========================================"
@@ -117,11 +125,13 @@ foreach ($root in $scanRoots) {
       Where-Object { $_.FullName -notmatch 'node_modules' }
   }
   foreach ($file in $files) {
-    $text = Get-Content $file.FullName -Raw -ErrorAction SilentlyContinue
+    $pathToRead = if ($file -is [System.IO.FileSystemInfo]) { $file.FullName } else { [string]$file }
+    if (-not $pathToRead) { continue }
+    $text = Get-Content -LiteralPath $pathToRead -Raw -ErrorAction SilentlyContinue
     if (-not $text) { continue }
     foreach ($m in $LegacyMarkers) {
       if ($text -match [regex]::Escape($m)) {
-        Write-Fail ("legacy marker '" + $m + "' found in " + $file.FullName)
+        Write-Fail ("legacy marker '" + $m + "' found in " + $pathToRead)
       }
     }
   }
