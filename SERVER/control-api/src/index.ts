@@ -10,6 +10,7 @@ import { registerAccountRoutes } from './routes/accounts.js';
 import { registerSystemRoutes } from './routes/system.js';
 import { registerTradeRoutes } from './routes/trades.js';
 import { registerMarketRoutes } from './routes/market.js';
+import { registerMarketIntelligenceRoutes } from './routes/marketIntelligence.js';
 import { registerAuditRoutes } from './routes/audit.js';
 import { registerSettingsRoutes } from './routes/settings.js';
 import { registerTradingRoutes } from './routes/trading.js';
@@ -151,6 +152,7 @@ async function main() {
   await registerAccountRoutes(app);
   await registerTradeRoutes(app);
   await registerMarketRoutes(app, telemetry);
+  await registerMarketIntelligenceRoutes(app);
   await registerTradingRoutes(app);
   await registerRobotReaderRoutes(app);
   await registerRobotDeskRoutes(app);
