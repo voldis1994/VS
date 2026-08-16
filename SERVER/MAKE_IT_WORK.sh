@@ -128,20 +128,33 @@ docker start market-reader-redis 2>/dev/null || \
 
 echo "==> wait for Postgres"
 for i in $(seq 1 60); do
-  if docker exec "$CONTAINER" pg_isready -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1; then
+  if docker exec "$CONTAINER" pg_isready -U "$DB_USER" >/dev/null 2>&1; then
     break
   fi
   sleep 1
 done
 
-echo "==> verify TCP auth with exact password Node will use"
+echo "==> ensure database $DB_NAME exists"
+# During init, healthchecks may log FATAL database does not exist — create explicitly.
+docker exec "$CONTAINER" psql -U "$DB_USER" -d postgres -v ON_ERROR_STOP=0 -c \
+  "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" | grep -q 1 \
+  || docker exec "$CONTAINER" psql -U "$DB_USER" -d postgres -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};" \
+  || docker exec "$CONTAINER" psql -U "$DB_USER" -d template1 -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};" \
+  || true
+
+# Also try via TCP once password path works
+docker exec -e PGPASSWORD="$DB_PASSWORD" "$CONTAINER" \
+  psql -h 127.0.0.1 -U "$DB_USER" -d postgres -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};" 2>/dev/null || true
+
+echo "==> verify TCP auth + database"
 if ! docker exec -e PGPASSWORD="$DB_PASSWORD" "$CONTAINER" \
   psql -h 127.0.0.1 -U "$DB_USER" -d "$DB_NAME" -c 'SELECT 1' >/dev/null; then
-  echo "FAIL: fresh Postgres rejects the password we just set" >&2
-  docker logs "$CONTAINER" 2>&1 | tail -30 >&2
+  echo "FAIL: cannot SELECT 1 on ${DB_NAME}" >&2
+  docker exec "$CONTAINER" psql -U "$DB_USER" -d postgres -c '\l' >&2 || true
+  docker logs "$CONTAINER" 2>&1 | tail -40 >&2
   exit 1
 fi
-echo "OK: Postgres accepts DB_PASSWORD"
+echo "OK: Postgres accepts DB_PASSWORD on database $DB_NAME"
 
 # npm if needed
 if [[ ! -x "$API/node_modules/.bin/tsx" ]]; then
