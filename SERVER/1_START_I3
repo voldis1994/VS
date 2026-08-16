@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# =============================================================================
+# 1_START_I3 — VIENS fails: palaid / salabo VS SERVER uz Debian i3
+# =============================================================================
+# Lietošana (root):
+#   sudo bash /root/VS/SERVER/1_START_I3
+# =============================================================================
+set -euo pipefail
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "FAIL: palaid kā root:  sudo bash $0" >&2
+  exit 1
+fi
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$HERE/.." && pwd)"
+export VS_REPO="$REPO"
+export DEBIAN_FRONTEND=noninteractive
+export LIVE_TRADING_ENABLED=false
+export OPERATING_MODE=DEMO
+
+# Detect LAN IP for WireGuard peer Endpoint (Windows cannot resolve VS-CORE-01)
+LAN_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true)"
+export VS_SERVER_ENDPOINT_IP="${VS_SERVER_ENDPOINT_IP:-$LAN_IP}"
+export VS_SERVER_LAN_IP="${VS_SERVER_LAN_IP:-$LAN_IP}"
+echo "LAN_IP=${LAN_IP:-UNKNOWN}"
+
+chmod +x "$HERE"/* "$HERE/network/"* "$HERE/deploy/"* 2>/dev/null || true
+
+# Prefer full bootstrap if never installed; else harden + start
+if [[ ! -f /var/lib/vs-server/server.env ]] || [[ ! -d /opt/vs-server/control-api/node_modules ]]; then
+  echo "==> first install via LAUNCH_ALL"
+  SKIP_WIFI=1 bash "$HERE/LAUNCH_ALL"
+else
+  echo "==> already installed — MAKE_READY"
+  bash "$HERE/MAKE_READY"
+fi
+
+# Always refresh ADMIN conf with real Endpoint IP for USB
+bash "$HERE/2_EXPORT_USB" || true
+
+echo
+echo "========================================"
+echo " SERVER DONE"
+echo " Next on i3:   sudo bash SERVER/2_EXPORT_USB"
+echo " Next Windows: run ADMIN\\1_START_WINDOWS.bat"
+echo "========================================"

@@ -13,7 +13,7 @@ import {
   randomDeviceToken,
   assertPathOutsideRepo,
 } from './wireguardKeys.js';
-import { renderPeerWgConf, buildServerConfFromRegistry } from './wireguardConfig.js';
+import { renderPeerWgConf, buildServerConfFromRegistry, serverWgEndpoint } from './wireguardConfig.js';
 import { invalidateDeviceSessions } from './deviceAuth.js';
 import { nextAdminId, nextClientId } from './enrollment.js';
 import { appendNetworkAudit } from './networkAudit.js';
@@ -50,12 +50,11 @@ export function registerAdminDevice(
   mkdirSync(issuedDir, { recursive: true });
   writePrivateKeyFile(dataRoot, device_id, pair.privateKey);
   const meta = registry.getMeta();
-  const endpointHost = meta.server_endpoint_hostname || 'VS-CORE-01';
   const conf = renderPeerWgConf({
     devicePrivateKeyPlaceholder: pair.privateKey,
     devicePrivateIp: rec.private_address,
     serverPublicKey: meta.server_public_key || '<SERVER_PUBLIC_KEY>',
-    serverEndpoint: `${endpointHost}:${meta.wg_listen_port}`,
+    serverEndpoint: serverWgEndpoint(meta.server_endpoint_hostname, meta.wg_listen_port),
   });
   const peer_config_path = join(issuedDir, `${device_id}.conf`);
   writeFileSync(peer_config_path, conf, { mode: 0o600 });
@@ -117,12 +116,11 @@ export function registerClientDevice(
   mkdirSync(issuedDir, { recursive: true });
   writePrivateKeyFile(dataRoot, device_id, pair.privateKey);
   const meta = registry.getMeta();
-  const endpointHost = meta.server_endpoint_hostname || 'VS-CORE-01';
   const conf = renderPeerWgConf({
     devicePrivateKeyPlaceholder: pair.privateKey,
     devicePrivateIp: rec.private_address,
     serverPublicKey: meta.server_public_key || '<SERVER_PUBLIC_KEY>',
-    serverEndpoint: `${endpointHost}:${meta.wg_listen_port}`,
+    serverEndpoint: serverWgEndpoint(meta.server_endpoint_hostname, meta.wg_listen_port),
   });
   const peer_config_path = join(issuedDir, `${device_id}.conf`);
   writeFileSync(peer_config_path, conf, { mode: 0o600 });
@@ -172,12 +170,11 @@ export function rotateDeviceKey(
   invalidateDeviceSessions(deviceId);
   writePrivateKeyFile(dataRoot, deviceId, pair.privateKey);
   const meta = registry.getMeta();
-  const endpointHost = meta.server_endpoint_hostname || 'VS-CORE-01';
   const conf = renderPeerWgConf({
     devicePrivateKeyPlaceholder: pair.privateKey,
     devicePrivateIp: existing.private_address || existing.private_ip,
     serverPublicKey: meta.server_public_key || '<SERVER_PUBLIC_KEY>',
-    serverEndpoint: `${endpointHost}:${meta.wg_listen_port}`,
+    serverEndpoint: serverWgEndpoint(meta.server_endpoint_hostname, meta.wg_listen_port),
   });
   const peer_config_path = join(dataRoot, 'network', 'issued', `${deviceId}.conf`);
   mkdirSync(join(dataRoot, 'network', 'issued'), { recursive: true });

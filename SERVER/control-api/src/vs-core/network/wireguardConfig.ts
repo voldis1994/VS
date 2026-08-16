@@ -70,8 +70,26 @@ export function buildServerConfFromRegistry(
   });
 }
 
-/** WireGuard peer endpoint string from hostname foundation. */
-export function serverWgEndpoint(hostname: string | null | undefined, listenPort: number): string {
-  const host = hostname && hostname.trim() ? hostname.trim() : 'VS-CORE-01';
-  return `${host}:${listenPort}`;
+/** WireGuard peer endpoint — prefer real IP/FQDN; never leave bare VS-CORE-01 for clients. */
+export function serverWgEndpoint(
+  hostname: string | null | undefined,
+  listenPort: number,
+  opts?: { lanIp?: string | null }
+): string {
+  const envIp = (process.env.VS_SERVER_ENDPOINT_IP || process.env.VS_SERVER_LAN_IP || opts?.lanIp || '')
+    .trim();
+  const host = (hostname && hostname.trim()) || '';
+  // Placeholder appliance id is not a DNS name — use LAN/public IP when available
+  const looksLikePlaceholder = !host || host === 'VS-CORE-01' || (!host.includes('.') && !/^\d+\.\d+\.\d+\.\d+$/.test(host));
+  if (looksLikePlaceholder && envIp) {
+    return `${envIp}:${listenPort}`;
+  }
+  if (host) {
+    return `${host}:${listenPort}`;
+  }
+  if (envIp) {
+    return `${envIp}:${listenPort}`;
+  }
+  // Last resort — operator must rewrite Endpoint (EXPORT_USB does this)
+  return `127.0.0.1:${listenPort}`;
 }
