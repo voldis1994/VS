@@ -142,7 +142,6 @@ cat >/etc/systemd/system/vs-server.service <<UNIT
 Description=VS SERVER appliance
 After=network-online.target docker.service
 Wants=network-online.target docker.service
-Requires=docker.service
 
 [Service]
 Type=simple
