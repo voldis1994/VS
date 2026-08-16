@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 # Bring up WireGuard interface from data-dir keys (physical SERVER).
+# Uses `wg setconf` (NOT wg-quick) — so Address/DNS/MTU/SaveConfig must be stripped;
+# IP is applied with `ip address` below.
 set -euo pipefail
 
 DATA="${VS_SERVER_DATA:-${VS_CORE_DATA:-/var/lib/vs-server}}"
 IFACE="${VS_WG_INTERFACE:-vs0}"
 PORT="${VS_WG_LISTEN_PORT:-51820}"
 SERVER_ID="${VS_SERVER_ID:-VS-CORE-01}"
+SERVER_CIDR="${VS_WG_SERVER_CIDR:-10.77.0.1/24}"
 
 PRIV="$DATA/network/keys/${SERVER_ID}.private"
 if [[ ! -f "$PRIV" ]]; then
-  echo "FAIL: missing $PRIV — run START_SERVER / ensureServerIdentity first" >&2
+  echo "FAIL: missing $PRIV — run SETUP_PRIVATE_NETWORK / ensureServerIdentity first" >&2
   exit 1
 fi
 
@@ -34,13 +37,16 @@ import { buildServerConfFromRegistry } from './src/vs-core/network/wireguardConf
 const reg = getDeviceRegistry(process.env.VS_SERVER_DATA!);
 process.stdout.write(buildServerConfFromRegistry(reg, '___PRIV___'));
 ")"
-echo "$CONF" | sed "s|___PRIV___|${PRIV_KEY}|" >"$TMP"
+# wg setconf rejects wg-quick-only keys (Address, DNS, MTU, SaveConfig, Pre*/Post*)
+echo "$CONF" | sed "s|___PRIV___|${PRIV_KEY}|" \
+  | grep -v -E '^[[:space:]]*(Address|DNS|MTU|SaveConfig|PreUp|PostUp|PreDown|PostDown)[[:space:]]*=' \
+  >"$TMP"
 chmod 600 "$TMP"
 
 ip link add dev "$IFACE" type wireguard 2>/dev/null || true
 wg setconf "$IFACE" "$TMP"
-ip address replace 10.77.0.1/24 dev "$IFACE" 2>/dev/null || ip addr add 10.77.0.1/24 dev "$IFACE" || true
+ip address replace "$SERVER_CIDR" dev "$IFACE" 2>/dev/null || ip addr add "$SERVER_CIDR" dev "$IFACE" || true
 ip link set "$IFACE" up
 rm -f "$TMP"
-echo "SUCCESS: ${IFACE} up on 10.77.0.1/24"
+echo "SUCCESS: ${IFACE} up on ${SERVER_CIDR}"
 wg show "$IFACE"
