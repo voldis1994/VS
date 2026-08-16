@@ -410,7 +410,8 @@ Environment=VS_LAN_MANAGEMENT=1
 Environment=VS_PRIVATE_NETWORK=1
 Environment=CONTROL_API_HOST=0.0.0.0
 Environment=CONTROL_API_PORT=3000
-ExecStartPre=/bin/bash -c 'set -e; C="docker compose -f /var/lib/vs-server/docker-compose.yml --env-file /var/lib/vs-server/compose.env"; if ! $C up -d 2>/tmp/vs-compose.err; then if grep -qiE "already in use|Conflict" /tmp/vs-compose.err; then docker start market-reader-postgres market-reader-redis; else cat /tmp/vs-compose.err >&2; exit 1; fi; fi; for i in $(seq 1 30); do docker exec market-reader-postgres pg_isready >/dev/null 2>&1 && exit 0; sleep 1; done; echo FAIL: postgres not ready; exit 1'
+# ensure-postgres.sh — do NOT inline $vars here (unquoted heredoc + set -u breaks install)
+ExecStartPre=${PREFIX}/deploy/ensure-postgres.sh
 ExecStart=${PREFIX}/deploy/boot.sh
 Restart=on-failure
 RestartSec=5
