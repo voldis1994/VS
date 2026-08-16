@@ -12,43 +12,28 @@ One system. One source of truth: **i3 VS-CORE-01**.
 
 ## Install
 
-### i3
+### i3 (one command)
 
 ```bash
 cd ~/VS-new/VS
 git pull origin main
-sudo bash SERVER/install/INSTALL_I3_SERVER.sh
-vs-monitor
+sudo bash SERVER/START_I3.sh
 ```
 
-Check: `ss -lntp | grep 3000` must show **`0.0.0.0:3000`** (not only `10.77.0.1`).
-
-If `/health` fails with DB auth / `28P01`:
-
-```bash
-sudo bash SERVER/deploy/fix-db-password.sh
-sudo bash SERVER/FIX_CONTROL_API.sh
-```
-
-MSI needs the **real** i3 LAN IP (not only 192.168.0.10). After API is up:
+### MSI (one command)
 
 ```bat
-REM in ADMIN\config\control-panel.env
-VS_SERVER_URL=http://<i3-lan-ip>:3000
-ADMIN\START_ADMIN.bat
+git pull
+ADMIN\START_EVERYTHING.bat
 ```
 
-### MSI
-
-```bat
-git pull origin main
-ADMIN\INSTALL_ADMIN.bat
-ADMIN\START_ADMIN.bat
-```
+If LAN IP wrong, put i3 IP in `ADMIN\config\SERVER_IP.txt` then re-run.
 
 ### CLIENT
 
-ADMIN → CLIENTS → create remote login → WireGuard → open portal URL.
+ADMIN → CLIENTS → CREATE WEB LOGIN → open printed URL → market + lot + START/STOP.
+
+See `DOCS/ONE_SHOT_START.md`.
 
 ## Status
 
