@@ -1,20 +1,45 @@
-# VS — 3 faili (vairāk nevajag)
+# VS — two computers
 
-## 1) SERVER uz i3 (Debian)
+## COMPUTER 1 — i3 SERVER (Sony)
 ```bash
-sudo bash /root/VS/SERVER/1_START_I3
+git clone https://github.com/voldis1994/VS.git /root/VS
+cd /root/VS
+sudo bash SERVER/INSTALL_I3_SERVER
+sudo bash SERVER/STATUS_SERVER
 ```
 
-## 2) Komunikācija (USB / WireGuard conf)
+After install:
 ```bash
-sudo bash /root/VS/SERVER/2_EXPORT_USB
+sudo bash SERVER/START_SERVER    # usually already via systemd
+sudo bash SERVER/STOP_SERVER
+sudo bash SERVER/RESTART_SERVER
+sudo bash SERVER/STATUS_SERVER
+sudo bash SERVER/2_EXPORT_USB    # WireGuard pack for remote / optional
 ```
-Ņem mapi `/home/vs/VS-USB/` vai USB: `VS-ADMIN-01.conf` + `ADMIN_TOKEN.txt`  
-`Endpoint` jau ir **LAN IP** (ne VS-CORE-01).
 
-## 3) ADMIN uz Windows
-1. WireGuard → Import `VS-ADMIN-01.conf` → **Activate**
-2. `ping 10.77.0.1`
-3. Dubultklikšķis: `VS\ADMIN\1_START_WINDOWS.bat`
+MSI reaches API on LAN: `http://<i3-lan-ip>:3000` (e.g. `http://192.168.0.53:3000`).  
+Reserve a DHCP lease for the i3 on your router.
 
-LIVE = off (DEMO).
+## COMPUTER 2 — MSI CONTROL PANEL
+```bash
+git clone https://github.com/voldis1994/VS.git
+cd VS
+# set your i3 LAN IP:
+export VS_SERVER_URL=http://192.168.0.53:3000
+bash ADMIN/INSTALL_CONTROL_PANEL
+# put API_ADMIN_TOKEN into ADMIN/config/control-panel.env (from i3 server.env)
+bash ADMIN/START_CONTROL_PANEL
+```
+Open http://127.0.0.1:5173
+
+Windows: `ADMIN\1_START_WINDOWS.bat` (CLI) or Git Bash for Control Panel scripts.
+
+## Remote clients (different ISPs)
+WireGuard UDP **51820** → i3 (router port-forward).  
+Peer Endpoint = public IP or DDNS (not 192.168.x.x).  
+Private API: `http://10.77.0.1:3000` inside the tunnel.
+
+## Security
+- LIVE_TRADING_ENABLED=false until you explicitly enable after Capital verification
+- Postgres/Redis bound to 127.0.0.1 only
+- Control API firewalled to LAN CIDR + WireGuard supernet

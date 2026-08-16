@@ -1,0 +1,358 @@
+#!/usr/bin/env bash
+# =============================================================================
+# INSTALL_I3_SERVER — ONE authoritative installer for VS SERVER on dedicated i3
+# =============================================================================
+# Clean Debian/Ubuntu Linux. Idempotent. Does NOT enable LIVE trading.
+#
+#   sudo bash SERVER/INSTALL_I3_SERVER
+#
+# Architecture:
+#   MSI Control Panel (LAN)  →  http://<i3-lan-ip>:3000
+#   Remote clients           →  WireGuard UDP 51820 → 10.77.0.1:3000
+#   Postgres/Redis           →  127.0.0.1 only (Docker)
+# =============================================================================
+set -euo pipefail
+
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "FAIL: run as root:  sudo bash $0" >&2
+  exit 1
+fi
+
+export DEBIAN_FRONTEND=noninteractive
+export LIVE_TRADING_ENABLED=false
+# Infrastructure mode — not a fake "demo install"; LIVE stays fail-closed
+export OPERATING_MODE="${OPERATING_MODE:-PAPER}"
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$HERE/.." && pwd)"
+PREFIX="${VS_SERVER_PREFIX:-/opt/vs-server}"
+DATA="${VS_SERVER_DATA:-/var/lib/vs-server}"
+LOG="${VS_SERVER_LOG:-/var/log/vs-server}"
+API="$PREFIX/control-api"
+RUN_USER="${VS_SERVER_USER:-vs-server}"
+
+LAN_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true)"
+export VS_SERVER_ENDPOINT_IP="${VS_SERVER_ENDPOINT_IP:-$LAN_IP}"
+export VS_SERVER_LAN_IP="${VS_SERVER_LAN_IP:-$LAN_IP}"
+
+echo "========================================"
+echo " VS SERVER — INSTALL_I3_SERVER"
+echo " REPO=$REPO"
+echo " PREFIX=$PREFIX DATA=$DATA"
+echo " LAN_IP=${LAN_IP:-UNKNOWN}"
+echo " LIVE_TRADING_ENABLED=false  MODE=$OPERATING_MODE"
+echo "========================================"
+
+# ---------------------------------------------------------------------------
+# 1) OS packages
+# ---------------------------------------------------------------------------
+apt-get update -y
+apt-get install -y --no-install-recommends \
+  ca-certificates curl git rsync jq openssl \
+  iproute2 iptables nftables ufw \
+  wireguard wireguard-tools \
+  docker.io \
+  postgresql-client
+
+# Compose plugin (name varies)
+apt-get install -y docker-compose-plugin 2>/dev/null \
+  || apt-get install -y docker-compose-v2 2>/dev/null \
+  || apt-get install -y docker-compose 2>/dev/null \
+  || true
+
+systemctl enable --now docker
+systemctl enable --now systemd-timesyncd 2>/dev/null || true
+timedatectl set-ntp true 2>/dev/null || true
+update-ca-certificates 2>/dev/null || true
+
+# Node 20+
+need_node=0
+if ! command -v node >/dev/null 2>&1; then need_node=1; else
+  [[ "$(node -v | sed 's/^v//;s/\..*//')" -lt 20 ]] && need_node=1
+fi
+if [[ "$need_node" -eq 1 ]]; then
+  apt-get install -y nodejs npm 2>/dev/null || true
+  if ! command -v node >/dev/null 2>&1 || [[ "$(node -v | sed 's/^v//;s/\..*//')" -lt 20 ]]; then
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    apt-get install -y nodejs
+  fi
+fi
+echo "NODE=$(node -v) DOCKER=$(docker --version 2>/dev/null | head -1)"
+
+# ---------------------------------------------------------------------------
+# 2) Service user + dirs
+# ---------------------------------------------------------------------------
+id -u "$RUN_USER" >/dev/null 2>&1 || useradd --system --home "$DATA" --shell /usr/sbin/nologin "$RUN_USER"
+id -u vs-core >/dev/null 2>&1 || useradd --system --home "$DATA" --shell /usr/sbin/nologin vs-core
+usermod -aG docker "$RUN_USER" 2>/dev/null || true
+
+mkdir -p "$PREFIX" "$DATA" "$LOG" \
+  "$DATA/market" "$DATA/backup" "$DATA/updates" "$DATA/orders" "$DATA/admin" \
+  "$DATA/network/keys" "$DATA/network/issued" "$DATA/logs"
+
+# ---------------------------------------------------------------------------
+# 3) Secrets (idempotent — never rotate existing strong keys)
+# ---------------------------------------------------------------------------
+ENV_ROOT="$REPO/.env"
+ENV_API="$API/.env"
+SERVER_ENV="$DATA/server.env"
+
+gen() { openssl rand -hex "$1"; }
+
+ensure_kv() {
+  local f="$1" k="$2" v="$3"
+  touch "$f"
+  if grep -qE "^${k}=" "$f" 2>/dev/null; then
+    local cur
+    cur="$(grep -E "^${k}=" "$f" | head -1 | cut -d= -f2-)"
+    if [[ -z "$cur" || "$cur" == *CHANGE_ME* || ${#cur} -lt 8 ]]; then
+      sed -i "s|^${k}=.*|${k}=${v}|" "$f"
+    fi
+  else
+    printf '%s=%s\n' "$k" "$v" >>"$f"
+  fi
+}
+
+[[ -f "$ENV_ROOT" ]] || cp "$REPO/.env.example" "$ENV_ROOT" 2>/dev/null || touch "$ENV_ROOT"
+
+DB_PASS="$(gen 16)"
+MASTER="$(gen 32)"
+ADMIN="$(gen 24)"
+JWT="$(gen 24)"
+
+ensure_kv "$ENV_ROOT" DB_HOST 127.0.0.1
+ensure_kv "$ENV_ROOT" DB_PORT 5432
+ensure_kv "$ENV_ROOT" DB_NAME market_reader
+ensure_kv "$ENV_ROOT" DB_USER market_reader
+ensure_kv "$ENV_ROOT" DB_PASSWORD "$DB_PASS"
+ensure_kv "$ENV_ROOT" MASTER_ENCRYPTION_KEY "$MASTER"
+ensure_kv "$ENV_ROOT" API_ADMIN_TOKEN "$ADMIN"
+ensure_kv "$ENV_ROOT" JWT_SECRET "$JWT"
+ensure_kv "$ENV_ROOT" OPERATING_MODE "$OPERATING_MODE"
+ensure_kv "$ENV_ROOT" LIVE_TRADING_ENABLED false
+ensure_kv "$ENV_ROOT" VS_PRIVATE_NETWORK 1
+ensure_kv "$ENV_ROOT" VS_LAN_MANAGEMENT 1
+ensure_kv "$ENV_ROOT" CONTROL_API_HOST 0.0.0.0
+ensure_kv "$ENV_ROOT" CONTROL_API_PORT 3000
+ensure_kv "$ENV_ROOT" CONTROL_API_URL "http://127.0.0.1:3000"
+ensure_kv "$ENV_ROOT" CORS_ORIGIN "http://127.0.0.1:5173,http://localhost:5173,*"
+ensure_kv "$ENV_ROOT" VS_WG_LISTEN_PORT 51820
+ensure_kv "$ENV_ROOT" VS_SERVER_ENDPOINT_IP "${LAN_IP:-}"
+chmod 600 "$ENV_ROOT"
+
+set -a
+# shellcheck disable=SC1090
+source <(grep -E '^[A-Z0-9_]+=' "$ENV_ROOT" | sed 's/\r$//')
+set +a
+
+# Durable server.env for systemd
+cat >"$SERVER_ENV" <<EOF
+# Generated/updated by INSTALL_I3_SERVER — do not commit
+NODE_ENV=production
+OPERATING_MODE=${OPERATING_MODE}
+LIVE_TRADING_ENABLED=false
+VS_PRIVATE_NETWORK=1
+VS_LAN_MANAGEMENT=1
+CONTROL_API_HOST=0.0.0.0
+CONTROL_API_PORT=3000
+CONTROL_API_URL=http://127.0.0.1:3000
+CORS_ORIGIN=http://127.0.0.1:5173,http://localhost:5173,*
+VS_WG_INTERFACE=vs0
+VS_WG_LISTEN_PORT=51820
+VS_SERVER_ID=VS-CORE-01
+VS_SERVER_ENDPOINT_IP=${LAN_IP:-}
+VS_SERVER_LAN_IP=${LAN_IP:-}
+VS_SERVER_ENDPOINT_HOSTNAME=${VS_SERVER_ENDPOINT_HOSTNAME:-}
+DB_HOST=127.0.0.1
+DB_PORT=5432
+DB_NAME=${DB_NAME}
+DB_USER=${DB_USER}
+DB_PASSWORD=${DB_PASSWORD}
+MASTER_ENCRYPTION_KEY=${MASTER_ENCRYPTION_KEY}
+API_ADMIN_TOKEN=${API_ADMIN_TOKEN}
+JWT_SECRET=${JWT_SECRET}
+VS_SERVER_ROOT=${PREFIX}
+VS_CORE_ROOT=${PREFIX}
+VS_SERVER_DATA=${DATA}
+VS_CORE_DATA=${DATA}
+EOF
+chmod 600 "$SERVER_ENV"
+
+# ---------------------------------------------------------------------------
+# 4) Docker Postgres + Redis (wait until READY)
+# ---------------------------------------------------------------------------
+cd "$REPO"
+if ! docker compose version >/dev/null 2>&1 && ! docker-compose version >/dev/null 2>&1; then
+  echo "FAIL: docker compose not available after apt install" >&2
+  exit 1
+fi
+
+compose() {
+  if docker compose version >/dev/null 2>&1; then docker compose "$@"
+  else docker-compose "$@"
+  fi
+}
+
+echo "==> docker compose up -d (postgres+redis on 127.0.0.1)"
+compose up -d
+
+# Persist compose files for reboot (systemd ExecStartPre)
+cp -a "$REPO/docker-compose.yml" "$DATA/docker-compose.yml"
+cp -a "$ENV_ROOT" "$DATA/compose.env"
+chmod 600 "$DATA/compose.env"
+
+echo "==> waiting for Postgres readiness"
+ok_pg=0
+for i in $(seq 1 90); do
+  if docker exec market-reader-postgres pg_isready -U "${DB_USER}" -d "${DB_NAME}" >/dev/null 2>&1; then
+    ok_pg=1
+    break
+  fi
+  sleep 1
+done
+[[ "$ok_pg" -eq 1 ]] || { echo "FAIL: Postgres not ready" >&2; exit 1; }
+echo "SUCCESS: Postgres READY"
+
+ok_rd=0
+for i in $(seq 1 30); do
+  if docker exec market-reader-redis redis-cli ping 2>/dev/null | grep -q PONG; then
+    ok_rd=1
+    break
+  fi
+  sleep 1
+done
+[[ "$ok_rd" -eq 1 ]] || echo "WARN: Redis not ready (optional)"
+
+# ---------------------------------------------------------------------------
+# 5) Install tree + npm as vs-server (never leave root-owned node_modules)
+# ---------------------------------------------------------------------------
+echo "==> rsync → $PREFIX"
+rsync -a --delete \
+  --exclude .git \
+  --exclude node_modules \
+  --exclude '**/node_modules' \
+  "$HERE/" "$PREFIX/"
+
+mkdir -p "$API"
+cp -a "$ENV_ROOT" "$API/.env"
+cp -a "$ENV_ROOT" "$PREFIX/.env" 2>/dev/null || true
+cp -a "$ENV_ROOT" /opt/.env
+chmod 600 "$API/.env" /opt/.env
+
+chown -R "$RUN_USER:$RUN_USER" "$DATA" "$LOG" "$PREFIX"
+
+echo "==> npm ci as $RUN_USER"
+sudo -u "$RUN_USER" bash -lc "cd '$API' && npm ci"
+# tsx is a production dependency; verify binary
+if [[ ! -x "$API/node_modules/.bin/tsx" ]]; then
+  sudo -u "$RUN_USER" bash -lc "cd '$API' && npm install tsx"
+fi
+test -x "$API/node_modules/.bin/tsx"
+
+# ---------------------------------------------------------------------------
+# 6) Private network foundation + firewall + WireGuard
+# ---------------------------------------------------------------------------
+chmod +x "$PREFIX"/INSTALL_* "$PREFIX"/START_* "$PREFIX"/STOP_* "$PREFIX"/STATUS_* \
+  "$PREFIX"/RESTART_* "$PREFIX"/network/* "$PREFIX"/deploy/*.sh 2>/dev/null || true
+
+set -a
+# shellcheck disable=SC1090
+source "$SERVER_ENV"
+set +a
+
+export VS_SETUP_NONINTERACTIVE=1
+export VS_SETUP_CREATE_ADMIN=Y
+export VS_SERVER_DATA="$DATA"
+export VS_CORE_DATA="$DATA"
+
+echo "==> SETUP_PRIVATE_NETWORK"
+"$PREFIX/network/SETUP_PRIVATE_NETWORK" || true
+
+echo "==> APPLY_FIREWALL (LAN + WG for API)"
+"$PREFIX/network/APPLY_FIREWALL"
+
+echo "==> UP_WIREGUARD"
+VS_SERVER_DATA="$DATA" "$PREFIX/network/UP_WIREGUARD" || true
+
+# ---------------------------------------------------------------------------
+# 7) systemd
+# ---------------------------------------------------------------------------
+cat >/etc/systemd/system/vs-server.service <<EOF
+[Unit]
+Description=VS SERVER appliance
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=${RUN_USER}
+Group=${RUN_USER}
+WorkingDirectory=${PREFIX}
+EnvironmentFile=-${DATA}/server.env
+Environment=VS_SERVER_ROOT=${PREFIX}
+Environment=VS_CORE_ROOT=${PREFIX}
+Environment=VS_SERVER_DATA=${DATA}
+Environment=VS_CORE_DATA=${DATA}
+Environment=NODE_ENV=production
+Environment=OPERATING_MODE=${OPERATING_MODE}
+Environment=LIVE_TRADING_ENABLED=false
+Environment=VS_LAN_MANAGEMENT=1
+Environment=VS_PRIVATE_NETWORK=1
+Environment=CONTROL_API_HOST=0.0.0.0
+Environment=CONTROL_API_PORT=3000
+ExecStartPre=/bin/bash -c 'docker compose -f /var/lib/vs-server/docker-compose.yml --env-file /var/lib/vs-server/compose.env up -d || true'
+ExecStart=${PREFIX}/deploy/boot.sh
+Restart=on-failure
+RestartSec=5
+MemoryMax=4G
+LimitNOFILE=65535
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=${DATA} ${LOG} ${PREFIX}
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Convenience wrappers on PATH-ish locations
+ln -sfn "$PREFIX/INSTALL_I3_SERVER" /usr/local/sbin/INSTALL_I3_SERVER 2>/dev/null || true
+cp -a "$HERE/START_SERVER" "$PREFIX/START_SERVER"
+cp -a "$HERE/STOP_SERVER" "$PREFIX/STOP_SERVER"
+cp -a "$HERE/STATUS_SERVER" "$PREFIX/STATUS_SERVER"
+cp -a "$HERE/RESTART_SERVER" "$PREFIX/RESTART_SERVER" 2>/dev/null || true
+
+systemctl daemon-reload
+systemctl enable vs-server.service
+systemctl restart vs-server.service
+
+# ---------------------------------------------------------------------------
+# 8) Health
+# ---------------------------------------------------------------------------
+ok=0
+for i in $(seq 1 60); do
+  if curl -fsS "http://127.0.0.1:3000/health" >/dev/null 2>&1; then ok=1; break; fi
+  if [[ -n "$LAN_IP" ]] && curl -fsS "http://${LAN_IP}:3000/health" >/dev/null 2>&1; then ok=1; break; fi
+  sleep 1
+done
+
+echo
+"$PREFIX/STATUS_SERVER" || true
+echo
+echo "======== MSI CONTROL PANEL ========"
+echo "Server LAN URL:  http://${LAN_IP:-<i3-lan-ip>}:3000"
+echo "Reserve DHCP lease for this MAC/IP on your router."
+echo "API_ADMIN_TOKEN is in $SERVER_ENV (not printed)."
+echo "WireGuard UDP:   ${VS_WG_LISTEN_PORT:-51820} (remote clients)"
+echo "Export USB pack: sudo bash $PREFIX/2_EXPORT_USB"
+echo "==================================="
+
+if [[ "$ok" -ne 1 ]]; then
+  echo "FAIL: Control API health not up — journalctl -u vs-server -e" >&2
+  journalctl -u vs-server -n 40 --no-pager >&2 || true
+  exit 1
+fi
+
+echo "SUCCESS: VS SERVER READY (LIVE_TRADING_ENABLED=false)"
+exit 0

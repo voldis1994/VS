@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# APPLY_FIREWALL — SERVER host firewall for VS Private Network (product).
+# APPLY_FIREWALL — SERVER host firewall for VS (product).
 # DEFAULT INBOUND DENY.
-# Allow WireGuard UDP only as public ingress.
-# Application services only from VS private / localhost.
-# CLIENT subnet must not reach ADMIN subnet; CLIENT ↛ CLIENT.
+# - WireGuard UDP publicly reachable (remote clients)
+# - Control API TCP only from: localhost + LAN CIDR + VS WireGuard supernet
+# - PostgreSQL/Redis NOT exposed (compose binds 127.0.0.1)
+# CLIENT↛ADMIN / CLIENT↛CLIENT on forward chain
 set -euo pipefail
 
 WG_IFACE="${VS_WG_INTERFACE:-vs0}"
@@ -14,9 +15,25 @@ ADMIN_NET="${VS_WG_ADMIN_NET:-10.77.1.0/24}"
 CLIENT_NET="${VS_WG_CLIENT_NET:-10.77.10.0/20}"
 SERVER_IP="${VS_WG_SERVER_IP:-10.77.0.1}"
 
+# LAN for MSI Control Panel (same Wi-Fi). Override with VS_LAN_CIDR=192.168.0.0/24
+detect_lan_cidr() {
+  if [[ -n "${VS_LAN_CIDR:-}" ]]; then
+    echo "$VS_LAN_CIDR"
+    return
+  fi
+  local src
+  src="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true)"
+  if [[ "$src" =~ ^([0-9]+\.[0-9]+\.[0-9]+)\.[0-9]+$ ]]; then
+    echo "${BASH_REMATCH[1]}.0/24"
+    return
+  fi
+  echo "192.168.0.0/16"
+}
+LAN_CIDR="$(detect_lan_cidr)"
+
 echo "VS SERVER FIREWALL (product)"
-echo "IFACE=$WG_IFACE PORT=$WG_PORT API=$API_PORT"
-echo "SUPERNET=$SUPERNET ADMIN=$ADMIN_NET CLIENT=$CLIENT_NET SERVER=$SERVER_IP"
+echo "IFACE=$WG_IFACE WG_UDP=$WG_PORT API_TCP=$API_PORT"
+echo "LAN_CIDR=$LAN_CIDR WG_SUPERNET=$SUPERNET"
 
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "FAIL: APPLY_FIREWALL requires root" >&2
@@ -27,14 +44,13 @@ if command -v ufw >/dev/null 2>&1; then
   ufw --force reset || true
   ufw default deny incoming
   ufw default allow outgoing
-  ufw allow OpenSSH || true
-  ufw allow "${WG_PORT}/udp" comment 'VS WireGuard transport only'
-  # Management/API only from VS private supernet (not public internet)
-  ufw allow from "$SUPERNET" to any port "$API_PORT" proto tcp comment 'VS private API'
+  ufw allow OpenSSH || ufw allow 22/tcp || true
+  ufw allow "${WG_PORT}/udp" comment 'VS WireGuard'
+  ufw allow from "$LAN_CIDR" to any port "$API_PORT" proto tcp comment 'VS Control API LAN (MSI)'
+  ufw allow from "$SUPERNET" to any port "$API_PORT" proto tcp comment 'VS Control API WireGuard'
+  ufw allow from 127.0.0.1 to any port "$API_PORT" proto tcp comment 'VS Control API localhost'
   ufw --force enable
-  echo "SUCCESS: ufw default deny + WG UDP + private API"
-  echo "NOTE: CLIENT↛ADMIN / CLIENT↛CLIENT also enforced in nft path and app auth"
-  # Prefer nft for forward segmentation when available
+  echo "SUCCESS: ufw deny-in + WG UDP + API from LAN/WG/lo only"
 fi
 
 if command -v nft >/dev/null 2>&1; then
@@ -46,24 +62,21 @@ table inet vs_private {
     ct state established,related accept
     iif lo accept
     udp dport ${WG_PORT} accept
-    ip saddr ${SUPERNET} tcp dport ${API_PORT} accept
     tcp dport 22 accept
+    ip saddr ${LAN_CIDR} tcp dport ${API_PORT} accept
+    ip saddr ${SUPERNET} tcp dport ${API_PORT} accept
   }
   chain forward {
     type filter hook forward priority 0; policy drop;
     ct state established,related accept
-    # ADMIN may reach SERVER infrastructure
     ip saddr ${ADMIN_NET} ip daddr ${SERVER_IP} accept
-    # CLIENT may reach SERVER only (not ADMIN devices, not other clients)
     ip saddr ${CLIENT_NET} ip daddr ${SERVER_IP} accept
-    # Explicit deny CLIENT → ADMIN
     ip saddr ${CLIENT_NET} ip daddr ${ADMIN_NET} drop
-    # Explicit deny CLIENT → CLIENT
     ip saddr ${CLIENT_NET} ip daddr ${CLIENT_NET} drop
   }
 }
 EOF
-  echo "SUCCESS: nftables vs_private applied (CLIENT↛ADMIN, CLIENT↛CLIENT)"
+  echo "SUCCESS: nftables vs_private (API LAN+WG only; CLIENT↛ADMIN)"
   exit 0
 fi
 

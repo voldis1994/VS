@@ -81,7 +81,7 @@ async function main() {
     process.env.LIVE_TRADING_ENABLED = 'false';
   }
   if (process.env.OPERATING_MODE === undefined || process.env.OPERATING_MODE === '') {
-    process.env.OPERATING_MODE = 'DEMO';
+    process.env.OPERATING_MODE = 'PAPER';
   }
 
   // B6: refuse missing/default encryption key for ALL modes (broker secrets)

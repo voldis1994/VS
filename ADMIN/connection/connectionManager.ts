@@ -9,7 +9,7 @@ export type AdminProductConfig = {
   enrollment_code?: string;
 };
 
-/** Internal catalog — not shown as user-editable port fields. */
+/** Internal catalog — LAN MSI uses configured baseUrl; WG peers use private host. */
 const INTERNAL = {
   private_host: '10.77.0.1',
   private_port: 3000,
@@ -17,6 +17,9 @@ const INTERNAL = {
 
 export function resolveAdminBaseUrl(serverId: string, override?: string): string {
   if (override) return override.replace(/\/$/, '');
+  // Optional LAN URL from env (same Wi-Fi as i3) — not 127.0.0.1
+  const lan = (process.env.VS_SERVER_URL || process.env.VS_LAN_SERVER_URL || '').trim();
+  if (lan) return lan.replace(/\/$/, '');
   void serverId;
   return `http://${INTERNAL.private_host}:${INTERNAL.private_port}`;
 }

@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# RESTART_SERVER — restart VS SERVER appliance (systemd preferred).
+set -euo pipefail
+DATA="${VS_SERVER_DATA:-${VS_CORE_DATA:-/var/lib/vs-server}}"
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+
+echo "VS SERVER RESTART"
+if systemctl list-unit-files vs-server.service >/dev/null 2>&1; then
+  systemctl restart vs-server.service
+  sleep 2
+  systemctl --no-pager -l status vs-server | head -15 || true
+  exit 0
+fi
+"$ROOT/STOP_SERVER" || true
+VS_SERVER_DATA="$DATA" "$ROOT/START_SERVER"

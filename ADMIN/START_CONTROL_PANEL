@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# START_CONTROL_PANEL — start Vite Control Panel against configured i3 SERVER URL.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$ROOT/.." && pwd)"
+DASH="$REPO/apps/dashboard"
+CFG="$ROOT/config/control-panel.env"
+
+if [[ -f "$CFG" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$CFG"
+  set +a
+fi
+
+SERVER_URL="${VS_SERVER_URL:-${VITE_API_URL:-http://192.168.0.53:3000}}"
+export VITE_API_URL="$SERVER_URL"
+export VITE_WS_URL="${VITE_WS_URL:-${SERVER_URL/http/ws}/ws}"
+export VITE_API_ADMIN_TOKEN="${API_ADMIN_TOKEN:-${VITE_API_ADMIN_TOKEN:-}}"
+export API_ADMIN_TOKEN="${API_ADMIN_TOKEN:-}"
+
+echo "VS CONTROL PANEL"
+echo "  API = $VITE_API_URL"
+echo "  WS  = $VITE_WS_URL"
+
+# Probe server (LAN)
+if ! curl -fsS --max-time 5 "$SERVER_URL/health" >/dev/null 2>&1; then
+  echo "FAIL: cannot reach $SERVER_URL/health" >&2
+  echo "  - Is i3 SERVER running?  (STATUS_SERVER on i3)" >&2
+  echo "  - Same Wi-Fi? Update VS_SERVER_URL in $CFG" >&2
+  echo "  - Firewall allowing LAN → :3000?" >&2
+  exit 1
+fi
+echo "  health OK"
+
+if [[ ! -d "$DASH/node_modules" ]]; then
+  echo "FAIL: run INSTALL_CONTROL_PANEL first" >&2
+  exit 1
+fi
+
+cd "$DASH"
+# Bind panel to localhost on MSI only; API calls go to i3 LAN IP via VITE_API_URL
+exec npx vite --host 127.0.0.1 --port 5173

@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# INSTALL_CONTROL_PANEL — MSI / admin PC: web Control Panel (apps/dashboard) + ADMIN CLI.
+# Does NOT install Postgres/Redis/backend.
+#
+#   bash ADMIN/INSTALL_CONTROL_PANEL
+#   # optional:
+#   VS_SERVER_URL=http://192.168.0.53:3000 bash ADMIN/INSTALL_CONTROL_PANEL
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$ROOT/.." && pwd)"
+DASH="$REPO/apps/dashboard"
+CFG_DIR="$ROOT/config"
+DATA="${VS_ADMIN_DATA:-$REPO/data/vs-admin}"
+SERVER_URL="${VS_SERVER_URL:-http://192.168.0.53:3000}"
+
+echo "========================================"
+echo " VS CONTROL PANEL — INSTALL"
+echo " SERVER_URL=$SERVER_URL"
+echo "========================================"
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "FAIL: Node.js 20+ required on this PC" >&2
+  exit 1
+fi
+
+mkdir -p "$CFG_DIR" "$DATA"
+
+# Writable config — DHCP may change; edit this file, do not hard-code forever
+cat >"$CFG_DIR/control-panel.env" <<EOF
+# VS Control Panel → i3 SERVER
+# Prefer a DHCP reservation for the i3 on your router.
+VS_SERVER_URL=${SERVER_URL}
+VITE_API_URL=${SERVER_URL}
+VITE_WS_URL=${SERVER_URL/http/ws}/ws
+API_ADMIN_TOKEN=
+# Optional enrollment (WireGuard remote path)
+VS_ENROLLMENT_CODE=
+EOF
+chmod 600 "$CFG_DIR/control-panel.env"
+
+# ADMIN CLI deps (tsx must be a runtime dependency)
+cd "$ROOT"
+npm install
+# ensure tsx present for start scripts
+npm install tsx --save
+
+# Dashboard (Control Panel UI)
+if [[ -d "$DASH" ]]; then
+  cd "$DASH"
+  npm install
+else
+  echo "WARN: apps/dashboard missing — CLI ADMIN only"
+fi
+
+# Connection JSON for CLI ADMIN
+if [[ ! -f "$CFG_DIR/admin.connection.json" ]]; then
+  cat >"$CFG_DIR/admin.connection.json" <<EOF
+{
+  "server_id": "VS-CORE-01",
+  "device_id": "VS-ADMIN-01",
+  "baseUrl": "${SERVER_URL}",
+  "adminToken": "",
+  "enrollment_code": "",
+  "note": "Set adminToken from i3 /var/lib/vs-server/server.env API_ADMIN_TOKEN"
+}
+EOF
+fi
+
+chmod +x "$ROOT/INSTALL_CONTROL_PANEL" "$ROOT/START_CONTROL_PANEL" \
+  "$ROOT/INSTALL_ADMIN" "$ROOT/START_ADMIN" "$ROOT/LAUNCH_ADMIN" \
+  "$ROOT/1_START_WINDOWS.bat" 2>/dev/null || true
+
+echo "SUCCESS: Control Panel installed"
+echo "Config: $CFG_DIR/control-panel.env"
+echo "Start:  bash $ROOT/START_CONTROL_PANEL"
+echo "Put API_ADMIN_TOKEN into control-panel.env (from i3 server.env — never commit)"
+exit 0

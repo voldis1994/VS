@@ -298,11 +298,18 @@ describe('VS_PRIVATE_NETWORK_PRODUCT', () => {
     expect(JSON.stringify(uf)).not.toMatch(/:\d{4}/);
   });
 
-  it('fail-closed bind: production private net refuses 0.0.0.0; WG-down throws', () => {
+  it('fail-closed bind: production refuses open 0.0.0.0; LAN management allows firewall bind; WG-down throws without LAN', () => {
     expect(resolveManagementBind({ NODE_ENV: 'test' }).public_management_exposure).toBe('NONE');
     expect(() =>
       resolveManagementBind({ NODE_ENV: 'production', CONTROL_API_HOST: '0.0.0.0' })
     ).toThrow(/PUBLIC_BIND_DENIED/);
+    const lan = resolveManagementBind({
+      NODE_ENV: 'production',
+      VS_LAN_MANAGEMENT: '1',
+      VS_PRIVATE_NETWORK: '1',
+    });
+    expect(lan.host).toBe('0.0.0.0');
+    expect(lan.public_management_exposure).toBe('LAN_FIREWALL_REQUIRED');
     expect(() =>
       resolveManagementBind({
         VS_PRIVATE_NETWORK: '1',

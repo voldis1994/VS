@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 
 const API_URL = import.meta.env.VITE_API_URL || '';
+const ADMIN_TOKEN = import.meta.env.VITE_API_ADMIN_TOKEN || '';
 
 function extractErrorMessage(body: unknown, status: number, statusText: string): string {
   if (body && typeof body === 'object') {
@@ -22,6 +23,9 @@ export function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
     Accept: 'application/json',
     ...((options?.headers as Record<string, string> | undefined) || {}),
   };
+  if (ADMIN_TOKEN && !headers['x-admin-token'] && !headers['X-Admin-Token']) {
+    headers['x-admin-token'] = ADMIN_TOKEN;
+  }
 
   // Avoid Fastify 400: Content-Type application/json with empty body
   if (options?.body !== undefined && options?.body !== null) {

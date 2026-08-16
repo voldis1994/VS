@@ -7,8 +7,9 @@ services:
       POSTGRES_DB: ${DB_NAME:-market_reader}
       POSTGRES_USER: ${DB_USER:-market_reader}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-CHANGE_ME}
+    # Localhost only — never expose DB on LAN
     ports:
-      - "${DB_PORT:-5432}:5432"
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -22,7 +23,7 @@ services:
     container_name: market-reader-redis
     restart: unless-stopped
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:

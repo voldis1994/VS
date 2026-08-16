@@ -1,12 +1,15 @@
 /**
- * Production bind policy — fail closed.
+ * Production bind policy — fail closed on public exposure.
+ *
+ * Modes:
+ * - Default: 127.0.0.1
+ * - VS_LAN_MANAGEMENT=1: bind 0.0.0.0 so MSI on LAN + WG peers can reach Control API.
+ *   MUST be paired with APPLY_FIREWALL (LAN CIDR + 10.77.0.0/16 only for :3000).
+ * - VS_PRIVATE_NETWORK=1 without LAN management: bind WireGuard IP only (legacy).
  *
  * NEVER:
- *   WireGuard FAIL → fallback public HTTP
- *   fallback 0.0.0.0
- *   "warn and continue" with management publicly available
- *
- * When VS_PRIVATE_NETWORK=1 and WireGuard is not READY → throw (management NOT READY).
+ *   silent public 0.0.0.0 without VS_LAN_MANAGEMENT
+ *   WireGuard-down → public HTTP fallback
  */
 
 import { networkInterfaces } from 'os';
@@ -15,7 +18,7 @@ import { VS_WG_SERVER_IP, VS_WG_INTERFACE_DEFAULT } from './networkConstants.js'
 export type BindDecision = {
   host: string;
   reason: string;
-  public_management_exposure: 'NONE' | 'DENIED_DEFAULT' | string;
+  public_management_exposure: 'NONE' | 'DENIED_DEFAULT' | 'LAN_FIREWALL_REQUIRED' | string;
   wireguard_ready: boolean;
 };
 
@@ -37,22 +40,47 @@ export function isWireGuardReady(
   return { ready: Boolean(ip), ip, iface };
 }
 
+function truthy(v: string | undefined): boolean {
+  return v === '1' || v === 'true' || v === 'yes';
+}
+
 /**
  * Resolve CONTROL_API listen host.
- * - Default: 127.0.0.1
- * - VS_PRIVATE_NETWORK=1: require WireGuard UP; bind private IP only (no public fallback)
- * - Explicit CONTROL_API_HOST=0.0.0.0 → refuse in production/private-network
  */
 export function resolveManagementBind(env: NodeJS.ProcessEnv = process.env): BindDecision {
   const explicit = env.CONTROL_API_HOST;
   const isProd = env.NODE_ENV === 'production';
-  const privateNet = env.VS_PRIVATE_NETWORK === '1' || env.VS_PRIVATE_NETWORK === 'true';
+  const privateNet = truthy(env.VS_PRIVATE_NETWORK);
+  const lanMgmt = truthy(env.VS_LAN_MANAGEMENT);
   const wg = isWireGuardReady(env);
+
+  // Appliance: MSI on same Wi-Fi + remote clients on WireGuard.
+  // Bind all interfaces; nftables/ufw MUST restrict TCP API to LAN+WG+lo.
+  if (lanMgmt) {
+    const host =
+      explicit && explicit !== '' && explicit !== '127.0.0.1'
+        ? explicit
+        : '0.0.0.0';
+    if (host === '0.0.0.0' || host === '::') {
+      return {
+        host,
+        reason: 'LAN_MANAGEMENT_FIREWALL_ENFORCED',
+        public_management_exposure: 'LAN_FIREWALL_REQUIRED',
+        wireguard_ready: wg.ready,
+      };
+    }
+    return {
+      host,
+      reason: 'LAN_MANAGEMENT_EXPLICIT_HOST',
+      public_management_exposure: 'LAN_FIREWALL_REQUIRED',
+      wireguard_ready: wg.ready,
+    };
+  }
 
   if (explicit === '0.0.0.0' || explicit === '::') {
     if (isProd || privateNet) {
       throw new Error(
-        'PUBLIC_BIND_DENIED: management API must not bind 0.0.0.0 in production/private-network mode'
+        'PUBLIC_BIND_DENIED: set VS_LAN_MANAGEMENT=1 (firewall-enforced) or bind WireGuard IP — refuse open public bind'
       );
     }
     return {
@@ -64,10 +92,8 @@ export function resolveManagementBind(env: NodeJS.ProcessEnv = process.env): Bin
   }
 
   if (privateNet) {
-    // Fail closed: do not fall back to localhost/public when WG is down
-    // Tests may set VS_PRIVATE_NETWORK_ALLOW_UNBOUND=1 to exercise registry without iface
     const allowUnbound =
-      env.VS_PRIVATE_NETWORK_ALLOW_UNBOUND === '1' ||
+      truthy(env.VS_PRIVATE_NETWORK_ALLOW_UNBOUND) ||
       env.NODE_ENV === 'test' ||
       env.VITEST === 'true';
 
@@ -83,7 +109,6 @@ export function resolveManagementBind(env: NodeJS.ProcessEnv = process.env): Bin
     }
 
     if (explicit && explicit !== '' && explicit !== host && explicit !== VS_WG_SERVER_IP) {
-      // Explicit private bind still OK if it's the catalog server IP
       if (explicit === '127.0.0.1' && !allowUnbound) {
         throw new Error(
           'PRIVATE_NETWORK_LOCALHOST_FALLBACK_DENIED: refuse localhost fallback when VS_PRIVATE_NETWORK=1'

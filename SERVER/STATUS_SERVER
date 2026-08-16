@@ -1,66 +1,126 @@
 #!/usr/bin/env bash
-# STATUS_SERVER — one real status block for product operations.
+# STATUS_SERVER — clear READY / NOT_READY / DEGRADED report (never invent LIVE_READY).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-DATA="${VS_SERVER_DATA:-${VS_CORE_DATA:-$ROOT/../data/vs-server}}"
+DATA="${VS_SERVER_DATA:-${VS_CORE_DATA:-/var/lib/vs-server}}"
 PID_FILE="$DATA/vs-server.pid"
 PORT="${CONTROL_API_PORT:-3000}"
 TOKEN="${API_ADMIN_TOKEN:-}"
 WG_IFACE="${VS_WG_INTERFACE:-vs0}"
+if [[ -f "$DATA/server.env" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$DATA/server.env"
+  set +a
+fi
+PORT="${CONTROL_API_PORT:-$PORT}"
+TOKEN="${API_ADMIN_TOKEN:-$TOKEN}"
+
+pass() { echo "  READY     $1 — $2"; }
+fail() { echo "  NOT_READY $1 — $2"; FAIL=1; }
+deg()  { echo "  DEGRADED  $1 — $2"; DEGRADED=1; }
+info() { echo "  INFO      $1 — $2"; }
+
+FAIL=0
+DEGRADED=0
 
 echo "VS SERVER STATUS"
 echo "================"
-echo "SYSTEM"
-if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-  echo "  PROCESS=RUNNING pid=$(cat "$PID_FILE")"
-elif systemctl is-active --quiet vs-server.service 2>/dev/null; then
-  echo "  PROCESS=RUNNING (systemd)"
+
+# SERVER process
+echo "SERVER"
+if systemctl is-active --quiet vs-server.service 2>/dev/null; then
+  pass "PROCESS" "systemd vs-server active"
+elif [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+  pass "PROCESS" "pid=$(cat "$PID_FILE")"
 else
-  echo "  PROCESS=STOPPED"
+  fail "PROCESS" "stopped"
 fi
 
-echo "NETWORK / WIREGUARD"
-if ip -4 addr show dev "$WG_IFACE" 2>/dev/null | grep -q 'inet '; then
-  echo "  WIREGUARD=UP $(ip -4 -o addr show dev "$WG_IFACE" | awk '{print $4}')"
-else
-  echo "  WIREGUARD=DOWN"
-fi
-
-echo "FIREWALL"
-if command -v nft >/dev/null 2>&1 && nft list table inet vs_private >/dev/null 2>&1; then
-  echo "  FIREWALL=vs_private PRESENT"
-elif command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi active; then
-  echo "  FIREWALL=ufw ACTIVE"
-else
-  echo "  FIREWALL=NOT_VERIFIED"
-fi
-
+# DATABASE
 echo "DATABASE"
-if curl -fsS "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
-  echo "  HEALTH=OK"
+if docker exec market-reader-postgres pg_isready -U "${DB_USER:-market_reader}" -d "${DB_NAME:-market_reader}" >/dev/null 2>&1; then
+  pass "POSTGRES" "docker pg_isready OK"
+elif PGPASSWORD="${DB_PASSWORD:-}" psql -h 127.0.0.1 -U "${DB_USER:-market_reader}" -d "${DB_NAME:-market_reader}" -c 'SELECT 1' >/dev/null 2>&1; then
+  pass "POSTGRES" "local psql OK"
 else
-  echo "  HEALTH=NOT_READY"
+  fail "POSTGRES" "not reachable on 127.0.0.1:5432"
 fi
 
-echo "CORE / MARKET / CAPITAL / ADMIN / CLIENT / INCIDENTS"
-if [[ -n "$TOKEN" && "$TOKEN" != "CHANGE_ME_ADMIN_TOKEN" ]]; then
-  snap="$(curl -fsS -H "x-admin-token: $TOKEN" "http://127.0.0.1:${PORT}/api/v1/admin/snapshot" 2>/dev/null || true)"
-  if [[ -n "$snap" ]]; then
-    echo "$snap" | head -c 1200
-    echo
-  else
-    echo "  ADMIN_SNAPSHOT=NOT_READY"
+# REDIS
+echo "REDIS"
+if docker exec market-reader-redis redis-cli ping 2>/dev/null | grep -q PONG; then
+  pass "REDIS" "PONG"
+elif command -v redis-cli >/dev/null && redis-cli -h 127.0.0.1 ping 2>/dev/null | grep -q PONG; then
+  pass "REDIS" "local PONG"
+else
+  deg "REDIS" "not reachable (optional)"
+fi
+
+# CONTROL_API
+echo "CONTROL_API"
+LAN="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true)"
+API_OK=0
+BODY=""
+for url in "http://127.0.0.1:${PORT}/health" "http://10.77.0.1:${PORT}/health" ${LAN:+http://${LAN}:${PORT}/health}; do
+  BODY="$(curl -fsS --max-time 3 "$url" 2>/dev/null || true)"
+  if [[ -n "$BODY" ]]; then
+    pass "HTTP" "$url"
+    API_OK=1
+    break
   fi
+done
+[[ "$API_OK" -eq 1 ]] || fail "HTTP" "no response on :${PORT}"
+
+# WIREGUARD
+echo "WIREGUARD"
+if ip -4 addr show dev "$WG_IFACE" 2>/dev/null | grep -q 'inet '; then
+  pass "INTERFACE" "$(ip -4 -br addr show dev "$WG_IFACE" | awk '{print $3}')"
 else
-  echo "  ADMIN_SNAPSHOT=SKIPPED (set API_ADMIN_TOKEN)"
+  deg "INTERFACE" "$WG_IFACE down (LAN MSI may still work if VS_LAN_MANAGEMENT=1)"
 fi
 
-if [[ -f "$DATA/network/device-registry.json" ]]; then
-  echo "DEVICE_REGISTRY=PRESENT"
+# VS_CORE / market (informational — market closed ≠ server dead)
+echo "VS_CORE"
+if [[ "$API_OK" -eq 1 ]]; then
+  pass "BOOT" "Control API responding (market open/closed is unrelated)"
+  info "NOTE" "historical_strategy / CAPITAL may be NOT_PROVEN — does not stop API"
 else
-  echo "DEVICE_REGISTRY=MISSING"
+  fail "BOOT" "API down"
 fi
 
-echo "RESULT=see lines above (never invent READY)"
+# NETWORK / PORTS
+echo "NETWORK"
+info "LAN_IP" "${LAN:-unknown}"
+info "API_PORT" "$PORT"
+info "WG_UDP" "${VS_WG_LISTEN_PORT:-51820}"
+info "LAN_MANAGEMENT" "${VS_LAN_MANAGEMENT:-unset}"
+if command -v nft >/dev/null 2>&1 && nft list table inet vs_private >/dev/null 2>&1; then
+  pass "FIREWALL" "nft vs_private present"
+elif command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi active; then
+  pass "FIREWALL" "ufw active"
+else
+  deg "FIREWALL" "not verified"
+fi
+
+echo "PORTS"
+ss -lntu 2>/dev/null | grep -E ":${PORT}|:5432|:6379|:51820" || netstat -lntu 2>/dev/null | grep -E ":${PORT}|:5432|:6379" || true
+
+if [[ -n "$TOKEN" && "$TOKEN" != "CHANGE_ME_ADMIN_TOKEN" && "$API_OK" -eq 1 ]]; then
+  echo "ADMIN_SNAPSHOT"
+  curl -fsS -H "x-admin-token: $TOKEN" "http://127.0.0.1:${PORT}/api/v1/admin/snapshot" 2>/dev/null | head -c 800 || true
+  echo
+fi
+
+echo "================"
+if [[ "$FAIL" -ne 0 ]]; then
+  echo "RESULT=NOT_READY"
+  exit 1
+fi
+if [[ "$DEGRADED" -ne 0 ]]; then
+  echo "RESULT=DEGRADED (server usable; see lines above)"
+  exit 0
+fi
+echo "RESULT=READY"
 exit 0

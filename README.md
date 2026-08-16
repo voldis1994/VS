@@ -6,26 +6,32 @@ Real-time multi-source market intelligence + VS SERVER trading appliance.
 
 ```
 VS/
-├── SERVER/     # Authoritative brain (i3) — INSTALL_SERVER / START_SERVER
-├── ADMIN/      # Management client (personal PC) — INSTALL_ADMIN / START_ADMIN
+├── SERVER/     # Authoritative brain (i3) — INSTALL_I3_SERVER
+├── ADMIN/      # Control Panel + diagnostic client (MSI PC)
 └── CLIENT/     # Device app build — BUILD_CLIENT (native UI deferred)
 ```
 
 Money path lives under `SERVER/control-api` (verified P0). Compatibility symlinks:
 `apps/control-api` → `SERVER/control-api`, `deploy/vs-core` → `SERVER/deploy`.
 
-**LIVE_READY is NOT claimed** until Capital DEMO + physical i3 are proven on real hardware.
+**LIVE trading stays fail-closed** (`LIVE_TRADING_ENABLED=false`) until Capital DEMO + production gates are satisfied on real hardware.
 
-## First boot (Debian 13 / i3 SERVER)
-
-On the appliance (root), from a git checkout:
+## Clean install (Debian i3 SERVER)
 
 ```bash
-sudo WIFI_SSID='YourWifi' WIFI_PASSWORD='YourPass' ./SERVER/FIRST_BOOT_DEBIAN
+sudo bash SERVER/INSTALL_I3_SERVER
+sudo bash SERVER/STATUS_SERVER
 ```
 
-This installs packages, repairs WiFi, starts Postgres, installs VS SERVER, brings up WireGuard, and starts `vs-server` in **DEMO** (`LIVE=false`).  
-WiFi-only repair: `sudo ./SERVER/FIX_WIFI`.
+MSI Control Panel:
+```bash
+export VS_SERVER_URL=http://192.168.0.53:3000   # your i3 LAN IP
+bash ADMIN/INSTALL_CONTROL_PANEL
+# edit ADMIN/config/control-panel.env → API_ADMIN_TOKEN
+bash ADMIN/START_CONTROL_PANEL
+```
+
+See [START_3_FILES.txt](START_3_FILES.txt).
 
 ## Architecture
 

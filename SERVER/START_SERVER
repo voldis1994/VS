@@ -5,8 +5,13 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-DATA="${VS_SERVER_DATA:-${VS_CORE_DATA:-$ROOT/../data/vs-server}}"
-LOG="${VS_SERVER_LOG:-${VS_CORE_LOG:-$ROOT/../data/vs-server/logs}}"
+# Prefer appliance data dir; fall back to repo-relative only for unpackaged checkout
+if [[ -f /var/lib/vs-server/server.env ]]; then
+  DATA="${VS_SERVER_DATA:-${VS_CORE_DATA:-/var/lib/vs-server}}"
+else
+  DATA="${VS_SERVER_DATA:-${VS_CORE_DATA:-$ROOT/../data/vs-server}}"
+fi
+LOG="${VS_SERVER_LOG:-${VS_CORE_LOG:-$DATA/logs}}"
 
 # Load durable host env if present (secrets never committed)
 if [[ -f "$DATA/server.env" ]]; then
