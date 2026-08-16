@@ -228,9 +228,27 @@ try {
   ipconfig | Select-String "IPv4"
 }
 
-Write-Host "Resolving VS-CORE-01 on LAN..."
-$serverUrl = Resolve-LanServerUrl
+# CONNECT_FORCE / operator may pre-verify — trust and skip probe spam
+$serverUrl = $null
 $transport = "LAN"
+if ($env:VS_ADMIN_FORCE_URL) {
+  $force = $env:VS_ADMIN_FORCE_URL.TrimEnd("/")
+  Write-Host ("FORCE URL from CONNECT_FORCE: " + $force)
+  if (Test-VsCoreIdentity $force) {
+    $serverUrl = $force
+    if ($force -match '10\.77\.') { $transport = "WIREGUARD" }
+    Write-Host ("OK VS-CORE forced at " + $serverUrl)
+  } else {
+    Write-Host "WARN: FORCE URL identity failed — falling back to discovery"
+  }
+}
+
+if (-not $serverUrl) {
+  Write-Host "Resolving VS-CORE-01 on LAN..."
+  $serverUrl = Resolve-LanServerUrl
+  $transport = "LAN"
+}
+
 if (-not $serverUrl) {
   Write-Host ""
   Write-Host "LAN FAILED — diagnosing path to i3..."
@@ -245,29 +263,32 @@ if (-not $serverUrl) {
   & ping.exe -n 2 $targetIp 2>&1 | ForEach-Object { Write-Host ("    " + $_) }
   Show-ProbeDetail ("http://" + $targetIp + ":3000")
 
-  # WireGuard fallback (only if identity OK)
-  Write-Host "  trying WireGuard http://10.77.0.1:3000 ..."
-  if (Test-VsCoreIdentity "http://10.77.0.1:3000") {
-    $serverUrl = "http://10.77.0.1:3000"
-    $transport = "WIREGUARD"
-    Write-Host "  OK VS-CORE via WireGuard"
+  # Retry identity with fixed checker (often succeeds even when loop failed)
+  $retry = "http://" + $targetIp + ":3000"
+  if (Test-VsCoreIdentity $retry) {
+    $serverUrl = $retry
+    $transport = "LAN"
+    Write-Host ("  OK VS-CORE on retry at " + $serverUrl)
+  }
+
+  if (-not $serverUrl) {
+    Write-Host "  trying WireGuard http://10.77.0.1:3000 ..."
+    if (Test-VsCoreIdentity "http://10.77.0.1:3000") {
+      $serverUrl = "http://10.77.0.1:3000"
+      $transport = "WIREGUARD"
+      Write-Host "  OK VS-CORE via WireGuard"
+    }
   }
 }
 
 if (-not $serverUrl) {
   Write-Host ""
   Write-Host "SERVER OFFLINE — MSI cannot reach VS-CORE-01"
-  Write-Host "i3 already proves LAN works FROM i3 itself."
-  Write-Host "This is almost always:"
-  Write-Host "  1) MSI on different WiFi / Guest SSID"
-  Write-Host "  2) Router AP/client isolation (blocks phone/laptop-to-laptop)"
-  Write-Host "  3) WireGuard not connected yet"
-  Write-Host ""
+  Write-Host "If ping+HTTP 200 worked but this still fails: update scripts (git pull) — identity bug."
   Write-Host "Do this:"
-  Write-Host "  A) Same WiFi as i3 (not Guest). Disable AP isolation on router."
-  Write-Host "  B) On MSI:  ADMIN\PROVE_LAN.bat"
-  Write-Host "  C) Or finish WireGuard, then START_MSI.bat again (uses 10.77.0.1)"
-  Write-Host "  D) On i3:   sudo bash SERVER/OPEN_LAN_FOR_MSI.sh"
+  Write-Host "  cd /d C:\VS-main"
+  Write-Host "  git pull origin main"
+  Write-Host "  ADMIN\CONNECT_FORCE.bat"
   exit 1
 }
 
