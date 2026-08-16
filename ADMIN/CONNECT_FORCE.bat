@@ -73,7 +73,7 @@ mkdir ADMIN\config 2>nul
 echo %IP%> ADMIN\config\SERVER_IP.txt
 echo Wrote ADMIN\config\SERVER_IP.txt = %IP%
 
-REM seed control-panel.env so START_ADMIN skips broken discovery if needed
+REM seed control-panel.env
 if not exist "ADMIN\config\control-panel.env" (
   echo VS_SERVER_URL=%URL%> ADMIN\config\control-panel.env
   echo VITE_API_URL=%URL%>> ADMIN\config\control-panel.env
@@ -84,7 +84,12 @@ if not exist "ADMIN\config\control-panel.env" (
     "$p='ADMIN\config\control-panel.env'; $u='%URL%'; $c=Get-Content $p -ErrorAction SilentlyContinue; if(-not $c){$c=@()}; $m=@{}; foreach($l in $c){ if($l -match '^([^=]+)=(.*)$'){ $m[$matches[1]]=$matches[2] } }; $m['VS_SERVER_URL']=$u; $m['VITE_API_URL']=$u; $m['VS_LAN_SERVER_URL']=$u; $m['VS_ADMIN_TRANSPORT']='lan'; $m.GetEnumerator() | ForEach-Object { $_.Key+'='+$_.Value } | Set-Content $p -Encoding ascii"
 )
 
+REM Skip rediscovery in START_ADMIN — LAN already proved by curl above
+set "VS_ADMIN_FORCE_URL=%URL%"
+set "VS_SERVER_URL=%URL%"
+set "VITE_API_URL=%URL%"
+
 echo.
-echo Starting ADMIN against %URL% ...
+echo Starting ADMIN against %URL% (FORCE — no rescan) ...
 call ADMIN\START_ADMIN.bat
 exit /b %ERRORLEVEL%

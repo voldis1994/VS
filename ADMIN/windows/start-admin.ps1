@@ -102,28 +102,28 @@ function Test-VsCoreIdentity([string]$Url) {
   if (-not $Url) { return $false }
   $u = $Url.TrimEnd("/")
   $health = $u + "/health"
-  # Prefer curl.exe — PowerShell Invoke-WebRequest is unreliable / aliased to curl
-  if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
-    try {
-      $out = & curl.exe -fsS --connect-timeout 3 --max-time 5 $health 2>$null
-      if (-not $out) { return $false }
-      $j = $out | ConvertFrom-Json
-      if ($j.service -ne "VS-CORE") { return $false }
-      if (-not $j.server_id) { return $false }
-      return $true
-    } catch {
-      return $false
-    }
-  }
+  $tmp = Join-Path $env:TEMP ("vs-health-" + [guid]::NewGuid().ToString("N") + ".json")
   try {
-    $r = Invoke-WebRequest -Uri $health -UseBasicParsing -TimeoutSec 4
-    if ($r.StatusCode -lt 200 -or $r.StatusCode -ge 300) { return $false }
-    $j = $r.Content | ConvertFrom-Json
-    if ($j.service -ne "VS-CORE") { return $false }
-    if (-not $j.server_id) { return $false }
+    if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
+      # MUST write to file — PS 5.1 breaks curl.exe stdout capture (false negatives)
+      & curl.exe -sS --connect-timeout 5 --max-time 8 -o $tmp $health 2>"$tmp.err"
+      if (-not (Test-Path $tmp)) { return $false }
+      $raw = [System.IO.File]::ReadAllText($tmp)
+    } else {
+      $r = Invoke-WebRequest -Uri $health -UseBasicParsing -TimeoutSec 5
+      if ($r.StatusCode -lt 200 -or $r.StatusCode -ge 300) { return $false }
+      $raw = [string]$r.Content
+    }
+    if ([string]::IsNullOrWhiteSpace($raw)) { return $false }
+    # Regex — avoid ConvertFrom-Json quirks on PS 5.1
+    if ($raw -notmatch '"service"\s*:\s*"VS-CORE"') { return $false }
+    if ($raw -notmatch '"server_id"\s*:\s*"[^"]+"') { return $false }
     return $true
   } catch {
     return $false
+  } finally {
+    Remove-Item $tmp -ErrorAction SilentlyContinue
+    Remove-Item ($tmp + ".err") -ErrorAction SilentlyContinue
   }
 }
 
