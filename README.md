@@ -23,6 +23,13 @@ vs-monitor
 
 Check: `ss -lntp | grep 3000` must show **`0.0.0.0:3000`** (not only `10.77.0.1`).
 
+If monitor shows `API: fetch failed`:
+
+```bash
+sudo bash SERVER/FIX_CONTROL_API.sh
+vs-monitor
+```
+
 ### MSI
 
 ```bat
