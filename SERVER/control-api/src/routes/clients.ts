@@ -125,14 +125,75 @@ export async function registerClientRoutes(app: FastifyInstance): Promise<void> 
     return { ...rows[0], accounts: accounts.rows, panel };
   });
 
-  app.post('/api/clients', async (request) => {
-    const body = request.body as { name: string };
+  app.post('/api/clients', async (request, reply) => {
+    const body = request.body as { name?: string };
+    const name = String(body.name || '').trim();
+    if (!name) {
+      return reply.code(400).send({ error: 'name required', message: 'Client login name required' });
+    }
+    const dup = await pool.query(
+      `SELECT id FROM clients WHERE lower(name) = lower($1) LIMIT 1`,
+      [name]
+    );
+    if (dup.rows.length) {
+      return reply.code(409).send({
+        error: 'name_taken',
+        message: 'Client login name already exists',
+      });
+    }
     const { rows } = await pool.query(
       'INSERT INTO clients (name) VALUES ($1) RETURNING id, name, enabled, access_enabled, created_at',
-      [body.name]
+      [name]
     );
     await logAudit('admin', 'client_created', 'client', String(rows[0].id), null, rows[0]);
     return rows[0];
+  });
+
+  /** Create client + issue password (access code) in one step for web portal. */
+  app.post('/api/clients/provision-web', async (request, reply) => {
+    const body = (request.body || {}) as { name?: string };
+    const name = String(body.name || '').trim();
+    if (!name) {
+      return reply.code(400).send({ error: 'name required', message: 'Client login name required' });
+    }
+    const dup = await pool.query(
+      `SELECT id FROM clients WHERE lower(name) = lower($1) LIMIT 1`,
+      [name]
+    );
+    if (dup.rows.length) {
+      return reply.code(409).send({
+        error: 'name_taken',
+        message: 'Client login name already exists',
+      });
+    }
+    const { rows } = await pool.query(
+      'INSERT INTO clients (name) VALUES ($1) RETURNING id, name, enabled, access_enabled, created_at',
+      [name]
+    );
+    const clientId = rows[0].id as number;
+    const code = generateAccessCode();
+    const hash = hashAccessCode(code);
+    await pool.query(
+      `UPDATE clients SET access_code_hash = $2, access_enabled = true, updated_at = NOW() WHERE id = $1`,
+      [clientId, hash]
+    );
+    await logAudit('admin', 'client_provision_web', 'client', String(clientId), null, {
+      name,
+      access_enabled: true,
+    });
+    const host =
+      process.env.VS_PUBLIC_CLIENT_URL ||
+      process.env.VS_LAN_URL ||
+      `http://127.0.0.1:${process.env.CONTROL_API_PORT || 3000}`;
+    return {
+      success: true,
+      client_id: clientId,
+      login: name,
+      password: code,
+      panel_url: host.replace(/\/$/, '') + '/',
+      message:
+        'Save login and password now — password will not be shown again. Share panel_url with the client.',
+    };
   });
 
   app.put('/api/clients/:id', async (request) => {

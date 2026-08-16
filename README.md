@@ -4,11 +4,11 @@
 
 1. **VS CORE SERVER** — Debian 13 on i3 (`VS-CORE-01`)
 2. **VS ADMIN** — Windows MSI Control Panel only (`VS-ADMIN-01`)
-3. **VS CLIENT** — Windows customer application + WireGuard
+3. **VS CLIENT** — Customer **web portal** (login + market + lot + robot)
 
 ```
-CUSTOMER (Internet) --WireGuard--> HOME ROUTER --> i3 SERVER
-MSI ADMIN (LAN) -------------------------------^
+CUSTOMER browser  --->  http://<i3-ip>:3000/  (login from ADMIN)
+MSI ADMIN (LAN)   --->  i3 Control API
 ```
 
 i3 remains authoritative if MSI or all clients disconnect.
@@ -16,15 +16,12 @@ i3 remains authoritative if MSI or all clients disconnect.
 ## Repository
 
 ```
-SERVER/         i3 brain (control-api, client-api, core engines, monitor, install)
-ADMIN/          MSI Control Panel (desktop UI + windows installers)
-CLIENT/         Customer app (desktop UI + windows installers + enrollment)
-SHARED/         Contracts / types
-DEPLOY/         Symlinks to debian/windows/systemd/wireguard/firewall assets
-TESTS/          Automated + physical checklists
-DOCS/           Architecture and operations
-legacy-review/  Archived historical code (never imported by production)
-scripts/        Release packaging
+SERVER/         i3 brain (control-api, core, monitor, install)
+ADMIN/          MSI Control Panel
+CLIENT/desktop  Customer web UI (served by i3 at :3000)
+SHARED/         Contracts
+DEPLOY/         Deploy asset index
+TESTS/ DOCS/ legacy-review/ scripts/
 ```
 
 ## i3 install
@@ -37,22 +34,22 @@ sudo bash SERVER/install/HEALTHCHECK.sh
 bash SERVER/SHOW_DASHBOARD.sh
 ```
 
-## MSI ADMIN install
+## MSI ADMIN
 
 ```bat
 ADMIN\INSTALL_ADMIN.bat
 ADMIN\START_ADMIN.bat
 ```
 
+Then: **CLIENTS → CREATE WEB LOGIN** → copy URL + login + password for the customer.
+
 ## Customer CLIENT
 
-```bat
-CLIENT\INSTALL_CLIENT.bat
-CLIENT\START_CLIENT.bat
-CLIENT\VERIFY_CLIENT.bat
-```
+1. Open the URL from ADMIN (example: `http://192.168.0.10:3000/`)
+2. Sign in with login + password
+3. Choose market, set lot, START/STOP robot
 
-Packaged deliverable: `scripts/BUILD_CLIENT_PACKAGE.sh` → `dist/VS-CLIENT` (Windows CI wraps as `VS_CLIENT_SETUP.exe`).
+No Git / Node / installer required for the customer. Details: `DOCS/CLIENT_INSTALL.md`.
 
 ## Rules
 

@@ -69,8 +69,14 @@ export async function requireClientSession(
 
 export async function registerClientAuthRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/client-auth/login', async (request, reply) => {
-    const body = (request.body || {}) as { access_code?: string };
-    const code = String(body.access_code || '').trim();
+    const body = (request.body || {}) as {
+      access_code?: string;
+      login?: string;
+      password?: string;
+      username?: string;
+    };
+    const loginName = String(body.login || body.username || '').trim();
+    const password = String(body.password || body.access_code || '').trim();
     const ip = clientIp(request);
 
     const failures = await countRecentFailures(ip);
@@ -81,34 +87,58 @@ export async function registerClientAuthRoutes(app: FastifyInstance): Promise<vo
       });
     }
 
-    if (!code) {
+    if (!password) {
       await recordAttempt(ip, false);
-      return reply.code(400).send({ error: 'access_code required', message: 'access_code required' });
+      return reply.code(400).send({
+        error: 'password required',
+        message: 'Login and password required (or access_code)',
+      });
     }
-
-    const { rows } = await pool.query(
-      `SELECT id, name, enabled, access_enabled, access_code_hash
-       FROM clients
-       WHERE access_code_hash IS NOT NULL`
-    );
 
     let matched: { id: number; name: string; enabled: boolean; access_enabled: boolean } | null =
       null;
-    for (const row of rows) {
-      if (verifyAccessCode(code, row.access_code_hash as string)) {
+
+    if (loginName) {
+      // Username + password: username is the client name created in ADMIN
+      const { rows } = await pool.query(
+        `SELECT id, name, enabled, access_enabled, access_code_hash
+         FROM clients
+         WHERE lower(name) = lower($1) AND access_code_hash IS NOT NULL
+         LIMIT 1`,
+        [loginName]
+      );
+      const row = rows[0];
+      if (row && verifyAccessCode(password, row.access_code_hash as string)) {
         matched = {
           id: row.id as number,
           name: row.name as string,
           enabled: Boolean(row.enabled),
           access_enabled: Boolean(row.access_enabled),
         };
-        break;
+      }
+    } else {
+      // Legacy: access_code alone
+      const { rows } = await pool.query(
+        `SELECT id, name, enabled, access_enabled, access_code_hash
+         FROM clients
+         WHERE access_code_hash IS NOT NULL`
+      );
+      for (const row of rows) {
+        if (verifyAccessCode(password, row.access_code_hash as string)) {
+          matched = {
+            id: row.id as number,
+            name: row.name as string,
+            enabled: Boolean(row.enabled),
+            access_enabled: Boolean(row.access_enabled),
+          };
+          break;
+        }
       }
     }
 
     if (!matched) {
       await recordAttempt(ip, false);
-      return reply.code(401).send({ error: 'Invalid access code', message: 'Invalid access code' });
+      return reply.code(401).send({ error: 'Invalid credentials', message: 'Invalid login or password' });
     }
     if (!matched.enabled || !matched.access_enabled) {
       await recordAttempt(ip, false);

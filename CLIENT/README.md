@@ -1,30 +1,26 @@
-# CLIENT
+# VS CLIENT — Web portal
 
-Windows customer application for VS CORE.
+Customer opens a **web URL** on VS CORE (same host as Control API).
 
-## Layout
+## Flow
+
+1. ADMIN → CLIENTS → **CREATE WEB LOGIN** (login name)
+2. ADMIN copies URL + login + password (password shown once)
+3. Customer opens URL → signs in → selects market → sets lot → START/STOP robot
+
+## Local URL (LAN)
 
 ```
-CLIENT/
-  desktop/     React UI (HOME / POSITIONS / HISTORY / SETTINGS)
-  connection/  Enrollment helper (device enroll against Network Authority)
-  windows/     INSTALL / START / STOP / STATUS / VERIFY
+http://<i3-LAN-IP>:3000/
 ```
 
-## Install
+After server install, `CLIENT/desktop` is built into the static panel served by Control API.
 
-1. Obtain enrollment package from ADMIN (one-time code + WG config)
-2. `CLIENT\windows\INSTALL_CLIENT.bat`
-3. `CLIENT\START_CLIENT.bat`
-4. `CLIENT\VERIFY_CLIENT.bat`
+## Dev
 
-Customer packaged release must ship prebuilt UI / `VS_CLIENT_SETUP.exe` (see `scripts/BUILD_CLIENT_PACKAGE.sh`).
+```bash
+cd CLIENT/desktop && npm install && npm run build
+# Point CLIENT_PANEL_DIST or rebuild on i3 so / serves this UI
+```
 
-## START / STOP
-
-START calls `POST /api/v1/trading/start` on the CLIENT API (WireGuard `10.77.0.1`).
-It does **not** place an instant market order.
-
-## States
-
-VPN connected ≠ APP connected. App heartbeat uses `/api/v1/network/device/heartbeat`.
+No Git/Node required for the end customer — only a browser + credentials from ADMIN.

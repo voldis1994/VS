@@ -49,7 +49,7 @@ export async function registerClientPanelStatic(app: FastifyInstance): Promise<v
       return reply
         .code(503)
         .type('text/plain; charset=utf-8')
-        .send('Client panel nav uzbuivets. Palaid VS.bat (vite build).\n');
+        .send('Client web panel not built. On server: cd CLIENT/desktop && npm run build\n');
     }
 
     let file = safeJoin(dist, urlPath);

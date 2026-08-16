@@ -1,18 +1,43 @@
-# CLIENT install (remote Windows)
+# CLIENT — Web portal (simple)
 
-1. ADMIN creates enrollment (device + WireGuard peer).  
-2. Deliver enrollment package securely.  
-3. On client PC:
+Customers do **not** need Git, Node, or a Windows installer for normal use.
 
-```bat
-CLIENT\windows\INSTALL_CLIENT.bat
-CLIENT\VERIFY_CLIENT.bat
-CLIENT\windows\START_CLIENT.bat
+## What the customer gets
+
+1. Web address (from ADMIN), e.g. `http://192.168.x.x:3000/`
+2. Login + password (created once in VS ADMIN → CLIENTS)
+
+## What they can do after login
+
+- Choose market
+- Change lot size
+- START / STOP robot
+
+Access works only while ADMIN has enabled the client (credentials issued, not revoked).
+
+## ADMIN steps (MSI)
+
+1. Open VS ADMIN → **CLIENTS**
+2. Enter login name → **CREATE WEB LOGIN**
+3. Copy **URL / Login / Password** (password shown once)
+4. Send to customer securely
+5. Link a broker account to that client before markets appear (Capital connection on i3)
+
+## Server requirement
+
+Control API serves `CLIENT/desktop/dist` at `/`.
+
+On i3 after install / update:
+
+```bash
+cd /opt/vs-server/../CLIENT/desktop   # or repo CLIENT/desktop
+npm ci || npm install
+npm run build
+sudo bash SERVER/RESTART_SERVER.sh
 ```
 
-Requires WireGuard. Endpoint must be `PUBLIC_HOST_OR_IP:51820` (not LAN IP across ISPs).
+Installer should build this automatically when Node is available.
 
-Client never holds Capital credentials, ADMIN token, or server WG private key.
+## Optional WireGuard path
 
-START = strategy participation enabled (not immediate BUY).  
-STOP = block new strategy-originated exposure (does not silently close LIVE positions).
+Remote customers over the internet still need a reachable URL (LAN only works on home Wi‑Fi; remote needs public host / reverse proxy / VPN). WireGuard remains available for private-network access, but the product UX is the web portal + login.

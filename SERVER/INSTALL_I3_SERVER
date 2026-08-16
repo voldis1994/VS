@@ -7,8 +7,8 @@
 #   sudo bash SERVER/INSTALL_I3_SERVER
 #
 # Architecture:
-#   MSI Control Panel (LAN)  →  http://<i3-lan-ip>:3000
-#   Remote clients           →  WireGuard UDP 51820 → 10.77.0.1:3000
+#   MSI Control Panel (LAN)  →  http://<i3-lan-ip>:3000  (ADMIN)
+#   Customer web portal      →  http://<i3-lan-ip>:3000/ (login+password from ADMIN)
 #   Postgres/Redis           →  127.0.0.1 only (Docker)
 # =============================================================================
 set -euo pipefail
@@ -21,7 +21,7 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 export LIVE_TRADING_ENABLED=false
 # Infrastructure mode — not a fake "demo install"; LIVE stays fail-closed
-export OPERATING_MODE="${OPERATING_MODE:-PAPER}"
+export OPERATING_MODE="${OPERATING_MODE:-PRODUCTION}"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
@@ -249,6 +249,28 @@ if [[ ! -x "$API/node_modules/.bin/tsx" ]]; then
 fi
 test -x "$API/node_modules/.bin/tsx"
 
+# Client web portal (login / market / lot / robot) — served at http://SERVER:3000/
+CLIENT_SRC="$REPO/CLIENT/desktop"
+CLIENT_DIST="$PREFIX/client-panel"
+if [[ -f "$CLIENT_SRC/package.json" ]]; then
+  echo "==> Build CLIENT web panel → $CLIENT_DIST"
+  mkdir -p "$CLIENT_DIST" "$PREFIX/client-panel-src"
+  rsync -a --delete --exclude node_modules --exclude dist "$CLIENT_SRC/" "$PREFIX/client-panel-src/"
+  chown -R "$RUN_USER:$RUN_USER" "$PREFIX/client-panel-src"
+  sudo -u "$RUN_USER" bash -lc "cd '$PREFIX/client-panel-src' && (npm ci || npm install) && npm run build"
+  rsync -a --delete "$PREFIX/client-panel-src/dist/" "$CLIENT_DIST/"
+  chown -R "$RUN_USER:$RUN_USER" "$CLIENT_DIST"
+  ensure_kv "$ENV_ROOT" CLIENT_PANEL_DIST "$CLIENT_DIST"
+  if grep -q '^CLIENT_PANEL_DIST=' "$SERVER_ENV" 2>/dev/null; then
+    sed -i "s|^CLIENT_PANEL_DIST=.*|CLIENT_PANEL_DIST=$CLIENT_DIST|" "$SERVER_ENV"
+  else
+    echo "CLIENT_PANEL_DIST=$CLIENT_DIST" >>"$SERVER_ENV"
+  fi
+  echo "CLIENT panel ready: $CLIENT_DIST"
+else
+  echo "WARN: $CLIENT_SRC missing — web panel not built"
+fi
+
 # ---------------------------------------------------------------------------
 # 6) Private network foundation + firewall + WireGuard
 # ---------------------------------------------------------------------------
@@ -375,6 +397,11 @@ echo "======== MSI CONTROL PANEL ========"
 echo "Server LAN URL:  http://${LAN_IP:-<i3-lan-ip>}:3000"
 echo "Reserve DHCP lease for this MAC/IP on your router."
 echo "API_ADMIN_TOKEN is in $SERVER_ENV (not printed)."
+echo
+echo "======== CUSTOMER WEB PORTAL ========"
+echo "URL:    http://${LAN_IP:-<i3-lan-ip>}:3000/"
+echo "Create login+password in VS ADMIN → CLIENTS → CREATE WEB LOGIN"
+echo "Customer needs only a browser (no installer)."
 echo "WireGuard UDP:   ${VS_WG_LISTEN_PORT:-51820} (remote clients)"
 echo "Local monitor:   systemctl status vs-server-monitor  (console /dev/tty1)"
 echo "Export USB pack: sudo bash $PREFIX/2_EXPORT_USB"
