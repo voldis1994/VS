@@ -13,7 +13,7 @@ import {
 } from './serverMonitor.js';
 import { normalizeNetworkSecret } from './network/networkSecrets.js';
 
-const REFRESH_MS = Number(process.env.VS_MONITOR_REFRESH_MS || 2000);
+const REFRESH_MS = Math.max(250, Number(process.env.VS_MONITOR_REFRESH_MS || 800));
 const PORT = process.env.CONTROL_API_PORT || '3000';
 const BASE = (process.env.VS_MONITOR_API_URL || `http://127.0.0.1:${PORT}`).replace(/\/$/, '');
 

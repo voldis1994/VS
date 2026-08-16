@@ -17,7 +17,7 @@ Environment=VS_SERVER_DATA=/var/lib/vs-server
 Environment=VS_CORE_DATA=/var/lib/vs-server
 Environment=LIVE_TRADING_ENABLED=false
 Environment=VS_MONITOR_API_URL=http://127.0.0.1:3000
-Environment=VS_MONITOR_REFRESH_MS=2000
+Environment=VS_MONITOR_REFRESH_MS=800
 ExecStart=/opt/vs-server/MONITOR_SERVER
 Restart=on-failure
 RestartSec=10
