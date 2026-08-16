@@ -1,25 +1,21 @@
-MSI — VIENA KOMANDA
-===================
+MSI STUCK?  (i3 /health already OK)
+=================================
 
-NEDRĪKSTI palaist no C:\Users\voldi
+i3 ir gatavs. MSI neredz = WiFi ceļš vai vecs skripts.
 
-1) cd /d C:\VS-main
-   dir START_MSI.bat
+I3:
+  cd ~/VS-new/VS
+  git pull origin main
+  sudo bash FORCE_I3_LAN
 
-2) i3 IP (no i3 hostname -I), piemēram 192.168.0.10:
-   mkdir ADMIN\config 2>nul
-   echo 192.168.0.10> ADMIN\config\SERVER_IP.txt
-   git pull origin main
+MSI (TIKAI no C:\VS-main):
+  cd /d C:\VS-main
+  git pull origin main
+  echo 192.168.0.10> ADMIN\config\SERVER_IP.txt
+  ADMIN\CONNECT_FORCE.bat
 
-3) Vispirms DIAGNOZE (nevis uzreiz START):
-   ADMIN\PROVE_LAN.bat
-
-   - ja ping FAIL = cita WiFi / Guest / AP isolation (NAV VS kļūda)
-   - ja curl OK = tad START_MSI.bat
-
-4) START_MSI.bat
-
-Ja WiFi bloķē laptop↔laptop:
-  - izslēdz router AP/client isolation
+CONNECT_FORCE dara ping+curl. Ja curl FAIL:
+  - tā PATI WiFi kā i3 (ne Guest)
+  - router: izslēdz AP/Client Isolation
   - VAI ethernet
-  - VAI WireGuard → tad ADMIN izmanto http://10.77.0.1:3000
+  - VAI WireGuard → echo 10.77.0.1> ADMIN\config\SERVER_IP.txt

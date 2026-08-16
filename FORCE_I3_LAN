@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# One command on i3 — pull + nuclear open LAN for MSI.
+#   sudo bash FORCE_I3_LAN
+set -euo pipefail
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "FAIL: sudo bash FORCE_I3_LAN" >&2
+  exit 1
+fi
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "$ROOT"
+git pull origin main
+bash "$ROOT/SERVER/OPEN_LAN_FOR_MSI.sh"
+echo
+echo "PROOF (must be 0.0.0.0 and VS-CORE):"
+ss -lntp | grep ':3000' || true
+LAN_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
+curl -fsS "http://${LAN_IP}:3000/health"; echo
+echo "MSI next:"
+echo "  cd /d C:\\VS-main"
+echo "  git pull origin main"
+echo "  echo ${LAN_IP}> ADMIN\\config\\SERVER_IP.txt"
+echo "  ADMIN\\CONNECT_FORCE.bat"
