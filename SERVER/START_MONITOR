@@ -1,11 +1,28 @@
 #!/usr/bin/env bash
-# START_MONITOR — start local read-only i3 console monitor (does not start backend).
+# START_MONITOR — install unit if missing, then start console monitor.
+# Does NOT stop vs-server / Postgres / Redis / WireGuard.
 set -euo pipefail
+
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-if systemctl list-unit-files vs-server-monitor.service >/dev/null 2>&1; then
-  systemctl start vs-server-monitor.service
-  systemctl --no-pager -l status vs-server-monitor | head -20 || true
+
+unit_present() {
+  systemctl cat vs-server-monitor.service >/dev/null 2>&1
+}
+
+if ! unit_present; then
+  echo "INFO: vs-server-monitor.service missing — installing now"
+  if [[ "$(id -u)" -ne 0 ]]; then
+    echo "FAIL: need root once to install unit:" >&2
+    echo "  sudo bash $ROOT/INSTALL_MONITOR" >&2
+    exit 1
+  fi
+  bash "$ROOT/INSTALL_MONITOR"
   exit 0
 fi
-echo "INFO: systemd unit missing — running MONITOR_SERVER in foreground"
-exec "$ROOT/MONITOR_SERVER"
+
+if [[ "$(id -u)" -ne 0 ]]; then
+  exec sudo systemctl start vs-server-monitor.service
+fi
+systemctl start vs-server-monitor.service
+systemctl --no-pager -l status vs-server-monitor | head -20 || true
+exit 0

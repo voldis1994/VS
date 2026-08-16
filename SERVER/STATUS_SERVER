@@ -40,12 +40,14 @@ fi
 
 # LOCAL MONITOR (observational — failure does not fail infrastructure READY)
 echo "MONITOR"
-if systemctl is-active --quiet vs-server-monitor.service 2>/dev/null; then
-  pass "CONSOLE" "vs-server-monitor active (read-only)"
-elif systemctl list-unit-files vs-server-monitor.service >/dev/null 2>&1; then
-  deg "CONSOLE" "vs-server-monitor installed but not active"
+if systemctl cat vs-server-monitor.service >/dev/null 2>&1; then
+  if systemctl is-active --quiet vs-server-monitor.service 2>/dev/null; then
+    pass "CONSOLE" "vs-server-monitor active (read-only)"
+  else
+    deg "CONSOLE" "vs-server-monitor installed but not active — sudo bash SERVER/START_MONITOR"
+  fi
 else
-  info "CONSOLE" "unit not installed (run INSTALL_I3_SERVER)"
+  deg "CONSOLE" "unit missing — fix with: sudo bash SERVER/INSTALL_MONITOR"
 fi
 
 # DATABASE
@@ -117,10 +119,18 @@ fi
 echo "PORTS"
 ss -lntu 2>/dev/null | grep -E ":${PORT}|:5432|:6379|:51820" || netstat -lntu 2>/dev/null | grep -E ":${PORT}|:5432|:6379" || true
 
-if [[ -n "$TOKEN" && "$TOKEN" != "CHANGE_ME_ADMIN_TOKEN" && "$API_OK" -eq 1 ]]; then
+if [[ "$API_OK" -eq 1 ]]; then
   echo "SERVER_MONITOR"
-  curl -fsS -H "x-admin-token: $TOKEN" "http://127.0.0.1:${PORT}/api/v1/server/monitor" 2>/dev/null | head -c 1200 || true
-  echo
+  if [[ -z "$TOKEN" || "$TOKEN" == "CHANGE_ME_ADMIN_TOKEN" ]]; then
+    info "AUTH" "API_ADMIN_TOKEN not loaded — source $DATA/server.env (never echo it)"
+  else
+    MON="$(curl -fsS -H "x-admin-token: $TOKEN" "http://127.0.0.1:${PORT}/api/v1/server/monitor/text" 2>/dev/null || true)"
+    if [[ -n "$MON" ]]; then
+      echo "$MON" | head -n 35
+    else
+      deg "MONITOR_API" "401/unreachable — token mismatch or old API; sudo bash SERVER/INSTALL_MONITOR"
+    fi
+  fi
 fi
 
 echo "================"

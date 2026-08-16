@@ -255,6 +255,10 @@ test -x "$API/node_modules/.bin/tsx"
 chmod +x "$PREFIX"/INSTALL_* "$PREFIX"/START_* "$PREFIX"/STOP_* "$PREFIX"/STATUS_* \
   "$PREFIX"/RESTART_* "$PREFIX"/MONITOR_* "$PREFIX"/network/* "$PREFIX"/deploy/*.sh 2>/dev/null || true
 
+# Keep INSTALL_MONITOR next to INSTALL_I3_SERVER for one-shot monitor repair
+cp -a "$HERE/INSTALL_MONITOR" "$PREFIX/INSTALL_MONITOR" 2>/dev/null || true
+chmod +x "$PREFIX/INSTALL_MONITOR" 2>/dev/null || true
+
 set -a
 # shellcheck disable=SC1090
 source "$SERVER_ENV"

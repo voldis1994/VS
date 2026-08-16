@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# =============================================================================
+# INSTALL_MONITOR — ONE command: install + enable i3 local console monitor
+# =============================================================================
+# Does NOT reinstall the whole server. Does NOT stop vs-server.
+# Does NOT enable LIVE trading.
+#
+#   sudo bash SERVER/INSTALL_MONITOR
+#
+# Safe to run repeatedly (idempotent).
+# =============================================================================
+set -euo pipefail
+
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "FAIL: run as root:  sudo bash $0" >&2
+  exit 1
+fi
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$HERE/.." && pwd)"
+PREFIX="${VS_SERVER_PREFIX:-/opt/vs-server}"
+DATA="${VS_SERVER_DATA:-/var/lib/vs-server}"
+UNIT_DST="/etc/systemd/system/vs-server-monitor.service"
+UNIT_SRC="$HERE/deploy/systemd/vs-server-monitor.service"
+
+echo "========================================"
+echo " VS SERVER — INSTALL_MONITOR"
+echo " REPO=$REPO"
+echo " PREFIX=$PREFIX DATA=$DATA"
+echo "========================================"
+
+if [[ ! -f "$UNIT_SRC" ]]; then
+  echo "FAIL: missing $UNIT_SRC — pull latest code first" >&2
+  exit 1
+fi
+if [[ ! -f "$HERE/MONITOR_SERVER" ]]; then
+  echo "FAIL: missing $HERE/MONITOR_SERVER" >&2
+  exit 1
+fi
+if [[ ! -d "$PREFIX/control-api" ]]; then
+  echo "FAIL: $PREFIX/control-api missing — run sudo bash SERVER/INSTALL_I3_SERVER first" >&2
+  exit 1
+fi
+
+# Sync monitor scripts + unit source into the appliance tree
+mkdir -p "$PREFIX/deploy/systemd"
+cp -a "$HERE/MONITOR_SERVER" "$PREFIX/MONITOR_SERVER"
+cp -a "$HERE/START_MONITOR" "$PREFIX/START_MONITOR" 2>/dev/null || true
+cp -a "$HERE/STOP_MONITOR" "$PREFIX/STOP_MONITOR" 2>/dev/null || true
+cp -a "$UNIT_SRC" "$PREFIX/deploy/systemd/vs-server-monitor.service"
+chmod +x "$PREFIX/MONITOR_SERVER" "$PREFIX/START_MONITOR" "$PREFIX/STOP_MONITOR" 2>/dev/null || true
+
+# Also sync monitor TypeScript into running control-api (no full npm ci)
+if [[ -f "$HERE/control-api/src/vs-core/serverMonitor.ts" ]]; then
+  mkdir -p "$PREFIX/control-api/src/vs-core"
+  cp -a "$HERE/control-api/src/vs-core/serverMonitor.ts" \
+        "$PREFIX/control-api/src/vs-core/serverMonitor.ts"
+  cp -a "$HERE/control-api/src/vs-core/runServerMonitor.ts" \
+        "$PREFIX/control-api/src/vs-core/runServerMonitor.ts"
+  # adminAgent routes for /api/v1/server/monitor
+  if [[ -f "$HERE/control-api/src/vs-core/adminAgent.ts" ]]; then
+    cp -a "$HERE/control-api/src/vs-core/adminAgent.ts" \
+          "$PREFIX/control-api/src/vs-core/adminAgent.ts"
+  fi
+fi
+
+# Install systemd unit with correct PREFIX/DATA paths
+install -m 0644 "$UNIT_SRC" "$UNIT_DST"
+sed -i "s|/opt/vs-server|${PREFIX}|g; s|/var/lib/vs-server|${DATA}|g" "$UNIT_DST"
+
+# Headless / no physical console: journal only (still auto-starts)
+if [[ ! -e /dev/tty1 ]]; then
+  sed -i \
+    -e '/^TTYPath=/d' \
+    -e '/^StandardInput=/d' \
+    -e '/^StandardOutput=/d' \
+    -e '/^TTYReset=/d' \
+    -e '/^TTYVHangup=/d' \
+    "$UNIT_DST"
+  if ! grep -q '^StandardOutput=' "$UNIT_DST"; then
+    printf '%s\n' 'StandardOutput=journal' 'StandardError=journal' >>"$UNIT_DST"
+  fi
+  echo "INFO: /dev/tty1 missing — monitor logs to journal"
+else
+  echo "INFO: binding monitor to /dev/tty1"
+fi
+
+systemctl daemon-reload
+systemctl enable vs-server-monitor.service
+
+# Restart API so /api/v1/server/monitor is live if we just synced adminAgent
+if systemctl is-active --quiet vs-server.service 2>/dev/null; then
+  echo "==> restarting vs-server so monitor API is loaded"
+  systemctl restart vs-server.service
+  ok=0
+  for i in $(seq 1 40); do
+    if curl -fsS "http://127.0.0.1:3000/health" >/dev/null 2>&1; then ok=1; break; fi
+    sleep 0.5
+  done
+  if [[ "$ok" -ne 1 ]]; then
+    echo "WARN: vs-server health not up yet — continuing with monitor install" >&2
+  fi
+fi
+
+systemctl restart vs-server-monitor.service
+
+sleep 1
+echo
+systemctl --no-pager -l status vs-server-monitor.service | head -25 || true
+echo
+
+# Prove monitor API with token from server.env (never print token)
+TOKEN=""
+if [[ -f "$DATA/server.env" ]]; then
+  # shellcheck disable=SC1090
+  TOKEN="$(grep -E '^API_ADMIN_TOKEN=' "$DATA/server.env" | head -1 | cut -d= -f2- | tr -d '\r' | sed 's/^"//;s/"$//')"
+fi
+if [[ -n "$TOKEN" && "$TOKEN" != "CHANGE_ME_ADMIN_TOKEN" ]]; then
+  if curl -fsS -H "x-admin-token: $TOKEN" "http://127.0.0.1:3000/api/v1/server/monitor/text" 2>/dev/null | head -20; then
+    echo
+    echo "SUCCESS: monitor API OK + vs-server-monitor installed"
+  else
+    echo "WARN: monitor unit installed but API probe failed — check: journalctl -u vs-server -e" >&2
+  fi
+else
+  echo "WARN: API_ADMIN_TOKEN missing in $DATA/server.env — unit installed anyway" >&2
+fi
+
+echo
+echo "DONE. Console monitor: systemctl status vs-server-monitor"
+echo "Stop monitor only:     sudo bash $HERE/STOP_MONITOR"
+echo "Backend stays up when monitor stops."
+exit 0
