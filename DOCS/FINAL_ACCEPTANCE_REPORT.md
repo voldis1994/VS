@@ -1,12 +1,12 @@
 # Final Acceptance Report
 
 **Generated:** 2026-08-16  
-**Git commit SHA:** `e7c2c19927b954be06debe9ee3b295ca359644d0`
+**Git commit SHA:** `PENDING_STAMP`
 **Environment:** Cursor cloud agent — **no physical i3 / MSI / remote CLIENT**
 
 ## 1. Commit
 
-`2a6edbecded9c7caa7063ac7e6d6c50699dc771f`
+`PENDING_STAMP`
 
 ## 2. Final directory tree (production)
 
