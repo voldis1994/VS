@@ -3,6 +3,9 @@
  * Prints machine-readable lines for PowerShell START/STATUS helpers.
  *
  * Usage: npx tsx app/resolveAdminEndpoint.ts
+ *
+ * Windows: never call process.exit() immediately after fetch — that triggers
+ * libuv UV_HANDLE_CLOSING. Set process.exitCode and let the event loop drain.
  */
 
 import { existsSync, readFileSync } from 'fs';
@@ -80,9 +83,11 @@ async function main(): Promise<number> {
 }
 
 main()
-  .then((c) => process.exit(c))
+  .then((c) => {
+    process.exitCode = c;
+  })
   .catch((e) => {
     console.log('OK=0');
     console.log(`ERROR=${e instanceof Error ? e.message : String(e)}`);
-    process.exit(1);
+    process.exitCode = 1;
   });
