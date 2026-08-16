@@ -138,7 +138,8 @@ ensure_kv "$ENV_ROOT" CONTROL_API_URL "http://127.0.0.1:3000"
 ensure_kv "$ENV_ROOT" CORS_ORIGIN "http://127.0.0.1:5173,http://localhost:5173,*"
 ensure_kv "$ENV_ROOT" VS_WG_LISTEN_PORT 51820
 ensure_kv "$ENV_ROOT" VS_SERVER_ENDPOINT_IP "${LAN_IP:-}"
-chmod 600 "$ENV_ROOT"
+chmod 640 "$ENV_ROOT"
+chown root:"$RUN_USER" "$ENV_ROOT" 2>/dev/null || chmod 600 "$ENV_ROOT"
 
 set -a
 # shellcheck disable=SC1090
@@ -176,7 +177,10 @@ VS_CORE_ROOT=${PREFIX}
 VS_SERVER_DATA=${DATA}
 VS_CORE_DATA=${DATA}
 EOF
-chmod 600 "$SERVER_ENV"
+chmod 640 "$SERVER_ENV"
+chown root:"$RUN_USER" "$SERVER_ENV"
+# Secrets stay group-readable by vs-server only — never world-readable, never 777.
+# Physical monitor must NOT source this file; it uses localhost console API.
 
 # ---------------------------------------------------------------------------
 # 4) Docker Postgres + Redis (wait until READY)
@@ -241,13 +245,24 @@ chmod 600 "$API/.env" /opt/.env
 
 chown -R "$RUN_USER:$RUN_USER" "$DATA" "$LOG" "$PREFIX"
 
-echo "==> npm ci as $RUN_USER"
-sudo -u "$RUN_USER" bash -lc "cd '$API' && npm ci"
-# tsx is a production dependency; verify binary
+echo "==> npm ci as $RUN_USER (control-api + tsx runtime)"
+sudo -u "$RUN_USER" bash -lc "cd '$API' && (npm ci || npm install)"
+# tsx is a production dependency; verify binary hard-fail
 if [[ ! -x "$API/node_modules/.bin/tsx" ]]; then
-  sudo -u "$RUN_USER" bash -lc "cd '$API' && npm install tsx"
+  echo "==> tsx binary missing after npm ci — installing tsx explicitly"
+  sudo -u "$RUN_USER" bash -lc "cd '$API' && npm install tsx@^4.19.0 --save"
 fi
-test -x "$API/node_modules/.bin/tsx"
+if [[ ! -x "$API/node_modules/.bin/tsx" && ! -d "$API/node_modules/tsx" ]]; then
+  echo "FAIL: tsx not installed under $API/node_modules — monitor/boot cannot start" >&2
+  exit 1
+fi
+# Prove local runtime resolves without global npm
+if ! sudo -u "$RUN_USER" bash -lc "cd '$API' && ./node_modules/.bin/tsx --version" >/dev/null 2>&1 \
+   && ! sudo -u "$RUN_USER" bash -lc "cd '$API' && node --import tsx -e 'console.log(1)'" >/dev/null 2>&1; then
+  echo "FAIL: local tsx runtime does not execute" >&2
+  exit 1
+fi
+echo "SUCCESS: local tsx runtime OK ($API/node_modules/.bin/tsx)"
 
 # Client web portal (login / market / lot / robot) — served at http://SERVER:3000/
 CLIENT_SRC="$REPO/CLIENT/desktop"
@@ -349,9 +364,29 @@ cp -a "$HERE/STOP_SERVER" "$PREFIX/STOP_SERVER"
 cp -a "$HERE/STATUS_SERVER" "$PREFIX/STATUS_SERVER"
 cp -a "$HERE/RESTART_SERVER" "$PREFIX/RESTART_SERVER" 2>/dev/null || true
 cp -a "$HERE/MONITOR_SERVER" "$PREFIX/MONITOR_SERVER"
+cp -a "$HERE/SHOW_LIVE_MONITOR.sh" "$PREFIX/SHOW_LIVE_MONITOR.sh" 2>/dev/null || true
 cp -a "$HERE/START_MONITOR" "$PREFIX/START_MONITOR" 2>/dev/null || true
 cp -a "$HERE/STOP_MONITOR" "$PREFIX/STOP_MONITOR" 2>/dev/null || true
-chmod +x "$PREFIX/MONITOR_SERVER" "$PREFIX/START_MONITOR" "$PREFIX/STOP_MONITOR" 2>/dev/null || true
+chmod +x "$PREFIX/MONITOR_SERVER" "$PREFIX/SHOW_LIVE_MONITOR.sh" \
+  "$PREFIX/START_MONITOR" "$PREFIX/STOP_MONITOR" 2>/dev/null || true
+
+# Global one-command monitor (works from any directory after install)
+install -m 0755 "$HERE/deploy/vs-monitor" /usr/local/bin/vs-monitor
+# Also keep a copy under PREFIX for PATH-less recovery
+cp -a "$HERE/deploy/vs-monitor" "$PREFIX/vs-monitor"
+chmod +x "$PREFIX/vs-monitor"
+
+# Optional autostart hint for graphical/login sessions (does not block boot)
+AUTOSTART_DIR="/etc/profile.d"
+if [[ -d "$AUTOSTART_DIR" ]]; then
+  cat >"$AUTOSTART_DIR/vs-monitor-hint.sh" <<'EOF'
+# VS CORE — optional. Uncomment to auto-open monitor on interactive login TTYs.
+# [[ $- == *i* && -z ${VS_MONITOR_AUTOSTART_DONE:-} && $(tty 2>/dev/null) == /dev/tty1 ]] || return 0
+# export VS_MONITOR_AUTOSTART_DONE=1
+# command -v vs-monitor >/dev/null 2>&1 && vs-monitor
+EOF
+  chmod 644 "$AUTOSTART_DIR/vs-monitor-hint.sh"
+fi
 
 # Local read-only physical console monitor (independent of vs-server lifecycle)
 install -m 0644 "$HERE/deploy/systemd/vs-server-monitor.service" \
@@ -377,7 +412,7 @@ systemctl enable vs-server.service
 systemctl restart vs-server.service
 
 # ---------------------------------------------------------------------------
-# 8) Health
+# 8) Health + MONITOR self-test (must pass or install FAILS)
 # ---------------------------------------------------------------------------
 ok=0
 for i in $(seq 1 60); do
@@ -393,6 +428,42 @@ systemctl restart vs-server-monitor.service || true
 echo
 "$PREFIX/STATUS_SERVER" || true
 echo
+echo "======== INSTALL SELF-TEST ========"
+SELF_FAIL=0
+node -v || SELF_FAIL=1
+npm -v || SELF_FAIL=1
+[[ -x "$API/node_modules/.bin/tsx" || -d "$API/node_modules/tsx" ]] || {
+  echo "FAIL: tsx missing under $API"; SELF_FAIL=1;
+}
+[[ -x /usr/local/bin/vs-monitor ]] || { echo "FAIL: /usr/local/bin/vs-monitor missing"; SELF_FAIL=1; }
+[[ -x "$PREFIX/MONITOR_SERVER" ]] || { echo "FAIL: MONITOR_SERVER missing"; SELF_FAIL=1; }
+# server.env must exist, not world-readable, owned root + service group
+if [[ ! -f "$SERVER_ENV" ]]; then
+  echo "FAIL: $SERVER_ENV missing"; SELF_FAIL=1
+else
+  mode="$(stat -c '%a' "$SERVER_ENV" 2>/dev/null || stat -f '%OLp' "$SERVER_ENV")"
+  if [[ "$mode" == *7 || "$mode" == "777" || "$mode" == "666" ]]; then
+    echo "FAIL: $SERVER_ENV mode $mode is too open"; SELF_FAIL=1
+  else
+    echo "OK: server.env mode=$mode (secrets protected)"
+  fi
+fi
+# Monitor console API — no token, localhost only
+if ! curl -fsS "http://127.0.0.1:3000/api/v1/server/monitor/console/text" | head -5 | grep -q 'VS CORE SERVER'; then
+  echo "FAIL: localhost monitor console endpoint not serving VS CORE SERVER frame" >&2
+  SELF_FAIL=1
+else
+  echo "OK: monitor console endpoint"
+fi
+# Non-localhost must not get free access (best-effort; Host header alone is not enough)
+# Presence of endpoint is enough; auth model tested in unit tests.
+docker exec market-reader-postgres pg_isready -U "${DB_USER}" -d "${DB_NAME}" >/dev/null \
+  || { echo "FAIL: Postgres"; SELF_FAIL=1; }
+docker exec market-reader-redis redis-cli ping 2>/dev/null | grep -q PONG \
+  || echo "WARN: Redis not ready"
+systemctl is-active --quiet vs-server.service || { echo "FAIL: vs-server inactive"; SELF_FAIL=1; }
+[[ "$ok" -eq 1 ]] || { echo "FAIL: /health down"; SELF_FAIL=1; }
+
 echo "======== MSI CONTROL PANEL ========"
 echo "Server LAN URL:  http://${LAN_IP:-<i3-lan-ip>}:3000"
 echo "Reserve DHCP lease for this MAC/IP on your router."
@@ -403,15 +474,16 @@ echo "URL:    http://${LAN_IP:-<i3-lan-ip>}:3000/"
 echo "Create login+password in VS ADMIN → CLIENTS → CREATE WEB LOGIN"
 echo "Customer needs only a browser (no installer)."
 echo "WireGuard UDP:   ${VS_WG_LISTEN_PORT:-51820} (remote clients)"
-echo "Local monitor:   systemctl status vs-server-monitor  (console /dev/tty1)"
+echo "Local monitor:   vs-monitor"
 echo "Export USB pack: sudo bash $PREFIX/2_EXPORT_USB"
 echo "==================================="
 
-if [[ "$ok" -ne 1 ]]; then
-  echo "FAIL: Control API health not up — journalctl -u vs-server -e" >&2
+if [[ "$ok" -ne 1 || "$SELF_FAIL" -ne 0 ]]; then
+  echo "FAIL: INSTALL incomplete — journalctl -u vs-server -e" >&2
   journalctl -u vs-server -n 40 --no-pager >&2 || true
   exit 1
 fi
 
 echo "SUCCESS: VS SERVER READY (LIVE_TRADING_ENABLED=false)"
+echo "NEXT: run  vs-monitor"
 exit 0

@@ -42,13 +42,28 @@ if [[ ! -d "$PREFIX/control-api" ]]; then
   exit 1
 fi
 
-# Sync monitor scripts + unit source into the appliance tree
 mkdir -p "$PREFIX/deploy/systemd"
 cp -a "$HERE/MONITOR_SERVER" "$PREFIX/MONITOR_SERVER"
+cp -a "$HERE/SHOW_LIVE_MONITOR.sh" "$PREFIX/SHOW_LIVE_MONITOR.sh" 2>/dev/null || true
 cp -a "$HERE/START_MONITOR" "$PREFIX/START_MONITOR" 2>/dev/null || true
 cp -a "$HERE/STOP_MONITOR" "$PREFIX/STOP_MONITOR" 2>/dev/null || true
-cp -a "$UNIT_SRC" "$PREFIX/deploy/systemd/vs-server-monitor.service"
-chmod +x "$PREFIX/MONITOR_SERVER" "$PREFIX/START_MONITOR" "$PREFIX/STOP_MONITOR" 2>/dev/null || true
+chmod +x "$PREFIX/MONITOR_SERVER" "$PREFIX/SHOW_LIVE_MONITOR.sh" "$PREFIX/START_MONITOR" "$PREFIX/STOP_MONITOR" 2>/dev/null || true
+
+# Ensure local tsx exists under installed control-api
+if [[ ! -x "$PREFIX/control-api/node_modules/.bin/tsx" ]]; then
+  echo "==> installing control-api deps (tsx) for monitor"
+  if id -u vs-server >/dev/null 2>&1; then
+    sudo -u vs-server bash -lc "cd '$PREFIX/control-api' && (npm ci || npm install)"
+  else
+    (cd "$PREFIX/control-api" && (npm ci || npm install))
+  fi
+fi
+[[ -x "$PREFIX/control-api/node_modules/.bin/tsx" || -d "$PREFIX/control-api/node_modules/tsx" ]] \
+  || { echo "FAIL: tsx still missing under $PREFIX/control-api" >&2; exit 1; }
+
+install -m 0755 "$HERE/deploy/vs-monitor" /usr/local/bin/vs-monitor
+cp -a "$HERE/deploy/vs-monitor" "$PREFIX/vs-monitor"
+chmod +x "$PREFIX/vs-monitor"
 
 # Also sync monitor TypeScript into running control-api (no full npm ci)
 if [[ -f "$HERE/control-api/src/vs-core/serverMonitor.ts" ]]; then
@@ -109,25 +124,25 @@ echo
 systemctl --no-pager -l status vs-server-monitor.service | head -25 || true
 echo
 
-# Prove monitor API with token from server.env (never print token)
-TOKEN=""
-if [[ -f "$DATA/server.env" ]]; then
-  # shellcheck disable=SC1090
-  TOKEN="$(grep -E '^API_ADMIN_TOKEN=' "$DATA/server.env" | head -1 | cut -d= -f2- | tr -d '\r' | sed 's/^"//;s/"$//')"
-fi
-if [[ -n "$TOKEN" && "$TOKEN" != "CHANGE_ME_ADMIN_TOKEN" ]]; then
-  if curl -fsS -H "x-admin-token: $TOKEN" "http://127.0.0.1:3000/api/v1/server/monitor/text" 2>/dev/null | head -20; then
-    echo
-    echo "SUCCESS: monitor API OK + vs-server-monitor installed"
-  else
-    echo "WARN: monitor unit installed but API probe failed — check: journalctl -u vs-server -e" >&2
-  fi
+# Prove monitor API via localhost console (no secrets)
+if curl -fsS "http://127.0.0.1:3000/api/v1/server/monitor/console/text" 2>/dev/null | head -20 | grep -q 'VS CORE SERVER'; then
+  echo
+  echo "SUCCESS: monitor console API OK + vs-server-monitor installed"
+  echo "Run: vs-monitor"
 else
-  echo "WARN: API_ADMIN_TOKEN missing in $DATA/server.env — unit installed anyway" >&2
+  echo "WARN: monitor unit installed but console API probe failed — check: journalctl -u vs-server -e" >&2
+  echo "      Admin-token probe (optional):" >&2
+  TOKEN=""
+  if [[ -f "$DATA/server.env" ]]; then
+    TOKEN="$(grep -E '^API_ADMIN_TOKEN=' "$DATA/server.env" | head -1 | cut -d= -f2- | tr -d '\r' | sed 's/^"//;s/"$//')"
+  fi
+  if [[ -n "$TOKEN" && "$TOKEN" != "CHANGE_ME_ADMIN_TOKEN" ]]; then
+    curl -fsS -H "x-admin-token: $TOKEN" "http://127.0.0.1:3000/api/v1/server/monitor/text" 2>/dev/null | head -10 || true
+  fi
 fi
 
 echo
-echo "DONE. Console monitor: systemctl status vs-server-monitor"
+echo "DONE. Console monitor: vs-monitor"
 echo "Stop monitor only:     sudo bash $HERE/STOP_MONITOR"
 echo "Backend stays up when monitor stops."
 exit 0

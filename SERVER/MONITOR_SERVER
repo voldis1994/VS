@@ -2,67 +2,124 @@
 # MONITOR_SERVER — local read-only physical status display for i3 console.
 # Closing this does NOT stop vs-server, Postgres, Redis, or WireGuard.
 #
-# Prefer:
-#   sudo bash SERVER/SHOW_LIVE_MONITOR.sh
-# (server.env is root-only; sudo is required to read API_ADMIN_TOKEN)
+# Prefer:  vs-monitor
+# Or:      sudo bash SERVER/SHOW_LIVE_MONITOR.sh
+#
+# Does NOT source /var/lib/vs-server/server.env secrets.
+# Uses localhost Control API console endpoint instead.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+PREFIX="${VS_SERVER_PREFIX:-${VS_SERVER_ROOT:-/opt/vs-server}}"
 DATA="${VS_SERVER_DATA:-${VS_CORE_DATA:-/var/lib/vs-server}}"
-API="${VS_SERVER_ROOT:-$ROOT}/control-api"
-if [[ ! -d "$API" && -d "$ROOT/control-api" ]]; then
-  API="$ROOT/control-api"
-fi
+PORT="${CONTROL_API_PORT:-3000}"
+BASE="${VS_MONITOR_API_URL:-http://127.0.0.1:${PORT}}"
+BASE="${BASE%/}"
+REFRESH_MS="${VS_MONITOR_REFRESH_MS:-800}"
+REFRESH_SEC="$(awk -v ms="$REFRESH_MS" 'BEGIN { printf "%.3f", (ms < 250 ? 250 : ms) / 1000 }')"
 
-load_env_file() {
-  local f="$1"
-  [[ -f "$f" ]] || return 0
-  if [[ -r "$f" ]]; then
-    set -a
-    # shellcheck disable=SC1090
-    source "$f"
-    set +a
-    return 0
-  fi
-  # server.env is usually 600 root:vs-server — load via sudo without printing secrets
-  if command -v sudo >/dev/null 2>&1 && sudo -n test -r "$f" 2>/dev/null; then
-    set -a
-    # shellcheck disable=SC1090
-    source <(sudo -n cat "$f")
-    set +a
-    return 0
-  fi
-  if [[ "$(id -u)" -ne 0 ]] && command -v sudo >/dev/null 2>&1; then
-    echo "INFO: $f is not readable by $(id -un) — re-running monitor with sudo..." >&2
-    exec sudo --preserve-env=VS_MONITOR_REFRESH_MS,VS_MONITOR_API_URL,CONTROL_API_PORT \
-      bash "$ROOT/MONITOR_SERVER"
-  fi
-  echo "WARN: cannot read $f — monitor may show OFFLINE without API_ADMIN_TOKEN" >&2
+export VS_SERVER_DATA="$DATA"
+export VS_CORE_DATA="$DATA"
+export VS_SERVER_ROOT="$PREFIX"
+export VS_CORE_ROOT="$PREFIX"
+export CONTROL_API_PORT="$PORT"
+export VS_MONITOR_API_URL="$BASE"
+export VS_MONITOR_REFRESH_MS="$REFRESH_MS"
+export LIVE_TRADING_ENABLED="${LIVE_TRADING_ENABLED:-false}"
+
+resolve_api_dir() {
+  local candidates=(
+    "$PREFIX/control-api"
+    "/opt/vs-server/control-api"
+    "$ROOT/control-api"
+  )
+  local d
+  for d in "${candidates[@]}"; do
+    if [[ -f "$d/package.json" && -x "$d/node_modules/.bin/tsx" ]]; then
+      echo "$d"
+      return 0
+    fi
+  done
+  for d in "${candidates[@]}"; do
+    if [[ -f "$d/package.json" && -d "$d/node_modules/tsx" ]]; then
+      echo "$d"
+      return 0
+    fi
+  done
+  for d in "${candidates[@]}"; do
+    if [[ -f "$d/package.json" ]]; then
+      echo "$d"
+      return 0
+    fi
+  done
+  return 1
 }
 
-load_env_file "$DATA/server.env"
-load_env_file "$API/.env"
+run_tsx_monitor() {
+  local api="$1"
+  cd "$api"
+  if [[ -x ./node_modules/.bin/tsx ]]; then
+    exec ./node_modules/.bin/tsx src/vs-core/runServerMonitor.ts
+  fi
+  if [[ -d ./node_modules/tsx ]]; then
+    exec node --import tsx src/vs-core/runServerMonitor.ts
+  fi
+  return 1
+}
 
-export VS_SERVER_DATA="${VS_SERVER_DATA:-$DATA}"
-export VS_CORE_DATA="${VS_CORE_DATA:-$DATA}"
-export LIVE_TRADING_ENABLED="${LIVE_TRADING_ENABLED:-false}"
-export CONTROL_API_PORT="${CONTROL_API_PORT:-3000}"
-export VS_MONITOR_API_URL="${VS_MONITOR_API_URL:-http://127.0.0.1:${CONTROL_API_PORT}}"
-export VS_MONITOR_REFRESH_MS="${VS_MONITOR_REFRESH_MS:-800}"
+# Bash/curl fallback — works without tsx once Control API is up.
+# Never reads server.env. Never invents LIVE.
+run_curl_monitor() {
+  echo "VS SERVER MONITOR (curl console) — read-only; Ctrl+C stops monitor only" >&2
+  echo "API $BASE  refresh ${REFRESH_MS}ms" >&2
+  local frame
+  while true; do
+    if frame="$(curl -fsS --max-time 8 "$BASE/api/v1/server/monitor/console/text" 2>/dev/null)"; then
+      if [[ -t 1 ]]; then printf '\033c'; fi
+      printf '%s\n' "$frame"
+    elif curl -fsS --max-time 3 "$BASE/health" >/dev/null 2>&1; then
+      if [[ -t 1 ]]; then printf '\033c'; fi
+      cat <<EOF
+╔════════════════════════════════════════════════════════════╗
+║                    VS CORE SERVER                          ║
+║                      VS-CORE-01                            ║
+╠════════════════════════════════════════════════════════════╣
+║  STATUS: API UP — monitor console route not loaded yet     ║
+║  ACTION: sudo systemctl restart vs-server                  ║
+║  DETAIL: /api/v1/server/monitor/console/text missing       ║
+║  $(date -u '+%Y-%m-%d %H:%M:%S UTC')                                         ║
+╚════════════════════════════════════════════════════════════╝
+EOF
+    else
+      if [[ -t 1 ]]; then printf '\033c'; fi
+      cat <<EOF
+╔════════════════════════════════════════════════════════════╗
+║                    VS CORE SERVER                          ║
+║                      VS-CORE-01                            ║
+╠════════════════════════════════════════════════════════════╣
+║  CONTROL API          ● OFFLINE                            ║
+║  DATABASE             ○ UNKNOWN                            ║
+║  REDIS                ○ UNKNOWN                            ║
+║  ADMIN                ○ UNKNOWN                            ║
+║  CLIENTS              ○ UNKNOWN                            ║
+║  LAST ERROR: cannot reach $BASE/health
+║  $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+║  READ-ONLY — closing this does not stop the server         ║
+╚════════════════════════════════════════════════════════════╝
+EOF
+    fi
+    sleep "$REFRESH_SEC"
+  done
+}
 
-if [[ ! -f "$API/package.json" ]]; then
-  # Installed tree under /opt/vs-server
-  if [[ -f /opt/vs-server/control-api/package.json ]]; then
-    API=/opt/vs-server/control-api
-  else
-    echo "FAIL: control-api missing at $API" >&2
-    exit 1
+API_DIR=""
+if API_DIR="$(resolve_api_dir)"; then
+  if [[ -x "$API_DIR/node_modules/.bin/tsx" || -d "$API_DIR/node_modules/tsx" ]]; then
+    run_tsx_monitor "$API_DIR" || true
   fi
 fi
-cd "$API"
-if [[ ! -x node_modules/.bin/tsx ]]; then
-  echo "FAIL: tsx missing — run INSTALL_I3_SERVER / npm ci in control-api" >&2
-  exit 1
-fi
 
-exec ./node_modules/.bin/tsx src/vs-core/runServerMonitor.ts
+# If tsx path failed or missing — still show a live dashboard via curl.
+echo "WARN: local tsx runtime missing under installed control-api — using console API fallback" >&2
+echo "      Fix permanently: sudo bash SERVER/install/INSTALL_I3_SERVER.sh" >&2
+run_curl_monitor

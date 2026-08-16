@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# /usr/local/bin/vs-monitor — installed by INSTALL_I3_SERVER
+# Live VS CORE SERVER console. Closing does NOT stop the server.
+set -euo pipefail
+export VS_MONITOR_REFRESH_MS="${VS_MONITOR_REFRESH_MS:-800}"
+export VS_SERVER_PREFIX="${VS_SERVER_PREFIX:-/opt/vs-server}"
+export VS_SERVER_ROOT="${VS_SERVER_ROOT:-$VS_SERVER_PREFIX}"
+export VS_SERVER_DATA="${VS_SERVER_DATA:-/var/lib/vs-server}"
+
+if [[ -x /opt/vs-server/MONITOR_SERVER ]]; then
+  exec bash /opt/vs-server/MONITOR_SERVER
+fi
+if [[ -x "$VS_SERVER_PREFIX/MONITOR_SERVER" ]]; then
+  exec bash "$VS_SERVER_PREFIX/MONITOR_SERVER"
+fi
+
+# Dev/git tree fallback
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+for cand in \
+  /opt/vs-server/SHOW_LIVE_MONITOR.sh \
+  "$SCRIPT_DIR/../opt/vs-server/SHOW_LIVE_MONITOR.sh"
+do
+  if [[ -f "$cand" ]]; then
+    exec bash "$cand"
+  fi
+done
+
+echo "FAIL: MONITOR_SERVER not installed — run: sudo bash SERVER/install/INSTALL_I3_SERVER.sh" >&2
+exit 1

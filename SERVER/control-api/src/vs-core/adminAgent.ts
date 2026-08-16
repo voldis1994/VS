@@ -55,6 +55,28 @@ function authorizeAdmin(req: { headers: Record<string, unknown> }, expected?: st
   return token === want;
 }
 
+/** Physical i3 console only — never expose on LAN/WireGuard clients. */
+function isLocalConsoleRequest(req: {
+  ip?: string;
+  ips?: string[];
+  headers?: Record<string, unknown>;
+  socket?: { remoteAddress?: string };
+}): boolean {
+  const candidates = [
+    req.ip,
+    ...(Array.isArray(req.ips) ? req.ips : []),
+    req.socket?.remoteAddress,
+    typeof req.headers?.['x-forwarded-for'] === 'string'
+      ? String(req.headers['x-forwarded-for']).split(',')[0]?.trim()
+      : undefined,
+  ].filter(Boolean) as string[];
+  for (const raw of candidates) {
+    const ip = raw.replace(/^::ffff:/, '');
+    if (ip === '127.0.0.1' || ip === '::1' || ip === 'localhost') return true;
+  }
+  return false;
+}
+
 function probeStatus(
   probes: ProbeResult[],
   name: string
@@ -257,6 +279,33 @@ export async function registerAdminAgentRoutes(
   app.get('/api/v1/server/monitor/text', async (req, reply) => {
     if (!authorizeAdmin(req as { headers: Record<string, unknown> }, token)) {
       return reply.code(401).send({ ok: false, code: 'UNAUTHORIZED' });
+    }
+    const snap = await buildServerMonitorSnapshot({
+      getProbes: deps.getProbes,
+      apiSelfOnline: true,
+    });
+    reply.header('content-type', 'text/plain; charset=utf-8');
+    return renderServerMonitorFrame(snap);
+  });
+
+  /**
+   * Local console monitor for physical i3 — 127.0.0.1 / ::1 only.
+   * No admin token required so the monitor never sources server.env secrets.
+   * Never returns secrets. Rejects non-localhost (LAN/WG) with 403.
+   */
+  app.get('/api/v1/server/monitor/console', async (req, reply) => {
+    if (!isLocalConsoleRequest(req as Parameters<typeof isLocalConsoleRequest>[0])) {
+      return reply.code(403).send({ ok: false, code: 'LOCALHOST_ONLY' });
+    }
+    return buildServerMonitorSnapshot({
+      getProbes: deps.getProbes,
+      apiSelfOnline: true,
+    });
+  });
+
+  app.get('/api/v1/server/monitor/console/text', async (req, reply) => {
+    if (!isLocalConsoleRequest(req as Parameters<typeof isLocalConsoleRequest>[0])) {
+      return reply.code(403).send({ ok: false, code: 'LOCALHOST_ONLY' });
     }
     const snap = await buildServerMonitorSnapshot({
       getProbes: deps.getProbes,

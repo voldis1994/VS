@@ -316,4 +316,37 @@ describe('GET /api/v1/server/monitor', () => {
     expect(res.body).toContain('VS CORE SERVER');
     expect(res.body).toContain('READ-ONLY');
   });
+
+  it('localhost console monitor requires no admin token', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/server/monitor/console',
+      remoteAddress: '127.0.0.1',
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.role).toBe('server_monitor');
+    expect(JSON.stringify(body)).not.toMatch(/API_ADMIN_TOKEN|private_key|BEGIN /i);
+  });
+
+  it('console text works from localhost without token', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/server/monitor/console/text',
+      remoteAddress: '127.0.0.1',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain('VS CORE SERVER');
+    expect(res.body).toContain('[ ADMIN ]');
+    expect(res.body).toContain('[ CLIENTS ]');
+  });
+
+  it('console rejects non-localhost', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/server/monitor/console',
+      remoteAddress: '192.168.0.50',
+    });
+    expect(res.statusCode).toBe(403);
+  });
 });
