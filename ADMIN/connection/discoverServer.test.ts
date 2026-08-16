@@ -6,6 +6,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   discoverVsServer,
   isWireGuardUrl,
+  isDockerNatUrl,
   WIREGUARD_ADMIN_API,
 } from './discoverServer.js';
 
@@ -48,6 +49,14 @@ describe('isWireGuardUrl', () => {
   it('detects private WG API host', () => {
     expect(isWireGuardUrl('http://10.77.0.1:3000')).toBe(true);
     expect(isWireGuardUrl('http://192.168.0.10:3000')).toBe(false);
+  });
+});
+
+describe('isDockerNatUrl', () => {
+  it('detects Docker/Hyper-V NAT ranges', () => {
+    expect(isDockerNatUrl('http://172.30.64.1:3000')).toBe(true);
+    expect(isDockerNatUrl('http://172.17.0.1:3000')).toBe(true);
+    expect(isDockerNatUrl('http://192.168.0.10:3000')).toBe(false);
   });
 });
 
