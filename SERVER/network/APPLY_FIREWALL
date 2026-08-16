@@ -1,72 +1,46 @@
 #!/usr/bin/env bash
-# APPLY_FIREWALL — SERVER host firewall for VS (product).
-# Home appliance mode (VS_LAN_MANAGEMENT=1):
-#   Allow Control API :3000 from private LAN ranges + WireGuard + localhost.
-#   Do NOT install an nft input policy-drop table that can lock out MSI when
-#   LAN CIDR detection is wrong or MSI is on a sibling 192.168.x subnet.
+# APPLY_FIREWALL — home appliance: MSI on Wi‑Fi must reach Control API :3000.
+# Prefer reachability over narrow CIDR guessing. WireGuard UDP still opened.
 set -euo pipefail
 
-WG_IFACE="${VS_WG_INTERFACE:-vs0}"
 WG_PORT="${VS_WG_LISTEN_PORT:-51820}"
 API_PORT="${CONTROL_API_PORT:-3000}"
 SUPERNET="${VS_WG_SUBNET:-10.77.0.0/16}"
 
-detect_lan_cidr() {
-  if [[ -n "${VS_LAN_CIDR:-}" ]]; then
-    echo "$VS_LAN_CIDR"
-    return
-  fi
-  local src
-  src="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true)"
-  if [[ "$src" =~ ^([0-9]+\.[0-9]+\.[0-9]+)\.[0-9]+$ ]]; then
-    echo "${BASH_REMATCH[1]}.0/24"
-    return
-  fi
-  echo "192.168.0.0/16"
-}
-LAN_CIDR="$(detect_lan_cidr)"
-
-echo "VS SERVER FIREWALL (product)"
-echo "IFACE=$WG_IFACE WG_UDP=$WG_PORT API_TCP=$API_PORT"
-echo "LAN_CIDR=$LAN_CIDR WG_SUPERNET=$SUPERNET"
+echo "VS SERVER FIREWALL (home appliance)"
+echo "WG_UDP=$WG_PORT API_TCP=$API_PORT"
 
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "FAIL: APPLY_FIREWALL requires root" >&2
   exit 1
 fi
 
-# Remove previous fail-closed nft table — it dropped MSI when source ∉ /24
+# Remove prior fail-closed nft table (locked MSI out)
 if command -v nft >/dev/null 2>&1; then
   nft delete table inet vs_private 2>/dev/null || true
   echo "OK: removed nft inet vs_private (if present)"
 fi
 
-# iptables accept (idempotent insert) — works even when ufw is inactive
+# NUCLEAR home allow: any source → :3000 (bind is still local LAN interfaces)
+# Required because Wi‑Fi AP isolation / wrong CIDR / Tailscale source IPs broke MSI.
 if command -v iptables >/dev/null 2>&1; then
-  for cidr in "$LAN_CIDR" "192.168.0.0/16" "10.0.0.0/8" "$SUPERNET"; do
-    if ! iptables -C INPUT -p tcp --dport "$API_PORT" -s "$cidr" -j ACCEPT 2>/dev/null; then
-      iptables -I INPUT 1 -p tcp --dport "$API_PORT" -s "$cidr" -j ACCEPT || true
-    fi
-  done
-  if ! iptables -C INPUT -p tcp --dport "$API_PORT" -i lo -j ACCEPT 2>/dev/null; then
-    iptables -I INPUT 1 -p tcp --dport "$API_PORT" -i lo -j ACCEPT || true
-  fi
-  echo "OK: iptables ACCEPT :${API_PORT} from LAN/WG/lo"
+  iptables -D INPUT -p tcp --dport "$API_PORT" -j ACCEPT 2>/dev/null || true
+  iptables -I INPUT 1 -p tcp --dport "$API_PORT" -j ACCEPT || true
+  iptables -D INPUT -p udp --dport "$WG_PORT" -j ACCEPT 2>/dev/null || true
+  iptables -I INPUT 1 -p udp --dport "$WG_PORT" -j ACCEPT || true
+  echo "OK: iptables ACCEPT tcp/$API_PORT + udp/$WG_PORT (any)"
 fi
 
 if command -v ufw >/dev/null 2>&1; then
   ufw allow OpenSSH 2>/dev/null || ufw allow 22/tcp 2>/dev/null || true
   ufw allow "${WG_PORT}/udp" comment 'VS WireGuard' 2>/dev/null || true
-  # Wide home-LAN allow — MSI may be on 192.168.0.x or 192.168.1.x
-  ufw allow from 192.168.0.0/16 to any port "$API_PORT" proto tcp comment 'VS Control API home LAN' 2>/dev/null || true
-  ufw allow from 10.0.0.0/8 to any port "$API_PORT" proto tcp comment 'VS Control API RFC1918/10' 2>/dev/null || true
-  ufw allow from "$SUPERNET" to any port "$API_PORT" proto tcp comment 'VS Control API WireGuard' 2>/dev/null || true
-  ufw allow from 127.0.0.1 to any port "$API_PORT" proto tcp comment 'VS Control API localhost' 2>/dev/null || true
-  # Ensure ufw is active but do not --force reset (destroys operator SSH rules)
+  ufw allow "${API_PORT}/tcp" comment 'VS Control API home (MSI LAN)' 2>/dev/null || true
+  ufw allow from "$SUPERNET" to any port "$API_PORT" proto tcp comment 'VS Control API WG' 2>/dev/null || true
   ufw --force enable 2>/dev/null || true
-  echo "SUCCESS: ufw allows API from 192.168.0.0/16 + 10/8 + WG + lo"
+  ufw status numbered 2>/dev/null | head -40 || true
+  echo "SUCCESS: ufw allow ${API_PORT}/tcp (any) + WG"
   exit 0
 fi
 
-echo "SUCCESS: firewall rules applied (iptables; ufw not installed)"
+echo "SUCCESS: iptables open (ufw not installed)"
 exit 0

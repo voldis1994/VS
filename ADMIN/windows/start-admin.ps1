@@ -219,40 +219,56 @@ Write-Host " UI PATH = ADMIN\desktop"
 Write-Host " UI PORT = $UiPort  (old tactical :5173 is killed, never used)"
 Write-Host "========================================"
 
+Write-Host "MSI IPv4 (must share 192.168.0.x with i3 for LAN):"
+try {
+  Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object { $_.IPAddress -notlike "127.*" } |
+    ForEach-Object { Write-Host ("  " + $_.IPAddress + "  " + $_.InterfaceAlias) }
+} catch {
+  ipconfig | Select-String "IPv4"
+}
+
 Write-Host "Resolving VS-CORE-01 on LAN..."
 $serverUrl = Resolve-LanServerUrl
 $transport = "LAN"
 if (-not $serverUrl) {
-  Write-Host "SERVER OFFLINE — cannot reach VS-CORE-01 on LAN"
   Write-Host ""
-  Write-Host "On i3 (API is local-ok but MSI needs LAN):"
-  Write-Host "  sudo bash SERVER/OPEN_LAN_FOR_MSI.sh"
-  Write-Host "  curl -f http://127.0.0.1:3000/health"
-  Write-Host "  curl -f http://192.168.0.10:3000/health"
-  Write-Host "  hostname -I"
-  Write-Host ""
-  Write-Host "On MSI create ADMIN\config\SERVER_IP.txt with ONE line = i3 LAN IP"
-  Write-Host "  example: 192.168.0.10"
-  Write-Host "Then: START_MSI.bat"
-  Write-Host ""
-  # Show why the primary candidate failed
-  Show-ProbeDetail "http://192.168.0.10:3000"
+  Write-Host "LAN FAILED — diagnosing path to i3..."
+  $targetIp = "192.168.0.10"
   $ipFile = Join-Path $AdminRoot "config\SERVER_IP.txt"
   if (Test-Path $ipFile) {
-    $manualIp = (Get-Content -LiteralPath $ipFile -TotalCount 1).Trim()
-    if ($manualIp -match '^\d+\.\d+\.\d+\.\d+$') {
-      $manualUrl = "http://${manualIp}:3000"
-      Write-Host ("Trying SERVER_IP.txt -> " + $manualUrl)
-      Show-ProbeDetail $manualUrl
-      if (Test-VsCoreIdentity $manualUrl) {
-        $serverUrl = $manualUrl
-      }
-    }
+    $t = (Get-Content -LiteralPath $ipFile -TotalCount 1 -ErrorAction SilentlyContinue)
+    if ($t -and $t.Trim() -match '^\d+\.\d+\.\d+\.\d+$') { $targetIp = $t.Trim() }
   }
-  if (-not $serverUrl -and $env:VS_SERVER_URL) {
-    if (Test-VsCoreIdentity $env:VS_SERVER_URL) { $serverUrl = $env:VS_SERVER_URL.TrimEnd("/") }
+  Write-Host ("  target=" + $targetIp)
+  Write-Host "  ping:"
+  & ping.exe -n 2 $targetIp 2>&1 | ForEach-Object { Write-Host ("    " + $_) }
+  Show-ProbeDetail ("http://" + $targetIp + ":3000")
+
+  # WireGuard fallback (only if identity OK)
+  Write-Host "  trying WireGuard http://10.77.0.1:3000 ..."
+  if (Test-VsCoreIdentity "http://10.77.0.1:3000") {
+    $serverUrl = "http://10.77.0.1:3000"
+    $transport = "WIREGUARD"
+    Write-Host "  OK VS-CORE via WireGuard"
   }
-  if (-not $serverUrl) { exit 1 }
+}
+
+if (-not $serverUrl) {
+  Write-Host ""
+  Write-Host "SERVER OFFLINE — MSI cannot reach VS-CORE-01"
+  Write-Host "i3 already proves LAN works FROM i3 itself."
+  Write-Host "This is almost always:"
+  Write-Host "  1) MSI on different WiFi / Guest SSID"
+  Write-Host "  2) Router AP/client isolation (blocks phone/laptop-to-laptop)"
+  Write-Host "  3) WireGuard not connected yet"
+  Write-Host ""
+  Write-Host "Do this:"
+  Write-Host "  A) Same WiFi as i3 (not Guest). Disable AP isolation on router."
+  Write-Host "  B) On MSI:  ADMIN\PROVE_LAN.bat"
+  Write-Host "  C) Or finish WireGuard, then START_MSI.bat again (uses 10.77.0.1)"
+  Write-Host "  D) On i3:   sudo bash SERVER/OPEN_LAN_FOR_MSI.sh"
+  exit 1
 }
 
 $adminToken = $env:VITE_API_ADMIN_TOKEN

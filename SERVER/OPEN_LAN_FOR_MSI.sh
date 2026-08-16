@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# OPEN_LAN_FOR_MSI — force Control API reachable from MSI on home Wi-Fi.
+# OPEN_LAN_FOR_MSI — force Control API reachable from MSI.
 #   sudo bash SERVER/OPEN_LAN_FOR_MSI.sh
 set -euo pipefail
 
@@ -34,6 +34,12 @@ done
 
 bash "$HERE/network/APPLY_FIREWALL" || true
 
+# Also punch host firewalld if present
+if command -v firewall-cmd >/dev/null 2>&1; then
+  firewall-cmd --add-port="${API_PORT}/tcp" --permanent 2>/dev/null || true
+  firewall-cmd --reload 2>/dev/null || true
+fi
+
 systemctl daemon-reload 2>/dev/null || true
 systemctl restart vs-server.service || true
 
@@ -46,12 +52,9 @@ done
 
 echo "==> listen sockets:"
 ss -lntp | grep -E ":${API_PORT}\\b" || true
-if ss -lntp | grep -E ":${API_PORT}\\b" | grep -qE '127\.0\.0\.1|\[::1\]'; then
-  if ! ss -lntp | grep -E ":${API_PORT}\\b" | grep -qE '0\.0\.0\.0|\*:|\[::\]'; then
-    echo "FAIL: Control API bound to localhost only — MSI cannot connect" >&2
-    ss -lntp | grep -E ":${API_PORT}\\b" >&2 || true
-    exit 1
-  fi
+if ! ss -lntp | grep -E ":${API_PORT}\\b" | grep -qE '0\.0\.0\.0|\*:|\[::\]'; then
+  echo "FAIL: Control API not on 0.0.0.0 — MSI cannot connect" >&2
+  exit 1
 fi
 
 LAN_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true)"
@@ -60,19 +63,25 @@ if [[ -z "$LAN_IP" ]]; then
 fi
 
 echo "==> LAN health via ${LAN_IP}:"
-if ! curl -fsS --connect-timeout 3 "http://${LAN_IP}:${API_PORT}/health"; then
-  echo >&2
-  echo "FAIL: LAN IP /health failed — bind/firewall still wrong" >&2
-  exit 1
-fi
+curl -fsS --connect-timeout 3 "http://${LAN_IP}:${API_PORT}/health"
 echo
 
-echo "======== MSI COPY THESE ========"
-echo "1) On MSI create file ADMIN\\config\\SERVER_IP.txt with ONE line:"
-echo "   ${LAN_IP}"
-echo "2) git pull"
-echo "3) START_MSI.bat"
-echo "Test from MSI PowerShell:"
-echo "   curl.exe -s http://${LAN_IP}:${API_PORT}/health"
-echo "SUCCESS: LAN API open for MSI"
+# Write IP helper file into repo tree if present (operator may copy to USB)
+REPO_HINT="$(cd "$HERE/.." 2>/dev/null && pwd || true)"
+if [[ -n "$REPO_HINT" && -d "$REPO_HINT/ADMIN/config" ]]; then
+  printf '%s\n' "$LAN_IP" >"$REPO_HINT/ADMIN/config/SERVER_IP.txt"
+  echo "Wrote $REPO_HINT/ADMIN/config/SERVER_IP.txt = $LAN_IP"
+fi
+
+echo "======== MSI — COPY EXACTLY ========"
+echo "cd /d C:\\VS-main"
+echo "mkdir ADMIN\\config 2>nul"
+echo "echo ${LAN_IP}> ADMIN\\config\\SERVER_IP.txt"
+echo "git pull origin main"
+echo "ADMIN\\PROVE_LAN.bat"
+echo "START_MSI.bat"
+echo
+echo "If PROVE_LAN.bat ping FAILS = WiFi AP isolation / different WiFi (not VS bug)."
+echo "Fix router: disable AP/client isolation, OR use ethernet, OR WireGuard."
+echo "SUCCESS: LAN API open for MSI (i3 side)"
 exit 0
