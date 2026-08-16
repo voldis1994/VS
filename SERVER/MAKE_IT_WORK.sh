@@ -78,6 +78,8 @@ DB_USER=market_reader
 DB_NAME=market_reader
 DB_PASSWORD="$(openssl rand -hex 16)"
 echo "==> new DB_PASSWORD generated and written to all env files"
+BUILD_SHA="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 for f in "$DATA/server.env" "$DATA/compose.env" "$API/.env" "$PREFIX/.env" "$REPO/.env" /opt/.env; do
   force_kv "$f" DB_HOST 127.0.0.1
@@ -93,6 +95,9 @@ for f in "$DATA/server.env" "$DATA/compose.env" "$API/.env" "$PREFIX/.env" "$REP
   force_kv "$f" LIVE_TRADING_ENABLED false
   force_kv "$f" NODE_ENV production
   force_kv "$f" OPERATING_MODE PRODUCTION
+  force_kv "$f" VS_SERVER_ID VS-CORE-01
+  force_kv "$f" BUILD_SHA "$BUILD_SHA"
+  force_kv "$f" BUILD_TIME "$BUILD_TIME"
   force_kv "$f" VS_SERVER_ROOT "$PREFIX"
   force_kv "$f" VS_CORE_ROOT "$PREFIX"
   force_kv "$f" VS_SERVER_DATA "$DATA"

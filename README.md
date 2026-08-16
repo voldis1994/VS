@@ -19,6 +19,6 @@ Skatīt arī `I3.txt` un `MSI.txt` repo saknē.
 
 ## Status
 
-See `DOCS/PHYSICAL_ACCEPTANCE.md` and `DOCS/FINAL_ACCEPTANCE_REPORT.md`.
+See `DOCS/PHYSICAL_CHAIN_EVIDENCE.md`.
 
-**Current formal status: NOT PRODUCTION ACCEPTED** until physical chain is retested.
+**Current formal status: NOT PRODUCTION ACCEPTED / NOT ACCEPTED** until physical i3+MSI evidence is filled.
