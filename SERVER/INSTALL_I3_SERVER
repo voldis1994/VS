@@ -423,16 +423,17 @@ Environment=VS_LAN_MANAGEMENT=1
 Environment=VS_PRIVATE_NETWORK=1
 Environment=CONTROL_API_HOST=0.0.0.0
 Environment=CONTROL_API_PORT=3000
-ExecStartPre=${PREFIX}/deploy/ensure-postgres.sh
+ExecStartPre=+${PREFIX}/deploy/ensure-postgres.sh
 ExecStart=${PREFIX}/deploy/boot.sh
 Restart=on-failure
 RestartSec=5
 MemoryMax=4G
 LimitNOFILE=65535
-NoNewPrivileges=true
+SupplementaryGroups=docker
+NoNewPrivileges=false
 PrivateTmp=true
-ProtectSystem=strict
-ReadWritePaths=${DATA} ${LOG} ${PREFIX}
+ProtectSystem=full
+ReadWritePaths=${DATA} ${LOG} ${PREFIX} /var/run/docker.sock
 
 [Install]
 WantedBy=multi-user.target

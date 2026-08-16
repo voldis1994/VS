@@ -136,7 +136,33 @@ $serverUrl = Resolve-LanServerUrl
 $transport = "LAN"
 if (-not $serverUrl) {
   Write-Host "SERVER OFFLINE — cannot reach VS-CORE-01 on LAN"
-  exit 1
+  Write-Host ""
+  Write-Host "On i3 first:"
+  Write-Host "  sudo bash SERVER/FIX_CONTROL_API.sh"
+  Write-Host "  curl http://127.0.0.1:3000/health"
+  Write-Host "  hostname -I"
+  Write-Host ""
+  Write-Host "Then set the real i3 LAN IP in ADMIN\config\control-panel.env :"
+  Write-Host "  VS_SERVER_URL=http://<i3-lan-ip>:3000"
+  Write-Host "Or set env and retry:"
+  Write-Host "  set VS_SERVER_URL=http://<i3-lan-ip>:3000"
+  Write-Host "  ADMIN\START_ADMIN.bat"
+  # Manual IP file (operator writes one line: 192.168.x.y)
+  $ipFile = Join-Path $AdminRoot "config\SERVER_IP.txt"
+  if (Test-Path $ipFile) {
+    $manualIp = (Get-Content -LiteralPath $ipFile -TotalCount 1).Trim()
+    if ($manualIp -match '^\d+\.\d+\.\d+\.\d+$') {
+      $manualUrl = "http://${manualIp}:3000"
+      Write-Host ("Trying SERVER_IP.txt -> " + $manualUrl)
+      if (Test-VsHealth $manualUrl) {
+        $serverUrl = $manualUrl
+      }
+    }
+  }
+  if (-not $serverUrl -and $env:VS_SERVER_URL) {
+    if (Test-VsHealth $env:VS_SERVER_URL) { $serverUrl = $env:VS_SERVER_URL.TrimEnd("/") }
+  }
+  if (-not $serverUrl) { exit 1 }
 }
 
 $adminToken = $env:VITE_API_ADMIN_TOKEN

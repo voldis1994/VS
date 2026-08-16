@@ -161,16 +161,18 @@ Environment=VS_LAN_MANAGEMENT=1
 Environment=VS_PRIVATE_NETWORK=1
 Environment=CONTROL_API_HOST=0.0.0.0
 Environment=CONTROL_API_PORT=3000
-ExecStartPre=${PREFIX}/deploy/ensure-postgres.sh
+# '+' = run prestart as root so docker.sock works (vs-server user often cannot)
+ExecStartPre=+${PREFIX}/deploy/ensure-postgres.sh
 ExecStart=${PREFIX}/deploy/boot.sh
 Restart=on-failure
 RestartSec=5
 MemoryMax=4G
 LimitNOFILE=65535
-NoNewPrivileges=true
+SupplementaryGroups=docker
+NoNewPrivileges=false
 PrivateTmp=true
-ProtectSystem=strict
-ReadWritePaths=${DATA} ${LOG} ${PREFIX}
+ProtectSystem=full
+ReadWritePaths=${DATA} ${LOG} ${PREFIX} /var/run/docker.sock
 
 [Install]
 WantedBy=multi-user.target
@@ -184,13 +186,15 @@ fi
 
 systemctl daemon-reload
 systemctl enable vs-server.service
+# Ensure docker group membership is effective for the service
+usermod -aG docker "$RUN_USER" 2>/dev/null || true
 echo "==> restart vs-server"
-systemctl restart vs-server.service
+systemctl restart vs-server.service || true
 
 # --- 6) Wait for health ---
 echo "==> wait for /health"
 ok=0
-for i in $(seq 1 45); do
+for i in $(seq 1 30); do
   if curl -fsS "http://127.0.0.1:3000/health" >/dev/null 2>&1; then
     ok=1
     break
@@ -198,17 +202,20 @@ for i in $(seq 1 45); do
   sleep 1
 done
 
+if [[ "$ok" -ne 1 ]]; then
+  echo "WARN: systemd path failed — falling back to START_API_DIRECT" >&2
+  journalctl -u vs-server -n 40 --no-pager >&2 || true
+  bash "$HERE/START_API_DIRECT.sh"
+  ok=1
+fi
+
 echo
 echo "======== RESULT ========"
-systemctl is-active vs-server.service || true
+systemctl is-active vs-server.service 2>/dev/null || true
 ss -lntp 2>/dev/null | grep -E ':3000\b' || netstat -lntp 2>/dev/null | grep 3000 || true
 
-if [[ "$ok" -ne 1 ]]; then
+if ! curl -fsS "http://127.0.0.1:3000/health" >/dev/null 2>&1; then
   echo "FAIL: Control API still down on 127.0.0.1:3000" >&2
-  echo "---- journalctl -u vs-server (last 50) ----" >&2
-  journalctl -u vs-server -n 50 --no-pager >&2 || true
-  echo "---- boot test as $RUN_USER ----" >&2
-  sudo -u "$RUN_USER" bash -lc "cd '$API' && set -a; source '$DATA/server.env'; set +a; export VS_LAN_MANAGEMENT=1 CONTROL_API_HOST=0.0.0.0; ./node_modules/.bin/tsx -e \"import { resolveManagementBind } from './src/vs-core/network/networkBind.ts'; console.log(resolveManagementBind(process.env))\"" >&2 || true
   exit 1
 fi
 
@@ -226,5 +233,6 @@ echo
 echo "SUCCESS: Control API listening"
 echo "  Local:  http://127.0.0.1:3000/health"
 echo "  LAN:    http://${LAN_IP:-<lan-ip>}:3000/health"
+echo "  MSI:    set VS_SERVER_URL=http://${LAN_IP}:3000 in ADMIN\\config\\control-panel.env"
 echo "NEXT:     vs-monitor"
 exit 0
