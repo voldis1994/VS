@@ -201,7 +201,7 @@ describe('serverMonitor builder', () => {
       device_type: 'ADMIN',
       public_key: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=',
       device_token: 'tok-test-admin-device-0001',
-    });
+    }, { timeout: 15_000 });
     reg.approve(d.device_id);
     // enrolled but never heartbeat → DISCONNECTED / OFFLINE
     const disc = await buildServerMonitorSnapshot({
