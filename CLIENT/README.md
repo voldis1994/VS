@@ -1,26 +1,23 @@
 # VS CLIENT — Web portal
 
-Customer opens a **web URL** on VS CORE (same host as Control API).
+This is the **only** user-facing web application in VS.
+
+Customer opens a **public HTTPS URL** (Client Gateway `:443`). Nothing is installed on the phone or PC.
 
 ## Flow
 
-1. ADMIN → CLIENTS → **CREATE WEB LOGIN** (login name)
-2. ADMIN copies URL + login + password (password shown once)
-3. Customer opens URL → signs in → selects market → sets lot → START/STOP robot
+1. ADMIN (`VS Admin.exe`) → CLIENTS → **CREATE WEB LOGIN**
+2. ADMIN copies public URL + login + password (password shown once)
+3. Customer opens URL → signs in → market → lot → START/STOP
 
-## Local URL (LAN)
+## Public URL
 
-```
-http://<i3-LAN-IP>:3000/
-```
-
-After server install, `CLIENT/desktop` is built into the static panel served by Control API.
+Whatever is in `/etc/vs/client-url` on i3. Never `:3000`, never localhost.
 
 ## Dev
 
 ```bash
-cd CLIENT/desktop && npm install && npm run build
-# Point CLIENT_PANEL_DIST or rebuild on i3 so / serves this UI
+cd CLIENT/web && npm install && npm run build
 ```
 
-No Git/Node required for the end customer — only a browser + credentials from ADMIN.
+On i3, `START_I3` builds this into `/opt/vs-server/client-panel` and the gateway serves it on `:443`.

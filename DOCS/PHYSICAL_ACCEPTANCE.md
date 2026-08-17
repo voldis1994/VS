@@ -1,64 +1,56 @@
 # Physical acceptance — VS CORE
 
-**Status: NOT PRODUCTION ACCEPTED**
+**Status: NOT PRODUCTION ACCEPTED / BLOCKED on physical hardware**
 
-Automated tests ≠ physical DONE. Mark only with evidence.
+Automated tests ≠ physical DONE. Mark only with evidence from i3 Debian + MSI Windows.
 
-## Bugs closed in software (must retest on hardware)
+## Software closed in this revision (must retest on hardware)
 
-| Bug | Root cause | Fix |
-|---|---|---|
-| CONTROL API OFFLINE :3000 / monitor | Stale `CONTROL_API_HOST=10.77.0.1` + monitor console blocked by auth | Force `0.0.0.0` under `VS_LAN_MANAGEMENT`; public localhost console routes |
-| MSI SERVER OFFLINE | API bound WG-only | Same bind fix + LAN discovery |
-| Get-Content Path null | `$file.FullName` when `$file` is string | `LiteralPath` + type check |
-| Tactical UI on :5173 | Wrong start path | ADMIN/desktop :5188 only |
+| Item | Expected on hardware |
+|------|----------------------|
+| ADMIN | `START_MSI.bat` → native `VS Admin.exe` window, no browser |
+| ADMIN ports | `netstat` must NOT show listener on 5173 or 5188 after start |
+| ADMIN identity | header `VS-CORE-01` `CONNECTED` `LAN` with live `/health` |
+| Server monitor | `vs-monitor` native GUI when DISPLAY exists; TUI if headless |
+| CLIENT | browser → stable HTTPS `:443` only web UI |
 
 ## A. i3
 
 ```bash
 cd ~/VS-new/VS
 git pull origin main
-sudo bash SERVER/install/INSTALL_I3_SERVER.sh
-ss -lntp | grep 3000          # MUST show 0.0.0.0:3000
+sudo bash START_I3
+ss -lntp | grep -E '3000|443'
 curl -sS http://127.0.0.1:3000/health
-curl -sS http://127.0.0.1:3000/api/v1/server/monitor/console/text | head
-vs-monitor                    # auto-refresh; CONTROL API ONLINE
-systemctl is-active vs-server
+vs-monitor
 ```
 
-Pass only if health OK and monitor shows real host metrics (not OFFLINE).
+Pass only if health is VS-CORE-01 and monitor shows real host metrics.
 
 ## B. MSI
 
 ```bat
 git pull origin main
-ADMIN\STOP_ADMIN.bat
-ADMIN\INSTALL_ADMIN.bat
-ADMIN\START_ADMIN.bat
+echo I3_LAN_IP> ADMIN\config\SERVER_IP.txt
+ADMIN\windows\BUILD_ADMIN.bat
+START_MSI.bat
 ```
 
-Open `http://127.0.0.1:5188/` — VS ADMIN, VS-CORE-01 CONNECTED, heartbeat changes.
-Never open :5173.
+Native **VS Admin** window. VS-CORE-01 CONNECTED. No Chrome/Edge. No `localhost:5188`.
 
-## C. CLIENT (WireGuard)
+```bat
+netstat -ano | findstr "5173 5188"
+```
 
-Enroll via ADMIN → WireGuard up → portal `http://10.77.0.1:3000/` → login.
-i3 presence shows CLIENT CONNECTED.
+Must be empty for ADMIN-owned listeners.
+
+## C. CLIENT
+
+Enroll via ADMIN → Clients → CREATE WEB LOGIN.  
+Open the **public HTTPS URL** from `/etc/vs/client-url`. Never `:3000`.
 
 ## D. End-to-end
 
-- i3 sees MSI ADMIN connected
-- i3 sees CLIENT connected
-- MSI sees CLIENT
-- CLIENT receives its account slice only
-
-## Result table
-
-| Test | Result |
-|---|---|
-| A i3 install + API + monitor | **BLOCKED** (await hardware) |
-| B MSI install + connect | **BLOCKED** |
-| C CLIENT WireGuard | **BLOCKED** |
-| D E2E presence | **BLOCKED** |
-
-Do not convert BLOCKED → PASS without captured commands/output.
+- i3 monitor shows MSI ADMIN connected
+- Client START reaches CORE
+- Reboot i3: Admin shows RECONNECTING then CONNECTED without restarting the exe

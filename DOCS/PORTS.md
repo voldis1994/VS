@@ -1,51 +1,20 @@
-# Ports & network exposure
+# Ports
 
-**Hostname:** VS-CORE-01 (i3 Debian 13)
+| Port | Role | Bind | Who |
+|------|------|------|-----|
+| **3000** | VS private Control / ADMIN API | i3 LAN + trusted WG | MSI `VS Admin.exe` |
+| **443** | VS public CLIENT HTTPS | i3 / gateway | Internet browsers |
+| **5432** | PostgreSQL | internal | VS CORE only |
+| **6379** | Redis | internal | VS CORE only |
+| **51820/udp** | WireGuard | WAN→LAN | remote CLIENT devices |
 
-## Listening / intended exposure
+Removed from production:
 
-| Port | Protocol | Bind | Who may reach | Notes |
-|------|----------|------|---------------|-------|
-| 22 | TCP | LAN | ADMIN operators | SSH — restrict as needed |
-| 3000 | TCP | LAN + `10.77.0.1` | MSI ADMIN (LAN), CLIENT (VPN) | Control API + Client API process |
-| 51820 | UDP | WAN→LAN forward | Remote WireGuard clients | **Must** be public endpoint for remote ISPs |
-| 5432 | TCP | localhost / docker bridge only | SERVER only | PostgreSQL — **not** exposed to WG clients or WAN |
-| 6379 | TCP | localhost / docker bridge only | SERVER only | Redis — **not** exposed to WG clients or WAN |
+| Port | Why |
+|------|-----|
+| **5188** | Old ADMIN localhost web UI — archived |
+| **5173** | Old Vite ADMIN — archived |
 
-## WireGuard conceptual network
+ADMIN desktop (`VS Admin.exe`) does not listen on any TCP port.
 
-- Network: `10.77.0.0/24`
-- Server: `10.77.0.1`
-- UDP: `51820`
-
-### Required env for remote clients
-
-```
-PUBLIC_HOST_OR_IP=<reachable public DNS or WAN IP>
-WIREGUARD_PORT=51820
-```
-
-Do **not** put `192.168.x.x` into remote client peer endpoints when clients are on other ISPs.
-
-### NAT / router
-
-If VS-CORE-01 is behind a router:
-
-```
-WAN UDP 51820  →  VS-CORE-01 LAN IP UDP 51820
-```
-
-## Authorization boundaries
-
-- ADMIN Control API routes require admin token / admin session (LAN trusted path).
-- CLIENT API uses device/client auth; ADMIN-only routes must return 403 for client tokens.
-- PostgreSQL and Redis must remain unreachable from WireGuard client addresses via firewall (`SERVER/network/APPLY_FIREWALL`).
-
-## CONFIG_REQUIRED vs BROKEN
-
-| Condition | Classification |
-|-----------|----------------|
-| `PUBLIC_HOST_OR_IP` unset for remote deploy | CONFIG_REQUIRED |
-| Capital credentials absent | CONFIG_REQUIRED |
-| Postgres down / migration fail | BROKEN |
-| API process crash | BROKEN |
+CLIENT is the only web UI. It does not require an install and does not use ADMIN ports.

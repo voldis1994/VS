@@ -1,0 +1,1 @@
+# VS Admin native desktop

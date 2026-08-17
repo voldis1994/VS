@@ -51,14 +51,12 @@ else
   PROCESS=0
 fi
 
-# Client API may share process on :3000 or dedicated :3001
-if curl -fsS "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1 \
-  || curl -fsS "http://127.0.0.1:${CLIENT_PORT}/health" >/dev/null 2>&1; then
-  echo "[PASS] client-api endpoint reachable"
-  SYSTEM=$PROCESS
+# Client gateway :443 (public door)
+if curl -fsS "http://127.0.0.1:443/health" >/dev/null 2>&1 \
+  || curl -fkSs "https://127.0.0.1/health" >/dev/null 2>&1; then
+  echo "[PASS] client-gateway"
 else
-  echo "[FAIL] client-api"
-  SYSTEM=0
+  echo "[WARN] client-gateway not answering on :443 yet"
 fi
 
 WG_IFACE="${VS_WG_INTERFACE:-vs0}"

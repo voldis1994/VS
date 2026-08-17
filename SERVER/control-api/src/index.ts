@@ -57,20 +57,17 @@ function corsOrigins(): boolean | string | string[] {
   const raw = [process.env.CORS_ORIGIN, process.env.CLIENT_CORS_ORIGIN]
     .filter(Boolean)
     .join(',');
-  // Home ADMIN UI is always http://127.0.0.1:5188 — allow that + optional extras.
-  // Also allow true (reflect request) when VS_LAN_TRUST_ADMIN for simpler MSI bring-up.
+  // Native VS Admin.exe does not use browser CORS. CLIENT traffic is :443 gateway.
   const lanTrust = ['1', 'true', 'yes'].includes(
     String(process.env.VS_LAN_TRUST_ADMIN || '').trim().toLowerCase()
   );
   if (lanTrust && !raw) return true;
-  const defaults = ['http://127.0.0.1:5188', 'http://localhost:5188'];
-  if (!raw) return defaults;
+  if (!raw) return [];
   const list = raw
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
   if (list.includes('*')) return true;
-  for (const d of defaults) if (!list.includes(d)) list.push(d);
   return list.length === 1 ? list[0]! : list;
 }
 

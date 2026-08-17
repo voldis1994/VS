@@ -37,7 +37,7 @@ bash "$HERE/network/APPLY_FIREWALL" || true
 
 # Also punch host firewalld if present
 if command -v firewall-cmd >/dev/null 2>&1; then
-  firewall-cmd --add-port="${API_PORT}/tcp" --permanent 2>/dev/null || true
+  firewall-cmd --add-port=443/tcp --permanent 2>/dev/null || true
   firewall-cmd --reload 2>/dev/null || true
 fi
 
@@ -79,10 +79,9 @@ echo "cd /d C:\\VS-main"
 echo "mkdir ADMIN\\config 2>nul"
 echo "echo ${LAN_IP}> ADMIN\\config\\SERVER_IP.txt"
 echo "git pull origin main"
-echo "ADMIN\\PROVE_LAN.bat"
 echo "START_MSI.bat"
 echo
-echo "If PROVE_LAN.bat ping FAILS = WiFi AP isolation / different WiFi (not VS bug)."
+echo "If START_MSI ping/identity FAILS = WiFi AP isolation / wrong IP (not VS bug)."
 echo "Fix router: disable AP/client isolation, OR use ethernet, OR WireGuard."
 echo "SUCCESS: LAN API open for MSI (i3 side)"
 exit 0

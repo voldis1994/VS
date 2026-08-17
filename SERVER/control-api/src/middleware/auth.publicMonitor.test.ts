@@ -14,8 +14,10 @@ describe('auth public monitor console', () => {
     expect(isPublicUnauthedPath('GET', '/api/v1/admin/snapshot')).toBe(false);
   });
 
-  it('keeps /health public', () => {
-    expect(isPublicUnauthedPath('GET', '/health')).toBe(true);
+  it('does not expose system mode/status without auth', () => {
+    expect(isPublicUnauthedPath('GET', '/api/system/mode')).toBe(false);
+    expect(isPublicUnauthedPath('POST', '/api/system/mode')).toBe(false);
+    expect(isPublicUnauthedPath('GET', '/api/system/status')).toBe(false);
   });
 
   it('allows LAN bootstrap path (handler still enforces VS_LAN_TRUST_ADMIN)', () => {

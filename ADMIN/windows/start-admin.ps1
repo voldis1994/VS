@@ -1,101 +1,22 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-  Start ONLY canonical VS ADMIN desktop (ADMIN/desktop) against i3 VS-CORE-01.
-  Never starts legacy-review / tactical dashboard.
+  Canonical VS ADMIN production start (called by START_MSI.bat).
+  Launches native VS Admin.exe — never Vite, never a local HTTP UI, never a browser.
 #>
 
 $ErrorActionPreference = "Continue"
 $AdminRoot = Split-Path -Parent $PSScriptRoot
 $RepoRoot = Split-Path -Parent $AdminRoot
-$Dash = Join-Path $AdminRoot "desktop"
+$Desktop = Join-Path $AdminRoot "desktop"
+$Exe = Join-Path $PSScriptRoot "dist\VS Admin.exe"
 $Cfg = Join-Path $AdminRoot "config\control-panel.env"
-$PidFile = Join-Path $env:LOCALAPPDATA "VS\admin\control-panel.pid"
-$UiPort = 5188
-Set-Location $AdminRoot
+$PidFile = Join-Path $env:LOCALAPPDATA "VS\admin\vs-admin.pid"
+Set-Location $RepoRoot
 
 function Write-Fail([string]$Msg) {
   Write-Host ("FAIL: " + $Msg)
   exit 1
-}
-
-function Test-VsHealth([string]$Url) {
-  if (-not $Url) { return $false }
-  $u = $Url.TrimEnd("/")
-  try {
-    $r = Invoke-WebRequest -Uri ($u + "/health") -UseBasicParsing -TimeoutSec 4
-    return ($r.StatusCode -ge 200 -and $r.StatusCode -lt 300)
-  } catch {
-    return $false
-  }
-}
-
-function Get-CfgValue([string]$Path, [string]$Key) {
-  if (-not (Test-Path $Path)) { return $null }
-  foreach ($line in Get-Content $Path) {
-    $t = $line.Trim()
-    if (-not $t -or $t.StartsWith("#")) { continue }
-    $i = $t.IndexOf("=")
-    if ($i -lt 1) { continue }
-    if ($t.Substring(0, $i).Trim() -eq $Key) {
-      return $t.Substring($i + 1).Trim()
-    }
-  }
-  return $null
-}
-
-function Stop-PortListeners([int]$Port) {
-  try {
-    $conns = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue |
-      Where-Object { $_.State -eq "Listen" }
-    foreach ($c in @($conns)) {
-      if ($c.OwningProcess) {
-        Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue
-        Write-Host ("Stopped stale PID " + $c.OwningProcess + " on port " + $Port)
-      }
-    }
-  } catch { }
-}
-
-# --- Canonical UI hard checks ---
-$Pkg = Join-Path $Dash "package.json"
-$Index = Join-Path $Dash "index.html"
-if (-not (Test-Path $Pkg)) { Write-Fail "ADMIN/desktop missing — run INSTALL_ADMIN.bat" }
-$pkgJson = Get-Content $Pkg -Raw
-if ($pkgJson -notmatch '"name"\s*:\s*"@vs/admin-desktop"') {
-  Write-Fail "ADMIN/desktop/package.json is not @vs/admin-desktop (wrong UI tree)"
-}
-if (-not (Test-Path $Index)) { Write-Fail "ADMIN/desktop/index.html missing" }
-$idx = Get-Content $Index -Raw
-if ($idx -notmatch '<title>VS ADMIN</title>') {
-  Write-Fail "ADMIN/desktop/index.html title must be VS ADMIN"
-}
-if ($idx -match 'TACTICAL|VS SYSTEM') {
-  Write-Fail "ADMIN/desktop contains legacy tactical markers"
-}
-
-# Refuse to start if someone points at archived dashboard
-if ((Get-Location).Path -like "*legacy-review*") {
-  Write-Fail "CWD is under legacy-review — production START refuses"
-}
-
-if (-not (Test-Path (Join-Path $Dash "node_modules"))) {
-  Write-Fail "run INSTALL_ADMIN.bat first (desktop node_modules missing)"
-}
-if (-not (Test-Path $Cfg)) {
-  Write-Fail "missing config\control-panel.env - run INSTALL_ADMIN.bat first"
-}
-
-# Load tokens / prior config
-Get-Content $Cfg | ForEach-Object {
-  $line = $_.Trim()
-  if (-not $line) { return }
-  if ($line.StartsWith("#")) { return }
-  $i = $line.IndexOf("=")
-  if ($i -lt 1) { return }
-  $k = $line.Substring(0, $i).Trim()
-  $v = $line.Substring($i + 1).Trim()
-  Set-Item -Path ("Env:" + $k) -Value $v
 }
 
 function Test-VsCoreIdentity([string]$Url) {
@@ -105,7 +26,6 @@ function Test-VsCoreIdentity([string]$Url) {
   $tmp = Join-Path $env:TEMP ("vs-health-" + [guid]::NewGuid().ToString("N") + ".json")
   try {
     if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
-      # MUST write to file — PS 5.1 breaks curl.exe stdout capture (false negatives)
       & curl.exe -sS --connect-timeout 5 --max-time 8 -o $tmp $health 2>"$tmp.err"
       if (-not (Test-Path $tmp)) { return $false }
       $raw = [System.IO.File]::ReadAllText($tmp)
@@ -115,9 +35,8 @@ function Test-VsCoreIdentity([string]$Url) {
       $raw = [string]$r.Content
     }
     if ([string]::IsNullOrWhiteSpace($raw)) { return $false }
-    # Regex — avoid ConvertFrom-Json quirks on PS 5.1
     if ($raw -notmatch '"service"\s*:\s*"VS-CORE"') { return $false }
-    if ($raw -notmatch '"server_id"\s*:\s*"[^"]+"') { return $false }
+    if ($raw -notmatch '"server_id"\s*:\s*"VS-CORE-01"') { return $false }
     return $true
   } catch {
     return $false
@@ -127,39 +46,31 @@ function Test-VsCoreIdentity([string]$Url) {
   }
 }
 
-function Show-ProbeDetail([string]$Url) {
-  $health = $Url.TrimEnd("/") + "/health"
-  if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
-    Write-Host ("  detail " + $health)
-    & curl.exe -sS -o NUL -w "  HTTP %{http_code} time=%{time_total}s err=%{errormsg}\n" --connect-timeout 3 --max-time 5 $health 2>&1 | ForEach-Object { Write-Host $_ }
+function Get-VsAdminProcess {
+  Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.Name -match 'VS Admin' -or
+      ($_.CommandLine -and $_.CommandLine -match 'VS Admin\.exe') -or
+      ($_.CommandLine -and $_.CommandLine -match 'ADMIN\\desktop\\main\.py')
+    }
+}
+
+function Focus-VsAdminWindow {
+  Add-Type -Namespace VsAdmin -Name Native -MemberDefinition @"
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+"@ -ErrorAction SilentlyContinue
+  Get-Process | Where-Object { $_.MainWindowTitle -eq "VS Admin" } | ForEach-Object {
+    [void][VsAdmin.Native]::ShowWindow($_.MainWindowHandle, 9)
+    [void][VsAdmin.Native]::SetForegroundWindow($_.MainWindowHandle)
   }
 }
 
-function Get-LocalLanProbeUrls {
-  $list = New-Object System.Collections.Generic.List[string]
-  try {
-    $addrs = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-      Where-Object {
-        $_.IPAddress -notlike "127.*" -and
-        $_.IPAddress -notlike "169.254.*" -and
-        $_.IPAddress -notlike "10.77.*" -and
-        # Skip Docker / Hyper-V / WSL NAT bridges (172.16-31.x) — not home LAN to i3
-        $_.IPAddress -notmatch '^172\.(1[6-9]|2[0-9]|3[0-1])\.' -and
-        # Skip Tailscale CGNAT
-        $_.IPAddress -notmatch '^100\.'
-      }
-    foreach ($a in @($addrs)) {
-      $parts = $a.IPAddress.Split(".")
-      if ($parts.Count -eq 4) {
-        $prefix = $parts[0] + "." + $parts[1] + "." + $parts[2]
-        # Prefer common router/AP/server hosts only — short list, not a scan of the subnet
-        foreach ($hostOct in @(1, 2, 10, 20, 50, 53, 100, 101, 200)) {
-          [void]$list.Add("http://${prefix}.${hostOct}:3000")
-        }
-      }
-    }
-  } catch { }
-  return $list
+if ((Get-Location).Path -like "*legacy-review*" -or (Get-Location).Path -like "*old version*") {
+  Write-Fail "CWD is archive — production START refuses"
+}
+if (-not (Test-Path (Join-Path $Desktop "main.py"))) {
+  Write-Fail "ADMIN/desktop/main.py missing — native Admin source required"
 }
 
 function Resolve-LanServerUrl {
@@ -209,31 +120,30 @@ function Resolve-LanServerUrl {
   }
   # 3) Controlled local subnet probe (no Docker 172.x)
   foreach ($c in (Get-LocalLanProbeUrls)) { [void]$candidates.Add($c) }
+$existing = @(Get-VsAdminProcess)
+if ($existing.Count -gt 0) {
+  Write-Host ("ADMIN already RUNNING pid=" + $existing[0].ProcessId + " — focus existing window")
+  Focus-VsAdminWindow
+  Write-Host "VS ADMIN"
+  Write-Host "  SERVER       VS-CORE-01"
+  Write-Host "  UI           native VS Admin.exe"
+  Write-Host "  NOTE         no second process started"
+  exit 0
+}
 
-  $seen = @{}
-  $n = 0
-  foreach ($c in $candidates) {
-    if (-not $c) { continue }
-    if ($seen.ContainsKey($c)) { continue }
-    $seen[$c] = $true
-    $n++
-    if ($n -le 12) {
-      Write-Host ("  probe " + $c + " ...")
-    } elseif ($n -eq 13) {
-      Write-Host "  ... probing remaining LAN candidates silently ..."
-    }
-    if (Test-VsCoreIdentity $c) {
-      Write-Host ("  OK VS-CORE at " + $c)
-      return $c
-    }
+if (Test-Path $Cfg) {
+  Get-Content $Cfg | ForEach-Object {
+    $line = $_.Trim()
+    if (-not $line -or $line.StartsWith("#")) { return }
+    $i = $line.IndexOf("=")
+    if ($i -lt 1) { return }
+    Set-Item -Path ("Env:" + $line.Substring(0, $i).Trim()) -Value $line.Substring($i + 1).Trim()
   }
-  return $null
 }
 
 Write-Host "========================================"
-Write-Host " VS ADMIN — CANONICAL DESKTOP ONLY"
-Write-Host " UI PATH = ADMIN\desktop"
-Write-Host " UI PORT = $UiPort  (old tactical :5173 is killed, never used)"
+Write-Host " VS ADMIN — NATIVE DESKTOP"
+Write-Host " UI = VS Admin.exe  (no browser, no local HTTP UI)"
 Write-Host "========================================"
 
 Write-Host "MSI IPv4 (must share subnet with i3 — check SERVER_IP.txt):"
@@ -334,104 +244,50 @@ if (-not $serverUrl) {
   Write-Host "  ADMIN\CONNECT_FORCE.bat"
   exit 1
 }
+Write-Host "OK identity VS-CORE-01"
 
-$adminToken = $env:VITE_API_ADMIN_TOKEN
-if (-not $adminToken) { $adminToken = $env:API_ADMIN_TOKEN }
+$adminToken = $env:API_ADMIN_TOKEN
 if (-not $adminToken) { $adminToken = "" }
+$bootTmp = Join-Path $env:TEMP "vs-lan-boot.json"
+if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
+  & curl.exe -sS --connect-timeout 5 --max-time 8 ($serverUrl + "/api/v1/admin/lan-bootstrap") -o $bootTmp 2>$null
+  if (Test-Path $bootTmp) {
+    $bootRaw = [System.IO.File]::ReadAllText($bootTmp)
+    if ($bootRaw -match '"api_admin_token"\s*:\s*"([^"]+)"') {
+      $adminToken = $matches[1]
+      Write-Host ("OK lan-bootstrap token len=" + $adminToken.Length)
+    }
+  }
+}
 
 $env:VS_SERVER_URL = $serverUrl
-$env:VITE_API_URL = $serverUrl
-$env:VITE_WS_URL = ($serverUrl -replace '^http', 'ws') + "/ws"
-$env:VS_ADMIN_TRANSPORT = $transport.ToLower()
-$env:VITE_API_ADMIN_TOKEN = $adminToken
+$env:VS_ADMIN_TRANSPORT = $transport
 $env:API_ADMIN_TOKEN = $adminToken
+$env:VS_ADMIN_TOKEN = $adminToken
 
-# Persist config
-$newLines = New-Object System.Collections.Generic.List[string]
-$seenUrl = $false
-Get-Content $Cfg | ForEach-Object {
-  $row = $_
-  if ($row -match '^\s*VS_SERVER_URL=') { [void]$newLines.Add("VS_SERVER_URL=$serverUrl"); $seenUrl = $true; return }
-  if ($row -match '^\s*VITE_API_URL=') { [void]$newLines.Add("VITE_API_URL=$serverUrl"); return }
-  if ($row -match '^\s*VITE_WS_URL=') { [void]$newLines.Add("VITE_WS_URL=$($env:VITE_WS_URL)"); return }
-  if ($row -match '^\s*VS_ADMIN_TRANSPORT=') { [void]$newLines.Add("VS_ADMIN_TRANSPORT=$($transport.ToLower())"); return }
-  if ($row -match '^\s*VS_LAN_SERVER_URL=') {
-    if ($transport -eq "LAN") { [void]$newLines.Add("VS_LAN_SERVER_URL=$serverUrl") }
-    return
-  }
-  [void]$newLines.Add($row)
-}
-if (-not $seenUrl) { [void]$newLines.Add("VS_SERVER_URL=$serverUrl") }
-$newLines | Set-Content -Path $Cfg -Encoding ascii
+New-Item -ItemType Directory -Force -Path (Split-Path $Cfg) | Out-Null
+@(
+  "VS_SERVER_URL=$serverUrl",
+  "VS_ADMIN_TRANSPORT=$transport",
+  "API_ADMIN_TOKEN=$adminToken"
+) | Set-Content -Path $Cfg -Encoding ascii
 
-# Runtime config for browser (localStorage bootstrap) — no secrets in git
-$PublicDir = Join-Path $Dash "public"
-New-Item -ItemType Directory -Force -Path $PublicDir | Out-Null
-$runtime = @"
-window.VS_ADMIN_RUNTIME = {
-  product: "VS ADMIN",
-  ui: "ADMIN/desktop",
-  serverId: "VS-CORE-01",
-  apiBase: "$serverUrl",
-  adminToken: "$adminToken",
-  transport: "$transport",
-  deviceId: "VS-ADMIN-01",
-  startedAt: "$(Get-Date -Format o)"
-};
-"@
-# CRITICAL: no UTF-8 BOM — BOM breaks browser parse → falls back to 127.0.0.1:3000 → DISCONNECTED
-$runtimePath = Join-Path $PublicDir "runtime-config.js"
-$utf8NoBom = New-Object System.Text.UTF8Encoding $false
-[System.IO.File]::WriteAllText($runtimePath, $runtime, $utf8NoBom)
-Write-Host ("Wrote runtime-config.js apiBase=" + $serverUrl + " tokenLen=" + $adminToken.Length)
-
-# Kill old tactical (:5173) and previous admin (:5188)
-Stop-PortListeners 5173
-Stop-PortListeners $UiPort
-if (Test-Path $PidFile) {
-  $old = Get-Content $PidFile -ErrorAction SilentlyContinue
-  if ($old) { Stop-Process -Id ([int]$old) -Force -ErrorAction SilentlyContinue }
-  Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
+if (-not (Test-Path $Exe)) {
+  Write-Host "VS Admin.exe not built yet — run ADMIN\windows\BUILD_ADMIN.bat"
+  Write-Fail "missing ADMIN\windows\dist\VS Admin.exe"
 }
 
-Write-Host "VS ADMIN"
-Write-Host "  SERVER     = VS-CORE-01"
-Write-Host "  TRANSPORT  = LAN"
-Write-Host "  SERVER_URL = $serverUrl"
-Write-Host "  UI         = http://127.0.0.1:$UiPort/"
-Write-Host "  PRODUCT    = ADMIN/desktop (NOT tactical desk)"
-
-$npmCmd = Get-Command npm.cmd -ErrorAction SilentlyContinue
-if (-not $npmCmd) { $npmCmd = Get-Command npm -ErrorAction SilentlyContinue }
-if (-not $npmCmd) { Write-Fail "npm not found on PATH" }
-
-Set-Location $Dash
-$env:BROWSER = "none"
-
-Start-Job -ScriptBlock {
-  param($Port)
-  Start-Sleep -Seconds 3
-  Start-Process ("http://127.0.0.1:" + $Port + "/")
-} -ArgumentList $UiPort | Out-Null
-
-$p = Start-Process -FilePath $npmCmd.Source `
-  -ArgumentList @("exec", "--", "vite", "--host", "127.0.0.1", "--port", "$UiPort", "--strictPort") `
-  -WorkingDirectory $Dash `
-  -PassThru `
-  -NoNewWindow
-
-if (-not $p) { Write-Fail "could not start vite for ADMIN/desktop" }
 New-Item -ItemType Directory -Force -Path (Split-Path $PidFile) | Out-Null
+$p = Start-Process -FilePath $Exe -WorkingDirectory $Desktop -PassThru
+if (-not $p) { Write-Fail "could not start VS Admin.exe" }
 $p.Id | Set-Content -Path $PidFile -Encoding ascii
-Write-Host ("Control Panel PID=" + $p.Id + "  UI=http://127.0.0.1:$UiPort/")
-Write-Host "STOP_ADMIN.bat or Ctrl+C to stop. Closing browser does not stop server on i3."
 
-try {
-  Wait-Process -Id $p.Id
-  $code = 0
-  if ($p.HasExited) { $code = $p.ExitCode }
-  if ($null -eq $code) { $code = 0 }
-  exit ([int]$code)
-} finally {
-  Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
-}
+Start-Sleep -Milliseconds 800
+Write-Host "VS ADMIN"
+Write-Host "  SERVER       VS-CORE-01"
+Write-Host "  SERVER API   CONNECTED"
+Write-Host "  TRANSPORT    $transport"
+Write-Host "  ADMIN        VS Admin.exe"
+Write-Host "  UI           native window (no browser)"
+Write-Host "STOP: powershell -File ADMIN\windows\stop-admin.ps1   (does not stop i3)"
+exit 0

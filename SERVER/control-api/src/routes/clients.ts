@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from 'fs';
 import { FastifyInstance } from 'fastify';
 import { join } from 'path';
 import { pool } from '../db/pool.js';
@@ -12,6 +13,24 @@ import { getDeviceRegistry } from '../vs-core/network/deviceRegistry.js';
 import { issueEnrollmentPackage } from '../vs-core/network/enrollment.js';
 import { ensureServerIdentity } from '../vs-core/network/deviceLifecycle.js';
 import { VS_WG_SERVER_IP } from '../vs-core/network/networkConstants.js';
+
+function stablePublicClientUrl(): string | null {
+  const file = process.env.VS_CLIENT_URL_FILE || '/etc/vs/client-url';
+  try {
+    if (existsSync(file)) {
+      const line = readFileSync(file, 'utf8')
+        .split('\n')
+        .map((l) => l.trim())
+        .find((l) => l && !l.startsWith('#') && /https?:\/\//i.test(l));
+      if (line) return line.replace(/\/$/, '') + '/';
+    }
+  } catch {
+    /* ignore */
+  }
+  const env = String(process.env.VS_PUBLIC_CLIENT_URL || '').trim();
+  if (env) return env.replace(/\/$/, '') + '/';
+  return null;
+}
 
 async function hardDeleteClient(clientId: string): Promise<void> {
   const db = await pool.connect();
@@ -183,14 +202,15 @@ export async function registerClientRoutes(app: FastifyInstance): Promise<void> 
       [clientId, hash]
     );
 
+    const publicUrl = stablePublicClientUrl();
     const lanHost =
-      process.env.VS_PUBLIC_CLIENT_URL ||
       process.env.VS_LAN_URL ||
       (process.env.VS_SERVER_LAN_IP
         ? `http://${process.env.VS_SERVER_LAN_IP}:${process.env.CONTROL_API_PORT || 3000}`
         : `http://127.0.0.1:${process.env.CONTROL_API_PORT || 3000}`);
     const panel_url_lan = lanHost.replace(/\/$/, '') + '/';
     const panel_url_vpn = `http://${VS_WG_SERVER_IP}:${process.env.CONTROL_API_PORT || 3000}/`;
+    const panel_url = publicUrl || panel_url_vpn;
 
     let wireguard: Record<string, unknown> | null = null;
     let wg_warning: string | null = null;
@@ -246,14 +266,15 @@ export async function registerClientRoutes(app: FastifyInstance): Promise<void> 
       client_id: clientId,
       login: name,
       password: code,
-      /** Prefer VPN URL for customers outside home Wi‑Fi */
-      panel_url: panel_url_vpn,
+      panel_url,
+      panel_url_public: publicUrl,
       panel_url_vpn,
       panel_url_lan,
       wireguard,
       wg_warning,
-      message:
-        'Save login + password now (password shown once). Outside Wi‑Fi: customer must connect WireGuard first, then open panel_url_vpn.',
+      message: publicUrl
+        ? 'Save login + password now (password shown once). Client opens the public HTTPS URL — it does not change on VS update.'
+        : 'Save login + password now. Set /etc/vs/client-url to a stable https://host so clients never see :3000.',
     };
   });
 

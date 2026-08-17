@@ -882,10 +882,10 @@ function pad(label: string, width: number): string {
 }
 
 export function renderServerMonitorFrame(s: ServerMonitorSnapshot): string {
-  const W = 60;
+  const W = 72;
   const bar = (ch: string) => ch.repeat(W);
   const row = (label: string, status: string, extra = '') => {
-    const left = `  ${pad(label, 20)} ${dot(status)} ${pad(status, 12)}`;
+    const left = `  ${pad(label, 22)} ${dot(status)} ${pad(status, 12)}`;
     return extra ? `${left} ${extra}` : left;
   };
   const lines: string[] = [];
@@ -895,6 +895,7 @@ export function renderServerMonitorFrame(s: ServerMonitorSnapshot): string {
       : s.api.status === 'ONLINE'
         ? 'DEGRADED'
         : 'OFFLINE';
+  const liveReady = s.live_trading_enabled ? 'LIVE READY' : 'NOT LIVE';
   const adminLabel = s.admin.connected
     ? 'CONNECTED'
     : s.admin.device_id
@@ -902,15 +903,20 @@ export function renderServerMonitorFrame(s: ServerMonitorSnapshot): string {
       : 'DISCONNECTED';
   const presenceOnline = (s.presence_clients || []).filter((c) => c.app_connected).length;
   const clientsConnected = Math.max(s.clients.online, presenceOnline);
+  const build = s.build || {
+    service: 'VS-CORE' as const,
+    server_id: s.server_id,
+    version: s.server_version,
+    build_commit: 'unknown',
+    build_time: 'unknown',
+    api_version: 'v1',
+  };
 
   lines.push(`╔${bar('═')}╗`);
-  lines.push(`║${'VS CORE SERVER'.padStart(37).padEnd(W)}║`);
-  lines.push(`║${'CORE SERVER — MAIN BRAIN'.padStart(42).padEnd(W)}║`);
-  lines.push(`╠${bar('═')}╣`);
-  lines.push(`║${pad(`  SERVER ID: ${s.server_id}`, W)}║`);
-  lines.push(`║${pad(`  UPTIME:    ${s.uptime_human}`, W)}║`);
-  lines.push(`║${pad(`  UTC TIME:  ${s.timestamp}`, W)}║`);
-  lines.push(`║${pad(`  STATUS:    ${overall}`, W)}║`);
+  lines.push(`║${'VS CORE SERVER'.padStart(43).padEnd(W)}║`);
+  lines.push(`║${pad(`  ${s.server_id}   ${build.version}   ${build.build_commit}`, W)}║`);
+  lines.push(`║${pad(`  UPTIME ${s.uptime_human}   UTC ${s.timestamp}   ${liveReady}`, W)}║`);
+  lines.push(`║${pad(`  STATUS ${overall}`, W)}║`);
 
   lines.push(`╠${bar('═')}╣`);
   lines.push(`║  [ SYSTEM ]${' '.repeat(W - 12)}║`);
@@ -958,6 +964,7 @@ export function renderServerMonitorFrame(s: ServerMonitorSnapshot): string {
     row('EXECUTION CORE', s.execution.status),
     row('RECONCILIATION', s.reconciliation.status),
     row('CONTROL API', s.api.status, `:${s.api.port}`),
+    row('CLIENT GATEWAY', s.api.status === 'ONLINE' ? 'ONLINE' : s.api.status, ':443'),
   ]) {
     lines.push(`║${pad(r, W)}║`);
   }
@@ -1063,7 +1070,7 @@ export function renderServerMonitorFrame(s: ServerMonitorSnapshot): string {
   }
   lines.push(`║${pad(`  LAST ERROR           ${s.last_error || 'NONE'}`, W)}║`);
 
-  const build = s.build || {
+  const buildFooter = s.build || {
     service: 'VS-CORE' as const,
     server_id: s.server_id,
     version: s.server_version,
@@ -1073,7 +1080,7 @@ export function renderServerMonitorFrame(s: ServerMonitorSnapshot): string {
   };
   lines.push(`╠${bar('═')}╣`);
   lines.push(`║  [ BUILD / VERSION ]${' '.repeat(W - 21)}║`);
-  lines.push(`║${pad(`  SERVICE              ${build.service}`, W)}║`);
+  lines.push(`║${pad(`  SERVICE              ${buildFooter.service}`, W)}║`);
   lines.push(`║${pad(`  SERVER ID            ${build.server_id}`, W)}║`);
   lines.push(`║${pad(`  VERSION              ${build.version}`, W)}║`);
   lines.push(`║${pad(`  BUILD COMMIT         ${build.build_commit}`, W)}║`);

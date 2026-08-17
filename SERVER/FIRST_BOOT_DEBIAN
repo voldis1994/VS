@@ -31,7 +31,11 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # Prefer repo root when run from checkout; fall back to installed prefix parent
-if [[ -f "$SCRIPT_DIR/../docker-compose.yml" ]]; then
+if [[ -f "$SCRIPT_DIR/database/docker-compose.yml" ]]; then
+  REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+elif [[ -f "$SCRIPT_DIR/../SERVER/database/docker-compose.yml" ]]; then
+  REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+elif [[ -f "$SCRIPT_DIR/../docker-compose.yml" ]]; then
   REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 elif [[ -f "$SCRIPT_DIR/docker-compose.yml" ]]; then
   REPO_ROOT="$SCRIPT_DIR"

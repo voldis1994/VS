@@ -21,7 +21,7 @@ dist-client/
 .env
 !.env.example
 
-# Data / runtime
+# Runtime / generated
 data/raw/**
 data/normalized/**
 data/replay/**
@@ -33,6 +33,17 @@ data/exports/**
 !data/models/.gitkeep
 data/vs-server/
 data/vs-admin/
+ADMIN/desktop/public/runtime-config.js
+*.pid
+*.sqlite
+*.db
+
+# Native ADMIN / monitor build
+ADMIN/desktop/build/
+ADMIN/windows/dist/
+SERVER/monitor/__pycache__/
+ADMIN/desktop/__pycache__/
+
 
 # Logs
 logs/
@@ -52,7 +63,8 @@ Thumbs.db
 test-results/
 benchmark-results/
 !benchmark-results/.gitkeep
-coverage/
+.pytest_cache/
+**/__pycache__/
 
 # Secrets
 *.pem
@@ -68,11 +80,9 @@ SERVER/control-api/data/
 **/VS-CLIENT-*.conf
 
 # Product UI build outputs / deps
-ADMIN/desktop/node_modules/
-CLIENT/desktop/node_modules/
+CLIENT/web/node_modules/
 ADMIN/desktop/dist/
-CLIENT/desktop/dist/
+CLIENT/web/dist/
 ADMIN/desktop/public/runtime-config.js
 TESTS/node_modules/
 SERVER/client-api/node_modules/
-SERVER/monitor/public/config.js

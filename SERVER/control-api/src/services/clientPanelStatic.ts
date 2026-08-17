@@ -20,8 +20,8 @@ export function clientPanelDistDir(): string {
   const fromEnv = process.env.CLIENT_PANEL_DIST?.trim();
   if (fromEnv) return path.resolve(fromEnv);
   const here = path.dirname(fileURLToPath(import.meta.url));
-  // Prefer CLIENT desktop dist; optional env override
-  return path.resolve(here, '../../../../CLIENT/desktop/dist');
+  // Prefer CLIENT web dist; optional env override
+  return path.resolve(here, '../../../../CLIENT/web/dist');
 }
 
 function safeJoin(root: string, urlPath: string): string | null {
@@ -49,7 +49,7 @@ export async function registerClientPanelStatic(app: FastifyInstance): Promise<v
       return reply
         .code(503)
         .type('text/plain; charset=utf-8')
-        .send('Client web panel not built. On server: cd CLIENT/desktop && npm run build\n');
+        .send('Client web panel not built. On server: cd CLIENT/web && npm run build\n');
     }
 
     let file = safeJoin(dist, urlPath);
