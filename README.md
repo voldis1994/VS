@@ -59,6 +59,8 @@ START_MSI.bat
 
 That launches **one** `VS Admin.exe` window. If it is already running, the existing window is focused.
 
+Stop: `powershell -File ADMIN\windows\stop-admin.ps1`
+
 ## WHAT URL DOES CLIENT USE?
 
 Whatever you wrote in `/etc/vs/client-url`. Git pull / rebuild / restart does not change that file.
