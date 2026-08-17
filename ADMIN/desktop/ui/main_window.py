@@ -18,8 +18,10 @@ from PySide6.QtWidgets import (
 
 from app.version import ADMIN_VERSION
 from pages.accounts import AccountsPage
+from pages.brokers import BrokersPage
 from pages.clients import ClientsPage
 from pages.dashboard import DashboardPage
+from pages.feeds import FeedsPage
 from pages.logs import BackupsPage, LogsPage, SettingsPage, UpdatesPage
 from pages.market import MarketPage
 from pages.ops import IncidentsPage, OrdersPage, PositionsPage, TradesPage
@@ -34,6 +36,8 @@ from ui.theme import APP_QSS
 NAV = [
     "Dashboard",
     "Server",
+    "Brokers",
+    "Feeds",
     "Clients",
     "Accounts",
     "Market",
@@ -107,10 +111,12 @@ class MainWindow(QMainWindow):
         self.hb = _chip("LAST HEARTBEAT —")
         self.sver = _chip("SERVER —")
         self.aver = _chip(f"ADMIN {ADMIN_VERSION}")
+        self.live_chip = _chip("LIVE —")
+        self.money_chip = _chip("MONEY PATH —")
         hl.addWidget(self.brand)
         hl.addWidget(self.server_id)
         hl.addStretch(1)
-        for w in (self.conn, self.transport, self.latency, self.hb, self.sver, self.aver):
+        for w in (self.conn, self.transport, self.latency, self.hb, self.sver, self.aver, self.live_chip, self.money_chip):
             hl.addWidget(w)
         right_l.addWidget(header)
 
@@ -118,6 +124,8 @@ class MainWindow(QMainWindow):
         self.pages: dict[str, QWidget] = {
             "Dashboard": DashboardPage(),
             "Server": ServerPage(),
+            "Brokers": BrokersPage(self.api),
+            "Feeds": FeedsPage(self.api),
             "Clients": ClientsPage(self.api),
             "Accounts": AccountsPage(),
             "Market": MarketPage(),
@@ -133,6 +141,10 @@ class MainWindow(QMainWindow):
             "Updates": UpdatesPage(),
             "Settings": SettingsPage(),
         }
+        # Inject API into pages that need it for actions
+        settings_page = self.pages["Settings"]
+        if hasattr(settings_page, "set_api"):
+            settings_page.set_api(self.api)
         for name in NAV:
             self.stack.addWidget(self.pages[name])
         right_l.addWidget(self.stack, 1)
@@ -192,6 +204,16 @@ class MainWindow(QMainWindow):
         self.latency.setText(f"LATENCY {lat} ms" if lat is not None else "LATENCY —")
         self.hb.setText(f"LAST HEARTBEAT {snap.get('last_heartbeat') or '—'}")
         self.sver.setText(f"SERVER {snap.get('server_version') or snap.get('serverVersion') or '—'}")
+        # LIVE chip
+        live_on = snap.get("live_trading_enabled") or snap.get("liveEnabled")
+        live_text = "LIVE ENABLED" if live_on else "LIVE DISABLED"
+        live_tone = "ok" if live_on else "bad"
+        self._set_chip(self.live_chip, live_text, live_tone)
+        # MONEY PATH chip
+        mp = snap.get("money_path_ready") or snap.get("moneyPathReady")
+        mp_text = "MONEY PATH READY" if mp else "MONEY PATH BLOCKED"
+        mp_tone = "ok" if mp else "bad"
+        self._set_chip(self.money_chip, mp_text, mp_tone)
         self.status_msg.setText(str(snap.get("error") or f"{state} · {nd(snap.get('url'), '')}"))
         for page in self.pages.values():
             apply = getattr(page, "apply", None)

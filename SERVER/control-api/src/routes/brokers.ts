@@ -346,4 +346,34 @@ export async function registerBrokerRoutes(app: FastifyInstance): Promise<void> 
     await logAudit('admin', 'broker_disabled', 'broker_connection', id, prev.rows[0], { enabled: false });
     return { success: true, hard: false };
   });
+
+  // POST /api/brokers/:id/disable — explicit disable without delete
+  app.post('/api/brokers/:id/disable', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const prev = await pool.query('SELECT * FROM broker_connections WHERE id = $1', [id]);
+    if (!prev.rows.length) return reply.code(404).send({ error: 'Broker connection not found' });
+    await pool.query('UPDATE broker_connections SET enabled = false WHERE id = $1', [id]);
+    await logAudit('admin', 'broker_disabled', 'broker_connection', id, prev.rows[0], { enabled: false });
+    return { success: true, message: 'Broker disabled. New orders blocked.' };
+  });
+
+  // POST /api/brokers/:id/pull-markets — re-seed instrument catalog from Capital
+  app.post('/api/brokers/:id/pull-markets', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const conn = await pool.query('SELECT * FROM broker_connections WHERE id = $1', [id]);
+    if (!conn.rows.length) return reply.code(404).send({ error: 'Broker connection not found' });
+    const { rows: accs } = await pool.query(
+      `SELECT ba.id FROM broker_accounts ba
+       WHERE ba.broker_connection_id = $1 AND ba.enabled = true ORDER BY ba.id ASC LIMIT 1`,
+      [id]
+    );
+    if (!accs.length) {
+      return reply.code(400).send({
+        error: 'NO_ACCOUNT',
+        message: 'No enabled account found for this broker. Run SYNC ACCOUNTS first.',
+      });
+    }
+    await seedAccountInstruments(accs[0].id as number);
+    return { success: true, message: 'Capital market catalog refreshed from live session.' };
+  });
 }

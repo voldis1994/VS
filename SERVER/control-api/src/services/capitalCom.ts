@@ -1005,7 +1005,7 @@ export async function createCapitalPosition(
   };
 }
 
-/** Safety SL = 0.20% of instrument price (at least Capital min×2.5). */
+/** Safety SL = 2.5% of instrument entry price (at least Capital min×2.5). */
 export function computeSafetyCushionStopLevel(
   direction: 'BUY' | 'SELL',
   mid: number,

@@ -113,7 +113,30 @@ class ControlApi:
                     return None
                 return json.loads(raw.decode("utf-8"))
         except urllib.error.HTTPError as e:
-            raise ApiError(f"HTTP {e.code} {path}", e.code) from e
+            # Read the server JSON body so we surface error/message/detail/errorCode
+            try:
+                raw_body = e.read()
+                body_text = raw_body.decode("utf-8", errors="replace") if raw_body else ""
+                parsed = json.loads(body_text) if body_text.strip().startswith("{") else {}
+            except Exception:
+                parsed = {}
+            # Prefer structured fields in order of specificity
+            detail = (
+                parsed.get("detail")
+                or parsed.get("message")
+                or parsed.get("error")
+                or parsed.get("errorCode")
+                or parsed.get("msg")
+                or ""
+            )
+            error_code = parsed.get("errorCode") or parsed.get("error_code") or ""
+            if detail and error_code and error_code != detail:
+                msg = f"HTTP {e.code}: {detail} (errorCode={error_code})"
+            elif detail:
+                msg = f"HTTP {e.code}: {detail}"
+            else:
+                msg = f"HTTP {e.code} {e.reason or ''} {path}".strip()
+            raise ApiError(msg, e.code) from e
         except Exception as e:
             raise ApiError(str(e)) from e
 

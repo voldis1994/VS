@@ -331,7 +331,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     git_sha: build.git_sha,
     entry_brain: build.entry_brain,
     chain: '10s OHLC → REGIME(context) → SETUP EVIDENCE → evaluateStrategy · Node robotDesk',
-    note: `BUILD ${build.git_sha} · NODE BRAIN · regime=context · SL=0.20% of price · ${build.trend_minutes}-min`,
+    note: `BUILD ${build.git_sha} · NODE BRAIN · regime=context · SL=2.5% of price · ${build.trend_minutes}-min`,
   };
 }
 
@@ -381,7 +381,7 @@ function clearTradeState(s: Internal) {
 }
 
 /**
- * Safety SL = 0.20% of price (at least Capital min×2.5 so broker accepts it).
+ * Safety SL = 2.5% of price (at least Capital min×2.5 so broker accepts it).
  */
 function safetyStopLevel(
   direction: 'BUY' | 'SELL',
@@ -1048,7 +1048,7 @@ async function enterTrade(
               ask: quote.ask,
               mid: quote.mid,
               code: DecisionCodes.ORDER_SUBMITTING,
-              detail: `SL 0.20% stopDistance=${stopDistance} pts (Capital min=${minPts} · ~level ${
+              detail: `SL 2.5% stopDistance=${stopDistance} pts (Capital min=${minPts} · ~level ${
                 expect ?? 'n/a'
               } · x${loosen})`,
             });
@@ -1096,7 +1096,7 @@ async function enterTrade(
             ask: quote.ask,
             mid: quote.mid,
             code: DecisionCodes.ORDER_SUBMITTING,
-            detail: `SL 0.20% try stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
+            detail: `SL 2.5% try stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
               minPrice ?? 'n/a'
             } · spread=${quote.spread ?? 'n/a'} · x${loosen})`,
           });
@@ -1586,7 +1586,7 @@ async function robotCycleBody(s: Internal) {
       s.mode = 'MANAGE';
       if (quote.mid == null) return;
 
-      // One-shot: pull already-open SL in to 0.20% of price
+      // One-shot: pull already-open SL in to 2.5% of price
       if (!s.sl_tighten_done && s.deal_id && s.open_side && quote.mid != null) {
         s.sl_tighten_done = true;
         const tighter = safetyStopLevel(
@@ -1614,7 +1614,7 @@ async function robotCycleBody(s: Internal) {
               bid: quote.bid,
               ask: quote.ask,
               mid: quote.mid,
-              detail: `SL tightened ${cur} → ${tighter} (0.20% of price)`,
+              detail: `SL tightened ${cur} → ${tighter} (2.5% of price)`,
             });
           } else {
             pushTick(s, {
@@ -2022,7 +2022,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: Node robotDesk (not C++ market-core) · SL = 0.20% of price · 3-min trend · with-trend or confirmed fade after large move · max 1 open',
+      'Rules: Node robotDesk (not C++ market-core) · SL = 2.5% of price · 3-min trend · with-trend or confirmed fade after large move · max 1 open',
   });
 
   sessions.set(id, session);
