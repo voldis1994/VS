@@ -1,6 +1,9 @@
 MSI STUCK?  (i3 /health already OK)
 =================================
 
+NE AWS / CentOS / /home/centos/portal / start-portal.sh / express.
+CLIENT portal = i3 Control API :3000 (skatīt PORTAL.txt).
+
 i3 ir gatavs. MSI neredz = WiFi ceļš, VAI nepareizs IP (piem. 192.168.8.10 kad i3 ir 192.168.0.10).
 
 I3:
