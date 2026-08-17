@@ -48,13 +48,13 @@ class BrokerForm(QWidget):
         self.api_key.setPlaceholderText("Capital.com API Key")
         self.api_key.setEchoMode(QLineEdit.EchoMode.Password)
 
-        self.api_password = QLineEdit()
-        self.api_password.setPlaceholderText("Capital.com API Password")
-        self.api_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.password = QLineEdit()
+        self.password.setPlaceholderText("Capital.com API Password")
+        self.password.setEchoMode(QLineEdit.EchoMode.Password)
 
         form_lay.addRow("IDENTIFIER", self.identifier)
         form_lay.addRow("API KEY", self.api_key)
-        form_lay.addRow("API PASSWORD", self.api_password)
+        form_lay.addRow("API PASSWORD", self.password)
 
         btn_row = QHBoxLayout()
 
@@ -123,7 +123,7 @@ class BrokerForm(QWidget):
             self.identifier.setText(str(row.get("identifier") or ""))
             # Secrets are always masked on server — clear local fields
             self.api_key.clear()
-            self.api_password.clear()
+            self.password.clear()
             env = str(row.get("environment") or "")
             enabled = row.get("enabled", True)
             self._set_status(
@@ -136,11 +136,11 @@ class BrokerForm(QWidget):
     def _save(self) -> None:
         identifier = self.identifier.text().strip()
         api_key = self.api_key.text().strip()
-        api_password = self.api_password.text().strip()
+        password = self.password.text().strip()
         if not identifier:
             QMessageBox.warning(self, "VS Admin", "Identifier (login email) is required.")
             return
-        if not api_key or not api_password:
+        if not api_key or not password:
             QMessageBox.warning(self, "VS Admin", "API Key and API Password are required.")
             return
         try:
@@ -151,7 +151,7 @@ class BrokerForm(QWidget):
                     "environment": "live",
                     "identifier": identifier,
                     "api_key": api_key,
-                    "api_password": api_password,
+                    "password": password,
                 },
             ) or {}
         except ApiError as e:
@@ -160,21 +160,48 @@ class BrokerForm(QWidget):
 
         # Clear secret fields immediately after successful save
         self.api_key.clear()
-        self.api_password.clear()
+        self.password.clear()
 
         bid = res.get("id") or res.get("broker_connection_id")
         if bid:
             self._broker_id = int(bid)
 
-        msg = res.get("message") or res.get("detail") or "Saved."
-        accounts = res.get("capital_accounts") or []
-        if accounts:
-            names = ", ".join(
-                str(a.get("accountName") or a.get("accountId") or a) for a in accounts
-            )
-            msg = f"{msg}\n\nCapital accounts found: {names}"
-        QMessageBox.information(self, "BROKER SAVED", msg)
-        self._set_status(f"SAVED  broker_id={self._broker_id}", "ok")
+        # Immediately test the saved connection
+        if self._broker_id:
+            try:
+                test_res = self.api.post(f"/api/brokers/{self._broker_id}/test") or {}
+            except ApiError as e:
+                QMessageBox.critical(self, "SAVE OK — TEST FAILED", str(e))
+                self._set_status(f"SAVED broker_id={self._broker_id} — TEST FAILED", "bad")
+                return
+
+            if test_res.get("success"):
+                accounts = test_res.get("capital_accounts") or []
+                names = ", ".join(
+                    str(a.get("accountName") or a.get("accountId") or a) for a in accounts
+                )
+                detail = test_res.get("message") or "Connected."
+                if names:
+                    detail = f"{detail}\n\nCapital accounts: {names}"
+                QMessageBox.information(self, "CONNECTED", detail)
+                self._set_status(f"CONNECTED  broker_id={self._broker_id}", "ok")
+            else:
+                error = (
+                    test_res.get("error")
+                    or test_res.get("message")
+                    or test_res.get("detail")
+                    or str(test_res)
+                )
+                err_code = test_res.get("errorCode") or test_res.get("status") or ""
+                msg = f"{error}"
+                if err_code:
+                    msg = f"[{err_code}] {msg}"
+                QMessageBox.critical(self, "SAVE OK — CAPITAL CONNECTION FAILED", msg)
+                self._set_status(f"SAVED broker_id={self._broker_id} — CONNECTION FAILED", "bad")
+        else:
+            msg = res.get("message") or res.get("detail") or "Saved."
+            QMessageBox.information(self, "BROKER SAVED", msg)
+            self._set_status("SAVED", "ok")
 
     def _test(self) -> None:
         if not self._broker_id:

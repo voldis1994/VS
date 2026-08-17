@@ -98,7 +98,7 @@ async function findLiveBroker(): Promise<{
      LEFT JOIN api_credential_metadata a
        ON a.broker_connection_id = bc.id AND a.credential_type = 'api_key'
      LEFT JOIN api_credential_metadata p
-       ON p.broker_connection_id = bc.id AND p.credential_type = 'api_password'
+       ON p.broker_connection_id = bc.id AND p.credential_type = 'password'
      WHERE bc.broker_name = 'capital_com'
        AND bc.environment = 'live'
        AND bc.enabled = true
@@ -111,18 +111,19 @@ async function findLiveBroker(): Promise<{
   if (r.api_key_cipher && r.api_key_iv && r.api_key_tag)
     creds.api_key = decrypt(r.api_key_cipher, r.api_key_iv, r.api_key_tag);
   if (r.api_pw_cipher && r.api_pw_iv && r.api_pw_tag)
-    creds.api_password = decrypt(r.api_pw_cipher, r.api_pw_iv, r.api_pw_tag);
+    creds.password = decrypt(r.api_pw_cipher, r.api_pw_iv, r.api_pw_tag);
   return { id: Number(r.id), identifier: String(r.identifier ?? ''), creds };
 }
 
 async function findLiveAccount(brokerConnectionId: number): Promise<string | null> {
   const { rows } = await pool.query(
-    `SELECT deal_account_id FROM accounts
+    `SELECT external_account_id FROM broker_accounts
      WHERE broker_connection_id = $1 AND enabled = true
-     ORDER BY created_at ASC LIMIT 1`,
+       AND external_account_id IS NOT NULL AND external_account_id <> ''
+     ORDER BY id ASC LIMIT 1`,
     [brokerConnectionId]
   );
-  return rows.length ? (rows[0].deal_account_id as string) : null;
+  return rows.length ? (rows[0].external_account_id as string) : null;
 }
 
 function adminTokenOk(request: { headers: Record<string, string | string[] | undefined> }): boolean {
@@ -191,7 +192,7 @@ export async function registerLiveControlRoutes(app: FastifyInstance): Promise<v
       sessionTest = await testCapitalComSession({
         identifier: broker.identifier,
         apiKey: broker.creds.api_key ?? '',
-        password: broker.creds.api_password ?? '',
+        password: broker.creds.password ?? '',
         environment: 'live',
       });
     } catch (e) {

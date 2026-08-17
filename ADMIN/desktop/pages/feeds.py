@@ -77,8 +77,8 @@ class FeedsPage(Page):
         # ── Public Reference Feeds panel ─────────────────────────────────────
         pub_panel = Panel("PUBLIC REFERENCE FEEDS")
         pub_note = QLabel(
-            "Yahoo Finance · Aurum Metals · Fawaz FX Live · Coinbase Spot\n"
-            "All run on i3 only. MSI reads status from i3. No credentials required for public sources."
+            "Reference feeds are read dynamically from i3. "
+            "Capital.com is the execution authority — feeds are validation only."
         )
         pub_note.setObjectName("muted")
         pub_note.setWordWrap(True)
@@ -207,7 +207,7 @@ class FeedsPage(Page):
 
         # 10s OHLC analysis
         ohlc = raw.get("ohlc") or raw.get("canonical") or s.get("ohlc") or {}
-        ohlc_state = ohlc.get("state") or ohlc.get("status") or ("LIVE" if ohlc.get("close") else "NO DATA")
+        ohlc_state = ohlc.get("state") or ohlc.get("status") or "NO DATA"
         self.ohlc_state.set_value(ohlc_state, tone=_tone(ohlc_state))
         self.ohlc_open.set_value(nd(ohlc.get("open") or ohlc.get("o")))
         self.ohlc_high.set_value(nd(ohlc.get("high") or ohlc.get("h")))
