@@ -96,4 +96,13 @@ describe('canonical production architecture', () => {
     expect(existsSync(join(ROOT, 'SERVER/monitor/main.py'))).toBe(true);
     expect(existsSync(join(ROOT, 'ADMIN/desktop/vite.config.ts'))).toBe(false);
   });
+
+  it('operator BAT clutter is not in production', () => {
+    expect(existsSync(join(ROOT, 'ADMIN/INSTALL_ADMIN.bat'))).toBe(false);
+    expect(existsSync(join(ROOT, 'ADMIN/START_ADMIN.bat'))).toBe(false);
+    expect(existsSync(join(ROOT, 'ADMIN/windows/BUILD_ADMIN_NEW.bat'))).toBe(false);
+    expect(existsSync(join(ROOT, 'CLIENT/INSTALL_CLIENT.bat'))).toBe(false);
+    expect(existsSync(join(ROOT, 'CLIENT/windows'))).toBe(false);
+    expect(existsSync(join(ROOT, 'ADMIN/runtime/serve-admin.mjs'))).toBe(false);
+  });
 });

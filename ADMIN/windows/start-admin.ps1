@@ -159,5 +159,5 @@ Write-Host "  SERVER API   CONNECTED"
 Write-Host "  TRANSPORT    $transport"
 Write-Host "  ADMIN        VS Admin.exe"
 Write-Host "  UI           native window (no browser)"
-Write-Host "STOP: ADMIN\STOP_ADMIN.bat   (does not stop i3)"
+Write-Host "STOP: powershell -File ADMIN\windows\stop-admin.ps1   (does not stop i3)"
 exit 0

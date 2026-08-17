@@ -22,10 +22,8 @@ const PROD_ROOTS = [
   join(ROOT, 'SERVER/core'),
   join(ROOT, 'SERVER/monitor'),
   join(ROOT, 'ADMIN/desktop'),
-  join(ROOT, 'ADMIN/app'),
-  join(ROOT, 'ADMIN/connection'),
+  join(ROOT, 'ADMIN/tests'),
   join(ROOT, 'CLIENT/web'),
-  join(ROOT, 'CLIENT/connection'),
   join(ROOT, 'SHARED'),
 ];
 

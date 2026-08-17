@@ -6,6 +6,8 @@
 | `START_MSI.bat` | Canonical MSI operator start → VS Admin.exe |
 | `ADMIN/desktop/` | Native PySide6 VS Admin source |
 | `ADMIN/windows/BUILD_ADMIN.bat` | Canonical Windows PyInstaller build |
+| `ADMIN/windows/start-admin.ps1` | Called by START_MSI.bat |
+| `ADMIN/windows/stop-admin.ps1` | Stop VS Admin.exe |
 | `ADMIN/windows/dist/VS Admin.exe` | Production artifact (built on MSI, not committed) |
 | `SERVER/monitor/main.py` | Native PySide6 VS Server Monitor |
 | `SERVER/MONITOR_SERVER` | GUI first, TUI fallback |
@@ -16,3 +18,5 @@
 | `old version/server/monitor-web/` | Archived HTML server panel |
 
 Production must not launch Vite ADMIN, `serve-admin.mjs`, or a browser wrapper.
+
+Extra Windows BAT helpers and CLIENT desktop launchers live in `old version/`. Canonical operator files are `START_MSI.bat` and `ADMIN/windows/BUILD_ADMIN.bat`.

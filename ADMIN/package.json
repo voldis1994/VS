@@ -5,7 +5,7 @@
   "type": "module",
   "description": "VS ADMIN — native desktop operator console (PySide6) plus LAN identity tests",
   "scripts": {
-    "test": "vitest run connection"
+    "test": "vitest run tests/connection"
   },
   "devDependencies": {
     "@types/node": "^22.5.0",

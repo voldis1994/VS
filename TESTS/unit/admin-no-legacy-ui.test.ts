@@ -9,7 +9,7 @@ const ROOT = join(import.meta.dirname, '../..');
 const ADMIN_DESKTOP = join(ROOT, 'ADMIN/desktop');
 const START_MSI = join(ROOT, 'START_MSI.bat');
 const START_PS1 = join(ROOT, 'ADMIN/windows/start-admin.ps1');
-const INSTALL_PS1 = join(ROOT, 'ADMIN/windows/install-admin.ps1');
+const BUILD_BAT = join(ROOT, 'ADMIN/windows/BUILD_ADMIN.bat');
 
 const LEGACY_MARKERS = ['TACTICAL DESK', 'ROBOT BRAIN', 'DRIFT GUARD', 'VS SYSTEM //'];
 
@@ -65,14 +65,15 @@ describe('ADMIN production path — native desktop, no legacy tactical UI', () =
     expect(ps1).not.toMatch(/Start-Process http/);
   });
 
-  it('install-admin.ps1 builds native VS Admin.exe via BUILD_ADMIN.bat', () => {
-    expect(existsSync(INSTALL_PS1)).toBe(true);
-    const ps1 = readFileSync(INSTALL_PS1, 'utf8');
-    expect(ps1).toContain('BUILD_ADMIN.bat');
-    expect(ps1).toContain('VS Admin.exe');
-    expect(ps1).not.toMatch(/@vs\/admin-desktop/);
-    expect(ps1).not.toMatch(/npm run build/);
-    expect(ps1).not.toMatch(/Push-Location.*apps\\dashboard|cd .*apps\\dashboard/i);
+  it('BUILD_ADMIN.bat is the only canonical Windows build', () => {
+    expect(existsSync(BUILD_BAT)).toBe(true);
+    const bat = readFileSync(BUILD_BAT, 'utf8');
+    expect(bat).toMatch(/PyInstaller|pyinstaller/i);
+    expect(bat).toContain('VS Admin');
+    expect(existsSync(join(ROOT, 'ADMIN/windows/BUILD_ADMIN_NEW.bat'))).toBe(false);
+    expect(existsSync(join(ROOT, 'ADMIN/windows/install-admin.ps1'))).toBe(false);
+    expect(existsSync(join(ROOT, 'ADMIN/INSTALL_ADMIN.bat'))).toBe(false);
+    expect(existsSync(join(ROOT, 'CLIENT/windows'))).toBe(false);
   });
 
   it('legacy tactical strings exist only under old version archive', () => {
