@@ -21,7 +21,7 @@ dist-client/
 .env
 !.env.example
 
-# Data / runtime
+# Runtime / generated
 data/raw/**
 data/normalized/**
 data/replay/**
@@ -33,6 +33,10 @@ data/exports/**
 !data/models/.gitkeep
 data/vs-server/
 data/vs-admin/
+ADMIN/desktop/public/runtime-config.js
+*.pid
+*.sqlite
+*.db
 
 # Logs
 logs/

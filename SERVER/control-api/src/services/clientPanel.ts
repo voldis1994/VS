@@ -23,6 +23,7 @@ import {
 } from './pipelineBridge.js';
 import {
   acquireCapitalSession,
+  closeCapitalPosition,
   listCapitalOpenPositions,
 } from './capitalCom.js';
 import { decrypt } from '../security/encryption.js';
@@ -501,7 +502,48 @@ export async function startClientRobot(clientId: number): Promise<ClientPanelSta
   return status;
 }
 
-export async function stopClientRobot(clientId: number): Promise<ClientPanelStatus> {
+export type ClientStopMode = 'STOP_NEW_ENTRIES' | 'CLOSE_AND_STOP';
+
+export async function listClientPositions(clientId: number): Promise<Record<string, unknown>[]> {
+  const { rows } = await pool.query(
+    `SELECT p.id, p.direction AS side, p.entry_price, p.quantity AS lot, p.stop_loss, p.take_profit,
+            p.status, p.opened_at, p.closed_at,
+            COALESCE(ais.symbol, p.instrument_id::text) AS symbol
+     FROM positions p
+     JOIN broker_accounts ba ON ba.id = p.broker_account_id
+     JOIN broker_connections bc ON bc.id = ba.broker_connection_id
+     LEFT JOIN account_instrument_settings ais
+       ON ais.broker_account_id = ba.id AND ais.instrument_id = p.instrument_id
+     WHERE bc.client_id = $1 AND p.status = 'OPEN'
+     ORDER BY p.opened_at DESC
+     LIMIT 50`,
+    [clientId]
+  );
+  return rows;
+}
+
+export async function listClientHistory(clientId: number): Promise<Record<string, unknown>[]> {
+  const { rows } = await pool.query(
+    `SELECT t.id, t.direction AS side, t.entry_price, t.exit_price, t.quantity AS lot,
+            t.pnl, t.exit_reason, t.regime, t.opened_at, t.closed_at,
+            COALESCE(ais.symbol, t.instrument_id::text) AS symbol
+     FROM trades t
+     JOIN broker_accounts ba ON ba.id = t.broker_account_id
+     JOIN broker_connections bc ON bc.id = ba.broker_connection_id
+     LEFT JOIN account_instrument_settings ais
+       ON ais.broker_account_id = ba.id AND ais.instrument_id = t.instrument_id
+     WHERE bc.client_id = $1
+     ORDER BY COALESCE(t.closed_at, t.opened_at) DESC
+     LIMIT 80`,
+    [clientId]
+  );
+  return rows;
+}
+
+export async function stopClientRobot(
+  clientId: number,
+  mode: ClientStopMode = 'STOP_NEW_ENTRIES'
+): Promise<ClientPanelStatus & { stop_mode: ClientStopMode; close_detail?: string }> {
   const account = await resolveClientTradingAccount(clientId);
   const { rows } = await pool.query(
     `SELECT panel_epic FROM clients WHERE id = $1`,
@@ -513,6 +555,63 @@ export async function stopClientRobot(clientId: number): Promise<ClientPanelStat
     const m = await loadMarketForClient(clientId, epic);
     instrumentId = m?.instrument_id ?? null;
   }
+  let close_detail: string | undefined;
+  if (account && mode === 'CLOSE_AND_STOP') {
+    try {
+      const conn = await pool.query(
+        `SELECT bc.environment, bc.identifier, bc.id AS connection_id
+         FROM broker_connections bc
+         JOIN broker_accounts ba ON ba.broker_connection_id = bc.id
+         WHERE ba.id = $1 AND bc.broker_name = 'capital_com' LIMIT 1`,
+        [account.account_id]
+      );
+      if (conn.rows[0]) {
+        const credRows = await pool.query(
+          `SELECT credential_type, ciphertext, iv, tag FROM api_credential_metadata
+           WHERE broker_connection_id = $1`,
+          [conn.rows[0].connection_id]
+        );
+        const creds: Record<string, string> = {};
+        for (const row of credRows.rows) {
+          creds[row.credential_type as string] = decrypt(
+            row.ciphertext as string,
+            row.iv as string,
+            row.tag as string
+          );
+        }
+        const accExt = await pool.query(
+          `SELECT external_account_id FROM broker_accounts WHERE id = $1`,
+          [account.account_id]
+        );
+        const opened = await acquireCapitalSession({
+          environment: conn.rows[0].environment as string,
+          apiKey: creds.api_key || '',
+          identifier: String(conn.rows[0].identifier || '').trim(),
+          password: creds.password || '',
+          connectionId: Number(conn.rows[0].connection_id),
+          capitalAccountId: (accExt.rows[0]?.external_account_id as string | null) || null,
+        });
+        if (opened.ok) {
+          const listed = await listCapitalOpenPositions(opened.session);
+          const results: string[] = [];
+          if (listed.ok) {
+            for (const pos of listed.positions) {
+              const closed = await closeCapitalPosition(opened.session, pos.deal_id);
+              results.push(`${pos.epic}:${closed.ok ? 'CLOSED' : closed.detail}`);
+            }
+          }
+          close_detail = results.length ? results.join('; ') : 'NO OPEN BROKER POSITIONS';
+        } else {
+          close_detail = 'BROKER SESSION FAILED — entries stopped, positions may still be open';
+        }
+      } else {
+        close_detail = 'NO CAPITAL CONNECTION — STOP_NEW_ENTRIES only';
+      }
+    } catch (err) {
+      close_detail = err instanceof Error ? err.message : 'CLOSE_AND_STOP failed';
+    }
+  }
+
   if (account) {
     await stopEntryRobotsForAccount(account.account_id);
     await stopFlatManageRobotsForAccount(account.account_id);
@@ -531,9 +630,10 @@ export async function stopClientRobot(clientId: number): Promise<ClientPanelStat
   emitToClient(clientId, {
     type: 'robot_stopped',
     robot_status: status.robot_status,
+    stop_mode: mode,
   });
   emitToClient(clientId, { type: 'client_status', ...status });
-  return status;
+  return { ...status, stop_mode: mode, close_detail };
 }
 
 export function assertNoSecrets(payload: unknown): void {

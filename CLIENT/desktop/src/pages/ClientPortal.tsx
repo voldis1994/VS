@@ -54,7 +54,9 @@ export function ClientPortal() {
   const [epic, setEpic] = useState('');
   const [lot, setLot] = useState(0.1);
   const [error, setError] = useState<string | null>(null);
-  const [savedHint, setSavedHint] = useState<string | null>(null);
+  const [tab, setTab] = useState<'home' | 'positions' | 'history' | 'settings'>('home');
+  const [positions, setPositions] = useState<Array<Record<string, unknown>>>([]);
+  const [history, setHistory] = useState<Array<Record<string, unknown>>>([]);
 
   const selected = useMemo(() => markets.find((m) => m.epic === epic) || null, [markets, epic]);
   const running = status?.robot_status === 'RUNNING';
@@ -67,6 +69,18 @@ export function ClientPortal() {
     setStatus(st);
     if (st.market) setEpic(st.market);
     if (st.lot_size != null) setLot(Number(st.lot_size));
+    try {
+      const pos = await clientFetch<{ positions: Array<Record<string, unknown>> }>('/api/client/positions');
+      setPositions(pos.positions || []);
+    } catch {
+      setPositions([]);
+    }
+    try {
+      const hist = await clientFetch<{ history: Array<Record<string, unknown>> }>('/api/client/history');
+      setHistory(hist.history || []);
+    } catch {
+      setHistory([]);
+    }
     return st;
   }, []);
 
@@ -169,6 +183,23 @@ export function ClientPortal() {
     }
   };
 
+  const stopRobot = async (mode: 'STOP_NEW_ENTRIES' | 'CLOSE_AND_STOP') => {
+    setBusy(true);
+    setError(null);
+    try {
+      await clientFetch('/api/client/stop', {
+        method: 'POST',
+        body: JSON.stringify({ mode }),
+      });
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Stop failed');
+      await refresh().catch(() => undefined);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const toggleRobot = async () => {
     setBusy(true);
     setError(null);
@@ -178,7 +209,8 @@ export function ClientPortal() {
         await persistConfig(epic, lot);
         await clientFetch('/api/client/start', { method: 'POST', body: '{}' });
       } else {
-        await clientFetch('/api/client/stop', { method: 'POST', body: '{}' });
+        await stopRobot('STOP_NEW_ENTRIES');
+        return;
       }
       await refresh();
     } catch (e) {
@@ -197,7 +229,7 @@ export function ClientPortal() {
         <div className="card">
           <div className="welcome">LOGIN</div>
           <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-            Outside home Wi‑Fi: connect WireGuard first, then open http://10.77.0.1:3000/
+            Use the HTTPS address from your administrator. Login is required.
           </p>
           <label className="field">
             <span>Login</span>
@@ -344,24 +376,106 @@ export function ClientPortal() {
 
       {error ? <div className="err">{error}</div> : null}
 
-      <div className="start-wrap">
-        <button
-          type="button"
-          className={`start ${locked ? 'stop' : ''}`}
-          disabled={busy || (!locked && (!epic || markets.length === 0))}
-          onClick={() => void toggleRobot()}
-        >
-          <div>
-            VS
-            <small>{locked ? 'STOP' : 'START'}</small>
+      {tab === 'home' ? (
+        <>
+          <div className="start-wrap">
+            {!locked ? (
+              <button
+                type="button"
+                className="start"
+                disabled={busy || !epic || markets.length === 0}
+                onClick={() => void toggleRobot()}
+              >
+                <div>
+                  VS
+                  <small>START</small>
+                </div>
+              </button>
+            ) : (
+              <>
+                <button type="button" className="start stop" disabled={busy} onClick={() => void toggleRobot()}>
+                  <div>
+                    RUNNING
+                    <small>STOP NEW ENTRIES</small>
+                  </div>
+                </button>
+                <div className="stop-row">
+                  <button type="button" disabled={busy} onClick={() => void stopRobot('STOP_NEW_ENTRIES')}>
+                    STOP_NEW_ENTRIES
+                    <div className="muted">leaves open positions managed</div>
+                  </button>
+                  <button type="button" disabled={busy} onClick={() => void stopRobot('CLOSE_AND_STOP')}>
+                    CLOSE_AND_STOP
+                    <div className="muted">closes broker positions then stops</div>
+                  </button>
+                </div>
+              </>
+            )}
           </div>
-        </button>
-      </div>
-      <div className="conn">3. START robot — uses your selected market + lot</div>
+        </>
+      ) : null}
 
-      <button className="link" type="button" onClick={() => void logout()}>
-        Sign out
-      </button>
+      {tab === 'positions' ? (
+        <div className="card">
+          <div className="welcome">POSITIONS</div>
+          {positions.length === 0 ? (
+            <div className="empty">NO DATA — no open positions for this login</div>
+          ) : (
+            positions.map((p) => (
+              <div className="hist" key={String(p.id)}>
+                <div className="row">
+                  <span>{String(p.symbol)}</span>
+                  <span>{String(p.side)} {String(p.lot)}</span>
+                </div>
+                <div className="row muted">
+                  <span>entry {String(p.entry_price ?? '—')}</span>
+                  <span>SL {String(p.stop_loss ?? '—')}</span>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      ) : null}
+
+      {tab === 'history' ? (
+        <div className="card">
+          <div className="welcome">HISTORY</div>
+          {history.length === 0 ? (
+            <div className="empty">NO DATA — no closed trades for this login</div>
+          ) : (
+            history.map((h) => (
+              <div className="hist" key={String(h.id)}>
+                <div className="row">
+                  <span>{String(h.symbol)}</span>
+                  <span>P/L {h.pnl == null ? '—' : String(h.pnl)}</span>
+                </div>
+                <div className="row muted">
+                  <span>{String(h.side)} {String(h.lot)}</span>
+                  <span>{String(h.exit_reason || '—')}</span>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      ) : null}
+
+      {tab === 'settings' ? (
+        <div className="card">
+          <div className="welcome">SETTINGS</div>
+          <div className="row"><span>Client</span><span>{status?.client_name || '—'}</span></div>
+          <div className="row"><span>Status</span><span>{status?.robot_status || '—'}</span></div>
+          <button className="link" type="button" onClick={() => void logout()}>
+            Sign out
+          </button>
+        </div>
+      ) : null}
+
+      <nav className="bottom-nav">
+        <button type="button" className={tab === 'home' ? 'on' : ''} onClick={() => setTab('home')}>HOME</button>
+        <button type="button" className={tab === 'positions' ? 'on' : ''} onClick={() => setTab('positions')}>POSITIONS</button>
+        <button type="button" className={tab === 'history' ? 'on' : ''} onClick={() => setTab('history')}>HISTORY</button>
+        <button type="button" className={tab === 'settings' ? 'on' : ''} onClick={() => setTab('settings')}>SETTINGS</button>
+      </nav>
     </div>
   );
 }

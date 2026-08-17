@@ -50,6 +50,7 @@ usermod -aG docker "$RUN_USER" 2>/dev/null || true
 rsync -a --exclude node_modules --exclude dist --exclude data "$HERE/control-api/" "$API/"
 rsync -a --exclude node_modules --exclude dist "$HERE/core/" "$PREFIX/core/"
 rsync -a "$HERE/deploy/" "$PREFIX/deploy/"
+rsync -a --exclude node_modules "$HERE/client-gateway/" "$PREFIX/client-gateway/"
 # supervisor / broker helpers used by control-api imports
 if [[ -d "$HERE/../SHARED" ]]; then
   rsync -a "$HERE/../SHARED/" "$PREFIX/../SHARED/" 2>/dev/null || true
@@ -73,11 +74,27 @@ chmod +x "$PREFIX/deploy/validate-mi-contract.sh" 2>/dev/null || true
 echo "==> validate market-intelligence ESM contract (runtime import)"
 bash "$PREFIX/deploy/validate-mi-contract.sh"
 
-# --- ONE password, write to EVERY env file BEFORE creating DB ---
+# --- Database credentials: keep existing unless VS_NUCLEAR_DB=1 ---
 DB_USER=market_reader
 DB_NAME=market_reader
-DB_PASSWORD="$(openssl rand -hex 16)"
-echo "==> new DB_PASSWORD generated and written to all env files"
+EXISTING_PW=""
+if [[ -f "$DATA/server.env" ]]; then
+  EXISTING_PW="$(grep -E '^DB_PASSWORD=' "$DATA/server.env" | head -1 | cut -d= -f2- | tr -d '\r' || true)"
+fi
+PG_OK=0
+if [[ "${VS_NUCLEAR_DB:-0}" != "1" && -n "$EXISTING_PW" ]]; then
+  if docker exec -e PGPASSWORD="$EXISTING_PW" "$CONTAINER" \
+    psql -h 127.0.0.1 -U "$DB_USER" -d "$DB_NAME" -c 'SELECT 1' >/dev/null 2>&1; then
+    PG_OK=1
+  fi
+fi
+if [[ "$PG_OK" -eq 1 ]]; then
+  DB_PASSWORD="$EXISTING_PW"
+  echo "==> keeping existing Postgres (set VS_NUCLEAR_DB=1 to recreate)"
+else
+  DB_PASSWORD="$(openssl rand -hex 16)"
+  echo "==> new DB_PASSWORD generated (Postgres missing or VS_NUCLEAR_DB=1)"
+fi
 BUILD_SHA="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -126,28 +143,34 @@ done
 chmod 600 "$DATA/compose.env" "$API/.env" 2>/dev/null || true
 chmod 640 "$DATA/server.env" 2>/dev/null || true
 
-# --- Destroy old Postgres and volume (password baked into volume at first init) ---
-echo "==> destroying old Postgres volume (required for password reset)"
-VOL="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}' "$CONTAINER" 2>/dev/null || true)"
-docker rm -f "$CONTAINER" 2>/dev/null || true
-[[ -n "$VOL" ]] && docker volume rm -f "$VOL" 2>/dev/null || true
-for v in $(docker volume ls -q | grep -E 'postgres_data' || true); do
-  docker volume rm -f "$v" 2>/dev/null || true
-done
-
-if [[ ! -f "$DATA/docker-compose.yml" ]]; then
-  cp -a "$REPO/docker-compose.yml" "$DATA/docker-compose.yml"
+COMPOSE_SRC="$HERE/database/docker-compose.yml"
+if [[ ! -f "$COMPOSE_SRC" ]]; then COMPOSE_SRC="$REPO/docker-compose.yml"; fi
+if [[ ! -f "$DATA/docker-compose.yml" && -f "$COMPOSE_SRC" ]]; then
+  cp -a "$COMPOSE_SRC" "$DATA/docker-compose.yml"
 fi
 
-echo "==> starting fresh Postgres with new password"
-docker compose -f "$DATA/docker-compose.yml" --env-file "$DATA/compose.env" up -d postgres \
-  || docker run -d --name "$CONTAINER" --restart unless-stopped \
-       -e POSTGRES_USER="$DB_USER" \
-       -e POSTGRES_PASSWORD="$DB_PASSWORD" \
-       -e POSTGRES_DB="$DB_NAME" \
-       -p 127.0.0.1:5432:5432 \
-       -v vs_postgres_data:/var/lib/postgresql/data \
-       postgres:16-alpine
+if [[ "$PG_OK" -ne 1 ]]; then
+  echo "==> destroying old Postgres volume (password reset / first install)"
+  VOL="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}' "$CONTAINER" 2>/dev/null || true)"
+  docker rm -f "$CONTAINER" 2>/dev/null || true
+  [[ -n "$VOL" ]] && docker volume rm -f "$VOL" 2>/dev/null || true
+  for v in $(docker volume ls -q | grep -E 'postgres_data' || true); do
+    docker volume rm -f "$v" 2>/dev/null || true
+  done
+  echo "==> starting fresh Postgres with new password"
+  docker compose -f "$DATA/docker-compose.yml" --env-file "$DATA/compose.env" up -d postgres \
+    || docker run -d --name "$CONTAINER" --restart unless-stopped \
+         -e POSTGRES_USER="$DB_USER" \
+         -e POSTGRES_PASSWORD="$DB_PASSWORD" \
+         -e POSTGRES_DB="$DB_NAME" \
+         -p 127.0.0.1:5432:5432 \
+         -v vs_postgres_data:/var/lib/postgresql/data \
+         postgres:16-alpine
+else
+  echo "==> ensuring Postgres/Redis containers are up"
+  docker compose -f "$DATA/docker-compose.yml" --env-file "$DATA/compose.env" up -d postgres redis 2>/dev/null || \
+    docker start "$CONTAINER" 2>/dev/null || true
+fi
 
 docker start market-reader-redis 2>/dev/null || \
   docker compose -f "$DATA/docker-compose.yml" --env-file "$DATA/compose.env" up -d redis 2>/dev/null || true
@@ -263,9 +286,51 @@ ReadWritePaths=${DATA} ${LOG} ${PREFIX} /var/run/docker.sock
 WantedBy=multi-user.target
 UNIT
 
+# Stable CLIENT URL — created once, never overwritten by git pull / rebuild
+mkdir -p /etc/vs /etc/vs/tls
+if [[ ! -f /etc/vs/client-url ]]; then
+  cat >/etc/vs/client-url <<EOF
+# VS CLIENT public URL (immutable across updates). Set once.
+# Example: https://vs.example.com
+EOF
+  echo "Wrote empty /etc/vs/client-url — set https://<stable-host> once"
+fi
+# Do not clobber VS_PUBLIC_CLIENT_URL if already in server.env
+if ! grep -qE '^VS_PUBLIC_CLIENT_URL=.' "$DATA/server.env" 2>/dev/null; then
+  force_kv "$DATA/server.env" VS_PUBLIC_CLIENT_URL ""
+fi
+
+cat >/etc/systemd/system/vs-client-gateway.service <<GW
+[Unit]
+Description=VS CLIENT HTTPS gateway
+After=vs-server.service network-online.target
+Wants=vs-server.service
+
+[Service]
+Type=simple
+WorkingDirectory=${PREFIX}/client-gateway
+EnvironmentFile=-${DATA}/server.env
+Environment=VS_CONTROL_API_HOST=127.0.0.1
+Environment=CONTROL_API_PORT=3000
+Environment=VS_CLIENT_GATEWAY_PORT=443
+Environment=VS_CLIENT_ALLOW_HTTP=1
+Environment=VS_CLIENT_URL_FILE=/etc/vs/client-url
+Environment=VS_CLIENT_TLS_CERT=/etc/vs/tls/fullchain.pem
+Environment=VS_CLIENT_TLS_KEY=/etc/vs/tls/privkey.pem
+ExecStart=/usr/bin/node ${PREFIX}/client-gateway/gateway.mjs
+Restart=on-failure
+RestartSec=3
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target
+GW
+
 systemctl daemon-reload
-systemctl enable vs-server.service
+systemctl enable vs-server.service vs-client-gateway.service
 systemctl restart vs-server.service || true
+systemctl restart vs-client-gateway.service || true
 
 ok=0
 for i in $(seq 1 45); do
@@ -307,8 +372,9 @@ ss -lntp | grep 3000 || true
 echo
 echo "i3 LAN IP:     $LAN_IP"
 echo "Control API:   http://${LAN_IP}:3000/health"
-echo "CLIENT portal: http://${LAN_IP}:3000/   (login from ADMIN → CLIENTS)"
-echo "WireGuard:     http://10.77.0.1:3000/  (remote clients)"
+echo "CLIENT gateway: TCP 443 (HTTPS when /etc/vs/tls certs exist)"
+echo "CLIENT URL file: /etc/vs/client-url  (never changed by git pull)"
+echo "ADMIN API:      http://${LAN_IP}:3000/health  (LAN only)"
 
 # Mandatory: LAN must work — localhost-only bind is a FAIL for MSI
 if [[ -n "$LAN_IP" ]]; then

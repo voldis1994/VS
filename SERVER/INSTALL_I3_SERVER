@@ -146,7 +146,7 @@ ensure_kv "$ENV_ROOT" VS_LAN_MANAGEMENT 1
 ensure_kv "$ENV_ROOT" CONTROL_API_HOST 0.0.0.0
 ensure_kv "$ENV_ROOT" CONTROL_API_PORT 3000
 ensure_kv "$ENV_ROOT" CONTROL_API_URL "http://127.0.0.1:3000"
-ensure_kv "$ENV_ROOT" CORS_ORIGIN "http://127.0.0.1:5188,http://localhost:5188,http://127.0.0.1:5173,http://localhost:5173,*"
+ensure_kv "$ENV_ROOT" CORS_ORIGIN "http://127.0.0.1:5188,http://localhost:5188"
 ensure_kv "$ENV_ROOT" VS_WG_LISTEN_PORT 51820
 ensure_kv "$ENV_ROOT" VS_SERVER_ENDPOINT_IP "${LAN_IP:-}"
 # CRITICAL: always overwrite bind/LAN flags (ensure_kv would keep stale 10.77.0.1)
@@ -173,7 +173,7 @@ VS_LAN_MANAGEMENT=1
 CONTROL_API_HOST=0.0.0.0
 CONTROL_API_PORT=3000
 CONTROL_API_URL=http://127.0.0.1:3000
-CORS_ORIGIN=http://127.0.0.1:5188,http://localhost:5188,http://127.0.0.1:5173,http://localhost:5173,*
+CORS_ORIGIN=http://127.0.0.1:5188,http://localhost:5188
 VS_WG_INTERFACE=vs0
 VS_WG_LISTEN_PORT=51820
 VS_SERVER_ID=VS-CORE-01
@@ -262,7 +262,7 @@ fi
 rm -f "$compose_err"
 
 # Persist compose files for reboot (systemd ExecStartPre)
-cp -a "$REPO/docker-compose.yml" "$DATA/docker-compose.yml"
+cp -a "$REPO/SERVER/database/docker-compose.yml" "$DATA/docker-compose.yml"
 cp -a "$ENV_ROOT" "$DATA/compose.env"
 chmod 600 "$DATA/compose.env"
 chown root:"$RUN_USER" "$DATA/compose.env" 2>/dev/null || true

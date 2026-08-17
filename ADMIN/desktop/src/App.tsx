@@ -12,9 +12,11 @@ const NAV = [
   ['/accounts', 'Accounts'],
   ['/market', 'Market'],
   ['/trading', 'Trading'],
-  ['/risk', 'Risk'],
+  ['/strategies', 'Strategies'],
   ['/execution', 'Execution'],
   ['/positions', 'Positions'],
+  ['/orders', 'Orders'],
+  ['/trades', 'Trades'],
   ['/incidents', 'Incidents'],
   ['/logs', 'Logs'],
   ['/backups', 'Backups'],
@@ -51,7 +53,7 @@ export function App() {
               <div className="topbar-title">VS ADMIN</div>
               <div className="muted" style={{ fontSize: 11 }}>
                 Server: <strong>{live.serverId}</strong>
-                <span> · selector: Main</span>
+                <span> · {live.transport} · {live.connectionPhase}</span>
               </div>
             </div>
           </div>
@@ -88,9 +90,11 @@ export function App() {
             <Route path="/accounts" element={<ResourcePage title="ACCOUNTS" live={live} kind="accounts" />} />
             <Route path="/market" element={<ResourcePage title="MARKET" live={live} kind="market" />} />
             <Route path="/trading" element={<ResourcePage title="TRADING PIPELINE" live={live} kind="trading" />} />
-            <Route path="/risk" element={<ResourcePage title="RISK" live={live} kind="risk" />} />
+            <Route path="/strategies" element={<ResourcePage title="STRATEGIES" live={live} kind="trading" />} />
             <Route path="/execution" element={<ResourcePage title="EXECUTION" live={live} kind="execution" />} />
             <Route path="/positions" element={<ResourcePage title="POSITIONS" live={live} kind="positions" />} />
+            <Route path="/orders" element={<ResourcePage title="ORDERS" live={live} kind="positions" />} />
+            <Route path="/trades" element={<ResourcePage title="TRADES" live={live} kind="positions" />} />
             <Route path="/incidents" element={<ResourcePage title="INCIDENTS" live={live} kind="incidents" />} />
             <Route path="/logs" element={<ResourcePage title="LOGS" live={live} kind="logs" />} />
             <Route path="/backups" element={<ResourcePage title="BACKUPS" live={live} kind="backups" />} />

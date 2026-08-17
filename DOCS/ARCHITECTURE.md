@@ -1,41 +1,40 @@
-# VS Architecture
+# Architecture (as implemented)
 
-## Physical products
-
-1. **VS CORE SERVER** — i3 Debian 13 (`VS-CORE-01`) — sole trading brain  
-2. **VS ADMIN** — MSI Windows 11 — Control Panel only (LAN)  
-3. **VS CLIENT** — customer Windows — WireGuard → Client API  
-
-## Data flow
+ONE VS CORE on i3 Debian. ADMIN and CLIENT are two authorization doors, not two servers.
 
 ```
-CAPITAL.COM
-    ↕ REST/WS
-BROKER GATEWAY (SERVER/core/broker)
-    ↕
-VS CORE (i3)
-  market-data → indicators → regime → strategy → signal → risk → execution
-  positions / reconciliation / audit / incidents
-  PostgreSQL + Redis
-  CONTROL API  ←LAN←  MSI ADMIN
-  CLIENT API   ←WG←   CLIENT (10.77.0.1)
-  local monitor (optional UI; closing does not stop server)
+INTERNET → market feeds → i3 VS-CORE-01
+                         ├─ Control API  :3000  (LAN / MSI only)
+                         ├─ Client GW    :443   (public HTTPS)
+                         ├─ PostgreSQL   :5432  (localhost)
+                         └─ Redis        :6379  (localhost)
+
+MSI Windows → START_MSI.bat → 127.0.0.1:5188 UI → http://<i3-LAN>:3000
+CLIENT browser → https://<stable-host>/ → :443 → Control API client routes only
 ```
 
-## Readiness
+## Config precedence (MSI)
 
-| Flag | Meaning |
-|------|---------|
-| PROCESS_READY | systemd + Control API process |
-| SYSTEM_READY | process + DB + Client API reachable |
-| TRADING_READY | system + broker + market + risk + execution + reconciliation gates |
+1. `ADMIN/config/SERVER_IP.txt` (operator-pinned i3 IPv4)
+2. LAN bootstrap token from `/api/v1/admin/lan-bootstrap`
+3. `ADMIN/config/control-panel.env`
+4. `ADMIN/desktop/public/runtime-config.js` (written at start, gitignored)
 
-Broker credentials absent ⇒ `BROKER_READY=false`, `TRADING_READY=false`. Server is **not** “dead”.
+No subnet scan. Wrong IP fails identity (`service=VS-CORE`, `server_id=VS-CORE-01`).
 
-## Authority
+## Config precedence (i3)
 
-Authoritative state lives only on i3. MSI/CLIENT offline must not stop VS CORE.
+1. `/var/lib/vs-server/server.env` (runtime, not git)
+2. `/etc/vs/client-url` (stable public CLIENT URL — never overwritten by `git pull`)
+3. `/etc/vs/tls/*.pem` (optional TLS for :443)
+4. Control API env from systemd `EnvironmentFile`
 
-## Repository map
+## START / STOP (client)
 
-See `DOCS/LEGACY_AUDIT.md` and tree under `SERVER/core/`, `SERVER/control-api/`, `SERVER/client-api/`.
+- `START` — activate this client's server-side session (market + lot).
+- `STOP_NEW_ENTRIES` (default STOP) — stop new entries; open positions stay managed.
+- `CLOSE_AND_STOP` — close broker positions then stop entries.
+
+## Old files
+
+`old version/` is an archive. Production source must not reference it.

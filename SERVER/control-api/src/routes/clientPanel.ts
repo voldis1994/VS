@@ -7,6 +7,9 @@ import {
   saveClientConfig,
   startClientRobot,
   stopClientRobot,
+  listClientPositions,
+  listClientHistory,
+  type ClientStopMode,
 } from '../services/clientPanel.js';
 
 export async function registerClientPanelRoutes(app: FastifyInstance): Promise<void> {
@@ -74,13 +77,34 @@ export async function registerClientPanelRoutes(app: FastifyInstance): Promise<v
   app.post('/api/client/stop', async (request, reply) => {
     const session = await requireClientSession(request, reply);
     if (!session) return;
+    const body = (request.body || {}) as { mode?: string };
+    const mode: ClientStopMode =
+      String(body.mode || '').toUpperCase() === 'CLOSE_AND_STOP'
+        ? 'CLOSE_AND_STOP'
+        : 'STOP_NEW_ENTRIES';
     try {
-      const status = await stopClientRobot(session.client_id);
+      const status = await stopClientRobot(session.client_id, mode);
       assertNoSecrets(status);
       return { success: true, status };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Stop failed';
       return reply.code(400).send({ error: message, message });
     }
+  });
+
+  app.get('/api/client/positions', async (request, reply) => {
+    const session = await requireClientSession(request, reply);
+    if (!session) return;
+    const positions = await listClientPositions(session.client_id);
+    assertNoSecrets(positions);
+    return { positions };
+  });
+
+  app.get('/api/client/history', async (request, reply) => {
+    const session = await requireClientSession(request, reply);
+    if (!session) return;
+    const history = await listClientHistory(session.client_id);
+    assertNoSecrets(history);
+    return { history };
   });
 }

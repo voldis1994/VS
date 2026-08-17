@@ -3,8 +3,6 @@ import { authorizePipelineRequest } from '../services/pipelineBridge.js';
 
 const PUBLIC_PATHS = [
   '/health',
-  '/api/system/status',
-  '/api/system/mode',
   '/api/system/health',
   '/api/client-auth/',
   '/api/client/',

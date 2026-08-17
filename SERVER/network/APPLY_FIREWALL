@@ -1,46 +1,71 @@
 #!/usr/bin/env bash
-# APPLY_FIREWALL — home appliance: MSI on Wi‑Fi must reach Control API :3000.
-# Prefer reachability over narrow CIDR guessing. WireGuard UDP still opened.
+# APPLY_FIREWALL — production policy
+#   :3000  ADMIN Control API  — trusted LAN / WG / localhost only
+#   :443   CLIENT HTTPS       — public
+#   :51820 WireGuard UDP      — public (remote clients)
+#   :5432 / :6379             — not public
 set -euo pipefail
 
 WG_PORT="${VS_WG_LISTEN_PORT:-51820}"
 API_PORT="${CONTROL_API_PORT:-3000}"
-SUPERNET="${VS_WG_SUBNET:-10.77.0.0/16}"
+CLIENT_PORT="${VS_CLIENT_GATEWAY_PORT:-443}"
+WG_NET="${VS_WG_SUBNET:-10.77.0.0/16}"
 
-echo "VS SERVER FIREWALL (home appliance)"
-echo "WG_UDP=$WG_PORT API_TCP=$API_PORT"
+echo "VS SERVER FIREWALL"
+echo "  ADMIN ${API_PORT}/tcp  LAN+WG only"
+echo "  CLIENT ${CLIENT_PORT}/tcp public"
+echo "  WG ${WG_PORT}/udp public"
 
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "FAIL: APPLY_FIREWALL requires root" >&2
   exit 1
 fi
 
-# Remove prior fail-closed nft table (locked MSI out)
 if command -v nft >/dev/null 2>&1; then
   nft delete table inet vs_private 2>/dev/null || true
-  echo "OK: removed nft inet vs_private (if present)"
 fi
 
-# NUCLEAR home allow: any source → :3000 (bind is still local LAN interfaces)
-# Required because Wi‑Fi AP isolation / wrong CIDR / Tailscale source IPs broke MSI.
+allow_lan_tcp() {
+  local port="$1"
+  if command -v iptables >/dev/null 2>&1; then
+    iptables -D INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null || true
+    iptables -C INPUT -p tcp --dport "$port" -s 127.0.0.0/8 -j ACCEPT 2>/dev/null || \
+      iptables -I INPUT 1 -p tcp --dport "$port" -s 127.0.0.0/8 -j ACCEPT || true
+    iptables -C INPUT -p tcp --dport "$port" -s 10.0.0.0/8 -j ACCEPT 2>/dev/null || \
+      iptables -I INPUT 1 -p tcp --dport "$port" -s 10.0.0.0/8 -j ACCEPT || true
+    iptables -C INPUT -p tcp --dport "$port" -s 172.16.0.0/12 -j ACCEPT 2>/dev/null || \
+      iptables -I INPUT 1 -p tcp --dport "$port" -s 172.16.0.0/12 -j ACCEPT || true
+    iptables -C INPUT -p tcp --dport "$port" -s 192.168.0.0/16 -j ACCEPT 2>/dev/null || \
+      iptables -I INPUT 1 -p tcp --dport "$port" -s 192.168.0.0/16 -j ACCEPT || true
+  fi
+}
+
 if command -v iptables >/dev/null 2>&1; then
-  iptables -D INPUT -p tcp --dport "$API_PORT" -j ACCEPT 2>/dev/null || true
-  iptables -I INPUT 1 -p tcp --dport "$API_PORT" -j ACCEPT || true
+  allow_lan_tcp "$API_PORT"
+  iptables -D INPUT -p tcp --dport "$CLIENT_PORT" -j ACCEPT 2>/dev/null || true
+  iptables -I INPUT 1 -p tcp --dport "$CLIENT_PORT" -j ACCEPT || true
   iptables -D INPUT -p udp --dport "$WG_PORT" -j ACCEPT 2>/dev/null || true
   iptables -I INPUT 1 -p udp --dport "$WG_PORT" -j ACCEPT || true
-  echo "OK: iptables ACCEPT tcp/$API_PORT + udp/$WG_PORT (any)"
+  echo "OK: iptables LAN :${API_PORT} + public :${CLIENT_PORT}/:${WG_PORT}"
 fi
 
 if command -v ufw >/dev/null 2>&1; then
   ufw allow OpenSSH 2>/dev/null || ufw allow 22/tcp 2>/dev/null || true
+  ufw delete allow "${API_PORT}/tcp" 2>/dev/null || true
+  ufw allow from 127.0.0.0/8 to any port "$API_PORT" proto tcp comment 'VS ADMIN loopback' 2>/dev/null || true
+  ufw allow from 10.0.0.0/8 to any port "$API_PORT" proto tcp comment 'VS ADMIN RFC1918' 2>/dev/null || true
+  ufw allow from 172.16.0.0/12 to any port "$API_PORT" proto tcp comment 'VS ADMIN RFC1918' 2>/dev/null || true
+  ufw allow from 192.168.0.0/16 to any port "$API_PORT" proto tcp comment 'VS ADMIN LAN' 2>/dev/null || true
+  ufw allow from "$WG_NET" to any port "$API_PORT" proto tcp comment 'VS ADMIN WG' 2>/dev/null || true
+  ufw allow "${CLIENT_PORT}/tcp" comment 'VS CLIENT HTTPS' 2>/dev/null || true
   ufw allow "${WG_PORT}/udp" comment 'VS WireGuard' 2>/dev/null || true
-  ufw allow "${API_PORT}/tcp" comment 'VS Control API home (MSI LAN)' 2>/dev/null || true
-  ufw allow from "$SUPERNET" to any port "$API_PORT" proto tcp comment 'VS Control API WG' 2>/dev/null || true
+  ufw deny 5432/tcp comment 'VS Postgres not public' 2>/dev/null || true
+  ufw deny 6379/tcp comment 'VS Redis not public' 2>/dev/null || true
   ufw --force enable 2>/dev/null || true
-  ufw status numbered 2>/dev/null | head -40 || true
-  echo "SUCCESS: ufw allow ${API_PORT}/tcp (any) + WG"
+  ufw status numbered 2>/dev/null | head -50 || true
+  echo "SUCCESS: ufw ADMIN LAN-only :${API_PORT}, CLIENT public :${CLIENT_PORT}"
   exit 0
 fi
 
-echo "SUCCESS: iptables open (ufw not installed)"
+echo "SUCCESS: iptables policy applied (ufw not installed)"
 exit 0

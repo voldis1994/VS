@@ -1,18 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { authorizeClientRequest } from '../../SERVER/client-api/src/auth/authorize.ts';
+import { isClientPublicPath } from '../../SERVER/client-gateway/gateway.mjs';
 
-describe('security: CLIENT cannot use ADMIN credentials', () => {
-  it('admin header on client API → 403', () => {
-    const r = authorizeClientRequest({ headers: { 'x-admin-token': 'x' } });
-    expect(r.ok).toBe(false);
-    if (!r.ok) {
-      expect(r.status).toBe(403);
-      expect(r.code).toContain('ADMIN');
-    }
+describe('security: CLIENT gateway cannot reach ADMIN APIs', () => {
+  it('admin and system paths are forbidden on the public door', () => {
+    expect(isClientPublicPath('/api/v1/admin/snapshot')).toBe(false);
+    expect(isClientPublicPath('/api/v1/admin/lan-bootstrap')).toBe(false);
+    expect(isClientPublicPath('/api/clients')).toBe(false);
+    expect(isClientPublicPath('/api/system/mode')).toBe(false);
   });
 
-  it('placeholder token rejected', () => {
-    const r = authorizeClientRequest({ headers: { 'x-client-token': 'CHANGE_ME' } });
-    expect(r.ok).toBe(false);
+  it('client session paths remain available', () => {
+    expect(isClientPublicPath('/api/client-auth/login')).toBe(true);
+    expect(isClientPublicPath('/api/client/start')).toBe(true);
+    expect(isClientPublicPath('/api/client/stop')).toBe(true);
   });
 });
