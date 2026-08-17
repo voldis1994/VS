@@ -82,6 +82,8 @@ describe('canonical production architecture', () => {
       join(ROOT, 'ADMIN/windows/stop-admin.ps1'),
       join(ROOT, 'ADMIN/windows/BUILD_ADMIN.bat'),
       join(ROOT, 'SERVER/control-api/src/index.ts'),
+      join(ROOT, 'SERVER/INSTALL_I3_SERVER'),
+      join(ROOT, '.env.example'),
     ];
     for (const f of prodFiles) {
       const src = readFileSync(f, 'utf8');

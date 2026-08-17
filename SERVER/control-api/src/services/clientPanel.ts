@@ -67,6 +67,13 @@ export type ClientPanelStatus = {
   lot_size: number | null;
   account_id: number | null;
   live_trade: ClientLiveTrade;
+  quote: {
+    bid: number | null;
+    ask: number | null;
+    mid: number | null;
+    spread: number | null;
+    at: string | null;
+  };
   last_seen_at: string | null;
   /** Human-readable reason for STARTING/ERROR */
   status_reason?: string | null;
@@ -381,6 +388,13 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
     connection_status = requestedRunning ? 'ERROR' : 'ONLINE';
   }
 
+  const lastTick = robot?.ticks?.length ? robot.ticks[robot.ticks.length - 1] : null;
+  const bid = lastTick?.bid ?? null;
+  const ask = lastTick?.ask ?? null;
+  const mid = lastTick?.mid ?? robot?.last_mid ?? null;
+  const spread =
+    bid != null && ask != null && Number.isFinite(bid) && Number.isFinite(ask) ? ask - bid : null;
+
   return {
     client_id: c.id,
     client_name: c.name,
@@ -399,6 +413,13 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
     lot_size: c.panel_lot_size != null ? Number(c.panel_lot_size) : null,
     account_id: account?.account_id ?? null,
     live_trade,
+    quote: {
+      bid,
+      ask,
+      mid,
+      spread,
+      at: lastTick?.at ?? robot?.last_quote_at ?? null,
+    },
     last_seen_at: c.last_seen_at ? new Date(c.last_seen_at).toISOString() : null,
     git_sha: runtimeBuildInfo().git_sha,
     entry_brain: runtimeBuildInfo().entry_brain,

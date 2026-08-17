@@ -1,35 +1,26 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import (
-    QFrame,
-    QGridLayout,
-    QHBoxLayout,
-    QLabel,
-    QTableView,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget
 
-from models.table_model import DictTableModel
-from widgets.metric_bar import MetricBar
+from pages.base import Page
+from ui.format import nd
+from widgets.chrome import FeedPills, KpiCard, Panel, ResourceGauges, VsTable
 
 
-def _txt(v) -> str:
-    if v is None or v == "":
-        return "NO DATA"
-    return str(v)
-
-
-class DashboardPage(QWidget):
+class DashboardPage(Page):
     def __init__(self):
-        super().__init__()
-        root = QVBoxLayout(self)
-        root.setContentsMargins(16, 16, 16, 16)
-        root.setSpacing(12)
+        super().__init__("DASHBOARD")
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        inner = QWidget()
+        body = QVBoxLayout(inner)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(12)
 
-        self.cards = {}
+        self.cards: dict[str, KpiCard] = {}
         grid = QGridLayout()
-        labels = [
+        grid.setSpacing(10)
+        specs = [
             ("health", "SERVER HEALTH"),
             ("uptime", "UPTIME"),
             ("clients", "CLIENTS"),
@@ -37,141 +28,121 @@ class DashboardPage(QWidget):
             ("positions", "OPEN POSITIONS"),
             ("pnl", "TODAY P/L"),
         ]
-        for i, (key, title) in enumerate(labels):
-            card = QFrame()
-            card.setObjectName("Card")
-            lay = QVBoxLayout(card)
-            lab = QLabel(title)
-            lab.setObjectName("CardLabel")
-            val = QLabel("—")
-            val.setObjectName("CardValue")
-            lay.addWidget(lab)
-            lay.addWidget(val)
-            self.cards[key] = val
+        for i, (key, title) in enumerate(specs):
+            card = KpiCard(title)
+            self.cards[key] = card
             grid.addWidget(card, i // 3, i % 3)
-        root.addLayout(grid)
+        body.addLayout(grid)
 
         mid = QHBoxLayout()
-        mframe = QFrame()
-        mframe.setObjectName("Card")
-        ml = QVBoxLayout(mframe)
-        h = QLabel("MARKET OVERVIEW")
-        h.setObjectName("Section")
-        self.marketBody = QLabel("NO DATA")
-        self.marketBody.setWordWrap(True)
-        ml.addWidget(h)
-        ml.addWidget(self.marketBody)
-        mid.addWidget(mframe, 2)
+        market = Panel("MARKET OVERVIEW")
+        self.market_status = QLabel("NO DATA")
+        self.market_status.setObjectName("CardValue")
+        self.market_detail = QLabel("NO DATA")
+        self.market_detail.setObjectName("muted")
+        self.market_detail.setWordWrap(True)
+        self.quote = QLabel("PRICE  NO DATA    BID  NO DATA    ASK  NO DATA    SPREAD  NO DATA")
+        market.body.addWidget(self.market_status)
+        market.body.addWidget(self.market_detail)
+        market.body.addWidget(self.quote)
+        chart = QLabel("NO CHART — waiting for live 10s OHLC from VS CORE")
+        chart.setObjectName("muted")
+        chart.setMinimumHeight(72)
+        market.body.addWidget(chart)
+        mid.addWidget(market, 2)
 
-        rframe = QFrame()
-        rframe.setObjectName("Card")
-        rl = QVBoxLayout(rframe)
-        rh = QLabel("SYSTEM RESOURCES")
-        rh.setObjectName("Section")
-        self.cpu = MetricBar("CPU")
-        self.ram = MetricBar("RAM")
-        self.ssd = MetricBar("SSD")
-        self.net = QLabel("NETWORK  NO DATA")
-        self.net.setObjectName("muted")
-        rl.addWidget(rh)
-        rl.addWidget(self.cpu)
-        rl.addWidget(self.ram)
-        rl.addWidget(self.ssd)
-        rl.addWidget(self.net)
-        mid.addWidget(rframe, 1)
-        root.addLayout(mid)
+        res = Panel("SYSTEM RESOURCES")
+        self.gauges = ResourceGauges()
+        res.body.addWidget(self.gauges)
+        mid.addWidget(res, 1)
+        body.addLayout(mid)
 
-        self.feeds = QLabel("FEED HEALTH — NO DATA")
-        root.addWidget(self.feeds)
+        feeds = Panel("FEED HEALTH")
+        self.feeds = FeedPills()
+        feeds.body.addWidget(self.feeds)
+        body.addWidget(feeds)
 
         tables = QHBoxLayout()
-        self.client_model = DictTableModel(
+        clients = Panel("CLIENT STATUS")
+        self.client_table = VsTable(
             ["CLIENT", "STATUS", "TRANSPORT", "LAST SEEN"],
             ["name", "status", "transport", "seen"],
         )
-        self.client_table = QTableView()
-        self.client_table.setModel(self.client_model)
-        self.client_table.horizontalHeader().setStretchLastSection(True)
-        self.client_table.verticalHeader().setVisible(False)
-        self.order_model = DictTableModel(
+        clients.body.addWidget(self.client_table, 1)
+        orders = Panel("RECENT ORDERS")
+        self.order_table = VsTable(
             ["ORDER", "SIDE", "STATUS", "SIZE"],
             ["id", "side", "status", "size"],
         )
-        self.order_table = QTableView()
-        self.order_table.setModel(self.order_model)
-        self.order_table.horizontalHeader().setStretchLastSection(True)
-        self.order_table.verticalHeader().setVisible(False)
-        left = QVBoxLayout()
-        clh = QLabel("CLIENT STATUS")
-        clh.setObjectName("Section")
-        left.addWidget(clh)
-        left.addWidget(self.client_table)
-        right = QVBoxLayout()
-        oh = QLabel("RECENT ORDERS")
-        oh.setObjectName("Section")
-        right.addWidget(oh)
-        right.addWidget(self.order_table)
-        tables.addLayout(left, 1)
-        tables.addLayout(right, 1)
-        root.addLayout(tables, 1)
+        orders.body.addWidget(self.order_table, 1)
+        tables.addWidget(clients, 1)
+        tables.addWidget(orders, 1)
+        body.addLayout(tables, 1)
 
-        self.incidents = QLabel("INCIDENTS — NO DATA")
-        self.events = QLabel("RECENT EVENTS — NO DATA")
-        root.addWidget(self.incidents)
-        root.addWidget(self.events)
+        bottom = QHBoxLayout()
+        inc = Panel("INCIDENTS")
+        self.incidents = VsTable(["SEV", "CODE", "MESSAGE"], ["sev", "code", "message"])
+        inc.body.addWidget(self.incidents, 1)
+        ev = Panel("RECENT EVENTS")
+        self.events = VsTable(["TYPE", "MESSAGE"], ["type", "message"])
+        ev.body.addWidget(self.events, 1)
+        bottom.addWidget(inc, 1)
+        bottom.addWidget(ev, 1)
+        body.addLayout(bottom, 1)
+
+        scroll.setWidget(inner)
+        self.root.addWidget(scroll, 1)
 
     def apply(self, s: dict) -> None:
-        self.cards["health"].setText(_txt(s.get("health")))
-        self.cards["health"].setProperty("ok", "true" if s.get("health") == "HEALTHY" else "false")
-        self.cards["uptime"].setText(_txt(s.get("uptime")))
-        self.cards["clients"].setText(f"{s.get('clientsOnline') or 0} / {s.get('clientsRegistered') or 0}")
-        n_acc = len(s.get("clients") or [])
-        self.cards["accounts"].setText(str(n_acc) if n_acc else "NO DATA")
-        pos = s.get("openPositions")
-        self.cards["positions"].setText("NO DATA" if pos is None else str(pos))
-        pnl = s.get("totalPnlToday")
-        self.cards["pnl"].setText("NO DATA" if pnl is None else str(pnl))
-        bid, ask, sp = s.get("marketBid"), s.get("marketAsk"), s.get("marketSpread")
-        quote = "NO DATA" if bid is None and ask is None else f"bid {bid}  ask {ask}  spread {sp}"
-        self.marketBody.setText(
-            f"{s.get('marketStatus') or 'UNKNOWN'}\n{s.get('marketDetail') or 'NO DATA'}\n{quote}"
+        self.mark_disconnected(s)
+        health = s.get("health")
+        tone = "ok" if health == "HEALTHY" else "warn" if health == "DEGRADED" else "bad"
+        self.cards["health"].set_value(health, sub=nd(s.get("server_id")), tone=tone)
+        self.cards["uptime"].set_value(s.get("uptime"))
+        self.cards["clients"].set_value(
+            f"{s.get('clientsOnline') or 0} / {s.get('clientsRegistered') or 0}",
+            sub="online / registered",
         )
-        self.cpu.set_value(s.get("cpu") if isinstance(s.get("cpu"), (int, float)) else None)
-        self.ram.set_value(s.get("ram") if isinstance(s.get("ram"), (int, float)) else None)
-        self.ssd.set_value(s.get("disk") if isinstance(s.get("disk"), (int, float)) else None)
-        self.net.setText(f"NETWORK  {_txt(s.get('network'))}")
-        feeds = s.get("feeds") or {}
-        if not feeds:
-            self.feeds.setText("FEED HEALTH — NO DATA")
-        else:
-            parts = []
-            for name, cell in feeds.items():
-                if isinstance(cell, dict):
-                    parts.append(f"{name}: {cell.get('status') or 'NO DATA'}")
-                else:
-                    parts.append(f"{name}: {cell}")
-            self.feeds.setText("FEED HEALTH  " + "   ".join(parts))
+        n_acc = len(s.get("clients") or [])
+        self.cards["accounts"].set_value(n_acc if n_acc else None, sub="provisioned logins")
+        self.cards["positions"].set_value(s.get("openPositions"))
+        self.cards["pnl"].set_value(s.get("totalPnlToday"))
+
+        self.market_status.setText(nd(s.get("marketStatus")))
+        self.market_detail.setText(nd(s.get("marketDetail")))
+        self.quote.setText(
+            f"PRICE  {nd(s.get('marketBid') if s.get('marketBid') is not None else s.get('marketAsk'))}"
+            f"    BID  {nd(s.get('marketBid'))}"
+            f"    ASK  {nd(s.get('marketAsk'))}"
+            f"    SPREAD  {nd(s.get('marketSpread'))}"
+        )
+        self.gauges.apply(s)
+        self.feeds.set_feeds(s.get("feeds") or {})
 
         rows = []
         for c in s.get("presenceClients") or []:
+            if not isinstance(c, dict):
+                continue
             rows.append(
                 {
                     "name": c.get("display_name") or c.get("device_id") or "—",
                     "status": c.get("status") or "—",
                     "transport": "LAN",
-                    "seen": "heartbeat" if c.get("app_connected") else "—",
+                    "seen": "heartbeat" if c.get("app_connected") else "NO DATA",
                 }
             )
         for d in s.get("devices") or []:
+            if not isinstance(d, dict):
+                continue
             rows.append(
                 {
                     "name": d.get("device_id") or "—",
                     "status": d.get("connection_state") or d.get("status") or "—",
                     "transport": d.get("transport") or "—",
-                    "seen": d.get("last_seen_human") or "—",
+                    "seen": d.get("last_seen_human") or "NO DATA",
                 }
             )
-        self.client_model.set_rows(rows)
+        self.client_table.set_rows(rows)
         orders = []
         for o in (s.get("orders") or [])[:20]:
             if not isinstance(o, dict):
@@ -184,22 +155,22 @@ class DashboardPage(QWidget):
                     "size": o.get("size") or o.get("lot") or "—",
                 }
             )
-        self.order_model.set_rows(orders)
-        incs = s.get("incidents") or []
-        if not incs:
-            self.incidents.setText("INCIDENTS — NO OPEN INCIDENTS")
-        else:
-            self.incidents.setText(
-                "INCIDENTS  " + " | ".join(str(i.get("message") or i.get("code") or i) for i in incs[:5] if isinstance(i, dict) or True)
-            )
-        events = s.get("events") or []
-        if not events:
-            self.events.setText("RECENT EVENTS — NO DATA")
-        else:
-            bits = []
-            for ev in events[:6]:
-                if isinstance(ev, dict):
-                    bits.append(str(ev.get("message") or ev.get("type") or ev))
-                else:
-                    bits.append(str(ev))
-            self.events.setText("RECENT EVENTS  " + " | ".join(bits))
+        self.order_table.set_rows(orders)
+        incs = []
+        for i in s.get("incidents") or []:
+            if isinstance(i, dict):
+                incs.append(
+                    {
+                        "sev": i.get("severity") or "—",
+                        "code": i.get("code") or "—",
+                        "message": i.get("message") or i.get("detail") or "—",
+                    }
+                )
+        self.incidents.set_rows(incs)
+        events = []
+        for ev in s.get("events") or []:
+            if isinstance(ev, dict):
+                events.append({"type": ev.get("type") or "event", "message": ev.get("message") or "—"})
+            else:
+                events.append({"type": "event", "message": str(ev)})
+        self.events.set_rows(events)

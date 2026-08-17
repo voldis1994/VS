@@ -15,6 +15,7 @@ type Market = {
 type Status = {
   client_id: number;
   client_name: string;
+  connection_status?: 'ONLINE' | 'LOST' | 'ERROR';
   robot_status: 'RUNNING' | 'STARTING' | 'STOPPED' | 'ERROR';
   requested_status?: 'RUNNING' | 'STOPPED';
   status_reason?: string | null;
@@ -22,6 +23,13 @@ type Status = {
   market: string | null;
   display_name: string | null;
   lot_size: number | null;
+  quote?: {
+    bid: number | null;
+    ask: number | null;
+    mid: number | null;
+    spread: number | null;
+    at: string | null;
+  };
   live_trade?: {
     market: string;
     display_name: string;
@@ -43,6 +51,11 @@ function clampLot(n: number, m: Market | null) {
   return Math.min(m.max_lot, Math.max(m.min_lot, roundLot(n, m.lot_step || 0.01)));
 }
 
+function fmt(v: number | null | undefined) {
+  if (v == null || Number.isNaN(v)) return 'NO DATA';
+  return String(v);
+}
+
 export function ClientPortal() {
   const [token, setToken] = useState<string | null>(() => getClientToken());
   const [login, setLogin] = useState('');
@@ -54,6 +67,7 @@ export function ClientPortal() {
   const [epic, setEpic] = useState('');
   const [lot, setLot] = useState(0.1);
   const [error, setError] = useState<string | null>(null);
+  const [savedHint, setSavedHint] = useState<string | null>(null);
   const [tab, setTab] = useState<'home' | 'positions' | 'history' | 'settings'>('home');
   const [positions, setPositions] = useState<Array<Record<string, unknown>>>([]);
   const [history, setHistory] = useState<Array<Record<string, unknown>>>([]);
@@ -111,12 +125,12 @@ export function ClientPortal() {
   }, [token, refresh, loadMarkets]);
 
   useEffect(() => {
-    if (!token || !locked) return;
+    if (!token) return;
     const t = setInterval(() => {
       void refresh().catch(() => undefined);
-    }, 3000);
+    }, running || starting ? 3000 : 8000);
     return () => clearInterval(t);
-  }, [token, locked, refresh]);
+  }, [token, running, starting, refresh]);
 
   const doLogin = async () => {
     setLoginError(null);
@@ -223,13 +237,13 @@ export function ClientPortal() {
 
   if (!token) {
     return (
-      <div className="app">
+      <div className="app login">
         <div className="brand">VS</div>
-        <div className="sub">CLIENT PORTAL</div>
+        <div className="sub">CLIENT</div>
         <div className="card">
           <div className="welcome">LOGIN</div>
           <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-            Use the HTTPS address from your administrator. Login is required.
+            Open the HTTPS address from your administrator. Nothing is installed on this device.
           </p>
           <label className="field">
             <span>Login</span>
@@ -267,117 +281,146 @@ export function ClientPortal() {
     );
   }
 
+  const connClass =
+    status?.connection_status === 'ONLINE' && running
+      ? 'ok'
+      : starting
+        ? 'warn'
+        : status?.connection_status === 'ERROR'
+          ? 'bad'
+          : running
+            ? 'ok'
+            : 'bad';
+
   return (
     <div className="app">
       <div className="brand">VS</div>
-      <div className="sub">CONTROL PANEL</div>
-      <div className={`conn ${running ? 'ok' : starting ? 'warn' : 'bad'}`}>
-        ROBOT {status?.robot_status || (busy ? 'LOADING' : 'STOPPED')}
+      <div className="sub">CLIENT</div>
+      <div className={`conn ${connClass}`}>
+        {status?.connection_status || 'NO DATA'} · ROBOT {status?.robot_status || (busy ? 'LOADING' : 'STOPPED')}
       </div>
-
-      <div className="card">
-        <div className="welcome">WELCOME</div>
-        <div className="name">{status?.client_name || 'Client'}</div>
-        {status?.status_reason || status?.broker_error ? (
-          <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>
-            {status.status_reason || status.broker_error}
-          </div>
-        ) : null}
-      </div>
-
-      <div className="card">
-        <div className="muted" style={{ fontSize: 11, letterSpacing: '0.12em' }}>
-          1. SELECT MARKET
-        </div>
-        {markets.length === 0 ? (
-          <div className="empty">
-            NO MARKETS — ask admin to link a broker account to your login
-          </div>
-        ) : (
-          <select
-            className="select"
-            value={epic}
-            disabled={locked || busy}
-            onChange={(e) => void onMarketChange(e.target.value)}
-          >
-            {!epic ? <option value="">— choose market —</option> : null}
-            {markets.map((m) => (
-              <option key={m.epic} value={m.epic}>
-                {m.display_name || m.symbol || m.epic}
-              </option>
-            ))}
-          </select>
-        )}
-        <div className="row" style={{ marginTop: 10 }}>
-          <span>Active</span>
-          <span>{status?.display_name || selected?.display_name || '—'}</span>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="muted" style={{ fontSize: 11, letterSpacing: '0.12em' }}>
-          2. LOT SIZE
-        </div>
-        <div className="lot">
-          <button
-            type="button"
-            disabled={locked || !selected}
-            onClick={() => void applyLot(lot - (selected?.lot_step || 0.01))}
-          >
-            −
-          </button>
-          <div className="val">{Number(lot).toFixed(2)}</div>
-          <button
-            type="button"
-            disabled={locked || !selected}
-            onClick={() => void applyLot(lot + (selected?.lot_step || 0.01))}
-          >
-            +
-          </button>
-        </div>
-        <div className="presets">
-          {LOT_PRESETS.map((p) => (
-            <button
-              key={p}
-              type="button"
-              className={Math.abs(lot - p) < 1e-9 ? 'on' : ''}
-              disabled={locked || !selected || p < (selected?.min_lot || 0) || p > (selected?.max_lot || 999)}
-              onClick={() => void applyLot(p)}
-            >
-              {p.toFixed(2)}
-            </button>
-          ))}
-        </div>
-        {selected ? (
-          <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>
-            Range {selected.min_lot} – {selected.max_lot} (step {selected.lot_step})
-          </div>
-        ) : null}
-        {savedHint ? <div className="conn ok">{savedHint}</div> : null}
-      </div>
-
-      {status?.live_trade ? (
-        <div className="card">
-          <div className="muted" style={{ fontSize: 11 }}>
-            OPEN POSITION
-          </div>
-          <div className="row">
-            <span>{status.live_trade.display_name}</span>
-            <span>
-              {status.live_trade.side} {status.live_trade.lot_size}
-            </span>
-          </div>
-          <div className="row">
-            <span>Entry</span>
-            <span>{status.live_trade.entry_price ?? '—'}</span>
-          </div>
-        </div>
-      ) : null}
-
-      {error ? <div className="err">{error}</div> : null}
 
       {tab === 'home' ? (
         <>
+          <div className="card">
+            <div className="welcome">ACCOUNT</div>
+            <div className="name">{status?.client_name || 'NO DATA'}</div>
+            {status?.status_reason || status?.broker_error ? (
+              <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>
+                {status.status_reason || status.broker_error}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="card quotes">
+            <div className="welcome">MARKET</div>
+            <div className="name">{status?.display_name || selected?.display_name || 'NO DATA'}</div>
+            <div className="quote-grid">
+              <div>
+                <span>PRICE</span>
+                <strong>{fmt(status?.quote?.mid ?? status?.quote?.bid ?? status?.quote?.ask)}</strong>
+              </div>
+              <div>
+                <span>BID</span>
+                <strong>{fmt(status?.quote?.bid)}</strong>
+              </div>
+              <div>
+                <span>ASK</span>
+                <strong>{fmt(status?.quote?.ask)}</strong>
+              </div>
+              <div>
+                <span>SPREAD</span>
+                <strong>{fmt(status?.quote?.spread)}</strong>
+              </div>
+            </div>
+            <div className="chart-empty">NO CHART — waiting for live ticks from VS CORE</div>
+          </div>
+
+          <div className="card">
+            <div className="muted" style={{ fontSize: 11, letterSpacing: '0.12em' }}>
+              SELECT MARKET
+            </div>
+            {markets.length === 0 ? (
+              <div className="empty">NO MARKETS — ask admin to link a broker account to your login</div>
+            ) : (
+              <select
+                className="select"
+                value={epic}
+                disabled={locked || busy}
+                onChange={(e) => void onMarketChange(e.target.value)}
+              >
+                {!epic ? <option value="">— choose market —</option> : null}
+                {markets.map((m) => (
+                  <option key={m.epic} value={m.epic}>
+                    {m.display_name || m.symbol || m.epic}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          <div className="card">
+            <div className="muted" style={{ fontSize: 11, letterSpacing: '0.12em' }}>
+              LOT
+            </div>
+            <div className="lot">
+              <button
+                type="button"
+                disabled={locked || !selected}
+                onClick={() => void applyLot(lot - (selected?.lot_step || 0.01))}
+              >
+                −
+              </button>
+              <div className="val">{Number(lot).toFixed(2)}</div>
+              <button
+                type="button"
+                disabled={locked || !selected}
+                onClick={() => void applyLot(lot + (selected?.lot_step || 0.01))}
+              >
+                +
+              </button>
+            </div>
+            <div className="presets">
+              {LOT_PRESETS.map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  className={Math.abs(lot - p) < 1e-9 ? 'on' : ''}
+                  disabled={locked || !selected || p < (selected?.min_lot || 0) || p > (selected?.max_lot || 999)}
+                  onClick={() => void applyLot(p)}
+                >
+                  {p.toFixed(2)}
+                </button>
+              ))}
+            </div>
+            {selected ? (
+              <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>
+                Range {selected.min_lot} – {selected.max_lot} (step {selected.lot_step})
+              </div>
+            ) : null}
+            {savedHint ? <div className="conn ok">{savedHint}</div> : null}
+          </div>
+
+          {status?.live_trade ? (
+            <div className="card">
+              <div className="muted" style={{ fontSize: 11 }}>
+                OPEN POSITION
+              </div>
+              <div className="row">
+                <span>{status.live_trade.display_name}</span>
+                <span>
+                  {status.live_trade.side} {status.live_trade.lot_size}
+                </span>
+              </div>
+              <div className="row">
+                <span>Entry</span>
+                <span>{status.live_trade.entry_price ?? 'NO DATA'}</span>
+              </div>
+            </div>
+          ) : null}
+
+          {error ? <div className="err">{error}</div> : null}
+
           <div className="start-wrap">
             {!locked ? (
               <button
@@ -425,11 +468,13 @@ export function ClientPortal() {
               <div className="hist" key={String(p.id)}>
                 <div className="row">
                   <span>{String(p.symbol)}</span>
-                  <span>{String(p.side)} {String(p.lot)}</span>
+                  <span>
+                    {String(p.side)} {String(p.lot)}
+                  </span>
                 </div>
                 <div className="row muted">
-                  <span>entry {String(p.entry_price ?? '—')}</span>
-                  <span>SL {String(p.stop_loss ?? '—')}</span>
+                  <span>entry {String(p.entry_price ?? 'NO DATA')}</span>
+                  <span>SL {String(p.stop_loss ?? 'NO DATA')}</span>
                 </div>
               </div>
             ))
@@ -447,11 +492,13 @@ export function ClientPortal() {
               <div className="hist" key={String(h.id)}>
                 <div className="row">
                   <span>{String(h.symbol)}</span>
-                  <span>P/L {h.pnl == null ? '—' : String(h.pnl)}</span>
+                  <span>P/L {h.pnl == null ? 'NO DATA' : String(h.pnl)}</span>
                 </div>
                 <div className="row muted">
-                  <span>{String(h.side)} {String(h.lot)}</span>
-                  <span>{String(h.exit_reason || '—')}</span>
+                  <span>
+                    {String(h.side)} {String(h.lot)}
+                  </span>
+                  <span>{String(h.exit_reason || 'NO DATA')}</span>
                 </div>
               </div>
             ))
@@ -462,8 +509,18 @@ export function ClientPortal() {
       {tab === 'settings' ? (
         <div className="card">
           <div className="welcome">SETTINGS</div>
-          <div className="row"><span>Client</span><span>{status?.client_name || '—'}</span></div>
-          <div className="row"><span>Status</span><span>{status?.robot_status || '—'}</span></div>
+          <div className="row">
+            <span>Client</span>
+            <span>{status?.client_name || 'NO DATA'}</span>
+          </div>
+          <div className="row">
+            <span>Connection</span>
+            <span>{status?.connection_status || 'NO DATA'}</span>
+          </div>
+          <div className="row">
+            <span>Status</span>
+            <span>{status?.robot_status || 'NO DATA'}</span>
+          </div>
           <button className="link" type="button" onClick={() => void logout()}>
             Sign out
           </button>
@@ -471,10 +528,18 @@ export function ClientPortal() {
       ) : null}
 
       <nav className="bottom-nav">
-        <button type="button" className={tab === 'home' ? 'on' : ''} onClick={() => setTab('home')}>HOME</button>
-        <button type="button" className={tab === 'positions' ? 'on' : ''} onClick={() => setTab('positions')}>POSITIONS</button>
-        <button type="button" className={tab === 'history' ? 'on' : ''} onClick={() => setTab('history')}>HISTORY</button>
-        <button type="button" className={tab === 'settings' ? 'on' : ''} onClick={() => setTab('settings')}>SETTINGS</button>
+        <button type="button" className={tab === 'home' ? 'on' : ''} onClick={() => setTab('home')}>
+          HOME
+        </button>
+        <button type="button" className={tab === 'positions' ? 'on' : ''} onClick={() => setTab('positions')}>
+          POSITIONS
+        </button>
+        <button type="button" className={tab === 'history' ? 'on' : ''} onClick={() => setTab('history')}>
+          HISTORY
+        </button>
+        <button type="button" className={tab === 'settings' ? 'on' : ''} onClick={() => setTab('settings')}>
+          SETTINGS
+        </button>
       </nav>
     </div>
   );

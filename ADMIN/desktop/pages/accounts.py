@@ -1,18 +1,33 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from pages.base import Page
+from widgets.chrome import VsTable
 
-from pages.resource import ResourcePage
 
-
-class AccountsPage(ResourcePage):
-    def __init__(self) -> None:
+class AccountsPage(Page):
+    def __init__(self):
         super().__init__("ACCOUNTS")
-        extra = QWidget()
-        lay = QVBoxLayout(extra)
-        lay.setContentsMargins(0, 0, 0, 0)
-        self.note = QLabel("Client trading accounts are provisioned from CLIENTS. This view shows live CORE account/position state.")
-        self.note.setWordWrap(True)
-        self.note.setObjectName("muted")
-        lay.addWidget(self.note)
-        self.layout().insertWidget(1, extra)
+        self.set_note("Trading accounts bound to CLIENT logins. Provisioning is done on CLIENTS.")
+        self.table = VsTable(
+            ["LOGIN", "ACCOUNT", "ACCESS", "ROBOT", "MARKET", "LOT"],
+            ["name", "account", "access", "robot", "market", "lot"],
+        )
+        self.root.addWidget(self.table, 1)
+
+    def apply(self, s: dict) -> None:
+        self.mark_disconnected(s)
+        rows = []
+        for c in s.get("clients") or []:
+            if not isinstance(c, dict):
+                continue
+            rows.append(
+                {
+                    "name": c.get("name") or "—",
+                    "account": c.get("account_id") or c.get("account_name") or "—",
+                    "access": "ENABLED" if c.get("access_enabled") else "DISABLED",
+                    "robot": c.get("robot_status") or "STOPPED",
+                    "market": c.get("panel_epic") or "—",
+                    "lot": c.get("panel_lot_size") if c.get("panel_lot_size") is not None else "—",
+                }
+            )
+        self.table.set_rows(rows)

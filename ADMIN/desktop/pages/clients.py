@@ -1,54 +1,40 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import (
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QMessageBox,
-    QPushButton,
-    QTableView,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton
 
-from models.table_model import DictTableModel
+from pages.base import Page
 from services.api import ApiError, ControlApi
+from widgets.chrome import VsTable
 
 
-class ClientsPage(QWidget):
+class ClientsPage(Page):
     def __init__(self, api: ControlApi):
-        super().__init__()
+        super().__init__("CLIENTS")
         self.api = api
-        root = QVBoxLayout(self)
-        title = QLabel("CLIENTS")
-        title.setObjectName("Section")
-        root.addWidget(title)
         row = QHBoxLayout()
         self.name = QLineEdit()
         self.name.setPlaceholderText("login name")
         create = QPushButton("CREATE WEB LOGIN")
         create.setObjectName("Primary")
         create.clicked.connect(self._create)
-        row.addWidget(self.name)
+        row.addWidget(self.name, 1)
         row.addWidget(create)
-        root.addLayout(row)
-        self.hint = QLabel(
-            "Create a client HTTPS login. Password is shown once. Public URL comes from /etc/vs/client-url."
+        self.root.addLayout(row)
+        hint = QLabel(
+            "Creates a CLIENT HTTPS login. Password is shown once. Public URL is /etc/vs/client-url on :443. "
+            "This panel contains no trading logic."
         )
-        self.hint.setWordWrap(True)
-        self.hint.setObjectName("muted")
-        root.addWidget(self.hint)
-        self.model = DictTableModel(
+        hint.setWordWrap(True)
+        hint.setObjectName("muted")
+        self.root.addWidget(hint)
+        self.table = VsTable(
             ["LOGIN", "ACCESS", "ROBOT", "MARKET", "LOT"],
             ["name", "access", "robot", "market", "lot"],
         )
-        self.table = QTableView()
-        self.table.setModel(self.model)
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.verticalHeader().setVisible(False)
-        root.addWidget(self.table, 1)
+        self.root.addWidget(self.table, 1)
 
     def apply(self, s: dict) -> None:
+        self.mark_disconnected(s)
         rows = []
         for c in s.get("clients") or []:
             if not isinstance(c, dict):
@@ -62,7 +48,7 @@ class ClientsPage(QWidget):
                     "lot": c.get("panel_lot_size") if c.get("panel_lot_size") is not None else "—",
                 }
             )
-        self.model.set_rows(rows)
+        self.table.set_rows(rows)
 
     def _create(self) -> None:
         login = self.name.text().strip()

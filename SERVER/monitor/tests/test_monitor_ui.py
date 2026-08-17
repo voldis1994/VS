@@ -16,5 +16,11 @@ def test_monitor_window_launches():
     app.processEvents()
     assert win.windowTitle() == "VS Server Monitor"
     assert "LIVE" in win.live.text() or "OFFLINE" in win.live.text() or "DISCONNECTED" in win.live.text()
+    win.on_snapshot({"_connected": True, "_ts": "now", "uptime_human": "1h", "system": {}, "admin": {"connected": True}})
+    app.processEvents()
+    assert "LIVE READY" in win.live.text()
+    win.on_snapshot({"_connected": False, "_ts": "now"})
+    app.processEvents()
+    assert "OFFLINE" in win.live.text()
     win.close()
     app.processEvents()
