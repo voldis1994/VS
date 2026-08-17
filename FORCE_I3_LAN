@@ -15,6 +15,11 @@ echo "PROOF (must be 0.0.0.0 and VS-CORE):"
 ss -lntp | grep ':3000' || true
 LAN_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
 curl -fsS "http://${LAN_IP}:3000/health"; echo
+echo
+echo "CLIENT portal is THIS process (no Express, no AWS CentOS):"
+echo "  http://${LAN_IP}:3000/"
+echo "  Do NOT run /home/centos/portal or start-portal.sh on another host."
+echo
 echo "MSI next:"
 echo "  cd /d C:\\VS-main"
 echo "  git pull origin main"
