@@ -1,14 +1,12 @@
-# Final network audit
+# Network audit
 
-| PORT | SERVICE | BIND | ACCESS | PUBLIC? | PURPOSE |
-|---|---|---|---|---|---|
-| 3000 | VS Control / ADMIN API | `0.0.0.0` on i3, firewall LAN+WG | MSI LAN, localhost, WireGuard | NO | Private administration + identity `/health` |
-| 443 | VS CLIENT gateway | `0.0.0.0` | Internet clients | YES | HTTPS (or HTTP until `/etc/vs/tls` exists) client web + `/api/client*` |
-| 5188 | VS ADMIN local UI | `127.0.0.1` on MSI | MSI browser only | NO | Built ADMIN frontend |
-| 5432 | PostgreSQL | `127.0.0.1` | i3 only | NO | Database |
-| 6379 | Redis | `127.0.0.1` | i3 only | NO | Cache / state |
-| 51820/udp | WireGuard | i3 public UDP | Remote devices | YES | Optional remote tunnel |
+| Port | Role | Bind | Who | Internet | Notes |
+|------|------|------|-----|----------|-------|
+| 3000 | VS private Control / ADMIN API | i3 LAN / WG | MSI Admin.exe, i3 monitor | NO | Identity `VS-CORE` / `VS-CORE-01` |
+| 443 | VS public CLIENT HTTPS | i3 / gateway | Internet clients | YES | `/etc/vs/client-url` |
+| 5432 | PostgreSQL | localhost | CORE | NO | |
+| 6379 | Redis | localhost | CORE | NO | |
+| 5188 | removed | — | — | — | Old ADMIN web UI archived |
+| 5173 | removed | — | — | — | Old Vite ADMIN archived |
 
-5173 is not a production port.
-
-CLIENT stable URL is `/etc/vs/client-url`. Updates do not rewrite that file.
+ADMIN desktop application does not listen on any TCP port.

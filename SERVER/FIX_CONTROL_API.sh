@@ -81,6 +81,7 @@ mkdir -p "$PREFIX/deploy" "$PREFIX/network"
 rsync -a "$HERE/deploy/" "$PREFIX/deploy/"
 rsync -a "$HERE/network/" "$PREFIX/network/" 2>/dev/null || true
 cp -a "$HERE/MONITOR_SERVER" "$PREFIX/MONITOR_SERVER"
+rsync -a --delete --exclude '__pycache__' "$HERE/monitor/" "$PREFIX/monitor/" 2>/dev/null || true
 cp -a "$HERE/SHOW_LIVE_MONITOR.sh" "$PREFIX/SHOW_LIVE_MONITOR.sh" 2>/dev/null || true
 cp -a "$HERE/STATUS_SERVER" "$PREFIX/STATUS_SERVER" 2>/dev/null || true
 cp -a "$HERE/START_SERVER" "$PREFIX/START_SERVER" 2>/dev/null || true

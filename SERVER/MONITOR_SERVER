@@ -2,11 +2,8 @@
 # MONITOR_SERVER — local read-only physical status display for i3 console.
 # Closing this does NOT stop vs-server, Postgres, Redis, or WireGuard.
 #
-# Prefer:  vs-monitor
-# Or:      sudo bash SERVER/SHOW_LIVE_MONITOR.sh
-#
-# Does NOT source /var/lib/vs-server/server.env secrets.
-# Uses localhost Control API console endpoint instead.
+# Primary: native PySide6 VS Server Monitor when a graphical session exists.
+# Fallback: tsx TUI, then curl console text.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -26,6 +23,36 @@ export CONTROL_API_PORT="$PORT"
 export VS_MONITOR_API_URL="$BASE"
 export VS_MONITOR_REFRESH_MS="$REFRESH_MS"
 export LIVE_TRADING_ENABLED="${LIVE_TRADING_ENABLED:-false}"
+
+resolve_gui() {
+  local candidates=(
+    "$ROOT/monitor/main.py"
+    "$PREFIX/monitor/main.py"
+    "$ROOT/../monitor/main.py"
+  )
+  local f
+  for f in "${candidates[@]}"; do
+    if [[ -f "$f" ]]; then
+      echo "$f"
+      return 0
+    fi
+  done
+  return 1
+}
+
+run_gui_monitor() {
+  local gui="$1"
+  if [[ -n "${VS_MONITOR_TUI:-}" ]]; then
+    return 1
+  fi
+  if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+    return 1
+  fi
+  if ! python3 -c "import PySide6" >/dev/null 2>&1; then
+    return 1
+  fi
+  exec python3 "$gui"
+}
 
 resolve_api_dir() {
   local candidates=(
@@ -70,7 +97,7 @@ run_tsx_monitor() {
 # Bash/curl fallback — works without tsx once Control API is up.
 # Never reads server.env. Never invents LIVE.
 run_curl_monitor() {
-  echo "VS SERVER MONITOR (curl console) — read-only; Ctrl+C stops monitor only" >&2
+  echo "VS SERVER MONITOR (TUI fallback) — read-only; Ctrl+C stops monitor only" >&2
   echo "API $BASE  refresh ${REFRESH_MS}ms" >&2
   local frame
   while true; do
@@ -113,6 +140,11 @@ EOF
   done
 }
 
+GUI=""
+if GUI="$(resolve_gui)"; then
+  run_gui_monitor "$GUI" || true
+fi
+
 API_DIR=""
 if API_DIR="$(resolve_api_dir)"; then
   if [[ -x "$API_DIR/node_modules/.bin/tsx" || -d "$API_DIR/node_modules/tsx" ]]; then
@@ -120,7 +152,6 @@ if API_DIR="$(resolve_api_dir)"; then
   fi
 fi
 
-# If tsx path failed or missing — still show a live dashboard via curl.
-echo "WARN: local tsx runtime missing under installed control-api — using console API fallback" >&2
-echo "      Fix permanently: sudo bash SERVER/install/INSTALL_I3_SERVER.sh" >&2
+echo "WARN: graphical VS Server Monitor unavailable — using console API fallback" >&2
+echo "      Install PySide6 on i3 desktop, or keep this TUI on headless hosts." >&2
 run_curl_monitor

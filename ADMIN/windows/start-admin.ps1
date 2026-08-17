@@ -2,35 +2,21 @@
 <#
 .SYNOPSIS
   Canonical VS ADMIN production start (called by START_MSI.bat).
-  Serves ADMIN/desktop/dist on 127.0.0.1:5188 — never Vite dev.
+  Launches native VS Admin.exe — never Vite, never a local HTTP UI, never a browser.
 #>
 
 $ErrorActionPreference = "Continue"
 $AdminRoot = Split-Path -Parent $PSScriptRoot
 $RepoRoot = Split-Path -Parent $AdminRoot
-$Dash = Join-Path $AdminRoot "desktop"
-$Runtime = Join-Path $AdminRoot "runtime\serve-admin.mjs"
+$Desktop = Join-Path $AdminRoot "desktop"
+$Exe = Join-Path $PSScriptRoot "dist\VS Admin.exe"
 $Cfg = Join-Path $AdminRoot "config\control-panel.env"
-$PidFile = Join-Path $env:LOCALAPPDATA "VS\admin\control-panel.pid"
-$IdentityFile = Join-Path $env:LOCALAPPDATA "VS\admin\runtime-identity.txt"
-$UiPort = 5188
+$PidFile = Join-Path $env:LOCALAPPDATA "VS\admin\vs-admin.pid"
 Set-Location $RepoRoot
 
 function Write-Fail([string]$Msg) {
   Write-Host ("FAIL: " + $Msg)
   exit 1
-}
-
-function Get-CfgValue([string]$Path, [string]$Key) {
-  if (-not (Test-Path $Path)) { return $null }
-  foreach ($line in Get-Content $Path) {
-    $t = $line.Trim()
-    if (-not $t -or $t.StartsWith("#")) { continue }
-    $i = $t.IndexOf("=")
-    if ($i -lt 1) { continue }
-    if ($t.Substring(0, $i).Trim() -eq $Key) { return $t.Substring($i + 1).Trim() }
-  }
-  return $null
 }
 
 function Test-VsCoreIdentity([string]$Url) {
@@ -60,49 +46,44 @@ function Test-VsCoreIdentity([string]$Url) {
   }
 }
 
-function Get-ListenPid([int]$Port) {
-  try {
-    $c = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($c -and $c.OwningProcess) { return [int]$c.OwningProcess }
-  } catch { }
-  return $null
+function Get-VsAdminProcess {
+  Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.Name -match 'VS Admin' -or
+      ($_.CommandLine -and $_.CommandLine -match 'VS Admin\.exe') -or
+      ($_.CommandLine -and $_.CommandLine -match 'ADMIN\\desktop\\main\.py')
+    }
 }
 
-function Get-ProcessCommand([int]$ProcId) {
-  try {
-    $p = Get-CimInstance Win32_Process -Filter ("ProcessId=" + $ProcId) -ErrorAction SilentlyContinue
-    if ($p) { return [string]$p.CommandLine }
-  } catch { }
-  try {
-    $p2 = Get-Process -Id $ProcId -ErrorAction SilentlyContinue
-    if ($p2) { return $p2.ProcessName }
-  } catch { }
-  return ""
+function Focus-VsAdminWindow {
+  Add-Type -Namespace VsAdmin -Name Native -MemberDefinition @"
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+"@ -ErrorAction SilentlyContinue
+  Get-Process | Where-Object { $_.MainWindowTitle -eq "VS Admin" } | ForEach-Object {
+    [void][VsAdmin.Native]::ShowWindow($_.MainWindowHandle, 9)
+    [void][VsAdmin.Native]::SetForegroundWindow($_.MainWindowHandle)
+  }
 }
 
-function Test-IsVsAdminCommand([string]$Cmd) {
-  if (-not $Cmd) { return $false }
-  return ($Cmd -match 'serve-admin\.mjs' -or $Cmd -match 'ADMIN\\desktop\\dist' -or $Cmd -match 'VS_ADMIN_DIST')
-}
-
-# --- Canonical UI hard checks ---
-$Pkg = Join-Path $Dash "package.json"
-$Index = Join-Path $Dash "index.html"
-if (-not (Test-Path $Pkg)) { Write-Fail "ADMIN/desktop missing — run ADMIN\INSTALL_ADMIN.bat" }
-$pkgJson = Get-Content $Pkg -Raw
-if ($pkgJson -notmatch '"name"\s*:\s*"@vs/admin-desktop"') {
-  Write-Fail "ADMIN/desktop/package.json is not @vs/admin-desktop"
-}
-if (-not (Test-Path $Index)) { Write-Fail "ADMIN/desktop/index.html missing" }
-$idx = Get-Content $Index -Raw
-if ($idx -notmatch '<title>VS ADMIN</title>') { Write-Fail "index.html title must be VS ADMIN" }
-if ($idx -match 'TACTICAL|VS SYSTEM') { Write-Fail "ADMIN/desktop contains legacy tactical markers" }
 if ((Get-Location).Path -like "*legacy-review*" -or (Get-Location).Path -like "*old version*") {
   Write-Fail "CWD is archive — production START refuses"
 }
-if (-not (Test-Path $Runtime)) { Write-Fail "missing ADMIN/runtime/serve-admin.mjs" }
+if (-not (Test-Path (Join-Path $Desktop "main.py"))) {
+  Write-Fail "ADMIN/desktop/main.py missing — native Admin source required"
+}
 
-# Load prior env
+$existing = @(Get-VsAdminProcess)
+if ($existing.Count -gt 0) {
+  Write-Host ("ADMIN already RUNNING pid=" + $existing[0].ProcessId + " — focus existing window")
+  Focus-VsAdminWindow
+  Write-Host "VS ADMIN"
+  Write-Host "  SERVER       VS-CORE-01"
+  Write-Host "  UI           native VS Admin.exe"
+  Write-Host "  NOTE         no second process started"
+  exit 0
+}
+
 if (Test-Path $Cfg) {
   Get-Content $Cfg | ForEach-Object {
     $line = $_.Trim()
@@ -114,12 +95,10 @@ if (Test-Path $Cfg) {
 }
 
 Write-Host "========================================"
-Write-Host " VS ADMIN — PRODUCTION UI"
-Write-Host " UI PATH = ADMIN\desktop\dist"
-Write-Host " UI PORT = $UiPort  (localhost only)"
+Write-Host " VS ADMIN — NATIVE DESKTOP"
+Write-Host " UI = VS Admin.exe  (no browser, no local HTTP UI)"
 Write-Host "========================================"
 
-# Resolve i3 URL from SERVER_IP.txt (no subnet scan)
 $ipFile = Join-Path $AdminRoot "config\SERVER_IP.txt"
 if (-not (Test-Path $ipFile)) { Write-Fail "missing ADMIN\config\SERVER_IP.txt — write i3 LAN IP, one line" }
 $targetIp = (Get-Content -LiteralPath $ipFile -TotalCount 1).Trim()
@@ -137,9 +116,7 @@ if (-not (Test-VsCoreIdentity $serverUrl)) {
 }
 Write-Host "OK identity VS-CORE-01"
 
-# LAN bootstrap token
-$adminToken = $env:VITE_API_ADMIN_TOKEN
-if (-not $adminToken) { $adminToken = $env:API_ADMIN_TOKEN }
+$adminToken = $env:API_ADMIN_TOKEN
 if (-not $adminToken) { $adminToken = "" }
 $bootTmp = Join-Path $env:TEMP "vs-lan-boot.json"
 if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
@@ -154,115 +131,33 @@ if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
 }
 
 $env:VS_SERVER_URL = $serverUrl
-$env:VITE_API_URL = $serverUrl
-$env:VS_ADMIN_TRANSPORT = $transport.ToLower()
-$env:VITE_API_ADMIN_TOKEN = $adminToken
+$env:VS_ADMIN_TRANSPORT = $transport
 $env:API_ADMIN_TOKEN = $adminToken
+$env:VS_ADMIN_TOKEN = $adminToken
 
 New-Item -ItemType Directory -Force -Path (Split-Path $Cfg) | Out-Null
 @(
   "VS_SERVER_URL=$serverUrl",
-  "VITE_API_URL=$serverUrl",
-  "VS_LAN_SERVER_URL=$serverUrl",
-  "VS_ADMIN_TRANSPORT=$($transport.ToLower())",
-  "API_ADMIN_TOKEN=$adminToken",
-  "VITE_API_ADMIN_TOKEN=$adminToken"
+  "VS_ADMIN_TRANSPORT=$transport",
+  "API_ADMIN_TOKEN=$adminToken"
 ) | Set-Content -Path $Cfg -Encoding ascii
 
-# Runtime config for the built UI (copied into dist)
-$PublicDir = Join-Path $Dash "public"
-New-Item -ItemType Directory -Force -Path $PublicDir | Out-Null
-$runtimeJs = @"
-window.VS_ADMIN_RUNTIME = {
-  product: "VS ADMIN",
-  ui: "ADMIN/desktop",
-  serverId: "VS-CORE-01",
-  apiBase: "$serverUrl",
-  adminToken: "$adminToken",
-  transport: "$transport",
-  deviceId: "VS-ADMIN-01",
-  startedAt: "$(Get-Date -Format o)"
-};
-"@
-$utf8NoBom = New-Object System.Text.UTF8Encoding $false
-[System.IO.File]::WriteAllText((Join-Path $PublicDir "runtime-config.js"), $runtimeJs, $utf8NoBom)
-
-# Reuse existing VS ADMIN on :5188
-$listenPid = Get-ListenPid $UiPort
-if ($listenPid) {
-  $cmd = Get-ProcessCommand $listenPid
-  if (Test-IsVsAdminCommand $cmd) {
-    Write-Host ("ADMIN already RUNNING pid=" + $listenPid + " — reuse")
-    try { Start-Process ("http://127.0.0.1:" + $UiPort + "/") } catch { }
-    Write-Host "VS ADMIN"
-    Write-Host "  SERVER       VS-CORE-01"
-    Write-Host "  SERVER API   CONNECTED"
-    Write-Host "  TRANSPORT    $transport"
-    Write-Host "  ADMIN        RUNNING"
-    Write-Host "  HEARTBEAT    LIVE"
-    Write-Host ("  UI           http://127.0.0.1:" + $UiPort + "/")
-    exit 0
-  }
-  Write-Host "PORT 5188 OCCUPIED"
-  Write-Host ("PID " + $listenPid)
-  Write-Host ("PROCESS " + $cmd)
-  Write-Host "Foreign process — not killed. Stop it or choose another host."
-  exit 1
+if (-not (Test-Path $Exe)) {
+  Write-Host "VS Admin.exe not built yet — run ADMIN\windows\BUILD_ADMIN.bat"
+  Write-Fail "missing ADMIN\windows\dist\VS Admin.exe"
 }
-
-# Build dist if missing or stale vs source
-$DistDir = Join-Path $Dash "dist"
-$needBuild = $false
-if (-not (Test-Path (Join-Path $DistDir "index.html"))) { $needBuild = $true }
-if (-not (Test-Path (Join-Path $Dash "node_modules"))) { Write-Fail "run ADMIN\INSTALL_ADMIN.bat first" }
-if ($needBuild) {
-  Write-Host "Building ADMIN/desktop (production)..."
-  $npmCmd = Get-Command npm.cmd -ErrorAction SilentlyContinue
-  if (-not $npmCmd) { $npmCmd = Get-Command npm -ErrorAction SilentlyContinue }
-  if (-not $npmCmd) { Write-Fail "npm not found" }
-  Push-Location $Dash
-  & $npmCmd.Source run build
-  $b = $LASTEXITCODE
-  Pop-Location
-  if ($b -ne 0) { Write-Fail "npm run build failed" }
-} else {
-  Write-Host "Using existing ADMIN/desktop/dist"
-}
-Copy-Item (Join-Path $PublicDir "runtime-config.js") (Join-Path $DistDir "runtime-config.js") -Force -ErrorAction SilentlyContinue
-
-$node = Get-Command node.exe -ErrorAction SilentlyContinue
-if (-not $node) { $node = Get-Command node -ErrorAction SilentlyContinue }
-if (-not $node) { Write-Fail "node not found" }
 
 New-Item -ItemType Directory -Force -Path (Split-Path $PidFile) | Out-Null
-$env:VS_ADMIN_DIST = $DistDir
-$env:VS_ADMIN_UI_HOST = "127.0.0.1"
-$env:VS_ADMIN_UI_PORT = "$UiPort"
-
-$p = Start-Process -FilePath $node.Source `
-  -ArgumentList @($Runtime) `
-  -WorkingDirectory $AdminRoot `
-  -PassThru `
-  -NoNewWindow
-if (-not $p) { Write-Fail "could not start ADMIN runtime" }
+$p = Start-Process -FilePath $Exe -WorkingDirectory $Desktop -PassThru
+if (-not $p) { Write-Fail "could not start VS Admin.exe" }
 $p.Id | Set-Content -Path $PidFile -Encoding ascii
-("VS-ADMIN pid=" + $p.Id + " started=" + (Get-Date -Format o) + " api=" + $serverUrl) | Set-Content -Path $IdentityFile -Encoding ascii
 
-Start-Sleep -Seconds 1
-try { Start-Process ("http://127.0.0.1:" + $UiPort + "/") } catch { }
-
+Start-Sleep -Milliseconds 800
 Write-Host "VS ADMIN"
 Write-Host "  SERVER       VS-CORE-01"
 Write-Host "  SERVER API   CONNECTED"
 Write-Host "  TRANSPORT    $transport"
-Write-Host "  ADMIN        RUNNING"
-Write-Host "  HEARTBEAT    (opens with UI)"
-Write-Host ("  UI           http://127.0.0.1:" + $UiPort + "/")
+Write-Host "  ADMIN        VS Admin.exe"
+Write-Host "  UI           native window (no browser)"
 Write-Host "STOP: ADMIN\STOP_ADMIN.bat   (does not stop i3)"
-
-try {
-  Wait-Process -Id $p.Id
-  exit 0
-} finally {
-  Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
-}
+exit 0

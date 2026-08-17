@@ -9,7 +9,7 @@ echo ########################################
 echo #  VS ADMIN — START_MSI
 echo ########################################
 
-if not exist "%~dp0ADMIN\desktop\package.json" (
+if not exist "%~dp0ADMIN\desktop\main.py" (
   echo FAIL: not VS repo root. Use C:\VS-main
   echo cwd=%CD%
   pause
@@ -32,6 +32,16 @@ if not exist "%~dp0ADMIN\config\SERVER_IP.txt" (
   echo Example: echo 192.168.0.10^> ADMIN\config\SERVER_IP.txt
   pause
   exit /b 1
+)
+
+if not exist "%~dp0ADMIN\windows\dist\VS Admin.exe" (
+  echo VS Admin.exe missing — building once via ADMIN\windows\BUILD_ADMIN.bat
+  call "%~dp0ADMIN\windows\BUILD_ADMIN.bat"
+  if errorlevel 1 (
+    echo START_MSI FAILED — native build required
+    pause
+    exit /b 1
+  )
 )
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0ADMIN\windows\start-admin.ps1"

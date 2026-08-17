@@ -31,19 +31,20 @@ function Get-CfgValue([string]$Path, [string]$Key) {
 }
 
 Write-Host "VS ADMIN STATUS"
-Write-Host "Resolving endpoint on LAN (Wi-Fi)..."
 
 $token = $env:API_ADMIN_TOKEN
 $candidates = New-Object System.Collections.Generic.List[string]
+$ipFile = Join-Path $AdminRoot "config\SERVER_IP.txt"
+if (Test-Path $ipFile) {
+  $ip = (Get-Content -LiteralPath $ipFile -TotalCount 1).Trim()
+  if ($ip -match '^\d+\.\d+\.\d+\.\d+$') { [void]$candidates.Add("http://${ip}:3000") }
+}
 if (Test-Path $Cfg) {
-  foreach ($k in @("VS_SERVER_URL", "VITE_API_URL", "VS_LAN_SERVER_URL", "API_ADMIN_TOKEN", "VITE_API_ADMIN_TOKEN")) {
+  foreach ($k in @("VS_SERVER_URL", "API_ADMIN_TOKEN")) {
     $v = Get-CfgValue $Cfg $k
     if ($k -match "TOKEN" -and $v) { $token = $v }
-    elseif ($v -and $v -notmatch '10\.77\.') { [void]$candidates.Add($v.TrimEnd("/")) }
+    elseif ($v) { [void]$candidates.Add($v.TrimEnd("/")) }
   }
-}
-foreach ($c in @("http://192.168.0.10:3000", "http://192.168.0.53:3000", "http://192.168.1.10:3000")) {
-  [void]$candidates.Add($c)
 }
 
 $serverUrl = $null

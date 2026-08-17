@@ -24,7 +24,7 @@ const PROD_ROOTS = [
   join(ROOT, 'ADMIN/desktop'),
   join(ROOT, 'ADMIN/app'),
   join(ROOT, 'ADMIN/connection'),
-  join(ROOT, 'CLIENT/desktop'),
+  join(ROOT, 'CLIENT/web'),
   join(ROOT, 'CLIENT/connection'),
   join(ROOT, 'SHARED'),
 ];
@@ -45,6 +45,6 @@ describe('production must not import legacy-review', () => {
     // Presence of archive is OK; production entrypoints must not live there.
     expect(existsSync(join(ROOT, 'SERVER/control-api'))).toBe(true);
     expect(existsSync(join(ROOT, 'ADMIN/desktop'))).toBe(true);
-    expect(existsSync(join(ROOT, 'CLIENT/desktop'))).toBe(true);
+    expect(existsSync(join(ROOT, 'CLIENT/web'))).toBe(true);
   });
 });

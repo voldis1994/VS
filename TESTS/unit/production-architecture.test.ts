@@ -1,5 +1,5 @@
 /**
- * Production architecture invariants after cleanup.
+ * Production architecture invariants after desktop UI correction.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync, existsSync } from 'fs';
@@ -44,14 +44,20 @@ describe('canonical production architecture', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('START_MSI uses production runtime not Vite dev', () => {
+  it('START_MSI launches native VS Admin.exe and does not serve a local web UI', () => {
     const msi = readFileSync(join(ROOT, 'START_MSI.bat'), 'utf8');
     expect(msi).toMatch(/start-admin\.ps1/);
+    expect(msi).toMatch(/VS Admin\.exe/);
+    expect(msi).toMatch(/BUILD_ADMIN\.bat/);
     const ps1 = readFileSync(join(ROOT, 'ADMIN/windows/start-admin.ps1'), 'utf8');
-    expect(ps1).toContain('serve-admin.mjs');
+    expect(ps1).toContain('VS Admin.exe');
+    expect(ps1).not.toMatch(/serve-admin\.mjs/);
     expect(ps1).not.toMatch(/npm exec.*vite|vite --host/);
-    expect(ps1).toMatch(/PORT 5188 OCCUPIED/);
-    expect(existsSync(join(ROOT, 'ADMIN/runtime/serve-admin.mjs'))).toBe(true);
+    expect(ps1).not.toMatch(/5188/);
+    expect(ps1).not.toMatch(/5173/);
+    expect(existsSync(join(ROOT, 'ADMIN/desktop/main.py'))).toBe(true);
+    expect(existsSync(join(ROOT, 'ADMIN/runtime/serve-admin.mjs'))).toBe(false);
+    expect(existsSync(join(ROOT, 'ADMIN/windows/BUILD_ADMIN.bat'))).toBe(true);
   });
 
   it('client gateway exists and blocks admin paths', () => {
@@ -67,5 +73,27 @@ describe('canonical production architecture', () => {
     expect(fw).toMatch(/192\.168\.0\.0\/16/);
     expect(fw).toMatch(/5432/);
     expect(fw).not.toMatch(/ufw allow "\$\{API_PORT\}\/tcp"/);
+  });
+
+  it('production ADMIN and Control API do not listen on 5188/5173', () => {
+    const prodFiles = [
+      join(ROOT, 'START_MSI.bat'),
+      join(ROOT, 'ADMIN/windows/start-admin.ps1'),
+      join(ROOT, 'ADMIN/windows/stop-admin.ps1'),
+      join(ROOT, 'ADMIN/windows/BUILD_ADMIN.bat'),
+      join(ROOT, 'SERVER/control-api/src/index.ts'),
+    ];
+    for (const f of prodFiles) {
+      const src = readFileSync(f, 'utf8');
+      expect(src).not.toMatch(/:\s*5188|port 5188|UiPort\s*=\s*5188/i);
+      expect(src).not.toMatch(/:\s*5173|port 5173/i);
+    }
+  });
+
+  it('CLIENT web app exists and ADMIN is native python', () => {
+    expect(existsSync(join(ROOT, 'CLIENT/web/package.json'))).toBe(true);
+    expect(existsSync(join(ROOT, 'ADMIN/desktop/main.py'))).toBe(true);
+    expect(existsSync(join(ROOT, 'SERVER/monitor/main.py'))).toBe(true);
+    expect(existsSync(join(ROOT, 'ADMIN/desktop/vite.config.ts'))).toBe(false);
   });
 });

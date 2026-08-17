@@ -1,6 +1,6 @@
 @echo off
 REM =============================================================================
-REM STOP_ADMIN.bat - stop local Control Panel (Vite) on this Windows PC
+REM STOP_ADMIN.bat - stop native VS Admin.exe on this Windows PC
 REM =============================================================================
 setlocal EnableExtensions
 cd /d "%~dp0"

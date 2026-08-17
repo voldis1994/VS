@@ -1,16 +1,11 @@
 {
   "name": "vs-admin",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "VS ADMIN — Control Panel client + diagnostic for VS SERVER (runs on MSI, not i3)",
+  "description": "VS ADMIN — native desktop operator console (PySide6) plus LAN identity tests",
   "scripts": {
-    "start": "tsx app/startAdmin.ts",
-    "install:admin": "tsx app/installAdmin.ts",
     "test": "vitest run connection"
-  },
-  "dependencies": {
-    "tsx": "^4.19.0"
   },
   "devDependencies": {
     "@types/node": "^22.5.0",

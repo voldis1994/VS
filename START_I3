@@ -50,7 +50,7 @@ echo "#  VS CORE READY"
 echo "#  SERVER ID     VS-CORE-01"
 echo "#  ADMIN API     http://${LAN_IP}:3000/health   (LAN only)"
 echo "#  CLIENT HTTPS  ${STABLE:-set /etc/vs/client-url}  (:443)"
-echo "#  MONITOR       vs-monitor"
+echo "#  MONITOR       native VS Server Monitor (GUI if display; TUI fallback)"
 echo "#  MSI           START_MSI.bat  SERVER_IP=${LAN_IP}"
 echo "########################################"
 

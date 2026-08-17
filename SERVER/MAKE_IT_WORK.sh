@@ -57,7 +57,12 @@ if [[ -d "$HERE/../SHARED" ]]; then
 fi
 chmod +x "$PREFIX/deploy/"*.sh
 cp -a "$HERE/MONITOR_SERVER" "$PREFIX/MONITOR_SERVER"
+rsync -a --delete --exclude '__pycache__' "$HERE/monitor/" "$PREFIX/monitor/"
 install -m 0755 "$HERE/deploy/vs-monitor" /usr/local/bin/vs-monitor
+if command -v python3 >/dev/null 2>&1; then
+  python3 -m pip install --quiet -r "$HERE/monitor/requirements.txt" >/dev/null 2>&1 || \
+    echo "WARN: PySide6 not installed — VS Server Monitor will use TUI fallback"
+fi
 
 # Prove market-intelligence export exists on disk before boot
 if ! grep -q 'buildMarketStateVector' "$PREFIX/core/market-intelligence/src/index.ts" 2>/dev/null; then
@@ -206,7 +211,10 @@ fi
 echo "OK: Postgres accepts DB_PASSWORD on database $DB_NAME"
 
 # --- Build CLIENT web portal (market / lot / START STOP) ---
-CLIENT_SRC="$REPO/CLIENT/desktop"
+CLIENT_SRC="$REPO/CLIENT/web"
+if [[ ! -f "$CLIENT_SRC/package.json" && -f "$REPO/CLIENT/desktop/package.json" ]]; then
+  CLIENT_SRC="$REPO/CLIENT/desktop"
+fi
 CLIENT_DIST="$PREFIX/client-panel"
 echo "==> build CLIENT web panel → $CLIENT_DIST"
 if [[ -f "$CLIENT_SRC/package.json" ]]; then
@@ -221,7 +229,7 @@ if [[ -f "$CLIENT_SRC/package.json" ]]; then
   done
   echo "OK: CLIENT panel built"
 else
-  echo "WARN: CLIENT/desktop missing — portal UI not built"
+  echo "WARN: CLIENT/web missing — portal UI not built"
 fi
 
 # npm if needed for control-api
@@ -400,5 +408,5 @@ echo "       ${LAN_IP}"
 echo "  3) START_MSI.bat"
 echo "  4) Test: curl.exe -s http://${LAN_IP}:3000/health"
 echo
-echo "Monitor: vs-monitor"
+echo "Monitor: vs-monitor  (native GUI if DISPLAY; TUI fallback otherwise)"
 exit 0

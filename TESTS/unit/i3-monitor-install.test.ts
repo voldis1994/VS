@@ -22,6 +22,8 @@ describe('i3 monitor installation path', () => {
     expect(sh).toContain('node_modules/.bin/tsx');
     expect(sh).toContain('run_curl_monitor');
     expect(sh).toContain('/api/v1/server/monitor/console/text');
+    expect(sh).toContain('monitor/main.py');
+    expect(sh).toContain('PySide6');
     expect(sh).not.toMatch(/npx\s+tsx/);
     // Must not hard-fail with only "tsx missing" when curl fallback exists
     expect(sh).not.toMatch(/FAIL: tsx missing/);
