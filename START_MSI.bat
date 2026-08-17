@@ -44,6 +44,14 @@ if not exist "%~dp0ADMIN\windows\dist\VS Admin.exe" (
   )
 )
 
+if exist "%~dp0ADMIN\PHYSICAL_VERIFY.bat" (
+  echo Tip: run ADMIN\PHYSICAL_VERIFY.bat first if CONNECT fails identity.
+)
+if exist "%~dp0ADMIN\CONNECT_FORCE.bat" (
+  call "%~dp0ADMIN\CONNECT_FORCE.bat"
+  exit /b %ERRORLEVEL%
+)
+
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0ADMIN\windows\start-admin.ps1"
 set "ERR=%ERRORLEVEL%"
 if not "%ERR%"=="0" (

@@ -105,6 +105,7 @@ describe('production control-api modules load', () => {
     const info = runtimeBuildInfo();
     expect(info.service).toBe('VS-CORE');
     expect(info.server_id).toBeTruthy();
+    expect(info.name).toBe(info.server_id);
     expect(info.build_commit).toBeTruthy();
     expect(info.api_version).toBe('v1');
   });

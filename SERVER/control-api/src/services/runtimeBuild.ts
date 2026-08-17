@@ -50,6 +50,8 @@ export function runtimeBuildInfo() {
     // Identity — MSI discovery must validate these (non-secret)
     service: 'VS-CORE' as const,
     server_id: serverId,
+    /** Legacy MSI scripts checked `name` before server_id was canonical. */
+    name: serverId,
     api_version: 'v1',
     VERSION: packageVersion(),
     GIT_COMMIT: git,

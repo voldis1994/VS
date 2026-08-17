@@ -45,6 +45,7 @@ if errorlevel 1 (
   exit /b 1
 )
 curl.exe -sS --connect-timeout 5 --max-time 8 "%URL%/health"
+echo.
 if errorlevel 1 (
   echo.
   echo FAIL: MSI cannot reach i3:%IP%:3000
@@ -66,6 +67,19 @@ if errorlevel 1 (
   set "IP=10.77.0.1"
   set "URL=http://10.77.0.1:3000"
   echo WG OK — using %URL%
+)
+
+echo === IDENTITY (must be VS-CORE-01) ===
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0windows\Assert-VsCoreHealth.ps1" -Url "%URL%" -ExpectedId "VS-CORE-01"
+if errorlevel 1 (
+  echo.
+  echo FAIL: %URL% is not VS-CORE-01
+  echo Wrong IP in SERVER_IP.txt or random :3000 on your subnet.
+  echo On i3: hostname -I
+  echo Then: echo REAL_IP^> ADMIN\config\SERVER_IP.txt
+  echo Or run: ADMIN\PHYSICAL_VERIFY.bat
+  pause
+  exit /b 1
 )
 
 echo.
