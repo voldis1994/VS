@@ -5,6 +5,19 @@ import { logAudit } from '../services/audit.js';
 import { acquireCapitalSession, listCapitalAccounts, testCapitalComSession } from '../services/capitalCom.js';
 import { ensureBrokerAccount, seedAccountInstruments } from './trading.js';
 
+/** Simple in-process rate limiter: max 10 requests per IP per 60 s for write endpoints. */
+const _brokerWriteHits = new Map<string, number[]>();
+function brokerWriteAllowed(ip: string): boolean {
+  const now = Date.now();
+  const window = 60_000;
+  const max = 10;
+  const hits = (_brokerWriteHits.get(ip) ?? []).filter((t) => now - t < window);
+  if (hits.length >= max) { _brokerWriteHits.set(ip, hits); return false; }
+  hits.push(now);
+  _brokerWriteHits.set(ip, hits);
+  return true;
+}
+
 async function ensureClientId(preferredId: number | undefined, fallbackName: string): Promise<number> {
   if (preferredId && Number.isFinite(preferredId) && preferredId > 0) {
     const existing = await pool.query('SELECT id FROM clients WHERE id = $1', [preferredId]);
@@ -349,6 +362,8 @@ export async function registerBrokerRoutes(app: FastifyInstance): Promise<void> 
 
   // POST /api/brokers/:id/disable — explicit disable without delete
   app.post('/api/brokers/:id/disable', async (request, reply) => {
+    const ip = (request.ip ?? 'unknown').replace(/^::ffff:/, '');
+    if (!brokerWriteAllowed(ip)) return reply.code(429).send({ error: 'Too many requests' });
     const { id } = request.params as { id: string };
     const prev = await pool.query('SELECT * FROM broker_connections WHERE id = $1', [id]);
     if (!prev.rows.length) return reply.code(404).send({ error: 'Broker connection not found' });
@@ -359,6 +374,8 @@ export async function registerBrokerRoutes(app: FastifyInstance): Promise<void> 
 
   // POST /api/brokers/:id/pull-markets — re-seed instrument catalog from Capital
   app.post('/api/brokers/:id/pull-markets', async (request, reply) => {
+    const ip = (request.ip ?? 'unknown').replace(/^::ffff:/, '');
+    if (!brokerWriteAllowed(ip)) return reply.code(429).send({ error: 'Too many requests' });
     const { id } = request.params as { id: string };
     const conn = await pool.query('SELECT * FROM broker_connections WHERE id = $1', [id]);
     if (!conn.rows.length) return reply.code(404).send({ error: 'Broker connection not found' });
