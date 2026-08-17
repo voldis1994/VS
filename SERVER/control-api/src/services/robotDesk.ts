@@ -408,7 +408,7 @@ function safetyStopLevel(
         ? Math.max(ask - bid, 0)
         : abs * 0.00005;
 
-  const pctCushion = abs * 0.002; // 0.20% of price
+  const pctCushion = abs * 0.025; // 2.5% of price
   const brokerMin =
     minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
       ? minStopDistance
@@ -424,14 +424,14 @@ function safetyStopLevel(
   return Math.round(raw * 1e6) / 1e6;
 }
 
-/** stopDistance from 0.20% of price (≥ 2.5× Capital min points). */
+/** stopDistance from 2.5% of price (≥ 2.5× Capital min points). */
 function safetyStopDistancePts(
   mid: number,
   minPts: number,
   pointSize: number | null
 ): number {
   const abs = Math.max(Math.abs(mid), 1e-9);
-  const pct = abs * 0.002;
+  const pct = abs * 0.025;
   let fromPct = minPts * 2.5;
   if (pointSize != null && pointSize > 0) {
     fromPct = Math.max(fromPct, pct / pointSize);

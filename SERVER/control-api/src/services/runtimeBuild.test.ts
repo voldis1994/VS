@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { runtimeBuildInfo } from './runtimeBuild.js';
 
 describe('runtimeBuildInfo', () => {
-  it('reports Node robotDesk as the entry brain and 0.20% of price SL', () => {
+  it('reports Node robotDesk as the entry brain and 2.5% of price SL', () => {
     const info = runtimeBuildInfo();
     expect(info.entry_brain).toBe('node-robot-desk');
-    expect(info.sl).toBe('0.20%-of-price');
+    expect(info.sl).toBe('2.5%-of-price');
     expect(info.trend_minutes).toBe(3);
     expect(info.unknown_bias_unlock).toBe(true);
     expect(info.git_sha).toMatch(/^[0-9a-f]{7,40}$|^unknown$/);
