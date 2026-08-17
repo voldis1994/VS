@@ -2,8 +2,21 @@ import { FastifyInstance } from 'fastify';
 import { pool } from '../db/pool.js';
 import { encrypt, decrypt, maskSecret } from '../security/encryption.js';
 import { logAudit } from '../services/audit.js';
-import { acquireCapitalSession, listCapitalAccounts, testCapitalComSession } from '../services/capitalCom.js';
+import { acquireCapitalSession, fetchAllCapitalMarkets, listCapitalAccounts, testCapitalComSession } from '../services/capitalCom.js';
 import { ensureBrokerAccount, seedAccountInstruments } from './trading.js';
+
+/** Simple in-process rate limiter: max 10 requests per IP per 60 s for write endpoints. */
+const _brokerWriteHits = new Map<string, number[]>();
+function brokerWriteAllowed(ip: string): boolean {
+  const now = Date.now();
+  const window = 60_000;
+  const max = 10;
+  const hits = (_brokerWriteHits.get(ip) ?? []).filter((t) => now - t < window);
+  if (hits.length >= max) { _brokerWriteHits.set(ip, hits); return false; }
+  hits.push(now);
+  _brokerWriteHits.set(ip, hits);
+  return true;
+}
 
 async function ensureClientId(preferredId: number | undefined, fallbackName: string): Promise<number> {
   if (preferredId && Number.isFinite(preferredId) && preferredId > 0) {
@@ -345,5 +358,116 @@ export async function registerBrokerRoutes(app: FastifyInstance): Promise<void> 
     await pool.query('UPDATE broker_connections SET enabled = false WHERE id = $1', [id]);
     await logAudit('admin', 'broker_disabled', 'broker_connection', id, prev.rows[0], { enabled: false });
     return { success: true, hard: false };
+  });
+
+  // POST /api/brokers/:id/disable — explicit disable without delete
+  app.post('/api/brokers/:id/disable', async (request, reply) => {
+    const ip = (request.ip ?? 'unknown').replace(/^::ffff:/, '');
+    if (!brokerWriteAllowed(ip)) return reply.code(429).send({ error: 'Too many requests' });
+    const { id } = request.params as { id: string };
+    const prev = await pool.query('SELECT * FROM broker_connections WHERE id = $1', [id]);
+    if (!prev.rows.length) return reply.code(404).send({ error: 'Broker connection not found' });
+    await pool.query('UPDATE broker_connections SET enabled = false WHERE id = $1', [id]);
+    await logAudit('admin', 'broker_disabled', 'broker_connection', id, prev.rows[0], { enabled: false });
+    return { success: true, message: 'Broker disabled. New orders blocked.' };
+  });
+
+  // POST /api/brokers/:id/pull-markets — fetch full Capital.com market tree, upsert, then seed
+  app.post('/api/brokers/:id/pull-markets', async (request, reply) => {
+    const ip = (request.ip ?? 'unknown').replace(/^::ffff:/, '');
+    if (!brokerWriteAllowed(ip)) return reply.code(429).send({ error: 'Too many requests' });
+    const { id } = request.params as { id: string };
+
+    const connRows = await pool.query('SELECT * FROM broker_connections WHERE id = $1', [id]);
+    if (!connRows.rows.length) return reply.code(404).send({ error: 'Broker connection not found' });
+    const conn = connRows.rows[0] as {
+      id: number;
+      broker_name: string;
+      environment: string;
+      identifier: string | null;
+    };
+
+    if (conn.broker_name !== 'capital_com') {
+      return reply.code(400).send({ error: 'Only capital_com connections can pull live markets.' });
+    }
+
+    const creds = await loadCredentialMap(conn.id);
+    const apiKey = creds.api_key || '';
+    const password = creds.password || '';
+    const identifier = (conn.identifier || '').trim();
+
+    if (!apiKey || !password || !identifier) {
+      return reply.code(400).send({
+        error: 'MISSING_CREDENTIALS',
+        message: 'Missing Capital.com credentials on this broker connection. Re-save in Brokers first.',
+      });
+    }
+
+    const opened = await acquireCapitalSession({
+      environment: conn.environment,
+      apiKey,
+      identifier,
+      password,
+      connectionId: conn.id,
+    });
+    if (!opened.ok) {
+      return reply.code(400).send({
+        error: 'CAPITAL_SESSION_FAILED',
+        message: opened.result?.detail || 'Capital.com session could not be established.',
+      });
+    }
+
+    const markets = await fetchAllCapitalMarkets(opened.session);
+    if (markets.length === 0) {
+      return reply.code(502).send({
+        error: 'NO_MARKETS',
+        message: 'Capital.com returned 0 markets. Check Live/Demo environment and API key permissions.',
+      });
+    }
+
+    // Upsert Capital.com catalog
+    for (const m of markets) {
+      await pool.query(
+        `INSERT INTO capital_markets
+         (broker_connection_id, epic, symbol, display_name, instrument_type, category, min_lot, max_lot, lot_step)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         ON CONFLICT (broker_connection_id, epic) DO UPDATE SET
+           symbol = EXCLUDED.symbol,
+           display_name = EXCLUDED.display_name,
+           instrument_type = EXCLUDED.instrument_type,
+           category = EXCLUDED.category,
+           min_lot = EXCLUDED.min_lot,
+           max_lot = EXCLUDED.max_lot,
+           lot_step = EXCLUDED.lot_step,
+           updated_at = NOW()`,
+        [
+          conn.id, m.epic, m.epic, m.display_name,
+          m.instrument_type || null, m.category || null,
+          m.min_lot ?? 0.01, m.max_lot ?? 1000, m.lot_step ?? 0.01,
+        ]
+      );
+    }
+
+    // Seed account instrument settings from the refreshed catalog
+    const { rows: accs } = await pool.query(
+      `SELECT id FROM broker_accounts
+       WHERE broker_connection_id = $1 AND enabled = true ORDER BY id ASC LIMIT 1`,
+      [id]
+    );
+    if (accs.length) {
+      await seedAccountInstruments(accs[0].id as number);
+    }
+
+    await logAudit('admin', 'capital_markets_pulled', 'broker_connection', id, null, {
+      count: markets.length,
+      environment: conn.environment,
+    });
+
+    return {
+      success: true,
+      count: markets.length,
+      message: `Capital market catalog refreshed. ${markets.length} instruments loaded.`,
+      sample: markets.slice(0, 8).map((m) => ({ epic: m.epic, name: m.display_name })),
+    };
   });
 }

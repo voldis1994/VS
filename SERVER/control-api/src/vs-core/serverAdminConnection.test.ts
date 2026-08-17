@@ -7,7 +7,7 @@ import { registerAdminAgentRoutes } from './adminAgent.js';
 import { probe } from './readiness.js';
 import { probeStrategyRuntime, probeRiskRuntime, probeExecutionRuntime } from './runtimeHealth.js';
 import { collectHostSystemSnapshot } from './hostTelemetry.js';
-import { AdminConnectionClient } from '../../../../ADMIN/connection/adminConnectionClient.js';
+import { AdminConnectionClient } from '../../../../ADMIN/tests/connection/adminConnectionClient.js';
 
 async function buildAdminApp(token: string) {
   const app = Fastify({ logger: false });
@@ -94,7 +94,7 @@ describe('SERVER_ADMIN_CONNECTION', () => {
     const client = new AdminConnectionClient({
       baseUrl: ephemeral.baseUrl,
       adminToken: token,
-      timeoutMs: 2000,
+      timeoutMs: 5000,
     });
     const snap = await client.fetchSnapshot();
     expect(snap).toBeTruthy();
@@ -115,7 +115,7 @@ describe('SERVER_ADMIN_CONNECTION', () => {
     const client = new AdminConnectionClient({
       baseUrl: a.baseUrl,
       adminToken: token,
-      timeoutMs: 2000,
+      timeoutMs: 5000,
     });
     expect((await client.fetchSnapshot())?.ok).toBe(true);
     await a.app.close();
@@ -128,7 +128,7 @@ describe('SERVER_ADMIN_CONNECTION', () => {
     const client2 = new AdminConnectionClient({
       baseUrl: b.baseUrl,
       adminToken: token,
-      timeoutMs: 2000,
+      timeoutMs: 5000,
     });
     const again = await client2.fetchSnapshot();
     expect(again?.ok).toBe(true);

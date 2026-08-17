@@ -34,6 +34,7 @@ import { verifyAccessCode } from './security/accessCode.js';
 import { probe } from './vs-core/readiness.js';
 import { registerAdminAgentRoutes } from './vs-core/adminAgent.js';
 import { registerCanonicalV1Routes } from './routes/canonicalV1.js';
+import { registerLiveControlRoutes } from './routes/liveControl.js';
 import {
   probeStrategyRuntime,
   probeRiskRuntime,
@@ -201,6 +202,9 @@ async function main() {
   // Admin Agent API + canonical /api/v1 read surfaces for MSI ADMIN.
   await registerAdminAgentRoutes(app, { getProbes });
   await registerCanonicalV1Routes(app, { getProbes });
+
+  // Admin live-control API (GET/POST /api/admin/live-control)
+  await registerLiveControlRoutes(app);
 
   // VS Private Network device registry / heartbeat / registration
   await registerPrivateNetworkRoutes(app);

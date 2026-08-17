@@ -29,7 +29,7 @@ function gitShortSha(): string {
   return cachedSha;
 }
 
-const STRATEGY_VERSION = 'with-trend-10s-sl020-v1';
+const STRATEGY_VERSION = 'with-trend-10s-sl025-v1';
 
 function buildTimeIso(): string {
   const env = String(process.env.BUILD_TIME || '').trim();

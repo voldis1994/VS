@@ -432,7 +432,7 @@ Environment=VS_SERVER_DATA=${DATA}
 Environment=VS_CORE_DATA=${DATA}
 Environment=NODE_ENV=production
 Environment=OPERATING_MODE=${OPERATING_MODE}
-Environment=LIVE_TRADING_ENABLED=false
+# LIVE_TRADING_ENABLED is NOT hardcoded here — operator value is preserved in server.env
 Environment=VS_LAN_MANAGEMENT=1
 Environment=VS_PRIVATE_NETWORK=1
 Environment=CONTROL_API_HOST=0.0.0.0
