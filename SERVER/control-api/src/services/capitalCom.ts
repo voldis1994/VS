@@ -1035,7 +1035,7 @@ export function computeSafetyCushionStopLevel(
         : abs * 0.00005;
   const brokerMin =
     opts?.minStopDistance != null && opts.minStopDistance > 0 ? opts.minStopDistance : 0;
-  const pctCushion = abs * 0.002; // 0.20% of price
+  const pctCushion = abs * 0.025; // 2.5% of price
   const floor = abs >= 1000 ? 0.5 : abs >= 100 ? 0.25 : abs >= 10 ? 0.05 : 0.0005;
   const dist = Math.max(pctCushion, brokerMin * 2.5, spr * 8, floor);
   const raw = direction === 'BUY' ? ref - dist : ref + dist;
