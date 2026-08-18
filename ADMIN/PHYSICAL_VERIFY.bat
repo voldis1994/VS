@@ -12,7 +12,7 @@ echo # VS PHYSICAL VERIFICATION (MSI -^> i3)
 echo # cwd=%CD%
 echo ############################################
 
-if not exist "ADMIN\desktop\package.json" (
+if not exist "ADMIN\desktop\main.py" (
   echo FAIL: not VS repo. Use C:\VS-main not C:\VS-admin
   pause
   exit /b 1
@@ -105,7 +105,7 @@ if exist "ADMIN\config\control-panel.env" (
   )
 )
 if not defined TOKEN (
-  echo SKIP: no API_ADMIN_TOKEN — run CONNECT_FORCE.bat first
+  echo SKIP: no API_ADMIN_TOKEN — START_MSI.bat writes it via lan-bootstrap
 ) else (
   curl.exe -sS --connect-timeout 5 --max-time 8 -H "x-admin-token: %TOKEN%" "%URL%/api/v1/system/supervisor" -o "%TEMP%\vs-supervisor.json"
   if exist "%TEMP%\vs-supervisor.json" (
@@ -146,15 +146,14 @@ if "%FAIL%"=="1" (
   echo Fix checklist:
   echo   1. i3: sudo bash FORCE_I3_LAN  ^& curl LAN_IP/health
   echo   2. MSI: echo i3_LAN_IP^> ADMIN\config\SERVER_IP.txt
-  echo   3. MSI: ADMIN\CONNECT_FORCE.bat
-  echo   4. Browser: Ctrl+F5 at http://127.0.0.1:5188/
+  echo   3. MSI: START_MSI.bat  (VS Admin.exe — not a browser)
   pause
   exit /b 1
 )
 
 echo ############################################
 echo # PHYSICAL VERIFICATION PASSED (software)
-echo # Open UI: http://127.0.0.1:5188/  — must show CONNECTED
+echo # Open UI: START_MSI.bat  — VS Admin.exe must show CONNECTED
 echo ############################################
 pause
 exit /b 0

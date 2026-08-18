@@ -33,7 +33,9 @@ def test_start_msi_launches_native_exe_not_browser():
     ps1 = (ROOT / "ADMIN" / "windows" / "start-admin.ps1").read_text(encoding="utf-8", errors="replace")
     assert "start-admin.ps1" in bat
     assert "VS Admin.exe" in ps1
+    assert "CONNECT_FORCE.bat" not in bat
     assert "5188" not in ps1
+    assert "5188" not in bat
     assert "5173" not in ps1
     assert "serve-admin" not in ps1
     assert "vite --host" not in ps1.lower()
@@ -42,3 +44,5 @@ def test_start_msi_launches_native_exe_not_browser():
     combo = bat + ps1
     assert "chrome" not in combo.lower()
     assert "msedge" not in combo.lower()
+    assert ps1.count("{") == ps1.count("}")
+    assert "Resolve-LanServerUrl" not in ps1
