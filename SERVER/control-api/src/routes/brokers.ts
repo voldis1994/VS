@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { pool } from '../db/pool.js';
 import { encrypt, decrypt, maskSecret } from '../security/encryption.js';
 import { logAudit } from '../services/audit.js';
-import { acquireCapitalSession, listCapitalAccounts, testCapitalComSession } from '../services/capitalCom.js';
+import { acquireCapitalSession, listCapitalAccounts } from '../services/capitalCom.js';
 import { ensureBrokerAccount, seedAccountInstruments } from './trading.js';
 
 async function ensureClientId(preferredId: number | undefined, fallbackName: string): Promise<number> {
@@ -214,35 +214,34 @@ export async function registerBrokerRoutes(app: FastifyInstance): Promise<void> 
         });
       }
 
-      const result = await testCapitalComSession({
+      const opened = await acquireCapitalSession({
         environment: conn.environment,
         apiKey,
         identifier,
         password,
+        connectionId: conn.id,
       });
 
-      if (!result.ok) {
-        // 200 + success:false so UI always receives the detailed error body
+      if (!opened.ok) {
         return {
           success: false,
-          error: result.detail,
-          status: result.status,
-          errorCode: result.errorCode,
+          error: opened.result.detail,
+          status: opened.result.status,
+          errorCode: opened.result.errorCode,
         };
       }
+
+      const result = {
+        ok: true as const,
+        status: 200,
+        detail: `Capital.com ${(conn.environment || 'demo').toUpperCase()} session OK`,
+        accountType: opened.session.accountType,
+      };
 
       // Sync Capital.com multi-accounts onto this connection (external_account_id)
       let syncedAccounts: Array<{ accountId: string; accountName: string }> = [];
       try {
-        const opened = await acquireCapitalSession({
-          environment: conn.environment,
-          apiKey,
-          identifier,
-          password,
-          connectionId: conn.id,
-        });
-        if (opened.ok) {
-          const listed = await listCapitalAccounts(opened.session);
+        const listed = await listCapitalAccounts(opened.session);
           if (listed.ok && listed.accounts.length) {
             syncedAccounts = listed.accounts.map((a) => ({
               accountId: a.accountId,
@@ -284,7 +283,6 @@ export async function registerBrokerRoutes(app: FastifyInstance): Promise<void> 
               }
             }
           }
-        }
       } catch {
         /* test already OK — sync is best-effort */
       }

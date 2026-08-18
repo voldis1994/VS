@@ -1,3 +1,6 @@
+import { readFileSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { describe, expect, it, vi } from 'vitest';
 import {
   capitalComBaseUrl,
@@ -16,6 +19,24 @@ describe('capitalComBaseUrl', () => {
   it('defaults to demo host otherwise', () => {
     expect(capitalComBaseUrl('demo')).toBe('https://demo-api-capital.backend-capital.com');
     expect(capitalComBaseUrl('other')).toBe('https://demo-api-capital.backend-capital.com');
+  });
+});
+
+describe('broker TEST login', () => {
+  it('uses one pooled Capital session — TEST must not login then login again', () => {
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../routes/brokers.ts'), 'utf8');
+    const start = src.indexOf("app.post('/api/brokers/:id/test'");
+    const end = src.indexOf("app.delete('/api/brokers/:id'");
+    const chunk = src.slice(start, end);
+    expect(start).toBeGreaterThan(0);
+    expect(chunk).toContain('acquireCapitalSession');
+    expect(chunk).not.toContain('testCapitalComSession');
+    expect(chunk.match(/acquireCapitalSession/g)?.length).toBe(1);
+  });
+
+  it('PULL CAPITAL waits out Capital 429 cooldown instead of failing immediately', () => {
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../routes/trading.ts'), 'utf8');
+    expect(src).toMatch(/waitForCooldown:\s*true/);
   });
 });
 

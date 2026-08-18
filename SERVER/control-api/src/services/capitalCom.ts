@@ -450,6 +450,7 @@ export async function acquireCapitalSession(input: {
   password: string;
   connectionId: number;
   capitalAccountId?: string | null;
+  waitForCooldown?: boolean;
 }): Promise<{ ok: true; session: CapitalSession } | { ok: false; result: CapitalComSessionResult }> {
   const connectionId = Number(input.connectionId);
   if (!Number.isFinite(connectionId) || connectionId <= 0) {
@@ -464,19 +465,6 @@ export async function acquireCapitalSession(input: {
   const cached = capitalSessionPool.get(key);
   const wantedAccount = (input.capitalAccountId || '').trim() || null;
 
-  if (cached && cached.cooldownUntil > now) {
-    const waitSec = Math.ceil((cached.cooldownUntil - now) / 1000);
-    return {
-      ok: false,
-      result: {
-        ok: false,
-        status: 429,
-        errorCode: 'error.too-many.requests',
-        detail: `Capital.com rate-limit cooldown ${waitSec}s on connection #${connectionId} — other clients keep their own sessions.`,
-      },
-    };
-  }
-
   let session: CapitalSession | null = null;
   let raw: CapitalSession | null = null;
 
@@ -484,6 +472,23 @@ export async function acquireCapitalSession(input: {
     session = cached.session;
     raw = cached.raw;
   } else {
+    if (cached && cached.cooldownUntil > now) {
+      if (input.waitForCooldown) {
+        const waitMs = Math.min(110_000, Math.max(0, cached.cooldownUntil - Date.now() + 250));
+        await new Promise((r) => setTimeout(r, waitMs));
+      } else {
+        const waitSec = Math.ceil((cached.cooldownUntil - Date.now()) / 1000);
+        return {
+          ok: false,
+          result: {
+            ok: false,
+            status: 429,
+            errorCode: 'error.too-many.requests',
+            detail: `Capital.com rate-limit cooldown ${waitSec}s on connection #${connectionId} — other clients keep their own sessions.`,
+          },
+        };
+      }
+    }
     if (cached?.raw) {
       try {
         await cached.raw.close();
