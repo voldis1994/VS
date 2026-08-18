@@ -28,6 +28,9 @@ echo "======== OPEN_LAN_FOR_MSI ========"
 
 for f in "$DATA/server.env" "$PREFIX/control-api/.env" "$PREFIX/.env"; do
   force_kv "$f" VS_LAN_MANAGEMENT 1
+  # VS_LAN_TRUST_ADMIN=1 allows LAN IPs to reach READ-ONLY monitoring endpoints
+  # without the admin token.  All state-changing routes (trading, kill-switch, etc.)
+  # still require a valid x-admin-token header regardless of source IP.
   force_kv "$f" VS_LAN_TRUST_ADMIN 1
   force_kv "$f" CONTROL_API_HOST 0.0.0.0
   force_kv "$f" CONTROL_API_PORT "$API_PORT"
