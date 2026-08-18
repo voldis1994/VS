@@ -1,7 +1,7 @@
 # Database
 
 **Engine:** PostgreSQL on VS-CORE-01 only.  
-**Runner:** `SERVER/control-api` → `SERVER/database/migrations` (symlink).
+**Runner:** `SERVER/control-api` reads `SERVER/database/migrations` directly (the `src/db/migrations` symlink is a file on Windows Git).
 
 ## Migrations
 
