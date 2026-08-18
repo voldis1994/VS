@@ -77,11 +77,31 @@ export async function authMiddleware(
   // (WireGuard ≠ authorization). Do not require x-admin-token here.
   if (path === '/api/v1/network' || path.startsWith('/api/v1/network/')) return;
 
-  // Home appliance: MSI on LAN may use ADMIN read/heartbeat APIs without copying token first
+  // Home appliance: MSI on LAN may use a narrow set of READ-ONLY monitoring
+  // endpoints without copying the token first.  State-changing routes
+  // (trading start/stop, kill-switch, lot-size writes, etc.) always require
+  // a valid x-admin-token regardless of source IP.
+  const LAN_TRUST_READONLY_PATHS = new Set([
+    '/api/v1/admin/ping',
+    '/api/v1/admin/health',
+    '/api/v1/admin/snapshot',
+    '/api/v1/admin/tui',
+    '/api/v1/server/monitor',
+    '/api/v1/server/monitor/text',
+    '/api/v1/broker/health',
+    '/api/v1/presence',
+    '/api/v1/system/status',
+    '/api/v1/system/supervisor',
+    '/api/v1/incidents',
+    '/api/v1/market',
+    '/api/system/health',
+    '/api/system/money-path',
+  ]);
   if (
     lanTrustEnabled() &&
     requestFromPrivateLan(request) &&
-    (path.startsWith('/api/v1/') || path.startsWith('/api/system/'))
+    request.method === 'GET' &&
+    LAN_TRUST_READONLY_PATHS.has(path)
   ) {
     return;
   }
