@@ -97,6 +97,13 @@ describe('canonical production architecture', () => {
     }
   });
 
+  it('Control API migrations use SERVER/database/migrations (Windows Git has no symlink dirs)', () => {
+    const migrate = readFileSync(join(ROOT, 'SERVER/control-api/src/db/migrate.ts'), 'utf8');
+    expect(migrate).toMatch(/database\/migrations/);
+    expect(migrate).toMatch(/isDirectory/);
+    expect(existsSync(join(ROOT, 'SERVER/database/migrations/001_initial_schema.sql'))).toBe(true);
+  });
+
   it('CLIENT web app exists and ADMIN web control panel is served from Control API', () => {
     expect(existsSync(join(ROOT, 'CLIENT/web/package.json'))).toBe(true);
     expect(existsSync(join(ROOT, 'ADMIN/web/index.html'))).toBe(true);
