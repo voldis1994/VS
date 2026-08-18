@@ -16,7 +16,7 @@ export function EquityCurve({ values }: { values: number[] }) {
     .join(' ');
   return (
     <svg className="chart-box" viewBox={`0 0 ${w} ${h}`} width="100%" height="120" preserveAspectRatio="none">
-      <polyline fill="none" stroke="#c084fc" strokeWidth="2.2" points={pts} />
+      <polyline fill="none" stroke="#ff2bd6" strokeWidth="2.2" points={pts} />
       <polyline
         fill="url(#eqFill)"
         stroke="none"
@@ -25,8 +25,8 @@ export function EquityCurve({ values }: { values: number[] }) {
       />
       <defs>
         <linearGradient id="eqFill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#a855f7" />
-          <stop offset="100%" stopColor="#a855f7" stopOpacity="0" />
+          <stop offset="0%" stopColor="#00f0ff" />
+          <stop offset="100%" stopColor="#ff2bd6" stopOpacity="0" />
         </linearGradient>
       </defs>
     </svg>
@@ -52,7 +52,7 @@ export function DailyBars({ values }: { values: number[] }) {
             y={y}
             width={Math.max(barW - 4, 2)}
             height={Math.max(bh, 2)}
-            fill={v >= 0 ? '#39ff14' : '#ff3b6b'}
+            fill={v >= 0 ? '#00f0ff' : '#ff2a5a'}
             opacity={0.85}
             rx={1}
           />
