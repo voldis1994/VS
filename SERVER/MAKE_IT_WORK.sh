@@ -35,6 +35,16 @@ force_kv() {
   fi
 }
 
+# Like force_kv but only writes the key if it is absent (preserve operator value on update)
+set_default_kv() {
+  local f="$1" k="$2" v="$3"
+  mkdir -p "$(dirname "$f")"
+  touch "$f"
+  if ! grep -qE "^${k}=" "$f" 2>/dev/null; then
+    printf '%s=%s\n' "$k" "$v" >>"$f"
+  fi
+}
+
 systemctl enable --now docker >/dev/null 2>&1 || true
 systemctl stop vs-server.service 2>/dev/null || true
 systemctl unmask vs-server.service 2>/dev/null || true
@@ -110,15 +120,17 @@ for f in "$DATA/server.env" "$DATA/compose.env" "$API/.env" "$PREFIX/.env" "$REP
   force_kv "$f" DB_USER "$DB_USER"
   force_kv "$f" DB_PASSWORD "$DB_PASSWORD"
   force_kv "$f" VS_LAN_MANAGEMENT 1
-  # VS_LAN_TRUST_ADMIN=1 grants LAN IPs access to READ-ONLY monitoring endpoints
-  # only (ping, health, snapshot, market).  State-changing routes (trading
-  # start/stop, kill-switch) always require a valid x-admin-token.
+  # VS_LAN_TRUST_ADMIN=1 grants LAN IPs access to READ-ONLY monitoring endpoints only.
+
+  # State-changing routes (trading start/stop, kill-switch) always require x-admin-token.
+
   force_kv "$f" VS_LAN_TRUST_ADMIN 1
   force_kv "$f" VS_PRIVATE_NETWORK 1
   force_kv "$f" CONTROL_API_HOST 0.0.0.0
   force_kv "$f" CONTROL_API_PORT 3000
   force_kv "$f" CONTROL_API_URL "http://127.0.0.1:3000"
-  force_kv "$f" LIVE_TRADING_ENABLED false
+  # Preserve existing operator LIVE_TRADING_ENABLED value — only default false on fresh install
+  set_default_kv "$f" LIVE_TRADING_ENABLED false
   force_kv "$f" NODE_ENV production
   force_kv "$f" OPERATING_MODE PRODUCTION
   force_kv "$f" VS_SERVER_ID VS-CORE-01
@@ -271,7 +283,7 @@ Environment=VS_SERVER_DATA=${DATA}
 Environment=VS_CORE_DATA=${DATA}
 Environment=NODE_ENV=production
 Environment=OPERATING_MODE=PRODUCTION
-Environment=LIVE_TRADING_ENABLED=false
+# LIVE_TRADING_ENABLED is NOT hardcoded here — operator value is preserved in server.env
 Environment=VS_LAN_MANAGEMENT=1
 # VS_LAN_TRUST_ADMIN=1: grants LAN IPs read-only monitoring access only.
 # State-changing routes always require x-admin-token.
