@@ -26,9 +26,9 @@ Browser opens:
 |------|-----|
 | Control panel (TACTICAL DESK) | http://127.0.0.1:3000/robot |
 | Feeds / Orbit | http://127.0.0.1:3000/feeds |
-| Client homepage (stable) | http://127.0.0.1:8443/ |
+| Client homepage (phone, same Wi-Fi) | PALAID `PHONE` line — `http://<MSI-LAN-IP>:8443/` |
 
-Client URL is `ADMIN\config\client-url.txt`. PALAID never overwrites it and never starts trycloudflare. Hand the client that URL + login in person. Same Wi‑Fi: `http://<MSI-LAN-IP>:8443/`. Outside Wi‑Fi: write your stable `https://…` into that file once.
+On a phone never type `127.0.0.1` (that is the phone itself). Safari needs the MSI Wi-Fi IP and port **8443**. PALAID writes that into `ADMIN\config\client-url.txt` (it does not overwrite a custom `https://…`).
 
 ## WHAT RUNS
 
@@ -42,7 +42,7 @@ Client URL is `ADMIN\config\client-url.txt`. PALAID never overwrites it and neve
 1. Brokers — SAVE Capital key + TEST
 2. Accounts — PULL CAPITAL → SAVE EPIC
 3. Robot — START
-4. Client homepage: http://127.0.0.1:8443/ (or the URL in `ADMIN\config\client-url.txt`)
+4. Client homepage: PALAID `PHONE` line (`http://<MSI-LAN-IP>:8443/`) — not `127.0.0.1` on the phone
 
 Stop: `powershell -File ADMIN\windows\stop-admin.ps1`
 

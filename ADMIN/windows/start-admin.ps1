@@ -63,10 +63,42 @@ function Invoke-NpmInstall {
   return $code
 }
 
+function Get-LanIPv4 {
+  try {
+    $rows = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
+      Where-Object {
+        $_.IPAddress -notmatch '^127\.' -and
+        $_.IPAddress -notmatch '^169\.254\.' -and
+        $_.PrefixOrigin -ne 'WellKnown' -and
+        $_.InterfaceAlias -notmatch 'vEthernet|WSL|Loopback|Bluetooth|VMware|VirtualBox|Hyper-V|Docker|Default Switch'
+      })
+    $pick = $rows | Where-Object { $_.IPAddress -match '^192\.168\.' } | Select-Object -First 1
+    if (-not $pick) { $pick = $rows | Where-Object { $_.IPAddress -match '^10\.' } | Select-Object -First 1 }
+    if (-not $pick) { $pick = $rows | Select-Object -First 1 }
+    if ($pick) { return [string]$pick.IPAddress }
+  } catch { }
+  return ""
+}
+
+function Open-ClientPort8443 {
+  Write-Host "Firewall: allow TCP 8443 so a phone on the same Wi-Fi can open the client page..."
+  try {
+    & netsh advfirewall firewall delete rule name="VS CLIENT 8443" | Out-Null
+  } catch { }
+  try {
+    & netsh advfirewall firewall add rule name="VS CLIENT 8443" dir=in action=allow protocol=TCP localport=8443 | Out-Null
+  } catch {
+    Write-Host "WARN: could not add firewall rule for 8443 — phone may fail until Windows allows it"
+  }
+}
+
 $cfgDir = Join-Path $AdminRoot "config"
 $envFile = Join-Path $cfgDir "single-box.env"
 $clientUrlFile = Join-Path $cfgDir "client-url.txt"
 New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
+
+$lan = Get-LanIPv4
+$phoneUrl = if ($lan) { "http://" + $lan + ":8443/" } else { "http://127.0.0.1:8443/" }
 
 if (-not (Test-Path $envFile)) {
   $dbPw = New-Secret 16
@@ -95,21 +127,21 @@ if (-not (Test-Path $envFile)) {
     "CORS_ORIGIN=*",
     "CLIENT_COOKIE_SECURE=false",
     "VS_CLIENT_URL_FILE=" + $clientUrlFile,
-    "VS_PUBLIC_CLIENT_URL=http://127.0.0.1:8443/",
+    "VS_PUBLIC_CLIENT_URL=" + $phoneUrl,
     "VS_CLIENT_GATEWAY_PORT=8443",
     "VS_CLIENT_ALLOW_HTTP=1",
     "NODE_ENV=production"
   ) | Set-Content -Path $envFile -Encoding ascii
 }
 
-# Stable CLIENT homepage. Never trycloudflare (that hostname changes every launch).
-# PALAID does not overwrite client-url.txt once you set it.
+# Phone URL = MSI Wi-Fi IP :8443. 127.0.0.1 on a phone is the phone itself (Safari fails).
+# PALAID never overwrites this once it is a custom https:// URL.
 if (-not (Test-Path $clientUrlFile)) {
-  Set-Content -Path $clientUrlFile -Value "http://127.0.0.1:8443/" -Encoding ascii
+  Set-Content -Path $clientUrlFile -Value $phoneUrl -Encoding ascii
 } else {
   $curClientUrl = ((Get-Content $clientUrlFile -Raw -ErrorAction SilentlyContinue) + "").Trim()
-  if ($curClientUrl -match '^https?://127\.0\.0\.1:3000/?$') {
-    Set-Content -Path $clientUrlFile -Value "http://127.0.0.1:8443/" -Encoding ascii
+  if ($curClientUrl -match '^https?://(127\.0\.0\.1|localhost)(:\d+)?/?$') {
+    Set-Content -Path $clientUrlFile -Value $phoneUrl -Encoding ascii
   }
 }
 
@@ -120,16 +152,18 @@ if (Test-Path $clientUrlFile) {
   $stableClientUrl = @(Get-Content $clientUrlFile | Where-Object { $_ -and ($_ -notmatch '^\s*#') -and ($_ -match 'https?://') } | Select-Object -First 1)
   $stableClientUrl = [string]$stableClientUrl
 }
-if (-not $stableClientUrl) { $stableClientUrl = "http://127.0.0.1:8443/" }
+if (-not $stableClientUrl) { $stableClientUrl = $phoneUrl }
 if (-not $stableClientUrl.EndsWith("/")) { $stableClientUrl = $stableClientUrl + "/" }
 $env:VS_PUBLIC_CLIENT_URL = $stableClientUrl
 $env:VS_CLIENT_URL_FILE = $clientUrlFile
+$env:VS_LAN_IP = $lan
 $env:VS_CLIENT_GATEWAY_PORT = "8443"
 $env:VS_CLIENT_GATEWAY_PLAIN_PORT = "8443"
 $env:VS_CLIENT_ALLOW_HTTP = "1"
 $env:VS_CLIENT_GATEWAY_HOST = "0.0.0.0"
 Set-Kv $envFile "VS_PUBLIC_CLIENT_URL" $stableClientUrl
 Set-Kv $envFile "VS_CLIENT_URL_FILE" $clientUrlFile
+Set-Kv $envFile "VS_LAN_IP" $lan
 Set-Kv $envFile "VS_CLIENT_GATEWAY_PORT" "8443"
 Set-Kv $envFile "VS_CLIENT_ALLOW_HTTP" "1"
 Copy-Item $envFile (Join-Path $RepoRoot "SERVER\control-api\.env") -Force
@@ -138,7 +172,7 @@ Copy-Item $envFile (Join-Path $RepoRoot ".env") -Force
 Write-Host "========================================"
 Write-Host " VS — ONE PC (MSI)"
 Write-Host " Control panel  http://127.0.0.1:3000/robot"
-Write-Host " Client web     $stableClientUrl"
+Write-Host " Phone page     $phoneUrl"
 Write-Host " C++ calc       vs-calc  (EntryReady only)"
 Write-Host " Docker Desktop stays installed"
 Write-Host "========================================"
@@ -347,22 +381,13 @@ if (Test-Path $calcExe) {
   Write-Host "WARN: C++ vs-calc.exe missing — install g++ or MSVC and run SERVER\calc\BUILD_CALC.bat"
 }
 
-function Get-LanIPv4 {
-  try {
-    $ip = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
-      Where-Object { $_.IPAddress -notmatch '^127\.' -and $_.PrefixOrigin -ne 'WellKnown' } |
-      Select-Object -First 1 -ExpandProperty IPAddress
-    if ($ip) { return [string]$ip }
-  } catch { }
-  return ""
-}
-
 function Stop-ClientGateway {
   Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
     Where-Object { $_.CommandLine -and $_.CommandLine -match 'client-gateway\\gateway\.mjs' } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 
+Open-ClientPort8443
 Write-Host "Starting CLIENT gateway :8443 (stable URL, not trycloudflare)..."
 Stop-ClientGateway
 $gwJs = Join-Path $RepoRoot "SERVER\client-gateway\gateway.mjs"
@@ -380,14 +405,11 @@ $url = "http://127.0.0.1:3000/robot"
 Write-Host ("Opening " + $url)
 Start-Process $url
 
-$lan = Get-LanIPv4
 Write-Host "VS READY"
-Write-Host "  DESK    http://127.0.0.1:3000/robot"
-Write-Host ("  CLIENT  " + $stableClientUrl)
-Write-Host "          ADMIN\config\client-url.txt  (PALAID never overwrites this)"
-if ($lan) {
-  Write-Host ("  LAN     http://" + $lan + ":8443/  (same Wi-Fi)")
-}
+Write-Host "  DESK    http://127.0.0.1:3000/robot   (this MSI only)"
+Write-Host ("  PHONE   " + $stableClientUrl + "   << type this on the phone, NOT 127.0.0.1")
+Write-Host "          Same Wi-Fi as the MSI. Port 8443 is required."
+Write-Host "          ADMIN\config\client-url.txt  (PALAID never overwrites this once it is a custom https URL)"
 Write-Host "  CALC    C++ vs-calc → /api/pipeline/intents"
 Write-Host "STOP: powershell -File ADMIN\windows\stop-admin.ps1"
 exit 0

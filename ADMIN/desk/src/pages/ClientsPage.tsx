@@ -230,16 +230,17 @@ export function ClientsPage() {
       </p>
       <div className="card" style={{ marginBottom: 16, padding: '12px 16px' }}>
         <div className="section-title" style={{ marginBottom: 8 }}>
-          Client homepage (does not change)
+          Phone homepage (same Wi-Fi as this MSI)
         </div>
-        <p className="mono" style={{ fontSize: 14, wordBreak: 'break-all' }}>
+        <p className="mono" style={{ fontSize: 22, wordBreak: 'break-all', color: 'var(--accent)' }}>
           {clientHome}
         </p>
-        <p style={{ marginTop: 8, fontSize: 12, opacity: 0.7 }}>
-          This is <code>ADMIN\config\client-url.txt</code>. PALAID does not overwrite it and does
-          not start trycloudflare. Login + password you hand over in person. Same Wi‑Fi:{' '}
-          <code>http://&lt;this-MSI-LAN-IP&gt;:8443/</code>. Outside Wi‑Fi: put your stable{' '}
-          <code>https://…</code> in that file once. Admin preview: <Link to="/client">/client</Link>
+        <p style={{ marginTop: 8, fontSize: 13 }}>
+          Type that full address on the phone — including <code>:8443</code>. Never type{' '}
+          <code>127.0.0.1</code> on the phone: that is the phone itself, Safari cannot connect.
+          Phone and MSI must be on the same Wi-Fi. This is <code>ADMIN\config\client-url.txt</code>.
+          PALAID never overwrites a custom <code>https://…</code>. Admin preview:{' '}
+          <Link to="/client">/client</Link>
         </p>
       </div>
 

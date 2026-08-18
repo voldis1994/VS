@@ -39,6 +39,7 @@ describe('ADMIN production path — web control panel on one MSI, no tactical UI
     expect(clients).toContain('Set password');
     expect(clients).toContain('8443');
     expect(clients).toContain('client-url.txt');
+    expect(clients).toContain('Never type');
     expect(clients).not.toMatch(/trycloudflare\.com/);
     expect(robot).toMatch(/MARKET CLOSED/);
     expect(robot).toMatch(/last_close_at/);
@@ -84,6 +85,10 @@ describe('ADMIN production path — web control panel on one MSI, no tactical UI
     expect(ps1).toContain('vs-calc');
     expect(ps1).toContain('TACTICAL DESK');
     expect(ps1).toMatch(/Restarting Control API so \/robot is TACTICAL DESK/);
+    expect(ps1).toContain('PHONE');
+    expect(ps1).toContain('NOT 127.0.0.1');
+    expect(ps1).toContain('VS CLIENT 8443');
+    expect(ps1).toMatch(/never overwrites this/);
     expect(ps1).not.toMatch(/\$panelAlreadyUp/);
     expect(ps1).toContain('TACTICAL DESK missing ADMIN\\desk\\dist\\index.html');
     expect(ps1).toContain('Remove-Item -Recurse -Force $deskDist');
