@@ -245,7 +245,7 @@ export function ClientPortal() {
         <div className="card">
           <div className="welcome">LOGIN</div>
           <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-            Open the HTTPS address from your administrator. Nothing is installed on this device.
+            Open this phone page on the same Wi-Fi as the MSI. Login is the name from CLIENTS.
           </p>
           <label className="field">
             <span>Login</span>

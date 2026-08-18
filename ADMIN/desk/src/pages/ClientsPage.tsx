@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
 import { useApi, apiFetch } from '../hooks/useApi';
 
 interface LiveTrade {
@@ -239,8 +238,8 @@ export function ClientsPage() {
           Type that full address on the phone — including <code>:8443</code>. Never type{' '}
           <code>127.0.0.1</code> on the phone: that is the phone itself, Safari cannot connect.
           Phone and MSI must be on the same Wi-Fi. This is <code>ADMIN\config\client-url.txt</code>.
-          PALAID never overwrites a custom <code>https://…</code>. Admin preview:{' '}
-          <Link to="/client">/client</Link>
+          PALAID never overwrites a custom <code>https://…</code>. Login page is that URL root, not{' '}
+          <code>/robot</code> and not <code>/client</code>.
         </p>
       </div>
 

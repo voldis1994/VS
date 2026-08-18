@@ -51,6 +51,48 @@ function env(name, fallback = '') {
   return String(process.env[name] || fallback).trim();
 }
 
+function applyEnvFile(file) {
+  if (!file || !fs.existsSync(file)) return;
+  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith('#') || !t.includes('=')) continue;
+    const i = t.indexOf('=');
+    const k = t.slice(0, i).trim();
+    const v = t.slice(i + 1).trim();
+    if (k && process.env[k] === undefined) process.env[k] = v;
+  }
+}
+
+/** PALAID Start-Process does not always pass PowerShell env — load the MSI env file here. */
+function loadLocalEnv() {
+  const repoRoot = path.resolve(__dirname, '../..');
+  applyEnvFile(path.join(repoRoot, 'ADMIN', 'config', 'single-box.env'));
+  applyEnvFile(path.join(repoRoot, '.env'));
+  applyEnvFile(path.join(repoRoot, 'SERVER', 'control-api', '.env'));
+}
+
+loadLocalEnv();
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.map': 'application/json',
+};
+
+export function clientDistDir() {
+  const fromEnv = env('CLIENT_PANEL_DIST');
+  if (fromEnv && fs.existsSync(path.join(fromEnv, 'index.html'))) return fromEnv;
+  const dist = path.resolve(__dirname, '../../CLIENT/web/dist');
+  return fs.existsSync(path.join(dist, 'index.html')) ? dist : null;
+}
+
 function loadStableUrl() {
   const file = env('VS_CLIENT_URL_FILE', '/etc/vs/client-url');
   try {
@@ -59,7 +101,7 @@ function loadStableUrl() {
       const line = raw
         .split('\n')
         .map((l) => l.trim())
-        .find((l) => l && !l.startsWith('#'));
+        .find((l) => l && !l.startsWith('#') && /https?:\/\//i.test(l));
       if (line) return line.replace(/\/$/, '');
     }
   } catch {
@@ -86,7 +128,53 @@ const LISTEN_HOST = env('VS_CLIENT_GATEWAY_HOST', '0.0.0.0');
 const HTTPS_PORT = Number(env('VS_CLIENT_GATEWAY_PORT') || 443);
 const HTTP_PORT = Number(env('VS_CLIENT_GATEWAY_HTTP_PORT') || 80);
 
+function sendFile(res, file) {
+  const ext = path.extname(file).toLowerCase();
+  res.writeHead(200, {
+    'content-type': MIME[ext] || 'application/octet-stream',
+    'cache-control': 'no-store',
+    'x-vs-panel': 'client-gateway',
+  });
+  fs.createReadStream(file).pipe(res);
+}
+
+/** Serve CLIENT/web/dist on :8443 so the phone page does not depend on Control API static. */
+export function tryServeClientStatic(req, res) {
+  const method = String(req.method || 'GET').toUpperCase();
+  if (method !== 'GET' && method !== 'HEAD') return false;
+  const urlPath = (req.url || '/').split('?')[0] || '/';
+  if (urlPath.startsWith('/api') || urlPath.startsWith('/ws')) return false;
+  if (urlPath === '/health') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: true, panel: 'client-gateway' }));
+    return true;
+  }
+  if (!isClientPublicPath(urlPath)) return false;
+
+  const root = clientDistDir();
+  if (!root) {
+    res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('Client web not built. PALAID.bat builds CLIENT/web\n');
+    return true;
+  }
+  const rel = decodeURIComponent(urlPath === '/' ? '/index.html' : urlPath);
+  const candidate = path.resolve(root, `.${rel}`);
+  if (!candidate.startsWith(root)) {
+    res.writeHead(403);
+    res.end();
+    return true;
+  }
+  if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+    sendFile(res, candidate);
+    return true;
+  }
+  sendFile(res, path.join(root, 'index.html'));
+  return true;
+}
+
 function proxy(req, res) {
+  if (tryServeClientStatic(req, res)) return;
+
   const urlPath = req.url || '/';
   if (!isClientPublicPath(urlPath)) {
     res.writeHead(403, { 'content-type': 'application/json; charset=utf-8' });
@@ -146,24 +234,29 @@ export function createGatewayServer() {
     s.on('upgrade', onUpgrade);
     return { server: s, tls: true, port: HTTPS_PORT };
   }
-  const allowHttp = env('VS_CLIENT_ALLOW_HTTP', '0') === '1';
+  const singleBox = ['1', 'true', 'yes'].includes(env('VS_SINGLE_BOX', '0').toLowerCase());
+  const allowHttp = env('VS_CLIENT_ALLOW_HTTP', singleBox ? '1' : '0') === '1' || HTTPS_PORT === 8443;
   if (!allowHttp) {
     throw new Error('No TLS certs at /etc/vs/tls and VS_CLIENT_ALLOW_HTTP is not 1');
   }
   const s = http.createServer(handler);
   s.on('upgrade', onUpgrade);
-  return { server: s, tls: false, port: Number(env('VS_CLIENT_GATEWAY_PLAIN_PORT') || HTTPS_PORT) };
+  return { server: s, tls: false, port: Number(env('VS_CLIENT_GATEWAY_PLAIN_PORT') || HTTPS_PORT || HTTP_PORT) };
 }
 
 function main() {
-  const stable = loadStableUrl();
+  const stable = loadStableUrl() || `http://127.0.0.1:${env('VS_CLIENT_GATEWAY_PLAIN_PORT') || HTTPS_PORT || 8443}/`;
   const { server, tls, port } = createGatewayServer();
+  server.on('error', (err) => {
+    process.stderr.write(`CLIENT GATEWAY LISTEN FAIL ${LISTEN_HOST}:${port} ${err.message}\n`);
+    process.exit(1);
+  });
   server.listen(port, LISTEN_HOST, () => {
-    const mode = tls ? 'HTTPS' : 'HTTP (set /etc/vs/tls for production TLS)';
+    const mode = tls ? 'HTTPS' : 'HTTP';
     process.stdout.write(
       `VS CLIENT GATEWAY ${mode} ${LISTEN_HOST}:${port} → ${UPSTREAM_HOST}:${UPSTREAM_PORT}\n`
     );
-    process.stdout.write(`STABLE_URL=${stable || '(set /etc/vs/client-url)'}\n`);
+    process.stdout.write(`STABLE_URL=${stable}\n`);
   });
 }
 

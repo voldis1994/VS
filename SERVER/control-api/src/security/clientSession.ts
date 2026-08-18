@@ -8,6 +8,14 @@ export function hashSessionToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 
+/** HTTP LAN (:8443) must not set Secure. NODE_ENV=production used to force Secure and Safari dropped the cookie. */
+export function clientCookieSecure(): boolean {
+  const raw = String(process.env.CLIENT_COOKIE_SECURE || '').trim().toLowerCase();
+  if (raw === 'false' || raw === '0' || raw === 'no') return false;
+  if (raw === 'true' || raw === '1' || raw === 'yes') return true;
+  return false;
+}
+
 export function createRawSessionToken(): string {
   return randomBytes(32).toString('hex');
 }
@@ -115,7 +123,7 @@ export function extractClientToken(request: {
 }
 
 export function sessionCookieOptions(expires: Date): string {
-  const secure = process.env.NODE_ENV === 'production' || process.env.CLIENT_COOKIE_SECURE === 'true';
+  const secure = clientCookieSecure();
   const parts = [
     `${CLIENT_SESSION_COOKIE}=`,
     `Path=/`,

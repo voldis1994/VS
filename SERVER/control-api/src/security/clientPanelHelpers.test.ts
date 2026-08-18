@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { validateLotSize, assertNoSecrets } from '../services/clientPanel.js';
 import { formatTradeLabel } from '../services/tradePresentation.js';
-import { hashSessionToken, parseCookieHeader } from './clientSession.js';
+import { hashSessionToken, parseCookieHeader, clientCookieSecure } from './clientSession.js';
 
 describe('client panel helpers', () => {
   it('maps trade labels honestly (BUY/SELL only without classification)', () => {
@@ -40,5 +40,17 @@ describe('client panel helpers', () => {
     const token = parseCookieHeader('a=1; vs_client_session=tok123; b=2', 'vs_client_session');
     expect(token).toBe('tok123');
     expect(parseCookieHeader('a=1', 'vs_client_session')).toBeNull();
+  });
+
+  it('does not force Secure cookies just because NODE_ENV=production', () => {
+    const prevNode = process.env.NODE_ENV;
+    const prevSecure = process.env.CLIENT_COOKIE_SECURE;
+    process.env.NODE_ENV = 'production';
+    process.env.CLIENT_COOKIE_SECURE = 'false';
+    expect(clientCookieSecure()).toBe(false);
+    process.env.CLIENT_COOKIE_SECURE = 'true';
+    expect(clientCookieSecure()).toBe(true);
+    process.env.CLIENT_COOKIE_SECURE = prevSecure ?? '';
+    process.env.NODE_ENV = prevNode;
   });
 });

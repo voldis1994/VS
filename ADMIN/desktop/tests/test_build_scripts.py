@@ -50,7 +50,9 @@ def test_start_msi_opens_web_panel_on_this_pc():
     assert "DB_AUTH_FAILED" in ps1
     assert "Get-Content" in ps1
     assert "-lt 90" in ps1
-    assert "Admin panel will still open" in ps1
+    assert "CLIENT web missing CLIENT\\web\\dist\\index.html" in ps1
+    assert "CLIENT gateway did not listen on :8443" in ps1
+    assert "CLIENT_COOKIE_SECURE" in ps1
     assert "npm run build" not in ps1
     assert "3000/robot" in ps1
     assert (ROOT / "SERVER" / "calc" / "vs-calc.exe").is_file()

@@ -118,4 +118,23 @@ describe('client panel static (tunnel Host)', () => {
 
     await app.close();
   });
+
+  it('serves CLIENT logo.svg on / not the desk file', async () => {
+    makeClient();
+    makeDesk();
+    fs.writeFileSync(path.join(clientDir, 'logo.svg'), '<svg id="client-logo"></svg>');
+    fs.writeFileSync(path.join(deskDir, 'logo.svg'), '<svg id="desk-logo"></svg>');
+
+    const app = Fastify();
+    await registerClientPanelStatic(app);
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/logo.svg' });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain('client-logo');
+    expect(res.body).not.toContain('desk-logo');
+    expect(res.headers['x-vs-panel']).toBe('control-api');
+
+    await app.close();
+  });
 });

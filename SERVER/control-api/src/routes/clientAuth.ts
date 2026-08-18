@@ -3,6 +3,7 @@ import { pool } from '../db/pool.js';
 import { verifyAccessCode } from '../security/accessCode.js';
 import {
   CLIENT_SESSION_COOKIE,
+  clientCookieSecure,
   createClientSession,
   extractClientToken,
   resolveClientSession,
@@ -44,7 +45,7 @@ export function setClientSessionCookie(reply: FastifyReply, token: string, expir
 }
 
 export function clearClientSessionCookie(reply: FastifyReply): void {
-  const secure = process.env.NODE_ENV === 'production' || process.env.CLIENT_COOKIE_SECURE === 'true';
+  const secure = clientCookieSecure();
   let cookie = `${CLIENT_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
   if (secure) cookie += '; Secure';
   reply.header('Set-Cookie', cookie);

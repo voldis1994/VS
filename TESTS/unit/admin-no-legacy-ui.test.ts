@@ -91,6 +91,9 @@ describe('ADMIN production path — web control panel on one MSI, no tactical UI
     expect(ps1).toMatch(/never overwrites this/);
     expect(ps1).not.toMatch(/\$panelAlreadyUp/);
     expect(ps1).toContain('TACTICAL DESK missing ADMIN\\desk\\dist\\index.html');
+    expect(ps1).toContain('CLIENT web missing CLIENT\\web\\dist\\index.html');
+    expect(ps1).toContain('CLIENT gateway did not listen on :8443');
+    expect(ps1).toContain('CLIENT_COOKIE_SECURE');
     expect(ps1).toContain('Remove-Item -Recurse -Force $deskDist');
     expect(ps1).not.toMatch(/5188/);
     expect(ps1).not.toContain('serve-admin.mjs');

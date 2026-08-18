@@ -112,10 +112,15 @@ export async function registerClientPanelStatic(app: FastifyInstance): Promise<v
 
     const looksLikeFile = /\.[A-Za-z0-9]+$/.test(urlPath);
     if (looksLikeFile) {
-      const fromDesk = desk ? fileIfExists(desk, urlPath) : null;
       const fromClient = fileIfExists(client, urlPath);
-      if (fromDesk) return sendFile(reply, fromDesk, 'tactical-desk');
-      if (fromClient) return sendFile(reply, fromClient, 'control-api');
+      const fromDesk = desk ? fileIfExists(desk, urlPath) : null;
+      if (isOperatorDeskPath(urlPath)) {
+        if (fromDesk) return sendFile(reply, fromDesk, 'tactical-desk');
+        if (fromClient) return sendFile(reply, fromClient, 'control-api');
+      } else {
+        if (fromClient) return sendFile(reply, fromClient, 'control-api');
+        if (fromDesk) return sendFile(reply, fromDesk, 'tactical-desk');
+      }
     }
 
     if (fs.existsSync(path.join(client, 'index.html'))) {

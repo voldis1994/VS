@@ -135,12 +135,12 @@ if (-not (Test-Path $envFile)) {
 }
 
 # Phone URL = MSI Wi-Fi IP :8443. 127.0.0.1 on a phone is the phone itself (Safari fails).
-# PALAID never overwrites this once it is a custom https:// URL.
+# Keep a custom https:// URL. Refresh http LAN URLs when Wi-Fi IP changes.
 if (-not (Test-Path $clientUrlFile)) {
   Set-Content -Path $clientUrlFile -Value $phoneUrl -Encoding ascii
 } else {
   $curClientUrl = ((Get-Content $clientUrlFile -Raw -ErrorAction SilentlyContinue) + "").Trim()
-  if ($curClientUrl -match '^https?://(127\.0\.0\.1|localhost)(:\d+)?/?$') {
+  if ($curClientUrl -notmatch '^https://') {
     Set-Content -Path $clientUrlFile -Value $phoneUrl -Encoding ascii
   }
 }
@@ -166,6 +166,13 @@ Set-Kv $envFile "VS_CLIENT_URL_FILE" $clientUrlFile
 Set-Kv $envFile "VS_LAN_IP" $lan
 Set-Kv $envFile "VS_CLIENT_GATEWAY_PORT" "8443"
 Set-Kv $envFile "VS_CLIENT_ALLOW_HTTP" "1"
+if ($stableClientUrl -match '^https://') {
+  Set-Kv $envFile "CLIENT_COOKIE_SECURE" "true"
+  $env:CLIENT_COOKIE_SECURE = "true"
+} else {
+  Set-Kv $envFile "CLIENT_COOKIE_SECURE" "false"
+  $env:CLIENT_COOKIE_SECURE = "false"
+}
 Copy-Item $envFile (Join-Path $RepoRoot "SERVER\control-api\.env") -Force
 Copy-Item $envFile (Join-Path $RepoRoot ".env") -Force
 
@@ -278,12 +285,17 @@ if (-not (Test-Path $viteJs)) {
 if (Test-Path $viteJs) {
   & $node.Source $viteJs build
   if ($LASTEXITCODE -ne 0) {
-    Write-Host "WARN: CLIENT web build failed — Admin panel will still open"
+    Pop-Location
+    Write-Fail "CLIENT web build failed — phone page :8443 will not work"
   }
 } else {
-  Write-Host "WARN: CLIENT vite missing after npm install — Admin panel will still open"
+  Pop-Location
+  Write-Fail "CLIENT vite missing after npm install — phone page :8443 will not work"
 }
 Pop-Location
+if (-not (Test-Path $clientIndex)) {
+  Write-Fail "CLIENT web missing CLIENT\web\dist\index.html — phone page :8443 will not work"
+}
 
 $logDir = Join-Path $cfgDir "logs"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
@@ -389,18 +401,36 @@ function Stop-ClientGateway {
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 
+function Test-Port8443 {
+  try {
+    $r = Invoke-WebRequest -Uri "http://127.0.0.1:8443/health" -UseBasicParsing -TimeoutSec 2
+    return $r.StatusCode -ge 200
+  } catch { return $false }
+}
+
 Open-ClientPort8443
 Write-Host "Starting CLIENT gateway :8443 (stable URL, not trycloudflare)..."
 Stop-ClientGateway
 $gwJs = Join-Path $RepoRoot "SERVER\client-gateway\gateway.mjs"
-if (Test-Path $gwJs) {
-  $gwLog = Join-Path $logDir "client-gateway.out.log"
-  $gwErr = Join-Path $logDir "client-gateway.err.log"
-  Remove-Item $gwLog -Force -ErrorAction SilentlyContinue
-  Remove-Item $gwErr -Force -ErrorAction SilentlyContinue
-  Start-Process -FilePath $node.Source -ArgumentList @($gwJs) -WorkingDirectory (Split-Path $gwJs) -RedirectStandardOutput $gwLog -RedirectStandardError $gwErr -WindowStyle Hidden | Out-Null
-} else {
-  Write-Host "WARN: SERVER\client-gateway\gateway.mjs missing"
+if (-not (Test-Path $gwJs)) {
+  Write-Fail "SERVER\client-gateway\gateway.mjs missing"
+}
+$gwLog = Join-Path $logDir "client-gateway.out.log"
+$gwErr = Join-Path $logDir "client-gateway.err.log"
+Remove-Item $gwLog -Force -ErrorAction SilentlyContinue
+Remove-Item $gwErr -Force -ErrorAction SilentlyContinue
+$gw = Start-Process -FilePath $node.Source -ArgumentList @($gwJs) -WorkingDirectory (Split-Path $gwJs) -RedirectStandardOutput $gwLog -RedirectStandardError $gwErr -WindowStyle Hidden -PassThru
+if (-not $gw) { Write-Fail "could not start CLIENT gateway" }
+$gwUp = $false
+for ($i = 0; $i -lt 20; $i++) {
+  Start-Sleep -Milliseconds 400
+  if (Test-Port8443) { $gwUp = $true; break }
+  if ($gw.HasExited) { break }
+}
+if (-not $gwUp) {
+  Show-LogTail $gwLog
+  Show-LogTail $gwErr
+  Write-Fail "CLIENT gateway did not listen on :8443 — phone page will not open"
 }
 
 $url = "http://127.0.0.1:3000/robot"
