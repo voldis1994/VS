@@ -383,13 +383,16 @@ if (-not $ok) {
 
 $calcDir = Join-Path $RepoRoot "SERVER\calc"
 $calcExe = Join-Path $calcDir "vs-calc.exe"
-if (-not (Test-Path $calcExe)) {
-  Write-Host "Building C++ calc..."
-  & cmd /c (Join-Path $calcDir "BUILD_CALC.bat")
-}
+Write-Host "Building C++ calc (EntryReady)..."
+& cmd /c (Join-Path $calcDir "BUILD_CALC.bat")
 if (Test-Path $calcExe) {
   Write-Host "Starting C++ vs-calc..."
   $calcLog = Join-Path $logDir "vs-calc.out.log"
+  $env:VS_CALC_HOST = "127.0.0.1"
+  $env:CONTROL_API_PORT = "3000"
+  if (-not $env:PIPELINE_TOKEN) {
+    Write-Host "WARN: PIPELINE_TOKEN empty — C++ calc cannot send EntryReady (robot stays SCAN)"
+  }
   Start-Process -FilePath $calcExe -WorkingDirectory $calcDir -RedirectStandardError $calcLog -WindowStyle Hidden | Out-Null
 } else {
   Write-Host "WARN: C++ vs-calc.exe missing — install g++ or MSVC and run SERVER\calc\BUILD_CALC.bat"

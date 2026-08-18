@@ -23,7 +23,7 @@
 #include <vector>
 #include <map>
 #include <algorithm>
-#include <cctype>
+#include <ctime>
 
 #ifdef _WIN32
 static void sock_close(SOCKET s) { closesocket(s); }
@@ -97,6 +97,7 @@ static bool http(const std::string& method, const std::string& host, int port,
 struct Bar { double o{}, h{}, l{}, c{}; };
 struct Snap {
   std::string epic;
+  std::string regime;
   double bid{}, ask{}, mid{};
   std::vector<Bar> bars;
 };
@@ -126,6 +127,7 @@ static std::vector<Snap> parse_snaps(const std::string& json) {
     std::string chunk = json.substr(i, end == std::string::npos ? json.size() - i : end - i);
     Snap s;
     s.epic = json_str(chunk, "epic");
+    s.regime = json_str(chunk, "regime");
     s.bid = json_num(chunk, "bid");
     s.ask = json_num(chunk, "ask");
     s.mid = json_num(chunk, "mid");
@@ -145,9 +147,34 @@ static std::vector<Snap> parse_snaps(const std::string& json) {
   return out;
 }
 
-/** Vein/flow/EV — same family as C++ entry engine: flow align + range position + EV > 0. */
+/** With-trend 10s + vein/flow. TREND_DOWN must emit SELL without waiting for vein±2. */
 static bool decide(const Snap& s, std::string* dir, std::string* why, double* ev_out) {
-  if (s.bars.size() < 8) return false;
+  if (s.bars.empty()) return false;
+  const Bar& last = s.bars.back();
+  std::string regime = s.regime;
+  for (char& ch : regime) ch = (char)std::toupper((unsigned char)ch);
+  bool down_ctx =
+    regime.find("TREND_DOWN") != std::string::npos ||
+    regime.find("BREAKOUT_DOWN") != std::string::npos ||
+    regime.find("PULLBACK_DOWN") != std::string::npos;
+  bool up_ctx =
+    regime.find("TREND_UP") != std::string::npos ||
+    regime.find("BREAKOUT_UP") != std::string::npos ||
+    regime.find("PULLBACK_UP") != std::string::npos;
+  double prev_c = s.bars.size() >= 2 ? s.bars[s.bars.size() - 2].c : last.o;
+  if (down_ctx && (last.c < last.o || last.c < prev_c)) {
+    *dir = "SELL";
+    *ev_out = 0.2;
+    *why = "regime " + s.regime + " follow dump";
+    return true;
+  }
+  if (up_ctx && (last.c > last.o || last.c > prev_c)) {
+    *dir = "BUY";
+    *ev_out = 0.2;
+    *why = "regime " + s.regime + " follow climb";
+    return true;
+  }
+  if (s.bars.size() < 4) return false;
   double up = 0, down = 0, hi = s.bars[0].h, lo = s.bars[0].l;
   int vein = 0;
   for (size_t i = 1; i < s.bars.size(); ++i) {
@@ -160,9 +187,9 @@ static bool decide(const Snap& s, std::string* dir, std::string* why, double* ev
   }
   double n = double(s.bars.size() - 1);
   double net_flow = (up - down) / n;
-  double last = s.bars.back().c;
-  double range_pos = (hi > lo) ? (last - lo) / (hi - lo) : 0.5;
-  double spread = (s.ask > 0 && s.bid > 0) ? (s.ask - s.bid) / std::max(last, 1.0) : 0.0002;
+  double lastc = last.c;
+  double range_pos = (hi > lo) ? (lastc - lo) / (hi - lo) : 0.5;
+  double spread = (s.ask > 0 && s.bid > 0) ? (s.ask - s.bid) / std::max(lastc, 1.0) : 0.0002;
   auto score = [&](int sign) {
     double p = 0.5 + 0.2 * (sign * net_flow) + 0.1 * (sign * vein > 0 ? 1.0 : 0.0);
     if (sign > 0 && range_pos < 0.55) p += 0.08;
@@ -174,14 +201,13 @@ static bool decide(const Snap& s, std::string* dir, std::string* why, double* ev
   };
   double ev_buy = score(1);
   double ev_sell = score(-1);
-  if (ev_buy < 0.05 && ev_sell < 0.05) return false;
-  if (ev_buy >= ev_sell && ev_buy > 0.05 && net_flow > 0 && vein >= 2) {
+  if (ev_buy >= ev_sell && ev_buy > 0.02 && net_flow > 0 && vein >= 1) {
     *dir = "BUY";
     *ev_out = ev_buy;
     *why = "vein long · flow+ · EV " + std::to_string(ev_buy);
     return true;
   }
-  if (ev_sell > 0.05 && net_flow < 0 && vein <= -2) {
+  if (ev_sell > 0.02 && net_flow < 0 && vein <= -1) {
     *dir = "SELL";
     *ev_out = ev_sell;
     *why = "vein short · flow- · EV " + std::to_string(ev_sell);
@@ -199,7 +225,6 @@ int main() {
     return 1;
   }
   std::cerr << "vs-calc C++ started → " << host << ":" << port << "\n";
-  std::map<std::string, double> last_close;
   std::map<std::string, std::chrono::steady_clock::time_point> last_sent;
   for (;;) {
     std::string body;
@@ -218,21 +243,21 @@ int main() {
     http("POST", host, port, "/api/pipeline/heartbeat", token, hb.str(), &hbr);
 
     for (const auto& s : snaps) {
-      if (s.bars.empty()) continue;
-      double c = s.bars.back().c;
-      if (last_close[s.epic] == c) continue;
-      last_close[s.epic] = c;
+      if (s.bars.empty() && s.mid <= 0) continue;
       auto now = std::chrono::steady_clock::now();
-      if (last_sent.count(s.epic) && now - last_sent[s.epic] < std::chrono::seconds(25)) continue;
+      if (last_sent.count(s.epic) && now - last_sent[s.epic] < std::chrono::seconds(12)) continue;
       std::string dir, why;
       double ev = 0;
       if (!decide(s, &dir, &why, &ev)) continue;
+      for (char& ch : why) if (ch == '"' || ch == '\\') ch = ' ';
+      long bucket = (long)(std::time(nullptr) / 10);
       std::ostringstream intent;
       intent << "{\"epic\":\"" << s.epic << "\",\"direction\":\"" << dir
              << "\",\"decision\":\"ENTRY_READY\",\"setup_type\":\"vein_flow\","
+             << "\"regime\":\"" << s.regime << "\","
              << "\"explanation\":\"" << why << "\","
-             << "\"reference_price\":" << (s.mid > 0 ? s.mid : c) << ","
-             << "\"idempotency_key\":\"cpp-" << s.epic << "-" << (int)c << "-" << dir << "\"}";
+             << "\"reference_price\":" << (s.mid > 0 ? s.mid : s.bars.back().c) << ","
+             << "\"idempotency_key\":\"cpp-" << s.epic << "-" << bucket << "-" << dir << "\"}";
       std::string ir;
       if (http("POST", host, port, "/api/pipeline/intents", token, intent.str(), &ir)) {
         last_sent[s.epic] = now;

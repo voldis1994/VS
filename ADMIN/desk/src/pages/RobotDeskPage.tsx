@@ -164,12 +164,12 @@ function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'fl
       regime === 'FAILED_BREAKOUT_DOWN' ||
       regime === 'REVERSAL_CANDIDATE' ||
       regime === 'SEEDING';
-    if (fade && regime !== 'SEEDING') return { label: `WAIT · ${regime} · no fade`, kind: 'entry' };
-    if (regime === 'SEEDING') return { label: 'WAIT · SEEDING 10s', kind: 'entry' };
+    if (fade && regime !== 'SEEDING') return { label: `SCAN · ${regime} · no fade`, kind: 'entry' };
+    if (regime === 'SEEDING') return { label: 'SCAN · SEEDING 10s', kind: 'entry' };
     const bias = String(s.trend_bias || s.decision_chain?.setup || '').toUpperCase();
     const only =
       bias.includes('UP') ? ' · bias UP · only BUY' : bias.includes('DOWN') ? ' · bias DOWN · only SELL' : ' · with-trend';
-    return { label: `WAIT · ${regime}${only}`, kind: 'entry' };
+    return { label: `SCAN · ${regime}${only}`, kind: 'entry' };
   }
   return { label: `FLAT · ${regime}`, kind: 'flat' };
 }

@@ -53,9 +53,10 @@ vi.mock('../security/encryption.js', () => ({
   decrypt: () => 'secret',
 }));
 
-const { hasEntryEnabledRobot, offerCalcEntry } = vi.hoisted(() => ({
+const { hasEntryEnabledRobot, offerCalcEntry, listRunningHandsForEpic } = vi.hoisted(() => ({
   hasEntryEnabledRobot: vi.fn(() => false),
   offerCalcEntry: vi.fn(() => ({ queued: true, running: false })),
+  listRunningHandsForEpic: vi.fn(() => []),
 }));
 
 vi.mock('./robotDesk.js', () => ({
@@ -64,6 +65,7 @@ vi.mock('./robotDesk.js', () => ({
   stopRobotSession: vi.fn(async () => undefined),
   hasEntryEnabledRobot: (accountId: number, epic: string) => hasEntryEnabledRobot(accountId, epic),
   offerCalcEntry: (input: unknown) => offerCalcEntry(input),
+  listRunningHandsForEpic: (epic: string) => listRunningHandsForEpic(epic),
 }));
 
 function sub(partial: {
@@ -92,6 +94,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   hasEntryEnabledRobot.mockReturnValue(false);
   offerCalcEntry.mockReturnValue({ queued: true, running: false });
+  listRunningHandsForEpic.mockReturnValue([]);
   resetPipelineBridgeForTests();
   claimedKeys.clear();
   claimRows.clear();
@@ -350,6 +353,26 @@ describe('Calc queues onto robotDesk hands', () => {
     expect(result.fanout.executed[0]?.ok).toBe(true);
     expect(result.fanout.executed[0]?.detail).toMatch(/QUEUED · robotDesk will execute calc EntryReady/);
     hasEntryEnabledRobot.mockReturnValue(false);
+  });
+
+  it('queues EntryReady onto desk START robots even with zero client-panel subscriptions', async () => {
+    offerCalcEntry.mockReturnValue({ queued: true, running: true });
+    listRunningHandsForEpic.mockReturnValue([{ account_id: 9, client_id: 3 }]);
+    const { fanoutEntryIntent } = await import('./intentFanout.js');
+    listActiveSubscriptionsForEpic.mockResolvedValue([]);
+
+    const result = await fanoutEntryIntent({
+      epic: 'GOLD',
+      direction: 'SELL',
+      decision: 'ENTRY_READY',
+      idempotency_key: 'cpp-desk-gold-1',
+    });
+
+    expect(offerCalcEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ account_id: 9, epic: 'GOLD', direction: 'SELL' })
+    );
+    expect(result.fanout.subscribers).toBe(1);
+    expect(result.fanout.executed[0]?.detail).toMatch(/QUEUED · robotDesk will execute calc EntryReady/);
   });
 });
 

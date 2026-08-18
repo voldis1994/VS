@@ -317,6 +317,28 @@ export function offerCalcEntry(input: {
   return { queued: true, running };
 }
 
+/** Desk START robots are not always in client panel_robot_requested — still must get EntryReady. */
+export function listRunningHandsForEpic(
+  epic: string
+): Array<{ account_id: number; client_id: number }> {
+  const want = String(epic || '').trim().toUpperCase();
+  const out: Array<{ account_id: number; client_id: number }> = [];
+  const seen = new Set<number>();
+  for (const s of sessions.values()) {
+    if (
+      !s.running ||
+      !s.entry_enabled ||
+      String(s.epic || '').toUpperCase() !== want ||
+      seen.has(s.account_id)
+    ) {
+      continue;
+    }
+    seen.add(s.account_id);
+    out.push({ account_id: s.account_id, client_id: s.client_id });
+  }
+  return out;
+}
+
 export function resetCalcQueueForTests(): void {
   calcQueue.clear();
 }

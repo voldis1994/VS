@@ -527,7 +527,7 @@ export function decideEntryFrom10sRegime(
     return null;
   }
   if (r === 'TREND_DOWN') {
-    if (!movingOrNull(bar) || !dip(bar)) return null;
+    if (!softDip(bar) && !dip(bar)) return null;
     return gateWithTrend(
       { direction: 'SELL', setup: 'PULLBACK', reason: `${r} follow dump · ${candle}` },
       b,

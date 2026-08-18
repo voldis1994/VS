@@ -5,7 +5,7 @@ import {
   type ActiveSubscription,
 } from './clientSubscriptions.js';
 import { notePipelineRegime } from './regimes.js';
-import { offerCalcEntry } from './robotDesk.js';
+import { listRunningHandsForEpic, offerCalcEntry } from './robotDesk.js';
 
 export { stopEntryRobotsForAccount } from './robotDesk.js';
 
@@ -66,6 +66,7 @@ export async function executePipelineIntent(
 
   const subs = await listActiveSubscriptionsForEpic(epic);
   const executed: FanoutResult['executed'] = [];
+  const seenAccounts = new Set<number>();
 
   for (const sub of subs) {
     const row = await executeForSubscription(
@@ -78,6 +79,32 @@ export async function executePipelineIntent(
       intent.explanation ?? null
     );
     executed.push(row);
+    seenAccounts.add(sub.account_id);
+  }
+
+  for (const hand of listRunningHandsForEpic(epic)) {
+    if (seenAccounts.has(hand.account_id)) continue;
+    const queued = offerCalcEntry({
+      account_id: hand.account_id,
+      epic,
+      direction,
+      setup_type: setupType,
+      regime,
+      explanation: intent.explanation ?? null,
+      reference_price: intent.reference_price ?? null,
+      idempotency_key: idem,
+    });
+    executed.push({
+      client_id: hand.client_id,
+      account_id: hand.account_id,
+      lot_size: 0,
+      ok: true,
+      detail: queued.running
+        ? 'QUEUED · robotDesk will execute calc EntryReady'
+        : 'QUEUED · START robot to execute calc EntryReady',
+      entry_price: null,
+    });
+    seenAccounts.add(hand.account_id);
   }
 
   return {
@@ -85,7 +112,7 @@ export async function executePipelineIntent(
     direction,
     setup_type: setupType,
     regime,
-    subscribers: subs.length,
+    subscribers: executed.length,
     executed,
   };
 }
