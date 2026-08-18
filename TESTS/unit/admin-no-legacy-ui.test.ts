@@ -32,6 +32,8 @@ describe('ADMIN production path — web control panel on one MSI, no tactical UI
     expect(logo).toContain('TACTICAL DESK');
     expect(robot).toMatch(/SAFETY SL/);
     expect(robot).toMatch(/ROBOT COMMAND/);
+    expect(robot).toMatch(/MARKET CLOSED/);
+    expect(robot).toMatch(/last_close_at/);
     expect(existsSync(join(ROOT, 'ADMIN/desk/src/pages/FeedsPage.tsx'))).toBe(true);
     expect(existsSync(join(ROOT, 'ADMIN/desk/src/pages/OrbitReaderPage.tsx'))).toBe(true);
   });

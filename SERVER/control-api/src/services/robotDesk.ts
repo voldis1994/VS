@@ -111,6 +111,9 @@ export type RobotSession = {
   capital_market_status: string | null;
   last_deal_reference: string | null;
   deal_id: string | null;
+  /** Last broker-confirmed close — desk must show this, not jump back to SCAN ENTRY. */
+  last_close_at: string | null;
+  last_close_detail: string | null;
   entry_price: number | null;
   entry_at: string | null;
   mfe: number;
@@ -189,8 +192,7 @@ type Internal = RobotSession & {
 };
 
 const ACTIVE_CADENCE_MS = 2_000;
-const CLOSED_MARKET_CADENCE_MS = 90_000;
-const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
+const CLOSED_MARKET_CADENCE_MS = 15_000;
 
 /** Capital LIVE quote ≠ TRADEABLE. Only these statuses allow entries/manage. FAIL CLOSED. */
 function marketAllowsTrading(status: string | null | undefined): boolean {
@@ -401,8 +403,11 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
     s.multiFeed?.sender_count ?? s.feed_sender_count ?? 0
   } ${s.feed_source || 'NONE'} ${s.multiFeed?.agreement || s.feed_agreement || ''}`.trim();
   let action = 'SCAN';
+  const marketOpen = marketStatusAllowsTrading(s.capital_market_status);
   if (!s.running) action = 'STOPPED';
-  else if (s.open_side) action = `MANAGE ${s.open_side}`;
+  else if (!marketOpen) {
+    action = s.open_side ? `HOLD ${s.open_side} · MARKET CLOSED` : 'MARKET CLOSED';
+  } else if (s.open_side) action = `MANAGE ${s.open_side}`;
   else if (s.pending_calc) action = `CALC ${s.pending_calc.direction}`;
   else if (s.mode === 'ENTRY') action = 'SCAN ENTRY';
   return {
@@ -791,13 +796,15 @@ async function finalizeLocalClose(
   s.exits_done += 1;
   s.closed_at_ms = Date.now();
   s.error = null;
+  s.last_close_at = new Date().toISOString();
+  s.last_close_detail = `CLOSED ${s.open_side} ${s.display_name} · ${brokerDetail} · ${reason}`;
   pushTick(s, {
     phase: 'EXIT',
     bid: quote.bid,
     ask: quote.ask,
     mid: quote.mid,
     code: DecisionCodes.POSITION_CLOSED,
-    detail: `CLOSED ${s.open_side} ${s.display_name} · ${brokerDetail} · ${reason}`,
+    detail: s.last_close_detail,
   });
   if (s.client_id) {
     emitToClient(s.client_id, {
@@ -1634,46 +1641,22 @@ async function robotCycleBody(s: Internal) {
       }
     };
 
-    // Capital marketStatus not TRADEABLE/OPEN → park (price can still stream when CLOSED)
-    if (!marketAllowsTrading(quote.market_status)) {
-      pushOhlcTick(pickedClosed.mid ?? quote.mid);
-      setRobotCadence(s, CLOSED_MARKET_CADENCE_MS);
-      const now = Date.now();
-      if (now - s.last_market_closed_tick_ms >= CLOSED_MARKET_TICK_EVERY_MS) {
-        s.last_market_closed_tick_ms = now;
-        pushTick(s, {
-          phase: 'SCAN',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          code: DecisionCodes.BLOCKED_TECHNICAL,
-          detail: formatCapitalParkDetail(
-            s.epic,
-            quote.market_status,
-            `feeds ${s.feed_contributing}/${s.feed_sender_count} ${s.feed_source} · poll ${
-              CLOSED_MARKET_CADENCE_MS / 1000
-            }s`,
-          ),
-        });
-      }
-      return;
+    // OHLC once per cycle. Capital still streams bid/offer when dealing is CLOSED.
+    s.last_mid = quote.mid ?? s.last_mid;
+    const marketOpen = marketAllowsTrading(quote.market_status);
+    pushOhlcTick(pickedClosed.mid ?? quote.mid);
+    setRobotCadence(s, marketOpen ? ACTIVE_CADENCE_MS : CLOSED_MARKET_CADENCE_MS);
+
+    if (marketOpen) {
+      const picked = pickOhlcMid(quote.mid, s.multiFeed);
+      s.feed_source = picked.source;
+      s.feed_contributing = Math.max(s.feed_contributing || 0, s.multiFeed?.contributing ?? 0);
+      s.feed_sender_count = Math.max(s.feed_sender_count || 0, s.multiFeed?.sender_count ?? 0);
+      s.feed_agreement = s.multiFeed?.agreement ?? s.feed_agreement ?? null;
+      if (s.multiFeed?.legs?.length) s.feed_legs = s.multiFeed.legs;
     }
 
-    // Restore normal cadence after a successful tradeable read (may have been slowed by 429 / closed)
-    setRobotCadence(s, ACTIVE_CADENCE_MS);
-    s.last_mid = quote.mid;
-
-    const picked = pickOhlcMid(quote.mid, s.multiFeed);
-    s.feed_source = picked.source;
-    s.feed_contributing = Math.max(s.feed_contributing || 0, s.multiFeed?.contributing ?? 0);
-    s.feed_sender_count = Math.max(s.feed_sender_count || 0, s.multiFeed?.sender_count ?? 0);
-    s.feed_agreement = s.multiFeed?.agreement ?? s.feed_agreement ?? null;
-    if (s.multiFeed?.legs?.length) s.feed_legs = s.multiFeed.legs;
-
-    // Single OHLC tick for this cycle (Capital-safe mid)
-    pushOhlcTick(picked.mid ?? quote.mid);
-
-    // Sync truth from broker — source of ONE TRADE ONLY
+    // Sync broker positions even when the market is closed — SL/close can flatten the deal.
     const listed = await listCapitalOpenPositions(opened.session);
     let brokerOpen: CapitalOpenPosition | null = null;
     if (listed.ok) {
@@ -1685,7 +1668,6 @@ async function robotCycleBody(s: Internal) {
         if (!s.entry_at) s.entry_at = new Date().toISOString();
         s.mode = 'MANAGE';
         if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
-        // Restore durable CLOSE_PENDING across restart — do not issue a fresh close blindly
         try {
           if (getDurableOrderStore().isClosePending(s.account_id, s.epic)) {
             s.close_pending = true;
@@ -1694,16 +1676,18 @@ async function robotCycleBody(s: Internal) {
           /* ignore */
         }
       } else if (s.open_side) {
-        // Local thought open but broker flat → treat as closed (external / pending close confirmed)
+        const closeDetail = s.close_pending
+          ? 'Broker flat — close confirmed · POSITION_CLOSED'
+          : 'Broker flat on this epic — trade closed · POSITION_CLOSED';
+        s.last_close_at = new Date().toISOString();
+        s.last_close_detail = closeDetail;
         pushTick(s, {
           phase: 'INFO',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
           code: DecisionCodes.POSITION_CLOSED,
-          detail: s.close_pending
-            ? 'Broker flat — close confirmed · POSITION_CLOSED'
-            : 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
+          detail: closeDetail,
         });
         try {
           getDurableOrderStore().markPositionClosed(
@@ -1725,6 +1709,24 @@ async function robotCycleBody(s: Internal) {
         mid: quote.mid,
         code: DecisionCodes.BLOCKED_TECHNICAL,
         detail: `BLOCKED_TECHNICAL · Position sync warn: ${listed.detail} · holding no-new-entry while unsure`,
+      });
+      return;
+    }
+
+    if (!marketOpen) {
+      pushTick(s, {
+        phase: 'SCAN',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        code: DecisionCodes.MARKET_CLOSED,
+        detail: formatCapitalParkDetail(
+          s.epic,
+          quote.market_status,
+          `feeds ${s.feed_contributing}/${s.feed_sender_count} ${s.feed_source} · poll ${
+            CLOSED_MARKET_CADENCE_MS / 1000
+          }s · deal ${s.deal_id || s.last_close_detail || 'FLAT'}`,
+        ),
       });
       return;
     }
@@ -2147,6 +2149,8 @@ export async function startRobotSession(input: {
     capital_market_status: null,
     last_deal_reference: null,
     deal_id: null,
+    last_close_at: null,
+    last_close_detail: null,
     entry_price: null,
     entry_at: null,
     entry_setup: null,
@@ -2232,7 +2236,7 @@ export async function startRobotSession(input: {
     robot_status: 'RUNNING',
   });
   void robotCycle(session);
-  // 6s when TRADEABLE; auto-slows to 90s when market closed
+  // 2s when TRADEABLE; auto-slows to 15s when market closed (still reads deal flat)
   setRobotCadence(session, ACTIVE_CADENCE_MS);
 
   return publicSession(session);
