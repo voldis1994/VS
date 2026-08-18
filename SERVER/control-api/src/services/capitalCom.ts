@@ -640,8 +640,13 @@ function parseHmToMinutes(raw: string): number | null {
 
 function extractOpeningWindows(json: unknown): Array<{ openTime: string; closeTime: string }> {
   if (!json || typeof json !== 'object') return [];
-  const inst = ((json as Record<string, unknown>).instrument || {}) as Record<string, unknown>;
-  const hours = (inst.openingHours || inst.opening_hours || {}) as Record<string, unknown>;
+  const o = json as Record<string, unknown>;
+  const inst = (o.instrument || {}) as Record<string, unknown>;
+  const hours = (inst.openingHours ||
+    inst.opening_hours ||
+    o.openingHours ||
+    o.opening_hours ||
+    {}) as Record<string, unknown>;
   const times = hours.marketTimes || hours.market_times;
   if (!Array.isArray(times)) return [];
   const out: Array<{ openTime: string; closeTime: string }> = [];
@@ -653,6 +658,28 @@ function extractOpeningWindows(json: unknown): Array<{ openTime: string; closeTi
     if (openTime && closeTime) out.push({ openTime, closeTime });
   }
   return out;
+}
+
+const GOLD_FX_DAILY = [{ openTime: '22:00', closeTime: '21:00' }];
+
+function dealingWindows(json: unknown): Array<{ openTime: string; closeTime: string }> {
+  const extracted = extractOpeningWindows(json);
+  if (extracted.length) return extracted;
+  if (!json || typeof json !== 'object') return [];
+  const inst = ((json as Record<string, unknown>).instrument || {}) as Record<string, unknown>;
+  const needle = `${inst.epic || ''} ${inst.name || ''} ${inst.type || ''}`;
+  if (/GOLD|XAU|SILVER|XAG|OIL|BRENT|CURRENCIES|COMMODIT|INDICES/i.test(needle)) {
+    return GOLD_FX_DAILY;
+  }
+  return [];
+}
+
+function snapshotHasLiveQuote(json: unknown): boolean {
+  if (!json || typeof json !== 'object') return false;
+  const snap = ((json as Record<string, unknown>).snapshot || {}) as Record<string, unknown>;
+  const bid = numOrNull(snap.bid ?? snap.bidPrice);
+  const ask = numOrNull(snap.offer ?? snap.ask ?? snap.offerPrice);
+  return bid != null && ask != null && bid > 0 && ask > 0 && ask >= bid;
 }
 
 /** true = inside a UTC dealing window, false = outside, null = no hours on the payload. */
@@ -678,18 +705,39 @@ export function utcMinutesInOpenWindows(
   return false;
 }
 
+/** Gold/FX weekend in UTC: Friday 21:00 → Sunday 22:00. */
+export function isCapitalWeekendUtc(now: Date): boolean {
+  const day = now.getUTCDay();
+  const hm = now.getUTCHours() * 60 + now.getUTCMinutes();
+  const fridayClose = 21 * 60;
+  const sundayOpen = 22 * 60;
+  if (day === 6) return true;
+  if (day === 5 && hm >= fridayClose) return true;
+  if (day === 0 && hm < sundayOpen) return true;
+  return false;
+}
+
 /**
- * Capital dealing status. Snapshot CLOSED/OFFLINE wins. If snapshot says TRADEABLE
- * but openingHours (UTC) put us in the daily Gold break, force CLOSED.
+ * Capital dealing status.
+ * Daily break: openingHours (UTC) outside window → CLOSED even if snapshot is TRADEABLE.
+ * After reopen Capital often leaves snapshot CLOSED while the app is live — if hours
+ * say we are in session and it is not the weekend, treat as TRADEABLE.
  */
 export function effectiveCapitalMarketStatus(json: unknown, now = new Date()): string | null {
   const snap = readCapitalMarketStatus(json);
   const snapU = (snap || '').toUpperCase();
-  if (snapU && snapU !== 'TRADEABLE' && snapU !== 'OPEN' && snapU !== 'ON') {
-    return snapU;
-  }
-  const inHours = utcMinutesInOpenWindows(extractOpeningWindows(json), now);
+  const openSnap = snapU === 'TRADEABLE' || snapU === 'OPEN' || snapU === 'ON';
+  const inHours = utcMinutesInOpenWindows(dealingWindows(json), now);
+
   if (inHours === false) return 'CLOSED';
+  if (!openSnap && inHours === true && !isCapitalWeekendUtc(now)) {
+    return 'TRADEABLE';
+  }
+  if (!openSnap && inHours == null && !isCapitalWeekendUtc(now) && snapshotHasLiveQuote(json)) {
+    const inDailyBreak = utcMinutesInOpenWindows(GOLD_FX_DAILY, now) === false;
+    if (!inDailyBreak) return 'TRADEABLE';
+  }
+  if (snapU && !openSnap) return snapU;
   return snap;
 }
 

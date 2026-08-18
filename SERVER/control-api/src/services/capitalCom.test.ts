@@ -10,6 +10,7 @@ import {
   readCapitalMarketStatus,
   effectiveCapitalMarketStatus,
   utcMinutesInOpenWindows,
+  isCapitalWeekendUtc,
   type CapitalSession,
 } from './capitalCom.js';
 import { generateKeyPairSync } from 'crypto';
@@ -151,5 +152,43 @@ describe('Capital marketStatus + openingHours', () => {
       },
     };
     expect(effectiveCapitalMarketStatus(json, new Date('2026-08-18T23:05:00Z'))).toBe('TRADEABLE');
+  });
+
+  it('treats stale CLOSED as TRADEABLE after the daily Gold reopen', () => {
+    const json = {
+      snapshot: { marketStatus: 'CLOSED', bid: 4342.15, offer: 4342.45 },
+      instrument: {
+        openingHours: { marketTimes: [{ openTime: '22:00', closeTime: '21:00' }] },
+      },
+    };
+    expect(effectiveCapitalMarketStatus(json, new Date('2026-08-18T22:05:00Z'))).toBe('TRADEABLE');
+    expect(effectiveCapitalMarketStatus(json, new Date('2026-08-18T20:05:00Z'))).toBe('TRADEABLE');
+  });
+
+  it('keeps CLOSED on the weekend even if clock time looks in-session', () => {
+    expect(isCapitalWeekendUtc(new Date('2026-08-22T23:05:00Z'))).toBe(true);
+    const json = {
+      snapshot: { marketStatus: 'CLOSED', bid: 4342.15, offer: 4342.45 },
+      instrument: {
+        openingHours: { marketTimes: [{ openTime: '22:00', closeTime: '21:00' }] },
+      },
+    };
+    expect(effectiveCapitalMarketStatus(json, new Date('2026-08-22T23:05:00Z'))).toBe('CLOSED');
+  });
+
+  it('keeps CLOSED in the daily break when snapshot is also CLOSED', () => {
+    const json = {
+      snapshot: { marketStatus: 'CLOSED', bid: 4342.15, offer: 4342.45 },
+      instrument: {
+        openingHours: { marketTimes: [{ openTime: '22:00', closeTime: '21:00' }] },
+      },
+    };
+    expect(effectiveCapitalMarketStatus(json, new Date('2026-08-18T21:19:00Z'))).toBe('CLOSED');
+  });
+
+  it('unsticks CLOSED after reopen even when Capital omits openingHours', () => {
+    const json = { snapshot: { marketStatus: 'CLOSED', bid: 4342.15, offer: 4342.45 } };
+    expect(effectiveCapitalMarketStatus(json, new Date('2026-08-18T22:05:00Z'))).toBe('TRADEABLE');
+    expect(effectiveCapitalMarketStatus(json, new Date('2026-08-18T21:19:00Z'))).toBe('CLOSED');
   });
 });
