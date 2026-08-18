@@ -91,6 +91,8 @@ type RobotSession = {
   capital_market_status?: string | null;
   last_deal_reference: string | null;
   deal_id: string | null;
+  last_close_at?: string | null;
+  last_close_detail?: string | null;
   entry_price: number | null;
   entry_at: string | null;
   mfe: number;
@@ -133,6 +135,11 @@ function displayRegime(s: Pick<RobotSession, 'regime' | 'trend_bias' | 'ohlc_10s
   return 'SEEDING';
 }
 
+function marketDealingOpen(s: Pick<RobotSession, 'capital_market_status'>): boolean {
+  const st = String(s.capital_market_status || '').toUpperCase();
+  return st === 'TRADEABLE' || st === 'OPEN';
+}
+
 function fmt(n: number | null | undefined, d = 5) {
   if (n == null || !Number.isFinite(n)) return '—';
   return n.toLocaleString(undefined, { maximumFractionDigits: d });
@@ -140,10 +147,15 @@ function fmt(n: number | null | undefined, d = 5) {
 
 function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'flat' | 'entry' } {
   const regime = displayRegime(s);
+  const closed = !marketDealingOpen(s);
+  const closedTag = closed ? ` · ${String(s.capital_market_status || 'CLOSED').toUpperCase()}` : '';
   if (!s.running && !s.open_side) return { label: `STOPPED · ${regime}`, kind: 'flat' };
   if (s.open_side === 'BUY' || s.open_side === 'SELL') {
     const t = tradeLabel(s);
-    return { label: `${t} · ${regime}`, kind: t.includes('SCALP') ? 'short' : 'long' };
+    return { label: `${t} · ${regime}${closedTag}`, kind: t.includes('SCALP') ? 'short' : 'long' };
+  }
+  if (s.running && !s.open_side && closed) {
+    return { label: `MARKET CLOSED · ${String(s.capital_market_status || 'CLOSED').toUpperCase()}`, kind: 'flat' };
   }
   if (s.running && !s.open_side) {
     const fade =
@@ -831,7 +843,12 @@ export function RobotDeskPage() {
                 <div className="robot-op-focus-meta mono">
                   <div>
                     <span>STATUS</span>
-                    <strong>{focused.running ? 'ONLINE' : 'STOPPED'}</strong>
+                    <strong>
+                      {focused.running ? 'ONLINE' : 'STOPPED'}
+                      {marketDealingOpen(focused)
+                        ? ''
+                        : ` · MARKET ${String(focused.capital_market_status || 'CLOSED').toUpperCase()}`}
+                    </strong>
                   </div>
                   <div>
                     <span>CAPITAL</span>
@@ -890,8 +907,19 @@ export function RobotDeskPage() {
                   </div>
                   <div>
                     <span>DEAL</span>
-                    <strong className="mono">{focused.deal_id || '—'}</strong>
+                    <strong className="mono">
+                      {focused.deal_id ||
+                        (focused.last_close_at
+                          ? `CLOSED ${new Date(focused.last_close_at).toLocaleTimeString()}`
+                          : '—')}
+                    </strong>
                   </div>
+                  {focused.last_close_detail && !focused.deal_id ? (
+                    <div>
+                      <span>LAST CLOSE</span>
+                      <strong>{focused.last_close_detail}</strong>
+                    </div>
+                  ) : null}
                   <div>
                     <span>SCORE</span>
                     <strong>

@@ -600,6 +600,99 @@ export interface CapitalMarketQuote {
   min_stop_distance?: number | null;
 }
 
+function coerceMarketStatus(v: unknown): string | null {
+  if (typeof v === 'string') {
+    const s = v.trim().toUpperCase();
+    return s || null;
+  }
+  if (v && typeof v === 'object' && 'value' in (v as object)) {
+    return coerceMarketStatus((v as { value?: unknown }).value);
+  }
+  return null;
+}
+
+/** snapshot.marketStatus / instrument.marketStatus from GET /api/v1/markets/{epic}. */
+export function readCapitalMarketStatus(json: unknown): string | null {
+  if (!json || typeof json !== 'object') return null;
+  const o = json as Record<string, unknown>;
+  const snap = (o.snapshot || o.marketSnapshot || {}) as Record<string, unknown>;
+  const inst = (o.instrument || {}) as Record<string, unknown>;
+  return coerceMarketStatus(
+    snap.marketStatus ??
+      snap.market_status ??
+      inst.marketStatus ??
+      inst.market_status ??
+      inst.status ??
+      o.marketStatus
+  );
+}
+
+function parseHmToMinutes(raw: string): number | null {
+  const m = String(raw || '')
+    .trim()
+    .match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (!Number.isFinite(h) || !Number.isFinite(min) || h > 23 || min > 59) return null;
+  return h * 60 + min;
+}
+
+function extractOpeningWindows(json: unknown): Array<{ openTime: string; closeTime: string }> {
+  if (!json || typeof json !== 'object') return [];
+  const inst = ((json as Record<string, unknown>).instrument || {}) as Record<string, unknown>;
+  const hours = (inst.openingHours || inst.opening_hours || {}) as Record<string, unknown>;
+  const times = hours.marketTimes || hours.market_times;
+  if (!Array.isArray(times)) return [];
+  const out: Array<{ openTime: string; closeTime: string }> = [];
+  for (const row of times) {
+    if (!row || typeof row !== 'object') continue;
+    const r = row as Record<string, unknown>;
+    const openTime = String(r.openTime ?? r.open_time ?? '');
+    const closeTime = String(r.closeTime ?? r.close_time ?? '');
+    if (openTime && closeTime) out.push({ openTime, closeTime });
+  }
+  return out;
+}
+
+/** true = inside a UTC dealing window, false = outside, null = no hours on the payload. */
+export function utcMinutesInOpenWindows(
+  windows: Array<{ openTime: string; closeTime: string }>,
+  now: Date
+): boolean | null {
+  if (!windows.length) return null;
+  const nowM = now.getUTCHours() * 60 + now.getUTCMinutes();
+  let parsed = 0;
+  for (const w of windows) {
+    const o = parseHmToMinutes(w.openTime);
+    const c = parseHmToMinutes(w.closeTime);
+    if (o == null || c == null || o === c) continue;
+    parsed += 1;
+    if (o < c) {
+      if (nowM >= o && nowM < c) return true;
+    } else if (nowM >= o || nowM < c) {
+      return true;
+    }
+  }
+  if (!parsed) return null;
+  return false;
+}
+
+/**
+ * Capital dealing status. Snapshot CLOSED/OFFLINE wins. If snapshot says TRADEABLE
+ * but openingHours (UTC) put us in the daily Gold break, force CLOSED.
+ */
+export function effectiveCapitalMarketStatus(json: unknown, now = new Date()): string | null {
+  const snap = readCapitalMarketStatus(json);
+  const snapU = (snap || '').toUpperCase();
+  if (snapU && snapU !== 'TRADEABLE' && snapU !== 'OPEN' && snapU !== 'ON') {
+    return snapU;
+  }
+  const inHours = utcMinutesInOpenWindows(extractOpeningWindows(json), now);
+  if (inHours === false) return 'CLOSED';
+  return snap;
+}
+
 function inferPointSize(json: any, mid: number | null): number {
   const snap = (json?.snapshot || json?.marketSnapshot || {}) as Record<string, unknown>;
   const rules = (json?.dealingRules || json?.dealing_rules || {}) as Record<string, any>;
@@ -728,7 +821,7 @@ export async function fetchCapitalMarketQuote(
       ask,
       mid,
       spread,
-      market_status: strOrNull(snap.marketStatus ?? res.json?.instrument?.marketStatus),
+      market_status: effectiveCapitalMarketStatus(res.json),
       update_time: strOrNull(snap.updateTime ?? snap.updateTimeUTC ?? snap.binaryUpdateTime),
       percentage_change: numOrNull(snap.percentageChange),
       high: numOrNull(snap.high),

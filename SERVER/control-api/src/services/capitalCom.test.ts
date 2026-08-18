@@ -7,6 +7,9 @@ import {
   confirmCapitalDeal,
   encryptCapitalPassword,
   testCapitalComSession,
+  readCapitalMarketStatus,
+  effectiveCapitalMarketStatus,
+  utcMinutesInOpenWindows,
   type CapitalSession,
 } from './capitalCom.js';
 import { generateKeyPairSync } from 'crypto';
@@ -110,5 +113,43 @@ describe('confirmCapitalDeal dealStatus', () => {
     );
     expect(conf.ok).toBe(true);
     expect(conf.deal_id).toBe('d2');
+  });
+});
+
+describe('Capital marketStatus + openingHours', () => {
+  it('reads snapshot.marketStatus CLOSED', () => {
+    const json = { snapshot: { marketStatus: 'CLOSED', bid: 4334.57, offer: 4334.87 } };
+    expect(readCapitalMarketStatus(json)).toBe('CLOSED');
+    expect(effectiveCapitalMarketStatus(json, new Date('2026-08-18T21:19:00Z'))).toBe('CLOSED');
+  });
+
+  it('reads nested { value } marketStatus', () => {
+    expect(
+      readCapitalMarketStatus({ instrument: { marketStatus: { value: 'offline' } } })
+    ).toBe('OFFLINE');
+  });
+
+  it('forces CLOSED in the Gold daily break even if snapshot says TRADEABLE', () => {
+    const now = new Date('2026-08-18T21:19:00Z');
+    expect(
+      utcMinutesInOpenWindows([{ openTime: '22:00', closeTime: '21:00' }], now)
+    ).toBe(false);
+    const json = {
+      snapshot: { marketStatus: 'TRADEABLE', bid: 4334.57, offer: 4334.87 },
+      instrument: {
+        openingHours: { marketTimes: [{ openTime: '22:00', closeTime: '21:00' }] },
+      },
+    };
+    expect(effectiveCapitalMarketStatus(json, now)).toBe('CLOSED');
+  });
+
+  it('keeps TRADEABLE inside wrapping midnight hours', () => {
+    const json = {
+      snapshot: { marketStatus: 'TRADEABLE' },
+      instrument: {
+        openingHours: { marketTimes: [{ openTime: '22:00', closeTime: '21:00' }] },
+      },
+    };
+    expect(effectiveCapitalMarketStatus(json, new Date('2026-08-18T23:05:00Z'))).toBe('TRADEABLE');
   });
 });
