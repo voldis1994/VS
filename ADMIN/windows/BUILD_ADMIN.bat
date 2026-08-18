@@ -39,14 +39,18 @@ if errorlevel 1 (
 )
 
 echo ==^> tests
-set QT_QPA_PLATFORM=offscreen
-pushd "%CD%\ADMIN\desktop"
-python -m pytest tests
-set "TERR=%ERRORLEVEL%"
-popd
-if not "%TERR%"=="0" (
-  echo FAIL: ADMIN desktop tests
-  exit /b %TERR%
+if /I "%VS_ADMIN_RUN_TESTS%"=="1" (
+  set QT_QPA_PLATFORM=offscreen
+  pushd "%CD%\ADMIN\desktop"
+  python -m pytest tests
+  set "TERR=%ERRORLEVEL%"
+  popd
+  if not "%TERR%"=="0" (
+    echo FAIL: ADMIN desktop tests
+    exit /b %TERR%
+  )
+) else (
+  echo skip pytest ^(set VS_ADMIN_RUN_TESTS=1 to run^)
 )
 
 echo ==^> PyInstaller

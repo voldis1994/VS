@@ -35,12 +35,10 @@ if not exist "%~dp0ADMIN\config\SERVER_IP.txt" (
 )
 
 if not exist "%~dp0ADMIN\windows\dist\VS Admin.exe" (
-  echo VS Admin.exe missing — building once via ADMIN\windows\BUILD_ADMIN.bat
+  echo VS Admin.exe missing — trying BUILD_ADMIN.bat once
   call "%~dp0ADMIN\windows\BUILD_ADMIN.bat"
   if errorlevel 1 (
-    echo START_MSI FAILED — native build required
-    pause
-    exit /b 1
+    echo WARN: exe build failed — START will use python ADMIN\desktop\main.py
   )
 )
 

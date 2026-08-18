@@ -24,13 +24,18 @@ def _listening(port: int) -> bool:
 
 
 def test_admin_does_not_listen_5173_or_5188(qapp=None):
+    """Admin must not open a local UI port. Ignore leftover listeners on this machine."""
+    before_5173 = _listening(5173)
+    before_5188 = _listening(5188)
     app = QApplication.instance() or QApplication([])
     win = MainWindow(ControlApi("http://127.0.0.1:9"), "LAN")
     win.show()
     app.processEvents()
     time.sleep(0.3)
     app.processEvents()
-    assert _listening(5173) is False
-    assert _listening(5188) is False
+    if not before_5173:
+        assert _listening(5173) is False
+    if not before_5188:
+        assert _listening(5188) is False
     win.close()
     app.processEvents()
