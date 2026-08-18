@@ -43,8 +43,8 @@ export async function registerAdminPanelStatic(app: FastifyInstance): Promise<vo
     return reply.type('text/html; charset=utf-8').send(fs.createReadStream(file));
   };
 
-  app.get('/admin', async (_req, reply) => reply.redirect('/admin/'));
-  app.get('/admin/', sendIndex);
+  app.get('/admin', async (_req, reply) => reply.redirect('/robot'));
+  app.get('/admin/', async (_req, reply) => reply.redirect('/robot'));
 
   app.get('/admin/:file', async (request, reply) => {
     const name = String((request.params as { file?: string }).file || '');

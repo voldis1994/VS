@@ -26,13 +26,23 @@ function walk(dir: string, acc: string[] = []): string[] {
 }
 
 describe('ADMIN production path — web control panel on one MSI, no tactical UI', () => {
+  it('ADMIN/desk is the PALAID TACTICAL DESK with SAFETY SL', () => {
+    const logo = readFileSync(join(ROOT, 'ADMIN/desk/src/components/Logo.tsx'), 'utf8');
+    const robot = readFileSync(join(ROOT, 'ADMIN/desk/src/pages/RobotDeskPage.tsx'), 'utf8');
+    expect(logo).toContain('TACTICAL DESK');
+    expect(robot).toMatch(/SAFETY SL/);
+    expect(robot).toMatch(/ROBOT COMMAND/);
+    expect(existsSync(join(ROOT, 'ADMIN/desk/src/pages/FeedsPage.tsx'))).toBe(true);
+    expect(existsSync(join(ROOT, 'ADMIN/desk/src/pages/OrbitReaderPage.tsx'))).toBe(true);
+  });
+
   it('ADMIN/web control panel exists and desktop archive is not the start path', () => {
     expect(existsSync(join(ROOT, 'ADMIN/web/index.html'))).toBe(true);
     expect(existsSync(join(ROOT, 'ADMIN/web/app.js'))).toBe(true);
     expect(existsSync(join(ROOT, 'SERVER/calc/vs-calc.cpp'))).toBe(true);
     const html = readFileSync(join(ROOT, 'ADMIN/web/index.html'), 'utf8');
     expect(html).toMatch(/VS ADMIN/);
-    expect(html).not.toMatch(/TACTICAL DESK|ROBOT BRAIN/);
+    expect(html).not.toMatch(/ROBOT BRAIN/);
   });
 
   it('production ADMIN web + desktop must not contain legacy identifiers', () => {
@@ -48,7 +58,7 @@ describe('ADMIN production path — web control panel on one MSI, no tactical UI
     expect(offenders).toEqual([]);
   });
 
-  it('START_MSI.bat opens local :3000/admin and never Vite 5188', () => {
+  it('START_MSI.bat opens TACTICAL DESK /robot and never Vite 5188', () => {
     expect(existsSync(START_MSI)).toBe(true);
     const bat = readFileSync(START_MSI, 'utf8');
     expect(bat).toMatch(/start-admin\.ps1/);
@@ -56,9 +66,10 @@ describe('ADMIN production path — web control panel on one MSI, no tactical UI
 
     expect(existsSync(START_PS1)).toBe(true);
     const ps1 = readFileSync(START_PS1, 'utf8');
-    expect(ps1).toContain('3000/admin');
+    expect(ps1).toContain('3000/robot');
     expect(ps1).toContain('VS_SINGLE_BOX');
     expect(ps1).toContain('vs-calc');
+    expect(ps1).toContain('TACTICAL DESK');
     expect(ps1).not.toMatch(/5188/);
     expect(ps1).not.toContain('serve-admin.mjs');
     expect(ps1).not.toMatch(/apps\\dashboard/);

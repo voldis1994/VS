@@ -49,9 +49,10 @@ describe('canonical production architecture', () => {
     expect(msi).toMatch(/start-admin\.ps1/);
     expect(msi).toMatch(/ADMIN\\web\\index.html/);
     const ps1 = readFileSync(join(ROOT, 'ADMIN/windows/start-admin.ps1'), 'utf8');
-    expect(ps1).toContain('3000/admin');
+    expect(ps1).toContain('3000/robot');
     expect(ps1).toContain('VS_SINGLE_BOX');
     expect(ps1).toContain('vs-calc');
+    expect(ps1).toContain('TACTICAL DESK');
     expect(ps1).not.toMatch(/serve-admin\.mjs/);
     expect(ps1).not.toMatch(/npm exec.*vite|vite --host/);
     expect(ps1).toMatch(/node_modules\\vite\\bin\\vite\.js/);

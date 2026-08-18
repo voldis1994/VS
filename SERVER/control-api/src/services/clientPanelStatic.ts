@@ -20,7 +20,8 @@ export function clientPanelDistDir(): string {
   const fromEnv = process.env.CLIENT_PANEL_DIST?.trim();
   if (fromEnv) return path.resolve(fromEnv);
   const here = path.dirname(fileURLToPath(import.meta.url));
-  // Prefer CLIENT web dist; optional env override
+  const desk = path.resolve(here, '../../../../ADMIN/desk/dist');
+  if (fs.existsSync(path.join(desk, 'index.html'))) return desk;
   return path.resolve(here, '../../../../CLIENT/web/dist');
 }
 
@@ -49,7 +50,7 @@ export async function registerClientPanelStatic(app: FastifyInstance): Promise<v
       return reply
         .code(503)
         .type('text/plain; charset=utf-8')
-        .send('Client web panel not built. On server: cd CLIENT/web && npm run build\n');
+        .send('Tactical desk not built. START_MSI.bat builds ADMIN/desk\n');
     }
 
     let file = safeJoin(dist, urlPath);
