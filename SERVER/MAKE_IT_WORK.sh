@@ -110,6 +110,9 @@ for f in "$DATA/server.env" "$DATA/compose.env" "$API/.env" "$PREFIX/.env" "$REP
   force_kv "$f" DB_USER "$DB_USER"
   force_kv "$f" DB_PASSWORD "$DB_PASSWORD"
   force_kv "$f" VS_LAN_MANAGEMENT 1
+  # VS_LAN_TRUST_ADMIN=1 grants LAN IPs access to READ-ONLY monitoring endpoints
+  # only (ping, health, snapshot, market).  State-changing routes (trading
+  # start/stop, kill-switch) always require a valid x-admin-token.
   force_kv "$f" VS_LAN_TRUST_ADMIN 1
   force_kv "$f" VS_PRIVATE_NETWORK 1
   force_kv "$f" CONTROL_API_HOST 0.0.0.0
@@ -270,6 +273,8 @@ Environment=NODE_ENV=production
 Environment=OPERATING_MODE=PRODUCTION
 Environment=LIVE_TRADING_ENABLED=false
 Environment=VS_LAN_MANAGEMENT=1
+# VS_LAN_TRUST_ADMIN=1: grants LAN IPs read-only monitoring access only.
+# State-changing routes always require x-admin-token.
 Environment=VS_LAN_TRUST_ADMIN=1
 Environment=VS_PRIVATE_NETWORK=1
 Environment=CONTROL_API_HOST=0.0.0.0
@@ -321,7 +326,10 @@ EnvironmentFile=-${DATA}/server.env
 Environment=VS_CONTROL_API_HOST=127.0.0.1
 Environment=CONTROL_API_PORT=3000
 Environment=VS_CLIENT_GATEWAY_PORT=443
-Environment=VS_CLIENT_ALLOW_HTTP=1
+# VS_CLIENT_ALLOW_HTTP is intentionally NOT set here.
+# The gateway requires TLS certs at /etc/vs/tls/ for production.
+# If certs are missing, provision them (e.g. certbot) before starting the gateway.
+# For a LAN-only test without certs, set VS_CLIENT_ALLOW_HTTP=1 manually and accept the risk.
 Environment=VS_CLIENT_URL_FILE=/etc/vs/client-url
 Environment=VS_CLIENT_TLS_CERT=/etc/vs/tls/fullchain.pem
 Environment=VS_CLIENT_TLS_KEY=/etc/vs/tls/privkey.pem
