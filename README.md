@@ -26,7 +26,9 @@ Browser opens:
 |------|-----|
 | Control panel (TACTICAL DESK) | http://127.0.0.1:3000/robot |
 | Feeds / Orbit | http://127.0.0.1:3000/feeds |
-| Client web | http://127.0.0.1:3000/ |
+| Client homepage (stable) | http://127.0.0.1:8443/ |
+
+Client URL is `ADMIN\config\client-url.txt`. PALAID never overwrites it and never starts trycloudflare. Hand the client that URL + login in person. Same Wi‑Fi: `http://<MSI-LAN-IP>:8443/`. Outside Wi‑Fi: write your stable `https://…` into that file once.
 
 ## WHAT RUNS
 
@@ -40,7 +42,7 @@ Browser opens:
 1. Brokers — SAVE Capital key + TEST
 2. Accounts — PULL CAPITAL → SAVE EPIC
 3. Robot — START
-4. Client URL for customers: http://127.0.0.1:3000/ (or this MSI LAN IP once you set `VS_LAN_MANAGEMENT=1`)
+4. Client homepage: http://127.0.0.1:8443/ (or the URL in `ADMIN\config\client-url.txt`)
 
 Stop: `powershell -File ADMIN\windows\stop-admin.ps1`
 

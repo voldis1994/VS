@@ -95,24 +95,50 @@ if (-not (Test-Path $envFile)) {
     "CORS_ORIGIN=*",
     "CLIENT_COOKIE_SECURE=false",
     "VS_CLIENT_URL_FILE=" + $clientUrlFile,
-    "VS_PUBLIC_CLIENT_URL=http://127.0.0.1:3000/",
+    "VS_PUBLIC_CLIENT_URL=http://127.0.0.1:8443/",
+    "VS_CLIENT_GATEWAY_PORT=8443",
+    "VS_CLIENT_ALLOW_HTTP=1",
     "NODE_ENV=production"
   ) | Set-Content -Path $envFile -Encoding ascii
 }
 
+# Stable CLIENT homepage. Never trycloudflare (that hostname changes every launch).
+# PALAID does not overwrite client-url.txt once you set it.
 if (-not (Test-Path $clientUrlFile)) {
-  Set-Content -Path $clientUrlFile -Value "http://127.0.0.1:3000/" -Encoding ascii
+  Set-Content -Path $clientUrlFile -Value "http://127.0.0.1:8443/" -Encoding ascii
+} else {
+  $curClientUrl = ((Get-Content $clientUrlFile -Raw -ErrorAction SilentlyContinue) + "").Trim()
+  if ($curClientUrl -match '^https?://127\.0\.0\.1:3000/?$') {
+    Set-Content -Path $clientUrlFile -Value "http://127.0.0.1:8443/" -Encoding ascii
+  }
 }
 
 Import-EnvFile $envFile
 $env:VS_SINGLE_BOX = "1"
+$stableClientUrl = ""
+if (Test-Path $clientUrlFile) {
+  $stableClientUrl = @(Get-Content $clientUrlFile | Where-Object { $_ -and ($_ -notmatch '^\s*#') -and ($_ -match 'https?://') } | Select-Object -First 1)
+  $stableClientUrl = [string]$stableClientUrl
+}
+if (-not $stableClientUrl) { $stableClientUrl = "http://127.0.0.1:8443/" }
+if (-not $stableClientUrl.EndsWith("/")) { $stableClientUrl = $stableClientUrl + "/" }
+$env:VS_PUBLIC_CLIENT_URL = $stableClientUrl
+$env:VS_CLIENT_URL_FILE = $clientUrlFile
+$env:VS_CLIENT_GATEWAY_PORT = "8443"
+$env:VS_CLIENT_GATEWAY_PLAIN_PORT = "8443"
+$env:VS_CLIENT_ALLOW_HTTP = "1"
+$env:VS_CLIENT_GATEWAY_HOST = "0.0.0.0"
+Set-Kv $envFile "VS_PUBLIC_CLIENT_URL" $stableClientUrl
+Set-Kv $envFile "VS_CLIENT_URL_FILE" $clientUrlFile
+Set-Kv $envFile "VS_CLIENT_GATEWAY_PORT" "8443"
+Set-Kv $envFile "VS_CLIENT_ALLOW_HTTP" "1"
 Copy-Item $envFile (Join-Path $RepoRoot "SERVER\control-api\.env") -Force
 Copy-Item $envFile (Join-Path $RepoRoot ".env") -Force
 
 Write-Host "========================================"
 Write-Host " VS — ONE PC (MSI)"
 Write-Host " Control panel  http://127.0.0.1:3000/robot"
-Write-Host " Client web     http://127.0.0.1:3000/"
+Write-Host " Client web     $stableClientUrl"
 Write-Host " C++ calc       vs-calc  (EntryReady only)"
 Write-Host " Docker Desktop stays installed"
 Write-Host "========================================"
@@ -318,13 +344,47 @@ if (Test-Path $calcExe) {
   Write-Host "WARN: C++ vs-calc.exe missing — install g++ or MSVC and run SERVER\calc\BUILD_CALC.bat"
 }
 
+function Get-LanIPv4 {
+  try {
+    $ip = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
+      Where-Object { $_.IPAddress -notmatch '^127\.' -and $_.PrefixOrigin -ne 'WellKnown' } |
+      Select-Object -First 1 -ExpandProperty IPAddress
+    if ($ip) { return [string]$ip }
+  } catch { }
+  return ""
+}
+
+function Stop-ClientGateway {
+  Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and $_.CommandLine -match 'client-gateway\\gateway\.mjs' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+}
+
+Write-Host "Starting CLIENT gateway :8443 (stable URL, not trycloudflare)..."
+Stop-ClientGateway
+$gwJs = Join-Path $RepoRoot "SERVER\client-gateway\gateway.mjs"
+if (Test-Path $gwJs) {
+  $gwLog = Join-Path $logDir "client-gateway.out.log"
+  $gwErr = Join-Path $logDir "client-gateway.err.log"
+  Remove-Item $gwLog -Force -ErrorAction SilentlyContinue
+  Remove-Item $gwErr -Force -ErrorAction SilentlyContinue
+  Start-Process -FilePath $node.Source -ArgumentList @($gwJs) -WorkingDirectory (Split-Path $gwJs) -RedirectStandardOutput $gwLog -RedirectStandardError $gwErr -WindowStyle Hidden | Out-Null
+} else {
+  Write-Host "WARN: SERVER\client-gateway\gateway.mjs missing"
+}
+
 $url = "http://127.0.0.1:3000/robot"
 Write-Host ("Opening " + $url)
 Start-Process $url
 
+$lan = Get-LanIPv4
 Write-Host "VS READY"
 Write-Host "  DESK    http://127.0.0.1:3000/robot"
-Write-Host "  CLIENT  http://127.0.0.1:3000/"
+Write-Host ("  CLIENT  " + $stableClientUrl)
+Write-Host "          ADMIN\config\client-url.txt  (PALAID never overwrites this)"
+if ($lan) {
+  Write-Host ("  LAN     http://" + $lan + ":8443/  (same Wi-Fi)")
+}
 Write-Host "  CALC    C++ vs-calc → /api/pipeline/intents"
 Write-Host "STOP: powershell -File ADMIN\windows\stop-admin.ps1"
 exit 0

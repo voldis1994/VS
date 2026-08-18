@@ -4,6 +4,7 @@ import { TelemetryBroadcaster } from '../ws/telemetry.js';
 import { runtimeBuildInfo } from '../services/runtimeBuild.js';
 import { buildSystemHealth } from '../services/systemHealth.js';
 import { getPrimaryRobotConnectionId } from '../services/robotDesk.js';
+import { stablePublicClientUrl } from '../services/clientPublicUrl.js';
 
 function liveEnabled(): boolean {
   const v = process.env.LIVE_TRADING_ENABLED;
@@ -106,6 +107,7 @@ export async function registerSystemRoutes(
       today_executions: todayExecutions,
       mode: process.env.OPERATING_MODE || 'DEMO',
       live_enabled: liveEnabled(),
+      client_url: stablePublicClientUrl(),
       server_time: new Date().toISOString(),
       latency: telemetry.getLatestMetrics(),
       status: dbOk ? (liveEnabled() ? 'LIVE' : 'DEMO') : 'DEGRADED',

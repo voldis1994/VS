@@ -35,6 +35,9 @@ describe('ADMIN production path — web control panel on one MSI, no tactical UI
     const clients = readFileSync(join(ROOT, 'ADMIN/desk/src/pages/ClientsPage.tsx'), 'utf8');
     expect(clients).toMatch(/handleRename/);
     expect(clients).toContain("JSON.stringify({ name: next })");
+    expect(clients).toContain('8443');
+    expect(clients).toContain('client-url.txt');
+    expect(clients).not.toMatch(/trycloudflare\.com/);
     expect(robot).toMatch(/MARKET CLOSED/);
     expect(robot).toMatch(/last_close_at/);
     expect(existsSync(join(ROOT, 'ADMIN/desk/src/pages/FeedsPage.tsx'))).toBe(true);
@@ -72,6 +75,9 @@ describe('ADMIN production path — web control panel on one MSI, no tactical UI
     expect(existsSync(START_PS1)).toBe(true);
     const ps1 = readFileSync(START_PS1, 'utf8');
     expect(ps1).toContain('3000/robot');
+    expect(ps1).toContain('8443');
+    expect(ps1).not.toMatch(/trycloudflare\.com/);
+    expect(ps1).not.toMatch(/cloudflared/);
     expect(ps1).toContain('VS_SINGLE_BOX');
     expect(ps1).toContain('vs-calc');
     expect(ps1).toContain('TACTICAL DESK');

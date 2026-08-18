@@ -25,5 +25,7 @@ describe('client gateway path policy', () => {
     expect(isClientPublicPath('/admin')).toBe(false);
     expect(isClientPublicPath('/admin/')).toBe(false);
     expect(isClientPublicPath('/admin/app.js')).toBe(false);
+    expect(isClientPublicPath('/robot')).toBe(false);
+    expect(isClientPublicPath('/feeds')).toBe(false);
   });
 });

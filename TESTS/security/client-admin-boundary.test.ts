@@ -7,6 +7,7 @@ describe('security: CLIENT gateway cannot reach ADMIN APIs', () => {
     expect(isClientPublicPath('/api/v1/admin/lan-bootstrap')).toBe(false);
     expect(isClientPublicPath('/api/clients')).toBe(false);
     expect(isClientPublicPath('/api/system/mode')).toBe(false);
+    expect(isClientPublicPath('/robot')).toBe(false);
   });
 
   it('client session paths remain available', () => {
