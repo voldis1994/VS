@@ -26,6 +26,7 @@ describe('admin panel static', () => {
     expect(res.statusCode).toBe(200);
     expect(res.body).toContain('VS ADMIN CONTROL PANEL');
     expect(res.headers['x-vs-panel']).toBe('admin');
+    expect(String(res.headers['cache-control'] || '')).toMatch(/no-store/);
     await app.close();
   });
 });
