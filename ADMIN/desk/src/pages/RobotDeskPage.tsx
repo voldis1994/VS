@@ -409,14 +409,7 @@ export function RobotDeskPage() {
   const capitalSenders = senders.filter(
     (s) => s.kind === 'capital_com' && s.enabled !== false,
   );
-  const publicSenders = senders.filter(
-    (s) =>
-      s.kind === 'yahoo_finance' ||
-      s.kind === 'aurum_metals' ||
-      s.kind === 'fx_live' ||
-      s.kind === 'coinbase' ||
-      s.kind === 'fx_reference',
-  );
+  const publicSenders = senders.filter((s) => s.trust === 'public_ref');
   const feedCount = board?.feed_sender_count ?? capitalSenders.length + publicSenders.length;
   const feedOk = board?.feed_contributing ?? 0;
   const chainLabel =

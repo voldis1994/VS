@@ -12,7 +12,7 @@ export function FeedsPage() {
     <div>
       <h1 className="page-title">Senders / Feeds</h1>
       <p className="page-subtitle">
-        Real data senders (Capital.com broker rows + FX reference + catalog). Not synthetic.
+        Capital.com broker rows plus public internet senders (Yahoo, Aurum, Gold-API, Fawaz, Coinbase, Kraken, KuCoin, Binance.US, CoinGecko, Bitstamp) and ECB FX. Not synthetic.
         Open <Link to="/orbit">Orbit Reader</Link> to watch simultaneous trusted reads.
       </p>
       <div className="card">

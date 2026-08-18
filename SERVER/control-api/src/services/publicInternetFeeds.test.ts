@@ -1,9 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
+  PUBLIC_SENDERS,
+  epicToBinanceUsSymbol,
+  epicToBitstampPair,
+  epicToCoinGeckoId,
   epicToCoinbaseProduct,
+  epicToFawazMetal,
+  epicToGoldApiSymbol,
+  epicToKrakenPair,
+  epicToKucoinSymbol,
   epicToMetalKey,
   epicToYahooSymbol,
   fusePriceMids,
+  publicFeedNotApplicable,
 } from './publicInternetFeeds.js';
 
 describe('public internet epic mapping', () => {
@@ -15,10 +24,28 @@ describe('public internet epic mapping', () => {
     expect(epicToMetalKey('XAGUSD')).toBe('silver');
   });
 
+  it('maps GOLD onto several live public spots (not FX-only IDLE)', () => {
+    expect(epicToGoldApiSymbol('GOLD')).toBe('XAU');
+    expect(epicToFawazMetal('GOLD')).toBe('xau');
+    expect(epicToCoinbaseProduct('GOLD')).toBe('PAXG-USD');
+    expect(epicToKrakenPair('GOLD')).toBe('PAXGUSD');
+    expect(epicToKucoinSymbol('GOLD')).toBe('PAXG-USDT');
+    expect(epicToBinanceUsSymbol('GOLD')).toBe('PAXGUSDT');
+    expect(epicToCoinGeckoId('GOLD')).toBe('pax-gold');
+    expect(epicToBitstampPair('GOLD')).toBe('paxgusd');
+    expect(PUBLIC_SENDERS.length).toBeGreaterThanOrEqual(10);
+  });
+
+  it('treats N/A mapping details as not-applicable, not errors', () => {
+    expect(publicFeedNotApplicable('N/A · Coinbase has no mapping for this epic')).toBe(true);
+    expect(publicFeedNotApplicable('Coinbase HTTP 503')).toBe(false);
+  });
+
   it('maps FX and crypto', () => {
     expect(epicToYahooSymbol('EURUSD')).toBe('EURUSD=X');
     expect(epicToYahooSymbol('BTCUSD')).toBe('BTC-USD');
     expect(epicToCoinbaseProduct('BTCUSD')).toBe('BTC-USD');
+    expect(epicToBitstampPair('EURUSD')).toBe('eurusd');
   });
 });
 

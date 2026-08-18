@@ -9,20 +9,15 @@ import {
   PUBLIC_SENDERS,
   epicToFxPair,
   fusePriceMids,
+  publicFeedNotApplicable,
   readAllPublicFeeds,
+  type PublicFeedKind,
   type PublicFeedRead,
 } from './publicInternetFeeds.js';
 
 export { epicToFxPair } from './publicInternetFeeds.js';
 
-export type SenderKind =
-  | 'capital_com'
-  | 'fx_reference'
-  | 'catalog_pulse'
-  | 'yahoo_finance'
-  | 'aurum_metals'
-  | 'fx_live'
-  | 'coinbase';
+export type SenderKind = 'capital_com' | 'catalog_pulse' | PublicFeedKind;
 
 export interface DataSender {
   sender_id: string;
@@ -594,7 +589,7 @@ function publicReadToSenderRead(r: PublicFeedRead): SenderRead {
 
 function touchFromPublic(r: PublicFeedRead) {
   touchHealth(r.sender_id, {
-    status: r.ok ? 'LIVE' : r.detail?.includes('mapping') || r.detail?.includes('only') ? 'IDLE' : 'ERROR',
+    status: r.ok ? 'LIVE' : publicFeedNotApplicable(r.detail) ? 'IDLE' : 'ERROR',
     ok: r.ok,
     last_ok_at: r.ok ? new Date().toISOString() : undefined,
     last_error: r.ok ? null : r.detail || 'fail',
@@ -605,11 +600,8 @@ function touchFromPublic(r: PublicFeedRead) {
 function buildConsensus(epics: string[], reads: SenderRead[]) {
   const priceKinds = new Set<SenderKind>([
     'capital_com',
-    'yahoo_finance',
-    'aurum_metals',
-    'fx_live',
-    'coinbase',
     'fx_reference',
+    ...PUBLIC_SENDERS.map((s) => s.kind),
   ]);
   return epics.map((epic) => {
     const q = epic.toLowerCase();
@@ -785,7 +777,7 @@ export type MultiFeedPrice = {
   anchored_to_capital?: boolean;
 };
 
-const ANCHOR_MAX_REL = 0.015; // 1.5% — Capital CFD vs public spot/futures often diverge >0.8% on Gold
+const ANCHOR_MAX_REL = 0.02; // 2% — Capital CFD vs public spot/futures/daily FX-metal often 0.8–1.8% on Gold
 
 function nearAnchor(mid: number, anchor: number, maxRel = ANCHOR_MAX_REL): boolean {
   if (!Number.isFinite(mid) || !Number.isFinite(anchor) || anchor === 0) return false;
@@ -834,16 +826,9 @@ export async function readMultiFeedPrice(
   for (const r of publicReads) touchFromPublic(r);
 
   const fxApplicable = !(fxRead.detail || '').toLowerCase().includes('only applies');
-  const publicConfiguredForEpic = publicReads.filter((r) => {
-    const d = (r.detail || '').toLowerCase();
-    const na =
-      d.includes('no yahoo mapping') ||
-      d.includes('only prices') ||
-      d.includes('only for major') ||
-      d.includes('fx live only') ||
-      d.includes('coinbase only');
-    return !na;
-  }).length;
+  const publicConfiguredForEpic = publicReads.filter(
+    (r) => !publicFeedNotApplicable(r.detail)
+  ).length;
 
   const capitalMids = capitalReads
     .filter((r) => r.ok && r.mid != null && Number.isFinite(r.mid))
