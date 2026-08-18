@@ -15,7 +15,8 @@
 | `SERVER/client-gateway/` | Public :443 door |
 | `old version/admin/web/` | Archived React/Vite ADMIN |
 | `old version/admin/web-runtime/` | Archived localhost :5188 runtime |
-| `old version/server/monitor-web/` | Archived HTML server panel |
+| `old version/architecture/legacy-review/libs/` | Archived C++ calculation engines (not deleted) |
+| `DOCS/CPP_DISCONNECT_AUDIT.md` | What was changed when C++ was disconnected from Node/Capital |
 
 Production must not launch Vite ADMIN, `serve-admin.mjs`, or a browser wrapper.
 
