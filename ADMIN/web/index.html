@@ -6,20 +6,24 @@
     <title>VS ADMIN</title>
     <style>
       :root {
-        --bg: #050607;
-        --side: #07090c;
-        --line: #1c242c;
-        --text: #eef3f0;
-        --mute: #7d8882;
-        --ok: #2ef28a;
-        --bad: #ff5a5a;
-        --warn: #e6b84d;
-        --card: #0b1014;
+        --bg: #000000;
+        --side: #07070b;
+        --line: rgba(255, 43, 214, 0.28);
+        --text: #f4f1ff;
+        --mute: #8a849c;
+        --ok: #00f0ff;
+        --hot: #ff2bd6;
+        --bad: #ff2a5a;
+        --warn: #ffc14d;
+        --card: #0e0e16;
       }
       * { box-sizing: border-box; }
       body {
         margin: 0;
-        background: var(--bg);
+        background:
+          radial-gradient(900px 420px at 0% -10%, rgba(255, 43, 214, 0.14), transparent 55%),
+          radial-gradient(700px 380px at 100% 0%, rgba(0, 240, 255, 0.1), transparent 50%),
+          #000;
         color: var(--text);
         font: 13px/1.4 "Segoe UI", "IBM Plex Sans", sans-serif;
       }
@@ -30,22 +34,22 @@
         border-right: 1px solid var(--line);
         padding: 18px 12px;
       }
-      .brand { color: var(--ok); font-size: 22px; font-weight: 800; letter-spacing: 6px; }
-      .sub { color: var(--mute); font-size: 10px; letter-spacing: 3px; margin-bottom: 18px; }
+      .brand { color: var(--hot); font-size: 22px; font-weight: 800; letter-spacing: 6px; text-shadow: 0 0 12px rgba(255, 43, 214, 0.55); }
+      .sub { color: var(--ok); font-size: 10px; letter-spacing: 3px; margin-bottom: 18px; }
       .nav button {
         display: block; width: 100%; text-align: left;
         background: none; border: 0; color: var(--mute);
-        padding: 9px 12px; margin: 2px 0; border-radius: 6px; cursor: pointer;
+        padding: 9px 12px; margin: 2px 0; border-radius: 0; cursor: pointer;
       }
-      .nav button.on { background: #102018; color: var(--ok); border-left: 3px solid var(--ok); }
+      .nav button.on { background: linear-gradient(90deg, #ff2bd6, #00f0ff); color: #050008; border-left: 0; font-weight: 700; }
       .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
       .top {
         display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
-        padding: 12px 18px; border-bottom: 1px solid var(--line); background: #0c1116;
+        padding: 12px 18px; border-bottom: 1px solid var(--line); background: #05050a;
       }
       .chip {
         border: 1px solid var(--line); background: var(--card);
-        padding: 5px 10px; border-radius: 4px; font-size: 12px;
+        padding: 5px 10px; border-radius: 2px; font-size: 12px;
       }
       .chip.ok { color: var(--ok); } .chip.bad { color: var(--bad); } .chip.warn { color: var(--warn); }
       .content { padding: 18px; overflow: auto; }
@@ -59,7 +63,7 @@
         padding: 8px 10px; border-radius: 6px;
       }
       button.act { cursor: pointer; }
-      button.pri { background: #102018; color: var(--ok); border-color: #1c3a2a; font-weight: 700; }
+      button.pri { background: linear-gradient(90deg, #ff2bd6, #00f0ff); color: #050008; border-color: transparent; font-weight: 700; }
       table { width: 100%; border-collapse: collapse; }
       th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); }
       th { color: var(--mute); font-size: 11px; letter-spacing: 1px; }

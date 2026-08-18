@@ -73,7 +73,7 @@ function safeJoin(root: string, urlPath: string): string | null {
 function sendFile(reply: FastifyReply, file: string, panel: string) {
   const ext = path.extname(file).toLowerCase();
   reply.header('X-VS-Panel', panel);
-  if (ext === '.html') reply.header('Cache-Control', 'no-store');
+  reply.header('Cache-Control', 'no-store');
   return reply.type(MIME[ext] || 'application/octet-stream').send(fs.createReadStream(file));
 }
 

@@ -203,23 +203,26 @@ if (-not (Test-Path $tsx)) {
 $deskDir = Join-Path $RepoRoot "ADMIN\desk"
 $deskVite = Join-Path $deskDir "node_modules\vite\bin\vite.js"
 $deskIndex = Join-Path $deskDir "dist\index.html"
-if (-not (Test-Path $deskIndex)) {
-  Write-Host "Building TACTICAL DESK..."
-  Push-Location $deskDir
-  if (-not (Test-Path $deskVite)) {
-    Write-Host "npm install ADMIN desk..."
-    $npmCode = Invoke-NpmInstall
-    if ($npmCode -ne 0) { Pop-Location; Write-Fail "npm install ADMIN/desk failed" }
-  }
-  if (Test-Path $deskVite) {
-    & $node.Source $deskVite build
-    if ($LASTEXITCODE -ne 0) { Pop-Location; Write-Fail "TACTICAL DESK build failed" }
-  } else {
-    Pop-Location
-    Write-Fail "vite missing in ADMIN\desk"
-  }
-  Pop-Location
+$deskDist = Join-Path $deskDir "dist"
+# Always rebuild so git pull theme/CSS changes actually show (old dist stays green otherwise).
+Write-Host "Building TACTICAL DESK..."
+if (Test-Path $deskDist) {
+  Remove-Item -Recurse -Force $deskDist
 }
+Push-Location $deskDir
+if (-not (Test-Path $deskVite)) {
+  Write-Host "npm install ADMIN desk..."
+  $npmCode = Invoke-NpmInstall
+  if ($npmCode -ne 0) { Pop-Location; Write-Fail "npm install ADMIN/desk failed" }
+}
+if (Test-Path $deskVite) {
+  & $node.Source $deskVite build
+  if ($LASTEXITCODE -ne 0) { Pop-Location; Write-Fail "TACTICAL DESK build failed" }
+} else {
+  Pop-Location
+  Write-Fail "vite missing in ADMIN\desk"
+}
+Pop-Location
 
 if (-not (Test-Path $deskIndex)) {
   Write-Fail "TACTICAL DESK missing ADMIN\desk\dist\index.html — /robot would show VS CLIENT"
