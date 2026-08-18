@@ -205,7 +205,38 @@ async function main() {
   // VS Private Network device registry / heartbeat / registration
   await registerPrivateNetworkRoutes(app);
 
-  app.get('/ws', { websocket: true }, (socket) => {
+  // Telemetry WebSocket — requires valid x-admin-token header (first-message fallback).
+  app.get('/ws', { websocket: true }, async (socket, request) => {
+    const expectedToken = process.env.API_ADMIN_TOKEN;
+    const headerToken = request.headers['x-admin-token'] as string | undefined;
+    const tokenOk =
+      expectedToken &&
+      expectedToken !== 'CHANGE_ME_ADMIN_TOKEN' &&
+      headerToken === expectedToken;
+
+    if (!tokenOk) {
+      // Give a short window for the client to send {"type":"auth","token":"..."}.
+      const authed = await new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => resolve(false), 3000);
+        socket.once('message', (raw) => {
+          clearTimeout(timer);
+          try {
+            const msg = JSON.parse(String(raw)) as { type?: string; token?: string };
+            if (msg.type === 'auth' && msg.token && msg.token === expectedToken) {
+              resolve(true);
+              return;
+            }
+          } catch { /* ignore */ }
+          resolve(false);
+        });
+      });
+      if (!authed) {
+        socket.send(JSON.stringify({ type: 'error', message: 'Unauthorized', timestamp: new Date().toISOString() }));
+        socket.close();
+        return;
+      }
+    }
+
     telemetry.addClient(socket);
     socket.on('close', () => telemetry.removeClient(socket));
   });
