@@ -119,7 +119,7 @@ class MainWindow(QMainWindow):
             "Dashboard": DashboardPage(),
             "Server": ServerPage(),
             "Clients": ClientsPage(self.api),
-            "Accounts": AccountsPage(),
+            "Accounts": AccountsPage(self.api),
             "Market": MarketPage(),
             "Trading": TradingPage(),
             "Strategies": StrategiesPage(),
