@@ -32,6 +32,10 @@ export const CLIENT_PATH_DENY = [
   /^\/api\/brokers(\/|$)/,
   /^\/api\/robot/,
   /^\/admin(\/|$)/,
+  /^\/robot(\/|$)/,
+  /^\/feeds(\/|$)/,
+  /^\/orbit(\/|$)/,
+  /^\/brokers(\/|$)/,
   /^\/ws$/,
 ];
 

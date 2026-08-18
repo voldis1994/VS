@@ -22,6 +22,7 @@ if (Test-Path $PidFile) {
 }
 
 Stop-CmdMatch 'src\\index\.ts|control-api'
+Stop-CmdMatch 'client-gateway\\gateway\.mjs'
 Stop-CmdMatch 'vs-calc'
 Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
   Where-Object { $_.Name -match 'VS Admin' -or $_.Name -match 'vs-calc' } |

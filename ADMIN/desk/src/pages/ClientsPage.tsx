@@ -37,6 +37,9 @@ interface TradingAccount {
 
 export function ClientsPage() {
   const { data, error, loading, refresh } = useApi<ClientRow[]>('/api/clients');
+  const { data: sys } = useApi<{ client_url?: string | null }>('/api/system/status', 5000);
+  const clientHome =
+    (sys && sys.client_url) || 'http://127.0.0.1:8443/';
   const [accounts, setAccounts] = useState<TradingAccount[]>([]);
   const [name, setName] = useState('');
   const [drafts, setDrafts] = useState<Record<number, string>>({});
@@ -179,16 +182,16 @@ export function ClientsPage() {
       </p>
       <div className="card" style={{ marginBottom: 16, padding: '12px 16px' }}>
         <div className="section-title" style={{ marginBottom: 8 }}>
-          Client panel URL (share this)
+          Client homepage (does not change)
         </div>
         <p className="mono" style={{ fontSize: 14, wordBreak: 'break-all' }}>
-          {import.meta.env.VITE_CLIENT_PANEL_URL ||
-            'Double-click VS.bat → copy https://….trycloudflare.com from that window'}
+          {clientHome}
         </p>
         <p style={{ marginTop: 8, fontSize: 12, opacity: 0.7 }}>
-          Client is <strong>not</strong> on your Wi‑Fi — do not send a 192.168.x.x IP. Keep{' '}
-          <code>VS.bat</code> open, send the https tunnel link + access code. Admin preview:{' '}
-          <Link to="/client">/client</Link>
+          This is <code>ADMIN\config\client-url.txt</code>. PALAID does not overwrite it and does
+          not start trycloudflare. Login + password you hand over in person. Same Wi‑Fi:{' '}
+          <code>http://&lt;this-MSI-LAN-IP&gt;:8443/</code>. Outside Wi‑Fi: put your stable{' '}
+          <code>https://…</code> in that file once. Admin preview: <Link to="/client">/client</Link>
         </p>
       </div>
 

@@ -50,6 +50,11 @@ describe('canonical production architecture', () => {
     expect(msi).toMatch(/ADMIN\\web\\index.html/);
     const ps1 = readFileSync(join(ROOT, 'ADMIN/windows/start-admin.ps1'), 'utf8');
     expect(ps1).toContain('3000/robot');
+    expect(ps1).toContain('8443');
+    expect(ps1).toMatch(/client-gateway\\gateway\.mjs/);
+    expect(ps1).not.toMatch(/trycloudflare\.com/);
+    expect(ps1).not.toMatch(/cloudflared/);
+    expect(ps1).toMatch(/never overwrites this/);
     expect(ps1).toContain('VS_SINGLE_BOX');
     expect(ps1).toContain('vs-calc');
     expect(ps1).toContain('TACTICAL DESK');

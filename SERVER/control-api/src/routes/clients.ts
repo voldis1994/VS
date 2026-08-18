@@ -1,4 +1,3 @@
-import { existsSync, readFileSync } from 'fs';
 import { FastifyInstance } from 'fastify';
 import { join } from 'path';
 import { pool } from '../db/pool.js';
@@ -14,24 +13,7 @@ import { issueEnrollmentPackage } from '../vs-core/network/enrollment.js';
 import { ensureServerIdentity } from '../vs-core/network/deviceLifecycle.js';
 import { VS_WG_SERVER_IP } from '../vs-core/network/networkConstants.js';
 import { applyClientDisplayName } from '../services/robotDesk.js';
-
-function stablePublicClientUrl(): string | null {
-  const file = process.env.VS_CLIENT_URL_FILE || '/etc/vs/client-url';
-  try {
-    if (existsSync(file)) {
-      const line = readFileSync(file, 'utf8')
-        .split('\n')
-        .map((l) => l.trim())
-        .find((l) => l && !l.startsWith('#') && /https?:\/\//i.test(l));
-      if (line) return line.replace(/\/$/, '') + '/';
-    }
-  } catch {
-    /* ignore */
-  }
-  const env = String(process.env.VS_PUBLIC_CLIENT_URL || '').trim();
-  if (env) return env.replace(/\/$/, '') + '/';
-  return null;
-}
+import { stablePublicClientUrl } from '../services/clientPublicUrl.js';
 
 async function hardDeleteClient(clientId: string): Promise<void> {
   const db = await pool.connect();
