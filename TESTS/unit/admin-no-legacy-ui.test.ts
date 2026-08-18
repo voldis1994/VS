@@ -32,6 +32,9 @@ describe('ADMIN production path — web control panel on one MSI, no tactical UI
     expect(logo).toContain('TACTICAL DESK');
     expect(robot).toMatch(/SAFETY SL/);
     expect(robot).toMatch(/ROBOT COMMAND/);
+    const clients = readFileSync(join(ROOT, 'ADMIN/desk/src/pages/ClientsPage.tsx'), 'utf8');
+    expect(clients).toMatch(/handleRename/);
+    expect(clients).toContain("JSON.stringify({ name: next })");
     expect(robot).toMatch(/MARKET CLOSED/);
     expect(robot).toMatch(/last_close_at/);
     expect(existsSync(join(ROOT, 'ADMIN/desk/src/pages/FeedsPage.tsx'))).toBe(true);

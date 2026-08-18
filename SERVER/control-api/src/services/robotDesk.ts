@@ -637,6 +637,15 @@ export function listRobotSessions(): RobotSession[] {
     .map(publicSession);
 }
 
+/** CLIENTS rename must show on a running ROBOT BOARD without restart. */
+export function applyClientDisplayName(clientId: number, name: string): void {
+  const n = String(name || '').trim();
+  if (!n || !Number.isFinite(clientId)) return;
+  for (const s of sessions.values()) {
+    if (s.client_id === clientId) s.client_name = n;
+  }
+}
+
 /** Quote + 10s bars for C++ calc. Hands already hold Capital; calc never talks to the broker. */
 export function listCalcSnapshots(): Array<{
   epic: string;

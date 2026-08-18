@@ -39,6 +39,7 @@ export function ClientsPage() {
   const { data, error, loading, refresh } = useApi<ClientRow[]>('/api/clients');
   const [accounts, setAccounts] = useState<TradingAccount[]>([]);
   const [name, setName] = useState('');
+  const [drafts, setDrafts] = useState<Record<number, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [issuedCode, setIssuedCode] = useState<{ client_id: number; code: string } | null>(null);
@@ -61,6 +62,31 @@ export function ClientsPage() {
       setMsg(e instanceof Error ? e.message : 'Failed to create account');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleRename = async (client: ClientRow) => {
+    const next = (drafts[client.id] ?? client.name).trim();
+    if (!next) {
+      setMsg('Name required');
+      return;
+    }
+    if (next === client.name) return;
+    setMsg(null);
+    try {
+      await apiFetch(`/api/clients/${client.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ name: next }),
+      });
+      setDrafts((d) => {
+        const copy = { ...d };
+        delete copy[client.id];
+        return copy;
+      });
+      setMsg(`Renamed to "${next}"`);
+      refresh();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Rename failed');
     }
   };
 
@@ -148,7 +174,8 @@ export function ClientsPage() {
     <div>
       <h1 className="page-title">Clients</h1>
       <p className="page-subtitle">
-        Client desks + access codes. Send clients this link (not the admin desk):
+        Client desks + access codes. Change the name in the roster (Save) — ROBOT BOARD updates live.
+        Send clients this link (not the admin desk):
       </p>
       <div className="card" style={{ marginBottom: 16, padding: '12px 16px' }}>
         <div className="section-title" style={{ marginBottom: 8 }}>
@@ -212,7 +239,28 @@ export function ClientsPage() {
                 return (
                   <tr key={c.id}>
                     <td className="mono">#{c.id}</td>
-                    <td>{c.name}</td>
+                    <td>
+                      <div className="actions" style={{ flexWrap: 'nowrap', alignItems: 'center' }}>
+                        <input
+                          className="input"
+                          style={{ minWidth: 140, maxWidth: 220 }}
+                          value={drafts[c.id] ?? c.name}
+                          onChange={(e) =>
+                            setDrafts((d) => ({ ...d, [c.id]: e.target.value }))
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') void handleRename(c);
+                          }}
+                        />
+                        <button
+                          className="btn btn-primary"
+                          disabled={(drafts[c.id] ?? c.name).trim() === c.name}
+                          onClick={() => void handleRename(c)}
+                        >
+                          Save
+                        </button>
+                      </div>
+                    </td>
                     <td>
                       <span className={`badge ${c.enabled ? 'badge-healthy' : 'badge-unhealthy'}`}>
                         {c.enabled ? 'ON' : 'OFF'}

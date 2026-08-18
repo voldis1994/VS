@@ -13,6 +13,7 @@ import { getDeviceRegistry } from '../vs-core/network/deviceRegistry.js';
 import { issueEnrollmentPackage } from '../vs-core/network/enrollment.js';
 import { ensureServerIdentity } from '../vs-core/network/deviceLifecycle.js';
 import { VS_WG_SERVER_IP } from '../vs-core/network/networkConstants.js';
+import { applyClientDisplayName } from '../services/robotDesk.js';
 
 function stablePublicClientUrl(): string | null {
   const file = process.env.VS_CLIENT_URL_FILE || '/etc/vs/client-url';
@@ -278,7 +279,7 @@ export async function registerClientRoutes(app: FastifyInstance): Promise<void> 
     };
   });
 
-  app.put('/api/clients/:id', async (request) => {
+  app.put('/api/clients/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = request.body as {
       name?: string;
@@ -287,7 +288,25 @@ export async function registerClientRoutes(app: FastifyInstance): Promise<void> 
       preferred_broker_account_id?: number | null;
     };
     const prev = await pool.query('SELECT * FROM clients WHERE id = $1', [id]);
-    if (!prev.rows.length) return { error: 'Not found' };
+    if (!prev.rows.length) return reply.code(404).send({ error: 'Not found' });
+
+    let nextName: string | null = null;
+    if (body.name != null) {
+      nextName = String(body.name).trim();
+      if (!nextName) {
+        return reply.code(400).send({ error: 'name required', message: 'Client name required' });
+      }
+      const dup = await pool.query(
+        `SELECT id FROM clients WHERE lower(name) = lower($1) AND id <> $2 LIMIT 1`,
+        [nextName, id]
+      );
+      if (dup.rows.length) {
+        return reply.code(409).send({
+          error: 'name_taken',
+          message: 'Client login name already exists',
+        });
+      }
+    }
 
     await pool.query(
       `UPDATE clients SET
@@ -296,7 +315,7 @@ export async function registerClientRoutes(app: FastifyInstance): Promise<void> 
         access_enabled = COALESCE($4, access_enabled),
         updated_at = NOW()
        WHERE id = $1`,
-      [id, body.name ?? null, body.enabled ?? null, body.access_enabled ?? null]
+      [id, nextName, body.enabled ?? null, body.access_enabled ?? null]
     );
     if (body.preferred_broker_account_id !== undefined) {
       await pool.query(
@@ -312,6 +331,7 @@ export async function registerClientRoutes(app: FastifyInstance): Promise<void> 
       [id]
     );
     await logAudit('admin', 'client_updated', 'client', id, prev.rows[0], fresh.rows[0]);
+    if (nextName) applyClientDisplayName(Number(id), nextName);
     return fresh.rows[0];
   });
 
