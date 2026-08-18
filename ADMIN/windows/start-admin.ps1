@@ -142,14 +142,25 @@ New-Item -ItemType Directory -Force -Path (Split-Path $Cfg) | Out-Null
   "API_ADMIN_TOKEN=$adminToken"
 ) | Set-Content -Path $Cfg -Encoding ascii
 
-if (-not (Test-Path $Exe)) {
-  Write-Host "VS Admin.exe not built yet — run ADMIN\windows\BUILD_ADMIN.bat"
-  Write-Fail "missing ADMIN\windows\dist\VS Admin.exe"
-}
-
 New-Item -ItemType Directory -Force -Path (Split-Path $PidFile) | Out-Null
-$p = Start-Process -FilePath $Exe -WorkingDirectory $Desktop -PassThru
-if (-not $p) { Write-Fail "could not start VS Admin.exe" }
+$uiKind = "VS Admin.exe"
+if (Test-Path $Exe) {
+  $p = Start-Process -FilePath $Exe -WorkingDirectory $Desktop -PassThru
+  if (-not $p) { Write-Fail "could not start VS Admin.exe" }
+} else {
+  Write-Host "VS Admin.exe missing — launching python ADMIN\desktop\main.py"
+  $py = Get-Command python -ErrorAction SilentlyContinue
+  if (-not $py) { Write-Fail "python not on PATH — install Python 3.12 from python.org, then START_MSI.bat" }
+  & python -c "import PySide6" 2>$null
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "Installing PySide6..."
+    & python -m pip install -r (Join-Path $Desktop "requirements.txt")
+    if ($LASTEXITCODE -ne 0) { Write-Fail "pip install PySide6 failed" }
+  }
+  $p = Start-Process -FilePath $py.Source -ArgumentList "main.py" -WorkingDirectory $Desktop -PassThru
+  if (-not $p) { Write-Fail "could not start python ADMIN\desktop\main.py" }
+  $uiKind = "python ADMIN\desktop\main.py"
+}
 $p.Id | Set-Content -Path $PidFile -Encoding ascii
 
 Start-Sleep -Milliseconds 800
@@ -157,7 +168,7 @@ Write-Host "VS ADMIN"
 Write-Host "  SERVER       VS-CORE-01"
 Write-Host "  SERVER API   CONNECTED"
 Write-Host "  TRANSPORT    $transport"
-Write-Host "  ADMIN        VS Admin.exe"
+Write-Host "  ADMIN        $uiKind"
 Write-Host "  UI           native window (no browser)"
 Write-Host "STOP: powershell -File ADMIN\windows\stop-admin.ps1   (does not stop i3)"
 exit 0
