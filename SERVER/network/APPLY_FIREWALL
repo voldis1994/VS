@@ -28,24 +28,32 @@ fi
 allow_lan_tcp() {
   local port="$1"
   if command -v iptables >/dev/null 2>&1; then
+    # Remove any old catch-all ACCEPT rule for this port first.
     iptables -D INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null || true
-    iptables -C INPUT -p tcp --dport "$port" -s 127.0.0.0/8 -j ACCEPT 2>/dev/null || \
-      iptables -I INPUT 1 -p tcp --dport "$port" -s 127.0.0.0/8 -j ACCEPT || true
-    iptables -C INPUT -p tcp --dport "$port" -s 10.0.0.0/8 -j ACCEPT 2>/dev/null || \
-      iptables -I INPUT 1 -p tcp --dport "$port" -s 10.0.0.0/8 -j ACCEPT || true
-    iptables -C INPUT -p tcp --dport "$port" -s 172.16.0.0/12 -j ACCEPT 2>/dev/null || \
-      iptables -I INPUT 1 -p tcp --dport "$port" -s 172.16.0.0/12 -j ACCEPT || true
-    iptables -C INPUT -p tcp --dport "$port" -s 192.168.0.0/16 -j ACCEPT 2>/dev/null || \
-      iptables -I INPUT 1 -p tcp --dport "$port" -s 192.168.0.0/16 -j ACCEPT || true
+    # Allow only trusted sources (loopback + RFC1918 + WireGuard subnet).
+    iptables -C INPUT -p tcp --dport "$port" -s 127.0.0.0/8     -j ACCEPT 2>/dev/null || \
+      iptables -I INPUT 1 -p tcp --dport "$port" -s 127.0.0.0/8     -j ACCEPT
+    iptables -C INPUT -p tcp --dport "$port" -s 10.0.0.0/8      -j ACCEPT 2>/dev/null || \
+      iptables -I INPUT 1 -p tcp --dport "$port" -s 10.0.0.0/8      -j ACCEPT
+    iptables -C INPUT -p tcp --dport "$port" -s 172.16.0.0/12   -j ACCEPT 2>/dev/null || \
+      iptables -I INPUT 1 -p tcp --dport "$port" -s 172.16.0.0/12   -j ACCEPT
+    iptables -C INPUT -p tcp --dport "$port" -s 192.168.0.0/16  -j ACCEPT 2>/dev/null || \
+      iptables -I INPUT 1 -p tcp --dport "$port" -s 192.168.0.0/16  -j ACCEPT
+    iptables -C INPUT -p tcp --dport "$port" -s "$WG_NET"        -j ACCEPT 2>/dev/null || \
+      iptables -I INPUT 1 -p tcp --dport "$port" -s "$WG_NET"        -j ACCEPT
+    # Explicit DROP for all other sources on this port (defence-in-depth even if
+    # the default INPUT policy is ACCEPT).
+    iptables -C INPUT -p tcp --dport "$port" -j DROP 2>/dev/null || \
+      iptables -A INPUT -p tcp --dport "$port" -j DROP
   fi
 }
 
 if command -v iptables >/dev/null 2>&1; then
   allow_lan_tcp "$API_PORT"
   iptables -D INPUT -p tcp --dport "$CLIENT_PORT" -j ACCEPT 2>/dev/null || true
-  iptables -I INPUT 1 -p tcp --dport "$CLIENT_PORT" -j ACCEPT || true
+  iptables -I INPUT 1 -p tcp --dport "$CLIENT_PORT" -j ACCEPT
   iptables -D INPUT -p udp --dport "$WG_PORT" -j ACCEPT 2>/dev/null || true
-  iptables -I INPUT 1 -p udp --dport "$WG_PORT" -j ACCEPT || true
+  iptables -I INPUT 1 -p udp --dport "$WG_PORT" -j ACCEPT
   echo "OK: iptables LAN :${API_PORT} + public :${CLIENT_PORT}/:${WG_PORT}"
 fi
 
