@@ -13,6 +13,7 @@ sudo bash START_I3
 ## MSI
 
 ```
+PALAID.bat  (alias of START_MSI.bat)
 START_MSI.bat
   → require ADMIN/config/SERVER_IP.txt
   → require /health service=VS-CORE server_id=VS-CORE-01

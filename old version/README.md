@@ -15,5 +15,5 @@ This tree is **history only**. Production does not import, execute, or start any
 Canonical production:
 
 - i3: `START_I3`
-- MSI: `START_MSI.bat`
+- MSI: `PALAID.bat` (alias of `START_MSI.bat`)
 - Client: HTTPS URL in `/etc/vs/client-url`
