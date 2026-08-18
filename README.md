@@ -18,6 +18,8 @@ START_MSI.bat
 
 Needs **Node.js LTS** and **Docker Desktop** (Postgres + Redis on localhost). C++ calc needs **g++** or **MSVC** once (`SERVER\calc\BUILD_CALC.bat`).
 
+Do **not** uninstall Docker Desktop. If an old VS Postgres volume has a different password, `START_MSI.bat` recreates only the VS compose volumes and continues.
+
 Browser opens:
 
 | Door | URL |

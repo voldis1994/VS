@@ -63,6 +63,9 @@ describe('ADMIN production path — web control panel on one MSI, no tactical UI
     expect(ps1).not.toContain('serve-admin.mjs');
     expect(ps1).not.toMatch(/apps\\dashboard/);
     expect(ps1).not.toMatch(/npm exec.*vite/);
+    expect(ps1).toMatch(/node_modules\\vite\\bin\\vite\.js/);
+    expect(ps1).toMatch(/Remove-Item Env:NODE_ENV/);
+    expect(ps1).toMatch(/@\("down", "-v"\)/);
     expect(existsSync(join(ROOT, 'PALAID.bat'))).toBe(true);
   });
 

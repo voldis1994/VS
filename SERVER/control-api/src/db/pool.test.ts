@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { isRetryableDbError } from './pool.js';
+
+const poolSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'pool.ts'), 'utf8');
 
 describe('isRetryableDbError', () => {
   it('retries ECONNREFUSED from pg-pool (Docker Engine OK but :5432 down)', () => {
@@ -20,5 +25,13 @@ describe('isRetryableDbError', () => {
     expect(isRetryableDbError(new Error('password authentication failed for user "market_reader"'))).toBe(
       false
     );
+  });
+});
+
+describe('single-box DB env', () => {
+  it('does not let i3 server.env override MSI single-box.env', () => {
+    expect(poolSrc).toMatch(/VS_SINGLE_BOX/);
+    expect(poolSrc).toMatch(/single-box\.env/);
+    expect(poolSrc).toMatch(/if \(!envFlag\(process\.env\.VS_SINGLE_BOX\)\)/);
   });
 });
