@@ -8,7 +8,7 @@ const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'robotDes
 describe('robotDesk reads Capital CLOSE', () => {
   it('syncs broker positions before parking a closed market', () => {
     const listAt = src.indexOf('const listed = await listCapitalOpenPositions(opened.session)');
-    const parkAt = src.indexOf('if (!marketOpen)');
+    const parkAt = src.indexOf('DecisionCodes.MARKET_CLOSED');
     expect(listAt).toBeGreaterThan(0);
     expect(parkAt).toBeGreaterThan(listAt);
   });
