@@ -1,3 +1,4 @@
 @echo off
-REM Alias — same as START_MSI.bat (one PC, web control panel + client web + C++ calc)
+REM PALAID.bat — same operator start as always.
+REM Homepage: http://127.0.0.1:3000/admin/  (VS ADMIN control panel)
 call "%~dp0START_MSI.bat"
