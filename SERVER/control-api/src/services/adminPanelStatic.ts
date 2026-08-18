@@ -39,6 +39,7 @@ export async function registerAdminPanelStatic(app: FastifyInstance): Promise<vo
         .send('Admin web panel missing (ADMIN/web/index.html)\n');
     }
     reply.header('X-VS-Panel', 'admin');
+    reply.header('Cache-Control', 'no-store');
     return reply.type('text/html; charset=utf-8').send(fs.createReadStream(file));
   };
 
@@ -53,6 +54,7 @@ export async function registerAdminPanelStatic(app: FastifyInstance): Promise<vo
     }
     const ext = path.extname(file).toLowerCase();
     reply.header('X-VS-Panel', 'admin');
+    reply.header('Cache-Control', 'no-store');
     return reply.type(MIME[ext] || 'application/octet-stream').send(fs.createReadStream(file));
   });
 }

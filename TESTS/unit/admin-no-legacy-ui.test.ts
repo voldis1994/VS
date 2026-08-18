@@ -69,6 +69,19 @@ describe('ADMIN production path — web control panel on one MSI, no tactical UI
     expect(existsSync(join(ROOT, 'PALAID.bat'))).toBe(true);
   });
 
+  it('ADMIN web forms are static HTML and poll must not wipe inputs', () => {
+    const html = readFileSync(join(ROOT, 'ADMIN/web/index.html'), 'utf8');
+    const js = readFileSync(join(ROOT, 'ADMIN/web/app.js'), 'utf8');
+    expect(html).toMatch(/id="bkey"/);
+    expect(html).toMatch(/id="bpass"/);
+    expect(html).toMatch(/id="bident"/);
+    expect(html).toMatch(/class="pane"/);
+    expect(js).toMatch(/typingInForm/);
+    expect(js).not.toMatch(/getElementById\('view'\)\.innerHTML/);
+    expect(js).not.toMatch(/function el\(html\)/);
+    expect(js).not.toMatch(/function render\(/);
+  });
+
   it('BUILD_ADMIN.bat is the only canonical Windows build', () => {
     expect(existsSync(BUILD_BAT)).toBe(true);
     const bat = readFileSync(BUILD_BAT, 'utf8');

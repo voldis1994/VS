@@ -256,7 +256,9 @@ function Wait-ControlApi([System.Diagnostics.Process]$Proc) {
   return $false
 }
 
-if (-not (Test-Port3000)) {
+$panelAlreadyUp = Test-Port3000
+
+if (-not $panelAlreadyUp) {
   Write-Host "Starting Control API..."
   $proc = Start-ControlApiProcess
   $ok = Wait-ControlApi $proc
@@ -296,8 +298,12 @@ if (Test-Path $calcExe) {
 }
 
 $url = "http://127.0.0.1:3000/admin/"
-Write-Host ("Opening " + $url)
-Start-Process $url
+if ($panelAlreadyUp) {
+  Write-Host ("Panel already open at " + $url + " — not reloading the browser")
+} else {
+  Write-Host ("Opening " + $url)
+  Start-Process $url
+}
 
 Write-Host "VS READY"
 Write-Host "  ADMIN   http://127.0.0.1:3000/admin/"

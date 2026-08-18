@@ -52,3 +52,5 @@ def test_start_msi_opens_web_panel_on_this_pc():
     assert "-lt 90" in ps1
     assert "Admin panel will still open" in ps1
     assert "npm run build" not in ps1
+    assert "not reloading the browser" in ps1
+    assert "panelAlreadyUp" in ps1
