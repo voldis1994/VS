@@ -14,7 +14,7 @@ git pull origin main
 START_MSI.bat
 ```
 
-`PALAID.bat` is the same command.
+`PALAID.bat` is the same command. It always restarts Control API after the desk build so `http://127.0.0.1:3000/robot` is TACTICAL DESK (ROBOT COMMAND), not the VS CLIENT login.
 
 Needs **Node.js LTS** and **Docker Desktop** (Postgres + Redis on localhost). C++ calc needs **g++** or **MSVC** once (`SERVER\calc\BUILD_CALC.bat`).
 

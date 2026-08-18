@@ -53,6 +53,8 @@ describe('canonical production architecture', () => {
     expect(ps1).toContain('VS_SINGLE_BOX');
     expect(ps1).toContain('vs-calc');
     expect(ps1).toContain('TACTICAL DESK');
+    expect(ps1).toMatch(/Restarting Control API so \/robot is TACTICAL DESK/);
+    expect(ps1).not.toMatch(/\$panelAlreadyUp/);
     expect(ps1).not.toMatch(/serve-admin\.mjs/);
     expect(ps1).not.toMatch(/npm exec.*vite|vite --host/);
     expect(ps1).toMatch(/node_modules\\vite\\bin\\vite\.js/);

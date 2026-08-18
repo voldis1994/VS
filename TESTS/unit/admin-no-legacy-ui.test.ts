@@ -70,6 +70,9 @@ describe('ADMIN production path — web control panel on one MSI, no tactical UI
     expect(ps1).toContain('VS_SINGLE_BOX');
     expect(ps1).toContain('vs-calc');
     expect(ps1).toContain('TACTICAL DESK');
+    expect(ps1).toMatch(/Restarting Control API so \/robot is TACTICAL DESK/);
+    expect(ps1).not.toMatch(/\$panelAlreadyUp/);
+    expect(ps1).toContain('TACTICAL DESK missing ADMIN\\desk\\dist\\index.html');
     expect(ps1).not.toMatch(/5188/);
     expect(ps1).not.toContain('serve-admin.mjs');
     expect(ps1).not.toMatch(/apps\\dashboard/);
