@@ -33,6 +33,13 @@ if not exist "%~dp0ADMIN\config\SERVER_IP.txt" (
   pause
   exit /b 1
 )
+set /p _VS_IP=<"%~dp0ADMIN\config\SERVER_IP.txt"
+if "%_VS_IP%"=="" (
+  echo FAIL: ADMIN\config\SERVER_IP.txt is empty
+  echo Run: echo 192.168.0.10^> ADMIN\config\SERVER_IP.txt
+  pause
+  exit /b 1
+)
 
 if not exist "%~dp0ADMIN\windows\dist\VS Admin.exe" (
   echo VS Admin.exe missing — trying BUILD_ADMIN.bat once

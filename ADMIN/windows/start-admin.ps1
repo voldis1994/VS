@@ -100,9 +100,14 @@ Write-Host " UI = VS Admin.exe  (no browser, no local HTTP UI)"
 Write-Host "========================================"
 
 $ipFile = Join-Path $AdminRoot "config\SERVER_IP.txt"
-if (-not (Test-Path $ipFile)) { Write-Fail "missing ADMIN\config\SERVER_IP.txt — write i3 LAN IP, one line" }
-$targetIp = (Get-Content -LiteralPath $ipFile -TotalCount 1).Trim()
-if ($targetIp -notmatch '^\d+\.\d+\.\d+\.\d+$') { Write-Fail "SERVER_IP.txt must be an IPv4 address" }
+if (-not (Test-Path $ipFile)) {
+  Write-Fail "missing ADMIN\config\SERVER_IP.txt — run: echo 192.168.0.10> ADMIN\config\SERVER_IP.txt"
+}
+$rawIp = Get-Content -LiteralPath $ipFile -TotalCount 1 -ErrorAction SilentlyContinue
+$targetIp = if ($null -eq $rawIp) { "" } else { ([string]$rawIp).Trim() }
+if ($targetIp -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+  Write-Fail "ADMIN\config\SERVER_IP.txt is empty or not an IPv4. Run: echo 192.168.0.10> ADMIN\config\SERVER_IP.txt"
+}
 $serverUrl = "http://${targetIp}:3000"
 $transport = "LAN"
 if ($targetIp -eq "10.77.0.1") { $transport = "WIREGUARD" }
