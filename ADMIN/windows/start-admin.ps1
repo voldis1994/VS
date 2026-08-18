@@ -3,6 +3,9 @@
 .SYNOPSIS
   ONE PC: start VS on this MSI (no i3 server).
   Postgres+Redis (Docker) → Control API :3000 → C++ calc → web control panel + client web.
+
+  Do NOT uninstall Docker Desktop. This script only recycles VS postgres/redis volumes
+  if the old volume password does not match ADMIN\config\single-box.env.
 #>
 $ErrorActionPreference = "Continue"
 $AdminRoot = Split-Path -Parent $PSScriptRoot
@@ -43,6 +46,21 @@ function Import-EnvFile([string]$File) {
     $i = $line.IndexOf("=")
     Set-Item -Path ("Env:" + $line.Substring(0, $i).Trim()) -Value $line.Substring($i + 1).Trim()
   }
+}
+
+function Show-LogTail([string]$Path) {
+  if (-not (Test-Path $Path)) { return }
+  Write-Host ("---- " + $Path + " ----")
+  Get-Content $Path -Tail 80
+}
+
+function Invoke-NpmInstall {
+  $saved = $env:NODE_ENV
+  Remove-Item Env:NODE_ENV -ErrorAction SilentlyContinue
+  & npm install --include=dev | Out-Host
+  $code = $LASTEXITCODE
+  if ($null -ne $saved -and $saved -ne "") { $env:NODE_ENV = $saved }
+  return $code
 }
 
 $cfgDir = Join-Path $AdminRoot "config"
@@ -87,6 +105,7 @@ if (-not (Test-Path $clientUrlFile)) {
 }
 
 Import-EnvFile $envFile
+$env:VS_SINGLE_BOX = "1"
 Copy-Item $envFile (Join-Path $RepoRoot "SERVER\control-api\.env") -Force
 Copy-Item $envFile (Join-Path $RepoRoot ".env") -Force
 
@@ -95,17 +114,46 @@ Write-Host " VS — ONE PC (MSI)"
 Write-Host " Control panel  http://127.0.0.1:3000/admin/"
 Write-Host " Client web     http://127.0.0.1:3000/"
 Write-Host " C++ calc       vs-calc  (EntryReady only)"
+Write-Host " Docker Desktop stays installed"
 Write-Host "========================================"
 
 $compose = Join-Path $RepoRoot "SERVER\database\docker-compose.yml"
 $docker = Get-Command docker -ErrorAction SilentlyContinue
+
+function Invoke-VsCompose([string[]]$ComposeArgs) {
+  & docker compose -f $compose --env-file $envFile @ComposeArgs
+}
+
+function Wait-PostgresHealthy {
+  for ($i = 0; $i -lt 60; $i++) {
+    $h = ""
+    try { $h = (& docker inspect -f "{{.State.Health.Status}}" market-reader-postgres 2>$null | Out-String).Trim() } catch { $h = "" }
+    if ($h -eq "healthy") { return $true }
+    Start-Sleep -Seconds 1
+  }
+  return $false
+}
+
+function Reset-VsDockerVolumes {
+  Write-Host "Old VS Postgres volume password mismatch — recreating VS volumes only (not uninstalling Docker)"
+  Invoke-VsCompose @("down", "-v")
+  Invoke-VsCompose @("up", "-d", "--wait")
+  if ($LASTEXITCODE -ne 0) {
+    Invoke-VsCompose @("up", "-d")
+    [void](Wait-PostgresHealthy)
+  }
+}
+
 if ($docker) {
   Write-Host "Starting Postgres + Redis (Docker)..."
-  & docker compose -f $compose --env-file $envFile up -d
+  Invoke-VsCompose @("up", "-d", "--wait")
   if ($LASTEXITCODE -ne 0) {
-    Write-Host "WARN: docker compose failed — will try existing 127.0.0.1:5432"
-  } else {
-    Start-Sleep -Seconds 4
+    Invoke-VsCompose @("up", "-d")
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host "WARN: docker compose failed — will try existing 127.0.0.1:5432"
+    } else {
+      [void](Wait-PostgresHealthy)
+    }
   }
 } else {
   Write-Host "WARN: Docker not on PATH — Postgres must already listen on 127.0.0.1:5432"
@@ -117,28 +165,41 @@ $npm = Get-Command npm -ErrorAction SilentlyContinue
 if (-not $npm) { Write-Fail "npm missing" }
 
 $apiDir = Join-Path $RepoRoot "SERVER\control-api"
-if (-not (Test-Path (Join-Path $apiDir "node_modules"))) {
+$tsx = Join-Path $apiDir "node_modules\tsx\dist\cli.mjs"
+if (-not (Test-Path $tsx)) {
   Write-Host "npm install control-api..."
   Push-Location $apiDir
-  & npm install --omit=dev
-  if ($LASTEXITCODE -ne 0) { Pop-Location; Write-Fail "npm install control-api failed" }
+  $npmCode = Invoke-NpmInstall
   Pop-Location
+  if ($npmCode -ne 0) { Write-Fail "npm install control-api failed" }
 }
 
 $clientDir = Join-Path $RepoRoot "CLIENT\web"
-if (-not (Test-Path (Join-Path $clientDir "dist\index.html"))) {
+$viteJs = Join-Path $clientDir "node_modules\vite\bin\vite.js"
+$clientIndex = Join-Path $clientDir "dist\index.html"
+if (-not (Test-Path $clientIndex)) {
   Write-Host "Building CLIENT web..."
   Push-Location $clientDir
-  if (-not (Test-Path "node_modules")) { & npm install }
-  & npm run build
+  if (-not (Test-Path $viteJs)) {
+    Write-Host "npm install CLIENT web (vite is not on PATH; install locally)..."
+    [void](Invoke-NpmInstall)
+  }
+  if (Test-Path $viteJs) {
+    & $node.Source $viteJs build
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host "WARN: CLIENT web build failed — Admin panel will still open"
+    }
+  } else {
+    Write-Host "WARN: CLIENT vite missing after npm install — Admin panel will still open"
+  }
   Pop-Location
 }
 
 $logDir = Join-Path $cfgDir "logs"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $apiLog = Join-Path $logDir "control-api.out.log"
+$apiErr = Join-Path $logDir "control-api.err.log"
 
-# stop leftover native Admin
 Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
   Where-Object { $_.Name -match 'VS Admin' -or ($_.CommandLine -and $_.CommandLine -match 'ADMIN\\desktop\\main\.py') } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
@@ -150,27 +211,74 @@ function Test-Port3000 {
   } catch { return $false }
 }
 
+function Stop-LocalApi {
+  Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and $_.CommandLine -match 'control-api|src\\index\.ts' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  $pidDir = Join-Path $env:LOCALAPPDATA "VS\admin"
+  $pidFile = Join-Path $pidDir "vs-api.pid"
+  if (Test-Path $pidFile) {
+    $old = Get-Content $pidFile -ErrorAction SilentlyContinue
+    if ($old) { Stop-Process -Id ([int]$old) -Force -ErrorAction SilentlyContinue }
+    Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function Read-ApiLogs {
+  $text = ""
+  if (Test-Path $apiLog) { $text += (Get-Content $apiLog -Raw -ErrorAction SilentlyContinue) }
+  if (Test-Path $apiErr) { $text += (Get-Content $apiErr -Raw -ErrorAction SilentlyContinue) }
+  return $text
+}
+
+function Start-ControlApiProcess {
+  Stop-LocalApi
+  Start-Sleep -Milliseconds 400
+  Remove-Item $apiLog -Force -ErrorAction SilentlyContinue
+  Remove-Item $apiErr -Force -ErrorAction SilentlyContinue
+  if (-not (Test-Path $tsx)) {
+    Write-Fail "tsx missing after npm install — cannot start Control API"
+  }
+  $p = Start-Process -FilePath $node.Source -ArgumentList @($tsx, "src/index.ts") -WorkingDirectory $apiDir -RedirectStandardOutput $apiLog -RedirectStandardError $apiErr -WindowStyle Hidden -PassThru
+  if (-not $p) { Write-Fail "could not start Control API" }
+  $pidDir = Join-Path $env:LOCALAPPDATA "VS\admin"
+  New-Item -ItemType Directory -Force -Path $pidDir | Out-Null
+  $p.Id | Set-Content (Join-Path $pidDir "vs-api.pid") -Encoding ascii
+  return $p
+}
+
+function Wait-ControlApi([System.Diagnostics.Process]$Proc) {
+  for ($i = 0; $i -lt 90; $i++) {
+    Start-Sleep -Seconds 1
+    if (Test-Port3000) { return $true }
+    if ($Proc -and $Proc.HasExited) { return $false }
+  }
+  return $false
+}
+
 if (-not (Test-Port3000)) {
   Write-Host "Starting Control API..."
-  $tsx = Join-Path $apiDir "node_modules\tsx\dist\cli.mjs"
-  if (Test-Path $tsx) {
-    $p = Start-Process -FilePath $node.Source -ArgumentList @($tsx, "src/index.ts") -WorkingDirectory $apiDir -RedirectStandardOutput $apiLog -RedirectStandardError ($apiLog + ".err") -WindowStyle Hidden -PassThru
-  } else {
-    Push-Location $apiDir
-    & npm install tsx --no-save | Out-Null
-    Pop-Location
-    $p = Start-Process -FilePath $node.Source -ArgumentList @("node_modules\tsx\dist\cli.mjs", "src/index.ts") -WorkingDirectory $apiDir -RedirectStandardOutput $apiLog -RedirectStandardError ($apiLog + ".err") -WindowStyle Hidden -PassThru
+  $proc = Start-ControlApiProcess
+  $ok = Wait-ControlApi $proc
+  if (-not $ok) {
+    Show-LogTail $apiLog
+    Show-LogTail $apiErr
+    $blob = Read-ApiLogs
+    $authFail = $blob -match "DB_AUTH_FAILED|28P01|password authentication failed"
+    if ($authFail -and $docker) {
+      Reset-VsDockerVolumes
+      Write-Host "Retrying Control API after volume recreate..."
+      $proc = Start-ControlApiProcess
+      $ok = Wait-ControlApi $proc
+      if (-not $ok) {
+        Show-LogTail $apiLog
+        Show-LogTail $apiErr
+      }
+    }
   }
-  if (-not $p) { Write-Fail "could not start Control API" }
-    $pidDir = Join-Path $env:LOCALAPPDATA "VS\admin"
-    New-Item -ItemType Directory -Force -Path $pidDir | Out-Null
-    $p.Id | Set-Content (Join-Path $pidDir "vs-api.pid") -Encoding ascii
-  $ok = $false
-  for ($i = 0; $i -lt 40; $i++) {
-    Start-Sleep -Milliseconds 500
-    if (Test-Port3000) { $ok = $true; break }
+  if (-not $ok) {
+    Write-Fail "Control API did not listen on :3000 — log tail printed above (ADMIN\config\logs)"
   }
-  if (-not $ok) { Write-Fail "Control API did not listen on :3000 — see ADMIN\config\logs" }
 }
 
 $calcDir = Join-Path $RepoRoot "SERVER\calc"

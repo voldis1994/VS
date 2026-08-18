@@ -42,3 +42,13 @@ def test_start_msi_opens_web_panel_on_this_pc():
     assert (ROOT / "ADMIN" / "web" / "index.html").is_file()
     assert (ROOT / "SERVER" / "calc" / "vs-calc.cpp").is_file()
     assert (ROOT / "PALAID.bat").is_file()
+    # Screenshot 18.08: NODE_ENV=production hid vite; API died before :3000 listen.
+    assert "Remove-Item Env:NODE_ENV" in ps1
+    assert "--include=dev" in ps1
+    assert "node_modules\\vite\\bin\\vite.js" in ps1
+    assert '@("down", "-v")' in ps1
+    assert "DB_AUTH_FAILED" in ps1
+    assert "Get-Content" in ps1
+    assert "-lt 90" in ps1
+    assert "Admin panel will still open" in ps1
+    assert "npm run build" not in ps1

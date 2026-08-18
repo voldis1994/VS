@@ -5,12 +5,17 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { config as loadEnv } from 'dotenv';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-// Appliance: prefer durable server.env DB_* over any stale control-api/.env
-loadEnv({ path: '/var/lib/vs-server/server.env', override: true });
+
+function envFlag(v: string | undefined): boolean {
+  return ['1', 'true', 'yes'].includes(String(v || '').trim().toLowerCase());
+}
+
 loadEnv({ path: join(__dirname, '../../../../.env') });
 loadEnv();
-// Re-apply server.env DB last so 28P01 cannot come from a stale dotenv file
-loadEnv({ path: '/var/lib/vs-server/server.env', override: true });
+// i3 appliance only: durable server.env wins. One-PC MSI must use single-box.env.
+if (!envFlag(process.env.VS_SINGLE_BOX)) {
+  loadEnv({ path: '/var/lib/vs-server/server.env', override: true });
+}
 
 const { Pool } = pg;
 
@@ -51,10 +56,10 @@ export async function waitForDatabase(attempts = 30, delayMs = 2000): Promise<vo
       const code = (err as { code?: string })?.code;
       // 28P01 = invalid_password — retrying forever hides the real fix
       if (code === '28P01' || /password authentication failed/i.test(msg)) {
-        throw new Error(
-          'DB_AUTH_FAILED (28P01): password in server.env does not match Postgres volume. ' +
-            'Fix: sudo bash SERVER/MAKE_IT_WORK.sh'
-        );
+        const hint = envFlag(process.env.VS_SINGLE_BOX)
+          ? 'Postgres Docker volume password does not match ADMIN/config/single-box.env. START_MSI recreates VS volumes automatically.'
+          : 'password in server.env does not match Postgres volume. Fix: sudo bash SERVER/MAKE_IT_WORK.sh';
+        throw new Error('DB_AUTH_FAILED (28P01): ' + hint);
       }
       const retry = isRetryableDbError(err);
       if (i === 1 || i % 5 === 0 || i === attempts) {

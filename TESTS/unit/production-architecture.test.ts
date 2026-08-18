@@ -54,6 +54,9 @@ describe('canonical production architecture', () => {
     expect(ps1).toContain('vs-calc');
     expect(ps1).not.toMatch(/serve-admin\.mjs/);
     expect(ps1).not.toMatch(/npm exec.*vite|vite --host/);
+    expect(ps1).toMatch(/node_modules\\vite\\bin\\vite\.js/);
+    expect(ps1).toMatch(/Remove-Item Env:NODE_ENV/);
+    expect(ps1).toMatch(/@\("down", "-v"\)/);
     expect(ps1).not.toMatch(/5188/);
     expect(ps1).not.toMatch(/5173/);
     expect(existsSync(join(ROOT, 'ADMIN/web/index.html'))).toBe(true);
