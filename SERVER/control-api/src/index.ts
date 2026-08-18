@@ -34,6 +34,7 @@ import { verifyAccessCode } from './security/accessCode.js';
 import { probe } from './vs-core/readiness.js';
 import { registerAdminAgentRoutes } from './vs-core/adminAgent.js';
 import { registerCanonicalV1Routes } from './routes/canonicalV1.js';
+import { registerLiveControlRoutes } from './routes/liveControl.js';
 import {
   probeStrategyRuntime,
   probeRiskRuntime,
@@ -202,10 +203,12 @@ async function main() {
   await registerAdminAgentRoutes(app, { getProbes });
   await registerCanonicalV1Routes(app, { getProbes });
 
+  // Admin live-control API (GET/POST /api/admin/live-control)
+  await registerLiveControlRoutes(app);
+
   // VS Private Network device registry / heartbeat / registration
   await registerPrivateNetworkRoutes(app);
 
-  // Telemetry WebSocket — requires valid x-admin-token header (first-message fallback).
   app.get('/ws', { websocket: true }, async (socket, request) => {
     const expectedToken = process.env.API_ADMIN_TOKEN;
     const headerToken = request.headers['x-admin-token'] as string | undefined;
@@ -215,7 +218,6 @@ async function main() {
       headerToken === expectedToken;
 
     if (!tokenOk) {
-      // Give a short window for the client to send {"type":"auth","token":"..."}.
       const authed = await new Promise<boolean>((resolve) => {
         const timer = setTimeout(() => resolve(false), 3000);
         socket.once('message', (raw) => {
