@@ -10,7 +10,7 @@ export function Logo({
   return (
     <span className={className ? `vs-logo-wrap ${className}` : 'vs-logo-wrap'}>
       <img
-        src="/logo.svg"
+        src="/logo.svg?v=4"
         width={size}
         height={size}
         alt=""

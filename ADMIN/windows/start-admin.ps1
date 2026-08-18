@@ -265,23 +265,25 @@ if (-not (Test-Path $deskIndex)) {
 $clientDir = Join-Path $RepoRoot "CLIENT\web"
 $viteJs = Join-Path $clientDir "node_modules\vite\bin\vite.js"
 $clientIndex = Join-Path $clientDir "dist\index.html"
-if (-not (Test-Path $clientIndex)) {
-  Write-Host "Building CLIENT web..."
-  Push-Location $clientDir
-  if (-not (Test-Path $viteJs)) {
-    Write-Host "npm install CLIENT web (vite is not on PATH; install locally)..."
-    [void](Invoke-NpmInstall)
-  }
-  if (Test-Path $viteJs) {
-    & $node.Source $viteJs build
-    if ($LASTEXITCODE -ne 0) {
-      Write-Host "WARN: CLIENT web build failed — Admin panel will still open"
-    }
-  } else {
-    Write-Host "WARN: CLIENT vite missing after npm install — Admin panel will still open"
-  }
-  Pop-Location
+$clientDist = Join-Path $clientDir "dist"
+Write-Host "Building CLIENT web..."
+if (Test-Path $clientDist) {
+  Remove-Item -Recurse -Force $clientDist
 }
+Push-Location $clientDir
+if (-not (Test-Path $viteJs)) {
+  Write-Host "npm install CLIENT web (vite is not on PATH; install locally)..."
+  [void](Invoke-NpmInstall)
+}
+if (Test-Path $viteJs) {
+  & $node.Source $viteJs build
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "WARN: CLIENT web build failed — Admin panel will still open"
+  }
+} else {
+  Write-Host "WARN: CLIENT vite missing after npm install — Admin panel will still open"
+}
+Pop-Location
 
 $logDir = Join-Path $cfgDir "logs"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null

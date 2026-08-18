@@ -38,8 +38,10 @@
     <path d="M396 436h40v-40"/>
   </g>
 
+  <!-- Geometric V -->
   <path fill="url(#vsV)" d="M64 126h64L186 388 236 126h64L210 422h-64z"/>
 
+  <!-- Geometric S -->
   <g fill="url(#vsS)">
     <rect x="316" y="126" width="132" height="46"/>
     <rect x="316" y="126" width="46" height="150"/>

@@ -61,10 +61,17 @@ body {
 }
 .brand {
   text-align: center;
-  color: var(--green);
-  font-weight: 800;
-  letter-spacing: 0.22em;
-  font-size: 22px;
+  line-height: 0;
+}
+.brand img {
+  display: inline-block;
+  width: 88px;
+  height: 88px;
+  border-radius: 8px;
+}
+.app:not(.login) .brand img {
+  width: 52px;
+  height: 52px;
 }
 .sub {
   text-align: center;

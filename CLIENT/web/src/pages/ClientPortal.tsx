@@ -238,7 +238,9 @@ export function ClientPortal() {
   if (!token) {
     return (
       <div className="app login">
-        <div className="brand">VS</div>
+        <div className="brand">
+          <img src="/logo.svg?v=4" width={88} height={88} alt="VS" />
+        </div>
         <div className="sub">CLIENT</div>
         <div className="card">
           <div className="welcome">LOGIN</div>
@@ -294,7 +296,9 @@ export function ClientPortal() {
 
   return (
     <div className="app">
-      <div className="brand">VS</div>
+      <div className="brand">
+        <img src="/logo.svg?v=4" width={56} height={56} alt="VS" />
+      </div>
       <div className="sub">CLIENT</div>
       <div className={`conn ${connClass}`}>
         {status?.connection_status || 'NO DATA'} · ROBOT {status?.robot_status || (busy ? 'LOADING' : 'STOPPED')}
