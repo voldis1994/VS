@@ -22,5 +22,8 @@ describe('client gateway path policy', () => {
     expect(isClientPublicPath('/api/pipeline/heartbeat')).toBe(false);
     expect(isClientPublicPath('/ws')).toBe(false);
     expect(isClientPublicPath('/api/brokers')).toBe(false);
+    expect(isClientPublicPath('/admin')).toBe(false);
+    expect(isClientPublicPath('/admin/')).toBe(false);
+    expect(isClientPublicPath('/admin/app.js')).toBe(false);
   });
 });

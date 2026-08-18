@@ -53,6 +53,18 @@ export function resolveManagementBind(env: NodeJS.ProcessEnv = process.env): Bin
   const privateNet = truthy(env.VS_PRIVATE_NETWORK);
   const lanMgmt = truthy(env.VS_LAN_MANAGEMENT);
   const wg = isWireGuardReady(env);
+  const singleBox = truthy(env.VS_SINGLE_BOX);
+
+  // One PC (MSI): no i3, no WireGuard. Bind loopback unless LAN clients needed.
+  if (singleBox) {
+    const host = lanMgmt ? '0.0.0.0' : (explicit && explicit !== '0.0.0.0' ? explicit : '127.0.0.1');
+    return {
+      host,
+      reason: 'SINGLE_BOX_MSI',
+      public_management_exposure: lanMgmt ? 'LAN_FIREWALL_REQUIRED' : 'NONE',
+      wireguard_ready: wg.ready,
+    };
+  }
 
   // Appliance: MSI on same Wi-Fi + remote clients on WireGuard.
   // ALWAYS bind 0.0.0.0 when LAN management is on — never honor a stale

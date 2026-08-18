@@ -1,7 +1,7 @@
 /**
  * P3 — Explicit REAL MARKET → normalize → strategy → setup → decision → risk → TradeIntent.
  * No fake success. Each stage returns a typed outcome; breaks surface as NO_SETUP / BLOCKED_TECHNICAL / ERROR_*.
- * Diagnostic/AAA helper — live opener remains evaluateStrategy → enterTrade in robotDesk.
+ * Diagnostic/AAA helper — live opener is C++ calc EntryReady → enterTrade in robotDesk.
  */
 import { DecisionCodes, type DecisionCode } from './decisionCodes.js';
 import type { CapitalMarketQuote } from './capitalCom.js';

@@ -9,6 +9,7 @@ import {
   stopRobotSession,
 } from '../services/robotDesk.js';
 import { listDataSenders } from '../services/robotReader.js';
+import { getPipelineBridgeStatus } from '../services/pipelineBridge.js';
 
 export async function registerRobotDeskRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/robot-desk', async (request) => {
@@ -29,6 +30,7 @@ export async function registerRobotDeskRoutes(app: FastifyInstance): Promise<voi
       active: resolved,
       sessions,
       board: robotBoardMeta(sessions),
+      calc: getPipelineBridgeStatus(),
       senders: senders
         .filter((s) => s.kind !== 'catalog_pulse')
         .map((s) => ({

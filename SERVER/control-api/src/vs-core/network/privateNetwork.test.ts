@@ -326,6 +326,13 @@ describe('VS_PRIVATE_NETWORK_PRODUCT', () => {
         VITEST: undefined,
       } as NodeJS.ProcessEnv)
     ).toThrow(/WIREGUARD_NOT_READY/);
+    const box = resolveManagementBind({
+      NODE_ENV: 'production',
+      VS_SINGLE_BOX: '1',
+      VS_PRIVATE_NETWORK: '1',
+    });
+    expect(box.host).toBe('127.0.0.1');
+    expect(box.reason).toBe('SINGLE_BOX_MSI');
   });
 
   it('HTTP: enrollment, isolation, command dedupe, me endpoint', async () => {

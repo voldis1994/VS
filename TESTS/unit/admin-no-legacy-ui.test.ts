@@ -25,30 +25,30 @@ function walk(dir: string, acc: string[] = []): string[] {
   return acc;
 }
 
-describe('ADMIN production path — native desktop, no legacy tactical UI', () => {
-  it('ADMIN/desktop is native PySide6 VS Admin', () => {
-    expect(existsSync(join(ADMIN_DESKTOP, 'main.py'))).toBe(true);
-    expect(existsSync(join(ADMIN_DESKTOP, 'requirements.txt'))).toBe(true);
-    const main = readFileSync(join(ADMIN_DESKTOP, 'main.py'), 'utf8');
-    expect(main).toMatch(/PySide6/);
-    expect(main).toMatch(/VS Admin/);
-    expect(existsSync(join(ADMIN_DESKTOP, 'package.json'))).toBe(false);
-    expect(existsSync(join(ADMIN_DESKTOP, 'vite.config.ts'))).toBe(false);
-    expect(existsSync(join(ADMIN_DESKTOP, 'index.html'))).toBe(false);
+describe('ADMIN production path — web control panel on one MSI, no tactical UI', () => {
+  it('ADMIN/web control panel exists and desktop archive is not the start path', () => {
+    expect(existsSync(join(ROOT, 'ADMIN/web/index.html'))).toBe(true);
+    expect(existsSync(join(ROOT, 'ADMIN/web/app.js'))).toBe(true);
+    expect(existsSync(join(ROOT, 'SERVER/calc/vs-calc.cpp'))).toBe(true);
+    const html = readFileSync(join(ROOT, 'ADMIN/web/index.html'), 'utf8');
+    expect(html).toMatch(/VS ADMIN/);
+    expect(html).not.toMatch(/TACTICAL DESK|ROBOT BRAIN/);
   });
 
-  it('production ADMIN/desktop source must not contain legacy identifiers', () => {
+  it('production ADMIN web + desktop must not contain legacy identifiers', () => {
     const offenders: string[] = [];
-    for (const file of walk(ADMIN_DESKTOP)) {
-      const src = readFileSync(file, 'utf8');
-      for (const marker of LEGACY_MARKERS) {
-        if (src.includes(marker)) offenders.push(`${file} :: ${marker}`);
+    for (const dir of [ADMIN_DESKTOP, join(ROOT, 'ADMIN/web')]) {
+      for (const file of walk(dir)) {
+        const src = readFileSync(file, 'utf8');
+        for (const marker of LEGACY_MARKERS) {
+          if (src.includes(marker)) offenders.push(`${file} :: ${marker}`);
+        }
       }
     }
     expect(offenders).toEqual([]);
   });
 
-  it('START_MSI.bat launches VS Admin.exe and never a browser UI', () => {
+  it('START_MSI.bat opens local :3000/admin and never Vite 5188', () => {
     expect(existsSync(START_MSI)).toBe(true);
     const bat = readFileSync(START_MSI, 'utf8');
     expect(bat).toMatch(/start-admin\.ps1/);
@@ -56,13 +56,14 @@ describe('ADMIN production path — native desktop, no legacy tactical UI', () =
 
     expect(existsSync(START_PS1)).toBe(true);
     const ps1 = readFileSync(START_PS1, 'utf8');
-    expect(ps1).toContain('ADMIN/desktop');
-    expect(ps1).toContain('VS Admin.exe');
+    expect(ps1).toContain('3000/admin');
+    expect(ps1).toContain('VS_SINGLE_BOX');
+    expect(ps1).toContain('vs-calc');
     expect(ps1).not.toMatch(/5188/);
     expect(ps1).not.toContain('serve-admin.mjs');
     expect(ps1).not.toMatch(/apps\\dashboard/);
     expect(ps1).not.toMatch(/npm exec.*vite/);
-    expect(ps1).not.toMatch(/Start-Process http/);
+    expect(existsSync(join(ROOT, 'PALAID.bat'))).toBe(true);
   });
 
   it('BUILD_ADMIN.bat is the only canonical Windows build', () => {
