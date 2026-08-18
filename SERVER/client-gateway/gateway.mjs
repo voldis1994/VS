@@ -141,7 +141,7 @@ export function createGatewayServer() {
     s.on('upgrade', onUpgrade);
     return { server: s, tls: true, port: HTTPS_PORT };
   }
-  const allowHttp = env('VS_CLIENT_ALLOW_HTTP', '1') === '1';
+  const allowHttp = env('VS_CLIENT_ALLOW_HTTP', '0') === '1';
   if (!allowHttp) {
     throw new Error('No TLS certs at /etc/vs/tls and VS_CLIENT_ALLOW_HTTP is not 1');
   }
