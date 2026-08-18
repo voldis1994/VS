@@ -58,11 +58,12 @@ describe('canonical production architecture', () => {
     expect(ps1).toMatch(/node_modules\\vite\\bin\\vite\.js/);
     expect(ps1).toMatch(/Remove-Item Env:NODE_ENV/);
     expect(ps1).toMatch(/@\("down", "-v"\)/);
-    expect(ps1).toMatch(/not reloading the browser/);
+    expect(ps1).not.toMatch(/not reloading the browser/);
     expect(ps1).not.toMatch(/5188/);
     expect(ps1).not.toMatch(/5173/);
     expect(existsSync(join(ROOT, 'ADMIN/web/index.html'))).toBe(true);
     expect(existsSync(join(ROOT, 'SERVER/calc/vs-calc.cpp'))).toBe(true);
+    expect(existsSync(join(ROOT, 'SERVER/calc/vs-calc.exe'))).toBe(true);
     expect(existsSync(join(ROOT, 'ADMIN/runtime/serve-admin.mjs'))).toBe(false);
     expect(existsSync(join(ROOT, 'PALAID.bat'))).toBe(true);
   });

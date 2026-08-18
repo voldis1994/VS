@@ -44,7 +44,6 @@ ADMIN/windows/dist/
 SERVER/monitor/__pycache__/
 ADMIN/desktop/__pycache__/
 SERVER/calc/vs-calc
-SERVER/calc/vs-calc.exe
 SERVER/calc/*.obj
 SERVER/calc/*.pdb
 

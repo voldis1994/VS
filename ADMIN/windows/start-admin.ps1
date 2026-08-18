@@ -319,12 +319,8 @@ if (Test-Path $calcExe) {
 }
 
 $url = "http://127.0.0.1:3000/robot"
-if ($panelAlreadyUp) {
-  Write-Host ("Panel already open at " + $url + " — not reloading the browser")
-} else {
-  Write-Host ("Opening " + $url)
-  Start-Process $url
-}
+Write-Host ("Opening " + $url)
+Start-Process $url
 
 Write-Host "VS READY"
 Write-Host "  DESK    http://127.0.0.1:3000/robot"
