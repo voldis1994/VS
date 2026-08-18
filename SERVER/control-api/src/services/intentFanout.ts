@@ -5,8 +5,7 @@ import {
   type ActiveSubscription,
 } from './clientSubscriptions.js';
 import { notePipelineRegime } from './regimes.js';
-import { hasEntryEnabledRobot } from './robotDesk.js';
-import { assertAuthoritativeOpener } from '../vs-core/moneyPathGate.js';
+import { offerCalcEntry } from './robotDesk.js';
 
 export { stopEntryRobotsForAccount } from './robotDesk.js';
 
@@ -44,7 +43,8 @@ export type FanoutResult = {
 /**
  * ExecutionRouter equivalent (Node): EntryReady intent → subscribed RUNNING clients only.
  * Lot size from each subscription. No decision logic here.
- * Broker opens are FAIL-CLOSED (B3) — sole opener is robotDesk durable path.
+ * Broker opens stay on robotDesk durable path. Calc (C++ pipeline) queues EntryReady
+ * onto the running robot — it does not SKIP and does not open Capital itself.
  */
 export async function executePipelineIntent(
   intent: PipelineIntentInput
@@ -74,7 +74,8 @@ export async function executePipelineIntent(
       setupType,
       regime,
       intent.reference_price,
-      idem
+      idem,
+      intent.explanation ?? null
     );
     executed.push(row);
   }
@@ -128,7 +129,8 @@ async function executeForSubscription(
   setupType: string | null,
   regime: string | null,
   referencePrice: number | null | undefined,
-  idempotencyKey: string | null
+  idempotencyKey: string | null,
+  explanation: string | null
 ): Promise<ExecRow> {
   let claimed = false;
   const finish = async (row: ExecRow): Promise<ExecRow> => {
@@ -143,18 +145,24 @@ async function executeForSubscription(
   };
 
   try {
-    if (hasEntryEnabledRobot(sub.account_id, sub.epic)) {
+    const own = await pool.query(
+      `SELECT ba.id
+       FROM broker_accounts ba
+       JOIN broker_connections bc ON bc.id = ba.broker_connection_id
+       WHERE ba.id = $1 AND bc.client_id = $2 AND ba.enabled = true AND bc.enabled = true`,
+      [sub.account_id, sub.client_id]
+    );
+    if (!own.rows.length) {
       return finish({
         client_id: sub.client_id,
         account_id: sub.account_id,
         lot_size: sub.lot_size,
-        ok: true,
-        detail: 'SKIP · Node robotDesk owns entries',
+        ok: false,
+        detail: 'Account ownership check failed',
         entry_price: null,
       });
     }
 
-    // Per client/account idempotency — claim BEFORE Capital (blocks concurrent duplicates)
     if (idempotencyKey) {
       const claim = await claimExecution(idempotencyKey, sub.client_id, sub.account_id);
       if (claim === 'duplicate') {
@@ -179,34 +187,24 @@ async function executeForSubscription(
       claimed = true;
     }
 
-    // Security boundary: account must still belong to this client and be enabled
-    const own = await pool.query(
-      `SELECT ba.id
-       FROM broker_accounts ba
-       JOIN broker_connections bc ON bc.id = ba.broker_connection_id
-       WHERE ba.id = $1 AND bc.client_id = $2 AND ba.enabled = true AND bc.enabled = true`,
-      [sub.account_id, sub.client_id]
-    );
-    if (!own.rows.length) {
-      return finish({
-        client_id: sub.client_id,
-        account_id: sub.account_id,
-        lot_size: sub.lot_size,
-        ok: false,
-        detail: 'Account ownership check failed',
-        entry_price: null,
-      });
-    }
-
-    // B3: refuse broker open outside robotDesk durable Strategy path (before Capital session)
-    const gate = assertAuthoritativeOpener('intentFanout');
-    noteBrokerError(sub.client_id, gate.reason);
+    const queued = offerCalcEntry({
+      account_id: sub.account_id,
+      epic: sub.epic,
+      direction,
+      setup_type: setupType,
+      regime,
+      explanation,
+      reference_price: referencePrice ?? null,
+      idempotency_key: idempotencyKey,
+    });
     return finish({
       client_id: sub.client_id,
       account_id: sub.account_id,
       lot_size: sub.lot_size,
-      ok: false,
-      detail: `${gate.code} · ${gate.reason}`,
+      ok: true,
+      detail: queued.running
+        ? 'QUEUED · robotDesk will execute calc EntryReady'
+        : 'QUEUED · START robot to execute calc EntryReady',
       entry_price: null,
     });
   } catch (err) {

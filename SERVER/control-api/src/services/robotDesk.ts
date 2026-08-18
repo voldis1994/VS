@@ -23,6 +23,12 @@ import {
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
+import {
+  computeCrossMarketPressure,
+  noteMarketMid,
+  relatedSearchNeedles,
+  type CrossMarketPressure,
+} from './crossMarketPressure.js';
 import { canIssueClose, decideCloseFinalize } from './exitLifecycle.js';
 import { effectiveBias, resolveTrendBias, TREND_LOOKBACK_10S, type TrendBias } from './entryFromRegime.js';
 import { DecisionCodes, type DecisionCode } from './decisionCodes.js';
@@ -75,6 +81,16 @@ export type RobotTick = {
   code?: DecisionCode;
 };
 
+export type CalcEntry = {
+  direction: 'BUY' | 'SELL';
+  setup_type: string | null;
+  regime: string | null;
+  explanation: string | null;
+  reference_price: number | null;
+  idempotency_key: string | null;
+  at: string;
+};
+
 export type RobotSession = {
   id: string;
   account_id: number;
@@ -118,7 +134,7 @@ export type RobotSession = {
   entry_regime: string | null;
   /** Strategy reason string at entry (audit). */
   entry_reason: string | null;
-  /** When false, robot never invents entries — pipeline fan-out only */
+  /** When false, manage-only (no new opens). When true, execute queued calc then Node fallback. */
   entry_enabled: boolean;
   ohlc_10s: {
     last_o: number | null;
@@ -141,6 +157,9 @@ export type RobotSession = {
     setup: string | null;
     action: string;
   };
+  /** C++ / pipeline EntryReady waiting for robotDesk hands */
+  pending_calc?: CalcEntry | null;
+  cross_market?: CrossMarketPressure | null;
 };
 
 type Internal = RobotSession & {
@@ -167,6 +186,7 @@ type Internal = RobotSession & {
   /** In-process close call (duplicate close prevention within/aside cycle) */
   close_in_flight: boolean;
   feedManager: FeedManager;
+  last_cross_ms: number;
 };
 
 const ACTIVE_CADENCE_MS = 2_000;
@@ -196,8 +216,109 @@ function setRobotCadence(s: Internal, ms: number) {
   s.timer = setInterval(() => void robotCycle(s), ms);
 }
 
+async function refreshCrossMarket(session: CapitalSession, s: Internal): Promise<CrossMarketPressure> {
+  const needles = relatedSearchNeedles(s.epic, s.display_name);
+  if (needles.length === 0) {
+    return computeCrossMarketPressure({
+      targetEpic: s.epic,
+      targetName: s.display_name,
+      side: s.open_side || s.pending_calc?.direction || null,
+      related: [],
+    });
+  }
+  const like = needles.map((n) => `%${n}%`);
+  let rows: Array<{ epic: string; display_name: string }> = [];
+  try {
+    const q = await pool.query(
+      `SELECT DISTINCT epic, display_name FROM capital_markets
+       WHERE broker_connection_id = $1
+         AND epic <> $2
+         AND (
+           epic ILIKE ANY($3::text[])
+           OR display_name ILIKE ANY($3::text[])
+         )
+       ORDER BY display_name ASC
+       LIMIT 12`,
+      [s.connection_id, s.epic, like]
+    );
+    rows = q.rows as Array<{ epic: string; display_name: string }>;
+  } catch {
+    rows = [];
+  }
+  const related = [];
+  for (const row of rows) {
+    try {
+      const q = await fetchCapitalMarketQuote(session, row.epic);
+      if (!q.ok || q.mid == null) continue;
+      const change = noteMarketMid(row.epic, q.mid);
+      related.push({
+        epic: row.epic,
+        display_name: row.display_name,
+        mid: q.mid,
+        change,
+      });
+    } catch {
+      /* skip one related epic */
+    }
+  }
+  return computeCrossMarketPressure({
+    targetEpic: s.epic,
+    targetName: s.display_name,
+    side: s.open_side || s.pending_calc?.direction || null,
+    related,
+  });
+}
+
 const sessions = new Map<string, Internal>();
 const MAX_TICKS = 200;
+const calcQueue = new Map<string, CalcEntry>();
+
+function calcKey(accountId: number, epic: string): string {
+  return `${accountId}|${String(epic || '').trim().toUpperCase()}`;
+}
+
+/** Queue C++ / pipeline EntryReady for robotDesk to execute on Capital. Never opens the broker here. */
+export function offerCalcEntry(input: {
+  account_id: number;
+  epic: string;
+  direction: 'BUY' | 'SELL';
+  setup_type?: string | null;
+  regime?: string | null;
+  explanation?: string | null;
+  reference_price?: number | null;
+  idempotency_key?: string | null;
+}): { queued: true; running: boolean } {
+  const epic = String(input.epic || '').trim();
+  const entry: CalcEntry = {
+    direction: input.direction === 'SELL' ? 'SELL' : 'BUY',
+    setup_type: input.setup_type ? String(input.setup_type) : null,
+    regime: input.regime ? String(input.regime) : null,
+    explanation: input.explanation ? String(input.explanation) : null,
+    reference_price:
+      input.reference_price != null && Number.isFinite(input.reference_price)
+        ? Number(input.reference_price)
+        : null,
+    idempotency_key: input.idempotency_key ? String(input.idempotency_key) : null,
+    at: new Date().toISOString(),
+  };
+  calcQueue.set(calcKey(input.account_id, epic), entry);
+  let running = false;
+  for (const s of sessions.values()) {
+    if (
+      s.running &&
+      s.account_id === input.account_id &&
+      String(s.epic || '').toUpperCase() === epic.toUpperCase()
+    ) {
+      s.pending_calc = entry;
+      running = true;
+    }
+  }
+  return { queued: true, running };
+}
+
+export function resetCalcQueueForTests(): void {
+  calcQueue.clear();
+}
 
 /** Stable robot id from account + epic — never Date.now(), never random */
 export function robotIdFor(accountId: number, epic: string): string {
@@ -256,6 +377,7 @@ function publicSession(s: Internal): RobotSession {
     close_pending: _cp,
     close_in_flight: _cifClose,
     feedManager: _fm,
+    last_cross_ms: _xc,
     ...rest
   } = s;
   return {
@@ -282,12 +404,13 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
   let action = 'SCAN';
   if (!s.running) action = 'STOPPED';
   else if (s.open_side) action = `MANAGE ${s.open_side}`;
+  else if (s.pending_calc) action = `CALC ${s.pending_calc.direction}`;
   else if (s.mode === 'ENTRY') action = 'SCAN ENTRY';
   return {
     feeds,
     ohlc: ohlcLine,
     regime: effectiveRegimeName(s),
-    setup: s.trend_bias ? `bias ${s.trend_bias}` : null,
+    setup: s.pending_calc?.setup_type || (s.trend_bias ? `bias ${s.trend_bias}` : null),
     action,
   };
 }
@@ -330,8 +453,8 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     git_sha: build.git_sha,
     entry_brain: build.entry_brain,
-    chain: '10s OHLC → REGIME(context) → SETUP EVIDENCE → evaluateStrategy · Node robotDesk',
-    note: `BUILD ${build.git_sha} · NODE BRAIN · regime=context · SL=0.20% of price · ${build.trend_minutes}-min`,
+    chain: 'calc EntryReady → robotDesk Capital hands · Node evaluateStrategy only if no pending calc',
+    note: `BUILD ${build.git_sha} · calc + hands · regime=context · SL=0.20% of price · ${build.trend_minutes}-min`,
   };
 }
 
@@ -521,7 +644,7 @@ export function getPrimaryRobotConnectionId(): number | null {
   return null;
 }
 
-/** True when Node robotDesk is the entry brain for this account+epic (ignore stale C++ intents). */
+/** True when robotDesk hands are running entries for this account+epic (executes queued calc). */
 export function hasEntryEnabledRobot(accountId: number, epic: string): boolean {
   const want = String(epic || '').trim().toUpperCase();
   for (const s of sessions.values()) {
@@ -1424,6 +1547,15 @@ async function robotCycleBody(s: Internal) {
       ask: quote.ask,
       source_timestamp: s.last_quote_at,
     });
+    if (quote.mid != null) noteMarketMid(s.epic, quote.mid);
+    if (Date.now() - s.last_cross_ms >= 15_000) {
+      s.last_cross_ms = Date.now();
+      try {
+        s.cross_market = await refreshCrossMarket(opened.session, s);
+      } catch {
+        /* keep previous */
+      }
+    }
 
     // Multi-provider + LOCAL feed snapshot ALWAYS (even when market closed) —
     // otherwise closed epics stay stuck at 0/0 NONE on the board.
@@ -1648,8 +1780,57 @@ async function robotCycleBody(s: Internal) {
         },
         quote.mid
       );
-      if (decision.exit) {
+      if (decision.action === 'CLOSE' || decision.exit) {
         await exitTrade(opened.session, s, quote, decision.reason);
+        return;
+      }
+      if (decision.action === 'TRAIL' && decision.trail_stop != null) {
+        const dealId = await resolveDealId(opened.session, s, s.last_deal_reference || undefined);
+        if (!dealId) {
+          pushTick(s, {
+            phase: 'ERROR',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `TRAIL blocked — no dealId · ${decision.reason}`,
+          });
+          return;
+        }
+        const stop = decision.trail_stop;
+        const cur = s.safety_sl;
+        const improves =
+          cur == null ||
+          (s.open_side === 'BUY' && stop > cur) ||
+          (s.open_side === 'SELL' && stop < cur);
+        if (!improves) {
+          pushTick(s, {
+            phase: 'MANAGE',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `TRAIL skip — SL ${cur} already tighter · ${decision.reason}`,
+          });
+          return;
+        }
+        const upd = await updateCapitalStop(opened.session, dealId, stop);
+        if (upd.ok) {
+          s.safety_sl = stop;
+          pushTick(s, {
+            phase: 'MANAGE',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `TRAIL SL ${stop} · ${decision.reason}`,
+          });
+        } else {
+          pushTick(s, {
+            phase: 'ERROR',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `TRAIL FAIL: ${upd.detail} · ${decision.reason}`,
+          });
+        }
         return;
       }
 
@@ -1758,65 +1939,100 @@ async function robotCycleBody(s: Internal) {
       : `10s OHLC seeding · feeds ${s.feed_contributing || 0}/${s.feed_sender_count || 0}`;
 
     const primarySnap = s.feedManager.snapshot(s.epic);
-    const decision = evaluateStrategy({
-      epic: s.epic,
-      market_snapshot_id: `desk_${s.id}_${s.last_quote_at || Date.now()}`,
-      market_open: marketAllowsTrading(quote.market_status),
-      feed_fresh: primarySnap.primary_status === 'LIVE' && primarySnap.allows_execution,
-      bar_closed: !!(s.ohlcState.just_closed && bar),
-      closed_bar: bar || null,
-      bars: s.closedBars,
-      regime: s.regime,
-      minute_candles: s.minuteCandles,
-      trading_enabled: s.trading_enabled && s.entry_enabled,
-      manage_only: !s.entry_enabled,
-    });
-
     let direction: 'BUY' | 'SELL' | null = null;
     let reason = '';
     let setupType: string | null = null;
 
-    if (decision.code === 'NO_SETUP') {
-      pushTick(s, {
-        phase: 'SCAN',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        code: DecisionCodes.NO_SETUP,
-        detail: `${ohlcLine} · ${decision.reason}${
-          !bar || !s.ohlcState.just_closed
-            ? ` · forming C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'}`
-            : ''
-        }`,
-      });
-      return;
-    }
-
-    if (decision.code === 'BLOCKED_TECHNICAL') {
-      pushTick(s, {
-        phase: 'ERROR',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        code: DecisionCodes.BLOCKED_TECHNICAL,
-        detail: `BLOCKED_TECHNICAL · ${decision.block_reason || decision.reason}`,
-      });
-      return;
-    }
-
-    if (decision.code === 'ENTER_LONG' || decision.code === 'ENTER_SHORT') {
-      direction = decision.direction;
-      setupType = decision.setup;
-      reason = decision.reason;
-      s.trend_bias = decision.bias;
+    const calc = s.pending_calc;
+    if (calc) {
+      const xm = s.cross_market;
+      const against =
+        xm != null &&
+        xm.refs.length > 0 &&
+        (calc.direction === 'BUY' ? xm.pressure < -0.25 : xm.pressure > 0.25);
+      if (against) {
+        pushTick(s, {
+          phase: 'SCAN',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          code: DecisionCodes.NO_SETUP,
+          detail: `CALC EntryReady held · ${xm?.detail || 'cross-market against'}`,
+        });
+        return;
+      }
+      s.pending_calc = null;
+      calcQueue.delete(calcKey(s.account_id, s.epic));
+      direction = calc.direction;
+      setupType = calc.setup_type;
+      reason = `CALC EntryReady · ${calc.explanation || calc.regime || calc.setup_type || calc.direction}`;
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        code: strategyToDecisionCode(decision),
-        detail: `${ohlcLine} · ${decision.code} · ${reason}`,
+        code: DecisionCodes.SIGNAL_CREATED,
+        detail: `${reason} · ${s.cross_market?.detail || 'cross-market n/a'}`,
       });
+    }
+
+    if (!direction) {
+      const decision = evaluateStrategy({
+        epic: s.epic,
+        market_snapshot_id: `desk_${s.id}_${s.last_quote_at || Date.now()}`,
+        market_open: marketAllowsTrading(quote.market_status),
+        feed_fresh: primarySnap.primary_status === 'LIVE' && primarySnap.allows_execution,
+        bar_closed: !!(s.ohlcState.just_closed && bar),
+        closed_bar: bar || null,
+        bars: s.closedBars,
+        regime: s.regime,
+        minute_candles: s.minuteCandles,
+        trading_enabled: s.trading_enabled && s.entry_enabled,
+        manage_only: !s.entry_enabled,
+      });
+
+      if (decision.code === 'NO_SETUP') {
+        pushTick(s, {
+          phase: 'SCAN',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          code: DecisionCodes.NO_SETUP,
+          detail: `${ohlcLine} · ${decision.reason}${
+            !bar || !s.ohlcState.just_closed
+              ? ` · forming C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'}`
+              : ''
+          }`,
+        });
+        return;
+      }
+
+      if (decision.code === 'BLOCKED_TECHNICAL') {
+        pushTick(s, {
+          phase: 'ERROR',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          code: DecisionCodes.BLOCKED_TECHNICAL,
+          detail: `BLOCKED_TECHNICAL · ${decision.block_reason || decision.reason}`,
+        });
+        return;
+      }
+
+      if (decision.code === 'ENTER_LONG' || decision.code === 'ENTER_SHORT') {
+        direction = decision.direction;
+        setupType = decision.setup;
+        reason = decision.reason;
+        s.trend_bias = decision.bias;
+        pushTick(s, {
+          phase: 'DECIDE',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          code: strategyToDecisionCode(decision),
+          detail: `${ohlcLine} · ${decision.code} · ${reason}`,
+        });
+      }
     }
 
     // Late-move / setup invalidation is owned solely by evaluateStrategy (minute_candles).
@@ -2000,6 +2216,9 @@ export async function startRobotSession(input: {
     regime: 'UNKNOWN',
     trend_bias: 'FLAT',
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
+    last_cross_ms: 0,
+    pending_calc: calcQueue.get(calcKey(acc.id, epic)) || null,
+    cross_market: null,
   };
 
   if (session.entry_enabled && acc.client_id) {
@@ -2014,7 +2233,7 @@ export async function startRobotSession(input: {
     bid: null,
     ask: null,
     mid: null,
-    detail: `ROBOT START · BUILD ${runtimeBuildInfo().git_sha} · NODE BRAIN · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · 10s OHLC from multi-feed consensus · ONE TRADE ONLY · other robots: ${others}`,
+    detail: `ROBOT START · BUILD ${runtimeBuildInfo().git_sha} · HANDS · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · calc EntryReady queued then Capital · ONE TRADE ONLY · other robots: ${others}`,
   });
   pushTick(session, {
     phase: 'INFO',
@@ -2022,7 +2241,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: Node robotDesk (not C++ market-core) · SL = 0.20% of price · 3-min trend · with-trend or confirmed fade after large move · max 1 open',
+      'Rules: calc (C++/pipeline) queues EntryReady · robotDesk opens/closes Capital · Node evaluateStrategy only if no pending calc · SL = 0.20% of price · max 1 open',
   });
 
   sessions.set(id, session);

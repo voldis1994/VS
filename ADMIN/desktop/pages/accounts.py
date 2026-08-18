@@ -70,8 +70,8 @@ class AccountsPage(Page):
         self._selected_market_id: int | None = None
 
         self.set_note(
-            "Select a trading account to assign its Capital market (EPIC).  "
-            "Each account must have exactly one EPIC before trading can start."
+            "Select a trading account to assign its Capital market (EPIC). "
+            "PULL CAPITAL walks the broker navigation (3000+ markets). LOAD CATALOG reads what is already stored."
         )
 
         # ── Account list table ───────────────────────────────────────────────
@@ -113,10 +113,13 @@ class AccountsPage(Page):
         self.btn_load = QPushButton("LOAD CATALOG")
         self.btn_load.setObjectName("Primary")
         self.btn_load.clicked.connect(self._load_catalog)
+        self.btn_pull = QPushButton("PULL CAPITAL")
+        self.btn_pull.clicked.connect(self._pull_catalog)
         self.lbl_load = QLabel("")
         self.lbl_load.setObjectName("muted")
         search_row.addWidget(self.search, 1)
         search_row.addWidget(self.btn_load)
+        search_row.addWidget(self.btn_pull)
         search_row.addWidget(self.lbl_load)
         pl.addLayout(search_row)
 
@@ -222,7 +225,7 @@ class AccountsPage(Page):
         self._selected_market_id = None
         self.btn_save.setEnabled(False)
         self.lbl_save.setText("")
-        self.lbl_load.setText("Catalog not loaded — click LOAD CATALOG")
+        self.lbl_load.setText("Catalog not loaded — LOAD CATALOG (DB) or PULL CAPITAL (broker, up to 3 min)")
         self.search.clear()
         self.mkt_table.setRowCount(0)
 
@@ -265,6 +268,33 @@ class AccountsPage(Page):
         except ApiError as e:
             self._val_epic.setText(f"ERR: {e}")
             _tone(self._val_epic, "warn")
+
+    def _pull_catalog(self) -> None:
+        if not self._current_account_id:
+            return
+        self.btn_pull.setEnabled(False)
+        self.btn_load.setEnabled(False)
+        self.lbl_load.setText("Pulling Capital navigation (up to 3 min)…")
+        try:
+            data = (
+                self.api.request(
+                    "POST",
+                    f"/api/trading/accounts/{self._current_account_id}/pull-capital-markets",
+                    {},
+                    timeout=180.0,
+                )
+                or {}
+            )
+            count = data.get("count")
+            note = data.get("note") or "Catalog imported"
+            self.lbl_load.setText(f"PULLED {count if count is not None else '?'} markets · {note}")
+            self._load_catalog()
+        except ApiError as e:
+            self.lbl_load.setText(f"Pull error: {e}")
+            QMessageBox.critical(self, "VS Admin", f"Failed to pull Capital catalog:\n{e}")
+        finally:
+            self.btn_pull.setEnabled(True)
+            self.btn_load.setEnabled(True)
 
     # ── Catalog load ─────────────────────────────────────────────────────────
 

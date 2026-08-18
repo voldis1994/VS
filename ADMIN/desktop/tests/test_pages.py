@@ -10,6 +10,8 @@ from pages.dashboard import DashboardPage
 from pages.ops import PositionsPage
 from pages.server import ServerPage
 from pages.trading import TradingPage
+from pages.brokers import BrokersPage
+from pages.robot import RobotPage
 from services.api import ControlApi
 from ui.main_window import NAV, MainWindow
 
@@ -20,6 +22,8 @@ def test_nav_has_all_operator_pages():
         "Server",
         "Clients",
         "Accounts",
+        "Brokers",
+        "Robot",
         "Market",
         "Trading",
         "Strategies",
@@ -64,6 +68,8 @@ def test_disconnected_snapshot_does_not_fake_connected():
     assert isinstance(win.pages["Server"], ServerPage)
     assert isinstance(win.pages["Trading"], TradingPage)
     assert isinstance(win.pages["Positions"], PositionsPage)
+    assert isinstance(win.pages["Brokers"], BrokersPage)
+    assert isinstance(win.pages["Robot"], RobotPage)
     win.close()
     app.processEvents()
 
