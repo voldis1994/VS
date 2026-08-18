@@ -246,6 +246,7 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
         identifier,
         password,
         connectionId: conn.connection_id,
+        waitForCooldown: true,
       });
       if (!opened.ok) {
         return reply.code(400).send({ error: opened.result.detail, message: opened.result.detail });
