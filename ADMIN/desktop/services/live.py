@@ -9,6 +9,25 @@ from PySide6.QtCore import QObject, QThread, Signal, Slot
 from app.version import ADMIN_VERSION
 from services.api import ApiError, ControlApi, validate_identity
 
+# Health + monitor every tick. Extra GETs (clients/brokers/robot/orders/…) on tick 1
+# and every EXTRA_EVERY ticks so a ~500ms LAN RTT does not serialize 13 calls.
+CONNECTED_POLL_MS = 2500
+DISCONNECTED_POLL_MS = 1500
+EXTRA_EVERY = 4
+_EXTRA_PATHS = (
+    ("presence", "/api/v1/presence"),
+    ("supervisor", "/api/v1/system/supervisor"),
+    ("broker", "/api/v1/broker/health"),
+    ("market", "/api/v1/market"),
+    ("position", "/api/v1/position"),
+    ("incidents", "/api/v1/incidents"),
+    ("clients", "/api/clients"),
+    ("orders", "/api/v1/orders"),
+    ("trades", "/api/v1/trades"),
+    ("brokers", "/api/brokers"),
+    ("robot_desk", "/api/robot-desk"),
+)
+
 
 def empty_state() -> dict[str, Any]:
     return {
@@ -78,9 +97,11 @@ class LiveWorker(QObject):
         self.api = api
         self.transport = transport
         self._stop = False
-        self._backoff_ms = 1500
+        self._backoff_ms = DISCONNECTED_POLL_MS
         self._last_ok: float | None = None
         self._ws_ok = False
+        self._n = 0
+        self._extras: dict[str, Any] = {key: None for key, _path in _EXTRA_PATHS}
 
     def mark_ws(self, ok: bool) -> None:
         self._ws_ok = ok
@@ -115,17 +136,20 @@ class LiveWorker(QObject):
         except ApiError:
             hb_at = None
         snap = self.api.get("/api/v1/server/monitor") or {}
-        presence = _safe(self.api, "/api/v1/presence")
-        supervisor = _safe(self.api, "/api/v1/system/supervisor")
-        broker = _safe(self.api, "/api/v1/broker/health")
-        market = _safe(self.api, "/api/v1/market")
-        position = _safe(self.api, "/api/v1/position")
-        incidents = _safe(self.api, "/api/v1/incidents")
-        clients = _safe(self.api, "/api/clients")
-        orders = _safe(self.api, "/api/v1/orders")
-        trades = _safe(self.api, "/api/v1/trades")
-        brokers = _safe(self.api, "/api/brokers")
-        robot_desk = _safe(self.api, "/api/robot-desk")
+        self._n += 1
+        if self._n == 1 or self._n % EXTRA_EVERY == 0:
+            self._extras = {key: _safe(self.api, path) for key, path in _EXTRA_PATHS}
+        presence = self._extras.get("presence")
+        supervisor = self._extras.get("supervisor")
+        broker = self._extras.get("broker")
+        market = self._extras.get("market")
+        position = self._extras.get("position")
+        incidents = self._extras.get("incidents")
+        clients = self._extras.get("clients")
+        orders = self._extras.get("orders")
+        trades = self._extras.get("trades")
+        brokers = self._extras.get("brokers")
+        robot_desk = self._extras.get("robot_desk")
         latency = int((time.monotonic() - t0) * 1000)
         sys = snap.get("system") or {}
         cl = snap.get("clients") or {}
@@ -164,7 +188,7 @@ class LiveWorker(QObject):
         sid = str(snap.get("server_id") or health.get("server_id") or "VS-CORE-01")
         ver = (snap.get("build") or {}).get("version") or health.get("VERSION") or snap.get("server_version")
         self._last_ok = time.time()
-        self._backoff_ms = 1500
+        self._backoff_ms = CONNECTED_POLL_MS
         return {
             **empty_state(),
             "connected": True,
@@ -246,7 +270,7 @@ class LiveWorker(QObject):
                     "lastError": str(e),
                     "ws": "DISCONNECTED",
                 }
-                self._backoff_ms = min(max(self._backoff_ms, 1500) * 2, 12000)
+                self._backoff_ms = min(max(self._backoff_ms, DISCONNECTED_POLL_MS) * 2, 12000)
             self.snapshot.emit(state)
             slept = 0
             step = 50

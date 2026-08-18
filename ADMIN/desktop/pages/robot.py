@@ -15,12 +15,34 @@ from services.api import ApiError, ControlApi
 from widgets.chrome import KvRow, Panel, VsTable
 
 
+def _session_fp(sess: dict) -> tuple:
+    ticks = sess.get("ticks") if isinstance(sess.get("ticks"), list) else []
+    last = ticks[0] if ticks and isinstance(ticks[0], dict) else {}
+    calc = sess.get("pending_calc") if isinstance(sess.get("pending_calc"), dict) else {}
+    xm = sess.get("cross_market") if isinstance(sess.get("cross_market"), dict) else {}
+    chain = sess.get("decision_chain") if isinstance(sess.get("decision_chain"), dict) else {}
+    return (
+        sess.get("id"),
+        sess.get("running"),
+        sess.get("open_side"),
+        sess.get("mode"),
+        calc.get("direction"),
+        xm.get("detail"),
+        chain.get("action"),
+        last.get("at"),
+        last.get("detail"),
+        len(ticks),
+    )
+
+
 class RobotPage(Page):
     def __init__(self, api: ControlApi):
         super().__init__("ROBOT")
         self.api = api
         self._accounts: list[dict] = []
         self._sessions: list[dict] = []
+        self._acct_fp: tuple | None = None
+        self._sess_fp: tuple | None = None
         self.set_note(
             "Robot is Capital hands. START executes queued calc (pipeline/C++) then Node fallback. "
             "STOP ends new entries; open trades keep managing until flat."
@@ -74,54 +96,79 @@ class RobotPage(Page):
 
     def apply(self, s: dict) -> None:
         self.mark_disconnected(s)
-        self._accounts = []
-        current = self.account.currentData()
-        self.account.blockSignals(True)
-        self.account.clear()
+        accounts: list[dict] = []
         for c in s.get("clients") or []:
             if not isinstance(c, dict) or not c.get("account_id"):
                 continue
-            acc = {
-                "account_id": int(c["account_id"]),
-                "client": c.get("name") or "—",
-                "epic": c.get("panel_epic") or "",
-                "lot": c.get("panel_lot_size"),
-            }
-            self._accounts.append(acc)
-            label = f"{acc['client']} · acct {acc['account_id']} · {acc['epic'] or 'NO EPIC'}"
-            self.account.addItem(label, acc["account_id"])
-        if current is not None:
-            idx = self.account.findData(current)
-            if idx >= 0:
-                self.account.setCurrentIndex(idx)
-        self.account.blockSignals(False)
-        self._fill_from_account()
+            accounts.append(
+                {
+                    "account_id": int(c["account_id"]),
+                    "client": c.get("name") or "—",
+                    "epic": c.get("panel_epic") or "",
+                    "lot": c.get("panel_lot_size"),
+                }
+            )
+        acct_fp = tuple((a["account_id"], a["client"], a["epic"], a["lot"]) for a in accounts)
+        if acct_fp != self._acct_fp:
+            self._acct_fp = acct_fp
+            self._accounts = accounts
+            current = self.account.currentData()
+            self.account.blockSignals(True)
+            self.account.clear()
+            for acc in self._accounts:
+                label = f"{acc['client']} · acct {acc['account_id']} · {acc['epic'] or 'NO EPIC'}"
+                self.account.addItem(label, acc["account_id"])
+            if current is not None:
+                idx = self.account.findData(current)
+                if idx >= 0:
+                    self.account.setCurrentIndex(idx)
+            self.account.blockSignals(False)
+            if current is None:
+                self._fill_from_account()
 
         desk = s.get("robot_desk") if isinstance(s.get("robot_desk"), dict) else {}
         self._sessions = [x for x in (desk.get("sessions") or []) if isinstance(x, dict)]
-        self.table.set_rows(
-            [
-                {
-                    "id": sess.get("id"),
-                    "client": sess.get("client_name") or sess.get("account_name") or "—",
-                    "epic": sess.get("epic") or "—",
-                    "mode": sess.get("mode") or "—",
-                    "side": sess.get("open_side") or "FLAT",
-                    "calc": (sess.get("pending_calc") or {}).get("direction")
-                    if isinstance(sess.get("pending_calc"), dict)
-                    else "—",
-                    "cross": (sess.get("cross_market") or {}).get("detail")
-                    if isinstance(sess.get("cross_market"), dict)
-                    else "—",
-                    "running": "YES" if sess.get("running") else "NO",
-                }
-                for sess in self._sessions
-            ]
-        )
         chain = (desk.get("board") or {}).get("chain") if isinstance(desk.get("board"), dict) else None
         if chain:
             self.lbl.setText(str(chain))
-        if self.table.selectionModel().selectedRows():
+        sess_fp = tuple(_session_fp(sess) for sess in self._sessions)
+        if sess_fp == self._sess_fp:
+            return
+        self._sess_fp = sess_fp
+        selected = self._selected_session()
+        selected_id = selected.get("id") if selected else None
+        sm = self.table.selectionModel()
+        sm.selectionChanged.disconnect(self._on_select)
+        restored = False
+        try:
+            self.table.set_rows(
+                [
+                    {
+                        "id": sess.get("id"),
+                        "client": sess.get("client_name") or sess.get("account_name") or "—",
+                        "epic": sess.get("epic") or "—",
+                        "mode": sess.get("mode") or "—",
+                        "side": sess.get("open_side") or "FLAT",
+                        "calc": (sess.get("pending_calc") or {}).get("direction")
+                        if isinstance(sess.get("pending_calc"), dict)
+                        else "—",
+                        "cross": (sess.get("cross_market") or {}).get("detail")
+                        if isinstance(sess.get("cross_market"), dict)
+                        else "—",
+                        "running": "YES" if sess.get("running") else "NO",
+                    }
+                    for sess in self._sessions
+                ]
+            )
+            if selected_id is not None:
+                for i, sess in enumerate(self._sessions):
+                    if sess.get("id") == selected_id:
+                        self.table.selectRow(i)
+                        restored = True
+                        break
+        finally:
+            sm.selectionChanged.connect(self._on_select)
+        if restored or self.table.selectionModel().selectedRows():
             self._on_select()
         elif self._sessions:
             self._show_session(self._sessions[0])

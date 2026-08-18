@@ -65,6 +65,7 @@ class MainWindow(QMainWindow):
     def __init__(self, api: ControlApi, transport: str = "LAN") -> None:
         super().__init__()
         self.api = api
+        self._last: dict = {}
         self.setWindowTitle("VS Admin")
         self.resize(1480, 920)
         self.setMinimumSize(1180, 740)
@@ -149,7 +150,7 @@ class MainWindow(QMainWindow):
         self.status_msg = QLabel("Connecting to VS CORE…")
         status.addWidget(self.status_msg, 1)
 
-        self.nav.currentRowChanged.connect(self.stack.setCurrentIndex)
+        self.nav.currentRowChanged.connect(self._on_nav)
         self.nav.setCurrentRow(0)
 
         self.thread, self.worker = start_live_thread(self.api, transport)
@@ -172,7 +173,22 @@ class MainWindow(QMainWindow):
         else:
             self.tray = None
 
-        self._last: dict = {}
+    def _visible_page(self) -> QWidget | None:
+        row = self.nav.currentRow()
+        if row < 0 or row >= len(NAV):
+            return None
+        return self.pages.get(NAV[row])
+
+    def _apply_page(self, page: QWidget | None, snap: dict) -> None:
+        apply = getattr(page, "apply", None)
+        if callable(apply):
+            apply(snap)
+
+    def _on_nav(self, row: int) -> None:
+        self.stack.setCurrentIndex(row)
+        if self._last:
+            name = NAV[row] if 0 <= row < len(NAV) else None
+            self._apply_page(self.pages.get(name) if name else None, self._last)
 
     def raise_window(self) -> None:
         self.show()
@@ -199,10 +215,7 @@ class MainWindow(QMainWindow):
         self.hb.setText(f"LAST HEARTBEAT {snap.get('last_heartbeat') or '—'}")
         self.sver.setText(f"SERVER {snap.get('server_version') or snap.get('serverVersion') or '—'}")
         self.status_msg.setText(str(snap.get("error") or f"{state} · {nd(snap.get('url'), '')}"))
-        for page in self.pages.values():
-            apply = getattr(page, "apply", None)
-            if callable(apply):
-                apply(snap)
+        self._apply_page(self._visible_page(), snap)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         try:

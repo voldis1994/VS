@@ -11,6 +11,7 @@ class ClientsPage(Page):
     def __init__(self, api: ControlApi):
         super().__init__("CLIENTS")
         self.api = api
+        self._fp: tuple | None = None
         row = QHBoxLayout()
         self.name = QLineEdit()
         self.name.setPlaceholderText("login name")
@@ -48,6 +49,21 @@ class ClientsPage(Page):
                     "lot": c.get("panel_lot_size") if c.get("panel_lot_size") is not None else "—",
                 }
             )
+        fp = tuple(
+            (
+                c.get("id"),
+                c.get("name"),
+                c.get("access_enabled"),
+                c.get("robot_status"),
+                c.get("panel_epic"),
+                c.get("panel_lot_size"),
+            )
+            for c in (s.get("clients") or [])
+            if isinstance(c, dict)
+        )
+        if fp == self._fp:
+            return
+        self._fp = fp
         self.table.set_rows(rows)
 
     def _create(self) -> None:

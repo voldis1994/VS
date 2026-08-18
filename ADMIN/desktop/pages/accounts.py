@@ -68,6 +68,7 @@ class AccountsPage(Page):
         self._filtered: list[dict] = []      # after search filter
         self._current_account_id: int | None = None
         self._selected_market_id: int | None = None
+        self._fp: tuple | None = None
 
         self.set_note(
             "Select a trading account to assign its Capital market (EPIC). "
@@ -176,7 +177,7 @@ class AccountsPage(Page):
 
     def apply(self, s: dict) -> None:
         self.mark_disconnected(s)
-        self._accounts = []
+        accounts: list[dict] = []
         rows = []
         for c in s.get("clients") or []:
             if not isinstance(c, dict):
@@ -184,7 +185,7 @@ class AccountsPage(Page):
             acc_id = c.get("account_id")
             epic = c.get("panel_epic") or ""
             lot = c.get("panel_lot_size")
-            self._accounts.append(
+            accounts.append(
                 {
                     "account_id": acc_id,
                     "client_name": c.get("name") or "—",
@@ -200,7 +201,27 @@ class AccountsPage(Page):
                     "trading": "✓  ENABLED" if epic else "—  NOT SET",
                 }
             )
-        self.table.set_rows(rows)
+        fp = tuple(
+            (c.get("account_id"), c.get("name"), c.get("panel_epic"), c.get("panel_lot_size"))
+            for c in (s.get("clients") or [])
+            if isinstance(c, dict)
+        )
+        if fp == self._fp:
+            return
+        self._fp = fp
+        prev = self._current_account_id
+        self._accounts = accounts
+        sm = self.table.selectionModel()
+        sm.selectionChanged.disconnect(self._on_row_selected)
+        try:
+            self.table.set_rows(rows)
+            if prev is not None:
+                for i, acc in enumerate(self._accounts):
+                    if acc.get("account_id") == prev:
+                        self.table.selectRow(i)
+                        break
+        finally:
+            sm.selectionChanged.connect(self._on_row_selected)
 
     # ── Row selection ─────────────────────────────────────────────────────────
 

@@ -21,6 +21,8 @@ class BrokersPage(Page):
         self.api = api
         self._clients: list[dict] = []
         self._rows: list[dict] = []
+        self._client_fp: tuple | None = None
+        self._broker_fp: tuple | None = None
         self.set_note(
             "Capital.com Live / Demo — execution venue. Save identifier + API key + API password, then TEST. "
             "Catalog pull is on Accounts."
@@ -75,22 +77,39 @@ class BrokersPage(Page):
     def apply(self, s: dict) -> None:
         self.mark_disconnected(s)
         self._clients = [c for c in (s.get("clients") or []) if isinstance(c, dict)]
-        current = self.client.currentData()
-        self.client.blockSignals(True)
-        self.client.clear()
-        if not self._clients:
-            self.client.addItem("Will create Default Client", None)
-        for c in self._clients:
-            cid = c.get("id")
-            name = c.get("name") or f"#{cid}"
-            self.client.addItem(f"{name} (#{cid})", cid)
-        if current is not None:
-            idx = self.client.findData(current)
-            if idx >= 0:
-                self.client.setCurrentIndex(idx)
-        self.client.blockSignals(False)
+        client_fp = tuple((c.get("id"), c.get("name")) for c in self._clients)
+        if client_fp != self._client_fp:
+            self._client_fp = client_fp
+            current = self.client.currentData()
+            self.client.blockSignals(True)
+            self.client.clear()
+            if not self._clients:
+                self.client.addItem("Will create Default Client", None)
+            for c in self._clients:
+                cid = c.get("id")
+                name = c.get("name") or f"#{cid}"
+                self.client.addItem(f"{name} (#{cid})", cid)
+            if current is not None:
+                idx = self.client.findData(current)
+                if idx >= 0:
+                    self.client.setCurrentIndex(idx)
+            self.client.blockSignals(False)
 
         self._rows = [b for b in (s.get("brokers") or []) if isinstance(b, dict)]
+        broker_fp = tuple(
+            (
+                b.get("id"),
+                b.get("client_name") or b.get("client_id"),
+                b.get("broker_name"),
+                b.get("environment"),
+                bool(b.get("enabled")),
+            )
+            for b in self._rows
+        )
+        if broker_fp == self._broker_fp:
+            return
+        self._broker_fp = broker_fp
+        selected = self._selected_id()
         self.table.set_rows(
             [
                 {
@@ -103,6 +122,14 @@ class BrokersPage(Page):
                 for b in self._rows
             ]
         )
+        if selected is not None:
+            for i, b in enumerate(self._rows):
+                try:
+                    if int(b.get("id")) == selected:
+                        self.table.selectRow(i)
+                        break
+                except (TypeError, ValueError):
+                    continue
 
     def _selected_id(self) -> int | None:
         indexes = self.table.selectionModel().selectedRows()
