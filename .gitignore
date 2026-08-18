@@ -38,11 +38,15 @@ ADMIN/desktop/public/runtime-config.js
 *.sqlite
 *.db
 
-# Native ADMIN / monitor build
+# Native ADMIN / monitor / C++ calc build
 ADMIN/desktop/build/
 ADMIN/windows/dist/
 SERVER/monitor/__pycache__/
 ADMIN/desktop/__pycache__/
+SERVER/calc/vs-calc
+SERVER/calc/vs-calc.exe
+SERVER/calc/*.obj
+SERVER/calc/*.pdb
 
 
 # Logs
@@ -72,6 +76,8 @@ benchmark-results/
 credentials.json
 ADMIN/config/admin.connection.json
 ADMIN/config/control-panel.env
+ADMIN/config/single-box.env
+ADMIN/config/client-url.txt
 ADMIN/ADMIN_TOKEN.txt
 ADMIN_TOKEN.txt
 SERVER/control-api/data/

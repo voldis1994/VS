@@ -20,6 +20,7 @@ import { registerClientAuthRoutes } from './routes/clientAuth.js';
 import { registerClientPanelRoutes } from './routes/clientPanel.js';
 import { registerPipelineRoutes } from './routes/pipeline.js';
 import { registerClientPanelStatic } from './services/clientPanelStatic.js';
+import { registerAdminPanelStatic } from './services/adminPanelStatic.js';
 import { TelemetryBroadcaster } from './ws/telemetry.js';
 import { ClientEventHub, setClientEventHub } from './services/clientEvents.js';
 import { authMiddleware } from './middleware/auth.js';
@@ -58,6 +59,10 @@ function corsOrigins(): boolean | string | string[] {
   const raw = [process.env.CORS_ORIGIN, process.env.CLIENT_CORS_ORIGIN]
     .filter(Boolean)
     .join(',');
+  const singleBox = ['1', 'true', 'yes'].includes(
+    String(process.env.VS_SINGLE_BOX || '').trim().toLowerCase()
+  );
+  if (singleBox) return true;
   // Native VS Admin.exe does not use browser CORS. CLIENT traffic is :443 gateway.
   const lanTrust = ['1', 'true', 'yes'].includes(
     String(process.env.VS_LAN_TRUST_ADMIN || '').trim().toLowerCase()
@@ -168,6 +173,7 @@ async function main() {
   await registerPipelineRoutes(app);
   await registerAuditRoutes(app);
   await registerSettingsRoutes(app);
+  await registerAdminPanelStatic(app);
   await registerClientPanelStatic(app);
 
   // Mobile Control API v1 — own Bearer auth; Capital credentials never returned.

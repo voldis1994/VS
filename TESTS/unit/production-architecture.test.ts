@@ -44,20 +44,22 @@ describe('canonical production architecture', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('START_MSI launches native VS Admin.exe and does not serve a local web UI', () => {
+  it('START_MSI starts one-PC web panel + C++ calc, not Vite 5188', () => {
     const msi = readFileSync(join(ROOT, 'START_MSI.bat'), 'utf8');
     expect(msi).toMatch(/start-admin\.ps1/);
-    expect(msi).toMatch(/VS Admin\.exe/);
-    expect(msi).toMatch(/BUILD_ADMIN\.bat/);
+    expect(msi).toMatch(/ADMIN\\web\\index.html/);
     const ps1 = readFileSync(join(ROOT, 'ADMIN/windows/start-admin.ps1'), 'utf8');
-    expect(ps1).toContain('VS Admin.exe');
+    expect(ps1).toContain('3000/admin');
+    expect(ps1).toContain('VS_SINGLE_BOX');
+    expect(ps1).toContain('vs-calc');
     expect(ps1).not.toMatch(/serve-admin\.mjs/);
     expect(ps1).not.toMatch(/npm exec.*vite|vite --host/);
     expect(ps1).not.toMatch(/5188/);
     expect(ps1).not.toMatch(/5173/);
-    expect(existsSync(join(ROOT, 'ADMIN/desktop/main.py'))).toBe(true);
+    expect(existsSync(join(ROOT, 'ADMIN/web/index.html'))).toBe(true);
+    expect(existsSync(join(ROOT, 'SERVER/calc/vs-calc.cpp'))).toBe(true);
     expect(existsSync(join(ROOT, 'ADMIN/runtime/serve-admin.mjs'))).toBe(false);
-    expect(existsSync(join(ROOT, 'ADMIN/windows/BUILD_ADMIN.bat'))).toBe(true);
+    expect(existsSync(join(ROOT, 'PALAID.bat'))).toBe(true);
   });
 
   it('client gateway exists and blocks admin paths', () => {
@@ -92,10 +94,9 @@ describe('canonical production architecture', () => {
     }
   });
 
-  it('CLIENT web app exists and ADMIN is native python', () => {
+  it('CLIENT web app exists and ADMIN web control panel is served from Control API', () => {
     expect(existsSync(join(ROOT, 'CLIENT/web/package.json'))).toBe(true);
-    expect(existsSync(join(ROOT, 'ADMIN/desktop/main.py'))).toBe(true);
-    expect(existsSync(join(ROOT, 'SERVER/monitor/main.py'))).toBe(true);
+    expect(existsSync(join(ROOT, 'ADMIN/web/index.html'))).toBe(true);
     expect(existsSync(join(ROOT, 'ADMIN/desktop/vite.config.ts'))).toBe(false);
   });
 

@@ -57,7 +57,6 @@ import {
 } from '../vs-core/executionCore.js';
 import { STRATEGY_VERSION, CONFIG_VERSION } from '../vs-core/versions.js';
 import { getClientTradingRegistry } from '../vs-core/clientTrading.js';
-import { evaluateStrategy, strategyToDecisionCode } from '../vs-core/strategyCore.js';
 import { FeedManager } from '../vs-core/feedManager.js';
 import {
   assertEntriesAllowed,
@@ -134,7 +133,7 @@ export type RobotSession = {
   entry_regime: string | null;
   /** Strategy reason string at entry (audit). */
   entry_reason: string | null;
-  /** When false, manage-only (no new opens). When true, execute queued calc then Node fallback. */
+  /** When false, manage-only (no new opens). When true, execute queued C++ calc (no Node brain). */
   entry_enabled: boolean;
   ohlc_10s: {
     last_o: number | null;
@@ -453,7 +452,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     git_sha: build.git_sha,
     entry_brain: build.entry_brain,
-    chain: 'calc EntryReady → robotDesk Capital hands · Node evaluateStrategy only if no pending calc',
+    chain: 'C++ calc EntryReady → robotDesk Capital hands (Node does not choose BUY/SELL)',
     note: `BUILD ${build.git_sha} · calc + hands · regime=context · SL=0.20% of price · ${build.trend_minutes}-min`,
   };
 }
@@ -631,6 +630,37 @@ export function listRobotSessions(): RobotSession[] {
   return [...sessions.values()]
     .sort((a, b) => b.started_at.localeCompare(a.started_at))
     .map(publicSession);
+}
+
+/** Quote + 10s bars for C++ calc. Hands already hold Capital; calc never talks to the broker. */
+export function listCalcSnapshots(): Array<{
+  epic: string;
+  mid: number | null;
+  bid: number | null;
+  ask: number | null;
+  bars: Array<{ o: number; h: number; l: number; c: number }>;
+  regime: string;
+  running: boolean;
+}> {
+  return [...sessions.values()]
+    .filter((s) => s.running)
+    .map((s) => {
+      const tick = s.ticks.find((t) => t.bid != null || t.ask != null) || s.ticks[0];
+      return {
+        epic: s.epic,
+        mid: s.last_mid,
+        bid: tick?.bid ?? null,
+        ask: tick?.ask ?? null,
+        bars: s.closedBars.slice(-40).map((b) => ({
+          o: b.open,
+          h: b.high,
+          l: b.low,
+          c: b.close,
+        })),
+        regime: String(s.regime || ''),
+        running: s.running,
+      };
+    });
 }
 
 /** For System Health — Capital connection of first running robot. */
@@ -1918,7 +1948,6 @@ async function robotCycleBody(s: Internal) {
     }
 
     const bar = s.ohlcState.last_closed;
-    const ohlc = s.ohlc_10s;
     if (Date.now() - s.last_minute_fetch_ms >= 30_000) {
       s.last_minute_fetch_ms = Date.now();
       try {
@@ -1938,7 +1967,6 @@ async function robotCycleBody(s: Internal) {
         }/${s.feed_sender_count || 0} ${s.feed_source || 'LOCAL'} ${s.feed_agreement || ''}`
       : `10s OHLC seeding · feeds ${s.feed_contributing || 0}/${s.feed_sender_count || 0}`;
 
-    const primarySnap = s.feedManager.snapshot(s.epic);
     let direction: 'BUY' | 'SELL' | null = null;
     let reason = '';
     let setupType: string | null = null;
@@ -1977,66 +2005,16 @@ async function robotCycleBody(s: Internal) {
     }
 
     if (!direction) {
-      const decision = evaluateStrategy({
-        epic: s.epic,
-        market_snapshot_id: `desk_${s.id}_${s.last_quote_at || Date.now()}`,
-        market_open: marketAllowsTrading(quote.market_status),
-        feed_fresh: primarySnap.primary_status === 'LIVE' && primarySnap.allows_execution,
-        bar_closed: !!(s.ohlcState.just_closed && bar),
-        closed_bar: bar || null,
-        bars: s.closedBars,
-        regime: s.regime,
-        minute_candles: s.minuteCandles,
-        trading_enabled: s.trading_enabled && s.entry_enabled,
-        manage_only: !s.entry_enabled,
+      pushTick(s, {
+        phase: 'SCAN',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        code: DecisionCodes.NO_SETUP,
+        detail: `${ohlcLine} · waiting for C++ calc EntryReady (hands only — no Node brain)`,
       });
-
-      if (decision.code === 'NO_SETUP') {
-        pushTick(s, {
-          phase: 'SCAN',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          code: DecisionCodes.NO_SETUP,
-          detail: `${ohlcLine} · ${decision.reason}${
-            !bar || !s.ohlcState.just_closed
-              ? ` · forming C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'}`
-              : ''
-          }`,
-        });
-        return;
-      }
-
-      if (decision.code === 'BLOCKED_TECHNICAL') {
-        pushTick(s, {
-          phase: 'ERROR',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          code: DecisionCodes.BLOCKED_TECHNICAL,
-          detail: `BLOCKED_TECHNICAL · ${decision.block_reason || decision.reason}`,
-        });
-        return;
-      }
-
-      if (decision.code === 'ENTER_LONG' || decision.code === 'ENTER_SHORT') {
-        direction = decision.direction;
-        setupType = decision.setup;
-        reason = decision.reason;
-        s.trend_bias = decision.bias;
-        pushTick(s, {
-          phase: 'DECIDE',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          code: strategyToDecisionCode(decision),
-          detail: `${ohlcLine} · ${decision.code} · ${reason}`,
-        });
-      }
+      return;
     }
-
-    // Late-move / setup invalidation is owned solely by evaluateStrategy (minute_candles).
-    // Desk must not apply a second market-analysis Strategy gate after ENTER_*.
 
     // Capital button lag vs already-printed drop/rally (chart / near Capital refs / 10s OHLC).
     // Distant public spot (Yahoo/Aurum basis) is filtered inside detectStaleQuoteAdverse.
@@ -2241,7 +2219,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: calc (C++/pipeline) queues EntryReady · robotDesk opens/closes Capital · Node evaluateStrategy only if no pending calc · SL = 0.20% of price · max 1 open',
+      'Rules: C++ calc queues EntryReady · robotDesk opens/closes Capital · Node never chooses BUY/SELL · SL = 0.20% of price · max 1 open',
   });
 
   sessions.set(id, session);

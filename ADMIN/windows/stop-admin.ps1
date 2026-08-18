@@ -1,41 +1,31 @@
 ﻿#Requires -Version 5.1
-# Stop only native VS Admin.exe. Never taskkill unrelated processes.
+# Stop local MSI stack: Control API + C++ calc + leftover native Admin. Does not drop Postgres data.
 $ErrorActionPreference = "Continue"
-$PidFile = Join-Path $env:LOCALAPPDATA "VS\admin\vs-admin.pid"
+$PidDir = Join-Path $env:LOCALAPPDATA "VS\admin"
+$PidFile = Join-Path $PidDir "vs-api.pid"
 
-function Get-ProcessCommand([int]$ProcId) {
-  try {
-    $p = Get-CimInstance Win32_Process -Filter ("ProcessId=" + $ProcId) -ErrorAction SilentlyContinue
-    if ($p) { return [string]$p.CommandLine }
-  } catch { }
-  return ""
+Write-Host "VS STOP — local API + C++ calc (Postgres stays)"
+
+function Stop-CmdMatch([string]$Pattern) {
+  Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and $_.CommandLine -match $Pattern } |
+    ForEach-Object {
+      Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+      Write-Host ("Stopped PID " + $_.ProcessId)
+    }
 }
 
-Write-Host "VS ADMIN STOP — native executable only"
-
-$stopped = $false
 if (Test-Path $PidFile) {
   $old = Get-Content $PidFile -ErrorAction SilentlyContinue
-  if ($old) {
-    $cmd = Get-ProcessCommand ([int]$old)
-    if ($cmd -match 'VS Admin' -or $cmd -match 'ADMIN\\desktop\\main\.py' -or $cmd -eq "") {
-      Stop-Process -Id ([int]$old) -Force -ErrorAction SilentlyContinue
-      Write-Host ("Stopped PID " + $old)
-      $stopped = $true
-    } else {
-      Write-Host ("PID file " + $old + " is not VS ADMIN — not killed: " + $cmd)
-    }
-  }
+  if ($old) { Stop-Process -Id ([int]$old) -Force -ErrorAction SilentlyContinue }
   Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
 }
 
+Stop-CmdMatch 'src\\index\.ts|control-api'
+Stop-CmdMatch 'vs-calc'
 Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-  Where-Object { $_.Name -match 'VS Admin' -or ($_.CommandLine -and $_.CommandLine -match 'VS Admin\.exe') } |
-  ForEach-Object {
-    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-    Write-Host ("Stopped PID " + $_.ProcessId)
-    $stopped = $true
-  }
+  Where-Object { $_.Name -match 'VS Admin' -or $_.Name -match 'vs-calc' } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
-if ($stopped) { Write-Host "SUCCESS: VS ADMIN stopped" } else { Write-Host "VS ADMIN was not running" }
+Write-Host "SUCCESS: local VS processes signaled to stop"
 exit 0

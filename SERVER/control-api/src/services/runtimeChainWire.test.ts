@@ -3,16 +3,15 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 describe('P3 runtime call-chain wiring', () => {
-  it('robotCycle uses Strategy→Exit money path (evaluateStrategy → enterTrade)', () => {
+  it('robotCycle executes queued C++ calc then Capital — Node is hands only', () => {
     const src = readFileSync(join(process.cwd(), 'src/services/robotDesk.ts'), 'utf8');
-    // Authoritative opener after architecture merge — not the AAA tradePipeline alternate.
-    expect(src).toContain("import { evaluateStrategy, strategyToDecisionCode } from '../vs-core/strategyCore.js'");
-    expect(src).toContain('evaluateStrategy({');
+    expect(src).toContain('pending_calc');
     expect(src).toContain('await enterTrade(');
     expect(src).toContain('buildMoneyPathRisk(');
     expect(src).toContain('evaluateRisk(');
     expect(src).toContain("import { decideBestOutcomeExit, favorableMove } from './exitManage.js'");
-    // tradePipeline remains available as a diagnostic/AAA module, not the live opener
+    expect(src).toContain('waiting for C++ calc EntryReady');
+    expect(src).not.toContain('evaluateStrategy({');
     expect(src).not.toContain("import { runTradePipeline } from './tradePipeline.js'");
   });
 
