@@ -251,53 +251,80 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
         });
       }
 
-      // Upsert Capital.com catalog (keep stable IDs via epic unique key).
-      const seenEpics: string[] = [];
-      for (const m of markets) {
-        seenEpics.push(m.epic);
-        await pool.query(
-          `INSERT INTO capital_markets
-           (broker_connection_id, epic, symbol, display_name, instrument_type, category, min_lot, max_lot, lot_step)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-           ON CONFLICT (broker_connection_id, epic) DO UPDATE SET
-             symbol = EXCLUDED.symbol,
-             display_name = EXCLUDED.display_name,
-             instrument_type = EXCLUDED.instrument_type,
-             category = EXCLUDED.category,
-             min_lot = EXCLUDED.min_lot,
-             max_lot = EXCLUDED.max_lot,
-             lot_step = EXCLUDED.lot_step,
-             updated_at = NOW()`,
-          [
-            conn.connection_id,
-            m.epic,
-            m.symbol,
-            m.display_name,
-            m.instrument_type,
-            m.category,
-            m.min_lot,
-            m.max_lot,
-            m.lot_step,
-          ]
-        );
+      // Sanity: reject suspiciously small broker responses — a partial/error
+      // response must never silently delete a large portion of the catalog.
+      const existing = await pool.query(
+        `SELECT COUNT(*)::int AS n FROM capital_markets WHERE broker_connection_id = $1`,
+        [conn.connection_id]
+      );
+      const existingCount = (existing.rows[0]?.n as number) ?? 0;
+      if (existingCount > 0 && markets.length < existingCount * 0.5) {
+        return reply.code(502).send({
+          error: `Capital.com returned only ${markets.length} markets but ${existingCount} are stored locally. ` +
+            `Refusing to delete catalog — check broker API health and retry.`,
+        });
       }
 
-      // Remove markets that disappeared from Capital.com for this connection.
-      if (seenEpics.length > 0) {
-        const orphan = await pool.query(
-          `SELECT id FROM capital_markets
-           WHERE broker_connection_id = $1 AND NOT (epic = ANY($2::text[]))`,
-          [conn.connection_id, seenEpics]
-        );
-        const orphanIds = orphan.rows.map((r) => r.id as number);
-        if (orphanIds.length > 0) {
-          await pool.query(
-            `DELETE FROM account_instrument_settings
-             WHERE broker_account_id = $1 AND instrument_id = ANY($2::int[])`,
-            [conn.account_id, orphanIds]
+      // Upsert + orphan cleanup inside a single transaction so a mid-flight
+      // failure cannot leave the catalog in a partially-deleted state.
+      const db = await pool.connect();
+      try {
+        await db.query('BEGIN');
+
+        const seenEpics: string[] = [];
+        for (const m of markets) {
+          seenEpics.push(m.epic);
+          await db.query(
+            `INSERT INTO capital_markets
+             (broker_connection_id, epic, symbol, display_name, instrument_type, category, min_lot, max_lot, lot_step)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+             ON CONFLICT (broker_connection_id, epic) DO UPDATE SET
+               symbol = EXCLUDED.symbol,
+               display_name = EXCLUDED.display_name,
+               instrument_type = EXCLUDED.instrument_type,
+               category = EXCLUDED.category,
+               min_lot = EXCLUDED.min_lot,
+               max_lot = EXCLUDED.max_lot,
+               lot_step = EXCLUDED.lot_step,
+               updated_at = NOW()`,
+            [
+              conn.connection_id,
+              m.epic,
+              m.symbol,
+              m.display_name,
+              m.instrument_type,
+              m.category,
+              m.min_lot,
+              m.max_lot,
+              m.lot_step,
+            ]
           );
-          await pool.query('DELETE FROM capital_markets WHERE id = ANY($1::int[])', [orphanIds]);
         }
+
+        // Remove markets that disappeared from Capital.com for this connection.
+        if (seenEpics.length > 0) {
+          const orphan = await db.query(
+            `SELECT id FROM capital_markets
+             WHERE broker_connection_id = $1 AND NOT (epic = ANY($2::text[]))`,
+            [conn.connection_id, seenEpics]
+          );
+          const orphanIds = orphan.rows.map((r) => r.id as number);
+          if (orphanIds.length > 0) {
+            await db.query(
+              `DELETE FROM account_instrument_settings
+               WHERE broker_account_id = $1 AND instrument_id = ANY($2::int[])`,
+              [conn.account_id, orphanIds]
+            );
+            await db.query('DELETE FROM capital_markets WHERE id = ANY($1::int[])', [orphanIds]);
+          }
+        }
+
+        await db.query('COMMIT');
+      } catch (txErr) {
+        await db.query('ROLLBACK');
+        throw txErr;
+      } finally {
+        db.release();
       }
 
       await seedAccountInstruments(conn.account_id);
