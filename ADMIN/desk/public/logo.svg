@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none" role="img" aria-label="VS SYSTEM">
+  <defs>
+    <linearGradient id="vsLime" x1="80" y1="60" x2="420" y2="460" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E8FF6A"/>
+      <stop offset="0.4" stop-color="#B4FF00"/>
+      <stop offset="1" stop-color="#39FF14"/>
+    </linearGradient>
+    <linearGradient id="vsCyan" x1="120" y1="400" x2="400" y2="80" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#00E5FF" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#B4FF00" stop-opacity="0.2"/>
+    </linearGradient>
+    <radialGradient id="vsCore" cx="50%" cy="46%" r="42%">
+      <stop offset="0%" stop-color="#B4FF00" stop-opacity="0.35"/>
+      <stop offset="55%" stop-color="#B4FF00" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#000" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="vsGlow" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="2.4" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="36" fill="#030403"/>
+  <rect width="512" height="512" rx="36" fill="url(#vsCore)"/>
+
+  <!-- outer tactical ring -->
+  <g stroke="url(#vsLime)" stroke-linecap="square" filter="url(#vsGlow)">
+    <circle cx="256" cy="256" r="208" stroke-width="2" stroke-dasharray="28 16 6 20" opacity="0.75"/>
+    <circle cx="256" cy="256" r="188" stroke-width="1.5" stroke-dasharray="4 10" opacity="0.55"/>
+    <circle cx="256" cy="256" r="168" stroke-width="3" stroke-dasharray="90 40" opacity="0.9"/>
+    <path d="M256 36v22M256 454v22M36 256h22M454 256h22" stroke-width="3"/>
+    <path d="M92 92l14 14M406 92l-14 14M92 420l14-14M406 420l-14-14" stroke-width="2.5" opacity="0.8"/>
+  </g>
+
+  <!-- angular VS crest -->
+  <g filter="url(#vsGlow)">
+    <!-- left chevron / wing -->
+    <path d="M96 256 L170 150 L210 170 L168 256 L210 342 L170 362 Z"
+          fill="rgba(180,255,0,0.12)" stroke="url(#vsLime)" stroke-width="4" stroke-linejoin="miter"/>
+    <!-- right chevron / wing -->
+    <path d="M416 256 L342 150 L302 170 L344 256 L302 342 L342 362 Z"
+          fill="rgba(180,255,0,0.12)" stroke="url(#vsLime)" stroke-width="4" stroke-linejoin="miter"/>
+    <!-- center blade -->
+    <path d="M256 108 L298 256 L256 404 L214 256 Z"
+          fill="rgba(180,255,0,0.22)" stroke="url(#vsLime)" stroke-width="4.5" stroke-linejoin="miter"/>
+    <path d="M256 168 L274 256 L256 344 L238 256 Z"
+          fill="#030403" stroke="url(#vsCyan)" stroke-width="2.5" stroke-linejoin="miter"/>
+  </g>
+
+  <!-- VS monogram -->
+  <g fill="url(#vsLime)" filter="url(#vsGlow)">
+    <path d="M168 214 L188 214 L210 278 L232 214 L252 214 L220 302 L200 302 Z"/>
+    <path d="M268 214 H348 L328 248 H292 L300 268 H334 L318 302 H238 L258 268 H292 L284 248 H260 Z"/>
+  </g>
+</svg>

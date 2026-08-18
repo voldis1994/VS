@@ -111,7 +111,7 @@ Copy-Item $envFile (Join-Path $RepoRoot ".env") -Force
 
 Write-Host "========================================"
 Write-Host " VS — ONE PC (MSI)"
-Write-Host " Control panel  http://127.0.0.1:3000/admin/"
+Write-Host " Control panel  http://127.0.0.1:3000/robot"
 Write-Host " Client web     http://127.0.0.1:3000/"
 Write-Host " C++ calc       vs-calc  (EntryReady only)"
 Write-Host " Docker Desktop stays installed"
@@ -172,6 +172,27 @@ if (-not (Test-Path $tsx)) {
   $npmCode = Invoke-NpmInstall
   Pop-Location
   if ($npmCode -ne 0) { Write-Fail "npm install control-api failed" }
+}
+
+$deskDir = Join-Path $RepoRoot "ADMIN\desk"
+$deskVite = Join-Path $deskDir "node_modules\vite\bin\vite.js"
+$deskIndex = Join-Path $deskDir "dist\index.html"
+if (-not (Test-Path $deskIndex)) {
+  Write-Host "Building TACTICAL DESK..."
+  Push-Location $deskDir
+  if (-not (Test-Path $deskVite)) {
+    Write-Host "npm install ADMIN desk..."
+    $npmCode = Invoke-NpmInstall
+    if ($npmCode -ne 0) { Pop-Location; Write-Fail "npm install ADMIN/desk failed" }
+  }
+  if (Test-Path $deskVite) {
+    & $node.Source $deskVite build
+    if ($LASTEXITCODE -ne 0) { Pop-Location; Write-Fail "TACTICAL DESK build failed" }
+  } else {
+    Pop-Location
+    Write-Fail "vite missing in ADMIN\desk"
+  }
+  Pop-Location
 }
 
 $clientDir = Join-Path $RepoRoot "CLIENT\web"
@@ -297,7 +318,7 @@ if (Test-Path $calcExe) {
   Write-Host "WARN: C++ vs-calc.exe missing — install g++ or MSVC and run SERVER\calc\BUILD_CALC.bat"
 }
 
-$url = "http://127.0.0.1:3000/admin/"
+$url = "http://127.0.0.1:3000/robot"
 if ($panelAlreadyUp) {
   Write-Host ("Panel already open at " + $url + " — not reloading the browser")
 } else {
@@ -306,7 +327,7 @@ if ($panelAlreadyUp) {
 }
 
 Write-Host "VS READY"
-Write-Host "  ADMIN   http://127.0.0.1:3000/admin/"
+Write-Host "  DESK    http://127.0.0.1:3000/robot"
 Write-Host "  CLIENT  http://127.0.0.1:3000/"
 Write-Host "  CALC    C++ vs-calc → /api/pipeline/intents"
 Write-Host "STOP: powershell -File ADMIN\windows\stop-admin.ps1"

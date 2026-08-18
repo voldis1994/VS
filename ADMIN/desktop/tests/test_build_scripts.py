@@ -25,7 +25,7 @@ def test_start_msi_opens_web_panel_on_this_pc():
     ps1 = (ROOT / "ADMIN" / "windows" / "start-admin.ps1").read_text(encoding="utf-8", errors="replace")
     assert "start-admin.ps1" in bat
     assert "ADMIN\\web\\index.html" in bat or "ADMIN\\web" in bat
-    assert "3000/admin" in ps1
+    assert "3000/robot" in ps1
     assert "vs-calc" in ps1
     assert "VS_SINGLE_BOX" in ps1
     assert "CONNECT_FORCE.bat" not in bat

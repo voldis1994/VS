@@ -24,7 +24,8 @@ Browser opens:
 
 | Door | URL |
 |------|-----|
-| Control panel | http://127.0.0.1:3000/admin/ |
+| Control panel (TACTICAL DESK) | http://127.0.0.1:3000/robot |
+| Feeds / Orbit | http://127.0.0.1:3000/feeds |
 | Client web | http://127.0.0.1:3000/ |
 
 ## WHAT RUNS
