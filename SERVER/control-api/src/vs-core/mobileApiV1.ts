@@ -204,14 +204,41 @@ export async function registerMobileApiV1(app: FastifyInstance, deps: MobileApiD
       body.account_id != null ? Number(body.account_id) : null
     );
     if (denied) return;
+
+    // Pre-flight: the client's account must have exactly one EPIC selected
+    // (trading_enabled=true) before trading can start. An operator must assign
+    // an EPIC via PUT /api/trading/accounts/:id/selected-market first.
+    // Never fall back to a global/default EPIC — fail explicitly.
+    const epicScope = accountId
+      ? 'ais.broker_account_id = $1 AND ais.trading_enabled = true'
+      : `ais.broker_account_id IN (
+           SELECT ba.id FROM broker_accounts ba
+           JOIN broker_connections bc ON bc.id = ba.broker_connection_id
+           WHERE bc.client_id = $1 AND ba.enabled = true
+         ) AND ais.trading_enabled = true`;
+    const epicParam = accountId ?? session.client_id;
+    const epicCheck = await pool.query(
+      `SELECT ais.symbol AS epic FROM account_instrument_settings ais
+       WHERE ${epicScope} LIMIT 1`,
+      [epicParam]
+    );
+    if (!epicCheck.rows.length) {
+      return reply.code(400).send({
+        ok: false,
+        code: 'NO_MARKET_SELECTED',
+        reason: 'No Capital market is selected for trading on this account. ' +
+          'An operator must assign an EPIC via MSI Admin → Account → Market before trading can start.',
+      });
+    }
+
     const state = reg.start(session.client_id, accountId);
     const robots = setRobotsTradingEnabled(session.client_id, accountId, true);
     await bus.emit('ClientTradingStarted', {
       source: 'mobile-api',
       client_id: session.client_id,
-      payload: { state, robots_enabled: robots, account_id: accountId },
+      payload: { state, robots_enabled: robots, account_id: accountId, epic: epicCheck.rows[0].epic },
     });
-    return { ok: true, state, robots_enabled: robots };
+    return { ok: true, state, robots_enabled: robots, epic: epicCheck.rows[0].epic as string };
   });
 
   app.post('/api/v1/trading/stop', async (req, reply) => {
