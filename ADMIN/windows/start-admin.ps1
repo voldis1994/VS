@@ -195,6 +195,10 @@ if (-not (Test-Path $deskIndex)) {
   Pop-Location
 }
 
+if (-not (Test-Path $deskIndex)) {
+  Write-Fail "TACTICAL DESK missing ADMIN\desk\dist\index.html — /robot would show VS CLIENT"
+}
+
 $clientDir = Join-Path $RepoRoot "CLIENT\web"
 $viteJs = Join-Path $clientDir "node_modules\vite\bin\vite.js"
 $clientIndex = Join-Path $clientDir "dist\index.html"
@@ -277,31 +281,27 @@ function Wait-ControlApi([System.Diagnostics.Process]$Proc) {
   return $false
 }
 
-$panelAlreadyUp = Test-Port3000
-
-if (-not $panelAlreadyUp) {
-  Write-Host "Starting Control API..."
-  $proc = Start-ControlApiProcess
-  $ok = Wait-ControlApi $proc
-  if (-not $ok) {
-    Show-LogTail $apiLog
-    Show-LogTail $apiErr
-    $blob = Read-ApiLogs
-    $authFail = $blob -match "DB_AUTH_FAILED|28P01|password authentication failed"
-    if ($authFail -and $docker) {
-      Reset-VsDockerVolumes
-      Write-Host "Retrying Control API after volume recreate..."
-      $proc = Start-ControlApiProcess
-      $ok = Wait-ControlApi $proc
-      if (-not $ok) {
-        Show-LogTail $apiLog
-        Show-LogTail $apiErr
-      }
+Write-Host "Restarting Control API so /robot is TACTICAL DESK (not VS CLIENT)..."
+$proc = Start-ControlApiProcess
+$ok = Wait-ControlApi $proc
+if (-not $ok) {
+  Show-LogTail $apiLog
+  Show-LogTail $apiErr
+  $blob = Read-ApiLogs
+  $authFail = $blob -match "DB_AUTH_FAILED|28P01|password authentication failed"
+  if ($authFail -and $docker) {
+    Reset-VsDockerVolumes
+    Write-Host "Retrying Control API after volume recreate..."
+    $proc = Start-ControlApiProcess
+    $ok = Wait-ControlApi $proc
+    if (-not $ok) {
+      Show-LogTail $apiLog
+      Show-LogTail $apiErr
     }
   }
-  if (-not $ok) {
-    Write-Fail "Control API did not listen on :3000 — log tail printed above (ADMIN\config\logs)"
-  }
+}
+if (-not $ok) {
+  Write-Fail "Control API did not listen on :3000 — log tail printed above (ADMIN\config\logs)"
 }
 
 $calcDir = Join-Path $RepoRoot "SERVER\calc"
