@@ -16,6 +16,15 @@ from services.api import ControlApi
 from ui.main_window import NAV, MainWindow
 
 
+def _stop_live(win: MainWindow) -> None:
+    """Tests inject snapshots; do not let the LAN poller overwrite them."""
+    try:
+        win.worker.snapshot.disconnect()
+    except Exception:
+        pass
+    win.worker.stop()
+
+
 def test_nav_has_all_operator_pages():
     assert NAV == [
         "Dashboard",
@@ -42,6 +51,7 @@ def test_nav_has_all_operator_pages():
 def test_disconnected_snapshot_does_not_fake_connected():
     app = QApplication.instance() or QApplication([])
     win = MainWindow(ControlApi("http://127.0.0.1:9"), "LAN")
+    _stop_live(win)
     win.show()
     app.processEvents()
     snap = {
@@ -77,6 +87,7 @@ def test_disconnected_snapshot_does_not_fake_connected():
 def test_connected_header_requires_snapshot_flag():
     app = QApplication.instance() or QApplication([])
     win = MainWindow(ControlApi("http://127.0.0.1:9"), "LAN")
+    _stop_live(win)
     win.on_snapshot(
         {
             "connected": True,
