@@ -23,8 +23,14 @@ export async function ensureBrokerAccount(connectionId: number, displayName: str
   return created.rows[0].id as number;
 }
 
+/**
+ * Ensure account_instrument_settings rows exist for every Capital market on
+ * this account's connection. All rows are inserted with trading_enabled=false.
+ *
+ * This is CATALOG import only — it never enables any market for trading.
+ * An operator must explicitly call PUT /selected-market to activate one EPIC.
+ */
 export async function seedAccountInstruments(accountId: number): Promise<void> {
-  // Prefer Capital.com markets for this account's connection when available.
   const link = await pool.query(
     `SELECT ba.id as account_id, ba.broker_connection_id
      FROM broker_accounts ba WHERE ba.id = $1`,
@@ -41,22 +47,18 @@ export async function seedAccountInstruments(accountId: number): Promise<void> {
 
   if (capital.rows.length > 0) {
     for (const m of capital.rows) {
+      // ON CONFLICT: update catalog metadata only. Never flip trading_enabled to true.
       await pool.query(
         `INSERT INTO account_instrument_settings
          (broker_account_id, instrument_id, symbol, lot_size, enabled, trading_enabled)
-         VALUES ($1, $2, $3, $4, true, true)
+         VALUES ($1, $2, $3, $4, false, false)
          ON CONFLICT (broker_account_id, instrument_id) DO UPDATE SET
            symbol = EXCLUDED.symbol,
-           enabled = true,
-           trading_enabled = true,
            updated_at = NOW()`,
         [accountId, m.id, m.epic, m.min_lot]
       );
     }
-    return;
   }
-
-  // No local fake catalog — Capital.com markets must be pulled first.
 }
 
 async function loadCredentialMap(brokerConnectionId: number): Promise<Record<string, string>> {
@@ -162,7 +164,11 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
               bc.identifier,
               c.id as client_id,
               c.name as client_name,
-              (SELECT COUNT(*)::int FROM capital_markets cm WHERE cm.broker_connection_id = bc.id) as capital_market_count
+              (SELECT COUNT(*)::int FROM capital_markets cm WHERE cm.broker_connection_id = bc.id) as capital_market_count,
+              (SELECT cm.epic FROM account_instrument_settings ais
+               JOIN capital_markets cm ON cm.id = ais.instrument_id
+               WHERE ais.broker_account_id = ba.id AND ais.trading_enabled = true
+               LIMIT 1) as selected_epic
        FROM broker_accounts ba
        JOIN broker_connections bc ON bc.id = ba.broker_connection_id
        JOIN clients c ON c.id = bc.client_id
@@ -184,6 +190,7 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
       for (const conn of connections) {
         const name = `${conn.client_name} / ${conn.broker_name} (${conn.environment})`;
         const accountId = await ensureBrokerAccount(conn.id as number, name);
+        // seedAccountInstruments is catalog-only; does not enable trading.
         await seedAccountInstruments(accountId);
         created.push(accountId);
       }
@@ -196,6 +203,7 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
 
   /**
    * Pull the full Capital.com market tree (real epics + names) for this trading account.
+   * Catalog import only — does NOT enable any market for trading.
    * Can take 1–3 minutes depending on account universe size.
    */
   app.post('/api/trading/accounts/:accountId/pull-capital-markets', async (request, reply) => {
@@ -251,8 +259,7 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
         });
       }
 
-      // Sanity: reject suspiciously small broker responses — a partial/error
-      // response must never silently delete a large portion of the catalog.
+      // Sanity: reject suspiciously small broker responses.
       const existing = await pool.query(
         `SELECT COUNT(*)::int AS n FROM capital_markets WHERE broker_connection_id = $1`,
         [conn.connection_id]
@@ -265,8 +272,10 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
         });
       }
 
-      // Upsert + orphan cleanup inside a single transaction so a mid-flight
-      // failure cannot leave the catalog in a partially-deleted state.
+      // Upsert + orphan cleanup inside a single transaction.
+      // Orphaned EPICs that were trading_enabled=true are cleared automatically
+      // because the DELETE cascades through account_instrument_settings,
+      // which means no account can silently continue on a stale EPIC.
       const db = await pool.connect();
       try {
         await db.query('BEGIN');
@@ -327,7 +336,9 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
         db.release();
       }
 
-      await seedAccountInstruments(conn.account_id);
+      // Do NOT call seedAccountInstruments here — pull is catalog-only.
+      // Operators assign EPICs via PUT /selected-market after reviewing the catalog.
+
       await logAudit('admin', 'capital_markets_pulled', 'broker_connection', String(conn.connection_id), null, {
         count: markets.length,
         environment: conn.environment,
@@ -336,6 +347,7 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
       return {
         success: true,
         count: markets.length,
+        note: 'Catalog imported. Use PUT /api/trading/accounts/:accountId/selected-market to assign an EPIC for trading.',
         sample: markets.slice(0, 8).map((m) => ({ epic: m.epic, name: m.display_name })),
       };
     } catch (err) {
@@ -380,8 +392,9 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
           max_lot: Number(m.max_lot),
           lot_step: Number(m.lot_step),
           lot_size: row ? Number(row.lot_size) : Number(m.min_lot),
-          enabled: row ? Boolean(row.enabled) : true,
-          trading_enabled: row ? Boolean(row.trading_enabled) : true,
+          // Default false — trading_enabled is only true when explicitly selected by operator.
+          enabled: row ? Boolean(row.enabled) : false,
+          trading_enabled: row ? Boolean(row.trading_enabled) : false,
           configured: Boolean(row),
           source: 'capital_com' as const,
         };
@@ -402,10 +415,129 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
       return rows;
     }
 
-    // Never return fake local EURUSD/XAUUSD catalog for Capital accounts.
     return [];
   });
 
+  /**
+   * Read the single EPIC currently selected for trading on this account.
+   * Returns { selected: null } when no EPIC has been assigned yet.
+   */
+  app.get('/api/trading/accounts/:accountId/selected-market', async (request, reply) => {
+    const { accountId } = request.params as { accountId: string };
+    const accountCheck = await pool.query(
+      'SELECT id FROM broker_accounts WHERE id = $1',
+      [accountId]
+    );
+    if (!accountCheck.rows.length) {
+      return reply.code(404).send({ error: 'Account not found' });
+    }
+    const { rows } = await pool.query(
+      `SELECT ais.instrument_id, ais.symbol as epic, ais.lot_size,
+              cm.display_name, cm.category, cm.min_lot, cm.max_lot, cm.lot_step
+       FROM account_instrument_settings ais
+       JOIN capital_markets cm ON cm.id = ais.instrument_id
+       WHERE ais.broker_account_id = $1 AND ais.trading_enabled = true
+       LIMIT 1`,
+      [accountId]
+    );
+    return { selected: rows[0] ?? null };
+  });
+
+  /**
+   * Assign exactly one Capital EPIC for trading on this account.
+   * Atomically clears any previous selection, then enables the chosen market.
+   *
+   * Admin flow: MSI → CLIENT → ACCOUNT → search catalog → select EPIC.
+   * Only the selected EPIC gets trading_enabled=true. All others remain false.
+   */
+  app.put('/api/trading/accounts/:accountId/selected-market', async (request, reply) => {
+    const { accountId } = request.params as { accountId: string };
+    const body = (request.body || {}) as { capital_market_id?: number; lot_size?: number };
+
+    if (!body.capital_market_id) {
+      return reply.code(400).send({ error: 'capital_market_id required' });
+    }
+
+    // Verify the market belongs to this account's broker connection catalog.
+    const check = await pool.query(
+      `SELECT cm.id, cm.epic, cm.display_name, cm.min_lot, cm.max_lot, cm.lot_step
+       FROM capital_markets cm
+       JOIN broker_accounts ba ON ba.broker_connection_id = cm.broker_connection_id
+       WHERE cm.id = $1 AND ba.id = $2
+       LIMIT 1`,
+      [body.capital_market_id, accountId]
+    );
+    if (!check.rows.length) {
+      return reply.code(404).send({
+        error: 'Market not found in this account\'s Capital catalog. Pull markets first.',
+      });
+    }
+    const market = check.rows[0] as {
+      id: number; epic: string; display_name: string;
+      min_lot: number; max_lot: number; lot_step: number;
+    };
+    const lotSize = body.lot_size ?? Number(market.min_lot);
+
+    const db = await pool.connect();
+    try {
+      await db.query('BEGIN');
+
+      // Step 1: Clear any existing selection for this account.
+      await db.query(
+        `UPDATE account_instrument_settings
+         SET trading_enabled = false, updated_at = NOW()
+         WHERE broker_account_id = $1`,
+        [accountId]
+      );
+
+      // Step 2: Upsert the chosen market with trading_enabled=true.
+      const { rows } = await db.query(
+        `INSERT INTO account_instrument_settings
+         (broker_account_id, instrument_id, symbol, lot_size, enabled, trading_enabled)
+         VALUES ($1, $2, $3, $4, true, true)
+         ON CONFLICT (broker_account_id, instrument_id) DO UPDATE SET
+           symbol = EXCLUDED.symbol,
+           lot_size = EXCLUDED.lot_size,
+           enabled = true,
+           trading_enabled = true,
+           updated_at = NOW()
+         RETURNING *`,
+        [accountId, market.id, market.epic, lotSize]
+      );
+
+      await db.query('COMMIT');
+
+      await logAudit('admin', 'capital_epic_selected', 'account_instrument_settings',
+        `${accountId}:${market.id}`, null, {
+          ...rows[0],
+          epic: market.epic,
+          display_name: market.display_name,
+        });
+
+      return {
+        ok: true,
+        selected: {
+          instrument_id: Number(rows[0].instrument_id),
+          epic: market.epic,
+          display_name: market.display_name,
+          lot_size: Number(rows[0].lot_size),
+          trading_enabled: true,
+        },
+      };
+    } catch (err) {
+      await db.query('ROLLBACK');
+      throw err;
+    } finally {
+      db.release();
+    }
+  });
+
+  /**
+   * Update individual instrument settings (lot_size, enabled flag).
+   * When trading_enabled=true is explicitly requested, this endpoint atomically
+   * clears all other selections first — preserving the one-EPIC-per-account rule.
+   * Prefer PUT /selected-market for the normal admin EPIC assignment flow.
+   */
   app.put('/api/trading/accounts/:accountId/instruments/:instrumentId', async (request, reply) => {
     const { accountId, instrumentId } = request.params as { accountId: string; instrumentId: string };
     const body = request.body as {
@@ -465,6 +597,51 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
       [accountId, instrumentId]
     );
 
+    // If enabling trading, atomically clear other selections first.
+    const enableTrading = body.trading_enabled ?? prev.rows[0]?.trading_enabled ?? false;
+
+    if (enableTrading) {
+      const db = await pool.connect();
+      try {
+        await db.query('BEGIN');
+        await db.query(
+          `UPDATE account_instrument_settings
+           SET trading_enabled = false, updated_at = NOW()
+           WHERE broker_account_id = $1 AND instrument_id != $2`,
+          [accountId, instrumentId]
+        );
+        const { rows } = await db.query(
+          `INSERT INTO account_instrument_settings
+           (broker_account_id, instrument_id, symbol, lot_size, enabled, trading_enabled)
+           VALUES ($1, $2, $3, $4, $5, true)
+           ON CONFLICT (broker_account_id, instrument_id)
+           DO UPDATE SET
+             symbol = EXCLUDED.symbol,
+             lot_size = COALESCE($4, account_instrument_settings.lot_size),
+             enabled = COALESCE($5, account_instrument_settings.enabled),
+             trading_enabled = true,
+             updated_at = NOW()
+           RETURNING *`,
+          [
+            accountId,
+            instrumentId,
+            symbol,
+            lot ?? prev.rows[0]?.lot_size ?? minLot,
+            body.enabled ?? prev.rows[0]?.enabled ?? true,
+          ]
+        );
+        await db.query('COMMIT');
+        await logAudit('admin', 'instrument_settings_updated', 'account_instrument_settings',
+          `${accountId}:${instrumentId}`, prev.rows[0] || null, rows[0]);
+        return rows[0];
+      } catch (err) {
+        await db.query('ROLLBACK');
+        throw err;
+      } finally {
+        db.release();
+      }
+    }
+
     const { rows } = await pool.query(
       `INSERT INTO account_instrument_settings
        (broker_account_id, instrument_id, symbol, lot_size, enabled, trading_enabled)
@@ -483,7 +660,7 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
         symbol,
         lot ?? prev.rows[0]?.lot_size ?? minLot,
         body.enabled ?? prev.rows[0]?.enabled ?? true,
-        body.trading_enabled ?? prev.rows[0]?.trading_enabled ?? true,
+        false,
       ]
     );
 
@@ -525,9 +702,11 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
     try {
       const { rows } = await pool.query(
         `SELECT ba.id as account_id, ba.display_name, ba.external_account_id,
-                bc.id as connection_id, bc.broker_name, bc.environment, bc.identifier
+                bc.id as connection_id, bc.broker_name, bc.environment, bc.identifier,
+                c.enabled as client_enabled, bc.enabled as broker_enabled, ba.enabled as account_enabled
          FROM broker_accounts ba
          JOIN broker_connections bc ON bc.id = ba.broker_connection_id
+         JOIN clients c ON c.id = bc.client_id
          WHERE ba.id = $1`,
         [accountId]
       );
@@ -541,9 +720,43 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
         identifier: string | null;
         display_name: string;
         external_account_id: string | null;
+        client_enabled: boolean;
+        broker_enabled: boolean;
+        account_enabled: boolean;
       };
+
+      // Pre-flight: all three tiers must be enabled.
+      if (!conn.client_enabled) {
+        return reply.code(403).send({ error: 'CLIENT_DISABLED', message: 'Client is disabled' });
+      }
+      if (!conn.broker_enabled) {
+        return reply.code(403).send({ error: 'BROKER_DISABLED', message: 'Broker connection is disabled' });
+      }
+      if (!conn.account_enabled) {
+        return reply.code(403).send({ error: 'ACCOUNT_DISABLED', message: 'Account is disabled' });
+      }
+
       if (conn.broker_name !== 'capital_com') {
         return reply.code(400).send({ error: 'Only Capital.com accounts can place live orders' });
+      }
+
+      // Pre-flight: the requested EPIC must be the one explicitly selected for this account.
+      const epicGate = await pool.query(
+        `SELECT ais.instrument_id, ais.trading_enabled
+         FROM account_instrument_settings ais
+         JOIN capital_markets cm ON cm.id = ais.instrument_id
+         WHERE ais.broker_account_id = $1
+           AND cm.epic = $2
+           AND ais.trading_enabled = true
+         LIMIT 1`,
+        [accountId, epic]
+      );
+      if (!epicGate.rows.length) {
+        return reply.code(403).send({
+          error: 'EPIC_NOT_SELECTED',
+          message: `EPIC ${epic} is not enabled for trading on this account. ` +
+            `Use PUT /api/trading/accounts/${accountId}/selected-market to assign it first.`,
+        });
       }
 
       const creds = await loadCredentialMap(conn.connection_id);
