@@ -2,7 +2,11 @@ import { FastifyInstance } from 'fastify';
 import { join } from 'path';
 import { pool } from '../db/pool.js';
 import { logAudit } from '../services/audit.js';
-import { generateAccessCode, hashAccessCode } from '../security/accessCode.js';
+import {
+  AccessSecretError,
+  chooseAccessSecret,
+  hashAccessCode,
+} from '../security/accessCode.js';
 import { revokeAllClientSessions } from '../security/clientSession.js';
 import {
   getClientPanelStatus,
@@ -133,7 +137,7 @@ export async function registerClientRoutes(app: FastifyInstance): Promise<void> 
   });
 
   app.post('/api/clients', async (request, reply) => {
-    const body = request.body as { name?: string };
+    const body = request.body as { name?: string; password?: string; access_code?: string };
     const name = String(body.name || '').trim();
     if (!name) {
       return reply.code(400).send({ error: 'name required', message: 'Client login name required' });
@@ -148,37 +152,77 @@ export async function registerClientRoutes(app: FastifyInstance): Promise<void> 
         message: 'Client login name already exists',
       });
     }
-    const { rows } = await pool.query(
-      'INSERT INTO clients (name) VALUES ($1) RETURNING id, name, enabled, access_enabled, created_at',
-      [name]
-    );
-    await logAudit('admin', 'client_created', 'client', String(rows[0].id), null, rows[0]);
-    return rows[0];
-  });
-
-  /** Create client + web password + remote WireGuard enrollment (outside home Wi‑Fi). */
-  app.post('/api/clients/provision-web', async (request, reply) => {
-    const body = (request.body || {}) as { name?: string };
-    const name = String(body.name || '').trim();
-    if (!name) {
-      return reply.code(400).send({ error: 'name required', message: 'Client login name required' });
-    }
-    const dup = await pool.query(
-      `SELECT id FROM clients WHERE lower(name) = lower($1) LIMIT 1`,
-      [name]
-    );
-    if (dup.rows.length) {
-      return reply.code(409).send({
-        error: 'name_taken',
-        message: 'Client login name already exists',
-      });
+    let secret: string;
+    let generated: boolean;
+    try {
+      ({ secret, generated } = chooseAccessSecret(body.password ?? body.access_code ?? ''));
+    } catch (err) {
+      if (err instanceof AccessSecretError) {
+        return reply.code(400).send({
+          error: err.code,
+          message: err.code === 'PASSWORD_TOO_SHORT' ? 'Password must be at least 4 characters' : 'Password too long',
+        });
+      }
+      throw err;
     }
     const { rows } = await pool.query(
       'INSERT INTO clients (name) VALUES ($1) RETURNING id, name, enabled, access_enabled, created_at',
       [name]
     );
     const clientId = rows[0].id as number;
-    const code = generateAccessCode();
+    await pool.query(
+      `UPDATE clients SET access_code_hash = $2, access_enabled = true, updated_at = NOW() WHERE id = $1`,
+      [clientId, hashAccessCode(secret)]
+    );
+    await logAudit('admin', 'client_created', 'client', String(clientId), null, { name, access_enabled: true });
+    return {
+      ...rows[0],
+      access_enabled: true,
+      login: name,
+      password: secret,
+      generated,
+      message: generated
+        ? 'Save login + generated password now — password shown once.'
+        : 'Save login + your password now — password shown once.',
+    };
+  });
+
+  /** Create client + web password + remote WireGuard enrollment (outside home Wi‑Fi). */
+  app.post('/api/clients/provision-web', async (request, reply) => {
+    const body = (request.body || {}) as { name?: string; password?: string; access_code?: string };
+    const name = String(body.name || '').trim();
+    if (!name) {
+      return reply.code(400).send({ error: 'name required', message: 'Client login name required' });
+    }
+    const dup = await pool.query(
+      `SELECT id FROM clients WHERE lower(name) = lower($1) LIMIT 1`,
+      [name]
+    );
+    if (dup.rows.length) {
+      return reply.code(409).send({
+        error: 'name_taken',
+        message: 'Client login name already exists',
+      });
+    }
+    let secret: string;
+    let generated: boolean;
+    try {
+      ({ secret, generated } = chooseAccessSecret(body.password ?? body.access_code ?? ''));
+    } catch (err) {
+      if (err instanceof AccessSecretError) {
+        return reply.code(400).send({
+          error: err.code,
+          message: err.code === 'PASSWORD_TOO_SHORT' ? 'Password must be at least 4 characters' : 'Password too long',
+        });
+      }
+      throw err;
+    }
+    const { rows } = await pool.query(
+      'INSERT INTO clients (name) VALUES ($1) RETURNING id, name, enabled, access_enabled, created_at',
+      [name]
+    );
+    const clientId = rows[0].id as number;
+    const code = secret;
     const hash = hashAccessCode(code);
     await pool.query(
       `UPDATE clients SET access_code_hash = $2, access_enabled = true, updated_at = NOW() WHERE id = $1`,
@@ -249,6 +293,7 @@ export async function registerClientRoutes(app: FastifyInstance): Promise<void> 
       client_id: clientId,
       login: name,
       password: code,
+      generated,
       panel_url,
       panel_url_public: publicUrl,
       panel_url_vpn,
@@ -319,12 +364,25 @@ export async function registerClientRoutes(app: FastifyInstance): Promise<void> 
 
   app.post('/api/clients/:id/access-code', async (request, reply) => {
     const { id } = request.params as { id: string };
+    const body = (request.body || {}) as { password?: string; access_code?: string };
     const exists = await pool.query('SELECT id, name FROM clients WHERE id = $1', [id]);
     if (!exists.rows.length) {
       return reply.code(404).send({ error: 'Client not found' });
     }
-    const code = generateAccessCode();
-    const hash = hashAccessCode(code);
+    let secret: string;
+    let generated: boolean;
+    try {
+      ({ secret, generated } = chooseAccessSecret(body.password ?? body.access_code ?? ''));
+    } catch (err) {
+      if (err instanceof AccessSecretError) {
+        return reply.code(400).send({
+          error: err.code,
+          message: err.code === 'PASSWORD_TOO_SHORT' ? 'Password must be at least 4 characters' : 'Password too long',
+        });
+      }
+      throw err;
+    }
+    const hash = hashAccessCode(secret);
     await pool.query(
       `UPDATE clients SET
          access_code_hash = $2,
@@ -336,14 +394,20 @@ export async function registerClientRoutes(app: FastifyInstance): Promise<void> 
     await revokeAllClientSessions(Number(id));
     await logAudit('admin', 'client_access_code_reset', 'client', id, null, {
       access_enabled: true,
+      generated,
     });
     // Plaintext returned ONCE — never stored
     return {
       success: true,
       client_id: Number(id),
-      access_code: code,
+      login: exists.rows[0].name,
+      access_code: secret,
+      password: secret,
+      generated,
       access_enabled: true,
-      message: 'Save this access code now — it will not be shown again.',
+      message: generated
+        ? 'Save this generated password now — it will not be shown again.'
+        : 'Password set. Save it now — it will not be shown again.',
     };
   });
 

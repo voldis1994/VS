@@ -42,10 +42,17 @@ export function ClientsPage() {
     (sys && sys.client_url) || 'http://127.0.0.1:8443/';
   const [accounts, setAccounts] = useState<TradingAccount[]>([]);
   const [name, setName] = useState('');
+  const [password, setPassword] = useState('');
+  const [pwDrafts, setPwDrafts] = useState<Record<number, string>>({});
   const [drafts, setDrafts] = useState<Record<number, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
-  const [issuedCode, setIssuedCode] = useState<{ client_id: number; code: string } | null>(null);
+  const [issuedCode, setIssuedCode] = useState<{
+    client_id: number;
+    login: string;
+    code: string;
+    generated: boolean;
+  } | null>(null);
 
   useEffect(() => {
     void apiFetch<TradingAccount[]>('/api/trading/accounts')
@@ -58,8 +65,28 @@ export function ClientsPage() {
     setSubmitting(true);
     setMsg(null);
     try {
-      await apiFetch('/api/clients', { method: 'POST', body: JSON.stringify({ name }) });
+      const res = await apiFetch<{
+        id: number;
+        name: string;
+        password?: string;
+        generated?: boolean;
+      }>('/api/clients', {
+        method: 'POST',
+        body: JSON.stringify({ name, password }),
+      });
+      setIssuedCode({
+        client_id: res.id,
+        login: res.name,
+        code: res.password || '',
+        generated: Boolean(res.generated),
+      });
+      setMsg(
+        res.generated
+          ? `Client created. Copy the generated password now — shown once.`
+          : `Client created. Login + your password are ready.`
+      );
       setName('');
+      setPassword('');
       refresh();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : 'Failed to create account');
@@ -111,15 +138,36 @@ export function ClientsPage() {
     refresh();
   };
 
-  const handleGenerateCode = async (client: ClientRow) => {
+  const handleGenerateCode = async (client: ClientRow, custom?: string) => {
     setMsg(null);
     try {
-      const res = await apiFetch<{ access_code: string; client_id: number }>(
-        `/api/clients/${client.id}/access-code`,
-        { method: 'POST', body: JSON.stringify({}) }
+      const res = await apiFetch<{
+        access_code: string;
+        password?: string;
+        client_id: number;
+        login?: string;
+        generated?: boolean;
+      }>(`/api/clients/${client.id}/access-code`, {
+        method: 'POST',
+        body: JSON.stringify({ password: custom ?? '' }),
+      });
+      const code = res.password || res.access_code;
+      setIssuedCode({
+        client_id: res.client_id,
+        login: res.login || client.name,
+        code,
+        generated: Boolean(res.generated),
+      });
+      setPwDrafts((d) => {
+        const copy = { ...d };
+        delete copy[client.id];
+        return copy;
+      });
+      setMsg(
+        res.generated
+          ? `Generated password for #${client.id}. Copy it now — shown once.`
+          : `Password set for #${client.id}. Copy it now — shown once.`
       );
-      setIssuedCode({ client_id: res.client_id, code: res.access_code });
-      setMsg(`Access code issued for #${client.id}. Copy it now — shown once.`);
       refresh();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : 'Access code failed');
@@ -177,8 +225,8 @@ export function ClientsPage() {
     <div>
       <h1 className="page-title">Clients</h1>
       <p className="page-subtitle">
-        Client desks + access codes. Change the name in the roster (Save) — ROBOT BOARD updates live.
-        Send clients this link (not the admin desk):
+        You choose login + password. Login is the client name. Send clients the homepage below (not
+        the admin desk). Change the roster name (Save) — ROBOT BOARD updates live.
       </p>
       <div className="card" style={{ marginBottom: 16, padding: '12px 16px' }}>
         <div className="section-title" style={{ marginBottom: 8 }}>
@@ -196,14 +244,27 @@ export function ClientsPage() {
       </div>
 
       <div className="card" style={{ marginBottom: 16 }}>
-        <div className="section-title">Add Client</div>
-        <div className="actions">
+        <div className="section-title">Add Client — your login + password</div>
+        <div className="actions" style={{ flexWrap: 'wrap' }}>
           <input
             className="input"
-            placeholder="Account / client name"
+            placeholder="Login (name)"
+            autoComplete="off"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            style={{ maxWidth: 320 }}
+            style={{ maxWidth: 240 }}
+          />
+          <input
+            className="input"
+            type="password"
+            placeholder="Password (empty = auto)"
+            autoComplete="new-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void handleCreate();
+            }}
+            style={{ maxWidth: 240 }}
           />
           <button className="btn btn-primary" onClick={handleCreate} disabled={submitting}>
             Add Client
@@ -212,8 +273,11 @@ export function ClientsPage() {
         {msg && <p style={{ marginTop: 10, fontFamily: 'var(--font-mono)', fontSize: 12 }}>{msg}</p>}
         {issuedCode && (
           <div className="error-state" style={{ marginTop: 12, color: 'var(--accent)' }}>
-            Access code for client #{issuedCode.client_id}:{' '}
+            Login: <strong className="mono">{issuedCode.login}</strong>
+            {' · '}
+            Password{issuedCode.generated ? ' (generated)' : ''}:{' '}
             <strong className="mono">{issuedCode.code}</strong>
+            {' · shown once'}
           </div>
         )}
       </div>
@@ -324,8 +388,31 @@ export function ClientsPage() {
                         <button className="btn" onClick={() => void handleToggle(c)}>
                           {c.enabled ? 'Disable' : 'Enable'}
                         </button>
+                        <input
+                          className="input"
+                          type="password"
+                          autoComplete="new-password"
+                          placeholder="New password"
+                          style={{ minWidth: 120, maxWidth: 160 }}
+                          value={pwDrafts[c.id] ?? ''}
+                          onChange={(e) =>
+                            setPwDrafts((d) => ({ ...d, [c.id]: e.target.value }))
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && (pwDrafts[c.id] || '').trim()) {
+                              void handleGenerateCode(c, pwDrafts[c.id]);
+                            }
+                          }}
+                        />
+                        <button
+                          className="btn btn-primary"
+                          disabled={!(pwDrafts[c.id] || '').trim()}
+                          onClick={() => void handleGenerateCode(c, pwDrafts[c.id])}
+                        >
+                          Set password
+                        </button>
                         <button className="btn btn-go" onClick={() => void handleGenerateCode(c)}>
-                          {c.has_access_code ? 'Reset Code' : 'Generate Code'}
+                          {c.has_access_code ? 'Random password' : 'Random password'}
                         </button>
                         <button className="btn" onClick={() => void handleAccessToggle(c)}>
                           {c.access_enabled ? 'Access Off' : 'Access On'}

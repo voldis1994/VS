@@ -35,6 +35,8 @@ describe('ADMIN production path — web control panel on one MSI, no tactical UI
     const clients = readFileSync(join(ROOT, 'ADMIN/desk/src/pages/ClientsPage.tsx'), 'utf8');
     expect(clients).toMatch(/handleRename/);
     expect(clients).toContain("JSON.stringify({ name: next })");
+    expect(clients).toContain("JSON.stringify({ name, password })");
+    expect(clients).toContain('Set password');
     expect(clients).toContain('8443');
     expect(clients).toContain('client-url.txt');
     expect(clients).not.toMatch(/trycloudflare\.com/);

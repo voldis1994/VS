@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { generateAccessCode, hashAccessCode, verifyAccessCode } from './accessCode.js';
+import {
+  AccessSecretError,
+  chooseAccessSecret,
+  generateAccessCode,
+  hashAccessCode,
+  verifyAccessCode,
+} from './accessCode.js';
 
 describe('accessCode', () => {
   it('hashes and verifies a valid access code', () => {
@@ -20,5 +26,22 @@ describe('accessCode', () => {
     const code = generateAccessCode();
     expect(code).toHaveLength(12);
     expect(/^[A-Z2-9]+$/.test(code)).toBe(true);
+  });
+
+  it('chooseAccessSecret keeps an operator-chosen password', () => {
+    const out = chooseAccessSecret('ManaParole1');
+    expect(out).toEqual({ secret: 'ManaParole1', generated: false });
+    const hash = hashAccessCode(out.secret);
+    expect(verifyAccessCode('ManaParole1', hash)).toBe(true);
+  });
+
+  it('chooseAccessSecret generates when blank', () => {
+    const out = chooseAccessSecret('  ');
+    expect(out.generated).toBe(true);
+    expect(out.secret).toHaveLength(12);
+  });
+
+  it('chooseAccessSecret rejects too-short passwords', () => {
+    expect(() => chooseAccessSecret('ab')).toThrow(AccessSecretError);
   });
 });

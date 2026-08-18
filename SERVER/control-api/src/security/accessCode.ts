@@ -43,3 +43,19 @@ export function generateAccessCode(): string {
   for (let i = 0; i < 12; i++) out += alphabet[bytes[i]! % alphabet.length];
   return out;
 }
+
+export class AccessSecretError extends Error {
+  constructor(readonly code: 'PASSWORD_TOO_SHORT' | 'PASSWORD_TOO_LONG') {
+    super(code);
+    this.name = 'AccessSecretError';
+  }
+}
+
+/** Operator-chosen password, or a generated access code if blank. */
+export function chooseAccessSecret(raw?: string | null): { secret: string; generated: boolean } {
+  const custom = String(raw ?? '').trim();
+  if (!custom) return { secret: generateAccessCode(), generated: true };
+  if (custom.length < 4) throw new AccessSecretError('PASSWORD_TOO_SHORT');
+  if (custom.length > 128) throw new AccessSecretError('PASSWORD_TOO_LONG');
+  return { secret: custom, generated: false };
+}

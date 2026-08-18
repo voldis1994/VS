@@ -30,7 +30,7 @@ type Status = {
   client_name: string;
   connection_ok?: boolean;
   connection_status?: 'ONLINE' | 'LOST' | 'ERROR';
-  /** CONFIRMED runtime — green logo only when RUNNING */
+  /** CONFIRMED runtime — neon logo only when RUNNING */
   robot_status: 'RUNNING' | 'STARTING' | 'STOPPED' | 'ERROR';
   requested_status?: 'RUNNING' | 'STOPPED';
   pipeline_healthy?: boolean;
@@ -60,6 +60,7 @@ function fmtLot(n: number) {
 
 export function ClientPanelPage() {
   const [token, setToken] = useState<string | null>(() => getClientToken());
+  const [loginName, setLoginName] = useState('');
   const [accessCode, setAccessCode] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -121,7 +122,7 @@ export function ClientPanelPage() {
   }, [token, refresh, loadMarkets]);
 
   useEffect(() => {
-    // Poll while STARTING or RUNNING so bridge confirmation flips to green logo
+    // Poll while STARTING or RUNNING so bridge confirmation flips the logo on
     if (!token || !requestedActive) return;
     const t = setInterval(() => {
       void refresh().catch(() => undefined);
@@ -158,11 +159,16 @@ export function ClientPanelPage() {
     try {
       const res = await clientFetch<{ token: string }>('/api/client-auth/login', {
         method: 'POST',
-        body: JSON.stringify({ access_code: accessCode.trim() }),
+        body: JSON.stringify({
+          login: loginName.trim(),
+          password: accessCode.trim(),
+          access_code: accessCode.trim(),
+        }),
       });
       setClientToken(res.token);
       setToken(res.token);
       setAccessCode('');
+      setLoginName('');
     } catch (e) {
       setLoginError(e instanceof Error ? e.message : 'Login failed');
     } finally {
@@ -270,17 +276,31 @@ export function ClientPanelPage() {
             <Logo size={88} />
             <div className="ccp-brand">VS</div>
             <div className="ccp-title">CONTROL PANEL</div>
+            <label className="ccp-label" htmlFor="ccp-login">
+              LOGIN
+            </label>
+            <input
+              id="ccp-login"
+              className="ccp-input"
+              autoComplete="username"
+              placeholder="your login"
+              value={loginName}
+              onChange={(e) => setLoginName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void login();
+              }}
+            />
             <label className="ccp-label" htmlFor="ccp-code">
-              ACCESS CODE
+              PASSWORD
             </label>
             <input
               id="ccp-code"
               className="ccp-input"
-              inputMode="text"
-              autoComplete="one-time-code"
-              placeholder="••••••••••••"
+              type="password"
+              autoComplete="current-password"
+              placeholder="••••••••"
               value={accessCode}
-              onChange={(e) => setAccessCode(e.target.value.toUpperCase())}
+              onChange={(e) => setAccessCode(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') void login();
               }}
