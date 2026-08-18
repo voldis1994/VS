@@ -28,6 +28,15 @@ def test_canonical_build_script_exists():
     assert not (ROOT / "ADMIN" / "windows" / "BUILD_V2.bat").exists()
 
 
+def test_palaid_bat_aliases_start_msi():
+    palaid = (ROOT / "PALAID.bat").read_text(encoding="utf-8", errors="replace")
+    assert (ROOT / "PALAID.bat").is_file()
+    assert "START_MSI.bat" in palaid
+    assert "VS.exe" not in palaid
+    assert "18090" not in palaid
+    assert "FIX.ps1" not in palaid
+
+
 def test_start_msi_launches_native_exe_not_browser():
     bat = (ROOT / "START_MSI.bat").read_text(encoding="utf-8", errors="replace")
     ps1 = (ROOT / "ADMIN" / "windows" / "start-admin.ps1").read_text(encoding="utf-8", errors="replace")

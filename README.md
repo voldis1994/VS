@@ -54,10 +54,10 @@ ADMIN\windows\BUILD_ADMIN.bat
 ## HOW TO START MSI?
 
 ```bat
-START_MSI.bat
+PALAID.bat
 ```
 
-That launches **one** `VS Admin.exe` window. If it is already running, the existing window is focused.
+Same as `START_MSI.bat`. That launches **one** `VS Admin.exe` window. If it is already running, the existing window is focused. `PALAID.bat` is the old operator name restored from `old version/` — it only starts, it does not download.
 
 Stop: `powershell -File ADMIN\windows\stop-admin.ps1`
 

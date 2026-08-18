@@ -21,7 +21,7 @@ ONE VS CORE on i3 Debian. ADMIN and CLIENT are two authorization doors, not two 
 ONLY CLIENT = WEB.
 
 ```
-MSI Windows → START_MSI.bat → VS Admin.exe → http://<i3-LAN>:3000
+MSI Windows → PALAID.bat / START_MSI.bat → VS Admin.exe → http://<i3-LAN>:3000
 CLIENT browser → https://<stable-host>/ → :443 → Control API client routes only
 ```
 

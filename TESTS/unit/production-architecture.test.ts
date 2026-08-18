@@ -23,10 +23,20 @@ describe('canonical production architecture', () => {
   it('root has START_I3 and START_MSI.bat only as operator starts', () => {
     expect(existsSync(join(ROOT, 'START_I3'))).toBe(true);
     expect(existsSync(join(ROOT, 'START_MSI.bat'))).toBe(true);
+    expect(existsSync(join(ROOT, 'PALAID.bat'))).toBe(true);
     expect(existsSync(join(ROOT, 'START_I3.sh'))).toBe(false);
     expect(existsSync(join(ROOT, 'FORCE_I3_LAN'))).toBe(false);
     expect(existsSync(join(ROOT, 'legacy-review'))).toBe(false);
     expect(existsSync(join(ROOT, 'DEPLOY'))).toBe(false);
+  });
+
+  it('PALAID.bat is the old operator name and only calls START_MSI.bat', () => {
+    const palaid = readFileSync(join(ROOT, 'PALAID.bat'), 'utf8');
+    expect(palaid).toMatch(/START_MSI\.bat/);
+    expect(palaid).not.toMatch(/VS\.exe/);
+    expect(palaid).not.toMatch(/18090/);
+    expect(palaid).not.toMatch(/FIX\.ps1/);
+    expect(palaid).not.toMatch(/chrome|msedge/i);
   });
 
   it('production source does not reference old version/', () => {
