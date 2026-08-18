@@ -100,20 +100,37 @@ class ControlApi:
             h["x-admin-token"] = self.token
         return h
 
-    def request(self, method: str, path: str, body: dict[str, Any] | None = None) -> Any:
+    def request(
+        self,
+        method: str,
+        path: str,
+        body: dict[str, Any] | None = None,
+        timeout: float | None = None,
+    ) -> Any:
         if not self.base:
             raise ApiError("NO_API_BASE")
         url = self.base + path
         data = None if body is None else json.dumps(body).encode("utf-8")
         req = urllib.request.Request(url, data=data, method=method, headers=self._headers())
+        wait = self.timeout if timeout is None else timeout
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as res:
+            with urllib.request.urlopen(req, timeout=wait) as res:
                 raw = res.read()
                 if not raw:
                     return None
                 return json.loads(raw.decode("utf-8"))
         except urllib.error.HTTPError as e:
-            raise ApiError(f"HTTP {e.code} {path}", e.code) from e
+            detail = ""
+            try:
+                raw_err = e.read().decode("utf-8", errors="replace")
+                parsed = json.loads(raw_err) if raw_err else {}
+                if isinstance(parsed, dict):
+                    detail = str(parsed.get("error") or parsed.get("message") or raw_err)
+                else:
+                    detail = raw_err
+            except Exception:
+                detail = ""
+            raise ApiError(f"HTTP {e.code} {path}" + (f": {detail}" if detail else ""), e.code) from e
         except Exception as e:
             raise ApiError(str(e)) from e
 

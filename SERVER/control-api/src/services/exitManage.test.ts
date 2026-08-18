@@ -414,7 +414,9 @@ describe('Exit helpers — LONG/SHORT symmetry', () => {
       }),
       1998.4
     );
-    expect(peak.exit).toBe(true);
+    expect(peak.exit).toBe(false);
+    expect(peak.action).toBe('TRAIL');
+    expect(peak.trail_stop).toBeGreaterThan(0);
     expect(peak.reason).toMatch(/PeakProtection/);
   });
 });

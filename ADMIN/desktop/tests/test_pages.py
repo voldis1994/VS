@@ -10,8 +10,19 @@ from pages.dashboard import DashboardPage
 from pages.ops import PositionsPage
 from pages.server import ServerPage
 from pages.trading import TradingPage
+from pages.brokers import BrokersPage
+from pages.robot import RobotPage
 from services.api import ControlApi
 from ui.main_window import NAV, MainWindow
+
+
+def _stop_live(win: MainWindow) -> None:
+    """Tests inject snapshots; do not let the LAN poller overwrite them."""
+    try:
+        win.worker.snapshot.disconnect()
+    except Exception:
+        pass
+    win.worker.stop()
 
 
 def test_nav_has_all_operator_pages():
@@ -20,6 +31,8 @@ def test_nav_has_all_operator_pages():
         "Server",
         "Clients",
         "Accounts",
+        "Brokers",
+        "Robot",
         "Market",
         "Trading",
         "Strategies",
@@ -38,6 +51,7 @@ def test_nav_has_all_operator_pages():
 def test_disconnected_snapshot_does_not_fake_connected():
     app = QApplication.instance() or QApplication([])
     win = MainWindow(ControlApi("http://127.0.0.1:9"), "LAN")
+    _stop_live(win)
     win.show()
     app.processEvents()
     snap = {
@@ -64,6 +78,8 @@ def test_disconnected_snapshot_does_not_fake_connected():
     assert isinstance(win.pages["Server"], ServerPage)
     assert isinstance(win.pages["Trading"], TradingPage)
     assert isinstance(win.pages["Positions"], PositionsPage)
+    assert isinstance(win.pages["Brokers"], BrokersPage)
+    assert isinstance(win.pages["Robot"], RobotPage)
     win.close()
     app.processEvents()
 
@@ -71,6 +87,7 @@ def test_disconnected_snapshot_does_not_fake_connected():
 def test_connected_header_requires_snapshot_flag():
     app = QApplication.instance() or QApplication([])
     win = MainWindow(ControlApi("http://127.0.0.1:9"), "LAN")
+    _stop_live(win)
     win.on_snapshot(
         {
             "connected": True,

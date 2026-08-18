@@ -456,8 +456,8 @@ export async function saveClientConfig(
 }
 
 /**
- * Client START = Node robotDesk entry brain (same rules as Robot Command).
- * C++ market-core intents are ignored while that session is running.
+ * Client START = robotDesk hands for this account+epic.
+ * Queued calc (C++/pipeline EntryReady) executes on the next cycle; Node strategy is fallback only.
  */
 export async function startClientRobot(clientId: number): Promise<ClientPanelStatus> {
   const { rows } = await pool.query(

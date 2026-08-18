@@ -53,8 +53,9 @@ vi.mock('../security/encryption.js', () => ({
   decrypt: () => 'secret',
 }));
 
-const { hasEntryEnabledRobot } = vi.hoisted(() => ({
+const { hasEntryEnabledRobot, offerCalcEntry } = vi.hoisted(() => ({
   hasEntryEnabledRobot: vi.fn(() => false),
+  offerCalcEntry: vi.fn(() => ({ queued: true, running: false })),
 }));
 
 vi.mock('./robotDesk.js', () => ({
@@ -62,6 +63,7 @@ vi.mock('./robotDesk.js', () => ({
   listRobotSessions: () => [],
   stopRobotSession: vi.fn(async () => undefined),
   hasEntryEnabledRobot: (accountId: number, epic: string) => hasEntryEnabledRobot(accountId, epic),
+  offerCalcEntry: (input: unknown) => offerCalcEntry(input),
 }));
 
 function sub(partial: {
@@ -89,6 +91,7 @@ function claimKey(idem: string, clientId: number, accountId: number) {
 beforeEach(() => {
   vi.clearAllMocks();
   hasEntryEnabledRobot.mockReturnValue(false);
+  offerCalcEntry.mockReturnValue({ queued: true, running: false });
   resetPipelineBridgeForTests();
   claimedKeys.clear();
   claimRows.clear();
@@ -250,8 +253,8 @@ describe('Pipeline authentication', () => {
   });
 });
 
-describe('Idempotency / B3 alternate opener disabled', () => {
-  it('same idempotency_key twice → ZERO Capital executions (fanout fail-closed)', async () => {
+describe('Idempotency / calc queue (no alternate Capital opener)', () => {
+  it('same idempotency_key twice → ZERO Capital executions (fanout queues, robotDesk opens)', async () => {
     const { fanoutEntryIntent } = await import('./intentFanout.js');
     listActiveSubscriptionsForEpic.mockResolvedValue([
       sub({ client_id: 17, account_id: 170, epic: 'XAUUSD', lot_size: 0.1 }),
@@ -262,6 +265,7 @@ describe('Idempotency / B3 alternate opener disabled', () => {
       direction: 'BUY',
       decision: 'ENTRY_READY',
       idempotency_key: 'mc-once-1',
+      explanation: 'vein long',
     });
     const r2 = await fanoutEntryIntent({
       epic: 'XAUUSD',
@@ -271,9 +275,16 @@ describe('Idempotency / B3 alternate opener disabled', () => {
     });
 
     expect(createCapitalPosition).not.toHaveBeenCalled();
-    expect(r1.fanout.executed[0]?.ok).toBe(false);
-    expect(r1.fanout.executed[0]?.detail).toMatch(/ALTERNATE_OPENER_DISABLED/);
-    expect(r2.fanout.executed[0]?.detail).toMatch(/ALTERNATE_OPENER_DISABLED|Duplicate|already/);
+    expect(offerCalcEntry).toHaveBeenCalledTimes(1);
+    expect(offerCalcEntry.mock.calls[0]?.[0]).toMatchObject({
+      account_id: 170,
+      epic: 'XAUUSD',
+      direction: 'BUY',
+      explanation: 'vein long',
+    });
+    expect(r1.fanout.executed[0]?.ok).toBe(true);
+    expect(r1.fanout.executed[0]?.detail).toMatch(/QUEUED/);
+    expect(r2.fanout.executed[0]?.detail).toMatch(/QUEUED|Duplicate|already/);
     const opened = emitToClient.mock.calls.filter(
       (c: unknown[]) => (c[1] as { type: string }).type === 'trade_opened'
     );
@@ -318,9 +329,10 @@ describe('Client isolation', () => {
   });
 });
 
-describe('Node robotDesk owns entries', () => {
-  it('skips C++/pipeline Capital orders when Node entry robot is running', async () => {
+describe('Calc queues onto robotDesk hands', () => {
+  it('pipeline EntryReady queues calc even when robot is already running — never opens Capital here', async () => {
     hasEntryEnabledRobot.mockReturnValue(true);
+    offerCalcEntry.mockReturnValue({ queued: true, running: true });
     const { fanoutEntryIntent } = await import('./intentFanout.js');
     listActiveSubscriptionsForEpic.mockResolvedValue([
       sub({ client_id: 17, account_id: 170, epic: 'XAUUSD', lot_size: 0.1 }),
@@ -334,7 +346,9 @@ describe('Node robotDesk owns entries', () => {
     });
 
     expect(createCapitalPosition).not.toHaveBeenCalled();
-    expect(result.fanout.executed[0]?.detail).toMatch(/Node robotDesk owns entries/);
+    expect(offerCalcEntry).toHaveBeenCalled();
+    expect(result.fanout.executed[0]?.ok).toBe(true);
+    expect(result.fanout.executed[0]?.detail).toMatch(/QUEUED · robotDesk will execute calc EntryReady/);
     hasEntryEnabledRobot.mockReturnValue(false);
   });
 });

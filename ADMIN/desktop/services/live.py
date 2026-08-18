@@ -57,6 +57,8 @@ def empty_state() -> dict[str, Any]:
         "clients": [],
         "admin": None,
         "ws": "DISCONNECTED",
+        "brokers": [],
+        "robot_desk": {},
     }
 
 
@@ -122,6 +124,8 @@ class LiveWorker(QObject):
         clients = _safe(self.api, "/api/clients")
         orders = _safe(self.api, "/api/v1/orders")
         trades = _safe(self.api, "/api/v1/trades")
+        brokers = _safe(self.api, "/api/brokers")
+        robot_desk = _safe(self.api, "/api/robot-desk")
         latency = int((time.monotonic() - t0) * 1000)
         sys = snap.get("system") or {}
         cl = snap.get("clients") or {}
@@ -210,6 +214,8 @@ class LiveWorker(QObject):
             "clients": clients if isinstance(clients, list) else [],
             "admin": snap.get("admin"),
             "ws": "CONNECTED" if self._ws_ok else "POLLING",
+            "brokers": brokers if isinstance(brokers, list) else [],
+            "robot_desk": robot_desk if isinstance(robot_desk, dict) else {},
         }
 
     @Slot()

@@ -18,11 +18,13 @@ from PySide6.QtWidgets import (
 
 from app.version import ADMIN_VERSION
 from pages.accounts import AccountsPage
+from pages.brokers import BrokersPage
 from pages.clients import ClientsPage
 from pages.dashboard import DashboardPage
 from pages.logs import BackupsPage, LogsPage, SettingsPage, UpdatesPage
 from pages.market import MarketPage
 from pages.ops import IncidentsPage, OrdersPage, PositionsPage, TradesPage
+from pages.robot import RobotPage
 from pages.server import ServerPage
 from pages.trading import ExecutionPage, StrategiesPage, TradingPage
 from services.api import ControlApi
@@ -36,6 +38,8 @@ NAV = [
     "Server",
     "Clients",
     "Accounts",
+    "Brokers",
+    "Robot",
     "Market",
     "Trading",
     "Strategies",
@@ -120,6 +124,8 @@ class MainWindow(QMainWindow):
             "Server": ServerPage(),
             "Clients": ClientsPage(self.api),
             "Accounts": AccountsPage(self.api),
+            "Brokers": BrokersPage(self.api),
+            "Robot": RobotPage(self.api),
             "Market": MarketPage(),
             "Trading": TradingPage(),
             "Strategies": StrategiesPage(),

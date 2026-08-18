@@ -114,13 +114,22 @@ QHeaderView::section {
   padding: 8px;
   letter-spacing: 1px;
 }
-QLineEdit, QPlainTextEdit, QTextEdit {
+QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox, QDoubleSpinBox {
   background: #0b1014;
   border: 1px solid #1c242c;
   padding: 8px;
   color: #eef3f0;
   border-radius: 6px;
 }
+QComboBox::drop-down { border: none; }
+QPushButton {
+  background: #0b1014;
+  border: 1px solid #1c242c;
+  color: #eef3f0;
+  padding: 8px 14px;
+  border-radius: 6px;
+}
+QPushButton:hover { border-color: #2ef28a; }
 QPushButton#Primary {
   background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1d3b2a, stop:1 #102018);
   border: 1px solid #178a4c;
