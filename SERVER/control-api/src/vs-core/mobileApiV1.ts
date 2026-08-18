@@ -12,6 +12,7 @@ import { versionBundle, CORE_VERSION, STRATEGY_VERSION } from './versions.js';
 import { getEventBus } from './eventBus.js';
 import { setRobotsTradingEnabled } from '../services/robotDesk.js';
 import { normalizeNetworkSecret } from './network/networkSecrets.js';
+import { pool } from '../db/pool.js';
 
 export type MobileApiDeps = {
   auth: MobileAuthService;
@@ -169,11 +170,40 @@ export async function registerMobileApiV1(app: FastifyInstance, deps: MobileApiD
     return { ok: true, lot_size: body.lot_size };
   });
 
+  /** Verify that account_id (if supplied) belongs to the authenticated client. */
+  async function resolveOwnedAccountId(
+    reply: import('fastify').FastifyReply,
+    clientId: number,
+    requestedAccountId: number | null
+  ): Promise<{ accountId: number | null; denied: boolean }> {
+    if (requestedAccountId == null) return { accountId: null, denied: false };
+    const { rows } = await pool.query(
+      `SELECT id FROM broker_accounts
+       WHERE id = $1 AND client_id = $2 AND enabled = true
+       LIMIT 1`,
+      [requestedAccountId, clientId]
+    );
+    if (!rows.length) {
+      await reply.code(403).send({
+        ok: false,
+        code: 'ACCOUNT_ACCESS_DENIED',
+        reason: 'account_id does not belong to this client or is disabled',
+      });
+      return { accountId: null, denied: true };
+    }
+    return { accountId: requestedAccountId, denied: false };
+  }
+
   app.post('/api/v1/trading/start', async (req, reply) => {
     const session = await requireSession(req, reply);
     if (!session) return;
     const body = (req.body || {}) as { account_id?: number };
-    const accountId = body.account_id ?? null;
+    const { accountId, denied } = await resolveOwnedAccountId(
+      reply,
+      session.client_id,
+      body.account_id != null ? Number(body.account_id) : null
+    );
+    if (denied) return;
     const state = reg.start(session.client_id, accountId);
     const robots = setRobotsTradingEnabled(session.client_id, accountId, true);
     await bus.emit('ClientTradingStarted', {
@@ -188,7 +218,12 @@ export async function registerMobileApiV1(app: FastifyInstance, deps: MobileApiD
     const session = await requireSession(req, reply);
     if (!session) return;
     const body = (req.body || {}) as { account_id?: number };
-    const accountId = body.account_id ?? null;
+    const { accountId, denied } = await resolveOwnedAccountId(
+      reply,
+      session.client_id,
+      body.account_id != null ? Number(body.account_id) : null
+    );
+    if (denied) return;
     const state = reg.stop(session.client_id, accountId);
     const robots = setRobotsTradingEnabled(session.client_id, accountId, false);
     await bus.emit('ClientTradingStopped', {
