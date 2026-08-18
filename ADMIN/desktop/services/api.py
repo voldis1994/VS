@@ -123,5 +123,8 @@ class ControlApi:
     def post(self, path: str, body: dict[str, Any] | None = None) -> Any:
         return self.request("POST", path, body or {})
 
+    def put(self, path: str, body: dict[str, Any] | None = None) -> Any:
+        return self.request("PUT", path, body or {})
+
     def health(self) -> dict[str, Any]:
         return parse_health(self.get("/health"))
