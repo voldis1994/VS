@@ -12,7 +12,7 @@ export async function registerAccountRoutes(app: FastifyInstance): Promise<void>
     return rows;
   });
 
-  app.put('/api/accounts/:id/instruments/:instrumentId', async (request) => {
+  app.put('/api/accounts/:id/instruments/:instrumentId', async (request, reply) => {
     const { id, instrumentId } = request.params as { id: string; instrumentId: string };
     const body = request.body as {
       lot_size?: number;
@@ -20,6 +20,57 @@ export async function registerAccountRoutes(app: FastifyInstance): Promise<void>
       trading_enabled?: boolean;
       symbol?: string;
     };
+
+    // Validate lot_size: must be a finite positive number when provided.
+    if (body.lot_size !== undefined) {
+      if (
+        typeof body.lot_size !== 'number' ||
+        !Number.isFinite(body.lot_size) ||
+        body.lot_size <= 0
+      ) {
+        return reply.code(400).send({
+          error: 'lot_size must be a finite positive number',
+        });
+      }
+    }
+
+    // Verify instrument belongs to this broker account via the capital_markets catalog.
+    const instrumentCheck = await pool.query(
+      `SELECT cm.id, cm.epic, cm.min_lot, cm.max_lot, cm.lot_step
+       FROM capital_markets cm
+       JOIN broker_accounts ba ON ba.broker_connection_id = cm.broker_connection_id
+       WHERE cm.id = $1 AND ba.id = $2
+       LIMIT 1`,
+      [instrumentId, id]
+    );
+    if (!instrumentCheck.rows.length) {
+      return reply.code(404).send({
+        error: 'instrument_id not found for this account — pull markets first',
+      });
+    }
+    const catalog = instrumentCheck.rows[0] as {
+      id: number;
+      epic: string;
+      min_lot: number;
+      max_lot: number;
+      lot_step: number;
+    };
+
+    // Validate lot_size against broker catalog constraints when provided.
+    if (body.lot_size !== undefined) {
+      if (body.lot_size < catalog.min_lot || body.lot_size > catalog.max_lot) {
+        return reply.code(400).send({
+          error: `lot_size ${body.lot_size} is outside broker limits [${catalog.min_lot}, ${catalog.max_lot}]`,
+        });
+      }
+      const step = catalog.lot_step > 0 ? catalog.lot_step : 0.01;
+      const remainder = Math.round((body.lot_size / step) * 1e10) % 1e10;
+      if (remainder !== 0) {
+        return reply.code(400).send({
+          error: `lot_size ${body.lot_size} is not a multiple of lot_step ${step}`,
+        });
+      }
+    }
 
     const prev = await pool.query(
       'SELECT * FROM account_instrument_settings WHERE broker_account_id = $1 AND instrument_id = $2',
@@ -40,8 +91,8 @@ export async function registerAccountRoutes(app: FastifyInstance): Promise<void>
       [
         id,
         instrumentId,
-        body.symbol || `INST_${instrumentId}`,
-        body.lot_size ?? 0.01,
+        body.symbol || catalog.epic,
+        body.lot_size ?? catalog.min_lot,
         body.enabled ?? true,
         body.trading_enabled ?? false,
       ]
