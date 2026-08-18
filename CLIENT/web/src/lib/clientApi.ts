@@ -1,33 +1,33 @@
-const TOKEN_KEY = 'vs_client_token';
+/**
+ * Client API helpers.
+ *
+ * Security: tokens are NOT stored in localStorage — doing so exposes them to
+ * any XSS or same-origin script.  The session is maintained exclusively via
+ * HttpOnly/Secure/SameSite cookies set by the server.  The bearer token
+ * returned at login is kept in memory only (React state) and cleared on page
+ * unload.  All requests use `credentials: 'include'` so the cookie is sent
+ * automatically.
+ */
 
 /** Same-origin when served by VS CORE; optional override for local vite preview. */
 export function apiBase(): string {
   const fromEnv = (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL;
   if (fromEnv) return fromEnv.replace(/\/$/, '');
-  try {
-    const stored = localStorage.getItem('VS_CLIENT_API_BASE');
-    if (stored) return stored.replace(/\/$/, '');
-  } catch {
-    /* ignore */
-  }
   return '';
 }
 
+/**
+ * Read the in-memory bearer token from the module-level store.
+ * Falls back to null — the server will accept the HttpOnly cookie instead.
+ */
+let _memoryToken: string | null = null;
+
 export function getClientToken(): string | null {
-  try {
-    return localStorage.getItem(TOKEN_KEY);
-  } catch {
-    return null;
-  }
+  return _memoryToken;
 }
 
 export function setClientToken(token: string | null) {
-  try {
-    if (token) localStorage.setItem(TOKEN_KEY, token);
-    else localStorage.removeItem(TOKEN_KEY);
-  } catch {
-    /* ignore */
-  }
+  _memoryToken = token;
 }
 
 export async function clientFetch<T>(path: string, options?: RequestInit): Promise<T> {
@@ -41,7 +41,7 @@ export async function clientFetch<T>(path: string, options?: RequestInit): Promi
   const res = await fetch(`${apiBase()}${path}`, {
     ...options,
     headers,
-    credentials: 'include',
+    credentials: 'include', // always send HttpOnly session cookie
   });
   const text = await res.text();
   let data: unknown = null;
