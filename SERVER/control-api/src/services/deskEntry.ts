@@ -2,7 +2,12 @@
  * Desk entry: 10s regime, then Capital-lag lead (BUY and SELL).
  * Does not invent a side on every dump/rally — that churns Gold 10s.
  */
-import { decideEntryFrom10sRegime, type TrendBias } from './entryFromRegime.js';
+import {
+  decideEntryFrom10sRegime,
+  denyWithTrendEntry,
+  blockLateCalcEntry,
+  type TrendBias,
+} from './entryFromRegime.js';
 import {
   detectCapitalLagLead,
   detectStaleQuoteAdverse,
@@ -68,6 +73,21 @@ export function resolveDeskEntry(input: {
           reason: `CONCEPT_BLOCK · with-trend ${s} vs bias ${conceptBias}`,
         };
       }
+    }
+  }
+
+  if (fromCalc && direction && input.bar) {
+    const setupU = String(setup || '').toUpperCase();
+    const late = blockLateCalcEntry(direction, input.bar, input.closedBars);
+    if (late) {
+      return { direction: null, setup: null, reason: `CALC_BLOCK · ${late}` };
+    }
+    const deny = denyWithTrendEntry(direction, input.bar, bias, input.closedBars, {
+      exhaustion: setupU === 'FADE',
+      allowCountertrend: ['FADE', 'REVERSAL', 'RANGE_REJECTION', 'FAILED_BREAKOUT'].includes(setupU),
+    });
+    if (deny) {
+      return { direction: null, setup: null, reason: `CALC_BLOCK · ${deny}` };
     }
   }
 

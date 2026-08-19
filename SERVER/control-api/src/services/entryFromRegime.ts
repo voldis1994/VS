@@ -270,6 +270,42 @@ export function decideExhaustionEntry(bars: TenSecBar[]): RegimeEntry | null {
   return null;
 }
 
+/**
+ * Block C++ EntryReady when the impulse already ended (chase at tail of move).
+ */
+export function blockLateCalcEntry(
+  direction: 'BUY' | 'SELL',
+  bar: TenSecBar,
+  recent?: TenSecBar[] | null
+): string | null {
+  const w = withBar(recent, bar);
+  if (w.length < 2) return null;
+  const cur = w[w.length - 1]!;
+  const prev = w[w.length - 2]!;
+
+  if (direction === 'SELL') {
+    if (rally(cur) && cur.close >= prev.close) {
+      return 'impulse ended — green 10s bounce, too late to SELL';
+    }
+    const bounds = rangeBoundsFromBars(w);
+    if (bounds && nearLower(cur, bounds)) {
+      return 'late SELL — price at range low after dump';
+    }
+  }
+
+  if (direction === 'BUY') {
+    if (dip(cur) && cur.close <= prev.close) {
+      return 'impulse ended — red 10s dump, too late to BUY';
+    }
+    const bounds = rangeBoundsFromBars(w);
+    if (bounds && nearUpper(cur, bounds)) {
+      return 'late BUY — price at range high after climb';
+    }
+  }
+
+  return null;
+}
+
 export function minuteExhaustionConfirmed(
   direction: 'BUY' | 'SELL',
   candles: Array<{ open: number; close: number }>

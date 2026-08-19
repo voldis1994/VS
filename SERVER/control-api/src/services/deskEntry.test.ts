@@ -263,4 +263,24 @@ describe('resolveDeskEntry — BUY and SELL both fire', () => {
     expect(e.direction).toBeNull();
     expect(e.reason).toMatch(/CONCEPT_BLOCK/);
   });
+
+  it('blocks C++ SELL when impulse ended with green bounce 10s', () => {
+    const e = resolveDeskEntry({
+      intended: 'SELL',
+      intendedSetup: 'CONTINUATION',
+      intendedReason: 'CALC EntryReady follow dump',
+      bar: bar(2492, 2494),
+      closedBars: [bar(2496, 2493), bar(2493, 2492)],
+      bias: 'DOWN',
+      regime: 'TREND_DOWN',
+      capitalMid: 2494,
+      refs: [
+        { label: 'Gold-API spot (public)', mid: 2494 },
+        { label: 'Coinbase spot (public)', mid: 2494 },
+        { label: 'Kraken spot (public)', mid: 2494 },
+      ],
+    });
+    expect(e.direction).toBeNull();
+    expect(e.reason).toMatch(/CALC_BLOCK.*impulse ended/i);
+  });
 });

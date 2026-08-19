@@ -173,19 +173,37 @@ static bool decide(const Snap& s, std::string* dir, std::string* why, double* ev
   double prev_c = s.bars.size() >= 2 ? s.bars[s.bars.size() - 2].c : last.o;
   bool dump = last.c < last.o || last.c < prev_c;
   bool climb = last.c > last.o || last.c > prev_c;
+  double range_hi = last.h, range_lo = last.l;
+  for (const auto& b : s.bars) {
+    range_hi = std::max(range_hi, b.h);
+    range_lo = std::min(range_lo, b.l);
+  }
+  double range_pos = (range_hi > range_lo) ? (last.c - range_lo) / (range_hi - range_lo) : 0.5;
+  bool prev_dump =
+    s.bars.size() >= 2 && s.bars[s.bars.size() - 2].c < s.bars[s.bars.size() - 2].o;
+  bool prev_climb =
+    s.bars.size() >= 2 && s.bars[s.bars.size() - 2].c > s.bars[s.bars.size() - 2].o;
+  bool bounce_after_dump = climb && prev_dump;
+  bool dip_after_climb = dump && prev_climb;
+
   if (down_ctx && dump) {
+    if (range_pos < 0.28) return false;
+    if (bounce_after_dump) return false;
     *dir = "SELL";
     *ev_out = 0.2;
     *why = "regime " + s.regime + " follow dump";
     return true;
   }
   if (up_ctx && climb) {
+    if (range_pos > 0.72) return false;
+    if (dip_after_climb) return false;
     *dir = "BUY";
     *ev_out = 0.2;
     *why = "regime " + s.regime + " follow climb";
     return true;
   }
   if (up_ctx && dump) {
+    if (range_pos > 0.82) return false;
     *dir = "BUY";
     *ev_out = 0.2;
     *why = "regime " + s.regime + " dip buy";
@@ -204,20 +222,17 @@ static bool decide(const Snap& s, std::string* dir, std::string* why, double* ev
     return true;
   }
   if (s.bars.size() < 4) return false;
-  double up = 0, down = 0, hi = s.bars[0].h, lo = s.bars[0].l;
+  double up = 0, down = 0;
   int vein = 0;
   for (size_t i = 1; i < s.bars.size(); ++i) {
     const auto& a = s.bars[i - 1];
     const auto& b = s.bars[i];
     if (b.c > a.c) { up += 1; vein = vein >= 0 ? vein + 1 : 1; }
     else if (b.c < a.c) { down += 1; vein = vein <= 0 ? vein - 1 : -1; }
-    hi = std::max(hi, b.h);
-    lo = std::min(lo, b.l);
   }
   double n = double(s.bars.size() - 1);
   double net_flow = (up - down) / n;
   double lastc = last.c;
-  double range_pos = (hi > lo) ? (lastc - lo) / (hi - lo) : 0.5;
   double spread = (s.ask > 0 && s.bid > 0) ? (s.ask - s.bid) / std::max(lastc, 1.0) : 0.0002;
   auto score = [&](int sign) {
     double p = 0.5 + 0.2 * (sign * net_flow) + 0.1 * (sign * vein > 0 ? 1.0 : 0.0);

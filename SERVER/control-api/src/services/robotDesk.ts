@@ -2247,6 +2247,19 @@ async function robotCycleBody(s: Internal) {
 
     const calc = s.pending_calc;
     if (calc) {
+      const calcAgeMs = Date.now() - new Date(calc.at).getTime();
+      if (calcAgeMs > 12_000) {
+        s.pending_calc = null;
+        calcQueue.delete(calcKey(s.account_id, s.epic));
+        pushTick(s, {
+          phase: 'SCAN',
+          bid: execQuote.bid,
+          ask: execQuote.ask,
+          mid: execQuote.mid,
+          code: DecisionCodes.NO_SETUP,
+          detail: `${ohlcLine} · stale C++ EntryReady discarded (${Math.round(calcAgeMs / 1000)}s)`,
+        });
+      } else {
       s.pending_calc = null;
       calcQueue.delete(calcKey(s.account_id, s.epic));
       direction = calc.direction;
@@ -2260,6 +2273,7 @@ async function robotCycleBody(s: Internal) {
         code: DecisionCodes.SIGNAL_CREATED,
         detail: `${reason} · ${s.cross_market?.detail || 'cross-market n/a'}`,
       });
+      }
     }
 
     const refs = collectFresherRefs(s);
@@ -2273,14 +2287,12 @@ async function robotCycleBody(s: Internal) {
         intended: direction,
         intendedSetup: setupType,
         intendedReason: reason,
-        // Prefer C++ for a short window right after 10s close.
-        bar: direction || waitCalcFirst ? null : bar,
+        bar,
         regime: regimeLabel,
         bias: s.trend_bias || 'FLAT',
         closedBars: s.closedBars,
-        // During calc-first wait window, disable LAG_LEAD decisions too.
-        // Otherwise we can enter without C++ pending_calc confirmation.
-        capitalMid: waitCalcFirst ? null : execQuote.mid,
+        // During calc-first wait window, disable LAG_LEAD without C++ confirmation.
+        capitalMid: waitCalcFirst && !direction ? null : execQuote.mid,
         refs,
       });
       if (resolved.direction) {
