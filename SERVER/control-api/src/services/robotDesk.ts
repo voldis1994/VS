@@ -31,13 +31,13 @@ import {
 } from './crossMarketPressure.js';
 import { canIssueClose, decideCloseFinalize } from './exitLifecycle.js';
 import {
-  decideEntryFrom10sRegime,
   effectiveBias,
   resolveTrendBias,
   TREND_LOOKBACK_10S,
   type TrendBias,
 } from './entryFromRegime.js';
 import { DecisionCodes, type DecisionCode } from './decisionCodes.js';
+import { resolveDeskEntry } from './deskEntry.js';
 import { runtimeBuildInfo } from './runtimeBuild.js';
 import {
   multiFeedOwnsOhlc,
@@ -46,13 +46,7 @@ import {
   type MultiFeedPrice,
   type MultiFeedLeg,
 } from './robotReader.js';
-import {
-  buildFresherRefs,
-  detectCapitalLagLead,
-  detectStaleQuoteAdverse,
-  LAG_SCAN_MIN_REL,
-  type PriceRef,
-} from './staleQuoteGuard.js';
+import { buildFresherRefs, type PriceRef } from './staleQuoteGuard.js';
 import {
   aggregateSecondsToTen,
   emptyTenSecState,
@@ -2071,40 +2065,30 @@ async function robotCycleBody(s: Internal) {
       });
     }
 
-    if (!direction && bar && s.entry_enabled && !s.open_side) {
-      const barKey = s.last_closed_bar_key || `${bar.open}:${bar.close}:${bar.high}`;
-      if (s.last_entry_bar_key !== barKey) {
-        const hit = decideEntryFrom10sRegime(bar, regimeLabel, s.trend_bias || 'FLAT', s.closedBars);
-        if (hit) {
-          direction = hit.direction;
-          setupType = hit.setup;
-          reason = `10s ${hit.setup} · ${hit.reason}`;
-          pushTick(s, {
-            phase: 'DECIDE',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            code: DecisionCodes.SIGNAL_CREATED,
-            detail: `${reason} · ${s.cross_market?.detail || 'cross-market n/a'}`,
-          });
-        }
-      }
-    }
-
-    // Capital lags other near feeds → BUY (feeds already up) or SELL (feeds already down).
     const refs = collectFresherRefs(s);
     const entryBarKey =
       s.last_closed_bar_key || (bar ? `${bar.open}:${bar.close}:${bar.high}` : '');
     const alreadyTriedBar = Boolean(entryBarKey) && s.last_entry_bar_key === entryBarKey;
-    if (s.entry_enabled && !s.open_side && !alreadyTriedBar && quote.mid != null) {
-      const lead = detectCapitalLagLead(quote.mid, refs, {
-        minRel: direction ? 0.0012 : LAG_SCAN_MIN_REL,
+    if (s.entry_enabled && !s.open_side && !alreadyTriedBar) {
+      const hadDirection = Boolean(direction);
+      const resolved = resolveDeskEntry({
+        intended: direction,
+        intendedSetup: setupType,
+        intendedReason: reason,
+        bar: direction ? null : bar,
+        regime: regimeLabel,
+        bias: s.trend_bias || 'FLAT',
+        closedBars: s.closedBars,
+        capitalMid: quote.mid,
+        refs,
       });
-      if (lead.hit && lead.direction) {
-        if (!direction) {
-          direction = lead.direction;
-          setupType = 'LAG_LEAD';
-          reason = lead.reason;
+      if (resolved.direction) {
+        const flipped = hadDirection && resolved.direction !== direction;
+        const fresh = !hadDirection;
+        direction = resolved.direction;
+        setupType = resolved.setup;
+        reason = resolved.reason;
+        if (fresh || flipped) {
           pushTick(s, {
             phase: 'DECIDE',
             bid: quote.bid,
@@ -2112,19 +2096,6 @@ async function robotCycleBody(s: Internal) {
             mid: quote.mid,
             code: DecisionCodes.SIGNAL_CREATED,
             detail: `${reason} · ${s.cross_market?.detail || 'cross-market n/a'}`,
-          });
-        } else if (direction !== lead.direction) {
-          const prev = direction;
-          direction = lead.direction;
-          setupType = 'LAG_LEAD';
-          reason = `FLIP ${prev} → ${lead.reason}`;
-          pushTick(s, {
-            phase: 'DECIDE',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            code: DecisionCodes.SIGNAL_CREATED,
-            detail: reason,
           });
         }
       }
@@ -2140,26 +2111,6 @@ async function robotCycleBody(s: Internal) {
         detail: `${ohlcLine} · waiting for C++ calc EntryReady (hands only — no Node brain)`,
       });
       return;
-    }
-
-    // Do not BUY a dump / SELL a climb that other feeds already printed — unless this
-    // tick is already the lag-lead order in the feed direction.
-    if (direction && quote.mid != null && setupType !== 'LAG_LEAD') {
-      const lag = detectStaleQuoteAdverse(direction, quote.mid, refs);
-      if (lag.block) {
-        const flip: 'BUY' | 'SELL' = direction === 'BUY' ? 'SELL' : 'BUY';
-        direction = flip;
-        setupType = 'LAG_LEAD';
-        reason = `LAG CAPITAL · ${flip} · ${lag.reason}`;
-        pushTick(s, {
-          phase: 'DECIDE',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          code: DecisionCodes.SIGNAL_CREATED,
-          detail: reason,
-        });
-      }
     }
 
     if (!direction) return;
