@@ -93,3 +93,48 @@ export function crossMarketNeedles(epic: string, displayName = ''): string[] {
   const self = epic.toUpperCase();
   return needles.filter((n) => !self.includes(n));
 }
+
+function normEpic(epic: string): string {
+  return String(epic || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+}
+
+/** Concrete Capital-style epics for public-feed cross-market when catalog is empty. */
+export function canonicalRelatedEpics(epic: string, displayName = ''): string[] {
+  const cls = detectMarketClass(epic, displayName);
+  const self = normEpic(epic);
+  const pick = (symbols: string[]) =>
+    symbols.filter((s) => {
+      const n = normEpic(s);
+      return n && n !== self && !self.includes(n) && !n.includes(self);
+    });
+
+  switch (cls) {
+    case 'gold':
+      return pick(['XAGUSD', 'USOIL', 'US500', 'EURUSD', 'USDJPY']);
+    case 'silver':
+      return pick(['GOLD', 'XAUUSD', 'USOIL', 'US500', 'EURUSD']);
+    case 'platinum':
+    case 'palladium':
+      return pick(['GOLD', 'XAGUSD', 'USOIL', 'EURUSD', 'US500']);
+    case 'oil_wti':
+      return pick(['UKOIL', 'US500', 'EURUSD', 'GOLD', 'NATURALGAS']);
+    case 'oil_brent':
+      return pick(['USOIL', 'US500', 'EURUSD', 'GOLD', 'NATURALGAS']);
+    case 'natgas':
+      return pick(['USOIL', 'UKOIL', 'US500', 'EURUSD', 'GOLD']);
+    case 'fx':
+      return pick(['US500', 'US100', 'GOLD', 'USOIL', 'USDJPY', 'GBPUSD']);
+    case 'index_us':
+      return pick(['US100', 'US30', 'EURUSD', 'USDJPY', 'GOLD', 'USOIL', 'BTCUSD']);
+    case 'index_eu':
+      return pick(['GER40', 'UK100', 'US500', 'EURUSD', 'GOLD', 'USOIL']);
+    case 'index_asia':
+      return pick(['JP225', 'US500', 'USDJPY', 'GOLD', 'USOIL']);
+    case 'crypto':
+      return pick(['BTCUSD', 'ETHUSD', 'US500', 'US100', 'GOLD', 'EURUSD']);
+    default:
+      return pick(['US500', 'EURUSD', 'GOLD', 'USOIL', 'BTCUSD']);
+  }
+}

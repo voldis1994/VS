@@ -33,6 +33,8 @@ import {
   relatedSearchNeedles,
   type CrossMarketPressure,
 } from './crossMarketPressure.js';
+import { canonicalRelatedEpics } from './marketAssetClass.js';
+import { readYahooFinance } from './publicInternetFeeds.js';
 import { canIssueClose, decideCloseFinalize } from './exitLifecycle.js';
 import {
   effectiveBias,
@@ -277,6 +279,30 @@ async function refreshCrossMarket(session: CapitalSession, s: Internal): Promise
       /* skip one related epic */
     }
   }
+
+  // Public Yahoo fallback — cross-market works even before PULL CAPITAL fills catalog
+  const have = new Set(related.map((r) => String(r.epic).toUpperCase()));
+  if (related.length < 4) {
+    for (const refEpic of canonicalRelatedEpics(s.epic, s.display_name).slice(0, 6)) {
+      const key = refEpic.toUpperCase();
+      if (have.has(key) || key === s.epic.toUpperCase()) continue;
+      try {
+        const pub = await readYahooFinance(refEpic);
+        if (!pub.ok || pub.mid == null || !Number.isFinite(pub.mid)) continue;
+        const change = noteMarketMid(refEpic, pub.mid);
+        related.push({
+          epic: refEpic,
+          display_name: `${refEpic} (public)`,
+          mid: pub.mid,
+          change,
+        });
+        have.add(key);
+      } catch {
+        /* skip one public ref */
+      }
+    }
+  }
+
   return computeCrossMarketPressure({
     targetEpic: s.epic,
     targetName: s.display_name,

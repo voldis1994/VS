@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  canonicalRelatedEpics,
   crossMarketNeedles,
   crossMarketNeedlesForClass,
   detectMarketClass,
@@ -49,5 +50,15 @@ describe('marketAssetClass', () => {
   it('BTC needles include ETH and indices', () => {
     const n = crossMarketNeedles('BTCUSD', 'Bitcoin');
     expect(n.join(' ')).toMatch(/ETH|US500|NAS/);
+  });
+
+  it('canonicalRelatedEpics returns concrete symbols for public fallback', () => {
+    const gold = canonicalRelatedEpics('GOLD', 'Gold');
+    expect(gold).toContain('XAGUSD');
+    expect(gold).toContain('US500');
+    expect(gold).not.toContain('GOLD');
+    const fx = canonicalRelatedEpics('EURUSD');
+    expect(fx).toContain('US500');
+    expect(fx).toContain('GOLD');
   });
 });
