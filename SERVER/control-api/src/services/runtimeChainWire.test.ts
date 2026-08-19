@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 describe('P3 runtime call-chain wiring', () => {
-  it('robotCycle executes queued C++ calc then Capital — Node is hands only', () => {
+  it('robotCycle executes queued C++ calc then 10s Node fallback — never evaluateStrategy', () => {
     const src = readFileSync(join(process.cwd(), 'src/services/robotDesk.ts'), 'utf8');
     expect(src).toContain('pending_calc');
     expect(src).toContain('await enterTrade(');
@@ -11,6 +11,7 @@ describe('P3 runtime call-chain wiring', () => {
     expect(src).toContain('evaluateRisk(');
     expect(src).toContain("import { decideBestOutcomeExit, favorableMove } from './exitManage.js'");
     expect(src).toContain('waiting for C++ calc EntryReady');
+    expect(src).toContain('decideEntryFrom10sRegime');
     expect(src).not.toContain('evaluateStrategy({');
     expect(src).not.toContain("import { runTradePipeline } from './tradePipeline.js'");
   });

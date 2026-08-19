@@ -30,7 +30,13 @@ import {
   type CrossMarketPressure,
 } from './crossMarketPressure.js';
 import { canIssueClose, decideCloseFinalize } from './exitLifecycle.js';
-import { effectiveBias, resolveTrendBias, TREND_LOOKBACK_10S, type TrendBias } from './entryFromRegime.js';
+import {
+  decideEntryFrom10sRegime,
+  effectiveBias,
+  resolveTrendBias,
+  TREND_LOOKBACK_10S,
+  type TrendBias,
+} from './entryFromRegime.js';
 import { DecisionCodes, type DecisionCode } from './decisionCodes.js';
 import { runtimeBuildInfo } from './runtimeBuild.js';
 import {
@@ -136,7 +142,7 @@ export type RobotSession = {
   entry_regime: string | null;
   /** Strategy reason string at entry (audit). */
   entry_reason: string | null;
-  /** When false, manage-only (no new opens). When true, execute queued C++ calc (no Node brain). */
+  /** When false, manage-only (no new opens). When true, C++ EntryReady first, then 10s Node fallback. */
   entry_enabled: boolean;
   ohlc_10s: {
     last_o: number | null;
@@ -175,6 +181,8 @@ type Internal = RobotSession & {
   ohlcState: TenSecState;
   last_second_fetch_ms: number;
   last_closed_bar_key: string;
+  /** One Capital entry attempt per closed 10s bar (C++ or Node 10s). */
+  last_entry_bar_key: string;
   closedBars: TenSecBar[];
   last_minute_fetch_ms: number;
   minuteCandles: Array<{ open: number; close: number }>;
@@ -391,6 +399,7 @@ function publicSession(s: Internal): RobotSession {
     ohlcState: _ohlc,
     last_second_fetch_ms: _sec,
     last_closed_bar_key: _bar,
+    last_entry_bar_key: _entryBar,
     closedBars: _bars,
     last_minute_fetch_ms: _minFetch,
     minuteCandles: _mins,
@@ -676,6 +685,7 @@ export function listCalcSnapshots(): Array<{
   ask: number | null;
   bars: Array<{ o: number; h: number; l: number; c: number }>;
   regime: string;
+  bias: string;
   running: boolean;
 }> {
   return [...sessions.values()]
@@ -694,6 +704,7 @@ export function listCalcSnapshots(): Array<{
           c: b.close,
         })),
         regime: String(s.regime || ''),
+        bias: String(s.trend_bias || ''),
         running: s.running,
       };
     });
@@ -2037,6 +2048,26 @@ async function robotCycleBody(s: Internal) {
       });
     }
 
+    if (!direction && bar && s.entry_enabled && !s.open_side) {
+      const barKey = s.last_closed_bar_key || `${bar.open}:${bar.close}:${bar.high}`;
+      if (s.last_entry_bar_key !== barKey) {
+        const hit = decideEntryFrom10sRegime(bar, regimeLabel, s.trend_bias || 'FLAT', s.closedBars);
+        if (hit) {
+          direction = hit.direction;
+          setupType = hit.setup;
+          reason = `10s ${hit.setup} · ${hit.reason}`;
+          pushTick(s, {
+            phase: 'DECIDE',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            code: DecisionCodes.SIGNAL_CREATED,
+            detail: `${reason} · ${s.cross_market?.detail || 'cross-market n/a'}`,
+          });
+        }
+      }
+    }
+
     if (!direction) {
       pushTick(s, {
         phase: 'SCAN',
@@ -2081,6 +2112,8 @@ async function robotCycleBody(s: Internal) {
     }
 
     if (!direction) return;
+    const barKey = s.last_closed_bar_key || (bar ? `${bar.open}:${bar.close}:${bar.high}` : '');
+    if (barKey) s.last_entry_bar_key = barKey;
     await enterTrade(opened.session, s, direction, quote, reason, setupType);
   } catch (err) {
     s.reads_fail += 1;
@@ -2208,6 +2241,7 @@ export async function startRobotSession(input: {
     ohlcState: emptyTenSecState(),
     last_second_fetch_ms: 0,
     last_closed_bar_key: '',
+    last_entry_bar_key: '',
     closedBars: [],
     last_minute_fetch_ms: 0,
     minuteCandles: [],

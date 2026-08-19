@@ -187,11 +187,17 @@ export function denyWithTrendEntry(
       ? `no SELL unless lasting DOWN (bias ${bias})`
       : `no BUY unless lasting UP (bias ${bias})`;
   }
-  const w = (recent || []).filter((b) => b && Number.isFinite(b.close));
-  if (w.length >= 4) {
-    const net = (w[w.length - 1]!.close - w[0]!.open) / Math.max(Math.abs(w[0]!.open), 1e-9);
-    if (direction === 'SELL' && net > 0.0003) return 'no SELL, 10s net still up';
-    if (direction === 'BUY' && net < -0.0003) return 'no BUY, 10s net still down';
+  // With lasting bias, a red BUY+UP (dip) or green SELL+DOWN is a pullback — do not
+  // veto the with-trend order just because this 10s window's net is still against the fill.
+  const pullbackWithBias =
+    (direction === 'BUY' && bias === 'UP') || (direction === 'SELL' && bias === 'DOWN');
+  if (!pullbackWithBias) {
+    const w = (recent || []).filter((b) => b && Number.isFinite(b.close));
+    if (w.length >= 4) {
+      const net = (w[w.length - 1]!.close - w[0]!.open) / Math.max(Math.abs(w[0]!.open), 1e-9);
+      if (direction === 'SELL' && net > 0.0003) return 'no SELL, 10s net still up';
+      if (direction === 'BUY' && net < -0.0003) return 'no BUY, 10s net still down';
+    }
   }
   return null;
 }
@@ -580,19 +586,28 @@ export function decideEntryFrom10sRegime(
   }
 
   if (r === 'EXPANSION') {
-    if (!movingOrNull(bar) || b === 'FLAT') return null;
-    if (rally(bar)) {
+    // Desk case: EXPANSION + bias UP + dump bar → BUY the dip (not SCAN / NO_SETUP).
+    if (b === 'UP' && (dip(bar) || softDip(bar))) {
       return gateWithTrend(
-        { direction: 'BUY', setup: 'BREAKOUT', reason: `${r} follow up · ${candle}` },
+        { direction: 'BUY', setup: 'PULLBACK', reason: `${r}+bias UP dip-buy · ${candle}` },
         b,
         bar,
         bars,
         r
       );
     }
-    if (dip(bar)) {
+    if (b === 'UP' && (rally(bar) || softRally(bar))) {
       return gateWithTrend(
-        { direction: 'SELL', setup: 'BREAKOUT', reason: `${r} follow down · ${candle}` },
+        { direction: 'BUY', setup: 'BREAKOUT', reason: `${r}+bias UP follow · ${candle}` },
+        b,
+        bar,
+        bars,
+        r
+      );
+    }
+    if (b === 'DOWN' && (dip(bar) || softDip(bar))) {
+      return gateWithTrend(
+        { direction: 'SELL', setup: 'BREAKOUT', reason: `${r}+bias DOWN follow dump · ${candle}` },
         b,
         bar,
         bars,

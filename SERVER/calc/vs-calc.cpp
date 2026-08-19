@@ -23,6 +23,7 @@
 #include <vector>
 #include <map>
 #include <algorithm>
+#include <cctype>
 #include <ctime>
 
 #ifdef _WIN32
@@ -98,6 +99,7 @@ struct Bar { double o{}, h{}, l{}, c{}; };
 struct Snap {
   std::string epic;
   std::string regime;
+  std::string bias;
   double bid{}, ask{}, mid{};
   std::vector<Bar> bars;
 };
@@ -128,6 +130,7 @@ static std::vector<Snap> parse_snaps(const std::string& json) {
     Snap s;
     s.epic = json_str(chunk, "epic");
     s.regime = json_str(chunk, "regime");
+    s.bias = json_str(chunk, "bias");
     s.bid = json_num(chunk, "bid");
     s.ask = json_num(chunk, "ask");
     s.mid = json_num(chunk, "mid");
@@ -153,6 +156,8 @@ static bool decide(const Snap& s, std::string* dir, std::string* why, double* ev
   const Bar& last = s.bars.back();
   std::string regime = s.regime;
   for (char& ch : regime) ch = (char)std::toupper((unsigned char)ch);
+  std::string bias = s.bias;
+  for (char& ch : bias) ch = (char)std::toupper((unsigned char)ch);
   bool down_ctx =
     regime.find("TREND_DOWN") != std::string::npos ||
     regime.find("BREAKOUT_DOWN") != std::string::npos ||
@@ -161,17 +166,41 @@ static bool decide(const Snap& s, std::string* dir, std::string* why, double* ev
     regime.find("TREND_UP") != std::string::npos ||
     regime.find("BREAKOUT_UP") != std::string::npos ||
     regime.find("PULLBACK_UP") != std::string::npos;
+  bool expand_ctx =
+    regime.find("EXPANSION") != std::string::npos ||
+    regime.find("COMPRESSION") != std::string::npos ||
+    regime.find("TRANSITION") != std::string::npos;
   double prev_c = s.bars.size() >= 2 ? s.bars[s.bars.size() - 2].c : last.o;
-  if (down_ctx && (last.c < last.o || last.c < prev_c)) {
+  bool dump = last.c < last.o || last.c < prev_c;
+  bool climb = last.c > last.o || last.c > prev_c;
+  if (down_ctx && dump) {
     *dir = "SELL";
     *ev_out = 0.2;
     *why = "regime " + s.regime + " follow dump";
     return true;
   }
-  if (up_ctx && (last.c > last.o || last.c > prev_c)) {
+  if (up_ctx && climb) {
     *dir = "BUY";
     *ev_out = 0.2;
     *why = "regime " + s.regime + " follow climb";
+    return true;
+  }
+  if (up_ctx && dump) {
+    *dir = "BUY";
+    *ev_out = 0.2;
+    *why = "regime " + s.regime + " dip buy";
+    return true;
+  }
+  if (expand_ctx && bias == "UP" && (dump || climb)) {
+    *dir = "BUY";
+    *ev_out = 0.2;
+    *why = std::string("regime ") + s.regime + " bias UP " + (dump ? "dip buy" : "follow climb");
+    return true;
+  }
+  if (expand_ctx && bias == "DOWN" && dump) {
+    *dir = "SELL";
+    *ev_out = 0.2;
+    *why = "regime " + s.regime + " bias DOWN follow dump";
     return true;
   }
   if (s.bars.size() < 4) return false;

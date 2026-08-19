@@ -5,6 +5,7 @@ import {
   decideFailedBreakout,
   decideRangeRejection,
   decideReversalConfirm,
+  denyWithTrendEntry,
   mergeTrendBias,
   trendBiasFromBars,
   trendBiasFromMinuteCandles,
@@ -158,6 +159,29 @@ describe('10s + regime-as-CONTEXT suitable entry', () => {
     };
     expect(decideEntryFrom10sRegime(goldDump, 'TREND_DOWN', 'DOWN')?.direction).toBe('SELL');
     expect(decideEntryFrom10sRegime(goldDump, 'UNKNOWN', 'FLAT')?.direction).toBe('SELL');
+  });
+
+  it('EXPANSION + bias UP + dump bar BUYs the dip (desk order, not SCAN)', () => {
+    const goldDump: TenSecBar = {
+      open_time_ms: 0,
+      open: 4346.42,
+      high: 4346.42,
+      low: 4345.25,
+      close: 4345.25,
+      ticks: 12,
+    };
+    const recent = [...dumpBars(6, 4348, 0.2), goldDump];
+    const hit = decideEntryFrom10sRegime(goldDump, 'EXPANSION', 'UP', recent);
+    expect(hit?.direction).toBe('BUY');
+    expect(hit?.setup).toBe('PULLBACK');
+    expect(
+      denyWithTrendEntry('BUY', goldDump, 'UP', recent)
+    ).toBeNull();
+  });
+
+  it('EXPANSION + bias DOWN follows the dump, never sells a green bar', () => {
+    expect(decideEntryFrom10sRegime(dip, 'EXPANSION', 'DOWN')?.direction).toBe('SELL');
+    expect(decideEntryFrom10sRegime(rally, 'EXPANSION', 'DOWN')).toBeNull();
   });
 });
 
