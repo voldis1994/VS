@@ -1,12 +1,6 @@
 #Requires -Version 5.1
-<#
-.SYNOPSIS
-  Full MSI rebuild: STOP, git pull main, npm install, build calc/desk/client, START.
-
-  Optional env:
-    VS_REBUILD_CLEAN=1        delete node_modules before npm install
-    VS_REBUILD_SKIP_PULL=1    skip git pull
-#>
+# Full MSI rebuild: STOP, git pull main, npm install, build calc/desk/client, START.
+# Optional: VS_REBUILD_CLEAN=1  VS_REBUILD_SKIP_PULL=1
 $ErrorActionPreference = "Continue"
 $AdminRoot = Split-Path -Parent $PSScriptRoot
 $RepoRoot = Split-Path -Parent $AdminRoot
@@ -23,7 +17,7 @@ if ((Get-Location).Path -like "*legacy-review*" -or (Get-Location).Path -like "*
 }
 
 if (-not (Test-Path (Join-Path $RepoRoot "ADMIN\windows\start-admin.ps1"))) {
-  Write-Fail "not VS repo root - run from C:\VS"
+  Write-Fail "not VS repo root - run from C:\VS or C:\VS-main"
 }
 
 function Invoke-NpmInstall {
@@ -61,20 +55,24 @@ Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
 Write-Host ""
 Write-Host "[2/6] GIT - pull origin main..."
 $git = Get-Command git -ErrorAction SilentlyContinue
-if ($git -and $env:VS_REBUILD_SKIP_PULL -ne "1") {
+$gitDir = Join-Path $RepoRoot ".git"
+if ($git -and $env:VS_REBUILD_SKIP_PULL -ne "1" -and (Test-Path $gitDir)) {
   & git fetch origin main 2>&1 | Out-Host
   & git checkout main 2>&1 | Out-Host
   & git pull origin main 2>&1 | Out-Host
   if ($LASTEXITCODE -ne 0) {
     Write-Host "WARN: git pull failed - continuing with local files" -ForegroundColor Yellow
-  }
-  else {
+  } else {
     $head = (& git log -1 --oneline 2>$null | Out-String).Trim()
     Write-Host ("  at " + $head) -ForegroundColor Green
   }
-}
-else {
-  Write-Host "  skip pull (no git or VS_REBUILD_SKIP_PULL=1)"
+} else {
+  if (-not (Test-Path $gitDir)) {
+    Write-Host "  WARN: not a git repo (.git missing) - skip pull" -ForegroundColor Yellow
+    Write-Host "  Run SETUP_GIT.bat once, or clone: git clone https://github.com/voldis1994/VS C:\VS"
+  } else {
+    Write-Host "  skip pull (VS_REBUILD_SKIP_PULL=1)"
+  }
 }
 
 $node = Get-Command node -ErrorAction SilentlyContinue
@@ -115,8 +113,7 @@ Push-Location $calcDir
 Pop-Location
 if (-not (Test-Path $calcExe)) {
   Write-Host "WARN: vs-calc.exe missing - install MinGW g++ or MSVC" -ForegroundColor Yellow
-}
-else {
+} else {
   Write-Host ("  OK " + $calcExe) -ForegroundColor Green
 }
 
@@ -144,5 +141,6 @@ if ($clientCode -ne 0) { Write-Fail "CLIENT web vite build failed" }
 
 Write-Host ""
 Write-Host "[6/6] START - Docker + Control API + vs-calc + gateway..."
-& (Join-Path $PSScriptRoot "start-admin.ps1")
+$startAdmin = Join-Path $PSScriptRoot "start-admin.ps1"
+& $startAdmin
 exit $LASTEXITCODE
