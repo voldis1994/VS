@@ -1363,6 +1363,44 @@ export function computeMarketProfitTrailStopLevel(
   return stopLevel;
 }
 
+/** Lock this fraction of peak favorable move (MFE) once in profit. */
+export const PROFIT_LOCK_RATIO = 0.75;
+
+/**
+ * Stop level that keeps `protectRatio` of peak profit (MFE).
+ * Example: BUY entry 2490, MFE +6 → stop ≈ 2494.5 (locks 75% = 4.5 pts).
+ */
+export function computeProfitLockStopLevel(
+  direction: 'BUY' | 'SELL',
+  entry: number,
+  mfe: number,
+  mid: number,
+  opts?: { protectRatio?: number; minStopDistance?: number | null }
+): number | null {
+  const ratio = opts?.protectRatio ?? PROFIT_LOCK_RATIO;
+  if (!Number.isFinite(entry) || !Number.isFinite(mfe) || mfe <= 0) return null;
+  if (!Number.isFinite(mid) || mid <= 0) return null;
+  if (ratio <= 0 || ratio > 1) return null;
+
+  const locked = mfe * ratio;
+  const rawStop = direction === 'BUY' ? entry + locked : entry - locked;
+  if (!Number.isFinite(rawStop)) return null;
+
+  const stopLevel = quantizePrice(rawStop);
+
+  if (direction === 'BUY') {
+    if (stopLevel <= entry || stopLevel >= mid) return null;
+    const minDist = opts?.minStopDistance;
+    if (minDist != null && minDist > 0 && stopLevel + 1e-9 > mid - minDist * 1.2) return null;
+  } else {
+    if (stopLevel >= entry || stopLevel <= mid) return null;
+    const minDist = opts?.minStopDistance;
+    if (minDist != null && minDist > 0 && stopLevel - 1e-9 < mid + minDist * 1.2) return null;
+  }
+
+  return stopLevel;
+}
+
 export type CapitalPriceCandle = {
   open: number;
   high: number;

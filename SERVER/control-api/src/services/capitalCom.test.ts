@@ -192,3 +192,28 @@ describe('Capital marketStatus + openingHours', () => {
     expect(effectiveCapitalMarketStatus(json, new Date('2026-08-18T21:19:00Z'))).toBe('CLOSED');
   });
 });
+
+describe('computeProfitLockStopLevel', () => {
+  it('BUY locks 75% of MFE below mid', async () => {
+    const { computeProfitLockStopLevel, PROFIT_LOCK_RATIO } = await import('./capitalCom.js');
+    expect(PROFIT_LOCK_RATIO).toBe(0.75);
+    const entry = 2490;
+    const mfe = 6;
+    const mid = 2496;
+    const stop = computeProfitLockStopLevel('BUY', entry, mfe, mid, { minStopDistance: 0.5 });
+    expect(stop).toBeCloseTo(2494.5, 1);
+    expect(stop!).toBeGreaterThan(entry);
+    expect(stop!).toBeLessThan(mid);
+  });
+
+  it('SELL locks 75% of MFE above mid', async () => {
+    const { computeProfitLockStopLevel } = await import('./capitalCom.js');
+    const entry = 2496;
+    const mfe = 6;
+    const mid = 2490;
+    const stop = computeProfitLockStopLevel('SELL', entry, mfe, mid, { minStopDistance: 0.5 });
+    expect(stop).toBeCloseTo(2491.5, 1);
+    expect(stop!).toBeLessThan(entry);
+    expect(stop!).toBeGreaterThan(mid);
+  });
+});

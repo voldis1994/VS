@@ -8,6 +8,7 @@ import {
   computeSafetyCushionStopLevel,
   computeMarketBehaviorStopLevel,
   computeMarketProfitTrailStopLevel,
+  computeProfitLockStopLevel,
   fetchCapitalMarketQuote,
   fetchCapitalMinutePrices,
   fetchCapitalPrices,
@@ -1993,24 +1994,34 @@ async function robotCycleBody(s: Internal) {
             lookback: 8,
           });
 
-          const canTrail =
-            profitTrail != null &&
-            ((s.open_side === 'BUY' && profitTrail > cur && profitTrail < px) ||
-              (s.open_side === 'SELL' && profitTrail < cur && profitTrail > px));
+          const profitLock = computeProfitLockStopLevel(s.open_side, entry, s.mfe, px, {
+            minStopDistance: quote.min_stop_distance ?? null,
+          });
+
+          const candidates = [profitTrail, profitLock].filter(
+            (x): x is number => x != null && Number.isFinite(x)
+          );
+          const profitStop =
+            s.open_side === 'BUY'
+              ? candidates.filter((x) => x > cur && x < px).sort((a, b) => b - a)[0] ?? null
+              : candidates.filter((x) => x < cur && x > px).sort((a, b) => a - b)[0] ?? null;
+
+          const canTrail = profitStop != null;
 
           if (canTrail) {
-            const upd = await updateCapitalStop(opened.session, s.deal_id, profitTrail!, {
+            const upd = await updateCapitalStop(opened.session, s.deal_id, profitStop, {
               mid: quote.mid,
               pointSize: quote.point_size ?? null,
             });
             if (upd.ok) {
-              s.safety_sl = profitTrail!;
+              s.safety_sl = profitStop;
+              const lockNote = profitLock != null && profitStop === profitLock ? '75% MFE lock' : 'swing trail';
               pushTick(s, {
                 phase: 'MANAGE',
                 bid: quote.bid,
                 ask: quote.ask,
                 mid: quote.mid,
-                detail: `POST-BE PROFIT TRAIL SL ${cur} → ${profitTrail}`,
+                detail: `POST-BE PROFIT TRAIL SL ${cur} → ${profitStop} (${lockNote} · MFE ${s.mfe.toFixed(2)})`,
               });
             } else {
               pushTick(s, {
