@@ -34,6 +34,9 @@ export function resolveDeskEntry(input: {
   let setup: string | null = input.intendedSetup ?? null;
   let reason = input.intendedReason ?? '';
   const bias = input.bias || 'FLAT';
+  // When direction came from C++ EntryReady, do not override it with Node-side
+  // lag/leak heuristics — that would discard EV/transition formulas from calc.
+  const fromCalc = input.intended != null;
 
   if (!direction && input.bar) {
     const hit = decideEntryFrom10sRegime(
@@ -56,7 +59,7 @@ export function resolveDeskEntry(input: {
     if (!direction) {
       return { direction: lead.direction, setup: 'LAG_LEAD', reason: lead.reason };
     }
-    if (direction !== lead.direction) {
+    if (!fromCalc && direction !== lead.direction) {
       return {
         direction: lead.direction,
         setup: 'LAG_LEAD',
@@ -68,6 +71,11 @@ export function resolveDeskEntry(input: {
   if (direction && setup !== 'LAG_LEAD') {
     const stale = detectStaleQuoteAdverse(direction, input.capitalMid, input.refs);
     if (stale.block) {
+      // If C++ already gave an intended side, do not flip it; block the entry instead.
+      if (fromCalc) {
+        return { direction: null, setup: null, reason: `STALE_QUOTE_BLOCK · ${stale.reason}` };
+      }
+
       const flip: 'BUY' | 'SELL' = direction === 'BUY' ? 'SELL' : 'BUY';
       return {
         direction: flip,

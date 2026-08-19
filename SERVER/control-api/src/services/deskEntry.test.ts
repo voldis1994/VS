@@ -198,4 +198,19 @@ describe('resolveDeskEntry — BUY and SELL both fire', () => {
     expect(dump.direction).toBeNull();
     expect(climb.direction).toBeNull();
   });
+
+  it('when intended comes from C++ calc, lag-lead opposite does not flip; stale blocks entry', () => {
+    const e = resolveDeskEntry({
+      intended: 'BUY',
+      intendedSetup: 'CONTINUATION',
+      intendedReason: 'CALC EntryReady',
+      capitalMid: 100,
+      refs: [
+        { label: 'Gold-API spot (public)', mid: 99.8 },
+        { label: 'Coinbase spot (public)', mid: 99.8 },
+        { label: 'Kraken spot (public)', mid: 99.8 },
+      ],
+    });
+    expect(e.direction).toBeNull();
+  });
 });
