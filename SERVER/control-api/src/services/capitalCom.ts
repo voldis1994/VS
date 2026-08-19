@@ -972,7 +972,9 @@ export async function listCapitalOpenPositions(
       size: numOrNull(pos.size) ?? 0,
       open_level: numOrNull(pos.level ?? pos.openLevel ?? pos.averagePrice),
       upl: numOrNull(pos.upl ?? pos.unrealizedProfit ?? pos.profit),
-      stop_level: numOrNull(pos.stopLevel ?? pos.stop_level),
+      stop_level: numOrNull(
+        pos.stopLevel ?? pos.stop_level ?? pos.guaranteedStopLevel ?? pos.guaranteed_stop_level
+      ),
     });
   }
   return { ok: true, positions, detail: `${positions.length} open` };
@@ -1151,7 +1153,9 @@ export async function createCapitalPosition(
   };
 }
 
-/** Safety SL = 0.20% of instrument price (at least Capital min×2.5). */
+/** Safety SL = 0.25% of instrument price (0.00250). Visible on Gold 10s; Capital accepts it. */
+export const SAFETY_SL_REL = 0.0025;
+
 export function computeSafetyCushionStopLevel(
   direction: 'BUY' | 'SELL',
   mid: number,
@@ -1160,10 +1164,12 @@ export function computeSafetyCushionStopLevel(
     ask?: number | null;
     spread?: number | null;
     minStopDistance?: number | null;
+    loosen?: number;
   }
 ): number {
   const bid = opts?.bid ?? null;
   const ask = opts?.ask ?? null;
+  const loosen = Math.max(opts?.loosen ?? 1, 1);
   const ref =
     direction === 'BUY'
       ? bid != null && Number.isFinite(bid)
@@ -1181,9 +1187,9 @@ export function computeSafetyCushionStopLevel(
         : abs * 0.00005;
   const brokerMin =
     opts?.minStopDistance != null && opts.minStopDistance > 0 ? opts.minStopDistance : 0;
-  const pctCushion = abs * 0.025; // 2.5% of price
+  const pctCushion = abs * SAFETY_SL_REL;
   const floor = abs >= 1000 ? 0.5 : abs >= 100 ? 0.25 : abs >= 10 ? 0.05 : 0.0005;
-  const dist = Math.max(pctCushion, brokerMin * 2.5, spr * 8, floor);
+  const dist = Math.max(pctCushion, brokerMin * 2.5, spr * 8, floor) * loosen;
   const raw = direction === 'BUY' ? ref - dist : ref + dist;
   if (abs >= 1000) return Math.round(raw * 10) / 10;
   if (abs >= 100) return Math.round(raw * 100) / 100;

@@ -5,10 +5,12 @@ import {
   closeCapitalPosition,
   confirmCapitalDeal,
   createCapitalPosition,
+  computeSafetyCushionStopLevel,
   fetchCapitalMarketQuote,
   fetchCapitalMinutePrices,
   fetchCapitalPrices,
   listCapitalOpenPositions,
+  SAFETY_SL_REL,
   updateCapitalStop,
   type CapitalMarketQuote,
   type CapitalOpenPosition,
@@ -506,7 +508,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     git_sha: build.git_sha,
     entry_brain: build.entry_brain,
     chain: 'C++ calc EntryReady → robotDesk Capital hands (Node does not choose BUY/SELL)',
-    note: `BUILD ${build.git_sha} · calc + hands · regime=context · SL=0.20% of price · ${build.trend_minutes}-min`,
+    note: `BUILD ${build.git_sha} · calc + hands · regime=context · SL=0.25% of price (0.00250) · ${build.trend_minutes}-min`,
   };
 }
 
@@ -556,7 +558,7 @@ function clearTradeState(s: Internal) {
 }
 
 /**
- * Safety SL = 0.20% of price (at least Capital min×2.5 so broker accepts it).
+ * Safety SL = 0.25% of price / 0.00250 (at least Capital min×2.5 so broker accepts it).
  */
 function safetyStopLevel(
   direction: 'BUY' | 'SELL',
@@ -567,46 +569,23 @@ function safetyStopLevel(
   minStopDistance: number | null,
   loosen = 1
 ): number {
-  const ref =
-    direction === 'BUY'
-      ? bid != null && Number.isFinite(bid)
-        ? bid
-        : mid
-      : ask != null && Number.isFinite(ask)
-        ? ask
-        : mid;
-  const abs = Math.max(Math.abs(ref), 1e-9);
-  const spr =
-    spread != null && Number.isFinite(spread) && spread > 0
-      ? spread
-      : bid != null && ask != null
-        ? Math.max(ask - bid, 0)
-        : abs * 0.00005;
-
-  const pctCushion = abs * 0.025; // 2.5% of price
-  const brokerMin =
-    minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
-      ? minStopDistance
-      : 0;
-  const floor = abs >= 1000 ? 0.5 : abs >= 100 ? 0.25 : abs >= 10 ? 0.05 : abs >= 1 ? 0.0005 : 0.00005;
-  const dist =
-    Math.max(pctCushion, brokerMin * 2.5, spr * 8, floor) * Math.max(loosen, 1);
-
-  const raw = direction === 'BUY' ? ref - dist : ref + dist;
-  if (abs >= 1000) return Math.round(raw * 10) / 10;
-  if (abs >= 100) return Math.round(raw * 100) / 100;
-  if (abs >= 1) return Math.round(raw * 10000) / 10000;
-  return Math.round(raw * 1e6) / 1e6;
+  return computeSafetyCushionStopLevel(direction, mid, {
+    bid,
+    ask,
+    spread,
+    minStopDistance,
+    loosen,
+  });
 }
 
-/** stopDistance from 2.5% of price (≥ 2.5× Capital min points). */
+/** stopDistance from 0.25% of price (≥ 2.5× Capital min points). */
 function safetyStopDistancePts(
   mid: number,
   minPts: number,
   pointSize: number | null
 ): number {
   const abs = Math.max(Math.abs(mid), 1e-9);
-  const pct = abs * 0.025;
+  const pct = abs * SAFETY_SL_REL;
   let fromPct = minPts * 2.5;
   if (pointSize != null && pointSize > 0) {
     fromPct = Math.max(fromPct, pct / pointSize);
@@ -1284,7 +1263,7 @@ async function enterTrade(
               ask: quote.ask,
               mid: quote.mid,
               code: DecisionCodes.ORDER_SUBMITTING,
-              detail: `SL 0.20% stopDistance=${stopDistance} pts (Capital min=${minPts} · ~level ${
+              detail: `SL 0.25% stopDistance=${stopDistance} pts (Capital min=${minPts} · ~level ${
                 expect ?? 'n/a'
               } · x${loosen})`,
             });
@@ -1332,7 +1311,7 @@ async function enterTrade(
             ask: quote.ask,
             mid: quote.mid,
             code: DecisionCodes.ORDER_SUBMITTING,
-            detail: `SL 0.20% try stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
+            detail: `SL 0.25% try stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
               minPrice ?? 'n/a'
             } · spread=${quote.spread ?? 'n/a'} · x${loosen})`,
           });
@@ -1745,6 +1724,9 @@ async function robotCycleBody(s: Internal) {
         if (!s.entry_at) s.entry_at = new Date().toISOString();
         s.mode = 'MANAGE';
         if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
+        if (brokerOpen.stop_level != null && Number.isFinite(brokerOpen.stop_level)) {
+          s.safety_sl = brokerOpen.stop_level;
+        }
         try {
           if (getDurableOrderStore().isClosePending(s.account_id, s.epic)) {
             s.close_pending = true;
@@ -1827,9 +1809,57 @@ async function robotCycleBody(s: Internal) {
       s.mode = 'MANAGE';
       if (quote.mid == null) return;
 
-      // One-shot: pull already-open SL in to 0.20% of price
-      if (!s.sl_tighten_done && s.deal_id && s.open_side && quote.mid != null) {
-        s.sl_tighten_done = true;
+      // Attach 0.25% safety SL if Capital has none; otherwise one-shot tighten.
+      const brokerStop = brokerOpen?.stop_level ?? null;
+      const missingBrokerSl =
+        Boolean(s.deal_id) &&
+        Boolean(s.open_side) &&
+        (brokerStop == null || !Number.isFinite(brokerStop));
+      if (missingBrokerSl && s.deal_id && s.open_side && quote.mid != null) {
+        const loosenStepsAttach = [1, 1.08, 1.16, 1.28];
+        let attached = false;
+        for (const loosen of loosenStepsAttach) {
+          const level = safetyStopLevel(
+            s.open_side,
+            quote.mid,
+            quote.bid ?? null,
+            quote.ask ?? null,
+            quote.spread ?? null,
+            quote.min_stop_distance ?? null,
+            loosen
+          );
+          const upd = await updateCapitalStop(opened.session, s.deal_id, level);
+          if (upd.ok) {
+            s.safety_sl = level;
+            attached = true;
+            pushTick(s, {
+              phase: 'INFO',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `SAFETY SL attached ${level} · 0.25% (0.00250) · x${loosen}`,
+            });
+            break;
+          }
+          pushTick(s, {
+            phase: 'INFO',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `SAFETY SL attach x${loosen} skipped: ${upd.detail}`,
+          });
+        }
+        if (!attached) {
+          pushTick(s, {
+            phase: 'ERROR',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            code: DecisionCodes.BLOCKED_TECHNICAL,
+            detail: 'BLOCKED_TECHNICAL · open trade has no Capital SL — retry next cycle',
+          });
+        }
+      } else if (!s.sl_tighten_done && s.deal_id && s.open_side && quote.mid != null) {
         const tighter = safetyStopLevel(
           s.open_side,
           quote.mid,
@@ -1839,13 +1869,14 @@ async function robotCycleBody(s: Internal) {
           quote.min_stop_distance ?? null,
           1
         );
-        const cur = s.safety_sl;
+        const cur = s.safety_sl ?? brokerStop;
         const px = quote.mid;
         const canTighten =
           cur != null &&
           Number.isFinite(cur) &&
           ((s.open_side === 'BUY' && tighter > cur && tighter < px) ||
             (s.open_side === 'SELL' && tighter < cur && tighter > px));
+        s.sl_tighten_done = true;
         if (canTighten) {
           const upd = await updateCapitalStop(opened.session, s.deal_id, tighter);
           if (upd.ok) {
@@ -1855,9 +1886,10 @@ async function robotCycleBody(s: Internal) {
               bid: quote.bid,
               ask: quote.ask,
               mid: quote.mid,
-              detail: `SL tightened ${cur} → ${tighter} (0.20% of price)`,
+              detail: `SL tightened ${cur} → ${tighter} (0.25% of price)`,
             });
           } else {
+            s.sl_tighten_done = false;
             pushTick(s, {
               phase: 'INFO',
               bid: quote.bid,
@@ -2294,7 +2326,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: closed 10s picks BUY/SELL · robotDesk opens Capital · SL = 0.20% · max 1 open',
+      'Rules: closed 10s picks BUY/SELL · robotDesk opens Capital · SL = 0.25% (0.00250) · max 1 open',
   });
 
   sessions.set(id, session);

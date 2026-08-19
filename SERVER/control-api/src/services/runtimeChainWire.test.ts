@@ -15,6 +15,10 @@ describe('P3 runtime call-chain wiring', () => {
     expect(src).not.toContain('alreadyTriedBar');
     expect(src).not.toContain('evaluateStrategy({');
     expect(src).not.toContain("import { runTradePipeline } from './tradePipeline.js'");
+    expect(src).toContain('SAFETY SL attached');
+    expect(src).toContain('SAFETY_SL_REL');
+    const cap = readFileSync(join(process.cwd(), 'src/services/capitalCom.ts'), 'utf8');
+    expect(cap).toContain('export const SAFETY_SL_REL = 0.0025');
     const desk = readFileSync(join(process.cwd(), 'src/services/deskEntry.ts'), 'utf8');
     expect(desk).toContain('decideEntryFrom10sRegime');
     expect(desk).toContain('detectCapitalLagLead');

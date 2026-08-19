@@ -341,7 +341,7 @@ export function ClientPanelPage() {
             <div className="ccp-client">{status?.client_name || '…'}</div>
             {status?.git_sha && (
               <div className="ccp-build">
-                BUILD {status.git_sha} · {status.entry_brain || 'node-robot-desk'} · SL 0.20% of price
+                BUILD {status.git_sha} · {status.entry_brain || 'node-robot-desk'} · SL 0.25% of price (0.00250)
               </div>
             )}
           </div>

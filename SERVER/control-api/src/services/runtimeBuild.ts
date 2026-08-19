@@ -63,7 +63,7 @@ export function runtimeBuildInfo() {
     build_time: buildTimeIso(),
     strategy_version: STRATEGY_VERSION,
     status: 'ok',
-    sl: '2.5%-of-price',
+    sl: '0.25%-of-price',
     trend_minutes: TREND_LOOKBACK_MINUTES,
     entry_brain: 'node-robot-desk',
     /** Proof this Node build unlocks with-trend entries when classifier says UNKNOWN. */
