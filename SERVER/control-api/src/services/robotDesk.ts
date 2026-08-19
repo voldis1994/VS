@@ -254,7 +254,7 @@ async function refreshCrossMarket(session: CapitalSession, s: Internal): Promise
            OR display_name ILIKE ANY($3::text[])
          )
        ORDER BY display_name ASC
-       LIMIT 12`,
+       LIMIT 16`,
       [s.connection_id, s.epic, like]
     );
     rows = q.rows as Array<{ epic: string; display_name: string }>;

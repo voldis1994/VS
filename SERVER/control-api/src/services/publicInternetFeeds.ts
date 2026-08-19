@@ -68,15 +68,23 @@ export function epicToYahooSymbol(epic: string): string | null {
   if (/(^|[^A-Z])XAG|SILVER/.test(s) || s.startsWith('SILVER')) return 'SI=F';
   if (/PLATINUM|XPT/.test(s)) return 'PL=F';
   if (/PALLADIUM|XPD/.test(s)) return 'PA=F';
-  if (/BRENT|UKOIL|OIL_BRENT/.test(s)) return 'BZ=F';
-  if (/WTI|USOIL|CRUDE|OIL/.test(s)) return 'CL=F';
-  if (/BTC/.test(s)) return 'BTC-USD';
-  if (/ETH/.test(s)) return 'ETH-USD';
-  if (/US500|SPX|SP500|SPY/.test(s)) return '^GSPC';
-  if (/US100|NDX|NAS100|USTECH/.test(s)) return '^NDX';
-  if (/US30|DJ30|DOW|DJI/.test(s)) return '^DJI';
-  if (/DE40|DAX/.test(s)) return '^GDAXI';
+  if (/BRENT|UKOIL|OILBRENT/.test(s)) return 'BZ=F';
+  if (/WTI|USOIL|CRUDE|OILWTI|OILCRUDE/.test(s)) return 'CL=F';
+  if (/OIL\b/.test(s) && !/SILVER|GOLD/.test(s)) return 'CL=F';
+  if (/NATGAS|NATURALGAS|NGAS/.test(s)) return 'NG=F';
+  if (/BTC|BITCOIN/.test(s)) return 'BTC-USD';
+  if (/ETH|ETHEREUM/.test(s)) return 'ETH-USD';
+  if (/US500|SPX|SP500|SPY|SNP|SANDP/.test(s)) return '^GSPC';
+  if (/US100|NDX|NAS100|USTECH|NASDAQ/.test(s)) return '^NDX';
+  if (/US30|DJ30|DOW|DJI|WALLSTREET30/.test(s)) return '^DJI';
+  if (/US2000|RUSSELL|RTY/.test(s)) return '^RUT';
+  if (/GER40|DE40|DAX/.test(s)) return '^GDAXI';
+  if (/FRA40|CAC/.test(s)) return '^FCHI';
   if (/UK100|FTSE/.test(s)) return '^FTSE';
+  if (/EU50|STOXX|EUROSTOXX/.test(s)) return '^STOXX50E';
+  if (/JP225|JPN225|NIKKEI/.test(s)) return '^N225';
+  if (/HK50|HSI|HANGSENG/.test(s)) return '^HSI';
+  if (/AUS200|ASX200/.test(s)) return '^AXJO';
 
   const majors = ['EUR', 'USD', 'GBP', 'JPY', 'CHF', 'AUD', 'CAD', 'NZD'];
   for (const a of majors) {
@@ -113,10 +121,8 @@ export function epicToCoinbaseProduct(epic: string): string | null {
   const s = norm(epic);
   if (/(^|[^A-Z])XAU|GOLD/.test(s) || s.startsWith('GOLD')) return 'PAXG-USD';
   if (/(^|[^A-Z])XAG|SILVER/.test(s) || s.startsWith('SILVER')) return null;
-  if (/BTC/.test(s) && /USD|USDT|USDC/.test(s)) return 'BTC-USD';
-  if (/ETH/.test(s) && /USD|USDT|USDC/.test(s)) return 'ETH-USD';
-  if (s === 'BTC' || s === 'BTCUSD') return 'BTC-USD';
-  if (s === 'ETH' || s === 'ETHUSD') return 'ETH-USD';
+  if (/BTC|BITCOIN/.test(s)) return 'BTC-USD';
+  if (/ETH|ETHEREUM/.test(s)) return 'ETH-USD';
   return null;
 }
 
@@ -132,8 +138,8 @@ export function epicToGoldApiSymbol(epic: string): string | null {
 export function epicToKrakenPair(epic: string): string | null {
   const s = norm(epic);
   if (/(^|[^A-Z])XAU|GOLD/.test(s) || s.startsWith('GOLD')) return 'PAXGUSD';
-  if (/BTC/.test(s)) return 'XBTUSD';
-  if (/ETH/.test(s)) return 'ETHUSD';
+  if (/BTC|BITCOIN/.test(s)) return 'XBTUSD';
+  if (/ETH|ETHEREUM/.test(s)) return 'ETHUSD';
   const pair = epicToFxPair(epic);
   if (pair) return `${pair.from}${pair.to}`;
   return null;
@@ -142,16 +148,16 @@ export function epicToKrakenPair(epic: string): string | null {
 export function epicToKucoinSymbol(epic: string): string | null {
   const s = norm(epic);
   if (/(^|[^A-Z])XAU|GOLD/.test(s) || s.startsWith('GOLD')) return 'PAXG-USDT';
-  if (/BTC/.test(s)) return 'BTC-USDT';
-  if (/ETH/.test(s)) return 'ETH-USDT';
+  if (/BTC|BITCOIN/.test(s)) return 'BTC-USDT';
+  if (/ETH|ETHEREUM/.test(s)) return 'ETH-USDT';
   return null;
 }
 
 export function epicToBinanceUsSymbol(epic: string): string | null {
   const s = norm(epic);
   if (/(^|[^A-Z])XAU|GOLD/.test(s) || s.startsWith('GOLD')) return 'PAXGUSDT';
-  if (/BTC/.test(s)) return 'BTCUSDT';
-  if (/ETH/.test(s)) return 'ETHUSDT';
+  if (/BTC|BITCOIN/.test(s)) return 'BTCUSDT';
+  if (/ETH|ETHEREUM/.test(s)) return 'ETHUSDT';
   return null;
 }
 
@@ -167,21 +173,30 @@ export function epicToFawazMetal(epic: string): 'xau' | 'xag' | 'xpt' | 'xpd' | 
 export function epicToCoinGeckoId(epic: string): string | null {
   const s = norm(epic);
   if (/(^|[^A-Z])XAU|GOLD/.test(s) || s.startsWith('GOLD')) return 'pax-gold';
-  if (/BTC/.test(s)) return 'bitcoin';
-  if (/ETH/.test(s)) return 'ethereum';
+  if (/BTC|BITCOIN/.test(s)) return 'bitcoin';
+  if (/ETH|ETHEREUM/.test(s)) return 'ethereum';
   return null;
 }
+
+const BITSTAMP_FX = new Set([
+  'eurusd',
+  'gbpusd',
+  'usdchf',
+  'usdjpy',
+  'audusd',
+  'usdcad',
+  'nzdusd',
+]);
 
 export function epicToBitstampPair(epic: string): string | null {
   const s = norm(epic);
   if (/(^|[^A-Z])XAU|GOLD/.test(s) || s.startsWith('GOLD')) return 'paxgusd';
-  if (/BTC/.test(s)) return 'btcusd';
-  if (/ETH/.test(s)) return 'ethusd';
+  if (/BTC|BITCOIN/.test(s)) return 'btcusd';
+  if (/ETH|ETHEREUM/.test(s)) return 'ethusd';
   const pair = epicToFxPair(epic);
   if (!pair) return null;
   const p = `${pair.from}${pair.to}`.toLowerCase();
-  if (p === 'eurusd' || p === 'gbpusd') return p;
-  return null;
+  return BITSTAMP_FX.has(p) ? p : null;
 }
 
 /** N/A = this sender has no mapping for the focused epic (IDLE, not ERROR). */

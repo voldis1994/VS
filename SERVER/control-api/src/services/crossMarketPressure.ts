@@ -4,6 +4,12 @@
  * not only extra gold feeds (Yahoo vs Capital vs Aurum).
  */
 
+import {
+  crossMarketNeedles,
+  detectMarketClass,
+  type MarketAssetClass,
+} from './marketAssetClass.js';
+
 export type RelatedQuote = {
   epic: string;
   display_name?: string;
@@ -18,6 +24,7 @@ export type CrossMarketPressure = {
   against: boolean;
   detail: string;
   refs: string[];
+  asset_class?: MarketAssetClass;
 };
 
 const lastMid = new Map<string, number>();
@@ -35,41 +42,99 @@ export function resetCrossMarketForTests(): void {
   lastMid.clear();
 }
 
+/** Capital catalog ILIKE needles for related instruments. */
 export function relatedSearchNeedles(epic: string, displayName = ''): string[] {
-  const blob = `${epic} ${displayName}`.toUpperCase();
-  if (/XAU|GOLD/.test(blob)) {
-    // Other instruments only — extra gold EPICs would crowd out DXY/oil/silver.
-    return ['XAG', 'SILVER', 'OIL', 'BRENT', 'WTI', 'US500', 'NAS', 'US100', 'DOLLAR', 'DXY', 'EURUSD'];
-  }
-  if (/XAG|SILVER/.test(blob)) {
-    return ['XAU', 'GOLD', 'OIL', 'EURUSD', 'US500', 'DXY'];
-  }
-  if (/OIL|BRENT|WTI|CRUDE/.test(blob)) {
-    return ['XAU', 'GOLD', 'US500', 'EURUSD', 'DXY'];
-  }
-  if (/EURUSD|GBPUSD|USDJPY|DOLLAR|DXY/.test(blob)) {
-    return ['EURUSD', 'DXY', 'USDJPY', 'US500', 'XAU', 'GOLD'];
-  }
-  if (/US500|US100|NAS|SPX|DAX|GER/.test(blob)) {
-    return ['US500', 'NAS', 'US100', 'XAU', 'OIL', 'EURUSD'];
-  }
-  return [];
+  return crossMarketNeedles(epic, displayName);
 }
 
-function weightForRelated(targetBlob: string, relatedBlob: string): number {
-  const t = targetBlob.toUpperCase();
-  const r = relatedBlob.toUpperCase();
-  if (/XAU|GOLD/.test(t)) {
-    if (/XAG|SILVER/.test(r)) return 0.35;
-    if (/OIL|BRENT|WTI/.test(r)) return 0.2;
-    if (/US500|NAS|US100/.test(r)) return 0.15;
-    if (/EURUSD/.test(r)) return 0.25;
-    if (/DXY|DOLLAR|USDJPY/.test(r)) return -0.3;
-    if (/XAU|GOLD/.test(r)) return 0;
+function relBlob(s: string): string {
+  return s.toUpperCase();
+}
+
+function weightForRelated(targetClass: MarketAssetClass, targetBlob: string, relatedBlob: string): number {
+  const t = relBlob(targetBlob);
+  const r = relBlob(relatedBlob);
+
+  if (targetClass === 'gold' && /XAU|GOLD/.test(r)) return 0;
+  if (targetClass === 'silver' && /XAG|SILVER/.test(r)) return 0;
+  if (targetClass === 'crypto' && /BTC/.test(t) && /BTC/.test(r)) return 0;
+  if (targetClass === 'crypto' && /ETH/.test(t) && /ETH/.test(r)) return 0;
+
+  switch (targetClass) {
+    case 'gold':
+      if (/XAG|SILVER/.test(r)) return 0.35;
+      if (/OIL|BRENT|WTI/.test(r)) return 0.2;
+      if (/US500|NAS|US100|US30/.test(r)) return 0.15;
+      if (/EURUSD|GBPUSD|AUDUSD|NZDUSD/.test(r)) return 0.25;
+      if (/DXY|DOLLAR|USDJPY|USDCHF/.test(r)) return -0.3;
+      break;
+    case 'silver':
+      if (/XAU|GOLD/.test(r)) return 0.4;
+      if (/OIL|BRENT|WTI/.test(r)) return 0.15;
+      if (/US500|NAS/.test(r)) return 0.12;
+      if (/EURUSD/.test(r)) return 0.2;
+      if (/DXY|USDJPY/.test(r)) return -0.25;
+      break;
+    case 'platinum':
+    case 'palladium':
+      if (/XAU|GOLD/.test(r)) return 0.35;
+      if (/XAG|SILVER/.test(r)) return 0.25;
+      if (/OIL/.test(r)) return 0.15;
+      if (/EURUSD/.test(r)) return 0.15;
+      break;
+    case 'oil_wti':
+    case 'oil_brent':
+      if (/US500|NAS|US100/.test(r)) return 0.25;
+      if (/XAU|GOLD/.test(r)) return 0.15;
+      if (/EURUSD|DXY/.test(r)) return 0.2;
+      if (/NATGAS|NGAS/.test(r)) return 0.15;
+      if (targetClass === 'oil_wti' && /BRENT|UKOIL/.test(r)) return 0.3;
+      if (targetClass === 'oil_brent' && /WTI|USOIL/.test(r)) return 0.3;
+      break;
+    case 'natgas':
+      if (/OIL|WTI|BRENT/.test(r)) return 0.3;
+      if (/US500|NAS/.test(r)) return 0.15;
+      if (/EURUSD/.test(r)) return 0.15;
+      break;
+    case 'fx':
+      if (/DXY|DOLLAR/.test(r)) return 0.35;
+      if (/EURUSD|GBPUSD|USDJPY|USDCHF|AUDUSD/.test(r)) return 0.25;
+      if (/US500|NAS|US100/.test(r)) return 0.2;
+      if (/XAU|GOLD/.test(r)) return 0.15;
+      if (/OIL|BRENT|WTI/.test(r)) return 0.1;
+      break;
+    case 'index_us':
+      if (/US500|NAS|US100|US30|DOW|SPX/.test(r)) return 0.3;
+      if (/XAU|GOLD/.test(r)) return -0.1;
+      if (/OIL|BRENT|WTI/.test(r)) return 0.15;
+      if (/EURUSD|USDJPY/.test(r)) return 0.15;
+      if (/BTC|ETH/.test(r)) return 0.12;
+      break;
+    case 'index_eu':
+      if (/GER40|DAX|UK100|FTSE|EU50|STOXX/.test(r)) return 0.3;
+      if (/US500|NAS/.test(r)) return 0.25;
+      if (/EURUSD/.test(r)) return 0.2;
+      if (/XAU|GOLD/.test(r)) return -0.08;
+      break;
+    case 'index_asia':
+      if (/JP225|NIKKEI|HK50|HSI|AUS200/.test(r)) return 0.3;
+      if (/US500|NAS/.test(r)) return 0.2;
+      if (/USDJPY/.test(r)) return 0.25;
+      if (/XAU|GOLD/.test(r)) return -0.08;
+      break;
+    case 'crypto':
+      if (/BTC/.test(r) && !/BTC/.test(t)) return 0.35;
+      if (/ETH/.test(r) && !/ETH/.test(t)) return 0.35;
+      if (/US500|NAS|US100/.test(r)) return 0.2;
+      if (/XAU|GOLD/.test(r)) return 0.1;
+      if (/EURUSD|DXY/.test(r)) return 0.12;
+      break;
+    default:
+      if (/US500|NAS/.test(r)) return 0.15;
+      if (/EURUSD|XAU|GOLD|OIL/.test(r)) return 0.1;
+      break;
   }
-  if (/XAG|SILVER/.test(t) && /XAU|GOLD/.test(r)) return 0.4;
-  if (/OIL|BRENT|WTI/.test(t) && /US500|XAU/.test(r)) return 0.2;
-  return 0.1;
+  return 0.08;
 }
 
 export function computeCrossMarketPressure(input: {
@@ -80,6 +145,7 @@ export function computeCrossMarketPressure(input: {
 }): CrossMarketPressure {
   const target = String(input.targetEpic || '').trim();
   const blob = `${target} ${input.targetName || ''}`;
+  const assetClass = detectMarketClass(target, input.targetName);
   const refs: string[] = [];
   let num = 0;
   let den = 0;
@@ -87,7 +153,7 @@ export function computeCrossMarketPressure(input: {
     if (!q || q.mid == null || !Number.isFinite(q.mid) || q.mid <= 0) continue;
     const relBlob = `${q.epic} ${q.display_name || ''}`;
     if (String(q.epic).toUpperCase() === target.toUpperCase()) continue;
-    const w = weightForRelated(blob, relBlob);
+    const w = weightForRelated(assetClass, blob, relBlob);
     if (w === 0) continue;
     const ch = q.change;
     if (ch == null || !Number.isFinite(ch) || q.mid <= 0) continue;
@@ -104,9 +170,10 @@ export function computeCrossMarketPressure(input: {
       : input.side === 'SELL'
         ? pressure > 0.25
         : false;
+  const clsLabel = assetClass !== 'unknown' ? `${assetClass} · ` : '';
   const detail =
     refs.length === 0
-      ? 'NO CROSS-MARKET DATA'
-      : `pressure ${pressure.toFixed(2)} · ${against ? 'AGAINST' : 'ALIGNED'} ${input.side || 'FLAT'} · ${refs.slice(0, 6).join(', ')}`;
-  return { target, side: input.side, pressure, against, detail, refs };
+      ? `NO CROSS-MARKET DATA · ${clsLabel}pull Capital markets for related instruments`
+      : `${clsLabel}pressure ${pressure.toFixed(2)} · ${against ? 'AGAINST' : 'ALIGNED'} ${input.side || 'FLAT'} · ${refs.slice(0, 6).join(', ')}`;
+  return { target, side: input.side, pressure, against, detail, refs, asset_class: assetClass };
 }

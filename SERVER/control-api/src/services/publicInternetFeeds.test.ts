@@ -13,6 +13,7 @@ import {
   epicToYahooSymbol,
   fusePriceMids,
   publicFeedNotApplicable,
+  publicFeedsApplicable,
 } from './publicInternetFeeds.js';
 
 describe('public internet epic mapping', () => {
@@ -46,6 +47,29 @@ describe('public internet epic mapping', () => {
     expect(epicToYahooSymbol('BTCUSD')).toBe('BTC-USD');
     expect(epicToCoinbaseProduct('BTCUSD')).toBe('BTC-USD');
     expect(epicToBitstampPair('EURUSD')).toBe('eurusd');
+    expect(epicToBitstampPair('USDJPY')).toBe('usdjpy');
+    expect(epicToKrakenPair('GBPUSD')).toBe('GBPUSD');
+  });
+
+  it('maps indices and energy for major markets', () => {
+    expect(epicToYahooSymbol('US500')).toBe('^GSPC');
+    expect(epicToYahooSymbol('US100')).toBe('^NDX');
+    expect(epicToYahooSymbol('GER40')).toBe('^GDAXI');
+    expect(epicToYahooSymbol('JP225')).toBe('^N225');
+    expect(epicToYahooSymbol('USOIL')).toBe('CL=F');
+    expect(epicToYahooSymbol('UKOIL')).toBe('BZ=F');
+    expect(epicToYahooSymbol('NATURALGAS')).toBe('NG=F');
+    expect(publicFeedsApplicable('US500')).toBe(true);
+    expect(publicFeedsApplicable('EURUSD')).toBe(true);
+    expect(publicFeedsApplicable('SILVER')).toBe(true);
+    expect(publicFeedsApplicable('BTCUSD')).toBe(true);
+  });
+
+  it('silver gets metal feeds but not crypto token venues', () => {
+    expect(epicToYahooSymbol('SILVER')).toBe('SI=F');
+    expect(epicToGoldApiSymbol('SILVER')).toBe('XAG');
+    expect(epicToCoinbaseProduct('SILVER')).toBeNull();
+    expect(publicFeedsApplicable('SILVER')).toBe(true);
   });
 });
 

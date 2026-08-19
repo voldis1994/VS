@@ -18,6 +18,18 @@ describe('cross-market pressure on selected epic', () => {
     expect(n).not.toContain('GOLD');
   });
 
+  it('EURUSD gets FX cross-market needles', () => {
+    const n = relatedSearchNeedles('EURUSD', 'EUR/USD');
+    expect(n.join(' ')).toMatch(/US500|NAS/);
+    expect(n.join(' ')).toMatch(/XAU|GOLD/);
+  });
+
+  it('US500 gets index cross-market needles', () => {
+    const n = relatedSearchNeedles('US500', 'S&P 500');
+    expect(n.length).toBeGreaterThan(4);
+    expect(n.join(' ')).toMatch(/EURUSD|USDJPY/);
+  });
+
   it('dollar up (EURUSD down) pressures against BUY gold', () => {
     const p = computeCrossMarketPressure({
       targetEpic: 'XAUUSD',
@@ -28,6 +40,7 @@ describe('cross-market pressure on selected epic', () => {
     expect(p.against).toBe(true);
     expect(p.side).toBe('BUY');
     expect(p.pressure).toBeLessThan(0);
+    expect(p.asset_class).toBe('gold');
   });
 
   it('silver + oil up supports BUY gold', () => {
@@ -41,6 +54,17 @@ describe('cross-market pressure on selected epic', () => {
       ],
     });
     expect(p.against).toBe(false);
+    expect(p.pressure).toBeGreaterThan(0);
+  });
+
+  it('US500 up supports BUY US100', () => {
+    const p = computeCrossMarketPressure({
+      targetEpic: 'US100',
+      targetName: 'Nasdaq',
+      side: 'BUY',
+      related: [{ epic: 'US500', display_name: 'S&P', mid: 5500, change: 12 }],
+    });
+    expect(p.asset_class).toBe('index_us');
     expect(p.pressure).toBeGreaterThan(0);
   });
 
