@@ -7,6 +7,11 @@ import {
 } from './marketAssetClass.js';
 
 describe('marketAssetClass', () => {
+  it('detects ASX Ltd stock as equity not gold or index', () => {
+    expect(detectMarketClass('ASXAU', 'ASX Limited')).toBe('equity');
+    expect(detectMarketClass('GOLD', 'Gold')).toBe('gold');
+  });
+
   it('detects major asset classes from Capital epics', () => {
     expect(detectMarketClass('GOLD', 'Gold')).toBe('gold');
     expect(detectMarketClass('XAGUSD', 'Silver')).toBe('silver');
