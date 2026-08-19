@@ -1966,6 +1966,14 @@ async function robotCycleBody(s: Internal) {
       s.best_price_seen = bo.view.best_price_seen;
 
       if (bo.action === 'CLOSE' || bo.exit) {
+        pushTick(s, {
+          phase: 'DECIDE',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          code: DecisionCodes.SIGNAL_CREATED,
+          detail: `BEST OUTCOME CLOSE · ${bo.reason}`,
+        });
         await exitTrade(opened.session, s, quote, bo.reason);
         return;
       }

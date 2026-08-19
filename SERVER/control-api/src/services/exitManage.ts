@@ -1,4 +1,4 @@
-import { SAFETY_SL_REL } from './capitalCom.js';
+import { PROFIT_LOCK_RATIO, SAFETY_SL_REL } from './capitalCom.js';
 import { trendBiasFromBars, type TrendBias } from './entryFromRegime.js';
 import { bodyPct, type TenSecBar } from './tenSecondOhlc.js';
 
@@ -227,12 +227,9 @@ export function thesisFailureReason(
   return null;
 }
 
-/**
- * Exit brain — watches open trades and issues CLOSE on Best Outcome rules only.
- * Entry owns the initial Capital SL; exit never trails or moves SL.
- *
- * @param nowMs Evaluation clock — must be wall time at T (injectable for tests; no look-ahead).
- */
+/** Close when peak profit retention falls below this (locks PROFIT_LOCK_RATIO of MFE). */
+export const PEAK_RETENTION_EXIT_THRESHOLD = PROFIT_LOCK_RATIO;
+
 export type BestOutcomeAction = 'HOLD' | 'CLOSE';
 
 export type BestOutcome = {
@@ -315,6 +312,49 @@ export function evaluateBestOutcome(
   track.max_profit_seen = Math.max(track.max_profit_seen, s.mfe, fav);
   track.consecutive_adverse = countConsecutiveAdverse(side, bars);
 
+  const peakMfe = Math.max(s.mfe, track.max_profit_seen);
+  const retention = peakMfe > 0 ? Math.max(0, fav / peakMfe) : null;
+  const giveback = peakMfe > 0 ? Math.max(0, peakMfe - fav) : 0;
+  const mfeSignificant = significantMfe(entry, peakMfe);
+  const minDist =
+    opts?.minStopDistance != null && Number.isFinite(opts.minStopDistance) && opts.minStopDistance > 0
+      ? opts.minStopDistance
+      : 0;
+  const closeMove = breakevenTriggerMove(entry, minDist > 0 ? minDist : null);
+
+  // ——— Active Best Outcome exits (CLOSE, not SL trail) ———
+
+  // Never go negative after a meaningful favorable excursion.
+  if (mfeSignificant && peakMfe > 0 && fav <= 0) {
+    track.state = 'EXIT';
+    track.reason = `BestOutcome EXIT · breakeven guard · MFE ${peakMfe.toFixed(5)} → UPL ${fav.toFixed(5)}`;
+    return {
+      exit: true,
+      action: 'CLOSE',
+      reason: track.reason,
+      track,
+      view: buildView(s, mid, track),
+    };
+  }
+
+  // 75% MFE profit lock — close when giveback exceeds allowed retention (after real MFE).
+  if (
+    mfeSignificant &&
+    peakMfe + 1e-9 >= closeMove &&
+    retention != null &&
+    retention + 1e-9 < PEAK_RETENTION_EXIT_THRESHOLD
+  ) {
+    track.state = 'EXIT';
+    track.reason = `BestOutcome EXIT · profit lock ${(PEAK_RETENTION_EXIT_THRESHOLD * 100).toFixed(0)}% · retention ${(retention * 100).toFixed(0)}% · giveback ${giveback.toFixed(5)}`;
+    return {
+      exit: true,
+      action: 'CLOSE',
+      reason: track.reason,
+      track,
+      view: buildView(s, mid, track),
+    };
+  }
+
   const thesisFail = thesisFailureReason(side, ctx.regime ?? s.regime, s.entry_setup);
   if (thesisFail && fav <= 0) {
     track.state = 'EXIT';
@@ -334,14 +374,6 @@ export function evaluateBestOutcome(
     entryRegime != null && curRegime != null && entryRegime !== curRegime && curRegime !== 'UNKNOWN';
   const shortBias = bars.length >= 3 ? trendBiasFromBars(bars) : 'FLAT';
   const trendBias = (ctx.trend_bias ?? shortBias) as TrendBias;
-  const retention = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
-  const giveback = s.mfe > 0 ? Math.max(0, s.mfe - fav) : 0;
-  const mfeSignificant = significantMfe(entry, s.mfe);
-  const minDist =
-    opts?.minStopDistance != null && Number.isFinite(opts.minStopDistance) && opts.minStopDistance > 0
-      ? opts.minStopDistance
-      : 0;
-  const closeMove = breakevenTriggerMove(entry, minDist > 0 ? minDist : null);
   const entrySetup = String(s.entry_setup || '')
     .trim()
     .toUpperCase();
@@ -383,7 +415,7 @@ export function evaluateBestOutcome(
     holdNotes.push('inputs ended · waiting for confirmation');
   }
   if (mfeSignificant && retention != null && retention < 0.45 && fav > 0) {
-    exitScore += 1;
+    exitScore += 2;
     exitNotes.push(`retention ${(retention * 100).toFixed(0)}%`);
   }
   if (mfeSignificant && giveback > 0 && fav > 0 && bars.length >= 2 && !netFlowSupportsSide(side, bars)) {
@@ -428,7 +460,16 @@ export function evaluateBestOutcome(
     reason = holdNotes.length
       ? `tracking · ${holdNotes.slice(0, 2).join(' · ')}`
       : 'tracking · waiting for meaningful move';
-  } else if (exitScore >= 4 || (exitScore >= 3 && holdScore <= 1 && track.consecutive_adverse >= 2)) {
+  } else if (
+    exitScore >= 4 ||
+    (exitScore >= 3 && holdScore <= 1 && track.consecutive_adverse >= 2) ||
+    (mfeSignificant &&
+      exitScore >= 2 &&
+      track.consecutive_adverse >= 2 &&
+      retention != null &&
+      retention < 0.6) ||
+    (mfeSignificant && exitScore >= 3 && retention != null && retention < 0.7)
+  ) {
     state = 'EXIT';
     reason = `BestOutcome EXIT · ${exitNotes.join(' · ')}`;
     return {

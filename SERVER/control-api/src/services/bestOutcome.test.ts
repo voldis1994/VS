@@ -232,4 +232,57 @@ describe('Best Outcome — open position manage', () => {
     expect(c2.view.max_profit_seen).toBeGreaterThanOrEqual(4);
     expect(c2.track.state).not.toBe('EXIT');
   });
+
+  it('75% profit lock CLOSE when giveback exceeds 25% of MFE', () => {
+    const entry = 2490;
+    const track = initBestOutcomeTrack(entry);
+    track.best_price_seen = 2496;
+    track.max_profit_seen = 6;
+    const r = evaluateBestOutcome(
+      snap({ open_side: 'BUY', entry_price: entry, mfe: 6, regime: 'TREND_UP' }),
+      2493,
+      { closedBars: [bar(2495, 2494), bar(2494, 2493)], trend_bias: 'UP', regime: 'TREND_UP' },
+      track
+    );
+    expect(r.exit).toBe(true);
+    expect(r.action).toBe('CLOSE');
+    expect(r.reason).toMatch(/profit lock 75%/);
+  });
+
+  it('breakeven guard CLOSE when was in profit and UPL goes flat/negative', () => {
+    const entry = 2490;
+    const track = initBestOutcomeTrack(entry);
+    track.max_profit_seen = 3;
+    const r = evaluateBestOutcome(
+      snap({ open_side: 'BUY', entry_price: entry, mfe: 3, regime: 'TREND_UP' }),
+      2490,
+      { closedBars: [bar(2492, 2491), bar(2491, 2490)], trend_bias: 'DOWN', regime: 'TREND_DOWN' },
+      track
+    );
+    expect(r.exit).toBe(true);
+    expect(r.action).toBe('CLOSE');
+    expect(r.reason).toMatch(/breakeven guard/);
+  });
+
+  it('SELL symmetric 75% profit lock CLOSE', () => {
+    const entry = 2490;
+    const track = initBestOutcomeTrack(entry);
+    track.best_price_seen = 2484;
+    track.max_profit_seen = 6;
+    const r = evaluateBestOutcome(
+      snap({
+        open_side: 'SELL',
+        entry_price: entry,
+        mfe: 6,
+        regime: 'TREND_DOWN',
+        entry_regime: 'TREND_DOWN',
+      }),
+      2487,
+      { closedBars: [bar(2485, 2486), bar(2486, 2487)], trend_bias: 'DOWN', regime: 'TREND_DOWN' },
+      track
+    );
+    expect(r.exit).toBe(true);
+    expect(r.action).toBe('CLOSE');
+    expect(r.reason).toMatch(/profit lock 75%/);
+  });
 });

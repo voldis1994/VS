@@ -77,7 +77,7 @@ describe('Exit matrix A–P', () => {
     );
     expect(d.exit).toBe(true);
     expect(d.action).toBe('CLOSE');
-    expect(d.reason).toMatch(/inputs ended/i);
+    expect(d.reason).toMatch(/inputs ended|profit lock/i);
   });
 
   it('C1) Gold: plus with same regime HOLDs — exit does not trail SL', () => {
@@ -119,7 +119,7 @@ describe('Exit matrix A–P', () => {
     expect(d.action).toBe('HOLD');
   });
 
-  it('F) opposite regime does NOT close — tiny plus still HOLD', () => {
+  it('F) opposite regime with small plus still HOLD until profit lock threshold', () => {
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -130,8 +130,9 @@ describe('Exit matrix A–P', () => {
       }),
       2001
     );
-    expect(d.exit).toBe(false);
-    expect(d.action).toBe('HOLD');
+    expect(d.exit).toBe(true);
+    expect(d.action).toBe('CLOSE');
+    expect(d.reason).toMatch(/profit lock/i);
   });
 
   it('F2) opposite regime with no favorable move can CLOSE on thesis failure', () => {
@@ -426,7 +427,7 @@ describe('Exit helpers — LONG/SHORT symmetry', () => {
     expect(favorableMove('SELL', 2000, 1995)).toBe(5);
   });
 
-  it('plus trails SL to BE for SELL; minus does not close', () => {
+  it('plus gives back to loss on SELL → Best Outcome CLOSE (breakeven guard)', () => {
     const gave = decideBestOutcomeExit(
       snap({
         open_side: 'SELL',
@@ -438,8 +439,9 @@ describe('Exit helpers — LONG/SHORT symmetry', () => {
       }),
       2000.2
     );
-    expect(gave.exit).toBe(false);
-    expect(gave.action).toBe('HOLD');
+    expect(gave.exit).toBe(true);
+    expect(gave.action).toBe('CLOSE');
+    expect(gave.reason).toMatch(/breakeven guard/i);
 
     const peak = decideBestOutcomeExit(
       snap({
@@ -454,7 +456,7 @@ describe('Exit helpers — LONG/SHORT symmetry', () => {
     );
     expect(peak.exit).toBe(true);
     expect(peak.action).toBe('CLOSE');
-    expect(peak.reason).toMatch(/inputs ended/i);
+    expect(peak.reason).toMatch(/inputs ended|profit lock/i);
   });
 
   it('waits for 0.25% plus (not broker min-stop) before BE', () => {
