@@ -46,6 +46,10 @@ import {
 } from './entryFromRegime.js';
 import { DecisionCodes, type DecisionCode } from './decisionCodes.js';
 import { resolveDeskEntry } from './deskEntry.js';
+import {
+  evaluateEntryDirectionGate,
+  formatEntryDiagnostic,
+} from './entryDirectionGate.js';
 import { runtimeBuildInfo } from './runtimeBuild.js';
 import {
   multiFeedOwnsOhlc,
@@ -2097,10 +2101,12 @@ async function robotCycleBody(s: Internal) {
     let direction: 'BUY' | 'SELL' | null = null;
     let reason = '';
     let setupType: string | null = null;
+    let calcSignalAgeMs: number | null = null;
 
     const calc = s.pending_calc;
     if (calc) {
       const calcAgeMs = Date.now() - new Date(calc.at).getTime();
+      calcSignalAgeMs = calcAgeMs;
       if (calcAgeMs > 12_000) {
         s.pending_calc = null;
         calcQueue.delete(calcKey(s.account_id, s.epic));
@@ -2192,6 +2198,27 @@ async function robotCycleBody(s: Internal) {
         code: DecisionCodes.NO_SETUP,
         detail: `${ohlcLine} · this 10s already filled — wait next candle`,
       });
+      return;
+    }
+
+    const finalGate = evaluateEntryDirectionGate({
+      direction,
+      closedBars: s.closedBars,
+      bar,
+      regime: regimeLabel,
+      bias: s.trend_bias || 'FLAT',
+      setup: setupType,
+      signalAgeMs: calcSignalAgeMs,
+    });
+    pushTick(s, {
+      phase: finalGate.final_entry === 'ALLOW' ? 'DECIDE' : 'SCAN',
+      bid: execQuote.bid,
+      ask: execQuote.ask,
+      mid: execQuote.mid,
+      code: finalGate.final_entry === 'ALLOW' ? DecisionCodes.SIGNAL_CREATED : DecisionCodes.NO_SETUP,
+      detail: `${formatEntryDiagnostic(finalGate)}${finalGate.block_reason ? ` · ${finalGate.block_reason}` : ''}`,
+    });
+    if (finalGate.final_entry === 'BLOCK') {
       return;
     }
 

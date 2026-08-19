@@ -9,6 +9,10 @@ import {
   type TrendBias,
 } from './entryFromRegime.js';
 import {
+  evaluateEntryDirectionGate,
+  formatEntryDiagnostic,
+} from './entryDirectionGate.js';
+import {
   detectCapitalLagLead,
   detectStaleQuoteAdverse,
   LAG_SCAN_MIN_REL,
@@ -108,6 +112,21 @@ export function resolveDeskEntry(input: {
           };
         }
       }
+    }
+    const trendGate = evaluateEntryDirectionGate({
+      direction: entry.direction,
+      closedBars: input.closedBars,
+      bar: input.bar,
+      regime: input.regime,
+      bias: conceptBias !== 'FLAT' ? conceptBias : bias,
+      setup: entry.setup,
+    });
+    if (trendGate.final_entry === 'BLOCK') {
+      return {
+        direction: null,
+        setup: null,
+        reason: `TREND_GATE · ${trendGate.block_reason} · ${formatEntryDiagnostic(trendGate)}`,
+      };
     }
     return entry;
   }
