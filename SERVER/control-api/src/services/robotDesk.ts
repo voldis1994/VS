@@ -2160,37 +2160,32 @@ async function robotCycleBody(s: Internal) {
     const refs = collectFresherRefs(s);
     if (s.entry_enabled && !s.open_side) {
       const hadDirection = Boolean(direction);
-      // Calc-first: if C++ EntryReady (intended direction) isn't available yet,
-      // do not create entries from Node lag/leak or 10s bar heuristics.
-      // We wait for the calc queue to preserve EV/transition formulas.
-      if (hadDirection) {
-        const resolved = resolveDeskEntry({
-          intended: direction,
-          intendedSetup: setupType,
-          intendedReason: reason,
-          bar: null,
-          regime: regimeLabel,
-          bias: s.trend_bias || 'FLAT',
-          closedBars: s.closedBars,
-          capitalMid: execQuote.mid,
-          refs,
-        });
-        if (resolved.direction) {
-          const flipped = hadDirection && resolved.direction !== direction;
-          const fresh = !hadDirection;
-          direction = resolved.direction;
-          setupType = resolved.setup;
-          reason = resolved.reason;
-          if (fresh || flipped) {
-            pushTick(s, {
-              phase: 'DECIDE',
-              bid: execQuote.bid,
-              ask: execQuote.ask,
-              mid: execQuote.mid,
-              code: DecisionCodes.SIGNAL_CREATED,
-              detail: `${reason} · ${s.cross_market?.detail || 'cross-market n/a'}`,
-            });
-          }
+      const resolved = resolveDeskEntry({
+        intended: direction,
+        intendedSetup: setupType,
+        intendedReason: reason,
+        bar: direction ? null : bar,
+        regime: regimeLabel,
+        bias: s.trend_bias || 'FLAT',
+        closedBars: s.closedBars,
+        capitalMid: execQuote.mid,
+        refs,
+      });
+      if (resolved.direction) {
+        const flipped = hadDirection && resolved.direction !== direction;
+        const fresh = !hadDirection;
+        direction = resolved.direction;
+        setupType = resolved.setup;
+        reason = resolved.reason;
+        if (fresh || flipped) {
+          pushTick(s, {
+            phase: 'DECIDE',
+            bid: execQuote.bid,
+            ask: execQuote.ask,
+            mid: execQuote.mid,
+            code: DecisionCodes.SIGNAL_CREATED,
+            detail: `${reason} · ${s.cross_market?.detail || 'cross-market n/a'}`,
+          });
         }
       }
     }
