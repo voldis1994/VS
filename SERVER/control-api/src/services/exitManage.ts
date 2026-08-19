@@ -147,6 +147,17 @@ export function decideBestOutcomeExit(
   if (!s.open_side || s.entry_price == null) return hold();
   if (!Number.isFinite(mid)) return hold();
 
+  /**
+   * “Inputs ended” gate:
+   * Let the trade run while the live regime/context matches the entry context.
+   * Only then allow Best Outcome to tighten SL to breakeven.
+   */
+  const entryRegime = s.entry_regime != null ? String(s.entry_regime).toUpperCase() : null;
+  const curRegime = s.regime != null ? String(s.regime).toUpperCase() : null;
+  const inputsEnded =
+    entryRegime && curRegime ? entryRegime !== curRegime : true;
+  if (!inputsEnded) return hold();
+
   const entry = s.entry_price;
   const fav = favorableMove(s.open_side, entry, mid);
   const minDist =

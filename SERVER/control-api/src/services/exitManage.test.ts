@@ -65,7 +65,14 @@ describe('Exit matrix A–P', () => {
 
   it('C) LONG plus → trail SL to BE, never TP close', () => {
     const d = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: 2000, mfe: 8, entry_setup: 'CONTINUATION' }),
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        mfe: 8,
+        entry_setup: 'CONTINUATION',
+        // “inputs ended”: live regime differs from entry regime
+        entry_regime: 'TREND_DOWN',
+      }),
       2005
     );
     expect(d.exit).toBe(false);
@@ -82,7 +89,8 @@ describe('Exit matrix A–P', () => {
         mfe: 8,
         entry_setup: 'CONTINUATION',
         entry_regime: 'TREND_DOWN',
-        regime: 'TREND_DOWN',
+        // “inputs ended”: live regime differs from entry regime
+        regime: 'TREND_UP',
       }),
       1995
     );
@@ -200,6 +208,8 @@ describe('Exit matrix A–P', () => {
         open_side: 'BUY',
         entry_price: 2000,
         entry_at: entryAt,
+        // “inputs ended”: live regime differs from entry regime
+        entry_regime: 'TREND_DOWN',
         mfe: 2,
         entry_setup: 'PULLBACK',
       }),
@@ -426,14 +436,26 @@ describe('Exit helpers — LONG/SHORT symmetry', () => {
 
   it('waits for 0.25% plus (not broker min-stop) before BE', () => {
     const d = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: 4353, entry_setup: 'PULLBACK' }),
+      snap({
+        open_side: 'BUY',
+        entry_price: 4353,
+        entry_setup: 'PULLBACK',
+        // “inputs ended”: live regime differs from entry regime
+        entry_regime: 'TREND_DOWN',
+      }),
       4354,
       Date.now(),
       { minStopDistance: 0.5 }
     );
     expect(d.action).toBe('HOLD');
     const ready = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: 4353, entry_setup: 'PULLBACK' }),
+      snap({
+        open_side: 'BUY',
+        entry_price: 4353,
+        entry_setup: 'PULLBACK',
+        // “inputs ended”: live regime differs from entry regime
+        entry_regime: 'TREND_DOWN',
+      }),
       4364,
       Date.now(),
       { minStopDistance: 0.5 }
