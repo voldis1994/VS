@@ -72,18 +72,47 @@ export function resolveDeskEntry(input: {
     }
   }
 
+  function lagConceptAllowed(lagDir: 'BUY' | 'SELL'): boolean {
+    if (bias === 'FLAT') return true;
+    if (bias === 'UP') return lagDir === 'BUY';
+    return lagDir === 'SELL';
+  }
+
+  function lagEvidenceAllowed(lagDir: 'BUY' | 'SELL', bar?: TenSecBar | null): boolean {
+    // In SCAN mode we may not have a 10s candle; then we can't validate dip/rally evidence.
+    if (!bar) return true;
+
+    // Block “BUY/SELL on a doji”.
+    const denom = Math.max(Math.abs(bar.open), 1e-9);
+    const bodyAbsRel = Math.abs(bar.close - bar.open) / denom;
+    if (bodyAbsRel < 0.00002) return false;
+
+    // Minimal dip/rally evidence: green → BUY, red → SELL.
+    if (lagDir === 'BUY') return bar.close > bar.open;
+    return bar.close < bar.open;
+  }
+
   const lead = detectCapitalLagLead(input.capitalMid, input.refs, {
     // Keep original scan threshold (avoid false-negative on real clusters).
     // Flip protection still uses the higher threshold when direction already exists.
     minRel: direction ? FLIP_MIN_REL : LAG_SCAN_MIN_REL,
   });
+
+  let lagBlockedReason: string | null = null;
   if (lead.hit && lead.direction) {
-    if (!direction) {
-      return { direction: lead.direction, setup: 'LAG_LEAD', reason: lead.reason };
-    }
-    if (!fromCalc && direction !== lead.direction) {
+    const lagDir = lead.direction;
+    const conceptOk = lagConceptAllowed(lagDir);
+    const evidenceOk = lagEvidenceAllowed(lagDir, input.bar);
+
+    if (!conceptOk) {
+      lagBlockedReason = `CONCEPT_BLOCK · LAG_LEAD ${lagDir} vs bias ${bias}`;
+    } else if (!evidenceOk) {
+      lagBlockedReason = `EVIDENCE_BLOCK · LAG_LEAD ${lagDir} vs 10s candle`;
+    } else if (!direction) {
+      return { direction: lagDir, setup: 'LAG_LEAD', reason: lead.reason };
+    } else if (!fromCalc && direction !== lagDir) {
       return {
-        direction: lead.direction,
+        direction: lagDir,
         setup: 'LAG_LEAD',
         reason: `FLIP ${direction} → ${lead.reason}`,
       };
@@ -99,11 +128,21 @@ export function resolveDeskEntry(input: {
       }
 
       const flip: 'BUY' | 'SELL' = direction === 'BUY' ? 'SELL' : 'BUY';
-      return {
-        direction: flip,
-        setup: 'LAG_LEAD',
-        reason: `LAG CAPITAL · ${flip} · ${stale.reason}`,
-      };
+      const conceptOk = lagConceptAllowed(flip);
+      const evidenceOk = lagEvidenceAllowed(flip, input.bar);
+
+      if (conceptOk && evidenceOk) {
+        return {
+          direction: flip,
+          setup: 'LAG_LEAD',
+          reason: `LAG CAPITAL · ${flip} · ${stale.reason}`,
+        };
+      }
+
+      const why = !conceptOk
+        ? `CONCEPT_BLOCK · LAG_LEAD ${flip} vs bias ${bias}`
+        : `EVIDENCE_BLOCK · LAG_LEAD ${flip} vs 10s candle`;
+      return { direction: null, setup: null, reason: `${why} · ${stale.reason}` };
     }
   }
 
@@ -136,6 +175,10 @@ export function resolveDeskEntry(input: {
         reason: `BIAS ${bias} · SELL · ${input.regime || 'UNKNOWN'} closed 10s`,
       };
     }
+  }
+
+  if (!direction && !setup && lagBlockedReason) {
+    reason = lagBlockedReason;
   }
 
   return { direction, setup, reason };

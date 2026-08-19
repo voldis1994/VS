@@ -41,6 +41,15 @@ describe('resolveDeskEntry — BUY and SELL both fire', () => {
     expect(e.reason).toMatch(/LAG CAPITAL · BUY/);
   });
 
+  it('SCAN: lag-lead opposite vs bias is blocked by concept permission', () => {
+    const e = resolveDeskEntry({
+      bias: 'UP',
+      capitalMid: 4338,
+      refs: [...yahooBasis, ...cluster(4330)],
+    });
+    expect(e.direction).toBeNull();
+  });
+
   it('SCAN: feeds already below Capital → SELL', () => {
     const e = resolveDeskEntry({
       capitalMid: 4338,
@@ -82,9 +91,8 @@ describe('resolveDeskEntry — BUY and SELL both fire', () => {
       capitalMid: 4354,
       refs: cluster(4346),
     });
-    expect(e.direction).toBe('SELL');
-    expect(e.setup).toBe('LAG_LEAD');
-    expect(e.reason).toMatch(/SELL/);
+    // With bias UP, we don't allow a stale-quote flip into SELL.
+    expect(e.direction).toBeNull();
   });
 
   it('FLIP: 10s SELL into a rallied cluster → BUY', () => {
@@ -95,9 +103,8 @@ describe('resolveDeskEntry — BUY and SELL both fire', () => {
       capitalMid: 4342,
       refs: cluster(4350),
     });
-    expect(e.direction).toBe('BUY');
-    expect(e.setup).toBe('LAG_LEAD');
-    expect(e.reason).toMatch(/BUY/);
+    // With bias DOWN, we don't allow a stale-quote flip into BUY.
+    expect(e.direction).toBeNull();
   });
 
   it('Yahoo 50pt basis alone never creates BUY or SELL', () => {
@@ -106,6 +113,31 @@ describe('resolveDeskEntry — BUY and SELL both fire', () => {
       refs: yahooBasis,
     });
     expect(e.direction).toBeNull();
+  });
+
+  it('LAG_LEAD blocked if 10s candle evidence mismatches (BUY needs green)', () => {
+    const bearish = bar(4346.0, 4345.6);
+    const e = resolveDeskEntry({
+      bar: bearish,
+      regime: 'RANGE',
+      bias: 'UP',
+      capitalMid: 4338,
+      refs: [...yahooBasis, ...cluster(4346)], // would produce LAG_LEAD BUY
+    });
+    expect(e.direction).toBeNull();
+  });
+
+  it('LAG_LEAD allowed if 10s candle evidence matches (BUY needs green)', () => {
+    const bullish = bar(4346.0, 4346.6);
+    const e = resolveDeskEntry({
+      bar: bullish,
+      regime: 'RANGE',
+      bias: 'UP',
+      capitalMid: 4338,
+      refs: [...yahooBasis, ...cluster(4346)], // would produce LAG_LEAD BUY
+    });
+    expect(e.direction).toBe('BUY');
+    expect(e.setup).toBe('LAG_LEAD');
   });
 
   it('live 02:07 board cluster vs Capital → SELL (not Yahoo BUY)', () => {
@@ -146,7 +178,8 @@ describe('resolveDeskEntry — BUY and SELL both fire', () => {
         { label: 'Binance.US (public)', mid: 4330.27 },
       ],
     });
-    expect(e.direction).toBe('BUY');
+    // On a quiet/doji candle, we don't take a lag-lead BUY.
+    expect(e.direction).toBeNull();
   });
 
   it('screenshot: PULLBACK_UPTREND + bias DOWN + dump 10s → SELL, not SCAN', () => {
