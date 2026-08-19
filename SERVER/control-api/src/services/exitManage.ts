@@ -108,21 +108,33 @@ function trail(reason: string, stop: number): BestOutcome {
   return { exit: false, action: 'TRAIL', reason, trail_stop: stop };
 }
 
-/** Broker BE stop = entry (Gold rounded to 1 decimal). */
+/**
+ * Broker BE stop level rounding:
+ * - BUY must not round ABOVE entry (would create immediate small loss).
+ * - SELL must not round BELOW entry.
+ *
+ * We quantize by Gold-like increments, but then force the stop to be on the
+ * "safe side" relative to the true entry.
+ */
+export function breakevenStopLevelForSide(side: ExitSide, entry: number): number {
+  const abs = Math.max(Math.abs(entry), 1e-9);
+  const scale = abs >= 1000 ? 10 : abs >= 100 ? 100 : abs >= 1 ? 10000 : 1e6;
+  if (side === 'BUY') return Math.floor(entry * scale) / scale;
+  return Math.ceil(entry * scale) / scale;
+}
+
+/** Back-compat: old signature rounds to the nearest (may be slightly unsafe for BUY/SELL). */
 export function breakevenStopLevel(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
-  if (abs >= 1000) return Math.round(entry * 10) / 10;
-  if (abs >= 100) return Math.round(entry * 100) / 100;
-  if (abs >= 1) return Math.round(entry * 10000) / 10000;
-  return Math.round(entry * 1e6) / 1e6;
+  const scale = abs >= 1000 ? 10 : abs >= 100 ? 100 : abs >= 1 ? 10000 : 1e6;
+  return Math.round(entry * scale) / scale;
 }
 
 /** @deprecated Best Outcome trails to BE, not half of remaining plus. */
 export function trailStopLevel(side: ExitSide, entry: number, mid: number): number | null {
   void mid;
   if (!Number.isFinite(entry)) return null;
-  void side;
-  return breakevenStopLevel(entry);
+  return breakevenStopLevelForSide(side, entry);
 }
 
 export function decideBestOutcomeExit(
@@ -147,7 +159,7 @@ export function decideBestOutcomeExit(
 
   // Best Outcome = only SL → BE. No TP/harvest/time/thesis close.
   if (Number.isFinite(fav) && fav + 1e-9 >= beMove) {
-    const stop = breakevenStopLevel(entry);
+    const stop = breakevenStopLevelForSide(s.open_side, entry);
     return trail(
       `BestOutcome BE · SL ${stop} · UPL ${fav.toFixed(5)} · entry ${entry}`,
       stop
