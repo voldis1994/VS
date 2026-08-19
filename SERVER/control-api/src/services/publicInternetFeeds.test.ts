@@ -12,6 +12,7 @@ import {
   epicToMetalKey,
   epicToYahooSymbol,
   fusePriceMids,
+  isGoldEpic,
   publicFeedNotApplicable,
   publicFeedsApplicable,
 } from './publicInternetFeeds.js';
@@ -63,6 +64,14 @@ describe('public internet epic mapping', () => {
     expect(publicFeedsApplicable('EURUSD')).toBe(true);
     expect(publicFeedsApplicable('SILVER')).toBe(true);
     expect(publicFeedsApplicable('BTCUSD')).toBe(true);
+  });
+
+  it('maps ASX Ltd stock epic without false gold match', () => {
+    expect(isGoldEpic('ASXAU')).toBe(false);
+    expect(isGoldEpic('XAUUSD')).toBe(true);
+    expect(isGoldEpic('GOLD')).toBe(true);
+    expect(epicToYahooSymbol('ASXAU')).toBe('ASX.AX');
+    expect(epicToCoinbaseProduct('ASXAU')).toBeNull();
   });
 
   it('silver gets metal feeds but not crypto token venues', () => {

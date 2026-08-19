@@ -884,8 +884,9 @@ export async function readMultiFeedPrice(
       latency_ms: r.latency_ms,
       detail: `${r.detail || ''} · FAR from Capital (${effectiveAnchor?.toFixed(2)}) — ignored for OHLC`.trim(),
     })),
-    // Show hard-failed public providers (no mid) so the board explains the ×
+    // Hard failures only — N/A providers are hidden (not errors for this epic)
     ...publicReads
+      .filter((r) => !publicFeedNotApplicable(r.detail))
       .filter((r) => !r.ok || r.mid == null)
       .filter((r) => !publicNear.some((p) => p.sender_id === r.sender_id))
       .filter((r) => !publicFar.some((p) => p.sender_id === r.sender_id))

@@ -3,6 +3,8 @@
  * Shared by public feed mapping and cross-market influence.
  */
 
+import { isGoldEpic } from './publicInternetFeeds.js';
+
 export type MarketAssetClass =
   | 'gold'
   | 'silver'
@@ -16,6 +18,7 @@ export type MarketAssetClass =
   | 'index_eu'
   | 'index_asia'
   | 'crypto'
+  | 'equity'
   | 'unknown';
 
 function blob(epic: string, displayName = ''): string {
@@ -25,7 +28,7 @@ function blob(epic: string, displayName = ''): string {
 export function detectMarketClass(epic: string, displayName = ''): MarketAssetClass {
   const b = blob(epic, displayName);
 
-  if (/(^|[^A-Z])XAU|GOLD/.test(b) || /\bGOLD\b/.test(b)) return 'gold';
+  if (isGoldEpic(epic) || /\bGOLD\b/.test(b)) return 'gold';
   if (/(^|[^A-Z])XAG|SILVER/.test(b) || /\bSILVER\b/.test(b)) return 'silver';
   if (/PLATINUM|XPT/.test(b)) return 'platinum';
   if (/PALLADIUM|XPD/.test(b)) return 'palladium';
@@ -44,7 +47,7 @@ export function detectMarketClass(epic: string, displayName = ''): MarketAssetCl
   if (/GER40|DE40|DAX|FRA40|CAC|EU50|STOXX|EUROSTOXX/.test(b)) return 'index_eu';
   if (/UK100|FTSE/.test(b)) return 'index_eu';
 
-  if (/JP225|JPN225|NIKKEI|HK50|HSI|AUS200|ASX|CN50|CHINA/.test(b)) return 'index_asia';
+  if (/JP225|JPN225|NIKKEI|HK50|HSI|AUS200|ASX200|CN50|CHINA/.test(b)) return 'index_asia';
 
   const majors = ['EUR', 'USD', 'GBP', 'JPY', 'CHF', 'AUD', 'CAD', 'NZD'];
   for (const a of majors) {
@@ -54,7 +57,17 @@ export function detectMarketClass(epic: string, displayName = ''): MarketAssetCl
   }
   if (/DXY|DOLLAR INDEX/.test(b)) return 'fx';
 
+  if (/LIMITED|PLC|INC|CORP|LTD|SHARES|STOCK/.test(b)) return 'equity';
+  const s = normEpic(epic);
+  if (s.endsWith('AU') && s.length >= 4 && s.length <= 8 && !isGoldEpic(epic)) return 'equity';
+
   return 'unknown';
+}
+
+function normEpic(epic: string): string {
+  return String(epic || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
 }
 
 /** Capital catalog ILIKE needles for cross-market related instruments. */
@@ -82,6 +95,8 @@ export function crossMarketNeedlesForClass(cls: MarketAssetClass): string[] {
       return ['JP225', 'NIKKEI', 'HK50', 'US500', 'USDJPY', 'XAU', 'OIL'];
     case 'crypto':
       return ['BTC', 'ETH', 'US500', 'NAS', 'US100', 'XAU', 'EURUSD', 'DXY', 'USDJPY'];
+    case 'equity':
+      return ['US500', 'NAS', 'AUS200', 'EURUSD', 'USDJPY', 'XAU', 'GOLD'];
     default:
       return ['US500', 'EURUSD', 'XAU', 'GOLD', 'OIL', 'BTC'];
   }
@@ -92,12 +107,6 @@ export function crossMarketNeedles(epic: string, displayName = ''): string[] {
   const needles = crossMarketNeedlesForClass(cls);
   const self = epic.toUpperCase();
   return needles.filter((n) => !self.includes(n));
-}
-
-function normEpic(epic: string): string {
-  return String(epic || '')
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, '');
 }
 
 /** Concrete Capital-style epics for public-feed cross-market when catalog is empty. */
@@ -134,6 +143,8 @@ export function canonicalRelatedEpics(epic: string, displayName = ''): string[] 
       return pick(['JP225', 'US500', 'USDJPY', 'GOLD', 'USOIL']);
     case 'crypto':
       return pick(['BTCUSD', 'ETHUSD', 'US500', 'US100', 'GOLD', 'EURUSD']);
+    case 'equity':
+      return pick(['US500', 'AUS200', 'EURUSD', 'USDJPY', 'GOLD']);
     default:
       return pick(['US500', 'EURUSD', 'GOLD', 'USOIL', 'BTCUSD']);
   }

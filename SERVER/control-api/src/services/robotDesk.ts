@@ -526,7 +526,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     ),
   ];
   const maxFeeds = sessions.reduce(
-    (n, s) => Math.max(n, s.feed_sender_count || 0, s.feed_legs?.length || 0),
+    (n, s) => Math.max(n, s.feed_sender_count || 0),
     0
   );
   const contributing = sessions.reduce((n, s) => Math.max(n, s.feed_contributing || 0), 0);

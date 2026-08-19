@@ -59,12 +59,62 @@ function norm(epic: string): string {
     .replace(/[^A-Z0-9]/g, '');
 }
 
+/** Strict gold epic — avoids false positives like ASXAU (ASX Ltd stock). */
+export function isGoldEpic(epic: string): boolean {
+  const s = norm(epic);
+  if (!s) return false;
+  if (s === 'GOLD' || s.startsWith('GOLD')) return true;
+  if (s === 'XAU' || /^XAU[A-Z]{3}$/.test(s)) return true;
+  return false;
+}
+
+const YAHOO_EQUITY_CC: Record<string, string> = {
+  AU: '.AX',
+  UK: '.L',
+  DE: '.DE',
+  FR: '.PA',
+  JP: '.T',
+  HK: '.HK',
+};
+
+function isMajorMarketEpic(s: string): boolean {
+  if (isGoldEpic(s)) return true;
+  if (/(^|[^A-Z])XAG|SILVER/.test(s) || s.startsWith('SILVER')) return true;
+  if (/PLATINUM|XPT|PALLADIUM|XPD/.test(s)) return true;
+  if (/US500|US100|US30|US2000|GER40|DE40|UK100|JP225|AUS200|HK50/.test(s)) return true;
+  if (/USOIL|UKOIL|BRENT|WTI|CRUDE|NATGAS|NGAS/.test(s)) return true;
+  if (/BTC|ETH|BITCOIN|ETHEREUM/.test(s)) return true;
+  const majors = ['EUR', 'USD', 'GBP', 'JPY', 'CHF', 'AUD', 'CAD', 'NZD'];
+  for (const a of majors) {
+    for (const b of majors) {
+      if (a !== b && s.includes(a + b)) return true;
+    }
+  }
+  return false;
+}
+
+/** Capital single-stock epics like ASX-AU → Yahoo ASX.AX */
+export function epicToYahooEquity(epic: string): string | null {
+  const s = norm(epic);
+  if (!s || s.length < 3 || isMajorMarketEpic(s)) return null;
+
+  for (const [cc, suf] of Object.entries(YAHOO_EQUITY_CC)) {
+    if (s.endsWith(cc) && s.length > cc.length + 1) {
+      const tick = s.slice(0, -cc.length);
+      if (/^[A-Z]{1,6}$/.test(tick)) return `${tick}${suf}`;
+    }
+  }
+  if (/^[A-Z]{1,5}US$/.test(s)) return s.slice(0, -2);
+  if (/^[A-Z]{1,5}$/.test(s)) return s;
+  return null;
+}
+
 /** Map Capital / VS epic to Yahoo chart symbol when possible. */
 export function epicToYahooSymbol(epic: string): string | null {
   const s = norm(epic);
   if (!s) return null;
 
-  if (/(^|[^A-Z])XAU|GOLD/.test(s) || s === 'GOLD' || s.startsWith('GOLD')) return 'GC=F';
+  if (isGoldEpic(epic)) return 'GC=F';
   if (/(^|[^A-Z])XAG|SILVER/.test(s) || s.startsWith('SILVER')) return 'SI=F';
   if (/PLATINUM|XPT/.test(s)) return 'PL=F';
   if (/PALLADIUM|XPD/.test(s)) return 'PA=F';
@@ -93,12 +143,12 @@ export function epicToYahooSymbol(epic: string): string | null {
       if (s.includes(a + b)) return `${a}${b}=X`;
     }
   }
-  return null;
+  return epicToYahooEquity(epic);
 }
 
 export function epicToMetalKey(epic: string): 'gold' | 'silver' | 'platinum' | 'palladium' | null {
   const s = norm(epic);
-  if (/(^|[^A-Z])XAU|GOLD/.test(s) || s.startsWith('GOLD')) return 'gold';
+  if (isGoldEpic(epic)) return 'gold';
   if (/(^|[^A-Z])XAG|SILVER/.test(s) || s.startsWith('SILVER')) return 'silver';
   if (/PLATINUM|XPT/.test(s)) return 'platinum';
   if (/PALLADIUM|XPD/.test(s)) return 'palladium';
@@ -119,7 +169,7 @@ export function epicToFxPair(epic: string): { from: string; to: string } | null 
 
 export function epicToCoinbaseProduct(epic: string): string | null {
   const s = norm(epic);
-  if (/(^|[^A-Z])XAU|GOLD/.test(s) || s.startsWith('GOLD')) return 'PAXG-USD';
+  if (isGoldEpic(epic)) return 'PAXG-USD';
   if (/(^|[^A-Z])XAG|SILVER/.test(s) || s.startsWith('SILVER')) return null;
   if (/BTC|BITCOIN/.test(s)) return 'BTC-USD';
   if (/ETH|ETHEREUM/.test(s)) return 'ETH-USD';
@@ -137,7 +187,7 @@ export function epicToGoldApiSymbol(epic: string): string | null {
 
 export function epicToKrakenPair(epic: string): string | null {
   const s = norm(epic);
-  if (/(^|[^A-Z])XAU|GOLD/.test(s) || s.startsWith('GOLD')) return 'PAXGUSD';
+  if (isGoldEpic(epic)) return 'PAXGUSD';
   if (/BTC|BITCOIN/.test(s)) return 'XBTUSD';
   if (/ETH|ETHEREUM/.test(s)) return 'ETHUSD';
   const pair = epicToFxPair(epic);
@@ -147,7 +197,7 @@ export function epicToKrakenPair(epic: string): string | null {
 
 export function epicToKucoinSymbol(epic: string): string | null {
   const s = norm(epic);
-  if (/(^|[^A-Z])XAU|GOLD/.test(s) || s.startsWith('GOLD')) return 'PAXG-USDT';
+  if (isGoldEpic(epic)) return 'PAXG-USDT';
   if (/BTC|BITCOIN/.test(s)) return 'BTC-USDT';
   if (/ETH|ETHEREUM/.test(s)) return 'ETH-USDT';
   return null;
@@ -155,7 +205,7 @@ export function epicToKucoinSymbol(epic: string): string | null {
 
 export function epicToBinanceUsSymbol(epic: string): string | null {
   const s = norm(epic);
-  if (/(^|[^A-Z])XAU|GOLD/.test(s) || s.startsWith('GOLD')) return 'PAXGUSDT';
+  if (isGoldEpic(epic)) return 'PAXGUSDT';
   if (/BTC|BITCOIN/.test(s)) return 'BTCUSDT';
   if (/ETH|ETHEREUM/.test(s)) return 'ETHUSDT';
   return null;
@@ -172,7 +222,7 @@ export function epicToFawazMetal(epic: string): 'xau' | 'xag' | 'xpt' | 'xpd' | 
 
 export function epicToCoinGeckoId(epic: string): string | null {
   const s = norm(epic);
-  if (/(^|[^A-Z])XAU|GOLD/.test(s) || s.startsWith('GOLD')) return 'pax-gold';
+  if (isGoldEpic(epic)) return 'pax-gold';
   if (/BTC|BITCOIN/.test(s)) return 'bitcoin';
   if (/ETH|ETHEREUM/.test(s)) return 'ethereum';
   return null;
@@ -190,7 +240,7 @@ const BITSTAMP_FX = new Set([
 
 export function epicToBitstampPair(epic: string): string | null {
   const s = norm(epic);
-  if (/(^|[^A-Z])XAU|GOLD/.test(s) || s.startsWith('GOLD')) return 'paxgusd';
+  if (isGoldEpic(epic)) return 'paxgusd';
   if (/BTC|BITCOIN/.test(s)) return 'btcusd';
   if (/ETH|ETHEREUM/.test(s)) return 'ethusd';
   const pair = epicToFxPair(epic);

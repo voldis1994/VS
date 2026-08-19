@@ -40,6 +40,7 @@ type FeedLeg = {
   mid: number | null;
   latency_ms: number;
   detail?: string;
+  na?: boolean;
 };
 
 type DecisionChain = {
@@ -789,13 +790,18 @@ export function RobotDeskPage() {
                     {(s.feed_legs?.length ?? 0) > 0 && (
                       <div className="robot-mini-legs mono">
                         {s.feed_legs!.slice(0, 4).map((leg) => (
-                          <span key={leg.sender_id} className={leg.ok ? 'ok' : 'bad'}>
+                          <span
+                            key={leg.sender_id}
+                            className={leg.na ? 'idle' : leg.ok ? 'ok' : 'bad'}
+                          >
                             {leg.name}:
-                            {leg.ok
-                              ? fmt(leg.mid, 2)
-                              : leg.mid != null
-                                ? `${fmt(leg.mid, 2)}·FAR`
-                                : '×'}
+                            {leg.na
+                              ? 'N/A'
+                              : leg.ok
+                                ? fmt(leg.mid, 2)
+                                : leg.mid != null
+                                  ? `${fmt(leg.mid, 2)}·FAR`
+                                  : '×'}
                           </span>
                         ))}
                       </div>
@@ -959,13 +965,18 @@ export function RobotDeskPage() {
                 {focusLegs.length > 0 && (
                   <div className="robot-focus-legs mono">
                     {focusLegs.map((leg) => (
-                      <div key={leg.sender_id} className={leg.ok ? 'ok' : 'bad'}>
+                      <div
+                        key={leg.sender_id}
+                        className={leg.na ? 'idle' : leg.ok ? 'ok' : 'bad'}
+                      >
                         {leg.name} ·{' '}
-                        {leg.ok
-                          ? fmt(leg.mid, 2)
-                          : leg.mid != null
-                            ? `${fmt(leg.mid, 2)} FAR`
-                            : 'FAIL'}{' '}
+                        {leg.na
+                          ? 'N/A'
+                          : leg.ok
+                            ? fmt(leg.mid, 2)
+                            : leg.mid != null
+                              ? `${fmt(leg.mid, 2)} FAR`
+                              : 'FAIL'}{' '}
                         · {leg.latency_ms}ms
                       </div>
                     ))}
