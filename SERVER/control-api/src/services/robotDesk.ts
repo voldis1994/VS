@@ -1884,11 +1884,6 @@ async function robotCycleBody(s: Internal) {
           ...(s.closedBars?.slice(-6) ?? []),
         ] as Array<{ high: number; low: number }>;
 
-        const behaviorTight = computeMarketBehaviorStopLevel(s.open_side, entry, recentSwing, {
-          minStopDistance: quote.min_stop_distance ?? null,
-          lookback: 8,
-        });
-
         const safetyTight = safetyStopLevel(
           s.open_side,
           quote.mid,
@@ -1899,38 +1894,56 @@ async function robotCycleBody(s: Internal) {
           1
         );
 
-        const tighter = behaviorTight ?? safetyTight;
         const cur = s.safety_sl ?? brokerStop;
         const px = quote.mid;
+
+        // Don’t tighten to swing SL until the position has actually gone favorable.
+        // Otherwise we risk “over-tight” SL and stop-out before the move is confirmed.
+        const behaviorAllowed = s.mfe > 0;
+        const behaviorTight = behaviorAllowed
+          ? computeMarketBehaviorStopLevel(s.open_side, entry, recentSwing, {
+              minStopDistance: quote.min_stop_distance ?? null,
+              lookback: 8,
+            })
+          : null;
+
+        const tighter = behaviorTight ?? safetyTight;
         const canTighten =
           cur != null &&
           Number.isFinite(cur) &&
           ((s.open_side === 'BUY' && tighter > cur && tighter < px) ||
             (s.open_side === 'SELL' && tighter < cur && tighter > px));
-        s.sl_tighten_done = true;
-        if (canTighten) {
-          const upd = await updateCapitalStop(opened.session, s.deal_id, tighter, {
-            mid: quote.mid,
-            pointSize: quote.point_size ?? null,
-          });
-          if (upd.ok) {
-            s.safety_sl = tighter;
-            pushTick(s, {
-              phase: 'INFO',
-              bid: quote.bid,
-              ask: quote.ask,
+
+        if (!canTighten) {
+          // Keep trying next cycle (especially until behaviorAllowed becomes true).
+          // Do not block other manage steps (exit decision, pending close checks).
+        } else {
+
+          s.sl_tighten_done = true;
+          {
+            const upd = await updateCapitalStop(opened.session, s.deal_id, tighter, {
               mid: quote.mid,
-              detail: `SL tightened ${cur} → ${tighter} (${behaviorTight != null ? 'market swing' : 'safety'})`,
+              pointSize: quote.point_size ?? null,
             });
-          } else {
-            s.sl_tighten_done = false;
-            pushTick(s, {
-              phase: 'INFO',
-              bid: quote.bid,
-              ask: quote.ask,
-              mid: quote.mid,
-              detail: `SL tighten skipped: ${upd.detail}`,
-            });
+            if (upd.ok) {
+              s.safety_sl = tighter;
+              pushTick(s, {
+                phase: 'INFO',
+                bid: quote.bid,
+                ask: quote.ask,
+                mid: quote.mid,
+                detail: `SL tightened ${cur} → ${tighter} (${behaviorTight != null ? 'market swing' : 'safety'})`,
+              });
+            } else {
+              s.sl_tighten_done = false;
+              pushTick(s, {
+                phase: 'INFO',
+                bid: quote.bid,
+                ask: quote.ask,
+                mid: quote.mid,
+                detail: `SL tighten skipped: ${upd.detail}`,
+              });
+            }
           }
         }
       }
