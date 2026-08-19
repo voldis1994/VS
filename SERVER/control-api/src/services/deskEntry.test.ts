@@ -253,6 +253,7 @@ describe('resolveDeskEntry — BUY and SELL both fire', () => {
       intendedSetup: 'PULLBACK',
       intendedReason: 'CALC EntryReady',
       bias: 'DOWN',
+      regime: 'TREND_DOWN',
       capitalMid: 100,
       refs: [
         { label: 'Gold-API spot (public)', mid: 100 },
@@ -261,7 +262,43 @@ describe('resolveDeskEntry — BUY and SELL both fire', () => {
       ],
     });
     expect(e.direction).toBeNull();
-    expect(e.reason).toMatch(/CONCEPT_BLOCK/);
+    expect(e.reason).toMatch(/CONCEPT_BLOCK|REGIME_BLOCK/);
+  });
+
+  it('blocks BUY on TREND_DOWN from 10s green bounce', () => {
+    const e = resolveDeskEntry({
+      bar: bar(2492, 2493.5),
+      closedBars: [bar(2494, 2492), bar(2492, 2491)],
+      regime: 'TREND_DOWN',
+      bias: 'DOWN',
+      capitalMid: 2493.5,
+      refs: [
+        { label: 'Gold-API spot (public)', mid: 2493.5 },
+        { label: 'Coinbase spot (public)', mid: 2493.5 },
+        { label: 'Kraken spot (public)', mid: 2493.5 },
+      ],
+    });
+    expect(e.direction).not.toBe('BUY');
+    if (e.direction === null) expect(e.reason).toMatch(/REGIME_BLOCK|CONCEPT_BLOCK|no BUY/);
+  });
+
+  it('blocks C++ vein BUY when regime is TREND_DOWN', () => {
+    const e = resolveDeskEntry({
+      intended: 'BUY',
+      intendedSetup: 'CONTINUATION',
+      intendedReason: 'CALC vein long · flow+',
+      bar: bar(2492, 2493),
+      regime: 'TREND_DOWN',
+      bias: 'DOWN',
+      capitalMid: 2493,
+      refs: [
+        { label: 'Gold-API spot (public)', mid: 2493 },
+        { label: 'Coinbase spot (public)', mid: 2493 },
+        { label: 'Kraken spot (public)', mid: 2493 },
+      ],
+    });
+    expect(e.direction).toBeNull();
+    expect(e.reason).toMatch(/REGIME_BLOCK|CONCEPT_BLOCK|CALC_BLOCK/);
   });
 
   it('blocks C++ SELL when impulse ended with green bounce 10s', () => {

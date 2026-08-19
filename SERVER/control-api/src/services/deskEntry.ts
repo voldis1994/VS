@@ -24,6 +24,35 @@ export type DeskEntry = {
 
 const FLIP_MIN_REL = 0.0012;
 
+const COUNTERTREND_SETUPS = new Set([
+  'FADE',
+  'REVERSAL',
+  'RANGE_REJECTION',
+  'FAILED_BREAKOUT',
+]);
+
+/** Hard block: no BUY in down regime/bias, no SELL in up regime/bias. */
+export function blockRegimeDirectionEntry(
+  direction: 'BUY' | 'SELL',
+  regime?: string | null,
+  bias: TrendBias = 'FLAT',
+  _setup?: string | null
+): string | null {
+  const r = String(regime || '').toUpperCase();
+  const downCtx =
+    r.includes('TREND_DOWN') || r.includes('PULLBACK_DOWN') || r.includes('BREAKOUT_DOWN');
+  const upCtx = r.includes('TREND_UP') || r.includes('PULLBACK_UP') || r.includes('BREAKOUT_UP');
+
+  // Explicit bias wins over regime label (e.g. PULLBACK_UPTREND + bias DOWN → SELL OK).
+  if (direction === 'BUY' && (bias === 'DOWN' || (downCtx && bias !== 'UP'))) {
+    return `REGIME_BLOCK · BUY forbidden in ${downCtx ? r : `bias ${bias}`}`;
+  }
+  if (direction === 'SELL' && (bias === 'UP' || (upCtx && bias !== 'DOWN'))) {
+    return `REGIME_BLOCK · SELL forbidden in ${upCtx ? r : `bias ${bias}`}`;
+  }
+  return null;
+}
+
 export function resolveDeskEntry(input: {
   intended?: 'BUY' | 'SELL' | null;
   intendedSetup?: string | null;
@@ -51,28 +80,51 @@ export function resolveDeskEntry(input: {
     return 'FLAT';
   }
 
+  // Concept permission gate — all entry paths (C++, 10s, LAG), not calc-only.
+  const conceptBias = bias === 'FLAT' ? conceptBiasFromRegime(input.regime) : bias;
+
+  function finish(entry: DeskEntry): DeskEntry {
+    if (!entry.direction) return entry;
+    const regimeBlock = blockRegimeDirectionEntry(
+      entry.direction,
+      input.regime,
+      conceptBias !== 'FLAT' ? conceptBias : bias,
+      entry.setup
+    );
+    if (regimeBlock) {
+      return { direction: null, setup: null, reason: regimeBlock };
+    }
+    if (conceptBias !== 'FLAT') {
+      const s = String(entry.setup || '')
+        .trim()
+        .toUpperCase();
+      if (!COUNTERTREND_SETUPS.has(s)) {
+        const ok = conceptBias === 'UP' ? entry.direction === 'BUY' : entry.direction === 'SELL';
+        if (!ok) {
+          return {
+            direction: null,
+            setup: null,
+            reason: `CONCEPT_BLOCK · ${entry.direction} vs bias ${conceptBias}${s ? ` · ${s}` : ''}`,
+          };
+        }
+      }
+    }
+    return entry;
+  }
+
   // When direction came from C++ EntryReady, do not override it with Node-side
   // lag/leak heuristics — that would discard EV/transition formulas from calc.
   const fromCalc = input.intended != null;
 
-  // Concept permission gate:
-  // With-trend setups must align with the lasting bias (1m concept).
-  // If C++ intended a with-trend direction against bias, block the entry.
-  const conceptBias = bias === 'FLAT' ? conceptBiasFromRegime(input.regime) : bias;
-  if (fromCalc && direction && conceptBias !== 'FLAT') {
-    const s = String(input.intendedSetup || '')
-      .trim()
-      .toUpperCase();
-    const withTrend = new Set(['PULLBACK', 'CONTINUATION', 'BREAKOUT']);
-    if (withTrend.has(s)) {
-      const ok = conceptBias === 'UP' ? direction === 'BUY' : direction === 'SELL';
-      if (!ok) {
-        return {
-          direction: null,
-          setup: null,
-          reason: `CONCEPT_BLOCK · with-trend ${s} vs bias ${conceptBias}`,
-        };
-      }
+  if (fromCalc && direction) {
+    const regimeBlock = blockRegimeDirectionEntry(
+      direction,
+      input.regime,
+      conceptBias !== 'FLAT' ? conceptBias : bias,
+      setup
+    );
+    if (regimeBlock) {
+      return { direction: null, setup: null, reason: regimeBlock };
     }
   }
 
@@ -143,13 +195,13 @@ export function resolveDeskEntry(input: {
     } else if (!evidenceOk) {
       lagBlockedReason = `EVIDENCE_BLOCK · LAG_LEAD ${lagDir} vs 10s candle`;
     } else if (!direction) {
-      return { direction: lagDir, setup: 'LAG_LEAD', reason: lead.reason };
+      return finish({ direction: lagDir, setup: 'LAG_LEAD', reason: lead.reason });
     } else if (!fromCalc && direction !== lagDir) {
-      return {
+      return finish({
         direction: lagDir,
         setup: 'LAG_LEAD',
         reason: `FLIP ${direction} → ${lead.reason}`,
-      };
+      });
     }
   }
 
@@ -166,11 +218,11 @@ export function resolveDeskEntry(input: {
       const evidenceOk = lagEvidenceAllowed(flip, input.bar);
 
       if (conceptOk && evidenceOk) {
-        return {
+        return finish({
           direction: flip,
           setup: 'LAG_LEAD',
           reason: `LAG CAPITAL · ${flip} · ${stale.reason}`,
-        };
+        });
       }
 
       const why = !conceptOk
@@ -196,18 +248,18 @@ export function resolveDeskEntry(input: {
     const trendingSell =
       regime === 'TREND_DOWN' || regime === 'PULLBACK_DOWNTREND' || regime === 'BREAKOUT_DOWN';
     if (trendingBuy && bias !== 'DOWN') {
-      return {
+      return finish({
         direction: 'BUY',
         setup: 'BIAS',
         reason: `BIAS ${bias} · BUY · ${input.regime || 'UNKNOWN'} closed 10s`,
-      };
+      });
     }
     if (trendingSell && bias !== 'UP') {
-      return {
+      return finish({
         direction: 'SELL',
         setup: 'BIAS',
         reason: `BIAS ${bias} · SELL · ${input.regime || 'UNKNOWN'} closed 10s`,
-      };
+      });
     }
   }
 
@@ -215,5 +267,5 @@ export function resolveDeskEntry(input: {
     reason = lagBlockedReason;
   }
 
-  return { direction, setup, reason };
+  return finish({ direction, setup, reason });
 }

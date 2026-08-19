@@ -245,6 +245,24 @@ static bool decide(const Snap& s, std::string* dir, std::string* why, double* ev
   };
   double ev_buy = score(1);
   double ev_sell = score(-1);
+  if (down_ctx) {
+    if (ev_sell > 0.02 && net_flow < 0 && vein <= -1) {
+      *dir = "SELL";
+      *ev_out = ev_sell;
+      *why = "vein short · flow- · EV " + std::to_string(ev_sell);
+      return true;
+    }
+    return false;
+  }
+  if (up_ctx) {
+    if (ev_buy >= ev_sell && ev_buy > 0.02 && net_flow > 0 && vein >= 1) {
+      *dir = "BUY";
+      *ev_out = ev_buy;
+      *why = "vein long · flow+ · EV " + std::to_string(ev_buy);
+      return true;
+    }
+    return false;
+  }
   if (ev_buy >= ev_sell && ev_buy > 0.02 && net_flow > 0 && vein >= 1) {
     *dir = "BUY";
     *ev_out = ev_buy;
