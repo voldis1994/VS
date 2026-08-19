@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { EquityCurve, DailyBars } from '../components/Charts';
 import { useDesk } from '../components/DeskContext';
 import { apiFetch } from '../hooks/useApi';
+import { pullCapital } from '../hooks/pullCapital';
 import { openRobotWindow } from './RobotDeskPage';
 import { Logo } from '../components/Logo';
 
@@ -109,7 +110,7 @@ export function OverviewPage() {
 
   const startRobotTrading = () => {
     if (!selectedAccountId || !marketEpic) {
-      setMsg('Izvēlies account + Capital.com tirgu (Pull markets Trading lapā, ja tukšs)');
+      setMsg('Izvēlies account + Capital.com tirgu (vispirms PULL CAPITAL, ja tukšs)');
       return;
     }
     const lot = Number(lotSize);
@@ -205,6 +206,29 @@ export function OverviewPage() {
     }
   };
 
+  const pullCapitalNow = async () => {
+    setBusy(true);
+    setMsg('PULL CAPITAL — Capital konti + visi tirgi (1–3 min, neaizver tab)...');
+    try {
+      const res = await pullCapital(selectedAccountId);
+      if (!selectedAccountId) setSelectedAccountId(res.accountId);
+      setMsg(`PULL CAPITAL OK · ${res.synced_accounts} konts · ${res.markets} tirgi`);
+      refreshDesk();
+      const rows = await apiFetch<MarketOpt[]>(`/api/trading/accounts/${res.accountId}/instruments`);
+      setMarkets(rows);
+      const gold =
+        rows.find((m) => /gold|xau/i.test(`${m.display_name} ${m.epic || ''} ${m.symbol}`)) || rows[0];
+      if (gold) {
+        setMarketEpic(gold.epic || gold.symbol);
+        setLotSize(String(gold.lot_size || gold.min_lot || 0.1));
+      }
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'PULL CAPITAL failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const accountPositions = selectedAccount
     ? positions.filter(
         (p) =>
@@ -226,7 +250,26 @@ export function OverviewPage() {
             </p>
           </div>
         </div>
-        {msg && <div className={msg.includes('Failed') ? 'error-state' : 'ok-state'}>{msg}</div>}
+        {msg && <div className={msg.includes('Failed') || msg.includes('Nav Capital') || msg.includes('timeout') ? 'error-state' : 'ok-state'}>{msg}</div>}
+      </div>
+
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="section-title">PULL CAPITAL</div>
+        <p className="hint-line" style={{ marginTop: 0 }}>
+          Sync Capital kontus un ielādē visus tirgus (Gold EPIC). Bez šī ROBOT START neredz Gold.
+          REDIS/WireGuard kļūdas šeit nav vajadzīgas. 1–3 minūtes.
+        </p>
+        <div className="actions">
+          <button className="btn btn-go" type="button" disabled={busy} onClick={() => void pullCapitalNow()}>
+            PULL CAPITAL
+          </button>
+          <Link className="btn" to="/brokers">
+            BROKERS
+          </Link>
+          <Link className="btn" to="/robot">
+            ROBOT BOARD
+          </Link>
+        </div>
       </div>
 
       {monitor && (
@@ -546,7 +589,7 @@ export function OverviewPage() {
           )}
           {selectedAccountId && markets.length === 0 && (
             <div className="error-state" style={{ marginBottom: 8 }}>
-              Nav tirgu. <Link to="/trading">Trading</Link> → Pull ALL Capital.com markets.
+              Nav tirgu. Spied <strong>PULL CAPITAL</strong> augšā (1–3 min).
             </div>
           )}
           <label className="field-label">Search market</label>
