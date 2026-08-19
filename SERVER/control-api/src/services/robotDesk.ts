@@ -507,8 +507,8 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     git_sha: build.git_sha,
     entry_brain: build.entry_brain,
-    chain: 'C++ calc EntryReady → robotDesk Capital hands (Node does not choose BUY/SELL)',
-    note: `BUILD ${build.git_sha} · calc + hands · regime=context · SL=0.25% of price (0.00250) · ${build.trend_minutes}-min`,
+    chain: 'MAIN PROTOTYPE · 10s BUY/SELL → robotDesk Capital hands · SL 0.25% · BE trail',
+    note: `MAIN PROTOTYPE · BUILD ${build.git_sha} · SL=0.25% (0.00250) · ${build.trend_minutes}-min`,
   };
 }
 
@@ -2341,7 +2341,7 @@ export async function startRobotSession(input: {
     bid: null,
     ask: null,
     mid: null,
-    detail: `ROBOT START · BUILD ${runtimeBuildInfo().git_sha} · HANDS · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · calc EntryReady queued then Capital · ONE TRADE ONLY · other robots: ${others}`,
+    detail: `ROBOT START · MAIN PROTOTYPE · BUILD ${runtimeBuildInfo().git_sha} · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · ONE TRADE ONLY · other robots: ${others}`,
   });
   pushTick(session, {
     phase: 'INFO',
@@ -2349,7 +2349,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: closed 10s picks BUY/SELL · robotDesk opens Capital · SL = 0.25% (0.00250) · max 1 open',
+      'MAIN PROTOTYPE · closed 10s BUY/SELL · SL 0.25% (0.00250) · Best Outcome SL→BE · max 1 open',
   });
 
   sessions.set(id, session);

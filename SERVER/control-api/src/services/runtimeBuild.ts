@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { TREND_LOOKBACK_MINUTES } from './entryFromRegime.js';
+import { DESK_PROTOTYPE, DESK_PROTOTYPE_SL, DESK_PROTOTYPE_STRATEGY } from './mainPrototype.js';
 
 let cachedSha: string | null = null;
 
@@ -29,7 +30,7 @@ function gitShortSha(): string {
   return cachedSha;
 }
 
-const STRATEGY_VERSION = 'with-trend-10s-sl020-v1';
+const STRATEGY_VERSION = DESK_PROTOTYPE_STRATEGY;
 
 function buildTimeIso(): string {
   const env = String(process.env.BUILD_TIME || '').trim();
@@ -63,7 +64,8 @@ export function runtimeBuildInfo() {
     build_time: buildTimeIso(),
     strategy_version: STRATEGY_VERSION,
     status: 'ok',
-    sl: '0.25%-of-price',
+    sl: DESK_PROTOTYPE_SL,
+    desk_prototype: DESK_PROTOTYPE,
     trend_minutes: TREND_LOOKBACK_MINUTES,
     entry_brain: 'node-robot-desk',
     /** Proof this Node build unlocks with-trend entries when classifier says UNKNOWN. */

@@ -12,7 +12,8 @@ describe('runtimeBuildInfo', () => {
     expect(info.VERSION).toBeTruthy();
     expect(info.GIT_COMMIT).toBe(info.git_sha);
     expect(info.BUILD_TIME).toBeTruthy();
-    expect(info.STRATEGY_VERSION).toBeTruthy();
+    expect(info.STRATEGY_VERSION).toBe('main-prototype-10s-sl025-be');
+    expect(info.desk_prototype).toBe('MAIN');
     expect(info.historical_strategy).toBe('NOT_PROVEN');
   });
 });
