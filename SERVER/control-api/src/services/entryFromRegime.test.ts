@@ -106,7 +106,7 @@ describe('10s + regime-as-CONTEXT suitable entry', () => {
       close: 4338.12,
       ticks: 8,
     };
-    expect(decideEntryFrom10sRegime(doji, 'COMPRESSION', 'UP')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(doji, 'COMPRESSION', 'UP')).toBeNull();
   });
 
   it('TREND_DOWN follows the dump (red) — never sells a green breakout', () => {

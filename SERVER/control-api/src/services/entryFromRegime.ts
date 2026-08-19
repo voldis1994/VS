@@ -499,17 +499,36 @@ export function decideEntryFrom10sRegime(
   // UNKNOWN / COMPRESSION / TRANSITION — use available evidence; do not invent regime
   if (r === 'UNKNOWN' || r === 'TRANSITION' || r === 'COMPRESSION') {
     if (b === 'UP') {
-      return gateWithTrend(
-        {
-          direction: 'BUY',
-          setup: softDip(bar) ? 'PULLBACK' : 'BREAKOUT',
-          reason: `${r}+bias UP · ${candle}`,
-        },
-        b,
-        bar,
-        bars,
-        r
-      );
+      // Avoid “BUY on any quiet noise”. Require actual 10s evidence:
+      // - red-ish dip → pullback BUY
+      // - green-ish rally → breakout/continuation BUY
+      if (softDip(bar) || dip(bar)) {
+        return gateWithTrend(
+          {
+            direction: 'BUY',
+            setup: 'PULLBACK',
+            reason: `${r}+bias UP · dip-buy · ${candle}`,
+          },
+          b,
+          bar,
+          bars,
+          r
+        );
+      }
+      if (softRally(bar) || rally(bar)) {
+        return gateWithTrend(
+          {
+            direction: 'BUY',
+            setup: 'BREAKOUT',
+            reason: `${r}+bias UP · rally-follow · ${candle}`,
+          },
+          b,
+          bar,
+          bars,
+          r
+        );
+      }
+      return null;
     }
     if (b === 'DOWN' && (softDip(bar) || dip(bar))) {
       return gateWithTrend(
