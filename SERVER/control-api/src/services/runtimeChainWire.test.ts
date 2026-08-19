@@ -3,16 +3,29 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 describe('P3 runtime call-chain wiring', () => {
-  it('robotCycle executes queued C++ calc then Capital — Node is hands only', () => {
+  it('robotCycle executes queued C++ calc then 10s Node fallback — never evaluateStrategy', () => {
     const src = readFileSync(join(process.cwd(), 'src/services/robotDesk.ts'), 'utf8');
     expect(src).toContain('pending_calc');
     expect(src).toContain('await enterTrade(');
+    expect(src).toContain('releaseGhostIntents');
     expect(src).toContain('buildMoneyPathRisk(');
     expect(src).toContain('evaluateRisk(');
     expect(src).toContain("import { decideBestOutcomeExit, favorableMove } from './exitManage.js'");
-    expect(src).toContain('waiting for C++ calc EntryReady');
+    const exitSrc = readFileSync(join(process.cwd(), 'src/services/exitManage.ts'), 'utf8');
+    expect(exitSrc).toContain('BestOutcome BE');
+    expect(exitSrc).not.toContain('HardInvalidation');
+    expect(src).toContain('waiting for closed 10s or C++ calc EntryReady');
+    expect(src).toContain('resolveDeskEntry');
+    expect(src).toContain('this 10s already filled');
     expect(src).not.toContain('evaluateStrategy({');
     expect(src).not.toContain("import { runTradePipeline } from './tradePipeline.js'");
+    expect(src).toContain('SAFETY SL attached');
+    expect(src).toContain('SAFETY_SL_REL');
+    const cap = readFileSync(join(process.cwd(), 'src/services/capitalCom.ts'), 'utf8');
+    expect(cap).toContain('export const SAFETY_SL_REL = 0.0015');
+    const desk = readFileSync(join(process.cwd(), 'src/services/deskEntry.ts'), 'utf8');
+    expect(desk).toContain('decideEntryFrom10sRegime');
+    expect(desk).toContain('detectCapitalLagLead');
   });
 
   it('tradePipeline + orderLifecycle modules exist for AAA health/desk tooling', () => {

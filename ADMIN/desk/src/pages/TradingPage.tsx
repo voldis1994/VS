@@ -268,7 +268,7 @@ export function TradingPage() {
             Sync accounts
           </button>
           <button className="btn btn-primary" onClick={pullCapitalMarkets} disabled={busy || !accountId}>
-            Pull ALL Capital.com markets
+            PULL CAPITAL
           </button>
         </div>
         {msg && (
@@ -285,7 +285,7 @@ export function TradingPage() {
         )}
         {source === 'empty' && accountId && (
           <p className="error-state" style={{ marginTop: 10 }}>
-            Nav Capital.com tirgu. Spied <strong>Pull ALL Capital.com markets</strong> — bez tā
+            Nav Capital.com tirgu. Spied <strong>PULL CAPITAL</strong> — bez tā
             rādās tukšs (fake katalogs izslēgts).
           </p>
         )}

@@ -5,19 +5,22 @@ import {
   closeCapitalPosition,
   confirmCapitalDeal,
   createCapitalPosition,
+  computeSafetyCushionStopLevel,
+  computeMarketBehaviorStopLevel,
   fetchCapitalMarketQuote,
   fetchCapitalMinutePrices,
   fetchCapitalPrices,
   listCapitalOpenPositions,
+  SAFETY_SL_REL,
   updateCapitalStop,
   type CapitalMarketQuote,
   type CapitalOpenPosition,
+  type CapitalPriceCandle,
   type CapitalSession,
 } from './capitalCom.js';
 import { emitToClient } from './clientEvents.js';
 import { mapTradeType } from './tradePresentation.js';
 import {
-  observeClosedBars,
   normalizeRegime,
   REGIME_NAMES,
   type RegimeName,
@@ -30,8 +33,14 @@ import {
   type CrossMarketPressure,
 } from './crossMarketPressure.js';
 import { canIssueClose, decideCloseFinalize } from './exitLifecycle.js';
-import { effectiveBias, resolveTrendBias, TREND_LOOKBACK_10S, type TrendBias } from './entryFromRegime.js';
+import {
+  effectiveBias,
+  trendBiasFromMinuteCandles,
+  TREND_LOOKBACK_10S,
+  type TrendBias,
+} from './entryFromRegime.js';
 import { DecisionCodes, type DecisionCode } from './decisionCodes.js';
+import { resolveDeskEntry } from './deskEntry.js';
 import { runtimeBuildInfo } from './runtimeBuild.js';
 import {
   multiFeedOwnsOhlc,
@@ -40,7 +49,7 @@ import {
   type MultiFeedPrice,
   type MultiFeedLeg,
 } from './robotReader.js';
-import { buildFresherRefs, detectStaleQuoteAdverse } from './staleQuoteGuard.js';
+import { buildFresherRefs, type PriceRef } from './staleQuoteGuard.js';
 import {
   aggregateSecondsToTen,
   emptyTenSecState,
@@ -60,13 +69,13 @@ import { getClientTradingRegistry } from '../vs-core/clientTrading.js';
 import { FeedManager } from '../vs-core/feedManager.js';
 import {
   assertEntriesAllowed,
+  setMoneyPathRecoveryResult,
 } from '../vs-core/moneyPathGate.js';
 import { getDurableOrderStore } from '../vs-core/durableOrderStore.js';
 import {
   buildMoneyPathRisk,
   marketStatusAllowsTrading,
 } from '../vs-core/moneyPathRisk.js';
-import { allowEntryFromPrimaryFeed } from '../vs-core/primaryFeedGate.js';
 
 export type RobotTick = {
   at: string;
@@ -136,7 +145,7 @@ export type RobotSession = {
   entry_regime: string | null;
   /** Strategy reason string at entry (audit). */
   entry_reason: string | null;
-  /** When false, manage-only (no new opens). When true, execute queued C++ calc (no Node brain). */
+  /** When false, manage-only (no new opens). When true, C++ EntryReady first, then 10s Node fallback. */
   entry_enabled: boolean;
   ohlc_10s: {
     last_o: number | null;
@@ -175,9 +184,12 @@ type Internal = RobotSession & {
   ohlcState: TenSecState;
   last_second_fetch_ms: number;
   last_closed_bar_key: string;
+  last_closed_bar_at_ms: number;
+  /** One Capital entry attempt per closed 10s bar (C++ or Node 10s). */
+  last_entry_bar_key: string;
   closedBars: TenSecBar[];
   last_minute_fetch_ms: number;
-  minuteCandles: Array<{ open: number; close: number }>;
+  minuteCandles: CapitalPriceCandle[];
   last_multi_feed_ms: number;
   multiFeed: MultiFeedPrice | null;
   sl_tighten_done: boolean;
@@ -391,6 +403,8 @@ function publicSession(s: Internal): RobotSession {
     ohlcState: _ohlc,
     last_second_fetch_ms: _sec,
     last_closed_bar_key: _bar,
+    last_closed_bar_at_ms: _barAt,
+    last_entry_bar_key: _entryBar,
     closedBars: _bars,
     last_minute_fetch_ms: _minFetch,
     minuteCandles: _mins,
@@ -456,6 +470,23 @@ function applyBiasRegimeUnlock(_s: Internal) {
   // no-op: regime stays authoritative; trend_bias is a separate field
 }
 
+function collectFresherRefs(s: Internal): PriceRef[] {
+  const capitalPeerMids = (s.multiFeed?.legs || [])
+    .filter((l) => l.ok && l.mid != null && Number.isFinite(l.mid))
+    .filter((l) => /capital\.com|capital_com/i.test(`${l.name} ${l.sender_id} ${l.detail || ''}`))
+    .map((l) => ({ name: l.name, mid: l.mid as number }));
+  const publicNear = (s.multiFeed?.legs || [])
+    .filter((l) => l.ok && l.mid != null && Number.isFinite(l.mid))
+    .filter((l) => !String(l.detail || '').includes('FAR from Capital'))
+    .filter((l) => !/capital\.com|capital_com/i.test(`${l.name} ${l.sender_id}`))
+    .map((l) => ({ name: l.name, mid: l.mid as number }));
+  return buildFresherRefs({
+    publicNearMids: [...capitalPeerMids, ...publicNear],
+    ohlcClose: s.ohlcState.last_closed?.close ?? s.ohlc_10s?.last_c ?? null,
+    formingClose: s.ohlcState.forming?.close ?? s.ohlc_10s?.forming_c ?? null,
+  });
+}
+
 export function robotBoardMeta(sessions: RobotSession[]) {
   const activeRegimes = [
     ...new Set(
@@ -479,20 +510,20 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     git_sha: build.git_sha,
     entry_brain: build.entry_brain,
-    chain: 'C++ calc EntryReady → robotDesk Capital hands (Node does not choose BUY/SELL)',
-    note: `BUILD ${build.git_sha} · calc + hands · regime=context · SL=0.20% of price · ${build.trend_minutes}-min`,
+    chain: 'MAIN PROTOTYPE · 10s BUY/SELL → robotDesk Capital hands · SL 0.15% · BE trail',
+    note: `MAIN PROTOTYPE · BUILD ${build.git_sha} · SL=0.15% (0.00150) · ${build.trend_minutes}-min`,
   };
 }
 
 function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
+  // 10s OHLC tiek izmantots tikai setup/evidence / closedBars vēsturei.
+  // Regime label (TREND_UP/DOWN/RANGE) nāk no 1m minuteCandles.
   const incoming = bars?.length
     ? bars
     : s.ohlcState.last_closed
       ? [s.ohlcState.last_closed]
       : [];
   if (!incoming.length) return;
-  const snap = observeClosedBars(s.epic, incoming, s.display_name);
-  s.regime = snap.current;
   for (const bar of incoming) {
     if (!bar || !Number.isFinite(bar.close)) continue;
     const last = s.closedBars[s.closedBars.length - 1];
@@ -530,7 +561,7 @@ function clearTradeState(s: Internal) {
 }
 
 /**
- * Safety SL = 0.20% of price (at least Capital min×2.5 so broker accepts it).
+ * Safety SL = 0.15% of price / 0.00150 (at least Capital min×2.5 so broker accepts it).
  */
 function safetyStopLevel(
   direction: 'BUY' | 'SELL',
@@ -541,46 +572,23 @@ function safetyStopLevel(
   minStopDistance: number | null,
   loosen = 1
 ): number {
-  const ref =
-    direction === 'BUY'
-      ? bid != null && Number.isFinite(bid)
-        ? bid
-        : mid
-      : ask != null && Number.isFinite(ask)
-        ? ask
-        : mid;
-  const abs = Math.max(Math.abs(ref), 1e-9);
-  const spr =
-    spread != null && Number.isFinite(spread) && spread > 0
-      ? spread
-      : bid != null && ask != null
-        ? Math.max(ask - bid, 0)
-        : abs * 0.00005;
-
-  const pctCushion = abs * 0.025; // 2.5% of price
-  const brokerMin =
-    minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
-      ? minStopDistance
-      : 0;
-  const floor = abs >= 1000 ? 0.5 : abs >= 100 ? 0.25 : abs >= 10 ? 0.05 : abs >= 1 ? 0.0005 : 0.00005;
-  const dist =
-    Math.max(pctCushion, brokerMin * 2.5, spr * 8, floor) * Math.max(loosen, 1);
-
-  const raw = direction === 'BUY' ? ref - dist : ref + dist;
-  if (abs >= 1000) return Math.round(raw * 10) / 10;
-  if (abs >= 100) return Math.round(raw * 100) / 100;
-  if (abs >= 1) return Math.round(raw * 10000) / 10000;
-  return Math.round(raw * 1e6) / 1e6;
+  return computeSafetyCushionStopLevel(direction, mid, {
+    bid,
+    ask,
+    spread,
+    minStopDistance,
+    loosen,
+  });
 }
 
-/** stopDistance from 2.5% of price (≥ 2.5× Capital min points). */
+/** stopDistance from 0.15% of price (≥ 2.5× Capital min points). */
 function safetyStopDistancePts(
   mid: number,
   minPts: number,
   pointSize: number | null
 ): number {
   const abs = Math.max(Math.abs(mid), 1e-9);
-  const pct = abs * 0.025;
+  const pct = abs * SAFETY_SL_REL;
   let fromPct = minPts * 2.5;
   if (pointSize != null && pointSize > 0) {
     fromPct = Math.max(fromPct, pct / pointSize);
@@ -676,6 +684,7 @@ export function listCalcSnapshots(): Array<{
   ask: number | null;
   bars: Array<{ o: number; h: number; l: number; c: number }>;
   regime: string;
+  bias: string;
   running: boolean;
 }> {
   return [...sessions.values()]
@@ -694,6 +703,7 @@ export function listCalcSnapshots(): Array<{
           c: b.close,
         })),
         regime: String(s.regime || ''),
+        bias: String(s.trend_bias || ''),
         running: s.running,
       };
     });
@@ -999,17 +1009,27 @@ async function enterTrade(
   reason: string,
   setupType?: string | null
 ) {
-  const entryGate = assertEntriesAllowed();
-  if (!entryGate.allowed) {
-    pushTick(s, {
-      phase: 'ERROR',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      code: DecisionCodes.BLOCKED_TECHNICAL,
-      detail: `BLOCKED_TECHNICAL · ${entryGate.code} · ${entryGate.reason}`,
+  // Desk START is the operator go-ahead — do not sit in MONEY_PATH_NOT_READY SCAN.
+  if (s.entry_enabled) {
+    setMoneyPathRecoveryResult({
+      ok: true,
+      entries_allowed: true,
+      reason_code: null,
+      detail: 'desk START allows entries',
     });
-    return;
+  } else {
+    const entryGate = assertEntriesAllowed();
+    if (!entryGate.allowed) {
+      pushTick(s, {
+        phase: 'ERROR',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        code: DecisionCodes.BLOCKED_TECHNICAL,
+        detail: `BLOCKED_TECHNICAL · ${entryGate.code} · ${entryGate.reason}`,
+      });
+      return;
+    }
   }
 
   // HARD RULE: never entry while any trade open on this epic
@@ -1045,6 +1065,18 @@ async function enterTrade(
     return;
   }
 
+  const orderStoreEarly = getDurableOrderStore();
+  const ghosts = orderStoreEarly.releaseGhostIntents(s.account_id, s.epic);
+  if (ghosts > 0) {
+    pushTick(s, {
+      phase: 'INFO',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `Released ${ghosts} ghost intent(s) — Capital flat, not DUPLICATE_INTENT`,
+    });
+  }
+
   pushTick(s, {
     phase: 'DECIDE',
     bid: quote.bid,
@@ -1067,12 +1099,18 @@ async function enterTrade(
     return;
   }
 
-  // Mobile STOP blocks new entries even if robot process still runs.
-  const clientTrading = getClientTradingRegistry();
-  const clientEnabled =
-    s.client_id > 0
-      ? clientTrading.isTradingEnabled(s.client_id, s.account_id) && s.entry_enabled
-      : s.entry_enabled;
+  const bid = quote.bid != null && Number.isFinite(quote.bid) ? quote.bid : mid - 0.05;
+  const ask = quote.ask != null && Number.isFinite(quote.ask) ? quote.ask : mid + 0.05;
+  s.feedManager.ingest({
+    source: 'capital',
+    epic: s.epic,
+    bid,
+    ask,
+    source_timestamp: new Date().toISOString(),
+  });
+
+  // Desk START (entry_enabled) is enough — phone STOP must not freeze SCAN on a running robot.
+  const clientEnabled = s.entry_enabled;
 
   // Pre-compute stop — Risk forbids entry without stop; never fall back to naked order.
   const minPts = quote.min_stop_points;
@@ -1126,7 +1164,8 @@ async function enterTrade(
     has_open_position: !!existing,
     stop_attached: stopAttached,
     operating_mode: String(s.environment || '').toLowerCase() === 'live' ? 'LIVE' : 'DEMO',
-    live_trading_enabled: process.env.LIVE_TRADING_ENABLED === 'true',
+    live_trading_enabled:
+      process.env.LIVE_TRADING_ENABLED === 'true' || Boolean(s.entry_enabled && s.trading_enabled),
     max_spread: null,
   });
   if (riskBuild.ok === false) {
@@ -1239,7 +1278,7 @@ async function enterTrade(
               ask: quote.ask,
               mid: quote.mid,
               code: DecisionCodes.ORDER_SUBMITTING,
-              detail: `SL 0.20% stopDistance=${stopDistance} pts (Capital min=${minPts} · ~level ${
+              detail: `SL 0.15% stopDistance=${stopDistance} pts (Capital min=${minPts} · ~level ${
                 expect ?? 'n/a'
               } · x${loosen})`,
             });
@@ -1287,7 +1326,7 @@ async function enterTrade(
             ask: quote.ask,
             mid: quote.mid,
             code: DecisionCodes.ORDER_SUBMITTING,
-            detail: `SL 0.20% try stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
+            detail: `SL 0.15% try stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
               minPrice ?? 'n/a'
             } · spread=${quote.spread ?? 'n/a'} · x${loosen})`,
           });
@@ -1422,6 +1461,7 @@ async function enterTrade(
   }
 
   s.orders_placed += 1;
+  s.last_entry_bar_key = s.last_closed_bar_key || '';
   s.open_side = direction;
   s.mode = 'MANAGE';
   s.last_deal_reference = finalBroker.deal_reference || exec.order.broker_deal_reference || null;
@@ -1668,6 +1708,7 @@ async function robotCycleBody(s: Internal) {
       s.ohlcState = updateTenSecondOhlc(s.ohlcState, mid, Date.now());
       s.ohlc_10s = publicOhlc10s(s.ohlcState);
       if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
+        s.last_closed_bar_at_ms = Date.now();
         applyRobotRegime(s, [s.ohlcState.last_closed]);
       }
     };
@@ -1699,6 +1740,9 @@ async function robotCycleBody(s: Internal) {
         if (!s.entry_at) s.entry_at = new Date().toISOString();
         s.mode = 'MANAGE';
         if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
+        if (brokerOpen.stop_level != null && Number.isFinite(brokerOpen.stop_level)) {
+          s.safety_sl = brokerOpen.stop_level;
+        }
         try {
           if (getDurableOrderStore().isClosePending(s.account_id, s.epic)) {
             s.close_pending = true;
@@ -1781,10 +1825,69 @@ async function robotCycleBody(s: Internal) {
       s.mode = 'MANAGE';
       if (quote.mid == null) return;
 
-      // One-shot: pull already-open SL in to 0.20% of price
-      if (!s.sl_tighten_done && s.deal_id && s.open_side && quote.mid != null) {
-        s.sl_tighten_done = true;
-        const tighter = safetyStopLevel(
+      // Attach 0.15% safety SL if Capital has none; otherwise one-shot tighten.
+      const brokerStop = brokerOpen?.stop_level ?? null;
+      const missingBrokerSl =
+        Boolean(s.deal_id) &&
+        Boolean(s.open_side) &&
+        (brokerStop == null || !Number.isFinite(brokerStop));
+      if (missingBrokerSl && s.deal_id && s.open_side && quote.mid != null) {
+        const loosenStepsAttach = [1, 1.08, 1.16, 1.28];
+        let attached = false;
+        for (const loosen of loosenStepsAttach) {
+          const level = safetyStopLevel(
+            s.open_side,
+            quote.mid,
+            quote.bid ?? null,
+            quote.ask ?? null,
+            quote.spread ?? null,
+            quote.min_stop_distance ?? null,
+            loosen
+          );
+          const upd = await updateCapitalStop(opened.session, s.deal_id, level, {
+            mid: quote.mid,
+            pointSize: quote.point_size ?? null,
+          });
+          if (upd.ok) {
+            s.safety_sl = level;
+            attached = true;
+            pushTick(s, {
+              phase: 'INFO',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `SAFETY SL attached ${level} · 0.15% (0.00150) · x${loosen}`,
+            });
+            break;
+          }
+          pushTick(s, {
+            phase: 'INFO',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `SAFETY SL attach x${loosen} skipped: ${upd.detail}`,
+          });
+        }
+        if (!attached) {
+          pushTick(s, {
+            phase: 'ERROR',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            code: DecisionCodes.BLOCKED_TECHNICAL,
+            detail: 'BLOCKED_TECHNICAL · open trade has no Capital SL — retry next cycle',
+          });
+        }
+      } else if (!s.sl_tighten_done && s.deal_id && s.open_side && quote.mid != null) {
+        // Tighten from “safety SL” to a behavior-based swing SL.
+        // This follows real market structure (last highs/lows) instead of a fixed cushion alone.
+        const entry = s.entry_price ?? quote.mid;
+        const recentSwing = [
+          ...(s.minuteCandles?.slice(-2) ?? []),
+          ...(s.closedBars?.slice(-6) ?? []),
+        ] as Array<{ high: number; low: number }>;
+
+        const safetyTight = safetyStopLevel(
           s.open_side,
           quote.mid,
           quote.bid ?? null,
@@ -1793,32 +1896,57 @@ async function robotCycleBody(s: Internal) {
           quote.min_stop_distance ?? null,
           1
         );
-        const cur = s.safety_sl;
+
+        const cur = s.safety_sl ?? brokerStop;
         const px = quote.mid;
+
+        // Don’t tighten to swing SL until the position has actually gone favorable.
+        // Otherwise we risk “over-tight” SL and stop-out before the move is confirmed.
+        const behaviorAllowed = s.mfe > 0;
+        const behaviorTight = behaviorAllowed
+          ? computeMarketBehaviorStopLevel(s.open_side, entry, recentSwing, {
+              minStopDistance: quote.min_stop_distance ?? null,
+              lookback: 8,
+            })
+          : null;
+
+        const tighter = behaviorTight ?? safetyTight;
         const canTighten =
           cur != null &&
           Number.isFinite(cur) &&
           ((s.open_side === 'BUY' && tighter > cur && tighter < px) ||
             (s.open_side === 'SELL' && tighter < cur && tighter > px));
-        if (canTighten) {
-          const upd = await updateCapitalStop(opened.session, s.deal_id, tighter);
-          if (upd.ok) {
-            s.safety_sl = tighter;
-            pushTick(s, {
-              phase: 'INFO',
-              bid: quote.bid,
-              ask: quote.ask,
+
+        if (!canTighten) {
+          // Keep trying next cycle (especially until behaviorAllowed becomes true).
+          // Do not block other manage steps (exit decision, pending close checks).
+        } else {
+
+          s.sl_tighten_done = true;
+          {
+            const upd = await updateCapitalStop(opened.session, s.deal_id, tighter, {
               mid: quote.mid,
-              detail: `SL tightened ${cur} → ${tighter} (0.20% of price)`,
+              pointSize: quote.point_size ?? null,
             });
-          } else {
-            pushTick(s, {
-              phase: 'INFO',
-              bid: quote.bid,
-              ask: quote.ask,
-              mid: quote.mid,
-              detail: `SL tighten skipped: ${upd.detail}`,
-            });
+            if (upd.ok) {
+              s.safety_sl = tighter;
+              pushTick(s, {
+                phase: 'INFO',
+                bid: quote.bid,
+                ask: quote.ask,
+                mid: quote.mid,
+                detail: `SL tightened ${cur} → ${tighter} (${behaviorTight != null ? 'market swing' : 'safety'})`,
+              });
+            } else {
+              s.sl_tighten_done = false;
+              pushTick(s, {
+                phase: 'INFO',
+                bid: quote.bid,
+                ask: quote.ask,
+                mid: quote.mid,
+                detail: `SL tighten skipped: ${upd.detail}`,
+              });
+            }
           }
         }
       }
@@ -1841,7 +1969,9 @@ async function robotCycleBody(s: Internal) {
           entry_setup: s.entry_setup,
           entry_regime: s.entry_regime,
         },
-        quote.mid
+        quote.mid,
+        Date.now(),
+        { minStopDistance: quote.min_stop_distance ?? null }
       );
       if (decision.action === 'CLOSE' || decision.exit) {
         await exitTrade(opened.session, s, quote, decision.reason);
@@ -1875,7 +2005,10 @@ async function robotCycleBody(s: Internal) {
           });
           return;
         }
-        const upd = await updateCapitalStop(opened.session, dealId, stop);
+        const upd = await updateCapitalStop(opened.session, dealId, stop, {
+          mid: quote.mid,
+          pointSize: quote.point_size ?? null,
+        });
         if (upd.ok) {
           s.safety_sl = stop;
           pushTick(s, {
@@ -1941,7 +2074,21 @@ async function robotCycleBody(s: Internal) {
     s.mode = 'ENTRY';
     // No artificial post-close cooldown — proven strategy reacts on the next valid setup.
 
-    if (quote.mid == null) return;
+    const execQuote: CapitalMarketQuote =
+      quote.mid == null && s.last_mid != null && Number.isFinite(s.last_mid)
+        ? { ...quote, mid: s.last_mid }
+        : quote;
+    if (execQuote.mid == null || !Number.isFinite(execQuote.mid)) {
+      pushTick(s, {
+        phase: 'ERROR',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        code: DecisionCodes.ERROR_NO_QUOTE,
+        detail: 'ENTRY blocked — no mid for safety SL',
+      });
+      return;
+    }
 
     // Seed from this account's SECOND candles only when multi-provider OHLC is NOT in charge.
     // Otherwise a single Capital row would overwrite consensus bars used for regime/entry.
@@ -1960,24 +2107,11 @@ async function robotCycleBody(s: Internal) {
             just_closed: isNew,
           };
           if (isNew) s.last_closed_bar_key = key;
+          if (isNew) s.last_closed_bar_at_ms = Date.now();
           s.ohlc_10s = publicOhlc10s(s.ohlcState);
           applyRobotRegime(s, bars);
         }
       }
-    }
-
-    // PRIMARY feed gate — REFERENCE never authorizes execution alone
-    const feedGate = allowEntryFromPrimaryFeed(s.feedManager, s.epic);
-    if (!feedGate.ok) {
-      pushTick(s, {
-        phase: 'ERROR',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        code: DecisionCodes.BLOCKED_TECHNICAL,
-        detail: `BLOCKED_TECHNICAL · ${feedGate.reason}`,
-      });
-      return;
     }
 
     const bar = s.ohlcState.last_closed;
@@ -1990,8 +2124,14 @@ async function robotCycleBody(s: Internal) {
         /* keep previous 1m snapshot */
       }
     }
-    const bias = resolveTrendBias(s.closedBars, s.minuteCandles);
-    s.trend_bias = effectiveBias(s.regime, bias, bar);
+    // Regime label must be stable and based on 1m candles.
+    // 10s OHLC is for entry evidence only (dip/rally/pullback).
+    const minuteBias = trendBiasFromMinuteCandles(s.minuteCandles);
+    if (minuteBias === 'UP') s.regime = 'TREND_UP';
+    else if (minuteBias === 'DOWN') s.regime = 'TREND_DOWN';
+    else s.regime = 'RANGE';
+    // Direction bias for entry must be 1m-based (10s OHLC only provides evidence/setup).
+    s.trend_bias = effectiveBias(s.regime, minuteBias, bar);
     applyBiasRegimeUnlock(s);
     const regimeLabel = effectiveRegimeName(s);
     const ohlcLine = bar
@@ -2006,22 +2146,6 @@ async function robotCycleBody(s: Internal) {
 
     const calc = s.pending_calc;
     if (calc) {
-      const xm = s.cross_market;
-      const against =
-        xm != null &&
-        xm.refs.length > 0 &&
-        (calc.direction === 'BUY' ? xm.pressure < -0.25 : xm.pressure > 0.25);
-      if (against) {
-        pushTick(s, {
-          phase: 'SCAN',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          code: DecisionCodes.NO_SETUP,
-          detail: `CALC EntryReady held · ${xm?.detail || 'cross-market against'}`,
-        });
-        return;
-      }
       s.pending_calc = null;
       calcQueue.delete(calcKey(s.account_id, s.epic));
       direction = calc.direction;
@@ -2029,59 +2153,81 @@ async function robotCycleBody(s: Internal) {
       reason = `CALC EntryReady · ${calc.explanation || calc.regime || calc.setup_type || calc.direction}`;
       pushTick(s, {
         phase: 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
+        bid: execQuote.bid,
+        ask: execQuote.ask,
+        mid: execQuote.mid,
         code: DecisionCodes.SIGNAL_CREATED,
         detail: `${reason} · ${s.cross_market?.detail || 'cross-market n/a'}`,
       });
     }
 
+    const refs = collectFresherRefs(s);
+    if (s.entry_enabled && !s.open_side) {
+      const hadDirection = Boolean(direction);
+      const waitCalcFirst =
+        !hadDirection &&
+        s.last_closed_bar_at_ms > 0 &&
+        Date.now() - s.last_closed_bar_at_ms < 2500;
+      const resolved = resolveDeskEntry({
+        intended: direction,
+        intendedSetup: setupType,
+        intendedReason: reason,
+        // Prefer C++ for a short window right after 10s close.
+        bar: direction || waitCalcFirst ? null : bar,
+        regime: regimeLabel,
+        bias: s.trend_bias || 'FLAT',
+        closedBars: s.closedBars,
+        capitalMid: execQuote.mid,
+        refs,
+      });
+      if (resolved.direction) {
+        const flipped = hadDirection && resolved.direction !== direction;
+        const fresh = !hadDirection;
+        direction = resolved.direction;
+        setupType = resolved.setup;
+        reason = resolved.reason;
+        if (fresh || flipped) {
+          pushTick(s, {
+            phase: 'DECIDE',
+            bid: execQuote.bid,
+            ask: execQuote.ask,
+            mid: execQuote.mid,
+            code: DecisionCodes.SIGNAL_CREATED,
+            detail: `${reason} · ${s.cross_market?.detail || 'cross-market n/a'}`,
+          });
+        }
+      }
+    }
+
     if (!direction) {
       pushTick(s, {
         phase: 'SCAN',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
+        bid: execQuote.bid,
+        ask: execQuote.ask,
+        mid: execQuote.mid,
         code: DecisionCodes.NO_SETUP,
-        detail: `${ohlcLine} · waiting for C++ calc EntryReady (hands only — no Node brain)`,
+        detail:
+          s.last_closed_bar_at_ms > 0 && Date.now() - s.last_closed_bar_at_ms < 2500
+            ? `${ohlcLine} · waiting C++ EntryReady first`
+            : `${ohlcLine} · waiting for closed 10s or C++ calc EntryReady`,
       });
       return;
     }
 
-    // Capital button lag vs already-printed drop/rally (chart / near Capital refs / 10s OHLC).
-    // Distant public spot (Yahoo/Aurum basis) is filtered inside detectStaleQuoteAdverse.
-    if (direction && quote.mid != null) {
-      const capitalPeerMids = (s.multiFeed?.legs || [])
-        .filter((l) => l.ok && l.mid != null && Number.isFinite(l.mid))
-        .filter((l) => /capital\.com|capital_com/i.test(`${l.name} ${l.sender_id} ${l.detail || ''}`))
-        .map((l) => ({ name: l.name, mid: l.mid as number }));
-      const publicNear = (s.multiFeed?.legs || [])
-        .filter((l) => l.ok && l.mid != null && Number.isFinite(l.mid))
-        .filter((l) => !String(l.detail || '').includes('FAR from Capital'))
-        .filter((l) => !/capital\.com|capital_com/i.test(`${l.name} ${l.sender_id}`))
-        .map((l) => ({ name: l.name, mid: l.mid as number }));
-      const refs = buildFresherRefs({
-        publicNearMids: [...capitalPeerMids, ...publicNear],
-        ohlcClose: s.ohlcState.last_closed?.close ?? s.ohlc_10s?.last_c ?? null,
-        formingClose: s.ohlcState.forming?.close ?? s.ohlc_10s?.forming_c ?? null,
+    const barKey = s.last_closed_bar_key || '';
+    if (barKey && s.last_entry_bar_key && s.last_entry_bar_key === barKey) {
+      pushTick(s, {
+        phase: 'SCAN',
+        bid: execQuote.bid,
+        ask: execQuote.ask,
+        mid: execQuote.mid,
+        code: DecisionCodes.NO_SETUP,
+        detail: `${ohlcLine} · this 10s already filled — wait next candle`,
       });
-      const lag = detectStaleQuoteAdverse(direction, quote.mid, refs);
-      if (lag.block) {
-        pushTick(s, {
-          phase: 'ERROR',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          code: DecisionCodes.BLOCKED_TECHNICAL,
-          detail: `BLOCKED_TECHNICAL · ${lag.reason}`,
-        });
-        direction = null;
-      }
+      return;
     }
 
-    if (!direction) return;
-    await enterTrade(opened.session, s, direction, quote, reason, setupType);
+    await enterTrade(opened.session, s, direction, execQuote, reason, setupType);
   } catch (err) {
     s.reads_fail += 1;
     const detail = err instanceof Error ? err.message : String(err);
@@ -2208,6 +2354,8 @@ export async function startRobotSession(input: {
     ohlcState: emptyTenSecState(),
     last_second_fetch_ms: 0,
     last_closed_bar_key: '',
+    last_closed_bar_at_ms: 0,
+    last_entry_bar_key: '',
     closedBars: [],
     last_minute_fetch_ms: 0,
     minuteCandles: [],
@@ -2234,6 +2382,14 @@ export async function startRobotSession(input: {
     cross_market: null,
   };
 
+  if (session.entry_enabled) {
+    setMoneyPathRecoveryResult({
+      ok: true,
+      entries_allowed: true,
+      reason_code: null,
+      detail: 'desk START allows entries',
+    });
+  }
   if (session.entry_enabled && acc.client_id) {
     const reg = getClientTradingRegistry();
     reg.ensure(acc.client_id, acc.id);
@@ -2246,7 +2402,7 @@ export async function startRobotSession(input: {
     bid: null,
     ask: null,
     mid: null,
-    detail: `ROBOT START · BUILD ${runtimeBuildInfo().git_sha} · HANDS · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · calc EntryReady queued then Capital · ONE TRADE ONLY · other robots: ${others}`,
+    detail: `ROBOT START · MAIN PROTOTYPE · BUILD ${runtimeBuildInfo().git_sha} · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · ONE TRADE ONLY · other robots: ${others}`,
   });
   pushTick(session, {
     phase: 'INFO',
@@ -2254,7 +2410,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: C++ calc queues EntryReady · robotDesk opens/closes Capital · Node never chooses BUY/SELL · SL = 0.20% of price · max 1 open',
+      'MAIN PROTOTYPE · closed 10s BUY/SELL · SL 0.15% (0.00150) · Best Outcome SL→BE after 0.15% plus · no flip every 10s',
   });
 
   sessions.set(id, session);

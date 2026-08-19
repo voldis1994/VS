@@ -5,6 +5,7 @@ import {
   decideFailedBreakout,
   decideRangeRejection,
   decideReversalConfirm,
+  denyWithTrendEntry,
   mergeTrendBias,
   trendBiasFromBars,
   trendBiasFromMinuteCandles,
@@ -67,12 +68,12 @@ function rangeThenUpperReject(): { bars: TenSecBar[]; confirm: TenSecBar } {
 describe('10s + regime-as-CONTEXT suitable entry', () => {
   beforeEach(() => disableStrategyEvalLogForTests(true));
 
-  it('UNKNOWN unlocks with bias OR bar-implied direction (no hard UNKNOWN block)', () => {
+  it('UNKNOWN unlocks with lasting bias — not the current 10s color', () => {
     expect(decideEntryFrom10sRegime(dip, 'UNKNOWN', 'UP')?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(dip, 'COMPRESSION', 'UP')?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(dip, 'UNKNOWN', 'DOWN')?.direction).toBe('SELL');
-    expect(decideEntryFrom10sRegime(dip, 'UNKNOWN', 'FLAT')?.direction).toBe('SELL');
-    expect(decideEntryFrom10sRegime(rally, 'UNKNOWN', 'FLAT')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(dip, 'UNKNOWN', 'FLAT')).toBeNull();
+    expect(decideEntryFrom10sRegime(rally, 'UNKNOWN', 'FLAT')).toBeNull();
     expect(decideEntryFrom10sRegime(rally, 'UNKNOWN', 'UP')?.direction).toBe('BUY');
   });
 
@@ -96,14 +97,27 @@ describe('10s + regime-as-CONTEXT suitable entry', () => {
     expect(decideEntryFrom10sRegime(quietGreen, 'COMPRESSION', 'DOWN')).toBeNull();
   });
 
+  it('COMPRESSION + bias UP BUYs a doji — not SCAN', () => {
+    const doji: TenSecBar = {
+      open_time_ms: 0,
+      open: 4338.12,
+      high: 4338.12,
+      low: 4337.7,
+      close: 4338.12,
+      ticks: 8,
+    };
+    expect(decideEntryFrom10sRegime(doji, 'COMPRESSION', 'UP')).toBeNull();
+  });
+
   it('TREND_DOWN follows the dump (red) — never sells a green breakout', () => {
     expect(decideEntryFrom10sRegime(dip, 'TREND_DOWN', 'DOWN')?.direction).toBe('SELL');
     expect(decideEntryFrom10sRegime(rally, 'TREND_DOWN', 'DOWN')).toBeNull();
   });
 
-  it('PULLBACK_UPTREND resumes long on the turn-up bar', () => {
+  it('PULLBACK_UPTREND dump SELLs with DOWN, dip-buys with UP, resumes long on rally', () => {
     expect(decideEntryFrom10sRegime(rally, 'PULLBACK_UPTREND', 'UP')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(dip, 'PULLBACK_UPTREND', 'UP')).toBeNull();
+    expect(decideEntryFrom10sRegime(dip, 'PULLBACK_UPTREND', 'UP')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(dip, 'PULLBACK_UPTREND', 'DOWN')?.direction).toBe('SELL');
   });
 
   it('BREAKOUT_UP follows up, not the failed red bar', () => {
@@ -157,7 +171,45 @@ describe('10s + regime-as-CONTEXT suitable entry', () => {
       ticks: 12,
     };
     expect(decideEntryFrom10sRegime(goldDump, 'TREND_DOWN', 'DOWN')?.direction).toBe('SELL');
-    expect(decideEntryFrom10sRegime(goldDump, 'UNKNOWN', 'FLAT')?.direction).toBe('SELL');
+    expect(decideEntryFrom10sRegime(goldDump, 'UNKNOWN', 'FLAT')).toBeNull();
+    expect(decideEntryFrom10sRegime(goldDump, 'UNKNOWN', 'DOWN')?.direction).toBe('SELL');
+  });
+
+  it('EXPANSION + bias UP + dump bar BUYs the dip (desk order, not SCAN)', () => {
+    const goldDump: TenSecBar = {
+      open_time_ms: 0,
+      open: 4346.42,
+      high: 4346.42,
+      low: 4345.25,
+      close: 4345.25,
+      ticks: 12,
+    };
+    const recent = [...dumpBars(6, 4348, 0.2), goldDump];
+    const hit = decideEntryFrom10sRegime(goldDump, 'EXPANSION', 'UP', recent);
+    expect(hit?.direction).toBe('BUY');
+    expect(hit?.setup).toBe('PULLBACK');
+    expect(
+      denyWithTrendEntry('BUY', goldDump, 'UP', recent)
+    ).toBeNull();
+  });
+
+  it('EXPANSION + bias DOWN follows the dump, never sells a green bar', () => {
+    expect(decideEntryFrom10sRegime(dip, 'EXPANSION', 'DOWN')?.direction).toBe('SELL');
+    expect(decideEntryFrom10sRegime(rally, 'EXPANSION', 'DOWN')).toBeNull();
+  });
+
+  it('FAILED_BREAKOUT_UP dump with UP bias BUYs when fade does not confirm', () => {
+    const goldDump: TenSecBar = {
+      open_time_ms: 0,
+      open: 4340.22,
+      high: 4340.22,
+      low: 4339.03,
+      close: 4339.03,
+      ticks: 12,
+    };
+    const hit = decideEntryFrom10sRegime(goldDump, 'FAILED_BREAKOUT_UP', 'UP');
+    expect(hit?.direction).toBe('BUY');
+    expect(hit?.setup).toBe('PULLBACK');
   });
 });
 

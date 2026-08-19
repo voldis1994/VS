@@ -175,4 +175,29 @@ export class OrderStore {
         open.includes(o.state)
     );
   }
+
+  /**
+   * Broker list is flat — leftover SIGNAL/SUBMITTING/POSITION_OPEN in the store
+   * is a ghost, not a live duplicate. Terminalize so the next order can fire.
+   */
+  releaseGhostIntents(accountId: number, epic: string): number {
+    let n = 0;
+    const at = new Date().toISOString();
+    for (const order of this.openIntents(accountId, epic)) {
+      const terminal: OrderState = order.state === 'POSITION_OPEN' ? 'POSITION_CLOSED' : 'REJECTED';
+      this.put({
+        ...order,
+        state: terminal,
+        reject_reason:
+          terminal === 'REJECTED' ? 'broker flat — ghost intent released' : order.reject_reason,
+        updated_at: at,
+        history: [
+          ...order.history,
+          { state: terminal, at, detail: 'broker flat — ghost intent released' },
+        ],
+      });
+      n += 1;
+    }
+    return n;
+  }
 }

@@ -972,7 +972,9 @@ export async function listCapitalOpenPositions(
       size: numOrNull(pos.size) ?? 0,
       open_level: numOrNull(pos.level ?? pos.openLevel ?? pos.averagePrice),
       upl: numOrNull(pos.upl ?? pos.unrealizedProfit ?? pos.profit),
-      stop_level: numOrNull(pos.stopLevel ?? pos.stop_level),
+      stop_level: numOrNull(
+        pos.stopLevel ?? pos.stop_level ?? pos.guaranteedStopLevel ?? pos.guaranteed_stop_level
+      ),
     });
   }
   return { ok: true, positions, detail: `${positions.length} open` };
@@ -1057,27 +1059,60 @@ export async function closeCapitalPosition(
   };
 }
 
-/** Tighten/set stop on an already-open Capital position (PUT stopLevel). */
+/** Tighten/set stop on an already-open Capital position (PUT stopLevel, then stopDistance). */
 export async function updateCapitalStop(
   session: CapitalSession,
   dealId: string,
-  stopLevel: number
+  stopLevel: number,
+  opts?: { mid?: number | null; pointSize?: number | null }
 ): Promise<{ ok: boolean; detail: string; status: number }> {
   const id = dealId.trim();
   if (!id || !Number.isFinite(stopLevel)) {
     return { ok: false, status: 0, detail: 'dealId + stopLevel required' };
   }
-  const res = await session.put(`/api/v1/positions/${encodeURIComponent(id)}`, { stopLevel });
-  if (!res.ok) {
-    return {
-      ok: false,
-      status: res.status,
-      detail: `Capital stop update ${id} failed HTTP ${res.status}: ${
-        res.json?.errorCode || res.json?.message || res.text.slice(0, 240)
-      }`,
-    };
+  const res = await session.put(`/api/v1/positions/${encodeURIComponent(id)}`, {
+    stopLevel,
+    guaranteedStop: false,
+  });
+  if (res.ok) {
+    return { ok: true, status: res.status, detail: `Updated stopLevel=${stopLevel} dealId=${id}` };
   }
-  return { ok: true, status: res.status, detail: `Updated stopLevel=${stopLevel} dealId=${id}` };
+  const mid = opts?.mid;
+  const ps = opts?.pointSize;
+  if (mid != null && Number.isFinite(mid) && ps != null && ps > 0) {
+    const distPrice = Math.abs(mid - stopLevel);
+    if (distPrice > 0) {
+      const rawPts = distPrice / ps;
+      const stopDistance = rawPts >= 10 ? Math.ceil(rawPts) : Math.round(rawPts * 100) / 100;
+      if (stopDistance > 0) {
+        const res2 = await session.put(`/api/v1/positions/${encodeURIComponent(id)}`, {
+          stopDistance,
+          guaranteedStop: false,
+        });
+        if (res2.ok) {
+          return {
+            ok: true,
+            status: res2.status,
+            detail: `Updated stopDistance=${stopDistance} (~${stopLevel}) dealId=${id}`,
+          };
+        }
+        return {
+          ok: false,
+          status: res2.status,
+          detail: `Capital stop update ${id} failed HTTP ${res.status}/${res2.status}: ${
+            res2.json?.errorCode || res.json?.errorCode || res2.json?.message || res.text.slice(0, 240)
+          }`,
+        };
+      }
+    }
+  }
+  return {
+    ok: false,
+    status: res.status,
+    detail: `Capital stop update ${id} failed HTTP ${res.status}: ${
+      res.json?.errorCode || res.json?.message || res.text.slice(0, 240)
+    }`,
+  };
 }
 
 export async function createCapitalPosition(
@@ -1151,7 +1186,9 @@ export async function createCapitalPosition(
   };
 }
 
-/** Safety SL = 0.20% of instrument price (at least Capital min×2.5). */
+/** Safety SL = 0.15% of instrument price (0.00150). Tighter on Gold 10s; Capital min is ~0.4pt. */
+export const SAFETY_SL_REL = 0.0015;
+
 export function computeSafetyCushionStopLevel(
   direction: 'BUY' | 'SELL',
   mid: number,
@@ -1160,10 +1197,12 @@ export function computeSafetyCushionStopLevel(
     ask?: number | null;
     spread?: number | null;
     minStopDistance?: number | null;
+    loosen?: number;
   }
 ): number {
   const bid = opts?.bid ?? null;
   const ask = opts?.ask ?? null;
+  const loosen = Math.max(opts?.loosen ?? 1, 1);
   const ref =
     direction === 'BUY'
       ? bid != null && Number.isFinite(bid)
@@ -1181,14 +1220,78 @@ export function computeSafetyCushionStopLevel(
         : abs * 0.00005;
   const brokerMin =
     opts?.minStopDistance != null && opts.minStopDistance > 0 ? opts.minStopDistance : 0;
-  const pctCushion = abs * 0.025; // 2.5% of price
+  const pctCushion = abs * SAFETY_SL_REL;
   const floor = abs >= 1000 ? 0.5 : abs >= 100 ? 0.25 : abs >= 10 ? 0.05 : 0.0005;
-  const dist = Math.max(pctCushion, brokerMin * 2.5, spr * 8, floor);
+  const dist = Math.max(pctCushion, brokerMin * 2.5, spr * 8, floor) * loosen;
   const raw = direction === 'BUY' ? ref - dist : ref + dist;
   if (abs >= 1000) return Math.round(raw * 10) / 10;
   if (abs >= 100) return Math.round(raw * 100) / 100;
   if (abs >= 1) return Math.round(raw * 10000) / 10000;
   return Math.round(raw * 1e6) / 1e6;
+}
+
+type RangeCandle = {
+  high: number;
+  low: number;
+};
+
+function quantizePrice(raw: number): number {
+  const abs = Math.abs(raw);
+  if (abs >= 1000) return Math.round(raw * 10) / 10;
+  if (abs >= 100) return Math.round(raw * 100) / 100;
+  if (abs >= 1) return Math.round(raw * 10000) / 10000;
+  return Math.round(raw * 1e6) / 1e6;
+}
+
+/**
+ * Market-behavior SL using recent swing levels (high/low).
+ *
+ * BUY: SL = (recent swing LOW) - buffer
+ * SELL: SL = (recent swing HIGH) + buffer
+ *
+ * Buffer adapts to recent candle range so it stays tighter in quiet markets
+ * and wider in volatile markets.
+ */
+export function computeMarketBehaviorStopLevel(
+  direction: 'BUY' | 'SELL',
+  entry: number,
+  recent: RangeCandle[],
+  opts?: {
+    minStopDistance?: number | null;
+    lookback?: number;
+  }
+): number | null {
+  const w = (recent || [])
+    .filter((c) => c && Number.isFinite(c.high) && Number.isFinite(c.low) && c.high >= c.low)
+    .slice(-Math.max(1, opts?.lookback ?? 4));
+  if (!w.length) return null;
+
+  const absEntry = Math.max(Math.abs(entry), 1e-9);
+  const minLow = Math.min(...w.map((c) => c.low));
+  const maxHigh = Math.max(...w.map((c) => c.high));
+  const range = Math.max(0, maxHigh - minLow);
+
+  // At least ~0.01% of price and a fraction of recent swing range.
+  const bufferPct = absEntry * 0.0003; // ~1.3pt on Gold at 4368
+  const bufferRange = range * 0.08; // adapt to candle volatility
+  const minBuffer = absEntry * 0.0001;
+  const buffer = Math.max(bufferPct, bufferRange, minBuffer);
+
+  const rawStop = direction === 'BUY' ? minLow - buffer : maxHigh + buffer;
+  if (!Number.isFinite(rawStop)) return null;
+
+  const stopLevel = quantizePrice(rawStop);
+
+  if (direction === 'BUY' && stopLevel >= entry) return null;
+  if (direction === 'SELL' && stopLevel <= entry) return null;
+
+  const minDist = opts?.minStopDistance != null && Number.isFinite(opts.minStopDistance) ? opts.minStopDistance : null;
+  if (minDist != null && minDist > 0) {
+    const dist = Math.abs(entry - stopLevel);
+    if (dist + 1e-9 < minDist) return null;
+  }
+
+  return stopLevel;
 }
 
 export type CapitalPriceCandle = {

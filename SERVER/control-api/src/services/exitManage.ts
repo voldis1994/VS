@@ -1,3 +1,5 @@
+import { SAFETY_SL_REL } from './capitalCom.js';
+
 /** Live Capital exit manager — per-robot, best-outcome + thesis invalidation.
 
  * Strategy owns ENTRY. Exit owns management of an EXISTING position.
@@ -44,7 +46,7 @@ export function favorableMove(side: ExitSide, entry: number, mid: number): numbe
  * Opposite live regime vs open side — ONLY for with-trend entry setups.
  * Counter-trend setups (FADE / REVERSAL / FAILED_BREAKOUT / RANGE_REJECTION)
  * must not be killed by re-applying opposite-regime as entry permission.
- * Missing entry_setup → no ThesisFailure (HardInvalidation / trail still apply).
+ * Missing entry_setup → no ThesisFailure (Best Outcome only trails SL to BE).
  */
 export function thesisFailureReason(
   side: ExitSide,
@@ -82,15 +84,15 @@ export function thesisFailureReason(
 }
 
 /**
- * Manage exit — lock the best available outcome.
- * Never give a printed plus back to minus. Broker SAFETY SL is last resort.
+ * Manage exit — lock the best available outcome by moving SL to breakeven.
+ * Never close from Best Outcome. Broker SAFETY SL (0.15%) is the loss stop.
  *
  * @param nowMs Evaluation clock — must be wall time at T (injectable for tests; no look-ahead).
  */
 export type BestOutcomeAction = 'HOLD' | 'CLOSE' | 'TRAIL';
 
 export type BestOutcome = {
-  /** True only when the broker position must be closed now. */
+  /** True only when the broker position must be closed now. Best Outcome never closes. */
   exit: boolean;
   action: BestOutcomeAction;
   reason: string;
@@ -102,84 +104,96 @@ function hold(): BestOutcome {
   return { exit: false, action: 'HOLD', reason: '', trail_stop: null };
 }
 
-function close(reason: string): BestOutcome {
-  return { exit: true, action: 'CLOSE', reason, trail_stop: null };
-}
-
 function trail(reason: string, stop: number): BestOutcome {
   return { exit: false, action: 'TRAIL', reason, trail_stop: stop };
 }
 
-/** Lock half of *current* favorable move (not original MFE — that would be through the market). */
+/**
+ * Broker BE stop level rounding:
+ * - BUY must not round ABOVE entry (would create immediate small loss).
+ * - SELL must not round BELOW entry.
+ *
+ * We quantize by Gold-like increments, but then force the stop to be on the
+ * "safe side" relative to the true entry.
+ */
+export function breakevenStopLevelForSide(side: ExitSide, entry: number): number {
+  const abs = Math.max(Math.abs(entry), 1e-9);
+  const scale = abs >= 1000 ? 10 : abs >= 100 ? 100 : abs >= 1 ? 10000 : 1e6;
+  if (side === 'BUY') return Math.floor(entry * scale) / scale;
+  return Math.ceil(entry * scale) / scale;
+}
+
+/** Back-compat: old signature rounds to the nearest (may be slightly unsafe for BUY/SELL). */
+export function breakevenStopLevel(entry: number): number {
+  const abs = Math.max(Math.abs(entry), 1e-9);
+  const scale = abs >= 1000 ? 10 : abs >= 100 ? 100 : abs >= 1 ? 10000 : 1e6;
+  return Math.round(entry * scale) / scale;
+}
+
+/** @deprecated Best Outcome trails to BE, not half of remaining plus. */
 export function trailStopLevel(side: ExitSide, entry: number, mid: number): number | null {
-  const fav = favorableMove(side, entry, mid);
-  if (!(fav > 0) || !Number.isFinite(entry) || !Number.isFinite(mid)) return null;
-  const lock = fav * 0.5;
-  return side === 'BUY' ? entry + lock : entry - lock;
+  void mid;
+  if (!Number.isFinite(entry)) return null;
+  return breakevenStopLevelForSide(side, entry);
 }
 
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
   mid: number,
-  nowMs: number = Date.now()
+  nowMs: number = Date.now(),
+  opts?: { minStopDistance?: number | null }
 ): BestOutcome {
+  void nowMs;
   if (!s.open_side || s.entry_price == null) return hold();
   if (!Number.isFinite(mid)) return hold();
 
-  const thesis = thesisFailureReason(s.open_side, s.regime, s.entry_setup);
-  if (thesis) return close(thesis);
+  /**
+   * “Inputs ended” gate:
+   * Let the trade run while the live regime/context matches the entry context.
+   * Only then allow Best Outcome to tighten SL to breakeven.
+   */
+  const entryRegime = s.entry_regime != null ? String(s.entry_regime).toUpperCase() : null;
+  const curRegime = s.regime != null ? String(s.regime).toUpperCase() : null;
+  const inputsEnded =
+    entryRegime && curRegime ? entryRegime !== curRegime : true;
 
   const entry = s.entry_price;
   const fav = favorableMove(s.open_side, entry, mid);
-  const absEntry = Math.max(Math.abs(entry), 1e-9);
-  const tp = Math.max(absEntry * 0.0022, 0.22);
-  const sl = Math.max(absEntry * 0.0015, 0.15);
-  /** Any plus that counts as "had a winner" — Gold ~2pts, FX ~0.08 */
-  const lockFloor = Math.max(absEntry * 0.00045, 0.08);
-  const retention = s.peak_retention;
-
-  // 1) Had plus → never ride it into minus
-  if (s.mfe >= lockFloor && fav <= 0) {
-    return close(
-      `GaveBackPlus · MFE ${s.mfe.toFixed(5)} now UPL ${fav.toFixed(5)} → lock, do not wait for minus`
-    );
+  const thesisFail = thesisFailureReason(s.open_side, s.regime, s.entry_setup);
+  if (thesisFail && fav <= 0) {
+    return { exit: true, action: 'CLOSE', reason: `${thesisFail} · no favorable move`, trail_stop: null };
   }
+  const minDist =
+    opts?.minStopDistance != null && Number.isFinite(opts.minStopDistance) && opts.minStopDistance > 0
+      ? opts.minStopDistance
+      : 0;
+  const absEntry = Math.max(Math.abs(entry), 1e-9);
 
-  // 2) Trail: move Capital SL to lock half of remaining plus (do not close)
-  if (s.mfe >= lockFloor && retention != null && retention < 0.5 && fav > 0) {
-    const stop = trailStopLevel(s.open_side, entry, mid);
-    if (stop != null && Number.isFinite(stop)) {
-      return trail(
-        `PeakProtection · retention ${(retention * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} → trail SL ${stop.toFixed(5)}`,
-        stop
-      );
+  // BE trigger tuned to operator “good feel”:
+  // - on Gold (~>=1000), trail SL to BE around +1.8 UPL points
+  // - otherwise keep relative SAFETY_SL_REL behavior
+  const goldBeTriggerPoints = 1.8;
+  const beMove = absEntry >= 1000 ? Math.max(minDist, goldBeTriggerPoints) : Math.max(minDist, absEntry * SAFETY_SL_REL);
+
+  // If “inputs ended” hasn't happened (regime unchanged), still allow BE only
+  // when the move is already clearly beyond normal noise.
+  // This prevents a situation where BE never triggers.
+  if (!inputsEnded) {
+    // For Gold we explicitly want the operator “good feel” trigger (~1.8 UPL points)
+    // even when the live regime has not yet “ended” by this heuristic.
+    if (absEntry < 1000) {
+      const lateBeMove = beMove * 2; // allow BE after a clearly larger move
+      if (!(Number.isFinite(fav) && fav + 1e-9 >= lateBeMove)) return hold();
     }
   }
 
-  // 3) Still green but fading — harvest remaining plus
-  if (s.mfe >= lockFloor && fav > 0 && retention != null && retention < 0.62) {
-    return close(
-      `BestOutcome harvest · UPL ${fav.toFixed(5)} after MFE ${s.mfe.toFixed(5)} (ret ${(retention * 100).toFixed(0)}%)`
+  // Best Outcome = only SL → BE. No TP/harvest/time/thesis close.
+  if (Number.isFinite(fav) && fav + 1e-9 >= beMove) {
+    const stop = breakevenStopLevelForSide(s.open_side, entry);
+    return trail(
+      `BestOutcome BE · SL ${stop} · UPL ${fav.toFixed(5)} · entry ${entry}`,
+      stop
     );
-  }
-
-  // 4) Take the plus when target is hit (do not wait for a bigger dream)
-  if (fav >= tp) {
-    return close(`Target / best outcome · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)}`);
-  }
-
-  // 5) Last-resort hard invalidation (no plus was ever locked)
-  if (fav <= -sl) {
-    return close(`HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}`);
-  }
-
-  const entryMs = s.entry_at ? new Date(s.entry_at).getTime() : NaN;
-  const heldMs = Number.isFinite(entryMs) ? Math.max(0, nowMs - entryMs) : 0;
-  if (heldMs > 90_000 && fav > 0 && s.mfe >= lockFloor * 0.6) {
-    return close(`TimeDecay · held ${Math.round(heldMs / 1000)}s · take plus ${fav.toFixed(5)}`);
-  }
-  if (heldMs > 180_000 && fav >= 0) {
-    return close(`TimeDecay · held ${Math.round(heldMs / 1000)}s · flatten non-negative ${fav.toFixed(5)}`);
   }
 
   return hold();

@@ -38,16 +38,16 @@ function snap(
 }
 
 describe('Exit matrix A–P', () => {
-  it('A) LONG hard-stop exit', () => {
+  it('A) LONG in minus — Best Outcome does not close (safety SL holds)', () => {
     const d = decideBestOutcomeExit(
       snap({ open_side: 'BUY', entry_price: 2000, regime: 'RANGE', entry_setup: 'PULLBACK' }),
       1994
     );
-    expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/HardInvalidation/);
+    expect(d.exit).toBe(false);
+    expect(d.action).toBe('HOLD');
   });
 
-  it('B) SHORT hard-stop exit', () => {
+  it('B) SHORT in minus — Best Outcome does not close', () => {
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'SELL',
@@ -58,21 +58,48 @@ describe('Exit matrix A–P', () => {
       }),
       2006
     );
-    expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/HardInvalidation/);
+    expect(d.exit).toBe(false);
+    expect(d.action).toBe('HOLD');
     expect(favorableMove('SELL', 2000, 2006)).toBeLessThan(0);
   });
 
-  it('C) LONG target exit', () => {
+  it('C) LONG plus → trail SL to BE, never TP close', () => {
     const d = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: 2000, mfe: 8, entry_setup: 'CONTINUATION' }),
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        mfe: 8,
+        entry_setup: 'CONTINUATION',
+        // “inputs ended”: live regime differs from entry regime
+        entry_regime: 'TREND_DOWN',
+      }),
       2005
     );
-    expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/Target/);
+    expect(d.exit).toBe(false);
+    expect(d.action).toBe('TRAIL');
+    expect(d.trail_stop).toBe(2000);
+    expect(d.reason).toMatch(/BestOutcome BE/);
   });
 
-  it('D) SHORT target exit', () => {
+  it('C1) Gold: 1.8 UPL still trails to BE even when inputsEnded=false', () => {
+    // “inputs ended” heuristic: entry_regime and live regime are the same by default in snap().
+    // This test ensures Gold does NOT require the extra 2× lateBeMove.
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        // setup is with-trend, but thesis failure won't matter here
+        entry_setup: 'PULLBACK',
+      }),
+      2001.8
+    );
+    expect(d.exit).toBe(false);
+    expect(d.action).toBe('TRAIL');
+    expect(d.trail_stop).toBe(2000);
+    expect(d.reason).toMatch(/BestOutcome BE/);
+  });
+
+  it('D) SHORT plus → trail SL to BE', () => {
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'SELL',
@@ -80,24 +107,27 @@ describe('Exit matrix A–P', () => {
         mfe: 8,
         entry_setup: 'CONTINUATION',
         entry_regime: 'TREND_DOWN',
-        regime: 'TREND_DOWN',
+        // “inputs ended”: live regime differs from entry regime
+        regime: 'TREND_UP',
       }),
       1995
     );
-    expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/Target/);
+    expect(d.exit).toBe(false);
+    expect(d.action).toBe('TRAIL');
+    expect(d.trail_stop).toBe(2000);
   });
 
-  it('E) valid position remains open when no exit condition exists', () => {
+  it('E) tiny plus HOLDs — Gold noise must not move SL to BE', () => {
     const d = decideBestOutcomeExit(
       snap({ open_side: 'BUY', entry_price: 2000, mfe: 0.4, entry_setup: 'PULLBACK' }),
       2000.5
     );
     expect(d.exit).toBe(false);
-    expect(d.reason).toBe('');
+    expect(d.action).toBe('HOLD');
+    expect(d.trail_stop).toBeNull();
   });
 
-  it('F) reversal/invalidation LONG (with-trend setup + opposite regime)', () => {
+  it('F) opposite regime does NOT close — tiny plus still HOLD', () => {
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -108,11 +138,26 @@ describe('Exit matrix A–P', () => {
       }),
       2001
     );
+    expect(d.exit).toBe(false);
+    expect(d.action).toBe('HOLD');
+  });
+
+  it('F2) opposite regime with no favorable move can CLOSE on thesis failure', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        regime: 'TREND_DOWN',
+        entry_setup: 'PULLBACK',
+      }),
+      1999.8
+    );
     expect(d.exit).toBe(true);
+    expect(d.action).toBe('CLOSE');
     expect(d.reason).toMatch(/ThesisFailure/);
   });
 
-  it('G) reversal/invalidation SHORT (with-trend setup + opposite regime)', () => {
+  it('G) SHORT plus + opposite regime → HOLD until 0.25% plus', () => {
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'SELL',
@@ -123,8 +168,8 @@ describe('Exit matrix A–P', () => {
       }),
       1999
     );
-    expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/ThesisFailure/);
+    expect(d.exit).toBe(false);
+    expect(d.action).toBe('HOLD');
   });
 
   it('H) failed-breakout position management — opposite regime is NOT thesis kill', () => {
@@ -163,7 +208,6 @@ describe('Exit matrix A–P', () => {
   it('J) no look-ahead — Exit uses only snapshot + mid at T (injectable clock)', () => {
     const entryAt = '2026-08-15T12:00:00.000Z';
     const t0 = Date.parse(entryAt);
-    // At T+10s: hold
     const early = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -177,8 +221,7 @@ describe('Exit matrix A–P', () => {
       t0 + 10_000
     );
     expect(early.exit).toBe(false);
-    // Future mid must be passed by caller — function has no bar history / no future fetch
-    const futureMid = 2100;
+    expect(early.action).toBe('HOLD');
     const atT = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -191,22 +234,24 @@ describe('Exit matrix A–P', () => {
       t0 + 5_000
     );
     expect(atT.exit).toBe(false);
-    // Using a later mid at same clock is caller's data at that T — TimeDecay must not fire from future heldMs
+    expect(atT.action).toBe('HOLD');
+    const futureMid = 2100;
     const noFutureTime = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: 2000,
         entry_at: entryAt,
+        // “inputs ended”: live regime differs from entry regime
+        entry_regime: 'TREND_DOWN',
         mfe: 2,
         entry_setup: 'PULLBACK',
       }),
       futureMid,
       t0 + 5_000
     );
-    // Target hits on mid alone — legitimate at T if mid is current; not look-ahead from bars
-    expect(noFutureTime.exit).toBe(true);
-    expect(noFutureTime.reason).toMatch(/Target/);
-    // TimeDecay only when nowMs - entry_at exceeds threshold (not Date.now smuggled)
+    expect(noFutureTime.exit).toBe(false);
+    expect(noFutureTime.action).toBe('TRAIL');
+    expect(noFutureTime.trail_stop).toBe(2000);
     const decay = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -219,8 +264,9 @@ describe('Exit matrix A–P', () => {
       2000.5,
       t0 + 100_000
     );
-    expect(decay.exit).toBe(true);
-    expect(decay.reason).toMatch(/TimeDecay/);
+    expect(decay.exit).toBe(false);
+    expect(decay.action).toBe('HOLD');
+    expect(decay.reason).not.toMatch(/TimeDecay/);
   });
 
   it('K) duplicate close prevention', () => {
@@ -378,6 +424,7 @@ describe('Exit matrix A–P', () => {
       1999.8
     );
     expect(holdFade.exit).toBe(false);
+    expect(holdFade.action).toBe('HOLD');
   });
 });
 
@@ -388,7 +435,7 @@ describe('Exit helpers — LONG/SHORT symmetry', () => {
     expect(favorableMove('SELL', 2000, 1995)).toBe(5);
   });
 
-  it('GaveBackPlus / PeakProtection / harvest work for SELL', () => {
+  it('plus trails SL to BE for SELL; minus does not close', () => {
     const gave = decideBestOutcomeExit(
       snap({
         open_side: 'SELL',
@@ -400,8 +447,8 @@ describe('Exit helpers — LONG/SHORT symmetry', () => {
       }),
       2000.2
     );
-    expect(gave.exit).toBe(true);
-    expect(gave.reason).toMatch(/GaveBackPlus/);
+    expect(gave.exit).toBe(false);
+    expect(gave.action).toBe('HOLD');
 
     const peak = decideBestOutcomeExit(
       snap({
@@ -412,11 +459,41 @@ describe('Exit helpers — LONG/SHORT symmetry', () => {
         mfe: 8,
         peak_retention: 0.2,
       }),
-      1998.4
+      1995
     );
     expect(peak.exit).toBe(false);
     expect(peak.action).toBe('TRAIL');
-    expect(peak.trail_stop).toBeGreaterThan(0);
-    expect(peak.reason).toMatch(/PeakProtection/);
+    expect(peak.trail_stop).toBe(2000);
+    expect(peak.reason).toMatch(/BestOutcome BE/);
+  });
+
+  it('waits for 0.25% plus (not broker min-stop) before BE', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4353,
+        entry_setup: 'PULLBACK',
+        // “inputs ended”: live regime differs from entry regime
+        entry_regime: 'TREND_DOWN',
+      }),
+      4354,
+      Date.now(),
+      { minStopDistance: 0.5 }
+    );
+    expect(d.action).toBe('HOLD');
+    const ready = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4353,
+        entry_setup: 'PULLBACK',
+        // “inputs ended”: live regime differs from entry regime
+        entry_regime: 'TREND_DOWN',
+      }),
+      4364,
+      Date.now(),
+      { minStopDistance: 0.5 }
+    );
+    expect(ready.action).toBe('TRAIL');
+    expect(ready.trail_stop).toBe(4353);
   });
 });

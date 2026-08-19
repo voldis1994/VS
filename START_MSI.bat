@@ -24,7 +24,12 @@ if not exist "%~dp0ADMIN\windows\start-admin.ps1" (
 
 where git >nul 2>&1
 if not errorlevel 1 (
-  git pull origin main 2>nul
+  echo Pulling origin main — MAIN prototype
+  git fetch origin main
+  git pull origin main
+  if errorlevel 1 (
+    echo WARN: git pull origin main failed — continuing with local tree
+  )
 )
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0ADMIN\windows\start-admin.ps1"

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiFetch } from '../hooks/useApi';
+import { pullCapital } from '../hooks/pullCapital';
 import { Logo } from '../components/Logo';
 
 type RobotTick = {
@@ -158,17 +159,9 @@ function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'fl
     return { label: `MARKET CLOSED · ${String(s.capital_market_status || 'CLOSED').toUpperCase()}`, kind: 'flat' };
   }
   if (s.running && !s.open_side) {
-    const fade =
-      regime === 'RANGE' ||
-      regime === 'FAILED_BREAKOUT_UP' ||
-      regime === 'FAILED_BREAKOUT_DOWN' ||
-      regime === 'REVERSAL_CANDIDATE' ||
-      regime === 'SEEDING';
-    if (fade && regime !== 'SEEDING') return { label: `SCAN · ${regime} · no fade`, kind: 'entry' };
-    if (regime === 'SEEDING') return { label: 'SCAN · SEEDING 10s', kind: 'entry' };
     const bias = String(s.trend_bias || s.decision_chain?.setup || '').toUpperCase();
     const only =
-      bias.includes('UP') ? ' · bias UP · only BUY' : bias.includes('DOWN') ? ' · bias DOWN · only SELL' : ' · with-trend';
+      bias.includes('UP') ? ' · bias UP' : bias.includes('DOWN') ? ' · bias DOWN' : '';
     return { label: `SCAN · ${regime}${only}`, kind: 'entry' };
   }
   return { label: `FLAT · ${regime}`, kind: 'flat' };
@@ -217,6 +210,7 @@ export function RobotDeskPage() {
   const [senders, setSenders] = useState<DataSender[]>([]);
   const [focusId, setFocusId] = useState<string | null>(params.get('id'));
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [booted, setBooted] = useState(false);
   const shellRef = useRef<HTMLDivElement>(null);
@@ -419,6 +413,36 @@ export function RobotDeskPage() {
   const focusChain = focused?.decision_chain;
   const focusPosture = focused ? posture(focused) : null;
 
+  const pullCapitalNow = async () => {
+    setBusy(true);
+    setError(null);
+    setInfo('PULL CAPITAL — 1–3 min, neaizver tab...');
+    try {
+      const res = await pullCapital(launchAccountId);
+      setLaunchAccountId(res.accountId);
+      setInfo(`PULL CAPITAL OK · ${res.synced_accounts} konts · ${res.markets} tirgi`);
+      setShowDeploy(true);
+      const accs = await apiFetch<typeof launchAccounts>('/api/trading/accounts');
+      setLaunchAccounts(accs || []);
+      const list = await apiFetch<typeof launchMarkets>(
+        `/api/trading/accounts/${res.accountId}/instruments`
+      );
+      setLaunchMarkets(list || []);
+      const gold =
+        (list || []).find((m) => /gold|xau/i.test(`${m.display_name} ${m.epic || ''} ${m.symbol}`)) ||
+        (list || [])[0];
+      if (gold) {
+        setLaunchEpic(gold.epic || gold.symbol);
+        setLaunchLot(String(gold.lot_size || gold.min_lot || 0.1));
+      }
+    } catch (e) {
+      setInfo(null);
+      setError(e instanceof Error ? e.message : 'PULL CAPITAL failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const deploy = () => {
     if (!launchAccountId || !launchEpic) {
       setError('Izvēlies account + tirgu');
@@ -527,6 +551,9 @@ export function RobotDeskPage() {
             </div>
           </div>
           <div className="robot-op-actions actions">
+            <button className="btn btn-go" type="button" disabled={busy} onClick={() => void pullCapitalNow()}>
+              PULL CAPITAL
+            </button>
             <button className="btn btn-primary" type="button" onClick={() => void goFullscreen()}>
               {isFs ? 'EXIT FS' : 'PILNEKRĀNS'}
             </button>
@@ -540,6 +567,7 @@ export function RobotDeskPage() {
         </header>
 
         {error && <div className="error-state robot-op-alert">{error}</div>}
+        {info && <div className="ok-state robot-op-alert">{info}</div>}
         {busy && <div className="mono robot-op-busy">Syncing…</div>}
 
         {showDeploy && (
