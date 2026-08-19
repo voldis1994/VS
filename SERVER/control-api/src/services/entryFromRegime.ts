@@ -559,24 +559,56 @@ export function decideEntryFrom10sRegime(
   }
 
   if (r === 'PULLBACK_UPTREND') {
-    if (!movingOrNull(bar) || !rally(bar)) return null;
-    return gateWithTrend(
-      { direction: 'BUY', setup: 'CONTINUATION', reason: `${r} resume long · ${candle}` },
-      b,
-      bar,
-      bars,
-      r
-    );
+    // Dump + DOWN → SELL (screenshot SCAN case). Dump + UP → dip-buy. Rally → resume long.
+    if (b === 'DOWN' && (dip(bar) || softDip(bar))) {
+      return gateWithTrend(
+        { direction: 'SELL', setup: 'CONTINUATION', reason: `${r}+bias DOWN follow dump · ${candle}` },
+        b,
+        bar,
+        bars,
+        r
+      );
+    }
+    if (dip(bar) || softDip(bar)) {
+      return gateWithTrend(
+        { direction: 'BUY', setup: 'PULLBACK', reason: `${r} dip-buy · ${candle}` },
+        b,
+        bar,
+        bars,
+        r
+      );
+    }
+    if (rally(bar) || softRally(bar)) {
+      return gateWithTrend(
+        { direction: 'BUY', setup: 'CONTINUATION', reason: `${r} resume long · ${candle}` },
+        b,
+        bar,
+        bars,
+        r
+      );
+    }
+    return null;
   }
   if (r === 'PULLBACK_DOWNTREND') {
-    if (!movingOrNull(bar) || !dip(bar)) return null;
-    return gateWithTrend(
-      { direction: 'SELL', setup: 'CONTINUATION', reason: `${r} resume short · ${candle}` },
-      b,
-      bar,
-      bars,
-      r
-    );
+    if (b === 'UP' && (rally(bar) || softRally(bar))) {
+      return gateWithTrend(
+        { direction: 'BUY', setup: 'CONTINUATION', reason: `${r}+bias UP follow rally · ${candle}` },
+        b,
+        bar,
+        bars,
+        r
+      );
+    }
+    if (dip(bar) || softDip(bar)) {
+      return gateWithTrend(
+        { direction: 'SELL', setup: 'CONTINUATION', reason: `${r} resume short · ${candle}` },
+        b,
+        bar,
+        bars,
+        r
+      );
+    }
+    return null;
   }
 
   if (r === 'BREAKOUT_UP') {

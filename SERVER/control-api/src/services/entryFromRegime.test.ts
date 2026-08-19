@@ -114,9 +114,10 @@ describe('10s + regime-as-CONTEXT suitable entry', () => {
     expect(decideEntryFrom10sRegime(rally, 'TREND_DOWN', 'DOWN')).toBeNull();
   });
 
-  it('PULLBACK_UPTREND resumes long on the turn-up bar', () => {
+  it('PULLBACK_UPTREND dump SELLs with DOWN, dip-buys with UP, resumes long on rally', () => {
     expect(decideEntryFrom10sRegime(rally, 'PULLBACK_UPTREND', 'UP')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(dip, 'PULLBACK_UPTREND', 'UP')).toBeNull();
+    expect(decideEntryFrom10sRegime(dip, 'PULLBACK_UPTREND', 'UP')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(dip, 'PULLBACK_UPTREND', 'DOWN')?.direction).toBe('SELL');
   });
 
   it('BREAKOUT_UP follows up, not the failed red bar', () => {

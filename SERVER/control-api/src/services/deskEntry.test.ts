@@ -148,4 +148,52 @@ describe('resolveDeskEntry — BUY and SELL both fire', () => {
     });
     expect(e.direction).toBe('BUY');
   });
+
+  it('screenshot: PULLBACK_UPTREND + bias DOWN + dump 10s → SELL, not SCAN', () => {
+    const e = resolveDeskEntry({
+      bar: {
+        open_time_ms: 0,
+        open: 4354.67,
+        high: 4354.67,
+        low: 4354.13,
+        close: 4354.13,
+        ticks: 8,
+      },
+      regime: 'PULLBACK_UPTREND',
+      bias: 'DOWN',
+      capitalMid: 4356.46,
+      refs: cluster(4354.13),
+    });
+    expect(e.direction).toBe('SELL');
+    expect(e.direction).not.toBeNull();
+  });
+
+  it('closed 10s always returns BUY or SELL (agreeing feeds, no lag)', () => {
+    const dump = bar(4354.67, 4354.13);
+    const climb = bar(4354.13, 4354.67);
+    const doji = bar(4354.5, 4354.5);
+    const regimes = [
+      'PULLBACK_UPTREND',
+      'COMPRESSION',
+      'RANGE',
+      'TREND_UP',
+      'TREND_DOWN',
+      'EXPANSION',
+    ] as const;
+    const biases = ['UP', 'DOWN', 'FLAT'] as const;
+    for (const regime of regimes) {
+      for (const bias of biases) {
+        for (const b of [dump, climb, doji]) {
+          const e = resolveDeskEntry({
+            bar: b,
+            regime,
+            bias,
+            capitalMid: 4354.4,
+            refs: cluster(4354.4),
+          });
+          expect(e.direction, `${regime} ${bias} O=${b.open} C=${b.close}`).toMatch(/BUY|SELL/);
+        }
+      }
+    }
+  });
 });

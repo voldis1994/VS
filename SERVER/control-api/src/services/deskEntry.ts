@@ -1,6 +1,8 @@
 /**
  * Desk entry: 10s regime, then Capital-lag lead (BUY and SELL).
  * robotDesk hands still open Capital — this only picks the side.
+ *
+ * A closed 10s bar always yields BUY or SELL. SCAN is only for "no bar yet".
  */
 import { decideEntryFrom10sRegime, type TrendBias } from './entryFromRegime.js';
 import {
@@ -19,6 +21,37 @@ export type DeskEntry = {
 
 const FLIP_MIN_REL = 0.0012;
 
+/** Closed 10s always has a side — dump follows DOWN/FLAT as SELL, UP as dip-buy. */
+export function sideFromClosedBar(
+  bar: TenSecBar,
+  bias: TrendBias,
+  regime?: string | null
+): { direction: 'BUY' | 'SELL'; setup: string; reason: string } {
+  const r = regime || 'UNKNOWN';
+  if (bar.close < bar.open) {
+    const direction: 'BUY' | 'SELL' = bias === 'UP' ? 'BUY' : 'SELL';
+    return {
+      direction,
+      setup: direction === 'BUY' ? 'PULLBACK' : 'CONTINUATION',
+      reason: `10s dump · ${direction} · ${r} · bias ${bias}`,
+    };
+  }
+  if (bar.close > bar.open) {
+    const direction: 'BUY' | 'SELL' = bias === 'DOWN' ? 'SELL' : 'BUY';
+    return {
+      direction,
+      setup: 'CONTINUATION',
+      reason: `10s rally · ${direction} · ${r} · bias ${bias}`,
+    };
+  }
+  const direction: 'BUY' | 'SELL' = bias === 'DOWN' ? 'SELL' : 'BUY';
+  return {
+    direction,
+    setup: 'BIAS',
+    reason: `10s doji · ${direction} · ${r} · bias ${bias}`,
+  };
+}
+
 export function resolveDeskEntry(input: {
   intended?: 'BUY' | 'SELL' | null;
   intendedSetup?: string | null;
@@ -33,12 +66,13 @@ export function resolveDeskEntry(input: {
   let direction: 'BUY' | 'SELL' | null = input.intended ?? null;
   let setup: string | null = input.intendedSetup ?? null;
   let reason = input.intendedReason ?? '';
+  const bias = input.bias || 'FLAT';
 
   if (!direction && input.bar) {
     const hit = decideEntryFrom10sRegime(
       input.bar,
       input.regime,
-      input.bias || 'FLAT',
+      bias,
       input.closedBars
     );
     if (hit) {
@@ -76,13 +110,18 @@ export function resolveDeskEntry(input: {
     }
   }
 
-  // Last resort: START + closed 10s + lasting bias → do not sit in SCAN.
-  if (!direction && input.bar && (input.bias === 'UP' || input.bias === 'DOWN')) {
-    const dir: 'BUY' | 'SELL' = input.bias === 'UP' ? 'BUY' : 'SELL';
+  // Closed 10s must not sit in SCAN — dump/rally/doji always pick a side.
+  if (!direction && input.bar) {
+    const forced = sideFromClosedBar(input.bar, bias, input.regime);
+    return forced;
+  }
+
+  if (!direction && (bias === 'UP' || bias === 'DOWN')) {
+    const dir: 'BUY' | 'SELL' = bias === 'UP' ? 'BUY' : 'SELL';
     return {
       direction: dir,
       setup: 'BIAS',
-      reason: `BIAS ${input.bias} · ${dir} · ${input.regime || 'UNKNOWN'} closed 10s`,
+      reason: `BIAS ${bias} · ${dir} · ${input.regime || 'UNKNOWN'}`,
     };
   }
 

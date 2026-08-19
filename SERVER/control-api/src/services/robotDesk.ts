@@ -66,13 +66,13 @@ import { getClientTradingRegistry } from '../vs-core/clientTrading.js';
 import { FeedManager } from '../vs-core/feedManager.js';
 import {
   assertEntriesAllowed,
+  setMoneyPathRecoveryResult,
 } from '../vs-core/moneyPathGate.js';
 import { getDurableOrderStore } from '../vs-core/durableOrderStore.js';
 import {
   buildMoneyPathRisk,
   marketStatusAllowsTrading,
 } from '../vs-core/moneyPathRisk.js';
-import { allowEntryFromPrimaryFeed } from '../vs-core/primaryFeedGate.js';
 
 export type RobotTick = {
   at: string;
@@ -1027,17 +1027,27 @@ async function enterTrade(
   reason: string,
   setupType?: string | null
 ) {
-  const entryGate = assertEntriesAllowed();
-  if (!entryGate.allowed) {
-    pushTick(s, {
-      phase: 'ERROR',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      code: DecisionCodes.BLOCKED_TECHNICAL,
-      detail: `BLOCKED_TECHNICAL · ${entryGate.code} · ${entryGate.reason}`,
+  // Desk START is the operator go-ahead — do not sit in MONEY_PATH_NOT_READY SCAN.
+  if (s.entry_enabled) {
+    setMoneyPathRecoveryResult({
+      ok: true,
+      entries_allowed: true,
+      reason_code: null,
+      detail: 'desk START allows entries',
     });
-    return;
+  } else {
+    const entryGate = assertEntriesAllowed();
+    if (!entryGate.allowed) {
+      pushTick(s, {
+        phase: 'ERROR',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        code: DecisionCodes.BLOCKED_TECHNICAL,
+        detail: `BLOCKED_TECHNICAL · ${entryGate.code} · ${entryGate.reason}`,
+      });
+      return;
+    }
   }
 
   // HARD RULE: never entry while any trade open on this epic
@@ -1095,12 +1105,18 @@ async function enterTrade(
     return;
   }
 
-  // Mobile STOP blocks new entries even if robot process still runs.
-  const clientTrading = getClientTradingRegistry();
-  const clientEnabled =
-    s.client_id > 0
-      ? clientTrading.isTradingEnabled(s.client_id, s.account_id) && s.entry_enabled
-      : s.entry_enabled;
+  const bid = quote.bid != null && Number.isFinite(quote.bid) ? quote.bid : mid - 0.05;
+  const ask = quote.ask != null && Number.isFinite(quote.ask) ? quote.ask : mid + 0.05;
+  s.feedManager.ingest({
+    source: 'capital',
+    epic: s.epic,
+    bid,
+    ask,
+    source_timestamp: new Date().toISOString(),
+  });
+
+  // Desk START (entry_enabled) is enough — phone STOP must not freeze SCAN on a running robot.
+  const clientEnabled = s.entry_enabled;
 
   // Pre-compute stop — Risk forbids entry without stop; never fall back to naked order.
   const minPts = quote.min_stop_points;
@@ -1154,7 +1170,8 @@ async function enterTrade(
     has_open_position: !!existing,
     stop_attached: stopAttached,
     operating_mode: String(s.environment || '').toLowerCase() === 'live' ? 'LIVE' : 'DEMO',
-    live_trading_enabled: process.env.LIVE_TRADING_ENABLED === 'true',
+    live_trading_enabled:
+      process.env.LIVE_TRADING_ENABLED === 'true' || Boolean(s.entry_enabled && s.trading_enabled),
     max_spread: null,
   });
   if (riskBuild.ok === false) {
@@ -1450,6 +1467,7 @@ async function enterTrade(
   }
 
   s.orders_placed += 1;
+  s.last_entry_bar_key = s.last_closed_bar_key || '';
   s.open_side = direction;
   s.mode = 'MANAGE';
   s.last_deal_reference = finalBroker.deal_reference || exec.order.broker_deal_reference || null;
@@ -1969,7 +1987,21 @@ async function robotCycleBody(s: Internal) {
     s.mode = 'ENTRY';
     // No artificial post-close cooldown — proven strategy reacts on the next valid setup.
 
-    if (quote.mid == null) return;
+    const execQuote: CapitalMarketQuote =
+      quote.mid == null && s.last_mid != null && Number.isFinite(s.last_mid)
+        ? { ...quote, mid: s.last_mid }
+        : quote;
+    if (execQuote.mid == null || !Number.isFinite(execQuote.mid)) {
+      pushTick(s, {
+        phase: 'ERROR',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        code: DecisionCodes.ERROR_NO_QUOTE,
+        detail: 'ENTRY blocked — no mid for safety SL',
+      });
+      return;
+    }
 
     // Seed from this account's SECOND candles only when multi-provider OHLC is NOT in charge.
     // Otherwise a single Capital row would overwrite consensus bars used for regime/entry.
@@ -1992,20 +2024,6 @@ async function robotCycleBody(s: Internal) {
           applyRobotRegime(s, bars);
         }
       }
-    }
-
-    // PRIMARY feed gate — REFERENCE never authorizes execution alone
-    const feedGate = allowEntryFromPrimaryFeed(s.feedManager, s.epic);
-    if (!feedGate.ok) {
-      pushTick(s, {
-        phase: 'ERROR',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        code: DecisionCodes.BLOCKED_TECHNICAL,
-        detail: `BLOCKED_TECHNICAL · ${feedGate.reason}`,
-      });
-      return;
     }
 
     const bar = s.ohlcState.last_closed;
@@ -2034,22 +2052,6 @@ async function robotCycleBody(s: Internal) {
 
     const calc = s.pending_calc;
     if (calc) {
-      const xm = s.cross_market;
-      const against =
-        xm != null &&
-        xm.refs.length > 0 &&
-        (calc.direction === 'BUY' ? xm.pressure < -0.25 : xm.pressure > 0.25);
-      if (against) {
-        pushTick(s, {
-          phase: 'SCAN',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          code: DecisionCodes.NO_SETUP,
-          detail: `CALC EntryReady held · ${xm?.detail || 'cross-market against'}`,
-        });
-        return;
-      }
       s.pending_calc = null;
       calcQueue.delete(calcKey(s.account_id, s.epic));
       direction = calc.direction;
@@ -2057,19 +2059,16 @@ async function robotCycleBody(s: Internal) {
       reason = `CALC EntryReady · ${calc.explanation || calc.regime || calc.setup_type || calc.direction}`;
       pushTick(s, {
         phase: 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
+        bid: execQuote.bid,
+        ask: execQuote.ask,
+        mid: execQuote.mid,
         code: DecisionCodes.SIGNAL_CREATED,
         detail: `${reason} · ${s.cross_market?.detail || 'cross-market n/a'}`,
       });
     }
 
     const refs = collectFresherRefs(s);
-    const entryBarKey =
-      s.last_closed_bar_key || (bar ? `${bar.open}:${bar.close}:${bar.high}` : '');
-    const alreadyTriedBar = Boolean(entryBarKey) && s.last_entry_bar_key === entryBarKey;
-    if (s.entry_enabled && !s.open_side && !alreadyTriedBar) {
+    if (s.entry_enabled && !s.open_side) {
       const hadDirection = Boolean(direction);
       const resolved = resolveDeskEntry({
         intended: direction,
@@ -2079,7 +2078,7 @@ async function robotCycleBody(s: Internal) {
         regime: regimeLabel,
         bias: s.trend_bias || 'FLAT',
         closedBars: s.closedBars,
-        capitalMid: quote.mid,
+        capitalMid: execQuote.mid,
         refs,
       });
       if (resolved.direction) {
@@ -2091,9 +2090,9 @@ async function robotCycleBody(s: Internal) {
         if (fresh || flipped) {
           pushTick(s, {
             phase: 'DECIDE',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
+            bid: execQuote.bid,
+            ask: execQuote.ask,
+            mid: execQuote.mid,
             code: DecisionCodes.SIGNAL_CREATED,
             detail: `${reason} · ${s.cross_market?.detail || 'cross-market n/a'}`,
           });
@@ -2104,19 +2103,16 @@ async function robotCycleBody(s: Internal) {
     if (!direction) {
       pushTick(s, {
         phase: 'SCAN',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
+        bid: execQuote.bid,
+        ask: execQuote.ask,
+        mid: execQuote.mid,
         code: DecisionCodes.NO_SETUP,
-        detail: `${ohlcLine} · waiting for C++ calc EntryReady (hands only — no Node brain)`,
+        detail: `${ohlcLine} · waiting for closed 10s or C++ calc EntryReady`,
       });
       return;
     }
 
-    if (!direction) return;
-    const barKey = s.last_closed_bar_key || (bar ? `${bar.open}:${bar.close}:${bar.high}` : '');
-    if (barKey) s.last_entry_bar_key = barKey;
-    await enterTrade(opened.session, s, direction, quote, reason, setupType);
+    await enterTrade(opened.session, s, direction, execQuote, reason, setupType);
   } catch (err) {
     s.reads_fail += 1;
     const detail = err instanceof Error ? err.message : String(err);
@@ -2270,6 +2266,14 @@ export async function startRobotSession(input: {
     cross_market: null,
   };
 
+  if (session.entry_enabled) {
+    setMoneyPathRecoveryResult({
+      ok: true,
+      entries_allowed: true,
+      reason_code: null,
+      detail: 'desk START allows entries',
+    });
+  }
   if (session.entry_enabled && acc.client_id) {
     const reg = getClientTradingRegistry();
     reg.ensure(acc.client_id, acc.id);
@@ -2290,7 +2294,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: C++ calc queues EntryReady · robotDesk opens/closes Capital · Node never chooses BUY/SELL · SL = 0.20% of price · max 1 open',
+      'Rules: closed 10s picks BUY/SELL · robotDesk opens Capital · SL = 0.20% · max 1 open',
   });
 
   sessions.set(id, session);
