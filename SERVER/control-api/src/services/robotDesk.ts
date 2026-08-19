@@ -2267,7 +2267,9 @@ async function robotCycleBody(s: Internal) {
         regime: regimeLabel,
         bias: s.trend_bias || 'FLAT',
         closedBars: s.closedBars,
-        capitalMid: execQuote.mid,
+        // During calc-first wait window, disable LAG_LEAD decisions too.
+        // Otherwise we can enter without C++ pending_calc confirmation.
+        capitalMid: waitCalcFirst ? null : execQuote.mid,
         refs,
       });
       if (resolved.direction) {
