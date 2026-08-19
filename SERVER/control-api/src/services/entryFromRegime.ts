@@ -138,10 +138,7 @@ export function effectiveBias(
   const r = normalizeRegime(regime);
   if (r === 'TREND_UP' || r === 'PULLBACK_UPTREND' || r === 'BREAKOUT_UP') return 'UP';
   if (r === 'TREND_DOWN' || r === 'PULLBACK_DOWNTREND' || r === 'BREAKOUT_DOWN') return 'DOWN';
-  if (bar) {
-    if (dip(bar)) return 'DOWN';
-    if (rally(bar)) return 'UP';
-  }
+  void bar;
   return 'FLAT';
 }
 

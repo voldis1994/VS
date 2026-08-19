@@ -168,32 +168,34 @@ describe('resolveDeskEntry — BUY and SELL both fire', () => {
     expect(e.direction).not.toBeNull();
   });
 
-  it('closed 10s always returns BUY or SELL (agreeing feeds, no lag)', () => {
-    const dump = bar(4354.67, 4354.13);
-    const climb = bar(4354.13, 4354.67);
+  it('RANGE + doji does not invent BUY/SELL just because a 10s closed', () => {
     const doji = bar(4354.5, 4354.5);
-    const regimes = [
-      'PULLBACK_UPTREND',
-      'COMPRESSION',
-      'RANGE',
-      'TREND_UP',
-      'TREND_DOWN',
-      'EXPANSION',
-    ] as const;
-    const biases = ['UP', 'DOWN', 'FLAT'] as const;
-    for (const regime of regimes) {
-      for (const bias of biases) {
-        for (const b of [dump, climb, doji]) {
-          const e = resolveDeskEntry({
-            bar: b,
-            regime,
-            bias,
-            capitalMid: 4354.4,
-            refs: cluster(4354.4),
-          });
-          expect(e.direction, `${regime} ${bias} O=${b.open} C=${b.close}`).toMatch(/BUY|SELL/);
-        }
-      }
-    }
+    const e = resolveDeskEntry({
+      bar: doji,
+      regime: 'RANGE',
+      bias: 'UP',
+      capitalMid: 4354.4,
+      refs: cluster(4354.4),
+    });
+    expect(e.direction).toBeNull();
+  });
+
+  it('dump then climb in RANGE does not flip side every candle', () => {
+    const dump = resolveDeskEntry({
+      bar: bar(4354.67, 4354.13),
+      regime: 'RANGE',
+      bias: 'FLAT',
+      capitalMid: 4354.4,
+      refs: cluster(4354.4),
+    });
+    const climb = resolveDeskEntry({
+      bar: bar(4354.13, 4354.67),
+      regime: 'RANGE',
+      bias: 'FLAT',
+      capitalMid: 4354.4,
+      refs: cluster(4354.4),
+    });
+    expect(dump.direction).toBeNull();
+    expect(climb.direction).toBeNull();
   });
 });

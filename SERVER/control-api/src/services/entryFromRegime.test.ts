@@ -68,12 +68,12 @@ function rangeThenUpperReject(): { bars: TenSecBar[]; confirm: TenSecBar } {
 describe('10s + regime-as-CONTEXT suitable entry', () => {
   beforeEach(() => disableStrategyEvalLogForTests(true));
 
-  it('UNKNOWN unlocks with bias OR bar-implied direction (no hard UNKNOWN block)', () => {
+  it('UNKNOWN unlocks with lasting bias — not the current 10s color', () => {
     expect(decideEntryFrom10sRegime(dip, 'UNKNOWN', 'UP')?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(dip, 'COMPRESSION', 'UP')?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(dip, 'UNKNOWN', 'DOWN')?.direction).toBe('SELL');
-    expect(decideEntryFrom10sRegime(dip, 'UNKNOWN', 'FLAT')?.direction).toBe('SELL');
-    expect(decideEntryFrom10sRegime(rally, 'UNKNOWN', 'FLAT')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(dip, 'UNKNOWN', 'FLAT')).toBeNull();
+    expect(decideEntryFrom10sRegime(rally, 'UNKNOWN', 'FLAT')).toBeNull();
     expect(decideEntryFrom10sRegime(rally, 'UNKNOWN', 'UP')?.direction).toBe('BUY');
   });
 
@@ -171,7 +171,8 @@ describe('10s + regime-as-CONTEXT suitable entry', () => {
       ticks: 12,
     };
     expect(decideEntryFrom10sRegime(goldDump, 'TREND_DOWN', 'DOWN')?.direction).toBe('SELL');
-    expect(decideEntryFrom10sRegime(goldDump, 'UNKNOWN', 'FLAT')?.direction).toBe('SELL');
+    expect(decideEntryFrom10sRegime(goldDump, 'UNKNOWN', 'FLAT')).toBeNull();
+    expect(decideEntryFrom10sRegime(goldDump, 'UNKNOWN', 'DOWN')?.direction).toBe('SELL');
   });
 
   it('EXPANSION + bias UP + dump bar BUYs the dip (desk order, not SCAN)', () => {

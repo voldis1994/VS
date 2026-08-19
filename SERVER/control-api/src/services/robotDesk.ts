@@ -2167,6 +2167,19 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
+    const barKey = s.last_closed_bar_key || '';
+    if (barKey && s.last_entry_bar_key && s.last_entry_bar_key === barKey) {
+      pushTick(s, {
+        phase: 'SCAN',
+        bid: execQuote.bid,
+        ask: execQuote.ask,
+        mid: execQuote.mid,
+        code: DecisionCodes.NO_SETUP,
+        detail: `${ohlcLine} · this 10s already filled — wait next candle`,
+      });
+      return;
+    }
+
     await enterTrade(opened.session, s, direction, execQuote, reason, setupType);
   } catch (err) {
     s.reads_fail += 1;
@@ -2349,7 +2362,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'MAIN PROTOTYPE · closed 10s BUY/SELL · SL 0.25% (0.00250) · Best Outcome SL→BE · max 1 open',
+      'MAIN PROTOTYPE · closed 10s BUY/SELL · SL 0.25% (0.00250) · Best Outcome SL→BE after 0.25% plus · no flip every 10s',
   });
 
   sessions.set(id, session);

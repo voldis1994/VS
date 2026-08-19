@@ -1,3 +1,5 @@
+import { SAFETY_SL_REL } from './capitalCom.js';
+
 /** Live Capital exit manager — per-robot, best-outcome + thesis invalidation.
 
  * Strategy owns ENTRY. Exit owns management of an EXISTING position.
@@ -139,9 +141,12 @@ export function decideBestOutcomeExit(
     opts?.minStopDistance != null && Number.isFinite(opts.minStopDistance) && opts.minStopDistance > 0
       ? opts.minStopDistance
       : 0;
+  // Gold 10s noise is ~0.3–2pt. Broker min-stop (~0.4) is too tight for BE —
+  // wait until plus is at least the 0.25% safety distance (~11pt on Gold).
+  const beMove = Math.max(minDist, Math.abs(entry) * SAFETY_SL_REL);
 
   // Best Outcome = only SL → BE. No TP/harvest/time/thesis close.
-  if (fav > 0 && fav >= minDist) {
+  if (Number.isFinite(fav) && fav + 1e-9 >= beMove) {
     const stop = breakevenStopLevel(entry);
     return trail(
       `BestOutcome BE · SL ${stop} · UPL ${fav.toFixed(5)} · entry ${entry}`,

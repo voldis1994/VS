@@ -1,8 +1,6 @@
 /**
  * Desk entry: 10s regime, then Capital-lag lead (BUY and SELL).
- * robotDesk hands still open Capital — this only picks the side.
- *
- * A closed 10s bar always yields BUY or SELL. SCAN is only for "no bar yet".
+ * Does not invent a side on every dump/rally — that churns Gold 10s.
  */
 import { decideEntryFrom10sRegime, type TrendBias } from './entryFromRegime.js';
 import {
@@ -20,37 +18,6 @@ export type DeskEntry = {
 };
 
 const FLIP_MIN_REL = 0.0012;
-
-/** Closed 10s always has a side — dump follows DOWN/FLAT as SELL, UP as dip-buy. */
-export function sideFromClosedBar(
-  bar: TenSecBar,
-  bias: TrendBias,
-  regime?: string | null
-): { direction: 'BUY' | 'SELL'; setup: string; reason: string } {
-  const r = regime || 'UNKNOWN';
-  if (bar.close < bar.open) {
-    const direction: 'BUY' | 'SELL' = bias === 'UP' ? 'BUY' : 'SELL';
-    return {
-      direction,
-      setup: direction === 'BUY' ? 'PULLBACK' : 'CONTINUATION',
-      reason: `10s dump · ${direction} · ${r} · bias ${bias}`,
-    };
-  }
-  if (bar.close > bar.open) {
-    const direction: 'BUY' | 'SELL' = bias === 'DOWN' ? 'SELL' : 'BUY';
-    return {
-      direction,
-      setup: 'CONTINUATION',
-      reason: `10s rally · ${direction} · ${r} · bias ${bias}`,
-    };
-  }
-  const direction: 'BUY' | 'SELL' = bias === 'DOWN' ? 'SELL' : 'BUY';
-  return {
-    direction,
-    setup: 'BIAS',
-    reason: `10s doji · ${direction} · ${r} · bias ${bias}`,
-  };
-}
 
 export function resolveDeskEntry(input: {
   intended?: 'BUY' | 'SELL' | null;
@@ -110,19 +77,27 @@ export function resolveDeskEntry(input: {
     }
   }
 
-  // Closed 10s must not sit in SCAN — dump/rally/doji always pick a side.
+  // Last resort only in a lasting trend — RANGE/COMPRESSION must not flip every 10s.
   if (!direction && input.bar) {
-    const forced = sideFromClosedBar(input.bar, bias, input.regime);
-    return forced;
-  }
-
-  if (!direction && (bias === 'UP' || bias === 'DOWN')) {
-    const dir: 'BUY' | 'SELL' = bias === 'UP' ? 'BUY' : 'SELL';
-    return {
-      direction: dir,
-      setup: 'BIAS',
-      reason: `BIAS ${bias} · ${dir} · ${input.regime || 'UNKNOWN'}`,
-    };
+    const regime = String(input.regime || '').toUpperCase();
+    const trendingBuy =
+      regime === 'TREND_UP' || regime === 'PULLBACK_UPTREND' || regime === 'BREAKOUT_UP';
+    const trendingSell =
+      regime === 'TREND_DOWN' || regime === 'PULLBACK_DOWNTREND' || regime === 'BREAKOUT_DOWN';
+    if (trendingBuy && bias !== 'DOWN') {
+      return {
+        direction: 'BUY',
+        setup: 'BIAS',
+        reason: `BIAS ${bias} · BUY · ${input.regime || 'UNKNOWN'} closed 10s`,
+      };
+    }
+    if (trendingSell && bias !== 'UP') {
+      return {
+        direction: 'SELL',
+        setup: 'BIAS',
+        reason: `BIAS ${bias} · SELL · ${input.regime || 'UNKNOWN'} closed 10s`,
+      };
+    }
   }
 
   return { direction, setup, reason };

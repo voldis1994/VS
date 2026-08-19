@@ -62,7 +62,7 @@ describe('MAIN prototype freeze', () => {
     expect(e.direction).toBe('SELL');
   });
 
-  it('RANGE + bias UP + closed 10s still has a side', () => {
+  it('RANGE + bias UP + closed 10s does not force a side', () => {
     const e = resolveDeskEntry({
       bar: bar(4360.8, 4360.9),
       regime: 'RANGE',
@@ -70,11 +70,28 @@ describe('MAIN prototype freeze', () => {
       capitalMid: 4360.7,
       refs: cluster(4360.7),
     });
-    expect(e.direction).toMatch(/BUY|SELL/);
+    expect(e.direction).toBeNull();
   });
 
-  it('Best Outcome never closes — plus trails SL to BE', () => {
+  it('Best Outcome never closes — plus trails SL to BE only after 0.25%', () => {
     const plus = decideBestOutcomeExit(
+      {
+        open_side: 'BUY',
+        entry_price: 4360,
+        entry_at: new Date().toISOString(),
+        mfe: 12,
+        mae: 0,
+        peak_retention: 0.4,
+        regime: 'RANGE',
+        entry_setup: 'PULLBACK',
+      },
+      4372
+    );
+    expect(plus.exit).toBe(false);
+    expect(plus.action).toBe('TRAIL');
+    expect(plus.trail_stop).toBe(4360);
+
+    const noise = decideBestOutcomeExit(
       {
         open_side: 'BUY',
         entry_price: 4360,
@@ -87,9 +104,8 @@ describe('MAIN prototype freeze', () => {
       },
       4365
     );
-    expect(plus.exit).toBe(false);
-    expect(plus.action).toBe('TRAIL');
-    expect(plus.trail_stop).toBe(4360);
+    expect(noise.exit).toBe(false);
+    expect(noise.action).toBe('HOLD');
 
     const minus = decideBestOutcomeExit(
       {
@@ -114,7 +130,7 @@ describe('MAIN prototype freeze', () => {
     expect(desk).toContain('releaseGhostIntents');
     expect(desk).toContain('await enterTrade(');
     expect(desk).toContain('MAIN PROTOTYPE');
-    expect(desk).not.toContain('alreadyTriedBar');
+    expect(desk).toContain('this 10s already filled');
     expect(desk).not.toContain('evaluateStrategy({');
 
     const start = readFileSync(join(repoRoot, 'START_MSI.bat'), 'utf8');

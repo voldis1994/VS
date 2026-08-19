@@ -14,6 +14,6 @@ export const DESK_PROTOTYPE_STRATEGY = 'main-prototype-10s-sl025-be';
 export function deskPrototypeRules(): string {
   return (
     `MAIN PROTOTYPE · closed 10s BUY/SELL · SL ${(SAFETY_SL_REL * 100).toFixed(2)}% (0.00250)` +
-    ' · Best Outcome SL→BE · max 1 open · ghost intents released when Capital flat'
+    ' · Best Outcome SL→BE after 0.25% plus · max 1 open · no flip every 10s candle'
   );
 }
