@@ -1970,8 +1970,13 @@ async function robotCycleBody(s: Internal) {
       ) {
         const entry = s.entry_price;
         const beStop = breakevenStopLevelForSide(s.open_side, entry);
-        const atBreakeven = Math.abs(s.safety_sl - beStop) <= Math.max(1e-6, Math.abs(entry) * 1e-9);
-        if (atBreakeven) {
+        const eps = Math.max(1e-6, Math.abs(entry) * 1e-9);
+        // Continue profit trailing once we are at/beyond breakeven:
+        // BUY: safety_sl >= BE, SELL: safety_sl <= BE
+        const beyondBe =
+          (s.open_side === 'BUY' && s.safety_sl >= beStop - eps) ||
+          (s.open_side === 'SELL' && s.safety_sl <= beStop + eps);
+        if (beyondBe) {
           const recentSwing = [
             ...(s.minuteCandles?.slice(-2) ?? []),
             ...(s.closedBars?.slice(-6) ?? []),
