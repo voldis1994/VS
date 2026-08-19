@@ -19,7 +19,6 @@ import {
 import { emitToClient } from './clientEvents.js';
 import { mapTradeType } from './tradePresentation.js';
 import {
-  observeClosedBars,
   normalizeRegime,
   REGIME_NAMES,
   type RegimeName,
@@ -34,7 +33,7 @@ import {
 import { canIssueClose, decideCloseFinalize } from './exitLifecycle.js';
 import {
   effectiveBias,
-  resolveTrendBias,
+  trendBiasFromMinuteCandles,
   TREND_LOOKBACK_10S,
   type TrendBias,
 } from './entryFromRegime.js';
@@ -513,14 +512,14 @@ export function robotBoardMeta(sessions: RobotSession[]) {
 }
 
 function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
+  // 10s OHLC tiek izmantots tikai setup/evidence / closedBars vēsturei.
+  // Regime label (TREND_UP/DOWN/RANGE) nāk no 1m minuteCandles.
   const incoming = bars?.length
     ? bars
     : s.ohlcState.last_closed
       ? [s.ohlcState.last_closed]
       : [];
   if (!incoming.length) return;
-  const snap = observeClosedBars(s.epic, incoming, s.display_name);
-  s.regime = snap.current;
   for (const bar of incoming) {
     if (!bar || !Number.isFinite(bar.close)) continue;
     const last = s.closedBars[s.closedBars.length - 1];
@@ -2091,8 +2090,14 @@ async function robotCycleBody(s: Internal) {
         /* keep previous 1m snapshot */
       }
     }
-    const bias = resolveTrendBias(s.closedBars, s.minuteCandles);
-    s.trend_bias = effectiveBias(s.regime, bias, bar);
+    // Regime label must be stable and based on 1m candles.
+    // 10s OHLC is for entry evidence only (dip/rally/pullback).
+    const minuteBias = trendBiasFromMinuteCandles(s.minuteCandles);
+    if (minuteBias === 'UP') s.regime = 'TREND_UP';
+    else if (minuteBias === 'DOWN') s.regime = 'TREND_DOWN';
+    else s.regime = 'RANGE';
+    // Direction bias for entry must be 1m-based (10s OHLC only provides evidence/setup).
+    s.trend_bias = effectiveBias(s.regime, minuteBias, bar);
     applyBiasRegimeUnlock(s);
     const regimeLabel = effectiveRegimeName(s);
     const ohlcLine = bar
