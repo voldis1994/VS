@@ -1781,6 +1781,9 @@ async function robotCycleBody(s: Internal) {
           /* ignore */
         }
         s.closed_at_ms = Date.now();
+        // Post-trade discipline: enforce 10s cooldown before a new entry.
+        // This path happens on external “broker flat” sync.
+        s.cooldown_until_ms = Date.now() + 10_000;
         clearTradeState(s);
       }
     } else {
