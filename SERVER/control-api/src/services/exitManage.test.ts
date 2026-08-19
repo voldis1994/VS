@@ -124,6 +124,21 @@ describe('Exit matrix A–P', () => {
     expect(d.action).toBe('HOLD');
   });
 
+  it('F2) opposite regime with no favorable move can CLOSE on thesis failure', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        regime: 'TREND_DOWN',
+        entry_setup: 'PULLBACK',
+      }),
+      1999.8
+    );
+    expect(d.exit).toBe(true);
+    expect(d.action).toBe('CLOSE');
+    expect(d.reason).toMatch(/ThesisFailure/);
+  });
+
   it('G) SHORT plus + opposite regime → HOLD until 0.25% plus', () => {
     const d = decideBestOutcomeExit(
       snap({

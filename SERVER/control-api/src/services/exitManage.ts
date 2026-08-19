@@ -159,6 +159,10 @@ export function decideBestOutcomeExit(
 
   const entry = s.entry_price;
   const fav = favorableMove(s.open_side, entry, mid);
+  const thesisFail = thesisFailureReason(s.open_side, s.regime, s.entry_setup);
+  if (thesisFail && fav <= 0) {
+    return { exit: true, action: 'CLOSE', reason: `${thesisFail} · no favorable move`, trail_stop: null };
+  }
   const minDist =
     opts?.minStopDistance != null && Number.isFinite(opts.minStopDistance) && opts.minStopDistance > 0
       ? opts.minStopDistance

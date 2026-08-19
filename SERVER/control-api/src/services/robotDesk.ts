@@ -184,6 +184,7 @@ type Internal = RobotSession & {
   ohlcState: TenSecState;
   last_second_fetch_ms: number;
   last_closed_bar_key: string;
+  last_closed_bar_at_ms: number;
   /** One Capital entry attempt per closed 10s bar (C++ or Node 10s). */
   last_entry_bar_key: string;
   closedBars: TenSecBar[];
@@ -402,6 +403,7 @@ function publicSession(s: Internal): RobotSession {
     ohlcState: _ohlc,
     last_second_fetch_ms: _sec,
     last_closed_bar_key: _bar,
+    last_closed_bar_at_ms: _barAt,
     last_entry_bar_key: _entryBar,
     closedBars: _bars,
     last_minute_fetch_ms: _minFetch,
@@ -1706,6 +1708,7 @@ async function robotCycleBody(s: Internal) {
       s.ohlcState = updateTenSecondOhlc(s.ohlcState, mid, Date.now());
       s.ohlc_10s = publicOhlc10s(s.ohlcState);
       if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
+        s.last_closed_bar_at_ms = Date.now();
         applyRobotRegime(s, [s.ohlcState.last_closed]);
       }
     };
@@ -2104,6 +2107,7 @@ async function robotCycleBody(s: Internal) {
             just_closed: isNew,
           };
           if (isNew) s.last_closed_bar_key = key;
+          if (isNew) s.last_closed_bar_at_ms = Date.now();
           s.ohlc_10s = publicOhlc10s(s.ohlcState);
           applyRobotRegime(s, bars);
         }
@@ -2160,11 +2164,16 @@ async function robotCycleBody(s: Internal) {
     const refs = collectFresherRefs(s);
     if (s.entry_enabled && !s.open_side) {
       const hadDirection = Boolean(direction);
+      const waitCalcFirst =
+        !hadDirection &&
+        s.last_closed_bar_at_ms > 0 &&
+        Date.now() - s.last_closed_bar_at_ms < 2500;
       const resolved = resolveDeskEntry({
         intended: direction,
         intendedSetup: setupType,
         intendedReason: reason,
-        bar: direction ? null : bar,
+        // Prefer C++ for a short window right after 10s close.
+        bar: direction || waitCalcFirst ? null : bar,
         regime: regimeLabel,
         bias: s.trend_bias || 'FLAT',
         closedBars: s.closedBars,
@@ -2197,7 +2206,10 @@ async function robotCycleBody(s: Internal) {
         ask: execQuote.ask,
         mid: execQuote.mid,
         code: DecisionCodes.NO_SETUP,
-        detail: `${ohlcLine} · waiting for closed 10s or C++ calc EntryReady`,
+        detail:
+          s.last_closed_bar_at_ms > 0 && Date.now() - s.last_closed_bar_at_ms < 2500
+            ? `${ohlcLine} · waiting C++ EntryReady first`
+            : `${ohlcLine} · waiting for closed 10s or C++ calc EntryReady`,
       });
       return;
     }
@@ -2342,6 +2354,7 @@ export async function startRobotSession(input: {
     ohlcState: emptyTenSecState(),
     last_second_fetch_ms: 0,
     last_closed_bar_key: '',
+    last_closed_bar_at_ms: 0,
     last_entry_bar_key: '',
     closedBars: [],
     last_minute_fetch_ms: 0,
