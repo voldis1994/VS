@@ -12,6 +12,7 @@ describe('P3 runtime call-chain wiring', () => {
     expect(src).toContain("import { decideBestOutcomeExit, favorableMove } from './exitManage.js'");
     expect(src).toContain('waiting for C++ calc EntryReady');
     expect(src).toContain('decideEntryFrom10sRegime');
+    expect(src).toContain('detectCapitalLagLead');
     expect(src).not.toContain('evaluateStrategy({');
     expect(src).not.toContain("import { runTradePipeline } from './tradePipeline.js'");
   });

@@ -46,7 +46,12 @@ import {
   type MultiFeedPrice,
   type MultiFeedLeg,
 } from './robotReader.js';
-import { buildFresherRefs, detectStaleQuoteAdverse } from './staleQuoteGuard.js';
+import {
+  buildFresherRefs,
+  detectCapitalLagLead,
+  detectStaleQuoteAdverse,
+  type PriceRef,
+} from './staleQuoteGuard.js';
 import {
   aggregateSecondsToTen,
   emptyTenSecState,
@@ -463,6 +468,23 @@ export function effectiveRegimeName(s: {
 /** Bias unlock must not rewrite UNKNOWN regime into TREND_* (keep bias separate). */
 function applyBiasRegimeUnlock(_s: Internal) {
   // no-op: regime stays authoritative; trend_bias is a separate field
+}
+
+function collectFresherRefs(s: Internal): PriceRef[] {
+  const capitalPeerMids = (s.multiFeed?.legs || [])
+    .filter((l) => l.ok && l.mid != null && Number.isFinite(l.mid))
+    .filter((l) => /capital\.com|capital_com/i.test(`${l.name} ${l.sender_id} ${l.detail || ''}`))
+    .map((l) => ({ name: l.name, mid: l.mid as number }));
+  const publicNear = (s.multiFeed?.legs || [])
+    .filter((l) => l.ok && l.mid != null && Number.isFinite(l.mid))
+    .filter((l) => !String(l.detail || '').includes('FAR from Capital'))
+    .filter((l) => !/capital\.com|capital_com/i.test(`${l.name} ${l.sender_id}`))
+    .map((l) => ({ name: l.name, mid: l.mid as number }));
+  return buildFresherRefs({
+    publicNearMids: [...capitalPeerMids, ...publicNear],
+    ohlcClose: s.ohlcState.last_closed?.close ?? s.ohlc_10s?.last_c ?? null,
+    formingClose: s.ohlcState.forming?.close ?? s.ohlc_10s?.forming_c ?? null,
+  });
 }
 
 export function robotBoardMeta(sessions: RobotSession[]) {
@@ -2068,6 +2090,43 @@ async function robotCycleBody(s: Internal) {
       }
     }
 
+    // Capital lags other near feeds → BUY (feeds already up) or SELL (feeds already down).
+    const refs = collectFresherRefs(s);
+    const entryBarKey =
+      s.last_closed_bar_key || (bar ? `${bar.open}:${bar.close}:${bar.high}` : '');
+    const alreadyTriedBar = Boolean(entryBarKey) && s.last_entry_bar_key === entryBarKey;
+    if (s.entry_enabled && !s.open_side && !alreadyTriedBar && quote.mid != null) {
+      const lead = detectCapitalLagLead(quote.mid, refs);
+      if (lead.hit && lead.direction) {
+        if (!direction) {
+          direction = lead.direction;
+          setupType = 'LAG_LEAD';
+          reason = lead.reason;
+          pushTick(s, {
+            phase: 'DECIDE',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            code: DecisionCodes.SIGNAL_CREATED,
+            detail: `${reason} · ${s.cross_market?.detail || 'cross-market n/a'}`,
+          });
+        } else if (direction !== lead.direction) {
+          const prev = direction;
+          direction = lead.direction;
+          setupType = 'LAG_LEAD';
+          reason = `FLIP ${prev} → ${lead.reason}`;
+          pushTick(s, {
+            phase: 'DECIDE',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            code: DecisionCodes.SIGNAL_CREATED,
+            detail: reason,
+          });
+        }
+      }
+    }
+
     if (!direction) {
       pushTick(s, {
         phase: 'SCAN',
@@ -2080,23 +2139,9 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    // Capital button lag vs already-printed drop/rally (chart / near Capital refs / 10s OHLC).
-    // Distant public spot (Yahoo/Aurum basis) is filtered inside detectStaleQuoteAdverse.
-    if (direction && quote.mid != null) {
-      const capitalPeerMids = (s.multiFeed?.legs || [])
-        .filter((l) => l.ok && l.mid != null && Number.isFinite(l.mid))
-        .filter((l) => /capital\.com|capital_com/i.test(`${l.name} ${l.sender_id} ${l.detail || ''}`))
-        .map((l) => ({ name: l.name, mid: l.mid as number }));
-      const publicNear = (s.multiFeed?.legs || [])
-        .filter((l) => l.ok && l.mid != null && Number.isFinite(l.mid))
-        .filter((l) => !String(l.detail || '').includes('FAR from Capital'))
-        .filter((l) => !/capital\.com|capital_com/i.test(`${l.name} ${l.sender_id}`))
-        .map((l) => ({ name: l.name, mid: l.mid as number }));
-      const refs = buildFresherRefs({
-        publicNearMids: [...capitalPeerMids, ...publicNear],
-        ohlcClose: s.ohlcState.last_closed?.close ?? s.ohlc_10s?.last_c ?? null,
-        formingClose: s.ohlcState.forming?.close ?? s.ohlc_10s?.forming_c ?? null,
-      });
+    // Do not BUY a dump / SELL a climb that other feeds already printed — unless this
+    // tick is already the lag-lead order in the feed direction.
+    if (direction && quote.mid != null && setupType !== 'LAG_LEAD') {
       const lag = detectStaleQuoteAdverse(direction, quote.mid, refs);
       if (lag.block) {
         pushTick(s, {
