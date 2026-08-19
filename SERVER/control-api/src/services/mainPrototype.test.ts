@@ -105,7 +105,8 @@ describe('MAIN prototype freeze', () => {
       4365
     );
     expect(noise.exit).toBe(false);
-    expect(noise.action).toBe('HOLD');
+    expect(noise.action).toBe('TRAIL');
+    expect(noise.trail_stop).toBe(4360);
 
     const minus = decideBestOutcomeExit(
       {

@@ -167,15 +167,19 @@ export function decideBestOutcomeExit(
     opts?.minStopDistance != null && Number.isFinite(opts.minStopDistance) && opts.minStopDistance > 0
       ? opts.minStopDistance
       : 0;
-  // Gold 10s noise is ~0.3–2pt. Broker min-stop (~0.4) is too tight for BE —
-  // wait until plus is at least the 0.15% safety distance (~6.5pt on Gold).
-  const beMove = Math.max(minDist, Math.abs(entry) * SAFETY_SL_REL);
+  const absEntry = Math.max(Math.abs(entry), 1e-9);
+
+  // BE trigger tuned to operator “good feel”:
+  // - on Gold (~>=1000), trail SL to BE around +1.8 UPL points
+  // - otherwise keep relative SAFETY_SL_REL behavior
+  const goldBeTriggerPoints = 1.8;
+  const beMove = absEntry >= 1000 ? Math.max(minDist, goldBeTriggerPoints) : Math.max(minDist, absEntry * SAFETY_SL_REL);
 
   // If “inputs ended” hasn't happened (regime unchanged), still allow BE only
   // when the move is already clearly beyond normal noise.
   // This prevents a situation where BE never triggers.
   if (!inputsEnded) {
-    const lateBeMove = Math.abs(entry) * SAFETY_SL_REL * 2; // ~0.30% on Gold with 0.15% safety
+    const lateBeMove = beMove * 2; // allow BE after a clearly larger move
     if (!(Number.isFinite(fav) && fav + 1e-9 >= lateBeMove)) return hold();
   }
 
