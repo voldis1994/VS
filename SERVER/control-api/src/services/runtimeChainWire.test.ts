@@ -10,6 +10,9 @@ describe('P3 runtime call-chain wiring', () => {
     expect(src).toContain('buildMoneyPathRisk(');
     expect(src).toContain('evaluateRisk(');
     expect(src).toContain("import { decideBestOutcomeExit, favorableMove } from './exitManage.js'");
+    const exitSrc = readFileSync(join(process.cwd(), 'src/services/exitManage.ts'), 'utf8');
+    expect(exitSrc).toContain('BestOutcome BE');
+    expect(exitSrc).not.toContain('HardInvalidation');
     expect(src).toContain('waiting for closed 10s or C++ calc EntryReady');
     expect(src).toContain('resolveDeskEntry');
     expect(src).not.toContain('alreadyTriedBar');

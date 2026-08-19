@@ -1828,7 +1828,10 @@ async function robotCycleBody(s: Internal) {
             quote.min_stop_distance ?? null,
             loosen
           );
-          const upd = await updateCapitalStop(opened.session, s.deal_id, level);
+          const upd = await updateCapitalStop(opened.session, s.deal_id, level, {
+            mid: quote.mid,
+            pointSize: quote.point_size ?? null,
+          });
           if (upd.ok) {
             s.safety_sl = level;
             attached = true;
@@ -1878,7 +1881,10 @@ async function robotCycleBody(s: Internal) {
             (s.open_side === 'SELL' && tighter < cur && tighter > px));
         s.sl_tighten_done = true;
         if (canTighten) {
-          const upd = await updateCapitalStop(opened.session, s.deal_id, tighter);
+          const upd = await updateCapitalStop(opened.session, s.deal_id, tighter, {
+            mid: quote.mid,
+            pointSize: quote.point_size ?? null,
+          });
           if (upd.ok) {
             s.safety_sl = tighter;
             pushTick(s, {
@@ -1919,7 +1925,9 @@ async function robotCycleBody(s: Internal) {
           entry_setup: s.entry_setup,
           entry_regime: s.entry_regime,
         },
-        quote.mid
+        quote.mid,
+        Date.now(),
+        { minStopDistance: quote.min_stop_distance ?? null }
       );
       if (decision.action === 'CLOSE' || decision.exit) {
         await exitTrade(opened.session, s, quote, decision.reason);
@@ -1953,7 +1961,10 @@ async function robotCycleBody(s: Internal) {
           });
           return;
         }
-        const upd = await updateCapitalStop(opened.session, dealId, stop);
+        const upd = await updateCapitalStop(opened.session, dealId, stop, {
+          mid: quote.mid,
+          pointSize: quote.point_size ?? null,
+        });
         if (upd.ok) {
           s.safety_sl = stop;
           pushTick(s, {

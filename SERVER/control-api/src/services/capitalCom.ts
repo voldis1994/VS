@@ -1059,27 +1059,60 @@ export async function closeCapitalPosition(
   };
 }
 
-/** Tighten/set stop on an already-open Capital position (PUT stopLevel). */
+/** Tighten/set stop on an already-open Capital position (PUT stopLevel, then stopDistance). */
 export async function updateCapitalStop(
   session: CapitalSession,
   dealId: string,
-  stopLevel: number
+  stopLevel: number,
+  opts?: { mid?: number | null; pointSize?: number | null }
 ): Promise<{ ok: boolean; detail: string; status: number }> {
   const id = dealId.trim();
   if (!id || !Number.isFinite(stopLevel)) {
     return { ok: false, status: 0, detail: 'dealId + stopLevel required' };
   }
-  const res = await session.put(`/api/v1/positions/${encodeURIComponent(id)}`, { stopLevel });
-  if (!res.ok) {
-    return {
-      ok: false,
-      status: res.status,
-      detail: `Capital stop update ${id} failed HTTP ${res.status}: ${
-        res.json?.errorCode || res.json?.message || res.text.slice(0, 240)
-      }`,
-    };
+  const res = await session.put(`/api/v1/positions/${encodeURIComponent(id)}`, {
+    stopLevel,
+    guaranteedStop: false,
+  });
+  if (res.ok) {
+    return { ok: true, status: res.status, detail: `Updated stopLevel=${stopLevel} dealId=${id}` };
   }
-  return { ok: true, status: res.status, detail: `Updated stopLevel=${stopLevel} dealId=${id}` };
+  const mid = opts?.mid;
+  const ps = opts?.pointSize;
+  if (mid != null && Number.isFinite(mid) && ps != null && ps > 0) {
+    const distPrice = Math.abs(mid - stopLevel);
+    if (distPrice > 0) {
+      const rawPts = distPrice / ps;
+      const stopDistance = rawPts >= 10 ? Math.ceil(rawPts) : Math.round(rawPts * 100) / 100;
+      if (stopDistance > 0) {
+        const res2 = await session.put(`/api/v1/positions/${encodeURIComponent(id)}`, {
+          stopDistance,
+          guaranteedStop: false,
+        });
+        if (res2.ok) {
+          return {
+            ok: true,
+            status: res2.status,
+            detail: `Updated stopDistance=${stopDistance} (~${stopLevel}) dealId=${id}`,
+          };
+        }
+        return {
+          ok: false,
+          status: res2.status,
+          detail: `Capital stop update ${id} failed HTTP ${res.status}/${res2.status}: ${
+            res2.json?.errorCode || res.json?.errorCode || res2.json?.message || res.text.slice(0, 240)
+          }`,
+        };
+      }
+    }
+  }
+  return {
+    ok: false,
+    status: res.status,
+    detail: `Capital stop update ${id} failed HTTP ${res.status}: ${
+      res.json?.errorCode || res.json?.message || res.text.slice(0, 240)
+    }`,
+  };
 }
 
 export async function createCapitalPosition(

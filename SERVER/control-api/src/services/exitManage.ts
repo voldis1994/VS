@@ -44,7 +44,7 @@ export function favorableMove(side: ExitSide, entry: number, mid: number): numbe
  * Opposite live regime vs open side — ONLY for with-trend entry setups.
  * Counter-trend setups (FADE / REVERSAL / FAILED_BREAKOUT / RANGE_REJECTION)
  * must not be killed by re-applying opposite-regime as entry permission.
- * Missing entry_setup → no ThesisFailure (HardInvalidation / trail still apply).
+ * Missing entry_setup → no ThesisFailure (Best Outcome only trails SL to BE).
  */
 export function thesisFailureReason(
   side: ExitSide,
@@ -82,15 +82,15 @@ export function thesisFailureReason(
 }
 
 /**
- * Manage exit — lock the best available outcome.
- * Never give a printed plus back to minus. Broker SAFETY SL is last resort.
+ * Manage exit — lock the best available outcome by moving SL to breakeven.
+ * Never close from Best Outcome. Broker SAFETY SL (0.25%) is the loss stop.
  *
  * @param nowMs Evaluation clock — must be wall time at T (injectable for tests; no look-ahead).
  */
 export type BestOutcomeAction = 'HOLD' | 'CLOSE' | 'TRAIL';
 
 export type BestOutcome = {
-  /** True only when the broker position must be closed now. */
+  /** True only when the broker position must be closed now. Best Outcome never closes. */
   exit: boolean;
   action: BestOutcomeAction;
   reason: string;
@@ -102,84 +102,51 @@ function hold(): BestOutcome {
   return { exit: false, action: 'HOLD', reason: '', trail_stop: null };
 }
 
-function close(reason: string): BestOutcome {
-  return { exit: true, action: 'CLOSE', reason, trail_stop: null };
-}
-
 function trail(reason: string, stop: number): BestOutcome {
   return { exit: false, action: 'TRAIL', reason, trail_stop: stop };
 }
 
-/** Lock half of *current* favorable move (not original MFE — that would be through the market). */
+/** Broker BE stop = entry (Gold rounded to 1 decimal). */
+export function breakevenStopLevel(entry: number): number {
+  const abs = Math.max(Math.abs(entry), 1e-9);
+  if (abs >= 1000) return Math.round(entry * 10) / 10;
+  if (abs >= 100) return Math.round(entry * 100) / 100;
+  if (abs >= 1) return Math.round(entry * 10000) / 10000;
+  return Math.round(entry * 1e6) / 1e6;
+}
+
+/** @deprecated Best Outcome trails to BE, not half of remaining plus. */
 export function trailStopLevel(side: ExitSide, entry: number, mid: number): number | null {
-  const fav = favorableMove(side, entry, mid);
-  if (!(fav > 0) || !Number.isFinite(entry) || !Number.isFinite(mid)) return null;
-  const lock = fav * 0.5;
-  return side === 'BUY' ? entry + lock : entry - lock;
+  void mid;
+  if (!Number.isFinite(entry)) return null;
+  void side;
+  return breakevenStopLevel(entry);
 }
 
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
   mid: number,
-  nowMs: number = Date.now()
+  nowMs: number = Date.now(),
+  opts?: { minStopDistance?: number | null }
 ): BestOutcome {
+  void nowMs;
   if (!s.open_side || s.entry_price == null) return hold();
   if (!Number.isFinite(mid)) return hold();
 
-  const thesis = thesisFailureReason(s.open_side, s.regime, s.entry_setup);
-  if (thesis) return close(thesis);
-
   const entry = s.entry_price;
   const fav = favorableMove(s.open_side, entry, mid);
-  const absEntry = Math.max(Math.abs(entry), 1e-9);
-  const tp = Math.max(absEntry * 0.0022, 0.22);
-  const sl = Math.max(absEntry * 0.0015, 0.15);
-  /** Any plus that counts as "had a winner" — Gold ~2pts, FX ~0.08 */
-  const lockFloor = Math.max(absEntry * 0.00045, 0.08);
-  const retention = s.peak_retention;
+  const minDist =
+    opts?.minStopDistance != null && Number.isFinite(opts.minStopDistance) && opts.minStopDistance > 0
+      ? opts.minStopDistance
+      : 0;
 
-  // 1) Had plus → never ride it into minus
-  if (s.mfe >= lockFloor && fav <= 0) {
-    return close(
-      `GaveBackPlus · MFE ${s.mfe.toFixed(5)} now UPL ${fav.toFixed(5)} → lock, do not wait for minus`
+  // Best Outcome = only SL → BE. No TP/harvest/time/thesis close.
+  if (fav > 0 && fav >= minDist) {
+    const stop = breakevenStopLevel(entry);
+    return trail(
+      `BestOutcome BE · SL ${stop} · UPL ${fav.toFixed(5)} · entry ${entry}`,
+      stop
     );
-  }
-
-  // 2) Trail: move Capital SL to lock half of remaining plus (do not close)
-  if (s.mfe >= lockFloor && retention != null && retention < 0.5 && fav > 0) {
-    const stop = trailStopLevel(s.open_side, entry, mid);
-    if (stop != null && Number.isFinite(stop)) {
-      return trail(
-        `PeakProtection · retention ${(retention * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} → trail SL ${stop.toFixed(5)}`,
-        stop
-      );
-    }
-  }
-
-  // 3) Still green but fading — harvest remaining plus
-  if (s.mfe >= lockFloor && fav > 0 && retention != null && retention < 0.62) {
-    return close(
-      `BestOutcome harvest · UPL ${fav.toFixed(5)} after MFE ${s.mfe.toFixed(5)} (ret ${(retention * 100).toFixed(0)}%)`
-    );
-  }
-
-  // 4) Take the plus when target is hit (do not wait for a bigger dream)
-  if (fav >= tp) {
-    return close(`Target / best outcome · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)}`);
-  }
-
-  // 5) Last-resort hard invalidation (no plus was ever locked)
-  if (fav <= -sl) {
-    return close(`HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}`);
-  }
-
-  const entryMs = s.entry_at ? new Date(s.entry_at).getTime() : NaN;
-  const heldMs = Number.isFinite(entryMs) ? Math.max(0, nowMs - entryMs) : 0;
-  if (heldMs > 90_000 && fav > 0 && s.mfe >= lockFloor * 0.6) {
-    return close(`TimeDecay · held ${Math.round(heldMs / 1000)}s · take plus ${fav.toFixed(5)}`);
-  }
-  if (heldMs > 180_000 && fav >= 0) {
-    return close(`TimeDecay · held ${Math.round(heldMs / 1000)}s · flatten non-negative ${fav.toFixed(5)}`);
   }
 
   return hold();
