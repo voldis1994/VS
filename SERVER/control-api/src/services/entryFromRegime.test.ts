@@ -183,6 +183,20 @@ describe('10s + regime-as-CONTEXT suitable entry', () => {
     expect(decideEntryFrom10sRegime(dip, 'EXPANSION', 'DOWN')?.direction).toBe('SELL');
     expect(decideEntryFrom10sRegime(rally, 'EXPANSION', 'DOWN')).toBeNull();
   });
+
+  it('FAILED_BREAKOUT_UP dump with UP bias BUYs when fade does not confirm', () => {
+    const goldDump: TenSecBar = {
+      open_time_ms: 0,
+      open: 4340.22,
+      high: 4340.22,
+      low: 4339.03,
+      close: 4339.03,
+      ticks: 12,
+    };
+    const hit = decideEntryFrom10sRegime(goldDump, 'FAILED_BREAKOUT_UP', 'UP');
+    expect(hit?.direction).toBe('BUY');
+    expect(hit?.setup).toBe('PULLBACK');
+  });
 });
 
 describe('with-trend bias — no SELL into a climb without confirmed countertrend setup', () => {

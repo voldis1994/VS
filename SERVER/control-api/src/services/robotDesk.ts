@@ -50,6 +50,7 @@ import {
   buildFresherRefs,
   detectCapitalLagLead,
   detectStaleQuoteAdverse,
+  LAG_SCAN_MIN_REL,
   type PriceRef,
 } from './staleQuoteGuard.js';
 import {
@@ -2096,7 +2097,9 @@ async function robotCycleBody(s: Internal) {
       s.last_closed_bar_key || (bar ? `${bar.open}:${bar.close}:${bar.high}` : '');
     const alreadyTriedBar = Boolean(entryBarKey) && s.last_entry_bar_key === entryBarKey;
     if (s.entry_enabled && !s.open_side && !alreadyTriedBar && quote.mid != null) {
-      const lead = detectCapitalLagLead(quote.mid, refs);
+      const lead = detectCapitalLagLead(quote.mid, refs, {
+        minRel: direction ? 0.0012 : LAG_SCAN_MIN_REL,
+      });
       if (lead.hit && lead.direction) {
         if (!direction) {
           direction = lead.direction;
@@ -2144,15 +2147,18 @@ async function robotCycleBody(s: Internal) {
     if (direction && quote.mid != null && setupType !== 'LAG_LEAD') {
       const lag = detectStaleQuoteAdverse(direction, quote.mid, refs);
       if (lag.block) {
+        const flip: 'BUY' | 'SELL' = direction === 'BUY' ? 'SELL' : 'BUY';
+        direction = flip;
+        setupType = 'LAG_LEAD';
+        reason = `LAG CAPITAL · ${flip} · ${lag.reason}`;
         pushTick(s, {
-          phase: 'ERROR',
+          phase: 'DECIDE',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          code: DecisionCodes.BLOCKED_TECHNICAL,
-          detail: `BLOCKED_TECHNICAL · ${lag.reason}`,
+          code: DecisionCodes.SIGNAL_CREATED,
+          detail: reason,
         });
-        direction = null;
       }
     }
 

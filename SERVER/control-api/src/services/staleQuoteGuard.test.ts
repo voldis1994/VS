@@ -113,6 +113,37 @@ describe('detectCapitalLagLead', () => {
     expect(v.hit).toBe(false);
   });
 
+  it('live board: Yahoo 50pts is basis; Coinbase cluster vs Capital still SELLs', () => {
+    // 02:07 board: Capital 4338.31, Yahoo/Aurum/Fawaz ~4390–4402, CoinGecko/Binance outliers
+    const v = detectCapitalLagLead(4338.31, [
+      { label: 'Yahoo Finance (public)', mid: 4391.5 },
+      { label: 'Aurum metals spot (public)', mid: 4393.8 },
+      { label: 'Gold-API spot (public)', mid: 4337.6 },
+      { label: 'Fawaz FX / XAU (public)', mid: 4402.33 },
+      { label: 'Coinbase spot (public)', mid: 4334.98 },
+      { label: 'Kraken spot (public)', mid: 4333.93 },
+      { label: 'KuCoin spot (public)', mid: 4339 },
+      { label: 'Binance.US (public)', mid: 4350 },
+      { label: 'CoinGecko (public)', mid: 4329.03 },
+      { label: 'Bitstamp (public)', mid: 4334.88 },
+    ]);
+    expect(v.hit).toBe(true);
+    expect(v.direction).toBe('SELL');
+  });
+
+  it('one CoinGecko dump does not veto BUY when the cluster still agrees', () => {
+    const v = detectStaleQuoteAdverse('BUY', 4338.31, [
+      { label: 'Gold-API spot (public)', mid: 4337.6 },
+      { label: 'Coinbase spot (public)', mid: 4337.9 },
+      { label: 'Kraken spot (public)', mid: 4338.0 },
+      { label: 'KuCoin spot (public)', mid: 4338.2 },
+      { label: 'Binance.US (public)', mid: 4338.4 },
+      { label: 'CoinGecko (public)', mid: 4329.03 },
+      { label: 'Bitstamp (public)', mid: 4337.8 },
+    ]);
+    expect(v.block).toBe(false);
+  });
+
   it('ignores Capital-named legs so they cannot cancel a public lead', () => {
     const v = detectCapitalLagLead(4354.11, [
       { label: 'Capital.com GOLD', mid: 4354.11 },

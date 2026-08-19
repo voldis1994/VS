@@ -469,7 +469,27 @@ export function decideEntryFrom10sRegime(
 
   if (r === 'FAILED_BREAKOUT_UP' || r === 'FAILED_BREAKOUT_DOWN') {
     const fb = decideFailedBreakout(bar, r, bars);
-    if (fb) return gateWithTrend(fb, b, bar, bars, r);
+    const gated = fb ? gateWithTrend(fb, b, bar, bars, r) : null;
+    if (gated) return gated;
+    // Fade not confirmed — do not SCAN forever; still dip-buy / follow dump with lasting bias.
+    if (b === 'UP' && (dip(bar) || softDip(bar))) {
+      return gateWithTrend(
+        { direction: 'BUY', setup: 'PULLBACK', reason: `${r}+bias UP dip-buy · ${candle}` },
+        b,
+        bar,
+        bars,
+        r
+      );
+    }
+    if (b === 'DOWN' && (dip(bar) || softDip(bar))) {
+      return gateWithTrend(
+        { direction: 'SELL', setup: 'BREAKOUT', reason: `${r}+bias DOWN follow dump · ${candle}` },
+        b,
+        bar,
+        bars,
+        r
+      );
+    }
     return null;
   }
 
