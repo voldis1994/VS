@@ -1,33 +1,33 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Full MSI rebuild from scratch: STOP → git pull main → npm install → build calc/desk/client → START.
-
-  Use when git pull alone is not enough (old Node still running, stale vs-calc.exe, old UI dist).
+  Full MSI rebuild: STOP, git pull main, npm install, build calc/desk/client, START.
 
   Optional env:
-    VS_REBUILD_CLEAN=1   delete node_modules in control-api / desk / client before npm install
-    VS_REBUILD_SKIP_PULL=1   skip git pull (offline tree)
+    VS_REBUILD_CLEAN=1        delete node_modules before npm install
+    VS_REBUILD_SKIP_PULL=1    skip git pull
 #>
 $ErrorActionPreference = "Continue"
 $AdminRoot = Split-Path -Parent $PSScriptRoot
 $RepoRoot = Split-Path -Parent $AdminRoot
 Set-Location $RepoRoot
 
-function Write-Fail([string]$Msg) {
+function Write-Fail {
+  param([string]$Msg)
   Write-Host ("FAIL: " + $Msg) -ForegroundColor Red
   exit 1
 }
 
 if ((Get-Location).Path -like "*legacy-review*" -or (Get-Location).Path -like "*old version*") {
-  Write-Fail "CWD is archive — production rebuild refuses"
+  Write-Fail "CWD is archive - production rebuild refuses"
 }
 
 if (-not (Test-Path (Join-Path $RepoRoot "ADMIN\windows\start-admin.ps1"))) {
-  Write-Fail "not VS repo root — run from C:\VS"
+  Write-Fail "not VS repo root - run from C:\VS"
 }
 
-function Invoke-NpmInstall([string]$Dir) {
+function Invoke-NpmInstall {
+  param([string]$Dir)
   $saved = $env:NODE_ENV
   Remove-Item Env:NODE_ENV -ErrorAction SilentlyContinue
   Push-Location $Dir
@@ -39,15 +39,14 @@ function Invoke-NpmInstall([string]$Dir) {
 }
 
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host " VS — REBUILD ALL (from scratch)" -ForegroundColor Cyan
+Write-Host " VS - REBUILD ALL (from scratch)" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 
 Write-Host ""
-Write-Host "[1/6] STOP — kill Control API, vs-calc, client gateway..."
+Write-Host "[1/6] STOP - kill Control API, vs-calc, client gateway..."
 & (Join-Path $PSScriptRoot "stop-admin.ps1")
 Start-Sleep -Seconds 2
 
-# Extra safety: any leftover VS node/tsx on this tree
 Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
   Where-Object {
     $_.CommandLine -and (
@@ -60,24 +59,26 @@ Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
   }
 
 Write-Host ""
-Write-Host "[2/6] GIT — pull origin main..."
+Write-Host "[2/6] GIT - pull origin main..."
 $git = Get-Command git -ErrorAction SilentlyContinue
 if ($git -and $env:VS_REBUILD_SKIP_PULL -ne "1") {
   & git fetch origin main 2>&1 | Out-Host
   & git checkout main 2>&1 | Out-Host
   & git pull origin main 2>&1 | Out-Host
   if ($LASTEXITCODE -ne 0) {
-    Write-Host "WARN: git pull failed — continuing with local files" -ForegroundColor Yellow
-  } else {
+    Write-Host "WARN: git pull failed - continuing with local files" -ForegroundColor Yellow
+  }
+  else {
     $head = (& git log -1 --oneline 2>$null | Out-String).Trim()
     Write-Host ("  at " + $head) -ForegroundColor Green
   }
-} else {
+}
+else {
   Write-Host "  skip pull (no git or VS_REBUILD_SKIP_PULL=1)"
 }
 
 $node = Get-Command node -ErrorAction SilentlyContinue
-if (-not $node) { Write-Fail "Node.js LTS required — https://nodejs.org/" }
+if (-not $node) { Write-Fail "Node.js LTS required - install from nodejs.org" }
 $npm = Get-Command npm -ErrorAction SilentlyContinue
 if (-not $npm) { Write-Fail "npm missing" }
 
@@ -88,9 +89,9 @@ $npmProjects = @(
 )
 
 Write-Host ""
-Write-Host "[3/6] NPM — install dependencies..."
+Write-Host "[3/6] NPM - install dependencies..."
 if ($env:VS_REBUILD_CLEAN -eq "1") {
-  Write-Host "  VS_REBUILD_CLEAN=1 — removing node_modules..."
+  Write-Host "  VS_REBUILD_CLEAN=1 - removing node_modules..."
   foreach ($p in $npmProjects) {
     $nm = Join-Path $p.Path "node_modules"
     if (Test-Path $nm) {
@@ -101,24 +102,26 @@ if ($env:VS_REBUILD_CLEAN -eq "1") {
 }
 foreach ($p in $npmProjects) {
   Write-Host ("  npm install " + $p.Name + "...")
-  $code = Invoke-NpmInstall $p.Path
+  $code = Invoke-NpmInstall -Dir $p.Path
   if ($code -ne 0) { Write-Fail ("npm install failed: " + $p.Name) }
 }
 
 Write-Host ""
-Write-Host "[4/6] BUILD — C++ vs-calc (EntryReady)..."
+Write-Host "[4/6] BUILD - C++ vs-calc (EntryReady)..."
 $calcDir = Join-Path $RepoRoot "SERVER\calc"
-$buildCalc = Join-Path $calcDir "BUILD_CALC.bat"
-& cmd /c "`"$buildCalc`""
 $calcExe = Join-Path $calcDir "vs-calc.exe"
+Push-Location $calcDir
+& cmd /c BUILD_CALC.bat
+Pop-Location
 if (-not (Test-Path $calcExe)) {
-  Write-Host "WARN: vs-calc.exe missing — install MinGW g++ or MSVC" -ForegroundColor Yellow
-} else {
+  Write-Host "WARN: vs-calc.exe missing - install MinGW g++ or MSVC" -ForegroundColor Yellow
+}
+else {
   Write-Host ("  OK " + $calcExe) -ForegroundColor Green
 }
 
 Write-Host ""
-Write-Host "[5/6] BUILD — TACTICAL DESK + CLIENT web dist..."
+Write-Host "[5/6] BUILD - TACTICAL DESK + CLIENT web dist..."
 $deskDir = Join-Path $RepoRoot "ADMIN\desk"
 $deskDist = Join-Path $deskDir "dist"
 $deskVite = Join-Path $deskDir "node_modules\vite\bin\vite.js"
@@ -140,6 +143,6 @@ Pop-Location
 if ($clientCode -ne 0) { Write-Fail "CLIENT web vite build failed" }
 
 Write-Host ""
-Write-Host "[6/6] START — Docker + Control API + vs-calc + gateway..."
+Write-Host "[6/6] START - Docker + Control API + vs-calc + gateway..."
 & (Join-Path $PSScriptRoot "start-admin.ps1")
 exit $LASTEXITCODE
