@@ -1369,6 +1369,7 @@ export const PROFIT_LOCK_RATIO = 0.75;
 /**
  * Stop level that keeps `protectRatio` of peak profit (MFE).
  * Example: BUY entry 2490, MFE +6 → stop ≈ 2494.5 (locks 75% = 4.5 pts).
+ * Clamps to broker min distance when price retraces — locks as much as allowed.
  */
 export function computeProfitLockStopLevel(
   direction: 'BUY' | 'SELL',
@@ -1383,21 +1384,39 @@ export function computeProfitLockStopLevel(
   if (ratio <= 0 || ratio > 1) return null;
 
   const locked = mfe * ratio;
-  const rawStop = direction === 'BUY' ? entry + locked : entry - locked;
+  let rawStop = direction === 'BUY' ? entry + locked : entry - locked;
   if (!Number.isFinite(rawStop)) return null;
 
-  const stopLevel = quantizePrice(rawStop);
+  const minDist =
+    opts?.minStopDistance != null && Number.isFinite(opts.minStopDistance) && opts.minStopDistance > 0
+      ? opts.minStopDistance
+      : null;
+  const cushioned = minDist != null ? minDist * 1.2 : null;
 
   if (direction === 'BUY') {
+    if (rawStop <= entry) return null;
+    if (cushioned != null) {
+      const maxStop = mid - cushioned;
+      if (maxStop <= entry) return null;
+      rawStop = Math.min(rawStop, maxStop);
+    } else if (rawStop >= mid) {
+      return null;
+    }
+    const stopLevel = quantizePrice(rawStop);
     if (stopLevel <= entry || stopLevel >= mid) return null;
-    const minDist = opts?.minStopDistance;
-    if (minDist != null && minDist > 0 && stopLevel + 1e-9 > mid - minDist * 1.2) return null;
-  } else {
-    if (stopLevel >= entry || stopLevel <= mid) return null;
-    const minDist = opts?.minStopDistance;
-    if (minDist != null && minDist > 0 && stopLevel - 1e-9 < mid + minDist * 1.2) return null;
+    return stopLevel;
   }
 
+  if (rawStop >= entry) return null;
+  if (cushioned != null) {
+    const minStop = mid + cushioned;
+    if (minStop >= entry) return null;
+    rawStop = Math.max(rawStop, minStop);
+  } else if (rawStop <= mid) {
+    return null;
+  }
+  const stopLevel = quantizePrice(rawStop);
+  if (stopLevel >= entry || stopLevel <= mid) return null;
   return stopLevel;
 }
 

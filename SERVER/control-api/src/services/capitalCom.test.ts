@@ -216,4 +216,16 @@ describe('computeProfitLockStopLevel', () => {
     expect(stop!).toBeLessThan(entry);
     expect(stop!).toBeGreaterThan(mid);
   });
+
+  it('BUY clamps lock when price retraces from peak MFE', async () => {
+    const { computeProfitLockStopLevel } = await import('./capitalCom.js');
+    const entry = 2490;
+    const mfe = 6;
+    const mid = 2493;
+    const stop = computeProfitLockStopLevel('BUY', entry, mfe, mid, { minStopDistance: 0.5 });
+    expect(stop).not.toBeNull();
+    expect(stop!).toBeGreaterThan(entry);
+    expect(stop!).toBeLessThan(mid);
+    expect(stop!).toBeLessThanOrEqual(2492.4);
+  });
 });

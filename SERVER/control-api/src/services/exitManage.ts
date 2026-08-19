@@ -123,6 +123,19 @@ export function breakevenStopLevelForSide(side: ExitSide, entry: number): number
   return Math.ceil(entry * scale) / scale;
 }
 
+/** UPL move required before SL may trail to breakeven (Gold ≈ 1.8 pts). */
+export function breakevenTriggerMove(entry: number, minStopDistance?: number | null): number {
+  const absEntry = Math.max(Math.abs(entry), 1e-9);
+  const minDist =
+    minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
+      ? minStopDistance
+      : 0;
+  const goldBeTriggerPoints = 1.8;
+  return absEntry >= 1000
+    ? Math.max(minDist, goldBeTriggerPoints)
+    : Math.max(minDist, absEntry * SAFETY_SL_REL);
+}
+
 /** Back-compat: old signature rounds to the nearest (may be slightly unsafe for BUY/SELL). */
 export function breakevenStopLevel(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
@@ -171,11 +184,7 @@ export function decideBestOutcomeExit(
       : 0;
   const absEntry = Math.max(Math.abs(entry), 1e-9);
 
-  // BE trigger tuned to operator “good feel”:
-  // - on Gold (~>=1000), trail SL to BE around +1.8 UPL points
-  // - otherwise keep relative SAFETY_SL_REL behavior
-  const goldBeTriggerPoints = 1.8;
-  const beMove = absEntry >= 1000 ? Math.max(minDist, goldBeTriggerPoints) : Math.max(minDist, absEntry * SAFETY_SL_REL);
+  const beMove = breakevenTriggerMove(entry, minDist > 0 ? minDist : null);
 
   // “Impulse ended” behavior:
   // When inputsEnded by this heuristic, we should not keep holding at BE.

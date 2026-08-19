@@ -27,7 +27,7 @@ import {
   REGIME_NAMES,
   type RegimeName,
 } from './regimes.js';
-import { breakevenStopLevelForSide, decideBestOutcomeExit, favorableMove } from './exitManage.js';
+import { breakevenStopLevelForSide, breakevenTriggerMove, decideBestOutcomeExit, favorableMove } from './exitManage.js';
 import {
   computeCrossMarketPressure,
   noteMarketMid,
@@ -633,6 +633,83 @@ function updateExcursion(s: Internal, mid: number) {
   }
   if (fav < s.mae) s.mae = fav;
   s.peak_retention = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
+}
+
+/** After BE (or once UPL ≥ BE trigger), trail SL into profit via swing + 75% MFE lock. */
+async function tryPostBeProfitTrail(
+  session: CapitalSession,
+  s: Internal,
+  quote: CapitalMarketQuote
+): Promise<void> {
+  if (
+    !s.deal_id ||
+    !s.open_side ||
+    quote.mid == null ||
+    s.entry_price == null ||
+    s.safety_sl == null ||
+    s.mfe <= 0
+  ) {
+    return;
+  }
+
+  const entry = s.entry_price;
+  const px = quote.mid;
+  const beStop = breakevenStopLevelForSide(s.open_side, entry);
+  const eps = Math.max(1e-6, Math.abs(entry) * 1e-9);
+  const beyondBe =
+    (s.open_side === 'BUY' && s.safety_sl >= beStop - eps) ||
+    (s.open_side === 'SELL' && s.safety_sl <= beStop + eps);
+  const fav = favorableMove(s.open_side, entry, px);
+  const beMove = breakevenTriggerMove(entry, quote.min_stop_distance ?? null);
+  if (!beyondBe && !(Number.isFinite(fav) && fav + 1e-9 >= beMove)) return;
+
+  const recentSwing = [
+    ...(s.minuteCandles?.slice(-2) ?? []),
+    ...(s.closedBars?.slice(-6) ?? []),
+  ] as Array<{ high: number; low: number }>;
+
+  const cur = s.safety_sl;
+  const profitTrail = computeMarketProfitTrailStopLevel(s.open_side, entry, px, recentSwing, {
+    minStopDistance: quote.min_stop_distance ?? null,
+    lookback: 8,
+  });
+  const profitLock = computeProfitLockStopLevel(s.open_side, entry, s.mfe, px, {
+    minStopDistance: quote.min_stop_distance ?? null,
+  });
+
+  const candidates = [profitTrail, profitLock].filter(
+    (x): x is number => x != null && Number.isFinite(x)
+  );
+  const profitStop =
+    s.open_side === 'BUY'
+      ? candidates.filter((x) => x > cur && x < px).sort((a, b) => b - a)[0] ?? null
+      : candidates.filter((x) => x < cur && x > px).sort((a, b) => a - b)[0] ?? null;
+
+  if (profitStop == null) return;
+
+  const upd = await updateCapitalStop(session, s.deal_id, profitStop, {
+    mid: quote.mid,
+    pointSize: quote.point_size ?? null,
+  });
+  if (upd.ok) {
+    s.safety_sl = profitStop;
+    const lockNote = profitLock != null && profitStop === profitLock ? '75% MFE lock' : 'swing trail';
+    pushTick(s, {
+      phase: 'MANAGE',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `POST-BE PROFIT TRAIL SL ${cur} → ${profitStop} (${lockNote} · MFE ${s.mfe.toFixed(2)})`,
+    });
+  } else {
+    pushTick(s, {
+      phase: 'ERROR',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `POST-BE PROFIT TRAIL failed: ${upd.detail}`,
+    });
+  }
 }
 
 /** Exact id only — never returns a different robot */
@@ -1962,80 +2039,6 @@ async function robotCycleBody(s: Internal) {
         }
       }
 
-      // Post-BE profit trailing:
-      // Once SL reached breakeven, continue moving it into profit using swing HIGH/LOW.
-      if (
-        s.deal_id &&
-        s.open_side &&
-        quote.mid != null &&
-        s.entry_price != null &&
-        s.safety_sl != null &&
-        s.mfe > 0
-      ) {
-        const entry = s.entry_price;
-        const beStop = breakevenStopLevelForSide(s.open_side, entry);
-        const eps = Math.max(1e-6, Math.abs(entry) * 1e-9);
-        // Continue profit trailing once we are at/beyond breakeven:
-        // BUY: safety_sl >= BE, SELL: safety_sl <= BE
-        const beyondBe =
-          (s.open_side === 'BUY' && s.safety_sl >= beStop - eps) ||
-          (s.open_side === 'SELL' && s.safety_sl <= beStop + eps);
-        if (beyondBe) {
-          const recentSwing = [
-            ...(s.minuteCandles?.slice(-2) ?? []),
-            ...(s.closedBars?.slice(-6) ?? []),
-          ] as Array<{ high: number; low: number }>;
-
-          const px = quote.mid;
-          const cur = s.safety_sl;
-
-          const profitTrail = computeMarketProfitTrailStopLevel(s.open_side, entry, px, recentSwing, {
-            minStopDistance: quote.min_stop_distance ?? null,
-            lookback: 8,
-          });
-
-          const profitLock = computeProfitLockStopLevel(s.open_side, entry, s.mfe, px, {
-            minStopDistance: quote.min_stop_distance ?? null,
-          });
-
-          const candidates = [profitTrail, profitLock].filter(
-            (x): x is number => x != null && Number.isFinite(x)
-          );
-          const profitStop =
-            s.open_side === 'BUY'
-              ? candidates.filter((x) => x > cur && x < px).sort((a, b) => b - a)[0] ?? null
-              : candidates.filter((x) => x < cur && x > px).sort((a, b) => a - b)[0] ?? null;
-
-          const canTrail = profitStop != null;
-
-          if (canTrail) {
-            const upd = await updateCapitalStop(opened.session, s.deal_id, profitStop, {
-              mid: quote.mid,
-              pointSize: quote.point_size ?? null,
-            });
-            if (upd.ok) {
-              s.safety_sl = profitStop;
-              const lockNote = profitLock != null && profitStop === profitLock ? '75% MFE lock' : 'swing trail';
-              pushTick(s, {
-                phase: 'MANAGE',
-                bid: quote.bid,
-                ask: quote.ask,
-                mid: quote.mid,
-                detail: `POST-BE PROFIT TRAIL SL ${cur} → ${profitStop} (${lockNote} · MFE ${s.mfe.toFixed(2)})`,
-              });
-            } else {
-              pushTick(s, {
-                phase: 'ERROR',
-                bid: quote.bid,
-                ask: quote.ask,
-                mid: quote.mid,
-                detail: `POST-BE PROFIT TRAIL failed: ${upd.detail}`,
-              });
-            }
-          }
-        }
-      }
-
       // Pending close: verify broker flat only — do not re-run exit decision / duplicate close
       if (s.close_pending) {
         await exitTrade(opened.session, s, quote, 'close pending · verify broker flat');
@@ -2072,48 +2075,49 @@ async function robotCycleBody(s: Internal) {
             mid: quote.mid,
             detail: `TRAIL blocked — no dealId · ${decision.reason}`,
           });
-          return;
-        }
-        const stop = decision.trail_stop;
-        const cur = s.safety_sl;
-        const improves =
-          cur == null ||
-          (s.open_side === 'BUY' && stop > cur) ||
-          (s.open_side === 'SELL' && stop < cur);
-        if (!improves) {
-          pushTick(s, {
-            phase: 'MANAGE',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: `TRAIL skip — SL ${cur} already tighter · ${decision.reason}`,
-          });
-          return;
-        }
-        const upd = await updateCapitalStop(opened.session, dealId, stop, {
-          mid: quote.mid,
-          pointSize: quote.point_size ?? null,
-        });
-        if (upd.ok) {
-          s.safety_sl = stop;
-          pushTick(s, {
-            phase: 'MANAGE',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: `TRAIL SL ${stop} · ${decision.reason}`,
-          });
         } else {
-          pushTick(s, {
-            phase: 'ERROR',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: `TRAIL FAIL: ${upd.detail} · ${decision.reason}`,
-          });
+          const stop = decision.trail_stop;
+          const cur = s.safety_sl;
+          const improves =
+            cur == null ||
+            (s.open_side === 'BUY' && stop > cur) ||
+            (s.open_side === 'SELL' && stop < cur);
+          if (!improves) {
+            pushTick(s, {
+              phase: 'MANAGE',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `TRAIL skip — SL ${cur} already tighter · ${decision.reason}`,
+            });
+          } else {
+            const upd = await updateCapitalStop(opened.session, dealId, stop, {
+              mid: quote.mid,
+              pointSize: quote.point_size ?? null,
+            });
+            if (upd.ok) {
+              s.safety_sl = stop;
+              pushTick(s, {
+                phase: 'MANAGE',
+                bid: quote.bid,
+                ask: quote.ask,
+                mid: quote.mid,
+                detail: `TRAIL SL ${stop} · ${decision.reason}`,
+              });
+            } else {
+              pushTick(s, {
+                phase: 'ERROR',
+                bid: quote.bid,
+                ask: quote.ask,
+                mid: quote.mid,
+                detail: `TRAIL FAIL: ${upd.detail} · ${decision.reason}`,
+              });
+            }
+          }
         }
-        return;
       }
+
+      await tryPostBeProfitTrail(opened.session, s, quote);
 
       pushTick(s, {
         phase: 'MANAGE',
