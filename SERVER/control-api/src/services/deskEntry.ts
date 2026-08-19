@@ -34,6 +34,18 @@ export function resolveDeskEntry(input: {
   let setup: string | null = input.intendedSetup ?? null;
   let reason = input.intendedReason ?? '';
   const bias = input.bias || 'FLAT';
+
+  // When bias is FLAT, infer concept direction from the lasting 1m regime.
+  // This avoids countertrend LAG_LEAD/stale flips during “bias uncertainty”.
+  function conceptBiasFromRegime(regime?: string | null): TrendBias {
+    const r = String(regime || '').toUpperCase();
+    const up = r === 'TREND_UP' || r === 'PULLBACK_UPTREND' || r === 'BREAKOUT_UP';
+    const down = r === 'TREND_DOWN' || r === 'PULLBACK_DOWNTREND' || r === 'BREAKOUT_DOWN';
+    if (up) return 'UP';
+    if (down) return 'DOWN';
+    return 'FLAT';
+  }
+
   // When direction came from C++ EntryReady, do not override it with Node-side
   // lag/leak heuristics — that would discard EV/transition formulas from calc.
   const fromCalc = input.intended != null;
@@ -41,18 +53,19 @@ export function resolveDeskEntry(input: {
   // Concept permission gate:
   // With-trend setups must align with the lasting bias (1m concept).
   // If C++ intended a with-trend direction against bias, block the entry.
-  if (fromCalc && direction && bias !== 'FLAT') {
+  const conceptBias = bias === 'FLAT' ? conceptBiasFromRegime(input.regime) : bias;
+  if (fromCalc && direction && conceptBias !== 'FLAT') {
     const s = String(input.intendedSetup || '')
       .trim()
       .toUpperCase();
     const withTrend = new Set(['PULLBACK', 'CONTINUATION', 'BREAKOUT']);
     if (withTrend.has(s)) {
-      const ok = bias === 'UP' ? direction === 'BUY' : direction === 'SELL';
+      const ok = conceptBias === 'UP' ? direction === 'BUY' : direction === 'SELL';
       if (!ok) {
         return {
           direction: null,
           setup: null,
-          reason: `CONCEPT_BLOCK · with-trend ${s} vs bias ${bias}`,
+          reason: `CONCEPT_BLOCK · with-trend ${s} vs bias ${conceptBias}`,
         };
       }
     }
@@ -73,8 +86,9 @@ export function resolveDeskEntry(input: {
   }
 
   function lagConceptAllowed(lagDir: 'BUY' | 'SELL'): boolean {
-    if (bias === 'FLAT') return true;
-    if (bias === 'UP') return lagDir === 'BUY';
+    const cb = bias === 'FLAT' ? conceptBiasFromRegime(input.regime) : bias;
+    if (cb === 'FLAT') return true;
+    if (cb === 'UP') return lagDir === 'BUY';
     return lagDir === 'SELL';
   }
 
