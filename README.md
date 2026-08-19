@@ -4,7 +4,7 @@ ONE computer: the MSI. **origin/main is the live prototype.**
 
 ## WHAT IS VS?
 
-Market data → **C++ calc** (EntryReady only) → **Node robotDesk** picks BUY/SELL on closed 10s and opens Capital with **0.25% SL**. Best Outcome only moves SL to **BE**. Admin and Client are steering only.
+Market data → **C++ calc** (EntryReady only) → **Node robotDesk** picks BUY/SELL on closed 10s and opens Capital with **0.15% SL**. Best Outcome only moves SL to **BE**. Admin and Client are steering only.
 
 ## HOW TO START (MSI)
 
@@ -34,7 +34,7 @@ On a phone never type `127.0.0.1` (that is the phone itself). Safari needs the M
 1. Postgres + Redis on `127.0.0.1`
 2. Control API `:3000`
 3. C++ `vs-calc` → `POST /api/pipeline/intents` (EntryReady only — never Capital)
-4. robotDesk: closed 10s BUY/SELL → Capital order + 0.25% SL; plus → SL to BE
+4. robotDesk: closed 10s BUY/SELL → Capital order + 0.15% SL; plus → SL to BE
 
 ## FIRST TRADE
 
@@ -49,7 +49,7 @@ Stop: `powershell -File ADMIN\windows\stop-admin.ps1`
 
 - C++ = EntryReady calc, never Capital
 - Node robotDesk = BUY/SELL + Capital hands
-- Safety SL = 0.25% of price (0.00250)
+- Safety SL = 0.15% of price (0.00150)
 - Best Outcome = SL to breakeven only (does not close)
 - Max 1 open; MARKET CLOSED parks
 - Ghost intents released when Capital is flat (no DUPLICATE_INTENT freeze)

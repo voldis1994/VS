@@ -193,7 +193,7 @@ export async function buildSystemHealth(opts?: {
     name: 'RISK',
     level: riskReject ? 'WARNING' : 'OK',
     code: riskReject ? String(lastTick?.code) : 'OK',
-    detail: riskReject ? lastTick?.detail || 'Risk rejected' : 'Risk gates nominal (SL 0.25% of price / 0.00250)',
+    detail: riskReject ? lastTick?.detail || 'Risk rejected' : 'Risk gates nominal (SL 0.15% of price / 0.00150)',
     broken_at: null,
     error_code: null,
     broker_error: null,

@@ -85,7 +85,7 @@ export function thesisFailureReason(
 
 /**
  * Manage exit — lock the best available outcome by moving SL to breakeven.
- * Never close from Best Outcome. Broker SAFETY SL (0.25%) is the loss stop.
+ * Never close from Best Outcome. Broker SAFETY SL (0.15%) is the loss stop.
  *
  * @param nowMs Evaluation clock — must be wall time at T (injectable for tests; no look-ahead).
  */
@@ -165,7 +165,7 @@ export function decideBestOutcomeExit(
       ? opts.minStopDistance
       : 0;
   // Gold 10s noise is ~0.3–2pt. Broker min-stop (~0.4) is too tight for BE —
-  // wait until plus is at least the 0.25% safety distance (~11pt on Gold).
+  // wait until plus is at least the 0.15% safety distance (~6.5pt on Gold).
   const beMove = Math.max(minDist, Math.abs(entry) * SAFETY_SL_REL);
 
   // Best Outcome = only SL → BE. No TP/harvest/time/thesis close.

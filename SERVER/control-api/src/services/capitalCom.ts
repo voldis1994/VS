@@ -1186,8 +1186,8 @@ export async function createCapitalPosition(
   };
 }
 
-/** Safety SL = 0.25% of instrument price (0.00250). Visible on Gold 10s; Capital accepts it. */
-export const SAFETY_SL_REL = 0.0025;
+/** Safety SL = 0.15% of instrument price (0.00150). Tighter on Gold 10s; Capital min is ~0.4pt. */
+export const SAFETY_SL_REL = 0.0015;
 
 export function computeSafetyCushionStopLevel(
   direction: 'BUY' | 'SELL',

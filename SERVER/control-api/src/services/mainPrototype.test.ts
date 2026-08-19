@@ -31,15 +31,15 @@ function cluster(mid: number): PriceRef[] {
 const repoRoot = join(process.cwd(), '..', '..');
 
 describe('MAIN prototype freeze', () => {
-  it('pins MAIN identity, 0.25% SL, and BE-only manage', () => {
+  it('pins MAIN identity, 0.15% SL, and BE-only manage', () => {
     expect(DESK_PROTOTYPE).toBe('MAIN');
-    expect(SAFETY_SL_REL).toBe(0.0025);
-    expect(DESK_PROTOTYPE_SL).toBe('0.25%-of-price');
+    expect(SAFETY_SL_REL).toBe(0.0015);
+    expect(DESK_PROTOTYPE_SL).toBe('0.15%-of-price');
     const info = runtimeBuildInfo();
     expect(info.desk_prototype).toBe('MAIN');
-    expect(info.sl).toBe('0.25%-of-price');
+    expect(info.sl).toBe('0.15%-of-price');
     expect(info.entry_brain).toBe('node-robot-desk');
-    expect(info.STRATEGY_VERSION).toBe('main-prototype-10s-sl025-be');
+    expect(info.STRATEGY_VERSION).toBe('main-prototype-10s-sl015-be');
     expect(deskPrototypeRules()).toMatch(/MAIN PROTOTYPE/);
     expect(deskPrototypeRules()).toMatch(/SL→BE/);
   });
@@ -73,7 +73,7 @@ describe('MAIN prototype freeze', () => {
     expect(e.direction).toBeNull();
   });
 
-  it('Best Outcome never closes — plus trails SL to BE only after 0.25%', () => {
+  it('Best Outcome never closes — plus trails SL to BE only after 0.15%', () => {
     const plus = decideBestOutcomeExit(
       {
         open_side: 'BUY',

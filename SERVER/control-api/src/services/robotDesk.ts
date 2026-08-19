@@ -506,8 +506,8 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     git_sha: build.git_sha,
     entry_brain: build.entry_brain,
-    chain: 'MAIN PROTOTYPE · 10s BUY/SELL → robotDesk Capital hands · SL 0.25% · BE trail',
-    note: `MAIN PROTOTYPE · BUILD ${build.git_sha} · SL=0.25% (0.00250) · ${build.trend_minutes}-min`,
+    chain: 'MAIN PROTOTYPE · 10s BUY/SELL → robotDesk Capital hands · SL 0.15% · BE trail',
+    note: `MAIN PROTOTYPE · BUILD ${build.git_sha} · SL=0.15% (0.00150) · ${build.trend_minutes}-min`,
   };
 }
 
@@ -557,7 +557,7 @@ function clearTradeState(s: Internal) {
 }
 
 /**
- * Safety SL = 0.25% of price / 0.00250 (at least Capital min×2.5 so broker accepts it).
+ * Safety SL = 0.15% of price / 0.00150 (at least Capital min×2.5 so broker accepts it).
  */
 function safetyStopLevel(
   direction: 'BUY' | 'SELL',
@@ -577,7 +577,7 @@ function safetyStopLevel(
   });
 }
 
-/** stopDistance from 0.25% of price (≥ 2.5× Capital min points). */
+/** stopDistance from 0.15% of price (≥ 2.5× Capital min points). */
 function safetyStopDistancePts(
   mid: number,
   minPts: number,
@@ -1274,7 +1274,7 @@ async function enterTrade(
               ask: quote.ask,
               mid: quote.mid,
               code: DecisionCodes.ORDER_SUBMITTING,
-              detail: `SL 0.25% stopDistance=${stopDistance} pts (Capital min=${minPts} · ~level ${
+              detail: `SL 0.15% stopDistance=${stopDistance} pts (Capital min=${minPts} · ~level ${
                 expect ?? 'n/a'
               } · x${loosen})`,
             });
@@ -1322,7 +1322,7 @@ async function enterTrade(
             ask: quote.ask,
             mid: quote.mid,
             code: DecisionCodes.ORDER_SUBMITTING,
-            detail: `SL 0.25% try stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
+            detail: `SL 0.15% try stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
               minPrice ?? 'n/a'
             } · spread=${quote.spread ?? 'n/a'} · x${loosen})`,
           });
@@ -1820,7 +1820,7 @@ async function robotCycleBody(s: Internal) {
       s.mode = 'MANAGE';
       if (quote.mid == null) return;
 
-      // Attach 0.25% safety SL if Capital has none; otherwise one-shot tighten.
+      // Attach 0.15% safety SL if Capital has none; otherwise one-shot tighten.
       const brokerStop = brokerOpen?.stop_level ?? null;
       const missingBrokerSl =
         Boolean(s.deal_id) &&
@@ -1851,7 +1851,7 @@ async function robotCycleBody(s: Internal) {
               bid: quote.bid,
               ask: quote.ask,
               mid: quote.mid,
-              detail: `SAFETY SL attached ${level} · 0.25% (0.00250) · x${loosen}`,
+              detail: `SAFETY SL attached ${level} · 0.15% (0.00150) · x${loosen}`,
             });
             break;
           }
@@ -1903,7 +1903,7 @@ async function robotCycleBody(s: Internal) {
               bid: quote.bid,
               ask: quote.ask,
               mid: quote.mid,
-              detail: `SL tightened ${cur} → ${tighter} (0.25% of price)`,
+              detail: `SL tightened ${cur} → ${tighter} (0.15% of price)`,
             });
           } else {
             s.sl_tighten_done = false;
@@ -2367,7 +2367,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'MAIN PROTOTYPE · closed 10s BUY/SELL · SL 0.25% (0.00250) · Best Outcome SL→BE after 0.25% plus · no flip every 10s',
+      'MAIN PROTOTYPE · closed 10s BUY/SELL · SL 0.15% (0.00150) · Best Outcome SL→BE after 0.15% plus · no flip every 10s',
   });
 
   sessions.set(id, session);
