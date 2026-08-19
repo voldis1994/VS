@@ -6,10 +6,6 @@ import {
   confirmCapitalDeal,
   createCapitalPosition,
   computeSafetyCushionStopLevel,
-  computeMarketBehaviorStopLevel,
-  computeMarketProfitTrailStopLevel,
-  computeProfitLockStopLevel,
-  selectProfitGuardStopLevel,
   fetchCapitalMarketQuote,
   fetchCapitalMinutePrices,
   fetchCapitalPrices,
@@ -28,7 +24,7 @@ import {
   REGIME_NAMES,
   type RegimeName,
 } from './regimes.js';
-import { breakevenStopLevelForSide, decideBestOutcomeExit, favorableMove } from './exitManage.js';
+import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
 import {
   computeCrossMarketPressure,
   noteMarketMid,
@@ -197,7 +193,6 @@ type Internal = RobotSession & {
   minuteCandles: CapitalPriceCandle[];
   last_multi_feed_ms: number;
   multiFeed: MultiFeedPrice | null;
-  sl_tighten_done: boolean;
   /** Prevent overlapping robotCycle runs on the same session */
   cycle_in_flight: boolean;
   /** Close request submitted; awaiting broker flat before POSITION_CLOSED */
@@ -515,7 +510,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     git_sha: build.git_sha,
     entry_brain: build.entry_brain,
-    chain: 'MAIN PROTOTYPE · 10s BUY/SELL → robotDesk Capital hands · SL 0.15% · BE trail',
+    chain: 'MAIN PROTOTYPE · 10s BUY/SELL → robotDesk Capital hands · Entry SL 0.15% · Exit Best Outcome',
     note: `MAIN PROTOTYPE · BUILD ${build.git_sha} · SL=0.15% (0.00150) · ${build.trend_minutes}-min`,
   };
 }
@@ -560,7 +555,6 @@ function clearTradeState(s: Internal) {
   s.unrealized = null;
   s.safety_sl = null;
   s.mode = 'FLAT';
-  s.sl_tighten_done = false;
   s.close_pending = false;
   s.close_in_flight = false;
 }
@@ -634,79 +628,6 @@ function updateExcursion(s: Internal, mid: number) {
   }
   if (fav < s.mae) s.mae = fav;
   s.peak_retention = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
-}
-
-/** Once MFE > 0: SL floor = breakeven; target up to 75% MFE lock + swing trail. */
-async function tryPostBeProfitTrail(
-  session: CapitalSession,
-  s: Internal,
-  quote: CapitalMarketQuote
-): Promise<void> {
-  if (
-    !s.deal_id ||
-    !s.open_side ||
-    quote.mid == null ||
-    s.entry_price == null ||
-    s.safety_sl == null ||
-    s.mfe <= 0
-  ) {
-    return;
-  }
-
-  const entry = s.entry_price;
-  const px = quote.mid;
-  const beStop = breakevenStopLevelForSide(s.open_side, entry);
-  const recentSwing = [
-    ...(s.minuteCandles?.slice(-2) ?? []),
-    ...(s.closedBars?.slice(-6) ?? []),
-  ] as Array<{ high: number; low: number }>;
-
-  const cur = s.safety_sl;
-  const profitTrail = computeMarketProfitTrailStopLevel(s.open_side, entry, px, recentSwing, {
-    minStopDistance: quote.min_stop_distance ?? null,
-    lookback: 8,
-  });
-  const profitLock = computeProfitLockStopLevel(s.open_side, entry, s.mfe, px, {
-    minStopDistance: quote.min_stop_distance ?? null,
-  });
-
-  const profitStop = selectProfitGuardStopLevel(s.open_side, entry, cur, px, s.mfe, {
-    minStopDistance: quote.min_stop_distance ?? null,
-    breakeven: beStop,
-    profitTrail,
-    profitLock,
-  });
-
-  if (profitStop == null) return;
-
-  const upd = await updateCapitalStop(session, s.deal_id, profitStop, {
-    mid: quote.mid,
-    pointSize: quote.point_size ?? null,
-  });
-  if (upd.ok) {
-    s.safety_sl = profitStop;
-    const lockNote =
-      profitLock != null && profitStop === profitLock
-        ? '75% MFE lock'
-        : profitStop === beStop
-          ? 'breakeven floor'
-          : 'swing trail';
-    pushTick(s, {
-      phase: 'MANAGE',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `PROFIT GUARD SL ${cur} → ${profitStop} (${lockNote} · MFE ${s.mfe.toFixed(2)})`,
-    });
-  } else {
-    pushTick(s, {
-      phase: 'ERROR',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `PROFIT GUARD failed: ${upd.detail}`,
-    });
-  }
 }
 
 /** Exact id only — never returns a different robot */
@@ -1910,7 +1831,7 @@ async function robotCycleBody(s: Internal) {
       s.mode = 'MANAGE';
       if (quote.mid == null) return;
 
-      // Attach 0.15% safety SL if Capital has none; otherwise one-shot tighten.
+      // Entry SL fallback: attach 0.15% safety SL if Capital has none on open position.
       const brokerStop = brokerOpen?.stop_level ?? null;
       const missingBrokerSl =
         Boolean(s.deal_id) &&
@@ -1963,86 +1884,13 @@ async function robotCycleBody(s: Internal) {
             detail: 'BLOCKED_TECHNICAL · open trade has no Capital SL — retry next cycle',
           });
         }
-      } else if (!s.sl_tighten_done && s.deal_id && s.open_side && quote.mid != null) {
-        // Tighten from “safety SL” to a behavior-based swing SL.
-        // This follows real market structure (last highs/lows) instead of a fixed cushion alone.
-        const entry = s.entry_price ?? quote.mid;
-        const recentSwing = [
-          ...(s.minuteCandles?.slice(-2) ?? []),
-          ...(s.closedBars?.slice(-6) ?? []),
-        ] as Array<{ high: number; low: number }>;
-
-        const safetyTight = safetyStopLevel(
-          s.open_side,
-          quote.mid,
-          quote.bid ?? null,
-          quote.ask ?? null,
-          quote.spread ?? null,
-          quote.min_stop_distance ?? null,
-          1
-        );
-
-        const cur = s.safety_sl ?? brokerStop;
-        const px = quote.mid;
-
-        // Don’t tighten to swing SL until the position has actually gone favorable.
-        // Otherwise we risk “over-tight” SL and stop-out before the move is confirmed.
-        const behaviorAllowed = s.mfe > 0;
-        const behaviorTight = behaviorAllowed
-          ? computeMarketBehaviorStopLevel(s.open_side, entry, recentSwing, {
-              minStopDistance: quote.min_stop_distance ?? null,
-              lookback: 8,
-            })
-          : null;
-
-        const tighter = behaviorTight ?? safetyTight;
-        const canTighten =
-          cur != null &&
-          Number.isFinite(cur) &&
-          ((s.open_side === 'BUY' && tighter > cur && tighter < px) ||
-            (s.open_side === 'SELL' && tighter < cur && tighter > px));
-
-        if (!canTighten) {
-          // Keep trying next cycle (especially until behaviorAllowed becomes true).
-          // Do not block other manage steps (exit decision, pending close checks).
-        } else {
-
-          s.sl_tighten_done = true;
-          {
-            const upd = await updateCapitalStop(opened.session, s.deal_id, tighter, {
-              mid: quote.mid,
-              pointSize: quote.point_size ?? null,
-            });
-            if (upd.ok) {
-              s.safety_sl = tighter;
-              pushTick(s, {
-                phase: 'INFO',
-                bid: quote.bid,
-                ask: quote.ask,
-                mid: quote.mid,
-                detail: `SL tightened ${cur} → ${tighter} (${behaviorTight != null ? 'market swing' : 'safety'})`,
-              });
-            } else {
-              s.sl_tighten_done = false;
-              pushTick(s, {
-                phase: 'INFO',
-                bid: quote.bid,
-                ask: quote.ask,
-                mid: quote.mid,
-                detail: `SL tighten skipped: ${upd.detail}`,
-              });
-            }
-          }
-        }
       }
 
-      // Pending close: verify broker flat only — do not re-run exit decision / duplicate close
+      // Exit brain: Best Outcome CLOSE only — never trail or move SL here.
       if (s.close_pending) {
         await exitTrade(opened.session, s, quote, 'close pending · verify broker flat');
         return;
       }
-
-      await tryPostBeProfitTrail(opened.session, s, quote);
 
       const decision = decideBestOutcomeExit(
         {
@@ -2063,57 +1911,6 @@ async function robotCycleBody(s: Internal) {
       if (decision.action === 'CLOSE' || decision.exit) {
         await exitTrade(opened.session, s, quote, decision.reason);
         return;
-      }
-      if (decision.action === 'TRAIL' && decision.trail_stop != null) {
-        const dealId = await resolveDealId(opened.session, s, s.last_deal_reference || undefined);
-        if (!dealId) {
-          pushTick(s, {
-            phase: 'ERROR',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: `TRAIL blocked — no dealId · ${decision.reason}`,
-          });
-        } else {
-          const stop = decision.trail_stop;
-          const cur = s.safety_sl;
-          const improves =
-            cur == null ||
-            (s.open_side === 'BUY' && stop > cur) ||
-            (s.open_side === 'SELL' && stop < cur);
-          if (!improves) {
-            pushTick(s, {
-              phase: 'MANAGE',
-              bid: quote.bid,
-              ask: quote.ask,
-              mid: quote.mid,
-              detail: `TRAIL skip — SL ${cur} already tighter · ${decision.reason}`,
-            });
-          } else {
-            const upd = await updateCapitalStop(opened.session, dealId, stop, {
-              mid: quote.mid,
-              pointSize: quote.point_size ?? null,
-            });
-            if (upd.ok) {
-              s.safety_sl = stop;
-              pushTick(s, {
-                phase: 'MANAGE',
-                bid: quote.bid,
-                ask: quote.ask,
-                mid: quote.mid,
-                detail: `TRAIL SL ${stop} · ${decision.reason}`,
-              });
-            } else {
-              pushTick(s, {
-                phase: 'ERROR',
-                bid: quote.bid,
-                ask: quote.ask,
-                mid: quote.mid,
-                detail: `TRAIL FAIL: ${upd.detail} · ${decision.reason}`,
-              });
-            }
-          }
-        }
       }
 
       pushTick(s, {
@@ -2478,7 +2275,6 @@ export async function startRobotSession(input: {
     minuteCandles: [],
     last_multi_feed_ms: 0,
     multiFeed: null,
-    sl_tighten_done: false,
     cycle_in_flight: false,
     close_pending: false,
     close_in_flight: false,
@@ -2527,7 +2323,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'MAIN PROTOTYPE · closed 10s BUY/SELL · SL 0.15% (0.00150) · Best Outcome SL→BE after 0.15% plus · no flip every 10s',
+      'MAIN PROTOTYPE · closed 10s BUY/SELL · Entry SL 0.15% (0.00150) · Exit Best Outcome close only · no flip every 10s',
   });
 
   sessions.set(id, session);

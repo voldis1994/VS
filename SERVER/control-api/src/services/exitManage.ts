@@ -84,28 +84,26 @@ export function thesisFailureReason(
 }
 
 /**
- * Manage exit — lock the best available outcome by moving SL to breakeven.
- * Never close from Best Outcome. Broker SAFETY SL (0.15%) is the loss stop.
+ * Exit brain — watches open trades and issues CLOSE on Best Outcome rules only.
+ * Entry owns the initial Capital SL; exit never trails or moves SL.
  *
  * @param nowMs Evaluation clock — must be wall time at T (injectable for tests; no look-ahead).
  */
-export type BestOutcomeAction = 'HOLD' | 'CLOSE' | 'TRAIL';
+export type BestOutcomeAction = 'HOLD' | 'CLOSE';
 
 export type BestOutcome = {
-  /** True only when the broker position must be closed now. Best Outcome never closes. */
+  /** True when the broker position must be closed now. */
   exit: boolean;
   action: BestOutcomeAction;
   reason: string;
-  /** Absolute stopLevel to PUT on Capital when action=TRAIL */
-  trail_stop: number | null;
 };
 
 function hold(): BestOutcome {
-  return { exit: false, action: 'HOLD', reason: '', trail_stop: null };
+  return { exit: false, action: 'HOLD', reason: '' };
 }
 
-function trail(reason: string, stop: number): BestOutcome {
-  return { exit: false, action: 'TRAIL', reason, trail_stop: stop };
+function closeNow(reason: string): BestOutcome {
+  return { exit: true, action: 'CLOSE', reason };
 }
 
 /**
@@ -123,7 +121,7 @@ export function breakevenStopLevelForSide(side: ExitSide, entry: number): number
   return Math.ceil(entry * scale) / scale;
 }
 
-/** UPL move required before SL may trail to breakeven (Gold ≈ 1.8 pts). */
+/** Min favorable move before Best Outcome may close after inputs ended (Gold ≈ 1.8 pts). */
 export function breakevenTriggerMove(entry: number, minStopDistance?: number | null): number {
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   const minDist =
@@ -163,63 +161,32 @@ export function decideBestOutcomeExit(
   /**
    * “Inputs ended” gate:
    * Let the trade run while the live regime/context matches the entry context.
-   * Only then allow Best Outcome to tighten SL to breakeven.
+   * Close only when entry regime no longer matches and move was favorable enough.
    */
   const entryRegime = s.entry_regime != null ? String(s.entry_regime).toUpperCase() : null;
   const curRegime = s.regime != null ? String(s.regime).toUpperCase() : null;
-  const inputsEnded =
-    entryRegime && curRegime ? entryRegime !== curRegime : true;
-  // Close after BE only when we actually *know* inputs ended via a real entry_regime vs live regime mismatch.
   const impulseEndedKnown = entryRegime != null && curRegime != null && entryRegime !== curRegime;
 
   const entry = s.entry_price;
   const fav = favorableMove(s.open_side, entry, mid);
   const thesisFail = thesisFailureReason(s.open_side, s.regime, s.entry_setup);
   if (thesisFail && fav <= 0) {
-    return { exit: true, action: 'CLOSE', reason: `${thesisFail} · no favorable move`, trail_stop: null };
+    return closeNow(`${thesisFail} · no favorable move`);
   }
   const minDist =
     opts?.minStopDistance != null && Number.isFinite(opts.minStopDistance) && opts.minStopDistance > 0
       ? opts.minStopDistance
       : 0;
-  const absEntry = Math.max(Math.abs(entry), 1e-9);
 
-  const beMove = breakevenTriggerMove(entry, minDist > 0 ? minDist : null);
+  const closeMove = breakevenTriggerMove(entry, minDist > 0 ? minDist : null);
 
-  // “Impulse ended” behavior:
-  // When inputsEnded by this heuristic, we should not keep holding at BE.
-  // For with-trend entry setups, after BE is reached we close.
   const entrySetup = String(s.entry_setup || '')
     .trim()
     .toUpperCase();
   const withTrendEntry = WITH_TREND_EXIT_SETUPS.has(entrySetup);
-  if (impulseEndedKnown && withTrendEntry && Number.isFinite(fav) && fav + 1e-9 >= beMove) {
-    return {
-      exit: true,
-      action: 'CLOSE',
-      reason: `BestOutcome · inputs ended · BE reached (${fav.toFixed(5)} >= ${beMove})`,
-      trail_stop: null,
-    };
-  }
-
-  // If “inputs ended” hasn't happened (regime unchanged), still allow BE only
-  // when the move is already clearly beyond normal noise.
-  // This prevents a situation where BE never triggers.
-  if (!inputsEnded) {
-    // For Gold we explicitly want the operator “good feel” trigger (~1.8 UPL points)
-    // even when the live regime has not yet “ended” by this heuristic.
-    if (absEntry < 1000) {
-      const lateBeMove = beMove * 2; // allow BE after a clearly larger move
-      if (!(Number.isFinite(fav) && fav + 1e-9 >= lateBeMove)) return hold();
-    }
-  }
-
-  // Best Outcome = only SL → BE. No TP/harvest/time/thesis close.
-  if (Number.isFinite(fav) && fav + 1e-9 >= beMove) {
-    const stop = breakevenStopLevelForSide(s.open_side, entry);
-    return trail(
-      `BestOutcome BE · SL ${stop} · UPL ${fav.toFixed(5)} · entry ${entry}`,
-      stop
+  if (impulseEndedKnown && withTrendEntry && Number.isFinite(fav) && fav + 1e-9 >= closeMove) {
+    return closeNow(
+      `BestOutcome · inputs ended · favorable move (${fav.toFixed(5)} >= ${closeMove})`
     );
   }
 
