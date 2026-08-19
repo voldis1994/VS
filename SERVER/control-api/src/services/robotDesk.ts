@@ -24,7 +24,13 @@ import {
   REGIME_NAMES,
   type RegimeName,
 } from './regimes.js';
-import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
+import {
+  decideBestOutcomeExitFull,
+  favorableMove,
+  initBestOutcomeTrack,
+  type BestOutcomeStateName,
+  type BestOutcomeTrack,
+} from './exitManage.js';
 import {
   computeCrossMarketPressure,
   noteMarketMid,
@@ -144,6 +150,10 @@ export type RobotSession = {
   entry_regime: string | null;
   /** Strategy reason string at entry (audit). */
   entry_reason: string | null;
+  /** Best Outcome manage state — per open Capital position. */
+  best_outcome_state: BestOutcomeStateName | null;
+  best_outcome_reason: string | null;
+  best_price_seen: number | null;
   /** When false, manage-only (no new opens). When true, C++ EntryReady first, then 10s Node fallback. */
   entry_enabled: boolean;
   ohlc_10s: {
@@ -201,6 +211,7 @@ type Internal = RobotSession & {
   close_in_flight: boolean;
   feedManager: FeedManager;
   last_cross_ms: number;
+  best_outcome_track: BestOutcomeTrack | null;
 };
 
 const ACTIVE_CADENCE_MS = 2_000;
@@ -557,6 +568,10 @@ function clearTradeState(s: Internal) {
   s.mode = 'FLAT';
   s.close_pending = false;
   s.close_in_flight = false;
+  s.best_outcome_state = null;
+  s.best_outcome_reason = null;
+  s.best_price_seen = null;
+  s.best_outcome_track = null;
 }
 
 /**
@@ -628,6 +643,24 @@ function updateExcursion(s: Internal, mid: number) {
   }
   if (fav < s.mae) s.mae = fav;
   s.peak_retention = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
+}
+
+function ensureBestOutcomeTrack(s: Internal, mid: number): BestOutcomeTrack {
+  if (s.best_outcome_track && s.entry_price != null) {
+    return s.best_outcome_track;
+  }
+  const entry = s.entry_price ?? mid;
+  const track = initBestOutcomeTrack(entry);
+  track.max_profit_seen = s.mfe;
+  track.best_price_seen =
+    s.best_price_seen ?? (s.peak_favorable > 0 ? s.peak_favorable : entry);
+  if (s.best_outcome_state) track.state = s.best_outcome_state;
+  if (s.best_outcome_reason) track.reason = s.best_outcome_reason;
+  s.best_outcome_track = track;
+  s.best_outcome_state = track.state;
+  s.best_outcome_reason = track.reason;
+  s.best_price_seen = track.best_price_seen;
+  return track;
 }
 
 /** Exact id only — never returns a different robot */
@@ -1479,6 +1512,10 @@ async function enterTrade(
   s.peak_retention = null;
   s.unrealized = 0;
   s.safety_sl = stopLevel != null && Number.isFinite(stopLevel) ? stopLevel : null;
+  s.best_outcome_track = initBestOutcomeTrack(mid);
+  s.best_outcome_state = s.best_outcome_track.state;
+  s.best_outcome_reason = s.best_outcome_track.reason;
+  s.best_price_seen = mid;
   s.error = null;
   s.close_pending = false;
   s.close_in_flight = false;
@@ -1746,6 +1783,7 @@ async function robotCycleBody(s: Internal) {
         if (brokerOpen.stop_level != null && Number.isFinite(brokerOpen.stop_level)) {
           s.safety_sl = brokerOpen.stop_level;
         }
+        if (quote.mid != null) ensureBestOutcomeTrack(s, quote.mid);
         try {
           if (getDurableOrderStore().isClosePending(s.account_id, s.epic)) {
             s.close_pending = true;
@@ -1892,7 +1930,8 @@ async function robotCycleBody(s: Internal) {
         return;
       }
 
-      const decision = decideBestOutcomeExit(
+      const track = ensureBestOutcomeTrack(s, quote.mid);
+      const bo = decideBestOutcomeExitFull(
         {
           open_side: s.open_side,
           entry_price: s.entry_price,
@@ -1903,13 +1942,27 @@ async function robotCycleBody(s: Internal) {
           regime: s.regime,
           entry_setup: s.entry_setup,
           entry_regime: s.entry_regime,
+          best_outcome_state: s.best_outcome_state,
+          best_outcome_reason: s.best_outcome_reason,
+          best_price_seen: s.best_price_seen,
+          consecutive_adverse: track.consecutive_adverse,
         },
         quote.mid,
-        Date.now(),
+        {
+          closedBars: s.closedBars,
+          trend_bias: s.trend_bias,
+          regime: s.regime,
+        },
+        track,
         { minStopDistance: quote.min_stop_distance ?? null }
       );
-      if (decision.action === 'CLOSE' || decision.exit) {
-        await exitTrade(opened.session, s, quote, decision.reason);
+      s.best_outcome_track = bo.track;
+      s.best_outcome_state = bo.track.state;
+      s.best_outcome_reason = bo.track.reason;
+      s.best_price_seen = bo.view.best_price_seen;
+
+      if (bo.action === 'CLOSE' || bo.exit) {
+        await exitTrade(opened.session, s, quote, bo.reason);
         return;
       }
 
@@ -1918,11 +1971,13 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `ONE TRADE · manage ${s.open_side} · setup ${s.entry_setup || '—'} · ${s.regime} · UPL ${
-          s.unrealized != null ? s.unrealized.toFixed(5) : '—'
-        } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
-          s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · no new orders`,
+        detail: `BEST OUTCOME ${bo.view.best_outcome_state} · ${bo.view.best_outcome_reason} · UPL ${
+          bo.view.current_profit.toFixed(5)
+        } · MFE ${bo.view.max_profit_seen.toFixed(5)} · giveback ${bo.view.profit_giveback.toFixed(
+          5
+        )} · ret ${
+          bo.view.peak_retention != null ? `${(bo.view.peak_retention * 100).toFixed(0)}%` : '—'
+        } · best ${bo.view.best_price_seen.toFixed(2)}`,
       });
       return;
     }
@@ -2291,6 +2346,10 @@ export async function startRobotSession(input: {
     trend_bias: 'FLAT',
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
     last_cross_ms: 0,
+    best_outcome_state: null,
+    best_outcome_reason: null,
+    best_price_seen: null,
+    best_outcome_track: null,
     pending_calc: calcQueue.get(calcKey(acc.id, epic)) || null,
     cross_market: null,
   };

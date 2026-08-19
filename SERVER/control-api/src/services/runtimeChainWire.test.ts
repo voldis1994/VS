@@ -10,9 +10,10 @@ describe('P3 runtime call-chain wiring', () => {
     expect(src).toContain('releaseGhostIntents');
     expect(src).toContain('buildMoneyPathRisk(');
     expect(src).toContain('evaluateRisk(');
-    expect(src).toContain("import { decideBestOutcomeExit, favorableMove } from './exitManage.js'");
+    expect(src).toContain('decideBestOutcomeExitFull');
+    expect(src).toContain('initBestOutcomeTrack');
     const exitSrc = readFileSync(join(process.cwd(), 'src/services/exitManage.ts'), 'utf8');
-    expect(exitSrc).toContain('decideBestOutcomeExit');
+    expect(exitSrc).toContain('evaluateBestOutcome');
     expect(exitSrc).toContain('Best Outcome');
     expect(exitSrc).not.toContain("action: 'TRAIL'");
     expect(src).not.toContain('tryPostBeProfitTrail');
