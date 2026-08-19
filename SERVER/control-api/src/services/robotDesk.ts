@@ -178,6 +178,8 @@ type Internal = RobotSession & {
   connection_id: number;
   closed_at_ms: number;
   peak_favorable: number;
+  /** After a trade close we wait a short cooldown before allowing a new entry. */
+  cooldown_until_ms: number;
   /** Last time we logged "market closed" (throttle ticks) */
   last_market_closed_tick_ms: number;
   cadence_ms: number;
@@ -882,6 +884,10 @@ async function finalizeLocalClose(
   } catch {
     /* best effort */
   }
+
+  // After a completed trade cycle, wait 10 seconds before allowing the next entry.
+  // (User-requested anti-churn / “10 sec cooldown” discipline.)
+  s.cooldown_until_ms = Date.now() + 10_000;
 
   clearTradeState(s);
 }
@@ -2072,7 +2078,23 @@ async function robotCycleBody(s: Internal) {
     }
 
     s.mode = 'ENTRY';
-    // No artificial post-close cooldown — proven strategy reacts on the next valid setup.
+    // Discipline: after each filled/closed trade, wait a short cooldown before allowing a new entry.
+    // This prevents immediate re-entries on the next 10s candle close.
+    const nowMs = Date.now();
+    if (s.cooldown_until_ms > nowMs) {
+      const waitMs = s.cooldown_until_ms - nowMs;
+      const waitSec = Math.ceil(waitMs / 1000);
+      s.mode = 'FLAT';
+      pushTick(s, {
+        phase: 'SCAN',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        code: DecisionCodes.BLOCKED_TECHNICAL,
+        detail: `BLOCKED_TECHNICAL · post-trade cooldown ${waitSec}s`,
+      });
+      return;
+    }
 
     const execQuote: CapitalMarketQuote =
       quote.mid == null && s.last_mid != null && Number.isFinite(s.last_mid)
@@ -2349,6 +2371,7 @@ export async function startRobotSession(input: {
     timer: null,
     closed_at_ms: 0,
     peak_favorable: 0,
+    cooldown_until_ms: 0,
     last_market_closed_tick_ms: 0,
     cadence_ms: 0,
     ohlcState: emptyTenSecState(),
