@@ -73,6 +73,8 @@ export function resolveDeskEntry(input: {
   }
 
   const lead = detectCapitalLagLead(input.capitalMid, input.refs, {
+    // Keep original scan threshold (avoid false-negative on real clusters).
+    // Flip protection still uses the higher threshold when direction already exists.
     minRel: direction ? FLIP_MIN_REL : LAG_SCAN_MIN_REL,
   });
   if (lead.hit && lead.direction) {
@@ -107,6 +109,14 @@ export function resolveDeskEntry(input: {
 
   // Last resort only in a lasting trend — RANGE/COMPRESSION must not flip every 10s.
   if (!direction && input.bar) {
+    // Avoid “BUY/SELL on a doji”: last-resort bias should require real body movement.
+    const bar = input.bar;
+    const denom = Math.max(Math.abs(bar.open), 1e-9);
+    const bodyAbsRel = Math.abs(bar.close - bar.open) / denom;
+    if (bodyAbsRel < 0.00002) {
+      return { direction: null, setup: null, reason: '' };
+    }
+
     const regime = String(input.regime || '').toUpperCase();
     const trendingBuy =
       regime === 'TREND_UP' || regime === 'PULLBACK_UPTREND' || regime === 'BREAKOUT_UP';
