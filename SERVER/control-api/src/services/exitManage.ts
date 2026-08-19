@@ -156,6 +156,8 @@ export function decideBestOutcomeExit(
   const curRegime = s.regime != null ? String(s.regime).toUpperCase() : null;
   const inputsEnded =
     entryRegime && curRegime ? entryRegime !== curRegime : true;
+  // Close after BE only when we actually *know* inputs ended via a real entry_regime vs live regime mismatch.
+  const impulseEndedKnown = entryRegime != null && curRegime != null && entryRegime !== curRegime;
 
   const entry = s.entry_price;
   const fav = favorableMove(s.open_side, entry, mid);
@@ -174,6 +176,22 @@ export function decideBestOutcomeExit(
   // - otherwise keep relative SAFETY_SL_REL behavior
   const goldBeTriggerPoints = 1.8;
   const beMove = absEntry >= 1000 ? Math.max(minDist, goldBeTriggerPoints) : Math.max(minDist, absEntry * SAFETY_SL_REL);
+
+  // “Impulse ended” behavior:
+  // When inputsEnded by this heuristic, we should not keep holding at BE.
+  // For with-trend entry setups, after BE is reached we close.
+  const entrySetup = String(s.entry_setup || '')
+    .trim()
+    .toUpperCase();
+  const withTrendEntry = WITH_TREND_EXIT_SETUPS.has(entrySetup);
+  if (impulseEndedKnown && withTrendEntry && Number.isFinite(fav) && fav + 1e-9 >= beMove) {
+    return {
+      exit: true,
+      action: 'CLOSE',
+      reason: `BestOutcome · inputs ended · BE reached (${fav.toFixed(5)} >= ${beMove})`,
+      trail_stop: null,
+    };
+  }
 
   // If “inputs ended” hasn't happened (regime unchanged), still allow BE only
   // when the move is already clearly beyond normal noise.
