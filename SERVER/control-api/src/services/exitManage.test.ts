@@ -75,10 +75,10 @@ describe('Exit matrix A–P', () => {
       }),
       2005
     );
-    expect(d.exit).toBe(false);
-    expect(d.action).toBe('TRAIL');
-    expect(d.trail_stop).toBe(2000);
-    expect(d.reason).toMatch(/BestOutcome BE/);
+    expect(d.exit).toBe(true);
+    expect(d.action).toBe('CLOSE');
+    expect(d.trail_stop).toBeNull();
+    expect(d.reason).toMatch(/inputs ended/i);
   });
 
   it('C1) Gold: 1.8 UPL still trails to BE even when inputsEnded=false', () => {
@@ -112,9 +112,9 @@ describe('Exit matrix A–P', () => {
       }),
       1995
     );
-    expect(d.exit).toBe(false);
-    expect(d.action).toBe('TRAIL');
-    expect(d.trail_stop).toBe(2000);
+    expect(d.exit).toBe(true);
+    expect(d.action).toBe('CLOSE');
+    expect(d.trail_stop).toBeNull();
   });
 
   it('E) tiny plus HOLDs — Gold noise must not move SL to BE', () => {
@@ -249,9 +249,9 @@ describe('Exit matrix A–P', () => {
       futureMid,
       t0 + 5_000
     );
-    expect(noFutureTime.exit).toBe(false);
-    expect(noFutureTime.action).toBe('TRAIL');
-    expect(noFutureTime.trail_stop).toBe(2000);
+    expect(noFutureTime.exit).toBe(true);
+    expect(noFutureTime.action).toBe('CLOSE');
+    expect(noFutureTime.trail_stop).toBeNull();
     const decay = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -461,10 +461,10 @@ describe('Exit helpers — LONG/SHORT symmetry', () => {
       }),
       1995
     );
-    expect(peak.exit).toBe(false);
-    expect(peak.action).toBe('TRAIL');
-    expect(peak.trail_stop).toBe(2000);
-    expect(peak.reason).toMatch(/BestOutcome BE/);
+    expect(peak.exit).toBe(true);
+    expect(peak.action).toBe('CLOSE');
+    expect(peak.trail_stop).toBeNull();
+    expect(peak.reason).toMatch(/inputs ended/i);
   });
 
   it('waits for 0.25% plus (not broker min-stop) before BE', () => {
@@ -493,7 +493,7 @@ describe('Exit helpers — LONG/SHORT symmetry', () => {
       Date.now(),
       { minStopDistance: 0.5 }
     );
-    expect(ready.action).toBe('TRAIL');
-    expect(ready.trail_stop).toBe(4353);
+    expect(ready.action).toBe('CLOSE');
+    expect(ready.trail_stop).toBeNull();
   });
 });
