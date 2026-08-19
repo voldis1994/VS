@@ -1322,9 +1322,9 @@ export function computeMarketProfitTrailStopLevel(
   const maxHigh = Math.max(...w.map((c) => c.high));
   const range = Math.max(0, maxHigh - minLow);
 
-  // “Give back” cushion: don't trail too tightly, allow price to run.
-  // 0.1% on Gold (~4300) is ~4.3 points.
-  const bufferPct = absEntry * 0.001;
+  // “Give back” cushion: keep room, but still follow fast enough.
+  // ~0.07% on Gold (~4300) is ~3.0 points.
+  const bufferPct = absEntry * 0.0007;
   const bufferRange = range * 0.08;
   const minBuffer = absEntry * 0.0001;
   const buffer = Math.max(bufferPct, bufferRange, minBuffer);
@@ -1348,14 +1348,14 @@ export function computeMarketProfitTrailStopLevel(
     const minDist = opts?.minStopDistance != null && Number.isFinite(opts.minStopDistance) ? opts.minStopDistance : null;
     if (minDist != null && minDist > 0) {
       // Keep an extra cushion beyond broker minimum.
-      const cushionedMinDist = minDist * 1.5;
+      const cushionedMinDist = minDist * 1.2;
       if (stopLevel + 1e-9 > mid - cushionedMinDist) return null;
     }
   } else {
     if (stopLevel <= mid) return null;
     const minDist = opts?.minStopDistance != null && Number.isFinite(opts.minStopDistance) ? opts.minStopDistance : null;
     if (minDist != null && minDist > 0) {
-      const cushionedMinDist = minDist * 1.5;
+      const cushionedMinDist = minDist * 1.2;
       if (stopLevel - 1e-9 < mid + cushionedMinDist) return null;
     }
   }
