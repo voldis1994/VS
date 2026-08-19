@@ -29,7 +29,7 @@ export type RegimeEntry = {
 export type TrendBias = 'UP' | 'DOWN' | 'FLAT';
 
 /** Robot trend horizon — 10s scalp, not a 20-minute swing. */
-export const TREND_LOOKBACK_MINUTES = 3;
+export const TREND_LOOKBACK_MINUTES = 5;
 export const TREND_LOOKBACK_10S = TREND_LOOKBACK_MINUTES * 6;
 
 function movingOrNull(bar: TenSecBar): boolean {
