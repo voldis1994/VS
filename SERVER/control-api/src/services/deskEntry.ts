@@ -76,5 +76,15 @@ export function resolveDeskEntry(input: {
     }
   }
 
+  // Last resort: START + closed 10s + lasting bias → do not sit in SCAN.
+  if (!direction && input.bar && (input.bias === 'UP' || input.bias === 'DOWN')) {
+    const dir: 'BUY' | 'SELL' = input.bias === 'UP' ? 'BUY' : 'SELL';
+    return {
+      direction: dir,
+      setup: 'BIAS',
+      reason: `BIAS ${input.bias} · ${dir} · ${input.regime || 'UNKNOWN'} closed 10s`,
+    };
+  }
+
   return { direction, setup, reason };
 }

@@ -97,6 +97,18 @@ describe('10s + regime-as-CONTEXT suitable entry', () => {
     expect(decideEntryFrom10sRegime(quietGreen, 'COMPRESSION', 'DOWN')).toBeNull();
   });
 
+  it('COMPRESSION + bias UP BUYs a doji — not SCAN', () => {
+    const doji: TenSecBar = {
+      open_time_ms: 0,
+      open: 4338.12,
+      high: 4338.12,
+      low: 4337.7,
+      close: 4338.12,
+      ticks: 8,
+    };
+    expect(decideEntryFrom10sRegime(doji, 'COMPRESSION', 'UP')?.direction).toBe('BUY');
+  });
+
   it('TREND_DOWN follows the dump (red) — never sells a green breakout', () => {
     expect(decideEntryFrom10sRegime(dip, 'TREND_DOWN', 'DOWN')?.direction).toBe('SELL');
     expect(decideEntryFrom10sRegime(rally, 'TREND_DOWN', 'DOWN')).toBeNull();

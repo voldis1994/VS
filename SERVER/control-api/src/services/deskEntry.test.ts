@@ -124,4 +124,28 @@ describe('resolveDeskEntry — BUY and SELL both fire', () => {
     });
     expect(e.direction).toBe('SELL');
   });
+
+  it('01:20 board: quote 4330 vs Capital LIVE 4338 → BUY, not SCAN', () => {
+    const doji: TenSecBar = {
+      open_time_ms: 0,
+      open: 4338.12,
+      high: 4338.12,
+      low: 4337.7,
+      close: 4338.12,
+      ticks: 8,
+    };
+    const e = resolveDeskEntry({
+      bar: doji,
+      regime: 'COMPRESSION',
+      bias: 'UP',
+      capitalMid: 4330.35,
+      refs: [
+        ...yahooBasis,
+        { label: 'BOOS / Capital.com LIVE', mid: 4338.08 },
+        { label: 'Gold-API spot (public)', mid: 4338.9 },
+        { label: 'Binance.US (public)', mid: 4330.27 },
+      ],
+    });
+    expect(e.direction).toBe('BUY');
+  });
 });

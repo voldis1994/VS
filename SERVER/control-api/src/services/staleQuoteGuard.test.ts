@@ -144,7 +144,17 @@ describe('detectCapitalLagLead', () => {
     expect(v.block).toBe(false);
   });
 
-  it('ignores Capital-named legs so they cannot cancel a public lead', () => {
+  it('Capital.com LIVE 8pts above stale quote.mid is a BUY lag, not ignored', () => {
+    const v = detectCapitalLagLead(4330.35, [
+      { label: 'BOOS / Capital.com LIVE', mid: 4338.08 },
+      { label: 'Gold-API spot (public)', mid: 4338.9 },
+      { label: 'Binance.US (public)', mid: 4330.27 },
+    ]);
+    expect(v.hit).toBe(true);
+    expect(v.direction).toBe('BUY');
+  });
+
+  it('public dump still SELLs even when a Capital.com leg sits on the quote', () => {
     const v = detectCapitalLagLead(4354.11, [
       { label: 'Capital.com GOLD', mid: 4354.11 },
       ...dumped,

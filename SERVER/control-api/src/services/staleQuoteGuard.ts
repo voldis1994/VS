@@ -35,10 +35,6 @@ function relMove(from: number, to: number): number {
   return (to - from) / Math.abs(from);
 }
 
-function isCapitalLabel(label: string): boolean {
-  return /capital\.com|capital_com|\bcapital\b/i.test(label);
-}
-
 function isOhlcLabel(label: string): boolean {
   return /10s|ohlc|forming/i.test(label);
 }
@@ -64,7 +60,7 @@ function usableNearRefs(
 ): PriceRef[] {
   return refs.filter((r) => {
     if (r.mid == null || !Number.isFinite(r.mid)) return false;
-    if (isCapitalLabel(r.label)) return false;
+    // Keep Capital.com LIVE in the vote — quote.mid can be 8pts behind that sender.
     return Math.abs(relMove(capitalMid, r.mid)) <= maxBasis;
   });
 }
