@@ -229,3 +229,27 @@ describe('computeProfitLockStopLevel', () => {
     expect(stop!).toBeLessThanOrEqual(2492.4);
   });
 });
+
+describe('selectProfitGuardStopLevel', () => {
+  it('BUY picks 75% lock when MFE peaked and enforces breakeven floor', async () => {
+    const { selectProfitGuardStopLevel } = await import('./capitalCom.js');
+    const entry = 2490;
+    const cur = 2485;
+    const mid = 2496;
+    const mfe = 6;
+    const stop = selectProfitGuardStopLevel('BUY', entry, cur, mid, mfe, {
+      breakeven: 2490,
+      minStopDistance: 0.5,
+    });
+    expect(stop).toBeCloseTo(2494.5, 1);
+  });
+
+  it('BUY falls back to breakeven on tiny MFE once in profit', async () => {
+    const { selectProfitGuardStopLevel } = await import('./capitalCom.js');
+    const stop = selectProfitGuardStopLevel('BUY', 2490, 2485, 2491.5, 0.005, {
+      breakeven: 2490,
+      minStopDistance: 0.5,
+    });
+    expect(stop).toBe(2490);
+  });
+});

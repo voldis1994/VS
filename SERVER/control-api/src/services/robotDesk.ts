@@ -9,6 +9,7 @@ import {
   computeMarketBehaviorStopLevel,
   computeMarketProfitTrailStopLevel,
   computeProfitLockStopLevel,
+  selectProfitGuardStopLevel,
   fetchCapitalMarketQuote,
   fetchCapitalMinutePrices,
   fetchCapitalPrices,
@@ -27,7 +28,7 @@ import {
   REGIME_NAMES,
   type RegimeName,
 } from './regimes.js';
-import { breakevenStopLevelForSide, breakevenTriggerMove, decideBestOutcomeExit, favorableMove } from './exitManage.js';
+import { breakevenStopLevelForSide, decideBestOutcomeExit, favorableMove } from './exitManage.js';
 import {
   computeCrossMarketPressure,
   noteMarketMid,
@@ -635,7 +636,7 @@ function updateExcursion(s: Internal, mid: number) {
   s.peak_retention = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
 }
 
-/** After BE (or once UPL ≥ BE trigger), trail SL into profit via swing + 75% MFE lock. */
+/** Once MFE > 0: SL floor = breakeven; target up to 75% MFE lock + swing trail. */
 async function tryPostBeProfitTrail(
   session: CapitalSession,
   s: Internal,
@@ -655,14 +656,6 @@ async function tryPostBeProfitTrail(
   const entry = s.entry_price;
   const px = quote.mid;
   const beStop = breakevenStopLevelForSide(s.open_side, entry);
-  const eps = Math.max(1e-6, Math.abs(entry) * 1e-9);
-  const beyondBe =
-    (s.open_side === 'BUY' && s.safety_sl >= beStop - eps) ||
-    (s.open_side === 'SELL' && s.safety_sl <= beStop + eps);
-  const fav = favorableMove(s.open_side, entry, px);
-  const beMove = breakevenTriggerMove(entry, quote.min_stop_distance ?? null);
-  if (!beyondBe && !(Number.isFinite(fav) && fav + 1e-9 >= beMove)) return;
-
   const recentSwing = [
     ...(s.minuteCandles?.slice(-2) ?? []),
     ...(s.closedBars?.slice(-6) ?? []),
@@ -677,13 +670,12 @@ async function tryPostBeProfitTrail(
     minStopDistance: quote.min_stop_distance ?? null,
   });
 
-  const candidates = [profitTrail, profitLock].filter(
-    (x): x is number => x != null && Number.isFinite(x)
-  );
-  const profitStop =
-    s.open_side === 'BUY'
-      ? candidates.filter((x) => x > cur && x < px).sort((a, b) => b - a)[0] ?? null
-      : candidates.filter((x) => x < cur && x > px).sort((a, b) => a - b)[0] ?? null;
+  const profitStop = selectProfitGuardStopLevel(s.open_side, entry, cur, px, s.mfe, {
+    minStopDistance: quote.min_stop_distance ?? null,
+    breakeven: beStop,
+    profitTrail,
+    profitLock,
+  });
 
   if (profitStop == null) return;
 
@@ -693,13 +685,18 @@ async function tryPostBeProfitTrail(
   });
   if (upd.ok) {
     s.safety_sl = profitStop;
-    const lockNote = profitLock != null && profitStop === profitLock ? '75% MFE lock' : 'swing trail';
+    const lockNote =
+      profitLock != null && profitStop === profitLock
+        ? '75% MFE lock'
+        : profitStop === beStop
+          ? 'breakeven floor'
+          : 'swing trail';
     pushTick(s, {
       phase: 'MANAGE',
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `POST-BE PROFIT TRAIL SL ${cur} → ${profitStop} (${lockNote} · MFE ${s.mfe.toFixed(2)})`,
+      detail: `PROFIT GUARD SL ${cur} → ${profitStop} (${lockNote} · MFE ${s.mfe.toFixed(2)})`,
     });
   } else {
     pushTick(s, {
@@ -707,7 +704,7 @@ async function tryPostBeProfitTrail(
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `POST-BE PROFIT TRAIL failed: ${upd.detail}`,
+      detail: `PROFIT GUARD failed: ${upd.detail}`,
     });
   }
 }
@@ -2045,6 +2042,8 @@ async function robotCycleBody(s: Internal) {
         return;
       }
 
+      await tryPostBeProfitTrail(opened.session, s, quote);
+
       const decision = decideBestOutcomeExit(
         {
           open_side: s.open_side,
@@ -2116,8 +2115,6 @@ async function robotCycleBody(s: Internal) {
           }
         }
       }
-
-      await tryPostBeProfitTrail(opened.session, s, quote);
 
       pushTick(s, {
         phase: 'MANAGE',

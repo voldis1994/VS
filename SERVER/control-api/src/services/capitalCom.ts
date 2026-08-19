@@ -1366,6 +1366,9 @@ export function computeMarketProfitTrailStopLevel(
 /** Lock this fraction of peak favorable move (MFE) once in profit. */
 export const PROFIT_LOCK_RATIO = 0.75;
 
+/** Minimum MFE (price pts) before 75% lock applies; below that only breakeven is attempted. */
+export const PROFIT_LOCK_MIN_MFE = 0.01;
+
 /**
  * Stop level that keeps `protectRatio` of peak profit (MFE).
  * Example: BUY entry 2490, MFE +6 → stop ≈ 2494.5 (locks 75% = 4.5 pts).
@@ -1379,7 +1382,7 @@ export function computeProfitLockStopLevel(
   opts?: { protectRatio?: number; minStopDistance?: number | null }
 ): number | null {
   const ratio = opts?.protectRatio ?? PROFIT_LOCK_RATIO;
-  if (!Number.isFinite(entry) || !Number.isFinite(mfe) || mfe <= 0) return null;
+  if (!Number.isFinite(entry) || !Number.isFinite(mfe) || mfe < PROFIT_LOCK_MIN_MFE) return null;
   if (!Number.isFinite(mid) || mid <= 0) return null;
   if (ratio <= 0 || ratio > 1) return null;
 
@@ -1418,6 +1421,47 @@ export function computeProfitLockStopLevel(
   const stopLevel = quantizePrice(rawStop);
   if (stopLevel >= entry || stopLevel <= mid) return null;
   return stopLevel;
+}
+
+/**
+ * Pick the tightest valid protected stop once MFE > 0.
+ * Floor = breakeven (never accept loss after a favorable tick); ceiling = 75% MFE lock + swing.
+ */
+export function selectProfitGuardStopLevel(
+  direction: 'BUY' | 'SELL',
+  entry: number,
+  cur: number,
+  mid: number,
+  mfe: number,
+  opts?: {
+    minStopDistance?: number | null;
+    profitTrail?: number | null;
+    profitLock?: number | null;
+    breakeven?: number | null;
+  }
+): number | null {
+  if (!Number.isFinite(entry) || !Number.isFinite(cur) || !Number.isFinite(mid) || mfe <= 0) {
+    return null;
+  }
+  const beStop = opts?.breakeven ?? null;
+  const profitLock =
+    opts?.profitLock ??
+    computeProfitLockStopLevel(direction, entry, mfe, mid, {
+      minStopDistance: opts?.minStopDistance ?? null,
+    });
+  const raw = [beStop, opts?.profitTrail ?? null, profitLock].filter(
+    (x): x is number => x != null && Number.isFinite(x)
+  );
+  if (!raw.length) return null;
+
+  if (direction === 'BUY') {
+    const floor = beStop != null ? beStop : entry;
+    const valid = raw.filter((x) => x > cur && x < mid && x + 1e-9 >= floor);
+    return valid.sort((a, b) => b - a)[0] ?? null;
+  }
+  const ceiling = beStop != null ? beStop : entry;
+  const valid = raw.filter((x) => x < cur && x > mid && x - 1e-9 <= ceiling);
+  return valid.sort((a, b) => a - b)[0] ?? null;
 }
 
 export type CapitalPriceCandle = {
