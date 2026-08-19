@@ -1294,6 +1294,70 @@ export function computeMarketBehaviorStopLevel(
   return stopLevel;
 }
 
+/**
+ * Profit trailing stop (after BE):
+ * - BUY: use recent swing HIGH → stop = high - buffer (lock more profit upward)
+ * - SELL: use recent swing LOW  → stop = low + buffer  (lock more profit downward)
+ *
+ * Unlike computeMarketBehaviorStopLevel (which never crosses entry),
+ * this one is allowed to move INTO profit (strictly past entry).
+ */
+export function computeMarketProfitTrailStopLevel(
+  direction: 'BUY' | 'SELL',
+  entry: number,
+  mid: number,
+  recent: RangeCandle[],
+  opts?: {
+    minStopDistance?: number | null;
+    lookback?: number;
+  }
+): number | null {
+  const w = (recent || [])
+    .filter((c) => c && Number.isFinite(c.high) && Number.isFinite(c.low) && c.high >= c.low)
+    .slice(-Math.max(1, opts?.lookback ?? 4));
+  if (!w.length) return null;
+
+  const absEntry = Math.max(Math.abs(entry), 1e-9);
+  const minLow = Math.min(...w.map((c) => c.low));
+  const maxHigh = Math.max(...w.map((c) => c.high));
+  const range = Math.max(0, maxHigh - minLow);
+
+  const bufferPct = absEntry * 0.0003;
+  const bufferRange = range * 0.08;
+  const minBuffer = absEntry * 0.0001;
+  const buffer = Math.max(bufferPct, bufferRange, minBuffer);
+
+  const rawStop = direction === 'BUY' ? maxHigh - buffer : minLow + buffer;
+  if (!Number.isFinite(rawStop)) return null;
+
+  const stopLevel = quantizePrice(rawStop);
+
+  // Must actually lock profit past entry.
+  if (direction === 'BUY' && stopLevel <= entry) return null;
+  if (direction === 'SELL' && stopLevel >= entry) return null;
+
+  // Broker-side validation relative to current mid:
+  // - BUY stop must be <= mid - minDist (and strictly below mid)
+  // - SELL stop must be >= mid + minDist (and strictly above mid)
+  if (!Number.isFinite(mid) || mid <= 0) return null;
+
+  if (direction === 'BUY') {
+    if (stopLevel >= mid) return null;
+    const minDist = opts?.minStopDistance != null && Number.isFinite(opts.minStopDistance) ? opts.minStopDistance : null;
+    if (minDist != null && minDist > 0) {
+      if (stopLevel + 1e-9 > mid - minDist) return null;
+    }
+  } else {
+    if (stopLevel <= mid) return null;
+    const minDist = opts?.minStopDistance != null && Number.isFinite(opts.minStopDistance) ? opts.minStopDistance : null;
+    if (minDist != null && minDist > 0) {
+      if (stopLevel - 1e-9 < mid + minDist) return null;
+    }
+  }
+
+  return stopLevel;
+}
+
 export type CapitalPriceCandle = {
   open: number;
   high: number;

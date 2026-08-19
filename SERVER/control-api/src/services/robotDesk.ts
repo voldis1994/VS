@@ -7,6 +7,7 @@ import {
   createCapitalPosition,
   computeSafetyCushionStopLevel,
   computeMarketBehaviorStopLevel,
+  computeMarketProfitTrailStopLevel,
   fetchCapitalMarketQuote,
   fetchCapitalMinutePrices,
   fetchCapitalPrices,
@@ -25,7 +26,7 @@ import {
   REGIME_NAMES,
   type RegimeName,
 } from './regimes.js';
-import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
+import { breakevenStopLevelForSide, decideBestOutcomeExit, favorableMove } from './exitManage.js';
 import {
   computeCrossMarketPressure,
   noteMarketMid,
@@ -1951,6 +1952,65 @@ async function robotCycleBody(s: Internal) {
                 ask: quote.ask,
                 mid: quote.mid,
                 detail: `SL tighten skipped: ${upd.detail}`,
+              });
+            }
+          }
+        }
+      }
+
+      // Post-BE profit trailing:
+      // Once SL reached breakeven, continue moving it into profit using swing HIGH/LOW.
+      if (
+        s.deal_id &&
+        s.open_side &&
+        quote.mid != null &&
+        s.entry_price != null &&
+        s.safety_sl != null &&
+        s.mfe > 0
+      ) {
+        const entry = s.entry_price;
+        const beStop = breakevenStopLevelForSide(s.open_side, entry);
+        const atBreakeven = Math.abs(s.safety_sl - beStop) <= Math.max(1e-6, Math.abs(entry) * 1e-9);
+        if (atBreakeven) {
+          const recentSwing = [
+            ...(s.minuteCandles?.slice(-2) ?? []),
+            ...(s.closedBars?.slice(-6) ?? []),
+          ] as Array<{ high: number; low: number }>;
+
+          const px = quote.mid;
+          const cur = s.safety_sl;
+
+          const profitTrail = computeMarketProfitTrailStopLevel(s.open_side, entry, px, recentSwing, {
+            minStopDistance: quote.min_stop_distance ?? null,
+            lookback: 8,
+          });
+
+          const canTrail =
+            profitTrail != null &&
+            ((s.open_side === 'BUY' && profitTrail > cur && profitTrail < px) ||
+              (s.open_side === 'SELL' && profitTrail < cur && profitTrail > px));
+
+          if (canTrail) {
+            const upd = await updateCapitalStop(opened.session, s.deal_id, profitTrail!, {
+              mid: quote.mid,
+              pointSize: quote.point_size ?? null,
+            });
+            if (upd.ok) {
+              s.safety_sl = profitTrail!;
+              pushTick(s, {
+                phase: 'MANAGE',
+                bid: quote.bid,
+                ask: quote.ask,
+                mid: quote.mid,
+                detail: `POST-BE PROFIT TRAIL SL ${cur} → ${profitTrail}`,
+              });
+            } else {
+              pushTick(s, {
+                phase: 'ERROR',
+                bid: quote.bid,
+                ask: quote.ask,
+                mid: quote.mid,
+                detail: `POST-BE PROFIT TRAIL failed: ${upd.detail}`,
               });
             }
           }
