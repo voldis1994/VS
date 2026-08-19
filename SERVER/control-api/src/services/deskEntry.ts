@@ -38,6 +38,26 @@ export function resolveDeskEntry(input: {
   // lag/leak heuristics — that would discard EV/transition formulas from calc.
   const fromCalc = input.intended != null;
 
+  // Concept permission gate:
+  // With-trend setups must align with the lasting bias (1m concept).
+  // If C++ intended a with-trend direction against bias, block the entry.
+  if (fromCalc && direction && bias !== 'FLAT') {
+    const s = String(input.intendedSetup || '')
+      .trim()
+      .toUpperCase();
+    const withTrend = new Set(['PULLBACK', 'CONTINUATION', 'BREAKOUT']);
+    if (withTrend.has(s)) {
+      const ok = bias === 'UP' ? direction === 'BUY' : direction === 'SELL';
+      if (!ok) {
+        return {
+          direction: null,
+          setup: null,
+          reason: `CONCEPT_BLOCK · with-trend ${s} vs bias ${bias}`,
+        };
+      }
+    }
+  }
+
   if (!direction && input.bar) {
     const hit = decideEntryFrom10sRegime(
       input.bar,

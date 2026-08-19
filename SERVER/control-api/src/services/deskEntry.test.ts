@@ -213,4 +213,21 @@ describe('resolveDeskEntry — BUY and SELL both fire', () => {
     });
     expect(e.direction).toBeNull();
   });
+
+  it('when C++ intended a with-trend direction against bias, concept gate blocks', () => {
+    const e = resolveDeskEntry({
+      intended: 'BUY',
+      intendedSetup: 'PULLBACK',
+      intendedReason: 'CALC EntryReady',
+      bias: 'DOWN',
+      capitalMid: 100,
+      refs: [
+        { label: 'Gold-API spot (public)', mid: 100 },
+        { label: 'Coinbase spot (public)', mid: 100.05 },
+        { label: 'Kraken spot (public)', mid: 99.95 },
+      ],
+    });
+    expect(e.direction).toBeNull();
+    expect(e.reason).toMatch(/CONCEPT_BLOCK/);
+  });
 });
