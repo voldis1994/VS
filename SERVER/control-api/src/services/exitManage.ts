@@ -156,7 +156,6 @@ export function decideBestOutcomeExit(
   const curRegime = s.regime != null ? String(s.regime).toUpperCase() : null;
   const inputsEnded =
     entryRegime && curRegime ? entryRegime !== curRegime : true;
-  if (!inputsEnded) return hold();
 
   const entry = s.entry_price;
   const fav = favorableMove(s.open_side, entry, mid);
@@ -167,6 +166,14 @@ export function decideBestOutcomeExit(
   // Gold 10s noise is ~0.3–2pt. Broker min-stop (~0.4) is too tight for BE —
   // wait until plus is at least the 0.15% safety distance (~6.5pt on Gold).
   const beMove = Math.max(minDist, Math.abs(entry) * SAFETY_SL_REL);
+
+  // If “inputs ended” hasn't happened (regime unchanged), still allow BE only
+  // when the move is already clearly beyond normal noise.
+  // This prevents a situation where BE never triggers.
+  if (!inputsEnded) {
+    const lateBeMove = Math.abs(entry) * SAFETY_SL_REL * 2; // ~0.30% on Gold with 0.15% safety
+    if (!(Number.isFinite(fav) && fav + 1e-9 >= lateBeMove)) return hold();
+  }
 
   // Best Outcome = only SL → BE. No TP/harvest/time/thesis close.
   if (Number.isFinite(fav) && fav + 1e-9 >= beMove) {
