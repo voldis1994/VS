@@ -6,6 +6,7 @@ import {
   confirmCapitalDeal,
   createCapitalPosition,
   computeSafetyCushionStopLevel,
+  computeMarketBehaviorStopLevel,
   fetchCapitalMarketQuote,
   fetchCapitalMinutePrices,
   fetchCapitalPrices,
@@ -14,6 +15,7 @@ import {
   updateCapitalStop,
   type CapitalMarketQuote,
   type CapitalOpenPosition,
+  type CapitalPriceCandle,
   type CapitalSession,
 } from './capitalCom.js';
 import { emitToClient } from './clientEvents.js';
@@ -186,7 +188,7 @@ type Internal = RobotSession & {
   last_entry_bar_key: string;
   closedBars: TenSecBar[];
   last_minute_fetch_ms: number;
-  minuteCandles: Array<{ open: number; close: number }>;
+  minuteCandles: CapitalPriceCandle[];
   last_multi_feed_ms: number;
   multiFeed: MultiFeedPrice | null;
   sl_tighten_done: boolean;
@@ -1874,7 +1876,20 @@ async function robotCycleBody(s: Internal) {
           });
         }
       } else if (!s.sl_tighten_done && s.deal_id && s.open_side && quote.mid != null) {
-        const tighter = safetyStopLevel(
+        // Tighten from “safety SL” to a behavior-based swing SL.
+        // This follows real market structure (last highs/lows) instead of a fixed cushion alone.
+        const entry = s.entry_price ?? quote.mid;
+        const recentSwing = [
+          ...(s.minuteCandles?.slice(-2) ?? []),
+          ...(s.closedBars?.slice(-6) ?? []),
+        ] as Array<{ high: number; low: number }>;
+
+        const behaviorTight = computeMarketBehaviorStopLevel(s.open_side, entry, recentSwing, {
+          minStopDistance: quote.min_stop_distance ?? null,
+          lookback: 8,
+        });
+
+        const safetyTight = safetyStopLevel(
           s.open_side,
           quote.mid,
           quote.bid ?? null,
@@ -1883,6 +1898,8 @@ async function robotCycleBody(s: Internal) {
           quote.min_stop_distance ?? null,
           1
         );
+
+        const tighter = behaviorTight ?? safetyTight;
         const cur = s.safety_sl ?? brokerStop;
         const px = quote.mid;
         const canTighten =
@@ -1903,7 +1920,7 @@ async function robotCycleBody(s: Internal) {
               bid: quote.bid,
               ask: quote.ask,
               mid: quote.mid,
-              detail: `SL tightened ${cur} → ${tighter} (0.15% of price)`,
+              detail: `SL tightened ${cur} → ${tighter} (${behaviorTight != null ? 'market swing' : 'safety'})`,
             });
           } else {
             s.sl_tighten_done = false;

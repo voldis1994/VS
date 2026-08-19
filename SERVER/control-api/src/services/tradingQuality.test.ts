@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   computeSafetyCushionStopLevel,
+  computeMarketBehaviorStopLevel,
   isLateMoveOnOneMinute,
   SAFETY_SL_REL,
 } from './capitalCom.js';
@@ -82,5 +83,36 @@ describe('1m late-move gate', () => {
     expect(
       isLateMoveOnOneMinute('BUY', [{ open: 2000, high: 2000.2, low: 1999.5, close: 1999.8 }])
     ).toBe(false);
+  });
+});
+
+describe('market-behavior SL (swing based)', () => {
+  it('BUY uses recent swing LOW - buffer', () => {
+    const entry = 2000;
+    const recent = [
+      { high: 2003, low: 1995 },
+      { high: 2002, low: 1996 },
+      { high: 2005, low: 1997 },
+    ];
+    const stop = computeMarketBehaviorStopLevel('BUY', entry, recent, { minStopDistance: 0.5, lookback: 3 });
+    expect(stop).not.toBeNull();
+    if (stop == null) return;
+    expect(stop).toBeLessThan(entry);
+    // should be below swing low
+    expect(stop).toBeLessThan(Math.min(...recent.map((c) => c.low)));
+  });
+
+  it('SELL uses recent swing HIGH + buffer', () => {
+    const entry = 2000;
+    const recent = [
+      { high: 2003, low: 1995 },
+      { high: 2002, low: 1996 },
+      { high: 2005, low: 1997 },
+    ];
+    const stop = computeMarketBehaviorStopLevel('SELL', entry, recent, { minStopDistance: 0.5, lookback: 3 });
+    expect(stop).not.toBeNull();
+    if (stop == null) return;
+    expect(stop).toBeGreaterThan(entry);
+    expect(stop).toBeGreaterThan(Math.max(...recent.map((c) => c.high)));
   });
 });

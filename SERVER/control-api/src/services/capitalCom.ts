@@ -1230,6 +1230,70 @@ export function computeSafetyCushionStopLevel(
   return Math.round(raw * 1e6) / 1e6;
 }
 
+type RangeCandle = {
+  high: number;
+  low: number;
+};
+
+function quantizePrice(raw: number): number {
+  const abs = Math.abs(raw);
+  if (abs >= 1000) return Math.round(raw * 10) / 10;
+  if (abs >= 100) return Math.round(raw * 100) / 100;
+  if (abs >= 1) return Math.round(raw * 10000) / 10000;
+  return Math.round(raw * 1e6) / 1e6;
+}
+
+/**
+ * Market-behavior SL using recent swing levels (high/low).
+ *
+ * BUY: SL = (recent swing LOW) - buffer
+ * SELL: SL = (recent swing HIGH) + buffer
+ *
+ * Buffer adapts to recent candle range so it stays tighter in quiet markets
+ * and wider in volatile markets.
+ */
+export function computeMarketBehaviorStopLevel(
+  direction: 'BUY' | 'SELL',
+  entry: number,
+  recent: RangeCandle[],
+  opts?: {
+    minStopDistance?: number | null;
+    lookback?: number;
+  }
+): number | null {
+  const w = (recent || [])
+    .filter((c) => c && Number.isFinite(c.high) && Number.isFinite(c.low) && c.high >= c.low)
+    .slice(-Math.max(1, opts?.lookback ?? 4));
+  if (!w.length) return null;
+
+  const absEntry = Math.max(Math.abs(entry), 1e-9);
+  const minLow = Math.min(...w.map((c) => c.low));
+  const maxHigh = Math.max(...w.map((c) => c.high));
+  const range = Math.max(0, maxHigh - minLow);
+
+  // At least ~0.01% of price and a fraction of recent swing range.
+  const bufferPct = absEntry * 0.0003; // ~1.3pt on Gold at 4368
+  const bufferRange = range * 0.08; // adapt to candle volatility
+  const minBuffer = absEntry * 0.0001;
+  const buffer = Math.max(bufferPct, bufferRange, minBuffer);
+
+  const rawStop = direction === 'BUY' ? minLow - buffer : maxHigh + buffer;
+  if (!Number.isFinite(rawStop)) return null;
+
+  const stopLevel = quantizePrice(rawStop);
+
+  if (direction === 'BUY' && stopLevel >= entry) return null;
+  if (direction === 'SELL' && stopLevel <= entry) return null;
+
+  const minDist = opts?.minStopDistance != null && Number.isFinite(opts.minStopDistance) ? opts.minStopDistance : null;
+  if (minDist != null && minDist > 0) {
+    const dist = Math.abs(entry - stopLevel);
+    if (dist + 1e-9 < minDist) return null;
+  }
+
+  return stopLevel;
+}
+
 export type CapitalPriceCandle = {
   open: number;
   high: number;
