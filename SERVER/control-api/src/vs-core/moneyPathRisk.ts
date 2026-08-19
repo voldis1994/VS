@@ -113,9 +113,10 @@ export function buildMoneyPathRisk(input: MoneyPathRiskInput): MoneyPathRiskBuil
     };
   }
 
-  const dupIntent =
-    input.orderStore.openIntents(input.account_id, input.epic).length > 0 ||
-    input.orderStore.hasUnresolvedSubmission(input.account_id, input.epic);
+  const dupIntent = Boolean(input.has_open_position)
+    ? input.orderStore.openIntents(input.account_id, input.epic).length > 0 ||
+      input.orderStore.hasUnresolvedSubmission(input.account_id, input.epic)
+    : false;
 
   const ctx: RiskContext = {
     client_id: input.client_id,

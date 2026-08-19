@@ -7,6 +7,7 @@ describe('P3 runtime call-chain wiring', () => {
     const src = readFileSync(join(process.cwd(), 'src/services/robotDesk.ts'), 'utf8');
     expect(src).toContain('pending_calc');
     expect(src).toContain('await enterTrade(');
+    expect(src).toContain('releaseGhostIntents');
     expect(src).toContain('buildMoneyPathRisk(');
     expect(src).toContain('evaluateRisk(');
     expect(src).toContain("import { decideBestOutcomeExit, favorableMove } from './exitManage.js'");

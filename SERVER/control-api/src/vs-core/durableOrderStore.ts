@@ -243,6 +243,24 @@ export class DurableOrderStore extends OrderStore {
     }
     return n;
   }
+
+  /**
+   * Capital is flat on this epic — drop SUBMITTING/BROKER_ACCEPTED/POSITION_OPEN ghosts
+   * so RISK_REJECTED_DUPLICATE_INTENT cannot freeze SCAN forever.
+   */
+  override releaseGhostIntents(accountId: number, epic: string): number {
+    const n = super.releaseGhostIntents(accountId, epic);
+    let extra = 0;
+    for (const L of [...this.ledger.values()]) {
+      if (L.account_id !== accountId || L.epic !== epic) continue;
+      if (!OPEN_LEDGER.includes(L.state)) continue;
+      this.updateLedger(L.client_order_id, {
+        state: L.state === 'POSITION_OPEN' || L.state === 'CLOSE_PENDING' ? 'POSITION_CLOSED' : 'REJECTED',
+      });
+      extra += 1;
+    }
+    return n + extra;
+  }
 }
 
 let shared: DurableOrderStore | null = null;

@@ -159,17 +159,9 @@ function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'fl
     return { label: `MARKET CLOSED · ${String(s.capital_market_status || 'CLOSED').toUpperCase()}`, kind: 'flat' };
   }
   if (s.running && !s.open_side) {
-    const fade =
-      regime === 'RANGE' ||
-      regime === 'FAILED_BREAKOUT_UP' ||
-      regime === 'FAILED_BREAKOUT_DOWN' ||
-      regime === 'REVERSAL_CANDIDATE' ||
-      regime === 'SEEDING';
-    if (fade && regime !== 'SEEDING') return { label: `SCAN · ${regime} · no fade`, kind: 'entry' };
-    if (regime === 'SEEDING') return { label: 'SCAN · SEEDING 10s', kind: 'entry' };
     const bias = String(s.trend_bias || s.decision_chain?.setup || '').toUpperCase();
     const only =
-      bias.includes('UP') ? ' · bias UP · only BUY' : bias.includes('DOWN') ? ' · bias DOWN · only SELL' : ' · with-trend';
+      bias.includes('UP') ? ' · bias UP' : bias.includes('DOWN') ? ' · bias DOWN' : '';
     return { label: `SCAN · ${regime}${only}`, kind: 'entry' };
   }
   return { label: `FLAT · ${regime}`, kind: 'flat' };

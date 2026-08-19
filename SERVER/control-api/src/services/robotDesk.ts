@@ -1062,6 +1062,18 @@ async function enterTrade(
     return;
   }
 
+  const orderStoreEarly = getDurableOrderStore();
+  const ghosts = orderStoreEarly.releaseGhostIntents(s.account_id, s.epic);
+  if (ghosts > 0) {
+    pushTick(s, {
+      phase: 'INFO',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `Released ${ghosts} ghost intent(s) — Capital flat, not DUPLICATE_INTENT`,
+    });
+  }
+
   pushTick(s, {
     phase: 'DECIDE',
     bid: quote.bid,
