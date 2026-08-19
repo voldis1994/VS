@@ -81,6 +81,24 @@ describe('Exit matrix A–P', () => {
     expect(d.reason).toMatch(/BestOutcome BE/);
   });
 
+  it('C1) Gold: 1.8 UPL still trails to BE even when inputsEnded=false', () => {
+    // “inputs ended” heuristic: entry_regime and live regime are the same by default in snap().
+    // This test ensures Gold does NOT require the extra 2× lateBeMove.
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        // setup is with-trend, but thesis failure won't matter here
+        entry_setup: 'PULLBACK',
+      }),
+      2001.8
+    );
+    expect(d.exit).toBe(false);
+    expect(d.action).toBe('TRAIL');
+    expect(d.trail_stop).toBe(2000);
+    expect(d.reason).toMatch(/BestOutcome BE/);
+  });
+
   it('D) SHORT plus → trail SL to BE', () => {
     const d = decideBestOutcomeExit(
       snap({

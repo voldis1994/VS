@@ -179,8 +179,12 @@ export function decideBestOutcomeExit(
   // when the move is already clearly beyond normal noise.
   // This prevents a situation where BE never triggers.
   if (!inputsEnded) {
-    const lateBeMove = beMove * 2; // allow BE after a clearly larger move
-    if (!(Number.isFinite(fav) && fav + 1e-9 >= lateBeMove)) return hold();
+    // For Gold we explicitly want the operator “good feel” trigger (~1.8 UPL points)
+    // even when the live regime has not yet “ended” by this heuristic.
+    if (absEntry < 1000) {
+      const lateBeMove = beMove * 2; // allow BE after a clearly larger move
+      if (!(Number.isFinite(fav) && fav + 1e-9 >= lateBeMove)) return hold();
+    }
   }
 
   // Best Outcome = only SL → BE. No TP/harvest/time/thesis close.
