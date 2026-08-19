@@ -66,11 +66,14 @@ describe('public internet epic mapping', () => {
     expect(publicFeedsApplicable('BTCUSD')).toBe(true);
   });
 
-  it('maps ASX Ltd stock epic without false gold match', () => {
+  it('maps ASX Ltd stock epic without false gold or US100 match', () => {
     expect(isGoldEpic('ASXAU')).toBe(false);
     expect(isGoldEpic('XAUUSD')).toBe(true);
     expect(isGoldEpic('GOLD')).toBe(true);
     expect(epicToYahooSymbol('ASXAU')).toBe('ASX.AX');
+    expect(epicToYahooSymbol('US100')).toBe('^NDX');
+    expect(epicToYahooSymbol('NAS100')).toBe('^NDX');
+    expect(epicToYahooSymbol('USTEC')).toBe('^NDX');
     expect(epicToCoinbaseProduct('ASXAU')).toBeNull();
   });
 

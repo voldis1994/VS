@@ -9,6 +9,7 @@ import {
   detectMarketClass,
   type MarketAssetClass,
 } from './marketAssetClass.js';
+import { resolveCapitalInstrument } from './capitalInstrumentRegistry.js';
 
 export type RelatedQuote = {
   epic: string;
@@ -25,6 +26,8 @@ export type CrossMarketPressure = {
   detail: string;
   refs: string[];
   asset_class?: MarketAssetClass;
+  canonical?: string | null;
+  identity_note?: string;
 };
 
 const lastMid = new Map<string, number>();
@@ -145,7 +148,8 @@ export function computeCrossMarketPressure(input: {
 }): CrossMarketPressure {
   const target = String(input.targetEpic || '').trim();
   const blob = `${target} ${input.targetName || ''}`;
-  const assetClass = detectMarketClass(target, input.targetName);
+  const resolved = resolveCapitalInstrument(target, input.targetName);
+  const assetClass = resolved.canonical ? resolved.asset_class : detectMarketClass(target, input.targetName);
   const refs: string[] = [];
   let num = 0;
   let den = 0;
@@ -170,10 +174,24 @@ export function computeCrossMarketPressure(input: {
       : input.side === 'SELL'
         ? pressure > 0.25
         : false;
-  const clsLabel = assetClass !== 'unknown' ? `${assetClass} · ` : '';
+  const clsLabel = resolved.canonical
+    ? `${resolved.canonical} (${resolved.label}) · `
+    : assetClass !== 'unknown'
+      ? `${assetClass} · `
+      : '';
   const detail =
     refs.length === 0
       ? `NO CROSS-MARKET DATA · ${clsLabel}pull Capital markets for related instruments`
       : `${clsLabel}pressure ${pressure.toFixed(2)} · ${against ? 'AGAINST' : 'ALIGNED'} ${input.side || 'FLAT'} · ${refs.slice(0, 6).join(', ')}`;
-  return { target, side: input.side, pressure, against, detail, refs, asset_class: assetClass };
+  return {
+    target,
+    side: input.side,
+    pressure,
+    against,
+    detail,
+    refs,
+    asset_class: assetClass,
+    canonical: resolved.canonical,
+    identity_note: resolved.identity_note,
+  };
 }

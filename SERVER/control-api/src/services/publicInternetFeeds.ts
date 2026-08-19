@@ -3,6 +3,8 @@
  * No API keys — used alongside Capital rows so regime/entry is not single-broker.
  */
 
+import { registryRowForEpic } from './capitalInstrumentRegistry.js';
+
 export type PublicFeedKind =
   | 'yahoo_finance'
   | 'aurum_metals'
@@ -110,7 +112,10 @@ export function epicToYahooEquity(epic: string): string | null {
 }
 
 /** Map Capital / VS epic to Yahoo chart symbol when possible. */
-export function epicToYahooSymbol(epic: string): string | null {
+export function epicToYahooSymbol(epic: string, displayName = ''): string | null {
+  const fromRegistry = registryRowForEpic(epic);
+  if (fromRegistry?.yahoo) return fromRegistry.yahoo;
+
   const s = norm(epic);
   if (!s) return null;
 
