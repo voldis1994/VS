@@ -32,6 +32,11 @@ export function BrokersPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveOk, setSaveOk] = useState(false);
+  const [quickClientName, setQuickClientName] = useState('');
+  const [quickClientPassword, setQuickClientPassword] = useState('');
+  const [creatingClient, setCreatingClient] = useState(false);
+  const [quickClientError, setQuickClientError] = useState<string | null>(null);
+  const [quickClientOk, setQuickClientOk] = useState<string | null>(null);
 
   useEffect(() => {
     if (!clients || clients.length === 0) return;
@@ -91,6 +96,33 @@ export function BrokersPage() {
     }
   };
 
+  const handleQuickCreateClient = async () => {
+    const name = quickClientName.trim();
+    if (!name) {
+      setQuickClientError('Client login name is required');
+      setQuickClientOk(null);
+      return;
+    }
+    setCreatingClient(true);
+    setQuickClientError(null);
+    setQuickClientOk(null);
+    try {
+      const created = await apiFetch<Client>('/api/clients', {
+        method: 'POST',
+        body: JSON.stringify({ name, password: quickClientPassword.trim() }),
+      });
+      await refreshClients();
+      setForm((prev) => ({ ...prev, client_id: String(created.id) }));
+      setQuickClientName('');
+      setQuickClientPassword('');
+      setQuickClientOk(`Client created: ${created.name} (#${created.id})`);
+    } catch (e) {
+      setQuickClientError(e instanceof Error ? e.message : 'Create client failed');
+    } finally {
+      setCreatingClient(false);
+    }
+  };
+
   const handleTest = async (id: number) => {
     setTesting(id);
     setTestMessage(null);
@@ -145,6 +177,38 @@ export function BrokersPage() {
       </p>
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="section-title">Add Broker Connection</div>
+        <div
+          style={{
+            border: '1px solid var(--border-primary)',
+            borderRadius: 8,
+            padding: 12,
+            marginBottom: 12,
+          }}
+        >
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
+            Quick Add Client (if missing in dropdown)
+          </div>
+          <div className="actions" style={{ flexWrap: 'wrap' }}>
+            <input
+              className="input"
+              placeholder="Client login (name)"
+              value={quickClientName}
+              onChange={(e) => setQuickClientName(e.target.value)}
+            />
+            <input
+              className="input"
+              type="password"
+              placeholder="Client password (optional)"
+              value={quickClientPassword}
+              onChange={(e) => setQuickClientPassword(e.target.value)}
+            />
+            <button className="btn btn-primary" onClick={handleQuickCreateClient} disabled={creatingClient}>
+              {creatingClient ? 'Creating...' : 'Add Client'}
+            </button>
+          </div>
+          {quickClientError && <p className="error-state" style={{ marginTop: 8 }}>{quickClientError}</p>}
+          {quickClientOk && <p style={{ marginTop: 8, color: 'var(--success)' }}>{quickClientOk}</p>}
+        </div>
         <div className="grid grid-2" style={{ gap: 12 }}>
           <label style={{ display: 'grid', gap: 4 }}>
             <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Client</span>
