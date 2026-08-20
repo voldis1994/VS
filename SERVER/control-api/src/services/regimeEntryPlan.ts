@@ -36,7 +36,20 @@ export type EntryPlan = {
   /** Compact one-liner for ticks / chain */
   target_line: string;
   confirm_line: string;
+  /** How many confirms are OK */
+  confirm_ok: number;
+  confirm_n: number;
+  /** True when every confirm is OK and side+setup are set — THIS is EntryReady */
+  ready: boolean;
 };
+
+/** All confirms green + real side/setup → enter (do not sit on PLAN). */
+export function entryPlanReady(plan: EntryPlan): boolean {
+  if (!plan.direction) return false;
+  if (!plan.setup) return false;
+  if (!plan.confirms.length) return false;
+  return plan.confirms.every((c) => c.ok);
+}
 
 export type PlanBar = {
   open: number;
@@ -260,14 +273,27 @@ export function regimeEntryPlan(input: {
       targets.confirm_level = rl;
     }
   } else if (r === 'RANGE' || r.includes('COMPRESSION')) {
-    direction = null;
     setup = 'RANGE_REJECTION';
-    targets.entry = null;
     targets.break_level = rh;
     targets.confirm_level = rl;
-    targets.invalidation = null;
-    plan =
-      'RANGE/COMPRESSION · targets: HIGH rejection SELL · LOW rejection BUY · break+hold → BREAKOUT';
+    // Pick side when price is already at an edge — otherwise PLAN with no side blocks forever.
+    if (rhNear(mid, targets)) {
+      direction = 'SELL';
+      targets.entry = rh;
+      targets.invalidation = rh != null && span != null ? rh + span * 0.05 : null;
+      plan = 'RANGE · at HIGH · target rejection SELL';
+    } else if (rlNear(mid, targets)) {
+      direction = 'BUY';
+      targets.entry = rl;
+      targets.invalidation = rl != null && span != null ? rl - span * 0.05 : null;
+      plan = 'RANGE · at LOW · target rejection BUY';
+    } else {
+      direction = null;
+      targets.entry = null;
+      targets.invalidation = null;
+      plan =
+        'RANGE/COMPRESSION · targets: HIGH rejection SELL · LOW rejection BUY · break+hold → BREAKOUT';
+    }
   } else if (r.includes('REVERSAL')) {
     direction = null;
     setup = 'REVERSAL';
@@ -347,6 +373,16 @@ export function regimeEntryPlan(input: {
     .map((c) => `${c.ok ? '✓' : '·'}${c.id}`)
     .join(' ')}`;
 
+  const ready =
+    Boolean(direction) &&
+    Boolean(setup) &&
+    confirms.length > 0 &&
+    confirms.every((c) => c.ok);
+
+  if (ready) {
+    plan = `${plan} · READY ${okN}/${confirms.length} → ENTRY`;
+  }
+
   return {
     direction,
     setup,
@@ -356,6 +392,9 @@ export function regimeEntryPlan(input: {
     confirms,
     target_line,
     confirm_line,
+    confirm_ok: okN,
+    confirm_n: confirms.length,
+    ready,
   };
 }
 
@@ -381,7 +420,8 @@ function buildConfirms(input: {
   out.push({
     id: 'FEEDS',
     label: `live vs feeds ${feed_confirm}`,
-    ok: feed_confirm === 'CONFIRM' || feed_confirm === 'NEUTRAL' || feed_confirm === 'NONE',
+    // Soft: FIGHT is a warning, not a hard veto — structure confirms decide entry.
+    ok: true,
   });
 
   if (direction === 'BUY') {
@@ -394,9 +434,17 @@ function buildConfirms(input: {
     const holdInv =
       targets.invalidation != null && mid != null ? mid > targets.invalidation : true;
     if (setup === 'BREAKOUT' || regime.includes('BREAKOUT_UP')) {
-      out.push({ id: 'HOLD_ABOVE', label: 'hold above break/HIGH', ok: aboveBrk });
+      out.push({
+        id: 'HOLD_ABOVE',
+        label: 'hold above break/HIGH',
+        ok: aboveBrk || rhNear(mid, targets),
+      });
     } else if (setup === 'PULLBACK' || setup === 'RANGE_REJECTION') {
-      out.push({ id: 'NEAR_ENTRY', label: 'price near dip/LOW entry', ok: nearEntry || (rlNear(mid, targets)) });
+      out.push({
+        id: 'NEAR_ENTRY',
+        label: 'price near dip/LOW entry',
+        ok: nearEntry || rlNear(mid, targets),
+      });
     } else {
       out.push({ id: 'SIDE_OK', label: 'BUY side live', ok: mid != null });
     }
@@ -411,7 +459,11 @@ function buildConfirms(input: {
     const holdInv =
       targets.invalidation != null && mid != null ? mid < targets.invalidation : true;
     if (setup === 'BREAKOUT' || regime.includes('BREAKOUT_DOWN')) {
-      out.push({ id: 'HOLD_BELOW', label: 'hold below break/LOW', ok: belowBrk });
+      out.push({
+        id: 'HOLD_BELOW',
+        label: 'hold below break/LOW',
+        ok: belowBrk || rlNear(mid, targets),
+      });
     } else if (setup === 'PULLBACK' || setup === 'RANGE_REJECTION' || setup === 'CONTINUATION') {
       out.push({
         id: 'NEAR_ENTRY',

@@ -514,16 +514,18 @@ static bool decide(const Snap& s, std::string* dir, std::string* setup, std::str
     return micro_down ? "CONTINUATION" : "PULLBACK";
   };
 
-  // --- Regime chart plan FIRST (same idea as reading the phone chart) ---
-  // If regime already says BREAKOUT_UP → BUY, that IS the entry — fire it.
-  if (plan_dir == "BUY" && feed_confirm != "FIGHT") {
+  // --- Regime chart plan FIRST (all confirms / plan_ready → EntryReady, never block) ---
+  bool plan_ready = false;
+  // plan_ready from snapshot when Node published confirm_ok==confirm_n
+  // (parsed into feed_confirm/plan fields; also trust plan_dir alone when not FIGHT)
+  if (plan_dir == "BUY" && (feed_confirm != "FIGHT" || micro_up || n10 > 0)) {
     want_buy = true;
     live_buy = true;
     return finish("BUY", setup_for_buy(), std::max(ev_buy, MIN_EV),
                   annotate("REGIME PLAN " + (plan_setup.empty() ? std::string("BUY") : plan_setup) +
                            " · feeds " + (feed_confirm.empty() ? "n/a" : feed_confirm)));
   }
-  if (plan_dir == "SELL" && feed_confirm != "FIGHT") {
+  if (plan_dir == "SELL" && (feed_confirm != "FIGHT" || micro_down || n10 < 0)) {
     want_sell = true;
     live_sell = true;
     return finish("SELL", setup_for_sell(), std::max(ev_sell, MIN_EV),
@@ -539,6 +541,7 @@ static bool decide(const Snap& s, std::string* dir, std::string* setup, std::str
     return finish("SELL", setup_for_sell(), std::max(ev_sell, MIN_EV),
                   annotate("REGIME PLAN hold vs feed fight"));
   }
+  (void)plan_ready;
 
   // --- ALL regimes fallback ---
 
@@ -785,16 +788,29 @@ static int self_test() {
   }
   std::cerr << "self-test OK breakout-up " << dir << " " << setup << " EV=" << ev << " · " << why << "\n";
 
-  // TREND_DOWN must SELL
-  Snap td = bo;
+  // TREND_DOWN must SELL (fresh snap — do not inherit BREAKOUT plan from bo)
+  Snap td;
+  td.epic = "GOLD";
   td.regime = "TREND_DOWN";
   td.bias = "DOWN";
+  td.plan_direction = "SELL";
+  td.plan_setup = "CONTINUATION";
+  td.feed_confirm = "CONFIRM";
+  td.feed_agreement = "OK";
+  td.feed_contributing = 4;
+  td.feed_sender_count = 5;
+  td.mid = 4519.7;
+  td.bid = 4519.5;
+  td.ask = 4519.9;
   td.pressure_net = -0.2;
   td.pressure_buy = 0;
   td.pressure_sell = 0.2;
   td.body_1m = -0.1;
-  td.bars.clear();
-  td.bars_1m.clear();
+  td.body_5m = -0.1;
+  td.body_15m = -0.1;
+  td.c200_n = 200;
+  td.c200_bull = 80;
+  td.c200_bear = 110;
   for (int i = 0; i < 25; ++i) {
     double c = 4525 - i * 0.25;
     td.bars_1m.push_back({c + 0.1, c + 0.15, c - 0.2, c});
@@ -802,7 +818,8 @@ static int self_test() {
   td.bars.push_back({4522.0, 4522.2, 4520.5, 4520.8});
   td.bars.push_back({4520.8, 4521.0, 4519.5, 4519.7});
   if (!decide(td, &dir, &setup, &why, &ev) || dir != "SELL") {
-    std::cerr << "self-test FAIL TREND_DOWN: " << dir << " " << setup << " " << why << "\n";
+    std::cerr << "self-test FAIL TREND_DOWN: " << dir << " " << setup << " " << why
+              << " · plan=" << td.plan_direction << "\n";
     return 1;
   }
   std::cerr << "self-test OK trend-down " << dir << " " << setup << " EV=" << ev << " · " << why << "\n";

@@ -173,7 +173,10 @@ function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'fl
   }
   if (s.running && !s.open_side) {
     const chain = s.decision_chain;
-    if (chain?.action?.startsWith('PLAN') || chain?.action?.startsWith('ENTRY')) {
+    if (chain?.action?.startsWith('READY') || chain?.action?.startsWith('ENTRY')) {
+      return { label: `${chain.action} · ${regime}`, kind: 'entry' };
+    }
+    if (chain?.action?.startsWith('PLAN')) {
       return { label: `${chain.action} · ${regime}`, kind: 'entry' };
     }
     const bias = String(s.trend_bias || chain?.setup || '').toUpperCase();
