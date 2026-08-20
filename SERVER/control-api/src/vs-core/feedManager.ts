@@ -36,12 +36,23 @@ export type FeedManagerSnapshot = {
 
 const DEFAULT_STALE_MS = 5000;
 
+/** Optional hook so TickMicro can mark DEGRADED without circular imports. */
+type FanoutErrorHook = (epic: string, err: unknown) => void;
+let fanoutErrorHook: FanoutErrorHook | null = null;
+
+export function setFanoutErrorHook(hook: FanoutErrorHook | null): void {
+  fanoutErrorHook = hook;
+}
+
 export class FeedManager {
   private seq = 0;
   private byEpic = new Map<string, Map<string, FeedQuote>>();
   private roles = new Map<string, FeedRole>(); // source → role
   private staleMs: number;
   private acceptedListeners: Array<(quote: FeedQuote) => void> = [];
+  /** Fan-out callback failures — never silent. */
+  fanout_error_count = 0;
+  last_fanout_error: string | null = null;
 
   constructor(staleMs = DEFAULT_STALE_MS) {
     this.staleMs = staleMs;
@@ -130,8 +141,24 @@ export class FeedManager {
       for (const cb of this.acceptedListeners) {
         try {
           cb(quote);
-        } catch {
-          /* never break ingest */
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.fanout_error_count += 1;
+          this.last_fanout_error = msg;
+          // Never swallow — log + degrade TickMicro quality for this epic.
+          console.error(
+            `[FeedManager] onAccepted fan-out failed epic=${quote.epic} source=${quote.source} seq=${quote.sequence}: ${msg}`
+          );
+          try {
+            // Lazy import avoided — caller registers mark via setFanoutErrorHook
+            fanoutErrorHook?.(quote.epic, err);
+          } catch (hookErr) {
+            console.error(
+              `[FeedManager] fan-out error hook failed: ${
+                hookErr instanceof Error ? hookErr.message : String(hookErr)
+              }`
+            );
+          }
         }
       }
     }

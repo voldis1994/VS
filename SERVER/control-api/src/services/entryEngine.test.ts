@@ -16,7 +16,11 @@ import {
   getEntryMachine,
   markEntryConsumed,
 } from './entryStateMachine.js';
-import { evaluateEntryEngine, onValidatedQuoteTick } from './entryEngine.js';
+import {
+  evaluateEntryEngine,
+  onValidatedQuoteTick,
+  resetEntryTickContexts,
+} from './entryEngine.js';
 import { regimeEntryPlan } from './regimeEntryPlan.js';
 import {
   attachEntryOutcome,
@@ -47,7 +51,10 @@ function climbBars(n = 12, start = 4500) {
 }
 
 describe('tickMicroEngine', () => {
-  beforeEach(() => resetTickMicroBooks());
+  beforeEach(() => {
+    resetTickMicroBooks();
+    resetEntryTickContexts();
+  });
 
   it('computes velocity / accel / persistence over time windows', () => {
     const book = createTickMicroBook('GOLD');

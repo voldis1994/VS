@@ -1,6 +1,17 @@
 /**
- * Capital quote pump — event-driven validated ticks independent of robotDesk ~2s cycle.
- * Each successful fetch → FeedManager.ingest → fan-out → TickMicro + 10s OHLC.
+ * Capital quote pump — REST quote polling independent of robotDesk ~2s cycle.
+ *
+ * Source of truth for cadence:
+ *   CAPITAL_QUOTE_PUMP_MS (default 250ms) = REST quote polling interval.
+ *   This is NOT a guarantee of “every market tick” — Capital.com in this
+ *   codebase is polled via GET markets/{epic} (REST). There is no Capital
+ *   Lightstreamer / streaming WebSocket price feed wired as primary.
+ *   Outbound /ws telemetry sockets are unrelated.
+ *
+ * Each successful poll → FeedManager.ingest → fan-out → TickMicro + 10s OHLC
+ * → Entry State Machine (when desk context published). REST remains primary;
+ * if a Capital streaming feed is added later, attach it as primary and keep
+ * this pump as fallback.
  */
 
 import type { FeedManager } from '../vs-core/feedManager.js';
@@ -22,7 +33,11 @@ type Pump = {
 
 const pumps = new Map<string, Pump>();
 
-/** Default 250ms — denser than robotDesk 2s so micro sees real tick cadence. */
+/**
+ * Default 250ms REST quote polling interval.
+ * Denser than robotDesk ~2s so micro/SM see polled quotes between desk cycles.
+ * Not a market-tick stream.
+ */
 export const CAPITAL_QUOTE_PUMP_MS = 250;
 
 export function startCapitalQuotePump(input: {

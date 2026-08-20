@@ -1,9 +1,12 @@
 /**
- * Event-driven TickMicro path: FeedManager LIVE accept → fan-out → micro + OHLC.
- * Proves many ticks in 1s are all seen, independent of robotDesk ~2s cadence.
+ * Event-driven TickMicro path: FeedManager LIVE accept → fan-out → micro + OHLC + Entry SM.
+ * Proves many ticks between desk cycles advance micro/SM without broker orders.
  */
 
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { FeedManager } from '../vs-core/feedManager.js';
 import {
   attachValidatedTickFanout,
@@ -18,16 +21,30 @@ import {
 import { injectPumpQuote, resetCapitalQuotePumps } from './capitalQuotePump.js';
 import {
   advanceEntryMachine,
+  getEntryMachine,
   resetEntryMachines,
 } from './entryStateMachine.js';
 import { regimeEntryPlan } from './regimeEntryPlan.js';
+import {
+  evaluateEntryEngine,
+  resetEntryTickContexts,
+} from './entryEngine.js';
 
 describe('validated tick fan-out (event-driven)', () => {
+  const prevMode = process.env.VS_ENTRY_ENGINE_MODE;
+
   beforeEach(() => {
     resetTickMicroBooks();
     resetEpicTickBooks();
     resetCapitalQuotePumps();
     resetEntryMachines();
+    resetEntryTickContexts();
+    process.env.VS_ENTRY_ENGINE_MODE = 'SHADOW';
+  });
+
+  afterEach(() => {
+    if (prevMode == null) delete process.env.VS_ENTRY_ENGINE_MODE;
+    else process.env.VS_ENTRY_ENGINE_MODE = prevMode;
   });
 
   it('FeedManager LIVE ingest fans out to TickMicro + OHLC without robotDesk', () => {
@@ -52,6 +69,102 @@ describe('validated tick fan-out (event-driven)', () => {
     const book = getEpicTickBook('GOLD');
     expect(book?.accepted_count).toBe(20);
     expect(book?.ohlcState.forming?.ticks).toBeGreaterThanOrEqual(1);
+  });
+
+  it('onAccepted callback exception increments fan-out errors and marks TickMicro DEGRADED', () => {
+    const fm = new FeedManager();
+    fm.defineSource('capital', 'PRIMARY');
+    attachValidatedTickFanout(fm);
+    // Extra listener that throws — must not be silent
+    fm.onAccepted(() => {
+      throw new Error('fanout boom');
+    });
+
+    injectPumpQuote(fm, 'GOLD-ERR', 4500, 4500.1, 6_000_000);
+
+    expect(fm.fanout_error_count).toBeGreaterThanOrEqual(1);
+    expect(fm.last_fanout_error).toMatch(/fanout boom/);
+    const micro = getTickMicroBook('GOLD-ERR').metrics;
+    expect(micro.quality).toBe('DEGRADED');
+    expect(micro.fanout_error_count).toBeGreaterThanOrEqual(1);
+    expect(micro.last_fanout_error).toMatch(/fanout boom/);
+  });
+
+  it('many accepted ticks between two desk cycles advance TickMicro + Entry SM, never broker orders', () => {
+    const fm = new FeedManager();
+    fm.defineSource('capital', 'PRIMARY');
+    attachValidatedTickFanout(fm);
+
+    const epic = 'GOLD-INTER';
+    const t0 = 7_000_000;
+    const bars10s = Array.from({ length: 12 }, (_, i) => {
+      const o = 4505 + i * 0.4;
+      return { open: o, high: o + 0.5, low: o - 0.2, close: o + 0.35 };
+    });
+
+    // Static guard: per-tick path must not contain broker order calls
+    const here = dirname(fileURLToPath(import.meta.url));
+    const fanoutSrc = readFileSync(join(here, 'validatedTickFanout.ts'), 'utf8');
+    const engSrc = readFileSync(join(here, 'entryEngine.ts'), 'utf8');
+    for (const src of [fanoutSrc, engSrc]) {
+      expect(src).not.toMatch(/openCapital|placeOrder|enterTrade|createPosition|submitOrder/i);
+    }
+
+    // ——— Desk cycle 1: publish context only (no execution) ———
+    const desk1 = evaluateEntryEngine({
+      instrument: epic,
+      regime: 'BREAKOUT_UP',
+      bias: 'UP',
+      liveMid: 4508,
+      feedMid: 4508.1,
+      bars10s,
+      feedAgreement: 'AGREE',
+      marketOpen: true,
+      nowMs: t0,
+    });
+    const stateAfterDesk1 = desk1.machine.state;
+    const phaseAfterDesk1 = desk1.machine.phase;
+    expect(desk1.shadow_only).toBe(true);
+    expect(desk1.allow_entry_ready).toBe(false);
+
+    // ——— Many accepted ticks WITHOUT a desk cycle (~2s gap) ———
+    for (let i = 0; i < 30; i++) {
+      injectPumpQuote(fm, epic, 4508 + i * 0.15, 4508.1 + i * 0.15, t0 + 100 + i * 40);
+    }
+
+    const micro = getTickMicroBook(epic);
+    expect(micro.ticks.length).toBe(30);
+    expect(micro.metrics.tick_rate_1s).toBeGreaterThanOrEqual(10);
+
+    const book = getEpicTickBook(epic)!;
+    expect(book.accepted_count).toBe(30);
+    expect(book.sm_advance_count).toBe(30);
+
+    const mid = getEntryMachine(epic);
+    expect(mid.updated_at_ms).toBeGreaterThanOrEqual(t0 + 100);
+    expect(
+      mid.state !== stateAfterDesk1 ||
+        mid.phase !== phaseAfterDesk1 ||
+        book.last_sm_state != null
+    ).toBe(true);
+    expect(book.last_sm_state).not.toBeNull();
+    expect(book.last_sm_phase).not.toBeNull();
+
+    // ——— Desk cycle 2 ———
+    const snap = evaluateEntryEngine({
+      instrument: epic,
+      regime: 'BREAKOUT_UP',
+      bias: 'UP',
+      liveMid: micro.metrics.last_mid,
+      feedMid: micro.metrics.last_mid,
+      bars10s,
+      feedAgreement: 'AGREE',
+      marketOpen: true,
+      nowMs: t0 + 100 + 29 * 40,
+    });
+    expect(snap.shadow_only).toBe(true);
+    expect(snap.allow_entry_ready).toBe(false);
+    expect(snap.micro.tick_count_30s).toBe(30);
   });
 
   it('STALE / ERROR quotes do not enter TickMicro log', () => {

@@ -2967,7 +2967,8 @@ export async function startRobotSession(input: {
     robot_status: 'RUNNING',
   });
 
-  // Event-driven Capital quote pump (~250ms) → FeedManager.ingest → TickMicro+OHLC.
+  // Capital REST quote poll (~250ms) → FeedManager.ingest → TickMicro+OHLC+Entry SM.
+  // 250ms = polling interval, not guaranteed every market tick. No Capital streaming WS in-repo.
   // Independent of robotDesk ~2s decision cycle.
   const pumpKey = `${acc.id}:${epic}`;
   startCapitalQuotePump({

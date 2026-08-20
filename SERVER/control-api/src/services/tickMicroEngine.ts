@@ -37,6 +37,10 @@ export type TickMicroMetrics = {
   exhaustion_up: boolean;
   exhaustion_down: boolean;
   last_mid: number | null;
+  /** Book-level quality — DEGRADED when fan-out/callback fails */
+  quality: 'OK' | 'DEGRADED' | 'STALE' | 'ERROR' | 'UNKNOWN';
+  fanout_error_count: number;
+  last_fanout_error: string | null;
 };
 
 export type TickMicroBook = {
@@ -71,6 +75,9 @@ export function emptyTickMicroMetrics(asOf = Date.now()): TickMicroMetrics {
     exhaustion_up: false,
     exhaustion_down: false,
     last_mid: null,
+    quality: 'OK',
+    fanout_error_count: 0,
+    last_fanout_error: null,
   };
 }
 
@@ -115,7 +122,16 @@ function windowTicks(ticks: ValidatedTick[], nowMs: number, windowMs: number): V
 export function recomputeTickMicro(book: TickMicroBook, nowMs = Date.now()): TickMicroMetrics {
   prune(book, nowMs);
   const ticks = book.ticks;
+  // Preserve fan-out failure counters/quality across recomputes (must not silently clear).
+  const prevFanout = book.metrics.fanout_error_count;
+  const prevFanoutErr = book.metrics.last_fanout_error;
+  const prevQuality = book.metrics.quality;
   const m = emptyTickMicroMetrics(nowMs);
+  m.fanout_error_count = prevFanout;
+  m.last_fanout_error = prevFanoutErr;
+  if (prevFanout > 0 || prevQuality === 'DEGRADED') {
+    m.quality = 'DEGRADED';
+  }
   m.tick_count_30s = ticks.length;
   if (!ticks.length) {
     book.metrics = m;
@@ -124,6 +140,11 @@ export function recomputeTickMicro(book: TickMicroBook, nowMs = Date.now()): Tic
   const last = ticks[ticks.length - 1]!;
   m.last_mid = last.mid;
   m.spread = last.spread;
+  if (last.quality === 'DEGRADED' || last.quality === 'STALE' || last.quality === 'ERROR') {
+    m.quality = last.quality;
+  } else if (prevFanout > 0) {
+    m.quality = 'DEGRADED';
+  }
   m.velocity_500ms = velocity(ticks, nowMs, 500);
   m.velocity_1s = velocity(ticks, nowMs, 1_000);
   m.velocity_2s = velocity(ticks, nowMs, 2_000);
@@ -308,4 +329,20 @@ export function getTickMicroBook(instrument: string): TickMicroBook {
 /** Test helper */
 export function resetTickMicroBooks(): void {
   books.clear();
+}
+
+/**
+ * Mark TickMicro quality DEGRADED when FeedManager fan-out callback throws.
+ * Does not invent ticks — only quality / error counters.
+ */
+export function markTickMicroFanoutDegraded(
+  instrument: string,
+  err: unknown
+): void {
+  const book = getTickMicroBook(instrument);
+  const msg = err instanceof Error ? err.message : String(err);
+  book.metrics.quality = 'DEGRADED';
+  book.metrics.fanout_error_count += 1;
+  book.metrics.last_fanout_error = msg;
+  book.metrics.as_of_ms = Date.now();
 }
