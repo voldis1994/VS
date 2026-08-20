@@ -44,8 +44,8 @@ describe('MAIN prototype freeze', () => {
     expect(deskPrototypeRules()).toMatch(/Exit Best Outcome close only/);
   });
 
-  it('screenshot dump: PULLBACK_UPTREND + DOWN is SELL, never SCAN', () => {
-    const e = resolveDeskEntry({
+  it('screenshot dump: PULLBACK_UPTREND + DOWN needs down structure (lone bar → SCAN)', () => {
+    const lone = resolveDeskEntry({
       bar: {
         open_time_ms: 0,
         open: 4354.67,
@@ -57,6 +57,32 @@ describe('MAIN prototype freeze', () => {
       regime: 'PULLBACK_UPTREND',
       bias: 'DOWN',
       capitalMid: 4356.46,
+      refs: cluster(4354.13),
+    });
+    expect(lone.direction).toBeNull();
+
+    const dump = [
+      bar(4364, 4362),
+      bar(4362, 4360),
+      bar(4360, 4358),
+      bar(4358, 4356),
+      bar(4356, 4355),
+      bar(4355, 4354.8),
+    ];
+    const last = {
+      open_time_ms: 0,
+      open: 4354.67,
+      high: 4354.67,
+      low: 4354.13,
+      close: 4354.13,
+      ticks: 8,
+    };
+    const e = resolveDeskEntry({
+      bar: last,
+      closedBars: [...dump, last],
+      regime: 'PULLBACK_UPTREND',
+      bias: 'DOWN',
+      capitalMid: 4354.13,
       refs: cluster(4354.13),
     });
     expect(e.direction).toBe('SELL');

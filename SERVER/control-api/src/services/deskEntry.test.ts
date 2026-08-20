@@ -69,9 +69,19 @@ describe('resolveDeskEntry — real setups only (no chase)', () => {
     expect(e.direction).toBeNull();
   });
 
-  it('10s TREND_UP dump → BUY (PULLBACK)', () => {
+  it('10s TREND_UP dump → BUY only with climb structure', () => {
+    const climb = [
+      bar(4330, 4332),
+      bar(4332, 4334),
+      bar(4334, 4336),
+      bar(4336, 4338),
+      bar(4338, 4340),
+      bar(4340, 4342),
+    ];
+    const pull = bar(4340.22, 4339.03);
     const e = resolveDeskEntry({
-      bar: bar(4340.22, 4339.03),
+      bar: pull,
+      closedBars: [...climb, pull],
       regime: 'TREND_UP',
       bias: 'UP',
       capitalMid: 4339.03,
@@ -81,27 +91,35 @@ describe('resolveDeskEntry — real setups only (no chase)', () => {
     expect(e.setup).toBe('PULLBACK');
   });
 
-  it('10s TREND_UP green climb alone → no chase CONTINUATION', () => {
+  it('10s TREND_UP lone dump without structure → no entry', () => {
     const e = resolveDeskEntry({
-      bar: bar(4339.03, 4340.22),
+      bar: bar(4340.22, 4339.03),
       regime: 'TREND_UP',
       bias: 'UP',
-      capitalMid: 4340.22,
-      refs: cluster(4340.2),
+      capitalMid: 4339.03,
+      refs: cluster(4339.0),
     });
     expect(e.direction).toBeNull();
   });
 
-  it('10s TREND_DOWN dump → SELL', () => {
+  it('10s TREND_DOWN dump → SELL with dump structure', () => {
+    const dump = [
+      bar(4350, 4348),
+      bar(4348, 4346),
+      bar(4346, 4344),
+      bar(4344, 4342),
+      bar(4342, 4340),
+    ];
+    const last = bar(4340.22, 4339.03);
     const e = resolveDeskEntry({
-      bar: bar(4340.22, 4339.03),
+      bar: last,
+      closedBars: [...dump, last],
       regime: 'TREND_DOWN',
       bias: 'DOWN',
       capitalMid: 4339.03,
       refs: cluster(4339.0),
     });
     expect(e.direction).toBe('SELL');
-    expect(e.setup).toBe('PULLBACK');
   });
 
   it('Yahoo 50pt basis alone never creates BUY or SELL', () => {
@@ -124,19 +142,29 @@ describe('resolveDeskEntry — real setups only (no chase)', () => {
     expect(e.direction).toBeNull();
   });
 
-  it('screenshot: PULLBACK_UPTREND + bias DOWN + dump 10s → SELL', () => {
+  it('screenshot: PULLBACK_UPTREND + bias DOWN + dump needs down structure', () => {
+    const dump = [
+      bar(4364, 4362),
+      bar(4362, 4360),
+      bar(4360, 4358),
+      bar(4358, 4356),
+      bar(4356, 4355),
+      bar(4355, 4354.5),
+    ];
+    const last = {
+      open_time_ms: 0,
+      open: 4354.67,
+      high: 4354.67,
+      low: 4354.13,
+      close: 4354.13,
+      ticks: 8,
+    };
     const e = resolveDeskEntry({
-      bar: {
-        open_time_ms: 0,
-        open: 4354.67,
-        high: 4354.67,
-        low: 4354.13,
-        close: 4354.13,
-        ticks: 8,
-      },
+      bar: last,
+      closedBars: [...dump, last],
       regime: 'PULLBACK_UPTREND',
       bias: 'DOWN',
-      capitalMid: 4356.46,
+      capitalMid: 4354.13,
       refs: cluster(4354.13),
     });
     expect(e.direction).toBe('SELL');

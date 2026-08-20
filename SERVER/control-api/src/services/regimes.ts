@@ -129,7 +129,7 @@ function epicKey(epic: string): string {
 
 /**
  * Classify from closed 10s OHLC — same names as C++ RegimeEngine.
- * Failed-breakout variants are live here (reserved in C++).
+ * Classic high/low oscillation stays RANGE — do not invent TREND from soft grind.
  */
 export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOWN'): RegimeName {
   if (!bars.length || bars.length < 2) return 'UNKNOWN';
@@ -150,8 +150,9 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
     persistWindow.map((v) => (v > 0.00008 ? 1 : v < -0.00008 ? -1 : 0))
   );
 
-  const trendingUp = persistence > 0.35 && lastVel > 0.00005;
-  const trendingDown = persistence < -0.35 && lastVel < -0.00005;
+  // Stronger than soft grind — half the window must lean the same way with a real last body.
+  const trendingUp = persistence > 0.5 && lastVel > 0.00008;
+  const trendingDown = persistence < -0.5 && lastVel < -0.00008;
   const compressed = lastRange < avgRange * 0.55 && lastRange < 0.00022;
   const expanding = lastRange > avgRange * 1.45 && lastRange >= 0.00025;
   const hi = Math.max(...prior.map((b) => b.high));
@@ -159,41 +160,39 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   const inRange = last.close <= hi && last.close >= lo;
   const breakoutUp = last.close > hi;
   const breakoutDown = last.close < lo;
+  const first = window[0]!;
+  const net = (last.close - first.open) / Math.max(Math.abs(first.open), 1e-9);
+  // Oscillation: net tiny while still bouncing inside the prior high/low band.
+  const oscillating = inRange && Math.abs(net) < 0.00045;
   const reversal =
     (previous === 'TREND_UP' && lastVel < -0.0012 && lastRange > avgRange && !breakoutDown) ||
     (previous === 'TREND_DOWN' && lastVel > 0.0012 && lastRange > avgRange && !breakoutUp);
 
-	if (previous === 'BREAKOUT_UP' && inRange && lastVel < 0) return 'FAILED_BREAKOUT_UP';
-	if (previous === 'BREAKOUT_DOWN' && inRange && lastVel > 0) return 'FAILED_BREAKOUT_DOWN';
-	if (compressed && inRange) return 'COMPRESSION';
-	if (expanding && breakoutUp && (trendingUp || lastVel > 0)) return 'BREAKOUT_UP';
-	if (expanding && breakoutDown && (trendingDown || lastVel < 0)) return 'BREAKOUT_DOWN';
-	if (expanding) return 'EXPANSION';
-	if (previous === 'TREND_UP' && lastVel < -0.00008 && persistence > 0.15) {
-		return 'PULLBACK_UPTREND';
-	}
-	if (previous === 'TREND_DOWN' && lastVel > 0.00008 && persistence < -0.15) {
-		return 'PULLBACK_DOWNTREND';
-	}
-	if (trendingUp) return 'TREND_UP';
-	if (trendingDown) return 'TREND_DOWN';
-	if (reversal) return 'REVERSAL_CANDIDATE';
-	const first = window[0]!;
-	const net = (last.close - first.open) / Math.max(Math.abs(first.open), 1e-9);
-	// Soft grind (Gold 10s) — persistence alone is enough; do not stay UNKNOWN forever.
-	if (persistence > 0.15 && net >= -0.00015) return 'TREND_UP';
-	if (persistence < -0.15 && net <= 0.00015) return 'TREND_DOWN';
-	if (net > 0.00035 && persistence >= 0) return 'TREND_UP';
-	if (net < -0.00035 && persistence <= 0) return 'TREND_DOWN';
-	if (inRange) return 'RANGE';
-	if (previous !== 'UNKNOWN' && previous !== 'RANGE') return 'TRANSITION';
-	// With a real 10s window, never park on UNKNOWN — pick trend from net or RANGE.
-	if (window.length >= 4) {
-		if (net > 0.0001) return 'TREND_UP';
-		if (net < -0.0001) return 'TREND_DOWN';
-		return 'RANGE';
-	}
-	return 'UNKNOWN';
+  if (previous === 'BREAKOUT_UP' && inRange && lastVel < 0) return 'FAILED_BREAKOUT_UP';
+  if (previous === 'BREAKOUT_DOWN' && inRange && lastVel > 0) return 'FAILED_BREAKOUT_DOWN';
+  if (compressed && inRange) return 'COMPRESSION';
+  if (expanding && breakoutUp && (trendingUp || lastVel > 0)) return 'BREAKOUT_UP';
+  if (expanding && breakoutDown && (trendingDown || lastVel < 0)) return 'BREAKOUT_DOWN';
+  if (expanding) return 'EXPANSION';
+  if (previous === 'TREND_UP' && lastVel < -0.00008 && persistence > 0.25 && !oscillating) {
+    return 'PULLBACK_UPTREND';
+  }
+  if (previous === 'TREND_DOWN' && lastVel > 0.00008 && persistence < -0.25 && !oscillating) {
+    return 'PULLBACK_DOWNTREND';
+  }
+  if (trendingUp && !oscillating) return 'TREND_UP';
+  if (trendingDown && !oscillating) return 'TREND_DOWN';
+  if (reversal) return 'REVERSAL_CANDIDATE';
+
+  // Classic range: still inside high/low — never paint soft UP/DOWN trend.
+  if (inRange || oscillating) return 'RANGE';
+
+  // Only strong directional break of the window qualifies as TREND outside the band.
+  if (net > 0.0008 && persistence > 0.35) return 'TREND_UP';
+  if (net < -0.0008 && persistence < -0.35) return 'TREND_DOWN';
+  if (previous !== 'UNKNOWN' && previous !== 'RANGE') return 'TRANSITION';
+  if (window.length >= 4) return 'RANGE';
+  return 'UNKNOWN';
 }
 
 function confidenceFrom(bars: TenSecBar[], regime: RegimeName): number {

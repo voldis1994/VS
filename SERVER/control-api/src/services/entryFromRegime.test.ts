@@ -68,18 +68,20 @@ function rangeThenUpperReject(): { bars: TenSecBar[]; confirm: TenSecBar } {
 describe('10s + regime-as-CONTEXT suitable entry', () => {
   beforeEach(() => disableStrategyEvalLogForTests(true));
 
-  it('UNKNOWN unlocks only with real dip + lasting bias — not rally chase', () => {
-    expect(decideEntryFrom10sRegime(dip, 'UNKNOWN', 'UP')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(dip, 'COMPRESSION', 'UP')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(dip, 'UNKNOWN', 'DOWN')?.direction).toBe('SELL');
-    expect(decideEntryFrom10sRegime(dip, 'UNKNOWN', 'FLAT')).toBeNull();
-    expect(decideEntryFrom10sRegime(rally, 'UNKNOWN', 'FLAT')).toBeNull();
+  it('UNKNOWN / COMPRESSION never invent pullback from bias alone', () => {
+    expect(decideEntryFrom10sRegime(dip, 'UNKNOWN', 'UP')).toBeNull();
+    expect(decideEntryFrom10sRegime(dip, 'COMPRESSION', 'UP')).toBeNull();
+    expect(decideEntryFrom10sRegime(dip, 'UNKNOWN', 'DOWN')).toBeNull();
     expect(decideEntryFrom10sRegime(rally, 'UNKNOWN', 'UP')).toBeNull();
   });
 
-  it('TREND_UP dip-buys — does not chase every green climb', () => {
-    expect(decideEntryFrom10sRegime(dip, 'TREND_UP', 'UP')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(dip, 'TREND_UP', 'UP')?.setup).toBe('PULLBACK');
+  it('TREND_UP dip-buy needs climb structure — lone dip is not enough', () => {
+    expect(decideEntryFrom10sRegime(dip, 'TREND_UP', 'UP')).toBeNull();
+    const climb = climbBars(9, 1990, 1.2);
+    const pull = bar(climb[climb.length - 1]!.close, climb[climb.length - 1]!.close - 2);
+    const hit = decideEntryFrom10sRegime(pull, 'TREND_UP', 'UP', [...climb, pull]);
+    expect(hit?.direction).toBe('BUY');
+    expect(hit?.setup).toBe('PULLBACK');
     expect(decideEntryFrom10sRegime(rally, 'TREND_UP', 'UP')).toBeNull();
   });
 
@@ -108,15 +110,25 @@ describe('10s + regime-as-CONTEXT suitable entry', () => {
     expect(decideEntryFrom10sRegime(doji, 'COMPRESSION', 'UP')).toBeNull();
   });
 
-  it('TREND_DOWN follows the dump (red) — never sells a green breakout', () => {
-    expect(decideEntryFrom10sRegime(dip, 'TREND_DOWN', 'DOWN')?.direction).toBe('SELL');
+  it('TREND_DOWN structured dump SELLs — lone red without structure is null', () => {
+    expect(decideEntryFrom10sRegime(dip, 'TREND_DOWN', 'DOWN')).toBeNull();
+    const dump = dumpBars(9, 2010, 1.2);
+    const last = dump[dump.length - 1]!;
+    const more = bar(last.close, last.close - 2);
+    expect(decideEntryFrom10sRegime(more, 'TREND_DOWN', 'DOWN', [...dump, more])?.direction).toBe(
+      'SELL'
+    );
     expect(decideEntryFrom10sRegime(rally, 'TREND_DOWN', 'DOWN')).toBeNull();
   });
 
-  it('PULLBACK_UPTREND dump SELLs with DOWN, dip-buys with UP — no naked rally chase', () => {
+  it('PULLBACK_UPTREND needs structure — soft dump alone is not enough', () => {
     expect(decideEntryFrom10sRegime(rally, 'PULLBACK_UPTREND', 'UP')).toBeNull();
-    expect(decideEntryFrom10sRegime(dip, 'PULLBACK_UPTREND', 'UP')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(dip, 'PULLBACK_UPTREND', 'DOWN')?.direction).toBe('SELL');
+    expect(decideEntryFrom10sRegime(dip, 'PULLBACK_UPTREND', 'UP')).toBeNull();
+    const climb = climbBars(9, 1990, 1.2);
+    const pull = bar(climb[climb.length - 1]!.close, climb[climb.length - 1]!.close - 2);
+    expect(decideEntryFrom10sRegime(pull, 'PULLBACK_UPTREND', 'UP', [...climb, pull])?.direction).toBe(
+      'BUY'
+    );
   });
 
   it('BREAKOUT_UP follows up, not the failed red bar', () => {
@@ -160,7 +172,7 @@ describe('10s + regime-as-CONTEXT suitable entry', () => {
     expect(decideEntryFrom10sRegime(quiet, 'BREAKOUT_UP')).toBeNull();
   });
 
-  it('Gold-sized 0.33pt dump is a tradeable dip', () => {
+  it('Gold-sized dump needs down-structure history', () => {
     const goldDump: TenSecBar = {
       open_time_ms: 0,
       open: 4383.98,
@@ -169,12 +181,16 @@ describe('10s + regime-as-CONTEXT suitable entry', () => {
       close: 4383.65,
       ticks: 12,
     };
-    expect(decideEntryFrom10sRegime(goldDump, 'TREND_DOWN', 'DOWN')?.direction).toBe('SELL');
+    expect(decideEntryFrom10sRegime(goldDump, 'TREND_DOWN', 'DOWN')).toBeNull();
     expect(decideEntryFrom10sRegime(goldDump, 'UNKNOWN', 'FLAT')).toBeNull();
-    expect(decideEntryFrom10sRegime(goldDump, 'UNKNOWN', 'DOWN')?.direction).toBe('SELL');
+    expect(decideEntryFrom10sRegime(goldDump, 'UNKNOWN', 'DOWN')).toBeNull();
+    const dump = dumpBars(8, 4390, 0.8);
+    expect(
+      decideEntryFrom10sRegime(goldDump, 'TREND_DOWN', 'DOWN', [...dump, goldDump])?.direction
+    ).toBe('SELL');
   });
 
-  it('EXPANSION + bias UP + dump bar BUYs the dip (desk order, not SCAN)', () => {
+  it('EXPANSION + bias UP + dump needs up-structure (not soft pullback)', () => {
     const goldDump: TenSecBar = {
       open_time_ms: 0,
       open: 4346.42,
@@ -183,21 +199,23 @@ describe('10s + regime-as-CONTEXT suitable entry', () => {
       close: 4345.25,
       ticks: 12,
     };
-    const recent = [...dumpBars(6, 4348, 0.2), goldDump];
+    const recent = [...climbBars(8, 4330, 2), goldDump];
     const hit = decideEntryFrom10sRegime(goldDump, 'EXPANSION', 'UP', recent);
     expect(hit?.direction).toBe('BUY');
     expect(hit?.setup).toBe('PULLBACK');
-    expect(
-      denyWithTrendEntry('BUY', goldDump, 'UP', recent)
-    ).toBeNull();
   });
 
-  it('EXPANSION + bias DOWN follows the dump, never sells a green bar', () => {
-    expect(decideEntryFrom10sRegime(dip, 'EXPANSION', 'DOWN')?.direction).toBe('SELL');
+  it('EXPANSION + bias DOWN needs down-structure', () => {
+    const dump = dumpBars(8, 2010, 1.2);
+    const last = dump[dump.length - 1]!;
+    const more = bar(last.close, last.close - 2);
+    expect(decideEntryFrom10sRegime(more, 'EXPANSION', 'DOWN', [...dump, more])?.direction).toBe(
+      'SELL'
+    );
     expect(decideEntryFrom10sRegime(rally, 'EXPANSION', 'DOWN')).toBeNull();
   });
 
-  it('FAILED_BREAKOUT_UP dump with UP bias BUYs when fade does not confirm', () => {
+  it('FAILED_BREAKOUT without confirmed fade → null (no soft dip-buy)', () => {
     const goldDump: TenSecBar = {
       open_time_ms: 0,
       open: 4340.22,
@@ -206,9 +224,7 @@ describe('10s + regime-as-CONTEXT suitable entry', () => {
       close: 4339.03,
       ticks: 12,
     };
-    const hit = decideEntryFrom10sRegime(goldDump, 'FAILED_BREAKOUT_UP', 'UP');
-    expect(hit?.direction).toBe('BUY');
-    expect(hit?.setup).toBe('PULLBACK');
+    expect(decideEntryFrom10sRegime(goldDump, 'FAILED_BREAKOUT_UP', 'UP')).toBeNull();
   });
 });
 
