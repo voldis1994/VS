@@ -55,6 +55,7 @@ import {
   countCandlePolarity,
   toCompactBar,
 } from './candleTf.js';
+import { regimeEntryPlan } from './regimeEntryPlan.js';
 import {
   canIssueClose,
   decideCloseFinalize,
@@ -203,6 +204,20 @@ export type RobotSession = {
     regime: string;
     setup: string | null;
     action: string;
+    /** Full entry plan: targets + confirms for current regime */
+    plan?: string | null;
+    target_line?: string | null;
+    confirm_line?: string | null;
+    feed_confirm?: string | null;
+    targets?: {
+      entry: number | null;
+      invalidation: number | null;
+      range_high: number | null;
+      range_low: number | null;
+      break_level: number | null;
+      confirm_level: number | null;
+    } | null;
+    confirms?: Array<{ id: string; label: string; ok: boolean }> | null;
   };
   /** C++ / pipeline EntryReady waiting for robotDesk hands */
   pending_calc?: CalcEntry | null;
@@ -485,20 +500,54 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
   const feeds = `${s.multiFeed?.contributing ?? s.feed_contributing ?? 0}/${
     s.multiFeed?.sender_count ?? s.feed_sender_count ?? 0
   } ${s.feed_source || 'NONE'} ${s.multiFeed?.agreement || s.feed_agreement || ''}`.trim();
-  let action = 'SCAN';
+  const feedMid =
+    s.multiFeed?.mid != null && Number.isFinite(s.multiFeed.mid) ? s.multiFeed.mid : null;
+  const plan = regimeEntryPlan({
+    regime: s.regime,
+    bias: s.trend_bias,
+    liveMid: s.last_mid,
+    feedMid,
+    bars10s: s.closedBars.map((b) => ({
+      open: b.open,
+      high: b.high,
+      low: b.low,
+      close: b.close,
+    })),
+    bars1m: (s.minuteCandles || []).map((b) => ({
+      open: b.open,
+      high: b.high,
+      low: b.low,
+      close: b.close,
+    })),
+  });
+  let action = 'WATCH';
   const marketOpen = marketStatusAllowsTrading(s.capital_market_status);
   if (!s.running) action = 'STOPPED';
   else if (!marketOpen) {
     action = s.open_side ? `HOLD ${s.open_side} · MARKET CLOSED` : 'MARKET CLOSED';
   } else if (s.open_side) action = `MANAGE ${s.open_side}`;
-  else if (s.pending_calc) action = `CALC ${s.pending_calc.direction}`;
-  else if (s.mode === 'ENTRY') action = 'SCAN ENTRY';
+  else if (s.pending_calc) {
+    action = `ENTRY ${s.pending_calc.direction} ${s.pending_calc.setup_type || plan.setup || ''}`.trim();
+  } else if (s.mode === 'ENTRY' && plan.direction) {
+    action = `PLAN ${plan.direction} ${plan.setup || ''}`.trim();
+  } else if (s.mode === 'ENTRY') {
+    action = `PLAN · ${plan.setup || 'wait'}`;
+  }
   return {
     feeds,
     ohlc: ohlcLine,
     regime: effectiveRegimeName(s),
-    setup: s.pending_calc?.setup_type || (s.trend_bias ? `bias ${s.trend_bias}` : null),
+    setup:
+      s.pending_calc?.setup_type ||
+      (plan.direction ? `${plan.setup} · ${plan.feed_confirm}` : plan.setup) ||
+      (s.trend_bias ? `bias ${s.trend_bias}` : null),
     action,
+    plan: plan.plan,
+    target_line: plan.target_line,
+    confirm_line: plan.confirm_line,
+    feed_confirm: plan.feed_confirm,
+    targets: plan.targets,
+    confirms: plan.confirms,
   };
 }
 
@@ -802,6 +851,19 @@ export function listCalcSnapshots(): Array<{
   body_pressure_1m: number;
   body_pressure_5m: number;
   body_pressure_15m: number;
+  feed_mid: number | null;
+  plan_direction: string;
+  plan_setup: string;
+  plan_text: string;
+  feed_confirm: string;
+  target_line: string;
+  confirm_line: string;
+  target_entry: number | null;
+  target_inv: number | null;
+  target_high: number | null;
+  target_low: number | null;
+  target_break: number | null;
+  target_confirm: number | null;
 }> {
   return [...sessions.values()]
     .filter((s) => s.running)
@@ -816,6 +878,26 @@ export function listCalcSnapshots(): Array<{
       const buyP = Math.max(0, net);
       const sellP = Math.max(0, -net);
       const legs = (s.feed_legs?.length ? s.feed_legs : s.multiFeed?.legs) || [];
+      const feedMid =
+        s.multiFeed?.mid != null && Number.isFinite(s.multiFeed.mid) ? s.multiFeed.mid : null;
+      const plan = regimeEntryPlan({
+        regime: s.regime,
+        bias: s.trend_bias,
+        liveMid: s.last_mid,
+        feedMid,
+        bars10s: s.closedBars.map((b) => ({
+          open: b.open,
+          high: b.high,
+          low: b.low,
+          close: b.close,
+        })),
+        bars1m: mins.map((b) => ({
+          open: b.open,
+          high: b.high,
+          low: b.low,
+          close: b.close,
+        })),
+      });
       return {
         epic: s.epic,
         mid: s.last_mid,
@@ -852,6 +934,19 @@ export function listCalcSnapshots(): Array<{
         body_pressure_1m: barBodyPressure(mins.slice(-20)),
         body_pressure_5m: barBodyPressure(bars5.slice(-12)),
         body_pressure_15m: barBodyPressure(bars15.slice(-8)),
+        feed_mid: feedMid,
+        plan_direction: plan.direction || '',
+        plan_setup: plan.setup || '',
+        plan_text: plan.plan,
+        feed_confirm: plan.feed_confirm,
+        target_line: plan.target_line,
+        confirm_line: plan.confirm_line,
+        target_entry: plan.targets.entry,
+        target_inv: plan.targets.invalidation,
+        target_high: plan.targets.range_high,
+        target_low: plan.targets.range_low,
+        target_break: plan.targets.break_level,
+        target_confirm: plan.targets.confirm_level,
       };
     });
 }
@@ -2402,26 +2497,66 @@ async function robotCycleBody(s: Internal) {
 
     // Wait for C++ on this candle — never invent a Node side meanwhile.
     if (!direction && Number.isFinite(msSinceBar) && msSinceBar < CALC_WAIT_MS) {
+      const feedMid =
+        s.multiFeed?.mid != null && Number.isFinite(s.multiFeed.mid) ? s.multiFeed.mid : null;
+      const plan = regimeEntryPlan({
+        regime: regimeLabel,
+        bias: s.trend_bias,
+        liveMid: execQuote.mid,
+        feedMid,
+        bars10s: s.closedBars.map((b) => ({
+          open: b.open,
+          high: b.high,
+          low: b.low,
+          close: b.close,
+        })),
+        bars1m: (s.minuteCandles || []).map((b) => ({
+          open: b.open,
+          high: b.high,
+          low: b.low,
+          close: b.close,
+        })),
+      });
       pushTick(s, {
-        phase: 'SCAN',
+        phase: 'DECIDE',
         bid: execQuote.bid,
         ask: execQuote.ask,
         mid: execQuote.mid,
         code: DecisionCodes.NO_SETUP,
-        detail: `${ohlcLine} · EXEC · waiting C++ EntryReady (${Math.ceil((CALC_WAIT_MS - msSinceBar) / 1000)}s)`,
+        detail: `${ohlcLine} · ${plan.plan} · ${plan.target_line} · ${plan.confirm_line} · waiting C++ EntryReady (${Math.ceil((CALC_WAIT_MS - msSinceBar) / 1000)}s)`,
       });
       return;
     }
 
     // No C++ after wait → flat. Node does not invent entry.
     if (!direction) {
+      const feedMid =
+        s.multiFeed?.mid != null && Number.isFinite(s.multiFeed.mid) ? s.multiFeed.mid : null;
+      const plan = regimeEntryPlan({
+        regime: regimeLabel,
+        bias: s.trend_bias,
+        liveMid: execQuote.mid,
+        feedMid,
+        bars10s: s.closedBars.map((b) => ({
+          open: b.open,
+          high: b.high,
+          low: b.low,
+          close: b.close,
+        })),
+        bars1m: (s.minuteCandles || []).map((b) => ({
+          open: b.open,
+          high: b.high,
+          low: b.low,
+          close: b.close,
+        })),
+      });
       pushTick(s, {
         phase: 'SCAN',
         bid: execQuote.bid,
         ask: execQuote.ask,
         mid: execQuote.mid,
         code: DecisionCodes.NO_SETUP,
-        detail: `${ohlcLine} · EXEC · no C++ EntryReady · Node does not invent`,
+        detail: `${ohlcLine} · ${plan.plan} · ${plan.target_line} · ${plan.confirm_line} · no C++ EntryReady yet`,
       });
       return;
     }
