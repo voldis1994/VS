@@ -204,6 +204,20 @@ export type RobotSession = {
     regime: string;
     setup: string | null;
     action: string;
+    /** Full entry plan: targets + confirms for current regime */
+    plan?: string | null;
+    target_line?: string | null;
+    confirm_line?: string | null;
+    feed_confirm?: string | null;
+    targets?: {
+      entry: number | null;
+      invalidation: number | null;
+      range_high: number | null;
+      range_low: number | null;
+      break_level: number | null;
+      confirm_level: number | null;
+    } | null;
+    confirms?: Array<{ id: string; label: string; ok: boolean }> | null;
   };
   /** C++ / pipeline EntryReady waiting for robotDesk hands */
   pending_calc?: CalcEntry | null;
@@ -493,6 +507,18 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
     bias: s.trend_bias,
     liveMid: s.last_mid,
     feedMid,
+    bars10s: s.closedBars.map((b) => ({
+      open: b.open,
+      high: b.high,
+      low: b.low,
+      close: b.close,
+    })),
+    bars1m: (s.minuteCandles || []).map((b) => ({
+      open: b.open,
+      high: b.high,
+      low: b.low,
+      close: b.close,
+    })),
   });
   let action = 'WATCH';
   const marketOpen = marketStatusAllowsTrading(s.capital_market_status);
@@ -516,6 +542,12 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
       (plan.direction ? `${plan.setup} · ${plan.feed_confirm}` : plan.setup) ||
       (s.trend_bias ? `bias ${s.trend_bias}` : null),
     action,
+    plan: plan.plan,
+    target_line: plan.target_line,
+    confirm_line: plan.confirm_line,
+    feed_confirm: plan.feed_confirm,
+    targets: plan.targets,
+    confirms: plan.confirms,
   };
 }
 
@@ -824,6 +856,14 @@ export function listCalcSnapshots(): Array<{
   plan_setup: string;
   plan_text: string;
   feed_confirm: string;
+  target_line: string;
+  confirm_line: string;
+  target_entry: number | null;
+  target_inv: number | null;
+  target_high: number | null;
+  target_low: number | null;
+  target_break: number | null;
+  target_confirm: number | null;
 }> {
   return [...sessions.values()]
     .filter((s) => s.running)
@@ -845,6 +885,18 @@ export function listCalcSnapshots(): Array<{
         bias: s.trend_bias,
         liveMid: s.last_mid,
         feedMid,
+        bars10s: s.closedBars.map((b) => ({
+          open: b.open,
+          high: b.high,
+          low: b.low,
+          close: b.close,
+        })),
+        bars1m: mins.map((b) => ({
+          open: b.open,
+          high: b.high,
+          low: b.low,
+          close: b.close,
+        })),
       });
       return {
         epic: s.epic,
@@ -887,6 +939,14 @@ export function listCalcSnapshots(): Array<{
         plan_setup: plan.setup || '',
         plan_text: plan.plan,
         feed_confirm: plan.feed_confirm,
+        target_line: plan.target_line,
+        confirm_line: plan.confirm_line,
+        target_entry: plan.targets.entry,
+        target_inv: plan.targets.invalidation,
+        target_high: plan.targets.range_high,
+        target_low: plan.targets.range_low,
+        target_break: plan.targets.break_level,
+        target_confirm: plan.targets.confirm_level,
       };
     });
 }
@@ -2444,6 +2504,18 @@ async function robotCycleBody(s: Internal) {
         bias: s.trend_bias,
         liveMid: execQuote.mid,
         feedMid,
+        bars10s: s.closedBars.map((b) => ({
+          open: b.open,
+          high: b.high,
+          low: b.low,
+          close: b.close,
+        })),
+        bars1m: (s.minuteCandles || []).map((b) => ({
+          open: b.open,
+          high: b.high,
+          low: b.low,
+          close: b.close,
+        })),
       });
       pushTick(s, {
         phase: 'DECIDE',
@@ -2451,7 +2523,7 @@ async function robotCycleBody(s: Internal) {
         ask: execQuote.ask,
         mid: execQuote.mid,
         code: DecisionCodes.NO_SETUP,
-        detail: `${ohlcLine} · ${plan.plan} · waiting C++ EntryReady (${Math.ceil((CALC_WAIT_MS - msSinceBar) / 1000)}s)`,
+        detail: `${ohlcLine} · ${plan.plan} · ${plan.target_line} · ${plan.confirm_line} · waiting C++ EntryReady (${Math.ceil((CALC_WAIT_MS - msSinceBar) / 1000)}s)`,
       });
       return;
     }
@@ -2465,6 +2537,18 @@ async function robotCycleBody(s: Internal) {
         bias: s.trend_bias,
         liveMid: execQuote.mid,
         feedMid,
+        bars10s: s.closedBars.map((b) => ({
+          open: b.open,
+          high: b.high,
+          low: b.low,
+          close: b.close,
+        })),
+        bars1m: (s.minuteCandles || []).map((b) => ({
+          open: b.open,
+          high: b.high,
+          low: b.low,
+          close: b.close,
+        })),
       });
       pushTick(s, {
         phase: 'SCAN',
@@ -2472,7 +2556,7 @@ async function robotCycleBody(s: Internal) {
         ask: execQuote.ask,
         mid: execQuote.mid,
         code: DecisionCodes.NO_SETUP,
-        detail: `${ohlcLine} · ${plan.plan} · no C++ EntryReady yet`,
+        detail: `${ohlcLine} · ${plan.plan} · ${plan.target_line} · ${plan.confirm_line} · no C++ EntryReady yet`,
       });
       return;
     }

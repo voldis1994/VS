@@ -48,6 +48,19 @@ type DecisionChain = {
   regime: string;
   setup: string | null;
   action: string;
+  plan?: string | null;
+  target_line?: string | null;
+  confirm_line?: string | null;
+  feed_confirm?: string | null;
+  targets?: {
+    entry: number | null;
+    invalidation: number | null;
+    range_high: number | null;
+    range_low: number | null;
+    break_level: number | null;
+    confirm_level: number | null;
+  } | null;
+  confirms?: Array<{ id: string; label: string; ok: boolean }> | null;
 };
 
 type BoardMeta = {
@@ -159,10 +172,14 @@ function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'fl
     return { label: `MARKET CLOSED · ${String(s.capital_market_status || 'CLOSED').toUpperCase()}`, kind: 'flat' };
   }
   if (s.running && !s.open_side) {
-    const bias = String(s.trend_bias || s.decision_chain?.setup || '').toUpperCase();
+    const chain = s.decision_chain;
+    if (chain?.action?.startsWith('PLAN') || chain?.action?.startsWith('ENTRY')) {
+      return { label: `${chain.action} · ${regime}`, kind: 'entry' };
+    }
+    const bias = String(s.trend_bias || chain?.setup || '').toUpperCase();
     const only =
       bias.includes('UP') ? ' · bias UP' : bias.includes('DOWN') ? ' · bias DOWN' : '';
-    return { label: `SCAN · ${regime}${only}`, kind: 'entry' };
+    return { label: `PLAN · ${regime}${only}`, kind: 'entry' };
   }
   return { label: `FLAT · ${regime}`, kind: 'flat' };
 }
@@ -903,6 +920,27 @@ export function RobotDeskPage() {
                           : ''}
                     </strong>
                   </div>
+                  <div>
+                    <span>PLAN</span>
+                    <strong className="mono">
+                      {focusChain?.action || '—'}
+                      {focusChain?.setup ? ` · ${focusChain.setup}` : ''}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>TARGETS</span>
+                    <strong className="mono">{focusChain?.target_line || '—'}</strong>
+                  </div>
+                  <div>
+                    <span>CONFIRM</span>
+                    <strong className="mono">{focusChain?.confirm_line || '—'}</strong>
+                  </div>
+                  {focusChain?.plan ? (
+                    <div>
+                      <span>IDEA</span>
+                      <strong className="mono">{focusChain.plan}</strong>
+                    </div>
+                  ) : null}
                   <div>
                     <span>10s</span>
                     <strong>
