@@ -62,7 +62,7 @@ import {
   type TrendBias,
 } from './entryFromRegime.js';
 import { DecisionCodes, type DecisionCode } from './decisionCodes.js';
-import { isRealEntrySetup, resolveDeskEntry } from './deskEntry.js';
+import { isRealEntrySetup } from './deskEntry.js';
 import {
   evaluateEntryDirectionGate,
   formatEntryDiagnostic,
@@ -75,7 +75,7 @@ import {
   type MultiFeedPrice,
   type MultiFeedLeg,
 } from './robotReader.js';
-import { buildFresherRefs, type PriceRef } from './staleQuoteGuard.js';
+import { buildFresherRefs, detectStaleQuoteAdverse, type PriceRef } from './staleQuoteGuard.js';
 import {
   aggregateSecondsToTen,
   emptyTenSecState,
@@ -175,7 +175,7 @@ export type RobotSession = {
   best_outcome_state: BestOutcomeStateName | null;
   best_outcome_reason: string | null;
   best_price_seen: number | null;
-  /** When false, manage-only (no new opens). When true: one team — C++ EntryReady first, Node validates + Capital + BO. */
+  /** When false, manage-only. When true: C++ prepares EntryReady; Node only executes Capital + BO. */
   entry_enabled: boolean;
   ohlc_10s: {
     last_o: number | null;
@@ -2302,11 +2302,9 @@ async function robotCycleBody(s: Internal) {
     let reason = '';
     let setupType: string | null = null;
     let calcSignalAgeMs: number | null = null;
-    let fromCpp = false;
 
-    // ——— ONE TEAM ———
-    // C++ = scout (EntryReady propose). Node = captain (validate, Capital, BO close).
-    // Never open from Node invent while still waiting for C++ on this candle.
+    // ——— C++ prepares entry · Node only executes Capital + BO ———
+    // Node does NOT invent BUY/SELL. No C++ EntryReady → no open.
     const CALC_WAIT_MS = 2_500;
     const CALC_STALE_MS = 12_000;
     const msSinceBar =
@@ -2318,23 +2316,22 @@ async function robotCycleBody(s: Internal) {
       if (calcAgeMs > CALC_STALE_MS) {
         s.pending_calc = null;
         calcQueue.delete(calcKey(s.account_id, s.epic));
-        calcSignalAgeMs = null; // discarded scout must not poison Node gate age
+        calcSignalAgeMs = null;
         pushTick(s, {
           phase: 'SCAN',
           bid: execQuote.bid,
           ask: execQuote.ask,
           mid: execQuote.mid,
           code: DecisionCodes.NO_SETUP,
-          detail: `${ohlcLine} · TEAM · stale C++ EntryReady discarded (${Math.round(calcAgeMs / 1000)}s)`,
+          detail: `${ohlcLine} · EXEC · stale C++ EntryReady discarded (${Math.round(calcAgeMs / 1000)}s)`,
         });
       } else {
         s.pending_calc = null;
         calcQueue.delete(calcKey(s.account_id, s.epic));
-        fromCpp = true;
         calcSignalAgeMs = calcAgeMs;
         direction = calc.direction;
         setupType = calc.setup_type;
-        reason = `TEAM C++ EntryReady · ${calc.explanation || calc.regime || calc.setup_type || calc.direction}`;
+        reason = `EXEC C++ ready · ${calc.explanation || calc.regime || calc.setup_type || calc.direction}`;
         pushTick(s, {
           phase: 'DECIDE',
           bid: execQuote.bid,
@@ -2346,7 +2343,7 @@ async function robotCycleBody(s: Internal) {
       }
     }
 
-    // Wait for scout before Node invents its own side on this 10s candle.
+    // Wait for C++ on this candle — never invent a Node side meanwhile.
     if (!direction && Number.isFinite(msSinceBar) && msSinceBar < CALC_WAIT_MS) {
       pushTick(s, {
         phase: 'SCAN',
@@ -2354,60 +2351,12 @@ async function robotCycleBody(s: Internal) {
         ask: execQuote.ask,
         mid: execQuote.mid,
         code: DecisionCodes.NO_SETUP,
-        detail: `${ohlcLine} · TEAM · waiting C++ EntryReady (${Math.ceil((CALC_WAIT_MS - msSinceBar) / 1000)}s)`,
+        detail: `${ohlcLine} · EXEC · waiting C++ EntryReady (${Math.ceil((CALC_WAIT_MS - msSinceBar) / 1000)}s)`,
       });
       return;
     }
 
-    const refs = collectFresherRefs(s);
-    if (s.entry_enabled && !s.open_side) {
-      const hadDirection = Boolean(direction);
-      const resolved = resolveDeskEntry({
-        intended: direction,
-        intendedSetup: setupType,
-        intendedReason: reason,
-        bar,
-        regime: regimeLabel,
-        bias: s.trend_bias || 'FLAT',
-        closedBars: s.closedBars,
-        capitalMid: execQuote.mid,
-        refs,
-      });
-      if (resolved.direction) {
-        const flipped = hadDirection && resolved.direction !== direction;
-        const fresh = !hadDirection;
-        direction = resolved.direction;
-        setupType = resolved.setup;
-        reason = fromCpp
-          ? `TEAM Node validate · ${resolved.reason}`
-          : `TEAM Node fallback (no C++) · ${resolved.reason}`;
-        if (fresh || flipped || fromCpp) {
-          pushTick(s, {
-            phase: 'DECIDE',
-            bid: execQuote.bid,
-            ask: execQuote.ask,
-            mid: execQuote.mid,
-            code: DecisionCodes.SIGNAL_CREATED,
-            detail: `${reason} · ${s.cross_market?.detail || 'cross-market n/a'}`,
-          });
-        }
-      } else if (hadDirection) {
-        // Desk denied C++ scout — captain says no; do not chase.
-        pushTick(s, {
-          phase: 'SCAN',
-          bid: execQuote.bid,
-          ask: execQuote.ask,
-          mid: execQuote.mid,
-          code: DecisionCodes.NO_SETUP,
-          detail: `${ohlcLine} · TEAM Node blocked C++ · ${resolved.reason || 'desk deny'}`,
-        });
-        direction = null;
-        setupType = null;
-        reason = resolved.reason || '';
-        calcSignalAgeMs = null;
-      }
-    }
-
+    // No C++ after wait → flat. Node does not invent entry.
     if (!direction) {
       pushTick(s, {
         phase: 'SCAN',
@@ -2415,10 +2364,47 @@ async function robotCycleBody(s: Internal) {
         ask: execQuote.ask,
         mid: execQuote.mid,
         code: DecisionCodes.NO_SETUP,
-        detail: `${ohlcLine} · TEAM · no setup (C++ none / Node none)`,
+        detail: `${ohlcLine} · EXEC · no C++ EntryReady · Node does not invent`,
       });
       return;
     }
+
+    // Thin money safety only (not a second brain inventing setups).
+    if (!isRealEntrySetup(setupType)) {
+      pushTick(s, {
+        phase: 'SCAN',
+        bid: execQuote.bid,
+        ask: execQuote.ask,
+        mid: execQuote.mid,
+        code: DecisionCodes.NO_SETUP,
+        detail: `${ohlcLine} · EXEC · C++ setup not real · ${setupType || 'none'}`,
+      });
+      return;
+    }
+
+    const refs = collectFresherRefs(s);
+    const stale = detectStaleQuoteAdverse(direction, execQuote.mid, refs);
+    if (stale.block) {
+      pushTick(s, {
+        phase: 'SCAN',
+        bid: execQuote.bid,
+        ask: execQuote.ask,
+        mid: execQuote.mid,
+        code: DecisionCodes.NO_SETUP,
+        detail: `${ohlcLine} · EXEC · STALE_QUOTE_BLOCK · ${stale.reason}`,
+      });
+      return;
+    }
+
+    reason = `EXEC Node hands · ${reason}`;
+    pushTick(s, {
+      phase: 'DECIDE',
+      bid: execQuote.bid,
+      ask: execQuote.ask,
+      mid: execQuote.mid,
+      code: DecisionCodes.SIGNAL_CREATED,
+      detail: `${reason} · Capital execute`,
+    });
 
     const barKey = s.last_closed_bar_key || '';
     if (barKey && s.last_entry_bar_key && s.last_entry_bar_key === barKey) {
@@ -2433,6 +2419,8 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
+    // C++ already prepared the setup — Node does not re-decide direction via invent/gate veto.
+    // Direction gate is diagnostic only (logged), not a second brain BLOCK.
     const finalGate = evaluateEntryDirectionGate({
       direction,
       closedBars: s.closedBars,
@@ -2443,28 +2431,15 @@ async function robotCycleBody(s: Internal) {
       signalAgeMs: calcSignalAgeMs,
     });
     pushTick(s, {
-      phase: finalGate.final_entry === 'ALLOW' ? 'DECIDE' : 'SCAN',
+      phase: 'DECIDE',
       bid: execQuote.bid,
       ask: execQuote.ask,
       mid: execQuote.mid,
-      code: finalGate.final_entry === 'ALLOW' ? DecisionCodes.SIGNAL_CREATED : DecisionCodes.NO_SETUP,
-      detail: `${formatEntryDiagnostic(finalGate)}${finalGate.block_reason ? ` · ${finalGate.block_reason}` : ''}`,
+      code: DecisionCodes.SIGNAL_CREATED,
+      detail: `EXEC · ${formatEntryDiagnostic(finalGate)}${
+        finalGate.block_reason ? ` · note ${finalGate.block_reason}` : ''
+      }`,
     });
-    if (finalGate.final_entry === 'BLOCK') {
-      return;
-    }
-
-    if (!isRealEntrySetup(setupType)) {
-      pushTick(s, {
-        phase: 'SCAN',
-        bid: execQuote.bid,
-        ask: execQuote.ask,
-        mid: execQuote.mid,
-        code: DecisionCodes.NO_SETUP,
-        detail: `${ohlcLine} · NO_REAL_SETUP · ${setupType || 'none'} — wait pullback/breakout/rejection`,
-      });
-      return;
-    }
 
     // Valid Strategy signal — finalize prior Best Outcome EXIT quality (does not alter Capital close).
     const boEval = evaluatePendingWithNextSignal({

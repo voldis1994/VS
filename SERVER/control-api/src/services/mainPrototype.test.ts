@@ -42,7 +42,7 @@ describe('MAIN prototype freeze', () => {
     expect(info.STRATEGY_VERSION).toBe('main-prototype-10s-sl040-exit');
     expect(deskPrototypeRules()).toMatch(/MAIN PROTOTYPE/);
     expect(deskPrototypeRules()).toMatch(/Exit Best Outcome close only/);
-    expect(deskPrototypeRules()).toMatch(/TEAM/);
+    expect(deskPrototypeRules()).toMatch(/C\+\+ prepares entry/);
   });
 
   it('screenshot dump: PULLBACK_UPTREND + DOWN needs structure + supply zone', () => {
@@ -148,7 +148,8 @@ describe('MAIN prototype freeze', () => {
 
   it('robotDesk + PALAID stay on origin/main prototype wiring', () => {
     const desk = readFileSync(join(process.cwd(), 'src/services/robotDesk.ts'), 'utf8');
-    expect(desk).toContain('resolveDeskEntry');
+    expect(desk).toContain('EXEC · waiting C++ EntryReady');
+    expect(desk).toContain('Node does not invent');
     expect(desk).toContain('releaseGhostIntents');
     expect(desk).toContain('await enterTrade(');
     expect(desk).toContain('MAIN PROTOTYPE');
