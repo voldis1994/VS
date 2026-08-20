@@ -338,20 +338,19 @@ a { color: var(--accent); text-decoration: none; }
 }
 
 .desk-main {
-  overflow: hidden;
+  overflow: auto;
   padding: 8px 10px;
   min-height: 0;
   height: 100%;
+}
+.desk-main:has(.cl-shell) {
+  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
-.desk-main > * {
-  min-height: 0;
+.desk-main:has(.cl-shell) > .cl-shell {
   flex: 1;
-}
-.desk-main > .empty-state,
-.desk-main > .error-state {
-  flex: 0;
+  min-height: 0;
 }
 
 .page-title {
