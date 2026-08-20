@@ -1,3 +1,3 @@
-tip=2026-08-20T20:20:00Z
-rule=Entry engine default LIVE · ENTRY_READY → C++/risk/moneyPath · SHADOW opt-out via VS_ENTRY_ENGINE_MODE · BO EXIT untouched
-prev=97cde34
+tip=2026-08-20T20:40:00Z
+rule=Setup-specific technical SL · MAX_STOP_ATR · STOP_TOO_WIDE=NO_TRADE · never far regime INV · SHADOW default · BO EXIT untouched
+prev=51f602b

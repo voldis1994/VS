@@ -61,6 +61,18 @@ type DecisionChain = {
     confirm_level: number | null;
   } | null;
   confirms?: Array<{ id: string; label: string; ok: boolean }> | null;
+  entry_state?: string | null;
+  movement_phase?: string | null;
+  entry_kind?: string | null;
+  entry_price_plan?: number | null;
+  technical_stop?: number | null;
+  stop_distance?: number | null;
+  stop_distance_atr?: number | null;
+  risk_reward?: number | null;
+  position_size_plan?: number | null;
+  sl_source?: string | null;
+  stop_block?: string | null;
+  stop_reason?: string | null;
 };
 
 type BoardMeta = {
@@ -961,12 +973,54 @@ export function RobotDeskPage() {
                   </div>
                   <div>
                     <span>ENTRY</span>
-                    <strong>{fmt(focused.entry_price)}</strong>
+                    <strong>
+                      {fmt(
+                        focused.open_side
+                          ? focused.entry_price
+                          : focusChain?.entry_price_plan ?? focused.entry_price
+                      )}
+                    </strong>
                   </div>
-                  <div>
-                    <span>SAFETY SL</span>
-                    <strong>{fmt(focused.safety_sl)}</strong>
-                  </div>
+                  {focusChain?.stop_block === 'STOP_TOO_WIDE' ||
+                  focusChain?.action?.includes('STOP_TOO_WIDE') ? (
+                    <div>
+                      <span>NO TRADE</span>
+                      <strong className="mono">STOP_TOO_WIDE</strong>
+                    </div>
+                  ) : (
+                    <>
+                      <div>
+                        <span>SL</span>
+                        <strong>
+                          {fmt(
+                            focused.open_side
+                              ? focused.safety_sl
+                              : focusChain?.technical_stop ?? focused.safety_sl
+                          )}
+                        </strong>
+                      </div>
+                      <div>
+                        <span>SL DIST</span>
+                        <strong>
+                          {focusChain?.stop_distance != null
+                            ? Number(focusChain.stop_distance).toFixed(2)
+                            : '—'}
+                        </strong>
+                      </div>
+                      <div>
+                        <span>SL ATR</span>
+                        <strong>
+                          {focusChain?.stop_distance_atr != null
+                            ? Number(focusChain.stop_distance_atr).toFixed(2)
+                            : '—'}
+                        </strong>
+                      </div>
+                      <div>
+                        <span>SL SOURCE</span>
+                        <strong className="mono">{focusChain?.sl_source || '—'}</strong>
+                      </div>
+                    </>
+                  )}
                   <div>
                     <span>DEAL</span>
                     <strong className="mono">
