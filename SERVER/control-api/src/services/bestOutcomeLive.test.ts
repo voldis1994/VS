@@ -434,7 +434,7 @@ describe('LIVE Best Outcome exit gate', () => {
     });
     expect(live.exit).toBe(false);
     expect(live.action).toBe('HOLD');
-    expect(live.reason).toMatch(/never closes at flat|never closes ≤ 0|SL\/HARD SAFETY/i);
+    expect(live.reason).toMatch(/0\.00 is not Best Outcome|never closes at flat|never closes ≤ 0|SL\/HARD SAFETY/i);
   });
 
   it('BUY → UPL 0 → strong SELL reversal => HOLD (OPTIMIZATION never closes ≤ 0)', () => {
@@ -644,7 +644,24 @@ describe('LIVE manage signal — no new order', () => {
   });
 
   it('blocked/invalid live signal is not valid', () => {
+    // Without C++/PLAN intended, desk invent + gate can still reject.
     const bars = trendBars('SELL');
+    const sig = resolveLiveManageSignal({
+      pendingCalc: null,
+      bar: bars[bars.length - 1],
+      closedBars: bars,
+      regime: 'TREND_DOWN',
+      bias: 'DOWN',
+      capitalMid: bars[bars.length - 1]!.close,
+      refs: [],
+    });
+    // May be valid SELL (with-trend) or invalid — must never invent BUY against downtrend bars.
+    expect(sig.consumed_pending_calc).toBe(false);
+    expect(sig.direction).not.toBe('BUY');
+  });
+
+  it('fresh C++ peek is trusted for manage even if late-entry would block a new open', () => {
+    const bars = trendBars('BUY');
     const sig = resolveLiveManageSignal({
       pendingCalc: {
         direction: 'BUY',
@@ -653,12 +670,55 @@ describe('LIVE manage signal — no new order', () => {
       },
       bar: bars[bars.length - 1],
       closedBars: bars,
-      regime: 'TREND_DOWN',
-      bias: 'DOWN',
+      regime: 'TREND_UP',
+      bias: 'UP',
       capitalMid: bars[bars.length - 1]!.close,
       refs: [],
     });
-    expect(sig.valid).toBe(false);
+    expect(sig.valid).toBe(true);
+    expect(sig.direction).toBe('BUY');
     expect(sig.consumed_pending_calc).toBe(false);
+  });
+
+  it('regime PLAN READY supplies manage direction when pending_calc empty', () => {
+    const bars = trendBars('BUY');
+    const sig = resolveLiveManageSignal({
+      pendingCalc: null,
+      bar: bars[bars.length - 1],
+      closedBars: bars,
+      regime: 'TREND_UP',
+      bias: 'UP',
+      capitalMid: bars[bars.length - 1]!.close,
+      refs: [],
+      planDirection: 'BUY',
+      planSetup: 'CONTINUATION',
+      planReady: true,
+      planConfirmOk: 4,
+      planConfirmN: 4,
+      planLine: 'TREND_UP continuation',
+    });
+    expect(sig.consumed_pending_calc).toBe(false);
+    expect(sig.valid).toBe(true);
+    expect(sig.direction).toBe('BUY');
+    expect(sig.reason).toMatch(/PLAN READY/i);
+  });
+
+  it('display 0.00 / micro UPL is not Best Outcome CLOSE', () => {
+    const candidate = profitLockCandidate('BUY');
+    const live = decideLiveBestOutcomeExit({
+      candidate,
+      openSide: 'BUY',
+      mfe: 3,
+      upl: 0.001,
+      entryPrice: 2490,
+      signal: validSignal('SELL'),
+      closedBars: trendBars('SELL'),
+      feed: feedStrong(),
+      regime: 'TREND_DOWN',
+      bias: 'DOWN',
+    });
+    expect(live.exit).toBe(false);
+    expect(live.action).toBe('HOLD');
+    expect(live.reason).toMatch(/0\.00 is not Best Outcome|never closes at flat/i);
   });
 });

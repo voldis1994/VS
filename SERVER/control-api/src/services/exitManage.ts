@@ -253,14 +253,15 @@ export type BestOutcome = {
 };
 
 /**
- * Best Outcome OPTIMIZATION may CLOSE only while still in profit.
- * UPL <= 0 is loss/flat territory — SL / HARD_SAFETY only.
+ * Best Outcome OPTIMIZATION may CLOSE only while clearly in profit.
+ * UPL ≤ 0 / display 0.00 is NOT Best Outcome — SL / HARD_SAFETY only.
  */
 export function canOptimizationClose(upl: number): boolean {
-  return Number.isFinite(upl) && upl > 0;
+  // Reject flat and display-noise near zero (0.00 on desk is not a win).
+  return Number.isFinite(upl) && upl > 0.005;
 }
 
-/** Hard guarantee: OPTIMIZATION + UPL <= 0 → never CLOSE. */
+/** Hard guarantee: OPTIMIZATION + UPL ≤ 0 / ~0.00 → never CLOSE. */
 export function blockOptimizationCloseIfNotInProfit<T extends BestOutcome>(
   decision: T,
   upl: number,
@@ -270,7 +271,7 @@ export function blockOptimizationCloseIfNotInProfit<T extends BestOutcome>(
   if (!(decision.exit && decision.exit_kind === 'OPTIMIZATION' && !canOptimizationClose(upl))) {
     return decision;
   }
-  const reason = `HOLD · UPL ${Number.isFinite(upl) ? upl.toFixed(5) : String(upl)} · Best Outcome never closes ≤ 0 · SL/HARD SAFETY only · (${decision.reason})`;
+  const reason = `HOLD · UPL ${Number.isFinite(upl) ? upl.toFixed(5) : String(upl)} · 0.00 is not Best Outcome · never closes ≤ 0 · SL/HARD SAFETY only · (${decision.reason})`;
   const holdTrack = track
     ? { ...track, state: 'HOLD' as BestOutcomeStateName, reason }
     : undefined;
