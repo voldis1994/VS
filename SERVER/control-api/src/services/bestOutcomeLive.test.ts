@@ -199,6 +199,7 @@ describe('LIVE Best Outcome exit gate', () => {
       openSide: 'SELL',
       mfe: 6,
       upl: 3,
+      entryPrice: 2490,
       signal: validSignal('BUY'),
       closedBars: trendBars('BUY'),
       feed: feedStrong(),
@@ -210,6 +211,26 @@ describe('LIVE Best Outcome exit gate', () => {
     expect(live.exit).toBe(true);
     expect(live.action).toBe('CLOSE');
     expect(live.reason).toMatch(/LIVE CLOSE/);
+  });
+
+  it('strong opposite + tiny UPL → HOLD (never micro plus CLOSE)', () => {
+    const candidate = profitLockCandidate('SELL');
+    const live = decideLiveBestOutcomeExit({
+      candidate,
+      openSide: 'SELL',
+      mfe: 6,
+      upl: 0.8,
+      entryPrice: 2490,
+      signal: validSignal('BUY'),
+      closedBars: trendBars('BUY'),
+      feed: feedStrong(),
+      regime: 'TREND_UP',
+      bias: 'UP',
+    });
+    expect(live.live_quality.next_signal_direction).toBe(1);
+    expect(live.exit).toBe(false);
+    expect(live.action).toBe('HOLD');
+    expect(live.reason).toMatch(/meaningful/i);
   });
 
   it('OPEN BUY + strong current BUY confirmation → HOLD', () => {
@@ -237,6 +258,7 @@ describe('LIVE Best Outcome exit gate', () => {
       openSide: 'BUY',
       mfe: 6,
       upl: 3,
+      entryPrice: 2490,
       signal: validSignal('SELL'),
       closedBars: trendBars('SELL'),
       feed: feedStrong(),
@@ -565,6 +587,7 @@ describe('LIVE Best Outcome exit gate', () => {
       openSide: 'SELL',
       mfe: 6,
       upl: 3,
+      entryPrice: 2490,
       signal: validSignal('BUY'),
       closedBars: trendBars('BUY'),
       feed: feedStrong(),

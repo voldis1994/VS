@@ -31,15 +31,15 @@ function cluster(mid: number): PriceRef[] {
 const repoRoot = join(process.cwd(), '..', '..');
 
 describe('MAIN prototype freeze', () => {
-  it('pins MAIN identity, 0.15% entry SL, and exit-only manage', () => {
+  it('pins MAIN identity, 0.40% entry SL, and exit-only manage', () => {
     expect(DESK_PROTOTYPE).toBe('MAIN');
-    expect(SAFETY_SL_REL).toBe(0.0015);
-    expect(DESK_PROTOTYPE_SL).toBe('0.15%-of-price');
+    expect(SAFETY_SL_REL).toBe(0.004);
+    expect(DESK_PROTOTYPE_SL).toBe('0.40%-of-price');
     const info = runtimeBuildInfo();
     expect(info.desk_prototype).toBe('MAIN');
-    expect(info.sl).toBe('0.15%-of-price');
+    expect(info.sl).toBe('0.40%-of-price');
     expect(info.entry_brain).toBe('node-robot-desk');
-    expect(info.STRATEGY_VERSION).toBe('main-prototype-10s-sl015-exit');
+    expect(info.STRATEGY_VERSION).toBe('main-prototype-10s-sl040-exit');
     expect(deskPrototypeRules()).toMatch(/MAIN PROTOTYPE/);
     expect(deskPrototypeRules()).toMatch(/Exit Best Outcome close only/);
   });

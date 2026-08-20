@@ -3,12 +3,13 @@ import {
   computeSafetyCushionStopLevel,
   computeMarketBehaviorStopLevel,
   isLateMoveOnOneMinute,
+  SAFETY_SL_GOLD_FLOOR,
   SAFETY_SL_REL,
 } from './capitalCom.js';
 
 describe('safety SL cushion', () => {
-  it('uses 0.15% / 0.00150 of price (not 2.5% and not Capital min-only)', () => {
-    expect(SAFETY_SL_REL).toBe(0.0015);
+  it('uses 0.40% / 0.0040 of price (not 2.5% and not Capital min-only)', () => {
+    expect(SAFETY_SL_REL).toBe(0.004);
     const mid = 2000;
     const level = computeSafetyCushionStopLevel('BUY', mid, {
       bid: 1999.8,
@@ -17,11 +18,11 @@ describe('safety SL cushion', () => {
       minStopDistance: 0.5,
     });
     const dist = mid - level;
-    expect(dist).toBeGreaterThanOrEqual(mid * 0.0015);
+    expect(dist).toBeGreaterThanOrEqual(mid * 0.004);
     expect(dist).toBeLessThan(mid * 0.01);
   });
 
-  it('on Gold ~4353 yields ~6.5pt stop from 0.15% of price', () => {
+  it('on Gold ~4353 yields ~17pt stop from 0.40% of price (not ~6.5pt chop)', () => {
     const mid = 4353;
     const level = computeSafetyCushionStopLevel('BUY', mid, {
       bid: 4352.93,
@@ -30,12 +31,12 @@ describe('safety SL cushion', () => {
       minStopDistance: 0.4,
     });
     const dist = mid - level;
-    expect(dist).toBeGreaterThanOrEqual(mid * 0.0015);
-    expect(dist).toBeLessThan(12);
-    expect(dist).toBeCloseTo(mid * 0.0015, 0);
+    expect(dist).toBeGreaterThanOrEqual(Math.max(mid * 0.004, SAFETY_SL_GOLD_FLOOR));
+    expect(dist).toBeLessThan(25);
+    expect(dist).toBeCloseTo(mid * 0.004, 0);
   });
 
-  it('BUY entry=4410.74 → SL ≈ 4404.12 (0.15%)', () => {
+  it('BUY entry=4410.74 → SL ≈ 4393.1 (0.40%)', () => {
     const entry = 4410.74;
     const level = computeSafetyCushionStopLevel('BUY', entry, {
       bid: 4410.54,
@@ -43,11 +44,11 @@ describe('safety SL cushion', () => {
       spread: 0.4,
       minStopDistance: 0.4,
     });
-    expect(level).toBeCloseTo(4404.1, 0);
-    expect(entry - level).toBeCloseTo(6.64, 0);
+    expect(entry - level).toBeCloseTo(entry * 0.004, 0);
+    expect(entry - level).toBeGreaterThanOrEqual(SAFETY_SL_GOLD_FLOOR);
   });
 
-  it('SELL entry=4410.74 → SL ≈ 4417.38 (0.15%)', () => {
+  it('SELL entry=4410.74 → SL ≈ 4428.4 (0.40%)', () => {
     const entry = 4410.74;
     const level = computeSafetyCushionStopLevel('SELL', entry, {
       bid: 4410.54,
@@ -55,8 +56,8 @@ describe('safety SL cushion', () => {
       spread: 0.4,
       minStopDistance: 0.4,
     });
-    expect(level).toBeCloseTo(4417.4, 0);
-    expect(level - entry).toBeCloseTo(6.64, 0);
+    expect(level - entry).toBeCloseTo(entry * 0.004, 0);
+    expect(level - entry).toBeGreaterThanOrEqual(SAFETY_SL_GOLD_FLOOR);
   });
 
   it('does not regress to 2.5% (BUY 4410.74)', () => {
@@ -68,8 +69,8 @@ describe('safety SL cushion', () => {
       minStopDistance: 0.4,
     });
     const dist = entry - level;
-    expect(dist).toBeLessThan(15);
-    expect(dist).toBeGreaterThan(5);
+    expect(dist).toBeLessThan(30);
+    expect(dist).toBeGreaterThan(12);
   });
 });
 

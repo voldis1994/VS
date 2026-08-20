@@ -565,8 +565,8 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     git_sha: build.git_sha,
     entry_brain: build.entry_brain,
-    chain: 'MAIN PROTOTYPE · 10s BUY/SELL → robotDesk Capital hands · Entry SL 0.15% · Exit Best Outcome',
-    note: `MAIN PROTOTYPE · BUILD ${build.git_sha} · SL=0.15% (0.00150) · ${build.trend_minutes}-min`,
+    chain: `MAIN PROTOTYPE · 10s BUY/SELL → robotDesk Capital hands · Entry SL ${(SAFETY_SL_REL * 100).toFixed(2)}% · Exit Best Outcome`,
+    note: `MAIN PROTOTYPE · BUILD ${build.git_sha} · SL=${(SAFETY_SL_REL * 100).toFixed(2)}% (${SAFETY_SL_REL.toFixed(4)}) · ${build.trend_minutes}-min`,
   };
 }
 
@@ -619,7 +619,7 @@ function clearTradeState(s: Internal) {
 }
 
 /**
- * Safety SL = 0.15% of price / 0.00150 (at least Capital min×2.5 so broker accepts it).
+ * Safety SL = 0.40% of price / 0.0040 (at least Capital min×2.5 + Gold floor so broker accepts it).
  */
 function safetyStopLevel(
   direction: 'BUY' | 'SELL',
@@ -639,7 +639,7 @@ function safetyStopLevel(
   });
 }
 
-/** stopDistance from 0.15% of price (≥ 2.5× Capital min points). */
+/** stopDistance from 0.40% of price (≥ 2.5× Capital min points; Gold never collapses to min-only). */
 function safetyStopDistancePts(
   mid: number,
   minPts: number,
@@ -647,11 +647,11 @@ function safetyStopDistancePts(
 ): number {
   const abs = Math.max(Math.abs(mid), 1e-9);
   const pct = abs * SAFETY_SL_REL;
-  let fromPct = minPts * 2.5;
-  if (pointSize != null && pointSize > 0) {
-    fromPct = Math.max(fromPct, pct / pointSize);
-  }
-  const distPts = Math.max(minPts * 2.5, fromPct, minPts + 1e-9);
+  // If Capital omits pointSize, assume Gold-like 0.1 so % distance is not dropped to minPts-only.
+  const ps = pointSize != null && pointSize > 0 ? pointSize : abs >= 1000 ? 0.1 : 0.0001;
+  const fromPct = pct / ps;
+  const goldFloorPts = abs >= 1000 ? 12 / ps : 0;
+  const distPts = Math.max(minPts * 2.5, fromPct, goldFloorPts, minPts + 1e-9);
   return distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
 }
 
@@ -982,9 +982,9 @@ async function finalizeLocalClose(
     );
   }
 
-  // After a completed trade cycle, wait 10 seconds before allowing the next entry.
-  // (User-requested anti-churn / “10 sec cooldown” discipline.)
-  s.cooldown_until_ms = Date.now() + 10_000;
+  // After Safety SL chop: longer cool-down. Normal BO close: shorter anti-flip pause.
+  const safetyHit = /Safety SL|broker stop flat/i.test(reason);
+  s.cooldown_until_ms = Date.now() + (safetyHit ? 120_000 : 45_000);
 
   clearTradeState(s);
 }
@@ -1381,7 +1381,7 @@ async function enterTrade(
               ask: quote.ask,
               mid: quote.mid,
               code: DecisionCodes.ORDER_SUBMITTING,
-              detail: `SL 0.15% stopDistance=${stopDistance} pts (Capital min=${minPts} · ~level ${
+              detail: `SL ${(SAFETY_SL_REL * 100).toFixed(2)}% stopDistance=${stopDistance} pts (Capital min=${minPts} · ~level ${
                 expect ?? 'n/a'
               } · x${loosen})`,
             });
@@ -1429,7 +1429,7 @@ async function enterTrade(
             ask: quote.ask,
             mid: quote.mid,
             code: DecisionCodes.ORDER_SUBMITTING,
-            detail: `SL 0.15% try stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
+            detail: `SL ${(SAFETY_SL_REL * 100).toFixed(2)}% try stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
               minPrice ?? 'n/a'
             } · spread=${quote.spread ?? 'n/a'} · x${loosen})`,
           });
@@ -1924,7 +1924,7 @@ async function robotCycleBody(s: Internal) {
       s.mode = 'MANAGE';
       if (quote.mid == null) return;
 
-      // Entry SL fallback: attach 0.15% safety SL if Capital has none on open position.
+      // Entry SL fallback: attach 0.40% safety SL from ENTRY (not live mid) if Capital has none.
       const brokerStop = brokerOpen?.stop_level ?? null;
       const missingBrokerSl =
         Boolean(s.deal_id) &&
@@ -1932,11 +1932,13 @@ async function robotCycleBody(s: Internal) {
         (brokerStop == null || !Number.isFinite(brokerStop));
       if (missingBrokerSl && s.deal_id && s.open_side && quote.mid != null) {
         const loosenStepsAttach = [1, 1.08, 1.16, 1.28];
+        const attachRef =
+          s.entry_price != null && Number.isFinite(s.entry_price) ? s.entry_price : quote.mid;
         let attached = false;
         for (const loosen of loosenStepsAttach) {
           const level = safetyStopLevel(
             s.open_side,
-            quote.mid,
+            attachRef,
             quote.bid ?? null,
             quote.ask ?? null,
             quote.spread ?? null,
@@ -1955,7 +1957,7 @@ async function robotCycleBody(s: Internal) {
               bid: quote.bid,
               ask: quote.ask,
               mid: quote.mid,
-              detail: `SAFETY SL attached ${level} · 0.15% (0.00150) · x${loosen}`,
+              detail: `SAFETY SL attached ${level} · ${(SAFETY_SL_REL * 100).toFixed(2)}% from entry=${attachRef} · x${loosen}`,
             });
             break;
           }
@@ -2535,7 +2537,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'MAIN PROTOTYPE · closed 10s BUY/SELL · Entry SL 0.15% (0.00150) · Exit Best Outcome close only · no flip every 10s',
+      `MAIN PROTOTYPE · closed 10s BUY/SELL · Entry SL ${(SAFETY_SL_REL * 100).toFixed(2)}% (${SAFETY_SL_REL.toFixed(4)}) · Exit Best Outcome close only · no flip every 10s`,
   });
 
   sessions.set(id, session);

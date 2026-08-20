@@ -340,7 +340,8 @@ describe('Best Outcome quality — feed/bars direction fallback', () => {
 
   it('hasMeaningfulProfit rejects micro plus on Gold-scale entry', () => {
     expect(hasMeaningfulProfit(2490, 0.05)).toBe(false);
-    expect(hasMeaningfulProfit(2490, 0.5)).toBe(true);
+    expect(hasMeaningfulProfit(2490, 0.5)).toBe(false);
+    expect(hasMeaningfulProfit(2490, 2.0)).toBe(true);
     expect(hasMeaningfulProfit(2490, 3)).toBe(true);
   });
 });

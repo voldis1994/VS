@@ -325,10 +325,11 @@ export function inferMarketDirectionFromFeed(input: {
   return null;
 }
 
-/** Min favorable UPL (price points) before weak-path OPTIMIZATION may CLOSE. */
+/** Min favorable UPL (price points) before OPTIMIZATION may CLOSE (blocks micro plus). */
 export function minMeaningfulUpl(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
-  return abs >= 1000 ? 0.5 : abs * 0.00025;
+  // Gold-scale: ≥2.0 pts (~noise + spread); smaller instruments: 0.04% of price.
+  return abs >= 1000 ? 2.0 : abs * 0.0004;
 }
 
 export function hasMeaningfulProfit(entry: number, upl: number): boolean {

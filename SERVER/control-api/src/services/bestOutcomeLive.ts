@@ -256,10 +256,10 @@ export function decideLiveBestOutcomeExit(input: {
     );
   }
 
-  // Strong OPPOSITE → CLOSE in profit when BO supports (or candidate already wants exit)
+  // Strong OPPOSITE → CLOSE only with meaningful UPL + BO support (never micro +0.01)
   if (strong && d === 1) {
     const boOk = bo == null || bo >= LIVE_BO_CLOSE_MIN;
-    if (boOk && (candidate.exit || meaningful)) {
+    if (boOk && meaningful) {
       return closeDecision(
         candidate,
         live_quality,
@@ -270,7 +270,7 @@ export function decideLiveBestOutcomeExit(input: {
     return holdDecision(
       candidate,
       live_quality,
-      `LIVE HOLD · opposite weak BO/UPL · ${scoreLabel(live_quality)}`
+      `LIVE HOLD · opposite needs meaningful UPL/BO · ${scoreLabel(live_quality)}`
     );
   }
 

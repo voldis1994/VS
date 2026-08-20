@@ -13,6 +13,7 @@ import {
 } from './capitalSessionManager.js';
 import { DecisionCodes } from './decisionCodes.js';
 import { listManagedOrders } from './orderLifecycle.js';
+import { SAFETY_SL_REL } from './capitalCom.js';
 
 export type HealthLevel = 'OK' | 'WARNING' | 'ERROR' | 'CRITICAL';
 
@@ -193,7 +194,9 @@ export async function buildSystemHealth(opts?: {
     name: 'RISK',
     level: riskReject ? 'WARNING' : 'OK',
     code: riskReject ? String(lastTick?.code) : 'OK',
-    detail: riskReject ? lastTick?.detail || 'Risk rejected' : 'Risk gates nominal (SL 0.15% of price / 0.00150)',
+    detail: riskReject
+      ? lastTick?.detail || 'Risk rejected'
+      : `Risk gates nominal (SL ${(SAFETY_SL_REL * 100).toFixed(2)}% of price / ${SAFETY_SL_REL.toFixed(4)})`,
     broken_at: null,
     error_code: null,
     broker_error: null,
