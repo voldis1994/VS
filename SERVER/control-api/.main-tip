@@ -1,3 +1,3 @@
-tip=2026-08-20T19:15:00Z
-rule=4/4 confirms = READY ENTRY · plan no longer blocks · Node executes when entryPlanReady
-prev=3840476
+tip=2026-08-20T19:50:00Z
+rule=Tick Micro entry · regime=context · SHADOW default · FIGHT≠✓ · no EV lift · BO EXIT untouched
+prev=5d1aa2a

@@ -112,7 +112,19 @@ struct Snap {
   std::string plan_direction;
   std::string plan_setup;
   std::string feed_confirm;
+  std::string entry_state;
+  std::string movement_phase;
+  std::string entry_kind;
+  std::string entry_engine_mode;
   double feed_mid{};
+  double opportunity_score{};
+  double micro_velocity_1s{};
+  double micro_acceleration{};
+  double micro_persistence{};
+  double extension_atr{};
+  int plan_ready{};
+  int micro_exhaustion_up{};
+  int micro_exhaustion_down{};
   std::vector<Bar> bars;      // 10s
   std::vector<Bar> bars_1m;
   std::vector<Bar> bars_5m;
@@ -124,6 +136,17 @@ static double json_num(const std::string& s, const char* key, double fb = 0) {
   auto p = s.find(k);
   if (p == std::string::npos) return fb;
   return std::atof(s.c_str() + p + k.size());
+}
+
+static int json_bool01(const std::string& s, const char* key) {
+  std::string k = std::string("\"") + key + "\":";
+  auto p = s.find(k);
+  if (p == std::string::npos) return 0;
+  p += k.size();
+  while (p < s.size() && (s[p] == ' ' || s[p] == '\t')) ++p;
+  if (p < s.size() && s[p] == 't') return 1;
+  if (p < s.size() && s[p] == '1') return 1;
+  return 0;
 }
 
 static std::string json_str(const std::string& s, const char* key) {
@@ -196,7 +219,19 @@ static std::vector<Snap> parse_snaps(const std::string& json) {
     s.plan_direction = json_str(chunk, "plan_direction");
     s.plan_setup = json_str(chunk, "plan_setup");
     s.feed_confirm = json_str(chunk, "feed_confirm");
+    s.entry_state = json_str(chunk, "entry_state");
+    s.movement_phase = json_str(chunk, "movement_phase");
+    s.entry_kind = json_str(chunk, "entry_kind");
+    s.entry_engine_mode = json_str(chunk, "entry_engine_mode");
     s.feed_mid = json_num(chunk, "feed_mid");
+    s.opportunity_score = json_num(chunk, "opportunity_score");
+    s.micro_velocity_1s = json_num(chunk, "micro_velocity_1s");
+    s.micro_acceleration = json_num(chunk, "micro_acceleration");
+    s.micro_persistence = json_num(chunk, "micro_persistence");
+    s.extension_atr = json_num(chunk, "extension_atr");
+    s.plan_ready = json_bool01(chunk, "plan_ready");
+    s.micro_exhaustion_up = json_bool01(chunk, "micro_exhaustion_up");
+    s.micro_exhaustion_down = json_bool01(chunk, "micro_exhaustion_down");
     s.bars = parse_bar_array(chunk, "bars", 40);
     s.bars_1m = parse_bar_array(chunk, "bars_1m", 200);
     s.bars_5m = parse_bar_array(chunk, "bars_5m", 40);
@@ -463,15 +498,7 @@ static bool decide(const Snap& s, std::string* dir, std::string* setup, std::str
   bool live_sell = want_sell && (dump || micro_down || n10 < -0.00015 || st10 <= -1 || prior_dump);
   if (bias == "UP" && (micro_up || n10 > 0.0002 || up_ctx || climb)) live_buy = true;
   if (bias == "DOWN" && (micro_down || n10 < -0.0002 || down_ctx || dump)) live_sell = true;
-  // Regime chart plan from Node (BREAKOUT_UP → BUY BREAKOUT, etc.) — this IS the entry idea.
-  if (plan_dir == "BUY") {
-    want_buy = true;
-    if (feed_confirm != "FIGHT" || micro_up || climb || n10 > 0) live_buy = true;
-  }
-  if (plan_dir == "SELL") {
-    want_sell = true;
-    if (feed_confirm != "FIGHT" || micro_down || dump || n10 < 0) live_sell = true;
-  }
+  // Plan direction is CONTEXT only — does not alone unlock live_buy/sell.
   if (want_buy && want_sell) {
     if (plan_dir == "BUY") want_sell = false;
     else if (plan_dir == "SELL") want_buy = false;
@@ -514,36 +541,36 @@ static bool decide(const Snap& s, std::string* dir, std::string* setup, std::str
     return micro_down ? "CONTINUATION" : "PULLBACK";
   };
 
-  // --- Regime chart plan FIRST (all confirms / plan_ready → EntryReady, never block) ---
-  bool plan_ready = false;
-  // plan_ready from snapshot when Node published confirm_ok==confirm_n
-  // (parsed into feed_confirm/plan fields; also trust plan_dir alone when not FIGHT)
-  if (plan_dir == "BUY" && (feed_confirm != "FIGHT" || micro_up || n10 > 0)) {
-    want_buy = true;
-    live_buy = true;
-    return finish("BUY", setup_for_buy(), std::max(ev_buy, MIN_EV),
-                  annotate("REGIME PLAN " + (plan_setup.empty() ? std::string("BUY") : plan_setup) +
+  // --- Tick-micro EntryReady (regime/plan = CONTEXT; no plan_dir-alone fire) ---
+  const std::string entry_state = upper(s.entry_state);
+  const std::string move_phase = upper(s.movement_phase);
+  const bool plan_ready = s.plan_ready != 0;
+  const bool micro_ready = entry_state == "ENTRY_READY";
+  const bool fight = feed_confirm == "FIGHT";
+  // Exhaustion: never chase BUY while still "UP" if micro says exhausted (sym SELL).
+  if (plan_dir == "BUY" && (s.micro_exhaustion_up || move_phase == "EXHAUSTION" || move_phase == "MATURE")) {
+    live_buy = false;
+  }
+  if (plan_dir == "SELL" && (s.micro_exhaustion_down || move_phase == "EXHAUSTION" || move_phase == "MATURE")) {
+    live_sell = false;
+  }
+  if (fight) {
+    // FIGHT is a hard veto for plan-driven EntryReady
+  } else if (micro_ready && plan_dir == "BUY" && ev_buy > MIN_EV_MICRO) {
+    // Real EV only — never lift weak EV to MIN_EV
+    return finish("BUY", setup_for_buy(), ev_buy,
+                  annotate("MICRO ENTRY_READY " + (s.entry_kind.empty() ? plan_setup : s.entry_kind) +
+                           " · " + (move_phase.empty() ? "phase?" : move_phase) +
                            " · feeds " + (feed_confirm.empty() ? "n/a" : feed_confirm)));
-  }
-  if (plan_dir == "SELL" && (feed_confirm != "FIGHT" || micro_down || n10 < 0)) {
-    want_sell = true;
-    live_sell = true;
-    return finish("SELL", setup_for_sell(), std::max(ev_sell, MIN_EV),
-                  annotate("REGIME PLAN " + (plan_setup.empty() ? std::string("SELL") : plan_setup) +
+  } else if (micro_ready && plan_dir == "SELL" && ev_sell > MIN_EV_MICRO) {
+    return finish("SELL", setup_for_sell(), ev_sell,
+                  annotate("MICRO ENTRY_READY " + (s.entry_kind.empty() ? plan_setup : s.entry_kind) +
+                           " · " + (move_phase.empty() ? "phase?" : move_phase) +
                            " · feeds " + (feed_confirm.empty() ? "n/a" : feed_confirm)));
-  }
-  // Feeds fight: still allow if micro impulse clearly holds the plan side
-  if (plan_dir == "BUY" && (micro_up || n10 > 0.0003) && feed_confirm == "FIGHT") {
-    return finish("BUY", setup_for_buy(), std::max(ev_buy, MIN_EV),
-                  annotate("REGIME PLAN hold vs feed fight"));
-  }
-  if (plan_dir == "SELL" && (micro_down || n10 < -0.0003) && feed_confirm == "FIGHT") {
-    return finish("SELL", setup_for_sell(), std::max(ev_sell, MIN_EV),
-                  annotate("REGIME PLAN hold vs feed fight"));
   }
   (void)plan_ready;
 
-  // --- ALL regimes fallback ---
+  // --- ALL regimes fallback (still requires live side + real EV; no plan short-circuit) ---
 
   // FAILED BREAKOUT fade
   if (failed_bo) {
@@ -753,6 +780,14 @@ static int self_test() {
   bo.plan_direction = "BUY";
   bo.plan_setup = "BREAKOUT";
   bo.feed_confirm = "CONFIRM";
+  bo.entry_state = "ENTRY_READY";
+  bo.movement_phase = "IGNITION";
+  bo.entry_kind = "IGNITION_ENTRY";
+  bo.plan_ready = 1;
+  bo.opportunity_score = 0.72;
+  bo.micro_velocity_1s = 0.0002;
+  bo.micro_acceleration = 0.00005;
+  bo.micro_persistence = 0.6;
   bo.feed_mid = 4522.4;
   bo.feed_agreement = "DIVERGENT";
   bo.feed_contributing = 10;
@@ -796,6 +831,12 @@ static int self_test() {
   td.plan_direction = "SELL";
   td.plan_setup = "CONTINUATION";
   td.feed_confirm = "CONFIRM";
+  td.entry_state = "ENTRY_READY";
+  td.movement_phase = "EARLY_EXPANSION";
+  td.entry_kind = "CONTINUATION_RELOAD";
+  td.plan_ready = 1;
+  td.micro_velocity_1s = -0.0002;
+  td.micro_persistence = -0.55;
   td.feed_agreement = "OK";
   td.feed_contributing = 4;
   td.feed_sender_count = 5;

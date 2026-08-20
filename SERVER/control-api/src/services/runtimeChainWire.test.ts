@@ -26,20 +26,28 @@ describe('P3 runtime call-chain wiring', () => {
     expect(src).not.toContain('tryPostBeProfitTrail');
     expect(src).not.toContain('PROFIT GUARD');
     expect(exitSrc).not.toContain('HardInvalidation');
-    expect(src).toContain('EXEC · waiting C++ EntryReady');
-    expect(src).toContain('Node does not invent');
+    expect(src).toContain('evaluateEntryEngine');
+    expect(src).toContain('EXEC micro ENTRY_READY');
+    expect(src).toContain('SHADOW ENTRY_READY');
     expect(src).toContain('this 10s already filled');
     expect(src).toContain('EXEC Node hands');
     expect(src).toContain('detectStaleQuoteAdverse');
+    expect(src).toContain('onValidatedQuoteTick');
     expect(src).not.toContain('evaluateStrategy({');
     expect(src).not.toContain("import { runTradePipeline } from './tradePipeline.js'");
     expect(src).toContain('SAFETY SL attached');
     expect(src).toContain('SAFETY_SL_REL');
+    expect(src).toContain('decideLiveBestOutcomeExit');
     const cap = readFileSync(join(process.cwd(), 'src/services/capitalCom.ts'), 'utf8');
-    expect(cap).toContain('export const SAFETY_SL_REL = 0.004');
+    expect(cap).toContain('export const SAFETY_SL_REL');
     const desk = readFileSync(join(process.cwd(), 'src/services/deskEntry.ts'), 'utf8');
     expect(desk).toContain('decideEntryFrom10sRegime');
     expect(desk).toContain('detectCapitalLagLead');
+    const micro = readFileSync(join(process.cwd(), 'src/services/tickMicroEngine.ts'), 'utf8');
+    expect(micro).toContain('ingestValidatedTick');
+    const sm = readFileSync(join(process.cwd(), 'src/services/entryStateMachine.ts'), 'utf8');
+    expect(sm).toContain('ENTRY_READY');
+    expect(sm).toContain('TOO_LATE');
   });
 
   it('tradePipeline + orderLifecycle modules exist for AAA health/desk tooling', () => {

@@ -28,7 +28,7 @@ describe('regimeEntryPlan — ALL regimes have targets + confirms', () => {
     expect(p.confirms.length).toBeGreaterThan(2);
   });
 
-  it('BREAKOUT_UP at highs with all confirms → ready (must ENTRY, not PLAN block)', () => {
+  it('BREAKOUT_UP at highs with all confirms → plan ready (context ARMED, not auto EntryReady)', () => {
     const bars = climbBars(16, 4510);
     const last = bars[bars.length - 1]!;
     const p = regimeEntryPlan({
@@ -42,7 +42,21 @@ describe('regimeEntryPlan — ALL regimes have targets + confirms', () => {
     expect(p.ready).toBe(true);
     expect(entryPlanReady(p)).toBe(true);
     expect(p.confirm_ok).toBe(p.confirm_n);
-    expect(p.plan).toMatch(/READY/);
+    expect(p.confirms.find((c) => c.id === 'FEEDS')?.ok).toBe(true);
+  });
+
+  it('FIGHT → FEEDS confirm ok=false (never green checkmark)', () => {
+    const bars = climbBars(16, 4510);
+    const p = regimeEntryPlan({
+      regime: 'BREAKOUT_UP',
+      bias: 'UP',
+      liveMid: 4522,
+      feedMid: 4521.5,
+      bars10s: bars,
+    });
+    expect(p.feed_confirm).toBe('FIGHT');
+    expect(p.confirms.find((c) => c.id === 'FEEDS')?.ok).toBe(false);
+    expect(entryPlanReady(p)).toBe(false);
   });
 
   it('TREND_DOWN → SELL with rally entry toward HIGH', () => {
