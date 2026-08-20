@@ -21,7 +21,7 @@ if exist "%~dp0ADMIN\windows\stop-admin.ps1" (
 timeout /t 2 /nobreak >nul
 
 echo.
-echo [2/6] GIT pull...
+echo [2/6] GIT sync origin/main (hard reset)...
 where git >nul 2>&1
 if errorlevel 1 (
   echo WARN: git not on PATH - skip pull
@@ -31,10 +31,20 @@ if errorlevel 1 (
   echo skip pull VS_REBUILD_SKIP_PULL=1
 ) else (
   git fetch origin main
+  if errorlevel 1 (
+    echo FAIL: git fetch origin main failed
+    pause
+    exit /b 1
+  )
   git checkout main
-  git pull origin main
-  if errorlevel 1 echo WARN: git pull failed - continuing
+  git reset --hard origin/main
+  if errorlevel 1 (
+    echo FAIL: git reset --hard origin/main failed
+    pause
+    exit /b 1
+  )
   git log -1 --oneline
+  echo OK: tree matched origin/main ^(hard reset^)
 )
 
 where node >nul 2>&1
