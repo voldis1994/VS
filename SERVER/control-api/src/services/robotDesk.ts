@@ -31,6 +31,12 @@ import {
   type BestOutcomeStateName,
   type BestOutcomeTrack,
 } from './exitManage.js';
+import type { BestOutcomeQualityResult } from './bestOutcomeQuality.js';
+import {
+  buildExitSnapshotFromClose,
+  evaluatePendingWithNextSignal,
+  saveBestOutcomeExitSnapshot,
+} from './bestOutcomePendingStore.js';
 import {
   computeCrossMarketPressure,
   noteMarketMid,
@@ -184,6 +190,8 @@ export type RobotSession = {
   /** C++ / pipeline EntryReady waiting for robotDesk hands */
   pending_calc?: CalcEntry | null;
   cross_market?: CrossMarketPressure | null;
+  /** Final BO quality after next valid Strategy signal confirms prior EXIT. */
+  last_best_outcome_evaluation?: BestOutcomeQualityResult | null;
 };
 
 type Internal = RobotSession & {
@@ -917,6 +925,29 @@ async function finalizeLocalClose(
     );
   } catch {
     /* best effort */
+  }
+
+  // Snapshot for deferred Best Outcome quality (MFE/UPL + next signal + confirm).
+  if (s.open_side && s.entry_price != null) {
+    const exitMid = quote.mid ?? s.entry_price;
+    const uplAtExit =
+      s.unrealized ?? favorableMove(s.open_side, s.entry_price, exitMid);
+    saveBestOutcomeExitSnapshot(
+      buildExitSnapshotFromClose({
+        robot_id: s.id,
+        account_id: s.account_id,
+        epic: s.epic,
+        open_side: s.open_side,
+        entry_price: s.entry_price,
+        exit_price: exitMid,
+        mfe: s.mfe,
+        upl_at_exit: uplAtExit,
+        best_outcome_reason: s.best_outcome_reason,
+        best_outcome_state: s.best_outcome_state,
+        entry_setup: s.entry_setup,
+        entry_regime: s.entry_regime,
+      })
+    );
   }
 
   // After a completed trade cycle, wait 10 seconds before allowing the next entry.
@@ -2230,6 +2261,29 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
+    // Valid Strategy signal — finalize prior Best Outcome EXIT quality (does not alter Capital close).
+    const boEval = evaluatePendingWithNextSignal({
+      account_id: s.account_id,
+      epic: s.epic,
+      next_side: direction,
+      closedBars: s.closedBars,
+      feed: s.multiFeed,
+      crossMarket: s.cross_market,
+      regime: regimeLabel,
+      bias: s.trend_bias || 'FLAT',
+    });
+    if (boEval) {
+      s.last_best_outcome_evaluation = boEval;
+      pushTick(s, {
+        phase: 'INFO',
+        bid: execQuote.bid,
+        ask: execQuote.ask,
+        mid: execQuote.mid,
+        code: DecisionCodes.SIGNAL_CREATED,
+        detail: `BO quality · R=${boEval.retention != null ? (boEval.retention * 100).toFixed(0) + '%' : 'n/a'} · D=${boEval.next_signal_direction} · C=${boEval.next_signal_confirm != null ? boEval.next_signal_confirm.toFixed(2) : 'n/a'} · score=${boEval.best_outcome_score != null ? boEval.best_outcome_score.toFixed(3) : 'n/a'}`,
+      });
+    }
+
     await enterTrade(opened.session, s, direction, execQuote, reason, setupType);
   } catch (err) {
     s.reads_fail += 1;
@@ -2387,6 +2441,7 @@ export async function startRobotSession(input: {
     best_outcome_track: null,
     pending_calc: calcQueue.get(calcKey(acc.id, epic)) || null,
     cross_market: null,
+    last_best_outcome_evaluation: null,
   };
 
   if (session.entry_enabled) {
