@@ -53,19 +53,17 @@ Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
   }
 
 Write-Host ""
-Write-Host "[2/6] GIT - pull origin main..."
+Write-Host "[2/6] GIT - hard reset to origin/main..."
 $git = Get-Command git -ErrorAction SilentlyContinue
 $gitDir = Join-Path $RepoRoot ".git"
 if ($git -and $env:VS_REBUILD_SKIP_PULL -ne "1" -and (Test-Path $gitDir)) {
   & git fetch origin main 2>&1 | Out-Host
+  if ($LASTEXITCODE -ne 0) { Write-Fail "git fetch origin main failed" }
   & git checkout main 2>&1 | Out-Host
-  & git pull origin main 2>&1 | Out-Host
-  if ($LASTEXITCODE -ne 0) {
-    Write-Host "WARN: git pull failed - continuing with local files" -ForegroundColor Yellow
-  } else {
-    $head = (& git log -1 --oneline 2>$null | Out-String).Trim()
-    Write-Host ("  at " + $head) -ForegroundColor Green
-  }
+  & git reset --hard origin/main 2>&1 | Out-Host
+  if ($LASTEXITCODE -ne 0) { Write-Fail "git reset --hard origin/main failed" }
+  $head = (& git log -1 --oneline 2>$null | Out-String).Trim()
+  Write-Host ("  at " + $head) -ForegroundColor Green
 } else {
   if (-not (Test-Path $gitDir)) {
     Write-Host "  WARN: not a git repo (.git missing) - skip pull" -ForegroundColor Yellow
