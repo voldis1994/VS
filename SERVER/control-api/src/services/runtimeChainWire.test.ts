@@ -15,6 +15,10 @@ describe('P3 runtime call-chain wiring', () => {
     expect(src).toContain('resolveLiveManageSignal');
     expect(src).toContain('canOptimizationClose');
     expect(src).toContain('initBestOutcomeTrack');
+    expect(src).toContain('decideExternalFlatClear');
+    expect(src).toContain('describeExternalFlatClose');
+    expect(src).toContain('finalizeLocalClose');
+    expect(src).not.toContain('Broker flat on this epic — trade closed');
     const exitSrc = readFileSync(join(process.cwd(), 'src/services/exitManage.ts'), 'utf8');
     expect(exitSrc).toContain('evaluateBestOutcome');
     expect(exitSrc).toContain('Best Outcome');

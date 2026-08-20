@@ -48,7 +48,12 @@ import {
   relatedSearchNeedles,
   type CrossMarketPressure,
 } from './crossMarketPressure.js';
-import { canIssueClose, decideCloseFinalize } from './exitLifecycle.js';
+import {
+  canIssueClose,
+  decideCloseFinalize,
+  decideExternalFlatClear,
+  describeExternalFlatClose,
+} from './exitLifecycle.js';
 import {
   effectiveBias,
   trendBiasFromMinuteCandles,
@@ -1854,33 +1859,21 @@ async function robotCycleBody(s: Internal) {
           /* ignore */
         }
       } else if (s.open_side) {
-        const closeDetail = s.close_pending
-          ? 'Broker flat — close confirmed · POSITION_CLOSED'
-          : 'Broker flat on this epic — trade closed · POSITION_CLOSED';
-        s.last_close_at = new Date().toISOString();
-        s.last_close_detail = closeDetail;
-        pushTick(s, {
-          phase: 'INFO',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          code: DecisionCodes.POSITION_CLOSED,
-          detail: closeDetail,
+        // Broker flattened (Safety SL / Limit / manual / our close already pending).
+        // Must use the same finalize path as exitTrade — never silent clearTradeState.
+        const flatAction = decideExternalFlatClear({
+          localOpen: true,
+          brokerListOk: true,
+          brokerHasPosition: false,
         });
-        try {
-          getDurableOrderStore().markPositionClosed(
-            s.account_id,
-            s.epic,
-            s.close_pending ? 'close pending → broker flat' : 'external flat'
-          );
-        } catch {
-          /* ignore */
+        if (flatAction === 'CLEAR_LOCAL') {
+          const reason = describeExternalFlatClose({
+            close_pending: s.close_pending,
+            safety_sl: s.safety_sl,
+          });
+          await finalizeLocalClose(s, quote, reason, 'broker list empty on epic');
+          return;
         }
-        s.closed_at_ms = Date.now();
-        // Post-trade discipline: enforce 10s cooldown before a new entry.
-        // This path happens on external “broker flat” sync.
-        s.cooldown_until_ms = Date.now() + 10_000;
-        clearTradeState(s);
       }
     } else {
       pushTick(s, {

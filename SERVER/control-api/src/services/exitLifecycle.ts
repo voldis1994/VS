@@ -66,7 +66,11 @@ export function decideCloseFinalize(input: {
   };
 }
 
-/** External/broker-flat sync while local thought open. */
+/**
+ * External/broker-flat sync while local thought open.
+ * CLEAR_LOCAL when broker confirms no position; ADOPT when broker has one and local flat;
+ * HOLD when list unavailable or both already agree.
+ */
 export function decideExternalFlatClear(input: {
   localOpen: boolean;
   brokerListOk: boolean;
@@ -76,4 +80,21 @@ export function decideExternalFlatClear(input: {
   if (input.brokerHasPosition) return input.localOpen ? 'HOLD' : 'ADOPT';
   if (input.localOpen) return 'CLEAR_LOCAL';
   return 'HOLD';
+}
+
+/**
+ * Human-readable reason when broker is flat but robot did not just finish exitTrade.
+ * Safety SL / Limit fills arrive as “flat” with no separate Capital close callback.
+ */
+export function describeExternalFlatClose(input: {
+  close_pending?: boolean;
+  safety_sl?: number | null;
+}): string {
+  if (input.close_pending) {
+    return 'broker confirmed flat after robot close';
+  }
+  if (input.safety_sl != null && Number.isFinite(input.safety_sl)) {
+    return `Safety SL / broker stop flat · SL was ${input.safety_sl}`;
+  }
+  return 'external broker flat (SL/limit/manual — robot did not issue this close)';
 }

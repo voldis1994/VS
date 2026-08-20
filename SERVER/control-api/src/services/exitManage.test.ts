@@ -13,6 +13,7 @@ import {
   canIssueClose,
   decideCloseFinalize,
   decideExternalFlatClear,
+  describeExternalFlatClose,
 } from './exitLifecycle.js';
 import {
   createOrderRecord,
@@ -329,6 +330,18 @@ describe('Exit matrix A–P', () => {
         brokerHasPosition: false,
       })
     ).toBe('HOLD');
+  });
+
+  it('N2) external flat reason distinguishes Safety SL vs robot close vs unknown', () => {
+    expect(
+      describeExternalFlatClose({ close_pending: true, safety_sl: 2490 })
+    ).toMatch(/after robot close/i);
+    expect(
+      describeExternalFlatClose({ close_pending: false, safety_sl: 2488.5 })
+    ).toMatch(/Safety SL \/ broker stop/i);
+    expect(
+      describeExternalFlatClose({ close_pending: false, safety_sl: null })
+    ).toMatch(/robot did not issue this close/i);
   });
 
   it('O) POSITION_CLOSED only after broker confirmation', () => {
