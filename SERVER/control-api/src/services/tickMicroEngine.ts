@@ -182,30 +182,93 @@ export function recomputeTickMicro(book: TickMicroBook, nowMs = Date.now()): Tic
     m.spread_delta_2s = m.spread - olderSpread;
   }
 
-  // Burst: tick rate in last 1s much higher than 5s average
-  m.tick_burst = m.tick_rate_1s >= 4 && m.tick_rate_1s >= m.tick_rate_5s * 2.5 + 1;
+  // Local baselines for normalization (not hard-coded 0.0000x alone).
+  const vol = Math.max(m.micro_volatility_5s ?? 0, 1e-7);
+  const rate5 = Math.max(m.tick_rate_5s, 0.25);
 
-  // Stall: almost no net move + low tick rate while we have history
-  const absVel = Math.abs(m.velocity_2s ?? 0);
-  m.stalling = ticks.length >= 4 && absVel < 0.00002 && m.tick_rate_1s <= 1;
+  // Burst vs own tick-rate baseline
+  m.tick_burst = m.tick_rate_1s >= Math.max(3, rate5 * 2.2 + 1);
 
-  // Exhaustion: still moving one way but accel flips + reversals rise
+  // Stall: move small vs vol + quiet vs rate baseline
+  const absVel2 = Math.abs(m.velocity_2s ?? 0);
+  m.stalling =
+    ticks.length >= 4 && absVel2 < vol * 0.6 && m.tick_rate_1s <= Math.max(1, rate5 * 0.5);
+
+  // Exhaustion: still directional but accel flips vs vol + reversals rise
   const persist = m.direction_persistence ?? 0;
   const accel = m.acceleration ?? 0;
   const rev = m.reversal_rate_5s ?? 0;
+  const vel5 = m.velocity_5s ?? 0;
   m.exhaustion_up =
-    persist > 0.25 &&
-    (m.velocity_5s ?? 0) > 0 &&
-    accel < -0.00001 &&
-    rev > 0.35;
+    persist > 0.25 && vel5 > vol * 0.5 && accel < -(vol * 0.35) && rev > 0.3;
   m.exhaustion_down =
-    persist < -0.25 &&
-    (m.velocity_5s ?? 0) < 0 &&
-    accel > 0.00001 &&
-    rev > 0.35;
+    persist < -0.25 && vel5 < -(vol * 0.5) && accel > vol * 0.35 && rev > 0.3;
 
   book.metrics = m;
   return m;
+}
+
+/** Velocity/accel significant vs local micro volatility. */
+export function significantVelocity(
+  vel: number | null | undefined,
+  micro: TickMicroMetrics,
+  mult = 1.0
+): boolean {
+  if (vel == null || !Number.isFinite(vel)) return false;
+  const vol = Math.max(micro.micro_volatility_5s ?? 0, 1e-7);
+  return Math.abs(vel) >= vol * mult;
+}
+
+export function signedSignificant(
+  value: number | null | undefined,
+  side: 'BUY' | 'SELL',
+  micro: TickMicroMetrics,
+  mult = 1.0
+): boolean {
+  if (value == null || !Number.isFinite(value)) return false;
+  const signed = side === 'BUY' ? value : -value;
+  const vol = Math.max(micro.micro_volatility_5s ?? 0, 1e-7);
+  return signed >= vol * mult;
+}
+
+/**
+ * Estimate impulse origin mid from the tick log — earliest mid in the recent
+ * directional run, NOT the price when phase was labeled IGNITION.
+ */
+export function estimateMoveStartMid(
+  book: TickMicroBook,
+  side: 'BUY' | 'SELL',
+  nowMs = Date.now()
+): number | null {
+  const ticks = windowTicks(book.ticks, nowMs, 8_000);
+  if (ticks.length < 3) return book.metrics.last_mid;
+  const vol = Math.max(book.metrics.micro_volatility_5s ?? 0, 1e-7);
+  const withSide = side === 'BUY' ? 1 : -1;
+
+  // Walk forward; find first tick where cumulative move toward side exceeds vol.
+  const anchor = ticks[0]!.mid;
+  let start = ticks[0]!.mid;
+  for (let i = 1; i < ticks.length; i++) {
+    const m = ticks[i]!.mid;
+    const cum = (m - anchor) * withSide;
+    if (cum >= vol * 0.8) {
+      // Origin = mid just before the run accelerated
+      start = ticks[Math.max(0, i - 1)]!.mid;
+      break;
+    }
+    start = m;
+  }
+
+  // Prefer earliest local extreme against the side within the window (dip before BUY climb)
+  let extreme = ticks[0]!.mid;
+  for (const t of ticks) {
+    if (side === 'BUY' && t.mid < extreme) extreme = t.mid;
+    if (side === 'SELL' && t.mid > extreme) extreme = t.mid;
+  }
+  const last = ticks[ticks.length - 1]!.mid;
+  const fromExtreme = (last - extreme) * withSide;
+  if (fromExtreme >= vol * 1.2) return extreme;
+  return start;
 }
 
 /**

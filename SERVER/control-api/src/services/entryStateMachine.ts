@@ -5,7 +5,13 @@
  */
 
 import type { EntryPlan, EntryPlanTarget } from './regimeEntryPlan.js';
-import type { TickMicroMetrics } from './tickMicroEngine.js';
+import {
+  estimateMoveStartMid,
+  getTickMicroBook,
+  significantVelocity,
+  signedSignificant,
+  type TickMicroMetrics,
+} from './tickMicroEngine.js';
 
 export type EntryEngineMode = 'OFF' | 'SHADOW' | 'PAPER' | 'LIVE';
 
@@ -192,33 +198,34 @@ export function classifyMovementPhase(input: {
   if (micro.exhaustion_down && side === 'SELL') return 'EXHAUSTION';
 
   const persist = micro.direction_persistence ?? 0;
-  const vel1 = micro.velocity_1s ?? 0;
-  const vel5 = micro.velocity_5s ?? 0;
-  const accel = micro.acceleration ?? 0;
-  const ext = location.extension_atr ?? 0;
   const withSide = side === 'BUY' ? 1 : -1;
   const signedPersist = persist * withSide;
-  const signedVel = vel1 * withSide;
-  const signedAccel = accel * withSide;
+  const signedVel1 = (micro.velocity_1s ?? 0) * withSide;
+  const signedVel5 = (micro.velocity_5s ?? 0) * withSide;
+  const signedAccel = (micro.acceleration ?? 0) * withSide;
+  const ext = location.extension_atr ?? 0;
+  const vol = Math.max(micro.micro_volatility_5s ?? 0, 1e-7);
 
-  if (ext > 3.5 && signedVel > 0) return 'MATURE';
-  if (ext > 2.2 && signedAccel < 0) return 'EXHAUSTION';
+  if (ext > 3.5 && signedVel1 > 0) return 'MATURE';
+  if (ext > 2.2 && signedAccel < -(vol * 0.3)) return 'EXHAUSTION';
 
-  // Pullback: against side after we had expansion
   if (
     (prev === 'EARLY_EXPANSION' || prev === 'MATURE' || prev === 'IGNITION') &&
-    signedVel < -0.00002 &&
+    signedVel1 < -(vol * 0.5) &&
     signedPersist < 0.1
   ) {
     return 'PULLBACK';
   }
-  if (prev === 'PULLBACK' && signedVel > 0.00002 && signedPersist > 0.2) return 'RELOAD';
+  if (prev === 'PULLBACK' && signedVel1 > vol * 0.5 && signedPersist > 0.2) return 'RELOAD';
 
-  if (micro.tick_burst && signedAccel > 0 && signedVel > 0.00003) return 'IGNITION';
-  if (signedVel > 0.00004 && signedPersist > 0.35 && ext < 2.0) return 'EARLY_EXPANSION';
-  if (signedPersist > 0.15 && Math.abs(vel5) > 0.00002) return 'PRESSURE';
+  if (micro.tick_burst && signedAccel > 0 && signedSignificant(micro.velocity_1s, side, micro, 0.8)) {
+    return 'IGNITION';
+  }
+  if (signedVel1 > vol * 0.9 && signedPersist > 0.35 && ext < 2.0) return 'EARLY_EXPANSION';
+  if (signedPersist > 0.15 && significantVelocity(micro.velocity_5s, micro, 0.5)) return 'PRESSURE';
   if (ext < 0 && Math.abs(ext) > 1.5) return 'FAILED_MOVE';
   if (micro.stalling && Math.abs(persist) < 0.15) return 'BASE';
+  void signedVel5;
   return prev === 'BASE' || prev === 'FAILED_MOVE' ? 'BASE' : prev;
 }
 
@@ -267,13 +274,20 @@ export function evaluateLate(input: {
 
 function microSupportsSide(side: 'BUY' | 'SELL', micro: TickMicroMetrics): boolean {
   const persist = micro.direction_persistence ?? 0;
-  const vel = micro.velocity_1s ?? 0;
   if (side === 'BUY') {
     if (micro.exhaustion_up) return false;
-    return vel > 0.000015 || persist > 0.2 || micro.tick_burst;
+    return (
+      signedSignificant(micro.velocity_1s, 'BUY', micro, 0.6) ||
+      persist > 0.2 ||
+      micro.tick_burst
+    );
   }
   if (micro.exhaustion_down) return false;
-  return vel < -0.000015 || persist < -0.2 || micro.tick_burst;
+  return (
+    signedSignificant(micro.velocity_1s, 'SELL', micro, 0.6) ||
+    persist < -0.2 ||
+    micro.tick_burst
+  );
 }
 
 function triggerForKind(
@@ -290,7 +304,7 @@ function triggerForKind(
     case 'IGNITION_ENTRY':
       return (
         (phase === 'IGNITION' || phase === 'EARLY_EXPANSION' || phase === 'PRESSURE') &&
-        (micro.tick_burst || (micro.acceleration ?? 0) * (side === 'BUY' ? 1 : -1) > 0)
+        (micro.tick_burst || signedSignificant(micro.acceleration, side, micro, 0.4))
       );
     case 'FIRST_PULLBACK':
       return (
@@ -391,19 +405,40 @@ export function advanceEntryMachine(input: AdvanceInput): EntryMachineSnapshot {
   m.setup = plan.setup;
   if (m.plan_anchor_mid == null && input.mid != null) m.plan_anchor_mid = input.mid;
 
+  // Impulse origin: from tick log / setup level BEFORE phase labels IGNITION at current mid.
+  // Prefer break/entry target, else estimate from micro tick path (earliest run start).
+  if (m.move_start_mid == null) {
+    const setupOrigin =
+      plan.targets.break_level ?? plan.targets.entry ?? plan.targets.confirm_level ?? null;
+    const rising =
+      signedSignificant(input.micro.velocity_1s, side, input.micro, 0.7) ||
+      input.micro.tick_burst ||
+      (input.micro.direction_persistence ?? 0) * (side === 'BUY' ? 1 : -1) > 0.25;
+    if (rising) {
+      const fromTicks = estimateMoveStartMid(getTickMicroBook(input.instrument), side, now);
+      m.move_start_mid =
+        setupOrigin != null && Number.isFinite(setupOrigin) ? setupOrigin : fromTicks;
+    }
+  }
+
   m.location = computeLocation(side, input.mid, plan.targets, input.micro, m.move_start_mid);
+  const prevPhase = m.phase;
   m.phase = classifyMovementPhase({
     micro: input.micro,
     location: m.location,
     side,
-    prev: m.phase,
+    prev: prevPhase,
   });
+
+  // If we just entered PRESSURE/IGNITION without origin, backfill from ticks — never current mid.
   if (
-    (m.phase === 'IGNITION' || m.phase === 'EARLY_EXPANSION') &&
     m.move_start_mid == null &&
-    input.mid != null
+    (m.phase === 'PRESSURE' || m.phase === 'IGNITION' || m.phase === 'EARLY_EXPANSION')
   ) {
-    m.move_start_mid = input.mid;
+    m.move_start_mid =
+      plan.targets.break_level ??
+      plan.targets.entry ??
+      estimateMoveStartMid(getTickMicroBook(input.instrument), side, now);
     m.location = computeLocation(side, input.mid, plan.targets, input.micro, m.move_start_mid);
   }
 

@@ -58,12 +58,15 @@ import {
 import { entryPlanReady, regimeEntryPlan, type EntryPlan } from './regimeEntryPlan.js';
 import {
   evaluateEntryEngine,
-  onValidatedQuoteTick,
   consumeEntryReady,
   getEntryEngineMode,
 } from './entryEngine.js';
 import { getEntryMachine } from './entryStateMachine.js';
-import { ingestValidatedTickToDeskOhlc } from './ohlcCanonicalAdapter.js';
+import { attachValidatedTickFanout, getEpicTickBook } from './validatedTickFanout.js';
+import {
+  startCapitalQuotePump,
+  stopCapitalQuotePump,
+} from './capitalQuotePump.js';
 import {
   canIssueClose,
   decideCloseFinalize,
@@ -95,7 +98,6 @@ import {
   aggregateSecondsToTen,
   emptyTenSecState,
   publicOhlc10s,
-  updateTenSecondOhlc,
   type TenSecBar,
   type TenSecState,
 } from './tenSecondOhlc.js';
@@ -1064,6 +1066,7 @@ export async function stopRobotSession(id: string): Promise<RobotSession | null>
     clearInterval(s.timer);
     s.timer = null;
   }
+  stopCapitalQuotePump(`${s.account_id}:${s.epic}`);
   if (s.client_id) {
     getClientTradingRegistry().stop(s.client_id, s.account_id);
   }
@@ -2042,7 +2045,8 @@ async function robotCycleBody(s: Internal) {
       s.epic = quote.epic;
     }
 
-    // PRIMARY Capital quote → FeedManager (money-path authority)
+    // PRIMARY Capital quote → FeedManager (money-path authority).
+    // TickMicro + 10s OHLC fan-out happens inside FeedManager.onAccepted — not here.
     s.feedManager.ingest({
       source: 'capital',
       epic: s.epic,
@@ -2096,48 +2100,40 @@ async function robotCycleBody(s: Internal) {
       s.feed_legs = s.multiFeed?.legs ?? s.feed_legs ?? [];
     }
 
-    // OHLC once per cycle via canonical adapter + tick micro (event on each validated quote).
-    // Desk tenSecondOhlc is the adapter; MI ohlc10s remains the long-term canonical builder.
-    const pushOhlcTick = (
-      mid: number | null | undefined,
-      bid?: number | null,
-      ask?: number | null
-    ) => {
-      if (mid == null || !Number.isFinite(mid)) return;
-      const now = Date.now();
-      onValidatedQuoteTick({
-        instrument: s.epic,
-        mid,
-        bid: bid ?? quote.bid,
-        ask: ask ?? quote.ask,
-        quality: 'OK',
-        provider: 'capital',
-        tsMs: now,
-      });
-      const adapted = ingestValidatedTickToDeskOhlc(s.ohlcState, {
-        ts_ms: now,
-        mid,
-        bid: bid ?? quote.bid ?? null,
-        ask: ask ?? quote.ask ?? null,
-        spread:
-          quote.bid != null && quote.ask != null
-            ? Math.max(quote.ask - quote.bid, 0)
-            : null,
-        quality: 'OK',
-        provider: 'capital',
-      });
-      s.ohlcState = adapted.state;
+    // Sync OHLC from event-driven fan-out book (same ticks as TickMicro).
+    // robotDesk must NOT simulate per-tick stream on its ~2s cadence.
+    const tickBook = getEpicTickBook(s.epic);
+    if (tickBook) {
+      const prevClosed = s.ohlcState.last_closed;
+      s.ohlcState = tickBook.ohlcState;
       s.ohlc_10s = publicOhlc10s(s.ohlcState);
-      if (adapted.closed) {
-        s.last_closed_bar_at_ms = now;
-        applyRobotRegime(s, [adapted.closed]);
+      if (tickBook.closedBars.length) {
+        for (const bar of tickBook.closedBars) {
+          const last = s.closedBars[s.closedBars.length - 1];
+          const same =
+            last &&
+            Math.abs(last.open - bar.open) < 1e-9 &&
+            Math.abs(last.close - bar.close) < 1e-9;
+          if (!same) s.closedBars.push(bar);
+        }
+        if (s.closedBars.length > TREND_LOOKBACK_10S) {
+          s.closedBars.splice(0, s.closedBars.length - TREND_LOOKBACK_10S);
+        }
       }
-    };
+      if (
+        tickBook.last_closed &&
+        (!prevClosed ||
+          Math.abs(prevClosed.close - tickBook.last_closed.close) > 1e-12 ||
+          prevClosed.open_time_ms !== tickBook.last_closed.open_time_ms)
+      ) {
+        s.last_closed_bar_at_ms = Date.now();
+        applyRobotRegime(s, [tickBook.last_closed]);
+      }
+    }
 
-    // OHLC once per cycle. Capital still streams bid/offer when dealing is CLOSED.
+    // Mid + cadence. Capital still returns bid/offer when dealing is CLOSED.
     s.last_mid = quote.mid ?? s.last_mid;
     const marketOpen = marketAllowsTrading(quote.market_status);
-    pushOhlcTick(pickedClosed.mid ?? quote.mid, quote.bid, quote.ask);
     setRobotCadence(s, marketOpen ? ACTIVE_CADENCE_MS : CLOSED_MARKET_CADENCE_MS);
 
     if (marketOpen) {
@@ -2908,6 +2904,7 @@ export async function startRobotSession(input: {
     feedManager: (() => {
       const fm = new FeedManager();
       fm.defineSource('capital', 'PRIMARY');
+      attachValidatedTickFanout(fm);
       return fm;
     })(),
     feed_source: 'NONE',
@@ -2969,6 +2966,26 @@ export async function startRobotSession(input: {
     lot_size: lot,
     robot_status: 'RUNNING',
   });
+
+  // Event-driven Capital quote pump (~250ms) → FeedManager.ingest → TickMicro+OHLC.
+  // Independent of robotDesk ~2s decision cycle.
+  const pumpKey = `${acc.id}:${epic}`;
+  startCapitalQuotePump({
+    key: pumpKey,
+    epic,
+    feedManager: session.feedManager,
+    fetchQuote: async () => {
+      try {
+        const opened = await acquireCapitalSession(session.connection_id);
+        if (!opened.ok) return null;
+        const q = await fetchCapitalMarketQuote(opened.session, session.epic);
+        return q.raw_ok ? q : null;
+      } catch {
+        return null;
+      }
+    },
+  });
+
   void robotCycle(session);
   // 2s when TRADEABLE; auto-slows to 15s when market closed (still reads deal flat)
   setRobotCadence(session, ACTIVE_CADENCE_MS);

@@ -150,6 +150,8 @@ describe('MAIN prototype freeze', () => {
     const desk = readFileSync(join(process.cwd(), 'src/services/robotDesk.ts'), 'utf8');
     expect(desk).toContain('evaluateEntryEngine');
     expect(desk).toContain('EXEC micro ENTRY_READY');
+    expect(desk).toContain('attachValidatedTickFanout');
+    expect(desk).toContain('startCapitalQuotePump');
     expect(desk).toContain('regimeEntryPlan');
     expect(desk).toContain('releaseGhostIntents');
     expect(desk).toContain('await enterTrade(');

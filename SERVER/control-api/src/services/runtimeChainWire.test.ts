@@ -29,10 +29,13 @@ describe('P3 runtime call-chain wiring', () => {
     expect(src).toContain('evaluateEntryEngine');
     expect(src).toContain('EXEC micro ENTRY_READY');
     expect(src).toContain('SHADOW ENTRY_READY');
+    expect(src).toContain('attachValidatedTickFanout');
+    expect(src).toContain('startCapitalQuotePump');
+    expect(src).toContain('getEpicTickBook');
+    expect(src).not.toContain('onValidatedQuoteTick');
     expect(src).toContain('this 10s already filled');
     expect(src).toContain('EXEC Node hands');
     expect(src).toContain('detectStaleQuoteAdverse');
-    expect(src).toContain('onValidatedQuoteTick');
     expect(src).not.toContain('evaluateStrategy({');
     expect(src).not.toContain("import { runTradePipeline } from './tradePipeline.js'");
     expect(src).toContain('SAFETY SL attached');
@@ -45,6 +48,10 @@ describe('P3 runtime call-chain wiring', () => {
     expect(desk).toContain('detectCapitalLagLead');
     const micro = readFileSync(join(process.cwd(), 'src/services/tickMicroEngine.ts'), 'utf8');
     expect(micro).toContain('ingestValidatedTick');
+    expect(micro).toContain('estimateMoveStartMid');
+    const fm = readFileSync(join(process.cwd(), 'src/vs-core/feedManager.ts'), 'utf8');
+    expect(fm).toContain('onAccepted');
+    expect(fm).toContain('acceptedListeners');
     const sm = readFileSync(join(process.cwd(), 'src/services/entryStateMachine.ts'), 'utf8');
     expect(sm).toContain('ENTRY_READY');
     expect(sm).toContain('TOO_LATE');

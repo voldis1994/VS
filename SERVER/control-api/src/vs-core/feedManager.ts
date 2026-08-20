@@ -41,6 +41,7 @@ export class FeedManager {
   private byEpic = new Map<string, Map<string, FeedQuote>>();
   private roles = new Map<string, FeedRole>(); // source → role
   private staleMs: number;
+  private acceptedListeners: Array<(quote: FeedQuote) => void> = [];
 
   constructor(staleMs = DEFAULT_STALE_MS) {
     this.staleMs = staleMs;
@@ -123,7 +124,28 @@ export class FeedManager {
       this.byEpic.set(input.epic, map);
     }
     map.set(input.source, quote);
+
+    // Event-driven: every LIVE accepted quote notifies listeners (TickMicro + OHLC fan-out).
+    if (quote.status === 'LIVE' && quote.mid != null && Number.isFinite(quote.mid)) {
+      for (const cb of this.acceptedListeners) {
+        try {
+          cb(quote);
+        } catch {
+          /* never break ingest */
+        }
+      }
+    }
+
     return quote;
+  }
+
+  /** Subscribe to each LIVE accepted quote after validation. */
+  onAccepted(listener: (quote: FeedQuote) => void): () => void {
+    this.acceptedListeners.push(listener);
+    return () => {
+      const i = this.acceptedListeners.indexOf(listener);
+      if (i >= 0) this.acceptedListeners.splice(i, 1);
+    };
   }
 
   markOffline(source: string, epic: string, detail = 'connection lost'): FeedQuote {
