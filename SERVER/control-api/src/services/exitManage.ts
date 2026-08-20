@@ -232,11 +232,15 @@ export const PEAK_RETENTION_EXIT_THRESHOLD = PROFIT_LOCK_RATIO;
 
 export type BestOutcomeAction = 'HOLD' | 'CLOSE';
 
+/** HARD_SAFETY must close immediately. OPTIMIZATION is an EXIT CANDIDATE for the LIVE formula. */
+export type BestOutcomeExitKind = 'NONE' | 'HARD_SAFETY' | 'OPTIMIZATION';
+
 export type BestOutcome = {
   /** True when the broker position must be closed now. */
   exit: boolean;
   action: BestOutcomeAction;
   reason: string;
+  exit_kind: BestOutcomeExitKind;
 };
 
 /**
@@ -293,6 +297,7 @@ export function evaluateBestOutcome(
     exit: false,
     action: 'HOLD',
     reason: trackIn.reason,
+    exit_kind: 'NONE',
     track: trackIn,
     view: buildView(s, mid, trackIn),
   });
@@ -332,6 +337,7 @@ export function evaluateBestOutcome(
       exit: true,
       action: 'CLOSE',
       reason: track.reason,
+      exit_kind: 'OPTIMIZATION',
       track,
       view: buildView(s, mid, track),
     };
@@ -350,6 +356,7 @@ export function evaluateBestOutcome(
       exit: true,
       action: 'CLOSE',
       reason: track.reason,
+      exit_kind: 'OPTIMIZATION',
       track,
       view: buildView(s, mid, track),
     };
@@ -363,6 +370,7 @@ export function evaluateBestOutcome(
       exit: true,
       action: 'CLOSE',
       reason: track.reason,
+      exit_kind: 'HARD_SAFETY',
       track,
       view: buildView(s, mid, track),
     };
@@ -386,6 +394,7 @@ export function evaluateBestOutcome(
       exit: true,
       action: 'CLOSE',
       reason: track.reason,
+      exit_kind: 'OPTIMIZATION',
       track,
       view: buildView(s, mid, track),
     };
@@ -476,6 +485,7 @@ export function evaluateBestOutcome(
       exit: true,
       action: 'CLOSE',
       reason,
+      exit_kind: 'OPTIMIZATION',
       track: { ...track, state, reason },
       view: buildView(s, mid, { ...track, state, reason }),
     };
@@ -497,6 +507,7 @@ export function evaluateBestOutcome(
     exit: false,
     action: 'HOLD',
     reason: track.reason,
+    exit_kind: 'NONE',
     track,
     view: buildView(s, mid, track),
   };
@@ -540,6 +551,7 @@ export function decideBestOutcomeExit(
     exit: evalResult.exit,
     action: evalResult.action,
     reason: evalResult.reason,
+    exit_kind: evalResult.exit_kind,
   };
 }
 
