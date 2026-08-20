@@ -3,7 +3,8 @@
  *
  * C++ vs-calc = EntryReady queue only (never Capital).
  * Node robotDesk = BUY/SELL on closed 10s + Capital hands.
- * Entry = order + 0.40% safety SL. Exit = zone take-profit / reverse + Best Outcome close.
+ * Entry = real 10s setup + 0.40% safety SL.
+ * Exit = Best Outcome close only (no zone manage, no SL trailing).
  */
 import { SAFETY_SL_REL } from './capitalCom.js';
 
@@ -14,6 +15,6 @@ export const DESK_PROTOTYPE_STRATEGY = 'main-prototype-10s-sl040-exit';
 export function deskPrototypeRules(): string {
   return (
     `MAIN PROTOTYPE · closed 10s BUY/SELL · Entry SL ${(SAFETY_SL_REL * 100).toFixed(2)}% (${SAFETY_SL_REL.toFixed(4)})` +
-    ' · Exit zones TP + Best Outcome · max 1 open · no flip every 10s candle'
+    ' · Exit Best Outcome close only · max 1 open · no flip every 10s candle'
   );
 }

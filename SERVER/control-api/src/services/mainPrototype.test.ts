@@ -41,7 +41,7 @@ describe('MAIN prototype freeze', () => {
     expect(info.entry_brain).toBe('node-robot-desk');
     expect(info.STRATEGY_VERSION).toBe('main-prototype-10s-sl040-exit');
     expect(deskPrototypeRules()).toMatch(/MAIN PROTOTYPE/);
-    expect(deskPrototypeRules()).toMatch(/Exit zones/);
+    expect(deskPrototypeRules()).toMatch(/Exit Best Outcome close only/);
   });
 
   it('screenshot dump: PULLBACK_UPTREND + DOWN needs structure + supply zone', () => {

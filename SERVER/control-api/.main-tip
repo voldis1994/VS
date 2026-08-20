@@ -1,3 +1,3 @@
-tip=2026-08-20T15:30:02Z
-sha_prev=ac3d292
-fix=restore-bo-close+rebuild-hard-reset
+tip=2026-08-20T15:38:00Z
+rule=ENTRY real setup only · EXIT Best Outcome only
+prev=af169c7

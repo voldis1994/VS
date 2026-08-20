@@ -19,7 +19,6 @@ import {
   type PriceRef,
 } from './staleQuoteGuard.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
-import { buildMarketZones, zoneAllowsEntry } from './marketZones.js';
 
 export type DeskEntry = {
   direction: 'BUY' | 'SELL' | null;
@@ -155,22 +154,6 @@ export function resolveDeskEntry(input: {
         direction: null,
         setup: null,
         reason: `TREND_GATE · ${trendGate.block_reason} · ${formatEntryDiagnostic(trendGate)}`,
-      };
-    }
-    if (input.bar) {
-      const zones = buildMarketZones(input.closedBars ?? [input.bar]);
-      const zoneGate = zoneAllowsEntry({
-        direction: entry.direction,
-        setup: entry.setup,
-        bar: input.bar,
-        zones,
-      });
-      if (!zoneGate.ok) {
-        return { direction: null, setup: null, reason: zoneGate.reason };
-      }
-      return {
-        ...entry,
-        reason: `${entry.reason} · ${zoneGate.reason}`,
       };
     }
     return entry;

@@ -116,7 +116,7 @@ describe('resolveDeskEntry — real setups only (no chase)', () => {
     });
     expect(e.direction).toBe('BUY');
     expect(e.setup).toBe('PULLBACK');
-    expect(e.reason).toMatch(/ZONE/i);
+    expect(e.reason).toMatch(/PULLBACK|structured/i);
   });
 
   it('10s TREND_UP lone dump without structure → no entry', () => {
@@ -141,7 +141,7 @@ describe('resolveDeskEntry — real setups only (no chase)', () => {
       refs: cluster(last.close),
     });
     expect(e.direction).toBe('SELL');
-    expect(e.reason).toMatch(/ZONE/i);
+    expect(e.reason).toMatch(/CONTINUATION|structured|dump/i);
   });
 
   it('Yahoo 50pt basis alone never creates BUY or SELL', () => {

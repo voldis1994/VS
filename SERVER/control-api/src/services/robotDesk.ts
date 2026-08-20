@@ -64,10 +64,6 @@ import {
 import { DecisionCodes, type DecisionCode } from './decisionCodes.js';
 import { isRealEntrySetup, resolveDeskEntry } from './deskEntry.js';
 import {
-  buildMarketZones,
-  decideZoneManageExit,
-} from './marketZones.js';
-import {
   evaluateEntryDirectionGate,
   formatEntryDiagnostic,
 } from './entryDirectionGate.js';
@@ -1018,24 +1014,6 @@ async function finalizeLocalClose(
   s.cooldown_until_ms = Date.now() + (safetyHit ? 120_000 : 45_000);
 
   clearTradeState(s);
-}
-
-/** Scale-out disabled: Capital REST cannot partial-close; opposite market orders hedge many accounts. */
-async function partialExitTrade(
-  session: CapitalSession,
-  s: Internal,
-  quote: { bid: number | null; ask: number | null; mid: number | null },
-  reason: string,
-  _closeFraction: number
-) {
-  pushTick(s, {
-    phase: 'MANAGE',
-    bid: quote.bid,
-    ask: quote.ask,
-    mid: quote.mid,
-    detail: `ZONE PARTIAL → FULL · Capital API full-row only · ${reason}`,
-  });
-  await exitTrade(session, s, quote, reason);
 }
 
 async function exitTrade(
@@ -2143,57 +2121,7 @@ async function robotCycleBody(s: Internal) {
       s.best_price_seen = bo.view.best_price_seen;
       s.last_best_outcome_evaluation = bo.live_quality;
 
-      // HARD_SAFETY always closes full.
-      if ((bo.action === 'CLOSE' || bo.exit) && bo.exit_kind === 'HARD_SAFETY') {
-        pushTick(s, {
-          phase: 'DECIDE',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          code: DecisionCodes.SIGNAL_CREATED,
-          detail: `HARD SAFETY CLOSE · ${bo.reason}`,
-        });
-        await exitTrade(opened.session, s, quote, bo.reason);
-        return;
-      }
-
-      // Zone take-profit / reverse (FULL only — never opposite-order partial).
-      if (s.entry_price != null && Number.isFinite(quote.mid)) {
-        const zones = buildMarketZones(s.closedBars);
-        const ze = decideZoneManageExit({
-          side: s.open_side,
-          entry: s.entry_price,
-          mid: quote.mid,
-          bars: s.closedBars,
-          zones,
-          partial_done: s.zone_partial_done,
-          upl: uplNow,
-        });
-
-        if (ze.action === 'FULL') {
-          const allowFull =
-            /reverse/i.test(ze.reason) || canOptimizationClose(uplNow);
-          if (allowFull) {
-            pushTick(s, {
-              phase: 'DECIDE',
-              bid: quote.bid,
-              ask: quote.ask,
-              mid: quote.mid,
-              code: DecisionCodes.SIGNAL_CREATED,
-              detail: ze.reason,
-            });
-            await exitTrade(opened.session, s, quote, ze.reason);
-            return;
-          }
-        }
-
-        if (ze.action === 'PARTIAL') {
-          await partialExitTrade(opened.session, s, quote, ze.reason, ze.close_fraction);
-          return;
-        }
-      }
-
-      // Best Outcome OPTIMIZATION close restored — zones must not block forever on HOLD.
+      // Exit = Best Outcome only (HARD_SAFETY + OPTIMIZATION). No zone manage path.
       const allowClose =
         (bo.action === 'CLOSE' || bo.exit) &&
         (bo.exit_kind === 'HARD_SAFETY' ||
