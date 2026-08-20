@@ -1,3 +1,3 @@
-tip=2026-08-20T18:10:00Z
-rule=SUPER C++ entry · all feeds + buy/sell pressure + 1m/5m/15m + 200c bull/bear · Node Capital+BO only
-prev=d3675d5
+tip=2026-08-20T18:35:00Z
+rule=SUPER C++ micro-impulse EntryReady · no SCAN-forever on clear 10s climb · multi-TF bias
+prev=ebfe15d

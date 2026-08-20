@@ -6,6 +6,11 @@
 import type { RegimeName } from './regimes.js';
 import { normalizeRegime } from './regimes.js';
 import { bodyPct, isMoving10s, rangePct, type TenSecBar } from './tenSecondOhlc.js';
+import {
+  aggregateMinutes,
+  countCandlePolarity,
+  type OhlcBar,
+} from './candleTf.js';
 
 export type SetupType =
   | 'CONTINUATION'
@@ -31,6 +36,8 @@ export type TrendBias = 'UP' | 'DOWN' | 'FLAT';
 /** Robot trend horizon — 10s scalp, not a 20-minute swing. */
 export const TREND_LOOKBACK_MINUTES = 5;
 export const TREND_LOOKBACK_10S = TREND_LOOKBACK_MINUTES * 6;
+/** Lasting bias window — 20×1m (+5m/15m/200c). Old 5×1m alone stayed FLAT forever. */
+export const SUPER_BIAS_1M_LOOKBACK = 20;
 
 function movingOrNull(bar: TenSecBar): boolean {
   return isMoving10s(bar);
@@ -127,6 +134,98 @@ export function resolveTrendBias(
   return mergeTrendBias(trendBiasFromBars(tenSec), trendBiasFromMinuteCandles(minutes || []));
 }
 
+function toOhlc(minutes: Array<{ open: number; high?: number; low?: number; close: number }>): OhlcBar[] {
+  return minutes
+    .filter((c) => c && Number.isFinite(c.open) && Number.isFinite(c.close))
+    .map((c) => ({
+      open: c.open,
+      high: c.high != null && Number.isFinite(c.high) ? c.high : Math.max(c.open, c.close),
+      low: c.low != null && Number.isFinite(c.low) ? c.low : Math.min(c.open, c.close),
+      close: c.close,
+    }));
+}
+
+function windowNet(w: Array<{ open: number; close: number }>): number {
+  if (w.length < 2) return 0;
+  return (w[w.length - 1]!.close - w[0]!.open) / Math.max(Math.abs(w[0]!.open), 1e-9);
+}
+
+function windowPersist(w: Array<{ open: number; close: number }>): number {
+  if (!w.length) return 0;
+  const up = w.filter((c) => c.close > c.open).length;
+  const down = w.filter((c) => c.close < c.open).length;
+  return (up - down) / w.length;
+}
+
+/**
+ * Lasting market bias from 1m / 5m / 15m + last-200 polarity.
+ * Fixes FLAT-forever when only last 5×1m were consulted.
+ */
+export function trendBiasFromMultiTf(
+  minutes: Array<{ open: number; high?: number; low?: number; close: number }>
+): TrendBias {
+  const clean = toOhlc(minutes);
+  if (clean.length < 3) return trendBiasFromMinuteCandles(clean);
+
+  const w20 = clean.slice(-SUPER_BIAS_1M_LOOKBACK);
+  const w5 = clean.slice(-TREND_LOOKBACK_MINUTES);
+  const bars5 = aggregateMinutes(clean, 5);
+  const bars15 = aggregateMinutes(clean, 15);
+  const pol = countCandlePolarity(clean, 200);
+
+  let upVotes = 0;
+  let downVotes = 0;
+
+  const n15 = windowNet(bars15.slice(-6));
+  const p15 = windowPersist(bars15.slice(-6));
+  if (n15 > 0.0002 || (n15 > 0.00008 && p15 > 0.15)) upVotes += 2;
+  if (n15 < -0.0002 || (n15 < -0.00008 && p15 < -0.15)) downVotes += 2;
+
+  const n5 = windowNet(bars5.slice(-8));
+  const p5 = windowPersist(bars5.slice(-8));
+  if (n5 > 0.00015 || (n5 > 0 && p5 > 0.2)) upVotes += 1;
+  if (n5 < -0.00015 || (n5 < 0 && p5 < -0.2)) downVotes += 1;
+
+  const n20 = windowNet(w20);
+  const p20 = windowPersist(w20);
+  if (n20 > 0.0002 && p20 >= 0) upVotes += 1;
+  if (n20 < -0.0002 && p20 <= 0) downVotes += 1;
+  if (p20 > 0.25 && n20 > 0) upVotes += 1;
+  if (p20 < -0.25 && n20 < 0) downVotes += 1;
+
+  const short = trendBiasFromMinuteCandles(w5);
+  if (short === 'UP') upVotes += 1;
+  if (short === 'DOWN') downVotes += 1;
+
+  if (pol.n >= 40) {
+    const edge = (pol.bullish - pol.bearish) / pol.n;
+    if (edge > 0.06) upVotes += 1;
+    if (edge < -0.06) downVotes += 1;
+    if (edge > 0.12) upVotes += 1;
+    if (edge < -0.12) downVotes += 1;
+  }
+
+  if (upVotes >= downVotes + 2 && upVotes >= 2) return 'UP';
+  if (downVotes >= upVotes + 2 && downVotes >= 2) return 'DOWN';
+  if (upVotes > downVotes && upVotes >= 3) return 'UP';
+  if (downVotes > upVotes && downVotes >= 3) return 'DOWN';
+  if (n20 > 0.0004) return 'UP';
+  if (n20 < -0.0004) return 'DOWN';
+  if (p20 > 0.35 && n20 >= 0) return 'UP';
+  if (p20 < -0.35 && n20 <= 0) return 'DOWN';
+  return short;
+}
+
+/** Board + C++ bias: 10s + 5×1m short, then lasting multi-TF (5m/15m/20×1m/200c). */
+export function resolveSuperTrendBias(
+  tenSec: TenSecBar[],
+  minutes?: Array<{ open: number; high?: number; low?: number; close: number }> | null
+): TrendBias {
+  const short = resolveTrendBias(tenSec, minutes || []);
+  const lasting = trendBiasFromMultiTf(minutes || []);
+  return mergeTrendBias(short, lasting);
+}
+
 /** Regime carries direction when bias calculator is still FLAT — does NOT rewrite regime. */
 export function effectiveBias(
   regime: string | null | undefined,
@@ -137,6 +236,11 @@ export function effectiveBias(
   const r = normalizeRegime(regime);
   if (r === 'TREND_UP' || r === 'PULLBACK_UPTREND' || r === 'BREAKOUT_UP') return 'UP';
   if (r === 'TREND_DOWN' || r === 'PULLBACK_DOWNTREND' || r === 'BREAKOUT_DOWN') return 'DOWN';
+  // Soft unlock from last bar when regime is directional-ish expansion
+  if (bar && Number.isFinite(bar.close) && Number.isFinite(bar.open)) {
+    if (r === 'EXPANSION' && bar.close > bar.open) return 'UP';
+    if (r === 'EXPANSION' && bar.close < bar.open) return 'DOWN';
+  }
   void bar;
   return 'FLAT';
 }

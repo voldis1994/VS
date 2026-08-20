@@ -63,7 +63,7 @@ import {
 } from './exitLifecycle.js';
 import {
   effectiveBias,
-  trendBiasFromMinuteCandles,
+  resolveSuperTrendBias,
   TREND_LOOKBACK_10S,
   type TrendBias,
 } from './entryFromRegime.js';
@@ -519,7 +519,8 @@ function applyBiasRegimeUnlock(_s: Internal) {
 
 function applyLiveRegimeFromMinutes(s: Internal) {
   const bar = s.ohlcState.last_closed;
-  const minuteBias = trendBiasFromMinuteCandles(s.minuteCandles);
+  // Multi-TF lasting bias (1m/5m/15m + 200c) — old 5×1m-only stayed FLAT forever.
+  const bias = resolveSuperTrendBias(s.closedBars, s.minuteCandles);
   // Regime from 10s structure — never invent TREND_* from last 1m candle color.
   const prev = normalizeRegime(s.regime) as RegimeName;
   if (s.closedBars.length >= 2) {
@@ -527,7 +528,7 @@ function applyLiveRegimeFromMinutes(s: Internal) {
   } else if (!s.regime || String(s.regime).toUpperCase() === 'UNKNOWN') {
     s.regime = 'RANGE';
   }
-  s.trend_bias = effectiveBias(s.regime, minuteBias, bar);
+  s.trend_bias = effectiveBias(s.regime, bias, bar);
   applyBiasRegimeUnlock(s);
 }
 

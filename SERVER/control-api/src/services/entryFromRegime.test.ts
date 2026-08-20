@@ -7,8 +7,10 @@ import {
   decideReversalConfirm,
   denyWithTrendEntry,
   mergeTrendBias,
+  resolveSuperTrendBias,
   trendBiasFromBars,
   trendBiasFromMinuteCandles,
+  trendBiasFromMultiTf,
 } from './entryFromRegime.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 import { evaluateStrategy } from '../vs-core/strategyCore.js';
@@ -240,6 +242,24 @@ describe('with-trend bias — no SELL into a climb without confirmed countertren
       close: 2000 + i * 1.2 + 0.8,
     }));
     expect(trendBiasFromMinuteCandles(climb)).toBe('UP');
+  });
+
+  it('multi-TF + 200c polarity is UP on lasting climb (not FLAT)', () => {
+    const mins = Array.from({ length: 60 }, (_, i) => {
+      const o = 2000 + i * 0.35;
+      return { open: o, high: o + 0.5, low: o - 0.2, close: o + 0.3 };
+    });
+    expect(trendBiasFromMultiTf(mins)).toBe('UP');
+    expect(resolveSuperTrendBias([], mins)).toBe('UP');
+  });
+
+  it('multi-TF + 200c polarity is DOWN on lasting dump (not FLAT)', () => {
+    const mins = Array.from({ length: 60 }, (_, i) => {
+      const o = 2100 - i * 0.35;
+      return { open: o, high: o + 0.2, low: o - 0.5, close: o - 0.3 };
+    });
+    expect(trendBiasFromMultiTf(mins)).toBe('DOWN');
+    expect(resolveSuperTrendBias([], mins)).toBe('DOWN');
   });
 
   it('lasting 1m trend wins over a short 10s pullback', () => {
