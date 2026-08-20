@@ -33,6 +33,10 @@ import {
 } from './exitManage.js';
 import type { BestOutcomeQualityResult } from './bestOutcomeQuality.js';
 import {
+  decideLiveBestOutcomeExit,
+  resolveLiveManageSignal,
+} from './bestOutcomeLive.js';
+import {
   buildExitSnapshotFromClose,
   evaluatePendingWithNextSignal,
   saveBestOutcomeExitSnapshot,
@@ -491,6 +495,28 @@ export function effectiveRegimeName(s: {
 /** Bias unlock must not rewrite UNKNOWN regime into TREND_* (keep bias separate). */
 function applyBiasRegimeUnlock(_s: Internal) {
   // no-op: regime stays authoritative; trend_bias is a separate field
+}
+
+function applyLiveRegimeFromMinutes(s: Internal) {
+  const bar = s.ohlcState.last_closed;
+  const minuteBias = trendBiasFromMinuteCandles(s.minuteCandles);
+  if (minuteBias === 'UP') s.regime = 'TREND_UP';
+  else if (minuteBias === 'DOWN') s.regime = 'TREND_DOWN';
+  else s.regime = 'RANGE';
+  s.trend_bias = effectiveBias(s.regime, minuteBias, bar);
+  applyBiasRegimeUnlock(s);
+}
+
+async function refreshMinuteCandles(session: CapitalSession, s: Internal) {
+  if (Date.now() - s.last_minute_fetch_ms >= 30_000) {
+    s.last_minute_fetch_ms = Date.now();
+    try {
+      const hist = await fetchCapitalMinutePrices(session, s.epic, 3);
+      if (hist.ok) s.minuteCandles = hist.candles;
+    } catch {
+      /* keep previous 1m snapshot */
+    }
+  }
 }
 
 function collectFresherRefs(s: Internal): PriceRef[] {
@@ -1959,14 +1985,18 @@ async function robotCycleBody(s: Internal) {
         }
       }
 
-      // Exit brain: Best Outcome CLOSE only — never trail or move SL here.
+      // Exit brain: Best Outcome candidate, then LIVE formula before exitTrade().
       if (s.close_pending) {
         await exitTrade(opened.session, s, quote, 'close pending · verify broker flat');
         return;
       }
 
+      await refreshMinuteCandles(opened.session, s);
+      applyLiveRegimeFromMinutes(s);
+      const liveRegime = effectiveRegimeName(s);
+
       const track = ensureBestOutcomeTrack(s, quote.mid);
-      const bo = decideBestOutcomeExitFull(
+      const candidate = decideBestOutcomeExitFull(
         {
           open_side: s.open_side,
           entry_price: s.entry_price,
@@ -1991,10 +2021,47 @@ async function robotCycleBody(s: Internal) {
         track,
         { minStopDistance: quote.min_stop_distance ?? null }
       );
+
+      if (!s.open_side) {
+        s.best_outcome_track = candidate.track;
+        s.best_outcome_state = candidate.track.state;
+        s.best_outcome_reason = candidate.track.reason;
+        s.best_price_seen = candidate.view.best_price_seen;
+        return;
+      }
+
+      // Peek Strategy signal while OPEN — never consume pending_calc, never enterTrade.
+      const liveSignal = resolveLiveManageSignal({
+        pendingCalc: s.pending_calc ?? null,
+        bar: s.ohlcState.last_closed,
+        closedBars: s.closedBars,
+        regime: liveRegime,
+        bias: s.trend_bias || 'FLAT',
+        capitalMid: quote.mid,
+        refs: collectFresherRefs(s),
+      });
+      const uplNow =
+        s.unrealized ??
+        (s.open_side && s.entry_price != null
+          ? favorableMove(s.open_side, s.entry_price, quote.mid)
+          : 0);
+      const bo = decideLiveBestOutcomeExit({
+        candidate,
+        openSide: s.open_side,
+        mfe: s.mfe,
+        upl: uplNow,
+        signal: liveSignal,
+        closedBars: s.closedBars,
+        feed: s.multiFeed,
+        crossMarket: s.cross_market,
+        regime: liveRegime,
+        bias: s.trend_bias || 'FLAT',
+      });
       s.best_outcome_track = bo.track;
       s.best_outcome_state = bo.track.state;
       s.best_outcome_reason = bo.track.reason;
       s.best_price_seen = bo.view.best_price_seen;
+      s.last_best_outcome_evaluation = bo.live_quality;
 
       if (bo.action === 'CLOSE' || bo.exit) {
         pushTick(s, {
@@ -2112,24 +2179,8 @@ async function robotCycleBody(s: Internal) {
     }
 
     const bar = s.ohlcState.last_closed;
-    if (Date.now() - s.last_minute_fetch_ms >= 30_000) {
-      s.last_minute_fetch_ms = Date.now();
-      try {
-        const hist = await fetchCapitalMinutePrices(opened.session, s.epic, 3);
-        if (hist.ok) s.minuteCandles = hist.candles;
-      } catch {
-        /* keep previous 1m snapshot */
-      }
-    }
-    // Regime label must be stable and based on 1m candles.
-    // 10s OHLC is for entry evidence only (dip/rally/pullback).
-    const minuteBias = trendBiasFromMinuteCandles(s.minuteCandles);
-    if (minuteBias === 'UP') s.regime = 'TREND_UP';
-    else if (minuteBias === 'DOWN') s.regime = 'TREND_DOWN';
-    else s.regime = 'RANGE';
-    // Direction bias for entry must be 1m-based (10s OHLC only provides evidence/setup).
-    s.trend_bias = effectiveBias(s.regime, minuteBias, bar);
-    applyBiasRegimeUnlock(s);
+    await refreshMinuteCandles(opened.session, s);
+    applyLiveRegimeFromMinutes(s);
     const regimeLabel = effectiveRegimeName(s);
     const ohlcLine = bar
       ? `10s O=${bar.open.toFixed(2)} H=${bar.high.toFixed(2)} L=${bar.low.toFixed(2)} C=${bar.close.toFixed(2)} ${regimeLabel} · bias ${s.trend_bias} · feeds ${

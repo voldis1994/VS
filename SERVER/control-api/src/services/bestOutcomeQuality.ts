@@ -19,6 +19,9 @@ import type { ExitSide } from './exitManage.js';
 /** Next-signal influence weight — single config source. */
 export const BEST_OUTCOME_ALPHA = 0.25;
 
+/** LIVE confirmation at or above this is "strong". Below is weak/neutral → original MFE/UPL logic. */
+export const LIVE_CONFIRM_STRONG = 0.6;
+
 /** Confirmation component weights (must sum to 1 among available components). Book omitted — no order-book data. */
 export const NEXT_SIGNAL_CONFIRM_WEIGHTS = {
   candle: 0.3,
@@ -336,4 +339,43 @@ export function evaluateBestOutcomeQuality(input: {
   });
 
   return { ...base, confirm_components: components, next_signal_confirm: confirm };
+}
+
+/** LIVE quality while the position is still OPEN — current valid signal vs open side. */
+export function evaluateLiveBestOutcomeQuality(input: {
+  mfe: number;
+  upl: number;
+  openSide: ExitSide;
+  currentSide?: ExitSide | null;
+  closedBars?: TenSecBar[] | null;
+  feed?: MultiFeedPrice | null;
+  crossMarket?: CrossMarketPressure | null;
+  regime?: string | null;
+  bias?: string | null;
+  alpha?: number;
+}): BestOutcomeQualityResult {
+  const currentSide = input.currentSide ?? null;
+  if (!currentSide) {
+    const base = computeBestOutcomeScore({
+      mfe: input.mfe,
+      uplAtExit: input.upl,
+      previousSide: input.openSide,
+      nextSide: null,
+      nextConfirm: null,
+      alpha: input.alpha,
+    });
+    return base;
+  }
+  return evaluateBestOutcomeQuality({
+    mfe: input.mfe,
+    uplAtExit: input.upl,
+    previousSide: input.openSide,
+    nextSide: currentSide,
+    closedBars: input.closedBars,
+    feed: input.feed,
+    crossMarket: input.crossMarket,
+    regime: input.regime,
+    bias: input.bias,
+    alpha: input.alpha,
+  });
 }
