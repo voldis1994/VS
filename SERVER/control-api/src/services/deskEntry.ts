@@ -19,6 +19,7 @@ import {
   type PriceRef,
 } from './staleQuoteGuard.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
+import { buildMarketZones, zoneAllowsEntry } from './marketZones.js';
 
 export type DeskEntry = {
   direction: 'BUY' | 'SELL' | null;
@@ -156,6 +157,22 @@ export function resolveDeskEntry(input: {
         reason: `TREND_GATE · ${trendGate.block_reason} · ${formatEntryDiagnostic(trendGate)}`,
       };
     }
+    if (input.bar) {
+      const zones = buildMarketZones(input.closedBars ?? [input.bar]);
+      const zoneGate = zoneAllowsEntry({
+        direction: entry.direction,
+        setup: entry.setup,
+        bar: input.bar,
+        zones,
+      });
+      if (!zoneGate.ok) {
+        return { direction: null, setup: null, reason: zoneGate.reason };
+      }
+      return {
+        ...entry,
+        reason: `${entry.reason} · ${zoneGate.reason}`,
+      };
+    }
     return entry;
   }
 
@@ -175,9 +192,18 @@ export function resolveDeskEntry(input: {
 
   if (fromCalc && direction && input.bar) {
     const setupU = String(setup || '').toUpperCase();
-    const late = blockLateCalcEntry(direction, input.bar, input.closedBars);
-    if (late) {
-      return { direction: null, setup: null, reason: `CALC_BLOCK · ${late}` };
+    // PULLBACK / FADE / rejection are meant to enter on the opposing candle — not "late chase".
+    const lateExempt =
+      setupU.includes('PULLBACK') ||
+      setupU.includes('FADE') ||
+      setupU.includes('REVERSAL') ||
+      setupU.includes('RANGE_REJECTION') ||
+      setupU.includes('FAILED_BREAKOUT');
+    if (!lateExempt) {
+      const late = blockLateCalcEntry(direction, input.bar, input.closedBars);
+      if (late) {
+        return { direction: null, setup: null, reason: `CALC_BLOCK · ${late}` };
+      }
     }
     const deny = denyWithTrendEntry(direction, input.bar, bias, input.closedBars, {
       exhaustion: setupU === 'FADE',

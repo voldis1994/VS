@@ -14,6 +14,41 @@ function bar(open: number, close: number): TenSecBar {
   };
 }
 
+function swing(o: number, h: number, l: number, c: number, i: number): TenSecBar {
+  return { open_time_ms: i * 10_000, open: o, high: h, low: l, close: c, ticks: 10 };
+}
+
+/** Climb, swing-low demand, red retest — zone + structure BUY. */
+function climbDemandPull() {
+  const bars = [
+    swing(4320, 4324, 4319, 4323, 0),
+    swing(4323, 4327, 4322, 4326, 1),
+    swing(4326, 4330, 4325, 4329, 2),
+    swing(4329, 4333, 4328, 4332, 3),
+    swing(4332, 4336, 4331, 4335, 4),
+    swing(4335, 4339, 4334, 4338, 5),
+    swing(4338, 4339, 4328, 4330, 6), // swing low / demand pivot 4328
+    swing(4330, 4334, 4329.5, 4333, 7),
+    swing(4333, 4333.5, 4327.5, 4329, 8), // red retest of demand
+  ];
+  return { bars, pull: bars[bars.length - 1]! };
+}
+
+/** Dump, swing-high supply, red reject — zone + structure SELL. */
+function dumpSupplyTouch() {
+  const bars = [
+    swing(4380, 4382, 4378, 4379, 0),
+    swing(4379, 4380, 4375, 4376, 1),
+    swing(4376, 4377, 4372, 4373, 2),
+    swing(4373, 4374, 4369, 4370, 3),
+    swing(4370, 4371, 4366, 4367, 4),
+    swing(4367, 4375, 4366, 4374, 5), // swing high / supply pivot 4375
+    swing(4374, 4374.5, 4371, 4372, 6),
+    swing(4372, 4375.2, 4369, 4370, 7), // red reject at supply
+  ];
+  return { bars, last: bars[bars.length - 1]! };
+}
+
 function cluster(mid: number): PriceRef[] {
   return [
     { label: 'Gold-API spot (public)', mid: mid - 0.2 },
@@ -69,26 +104,19 @@ describe('resolveDeskEntry — real setups only (no chase)', () => {
     expect(e.direction).toBeNull();
   });
 
-  it('10s TREND_UP dump → BUY only with climb structure', () => {
-    const climb = [
-      bar(4330, 4332),
-      bar(4332, 4334),
-      bar(4334, 4336),
-      bar(4336, 4338),
-      bar(4338, 4340),
-      bar(4340, 4342),
-    ];
-    const pull = bar(4340.22, 4339.03);
+  it('10s TREND_UP dump → BUY only with climb structure + demand zone', () => {
+    const { bars, pull } = climbDemandPull();
     const e = resolveDeskEntry({
       bar: pull,
-      closedBars: [...climb, pull],
+      closedBars: bars,
       regime: 'TREND_UP',
       bias: 'UP',
-      capitalMid: 4339.03,
-      refs: cluster(4339.0),
+      capitalMid: pull.close,
+      refs: cluster(pull.close),
     });
     expect(e.direction).toBe('BUY');
     expect(e.setup).toBe('PULLBACK');
+    expect(e.reason).toMatch(/ZONE/i);
   });
 
   it('10s TREND_UP lone dump without structure → no entry', () => {
@@ -102,24 +130,18 @@ describe('resolveDeskEntry — real setups only (no chase)', () => {
     expect(e.direction).toBeNull();
   });
 
-  it('10s TREND_DOWN dump → SELL with dump structure', () => {
-    const dump = [
-      bar(4350, 4348),
-      bar(4348, 4346),
-      bar(4346, 4344),
-      bar(4344, 4342),
-      bar(4342, 4340),
-    ];
-    const last = bar(4340.22, 4339.03);
+  it('10s TREND_DOWN dump → SELL with dump structure + supply zone', () => {
+    const { bars, last } = dumpSupplyTouch();
     const e = resolveDeskEntry({
       bar: last,
-      closedBars: [...dump, last],
+      closedBars: bars,
       regime: 'TREND_DOWN',
       bias: 'DOWN',
-      capitalMid: 4339.03,
-      refs: cluster(4339.0),
+      capitalMid: last.close,
+      refs: cluster(last.close),
     });
     expect(e.direction).toBe('SELL');
+    expect(e.reason).toMatch(/ZONE/i);
   });
 
   it('Yahoo 50pt basis alone never creates BUY or SELL', () => {
@@ -142,30 +164,15 @@ describe('resolveDeskEntry — real setups only (no chase)', () => {
     expect(e.direction).toBeNull();
   });
 
-  it('screenshot: PULLBACK_UPTREND + bias DOWN + dump needs down structure', () => {
-    const dump = [
-      bar(4364, 4362),
-      bar(4362, 4360),
-      bar(4360, 4358),
-      bar(4358, 4356),
-      bar(4356, 4355),
-      bar(4355, 4354.5),
-    ];
-    const last = {
-      open_time_ms: 0,
-      open: 4354.67,
-      high: 4354.67,
-      low: 4354.13,
-      close: 4354.13,
-      ticks: 8,
-    };
+  it('screenshot: PULLBACK_UPTREND + bias DOWN + dump needs down structure + supply zone', () => {
+    const { bars, last } = dumpSupplyTouch();
     const e = resolveDeskEntry({
       bar: last,
-      closedBars: [...dump, last],
+      closedBars: bars,
       regime: 'PULLBACK_UPTREND',
       bias: 'DOWN',
-      capitalMid: 4354.13,
-      refs: cluster(4354.13),
+      capitalMid: last.close,
+      refs: cluster(last.close),
     });
     expect(e.direction).toBe('SELL');
   });
@@ -300,16 +307,18 @@ describe('resolveDeskEntry — real setups only (no chase)', () => {
     expect(e.reason).toMatch(/CALC_BLOCK.*impulse ended/i);
   });
 
-  it('C++ CONTINUATION with matching structure still allowed', () => {
+  it('C++ CONTINUATION with matching structure + zone still allowed', () => {
+    const { bars, pull } = climbDemandPull();
     const e = resolveDeskEntry({
       intended: 'BUY',
       intendedSetup: 'PULLBACK',
       intendedReason: 'CALC EntryReady',
-      bar: bar(4340.22, 4339.03),
+      bar: pull,
+      closedBars: bars,
       regime: 'TREND_UP',
       bias: 'UP',
-      capitalMid: 4339.03,
-      refs: cluster(4339.0),
+      capitalMid: pull.close,
+      refs: cluster(pull.close),
     });
     expect(e.direction).toBe('BUY');
     expect(e.setup).toBe('PULLBACK');

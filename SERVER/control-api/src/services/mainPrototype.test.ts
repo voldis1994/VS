@@ -41,10 +41,10 @@ describe('MAIN prototype freeze', () => {
     expect(info.entry_brain).toBe('node-robot-desk');
     expect(info.STRATEGY_VERSION).toBe('main-prototype-10s-sl040-exit');
     expect(deskPrototypeRules()).toMatch(/MAIN PROTOTYPE/);
-    expect(deskPrototypeRules()).toMatch(/Exit Best Outcome close only/);
+    expect(deskPrototypeRules()).toMatch(/Exit zones/);
   });
 
-  it('screenshot dump: PULLBACK_UPTREND + DOWN needs down structure (lone bar → SCAN)', () => {
+  it('screenshot dump: PULLBACK_UPTREND + DOWN needs structure + supply zone', () => {
     const lone = resolveDeskEntry({
       bar: {
         open_time_ms: 0,
@@ -61,29 +61,25 @@ describe('MAIN prototype freeze', () => {
     });
     expect(lone.direction).toBeNull();
 
-    const dump = [
-      bar(4364, 4362),
-      bar(4362, 4360),
-      bar(4360, 4358),
-      bar(4358, 4356),
-      bar(4356, 4355),
-      bar(4355, 4354.8),
+    // Dump → supply swing → red reject (same shape as deskEntry dumpSupplyTouch).
+    const bars: TenSecBar[] = [
+      { open_time_ms: 0, open: 4380, high: 4382, low: 4378, close: 4379, ticks: 10 },
+      { open_time_ms: 1, open: 4379, high: 4380, low: 4375, close: 4376, ticks: 10 },
+      { open_time_ms: 2, open: 4376, high: 4377, low: 4372, close: 4373, ticks: 10 },
+      { open_time_ms: 3, open: 4373, high: 4374, low: 4369, close: 4370, ticks: 10 },
+      { open_time_ms: 4, open: 4370, high: 4371, low: 4366, close: 4367, ticks: 10 },
+      { open_time_ms: 5, open: 4367, high: 4375, low: 4366, close: 4374, ticks: 10 },
+      { open_time_ms: 6, open: 4374, high: 4374.5, low: 4371, close: 4372, ticks: 10 },
+      { open_time_ms: 7, open: 4372, high: 4375.2, low: 4369, close: 4370, ticks: 10 },
     ];
-    const last = {
-      open_time_ms: 0,
-      open: 4354.67,
-      high: 4354.67,
-      low: 4354.13,
-      close: 4354.13,
-      ticks: 8,
-    };
+    const last = bars[bars.length - 1]!;
     const e = resolveDeskEntry({
       bar: last,
-      closedBars: [...dump, last],
+      closedBars: bars,
       regime: 'PULLBACK_UPTREND',
       bias: 'DOWN',
-      capitalMid: 4354.13,
-      refs: cluster(4354.13),
+      capitalMid: last.close,
+      refs: cluster(last.close),
     });
     expect(e.direction).toBe('SELL');
   });

@@ -10,6 +10,7 @@ import {
   fetchCapitalMinutePrices,
   fetchCapitalPrices,
   listCapitalOpenPositions,
+  reduceCapitalPosition,
   SAFETY_SL_REL,
   updateCapitalStop,
   type CapitalMarketQuote,
@@ -63,6 +64,11 @@ import {
 } from './entryFromRegime.js';
 import { DecisionCodes, type DecisionCode } from './decisionCodes.js';
 import { isRealEntrySetup, resolveDeskEntry } from './deskEntry.js';
+import {
+  buildMarketZones,
+  decideZoneManageExit,
+  partialCloseSize,
+} from './marketZones.js';
 import {
   evaluateEntryDirectionGate,
   formatEntryDiagnostic,
@@ -235,6 +241,10 @@ type Internal = RobotSession & {
   feedManager: FeedManager;
   last_cross_ms: number;
   best_outcome_track: BestOutcomeTrack | null;
+  /** Zone scale-out: first opposing zone already taken as partial. */
+  zone_partial_done: boolean;
+  /** Remaining lot after partial (broker size when known). */
+  remaining_lot: number | null;
 };
 
 const ACTIVE_CADENCE_MS = 2_000;
@@ -620,6 +630,8 @@ function clearTradeState(s: Internal) {
   s.best_outcome_reason = null;
   s.best_price_seen = null;
   s.best_outcome_track = null;
+  s.zone_partial_done = false;
+  s.remaining_lot = null;
 }
 
 /**
@@ -991,6 +1003,87 @@ async function finalizeLocalClose(
   s.cooldown_until_ms = Date.now() + (safetyHit ? 120_000 : 45_000);
 
   clearTradeState(s);
+}
+
+/** Scale-out half at first zone target — opposite market order on netting Capital. */
+async function partialExitTrade(
+  session: CapitalSession,
+  s: Internal,
+  quote: { bid: number | null; ask: number | null; mid: number | null },
+  reason: string,
+  closeFraction: number
+) {
+  if (!s.open_side || s.zone_partial_done) return;
+  const baseLot = s.remaining_lot != null && s.remaining_lot > 0 ? s.remaining_lot : s.lot_size;
+  const size =
+    closeFraction >= 0.99 ? baseLot : partialCloseSize(s.lot_size > 0 ? s.lot_size : baseLot);
+  if (!(size > 0) || size >= baseLot) {
+    pushTick(s, {
+      phase: 'MANAGE',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `ZONE PARTIAL skipped · lot too small for scale-out (${baseLot}) · ${reason}`,
+    });
+    return;
+  }
+
+  pushTick(s, {
+    phase: 'DECIDE',
+    bid: quote.bid,
+    ask: quote.ask,
+    mid: quote.mid,
+    detail: `ZONE SCALE-OUT · ${reason} · reduce ${size}`,
+  });
+
+  s.close_in_flight = true;
+  let result: Awaited<ReturnType<typeof reduceCapitalPosition>>;
+  try {
+    result = await reduceCapitalPosition(session, {
+      epic: s.epic,
+      openSide: s.open_side,
+      size,
+      clientOrderId: `zone-partial-${s.account_id}-${Date.now()}`,
+    });
+  } finally {
+    s.close_in_flight = false;
+  }
+
+  if (!result.ok) {
+    pushTick(s, {
+      phase: 'ERROR',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `ZONE PARTIAL FAIL: ${result.detail}`,
+    });
+    return;
+  }
+
+  s.zone_partial_done = true;
+  s.remaining_lot = Math.max(0, Math.round((baseLot - size) * 100) / 100);
+  s.best_outcome_reason = reason;
+  pushTick(s, {
+    phase: 'MANAGE',
+    bid: quote.bid,
+    ask: quote.ask,
+    mid: quote.mid,
+    detail: `ZONE PARTIAL OK · left ~${s.remaining_lot} · ${result.detail}`,
+  });
+
+  // Refresh deal id / size from broker after netting reduce.
+  try {
+    const listed = await listCapitalOpenPositions(session);
+    const still = listed.ok ? matchOpenOnEpic(listed.positions, s.epic) : null;
+    if (!still) {
+      await finalizeLocalClose(s, quote, `${reason} · broker flat after partial`, 'partial flattened');
+      return;
+    }
+    if (still.deal_id) s.deal_id = still.deal_id;
+    if (still.size > 0) s.remaining_lot = still.size;
+  } catch {
+    /* keep local remaining_lot */
+  }
 }
 
 async function exitTrade(
@@ -1587,6 +1680,8 @@ async function enterTrade(
   s.best_outcome_state = s.best_outcome_track.state;
   s.best_outcome_reason = s.best_outcome_track.reason;
   s.best_price_seen = mid;
+  s.zone_partial_done = false;
+  s.remaining_lot = s.lot_size;
   s.error = null;
   s.close_pending = false;
   s.close_in_flight = false;
@@ -2064,32 +2159,71 @@ async function robotCycleBody(s: Internal) {
       s.best_price_seen = bo.view.best_price_seen;
       s.last_best_outcome_evaluation = bo.live_quality;
 
-      // Final guarantee: OPTIMIZATION never calls exitTrade when UPL ≤ 0.
-      const allowClose =
-        (bo.action === 'CLOSE' || bo.exit) &&
-        (bo.exit_kind === 'HARD_SAFETY' ||
-          (bo.exit_kind === 'OPTIMIZATION' && canOptimizationClose(uplNow)));
-
-      if (allowClose) {
+      // HARD_SAFETY always closes full.
+      if ((bo.action === 'CLOSE' || bo.exit) && bo.exit_kind === 'HARD_SAFETY') {
         pushTick(s, {
           phase: 'DECIDE',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
           code: DecisionCodes.SIGNAL_CREATED,
-          detail: `BEST OUTCOME CLOSE · ${bo.reason}`,
+          detail: `HARD SAFETY CLOSE · ${bo.reason}`,
         });
         await exitTrade(opened.session, s, quote, bo.reason);
         return;
       }
 
-      if ((bo.action === 'CLOSE' || bo.exit) && bo.exit_kind === 'OPTIMIZATION' && !canOptimizationClose(uplNow)) {
+      // Profit / reverse exits are zone-driven (partial at first target, full on reverse / 2nd zone).
+      if (s.entry_price != null && Number.isFinite(quote.mid)) {
+        const zones = buildMarketZones(s.closedBars);
+        const ze = decideZoneManageExit({
+          side: s.open_side,
+          entry: s.entry_price,
+          mid: quote.mid,
+          bars: s.closedBars,
+          zones,
+          partial_done: s.zone_partial_done,
+          upl: uplNow,
+        });
+
+        if (ze.action === 'PARTIAL' && canOptimizationClose(uplNow)) {
+          pushTick(s, {
+            phase: 'DECIDE',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            code: DecisionCodes.SIGNAL_CREATED,
+            detail: ze.reason,
+          });
+          await partialExitTrade(opened.session, s, quote, ze.reason, ze.close_fraction);
+          return;
+        }
+
+        if (ze.action === 'FULL') {
+          const allowFull =
+            /reverse|failed after partial/i.test(ze.reason) || canOptimizationClose(uplNow);
+          if (allowFull) {
+            pushTick(s, {
+              phase: 'DECIDE',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              code: DecisionCodes.SIGNAL_CREATED,
+              detail: ze.reason,
+            });
+            await exitTrade(opened.session, s, quote, ze.reason);
+            return;
+          }
+        }
+
         pushTick(s, {
           phase: 'MANAGE',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `BEST OUTCOME HOLD · blocked OPTIMIZATION at UPL ${uplNow.toFixed(5)} · SL/HARD SAFETY only`,
+          detail: `${ze.reason} · UPL=${uplNow.toFixed(5)} · partial=${
+            s.zone_partial_done ? 'done' : 'pending'
+          } · BO ${bo.view.best_outcome_state} · ${bo.view.best_outcome_reason}`,
         });
         return;
       }
@@ -2101,11 +2235,7 @@ async function robotCycleBody(s: Internal) {
         mid: quote.mid,
         detail: `BEST OUTCOME ${bo.view.best_outcome_state} · ${bo.view.best_outcome_reason} · UPL ${
           bo.view.current_profit.toFixed(5)
-        } · MFE ${bo.view.max_profit_seen.toFixed(5)} · giveback ${bo.view.profit_giveback.toFixed(
-          5
-        )} · ret ${
-          bo.view.peak_retention != null ? `${(bo.view.peak_retention * 100).toFixed(0)}%` : '—'
-        } · best ${bo.view.best_price_seen.toFixed(2)}`,
+        } · MFE ${bo.view.max_profit_seen.toFixed(5)}`,
       });
       return;
     }
@@ -2520,6 +2650,8 @@ export async function startRobotSession(input: {
     best_outcome_reason: null,
     best_price_seen: null,
     best_outcome_track: null,
+    zone_partial_done: false,
+    remaining_lot: null,
     pending_calc: calcQueue.get(calcKey(acc.id, epic)) || null,
     cross_market: null,
     last_best_outcome_evaluation: null,

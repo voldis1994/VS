@@ -1059,6 +1059,33 @@ export async function closeCapitalPosition(
   };
 }
 
+/**
+ * Scale-out (partial close) on netting Capital accounts via opposite market order.
+ * DELETE /positions/{dealId} is full-row only — partial must reduce by opposing size.
+ */
+export async function reduceCapitalPosition(
+  session: CapitalSession,
+  input: {
+    epic: string;
+    /** Direction of the OPEN position (we trade the opposite). */
+    openSide: 'BUY' | 'SELL';
+    size: number;
+    clientOrderId?: string;
+  }
+): Promise<{ ok: boolean; deal_reference?: string; detail: string; status: number; json: any }> {
+  const size = Number(input.size);
+  if (!(size > 0) || !Number.isFinite(size)) {
+    return { ok: false, status: 0, json: {}, detail: 'reduce size must be > 0' };
+  }
+  const reduceSide: 'BUY' | 'SELL' = input.openSide === 'BUY' ? 'SELL' : 'BUY';
+  return createCapitalPosition(session, {
+    epic: input.epic,
+    direction: reduceSide,
+    size,
+    clientOrderId: input.clientOrderId,
+  });
+}
+
 /** Tighten/set stop on an already-open Capital position (PUT stopLevel, then stopDistance). */
 export async function updateCapitalStop(
   session: CapitalSession,
