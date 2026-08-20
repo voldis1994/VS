@@ -64,6 +64,8 @@ export type BestOutcomeTrack = {
   best_price_seen: number;
   max_profit_seen: number;
   consecutive_adverse: number;
+  /** Epoch ms when UPL first went positive — starts 30s optimization hold window. */
+  first_plus_at_ms: number | null;
 };
 
 export type BestOutcomeView = {
@@ -83,6 +85,9 @@ export type BestOutcomeEvaluation = BestOutcome & {
   view: BestOutcomeView;
 };
 
+/** After first plus, wait this long before Best Outcome may CLOSE (optimization). */
+export const BEST_OUTCOME_PLUS_HOLD_MS = 30_000;
+
 export function initBestOutcomeTrack(entryPrice: number): BestOutcomeTrack {
   return {
     state: 'TRACKING',
@@ -90,17 +95,21 @@ export function initBestOutcomeTrack(entryPrice: number): BestOutcomeTrack {
     best_price_seen: entryPrice,
     max_profit_seen: 0,
     consecutive_adverse: 0,
+    first_plus_at_ms: null,
   };
 }
 
 export function trackFromSnapshot(s: ExitSnapshot, mid: number): BestOutcomeTrack {
   const entry = s.entry_price ?? mid;
+  const entryMs = s.entry_at ? Date.parse(s.entry_at) : NaN;
   return {
     state: s.best_outcome_state ?? 'TRACKING',
     reason: s.best_outcome_reason ?? '',
     best_price_seen: s.best_price_seen ?? s.entry_price ?? mid,
     max_profit_seen: s.mfe,
     consecutive_adverse: s.consecutive_adverse ?? 0,
+    // Restart/adopt: if already had MFE, treat first plus as entry time (hold window may have elapsed).
+    first_plus_at_ms: s.mfe > 0 && Number.isFinite(entryMs) ? entryMs : null,
   };
 }
 
@@ -292,7 +301,7 @@ export function evaluateBestOutcome(
   trackIn: BestOutcomeTrack,
   opts?: { minStopDistance?: number | null; nowMs?: number }
 ): BestOutcomeEvaluation {
-  void opts?.nowMs;
+  const nowMs = opts?.nowMs ?? Date.now();
   const holdResult = (): BestOutcomeEvaluation => ({
     exit: false,
     action: 'HOLD',
@@ -312,10 +321,38 @@ export function evaluateBestOutcome(
   const bars = (ctx.closedBars || []).filter((b) => b && Number.isFinite(b.close));
   const lastBar = bars.length ? bars[bars.length - 1]! : null;
 
-  let track: BestOutcomeTrack = { ...trackIn };
+  let track: BestOutcomeTrack = {
+    ...trackIn,
+    first_plus_at_ms: trackIn.first_plus_at_ms ?? null,
+  };
   track.best_price_seen = updateBestPrice(side, entry, mid, track.best_price_seen);
   track.max_profit_seen = Math.max(track.max_profit_seen, s.mfe, fav);
   track.consecutive_adverse = countConsecutiveAdverse(side, bars);
+
+  // Start 30s hold clock on first favorable UPL — small plus must not exit immediately.
+  if (fav > 0 && track.first_plus_at_ms == null) {
+    track.first_plus_at_ms = nowMs;
+  }
+
+  const plusHoldRemainMs =
+    track.first_plus_at_ms != null
+      ? BEST_OUTCOME_PLUS_HOLD_MS - (nowMs - track.first_plus_at_ms)
+      : 0;
+  const plusHoldActive = plusHoldRemainMs > 0;
+
+  const holdDuringPlusWindow = (candidateReason: string): BestOutcomeEvaluation => {
+    const remainSec = Math.max(1, Math.ceil(plusHoldRemainMs / 1000));
+    const reason = `plus hold ${remainSec}s · wait before CLOSE · ${candidateReason}`;
+    track = { ...track, state: 'HOLD', reason };
+    return {
+      exit: false,
+      action: 'HOLD',
+      reason,
+      exit_kind: 'NONE',
+      track,
+      view: buildView(s, mid, track),
+    };
+  };
 
   const peakMfe = Math.max(s.mfe, track.max_profit_seen);
   const retention = peakMfe > 0 ? Math.max(0, fav / peakMfe) : null;
@@ -331,8 +368,10 @@ export function evaluateBestOutcome(
 
   // Never go negative after a meaningful favorable excursion.
   if (mfeSignificant && peakMfe > 0 && fav <= 0) {
+    const candidateReason = `BestOutcome EXIT · breakeven guard · MFE ${peakMfe.toFixed(5)} → UPL ${fav.toFixed(5)}`;
+    if (plusHoldActive) return holdDuringPlusWindow(candidateReason);
     track.state = 'EXIT';
-    track.reason = `BestOutcome EXIT · breakeven guard · MFE ${peakMfe.toFixed(5)} → UPL ${fav.toFixed(5)}`;
+    track.reason = candidateReason;
     return {
       exit: true,
       action: 'CLOSE',
@@ -350,8 +389,10 @@ export function evaluateBestOutcome(
     retention != null &&
     retention + 1e-9 < PEAK_RETENTION_EXIT_THRESHOLD
   ) {
+    const candidateReason = `BestOutcome EXIT · profit lock ${(PEAK_RETENTION_EXIT_THRESHOLD * 100).toFixed(0)}% · retention ${(retention * 100).toFixed(0)}% · giveback ${giveback.toFixed(5)}`;
+    if (plusHoldActive) return holdDuringPlusWindow(candidateReason);
     track.state = 'EXIT';
-    track.reason = `BestOutcome EXIT · profit lock ${(PEAK_RETENTION_EXIT_THRESHOLD * 100).toFixed(0)}% · retention ${(retention * 100).toFixed(0)}% · giveback ${giveback.toFixed(5)}`;
+    track.reason = candidateReason;
     return {
       exit: true,
       action: 'CLOSE',
@@ -388,8 +429,10 @@ export function evaluateBestOutcome(
   const withTrendEntry = WITH_TREND_EXIT_SETUPS.has(entrySetup);
 
   if (impulseEndedKnown && withTrendEntry && fav + 1e-9 >= closeMove) {
+    const candidateReason = `BestOutcome · inputs ended · favorable move (${fav.toFixed(5)} >= ${closeMove})`;
+    if (plusHoldActive) return holdDuringPlusWindow(candidateReason);
     track.state = 'EXIT';
-    track.reason = `BestOutcome · inputs ended · favorable move (${fav.toFixed(5)} >= ${closeMove})`;
+    track.reason = candidateReason;
     return {
       exit: true,
       action: 'CLOSE',
@@ -479,8 +522,10 @@ export function evaluateBestOutcome(
       retention < 0.6) ||
     (mfeSignificant && exitScore >= 3 && retention != null && retention < 0.7)
   ) {
+    const candidateReason = `BestOutcome EXIT · ${exitNotes.join(' · ')}`;
+    if (plusHoldActive) return holdDuringPlusWindow(candidateReason);
     state = 'EXIT';
-    reason = `BestOutcome EXIT · ${exitNotes.join(' · ')}`;
+    reason = candidateReason;
     return {
       exit: true,
       action: 'CLOSE',

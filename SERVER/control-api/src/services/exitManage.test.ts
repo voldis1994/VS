@@ -29,7 +29,8 @@ function snap(
     mfe: 0,
     mae: 0,
     peak_retention: null,
-    entry_at: new Date().toISOString(),
+    // Aged so Best Outcome 30s plus-hold window has elapsed for CLOSE assertions.
+    entry_at: new Date(Date.now() - 60_000).toISOString(),
     regime: 'TREND_UP',
     entry_setup: 'PULLBACK',
     entry_regime: 'TREND_UP',
@@ -240,7 +241,7 @@ describe('Exit matrix A–P', () => {
         entry_setup: 'PULLBACK',
       }),
       futureMid,
-      t0 + 5_000
+      t0 + 35_000
     );
     expect(noFutureTime.exit).toBe(true);
     expect(noFutureTime.action).toBe('CLOSE');
@@ -480,6 +481,7 @@ describe('Exit helpers — LONG/SHORT symmetry', () => {
         entry_setup: 'PULLBACK',
         // “inputs ended”: live regime differs from entry regime
         entry_regime: 'TREND_DOWN',
+        mfe: 11,
       }),
       4364,
       Date.now(),

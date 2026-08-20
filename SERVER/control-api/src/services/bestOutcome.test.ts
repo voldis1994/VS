@@ -24,7 +24,8 @@ function snap(
     mfe: 0,
     mae: 0,
     peak_retention: null,
-    entry_at: new Date().toISOString(),
+    // Aged entry so 30s plus-hold window has already elapsed for CLOSE tests.
+    entry_at: new Date(Date.now() - 60_000).toISOString(),
     regime: 'TREND_UP',
     entry_setup: 'CONTINUATION',
     entry_regime: 'TREND_UP',
@@ -142,6 +143,7 @@ describe('Best Outcome — open position manage', () => {
     const track = initBestOutcomeTrack(entry);
     track.best_price_seen = 2495;
     track.max_profit_seen = 5;
+    track.first_plus_at_ms = Date.now() - 60_000;
     const bars = [bar(2494, 2493), bar(2493, 2492), bar(2492, 2491)];
     const r = evaluateBestOutcome(
       snap({
@@ -238,6 +240,7 @@ describe('Best Outcome — open position manage', () => {
     const track = initBestOutcomeTrack(entry);
     track.best_price_seen = 2496;
     track.max_profit_seen = 6;
+    track.first_plus_at_ms = Date.now() - 60_000;
     const r = evaluateBestOutcome(
       snap({ open_side: 'BUY', entry_price: entry, mfe: 6, regime: 'TREND_UP' }),
       2493,
@@ -253,6 +256,7 @@ describe('Best Outcome — open position manage', () => {
     const entry = 2490;
     const track = initBestOutcomeTrack(entry);
     track.max_profit_seen = 3;
+    track.first_plus_at_ms = Date.now() - 60_000;
     const r = evaluateBestOutcome(
       snap({ open_side: 'BUY', entry_price: entry, mfe: 3, regime: 'TREND_UP' }),
       2490,
@@ -269,6 +273,7 @@ describe('Best Outcome — open position manage', () => {
     const track = initBestOutcomeTrack(entry);
     track.best_price_seen = 2484;
     track.max_profit_seen = 6;
+    track.first_plus_at_ms = Date.now() - 60_000;
     const r = evaluateBestOutcome(
       snap({
         open_side: 'SELL',
@@ -284,5 +289,59 @@ describe('Best Outcome — open position manage', () => {
     expect(r.exit).toBe(true);
     expect(r.action).toBe('CLOSE');
     expect(r.reason).toMatch(/profit lock 75%/);
+  });
+
+  it('within 30s of first plus — profit lock stays HOLD', () => {
+    const entry = 2490;
+    const now = 1_000_000;
+    const track = initBestOutcomeTrack(entry);
+    track.best_price_seen = 2496;
+    track.max_profit_seen = 6;
+    track.first_plus_at_ms = now - 5_000;
+    const r = evaluateBestOutcome(
+      snap({ open_side: 'BUY', entry_price: entry, mfe: 6, regime: 'TREND_UP' }),
+      2493,
+      { closedBars: [bar(2495, 2494), bar(2494, 2493)], trend_bias: 'UP', regime: 'TREND_UP' },
+      track,
+      { nowMs: now }
+    );
+    expect(r.exit).toBe(false);
+    expect(r.action).toBe('HOLD');
+    expect(r.reason).toMatch(/plus hold/i);
+    expect(r.track.first_plus_at_ms).toBe(now - 5_000);
+  });
+
+  it('records first_plus_at_ms when UPL first goes positive', () => {
+    const entry = 2490;
+    const now = 2_000_000;
+    const track = initBestOutcomeTrack(entry);
+    const r = evaluateBestOutcome(
+      snap({ open_side: 'BUY', entry_price: entry, mfe: 0, regime: 'TREND_UP' }),
+      2491,
+      { closedBars: [bar(2490, 2491)], trend_bias: 'UP', regime: 'TREND_UP' },
+      track,
+      { nowMs: now }
+    );
+    expect(r.exit).toBe(false);
+    expect(r.track.first_plus_at_ms).toBe(now);
+  });
+
+  it('after 30s plus hold — profit lock may CLOSE', () => {
+    const entry = 2490;
+    const now = 1_000_000;
+    const track = initBestOutcomeTrack(entry);
+    track.best_price_seen = 2496;
+    track.max_profit_seen = 6;
+    track.first_plus_at_ms = now - 30_000;
+    const r = evaluateBestOutcome(
+      snap({ open_side: 'BUY', entry_price: entry, mfe: 6, regime: 'TREND_UP' }),
+      2493,
+      { closedBars: [bar(2495, 2494), bar(2494, 2493)], trend_bias: 'UP', regime: 'TREND_UP' },
+      track,
+      { nowMs: now }
+    );
+    expect(r.exit).toBe(true);
+    expect(r.action).toBe('CLOSE');
+    expect(r.reason).toMatch(/profit lock/i);
   });
 });

@@ -66,6 +66,7 @@ function snap(
 function profitLockCandidate(side: 'BUY' | 'SELL') {
   const entry = 2490;
   const track = initBestOutcomeTrack(entry);
+  track.first_plus_at_ms = Date.now() - 60_000;
   if (side === 'BUY') {
     track.best_price_seen = 2496;
     track.max_profit_seen = 6;
@@ -96,6 +97,7 @@ function breakevenAtZeroCandidate(side: 'BUY' | 'SELL') {
   const entry = 2490;
   const track = initBestOutcomeTrack(entry);
   track.max_profit_seen = 3;
+  track.first_plus_at_ms = Date.now() - 60_000;
   if (side === 'SELL') {
     track.best_price_seen = 2487;
     return evaluateBestOutcome(
