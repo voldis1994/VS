@@ -68,23 +68,22 @@ function rangeThenUpperReject(): { bars: TenSecBar[]; confirm: TenSecBar } {
 describe('10s + regime-as-CONTEXT suitable entry', () => {
   beforeEach(() => disableStrategyEvalLogForTests(true));
 
-  it('UNKNOWN unlocks with lasting bias — not the current 10s color', () => {
+  it('UNKNOWN unlocks only with real dip + lasting bias — not rally chase', () => {
     expect(decideEntryFrom10sRegime(dip, 'UNKNOWN', 'UP')?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(dip, 'COMPRESSION', 'UP')?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(dip, 'UNKNOWN', 'DOWN')?.direction).toBe('SELL');
     expect(decideEntryFrom10sRegime(dip, 'UNKNOWN', 'FLAT')).toBeNull();
     expect(decideEntryFrom10sRegime(rally, 'UNKNOWN', 'FLAT')).toBeNull();
-    expect(decideEntryFrom10sRegime(rally, 'UNKNOWN', 'UP')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(rally, 'UNKNOWN', 'UP')).toBeNull();
   });
 
-  it('TREND_UP dip-buys OR follows the climb — TREND alone never enough without bar evidence', () => {
+  it('TREND_UP dip-buys — does not chase every green climb', () => {
     expect(decideEntryFrom10sRegime(dip, 'TREND_UP', 'UP')?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(dip, 'TREND_UP', 'UP')?.setup).toBe('PULLBACK');
-    expect(decideEntryFrom10sRegime(rally, 'TREND_UP', 'UP')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(rally, 'TREND_UP', 'UP')?.setup).toBe('CONTINUATION');
+    expect(decideEntryFrom10sRegime(rally, 'TREND_UP', 'UP')).toBeNull();
   });
 
-  it('COMPRESSION quiet Gold green still BUYs with UP bias', () => {
+  it('COMPRESSION quiet Gold green does not chase BUY', () => {
     const quietGreen: TenSecBar = {
       open_time_ms: 0,
       open: 4374.9,
@@ -93,7 +92,7 @@ describe('10s + regime-as-CONTEXT suitable entry', () => {
       close: 4375.0,
       ticks: 8,
     };
-    expect(decideEntryFrom10sRegime(quietGreen, 'COMPRESSION', 'UP')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(quietGreen, 'COMPRESSION', 'UP')).toBeNull();
     expect(decideEntryFrom10sRegime(quietGreen, 'COMPRESSION', 'DOWN')).toBeNull();
   });
 
@@ -114,8 +113,8 @@ describe('10s + regime-as-CONTEXT suitable entry', () => {
     expect(decideEntryFrom10sRegime(rally, 'TREND_DOWN', 'DOWN')).toBeNull();
   });
 
-  it('PULLBACK_UPTREND dump SELLs with DOWN, dip-buys with UP, resumes long on rally', () => {
-    expect(decideEntryFrom10sRegime(rally, 'PULLBACK_UPTREND', 'UP')?.direction).toBe('BUY');
+  it('PULLBACK_UPTREND dump SELLs with DOWN, dip-buys with UP — no naked rally chase', () => {
+    expect(decideEntryFrom10sRegime(rally, 'PULLBACK_UPTREND', 'UP')).toBeNull();
     expect(decideEntryFrom10sRegime(dip, 'PULLBACK_UPTREND', 'UP')?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(dip, 'PULLBACK_UPTREND', 'DOWN')?.direction).toBe('SELL');
   });

@@ -102,16 +102,15 @@ export function trendBiasFromMinuteCandles(
   const downN = w.filter((c) => c.close < c.open).length;
   const { net, persist } = netAndPersist(w[0]!.open, w[w.length - 1]!.close, upN, downN, w.length);
   const last = w[w.length - 1]!;
-  if (last.close > last.open && net >= 0) return 'UP';
-  if (last.close < last.open && net <= 0) return 'DOWN';
+  // Require net/persist evidence — never invent bias from last 1m candle color alone.
+  if (last.close > last.open && net >= 0.0003 && persist >= 0) return 'UP';
+  if (last.close < last.open && net <= -0.0003 && persist <= 0) return 'DOWN';
   if (net > 0.0005 && persist >= 0) return 'UP';
   if (net < -0.0005 && persist <= 0) return 'DOWN';
   if (net > 0.001) return 'UP';
   if (net < -0.001) return 'DOWN';
-  if (persist > 0.15 && net > 0.0002) return 'UP';
-  if (persist < -0.15 && net < -0.0002) return 'DOWN';
-  if (last.close < last.open) return 'DOWN';
-  if (last.close > last.open) return 'UP';
+  if (persist > 0.35 && net > 0.0002) return 'UP';
+  if (persist < -0.35 && net < -0.0002) return 'DOWN';
   return 'FLAT';
 }
 
@@ -470,9 +469,16 @@ function gateWithTrend(
   return { ...hit, reason: `${hit.reason} · bias ${b}` };
 }
 
+function priorWasDip(bars: TenSecBar[]): boolean {
+  if (bars.length < 2) return false;
+  const prev = bars[bars.length - 2]!;
+  return dip(prev) || softDip(prev);
+}
+
 /**
  * Suitable entry for the current 10s regime context.
  * Returns null = no valid setup evidence (NO_SETUP) — never "regime forbidden".
+ * Does NOT chase every green/red candle — needs pullback / breakout / rejection structure.
  */
 export function decideEntryFrom10sRegime(
   bar: TenSecBar,
@@ -496,7 +502,6 @@ export function decideEntryFrom10sRegime(
   if (r === 'RANGE') {
     const rr = decideRangeRejection(bar, bars);
     if (rr) return gateWithTrend(rr, b, bar, bars, r);
-    // Also allow exhaustion already handled; no with-trend invent
     return null;
   }
 
@@ -504,8 +509,8 @@ export function decideEntryFrom10sRegime(
     const fb = decideFailedBreakout(bar, r, bars);
     const gated = fb ? gateWithTrend(fb, b, bar, bars, r) : null;
     if (gated) return gated;
-    // Fade not confirmed — do not SCAN forever; still dip-buy / follow dump with lasting bias.
-    if (b === 'UP' && (dip(bar) || softDip(bar))) {
+    // Only real dip after failed breakout — not soft color chase.
+    if (b === 'UP' && dip(bar) && movingOrNull(bar)) {
       return gateWithTrend(
         { direction: 'BUY', setup: 'PULLBACK', reason: `${r}+bias UP dip-buy · ${candle}` },
         b,
@@ -514,7 +519,7 @@ export function decideEntryFrom10sRegime(
         r
       );
     }
-    if (b === 'DOWN' && (dip(bar) || softDip(bar))) {
+    if (b === 'DOWN' && dip(bar) && movingOrNull(bar)) {
       return gateWithTrend(
         { direction: 'SELL', setup: 'BREAKOUT', reason: `${r}+bias DOWN follow dump · ${candle}` },
         b,
@@ -532,41 +537,22 @@ export function decideEntryFrom10sRegime(
     return null;
   }
 
-  // UNKNOWN / COMPRESSION / TRANSITION — use available evidence; do not invent regime
+  // UNKNOWN / COMPRESSION / TRANSITION — only real dip pullback with lasting bias (no rally chase).
   if (r === 'UNKNOWN' || r === 'TRANSITION' || r === 'COMPRESSION') {
-    if (b === 'UP') {
-      // Avoid “BUY on any quiet noise”. Require actual 10s evidence:
-      // - red-ish dip → pullback BUY
-      // - green-ish rally → breakout/continuation BUY
-      if (softDip(bar) || dip(bar)) {
-        return gateWithTrend(
-          {
-            direction: 'BUY',
-            setup: 'PULLBACK',
-            reason: `${r}+bias UP · dip-buy · ${candle}`,
-          },
-          b,
-          bar,
-          bars,
-          r
-        );
-      }
-      if (softRally(bar) || rally(bar)) {
-        return gateWithTrend(
-          {
-            direction: 'BUY',
-            setup: 'BREAKOUT',
-            reason: `${r}+bias UP · rally-follow · ${candle}`,
-          },
-          b,
-          bar,
-          bars,
-          r
-        );
-      }
-      return null;
+    if (b === 'UP' && dip(bar) && movingOrNull(bar)) {
+      return gateWithTrend(
+        {
+          direction: 'BUY',
+          setup: 'PULLBACK',
+          reason: `${r}+bias UP · dip-buy · ${candle}`,
+        },
+        b,
+        bar,
+        bars,
+        r
+      );
     }
-    if (b === 'DOWN' && (softDip(bar) || dip(bar))) {
+    if (b === 'DOWN' && dip(bar) && movingOrNull(bar)) {
       return gateWithTrend(
         { direction: 'SELL', setup: 'PULLBACK', reason: `${r}+bias DOWN follow dump · ${candle}` },
         b,
@@ -579,6 +565,7 @@ export function decideEntryFrom10sRegime(
   }
 
   if (r === 'TREND_UP') {
+    // Real setup = dip-buy pullback. Never chase every green continuation candle.
     if (movingOrNull(bar) && dip(bar)) {
       return gateWithTrend(
         { direction: 'BUY', setup: 'PULLBACK', reason: `${r} dip-buy · ${candle}` },
@@ -588,9 +575,10 @@ export function decideEntryFrom10sRegime(
         r
       );
     }
-    if (movingOrNull(bar) && rally(bar)) {
+    // Resume only after a prior dip (pullback → green), not naked climb.
+    if (movingOrNull(bar) && rally(bar) && priorWasDip(bars)) {
       return gateWithTrend(
-        { direction: 'BUY', setup: 'CONTINUATION', reason: `${r} follow climb · ${candle}` },
+        { direction: 'BUY', setup: 'CONTINUATION', reason: `${r} resume after dip · ${candle}` },
         b,
         bar,
         bars,
@@ -600,7 +588,8 @@ export function decideEntryFrom10sRegime(
     return null;
   }
   if (r === 'TREND_DOWN') {
-    if (!softDip(bar) && !dip(bar)) return null;
+    // Real dump only — soft red micro-noise is not a setup.
+    if (!(movingOrNull(bar) && dip(bar))) return null;
     return gateWithTrend(
       { direction: 'SELL', setup: 'PULLBACK', reason: `${r} follow dump · ${candle}` },
       b,
@@ -611,8 +600,7 @@ export function decideEntryFrom10sRegime(
   }
 
   if (r === 'PULLBACK_UPTREND') {
-    // Dump + DOWN → SELL (screenshot SCAN case). Dump + UP → dip-buy. Rally → resume long.
-    if (b === 'DOWN' && (dip(bar) || softDip(bar))) {
+    if (b === 'DOWN' && dip(bar) && movingOrNull(bar)) {
       return gateWithTrend(
         { direction: 'SELL', setup: 'CONTINUATION', reason: `${r}+bias DOWN follow dump · ${candle}` },
         b,
@@ -621,7 +609,7 @@ export function decideEntryFrom10sRegime(
         r
       );
     }
-    if (dip(bar) || softDip(bar)) {
+    if (dip(bar) && movingOrNull(bar)) {
       return gateWithTrend(
         { direction: 'BUY', setup: 'PULLBACK', reason: `${r} dip-buy · ${candle}` },
         b,
@@ -630,7 +618,8 @@ export function decideEntryFrom10sRegime(
         r
       );
     }
-    if (rally(bar) || softRally(bar)) {
+    // Resume long only on real rally after the pullback dip — not soft green noise.
+    if (rally(bar) && movingOrNull(bar) && priorWasDip(bars)) {
       return gateWithTrend(
         { direction: 'BUY', setup: 'CONTINUATION', reason: `${r} resume long · ${candle}` },
         b,
@@ -642,7 +631,7 @@ export function decideEntryFrom10sRegime(
     return null;
   }
   if (r === 'PULLBACK_DOWNTREND') {
-    if (b === 'UP' && (rally(bar) || softRally(bar))) {
+    if (b === 'UP' && rally(bar) && movingOrNull(bar)) {
       return gateWithTrend(
         { direction: 'BUY', setup: 'CONTINUATION', reason: `${r}+bias UP follow rally · ${candle}` },
         b,
@@ -651,7 +640,7 @@ export function decideEntryFrom10sRegime(
         r
       );
     }
-    if (dip(bar) || softDip(bar)) {
+    if (dip(bar) && movingOrNull(bar)) {
       return gateWithTrend(
         { direction: 'SELL', setup: 'CONTINUATION', reason: `${r} resume short · ${candle}` },
         b,
@@ -685,8 +674,8 @@ export function decideEntryFrom10sRegime(
   }
 
   if (r === 'EXPANSION') {
-    // Desk case: EXPANSION + bias UP + dump bar → BUY the dip (not SCAN / NO_SETUP).
-    if (b === 'UP' && (dip(bar) || softDip(bar))) {
+    // Only dip-buy with UP bias — do not chase every expansion green candle.
+    if (b === 'UP' && dip(bar) && movingOrNull(bar)) {
       return gateWithTrend(
         { direction: 'BUY', setup: 'PULLBACK', reason: `${r}+bias UP dip-buy · ${candle}` },
         b,
@@ -695,16 +684,7 @@ export function decideEntryFrom10sRegime(
         r
       );
     }
-    if (b === 'UP' && (rally(bar) || softRally(bar))) {
-      return gateWithTrend(
-        { direction: 'BUY', setup: 'BREAKOUT', reason: `${r}+bias UP follow · ${candle}` },
-        b,
-        bar,
-        bars,
-        r
-      );
-    }
-    if (b === 'DOWN' && (dip(bar) || softDip(bar))) {
+    if (b === 'DOWN' && dip(bar) && movingOrNull(bar)) {
       return gateWithTrend(
         { direction: 'SELL', setup: 'BREAKOUT', reason: `${r}+bias DOWN follow dump · ${candle}` },
         b,

@@ -20,6 +20,7 @@ import {
 import { emitToClient } from './clientEvents.js';
 import { mapTradeType } from './tradePresentation.js';
 import {
+  classifyRegime,
   normalizeRegime,
   REGIME_NAMES,
   type RegimeName,
@@ -61,7 +62,7 @@ import {
   type TrendBias,
 } from './entryFromRegime.js';
 import { DecisionCodes, type DecisionCode } from './decisionCodes.js';
-import { resolveDeskEntry } from './deskEntry.js';
+import { isRealEntrySetup, resolveDeskEntry } from './deskEntry.js';
 import {
   evaluateEntryDirectionGate,
   formatEntryDiagnostic,
@@ -506,9 +507,13 @@ function applyBiasRegimeUnlock(_s: Internal) {
 function applyLiveRegimeFromMinutes(s: Internal) {
   const bar = s.ohlcState.last_closed;
   const minuteBias = trendBiasFromMinuteCandles(s.minuteCandles);
-  if (minuteBias === 'UP') s.regime = 'TREND_UP';
-  else if (minuteBias === 'DOWN') s.regime = 'TREND_DOWN';
-  else s.regime = 'RANGE';
+  // Regime from 10s structure — never invent TREND_* from last 1m candle color.
+  const prev = normalizeRegime(s.regime) as RegimeName;
+  if (s.closedBars.length >= 2) {
+    s.regime = classifyRegime(s.closedBars, prev);
+  } else if (!s.regime || String(s.regime).toUpperCase() === 'UNKNOWN') {
+    s.regime = 'RANGE';
+  }
   s.trend_bias = effectiveBias(s.regime, minuteBias, bar);
   applyBiasRegimeUnlock(s);
 }
@@ -571,8 +576,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
 }
 
 function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
-  // 10s OHLC tiek izmantots tikai setup/evidence / closedBars vēsturei.
-  // Regime label (TREND_UP/DOWN/RANGE) nāk no 1m minuteCandles.
+  // 10s OHLC builds closedBars; live regime label comes from classifyRegime in applyLiveRegimeFromMinutes.
   const incoming = bars?.length
     ? bars
     : s.ohlcState.last_closed
@@ -2323,6 +2327,18 @@ async function robotCycleBody(s: Internal) {
       detail: `${formatEntryDiagnostic(finalGate)}${finalGate.block_reason ? ` · ${finalGate.block_reason}` : ''}`,
     });
     if (finalGate.final_entry === 'BLOCK') {
+      return;
+    }
+
+    if (!isRealEntrySetup(setupType)) {
+      pushTick(s, {
+        phase: 'SCAN',
+        bid: execQuote.bid,
+        ask: execQuote.ask,
+        mid: execQuote.mid,
+        code: DecisionCodes.NO_SETUP,
+        detail: `${ohlcLine} · NO_REAL_SETUP · ${setupType || 'none'} — wait pullback/breakout/rejection`,
+      });
       return;
     }
 

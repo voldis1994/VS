@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveDeskEntry } from './deskEntry.js';
+import { isRealEntrySetup, resolveDeskEntry } from './deskEntry.js';
 import type { PriceRef } from './staleQuoteGuard.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 
@@ -30,18 +30,29 @@ const yahooBasis: PriceRef[] = [
   { label: 'Fawaz FX / XAU (public)', mid: 4402.33 },
 ];
 
-describe('resolveDeskEntry — BUY and SELL both fire', () => {
-  it('SCAN: feeds already above Capital → BUY', () => {
+describe('isRealEntrySetup', () => {
+  it('allows structure setups only', () => {
+    expect(isRealEntrySetup('PULLBACK')).toBe(true);
+    expect(isRealEntrySetup('CONTINUATION')).toBe(true);
+    expect(isRealEntrySetup('BREAKOUT')).toBe(true);
+    expect(isRealEntrySetup('RANGE_REJECTION')).toBe(true);
+    expect(isRealEntrySetup('LAG_LEAD')).toBe(false);
+    expect(isRealEntrySetup('BIAS')).toBe(false);
+    expect(isRealEntrySetup(null)).toBe(false);
+  });
+});
+
+describe('resolveDeskEntry — real setups only (no chase)', () => {
+  it('LAG_LEAD alone never opens (feed lead is not a setup)', () => {
     const e = resolveDeskEntry({
       capitalMid: 4338,
       refs: [...yahooBasis, ...cluster(4346)],
     });
-    expect(e.direction).toBe('BUY');
-    expect(e.setup).toBe('LAG_LEAD');
-    expect(e.reason).toMatch(/LAG CAPITAL · BUY/);
+    expect(e.direction).toBeNull();
+    expect(e.reason).toMatch(/NO_REAL_SETUP|LAG_LEAD/);
   });
 
-  it('SCAN: lag-lead opposite vs bias is blocked by concept permission', () => {
+  it('SCAN: lag-lead opposite vs bias is blocked', () => {
     const e = resolveDeskEntry({
       bias: 'UP',
       capitalMid: 4338,
@@ -50,17 +61,15 @@ describe('resolveDeskEntry — BUY and SELL both fire', () => {
     expect(e.direction).toBeNull();
   });
 
-  it('SCAN: feeds already below Capital → SELL', () => {
+  it('feeds below Capital alone never opens SELL', () => {
     const e = resolveDeskEntry({
       capitalMid: 4338,
       refs: [...yahooBasis, ...cluster(4330)],
     });
-    expect(e.direction).toBe('SELL');
-    expect(e.setup).toBe('LAG_LEAD');
-    expect(e.reason).toMatch(/LAG CAPITAL · SELL/);
+    expect(e.direction).toBeNull();
   });
 
-  it('10s TREND_UP dump → BUY (dip)', () => {
+  it('10s TREND_UP dump → BUY (PULLBACK)', () => {
     const e = resolveDeskEntry({
       bar: bar(4340.22, 4339.03),
       regime: 'TREND_UP',
@@ -72,6 +81,17 @@ describe('resolveDeskEntry — BUY and SELL both fire', () => {
     expect(e.setup).toBe('PULLBACK');
   });
 
+  it('10s TREND_UP green climb alone → no chase CONTINUATION', () => {
+    const e = resolveDeskEntry({
+      bar: bar(4339.03, 4340.22),
+      regime: 'TREND_UP',
+      bias: 'UP',
+      capitalMid: 4340.22,
+      refs: cluster(4340.2),
+    });
+    expect(e.direction).toBeNull();
+  });
+
   it('10s TREND_DOWN dump → SELL', () => {
     const e = resolveDeskEntry({
       bar: bar(4340.22, 4339.03),
@@ -81,30 +101,7 @@ describe('resolveDeskEntry — BUY and SELL both fire', () => {
       refs: cluster(4339.0),
     });
     expect(e.direction).toBe('SELL');
-  });
-
-  it('FLIP: 10s BUY into a dumped cluster → SELL', () => {
-    const e = resolveDeskEntry({
-      bar: bar(4354, 4350),
-      regime: 'TREND_UP',
-      bias: 'UP',
-      capitalMid: 4354,
-      refs: cluster(4346),
-    });
-    // With bias UP, we don't allow a stale-quote flip into SELL.
-    expect(e.direction).toBeNull();
-  });
-
-  it('FLIP: 10s SELL into a rallied cluster → BUY', () => {
-    const e = resolveDeskEntry({
-      bar: bar(4346, 4342),
-      regime: 'TREND_DOWN',
-      bias: 'DOWN',
-      capitalMid: 4342,
-      refs: cluster(4350),
-    });
-    // With bias DOWN, we don't allow a stale-quote flip into BUY.
-    expect(e.direction).toBeNull();
+    expect(e.setup).toBe('PULLBACK');
   });
 
   it('Yahoo 50pt basis alone never creates BUY or SELL', () => {
@@ -115,74 +112,19 @@ describe('resolveDeskEntry — BUY and SELL both fire', () => {
     expect(e.direction).toBeNull();
   });
 
-  it('LAG_LEAD blocked if 10s candle evidence mismatches (BUY needs green)', () => {
-    const bearish = bar(4346.0, 4345.6);
-    const e = resolveDeskEntry({
-      bar: bearish,
-      regime: 'RANGE',
-      bias: 'UP',
-      capitalMid: 4338,
-      refs: [...yahooBasis, ...cluster(4346)], // would produce LAG_LEAD BUY
-    });
-    expect(e.direction).toBeNull();
-  });
-
-  it('LAG_LEAD allowed if 10s candle evidence matches (BUY needs green)', () => {
+  it('LAG_LEAD with matching green RANGE candle still blocked (not a real setup)', () => {
     const bullish = bar(4346.0, 4346.6);
     const e = resolveDeskEntry({
       bar: bullish,
       regime: 'RANGE',
       bias: 'UP',
       capitalMid: 4338,
-      refs: [...yahooBasis, ...cluster(4346)], // would produce LAG_LEAD BUY
+      refs: [...yahooBasis, ...cluster(4346)],
     });
-    expect(e.direction).toBe('BUY');
-    expect(e.setup).toBe('LAG_LEAD');
-  });
-
-  it('live 02:07 board cluster vs Capital → SELL (not Yahoo BUY)', () => {
-    const e = resolveDeskEntry({
-      capitalMid: 4338.31,
-      refs: [
-        ...yahooBasis,
-        { label: 'Gold-API spot (public)', mid: 4337.6 },
-        { label: 'Coinbase spot (public)', mid: 4334.98 },
-        { label: 'Kraken spot (public)', mid: 4333.93 },
-        { label: 'KuCoin spot (public)', mid: 4339 },
-        { label: 'Binance.US (public)', mid: 4350 },
-        { label: 'CoinGecko (public)', mid: 4329.03 },
-        { label: 'Bitstamp (public)', mid: 4334.88 },
-      ],
-    });
-    expect(e.direction).toBe('SELL');
-  });
-
-  it('01:20 board: quote 4330 vs Capital LIVE 4338 → BUY, not SCAN', () => {
-    const doji: TenSecBar = {
-      open_time_ms: 0,
-      open: 4338.12,
-      high: 4338.12,
-      low: 4337.7,
-      close: 4338.12,
-      ticks: 8,
-    };
-    const e = resolveDeskEntry({
-      bar: doji,
-      regime: 'COMPRESSION',
-      bias: 'UP',
-      capitalMid: 4330.35,
-      refs: [
-        ...yahooBasis,
-        { label: 'BOOS / Capital.com LIVE', mid: 4338.08 },
-        { label: 'Gold-API spot (public)', mid: 4338.9 },
-        { label: 'Binance.US (public)', mid: 4330.27 },
-      ],
-    });
-    // On a quiet/doji candle, we don't take a lag-lead BUY.
     expect(e.direction).toBeNull();
   });
 
-  it('screenshot: PULLBACK_UPTREND + bias DOWN + dump 10s → SELL, not SCAN', () => {
+  it('screenshot: PULLBACK_UPTREND + bias DOWN + dump 10s → SELL', () => {
     const e = resolveDeskEntry({
       bar: {
         open_time_ms: 0,
@@ -198,10 +140,9 @@ describe('resolveDeskEntry — BUY and SELL both fire', () => {
       refs: cluster(4354.13),
     });
     expect(e.direction).toBe('SELL');
-    expect(e.direction).not.toBeNull();
   });
 
-  it('RANGE + doji does not invent BUY/SELL just because a 10s closed', () => {
+  it('RANGE + doji does not invent BUY/SELL', () => {
     const doji = bar(4354.5, 4354.5);
     const e = resolveDeskEntry({
       bar: doji,
@@ -232,7 +173,18 @@ describe('resolveDeskEntry — BUY and SELL both fire', () => {
     expect(climb.direction).toBeNull();
   });
 
-  it('when intended comes from C++ calc, lag-lead opposite does not flip; stale blocks entry', () => {
+  it('BIAS last-resort path is gone — TREND alone + green is not enough', () => {
+    const e = resolveDeskEntry({
+      bar: bar(4350, 4351),
+      regime: 'TREND_UP',
+      bias: 'FLAT',
+      capitalMid: 4351,
+      refs: cluster(4351),
+    });
+    expect(e.direction).toBeNull();
+  });
+
+  it('when intended comes from C++ calc, adverse stale blocks entry (no LAG flip)', () => {
     const e = resolveDeskEntry({
       intended: 'BUY',
       intendedSetup: 'CONTINUATION',
@@ -279,7 +231,6 @@ describe('resolveDeskEntry — BUY and SELL both fire', () => {
       ],
     });
     expect(e.direction).not.toBe('BUY');
-    if (e.direction === null) expect(e.reason).toMatch(/REGIME_BLOCK|CONCEPT_BLOCK|no BUY/);
   });
 
   it('blocks C++ vein BUY when regime is TREND_DOWN', () => {
@@ -319,5 +270,20 @@ describe('resolveDeskEntry — BUY and SELL both fire', () => {
     });
     expect(e.direction).toBeNull();
     expect(e.reason).toMatch(/CALC_BLOCK.*impulse ended/i);
+  });
+
+  it('C++ CONTINUATION with matching structure still allowed', () => {
+    const e = resolveDeskEntry({
+      intended: 'BUY',
+      intendedSetup: 'PULLBACK',
+      intendedReason: 'CALC EntryReady',
+      bar: bar(4340.22, 4339.03),
+      regime: 'TREND_UP',
+      bias: 'UP',
+      capitalMid: 4339.03,
+      refs: cluster(4339.0),
+    });
+    expect(e.direction).toBe('BUY');
+    expect(e.setup).toBe('PULLBACK');
   });
 });

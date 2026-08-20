@@ -1,6 +1,6 @@
 /**
- * Desk entry: 10s regime, then Capital-lag lead (BUY and SELL).
- * Does not invent a side on every dump/rally — that churns Gold 10s.
+ * Desk entry: real 10s setups only (PULLBACK / CONTINUATION / BREAKOUT / rejection).
+ * Does not chase every dump/rally via BIAS or LAG_LEAD alone.
  */
 import {
   decideEntryFrom10sRegime,
@@ -34,6 +34,25 @@ const COUNTERTREND_SETUPS = new Set([
   'RANGE_REJECTION',
   'FAILED_BREAKOUT',
 ]);
+
+/** Named structure setups that may open Capital — not BIAS / LAG chase. */
+const REAL_ENTRY_SETUPS = [
+  'PULLBACK',
+  'CONTINUATION',
+  'BREAKOUT',
+  'RANGE_REJECTION',
+  'FADE',
+  'REVERSAL',
+  'FAILED_BREAKOUT',
+] as const;
+
+export function isRealEntrySetup(setup?: string | null): boolean {
+  const s = String(setup || '')
+    .trim()
+    .toUpperCase();
+  if (!s) return false;
+  return REAL_ENTRY_SETUPS.some((ok) => s === ok || s.includes(ok));
+}
 
 /** Hard block: no BUY in down regime/bias, no SELL in up regime/bias. */
 export function blockRegimeDirectionEntry(
@@ -73,8 +92,7 @@ export function resolveDeskEntry(input: {
   let reason = input.intendedReason ?? '';
   const bias = input.bias || 'FLAT';
 
-  // When bias is FLAT, infer concept direction from the lasting 1m regime.
-  // This avoids countertrend LAG_LEAD/stale flips during “bias uncertainty”.
+  // When bias is FLAT, infer concept direction from the lasting regime.
   function conceptBiasFromRegime(regime?: string | null): TrendBias {
     const r = String(regime || '').toUpperCase();
     const up = r === 'TREND_UP' || r === 'PULLBACK_UPTREND' || r === 'BREAKOUT_UP';
@@ -84,11 +102,17 @@ export function resolveDeskEntry(input: {
     return 'FLAT';
   }
 
-  // Concept permission gate — all entry paths (C++, 10s, LAG), not calc-only.
   const conceptBias = bias === 'FLAT' ? conceptBiasFromRegime(input.regime) : bias;
 
   function finish(entry: DeskEntry): DeskEntry {
     if (!entry.direction) return entry;
+    if (!isRealEntrySetup(entry.setup)) {
+      return {
+        direction: null,
+        setup: null,
+        reason: `NO_REAL_SETUP · ${entry.setup || 'none'} is not a tradeable structure`,
+      };
+    }
     const regimeBlock = blockRegimeDirectionEntry(
       entry.direction,
       input.regime,
@@ -102,7 +126,11 @@ export function resolveDeskEntry(input: {
       const s = String(entry.setup || '')
         .trim()
         .toUpperCase();
-      if (!COUNTERTREND_SETUPS.has(s)) {
+      if (
+        !COUNTERTREND_SETUPS.has(s) &&
+        !s.includes('FAILED_BREAKOUT') &&
+        !s.includes('RANGE_REJECTION')
+      ) {
         const ok = conceptBias === 'UP' ? entry.direction === 'BUY' : entry.direction === 'SELL';
         if (!ok) {
           return {
@@ -131,8 +159,6 @@ export function resolveDeskEntry(input: {
     return entry;
   }
 
-  // When direction came from C++ EntryReady, do not override it with Node-side
-  // lag/leak heuristics — that would discard EV/transition formulas from calc.
   const fromCalc = input.intended != null;
 
   if (fromCalc && direction) {
@@ -155,7 +181,9 @@ export function resolveDeskEntry(input: {
     }
     const deny = denyWithTrendEntry(direction, input.bar, bias, input.closedBars, {
       exhaustion: setupU === 'FADE',
-      allowCountertrend: ['FADE', 'REVERSAL', 'RANGE_REJECTION', 'FAILED_BREAKOUT'].includes(setupU),
+      allowCountertrend: ['FADE', 'REVERSAL', 'RANGE_REJECTION', 'FAILED_BREAKOUT'].includes(
+        setupU
+      ),
     });
     if (deny) {
       return { direction: null, setup: null, reason: `CALC_BLOCK · ${deny}` };
@@ -163,12 +191,7 @@ export function resolveDeskEntry(input: {
   }
 
   if (!direction && input.bar) {
-    const hit = decideEntryFrom10sRegime(
-      input.bar,
-      input.regime,
-      bias,
-      input.closedBars
-    );
+    const hit = decideEntryFrom10sRegime(input.bar, input.regime, bias, input.closedBars);
     if (hit) {
       direction = hit.direction;
       setup = hit.setup;
@@ -184,22 +207,15 @@ export function resolveDeskEntry(input: {
   }
 
   function lagEvidenceAllowed(lagDir: 'BUY' | 'SELL', bar?: TenSecBar | null): boolean {
-    // In SCAN mode we may not have a 10s candle; then we can't validate dip/rally evidence.
     if (!bar) return true;
-
-    // Block “BUY/SELL on a doji”.
     const denom = Math.max(Math.abs(bar.open), 1e-9);
     const bodyAbsRel = Math.abs(bar.close - bar.open) / denom;
     if (bodyAbsRel < 0.00002) return false;
-
-    // Minimal dip/rally evidence: green → BUY, red → SELL.
     if (lagDir === 'BUY') return bar.close > bar.open;
     return bar.close < bar.open;
   }
 
   const lead = detectCapitalLagLead(input.capitalMid, input.refs, {
-    // Keep original scan threshold (avoid false-negative on real clusters).
-    // Flip protection still uses the higher threshold when direction already exists.
     minRel: direction ? FLIP_MIN_REL : LAG_SCAN_MIN_REL,
   });
 
@@ -214,71 +230,20 @@ export function resolveDeskEntry(input: {
     } else if (!evidenceOk) {
       lagBlockedReason = `EVIDENCE_BLOCK · LAG_LEAD ${lagDir} vs 10s candle`;
     } else if (!direction) {
-      return finish({ direction: lagDir, setup: 'LAG_LEAD', reason: lead.reason });
+      lagBlockedReason = `NO_REAL_SETUP · LAG_LEAD alone blocked · ${lead.reason}`;
     } else if (!fromCalc && direction !== lagDir) {
-      return finish({
-        direction: lagDir,
-        setup: 'LAG_LEAD',
-        reason: `FLIP ${direction} → ${lead.reason}`,
-      });
+      return {
+        direction: null,
+        setup: null,
+        reason: `STALE_LAG_BLOCK · ${lead.reason}`,
+      };
     }
   }
 
-  if (direction && setup !== 'LAG_LEAD') {
+  if (direction && isRealEntrySetup(setup)) {
     const stale = detectStaleQuoteAdverse(direction, input.capitalMid, input.refs);
     if (stale.block) {
-      // If C++ already gave an intended side, do not flip it; block the entry instead.
-      if (fromCalc) {
-        return { direction: null, setup: null, reason: `STALE_QUOTE_BLOCK · ${stale.reason}` };
-      }
-
-      const flip: 'BUY' | 'SELL' = direction === 'BUY' ? 'SELL' : 'BUY';
-      const conceptOk = lagConceptAllowed(flip);
-      const evidenceOk = lagEvidenceAllowed(flip, input.bar);
-
-      if (conceptOk && evidenceOk) {
-        return finish({
-          direction: flip,
-          setup: 'LAG_LEAD',
-          reason: `LAG CAPITAL · ${flip} · ${stale.reason}`,
-        });
-      }
-
-      const why = !conceptOk
-        ? `CONCEPT_BLOCK · LAG_LEAD ${flip} vs bias ${bias}`
-        : `EVIDENCE_BLOCK · LAG_LEAD ${flip} vs 10s candle`;
-      return { direction: null, setup: null, reason: `${why} · ${stale.reason}` };
-    }
-  }
-
-  // Last resort only in a lasting trend — RANGE/COMPRESSION must not flip every 10s.
-  if (!direction && input.bar) {
-    // Avoid “BUY/SELL on a doji”: last-resort bias should require real body movement.
-    const bar = input.bar;
-    const denom = Math.max(Math.abs(bar.open), 1e-9);
-    const bodyAbsRel = Math.abs(bar.close - bar.open) / denom;
-    if (bodyAbsRel < 0.00002) {
-      return { direction: null, setup: null, reason: '' };
-    }
-
-    const regime = String(input.regime || '').toUpperCase();
-    const trendingBuy =
-      regime === 'TREND_UP' || regime === 'PULLBACK_UPTREND' || regime === 'BREAKOUT_UP';
-    const trendingSell =
-      regime === 'TREND_DOWN' || regime === 'PULLBACK_DOWNTREND' || regime === 'BREAKOUT_DOWN';
-    if (trendingBuy && bias !== 'DOWN') {
-      return finish({
-        direction: 'BUY',
-        setup: 'BIAS',
-        reason: `BIAS ${bias} · BUY · ${input.regime || 'UNKNOWN'} closed 10s`,
-      });
-    }
-    if (trendingSell && bias !== 'UP') {
-      return finish({
-        direction: 'SELL',
-        setup: 'BIAS',
-        reason: `BIAS ${bias} · SELL · ${input.regime || 'UNKNOWN'} closed 10s`,
-      });
+      return { direction: null, setup: null, reason: `STALE_QUOTE_BLOCK · ${stale.reason}` };
     }
   }
 
