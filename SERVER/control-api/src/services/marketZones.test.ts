@@ -72,7 +72,7 @@ describe('marketZones', () => {
     expect(partialCloseSize(0.01)).toBe(0);
   });
 
-  it('BUY hits first supply → PARTIAL', () => {
+  it('BUY hits first supply → FULL take-profit', () => {
     const bars = supplySetup();
     const zones = buildMarketZones(bars);
     expect(zones.supply.length).toBeGreaterThan(0);
@@ -87,21 +87,21 @@ describe('marketZones', () => {
       partial_done: false,
       upl: 3,
     });
-    expect(d.action).toBe('PARTIAL');
-    expect(d.close_fraction).toBe(0.5);
+    expect(d.action).toBe('FULL');
+    expect(d.close_fraction).toBe(1);
   });
 
-  it('BUY adverse after partial → FULL', () => {
-    const bars = supplySetup();
+  it('BUY adverse reverse into demand → FULL', () => {
+    const bars = demandSetup();
     const zones = buildMarketZones(bars);
-    const entry = 105.5;
+    const entry = 100.3;
     const d = decideZoneManageExit({
       side: 'BUY',
       entry,
-      mid: 104.0,
-      bars: [...bars, bar(109, 109.2, 103.5, 104.0, 7)],
+      mid: 100.05,
+      bars: [...bars, bar(100.2, 100.25, 99.9, 100.0, 7)],
       zones,
-      partial_done: true,
+      partial_done: false,
       upl: -1,
     });
     expect(d.action).toBe('FULL');

@@ -1060,8 +1060,9 @@ export async function closeCapitalPosition(
 }
 
 /**
- * Scale-out (partial close) on netting Capital accounts via opposite market order.
- * DELETE /positions/{dealId} is full-row only — partial must reduce by opposing size.
+ * Scale-out (partial close) — DISABLED for live robots.
+ * Capital DELETE is full-row only. Opposite market orders create hedges on many accounts
+ * and leave the client with BUY+SELL mess. Prefer full close at zone / Best Outcome.
  */
 export async function reduceCapitalPosition(
   session: CapitalSession,
@@ -1073,17 +1074,14 @@ export async function reduceCapitalPosition(
     clientOrderId?: string;
   }
 ): Promise<{ ok: boolean; deal_reference?: string; detail: string; status: number; json: any }> {
-  const size = Number(input.size);
-  if (!(size > 0) || !Number.isFinite(size)) {
-    return { ok: false, status: 0, json: {}, detail: 'reduce size must be > 0' };
-  }
-  const reduceSide: 'BUY' | 'SELL' = input.openSide === 'BUY' ? 'SELL' : 'BUY';
-  return createCapitalPosition(session, {
-    epic: input.epic,
-    direction: reduceSide,
-    size,
-    clientOrderId: input.clientOrderId,
-  });
+  void session;
+  void input;
+  return {
+    ok: false,
+    status: 0,
+    json: {},
+    detail: 'partial reduce disabled · Capital REST full-row only · use full close',
+  };
 }
 
 /** Tighten/set stop on an already-open Capital position (PUT stopLevel, then stopDistance). */

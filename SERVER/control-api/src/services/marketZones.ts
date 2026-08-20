@@ -257,8 +257,8 @@ export type ZoneExitDecision = {
 
 /**
  * Manage exit by zones:
- * - First opposing zone hit → PARTIAL (scale out half)
- * - Next opposing zone / already scaled → can FULL at second target
+ * - First opposing zone hit (in profit) → FULL take-profit
+ *   (Capital REST DELETE is full-row only; opposite-order "partial" hedges many accounts)
  * - Trend reverse into entry-side zone against us → FULL
  */
 export function decideZoneManageExit(input: {
@@ -277,7 +277,6 @@ export function decideZoneManageExit(input: {
   if (side === 'BUY') {
     const targets = supplyZonesAbove(zones, entry).filter((z) => z.pivot > entry);
     const first = targets[0] ?? null;
-    const second = targets[1] ?? null;
     const entryDemand =
       zones.demand.find((z) => priceInZone(entry, z)) ?? nearestDemandBelow(zones, entry);
 
@@ -297,45 +296,21 @@ export function decideZoneManageExit(input: {
       };
     }
 
-    if (!partial_done && first && (mid >= first.lo || (last && barTouchesZone(last, first)))) {
-      if (upl > 0) {
-        return {
-          action: 'PARTIAL',
-          reason: `ZONE PARTIAL · BUY hit supply ${first.pivot.toFixed(2)} · scale half`,
-          zone: first,
-          close_fraction: 0.5,
-        };
-      }
-    }
-
-    if (partial_done && second && mid >= second.lo) {
-      if (upl > 0) {
-        return {
-          action: 'FULL',
-          reason: `ZONE FULL · BUY second supply ${second.pivot.toFixed(2)}`,
-          zone: second,
-          close_fraction: 1,
-        };
-      }
-    }
-
-    // After partial: if price fails and falls back through first target the wrong way → full.
-    if (partial_done && first && mid < first.lo - (first.hi - first.lo) && upl <= 0) {
+    if (first && (mid >= first.lo || (last && barTouchesZone(last, first))) && upl > 0) {
       return {
         action: 'FULL',
-        reason: `ZONE FULL · BUY failed after partial · back below ${first.pivot.toFixed(2)}`,
+        reason: `ZONE FULL · BUY hit supply ${first.pivot.toFixed(2)} · take profit`,
         zone: first,
         close_fraction: 1,
       };
     }
 
-    return { action: 'HOLD', reason: 'ZONE HOLD · wait next supply / reverse', zone: first, close_fraction: 0 };
+    return { action: 'HOLD', reason: 'ZONE HOLD · wait supply TP / reverse', zone: first, close_fraction: 0 };
   }
 
   // SELL
   const targets = demandZonesBelow(zones, entry).filter((z) => z.pivot < entry);
   const first = targets[0] ?? null;
-  const second = targets[1] ?? null;
   const entrySupply =
     zones.supply.find((z) => priceInZone(entry, z)) ?? nearestSupplyAbove(zones, entry);
 
@@ -354,38 +329,16 @@ export function decideZoneManageExit(input: {
     };
   }
 
-  if (!partial_done && first && (mid <= first.hi || (last && barTouchesZone(last, first)))) {
-    if (upl > 0) {
-      return {
-        action: 'PARTIAL',
-        reason: `ZONE PARTIAL · SELL hit demand ${first.pivot.toFixed(2)} · scale half`,
-        zone: first,
-        close_fraction: 0.5,
-      };
-    }
-  }
-
-  if (partial_done && second && mid <= second.hi) {
-    if (upl > 0) {
-      return {
-        action: 'FULL',
-        reason: `ZONE FULL · SELL second demand ${second.pivot.toFixed(2)}`,
-        zone: second,
-        close_fraction: 1,
-      };
-    }
-  }
-
-  if (partial_done && first && mid > first.hi + (first.hi - first.lo) && upl <= 0) {
+  if (first && (mid <= first.hi || (last && barTouchesZone(last, first))) && upl > 0) {
     return {
       action: 'FULL',
-      reason: `ZONE FULL · SELL failed after partial · back above ${first.pivot.toFixed(2)}`,
+      reason: `ZONE FULL · SELL hit demand ${first.pivot.toFixed(2)} · take profit`,
       zone: first,
       close_fraction: 1,
     };
   }
 
-  return { action: 'HOLD', reason: 'ZONE HOLD · wait next demand / reverse', zone: first, close_fraction: 0 };
+  return { action: 'HOLD', reason: 'ZONE HOLD · wait demand TP / reverse', zone: first, close_fraction: 0 };
 }
 
 /** Half lot for scale-out; respects broker-ish 0.01 min when original >= 0.02. */
