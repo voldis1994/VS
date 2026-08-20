@@ -10,6 +10,7 @@ import {
   fetchCapitalMinutePrices,
   fetchCapitalPrices,
   listCapitalOpenPositions,
+  SAFETY_SL_GOLD_FLOOR,
   SAFETY_SL_REL,
   updateCapitalStop,
   type CapitalMarketQuote,
@@ -33,7 +34,7 @@ import {
   type BestOutcomeStateName,
   type BestOutcomeTrack,
 } from './exitManage.js';
-import type { BestOutcomeQualityResult } from './bestOutcomeQuality.js';
+import { hasMeaningfulProfit, type BestOutcomeQualityResult } from './bestOutcomeQuality.js';
 import {
   decideLiveBestOutcomeExit,
   resolveLiveManageSignal,
@@ -692,7 +693,7 @@ function clearTradeState(s: Internal) {
 }
 
 /**
- * Safety SL = 0.40% of price / 0.0040 (at least Capital min×2.5 + Gold floor so broker accepts it).
+ * Safety SL ≈ 0.13% of price / 0.004÷3 (at least Capital min×2.5 + Gold floor so broker accepts it).
  */
 function safetyStopLevel(
   direction: 'BUY' | 'SELL',
@@ -712,7 +713,7 @@ function safetyStopLevel(
   });
 }
 
-/** stopDistance from 0.40% of price (≥ 2.5× Capital min points; Gold never collapses to min-only). */
+/** stopDistance from ~0.13% of price (≥ 2.5× Capital min points; Gold never collapses to min-only). */
 function safetyStopDistancePts(
   mid: number,
   minPts: number,
@@ -723,7 +724,7 @@ function safetyStopDistancePts(
   // If Capital omits pointSize, assume Gold-like 0.1 so % distance is not dropped to minPts-only.
   const ps = pointSize != null && pointSize > 0 ? pointSize : abs >= 1000 ? 0.1 : 0.0001;
   const fromPct = pct / ps;
-  const goldFloorPts = abs >= 1000 ? 12 / ps : 0;
+  const goldFloorPts = abs >= 1000 ? SAFETY_SL_GOLD_FLOOR / ps : 0;
   const distPts = Math.max(minPts * 2.5, fromPct, goldFloorPts, minPts + 1e-9);
   return distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
 }
@@ -2176,7 +2177,7 @@ async function robotCycleBody(s: Internal) {
       s.mode = 'MANAGE';
       if (quote.mid == null) return;
 
-      // Entry SL fallback: attach 0.40% safety SL from ENTRY (not live mid) if Capital has none.
+      // Entry SL fallback: attach ~0.13% safety SL from ENTRY (not live mid) if Capital has none.
       const brokerStop = brokerOpen?.stop_level ?? null;
       const missingBrokerSl =
         Boolean(s.deal_id) &&
@@ -2279,6 +2280,28 @@ async function robotCycleBody(s: Internal) {
       }
 
       // Peek Strategy signal while OPEN — never consume pending_calc, never enterTrade.
+      // Prefer C++ EntryReady; else use regime PLAN (same system as READY ENTRY) so BO
+      // sees same/opposite while position is managed — not silent after plan entry.
+      const feedMidManage =
+        s.multiFeed?.mid != null && Number.isFinite(s.multiFeed.mid) ? s.multiFeed.mid : null;
+      const managePlan = regimeEntryPlan({
+        regime: liveRegime,
+        bias: s.trend_bias,
+        liveMid: quote.mid,
+        feedMid: feedMidManage,
+        bars10s: s.closedBars.map((b) => ({
+          open: b.open,
+          high: b.high,
+          low: b.low,
+          close: b.close,
+        })),
+        bars1m: (s.minuteCandles || []).map((b) => ({
+          open: b.open,
+          high: b.high,
+          low: b.low,
+          close: b.close,
+        })),
+      });
       const liveSignal = resolveLiveManageSignal({
         pendingCalc: s.pending_calc ?? null,
         bar: s.ohlcState.last_closed,
@@ -2287,6 +2310,12 @@ async function robotCycleBody(s: Internal) {
         bias: s.trend_bias || 'FLAT',
         capitalMid: quote.mid,
         refs: collectFresherRefs(s),
+        planDirection: managePlan.direction,
+        planSetup: managePlan.setup,
+        planReady: managePlan.ready,
+        planConfirmOk: managePlan.confirm_ok,
+        planConfirmN: managePlan.confirm_n,
+        planLine: managePlan.plan,
       });
       const uplNow =
         s.unrealized ??
@@ -2313,10 +2342,15 @@ async function robotCycleBody(s: Internal) {
       s.last_best_outcome_evaluation = bo.live_quality;
 
       // Exit = Best Outcome only (HARD_SAFETY + OPTIMIZATION). No zone manage path.
+      // 0.00 / flat / micro-plus is NOT Best Outcome — need clear meaningful profit.
+      const entryForBo =
+        s.entry_price != null && Number.isFinite(s.entry_price) ? s.entry_price : 2000;
       const allowClose =
         (bo.action === 'CLOSE' || bo.exit) &&
         (bo.exit_kind === 'HARD_SAFETY' ||
-          (bo.exit_kind === 'OPTIMIZATION' && canOptimizationClose(uplNow)));
+          (bo.exit_kind === 'OPTIMIZATION' &&
+            canOptimizationClose(uplNow) &&
+            hasMeaningfulProfit(entryForBo, uplNow)));
 
       if (allowClose) {
         pushTick(s, {

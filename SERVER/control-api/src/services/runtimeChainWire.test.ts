@@ -26,8 +26,10 @@ describe('P3 runtime call-chain wiring', () => {
     expect(src).not.toContain('tryPostBeProfitTrail');
     expect(src).not.toContain('PROFIT GUARD');
     expect(exitSrc).not.toContain('HardInvalidation');
-    expect(src).toContain('EXEC · waiting C++ EntryReady');
-    expect(src).toContain('Node does not invent');
+    expect(exitSrc).toContain('0.00 is not Best Outcome');
+    expect(src).toContain('waiting confirms/C++');
+    expect(src).toContain('EXEC plan READY');
+    expect(src).toContain('entryPlanReady');
     expect(src).toContain('this 10s already filled');
     expect(src).toContain('EXEC Node hands');
     expect(src).toContain('detectStaleQuoteAdverse');
@@ -35,8 +37,10 @@ describe('P3 runtime call-chain wiring', () => {
     expect(src).not.toContain("import { runTradePipeline } from './tradePipeline.js'");
     expect(src).toContain('SAFETY SL attached');
     expect(src).toContain('SAFETY_SL_REL');
+    expect(src).toContain('hasMeaningfulProfit');
+    expect(src).toContain('planDirection:');
     const cap = readFileSync(join(process.cwd(), 'src/services/capitalCom.ts'), 'utf8');
-    expect(cap).toContain('export const SAFETY_SL_REL = 0.004');
+    expect(cap).toContain('export const SAFETY_SL_REL = 0.004 / 3');
     const desk = readFileSync(join(process.cwd(), 'src/services/deskEntry.ts'), 'utf8');
     expect(desk).toContain('decideEntryFrom10sRegime');
     expect(desk).toContain('detectCapitalLagLead');

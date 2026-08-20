@@ -55,6 +55,13 @@ export function resolveLiveManageSignal(input: {
   capitalMid: number | null | undefined;
   refs: PriceRef[];
   nowMs?: number;
+  /** Regime entry plan (same PLAN/READY system as flat entry) — BO manage fallback. */
+  planDirection?: 'BUY' | 'SELL' | null;
+  planSetup?: string | null;
+  planReady?: boolean;
+  planConfirmOk?: number;
+  planConfirmN?: number;
+  planLine?: string | null;
 }): LiveManageSignal {
   const now = input.nowMs ?? Date.now();
   let intended: 'BUY' | 'SELL' | null = null;
@@ -62,6 +69,7 @@ export function resolveLiveManageSignal(input: {
   let reason = '';
   let signalAgeMs: number | null = null;
   let peeked = false;
+  let fromPlan = false;
 
   if (input.pendingCalc?.direction && input.pendingCalc.at) {
     const age = now - Date.parse(input.pendingCalc.at);
@@ -72,6 +80,35 @@ export function resolveLiveManageSignal(input: {
       reason = `CALC EntryReady · ${input.pendingCalc.explanation || input.pendingCalc.regime || input.pendingCalc.setup_type || input.pendingCalc.direction}`;
       signalAgeMs = age;
     }
+  }
+
+  // After plan READY entry, pending_calc is often empty — use live PLAN so BO
+  // still sees same/opposite (confirms + direction) from the new entry system.
+  if (!intended && input.planDirection) {
+    const ok = input.planConfirmOk ?? 0;
+    const n = input.planConfirmN ?? 0;
+    const ready = Boolean(input.planReady) || (n > 0 && ok >= n);
+    // Need at least half confirms (or READY) so weak noise plans do not flip BO.
+    if (ready || (n > 0 && ok * 2 >= n)) {
+      intended = input.planDirection;
+      setup = input.planSetup ?? null;
+      reason = `PLAN ${ready ? 'READY' : `${ok}/${n}`} · ${input.planLine || input.planSetup || input.planDirection}`;
+      signalAgeMs = 0;
+      fromPlan = true;
+    }
+  }
+
+  // Manage path: C++ / PLAN already decided the side. Do NOT re-apply late-entry
+  // blocks (those stop NEW opens, not BO same/opposite reading).
+  if (intended && (peeked || fromPlan)) {
+    return {
+      direction: intended,
+      setup,
+      reason,
+      valid: true,
+      peeked_pending_calc: peeked,
+      consumed_pending_calc: false,
+    };
   }
 
   const resolved = resolveDeskEntry({
@@ -235,7 +272,7 @@ export function decideLiveBestOutcomeExit(input: {
       live_quality,
       input.upl < 0
         ? `HOLD · UPL ${input.upl.toFixed(5)} · Best Outcome never closes negative · SL/HARD SAFETY only · ${scoreLabel(live_quality)}`
-        : `HOLD · UPL ${input.upl.toFixed(5)} · Best Outcome never closes at flat · SL/HARD SAFETY only · ${scoreLabel(live_quality)}`
+        : `HOLD · UPL ${input.upl.toFixed(5)} · 0.00 is not Best Outcome · never closes at flat · SL/HARD SAFETY only · ${scoreLabel(live_quality)}`
     );
   }
 
