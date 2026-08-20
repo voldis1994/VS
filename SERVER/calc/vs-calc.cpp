@@ -282,10 +282,23 @@ static bool decide(const Snap& s, std::string* dir, std::string* setup, std::str
   bool ltf_up = n1 > 0 || st1 >= 2 || s.body_1m > 0.04;
   bool ltf_down = n1 < 0 || st1 <= -2 || s.body_1m < -0.04;
 
-  // Bias from Node if present; else infer from HTF/polarity
-  bool want_buy = bias == "UP" || (bias != "DOWN" && (up_ctx || (htf_up && polarity >= 0)));
-  bool want_sell = bias == "DOWN" || (bias != "UP" && (down_ctx || (htf_down && polarity <= 0)));
-  if (bias == "FLAT" && !up_ctx && !down_ctx) {
+  // Bias from Node if present; else infer from HTF/polarity (never stay FLAT-blind)
+  bool want_buy = false;
+  bool want_sell = false;
+  if (bias == "UP") want_buy = true;
+  else if (bias == "DOWN") want_sell = true;
+  else {
+    // Node sent FLAT — compute lasting bias from 15m/5m/200c ourselves
+    if (htf_up && (mtf_up || polarity > 0.02)) want_buy = true;
+    else if (htf_down && (mtf_down || polarity < -0.02)) want_sell = true;
+    else if (polarity > 0.08 && (mtf_up || ltf_up || s.body_5m > 0)) want_buy = true;
+    else if (polarity < -0.08 && (mtf_down || ltf_down || s.body_5m < 0)) want_sell = true;
+    else if (up_ctx) want_buy = true;
+    else if (down_ctx) want_sell = true;
+    else if (bull > bear + 10 && n200 >= 40) want_buy = true;
+    else if (bear > bull + 10 && n200 >= 40) want_sell = true;
+  }
+  if (bias == "FLAT" && !up_ctx && !down_ctx && !want_buy && !want_sell) {
     want_buy = htf_up && mtf_up && polarity > 0.02;
     want_sell = htf_down && mtf_down && polarity < -0.02;
   }
