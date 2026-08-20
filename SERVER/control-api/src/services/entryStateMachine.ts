@@ -87,11 +87,11 @@ const COOLDOWN_MS = 20_000;
 const machines = new Map<string, EntryMachineSnapshot>();
 
 export function getEntryEngineMode(): EntryEngineMode {
-  const raw = String(process.env.VS_ENTRY_ENGINE_MODE || 'SHADOW')
+  const raw = String(process.env.VS_ENTRY_ENGINE_MODE || 'LIVE')
     .trim()
     .toUpperCase();
   if (raw === 'OFF' || raw === 'SHADOW' || raw === 'PAPER' || raw === 'LIVE') return raw;
-  return 'SHADOW';
+  return 'LIVE';
 }
 
 export function emptyLocation(targets?: EntryPlanTarget | null): EntryLocationView {

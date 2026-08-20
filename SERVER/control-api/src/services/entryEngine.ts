@@ -1,6 +1,7 @@
 /**
  * Entry engine orchestrator — Tick Micro + plan context → state → score.
- * Default mode SHADOW. Live EntryReady only when state=ENTRY_READY and mode LIVE/PAPER.
+ * Default mode LIVE: EntryReady when state=ENTRY_READY proceeds to C++/risk/moneyPath.
+ * Set VS_ENTRY_ENGINE_MODE=SHADOW for research-only (no live orders from micro/C++ path).
  * Best Outcome EXIT is untouched.
  *
  * Path:

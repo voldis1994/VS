@@ -1,9 +1,10 @@
 /**
  * MAIN prototype — the only live Gold path on origin/main.
  *
- * C++ SUPER vs-calc prepares EntryReady (all feeds + pressure + 1m/5m/15m + 200c).
+ * Tick-micro Entry State Machine + C++ SUPER vs-calc prepare EntryReady
+ * (feeds + pressure + 1m/5m/15m + 200c). Default VS_ENTRY_ENGINE_MODE=LIVE.
  * Node robotDesk only executes: Capital open + Safety SL + Best Outcome close.
- * Node does NOT invent BUY/SELL when C++ is silent.
+ * Node does NOT invent BUY/SELL when C++/micro is silent.
  */
 import { SAFETY_SL_REL } from './capitalCom.js';
 

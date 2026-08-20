@@ -14,13 +14,10 @@ import {
   advanceEntryMachine,
   resetEntryMachines,
   getEntryMachine,
+  getEntryEngineMode,
   markEntryConsumed,
 } from './entryStateMachine.js';
-import {
-  evaluateEntryEngine,
-  onValidatedQuoteTick,
-  resetEntryTickContexts,
-} from './entryEngine.js';
+import { evaluateEntryEngine, onValidatedQuoteTick, resetEntryTickContexts } from './entryEngine.js';
 import { regimeEntryPlan } from './regimeEntryPlan.js';
 import {
   attachEntryOutcome,
@@ -413,6 +410,15 @@ describe('LIVE mode allow flag', () => {
   beforeEach(() => {
     resetEntryMachines();
     resetTickMicroBooks();
+    resetEntryTickContexts();
+  });
+
+  it('default VS_ENTRY_ENGINE_MODE is LIVE (EntryReady armed)', () => {
+    const prev = process.env.VS_ENTRY_ENGINE_MODE;
+    delete process.env.VS_ENTRY_ENGINE_MODE;
+    expect(getEntryEngineMode()).toBe('LIVE');
+    if (prev == null) delete process.env.VS_ENTRY_ENGINE_MODE;
+    else process.env.VS_ENTRY_ENGINE_MODE = prev;
   });
 
   it('allow_entry_ready only when LIVE and ENTRY_READY', () => {
@@ -437,6 +443,7 @@ describe('LIVE mode allow flag', () => {
       marketOpen: true,
       nowMs: t0 + 30 * 80,
     });
+    expect(eng.mode).toBe('LIVE');
     if (eng.machine.state === 'ENTRY_READY') {
       expect(eng.allow_entry_ready).toBe(true);
       expect(eng.shadow_only).toBe(false);

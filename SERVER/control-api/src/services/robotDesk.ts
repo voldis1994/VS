@@ -2589,9 +2589,9 @@ async function robotCycleBody(s: Internal) {
       }
     }
 
-    // ——— EntryReady: C++ intent OR micro ENTRY_READY (LIVE/PAPER only) ———
+    // ——— EntryReady: C++ intent OR micro ENTRY_READY (LIVE/PAPER) ———
     // Regime/plan = context (ARMED). EntryReady comes from tick micro state machine.
-    // SHADOW mode never opens from plan alone — research candidates only.
+    // Default LIVE. SHADOW = research only (no live open).
     const planBars = () => ({
       bars10s: s.closedBars.map((b) => ({
         open: b.open,
