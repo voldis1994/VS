@@ -1,1 +1,0 @@
-../../SERVER/install/INSTALL_SERVER.sh

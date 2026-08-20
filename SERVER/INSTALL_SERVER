@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-# INSTALL_SERVER — delegates to INSTALL_I3_SERVER (single authoritative installer).
-set -euo pipefail
-HERE="$(cd "$(dirname "$0")" && pwd)"
-echo "NOTE: INSTALL_SERVER → INSTALL_I3_SERVER"
-exec bash "$HERE/INSTALL_I3_SERVER" "$@"

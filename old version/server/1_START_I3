@@ -1,5 +1,0 @@
-#!/usr/bin/env bash
-# 1_START_I3 — thin wrapper → INSTALL_I3_SERVER (authoritative).
-set -euo pipefail
-HERE="$(cd "$(dirname "$0")" && pwd)"
-exec bash "$HERE/INSTALL_I3_SERVER" "$@"
