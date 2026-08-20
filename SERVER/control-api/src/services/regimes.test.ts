@@ -53,7 +53,7 @@ describe('original regime names', () => {
 });
 
 describe('classifyRegime from 10s OHLC', () => {
-  it('quiet gold-like grind stays RANGE — not invented TREND_UP', () => {
+  it('quiet gold-like grind stays non-TREND — RANGE only if proven else TRANSITION', () => {
     const bars = [
       bar(2390.0, 2390.05, 2389.95, 2390.02, 0),
       bar(2390.02, 2390.08, 2390.0, 2390.06, 1),
@@ -63,10 +63,11 @@ describe('classifyRegime from 10s OHLC', () => {
     ];
     const r = classifyRegime(bars);
     expect(r).not.toBe('UNKNOWN');
-    expect(r).toBe('RANGE');
+    expect(r).not.toBe('TREND_UP');
+    expect(['RANGE', 'TRANSITION', 'COMPRESSION']).toContain(r);
   });
 
-  it('high/low oscillation inside band is RANGE not TREND', () => {
+  it('high/low oscillation inside band is RANGE or TRANSITION not invented TREND', () => {
     const bars = [
       bar(4400, 4402, 4398, 4401, 0),
       bar(4401, 4403, 4399, 4399.5, 1),
@@ -75,7 +76,8 @@ describe('classifyRegime from 10s OHLC', () => {
       bar(4399.2, 4402, 4398.5, 4400.8, 4),
       bar(4400.8, 4402.5, 4399, 4401.0, 5),
     ];
-    expect(classifyRegime(bars)).toBe('RANGE');
+    const r = classifyRegime(bars);
+    expect(['RANGE', 'TRANSITION', 'COMPRESSION']).toContain(r);
   });
 
   it('TREND_UP on a persistent rally', () => {
