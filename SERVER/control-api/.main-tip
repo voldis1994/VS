@@ -1,3 +1,3 @@
-tip=2026-08-20T20:40:00Z
-rule=Setup-specific technical SL · MAX_STOP_ATR · STOP_TOO_WIDE=NO_TRADE · never far regime INV · SHADOW default · BO EXIT untouched
-prev=51f602b
+tip=2026-08-20T20:50:00Z
+rule=RANGE proven-only · INTERNAL_STRUCTURE HH/HL|LH/LL · hysteresis TREND→TRANSITION→RANGE · Donchian alone ≠ RANGE
+prev=db89061
