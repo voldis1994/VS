@@ -123,13 +123,31 @@ function mean(xs: number[]): number {
   return xs.reduce((a, b) => a + b, 0) / xs.length;
 }
 
+/**
+ * Directional lean of one 10s bar.
+ * Relative-only thresholds (~0.00008) miss Gold bodies of 0.25–0.5pt
+ * (0.35/4515 ≈ 0.000077) → every climb looked like RANGE forever.
+ */
+function leanSign(b: TenSecBar): number {
+  const body = b.close - b.open;
+  const abs = Math.max(Math.abs(b.open), 1e-9);
+  const rel = body / abs;
+  const absFloor = abs >= 1000 ? 0.12 : abs >= 100 ? 0.02 : abs >= 10 ? 0.002 : 0.00005;
+  if (body > absFloor || rel > 0.00005) return 1;
+  if (body < -absFloor || rel < -0.00005) return -1;
+  return 0;
+}
+
 function epicKey(epic: string): string {
   return String(epic || '').trim().toUpperCase();
 }
 
 /**
  * Classify from closed 10s OHLC — same names as C++ RegimeEngine.
- * Classic high/low oscillation stays RANGE — do not invent TREND from soft grind.
+ *
+ * Important: wick highs/lows must NOT trap a real climb/dump as RANGE forever.
+ * Gold often prints 0.5–1.5pt wicks while closes grind — that is TREND, not RANGE.
+ * Classic oscillation (no net, mixed persistence) stays RANGE.
  */
 export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOWN'): RegimeName {
   if (!bars.length || bars.length < 2) return 'UNKNOWN';
@@ -139,57 +157,66 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   const prior = window.slice(0, -1);
   if (!prior.length) return 'UNKNOWN';
 
-  const velocities = window.map(bodyPct);
   const ranges = window.map(rangePct);
   const priorRanges = prior.map(rangePct);
   const avgRange = Math.max(mean(priorRanges.length ? priorRanges : ranges), 1e-9);
+  const lastLean = leanSign(last);
   const lastVel = bodyPct(last);
   const lastRange = rangePct(last);
-  const persistWindow = velocities.slice(-6);
-  const persistence = mean(
-    persistWindow.map((v) => (v > 0.00008 ? 1 : v < -0.00008 ? -1 : 0))
-  );
+  const persistWindow = window.slice(-6);
+  const persistence = mean(persistWindow.map((b) => leanSign(b)));
 
-  // Stronger than soft grind — half the window must lean the same way with a real last body.
-  const trendingUp = persistence > 0.5 && lastVel > 0.00008;
-  const trendingDown = persistence < -0.5 && lastVel < -0.00008;
+  // Directional persistence — Gold-aware lean (absolute + relative).
+  const trendingUp = persistence > 0.45 && lastLean > 0;
+  const trendingDown = persistence < -0.45 && lastLean < 0;
   const compressed = lastRange < avgRange * 0.55 && lastRange < 0.00022;
   const expanding = lastRange > avgRange * 1.45 && lastRange >= 0.00025;
+  // Wick envelope — true structure break / failed breakout.
   const hi = Math.max(...prior.map((b) => b.high));
   const lo = Math.min(...prior.map((b) => b.low));
-  const inRange = last.close <= hi && last.close >= lo;
+  const inWickRange = last.close <= hi && last.close >= lo;
+  // Body envelope — ignores wick traps that kept every Gold climb as RANGE.
+  const bodyHi = Math.max(...prior.map((b) => Math.max(b.open, b.close)));
+  const bodyLo = Math.min(...prior.map((b) => Math.min(b.open, b.close)));
+  const inBodyRange = last.close <= bodyHi && last.close >= bodyLo;
   const breakoutUp = last.close > hi;
   const breakoutDown = last.close < lo;
   const first = window[0]!;
   const net = (last.close - first.open) / Math.max(Math.abs(first.open), 1e-9);
-  // Oscillation: net tiny while still bouncing inside the prior high/low band.
-  const oscillating = inRange && Math.abs(net) < 0.00045;
+  // Oscillation = inside wick band + tiny net + no lean.
+  const oscillating =
+    inWickRange && Math.abs(net) < 0.00045 && Math.abs(persistence) < 0.35;
+  // Directed grind: closes walking one way even if still under prior wick highs.
+  const grindUp = net > 0.00045 && persistence >= 0.25;
+  const grindDown = net < -0.00045 && persistence <= -0.25;
   const reversal =
     (previous === 'TREND_UP' && lastVel < -0.0012 && lastRange > avgRange && !breakoutDown) ||
     (previous === 'TREND_DOWN' && lastVel > 0.0012 && lastRange > avgRange && !breakoutUp);
 
-  if (previous === 'BREAKOUT_UP' && inRange && lastVel < 0) return 'FAILED_BREAKOUT_UP';
-  if (previous === 'BREAKOUT_DOWN' && inRange && lastVel > 0) return 'FAILED_BREAKOUT_DOWN';
-  if (compressed && inRange) return 'COMPRESSION';
-  if (expanding && breakoutUp && (trendingUp || lastVel > 0)) return 'BREAKOUT_UP';
-  if (expanding && breakoutDown && (trendingDown || lastVel < 0)) return 'BREAKOUT_DOWN';
+  if (previous === 'BREAKOUT_UP' && inWickRange && lastLean < 0) return 'FAILED_BREAKOUT_UP';
+  if (previous === 'BREAKOUT_DOWN' && inWickRange && lastLean > 0) return 'FAILED_BREAKOUT_DOWN';
+  if (compressed && inWickRange) return 'COMPRESSION';
+  if (expanding && breakoutUp && (trendingUp || lastLean > 0)) return 'BREAKOUT_UP';
+  if (expanding && breakoutDown && (trendingDown || lastLean < 0)) return 'BREAKOUT_DOWN';
   if (expanding) return 'EXPANSION';
-  if (previous === 'TREND_UP' && lastVel < -0.00008 && persistence > 0.25 && !oscillating) {
+  if (previous === 'TREND_UP' && lastLean < 0 && persistence > 0.25 && !oscillating) {
     return 'PULLBACK_UPTREND';
   }
-  if (previous === 'TREND_DOWN' && lastVel > 0.00008 && persistence < -0.25 && !oscillating) {
+  if (previous === 'TREND_DOWN' && lastLean > 0 && persistence < -0.25 && !oscillating) {
     return 'PULLBACK_DOWNTREND';
   }
-  if (trendingUp && !oscillating) return 'TREND_UP';
-  if (trendingDown && !oscillating) return 'TREND_DOWN';
+  if ((trendingUp || grindUp) && !oscillating) return 'TREND_UP';
+  if ((trendingDown || grindDown) && !oscillating) return 'TREND_DOWN';
   if (reversal) return 'REVERSAL_CANDIDATE';
 
-  // Classic range: still inside high/low — never paint soft UP/DOWN trend.
-  if (inRange || oscillating) return 'RANGE';
+  // Classic range: real oscillation OR soft in-body chop — not wick-trapped climbs.
+  if (oscillating) return 'RANGE';
+  if (inBodyRange && Math.abs(persistence) < 0.35 && Math.abs(net) < 0.0005) return 'RANGE';
+  if (inWickRange && Math.abs(persistence) < 0.2 && Math.abs(net) < 0.00035) return 'RANGE';
 
-  // Only strong directional break of the window qualifies as TREND outside the band.
-  if (net > 0.0008 && persistence > 0.35) return 'TREND_UP';
-  if (net < -0.0008 && persistence < -0.35) return 'TREND_DOWN';
+  // Strong directional break / continuation outside body band.
+  if (net > 0.00055 && persistence > 0.2) return 'TREND_UP';
+  if (net < -0.00055 && persistence < -0.2) return 'TREND_DOWN';
   if (previous !== 'UNKNOWN' && previous !== 'RANGE') return 'TRANSITION';
   if (window.length >= 4) return 'RANGE';
   return 'UNKNOWN';

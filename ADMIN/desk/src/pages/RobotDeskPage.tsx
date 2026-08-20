@@ -142,9 +142,12 @@ type RobotSession = {
 
 function displayRegime(s: Pick<RobotSession, 'regime' | 'trend_bias' | 'ohlc_10s'>): string {
   const r = String(s.regime || '').toUpperCase();
+  const soft =
+    !r || r === 'UNKNOWN' || r === 'RANGE' || r === 'COMPRESSION' || r === 'TRANSITION';
+  // Soft chop label + clear bias → show TREND (matches server unlock). Never RANGE-forever.
+  if (soft && s.trend_bias === 'UP') return 'TREND_UP';
+  if (soft && s.trend_bias === 'DOWN') return 'TREND_DOWN';
   if (r && r !== 'UNKNOWN') return r;
-  if (s.trend_bias === 'UP') return 'TREND_UP';
-  if (s.trend_bias === 'DOWN') return 'TREND_DOWN';
   if (s.ohlc_10s?.market === 'SEEDING') return 'SEEDING';
   return 'SEEDING';
 }
