@@ -83,6 +83,7 @@ type RobotSession = {
   ticks: RobotTick[];
   last_quote_at: string | null;
   last_mid: number | null;
+  capital_market_status?: string | null;
   last_deal_reference: string | null;
   deal_id: string | null;
   entry_price: number | null;
@@ -612,6 +613,7 @@ export function RobotDeskPage() {
                     </div>
                     <div className="rc-focus-metrics mono">
                       <div><span>MID</span><strong>{fmt(focused.last_mid)}</strong></div>
+                      <div><span>CAPITAL</span><strong>{(focused.capital_market_status || '—').toUpperCase()}</strong></div>
                       <div><span>10s</span><strong>{focused.ohlc_10s?.market || 'SEEDING'}</strong></div>
                       <div><span>FEEDS</span><strong>{focused.feed_contributing ?? 0}/{focused.feed_sender_count ?? 0}</strong></div>
                       <div><span>SL</span><strong>{fmt(focused.safety_sl)}</strong></div>
