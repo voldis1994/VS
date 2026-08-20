@@ -109,6 +109,10 @@ struct Snap {
   double body_1m{}, body_5m{}, body_15m{};
   int feed_contributing{}, feed_sender_count{};
   int c200_n{}, c200_bull{}, c200_bear{}, c200_doji{};
+  std::string plan_direction;
+  std::string plan_setup;
+  std::string feed_confirm;
+  double feed_mid{};
   std::vector<Bar> bars;      // 10s
   std::vector<Bar> bars_1m;
   std::vector<Bar> bars_5m;
@@ -189,6 +193,10 @@ static std::vector<Snap> parse_snaps(const std::string& json) {
     s.c200_bull = (int)json_num(chunk, "candle200_bull");
     s.c200_bear = (int)json_num(chunk, "candle200_bear");
     s.c200_doji = (int)json_num(chunk, "candle200_doji");
+    s.plan_direction = json_str(chunk, "plan_direction");
+    s.plan_setup = json_str(chunk, "plan_setup");
+    s.feed_confirm = json_str(chunk, "feed_confirm");
+    s.feed_mid = json_num(chunk, "feed_mid");
     s.bars = parse_bar_array(chunk, "bars", 40);
     s.bars_1m = parse_bar_array(chunk, "bars_1m", 200);
     s.bars_5m = parse_bar_array(chunk, "bars_5m", 40);
@@ -243,6 +251,9 @@ static bool decide(const Snap& s, std::string* dir, std::string* setup, std::str
   const std::string regime = upper(s.regime);
   const std::string bias = upper(s.bias);
   const std::string agree = upper(s.feed_agreement);
+  const std::string plan_dir = upper(s.plan_direction);
+  const std::string plan_setup = upper(s.plan_setup);
+  const std::string feed_confirm = upper(s.feed_confirm);
 
   bool down_ctx =
     regime.find("TREND_DOWN") != std::string::npos ||
@@ -452,8 +463,29 @@ static bool decide(const Snap& s, std::string* dir, std::string* setup, std::str
   bool live_sell = want_sell && (dump || micro_down || n10 < -0.00015 || st10 <= -1 || prior_dump);
   if (bias == "UP" && (micro_up || n10 > 0.0002 || up_ctx || climb)) live_buy = true;
   if (bias == "DOWN" && (micro_down || n10 < -0.0002 || down_ctx || dump)) live_sell = true;
+  // Regime chart plan from Node (BREAKOUT_UP → BUY BREAKOUT, etc.) — this IS the entry idea.
+  if (plan_dir == "BUY") {
+    want_buy = true;
+    if (feed_confirm != "FIGHT" || micro_up || climb || n10 > 0) live_buy = true;
+  }
+  if (plan_dir == "SELL") {
+    want_sell = true;
+    if (feed_confirm != "FIGHT" || micro_down || dump || n10 < 0) live_sell = true;
+  }
+  if (want_buy && want_sell) {
+    if (plan_dir == "BUY") want_sell = false;
+    else if (plan_dir == "SELL") want_buy = false;
+  }
 
   auto setup_for_buy = [&]() -> const char* {
+    if (!plan_setup.empty() && plan_dir == "BUY") {
+      if (plan_setup == "BREAKOUT") return "BREAKOUT";
+      if (plan_setup == "PULLBACK") return "PULLBACK";
+      if (plan_setup == "CONTINUATION") return "CONTINUATION";
+      if (plan_setup == "RANGE_REJECTION") return "RANGE_REJECTION";
+      if (plan_setup == "FAILED_BREAKOUT") return "FAILED_BREAKOUT";
+      if (plan_setup == "REVERSAL" || plan_setup == "FADE") return "REVERSAL";
+    }
     if (regime.find("BREAKOUT_UP") != std::string::npos) return "BREAKOUT";
     if (failed_bo && regime.find("DOWN") != std::string::npos) return "FAILED_BREAKOUT";
     if (range_ctx && rpos < 0.35) return "RANGE_REJECTION";
@@ -464,6 +496,14 @@ static bool decide(const Snap& s, std::string* dir, std::string* setup, std::str
     return micro_up ? "CONTINUATION" : "PULLBACK";
   };
   auto setup_for_sell = [&]() -> const char* {
+    if (!plan_setup.empty() && plan_dir == "SELL") {
+      if (plan_setup == "BREAKOUT") return "BREAKOUT";
+      if (plan_setup == "PULLBACK") return "PULLBACK";
+      if (plan_setup == "CONTINUATION") return "CONTINUATION";
+      if (plan_setup == "RANGE_REJECTION") return "RANGE_REJECTION";
+      if (plan_setup == "FAILED_BREAKOUT") return "FAILED_BREAKOUT";
+      if (plan_setup == "REVERSAL" || plan_setup == "FADE") return "REVERSAL";
+    }
     if (regime.find("BREAKOUT_DOWN") != std::string::npos) return "BREAKOUT";
     if (failed_bo && regime.find("UP") != std::string::npos) return "FAILED_BREAKOUT";
     if (range_ctx && rpos > 0.65) return "RANGE_REJECTION";
@@ -474,7 +514,33 @@ static bool decide(const Snap& s, std::string* dir, std::string* setup, std::str
     return micro_down ? "CONTINUATION" : "PULLBACK";
   };
 
-  // --- ALL regimes: fire EntryReady when live side + EV (no SCAN-forever) ---
+  // --- Regime chart plan FIRST (same idea as reading the phone chart) ---
+  // If regime already says BREAKOUT_UP → BUY, that IS the entry — fire it.
+  if (plan_dir == "BUY" && feed_confirm != "FIGHT") {
+    want_buy = true;
+    live_buy = true;
+    return finish("BUY", setup_for_buy(), std::max(ev_buy, MIN_EV),
+                  annotate("REGIME PLAN " + (plan_setup.empty() ? std::string("BUY") : plan_setup) +
+                           " · feeds " + (feed_confirm.empty() ? "n/a" : feed_confirm)));
+  }
+  if (plan_dir == "SELL" && feed_confirm != "FIGHT") {
+    want_sell = true;
+    live_sell = true;
+    return finish("SELL", setup_for_sell(), std::max(ev_sell, MIN_EV),
+                  annotate("REGIME PLAN " + (plan_setup.empty() ? std::string("SELL") : plan_setup) +
+                           " · feeds " + (feed_confirm.empty() ? "n/a" : feed_confirm)));
+  }
+  // Feeds fight: still allow if micro impulse clearly holds the plan side
+  if (plan_dir == "BUY" && (micro_up || n10 > 0.0003) && feed_confirm == "FIGHT") {
+    return finish("BUY", setup_for_buy(), std::max(ev_buy, MIN_EV),
+                  annotate("REGIME PLAN hold vs feed fight"));
+  }
+  if (plan_dir == "SELL" && (micro_down || n10 < -0.0003) && feed_confirm == "FIGHT") {
+    return finish("SELL", setup_for_sell(), std::max(ev_sell, MIN_EV),
+                  annotate("REGIME PLAN hold vs feed fight"));
+  }
+
+  // --- ALL regimes fallback ---
 
   // FAILED BREAKOUT fade
   if (failed_bo) {
@@ -681,6 +747,10 @@ static int self_test() {
   bo.epic = "GOLD";
   bo.regime = "BREAKOUT_UP";
   bo.bias = "UP";
+  bo.plan_direction = "BUY";
+  bo.plan_setup = "BREAKOUT";
+  bo.feed_confirm = "CONFIRM";
+  bo.feed_mid = 4522.4;
   bo.feed_agreement = "DIVERGENT";
   bo.feed_contributing = 10;
   bo.feed_sender_count = 12;

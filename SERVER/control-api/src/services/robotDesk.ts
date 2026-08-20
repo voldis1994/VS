@@ -55,6 +55,7 @@ import {
   countCandlePolarity,
   toCompactBar,
 } from './candleTf.js';
+import { regimeEntryPlan } from './regimeEntryPlan.js';
 import {
   canIssueClose,
   decideCloseFinalize,
@@ -485,19 +486,35 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
   const feeds = `${s.multiFeed?.contributing ?? s.feed_contributing ?? 0}/${
     s.multiFeed?.sender_count ?? s.feed_sender_count ?? 0
   } ${s.feed_source || 'NONE'} ${s.multiFeed?.agreement || s.feed_agreement || ''}`.trim();
-  let action = 'SCAN';
+  const feedMid =
+    s.multiFeed?.mid != null && Number.isFinite(s.multiFeed.mid) ? s.multiFeed.mid : null;
+  const plan = regimeEntryPlan({
+    regime: s.regime,
+    bias: s.trend_bias,
+    liveMid: s.last_mid,
+    feedMid,
+  });
+  let action = 'WATCH';
   const marketOpen = marketStatusAllowsTrading(s.capital_market_status);
   if (!s.running) action = 'STOPPED';
   else if (!marketOpen) {
     action = s.open_side ? `HOLD ${s.open_side} · MARKET CLOSED` : 'MARKET CLOSED';
   } else if (s.open_side) action = `MANAGE ${s.open_side}`;
-  else if (s.pending_calc) action = `CALC ${s.pending_calc.direction}`;
-  else if (s.mode === 'ENTRY') action = 'SCAN ENTRY';
+  else if (s.pending_calc) {
+    action = `ENTRY ${s.pending_calc.direction} ${s.pending_calc.setup_type || plan.setup || ''}`.trim();
+  } else if (s.mode === 'ENTRY' && plan.direction) {
+    action = `PLAN ${plan.direction} ${plan.setup || ''}`.trim();
+  } else if (s.mode === 'ENTRY') {
+    action = `PLAN · ${plan.setup || 'wait'}`;
+  }
   return {
     feeds,
     ohlc: ohlcLine,
     regime: effectiveRegimeName(s),
-    setup: s.pending_calc?.setup_type || (s.trend_bias ? `bias ${s.trend_bias}` : null),
+    setup:
+      s.pending_calc?.setup_type ||
+      (plan.direction ? `${plan.setup} · ${plan.feed_confirm}` : plan.setup) ||
+      (s.trend_bias ? `bias ${s.trend_bias}` : null),
     action,
   };
 }
@@ -802,6 +819,11 @@ export function listCalcSnapshots(): Array<{
   body_pressure_1m: number;
   body_pressure_5m: number;
   body_pressure_15m: number;
+  feed_mid: number | null;
+  plan_direction: string;
+  plan_setup: string;
+  plan_text: string;
+  feed_confirm: string;
 }> {
   return [...sessions.values()]
     .filter((s) => s.running)
@@ -816,6 +838,14 @@ export function listCalcSnapshots(): Array<{
       const buyP = Math.max(0, net);
       const sellP = Math.max(0, -net);
       const legs = (s.feed_legs?.length ? s.feed_legs : s.multiFeed?.legs) || [];
+      const feedMid =
+        s.multiFeed?.mid != null && Number.isFinite(s.multiFeed.mid) ? s.multiFeed.mid : null;
+      const plan = regimeEntryPlan({
+        regime: s.regime,
+        bias: s.trend_bias,
+        liveMid: s.last_mid,
+        feedMid,
+      });
       return {
         epic: s.epic,
         mid: s.last_mid,
@@ -852,6 +882,11 @@ export function listCalcSnapshots(): Array<{
         body_pressure_1m: barBodyPressure(mins.slice(-20)),
         body_pressure_5m: barBodyPressure(bars5.slice(-12)),
         body_pressure_15m: barBodyPressure(bars15.slice(-8)),
+        feed_mid: feedMid,
+        plan_direction: plan.direction || '',
+        plan_setup: plan.setup || '',
+        plan_text: plan.plan,
+        feed_confirm: plan.feed_confirm,
       };
     });
 }
@@ -2402,26 +2437,42 @@ async function robotCycleBody(s: Internal) {
 
     // Wait for C++ on this candle — never invent a Node side meanwhile.
     if (!direction && Number.isFinite(msSinceBar) && msSinceBar < CALC_WAIT_MS) {
+      const feedMid =
+        s.multiFeed?.mid != null && Number.isFinite(s.multiFeed.mid) ? s.multiFeed.mid : null;
+      const plan = regimeEntryPlan({
+        regime: regimeLabel,
+        bias: s.trend_bias,
+        liveMid: execQuote.mid,
+        feedMid,
+      });
       pushTick(s, {
-        phase: 'SCAN',
+        phase: 'DECIDE',
         bid: execQuote.bid,
         ask: execQuote.ask,
         mid: execQuote.mid,
         code: DecisionCodes.NO_SETUP,
-        detail: `${ohlcLine} · EXEC · waiting C++ EntryReady (${Math.ceil((CALC_WAIT_MS - msSinceBar) / 1000)}s)`,
+        detail: `${ohlcLine} · ${plan.plan} · waiting C++ EntryReady (${Math.ceil((CALC_WAIT_MS - msSinceBar) / 1000)}s)`,
       });
       return;
     }
 
     // No C++ after wait → flat. Node does not invent entry.
     if (!direction) {
+      const feedMid =
+        s.multiFeed?.mid != null && Number.isFinite(s.multiFeed.mid) ? s.multiFeed.mid : null;
+      const plan = regimeEntryPlan({
+        regime: regimeLabel,
+        bias: s.trend_bias,
+        liveMid: execQuote.mid,
+        feedMid,
+      });
       pushTick(s, {
         phase: 'SCAN',
         bid: execQuote.bid,
         ask: execQuote.ask,
         mid: execQuote.mid,
         code: DecisionCodes.NO_SETUP,
-        detail: `${ohlcLine} · EXEC · no C++ EntryReady · Node does not invent`,
+        detail: `${ohlcLine} · ${plan.plan} · no C++ EntryReady yet`,
       });
       return;
     }
