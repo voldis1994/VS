@@ -20,9 +20,10 @@ import {
 import { emitToClient } from './clientEvents.js';
 import { mapTradeType } from './tradePresentation.js';
 import {
-  classifyRegime,
+  classifyRegimeDetailed,
   normalizeRegime,
   REGIME_NAMES,
+  type InternalStructure,
   type RegimeName,
 } from './regimes.js';
 import {
@@ -182,6 +183,8 @@ export type RobotSession = {
   unrealized: number | null;
   mode: 'FLAT' | 'MANAGE' | 'ENTRY';
   regime: RegimeName;
+  /** 10s swing structure inside macro regime (RANGE may be BEARISH internally). */
+  internal_structure: InternalStructure;
   trend_bias?: TrendBias;
   orders_placed: number;
   exits_done: number;
@@ -220,6 +223,7 @@ export type RobotSession = {
     feeds: string;
     ohlc: string;
     regime: string;
+    internal_structure?: string | null;
     setup: string | null;
     action: string;
     /** Full entry plan: targets + confirms for current regime */
@@ -609,6 +613,7 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
     feeds,
     ohlc: ohlcLine,
     regime: effectiveRegimeName(s),
+    internal_structure: s.internal_structure || 'NEUTRAL',
     setup:
       s.pending_calc?.setup_type ||
       (plan.direction ? `${plan.setup} · ${plan.feed_confirm}` : plan.setup) ||
@@ -657,11 +662,15 @@ function applyLiveRegimeFromMinutes(s: Internal) {
   // Multi-TF lasting bias (1m/5m/15m + 200c) — old 5×1m-only stayed FLAT forever.
   const bias = resolveSuperTrendBias(s.closedBars, s.minuteCandles);
   // Regime from 10s structure — never invent TREND_* from last 1m candle color.
+  // RANGE is proven-only; never default unknown books to RANGE.
   const prev = normalizeRegime(s.regime) as RegimeName;
   if (s.closedBars.length >= 2) {
-    s.regime = classifyRegime(s.closedBars, prev);
+    const detailed = classifyRegimeDetailed(s.closedBars, prev);
+    s.regime = detailed.regime;
+    s.internal_structure = detailed.internal_structure;
   } else if (!s.regime || String(s.regime).toUpperCase() === 'UNKNOWN') {
-    s.regime = 'RANGE';
+    s.regime = 'UNKNOWN';
+    s.internal_structure = 'NEUTRAL';
   }
   s.trend_bias = effectiveBias(s.regime, bias, bar);
   applyBiasRegimeUnlock(s);
@@ -726,7 +735,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
 }
 
 function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
-  // 10s OHLC builds closedBars; live regime label comes from classifyRegime in applyLiveRegimeFromMinutes.
+  // 10s OHLC builds closedBars; live regime + internal_structure from classifyRegimeDetailed.
   const incoming = bars?.length
     ? bars
     : s.ohlcState.last_closed
@@ -1023,6 +1032,7 @@ export function listCalcSnapshots(): Array<{
         bars_5m: bars5.slice(-40).map(toCompactBar),
         bars_15m: bars15.slice(-20).map(toCompactBar),
         regime: String(s.regime || ''),
+        internal_structure: String(s.internal_structure || 'NEUTRAL'),
         bias: String(s.trend_bias || ''),
         running: s.running,
         feed_contributing: s.feed_contributing ?? s.multiFeed?.contributing ?? 0,
@@ -3118,6 +3128,7 @@ export async function startRobotSession(input: {
     feed_sender_count: 0,
     feed_agreement: null,
     regime: 'UNKNOWN',
+    internal_structure: 'NEUTRAL',
     trend_bias: 'FLAT',
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
     last_cross_ms: 0,

@@ -46,6 +46,7 @@ type DecisionChain = {
   feeds: string;
   ohlc: string;
   regime: string;
+  internal_structure?: string | null;
   setup: string | null;
   action: string;
   plan?: string | null;
@@ -923,6 +924,14 @@ export function RobotDeskPage() {
                   <div>
                     <span>REGIME</span>
                     <strong>{displayRegime(focused)}</strong>
+                  </div>
+                  <div>
+                    <span>STRUCTURE</span>
+                    <strong className="mono">
+                      {focusChain?.internal_structure ||
+                        (focused as { internal_structure?: string }).internal_structure ||
+                        'NEUTRAL'}
+                    </strong>
                   </div>
                   <div>
                     <span>BIAS</span>
