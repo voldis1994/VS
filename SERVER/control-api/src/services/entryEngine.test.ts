@@ -413,10 +413,10 @@ describe('LIVE mode allow flag', () => {
     resetEntryTickContexts();
   });
 
-  it('default VS_ENTRY_ENGINE_MODE is LIVE (EntryReady armed)', () => {
+  it('default VS_ENTRY_ENGINE_MODE is SHADOW', () => {
     const prev = process.env.VS_ENTRY_ENGINE_MODE;
     delete process.env.VS_ENTRY_ENGINE_MODE;
-    expect(getEntryEngineMode()).toBe('LIVE');
+    expect(getEntryEngineMode()).toBe('SHADOW');
     if (prev == null) delete process.env.VS_ENTRY_ENGINE_MODE;
     else process.env.VS_ENTRY_ENGINE_MODE = prev;
   });

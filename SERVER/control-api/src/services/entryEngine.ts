@@ -1,11 +1,11 @@
 /**
- * Entry engine orchestrator — Tick Micro + plan context → state → score.
- * Default mode LIVE: EntryReady when state=ENTRY_READY proceeds to C++/risk/moneyPath.
- * Set VS_ENTRY_ENGINE_MODE=SHADOW for research-only (no live orders from micro/C++ path).
+ * Entry engine orchestrator — Tick Micro + plan context → state → score → setup SL.
+ * Default mode SHADOW (research). LIVE/PAPER: EntryReady only when state=ENTRY_READY
+ * AND setup-specific technical stop is ok (not STOP_TOO_WIDE).
  * Best Outcome EXIT is untouched.
  *
  * Path:
- *   accepted tick → TickMicro update → Entry State Machine evaluation (per-tick)
+ *   accepted tick → TickMicro → Entry SM → setup technical stop
  * Execution still goes through C++/risk/moneyPath — this module never places orders.
  */
 
@@ -25,6 +25,10 @@ import {
 } from './entryStateMachine.js';
 import { computeOpportunityScore, type OpportunityBreakdown } from './entryOpportunity.js';
 import { recordEntryCandidate } from './entryOutcomeStore.js';
+import {
+  computeSetupTechnicalStop,
+  type SetupStopPlan,
+} from './setupTechnicalStop.js';
 
 export type EntryEngineResult = {
   mode: ReturnType<typeof getEntryEngineMode>;
@@ -32,6 +36,8 @@ export type EntryEngineResult = {
   micro: TickMicroMetrics;
   plan: EntryPlan;
   score: OpportunityBreakdown | null;
+  /** Setup-specific SL plan — required before live EntryReady */
+  stop: SetupStopPlan | null;
   /** True when live/paper may proceed to C++/execution */
   allow_entry_ready: boolean;
   shadow_only: boolean;
@@ -43,15 +49,19 @@ export type EntryTickContext = {
   regime?: string | null;
   bias?: string | null;
   feedMid?: number | null;
+  bid?: number | null;
+  ask?: number | null;
+  spread?: number | null;
   bars10s: Array<{ open: number; high: number; low: number; close: number }>;
   bars1m?: Array<{ open: number; high: number; low: number; close: number }>;
   feedAgreement?: string | null;
   spreadBlock?: boolean;
   marketOpen?: boolean;
+  baseLot?: number;
 };
 
 const tickContexts = new Map<string, EntryTickContext>();
-/** Last recorded (state|phase|kind) — avoid outcome spam on every tick while ARMED. */
+/** Last recorded (state|phase|kind|stopBlock) — avoid outcome spam on every tick while ARMED. */
 const lastRecordedKey = new Map<string, string>();
 
 export function publishEntryTickContext(ctx: EntryTickContext): void {
@@ -98,10 +108,61 @@ export function onValidatedQuoteTick(input: {
   return ingestValidatedTick(book, tick);
 }
 
+function buildStopPlan(input: {
+  machine: EntryMachineSnapshot;
+  plan: EntryPlan;
+  micro: TickMicroMetrics;
+  liveMid: number | null;
+  bid?: number | null;
+  ask?: number | null;
+  spread?: number | null;
+  bars10s: Array<{ open: number; high: number; low: number; close: number }>;
+  baseLot?: number;
+}): SetupStopPlan | null {
+  if (!input.machine.direction || !input.machine.kind) return null;
+  if (
+    input.machine.state !== 'ENTRY_READY' &&
+    input.machine.state !== 'TRIGGERING' &&
+    input.machine.state !== 'ARMED'
+  ) {
+    return null;
+  }
+  const spread =
+    input.spread ??
+    (input.bid != null &&
+    input.ask != null &&
+    Number.isFinite(input.bid) &&
+    Number.isFinite(input.ask)
+      ? Math.max(input.ask - input.bid, 0)
+      : input.micro.spread);
+
+  return computeSetupTechnicalStop({
+    side: input.machine.direction,
+    kind: input.machine.kind,
+    mid: input.liveMid,
+    bid: input.bid,
+    ask: input.ask,
+    spread,
+    bars10s: input.bars10s,
+    micro: input.micro,
+    move_start_mid: input.machine.move_start_mid,
+    plan_entry: input.plan.targets.entry,
+    plan_invalidation: input.plan.targets.invalidation,
+    range_high: input.plan.targets.range_high,
+    range_low: input.plan.targets.range_low,
+    break_level: input.plan.targets.break_level,
+    confirm_level: input.plan.targets.confirm_level,
+    baseLot: input.baseLot,
+  });
+}
+
 function buildResult(input: {
   instrument: string;
   liveMid: number | null;
   feedMid?: number | null;
+  bid?: number | null;
+  ask?: number | null;
+  spread?: number | null;
   regime?: string | null;
   bias?: string | null;
   bars10s: Array<{ open: number; high: number; low: number; close: number }>;
@@ -110,6 +171,7 @@ function buildResult(input: {
   spreadBlock?: boolean;
   marketOpen?: boolean;
   nowMs?: number;
+  baseLot?: number;
   /** When true, only record candidate if state/phase/kind changed (per-tick path). */
   recordOnChangeOnly?: boolean;
 }): EntryEngineResult {
@@ -149,7 +211,28 @@ function buildResult(input: {
     machine.opportunity_score = score.total;
   }
 
-  const ready = machine.state === 'ENTRY_READY' && !machine.hard_block;
+  const stop = buildStopPlan({
+    machine,
+    plan,
+    micro,
+    liveMid: input.liveMid,
+    bid: input.bid,
+    ask: input.ask,
+    spread: input.spread,
+    bars10s: input.bars10s,
+    baseLot: input.baseLot,
+  });
+
+  // EntryReady requires setup-specific SL. Far / missing structure → demote, never pull SL closer.
+  if (machine.state === 'ENTRY_READY' && stop && !stop.ok) {
+    machine.hard_block = stop.block || 'STOP_TOO_WIDE';
+    machine.reason = stop.reason;
+    // Stay visible as TRIGGERING with block — not live ready
+    machine.state = 'TRIGGERING';
+  }
+
+  const ready =
+    machine.state === 'ENTRY_READY' && !machine.hard_block && !!stop?.ok;
   const shadow_only = mode === 'SHADOW' || mode === 'OFF';
   const allow_entry_ready = ready && (mode === 'LIVE' || mode === 'PAPER');
 
@@ -158,10 +241,11 @@ function buildResult(input: {
     machine.state === 'TOO_LATE' ||
     machine.state === 'ARMED' ||
     machine.state === 'INVALIDATED' ||
-    machine.state === 'TRIGGERING';
+    machine.state === 'TRIGGERING' ||
+    (stop != null && !stop.ok);
 
   if (shouldConsiderRecord) {
-    const key = `${machine.state}|${machine.phase}|${machine.kind || ''}`;
+    const key = `${machine.state}|${machine.phase}|${machine.kind || ''}|${stop?.block || ''}`;
     const prev = lastRecordedKey.get(String(input.instrument || '').toUpperCase());
     const changed = prev !== key;
     if (!input.recordOnChangeOnly || changed) {
@@ -176,7 +260,7 @@ function buildResult(input: {
         mid: input.liveMid,
         regime: input.regime,
         entryOrSkip: machine.state === 'ENTRY_READY' ? tag : 'SKIP',
-        reason: machine.reason,
+        reason: stop && !stop.ok ? stop.reason : machine.reason,
       });
     }
   }
@@ -187,6 +271,7 @@ function buildResult(input: {
     micro,
     plan,
     score,
+    stop,
     allow_entry_ready,
     shadow_only,
   };
@@ -198,24 +283,31 @@ export function evaluateEntryEngine(input: {
   bias?: string | null;
   liveMid: number | null;
   feedMid?: number | null;
+  bid?: number | null;
+  ask?: number | null;
+  spread?: number | null;
   bars10s: Array<{ open: number; high: number; low: number; close: number }>;
   bars1m?: Array<{ open: number; high: number; low: number; close: number }>;
   feedAgreement?: string | null;
   spreadBlock?: boolean;
   marketOpen?: boolean;
   nowMs?: number;
+  baseLot?: number;
 }): EntryEngineResult {
-  // Keep per-tick path armed with latest desk context (bars/regime/feeds).
   publishEntryTickContext({
     instrument: input.instrument,
     regime: input.regime,
     bias: input.bias,
     feedMid: input.feedMid,
+    bid: input.bid,
+    ask: input.ask,
+    spread: input.spread,
     bars10s: input.bars10s,
     bars1m: input.bars1m,
     feedAgreement: input.feedAgreement,
     spreadBlock: input.spreadBlock,
     marketOpen: input.marketOpen,
+    baseLot: input.baseLot,
   });
 
   return buildResult({ ...input, recordOnChangeOnly: false });
@@ -224,11 +316,12 @@ export function evaluateEntryEngine(input: {
 /**
  * Advance Entry State Machine on an accepted validated tick (between desk cycles).
  * Does NOT place broker orders — execution remains C++/risk/moneyPath via robotDesk.
- * Returns null if desk has not yet published context for this instrument.
  */
 export function advanceEntryEngineOnAcceptedTick(input: {
   instrument: string;
   mid: number | null;
+  bid?: number | null;
+  ask?: number | null;
   nowMs?: number;
 }): EntryEngineResult | null {
   const ctx = getEntryTickContext(input.instrument);
@@ -239,11 +332,15 @@ export function advanceEntryEngineOnAcceptedTick(input: {
     bias: ctx.bias,
     liveMid: input.mid,
     feedMid: ctx.feedMid,
+    bid: input.bid ?? ctx.bid,
+    ask: input.ask ?? ctx.ask,
+    spread: ctx.spread,
     bars10s: ctx.bars10s,
     bars1m: ctx.bars1m,
     feedAgreement: ctx.feedAgreement,
     spreadBlock: ctx.spreadBlock,
     marketOpen: ctx.marketOpen,
+    baseLot: ctx.baseLot,
     nowMs: input.nowMs,
     recordOnChangeOnly: true,
   });

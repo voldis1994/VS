@@ -62,6 +62,7 @@ import {
   getEntryEngineMode,
 } from './entryEngine.js';
 import { getEntryMachine } from './entryStateMachine.js';
+import type { SetupStopPlan } from './setupTechnicalStop.js';
 import { attachValidatedTickFanout, getEpicTickBook } from './validatedTickFanout.js';
 import {
   startCapitalQuotePump,
@@ -167,6 +168,13 @@ export type RobotSession = {
   last_close_at: string | null;
   last_close_detail: string | null;
   entry_price: number | null;
+  /** Planned setup-specific technical SL (pre-entry); not regime range LOW/HIGH */
+  planned_technical_sl: number | null;
+  planned_sl_source: string | null;
+  planned_sl_dist: number | null;
+  planned_sl_atr: number | null;
+  planned_entry_price: number | null;
+  stop_block: string | null;
   entry_at: string | null;
   mfe: number;
   mae: number;
@@ -233,6 +241,16 @@ export type RobotSession = {
     entry_kind?: string | null;
     opportunity_score?: number | null;
     entry_engine_mode?: string | null;
+    /** Setup-specific SL preview */
+    entry_price_plan?: number | null;
+    technical_stop?: number | null;
+    stop_distance?: number | null;
+    stop_distance_atr?: number | null;
+    risk_reward?: number | null;
+    position_size_plan?: number | null;
+    sl_source?: string | null;
+    stop_block?: string | null;
+    stop_reason?: string | null;
   };
   /** C++ / pipeline EntryReady waiting for robotDesk hands */
   pending_calc?: CalcEntry | null;
@@ -556,6 +574,37 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
     action = `PLAN · ${plan.setup || 'wait'} · ${plan.confirm_ok}/${plan.confirm_n}`;
   }
   const em = getEntryMachine(s.epic);
+  // Fresh stop preview for chain UI (SHADOW-safe; no orders)
+  const engPreview = evaluateEntryEngine({
+    instrument: s.epic,
+    regime: s.regime,
+    bias: s.trend_bias,
+    liveMid: s.last_mid,
+    feedMid,
+    bid: s.ticks.find((t) => t.bid != null)?.bid ?? null,
+    ask: s.ticks.find((t) => t.ask != null)?.ask ?? null,
+    bars10s: s.closedBars.map((b) => ({
+      open: b.open,
+      high: b.high,
+      low: b.low,
+      close: b.close,
+    })),
+    bars1m: (s.minuteCandles || []).map((b) => ({
+      open: b.open,
+      high: b.high,
+      low: b.low,
+      close: b.close,
+    })),
+    feedAgreement: s.feed_agreement ?? s.multiFeed?.agreement,
+    marketOpen: marketStatusAllowsTrading(s.capital_market_status),
+    baseLot: s.lot_size,
+  });
+  const stop = engPreview.stop;
+  if (stop?.block === 'STOP_TOO_WIDE') {
+    action = 'NO TRADE · STOP_TOO_WIDE';
+  } else if (stop?.ok && em.state === 'ENTRY_READY') {
+    action = `READY ${plan.direction} ${plan.setup || ''} · SL ${stop.sl_source}`.trim();
+  }
   return {
     feeds,
     ohlc: ohlcLine,
@@ -576,6 +625,15 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
     entry_kind: em.kind,
     opportunity_score: em.opportunity_score,
     entry_engine_mode: getEntryEngineMode(),
+    entry_price_plan: stop?.entry_price ?? s.planned_entry_price,
+    technical_stop: stop?.technical_stop ?? s.planned_technical_sl,
+    stop_distance: stop?.stop_distance ?? s.planned_sl_dist,
+    stop_distance_atr: stop?.stop_distance_atr ?? s.planned_sl_atr,
+    risk_reward: stop?.risk_reward ?? null,
+    position_size_plan: stop?.position_size ?? null,
+    sl_source: stop?.sl_source ?? s.planned_sl_source,
+    stop_block: stop?.block ?? s.stop_block,
+    stop_reason: stop?.reason ?? null,
   };
 }
 
@@ -695,6 +753,12 @@ function clearTradeState(s: Internal) {
   s.open_side = null;
   s.deal_id = null;
   s.entry_price = null;
+  s.planned_technical_sl = null;
+  s.planned_sl_source = null;
+  s.planned_sl_dist = null;
+  s.planned_sl_atr = null;
+  s.planned_entry_price = null;
+  s.stop_block = null;
   s.entry_at = null;
   s.entry_setup = null;
   s.entry_regime = null;
@@ -1398,7 +1462,8 @@ async function enterTrade(
   direction: 'BUY' | 'SELL',
   quote: CapitalMarketQuote,
   reason: string,
-  setupType?: string | null
+  setupType?: string | null,
+  stopPlan?: SetupStopPlan | null
 ) {
   // Desk START is the operator go-ahead — do not sit in MONEY_PATH_NOT_READY SCAN.
   if (s.entry_enabled) {
@@ -1503,38 +1568,100 @@ async function enterTrade(
   // Desk START (entry_enabled) is enough — phone STOP must not freeze SCAN on a running robot.
   const clientEnabled = s.entry_enabled;
 
-  // Pre-compute stop — Risk forbids entry without stop; never fall back to naked order.
+  // Setup-specific technical SL required — never substitute far regime invalidation or blunt %.
+  if (!stopPlan || !stopPlan.ok || stopPlan.technical_stop == null || !(stopPlan.stop_distance! > 0)) {
+    const block = stopPlan?.block || 'NO_STRUCTURE';
+    pushTick(s, {
+      phase: 'SCAN',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      code: DecisionCodes.NO_SETUP,
+      detail: `NO TRADE · ${block} · ${stopPlan?.reason || 'setup technical SL required'}`,
+    });
+    s.stop_block = block;
+    return;
+  }
+
+  // Pre-compute stop from setup structure (ASK/BID entry economics already in stopPlan).
   const minPts = quote.min_stop_points;
   const minPrice = quote.min_stop_distance ?? null;
   const unit = (quote.min_stop_unit || 'POINTS').toUpperCase();
   const useDistance = minPts != null && minPts > 0 && !unit.includes('PERCENT');
   const loosenSteps = [1, 1.08, 1.16, 1.28];
+  const ps = quote.point_size != null && quote.point_size > 0 ? quote.point_size : mid >= 1000 ? 0.1 : 0.0001;
 
   let plannedStopDistance: number | null = null;
-  let plannedStopLevel: number | null = null;
-  if (useDistance) {
-    const basePts = safetyStopDistancePts(mid, minPts!, quote.point_size ?? null);
-    const distPts = Math.max(basePts, minPts! * 2.5);
-    plannedStopDistance = distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
-    plannedStopLevel = expectedStopFromDistance(
-      direction,
-      mid,
-      quote.bid,
-      quote.ask,
-      plannedStopDistance,
-      quote.point_size ?? null
-    );
-  } else {
-    plannedStopLevel = safetyStopLevel(
-      direction,
-      mid,
-      quote.bid,
-      quote.ask,
-      quote.spread ?? null,
-      minPrice,
-      1
-    );
+  let plannedStopLevel: number | null = stopPlan.technical_stop;
+
+  // Broker min: may widen stop farther from entry (more risk) — never pull closer.
+  if (useDistance && minPts != null) {
+    const structPts = stopPlan.stop_distance! / ps;
+    const minRequired = Math.max(minPts, minPts * 1.05);
+    if (structPts + 1e-9 < minRequired) {
+      // Structure inside broker min — widen to min (farther), re-check MAX via stopPlan.max_stop_distance
+      const widenedDist = minRequired * ps;
+      if (
+        stopPlan.max_stop_distance != null &&
+        widenedDist > stopPlan.max_stop_distance
+      ) {
+        pushTick(s, {
+          phase: 'SCAN',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          code: DecisionCodes.NO_SETUP,
+          detail: `NO TRADE · STOP_TOO_WIDE · broker min ${widenedDist.toFixed(2)} > max ${stopPlan.max_stop_distance.toFixed(2)}`,
+        });
+        s.stop_block = 'STOP_TOO_WIDE';
+        return;
+      }
+      plannedStopDistance =
+        minRequired >= 10 ? Math.ceil(minRequired) : Math.round(minRequired * 100) / 100;
+      plannedStopLevel = expectedStopFromDistance(
+        direction,
+        stopPlan.entry_price ?? mid,
+        quote.bid,
+        quote.ask,
+        plannedStopDistance,
+        ps
+      );
+    } else {
+      plannedStopDistance =
+        structPts >= 10 ? Math.ceil(structPts) : Math.round(structPts * 100) / 100;
+      plannedStopLevel = stopPlan.technical_stop;
+    }
+  } else if (minPrice != null && minPrice > 0 && stopPlan.stop_distance! < minPrice) {
+    const widened = minPrice;
+    if (stopPlan.max_stop_distance != null && widened > stopPlan.max_stop_distance) {
+      pushTick(s, {
+        phase: 'SCAN',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        code: DecisionCodes.NO_SETUP,
+        detail: `NO TRADE · STOP_TOO_WIDE · broker min price dist`,
+      });
+      s.stop_block = 'STOP_TOO_WIDE';
+      return;
+    }
+    plannedStopLevel =
+      direction === 'BUY'
+        ? (stopPlan.entry_price ?? mid) - widened
+        : (stopPlan.entry_price ?? mid) + widened;
   }
+
+  s.planned_technical_sl = plannedStopLevel;
+  s.planned_sl_source = stopPlan.sl_source;
+  s.planned_sl_dist = stopPlan.stop_distance;
+  s.planned_sl_atr = stopPlan.stop_distance_atr;
+  s.planned_entry_price = stopPlan.entry_price;
+  s.stop_block = null;
+
+  const execLot =
+    stopPlan.position_size != null && stopPlan.position_size > 0
+      ? Math.min(s.lot_size, stopPlan.position_size)
+      : s.lot_size;
 
   const stopAttached = plannedStopDistance != null || plannedStopLevel != null;
   const existing = matchOpenOnEpic(listed.positions, s.epic);
@@ -1544,7 +1671,7 @@ async function enterTrade(
     account_id: s.account_id,
     epic: s.epic,
     direction,
-    size: s.lot_size,
+    size: execLot,
     client_trading_enabled: clientEnabled,
     quote,
     feedManager: s.feedManager,
@@ -1590,7 +1717,7 @@ async function enterTrade(
     ask: quote.ask,
     mid: quote.mid,
     code: DecisionCodes.RISK_ACCEPTED,
-    detail: `RISK_ACCEPTED · ${direction} lot=${s.lot_size}`,
+    detail: `RISK_ACCEPTED · ${direction} lot=${execLot} · SL ${stopPlan.sl_source} @ ${plannedStopLevel}`,
   });
 
   let stopLevel: number | null = null;
@@ -1611,7 +1738,7 @@ async function enterTrade(
       return await createCapitalPosition(session, {
         epic: s.epic,
         direction,
-        size: s.lot_size,
+        size: execLot,
         clientOrderId,
         ...params,
       });
@@ -1636,7 +1763,7 @@ async function enterTrade(
       account_id: s.account_id,
       epic: s.epic,
       direction,
-      size: s.lot_size,
+      size: execLot,
       stop_distance: plannedStopDistance,
       stop_level: plannedStopLevel,
       strategy_version: STRATEGY_VERSION,
@@ -1647,21 +1774,36 @@ async function enterTrade(
     {
       orderStore,
       submit: async (intent, clientOrderId) => {
-        // SL distance attempts (loosen only on stop-validation rejects — not network timeout)
-        if (useDistance && intent.stop_distance != null) {
+        // Setup-specific SL only — never rewrite to SAFETY_SL_REL / regime invalidation.
+        // Loosen = widen farther from entry; abort if exceeds max_stop_distance.
+        const maxDist = stopPlan.max_stop_distance;
+        const entryRef = stopPlan.entry_price ?? mid;
+
+        if (useDistance && (intent.stop_distance != null || plannedStopDistance != null)) {
+          const baseStructPts = plannedStopDistance ?? intent.stop_distance!;
           for (const loosen of loosenSteps) {
             if (submitTimedOut) break;
-            const basePts = safetyStopDistancePts(mid, minPts!, quote.point_size ?? null);
-            const distPts = Math.max(basePts * loosen, minPts! * 2.5);
+            const distPts = baseStructPts * loosen;
+            if (maxDist != null && distPts * ps > maxDist) {
+              pushTick(s, {
+                phase: 'SCAN',
+                bid: quote.bid,
+                ask: quote.ask,
+                mid: quote.mid,
+                code: DecisionCodes.NO_SETUP,
+                detail: `NO TRADE · STOP_TOO_WIDE · loosen x${loosen} exceeds max ATR stop`,
+              });
+              break;
+            }
             const stopDistance =
               distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
             const expect = expectedStopFromDistance(
               direction,
-              mid,
+              entryRef,
               quote.bid,
               quote.ask,
               stopDistance,
-              quote.point_size ?? null
+              ps
             );
             pushTick(s, {
               phase: 'INFO',
@@ -1669,14 +1811,14 @@ async function enterTrade(
               ask: quote.ask,
               mid: quote.mid,
               code: DecisionCodes.ORDER_SUBMITTING,
-              detail: `SL ${(SAFETY_SL_REL * 100).toFixed(2)}% stopDistance=${stopDistance} pts (Capital min=${minPts} · ~level ${
-                expect ?? 'n/a'
-              } · x${loosen})`,
+              detail: `SL ${stopPlan.sl_source} stopDistance=${stopDistance} pts · level ${
+                expect ?? plannedStopLevel
+              } · x${loosen}`,
             });
             brokerBox.current = await trySubmit({ stopDistance }, clientOrderId);
             if (brokerBox.current.ok) {
               usedStopDistance = stopDistance;
-              stopLevel = expect;
+              stopLevel = expect ?? plannedStopLevel;
               return {
                 ok: true,
                 deal_reference: brokerBox.current.deal_reference,
@@ -1694,32 +1836,36 @@ async function enterTrade(
               bid: quote.bid,
               ask: quote.ask,
               mid: quote.mid,
-              detail: `SL distance rejected — loosen x${loosen}: ${brokerBox.current.detail}`,
+              detail: `SL distance rejected — widen x${loosen}: ${brokerBox.current.detail}`,
             });
           }
         }
 
         for (const loosen of loosenSteps) {
           if (submitTimedOut) break;
-          const level = safetyStopLevel(
-            direction,
-            mid,
-            quote.bid,
-            quote.ask,
-            quote.spread ?? null,
-            minPrice,
-            loosen
-          );
-          const dist = direction === 'BUY' ? mid - level : level - mid;
+          if (plannedStopLevel == null) break;
+          const baseDist = Math.abs(entryRef - plannedStopLevel);
+          const dist = baseDist * loosen;
+          if (maxDist != null && dist > maxDist) {
+            pushTick(s, {
+              phase: 'SCAN',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              code: DecisionCodes.NO_SETUP,
+              detail: `NO TRADE · STOP_TOO_WIDE · level loosen x${loosen} exceeds max`,
+            });
+            break;
+          }
+          const level =
+            direction === 'BUY' ? entryRef - dist : entryRef + dist;
           pushTick(s, {
             phase: 'INFO',
             bid: quote.bid,
             ask: quote.ask,
             mid: quote.mid,
             code: DecisionCodes.ORDER_SUBMITTING,
-            detail: `SL ${(SAFETY_SL_REL * 100).toFixed(2)}% try stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
-              minPrice ?? 'n/a'
-            } · spread=${quote.spread ?? 'n/a'} · x${loosen})`,
+            detail: `SL ${stopPlan.sl_source} stopLevel=${level} (dist≈${dist.toFixed(5)} · x${loosen})`,
           });
           brokerBox.current = await trySubmit({ stopLevel: level }, clientOrderId);
           if (brokerBox.current.ok) {
@@ -1741,14 +1887,14 @@ async function enterTrade(
             bid: quote.bid,
             ask: quote.ask,
             mid: quote.mid,
-            detail: `SL level rejected — loosen x${loosen}: ${brokerBox.current.detail}`,
+            detail: `SL level rejected — widen x${loosen}: ${brokerBox.current.detail}`,
           });
         }
 
-        // VS CORE: never open without SL
+        // VS CORE: never open without SL — and never fall back to SAFETY_SL_REL
         return {
           ok: false,
-          detail: `RISK_REJECTED_NO_STOP — safety SL not accepted (${brokerBox.current?.detail || 'unknown'})`,
+          detail: `RISK_REJECTED_NO_STOP — setup SL not accepted (${brokerBox.current?.detail || 'unknown'})`,
         };
       },
       reconcile: async () => {
@@ -2248,60 +2394,68 @@ async function robotCycleBody(s: Internal) {
       s.mode = 'MANAGE';
       if (quote.mid == null) return;
 
-      // Entry SL fallback: attach 0.40% safety SL from ENTRY (not live mid) if Capital has none.
+      // Entry SL fallback: re-attach setup technical SL from entry (never SAFETY_SL_REL / regime INV).
       const brokerStop = brokerOpen?.stop_level ?? null;
       const missingBrokerSl =
         Boolean(s.deal_id) &&
         Boolean(s.open_side) &&
         (brokerStop == null || !Number.isFinite(brokerStop));
       if (missingBrokerSl && s.deal_id && s.open_side && quote.mid != null) {
-        const loosenStepsAttach = [1, 1.08, 1.16, 1.28];
         const attachRef =
           s.entry_price != null && Number.isFinite(s.entry_price) ? s.entry_price : quote.mid;
-        let attached = false;
-        for (const loosen of loosenStepsAttach) {
-          const level = safetyStopLevel(
-            s.open_side,
-            attachRef,
-            quote.bid ?? null,
-            quote.ask ?? null,
-            quote.spread ?? null,
-            quote.min_stop_distance ?? null,
-            loosen
-          );
-          const upd = await updateCapitalStop(opened.session, s.deal_id, level, {
-            mid: quote.mid,
-            pointSize: quote.point_size ?? null,
-          });
-          if (upd.ok) {
-            s.safety_sl = level;
-            attached = true;
-            pushTick(s, {
-              phase: 'INFO',
-              bid: quote.bid,
-              ask: quote.ask,
-              mid: quote.mid,
-              detail: `SAFETY SL attached ${level} · ${(SAFETY_SL_REL * 100).toFixed(2)}% from entry=${attachRef} · x${loosen}`,
-            });
-            break;
-          }
-          pushTick(s, {
-            phase: 'INFO',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: `SAFETY SL attach x${loosen} skipped: ${upd.detail}`,
-          });
-        }
-        if (!attached) {
+        const planned = s.planned_technical_sl;
+        if (planned == null || !Number.isFinite(planned)) {
           pushTick(s, {
             phase: 'ERROR',
             bid: quote.bid,
             ask: quote.ask,
             mid: quote.mid,
             code: DecisionCodes.BLOCKED_TECHNICAL,
-            detail: 'BLOCKED_TECHNICAL · open trade has no Capital SL — retry next cycle',
+            detail:
+              'BLOCKED_TECHNICAL · open trade has no Capital SL and no setup technical SL to attach — will not invent SAFETY_SL%',
           });
+        } else {
+          const loosenStepsAttach = [1, 1.08, 1.16, 1.28];
+          let attached = false;
+          for (const loosen of loosenStepsAttach) {
+            const baseDist = Math.abs(attachRef - planned);
+            const dist = baseDist * loosen;
+            const level =
+              s.open_side === 'BUY' ? attachRef - dist : attachRef + dist;
+            const upd = await updateCapitalStop(opened.session, s.deal_id, level, {
+              mid: quote.mid,
+              pointSize: quote.point_size ?? null,
+            });
+            if (upd.ok) {
+              s.safety_sl = level;
+              attached = true;
+              pushTick(s, {
+                phase: 'INFO',
+                bid: quote.bid,
+                ask: quote.ask,
+                mid: quote.mid,
+                detail: `SETUP SL attached ${level} · source ${s.planned_sl_source || 'TECHNICAL'} · from entry=${attachRef} · x${loosen}`,
+              });
+              break;
+            }
+            pushTick(s, {
+              phase: 'INFO',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `SETUP SL attach x${loosen} skipped: ${upd.detail}`,
+            });
+          }
+          if (!attached) {
+            pushTick(s, {
+              phase: 'ERROR',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              code: DecisionCodes.BLOCKED_TECHNICAL,
+              detail: 'BLOCKED_TECHNICAL · open trade has no Capital SL — retry next cycle',
+            });
+          }
         }
       }
 
@@ -2591,7 +2745,7 @@ async function robotCycleBody(s: Internal) {
 
     // ——— EntryReady: C++ intent OR micro ENTRY_READY (LIVE/PAPER) ———
     // Regime/plan = context (ARMED). EntryReady comes from tick micro state machine.
-    // Default LIVE. SHADOW = research only (no live open).
+    // Default SHADOW. LIVE requires setup-specific technical SL (not far regime INV).
     const planBars = () => ({
       bars10s: s.closedBars.map((b) => ({
         open: b.open,
@@ -2614,17 +2768,35 @@ async function robotCycleBody(s: Internal) {
       bias: s.trend_bias,
       liveMid: execQuote.mid,
       feedMid: feedMidNow,
+      bid: execQuote.bid,
+      ask: execQuote.ask,
+      spread: execQuote.spread ?? null,
       ...planBars(),
       feedAgreement: s.feed_agreement ?? s.multiFeed?.agreement,
       marketOpen: true,
+      baseLot: s.lot_size,
     });
     const plan = eng.plan;
+    let entryStopPlan: SetupStopPlan | null = eng.stop;
 
     if (!direction) {
-      if (eng.allow_entry_ready && eng.machine.direction && isRealEntrySetup(eng.machine.setup)) {
+      if (eng.stop && !eng.stop.ok && eng.stop.block === 'STOP_TOO_WIDE') {
+        s.stop_block = 'STOP_TOO_WIDE';
+        pushTick(s, {
+          phase: 'SCAN',
+          bid: execQuote.bid,
+          ask: execQuote.ask,
+          mid: execQuote.mid,
+          code: DecisionCodes.NO_SETUP,
+          detail: `${ohlcLine} · NO TRADE · STOP_TOO_WIDE · ${eng.stop.reason}`,
+        });
+        return;
+      }
+      if (eng.allow_entry_ready && eng.machine.direction && isRealEntrySetup(eng.machine.setup) && eng.stop?.ok) {
         direction = eng.machine.direction;
         setupType = eng.machine.setup;
-        reason = `EXEC micro ENTRY_READY ${eng.machine.kind || setupType} · ${eng.machine.phase} · score ${(eng.score?.total ?? 0).toFixed(2)} · ${plan.target_line}`;
+        entryStopPlan = eng.stop;
+        reason = `EXEC micro ENTRY_READY ${eng.machine.kind || setupType} · ${eng.machine.phase} · SL ${eng.stop.sl_source} · score ${(eng.score?.total ?? 0).toFixed(2)}`;
         consumeEntryReady(s.epic);
         pushTick(s, {
           phase: 'DECIDE',
@@ -2634,14 +2806,25 @@ async function robotCycleBody(s: Internal) {
           code: DecisionCodes.SIGNAL_CREATED,
           detail: reason,
         });
-      } else if (eng.machine.state === 'ENTRY_READY' && eng.shadow_only) {
+      } else if (eng.machine.state === 'ENTRY_READY' && eng.shadow_only && eng.stop?.ok) {
         pushTick(s, {
           phase: 'DECIDE',
           bid: execQuote.bid,
           ask: execQuote.ask,
           mid: execQuote.mid,
           code: DecisionCodes.NO_SETUP,
-          detail: `${ohlcLine} · SHADOW ENTRY_READY ${eng.machine.kind || ''} · ${eng.machine.phase} · no live order · ${plan.confirm_line}`,
+          detail: `${ohlcLine} · SHADOW ENTRY_READY ${eng.machine.kind || ''} · SL ${eng.stop.sl_source} · no live order`,
+        });
+        return;
+      } else if (eng.stop && !eng.stop.ok) {
+        s.stop_block = eng.stop.block;
+        pushTick(s, {
+          phase: 'SCAN',
+          bid: execQuote.bid,
+          ask: execQuote.ask,
+          mid: execQuote.mid,
+          code: DecisionCodes.NO_SETUP,
+          detail: `${ohlcLine} · NO TRADE · ${eng.stop.block} · ${eng.stop.reason}`,
         });
         return;
       } else if (Number.isFinite(msSinceBar) && msSinceBar < CALC_WAIT_MS) {
@@ -2665,6 +2848,23 @@ async function robotCycleBody(s: Internal) {
         });
         return;
       }
+    }
+
+    // C++ path still needs setup-specific SL — recompute if missing
+    if (direction && (!entryStopPlan || !entryStopPlan.ok)) {
+      entryStopPlan = eng.stop;
+    }
+    if (!entryStopPlan?.ok) {
+      s.stop_block = entryStopPlan?.block || 'NO_STRUCTURE';
+      pushTick(s, {
+        phase: 'SCAN',
+        bid: execQuote.bid,
+        ask: execQuote.ask,
+        mid: execQuote.mid,
+        code: DecisionCodes.NO_SETUP,
+        detail: `${ohlcLine} · NO TRADE · ${entryStopPlan?.block || 'NO_STRUCTURE'} · setup SL required before Capital open`,
+      });
+      return;
     }
 
     // Thin money safety only (not a second brain inventing setups).
@@ -2762,7 +2962,7 @@ async function robotCycleBody(s: Internal) {
       });
     }
 
-    await enterTrade(opened.session, s, direction, execQuote, reason, setupType);
+    await enterTrade(opened.session, s, direction, execQuote, reason, setupType, entryStopPlan);
   } catch (err) {
     s.reads_fail += 1;
     const detail = err instanceof Error ? err.message : String(err);
@@ -2864,6 +3064,12 @@ export async function startRobotSession(input: {
     last_close_at: null,
     last_close_detail: null,
     entry_price: null,
+    planned_technical_sl: null,
+    planned_sl_source: null,
+    planned_sl_dist: null,
+    planned_sl_atr: null,
+    planned_entry_price: null,
+    stop_block: null,
     entry_at: null,
     entry_setup: null,
     entry_regime: null,

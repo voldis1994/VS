@@ -38,7 +38,7 @@ describe('P3 runtime call-chain wiring', () => {
     expect(src).toContain('detectStaleQuoteAdverse');
     expect(src).not.toContain('evaluateStrategy({');
     expect(src).not.toContain("import { runTradePipeline } from './tradePipeline.js'");
-    expect(src).toContain('SAFETY SL attached');
+    expect(src).toContain('SETUP SL attached');
     expect(src).toContain('SAFETY_SL_REL');
     expect(src).toContain('decideLiveBestOutcomeExit');
     const cap = readFileSync(join(process.cwd(), 'src/services/capitalCom.ts'), 'utf8');
