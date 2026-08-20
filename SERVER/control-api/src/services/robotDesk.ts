@@ -175,7 +175,7 @@ export type RobotSession = {
   best_outcome_state: BestOutcomeStateName | null;
   best_outcome_reason: string | null;
   best_price_seen: number | null;
-  /** When false, manage-only (no new opens). When true, C++ EntryReady first, then 10s Node fallback. */
+  /** When false, manage-only (no new opens). When true: one team — C++ EntryReady first, Node validates + Capital + BO. */
   entry_enabled: boolean;
   ohlc_10s: {
     last_o: number | null;
@@ -2302,46 +2302,66 @@ async function robotCycleBody(s: Internal) {
     let reason = '';
     let setupType: string | null = null;
     let calcSignalAgeMs: number | null = null;
+    let fromCpp = false;
+
+    // ——— ONE TEAM ———
+    // C++ = scout (EntryReady propose). Node = captain (validate, Capital, BO close).
+    // Never open from Node invent while still waiting for C++ on this candle.
+    const CALC_WAIT_MS = 2_500;
+    const CALC_STALE_MS = 12_000;
+    const msSinceBar =
+      s.last_closed_bar_at_ms > 0 ? Date.now() - s.last_closed_bar_at_ms : Number.POSITIVE_INFINITY;
 
     const calc = s.pending_calc;
     if (calc) {
       const calcAgeMs = Date.now() - new Date(calc.at).getTime();
-      calcSignalAgeMs = calcAgeMs;
-      if (calcAgeMs > 12_000) {
+      if (calcAgeMs > CALC_STALE_MS) {
         s.pending_calc = null;
         calcQueue.delete(calcKey(s.account_id, s.epic));
+        calcSignalAgeMs = null; // discarded scout must not poison Node gate age
         pushTick(s, {
           phase: 'SCAN',
           bid: execQuote.bid,
           ask: execQuote.ask,
           mid: execQuote.mid,
           code: DecisionCodes.NO_SETUP,
-          detail: `${ohlcLine} · stale C++ EntryReady discarded (${Math.round(calcAgeMs / 1000)}s)`,
+          detail: `${ohlcLine} · TEAM · stale C++ EntryReady discarded (${Math.round(calcAgeMs / 1000)}s)`,
         });
       } else {
-      s.pending_calc = null;
-      calcQueue.delete(calcKey(s.account_id, s.epic));
-      direction = calc.direction;
-      setupType = calc.setup_type;
-      reason = `CALC EntryReady · ${calc.explanation || calc.regime || calc.setup_type || calc.direction}`;
+        s.pending_calc = null;
+        calcQueue.delete(calcKey(s.account_id, s.epic));
+        fromCpp = true;
+        calcSignalAgeMs = calcAgeMs;
+        direction = calc.direction;
+        setupType = calc.setup_type;
+        reason = `TEAM C++ EntryReady · ${calc.explanation || calc.regime || calc.setup_type || calc.direction}`;
+        pushTick(s, {
+          phase: 'DECIDE',
+          bid: execQuote.bid,
+          ask: execQuote.ask,
+          mid: execQuote.mid,
+          code: DecisionCodes.SIGNAL_CREATED,
+          detail: `${reason} · ${s.cross_market?.detail || 'cross-market n/a'}`,
+        });
+      }
+    }
+
+    // Wait for scout before Node invents its own side on this 10s candle.
+    if (!direction && Number.isFinite(msSinceBar) && msSinceBar < CALC_WAIT_MS) {
       pushTick(s, {
-        phase: 'DECIDE',
+        phase: 'SCAN',
         bid: execQuote.bid,
         ask: execQuote.ask,
         mid: execQuote.mid,
-        code: DecisionCodes.SIGNAL_CREATED,
-        detail: `${reason} · ${s.cross_market?.detail || 'cross-market n/a'}`,
+        code: DecisionCodes.NO_SETUP,
+        detail: `${ohlcLine} · TEAM · waiting C++ EntryReady (${Math.ceil((CALC_WAIT_MS - msSinceBar) / 1000)}s)`,
       });
-      }
+      return;
     }
 
     const refs = collectFresherRefs(s);
     if (s.entry_enabled && !s.open_side) {
       const hadDirection = Boolean(direction);
-      const waitCalcFirst =
-        !hadDirection &&
-        s.last_closed_bar_at_ms > 0 &&
-        Date.now() - s.last_closed_bar_at_ms < 2500;
       const resolved = resolveDeskEntry({
         intended: direction,
         intendedSetup: setupType,
@@ -2350,8 +2370,7 @@ async function robotCycleBody(s: Internal) {
         regime: regimeLabel,
         bias: s.trend_bias || 'FLAT',
         closedBars: s.closedBars,
-        // During calc-first wait window, disable LAG_LEAD without C++ confirmation.
-        capitalMid: waitCalcFirst && !direction ? null : execQuote.mid,
+        capitalMid: execQuote.mid,
         refs,
       });
       if (resolved.direction) {
@@ -2359,8 +2378,10 @@ async function robotCycleBody(s: Internal) {
         const fresh = !hadDirection;
         direction = resolved.direction;
         setupType = resolved.setup;
-        reason = resolved.reason;
-        if (fresh || flipped) {
+        reason = fromCpp
+          ? `TEAM Node validate · ${resolved.reason}`
+          : `TEAM Node fallback (no C++) · ${resolved.reason}`;
+        if (fresh || flipped || fromCpp) {
           pushTick(s, {
             phase: 'DECIDE',
             bid: execQuote.bid,
@@ -2371,18 +2392,19 @@ async function robotCycleBody(s: Internal) {
           });
         }
       } else if (hadDirection) {
-        // Desk denied C++/prior side — never chase with rejected EntryReady.
+        // Desk denied C++ scout — captain says no; do not chase.
         pushTick(s, {
           phase: 'SCAN',
           bid: execQuote.bid,
           ask: execQuote.ask,
           mid: execQuote.mid,
           code: DecisionCodes.NO_SETUP,
-          detail: `${ohlcLine} · ${resolved.reason || 'desk blocked EntryReady'}`,
+          detail: `${ohlcLine} · TEAM Node blocked C++ · ${resolved.reason || 'desk deny'}`,
         });
         direction = null;
         setupType = null;
         reason = resolved.reason || '';
+        calcSignalAgeMs = null;
       }
     }
 
@@ -2393,10 +2415,7 @@ async function robotCycleBody(s: Internal) {
         ask: execQuote.ask,
         mid: execQuote.mid,
         code: DecisionCodes.NO_SETUP,
-        detail:
-          s.last_closed_bar_at_ms > 0 && Date.now() - s.last_closed_bar_at_ms < 2500
-            ? `${ohlcLine} · waiting C++ EntryReady first`
-            : `${ohlcLine} · waiting for closed 10s or C++ calc EntryReady`,
+        detail: `${ohlcLine} · TEAM · no setup (C++ none / Node none)`,
       });
       return;
     }

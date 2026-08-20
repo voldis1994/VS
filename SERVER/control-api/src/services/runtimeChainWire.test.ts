@@ -26,9 +26,11 @@ describe('P3 runtime call-chain wiring', () => {
     expect(src).not.toContain('tryPostBeProfitTrail');
     expect(src).not.toContain('PROFIT GUARD');
     expect(exitSrc).not.toContain('HardInvalidation');
-    expect(src).toContain('waiting for closed 10s or C++ calc EntryReady');
+    expect(src).toContain('TEAM · waiting C++ EntryReady');
     expect(src).toContain('resolveDeskEntry');
     expect(src).toContain('this 10s already filled');
+    expect(src).toContain('TEAM Node blocked C++');
+    expect(src).toContain('TEAM Node fallback');
     expect(src).not.toContain('evaluateStrategy({');
     expect(src).not.toContain("import { runTradePipeline } from './tradePipeline.js'");
     expect(src).toContain('SAFETY SL attached');

@@ -42,6 +42,7 @@ describe('MAIN prototype freeze', () => {
     expect(info.STRATEGY_VERSION).toBe('main-prototype-10s-sl040-exit');
     expect(deskPrototypeRules()).toMatch(/MAIN PROTOTYPE/);
     expect(deskPrototypeRules()).toMatch(/Exit Best Outcome close only/);
+    expect(deskPrototypeRules()).toMatch(/TEAM/);
   });
 
   it('screenshot dump: PULLBACK_UPTREND + DOWN needs structure + supply zone', () => {
