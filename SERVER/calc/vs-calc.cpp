@@ -351,32 +351,44 @@ static bool decide(const Snap& s, std::string* dir, std::string* setup, std::str
 
   auto score_side = [&](int sign) {
     double p = 0.42;
-    // Polarity of last 200 — soft context only (don't let daily -0.08% kill a 10s climb)
+    // Polarity of last 200 — soft context only (don't let daily chop kill a live move)
     double pol_w = micro_up || micro_down ? 0.08 : 0.18;
     p += pol_w * (sign * polarity);
+    bool breakout_reg =
+      regime.find("BREAKOUT_UP") != std::string::npos ||
+      regime.find("BREAKOUT_DOWN") != std::string::npos;
+    bool trend_reg =
+      regime.find("TREND_UP") != std::string::npos ||
+      regime.find("TREND_DOWN") != std::string::npos ||
+      regime.find("PULLBACK_UP") != std::string::npos ||
+      regime.find("PULLBACK_DOWN") != std::string::npos ||
+      regime.find("EXPANSION") != std::string::npos;
     if (sign > 0) {
       if (htf_up) p += 0.12;
       if (mtf_up) p += 0.08;
       if (ltf_up) p += 0.06;
       if (micro_up) p += 0.16;
+      if (bias == "UP") p += 0.1;
       if (htf_down && !micro_up) p -= 0.2;
       p += 0.1 * std::min(1.0, buy_p);
       p -= 0.08 * std::min(1.0, sell_p);
+      // Breakouts/trends live at range highs — do NOT punish rpos there.
+      if (rpos > 0.88 && !breakout_reg && !trend_reg && !micro_up) p -= 0.22;
     } else {
       if (htf_down) p += 0.12;
       if (mtf_down) p += 0.08;
       if (ltf_down) p += 0.06;
       if (micro_down) p += 0.16;
+      if (bias == "DOWN") p += 0.1;
       if (htf_up && !micro_down) p -= 0.2;
       p += 0.1 * std::min(1.0, sell_p);
       p -= 0.08 * std::min(1.0, buy_p);
+      if (rpos < 0.12 && !breakout_reg && !trend_reg && !micro_down) p -= 0.22;
     }
     if (feeds_strong) p += 0.06;
-    else if (agree == "DIVERGENT") p -= 0.1;
-    if (sign > 0 && rpos > 0.88) p -= 0.22;
-    if (sign < 0 && rpos < 0.12) p -= 0.22;
-    if (sign > 0 && n10 < -0.0004 && !dump) p -= 0.08;
-    if (sign < 0 && n10 > 0.0004 && !climb) p -= 0.08;
+    else if (agree == "DIVERGENT") p -= 0.04; // soft only — never SCAN-forever on divergent feeds
+    if (sign > 0 && n10 < -0.0004 && !dump && !micro_up) p -= 0.08;
+    if (sign < 0 && n10 > 0.0004 && !climb && !micro_down) p -= 0.08;
     p = std::clamp(p, 0.02, 0.98);
     double spread = (s.ask > 0 && s.bid > 0) ? (s.ask - s.bid) / std::max(last10.c, 1.0) : 0.0002;
     return p * 1.0 - (1.0 - p) * 1.0 - spread * 6.0;
@@ -385,24 +397,22 @@ static bool decide(const Snap& s, std::string* dir, std::string* setup, std::str
   double ev_buy = score_side(1);
   double ev_sell = score_side(-1);
 
-  // Require edge — micro impulse path uses softer gate than full multi-TF.
-  const double MIN_EV = 0.03;
-  const double MIN_EV_MICRO = 0.015;
-  const int MIN_TF_ALIGN = 2;
+  const double MIN_EV = 0.02;
+  const double MIN_EV_MICRO = 0.01;
 
   auto tf_align_buy = [&]() {
     int a = 0;
-    if (htf_up || polarity > 0.04 || micro_up) ++a;
+    if (htf_up || polarity > 0.04 || micro_up || bias == "UP") ++a;
     if (mtf_up || s.body_5m > 0 || n1 > 0) ++a;
-    if (ltf_up || buy_p > sell_p || st10 >= 1) ++a;
+    if (ltf_up || buy_p > sell_p || st10 >= 1 || n10 > 0) ++a;
     if (bull > bear && n200 >= 30) ++a;
     return a;
   };
   auto tf_align_sell = [&]() {
     int a = 0;
-    if (htf_down || polarity < -0.04 || micro_down) ++a;
+    if (htf_down || polarity < -0.04 || micro_down || bias == "DOWN") ++a;
     if (mtf_down || s.body_5m < 0 || n1 < 0) ++a;
-    if (ltf_down || sell_p > buy_p || st10 <= -1) ++a;
+    if (ltf_down || sell_p > buy_p || st10 <= -1 || n10 < 0) ++a;
     if (bear > bull && n200 >= 30) ++a;
     return a;
   };
@@ -424,116 +434,119 @@ static bool decide(const Snap& s, std::string* dir, std::string* setup, std::str
       << " · Pbuy " << buy_p << " Psell " << sell_p
       << " · feeds " << s.feed_contributing << "/" << s.feed_sender_count << " " << agree
       << " · 15m " << (n15 * 10000.0) << "bp 5m " << (n5 * 10000.0) << "bp"
-      << " · 10s " << (n10 * 10000.0) << "bp";
+      << " · 10s " << (n10 * 10000.0) << "bp"
+      << " · bias " << bias;
     return o.str();
   };
 
   // Soft block only when pressure is strongly against AND micro does not disagree.
   if (!failed_bo && !range_ctx) {
-    if (want_buy && sell_p > buy_p + 0.45 && polarity < -0.12 && !micro_up) want_buy = false;
-    if (want_sell && buy_p > sell_p + 0.45 && polarity > 0.12 && !micro_down) want_sell = false;
+    if (want_buy && sell_p > buy_p + 0.55 && polarity < -0.15 && !micro_up && bias != "UP")
+      want_buy = false;
+    if (want_sell && buy_p > sell_p + 0.55 && polarity > 0.15 && !micro_down && bias != "DOWN")
+      want_sell = false;
   }
 
-  // --- Setup families (real names for Node isRealEntrySetup) ---
+  // Live side: last bar may be QUIET after the impulse — still trade the move.
+  bool live_buy = want_buy && (climb || micro_up || n10 > 0.00015 || st10 >= 1 || prior_climb);
+  bool live_sell = want_sell && (dump || micro_down || n10 < -0.00015 || st10 <= -1 || prior_dump);
+  if (bias == "UP" && (micro_up || n10 > 0.0002 || up_ctx || climb)) live_buy = true;
+  if (bias == "DOWN" && (micro_down || n10 < -0.0002 || down_ctx || dump)) live_sell = true;
 
-  // MICRO IMPULSE — phone 10s climb/dump that was stuck on SCAN forever.
-  if (want_buy && climb && micro_up && ev_buy > MIN_EV_MICRO && rpos < 0.92) {
-    if (tf_align_buy() >= 1 || n10 > 0.00035 || st10 >= 2) {
-      const char* st = prior_dump ? "CONTINUATION" : (dump ? "PULLBACK" : "CONTINUATION");
-      return finish("BUY", st, ev_buy, annotate("MICRO 10s impulse long"));
-    }
-  }
-  if (want_sell && dump && micro_down && ev_sell > MIN_EV_MICRO && rpos > 0.08) {
-    if (tf_align_sell() >= 1 || n10 < -0.00035 || st10 <= -2) {
-      const char* st = prior_climb ? "CONTINUATION" : (climb ? "PULLBACK" : "CONTINUATION");
-      return finish("SELL", st, ev_sell, annotate("MICRO 10s impulse short"));
-    }
-  }
+  auto setup_for_buy = [&]() -> const char* {
+    if (regime.find("BREAKOUT_UP") != std::string::npos) return "BREAKOUT";
+    if (failed_bo && regime.find("DOWN") != std::string::npos) return "FAILED_BREAKOUT";
+    if (range_ctx && rpos < 0.35) return "RANGE_REJECTION";
+    if (dump || (prior_dump && climb)) return dump ? "PULLBACK" : "CONTINUATION";
+    if (regime.find("PULLBACK") != std::string::npos) return prior_dump ? "CONTINUATION" : "PULLBACK";
+    if (regime.find("TREND") != std::string::npos || regime.find("EXPANSION") != std::string::npos)
+      return prior_dump ? "CONTINUATION" : (dump ? "PULLBACK" : "CONTINUATION");
+    return micro_up ? "CONTINUATION" : "PULLBACK";
+  };
+  auto setup_for_sell = [&]() -> const char* {
+    if (regime.find("BREAKOUT_DOWN") != std::string::npos) return "BREAKOUT";
+    if (failed_bo && regime.find("UP") != std::string::npos) return "FAILED_BREAKOUT";
+    if (range_ctx && rpos > 0.65) return "RANGE_REJECTION";
+    if (climb || (prior_climb && dump)) return climb ? "PULLBACK" : "CONTINUATION";
+    if (regime.find("PULLBACK") != std::string::npos) return prior_climb ? "CONTINUATION" : "PULLBACK";
+    if (regime.find("TREND") != std::string::npos || regime.find("EXPANSION") != std::string::npos)
+      return prior_climb ? "CONTINUATION" : (climb ? "PULLBACK" : "CONTINUATION");
+    return micro_down ? "CONTINUATION" : "PULLBACK";
+  };
+
+  // --- ALL regimes: fire EntryReady when live side + EV (no SCAN-forever) ---
 
   // FAILED BREAKOUT fade
   if (failed_bo) {
-    if (regime.find("UP") != std::string::npos && dump && ev_sell > MIN_EV && tf_align_sell() >= 1) {
-      return finish("SELL", "FAILED_BREAKOUT", ev_sell,
-                    annotate("FAILED_BREAKOUT fade short"));
+    if (regime.find("UP") != std::string::npos && live_sell && ev_sell > MIN_EV_MICRO) {
+      return finish("SELL", "FAILED_BREAKOUT", ev_sell, annotate("FAILED_BREAKOUT fade short"));
     }
-    if (regime.find("DOWN") != std::string::npos && climb && ev_buy > MIN_EV && tf_align_buy() >= 1) {
-      return finish("BUY", "FAILED_BREAKOUT", ev_buy,
-                    annotate("FAILED_BREAKOUT fade long"));
+    if (regime.find("DOWN") != std::string::npos && live_buy && ev_buy > MIN_EV_MICRO) {
+      return finish("BUY", "FAILED_BREAKOUT", ev_buy, annotate("FAILED_BREAKOUT fade long"));
     }
   }
 
-  // RANGE rejection
-  if (range_ctx && s.bars.size() >= 3) {
-    if (rpos > 0.82 && dump && ev_sell > MIN_EV && sell_p >= buy_p) {
-      return finish("SELL", "RANGE_REJECTION", ev_sell,
-                    annotate("RANGE top rejection"));
+  // BREAKOUT_UP / BREAKOUT_DOWN — highs/lows are expected, never veto on rpos
+  if (regime.find("BREAKOUT_UP") != std::string::npos && live_buy &&
+      (ev_buy > MIN_EV_MICRO || bias == "UP") && tf_align_buy() >= 1) {
+    return finish("BUY", "BREAKOUT", std::max(ev_buy, MIN_EV), annotate("BREAKOUT_UP follow"));
+  }
+  if (regime.find("BREAKOUT_DOWN") != std::string::npos && live_sell &&
+      (ev_sell > MIN_EV_MICRO || bias == "DOWN") && tf_align_sell() >= 1) {
+    return finish("SELL", "BREAKOUT", std::max(ev_sell, MIN_EV), annotate("BREAKOUT_DOWN follow"));
+  }
+
+  // TREND_UP / TREND_DOWN / PULLBACK_* / EXPANSION
+  if ((up_ctx || regime.find("EXPANSION") != std::string::npos) && live_buy &&
+      ev_buy > MIN_EV_MICRO && tf_align_buy() >= 1) {
+    return finish("BUY", setup_for_buy(), std::max(ev_buy, MIN_EV),
+                  annotate(std::string(s.regime) + " with-trend long"));
+  }
+  if ((down_ctx || (regime.find("EXPANSION") != std::string::npos && bias == "DOWN")) &&
+      live_sell && ev_sell > MIN_EV_MICRO && tf_align_sell() >= 1) {
+    return finish("SELL", setup_for_sell(), std::max(ev_sell, MIN_EV),
+                  annotate(std::string(s.regime) + " with-trend short"));
+  }
+
+  // RANGE rejection OR micro break of range
+  if (range_ctx) {
+    if (live_sell && (rpos > 0.7 || dump) && ev_sell > MIN_EV_MICRO && tf_align_sell() >= 1) {
+      return finish("SELL", "RANGE_REJECTION", std::max(ev_sell, MIN_EV),
+                    annotate("RANGE rejection short"));
     }
-    if (rpos < 0.18 && climb && ev_buy > MIN_EV && buy_p >= sell_p) {
-      return finish("BUY", "RANGE_REJECTION", ev_buy,
-                    annotate("RANGE bottom rejection"));
+    if (live_buy && (rpos < 0.3 || climb) && ev_buy > MIN_EV_MICRO && tf_align_buy() >= 1) {
+      return finish("BUY", "RANGE_REJECTION", std::max(ev_buy, MIN_EV),
+                    annotate("RANGE rejection long"));
     }
   }
 
-  // BREAKOUT follow (regime + HTF)
-  if (regime.find("BREAKOUT_UP") != std::string::npos && climb && want_buy &&
-      tf_align_buy() >= 1 && ev_buy > MIN_EV && buy_p >= sell_p - 0.1) {
-    if (rpos < 0.95) {
-      return finish("BUY", "BREAKOUT", ev_buy, annotate("BREAKOUT_UP multi-TF follow"));
-    }
+  // MICRO impulse — any regime, including UNKNOWN / TRANSITION / COMPRESSION
+  if (live_buy && micro_up && ev_buy > MIN_EV_MICRO && tf_align_buy() >= 1) {
+    return finish("BUY", setup_for_buy(), std::max(ev_buy, MIN_EV),
+                  annotate("MICRO impulse long · " + s.regime));
   }
-  if (regime.find("BREAKOUT_DOWN") != std::string::npos && dump && want_sell &&
-      tf_align_sell() >= 1 && ev_sell > MIN_EV && sell_p >= buy_p - 0.1) {
-    if (rpos > 0.05) {
-      return finish("SELL", "BREAKOUT", ev_sell, annotate("BREAKOUT_DOWN multi-TF follow"));
-    }
+  if (live_sell && micro_down && ev_sell > MIN_EV_MICRO && tf_align_sell() >= 1) {
+    return finish("SELL", setup_for_sell(), std::max(ev_sell, MIN_EV),
+                  annotate("MICRO impulse short · " + s.regime));
   }
 
-  // PULLBACK with-trend
-  if (want_buy && dump && (up_ctx || htf_up || bias == "UP" || micro_up || ltf_up)) {
-    if (tf_align_buy() >= 1 && ev_buy > MIN_EV && rpos < 0.85) {
-      return finish("BUY", "PULLBACK", ev_buy, annotate("PULLBACK dip-buy multi-TF"));
-    }
+  // Bias-led catch-all — board says UP/DOWN, must not SCAN forever
+  if (bias == "UP" && live_buy && ev_buy > MIN_EV_MICRO && (tf_align_buy() >= 1 || n10 > 0 || climb || micro_up)) {
+    return finish("BUY", setup_for_buy(), std::max(ev_buy, MIN_EV),
+                  annotate("BIAS UP catch-all · " + s.regime));
   }
-  if (want_sell && climb && (down_ctx || htf_down || bias == "DOWN" || micro_down || ltf_down)) {
-    if (tf_align_sell() >= 1 && ev_sell > MIN_EV && rpos > 0.15) {
-      return finish("SELL", "PULLBACK", ev_sell, annotate("PULLBACK rally-sell multi-TF"));
-    }
-  }
-
-  // CONTINUATION after pullback
-  if (want_buy && climb && prior_dump && (up_ctx || htf_up || bias == "UP" || micro_up)) {
-    if (tf_align_buy() >= 1 && ev_buy > MIN_EV) {
-      return finish("BUY", "CONTINUATION", ev_buy, annotate("CONTINUATION resume long"));
-    }
-  }
-  if (want_sell && dump && prior_climb && (down_ctx || htf_down || bias == "DOWN" || micro_down)) {
-    if (tf_align_sell() >= 1 && ev_sell > MIN_EV) {
-      return finish("SELL", "CONTINUATION", ev_sell, annotate("CONTINUATION resume short"));
-    }
+  if (bias == "DOWN" && live_sell && ev_sell > MIN_EV_MICRO &&
+      (tf_align_sell() >= 1 || n10 < 0 || dump || micro_down)) {
+    return finish("SELL", setup_for_sell(), std::max(ev_sell, MIN_EV),
+                  annotate("BIAS DOWN catch-all · " + s.regime));
   }
 
-  // TREND structured
-  if (want_sell && dump && (down_ctx || micro_down) && tf_align_sell() >= 1 && ev_sell > MIN_EV) {
-    if (rpos > 0.12) {
-      return finish("SELL", "CONTINUATION", ev_sell, annotate("TREND_DOWN structured dump"));
-    }
+  // Last resort: clear 10s net with pressure
+  if (ev_buy >= ev_sell && ev_buy > MIN_EV && want_buy && n10 > 0.00025 && buy_p >= sell_p - 0.05) {
+    return finish("BUY", setup_for_buy(), ev_buy, annotate("NET 10s long · " + s.regime));
   }
-  if (want_buy && climb && (up_ctx || micro_up) && tf_align_buy() >= 1 && ev_buy > MIN_EV) {
-    if (rpos < 0.88) {
-      return finish("BUY", "CONTINUATION", ev_buy, annotate("TREND_UP structured climb"));
-    }
-  }
-
-  // High-conviction polarity + pressure
-  if (ev_buy >= ev_sell && ev_buy > MIN_EV && want_buy && tf_align_buy() >= 2 &&
-      buy_p > sell_p && (dump || micro_up)) {
-    return finish("BUY", dump ? "PULLBACK" : "CONTINUATION", ev_buy,
-                  annotate("SUPER polarity long"));
-  }
-  if (ev_sell > ev_buy && ev_sell > MIN_EV && want_sell && tf_align_sell() >= 2 &&
-      sell_p > buy_p && (climb || micro_down)) {
-    return finish("SELL", climb ? "PULLBACK" : "CONTINUATION", ev_sell,
-                  annotate("SUPER polarity short"));
+  if (ev_sell > ev_buy && ev_sell > MIN_EV && want_sell && n10 < -0.00025 && sell_p >= buy_p - 0.05) {
+    return finish("SELL", setup_for_sell(), ev_sell, annotate("NET 10s short · " + s.regime));
   }
 
   return false;
@@ -662,6 +675,67 @@ static int self_test() {
     return 1;
   }
   std::cerr << "self-test OK gold-climb " << dir << " " << setup << " EV=" << ev << " · " << why << "\n";
+
+  // Desk screenshot: BREAKOUT_UP + bias UP + DIVERGENT feeds + QUIET last bar at highs → must BUY
+  Snap bo;
+  bo.epic = "GOLD";
+  bo.regime = "BREAKOUT_UP";
+  bo.bias = "UP";
+  bo.feed_agreement = "DIVERGENT";
+  bo.feed_contributing = 10;
+  bo.feed_sender_count = 12;
+  bo.mid = 4522.14;
+  bo.bid = 4521.99;
+  bo.ask = 4522.29;
+  bo.pressure_net = 0.1;
+  bo.pressure_buy = 0.1;
+  bo.pressure_sell = 0;
+  bo.body_1m = 0.1;
+  bo.body_5m = 0.05;
+  bo.body_15m = 0.02;
+  bo.c200_n = 200;
+  bo.c200_bull = 95;
+  bo.c200_bear = 100;
+  for (int i = 0; i < 25; ++i) {
+    double c = 4515 + i * 0.25;
+    bo.bars_1m.push_back({c - 0.1, c + 0.2, c - 0.15, c});
+  }
+  bo.bars.push_back({4519.0, 4520.5, 4518.8, 4520.2});
+  bo.bars.push_back({4520.2, 4521.8, 4520.0, 4521.5});
+  bo.bars.push_back({4521.5, 4522.5, 4521.3, 4522.3});
+  // QUIET last bar at highs (desk showed QUIET) — must still EntryReady
+  bo.bars.push_back({4522.21, 4522.21, 4522.11, 4522.11});
+  if (!decide(bo, &dir, &setup, &why, &ev) || dir != "BUY") {
+    std::cerr << "self-test FAIL BREAKOUT_UP quiet: " << dir << " " << setup << " " << why << "\n";
+    return 1;
+  }
+  if (setup != std::string("BREAKOUT") && setup != "CONTINUATION" && setup != "PULLBACK") {
+    std::cerr << "self-test FAIL BREAKOUT setup " << setup << "\n";
+    return 1;
+  }
+  std::cerr << "self-test OK breakout-up " << dir << " " << setup << " EV=" << ev << " · " << why << "\n";
+
+  // TREND_DOWN must SELL
+  Snap td = bo;
+  td.regime = "TREND_DOWN";
+  td.bias = "DOWN";
+  td.pressure_net = -0.2;
+  td.pressure_buy = 0;
+  td.pressure_sell = 0.2;
+  td.body_1m = -0.1;
+  td.bars.clear();
+  td.bars_1m.clear();
+  for (int i = 0; i < 25; ++i) {
+    double c = 4525 - i * 0.25;
+    td.bars_1m.push_back({c + 0.1, c + 0.15, c - 0.2, c});
+  }
+  td.bars.push_back({4522.0, 4522.2, 4520.5, 4520.8});
+  td.bars.push_back({4520.8, 4521.0, 4519.5, 4519.7});
+  if (!decide(td, &dir, &setup, &why, &ev) || dir != "SELL") {
+    std::cerr << "self-test FAIL TREND_DOWN: " << dir << " " << setup << " " << why << "\n";
+    return 1;
+  }
+  std::cerr << "self-test OK trend-down " << dir << " " << setup << " EV=" << ev << " · " << why << "\n";
   return 0;
 }
 
