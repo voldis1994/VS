@@ -1237,14 +1237,14 @@ export async function createCapitalPosition(
 }
 
 /**
- * Safety SL = 0.40% of instrument price (0.0040).
- * 0.15% (~6–7pts Gold) was eaten by 10s noise → Capital "Limit" micro losses.
- * 0.40% ≈ 17–18pts on Gold ~4400 — still far below old 2.5% disaster stops.
+ * Safety SL = 0.40%/3 ≈ 0.133% of instrument price (0.004/3).
+ * Previous 0.40% (~17–18pts Gold) was 3× too wide — user wants tighter SL.
+ * Floor also ÷3 so Gold is not stuck at the old 12pt minimum.
  */
-export const SAFETY_SL_REL = 0.004;
+export const SAFETY_SL_REL = 0.004 / 3;
 
 /** Min price-distance floor for high-priced instruments (Gold etc.). */
-export const SAFETY_SL_GOLD_FLOOR = 12;
+export const SAFETY_SL_GOLD_FLOOR = 4;
 
 export function computeSafetyCushionStopLevel(
   direction: 'BUY' | 'SELL',

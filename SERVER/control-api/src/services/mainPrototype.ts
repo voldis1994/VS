@@ -9,7 +9,7 @@ import { SAFETY_SL_REL } from './capitalCom.js';
 
 export const DESK_PROTOTYPE = 'MAIN' as const;
 export const DESK_PROTOTYPE_SL = `${(SAFETY_SL_REL * 100).toFixed(2)}%-of-price` as const;
-export const DESK_PROTOTYPE_STRATEGY = 'main-prototype-10s-sl040-exit';
+export const DESK_PROTOTYPE_STRATEGY = 'main-prototype-10s-sl013-exit';
 
 export function deskPrototypeRules(): string {
   return (
