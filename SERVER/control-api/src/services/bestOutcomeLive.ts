@@ -20,6 +20,10 @@ import type {
   ExitSide,
 } from './exitManage.js';
 import {
+  blockOptimizationCloseIfNotInProfit,
+  canOptimizationClose,
+} from './exitManage.js';
+import {
   LIVE_CONFIRM_STRONG,
   evaluateLiveBestOutcomeQuality,
   type BestOutcomeQualityResult,
@@ -142,11 +146,11 @@ function scoreLabel(q: BestOutcomeQualityResult): string {
 /**
  * Apply LIVE BO formula before exitTrade().
  *
+ * Best Outcome = profit optimization ONLY (UPL > 0).
+ * UPL ≤ 0 → HOLD for OPTIMIZATION; only HARD_SAFETY may CLOSE.
+ *
  * OPEN + strong SAME confirm → HOLD
- * OPEN + strong OPPOSITE confirm → CLOSE
- * UPL ≈ 0 without strong opposite → HOLD (never auto-exit on flat alone)
- * UPL ≈ 0 + strong opposite → CLOSE
- * Weak/neutral confirm → original MFE/UPL candidate (only while still in plus)
+ * OPEN + strong OPPOSITE confirm → CLOSE (only if UPL > 0)
  * HARD_SAFETY → CLOSE always
  */
 export function decideLiveBestOutcomeExit(input: {
@@ -180,34 +184,12 @@ export function decideLiveBestOutcomeExit(input: {
     return { ...candidate, live_quality, live_overridden: false };
   }
 
-  const d = live_quality.next_signal_direction;
-  const c = live_quality.next_signal_confirm;
-  const strong = c != null && Number.isFinite(c) && c >= LIVE_CONFIRM_STRONG;
-  const flatUpl = !(input.upl > 0);
-
-  // Flat / zero UPL: CLOSE only with strong opposite LIVE confirmation.
-  if (flatUpl) {
-    if (strong && d === 1) {
-      const reason = `LIVE CLOSE · opposite ${currentSide} at UPL ${input.upl.toFixed(5)} · ${scoreLabel(live_quality)}`;
-      return {
-        exit: true,
-        action: 'CLOSE',
-        reason,
-        exit_kind: 'OPTIMIZATION',
-        track: { ...candidate.track, state: 'EXIT', reason },
-        view: {
-          ...candidate.view,
-          best_outcome_state: 'EXIT',
-          best_outcome_reason: reason,
-        },
-        live_quality,
-        live_overridden: true,
-      };
-    }
+  // Hard rule: Best Outcome OPTIMIZATION never closes at UPL ≤ 0.
+  if (!canOptimizationClose(input.upl)) {
     const reason =
-      strong && d === -1
-        ? `LIVE HOLD · same-direction ${input.openSide} at UPL ${input.upl.toFixed(5)} · ${scoreLabel(live_quality)}`
-        : `HOLD · UPL ${input.upl.toFixed(5)} · no confirmed opposite · ${scoreLabel(live_quality)}`;
+      input.upl < 0
+        ? `HOLD · UPL ${input.upl.toFixed(5)} · Best Outcome never closes negative · SL/HARD SAFETY only`
+        : `HOLD · UPL ${input.upl.toFixed(5)} · Best Outcome never closes at flat · SL/HARD SAFETY only`;
     return {
       exit: false,
       action: 'HOLD',
@@ -224,12 +206,21 @@ export function decideLiveBestOutcomeExit(input: {
     };
   }
 
+  const d = live_quality.next_signal_direction;
+  const c = live_quality.next_signal_confirm;
+  const strong = c != null && Number.isFinite(c) && c >= LIVE_CONFIRM_STRONG;
+
   if (!candidate.exit) {
     return { ...candidate, live_quality, live_overridden: false };
   }
 
   if (!strong || d === 0) {
-    return { ...candidate, live_quality, live_overridden: false };
+    return blockOptimizationCloseIfNotInProfit(
+      { ...candidate, live_quality, live_overridden: false },
+      input.upl,
+      candidate.track,
+      candidate.view
+    );
   }
 
   if (d === -1) {
@@ -251,12 +242,17 @@ export function decideLiveBestOutcomeExit(input: {
   }
 
   const reason = `LIVE CLOSE · opposite ${currentSide} · ${scoreLabel(live_quality)} · ${candidate.reason}`;
-  return {
-    ...candidate,
-    reason,
-    track: { ...candidate.track, reason },
-    view: { ...candidate.view, best_outcome_reason: reason },
-    live_quality,
-    live_overridden: false,
-  };
+  return blockOptimizationCloseIfNotInProfit(
+    {
+      ...candidate,
+      reason,
+      track: { ...candidate.track, reason },
+      view: { ...candidate.view, best_outcome_reason: reason },
+      live_quality,
+      live_overridden: false,
+    },
+    input.upl,
+    candidate.track,
+    candidate.view
+  );
 }

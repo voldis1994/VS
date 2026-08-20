@@ -13,6 +13,7 @@ describe('P3 runtime call-chain wiring', () => {
     expect(src).toContain('decideBestOutcomeExitFull');
     expect(src).toContain('decideLiveBestOutcomeExit');
     expect(src).toContain('resolveLiveManageSignal');
+    expect(src).toContain('canOptimizationClose');
     expect(src).toContain('initBestOutcomeTrack');
     const exitSrc = readFileSync(join(process.cwd(), 'src/services/exitManage.ts'), 'utf8');
     expect(exitSrc).toContain('evaluateBestOutcome');

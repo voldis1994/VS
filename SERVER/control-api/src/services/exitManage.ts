@@ -253,6 +253,42 @@ export type BestOutcome = {
 };
 
 /**
+ * Best Outcome OPTIMIZATION may CLOSE only while still in profit.
+ * UPL <= 0 is loss/flat territory — SL / HARD_SAFETY only.
+ */
+export function canOptimizationClose(upl: number): boolean {
+  return Number.isFinite(upl) && upl > 0;
+}
+
+/** Hard guarantee: OPTIMIZATION + UPL <= 0 → never CLOSE. */
+export function blockOptimizationCloseIfNotInProfit<T extends BestOutcome>(
+  decision: T,
+  upl: number,
+  track?: BestOutcomeTrack,
+  view?: BestOutcomeView
+): T {
+  if (!(decision.exit && decision.exit_kind === 'OPTIMIZATION' && !canOptimizationClose(upl))) {
+    return decision;
+  }
+  const reason = `HOLD · UPL ${Number.isFinite(upl) ? upl.toFixed(5) : String(upl)} · Best Outcome never closes ≤ 0 · SL/HARD SAFETY only · (${decision.reason})`;
+  const holdTrack = track
+    ? { ...track, state: 'HOLD' as BestOutcomeStateName, reason }
+    : undefined;
+  const holdView = view
+    ? { ...view, best_outcome_state: 'HOLD' as BestOutcomeStateName, best_outcome_reason: reason }
+    : undefined;
+  return {
+    ...decision,
+    exit: false,
+    action: 'HOLD',
+    reason,
+    exit_kind: 'NONE',
+    ...(holdTrack ? { track: holdTrack } : {}),
+    ...(holdView ? { view: holdView } : {}),
+  };
+}
+
+/**
  * Broker BE stop level rounding:
  * - BUY must not round ABOVE entry (would create immediate small loss).
  * - SELL must not round BELOW entry.
@@ -365,13 +401,13 @@ export function evaluateBestOutcome(
   const closeMove = breakevenTriggerMove(entry, minDist > 0 ? minDist : null);
 
   // ——— Active Best Outcome exits (CLOSE, not SL trail) ———
-  // UPL = 0 is NOT an automatic EXIT. Flat/zero UPL after MFE must HOLD unless
-  // HARD_SAFETY or LIVE opposite confirmation (see decideLiveBestOutcomeExit).
+  // Best Outcome = profit optimization ONLY.
+  // OPTIMIZATION CLOSE requires UPL > 0. UPL ≤ 0 → HOLD (SL / HARD_SAFETY protect losses).
 
-  // 75% MFE profit lock — only while still in plus (fav > 0). Flat UPL is not a lock CLOSE.
+  // 75% MFE profit lock — only while still in plus (fav > 0).
   if (
     mfeSignificant &&
-    fav > 0 &&
+    canOptimizationClose(fav) &&
     peakMfe + 1e-9 >= closeMove &&
     retention != null &&
     retention + 1e-9 < PEAK_RETENTION_EXIT_THRESHOLD
@@ -380,14 +416,18 @@ export function evaluateBestOutcome(
     if (plusHoldActive) return holdDuringPlusWindow(candidateReason);
     track.state = 'EXIT';
     track.reason = candidateReason;
-    return {
-      exit: true,
-      action: 'CLOSE',
-      reason: track.reason,
-      exit_kind: 'OPTIMIZATION',
-      track,
-      view: buildView(s, mid, track),
-    };
+    return blockOptimizationCloseIfNotInProfit(
+      {
+        exit: true,
+        action: 'CLOSE',
+        reason: track.reason,
+        exit_kind: 'OPTIMIZATION',
+        track,
+        view: buildView(s, mid, track),
+      },
+      fav,
+      track
+    );
   }
 
   const thesisFail = thesisFailureReason(side, ctx.regime ?? s.regime, s.entry_setup);
@@ -415,19 +455,23 @@ export function evaluateBestOutcome(
     .toUpperCase();
   const withTrendEntry = WITH_TREND_EXIT_SETUPS.has(entrySetup);
 
-  if (impulseEndedKnown && withTrendEntry && fav + 1e-9 >= closeMove) {
+  if (impulseEndedKnown && withTrendEntry && canOptimizationClose(fav) && fav + 1e-9 >= closeMove) {
     const candidateReason = `BestOutcome · inputs ended · favorable move (${fav.toFixed(5)} >= ${closeMove})`;
     if (plusHoldActive) return holdDuringPlusWindow(candidateReason);
     track.state = 'EXIT';
     track.reason = candidateReason;
-    return {
-      exit: true,
-      action: 'CLOSE',
-      reason: track.reason,
-      exit_kind: 'OPTIMIZATION',
-      track,
-      view: buildView(s, mid, track),
-    };
+    return blockOptimizationCloseIfNotInProfit(
+      {
+        exit: true,
+        action: 'CLOSE',
+        reason: track.reason,
+        exit_kind: 'OPTIMIZATION',
+        track,
+        view: buildView(s, mid, track),
+      },
+      fav,
+      track
+    );
   }
 
   let exitScore = 0;
@@ -509,23 +553,26 @@ export function evaluateBestOutcome(
       retention < 0.6) ||
     (mfeSignificant && exitScore >= 3 && retention != null && retention < 0.7)
   ) {
-    // Flat/zero UPL alone is not Best Outcome EXIT — wait LIVE opposite or HARD_SAFETY.
-    if (fav <= 0) {
+    // OPTIMIZATION CLOSE only in profit. Flat/negative → wait SL / HARD_SAFETY.
+    if (!canOptimizationClose(fav)) {
       state = exitScore >= 3 ? 'REVERSAL_CONFIRMING' : 'WEAKENING';
-      reason = `${state === 'REVERSAL_CONFIRMING' ? 'reversal confirming' : 'weakening'} · UPL ${fav.toFixed(5)} · wait LIVE confirm · ${exitNotes.join(' · ')}`;
+      reason = `${state === 'REVERSAL_CONFIRMING' ? 'reversal confirming' : 'weakening'} · UPL ${fav.toFixed(5)} · Best Outcome HOLD ≤ 0 · ${exitNotes.join(' · ')}`;
     } else {
       const candidateReason = `BestOutcome EXIT · ${exitNotes.join(' · ')}`;
       if (plusHoldActive) return holdDuringPlusWindow(candidateReason);
       state = 'EXIT';
       reason = candidateReason;
-      return {
-        exit: true,
-        action: 'CLOSE',
-        reason,
-        exit_kind: 'OPTIMIZATION',
-        track: { ...track, state, reason },
-        view: buildView(s, mid, { ...track, state, reason }),
-      };
+      return blockOptimizationCloseIfNotInProfit(
+        {
+          exit: true,
+          action: 'CLOSE',
+          reason,
+          exit_kind: 'OPTIMIZATION',
+          track: { ...track, state, reason },
+          view: buildView(s, mid, { ...track, state, reason }),
+        },
+        fav
+      );
     }
   } else if (exitScore >= 2 && exitScore > holdScore) {
     state = 'REVERSAL_CONFIRMING';
@@ -541,14 +588,18 @@ export function evaluateBestOutcome(
   }
 
   track = { ...track, state, reason };
-  return {
-    exit: false,
-    action: 'HOLD',
-    reason: track.reason,
-    exit_kind: 'NONE',
-    track,
-    view: buildView(s, mid, track),
-  };
+  return blockOptimizationCloseIfNotInProfit(
+    {
+      exit: false,
+      action: 'HOLD',
+      reason: track.reason,
+      exit_kind: 'NONE',
+      track,
+      view: buildView(s, mid, track),
+    },
+    fav,
+    track
+  );
 }
 
 function buildView(s: ExitSnapshot, mid: number, track: BestOutcomeTrack): BestOutcomeView {
@@ -585,11 +636,14 @@ export function decideBestOutcomeExit(
     minStopDistance: opts?.minStopDistance ?? null,
     nowMs,
   });
+  const fav =
+    s.open_side && s.entry_price != null ? favorableMove(s.open_side, s.entry_price, mid) : 0;
+  const guarded = blockOptimizationCloseIfNotInProfit(evalResult, fav, evalResult.track, evalResult.view);
   return {
-    exit: evalResult.exit,
-    action: evalResult.action,
-    reason: evalResult.reason,
-    exit_kind: evalResult.exit_kind,
+    exit: guarded.exit,
+    action: guarded.action,
+    reason: guarded.reason,
+    exit_kind: guarded.exit_kind,
   };
 }
 
@@ -601,5 +655,8 @@ export function decideBestOutcomeExitFull(
   track: BestOutcomeTrack,
   opts?: { minStopDistance?: number | null; nowMs?: number }
 ): BestOutcomeEvaluation {
-  return evaluateBestOutcome(s, mid, ctx, track, opts);
+  const evalResult = evaluateBestOutcome(s, mid, ctx, track, opts);
+  const fav =
+    s.open_side && s.entry_price != null ? favorableMove(s.open_side, s.entry_price, mid) : 0;
+  return blockOptimizationCloseIfNotInProfit(evalResult, fav, evalResult.track, evalResult.view);
 }

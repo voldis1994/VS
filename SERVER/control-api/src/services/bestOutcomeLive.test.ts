@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   evaluateBestOutcome,
   initBestOutcomeTrack,
+  blockOptimizationCloseIfNotInProfit,
   type ExitSnapshot,
 } from './exitManage.js';
 import {
@@ -357,7 +358,7 @@ describe('LIVE Best Outcome exit gate', () => {
     expect(live.action).toBe('HOLD');
   });
 
-  it('SELL → UPL 0 → strong BUY reversal => CLOSE', () => {
+  it('SELL → UPL 0 → strong BUY reversal => HOLD (OPTIMIZATION never closes ≤ 0)', () => {
     const candidate = breakevenAtZeroCandidate('SELL');
     expect(candidate.exit).toBe(false);
     const live = decideLiveBestOutcomeExit({
@@ -371,14 +372,12 @@ describe('LIVE Best Outcome exit gate', () => {
       regime: 'TREND_UP',
       bias: 'UP',
     });
-    expect(live.live_quality.next_signal_direction).toBe(1);
-    expect(live.live_quality.next_signal_confirm!).toBeGreaterThanOrEqual(LIVE_CONFIRM_STRONG);
-    expect(live.exit).toBe(true);
-    expect(live.action).toBe('CLOSE');
-    expect(live.reason).toMatch(/LIVE CLOSE/);
+    expect(live.exit).toBe(false);
+    expect(live.action).toBe('HOLD');
+    expect(live.reason).toMatch(/never closes at flat|never closes ≤ 0|SL\/HARD SAFETY/i);
   });
 
-  it('BUY → UPL 0 → strong SELL reversal => CLOSE', () => {
+  it('BUY → UPL 0 → strong SELL reversal => HOLD (OPTIMIZATION never closes ≤ 0)', () => {
     const candidate = breakevenAtZeroCandidate('BUY');
     expect(candidate.exit).toBe(false);
     const live = decideLiveBestOutcomeExit({
@@ -392,12 +391,69 @@ describe('LIVE Best Outcome exit gate', () => {
       regime: 'TREND_DOWN',
       bias: 'DOWN',
     });
-    expect(live.live_quality.next_signal_direction).toBe(1);
-    expect(live.exit).toBe(true);
-    expect(live.action).toBe('CLOSE');
+    expect(live.exit).toBe(false);
+    expect(live.action).toBe('HOLD');
   });
 
-  it('HARD SAFETY => CLOSE always (even at flat UPL)', () => {
+  it('UPL < 0 → Best Outcome OPTIMIZATION HOLD (even strong opposite)', () => {
+    const candidate = profitLockCandidate('SELL');
+    expect(candidate.exit).toBe(true);
+    expect(candidate.exit_kind).toBe('OPTIMIZATION');
+    const live = decideLiveBestOutcomeExit({
+      candidate,
+      openSide: 'SELL',
+      mfe: 6,
+      upl: -1.5,
+      signal: validSignal('BUY'),
+      closedBars: trendBars('BUY'),
+      feed: feedStrong(),
+      regime: 'TREND_UP',
+      bias: 'UP',
+    });
+    expect(live.exit).toBe(false);
+    expect(live.action).toBe('HOLD');
+    expect(live.reason).toMatch(/never closes negative/i);
+  });
+
+  it('blockOptimizationCloseIfNotInProfit blocks OPTIMIZATION at UPL ≤ 0', () => {
+    const blocked = blockOptimizationCloseIfNotInProfit(
+      {
+        exit: true,
+        action: 'CLOSE',
+        reason: 'fake optimization',
+        exit_kind: 'OPTIMIZATION',
+      },
+      0
+    );
+    expect(blocked.exit).toBe(false);
+    expect(blocked.action).toBe('HOLD');
+    expect(blocked.exit_kind).toBe('NONE');
+
+    const neg = blockOptimizationCloseIfNotInProfit(
+      {
+        exit: true,
+        action: 'CLOSE',
+        reason: 'fake optimization',
+        exit_kind: 'OPTIMIZATION',
+      },
+      -2
+    );
+    expect(neg.exit).toBe(false);
+
+    const ok = blockOptimizationCloseIfNotInProfit(
+      {
+        exit: true,
+        action: 'CLOSE',
+        reason: 'fake optimization',
+        exit_kind: 'OPTIMIZATION',
+      },
+      1.5
+    );
+    expect(ok.exit).toBe(true);
+    expect(ok.exit_kind).toBe('OPTIMIZATION');
+  });
+
+  it('HARD SAFETY => CLOSE always (even at flat/negative UPL)', () => {
     const candidate = thesisFailureCandidate();
     expect(candidate.exit).toBe(true);
     expect(candidate.exit_kind).toBe('HARD_SAFETY');

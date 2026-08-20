@@ -28,6 +28,7 @@ import {
   decideBestOutcomeExitFull,
   favorableMove,
   initBestOutcomeTrack,
+  canOptimizationClose,
   type BestOutcomeStateName,
   type BestOutcomeTrack,
 } from './exitManage.js';
@@ -2063,7 +2064,13 @@ async function robotCycleBody(s: Internal) {
       s.best_price_seen = bo.view.best_price_seen;
       s.last_best_outcome_evaluation = bo.live_quality;
 
-      if (bo.action === 'CLOSE' || bo.exit) {
+      // Final guarantee: OPTIMIZATION never calls exitTrade when UPL ≤ 0.
+      const allowClose =
+        (bo.action === 'CLOSE' || bo.exit) &&
+        (bo.exit_kind === 'HARD_SAFETY' ||
+          (bo.exit_kind === 'OPTIMIZATION' && canOptimizationClose(uplNow)));
+
+      if (allowClose) {
         pushTick(s, {
           phase: 'DECIDE',
           bid: quote.bid,
@@ -2073,6 +2080,17 @@ async function robotCycleBody(s: Internal) {
           detail: `BEST OUTCOME CLOSE · ${bo.reason}`,
         });
         await exitTrade(opened.session, s, quote, bo.reason);
+        return;
+      }
+
+      if ((bo.action === 'CLOSE' || bo.exit) && bo.exit_kind === 'OPTIMIZATION' && !canOptimizationClose(uplNow)) {
+        pushTick(s, {
+          phase: 'MANAGE',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `BEST OUTCOME HOLD · blocked OPTIMIZATION at UPL ${uplNow.toFixed(5)} · SL/HARD SAFETY only`,
+        });
         return;
       }
 
