@@ -1,3 +1,4 @@
-tip=2026-08-20T15:38:00Z
+tip=2026-08-20T16:55:00Z
 rule=ENTRY real setup only · EXIT Best Outcome only
-prev=af169c7
+audit=P0 close-retry + desk-deny + dealStatus + START_MSI hard-reset
+prev=b2747f0

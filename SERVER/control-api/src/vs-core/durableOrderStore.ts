@@ -167,6 +167,18 @@ export class DurableOrderStore extends OrderStore {
     );
   }
 
+  /** Allow close retry after stuck CLOSE_PENDING — restore POSITION_OPEN on ledger. */
+  clearClosePending(accountId: number, epic: string): number {
+    let n = 0;
+    for (const L of [...this.ledger.values()]) {
+      if (L.account_id === accountId && L.epic === epic && L.state === 'CLOSE_PENDING') {
+        this.updateLedger(L.client_order_id, { state: 'POSITION_OPEN' });
+        n += 1;
+      }
+    }
+    return n;
+  }
+
   listClosePending(): SubmissionLedgerRow[] {
     return [...this.ledger.values()].filter((L) => L.state === 'CLOSE_PENDING');
   }

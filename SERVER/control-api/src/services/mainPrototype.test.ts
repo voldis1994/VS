@@ -156,7 +156,7 @@ describe('MAIN prototype freeze', () => {
 
     const start = readFileSync(join(repoRoot, 'START_MSI.bat'), 'utf8');
     expect(start).toContain('git fetch origin main');
-    expect(start).toContain('git pull origin main');
+    expect(start).toContain('git reset --hard origin/main');
     expect(start).not.toMatch(/git pull origin main 2>nul/);
 
     const palaid = readFileSync(join(repoRoot, 'PALAID.bat'), 'utf8');

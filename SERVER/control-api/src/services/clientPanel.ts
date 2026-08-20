@@ -388,7 +388,7 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
     connection_status = requestedRunning ? 'ERROR' : 'ONLINE';
   }
 
-  const lastTick = robot?.ticks?.length ? robot.ticks[robot.ticks.length - 1] : null;
+  const lastTick = robot?.ticks?.length ? robot.ticks[0] : null;
   const bid = lastTick?.bid ?? null;
   const ask = lastTick?.ask ?? null;
   const mid = lastTick?.mid ?? robot?.last_mid ?? null;

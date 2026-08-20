@@ -230,6 +230,8 @@ type Internal = RobotSession & {
   cycle_in_flight: boolean;
   /** Close request submitted; awaiting broker flat before POSITION_CLOSED */
   close_pending: boolean;
+  /** When close_pending became true (ms) — drives CLOSE RETRY. */
+  close_pending_since_ms: number;
   /** In-process close call (duplicate close prevention within/aside cycle) */
   close_in_flight: boolean;
   feedManager: FeedManager;
@@ -450,6 +452,7 @@ function publicSession(s: Internal): RobotSession {
     multiFeed: _multi,
     cycle_in_flight: _cif,
     close_pending: _cp,
+    close_pending_since_ms: _cps,
     close_in_flight: _cifClose,
     feedManager: _fm,
     last_cross_ms: _xc,
@@ -619,6 +622,7 @@ function clearTradeState(s: Internal) {
   s.safety_sl = null;
   s.mode = 'FLAT';
   s.close_pending = false;
+  s.close_pending_since_ms = 0;
   s.close_in_flight = false;
   s.best_outcome_state = null;
   s.best_outcome_reason = null;
@@ -1025,27 +1029,48 @@ async function exitTrade(
   const gate = canIssueClose(s);
   if (!gate.issue) {
     if (gate.reason === 'CLOSE_PENDING') {
-      // Verify flat without re-issuing close
       const listed = await listCapitalOpenPositions(session);
-      const still = listed.ok ? matchOpenOnEpic(listed.positions, s.epic, s.open_side) : null;
+      const stillRows = listed.ok ? positionsOnEpic(listed.positions, s.epic) : [];
+      const still = stillRows[0] ?? null;
       const fin = decideCloseFinalize({
         closeHttpOk: true,
         brokerListOk: listed.ok,
-        stillOpenOnBroker: listed.ok ? !!still : null,
+        stillOpenOnBroker: listed.ok ? stillRows.length > 0 : null,
       });
       if (fin.action === 'FINALIZE_CLOSED') {
         await finalizeLocalClose(s, quote, reason, fin.reason);
+        return;
+      }
+      // Still open → re-issue close (do not sit forever on CLOSE_PENDING).
+      const pendingAgeMs = s.close_pending_since_ms > 0 ? Date.now() - s.close_pending_since_ms : 0;
+      if (listed.ok && stillRows.length > 0 && pendingAgeMs >= 8_000) {
+        pushTick(s, {
+          phase: 'DECIDE',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `CLOSE RETRY · pending ${Math.round(pendingAgeMs / 1000)}s · ${stillRows.length} deal(s) still open`,
+        });
+        s.close_pending = false;
+        try {
+          getDurableOrderStore().clearClosePending(s.account_id, s.epic);
+        } catch {
+          /* best effort */
+        }
+        // fall through to issue close again
       } else {
         pushTick(s, {
           phase: 'MANAGE',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `CLOSE PENDING · ${fin.reason} · no duplicate close`,
+          detail: `CLOSE PENDING · ${fin.reason} · retry in ${Math.max(0, Math.ceil((8000 - pendingAgeMs) / 1000))}s`,
         });
+        return;
       }
+    } else {
+      return;
     }
-    return;
   }
 
   // Close EVERY open row on this epic (hedge leftover from opposite-order scale-out).
@@ -1082,12 +1107,14 @@ async function exitTrade(
 
   s.close_in_flight = true;
   let lastResult: Awaited<ReturnType<typeof closeCapitalPosition>> | null = null;
-  let anyOk = false;
+  let okCount = 0;
+  const failedIds: string[] = [];
   try {
     for (const id of dealIds) {
       lastResult = await closeCapitalPosition(session, id);
-      if (lastResult.ok) anyOk = true;
+      if (lastResult.ok) okCount += 1;
       else {
+        failedIds.push(id);
         pushTick(s, {
           phase: 'ERROR',
           bid: quote.bid,
@@ -1101,9 +1128,10 @@ async function exitTrade(
     s.close_in_flight = false;
   }
 
-  if (!anyOk || !lastResult) {
+  if (okCount === 0 || !lastResult) {
     s.error = lastResult?.detail || 'close failed';
     s.close_pending = false;
+    s.close_pending_since_ms = 0;
     return;
   }
 
@@ -1112,12 +1140,12 @@ async function exitTrade(
 
   // HTTP close OK ≠ POSITION_CLOSED — require broker flat confirmation.
   const listed = await listCapitalOpenPositions(session);
-  const still = listed.ok ? matchOpenOnEpic(listed.positions, s.epic) : null;
+  const stillRows = listed.ok ? positionsOnEpic(listed.positions, s.epic) : [];
   const fin = decideCloseFinalize({
-    closeHttpOk: true,
+    closeHttpOk: okCount === dealIds.length && failedIds.length === 0,
     closeDetail: lastResult.detail,
     brokerListOk: listed.ok,
-    stillOpenOnBroker: listed.ok ? !!still : null,
+    stillOpenOnBroker: listed.ok ? stillRows.length > 0 : null,
   });
 
   if (fin.action === 'FINALIZE_CLOSED') {
@@ -1126,6 +1154,7 @@ async function exitTrade(
   }
 
   s.close_pending = true;
+  s.close_pending_since_ms = s.close_pending_since_ms || Date.now();
   s.mode = 'MANAGE';
   try {
     getDurableOrderStore().markClosePending({
@@ -1145,7 +1174,9 @@ async function exitTrade(
     bid: quote.bid,
     ask: quote.ask,
     mid: quote.mid,
-    detail: `CLOSE SUBMITTED · awaiting broker flat · ${fin.reason} · not POSITION_CLOSED yet`,
+    detail: `CLOSE SUBMITTED · awaiting broker flat · ok=${okCount}/${dealIds.length}${
+      failedIds.length ? ` fail=${failedIds.join(',')}` : ''
+    } · ${fin.reason} · not POSITION_CLOSED yet`,
   });
 }
 
@@ -1632,6 +1663,7 @@ async function enterTrade(
   s.remaining_lot = s.lot_size;
   s.error = null;
   s.close_pending = false;
+  s.close_pending_since_ms = 0;
   s.close_in_flight = false;
 
   const dealId =
@@ -2339,6 +2371,19 @@ async function robotCycleBody(s: Internal) {
             detail: `${reason} · ${s.cross_market?.detail || 'cross-market n/a'}`,
           });
         }
+      } else if (hadDirection) {
+        // Desk denied C++/prior side — never chase with rejected EntryReady.
+        pushTick(s, {
+          phase: 'SCAN',
+          bid: execQuote.bid,
+          ask: execQuote.ask,
+          mid: execQuote.mid,
+          code: DecisionCodes.NO_SETUP,
+          detail: `${ohlcLine} · ${resolved.reason || 'desk blocked EntryReady'}`,
+        });
+        direction = null;
+        setupType = null;
+        reason = resolved.reason || '';
       }
     }
 
@@ -2563,6 +2608,7 @@ export async function startRobotSession(input: {
     multiFeed: null,
     cycle_in_flight: false,
     close_pending: false,
+    close_pending_since_ms: 0,
     close_in_flight: false,
     feedManager: (() => {
       const fm = new FeedManager();
@@ -2664,6 +2710,7 @@ export async function attachManageOnlyRobot(input: {
       existing.entry_regime = normalizeRegime(input.regime);
     }
     existing.close_pending = false;
+    existing.close_pending_since_ms = 0;
     existing.orders_placed = Math.max(existing.orders_placed, 1);
     pushTick(existing, {
       phase: 'ORDER',
@@ -2699,6 +2746,7 @@ export async function attachManageOnlyRobot(input: {
       ? normalizeRegime(input.regime)
       : String(internal.regime || 'UNKNOWN');
     internal.close_pending = false;
+    internal.close_pending_since_ms = 0;
     pushTick(internal, {
       phase: 'ORDER',
       bid: null,

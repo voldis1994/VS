@@ -151,9 +151,12 @@ export function classifyMarketTrend(
   const shortBias = trendBiasFromBars(bars);
   const r = String(regime || '').toUpperCase();
 
-  const regimeUp = r.includes('TREND_UP') || r.includes('PULLBACK_UP') || r.includes('BREAKOUT_UP');
+  const regimeUp =
+    (r.includes('TREND_UP') || r.includes('PULLBACK_UP') || r === 'BREAKOUT_UP') &&
+    !r.includes('FAILED');
   const regimeDown =
-    r.includes('TREND_DOWN') || r.includes('PULLBACK_DOWN') || r.includes('BREAKOUT_DOWN');
+    (r.includes('TREND_DOWN') || r.includes('PULLBACK_DOWN') || r === 'BREAKOUT_DOWN') &&
+    !r.includes('FAILED');
 
   const downSignals =
     (structure === 'LOWER_HIGH_LOWER_LOW' ? 2 : 0) +

@@ -1049,7 +1049,32 @@ export async function closeCapitalPosition(
       }`,
     };
   }
+  const dealStatus = String(res.json?.dealStatus || res.json?.status || '')
+    .trim()
+    .toUpperCase();
+  if (dealStatus === 'REJECTED' || dealStatus === 'FAILED' || dealStatus === 'ERROR') {
+    return {
+      ok: false,
+      status: res.status,
+      json: res.json,
+      detail: `Capital.com close ${id} rejected dealStatus=${dealStatus}: ${
+        res.json?.errorCode || res.json?.reason || res.json?.message || ''
+      }`.trim(),
+    };
+  }
   const dealRef = String(res.json?.dealReference || res.json?.dealId || '');
+  if (dealRef) {
+    const conf = await confirmCapitalDeal(session, dealRef);
+    if (!conf.ok) {
+      return {
+        ok: false,
+        status: res.status,
+        json: res.json,
+        deal_reference: dealRef,
+        detail: `Close submitted but confirm failed dealId=${id}: ${conf.detail}`,
+      };
+    }
+  }
   return {
     ok: true,
     status: res.status,

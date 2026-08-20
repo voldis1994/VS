@@ -59,18 +59,43 @@ export function blockRegimeDirectionEntry(
   direction: 'BUY' | 'SELL',
   regime?: string | null,
   bias: TrendBias = 'FLAT',
-  _setup?: string | null
+  setup?: string | null
 ): string | null {
+  const setupU = String(setup || '')
+    .trim()
+    .toUpperCase();
+  if (
+    setupU &&
+    (COUNTERTREND_SETUPS.has(setupU) ||
+      setupU.includes('FADE') ||
+      setupU.includes('REVERSAL') ||
+      setupU.includes('RANGE_REJECTION') ||
+      setupU.includes('FAILED_BREAKOUT'))
+  ) {
+    return null;
+  }
+
   const r = String(regime || '').toUpperCase();
+  // Exact tokens — do NOT treat FAILED_BREAKOUT_UP as BREAKOUT_UP.
   const downCtx =
-    r.includes('TREND_DOWN') || r.includes('PULLBACK_DOWN') || r.includes('BREAKOUT_DOWN');
-  const upCtx = r.includes('TREND_UP') || r.includes('PULLBACK_UP') || r.includes('BREAKOUT_UP');
+    r === 'TREND_DOWN' ||
+    r === 'PULLBACK_DOWNTREND' ||
+    r === 'BREAKOUT_DOWN' ||
+    r.startsWith('TREND_DOWN') ||
+    (r.includes('PULLBACK_DOWN') && !r.includes('FAILED'));
+  const upCtx =
+    r === 'TREND_UP' ||
+    r === 'PULLBACK_UPTREND' ||
+    r === 'BREAKOUT_UP' ||
+    r.startsWith('TREND_UP') ||
+    (r.includes('PULLBACK_UP') && !r.includes('FAILED'));
+  const failedBo = r.includes('FAILED_BREAKOUT');
 
   // Explicit bias wins over regime label (e.g. PULLBACK_UPTREND + bias DOWN → SELL OK).
-  if (direction === 'BUY' && (bias === 'DOWN' || (downCtx && bias !== 'UP'))) {
+  if (direction === 'BUY' && (bias === 'DOWN' || (!failedBo && downCtx && bias !== 'UP'))) {
     return `REGIME_BLOCK · BUY forbidden in ${downCtx ? r : `bias ${bias}`}`;
   }
-  if (direction === 'SELL' && (bias === 'UP' || (upCtx && bias !== 'DOWN'))) {
+  if (direction === 'SELL' && (bias === 'UP' || (!failedBo && upCtx && bias !== 'DOWN'))) {
     return `REGIME_BLOCK · SELL forbidden in ${upCtx ? r : `bias ${bias}`}`;
   }
   return null;
