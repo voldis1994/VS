@@ -148,14 +148,16 @@ describe('MAIN prototype freeze', () => {
 
   it('robotDesk + PALAID stay on origin/main prototype wiring', () => {
     const desk = readFileSync(join(process.cwd(), 'src/services/robotDesk.ts'), 'utf8');
-    expect(desk).toContain('waiting confirms/C++');
-    expect(desk).toContain('EXEC plan READY');
-    expect(desk).toContain('entryPlanReady');
+    expect(desk).toContain('evaluateEntryEngine');
+    expect(desk).toContain('EXEC micro ENTRY_READY');
+    expect(desk).toContain('attachValidatedTickFanout');
+    expect(desk).toContain('startCapitalQuotePump');
     expect(desk).toContain('regimeEntryPlan');
     expect(desk).toContain('releaseGhostIntents');
     expect(desk).toContain('await enterTrade(');
     expect(desk).toContain('MAIN PROTOTYPE');
     expect(desk).toContain('this 10s already filled');
+    expect(desk).toContain('decideLiveBestOutcomeExit');
     expect(desk).not.toContain('evaluateStrategy({');
 
     const start = readFileSync(join(repoRoot, 'START_MSI.bat'), 'utf8');

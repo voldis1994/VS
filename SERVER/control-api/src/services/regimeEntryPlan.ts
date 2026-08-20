@@ -39,11 +39,14 @@ export type EntryPlan = {
   /** How many confirms are OK */
   confirm_ok: number;
   confirm_n: number;
-  /** True when every confirm is OK and side+setup are set — THIS is EntryReady */
+  /** True when every confirm is OK and side+setup are set — plan ARMED, NOT EntryReady */
   ready: boolean;
 };
 
-/** All confirms green + real side/setup → enter (do not sit on PLAN). */
+/**
+ * Structure plan ready (all confirms green).
+ * This is NOT EntryReady — tick micro + state machine must still trigger.
+ */
 export function entryPlanReady(plan: EntryPlan): boolean {
   if (!plan.direction) return false;
   if (!plan.setup) return false;
@@ -420,8 +423,8 @@ function buildConfirms(input: {
   out.push({
     id: 'FEEDS',
     label: `live vs feeds ${feed_confirm}`,
-    // Soft: FIGHT is a warning, not a hard veto — structure confirms decide entry.
-    ok: true,
+    // FIGHT is never a green confirmation — hard veto on checklist.
+    ok: feed_confirm !== 'FIGHT',
   });
 
   if (direction === 'BUY') {

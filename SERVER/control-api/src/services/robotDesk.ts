@@ -57,6 +57,17 @@ import {
 } from './candleTf.js';
 import { entryPlanReady, regimeEntryPlan, type EntryPlan } from './regimeEntryPlan.js';
 import {
+  evaluateEntryEngine,
+  consumeEntryReady,
+  getEntryEngineMode,
+} from './entryEngine.js';
+import { getEntryMachine } from './entryStateMachine.js';
+import { attachValidatedTickFanout, getEpicTickBook } from './validatedTickFanout.js';
+import {
+  startCapitalQuotePump,
+  stopCapitalQuotePump,
+} from './capitalQuotePump.js';
+import {
   canIssueClose,
   decideCloseFinalize,
   decideExternalFlatClear,
@@ -87,7 +98,6 @@ import {
   aggregateSecondsToTen,
   emptyTenSecState,
   publicOhlc10s,
-  updateTenSecondOhlc,
   type TenSecBar,
   type TenSecState,
 } from './tenSecondOhlc.js';
@@ -218,6 +228,11 @@ export type RobotSession = {
       confirm_level: number | null;
     } | null;
     confirms?: Array<{ id: string; label: string; ok: boolean }> | null;
+    entry_state?: string | null;
+    movement_phase?: string | null;
+    entry_kind?: string | null;
+    opportunity_score?: number | null;
+    entry_engine_mode?: string | null;
   };
   /** C++ / pipeline EntryReady waiting for robotDesk hands */
   pending_calc?: CalcEntry | null;
@@ -529,12 +544,18 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
   else if (s.pending_calc) {
     action = `ENTRY ${s.pending_calc.direction} ${s.pending_calc.setup_type || plan.setup || ''}`.trim();
   } else if (s.mode === 'ENTRY' && entryPlanReady(plan)) {
-    action = `READY ${plan.direction} ${plan.setup || ''} · ${plan.confirm_ok}/${plan.confirm_n}`.trim();
+    const em = getEntryMachine(s.epic);
+    if (em.state === 'ENTRY_READY') {
+      action = `READY ${plan.direction} ${plan.setup || ''} · micro ${em.phase}`.trim();
+    } else {
+      action = `ARMED ${plan.direction} ${plan.setup || ''} · ${em.state} · ${plan.confirm_ok}/${plan.confirm_n}`.trim();
+    }
   } else if (s.mode === 'ENTRY' && plan.direction) {
     action = `PLAN ${plan.direction} ${plan.setup || ''} · ${plan.confirm_ok}/${plan.confirm_n}`.trim();
   } else if (s.mode === 'ENTRY') {
     action = `PLAN · ${plan.setup || 'wait'} · ${plan.confirm_ok}/${plan.confirm_n}`;
   }
+  const em = getEntryMachine(s.epic);
   return {
     feeds,
     ohlc: ohlcLine,
@@ -550,6 +571,11 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
     feed_confirm: plan.feed_confirm,
     targets: plan.targets,
     confirms: plan.confirms,
+    entry_state: em.state,
+    movement_phase: em.phase,
+    entry_kind: em.kind,
+    opportunity_score: em.opportunity_score,
+    entry_engine_mode: getEntryEngineMode(),
   };
 }
 
@@ -869,6 +895,17 @@ export function listCalcSnapshots(): Array<{
   target_low: number | null;
   target_break: number | null;
   target_confirm: number | null;
+  entry_state: string;
+  movement_phase: string;
+  entry_kind: string;
+  opportunity_score: number | null;
+  entry_engine_mode: string;
+  micro_velocity_1s: number | null;
+  micro_acceleration: number | null;
+  micro_persistence: number | null;
+  micro_exhaustion_up: boolean;
+  micro_exhaustion_down: boolean;
+  extension_atr: number | null;
 }> {
   return [...sessions.values()]
     .filter((s) => s.running)
@@ -885,7 +922,8 @@ export function listCalcSnapshots(): Array<{
       const legs = (s.feed_legs?.length ? s.feed_legs : s.multiFeed?.legs) || [];
       const feedMid =
         s.multiFeed?.mid != null && Number.isFinite(s.multiFeed.mid) ? s.multiFeed.mid : null;
-      const plan = regimeEntryPlan({
+      const eng = evaluateEntryEngine({
+        instrument: s.epic,
         regime: s.regime,
         bias: s.trend_bias,
         liveMid: s.last_mid,
@@ -902,7 +940,10 @@ export function listCalcSnapshots(): Array<{
           low: b.low,
           close: b.close,
         })),
+        feedAgreement: s.feed_agreement ?? s.multiFeed?.agreement,
+        marketOpen: marketStatusAllowsTrading(s.capital_market_status),
       });
+      const plan = eng.plan;
       return {
         epic: s.epic,
         mid: s.last_mid,
@@ -955,6 +996,17 @@ export function listCalcSnapshots(): Array<{
         target_low: plan.targets.range_low,
         target_break: plan.targets.break_level,
         target_confirm: plan.targets.confirm_level,
+        entry_state: eng.machine.state,
+        movement_phase: eng.machine.phase,
+        entry_kind: eng.machine.kind || '',
+        opportunity_score: eng.score?.total ?? null,
+        entry_engine_mode: eng.mode,
+        micro_velocity_1s: eng.micro.velocity_1s,
+        micro_acceleration: eng.micro.acceleration,
+        micro_persistence: eng.micro.direction_persistence,
+        micro_exhaustion_up: eng.micro.exhaustion_up,
+        micro_exhaustion_down: eng.micro.exhaustion_down,
+        extension_atr: eng.machine.location.extension_atr,
       };
     });
 }
@@ -1014,6 +1066,7 @@ export async function stopRobotSession(id: string): Promise<RobotSession | null>
     clearInterval(s.timer);
     s.timer = null;
   }
+  stopCapitalQuotePump(`${s.account_id}:${s.epic}`);
   if (s.client_id) {
     getClientTradingRegistry().stop(s.client_id, s.account_id);
   }
@@ -1992,7 +2045,8 @@ async function robotCycleBody(s: Internal) {
       s.epic = quote.epic;
     }
 
-    // PRIMARY Capital quote → FeedManager (money-path authority)
+    // PRIMARY Capital quote → FeedManager (money-path authority).
+    // TickMicro + 10s OHLC fan-out happens inside FeedManager.onAccepted — not here.
     s.feedManager.ingest({
       source: 'capital',
       epic: s.epic,
@@ -2046,22 +2100,40 @@ async function robotCycleBody(s: Internal) {
       s.feed_legs = s.multiFeed?.legs ?? s.feed_legs ?? [];
     }
 
-    // OHLC must update at most once per cycle. A second updateTenSecondOhlc in the
-    // same 10s bucket clears just_closed → entry forever stuck on "wait bar close".
-    const pushOhlcTick = (mid: number | null | undefined) => {
-      if (mid == null || !Number.isFinite(mid)) return;
-      s.ohlcState = updateTenSecondOhlc(s.ohlcState, mid, Date.now());
+    // Sync OHLC from event-driven fan-out book (same ticks as TickMicro).
+    // robotDesk must NOT simulate per-tick stream on its ~2s cadence.
+    const tickBook = getEpicTickBook(s.epic);
+    if (tickBook) {
+      const prevClosed = s.ohlcState.last_closed;
+      s.ohlcState = tickBook.ohlcState;
       s.ohlc_10s = publicOhlc10s(s.ohlcState);
-      if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
-        s.last_closed_bar_at_ms = Date.now();
-        applyRobotRegime(s, [s.ohlcState.last_closed]);
+      if (tickBook.closedBars.length) {
+        for (const bar of tickBook.closedBars) {
+          const last = s.closedBars[s.closedBars.length - 1];
+          const same =
+            last &&
+            Math.abs(last.open - bar.open) < 1e-9 &&
+            Math.abs(last.close - bar.close) < 1e-9;
+          if (!same) s.closedBars.push(bar);
+        }
+        if (s.closedBars.length > TREND_LOOKBACK_10S) {
+          s.closedBars.splice(0, s.closedBars.length - TREND_LOOKBACK_10S);
+        }
       }
-    };
+      if (
+        tickBook.last_closed &&
+        (!prevClosed ||
+          Math.abs(prevClosed.close - tickBook.last_closed.close) > 1e-12 ||
+          prevClosed.open_time_ms !== tickBook.last_closed.open_time_ms)
+      ) {
+        s.last_closed_bar_at_ms = Date.now();
+        applyRobotRegime(s, [tickBook.last_closed]);
+      }
+    }
 
-    // OHLC once per cycle. Capital still streams bid/offer when dealing is CLOSED.
+    // Mid + cadence. Capital still returns bid/offer when dealing is CLOSED.
     s.last_mid = quote.mid ?? s.last_mid;
     const marketOpen = marketAllowsTrading(quote.market_status);
-    pushOhlcTick(pickedClosed.mid ?? quote.mid);
     setRobotCadence(s, marketOpen ? ACTIVE_CADENCE_MS : CLOSED_MARKET_CADENCE_MS);
 
     if (marketOpen) {
@@ -2486,6 +2558,20 @@ async function robotCycleBody(s: Internal) {
           detail: `${ohlcLine} · EXEC · stale C++ EntryReady discarded (${Math.round(calcAgeMs / 1000)}s)`,
         });
       } else {
+        const mode = getEntryEngineMode();
+        if (mode === 'SHADOW') {
+          s.pending_calc = null;
+          calcQueue.delete(calcKey(s.account_id, s.epic));
+          pushTick(s, {
+            phase: 'DECIDE',
+            bid: execQuote.bid,
+            ask: execQuote.ask,
+            mid: execQuote.mid,
+            code: DecisionCodes.NO_SETUP,
+            detail: `${ohlcLine} · SHADOW · C++ EntryReady noted (no live order) · ${calc.explanation || calc.setup_type || calc.direction}`,
+          });
+          return;
+        }
         s.pending_calc = null;
         calcQueue.delete(calcKey(s.account_id, s.epic));
         calcSignalAgeMs = calcAgeMs;
@@ -2503,8 +2589,9 @@ async function robotCycleBody(s: Internal) {
       }
     }
 
-    // ——— EntryReady sources: C++ intent OR published plan with ALL confirms OK ———
-    // 4/4 confirms = entry moment. Do NOT sit on PLAN forever waiting for silent C++.
+    // ——— EntryReady: C++ intent OR micro ENTRY_READY (LIVE/PAPER only) ———
+    // Regime/plan = context (ARMED). EntryReady comes from tick micro state machine.
+    // SHADOW mode never opens from plan alone — research candidates only.
     const planBars = () => ({
       bars10s: s.closedBars.map((b) => ({
         open: b.open,
@@ -2521,21 +2608,24 @@ async function robotCycleBody(s: Internal) {
     });
     const feedMidNow =
       s.multiFeed?.mid != null && Number.isFinite(s.multiFeed.mid) ? s.multiFeed.mid : null;
-    const livePlan = (): EntryPlan =>
-      regimeEntryPlan({
-        regime: regimeLabel,
-        bias: s.trend_bias,
-        liveMid: execQuote.mid,
-        feedMid: feedMidNow,
-        ...planBars(),
-      });
+    const eng = evaluateEntryEngine({
+      instrument: s.epic,
+      regime: regimeLabel,
+      bias: s.trend_bias,
+      liveMid: execQuote.mid,
+      feedMid: feedMidNow,
+      ...planBars(),
+      feedAgreement: s.feed_agreement ?? s.multiFeed?.agreement,
+      marketOpen: true,
+    });
+    const plan = eng.plan;
 
     if (!direction) {
-      const plan = livePlan();
-      if (entryPlanReady(plan) && isRealEntrySetup(plan.setup)) {
-        direction = plan.direction;
-        setupType = plan.setup;
-        reason = `EXEC plan READY ${plan.confirm_ok}/${plan.confirm_n} · ${plan.plan} · ${plan.target_line}`;
+      if (eng.allow_entry_ready && eng.machine.direction && isRealEntrySetup(eng.machine.setup)) {
+        direction = eng.machine.direction;
+        setupType = eng.machine.setup;
+        reason = `EXEC micro ENTRY_READY ${eng.machine.kind || setupType} · ${eng.machine.phase} · score ${(eng.score?.total ?? 0).toFixed(2)} · ${plan.target_line}`;
+        consumeEntryReady(s.epic);
         pushTick(s, {
           phase: 'DECIDE',
           bid: execQuote.bid,
@@ -2544,6 +2634,16 @@ async function robotCycleBody(s: Internal) {
           code: DecisionCodes.SIGNAL_CREATED,
           detail: reason,
         });
+      } else if (eng.machine.state === 'ENTRY_READY' && eng.shadow_only) {
+        pushTick(s, {
+          phase: 'DECIDE',
+          bid: execQuote.bid,
+          ask: execQuote.ask,
+          mid: execQuote.mid,
+          code: DecisionCodes.NO_SETUP,
+          detail: `${ohlcLine} · SHADOW ENTRY_READY ${eng.machine.kind || ''} · ${eng.machine.phase} · no live order · ${plan.confirm_line}`,
+        });
+        return;
       } else if (Number.isFinite(msSinceBar) && msSinceBar < CALC_WAIT_MS) {
         pushTick(s, {
           phase: 'DECIDE',
@@ -2551,7 +2651,7 @@ async function robotCycleBody(s: Internal) {
           ask: execQuote.ask,
           mid: execQuote.mid,
           code: DecisionCodes.NO_SETUP,
-          detail: `${ohlcLine} · ${plan.plan} · ${plan.target_line} · ${plan.confirm_line} · waiting confirms/C++ (${Math.ceil((CALC_WAIT_MS - msSinceBar) / 1000)}s)`,
+          detail: `${ohlcLine} · ${plan.plan} · ${eng.machine.state}/${eng.machine.phase} · ${plan.confirm_line} · wait micro (${Math.ceil((CALC_WAIT_MS - msSinceBar) / 1000)}s)`,
         });
         return;
       } else {
@@ -2561,7 +2661,7 @@ async function robotCycleBody(s: Internal) {
           ask: execQuote.ask,
           mid: execQuote.mid,
           code: DecisionCodes.NO_SETUP,
-          detail: `${ohlcLine} · ${plan.plan} · ${plan.target_line} · ${plan.confirm_line} · not READY yet`,
+          detail: `${ohlcLine} · ${plan.plan} · ${eng.machine.state}/${eng.machine.phase} · ${plan.confirm_line} · not EntryReady`,
         });
         return;
       }
@@ -2804,6 +2904,7 @@ export async function startRobotSession(input: {
     feedManager: (() => {
       const fm = new FeedManager();
       fm.defineSource('capital', 'PRIMARY');
+      attachValidatedTickFanout(fm);
       return fm;
     })(),
     feed_source: 'NONE',
@@ -2865,6 +2966,27 @@ export async function startRobotSession(input: {
     lot_size: lot,
     robot_status: 'RUNNING',
   });
+
+  // Capital REST quote poll (~250ms) → FeedManager.ingest → TickMicro+OHLC+Entry SM.
+  // 250ms = polling interval, not guaranteed every market tick. No Capital streaming WS in-repo.
+  // Independent of robotDesk ~2s decision cycle.
+  const pumpKey = `${acc.id}:${epic}`;
+  startCapitalQuotePump({
+    key: pumpKey,
+    epic,
+    feedManager: session.feedManager,
+    fetchQuote: async () => {
+      try {
+        const opened = await acquireCapitalSession(session.connection_id);
+        if (!opened.ok) return null;
+        const q = await fetchCapitalMarketQuote(opened.session, session.epic);
+        return q.raw_ok ? q : null;
+      } catch {
+        return null;
+      }
+    },
+  });
+
   void robotCycle(session);
   // 2s when TRADEABLE; auto-slows to 15s when market closed (still reads deal flat)
   setRobotCadence(session, ACTIVE_CADENCE_MS);
