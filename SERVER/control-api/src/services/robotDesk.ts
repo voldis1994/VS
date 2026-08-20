@@ -1031,7 +1031,6 @@ async function exitTrade(
     if (gate.reason === 'CLOSE_PENDING') {
       const listed = await listCapitalOpenPositions(session);
       const stillRows = listed.ok ? positionsOnEpic(listed.positions, s.epic) : [];
-      const still = stillRows[0] ?? null;
       const fin = decideCloseFinalize({
         closeHttpOk: true,
         brokerListOk: listed.ok,
