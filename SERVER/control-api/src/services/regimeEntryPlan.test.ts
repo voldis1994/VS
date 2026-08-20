@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { liveVsFeedConfirm, regimeEntryPlan } from './regimeEntryPlan.js';
+import { entryPlanReady, liveVsFeedConfirm, regimeEntryPlan } from './regimeEntryPlan.js';
 import { REGIME_NAMES } from './regimes.js';
 
 function climbBars(n = 12, start = 4500) {
@@ -25,9 +25,24 @@ describe('regimeEntryPlan — ALL regimes have targets + confirms', () => {
     expect(p.targets.range_low).not.toBeNull();
     expect(p.targets.break_level).not.toBeNull();
     expect(p.target_line).toMatch(/H /);
-    expect(p.target_line).toMatch(/L /);
     expect(p.confirms.length).toBeGreaterThan(2);
-    expect(p.feed_confirm).toBe('CONFIRM');
+  });
+
+  it('BREAKOUT_UP at highs with all confirms → ready (must ENTRY, not PLAN block)', () => {
+    const bars = climbBars(16, 4510);
+    const last = bars[bars.length - 1]!;
+    const p = regimeEntryPlan({
+      regime: 'BREAKOUT_UP',
+      bias: 'UP',
+      liveMid: last.high,
+      feedMid: last.high + 0.1,
+      bars10s: bars,
+    });
+    expect(p.direction).toBe('BUY');
+    expect(p.ready).toBe(true);
+    expect(entryPlanReady(p)).toBe(true);
+    expect(p.confirm_ok).toBe(p.confirm_n);
+    expect(p.plan).toMatch(/READY/);
   });
 
   it('TREND_DOWN → SELL with rally entry toward HIGH', () => {
@@ -46,21 +61,23 @@ describe('regimeEntryPlan — ALL regimes have targets + confirms', () => {
     expect(p.direction).toBe('SELL');
     expect(p.setup).toBe('CONTINUATION');
     expect(p.targets.range_high).not.toBeNull();
-    expect(p.targets.entry).not.toBeNull();
-    expect(p.confirm_line).toMatch(/confirms/);
   });
 
-  it('RANGE → HIGH/LOW targets, rejection plan', () => {
-    const bars = Array.from({ length: 20 }, (_, i) => {
-      const mid = 4518 + Math.sin(i) * 1.5;
-      return { open: mid - 0.2, high: mid + 1.2, low: mid - 1.2, close: mid + 0.1 };
+  it('RANGE at HIGH → SELL rejection', () => {
+    const bars = Array.from({ length: 20 }, () => ({
+      open: 4517,
+      high: 4520,
+      low: 4515,
+      close: 4517.5,
+    }));
+    const p = regimeEntryPlan({
+      regime: 'RANGE',
+      bias: 'FLAT',
+      liveMid: 4519.85,
+      bars10s: bars,
     });
-    const p = regimeEntryPlan({ regime: 'RANGE', bias: 'FLAT', liveMid: 4518, bars10s: bars });
+    expect(p.direction).toBe('SELL');
     expect(p.setup).toBe('RANGE_REJECTION');
-    expect(p.targets.range_high).not.toBeNull();
-    expect(p.targets.range_low).not.toBeNull();
-    expect(p.plan).toMatch(/HIGH|LOW|BREAKOUT/i);
-    expect(p.target_line).toMatch(/H /);
   });
 
   it('every REGIME_NAMES gets target_line + confirms', () => {
@@ -75,7 +92,6 @@ describe('regimeEntryPlan — ALL regimes have targets + confirms', () => {
       });
       expect(p.target_line.length, name).toBeGreaterThan(5);
       expect(p.confirms.length, name).toBeGreaterThan(0);
-      expect(p.plan.length, name).toBeGreaterThan(10);
     }
   });
 

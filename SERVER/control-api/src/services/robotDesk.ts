@@ -55,7 +55,7 @@ import {
   countCandlePolarity,
   toCompactBar,
 } from './candleTf.js';
-import { regimeEntryPlan } from './regimeEntryPlan.js';
+import { entryPlanReady, regimeEntryPlan, type EntryPlan } from './regimeEntryPlan.js';
 import {
   canIssueClose,
   decideCloseFinalize,
@@ -528,10 +528,12 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
   } else if (s.open_side) action = `MANAGE ${s.open_side}`;
   else if (s.pending_calc) {
     action = `ENTRY ${s.pending_calc.direction} ${s.pending_calc.setup_type || plan.setup || ''}`.trim();
+  } else if (s.mode === 'ENTRY' && entryPlanReady(plan)) {
+    action = `READY ${plan.direction} ${plan.setup || ''} · ${plan.confirm_ok}/${plan.confirm_n}`.trim();
   } else if (s.mode === 'ENTRY' && plan.direction) {
-    action = `PLAN ${plan.direction} ${plan.setup || ''}`.trim();
+    action = `PLAN ${plan.direction} ${plan.setup || ''} · ${plan.confirm_ok}/${plan.confirm_n}`.trim();
   } else if (s.mode === 'ENTRY') {
-    action = `PLAN · ${plan.setup || 'wait'}`;
+    action = `PLAN · ${plan.setup || 'wait'} · ${plan.confirm_ok}/${plan.confirm_n}`;
   }
   return {
     feeds,
@@ -858,6 +860,9 @@ export function listCalcSnapshots(): Array<{
   feed_confirm: string;
   target_line: string;
   confirm_line: string;
+  confirm_ok: number;
+  confirm_n: number;
+  plan_ready: boolean;
   target_entry: number | null;
   target_inv: number | null;
   target_high: number | null;
@@ -941,6 +946,9 @@ export function listCalcSnapshots(): Array<{
         feed_confirm: plan.feed_confirm,
         target_line: plan.target_line,
         confirm_line: plan.confirm_line,
+        confirm_ok: plan.confirm_ok,
+        confirm_n: plan.confirm_n,
+        plan_ready: plan.ready,
         target_entry: plan.targets.entry,
         target_inv: plan.targets.invalidation,
         target_high: plan.targets.range_high,
@@ -2495,70 +2503,68 @@ async function robotCycleBody(s: Internal) {
       }
     }
 
-    // Wait for C++ on this candle — never invent a Node side meanwhile.
-    if (!direction && Number.isFinite(msSinceBar) && msSinceBar < CALC_WAIT_MS) {
-      const feedMid =
-        s.multiFeed?.mid != null && Number.isFinite(s.multiFeed.mid) ? s.multiFeed.mid : null;
-      const plan = regimeEntryPlan({
+    // ——— EntryReady sources: C++ intent OR published plan with ALL confirms OK ———
+    // 4/4 confirms = entry moment. Do NOT sit on PLAN forever waiting for silent C++.
+    const planBars = () => ({
+      bars10s: s.closedBars.map((b) => ({
+        open: b.open,
+        high: b.high,
+        low: b.low,
+        close: b.close,
+      })),
+      bars1m: (s.minuteCandles || []).map((b) => ({
+        open: b.open,
+        high: b.high,
+        low: b.low,
+        close: b.close,
+      })),
+    });
+    const feedMidNow =
+      s.multiFeed?.mid != null && Number.isFinite(s.multiFeed.mid) ? s.multiFeed.mid : null;
+    const livePlan = (): EntryPlan =>
+      regimeEntryPlan({
         regime: regimeLabel,
         bias: s.trend_bias,
         liveMid: execQuote.mid,
-        feedMid,
-        bars10s: s.closedBars.map((b) => ({
-          open: b.open,
-          high: b.high,
-          low: b.low,
-          close: b.close,
-        })),
-        bars1m: (s.minuteCandles || []).map((b) => ({
-          open: b.open,
-          high: b.high,
-          low: b.low,
-          close: b.close,
-        })),
+        feedMid: feedMidNow,
+        ...planBars(),
       });
-      pushTick(s, {
-        phase: 'DECIDE',
-        bid: execQuote.bid,
-        ask: execQuote.ask,
-        mid: execQuote.mid,
-        code: DecisionCodes.NO_SETUP,
-        detail: `${ohlcLine} · ${plan.plan} · ${plan.target_line} · ${plan.confirm_line} · waiting C++ EntryReady (${Math.ceil((CALC_WAIT_MS - msSinceBar) / 1000)}s)`,
-      });
-      return;
-    }
 
-    // No C++ after wait → flat. Node does not invent entry.
     if (!direction) {
-      const feedMid =
-        s.multiFeed?.mid != null && Number.isFinite(s.multiFeed.mid) ? s.multiFeed.mid : null;
-      const plan = regimeEntryPlan({
-        regime: regimeLabel,
-        bias: s.trend_bias,
-        liveMid: execQuote.mid,
-        feedMid,
-        bars10s: s.closedBars.map((b) => ({
-          open: b.open,
-          high: b.high,
-          low: b.low,
-          close: b.close,
-        })),
-        bars1m: (s.minuteCandles || []).map((b) => ({
-          open: b.open,
-          high: b.high,
-          low: b.low,
-          close: b.close,
-        })),
-      });
-      pushTick(s, {
-        phase: 'SCAN',
-        bid: execQuote.bid,
-        ask: execQuote.ask,
-        mid: execQuote.mid,
-        code: DecisionCodes.NO_SETUP,
-        detail: `${ohlcLine} · ${plan.plan} · ${plan.target_line} · ${plan.confirm_line} · no C++ EntryReady yet`,
-      });
-      return;
+      const plan = livePlan();
+      if (entryPlanReady(plan) && isRealEntrySetup(plan.setup)) {
+        direction = plan.direction;
+        setupType = plan.setup;
+        reason = `EXEC plan READY ${plan.confirm_ok}/${plan.confirm_n} · ${plan.plan} · ${plan.target_line}`;
+        pushTick(s, {
+          phase: 'DECIDE',
+          bid: execQuote.bid,
+          ask: execQuote.ask,
+          mid: execQuote.mid,
+          code: DecisionCodes.SIGNAL_CREATED,
+          detail: reason,
+        });
+      } else if (Number.isFinite(msSinceBar) && msSinceBar < CALC_WAIT_MS) {
+        pushTick(s, {
+          phase: 'DECIDE',
+          bid: execQuote.bid,
+          ask: execQuote.ask,
+          mid: execQuote.mid,
+          code: DecisionCodes.NO_SETUP,
+          detail: `${ohlcLine} · ${plan.plan} · ${plan.target_line} · ${plan.confirm_line} · waiting confirms/C++ (${Math.ceil((CALC_WAIT_MS - msSinceBar) / 1000)}s)`,
+        });
+        return;
+      } else {
+        pushTick(s, {
+          phase: 'SCAN',
+          bid: execQuote.bid,
+          ask: execQuote.ask,
+          mid: execQuote.mid,
+          code: DecisionCodes.NO_SETUP,
+          detail: `${ohlcLine} · ${plan.plan} · ${plan.target_line} · ${plan.confirm_line} · not READY yet`,
+        });
+        return;
+      }
     }
 
     // Thin money safety only (not a second brain inventing setups).

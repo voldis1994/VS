@@ -148,8 +148,9 @@ describe('MAIN prototype freeze', () => {
 
   it('robotDesk + PALAID stay on origin/main prototype wiring', () => {
     const desk = readFileSync(join(process.cwd(), 'src/services/robotDesk.ts'), 'utf8');
-    expect(desk).toContain('waiting C++ EntryReady');
-    expect(desk).toContain('Node does not invent');
+    expect(desk).toContain('waiting confirms/C++');
+    expect(desk).toContain('EXEC plan READY');
+    expect(desk).toContain('entryPlanReady');
     expect(desk).toContain('regimeEntryPlan');
     expect(desk).toContain('releaseGhostIntents');
     expect(desk).toContain('await enterTrade(');

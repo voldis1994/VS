@@ -1,3 +1,3 @@
-tip=2026-08-20T18:55:00Z
-rule=Regime = chart plan → EntryReady · live vs feeds confirm · desk shows PLAN not SCAN forever
-prev=e2352e1
+tip=2026-08-20T19:15:00Z
+rule=4/4 confirms = READY ENTRY · plan no longer blocks · Node executes when entryPlanReady
+prev=3840476
