@@ -365,26 +365,13 @@ export function evaluateBestOutcome(
   const closeMove = breakevenTriggerMove(entry, minDist > 0 ? minDist : null);
 
   // ——— Active Best Outcome exits (CLOSE, not SL trail) ———
+  // UPL = 0 is NOT an automatic EXIT. Flat/zero UPL after MFE must HOLD unless
+  // HARD_SAFETY or LIVE opposite confirmation (see decideLiveBestOutcomeExit).
 
-  // Never go negative after a meaningful favorable excursion.
-  if (mfeSignificant && peakMfe > 0 && fav <= 0) {
-    const candidateReason = `BestOutcome EXIT · breakeven guard · MFE ${peakMfe.toFixed(5)} → UPL ${fav.toFixed(5)}`;
-    if (plusHoldActive) return holdDuringPlusWindow(candidateReason);
-    track.state = 'EXIT';
-    track.reason = candidateReason;
-    return {
-      exit: true,
-      action: 'CLOSE',
-      reason: track.reason,
-      exit_kind: 'OPTIMIZATION',
-      track,
-      view: buildView(s, mid, track),
-    };
-  }
-
-  // 75% MFE profit lock — close when giveback exceeds allowed retention (after real MFE).
+  // 75% MFE profit lock — only while still in plus (fav > 0). Flat UPL is not a lock CLOSE.
   if (
     mfeSignificant &&
+    fav > 0 &&
     peakMfe + 1e-9 >= closeMove &&
     retention != null &&
     retention + 1e-9 < PEAK_RETENTION_EXIT_THRESHOLD
@@ -522,18 +509,24 @@ export function evaluateBestOutcome(
       retention < 0.6) ||
     (mfeSignificant && exitScore >= 3 && retention != null && retention < 0.7)
   ) {
-    const candidateReason = `BestOutcome EXIT · ${exitNotes.join(' · ')}`;
-    if (plusHoldActive) return holdDuringPlusWindow(candidateReason);
-    state = 'EXIT';
-    reason = candidateReason;
-    return {
-      exit: true,
-      action: 'CLOSE',
-      reason,
-      exit_kind: 'OPTIMIZATION',
-      track: { ...track, state, reason },
-      view: buildView(s, mid, { ...track, state, reason }),
-    };
+    // Flat/zero UPL alone is not Best Outcome EXIT — wait LIVE opposite or HARD_SAFETY.
+    if (fav <= 0) {
+      state = exitScore >= 3 ? 'REVERSAL_CONFIRMING' : 'WEAKENING';
+      reason = `${state === 'REVERSAL_CONFIRMING' ? 'reversal confirming' : 'weakening'} · UPL ${fav.toFixed(5)} · wait LIVE confirm · ${exitNotes.join(' · ')}`;
+    } else {
+      const candidateReason = `BestOutcome EXIT · ${exitNotes.join(' · ')}`;
+      if (plusHoldActive) return holdDuringPlusWindow(candidateReason);
+      state = 'EXIT';
+      reason = candidateReason;
+      return {
+        exit: true,
+        action: 'CLOSE',
+        reason,
+        exit_kind: 'OPTIMIZATION',
+        track: { ...track, state, reason },
+        view: buildView(s, mid, { ...track, state, reason }),
+      };
+    }
   } else if (exitScore >= 2 && exitScore > holdScore) {
     state = 'REVERSAL_CONFIRMING';
     reason = `reversal confirming · ${exitNotes.join(' · ')}`;

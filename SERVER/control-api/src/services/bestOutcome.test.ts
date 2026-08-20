@@ -252,7 +252,7 @@ describe('Best Outcome — open position manage', () => {
     expect(r.reason).toMatch(/profit lock 75%/);
   });
 
-  it('breakeven guard CLOSE when was in profit and UPL goes flat/negative', () => {
+  it('UPL = 0 after MFE is HOLD — not breakeven EXIT', () => {
     const entry = 2490;
     const track = initBestOutcomeTrack(entry);
     track.max_profit_seen = 3;
@@ -260,12 +260,34 @@ describe('Best Outcome — open position manage', () => {
     const r = evaluateBestOutcome(
       snap({ open_side: 'BUY', entry_price: entry, mfe: 3, regime: 'TREND_UP' }),
       2490,
-      { closedBars: [bar(2492, 2491), bar(2491, 2490)], trend_bias: 'DOWN', regime: 'TREND_DOWN' },
+      { closedBars: [bar(2492, 2491), bar(2491, 2490)], trend_bias: 'UP', regime: 'TREND_UP' },
       track
     );
-    expect(r.exit).toBe(true);
-    expect(r.action).toBe('CLOSE');
-    expect(r.reason).toMatch(/breakeven guard/);
+    expect(r.exit).toBe(false);
+    expect(r.action).toBe('HOLD');
+    expect(r.reason).not.toMatch(/breakeven guard/);
+  });
+
+  it('SELL UPL = 0 after MFE is HOLD — not breakeven EXIT', () => {
+    const entry = 2490;
+    const track = initBestOutcomeTrack(entry);
+    track.max_profit_seen = 3;
+    track.first_plus_at_ms = Date.now() - 60_000;
+    const r = evaluateBestOutcome(
+      snap({
+        open_side: 'SELL',
+        entry_price: entry,
+        mfe: 3,
+        regime: 'TREND_DOWN',
+        entry_regime: 'TREND_DOWN',
+      }),
+      2490,
+      { closedBars: [bar(2488, 2489), bar(2489, 2490)], trend_bias: 'DOWN', regime: 'TREND_DOWN' },
+      track
+    );
+    expect(r.exit).toBe(false);
+    expect(r.action).toBe('HOLD');
+    expect(r.reason).not.toMatch(/breakeven guard/);
   });
 
   it('SELL symmetric 75% profit lock CLOSE', () => {

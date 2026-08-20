@@ -285,10 +285,44 @@ describe('LIVE Best Outcome exit gate', () => {
     expect(live.live_overridden).toBe(false);
   });
 
-  it('SELL CLOSE at ~0 + strong SELL confirmation → HOLD (no churn)', () => {
+  it('SELL MFE>0 → UPL 0 → no reversal => HOLD', () => {
     const candidate = breakevenAtZeroCandidate('SELL');
-    expect(candidate.exit).toBe(true);
-    expect(candidate.exit_kind).toBe('OPTIMIZATION');
+    expect(candidate.exit).toBe(false);
+    const live = decideLiveBestOutcomeExit({
+      candidate,
+      openSide: 'SELL',
+      mfe: 3,
+      upl: 0,
+      signal: noSignal(),
+      closedBars: null,
+      feed: null,
+      regime: 'RANGE',
+      bias: 'FLAT',
+    });
+    expect(live.exit).toBe(false);
+    expect(live.action).toBe('HOLD');
+  });
+
+  it('BUY MFE>0 → UPL 0 → no reversal => HOLD', () => {
+    const candidate = breakevenAtZeroCandidate('BUY');
+    expect(candidate.exit).toBe(false);
+    const live = decideLiveBestOutcomeExit({
+      candidate,
+      openSide: 'BUY',
+      mfe: 3,
+      upl: 0,
+      signal: noSignal(),
+      closedBars: null,
+      feed: null,
+      regime: 'RANGE',
+      bias: 'FLAT',
+    });
+    expect(live.exit).toBe(false);
+    expect(live.action).toBe('HOLD');
+  });
+
+  it('SELL MFE>0 → UPL 0 → strong SELL => HOLD', () => {
+    const candidate = breakevenAtZeroCandidate('SELL');
     const live = decideLiveBestOutcomeExit({
       candidate,
       openSide: 'SELL',
@@ -300,9 +334,87 @@ describe('LIVE Best Outcome exit gate', () => {
       regime: 'TREND_DOWN',
       bias: 'DOWN',
     });
+    expect(live.live_quality.next_signal_direction).toBe(-1);
     expect(live.exit).toBe(false);
     expect(live.action).toBe('HOLD');
-    expect(live.live_overridden).toBe(true);
+  });
+
+  it('BUY MFE>0 → UPL 0 → strong BUY => HOLD', () => {
+    const candidate = breakevenAtZeroCandidate('BUY');
+    const live = decideLiveBestOutcomeExit({
+      candidate,
+      openSide: 'BUY',
+      mfe: 3,
+      upl: 0,
+      signal: validSignal('BUY'),
+      closedBars: trendBars('BUY'),
+      feed: feedStrong(),
+      regime: 'TREND_UP',
+      bias: 'UP',
+    });
+    expect(live.live_quality.next_signal_direction).toBe(-1);
+    expect(live.exit).toBe(false);
+    expect(live.action).toBe('HOLD');
+  });
+
+  it('SELL → UPL 0 → strong BUY reversal => CLOSE', () => {
+    const candidate = breakevenAtZeroCandidate('SELL');
+    expect(candidate.exit).toBe(false);
+    const live = decideLiveBestOutcomeExit({
+      candidate,
+      openSide: 'SELL',
+      mfe: 3,
+      upl: 0,
+      signal: validSignal('BUY'),
+      closedBars: trendBars('BUY'),
+      feed: feedStrong(),
+      regime: 'TREND_UP',
+      bias: 'UP',
+    });
+    expect(live.live_quality.next_signal_direction).toBe(1);
+    expect(live.live_quality.next_signal_confirm!).toBeGreaterThanOrEqual(LIVE_CONFIRM_STRONG);
+    expect(live.exit).toBe(true);
+    expect(live.action).toBe('CLOSE');
+    expect(live.reason).toMatch(/LIVE CLOSE/);
+  });
+
+  it('BUY → UPL 0 → strong SELL reversal => CLOSE', () => {
+    const candidate = breakevenAtZeroCandidate('BUY');
+    expect(candidate.exit).toBe(false);
+    const live = decideLiveBestOutcomeExit({
+      candidate,
+      openSide: 'BUY',
+      mfe: 3,
+      upl: 0,
+      signal: validSignal('SELL'),
+      closedBars: trendBars('SELL'),
+      feed: feedStrong(),
+      regime: 'TREND_DOWN',
+      bias: 'DOWN',
+    });
+    expect(live.live_quality.next_signal_direction).toBe(1);
+    expect(live.exit).toBe(true);
+    expect(live.action).toBe('CLOSE');
+  });
+
+  it('HARD SAFETY => CLOSE always (even at flat UPL)', () => {
+    const candidate = thesisFailureCandidate();
+    expect(candidate.exit).toBe(true);
+    expect(candidate.exit_kind).toBe('HARD_SAFETY');
+    const live = decideLiveBestOutcomeExit({
+      candidate,
+      openSide: 'SELL',
+      mfe: 0,
+      upl: -0.2,
+      signal: validSignal('SELL'),
+      closedBars: trendBars('SELL'),
+      feed: feedStrong(),
+      regime: 'TREND_DOWN',
+      bias: 'DOWN',
+    });
+    expect(live.exit).toBe(true);
+    expect(live.action).toBe('CLOSE');
+    expect(live.live_overridden).toBe(false);
   });
 
   it('hard safety/risk EXIT is not blocked by strong same-direction confirm', () => {

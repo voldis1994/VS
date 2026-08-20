@@ -140,11 +140,13 @@ function scoreLabel(q: BestOutcomeQualityResult): string {
 }
 
 /**
- * Apply LIVE BO formula to an EXIT CANDIDATE before exitTrade().
+ * Apply LIVE BO formula before exitTrade().
  *
  * OPEN + strong SAME confirm → HOLD
  * OPEN + strong OPPOSITE confirm → CLOSE
- * Weak/neutral confirm or no valid signal → original MFE/UPL candidate
+ * UPL ≈ 0 without strong opposite → HOLD (never auto-exit on flat alone)
+ * UPL ≈ 0 + strong opposite → CLOSE
+ * Weak/neutral confirm → original MFE/UPL candidate (only while still in plus)
  * HARD_SAFETY → CLOSE always
  */
 export function decideLiveBestOutcomeExit(input: {
@@ -178,13 +180,53 @@ export function decideLiveBestOutcomeExit(input: {
     return { ...candidate, live_quality, live_overridden: false };
   }
 
-  if (!candidate.exit) {
-    return { ...candidate, live_quality, live_overridden: false };
-  }
-
   const d = live_quality.next_signal_direction;
   const c = live_quality.next_signal_confirm;
   const strong = c != null && Number.isFinite(c) && c >= LIVE_CONFIRM_STRONG;
+  const flatUpl = !(input.upl > 0);
+
+  // Flat / zero UPL: CLOSE only with strong opposite LIVE confirmation.
+  if (flatUpl) {
+    if (strong && d === 1) {
+      const reason = `LIVE CLOSE · opposite ${currentSide} at UPL ${input.upl.toFixed(5)} · ${scoreLabel(live_quality)}`;
+      return {
+        exit: true,
+        action: 'CLOSE',
+        reason,
+        exit_kind: 'OPTIMIZATION',
+        track: { ...candidate.track, state: 'EXIT', reason },
+        view: {
+          ...candidate.view,
+          best_outcome_state: 'EXIT',
+          best_outcome_reason: reason,
+        },
+        live_quality,
+        live_overridden: true,
+      };
+    }
+    const reason =
+      strong && d === -1
+        ? `LIVE HOLD · same-direction ${input.openSide} at UPL ${input.upl.toFixed(5)} · ${scoreLabel(live_quality)}`
+        : `HOLD · UPL ${input.upl.toFixed(5)} · no confirmed opposite · ${scoreLabel(live_quality)}`;
+    return {
+      exit: false,
+      action: 'HOLD',
+      reason,
+      exit_kind: 'NONE',
+      track: { ...candidate.track, state: 'HOLD', reason },
+      view: {
+        ...candidate.view,
+        best_outcome_state: 'HOLD',
+        best_outcome_reason: reason,
+      },
+      live_quality,
+      live_overridden: true,
+    };
+  }
+
+  if (!candidate.exit) {
+    return { ...candidate, live_quality, live_overridden: false };
+  }
 
   if (!strong || d === 0) {
     return { ...candidate, live_quality, live_overridden: false };

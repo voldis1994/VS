@@ -428,7 +428,7 @@ describe('Exit helpers — LONG/SHORT symmetry', () => {
     expect(favorableMove('SELL', 2000, 1995)).toBe(5);
   });
 
-  it('plus gives back to loss on SELL → Best Outcome CLOSE (breakeven guard)', () => {
+  it('plus gives back to flat on SELL → HOLD (UPL=0 is not EXIT)', () => {
     const gave = decideBestOutcomeExit(
       snap({
         open_side: 'SELL',
@@ -438,11 +438,11 @@ describe('Exit helpers — LONG/SHORT symmetry', () => {
         mfe: 2.5,
         peak_retention: 0,
       }),
-      2000.2
+      2000
     );
-    expect(gave.exit).toBe(true);
-    expect(gave.action).toBe('CLOSE');
-    expect(gave.reason).toMatch(/breakeven guard/i);
+    expect(gave.exit).toBe(false);
+    expect(gave.action).toBe('HOLD');
+    expect(gave.reason).not.toMatch(/breakeven guard/i);
 
     const peak = decideBestOutcomeExit(
       snap({
