@@ -1,5 +1,0 @@
-# MSI ↔ i3 LAN acceptance
-1. Same Wi-Fi as i3
-2. INSTALL_ADMIN + START_ADMIN
-3. CONNECTED on MSI; ADMIN CONNECTED on i3 panel
-4. Stop MSI → i3 DISCONNECTED

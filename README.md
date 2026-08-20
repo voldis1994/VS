@@ -1,57 +1,121 @@
-# VS
+# Market Reader
 
-ONE computer: the MSI. **origin/main is the live prototype.**
+Real-time multi-source market intelligence engine for event-driven scalping (~10 second horizon).
 
-## WHAT IS VS?
+## What This Is
 
-Market data → **C++ calc** (EntryReady only) → **Node robotDesk** picks BUY/SELL on closed 10s and opens Capital with **0.15% SL**. Best Outcome only moves SL to **BE**. Admin and Client are steering only.
+Market Reader is **not** an RSI/EMA/MACD bot. It is a layered system that:
 
-## HOW TO START (MSI)
+1. Ingests multi-source market data (tick, quote, trade, order-book)
+2. Normalizes timestamps and assesses data quality
+3. Fuses multiple feeds with lead/lag analysis
+4. Computes incremental features on rolling windows (10ms–60s)
+5. Builds structured Market State snapshots
+6. Classifies market regimes
+7. Discovers setup hypotheses
+8. Accumulates sequential evidence
+9. Generates explainable TradeIntents with EV calculation
+10. Routes execution to multiple broker accounts
+11. Manages positions independently via Exit Engine
 
-```bat
-cd /d C:\VS
-PALAID.bat
+## Architecture
+
+```
+MARKET DATA → INGESTION → NORMALIZATION → DATA QUALITY → FEED FUSION
+  → FEATURE ENGINE → MARKET STATE → REGIME → SETUP → EVIDENCE
+  → ENTRY → EXECUTION ROUTER → BROKER → POSITION MANAGER → EXIT
 ```
 
-`PALAID.bat` = `START_MSI.bat`. It **git pull origin main**, rebuilds TACTICAL DESK, restarts Control API. Desk: `http://127.0.0.1:3000/robot`
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 
-Needs **Node.js LTS** and **Docker Desktop** (Postgres + Redis on localhost). C++ calc needs **g++** or **MSVC** once (`SERVER\calc\BUILD_CALC.bat`).
+## Prerequisites
 
-Do **not** uninstall Docker Desktop. If an old VS Postgres volume has a different password, `START_MSI.bat` recreates only the VS compose volumes and continues.
+### Windows 11 x64
+- Git
+- Visual Studio 2022 Build Tools (C++ workload)
+- CMake 3.24+
+- Node.js 20+
+- Docker Desktop
+- vcpkg (used by CMake if `market-core.exe` is missing on first `VS.bat` run)
 
-Browser opens:
+### Linux (development/CI)
+- GCC 13+ or Clang 16+
+- CMake, Ninja
+- Node.js 20+
+- Docker
+- Development libraries: fmt, spdlog, yaml-cpp, nlohmann-json, openssl, curl, gtest, zlib (optional: Google Benchmark via `vcpkg` feature `benchmarks`)
 
-| Door | URL |
-|------|-----|
-| Control panel (TACTICAL DESK) | http://127.0.0.1:3000/robot |
-| Feeds / Orbit | http://127.0.0.1:3000/feeds |
-| Client homepage (phone, same Wi-Fi) | PALAID `PHONE` line — `http://<MSI-LAN-IP>:8443/` |
+## Quick Start (Windows)
 
-On a phone never type `127.0.0.1` (that is the phone itself). Safari needs the MSI Wi-Fi IP and port **8443**. PALAID writes that into `ADMIN\config\client-url.txt` (it does not overwrite a custom `https://…`).
+**Vienīgais fails — dubultklikšķis:**
 
-## WHAT RUNS
+```bat
+VS.bat
+```
 
-1. Postgres + Redis on `127.0.0.1`
-2. Control API `:3000`
-3. C++ `vs-calc` → `POST /api/pipeline/intents` (EntryReady only — never Capital)
-4. robotDesk: closed 10s BUY/SELL → Capital order + 0.15% SL; plus → SL to BE
+Lejupielādē jaunāko `main`, palaiž sistēmu, **šajā logā** parāda klienta `https://….trycloudflare.com` saiti.  
+Neaizver to logu. Admin: http://localhost:5173/
 
-## FIRST TRADE
+Skatīt [docs/VS_RESTART.md](docs/VS_RESTART.md).
 
-1. Brokers — SAVE Capital key + TEST
-2. COMMAND or ROBOT BOARD — **PULL CAPITAL**
-3. Robot — START Gold
-4. Client homepage: PALAID `PHONE` line (`http://<MSI-LAN-IP>:8443/`) — not `127.0.0.1` on the phone
+## Build
 
-Stop: `powershell -File ADMIN\windows\stop-admin.ps1`
+```bat
+cmake --preset windows-debug
+cmake --build build/windows-debug
+```
 
-## MAIN PROTOTYPE RULES
+Linux:
+```bash
+cmake --preset linux-debug
+cmake --build build/linux-debug
+```
 
-- C++ = EntryReady calc, never Capital
-- Node robotDesk = BUY/SELL + Capital hands
-- Safety SL = 0.15% of price (0.00150)
-- Best Outcome = SL to breakeven only (does not close)
-- Max 1 open; MARKET CLOSED parks
-- Ghost intents released when Capital is flat (no DUPLICATE_INTENT freeze)
-- Admin / Client = steering
-- No Vite `:5188`, no native `VS Admin.exe` required
+## Operating Modes
+
+| Mode | Description |
+|------|-------------|
+| REPLAY | Deterministic playback of recorded events |
+| PAPER | Simulated execution (default) |
+| DEMO | Broker demo environment |
+| LIVE | Real trading (disabled by default) |
+
+Enable LIVE:
+```
+LIVE_TRADING_ENABLED=true
+OPERATING_MODE=LIVE
+```
+
+## Run
+
+```bat
+VS.bat
+```
+
+Backend tests:
+```bash
+cd apps/control-api && npm test
+```
+
+## Project Structure
+
+```
+apps/           market-core, execution-service, control-api, dashboard
+libs/           C++ engine libraries (clock, features, regime, evidence, etc.)
+config/         YAML configuration
+data/           raw, normalized, replay recordings
+tests/          unit, integration, replay, execution, security, performance
+docs/           architecture and operations documentation
+VS.bat          one-click launcher (git pull, stack, client tunnel)
+```
+
+## Security
+
+- API credentials encrypted at rest (AES-256-GCM)
+- Secrets never in frontend, git, or plaintext DB
+- Masked credential display in dashboard
+- Admin token required for API (production)
+
+## License
+
+Proprietary. All rights reserved.

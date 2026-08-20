@@ -1,3 +1,0 @@
-# Implementation report
-
-See `DOCS/FINAL_ACCEPTANCE_REPORT.md` and `DOCS/FINAL_REPOSITORY_AUDIT.md`.

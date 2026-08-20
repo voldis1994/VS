@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-# LAUNCH_ALL — legacy name; use INSTALL_I3_SERVER.
-set -euo pipefail
-HERE="$(cd "$(dirname "$0")" && pwd)"
-echo "NOTE: LAUNCH_ALL → INSTALL_I3_SERVER"
-exec bash "$HERE/INSTALL_I3_SERVER" "$@"

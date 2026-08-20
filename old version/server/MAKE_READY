@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-# MAKE_READY — repair path; delegates to authoritative INSTALL_I3_SERVER (idempotent).
-set -euo pipefail
-HERE="$(cd "$(dirname "$0")" && pwd)"
-echo "NOTE: MAKE_READY → INSTALL_I3_SERVER"
-exec bash "$HERE/INSTALL_I3_SERVER" "$@"
