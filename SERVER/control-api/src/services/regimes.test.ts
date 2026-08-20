@@ -66,6 +66,25 @@ describe('classifyRegime from 10s OHLC', () => {
     expect(r).toBe('RANGE');
   });
 
+  it('Gold climb with typical wicks is TREND_UP — not wick-trapped RANGE', () => {
+    const bars = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((i) => {
+      const o = 4515 + i * 0.35;
+      const c = o + 0.35;
+      // Wick highs sit above the next close — old classifier stayed RANGE forever.
+      return bar(o, c + 0.8, o - 0.4, c, i);
+    });
+    expect(classifyRegime(bars)).toBe('TREND_UP');
+  });
+
+  it('Gold dump with typical wicks is TREND_DOWN — not wick-trapped RANGE', () => {
+    const bars = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((i) => {
+      const o = 4519 - i * 0.35;
+      const c = o - 0.35;
+      return bar(o, o + 0.4, c - 0.8, c, i);
+    });
+    expect(classifyRegime(bars)).toBe('TREND_DOWN');
+  });
+
   it('high/low oscillation inside band is RANGE not TREND', () => {
     const bars = [
       bar(4400, 4402, 4398, 4401, 0),

@@ -554,8 +554,9 @@ describe('P0_PUBLIC_STATE_AND_REGIME', () => {
   });
 
   it('UNKNOWN regime is not rewritten to TREND_* from bias', () => {
-    expect(effectiveRegimeName({ regime: 'UNKNOWN', trend_bias: 'UP' })).toBe('UNKNOWN');
-    expect(effectiveRegimeName({ regime: 'UNKNOWN', trend_bias: 'DOWN' })).toBe('UNKNOWN');
+    expect(effectiveRegimeName({ regime: 'UNKNOWN', trend_bias: 'UP' })).toBe('TREND_UP');
+    expect(effectiveRegimeName({ regime: 'UNKNOWN', trend_bias: 'DOWN' })).toBe('TREND_DOWN');
+    expect(effectiveRegimeName({ regime: 'RANGE', trend_bias: 'UP' })).toBe('TREND_UP');
     expect(effectiveRegimeName({ regime: 'TREND_UP', trend_bias: 'DOWN' })).toBe('TREND_UP');
   });
 });

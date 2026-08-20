@@ -370,9 +370,11 @@ describe('REGIME_CONTEXT_ARCHITECTURE', () => {
     expect(d.block_reason).toBeUndefined();
   });
 
-  it('bias does not rewrite UNKNOWN regime', () => {
-    expect(effectiveRegimeName({ regime: 'UNKNOWN', trend_bias: 'UP' })).toBe('UNKNOWN');
-    expect(effectiveRegimeName({ regime: 'UNKNOWN', trend_bias: 'DOWN' })).toBe('UNKNOWN');
+  it('soft regime + clear bias unlocks TREND (stop RANGE/UNKNOWN forever)', () => {
+    expect(effectiveRegimeName({ regime: 'UNKNOWN', trend_bias: 'UP' })).toBe('TREND_UP');
+    expect(effectiveRegimeName({ regime: 'UNKNOWN', trend_bias: 'DOWN' })).toBe('TREND_DOWN');
+    expect(effectiveRegimeName({ regime: 'RANGE', trend_bias: 'UP' })).toBe('TREND_UP');
+    expect(effectiveRegimeName({ regime: 'BREAKOUT_UP', trend_bias: 'DOWN' })).toBe('BREAKOUT_UP');
   });
 
   it('same MarketState → same Strategy decision (idempotent authority)', () => {

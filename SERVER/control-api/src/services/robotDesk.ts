@@ -553,32 +553,45 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
   };
 }
 
-/** Regime field only — never invent TREND_* from bias alone. */
+/**
+ * UI/chain regime. Soft RANGE/UNKNOWN + clear multi-TF bias → show TREND_*
+ * (matches persisted unlock — desk must not scream RANGE while bias is UP).
+ */
 export function effectiveRegimeName(s: {
   regime?: string | null;
   trend_bias?: TrendBias | string | null;
 }): string {
-  void s.trend_bias;
-  const r = String(s.regime || 'UNKNOWN').toUpperCase();
-  return r || 'UNKNOWN';
+  const r = String(s.regime || 'UNKNOWN').toUpperCase() || 'UNKNOWN';
+  const soft =
+    r === 'UNKNOWN' || r === 'RANGE' || r === 'COMPRESSION' || r === 'TRANSITION';
+  if (soft && s.trend_bias === 'UP') return 'TREND_UP';
+  if (soft && s.trend_bias === 'DOWN') return 'TREND_DOWN';
+  return r;
 }
 
-/** Bias unlock must not rewrite UNKNOWN regime into TREND_* (keep bias separate). */
-function applyBiasRegimeUnlock(_s: Internal) {
-  // no-op: regime stays authoritative; trend_bias is a separate field
+/**
+ * Persist multi-TF bias onto soft regimes so PLAN/C++/desk stop RANGE-forever
+ * while 1m/5m/15m clearly lean UP or DOWN.
+ */
+function applyBiasRegimeUnlock(s: Internal) {
+  const r = String(s.regime || 'UNKNOWN').toUpperCase();
+  const soft =
+    !r || r === 'UNKNOWN' || r === 'RANGE' || r === 'COMPRESSION' || r === 'TRANSITION';
+  if (!soft) return;
+  if (s.trend_bias === 'UP') s.regime = 'TREND_UP';
+  else if (s.trend_bias === 'DOWN') s.regime = 'TREND_DOWN';
 }
 
 function applyLiveRegimeFromMinutes(s: Internal) {
   const bar = s.ohlcState.last_closed;
   // Multi-TF lasting bias (1m/5m/15m + 200c) — old 5×1m-only stayed FLAT forever.
   const bias = resolveSuperTrendBias(s.closedBars, s.minuteCandles);
-  // Regime from 10s structure — never invent TREND_* from last 1m candle color.
+  // 10s structure first; soft RANGE then unlocked by lasting bias (not last 1m color alone).
   const prev = normalizeRegime(s.regime) as RegimeName;
   if (s.closedBars.length >= 2) {
     s.regime = classifyRegime(s.closedBars, prev);
-  } else if (!s.regime || String(s.regime).toUpperCase() === 'UNKNOWN') {
-    s.regime = 'RANGE';
   }
+  // Do NOT stamp RANGE on empty/seed book — leave UNKNOWN until structure exists.
   s.trend_bias = effectiveBias(s.regime, bias, bar);
   applyBiasRegimeUnlock(s);
 }
