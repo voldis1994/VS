@@ -67,7 +67,7 @@ export function runtimeBuildInfo() {
     sl: DESK_PROTOTYPE_SL,
     desk_prototype: DESK_PROTOTYPE,
     trend_minutes: TREND_LOOKBACK_MINUTES,
-    entry_brain: 'node-robot-desk',
+    entry_brain: 'cpp-super-entry',
     /** Proof this Node build unlocks with-trend entries when classifier says UNKNOWN. */
     unknown_bias_unlock: true,
     /** HISTORICAL STRATEGY NOT PROVEN — no .vs-build-sha for exact host runtime. */

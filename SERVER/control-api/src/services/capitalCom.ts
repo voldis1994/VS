@@ -1529,7 +1529,7 @@ export type CapitalPriceCandle = {
   close: number;
 };
 
-/** Capital OHLC — SECOND for 10s bars, MINUTE for chase filter. */
+/** Capital OHLC — SECOND for 10s bars, MINUTE for multi-TF / 200-bar polarity. */
 export async function fetchCapitalPrices(
   session: CapitalSession,
   epic: string,
@@ -1537,10 +1537,12 @@ export async function fetchCapitalPrices(
   max = 5
 ): Promise<{ ok: boolean; candles: CapitalPriceCandle[]; detail: string }> {
   const encoded = encodeURIComponent(epic.trim());
-  const cap = resolution === 'SECOND' ? 50 : 20;
+  // Capital history typically caps ~100–200; ask high so C++ can count last 200 closes.
+  const cap = resolution === 'SECOND' ? 50 : 200;
+  const want = Math.min(Math.max(max, 1), cap);
   const q = new URLSearchParams({
     resolution,
-    max: String(Math.min(Math.max(max, 1), cap)),
+    max: String(want),
   });
   let res = await session.get(`/api/v1/prices/${encoded}?${q.toString()}`);
   if (!res.ok) {
@@ -1549,7 +1551,7 @@ export async function fetchCapitalPrices(
   }
   if (!res.ok) {
     res = await session.get(
-      `/api/v1/history/prices?epic=${encoded}&resolution=${resolution}&max=${Math.min(Math.max(max, 1), cap)}`
+      `/api/v1/history/prices?epic=${encoded}&resolution=${resolution}&max=${want}`
     );
   }
   const prices = (res.json?.prices || res.json?.candles || []) as any[];
@@ -1568,7 +1570,7 @@ export async function fetchCapitalPrices(
 export async function fetchCapitalMinutePrices(
   session: CapitalSession,
   epic: string,
-  max = 5
+  max = 200
 ): Promise<{ ok: boolean; candles: CapitalPriceCandle[]; detail: string }> {
   return fetchCapitalPrices(session, epic, 'MINUTE', max);
 }

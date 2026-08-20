@@ -38,7 +38,7 @@ describe('MAIN prototype freeze', () => {
     const info = runtimeBuildInfo();
     expect(info.desk_prototype).toBe('MAIN');
     expect(info.sl).toBe('0.40%-of-price');
-    expect(info.entry_brain).toBe('node-robot-desk');
+    expect(info.entry_brain).toBe('cpp-super-entry');
     expect(info.STRATEGY_VERSION).toBe('main-prototype-10s-sl040-exit');
     expect(deskPrototypeRules()).toMatch(/MAIN PROTOTYPE/);
     expect(deskPrototypeRules()).toMatch(/Exit Best Outcome close only/);

@@ -1,19 +1,24 @@
 @echo off
-REM Build C++ calc (vein/flow/EV). Hands stay in Node robotDesk.
+REM Build SUPER C++ calc (multi-TF + pressure + 200-bar polarity).
+REM Hands stay in Node robotDesk — C++ only posts EntryReady.
 REM Do not delete a shipped vs-calc.exe before compile — MSI often has no g++.
 cd /d "%~dp0"
 where g++ >nul 2>&1
 if not errorlevel 1 (
   g++ -std=c++17 -O2 vs-calc.cpp -o vs-calc.exe
   if errorlevel 1 exit /b 1
-  echo OK vs-calc.exe
+  vs-calc.exe --self-test
+  if errorlevel 1 exit /b 1
+  echo OK vs-calc.exe SUPER
   exit /b 0
 )
 where cl >nul 2>&1
 if not errorlevel 1 (
   cl /nologo /EHsc /std:c++17 /O2 vs-calc.cpp /Fe:vs-calc.exe
   if errorlevel 1 exit /b 1
-  echo OK vs-calc.exe
+  vs-calc.exe --self-test
+  if errorlevel 1 exit /b 1
+  echo OK vs-calc.exe SUPER
   exit /b 0
 )
 if exist vs-calc.exe (

@@ -4,7 +4,7 @@ import { runtimeBuildInfo } from './runtimeBuild.js';
 describe('runtimeBuildInfo', () => {
   it('reports Node robotDesk as the entry brain and 0.40% of price SL', () => {
     const info = runtimeBuildInfo();
-    expect(info.entry_brain).toBe('node-robot-desk');
+    expect(info.entry_brain).toBe('cpp-super-entry');
     expect(info.sl).toBe('0.40%-of-price');
     expect(info.trend_minutes).toBe(5);
     expect(info.unknown_bias_unlock).toBe(true);

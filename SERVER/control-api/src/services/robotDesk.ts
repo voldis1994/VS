@@ -50,6 +50,12 @@ import {
   type CrossMarketPressure,
 } from './crossMarketPressure.js';
 import {
+  aggregateMinutes,
+  barBodyPressure,
+  countCandlePolarity,
+  toCompactBar,
+} from './candleTf.js';
+import {
   canIssueClose,
   decideCloseFinalize,
   decideExternalFlatClear,
@@ -529,7 +535,8 @@ async function refreshMinuteCandles(session: CapitalSession, s: Internal) {
   if (Date.now() - s.last_minute_fetch_ms >= 30_000) {
     s.last_minute_fetch_ms = Date.now();
     try {
-      const hist = await fetchCapitalMinutePrices(session, s.epic, 3);
+      // 200×1m for C++ polarity + 5m/15m aggregation (stronger than old Node 3×1m).
+      const hist = await fetchCapitalMinutePrices(session, s.epic, 200);
       if (hist.ok) s.minuteCandles = hist.candles;
     } catch {
       /* keep previous 1m snapshot */
@@ -773,14 +780,41 @@ export function listCalcSnapshots(): Array<{
   bid: number | null;
   ask: number | null;
   bars: Array<{ o: number; h: number; l: number; c: number }>;
+  bars_1m: Array<{ o: number; h: number; l: number; c: number }>;
+  bars_5m: Array<{ o: number; h: number; l: number; c: number }>;
+  bars_15m: Array<{ o: number; h: number; l: number; c: number }>;
   regime: string;
   bias: string;
   running: boolean;
+  feed_contributing: number;
+  feed_sender_count: number;
+  feed_agreement: string;
+  feeds: Array<{ name: string; mid: number | null; ok: boolean }>;
+  pressure_net: number;
+  pressure_buy: number;
+  pressure_sell: number;
+  pressure_detail: string;
+  candle200_n: number;
+  candle200_bull: number;
+  candle200_bear: number;
+  candle200_doji: number;
+  body_pressure_1m: number;
+  body_pressure_5m: number;
+  body_pressure_15m: number;
 }> {
   return [...sessions.values()]
     .filter((s) => s.running)
     .map((s) => {
       const tick = s.ticks.find((t) => t.bid != null || t.ask != null) || s.ticks[0];
+      const mins = s.minuteCandles || [];
+      const bars5 = aggregateMinutes(mins, 5);
+      const bars15 = aggregateMinutes(mins, 15);
+      const pol = countCandlePolarity(mins, 200);
+      const cm = s.cross_market;
+      const net = Number.isFinite(cm?.pressure) ? Number(cm!.pressure) : 0;
+      const buyP = Math.max(0, net);
+      const sellP = Math.max(0, -net);
+      const legs = (s.feed_legs?.length ? s.feed_legs : s.multiFeed?.legs) || [];
       return {
         epic: s.epic,
         mid: s.last_mid,
@@ -792,9 +826,31 @@ export function listCalcSnapshots(): Array<{
           l: b.low,
           c: b.close,
         })),
+        bars_1m: mins.slice(-200).map(toCompactBar),
+        bars_5m: bars5.slice(-40).map(toCompactBar),
+        bars_15m: bars15.slice(-20).map(toCompactBar),
         regime: String(s.regime || ''),
         bias: String(s.trend_bias || ''),
         running: s.running,
+        feed_contributing: s.feed_contributing ?? s.multiFeed?.contributing ?? 0,
+        feed_sender_count: s.feed_sender_count ?? s.multiFeed?.sender_count ?? 0,
+        feed_agreement: String(s.feed_agreement ?? s.multiFeed?.agreement ?? 'NONE'),
+        feeds: legs.map((l) => ({
+          name: String(l.name || l.sender_id || ''),
+          mid: l.mid ?? null,
+          ok: Boolean(l.ok),
+        })),
+        pressure_net: net,
+        pressure_buy: buyP,
+        pressure_sell: sellP,
+        pressure_detail: String(cm?.detail || 'NO CROSS-MARKET DATA'),
+        candle200_n: pol.n,
+        candle200_bull: pol.bullish,
+        candle200_bear: pol.bearish,
+        candle200_doji: pol.doji,
+        body_pressure_1m: barBodyPressure(mins.slice(-20)),
+        body_pressure_5m: barBodyPressure(bars5.slice(-12)),
+        body_pressure_15m: barBodyPressure(bars15.slice(-8)),
       };
     });
 }
