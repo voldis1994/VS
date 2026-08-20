@@ -8,6 +8,8 @@ import {
   computeRetention,
   evaluateBestOutcomeQuality,
   feedConfirm,
+  hasMeaningfulProfit,
+  inferMarketDirectionFromFeed,
   momentumConfirm,
   regimeConfirm,
 } from './bestOutcomeQuality.js';
@@ -301,6 +303,45 @@ describe('Best Outcome quality — confirmation components', () => {
     const strong = feedConfirm('BUY', feedStrong());
     const weak = feedConfirm('BUY', { ...feedStrong(), agreement: 'DIVERGENT', contributing: 1 });
     expect(strong!).toBeGreaterThan(weak!);
+  });
+
+  it('feed weight boosted when candle/momentum/regime sparse', () => {
+    const feedOnly = computeNextSignalConfirm({
+      side: 'BUY',
+      closedBars: null,
+      feed: feedStrong(),
+      regime: null,
+      bias: null,
+    });
+    // regime still returns 0.5 for UNKNOWN — so feed + regime; boost when nonFeed <= 1
+    expect(feedOnly.components.feed).not.toBeNull();
+    expect(feedOnly.confirm).not.toBeNull();
+    expect(feedOnly.confirm!).toBeGreaterThan(0.5);
+  });
+});
+
+describe('Best Outcome quality — feed/bars direction fallback', () => {
+  it('infers SELL from TREND_DOWN when Strategy signal missing', () => {
+    expect(
+      inferMarketDirectionFromFeed({ regime: 'TREND_DOWN', bias: 'FLAT', feed: feedStrong() })
+    ).toBe('SELL');
+  });
+
+  it('infers BUY from bullish bars when regime/bias flat', () => {
+    expect(
+      inferMarketDirectionFromFeed({
+        regime: 'RANGE',
+        bias: 'FLAT',
+        closedBars: strongBuyBars(),
+        feed: null,
+      })
+    ).toBe('BUY');
+  });
+
+  it('hasMeaningfulProfit rejects micro plus on Gold-scale entry', () => {
+    expect(hasMeaningfulProfit(2490, 0.05)).toBe(false);
+    expect(hasMeaningfulProfit(2490, 0.5)).toBe(true);
+    expect(hasMeaningfulProfit(2490, 3)).toBe(true);
   });
 });
 

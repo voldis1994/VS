@@ -19,16 +19,25 @@ import type { ExitSide } from './exitManage.js';
 /** Next-signal influence weight — single config source. */
 export const BEST_OUTCOME_ALPHA = 0.25;
 
-/** LIVE confirmation at or above this is "strong". Below is weak/neutral → original MFE/UPL logic. */
+/** LIVE confirmation at or above this is "strong". */
 export const LIVE_CONFIRM_STRONG = 0.6;
 
-/** Confirmation component weights (must sum to 1 among available components). Book omitted — no order-book data. */
+/**
+ * Min BO score for OPTIMIZATION CLOSE when opposite is confirmed.
+ * BO = R + α×D×C — opposite strong often pushes BO above retention.
+ */
+export const LIVE_BO_CLOSE_MIN = 0.55;
+
+/** Base confirmation weights (renormalized among available). Feed boosted when others missing. */
 export const NEXT_SIGNAL_CONFIRM_WEIGHTS = {
-  candle: 0.3,
-  feed: 0.2,
-  momentum: 0.25,
+  candle: 0.25,
+  feed: 0.3,
+  momentum: 0.2,
   regime: 0.25,
 } as const;
+
+/** Extra feed weight multiplier when candle/momentum/regime are sparse. */
+export const FEED_FALLBACK_BOOST = 2.0;
 
 export type NextSignalDirection = -1 | 0 | 1;
 
@@ -221,7 +230,7 @@ function clamp01(v: number): number {
   return Math.max(0, Math.min(1, v));
 }
 
-/** Weighted average of available confirmation components; weights renormalized when some are missing. */
+/** Weighted average; missing components dropped; Feed weight boosted when others are scarce. */
 export function computeNextSignalConfirm(input: {
   side: ExitSide;
   closedBars?: TenSecBar[] | null;
@@ -237,30 +246,93 @@ export function computeNextSignalConfirm(input: {
     regime: regimeConfirm(input.side, input.regime, input.bias),
   };
 
-  const entries: Array<[keyof typeof NEXT_SIGNAL_CONFIRM_WEIGHTS, number]> = [];
-  for (const key of Object.keys(NEXT_SIGNAL_CONFIRM_WEIGHTS) as Array<
-    keyof typeof NEXT_SIGNAL_CONFIRM_WEIGHTS
-  >) {
+  const available = (
+    Object.keys(NEXT_SIGNAL_CONFIRM_WEIGHTS) as Array<keyof typeof NEXT_SIGNAL_CONFIRM_WEIGHTS>
+  ).filter((key) => {
     const val = components[key];
-    if (val != null && Number.isFinite(val)) {
-      entries.push([key, val]);
-    }
-  }
+    return val != null && Number.isFinite(val);
+  });
 
-  if (!entries.length) {
+  if (!available.length) {
     return { confirm: null, components };
   }
 
+  const nonFeed = available.filter((k) => k !== 'feed');
+  const boostFeed = nonFeed.length <= 1 && available.includes('feed');
+
   let weightSum = 0;
   let scoreSum = 0;
-  for (const [key, val] of entries) {
-    const w = NEXT_SIGNAL_CONFIRM_WEIGHTS[key];
+  for (const key of available) {
+    let w = NEXT_SIGNAL_CONFIRM_WEIGHTS[key];
+    if (boostFeed && key === 'feed') w *= FEED_FALLBACK_BOOST;
     weightSum += w;
-    scoreSum += w * val;
+    scoreSum += w * (components[key] as number);
   }
 
   const confirm = weightSum > 0 ? clamp01(scoreSum / weightSum) : null;
   return { confirm, components };
+}
+
+/**
+ * When Strategy signal is missing, infer LIVE direction from regime / bias /
+ * cross-market / bars / feed mid drift so BO still gets a real D and C.
+ */
+export function inferMarketDirectionFromFeed(input: {
+  feed?: MultiFeedPrice | null;
+  crossMarket?: CrossMarketPressure | null;
+  regime?: string | null;
+  bias?: string | null;
+  closedBars?: TenSecBar[] | null;
+}): ExitSide | null {
+  const r = String(input.regime || '').toUpperCase();
+  const b = String(input.bias || 'FLAT').toUpperCase();
+
+  if (r.includes('TREND_UP') || r.includes('BREAKOUT_UP') || r.includes('PULLBACK_UP')) return 'BUY';
+  if (r.includes('TREND_DOWN') || r.includes('BREAKOUT_DOWN') || r.includes('PULLBACK_DOWN')) {
+    return 'SELL';
+  }
+  if (b === 'UP') return 'BUY';
+  if (b === 'DOWN') return 'SELL';
+
+  const p = input.crossMarket?.pressure;
+  if (p != null && Number.isFinite(p)) {
+    if (p > 0.08) return 'BUY';
+    if (p < -0.08) return 'SELL';
+  }
+
+  const bars = (input.closedBars || []).filter((x) => x && Number.isFinite(x.close));
+  if (bars.length >= 3) {
+    const m = momentumBias(bars);
+    if (m === 'BULLISH') return 'BUY';
+    if (m === 'BEARISH') return 'SELL';
+  }
+
+  // Feed mid vs recent bar close — last-resort direction when agreement is usable.
+  const feed = input.feed;
+  const mid = feed?.mid;
+  if (
+    mid != null &&
+    Number.isFinite(mid) &&
+    bars.length >= 1 &&
+    (feed!.agreement === 'STRONG' || feed!.agreement === 'OK' || feed!.agreement === 'INSUFFICIENT')
+  ) {
+    const last = bars[bars.length - 1]!.close;
+    const rel = (mid - last) / Math.max(Math.abs(last), 1e-9);
+    if (rel > 0.00015) return 'BUY';
+    if (rel < -0.00015) return 'SELL';
+  }
+
+  return null;
+}
+
+/** Min favorable UPL (price points) before weak-path OPTIMIZATION may CLOSE. */
+export function minMeaningfulUpl(entry: number): number {
+  const abs = Math.max(Math.abs(entry), 1e-9);
+  return abs >= 1000 ? 0.5 : abs * 0.00025;
+}
+
+export function hasMeaningfulProfit(entry: number, upl: number): boolean {
+  return Number.isFinite(upl) && upl + 1e-9 >= minMeaningfulUpl(entry);
 }
 
 /** Final Best Outcome score: BO = R + α × D × C */
@@ -341,7 +413,9 @@ export function evaluateBestOutcomeQuality(input: {
   return { ...base, confirm_components: components, next_signal_confirm: confirm };
 }
 
-/** LIVE quality while the position is still OPEN — current valid signal vs open side. */
+/** LIVE quality while the position is still OPEN — current valid signal vs open side.
+ * If Strategy signal missing, infer direction from Feed/regime/bias so formula still runs.
+ */
 export function evaluateLiveBestOutcomeQuality(input: {
   mfe: number;
   upl: number;
@@ -354,18 +428,37 @@ export function evaluateLiveBestOutcomeQuality(input: {
   bias?: string | null;
   alpha?: number;
 }): BestOutcomeQualityResult {
-  const currentSide = input.currentSide ?? null;
+  const currentSide =
+    input.currentSide ??
+    inferMarketDirectionFromFeed({
+      feed: input.feed,
+      crossMarket: input.crossMarket,
+      regime: input.regime,
+      bias: input.bias,
+      closedBars: input.closedBars,
+    });
+
   if (!currentSide) {
+    // Still compute Feed-only confirm vs open side for logging; D stays 0.
+    const feedOnly = computeNextSignalConfirm({
+      side: input.openSide,
+      closedBars: input.closedBars,
+      feed: input.feed,
+      crossMarket: input.crossMarket,
+      regime: input.regime,
+      bias: input.bias,
+    });
     const base = computeBestOutcomeScore({
       mfe: input.mfe,
       uplAtExit: input.upl,
       previousSide: input.openSide,
       nextSide: null,
-      nextConfirm: null,
+      nextConfirm: feedOnly.confirm,
       alpha: input.alpha,
     });
-    return base;
+    return { ...base, confirm_components: feedOnly.components, next_signal_confirm: feedOnly.confirm };
   }
+
   return evaluateBestOutcomeQuality({
     mfe: input.mfe,
     uplAtExit: input.upl,

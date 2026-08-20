@@ -248,13 +248,14 @@ describe('LIVE Best Outcome exit gate', () => {
     expect(live.action).toBe('CLOSE');
   });
 
-  it('weak/neutral confirmation keeps original MFE/UPL CLOSE', () => {
+  it('weak/neutral confirmation + meaningful UPL keeps MFE/UPL CLOSE', () => {
     const candidate = profitLockCandidate('SELL');
     const live = decideLiveBestOutcomeExit({
       candidate,
       openSide: 'SELL',
       mfe: 6,
       upl: 3,
+      entryPrice: 2490,
       signal: validSignal('SELL'),
       closedBars: null,
       feed: null,
@@ -264,26 +265,63 @@ describe('LIVE Best Outcome exit gate', () => {
     expect(live.live_quality.next_signal_confirm!).toBeLessThan(LIVE_CONFIRM_STRONG);
     expect(live.exit).toBe(true);
     expect(live.action).toBe('CLOSE');
-    expect(live.live_overridden).toBe(false);
   });
 
-  it('no valid live signal keeps original CLOSE', () => {
+  it('weak/neutral + tiny UPL → HOLD (no micro plus EXIT)', () => {
+    const candidate = profitLockCandidate('SELL');
+    const live = decideLiveBestOutcomeExit({
+      candidate,
+      openSide: 'SELL',
+      mfe: 6,
+      upl: 0.05,
+      entryPrice: 2490,
+      signal: noSignal(),
+      closedBars: null,
+      feed: null,
+      regime: 'RANGE',
+      bias: 'FLAT',
+    });
+    expect(live.exit).toBe(false);
+    expect(live.action).toBe('HOLD');
+    expect(live.reason).toMatch(/below min meaningful/i);
+  });
+
+  it('no Strategy signal but Feed/regime continues same → HOLD', () => {
     const candidate = profitLockCandidate('SELL');
     const live = decideLiveBestOutcomeExit({
       candidate,
       openSide: 'SELL',
       mfe: 6,
       upl: 3,
+      entryPrice: 2490,
       signal: noSignal(),
       closedBars: trendBars('SELL'),
       feed: feedStrong(),
       regime: 'TREND_DOWN',
       bias: 'DOWN',
     });
+    expect(live.live_quality.next_signal_direction).toBe(-1);
+    expect(live.exit).toBe(false);
+    expect(live.action).toBe('HOLD');
+  });
+
+  it('no Strategy signal + no feed direction + meaningful UPL → candidate CLOSE', () => {
+    const candidate = profitLockCandidate('SELL');
+    const live = decideLiveBestOutcomeExit({
+      candidate,
+      openSide: 'SELL',
+      mfe: 6,
+      upl: 3,
+      entryPrice: 2490,
+      signal: noSignal(),
+      closedBars: null,
+      feed: null,
+      regime: 'RANGE',
+      bias: 'FLAT',
+    });
     expect(live.live_quality.next_signal_direction).toBe(0);
     expect(live.exit).toBe(true);
     expect(live.action).toBe('CLOSE');
-    expect(live.live_overridden).toBe(false);
   });
 
   it('SELL MFE>0 → UPL 0 → no reversal => HOLD', () => {

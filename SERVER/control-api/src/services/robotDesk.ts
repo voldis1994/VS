@@ -2044,6 +2044,7 @@ async function robotCycleBody(s: Internal) {
         openSide: s.open_side,
         mfe: s.mfe,
         upl: uplNow,
+        entryPrice: s.entry_price,
         signal: liveSignal,
         closedBars: s.closedBars,
         feed: s.multiFeed,
