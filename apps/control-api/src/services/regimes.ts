@@ -1,6 +1,6 @@
 /** Original spec §13 — all regime names. Regime is a market-state classifier, not an entry. */
 import type { TenSecBar } from './tenSecondOhlc.js';
-import { bodyPct, rangePct } from './tenSecondOhlc.js';
+import { BREAKOUT_BODY_PCT, bodyPct, rangePct } from './tenSecondOhlc.js';
 
 export const REGIME_NAMES = [
   'UNKNOWN',
@@ -242,9 +242,49 @@ export function toLiveRegime(regime: RegimeName): RegimeName {
   return 'UNKNOWN';
 }
 
+/**
+ * Live BO detector — does NOT require "expanding vs avg" (that forced TREND→UNKNOWN
+ * and made breakout-only mode never fire on real Gold climbs).
+ */
+export function classifyBreakoutLive(
+  bars: TenSecBar[],
+  _previous: RegimeName = 'UNKNOWN'
+): RegimeName {
+  if (!bars.length || bars.length < 4) return 'UNKNOWN';
+  const window = bars.slice(-8);
+  const last = window[window.length - 1]!;
+  const prior = window.slice(0, -1);
+  if (prior.length < 3) return 'UNKNOWN';
+
+  const hi = Math.max(...prior.map((b) => b.high));
+  const lo = Math.min(...prior.map((b) => b.low));
+  const bp = bodyPct(last);
+  const bodyAbs = Math.abs(last.close - last.open);
+  const rng = rangePct(last);
+  const mid = Math.max(Math.abs(last.close), 1e-9);
+  const boxRng = (hi - lo) / mid;
+  const strongEnough = Math.abs(bp) >= BREAKOUT_BODY_PCT || bodyAbs >= 0.15;
+
+  // Quiet inside prior box
+  if (rng < 0.00018 && last.close <= hi && last.close >= lo && boxRng < 0.00055) {
+    return 'COMPRESSION';
+  }
+
+  // Break above prior highs with green body (Gold-scale body gate)
+  if (last.close > hi && last.close > last.open && strongEnough && bp > 0) {
+    return 'BREAKOUT_UP';
+  }
+  // Break below prior lows with red body
+  if (last.close < lo && last.close < last.open && strongEnough && bp < 0) {
+    return 'BREAKOUT_DOWN';
+  }
+
+  return 'UNKNOWN';
+}
+
 function applyClassify(epic: string, b: Book): RegimeSnapshot {
-  // Full classifier still runs internally; live book only keeps breakout (+ compression wait)
-  const next = toLiveRegime(classifyRegime(b.bars, b.current));
+  // #150: dedicated live BO classify (old path mapped TREND climbs → UNKNOWN → no trades)
+  const next = classifyBreakoutLive(b.bars, b.current);
   const now = new Date().toISOString();
   if (next !== b.current) {
     b.previous = b.current;

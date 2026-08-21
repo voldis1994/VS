@@ -252,7 +252,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC → BREAKOUT_UP/DOWN only (other regimes OFF) → ENTRY/EXIT',
     note:
-      'Other regimes DISABLED (#149). Live = UNKNOWN/COMPRESSION/BREAKOUT_UP/BREAKOUT_DOWN only.',
+      'BO live detect (#150). Other regimes OFF. Entry = BREAKOUT_UP/DOWN (+ structural fallback).',
   };
 }
 
@@ -1201,9 +1201,8 @@ async function robotCycle(s: Internal) {
     let setupType: string | null = null;
 
     if (s.ohlcState.just_closed && bar) {
-      // HARD: entry ONLY on BREAKOUT_UP / BREAKOUT_DOWN (ignore classic/quiet env)
-      const sig = decideEntryBreakoutOnly(bar, s.regime);
-      const mode = 'breakout';
+      // HARD: entry ONLY on BREAKOUT_UP / BREAKOUT_DOWN (+ structural hist fallback)
+      const sig = decideEntryBreakoutOnly(bar, s.regime, s.closedBars);
       if (sig) {
         direction = sig.direction;
         setupType = sig.setup;
