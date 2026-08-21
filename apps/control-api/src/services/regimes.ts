@@ -286,7 +286,10 @@ export function currentRegime(
 }
 
 export function listRegimeSnapshots(): RegimeSnapshot[] {
-  return [...books.entries()].map(([epic, b]) => toSnapshot(epic, b));
+  return [...books.entries()].map(([key, b]) => {
+    const epic = key.includes('::') ? key.slice(0, key.indexOf('::')) : key;
+    return toSnapshot(epic, b);
+  });
 }
 
 export function regimeCatalog() {
@@ -296,7 +299,13 @@ export function regimeCatalog() {
   }));
 }
 
-/** Test helper */
+/** Test helper — wipe all books. */
 export function resetRegimeBook(): void {
   books.clear();
+}
+
+/** Clear one robot's regime book on start — no stale bars from prior run. */
+export function clearRegimeBookFor(epic: string, scope: string): void {
+  const key = bookKey(epic, scope);
+  books.delete(key);
 }

@@ -5,6 +5,7 @@ import {
   OPERATING_MODES,
   classifyRegime,
   currentRegime,
+  clearRegimeBookFor,
   observeClosedBars,
   resetRegimeBook,
   styleFromClassification,
@@ -197,6 +198,18 @@ describe('regime book + trade style', () => {
     expect(b.current).toBe('TREND_DOWN');
     expect(currentRegime('GOLD', 'r1_GOLD')?.current).toBe('TREND_UP');
     expect(currentRegime('GOLD', 'r2_GOLD')?.current).toBe('TREND_DOWN');
+  });
+
+  it('clearRegimeBookFor wipes only that robot scope', () => {
+    const prices = [100, 100.5, 101.2, 101.9, 102.7, 103.4];
+    const bars = prices.map((p, i) =>
+      bar(i === 0 ? p : prices[i - 1]!, p + 0.4, p - 0.4, p, i)
+    );
+    observeClosedBars('GOLD', bars, 'Gold', 'r1_GOLD');
+    observeClosedBars('GOLD', bars, 'Gold', 'r2_GOLD');
+    clearRegimeBookFor('GOLD', 'r1_GOLD');
+    expect(currentRegime('GOLD', 'r1_GOLD')).toBeNull();
+    expect(currentRegime('GOLD', 'r2_GOLD')?.current).toBe('TREND_UP');
   });
 
   it('maps trend regimes to LONG and breakout/range to SCALP', () => {

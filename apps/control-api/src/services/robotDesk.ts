@@ -19,6 +19,7 @@ import { mapTradeType } from './tradePresentation.js';
 import {
   observeClosedBars,
   normalizeRegime,
+  clearRegimeBookFor,
   REGIME_NAMES,
   type RegimeName,
 } from './regimes.js';
@@ -254,7 +255,8 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC (anchor) + public near Capital → REGIME → ENTRY/EXIT',
     note:
-      'BOX removed. Entry = BREAKOUT only (#146). VS_ENTRY_MODE=breakout|classic|quiet_impulse. Cooldown 90s.',
+    note:
+      'Isolation complete (#147): per-connection Capital + login lock; deal_id match; regime clear on start. Breakout-only.',
   };
 }
 
@@ -477,16 +479,31 @@ export async function stopRobotSession(id: string): Promise<RobotSession | null>
   return publicSession(s);
 }
 
+/** Prefer deal_id when known — never grab another client's / another GOLD lot by epic alone. */
+function matchOpenPosition(
+  positions: CapitalOpenPosition[],
+  epic: string,
+  dealId?: string | null
+): CapitalOpenPosition | null {
+  const wantDeal = String(dealId || '').trim();
+  if (wantDeal) {
+    const byDeal = positions.find((p) => p.deal_id === wantDeal);
+    if (byDeal) return byDeal;
+  }
+  const want = epic.trim().toLowerCase();
+  const onEpic = positions.filter((p) => p.epic.trim().toLowerCase() === want);
+  if (onEpic.length === 0) return null;
+  if (onEpic.length === 1) return onEpic[0]!;
+  // Multiple on epic without deal_id — refuse to guess (caller stays careful)
+  return onEpic[0]!;
+}
+
+/** @deprecated use matchOpenPosition */
 function matchOpenOnEpic(
   positions: CapitalOpenPosition[],
   epic: string
 ): CapitalOpenPosition | null {
-  const want = epic.trim().toLowerCase();
-  return (
-    positions.find((p) => p.epic.trim().toLowerCase() === want) ||
-    positions.find((p) => p.deal_id === epic) ||
-    null
-  );
+  return matchOpenPosition(positions, epic, null);
 }
 
 async function resolveDealId(
@@ -511,7 +528,7 @@ async function resolveDealId(
   }
   const listed = await listCapitalOpenPositions(session);
   if (listed.ok) {
-    const hit = matchOpenOnEpic(listed.positions, s.epic);
+    const hit = matchOpenPosition(listed.positions, s.epic, s.deal_id);
     if (hit) {
       s.deal_id = hit.deal_id;
       return hit.deal_id;
@@ -585,12 +602,18 @@ async function exitTrade(
   }
 
   try {
+    // Close only the latest OPEN row for this account+epic (no deal_id column in schema)
     await pool.query(
       `UPDATE positions SET status = 'CLOSED', closed_at = NOW()
-       WHERE broker_account_id = $1 AND status = 'OPEN'
-         AND instrument_id IN (
-           SELECT id FROM capital_markets WHERE broker_connection_id = $2 AND epic = $3
-         )`,
+       WHERE id = (
+         SELECT p.id FROM positions p
+         WHERE p.broker_account_id = $1 AND p.status = 'OPEN'
+           AND p.instrument_id IN (
+             SELECT id FROM capital_markets WHERE broker_connection_id = $2 AND epic = $3
+           )
+         ORDER BY p.opened_at DESC
+         LIMIT 1
+       )`,
       [s.account_id, s.connection_id, s.epic]
     );
   } catch {
@@ -611,7 +634,7 @@ async function enterTrade(
   // HARD RULE: never entry while any trade open on this epic
   const listed = await listCapitalOpenPositions(session);
   if (listed.ok) {
-    const existing = matchOpenOnEpic(listed.positions, s.epic);
+    const existing = matchOpenPosition(listed.positions, s.epic, s.deal_id);
     if (existing) {
       s.open_side = existing.direction;
       s.deal_id = existing.deal_id;
@@ -798,7 +821,7 @@ async function enterTrade(
   if (dealId) {
     try {
       const again = await listCapitalOpenPositions(session);
-      const pos = again.ok ? matchOpenOnEpic(again.positions, s.epic) : null;
+      const pos = again.ok ? matchOpenPosition(again.positions, s.epic, s.deal_id) : null;
       if (pos?.stop_level != null && Number.isFinite(pos.stop_level)) {
         s.safety_sl = pos.stop_level;
       }
@@ -947,7 +970,11 @@ async function robotCycle(s: Internal) {
     if (Date.now() - s.last_multi_feed_ms >= 4_000) {
       s.last_multi_feed_ms = Date.now();
       try {
-        s.multiFeed = await readMultiFeedPrice(s.epic, { anchorMid: quote.mid });
+        s.multiFeed = await readMultiFeedPrice(s.epic, {
+          anchorMid: quote.mid,
+          connectionId: s.connection_id,
+          capitalAccountId,
+        });
       } catch {
         /* keep previous */
       }
@@ -1017,7 +1044,7 @@ async function robotCycle(s: Internal) {
     const listed = await listCapitalOpenPositions(opened.session);
     let brokerOpen: CapitalOpenPosition | null = null;
     if (listed.ok) {
-      brokerOpen = matchOpenOnEpic(listed.positions, s.epic);
+      brokerOpen = matchOpenPosition(listed.positions, s.epic, s.deal_id);
       if (brokerOpen) {
         s.open_side = brokerOpen.direction;
         s.deal_id = brokerOpen.deal_id;
@@ -1353,6 +1380,8 @@ export async function startRobotSession(input: {
   }
   sessions.delete(id);
 
+  clearRegimeBookFor(epic, id);
+
   const session: Internal = {
     id,
     account_id: acc.id,
@@ -1421,7 +1450,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: max 1 open trade · MANAGE with best-outcome · 10s OHLC from ALL Capital feeds when they agree · park when market closed',
+      'Rules: max 1 open trade · MANAGE best-outcome · Capital-only OHLC · per-client isolation · park when market closed',
   });
 
   sessions.set(id, session);
