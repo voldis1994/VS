@@ -114,6 +114,13 @@ function epicKey(epic: string): string {
   return String(epic || '').trim().toUpperCase();
 }
 
+/** Book key: per-robot when scope given — two Gold clients must not share one regime brain. */
+function bookKey(epic: string, scope?: string | null): string {
+  const e = epicKey(epic);
+  const s = String(scope || '').trim();
+  return s ? `${e}::${s}` : e;
+}
+
 /**
  * Classify from closed 10s OHLC — same names as C++ RegimeEngine.
  * Failed-breakout variants are live here (reserved in C++).
@@ -191,8 +198,8 @@ function toSnapshot(epic: string, b: Book): RegimeSnapshot {
   };
 }
 
-function ensureBook(epic: string, displayName?: string): Book {
-  const key = epicKey(epic);
+function ensureBook(epic: string, displayName?: string, scope?: string | null): Book {
+  const key = bookKey(epic, scope);
   let b = books.get(key);
   if (!b) {
     const now = new Date().toISOString();
@@ -230,10 +237,10 @@ function applyClassify(epic: string, b: Book): RegimeSnapshot {
 export function observeClosedBars(
   epic: string,
   bars: TenSecBar[],
-  displayName?: string
+  displayName?: string,
+  scope?: string | null
 ): RegimeSnapshot {
-  const key = epicKey(epic);
-  const b = ensureBook(epic, displayName);
+  const b = ensureBook(epic, displayName, scope);
   for (const bar of bars) {
     if (!bar || !Number.isFinite(bar.close)) continue;
     const last = b.bars[b.bars.length - 1];
@@ -246,15 +253,16 @@ export function observeClosedBars(
     b.bars.push(bar);
   }
   if (b.bars.length > MAX_BARS) b.bars.splice(0, b.bars.length - MAX_BARS);
-  return applyClassify(key, b);
+  return applyClassify(epicKey(epic), b);
 }
 
 export function notePipelineRegime(
   epic: string,
   regime: string | null | undefined,
-  displayName?: string
+  displayName?: string,
+  scope?: string | null
 ): RegimeSnapshot {
-  const b = ensureBook(epic, displayName);
+  const b = ensureBook(epic, displayName, scope);
   const next = normalizeRegime(regime);
   const now = new Date().toISOString();
   if (next !== b.current) {
@@ -267,9 +275,12 @@ export function notePipelineRegime(
   return toSnapshot(epicKey(epic), b);
 }
 
-export function currentRegime(epic: string | null | undefined): RegimeSnapshot | null {
+export function currentRegime(
+  epic: string | null | undefined,
+  scope?: string | null
+): RegimeSnapshot | null {
   if (!epic) return null;
-  const b = books.get(epicKey(epic));
+  const b = books.get(bookKey(epic, scope));
   if (!b) return null;
   return toSnapshot(epicKey(epic), b);
 }
