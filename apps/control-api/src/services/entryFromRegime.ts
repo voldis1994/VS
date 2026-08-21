@@ -102,8 +102,8 @@ export function decideEntryFrom10sRegime(
 }
 
 /**
- * #146+: live entry = BREAKOUT only (no pullback / fade / reversal / range).
- * BREAKOUT_UP/DOWN + EXPANSION follow. Everything else → WAIT.
+ * Live entry = BREAKOUT_UP / BREAKOUT_DOWN only.
+ * No EXPANSION, pullback, fade, reversal, range, trend.
  */
 export function decideEntryBreakoutOnly(
   bar: TenSecBar,
@@ -119,12 +119,6 @@ export function decideEntryBreakoutOnly(
   if (r === 'BREAKOUT_DOWN') {
     if (!movingOrNull(bar) || rally(bar)) return null;
     return { direction: 'SELL', setup: 'BREAKOUT', reason: `${r} follow · ${candle}` };
-  }
-  if (r === 'EXPANSION') {
-    if (!movingOrNull(bar)) return null;
-    if (rally(bar)) return { direction: 'BUY', setup: 'BREAKOUT', reason: `${r} follow up · ${candle}` };
-    if (dip(bar)) return { direction: 'SELL', setup: 'BREAKOUT', reason: `${r} follow down · ${candle}` };
-    return null;
   }
 
   return null;
