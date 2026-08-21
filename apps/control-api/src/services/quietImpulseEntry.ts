@@ -49,6 +49,18 @@ export function compressionBox(bars: TenSecBar[], lookback = BOX_BARS): TenSecBa
   return bars.slice(0, -1).slice(-lookback);
 }
 
+/** Prior drift before impulse — blocks fade SELL into a buy move (and vice versa). */
+export function priorDriftPct(bars: TenSecBar[], n = 8): number {
+  const prior = bars.slice(0, -1).slice(-n);
+  if (prior.length < 4) return 0;
+  const a = prior[0]!.close;
+  const b = prior[prior.length - 1]!.close;
+  return (b - a) / Math.max(Math.abs(a), 1e-9);
+}
+
+/** Reject counter-trend breaks: ~1.6pt+ drift against the entry side on Gold. */
+const ANTI_FADE_DRIFT = 0.00035;
+
 /**
  * Tight recent range (box) then first close outside the box.
  * This is what the circled consolidation → big red candle looks like.
@@ -69,14 +81,16 @@ export function decideEntryFromBoxBreak(bars: TenSecBar[]): RegimeEntry | null {
   if (!isMoving10s(impulse) || Math.abs(bp) < IMPULSE_BODY) return null;
   if (Math.abs(bp) >= LATE_IMPULSE_BODY) return null;
 
+  const drift = priorDriftPct(bars, 8);
   const candle = `10s O=${impulse.open.toFixed(2)} C=${impulse.close.toFixed(2)} body=${(
     bp * 100
   ).toFixed(3)}% · box×${box.length} ${boxLow.toFixed(2)}–${boxHigh.toFixed(2)} (rng ${(
     boxRange * 100
-  ).toFixed(3)}%)`;
+  ).toFixed(3)}%) · drift ${(drift * 100).toFixed(3)}%`;
 
-  // Break UP out of box
+  // Break UP out of box — not into a fresh sell dump
   if (bp > 0 && impulse.close > boxHigh && impulse.close > impulse.open) {
+    if (drift <= -ANTI_FADE_DRIFT) return null; // buy into sell-move
     return {
       direction: 'BUY',
       setup: 'BREAKOUT',
@@ -84,8 +98,9 @@ export function decideEntryFromBoxBreak(bars: TenSecBar[]): RegimeEntry | null {
     };
   }
 
-  // Break DOWN out of box
+  // Break DOWN out of box — not into a fresh buy bounce
   if (bp < 0 && impulse.close < boxLow && impulse.close < impulse.open) {
+    if (drift >= ANTI_FADE_DRIFT) return null; // sell into buy-move
     return {
       direction: 'SELL',
       setup: 'BREAKOUT',
