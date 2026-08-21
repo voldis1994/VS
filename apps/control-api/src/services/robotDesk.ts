@@ -25,8 +25,10 @@ import {
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
 import { decideEntryFrom10sRegime } from './entryFromRegime.js';
 import {
+  decideEntryFromBoxBreak,
   decideEntryFromQuietImpulse,
   resolveEntryMode,
+  resolvePostExitCooldownMs,
 } from './quietImpulseEntry.js';
 import {
   allowEntryFromFeeds,
@@ -253,7 +255,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC (anchor) + public near Capital → REGIME → ENTRY/EXIT',
     note:
-      'BASE=#136. Testing #137 quiet→impulse entry (VS_ENTRY_MODE=quiet_impulse|classic). Confirm before new base.',
+      'Testing #140: BOX→BREAK entry (tight zone then first break). Cooldown 2.5m. VS_ENTRY_MODE=box_break|quiet_impulse|classic.',
   };
 }
 
@@ -1011,7 +1013,7 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
+          detail: 'Broker flat on this epic — trade closed externally · FLAT · post-exit cooldown',
         });
         s.closed_at_ms = Date.now();
         clearTradeState(s);
@@ -1091,14 +1093,17 @@ async function robotCycle(s: Internal) {
     }
 
     s.mode = 'ENTRY';
+    // #140 / #139: pause after close — stop re-entering the same Gold chop every ~1 min
+    const cooldownMs = resolvePostExitCooldownMs();
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
-    if (s.closed_at_ms > 0 && sinceClose < 20_000) {
+    if (s.closed_at_ms > 0 && sinceClose < cooldownMs) {
+      const leftSec = Math.ceil((cooldownMs - sinceClose) / 1000);
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `10s OHLC cooldown ${Math.ceil((20_000 - sinceClose) / 1000)}s after close · then next bar`,
+        detail: `POST-EXIT cooldown ${leftSec}s left (of ${Math.round(cooldownMs / 1000)}s) · no new entry`,
       });
       return;
     }
@@ -1162,12 +1167,14 @@ async function robotCycle(s: Internal) {
             : [...s.closedBars, bar].slice(-24)
           : [bar];
 
-      // quiet_impulse = only quiet→first-impulse (no classic fallback — classic is late-top prone).
-      // classic = BASE #136 path. Env VS_ENTRY_MODE=classic restores base without git rollback.
+      // box_break = tight zone → first break (#140, matches chart oval). No classic fallback.
+      // quiet_impulse = old per-candle quiet. classic = BASE #136.
       const sig =
-        mode === 'quiet_impulse'
-          ? decideEntryFromQuietImpulse(histBars)
-          : decideEntryFrom10sRegime(bar, s.regime);
+        mode === 'box_break'
+          ? decideEntryFromBoxBreak(histBars)
+          : mode === 'quiet_impulse'
+            ? decideEntryFromQuietImpulse(histBars)
+            : decideEntryFrom10sRegime(bar, s.regime);
       if (sig) {
         direction = sig.direction;
         setupType = sig.setup;

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  compressionBox,
+  decideEntryFromBoxBreak,
   decideEntryFromQuietImpulse,
-  quietBaseWindow,
   resolveEntryMode,
+  resolvePostExitCooldownMs,
 } from './quietImpulseEntry.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 
@@ -17,58 +19,92 @@ function bar(open: number, close: number, pad = 0.15): TenSecBar {
   };
 }
 
-describe('quietImpulseEntry', () => {
-  it('resolveEntryMode defaults to quiet_impulse', () => {
-    expect(resolveEntryMode('')).toBe('quiet_impulse');
+function stamp(bars: TenSecBar[]): TenSecBar[] {
+  return bars.map((b, i) => ({ ...b, open_time_ms: i * 10_000 }));
+}
+
+describe('resolveEntryMode / cooldown', () => {
+  it('defaults to box_break', () => {
+    expect(resolveEntryMode('')).toBe('box_break');
     expect(resolveEntryMode('classic')).toBe('classic');
-    expect(resolveEntryMode('QUIET_IMPULSE')).toBe('quiet_impulse');
+    expect(resolveEntryMode('quiet_impulse')).toBe('quiet_impulse');
   });
 
-  it('detects quiet base then first long impulse (chart green-line case)', () => {
-    // Flat ~4581 then first push through base high — entry at move START
-    const bars: TenSecBar[] = [
-      bar(4581.0, 4581.05, 0.08),
-      bar(4581.05, 4580.95, 0.08),
-      bar(4580.95, 4581.02, 0.08),
-      bar(4581.02, 4580.98, 0.08),
-      bar(4581.0, 4582.2, 0.2), // first impulse up (~0.026% body)
-    ].map((b, i) => ({ ...b, open_time_ms: i * 10_000 }));
-
-    expect(quietBaseWindow(bars).length).toBeGreaterThanOrEqual(3);
-    const sig = decideEntryFromQuietImpulse(bars);
-    expect(sig?.direction).toBe('BUY');
-    expect(sig?.reason).toMatch(/QUIET→IMPULSE long/);
+  it('post-exit cooldown defaults to 2.5 minutes', () => {
+    expect(resolvePostExitCooldownMs('')).toBe(150_000);
+    expect(resolvePostExitCooldownMs('180000')).toBe(180_000);
   });
+});
 
-  it('skips when first closed impulse bar already ran too far (late)', () => {
-    const bars: TenSecBar[] = [
-      bar(4581.0, 4581.0, 0.05),
-      bar(4581.0, 4581.02, 0.05),
-      bar(4581.0, 4580.98, 0.05),
-      bar(4581.0, 4585.5, 0.3), // ~0.1%+ body — too late for first-impulse
-    ].map((b, i) => ({ ...b, open_time_ms: i * 10_000 }));
-    expect(decideEntryFromQuietImpulse(bars)).toBeNull();
-  });
-
-  it('does not fire without quiet base (avoids mid-trend noise)', () => {
-    const bars: TenSecBar[] = [
-      bar(4580, 4581.5, 0.4),
-      bar(4581.5, 4583.0, 0.4),
-      bar(4583.0, 4584.5, 0.4),
-      bar(4584.5, 4585.2, 0.3),
-    ].map((b, i) => ({ ...b, open_time_ms: i * 10_000 }));
-    expect(decideEntryFromQuietImpulse(bars)).toBeNull();
-  });
-
-  it('first impulse short from quiet base', () => {
-    const bars: TenSecBar[] = [
-      bar(4584.0, 4584.05, 0.08),
-      bar(4584.05, 4583.95, 0.08),
-      bar(4583.95, 4584.02, 0.08),
-      bar(4584.0, 4582.8, 0.2),
-    ].map((b, i) => ({ ...b, open_time_ms: i * 10_000 }));
-    const sig = decideEntryFromQuietImpulse(bars);
+describe('decideEntryFromBoxBreak (chart oval → drop)', () => {
+  it('SELL when tight box then first break down (user green-oval case)', () => {
+    // ~4587.5–4588.5 consolidation then break under box low
+    const bars = stamp([
+      bar(4588.0, 4588.1, 0.25),
+      bar(4588.1, 4587.9, 0.25),
+      bar(4587.9, 4588.05, 0.25),
+      bar(4588.05, 4587.95, 0.25),
+      bar(4587.95, 4588.1, 0.25),
+      bar(4588.1, 4588.0, 0.25),
+      bar(4588.0, 4584.5, 0.4), // first break down (~3.5pt body — not late)
+    ]);
+    const box = compressionBox(bars);
+    expect(box.length).toBeGreaterThanOrEqual(5);
+    const sig = decideEntryFromBoxBreak(bars);
     expect(sig?.direction).toBe('SELL');
-    expect(sig?.reason).toMatch(/QUIET→IMPULSE short/);
+    expect(sig?.reason).toMatch(/BOX→BREAK short/);
+  });
+
+  it('BUY when tight box then first break up', () => {
+    const bars = stamp([
+      bar(4581.0, 4581.1, 0.2),
+      bar(4581.1, 4580.9, 0.2),
+      bar(4580.9, 4581.05, 0.2),
+      bar(4581.05, 4580.95, 0.2),
+      bar(4580.95, 4581.0, 0.2),
+      bar(4581.0, 4583.2, 0.3),
+    ]);
+    const sig = decideEntryFromBoxBreak(bars);
+    expect(sig?.direction).toBe('BUY');
+    expect(sig?.reason).toMatch(/BOX→BREAK long/);
+  });
+
+  it('skips when prior zone is too wide (not compressed)', () => {
+    const bars = stamp([
+      bar(4580, 4582, 0.5),
+      bar(4582, 4584, 0.5),
+      bar(4584, 4583, 0.5),
+      bar(4583, 4585, 0.5),
+      bar(4585, 4584, 0.5),
+      bar(4584, 4581, 0.4),
+    ]);
+    expect(decideEntryFromBoxBreak(bars)).toBeNull();
+  });
+
+  it('skips extreme chase candle after box', () => {
+    const bars = stamp([
+      bar(4588.0, 4588.05, 0.2),
+      bar(4588.05, 4587.95, 0.2),
+      bar(4587.95, 4588.0, 0.2),
+      bar(4588.0, 4587.9, 0.2),
+      bar(4587.9, 4588.05, 0.2),
+      bar(4588.0, 4580.0, 0.5), // ~8pt — late
+    ]);
+    expect(decideEntryFromBoxBreak(bars)).toBeNull();
+  });
+
+  it('still allows box even if some candles inside are not “quiet%”', () => {
+    // Mixed small red/blue with mild wicks — fails quiet_impulse often, box_break should pass
+    const bars = stamp([
+      bar(4588.2, 4587.9, 0.55),
+      bar(4587.9, 4588.15, 0.5),
+      bar(4588.15, 4587.85, 0.55),
+      bar(4587.85, 4588.1, 0.5),
+      bar(4588.1, 4587.95, 0.5),
+      bar(4588.0, 4585.2, 0.35),
+    ]);
+    expect(decideEntryFromQuietImpulse(bars)).toBeNull();
+    const sig = decideEntryFromBoxBreak(bars);
+    expect(sig?.direction).toBe('SELL');
   });
 });
