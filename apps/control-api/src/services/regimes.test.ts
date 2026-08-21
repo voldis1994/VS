@@ -174,15 +174,14 @@ describe('classifyRegime from 10s OHLC', () => {
 describe('regime book + trade style', () => {
   beforeEach(() => resetRegimeBook());
 
-  it('stores live snapshots under the epic', () => {
+  it('stores live snapshots — non-breakout regimes forced OFF → UNKNOWN', () => {
     const prices = [100, 100.5, 101.2, 101.9, 102.7, 103.4];
     const bars = prices.map((p, i) =>
       bar(i === 0 ? p : prices[i - 1]!, p + 0.4, p - 0.4, p, i)
     );
     const snap = observeClosedBars('GOLD', bars, 'Gold');
-    expect(snap.current).toBe('TREND_UP');
+    expect(snap.current).toBe('UNKNOWN');
     expect(snap.display_name).toBe('Gold');
-    expect(REGIME_NAMES).toContain(snap.current);
   });
 
   it('isolates regime books per robot scope (two Gold clients)', () => {
@@ -194,10 +193,11 @@ describe('regime book + trade style', () => {
     );
     const a = observeClosedBars('GOLD', up, 'Gold', 'r1_GOLD');
     const b = observeClosedBars('GOLD', down, 'Gold', 'r2_GOLD');
-    expect(a.current).toBe('TREND_UP');
-    expect(b.current).toBe('TREND_DOWN');
-    expect(currentRegime('GOLD', 'r1_GOLD')?.current).toBe('TREND_UP');
-    expect(currentRegime('GOLD', 'r2_GOLD')?.current).toBe('TREND_DOWN');
+    // Live gate: TREND_* disabled → UNKNOWN, but books stay separate
+    expect(a.current).toBe('UNKNOWN');
+    expect(b.current).toBe('UNKNOWN');
+    expect(currentRegime('GOLD', 'r1_GOLD')?.current).toBe('UNKNOWN');
+    expect(currentRegime('GOLD', 'r2_GOLD')?.current).toBe('UNKNOWN');
   });
 
   it('clearRegimeBookFor wipes only that robot scope', () => {
@@ -209,7 +209,7 @@ describe('regime book + trade style', () => {
     observeClosedBars('GOLD', bars, 'Gold', 'r2_GOLD');
     clearRegimeBookFor('GOLD', 'r1_GOLD');
     expect(currentRegime('GOLD', 'r1_GOLD')).toBeNull();
-    expect(currentRegime('GOLD', 'r2_GOLD')?.current).toBe('TREND_UP');
+    expect(currentRegime('GOLD', 'r2_GOLD')?.current).toBe('UNKNOWN');
   });
 
   it('maps trend regimes to LONG and breakout/range to SCALP', () => {

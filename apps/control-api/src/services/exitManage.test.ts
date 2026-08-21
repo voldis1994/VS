@@ -24,21 +24,22 @@ describe('per-client exit isolation helpers', () => {
     expect(favorableMove('SELL', 2000, 1995)).toBe(5);
   });
 
-  it('does not invent thesis failure on RANGE/COMPRESSION/UNKNOWN', () => {
+  it('does not invent thesis failure on RANGE/COMPRESSION/UNKNOWN/TREND (OFF)', () => {
     expect(thesisFailureReason('BUY', 'RANGE')).toBeNull();
     expect(thesisFailureReason('BUY', 'COMPRESSION')).toBeNull();
     expect(thesisFailureReason('SELL', 'UNKNOWN')).toBeNull();
     expect(thesisFailureReason('BUY', 'TREND_UP')).toBeNull();
+    expect(thesisFailureReason('BUY', 'TREND_DOWN')).toBeNull();
     expect(thesisFailureReason('SELL', 'TREND_DOWN')).toBeNull();
   });
 
-  it('thesis failure is opposite-regime only — each side independent', () => {
-    expect(thesisFailureReason('BUY', 'TREND_DOWN')).toMatch(/ThesisFailure/);
+  it('thesis failure only on opposite BREAKOUT (other regimes OFF)', () => {
     expect(thesisFailureReason('BUY', 'BREAKOUT_DOWN')).toMatch(/ThesisFailure/);
-    expect(thesisFailureReason('SELL', 'TREND_UP')).toMatch(/ThesisFailure/);
     expect(thesisFailureReason('SELL', 'BREAKOUT_UP')).toMatch(/ThesisFailure/);
-    expect(thesisFailureReason('BUY', 'TREND_UP')).toBeNull();
-    expect(thesisFailureReason('SELL', 'TREND_DOWN')).toBeNull();
+    expect(thesisFailureReason('BUY', 'TREND_DOWN')).toBeNull();
+    expect(thesisFailureReason('SELL', 'TREND_UP')).toBeNull();
+    expect(thesisFailureReason('BUY', 'BREAKOUT_UP')).toBeNull();
+    expect(thesisFailureReason('SELL', 'BREAKOUT_DOWN')).toBeNull();
   });
 });
 
@@ -48,13 +49,21 @@ describe('decideBestOutcomeExit', () => {
     expect(d.exit).toBe(false);
   });
 
-  it('exits BUY on TREND_DOWN thesis failure only while still green', () => {
+  it('exits BUY on BREAKOUT_DOWN thesis failure only while still green', () => {
     const d = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_DOWN', mfe: 2 }),
+      snap({ open_side: 'BUY', entry_price: 2000, regime: 'BREAKOUT_DOWN', mfe: 2 }),
       2001
     );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/ThesisFailure/);
+  });
+
+  it('TREND_DOWN no longer thesis-exits (regime OFF)', () => {
+    const d = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_DOWN', mfe: 2 }),
+      2001
+    );
+    expect(d.exit).toBe(false);
   });
 
   it('does not thesis-exit underwater at −0.01 / flat', () => {
@@ -85,13 +94,13 @@ describe('decideBestOutcomeExit', () => {
     expect(d.exit).toBe(false);
   });
 
-  it('exits SELL on TREND_UP without affecting BUY rules', () => {
+  it('exits SELL on BREAKOUT_UP without affecting BUY rules', () => {
     const sell = decideBestOutcomeExit(
-      snap({ open_side: 'SELL', entry_price: 2000, regime: 'TREND_UP' }),
+      snap({ open_side: 'SELL', entry_price: 2000, regime: 'BREAKOUT_UP' }),
       1999
     );
     const buy = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_UP' }),
+      snap({ open_side: 'BUY', entry_price: 2000, regime: 'BREAKOUT_UP' }),
       1999
     );
     expect(sell.exit).toBe(true);

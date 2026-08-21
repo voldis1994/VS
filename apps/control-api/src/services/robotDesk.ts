@@ -20,6 +20,7 @@ import {
   observeClosedBars,
   normalizeRegime,
   clearRegimeBookFor,
+  LIVE_REGIME_NAMES,
   REGIME_NAMES,
   type RegimeName,
 } from './regimes.js';
@@ -244,14 +245,14 @@ export function robotBoardMeta(sessions: RobotSession[]) {
   );
   const contributing = sessions.reduce((n, s) => Math.max(n, s.feed_contributing || 0), 0);
   return {
-    regimes: [...REGIME_NAMES],
+    regimes: [...LIVE_REGIME_NAMES],
     trade_types: ['BUY BREAKOUT', 'SELL BREAKOUT'],
     active_regimes: activeRegimes,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'Capital OHLC → BREAKOUT_UP/DOWN only → ENTRY/EXIT',
+    chain: 'Capital OHLC → BREAKOUT_UP/DOWN only (other regimes OFF) → ENTRY/EXIT',
     note:
-      'ENTRY = BREAKOUT only (#149). No pullback/fade/range/trend/EXPANSION. Isolation #147.',
+      'Other regimes DISABLED (#149). Live = UNKNOWN/COMPRESSION/BREAKOUT_UP/BREAKOUT_DOWN only.',
   };
 }
 

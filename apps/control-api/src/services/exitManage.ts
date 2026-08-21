@@ -16,7 +16,7 @@ export function favorableMove(side: ExitSide, entry: number, mid: number): numbe
   return side === 'BUY' ? mid - entry : entry - mid;
 }
 
-/** Opposite regime vs open side — original PositionManager thesis failure. */
+/** Opposite breakout vs open side. Other regimes are OFF — no thesis from them. */
 export function thesisFailureReason(
   side: ExitSide,
   regime?: string | null
@@ -24,22 +24,12 @@ export function thesisFailureReason(
   const r = String(regime || '')
     .trim()
     .toUpperCase();
-  if (!r || r === 'UNKNOWN') return null;
-  if (side === 'BUY') {
-    if (
-      r === 'TREND_DOWN' ||
-      r === 'BREAKOUT_DOWN' ||
-      r === 'PULLBACK_DOWNTREND' ||
-      r === 'FAILED_BREAKOUT_UP'
-    ) {
-      return `ThesisFailure · BUY vs ${r}`;
-    }
-  } else if (
-    r === 'TREND_UP' ||
-    r === 'BREAKOUT_UP' ||
-    r === 'PULLBACK_UPTREND' ||
-    r === 'FAILED_BREAKOUT_DOWN'
-  ) {
+  if (!r || r === 'UNKNOWN' || r === 'COMPRESSION') return null;
+  // Breakout-only mode: only opposite BREAKOUT kills the thesis
+  if (side === 'BUY' && r === 'BREAKOUT_DOWN') {
+    return `ThesisFailure · BUY vs ${r}`;
+  }
+  if (side === 'SELL' && r === 'BREAKOUT_UP') {
     return `ThesisFailure · SELL vs ${r}`;
   }
   return null;
