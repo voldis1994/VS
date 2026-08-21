@@ -1,15 +1,18 @@
 /**
- * Experimental (#137): entry at the START of a move — quiet base → first impulse.
+ * Experimental (#137+): entry at the START of a move — quiet base → first impulse.
  * Classic pullback/confirm often buys the top after the move is done.
  *
  * Base (#136) path stays available via VS_ENTRY_MODE=classic.
+ * #139: stricter quiet (fewer chop micro-impulses).
  */
 import { bodyPct, isMoving10s, rangePct, type TenSecBar } from './tenSecondOhlc.js';
 import type { RegimeEntry } from './entryFromRegime.js';
 
-const QUIET_BODY = 0.00012; // ~0.012%
-const QUIET_RANGE = 0.00022;
-const IMPULSE_BODY = 0.00022; // first real push (~1pt on Gold 4500)
+/** Tighter than #137 — chop 10s noise must not count as “quiet base”. */
+const QUIET_BODY = 0.00009; // ~0.009%
+const QUIET_RANGE = 0.00016;
+const MIN_QUIET_BARS = 4;
+const IMPULSE_BODY = 0.00026; // first real push (~1.2pt on Gold 4500)
 /** If this single 10s body is already huge, move is likely underway — skip (late). */
 const LATE_IMPULSE_BODY = 0.00080; // ~0.08% ≈ 3.6pt Gold — too much for "first tick"
 
@@ -21,7 +24,7 @@ function isImpulseBar(bar: TenSecBar): boolean {
   return Math.abs(bodyPct(bar)) >= IMPULSE_BODY && isMoving10s(bar);
 }
 
-export function quietBaseWindow(bars: TenSecBar[], lookback = 6): TenSecBar[] {
+export function quietBaseWindow(bars: TenSecBar[], lookback = 10): TenSecBar[] {
   if (bars.length < 2) return [];
   const prior = bars.slice(0, -1).slice(-lookback);
   const quiet: TenSecBar[] = [];
@@ -38,10 +41,10 @@ export function quietBaseWindow(bars: TenSecBar[], lookback = 6): TenSecBar[] {
  * Returns null when no quiet base / not first impulse / already oversized bar.
  */
 export function decideEntryFromQuietImpulse(bars: TenSecBar[]): RegimeEntry | null {
-  if (bars.length < 4) return null;
+  if (bars.length < MIN_QUIET_BARS + 1) return null;
   const impulse = bars[bars.length - 1]!;
-  const base = quietBaseWindow(bars, 8);
-  if (base.length < 3) return null;
+  const base = quietBaseWindow(bars, 10);
+  if (base.length < MIN_QUIET_BARS) return null;
   if (!isImpulseBar(impulse)) return null;
 
   const bp = bodyPct(impulse);
@@ -86,4 +89,13 @@ export function resolveEntryMode(raw?: string | null): EntryMode {
     .trim()
     .toLowerCase();
   return v === 'classic' ? 'classic' : 'quiet_impulse';
+}
+
+/** Seconds to wait after any close before next entry (chop anti-spam). Env override. */
+export function resolvePostExitCooldownMs(raw?: string | null): number {
+  const source = raw === undefined ? process.env.VS_POST_EXIT_COOLDOWN_MS : raw;
+  if (source == null || String(source).trim() === '') return 150_000;
+  const n = Number(source);
+  if (!Number.isFinite(n) || n < 0) return 150_000;
+  return Math.min(Math.max(n, 0), 600_000);
 }
