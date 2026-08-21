@@ -299,7 +299,13 @@ export function regimeCatalog() {
   }));
 }
 
-/** Test helper */
+/** Test helper — wipe all books. */
 export function resetRegimeBook(): void {
   books.clear();
+}
+
+/** Clear one robot's regime book on start — no stale bars from prior run. */
+export function clearRegimeBookFor(epic: string, scope: string): void {
+  const key = bookKey(epic, scope);
+  books.delete(key);
 }

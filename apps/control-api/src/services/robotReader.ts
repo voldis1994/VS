@@ -133,7 +133,10 @@ function touchHealth(
   senderHealth.set(senderId, prev);
 }
 
-async function getCapitalSession(connectionId: number): Promise<
+async function getCapitalSession(
+  connectionId: number,
+  capitalAccountId?: string | null
+): Promise<
   | { ok: true; session: CapitalSession }
   | { ok: false; detail: string }
 > {
@@ -169,6 +172,7 @@ async function getCapitalSession(connectionId: number): Promise<
     identifier,
     password,
     connectionId,
+    capitalAccountId: capitalAccountId || null,
   });
   if (!opened.ok) return { ok: false, detail: opened.result.detail };
   return { ok: true, session: opened.session };
@@ -463,7 +467,8 @@ async function readCatalogPulse(epic: string): Promise<SenderRead> {
 
 async function readCapitalSender(
   sender: DataSender,
-  epic: string
+  epic: string,
+  capitalAccountId?: string | null
 ): Promise<SenderRead> {
   const t0 = Date.now();
   const base = {
@@ -487,7 +492,7 @@ async function readCapitalSender(
     };
   }
 
-  const opened = await getCapitalSession(sender.connection_id);
+  const opened = await getCapitalSession(sender.connection_id, capitalAccountId);
   if (!opened.ok) {
     const latency_ms = Date.now() - t0;
     touchHealth(sender.sender_id, {
@@ -807,7 +812,11 @@ function anchorRelForEpic(epic: string): number {
  */
 export async function readMultiFeedPrice(
   epicInput: string,
-  opts?: { anchorMid?: number | null; connectionId?: number | null }
+  opts?: {
+    anchorMid?: number | null;
+    connectionId?: number | null;
+    capitalAccountId?: string | null;
+  }
 ): Promise<MultiFeedPrice> {
   const epic = String(epicInput || '').trim();
   const anchor = opts?.anchorMid != null && Number.isFinite(opts.anchorMid) ? opts.anchorMid : null;
@@ -815,6 +824,7 @@ export async function readMultiFeedPrice(
     opts?.connectionId != null && Number.isFinite(opts.connectionId) && opts.connectionId > 0
       ? Number(opts.connectionId)
       : null;
+  const capitalAccountId = (opts?.capitalAccountId || '').trim() || null;
   if (!epic) {
     return {
       epic: '',
@@ -841,7 +851,7 @@ export async function readMultiFeedPrice(
   });
 
   const [capitalReads, publicReads, fxRead] = await Promise.all([
-    Promise.all(capitalSenders.map((s) => readCapitalSender(s, epic))),
+    Promise.all(capitalSenders.map((s) => readCapitalSender(s, epic, capitalAccountId))),
     readAllPublicFeeds(epic),
     readFxReference(epic),
   ]);

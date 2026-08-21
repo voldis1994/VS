@@ -337,8 +337,9 @@ type PooledCapital = {
 };
 
 const capitalSessionPool = new Map<string, PooledCapital>();
-let loginChain: Promise<void> = Promise.resolve();
-let lastLoginAt = 0;
+/** Per-connection login serialization (was global — coupled all clients). */
+const loginChains = new Map<string, Promise<unknown>>();
+const lastLoginAtByConn = new Map<string, number>();
 const MIN_LOGIN_GAP_MS = 3500;
 const COOLDOWN_429_MS = 120_000;
 /** Serialize acquire+switch per connection — two accounts must not interleave API calls. */
@@ -368,18 +369,27 @@ async function withConnectionLock<T>(connectionId: number, fn: () => Promise<T>)
   }
 }
 
-async function withLoginThrottle<T>(fn: () => Promise<T>): Promise<T> {
+async function withLoginThrottle<T>(
+  connectionId: number,
+  fn: () => Promise<T>
+): Promise<T> {
+  // #147/#148: per-connection login gate — Client A must not serialize Client B logins
+  const key = capitalPoolKey(connectionId);
+  const prev = loginChains.get(key) ?? Promise.resolve();
   let release!: () => void;
   const gate = new Promise<void>((r) => {
     release = r;
   });
-  const prev = loginChain;
-  loginChain = prev.then(() => gate);
-  await prev;
+  loginChains.set(
+    key,
+    prev.then(() => gate).catch(() => gate)
+  );
+  await prev.catch(() => undefined);
   try {
-    const wait = Math.max(0, MIN_LOGIN_GAP_MS - (Date.now() - lastLoginAt));
+    const last = lastLoginAtByConn.get(key) ?? 0;
+    const wait = Math.max(0, MIN_LOGIN_GAP_MS - (Date.now() - last));
     if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-    lastLoginAt = Date.now();
+    lastLoginAtByConn.set(key, Date.now());
     return await fn();
   } finally {
     release();
@@ -485,7 +495,7 @@ export async function acquireCapitalSession(input: {
       }
       capitalSessionPool.delete(key);
 
-      const opened = await withLoginThrottle(() =>
+      const opened = await withLoginThrottle(connectionId, () =>
         openCapitalSession({
           environment: input.environment,
           apiKey: input.apiKey,
