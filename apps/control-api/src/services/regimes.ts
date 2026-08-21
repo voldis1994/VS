@@ -220,8 +220,31 @@ function ensureBook(epic: string, displayName?: string, scope?: string | null): 
   return b;
 }
 
+/** Live trading: only these regimes exist. Everything else is OFF → UNKNOWN. */
+export const LIVE_REGIME_NAMES = [
+  'UNKNOWN',
+  'COMPRESSION',
+  'BREAKOUT_UP',
+  'BREAKOUT_DOWN',
+] as const;
+
+export type LiveRegimeName = (typeof LIVE_REGIME_NAMES)[number];
+
+export function toLiveRegime(regime: RegimeName): RegimeName {
+  if (
+    regime === 'BREAKOUT_UP' ||
+    regime === 'BREAKOUT_DOWN' ||
+    regime === 'COMPRESSION' ||
+    regime === 'UNKNOWN'
+  ) {
+    return regime;
+  }
+  return 'UNKNOWN';
+}
+
 function applyClassify(epic: string, b: Book): RegimeSnapshot {
-  const next = classifyRegime(b.bars, b.current);
+  // Full classifier still runs internally; live book only keeps breakout (+ compression wait)
+  const next = toLiveRegime(classifyRegime(b.bars, b.current));
   const now = new Date().toISOString();
   if (next !== b.current) {
     b.previous = b.current;
@@ -272,6 +295,7 @@ export function notePipelineRegime(
   }
   b.last_update = now;
   if (next !== 'UNKNOWN') b.confidence = Math.max(b.confidence, 0.55);
+  b.current = toLiveRegime(next);
   return toSnapshot(epicKey(epic), b);
 }
 

@@ -20,16 +20,13 @@ import {
   observeClosedBars,
   normalizeRegime,
   clearRegimeBookFor,
+  LIVE_REGIME_NAMES,
   REGIME_NAMES,
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
-import { decideEntryFrom10sRegime, decideEntryBreakoutOnly } from './entryFromRegime.js';
-import {
-  decideEntryFromQuietImpulse,
-  resolveEntryMode,
-  resolvePostExitCooldownMs,
-} from './quietImpulseEntry.js';
+import { decideEntryBreakoutOnly } from './entryFromRegime.js';
+import { resolvePostExitCooldownMs } from './quietImpulseEntry.js';
 import {
   allowEntryFromFeeds,
   capitalOhlcMid,
@@ -248,15 +245,14 @@ export function robotBoardMeta(sessions: RobotSession[]) {
   );
   const contributing = sessions.reduce((n, s) => Math.max(n, s.feed_contributing || 0), 0);
   return {
-    regimes: [...REGIME_NAMES],
-    trade_types: ['BUY LONG', 'SELL LONG', 'BUY SCALP', 'SELL SCALP'],
+    regimes: [...LIVE_REGIME_NAMES],
+    trade_types: ['BUY BREAKOUT', 'SELL BREAKOUT'],
     active_regimes: activeRegimes,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'Capital OHLC (anchor) + public near Capital → REGIME → ENTRY/EXIT',
+    chain: 'Capital OHLC → BREAKOUT_UP/DOWN only (other regimes OFF) → ENTRY/EXIT',
     note:
-    note:
-      'Isolation complete (#147): per-connection Capital + login lock; deal_id match; regime clear on start. Breakout-only.',
+      'Other regimes DISABLED (#149). Live = UNKNOWN/COMPRESSION/BREAKOUT_UP/BREAKOUT_DOWN only.',
   };
 }
 
@@ -1205,22 +1201,9 @@ async function robotCycle(s: Internal) {
     let setupType: string | null = null;
 
     if (s.ohlcState.just_closed && bar) {
-      const mode = resolveEntryMode();
-      const histBars =
-        s.closedBars.length > 0
-          ? s.closedBars[s.closedBars.length - 1]?.open_time_ms === bar.open_time_ms
-            ? s.closedBars
-            : [...s.closedBars, bar].slice(-24)
-          : [bar];
-
-      // #146: BOX gone. Default breakout-only (BREAKOUT_UP/DOWN + EXPANSION).
-      // classic = full 14-regime entry. quiet_impulse = old quiet path.
-      const sig =
-        mode === 'quiet_impulse'
-          ? decideEntryFromQuietImpulse(histBars)
-          : mode === 'classic'
-            ? decideEntryFrom10sRegime(bar, s.regime)
-            : decideEntryBreakoutOnly(bar, s.regime);
+      // HARD: entry ONLY on BREAKOUT_UP / BREAKOUT_DOWN (ignore classic/quiet env)
+      const sig = decideEntryBreakoutOnly(bar, s.regime);
+      const mode = 'breakout';
       if (sig) {
         direction = sig.direction;
         setupType = sig.setup;
@@ -1231,7 +1214,7 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${ohlcLine} · ${mode} · ${s.regime} · no breakout · wait next 10s`,
+          detail: `${ohlcLine} · BREAKOUT-ONLY · ${s.regime} · wait BREAKOUT_UP/DOWN`,
         });
       }
     } else {

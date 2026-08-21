@@ -71,14 +71,14 @@ describe('10s + 14-regime suitable entry', () => {
   });
 });
 
-describe('breakout-only entry (#146)', () => {
-  it('arms only on BREAKOUT_UP/DOWN (+ EXPANSION)', () => {
+describe('breakout-only entry (#146/#149)', () => {
+  it('arms only on BREAKOUT_UP/DOWN', () => {
     expect(decideEntryBreakoutOnly(rally, 'BREAKOUT_UP')?.direction).toBe('BUY');
     expect(decideEntryBreakoutOnly(dip, 'BREAKOUT_DOWN')?.direction).toBe('SELL');
-    expect(decideEntryBreakoutOnly(rally, 'EXPANSION')?.direction).toBe('BUY');
   });
 
-  it('ignores pullback / fade / trend / range', () => {
+  it('ignores EXPANSION / pullback / fade / trend / range', () => {
+    expect(decideEntryBreakoutOnly(rally, 'EXPANSION')).toBeNull();
     expect(decideEntryBreakoutOnly(dip, 'TREND_UP')).toBeNull();
     expect(decideEntryBreakoutOnly(rally, 'TREND_DOWN')).toBeNull();
     expect(decideEntryBreakoutOnly(dip, 'RANGE')).toBeNull();
