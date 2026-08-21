@@ -104,6 +104,81 @@ export function detectStaleQuoteAdverse(
   };
 }
 
+/**
+ * Capital CFD often prints a fake extreme vs public spot before the real move
+ * (opposite reaction). If public-near mids exist and Capital is isolated on the
+ * wrong side of them, skip — when no public near, allow (do not miss moves).
+ *
+ * BUY blocked: Capital dumped alone below public (fake dip).
+ * SELL blocked: Capital spiked alone above public (fake rally).
+ */
+export function detectCapitalIsolatedExtreme(
+  direction: 'BUY' | 'SELL',
+  capitalMid: number | null | undefined,
+  publicNearMids: number[],
+  opts?: { minRel?: number }
+): StaleQuoteVerdict {
+  const minRel = opts?.minRel ?? 0.0008; // ~0.08% ≈ 3.6pt on Gold 4500
+  if (capitalMid == null || !Number.isFinite(capitalMid)) {
+    return {
+      block: false,
+      reason: 'no capital mid',
+      capital_mid: NaN,
+      lead_mid: null,
+      lead_label: null,
+      rel: 0,
+    };
+  }
+  const pubs = publicNearMids.filter((m) => Number.isFinite(m));
+  if (pubs.length === 0) {
+    return {
+      block: false,
+      reason: 'no public-near feeds — Capital-only OK',
+      capital_mid: capitalMid,
+      lead_mid: null,
+      lead_label: null,
+      rel: 0,
+    };
+  }
+  const sorted = [...pubs].sort((a, b) => a - b);
+  const midIdx = Math.floor(sorted.length / 2);
+  const publicMed =
+    sorted.length % 2 === 1
+      ? sorted[midIdx]!
+      : (sorted[midIdx - 1]! + sorted[midIdx]!) / 2;
+  const rel = relMove(publicMed, capitalMid); // + when Capital above public
+
+  if (direction === 'BUY' && rel <= -minRel) {
+    return {
+      block: true,
+      reason: `CAPITAL FAKE DIP · BUY blocked — Capital ${capitalMid.toFixed(2)} below public ${publicMed.toFixed(2)} (${(Math.abs(rel) * 100).toFixed(3)}%)`,
+      capital_mid: capitalMid,
+      lead_mid: publicMed,
+      lead_label: 'public-near median',
+      rel,
+    };
+  }
+  if (direction === 'SELL' && rel >= minRel) {
+    return {
+      block: true,
+      reason: `CAPITAL FAKE RALLY · SELL blocked — Capital ${capitalMid.toFixed(2)} above public ${publicMed.toFixed(2)} (${(Math.abs(rel) * 100).toFixed(3)}%)`,
+      capital_mid: capitalMid,
+      lead_mid: publicMed,
+      lead_label: 'public-near median',
+      rel,
+    };
+  }
+
+  return {
+    block: false,
+    reason: 'Capital not isolated vs public-near',
+    capital_mid: capitalMid,
+    lead_mid: publicMed,
+    lead_label: 'public-near median',
+    rel,
+  };
+}
+
 /** Build refs from multi-feed near legs + 10s OHLC closes. */
 export function buildFresherRefs(input: {
   publicNearMids?: Array<{ name: string; mid: number }>;

@@ -50,6 +50,12 @@ describe('10s + 14-regime suitable entry', () => {
     expect(decideEntryFrom10sRegime(rally, 'RANGE')?.direction).toBe('SELL');
   });
 
+  it('RANGE ignores micro Capital noise bodies', () => {
+    // ~0.02% body — below hardened RANGE threshold 0.028%
+    const micro = bar(4519, 4518.1);
+    expect(decideEntryFrom10sRegime(micro, 'RANGE')).toBeNull();
+  });
+
   it('quiet bar is never a trade in any regime', () => {
     const quiet: TenSecBar = {
       open_time_ms: 0,

@@ -786,10 +786,18 @@ export type MultiFeedPrice = {
 };
 
 const ANCHOR_MAX_REL = 0.008; // 0.8% — public must be near Capital CFD mid
+/** Metals spot vs Capital GOLD CFD often sits a bit wider than FX — still usable. */
+const ANCHOR_MAX_REL_METALS = 0.015;
 
 function nearAnchor(mid: number, anchor: number, maxRel = ANCHOR_MAX_REL): boolean {
   if (!Number.isFinite(mid) || !Number.isFinite(anchor) || anchor === 0) return false;
   return Math.abs(mid - anchor) / Math.abs(anchor) <= maxRel;
+}
+
+function anchorRelForEpic(epic: string): number {
+  const s = String(epic || '').toUpperCase();
+  if (/GOLD|XAU|SILVER|XAG|PLAT|XPT|PALL|XPD/.test(s)) return ANCHOR_MAX_REL_METALS;
+  return ANCHOR_MAX_REL;
 }
 
 /**
@@ -861,12 +869,13 @@ export async function readMultiFeedPrice(
     ...(fxApplicable ? [fxRead] : []),
   ].filter((r) => r.ok && r.mid != null && Number.isFinite(r.mid));
 
+  const anchorBand = anchorRelForEpic(epic);
   const publicNear = effectiveAnchor
-    ? publicOkReads.filter((r) => nearAnchor(r.mid as number, effectiveAnchor))
+    ? publicOkReads.filter((r) => nearAnchor(r.mid as number, effectiveAnchor, anchorBand))
     : publicOkReads;
 
   const publicFar = effectiveAnchor
-    ? publicOkReads.filter((r) => !nearAnchor(r.mid as number, effectiveAnchor))
+    ? publicOkReads.filter((r) => !nearAnchor(r.mid as number, effectiveAnchor, anchorBand))
     : [];
 
   const fuseMids = [
