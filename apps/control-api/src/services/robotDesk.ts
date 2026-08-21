@@ -34,6 +34,7 @@ import {
   allowEntryFromFeeds,
   multiFeedOwnsOhlc,
   pickOhlcMid,
+  capitalOhlcMid,
   readMultiFeedPrice,
   type MultiFeedPrice,
   type MultiFeedLeg,
@@ -255,7 +256,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC (anchor) + public near Capital → REGIME → ENTRY/EXIT',
     note:
-      'Testing #143: micro-pause in dump/rally (not only wide oval). Cooldown 90s. Per-robot regime.',
+      'Capital-only OHLC (#144). Yahoo/Aurum spot FAR if >~18pt. BOX/micro + 90s cooldown.',
   };
 }
 
@@ -953,7 +954,7 @@ async function robotCycle(s: Internal) {
         /* keep previous */
       }
     }
-    const pickedWarm = pickOhlcMid(quote.mid, s.multiFeed);
+    const pickedWarm = capitalOhlcMid(quote.mid, s.multiFeed);
     s.feed_source = pickedWarm.source;
     s.feed_contributing = s.multiFeed?.contributing ?? 0;
     s.feed_sender_count = s.multiFeed?.sender_count ?? 0;
@@ -963,8 +964,28 @@ async function robotCycle(s: Internal) {
       s.feed_contributing = 1;
       s.feed_sender_count = Math.max(1, s.feed_sender_count || 0);
     }
-    const warmMid = pickedWarm.mid ?? quote.mid;
+    // OHLC from Capital mid only — never Yahoo/Aurum spot (was poisoning bars ~80pt off)
+    const warmMid = quote.mid ?? pickedWarm.mid;
     if (warmMid != null) {
+      // Heal if forming/last bar drifted far from Capital (spot contamination)
+      const ref =
+        s.ohlcState.forming?.close ?? s.ohlcState.last_closed?.close ?? null;
+      if (
+        quote.mid != null &&
+        ref != null &&
+        Math.abs(ref - quote.mid) / Math.max(Math.abs(quote.mid), 1e-9) > 0.004
+      ) {
+        s.ohlcState = emptyTenSecState();
+        s.closedBars = [];
+        s.last_closed_bar_key = '';
+        pushTick(s, {
+          phase: 'INFO',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `OHLC RESET · bar ${ref.toFixed(2)} far from Capital ${quote.mid.toFixed(2)} — rebuild from broker`,
+        });
+      }
       s.ohlcState = updateTenSecondOhlc(s.ohlcState, warmMid, Date.now());
       s.ohlc_10s = publicOhlc10s(s.ohlcState);
       if (s.ohlcState.just_closed && s.ohlcState.last_closed) {

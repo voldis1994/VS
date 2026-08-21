@@ -786,8 +786,8 @@ export type MultiFeedPrice = {
 };
 
 const ANCHOR_MAX_REL = 0.008; // 0.8% — public must be near Capital CFD mid
-/** Metals spot vs Capital GOLD CFD often sits a bit wider than FX — still usable. */
-const ANCHOR_MAX_REL_METALS = 0.015;
+/** Metals: Capital CFD vs Yahoo/Aurum spot often ~40–60pt off — must NOT count as near. */
+const ANCHOR_MAX_REL_METALS = 0.004; // ~0.4% ≈ 18pt on Gold 4500
 
 function nearAnchor(mid: number, anchor: number, maxRel = ANCHOR_MAX_REL): boolean {
   if (!Number.isFinite(mid) || !Number.isFinite(anchor) || anchor === 0) return false;
@@ -992,7 +992,8 @@ export function pickOhlcMid(
   multi: Pick<
     MultiFeedPrice,
     'mid' | 'contributing' | 'agreement' | 'anchored_to_capital'
-  > | null | undefined
+  > | null | undefined,
+  opts?: { maxRel?: number }
 ): { mid: number | null; source: 'MULTI' | 'LOCAL' | 'NONE' } {
   const localOk = localMid != null && Number.isFinite(localMid);
   const multiOk =
@@ -1002,8 +1003,10 @@ export function pickOhlcMid(
     multi.contributing >= 2 &&
     (multi.agreement === 'STRONG' || multi.agreement === 'OK');
 
+  const maxRel = opts?.maxRel ?? ANCHOR_MAX_REL;
+
   if (multiOk && localOk) {
-    if (nearAnchor(multi.mid as number, localMid as number, ANCHOR_MAX_REL)) {
+    if (nearAnchor(multi.mid as number, localMid as number, maxRel)) {
       // Blend slightly toward Capital for execution safety
       const blended = (multi.mid as number) * 0.35 + (localMid as number) * 0.65;
       return { mid: blended, source: 'MULTI' };
@@ -1015,6 +1018,17 @@ export function pickOhlcMid(
     return { mid: multi.mid, source: 'MULTI' };
   }
   return { mid: null, source: 'NONE' };
+}
+
+/** Hard rule for robot OHLC: Capital mid only when available (spot feeds never write CFD bars). */
+export function capitalOhlcMid(
+  localMid: number | null | undefined,
+  multi: Parameters<typeof pickOhlcMid>[1]
+): { mid: number | null; source: 'MULTI' | 'LOCAL' | 'NONE' } {
+  if (localMid != null && Number.isFinite(localMid)) {
+    return { mid: localMid, source: 'LOCAL' };
+  }
+  return pickOhlcMid(localMid, multi);
 }
 
 /** True when ≥2 near-anchor providers agree AND result is Capital-safe. */
