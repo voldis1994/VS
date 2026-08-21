@@ -1,11 +1,11 @@
 /**
  * Entry at move START via compression BOX → first break (matches chart “oval then drop”).
  *
- * Replaces fragile per-candle quiet% (#137/#139): human “mierīgas” zones often fail
- * body/range filters even when the whole box is clearly tight.
+ * #143: also micro-pause in a trend — continuous dumps never form a wide oval, so
+ * a 3–4 bar pause then resume must still arm (otherwise forever WAIT).
  *
  * Modes (VS_ENTRY_MODE):
- *   box_break     — default (#140)
+ *   box_break     — default
  *   quiet_impulse — old per-candle quiet path
  *   classic       — BASE #136 regime path
  */
@@ -14,11 +14,19 @@ import type { RegimeEntry } from './entryFromRegime.js';
 
 const BOX_BARS = 8;
 const MIN_BOX_BARS = 5;
-/** Whole zone height ≤ ~2.5pt on Gold ~4500 — your green oval case. */
+/** Whole zone height ≤ ~2.5pt on Gold ~4500 — oval case. */
 const MAX_BOX_RANGE = 0.00055;
+/** Shorter pause mid-trend (~3.6pt). */
+const MICRO_BOX_BARS = 4;
+const MICRO_MIN_BARS = 3;
+const MICRO_MAX_BOX_RANGE = 0.00080;
 const IMPULSE_BODY = 0.00022; // ~1pt
 /** Allow a real first breakout candle; still skip extreme chase. */
 const LATE_IMPULSE_BODY = 0.00115; // ~5.2pt Gold
+/** Reject counter-trend breaks: ~1.6pt+ drift against the entry side. */
+const ANTI_FADE_DRIFT = 0.00035;
+/** Micro-pause must resume WITH the larger trend (~2pt+). */
+const TREND_DRIFT = 0.00045;
 
 /** Legacy quiet% path (#137) — kept for A/B via env. */
 const QUIET_BODY = 0.00012;
@@ -58,39 +66,42 @@ export function priorDriftPct(bars: TenSecBar[], n = 8): number {
   return (b - a) / Math.max(Math.abs(a), 1e-9);
 }
 
-/** Reject counter-trend breaks: ~1.6pt+ drift against the entry side on Gold. */
-const ANTI_FADE_DRIFT = 0.00035;
-
-/**
- * Tight recent range (box) then first close outside the box.
- * This is what the circled consolidation → big red candle looks like.
- */
-export function decideEntryFromBoxBreak(bars: TenSecBar[]): RegimeEntry | null {
-  if (bars.length < MIN_BOX_BARS + 1) return null;
+function tryBoxBreak(
+  bars: TenSecBar[],
+  opts: {
+    lookback: number;
+    minBars: number;
+    maxRange: number;
+    tag: string;
+    /** If set, break must align with this trend drift sign. */
+    requireTrend?: boolean;
+  }
+): RegimeEntry | null {
+  if (bars.length < opts.minBars + 1) return null;
   const impulse = bars[bars.length - 1]!;
-  const box = compressionBox(bars, BOX_BARS);
-  if (box.length < MIN_BOX_BARS) return null;
+  const box = compressionBox(bars, opts.lookback);
+  if (box.length < opts.minBars) return null;
 
   const boxHigh = Math.max(...box.map((b) => b.high));
   const boxLow = Math.min(...box.map((b) => b.low));
   const mid = Math.max(Math.abs((boxHigh + boxLow) / 2), Math.abs(impulse.open), 1e-9);
   const boxRange = (boxHigh - boxLow) / mid;
-  if (boxRange <= 0 || boxRange > MAX_BOX_RANGE) return null;
+  if (boxRange <= 0 || boxRange > opts.maxRange) return null;
 
   const bp = bodyPct(impulse);
   if (!isMoving10s(impulse) || Math.abs(bp) < IMPULSE_BODY) return null;
   if (Math.abs(bp) >= LATE_IMPULSE_BODY) return null;
 
-  const drift = priorDriftPct(bars, 8);
+  const drift = priorDriftPct(bars, Math.max(opts.lookback, 8));
   const candle = `10s O=${impulse.open.toFixed(2)} C=${impulse.close.toFixed(2)} body=${(
     bp * 100
-  ).toFixed(3)}% · box×${box.length} ${boxLow.toFixed(2)}–${boxHigh.toFixed(2)} (rng ${(
+  ).toFixed(3)}% · ${opts.tag}×${box.length} ${boxLow.toFixed(2)}–${boxHigh.toFixed(2)} (rng ${(
     boxRange * 100
   ).toFixed(3)}%) · drift ${(drift * 100).toFixed(3)}%`;
 
-  // Break UP out of box — not into a fresh sell dump
   if (bp > 0 && impulse.close > boxHigh && impulse.close > impulse.open) {
-    if (drift <= -ANTI_FADE_DRIFT) return null; // buy into sell-move
+    if (drift <= -ANTI_FADE_DRIFT) return null;
+    if (opts.requireTrend && drift < TREND_DRIFT) return null;
     return {
       direction: 'BUY',
       setup: 'BREAKOUT',
@@ -98,9 +109,9 @@ export function decideEntryFromBoxBreak(bars: TenSecBar[]): RegimeEntry | null {
     };
   }
 
-  // Break DOWN out of box — not into a fresh buy bounce
   if (bp < 0 && impulse.close < boxLow && impulse.close < impulse.open) {
-    if (drift >= ANTI_FADE_DRIFT) return null; // sell into buy-move
+    if (drift >= ANTI_FADE_DRIFT) return null;
+    if (opts.requireTrend && drift > -TREND_DRIFT) return null;
     return {
       direction: 'SELL',
       setup: 'BREAKOUT',
@@ -109,6 +120,29 @@ export function decideEntryFromBoxBreak(bars: TenSecBar[]): RegimeEntry | null {
   }
 
   return null;
+}
+
+/**
+ * Tight recent range (box) then first close outside the box.
+ * Falls back to micro-pause resume in an established dump/rally (#143).
+ */
+export function decideEntryFromBoxBreak(bars: TenSecBar[]): RegimeEntry | null {
+  const oval = tryBoxBreak(bars, {
+    lookback: BOX_BARS,
+    minBars: MIN_BOX_BARS,
+    maxRange: MAX_BOX_RANGE,
+    tag: 'box',
+  });
+  if (oval) return oval;
+
+  // Continuous dump/rally: no wide oval — catch short pause then resume with trend
+  return tryBoxBreak(bars, {
+    lookback: MICRO_BOX_BARS,
+    minBars: MICRO_MIN_BARS,
+    maxRange: MICRO_MAX_BOX_RANGE,
+    tag: 'micro',
+    requireTrend: true,
+  });
 }
 
 export function decideEntryFromQuietImpulse(bars: TenSecBar[]): RegimeEntry | null {
@@ -148,11 +182,11 @@ export function resolveEntryMode(raw?: string | null): EntryMode {
   return 'box_break';
 }
 
-/** Wait after any close before next entry. Default 2.5 min. */
+/** Wait after any close before next entry. Default 90s (#143 — was 150s forever-WAIT feel). */
 export function resolvePostExitCooldownMs(raw?: string | null): number {
   const source = raw === undefined ? process.env.VS_POST_EXIT_COOLDOWN_MS : raw;
-  if (source == null || String(source).trim() === '') return 150_000;
+  if (source == null || String(source).trim() === '') return 90_000;
   const n = Number(source);
-  if (!Number.isFinite(n) || n < 0) return 150_000;
+  if (!Number.isFinite(n) || n < 0) return 90_000;
   return Math.min(Math.max(n, 0), 600_000);
 }
