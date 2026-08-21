@@ -171,15 +171,16 @@ export function decideEntryFromQuietImpulse(bars: TenSecBar[]): RegimeEntry | nu
   return null;
 }
 
-export type EntryMode = 'box_break' | 'quiet_impulse' | 'classic';
+export type EntryMode = 'quiet_impulse' | 'classic';
 
+/** #146: BOX removed from live path. Default classic (BASE #136). */
 export function resolveEntryMode(raw?: string | null): EntryMode {
-  const v = String(raw || process.env.VS_ENTRY_MODE || 'box_break')
+  const v = String(raw || process.env.VS_ENTRY_MODE || 'classic')
     .trim()
     .toLowerCase();
-  if (v === 'classic') return 'classic';
   if (v === 'quiet_impulse' || v === 'quiet') return 'quiet_impulse';
-  return 'box_break';
+  // box_break / anything else → classic (BOX disabled)
+  return 'classic';
 }
 
 /** Wait after any close before next entry. Default 90s (#143 — was 150s forever-WAIT feel). */

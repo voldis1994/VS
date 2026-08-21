@@ -25,7 +25,6 @@ import {
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
 import { decideEntryFrom10sRegime } from './entryFromRegime.js';
 import {
-  decideEntryFromBoxBreak,
   decideEntryFromQuietImpulse,
   resolveEntryMode,
   resolvePostExitCooldownMs,
@@ -256,7 +255,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC (anchor) + public near Capital → REGIME → ENTRY/EXIT',
     note:
-      'Capital-only OHLC (#144). Yahoo/Aurum spot FAR if >~18pt. BOX/micro + 90s cooldown.',
+      'BOX entry REMOVED (#146). Default classic regime entry (BASE #136). Cooldown 90s. Capital-only OHLC.',
   };
 }
 
@@ -1188,14 +1187,12 @@ async function robotCycle(s: Internal) {
             : [...s.closedBars, bar].slice(-24)
           : [bar];
 
-      // box_break = tight zone → first break (#140, matches chart oval). No classic fallback.
-      // quiet_impulse = old per-candle quiet. classic = BASE #136.
+      // #146: BOX removed — it was buying dumps / forever-WAIT. Default = classic (#136).
+      // quiet_impulse only if VS_ENTRY_MODE=quiet_impulse.
       const sig =
-        mode === 'box_break'
-          ? decideEntryFromBoxBreak(histBars)
-          : mode === 'quiet_impulse'
-            ? decideEntryFromQuietImpulse(histBars)
-            : decideEntryFrom10sRegime(bar, s.regime);
+        mode === 'quiet_impulse'
+          ? decideEntryFromQuietImpulse(histBars)
+          : decideEntryFrom10sRegime(bar, s.regime);
       if (sig) {
         direction = sig.direction;
         setupType = sig.setup;
@@ -1206,7 +1203,7 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${ohlcLine} · ${mode} · no box/micro-pause break · ${s.regime} · wait next 10s`,
+          detail: `${ohlcLine} · ${mode} · ${s.regime} not suitable · wait next 10s`,
         });
       }
     } else {
