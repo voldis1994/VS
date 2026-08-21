@@ -91,32 +91,32 @@ describe('decideBestOutcomeExit', () => {
     expect(d.reason).toMatch(/PeakProtection/);
   });
 
-  it('arms peak protection from ~3.2pt MFE on Gold-scale price', () => {
-    // 4519 * 0.00071 ≈ 3.21 — small plus below old 5.4pt floor now protected after giveback
+  it('arms peak protection from ~2.2pt MFE on Gold-scale price', () => {
+    // 4519 * 0.00049 ≈ 2.21 — small impulse plus now protected after giveback
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: 4519,
         regime: 'TREND_UP',
-        mfe: 3.2,
+        mfe: 2.25,
         peak_retention: 0.25,
       }),
-      4519.8
+      4519.55
     );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/PeakProtection/);
   });
 
-  it('still holds sub-floor MFE noise on Gold (~2pt)', () => {
+  it('still holds sub-floor MFE noise on Gold (~1.5pt)', () => {
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: 4519,
         regime: 'TREND_UP',
-        mfe: 2.0,
+        mfe: 1.5,
         peak_retention: 0.1,
       }),
-      4519.2
+      4519.15
     );
     expect(d.exit).toBe(false);
   });
