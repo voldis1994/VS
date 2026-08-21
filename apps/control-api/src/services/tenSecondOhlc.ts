@@ -42,6 +42,22 @@ export function isMoving10s(bar: TenSecBar | null | undefined): boolean {
   return Math.abs(bodyPct(bar)) >= 0.00015 || rangePct(bar) >= 0.00025;
 }
 
+/**
+ * Breakout body gate for live Gold/metals 10s.
+ * Classic 0.015% (~0.7pt on XAU) missed real BO candles of 0.2–0.5pt.
+ */
+export const BREAKOUT_BODY_PCT = 0.000045;
+
+export function isMovingBreakout10s(bar: TenSecBar | null | undefined): boolean {
+  if (!bar) return false;
+  const body = Math.abs(bar.close - bar.open);
+  return (
+    Math.abs(bodyPct(bar)) >= BREAKOUT_BODY_PCT ||
+    rangePct(bar) >= 0.00009 ||
+    body >= 0.15
+  );
+}
+
 export function emptyTenSecState(): TenSecState {
   return { forming: null, last_closed: null, just_closed: false };
 }
