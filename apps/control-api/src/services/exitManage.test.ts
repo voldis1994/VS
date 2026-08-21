@@ -48,13 +48,41 @@ describe('decideBestOutcomeExit', () => {
     expect(d.exit).toBe(false);
   });
 
-  it('exits BUY on TREND_DOWN thesis failure even if still green', () => {
+  it('exits BUY on TREND_DOWN thesis failure only while still green', () => {
     const d = decideBestOutcomeExit(
       snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_DOWN', mfe: 2 }),
       2001
     );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/ThesisFailure/);
+  });
+
+  it('does not thesis-exit underwater at −0.01 / flat', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'SELL',
+        entry_price: 4567,
+        regime: 'TREND_UP',
+        mfe: 3,
+        peak_retention: 0.0,
+      }),
+      4567.05 // tiny red for SELL
+    );
+    expect(d.exit).toBe(false);
+  });
+
+  it('does not PeakProtect into flat / tiny red after giveback', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'SELL',
+        entry_price: 4567.39,
+        regime: 'TREND_DOWN',
+        mfe: 4,
+        peak_retention: 0.05,
+      }),
+      4567.4 // slightly against SELL → ~−0.01
+    );
+    expect(d.exit).toBe(false);
   });
 
   it('exits SELL on TREND_UP without affecting BUY rules', () => {

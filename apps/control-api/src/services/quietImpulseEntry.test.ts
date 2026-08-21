@@ -107,4 +107,19 @@ describe('decideEntryFromBoxBreak (chart oval → drop)', () => {
     const sig = decideEntryFromBoxBreak(bars);
     expect(sig?.direction).toBe('SELL');
   });
+
+  it('rejects SELL break into a buy-move bounce (V reverse)', () => {
+    // Climb ~4564→4569 then tiny box + red “break” — must NOT short the bounce
+    const bars = stamp([
+      bar(4564.0, 4565.2, 0.25),
+      bar(4565.2, 4566.5, 0.25),
+      bar(4566.5, 4567.8, 0.25),
+      bar(4567.8, 4568.5, 0.2),
+      bar(4568.5, 4568.7, 0.15),
+      bar(4568.7, 4568.9, 0.15),
+      bar(4568.9, 4568.6, 0.15),
+      bar(4568.8, 4567.2, 0.25), // red break under micro high — fade trap
+    ]);
+    expect(decideEntryFromBoxBreak(bars)).toBeNull();
+  });
 });

@@ -255,7 +255,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC (anchor) + public near Capital → REGIME → ENTRY/EXIT',
     note:
-      'Testing #140: BOX→BREAK entry (tight zone then first break). Cooldown 2.5m. VS_ENTRY_MODE=box_break|quiet_impulse|classic.',
+      'Testing #141: soft exits only green (no −0.01 flat) + no SELL into buy-move. BOX→BREAK + 2.5m cooldown.',
   };
 }
 
