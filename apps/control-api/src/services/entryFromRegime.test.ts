@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decideEntryFrom10sRegime } from './entryFromRegime.js';
+import { decideEntryFrom10sRegime, decideEntryBreakoutOnly } from './entryFromRegime.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 
 function bar(open: number, close: number): TenSecBar {
@@ -68,5 +68,21 @@ describe('10s + 14-regime suitable entry', () => {
     expect(decideEntryFrom10sRegime(quiet, 'TREND_UP')).toBeNull();
     expect(decideEntryFrom10sRegime(quiet, 'RANGE')).toBeNull();
     expect(decideEntryFrom10sRegime(quiet, 'BREAKOUT_UP')).toBeNull();
+  });
+});
+
+describe('breakout-only entry (#146)', () => {
+  it('arms only on BREAKOUT_UP/DOWN (+ EXPANSION)', () => {
+    expect(decideEntryBreakoutOnly(rally, 'BREAKOUT_UP')?.direction).toBe('BUY');
+    expect(decideEntryBreakoutOnly(dip, 'BREAKOUT_DOWN')?.direction).toBe('SELL');
+    expect(decideEntryBreakoutOnly(rally, 'EXPANSION')?.direction).toBe('BUY');
+  });
+
+  it('ignores pullback / fade / trend / range', () => {
+    expect(decideEntryBreakoutOnly(dip, 'TREND_UP')).toBeNull();
+    expect(decideEntryBreakoutOnly(rally, 'TREND_DOWN')).toBeNull();
+    expect(decideEntryBreakoutOnly(dip, 'RANGE')).toBeNull();
+    expect(decideEntryBreakoutOnly(dip, 'FAILED_BREAKOUT_UP')).toBeNull();
+    expect(decideEntryBreakoutOnly(rally, 'REVERSAL_CANDIDATE')).toBeNull();
   });
 });

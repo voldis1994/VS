@@ -171,15 +171,17 @@ export function decideEntryFromQuietImpulse(bars: TenSecBar[]): RegimeEntry | nu
   return null;
 }
 
-export type EntryMode = 'box_break' | 'quiet_impulse' | 'classic';
+export type EntryMode = 'breakout' | 'quiet_impulse' | 'classic';
 
+/** #146: BOX removed. Default = breakout-only (no pullback/fade/reversal). */
 export function resolveEntryMode(raw?: string | null): EntryMode {
-  const v = String(raw || process.env.VS_ENTRY_MODE || 'box_break')
+  const v = String(raw || process.env.VS_ENTRY_MODE || 'breakout')
     .trim()
     .toLowerCase();
-  if (v === 'classic') return 'classic';
   if (v === 'quiet_impulse' || v === 'quiet') return 'quiet_impulse';
-  return 'box_break';
+  if (v === 'classic' || v === 'full') return 'classic';
+  // breakout | box_break | anything else → breakout only
+  return 'breakout';
 }
 
 /** Wait after any close before next entry. Default 90s (#143 — was 150s forever-WAIT feel). */
