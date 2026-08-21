@@ -91,6 +91,36 @@ describe('decideBestOutcomeExit', () => {
     expect(d.reason).toMatch(/PeakProtection/);
   });
 
+  it('arms peak protection from ~3.2pt MFE on Gold-scale price', () => {
+    // 4519 * 0.00071 ≈ 3.21 — small plus below old 5.4pt floor now protected after giveback
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4519,
+        regime: 'TREND_UP',
+        mfe: 3.2,
+        peak_retention: 0.25,
+      }),
+      4519.8
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/PeakProtection/);
+  });
+
+  it('still holds sub-floor MFE noise on Gold (~2pt)', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4519,
+        regime: 'TREND_UP',
+        mfe: 2.0,
+        peak_retention: 0.1,
+      }),
+      4519.2
+    );
+    expect(d.exit).toBe(false);
+  });
+
   it('target at ~0.35%', () => {
     const d = decideBestOutcomeExit(
       snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_UP', mfe: 8 }),

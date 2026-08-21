@@ -64,7 +64,8 @@ export function decideBestOutcomeExit(
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   const tp = Math.max(absEntry * 0.0035, 0.35);
   const sl = Math.max(absEntry * 0.0022, 0.22);
-  const mfeFloor = Math.max(absEntry * 0.0012, 0.12);
+  // Peak/harvest arm earlier: ≈3.2pt on Gold ~4500 (was 0.0012 ≈5.4pt)
+  const mfeFloor = Math.max(absEntry * 0.000708, 0.12);
 
   if (fav <= -sl) {
     return { exit: true, reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}` };
