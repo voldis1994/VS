@@ -66,6 +66,27 @@ export function priorDriftPct(bars: TenSecBar[], n = 8): number {
   return (b - a) / Math.max(Math.abs(a), 1e-9);
 }
 
+/**
+ * True when price has already sold off from a recent high (BUY into dump trap).
+ * ~2.5pt off local high over last ~12 bars on Gold.
+ */
+export function isSellingOff(bars: TenSecBar[], n = 12): boolean {
+  const prior = bars.slice(0, -1).slice(-n);
+  if (prior.length < 5) return false;
+  const hi = Math.max(...prior.map((b) => b.high));
+  const last = prior[prior.length - 1]!.close;
+  return (hi - last) / Math.max(Math.abs(last), 1e-9) >= 0.00055;
+}
+
+/** True when price has already rallied from a recent low (SELL into buy trap). */
+export function isBuyingRally(bars: TenSecBar[], n = 12): boolean {
+  const prior = bars.slice(0, -1).slice(-n);
+  if (prior.length < 5) return false;
+  const lo = Math.min(...prior.map((b) => b.low));
+  const last = prior[prior.length - 1]!.close;
+  return (last - lo) / Math.max(Math.abs(last), 1e-9) >= 0.00055;
+}
+
 function tryBoxBreak(
   bars: TenSecBar[],
   opts: {
@@ -93,6 +114,7 @@ function tryBoxBreak(
   if (Math.abs(bp) >= LATE_IMPULSE_BODY) return null;
 
   const drift = priorDriftPct(bars, Math.max(opts.lookback, 8));
+  const longDrift = priorDriftPct(bars, 16);
   const candle = `10s O=${impulse.open.toFixed(2)} C=${impulse.close.toFixed(2)} body=${(
     bp * 100
   ).toFixed(3)}% · ${opts.tag}×${box.length} ${boxLow.toFixed(2)}–${boxHigh.toFixed(2)} (rng ${(
@@ -100,7 +122,9 @@ function tryBoxBreak(
   ).toFixed(3)}%) · drift ${(drift * 100).toFixed(3)}%`;
 
   if (bp > 0 && impulse.close > boxHigh && impulse.close > impulse.open) {
-    if (drift <= -ANTI_FADE_DRIFT) return null;
+    // #145: never BUY into an active dump (micro-bounce long trap)
+    if (drift <= -ANTI_FADE_DRIFT || longDrift <= -ANTI_FADE_DRIFT) return null;
+    if (isSellingOff(bars)) return null;
     if (opts.requireTrend && drift < TREND_DRIFT) return null;
     return {
       direction: 'BUY',
@@ -110,7 +134,8 @@ function tryBoxBreak(
   }
 
   if (bp < 0 && impulse.close < boxLow && impulse.close < impulse.open) {
-    if (drift >= ANTI_FADE_DRIFT) return null;
+    if (drift >= ANTI_FADE_DRIFT || longDrift >= ANTI_FADE_DRIFT) return null;
+    if (isBuyingRally(bars)) return null;
     if (opts.requireTrend && drift > -TREND_DRIFT) return null;
     return {
       direction: 'SELL',
