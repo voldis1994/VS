@@ -255,7 +255,6 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC (anchor) + public near Capital → REGIME → ENTRY/EXIT',
     note:
-    note:
       'Isolation complete (#147): per-connection Capital + login lock; deal_id match; regime clear on start. Breakout-only.',
   };
 }
