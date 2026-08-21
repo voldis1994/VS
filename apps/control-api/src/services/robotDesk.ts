@@ -23,7 +23,7 @@ import {
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
-import { decideEntryFrom10sRegime } from './entryFromRegime.js';
+import { decideEntryFrom10sRegime, decideEntryBreakoutOnly } from './entryFromRegime.js';
 import {
   decideEntryFromQuietImpulse,
   resolveEntryMode,
@@ -31,9 +31,8 @@ import {
 } from './quietImpulseEntry.js';
 import {
   allowEntryFromFeeds,
-  multiFeedOwnsOhlc,
-  pickOhlcMid,
   capitalOhlcMid,
+  multiFeedOwnsOhlc,
   readMultiFeedPrice,
   type MultiFeedPrice,
   type MultiFeedLeg,
@@ -255,7 +254,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC (anchor) + public near Capital → REGIME → ENTRY/EXIT',
     note:
-      'BOX entry REMOVED (#146). Default classic regime entry (BASE #136). Cooldown 90s. Capital-only OHLC.',
+      'BOX removed. Entry = BREAKOUT only (#146). VS_ENTRY_MODE=breakout|classic|quiet_impulse. Cooldown 90s.',
   };
 }
 
@@ -1187,12 +1186,14 @@ async function robotCycle(s: Internal) {
             : [...s.closedBars, bar].slice(-24)
           : [bar];
 
-      // #146: BOX removed — it was buying dumps / forever-WAIT. Default = classic (#136).
-      // quiet_impulse only if VS_ENTRY_MODE=quiet_impulse.
+      // #146: BOX gone. Default breakout-only (BREAKOUT_UP/DOWN + EXPANSION).
+      // classic = full 14-regime entry. quiet_impulse = old quiet path.
       const sig =
         mode === 'quiet_impulse'
           ? decideEntryFromQuietImpulse(histBars)
-          : decideEntryFrom10sRegime(bar, s.regime);
+          : mode === 'classic'
+            ? decideEntryFrom10sRegime(bar, s.regime)
+            : decideEntryBreakoutOnly(bar, s.regime);
       if (sig) {
         direction = sig.direction;
         setupType = sig.setup;
@@ -1203,7 +1204,7 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${ohlcLine} · ${mode} · ${s.regime} not suitable · wait next 10s`,
+          detail: `${ohlcLine} · ${mode} · ${s.regime} · no breakout · wait next 10s`,
         });
       }
     } else {

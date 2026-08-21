@@ -24,10 +24,10 @@ function stamp(bars: TenSecBar[]): TenSecBar[] {
 }
 
 describe('resolveEntryMode / cooldown', () => {
-  it('defaults to classic (BOX removed)', () => {
-    expect(resolveEntryMode('')).toBe('classic');
+  it('defaults to breakout (BOX removed)', () => {
+    expect(resolveEntryMode('')).toBe('breakout');
     expect(resolveEntryMode('classic')).toBe('classic');
-    expect(resolveEntryMode('box_break')).toBe('classic');
+    expect(resolveEntryMode('box_break')).toBe('breakout');
     expect(resolveEntryMode('quiet_impulse')).toBe('quiet_impulse');
   });
 

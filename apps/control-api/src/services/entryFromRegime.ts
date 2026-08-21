@@ -100,3 +100,32 @@ export function decideEntryFrom10sRegime(
 
   return null;
 }
+
+/**
+ * #146+: live entry = BREAKOUT only (no pullback / fade / reversal / range).
+ * BREAKOUT_UP/DOWN + EXPANSION follow. Everything else → WAIT.
+ */
+export function decideEntryBreakoutOnly(
+  bar: TenSecBar,
+  regime?: string | null
+): RegimeEntry | null {
+  const r: RegimeName = normalizeRegime(regime);
+  const candle = describe(bar);
+
+  if (r === 'BREAKOUT_UP') {
+    if (!movingOrNull(bar) || dip(bar)) return null;
+    return { direction: 'BUY', setup: 'BREAKOUT', reason: `${r} follow · ${candle}` };
+  }
+  if (r === 'BREAKOUT_DOWN') {
+    if (!movingOrNull(bar) || rally(bar)) return null;
+    return { direction: 'SELL', setup: 'BREAKOUT', reason: `${r} follow · ${candle}` };
+  }
+  if (r === 'EXPANSION') {
+    if (!movingOrNull(bar)) return null;
+    if (rally(bar)) return { direction: 'BUY', setup: 'BREAKOUT', reason: `${r} follow up · ${candle}` };
+    if (dip(bar)) return { direction: 'SELL', setup: 'BREAKOUT', reason: `${r} follow down · ${candle}` };
+    return null;
+  }
+
+  return null;
+}
