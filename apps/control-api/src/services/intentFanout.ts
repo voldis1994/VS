@@ -82,7 +82,7 @@ export async function executePipelineIntent(
   const setupType = intent.setup_type ? String(intent.setup_type) : null;
   const regime = intent.regime ? String(intent.regime) : null;
   if (!epic) throw new Error('epic required');
-  if (regime) notePipelineRegime(epic, regime);
+  if (regime) notePipelineRegime(epic, regime, undefined, 'pipeline');
   if (intent.decision && String(intent.decision).toUpperCase() !== 'ENTRY_READY') {
     throw new Error('Only EntryReady intents are executable');
   }

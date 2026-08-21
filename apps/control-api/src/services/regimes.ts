@@ -286,7 +286,10 @@ export function currentRegime(
 }
 
 export function listRegimeSnapshots(): RegimeSnapshot[] {
-  return [...books.entries()].map(([epic, b]) => toSnapshot(epic, b));
+  return [...books.entries()].map(([key, b]) => {
+    const epic = key.includes('::') ? key.slice(0, key.indexOf('::')) : key;
+    return toSnapshot(epic, b);
+  });
 }
 
 export function regimeCatalog() {

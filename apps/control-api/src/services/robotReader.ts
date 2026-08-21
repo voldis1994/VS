@@ -807,10 +807,14 @@ function anchorRelForEpic(epic: string): number {
  */
 export async function readMultiFeedPrice(
   epicInput: string,
-  opts?: { anchorMid?: number | null }
+  opts?: { anchorMid?: number | null; connectionId?: number | null }
 ): Promise<MultiFeedPrice> {
   const epic = String(epicInput || '').trim();
   const anchor = opts?.anchorMid != null && Number.isFinite(opts.anchorMid) ? opts.anchorMid : null;
+  const preferConn =
+    opts?.connectionId != null && Number.isFinite(opts.connectionId) && opts.connectionId > 0
+      ? Number(opts.connectionId)
+      : null;
   if (!epic) {
     return {
       epic: '',
@@ -829,9 +833,12 @@ export async function readMultiFeedPrice(
   }
 
   const senders = await listDataSenders();
-  const capitalSenders = senders.filter(
-    (s) => s.kind === 'capital_com' && s.connection_id && s.enabled !== false
-  );
+  // #147: only THIS robot's Capital connection — never poll Guntis+B.O.S.S. into one feed
+  const capitalSenders = senders.filter((s) => {
+    if (s.kind !== 'capital_com' || !s.connection_id || s.enabled === false) return false;
+    if (preferConn != null) return Number(s.connection_id) === preferConn;
+    return true;
+  });
 
   const [capitalReads, publicReads, fxRead] = await Promise.all([
     Promise.all(capitalSenders.map((s) => readCapitalSender(s, epic))),

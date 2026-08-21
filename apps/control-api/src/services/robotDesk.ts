@@ -254,7 +254,8 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC (anchor) + public near Capital → REGIME → ENTRY/EXIT',
     note:
-      'BOX removed. Entry = BREAKOUT only (#146). VS_ENTRY_MODE=breakout|classic|quiet_impulse. Cooldown 90s.',
+    note:
+      'Per-client isolation (#147): Capital feed scoped to THIS connection; session lock per connection. Breakout-only entry.',
   };
 }
 
@@ -947,7 +948,10 @@ async function robotCycle(s: Internal) {
     if (Date.now() - s.last_multi_feed_ms >= 4_000) {
       s.last_multi_feed_ms = Date.now();
       try {
-        s.multiFeed = await readMultiFeedPrice(s.epic, { anchorMid: quote.mid });
+        s.multiFeed = await readMultiFeedPrice(s.epic, {
+          anchorMid: quote.mid,
+          connectionId: s.connection_id,
+        });
       } catch {
         /* keep previous */
       }
