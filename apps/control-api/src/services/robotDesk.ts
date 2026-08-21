@@ -25,6 +25,10 @@ import {
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
 import { decideEntryFrom10sRegime } from './entryFromRegime.js';
 import {
+  decideEntryFromQuietImpulse,
+  resolveEntryMode,
+} from './quietImpulseEntry.js';
+import {
   allowEntryFromFeeds,
   multiFeedOwnsOhlc,
   pickOhlcMid,
@@ -249,7 +253,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC (anchor) + public near Capital → REGIME → ENTRY/EXIT',
     note:
-      'Public feeds (Yahoo/Aurum/FX/Coinbase) confirm when near Capital CFD mid; far public prices are ignored so they cannot block or distort trades.',
+      'BASE=#136. Testing #137 quiet→impulse entry (VS_ENTRY_MODE=quiet_impulse|classic). Confirm before new base.',
   };
 }
 
@@ -259,11 +263,25 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
     : s.ohlcState.last_closed
       ? [s.ohlcState.last_closed]
       : [];
-  if (incoming.length) {
-    const snap = observeClosedBars(s.epic, incoming, s.display_name);
-    s.regime = snap.current;
-    if (bars?.length) s.closedBars = bars.slice(-24);
+  if (!incoming.length) return;
+
+  const snap = observeClosedBars(s.epic, incoming, s.display_name);
+  s.regime = snap.current;
+
+  // Keep rolling 10s history for quiet→impulse (do not wipe on single-bar updates)
+  if (bars && bars.length > 1) {
+    s.closedBars = bars.slice(-24);
+    return;
   }
+  for (const b of incoming) {
+    const last = s.closedBars[s.closedBars.length - 1];
+    if (last && last.open_time_ms === b.open_time_ms) {
+      s.closedBars[s.closedBars.length - 1] = b;
+    } else {
+      s.closedBars.push(b);
+    }
+  }
+  if (s.closedBars.length > 24) s.closedBars = s.closedBars.slice(-24);
 }
 
 function clearTradeState(s: Internal) {
@@ -1136,7 +1154,20 @@ async function robotCycle(s: Internal) {
     let setupType: string | null = null;
 
     if (s.ohlcState.just_closed && bar) {
-      const sig = decideEntryFrom10sRegime(bar, s.regime);
+      const mode = resolveEntryMode();
+      const histBars =
+        s.closedBars.length > 0
+          ? s.closedBars[s.closedBars.length - 1]?.open_time_ms === bar.open_time_ms
+            ? s.closedBars
+            : [...s.closedBars, bar].slice(-24)
+          : [bar];
+
+      // quiet_impulse = only quiet→first-impulse (no classic fallback — classic is late-top prone).
+      // classic = BASE #136 path. Env VS_ENTRY_MODE=classic restores base without git rollback.
+      const sig =
+        mode === 'quiet_impulse'
+          ? decideEntryFromQuietImpulse(histBars)
+          : decideEntryFrom10sRegime(bar, s.regime);
       if (sig) {
         direction = sig.direction;
         setupType = sig.setup;
@@ -1147,7 +1178,7 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${ohlcLine} · ${s.regime} not suitable on this 10s close · wait next candle`,
+          detail: `${ohlcLine} · ${mode} · ${s.regime} not suitable on this 10s close · wait next candle`,
         });
       }
     } else {
