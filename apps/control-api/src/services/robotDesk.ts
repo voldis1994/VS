@@ -256,7 +256,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC (anchor) + public near Capital → REGIME → ENTRY/EXIT',
     note:
-      'Capital-only OHLC (#144). Yahoo/Aurum spot FAR if >~18pt. BOX/micro + 90s cooldown.',
+      'No BUY into dump (#145). Capital-only OHLC. BOX/micro + 90s cooldown.',
   };
 }
 

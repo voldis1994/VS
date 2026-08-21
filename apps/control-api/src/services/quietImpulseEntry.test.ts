@@ -139,4 +139,19 @@ describe('decideEntryFromBoxBreak (chart oval → drop)', () => {
     expect(sig?.direction).toBe('SELL');
     expect(sig?.reason).toMatch(/micro/);
   });
+
+  it('rejects BUY micro-bounce inside an active dump (#145)', () => {
+    // Dump from ~4631 then tiny pause + green break — must NOT open long
+    const bars = stamp([
+      bar(4631.0, 4629.0, 0.3),
+      bar(4629.0, 4627.5, 0.3),
+      bar(4627.5, 4626.0, 0.3),
+      bar(4626.0, 4625.2, 0.25),
+      bar(4625.2, 4625.4, 0.2),
+      bar(4625.4, 4625.1, 0.2),
+      bar(4625.1, 4625.3, 0.2),
+      bar(4625.2, 4626.5, 0.25), // green “break” micro-bounce — fade trap
+    ]);
+    expect(decideEntryFromBoxBreak(bars)).toBeNull();
+  });
 });
