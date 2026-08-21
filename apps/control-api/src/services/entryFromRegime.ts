@@ -89,11 +89,12 @@ export function decideEntryFrom10sRegime(
     return null;
   }
 
-  // RANGE — mean-reversion fade on a real 10s body
+  // RANGE — mean-reversion only on a clearer 10s body (cuts Capital micro-noise fades)
   if (r === 'RANGE') {
     if (!movingOrNull(bar)) return null;
-    if (dip(bar)) return { direction: 'BUY', setup: 'FADE', reason: `${r} fade dip · ${candle}` };
-    if (rally(bar)) return { direction: 'SELL', setup: 'FADE', reason: `${r} fade rally · ${candle}` };
+    const bp = bodyPct(bar);
+    if (bp <= -0.00028) return { direction: 'BUY', setup: 'FADE', reason: `${r} fade dip · ${candle}` };
+    if (bp >= 0.00028) return { direction: 'SELL', setup: 'FADE', reason: `${r} fade rally · ${candle}` };
     return null;
   }
 

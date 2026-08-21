@@ -32,7 +32,7 @@ import {
   type MultiFeedPrice,
   type MultiFeedLeg,
 } from './robotReader.js';
-import { buildFresherRefs, detectStaleQuoteAdverse } from './staleQuoteGuard.js';
+import { buildFresherRefs, detectCapitalIsolatedExtreme, detectStaleQuoteAdverse } from './staleQuoteGuard.js';
 import {
   aggregateSecondsToTen,
   emptyTenSecState,
@@ -127,8 +127,8 @@ type Internal = RobotSession & {
 };
 
 const ACTIVE_CADENCE_MS = 2_000;
-const CLOSED_MARKET_CADENCE_MS = 90_000;
-const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
+const CLOSED_MARKET_CADENCE_MS = 15_000;
+const CLOSED_MARKET_TICK_EVERY_MS = 15_000;
 
 function marketAllowsTrading(status: string | null | undefined): boolean {
   const s = String(status || '')
@@ -922,6 +922,35 @@ async function robotCycle(s: Internal) {
     if (quote.epic && quote.epic !== s.epic) {
       s.epic = quote.epic;
     }
+    if (quote.mid != null) s.last_mid = quote.mid;
+
+    // Always refresh feeds (even when parked) so FEEDS board is not stuck IDLE 0/0
+    if (Date.now() - s.last_multi_feed_ms >= 4_000) {
+      s.last_multi_feed_ms = Date.now();
+      try {
+        s.multiFeed = await readMultiFeedPrice(s.epic, { anchorMid: quote.mid });
+      } catch {
+        /* keep previous */
+      }
+    }
+    const pickedWarm = pickOhlcMid(quote.mid, s.multiFeed);
+    s.feed_source = pickedWarm.source;
+    s.feed_contributing = s.multiFeed?.contributing ?? 0;
+    s.feed_sender_count = s.multiFeed?.sender_count ?? 0;
+    s.feed_agreement = s.multiFeed?.agreement ?? null;
+    if (quote.mid != null && (s.feed_contributing || 0) < 1) {
+      s.feed_source = 'LOCAL';
+      s.feed_contributing = 1;
+      s.feed_sender_count = Math.max(1, s.feed_sender_count || 0);
+    }
+    const warmMid = pickedWarm.mid ?? quote.mid;
+    if (warmMid != null) {
+      s.ohlcState = updateTenSecondOhlc(s.ohlcState, warmMid, Date.now());
+      s.ohlc_10s = publicOhlc10s(s.ohlcState);
+      if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
+        applyRobotRegime(s, [s.ohlcState.last_closed]);
+      }
+    }
 
     // Market closed / offline → park: no positions sync, no MANAGE, no entry (anti-spam Capital)
     if (!marketAllowsTrading(quote.market_status)) {
@@ -934,7 +963,7 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `MARKET ${quote.market_status || 'CLOSED'} — park robot (no manage / no entry / no position spam) · poll ${
+          detail: `MARKET ${quote.market_status || 'CLOSED'} — park · feeds ${s.feed_contributing}/${s.feed_sender_count} ${s.feed_source} · poll ${
             CLOSED_MARKET_CADENCE_MS / 1000
           }s until TRADEABLE`,
         });
@@ -944,34 +973,6 @@ async function robotCycle(s: Internal) {
 
     // Restore normal cadence after a successful tradeable read (may have been slowed by 429 / closed)
     setRobotCadence(s, ACTIVE_CADENCE_MS);
-    s.last_mid = quote.mid;
-
-    // Multi-provider read (Capital + public near Capital). Throttle to protect Capital API.
-    if (Date.now() - s.last_multi_feed_ms >= 4_000) {
-      s.last_multi_feed_ms = Date.now();
-      try {
-        s.multiFeed = await readMultiFeedPrice(s.epic, { anchorMid: quote.mid });
-      } catch {
-        /* keep previous multiFeed snapshot */
-      }
-    } else if (s.multiFeed && quote.mid != null) {
-      // Re-anchor pick every tick even if multi snapshot is cached
-    }
-    const picked = pickOhlcMid(quote.mid, s.multiFeed);
-    s.feed_source = picked.source;
-    s.feed_contributing = s.multiFeed?.contributing ?? 0;
-    s.feed_sender_count = s.multiFeed?.sender_count ?? 0;
-    s.feed_agreement = s.multiFeed?.agreement ?? null;
-
-    // OHLC always from Capital-safe mid (LOCAL Capital quote if public is far)
-    const ohlcMid = picked.mid ?? quote.mid;
-    if (ohlcMid != null) {
-      s.ohlcState = updateTenSecondOhlc(s.ohlcState, ohlcMid, Date.now());
-      s.ohlc_10s = publicOhlc10s(s.ohlcState);
-      if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
-        applyRobotRegime(s, [s.ohlcState.last_closed]);
-      }
-    }
 
     // Sync truth from broker — source of ONE TRADE ONLY
     const listed = await listCapitalOpenPositions(opened.session);
@@ -1192,6 +1193,25 @@ async function robotCycle(s: Internal) {
           ask: quote.ask,
           mid: quote.mid,
           detail: `SKIP · ${lag.reason}`,
+        });
+        direction = null;
+      }
+    }
+
+    // Capital fake extreme vs public-near — skip noise, allow if no public (do not miss moves)
+    if (direction && quote.mid != null) {
+      const publicMids = (s.multiFeed?.legs || [])
+        .filter((l) => l.ok && l.mid != null && Number.isFinite(l.mid))
+        .filter((l) => !String(l.detail || '').includes('FAR from Capital'))
+        .map((l) => l.mid as number);
+      const fake = detectCapitalIsolatedExtreme(direction, quote.mid, publicMids);
+      if (fake.block) {
+        pushTick(s, {
+          phase: 'WAIT',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `SKIP · ${fake.reason}`,
         });
         direction = null;
       }

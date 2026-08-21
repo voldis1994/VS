@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildFresherRefs,
+  detectCapitalIsolatedExtreme,
   detectStaleQuoteAdverse,
 } from './staleQuoteGuard.js';
 
@@ -39,5 +40,30 @@ describe('detectStaleQuoteAdverse', () => {
       formingClose: 4345.5,
     });
     expect(refs).toHaveLength(3);
+  });
+});
+
+describe('detectCapitalIsolatedExtreme', () => {
+  it('allows when no public-near (do not miss Capital-only moves)', () => {
+    const v = detectCapitalIsolatedExtreme('BUY', 4519, []);
+    expect(v.block).toBe(false);
+    expect(v.reason).toMatch(/Capital-only OK/);
+  });
+
+  it('blocks BUY on Capital fake dump vs public', () => {
+    const v = detectCapitalIsolatedExtreme('BUY', 4500, [4510, 4512, 4509]);
+    expect(v.block).toBe(true);
+    expect(v.reason).toMatch(/FAKE DIP/);
+  });
+
+  it('blocks SELL on Capital fake spike vs public', () => {
+    const v = detectCapitalIsolatedExtreme('SELL', 4525, [4510, 4511]);
+    expect(v.block).toBe(true);
+    expect(v.reason).toMatch(/FAKE RALLY/);
+  });
+
+  it('allows when Capital aligns with public', () => {
+    const v = detectCapitalIsolatedExtreme('BUY', 4510.5, [4510, 4511, 4509.5]);
+    expect(v.block).toBe(false);
   });
 });
