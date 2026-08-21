@@ -4,6 +4,7 @@ import {
   TRADE_TYPE_NAMES,
   OPERATING_MODES,
   classifyRegime,
+  currentRegime,
   observeClosedBars,
   resetRegimeBook,
   styleFromClassification,
@@ -181,6 +182,21 @@ describe('regime book + trade style', () => {
     expect(snap.current).toBe('TREND_UP');
     expect(snap.display_name).toBe('Gold');
     expect(REGIME_NAMES).toContain(snap.current);
+  });
+
+  it('isolates regime books per robot scope (two Gold clients)', () => {
+    const up = [100, 100.5, 101.2, 101.9, 102.7, 103.4].map((p, i, a) =>
+      bar(i === 0 ? p : a[i - 1]!, p + 0.4, p - 0.4, p, i)
+    );
+    const down = [103.4, 102.7, 101.9, 101.2, 100.5, 100].map((p, i, a) =>
+      bar(i === 0 ? p : a[i - 1]!, p + 0.4, p - 0.4, p, i)
+    );
+    const a = observeClosedBars('GOLD', up, 'Gold', 'r1_GOLD');
+    const b = observeClosedBars('GOLD', down, 'Gold', 'r2_GOLD');
+    expect(a.current).toBe('TREND_UP');
+    expect(b.current).toBe('TREND_DOWN');
+    expect(currentRegime('GOLD', 'r1_GOLD')?.current).toBe('TREND_UP');
+    expect(currentRegime('GOLD', 'r2_GOLD')?.current).toBe('TREND_DOWN');
   });
 
   it('maps trend regimes to LONG and breakout/range to SCALP', () => {

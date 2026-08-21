@@ -255,7 +255,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC (anchor) + public near Capital → REGIME → ENTRY/EXIT',
     note:
-      'Testing #141: soft exits only green (no −0.01 flat) + no SELL into buy-move. BOX→BREAK + 2.5m cooldown.',
+      'Per-robot regime books (2 Gold clients isolated). Soft exits green-only. BOX→BREAK + cooldown.',
   };
 }
 
@@ -267,7 +267,7 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
       : [];
   if (!incoming.length) return;
 
-  const snap = observeClosedBars(s.epic, incoming, s.display_name);
+  const snap = observeClosedBars(s.epic, incoming, s.display_name, s.id);
   s.regime = snap.current;
 
   // Keep rolling 10s history for quiet→impulse (do not wipe on single-bar updates)
