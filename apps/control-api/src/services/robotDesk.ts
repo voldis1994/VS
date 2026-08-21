@@ -255,7 +255,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC (anchor) + public near Capital → REGIME → ENTRY/EXIT',
     note:
-      'Per-robot regime books (2 Gold clients isolated). Soft exits green-only. BOX→BREAK + cooldown.',
+      'Testing #143: micro-pause in dump/rally (not only wide oval). Cooldown 90s. Per-robot regime.',
   };
 }
 
@@ -1185,7 +1185,7 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${ohlcLine} · ${mode} · ${s.regime} not suitable on this 10s close · wait next candle`,
+          detail: `${ohlcLine} · ${mode} · no box/micro-pause break · ${s.regime} · wait next 10s`,
         });
       }
     } else {

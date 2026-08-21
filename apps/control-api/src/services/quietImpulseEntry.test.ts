@@ -30,8 +30,8 @@ describe('resolveEntryMode / cooldown', () => {
     expect(resolveEntryMode('quiet_impulse')).toBe('quiet_impulse');
   });
 
-  it('post-exit cooldown defaults to 2.5 minutes', () => {
-    expect(resolvePostExitCooldownMs('')).toBe(150_000);
+  it('post-exit cooldown defaults to 90 seconds', () => {
+    expect(resolvePostExitCooldownMs('')).toBe(90_000);
     expect(resolvePostExitCooldownMs('180000')).toBe(180_000);
   });
 });
@@ -121,5 +121,22 @@ describe('decideEntryFromBoxBreak (chart oval → drop)', () => {
       bar(4568.8, 4567.2, 0.25), // red break under micro high — fade trap
     ]);
     expect(decideEntryFromBoxBreak(bars)).toBeNull();
+  });
+
+  it('SELL on micro-pause resume in a dump (no wide oval — #143)', () => {
+    // Continuous dump then 3-bar pause then resume — was forever WAIT under oval-only
+    const bars = stamp([
+      bar(4604.0, 4601.5, 0.35),
+      bar(4601.5, 4598.5, 0.35),
+      bar(4598.5, 4595.5, 0.35),
+      bar(4595.5, 4593.0, 0.3),
+      bar(4593.0, 4592.8, 0.2),
+      bar(4592.8, 4593.1, 0.2),
+      bar(4593.1, 4592.7, 0.2),
+      bar(4592.7, 4590.5, 0.3), // resume short after micro pause
+    ]);
+    const sig = decideEntryFromBoxBreak(bars);
+    expect(sig?.direction).toBe('SELL');
+    expect(sig?.reason).toMatch(/micro/);
   });
 });
