@@ -15,7 +15,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { TradingPage } from './pages/TradingPage';
 import { OrbitReaderPage } from './pages/OrbitReaderPage';
 import { RobotDeskPage } from './pages/RobotDeskPage';
-import { ClientPanelPage } from './pages/ClientPanelPage';
+import { ClientApp } from './client-v2/ClientApp';
 import { useWebSocket } from './hooks/useWebSocket';
 
 function Desk({ children }: { children: ReactNode }) {
@@ -29,7 +29,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/robot" element={<RobotDeskPage />} />
-      <Route path="/client" element={<ClientPanelPage />} />
+      <Route path="/client" element={<ClientApp />} />
       <Route path="/" element={<Desk><OverviewPage /></Desk>} />
       <Route path="/orbit" element={<Desk><OrbitReaderPage /></Desk>} />
       <Route path="/market" element={<Desk><MarketReaderPage /></Desk>} />

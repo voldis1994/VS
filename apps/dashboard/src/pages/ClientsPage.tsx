@@ -171,7 +171,7 @@ export function ClientsPage() {
   const robotsOn = rows.filter((c) => c.robot_status === 'RUNNING').length;
   const shareUrl =
     import.meta.env.VITE_CLIENT_PANEL_URL ||
-    'Double-click VS.bat → copy https://….trycloudflare.com from that window';
+    'VS.bat → Cloudflare link · AURUM client panel';
 
   return (
     <div className="cl-shell">
