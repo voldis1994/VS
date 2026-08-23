@@ -171,7 +171,7 @@ export function ClientsPage() {
   const robotsOn = rows.filter((c) => c.robot_status === 'RUNNING').length;
   const shareUrl =
     import.meta.env.VITE_CLIENT_PANEL_URL ||
-    'Double-click VS.bat → copy https://….trycloudflare.com from that window';
+    'VS-DUCKDNS.bat → http://vs-system.duckdns.org:18080  ·  or VS.bat Cloudflare tunnel';
 
   return (
     <div className="cl-shell">
@@ -376,7 +376,8 @@ export function ClientsPage() {
             <p className="mono cl-info-url">{shareUrl}</p>
             <p className="cl-info-note">
               Client is <strong>not</strong> on your Wi‑Fi — do not send a 192.168.x.x IP. Keep{' '}
-              <code>VS.bat</code> open, send the https tunnel link + access code. Admin preview:{' '}
+              <code>VS.bat</code> / <code>VS-DUCKDNS.bat</code> open. Send the public panel URL + access
+              code. DuckDNS: <code>docs/CLIENT_PANEL_DUCKDNS.md</code>. Admin preview:{' '}
               <Link to="/client">/client</Link>
             </p>
           </div>
