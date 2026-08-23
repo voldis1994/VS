@@ -71,7 +71,7 @@ describe('10s + 14-regime suitable entry', () => {
   });
 });
 
-describe('breakout-only entry (#146/#149)', () => {
+describe('breakout-only entry (#146/#149/#150)', () => {
   it('arms only on BREAKOUT_UP/DOWN', () => {
     expect(decideEntryBreakoutOnly(rally, 'BREAKOUT_UP')?.direction).toBe('BUY');
     expect(decideEntryBreakoutOnly(dip, 'BREAKOUT_DOWN')?.direction).toBe('SELL');
@@ -84,5 +84,30 @@ describe('breakout-only entry (#146/#149)', () => {
     expect(decideEntryBreakoutOnly(dip, 'RANGE')).toBeNull();
     expect(decideEntryBreakoutOnly(dip, 'FAILED_BREAKOUT_UP')).toBeNull();
     expect(decideEntryBreakoutOnly(rally, 'REVERSAL_CANDIDATE')).toBeNull();
+  });
+
+  it('structural fallback buys when hist close breaks prior highs', () => {
+    const hist: TenSecBar[] = [
+      { open_time_ms: 0, open: 4620.0, high: 4620.4, low: 4619.8, close: 4620.2, ticks: 10 },
+      { open_time_ms: 10_000, open: 4620.2, high: 4620.6, low: 4620.0, close: 4620.5, ticks: 10 },
+      { open_time_ms: 20_000, open: 4620.5, high: 4621.0, low: 4620.3, close: 4620.9, ticks: 10 },
+      { open_time_ms: 30_000, open: 4620.9, high: 4622.2, low: 4620.8, close: 4622.0, ticks: 10 },
+    ];
+    const last = hist[hist.length - 1]!;
+    expect(decideEntryBreakoutOnly(last, 'UNKNOWN', hist)?.direction).toBe('BUY');
+    expect(decideEntryBreakoutOnly(last, 'UNKNOWN', hist)?.reason).toMatch(/STRUCT BO long/);
+  });
+
+  it('arms Gold-scale BREAKOUT_UP body under classic 0.015% gate', () => {
+    // 0.35pt @ 4621 ≈ 0.0076% — old isMoving10s would reject
+    const goldBo: TenSecBar = {
+      open_time_ms: 0,
+      open: 4621.0,
+      high: 4621.5,
+      low: 4620.9,
+      close: 4621.35,
+      ticks: 12,
+    };
+    expect(decideEntryBreakoutOnly(goldBo, 'BREAKOUT_UP')?.direction).toBe('BUY');
   });
 });
