@@ -16,6 +16,7 @@ import {
 } from './pipelineBridge.js';
 import {
   acquireCapitalSession,
+  fetchCapitalMarketQuote,
   listCapitalOpenPositions,
 } from './capitalCom.js';
 import { decrypt } from '../security/encryption.js';
@@ -41,6 +42,18 @@ export type ClientLiveTrade = {
   entry_price: number | null;
   status: 'OPEN';
 } | null;
+
+export type ClientQuote = {
+  epic: string;
+  display_name: string;
+  bid: number | null;
+  ask: number | null;
+  mid: number | null;
+  spread: number | null;
+  change_pct: number | null;
+  regime: string | null;
+  updated_at: string;
+};
 
 export type ClientPanelStatus = {
   client_id: number;
@@ -477,6 +490,153 @@ export async function stopClientRobot(clientId: number): Promise<ClientPanelStat
   });
   emitToClient(clientId, { type: 'client_status', ...status });
   return status;
+}
+
+export async function getClientQuote(clientId: number): Promise<ClientQuote | null> {
+  const { rows } = await pool.query(
+    `SELECT panel_epic, panel_display_name FROM clients WHERE id = $1`,
+    [clientId]
+  );
+  if (!rows.length) return null;
+  const epic = rows[0].panel_epic as string | null;
+  if (!epic) return null;
+  const displayName = String(rows[0].panel_display_name || epic);
+  const account = await resolveClientTradingAccount(clientId);
+  const regime = currentRegime(epic)?.current || null;
+  const now = new Date().toISOString();
+
+  if (account) {
+    const robot = robotForAccount(account.account_id, epic);
+    const tick = robot?.ticks?.[0];
+    if (tick && (tick.mid != null || tick.bid != null || tick.ask != null)) {
+      const bid = tick.bid;
+      const ask = tick.ask;
+      const mid =
+        tick.mid ??
+        (bid != null && ask != null ? (bid + ask) / 2 : bid ?? ask ?? robot?.last_mid ?? null);
+      const spread = bid != null && ask != null ? ask - bid : null;
+      return {
+        epic,
+        display_name: displayName,
+        bid,
+        ask,
+        mid,
+        spread,
+        change_pct: null,
+        regime: robot?.regime || regime,
+        updated_at: tick.at || robot?.last_quote_at || now,
+      };
+    }
+    if (robot?.last_mid != null) {
+      return {
+        epic,
+        display_name: displayName,
+        bid: null,
+        ask: null,
+        mid: robot.last_mid,
+        spread: null,
+        change_pct: null,
+        regime: robot?.regime || regime,
+        updated_at: robot.last_quote_at || now,
+      };
+    }
+  }
+
+  if (!account) {
+    return {
+      epic,
+      display_name: displayName,
+      bid: null,
+      ask: null,
+      mid: null,
+      spread: null,
+      change_pct: null,
+      regime,
+      updated_at: now,
+    };
+  }
+
+  try {
+    const conn = await pool.query(
+      `SELECT environment, identifier, broker_name FROM broker_connections WHERE id = $1`,
+      [account.connection_id]
+    );
+    if (conn.rows[0]?.broker_name !== 'capital_com') {
+      return {
+        epic,
+        display_name: displayName,
+        bid: null,
+        ask: null,
+        mid: null,
+        spread: null,
+        change_pct: null,
+        regime,
+        updated_at: now,
+      };
+    }
+    const credRows = await pool.query(
+      `SELECT credential_type, ciphertext, iv, tag FROM api_credential_metadata
+       WHERE broker_connection_id = $1`,
+      [account.connection_id]
+    );
+    const creds: Record<string, string> = {};
+    for (const row of credRows.rows) {
+      creds[row.credential_type as string] = decrypt(
+        row.ciphertext as string,
+        row.iv as string,
+        row.tag as string
+      );
+    }
+    const accExt = await pool.query(
+      `SELECT external_account_id FROM broker_accounts WHERE id = $1`,
+      [account.account_id]
+    );
+    const opened = await acquireCapitalSession({
+      environment: conn.rows[0].environment as string,
+      apiKey: creds.api_key || '',
+      identifier: String(conn.rows[0].identifier || '').trim(),
+      password: creds.password || '',
+      connectionId: account.connection_id,
+      capitalAccountId: (accExt.rows[0]?.external_account_id as string | null) || null,
+    });
+    if (!opened.ok) {
+      return {
+        epic,
+        display_name: displayName,
+        bid: null,
+        ask: null,
+        mid: null,
+        spread: null,
+        change_pct: null,
+        regime,
+        updated_at: now,
+      };
+    }
+    const quote = await fetchCapitalMarketQuote(opened.session, epic);
+    return {
+      epic: quote.epic || epic,
+      display_name: displayName,
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      spread: quote.spread,
+      change_pct: quote.percentage_change,
+      regime,
+      updated_at: quote.update_time || now,
+    };
+  } catch {
+    return {
+      epic,
+      display_name: displayName,
+      bid: null,
+      ask: null,
+      mid: null,
+      spread: null,
+      change_pct: null,
+      regime,
+      updated_at: now,
+    };
+  }
 }
 
 export function assertNoSecrets(payload: unknown): void {

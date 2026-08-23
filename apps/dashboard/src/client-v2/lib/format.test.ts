@@ -13,7 +13,7 @@ describe('client-v2 format', () => {
   });
 
   it('formats price', () => {
-    expect(fmtPrice(4623.05)).toBe('4623.05');
+    expect(fmtPrice(4623.05)).toMatch(/4,?623\.05/);
     expect(fmtPrice(null)).toBe('—');
   });
 });

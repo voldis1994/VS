@@ -10,5 +10,10 @@ export function fmtLot(n: number): string {
 
 export function fmtPrice(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return '—';
+  return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+export function fmtSpread(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return '—';
   return n.toFixed(2);
 }

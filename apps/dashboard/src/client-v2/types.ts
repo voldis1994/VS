@@ -39,4 +39,16 @@ export type DeskStatus = {
   live_trade: LiveTrade;
 };
 
+export type ClientQuote = {
+  epic: string;
+  display_name: string;
+  bid: number | null;
+  ask: number | null;
+  mid: number | null;
+  spread: number | null;
+  change_pct: number | null;
+  regime: string | null;
+  updated_at: string;
+};
+
 export type RobotPhase = DeskStatus['robot_status'];
