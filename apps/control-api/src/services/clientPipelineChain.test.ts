@@ -314,6 +314,37 @@ describe('Client isolation', () => {
     expect(matched.find((m) => m.client_id === 1)?.lot_size).toBe(0.1);
     expect(matched.find((m) => m.client_id === 3)?.lot_size).toBe(0.5);
   });
+
+  it('executes all subscribers in parallel (no client waits in line)', async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    createCapitalPosition.mockImplementation(async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 40));
+      inFlight -= 1;
+      return { ok: true, detail: 'filled', deal_reference: 'DR-P' };
+    });
+
+    listActiveSubscriptionsForEpic.mockResolvedValue([
+      sub({ client_id: 1, account_id: 10, epic: 'XAUUSD', lot_size: 0.1 }),
+      sub({ client_id: 2, account_id: 20, epic: 'XAUUSD', lot_size: 0.2 }),
+      sub({ client_id: 3, account_id: 30, epic: 'XAUUSD', lot_size: 0.3 }),
+    ]);
+
+    const { fanoutEntryIntent } = await import('./intentFanout.js');
+    const result = await fanoutEntryIntent({
+      epic: 'XAUUSD',
+      direction: 'BUY',
+      decision: 'ENTRY_READY',
+      idempotency_key: 'parallel-fanout-1',
+    });
+
+    expect(createCapitalPosition).toHaveBeenCalledTimes(3);
+    expect(maxInFlight).toBeGreaterThan(1);
+    expect(result.fanout.executed).toHaveLength(3);
+    expect(result.fanout.executed.every((r) => r.ok)).toBe(true);
+  });
 });
 
 describe('Heartbeat / runtime status', () => {

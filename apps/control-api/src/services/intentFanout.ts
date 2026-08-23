@@ -93,19 +93,12 @@ export async function executePipelineIntent(
       : null;
 
   const subs = await listActiveSubscriptionsForEpic(epic);
-  const executed: FanoutResult['executed'] = [];
-
-  for (const sub of subs) {
-    const row = await executeForSubscription(
-      sub,
-      direction,
-      setupType,
-      regime,
-      intent.reference_price,
-      idem
-    );
-    executed.push(row);
-  }
+  // Per-client Capital calls in parallel — C100 must not wait behind C1..C99
+  const executed = await Promise.all(
+    subs.map((sub) =>
+      executeForSubscription(sub, direction, setupType, regime, intent.reference_price, idem)
+    )
+  );
 
   return {
     epic,
