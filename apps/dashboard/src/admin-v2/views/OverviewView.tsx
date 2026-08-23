@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
+import { MarketSearchPicker } from '../components/MarketSearchPicker';
 import { useCommandDesk } from '../context/CommandDeskContext';
 import { apiFetch } from '../../hooks/useApi';
 
@@ -242,21 +243,15 @@ export function OverviewView() {
                 </option>
               ))}
             </select>
-            <select
-              className="cmd-select"
+            <MarketSearchPicker
+              markets={markets}
               value={marketEpic}
-              onChange={(e) => {
-                setMarketEpic(e.target.value);
-                const m = markets.find((x) => (x.epic || x.symbol) === e.target.value);
+              disabled={busy}
+              onChange={(epic, m) => {
+                setMarketEpic(epic);
                 if (m) setLotSize(String(m.lot_size || m.min_lot || 0.1));
               }}
-            >
-              {markets.slice(0, 120).map((m) => (
-                <option key={m.epic || m.symbol} value={m.epic || m.symbol}>
-                  {m.display_name}
-                </option>
-              ))}
-            </select>
+            />
             <input className="cmd-input" style={{ maxWidth: 90 }} value={lotSize} onChange={(e) => setLotSize(e.target.value)} />
             <button className="cmd-btn cmd-btn--primary" type="button" onClick={deployRobot}>
               Open robot board

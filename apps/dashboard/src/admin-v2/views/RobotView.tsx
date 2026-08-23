@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
+import { MarketSearchPicker } from '../components/MarketSearchPicker';
 import { apiFetch } from '../../hooks/useApi';
 import { fmtNum } from '../lib/format';
 
@@ -229,7 +230,7 @@ export function RobotView() {
     }
   };
 
-  const filteredLaunch = useMemo(() => launchMarkets.slice(0, 150), [launchMarkets]);
+  const filteredLaunch = useMemo(() => launchMarkets, [launchMarkets]);
 
   return (
     <div>
@@ -266,13 +267,15 @@ export function RobotView() {
                 </option>
               ))}
             </select>
-            <select className="cmd-select" value={launchEpic} onChange={(e) => setLaunchEpic(e.target.value)}>
-              {filteredLaunch.map((m) => (
-                <option key={m.instrument_id} value={m.epic || m.symbol}>
-                  {m.display_name}
-                </option>
-              ))}
-            </select>
+            <MarketSearchPicker
+              markets={filteredLaunch}
+              value={launchEpic}
+              disabled={busy}
+              onChange={(epic, m) => {
+                setLaunchEpic(epic);
+                if (m) setLaunchLot(String(m.lot_size || m.min_lot || 0.1));
+              }}
+            />
             <input className="cmd-input" style={{ maxWidth: 80 }} value={launchLot} onChange={(e) => setLaunchLot(e.target.value)} />
             <button className="cmd-btn cmd-btn--go" type="button" disabled={busy} onClick={deploy}>
               Deploy
