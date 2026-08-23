@@ -19,7 +19,11 @@ export default defineConfig({
       transformIndexHtml(html) {
         return html
           .replace('/src/main.tsx', '/src/main.client.tsx')
-          .replace('<title>VS SYSTEM</title>', '<title>VS Client Control</title>');
+          .replace('<title>VS SYSTEM</title>', '<title>AURUM · VS Client</title>')
+          .replace(
+            'family=Orbitron:wght@600;700;800&family=Oxanium:wght@400;500;600;700&family=Share+Tech+Mono&display=swap',
+            'family=Syne:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap'
+          );
       },
     },
   ],

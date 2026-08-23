@@ -1,0 +1,669 @@
+/* AURUM — standalone client desk (no legacy ccp-* styles) */
+
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+:root {
+  --void: #060608;
+  --void-2: #0e0e12;
+  --panel: rgba(18, 18, 24, 0.72);
+  --line: rgba(212, 168, 83, 0.22);
+  --gold: #d4a853;
+  --gold-bright: #f0cc7a;
+  --gold-dim: #8a6b2e;
+  --mint: #3ee8c5;
+  --rose: #ff5c7a;
+  --text: #f4f0e8;
+  --muted: #8a8798;
+  --mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --display: 'Syne', system-ui, sans-serif;
+  --radius: 20px;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100%;
+  min-height: 100dvh;
+  background: var(--void);
+  color: var(--text);
+  font-family: var(--display);
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  background:
+    radial-gradient(ellipse 120% 80% at 50% -20%, rgba(212, 168, 83, 0.14), transparent 55%),
+    radial-gradient(circle at 100% 100%, rgba(62, 232, 197, 0.06), transparent 40%),
+    var(--void);
+}
+
+.aurum-kicker {
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--gold-dim);
+}
+
+.aurum-btn {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 0.85rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.2s ease, opacity 0.2s;
+}
+
+.aurum-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.aurum-btn--gold {
+  width: 100%;
+  padding: 1rem 1.5rem;
+  color: #1a1204;
+  background: linear-gradient(135deg, var(--gold-bright), var(--gold) 45%, var(--gold-dim));
+  box-shadow: 0 8px 32px rgba(212, 168, 83, 0.35);
+}
+
+.aurum-btn--gold:not(:disabled):active {
+  transform: scale(0.98);
+}
+
+.aurum-btn--ghost {
+  padding: 0.5rem 1rem;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.aurum-error {
+  margin: 0.75rem 0 0;
+  padding: 0.65rem 0.85rem;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  color: #ffc4cf;
+  background: rgba(255, 92, 122, 0.12);
+  border: 1px solid rgba(255, 92, 122, 0.35);
+}
+
+.aurum-error--bar {
+  margin-top: 0;
+}
+
+/* ——— Login ——— */
+.aurum-login {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+}
+
+.aurum-login-card {
+  width: min(100%, 380px);
+  padding: 2rem 1.75rem 1.75rem;
+  border-radius: calc(var(--radius) + 4px);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(24px);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+}
+
+.aurum-brand {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  margin-bottom: 2rem;
+}
+
+.aurum-brand-mark {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  background: conic-gradient(from 210deg, var(--gold-dim), var(--gold-bright), var(--mint), var(--gold));
+  box-shadow: 0 0 40px rgba(212, 168, 83, 0.35);
+}
+
+.aurum-brand-title {
+  margin: 0;
+  font-size: 1.75rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  line-height: 1;
+}
+
+.aurum-brand-sub {
+  margin: 0.35rem 0 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+}
+
+.aurum-field {
+  display: block;
+  margin-bottom: 1.25rem;
+}
+
+.aurum-input {
+  display: block;
+  width: 100%;
+  margin-top: 0.5rem;
+  padding: 0.95rem 1rem;
+  font-family: var(--mono);
+  font-size: 1.1rem;
+  letter-spacing: 0.2em;
+  color: var(--text);
+  background: var(--void-2);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  outline: none;
+}
+
+.aurum-input:focus {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px rgba(212, 168, 83, 0.2);
+}
+
+.aurum-login-foot {
+  margin: 1.25rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* ——— Desk layout ——— */
+.aurum-desk {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 0 0 calc(3.5rem + var(--safe-bottom));
+}
+
+.aurum-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.25rem 1.25rem 0.5rem;
+}
+
+.aurum-header-title {
+  margin: 0.25rem 0 0;
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.aurum-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 0 1rem 1rem;
+}
+
+.aurum-panel {
+  padding: 1rem 1.1rem;
+  border-radius: var(--radius);
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(16px);
+}
+
+.aurum-panel--hero {
+  padding: 1.5rem 1rem 1.25rem;
+  border-color: var(--line);
+  background: linear-gradient(180deg, rgba(212, 168, 83, 0.06), transparent 60%), var(--panel);
+}
+
+/* ——— Robot dial ——— */
+.aurum-dial-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.aurum-dial {
+  position: relative;
+  width: min(72vw, 220px);
+  height: min(72vw, 220px);
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.aurum-dial-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+}
+
+.aurum-dial-ring--outer {
+  border-color: rgba(212, 168, 83, 0.15);
+}
+
+.aurum-dial-ring--mid {
+  inset: 12%;
+  border-color: rgba(212, 168, 83, 0.35);
+}
+
+.aurum-dial-core {
+  position: absolute;
+  inset: 22%;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 25%, #2a2418, #0c0c10 70%);
+  border: 1px solid rgba(212, 168, 83, 0.4);
+  box-shadow:
+    inset 0 2px 20px rgba(255, 255, 255, 0.06),
+    0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+.aurum-dial-glyph {
+  font-size: 2rem;
+  color: var(--gold-bright);
+  line-height: 1;
+}
+
+.aurum-dial.phase-running .aurum-dial-ring--mid {
+  border-color: var(--mint);
+  animation: aurum-spin 8s linear infinite;
+}
+
+.aurum-dial.phase-running .aurum-dial-core {
+  box-shadow:
+    inset 0 0 30px rgba(62, 232, 197, 0.15),
+    0 0 50px rgba(62, 232, 197, 0.2);
+}
+
+.aurum-dial.phase-starting .aurum-dial-ring--mid {
+  animation: aurum-pulse-ring 1.4s ease-in-out infinite;
+}
+
+.aurum-dial.phase-error .aurum-dial-core {
+  border-color: var(--rose);
+}
+
+.aurum-dial-label {
+  margin-top: 1rem;
+  font-size: 0.9rem;
+  font-weight: 800;
+  letter-spacing: 0.35em;
+}
+
+.aurum-dial-label.phase-running {
+  color: var(--mint);
+}
+
+.aurum-dial-label.phase-error {
+  color: var(--rose);
+}
+
+.aurum-dial-hint {
+  margin: 0.5rem 0 0;
+  max-width: 260px;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+@keyframes aurum-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes aurum-pulse-ring {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: scale(0.98);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ——— Market rail ——— */
+.aurum-rail {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.65rem;
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+  scrollbar-width: none;
+}
+
+.aurum-rail::-webkit-scrollbar {
+  display: none;
+}
+
+.aurum-rail--empty {
+  margin-top: 0.65rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.aurum-chip {
+  flex: 0 0 auto;
+  min-width: 120px;
+  padding: 0.65rem 0.85rem;
+  text-align: left;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--void-2);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.aurum-chip.on {
+  border-color: var(--gold);
+  background: rgba(212, 168, 83, 0.12);
+}
+
+.aurum-chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.aurum-chip-name {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.aurum-chip-epic {
+  display: block;
+  margin-top: 0.15rem;
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  color: var(--muted);
+}
+
+/* ——— Lot ——— */
+.aurum-lot-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.aurum-lot-meta {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  color: var(--muted);
+}
+
+.aurum-lot-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 0.75rem;
+  gap: 0.75rem;
+}
+
+.aurum-lot-btn {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--void-2);
+  color: var(--gold-bright);
+  font-size: 1.4rem;
+  cursor: pointer;
+}
+
+.aurum-lot-btn:disabled {
+  opacity: 0.4;
+}
+
+.aurum-lot-value {
+  text-align: center;
+}
+
+.aurum-lot-num {
+  display: block;
+  font-family: var(--mono);
+  font-size: 2rem;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.aurum-lot-unit {
+  font-size: 0.65rem;
+  letter-spacing: 0.2em;
+  color: var(--muted);
+}
+
+/* ——— Position ticket ——— */
+.aurum-ticket {
+  position: relative;
+  overflow: hidden;
+}
+
+.aurum-ticket.live {
+  border-left: 3px solid var(--mint);
+}
+
+.aurum-ticket.flash-in {
+  animation: aurum-flash-in 0.6s ease;
+}
+
+.aurum-ticket.flash-out {
+  animation: aurum-flash-out 0.6s ease;
+}
+
+@keyframes aurum-flash-in {
+  from {
+    box-shadow: inset 0 0 0 2px var(--mint);
+  }
+  to {
+    box-shadow: inset 0 0 0 0 transparent;
+  }
+}
+
+@keyframes aurum-flash-out {
+  from {
+    box-shadow: inset 0 0 0 2px var(--rose);
+  }
+  to {
+    box-shadow: inset 0 0 0 0 transparent;
+  }
+}
+
+.aurum-ticket-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.aurum-ticket-badge {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.15em;
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  background: rgba(62, 232, 197, 0.15);
+  color: var(--mint);
+}
+
+.aurum-ticket-badge.dim {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--muted);
+}
+
+.aurum-ticket-badge.buy {
+  background: rgba(62, 232, 197, 0.15);
+  color: var(--mint);
+}
+
+.aurum-ticket-badge.sell {
+  background: rgba(255, 92, 122, 0.15);
+  color: var(--rose);
+}
+
+.aurum-ticket-market {
+  margin: 0 0 1rem;
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+
+.aurum-ticket-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.aurum-ticket-key {
+  display: block;
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.aurum-ticket-val {
+  display: block;
+  margin-top: 0.2rem;
+  font-weight: 700;
+}
+
+.aurum-ticket-val.mono {
+  font-family: var(--mono);
+}
+
+.aurum-ticket-val.buy {
+  color: var(--mint);
+}
+
+.aurum-ticket-val.sell {
+  color: var(--rose);
+}
+
+.aurum-ticket-regime {
+  grid-column: 1 / -1;
+  padding-top: 0.5rem;
+  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+}
+
+.aurum-ticket-empty {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* ——— Status bar ——— */
+.aurum-statusbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 1rem calc(0.65rem + var(--safe-bottom));
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  background: rgba(6, 6, 8, 0.92);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(12px);
+}
+
+.aurum-statusbar-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.aurum-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--rose);
+}
+
+.aurum-pulse.on {
+  background: var(--mint);
+  box-shadow: 0 0 12px var(--mint);
+  animation: aurum-blink 2s ease-in-out infinite;
+}
+
+@keyframes aurum-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.aurum-statusbar-mid {
+  color: var(--gold-dim);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 140px;
+}
+
+.aurum-statusbar-right {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.65rem;
+  color: var(--muted);
+}
+
+.aurum-statusbar-right .ok {
+  color: var(--mint);
+}
+
+.aurum-statusbar-right .warn {
+  color: var(--gold);
+}
+
+@media (min-width: 640px) {
+  .aurum-desk {
+    max-width: 960px;
+    padding-top: 1rem;
+  }
+
+  .aurum-main {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+  }
+
+  .aurum-panel--hero {
+    grid-column: 1 / -1;
+  }
+
+  .aurum-panel--ticket {
+    grid-column: 1 / -1;
+  }
+}
