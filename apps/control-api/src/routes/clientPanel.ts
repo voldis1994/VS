@@ -3,6 +3,7 @@ import { requireClientSession } from './clientAuth.js';
 import {
   assertNoSecrets,
   getClientPanelStatus,
+  getClientQuote,
   listClientMarkets,
   saveClientConfig,
   startClientRobot,
@@ -24,6 +25,17 @@ export async function registerClientPanelRoutes(app: FastifyInstance): Promise<v
     const markets = await listClientMarkets(session.client_id);
     assertNoSecrets(markets);
     return { source: 'capital_com', markets };
+  });
+
+  app.get('/api/client/quote', async (request, reply) => {
+    const session = await requireClientSession(request, reply);
+    if (!session) return;
+    const quote = await getClientQuote(session.client_id);
+    if (!quote) {
+      return reply.code(404).send({ error: 'No market configured', message: 'Select a market first' });
+    }
+    assertNoSecrets(quote);
+    return quote;
   });
 
   app.put('/api/client/config', async (request, reply) => {

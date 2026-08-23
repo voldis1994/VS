@@ -18,14 +18,13 @@ Standalone client UI (`apps/dashboard/src/client-v2/`). **Does not reuse** legac
 
 ## Mobile (phone-first)
 
-Built for clients on the Cloudflare share URL (Safari / Chrome):
+Built like a **trading app** (Capital.com layout) for Cloudflare share clients:
 
-- `viewport-fit=cover` + safe-area insets (notch / home indicator)
-- Touch targets ≥ 48px; lot ± buttons 56px
-- Access code input ≥ 16px (no iOS zoom on focus)
-- Sticky header + fixed status bar with safe padding
-- Landscape compact grid (dial left, controls right)
-- Reduced-motion respected
+- Live **bid / ask / mid** + sparkline chart (`GET /api/client/quote`)
+- Top: market picker + price
+- Bottom dock: **Stop** (red) / **Start** (blue) + lot input
+- Collapsible **Trades** panel
+- Safe areas, 48px+ touch targets, no iOS zoom on inputs
 
 ## Admin preview
 
