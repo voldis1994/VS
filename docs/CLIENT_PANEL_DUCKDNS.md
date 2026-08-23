@@ -8,13 +8,7 @@ Stable share URL for remote clients while VS runs on your PC (or a home server l
 - Public panel process: `tools/client-public.mjs` on **`:18080`** (binds `0.0.0.0`)
 - Client UI: market / lot / START-STOP / live trade only (no admin desk)
 
-## One-time setup (easiest)
-
-Double-click **`SETUP-DUCKDNS.bat`** — writes all `.env` keys and asks you to paste **DUCKDNS_TOKEN** once from https://www.duckdns.org
-
-Then firewall + router (below), then **`VS-DUCKDNS.bat`**.
-
-## Manual `.env` (optional)
+## One-time setup
 
 ### 1) `.env` (repo root)
 
