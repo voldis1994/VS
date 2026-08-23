@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { clientFetch, getClientToken, setClientToken } from '../../hooks/useClientApi';
 import { useClientWebSocket } from '../../hooks/useClientWebSocket';
 import { fmtLot, roundLot } from '../lib/format';
-import type { DeskStatus, Market } from '../types';
+import type { ClientQuote, DeskStatus, Market } from '../types';
+
+const PRICE_HISTORY_MAX = 90;
 
 export function useDesk() {
   const [token, setToken] = useState<string | null>(() => getClientToken());
@@ -13,9 +15,13 @@ export function useDesk() {
   const [markets, setMarkets] = useState<Market[]>([]);
   const [epic, setEpic] = useState('');
   const [lot, setLot] = useState(0.1);
+  const [quote, setQuote] = useState<ClientQuote | null>(null);
+  const [priceHistory, setPriceHistory] = useState<number[]>([]);
   const [flash, setFlash] = useState<'opened' | 'closed' | null>(null);
   const [closedBanner, setClosedBanner] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [tradesOpen, setTradesOpen] = useState(true);
+  const lotInputTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const selected = useMemo(
     () => markets.find((m) => m.epic === epic) || null,
@@ -28,6 +34,14 @@ export function useDesk() {
   const requestedActive =
     status?.requested_status === 'RUNNING' || confirmedRunning || starting || errorState;
 
+  const pushPrice = useCallback((mid: number | null) => {
+    if (mid == null || !Number.isFinite(mid)) return;
+    setPriceHistory((prev) => {
+      const next = [...prev, mid];
+      return next.length > PRICE_HISTORY_MAX ? next.slice(-PRICE_HISTORY_MAX) : next;
+    });
+  }, []);
+
   const refresh = useCallback(async () => {
     const st = await clientFetch<DeskStatus>('/api/client/status');
     setStatus(st);
@@ -35,6 +49,16 @@ export function useDesk() {
     if (st.lot_size != null) setLot(st.lot_size);
     return st;
   }, []);
+
+  const refreshQuote = useCallback(async () => {
+    try {
+      const q = await clientFetch<ClientQuote>('/api/client/quote');
+      setQuote(q);
+      pushPrice(q.mid);
+    } catch {
+      /* quote optional until market selected */
+    }
+  }, [pushPrice]);
 
   const loadMarkets = useCallback(async () => {
     const res = await clientFetch<{ markets: Market[] }>('/api/client/markets');
@@ -45,6 +69,7 @@ export function useDesk() {
   useEffect(() => {
     if (!token) return;
     setBusy(true);
+    setPriceHistory([]);
     Promise.all([refresh(), loadMarkets()])
       .then(([st, mk]) => {
         if (!st.market && mk[0]) {
@@ -63,8 +88,15 @@ export function useDesk() {
   }, [token, refresh, loadMarkets]);
 
   useEffect(() => {
-    if (!token || !requestedActive) return;
-    const t = setInterval(() => void refresh().catch(() => undefined), 3000);
+    if (!token || !epic) return;
+    void refreshQuote();
+    const t = setInterval(() => void refreshQuote(), 2000);
+    return () => clearInterval(t);
+  }, [token, epic, refreshQuote]);
+
+  useEffect(() => {
+    if (!token) return;
+    const t = setInterval(() => void refresh().catch(() => undefined), requestedActive ? 3000 : 8000);
     return () => clearInterval(t);
   }, [token, requestedActive, refresh]);
 
@@ -72,11 +104,13 @@ export function useDesk() {
     if (msg.type === 'trade_opened') {
       setFlash('opened');
       setClosedBanner(false);
+      setTradesOpen(true);
       void refresh();
       setTimeout(() => setFlash(null), 1600);
     } else if (msg.type === 'trade_closed') {
       setFlash('closed');
       setClosedBanner(true);
+      setTradesOpen(true);
       void refresh();
       setTimeout(() => {
         setFlash(null);
@@ -118,6 +152,8 @@ export function useDesk() {
     setClientToken(null);
     setToken(null);
     setStatus(null);
+    setQuote(null);
+    setPriceHistory([]);
   };
 
   const persistConfig = async (nextEpic: string, nextLot: number) => {
@@ -125,7 +161,8 @@ export function useDesk() {
       method: 'PUT',
       body: JSON.stringify({ epic: nextEpic, lot_size: nextLot }),
     });
-    await refresh();
+    setPriceHistory([]);
+    await Promise.all([refresh(), refreshQuote()]);
   };
 
   const bumpLot = async (dir: -1 | 1) => {
@@ -144,12 +181,30 @@ export function useDesk() {
     }
   };
 
+  const setLotInput = (raw: string) => {
+    if (!selected || requestedActive) return;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    setLot(n);
+    setError(null);
+    if (lotInputTimer.current) clearTimeout(lotInputTimer.current);
+    lotInputTimer.current = setTimeout(() => {
+      const step = selected.lot_step || 0.01;
+      const clamped = Math.min(selected.max_lot, Math.max(selected.min_lot, roundLot(n, step)));
+      setLot(clamped);
+      void persistConfig(selected.epic, clamped).catch((e) => {
+        setError(e instanceof Error ? e.message : 'Lot update failed');
+      });
+    }, 450);
+  };
+
   const onMarketChange = async (value: string) => {
     if (requestedActive) return;
     const m = markets.find((x) => x.epic === value);
     if (!m) return;
     setEpic(m.epic);
     setLot(m.min_lot);
+    setPriceHistory([]);
     setError(null);
     try {
       await persistConfig(m.epic, m.min_lot);
@@ -158,31 +213,45 @@ export function useDesk() {
     }
   };
 
-  const toggleRobot = async () => {
-    if (busy) return;
+  const startRobot = async () => {
+    if (busy || requestedActive) return;
     setBusy(true);
     setError(null);
     try {
-      if (!requestedActive) {
-        if (!epic) throw new Error('Select a market first');
-        await persistConfig(epic, lot);
-        const res = await clientFetch<{ status: DeskStatus }>('/api/client/start', {
-          method: 'POST',
-          body: JSON.stringify({}),
-        });
-        setStatus(res.status);
-        if (res.status.robot_status === 'ERROR') {
-          setError(res.status.broker_error || 'Start failed — check account / market');
-        }
-      } else {
-        const res = await clientFetch<{ status: DeskStatus }>('/api/client/stop', {
-          method: 'POST',
-          body: JSON.stringify({}),
-        });
-        setStatus(res.status);
+      if (!epic) throw new Error('Select a market first');
+      await persistConfig(epic, lot);
+      const res = await clientFetch<{ status: DeskStatus }>('/api/client/start', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      setStatus(res.status);
+      if (res.status.robot_status === 'ERROR') {
+        setError(res.status.broker_error || 'Start failed — check account / market');
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Action failed');
+      setError(e instanceof Error ? e.message : 'Start failed');
+      try {
+        await refresh();
+      } catch {
+        /* ignore */
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const stopRobot = async () => {
+    if (busy || !requestedActive) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await clientFetch<{ status: DeskStatus }>('/api/client/stop', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      setStatus(res.status);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Stop failed');
       try {
         await refresh();
       } catch {
@@ -209,9 +278,13 @@ export function useDesk() {
     markets,
     epic,
     lot,
+    quote,
+    priceHistory,
     flash,
     closedBanner,
     error,
+    tradesOpen,
+    setTradesOpen,
     selected,
     confirmedRunning,
     starting,
@@ -222,8 +295,10 @@ export function useDesk() {
     login,
     logout,
     bumpLot,
+    setLotInput,
     onMarketChange,
-    toggleRobot,
+    startRobot,
+    stopRobot,
     fmtLot,
   };
 }
