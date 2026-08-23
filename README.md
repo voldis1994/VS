@@ -58,9 +58,8 @@ Admin: `http://localhost:5173/` · Klienta panelis lokāli: `http://127.0.0.1:18
 
 **DuckDNS (fiksēts nosaukums, bez Cloudflare):** `VS-DUCKDNS.bat` → `http://vs-system.duckdns.org:18080`  
 Skatīt [docs/CLIENT_PANEL_DUCKDNS.md](docs/CLIENT_PANEL_DUCKDNS.md). Atpakaļ uz Cloudflare: `VS-CLOUDFLARE.bat`.
-Neaizver to logu. Admin: http://localhost:5173/
 
-Skatīt [docs/VS_RESTART.md](docs/VS_RESTART.md).
+Neaizver launchera logu. Skatīt [docs/VS_RESTART.md](docs/VS_RESTART.md).
 
 ## Build
 
