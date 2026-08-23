@@ -54,6 +54,10 @@ VS.bat
 ```
 
 Lejupielādē jaunāko `main`, palaiž sistēmu, **šajā logā** parāda klienta `https://….trycloudflare.com` saiti.  
+Admin: `http://localhost:5173/` · Klienta panelis lokāli: `http://127.0.0.1:18080`
+
+**DuckDNS (fiksēts nosaukums, bez Cloudflare):** `VS-DUCKDNS.bat` → `http://vs-system.duckdns.org:18080`  
+Skatīt [docs/CLIENT_PANEL_DUCKDNS.md](docs/CLIENT_PANEL_DUCKDNS.md). Atpakaļ uz Cloudflare: `VS-CLOUDFLARE.bat`.
 Neaizver to logu. Admin: http://localhost:5173/
 
 Skatīt [docs/VS_RESTART.md](docs/VS_RESTART.md).
@@ -106,7 +110,9 @@ config/         YAML configuration
 data/           raw, normalized, replay recordings
 tests/          unit, integration, replay, execution, security, performance
 docs/           architecture and operations documentation
-VS.bat          one-click launcher (git pull, stack, client tunnel)
+VS.bat              one-click launcher (git pull, stack, Cloudflare tunnel)
+VS-DUCKDNS.bat      same stack + DuckDNS public URL (no Cloudflare)
+VS-CLOUDFLARE.bat   switch share mode back to Cloudflare tunnel
 ```
 
 ## Security
