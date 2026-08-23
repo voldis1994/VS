@@ -12,9 +12,20 @@ Standalone client UI (`apps/dashboard/src/client-v2/`). **Does not reuse** legac
 
 - **AURUM** — dark gold cockpit, Syne + IBM Plex Mono
 - Central **robot dial** (arm / disarm)
-- Horizontal **market chips**
+- Horizontal **market chips** (snap-scroll on phone)
 - **Position ticket** for live trade
 - Bottom **link status bar** (broker + market-core)
+
+## Mobile (phone-first)
+
+Built for clients on the Cloudflare share URL (Safari / Chrome):
+
+- `viewport-fit=cover` + safe-area insets (notch / home indicator)
+- Touch targets ≥ 48px; lot ± buttons 56px
+- Access code input ≥ 16px (no iOS zoom on focus)
+- Sticky header + fixed status bar with safe padding
+- Landscape compact grid (dial left, controls right)
+- Reduced-motion respected
 
 ## Admin preview
 

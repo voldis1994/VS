@@ -1,3 +1,5 @@
+import { useEffect, useRef } from 'react';
+
 export function LoginScreen({
   accessCode,
   setAccessCode,
@@ -11,6 +13,14 @@ export function LoginScreen({
   busy: boolean;
   onLogin: () => void;
 }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    // Delay focus so mobile keyboard opens after paint (Safari)
+    const t = window.setTimeout(() => inputRef.current?.focus(), 280);
+    return () => window.clearTimeout(t);
+  }, []);
+
   return (
     <div className="aurum-login">
       <div className="aurum-login-card">
@@ -25,10 +35,16 @@ export function LoginScreen({
         <label className="aurum-field" htmlFor="access">
           <span className="aurum-kicker">Access code</span>
           <input
+            ref={inputRef}
             id="access"
             className="aurum-input"
+            type="text"
             inputMode="text"
+            autoCapitalize="characters"
+            autoCorrect="off"
+            spellCheck={false}
             autoComplete="one-time-code"
+            enterKeyHint="go"
             placeholder="••••••••••••"
             value={accessCode}
             onChange={(e) => setAccessCode(e.target.value.toUpperCase())}
@@ -45,7 +61,7 @@ export function LoginScreen({
         </button>
 
         <p className="aurum-login-foot">
-          Breakout execution only · your account · your lot
+          Phone-ready · breakout only · your lot
         </p>
       </div>
     </div>

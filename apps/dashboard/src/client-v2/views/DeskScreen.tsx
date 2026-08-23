@@ -39,27 +39,29 @@ export function DeskScreen() {
           />
         </section>
 
-        <section className="aurum-panel">
-          <p className="aurum-kicker">Instrument</p>
-          <MarketRail
-            markets={d.markets}
-            epic={d.epic}
-            locked={d.requestedActive || d.busy}
-            onChange={(v) => void d.onMarketChange(v)}
-          />
-        </section>
+        <div className="aurum-controls">
+          <section className="aurum-panel">
+            <p className="aurum-kicker">Instrument</p>
+            <MarketRail
+              markets={d.markets}
+              epic={d.epic}
+              locked={d.requestedActive || d.busy}
+              onChange={(v) => void d.onMarketChange(v)}
+            />
+          </section>
 
-        <section className="aurum-panel">
-          <LotControl
-            lot={d.lot}
-            min={d.selected?.min_lot ?? 0.01}
-            max={d.selected?.max_lot ?? 100}
-            step={d.selected?.lot_step ?? 0.01}
-            locked={d.requestedActive}
-            busy={d.busy}
-            onBump={(dir) => void d.bumpLot(dir)}
-          />
-        </section>
+          <section className="aurum-panel">
+            <LotControl
+              lot={d.lot}
+              min={d.selected?.min_lot ?? 0.01}
+              max={d.selected?.max_lot ?? 100}
+              step={d.selected?.lot_step ?? 0.01}
+              locked={d.requestedActive}
+              busy={d.busy}
+              onBump={(dir) => void d.bumpLot(dir)}
+            />
+          </section>
+        </div>
 
         <section className="aurum-panel aurum-panel--ticket">
           <PositionTicket
