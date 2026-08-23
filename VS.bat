@@ -13,11 +13,6 @@ if /I "%~1"=="_INNER" (
 cd /d "%~dp0"
 set "ROOT=%CD%"
 echo [0/5] Nemu jaunako VS.bat no GitHub...
-if /I "%VS_USE_LOCAL_BAT%"=="1" (
-  echo [0/5] VS_USE_LOCAL_BAT=1 — izmantoju lokalo VS.bat (DuckDNS tests)
-  call "%~f0" _INNER "%ROOT%"
-  exit /b %ERRORLEVEL%
-)
 curl.exe -fsSL -o "%TEMP%\VS_from_github.bat" "https://raw.githubusercontent.com/voldis1994/VS/main/VS.bat"
 if exist "%TEMP%\VS_from_github.bat" (
   call "%TEMP%\VS_from_github.bat" _INNER "%ROOT%"
@@ -259,19 +254,11 @@ echo [OK] lokali panelis http://127.0.0.1:18080
 echo [OK] admin lokali http://localhost:5173/  (klientam NESUTI)
 echo.
 
-REM ---- public share mode: cloudflare (default) OR duckdns ----
-set "PUBLIC_SHARE_MODE=cloudflare"
-set "DUCKDNS_DOMAIN=vs-system.duckdns.org"
-for /f "usebackq delims=" %%A in (`powershell -NoProfile -Command "$p='!ROOT!\.env'; if (Test-Path -LiteralPath $p) { Get-Content -LiteralPath $p | ForEach-Object { if ($_ -match '^\s*PUBLIC_SHARE_MODE\s*=\s*(.+)\s*$') { $matches[1].Trim().Trim('\"').Trim(\"'\") } } }"`) do set "PUBLIC_SHARE_MODE=%%A"
-for /f "usebackq delims=" %%A in (`powershell -NoProfile -Command "$p='!ROOT!\.env'; if (Test-Path -LiteralPath $p) { Get-Content -LiteralPath $p | ForEach-Object { if ($_ -match '^\s*DUCKDNS_DOMAIN\s*=\s*(.+)\s*$') { $matches[1].Trim().Trim('\"').Trim(\"'\") } } }"`) do set "DUCKDNS_DOMAIN=%%A"
-if /I "!PUBLIC_SHARE_MODE!"=="duckdns" goto :share_duckdns
-
-echo [5/5] Klienta tunelis uz :18080  (Cloudflare)
+echo [5/5] Klienta tunelis uz :18080  (NE Vite, NE :5173, NE :5174)
 echo.
 echo ============================================================
 echo   NEAIZVER SO LOGU
 echo   Suti klientam TIKAI so https://....trycloudflare.com
-echo   (DuckDNS: uzliec PUBLIC_SHARE_MODE=duckdns .env vai VS-DUCKDNS.bat)
 echo ============================================================
 echo.
 
@@ -282,41 +269,6 @@ if not errorlevel 1 (
 )
 npx --yes cloudflared tunnel --url http://127.0.0.1:18080
 exit /b %ERRORLEVEL%
-
-:share_duckdns
-echo [5/5] DuckDNS publiskais panelis  (BEZ Cloudflare)
-echo.
-set "DUCK_HOST=!DUCKDNS_DOMAIN!"
-echo !DUCK_HOST! | findstr /I "duckdns.org" >nul
-if errorlevel 1 set "DUCK_HOST=!DUCKDNS_DOMAIN!.duckdns.org"
-call :upsert_env VITE_CLIENT_PANEL_URL "http://!DUCK_HOST!:18080"
-call :upsert_env CLIENT_COOKIE_SECURE false
-call :upsert_env CLIENT_CORS_ORIGIN "http://localhost:5173,http://localhost:5174,http://127.0.0.1:18080,http://!DUCK_HOST!:18080"
-echo ============================================================
-echo   NEAIZVER SO LOGU
-echo   Suti klientam:
-echo     http://!DUCK_HOST!:18080
-echo   + access code no Admin - Clients
-echo.
-echo   Router: WAN 18080 -^> si PC :18080
-echo   Firewall: tools\open-firewall-18080.ps1  (Admin)
-echo   Atvienot: VS-CLOUDFLARE.bat  vai PUBLIC_SHARE_MODE=cloudflare
-echo   Docs: docs\CLIENT_PANEL_DUCKDNS.md
-echo ============================================================
-echo.
-if exist "%ROOT%\tools\duckdns-update.mjs" (
-  start "MR-DuckDNS" /D "%ROOT%" cmd /k node tools\duckdns-update.mjs
-) else (
-  echo [WARN] tools\duckdns-update.mjs nav - IP updater netika palaists
-)
-echo [OK] lokali http://127.0.0.1:18080
-echo [OK] publiski http://!DUCK_HOST!:18080
-echo.
-echo Gaidu (Ctrl+C aizver so logu). Firewall/router jabut gataviem.
-:duckdns_hold
-ping -n 3600 127.0.0.1 >nul
-goto :duckdns_hold
-exit /b 0
 
 :ensure_docker
 where docker >nul 2>&1
