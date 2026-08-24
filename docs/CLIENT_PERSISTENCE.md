@@ -2,6 +2,9 @@
 
 Clients, brokers, access-code hashes, and panel settings live in **Postgres**.
 
+Restoring trading logic (e.g. back to #136 entry/exit) does **not** wipe clients —
+DB volume, `robot_desk_persist`, and panel RUNNING flags stay intact.
+
 ## Survives restart
 
 | What | Where |

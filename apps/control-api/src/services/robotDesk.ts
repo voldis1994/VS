@@ -31,8 +31,7 @@ import {
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove } from './exitManage.js';
-import { decideEntryBreakoutOnly } from './entryFromRegime.js';
-import { resolvePostExitCooldownMs } from './quietImpulseEntry.js';
+import { decideEntryFrom10sRegime } from './entryFromRegime.js';
 import {
   allowEntryFromFeeds,
   multiFeedOwnsOhlc,
@@ -273,7 +272,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC → BREAKOUT + TREND → ENTRY/EXIT',
     note:
-      'Live: BREAKOUT_UP/DOWN + TREND_UP/DOWN + COMPRESSION. No UNKNOWN stall.',
+      'Live #136: classic 10s regime entry (TREND/BO/RANGE/FADE) · clients persist across restart.',
   };
 }
 
@@ -1185,8 +1184,8 @@ async function robotCycle(s: Internal) {
     }
 
     s.mode = 'ENTRY';
-    // #140 / #139: pause after close — stop re-entering the same Gold chop every ~1 min
-    const cooldownMs = resolvePostExitCooldownMs();
+    // #136 post-close pause (~20s) before next entry
+    const cooldownMs = 20_000;
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
     if (s.closed_at_ms > 0 && sinceClose < cooldownMs) {
       const leftSec = Math.ceil((cooldownMs - sinceClose) / 1000);
@@ -1254,8 +1253,8 @@ async function robotCycle(s: Internal) {
     let setupType: string | null = null;
 
     if (s.ohlcState.just_closed && bar) {
-      // Live path: regime BREAKOUT / TREND pullback / structural BO only — no BOX, no quiet oval
-      const sig = decideEntryBreakoutOnly(bar, s.regime, s.closedBars);
+      // #136 original: classic decideEntryFrom10sRegime (all live regimes)
+      const sig = decideEntryFrom10sRegime(bar, s.regime);
       if (sig) {
         direction = sig.direction;
         setupType = sig.setup;
@@ -1266,7 +1265,7 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${ohlcLine} · ${s.regime} · no BO/TREND pullback yet`,
+          detail: `${ohlcLine} · ${s.regime} · no #136 setup yet`,
         });
       }
     } else {

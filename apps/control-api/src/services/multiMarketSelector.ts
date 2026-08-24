@@ -11,7 +11,7 @@ import {
   isLateMoveOnOneMinute,
   leaseCapitalSession,
 } from './capitalCom.js';
-import { decideEntryBreakoutOnly, type RegimeEntry } from './entryFromRegime.js';
+import { decideEntryFrom10sRegime, type RegimeEntry } from './entryFromRegime.js';
 import { fanoutEntryIntent, type FanoutResult } from './intentFanout.js';
 import { observeClosedBars, type RegimeName } from './regimes.js';
 import { aggregateSecondsToTen, bodyPct, type TenSecBar } from './tenSecondOhlc.js';
@@ -402,7 +402,7 @@ async function scanOneEpic(
 
   const snap = observeClosedBars(m.epic, bars.slice(-12), m.display_name, scope);
   const last = bars[bars.length - 1]!;
-  const entry = decideEntryBreakoutOnly(last, snap.current, bars);
+  const entry = decideEntryFrom10sRegime(last, snap.current);
   const scored = scoreMarketSetup({ entry, regime: snap.current, bar: last });
 
   if (!entry) {
@@ -416,7 +416,7 @@ async function scanOneEpic(
       score: scored.score,
       reason: `${snap.current} · no entry`,
       mid: last.close,
-      skipped: 'no BO/TREND pullback',
+      skipped: 'no #136 regime setup',
     };
   }
 

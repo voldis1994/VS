@@ -1,14 +1,7 @@
 /** 10s OHLC + 14-regime entry — regime is the classifier; this picks the suitable setup. */
 import type { RegimeName } from './regimes.js';
 import { normalizeRegime } from './regimes.js';
-import {
-  BREAKOUT_BODY_PCT,
-  bodyPct,
-  isMoving10s,
-  isMovingBreakout10s,
-  rangePct,
-  type TenSecBar,
-} from './tenSecondOhlc.js';
+import { bodyPct, isMoving10s, rangePct, type TenSecBar } from './tenSecondOhlc.js';
 
 export type RegimeEntry = {
   direction: 'BUY' | 'SELL';
@@ -103,76 +96,6 @@ export function decideEntryFrom10sRegime(
     if (bp <= -0.00028) return { direction: 'BUY', setup: 'FADE', reason: `${r} fade dip · ${candle}` };
     if (bp >= 0.00028) return { direction: 'SELL', setup: 'FADE', reason: `${r} fade rally · ${candle}` };
     return null;
-  }
-
-  return null;
-}
-
-/**
- * Live entry = BREAKOUT_UP/DOWN + TREND pullbacks only (no mid-move chase follow).
- * Also accepts structural break from bar history when regime label lags.
- * Skips a signaling bar that already ran too far (~HardInv food).
- */
-/** ~3.4pt @ Gold 4500 — 10s signal bar already spent the move. */
-const LATE_SIGNAL_BODY_PCT = 0.00075;
-
-function signalBarTooLate(bar: TenSecBar): boolean {
-  return Math.abs(bodyPct(bar)) >= LATE_SIGNAL_BODY_PCT;
-}
-
-export function decideEntryBreakoutOnly(
-  bar: TenSecBar,
-  regime?: string | null,
-  histBars?: TenSecBar[] | null
-): RegimeEntry | null {
-  const r: RegimeName = normalizeRegime(regime);
-  const candle = describe(bar);
-
-  if (r === 'BREAKOUT_UP') {
-    if (!isMovingBreakout10s(bar) || bar.close < bar.open) return null;
-    if (signalBarTooLate(bar)) return null;
-    return { direction: 'BUY', setup: 'BREAKOUT', reason: `${r} follow · ${candle}` };
-  }
-  if (r === 'BREAKOUT_DOWN') {
-    if (!isMovingBreakout10s(bar) || bar.close > bar.open) return null;
-    if (signalBarTooLate(bar)) return null;
-    return { direction: 'SELL', setup: 'BREAKOUT', reason: `${r} follow · ${candle}` };
-  }
-
-  // TREND: only pullback entries — never chase a continuation candle mid-move
-  if (r === 'TREND_UP') {
-    if (!movingOrNull(bar) || !dip(bar)) return null;
-    return { direction: 'BUY', setup: 'PULLBACK', reason: `${r} dip-buy · ${candle}` };
-  }
-  if (r === 'TREND_DOWN') {
-    if (!movingOrNull(bar) || !rally(bar)) return null;
-    return { direction: 'SELL', setup: 'PULLBACK', reason: `${r} rally-sell · ${candle}` };
-  }
-
-  // Structural fallback: close beyond prior highs/lows (same idea as live BO classify)
-  const bars = histBars && histBars.length >= 4 ? histBars : null;
-  if (!bars || !isMovingBreakout10s(bar)) return null;
-  if (signalBarTooLate(bar)) return null;
-  const prior = bars.slice(0, -1).slice(-7);
-  if (prior.length < 3) return null;
-  const hi = Math.max(...prior.map((b) => b.high));
-  const lo = Math.min(...prior.map((b) => b.low));
-  const bp = bodyPct(bar);
-  const bodyAbs = Math.abs(bar.close - bar.open);
-  const strong = Math.abs(bp) >= BREAKOUT_BODY_PCT || bodyAbs >= 0.08;
-  if (bar.close > hi && bar.close > bar.open && strong && bp > 0) {
-    return {
-      direction: 'BUY',
-      setup: 'BREAKOUT',
-      reason: `STRUCT BO long · close>${hi.toFixed(2)} · ${candle}`,
-    };
-  }
-  if (bar.close < lo && bar.close < bar.open && strong && bp < 0) {
-    return {
-      direction: 'SELL',
-      setup: 'BREAKOUT',
-      reason: `STRUCT BO short · close<${lo.toFixed(2)} · ${candle}`,
-    };
   }
 
   return null;
