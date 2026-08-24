@@ -185,7 +185,7 @@ describe('classifyBreakoutLive (#150)', () => {
       bar(4621.9, 4622.8, 4621.7, 4622.6, 5),
     ];
     expect(classifyRegime(bars)).toBe('TREND_UP');
-    expect(toLiveRegime(classifyRegime(bars))).toBe('COMPRESSION');
+    expect(toLiveRegime(classifyRegime(bars))).toBe('TREND_UP');
     expect(classifyBreakoutLive(bars)).toBe('BREAKOUT_UP');
   });
 

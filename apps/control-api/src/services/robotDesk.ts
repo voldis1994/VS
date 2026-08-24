@@ -272,13 +272,13 @@ export function robotBoardMeta(sessions: RobotSession[]) {
   const contributing = sessions.reduce((n, s) => Math.max(n, s.feed_contributing || 0), 0);
   return {
     regimes: [...LIVE_REGIME_NAMES],
-    trade_types: ['BUY BREAKOUT', 'SELL BREAKOUT'],
+    trade_types: ['BUY BREAKOUT', 'SELL BREAKOUT', 'BUY TREND', 'SELL TREND'],
     active_regimes: activeRegimes,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'Capital OHLC → BREAKOUT_UP/DOWN only (other regimes OFF) → ENTRY/EXIT',
+    chain: 'Capital OHLC → BREAKOUT + TREND → ENTRY/EXIT',
     note:
-      'BO live detect (#150). Other regimes OFF. Entry = BREAKOUT_UP/DOWN (+ structural fallback).',
+      'Live: BREAKOUT_UP/DOWN + TREND_UP/DOWN + COMPRESSION. No UNKNOWN stall.',
   };
 }
 

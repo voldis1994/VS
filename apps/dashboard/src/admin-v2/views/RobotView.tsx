@@ -37,7 +37,7 @@ type BoardMeta = {
 };
 
 const ALL_REGIMES = [
-  'COMPRESSION', 'BREAKOUT_UP', 'BREAKOUT_DOWN',
+  'COMPRESSION', 'TREND_UP', 'TREND_DOWN', 'BREAKOUT_UP', 'BREAKOUT_DOWN',
 ] as const;
 
 function posture(s: RobotSession) {

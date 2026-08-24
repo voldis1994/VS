@@ -220,9 +220,11 @@ function ensureBook(epic: string, displayName?: string, scope?: string | null): 
   return b;
 }
 
-/** Live trading: COMPRESSION + BREAKOUT only. UNKNOWN is not a live stall state. */
+/** Live trading: breakout + trend + compression. UNKNOWN is never a live stall. */
 export const LIVE_REGIME_NAMES = [
   'COMPRESSION',
+  'TREND_UP',
+  'TREND_DOWN',
   'BREAKOUT_UP',
   'BREAKOUT_DOWN',
 ] as const;
@@ -230,17 +232,22 @@ export const LIVE_REGIME_NAMES = [
 export type LiveRegimeName = (typeof LIVE_REGIME_NAMES)[number];
 
 export function toLiveRegime(regime: RegimeName): RegimeName {
-  if (regime === 'BREAKOUT_UP' || regime === 'BREAKOUT_DOWN' || regime === 'COMPRESSION') {
+  if (
+    regime === 'BREAKOUT_UP' ||
+    regime === 'BREAKOUT_DOWN' ||
+    regime === 'TREND_UP' ||
+    regime === 'TREND_DOWN' ||
+    regime === 'COMPRESSION'
+  ) {
     return regime;
   }
-  // Never surface UNKNOWN as a live regime — it froze robots in WAIT forever
+  // Never surface UNKNOWN — it froze robots in WAIT forever
   return 'COMPRESSION';
 }
 
 /**
- * Live BO detector — does NOT require "expanding vs avg" (that forced TREND→UNKNOWN
- * and made breakout-only mode never fire on real Gold climbs).
- * No UNKNOWN output once we have bars: quiet = COMPRESSION.
+ * Live classifier: BREAKOUT first, then TREND, else COMPRESSION.
+ * No UNKNOWN output once we have bars.
  */
 export function classifyBreakoutLive(
   bars: TenSecBar[],
@@ -259,33 +266,32 @@ export function classifyBreakoutLive(
   const rng = rangePct(last);
   const mid = Math.max(Math.abs(last.close), 1e-9);
   const boxRng = (hi - lo) / mid;
-  // Gold 10s: ~0.08pt body is already a real push (was 0.15 — missed climbs)
+  // Gold 10s: ~0.08pt body is already a real push
   const strongEnough = Math.abs(bp) >= BREAKOUT_BODY_PCT || bodyAbs >= 0.08;
+
+  const velocities = window.map(bodyPct);
+  const persistence = mean(
+    velocities.slice(-6).map((v) => (v > 0.00008 ? 1 : v < -0.00008 ? -1 : 0))
+  );
+  const trendingUp = persistence > 0.35 && bp > 0.00005;
+  const trendingDown = persistence < -0.35 && bp < -0.00005;
 
   // Quiet inside prior box
   if (rng < 0.00018 && last.close <= hi && last.close >= lo && boxRng < 0.00055) {
     return 'COMPRESSION';
   }
 
-  // Break above prior highs with green body (Gold-scale body gate)
+  // Breakout above/below prior box
   if (last.close > hi && last.close > last.open && strongEnough && bp > 0) {
     return 'BREAKOUT_UP';
   }
-  // Break below prior lows with red body
   if (last.close < lo && last.close < last.open && strongEnough && bp < 0) {
     return 'BREAKOUT_DOWN';
   }
 
-  // Soft: close beyond mid of prior box with direction — catch climbs that expand the box
-  const priorMid = (hi + lo) / 2;
-  if (last.close > priorMid && last.close > last.open && strongEnough && bodyAbs >= 0.25) {
-    const climb = (last.close - lo) / mid;
-    if (climb >= 0.00035) return 'BREAKOUT_UP';
-  }
-  if (last.close < priorMid && last.close < last.open && strongEnough && bodyAbs >= 0.25) {
-    const drop = (hi - last.close) / mid;
-    if (drop >= 0.00035) return 'BREAKOUT_DOWN';
-  }
+  // Trend while price advances without a clean box break
+  if (trendingUp) return 'TREND_UP';
+  if (trendingDown) return 'TREND_DOWN';
 
   return 'COMPRESSION';
 }

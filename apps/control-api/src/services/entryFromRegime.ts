@@ -109,7 +109,7 @@ export function decideEntryFrom10sRegime(
 }
 
 /**
- * Live entry = BREAKOUT_UP / BREAKOUT_DOWN only.
+ * Live entry = BREAKOUT_UP/DOWN + TREND_UP/DOWN.
  * Also accepts structural break from bar history when regime label lags.
  */
 export function decideEntryBreakoutOnly(
@@ -127,6 +127,23 @@ export function decideEntryBreakoutOnly(
   if (r === 'BREAKOUT_DOWN') {
     if (!isMovingBreakout10s(bar) || bar.close > bar.open) return null;
     return { direction: 'SELL', setup: 'BREAKOUT', reason: `${r} follow · ${candle}` };
+  }
+
+  if (r === 'TREND_UP') {
+    if (!movingOrNull(bar)) return null;
+    if (dip(bar)) return { direction: 'BUY', setup: 'PULLBACK', reason: `${r} dip-buy · ${candle}` };
+    if (rally(bar) && isMovingBreakout10s(bar)) {
+      return { direction: 'BUY', setup: 'CONTINUATION', reason: `${r} follow · ${candle}` };
+    }
+    return null;
+  }
+  if (r === 'TREND_DOWN') {
+    if (!movingOrNull(bar)) return null;
+    if (rally(bar)) return { direction: 'SELL', setup: 'PULLBACK', reason: `${r} rally-sell · ${candle}` };
+    if (dip(bar) && isMovingBreakout10s(bar)) {
+      return { direction: 'SELL', setup: 'CONTINUATION', reason: `${r} follow · ${candle}` };
+    }
+    return null;
   }
 
   // Structural fallback: close beyond prior highs/lows (same idea as live BO classify)

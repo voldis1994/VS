@@ -71,16 +71,21 @@ describe('10s + 14-regime suitable entry', () => {
   });
 });
 
-describe('breakout-only entry (#146/#149/#150)', () => {
-  it('arms only on BREAKOUT_UP/DOWN', () => {
+describe('breakout + trend entry', () => {
+  it('arms on BREAKOUT_UP/DOWN', () => {
     expect(decideEntryBreakoutOnly(rally, 'BREAKOUT_UP')?.direction).toBe('BUY');
     expect(decideEntryBreakoutOnly(dip, 'BREAKOUT_DOWN')?.direction).toBe('SELL');
   });
 
-  it('ignores EXPANSION / pullback / fade / trend / range', () => {
+  it('arms on TREND_UP dip and TREND_DOWN rally', () => {
+    expect(decideEntryBreakoutOnly(dip, 'TREND_UP')?.direction).toBe('BUY');
+    expect(decideEntryBreakoutOnly(dip, 'TREND_UP')?.setup).toBe('PULLBACK');
+    expect(decideEntryBreakoutOnly(rally, 'TREND_DOWN')?.direction).toBe('SELL');
+    expect(decideEntryBreakoutOnly(rally, 'TREND_DOWN')?.setup).toBe('PULLBACK');
+  });
+
+  it('ignores EXPANSION / range / failed / reversal (not live)', () => {
     expect(decideEntryBreakoutOnly(rally, 'EXPANSION')).toBeNull();
-    expect(decideEntryBreakoutOnly(dip, 'TREND_UP')).toBeNull();
-    expect(decideEntryBreakoutOnly(rally, 'TREND_DOWN')).toBeNull();
     expect(decideEntryBreakoutOnly(dip, 'RANGE')).toBeNull();
     expect(decideEntryBreakoutOnly(dip, 'FAILED_BREAKOUT_UP')).toBeNull();
     expect(decideEntryBreakoutOnly(rally, 'REVERSAL_CANDIDATE')).toBeNull();
@@ -94,8 +99,8 @@ describe('breakout-only entry (#146/#149/#150)', () => {
       { open_time_ms: 30_000, open: 4620.9, high: 4622.2, low: 4620.8, close: 4622.0, ticks: 10 },
     ];
     const last = hist[hist.length - 1]!;
-    expect(decideEntryBreakoutOnly(last, 'UNKNOWN', hist)?.direction).toBe('BUY');
-    expect(decideEntryBreakoutOnly(last, 'UNKNOWN', hist)?.reason).toMatch(/STRUCT BO long/);
+    expect(decideEntryBreakoutOnly(last, 'COMPRESSION', hist)?.direction).toBe('BUY');
+    expect(decideEntryBreakoutOnly(last, 'COMPRESSION', hist)?.reason).toMatch(/STRUCT BO long/);
   });
 
   it('arms Gold-scale BREAKOUT_UP body under classic 0.015% gate', () => {
