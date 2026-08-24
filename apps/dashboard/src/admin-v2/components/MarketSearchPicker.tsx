@@ -23,7 +23,7 @@ export function MarketSearchPicker({
     [markets, value],
   );
 
-  const filtered = useMemo(() => filterMarkets(markets, query, 80), [markets, query]);
+  const filtered = useMemo(() => filterMarkets(markets, query, 40), [markets, query]);
 
   useEffect(() => {
     if (!open) return;
@@ -71,34 +71,41 @@ export function MarketSearchPicker({
           if (e.key === 'Escape') setOpen(false);
         }}
       />
-      {open && filtered.length > 0 && (
-        <ul className="cmd-market-picker-list" role="listbox">
-          {filtered.map((m) => {
-            const epic = marketKey(m);
-            const on = epic === value;
-            return (
-              <li key={`${m.instrument_id ?? epic}`}>
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected={on}
-                  className={`cmd-market-picker-item ${on ? 'on' : ''}`}
-                  onClick={() => pick(m)}
-                >
-                  <span className="cmd-market-picker-name">{m.display_name}</span>
-                  <span className="cmd-market-picker-epic mono">{epic}</span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      {open && query.trim() && filtered.length === 0 && (
-        <div className="cmd-market-picker-empty mono">Nav rezultātu — mēģini &quot;gold&quot;, &quot;xau&quot;</div>
-      )}
-      {markets.length > 0 && (
-        <div className="cmd-market-picker-meta mono">
-          {markets.length.toLocaleString()} tirgi · rāda līdz 80
+      {open && (
+        <div className="cmd-market-picker-panel" role="listbox">
+          {filtered.length > 0 ? (
+            <ul className="cmd-market-picker-list">
+              {filtered.map((m) => {
+                const epic = marketKey(m);
+                const on = epic === value;
+                return (
+                  <li key={`${m.instrument_id ?? epic}`}>
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={on}
+                      className={`cmd-market-picker-item ${on ? 'on' : ''}`}
+                      onClick={() => pick(m)}
+                    >
+                      <span className="cmd-market-picker-name">{m.display_name}</span>
+                      <span className="cmd-market-picker-epic mono">{epic}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : query.trim() ? (
+            <div className="cmd-market-picker-empty mono">
+              Nav rezultātu — mēģini &quot;gold&quot;, &quot;xau&quot;
+            </div>
+          ) : (
+            <div className="cmd-market-picker-empty mono">Sāc rakstīt — gold, XAU, epic…</div>
+          )}
+          {markets.length > 0 && (
+            <div className="cmd-market-picker-meta mono">
+              {filtered.length} / {markets.length.toLocaleString()} · Enter = pirmais
+            </div>
+          )}
         </div>
       )}
     </div>

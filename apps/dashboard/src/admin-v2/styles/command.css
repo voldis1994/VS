@@ -445,9 +445,14 @@ body {
 /* Robot board */
 .cmd-robot-stage {
   display: grid;
-  grid-template-columns: 1fr minmax(260px, 320px) minmax(120px, 160px);
+  grid-template-columns: 1fr minmax(260px, 320px);
   gap: 1rem;
-  min-height: 420px;
+  min-height: 280px;
+}
+
+.cmd-robot-stage.no-focus,
+.cmd-robot-stage.empty {
+  grid-template-columns: 1fr;
 }
 
 .cmd-unit-grid {
@@ -455,6 +460,7 @@ body {
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 0.65rem;
   align-content: start;
+  min-width: 0;
 }
 
 .cmd-unit {
@@ -579,12 +585,7 @@ body {
 }
 
 .cmd-emblem {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  opacity: 0.35;
+  display: none;
 }
 
 .cmd-emblem-ring {
@@ -648,8 +649,29 @@ body {
   color: var(--cmd-muted);
 }
 
+.cmd-empty--board {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  grid-column: 1 / -1;
+  padding: 2.5rem 1rem;
+  border: 1px dashed var(--cmd-line);
+  border-radius: var(--cmd-radius);
+  background: rgba(6, 12, 20, 0.45);
+}
+
 .cmd-deploy {
   margin-bottom: 1rem;
+  position: relative;
+  z-index: 20;
+  overflow: visible;
+}
+
+.cmd-deploy-hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.68rem;
+  color: var(--cmd-muted);
 }
 
 .cmd-deploy-row {
@@ -657,6 +679,7 @@ body {
   flex-wrap: wrap;
   gap: 0.5rem;
   margin-top: 0.5rem;
+  align-items: flex-start;
 }
 
 .cmd-deploy-row .cmd-select,
@@ -668,30 +691,35 @@ body {
 
 .cmd-market-picker {
   position: relative;
-  flex: 1 1 260px;
-  min-width: 200px;
-  max-width: 420px;
+  flex: 1 1 100%;
+  min-width: 220px;
+  max-width: none;
+}
+
+.cmd-market-picker.open {
+  z-index: 30;
 }
 
 .cmd-market-picker-input {
   width: 100%;
 }
 
-.cmd-market-picker-list {
-  position: absolute;
-  z-index: 40;
-  left: 0;
-  right: 0;
-  top: calc(100% + 4px);
-  margin: 0;
-  padding: 0.35rem;
-  list-style: none;
-  max-height: 280px;
-  overflow-y: auto;
+/* In-flow results — never cover regimes / unit list under an absolute overlay */
+.cmd-market-picker-panel {
+  margin-top: 0.45rem;
+  width: 100%;
   border-radius: 12px;
   border: 1px solid var(--cmd-line);
   background: rgba(8, 12, 18, 0.98);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+}
+
+.cmd-market-picker-list {
+  margin: 0;
+  padding: 0.35rem;
+  list-style: none;
+  max-height: 240px;
+  overflow-y: auto;
 }
 
 .cmd-market-picker-item {
@@ -725,23 +753,16 @@ body {
 }
 
 .cmd-market-picker-empty {
-  position: absolute;
-  z-index: 40;
-  left: 0;
-  right: 0;
-  top: calc(100% + 4px);
-  padding: 0.65rem;
-  border-radius: 10px;
-  border: 1px solid var(--cmd-line);
-  background: rgba(8, 12, 18, 0.98);
+  padding: 0.75rem 0.85rem;
   font-size: 0.72rem;
   color: var(--cmd-muted);
 }
 
 .cmd-market-picker-meta {
-  margin-top: 0.25rem;
+  padding: 0.35rem 0.75rem 0.55rem;
   font-size: 0.58rem;
   color: var(--cmd-muted);
+  border-top: 1px solid rgba(72, 196, 255, 0.12);
 }
 
 .pos {

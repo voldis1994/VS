@@ -255,6 +255,7 @@ export function RobotView() {
       {showDeploy && (
         <section className="cmd-panel cmd-deploy">
           <div className="cmd-section-title">Deploy robot</div>
+          <p className="cmd-deploy-hint mono">Izvēlies kontu → meklē GOLD / XAU → lot → Deploy</p>
           <div className="cmd-deploy-row">
             <select
               className="cmd-select"
@@ -276,7 +277,13 @@ export function RobotView() {
                 if (m) setLaunchLot(String(m.lot_size || m.min_lot || 0.1));
               }}
             />
-            <input className="cmd-input" style={{ maxWidth: 80 }} value={launchLot} onChange={(e) => setLaunchLot(e.target.value)} />
+            <input
+              className="cmd-input"
+              style={{ maxWidth: 80 }}
+              value={launchLot}
+              onChange={(e) => setLaunchLot(e.target.value)}
+              aria-label="Lot size"
+            />
             <button className="cmd-btn cmd-btn--go" type="button" disabled={busy} onClick={deploy}>
               Deploy
             </button>
@@ -284,27 +291,36 @@ export function RobotView() {
         </section>
       )}
 
-      <section className="cmd-panel" style={{ marginBottom: '1rem' }}>
-        <div className="cmd-section-title">Regimes</div>
-        <div className="cmd-chip-row">
-          {regimes.map((r) => {
-            const name = r.toUpperCase();
-            const live = activeRegimes.has(name);
-            const focusHit = (focused?.regime || '').toUpperCase() === name;
-            return (
-              <span key={name} className={`cmd-chip ${live ? 'live' : ''} ${focusHit ? 'focus' : ''}`}>
-                {name}
-              </span>
-            );
-          })}
-        </div>
-      </section>
+      {!showDeploy && (
+        <section className="cmd-panel" style={{ marginBottom: '1rem' }}>
+          <div className="cmd-section-title">Regimes</div>
+          <div className="cmd-chip-row">
+            {regimes.map((r) => {
+              const name = r.toUpperCase();
+              const live = activeRegimes.has(name);
+              const focusHit = (focused?.regime || '').toUpperCase() === name;
+              return (
+                <span key={name} className={`cmd-chip ${live ? 'live' : ''} ${focusHit ? 'focus' : ''}`}>
+                  {name}
+                </span>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
-      <div className="cmd-robot-stage">
+      <div className={`cmd-robot-stage ${focused ? 'has-focus' : 'no-focus'} ${sessions.length === 0 ? 'empty' : ''}`}>
         <div className="cmd-unit-grid">
           {sessions.length === 0 && !busy && (
-            <div className="cmd-empty">
-              <p>Nav robotu. Spied + Deploy.</p>
+            <div className="cmd-empty cmd-empty--board">
+              <p>Nav robotu.</p>
+              <button
+                className="cmd-btn cmd-btn--primary"
+                type="button"
+                onClick={() => setShowDeploy(true)}
+              >
+                + Deploy
+              </button>
             </div>
           )}
           {sessions.map((s) => {
@@ -335,43 +351,32 @@ export function RobotView() {
           })}
         </div>
 
-        <section className="cmd-panel cmd-focus">
-          {focused ? (
-            <>
-              <div className="cmd-kicker">Focus unit</div>
-              <div className="cmd-focus-name">
-                {(focused.client_name || focused.account_name).toUpperCase()} · {focused.display_name}
-              </div>
-              <div className={`cmd-unit-posture ${posture(focused).kind}`}>{posture(focused).label}</div>
-              <div className="cmd-page-actions">
-                <button className="cmd-btn cmd-btn--go" type="button" disabled={busy || focused.running} onClick={() => void startOne(focused)}>
-                  Start
-                </button>
-                <button className="cmd-btn cmd-btn--stop" type="button" disabled={busy || !focused.running} onClick={() => void stopOne(focused)}>
-                  Stop
-                </button>
-              </div>
-              <div className="cmd-focus-metrics mono">
-                <div><span>MID</span><strong>{fmtNum(focused.last_mid)}</strong></div>
-                <div><span>10s</span><strong>{focused.ohlc_10s?.market || 'SEEDING'}</strong></div>
-                <div><span>FEEDS</span><strong>{focused.feed_contributing ?? 0}/{focused.feed_sender_count ?? 0}</strong></div>
-                <div><span>SL</span><strong>{fmtNum(focused.safety_sl)}</strong></div>
-                <div><span>UPL</span><strong className={(focused.unrealized || 0) >= 0 ? 'pos' : 'neg'}>{fmtNum(focused.unrealized)}</strong></div>
-                <div><span>LOT</span><strong>{focused.lot_size}</strong></div>
-              </div>
-              <div className="cmd-focus-log mono">{lastLog(focused)}</div>
-            </>
-          ) : (
-            <div className="cmd-empty">Select or deploy a unit</div>
-          )}
-        </section>
-
-        <div className="cmd-emblem" aria-hidden>
-          <div className="cmd-emblem-ring" />
-          <div className="mono" style={{ fontSize: '0.55rem', letterSpacing: '0.2em' }}>
-            PRECISION · CONTROL
-          </div>
-        </div>
+        {focused && (
+          <section className="cmd-panel cmd-focus">
+            <div className="cmd-kicker">Focus unit</div>
+            <div className="cmd-focus-name">
+              {(focused.client_name || focused.account_name).toUpperCase()} · {focused.display_name}
+            </div>
+            <div className={`cmd-unit-posture ${posture(focused).kind}`}>{posture(focused).label}</div>
+            <div className="cmd-page-actions">
+              <button className="cmd-btn cmd-btn--go" type="button" disabled={busy || focused.running} onClick={() => void startOne(focused)}>
+                Start
+              </button>
+              <button className="cmd-btn cmd-btn--stop" type="button" disabled={busy || !focused.running} onClick={() => void stopOne(focused)}>
+                Stop
+              </button>
+            </div>
+            <div className="cmd-focus-metrics mono">
+              <div><span>MID</span><strong>{fmtNum(focused.last_mid)}</strong></div>
+              <div><span>10s</span><strong>{focused.ohlc_10s?.market || 'SEEDING'}</strong></div>
+              <div><span>FEEDS</span><strong>{focused.feed_contributing ?? 0}/{focused.feed_sender_count ?? 0}</strong></div>
+              <div><span>SL</span><strong>{fmtNum(focused.safety_sl)}</strong></div>
+              <div><span>UPL</span><strong className={(focused.unrealized || 0) >= 0 ? 'pos' : 'neg'}>{fmtNum(focused.unrealized)}</strong></div>
+              <div><span>LOT</span><strong>{focused.lot_size}</strong></div>
+            </div>
+            <div className="cmd-focus-log mono">{lastLog(focused)}</div>
+          </section>
+        )}
       </div>
     </div>
   );
