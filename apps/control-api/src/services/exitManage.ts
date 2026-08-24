@@ -40,6 +40,15 @@ export function thesisFailureReason(
  * Soft exits (thesis / peak / harvest / time) ONLY when still green.
  * HardInvalidation closes via robot BEFORE Capital SL can fire.
  */
+export function hardInvalidationDistance(entry: number): number {
+  const abs = Math.max(Math.abs(entry), 1e-9);
+  // Gold-scale: fixed ≈3pt cut — was ~0.32% (~15pt) and bled too long
+  if (abs >= 1000) return 3;
+  if (abs >= 100) return Math.max(abs * 0.00065, 0.35);
+  if (abs >= 10) return Math.max(abs * 0.00065, 0.05);
+  return Math.max(abs * 0.00065, 0.0005);
+}
+
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
   mid: number
@@ -51,8 +60,7 @@ export function decideBestOutcomeExit(
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   // TP ≈ 0.28% — take Best Outcome earlier than waiting for Capital SL noise
   const tp = Math.max(absEntry * 0.0028, 0.28);
-  // HardInvalidation ≈ 0.32% — robot closes BEFORE broker SAFETY SL (~0.50%)
-  const sl = Math.max(absEntry * 0.0032, 0.32);
+  const sl = hardInvalidationDistance(entry);
   // Arm peak/harvest from ≈1.4pt on Gold ~4600
   const mfeFloor = Math.max(absEntry * 0.0003, 0.08);
   // Min green to soft-exit (~0.18pt Gold)
@@ -123,7 +131,7 @@ export function describeBestOutcomeState(
   const entry = s.entry_price;
   const fav = favorableMove(s.open_side, entry, mid);
   const absEntry = Math.max(Math.abs(entry), 1e-9);
-  const sl = Math.max(absEntry * 0.0032, 0.32);
+  const sl = hardInvalidationDistance(entry);
   const minGreen = Math.max(absEntry * 0.00004, 0.1);
   const mfeFloor = Math.max(absEntry * 0.0003, 0.08);
   const ret =

@@ -108,16 +108,29 @@ describe('decideBestOutcomeExit', () => {
     expect(buy.exit).toBe(false);
   });
 
-  it('hard invalidation on ~0.32% adverse (before broker SAFETY SL ~0.50%)', () => {
-    const d = decideBestOutcomeExit(snap({ open_side: 'BUY', entry_price: 2000, regime: 'RANGE' }), 1993);
+  it('hard invalidation at ≈3pt adverse on Gold-scale (not ~15pt)', () => {
+    // entry 4638 → HI @ −3 → mid 4635
+    const d = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: 4638, regime: 'RANGE' }),
+      4635
+    );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/HardInvalidation/);
   });
 
-  it('does not hard-invalidate at old 0.22% (room for Best Outcome)', () => {
-    // 2000 * 0.0022 = 4.4 — was old HI; must HOLD so Capital SL is not the only exit path
-    const d = decideBestOutcomeExit(snap({ open_side: 'BUY', entry_price: 2000, regime: 'RANGE' }), 1995.5);
+  it('holds small red under 3pt HardInv (room for Best Outcome green)', () => {
+    // −1.29 style noise must NOT cut
+    const d = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: 4638, regime: 'RANGE' }),
+      4636.5
+    );
     expect(d.exit).toBe(false);
+  });
+
+  it('still hard-invalidates deep adverse on mid-price instruments', () => {
+    const d = decideBestOutcomeExit(snap({ open_side: 'BUY', entry_price: 2000, regime: 'RANGE' }), 1993);
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/HardInvalidation/);
   });
 
   it('peak protection after meaningful MFE giveback', () => {
