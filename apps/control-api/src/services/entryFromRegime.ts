@@ -138,7 +138,7 @@ export function decideEntryBreakoutOnly(
   const lo = Math.min(...prior.map((b) => b.low));
   const bp = bodyPct(bar);
   const bodyAbs = Math.abs(bar.close - bar.open);
-  const strong = Math.abs(bp) >= BREAKOUT_BODY_PCT || bodyAbs >= 0.15;
+  const strong = Math.abs(bp) >= BREAKOUT_BODY_PCT || bodyAbs >= 0.08;
   if (bar.close > hi && bar.close > bar.open && strong && bp > 0) {
     return {
       direction: 'BUY',

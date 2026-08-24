@@ -185,7 +185,7 @@ describe('classifyBreakoutLive (#150)', () => {
       bar(4621.9, 4622.8, 4621.7, 4622.6, 5),
     ];
     expect(classifyRegime(bars)).toBe('TREND_UP');
-    expect(toLiveRegime(classifyRegime(bars))).toBe('UNKNOWN');
+    expect(toLiveRegime(classifyRegime(bars))).toBe('COMPRESSION');
     expect(classifyBreakoutLive(bars)).toBe('BREAKOUT_UP');
   });
 
@@ -200,14 +200,14 @@ describe('classifyBreakoutLive (#150)', () => {
     expect(classifyBreakoutLive(bars)).toBe('BREAKOUT_DOWN');
   });
 
-  it('stays UNKNOWN when close does not leave the prior box', () => {
+  it('stays COMPRESSION when close does not leave the prior box (no UNKNOWN stall)', () => {
     const bars = [
       bar(4620.0, 4621.5, 4619.0, 4620.5, 0),
       bar(4620.5, 4621.2, 4619.5, 4620.2, 1),
       bar(4620.2, 4621.0, 4619.8, 4620.6, 2),
       bar(4620.6, 4621.1, 4619.9, 4620.4, 3),
     ];
-    expect(classifyBreakoutLive(bars)).toBe('UNKNOWN');
+    expect(classifyBreakoutLive(bars)).toBe('COMPRESSION');
   });
 });
 

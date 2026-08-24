@@ -205,8 +205,8 @@ function ensureBook(epic: string, displayName?: string, scope?: string | null): 
     const now = new Date().toISOString();
     b = {
       bars: [],
-      current: 'UNKNOWN',
-      previous: 'UNKNOWN',
+      current: 'COMPRESSION',
+      previous: 'COMPRESSION',
       confidence: 0,
       since: now,
       display_name: displayName || epic,
@@ -220,9 +220,8 @@ function ensureBook(epic: string, displayName?: string, scope?: string | null): 
   return b;
 }
 
-/** Live trading: only these regimes exist. Everything else is OFF → UNKNOWN. */
+/** Live trading: COMPRESSION + BREAKOUT only. UNKNOWN is not a live stall state. */
 export const LIVE_REGIME_NAMES = [
-  'UNKNOWN',
   'COMPRESSION',
   'BREAKOUT_UP',
   'BREAKOUT_DOWN',
@@ -231,30 +230,27 @@ export const LIVE_REGIME_NAMES = [
 export type LiveRegimeName = (typeof LIVE_REGIME_NAMES)[number];
 
 export function toLiveRegime(regime: RegimeName): RegimeName {
-  if (
-    regime === 'BREAKOUT_UP' ||
-    regime === 'BREAKOUT_DOWN' ||
-    regime === 'COMPRESSION' ||
-    regime === 'UNKNOWN'
-  ) {
+  if (regime === 'BREAKOUT_UP' || regime === 'BREAKOUT_DOWN' || regime === 'COMPRESSION') {
     return regime;
   }
-  return 'UNKNOWN';
+  // Never surface UNKNOWN as a live regime — it froze robots in WAIT forever
+  return 'COMPRESSION';
 }
 
 /**
  * Live BO detector — does NOT require "expanding vs avg" (that forced TREND→UNKNOWN
  * and made breakout-only mode never fire on real Gold climbs).
+ * No UNKNOWN output once we have bars: quiet = COMPRESSION.
  */
 export function classifyBreakoutLive(
   bars: TenSecBar[],
-  _previous: RegimeName = 'UNKNOWN'
+  _previous: RegimeName = 'COMPRESSION'
 ): RegimeName {
-  if (!bars.length || bars.length < 4) return 'UNKNOWN';
+  if (!bars.length || bars.length < 4) return 'COMPRESSION';
   const window = bars.slice(-8);
   const last = window[window.length - 1]!;
   const prior = window.slice(0, -1);
-  if (prior.length < 3) return 'UNKNOWN';
+  if (prior.length < 3) return 'COMPRESSION';
 
   const hi = Math.max(...prior.map((b) => b.high));
   const lo = Math.min(...prior.map((b) => b.low));
@@ -263,7 +259,8 @@ export function classifyBreakoutLive(
   const rng = rangePct(last);
   const mid = Math.max(Math.abs(last.close), 1e-9);
   const boxRng = (hi - lo) / mid;
-  const strongEnough = Math.abs(bp) >= BREAKOUT_BODY_PCT || bodyAbs >= 0.15;
+  // Gold 10s: ~0.08pt body is already a real push (was 0.15 — missed climbs)
+  const strongEnough = Math.abs(bp) >= BREAKOUT_BODY_PCT || bodyAbs >= 0.08;
 
   // Quiet inside prior box
   if (rng < 0.00018 && last.close <= hi && last.close >= lo && boxRng < 0.00055) {
@@ -279,7 +276,18 @@ export function classifyBreakoutLive(
     return 'BREAKOUT_DOWN';
   }
 
-  return 'UNKNOWN';
+  // Soft: close beyond mid of prior box with direction — catch climbs that expand the box
+  const priorMid = (hi + lo) / 2;
+  if (last.close > priorMid && last.close > last.open && strongEnough && bodyAbs >= 0.25) {
+    const climb = (last.close - lo) / mid;
+    if (climb >= 0.00035) return 'BREAKOUT_UP';
+  }
+  if (last.close < priorMid && last.close < last.open && strongEnough && bodyAbs >= 0.25) {
+    const drop = (hi - last.close) / mid;
+    if (drop >= 0.00035) return 'BREAKOUT_DOWN';
+  }
+
+  return 'COMPRESSION';
 }
 
 function applyClassify(epic: string, b: Book): RegimeSnapshot {

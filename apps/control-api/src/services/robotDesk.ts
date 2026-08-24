@@ -32,7 +32,11 @@ import {
 } from './regimes.js';
 import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove } from './exitManage.js';
 import { decideEntryBreakoutOnly } from './entryFromRegime.js';
-import { resolvePostExitCooldownMs } from './quietImpulseEntry.js';
+import {
+  decideEntryFromBoxBreak,
+  decideEntryFromQuietImpulse,
+  resolvePostExitCooldownMs,
+} from './quietImpulseEntry.js';
 import {
   allowEntryFromFeeds,
   capitalOhlcMid,
@@ -251,7 +255,7 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
   return {
     feeds,
     ohlc: ohlcLine,
-    regime: s.regime || 'UNKNOWN',
+    regime: s.regime || 'COMPRESSION',
     setup: null,
     action,
   };
@@ -259,7 +263,7 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
 
 export function robotBoardMeta(sessions: RobotSession[]) {
   const activeRegimes = [
-    ...new Set(sessions.filter((s) => s.running).map((s) => s.regime || 'UNKNOWN')),
+    ...new Set(sessions.filter((s) => s.running).map((s) => s.regime || 'COMPRESSION')),
   ];
   const maxFeeds = sessions.reduce(
     (n, s) => Math.max(n, s.feed_sender_count || 0, s.feed_legs?.length || 0),
@@ -1063,8 +1067,29 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // Open trade: fast poll so every client can HardInv/BO in the same second
+    // Restore / manage cadence
     setRobotCadence(s, s.open_side ? MANAGE_CADENCE_MS : ACTIVE_CADENCE_MS);
+
+    // Always seed 10s from Capital SECOND when empty — do not sit SEEDING/UNKNOWN forever
+    const seedingEarly = !s.ohlcState.last_closed || s.ohlc_10s.market === 'SEEDING';
+    if (seedingEarly && Date.now() - s.last_second_fetch_ms >= 3_000) {
+      s.last_second_fetch_ms = Date.now();
+      const sec = await fetchCapitalPrices(session, s.epic, 'SECOND', 40);
+      if (sec.ok && sec.candles.length >= 10) {
+        const bars = aggregateSecondsToTen(sec.candles);
+        const last = bars[bars.length - 1];
+        if (last) {
+          s.ohlcState = {
+            forming: s.ohlcState.forming,
+            last_closed: last,
+            just_closed: true,
+          };
+          s.last_closed_bar_key = `${last.open.toFixed(4)}:${last.close.toFixed(4)}:${last.high.toFixed(4)}`;
+          s.ohlc_10s = publicOhlc10s(s.ohlcState);
+          applyRobotRegime(s, bars);
+        }
+      }
+    }
 
     // Sync truth from broker — source of ONE TRADE ONLY
     const listed = await listCapitalOpenPositions(session);
@@ -1185,9 +1210,12 @@ async function robotCycle(s: Internal) {
 
     if (quote.mid == null) return;
 
-    // Seed from this account's SECOND candles only when multi-provider OHLC is NOT in charge.
-    // Otherwise a single Capital row would overwrite consensus bars used for regime/entry.
-    if (!multiFeedOwnsOhlc(s.multiFeed) && Date.now() - s.last_second_fetch_ms >= 8_000) {
+    // Seed 10s OHLC fast when SEEDING — never sit forever in UNKNOWN/empty bars
+    const seeding = !s.ohlcState.last_closed || s.ohlc_10s.market === 'SEEDING';
+    if (
+      (seeding || !multiFeedOwnsOhlc(s.multiFeed)) &&
+      Date.now() - s.last_second_fetch_ms >= (seeding ? 3_000 : 8_000)
+    ) {
       s.last_second_fetch_ms = Date.now();
       const sec = await fetchCapitalPrices(session, s.epic, 'SECOND', 40);
       if (sec.ok && sec.candles.length >= 10) {
@@ -1234,8 +1262,11 @@ async function robotCycle(s: Internal) {
     let setupType: string | null = null;
 
     if (s.ohlcState.just_closed && bar) {
-      // HARD: entry ONLY on BREAKOUT_UP / BREAKOUT_DOWN (+ structural hist fallback)
-      const sig = decideEntryBreakoutOnly(bar, s.regime, s.closedBars);
+      // BREAKOUT label OR structural / box / quiet-impulse — never stall on UNKNOWN
+      const sig =
+        decideEntryBreakoutOnly(bar, s.regime, s.closedBars) ||
+        decideEntryFromBoxBreak(s.closedBars) ||
+        decideEntryFromQuietImpulse(s.closedBars);
       if (sig) {
         direction = sig.direction;
         setupType = sig.setup;
@@ -1246,7 +1277,7 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${ohlcLine} · BREAKOUT-ONLY · ${s.regime} · wait BREAKOUT_UP/DOWN`,
+          detail: `${ohlcLine} · ${s.regime} · no BO/box/impulse yet`,
         });
       }
     } else {
@@ -1455,7 +1486,7 @@ export async function startRobotSession(input: {
     feed_contributing: 0,
     feed_sender_count: 0,
     feed_agreement: null,
-    regime: 'UNKNOWN',
+    regime: 'COMPRESSION',
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
 

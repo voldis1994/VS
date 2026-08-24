@@ -37,14 +37,18 @@ type BoardMeta = {
 };
 
 const ALL_REGIMES = [
-  'UNKNOWN', 'RANGE', 'TREND_UP', 'TREND_DOWN', 'BREAKOUT_UP', 'BREAKOUT_DOWN',
-  'COMPRESSION', 'EXPANSION', 'TRANSITION',
+  'COMPRESSION', 'BREAKOUT_UP', 'BREAKOUT_DOWN',
 ] as const;
 
 function posture(s: RobotSession) {
   if (!s.running && !s.open_side) return { label: 'STOPPED', kind: 'flat' as const };
   if (s.open_side) return { label: s.open_side, kind: 'long' as const };
-  if (s.running) return { label: `WAIT · ${(s.regime || 'UNKNOWN').toUpperCase()}`, kind: 'entry' as const };
+  if (s.running) {
+    if (s.ohlc_10s?.market === 'SEEDING') return { label: 'SEEDING · OHLC', kind: 'entry' as const };
+    const r = String(s.regime || 'COMPRESSION').toUpperCase();
+    if (r === 'UNKNOWN') return { label: 'WAIT · COMPRESSION', kind: 'entry' as const };
+    return { label: `WAIT · ${r}`, kind: 'entry' as const };
+  }
   return { label: 'FLAT', kind: 'flat' as const };
 }
 
@@ -158,7 +162,7 @@ export function RobotView() {
   const activeRegimes = new Set(
     (board?.active_regimes?.length
       ? board.active_regimes
-      : sessions.filter((s) => s.running).map((s) => s.regime || 'UNKNOWN')
+      : sessions.filter((s) => s.running).map((s) => s.regime || 'COMPRESSION')
     ).map((r) => r.toUpperCase()),
   );
 
