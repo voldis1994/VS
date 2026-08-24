@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decideEntryFrom10sRegime, decideEntryBreakoutOnly } from './entryFromRegime.js';
+import { decideEntryFrom10sRegime } from './entryFromRegime.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 
 function bar(open: number, close: number): TenSecBar {
@@ -10,9 +10,6 @@ function bar(open: number, close: number): TenSecBar {
 
 const dip = bar(2000, 1996); // ~0.2% down — moving
 const rally = bar(2000, 2004);
-/** Fresh breakout body under late-chase gate (~0.05%). */
-const boUp = bar(4620, 4622.2);
-const boDown = bar(4620, 4617.8);
 
 describe('10s + 14-regime suitable entry', () => {
   it('waits in UNKNOWN / COMPRESSION / TRANSITION', () => {
@@ -71,67 +68,5 @@ describe('10s + 14-regime suitable entry', () => {
     expect(decideEntryFrom10sRegime(quiet, 'TREND_UP')).toBeNull();
     expect(decideEntryFrom10sRegime(quiet, 'RANGE')).toBeNull();
     expect(decideEntryFrom10sRegime(quiet, 'BREAKOUT_UP')).toBeNull();
-  });
-});
-
-describe('breakout + trend entry', () => {
-  it('arms on BREAKOUT_UP/DOWN (fresh body, not already-spent bar)', () => {
-    expect(decideEntryBreakoutOnly(boUp, 'BREAKOUT_UP')?.direction).toBe('BUY');
-    expect(decideEntryBreakoutOnly(boDown, 'BREAKOUT_DOWN')?.direction).toBe('SELL');
-    // classic 0.2% rally bar is already late for HardInv world
-    expect(decideEntryBreakoutOnly(rally, 'BREAKOUT_UP')).toBeNull();
-  });
-
-  it('arms on TREND_UP dip and TREND_DOWN rally — never chase continuation', () => {
-    expect(decideEntryBreakoutOnly(dip, 'TREND_UP')?.direction).toBe('BUY');
-    expect(decideEntryBreakoutOnly(dip, 'TREND_UP')?.setup).toBe('PULLBACK');
-    expect(decideEntryBreakoutOnly(rally, 'TREND_UP')).toBeNull();
-    expect(decideEntryBreakoutOnly(rally, 'TREND_DOWN')?.direction).toBe('SELL');
-    expect(decideEntryBreakoutOnly(rally, 'TREND_DOWN')?.setup).toBe('PULLBACK');
-    expect(decideEntryBreakoutOnly(dip, 'TREND_DOWN')).toBeNull();
-  });
-
-  it('skips BREAKOUT signal bar that already ran ~3pt+ (chase food)', () => {
-    const late: TenSecBar = {
-      open_time_ms: 0,
-      open: 4620,
-      high: 4624.2,
-      low: 4619.8,
-      close: 4623.8,
-      ticks: 12,
-    };
-    expect(decideEntryBreakoutOnly(late, 'BREAKOUT_UP')).toBeNull();
-  });
-
-  it('ignores EXPANSION / range / failed / reversal (not live)', () => {
-    expect(decideEntryBreakoutOnly(rally, 'EXPANSION')).toBeNull();
-    expect(decideEntryBreakoutOnly(dip, 'RANGE')).toBeNull();
-    expect(decideEntryBreakoutOnly(dip, 'FAILED_BREAKOUT_UP')).toBeNull();
-    expect(decideEntryBreakoutOnly(rally, 'REVERSAL_CANDIDATE')).toBeNull();
-  });
-
-  it('structural fallback buys when hist close breaks prior highs', () => {
-    const hist: TenSecBar[] = [
-      { open_time_ms: 0, open: 4620.0, high: 4620.4, low: 4619.8, close: 4620.2, ticks: 10 },
-      { open_time_ms: 10_000, open: 4620.2, high: 4620.6, low: 4620.0, close: 4620.5, ticks: 10 },
-      { open_time_ms: 20_000, open: 4620.5, high: 4621.0, low: 4620.3, close: 4620.9, ticks: 10 },
-      { open_time_ms: 30_000, open: 4620.9, high: 4622.2, low: 4620.8, close: 4622.0, ticks: 10 },
-    ];
-    const last = hist[hist.length - 1]!;
-    expect(decideEntryBreakoutOnly(last, 'COMPRESSION', hist)?.direction).toBe('BUY');
-    expect(decideEntryBreakoutOnly(last, 'COMPRESSION', hist)?.reason).toMatch(/STRUCT BO long/);
-  });
-
-  it('arms Gold-scale BREAKOUT_UP body under classic 0.015% gate', () => {
-    // 0.35pt @ 4621 ≈ 0.0076% — old isMoving10s would reject
-    const goldBo: TenSecBar = {
-      open_time_ms: 0,
-      open: 4621.0,
-      high: 4621.5,
-      low: 4620.9,
-      close: 4621.35,
-      ticks: 12,
-    };
-    expect(decideEntryBreakoutOnly(goldBo, 'BREAKOUT_UP')?.direction).toBe('BUY');
   });
 });

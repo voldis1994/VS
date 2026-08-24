@@ -220,29 +220,31 @@ function ensureBook(epic: string, displayName?: string, scope?: string | null): 
   return b;
 }
 
-/** Live trading: breakout + trend + compression. UNKNOWN is never a live stall. */
+/**
+ * #136 live set — full classic regimes that decideEntryFrom10sRegime can trade.
+ * UNKNOWN is never surfaced (maps to COMPRESSION) so clients/robots do not stall.
+ */
 export const LIVE_REGIME_NAMES = [
   'COMPRESSION',
+  'RANGE',
   'TREND_UP',
   'TREND_DOWN',
+  'PULLBACK_UPTREND',
+  'PULLBACK_DOWNTREND',
   'BREAKOUT_UP',
   'BREAKOUT_DOWN',
+  'FAILED_BREAKOUT_UP',
+  'FAILED_BREAKOUT_DOWN',
+  'EXPANSION',
+  'REVERSAL_CANDIDATE',
+  'TRANSITION',
 ] as const;
 
 export type LiveRegimeName = (typeof LIVE_REGIME_NAMES)[number];
 
 export function toLiveRegime(regime: RegimeName): RegimeName {
-  if (
-    regime === 'BREAKOUT_UP' ||
-    regime === 'BREAKOUT_DOWN' ||
-    regime === 'TREND_UP' ||
-    regime === 'TREND_DOWN' ||
-    regime === 'COMPRESSION'
-  ) {
-    return regime;
-  }
-  // Never surface UNKNOWN — it froze robots in WAIT forever
-  return 'COMPRESSION';
+  if (regime === 'UNKNOWN') return 'COMPRESSION';
+  return regime;
 }
 
 /**
@@ -297,8 +299,8 @@ export function classifyBreakoutLive(
 }
 
 function applyClassify(epic: string, b: Book): RegimeSnapshot {
-  // #150: dedicated live BO classify (old path mapped TREND climbs → UNKNOWN → no trades)
-  const next = classifyBreakoutLive(b.bars, b.current);
+  // #136 classic RegimeEngine classifier (not breakout-only)
+  const next = toLiveRegime(classifyRegime(b.bars, b.current));
   const now = new Date().toISOString();
   if (next !== b.current) {
     b.previous = b.current;

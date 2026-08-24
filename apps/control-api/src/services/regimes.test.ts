@@ -214,13 +214,13 @@ describe('classifyBreakoutLive (#150)', () => {
 describe('regime book + trade style', () => {
   beforeEach(() => resetRegimeBook());
 
-  it('stores live snapshots — gradual climb → BREAKOUT_UP (not TREND→UNKNOWN)', () => {
+  it('stores live snapshots — gradual climb → TREND_UP (#136 classic, not UNKNOWN stall)', () => {
     const prices = [100, 100.5, 101.2, 101.9, 102.7, 103.4];
     const bars = prices.map((p, i) =>
       bar(i === 0 ? p : prices[i - 1]!, p + 0.4, p - 0.4, p, i)
     );
     const snap = observeClosedBars('GOLD', bars, 'Gold');
-    expect(snap.current).toBe('BREAKOUT_UP');
+    expect(snap.current).toBe('TREND_UP');
     expect(snap.display_name).toBe('Gold');
   });
 
@@ -233,10 +233,10 @@ describe('regime book + trade style', () => {
     );
     const a = observeClosedBars('GOLD', up, 'Gold', 'r1_GOLD');
     const b = observeClosedBars('GOLD', down, 'Gold', 'r2_GOLD');
-    expect(a.current).toBe('BREAKOUT_UP');
-    expect(b.current).toBe('BREAKOUT_DOWN');
-    expect(currentRegime('GOLD', 'r1_GOLD')?.current).toBe('BREAKOUT_UP');
-    expect(currentRegime('GOLD', 'r2_GOLD')?.current).toBe('BREAKOUT_DOWN');
+    expect(a.current).toBe('TREND_UP');
+    expect(b.current).toBe('TREND_DOWN');
+    expect(currentRegime('GOLD', 'r1_GOLD')?.current).toBe('TREND_UP');
+    expect(currentRegime('GOLD', 'r2_GOLD')?.current).toBe('TREND_DOWN');
   });
 
   it('clearRegimeBookFor wipes only that robot scope', () => {
@@ -248,7 +248,7 @@ describe('regime book + trade style', () => {
     observeClosedBars('GOLD', bars, 'Gold', 'r2_GOLD');
     clearRegimeBookFor('GOLD', 'r1_GOLD');
     expect(currentRegime('GOLD', 'r1_GOLD')).toBeNull();
-    expect(currentRegime('GOLD', 'r2_GOLD')?.current).toBe('BREAKOUT_UP');
+    expect(currentRegime('GOLD', 'r2_GOLD')?.current).toBe('TREND_UP');
   });
 
   it('maps trend regimes to LONG and breakout/range to SCALP', () => {
