@@ -44,7 +44,9 @@ function posture(s: RobotSession) {
   if (!s.running && !s.open_side) return { label: 'STOPPED', kind: 'flat' as const };
   if (s.open_side) return { label: s.open_side, kind: 'long' as const };
   if (s.running) {
-    if (s.ohlc_10s?.market === 'SEEDING') return { label: 'SEEDING · OHLC', kind: 'entry' as const };
+    if (s.last_mid == null && s.ohlc_10s?.market === 'SEEDING') {
+      return { label: 'CONNECTING…', kind: 'entry' as const };
+    }
     const r = String(s.regime || 'COMPRESSION').toUpperCase();
     if (r === 'UNKNOWN') return { label: 'WAIT · COMPRESSION', kind: 'entry' as const };
     return { label: `WAIT · ${r}`, kind: 'entry' as const };

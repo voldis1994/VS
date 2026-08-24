@@ -996,39 +996,16 @@ async function robotCycle(s: Internal) {
     }
     if (quote.mid != null) s.last_mid = quote.mid;
 
-    // Always refresh feeds (even when parked) so FEEDS board is not stuck IDLE 0/0
-    if (Date.now() - s.last_multi_feed_ms >= 4_000) {
-      s.last_multi_feed_ms = Date.now();
-      try {
-        s.multiFeed = await readMultiFeedPrice(s.epic, {
-          anchorMid: quote.mid,
-          connectionId: s.connection_id,
-          capitalAccountId,
-        });
-      } catch {
-        /* keep previous */
-      }
-    }
-    const pickedWarm = capitalOhlcMid(quote.mid, s.multiFeed);
-    s.feed_source = pickedWarm.source;
-    s.feed_contributing = s.multiFeed?.contributing ?? 0;
-    s.feed_sender_count = s.multiFeed?.sender_count ?? 0;
-    s.feed_agreement = s.multiFeed?.agreement ?? null;
-    if (quote.mid != null && (s.feed_contributing || 0) < 1) {
-      s.feed_source = 'LOCAL';
-      s.feed_contributing = 1;
-      s.feed_sender_count = Math.max(1, s.feed_sender_count || 0);
-    }
     // OHLC from Capital mid only — never Yahoo/Aurum spot (was poisoning bars ~80pt off)
-    const warmMid = quote.mid ?? pickedWarm.mid;
+    // NOTE: multiFeed runs AFTER lease release — it calls acquireCapitalSession and
+    // would deadlock if invoked while we still hold the connection lock.
+    const warmMid = quote.mid;
     if (warmMid != null) {
-      // Heal if forming/last bar drifted far from Capital (spot contamination)
       const ref =
         s.ohlcState.forming?.close ?? s.ohlcState.last_closed?.close ?? null;
       if (
-        quote.mid != null &&
         ref != null &&
-        Math.abs(ref - quote.mid) / Math.max(Math.abs(quote.mid), 1e-9) > 0.004
+        Math.abs(ref - warmMid) / Math.max(Math.abs(warmMid), 1e-9) > 0.004
       ) {
         s.ohlcState = emptyTenSecState();
         s.closedBars = [];
@@ -1038,14 +1015,29 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `OHLC RESET · bar ${ref.toFixed(2)} far from Capital ${quote.mid.toFixed(2)} — rebuild from broker`,
+          detail: `OHLC RESET · bar ${ref.toFixed(2)} far from Capital ${warmMid.toFixed(2)} — rebuild from broker`,
         });
       }
       s.ohlcState = updateTenSecondOhlc(s.ohlcState, warmMid, Date.now());
+      // Leave SEEDING immediately once we have a forming bar with ticks
+      if (!s.ohlcState.last_closed && s.ohlcState.forming && s.ohlcState.forming.ticks >= 1) {
+        s.ohlcState = {
+          forming: s.ohlcState.forming,
+          last_closed: { ...s.ohlcState.forming },
+          just_closed: true,
+        };
+      }
       s.ohlc_10s = publicOhlc10s(s.ohlcState);
       if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
         applyRobotRegime(s, [s.ohlcState.last_closed]);
       }
+    }
+
+    // Local feed badge until multiFeed runs after lease
+    if (quote.mid != null && (s.feed_contributing || 0) < 1) {
+      s.feed_source = 'LOCAL';
+      s.feed_contributing = 1;
+      s.feed_sender_count = Math.max(1, s.feed_sender_count || 0);
     }
 
     // Market closed / offline → park: no positions sync, no MANAGE, no entry (anti-spam Capital)
@@ -1351,6 +1343,29 @@ async function robotCycle(s: Internal) {
     await enterTrade(session, s, direction, quote, reason, setupType);
   } finally {
     leased.release();
+  }
+
+  // Multi-feed AFTER lease — readMultiFeedPrice acquires Capital and must not nest under lease
+  if (Date.now() - s.last_multi_feed_ms >= 4_000) {
+    s.last_multi_feed_ms = Date.now();
+    try {
+      s.multiFeed = await readMultiFeedPrice(s.epic, {
+        anchorMid: s.last_mid,
+        connectionId: s.connection_id,
+        capitalAccountId,
+      });
+      s.feed_source = s.multiFeed?.contributing ? 'MULTI' : s.feed_source;
+      s.feed_contributing = s.multiFeed?.contributing ?? s.feed_contributing ?? 0;
+      s.feed_sender_count = s.multiFeed?.sender_count ?? s.feed_sender_count ?? 0;
+      s.feed_agreement = s.multiFeed?.agreement ?? null;
+      if ((s.feed_contributing || 0) < 1 && s.last_mid != null) {
+        s.feed_source = 'LOCAL';
+        s.feed_contributing = 1;
+        s.feed_sender_count = Math.max(1, s.feed_sender_count || 0);
+      }
+    } catch {
+      /* keep previous */
+    }
   }
   } catch (err) {
     s.reads_fail += 1;

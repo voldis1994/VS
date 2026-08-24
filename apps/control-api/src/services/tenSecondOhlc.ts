@@ -148,12 +148,24 @@ export function publicOhlc10s(state: TenSecState): {
 } {
   const last = state.last_closed;
   if (!last) {
+    // Forming ticks mean we have live price — not stuck SEEDING forever
+    if (state.forming && state.forming.ticks >= 1) {
+      return {
+        last_o: state.forming.open,
+        last_h: state.forming.high,
+        last_l: state.forming.low,
+        last_c: state.forming.close,
+        forming_c: state.forming.close,
+        body_pct: bodyPct(state.forming),
+        market: isMoving10s(state.forming) ? 'MOVING' : 'QUIET',
+      };
+    }
     return {
       last_o: null,
       last_h: null,
       last_l: null,
       last_c: null,
-      forming_c: state.forming?.close ?? null,
+      forming_c: null,
       body_pct: null,
       market: 'SEEDING',
     };
