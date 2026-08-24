@@ -243,7 +243,7 @@ async function executeForSubscription(
       });
     }
 
-    // ONE TRADE: skip if broker already open on this epic
+    // Skip if THIS account already open on epic (other clients still trade in parallel)
     const connRow = await pool.query(
       `SELECT environment, identifier, broker_name FROM broker_connections WHERE id = $1`,
       [sub.connection_id]

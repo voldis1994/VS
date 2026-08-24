@@ -669,7 +669,7 @@ async function enterTrade(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `ONE TRADE ONLY — broker already open ${existing.direction} dealId=${existing.deal_id} · no new entry`,
+        detail: `Already open on this account ${existing.direction} dealId=${existing.deal_id} · no second entry on same epic`,
       });
       return;
     }
@@ -1097,7 +1097,7 @@ async function robotCycle(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `Position sync warn: ${listed.detail} · holding ONE TRADE rule (no new entry if unsure)`,
+        detail: `Position sync warn: ${listed.detail} · no new entry while unsure`,
       });
     }
 
@@ -1144,7 +1144,7 @@ async function robotCycle(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `ONE TRADE · manage ${s.open_side} · ${s.regime} · UPL ${
+        detail: `MANAGE ${s.open_side} · ${s.regime} · UPL ${
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
@@ -1465,7 +1465,7 @@ export async function startRobotSession(input: {
     bid: null,
     ask: null,
     mid: null,
-    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · 10s OHLC from multi-feed consensus · ONE TRADE ONLY · other robots: ${others}`,
+    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · 10s OHLC · per-client manage · other robots: ${others}`,
   });
   pushTick(session, {
     phase: 'INFO',
@@ -1473,7 +1473,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: max 1 open trade · MANAGE best-outcome · Capital-only OHLC · per-client isolation · park when market closed',
+      'Rules: 1 open trade per client account · MANAGE best-outcome · Capital-only OHLC · clients run in parallel · park when market closed',
   });
 
   sessions.set(id, session);
