@@ -10,7 +10,9 @@ services:
     ports:
       - "${DB_PORT:-5432}:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      # Named volume — clients/brokers survive VS.bat + PC restart.
+      # NEVER run: docker compose down -v
+      - vs_postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-market_reader} -d ${DB_NAME:-market_reader}"]
       interval: 5s
@@ -24,7 +26,7 @@ services:
     ports:
       - "${REDIS_PORT:-6379}:6379"
     volumes:
-      - redis_data:/data
+      - vs_redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -32,5 +34,9 @@ services:
       retries: 10
 
 volumes:
-  postgres_data:
-  redis_data:
+  vs_postgres_data:
+    name: vs_postgres_data
+    external: false
+  vs_redis_data:
+    name: vs_redis_data
+    external: false

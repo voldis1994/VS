@@ -15,6 +15,11 @@ import {
   type CapitalSession,
 } from './capitalCom.js';
 import { emitToClient } from './clientEvents.js';
+import {
+  listDesiredRunningRobots,
+  markRobotDesiredRunning,
+  markRobotDesiredStopped,
+} from './robotDeskPersist.js';
 import { mapTradeType } from './tradePresentation.js';
 import {
   observeClosedBars,
@@ -454,6 +459,11 @@ export async function stopRobotSession(id: string): Promise<RobotSession | null>
       market: s.epic,
       robot_status: 'STOPPED',
     });
+  }
+  try {
+    await markRobotDesiredStopped(id);
+  } catch (err) {
+    console.warn('[robot-desk] persist stop failed', err);
   }
   return publicSession(s);
 }
@@ -1368,6 +1378,19 @@ export async function startRobotSession(input: {
   });
 
   sessions.set(id, session);
+  try {
+    await markRobotDesiredRunning({
+      id,
+      account_id: acc.id,
+      epic,
+      display_name: displayName,
+      lot_size: lot,
+      trading_enabled: session.trading_enabled,
+      entry_enabled: session.entry_enabled,
+    });
+  } catch (err) {
+    console.warn('[robot-desk] persist start failed', err);
+  }
   emitToClient(acc.client_id, {
     type: 'robot_started',
     robot_id: id,
@@ -1448,4 +1471,43 @@ export async function attachManageOnlyRobot(input: {
     });
   }
   return getRobotSession(session.id) || session;
+}
+
+/** After API/PC restart — bring back robots that were running (Postgres persist). */
+export async function restorePersistedRobotSessions(): Promise<{
+  restored: number;
+  failed: number;
+}> {
+  const desired = await listDesiredRunningRobots();
+  let restored = 0;
+  let failed = 0;
+  for (const row of desired) {
+    try {
+      const id = robotIdFor(row.account_id, row.epic);
+      const existing = sessions.get(id);
+      if (existing?.running) {
+        restored += 1;
+        continue;
+      }
+      await startRobotSession({
+        account_id: row.account_id,
+        epic: row.epic,
+        display_name: row.display_name || undefined,
+        lot_size: row.lot_size,
+        trading_enabled: row.trading_enabled,
+        entry_enabled: row.entry_enabled,
+      });
+      restored += 1;
+      console.log(
+        `[robot-desk] restored ${row.display_name || row.epic} · account #${row.account_id}`
+      );
+    } catch (err) {
+      failed += 1;
+      console.warn(
+        `[robot-desk] restore failed account=${row.account_id} epic=${row.epic}:`,
+        err instanceof Error ? err.message : err
+      );
+    }
+  }
+  return { restored, failed };
 }

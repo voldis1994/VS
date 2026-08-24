@@ -26,11 +26,13 @@ data/raw/**
 data/normalized/**
 data/replay/**
 data/exports/**
+data/backups/**
 !data/raw/.gitkeep
 !data/normalized/.gitkeep
 !data/replay/.gitkeep
 !data/exports/.gitkeep
 !data/models/.gitkeep
+!data/backups/.gitkeep
 
 # Logs
 logs/
