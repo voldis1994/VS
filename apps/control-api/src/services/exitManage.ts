@@ -12,6 +12,9 @@ export type ExitSnapshot = {
   regime?: string | null;
 };
 
+/** Soft profit exits (peak / harvest / TP / time) wait this long so tiny greens can breathe. */
+export const BEST_OUTCOME_MIN_HOLD_MS = 60_000;
+
 export function favorableMove(side: ExitSide, entry: number, mid: number): number {
   return side === 'BUY' ? mid - entry : entry - mid;
 }
@@ -49,6 +52,18 @@ export function hardInvalidationDistance(entry: number): number {
   return Math.max(abs * 0.00065, 0.0005);
 }
 
+/** Arm peak/harvest only after a real excursion — ~2.5pt on Gold ~4500 (was ~1.4). */
+export function bestOutcomeMfeFloor(entry: number): number {
+  const abs = Math.max(Math.abs(entry), 1e-9);
+  return Math.max(abs * 0.00055, 1.8);
+}
+
+/** Soft TP — hold winners longer (~0.45%, was 0.28%). */
+export function bestOutcomeTarget(entry: number): number {
+  const abs = Math.max(Math.abs(entry), 1e-9);
+  return Math.max(abs * 0.0045, 0.45);
+}
+
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
   mid: number
@@ -58,13 +73,13 @@ export function decideBestOutcomeExit(
   const entry = s.entry_price;
   const fav = favorableMove(s.open_side, entry, mid);
   const absEntry = Math.max(Math.abs(entry), 1e-9);
-  // TP ≈ 0.28% — take Best Outcome earlier than waiting for Capital SL noise
-  const tp = Math.max(absEntry * 0.0028, 0.28);
+  const tp = bestOutcomeTarget(entry);
   const sl = hardInvalidationDistance(entry);
-  // Arm peak/harvest from ≈1.4pt on Gold ~4600
-  const mfeFloor = Math.max(absEntry * 0.0003, 0.08);
+  const mfeFloor = bestOutcomeMfeFloor(entry);
   // Min green to soft-exit (~0.18pt Gold)
   const minGreen = Math.max(absEntry * 0.00004, 0.1);
+  const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
+  const pastMinHold = heldMs >= BEST_OUTCOME_MIN_HOLD_MS;
 
   if (fav <= -sl) {
     return { exit: true, reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}` };
@@ -80,7 +95,13 @@ export function decideBestOutcomeExit(
     return { exit: true, reason: `${thesis} · lock green ${fav.toFixed(5)}` };
   }
 
-  if (s.mfe >= mfeFloor && s.peak_retention != null && s.peak_retention < 0.35) {
+  // Let early green develop — Peak/Harvest/TP/Time wait min hold
+  if (!pastMinHold) {
+    return { exit: false, reason: '' };
+  }
+
+  // Peak: only after meaningful MFE and deeper giveback (was <35% / ~1.4pt)
+  if (s.mfe >= mfeFloor && s.peak_retention != null && s.peak_retention < 0.28) {
     return {
       exit: true,
       reason: `PeakProtection · retention ${(s.peak_retention * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} · UPL ${fav.toFixed(5)}`,
@@ -94,15 +115,16 @@ export function decideBestOutcomeExit(
     };
   }
 
-  if (s.mfe >= mfeFloor && s.peak_retention != null && s.peak_retention < 0.5) {
+  // Harvest: looser than peak, still needs real MFE + clearer pullback (was <50%)
+  if (s.mfe >= mfeFloor && s.peak_retention != null && s.peak_retention < 0.4) {
     return {
       exit: true,
       reason: `BestOutcome harvest · UPL ${fav.toFixed(5)} after MFE ${s.mfe.toFixed(5)} (ret ${(s.peak_retention * 100).toFixed(0)}%)`,
     };
   }
 
-  const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
-  if (heldMs > 360_000 && s.mfe >= mfeFloor * 0.5) {
+  // TimeDecay: 15 min (was 6) and full MFE floor
+  if (heldMs > 900_000 && s.mfe >= mfeFloor) {
     return {
       exit: true,
       reason: `TimeDecay · held ${Math.round(heldMs / 1000)}s · realize green UPL ${fav.toFixed(5)}`,
@@ -133,7 +155,8 @@ export function describeBestOutcomeState(
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   const sl = hardInvalidationDistance(entry);
   const minGreen = Math.max(absEntry * 0.00004, 0.1);
-  const mfeFloor = Math.max(absEntry * 0.0003, 0.08);
+  const mfeFloor = bestOutcomeMfeFloor(entry);
+  const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
   const ret =
     s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—';
 
@@ -142,6 +165,15 @@ export function describeBestOutcomeState(
       exit: false,
       reason: '',
       hold: `BO idle (need green) · UPL ${fav.toFixed(2)} < ${minGreen.toFixed(2)} · HardInv @ -${sl.toFixed(2)} · MFE ${s.mfe.toFixed(2)}/${mfeFloor.toFixed(2)} · ret ${ret}`,
+    };
+  }
+
+  if (heldMs < BEST_OUTCOME_MIN_HOLD_MS) {
+    const left = Math.ceil((BEST_OUTCOME_MIN_HOLD_MS - heldMs) / 1000);
+    return {
+      exit: false,
+      reason: '',
+      hold: `BO hold ${left}s · UPL ${fav.toFixed(2)} · MFE ${s.mfe.toFixed(2)} · let green run`,
     };
   }
 

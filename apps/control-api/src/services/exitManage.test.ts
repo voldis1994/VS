@@ -133,7 +133,7 @@ describe('decideBestOutcomeExit', () => {
     expect(d.reason).toMatch(/HardInvalidation/);
   });
 
-  it('peak protection after meaningful MFE giveback', () => {
+  it('peak protection after meaningful MFE giveback (past min hold)', () => {
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -141,6 +141,7 @@ describe('decideBestOutcomeExit', () => {
         regime: 'TREND_UP',
         mfe: 8,
         peak_retention: 0.2,
+        entry_at: new Date(Date.now() - 90_000).toISOString(),
       }),
       2001.6
     );
@@ -148,8 +149,39 @@ describe('decideBestOutcomeExit', () => {
     expect(d.reason).toMatch(/PeakProtection/);
   });
 
-  it('arms peak protection from ~1.4pt MFE on Gold-scale price', () => {
-    // 4519 * 0.0003 ≈ 1.36
+  it('does not peak-exit before min hold even with giveback', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        regime: 'TREND_UP',
+        mfe: 8,
+        peak_retention: 0.2,
+        entry_at: new Date(Date.now() - 15_000).toISOString(),
+      }),
+      2001.6
+    );
+    expect(d.exit).toBe(false);
+  });
+
+  it('arms peak protection from ~2.5pt MFE on Gold-scale price', () => {
+    // 4519 * 0.00055 ≈ 2.49
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4519,
+        regime: 'TREND_UP',
+        mfe: 2.6,
+        peak_retention: 0.2,
+        entry_at: new Date(Date.now() - 90_000).toISOString(),
+      }),
+      4519.5
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/PeakProtection/);
+  });
+
+  it('holds ~1.5pt Gold MFE (under new floor) even with giveback', () => {
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -157,11 +189,11 @@ describe('decideBestOutcomeExit', () => {
         regime: 'TREND_UP',
         mfe: 1.5,
         peak_retention: 0.25,
+        entry_at: new Date(Date.now() - 90_000).toISOString(),
       }),
       4519.4
     );
-    expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/PeakProtection/);
+    expect(d.exit).toBe(false);
   });
 
   it('still holds sub-floor MFE noise on Gold (~0.5pt)', () => {
@@ -172,19 +204,40 @@ describe('decideBestOutcomeExit', () => {
         regime: 'TREND_UP',
         mfe: 0.5,
         peak_retention: 0.1,
+        entry_at: new Date(Date.now() - 90_000).toISOString(),
       }),
       4519.05
     );
     expect(d.exit).toBe(false);
   });
 
-  it('target at ~0.28%', () => {
+  it('target at ~0.45%', () => {
     const d = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_UP', mfe: 8 }),
-      2005.7
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        regime: 'TREND_UP',
+        mfe: 10,
+        entry_at: new Date(Date.now() - 90_000).toISOString(),
+      }),
+      2009.1
     );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/Target/);
+  });
+
+  it('holds under old 0.28% target until new TP', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        regime: 'TREND_UP',
+        mfe: 8,
+        entry_at: new Date(Date.now() - 90_000).toISOString(),
+      }),
+      2005.7
+    );
+    expect(d.exit).toBe(false);
   });
 });
 
@@ -205,5 +258,20 @@ describe('describeBestOutcomeState', () => {
     );
     expect(d.exit).toBe(false);
     expect(d.hold).toMatch(/BO idle/);
+  });
+
+  it('reports BO hold countdown while green under min hold', () => {
+    const d = describeBestOutcomeState(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4519,
+        mfe: 1,
+        regime: 'BREAKOUT_UP',
+        entry_at: new Date(Date.now() - 10_000).toISOString(),
+      }),
+      4520
+    );
+    expect(d.exit).toBe(false);
+    expect(d.hold).toMatch(/BO hold/);
   });
 });
