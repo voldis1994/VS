@@ -45,6 +45,58 @@ export function getBrokerHealth(clientId: number): {
   };
 }
 
+/** All client panel subscriptions with trading enabled (for manage-robot reconcile). */
+export async function listAllActiveSubscriptions(): Promise<ActiveSubscription[]> {
+  const { rows } = await pool.query(
+    `SELECT c.id as client_id, c.name as client_name,
+            c.panel_epic, c.panel_display_name, c.panel_lot_size,
+            ba.id as account_id, bc.id as connection_id,
+            cm.id as instrument_id, cm.epic, cm.display_name, cm.min_lot, cm.max_lot, cm.lot_step,
+            ais.lot_size as settings_lot, ais.trading_enabled
+     FROM clients c
+     JOIN broker_connections bc ON bc.client_id = c.id AND bc.enabled = true
+     JOIN broker_accounts ba ON ba.broker_connection_id = bc.id AND ba.enabled = true
+     JOIN capital_markets cm ON cm.broker_connection_id = bc.id AND cm.epic = c.panel_epic
+     LEFT JOIN account_instrument_settings ais
+       ON ais.broker_account_id = ba.id AND ais.instrument_id = cm.id
+     WHERE c.enabled = true
+       AND c.access_enabled = true
+       AND c.panel_robot_requested = 'RUNNING'
+       AND c.panel_epic IS NOT NULL
+       AND (
+         c.preferred_broker_account_id IS NULL
+         OR c.preferred_broker_account_id = ba.id
+       )
+     ORDER BY c.id ASC, ba.id ASC`
+  );
+
+  const out: ActiveSubscription[] = [];
+  const seenClients = new Set<number>();
+  for (const r of rows) {
+    const clientId = Number(r.client_id);
+    if (seenClients.has(clientId)) continue;
+    if (r.trading_enabled === false) continue;
+    const lot =
+      r.settings_lot != null
+        ? Number(r.settings_lot)
+        : r.panel_lot_size != null
+          ? Number(r.panel_lot_size)
+          : Number(r.min_lot);
+    out.push({
+      client_id: clientId,
+      client_name: String(r.client_name),
+      account_id: Number(r.account_id),
+      connection_id: Number(r.connection_id),
+      epic: String(r.epic),
+      display_name: String(r.display_name || r.panel_display_name || r.epic),
+      lot_size: lot,
+      instrument_id: Number(r.instrument_id),
+    });
+    seenClients.add(clientId);
+  }
+  return out;
+}
+
 export async function listActiveSubscriptionsForEpic(
   epic: string
 ): Promise<ActiveSubscription[]> {

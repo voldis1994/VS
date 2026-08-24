@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   decideBestOutcomeExit,
+  describeBestOutcomeState,
   favorableMove,
   thesisFailureReason,
   type ExitSnapshot,
@@ -171,5 +172,25 @@ describe('decideBestOutcomeExit', () => {
     );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/Target/);
+  });
+});
+
+describe('describeBestOutcomeState', () => {
+  it('reports blocked when entry_price missing', () => {
+    const d = describeBestOutcomeState(
+      { open_side: 'BUY', entry_price: null, mfe: 0, mae: 0, peak_retention: null, entry_at: null },
+      4519
+    );
+    expect(d.exit).toBe(false);
+    expect(d.hold).toMatch(/blocked/);
+  });
+
+  it('reports idle when underwater below minGreen', () => {
+    const d = describeBestOutcomeState(
+      snap({ open_side: 'BUY', entry_price: 4519, mfe: 0.2, regime: 'BREAKOUT_UP' }),
+      4518.5
+    );
+    expect(d.exit).toBe(false);
+    expect(d.hold).toMatch(/BO idle/);
   });
 });

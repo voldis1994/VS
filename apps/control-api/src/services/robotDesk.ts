@@ -29,7 +29,7 @@ import {
   REGIME_NAMES,
   type RegimeName,
 } from './regimes.js';
-import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
+import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove } from './exitManage.js';
 import { decideEntryBreakoutOnly } from './entryFromRegime.js';
 import { resolvePostExitCooldownMs } from './quietImpulseEntry.js';
 import {
@@ -41,6 +41,7 @@ import {
   type MultiFeedLeg,
 } from './robotReader.js';
 import { buildFresherRefs, detectCapitalIsolatedExtreme, detectStaleQuoteAdverse } from './staleQuoteGuard.js';
+import { listAllActiveSubscriptions } from './clientSubscriptions.js';
 import {
   aggregateSecondsToTen,
   emptyTenSecState,
@@ -1124,7 +1125,7 @@ async function robotCycle(s: Internal) {
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · no new orders`,
+        } · ${describeBestOutcomeState(s, quote.mid).hold}`,
       });
       return;
     }
@@ -1311,6 +1312,8 @@ export async function startRobotSession(input: {
   trading_enabled?: boolean;
   /** Default true for Admin Robot Board; Client Panel manage-only uses false */
   entry_enabled?: boolean;
+  /** Set when caller will seed trade state before first manage tick (pipeline fill attach). */
+  skipInitialCycle?: boolean;
 }): Promise<RobotSession> {
   const { rows } = await pool.query(
     `SELECT ba.id, ba.display_name, ba.external_account_id,
@@ -1466,7 +1469,9 @@ export async function startRobotSession(input: {
     lot_size: lot,
     robot_status: 'RUNNING',
   });
-  void robotCycle(session);
+  if (!input.skipInitialCycle) {
+    void robotCycle(session);
+  }
   // 6s when TRADEABLE; auto-slows to 90s when market closed
   setRobotCadence(session, ACTIVE_CADENCE_MS);
 
@@ -1482,22 +1487,46 @@ export async function attachManageOnlyRobot(input: {
   lot_size: number;
   side: 'BUY' | 'SELL';
   entry_price: number | null;
+  deal_id?: string | null;
   deal_reference?: string | null;
   regime?: string | null;
   setup_type?: string | null;
 }): Promise<RobotSession> {
+  const persistManage = async (id: string, lot: number, displayName: string, epic: string) => {
+    try {
+      await markRobotDesiredRunning({
+        id,
+        account_id: input.account_id,
+        epic,
+        display_name: displayName,
+        lot_size: lot,
+        trading_enabled: true,
+        entry_enabled: false,
+      });
+    } catch (err) {
+      console.warn('[robot-desk] manage-only persist failed', id, err);
+    }
+  };
+
+  const seedTradeState = (internal: Internal) => {
+    internal.open_side = input.side;
+    internal.entry_price = input.entry_price;
+    internal.entry_at = internal.entry_at || new Date().toISOString();
+    internal.mode = 'MANAGE';
+    internal.entry_enabled = false;
+    internal.trading_enabled = true;
+    if (input.deal_id) internal.deal_id = input.deal_id;
+    if (input.deal_reference) internal.last_deal_reference = input.deal_reference;
+    if (input.regime) internal.regime = normalizeRegime(input.regime);
+    internal.orders_placed = Math.max(internal.orders_placed, 1);
+  };
+
   const id = robotIdFor(input.account_id, input.epic);
   const existing = sessions.get(id);
   if (existing?.running) {
     existing.entry_enabled = false;
     existing.trading_enabled = true;
-    existing.open_side = input.side;
-    existing.mode = 'MANAGE';
-    if (existing.entry_price == null) existing.entry_price = input.entry_price;
-    if (!existing.entry_at) existing.entry_at = new Date().toISOString();
-    if (input.deal_reference) existing.last_deal_reference = input.deal_reference;
-    if (input.regime) existing.regime = normalizeRegime(input.regime);
-    existing.orders_placed = Math.max(existing.orders_placed, 1);
+    seedTradeState(existing);
     pushTick(existing, {
       phase: 'ORDER',
       bid: null,
@@ -1507,6 +1536,8 @@ export async function attachManageOnlyRobot(input: {
         existing.regime
       } · manage-only (kept MFE ${existing.mfe.toFixed(5)})`,
     });
+    await persistManage(id, existing.lot_size, existing.display_name, existing.epic);
+    void robotCycle(existing);
     return publicSession(existing);
   }
 
@@ -1517,16 +1548,11 @@ export async function attachManageOnlyRobot(input: {
     lot_size: input.lot_size,
     trading_enabled: true,
     entry_enabled: false,
+    skipInitialCycle: true,
   });
   const internal = sessions.get(session.id);
   if (internal) {
-    internal.open_side = input.side;
-    internal.entry_price = input.entry_price;
-    internal.entry_at = new Date().toISOString();
-    internal.mode = 'MANAGE';
-    internal.last_deal_reference = input.deal_reference || null;
-    internal.orders_placed = Math.max(internal.orders_placed, 1);
-    if (input.regime) internal.regime = normalizeRegime(input.regime);
+    seedTradeState(internal);
     pushTick(internal, {
       phase: 'ORDER',
       bid: null,
@@ -1534,10 +1560,97 @@ export async function attachManageOnlyRobot(input: {
       mid: input.entry_price,
       detail: `PIPELINE FILL ${input.side} ${input.display_name} lot=${input.lot_size} · ${
         internal.regime
-      } · manage-only attached`,
+      } · manage-only attached · entry=${input.entry_price ?? '—'} deal=${input.deal_id || input.deal_reference || '—'}`,
     });
+    void robotCycle(internal);
   }
   return getRobotSession(session.id) || session;
+}
+
+/**
+ * Boot / heal: client fills only attach manage robots on intent — if attach failed or API restarted
+ * mid-trade, open Capital positions may have no Best Outcome manager. Re-attach from broker truth.
+ */
+export async function reconcileManageRobotsForOpenTrades(): Promise<{
+  attached: number;
+  skipped: number;
+  failed: number;
+}> {
+  const subs = await listAllActiveSubscriptions();
+  let attached = 0;
+  let skipped = 0;
+  let failed = 0;
+
+  for (const sub of subs) {
+    const id = robotIdFor(sub.account_id, sub.epic);
+    const existing = sessions.get(id);
+    if (existing?.running && existing.open_side && existing.entry_price != null) {
+      skipped += 1;
+      continue;
+    }
+
+    try {
+      const connRow = await pool.query(
+        `SELECT environment, identifier, broker_name FROM broker_connections WHERE id = $1`,
+        [sub.connection_id]
+      );
+      if (!connRow.rows.length || connRow.rows[0].broker_name !== 'capital_com') {
+        skipped += 1;
+        continue;
+      }
+      const creds = await loadCreds(sub.connection_id);
+      const acc = await pool.query(
+        `SELECT external_account_id FROM broker_accounts WHERE id = $1`,
+        [sub.account_id]
+      );
+      const opened = await acquireCapitalSession({
+        environment: connRow.rows[0].environment as string,
+        apiKey: creds.api_key || '',
+        identifier: String(connRow.rows[0].identifier || '').trim(),
+        password: creds.password || '',
+        connectionId: sub.connection_id,
+        capitalAccountId: (acc.rows[0]?.external_account_id as string | null) || null,
+      });
+      if (!opened.ok) {
+        failed += 1;
+        continue;
+      }
+      const listed = await listCapitalOpenPositions(opened.session);
+      if (!listed.ok) {
+        failed += 1;
+        continue;
+      }
+      const pos = listed.positions.find(
+        (p) => p.epic.trim().toUpperCase() === sub.epic.trim().toUpperCase()
+      );
+      if (!pos) {
+        skipped += 1;
+        continue;
+      }
+
+      await attachManageOnlyRobot({
+        account_id: sub.account_id,
+        epic: sub.epic,
+        display_name: sub.display_name,
+        lot_size: sub.lot_size,
+        side: pos.direction,
+        entry_price: pos.open_level,
+        deal_id: pos.deal_id,
+      });
+      attached += 1;
+      console.log(
+        `[robot-desk] reconcile manage attach · client #${sub.client_id} · ${sub.display_name} · ${pos.direction}`
+      );
+    } catch (err) {
+      failed += 1;
+      console.warn(
+        `[robot-desk] reconcile manage failed · client #${sub.client_id}`,
+        err instanceof Error ? err.message : err
+      );
+    }
+  }
+
+  return { attached, skipped, failed };
 }
 
 /** After API/PC restart — bring back robots that were running (Postgres persist). */

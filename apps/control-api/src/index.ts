@@ -26,7 +26,7 @@ import {
   extractClientToken,
   resolveClientSession,
 } from './security/clientSession.js';
-import { restorePersistedRobotSessions } from './services/robotDesk.js';
+import { restorePersistedRobotSessions, reconcileManageRobotsForOpenTrades } from './services/robotDesk.js';
 import { countPersistedClients } from './services/robotDeskPersist.js';
 
 const PORT = parseInt(process.env.CONTROL_API_PORT || '3000', 10);
@@ -181,6 +181,10 @@ async function main() {
     const resume = await restorePersistedRobotSessions();
     console.log(
       `[persist] robot desk restored=${resume.restored} failed=${resume.failed}`
+    );
+    const heal = await reconcileManageRobotsForOpenTrades();
+    console.log(
+      `[persist] manage reconcile attached=${heal.attached} skipped=${heal.skipped} failed=${heal.failed}`
     );
   } catch (err) {
     console.warn('[persist] robot restore failed', err);

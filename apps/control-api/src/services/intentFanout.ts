@@ -143,6 +143,41 @@ async function completeExecutionClaim(
   );
 }
 
+async function ensureManageRobotAttached(
+  sub: ActiveSubscription,
+  input: {
+    side: 'BUY' | 'SELL';
+    entry_price: number | null;
+    deal_id?: string | null;
+    deal_reference?: string | null;
+    regime?: string | null;
+    setup_type?: string | null;
+  }
+): Promise<void> {
+  try {
+    await attachManageOnlyRobot({
+      account_id: sub.account_id,
+      epic: sub.epic,
+      display_name: sub.display_name,
+      lot_size: sub.lot_size,
+      side: input.side,
+      entry_price: input.entry_price,
+      deal_id: input.deal_id,
+      deal_reference: input.deal_reference,
+      regime: input.regime,
+      setup_type: input.setup_type,
+    });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    console.error('[fanout] manage-only attach failed', sub.client_id, detail);
+    emitToClient(sub.client_id, {
+      type: 'error',
+      message: `Best Outcome manager failed to attach: ${detail}`,
+    });
+    throw err;
+  }
+}
+
 async function executeForSubscription(
   sub: ActiveSubscription,
   direction: 'BUY' | 'SELL',
@@ -260,12 +295,23 @@ async function executeForSubscription(
       );
       if (existing) {
         noteBrokerOk(sub.client_id);
+        try {
+          await ensureManageRobotAttached(sub, {
+            side: existing.direction,
+            entry_price: existing.open_level,
+            deal_id: existing.deal_id,
+            regime,
+            setup_type: setupType,
+          });
+        } catch {
+          /* logged + client notified */
+        }
         return finish({
           client_id: sub.client_id,
           account_id: sub.account_id,
           lot_size: sub.lot_size,
           ok: false,
-          detail: 'Already open on epic — skip',
+          detail: 'Already open on epic — skip (manage robot ensured)',
           entry_price: existing.open_level,
         });
       }
@@ -328,8 +374,23 @@ async function executeForSubscription(
     }
 
     noteBrokerOk(sub.client_id);
-    const entry =
-      referencePrice != null && Number.isFinite(referencePrice) ? Number(referencePrice) : null;
+    let entry: number | null =
+      referencePrice != null && Number.isFinite(referencePrice)
+        ? Number(referencePrice)
+        : mid != null && Number.isFinite(mid)
+          ? mid
+          : null;
+    let dealId: string | null = null;
+    const afterOpen = await listCapitalOpenPositions(opened.session);
+    if (afterOpen.ok) {
+      const openedPos = afterOpen.positions.find(
+        (p) => p.epic.toUpperCase() === sub.epic.toUpperCase()
+      );
+      if (openedPos) {
+        entry = openedPos.open_level ?? entry;
+        dealId = openedPos.deal_id;
+      }
+    }
 
     // Persist execution/position best-effort
     try {
@@ -362,22 +423,15 @@ async function executeForSubscription(
       regime,
     });
 
-    // Manage-only robot: exits / health reads — no entry brain
-    try {
-      await attachManageOnlyRobot({
-        account_id: sub.account_id,
-        epic: sub.epic,
-        display_name: sub.display_name,
-        lot_size: sub.lot_size,
-        side: direction,
-        entry_price: entry,
-        deal_reference: result.deal_reference || null,
-        regime,
-        setup_type: setupType,
-      });
-    } catch {
-      /* manage attach best-effort */
-    }
+    // Manage-only robot: Best Outcome exits — must not fail silently
+    await ensureManageRobotAttached(sub, {
+      side: direction,
+      entry_price: entry,
+      deal_id: dealId,
+      deal_reference: result.deal_reference || null,
+      regime,
+      setup_type: setupType,
+    });
 
     return finish({
       client_id: sub.client_id,
