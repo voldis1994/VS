@@ -301,7 +301,7 @@ function clearTradeState(s: Internal) {
 }
 
 /**
- * SAFETY SL as LAST RESORT (~0.50%) — NOT the primary exit.
+ * SAFETY SL as LAST RESORT (~0.25%) — micro account friendly (was 0.50%).
  * Best Outcome / HardInvalidation must fire first; Capital Limit SL only on disaster.
  */
 function safetyStopLevel(
@@ -329,14 +329,14 @@ function safetyStopLevel(
         ? Math.max(ask - bid, 0)
         : abs * 0.00005;
 
-  const pctCushion = abs * 0.005; // 0.50% disaster cushion (0.20% sniped Best Outcome)
+  const pctCushion = abs * 0.0025; // 0.25% — half of 0.50% for micro accounts
   const brokerMin =
     minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
       ? minStopDistance
       : 0;
-  const floor = abs >= 1000 ? 1.2 : abs >= 100 ? 0.5 : abs >= 10 ? 0.08 : abs >= 1 ? 0.0008 : 0.00008;
+  const floor = abs >= 1000 ? 0.6 : abs >= 100 ? 0.25 : abs >= 10 ? 0.04 : abs >= 1 ? 0.0004 : 0.00004;
   const dist =
-    Math.max(pctCushion, brokerMin * 4, spr * 12, floor) * Math.max(loosen, 1);
+    Math.max(pctCushion, brokerMin * 2, spr * 6, floor) * Math.max(loosen, 1);
 
   const raw = direction === 'BUY' ? ref - dist : ref + dist;
   if (abs >= 1000) return Math.round(raw * 10) / 10;
@@ -345,19 +345,19 @@ function safetyStopLevel(
   return Math.round(raw * 1e6) / 1e6;
 }
 
-/** Cushion stopDistance in Capital POINTS (≥ 4× min, ~0.50% when point size known). */
+/** Cushion stopDistance in Capital POINTS (≥ 2× min, ~0.25% when point size known). */
 function safetyStopDistancePts(
   mid: number,
   minPts: number,
   pointSize: number | null
 ): number {
   const abs = Math.max(Math.abs(mid), 1e-9);
-  const pct = abs * 0.005;
-  let fromPct = minPts * 4;
+  const pct = abs * 0.0025;
+  let fromPct = minPts * 2;
   if (pointSize != null && pointSize > 0) {
     fromPct = Math.max(fromPct, pct / pointSize);
   }
-  const distPts = Math.max(minPts * 4, fromPct, minPts + 1e-9);
+  const distPts = Math.max(minPts * 2, fromPct, minPts + 1e-9);
   return distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
 }
 
@@ -383,18 +383,23 @@ function expectedStopFromDistance(
   return direction === 'BUY' ? ref - dist : ref + dist;
 }
 
+/**
+ * Track excursion in PRICE POINTS only.
+ * Broker UPL ($) is display-only — never mix into MFE / peak_retention
+ * or PeakProtection never arms (floor is in points).
+ */
 function updateExcursion(s: Internal, mid: number, brokerUpl?: number | null) {
   if (!s.open_side || s.entry_price == null) return;
   const fav = favorableMove(s.open_side, s.entry_price, mid);
-  const upl =
+  // Display: prefer broker cash UPL when present; BO math uses fav/mfe points
+  s.unrealized =
     brokerUpl != null && Number.isFinite(brokerUpl) ? Number(brokerUpl) : fav;
-  s.unrealized = upl;
-  if (upl > s.mfe) {
-    s.mfe = upl;
+  if (fav > s.mfe) {
+    s.mfe = fav;
     s.peak_favorable = mid;
   }
   if (fav < s.mae) s.mae = fav;
-  s.peak_retention = s.mfe > 0 ? Math.max(0, upl / s.mfe) : null;
+  s.peak_retention = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
 }
 
 /** Exact id only — never returns a different robot */
