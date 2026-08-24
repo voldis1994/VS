@@ -383,18 +383,23 @@ function expectedStopFromDistance(
   return direction === 'BUY' ? ref - dist : ref + dist;
 }
 
+/**
+ * Track excursion in PRICE POINTS only.
+ * Broker UPL ($) is display-only — never mix into MFE / peak_retention
+ * or PeakProtection never arms (floor is in points).
+ */
 function updateExcursion(s: Internal, mid: number, brokerUpl?: number | null) {
   if (!s.open_side || s.entry_price == null) return;
   const fav = favorableMove(s.open_side, s.entry_price, mid);
-  const upl =
+  // Display: prefer broker cash UPL when present; BO math uses fav/mfe points
+  s.unrealized =
     brokerUpl != null && Number.isFinite(brokerUpl) ? Number(brokerUpl) : fav;
-  s.unrealized = upl;
-  if (upl > s.mfe) {
-    s.mfe = upl;
+  if (fav > s.mfe) {
+    s.mfe = fav;
     s.peak_favorable = mid;
   }
   if (fav < s.mae) s.mae = fav;
-  s.peak_retention = s.mfe > 0 ? Math.max(0, upl / s.mfe) : null;
+  s.peak_retention = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
 }
 
 /** Exact id only — never returns a different robot */

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BEST_OUTCOME_LOCK_RETENTION,
   bestOutcomeMfeFloor,
   decideBestOutcomeExit,
   describeBestOutcomeState,
@@ -51,16 +52,48 @@ describe('decideBestOutcomeExit', () => {
     expect(d.exit).toBe(false);
   });
 
-  it('does not soft-exit flat after giveback', () => {
+  it('cuts when peak was real and giveback hits flat/red — never wait HardInv', () => {
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
-        entry_price: 2000,
+        entry_price: 4600,
         regime: 'TREND_UP',
         mfe: 5,
-        peak_retention: 0.05,
+        peak_retention: 0.01,
       }),
-      2000.05
+      4599.9
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/BestOutcome cut|gave back/);
+  });
+
+  it('locks majority of MFE while still green (~65% retention)', () => {
+    expect(BEST_OUTCOME_LOCK_RETENTION).toBe(0.65);
+    // MFE 5pt, fav ~3.0 → ret 0.60 < 0.65 → lock
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4600,
+        regime: 'TREND_UP',
+        mfe: 5,
+        peak_retention: 0.6,
+      }),
+      4603
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/PeakProtection/);
+  });
+
+  it('holds near peak (ret 90%)', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4600,
+        regime: 'TREND_UP',
+        mfe: 5,
+        peak_retention: 0.9,
+      }),
+      4604.5
     );
     expect(d.exit).toBe(false);
   });
@@ -95,39 +128,27 @@ describe('decideBestOutcomeExit', () => {
     expect(d.reason).toMatch(/HardInvalidation/);
   });
 
-  it('peak protection after meaningful MFE giveback (~1.4pt floor)', () => {
+  it('arms from ~1.0pt MFE on Gold', () => {
     const floor = bestOutcomeMfeFloor(4600);
-    expect(floor).toBeLessThan(2);
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 4600,
-        regime: 'TREND_UP',
-        mfe: 2.0,
-        peak_retention: 0.3,
-      }),
-      4600.6
-    );
-    expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/PeakProtection/);
+    expect(floor).toBeLessThanOrEqual(1.1);
+    expect(floor).toBeGreaterThanOrEqual(0.8);
   });
 
-  it('target at ~0.28%', () => {
+  it('target at ~0.22%', () => {
     const d = decideBestOutcomeExit(
       snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_UP', mfe: 8 }),
-      2006
+      2004.5
     );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/Target/);
   });
 
-  it('describeBestOutcomeState shows BO hold line when not exiting', () => {
+  it('describeBestOutcomeState shows lock threshold', () => {
     const s = describeBestOutcomeState(
-      snap({ open_side: 'BUY', entry_price: 4519, mfe: 1.5, peak_retention: 0.8 }),
+      snap({ open_side: 'BUY', entry_price: 4519, mfe: 1.5, peak_retention: 0.9 }),
       4519.5
     );
     expect(s.exit).toBe(false);
-    expect(s.hold).toMatch(/BO · UPL/);
-    expect(s.hold).toMatch(/MFE/);
+    expect(s.hold).toMatch(/lock@65%/);
   });
 });
