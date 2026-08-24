@@ -103,3 +103,43 @@ export function decideBestOutcomeExit(
 
   return { exit: false, reason: '' };
 }
+
+/** Operator-facing hold line when Best Outcome did not fire an exit. */
+export function describeBestOutcomeState(
+  s: ExitSnapshot,
+  mid: number
+): { exit: boolean; reason: string; hold: string } {
+  const decision = decideBestOutcomeExit(s, mid);
+  if (decision.exit) return { ...decision, hold: '' };
+
+  if (!s.open_side || s.entry_price == null) {
+    return {
+      exit: false,
+      reason: '',
+      hold: 'BO blocked — missing entry_price (manage robot not seeded?)',
+    };
+  }
+
+  const entry = s.entry_price;
+  const fav = favorableMove(s.open_side, entry, mid);
+  const absEntry = Math.max(Math.abs(entry), 1e-9);
+  const sl = Math.max(absEntry * 0.0032, 0.32);
+  const minGreen = Math.max(absEntry * 0.00004, 0.1);
+  const mfeFloor = Math.max(absEntry * 0.0003, 0.08);
+  const ret =
+    s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—';
+
+  if (fav < minGreen) {
+    return {
+      exit: false,
+      reason: '',
+      hold: `BO idle (need green) · UPL ${fav.toFixed(2)} < ${minGreen.toFixed(2)} · HardInv @ -${sl.toFixed(2)} · MFE ${s.mfe.toFixed(2)}/${mfeFloor.toFixed(2)} · ret ${ret}`,
+    };
+  }
+
+  return {
+    exit: false,
+    reason: '',
+    hold: `BO armed · UPL ${fav.toFixed(2)} · MFE ${s.mfe.toFixed(2)} · ret ${ret} · waiting rule`,
+  };
+}
