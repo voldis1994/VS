@@ -5,6 +5,7 @@ import { fmtLot, roundLot } from '../lib/format';
 import type { ClientQuote, DeskStatus, Market } from '../types';
 
 const PRICE_HISTORY_MAX = 90;
+const MAX_MARKETS = 3;
 
 export function useDesk() {
   const [token, setToken] = useState<string | null>(() => getClientToken());
@@ -13,7 +14,9 @@ export function useDesk() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<DeskStatus | null>(null);
   const [markets, setMarkets] = useState<Market[]>([]);
-  const [epic, setEpic] = useState('');
+  const [epics, setEpics] = useState<string[]>([]);
+  const [focusEpic, setFocusEpic] = useState('');
+  const [budgetPct, setBudgetPct] = useState(25);
   const [lot, setLot] = useState(0.1);
   const [quote, setQuote] = useState<ClientQuote | null>(null);
   const [priceHistory, setPriceHistory] = useState<number[]>([]);
@@ -21,11 +24,11 @@ export function useDesk() {
   const [closedBanner, setClosedBanner] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tradesOpen, setTradesOpen] = useState(true);
-  const lotInputTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const budgetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const selected = useMemo(
-    () => markets.find((m) => m.epic === epic) || null,
-    [markets, epic]
+    () => markets.find((m) => m.epic === focusEpic) || null,
+    [markets, focusEpic]
   );
 
   const confirmedRunning = status?.robot_status === 'RUNNING';
@@ -45,20 +48,32 @@ export function useDesk() {
   const refresh = useCallback(async () => {
     const st = await clientFetch<DeskStatus>('/api/client/status');
     setStatus(st);
-    if (st.market) setEpic(st.market);
+    const nextEpics =
+      Array.isArray(st.markets) && st.markets.length
+        ? st.markets
+        : st.market
+          ? [st.market]
+          : [];
+    if (nextEpics.length) {
+      setEpics(nextEpics);
+      setFocusEpic((prev) => (nextEpics.includes(prev) ? prev : nextEpics[0]!));
+    }
+    if (st.budget_pct != null) setBudgetPct(st.budget_pct);
     if (st.lot_size != null) setLot(st.lot_size);
     return st;
   }, []);
 
   const refreshQuote = useCallback(async () => {
     try {
-      const q = await clientFetch<ClientQuote>('/api/client/quote');
+      const q = await clientFetch<ClientQuote>(
+        `/api/client/quote${focusEpic ? `?epic=${encodeURIComponent(focusEpic)}` : ''}`
+      );
       setQuote(q);
       pushPrice(q.mid);
     } catch {
       /* quote optional until market selected */
     }
-  }, [pushPrice]);
+  }, [pushPrice, focusEpic]);
 
   const loadMarkets = useCallback(async () => {
     const res = await clientFetch<{ markets: Market[] }>('/api/client/markets');
@@ -72,8 +87,15 @@ export function useDesk() {
     setPriceHistory([]);
     Promise.all([refresh(), loadMarkets()])
       .then(([st, mk]) => {
-        if (!st.market && mk[0]) {
-          setEpic(mk[0].epic);
+        const have =
+          Array.isArray(st.markets) && st.markets.length
+            ? st.markets
+            : st.market
+              ? [st.market]
+              : [];
+        if (!have.length && mk[0]) {
+          setEpics([mk[0].epic]);
+          setFocusEpic(mk[0].epic);
           setLot(mk[0].min_lot);
         }
       })
@@ -88,11 +110,11 @@ export function useDesk() {
   }, [token, refresh, loadMarkets]);
 
   useEffect(() => {
-    if (!token || !epic) return;
+    if (!token || !focusEpic) return;
     void refreshQuote();
     const t = setInterval(() => void refreshQuote(), 2000);
     return () => clearInterval(t);
-  }, [token, epic, refreshQuote]);
+  }, [token, focusEpic, refreshQuote]);
 
   useEffect(() => {
     if (!token) return;
@@ -156,61 +178,75 @@ export function useDesk() {
     setPriceHistory([]);
   };
 
-  const persistConfig = async (nextEpic: string, nextLot: number) => {
+  const persistConfig = async (nextEpics: string[], nextBudget: number, nextLot?: number) => {
+    const cleaned = [...new Set(nextEpics.map((e) => e.trim()).filter(Boolean))].slice(0, MAX_MARKETS);
+    if (!cleaned.length) throw new Error('Select 1–3 markets');
     await clientFetch('/api/client/config', {
       method: 'PUT',
-      body: JSON.stringify({ epic: nextEpic, lot_size: nextLot }),
+      body: JSON.stringify({
+        epics: cleaned,
+        budget_pct: nextBudget,
+        lot_size: nextLot ?? lot,
+      }),
     });
     setPriceHistory([]);
     await Promise.all([refresh(), refreshQuote()]);
   };
 
-  const bumpLot = async (dir: -1 | 1) => {
-    if (!selected || requestedActive) return;
-    const step = selected.lot_step || 0.01;
-    const next = Math.min(
-      selected.max_lot,
-      Math.max(selected.min_lot, roundLot(lot + dir * step, step))
-    );
-    setLot(next);
-    setError(null);
-    try {
-      await persistConfig(selected.epic, next);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Lot update failed');
-    }
-  };
-
-  const setLotInput = (raw: string) => {
-    if (!selected || requestedActive) return;
-    const n = Number(raw);
-    if (!Number.isFinite(n)) return;
-    setLot(n);
-    setError(null);
-    if (lotInputTimer.current) clearTimeout(lotInputTimer.current);
-    lotInputTimer.current = setTimeout(() => {
-      const step = selected.lot_step || 0.01;
-      const clamped = Math.min(selected.max_lot, Math.max(selected.min_lot, roundLot(n, step)));
-      setLot(clamped);
-      void persistConfig(selected.epic, clamped).catch((e) => {
-        setError(e instanceof Error ? e.message : 'Lot update failed');
-      });
-    }, 450);
-  };
-
-  const onMarketChange = async (value: string) => {
+  const toggleMarket = async (epic: string) => {
     if (requestedActive) return;
-    const m = markets.find((x) => x.epic === value);
-    if (!m) return;
-    setEpic(m.epic);
-    setLot(m.min_lot);
-    setPriceHistory([]);
+    const has = epics.includes(epic);
+    let next: string[];
+    if (has) {
+      if (epics.length <= 1) {
+        setError('Keep at least 1 market');
+        return;
+      }
+      next = epics.filter((e) => e !== epic);
+    } else {
+      if (epics.length >= MAX_MARKETS) {
+        setError('Max 3 markets');
+        return;
+      }
+      next = [...epics, epic];
+    }
+    setEpics(next);
+    setFocusEpic(next.includes(focusEpic) ? focusEpic : next[0]!);
     setError(null);
     try {
-      await persistConfig(m.epic, m.min_lot);
+      const m = markets.find((x) => x.epic === next[0]);
+      await persistConfig(next, budgetPct, m?.min_lot ?? lot);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Market update failed');
     }
+  };
+
+  const bumpBudget = async (dir: -1 | 1) => {
+    if (requestedActive) return;
+    const next = Math.min(100, Math.max(1, budgetPct + dir * 5));
+    setBudgetPct(next);
+    setError(null);
+    try {
+      await persistConfig(epics, next);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Budget update failed');
+    }
+  };
+
+  const setBudgetInput = (raw: string) => {
+    if (requestedActive) return;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    setBudgetPct(n);
+    setError(null);
+    if (budgetTimer.current) clearTimeout(budgetTimer.current);
+    budgetTimer.current = setTimeout(() => {
+      const clamped = Math.min(100, Math.max(1, Math.round(n)));
+      setBudgetPct(clamped);
+      void persistConfig(epics, clamped).catch((e) => {
+        setError(e instanceof Error ? e.message : 'Budget update failed');
+      });
+    }, 450);
   };
 
   const startRobot = async () => {
@@ -218,8 +254,8 @@ export function useDesk() {
     setBusy(true);
     setError(null);
     try {
-      if (!epic) throw new Error('Select a market first');
-      await persistConfig(epic, lot);
+      if (!epics.length) throw new Error('Select 1–3 markets first');
+      await persistConfig(epics, budgetPct, lot);
       const res = await clientFetch<{ status: DeskStatus }>('/api/client/start', {
         method: 'POST',
         body: JSON.stringify({}),
@@ -268,6 +304,16 @@ export function useDesk() {
     status?.connection_status !== 'ERROR' &&
     status?.broker_status !== 'DEGRADED';
 
+  const estimatedLot = useMemo(() => {
+    if (!selected) return null;
+    // Preview only — live size uses Capital equity on the server
+    const mid = quote?.mid;
+    if (mid == null || !(mid > 0)) return selected.min_lot;
+    const factor = selected.category === 'fx' ? 0.033 : 0.05;
+    const rough = (100 * (budgetPct / 100)) / (mid * factor);
+    return Math.max(selected.min_lot, roundLot(rough, selected.lot_step || 0.01));
+  }, [selected, quote?.mid, budgetPct]);
+
   return {
     token,
     accessCode,
@@ -276,8 +322,11 @@ export function useDesk() {
     busy,
     status,
     markets,
-    epic,
+    epics,
+    epic: focusEpic,
+    budgetPct,
     lot,
+    estimatedLot,
     quote,
     priceHistory,
     flash,
@@ -294,9 +343,10 @@ export function useDesk() {
     online,
     login,
     logout,
-    bumpLot,
-    setLotInput,
-    onMarketChange,
+    toggleMarket,
+    setFocusEpic,
+    bumpBudget,
+    setBudgetInput,
     startRobot,
     stopRobot,
     fmtLot,

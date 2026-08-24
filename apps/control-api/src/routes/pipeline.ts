@@ -29,19 +29,26 @@ export async function registerPipelineRoutes(app: FastifyInstance): Promise<void
   app.get('/api/pipeline/subscribed-epics', async (request, reply) => {
     if (!requirePipelineAuth(request, reply)) return;
     const { rows } = await pool.query(
-      `SELECT DISTINCT c.panel_epic as epic, c.panel_display_name as display_name
-       FROM clients c
-       WHERE c.enabled = true
-         AND c.access_enabled = true
-         AND c.panel_robot_requested = 'RUNNING'
-         AND c.panel_epic IS NOT NULL
-         AND length(trim(c.panel_epic)) > 0
+      `SELECT DISTINCT epic, epic as display_name FROM (
+         SELECT UNNEST(
+           CASE
+             WHEN cardinality(COALESCE(c.panel_epics, ARRAY[]::text[])) > 0 THEN c.panel_epics
+             WHEN c.panel_epic IS NOT NULL AND length(trim(c.panel_epic)) > 0 THEN ARRAY[c.panel_epic]
+             ELSE ARRAY[]::text[]
+           END
+         ) as epic
+         FROM clients c
+         WHERE c.enabled = true
+           AND c.access_enabled = true
+           AND c.panel_robot_requested = 'RUNNING'
+       ) t
+       WHERE epic IS NOT NULL AND length(trim(epic)) > 0
        ORDER BY epic ASC`
     );
     return {
       epics: rows.map((r) => ({
         epic: String(r.epic),
-        display_name: r.display_name ? String(r.display_name) : String(r.epic),
+        display_name: String(r.epic),
       })),
       bridge: getPipelineBridgeStatus(),
     };

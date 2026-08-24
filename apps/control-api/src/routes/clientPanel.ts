@@ -30,7 +30,8 @@ export async function registerClientPanelRoutes(app: FastifyInstance): Promise<v
   app.get('/api/client/quote', async (request, reply) => {
     const session = await requireClientSession(request, reply);
     if (!session) return;
-    const quote = await getClientQuote(session.client_id);
+    const q = request.query as { epic?: string };
+    const quote = await getClientQuote(session.client_id, q.epic ? String(q.epic) : undefined);
     if (!quote) {
       return reply.code(404).send({ error: 'No market configured', message: 'Select a market first' });
     }
@@ -41,17 +42,28 @@ export async function registerClientPanelRoutes(app: FastifyInstance): Promise<v
   app.put('/api/client/config', async (request, reply) => {
     const session = await requireClientSession(request, reply);
     if (!session) return;
-    const body = (request.body || {}) as { epic?: string; lot_size?: number };
-    if (!body.epic || body.lot_size == null) {
+    const body = (request.body || {}) as {
+      epic?: string;
+      epics?: string[];
+      lot_size?: number;
+      budget_pct?: number;
+    };
+    const epics = Array.isArray(body.epics) && body.epics.length
+      ? body.epics
+      : body.epic
+        ? [body.epic]
+        : [];
+    if (!epics.length) {
       return reply.code(400).send({
-        error: 'epic and lot_size required',
-        message: 'epic and lot_size required',
+        error: 'epics required (1–3)',
+        message: 'Select 1–3 markets',
       });
     }
     try {
       const status = await saveClientConfig(session.client_id, {
-        epic: String(body.epic),
-        lot_size: Number(body.lot_size),
+        epics: epics.map(String),
+        lot_size: body.lot_size != null ? Number(body.lot_size) : undefined,
+        budget_pct: body.budget_pct != null ? Number(body.budget_pct) : undefined,
       });
       assertNoSecrets(status);
       return { success: true, status };

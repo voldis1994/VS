@@ -8,7 +8,10 @@ import {
   fetchCapitalMinutePrices,
   computeSafetyCushionStopLevel,
   isLateMoveOnOneMinute,
+  listCapitalAccounts,
+  pickCapitalEquity,
 } from './capitalCom.js';
+import { sizeFromBudgetPct } from './budgetSizing.js';
 import { emitToClient } from './clientEvents.js';
 import {
   listActiveSubscriptionsForEpic,
@@ -152,6 +155,7 @@ async function ensureManageRobotAttached(
     deal_reference?: string | null;
     regime?: string | null;
     setup_type?: string | null;
+    lot_size?: number;
   }
 ): Promise<void> {
   try {
@@ -159,7 +163,7 @@ async function ensureManageRobotAttached(
       account_id: sub.account_id,
       epic: sub.epic,
       display_name: sub.display_name,
-      lot_size: sub.lot_size,
+      lot_size: input.lot_size ?? sub.lot_size,
       side: input.side,
       entry_price: input.entry_price,
       deal_id: input.deal_id,
@@ -354,10 +358,34 @@ async function executeForSubscription(
       });
     }
 
+    // Budget % of Capital equity → deal size (fallback to configured lot)
+    let dealSize = sub.lot_size;
+    let sizeDetail = `lot ${sub.lot_size}`;
+    if (mid != null) {
+      const accounts = await listCapitalAccounts(leased.session);
+      const equity = accounts.ok
+        ? pickCapitalEquity(accounts.accounts, null)
+        : null;
+      if (equity != null && equity > 0) {
+        const sized = sizeFromBudgetPct({
+          equity,
+          budgetPct: sub.budget_pct ?? 25,
+          mid,
+          minLot: sub.min_lot,
+          maxLot: sub.max_lot,
+          lotStep: sub.lot_step,
+          marginFactor: q.margin_factor,
+          category: sub.category,
+        });
+        dealSize = sized.size;
+        sizeDetail = sized.detail;
+      }
+    }
+
     const result = await createCapitalPosition(leased.session, {
       epic: sub.epic,
       direction,
-      size: sub.lot_size,
+      size: dealSize,
       ...(stopLevel != null ? { stopLevel } : {}),
     });
 
@@ -371,9 +399,9 @@ async function executeForSubscription(
       return finish({
         client_id: sub.client_id,
         account_id: sub.account_id,
-        lot_size: sub.lot_size,
+        lot_size: dealSize,
         ok: false,
-        detail: result.detail,
+        detail: `${result.detail} · ${sizeDetail}`,
         entry_price: null,
       });
     }
@@ -397,7 +425,7 @@ async function executeForSubscription(
       }
     }
 
-    const openDetail = result.detail;
+    const openDetail = `${result.detail} · ${sizeDetail}`;
     // Release Capital lease BEFORE manage attach (attach kicks robotCycle which needs same lock)
     leased.release();
 
@@ -412,7 +440,7 @@ async function executeForSubscription(
           sub.instrument_id,
           direction === 'BUY' ? 'LONG' : 'SHORT',
           entry ?? 0,
-          sub.lot_size,
+          dealSize,
         ]
       );
     } catch {
@@ -425,7 +453,7 @@ async function executeForSubscription(
       display_name: sub.display_name,
       side: direction,
       trade_type: formatTradeLabel(direction, setupType, regime),
-      lot_size: sub.lot_size,
+      lot_size: dealSize,
       entry_price: entry,
       account_id: sub.account_id,
       setup_type: setupType,
@@ -442,6 +470,7 @@ async function executeForSubscription(
         deal_reference: result.deal_reference || null,
         regime,
         setup_type: setupType,
+        lot_size: dealSize,
       });
     } catch (err) {
       manageNote =
@@ -451,7 +480,7 @@ async function executeForSubscription(
     return finish({
       client_id: sub.client_id,
       account_id: sub.account_id,
-      lot_size: sub.lot_size,
+      lot_size: dealSize,
       ok: true,
       detail: manageNote
         ? `${openDetail} · BO attach FAILED: ${manageNote}`

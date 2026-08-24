@@ -4,32 +4,28 @@ export function TradeDock({
   bid,
   ask,
   spread,
-  lot,
-  min,
-  max,
-  step,
+  budgetPct,
+  estimatedLot,
   locked,
   busy,
   running,
   onStop,
   onStart,
-  onLotBump,
-  onLotInput,
+  onBudgetBump,
+  onBudgetInput,
 }: {
   bid: number | null;
   ask: number | null;
   spread: number | null;
-  lot: number;
-  min: number;
-  max: number;
-  step: number;
+  budgetPct: number;
+  estimatedLot: number | null;
   locked: boolean;
   busy: boolean;
   running: boolean;
   onStop: () => void;
   onStart: () => void;
-  onLotBump: (dir: -1 | 1) => void;
-  onLotInput: (value: string) => void;
+  onBudgetBump: (dir: -1 | 1) => void;
+  onBudgetInput: (value: string) => void;
 }) {
   return (
     <footer className="m-dock">
@@ -63,31 +59,31 @@ export function TradeDock({
           type="button"
           className="m-dock-lot-btn"
           disabled={locked || busy}
-          onClick={() => onLotBump(-1)}
-          aria-label="Decrease lot"
+          onClick={() => onBudgetBump(-1)}
+          aria-label="Decrease budget %"
         >
           −
         </button>
         <label className="m-dock-lot-field">
-          <span className="m-dock-lot-label">Lot size</span>
+          <span className="m-dock-lot-label">Budget % of equity</span>
           <input
             className="m-dock-lot-input"
             type="number"
             inputMode="decimal"
-            min={min}
-            max={max}
-            step={step}
-            value={lot}
+            min={1}
+            max={100}
+            step={1}
+            value={budgetPct}
             disabled={locked || busy}
-            onChange={(e) => onLotInput(e.target.value)}
+            onChange={(e) => onBudgetInput(e.target.value)}
           />
         </label>
         <button
           type="button"
           className="m-dock-lot-btn"
           disabled={locked || busy}
-          onClick={() => onLotBump(1)}
-          aria-label="Increase lot"
+          onClick={() => onBudgetBump(1)}
+          aria-label="Increase budget %"
         >
           +
         </button>
@@ -95,7 +91,7 @@ export function TradeDock({
 
       <div className="m-dock-meta mono">
         <span>
-          {min} – {max} · step {step}
+          ~{budgetPct}% margin · est lot {estimatedLot != null ? fmtLot(estimatedLot) : '—'}
         </span>
         <span>{running ? 'ROBOT ON' : 'ROBOT OFF'}</span>
       </div>

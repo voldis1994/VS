@@ -585,7 +585,19 @@ async function withLoginThrottle<T>(
 
 export async function listCapitalAccounts(
   session: CapitalSession
-): Promise<{ ok: boolean; accounts: Array<{ accountId: string; accountName: string; accountType?: string }>; detail: string }> {
+): Promise<{
+  ok: boolean;
+  accounts: Array<{
+    accountId: string;
+    accountName: string;
+    accountType?: string;
+    balance: number | null;
+    available: number | null;
+    deposit: number | null;
+    profitLoss: number | null;
+  }>;
+  detail: string;
+}> {
   const res = await session.get('/api/v1/accounts');
   if (!res.ok) {
     return {
@@ -596,13 +608,66 @@ export async function listCapitalAccounts(
   }
   const raw = Array.isArray(res.json?.accounts) ? res.json.accounts : [];
   const accounts = raw
-    .map((a: any) => ({
-      accountId: String(a.accountId || a.account_id || '').trim(),
-      accountName: String(a.accountName || a.name || a.accountId || '').trim(),
-      accountType: a.accountType ? String(a.accountType) : undefined,
-    }))
+    .map((a: any) => {
+      const bal = a.balance && typeof a.balance === 'object' ? a.balance : a;
+      const balance = numOrNull(bal.balance ?? a.balance);
+      const available = numOrNull(bal.available ?? a.available ?? bal.balance);
+      const deposit = numOrNull(bal.deposit ?? a.deposit);
+      const profitLoss = numOrNull(bal.profitLoss ?? bal.profit_loss ?? a.profitLoss);
+      return {
+        accountId: String(a.accountId || a.account_id || '').trim(),
+        accountName: String(a.accountName || a.name || a.accountId || '').trim(),
+        accountType: a.accountType ? String(a.accountType) : undefined,
+        balance,
+        available,
+        deposit,
+        profitLoss,
+      };
+    })
     .filter((a: { accountId: string }) => a.accountId);
   return { ok: true, accounts, detail: `${accounts.length} accounts` };
+}
+
+/** Equity for sizing: prefer available, else balance. */
+export function pickCapitalEquity(
+  accounts: Array<{ accountId: string; balance: number | null; available: number | null }>,
+  preferAccountId?: string | null
+): number | null {
+  const prefer = (preferAccountId || '').trim();
+  const ordered = prefer
+    ? [
+        ...accounts.filter((a) => a.accountId === prefer),
+        ...accounts.filter((a) => a.accountId !== prefer),
+      ]
+    : accounts;
+  for (const a of ordered) {
+    if (a.available != null && Number.isFinite(a.available) && a.available > 0) return a.available;
+    if (a.balance != null && Number.isFinite(a.balance) && a.balance > 0) return a.balance;
+  }
+  return null;
+}
+
+/** Parse Capital market payload margin / deposit factor (fraction of notional). */
+export function parseMarginFactorFromMarketJson(json: any): number | null {
+  const instrument = (json?.instrument || json?.market || {}) as Record<string, any>;
+  const direct =
+    numOrNull(instrument.marginFactor) ??
+    numOrNull(instrument.depositFactor) ??
+    numOrNull(json?.marginFactor);
+  if (direct != null && direct > 0) {
+    // Capital sometimes returns 5 for 5%, sometimes 0.05
+    return direct > 1 ? direct / 100 : direct;
+  }
+  const bands = instrument.marginDepositBands || instrument.depositBands || json?.marginDepositBands;
+  if (Array.isArray(bands) && bands.length) {
+    const b0 = bands[0];
+    const m =
+      numOrNull(b0?.margin) ??
+      numOrNull(b0?.deposit) ??
+      numOrNull(b0?.marginFactor);
+    if (m != null && m > 0) return m > 1 ? m / 100 : m;
+  }
+  return null;
 }
 
 export async function switchCapitalAccount(
@@ -673,6 +738,8 @@ export interface CapitalMarketQuote {
   point_size?: number | null;
   /** Minimum stop distance in PRICE units */
   min_stop_distance?: number | null;
+  /** Margin as fraction of notional when Capital provides it */
+  margin_factor?: number | null;
 }
 
 function inferPointSize(json: any, mid: number | null): number {
@@ -796,6 +863,7 @@ export async function fetchCapitalMarketQuote(
     else mid = numOrNull(snap.mid ?? snap.lastTraded);
     const spread = bid != null && ask != null ? ask - bid : null;
     const stops = parseStopRules(res.json, mid);
+    const marginFactor = parseMarginFactorFromMarketJson(res.json);
 
     return {
       epic: candidate,
@@ -813,6 +881,7 @@ export async function fetchCapitalMarketQuote(
       min_stop_unit: stops.min_stop_unit,
       point_size: stops.point_size,
       min_stop_distance: stops.min_stop_distance,
+      margin_factor: marginFactor,
       detail: bid == null && ask == null ? 'Snapshot returned without bid/offer' : undefined,
     };
   };
@@ -1193,8 +1262,8 @@ function lotDefaults(category: string): { min_lot: number; max_lot: number; lot_
 function normalizeMarket(raw: Record<string, any>, pathNames: string[]): CapitalMarket | null {
   const epic = String(raw.epic || raw.instrumentEpic || '').trim();
   if (!epic) return null;
-  const display =
-    String(raw.instrumentName || raw.displayName || raw.name || epic).trim() || epic;
+  // Capital app ticker = epic (US100 stays US100) — never rewrite to Nasdaq/Gold Spot aliases
+  const display = epic;
   const instrumentType = String(raw.instrumentType || raw.type || '');
   const category = mapInstrumentType(instrumentType, pathNames);
   const lots = lotDefaults(category);

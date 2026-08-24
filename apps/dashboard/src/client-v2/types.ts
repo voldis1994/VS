@@ -35,7 +35,9 @@ export type DeskStatus = {
   status_reason?: string | null;
   market: string | null;
   display_name: string | null;
+  markets?: string[];
   lot_size: number | null;
+  budget_pct?: number;
   live_trade: LiveTrade;
 };
 

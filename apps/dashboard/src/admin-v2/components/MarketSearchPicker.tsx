@@ -36,14 +36,14 @@ export function MarketSearchPicker({
 
   useEffect(() => {
     if (!open) {
-      setQuery(selected ? `${selected.display_name} · ${marketKey(selected)}` : '');
+      setQuery(selected ? marketKey(selected) : '');
     }
   }, [open, selected]);
 
   const pick = (m: MarketOption) => {
     const epic = marketKey(m);
     onChange(epic, m);
-    setQuery(`${m.display_name} · ${epic}`);
+    setQuery(epic);
     setOpen(false);
   };
 
@@ -87,8 +87,8 @@ export function MarketSearchPicker({
                       className={`cmd-market-picker-item ${on ? 'on' : ''}`}
                       onClick={() => pick(m)}
                     >
-                      <span className="cmd-market-picker-name">{m.display_name}</span>
-                      <span className="cmd-market-picker-epic mono">{epic}</span>
+                      <span className="cmd-market-picker-name">{epic}</span>
+                      <span className="cmd-market-picker-epic mono">{m.category || m.symbol}</span>
                     </button>
                   </li>
                 );

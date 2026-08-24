@@ -14,6 +14,7 @@ import {
   getPipelineBridgeStatus,
   isEpicBeingAnalyzed,
 } from './pipelineBridge.js';
+import { clampBudgetPct } from './budgetSizing.js';
 import {
   acquireCapitalSession,
   fetchCapitalMarketQuote,
@@ -69,7 +70,11 @@ export type ClientPanelStatus = {
   broker_error: string | null;
   market: string | null;
   display_name: string | null;
+  /** Selected markets (1–3). Capital epic codes. */
+  markets: string[];
   lot_size: number | null;
+  /** % of Capital equity used as margin budget for entry size */
+  budget_pct: number;
   account_id: number | null;
   live_trade: ClientLiveTrade;
   last_seen_at: string | null;
@@ -171,16 +176,20 @@ export async function listClientMarkets(clientId: number): Promise<ClientMarket[
      ORDER BY display_name ASC`,
     [account.connection_id]
   );
-  return rows.map((m) => ({
-    instrument_id: Number(m.id),
-    epic: String(m.epic),
-    symbol: String(m.symbol || m.epic),
-    display_name: String(m.display_name),
-    category: String(m.category || 'other'),
-    min_lot: Number(m.min_lot),
-    max_lot: Number(m.max_lot),
-    lot_step: Number(m.lot_step),
-  }));
+  return rows.map((m) => {
+    const epic = String(m.epic);
+    return {
+      instrument_id: Number(m.id),
+      epic,
+      symbol: epic,
+      // Capital app ticker — US100 stays US100
+      display_name: epic,
+      category: String(m.category || 'other'),
+      min_lot: Number(m.min_lot),
+      max_lot: Number(m.max_lot),
+      lot_step: Number(m.lot_step),
+    };
+  });
 }
 
 async function loadMarketForClient(
@@ -223,7 +232,7 @@ function robotForAccount(accountId: number, epic?: string | null) {
 
 export async function getClientPanelStatus(clientId: number): Promise<ClientPanelStatus> {
   const { rows } = await pool.query(
-    `SELECT id, name, panel_epic, panel_display_name, panel_lot_size,
+    `SELECT id, name, panel_epic, panel_display_name, panel_lot_size, panel_epics, panel_budget_pct,
             panel_robot_requested, last_seen_at
      FROM clients WHERE id = $1`,
     [clientId]
@@ -235,6 +244,8 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
     panel_epic: string | null;
     panel_display_name: string | null;
     panel_lot_size: string | number | null;
+    panel_epics: string[] | null;
+    panel_budget_pct: string | number | null;
     panel_robot_requested: string;
     last_seen_at: Date | string | null;
   };
@@ -243,7 +254,14 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
   const robot = account ? robotForAccount(account.account_id, c.panel_epic) : null;
   const health = getBrokerHealth(clientId);
   const bridge = getPipelineBridgeStatus();
-  const marketAnalyzed = isEpicBeingAnalyzed(c.panel_epic);
+  const epics = Array.isArray(c.panel_epics) && c.panel_epics.length
+    ? c.panel_epics.map(String).filter(Boolean).slice(0, 3)
+    : c.panel_epic
+      ? [String(c.panel_epic)]
+      : [];
+  const marketAnalyzed = epics.some((e) => isEpicBeingAnalyzed(e));
+  const primaryEpic = epics[0] || c.panel_epic || null;
+  const budgetPct = clampBudgetPct(Number(c.panel_budget_pct ?? 25));
 
   let live_trade: ClientLiveTrade = null;
   if (robot?.running && robot.open_side) {
@@ -251,7 +269,7 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
     const regime = robot.regime || currentRegime(robot.epic)?.current || null;
     live_trade = {
       market: robot.epic,
-      display_name: robot.display_name,
+      display_name: robot.epic,
       side,
       trade_type: formatTradeLabel(side, null, regime) || side,
       regime,
@@ -298,8 +316,11 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
           noteBrokerOk(clientId);
           const listed = await listCapitalOpenPositions(opened.session);
           const match = listed.ok
-            ? listed.positions.find(
-                (p) => p.epic.toUpperCase() === String(c.panel_epic).toUpperCase()
+            ? listed.positions.find((p) =>
+                epics.some((e) => p.epic.toUpperCase() === e.toUpperCase())
+              ) ||
+              listed.positions.find(
+                (p) => p.epic.toUpperCase() === String(c.panel_epic || '').toUpperCase()
               )
             : null;
           if (match) {
@@ -307,7 +328,7 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
             const regime = currentRegime(match.epic)?.current || null;
             live_trade = {
               market: match.epic,
-              display_name: c.panel_display_name || match.epic,
+              display_name: match.epic,
               side,
               trade_type: formatTradeLabel(side, null, regime) || side,
               regime,
@@ -333,7 +354,7 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
   const computed = computeClientRobotStatus({
     requestedRunning,
     hasAccount: Boolean(account),
-    hasEpic: Boolean(c.panel_epic),
+    hasEpic: epics.length > 0,
     bridgeHealthy: bridge.healthy,
     marketAnalyzed,
   });
@@ -361,9 +382,11 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
     last_broker_ok_at: health.last_ok_at,
     broker_error: health.last_error || status_reason,
     status_reason,
-    market: c.panel_epic,
-    display_name: c.panel_display_name,
+    market: primaryEpic,
+    display_name: primaryEpic,
+    markets: epics,
     lot_size: c.panel_lot_size != null ? Number(c.panel_lot_size) : null,
+    budget_pct: budgetPct,
     account_id: account?.account_id ?? null,
     live_trade,
     last_seen_at: c.last_seen_at ? new Date(c.last_seen_at).toISOString() : null,
@@ -372,28 +395,51 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
 
 export async function saveClientConfig(
   clientId: number,
-  input: { epic: string; lot_size: number }
+  input: { epics?: string[]; epic?: string; lot_size?: number; budget_pct?: number }
 ): Promise<ClientPanelStatus> {
-  const market = await loadMarketForClient(clientId, input.epic.trim());
-  if (!market) throw new Error('Invalid market for this client');
-  const lotErr = validateLotSize(input.lot_size, market.min_lot, market.max_lot, market.lot_step);
+  const rawEpics = (input.epics?.length ? input.epics : input.epic ? [input.epic] : [])
+    .map((e) => String(e || '').trim())
+    .filter(Boolean);
+  const unique = [...new Set(rawEpics)].slice(0, 3);
+  if (!unique.length) throw new Error('Select 1–3 markets');
+  if (unique.length > 3) throw new Error('Max 3 markets');
+
+  const loaded = [];
+  for (const epic of unique) {
+    const market = await loadMarketForClient(clientId, epic);
+    if (!market) throw new Error(`Invalid market: ${epic}`);
+    loaded.push(market);
+  }
+
+  const budgetPct = clampBudgetPct(Number(input.budget_pct ?? 25));
+  // lot_size kept as fallback / UI hint — live size comes from budget %
+  const primary = loaded[0]!;
+  const lot =
+    input.lot_size != null && Number.isFinite(Number(input.lot_size))
+      ? Number(input.lot_size)
+      : primary.min_lot;
+  const lotErr = validateLotSize(lot, primary.min_lot, primary.max_lot, primary.lot_step);
   if (lotErr) throw new Error(lotErr);
 
   await pool.query(
     `UPDATE clients SET
        panel_epic = $2,
-       panel_display_name = $3,
+       panel_display_name = $2,
+       panel_epics = $3::text[],
        panel_lot_size = $4,
+       panel_budget_pct = $5,
        updated_at = NOW()
      WHERE id = $1`,
-    [clientId, market.epic, market.display_name, input.lot_size]
+    [clientId, primary.epic, unique, lot, budgetPct]
   );
 
   emitToClient(clientId, {
     type: 'client_status',
-    market: market.epic,
-    display_name: market.display_name,
-    lot_size: input.lot_size,
+    market: primary.epic,
+    display_name: primary.epic,
+    markets: unique,
+    lot_size: lot,
+    budget_pct: budgetPct,
   });
 
   return getClientPanelStatus(clientId);
@@ -405,29 +451,43 @@ export async function saveClientConfig(
  */
 export async function startClientRobot(clientId: number): Promise<ClientPanelStatus> {
   const { rows } = await pool.query(
-    `SELECT panel_epic, panel_display_name, panel_lot_size, enabled, access_enabled
+    `SELECT panel_epic, panel_epics, panel_lot_size, panel_budget_pct, enabled, access_enabled
      FROM clients WHERE id = $1`,
     [clientId]
   );
   if (!rows.length) throw new Error('Client not found');
   const c = rows[0] as {
     panel_epic: string | null;
-    panel_display_name: string | null;
+    panel_epics: string[] | null;
     panel_lot_size: string | number | null;
+    panel_budget_pct: string | number | null;
     enabled: boolean;
     access_enabled: boolean;
   };
   if (!c.enabled) throw new Error('Client disabled');
   if (!c.access_enabled) throw new Error('Client access disabled');
-  if (!c.panel_epic || c.panel_lot_size == null) {
-    throw new Error('Select market and lot size before START');
+
+  const epics = Array.isArray(c.panel_epics) && c.panel_epics.length
+    ? c.panel_epics.map(String).filter(Boolean).slice(0, 3)
+    : c.panel_epic
+      ? [String(c.panel_epic)]
+      : [];
+  if (!epics.length || c.panel_lot_size == null) {
+    throw new Error('Select 1–3 markets and budget before START');
   }
 
-  const market = await loadMarketForClient(clientId, c.panel_epic);
-  if (!market) throw new Error('Invalid market for this client');
+  const markets = [];
+  for (const epic of epics) {
+    const market = await loadMarketForClient(clientId, epic);
+    if (!market) throw new Error(`Invalid market: ${epic}`);
+    markets.push(market);
+  }
+
   const lot = Number(c.panel_lot_size);
-  const lotErr = validateLotSize(lot, market.min_lot, market.max_lot, market.lot_step);
+  const primary = markets[0]!;
+  const lotErr = validateLotSize(lot, primary.min_lot, primary.max_lot, primary.lot_step);
   if (lotErr) throw new Error(lotErr);
+  const budgetPct = clampBudgetPct(Number(c.panel_budget_pct ?? 25));
 
   const account = await resolveClientTradingAccount(clientId);
   if (!account) throw new Error('No broker account linked to this client');
@@ -438,10 +498,9 @@ export async function startClientRobot(clientId: number): Promise<ClientPanelSta
   await activateSubscription({
     clientId,
     accountId: account.account_id,
-    instrumentId: market.instrument_id,
-    epic: market.epic,
-    displayName: market.display_name,
+    markets: markets.map((m) => ({ instrumentId: m.instrument_id, epic: m.epic })),
     lotSize: lot,
+    budgetPct,
   });
 
   const status = await getClientPanelStatus(clientId);
@@ -449,7 +508,9 @@ export async function startClientRobot(clientId: number): Promise<ClientPanelSta
     type: 'robot_started',
     market: status.market,
     display_name: status.display_name,
+    markets: status.markets,
     lot_size: status.lot_size,
+    budget_pct: status.budget_pct,
     robot_status: status.robot_status,
     mode: 'subscription',
   });
@@ -460,22 +521,26 @@ export async function startClientRobot(clientId: number): Promise<ClientPanelSta
 export async function stopClientRobot(clientId: number): Promise<ClientPanelStatus> {
   const account = await resolveClientTradingAccount(clientId);
   const { rows } = await pool.query(
-    `SELECT panel_epic FROM clients WHERE id = $1`,
+    `SELECT panel_epic, panel_epics FROM clients WHERE id = $1`,
     [clientId]
   );
-  const epic = rows[0]?.panel_epic as string | null;
-  let instrumentId: number | null = null;
-  if (account && epic) {
-    const m = await loadMarketForClient(clientId, epic);
-    instrumentId = m?.instrument_id ?? null;
-  }
+  const epics = Array.isArray(rows[0]?.panel_epics) && rows[0].panel_epics.length
+    ? (rows[0].panel_epics as string[])
+    : rows[0]?.panel_epic
+      ? [String(rows[0].panel_epic)]
+      : [];
+  const instrumentIds: number[] = [];
   if (account) {
+    for (const epic of epics) {
+      const m = await loadMarketForClient(clientId, epic);
+      if (m) instrumentIds.push(m.instrument_id);
+    }
     await stopEntryRobotsForAccount(account.account_id);
     await stopFlatManageRobotsForAccount(account.account_id);
     await deactivateSubscription({
       clientId,
       accountId: account.account_id,
-      instrumentId,
+      instrumentIds,
     });
   } else {
     await pool.query(
@@ -492,15 +557,26 @@ export async function stopClientRobot(clientId: number): Promise<ClientPanelStat
   return status;
 }
 
-export async function getClientQuote(clientId: number): Promise<ClientQuote | null> {
+export async function getClientQuote(
+  clientId: number,
+  preferEpic?: string
+): Promise<ClientQuote | null> {
   const { rows } = await pool.query(
-    `SELECT panel_epic, panel_display_name FROM clients WHERE id = $1`,
+    `SELECT panel_epic, panel_epics FROM clients WHERE id = $1`,
     [clientId]
   );
   if (!rows.length) return null;
-  const epic = rows[0].panel_epic as string | null;
+  const epics = Array.isArray(rows[0].panel_epics) && rows[0].panel_epics.length
+    ? (rows[0].panel_epics as string[])
+    : rows[0].panel_epic
+      ? [String(rows[0].panel_epic)]
+      : [];
+  const epic =
+    (preferEpic && epics.includes(preferEpic) ? preferEpic : null) ||
+    epics[0] ||
+    null;
   if (!epic) return null;
-  const displayName = String(rows[0].panel_display_name || epic);
+  const displayName = String(epic);
   const account = await resolveClientTradingAccount(clientId);
   const regime = currentRegime(epic)?.current || null;
   const now = new Date().toISOString();

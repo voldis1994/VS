@@ -11,12 +11,27 @@ const PHASE_LABEL: Record<string, string> = {
   ERROR: 'FAULT',
 };
 
+const POPULAR = ['GOLD', 'SILVER', 'US100', 'US500', 'OIL_CRUDE', 'BTCUSD', 'ETHUSD', 'EURUSD'];
+
 export function DeskScreen() {
   const d = useDeskContext();
   const phase = d.status?.robot_status || 'STOPPED';
-  const displayName = d.selected?.display_name || d.status?.display_name || d.epic || 'Market';
+  const ticker = d.epic || d.status?.market || '—';
   const mid = d.quote?.mid ?? null;
   const regime = d.quote?.regime || d.status?.live_trade?.regime || null;
+
+  const pickList = (() => {
+    const byEpic = new Map(d.markets.map((m) => [m.epic, m]));
+    const popular = POPULAR.map((e) => byEpic.get(e)).filter(Boolean) as typeof d.markets;
+    const rest = d.markets.filter((m) => !POPULAR.includes(m.epic)).slice(0, 40);
+    const merged = [...popular, ...rest];
+    // Always include selected even if not in popular/rest slice
+    for (const e of d.epics) {
+      const m = byEpic.get(e);
+      if (m && !merged.some((x) => x.epic === e)) merged.unshift(m);
+    }
+    return merged;
+  })();
 
   return (
     <div className="m-app">
@@ -24,20 +39,9 @@ export function DeskScreen() {
         <div className="m-top-left">
           <div className="m-asset-icon" aria-hidden />
           <div className="m-top-titles">
-            <select
-              className="m-market-select"
-              value={d.epic}
-              disabled={d.requestedActive || d.busy}
-              onChange={(e) => void d.onMarketChange(e.target.value)}
-              aria-label="Market"
-            >
-              {!d.markets.length && <option value="">No markets</option>}
-              {d.markets.map((m) => (
-                <option key={m.instrument_id} value={m.epic}>
-                  {m.display_name}
-                </option>
-              ))}
-            </select>
+            <div className="m-market-select" style={{ fontWeight: 700, letterSpacing: '0.04em' }}>
+              {ticker}
+            </div>
             <div className="m-top-sub mono">{d.status?.client_name || '—'}</div>
           </div>
         </div>
@@ -47,6 +51,47 @@ export function DeskScreen() {
           </button>
         </div>
       </header>
+
+      <section className="m-markets-pick" style={{ padding: '0 14px 8px' }}>
+        <div className="m-top-sub" style={{ marginBottom: 6 }}>
+          Markets 1–3 · Capital names
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {pickList.map((m) => {
+            const on = d.epics.includes(m.epic);
+            const focus = d.epic === m.epic;
+            return (
+              <button
+                key={m.epic}
+                type="button"
+                disabled={d.requestedActive || d.busy}
+                onClick={() => {
+                  if (on) {
+                    if (focus) void d.toggleMarket(m.epic);
+                    else d.setFocusEpic(m.epic);
+                  } else {
+                    void d.toggleMarket(m.epic);
+                  }
+                }}
+                onDoubleClick={() => void d.toggleMarket(m.epic)}
+                className="m-phase"
+                style={{
+                  border: focus ? '1px solid #2dd4bf' : '1px solid transparent',
+                  opacity: on ? 1 : 0.55,
+                  cursor: 'pointer',
+                  background: on ? 'rgba(45,212,191,0.15)' : undefined,
+                }}
+                title={on ? 'Selected — tap to focus, double-tap to remove' : 'Add market'}
+              >
+                {m.epic}
+              </button>
+            );
+          })}
+        </div>
+        <div className="m-top-sub mono" style={{ marginTop: 6 }}>
+          Selected: {d.epics.join(' · ') || '—'}
+        </div>
+      </section>
 
       <section className="m-price-block">
         <div className="m-price-main mono">{fmtPrice(mid)}</div>
@@ -108,17 +153,15 @@ export function DeskScreen() {
         bid={d.quote?.bid ?? mid}
         ask={d.quote?.ask ?? mid}
         spread={d.quote?.spread ?? null}
-        lot={d.lot}
-        min={d.selected?.min_lot ?? 0.01}
-        max={d.selected?.max_lot ?? 100}
-        step={d.selected?.lot_step ?? 0.01}
+        budgetPct={d.budgetPct}
+        estimatedLot={d.estimatedLot}
         locked={d.requestedActive}
         busy={d.busy}
         running={d.requestedActive}
         onStop={() => void d.stopRobot()}
         onStart={() => void d.startRobot()}
-        onLotBump={(dir) => void d.bumpLot(dir)}
-        onLotInput={d.setLotInput}
+        onBudgetBump={(dir) => void d.bumpBudget(dir)}
+        onBudgetInput={d.setBudgetInput}
       />
     </div>
   );

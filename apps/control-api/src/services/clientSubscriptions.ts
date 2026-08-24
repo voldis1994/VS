@@ -9,6 +9,11 @@ export type ActiveSubscription = {
   display_name: string;
   lot_size: number;
   instrument_id: number;
+  budget_pct: number;
+  category: string;
+  min_lot: number;
+  max_lot: number;
+  lot_step: number;
 };
 
 /** Runtime health per client (broker last-ok). */
@@ -45,54 +50,77 @@ export function getBrokerHealth(clientId: number): {
   };
 }
 
+function mapSubRow(r: Record<string, unknown>): ActiveSubscription {
+  const lot =
+    r.settings_lot != null
+      ? Number(r.settings_lot)
+      : r.panel_lot_size != null
+        ? Number(r.panel_lot_size)
+        : Number(r.min_lot);
+  const budget =
+    r.panel_budget_pct != null && Number.isFinite(Number(r.panel_budget_pct))
+      ? Number(r.panel_budget_pct)
+      : 25;
+  const epic = String(r.epic);
+  return {
+    client_id: Number(r.client_id),
+    client_name: String(r.client_name),
+    account_id: Number(r.account_id),
+    connection_id: Number(r.connection_id),
+    epic,
+    // Capital app name = epic (US100 stays US100)
+    display_name: epic,
+    lot_size: lot,
+    instrument_id: Number(r.instrument_id),
+    budget_pct: budget,
+    category: String(r.category || 'other'),
+    min_lot: Number(r.min_lot),
+    max_lot: Number(r.max_lot),
+    lot_step: Number(r.lot_step),
+  };
+}
+
 /** All client panel subscriptions with trading enabled (for manage-robot reconcile). */
 export async function listAllActiveSubscriptions(): Promise<ActiveSubscription[]> {
   const { rows } = await pool.query(
     `SELECT c.id as client_id, c.name as client_name,
-            c.panel_epic, c.panel_display_name, c.panel_lot_size,
+            c.panel_epic, c.panel_display_name, c.panel_lot_size, c.panel_budget_pct,
             ba.id as account_id, bc.id as connection_id,
-            cm.id as instrument_id, cm.epic, cm.display_name, cm.min_lot, cm.max_lot, cm.lot_step,
+            cm.id as instrument_id, cm.epic, cm.display_name, cm.category,
+            cm.min_lot, cm.max_lot, cm.lot_step,
             ais.lot_size as settings_lot, ais.trading_enabled
      FROM clients c
      JOIN broker_connections bc ON bc.client_id = c.id AND bc.enabled = true
      JOIN broker_accounts ba ON ba.broker_connection_id = bc.id AND ba.enabled = true
-     JOIN capital_markets cm ON cm.broker_connection_id = bc.id AND cm.epic = c.panel_epic
+     JOIN capital_markets cm ON cm.broker_connection_id = bc.id
+       AND (
+         cm.epic = ANY(COALESCE(c.panel_epics, ARRAY[]::text[]))
+         OR (cardinality(COALESCE(c.panel_epics, ARRAY[]::text[])) = 0 AND cm.epic = c.panel_epic)
+       )
      LEFT JOIN account_instrument_settings ais
        ON ais.broker_account_id = ba.id AND ais.instrument_id = cm.id
      WHERE c.enabled = true
        AND c.access_enabled = true
        AND c.panel_robot_requested = 'RUNNING'
-       AND c.panel_epic IS NOT NULL
+       AND (
+         cardinality(COALESCE(c.panel_epics, ARRAY[]::text[])) > 0
+         OR c.panel_epic IS NOT NULL
+       )
        AND (
          c.preferred_broker_account_id IS NULL
          OR c.preferred_broker_account_id = ba.id
        )
-     ORDER BY c.id ASC, ba.id ASC`
+     ORDER BY c.id ASC, ba.id ASC, cm.epic ASC`
   );
 
   const out: ActiveSubscription[] = [];
-  const seenClients = new Set<number>();
+  const seen = new Set<string>();
   for (const r of rows) {
-    const clientId = Number(r.client_id);
-    if (seenClients.has(clientId)) continue;
+    const key = `${r.client_id}:${r.epic}`;
+    if (seen.has(key)) continue;
     if (r.trading_enabled === false) continue;
-    const lot =
-      r.settings_lot != null
-        ? Number(r.settings_lot)
-        : r.panel_lot_size != null
-          ? Number(r.panel_lot_size)
-          : Number(r.min_lot);
-    out.push({
-      client_id: clientId,
-      client_name: String(r.client_name),
-      account_id: Number(r.account_id),
-      connection_id: Number(r.connection_id),
-      epic: String(r.epic),
-      display_name: String(r.display_name || r.panel_display_name || r.epic),
-      lot_size: lot,
-      instrument_id: Number(r.instrument_id),
-    });
-    seenClients.add(clientId);
+    out.push(mapSubRow(r as Record<string, unknown>));
+    seen.add(key);
   }
   return out;
 }
@@ -105,9 +133,10 @@ export async function listActiveSubscriptionsForEpic(
 
   const { rows } = await pool.query(
     `SELECT c.id as client_id, c.name as client_name,
-            c.panel_epic, c.panel_display_name, c.panel_lot_size, c.panel_multi_market,
+            c.panel_epic, c.panel_display_name, c.panel_lot_size, c.panel_budget_pct,
             ba.id as account_id, bc.id as connection_id,
-            cm.id as instrument_id, cm.epic, cm.display_name, cm.min_lot, cm.max_lot, cm.lot_step,
+            cm.id as instrument_id, cm.epic, cm.display_name, cm.category,
+            cm.min_lot, cm.max_lot, cm.lot_step,
             ais.lot_size as settings_lot, ais.trading_enabled
      FROM clients c
      JOIN broker_connections bc ON bc.client_id = c.id AND bc.enabled = true
@@ -119,7 +148,11 @@ export async function listActiveSubscriptionsForEpic(
        AND c.access_enabled = true
        AND c.panel_robot_requested = 'RUNNING'
        AND (
-         c.panel_epic = $1
+         $1 = ANY(COALESCE(c.panel_epics, ARRAY[]::text[]))
+         OR (
+           cardinality(COALESCE(c.panel_epics, ARRAY[]::text[])) = 0
+           AND c.panel_epic = $1
+         )
          OR COALESCE(c.panel_multi_market, false) = true
        )
        AND (
@@ -136,22 +169,7 @@ export async function listActiveSubscriptionsForEpic(
     const clientId = Number(r.client_id);
     if (seenClients.has(clientId)) continue;
     if (r.trading_enabled === false) continue;
-    const lot =
-      r.settings_lot != null
-        ? Number(r.settings_lot)
-        : r.panel_lot_size != null
-          ? Number(r.panel_lot_size)
-          : Number(r.min_lot);
-    out.push({
-      client_id: clientId,
-      client_name: String(r.client_name),
-      account_id: Number(r.account_id),
-      connection_id: Number(r.connection_id),
-      epic: String(r.epic),
-      display_name: String(r.display_name || r.panel_display_name || r.epic),
-      lot_size: lot,
-      instrument_id: Number(r.instrument_id),
-    });
+    out.push(mapSubRow(r as Record<string, unknown>));
     seenClients.add(clientId);
   }
   return out;
@@ -160,53 +178,72 @@ export async function listActiveSubscriptionsForEpic(
 export async function activateSubscription(input: {
   clientId: number;
   accountId: number;
-  instrumentId: number;
-  epic: string;
-  displayName: string;
+  markets: Array<{ instrumentId: number; epic: string }>;
   lotSize: number;
+  budgetPct: number;
 }): Promise<void> {
-  // One active market per account for Client Panel subscriptions
+  const markets = input.markets.slice(0, 3);
+  if (!markets.length) throw new Error('Select 1–3 markets');
+  const epics = markets.map((m) => m.epic);
+  const ids = markets.map((m) => m.instrumentId);
+
+  // Enable only selected markets on this account
   await pool.query(
     `UPDATE account_instrument_settings
      SET trading_enabled = false, updated_at = NOW()
-     WHERE broker_account_id = $1 AND instrument_id <> $2`,
-    [input.accountId, input.instrumentId]
+     WHERE broker_account_id = $1
+       AND NOT (instrument_id = ANY($2::int[]))`,
+    [input.accountId, ids]
   );
-  await pool.query(
-    `INSERT INTO account_instrument_settings
-       (broker_account_id, instrument_id, symbol, lot_size, enabled, trading_enabled)
-     VALUES ($1, $2, $3, $4, true, true)
-     ON CONFLICT (broker_account_id, instrument_id) DO UPDATE SET
-       symbol = EXCLUDED.symbol,
-       lot_size = EXCLUDED.lot_size,
-       enabled = true,
-       trading_enabled = true,
-       updated_at = NOW()`,
-    [input.accountId, input.instrumentId, input.epic, input.lotSize]
-  );
+
+  for (const m of markets) {
+    await pool.query(
+      `INSERT INTO account_instrument_settings
+         (broker_account_id, instrument_id, symbol, lot_size, enabled, trading_enabled)
+       VALUES ($1, $2, $3, $4, true, true)
+       ON CONFLICT (broker_account_id, instrument_id) DO UPDATE SET
+         symbol = EXCLUDED.symbol,
+         lot_size = EXCLUDED.lot_size,
+         enabled = true,
+         trading_enabled = true,
+         updated_at = NOW()`,
+      [input.accountId, m.instrumentId, m.epic, input.lotSize]
+    );
+  }
+
+  const primary = markets[0]!;
   await pool.query(
     `UPDATE clients SET
        panel_epic = $2,
-       panel_display_name = $3,
+       panel_display_name = $2,
+       panel_epics = $3::text[],
        panel_lot_size = $4,
+       panel_budget_pct = $5,
        panel_robot_requested = 'RUNNING',
        updated_at = NOW()
      WHERE id = $1`,
-    [input.clientId, input.epic, input.displayName, input.lotSize]
+    [input.clientId, primary.epic, epics, input.lotSize, input.budgetPct]
   );
 }
 
 export async function deactivateSubscription(input: {
   clientId: number;
   accountId: number;
-  instrumentId: number | null;
+  instrumentIds?: number[] | null;
 }): Promise<void> {
-  if (input.instrumentId != null) {
+  if (input.instrumentIds?.length) {
     await pool.query(
       `UPDATE account_instrument_settings
        SET trading_enabled = false, updated_at = NOW()
-       WHERE broker_account_id = $1 AND instrument_id = $2`,
-      [input.accountId, input.instrumentId]
+       WHERE broker_account_id = $1 AND instrument_id = ANY($2::int[])`,
+      [input.accountId, input.instrumentIds]
+    );
+  } else {
+    await pool.query(
+      `UPDATE account_instrument_settings
+       SET trading_enabled = false, updated_at = NOW()
+       WHERE broker_account_id = $1`,
+      [input.accountId]
     );
   }
   await pool.query(

@@ -32,6 +32,12 @@ vi.mock('./capitalCom.js', () => ({
   listCapitalOpenPositions: (...a: unknown[]) => listCapitalOpenPositions(...a),
   fetchCapitalMarketQuote: (...a: unknown[]) => fetchCapitalMarketQuote(...a),
   fetchCapitalMinutePrices: (...a: unknown[]) => fetchCapitalMinutePrices(...a),
+  listCapitalAccounts: async () => ({
+    ok: true,
+    accounts: [{ accountId: '1', accountName: 'Demo', balance: 1000, available: 1000 }],
+    detail: '1',
+  }),
+  pickCapitalEquity: () => 1000,
   computeSafetyCushionStopLevel: () => 1995,
   isLateMoveOnOneMinute: () => false,
 }));
@@ -75,6 +81,11 @@ function sub(partial: {
     display_name: partial.epic,
     lot_size: partial.lot_size,
     instrument_id: 100 + partial.client_id,
+    budget_pct: 25,
+    category: 'metals',
+    min_lot: 0.01,
+    max_lot: 100,
+    lot_step: 0.01,
   };
 }
 
