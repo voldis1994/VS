@@ -32,11 +32,7 @@ import {
 } from './regimes.js';
 import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove } from './exitManage.js';
 import { decideEntryBreakoutOnly } from './entryFromRegime.js';
-import {
-  decideEntryFromBoxBreak,
-  decideEntryFromQuietImpulse,
-  resolvePostExitCooldownMs,
-} from './quietImpulseEntry.js';
+import { resolvePostExitCooldownMs } from './quietImpulseEntry.js';
 import {
   allowEntryFromFeeds,
   multiFeedOwnsOhlc,
@@ -1258,11 +1254,8 @@ async function robotCycle(s: Internal) {
     let setupType: string | null = null;
 
     if (s.ohlcState.just_closed && bar) {
-      // Prefer BOX/QUIET (move START) over regime BO follow — less chase after the print
-      const sig =
-        decideEntryFromBoxBreak(s.closedBars) ||
-        decideEntryFromQuietImpulse(s.closedBars) ||
-        decideEntryBreakoutOnly(bar, s.regime, s.closedBars);
+      // Live path: regime BREAKOUT / TREND pullback / structural BO only — no BOX, no quiet oval
+      const sig = decideEntryBreakoutOnly(bar, s.regime, s.closedBars);
       if (sig) {
         direction = sig.direction;
         setupType = sig.setup;
@@ -1273,7 +1266,7 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${ohlcLine} · ${s.regime} · no box/impulse/BO yet`,
+          detail: `${ohlcLine} · ${s.regime} · no BO/TREND pullback yet`,
         });
       }
     } else {

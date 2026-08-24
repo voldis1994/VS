@@ -1,13 +1,9 @@
 /**
- * Entry at move START via compression BOX → first break (matches chart “oval then drop”).
- *
- * #143: also micro-pause in a trend — continuous dumps never form a wide oval, so
- * a 3–4 bar pause then resume must still arm (otherwise forever WAIT).
- *
  * Modes (VS_ENTRY_MODE):
- *   box_break     — default
- *   quiet_impulse — old per-candle quiet path
- *   classic       — BASE #136 regime path
+ *   breakout      — default (regime BO + TREND pullback + structural)
+ *   quiet_impulse — legacy per-candle quiet path (not used by Robot Desk)
+ *   classic       — full 14-regime path
+ * BOX / box_break is dead — never armed.
  */
 import { bodyPct, isMoving10s, rangePct, type TenSecBar } from './tenSecondOhlc.js';
 import type { RegimeEntry } from './entryFromRegime.js';
@@ -123,26 +119,11 @@ function tryBoxBreak(
 }
 
 /**
- * Tight recent range (box) then first close outside the box.
- * Falls back to micro-pause resume in an established dump/rally (#143).
+ * BOX entry is retired — always null. Live robot uses decideEntryBreakoutOnly only.
+ * Kept so old imports/tests do not resurrect oval/box chase paths.
  */
-export function decideEntryFromBoxBreak(bars: TenSecBar[]): RegimeEntry | null {
-  const oval = tryBoxBreak(bars, {
-    lookback: BOX_BARS,
-    minBars: MIN_BOX_BARS,
-    maxRange: MAX_BOX_RANGE,
-    tag: 'box',
-  });
-  if (oval) return oval;
-
-  // Continuous dump/rally: no wide oval — catch short pause then resume with trend
-  return tryBoxBreak(bars, {
-    lookback: MICRO_BOX_BARS,
-    minBars: MICRO_MIN_BARS,
-    maxRange: MICRO_MAX_BOX_RANGE,
-    tag: 'micro',
-    requireTrend: true,
-  });
+export function decideEntryFromBoxBreak(_bars: TenSecBar[]): RegimeEntry | null {
+  return null;
 }
 
 export function decideEntryFromQuietImpulse(bars: TenSecBar[]): RegimeEntry | null {
@@ -184,11 +165,11 @@ export function resolveEntryMode(raw?: string | null): EntryMode {
   return 'breakout';
 }
 
-/** Wait after any close before next entry. Default 180s — was 90s and re-chased the same Gold chop. */
+/** Wait after any close before next entry. Default 30s. */
 export function resolvePostExitCooldownMs(raw?: string | null): number {
   const source = raw === undefined ? process.env.VS_POST_EXIT_COOLDOWN_MS : raw;
-  if (source == null || String(source).trim() === '') return 180_000;
+  if (source == null || String(source).trim() === '') return 30_000;
   const n = Number(source);
-  if (!Number.isFinite(n) || n < 0) return 180_000;
+  if (!Number.isFinite(n) || n < 0) return 30_000;
   return Math.min(Math.max(n, 0), 600_000);
 }
