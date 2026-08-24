@@ -10,6 +10,9 @@ function bar(open: number, close: number): TenSecBar {
 
 const dip = bar(2000, 1996); // ~0.2% down — moving
 const rally = bar(2000, 2004);
+/** Fresh breakout body under late-chase gate (~0.05%). */
+const boUp = bar(4620, 4622.2);
+const boDown = bar(4620, 4617.8);
 
 describe('10s + 14-regime suitable entry', () => {
   it('waits in UNKNOWN / COMPRESSION / TRANSITION', () => {
@@ -72,16 +75,32 @@ describe('10s + 14-regime suitable entry', () => {
 });
 
 describe('breakout + trend entry', () => {
-  it('arms on BREAKOUT_UP/DOWN', () => {
-    expect(decideEntryBreakoutOnly(rally, 'BREAKOUT_UP')?.direction).toBe('BUY');
-    expect(decideEntryBreakoutOnly(dip, 'BREAKOUT_DOWN')?.direction).toBe('SELL');
+  it('arms on BREAKOUT_UP/DOWN (fresh body, not already-spent bar)', () => {
+    expect(decideEntryBreakoutOnly(boUp, 'BREAKOUT_UP')?.direction).toBe('BUY');
+    expect(decideEntryBreakoutOnly(boDown, 'BREAKOUT_DOWN')?.direction).toBe('SELL');
+    // classic 0.2% rally bar is already late for HardInv world
+    expect(decideEntryBreakoutOnly(rally, 'BREAKOUT_UP')).toBeNull();
   });
 
-  it('arms on TREND_UP dip and TREND_DOWN rally', () => {
+  it('arms on TREND_UP dip and TREND_DOWN rally — never chase continuation', () => {
     expect(decideEntryBreakoutOnly(dip, 'TREND_UP')?.direction).toBe('BUY');
     expect(decideEntryBreakoutOnly(dip, 'TREND_UP')?.setup).toBe('PULLBACK');
+    expect(decideEntryBreakoutOnly(rally, 'TREND_UP')).toBeNull();
     expect(decideEntryBreakoutOnly(rally, 'TREND_DOWN')?.direction).toBe('SELL');
     expect(decideEntryBreakoutOnly(rally, 'TREND_DOWN')?.setup).toBe('PULLBACK');
+    expect(decideEntryBreakoutOnly(dip, 'TREND_DOWN')).toBeNull();
+  });
+
+  it('skips BREAKOUT signal bar that already ran ~3pt+ (chase food)', () => {
+    const late: TenSecBar = {
+      open_time_ms: 0,
+      open: 4620,
+      high: 4624.2,
+      low: 4619.8,
+      close: 4623.8,
+      ticks: 12,
+    };
+    expect(decideEntryBreakoutOnly(late, 'BREAKOUT_UP')).toBeNull();
   });
 
   it('ignores EXPANSION / range / failed / reversal (not live)', () => {

@@ -184,11 +184,11 @@ export function resolveEntryMode(raw?: string | null): EntryMode {
   return 'breakout';
 }
 
-/** Wait after any close before next entry. Default 90s (#143 — was 150s forever-WAIT feel). */
+/** Wait after any close before next entry. Default 180s — was 90s and re-chased the same Gold chop. */
 export function resolvePostExitCooldownMs(raw?: string | null): number {
   const source = raw === undefined ? process.env.VS_POST_EXIT_COOLDOWN_MS : raw;
-  if (source == null || String(source).trim() === '') return 90_000;
+  if (source == null || String(source).trim() === '') return 180_000;
   const n = Number(source);
-  if (!Number.isFinite(n) || n < 0) return 90_000;
+  if (!Number.isFinite(n) || n < 0) return 180_000;
   return Math.min(Math.max(n, 0), 600_000);
 }

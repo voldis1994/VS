@@ -109,9 +109,17 @@ export function decideEntryFrom10sRegime(
 }
 
 /**
- * Live entry = BREAKOUT_UP/DOWN + TREND_UP/DOWN.
+ * Live entry = BREAKOUT_UP/DOWN + TREND pullbacks only (no mid-move chase follow).
  * Also accepts structural break from bar history when regime label lags.
+ * Skips a signaling bar that already ran too far (~HardInv food).
  */
+/** ~3.4pt @ Gold 4500 — 10s signal bar already spent the move. */
+const LATE_SIGNAL_BODY_PCT = 0.00075;
+
+function signalBarTooLate(bar: TenSecBar): boolean {
+  return Math.abs(bodyPct(bar)) >= LATE_SIGNAL_BODY_PCT;
+}
+
 export function decideEntryBreakoutOnly(
   bar: TenSecBar,
   regime?: string | null,
@@ -122,33 +130,29 @@ export function decideEntryBreakoutOnly(
 
   if (r === 'BREAKOUT_UP') {
     if (!isMovingBreakout10s(bar) || bar.close < bar.open) return null;
+    if (signalBarTooLate(bar)) return null;
     return { direction: 'BUY', setup: 'BREAKOUT', reason: `${r} follow · ${candle}` };
   }
   if (r === 'BREAKOUT_DOWN') {
     if (!isMovingBreakout10s(bar) || bar.close > bar.open) return null;
+    if (signalBarTooLate(bar)) return null;
     return { direction: 'SELL', setup: 'BREAKOUT', reason: `${r} follow · ${candle}` };
   }
 
+  // TREND: only pullback entries — never chase a continuation candle mid-move
   if (r === 'TREND_UP') {
-    if (!movingOrNull(bar)) return null;
-    if (dip(bar)) return { direction: 'BUY', setup: 'PULLBACK', reason: `${r} dip-buy · ${candle}` };
-    if (rally(bar) && isMovingBreakout10s(bar)) {
-      return { direction: 'BUY', setup: 'CONTINUATION', reason: `${r} follow · ${candle}` };
-    }
-    return null;
+    if (!movingOrNull(bar) || !dip(bar)) return null;
+    return { direction: 'BUY', setup: 'PULLBACK', reason: `${r} dip-buy · ${candle}` };
   }
   if (r === 'TREND_DOWN') {
-    if (!movingOrNull(bar)) return null;
-    if (rally(bar)) return { direction: 'SELL', setup: 'PULLBACK', reason: `${r} rally-sell · ${candle}` };
-    if (dip(bar) && isMovingBreakout10s(bar)) {
-      return { direction: 'SELL', setup: 'CONTINUATION', reason: `${r} follow · ${candle}` };
-    }
-    return null;
+    if (!movingOrNull(bar) || !rally(bar)) return null;
+    return { direction: 'SELL', setup: 'PULLBACK', reason: `${r} rally-sell · ${candle}` };
   }
 
   // Structural fallback: close beyond prior highs/lows (same idea as live BO classify)
   const bars = histBars && histBars.length >= 4 ? histBars : null;
   if (!bars || !isMovingBreakout10s(bar)) return null;
+  if (signalBarTooLate(bar)) return null;
   const prior = bars.slice(0, -1).slice(-7);
   if (prior.length < 3) return null;
   const hi = Math.max(...prior.map((b) => b.high));

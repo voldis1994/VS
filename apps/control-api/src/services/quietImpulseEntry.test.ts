@@ -31,8 +31,9 @@ describe('resolveEntryMode / cooldown', () => {
     expect(resolveEntryMode('quiet_impulse')).toBe('quiet_impulse');
   });
 
-  it('post-exit cooldown defaults to 90 seconds', () => {
-    expect(resolvePostExitCooldownMs('')).toBe(90_000);
+  it('post-exit cooldown defaults to 180 seconds', () => {
+    expect(resolvePostExitCooldownMs('')).toBe(180_000);
+    expect(resolvePostExitCooldownMs('90000')).toBe(90_000);
     expect(resolvePostExitCooldownMs('180000')).toBe(180_000);
   });
 });

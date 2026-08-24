@@ -1123,7 +1123,8 @@ export async function fetchCapitalMinutePrices(
 
 /**
  * True if the latest 1m candle already moved hard in trade direction (~end of move).
- * Threshold ~0.12% of price — block chase entries.
+ * Gold: ~0.065% ≈ 2.9pt @ 4500 — was 0.12% (~5.4pt) and still chased into HardInv.
+ * Also blocks when last 2–3 minutes already extended the same way.
  */
 export function isLateMoveOnOneMinute(
   direction: 'BUY' | 'SELL',
@@ -1132,10 +1133,21 @@ export function isLateMoveOnOneMinute(
   if (!candles.length) return false;
   const last = candles[candles.length - 1]!;
   const mid = Math.max(Math.abs(last.open), 1e-9);
+  const thr = Math.max(mid * 0.00065, 0.08);
   const move = last.close - last.open;
-  const thr = Math.max(mid * 0.0012, 0.05);
   if (direction === 'BUY' && move >= thr) return true;
   if (direction === 'SELL' && move <= -thr) return true;
+
+  // Cumulative stretch on last 2–3 minutes (chase after a run)
+  const recent = candles.slice(-3);
+  if (recent.length >= 2) {
+    const first = recent[0]!;
+    const end = recent[recent.length - 1]!;
+    const cum = end.close - first.open;
+    const cumThr = thr * 1.15;
+    if (direction === 'BUY' && cum >= cumThr) return true;
+    if (direction === 'SELL' && cum <= -cumThr) return true;
+  }
   return false;
 }
 
