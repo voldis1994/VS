@@ -971,6 +971,9 @@ async function robotCycle(s: Internal) {
     return;
   }
 
+  // Early `return` inside this try still runs `finally` (lease release + multi-feed).
+  // Do NOT put multi-feed after the try/finally — those returns would skip it forever (1/1 LOCAL).
+  let refreshMultiFeed = false;
   try {
     const session = leased.session;
     const quote = await fetchCapitalMarketQuote(session, s.epic);
@@ -994,6 +997,7 @@ async function robotCycle(s: Internal) {
       s.epic = quote.epic;
     }
     if (quote.mid != null) s.last_mid = quote.mid;
+    refreshMultiFeed = true;
 
     // OHLC from Capital mid only — never Yahoo/Aurum spot (was poisoning bars ~80pt off)
     // NOTE: multiFeed runs AFTER lease release — it calls acquireCapitalSession and
@@ -1032,11 +1036,12 @@ async function robotCycle(s: Internal) {
       }
     }
 
-    // Local feed badge until multiFeed runs after lease
+    // Local feed badge until multiFeed runs in finally (same cycle)
     if (quote.mid != null && (s.feed_contributing || 0) < 1) {
       s.feed_source = 'LOCAL';
       s.feed_contributing = 1;
-      s.feed_sender_count = Math.max(1, s.feed_sender_count || 0);
+      // Do not collapse a known multi denominator to 1 while waiting for refresh
+      if ((s.feed_sender_count || 0) < 1) s.feed_sender_count = 1;
     }
 
     // Market closed / offline → park: no positions sync, no MANAGE, no entry (anti-spam Capital)
@@ -1342,28 +1347,33 @@ async function robotCycle(s: Internal) {
     await enterTrade(session, s, direction, quote, reason, setupType);
   } finally {
     leased.release();
-  }
-
-  // Multi-feed AFTER lease — readMultiFeedPrice acquires Capital and must not nest under lease
-  if (Date.now() - s.last_multi_feed_ms >= 4_000) {
-    s.last_multi_feed_ms = Date.now();
-    try {
-      s.multiFeed = await readMultiFeedPrice(s.epic, {
-        anchorMid: s.last_mid,
-        connectionId: s.connection_id,
-        capitalAccountId,
-      });
-      s.feed_source = s.multiFeed?.contributing ? 'MULTI' : s.feed_source;
-      s.feed_contributing = s.multiFeed?.contributing ?? s.feed_contributing ?? 0;
-      s.feed_sender_count = s.multiFeed?.sender_count ?? s.feed_sender_count ?? 0;
-      s.feed_agreement = s.multiFeed?.agreement ?? null;
-      if ((s.feed_contributing || 0) < 1 && s.last_mid != null) {
-        s.feed_source = 'LOCAL';
-        s.feed_contributing = 1;
-        s.feed_sender_count = Math.max(1, s.feed_sender_count || 0);
+    // Multi-feed AFTER lease release (never nest acquireCapitalSession under lease).
+    // Must live in finally so WAIT/MANAGE/early returns still refresh FEEDS UI.
+    if (refreshMultiFeed && Date.now() - s.last_multi_feed_ms >= 4_000) {
+      s.last_multi_feed_ms = Date.now();
+      try {
+        s.multiFeed = await readMultiFeedPrice(s.epic, {
+          anchorMid: s.last_mid,
+          connectionId: s.connection_id,
+          capitalAccountId,
+        });
+        const mf = s.multiFeed;
+        if (mf) {
+          s.feed_sender_count = mf.sender_count;
+          s.feed_agreement = mf.agreement ?? null;
+          if (mf.contributing >= 1) {
+            s.feed_source = mf.contributing >= 2 ? 'MULTI' : s.feed_source || 'LOCAL';
+            s.feed_contributing = mf.contributing;
+          } else if (s.last_mid != null) {
+            s.feed_source = 'LOCAL';
+            s.feed_contributing = 1;
+            // Keep real denominator (public+capital configured), never collapse to 1/1
+            s.feed_sender_count = Math.max(mf.sender_count, s.feed_sender_count || 1);
+          }
+        }
+      } catch {
+        /* keep previous */
       }
-    } catch {
-      /* keep previous */
     }
   }
   } catch (err) {
