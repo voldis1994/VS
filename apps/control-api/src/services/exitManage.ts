@@ -47,10 +47,10 @@ export function thesisFailureReason(
   return null;
 }
 
-/** Robot HardInv ≈0.32% — before broker disaster SL (~0.50%). */
+/** Robot HardInv ≈0.16% — before broker disaster SL (~0.25%, micro-friendly). */
 export function hardInvalidationDistance(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.0032, 0.32);
+  return Math.max(abs * 0.0016, 0.16);
 }
 
 /** Arm protection from ≈1.0pt on Gold ~4600. */

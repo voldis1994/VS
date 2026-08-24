@@ -120,9 +120,10 @@ describe('decideBestOutcomeExit', () => {
     expect(buy.exit).toBe(false);
   });
 
-  it('hard invalidation at ~0.32% adverse (before broker disaster SL)', () => {
+  it('hard invalidation at ~0.16% adverse (before broker disaster SL)', () => {
     const sl = hardInvalidationDistance(2000);
-    expect(sl).toBeGreaterThanOrEqual(6.4);
+    expect(sl).toBeGreaterThanOrEqual(3.2);
+    expect(sl).toBeLessThan(4);
     const d = decideBestOutcomeExit(snap({ open_side: 'BUY', entry_price: 2000, regime: 'RANGE' }), 1993);
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/HardInvalidation/);
