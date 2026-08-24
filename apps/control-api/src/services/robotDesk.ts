@@ -39,7 +39,6 @@ import {
 } from './quietImpulseEntry.js';
 import {
   allowEntryFromFeeds,
-  capitalOhlcMid,
   multiFeedOwnsOhlc,
   readMultiFeedPrice,
   type MultiFeedPrice,
