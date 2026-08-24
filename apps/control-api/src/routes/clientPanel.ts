@@ -3,7 +3,6 @@ import { requireClientSession } from './clientAuth.js';
 import {
   assertNoSecrets,
   getClientPanelStatus,
-  getClientQuote,
   listClientMarkets,
   saveClientConfig,
   startClientRobot,
@@ -27,43 +26,20 @@ export async function registerClientPanelRoutes(app: FastifyInstance): Promise<v
     return { source: 'capital_com', markets };
   });
 
-  app.get('/api/client/quote', async (request, reply) => {
-    const session = await requireClientSession(request, reply);
-    if (!session) return;
-    const q = request.query as { epic?: string };
-    const quote = await getClientQuote(session.client_id, q.epic ? String(q.epic) : undefined);
-    if (!quote) {
-      return reply.code(404).send({ error: 'No market configured', message: 'Select a market first' });
-    }
-    assertNoSecrets(quote);
-    return quote;
-  });
-
   app.put('/api/client/config', async (request, reply) => {
     const session = await requireClientSession(request, reply);
     if (!session) return;
-    const body = (request.body || {}) as {
-      epic?: string;
-      epics?: string[];
-      lot_size?: number;
-      budget_pct?: number;
-    };
-    const epics = Array.isArray(body.epics) && body.epics.length
-      ? body.epics
-      : body.epic
-        ? [body.epic]
-        : [];
-    if (!epics.length) {
+    const body = (request.body || {}) as { epic?: string; lot_size?: number };
+    if (!body.epic || body.lot_size == null) {
       return reply.code(400).send({
-        error: 'epics required (1–3)',
-        message: 'Select 1–3 markets',
+        error: 'epic and lot_size required',
+        message: 'epic and lot_size required',
       });
     }
     try {
       const status = await saveClientConfig(session.client_id, {
-        epics: epics.map(String),
-        lot_size: body.lot_size != null ? Number(body.lot_size) : undefined,
-        budget_pct: body.budget_pct != null ? Number(body.budget_pct) : undefined,
+        epic: String(body.epic),
+        lot_size: Number(body.lot_size),
       });
       assertNoSecrets(status);
       return { success: true, status };

@@ -61,7 +61,7 @@ export async function registerClientRoutes(app: FastifyInstance): Promise<void> 
               c.access_code_hash IS NOT NULL as has_access_code,
               c.preferred_broker_account_id,
               c.panel_epic, c.panel_display_name, c.panel_lot_size,
-              c.panel_robot_requested, c.panel_multi_market, c.last_seen_at,
+              c.panel_robot_requested, c.last_seen_at,
               c.created_at, c.updated_at
        FROM clients c
        ORDER BY c.created_at DESC`
@@ -86,7 +86,6 @@ export async function registerClientRoutes(app: FastifyInstance): Promise<void> 
         panel_display_name: row.panel_display_name,
         panel_lot_size: row.panel_lot_size != null ? Number(row.panel_lot_size) : null,
         panel_robot_requested: row.panel_robot_requested,
-        panel_multi_market: Boolean(row.panel_multi_market),
         last_seen_at: row.last_seen_at,
         created_at: row.created_at,
         updated_at: row.updated_at,

@@ -337,55 +337,90 @@ type PooledCapital = {
 };
 
 const capitalSessionPool = new Map<string, PooledCapital>();
-/** Per-connection login serialization (was global — coupled all clients). */
-const loginChains = new Map<string, Promise<unknown>>();
-const lastLoginAtByConn = new Map<string, number>();
+let loginChain: Promise<void> = Promise.resolve();
+let lastLoginAt = 0;
 const MIN_LOGIN_GAP_MS = 3500;
 const COOLDOWN_429_MS = 120_000;
-/** Serialize acquire+switch per connection — two accounts must not interleave API calls. */
-const connectionLocks = new Map<string, Promise<unknown>>();
 
 /** Isolate pool per broker connection so multi-client never shares sessions. */
 function capitalPoolKey(connectionId: number): string {
   return `conn:${connectionId}`;
 }
 
-async function withConnectionLock<T>(connectionId: number, fn: () => Promise<T>): Promise<T> {
-  const key = capitalPoolKey(connectionId);
-  const prev = connectionLocks.get(key) ?? Promise.resolve();
+async function withLoginThrottle<T>(fn: () => Promise<T>): Promise<T> {
   let release!: () => void;
   const gate = new Promise<void>((r) => {
     release = r;
   });
-  connectionLocks.set(
-    key,
-    prev.then(() => gate).catch(() => gate)
-  );
-  await prev.catch(() => undefined);
+  const prev = loginChain;
+  loginChain = prev.then(() => gate);
+  await prev;
   try {
+    const wait = Math.max(0, MIN_LOGIN_GAP_MS - (Date.now() - lastLoginAt));
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    lastLoginAt = Date.now();
     return await fn();
   } finally {
     release();
   }
 }
 
+export async function listCapitalAccounts(
+  session: CapitalSession
+): Promise<{ ok: boolean; accounts: Array<{ accountId: string; accountName: string; accountType?: string }>; detail: string }> {
+  const res = await session.get('/api/v1/accounts');
+  if (!res.ok) {
+    return {
+      ok: false,
+      accounts: [],
+      detail: `accounts HTTP ${res.status}: ${res.json?.errorCode || res.json?.message || res.text.slice(0, 120)}`,
+    };
+  }
+  const raw = Array.isArray(res.json?.accounts) ? res.json.accounts : [];
+  const accounts = raw
+    .map((a: any) => ({
+      accountId: String(a.accountId || a.account_id || '').trim(),
+      accountName: String(a.accountName || a.name || a.accountId || '').trim(),
+      accountType: a.accountType ? String(a.accountType) : undefined,
+    }))
+    .filter((a: { accountId: string }) => a.accountId);
+  return { ok: true, accounts, detail: `${accounts.length} accounts` };
+}
+
+export async function switchCapitalAccount(
+  session: CapitalSession,
+  capitalAccountId: string
+): Promise<{ ok: boolean; detail: string }> {
+  const id = capitalAccountId.trim();
+  if (!id) return { ok: false, detail: 'capital accountId required' };
+  if (session.currentAccountId && session.currentAccountId === id) {
+    return { ok: true, detail: `Already on account ${id}` };
+  }
+  const res = await session.put('/api/v1/session', { accountId: id });
+  if (!res.ok) {
+    return {
+      ok: false,
+      detail: `Switch account ${id} failed HTTP ${res.status}: ${
+        res.json?.errorCode || res.json?.message || res.text.slice(0, 160)
+      }`,
+    };
+  }
+  session.currentAccountId = id;
+  return { ok: true, detail: `Switched to Capital account ${id}` };
+}
+
 /**
- * Hold the per-connection Capital lock until release() — required for manage/exit.
- * Same login/session can only target one account at a time; without a lease, Client A
- * close races Client B account-switch and only the first close lands.
- * Different connectionIds still run fully in parallel.
+ * Reuse Capital.com session per broker connection (multi-client safe).
+ * Optionally switches to the correct Capital accountId for that desk account.
  */
-export async function leaseCapitalSession(input: {
+export async function acquireCapitalSession(input: {
   environment: string;
   apiKey: string;
   identifier: string;
   password: string;
   connectionId: number;
   capitalAccountId?: string | null;
-}): Promise<
-  | { ok: true; session: CapitalSession; release: () => void }
-  | { ok: false; result: CapitalComSessionResult }
-> {
+}): Promise<{ ok: true; session: CapitalSession } | { ok: false; result: CapitalComSessionResult }> {
   const connectionId = Number(input.connectionId);
   if (!Number.isFinite(connectionId) || connectionId <= 0) {
     return {
@@ -395,56 +430,6 @@ export async function leaseCapitalSession(input: {
   }
 
   const key = capitalPoolKey(connectionId);
-  const prev = connectionLocks.get(key) ?? Promise.resolve();
-  let unlock!: () => void;
-  const gate = new Promise<void>((r) => {
-    unlock = r;
-  });
-  connectionLocks.set(
-    key,
-    prev.then(() => gate).catch(() => gate)
-  );
-  await prev.catch(() => undefined);
-
-  try {
-    const opened = await acquireCapitalSessionUnlocked(input);
-    if (!opened.ok) {
-      unlock();
-      return opened;
-    }
-    let released = false;
-    return {
-      ok: true,
-      session: opened.session,
-      release: () => {
-        if (released) return;
-        released = true;
-        unlock();
-      },
-    };
-  } catch (err) {
-    unlock();
-    return {
-      ok: false,
-      result: {
-        ok: false,
-        status: 0,
-        detail: err instanceof Error ? err.message : String(err),
-      },
-    };
-  }
-}
-
-async function acquireCapitalSessionUnlocked(input: {
-  environment: string;
-  apiKey: string;
-  identifier: string;
-  password: string;
-  connectionId: number;
-  capitalAccountId?: string | null;
-}): Promise<{ ok: true; session: CapitalSession } | { ok: false; result: CapitalComSessionResult }> {
-  const connectionId = Number(input.connectionId);
-  const key = capitalPoolKey(connectionId);
   const now = Date.now();
   const cached = capitalSessionPool.get(key);
   const wantedAccount = (input.capitalAccountId || '').trim() || null;
@@ -452,7 +437,7 @@ async function acquireCapitalSessionUnlocked(input: {
   if (cached && cached.cooldownUntil > now) {
     const waitSec = Math.ceil((cached.cooldownUntil - now) / 1000);
     return {
-      ok: false as const,
+      ok: false,
       result: {
         ok: false,
         status: 429,
@@ -478,7 +463,7 @@ async function acquireCapitalSessionUnlocked(input: {
     }
     capitalSessionPool.delete(key);
 
-    const opened = await withLoginThrottle(connectionId, () =>
+    const opened = await withLoginThrottle(() =>
       openCapitalSession({
         environment: input.environment,
         apiKey: input.apiKey,
@@ -516,7 +501,7 @@ async function acquireCapitalSessionUnlocked(input: {
     const sw = await switchCapitalAccount(session, wantedAccount);
     if (!sw.ok) {
       return {
-        ok: false as const,
+        ok: false,
         result: { ok: false, status: 400, detail: sw.detail },
       };
     }
@@ -529,167 +514,7 @@ async function acquireCapitalSessionUnlocked(input: {
     cooldownUntil: 0,
     activeCapitalAccountId: wantedAccount || session?.currentAccountId || null,
   });
-  return { ok: true as const, session: session! };
-}
-
-/**
- * Reuse Capital.com session per broker connection (multi-client safe).
- * Optionally switches to the correct Capital accountId for that desk account.
- * Prefer leaseCapitalSession for manage/exit so the account switch cannot race.
- */
-export async function acquireCapitalSession(input: {
-  environment: string;
-  apiKey: string;
-  identifier: string;
-  password: string;
-  connectionId: number;
-  capitalAccountId?: string | null;
-}): Promise<{ ok: true; session: CapitalSession } | { ok: false; result: CapitalComSessionResult }> {
-  const connectionId = Number(input.connectionId);
-  if (!Number.isFinite(connectionId) || connectionId <= 0) {
-    return {
-      ok: false,
-      result: { ok: false, status: 0, detail: 'connectionId required for multi-account session pool' },
-    };
-  }
-
-  return withConnectionLock(connectionId, () => acquireCapitalSessionUnlocked(input));
-}
-
-async function withLoginThrottle<T>(
-  connectionId: number,
-  fn: () => Promise<T>
-): Promise<T> {
-  // #147/#148: per-connection login gate — Client A must not serialize Client B logins
-  const key = capitalPoolKey(connectionId);
-  const prev = loginChains.get(key) ?? Promise.resolve();
-  let release!: () => void;
-  const gate = new Promise<void>((r) => {
-    release = r;
-  });
-  loginChains.set(
-    key,
-    prev.then(() => gate).catch(() => gate)
-  );
-  await prev.catch(() => undefined);
-  try {
-    const last = lastLoginAtByConn.get(key) ?? 0;
-    const wait = Math.max(0, MIN_LOGIN_GAP_MS - (Date.now() - last));
-    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-    lastLoginAtByConn.set(key, Date.now());
-    return await fn();
-  } finally {
-    release();
-  }
-}
-
-export async function listCapitalAccounts(
-  session: CapitalSession
-): Promise<{
-  ok: boolean;
-  accounts: Array<{
-    accountId: string;
-    accountName: string;
-    accountType?: string;
-    balance: number | null;
-    available: number | null;
-    deposit: number | null;
-    profitLoss: number | null;
-  }>;
-  detail: string;
-}> {
-  const res = await session.get('/api/v1/accounts');
-  if (!res.ok) {
-    return {
-      ok: false,
-      accounts: [],
-      detail: `accounts HTTP ${res.status}: ${res.json?.errorCode || res.json?.message || res.text.slice(0, 120)}`,
-    };
-  }
-  const raw = Array.isArray(res.json?.accounts) ? res.json.accounts : [];
-  const accounts = raw
-    .map((a: any) => {
-      const bal = a.balance && typeof a.balance === 'object' ? a.balance : a;
-      const balance = numOrNull(bal.balance ?? a.balance);
-      const available = numOrNull(bal.available ?? a.available ?? bal.balance);
-      const deposit = numOrNull(bal.deposit ?? a.deposit);
-      const profitLoss = numOrNull(bal.profitLoss ?? bal.profit_loss ?? a.profitLoss);
-      return {
-        accountId: String(a.accountId || a.account_id || '').trim(),
-        accountName: String(a.accountName || a.name || a.accountId || '').trim(),
-        accountType: a.accountType ? String(a.accountType) : undefined,
-        balance,
-        available,
-        deposit,
-        profitLoss,
-      };
-    })
-    .filter((a: { accountId: string }) => a.accountId);
-  return { ok: true, accounts, detail: `${accounts.length} accounts` };
-}
-
-/** Equity for sizing: prefer available, else balance. */
-export function pickCapitalEquity(
-  accounts: Array<{ accountId: string; balance: number | null; available: number | null }>,
-  preferAccountId?: string | null
-): number | null {
-  const prefer = (preferAccountId || '').trim();
-  const ordered = prefer
-    ? [
-        ...accounts.filter((a) => a.accountId === prefer),
-        ...accounts.filter((a) => a.accountId !== prefer),
-      ]
-    : accounts;
-  for (const a of ordered) {
-    if (a.available != null && Number.isFinite(a.available) && a.available > 0) return a.available;
-    if (a.balance != null && Number.isFinite(a.balance) && a.balance > 0) return a.balance;
-  }
-  return null;
-}
-
-/** Parse Capital market payload margin / deposit factor (fraction of notional). */
-export function parseMarginFactorFromMarketJson(json: any): number | null {
-  const instrument = (json?.instrument || json?.market || {}) as Record<string, any>;
-  const direct =
-    numOrNull(instrument.marginFactor) ??
-    numOrNull(instrument.depositFactor) ??
-    numOrNull(json?.marginFactor);
-  if (direct != null && direct > 0) {
-    // Capital sometimes returns 5 for 5%, sometimes 0.05
-    return direct > 1 ? direct / 100 : direct;
-  }
-  const bands = instrument.marginDepositBands || instrument.depositBands || json?.marginDepositBands;
-  if (Array.isArray(bands) && bands.length) {
-    const b0 = bands[0];
-    const m =
-      numOrNull(b0?.margin) ??
-      numOrNull(b0?.deposit) ??
-      numOrNull(b0?.marginFactor);
-    if (m != null && m > 0) return m > 1 ? m / 100 : m;
-  }
-  return null;
-}
-
-export async function switchCapitalAccount(
-  session: CapitalSession,
-  capitalAccountId: string
-): Promise<{ ok: boolean; detail: string }> {
-  const id = capitalAccountId.trim();
-  if (!id) return { ok: false, detail: 'capital accountId required' };
-  if (session.currentAccountId && session.currentAccountId === id) {
-    return { ok: true, detail: `Already on account ${id}` };
-  }
-  const res = await session.put('/api/v1/session', { accountId: id });
-  if (!res.ok) {
-    return {
-      ok: false,
-      detail: `Switch account ${id} failed HTTP ${res.status}: ${
-        res.json?.errorCode || res.json?.message || res.text.slice(0, 160)
-      }`,
-    };
-  }
-  session.currentAccountId = id;
-  return { ok: true, detail: `Switched to Capital account ${id}` };
+  return { ok: true, session: session! };
 }
 
 /** Drop a pooled session for one broker connection (e.g. after HTTP 401). */
@@ -738,8 +563,6 @@ export interface CapitalMarketQuote {
   point_size?: number | null;
   /** Minimum stop distance in PRICE units */
   min_stop_distance?: number | null;
-  /** Margin as fraction of notional when Capital provides it */
-  margin_factor?: number | null;
 }
 
 function inferPointSize(json: any, mid: number | null): number {
@@ -863,7 +686,6 @@ export async function fetchCapitalMarketQuote(
     else mid = numOrNull(snap.mid ?? snap.lastTraded);
     const spread = bid != null && ask != null ? ask - bid : null;
     const stops = parseStopRules(res.json, mid);
-    const marginFactor = parseMarginFactorFromMarketJson(res.json);
 
     return {
       epic: candidate,
@@ -881,7 +703,6 @@ export async function fetchCapitalMarketQuote(
       min_stop_unit: stops.min_stop_unit,
       point_size: stops.point_size,
       min_stop_distance: stops.min_stop_distance,
-      margin_factor: marginFactor,
       detail: bid == null && ask == null ? 'Snapshot returned without bid/offer' : undefined,
     };
   };
@@ -1099,7 +920,7 @@ export async function createCapitalPosition(
   };
 }
 
-/** ~0.50% disaster cushion stopLevel (≥4× broker min) — last resort, not Best Outcome. */
+/** ~0.20% cushion stopLevel (≥2.5× broker min) — safety pillow, not min legal SL. */
 export function computeSafetyCushionStopLevel(
   direction: 'BUY' | 'SELL',
   mid: number,
@@ -1129,9 +950,9 @@ export function computeSafetyCushionStopLevel(
         : abs * 0.00005;
   const brokerMin =
     opts?.minStopDistance != null && opts.minStopDistance > 0 ? opts.minStopDistance : 0;
-  const pctCushion = abs * 0.005; // 0.50% disaster (was 0.20% — Capital Limit sniped BO)
-  const floor = abs >= 1000 ? 1.2 : abs >= 100 ? 0.5 : abs >= 10 ? 0.08 : 0.0008;
-  const dist = Math.max(pctCushion, brokerMin * 4, spr * 12, floor);
+  const pctCushion = abs * 0.002; // 0.20% (was 0.25%)
+  const floor = abs >= 1000 ? 0.5 : abs >= 100 ? 0.25 : abs >= 10 ? 0.05 : 0.0005;
+  const dist = Math.max(pctCushion, brokerMin * 2.5, spr * 8, floor);
   const raw = direction === 'BUY' ? ref - dist : ref + dist;
   if (abs >= 1000) return Math.round(raw * 10) / 10;
   if (abs >= 100) return Math.round(raw * 100) / 100;
@@ -1192,8 +1013,7 @@ export async function fetchCapitalMinutePrices(
 
 /**
  * True if the latest 1m candle already moved hard in trade direction (~end of move).
- * Gold: ~0.065% ≈ 2.9pt @ 4500 — was 0.12% (~5.4pt) and still chased into HardInv.
- * Also blocks when last 2–3 minutes already extended the same way.
+ * Threshold ~0.12% of price — block chase entries.
  */
 export function isLateMoveOnOneMinute(
   direction: 'BUY' | 'SELL',
@@ -1202,21 +1022,10 @@ export function isLateMoveOnOneMinute(
   if (!candles.length) return false;
   const last = candles[candles.length - 1]!;
   const mid = Math.max(Math.abs(last.open), 1e-9);
-  const thr = Math.max(mid * 0.00065, 0.08);
   const move = last.close - last.open;
+  const thr = Math.max(mid * 0.0012, 0.05);
   if (direction === 'BUY' && move >= thr) return true;
   if (direction === 'SELL' && move <= -thr) return true;
-
-  // Cumulative stretch on last 2–3 minutes (chase after a run)
-  const recent = candles.slice(-3);
-  if (recent.length >= 2) {
-    const first = recent[0]!;
-    const end = recent[recent.length - 1]!;
-    const cum = end.close - first.open;
-    const cumThr = thr * 1.15;
-    if (direction === 'BUY' && cum >= cumThr) return true;
-    if (direction === 'SELL' && cum <= -cumThr) return true;
-  }
   return false;
 }
 
@@ -1262,8 +1071,8 @@ function lotDefaults(category: string): { min_lot: number; max_lot: number; lot_
 function normalizeMarket(raw: Record<string, any>, pathNames: string[]): CapitalMarket | null {
   const epic = String(raw.epic || raw.instrumentEpic || '').trim();
   if (!epic) return null;
-  // Capital app ticker = epic (US100 stays US100) — never rewrite to Nasdaq/Gold Spot aliases
-  const display = epic;
+  const display =
+    String(raw.instrumentName || raw.displayName || raw.name || epic).trim() || epic;
   const instrumentType = String(raw.instrumentType || raw.type || '');
   const category = mapInstrumentType(instrumentType, pathNames);
   const lots = lotDefaults(category);

@@ -1,11 +1,14 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { ClientApp } from './client-v2/ClientApp';
-import './client-v2/styles/aurum.css';
+import { BrowserRouter } from 'react-router-dom';
+import { ClientPanelPage } from './pages/ClientPanelPage';
+import './styles/global.css';
 
-/** Client-only entry — AURUM desk (v2). No legacy ClientPanelPage. */
+/** Client-only entry — share this app URL with clients (no admin desk). */
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <ClientApp />
+    <BrowserRouter>
+      <ClientPanelPage />
+    </BrowserRouter>
   </React.StrictMode>
 );

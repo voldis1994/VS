@@ -1,9 +1,11 @@
 # Client + robot persistence
 
-Clients, brokers, access-code hashes, and panel settings live in **Postgres**.
+**HARD RESET to #136** (`b2910bf`) + this persistence layer only.
 
-Restoring trading logic (e.g. back to #136 entry/exit) does **not** wipe clients —
-DB volume, `robot_desk_persist`, and panel RUNNING flags stay intact.
+Everything after #136 (BO-only, multi-market selector, later exit tweaks, COMMAND/AURUM v2) is removed from the code tree. Classic client panel (`ClientPanelPage`) remains.
+
+Clients, brokers, access-code hashes, and panel settings live in **Postgres**.
+**DB clients are not wiped** by this restore — only code rolls back.
 
 ## Survives restart
 

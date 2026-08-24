@@ -1,6 +1,6 @@
 /** Original spec §13 — all regime names. Regime is a market-state classifier, not an entry. */
 import type { TenSecBar } from './tenSecondOhlc.js';
-import { BREAKOUT_BODY_PCT, bodyPct, rangePct } from './tenSecondOhlc.js';
+import { bodyPct, rangePct } from './tenSecondOhlc.js';
 
 export const REGIME_NAMES = [
   'UNKNOWN',
@@ -114,13 +114,6 @@ function epicKey(epic: string): string {
   return String(epic || '').trim().toUpperCase();
 }
 
-/** Book key: per-robot when scope given — two Gold clients must not share one regime brain. */
-function bookKey(epic: string, scope?: string | null): string {
-  const e = epicKey(epic);
-  const s = String(scope || '').trim();
-  return s ? `${e}::${s}` : e;
-}
-
 /**
  * Classify from closed 10s OHLC — same names as C++ RegimeEngine.
  * Failed-breakout variants are live here (reserved in C++).
@@ -198,15 +191,15 @@ function toSnapshot(epic: string, b: Book): RegimeSnapshot {
   };
 }
 
-function ensureBook(epic: string, displayName?: string, scope?: string | null): Book {
-  const key = bookKey(epic, scope);
+function ensureBook(epic: string, displayName?: string): Book {
+  const key = epicKey(epic);
   let b = books.get(key);
   if (!b) {
     const now = new Date().toISOString();
     b = {
       bars: [],
-      current: 'COMPRESSION',
-      previous: 'COMPRESSION',
+      current: 'UNKNOWN',
+      previous: 'UNKNOWN',
       confidence: 0,
       since: now,
       display_name: displayName || epic,
@@ -220,87 +213,8 @@ function ensureBook(epic: string, displayName?: string, scope?: string | null): 
   return b;
 }
 
-/**
- * #136 live set — full classic regimes that decideEntryFrom10sRegime can trade.
- * UNKNOWN is never surfaced (maps to COMPRESSION) so clients/robots do not stall.
- */
-export const LIVE_REGIME_NAMES = [
-  'COMPRESSION',
-  'RANGE',
-  'TREND_UP',
-  'TREND_DOWN',
-  'PULLBACK_UPTREND',
-  'PULLBACK_DOWNTREND',
-  'BREAKOUT_UP',
-  'BREAKOUT_DOWN',
-  'FAILED_BREAKOUT_UP',
-  'FAILED_BREAKOUT_DOWN',
-  'EXPANSION',
-  'REVERSAL_CANDIDATE',
-  'TRANSITION',
-] as const;
-
-export type LiveRegimeName = (typeof LIVE_REGIME_NAMES)[number];
-
-export function toLiveRegime(regime: RegimeName): RegimeName {
-  if (regime === 'UNKNOWN') return 'COMPRESSION';
-  return regime;
-}
-
-/**
- * Live classifier: BREAKOUT first, then TREND, else COMPRESSION.
- * No UNKNOWN output once we have bars.
- */
-export function classifyBreakoutLive(
-  bars: TenSecBar[],
-  _previous: RegimeName = 'COMPRESSION'
-): RegimeName {
-  if (!bars.length || bars.length < 4) return 'COMPRESSION';
-  const window = bars.slice(-8);
-  const last = window[window.length - 1]!;
-  const prior = window.slice(0, -1);
-  if (prior.length < 3) return 'COMPRESSION';
-
-  const hi = Math.max(...prior.map((b) => b.high));
-  const lo = Math.min(...prior.map((b) => b.low));
-  const bp = bodyPct(last);
-  const bodyAbs = Math.abs(last.close - last.open);
-  const rng = rangePct(last);
-  const mid = Math.max(Math.abs(last.close), 1e-9);
-  const boxRng = (hi - lo) / mid;
-  // Gold 10s: ~0.08pt body is already a real push
-  const strongEnough = Math.abs(bp) >= BREAKOUT_BODY_PCT || bodyAbs >= 0.08;
-
-  const velocities = window.map(bodyPct);
-  const persistence = mean(
-    velocities.slice(-6).map((v) => (v > 0.00008 ? 1 : v < -0.00008 ? -1 : 0))
-  );
-  const trendingUp = persistence > 0.35 && bp > 0.00005;
-  const trendingDown = persistence < -0.35 && bp < -0.00005;
-
-  // Quiet inside prior box
-  if (rng < 0.00018 && last.close <= hi && last.close >= lo && boxRng < 0.00055) {
-    return 'COMPRESSION';
-  }
-
-  // Breakout above/below prior box
-  if (last.close > hi && last.close > last.open && strongEnough && bp > 0) {
-    return 'BREAKOUT_UP';
-  }
-  if (last.close < lo && last.close < last.open && strongEnough && bp < 0) {
-    return 'BREAKOUT_DOWN';
-  }
-
-  // Trend while price advances without a clean box break
-  if (trendingUp) return 'TREND_UP';
-  if (trendingDown) return 'TREND_DOWN';
-
-  return 'COMPRESSION';
-}
-
 function applyClassify(epic: string, b: Book): RegimeSnapshot {
-  // #136 classic RegimeEngine classifier (not breakout-only)
-  const next = toLiveRegime(classifyRegime(b.bars, b.current));
+  const next = classifyRegime(b.bars, b.current);
   const now = new Date().toISOString();
   if (next !== b.current) {
     b.previous = b.current;
@@ -316,10 +230,10 @@ function applyClassify(epic: string, b: Book): RegimeSnapshot {
 export function observeClosedBars(
   epic: string,
   bars: TenSecBar[],
-  displayName?: string,
-  scope?: string | null
+  displayName?: string
 ): RegimeSnapshot {
-  const b = ensureBook(epic, displayName, scope);
+  const key = epicKey(epic);
+  const b = ensureBook(epic, displayName);
   for (const bar of bars) {
     if (!bar || !Number.isFinite(bar.close)) continue;
     const last = b.bars[b.bars.length - 1];
@@ -332,16 +246,15 @@ export function observeClosedBars(
     b.bars.push(bar);
   }
   if (b.bars.length > MAX_BARS) b.bars.splice(0, b.bars.length - MAX_BARS);
-  return applyClassify(epicKey(epic), b);
+  return applyClassify(key, b);
 }
 
 export function notePipelineRegime(
   epic: string,
   regime: string | null | undefined,
-  displayName?: string,
-  scope?: string | null
+  displayName?: string
 ): RegimeSnapshot {
-  const b = ensureBook(epic, displayName, scope);
+  const b = ensureBook(epic, displayName);
   const next = normalizeRegime(regime);
   const now = new Date().toISOString();
   if (next !== b.current) {
@@ -351,25 +264,18 @@ export function notePipelineRegime(
   }
   b.last_update = now;
   if (next !== 'UNKNOWN') b.confidence = Math.max(b.confidence, 0.55);
-  b.current = toLiveRegime(next);
   return toSnapshot(epicKey(epic), b);
 }
 
-export function currentRegime(
-  epic: string | null | undefined,
-  scope?: string | null
-): RegimeSnapshot | null {
+export function currentRegime(epic: string | null | undefined): RegimeSnapshot | null {
   if (!epic) return null;
-  const b = books.get(bookKey(epic, scope));
+  const b = books.get(epicKey(epic));
   if (!b) return null;
   return toSnapshot(epicKey(epic), b);
 }
 
 export function listRegimeSnapshots(): RegimeSnapshot[] {
-  return [...books.entries()].map(([key, b]) => {
-    const epic = key.includes('::') ? key.slice(0, key.indexOf('::')) : key;
-    return toSnapshot(epic, b);
-  });
+  return [...books.entries()].map(([epic, b]) => toSnapshot(epic, b));
 }
 
 export function regimeCatalog() {
@@ -379,13 +285,7 @@ export function regimeCatalog() {
   }));
 }
 
-/** Test helper — wipe all books. */
+/** Test helper */
 export function resetRegimeBook(): void {
   books.clear();
-}
-
-/** Clear one robot's regime book on start — no stale bars from prior run. */
-export function clearRegimeBookFor(epic: string, scope: string): void {
-  const key = bookKey(epic, scope);
-  books.delete(key);
 }

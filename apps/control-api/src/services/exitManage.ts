@@ -1,4 +1,4 @@
-/** Live Capital exit manager — #136 original Best Outcome + thesis failure. */
+/** Live Capital exit manager — per-robot, best-outcome + thesis failure from regime. */
 
 export type ExitSide = 'BUY' | 'SELL';
 
@@ -45,26 +45,8 @@ export function thesisFailureReason(
   return null;
 }
 
-/** #136 HardInv ≈0.22% (min 0.22). */
-export function hardInvalidationDistance(entry: number): number {
-  const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.0022, 0.22);
-}
-
-/** #136 Peak/harvest arm ≈0.0708% (min 0.12) — ~3.2pt on Gold ~4500. */
-export function bestOutcomeMfeFloor(entry: number): number {
-  const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.000708, 0.12);
-}
-
-/** #136 soft TP ≈0.35%. */
-export function bestOutcomeTarget(entry: number): number {
-  const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.0035, 0.35);
-}
-
 /**
- * Manage exit — #136 original.
+ * Manage exit — give the trade room to develop (~10s scalp with breathing room).
  * Broker SAFETY SL is the hard cushion; this is best-outcome + thesis management.
  * Isolated: caller must pass ONE robot's snapshot (never mix clients).
  */
@@ -79,9 +61,11 @@ export function decideBestOutcomeExit(
 
   const entry = s.entry_price;
   const fav = favorableMove(s.open_side, entry, mid);
-  const tp = bestOutcomeTarget(entry);
-  const sl = hardInvalidationDistance(entry);
-  const mfeFloor = bestOutcomeMfeFloor(entry);
+  const absEntry = Math.max(Math.abs(entry), 1e-9);
+  const tp = Math.max(absEntry * 0.0035, 0.35);
+  const sl = Math.max(absEntry * 0.0022, 0.22);
+  // Peak/harvest arm earlier: ≈3.2pt on Gold ~4500 (was 0.0012 ≈5.4pt)
+  const mfeFloor = Math.max(absEntry * 0.000708, 0.12);
 
   if (fav <= -sl) {
     return { exit: true, reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}` };
@@ -117,34 +101,4 @@ export function decideBestOutcomeExit(
   }
 
   return { exit: false, reason: '' };
-}
-
-/** Operator-facing hold line when Best Outcome did not fire an exit. */
-export function describeBestOutcomeState(
-  s: ExitSnapshot,
-  mid: number
-): { exit: boolean; reason: string; hold: string } {
-  const decision = decideBestOutcomeExit(s, mid);
-  if (decision.exit) return { ...decision, hold: '' };
-
-  if (!s.open_side || s.entry_price == null) {
-    return {
-      exit: false,
-      reason: '',
-      hold: 'BO blocked — missing entry_price (manage robot not seeded?)',
-    };
-  }
-
-  const entry = s.entry_price;
-  const fav = favorableMove(s.open_side, entry, mid);
-  const sl = hardInvalidationDistance(entry);
-  const mfeFloor = bestOutcomeMfeFloor(entry);
-  const ret =
-    s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—';
-
-  return {
-    exit: false,
-    reason: '',
-    hold: `BO #136 · UPL ${fav.toFixed(2)} · HardInv @ -${sl.toFixed(2)} · MFE ${s.mfe.toFixed(2)}/${mfeFloor.toFixed(2)} · ret ${ret}`,
-  };
 }

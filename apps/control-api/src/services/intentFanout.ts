@@ -1,17 +1,14 @@
 import { pool } from '../db/pool.js';
 import { decrypt } from '../security/encryption.js';
 import {
-  leaseCapitalSession,
+  acquireCapitalSession,
   createCapitalPosition,
   listCapitalOpenPositions,
   fetchCapitalMarketQuote,
   fetchCapitalMinutePrices,
   computeSafetyCushionStopLevel,
   isLateMoveOnOneMinute,
-  listCapitalAccounts,
-  pickCapitalEquity,
 } from './capitalCom.js';
-import { sizeFromBudgetPct } from './budgetSizing.js';
 import { emitToClient } from './clientEvents.js';
 import {
   listActiveSubscriptionsForEpic,
@@ -85,7 +82,7 @@ export async function executePipelineIntent(
   const setupType = intent.setup_type ? String(intent.setup_type) : null;
   const regime = intent.regime ? String(intent.regime) : null;
   if (!epic) throw new Error('epic required');
-  if (regime) notePipelineRegime(epic, regime, undefined, 'pipeline');
+  if (regime) notePipelineRegime(epic, regime);
   if (intent.decision && String(intent.decision).toUpperCase() !== 'ENTRY_READY') {
     throw new Error('Only EntryReady intents are executable');
   }
@@ -96,12 +93,19 @@ export async function executePipelineIntent(
       : null;
 
   const subs = await listActiveSubscriptionsForEpic(epic);
-  // Per-client Capital calls in parallel — C100 must not wait behind C1..C99
-  const executed = await Promise.all(
-    subs.map((sub) =>
-      executeForSubscription(sub, direction, setupType, regime, intent.reference_price, idem)
-    )
-  );
+  const executed: FanoutResult['executed'] = [];
+
+  for (const sub of subs) {
+    const row = await executeForSubscription(
+      sub,
+      direction,
+      setupType,
+      regime,
+      intent.reference_price,
+      idem
+    );
+    executed.push(row);
+  }
 
   return {
     epic,
@@ -144,42 +148,6 @@ async function completeExecutionClaim(
      WHERE idempotency_key = $1 AND client_id = $2 AND account_id = $3`,
     [idem, clientId, accountId, JSON.stringify(summary)]
   );
-}
-
-async function ensureManageRobotAttached(
-  sub: ActiveSubscription,
-  input: {
-    side: 'BUY' | 'SELL';
-    entry_price: number | null;
-    deal_id?: string | null;
-    deal_reference?: string | null;
-    regime?: string | null;
-    setup_type?: string | null;
-    lot_size?: number;
-  }
-): Promise<void> {
-  try {
-    await attachManageOnlyRobot({
-      account_id: sub.account_id,
-      epic: sub.epic,
-      display_name: sub.display_name,
-      lot_size: input.lot_size ?? sub.lot_size,
-      side: input.side,
-      entry_price: input.entry_price,
-      deal_id: input.deal_id,
-      deal_reference: input.deal_reference,
-      regime: input.regime,
-      setup_type: input.setup_type,
-    });
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    console.error('[fanout] manage-only attach failed', sub.client_id, detail);
-    emitToClient(sub.client_id, {
-      type: 'error',
-      message: `Best Outcome manager failed to attach: ${detail}`,
-    });
-    throw err;
-  }
 }
 
 async function executeForSubscription(
@@ -247,7 +215,7 @@ async function executeForSubscription(
       });
     }
 
-    // Skip if THIS account already open on epic (other clients still trade in parallel)
+    // ONE TRADE: skip if broker already open on this epic
     const connRow = await pool.query(
       `SELECT environment, identifier, broker_name FROM broker_connections WHERE id = $1`,
       [sub.connection_id]
@@ -267,7 +235,7 @@ async function executeForSubscription(
       `SELECT external_account_id FROM broker_accounts WHERE id = $1`,
       [sub.account_id]
     );
-    const leased = await leaseCapitalSession({
+    const opened = await acquireCapitalSession({
       environment: connRow.rows[0].environment as string,
       apiKey: creds.api_key || '',
       identifier: String(connRow.rows[0].identifier || '').trim(),
@@ -275,11 +243,11 @@ async function executeForSubscription(
       connectionId: sub.connection_id,
       capitalAccountId: (acc.rows[0]?.external_account_id as string | null) || null,
     });
-    if (!leased.ok) {
-      noteBrokerError(sub.client_id, leased.result.detail);
+    if (!opened.ok) {
+      noteBrokerError(sub.client_id, opened.result.detail);
       emitToClient(sub.client_id, {
         type: 'error',
-        message: leased.result.detail,
+        message: opened.result.detail,
         robot_status: 'RUNNING',
       });
       return finish({
@@ -287,47 +255,31 @@ async function executeForSubscription(
         account_id: sub.account_id,
         lot_size: sub.lot_size,
         ok: false,
-        detail: leased.result.detail,
+        detail: opened.result.detail,
         entry_price: null,
       });
     }
 
-    try {
-    const listed = await listCapitalOpenPositions(leased.session);
+    const listed = await listCapitalOpenPositions(opened.session);
     if (listed.ok) {
       const existing = listed.positions.find(
         (p) => p.epic.toUpperCase() === sub.epic.toUpperCase()
       );
       if (existing) {
         noteBrokerOk(sub.client_id);
-        const existingEntry = existing.open_level;
-        const existingDeal = existing.deal_id;
-        const existingSide = existing.direction;
-        leased.release();
-        try {
-          await ensureManageRobotAttached(sub, {
-            side: existingSide,
-            entry_price: existingEntry,
-            deal_id: existingDeal,
-            regime,
-            setup_type: setupType,
-          });
-        } catch {
-          /* logged + client notified */
-        }
         return finish({
           client_id: sub.client_id,
           account_id: sub.account_id,
           lot_size: sub.lot_size,
           ok: false,
-          detail: 'Already open on epic — skip (manage robot ensured)',
-          entry_price: existingEntry,
+          detail: 'Already open on epic — skip',
+          entry_price: existing.open_level,
         });
       }
     }
 
     // Avoid chasing end of 1m move (10s scalp guided by Capital 1m OHLC)
-    const hist = await fetchCapitalMinutePrices(leased.session, sub.epic, 3);
+    const hist = await fetchCapitalMinutePrices(opened.session, sub.epic, 3);
     if (hist.ok && isLateMoveOnOneMinute(direction, hist.candles)) {
       noteBrokerOk(sub.client_id);
       return finish({
@@ -340,8 +292,8 @@ async function executeForSubscription(
       });
     }
 
-    // SAFETY SL disaster cushion (~0.50%) — Best Outcome manages first
-    const q = await fetchCapitalMarketQuote(leased.session, sub.epic);
+    // SAFETY SL cushion (~0.20%), not broker minimum
+    const q = await fetchCapitalMarketQuote(opened.session, sub.epic);
     const mid =
       q.mid != null && Number.isFinite(q.mid)
         ? q.mid
@@ -358,34 +310,10 @@ async function executeForSubscription(
       });
     }
 
-    // Budget % of Capital equity → deal size (fallback to configured lot)
-    let dealSize = sub.lot_size;
-    let sizeDetail = `lot ${sub.lot_size}`;
-    if (mid != null) {
-      const accounts = await listCapitalAccounts(leased.session);
-      const equity = accounts.ok
-        ? pickCapitalEquity(accounts.accounts, null)
-        : null;
-      if (equity != null && equity > 0) {
-        const sized = sizeFromBudgetPct({
-          equity,
-          budgetPct: sub.budget_pct ?? 25,
-          mid,
-          minLot: sub.min_lot,
-          maxLot: sub.max_lot,
-          lotStep: sub.lot_step,
-          marginFactor: q.margin_factor,
-          category: sub.category,
-        });
-        dealSize = sized.size;
-        sizeDetail = sized.detail;
-      }
-    }
-
-    const result = await createCapitalPosition(leased.session, {
+    const result = await createCapitalPosition(opened.session, {
       epic: sub.epic,
       direction,
-      size: dealSize,
+      size: sub.lot_size,
       ...(stopLevel != null ? { stopLevel } : {}),
     });
 
@@ -399,35 +327,16 @@ async function executeForSubscription(
       return finish({
         client_id: sub.client_id,
         account_id: sub.account_id,
-        lot_size: dealSize,
+        lot_size: sub.lot_size,
         ok: false,
-        detail: `${result.detail} · ${sizeDetail}`,
+        detail: result.detail,
         entry_price: null,
       });
     }
 
     noteBrokerOk(sub.client_id);
-    let entry: number | null =
-      referencePrice != null && Number.isFinite(referencePrice)
-        ? Number(referencePrice)
-        : mid != null && Number.isFinite(mid)
-          ? mid
-          : null;
-    let dealId: string | null = null;
-    const afterOpen = await listCapitalOpenPositions(leased.session);
-    if (afterOpen.ok) {
-      const openedPos = afterOpen.positions.find(
-        (p) => p.epic.toUpperCase() === sub.epic.toUpperCase()
-      );
-      if (openedPos) {
-        entry = openedPos.open_level ?? entry;
-        dealId = openedPos.deal_id;
-      }
-    }
-
-    const openDetail = `${result.detail} · ${sizeDetail}`;
-    // Release Capital lease BEFORE manage attach (attach kicks robotCycle which needs same lock)
-    leased.release();
+    const entry =
+      referencePrice != null && Number.isFinite(referencePrice) ? Number(referencePrice) : null;
 
     // Persist execution/position best-effort
     try {
@@ -440,7 +349,7 @@ async function executeForSubscription(
           sub.instrument_id,
           direction === 'BUY' ? 'LONG' : 'SHORT',
           entry ?? 0,
-          dealSize,
+          sub.lot_size,
         ]
       );
     } catch {
@@ -453,48 +362,38 @@ async function executeForSubscription(
       display_name: sub.display_name,
       side: direction,
       trade_type: formatTradeLabel(direction, setupType, regime),
-      lot_size: dealSize,
+      lot_size: sub.lot_size,
       entry_price: entry,
       account_id: sub.account_id,
       setup_type: setupType,
       regime,
     });
 
-    // Manage-only robot: Best Outcome exits — fill already live; attach failure must not hide it
-    let manageNote = '';
+    // Manage-only robot: exits / health reads — no entry brain
     try {
-      await ensureManageRobotAttached(sub, {
+      await attachManageOnlyRobot({
+        account_id: sub.account_id,
+        epic: sub.epic,
+        display_name: sub.display_name,
+        lot_size: sub.lot_size,
         side: direction,
         entry_price: entry,
-        deal_id: dealId,
         deal_reference: result.deal_reference || null,
         regime,
         setup_type: setupType,
-        lot_size: dealSize,
       });
-    } catch (err) {
-      manageNote =
-        err instanceof Error ? err.message : String(err);
+    } catch {
+      /* manage attach best-effort */
     }
 
     return finish({
       client_id: sub.client_id,
       account_id: sub.account_id,
-      lot_size: dealSize,
+      lot_size: sub.lot_size,
       ok: true,
-      detail: manageNote
-        ? `${openDetail} · BO attach FAILED: ${manageNote}`
-        : openDetail,
+      detail: result.detail,
       entry_price: entry,
     });
-    } finally {
-      // no-op if already released after successful open; safe if early-return paths
-      try {
-        leased.release();
-      } catch {
-        /* ignore */
-      }
-    }
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     noteBrokerError(sub.client_id, detail);
