@@ -107,10 +107,16 @@ describe('decideBestOutcomeExit', () => {
     expect(buy.exit).toBe(false);
   });
 
-  it('hard invalidation on ~0.22% adverse', () => {
-    const d = decideBestOutcomeExit(snap({ open_side: 'BUY', entry_price: 2000, regime: 'RANGE' }), 1994);
+  it('hard invalidation on ~0.32% adverse (before broker SAFETY SL ~0.50%)', () => {
+    const d = decideBestOutcomeExit(snap({ open_side: 'BUY', entry_price: 2000, regime: 'RANGE' }), 1993);
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/HardInvalidation/);
+  });
+
+  it('does not hard-invalidate at old 0.22% (room for Best Outcome)', () => {
+    // 2000 * 0.0022 = 4.4 — was old HI; must HOLD so Capital SL is not the only exit path
+    const d = decideBestOutcomeExit(snap({ open_side: 'BUY', entry_price: 2000, regime: 'RANGE' }), 1995.5);
+    expect(d.exit).toBe(false);
   });
 
   it('peak protection after meaningful MFE giveback', () => {
@@ -128,40 +134,40 @@ describe('decideBestOutcomeExit', () => {
     expect(d.reason).toMatch(/PeakProtection/);
   });
 
-  it('arms peak protection from ~2.2pt MFE on Gold-scale price', () => {
-    // 4519 * 0.00049 ≈ 2.21 — small impulse plus now protected after giveback
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 4519,
-        regime: 'TREND_UP',
-        mfe: 2.25,
-        peak_retention: 0.25,
-      }),
-      4519.55
-    );
-    expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/PeakProtection/);
-  });
-
-  it('still holds sub-floor MFE noise on Gold (~1.5pt)', () => {
+  it('arms peak protection from ~1.4pt MFE on Gold-scale price', () => {
+    // 4519 * 0.0003 ≈ 1.36
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: 4519,
         regime: 'TREND_UP',
         mfe: 1.5,
+        peak_retention: 0.25,
+      }),
+      4519.4
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/PeakProtection/);
+  });
+
+  it('still holds sub-floor MFE noise on Gold (~0.5pt)', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4519,
+        regime: 'TREND_UP',
+        mfe: 0.5,
         peak_retention: 0.1,
       }),
-      4519.15
+      4519.05
     );
     expect(d.exit).toBe(false);
   });
 
-  it('target at ~0.35%', () => {
+  it('target at ~0.28%', () => {
     const d = decideBestOutcomeExit(
       snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_UP', mfe: 8 }),
-      2008
+      2005.7
     );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/Target/);

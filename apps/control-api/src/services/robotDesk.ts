@@ -303,9 +303,8 @@ function clearTradeState(s: Internal) {
 }
 
 /**
- * SAFETY SL as a true cushion — NOT dealing-rules minimum.
- * Target ~0.20% of price, at least ~2.5× broker min / wide vs spread,
- * so noise does not stop every trade (slightly tighter than 0.25%).
+ * SAFETY SL as LAST RESORT (~0.50%) — NOT the primary exit.
+ * Best Outcome / HardInvalidation must fire first; Capital "Limit" SL only on disaster.
  */
 function safetyStopLevel(
   direction: 'BUY' | 'SELL',
@@ -332,14 +331,14 @@ function safetyStopLevel(
         ? Math.max(ask - bid, 0)
         : abs * 0.00005;
 
-  const pctCushion = abs * 0.002; // 0.20% safety cushion (was 0.25%)
+  const pctCushion = abs * 0.005; // 0.50% disaster cushion (was 0.20% — sniped Best Outcome)
   const brokerMin =
     minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
       ? minStopDistance
       : 0;
-  const floor = abs >= 1000 ? 0.5 : abs >= 100 ? 0.25 : abs >= 10 ? 0.05 : abs >= 1 ? 0.0005 : 0.00005;
+  const floor = abs >= 1000 ? 1.2 : abs >= 100 ? 0.5 : abs >= 10 ? 0.08 : abs >= 1 ? 0.0008 : 0.00008;
   const dist =
-    Math.max(pctCushion, brokerMin * 2.5, spr * 8, floor) * Math.max(loosen, 1);
+    Math.max(pctCushion, brokerMin * 4, spr * 12, floor) * Math.max(loosen, 1);
 
   const raw = direction === 'BUY' ? ref - dist : ref + dist;
   if (abs >= 1000) return Math.round(raw * 10) / 10;
@@ -348,19 +347,19 @@ function safetyStopLevel(
   return Math.round(raw * 1e6) / 1e6;
 }
 
-/** Cushion stopDistance in Capital POINTS (≥ 2.5× min, ~0.20% of price when point size known). */
+/** Disaster stopDistance in Capital POINTS (≥ 4× min, ~0.50% of price). */
 function safetyStopDistancePts(
   mid: number,
   minPts: number,
   pointSize: number | null
 ): number {
   const abs = Math.max(Math.abs(mid), 1e-9);
-  const pct = abs * 0.002;
-  let fromPct = minPts * 2.5;
+  const pct = abs * 0.005;
+  let fromPct = minPts * 4;
   if (pointSize != null && pointSize > 0) {
     fromPct = Math.max(fromPct, pct / pointSize);
   }
-  const distPts = Math.max(minPts * 2.5, fromPct, minPts + 1e-9);
+  const distPts = Math.max(minPts * 4, fromPct, minPts + 1e-9);
   return distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
 }
 
@@ -679,7 +678,7 @@ async function enterTrade(
     return;
   }
 
-  // SAFETY SL cushion (~0.20% / ≥2.5× min) — not dealing-rules minimum
+  // SAFETY SL disaster cushion (~0.50% / ≥4× min) — Best Outcome exits first
   const minPts = quote.min_stop_points;
   const minPrice = quote.min_stop_distance ?? null;
   const unit = (quote.min_stop_unit || 'POINTS').toUpperCase();
@@ -693,7 +692,7 @@ async function enterTrade(
   if (useDistance) {
     for (const loosen of loosenSteps) {
       const basePts = safetyStopDistancePts(mid, minPts!, quote.point_size ?? null);
-      const distPts = Math.max(basePts * loosen, minPts! * 3);
+      const distPts = Math.max(basePts * loosen, minPts! * 4);
       const stopDistance =
         distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
       const expect = expectedStopFromDistance(
@@ -1065,7 +1064,7 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: 'Broker flat on this epic — trade closed externally · FLAT · post-exit cooldown',
+          detail: 'Capital closed this epic (likely SAFETY SL / Limit) · FLAT · Best Outcome never got green lock',
         });
         s.closed_at_ms = Date.now();
         clearTradeState(s);

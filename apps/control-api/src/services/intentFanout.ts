@@ -285,7 +285,7 @@ async function executeForSubscription(
       });
     }
 
-    // SAFETY SL cushion (~0.20%), not broker minimum
+    // SAFETY SL disaster cushion (~0.50%) — Best Outcome manages first
     const q = await fetchCapitalMarketQuote(opened.session, sub.epic);
     const mid =
       q.mid != null && Number.isFinite(q.mid)

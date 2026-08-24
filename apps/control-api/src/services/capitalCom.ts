@@ -953,7 +953,7 @@ export async function createCapitalPosition(
   };
 }
 
-/** ~0.20% cushion stopLevel (≥2.5× broker min) — safety pillow, not min legal SL. */
+/** ~0.50% disaster cushion stopLevel (≥4× broker min) — last resort, not Best Outcome. */
 export function computeSafetyCushionStopLevel(
   direction: 'BUY' | 'SELL',
   mid: number,
@@ -983,9 +983,9 @@ export function computeSafetyCushionStopLevel(
         : abs * 0.00005;
   const brokerMin =
     opts?.minStopDistance != null && opts.minStopDistance > 0 ? opts.minStopDistance : 0;
-  const pctCushion = abs * 0.002; // 0.20% (was 0.25%)
-  const floor = abs >= 1000 ? 0.5 : abs >= 100 ? 0.25 : abs >= 10 ? 0.05 : 0.0005;
-  const dist = Math.max(pctCushion, brokerMin * 2.5, spr * 8, floor);
+  const pctCushion = abs * 0.005; // 0.50% disaster (was 0.20% — Capital Limit sniped BO)
+  const floor = abs >= 1000 ? 1.2 : abs >= 100 ? 0.5 : abs >= 10 ? 0.08 : 0.0008;
+  const dist = Math.max(pctCushion, brokerMin * 4, spr * 12, floor);
   const raw = direction === 'BUY' ? ref - dist : ref + dist;
   if (abs >= 1000) return Math.round(raw * 10) / 10;
   if (abs >= 100) return Math.round(raw * 100) / 100;
