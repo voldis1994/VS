@@ -14,6 +14,7 @@ import {
 import { decideEntryBreakoutOnly, type RegimeEntry } from './entryFromRegime.js';
 import { fanoutEntryIntent, type FanoutResult } from './intentFanout.js';
 import { observeClosedBars, type RegimeName } from './regimes.js';
+import { decideEntryFromTdSequential } from './tdSequential.js';
 import { aggregateSecondsToTen, bodyPct, type TenSecBar } from './tenSecondOhlc.js';
 
 /** Popular universe needles — resolved against this connection's capital_markets. */
@@ -174,7 +175,13 @@ export function scoreMarketSetup(input: {
   const r = String(regime || '').toUpperCase();
   const bp = Math.abs(bodyPct(bar));
 
-  if (setup === 'BREAKOUT') score += 55;
+  const reasonText = String(entry.reason || '');
+  const isTd = reasonText.startsWith('TD ');
+
+  if (isTd && reasonText.includes('Countdown 13')) score += 78;
+  else if (isTd && reasonText.includes('Setup 9')) score += 66;
+  else if (setup === 'BREAKOUT') score += 55;
+  else if (setup === 'REVERSAL') score += 50;
   else if (setup === 'PULLBACK') score += 40;
   else score += 30;
 
@@ -183,12 +190,13 @@ export function scoreMarketSetup(input: {
   else if (r === 'COMPRESSION') score += 4;
 
   // Sweet spot body — enough to be real, not already spent (~0.015%–0.065%)
+  // TD Setup/CD can finish on small bodies — don't punish as hard
   if (bp >= 0.00015 && bp <= 0.00065) score += 18;
   else if (bp > 0.00065 && bp < 0.00075) score += 8;
-  else if (bp < 0.00015) score += 2;
-  else score -= 25; // spent bar
+  else if (bp < 0.00015) score += isTd ? 10 : 2;
+  else score -= isTd ? 8 : 25; // spent bar
 
-  if (String(entry.reason || '').includes('STRUCT BO')) score += 6;
+  if (reasonText.includes('STRUCT BO')) score += 6;
 
   return {
     score: Math.max(0, Math.min(100, score)),
@@ -402,7 +410,8 @@ async function scanOneEpic(
 
   const snap = observeClosedBars(m.epic, bars.slice(-12), m.display_name, scope);
   const last = bars[bars.length - 1]!;
-  const entry = decideEntryBreakoutOnly(last, snap.current, bars);
+  const entry =
+    decideEntryFromTdSequential(bars) || decideEntryBreakoutOnly(last, snap.current, bars);
   const scored = scoreMarketSetup({ entry, regime: snap.current, bar: last });
 
   if (!entry) {
@@ -416,7 +425,7 @@ async function scanOneEpic(
       score: scored.score,
       reason: `${snap.current} · no entry`,
       mid: last.close,
-      skipped: 'no BO/TREND pullback',
+      skipped: 'no TD/BO',
     };
   }
 

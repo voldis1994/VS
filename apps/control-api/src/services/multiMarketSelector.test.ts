@@ -57,4 +57,23 @@ describe('scoreMarketSetup', () => {
     });
     expect(bo.score).toBeGreaterThan(pb.score);
   });
+
+  it('ranks TD Countdown 13 above BREAKOUT on same body', () => {
+    const b = bar(4500, 4501.2);
+    const td = scoreMarketSetup({
+      entry: {
+        direction: 'BUY',
+        setup: 'REVERSAL',
+        reason: 'TD Buy Countdown 13 · 10s O=4500.00 C=4501.20',
+      },
+      regime: 'COMPRESSION',
+      bar: b,
+    });
+    const bo = scoreMarketSetup({
+      entry: { direction: 'BUY', setup: 'BREAKOUT', reason: 'BO' },
+      regime: 'BREAKOUT_UP',
+      bar: b,
+    });
+    expect(td.score).toBeGreaterThan(bo.score);
+  });
 });
