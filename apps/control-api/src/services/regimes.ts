@@ -66,6 +66,17 @@ export function normalizeRegime(value: string | null | undefined): RegimeName {
   return isRegimeName(v) ? v : 'UNKNOWN';
 }
 
+/**
+ * Live path never surfaces UNKNOWN — it froze robots in WAIT forever.
+ * Map stall regimes to EXPANSION so entry can follow the 10s candle.
+ */
+export function toLiveRegime(regime: RegimeName): RegimeName {
+  if (regime === 'UNKNOWN' || regime === 'TRANSITION' || regime === 'COMPRESSION') {
+    return 'EXPANSION';
+  }
+  return regime;
+}
+
 export function styleFromClassification(
   regime?: string | null,
   setupType?: string | null
@@ -214,7 +225,8 @@ function ensureBook(epic: string, displayName?: string): Book {
 }
 
 function applyClassify(epic: string, b: Book): RegimeSnapshot {
-  const next = classifyRegime(b.bars, b.current);
+  // Never stall live on UNKNOWN / COMPRESSION / TRANSITION
+  const next = toLiveRegime(classifyRegime(b.bars, b.current));
   const now = new Date().toISOString();
   if (next !== b.current) {
     b.previous = b.current;
@@ -255,7 +267,7 @@ export function notePipelineRegime(
   displayName?: string
 ): RegimeSnapshot {
   const b = ensureBook(epic, displayName);
-  const next = normalizeRegime(regime);
+  const next = toLiveRegime(normalizeRegime(regime));
   const now = new Date().toISOString();
   if (next !== b.current) {
     b.previous = b.current;
@@ -263,7 +275,7 @@ export function notePipelineRegime(
     b.since = now;
   }
   b.last_update = now;
-  if (next !== 'UNKNOWN') b.confidence = Math.max(b.confidence, 0.55);
+  b.confidence = Math.max(b.confidence, 0.55);
   return toSnapshot(epicKey(epic), b);
 }
 

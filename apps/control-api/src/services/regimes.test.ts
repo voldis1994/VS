@@ -7,6 +7,7 @@ import {
   observeClosedBars,
   resetRegimeBook,
   styleFromClassification,
+  toLiveRegime,
   type RegimeName,
 } from './regimes.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
@@ -166,6 +167,19 @@ describe('classifyRegime from 10s OHLC', () => {
       bar(100.0, 100.04, 99.93, 99.94, 2),
     ];
     expect(classifyRegime(bars, 'TREND_UP')).toBe('TRANSITION');
+  });
+
+  it('toLiveRegime never returns UNKNOWN / COMPRESSION / TRANSITION', () => {
+    expect(toLiveRegime('UNKNOWN')).toBe('EXPANSION');
+    expect(toLiveRegime('COMPRESSION')).toBe('EXPANSION');
+    expect(toLiveRegime('TRANSITION')).toBe('EXPANSION');
+    expect(toLiveRegime('TREND_UP')).toBe('TREND_UP');
+  });
+
+  it('observeClosedBars never surfaces UNKNOWN', () => {
+    const snap = observeClosedBars('X', [bar(100, 100.1, 99.9, 100)]);
+    expect(snap.current).not.toBe('UNKNOWN');
+    expect(snap.current).toBe('EXPANSION');
   });
 });
 

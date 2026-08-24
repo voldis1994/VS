@@ -5,9 +5,7 @@ import {
   createCapitalPosition,
   listCapitalOpenPositions,
   fetchCapitalMarketQuote,
-  fetchCapitalMinutePrices,
   computeSafetyCushionStopLevel,
-  isLateMoveOnOneMinute,
 } from './capitalCom.js';
 import { emitToClient } from './clientEvents.js';
 import {
@@ -278,19 +276,7 @@ async function executeForSubscription(
       }
     }
 
-    // Avoid chasing end of 1m move (10s scalp guided by Capital 1m OHLC)
-    const hist = await fetchCapitalMinutePrices(opened.session, sub.epic, 3);
-    if (hist.ok && isLateMoveOnOneMinute(direction, hist.candles)) {
-      noteBrokerOk(sub.client_id);
-      return finish({
-        client_id: sub.client_id,
-        account_id: sub.account_id,
-        lot_size: sub.lot_size,
-        ok: false,
-        detail: 'Skip entry — late on 1m candle (end of move)',
-        entry_price: null,
-      });
-    }
+    // (late-1m gate removed — never skip client fanout entries)
 
     // SAFETY SL cushion (~0.20%), not broker minimum
     const q = await fetchCapitalMarketQuote(opened.session, sub.epic);

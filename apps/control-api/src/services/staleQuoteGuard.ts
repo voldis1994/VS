@@ -25,7 +25,7 @@ function relMove(from: number, to: number): number {
 
 /**
  * If fresher refs have already moved against the intended side while Capital
- * quote has not caught up, block the entry.
+ * quote has not caught up — advisory only; never block entry.
  */
 export function detectStaleQuoteAdverse(
   direction: 'BUY' | 'SELL',
@@ -57,60 +57,37 @@ export function detectStaleQuoteAdverse(
     };
   }
 
-  // Freshest adverse extreme vs Capital
+  let worst = usable[0]!;
+  let rel = 0;
   if (direction === 'BUY') {
-    // Lowest fresher mid — if already well below Capital, market dropped / Capital lagging high
-    let worst = usable[0]!;
     for (const r of usable) {
       if (r.mid < worst.mid) worst = r;
     }
-    const rel = relMove(capitalMid, worst.mid); // negative when ref below capital
-    if (rel <= -minRel) {
-      return {
-        block: true,
-        reason: `STALE CAPITAL · BUY blocked — ${worst.label} already ${worst.mid.toFixed(2)} while Capital ${capitalMid.toFixed(2)} (drop ${(Math.abs(rel) * 100).toFixed(3)}%)`,
-        capital_mid: capitalMid,
-        lead_mid: worst.mid,
-        lead_label: worst.label,
-        rel,
-      };
-    }
+    rel = relMove(capitalMid, worst.mid);
   } else {
-    // Highest fresher mid — if already well above Capital, market rallied / Capital lagging low
-    let worst = usable[0]!;
     for (const r of usable) {
       if (r.mid > worst.mid) worst = r;
     }
-    const rel = relMove(capitalMid, worst.mid); // positive when ref above capital
-    if (rel >= minRel) {
-      return {
-        block: true,
-        reason: `STALE CAPITAL · SELL blocked — ${worst.label} already ${worst.mid.toFixed(2)} while Capital ${capitalMid.toFixed(2)} (rally ${(Math.abs(rel) * 100).toFixed(3)}%)`,
-        capital_mid: capitalMid,
-        lead_mid: worst.mid,
-        lead_label: worst.label,
-        rel,
-      };
-    }
+    rel = relMove(capitalMid, worst.mid);
   }
 
+  // Never block — note only
+  void minRel;
   return {
     block: false,
-    reason: 'capital quote aligned with fresher refs',
+    reason:
+      Math.abs(rel) >= minRel
+        ? `STALE NOTE · Capital ${capitalMid.toFixed(2)} vs ${worst.label} ${worst.mid.toFixed(2)} (allow)`
+        : 'capital quote aligned with fresher refs',
     capital_mid: capitalMid,
-    lead_mid: usable[0]!.mid,
-    lead_label: usable[0]!.label,
-    rel: relMove(capitalMid, usable[0]!.mid),
+    lead_mid: worst.mid,
+    lead_label: worst.label,
+    rel,
   };
 }
 
 /**
- * Capital CFD often prints a fake extreme vs public spot before the real move
- * (opposite reaction). If public-near mids exist and Capital is isolated on the
- * wrong side of them, skip — when no public near, allow (do not miss moves).
- *
- * BUY blocked: Capital dumped alone below public (fake dip).
- * SELL blocked: Capital spiked alone above public (fake rally).
+ * Capital vs public extreme — advisory only; never block entry.
  */
 export function detectCapitalIsolatedExtreme(
   direction: 'BUY' | 'SELL',
@@ -118,7 +95,7 @@ export function detectCapitalIsolatedExtreme(
   publicNearMids: number[],
   opts?: { minRel?: number }
 ): StaleQuoteVerdict {
-  const minRel = opts?.minRel ?? 0.0008; // ~0.08% ≈ 3.6pt on Gold 4500
+  const minRel = opts?.minRel ?? 0.0008;
   if (capitalMid == null || !Number.isFinite(capitalMid)) {
     return {
       block: false,
@@ -146,32 +123,12 @@ export function detectCapitalIsolatedExtreme(
     sorted.length % 2 === 1
       ? sorted[midIdx]!
       : (sorted[midIdx - 1]! + sorted[midIdx]!) / 2;
-  const rel = relMove(publicMed, capitalMid); // + when Capital above public
-
-  if (direction === 'BUY' && rel <= -minRel) {
-    return {
-      block: true,
-      reason: `CAPITAL FAKE DIP · BUY blocked — Capital ${capitalMid.toFixed(2)} below public ${publicMed.toFixed(2)} (${(Math.abs(rel) * 100).toFixed(3)}%)`,
-      capital_mid: capitalMid,
-      lead_mid: publicMed,
-      lead_label: 'public-near median',
-      rel,
-    };
-  }
-  if (direction === 'SELL' && rel >= minRel) {
-    return {
-      block: true,
-      reason: `CAPITAL FAKE RALLY · SELL blocked — Capital ${capitalMid.toFixed(2)} above public ${publicMed.toFixed(2)} (${(Math.abs(rel) * 100).toFixed(3)}%)`,
-      capital_mid: capitalMid,
-      lead_mid: publicMed,
-      lead_label: 'public-near median',
-      rel,
-    };
-  }
-
+  const rel = relMove(publicMed, capitalMid);
+  void direction;
+  void minRel;
   return {
     block: false,
-    reason: 'Capital not isolated vs public-near',
+    reason: 'Capital advisory vs public-near (never block)',
     capital_mid: capitalMid,
     lead_mid: publicMed,
     lead_label: 'public-near median',

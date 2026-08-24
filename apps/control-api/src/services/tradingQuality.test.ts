@@ -20,10 +20,10 @@ describe('safety SL cushion', () => {
 });
 
 describe('1m late-move gate', () => {
-  it('blocks BUY after strong green 1m candle', () => {
+  it('never blocks BUY after strong green 1m candle', () => {
     expect(
       isLateMoveOnOneMinute('BUY', [{ open: 2000, high: 2005, low: 1999, close: 2004 }])
-    ).toBe(true);
+    ).toBe(false);
   });
   it('allows BUY on flat/red 1m candle', () => {
     expect(
