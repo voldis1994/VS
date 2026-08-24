@@ -9,7 +9,6 @@ import {
   fetchCapitalMinutePrices,
   fetchCapitalPrices,
   isLateMoveOnOneMinute,
-  leaseCapitalSession,
   listCapitalOpenPositions,
   type CapitalMarketQuote,
   type CapitalOpenPosition,
@@ -25,22 +24,20 @@ import { mapTradeType } from './tradePresentation.js';
 import {
   observeClosedBars,
   normalizeRegime,
-  clearRegimeBookFor,
-  LIVE_REGIME_NAMES,
   REGIME_NAMES,
   type RegimeName,
 } from './regimes.js';
-import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove } from './exitManage.js';
+import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
 import { decideEntryFrom10sRegime } from './entryFromRegime.js';
 import {
   allowEntryFromFeeds,
   multiFeedOwnsOhlc,
+  pickOhlcMid,
   readMultiFeedPrice,
   type MultiFeedPrice,
   type MultiFeedLeg,
 } from './robotReader.js';
 import { buildFresherRefs, detectCapitalIsolatedExtreme, detectStaleQuoteAdverse } from './staleQuoteGuard.js';
-import { listAllActiveSubscriptions } from './clientSubscriptions.js';
 import {
   aggregateSecondsToTen,
   emptyTenSecState,
@@ -123,8 +120,6 @@ type Internal = RobotSession & {
   connection_id: number;
   closed_at_ms: number;
   peak_favorable: number;
-  /** Skip overlapping ticks — one slow Capital read must not stack cycles on this robot. */
-  cycle_busy: boolean;
   /** Last time we logged "market closed" (throttle ticks) */
   last_market_closed_tick_ms: number;
   cadence_ms: number;
@@ -137,8 +132,6 @@ type Internal = RobotSession & {
 };
 
 const ACTIVE_CADENCE_MS = 2_000;
-/** Open trade: poll faster so all clients hit HardInv/BO nearly together (not one-by-one on 2s stagger). */
-const MANAGE_CADENCE_MS = 500;
 const CLOSED_MARKET_CADENCE_MS = 15_000;
 const CLOSED_MARKET_TICK_EVERY_MS = 15_000;
 
@@ -156,17 +149,6 @@ function setRobotCadence(s: Internal, ms: number) {
   if (s.timer) clearInterval(s.timer);
   s.cadence_ms = ms;
   s.timer = setInterval(() => void robotCycle(s), ms);
-}
-
-/** After one client exits, nudge peers on same epic so they don't wait a full cadence. */
-function kickPeerManageCycles(exceptId: string, epic: string) {
-  const want = epic.trim().toLowerCase();
-  for (const peer of sessions.values()) {
-    if (peer.id === exceptId || !peer.running || !peer.open_side) continue;
-    if (peer.epic.trim().toLowerCase() !== want) continue;
-    if (peer.cycle_busy) continue;
-    void robotCycle(peer);
-  }
 }
 
 const sessions = new Map<string, Internal>();
@@ -249,7 +231,7 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
   return {
     feeds,
     ohlc: ohlcLine,
-    regime: s.regime || 'COMPRESSION',
+    regime: s.regime || 'UNKNOWN',
     setup: null,
     action,
   };
@@ -257,7 +239,7 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
 
 export function robotBoardMeta(sessions: RobotSession[]) {
   const activeRegimes = [
-    ...new Set(sessions.filter((s) => s.running).map((s) => s.regime || 'COMPRESSION')),
+    ...new Set(sessions.filter((s) => s.running).map((s) => s.regime || 'UNKNOWN')),
   ];
   const maxFeeds = sessions.reduce(
     (n, s) => Math.max(n, s.feed_sender_count || 0, s.feed_legs?.length || 0),
@@ -265,14 +247,14 @@ export function robotBoardMeta(sessions: RobotSession[]) {
   );
   const contributing = sessions.reduce((n, s) => Math.max(n, s.feed_contributing || 0), 0);
   return {
-    regimes: [...LIVE_REGIME_NAMES],
-    trade_types: ['BUY BREAKOUT', 'SELL BREAKOUT', 'BUY TREND', 'SELL TREND'],
+    regimes: [...REGIME_NAMES],
+    trade_types: ['BUY LONG', 'SELL LONG', 'BUY SCALP', 'SELL SCALP'],
     active_regimes: activeRegimes,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'Capital OHLC → BREAKOUT + TREND → ENTRY/EXIT',
+    chain: 'Capital OHLC (anchor) + public near Capital → REGIME → ENTRY/EXIT',
     note:
-      'Live #136: classic 10s regime entry (TREND/BO/RANGE/FADE) · clients persist across restart.',
+      'Public feeds (Yahoo/Aurum/FX/Coinbase) confirm when near Capital CFD mid; far public prices are ignored so they cannot block or distort trades.',
   };
 }
 
@@ -282,25 +264,11 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
     : s.ohlcState.last_closed
       ? [s.ohlcState.last_closed]
       : [];
-  if (!incoming.length) return;
-
-  const snap = observeClosedBars(s.epic, incoming, s.display_name, s.id);
-  s.regime = snap.current;
-
-  // Keep rolling 10s history for quiet→impulse (do not wipe on single-bar updates)
-  if (bars && bars.length > 1) {
-    s.closedBars = bars.slice(-24);
-    return;
+  if (incoming.length) {
+    const snap = observeClosedBars(s.epic, incoming, s.display_name);
+    s.regime = snap.current;
+    if (bars?.length) s.closedBars = bars.slice(-24);
   }
-  for (const b of incoming) {
-    const last = s.closedBars[s.closedBars.length - 1];
-    if (last && last.open_time_ms === b.open_time_ms) {
-      s.closedBars[s.closedBars.length - 1] = b;
-    } else {
-      s.closedBars.push(b);
-    }
-  }
-  if (s.closedBars.length > 24) s.closedBars = s.closedBars.slice(-24);
 }
 
 function clearTradeState(s: Internal) {
@@ -318,8 +286,9 @@ function clearTradeState(s: Internal) {
 }
 
 /**
- * SAFETY SL as LAST RESORT (~0.50%) — NOT the primary exit.
- * Best Outcome / HardInvalidation must fire first; Capital "Limit" SL only on disaster.
+ * SAFETY SL as a true cushion — NOT dealing-rules minimum.
+ * Target ~0.20% of price, at least ~2.5× broker min / wide vs spread,
+ * so noise does not stop every trade (slightly tighter than 0.25%).
  */
 function safetyStopLevel(
   direction: 'BUY' | 'SELL',
@@ -346,14 +315,14 @@ function safetyStopLevel(
         ? Math.max(ask - bid, 0)
         : abs * 0.00005;
 
-  const pctCushion = abs * 0.005; // 0.50% disaster cushion (was 0.20% — sniped Best Outcome)
+  const pctCushion = abs * 0.002; // 0.20% safety cushion (was 0.25%)
   const brokerMin =
     minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
       ? minStopDistance
       : 0;
-  const floor = abs >= 1000 ? 1.2 : abs >= 100 ? 0.5 : abs >= 10 ? 0.08 : abs >= 1 ? 0.0008 : 0.00008;
+  const floor = abs >= 1000 ? 0.5 : abs >= 100 ? 0.25 : abs >= 10 ? 0.05 : abs >= 1 ? 0.0005 : 0.00005;
   const dist =
-    Math.max(pctCushion, brokerMin * 4, spr * 12, floor) * Math.max(loosen, 1);
+    Math.max(pctCushion, brokerMin * 2.5, spr * 8, floor) * Math.max(loosen, 1);
 
   const raw = direction === 'BUY' ? ref - dist : ref + dist;
   if (abs >= 1000) return Math.round(raw * 10) / 10;
@@ -362,19 +331,19 @@ function safetyStopLevel(
   return Math.round(raw * 1e6) / 1e6;
 }
 
-/** Disaster stopDistance in Capital POINTS (≥ 4× min, ~0.50% of price). */
+/** Cushion stopDistance in Capital POINTS (≥ 2.5× min, ~0.20% of price when point size known). */
 function safetyStopDistancePts(
   mid: number,
   minPts: number,
   pointSize: number | null
 ): number {
   const abs = Math.max(Math.abs(mid), 1e-9);
-  const pct = abs * 0.005;
-  let fromPct = minPts * 4;
+  const pct = abs * 0.002;
+  let fromPct = minPts * 2.5;
   if (pointSize != null && pointSize > 0) {
     fromPct = Math.max(fromPct, pct / pointSize);
   }
-  const distPts = Math.max(minPts * 4, fromPct, minPts + 1e-9);
+  const distPts = Math.max(minPts * 2.5, fromPct, minPts + 1e-9);
   return distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
 }
 
@@ -499,31 +468,16 @@ export async function stopRobotSession(id: string): Promise<RobotSession | null>
   return publicSession(s);
 }
 
-/** Prefer deal_id when known — never grab another client's / another GOLD lot by epic alone. */
-function matchOpenPosition(
-  positions: CapitalOpenPosition[],
-  epic: string,
-  dealId?: string | null
-): CapitalOpenPosition | null {
-  const wantDeal = String(dealId || '').trim();
-  if (wantDeal) {
-    const byDeal = positions.find((p) => p.deal_id === wantDeal);
-    if (byDeal) return byDeal;
-  }
-  const want = epic.trim().toLowerCase();
-  const onEpic = positions.filter((p) => p.epic.trim().toLowerCase() === want);
-  if (onEpic.length === 0) return null;
-  if (onEpic.length === 1) return onEpic[0]!;
-  // Multiple on epic without deal_id — refuse to guess (caller stays careful)
-  return onEpic[0]!;
-}
-
-/** @deprecated use matchOpenPosition */
 function matchOpenOnEpic(
   positions: CapitalOpenPosition[],
   epic: string
 ): CapitalOpenPosition | null {
-  return matchOpenPosition(positions, epic, null);
+  const want = epic.trim().toLowerCase();
+  return (
+    positions.find((p) => p.epic.trim().toLowerCase() === want) ||
+    positions.find((p) => p.deal_id === epic) ||
+    null
+  );
 }
 
 async function resolveDealId(
@@ -548,7 +502,7 @@ async function resolveDealId(
   }
   const listed = await listCapitalOpenPositions(session);
   if (listed.ok) {
-    const hit = matchOpenPosition(listed.positions, s.epic, s.deal_id);
+    const hit = matchOpenOnEpic(listed.positions, s.epic);
     if (hit) {
       s.deal_id = hit.deal_id;
       return hit.deal_id;
@@ -622,18 +576,12 @@ async function exitTrade(
   }
 
   try {
-    // Close only the latest OPEN row for this account+epic (no deal_id column in schema)
     await pool.query(
       `UPDATE positions SET status = 'CLOSED', closed_at = NOW()
-       WHERE id = (
-         SELECT p.id FROM positions p
-         WHERE p.broker_account_id = $1 AND p.status = 'OPEN'
-           AND p.instrument_id IN (
-             SELECT id FROM capital_markets WHERE broker_connection_id = $2 AND epic = $3
-           )
-         ORDER BY p.opened_at DESC
-         LIMIT 1
-       )`,
+       WHERE broker_account_id = $1 AND status = 'OPEN'
+         AND instrument_id IN (
+           SELECT id FROM capital_markets WHERE broker_connection_id = $2 AND epic = $3
+         )`,
       [s.account_id, s.connection_id, s.epic]
     );
   } catch {
@@ -654,7 +602,7 @@ async function enterTrade(
   // HARD RULE: never entry while any trade open on this epic
   const listed = await listCapitalOpenPositions(session);
   if (listed.ok) {
-    const existing = matchOpenPosition(listed.positions, s.epic, s.deal_id);
+    const existing = matchOpenOnEpic(listed.positions, s.epic);
     if (existing) {
       s.open_side = existing.direction;
       s.deal_id = existing.deal_id;
@@ -667,7 +615,7 @@ async function enterTrade(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `Already open on this account ${existing.direction} dealId=${existing.deal_id} · no second entry on same epic`,
+        detail: `ONE TRADE ONLY — broker already open ${existing.direction} dealId=${existing.deal_id} · no new entry`,
       });
       return;
     }
@@ -693,7 +641,7 @@ async function enterTrade(
     return;
   }
 
-  // SAFETY SL disaster cushion (~0.50% / ≥4× min) — Best Outcome exits first
+  // SAFETY SL cushion (~0.20% / ≥2.5× min) — not dealing-rules minimum
   const minPts = quote.min_stop_points;
   const minPrice = quote.min_stop_distance ?? null;
   const unit = (quote.min_stop_unit || 'POINTS').toUpperCase();
@@ -707,7 +655,7 @@ async function enterTrade(
   if (useDistance) {
     for (const loosen of loosenSteps) {
       const basePts = safetyStopDistancePts(mid, minPts!, quote.point_size ?? null);
-      const distPts = Math.max(basePts * loosen, minPts! * 4);
+      const distPts = Math.max(basePts * loosen, minPts! * 3);
       const stopDistance =
         distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
       const expect = expectedStopFromDistance(
@@ -841,7 +789,7 @@ async function enterTrade(
   if (dealId) {
     try {
       const again = await listCapitalOpenPositions(session);
-      const pos = again.ok ? matchOpenPosition(again.positions, s.epic, s.deal_id) : null;
+      const pos = again.ok ? matchOpenOnEpic(again.positions, s.epic) : null;
       if (pos?.stop_level != null && Number.isFinite(pos.stop_level)) {
         s.safety_sl = pos.stop_level;
       }
@@ -900,10 +848,7 @@ async function enterTrade(
 
 async function robotCycle(s: Internal) {
   if (!s.running) return;
-  if (s.cycle_busy) return;
-  s.cycle_busy = true;
 
-  try {
   const { rows } = await pool.query(
     `SELECT bc.id, bc.environment, bc.identifier, bc.broker_name
      FROM broker_connections bc WHERE bc.id = $1`,
@@ -939,7 +884,7 @@ async function robotCycle(s: Internal) {
   const capitalAccountId =
     (accRow.rows[0]?.external_account_id as string | null | undefined) || null;
 
-  const leased = await leaseCapitalSession({
+  const opened = await acquireCapitalSession({
     environment: conn.environment,
     apiKey: creds.api_key || '',
     identifier: (conn.identifier || '').trim(),
@@ -947,31 +892,27 @@ async function robotCycle(s: Internal) {
     connectionId: s.connection_id,
     capitalAccountId,
   });
-  if (!leased.ok) {
+  if (!opened.ok) {
     s.reads_fail += 1;
-    s.error = leased.result.detail;
+    s.error = opened.result.detail;
     const rateLimited =
-      leased.result.status === 429 || /rate-limit|too-many|cooldown/i.test(leased.result.detail);
+      opened.result.status === 429 || /rate-limit|too-many|cooldown/i.test(opened.result.detail);
     pushTick(s, {
       phase: rateLimited ? 'WAIT' : 'ERROR',
       bid: null,
       ask: null,
       mid: null,
       detail: rateLimited
-        ? `RATE LIMIT — ${leased.result.detail}`
-        : `Session fail: ${leased.result.detail}`,
+        ? `RATE LIMIT — ${opened.result.detail}`
+        : `Session fail: ${opened.result.detail}`,
     });
     // Slow this robot while cooling down so control panel stays usable
     if (rateLimited) setRobotCadence(s, 20_000);
     return;
   }
 
-  // Early `return` inside this try still runs `finally` (lease release + multi-feed).
-  // Do NOT put multi-feed after the try/finally — those returns would skip it forever (1/1 LOCAL).
-  let refreshMultiFeed = false;
   try {
-    const session = leased.session;
-    const quote = await fetchCapitalMarketQuote(session, s.epic);
+    const quote = await fetchCapitalMarketQuote(opened.session, s.epic);
     if (!quote.raw_ok) {
       s.reads_fail += 1;
       s.error = quote.detail || 'No quote';
@@ -992,51 +933,33 @@ async function robotCycle(s: Internal) {
       s.epic = quote.epic;
     }
     if (quote.mid != null) s.last_mid = quote.mid;
-    refreshMultiFeed = true;
 
-    // OHLC from Capital mid only — never Yahoo/Aurum spot (was poisoning bars ~80pt off)
-    // NOTE: multiFeed runs AFTER lease release — it calls acquireCapitalSession and
-    // would deadlock if invoked while we still hold the connection lock.
-    const warmMid = quote.mid;
+    // Always refresh feeds (even when parked) so FEEDS board is not stuck IDLE 0/0
+    if (Date.now() - s.last_multi_feed_ms >= 4_000) {
+      s.last_multi_feed_ms = Date.now();
+      try {
+        s.multiFeed = await readMultiFeedPrice(s.epic, { anchorMid: quote.mid });
+      } catch {
+        /* keep previous */
+      }
+    }
+    const pickedWarm = pickOhlcMid(quote.mid, s.multiFeed);
+    s.feed_source = pickedWarm.source;
+    s.feed_contributing = s.multiFeed?.contributing ?? 0;
+    s.feed_sender_count = s.multiFeed?.sender_count ?? 0;
+    s.feed_agreement = s.multiFeed?.agreement ?? null;
+    if (quote.mid != null && (s.feed_contributing || 0) < 1) {
+      s.feed_source = 'LOCAL';
+      s.feed_contributing = 1;
+      s.feed_sender_count = Math.max(1, s.feed_sender_count || 0);
+    }
+    const warmMid = pickedWarm.mid ?? quote.mid;
     if (warmMid != null) {
-      const ref =
-        s.ohlcState.forming?.close ?? s.ohlcState.last_closed?.close ?? null;
-      if (
-        ref != null &&
-        Math.abs(ref - warmMid) / Math.max(Math.abs(warmMid), 1e-9) > 0.004
-      ) {
-        s.ohlcState = emptyTenSecState();
-        s.closedBars = [];
-        s.last_closed_bar_key = '';
-        pushTick(s, {
-          phase: 'INFO',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `OHLC RESET · bar ${ref.toFixed(2)} far from Capital ${warmMid.toFixed(2)} — rebuild from broker`,
-        });
-      }
       s.ohlcState = updateTenSecondOhlc(s.ohlcState, warmMid, Date.now());
-      // Leave SEEDING immediately once we have a forming bar with ticks
-      if (!s.ohlcState.last_closed && s.ohlcState.forming && s.ohlcState.forming.ticks >= 1) {
-        s.ohlcState = {
-          forming: s.ohlcState.forming,
-          last_closed: { ...s.ohlcState.forming },
-          just_closed: true,
-        };
-      }
       s.ohlc_10s = publicOhlc10s(s.ohlcState);
       if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
         applyRobotRegime(s, [s.ohlcState.last_closed]);
       }
-    }
-
-    // Local feed badge until multiFeed runs in finally (same cycle)
-    if (quote.mid != null && (s.feed_contributing || 0) < 1) {
-      s.feed_source = 'LOCAL';
-      s.feed_contributing = 1;
-      // Do not collapse a known multi denominator to 1 while waiting for refresh
-      if ((s.feed_sender_count || 0) < 1) s.feed_sender_count = 1;
     }
 
     // Market closed / offline → park: no positions sync, no MANAGE, no entry (anti-spam Capital)
@@ -1058,35 +981,14 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // Restore / manage cadence
-    setRobotCadence(s, s.open_side ? MANAGE_CADENCE_MS : ACTIVE_CADENCE_MS);
-
-    // Always seed 10s from Capital SECOND when empty — do not sit SEEDING/UNKNOWN forever
-    const seedingEarly = !s.ohlcState.last_closed || s.ohlc_10s.market === 'SEEDING';
-    if (seedingEarly && Date.now() - s.last_second_fetch_ms >= 3_000) {
-      s.last_second_fetch_ms = Date.now();
-      const sec = await fetchCapitalPrices(session, s.epic, 'SECOND', 40);
-      if (sec.ok && sec.candles.length >= 10) {
-        const bars = aggregateSecondsToTen(sec.candles);
-        const last = bars[bars.length - 1];
-        if (last) {
-          s.ohlcState = {
-            forming: s.ohlcState.forming,
-            last_closed: last,
-            just_closed: true,
-          };
-          s.last_closed_bar_key = `${last.open.toFixed(4)}:${last.close.toFixed(4)}:${last.high.toFixed(4)}`;
-          s.ohlc_10s = publicOhlc10s(s.ohlcState);
-          applyRobotRegime(s, bars);
-        }
-      }
-    }
+    // Restore normal cadence after a successful tradeable read (may have been slowed by 429 / closed)
+    setRobotCadence(s, ACTIVE_CADENCE_MS);
 
     // Sync truth from broker — source of ONE TRADE ONLY
-    const listed = await listCapitalOpenPositions(session);
+    const listed = await listCapitalOpenPositions(opened.session);
     let brokerOpen: CapitalOpenPosition | null = null;
     if (listed.ok) {
-      brokerOpen = matchOpenPosition(listed.positions, s.epic, s.deal_id);
+      brokerOpen = matchOpenOnEpic(listed.positions, s.epic);
       if (brokerOpen) {
         s.open_side = brokerOpen.direction;
         s.deal_id = brokerOpen.deal_id;
@@ -1094,7 +996,6 @@ async function robotCycle(s: Internal) {
         if (!s.entry_at) s.entry_at = new Date().toISOString();
         s.mode = 'MANAGE';
         if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
-        setRobotCadence(s, MANAGE_CADENCE_MS);
       } else if (s.open_side) {
         // Local thought open but broker flat → treat as closed
         pushTick(s, {
@@ -1102,7 +1003,7 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: 'Capital closed this epic (likely SAFETY SL / Limit) · FLAT · Best Outcome never got green lock',
+          detail: 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
         });
         s.closed_at_ms = Date.now();
         clearTradeState(s);
@@ -1113,7 +1014,7 @@ async function robotCycle(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `Position sync warn: ${listed.detail} · no new entry while unsure`,
+        detail: `Position sync warn: ${listed.detail} · holding ONE TRADE rule (no new entry if unsure)`,
       });
     }
 
@@ -1149,9 +1050,7 @@ async function robotCycle(s: Internal) {
 
       const decision = decideBestOutcomeExit(s, quote.mid);
       if (decision.exit) {
-        await exitTrade(session, s, quote, decision.reason);
-        // Wake other clients' manage robots immediately (each decides on own UPL — no shared exit)
-        queueMicrotask(() => kickPeerManageCycles(s.id, s.epic));
+        await exitTrade(opened.session, s, quote, decision.reason);
         return;
       }
 
@@ -1160,11 +1059,11 @@ async function robotCycle(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `MANAGE ${s.open_side} · ${s.regime} · UPL ${
+        detail: `ONE TRADE · manage ${s.open_side} · ${s.regime} · UPL ${
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · ${describeBestOutcomeState(s, quote.mid).hold}`,
+        } · no new orders`,
       });
       return;
     }
@@ -1184,31 +1083,25 @@ async function robotCycle(s: Internal) {
     }
 
     s.mode = 'ENTRY';
-    // #136 post-close pause (~20s) before next entry
-    const cooldownMs = 20_000;
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
-    if (s.closed_at_ms > 0 && sinceClose < cooldownMs) {
-      const leftSec = Math.ceil((cooldownMs - sinceClose) / 1000);
+    if (s.closed_at_ms > 0 && sinceClose < 20_000) {
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `POST-EXIT cooldown ${leftSec}s left (of ${Math.round(cooldownMs / 1000)}s) · no new entry`,
+        detail: `10s OHLC cooldown ${Math.ceil((20_000 - sinceClose) / 1000)}s after close · then next bar`,
       });
       return;
     }
 
     if (quote.mid == null) return;
 
-    // Seed 10s OHLC fast when SEEDING — never sit forever in UNKNOWN/empty bars
-    const seeding = !s.ohlcState.last_closed || s.ohlc_10s.market === 'SEEDING';
-    if (
-      (seeding || !multiFeedOwnsOhlc(s.multiFeed)) &&
-      Date.now() - s.last_second_fetch_ms >= (seeding ? 3_000 : 8_000)
-    ) {
+    // Seed from this account's SECOND candles only when multi-provider OHLC is NOT in charge.
+    // Otherwise a single Capital row would overwrite consensus bars used for regime/entry.
+    if (!multiFeedOwnsOhlc(s.multiFeed) && Date.now() - s.last_second_fetch_ms >= 8_000) {
       s.last_second_fetch_ms = Date.now();
-      const sec = await fetchCapitalPrices(session, s.epic, 'SECOND', 40);
+      const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 40);
       if (sec.ok && sec.candles.length >= 10) {
         const bars = aggregateSecondsToTen(sec.candles);
         const last = bars[bars.length - 1];
@@ -1253,7 +1146,6 @@ async function robotCycle(s: Internal) {
     let setupType: string | null = null;
 
     if (s.ohlcState.just_closed && bar) {
-      // #136 original: classic decideEntryFrom10sRegime (all live regimes)
       const sig = decideEntryFrom10sRegime(bar, s.regime);
       if (sig) {
         direction = sig.direction;
@@ -1265,7 +1157,7 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${ohlcLine} · ${s.regime} · no #136 setup yet`,
+          detail: `${ohlcLine} · ${s.regime} not suitable on this 10s close · wait next candle`,
         });
       }
     } else {
@@ -1279,7 +1171,7 @@ async function robotCycle(s: Internal) {
     }
 
     if (direction) {
-      const hist = await fetchCapitalMinutePrices(session, s.epic, 3);
+      const hist = await fetchCapitalMinutePrices(opened.session, s.epic, 3);
       if (hist.ok && isLateMoveOnOneMinute(direction, hist.candles)) {
         pushTick(s, {
           phase: 'WAIT',
@@ -1336,45 +1228,12 @@ async function robotCycle(s: Internal) {
     }
 
     if (!direction) return;
-    await enterTrade(session, s, direction, quote, reason, setupType);
-  } finally {
-    leased.release();
-    // Multi-feed AFTER lease release (never nest acquireCapitalSession under lease).
-    // Must live in finally so WAIT/MANAGE/early returns still refresh FEEDS UI.
-    if (refreshMultiFeed && Date.now() - s.last_multi_feed_ms >= 4_000) {
-      s.last_multi_feed_ms = Date.now();
-      try {
-        s.multiFeed = await readMultiFeedPrice(s.epic, {
-          anchorMid: s.last_mid,
-          connectionId: s.connection_id,
-          capitalAccountId,
-        });
-        const mf = s.multiFeed;
-        if (mf) {
-          s.feed_sender_count = mf.sender_count;
-          s.feed_agreement = mf.agreement ?? null;
-          if (mf.contributing >= 1) {
-            s.feed_source = mf.contributing >= 2 ? 'MULTI' : s.feed_source || 'LOCAL';
-            s.feed_contributing = mf.contributing;
-          } else if (s.last_mid != null) {
-            s.feed_source = 'LOCAL';
-            s.feed_contributing = 1;
-            // Keep real denominator (public+capital configured), never collapse to 1/1
-            s.feed_sender_count = Math.max(mf.sender_count, s.feed_sender_count || 1);
-          }
-        }
-      } catch {
-        /* keep previous */
-      }
-    }
-  }
+    await enterTrade(opened.session, s, direction, quote, reason, setupType);
   } catch (err) {
     s.reads_fail += 1;
     const detail = err instanceof Error ? err.message : String(err);
     s.error = detail;
     pushTick(s, { phase: 'ERROR', bid: null, ask: null, mid: null, detail });
-  } finally {
-    s.cycle_busy = false;
   }
   // Do NOT close pooled Capital session each tick — that caused HTTP 429 login spam
 }
@@ -1387,8 +1246,6 @@ export async function startRobotSession(input: {
   trading_enabled?: boolean;
   /** Default true for Admin Robot Board; Client Panel manage-only uses false */
   entry_enabled?: boolean;
-  /** Set when caller will seed trade state before first manage tick (pipeline fill attach). */
-  skipInitialCycle?: boolean;
 }): Promise<RobotSession> {
   const { rows } = await pool.query(
     `SELECT ba.id, ba.display_name, ba.external_account_id,
@@ -1449,8 +1306,6 @@ export async function startRobotSession(input: {
   }
   sessions.delete(id);
 
-  clearRegimeBookFor(epic, id);
-
   const session: Internal = {
     id,
     account_id: acc.id,
@@ -1489,7 +1344,6 @@ export async function startRobotSession(input: {
     timer: null,
     closed_at_ms: 0,
     peak_favorable: 0,
-    cycle_busy: false,
     last_market_closed_tick_ms: 0,
     cadence_ms: 0,
     ohlcState: emptyTenSecState(),
@@ -1502,7 +1356,7 @@ export async function startRobotSession(input: {
     feed_contributing: 0,
     feed_sender_count: 0,
     feed_agreement: null,
-    regime: 'COMPRESSION',
+    regime: 'UNKNOWN',
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
 
@@ -1512,7 +1366,7 @@ export async function startRobotSession(input: {
     bid: null,
     ask: null,
     mid: null,
-    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · 10s OHLC · per-client manage · other robots: ${others}`,
+    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · 10s OHLC from multi-feed consensus · ONE TRADE ONLY · other robots: ${others}`,
   });
   pushTick(session, {
     phase: 'INFO',
@@ -1520,7 +1374,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: 1 open trade per client account · MANAGE best-outcome · Capital-only OHLC · clients run in parallel · park when market closed',
+      'Rules: max 1 open trade · MANAGE with best-outcome · 10s OHLC from ALL Capital feeds when they agree · park when market closed',
   });
 
   sessions.set(id, session);
@@ -1545,9 +1399,7 @@ export async function startRobotSession(input: {
     lot_size: lot,
     robot_status: 'RUNNING',
   });
-  if (!input.skipInitialCycle) {
-    void robotCycle(session);
-  }
+  void robotCycle(session);
   // 6s when TRADEABLE; auto-slows to 90s when market closed
   setRobotCadence(session, ACTIVE_CADENCE_MS);
 
@@ -1563,46 +1415,22 @@ export async function attachManageOnlyRobot(input: {
   lot_size: number;
   side: 'BUY' | 'SELL';
   entry_price: number | null;
-  deal_id?: string | null;
   deal_reference?: string | null;
   regime?: string | null;
   setup_type?: string | null;
 }): Promise<RobotSession> {
-  const persistManage = async (id: string, lot: number, displayName: string, epic: string) => {
-    try {
-      await markRobotDesiredRunning({
-        id,
-        account_id: input.account_id,
-        epic,
-        display_name: displayName,
-        lot_size: lot,
-        trading_enabled: true,
-        entry_enabled: false,
-      });
-    } catch (err) {
-      console.warn('[robot-desk] manage-only persist failed', id, err);
-    }
-  };
-
-  const seedTradeState = (internal: Internal) => {
-    internal.open_side = input.side;
-    internal.entry_price = input.entry_price;
-    internal.entry_at = internal.entry_at || new Date().toISOString();
-    internal.mode = 'MANAGE';
-    internal.entry_enabled = false;
-    internal.trading_enabled = true;
-    if (input.deal_id) internal.deal_id = input.deal_id;
-    if (input.deal_reference) internal.last_deal_reference = input.deal_reference;
-    if (input.regime) internal.regime = normalizeRegime(input.regime);
-    internal.orders_placed = Math.max(internal.orders_placed, 1);
-  };
-
   const id = robotIdFor(input.account_id, input.epic);
   const existing = sessions.get(id);
   if (existing?.running) {
     existing.entry_enabled = false;
     existing.trading_enabled = true;
-    seedTradeState(existing);
+    existing.open_side = input.side;
+    existing.mode = 'MANAGE';
+    if (existing.entry_price == null) existing.entry_price = input.entry_price;
+    if (!existing.entry_at) existing.entry_at = new Date().toISOString();
+    if (input.deal_reference) existing.last_deal_reference = input.deal_reference;
+    if (input.regime) existing.regime = normalizeRegime(input.regime);
+    existing.orders_placed = Math.max(existing.orders_placed, 1);
     pushTick(existing, {
       phase: 'ORDER',
       bid: null,
@@ -1612,8 +1440,6 @@ export async function attachManageOnlyRobot(input: {
         existing.regime
       } · manage-only (kept MFE ${existing.mfe.toFixed(5)})`,
     });
-    await persistManage(id, existing.lot_size, existing.display_name, existing.epic);
-    void robotCycle(existing);
     return publicSession(existing);
   }
 
@@ -1624,11 +1450,16 @@ export async function attachManageOnlyRobot(input: {
     lot_size: input.lot_size,
     trading_enabled: true,
     entry_enabled: false,
-    skipInitialCycle: true,
   });
   const internal = sessions.get(session.id);
   if (internal) {
-    seedTradeState(internal);
+    internal.open_side = input.side;
+    internal.entry_price = input.entry_price;
+    internal.entry_at = new Date().toISOString();
+    internal.mode = 'MANAGE';
+    internal.last_deal_reference = input.deal_reference || null;
+    internal.orders_placed = Math.max(internal.orders_placed, 1);
+    if (input.regime) internal.regime = normalizeRegime(input.regime);
     pushTick(internal, {
       phase: 'ORDER',
       bid: null,
@@ -1636,94 +1467,10 @@ export async function attachManageOnlyRobot(input: {
       mid: input.entry_price,
       detail: `PIPELINE FILL ${input.side} ${input.display_name} lot=${input.lot_size} · ${
         internal.regime
-      } · manage-only attached · entry=${input.entry_price ?? '—'} deal=${input.deal_id || input.deal_reference || '—'}`,
+      } · manage-only attached`,
     });
-    void robotCycle(internal);
   }
   return getRobotSession(session.id) || session;
-}
-
-/**
- * Boot / heal: client fills only attach manage robots on intent — if attach failed or API restarted
- * mid-trade, open Capital positions may have no Best Outcome manager. Re-attach from broker truth.
- */
-export async function reconcileManageRobotsForOpenTrades(): Promise<{
-  attached: number;
-  skipped: number;
-  failed: number;
-}> {
-  const subs = await listAllActiveSubscriptions();
-
-  const attempt = async (
-    sub: (typeof subs)[number]
-  ): Promise<'attached' | 'skipped' | 'failed'> => {
-    const id = robotIdFor(sub.account_id, sub.epic);
-    const existing = sessions.get(id);
-    if (existing?.running && existing.open_side && existing.entry_price != null) {
-      return 'skipped';
-    }
-
-    const connRow = await pool.query(
-      `SELECT environment, identifier, broker_name FROM broker_connections WHERE id = $1`,
-      [sub.connection_id]
-    );
-    if (!connRow.rows.length || connRow.rows[0].broker_name !== 'capital_com') {
-      return 'skipped';
-    }
-    const creds = await loadCreds(sub.connection_id);
-    const acc = await pool.query(
-      `SELECT external_account_id FROM broker_accounts WHERE id = $1`,
-      [sub.account_id]
-    );
-    const opened = await acquireCapitalSession({
-      environment: connRow.rows[0].environment as string,
-      apiKey: creds.api_key || '',
-      identifier: String(connRow.rows[0].identifier || '').trim(),
-      password: creds.password || '',
-      connectionId: sub.connection_id,
-      capitalAccountId: (acc.rows[0]?.external_account_id as string | null) || null,
-    });
-    if (!opened.ok) return 'failed';
-
-    const listed = await listCapitalOpenPositions(opened.session);
-    if (!listed.ok) return 'failed';
-
-    const pos = listed.positions.find(
-      (p) => p.epic.trim().toUpperCase() === sub.epic.trim().toUpperCase()
-    );
-    if (!pos) return 'skipped';
-
-    await attachManageOnlyRobot({
-      account_id: sub.account_id,
-      epic: sub.epic,
-      display_name: sub.display_name,
-      lot_size: sub.lot_size,
-      side: pos.direction,
-      entry_price: pos.open_level,
-      deal_id: pos.deal_id,
-    });
-    console.log(
-      `[robot-desk] reconcile manage attach · client #${sub.client_id} · ${sub.display_name} · ${pos.direction}`
-    );
-    return 'attached';
-  };
-
-  const results = await Promise.allSettled(subs.map((sub) => attempt(sub)));
-  let attached = 0;
-  let skipped = 0;
-  let failed = 0;
-  for (const r of results) {
-    if (r.status === 'rejected') {
-      failed += 1;
-      console.warn('[robot-desk] reconcile manage failed', r.reason);
-      continue;
-    }
-    if (r.value === 'attached') attached += 1;
-    else if (r.value === 'skipped') skipped += 1;
-    else failed += 1;
-  }
-
-  return { attached, skipped, failed };
 }
 
 /** After API/PC restart — bring back robots that were running (Postgres persist). */

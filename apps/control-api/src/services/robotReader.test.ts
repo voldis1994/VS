@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   allowEntryFromFeeds,
-  capitalOhlcMid,
   multiFeedOwnsOhlc,
   pickOhlcMid,
 } from './robotReader.js';
@@ -48,16 +47,6 @@ describe('multi-feed OHLC mid pick (Capital-anchored)', () => {
     expect(pickOhlcMid(undefined, { mid: null, contributing: 0, agreement: 'NONE' }).source).toBe(
       'NONE'
     );
-  });
-
-  it('capitalOhlcMid always prefers Capital local when present', () => {
-    const p = capitalOhlcMid(4587.87, {
-      mid: 4640.6,
-      contributing: 4,
-      agreement: 'OK',
-      anchored_to_capital: true,
-    });
-    expect(p).toEqual({ mid: 4587.87, source: 'LOCAL' });
   });
 });
 

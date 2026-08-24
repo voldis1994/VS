@@ -42,22 +42,6 @@ export function isMoving10s(bar: TenSecBar | null | undefined): boolean {
   return Math.abs(bodyPct(bar)) >= 0.00015 || rangePct(bar) >= 0.00025;
 }
 
-/**
- * Breakout body gate for live Gold/metals 10s.
- * Classic 0.015% (~0.7pt on XAU) missed real BO candles of 0.2–0.5pt.
- */
-export const BREAKOUT_BODY_PCT = 0.000045;
-
-export function isMovingBreakout10s(bar: TenSecBar | null | undefined): boolean {
-  if (!bar) return false;
-  const body = Math.abs(bar.close - bar.open);
-  return (
-    Math.abs(bodyPct(bar)) >= BREAKOUT_BODY_PCT ||
-    rangePct(bar) >= 0.00009 ||
-    body >= 0.15
-  );
-}
-
 export function emptyTenSecState(): TenSecState {
   return { forming: null, last_closed: null, just_closed: false };
 }
@@ -148,24 +132,12 @@ export function publicOhlc10s(state: TenSecState): {
 } {
   const last = state.last_closed;
   if (!last) {
-    // Forming ticks mean we have live price — not stuck SEEDING forever
-    if (state.forming && state.forming.ticks >= 1) {
-      return {
-        last_o: state.forming.open,
-        last_h: state.forming.high,
-        last_l: state.forming.low,
-        last_c: state.forming.close,
-        forming_c: state.forming.close,
-        body_pct: bodyPct(state.forming),
-        market: isMoving10s(state.forming) ? 'MOVING' : 'QUIET',
-      };
-    }
     return {
       last_o: null,
       last_h: null,
       last_l: null,
       last_c: null,
-      forming_c: null,
+      forming_c: state.forming?.close ?? null,
       body_pct: null,
       market: 'SEEDING',
     };

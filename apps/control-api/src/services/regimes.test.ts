@@ -3,14 +3,10 @@ import {
   REGIME_NAMES,
   TRADE_TYPE_NAMES,
   OPERATING_MODES,
-  classifyBreakoutLive,
   classifyRegime,
-  currentRegime,
-  clearRegimeBookFor,
   observeClosedBars,
   resetRegimeBook,
   styleFromClassification,
-  toLiveRegime,
   type RegimeName,
 } from './regimes.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
@@ -173,48 +169,10 @@ describe('classifyRegime from 10s OHLC', () => {
   });
 });
 
-describe('classifyBreakoutLive (#150)', () => {
-  it('labels Gold-scale climb as BREAKOUT_UP (classic TREND path stayed UNKNOWN)', () => {
-    // ~0.3–0.5pt bodies @ 4620 — under old 0.015% gate, above new BO gate
-    const bars = [
-      bar(4620.0, 4620.4, 4619.8, 4620.2, 0),
-      bar(4620.2, 4620.6, 4620.0, 4620.5, 1),
-      bar(4620.5, 4621.0, 4620.3, 4620.9, 2),
-      bar(4620.9, 4621.4, 4620.7, 4621.3, 3),
-      bar(4621.3, 4622.0, 4621.1, 4621.9, 4),
-      bar(4621.9, 4622.8, 4621.7, 4622.6, 5),
-    ];
-    expect(classifyRegime(bars)).toBe('TREND_UP');
-    expect(toLiveRegime(classifyRegime(bars))).toBe('TREND_UP');
-    expect(classifyBreakoutLive(bars)).toBe('BREAKOUT_UP');
-  });
-
-  it('labels breakdown as BREAKOUT_DOWN', () => {
-    const bars = [
-      bar(4622.0, 4622.3, 4621.6, 4621.8, 0),
-      bar(4621.8, 4622.0, 4621.3, 4621.4, 1),
-      bar(4621.4, 4621.6, 4620.8, 4620.9, 2),
-      bar(4620.9, 4621.1, 4620.2, 4620.3, 3),
-      bar(4620.3, 4620.5, 4619.4, 4619.5, 4),
-    ];
-    expect(classifyBreakoutLive(bars)).toBe('BREAKOUT_DOWN');
-  });
-
-  it('stays COMPRESSION when close does not leave the prior box (no UNKNOWN stall)', () => {
-    const bars = [
-      bar(4620.0, 4621.5, 4619.0, 4620.5, 0),
-      bar(4620.5, 4621.2, 4619.5, 4620.2, 1),
-      bar(4620.2, 4621.0, 4619.8, 4620.6, 2),
-      bar(4620.6, 4621.1, 4619.9, 4620.4, 3),
-    ];
-    expect(classifyBreakoutLive(bars)).toBe('COMPRESSION');
-  });
-});
-
 describe('regime book + trade style', () => {
   beforeEach(() => resetRegimeBook());
 
-  it('stores live snapshots — gradual climb → TREND_UP (#136 classic, not UNKNOWN stall)', () => {
+  it('stores live snapshots under the epic', () => {
     const prices = [100, 100.5, 101.2, 101.9, 102.7, 103.4];
     const bars = prices.map((p, i) =>
       bar(i === 0 ? p : prices[i - 1]!, p + 0.4, p - 0.4, p, i)
@@ -222,33 +180,7 @@ describe('regime book + trade style', () => {
     const snap = observeClosedBars('GOLD', bars, 'Gold');
     expect(snap.current).toBe('TREND_UP');
     expect(snap.display_name).toBe('Gold');
-  });
-
-  it('isolates regime books per robot scope (two Gold clients)', () => {
-    const up = [100, 100.5, 101.2, 101.9, 102.7, 103.4].map((p, i, a) =>
-      bar(i === 0 ? p : a[i - 1]!, p + 0.4, p - 0.4, p, i)
-    );
-    const down = [103.4, 102.7, 101.9, 101.2, 100.5, 100].map((p, i, a) =>
-      bar(i === 0 ? p : a[i - 1]!, p + 0.4, p - 0.4, p, i)
-    );
-    const a = observeClosedBars('GOLD', up, 'Gold', 'r1_GOLD');
-    const b = observeClosedBars('GOLD', down, 'Gold', 'r2_GOLD');
-    expect(a.current).toBe('TREND_UP');
-    expect(b.current).toBe('TREND_DOWN');
-    expect(currentRegime('GOLD', 'r1_GOLD')?.current).toBe('TREND_UP');
-    expect(currentRegime('GOLD', 'r2_GOLD')?.current).toBe('TREND_DOWN');
-  });
-
-  it('clearRegimeBookFor wipes only that robot scope', () => {
-    const prices = [100, 100.5, 101.2, 101.9, 102.7, 103.4];
-    const bars = prices.map((p, i) =>
-      bar(i === 0 ? p : prices[i - 1]!, p + 0.4, p - 0.4, p, i)
-    );
-    observeClosedBars('GOLD', bars, 'Gold', 'r1_GOLD');
-    observeClosedBars('GOLD', bars, 'Gold', 'r2_GOLD');
-    clearRegimeBookFor('GOLD', 'r1_GOLD');
-    expect(currentRegime('GOLD', 'r1_GOLD')).toBeNull();
-    expect(currentRegime('GOLD', 'r2_GOLD')?.current).toBe('TREND_UP');
+    expect(REGIME_NAMES).toContain(snap.current);
   });
 
   it('maps trend regimes to LONG and breakout/range to SCALP', () => {

@@ -133,10 +133,7 @@ function touchHealth(
   senderHealth.set(senderId, prev);
 }
 
-async function getCapitalSession(
-  connectionId: number,
-  capitalAccountId?: string | null
-): Promise<
+async function getCapitalSession(connectionId: number): Promise<
   | { ok: true; session: CapitalSession }
   | { ok: false; detail: string }
 > {
@@ -172,7 +169,6 @@ async function getCapitalSession(
     identifier,
     password,
     connectionId,
-    capitalAccountId: capitalAccountId || null,
   });
   if (!opened.ok) return { ok: false, detail: opened.result.detail };
   return { ok: true, session: opened.session };
@@ -467,8 +463,7 @@ async function readCatalogPulse(epic: string): Promise<SenderRead> {
 
 async function readCapitalSender(
   sender: DataSender,
-  epic: string,
-  capitalAccountId?: string | null
+  epic: string
 ): Promise<SenderRead> {
   const t0 = Date.now();
   const base = {
@@ -492,7 +487,7 @@ async function readCapitalSender(
     };
   }
 
-  const opened = await getCapitalSession(sender.connection_id, capitalAccountId);
+  const opened = await getCapitalSession(sender.connection_id);
   if (!opened.ok) {
     const latency_ms = Date.now() - t0;
     touchHealth(sender.sender_id, {
@@ -791,8 +786,8 @@ export type MultiFeedPrice = {
 };
 
 const ANCHOR_MAX_REL = 0.008; // 0.8% — public must be near Capital CFD mid
-/** Metals: Capital CFD vs Yahoo/Aurum spot often ~40–60pt off — must NOT count as near. */
-const ANCHOR_MAX_REL_METALS = 0.004; // ~0.4% ≈ 18pt on Gold 4500
+/** Metals spot vs Capital GOLD CFD often sits a bit wider than FX — still usable. */
+const ANCHOR_MAX_REL_METALS = 0.015;
 
 function nearAnchor(mid: number, anchor: number, maxRel = ANCHOR_MAX_REL): boolean {
   if (!Number.isFinite(mid) || !Number.isFinite(anchor) || anchor === 0) return false;
@@ -812,19 +807,10 @@ function anchorRelForEpic(epic: string): number {
  */
 export async function readMultiFeedPrice(
   epicInput: string,
-  opts?: {
-    anchorMid?: number | null;
-    connectionId?: number | null;
-    capitalAccountId?: string | null;
-  }
+  opts?: { anchorMid?: number | null }
 ): Promise<MultiFeedPrice> {
   const epic = String(epicInput || '').trim();
   const anchor = opts?.anchorMid != null && Number.isFinite(opts.anchorMid) ? opts.anchorMid : null;
-  const preferConn =
-    opts?.connectionId != null && Number.isFinite(opts.connectionId) && opts.connectionId > 0
-      ? Number(opts.connectionId)
-      : null;
-  const capitalAccountId = (opts?.capitalAccountId || '').trim() || null;
   if (!epic) {
     return {
       epic: '',
@@ -843,15 +829,12 @@ export async function readMultiFeedPrice(
   }
 
   const senders = await listDataSenders();
-  // #147: only THIS robot's Capital connection — never poll Guntis+B.O.S.S. into one feed
-  const capitalSenders = senders.filter((s) => {
-    if (s.kind !== 'capital_com' || !s.connection_id || s.enabled === false) return false;
-    if (preferConn != null) return Number(s.connection_id) === preferConn;
-    return true;
-  });
+  const capitalSenders = senders.filter(
+    (s) => s.kind === 'capital_com' && s.connection_id && s.enabled !== false
+  );
 
   const [capitalReads, publicReads, fxRead] = await Promise.all([
-    Promise.all(capitalSenders.map((s) => readCapitalSender(s, epic, capitalAccountId))),
+    Promise.all(capitalSenders.map((s) => readCapitalSender(s, epic))),
     readAllPublicFeeds(epic),
     readFxReference(epic),
   ]);
@@ -1009,8 +992,7 @@ export function pickOhlcMid(
   multi: Pick<
     MultiFeedPrice,
     'mid' | 'contributing' | 'agreement' | 'anchored_to_capital'
-  > | null | undefined,
-  opts?: { maxRel?: number }
+  > | null | undefined
 ): { mid: number | null; source: 'MULTI' | 'LOCAL' | 'NONE' } {
   const localOk = localMid != null && Number.isFinite(localMid);
   const multiOk =
@@ -1020,10 +1002,8 @@ export function pickOhlcMid(
     multi.contributing >= 2 &&
     (multi.agreement === 'STRONG' || multi.agreement === 'OK');
 
-  const maxRel = opts?.maxRel ?? ANCHOR_MAX_REL;
-
   if (multiOk && localOk) {
-    if (nearAnchor(multi.mid as number, localMid as number, maxRel)) {
+    if (nearAnchor(multi.mid as number, localMid as number, ANCHOR_MAX_REL)) {
       // Blend slightly toward Capital for execution safety
       const blended = (multi.mid as number) * 0.35 + (localMid as number) * 0.65;
       return { mid: blended, source: 'MULTI' };
@@ -1035,17 +1015,6 @@ export function pickOhlcMid(
     return { mid: multi.mid, source: 'MULTI' };
   }
   return { mid: null, source: 'NONE' };
-}
-
-/** Hard rule for robot OHLC: Capital mid only when available (spot feeds never write CFD bars). */
-export function capitalOhlcMid(
-  localMid: number | null | undefined,
-  multi: Parameters<typeof pickOhlcMid>[1]
-): { mid: number | null; source: 'MULTI' | 'LOCAL' | 'NONE' } {
-  if (localMid != null && Number.isFinite(localMid)) {
-    return { mid: localMid, source: 'LOCAL' };
-  }
-  return pickOhlcMid(localMid, multi);
 }
 
 /** True when ≥2 near-anchor providers agree AND result is Capital-safe. */

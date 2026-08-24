@@ -13,7 +13,7 @@ import {
 import { computeClientRobotStatus } from './clientPanel.js';
 
 const createCapitalPosition = vi.fn();
-const leaseCapitalSession = vi.fn();
+const acquireCapitalSession = vi.fn();
 const listCapitalOpenPositions = vi.fn();
 const fetchCapitalMarketQuote = vi.fn();
 const fetchCapitalMinutePrices = vi.fn();
@@ -27,17 +27,10 @@ const intentDedupe = new Map<string, unknown>();
 
 vi.mock('./capitalCom.js', () => ({
   createCapitalPosition: (...a: unknown[]) => createCapitalPosition(...a),
-  leaseCapitalSession: (...a: unknown[]) => leaseCapitalSession(...a),
-  acquireCapitalSession: (...a: unknown[]) => leaseCapitalSession(...a),
+  acquireCapitalSession: (...a: unknown[]) => acquireCapitalSession(...a),
   listCapitalOpenPositions: (...a: unknown[]) => listCapitalOpenPositions(...a),
   fetchCapitalMarketQuote: (...a: unknown[]) => fetchCapitalMarketQuote(...a),
   fetchCapitalMinutePrices: (...a: unknown[]) => fetchCapitalMinutePrices(...a),
-  listCapitalAccounts: async () => ({
-    ok: true,
-    accounts: [{ accountId: '1', accountName: 'Demo', balance: 1000, available: 1000 }],
-    detail: '1',
-  }),
-  pickCapitalEquity: () => 1000,
   computeSafetyCushionStopLevel: () => 1995,
   isLateMoveOnOneMinute: () => false,
 }));
@@ -81,11 +74,6 @@ function sub(partial: {
     display_name: partial.epic,
     lot_size: partial.lot_size,
     instrument_id: 100 + partial.client_id,
-    budget_pct: 25,
-    category: 'metals',
-    min_lot: 0.01,
-    max_lot: 100,
-    lot_step: 0.01,
   };
 }
 
@@ -165,11 +153,7 @@ beforeEach(() => {
     return { rows: [{ id: 1 }] };
   });
 
-  leaseCapitalSession.mockResolvedValue({
-    ok: true,
-    session: { token: 't' },
-    release: vi.fn(),
-  });
+  acquireCapitalSession.mockResolvedValue({ ok: true, session: { token: 't' } });
   listCapitalOpenPositions.mockResolvedValue({ ok: true, positions: [] });
   fetchCapitalMarketQuote.mockResolvedValue({
     epic: 'XAUUSD',
@@ -329,37 +313,6 @@ describe('Client isolation', () => {
     expect(matched.map((m) => m.client_id).sort()).toEqual([1, 3]);
     expect(matched.find((m) => m.client_id === 1)?.lot_size).toBe(0.1);
     expect(matched.find((m) => m.client_id === 3)?.lot_size).toBe(0.5);
-  });
-
-  it('executes all subscribers in parallel (no client waits in line)', async () => {
-    let inFlight = 0;
-    let maxInFlight = 0;
-    createCapitalPosition.mockImplementation(async () => {
-      inFlight += 1;
-      maxInFlight = Math.max(maxInFlight, inFlight);
-      await new Promise((r) => setTimeout(r, 40));
-      inFlight -= 1;
-      return { ok: true, detail: 'filled', deal_reference: 'DR-P' };
-    });
-
-    listActiveSubscriptionsForEpic.mockResolvedValue([
-      sub({ client_id: 1, account_id: 10, epic: 'XAUUSD', lot_size: 0.1 }),
-      sub({ client_id: 2, account_id: 20, epic: 'XAUUSD', lot_size: 0.2 }),
-      sub({ client_id: 3, account_id: 30, epic: 'XAUUSD', lot_size: 0.3 }),
-    ]);
-
-    const { fanoutEntryIntent } = await import('./intentFanout.js');
-    const result = await fanoutEntryIntent({
-      epic: 'XAUUSD',
-      direction: 'BUY',
-      decision: 'ENTRY_READY',
-      idempotency_key: 'parallel-fanout-1',
-    });
-
-    expect(createCapitalPosition).toHaveBeenCalledTimes(3);
-    expect(maxInFlight).toBeGreaterThan(1);
-    expect(result.fanout.executed).toHaveLength(3);
-    expect(result.fanout.executed.every((r) => r.ok)).toBe(true);
   });
 });
 
