@@ -139,9 +139,9 @@ export function MultiMarketView() {
           )}
         </div>
         <p className="cmd-muted" style={{ marginTop: 10, marginBottom: 0 }}>
-          Clients need <strong>panel multi-market</strong> ON (or matching epic) + RUNNING to receive picks.
-          Fire cooldown {status?.fire_cooldown_ms ? status.fire_cooldown_ms / 1000 : 30}s · min score{' '}
-          {status?.min_score ?? 78}.
+          Clients pick <strong>1–3 Capital epics</strong> + budget % on the client panel. Selector fires best
+          setup; only matching epics fill. Fire cooldown {status?.fire_cooldown_ms ? status.fire_cooldown_ms / 1000 : 30}s · min
+          score {status?.min_score ?? 78}.
         </p>
       </section>
 
