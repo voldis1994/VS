@@ -9,6 +9,7 @@ import {
   fetchCapitalMinutePrices,
   fetchCapitalPrices,
   isLateMoveOnOneMinute,
+  leaseCapitalSession,
   listCapitalOpenPositions,
   type CapitalMarketQuote,
   type CapitalOpenPosition,
@@ -138,6 +139,8 @@ type Internal = RobotSession & {
 };
 
 const ACTIVE_CADENCE_MS = 2_000;
+/** Open trade: poll faster so all clients hit HardInv/BO nearly together (not one-by-one on 2s stagger). */
+const MANAGE_CADENCE_MS = 500;
 const CLOSED_MARKET_CADENCE_MS = 15_000;
 const CLOSED_MARKET_TICK_EVERY_MS = 15_000;
 
@@ -155,6 +158,17 @@ function setRobotCadence(s: Internal, ms: number) {
   if (s.timer) clearInterval(s.timer);
   s.cadence_ms = ms;
   s.timer = setInterval(() => void robotCycle(s), ms);
+}
+
+/** After one client exits, nudge peers on same epic so they don't wait a full cadence. */
+function kickPeerManageCycles(exceptId: string, epic: string) {
+  const want = epic.trim().toLowerCase();
+  for (const peer of sessions.values()) {
+    if (peer.id === exceptId || !peer.running || !peer.open_side) continue;
+    if (peer.epic.trim().toLowerCase() !== want) continue;
+    if (peer.cycle_busy) continue;
+    void robotCycle(peer);
+  }
 }
 
 const sessions = new Map<string, Internal>();
@@ -927,7 +941,7 @@ async function robotCycle(s: Internal) {
   const capitalAccountId =
     (accRow.rows[0]?.external_account_id as string | null | undefined) || null;
 
-  const opened = await acquireCapitalSession({
+  const leased = await leaseCapitalSession({
     environment: conn.environment,
     apiKey: creds.api_key || '',
     identifier: (conn.identifier || '').trim(),
@@ -935,26 +949,28 @@ async function robotCycle(s: Internal) {
     connectionId: s.connection_id,
     capitalAccountId,
   });
-  if (!opened.ok) {
+  if (!leased.ok) {
     s.reads_fail += 1;
-    s.error = opened.result.detail;
+    s.error = leased.result.detail;
     const rateLimited =
-      opened.result.status === 429 || /rate-limit|too-many|cooldown/i.test(opened.result.detail);
+      leased.result.status === 429 || /rate-limit|too-many|cooldown/i.test(leased.result.detail);
     pushTick(s, {
       phase: rateLimited ? 'WAIT' : 'ERROR',
       bid: null,
       ask: null,
       mid: null,
       detail: rateLimited
-        ? `RATE LIMIT — ${opened.result.detail}`
-        : `Session fail: ${opened.result.detail}`,
+        ? `RATE LIMIT — ${leased.result.detail}`
+        : `Session fail: ${leased.result.detail}`,
     });
     // Slow this robot while cooling down so control panel stays usable
     if (rateLimited) setRobotCadence(s, 20_000);
     return;
   }
 
-    const quote = await fetchCapitalMarketQuote(opened.session, s.epic);
+  try {
+    const session = leased.session;
+    const quote = await fetchCapitalMarketQuote(session, s.epic);
     if (!quote.raw_ok) {
       s.reads_fail += 1;
       s.error = quote.detail || 'No quote';
@@ -1047,11 +1063,11 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // Restore normal cadence after a successful tradeable read (may have been slowed by 429 / closed)
-    setRobotCadence(s, ACTIVE_CADENCE_MS);
+    // Open trade: fast poll so every client can HardInv/BO in the same second
+    setRobotCadence(s, s.open_side ? MANAGE_CADENCE_MS : ACTIVE_CADENCE_MS);
 
     // Sync truth from broker — source of ONE TRADE ONLY
-    const listed = await listCapitalOpenPositions(opened.session);
+    const listed = await listCapitalOpenPositions(session);
     let brokerOpen: CapitalOpenPosition | null = null;
     if (listed.ok) {
       brokerOpen = matchOpenPosition(listed.positions, s.epic, s.deal_id);
@@ -1062,6 +1078,7 @@ async function robotCycle(s: Internal) {
         if (!s.entry_at) s.entry_at = new Date().toISOString();
         s.mode = 'MANAGE';
         if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
+        setRobotCadence(s, MANAGE_CADENCE_MS);
       } else if (s.open_side) {
         // Local thought open but broker flat → treat as closed
         pushTick(s, {
@@ -1116,7 +1133,9 @@ async function robotCycle(s: Internal) {
 
       const decision = decideBestOutcomeExit(s, quote.mid);
       if (decision.exit) {
-        await exitTrade(opened.session, s, quote, decision.reason);
+        await exitTrade(session, s, quote, decision.reason);
+        // Wake other clients' manage robots immediately (each decides on own UPL — no shared exit)
+        queueMicrotask(() => kickPeerManageCycles(s.id, s.epic));
         return;
       }
 
@@ -1170,7 +1189,7 @@ async function robotCycle(s: Internal) {
     // Otherwise a single Capital row would overwrite consensus bars used for regime/entry.
     if (!multiFeedOwnsOhlc(s.multiFeed) && Date.now() - s.last_second_fetch_ms >= 8_000) {
       s.last_second_fetch_ms = Date.now();
-      const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 40);
+      const sec = await fetchCapitalPrices(session, s.epic, 'SECOND', 40);
       if (sec.ok && sec.candles.length >= 10) {
         const bars = aggregateSecondsToTen(sec.candles);
         const last = bars[bars.length - 1];
@@ -1241,7 +1260,7 @@ async function robotCycle(s: Internal) {
     }
 
     if (direction) {
-      const hist = await fetchCapitalMinutePrices(opened.session, s.epic, 3);
+      const hist = await fetchCapitalMinutePrices(session, s.epic, 3);
       if (hist.ok && isLateMoveOnOneMinute(direction, hist.candles)) {
         pushTick(s, {
           phase: 'WAIT',
@@ -1298,7 +1317,10 @@ async function robotCycle(s: Internal) {
     }
 
     if (!direction) return;
-    await enterTrade(opened.session, s, direction, quote, reason, setupType);
+    await enterTrade(session, s, direction, quote, reason, setupType);
+  } finally {
+    leased.release();
+  }
   } catch (err) {
     s.reads_fail += 1;
     const detail = err instanceof Error ? err.message : String(err);

@@ -13,7 +13,7 @@ import {
 import { computeClientRobotStatus } from './clientPanel.js';
 
 const createCapitalPosition = vi.fn();
-const acquireCapitalSession = vi.fn();
+const leaseCapitalSession = vi.fn();
 const listCapitalOpenPositions = vi.fn();
 const fetchCapitalMarketQuote = vi.fn();
 const fetchCapitalMinutePrices = vi.fn();
@@ -27,7 +27,8 @@ const intentDedupe = new Map<string, unknown>();
 
 vi.mock('./capitalCom.js', () => ({
   createCapitalPosition: (...a: unknown[]) => createCapitalPosition(...a),
-  acquireCapitalSession: (...a: unknown[]) => acquireCapitalSession(...a),
+  leaseCapitalSession: (...a: unknown[]) => leaseCapitalSession(...a),
+  acquireCapitalSession: (...a: unknown[]) => leaseCapitalSession(...a),
   listCapitalOpenPositions: (...a: unknown[]) => listCapitalOpenPositions(...a),
   fetchCapitalMarketQuote: (...a: unknown[]) => fetchCapitalMarketQuote(...a),
   fetchCapitalMinutePrices: (...a: unknown[]) => fetchCapitalMinutePrices(...a),
@@ -153,7 +154,11 @@ beforeEach(() => {
     return { rows: [{ id: 1 }] };
   });
 
-  acquireCapitalSession.mockResolvedValue({ ok: true, session: { token: 't' } });
+  leaseCapitalSession.mockResolvedValue({
+    ok: true,
+    session: { token: 't' },
+    release: vi.fn(),
+  });
   listCapitalOpenPositions.mockResolvedValue({ ok: true, positions: [] });
   fetchCapitalMarketQuote.mockResolvedValue({
     epic: 'XAUUSD',
