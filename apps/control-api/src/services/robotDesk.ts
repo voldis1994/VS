@@ -32,6 +32,11 @@ import {
 } from './regimes.js';
 import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove } from './exitManage.js';
 import { decideEntryBreakoutOnly } from './entryFromRegime.js';
+import {
+  decideEntryFromTdSequential,
+  describeTdSequential,
+  computeTdSequential,
+} from './tdSequential.js';
 import { resolvePostExitCooldownMs } from './quietImpulseEntry.js';
 import {
   allowEntryFromFeeds,
@@ -1253,9 +1258,14 @@ async function robotCycle(s: Internal) {
     let reason = '';
     let setupType: string | null = null;
 
+    const tdState = computeTdSequential(s.closedBars);
+    const tdLine = describeTdSequential(tdState);
+
     if (s.ohlcState.just_closed && bar) {
-      // Live path: regime BREAKOUT / TREND pullback / structural BO only — no BOX, no quiet oval
-      const sig = decideEntryBreakoutOnly(bar, s.regime, s.closedBars);
+      // Prefer TD Sequential (Setup 9 / Countdown 13); else BO / TREND pullback
+      const sig =
+        decideEntryFromTdSequential(s.closedBars) ||
+        decideEntryBreakoutOnly(bar, s.regime, s.closedBars);
       if (sig) {
         direction = sig.direction;
         setupType = sig.setup;
@@ -1266,7 +1276,7 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${ohlcLine} · ${s.regime} · no BO/TREND pullback yet`,
+          detail: `${ohlcLine} · ${tdLine} · ${s.regime} · no TD/BO yet`,
         });
       }
     } else {
@@ -1275,7 +1285,7 @@ async function robotCycle(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · forming C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'} · wait bar close`,
+        detail: `${ohlcLine} · ${tdLine} · forming C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'} · wait bar close`,
       });
     }
 
