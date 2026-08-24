@@ -124,6 +124,8 @@ type Internal = RobotSession & {
   connection_id: number;
   closed_at_ms: number;
   peak_favorable: number;
+  /** Skip overlapping ticks — one slow Capital read must not stack cycles on this robot. */
+  cycle_busy: boolean;
   /** Last time we logged "market closed" (throttle ticks) */
   last_market_closed_tick_ms: number;
   cadence_ms: number;
@@ -886,7 +888,10 @@ async function enterTrade(
 
 async function robotCycle(s: Internal) {
   if (!s.running) return;
+  if (s.cycle_busy) return;
+  s.cycle_busy = true;
 
+  try {
   const { rows } = await pool.query(
     `SELECT bc.id, bc.environment, bc.identifier, bc.broker_name
      FROM broker_connections bc WHERE bc.id = $1`,
@@ -949,7 +954,6 @@ async function robotCycle(s: Internal) {
     return;
   }
 
-  try {
     const quote = await fetchCapitalMarketQuote(opened.session, s.epic);
     if (!quote.raw_ok) {
       s.reads_fail += 1;
@@ -1300,6 +1304,8 @@ async function robotCycle(s: Internal) {
     const detail = err instanceof Error ? err.message : String(err);
     s.error = detail;
     pushTick(s, { phase: 'ERROR', bid: null, ask: null, mid: null, detail });
+  } finally {
+    s.cycle_busy = false;
   }
   // Do NOT close pooled Capital session each tick — that caused HTTP 429 login spam
 }
@@ -1414,6 +1420,7 @@ export async function startRobotSession(input: {
     timer: null,
     closed_at_ms: 0,
     peak_favorable: 0,
+    cycle_busy: false,
     last_market_closed_tick_ms: 0,
     cadence_ms: 0,
     ohlcState: emptyTenSecState(),
@@ -1577,77 +1584,74 @@ export async function reconcileManageRobotsForOpenTrades(): Promise<{
   failed: number;
 }> {
   const subs = await listAllActiveSubscriptions();
-  let attached = 0;
-  let skipped = 0;
-  let failed = 0;
 
-  for (const sub of subs) {
+  const attempt = async (
+    sub: (typeof subs)[number]
+  ): Promise<'attached' | 'skipped' | 'failed'> => {
     const id = robotIdFor(sub.account_id, sub.epic);
     const existing = sessions.get(id);
     if (existing?.running && existing.open_side && existing.entry_price != null) {
-      skipped += 1;
+      return 'skipped';
+    }
+
+    const connRow = await pool.query(
+      `SELECT environment, identifier, broker_name FROM broker_connections WHERE id = $1`,
+      [sub.connection_id]
+    );
+    if (!connRow.rows.length || connRow.rows[0].broker_name !== 'capital_com') {
+      return 'skipped';
+    }
+    const creds = await loadCreds(sub.connection_id);
+    const acc = await pool.query(
+      `SELECT external_account_id FROM broker_accounts WHERE id = $1`,
+      [sub.account_id]
+    );
+    const opened = await acquireCapitalSession({
+      environment: connRow.rows[0].environment as string,
+      apiKey: creds.api_key || '',
+      identifier: String(connRow.rows[0].identifier || '').trim(),
+      password: creds.password || '',
+      connectionId: sub.connection_id,
+      capitalAccountId: (acc.rows[0]?.external_account_id as string | null) || null,
+    });
+    if (!opened.ok) return 'failed';
+
+    const listed = await listCapitalOpenPositions(opened.session);
+    if (!listed.ok) return 'failed';
+
+    const pos = listed.positions.find(
+      (p) => p.epic.trim().toUpperCase() === sub.epic.trim().toUpperCase()
+    );
+    if (!pos) return 'skipped';
+
+    await attachManageOnlyRobot({
+      account_id: sub.account_id,
+      epic: sub.epic,
+      display_name: sub.display_name,
+      lot_size: sub.lot_size,
+      side: pos.direction,
+      entry_price: pos.open_level,
+      deal_id: pos.deal_id,
+    });
+    console.log(
+      `[robot-desk] reconcile manage attach · client #${sub.client_id} · ${sub.display_name} · ${pos.direction}`
+    );
+    return 'attached';
+  };
+
+  const results = await Promise.allSettled(subs.map((sub) => attempt(sub)));
+  let attached = 0;
+  let skipped = 0;
+  let failed = 0;
+  for (const r of results) {
+    if (r.status === 'rejected') {
+      failed += 1;
+      console.warn('[robot-desk] reconcile manage failed', r.reason);
       continue;
     }
-
-    try {
-      const connRow = await pool.query(
-        `SELECT environment, identifier, broker_name FROM broker_connections WHERE id = $1`,
-        [sub.connection_id]
-      );
-      if (!connRow.rows.length || connRow.rows[0].broker_name !== 'capital_com') {
-        skipped += 1;
-        continue;
-      }
-      const creds = await loadCreds(sub.connection_id);
-      const acc = await pool.query(
-        `SELECT external_account_id FROM broker_accounts WHERE id = $1`,
-        [sub.account_id]
-      );
-      const opened = await acquireCapitalSession({
-        environment: connRow.rows[0].environment as string,
-        apiKey: creds.api_key || '',
-        identifier: String(connRow.rows[0].identifier || '').trim(),
-        password: creds.password || '',
-        connectionId: sub.connection_id,
-        capitalAccountId: (acc.rows[0]?.external_account_id as string | null) || null,
-      });
-      if (!opened.ok) {
-        failed += 1;
-        continue;
-      }
-      const listed = await listCapitalOpenPositions(opened.session);
-      if (!listed.ok) {
-        failed += 1;
-        continue;
-      }
-      const pos = listed.positions.find(
-        (p) => p.epic.trim().toUpperCase() === sub.epic.trim().toUpperCase()
-      );
-      if (!pos) {
-        skipped += 1;
-        continue;
-      }
-
-      await attachManageOnlyRobot({
-        account_id: sub.account_id,
-        epic: sub.epic,
-        display_name: sub.display_name,
-        lot_size: sub.lot_size,
-        side: pos.direction,
-        entry_price: pos.open_level,
-        deal_id: pos.deal_id,
-      });
-      attached += 1;
-      console.log(
-        `[robot-desk] reconcile manage attach · client #${sub.client_id} · ${sub.display_name} · ${pos.direction}`
-      );
-    } catch (err) {
-      failed += 1;
-      console.warn(
-        `[robot-desk] reconcile manage failed · client #${sub.client_id}`,
-        err instanceof Error ? err.message : err
-      );
-    }
+    if (r.value === 'attached') attached += 1;
+    else if (r.value === 'skipped') skipped += 1;
+    else failed += 1;
   }
 
   return { attached, skipped, failed };

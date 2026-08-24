@@ -423,22 +423,30 @@ async function executeForSubscription(
       regime,
     });
 
-    // Manage-only robot: Best Outcome exits — must not fail silently
-    await ensureManageRobotAttached(sub, {
-      side: direction,
-      entry_price: entry,
-      deal_id: dealId,
-      deal_reference: result.deal_reference || null,
-      regime,
-      setup_type: setupType,
-    });
+    // Manage-only robot: Best Outcome exits — fill already live; attach failure must not hide it
+    let manageNote = '';
+    try {
+      await ensureManageRobotAttached(sub, {
+        side: direction,
+        entry_price: entry,
+        deal_id: dealId,
+        deal_reference: result.deal_reference || null,
+        regime,
+        setup_type: setupType,
+      });
+    } catch (err) {
+      manageNote =
+        err instanceof Error ? err.message : String(err);
+    }
 
     return finish({
       client_id: sub.client_id,
       account_id: sub.account_id,
       lot_size: sub.lot_size,
       ok: true,
-      detail: result.detail,
+      detail: manageNote
+        ? `${result.detail} · BO attach FAILED: ${manageNote}`
+        : result.detail,
       entry_price: entry,
     });
   } catch (err) {
