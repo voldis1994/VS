@@ -43,6 +43,21 @@ describe('scoreMarketSetup', () => {
     expect(a.score).toBeLessThan(78);
   });
 
+  it('ranks BREAKOUT above TREND pullback on same body', () => {
+    const b = bar(4500, 4501.2);
+    const bo = scoreMarketSetup({
+      entry: { direction: 'BUY', setup: 'BREAKOUT', reason: 'BO' },
+      regime: 'BREAKOUT_UP',
+      bar: b,
+    });
+    const pb = scoreMarketSetup({
+      entry: { direction: 'BUY', setup: 'PULLBACK', reason: 'dip' },
+      regime: 'TREND_UP',
+      bar: b,
+    });
+    expect(bo.score).toBeGreaterThan(pb.score);
+  });
+
   it('ranks TD Countdown 13 above BREAKOUT on same body', () => {
     const b = bar(4500, 4501.2);
     const td = scoreMarketSetup({
