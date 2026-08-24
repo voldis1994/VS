@@ -105,20 +105,23 @@ export async function listActiveSubscriptionsForEpic(
 
   const { rows } = await pool.query(
     `SELECT c.id as client_id, c.name as client_name,
-            c.panel_epic, c.panel_display_name, c.panel_lot_size,
+            c.panel_epic, c.panel_display_name, c.panel_lot_size, c.panel_multi_market,
             ba.id as account_id, bc.id as connection_id,
             cm.id as instrument_id, cm.epic, cm.display_name, cm.min_lot, cm.max_lot, cm.lot_step,
             ais.lot_size as settings_lot, ais.trading_enabled
      FROM clients c
      JOIN broker_connections bc ON bc.client_id = c.id AND bc.enabled = true
      JOIN broker_accounts ba ON ba.broker_connection_id = bc.id AND ba.enabled = true
-     JOIN capital_markets cm ON cm.broker_connection_id = bc.id AND cm.epic = c.panel_epic
+     JOIN capital_markets cm ON cm.broker_connection_id = bc.id AND cm.epic = $1
      LEFT JOIN account_instrument_settings ais
        ON ais.broker_account_id = ba.id AND ais.instrument_id = cm.id
      WHERE c.enabled = true
        AND c.access_enabled = true
        AND c.panel_robot_requested = 'RUNNING'
-       AND c.panel_epic = $1
+       AND (
+         c.panel_epic = $1
+         OR COALESCE(c.panel_multi_market, false) = true
+       )
        AND (
          c.preferred_broker_account_id IS NULL
          OR c.preferred_broker_account_id = ba.id
@@ -132,7 +135,6 @@ export async function listActiveSubscriptionsForEpic(
   for (const r of rows) {
     const clientId = Number(r.client_id);
     if (seenClients.has(clientId)) continue;
-    // Prefer preferred account row; query already filters, take first per client
     if (r.trading_enabled === false) continue;
     const lot =
       r.settings_lot != null

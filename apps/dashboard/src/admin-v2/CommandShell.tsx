@@ -4,6 +4,7 @@ import { useCommandDesk } from './context/CommandDeskContext';
 const NAV = [
   { to: '/', label: 'Overview', end: true },
   { to: '/robot', label: 'Robots' },
+  { to: '/multi-market', label: 'Multi' },
   { to: '/clients', label: 'Clients' },
   { to: '/market', label: 'Regimes' },
   { to: '/trading', label: 'Trading' },

@@ -3,6 +3,7 @@ import { CommandShell } from './CommandShell';
 import { CommandDeskProvider } from './context/CommandDeskContext';
 import { OverviewView } from './views/OverviewView';
 import { RobotView } from './views/RobotView';
+import { MultiMarketView } from './views/MultiMarketView';
 import { ClientsView } from './views/ClientsView';
 import { MarketView } from './views/MarketView';
 import { TradingView } from './views/TradingView';
@@ -22,6 +23,7 @@ export function CommandApp() {
         <Route element={<CommandShell />}>
           <Route index element={<OverviewView />} />
           <Route path="robot" element={<RobotView />} />
+          <Route path="multi-market" element={<MultiMarketView />} />
           <Route path="clients" element={<ClientsView />} />
           <Route path="market" element={<MarketView />} />
           <Route path="trading" element={<TradingView />} />

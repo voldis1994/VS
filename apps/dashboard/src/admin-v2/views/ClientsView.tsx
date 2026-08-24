@@ -14,6 +14,7 @@ type ClientRow = {
   panel_epic?: string | null;
   panel_display_name?: string | null;
   panel_lot_size?: number | null;
+  panel_multi_market?: boolean;
   robot_status?: 'RUNNING' | 'STOPPED';
   account_id?: number | null;
   last_seen_at?: string | null;
@@ -177,6 +178,9 @@ export function ClientsView() {
               <span className={`cmd-badge ${c.access_enabled && c.has_access_code ? 'cmd-badge--ok' : 'cmd-badge--bad'}`}>
                 {c.access_enabled && c.has_access_code ? 'PANEL' : 'NO ACCESS'}
               </span>
+              <span className={`cmd-badge ${c.panel_multi_market ? 'cmd-badge--ok' : 'cmd-badge--bad'}`}>
+                {c.panel_multi_market ? 'MULTI' : '1-MKT'}
+              </span>
               <span className={`cmd-badge ${c.robot_status === 'RUNNING' ? 'cmd-badge--ok' : 'cmd-badge--bad'}`}>
                 {c.robot_status || 'STOPPED'}
               </span>
@@ -227,6 +231,25 @@ export function ClientsView() {
                 </button>
                 <button className="cmd-btn cmd-btn--go" type="button" onClick={() => void handleGenerateCode(focused)}>
                   {focused.has_access_code ? 'Reset code' : 'Generate code'}
+                </button>
+                <button
+                  className="cmd-btn"
+                  type="button"
+                  onClick={() =>
+                    void apiFetch(`/api/multi-market/clients/${focused.id}/multi`, {
+                      method: 'POST',
+                      body: JSON.stringify({ enabled: !focused.panel_multi_market }),
+                    }).then(async () => {
+                      setMsg(
+                        focused.panel_multi_market
+                          ? 'Multi-market OFF — epic-locked'
+                          : 'Multi-market ON — accepts selector picks'
+                      );
+                      await refresh();
+                    })
+                  }
+                >
+                  {focused.panel_multi_market ? 'Multi OFF' : 'Multi ON'}
                 </button>
                 <button
                   className="cmd-btn"
