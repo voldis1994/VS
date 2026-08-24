@@ -1,6 +1,9 @@
 # Client + robot persistence
 
+This branch is a **hard restore to #136** (`b2910bf`) plus this persistence layer only.
+
 Clients, brokers, access-code hashes, and panel settings live in **Postgres**.
+Trading code after #136 is removed; **DB clients are not wiped** by this restore.
 
 ## Survives restart
 
