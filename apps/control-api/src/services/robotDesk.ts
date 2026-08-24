@@ -26,7 +26,7 @@ import {
   toLiveRegime,
   type RegimeName,
 } from './regimes.js';
-import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
+import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove } from './exitManage.js';
 import { decideEntryFrom10sRegime } from './entryFromRegime.js';
 import {
   allowEntryFromFeeds,
@@ -129,9 +129,11 @@ type Internal = RobotSession & {
   closedBars: TenSecBar[];
   last_multi_feed_ms: number;
   multiFeed: MultiFeedPrice | null;
+  cycle_busy: boolean;
 };
 
 const ACTIVE_CADENCE_MS = 2_000;
+const MANAGE_CADENCE_MS = 500;
 const CLOSED_MARKET_CADENCE_MS = 15_000;
 const CLOSED_MARKET_TICK_EVERY_MS = 15_000;
 
@@ -149,6 +151,17 @@ function setRobotCadence(s: Internal, ms: number) {
   if (s.timer) clearInterval(s.timer);
   s.cadence_ms = ms;
   s.timer = setInterval(() => void robotCycle(s), ms);
+}
+
+/** After one client exits, nudge peers on same epic so they don't wait a full cadence. */
+function kickPeerManageCycles(exceptId: string, epic: string) {
+  const want = epic.trim().toLowerCase();
+  for (const peer of sessions.values()) {
+    if (peer.id === exceptId || !peer.running || !peer.open_side) continue;
+    if (peer.epic.trim().toLowerCase() !== want) continue;
+    if (peer.cycle_busy) continue;
+    void robotCycle(peer);
+  }
 }
 
 const sessions = new Map<string, Internal>();
@@ -202,6 +215,7 @@ function publicSession(s: Internal): RobotSession {
     closedBars: _bars,
     last_multi_feed_ms: _mf,
     multiFeed: _multi,
+    cycle_busy: _busy,
     ...rest
   } = s;
   return {
@@ -287,9 +301,8 @@ function clearTradeState(s: Internal) {
 }
 
 /**
- * SAFETY SL as a true cushion — NOT dealing-rules minimum.
- * Target ~0.20% of price, at least ~2.5× broker min / wide vs spread,
- * so noise does not stop every trade (slightly tighter than 0.25%).
+ * SAFETY SL as LAST RESORT (~0.50%) — NOT the primary exit.
+ * Best Outcome / HardInvalidation must fire first; Capital Limit SL only on disaster.
  */
 function safetyStopLevel(
   direction: 'BUY' | 'SELL',
@@ -316,14 +329,14 @@ function safetyStopLevel(
         ? Math.max(ask - bid, 0)
         : abs * 0.00005;
 
-  const pctCushion = abs * 0.002; // 0.20% safety cushion (was 0.25%)
+  const pctCushion = abs * 0.005; // 0.50% disaster cushion (0.20% sniped Best Outcome)
   const brokerMin =
     minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
       ? minStopDistance
       : 0;
-  const floor = abs >= 1000 ? 0.5 : abs >= 100 ? 0.25 : abs >= 10 ? 0.05 : abs >= 1 ? 0.0005 : 0.00005;
+  const floor = abs >= 1000 ? 1.2 : abs >= 100 ? 0.5 : abs >= 10 ? 0.08 : abs >= 1 ? 0.0008 : 0.00008;
   const dist =
-    Math.max(pctCushion, brokerMin * 2.5, spr * 8, floor) * Math.max(loosen, 1);
+    Math.max(pctCushion, brokerMin * 4, spr * 12, floor) * Math.max(loosen, 1);
 
   const raw = direction === 'BUY' ? ref - dist : ref + dist;
   if (abs >= 1000) return Math.round(raw * 10) / 10;
@@ -332,19 +345,19 @@ function safetyStopLevel(
   return Math.round(raw * 1e6) / 1e6;
 }
 
-/** Cushion stopDistance in Capital POINTS (≥ 2.5× min, ~0.20% of price when point size known). */
+/** Cushion stopDistance in Capital POINTS (≥ 4× min, ~0.50% when point size known). */
 function safetyStopDistancePts(
   mid: number,
   minPts: number,
   pointSize: number | null
 ): number {
   const abs = Math.max(Math.abs(mid), 1e-9);
-  const pct = abs * 0.002;
-  let fromPct = minPts * 2.5;
+  const pct = abs * 0.005;
+  let fromPct = minPts * 4;
   if (pointSize != null && pointSize > 0) {
     fromPct = Math.max(fromPct, pct / pointSize);
   }
-  const distPts = Math.max(minPts * 2.5, fromPct, minPts + 1e-9);
+  const distPts = Math.max(minPts * 4, fromPct, minPts + 1e-9);
   return distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
 }
 
@@ -370,16 +383,18 @@ function expectedStopFromDistance(
   return direction === 'BUY' ? ref - dist : ref + dist;
 }
 
-function updateExcursion(s: Internal, mid: number) {
+function updateExcursion(s: Internal, mid: number, brokerUpl?: number | null) {
   if (!s.open_side || s.entry_price == null) return;
   const fav = favorableMove(s.open_side, s.entry_price, mid);
-  s.unrealized = fav;
-  if (fav > s.mfe) {
-    s.mfe = fav;
+  const upl =
+    brokerUpl != null && Number.isFinite(brokerUpl) ? Number(brokerUpl) : fav;
+  s.unrealized = upl;
+  if (upl > s.mfe) {
+    s.mfe = upl;
     s.peak_favorable = mid;
   }
   if (fav < s.mae) s.mae = fav;
-  s.peak_retention = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
+  s.peak_retention = s.mfe > 0 ? Math.max(0, upl / s.mfe) : null;
 }
 
 /** Exact id only — never returns a different robot */
@@ -848,6 +863,16 @@ async function enterTrade(
 
 
 async function robotCycle(s: Internal) {
+  if (!s.running || s.cycle_busy) return;
+  s.cycle_busy = true;
+  try {
+    await robotCycleBody(s);
+  } finally {
+    s.cycle_busy = false;
+  }
+}
+
+async function robotCycleBody(s: Internal) {
   if (!s.running) return;
 
   const { rows } = await pool.query(
@@ -983,7 +1008,7 @@ async function robotCycle(s: Internal) {
     }
 
     // Restore normal cadence after a successful tradeable read (may have been slowed by 429 / closed)
-    setRobotCadence(s, ACTIVE_CADENCE_MS);
+    setRobotCadence(s, s.open_side ? MANAGE_CADENCE_MS : ACTIVE_CADENCE_MS);
 
     // Sync truth from broker — source of ONE TRADE ONLY
     const listed = await listCapitalOpenPositions(opened.session);
@@ -996,6 +1021,7 @@ async function robotCycle(s: Internal) {
         if (s.entry_price == null) s.entry_price = brokerOpen.open_level ?? quote.mid;
         if (!s.entry_at) s.entry_at = new Date().toISOString();
         s.mode = 'MANAGE';
+        setRobotCadence(s, MANAGE_CADENCE_MS);
         if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
       } else if (s.open_side) {
         // Local thought open but broker flat → treat as closed
@@ -1020,7 +1046,7 @@ async function robotCycle(s: Internal) {
     }
 
     if (quote.mid != null && s.open_side && s.entry_price != null) {
-      updateExcursion(s, quote.mid);
+      updateExcursion(s, quote.mid, brokerOpen?.upl ?? s.unrealized);
     }
 
     pushTick(s, {
@@ -1052,6 +1078,7 @@ async function robotCycle(s: Internal) {
       const decision = decideBestOutcomeExit(s, quote.mid);
       if (decision.exit) {
         await exitTrade(opened.session, s, quote, decision.reason);
+        queueMicrotask(() => kickPeerManageCycles(s.id, s.epic));
         return;
       }
 
@@ -1060,11 +1087,11 @@ async function robotCycle(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `ONE TRADE · manage ${s.open_side} · ${s.regime} · UPL ${
+        detail: `MANAGE ${s.open_side} · ${s.regime} · UPL ${
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · no new orders`,
+        } · ${describeBestOutcomeState(s, quote.mid).hold}`,
       });
       return;
     }
@@ -1306,6 +1333,7 @@ export async function startRobotSession(input: {
     closedBars: [],
     last_multi_feed_ms: 0,
     multiFeed: null,
+    cycle_busy: false,
     feed_source: 'NONE',
     feed_contributing: 0,
     feed_sender_count: 0,
