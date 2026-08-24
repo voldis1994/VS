@@ -25,8 +25,17 @@ function describe(bar: TenSecBar): string {
   return `10s O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} body=${(bodyPct(bar) * 100).toFixed(3)}% rng=${(rangePct(bar) * 100).toFixed(3)}%`;
 }
 
+/** Follow 10s body — used when regime would otherwise stall (UNKNOWN/COMPRESSION/TRANSITION). */
+function followBody(bar: TenSecBar, label: string): RegimeEntry | null {
+  if (!movingOrNull(bar)) return null;
+  if (rally(bar)) return { direction: 'BUY', setup: 'BREAKOUT', reason: `${label} follow up · ${describe(bar)}` };
+  if (dip(bar)) return { direction: 'SELL', setup: 'BREAKOUT', reason: `${label} follow down · ${describe(bar)}` };
+  return null;
+}
+
 /**
- * Suitable entry for the current 10s regime. Returns null = WAIT (not a skip-forever).
+ * Suitable entry for the current 10s regime.
+ * Never stalls on UNKNOWN / COMPRESSION / TRANSITION — follows the candle.
  * Does not fade a trend (no SELL in TREND_UP, no BUY in TREND_DOWN).
  */
 export function decideEntryFrom10sRegime(
@@ -36,8 +45,10 @@ export function decideEntryFrom10sRegime(
   const r: RegimeName = normalizeRegime(regime);
   const candle = describe(bar);
 
-  if (r === 'UNKNOWN' || r === 'TRANSITION') return null;
-  if (r === 'COMPRESSION') return null; // wait for expansion / breakout
+  // No wait / no UNKNOWN stall — trade the move
+  if (r === 'UNKNOWN' || r === 'TRANSITION' || r === 'COMPRESSION') {
+    return followBody(bar, r);
+  }
 
   if (r === 'TREND_UP') {
     if (!movingOrNull(bar) || !dip(bar)) return null;
@@ -83,20 +94,16 @@ export function decideEntryFrom10sRegime(
   }
 
   if (r === 'EXPANSION') {
-    if (!movingOrNull(bar)) return null;
-    if (rally(bar)) return { direction: 'BUY', setup: 'BREAKOUT', reason: `${r} follow up · ${candle}` };
-    if (dip(bar)) return { direction: 'SELL', setup: 'BREAKOUT', reason: `${r} follow down · ${candle}` };
-    return null;
+    return followBody(bar, r);
   }
 
-  // RANGE — mean-reversion only on a clearer 10s body (cuts Capital micro-noise fades)
+  // RANGE — mean-reversion on same body threshold as dip/rally (no extra wait)
   if (r === 'RANGE') {
     if (!movingOrNull(bar)) return null;
-    const bp = bodyPct(bar);
-    if (bp <= -0.00028) return { direction: 'BUY', setup: 'FADE', reason: `${r} fade dip · ${candle}` };
-    if (bp >= 0.00028) return { direction: 'SELL', setup: 'FADE', reason: `${r} fade rally · ${candle}` };
+    if (dip(bar)) return { direction: 'BUY', setup: 'FADE', reason: `${r} fade dip · ${candle}` };
+    if (rally(bar)) return { direction: 'SELL', setup: 'FADE', reason: `${r} fade rally · ${candle}` };
     return null;
   }
 
-  return null;
+  return followBody(bar, r || 'LIVE');
 }

@@ -12,10 +12,10 @@ const dip = bar(2000, 1996); // ~0.2% down — moving
 const rally = bar(2000, 2004);
 
 describe('10s + 14-regime suitable entry', () => {
-  it('waits in UNKNOWN / COMPRESSION / TRANSITION', () => {
-    expect(decideEntryFrom10sRegime(dip, 'UNKNOWN')).toBeNull();
-    expect(decideEntryFrom10sRegime(dip, 'COMPRESSION')).toBeNull();
-    expect(decideEntryFrom10sRegime(rally, 'TRANSITION')).toBeNull();
+  it('never stalls UNKNOWN / COMPRESSION / TRANSITION — follows body', () => {
+    expect(decideEntryFrom10sRegime(dip, 'UNKNOWN')?.direction).toBe('SELL');
+    expect(decideEntryFrom10sRegime(rally, 'COMPRESSION')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(dip, 'TRANSITION')?.direction).toBe('SELL');
   });
 
   it('TREND_UP only dip-buys — never sells the rally', () => {
@@ -50,12 +50,6 @@ describe('10s + 14-regime suitable entry', () => {
     expect(decideEntryFrom10sRegime(rally, 'RANGE')?.direction).toBe('SELL');
   });
 
-  it('RANGE ignores micro Capital noise bodies', () => {
-    // ~0.02% body — below hardened RANGE threshold 0.028%
-    const micro = bar(4519, 4518.1);
-    expect(decideEntryFrom10sRegime(micro, 'RANGE')).toBeNull();
-  });
-
   it('quiet bar is never a trade in any regime', () => {
     const quiet: TenSecBar = {
       open_time_ms: 0,
@@ -68,5 +62,6 @@ describe('10s + 14-regime suitable entry', () => {
     expect(decideEntryFrom10sRegime(quiet, 'TREND_UP')).toBeNull();
     expect(decideEntryFrom10sRegime(quiet, 'RANGE')).toBeNull();
     expect(decideEntryFrom10sRegime(quiet, 'BREAKOUT_UP')).toBeNull();
+    expect(decideEntryFrom10sRegime(quiet, 'UNKNOWN')).toBeNull();
   });
 });

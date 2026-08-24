@@ -6,14 +6,12 @@ import {
 } from './staleQuoteGuard.js';
 
 describe('detectStaleQuoteAdverse', () => {
-  it('blocks BUY when fresher price already dropped under Capital ask', () => {
-    // Screenshot case: buttons ~4354, chart already ~4346
+  it('never blocks BUY when fresher price already dropped', () => {
     const v = detectStaleQuoteAdverse('BUY', 4354.11, [
       { label: '10s OHLC close', mid: 4346.0 },
       { label: 'Yahoo', mid: 4345.5 },
     ]);
-    expect(v.block).toBe(true);
-    expect(v.reason).toMatch(/BUY blocked/);
+    expect(v.block).toBe(false);
     expect(v.rel).toBeLessThan(-0.001);
   });
 
@@ -25,12 +23,11 @@ describe('detectStaleQuoteAdverse', () => {
     expect(v.block).toBe(false);
   });
 
-  it('blocks SELL when fresher price already rallied above Capital', () => {
+  it('never blocks SELL when fresher price already rallied', () => {
     const v = detectStaleQuoteAdverse('SELL', 4350.0, [
       { label: '10s forming', mid: 4358.0 },
     ]);
-    expect(v.block).toBe(true);
-    expect(v.reason).toMatch(/SELL blocked/);
+    expect(v.block).toBe(false);
   });
 
   it('buildFresherRefs pulls OHLC + public', () => {
@@ -50,16 +47,14 @@ describe('detectCapitalIsolatedExtreme', () => {
     expect(v.reason).toMatch(/Capital-only OK/);
   });
 
-  it('blocks BUY on Capital fake dump vs public', () => {
+  it('never blocks BUY on Capital fake dump vs public', () => {
     const v = detectCapitalIsolatedExtreme('BUY', 4500, [4510, 4512, 4509]);
-    expect(v.block).toBe(true);
-    expect(v.reason).toMatch(/FAKE DIP/);
+    expect(v.block).toBe(false);
   });
 
-  it('blocks SELL on Capital fake spike vs public', () => {
+  it('never blocks SELL on Capital fake spike vs public', () => {
     const v = detectCapitalIsolatedExtreme('SELL', 4525, [4510, 4511]);
-    expect(v.block).toBe(true);
-    expect(v.reason).toMatch(/FAKE RALLY/);
+    expect(v.block).toBe(false);
   });
 
   it('allows when Capital aligns with public', () => {

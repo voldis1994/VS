@@ -6,9 +6,7 @@ import {
   confirmCapitalDeal,
   createCapitalPosition,
   fetchCapitalMarketQuote,
-  fetchCapitalMinutePrices,
   fetchCapitalPrices,
-  isLateMoveOnOneMinute,
   listCapitalOpenPositions,
   type CapitalMarketQuote,
   type CapitalOpenPosition,
@@ -25,6 +23,7 @@ import {
   observeClosedBars,
   normalizeRegime,
   REGIME_NAMES,
+  toLiveRegime,
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
@@ -37,7 +36,6 @@ import {
   type MultiFeedPrice,
   type MultiFeedLeg,
 } from './robotReader.js';
-import { buildFresherRefs, detectCapitalIsolatedExtreme, detectStaleQuoteAdverse } from './staleQuoteGuard.js';
 import {
   aggregateSecondsToTen,
   emptyTenSecState,
@@ -126,6 +124,8 @@ type Internal = RobotSession & {
   ohlcState: TenSecState;
   last_second_fetch_ms: number;
   last_closed_bar_key: string;
+  /** Last entry signal fingerprint — avoid re-firing same candle body every tick */
+  last_entry_signal_key: string;
   closedBars: TenSecBar[];
   last_multi_feed_ms: number;
   multiFeed: MultiFeedPrice | null;
@@ -198,6 +198,7 @@ function publicSession(s: Internal): RobotSession {
     ohlcState: _ohlc,
     last_second_fetch_ms: _sec,
     last_closed_bar_key: _bar,
+    last_entry_signal_key: _sig,
     closedBars: _bars,
     last_multi_feed_ms: _mf,
     multiFeed: _multi,
@@ -252,9 +253,9 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     active_regimes: activeRegimes,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'Capital OHLC (anchor) + public near Capital → REGIME → ENTRY/EXIT',
+    chain: 'Capital OHLC → live regime (no UNKNOWN) → ENTRY/EXIT',
     note:
-      'Public feeds (Yahoo/Aurum/FX/Coinbase) confirm when near Capital CFD mid; far public prices are ignored so they cannot block or distort trades.',
+      'No post-close wait · no UNKNOWN/COMPRESSION stall · no late/fake/stale skips · clients persist.',
   };
 }
 
@@ -266,7 +267,7 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
       : [];
   if (incoming.length) {
     const snap = observeClosedBars(s.epic, incoming, s.display_name);
-    s.regime = snap.current;
+    s.regime = toLiveRegime(snap.current);
     if (bars?.length) s.closedBars = bars.slice(-24);
   }
 }
@@ -1083,17 +1084,7 @@ async function robotCycle(s: Internal) {
     }
 
     s.mode = 'ENTRY';
-    const sinceClose = Date.now() - (s.closed_at_ms || 0);
-    if (s.closed_at_ms > 0 && sinceClose < 20_000) {
-      pushTick(s, {
-        phase: 'WAIT',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `10s OHLC cooldown ${Math.ceil((20_000 - sinceClose) / 1000)}s after close · then next bar`,
-      });
-      return;
-    }
+    // No post-close cooldown — enter on next valid 10s signal
 
     if (quote.mid == null) return;
 
@@ -1134,6 +1125,7 @@ async function robotCycle(s: Internal) {
     }
 
     const bar = s.ohlcState.last_closed;
+    const forming = s.ohlcState.forming;
     const ohlc = s.ohlc_10s;
     const ohlcLine = bar
       ? `10s O=${bar.open.toFixed(2)} H=${bar.high.toFixed(2)} L=${bar.low.toFixed(2)} C=${bar.close.toFixed(2)} ${s.regime} · feeds ${
@@ -1145,88 +1137,49 @@ async function robotCycle(s: Internal) {
     let reason = '';
     let setupType: string | null = null;
 
-    if (s.ohlcState.just_closed && bar) {
-      const sig = decideEntryFrom10sRegime(bar, s.regime);
-      if (sig) {
-        direction = sig.direction;
-        setupType = sig.setup;
-        reason = sig.reason;
-      } else {
+    // Closed bar on close; otherwise forming — never idle-wait for candle close
+    const signalBar = s.ohlcState.just_closed && bar ? bar : forming || bar;
+
+    if (signalBar) {
+      if (!s.regime || s.regime === 'UNKNOWN') s.regime = 'EXPANSION';
+      const bucketKey = String(signalBar.open_time_ms || 0);
+      // One attempt per 10s bucket — not a cooldown, just no Capital spam
+      if (bucketKey && bucketKey === s.last_entry_signal_key) {
         pushTick(s, {
           phase: 'DECIDE',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${ohlcLine} · ${s.regime} not suitable on this 10s close · wait next candle`,
+          detail: `${ohlcLine} · ${s.regime} · watching`,
         });
+      } else {
+        const sig = decideEntryFrom10sRegime(signalBar, s.regime);
+        if (sig) {
+          direction = sig.direction;
+          setupType = sig.setup;
+          reason = sig.reason;
+          if (bucketKey) s.last_entry_signal_key = bucketKey;
+        } else {
+          pushTick(s, {
+            phase: 'DECIDE',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `${ohlcLine} · ${s.regime} · no moving body yet`,
+          });
+        }
       }
     } else {
       pushTick(s, {
-        phase: 'WAIT',
+        phase: 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · forming C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'} · wait bar close`,
+        detail: `${ohlcLine} · seeding OHLC · C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'}`,
       });
     }
 
-    if (direction) {
-      const hist = await fetchCapitalMinutePrices(opened.session, s.epic, 3);
-      if (hist.ok && isLateMoveOnOneMinute(direction, hist.candles)) {
-        pushTick(s, {
-          phase: 'WAIT',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `SKIP · late on 1m candle (end of move) · ${direction}`,
-        });
-        direction = null;
-      }
-    }
-
-    // Capital button lag vs already-printed drop/rally (chart/public/10s OHLC)
-    if (direction && quote.mid != null) {
-      const publicNear = (s.multiFeed?.legs || [])
-        .filter((l) => l.ok && l.mid != null && Number.isFinite(l.mid))
-        .filter((l) => !String(l.detail || '').includes('FAR from Capital'))
-        .map((l) => ({ name: l.name, mid: l.mid as number }));
-      const refs = buildFresherRefs({
-        publicNearMids: publicNear,
-        ohlcClose: s.ohlcState.last_closed?.close ?? s.ohlc_10s?.last_c ?? null,
-        formingClose: s.ohlcState.forming?.close ?? s.ohlc_10s?.forming_c ?? null,
-      });
-      const lag = detectStaleQuoteAdverse(direction, quote.mid, refs);
-      if (lag.block) {
-        pushTick(s, {
-          phase: 'WAIT',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `SKIP · ${lag.reason}`,
-        });
-        direction = null;
-      }
-    }
-
-    // Capital fake extreme vs public-near — skip noise, allow if no public (do not miss moves)
-    if (direction && quote.mid != null) {
-      const publicMids = (s.multiFeed?.legs || [])
-        .filter((l) => l.ok && l.mid != null && Number.isFinite(l.mid))
-        .filter((l) => !String(l.detail || '').includes('FAR from Capital'))
-        .map((l) => l.mid as number);
-      const fake = detectCapitalIsolatedExtreme(direction, quote.mid, publicMids);
-      if (fake.block) {
-        pushTick(s, {
-          phase: 'WAIT',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `SKIP · ${fake.reason}`,
-        });
-        direction = null;
-      }
-    }
-
+    // No late-1m / stale-quote / fake-extreme skips — enter when regime says so
     if (!direction) return;
     await enterTrade(opened.session, s, direction, quote, reason, setupType);
   } catch (err) {
@@ -1349,6 +1302,7 @@ export async function startRobotSession(input: {
     ohlcState: emptyTenSecState(),
     last_second_fetch_ms: 0,
     last_closed_bar_key: '',
+    last_entry_signal_key: '',
     closedBars: [],
     last_multi_feed_ms: 0,
     multiFeed: null,
@@ -1356,7 +1310,7 @@ export async function startRobotSession(input: {
     feed_contributing: 0,
     feed_sender_count: 0,
     feed_agreement: null,
-    regime: 'UNKNOWN',
+    regime: 'EXPANSION',
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
 
