@@ -16,16 +16,13 @@ function bar(open: number, close: number, i = 0): TenSecBar {
 const dip = bar(2000, 1996);
 const rally = bar(2000, 2004);
 
-describe('quality entry only', () => {
-  it('skips junk regimes: RANGE / UNKNOWN / FADE / REVERSAL / EXPANSION / BREAKOUT', () => {
+describe('quality entry', () => {
+  it('skips chop: RANGE / UNKNOWN / FADE / REVERSAL', () => {
     expect(decideEntryFrom10sRegime(dip, 'UNKNOWN')).toBeNull();
     expect(decideEntryFrom10sRegime(rally, 'COMPRESSION')).toBeNull();
     expect(decideEntryFrom10sRegime(dip, 'RANGE')).toBeNull();
     expect(decideEntryFrom10sRegime(dip, 'FAILED_BREAKOUT_UP')).toBeNull();
     expect(decideEntryFrom10sRegime(rally, 'REVERSAL_CANDIDATE')).toBeNull();
-    expect(decideEntryFrom10sRegime(rally, 'EXPANSION')).toBeNull();
-    expect(decideEntryFrom10sRegime(rally, 'BREAKOUT_UP')).toBeNull();
-    expect(decideEntryFrom10sRegime(dip, 'BREAKOUT_DOWN')).toBeNull();
   });
 
   it('TREND_UP only dip-buys — never sells the rally', () => {
@@ -44,11 +41,26 @@ describe('quality entry only', () => {
     expect(decideEntryFrom10sRegime(dip, 'PULLBACK_UPTREND')).toBeNull();
   });
 
-  it('10s BREAKOUT is never traded (whipsaw on micro)', () => {
-    expect(decideEntryFrom10sRegime(rally, 'BREAKOUT_UP')).toBeNull();
-    expect(decideEntryFrom10sRegime(dip, 'BREAKOUT_DOWN')).toBeNull();
+  it('EXPANSION follows clear body (no more eternal WAIT on real moves)', () => {
+    expect(decideEntryFrom10sRegime(rally, 'EXPANSION')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(dip, 'EXPANSION')?.direction).toBe('SELL');
+    const quiet: TenSecBar = {
+      open_time_ms: 0,
+      open: 2000,
+      high: 2000.15,
+      low: 1999.9,
+      close: 2000.05,
+      ticks: 8,
+    };
+    expect(decideEntryFrom10sRegime(quiet, 'EXPANSION')).toBeNull();
+  });
+
+  it('BREAKOUT follows clear body, not late chase', () => {
+    expect(decideEntryFrom10sRegime(rally, 'BREAKOUT_UP')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(dip, 'BREAKOUT_DOWN')?.direction).toBe('SELL');
     const late = bar(4600, 4620);
     expect(signalBarTooLate(late)).toBe(true);
+    expect(decideEntryFrom10sRegime(late, 'BREAKOUT_UP')).toBeNull();
   });
 
   it('quiet bar is never a trade', () => {

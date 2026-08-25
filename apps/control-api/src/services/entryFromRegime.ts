@@ -1,6 +1,7 @@
 /**
- * Quality entry only — no junk fades, no mid-move chase, no “follow every red/green”.
- * After 8 months of noise: TREND pullback / resume only (10s BREAKOUT = whipsaw junk).
+ * Quality entry — trade real moves, skip chop fades.
+ * TREND pullback/resume + EXPANSION/BREAKOUT follow (clear body).
+ * SKIP: RANGE / FADE / REVERSAL / quiet noise.
  */
 import type { RegimeName } from './regimes.js';
 import { normalizeRegime } from './regimes.js';
@@ -16,8 +17,8 @@ function movingOrNull(bar: TenSecBar): boolean {
   return isMoving10s(bar);
 }
 
-/** Clearer pullback than tick noise — ~1.0pt @ Gold 4600. */
-const PULLBACK_BODY_PCT = 0.00022;
+/** Clearer pullback than tick noise — ~0.9pt @ Gold 4600. */
+const PULLBACK_BODY_PCT = 0.0002;
 
 function dip(bar: TenSecBar): boolean {
   return bodyPct(bar) <= -PULLBACK_BODY_PCT;
@@ -25,6 +26,13 @@ function dip(bar: TenSecBar): boolean {
 
 function rally(bar: TenSecBar): boolean {
   return bodyPct(bar) >= PULLBACK_BODY_PCT;
+}
+
+/** Expansion/breakout needs a real body — ~1.3pt Gold. */
+const IMPULSE_BODY_PCT = 0.00028;
+
+function strongBody(bar: TenSecBar): boolean {
+  return Math.abs(bodyPct(bar)) >= IMPULSE_BODY_PCT || Math.abs(bar.close - bar.open) >= 0.12;
 }
 
 function describe(bar: TenSecBar): string {
@@ -84,11 +92,12 @@ export function allowEntryAgainstImpulse(
 }
 
 /**
- * Quality entry — ONLY:
- * - TREND_UP dip-buy / TREND_DOWN rally-sell (pullback)
- * - PULLBACK_* resume with the trend
+ * Entry:
+ * - TREND_UP dip-buy / TREND_DOWN rally-sell
+ * - PULLBACK_* resume
+ * - EXPANSION / BREAKOUT follow clear body (was skipped → eternal WAIT on real moves)
  *
- * SKIP: RANGE/FADE/REVERSAL/EXPANSION + 10s BREAKOUT (micro whipsaw).
+ * SKIP: RANGE chop, FADE, REVERSAL, quiet.
  */
 export function decideEntryFrom10sRegime(
   bar: TenSecBar,
@@ -97,7 +106,6 @@ export function decideEntryFrom10sRegime(
   const r: RegimeName = normalizeRegime(regime);
   const candle = describe(bar);
 
-  // Stall / noise / chop / noisy 10s breakout — do NOT trade
   if (
     r === 'UNKNOWN' ||
     r === 'TRANSITION' ||
@@ -105,15 +113,11 @@ export function decideEntryFrom10sRegime(
     r === 'RANGE' ||
     r === 'REVERSAL_CANDIDATE' ||
     r === 'FAILED_BREAKOUT_UP' ||
-    r === 'FAILED_BREAKOUT_DOWN' ||
-    r === 'EXPANSION' ||
-    r === 'BREAKOUT_UP' ||
-    r === 'BREAKOUT_DOWN'
+    r === 'FAILED_BREAKOUT_DOWN'
   ) {
     return null;
   }
 
-  // Never chase a bar that already ran
   if (signalBarTooLate(bar)) return null;
 
   if (r === 'TREND_UP') {
@@ -132,6 +136,27 @@ export function decideEntryFrom10sRegime(
   if (r === 'PULLBACK_DOWNTREND') {
     if (!movingOrNull(bar) || !dip(bar)) return null;
     return { direction: 'SELL', setup: 'CONTINUATION', reason: `${r} resume short · ${candle}` };
+  }
+
+  // Real volatility — follow the body (15:30 Gold dump was EXPANSION and was skipped → WAIT forever)
+  if (r === 'EXPANSION') {
+    if (!movingOrNull(bar) || !strongBody(bar)) return null;
+    if (rally(bar)) {
+      return { direction: 'BUY', setup: 'CONTINUATION', reason: `${r} follow up · ${candle}` };
+    }
+    if (dip(bar)) {
+      return { direction: 'SELL', setup: 'CONTINUATION', reason: `${r} follow down · ${candle}` };
+    }
+    return null;
+  }
+
+  if (r === 'BREAKOUT_UP') {
+    if (!movingOrNull(bar) || dip(bar) || !strongBody(bar)) return null;
+    return { direction: 'BUY', setup: 'BREAKOUT', reason: `${r} follow · ${candle}` };
+  }
+  if (r === 'BREAKOUT_DOWN') {
+    if (!movingOrNull(bar) || rally(bar) || !strongBody(bar)) return null;
+    return { direction: 'SELL', setup: 'BREAKOUT', reason: `${r} follow · ${candle}` };
   }
 
   return null;
