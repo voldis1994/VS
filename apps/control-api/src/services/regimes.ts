@@ -169,11 +169,12 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   let slopeDown = false;
   let bounceInDown = false;
   let dipInUp = false;
+  let shortPct = 0;
   if (bars.length >= 4) {
     const shortBars = bars.slice(-6);
     const shortOpen = shortBars[0]!.open;
     const shortMid = Math.max(Math.abs(shortOpen), 1e-9);
-    const shortPct = (last.close - shortOpen) / shortMid;
+    shortPct = (last.close - shortOpen) / shortMid;
     const shortUp = shortPct >= 0.0012;
     const shortDown = shortPct <= -0.0012;
 
@@ -187,12 +188,24 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
       structUp = structPct >= 0.002;
       structDown = structPct <= -0.002;
       if (structDown && shortPct > 0.0008) bounceInDown = true;
-      if (structUp && shortPct < -0.0008) dipInUp = true;
+      if (structUp && shortPct < -0.0008 && shortPct > -0.0025) dipInUp = true;
     }
 
     slopeDown = shortDown || structDown;
     slopeUp = shortUp || structUp;
-    if (structDown && shortUp) {
+
+    // Decisive ~30m move overrides stale 2h structure.
+    // Old bug: structUp+shortDown kept TREND_UP → BUY into the dump.
+    const SHORT_OVERRIDE = 0.0025; // ~11.5pt Gold
+    if (shortPct <= -SHORT_OVERRIDE) {
+      slopeDown = true;
+      slopeUp = false;
+      dipInUp = false;
+    } else if (shortPct >= SHORT_OVERRIDE) {
+      slopeUp = true;
+      slopeDown = false;
+      bounceInDown = false;
+    } else if (structDown && shortUp) {
       slopeDown = true;
       slopeUp = false;
     } else if (structUp && shortDown) {
@@ -215,6 +228,25 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   }
   if (bounceInDown) return 'PULLBACK_DOWNTREND';
   if (dipInUp) return 'PULLBACK_UPTREND';
+  // Sticky: once in TREND_DOWN, do not flip to TREND_UP on one green tick of structure
+  if (
+    previous === 'TREND_DOWN' &&
+    slopeUp &&
+    !slopeDown &&
+    shortPct < 0.0025 &&
+    persistence < 0.35
+  ) {
+    return 'PULLBACK_DOWNTREND';
+  }
+  if (
+    previous === 'TREND_UP' &&
+    slopeDown &&
+    !slopeUp &&
+    shortPct > -0.0025 &&
+    persistence > -0.35
+  ) {
+    return 'PULLBACK_UPTREND';
+  }
   if (trendingUp && !slopeDown) return 'TREND_UP';
   if (trendingDown && !slopeUp) return 'TREND_DOWN';
   if (reversal) return 'REVERSAL_CANDIDATE';

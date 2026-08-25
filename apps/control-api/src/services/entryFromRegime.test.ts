@@ -107,4 +107,16 @@ describe('no SELL into fresh buy impulse', () => {
     expect(allowEntryAgainstImpulse('SELL', upImpulse).ok).toBe(false);
     expect(allowEntryAgainstImpulse('BUY', upImpulse).ok).toBe(true);
   });
+
+  it('blocks BUY into short dump even with live green tick', () => {
+    const dump: TenSecBar[] = [
+      bar(4660, 4652, 0),
+      bar(4652, 4648, 1),
+      bar(4648, 4643, 2),
+      bar(4643, 4640, 3),
+    ];
+    const liveGreen = bar(4640, 4642.5, 4);
+    expect(allowEntryAgainstImpulse('BUY', dump, liveGreen).ok).toBe(false);
+    expect(allowEntryAgainstImpulse('SELL', dump, liveGreen).ok).toBe(true);
+  });
 });

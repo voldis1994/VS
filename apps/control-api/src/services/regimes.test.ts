@@ -206,6 +206,29 @@ describe('classifyRegime from 10s OHLC', () => {
     expect(snap.current).toBe('TREND_DOWN');
   });
 
+  it('violent dump after rally flips TREND_DOWN — not stuck TREND_UP / BUY bias', () => {
+    const prices: number[] = [];
+    let p = 4608;
+    // ~1h rally to ~4660
+    for (let i = 0; i < 18; i++) {
+      p += 2.8;
+      prices.push(p);
+    }
+    // ~30m dump ~20pt (like 4660 → 4640)
+    for (let i = 0; i < 6; i++) {
+      p -= 3.4;
+      prices.push(p);
+    }
+    const bars = prices.map((close, i) => {
+      const open = i === 0 ? 4608 : prices[i - 1]!;
+      return bar(open, Math.max(open, close) + 0.5, Math.min(open, close) - 0.4, close, i);
+    });
+    const r = classifyRegime(bars, 'TREND_UP');
+    expect(['TREND_DOWN', 'PULLBACK_DOWNTREND', 'BREAKOUT_DOWN', 'EXPANSION']).toContain(r);
+    expect(r).not.toBe('TREND_UP');
+    expect(r).not.toBe('PULLBACK_UPTREND');
+  });
+
   it('dump then bottom chop stays TREND_DOWN — not RANGE', () => {
     const prices: number[] = [];
     let p = 4647.0;

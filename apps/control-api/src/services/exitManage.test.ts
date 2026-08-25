@@ -131,6 +131,21 @@ describe('decideBestOutcomeExit 5m hold-longer', () => {
     expect(hit.reason).toMatch(/Target/);
   });
 
+  it('cuts BUY when short window is dumping even if regime still UP', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4647,
+        regime: 'TREND_UP',
+        short_net_pct: -0.004,
+        mfe: 1,
+      }),
+      4640
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/ThesisFailure · short dump/);
+  });
+
   it('describeBestOutcomeState shows BO5m lock@50%', () => {
     const s = describeBestOutcomeState(
       snap({ open_side: 'BUY', entry_price: 4600, mfe: 15, peak_retention: 0.9 }),

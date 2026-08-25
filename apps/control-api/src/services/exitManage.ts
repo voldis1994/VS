@@ -10,6 +10,8 @@ export type ExitSnapshot = {
   mae: number;
   peak_retention: number | null;
   regime?: string | null;
+  /** Short ~30m net move as fraction (e.g. -0.004 = −0.4%). Cuts BUY into dump even if regime lags. */
+  short_net_pct?: number | null;
 };
 
 export function favorableMove(side: ExitSide, entry: number, mid: number): number {
@@ -94,6 +96,23 @@ export function decideBestOutcomeExit(
 
   if (fav <= -sl) {
     return { exit: true, reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}` };
+  }
+
+  // Price already dumped/rallied against us — don't wait for regime label to flip
+  const short = s.short_net_pct;
+  if (short != null && Number.isFinite(short)) {
+    if (s.open_side === 'BUY' && short <= -0.002) {
+      return {
+        exit: true,
+        reason: `ThesisFailure · short dump ${(short * 100).toFixed(2)}% vs BUY`,
+      };
+    }
+    if (s.open_side === 'SELL' && short >= 0.002) {
+      return {
+        exit: true,
+        reason: `ThesisFailure · short rally ${(short * 100).toFixed(2)}% vs SELL`,
+      };
+    }
   }
 
   if (armed) {

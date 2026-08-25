@@ -36,6 +36,7 @@ import {
   decideEntryFrom10sRegime,
   explainNoEntry,
   lateChaseAppliesToSetup,
+  shortNetMove,
 } from './entryFromRegime.js';
 import { allowEpicReentry, noteEpicTradeClose } from './tradeCooldown.js';
 import { publishEpicEntry, readEpicEntry } from './epicEntrySync.js';
@@ -314,7 +315,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC → live regime (no UNKNOWN) → ENTRY/EXIT',
     note:
-      '5m brain · regime-led entry (soft live timing) · hold winners',
+      '5m brain · no BUY into dump · sticky TREND · regime-led',
   };
 }
 
@@ -1151,7 +1152,11 @@ async function robotCycleBody(s: Internal) {
       s.mode = 'MANAGE';
       if (quote.mid == null) return;
 
-      const decision = decideBestOutcomeExit(s, quote.mid);
+      const short = shortNetMove(s.closedBars, s.ohlcState.forming ?? s.ohlcState.last_closed);
+      const decision = decideBestOutcomeExit(
+        { ...s, short_net_pct: short.netPct },
+        quote.mid
+      );
       if (decision.exit) {
         await exitTrade(opened.session, s, quote, decision.reason);
         queueMicrotask(() => kickPeerManageCycles(s.id, s.epic));
@@ -1167,7 +1172,7 @@ async function robotCycleBody(s: Internal) {
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · ${describeBestOutcomeState(s, quote.mid).hold}`,
+        } · ${describeBestOutcomeState({ ...s, short_net_pct: short.netPct }, quote.mid).hold}`,
       });
       return;
     }
@@ -1298,6 +1303,21 @@ async function robotCycleBody(s: Internal) {
         });
         return;
       }
+      const peerVs = allowEntryAgainstImpulse(
+        peerSig.side,
+        s.closedBars,
+        signalBar ?? forming ?? closed
+      );
+      if (!peerVs.ok) {
+        pushTick(s, {
+          phase: 'WAIT',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `${ohlcLine} · peer blocked · ${peerVs.reason}`,
+        });
+        return;
+      }
       s.last_entry_signal_key = peerKey;
       direction = peerSig.side;
       setupType = peerSig.regime || 'PEER';
@@ -1342,7 +1362,7 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    const vsImpulse = allowEntryAgainstImpulse(sig.direction, s.closedBars);
+    const vsImpulse = allowEntryAgainstImpulse(sig.direction, s.closedBars, signalBar);
     if (!vsImpulse.ok) {
       pushTick(s, {
         phase: 'DECIDE',

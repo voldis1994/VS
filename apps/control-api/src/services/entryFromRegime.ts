@@ -69,10 +69,39 @@ export function recentImpulse(
   return { dir: null, netPct, netPts };
 }
 
+/** Short ~30m net including optional live bar — blocks BUY into an active dump. */
+export function shortNetMove(
+  bars: TenSecBar[] | null | undefined,
+  liveBar?: TenSecBar | null
+): { dir: 'UP' | 'DOWN' | null; netPct: number; netPts: number } {
+  const all = [...(bars ?? [])];
+  if (liveBar && Number.isFinite(liveBar.close)) {
+    const last = all[all.length - 1];
+    if (!last || last.open_time_ms !== liveBar.open_time_ms) all.push(liveBar);
+    else all[all.length - 1] = liveBar;
+  }
+  return recentImpulse(all, 6);
+}
+
 export function allowEntryAgainstImpulse(
   direction: 'BUY' | 'SELL',
-  bars: TenSecBar[] | null | undefined
+  bars: TenSecBar[] | null | undefined,
+  liveBar?: TenSecBar | null
 ): { ok: boolean; reason: string } {
+  // Prefer short window + live — catches dump before regime label flips
+  const short = shortNetMove(bars, liveBar);
+  if (direction === 'BUY' && short.netPct <= -0.0015) {
+    return {
+      ok: false,
+      reason: `BLOCK BUY · short dump ${short.netPts.toFixed(1)}pt (${(short.netPct * 100).toFixed(2)}%) — no long into selloff`,
+    };
+  }
+  if (direction === 'SELL' && short.netPct >= 0.0015) {
+    return {
+      ok: false,
+      reason: `BLOCK SELL · short rally ${short.netPts.toFixed(1)}pt (${(short.netPct * 100).toFixed(2)}%) — no short into buy-move`,
+    };
+  }
   const imp = recentImpulse(bars);
   if (!imp.dir) return { ok: true, reason: 'no strong recent impulse' };
   if (direction === 'SELL' && imp.dir === 'UP') {
