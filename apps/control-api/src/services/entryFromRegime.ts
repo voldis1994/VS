@@ -1,11 +1,11 @@
 /**
- * Quality entry — trade real moves, skip chop fades.
- * TREND pullback/resume + EXPANSION/BREAKOUT follow (clear body).
- * SKIP: RANGE / FADE / REVERSAL / quiet noise.
+ * Quality entry on 5m — fewer trades, larger bodies.
+ * TREND pullback/resume + EXPANSION/BREAKOUT follow.
+ * SKIP: RANGE chop, FADE, REVERSAL, quiet.
  */
 import type { RegimeName } from './regimes.js';
 import { normalizeRegime } from './regimes.js';
-import { bodyPct, isMoving10s, rangePct, type TenSecBar } from './tenSecondOhlc.js';
+import { bodyPct, isMoving5m, rangePct, type TenSecBar } from './tenSecondOhlc.js';
 
 export type RegimeEntry = {
   direction: 'BUY' | 'SELL';
@@ -14,11 +14,11 @@ export type RegimeEntry = {
 };
 
 function movingOrNull(bar: TenSecBar): boolean {
-  return isMoving10s(bar);
+  return isMoving5m(bar);
 }
 
-/** Clearer pullback than tick noise — ~0.9pt @ Gold 4600. */
-const PULLBACK_BODY_PCT = 0.0002;
+/** Pullback ~0.10% ≈ 4.6pt Gold. */
+const PULLBACK_BODY_PCT = 0.001;
 
 function dip(bar: TenSecBar): boolean {
   return bodyPct(bar) <= -PULLBACK_BODY_PCT;
@@ -28,31 +28,28 @@ function rally(bar: TenSecBar): boolean {
   return bodyPct(bar) >= PULLBACK_BODY_PCT;
 }
 
-/** Expansion/breakout needs a real body — ~1.3pt Gold. */
-const IMPULSE_BODY_PCT = 0.00028;
+/** Expansion/breakout ~0.15% ≈ 7pt Gold. */
+const IMPULSE_BODY_PCT = 0.0015;
 
 function strongBody(bar: TenSecBar): boolean {
-  return Math.abs(bodyPct(bar)) >= IMPULSE_BODY_PCT || Math.abs(bar.close - bar.open) >= 0.12;
+  return Math.abs(bodyPct(bar)) >= IMPULSE_BODY_PCT || Math.abs(bar.close - bar.open) >= 6;
 }
 
 function describe(bar: TenSecBar): string {
-  return `10s O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} body=${(bodyPct(bar) * 100).toFixed(3)}% rng=${(rangePct(bar) * 100).toFixed(3)}%`;
+  return `5m O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} body=${(bodyPct(bar) * 100).toFixed(3)}% rng=${(rangePct(bar) * 100).toFixed(3)}%`;
 }
 
-/** Signal bar already spent the move — chasing junk. ~0.25% ≈ 11pt @ Gold 4600. */
-const LATE_SIGNAL_BODY_PCT = 0.0025;
+/** Already spent the 5m move — ~0.45% ≈ 21pt Gold. */
+const LATE_SIGNAL_BODY_PCT = 0.0045;
 
 export function signalBarTooLate(bar: TenSecBar): boolean {
   return Math.abs(bodyPct(bar)) >= LATE_SIGNAL_BODY_PCT;
 }
 
-/**
- * Net impulse over recent 10s bars (~lookback×10s).
- * ~0.12% on Gold ≈ 5.5pt — blocks fading a fresh spike with counter trades.
- */
+/** Impulse over ~3×5m. ~0.25% ≈ 11.5pt Gold. */
 export function recentImpulse(
   bars: TenSecBar[] | null | undefined,
-  lookback = 12
+  lookback = 3
 ): { dir: 'UP' | 'DOWN' | null; netPct: number; netPts: number } {
   if (!bars?.length) return { dir: null, netPct: 0, netPts: 0 };
   const window = bars.slice(-Math.max(lookback, 2));
@@ -62,14 +59,11 @@ export function recentImpulse(
   const netPts = last.close - first.open;
   const mid = Math.max(Math.abs(first.open), 1e-9);
   const netPct = netPts / mid;
-  if (netPct >= 0.0012) return { dir: 'UP', netPct, netPts };
-  if (netPct <= -0.0012) return { dir: 'DOWN', netPct, netPts };
+  if (netPct >= 0.0025) return { dir: 'UP', netPct, netPts };
+  if (netPct <= -0.0025) return { dir: 'DOWN', netPct, netPts };
   return { dir: null, netPct, netPts };
 }
 
-/**
- * Never SELL into a fresh UP impulse / BUY into a fresh DOWN dump.
- */
 export function allowEntryAgainstImpulse(
   direction: 'BUY' | 'SELL',
   bars: TenSecBar[] | null | undefined
@@ -91,14 +85,6 @@ export function allowEntryAgainstImpulse(
   return { ok: true, reason: `impulse ${imp.dir} aligns` };
 }
 
-/**
- * Entry:
- * - TREND_UP dip-buy / TREND_DOWN rally-sell
- * - PULLBACK_* resume
- * - EXPANSION / BREAKOUT follow clear body (was skipped → eternal WAIT on real moves)
- *
- * SKIP: RANGE chop, FADE, REVERSAL, quiet.
- */
 export function decideEntryFrom10sRegime(
   bar: TenSecBar,
   regime?: string | null
@@ -138,7 +124,6 @@ export function decideEntryFrom10sRegime(
     return { direction: 'SELL', setup: 'CONTINUATION', reason: `${r} resume short · ${candle}` };
   }
 
-  // Real volatility — follow the body (15:30 Gold dump was EXPANSION and was skipped → WAIT forever)
   if (r === 'EXPANSION') {
     if (!movingOrNull(bar) || !strongBody(bar)) return null;
     if (rally(bar)) {

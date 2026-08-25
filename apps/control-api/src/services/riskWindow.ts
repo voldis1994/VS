@@ -1,14 +1,11 @@
 /**
- * Simple 10-minute account risk window (operator rules):
- * - Clock starts on the FIRST trade (open/close) — sitting in WAIT does NOT burn the window
- * - Target ≈ 10%; pass band ≥7% realized at window end
- * - +10% anytime (realized or live) early → bank, cooldown 10 min
- * - −10% live (realized + open UPL) → cooldown 10 min
- * - Window end with trades but <+7% realized → cooldown 10 min
- * - Window end with ZERO trades → roll next window, NO cooldown (no setup ≠ failure)
+ * Simple account risk window for 5m brain:
+ * - Clock starts on FIRST trade — IDLE while waiting for setup
+ * - 60min window · +10% early bank · −10% stop · ≥7% pass
+ * - Zero trades → no penalty cooldown
  */
 
-export const RISK_WINDOW_MS = 10 * 60 * 1000;
+export const RISK_WINDOW_MS = 60 * 60 * 1000; // 60 min — fits 5m holds
 export const RISK_TARGET_MIN_PCT = 0.07;
 export const RISK_TARGET_MAX_PCT = 0.1;
 export const RISK_MAX_LOSS_PCT = 0.1;

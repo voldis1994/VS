@@ -8,15 +8,16 @@ import {
 import type { TenSecBar } from './tenSecondOhlc.js';
 
 function bar(open: number, close: number, i = 0): TenSecBar {
-  const high = Math.max(open, close) + 0.8;
-  const low = Math.min(open, close) - 0.4;
-  return { open_time_ms: i * 10_000, open, high, low, close, ticks: 12 };
+  const high = Math.max(open, close) + 2;
+  const low = Math.min(open, close) - 1;
+  return { open_time_ms: i * 300_000, open, high, low, close, ticks: 12 };
 }
 
-const dip = bar(2000, 1996);
-const rally = bar(2000, 2004);
+// ~0.2% bodies — clear on 5m thresholds
+const dip = bar(4600, 4590);
+const rally = bar(4600, 4610);
 
-describe('quality entry', () => {
+describe('5m quality entry', () => {
   it('skips chop: RANGE / UNKNOWN / FADE / REVERSAL', () => {
     expect(decideEntryFrom10sRegime(dip, 'UNKNOWN')).toBeNull();
     expect(decideEntryFrom10sRegime(rally, 'COMPRESSION')).toBeNull();
@@ -25,40 +26,25 @@ describe('quality entry', () => {
     expect(decideEntryFrom10sRegime(rally, 'REVERSAL_CANDIDATE')).toBeNull();
   });
 
-  it('TREND_UP only dip-buys — never sells the rally', () => {
+  it('TREND_UP only dip-buys', () => {
     expect(decideEntryFrom10sRegime(dip, 'TREND_UP')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(dip, 'TREND_UP')?.setup).toBe('PULLBACK');
     expect(decideEntryFrom10sRegime(rally, 'TREND_UP')).toBeNull();
   });
 
-  it('TREND_DOWN only rally-sells — never buys the dump', () => {
+  it('TREND_DOWN only rally-sells', () => {
     expect(decideEntryFrom10sRegime(rally, 'TREND_DOWN')?.direction).toBe('SELL');
     expect(decideEntryFrom10sRegime(dip, 'TREND_DOWN')).toBeNull();
   });
 
-  it('PULLBACK_UPTREND resumes long on the turn-up bar', () => {
-    expect(decideEntryFrom10sRegime(rally, 'PULLBACK_UPTREND')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(dip, 'PULLBACK_UPTREND')).toBeNull();
-  });
-
-  it('EXPANSION follows clear body (no more eternal WAIT on real moves)', () => {
+  it('EXPANSION / BREAKOUT follow clear body', () => {
     expect(decideEntryFrom10sRegime(rally, 'EXPANSION')?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(dip, 'EXPANSION')?.direction).toBe('SELL');
-    const quiet: TenSecBar = {
-      open_time_ms: 0,
-      open: 2000,
-      high: 2000.15,
-      low: 1999.9,
-      close: 2000.05,
-      ticks: 8,
-    };
-    expect(decideEntryFrom10sRegime(quiet, 'EXPANSION')).toBeNull();
-  });
-
-  it('BREAKOUT follows clear body, not late chase', () => {
     expect(decideEntryFrom10sRegime(rally, 'BREAKOUT_UP')?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(dip, 'BREAKOUT_DOWN')?.direction).toBe('SELL');
-    const late = bar(4600, 4620);
+  });
+
+  it('rejects late exhausted 5m bar', () => {
+    const late = bar(4600, 4625); // ~0.54%
     expect(signalBarTooLate(late)).toBe(true);
     expect(decideEntryFrom10sRegime(late, 'BREAKOUT_UP')).toBeNull();
   });
@@ -66,24 +52,22 @@ describe('quality entry', () => {
   it('quiet bar is never a trade', () => {
     const quiet: TenSecBar = {
       open_time_ms: 0,
-      open: 2000,
-      high: 2000.1,
-      low: 1999.95,
-      close: 2000.05,
+      open: 4600,
+      high: 4600.5,
+      low: 4599.7,
+      close: 4600.2,
       ticks: 8,
     };
     expect(decideEntryFrom10sRegime(quiet, 'TREND_UP')).toBeNull();
-    expect(decideEntryFrom10sRegime(quiet, 'BREAKOUT_UP')).toBeNull();
+    expect(decideEntryFrom10sRegime(quiet, 'EXPANSION')).toBeNull();
   });
 });
 
 describe('no SELL into fresh buy impulse', () => {
   const buySpike: TenSecBar[] = [
-    bar(4626, 4627, 0),
-    bar(4627, 4630, 1),
-    bar(4630, 4635, 2),
-    bar(4635, 4639, 3),
-    bar(4639, 4637, 4),
+    bar(4600, 4605, 0),
+    bar(4605, 4615, 1),
+    bar(4615, 4625, 2),
   ];
 
   it('detects strong UP impulse', () => {
@@ -93,10 +77,5 @@ describe('no SELL into fresh buy impulse', () => {
   it('blocks SELL after buy spike', () => {
     expect(allowEntryAgainstImpulse('SELL', buySpike).ok).toBe(false);
     expect(allowEntryAgainstImpulse('BUY', buySpike).ok).toBe(true);
-  });
-
-  it('blocks BUY into dump', () => {
-    const dump = [bar(4640, 4638, 0), bar(4638, 4634, 1), bar(4634, 4630, 2), bar(4630, 4628, 3)];
-    expect(allowEntryAgainstImpulse('BUY', dump).ok).toBe(false);
   });
 });

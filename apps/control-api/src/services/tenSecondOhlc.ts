@@ -1,4 +1,5 @@
-/** Native 10-second OHLC — same TF as Capital.com 10s chart. */
+/** OHLC bars — live brain uses 5-MINUTE buckets (fewer trades, larger moves). */
+export const FIVE_MIN_MS = 300_000;
 
 export type TenSecBar = {
   open_time_ms: number;
@@ -26,6 +27,10 @@ export function tenSecBucketMs(tsMs: number): number {
   return Math.floor(tsMs / 10_000) * 10_000;
 }
 
+export function fiveMinBucketMs(tsMs: number): number {
+  return Math.floor(tsMs / FIVE_MIN_MS) * FIVE_MIN_MS;
+}
+
 export function bodyPct(bar: Pick<TenSecBar, 'open' | 'close'>): number {
   const mid = Math.max(Math.abs(bar.open), 1e-9);
   return (bar.close - bar.open) / mid;
@@ -36,21 +41,32 @@ export function rangePct(bar: Pick<TenSecBar, 'open' | 'high' | 'low'>): number 
   return (bar.high - bar.low) / mid;
 }
 
-/** Visible on a Capital 10s chart — not tick-to-tick noise. */
+/** Legacy 10s moving check (tests / helpers). */
 export function isMoving10s(bar: TenSecBar | null | undefined): boolean {
   if (!bar) return false;
   return Math.abs(bodyPct(bar)) >= 0.00015 || rangePct(bar) >= 0.00025;
+}
+
+/** 5m moving — ~0.08% body or ~0.12% range ≈ 3.7–5.5pt Gold. */
+export function isMoving5m(bar: TenSecBar | null | undefined): boolean {
+  if (!bar) return false;
+  return Math.abs(bodyPct(bar)) >= 0.0008 || rangePct(bar) >= 0.0012;
 }
 
 export function emptyTenSecState(): TenSecState {
   return { forming: null, last_closed: null, just_closed: false };
 }
 
-export function updateTenSecondOhlc(state: TenSecState, price: number, tsMs: number): TenSecState {
+function updateBucketOhlc(
+  state: TenSecState,
+  price: number,
+  tsMs: number,
+  bucketMs: number
+): TenSecState {
   if (!Number.isFinite(price) || price <= 0) {
     return { ...state, just_closed: false };
   }
-  const bucket = tenSecBucketMs(tsMs);
+  const bucket = Math.floor(tsMs / bucketMs) * bucketMs;
   let forming = state.forming;
   let lastClosed = state.last_closed;
   let justClosed = false;
@@ -80,6 +96,15 @@ export function updateTenSecondOhlc(state: TenSecState, price: number, tsMs: num
   return { forming, last_closed: lastClosed, just_closed: justClosed };
 }
 
+export function updateTenSecondOhlc(state: TenSecState, price: number, tsMs: number): TenSecState {
+  return updateBucketOhlc(state, price, tsMs, 10_000);
+}
+
+/** Live 5-minute OHLC from mid ticks. */
+export function updateFiveMinuteOhlc(state: TenSecState, price: number, tsMs: number): TenSecState {
+  return updateBucketOhlc(state, price, tsMs, FIVE_MIN_MS);
+}
+
 /** Fold Capital 1-second candles into completed 10-second bars (oldest → newest). */
 export function aggregateSecondsToTen(seconds: CapitalOhlc[]): TenSecBar[] {
   if (seconds.length < 2) return [];
@@ -89,6 +114,29 @@ export function aggregateSecondsToTen(seconds: CapitalOhlc[]): TenSecBar[] {
     const first = chunk[0]!;
     bars.push({
       open_time_ms: i * 1000,
+      open: first.open,
+      high: Math.max(...chunk.map((c) => c.high)),
+      low: Math.min(...chunk.map((c) => c.low)),
+      close: chunk[chunk.length - 1]!.close,
+      ticks: chunk.length,
+    });
+  }
+  return bars;
+}
+
+/**
+ * Fold Capital MINUTE candles into completed 5-minute bars (oldest → newest).
+ * Chunks of 5 by array order (Capital returns chronological).
+ */
+export function aggregateMinutesToFive(minutes: CapitalOhlc[]): TenSecBar[] {
+  if (minutes.length < 5) return [];
+  const bars: TenSecBar[] = [];
+  const complete = Math.floor(minutes.length / 5) * 5;
+  for (let i = 0; i + 5 <= complete; i += 5) {
+    const chunk = minutes.slice(i, i + 5);
+    const first = chunk[0]!;
+    bars.push({
+      open_time_ms: i * 60_000,
       open: first.open,
       high: Math.max(...chunk.map((c) => c.high)),
       low: Math.min(...chunk.map((c) => c.low)),
@@ -117,7 +165,6 @@ export function decideFromClosed10s(
       reason: `10s OHLC rally O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} body=${(bp * 100).toFixed(3)}% range=${(rng * 100).toFixed(3)}% → SELL`,
     };
   }
-  // Wick/range without directional body — still not FLAT, but no fade signal
   return null;
 }
 
@@ -149,6 +196,6 @@ export function publicOhlc10s(state: TenSecState): {
     last_c: last.close,
     forming_c: state.forming?.close ?? null,
     body_pct: bodyPct(last),
-    market: isMoving10s(last) ? 'MOVING' : 'QUIET',
+    market: isMoving5m(last) ? 'MOVING' : 'QUIET',
   };
 }

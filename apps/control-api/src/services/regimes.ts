@@ -113,7 +113,7 @@ type Book = {
   last_update: string;
 };
 
-const MAX_BARS = 90; // 15 min of 10s — same context user sees on Capital chart
+const MAX_BARS = 48; // ~4h of 5m bars
 /** Keep closedBars / impulse windows aligned with regime book. */
 export const MAX_REGIME_BARS = MAX_BARS;
 
@@ -129,10 +129,8 @@ function epicKey(epic: string): string {
 }
 
 /**
- * Classify from closed 10s OHLC — same names as C++ RegimeEngine.
- * Short slope (~16 bars) + structure slope (~60 bars) beat local "inRange" /
- * quiet COMPRESSION / bare EXPANSION. After a dump, bottom chop must stay
- * TREND_DOWN — not RANGE just because the last 2 minutes are flat.
+ * Classify from closed 5m OHLC — same names as C++ RegimeEngine.
+ * Short slope (~6×5m ≈ 30m) + structure (~24×5m ≈ 2h).
  */
 export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOWN'): RegimeName {
   if (!bars.length || bars.length < 2) return 'UNKNOWN';
@@ -150,52 +148,50 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   const lastRange = rangePct(last);
   const persistWindow = velocities.slice(-6);
   const persistence = mean(
-    persistWindow.map((v) => (v > 0.00008 ? 1 : v < -0.00008 ? -1 : 0))
+    persistWindow.map((v) => (v > 0.00025 ? 1 : v < -0.00025 ? -1 : 0))
   );
 
-  const trendingUp = persistence > 0.35 && lastVel > 0.00005;
-  const trendingDown = persistence < -0.35 && lastVel < -0.00005;
-  const compressed = lastRange < avgRange * 0.55 && lastRange < 0.00022;
-  const expanding = lastRange > avgRange * 1.45 && lastRange >= 0.00025;
+  const trendingUp = persistence > 0.35 && lastVel > 0.00015;
+  const trendingDown = persistence < -0.35 && lastVel < -0.00015;
+  const compressed = lastRange < avgRange * 0.55 && lastRange < 0.0008;
+  const expanding = lastRange > avgRange * 1.45 && lastRange >= 0.001;
   const hi = Math.max(...prior.map((b) => b.high));
   const lo = Math.min(...prior.map((b) => b.low));
   const inRange = last.close <= hi && last.close >= lo;
   const breakoutUp = last.close > hi;
   const breakoutDown = last.close < lo;
   const reversal =
-    (previous === 'TREND_UP' && lastVel < -0.0012 && lastRange > avgRange && !breakoutDown) ||
-    (previous === 'TREND_DOWN' && lastVel > 0.0012 && lastRange > avgRange && !breakoutUp);
+    (previous === 'TREND_UP' && lastVel < -0.0025 && lastRange > avgRange && !breakoutDown) ||
+    (previous === 'TREND_DOWN' && lastVel > 0.0025 && lastRange > avgRange && !breakoutUp);
 
-  // Short ~2.5 min; structure ~10 min. ~0.07% ≈ 3.2pt, ~0.12% ≈ 5.5pt on Gold ~4600
+  // Short ~30 min; structure ~2h. ~0.15% ≈ 7pt, ~0.25% ≈ 11.5pt on Gold ~4600
   let slopeUp = false;
   let slopeDown = false;
   let bounceInDown = false;
   let dipInUp = false;
-  if (bars.length >= 12) {
-    const shortBars = bars.slice(-16);
+  if (bars.length >= 4) {
+    const shortBars = bars.slice(-6);
     const shortOpen = shortBars[0]!.open;
     const shortMid = Math.max(Math.abs(shortOpen), 1e-9);
     const shortPct = (last.close - shortOpen) / shortMid;
-    const shortUp = shortPct >= 0.0007;
-    const shortDown = shortPct <= -0.0007;
+    const shortUp = shortPct >= 0.0012;
+    const shortDown = shortPct <= -0.0012;
 
     let structUp = false;
     let structDown = false;
-    if (bars.length >= 30) {
-      const structBars = bars.slice(-60);
+    if (bars.length >= 12) {
+      const structBars = bars.slice(-24);
       const structOpen = structBars[0]!.open;
       const structMid = Math.max(Math.abs(structOpen), 1e-9);
       const structPct = (last.close - structOpen) / structMid;
-      structUp = structPct >= 0.0012;
-      structDown = structPct <= -0.0012;
-      // Local bounce/dip against the bigger move — still the same trend, not RANGE
-      if (structDown && shortPct > 0.00035) bounceInDown = true;
-      if (structUp && shortPct < -0.00035) dipInUp = true;
+      structUp = structPct >= 0.002;
+      structDown = structPct <= -0.002;
+      if (structDown && shortPct > 0.0008) bounceInDown = true;
+      if (structUp && shortPct < -0.0008) dipInUp = true;
     }
 
     slopeDown = shortDown || structDown;
     slopeUp = shortUp || structUp;
-    // Structure wins when short and long disagree (bounce after dump ≠ TREND_UP)
     if (structDown && shortUp) {
       slopeDown = true;
       slopeUp = false;
@@ -207,30 +203,27 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
 
   if (previous === 'BREAKOUT_UP' && inRange && lastVel < 0) return 'FAILED_BREAKOUT_UP';
   if (previous === 'BREAKOUT_DOWN' && inRange && lastVel > 0) return 'FAILED_BREAKOUT_DOWN';
-  // Quiet/wide bars must not erase a clear multi-bar slope (→ live EXPANSION looked "wrong")
   if (compressed && inRange && !slopeUp && !slopeDown) return 'COMPRESSION';
   if (expanding && breakoutUp && (trendingUp || lastVel > 0 || slopeUp)) return 'BREAKOUT_UP';
   if (expanding && breakoutDown && (trendingDown || lastVel < 0 || slopeDown)) return 'BREAKOUT_DOWN';
   if (expanding && !slopeUp && !slopeDown) return 'EXPANSION';
-  if (previous === 'TREND_UP' && lastVel < -0.00008 && persistence > 0.15) {
+  if (previous === 'TREND_UP' && lastVel < -0.00025 && persistence > 0.15) {
     return 'PULLBACK_UPTREND';
   }
-  if (previous === 'TREND_DOWN' && lastVel > 0.00008 && persistence < -0.15) {
+  if (previous === 'TREND_DOWN' && lastVel > 0.00025 && persistence < -0.15) {
     return 'PULLBACK_DOWNTREND';
   }
-  // Bounce/dip against longer structure before short persistence flips the trend
   if (bounceInDown) return 'PULLBACK_DOWNTREND';
   if (dipInUp) return 'PULLBACK_UPTREND';
   if (trendingUp && !slopeDown) return 'TREND_UP';
   if (trendingDown && !slopeUp) return 'TREND_DOWN';
   if (reversal) return 'REVERSAL_CANDIDATE';
-  // Clear directional slope must not become RANGE just because last close is inside prior H/L
   if (slopeDown) {
-    if (lastVel > 0.00008) return 'PULLBACK_DOWNTREND';
+    if (lastVel > 0.00025) return 'PULLBACK_DOWNTREND';
     return 'TREND_DOWN';
   }
   if (slopeUp) {
-    if (lastVel < -0.00008) return 'PULLBACK_UPTREND';
+    if (lastVel < -0.00025) return 'PULLBACK_UPTREND';
     return 'TREND_UP';
   }
   if (inRange) return 'RANGE';
