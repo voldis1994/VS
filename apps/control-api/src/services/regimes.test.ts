@@ -169,6 +169,47 @@ describe('classifyRegime from 10s OHLC', () => {
     expect(r).not.toBe('RANGE');
   });
 
+  it('quiet bar mid-selloff stays TREND_DOWN (not COMPRESSION→live EXPANSION)', () => {
+    const prices: number[] = [];
+    let p = 4646.5;
+    for (let i = 0; i < 15; i++) {
+      p -= 0.45;
+      prices.push(p);
+    }
+    const bars = prices.map((close, i) => {
+      const open = i === 0 ? 4646.5 : prices[i - 1]!;
+      return bar(open, Math.max(open, close) + 0.15, Math.min(open, close) - 0.1, close, i);
+    });
+    const o = bars[bars.length - 1]!.close;
+    bars.push(bar(o, o + 0.02, o - 0.02, o - 0.01, 15));
+    const raw = classifyRegime(bars);
+    expect(toLiveRegime(raw)).toBe('TREND_DOWN');
+  });
+
+  it('same 10s bucket from a peer replaces the bar — book does not grow', () => {
+    resetRegimeBook();
+    const prices: number[] = [];
+    let p = 4646.5;
+    for (let i = 0; i < 12; i++) {
+      p -= 0.45;
+      prices.push(p);
+    }
+    const bars = prices.map((close, i) => {
+      const open = i === 0 ? 4646.5 : prices[i - 1]!;
+      return bar(open, Math.max(open, close) + 0.15, Math.min(open, close) - 0.1, close, i);
+    });
+    observeClosedBars('GOLD', bars, 'A');
+    const last = bars[bars.length - 1]!;
+    observeClosedBars(
+      'GOLD',
+      [{ ...last, open: last.open + 0.05, close: last.close - 0.08, high: last.high + 0.1 }],
+      'B'
+    );
+    const snap = observeClosedBars('GOLD', [], 'A');
+    expect(snap.bar_count).toBe(12);
+    expect(snap.current).toBe('TREND_DOWN');
+  });
+
   it('REVERSAL_CANDIDATE after TREND_UP with a violent opposite bar still inside range', () => {
     const bars = [
       bar(100.0, 101.0, 99.6, 100.7, 0),
