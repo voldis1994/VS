@@ -387,6 +387,49 @@ export async function listCapitalAccounts(
   return { ok: true, accounts, detail: `${accounts.length} accounts` };
 }
 
+/** Account equity/balance for 10min risk window (% of total sum). */
+export async function fetchCapitalAccountEquity(
+  session: CapitalSession
+): Promise<{ ok: boolean; equity: number | null; available: number | null; detail: string }> {
+  const res = await session.get('/api/v1/accounts');
+  if (!res.ok) {
+    return {
+      ok: false,
+      equity: null,
+      available: null,
+      detail: `accounts HTTP ${res.status}: ${res.json?.errorCode || res.json?.message || res.text.slice(0, 120)}`,
+    };
+  }
+  const raw = Array.isArray(res.json?.accounts) ? res.json.accounts : [];
+  const want = String(session.currentAccountId || '').trim();
+  const row =
+    (want && raw.find((a: any) => String(a.accountId || a.account_id || '').trim() === want)) ||
+    raw.find((a: any) => a.preferred) ||
+    raw[0];
+  if (!row) {
+    return { ok: false, equity: null, available: null, detail: 'no Capital accounts in response' };
+  }
+  const bal = row.balance || row.accountBalance || {};
+  const equity = numOrNull(
+    bal.balance ?? bal.equity ?? bal.amount ?? row.balance ?? row.equity
+  );
+  const available = numOrNull(bal.available ?? bal.availableBalance ?? bal.deposit);
+  if (equity == null || equity <= 0) {
+    return {
+      ok: false,
+      equity: null,
+      available,
+      detail: `no equity on account ${row.accountId || '?'}`,
+    };
+  }
+  return {
+    ok: true,
+    equity,
+    available,
+    detail: `equity=${equity}${available != null ? ` available=${available}` : ''}`,
+  };
+}
+
 export async function switchCapitalAccount(
   session: CapitalSession,
   capitalAccountId: string
