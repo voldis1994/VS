@@ -23,7 +23,8 @@ export type PublicFeedRead = {
 
 type CacheEntry = { at: number; read: PublicFeedRead };
 const cache = new Map<string, CacheEntry>();
-const PUBLIC_TTL_MS = 20_000;
+/** 10s scalp — public lead must be fresher than Capital lag, not 20s stale. */
+const PUBLIC_TTL_MS = 2_500;
 
 export const PUBLIC_SENDERS: Array<{
   sender_id: string;

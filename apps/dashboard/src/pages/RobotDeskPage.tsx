@@ -36,6 +36,7 @@ type FeedLeg = {
   mid: number | null;
   latency_ms: number;
   detail?: string;
+  role?: 'LEAD' | 'CONFIRM' | 'EXECUTE' | 'REJECT';
 };
 
 type DecisionChain = {
@@ -98,6 +99,10 @@ type RobotSession = {
   feed_sender_count?: number;
   feed_agreement?: string | null;
   feed_legs?: FeedLeg[];
+  zone_info?: string | null;
+  zone_high?: number | null;
+  zone_low?: number | null;
+  zone_kind?: string | null;
   decision_chain?: DecisionChain;
   ohlc_10s?: {
     last_o: number | null;
@@ -706,6 +711,12 @@ export function RobotDeskPage() {
                   <div>MODE · {focused.running ? focused.mode : 'STOPPED'}</div>
                   <div>REGIME · {(focused.regime || 'UNKNOWN').toUpperCase()}</div>
                   <div>
+                    ZONE · {focused.zone_info || 'forming'}
+                    {focused.zone_low != null && focused.zone_high != null
+                      ? ` · ${fmt(focused.zone_low, 2)}–${fmt(focused.zone_high, 2)}`
+                      : ''}
+                  </div>
+                  <div>
                     FEEDS · {focused.feed_contributing ?? 0}/{focused.feed_sender_count ?? 0}{' '}
                     {focused.feed_agreement || ''} · {focused.feed_source || '—'}
                   </div>
@@ -713,12 +724,21 @@ export function RobotDeskPage() {
                     <div className="robot-focus-legs">
                       {focusLegs.map((leg) => (
                         <div key={leg.sender_id} className={leg.ok ? 'ok' : 'bad'}>
+                          {leg.role ? `[${leg.role}] ` : ''}
                           {leg.name} · {leg.ok ? fmt(leg.mid, 2) : 'FAIL'} · {leg.latency_ms}ms
                           {leg.detail ? ` · ${leg.detail}` : ''}
                         </div>
                       ))}
                     </div>
                   )}
+                  <div className="robot-focus-legs" style={{ marginTop: 10 }}>
+                    <div style={{ opacity: 0.7, marginBottom: 4 }}>LIVE TICKS (what is really happening)</div>
+                    {(focused.ticks || []).slice(0, 8).map((t, i) => (
+                      <div key={`${t.at}-${i}`}>
+                        {t.phase} · {t.detail}
+                      </div>
+                    ))}
+                  </div>
                   <div>ENTRY · {fmt(focused.entry_price)}</div>
                   <div>SAFETY SL · {fmt(focused.safety_sl)}</div>
                   <div>DEAL · {focused.deal_id || '—'}</div>

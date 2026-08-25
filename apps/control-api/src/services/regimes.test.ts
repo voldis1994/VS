@@ -289,17 +289,16 @@ describe('classifyRegime from 10s OHLC', () => {
     expect(classifyRegime(bars, 'TREND_UP')).toBe('TRANSITION');
   });
 
-  it('toLiveRegime never returns UNKNOWN / COMPRESSION / TRANSITION', () => {
-    expect(toLiveRegime('UNKNOWN')).toBe('EXPANSION');
-    expect(toLiveRegime('COMPRESSION')).toBe('EXPANSION');
-    expect(toLiveRegime('TRANSITION')).toBe('EXPANSION');
+  it('toLiveRegime keeps stall regimes (no fake EXPANSION)', () => {
+    expect(toLiveRegime('UNKNOWN')).toBe('UNKNOWN');
+    expect(toLiveRegime('COMPRESSION')).toBe('COMPRESSION');
+    expect(toLiveRegime('TRANSITION')).toBe('TRANSITION');
     expect(toLiveRegime('TREND_UP')).toBe('TREND_UP');
   });
 
-  it('observeClosedBars never surfaces UNKNOWN', () => {
+  it('observeClosedBars can surface UNKNOWN with too few bars', () => {
     const snap = observeClosedBars('X', [bar(100, 100.1, 99.9, 100)]);
-    expect(snap.current).not.toBe('UNKNOWN');
-    expect(snap.current).toBe('EXPANSION');
+    expect(snap.current).toBe('UNKNOWN');
   });
 });
 

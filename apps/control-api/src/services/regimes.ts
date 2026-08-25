@@ -67,13 +67,10 @@ export function normalizeRegime(value: string | null | undefined): RegimeName {
 }
 
 /**
- * Live path never surfaces UNKNOWN — it froze robots in WAIT forever.
- * Map stall regimes to EXPANSION so entry can follow the 10s candle.
+ * Keep real classifier output — do NOT map COMPRESSION/UNKNOWN → EXPANSION.
+ * That mapping caused random candle-follow BUY/SELL. Stall regimes → WAIT in INFO.
  */
 export function toLiveRegime(regime: RegimeName): RegimeName {
-  if (regime === 'UNKNOWN' || regime === 'TRANSITION' || regime === 'COMPRESSION') {
-    return 'EXPANSION';
-  }
   return regime;
 }
 
@@ -113,7 +110,7 @@ type Book = {
   last_update: string;
 };
 
-const MAX_BARS = 48; // ~4h of 5m bars
+const MAX_BARS = 90; // ~15 min of 10s bars
 /** Keep closedBars / impulse windows aligned with regime book. */
 export const MAX_REGIME_BARS = MAX_BARS;
 
@@ -129,8 +126,8 @@ function epicKey(epic: string): string {
 }
 
 /**
- * Classify from closed 5m OHLC — same names as C++ RegimeEngine.
- * Short slope (~6×5m ≈ 30m) + structure (~24×5m ≈ 2h).
+ * Classify from closed 10s OHLC — same names as C++ RegimeEngine.
+ * Short slope (~9×10s ≈ 90s) + structure (~36×10s ≈ 6m).
  */
 export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOWN'): RegimeName {
   if (!bars.length || bars.length < 2) return 'UNKNOWN';
@@ -307,7 +304,6 @@ function ensureBook(epic: string, displayName?: string): Book {
 }
 
 function applyClassify(epic: string, b: Book): RegimeSnapshot {
-  // Never stall live on UNKNOWN / COMPRESSION / TRANSITION
   const next = toLiveRegime(classifyRegime(b.bars, b.current));
   const now = new Date().toISOString();
   if (next !== b.current) {

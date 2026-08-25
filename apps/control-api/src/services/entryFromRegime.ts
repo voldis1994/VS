@@ -1,25 +1,31 @@
 /**
- * One entry rule on 5m:
- *   market direction (short slope, else regime) → same side
- *   live bar = soft timing only
- *
- * No filter pile: no swing-high block stack, no late-chase, no EXPANSION guess.
- * SKIP only: quiet chop regimes, no clear direction, flat live.
+ * 10s regime + zone entry.
+ * Thesis = market direction / regime; structure = zone; bar = timing.
+ * No EXPANSION candle-color follow. No stupid trades without zone.
  */
 import type { RegimeName } from './regimes.js';
 import { normalizeRegime } from './regimes.js';
-import { bodyPct, isMoving5m, rangePct, type TenSecBar } from './tenSecondOhlc.js';
+import { bodyPct, isMoving10s, rangePct, type TenSecBar } from './tenSecondOhlc.js';
+import {
+  buildScalpZone,
+  evaluateZoneEntry,
+  formatZoneInfo,
+  type ScalpZone,
+  type ZoneSetup,
+} from './zones.js';
 
 export type RegimeEntry = {
   direction: 'BUY' | 'SELL';
   setup: 'CONTINUATION' | 'PULLBACK' | 'BREAKOUT' | 'FADE' | 'REVERSAL';
   reason: string;
+  zone?: ScalpZone | null;
+  zone_setup?: ZoneSetup | null;
 };
 
-/** Soft live timing — ~2pt or soft range. */
+/** Soft live on 10s — moving bar, not flat doji. */
 function softLive(bar: TenSecBar): boolean {
   const pts = Math.abs(bar.close - bar.open);
-  return pts >= 2 || rangePct(bar) >= 0.0006 || isMoving5m(bar);
+  return pts >= 0.6 || rangePct(bar) >= 0.0002 || isMoving10s(bar);
 }
 
 function isGreen(bar: TenSecBar): boolean {
@@ -31,13 +37,19 @@ function isRed(bar: TenSecBar): boolean {
 }
 
 function describe(bar: TenSecBar): string {
-  return `5m O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} body=${(bodyPct(bar) * 100).toFixed(3)}% rng=${(rangePct(bar) * 100).toFixed(3)}%`;
+  return `10s O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} body=${(bodyPct(bar) * 100).toFixed(3)}% rng=${(rangePct(bar) * 100).toFixed(3)}%`;
 }
 
-/** Net over lookback bars. Clear dir at ~0.18% ≈ 8pt Gold. */
+/** Late chase on 10s — ~0.28% ≈ 12pt Gold single bar. */
+const LATE_SIGNAL_BODY_PCT = 0.0028;
+
+export function signalBarTooLate(bar: TenSecBar): boolean {
+  return Math.abs(bodyPct(bar)) >= LATE_SIGNAL_BODY_PCT;
+}
+
 export function recentImpulse(
   bars: TenSecBar[] | null | undefined,
-  lookback = 3
+  lookback = 6
 ): { dir: 'UP' | 'DOWN' | null; netPct: number; netPts: number } {
   if (!bars?.length) return { dir: null, netPct: 0, netPts: 0 };
   const window = bars.slice(-Math.max(lookback, 2));
@@ -47,8 +59,9 @@ export function recentImpulse(
   const netPts = last.close - first.open;
   const mid = Math.max(Math.abs(first.open), 1e-9);
   const netPct = netPts / mid;
-  if (netPct >= 0.0018) return { dir: 'UP', netPct, netPts };
-  if (netPct <= -0.0018) return { dir: 'DOWN', netPct, netPts };
+  // ~0.12% ≈ 5.5pt over ~1 min of 10s bars
+  if (netPct >= 0.0012) return { dir: 'UP', netPct, netPts };
+  if (netPct <= -0.0012) return { dir: 'DOWN', netPct, netPts };
   return { dir: null, netPct, netPts };
 }
 
@@ -65,15 +78,14 @@ function withLive(
   return all;
 }
 
-/** Short ~30m net including live bar. */
+/** Short ~60–90s net including live bar. */
 export function shortNetMove(
   bars: TenSecBar[] | null | undefined,
   liveBar?: TenSecBar | null
 ): { dir: 'UP' | 'DOWN' | null; netPct: number; netPts: number } {
-  return recentImpulse(withLive(bars, liveBar), 6);
+  return recentImpulse(withLive(bars, liveBar), 9);
 }
 
-/** Kept for older tests / callers — thin wrappers around short net. */
 export function selloffFromSwingHigh(
   bars: TenSecBar[] | null | undefined,
   liveBar?: TenSecBar | null
@@ -92,52 +104,58 @@ export function rallyFromSwingLow(
   return { rallyPts: s.netPts, rallyPct: s.netPct };
 }
 
-export function signalBarTooLate(_bar: TenSecBar): boolean {
-  // Removed — fat-candle / late-bar gate was part of the filter pile.
-  return false;
-}
-
-/**
- * ONE alignment rule: do not trade against a clear short-window direction.
- * No swing-high stack, no second impulse check.
- */
 export function allowEntryAgainstImpulse(
   direction: 'BUY' | 'SELL',
   bars: TenSecBar[] | null | undefined,
   liveBar?: TenSecBar | null
 ): { ok: boolean; reason: string } {
   const short = shortNetMove(bars, liveBar);
-  if (!short.dir) return { ok: true, reason: 'no clear short direction' };
-  if (direction === 'BUY' && short.dir === 'DOWN') {
+  if (direction === 'BUY' && short.netPct <= -0.0009) {
     return {
       ok: false,
-      reason: `vs market · short DOWN ${short.netPts.toFixed(1)}pt — no BUY`,
+      reason: `BLOCK BUY · short dump ${short.netPts.toFixed(1)}pt (${(short.netPct * 100).toFixed(2)}%)`,
     };
   }
-  if (direction === 'SELL' && short.dir === 'UP') {
+  if (direction === 'SELL' && short.netPct >= 0.0009) {
     return {
       ok: false,
-      reason: `vs market · short UP ${short.netPts.toFixed(1)}pt — no SELL`,
+      reason: `BLOCK SELL · short rally ${short.netPts.toFixed(1)}pt (${(short.netPct * 100).toFixed(2)}%)`,
     };
   }
-  return { ok: true, reason: `with market ${short.dir}` };
+  const imp = recentImpulse(bars);
+  if (!imp.dir) return { ok: true, reason: 'no strong recent impulse' };
+  if (direction === 'SELL' && imp.dir === 'UP') {
+    return {
+      ok: false,
+      reason: `BLOCK SELL · fresh UP ${imp.netPts.toFixed(1)}pt — no fade`,
+    };
+  }
+  if (direction === 'BUY' && imp.dir === 'DOWN') {
+    return {
+      ok: false,
+      reason: `BLOCK BUY · fresh DOWN ${imp.netPts.toFixed(1)}pt — no fade`,
+    };
+  }
+  return { ok: true, reason: `impulse ${imp.dir} aligns` };
 }
 
-/** Late-chase removed from live path. */
 export function lateChaseAppliesToSetup(
-  _setup: RegimeEntry['setup'],
-  _regime?: string | null
+  setup: RegimeEntry['setup'],
+  regime?: string | null
 ): boolean {
-  return false;
+  const r = normalizeRegime(regime);
+  if (r === 'TREND_UP' || r === 'TREND_DOWN') return false;
+  if (r === 'PULLBACK_UPTREND' || r === 'PULLBACK_DOWNTREND') return false;
+  return setup === 'BREAKOUT' || setup === 'CONTINUATION';
 }
 
 function regimeBias(r: RegimeName): 'BUY' | 'SELL' | null {
   if (r === 'TREND_UP' || r === 'PULLBACK_UPTREND' || r === 'BREAKOUT_UP') return 'BUY';
   if (r === 'TREND_DOWN' || r === 'PULLBACK_DOWNTREND' || r === 'BREAKOUT_DOWN') return 'SELL';
-  return null; // EXPANSION / other → use short slope only
+  // EXPANSION alone is NOT a direction — need slope
+  return null;
 }
 
-/** Direction: short slope wins; else regime bias. */
 export function marketDirection(
   regime?: string | null,
   closedBars?: TenSecBar[] | null,
@@ -149,18 +167,89 @@ export function marketDirection(
   return regimeBias(normalizeRegime(regime));
 }
 
+function mapZoneSetup(z: ZoneSetup | null | undefined, r: RegimeName): RegimeEntry['setup'] {
+  if (z === 'BREAKOUT') return 'BREAKOUT';
+  if (z === 'BOUNCE' || z === 'REJECT' || z === 'RETEST') return 'PULLBACK';
+  if (r.includes('BREAKOUT')) return 'BREAKOUT';
+  return 'CONTINUATION';
+}
+
 export function explainNoEntry(
   bar: TenSecBar,
   regime?: string | null,
   closedBars?: TenSecBar[] | null
 ): string {
   const r = normalizeRegime(regime);
-  const short = shortNetMove(closedBars, bar);
+  const zone = buildScalpZone(closedBars);
   const dir = marketDirection(regime, closedBars, bar);
-  const bits = `body=${(bodyPct(bar) * 100).toFixed(2)}% short=${short.dir ?? 'flat'}/${short.netPts.toFixed(1)}pt`;
-  if (!softLive(bar)) return `wait soft live · ${bits}`;
-  if (!dir) return `no market direction · regime ${r} · ${bits}`;
-  return `no timing for ${dir} · ${bits}`;
+  const bits = [
+    `body=${(bodyPct(bar) * 100).toFixed(2)}%`,
+    formatZoneInfo(zone),
+  ];
+  if (
+    r === 'UNKNOWN' ||
+    r === 'TRANSITION' ||
+    r === 'COMPRESSION' ||
+    r === 'RANGE' ||
+    r === 'REVERSAL_CANDIDATE' ||
+    r === 'FAILED_BREAKOUT_UP' ||
+    r === 'FAILED_BREAKOUT_DOWN'
+  ) {
+    return `regime ${r} · no entry · ${bits.join(' · ')}`;
+  }
+  if (!zone) return `waiting zone · ${bits.join(' · ')}`;
+  if (!softLive(bar)) return `wait soft live 10s · ${bits.join(' · ')}`;
+  if (signalBarTooLate(bar)) return `late bar · ${bits.join(' · ')}`;
+  if (!dir) return `no market direction · ${r} · ${bits.join(' · ')}`;
+  const zv = evaluateZoneEntry(dir, bar, zone, closedBars);
+  if (!zv.ok) return `${zv.reason}`;
+  return `filters pending · ${dir} · ${bits.join(' · ')}`;
+}
+
+/**
+ * Continuation check for BO — same side still valid (zone optional soft).
+ * Used before PeakProtect/TP close: if true → HOLD.
+ */
+export function continuationSameSide(
+  openSide: 'BUY' | 'SELL',
+  bar: TenSecBar | null | undefined,
+  regime?: string | null,
+  closedBars?: TenSecBar[] | null
+): { ok: boolean; reason: string } {
+  if (!bar) {
+    const dir = marketDirection(regime, closedBars, null);
+    if (dir === openSide) {
+      return { ok: true, reason: `continuation · market still ${dir}` };
+    }
+    return { ok: false, reason: 'no continuation · direction unclear/flipped' };
+  }
+  const dir = marketDirection(regime, closedBars, bar);
+  if (dir !== openSide) {
+    return { ok: false, reason: `no continuation · market ${dir ?? 'flat'} vs open ${openSide}` };
+  }
+  const vs = allowEntryAgainstImpulse(openSide, closedBars, bar);
+  if (!vs.ok) return { ok: false, reason: `no continuation · ${vs.reason}` };
+  // Zone still supportive or breakout continuation
+  const zone = buildScalpZone(closedBars);
+  if (zone) {
+    const zv = evaluateZoneEntry(openSide, bar, zone, closedBars);
+    if (zv.ok) return { ok: true, reason: `continuation · ${zv.reason}` };
+  }
+  // Trend regimes: direction alone is enough to hold
+  const r = normalizeRegime(regime);
+  if (
+    (openSide === 'BUY' && (r === 'TREND_UP' || r === 'PULLBACK_UPTREND' || r === 'BREAKOUT_UP')) ||
+    (openSide === 'SELL' && (r === 'TREND_DOWN' || r === 'PULLBACK_DOWNTREND' || r === 'BREAKOUT_DOWN'))
+  ) {
+    return { ok: true, reason: `continuation · ${r} still with ${openSide}` };
+  }
+  if (openSide === 'BUY' && isGreen(bar)) {
+    return { ok: true, reason: 'continuation · live green with market UP' };
+  }
+  if (openSide === 'SELL' && isRed(bar)) {
+    return { ok: true, reason: 'continuation · live red with market DOWN' };
+  }
+  return { ok: false, reason: 'no clear continuation signal' };
 }
 
 export function decideEntryFrom10sRegime(
@@ -183,43 +272,35 @@ export function decideEntryFrom10sRegime(
     return null;
   }
 
-  if (!softLive(bar)) return null;
-
+  // EXPANSION alone without clear slope → no entry (was random color follow)
   const dir = marketDirection(regime, closedBars, bar);
   if (!dir) return null;
+  if (r === 'EXPANSION' && !shortNetMove(closedBars, bar).dir) return null;
 
-  // Soft timing with the market — continuation preferred; mild pullback OK
-  if (dir === 'BUY') {
-    if (isGreen(bar)) {
-      return {
-        direction: 'BUY',
-        setup: r.includes('BREAKOUT') ? 'BREAKOUT' : 'CONTINUATION',
-        reason: `${r} with market BUY · ${candle}`,
-      };
-    }
-    if (isRed(bar)) {
-      return {
-        direction: 'BUY',
-        setup: 'PULLBACK',
-        reason: `${r} dip-buy with UP market · ${candle}`,
-      };
-    }
+  if (!softLive(bar)) return null;
+  if (signalBarTooLate(bar)) return null;
+
+  const zone = buildScalpZone(closedBars);
+  if (!zone) return null;
+
+  const zv = evaluateZoneEntry(dir, bar, zone, closedBars);
+  if (!zv.ok || !zv.setup) return null;
+
+  // Mild timing agreement — don't require color for breakout/retest already validated
+  if (zv.setup === 'BOUNCE' && dir === 'BUY' && isRed(bar) && bodyPct(bar) < -0.001) {
+    return null; // bounce failed
+  }
+  if (zv.setup === 'REJECT' && dir === 'SELL' && isGreen(bar) && bodyPct(bar) > 0.001) {
     return null;
   }
 
-  if (isRed(bar)) {
-    return {
-      direction: 'SELL',
-      setup: r.includes('BREAKOUT') ? 'BREAKOUT' : 'CONTINUATION',
-      reason: `${r} with market SELL · ${candle}`,
-    };
-  }
-  if (isGreen(bar)) {
-    return {
-      direction: 'SELL',
-      setup: 'PULLBACK',
-      reason: `${r} rally-sell with DOWN market · ${candle}`,
-    };
-  }
-  return null;
+  return {
+    direction: dir,
+    setup: mapZoneSetup(zv.setup, r),
+    reason: `${r} · ${zv.reason} · ${candle}`,
+    zone,
+    zone_setup: zv.setup,
+  };
 }
+
+export { buildScalpZone, formatZoneInfo, type ScalpZone };

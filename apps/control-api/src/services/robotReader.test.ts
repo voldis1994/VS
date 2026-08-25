@@ -70,7 +70,19 @@ describe('multi-feed owns OHLC / entry gate', () => {
     ).toBe(false);
   });
 
-  it('never freezes entry due to public-only sender_count', () => {
+  it('hard-blocks when Capital peers are DIVERGENT', () => {
+    expect(
+      allowEntryFromFeeds({
+        contributing: 2,
+        sender_count: 2,
+        agreement: 'DIVERGENT',
+        capital_contributing: 2,
+        capital_sender_count: 2,
+      }).ok
+    ).toBe(false);
+  });
+
+  it('allows Capital-local when public-only snapshot is weak', () => {
     expect(
       allowEntryFromFeeds({
         contributing: 0,

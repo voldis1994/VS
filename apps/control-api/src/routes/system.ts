@@ -59,7 +59,7 @@ export async function registerSystemRoutes(
       execution: 'HEALTHY',
       database: dbOk ? 'HEALTHY' : 'UNHEALTHY',
       postgres: dbOk ? 'ok' : 'down',
-      redis: 'ok',
+      redis: 'unused',
       control_api: 'HEALTHY',
       feeds: { active: feedActive, unhealthy: feedUnhealthy },
       clients: { active: clientsActive },

@@ -6,9 +6,7 @@ import {
   bestOutcomeTarget,
   decideBestOutcomeExit,
   describeBestOutcomeState,
-  favorableMove,
   hardInvalidationDistance,
-  thesisFailureReason,
   type ExitSnapshot,
 } from './exitManage.js';
 
@@ -23,136 +21,73 @@ function snap(partial: Partial<ExitSnapshot> & { open_side: 'BUY' | 'SELL'; entr
   };
 }
 
-describe('per-client exit isolation helpers', () => {
-  it('favorableMove is side-correct', () => {
-    expect(favorableMove('BUY', 2000, 2005)).toBe(5);
-    expect(favorableMove('SELL', 2000, 2005)).toBe(-5);
+describe('decideBestOutcomeExit 10s + continuation', () => {
+  it('HardInv ~0.15% tighter than Safety 0.20%', () => {
+    const hard = hardInvalidationDistance(4600);
+    expect(hard).toBeGreaterThanOrEqual(0.15);
+    expect(hard).toBeLessThan(4600 * 0.002);
   });
 
-  it('thesis failure is opposite-regime only', () => {
-    expect(thesisFailureReason('BUY', 'TREND_DOWN')).toMatch(/ThesisFailure/);
-    expect(thesisFailureReason('SELL', 'TREND_UP')).toMatch(/ThesisFailure/);
-    expect(thesisFailureReason('BUY', 'TREND_UP')).toBeNull();
-  });
-});
-
-describe('decideBestOutcomeExit 5m hold-longer', () => {
-  it('holds micro green below minGreen (~5pt)', () => {
+  it('holds micro green below minGreen', () => {
     const d = decideBestOutcomeExit(
       snap({ open_side: 'BUY', entry_price: 4640, mfe: 2, peak_retention: 0.5 }),
       4641
     );
     expect(d.exit).toBe(false);
-    expect(bestOutcomeMinGreen(4640)).toBeGreaterThanOrEqual(5);
+    expect(bestOutcomeMinGreen(4640)).toBeGreaterThanOrEqual(3);
   });
 
-  it('does not PeakProtect on small MFE (below arm floor)', () => {
-    // Old bug: ~6pt peak + 35% pullback → early bank while move continues
-    const floor = bestOutcomeMfeFloor(4600);
-    expect(floor).toBeGreaterThanOrEqual(12);
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 4600,
-        mfe: 6,
-        peak_retention: 0.64,
-      }),
-      4603.8
-    );
-    expect(d.exit).toBe(false);
-  });
-
-  it('cuts when peak was real and giveback hits flat/red', () => {
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 4600,
-        mfe: 15,
-        peak_retention: 0.01,
-      }),
-      4599.9
-    );
-    expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/BestOutcome cut|gave back/);
-  });
-
-  it('PeakProtect only after deep giveback (~50%) while green', () => {
-    expect(BEST_OUTCOME_LOCK_RETENTION).toBe(0.5);
-    const hold = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 4600,
-        mfe: 20,
-        peak_retention: 0.64,
-      }),
-      4612.8
-    );
-    expect(hold.exit).toBe(false);
-
+  it('PeakProtect without continuation after deep giveback', () => {
+    expect(BEST_OUTCOME_LOCK_RETENTION).toBe(0.4);
     const cut = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: 4600,
         mfe: 20,
-        peak_retention: 0.45,
+        peak_retention: 0.35,
       }),
-      4609
+      4608
     );
     expect(cut.exit).toBe(true);
     expect(cut.reason).toMatch(/PeakProtection/);
   });
 
-  it('hard invalidation at ~0.22%', () => {
-    expect(hardInvalidationDistance(4600)).toBeCloseTo(10.12, 1);
-    const d = decideBestOutcomeExit(snap({ open_side: 'BUY', entry_price: 4600, regime: 'RANGE' }), 4589);
+  it('continuation hold skips PeakProtect soft exit', () => {
+    const hold = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4600,
+        mfe: 20,
+        peak_retention: 0.35,
+      }),
+      4608,
+      { continuationSameSide: true }
+    );
+    expect(hold.exit).toBe(false);
+  });
+
+  it('continuation does not skip HardInvalidation', () => {
+    const d = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: 4600, mfe: 10, peak_retention: 0.9 }),
+      4580,
+      { continuationSameSide: true }
+    );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/HardInvalidation/);
   });
 
-  it('arms peak after ~13pt MFE on Gold', () => {
-    const floor = bestOutcomeMfeFloor(4600);
-    expect(floor).toBeGreaterThanOrEqual(12);
-    expect(floor).toBeLessThanOrEqual(14);
-  });
-
-  it('target at ~1.20%', () => {
-    expect(bestOutcomeTarget(4600)).toBeCloseTo(55.2, 0);
-    const early = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: 4600, regime: 'TREND_UP', mfe: 30 }),
-      4630
-    );
-    expect(early.exit).toBe(false);
-
-    const hit = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: 4600, regime: 'TREND_UP', mfe: 56 }),
-      4656
-    );
-    expect(hit.exit).toBe(true);
-    expect(hit.reason).toMatch(/Target/);
-  });
-
-  it('cuts BUY when short window is dumping even if regime still UP', () => {
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 4647,
-        regime: 'TREND_UP',
-        short_net_pct: -0.004,
-        mfe: 1,
-      }),
-      4640
-    );
-    expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/ThesisFailure · short dump/);
-  });
-
-  it('describeBestOutcomeState shows BO5m lock@50%', () => {
+  it('describe shows BO10s + continuation', () => {
     const s = describeBestOutcomeState(
       snap({ open_side: 'BUY', entry_price: 4600, mfe: 15, peak_retention: 0.9 }),
-      4612
+      4610,
+      { continuationSameSide: true, continuationReason: 'continuation · TREND_UP' }
     );
-    expect(s.exit).toBe(false);
-    expect(s.hold).toMatch(/BO5m/);
-    expect(s.hold).toMatch(/lock@50%/);
+    expect(s.hold).toMatch(/BO10s/);
+    expect(s.hold).toMatch(/HOLD/);
+  });
+
+  it('TP scaled for 10s (~0.45%)', () => {
+    expect(bestOutcomeTarget(4600)).toBeLessThan(4600 * 0.01);
+    expect(bestOutcomeMfeFloor(4600)).toBeLessThan(bestOutcomeTarget(4600));
   });
 });

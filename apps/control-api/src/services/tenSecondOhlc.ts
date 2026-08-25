@@ -1,4 +1,6 @@
-/** OHLC bars — live brain uses 5-MINUTE buckets (fewer trades, larger moves). */
+/** OHLC bars — live brain uses 10-SECOND buckets (SO scalp). */
+export const TEN_SEC_MS = 10_000;
+/** Legacy helper kept for tests / aggregateMinutesToFive. */
 export const FIVE_MIN_MS = 300_000;
 
 export type TenSecBar = {
@@ -196,6 +198,6 @@ export function publicOhlc10s(state: TenSecState): {
     last_c: last.close,
     forming_c: state.forming?.close ?? null,
     body_pct: bodyPct(last),
-    market: isMoving5m(last) ? 'MOVING' : 'QUIET',
+    market: isMoving10s(last) ? 'MOVING' : 'QUIET',
   };
 }
