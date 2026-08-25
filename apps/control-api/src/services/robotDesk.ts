@@ -142,6 +142,10 @@ export type RobotSession = {
   zone_high?: number | null;
   zone_low?: number | null;
   zone_kind?: string | null;
+  /** Capital.com marketStatus snapshot — TRADEABLE vs CLOSED/OFFLINE */
+  market_status?: string | null;
+  market_tradeable?: boolean;
+  market_info?: string | null;
   decision_chain?: {
     feeds: string;
     ohlc: string;
@@ -156,6 +160,8 @@ type Internal = RobotSession & {
   connection_id: number;
   closed_at_ms: number;
   peak_favorable: number;
+  /** Last Capital marketStatus — detect open→closed transitions */
+  last_market_tradeable: boolean;
   /** Last time we logged "market closed" (throttle ticks) */
   last_market_closed_tick_ms: number;
   cadence_ms: number;
@@ -184,6 +190,19 @@ function marketAllowsTrading(status: string | null | undefined): boolean {
   // Missing status → do not park (Capital sometimes omits it)
   if (!s) return true;
   return s === 'TRADEABLE' || s === 'OPEN';
+}
+
+/** Human INFO line — must scream when Capital market is not TRADEABLE (#136 / Aug13). */
+export function formatMarketInfo(
+  status: string | null | undefined,
+  tradeable: boolean,
+  pollSec = CLOSED_MARKET_CADENCE_MS / 1000
+): string {
+  const st = String(status || 'CLOSED').trim().toUpperCase() || 'CLOSED';
+  if (tradeable) {
+    return `MARKET OPEN · Capital=${st} · entry/manage allowed`;
+  }
+  return `MARKET CLOSED · Capital=${st} · robot PARKED (no entry · no manage · no position spam) · poll ${pollSec}s until TRADEABLE`;
 }
 
 function setRobotCadence(s: Internal, ms: number) {
@@ -307,11 +326,28 @@ function publicSession(s: Internal): RobotSession {
     zone_high: zoneSnap?.high ?? null,
     zone_low: zoneSnap?.low ?? null,
     zone_kind: zoneSnap?.kind ?? null,
+    market_status: s.market_status ?? null,
+    market_tradeable: s.market_tradeable ?? true,
+    market_info: formatMarketInfo(s.market_status, s.market_tradeable ?? true, s.cadence_ms / 1000),
     decision_chain: buildDecisionChain(s),
   };
 }
 
 function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_chain']> {
+  const tradeable = s.market_tradeable ?? true;
+  const marketLine = formatMarketInfo(s.market_status, tradeable, s.cadence_ms / 1000);
+  if (!tradeable) {
+    const mf = s.multiFeed;
+    const capLive = mf?.capital_contributing ?? s.feed_contributing ?? 0;
+    const capCfg = mf?.capital_sender_count ?? s.feed_sender_count ?? 0;
+    return {
+      feeds: `FEEDS cap ${capLive}/${capCfg} (warm while parked)`,
+      ohlc: marketLine,
+      regime: marketLine,
+      setup: null,
+      action: `PARKED · ${String(s.market_status || 'CLOSED').toUpperCase()}`,
+    };
+  }
   const ohlc = publicOhlc10s(s.ohlcState);
   const ohlcLine =
     ohlc.last_c != null
@@ -1285,6 +1321,9 @@ async function robotCycleBody(s: Internal) {
     }
     if (quote.mid != null) s.last_mid = quote.mid;
 
+    s.market_status = quote.market_status;
+    s.market_tradeable = marketAllowsTrading(quote.market_status);
+
     // Always refresh feeds (even when parked) so FEEDS board is not stuck IDLE 0/0
     if (Date.now() - s.last_multi_feed_ms >= 4_000) {
       s.last_multi_feed_ms = Date.now();
@@ -1316,23 +1355,33 @@ async function robotCycleBody(s: Internal) {
     }
 
     // Market closed / offline → park: no positions sync, no MANAGE, no entry (anti-spam Capital)
-    if (!marketAllowsTrading(quote.market_status)) {
+    if (!s.market_tradeable) {
       setRobotCadence(s, CLOSED_MARKET_CADENCE_MS);
       const now = Date.now();
-      if (now - s.last_market_closed_tick_ms >= CLOSED_MARKET_TICK_EVERY_MS) {
+      const justClosed = s.last_market_tradeable && !s.market_tradeable;
+      s.last_market_tradeable = false;
+      const marketLine = formatMarketInfo(
+        s.market_status,
+        false,
+        CLOSED_MARKET_CADENCE_MS / 1000
+      );
+      if (
+        justClosed ||
+        now - s.last_market_closed_tick_ms >= CLOSED_MARKET_TICK_EVERY_MS
+      ) {
         s.last_market_closed_tick_ms = now;
         pushTick(s, {
-          phase: 'WAIT',
+          phase: justClosed ? 'INFO' : 'WAIT',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `MARKET ${quote.market_status || 'CLOSED'} — park · feeds ${s.feed_contributing}/${s.feed_sender_count} ${s.feed_source} · poll ${
-            CLOSED_MARKET_CADENCE_MS / 1000
-          }s until TRADEABLE`,
+          detail: `${marketLine} · feeds cap ${s.feed_contributing ?? 0}/${s.feed_sender_count ?? 0} ${s.feed_source || 'LOCAL'}`,
         });
       }
       return;
     }
+
+    s.last_market_tradeable = true;
 
     // Restore normal cadence after a successful tradeable read (may have been slowed by 429 / closed)
     setRobotCadence(s, s.open_side ? MANAGE_CADENCE_MS : ACTIVE_CADENCE_MS);
@@ -1923,6 +1972,9 @@ export async function startRobotSession(input: {
     closed_at_ms: 0,
     peak_favorable: 0,
     last_market_closed_tick_ms: 0,
+    last_market_tradeable: true,
+    market_status: null,
+    market_tradeable: true,
     cadence_ms: 0,
     ohlcState: emptyTenSecState(),
     last_second_fetch_ms: 0,

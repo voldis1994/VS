@@ -101,6 +101,9 @@ type RobotSession = {
   feed_legs?: FeedLeg[];
   zone_info?: string | null;
   regime_info?: string | null;
+  market_status?: string | null;
+  market_tradeable?: boolean;
+  market_info?: string | null;
   zone_high?: number | null;
   zone_low?: number | null;
   zone_kind?: string | null;
@@ -128,8 +131,12 @@ function fmt(n: number | null | undefined, d = 5) {
   return n.toLocaleString(undefined, { maximumFractionDigits: d });
 }
 
-function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'flat' | 'entry' } {
+function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'flat' | 'entry' | 'closed' } {
   if (!s.running && !s.open_side) return { label: 'STOPPED', kind: 'flat' };
+  if (s.running && s.market_tradeable === false) {
+    const st = (s.market_status || 'CLOSED').toUpperCase();
+    return { label: `MARKET CLOSED · ${st}`, kind: 'closed' };
+  }
   if (s.open_side === 'BUY') {
     const t = tradeLabel(s);
     return { label: t, kind: t.includes('SCALP') ? 'short' : 'long' };
@@ -759,6 +766,9 @@ export function RobotDeskPage() {
                   <div>ID · {focused.id}</div>
                   <div>ACCOUNT · {focused.account_name}</div>
                   <div>POSTURE · {posture(focused).label}</div>
+                  {focused.market_tradeable === false && (
+                    <div className="robot-market-closed">{focused.market_info || `MARKET CLOSED · ${focused.market_status || 'CLOSED'}`}</div>
+                  )}
                   <div>
                     CHAIN ·{' '}
                     {focusChain
