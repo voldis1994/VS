@@ -28,6 +28,7 @@ import {
   currentRegime,
   MAX_REGIME_BARS,
   REGIME_NAMES,
+  describeRegimeContext,
   toLiveRegime,
   type RegimeName,
 } from './regimes.js';
@@ -42,6 +43,7 @@ import {
   lateChaseAppliesToSetup,
   shortNetMove,
 } from './entryFromRegime.js';
+import type { ScalpZone } from './zones.js';
 import { allowEpicReentry, noteEpicTradeClose } from './tradeCooldown.js';
 import { publishEpicEntry, readEpicEntry } from './epicEntrySync.js';
 import { allowDeskSameSide, deskConflictShouldExit, deskOpensOnEpic } from './deskSideLock.js';
@@ -135,6 +137,8 @@ export type RobotSession = {
   feed_legs?: MultiFeedLeg[];
   /** Live scalp zone snapshot for INFO */
   zone_info?: string | null;
+  /** Regime context with bar counts — separate from zone */
+  regime_info?: string | null;
   zone_high?: number | null;
   zone_low?: number | null;
   zone_kind?: string | null;
@@ -298,7 +302,8 @@ function publicSession(s: Internal): RobotSession {
     feed_sender_count: s.multiFeed?.sender_count ?? rest.feed_sender_count ?? 0,
     feed_agreement: s.multiFeed?.agreement ?? rest.feed_agreement ?? null,
     feed_legs: s.multiFeed?.legs ?? rest.feed_legs ?? [],
-    zone_info: formatZoneInfo(zoneSnap),
+    zone_info: formatZoneInfo(zoneSnap, s.closedBars),
+    regime_info: describeRegimeContext(s.closedBars, s.regime || 'UNKNOWN'),
     zone_high: zoneSnap?.high ?? null,
     zone_low: zoneSnap?.low ?? null,
     zone_kind: zoneSnap?.kind ?? null,
@@ -318,17 +323,17 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
   const capLive = mf?.capital_contributing ?? s.feed_contributing ?? 0;
   const capCfg = mf?.capital_sender_count ?? s.feed_sender_count ?? 0;
   const pubNear = mf?.public_contributing ?? 0;
-  const feeds = `cap ${capLive}/${capCfg} · pubNear ${pubNear} · reject ${rejectN} · lead=${
-    mf?.lead_label || '—'
-  } · ${mf?.agreement || s.feed_agreement || 'NONE'}`.trim();
+  const feeds = `FEEDS cap ${capLive}/${capCfg} · pubAdv ${pubNear} · reject ${rejectN} · lead=${mf?.lead_label || '—'} · ${mf?.agreement || s.feed_agreement || 'NONE'}`.trim();
+  const regimeLine = describeRegimeContext(s.closedBars, s.regime || 'UNKNOWN');
+  const zoneLine = formatZoneInfo(zone, s.closedBars);
   let action = 'WAIT';
   if (!s.running) action = 'STOPPED';
   else if (s.open_side) action = `MANAGE ${s.open_side}`;
   else if (s.mode === 'ENTRY') action = 'SCAN ENTRY';
   return {
     feeds,
-    ohlc: `${ohlcLine} · ${formatZoneInfo(zone)}`,
-    regime: s.regime || 'UNKNOWN',
+    ohlc: `${ohlcLine} · ${zoneLine}`,
+    regime: regimeLine,
     setup: zone?.kind ?? null,
     action,
   };
@@ -353,6 +358,22 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     note:
       'REAL feeds = Capital.com konti (B.O.S.S./guntis/dimitrij). Public = tikai ADVISORY, nekad nebloķē entry. Zones + Capital quote obligāti.',
   };
+}
+
+function formatScanContext(
+  s: Internal,
+  zone: ScalpZone | null,
+  feedNote?: string
+): string {
+  const regimeLine = describeRegimeContext(s.closedBars, s.regime || 'UNKNOWN');
+  const zoneLine = formatZoneInfo(zone, s.closedBars);
+  const mf = s.multiFeed;
+  const capLive = mf?.capital_contributing ?? s.feed_contributing ?? 0;
+  const capCfg = mf?.capital_sender_count ?? s.feed_sender_count ?? 0;
+  const feedLine =
+    feedNote ||
+    `FEEDS cap ${capLive}/${capCfg} · lead=${mf?.lead_label || '—'} · ${mf?.agreement || s.feed_agreement || 'NONE'}`;
+  return `${regimeLine} · ${zoneLine} · ${feedLine}`;
 }
 
 function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
@@ -428,7 +449,7 @@ function buildJournalOpen(
     zone_kind: zone?.kind ?? null,
     zone_high: zone?.high ?? null,
     zone_low: zone?.low ?? null,
-    zone_detail: zone ? zone.detail : formatZoneInfo(null),
+    zone_detail: zone ? zone.detail : formatZoneInfo(null, s.closedBars),
     open_reason: reason,
     feed_source: s.feed_source ?? s.multiFeed?.detail ?? null,
     feed_agreement: s.multiFeed?.agreement ?? s.feed_agreement ?? null,
@@ -478,7 +499,7 @@ function writeJournalClose(
     peak_retention: s.peak_retention,
     unrealized_at_close: s.unrealized,
     regime_at_exit: String(s.regime || 'UNKNOWN'),
-    zone_detail_at_exit: formatZoneInfo(zone),
+    zone_detail_at_exit: formatZoneInfo(zone, s.closedBars),
     was_loss: wasLoss,
     hold_sec,
     pnl_pts: pnlPts,
@@ -1462,7 +1483,7 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `MANAGE ${s.open_side} · ${s.regime} · ${formatZoneInfo(zone)} · UPL ${
+        detail: `${formatScanContext(s, zone)} · UPL ${
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
@@ -1543,7 +1564,7 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${formatZoneInfo(zoneNow)} · ${feedGate.reason}`,
+        detail: `WAIT · ${formatScanContext(s, zoneNow, feedGate.reason)}`,
       });
       return;
     }
@@ -1561,10 +1582,8 @@ async function robotCycleBody(s: Internal) {
     const ohlc = s.ohlc_10s;
     const show = signalBar || closed;
     const ohlcLine = show
-      ? `10s${liveSignal ? ' LIVE' : justClosed ? ' CLOSE' : ''} O=${show.open.toFixed(2)} H=${show.high.toFixed(2)} L=${show.low.toFixed(2)} C=${show.close.toFixed(2)} ${s.regime} · ${formatZoneInfo(zoneNow)} · feeds ${
-          s.feed_contributing || 0
-        }/${s.feed_sender_count || 0} ${s.feed_source || 'LOCAL'} lead=${s.multiFeed?.lead_label || '—'} ${s.feed_agreement || ''}`
-      : `10s OHLC seeding · ${formatZoneInfo(zoneNow)} · feeds ${s.feed_contributing || 0}/${s.feed_sender_count || 0}`;
+      ? `10s${liveSignal ? ' LIVE' : justClosed ? ' CLOSE' : ''} O=${show.open.toFixed(2)} H=${show.high.toFixed(2)} L=${show.low.toFixed(2)} C=${show.close.toFixed(2)}`
+      : `10s OHLC seeding · C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'}`;
 
     let direction: 'BUY' | 'SELL' | null = null;
     let reason = '';
@@ -1643,7 +1662,7 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · seeding 10s · C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'}`,
+        detail: `WAIT · ${ohlcLine} · collecting 10s bars · ${formatScanContext(s, zoneNow)}`,
       });
       return;
     }
@@ -1657,7 +1676,7 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · ${s.regime} · watching same 10s bucket`,
+        detail: `DECIDE · ${ohlcLine} · same 10s bucket already scanned · ${formatScanContext(s, zoneNow)}`,
       });
       return;
     }
@@ -1669,7 +1688,7 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · ${explainNoEntry(signalBar, s.regime, s.closedBars)}`,
+        detail: `DECIDE · ${ohlcLine} · ${explainNoEntry(signalBar, s.regime, s.closedBars)}`,
       });
       return;
     }

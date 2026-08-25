@@ -29,24 +29,105 @@ export type ZoneVerdict = {
 /** Scalp box: not micro-noise, not a runaway range. Gold@4500 → ~1.8–18pt. */
 const MIN_WIDTH_PCT = 0.0004;
 const MAX_WIDTH_PCT = 0.004;
+const MIN_ZONE_BARS = 8;
+const ZONE_WINDOW = 18;
 
-export function buildScalpZone(
+export type ZoneBuildStatus =
+  | 'READY'
+  | 'SEEDING'
+  | 'NO_STRUCT'
+  | 'TOO_NARROW'
+  | 'TOO_WIDE';
+
+export type ZoneBuildDiag = {
+  zone: ScalpZone | null;
+  closed_bars: number;
+  min_bars: number;
+  struct_bars: number;
+  width_pct: number | null;
+  width_pts: number | null;
+  status: ZoneBuildStatus;
+};
+
+/** Why zone is null or ready — for honest INFO. */
+export function diagnoseZoneBuild(
   bars: TenSecBar[] | null | undefined,
   nowMs = Date.now()
-): ScalpZone | null {
-  if (!bars || bars.length < 8) return null;
-  const window = bars.slice(-18);
-  // Structure from older bars; leave last 1–2 for reaction
+): ZoneBuildDiag {
+  const closed_bars = bars?.length ?? 0;
+  if (!bars || closed_bars < MIN_ZONE_BARS) {
+    return {
+      zone: null,
+      closed_bars,
+      min_bars: MIN_ZONE_BARS,
+      struct_bars: 0,
+      width_pct: null,
+      width_pts: null,
+      status: 'SEEDING',
+    };
+  }
+  const window = bars.slice(-ZONE_WINDOW);
   const struct = window.length > 10 ? window.slice(0, -2) : window.slice(0, -1);
-  if (struct.length < 6) return null;
+  if (struct.length < 6) {
+    return {
+      zone: null,
+      closed_bars,
+      min_bars: MIN_ZONE_BARS,
+      struct_bars: struct.length,
+      width_pct: null,
+      width_pts: null,
+      status: 'NO_STRUCT',
+    };
+  }
+  const high = Math.max(...struct.map((b) => b.high));
+  const low = Math.min(...struct.map((b) => b.low));
+  const mid = (high + low) / 2;
+  const width_pts = high - low;
+  const width_pct = width_pts / Math.max(Math.abs(mid), 1e-9);
+  if (width_pct < MIN_WIDTH_PCT) {
+    return {
+      zone: null,
+      closed_bars,
+      min_bars: MIN_ZONE_BARS,
+      struct_bars: struct.length,
+      width_pct,
+      width_pts,
+      status: 'TOO_NARROW',
+    };
+  }
+  if (width_pct > MAX_WIDTH_PCT) {
+    return {
+      zone: null,
+      closed_bars,
+      min_bars: MIN_ZONE_BARS,
+      struct_bars: struct.length,
+      width_pct,
+      width_pts,
+      status: 'TOO_WIDE',
+    };
+  }
+  const zone = composeScalpZone(window, struct, nowMs);
+  return {
+    zone,
+    closed_bars,
+    min_bars: MIN_ZONE_BARS,
+    struct_bars: struct.length,
+    width_pct,
+    width_pts,
+    status: 'READY',
+  };
+}
 
+function composeScalpZone(
+  window: TenSecBar[],
+  struct: TenSecBar[],
+  nowMs: number
+): ScalpZone {
   const high = Math.max(...struct.map((b) => b.high));
   const low = Math.min(...struct.map((b) => b.low));
   const mid = (high + low) / 2;
   const width = high - low;
   const width_pct = width / Math.max(Math.abs(mid), 1e-9);
-  if (width_pct < MIN_WIDTH_PCT || width_pct > MAX_WIDTH_PCT) return null;
-
   const last = window[window.length - 1]!;
   const third = width / 3;
   let kind: ZoneKind = 'BOX';
@@ -65,10 +146,17 @@ export function buildScalpZone(
     width_pct,
     bars_used: struct.length,
     formed_at_ms: struct[0]!.open_time_ms,
-    detail: `${kind} ${low.toFixed(2)}–${high.toFixed(2)} · w=${(width_pct * 100).toFixed(3)}% · ${struct.length} bars${
+    detail: `${kind} ${low.toFixed(2)}–${high.toFixed(2)} · w=${(width_pct * 100).toFixed(3)}% · ${struct.length} struct bars${
       quiet ? ' · base' : ''
     } · age ${Math.max(0, Math.round((nowMs - struct[0]!.open_time_ms) / 1000))}s`,
   };
+}
+
+export function buildScalpZone(
+  bars: TenSecBar[] | null | undefined,
+  nowMs = Date.now()
+): ScalpZone | null {
+  return diagnoseZoneBuild(bars, nowMs).zone;
 }
 
 function brokeAbove(bars: TenSecBar[], level: number): boolean {
@@ -181,7 +269,27 @@ export function evaluateZoneEntry(
   };
 }
 
-export function formatZoneInfo(zone: ScalpZone | null): string {
-  if (!zone) return 'ZONE · forming (need ≥8×10s bars in band)';
-  return `ZONE · ${zone.detail}`;
+export function formatZoneInfo(
+  zone: ScalpZone | null,
+  bars?: TenSecBar[] | null | undefined
+): string {
+  if (zone) {
+    const wPt = (zone.high - zone.low).toFixed(1);
+    return `ZONE OK · ${zone.kind} ${zone.low.toFixed(2)}–${zone.high.toFixed(2)} · ${zone.bars_used} struct · w=${(zone.width_pct * 100).toFixed(3)}% (${wPt}pt)`;
+  }
+  const d = diagnoseZoneBuild(bars);
+  const wPct = d.width_pct != null ? `${(d.width_pct * 100).toFixed(3)}%` : '—';
+  const wPt = d.width_pts != null ? `${d.width_pts.toFixed(1)}pt` : '—';
+  switch (d.status) {
+    case 'SEEDING':
+      return `ZONE seeding · ${d.closed_bars}/${d.min_bars}×10s closed (need ${Math.max(0, d.min_bars - d.closed_bars)} more · ~${Math.max(0, d.min_bars - d.closed_bars) * 10}s)`;
+    case 'TOO_NARROW':
+      return `ZONE invalid · ${d.closed_bars} bars · band ${wPt} ${wPct} too tight (min ${(MIN_WIDTH_PCT * 100).toFixed(3)}%) — micro noise`;
+    case 'TOO_WIDE':
+      return `ZONE invalid · ${d.closed_bars} bars · band ${wPt} ${wPct} too wide (max ${(MAX_WIDTH_PCT * 100).toFixed(3)}%) — trending not box`;
+    case 'NO_STRUCT':
+      return `ZONE invalid · ${d.closed_bars} bars · only ${d.struct_bars} struct bars (need ≥6 in ${ZONE_WINDOW}-bar window)`;
+    default:
+      return `ZONE · unknown state · ${d.closed_bars} bars`;
+  }
 }

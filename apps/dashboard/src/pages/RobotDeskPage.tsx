@@ -36,7 +36,7 @@ type FeedLeg = {
   mid: number | null;
   latency_ms: number;
   detail?: string;
-  role?: 'LEAD' | 'CONFIRM' | 'EXECUTE' | 'REJECT';
+  role?: 'LEAD' | 'CONFIRM' | 'EXECUTE' | 'REJECT' | 'ADVISORY';
 };
 
 type DecisionChain = {
@@ -100,6 +100,7 @@ type RobotSession = {
   feed_agreement?: string | null;
   feed_legs?: FeedLeg[];
   zone_info?: string | null;
+  regime_info?: string | null;
   zone_high?: number | null;
   zone_low?: number | null;
   zone_kind?: string | null;
@@ -770,17 +771,12 @@ export function RobotDeskPage() {
                     {focused.ohlc_10s?.market || 'SEEDING'}
                   </div>
                   <div>MODE · {focused.running ? focused.mode : 'STOPPED'}</div>
-                  <div>REGIME · {(focused.regime || 'UNKNOWN').toUpperCase()}</div>
-                  <div>
-                    ZONE · {focused.zone_info || 'forming'}
-                    {focused.zone_low != null && focused.zone_high != null
-                      ? ` · ${fmt(focused.zone_low, 2)}–${fmt(focused.zone_high, 2)}`
-                      : ''}
-                  </div>
+                  <div>{focused.regime_info || `REGIME · ${(focused.regime || 'UNKNOWN').toUpperCase()}`}</div>
+                  <div>{focused.zone_info || 'ZONE · forming'}</div>
                   <div>
                     FEEDS ·{' '}
                     {focusChain?.feeds ||
-                      `${focused.feed_contributing ?? 0}/${focused.feed_sender_count ?? 0} ${
+                      `cap ${focused.feed_contributing ?? 0}/${focused.feed_sender_count ?? 0} · ${
                         focused.feed_agreement || ''
                       } · ${focused.feed_source || '—'}`}
                   </div>

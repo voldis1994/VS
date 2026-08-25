@@ -40,7 +40,7 @@ describe('10s zone entry', () => {
   it('explainNoEntry surfaces zone state', () => {
     const bars = baseBars();
     const quiet = bar(4500.5, 4500.55, 12, 0.2);
-    expect(explainNoEntry(quiet, 'TREND_UP', bars)).toMatch(/ZONE|soft live|waiting/i);
+    expect(explainNoEntry(quiet, 'TREND_UP', bars)).toMatch(/WAIT|ZONE|flat/i);
   });
 
   it('continuationSameSide holds with TREND_UP + green', () => {

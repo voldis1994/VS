@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildScalpZone, evaluateZoneEntry } from './zones.js';
+import { buildScalpZone, evaluateZoneEntry, formatZoneInfo } from './zones.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 
 function bar(o: number, h: number, l: number, c: number, i: number): TenSecBar {
@@ -31,6 +31,26 @@ describe('buildScalpZone 10s', () => {
       bar(4615, 4640, 4610, 4635, 7),
     ];
     expect(buildScalpZone(bars)).toBeNull();
+  });
+});
+
+describe('formatZoneInfo', () => {
+  it('explains seeding when too few bars', () => {
+    expect(formatZoneInfo(null, [])).toMatch(/seeding · 0\/8/);
+  });
+
+  it('explains too wide band on trend run', () => {
+    const bars = [
+      bar(4500, 4510, 4490, 4505, 0),
+      bar(4505, 4520, 4500, 4518, 1),
+      bar(4518, 4540, 4515, 4535, 2),
+      bar(4535, 4560, 4530, 4555, 3),
+      bar(4555, 4580, 4550, 4575, 4),
+      bar(4575, 4600, 4570, 4595, 5),
+      bar(4595, 4620, 4590, 4615, 6),
+      bar(4615, 4640, 4610, 4635, 7),
+    ];
+    expect(formatZoneInfo(null, bars)).toMatch(/too wide/);
   });
 });
 
