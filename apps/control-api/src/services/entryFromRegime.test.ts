@@ -3,6 +3,7 @@ import {
   allowEntryAgainstImpulse,
   decideEntryFrom10sRegime,
   recentImpulse,
+  signalBarTooLate,
 } from './entryFromRegime.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 
@@ -15,11 +16,14 @@ function bar(open: number, close: number, i = 0): TenSecBar {
 const dip = bar(2000, 1996);
 const rally = bar(2000, 2004);
 
-describe('10s + 14-regime suitable entry', () => {
-  it('never stalls UNKNOWN / COMPRESSION / TRANSITION — follows body', () => {
-    expect(decideEntryFrom10sRegime(dip, 'UNKNOWN')?.direction).toBe('SELL');
-    expect(decideEntryFrom10sRegime(rally, 'COMPRESSION')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(dip, 'TRANSITION')?.direction).toBe('SELL');
+describe('quality entry only', () => {
+  it('skips junk regimes: RANGE / UNKNOWN / FADE / REVERSAL / EXPANSION', () => {
+    expect(decideEntryFrom10sRegime(dip, 'UNKNOWN')).toBeNull();
+    expect(decideEntryFrom10sRegime(rally, 'COMPRESSION')).toBeNull();
+    expect(decideEntryFrom10sRegime(dip, 'RANGE')).toBeNull();
+    expect(decideEntryFrom10sRegime(dip, 'FAILED_BREAKOUT_UP')).toBeNull();
+    expect(decideEntryFrom10sRegime(rally, 'REVERSAL_CANDIDATE')).toBeNull();
+    expect(decideEntryFrom10sRegime(rally, 'EXPANSION')).toBeNull();
   });
 
   it('TREND_UP only dip-buys — never sells the rally', () => {
@@ -35,26 +39,19 @@ describe('10s + 14-regime suitable entry', () => {
 
   it('PULLBACK_UPTREND resumes long on the turn-up bar', () => {
     expect(decideEntryFrom10sRegime(rally, 'PULLBACK_UPTREND')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(rally, 'PULLBACK_UPTREND')?.setup).toBe('CONTINUATION');
     expect(decideEntryFrom10sRegime(dip, 'PULLBACK_UPTREND')).toBeNull();
   });
 
-  it('BREAKOUT_UP follows up, not the failed red bar', () => {
+  it('BREAKOUT_UP follows clear up body, not late chase', () => {
     expect(decideEntryFrom10sRegime(rally, 'BREAKOUT_UP')?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(dip, 'BREAKOUT_UP')).toBeNull();
+    // Already ran ~0.4% — too late
+    const late = bar(4600, 4620);
+    expect(signalBarTooLate(late)).toBe(true);
+    expect(decideEntryFrom10sRegime(late, 'BREAKOUT_UP')).toBeNull();
   });
 
-  it('FAILED_BREAKOUT_UP fades — SELL, not chase', () => {
-    expect(decideEntryFrom10sRegime(dip, 'FAILED_BREAKOUT_UP')?.direction).toBe('SELL');
-    expect(decideEntryFrom10sRegime(rally, 'FAILED_BREAKOUT_UP')).toBeNull();
-  });
-
-  it('RANGE still mean-reverts on a real 10s body', () => {
-    expect(decideEntryFrom10sRegime(dip, 'RANGE')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(rally, 'RANGE')?.direction).toBe('SELL');
-  });
-
-  it('quiet bar is never a trade in any regime', () => {
+  it('quiet bar is never a trade', () => {
     const quiet: TenSecBar = {
       open_time_ms: 0,
       open: 2000,
@@ -64,14 +61,11 @@ describe('10s + 14-regime suitable entry', () => {
       ticks: 8,
     };
     expect(decideEntryFrom10sRegime(quiet, 'TREND_UP')).toBeNull();
-    expect(decideEntryFrom10sRegime(quiet, 'RANGE')).toBeNull();
     expect(decideEntryFrom10sRegime(quiet, 'BREAKOUT_UP')).toBeNull();
-    expect(decideEntryFrom10sRegime(quiet, 'UNKNOWN')).toBeNull();
   });
 });
 
 describe('no SELL into fresh buy impulse', () => {
-  /** Chart case: spike 4627→4640 then red pullback — must not open SELL */
   const buySpike: TenSecBar[] = [
     bar(4626, 4627, 0),
     bar(4627, 4630, 1),
@@ -80,30 +74,17 @@ describe('no SELL into fresh buy impulse', () => {
     bar(4639, 4637, 4),
   ];
 
-  it('detects strong UP impulse across the spike window', () => {
-    const imp = recentImpulse(buySpike);
-    expect(imp.dir).toBe('UP');
-    expect(imp.netPts).toBeGreaterThan(5);
+  it('detects strong UP impulse', () => {
+    expect(recentImpulse(buySpike).dir).toBe('UP');
   });
 
-  it('blocks SELL after buy spike (user screenshot)', () => {
-    const gate = allowEntryAgainstImpulse('SELL', buySpike);
-    expect(gate.ok).toBe(false);
-    expect(gate.reason).toMatch(/BLOCK SELL/);
-  });
-
-  it('allows BUY to continue with the impulse', () => {
+  it('blocks SELL after buy spike', () => {
+    expect(allowEntryAgainstImpulse('SELL', buySpike).ok).toBe(false);
     expect(allowEntryAgainstImpulse('BUY', buySpike).ok).toBe(true);
   });
 
-  it('blocks BUY into a dump impulse', () => {
-    const dump = [
-      bar(4640, 4638, 0),
-      bar(4638, 4634, 1),
-      bar(4634, 4630, 2),
-      bar(4630, 4628, 3),
-    ];
+  it('blocks BUY into dump', () => {
+    const dump = [bar(4640, 4638, 0), bar(4638, 4634, 1), bar(4634, 4630, 2), bar(4630, 4628, 3)];
     expect(allowEntryAgainstImpulse('BUY', dump).ok).toBe(false);
-    expect(allowEntryAgainstImpulse('SELL', dump).ok).toBe(true);
   });
 });

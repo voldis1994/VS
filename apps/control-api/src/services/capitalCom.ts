@@ -1013,12 +1013,19 @@ export async function fetchCapitalMinutePrices(
 
 /**
  * True if the latest 1m candle already moved hard in trade direction (~end of move).
- * Disabled: never block entries (operator: no late-move skips).
+ * Blocks chase entries — ~0.12% of price (~5.5pt Gold).
  */
 export function isLateMoveOnOneMinute(
-  _direction: 'BUY' | 'SELL',
-  _candles: CapitalPriceCandle[]
+  direction: 'BUY' | 'SELL',
+  candles: CapitalPriceCandle[]
 ): boolean {
+  if (!candles.length) return false;
+  const last = candles[candles.length - 1]!;
+  const mid = Math.max(Math.abs(last.open), 1e-9);
+  const move = last.close - last.open;
+  const thr = Math.max(mid * 0.0012, 0.05);
+  if (direction === 'BUY' && move >= thr) return true;
+  if (direction === 'SELL' && move <= -thr) return true;
   return false;
 }
 
