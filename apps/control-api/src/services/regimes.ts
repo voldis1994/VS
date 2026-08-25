@@ -127,8 +127,8 @@ function epicKey(epic: string): string {
 
 /**
  * Classify from closed 10s OHLC — same names as C++ RegimeEngine.
- * With ≥12 bars, net slope over ~16 bars beats local "inRange" so a clear
- * selloff/buy is TREND_*, not RANGE (stair-step trends look "in range" on 8 bars).
+ * With ≥12 bars, net slope over ~16 bars beats local "inRange" / quiet COMPRESSION
+ * / bare EXPANSION so a clear selloff is TREND_*, not RANGE or live EXPANSION.
  */
 export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOWN'): RegimeName {
   if (!bars.length || bars.length < 2) return 'UNKNOWN';
@@ -176,10 +176,11 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
 
   if (previous === 'BREAKOUT_UP' && inRange && lastVel < 0) return 'FAILED_BREAKOUT_UP';
   if (previous === 'BREAKOUT_DOWN' && inRange && lastVel > 0) return 'FAILED_BREAKOUT_DOWN';
-  if (compressed && inRange) return 'COMPRESSION';
-  if (expanding && breakoutUp && (trendingUp || lastVel > 0)) return 'BREAKOUT_UP';
-  if (expanding && breakoutDown && (trendingDown || lastVel < 0)) return 'BREAKOUT_DOWN';
-  if (expanding) return 'EXPANSION';
+  // Quiet/wide bars must not erase a clear multi-bar slope (→ live EXPANSION looked "wrong")
+  if (compressed && inRange && !slopeUp && !slopeDown) return 'COMPRESSION';
+  if (expanding && breakoutUp && (trendingUp || lastVel > 0 || slopeUp)) return 'BREAKOUT_UP';
+  if (expanding && breakoutDown && (trendingDown || lastVel < 0 || slopeDown)) return 'BREAKOUT_DOWN';
+  if (expanding && !slopeUp && !slopeDown) return 'EXPANSION';
   if (previous === 'TREND_UP' && lastVel < -0.00008 && persistence > 0.15) {
     return 'PULLBACK_UPTREND';
   }
@@ -271,6 +272,11 @@ export function observeClosedBars(
   for (const bar of bars) {
     if (!bar || !Number.isFinite(bar.close)) continue;
     const last = b.bars[b.bars.length - 1];
+    // Same 10s bucket from another unit — replace, do not append (book pollution → wrong regime)
+    if (last && last.open_time_ms === bar.open_time_ms) {
+      if ((bar.ticks || 0) >= (last.ticks || 0)) b.bars[b.bars.length - 1] = bar;
+      continue;
+    }
     const same =
       last &&
       Math.abs(last.open - bar.open) < 1e-9 &&

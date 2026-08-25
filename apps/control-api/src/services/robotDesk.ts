@@ -283,23 +283,21 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
       ? [s.ohlcState.last_closed]
       : [];
   if (incoming.length) {
-    const snap = observeClosedBars(s.epic, incoming, s.display_name);
-    s.regime = toLiveRegime(snap.current);
+    observeClosedBars(s.epic, incoming, s.display_name);
     // Append closed bars (do not replace a full window with a single tick bar)
     for (const b of incoming) {
       const last = s.closedBars[s.closedBars.length - 1];
-      const same =
-        last &&
-        last.open_time_ms === b.open_time_ms &&
-        Math.abs(last.close - b.close) < 1e-9;
-      if (!same) s.closedBars.push(b);
+      if (last && last.open_time_ms === b.open_time_ms) {
+        s.closedBars[s.closedBars.length - 1] = b;
+        continue;
+      }
+      s.closedBars.push(b);
     }
     if (s.closedBars.length > 24) s.closedBars = s.closedBars.slice(-24);
-  } else {
-    // Keep units in sync — shared epic book (B.O.S.S. vs DIMITRIJ must match)
-    const shared = currentRegime(s.epic);
-    if (shared) s.regime = toLiveRegime(shared.current);
   }
+  // Always sync from shared epic book — B.O.S.S. / DIMITRIJ / GUNTIS must match
+  const shared = currentRegime(s.epic);
+  if (shared) s.regime = toLiveRegime(shared.current);
 }
 
 function clearTradeState(s: Internal) {
