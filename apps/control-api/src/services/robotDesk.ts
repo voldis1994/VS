@@ -24,6 +24,7 @@ import { mapTradeType } from './tradePresentation.js';
 import {
   observeClosedBars,
   normalizeRegime,
+  currentRegime,
   REGIME_NAMES,
   toLiveRegime,
   type RegimeName,
@@ -294,6 +295,10 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
       if (!same) s.closedBars.push(b);
     }
     if (s.closedBars.length > 24) s.closedBars = s.closedBars.slice(-24);
+  } else {
+    // Keep units in sync — shared epic book (B.O.S.S. vs DIMITRIJ must match)
+    const shared = currentRegime(s.epic);
+    if (shared) s.regime = toLiveRegime(shared.current);
   }
 }
 

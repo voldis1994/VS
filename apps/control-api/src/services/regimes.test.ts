@@ -150,6 +150,25 @@ describe('classifyRegime from 10s OHLC', () => {
     expect(['RANGE', 'TRANSITION', 'UNKNOWN']).toContain(r);
   });
 
+  it('TREND_DOWN on clear multi-bar selloff even when last close is inside prior 8-bar H/L', () => {
+    // Stair-step selloff: each close inside recent window → old classifier said RANGE
+    const prices: number[] = [];
+    let p = 4646.5;
+    for (let i = 0; i < 16; i++) {
+      p -= 0.45; // ~7.2pt drop over ~2.5 min — like the Capital Gold chart
+      prices.push(p);
+    }
+    const bars = prices.map((close, i) => {
+      const open = i === 0 ? 4646.5 : prices[i - 1]!;
+      const high = Math.max(open, close) + 0.15;
+      const low = Math.min(open, close) - 0.1;
+      return bar(open, high, low, close, i);
+    });
+    const r = classifyRegime(bars);
+    expect(r).toBe('TREND_DOWN');
+    expect(r).not.toBe('RANGE');
+  });
+
   it('REVERSAL_CANDIDATE after TREND_UP with a violent opposite bar still inside range', () => {
     const bars = [
       bar(100.0, 101.0, 99.6, 100.7, 0),
