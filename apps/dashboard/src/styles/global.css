@@ -1192,6 +1192,10 @@ tr:hover td { background: rgba(57, 255, 20, 0.06); }
   background: var(--cyan);
   border-color: var(--cyan);
 }
+.robot-regime-chip.parked {
+  opacity: 0.35;
+  pointer-events: none;
+}
 .robot-wire-feeds .robot-arena-kicker {
   margin-bottom: 6px;
 }

@@ -202,7 +202,7 @@ export function formatMarketInfo(
   if (tradeable) {
     return `MARKET OPEN · Capital=${st} · entry/manage allowed`;
   }
-  return `MARKET CLOSED · Capital=${st} · robot PARKED (no entry · no manage · no position spam) · poll ${pollSec}s until TRADEABLE`;
+  return `MARKET CLOSED · Capital=${st} · app chart/prices can still move · NO orders until TRADEABLE · robot PARKED · poll ${pollSec}s`;
 }
 
 function setRobotCadence(s: Internal, ms: number) {
