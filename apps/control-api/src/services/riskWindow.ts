@@ -1,12 +1,11 @@
 /**
  * Simple 10-minute account risk window (operator rules):
- * - Target profit ≈ 10% of total equity (pass band 7–10%+)
- * - Open/close trades normally inside the window
- * - Hit +10% anytime (realized or live) before window end → bank early, cooldown 10 min
- * - End of 10 min without ≥7% realized → cooldown next 10 min
- * - −10% of total equity (realized + open UPL) → cooldown next 10 min
- *
- * +7% window-pass uses REALIZED PnL (closed trades). Early +10% bank also trips on live UPL.
+ * - Clock starts on the FIRST trade (open/close) — sitting in WAIT does NOT burn the window
+ * - Target ≈ 10%; pass band ≥7% realized at window end
+ * - +10% anytime (realized or live) early → bank, cooldown 10 min
+ * - −10% live (realized + open UPL) → cooldown 10 min
+ * - Window end with trades but <+7% realized → cooldown 10 min
+ * - Window end with ZERO trades → roll next window, NO cooldown (no setup ≠ failure)
  */
 
 export const RISK_WINDOW_MS = 10 * 60 * 1000;
@@ -20,11 +19,11 @@ export type RiskSnapshot = {
   realized_pnl: number;
   open_upl: number;
   pnl_pct: number | null;
-  /** realized-only % for target/bank */
   realized_pct: number | null;
+  trades_in_window: number;
   window_remaining_sec: number;
   cooldown_remaining_sec: number;
-  status: 'SEEDING' | 'ACTIVE' | 'COOLDOWN' | 'BANKED' | 'STOPPED_LOSS';
+  status: 'SEEDING' | 'IDLE' | 'ACTIVE' | 'COOLDOWN' | 'BANKED' | 'STOPPED_LOSS';
   detail: string;
 };
 
@@ -33,11 +32,14 @@ type AccountRisk = {
   equityStart: number | null;
   lastSeenEquity: number | null;
   realizedPnl: number;
+  tradesInWindow: number;
   cooldownUntilMs: number;
   lastStatus: RiskSnapshot['status'];
   lastDetail: string;
-  /** True once equity has been applied to the current window */
-  windowArmed: boolean;
+  /** Equity known */
+  equityReady: boolean;
+  /** 10min clock running (after first trade) */
+  clockRunning: boolean;
 };
 
 const byAccount = new Map<number, AccountRisk>();
@@ -50,10 +52,12 @@ function ensure(accountId: number, now: number): AccountRisk {
       equityStart: null,
       lastSeenEquity: null,
       realizedPnl: 0,
+      tradesInWindow: 0,
       cooldownUntilMs: 0,
       lastStatus: 'SEEDING',
       lastDetail: 'waiting equity',
-      windowArmed: false,
+      equityReady: false,
+      clockRunning: false,
     };
     byAccount.set(accountId, s);
   }
@@ -65,21 +69,38 @@ function pct(pnl: number, equity: number): number {
   return pnl / e;
 }
 
-/** Seed / refresh equity. Window clock starts only when first armed. */
+function armEquity(s: AccountRisk, equity: number) {
+  s.lastSeenEquity = equity;
+  if (!s.equityReady || s.equityStart == null || s.equityStart <= 0) {
+    s.equityStart = equity;
+    s.equityReady = true;
+  }
+}
+
+/** Seed / refresh equity. Does NOT start the 10min clock. */
 export function setRiskEquity(accountId: number, equity: number, now = Date.now()): void {
   if (!Number.isFinite(accountId) || accountId <= 0) return;
   if (!Number.isFinite(equity) || equity <= 0) return;
   const s = ensure(accountId, now);
   s.lastSeenEquity = equity;
-  if (s.cooldownUntilMs > now) return; // don't arm during cooldown
-  if (s.equityStart == null || s.equityStart <= 0) {
-    s.equityStart = equity;
-    if (!s.windowArmed) {
-      s.windowStartMs = now;
-      s.windowArmed = true;
-      s.realizedPnl = 0;
-    }
-  }
+  if (s.cooldownUntilMs > now) return;
+  armEquity(s, equity);
+}
+
+function startClock(s: AccountRisk, now: number) {
+  if (s.clockRunning) return;
+  s.clockRunning = true;
+  s.windowStartMs = now;
+  if (!s.equityReady && s.lastSeenEquity != null) armEquity(s, s.lastSeenEquity);
+}
+
+/** Call when a trade is opened — starts the 10min risk clock. */
+export function noteRiskTradeOpen(accountId: number, now = Date.now()): void {
+  if (!Number.isFinite(accountId) || accountId <= 0) return;
+  const s = ensure(accountId, now);
+  if (s.cooldownUntilMs > now) return;
+  startClock(s, now);
+  s.tradesInWindow += 1;
 }
 
 /** Record realized P&L when a trade closes (account currency). */
@@ -88,7 +109,8 @@ export function noteRiskTradePnl(accountId: number, pnl: number, now = Date.now(
   if (!Number.isFinite(pnl)) return;
   const s = ensure(accountId, now);
   if (s.cooldownUntilMs > now) return;
-  if (!s.windowArmed) return;
+  startClock(s, now);
+  if (s.tradesInWindow < 1) s.tradesInWindow = 1;
   s.realizedPnl += pnl;
 }
 
@@ -98,23 +120,26 @@ function startCooldown(s: AccountRisk, now: number, status: RiskSnapshot['status
   s.lastDetail = detail;
   s.windowStartMs = s.cooldownUntilMs;
   s.realizedPnl = 0;
+  s.tradesInWindow = 0;
   s.equityStart = null;
-  s.windowArmed = false;
+  s.equityReady = false;
+  s.clockRunning = false;
 }
 
 function rollFreshWindow(s: AccountRisk, now: number, detail: string) {
   s.windowStartMs = now;
   s.realizedPnl = 0;
+  s.tradesInWindow = 0;
   s.cooldownUntilMs = 0;
-  s.lastStatus = 'ACTIVE';
+  s.clockRunning = false; // idle until next trade
+  s.lastStatus = 'IDLE';
   s.lastDetail = detail;
-  // Re-arm immediately from last known equity so SEEDING hole cannot open
   if (s.lastSeenEquity != null && s.lastSeenEquity > 0) {
     s.equityStart = s.lastSeenEquity;
-    s.windowArmed = true;
+    s.equityReady = true;
   } else {
     s.equityStart = null;
-    s.windowArmed = false;
+    s.equityReady = false;
   }
 }
 
@@ -139,6 +164,7 @@ export function evaluateRiskWindow(
       open_upl: upl,
       pnl_pct: null,
       realized_pct: null,
+      trades_in_window: s.tradesInWindow,
       window_remaining_sec: 0,
       cooldown_remaining_sec: Math.ceil(coolLeft / 1000),
       status: s.lastStatus === 'BANKED' || s.lastStatus === 'STOPPED_LOSS' ? s.lastStatus : 'COOLDOWN',
@@ -147,15 +173,12 @@ export function evaluateRiskWindow(
     return { allowEntry: false, snapshot };
   }
 
-  // Cooldown ended — arm from last equity if possible
-  if (!s.windowArmed && s.lastSeenEquity != null && s.lastSeenEquity > 0) {
-    s.equityStart = s.lastSeenEquity;
-    s.windowStartMs = now;
-    s.windowArmed = true;
-    s.realizedPnl = 0;
+  // Cooldown ended — restore equity, stay IDLE until next trade
+  if (!s.equityReady && s.lastSeenEquity != null && s.lastSeenEquity > 0) {
+    armEquity(s, s.lastSeenEquity);
   }
 
-  if (!s.windowArmed || s.equityStart == null || s.equityStart <= 0) {
+  if (!s.equityReady || s.equityStart == null || s.equityStart <= 0) {
     const snapshot: RiskSnapshot = {
       account_id: accountId,
       equity_start: null,
@@ -163,6 +186,7 @@ export function evaluateRiskWindow(
       open_upl: upl,
       pnl_pct: null,
       realized_pct: null,
+      trades_in_window: 0,
       window_remaining_sec: 0,
       cooldown_remaining_sec: 0,
       status: 'SEEDING',
@@ -174,11 +198,31 @@ export function evaluateRiskWindow(
   }
 
   const equity = s.equityStart;
+
+  // Idle: waiting for quality setup — do NOT burn 10min clock, do NOT cooldown
+  if (!s.clockRunning) {
+    const snapshot: RiskSnapshot = {
+      account_id: accountId,
+      equity_start: equity,
+      realized_pnl: 0,
+      open_upl: upl,
+      pnl_pct: pct(upl, equity),
+      realized_pct: 0,
+      trades_in_window: 0,
+      window_remaining_sec: 0,
+      cooldown_remaining_sec: 0,
+      status: 'IDLE',
+      detail: 'RISK idle · clock starts on first trade · waiting quality setup',
+    };
+    s.lastStatus = 'IDLE';
+    s.lastDetail = snapshot.detail;
+    return { allowEntry: true, snapshot };
+  }
+
   const realizedPct = pct(s.realizedPnl, equity);
   const livePct = pct(s.realizedPnl + upl, equity);
   const windowLeft = Math.max(0, RISK_WINDOW_MS - (now - s.windowStartMs));
 
-  // Live hard stop: −10% of total equity (includes open UPL)
   if (livePct <= -RISK_MAX_LOSS_PCT) {
     const detail = `RISK −${(Math.abs(livePct) * 100).toFixed(1)}% ≤ −10% · cooldown 10min`;
     startCooldown(s, now, 'STOPPED_LOSS', detail);
@@ -191,6 +235,7 @@ export function evaluateRiskWindow(
         open_upl: upl,
         pnl_pct: livePct,
         realized_pct: realizedPct,
+        trades_in_window: s.tradesInWindow,
         window_remaining_sec: 0,
         cooldown_remaining_sec: Math.ceil(RISK_WINDOW_MS / 1000),
         status: 'STOPPED_LOSS',
@@ -199,7 +244,6 @@ export function evaluateRiskWindow(
     };
   }
 
-  // Early bank: +10% anytime in the window (realized OR live with open UPL) → stop trading 10min
   if (realizedPct >= RISK_TARGET_MAX_PCT || livePct >= RISK_TARGET_MAX_PCT) {
     const hit = Math.max(realizedPct, livePct);
     const via = realizedPct >= RISK_TARGET_MAX_PCT ? 'realized' : 'live';
@@ -214,6 +258,7 @@ export function evaluateRiskWindow(
         open_upl: upl,
         pnl_pct: livePct,
         realized_pct: realizedPct,
+        trades_in_window: s.tradesInWindow,
         window_remaining_sec: 0,
         cooldown_remaining_sec: Math.ceil(RISK_WINDOW_MS / 1000),
         status: 'BANKED',
@@ -222,10 +267,29 @@ export function evaluateRiskWindow(
     };
   }
 
-  // Window ended — must have ≥7% REALIZED or cooldown
   if (windowLeft <= 0) {
+    // No trades taken (shouldn't normally happen if clock starts on trade) — no penalty
+    if (s.tradesInWindow <= 0) {
+      rollFreshWindow(s, now, 'RISK 10min · 0 trades · no penalty · idle');
+      return {
+        allowEntry: true,
+        snapshot: {
+          account_id: accountId,
+          equity_start: s.equityStart,
+          realized_pnl: 0,
+          open_upl: upl,
+          pnl_pct: s.equityStart != null ? pct(upl, s.equityStart) : null,
+          realized_pct: 0,
+          trades_in_window: 0,
+          window_remaining_sec: 0,
+          cooldown_remaining_sec: 0,
+          status: 'IDLE',
+          detail: s.lastDetail,
+        },
+      };
+    }
     if (realizedPct < RISK_TARGET_MIN_PCT) {
-      const detail = `RISK 10min done · +${(realizedPct * 100).toFixed(1)}% < +7% · cooldown 10min`;
+      const detail = `RISK 10min done · ${s.tradesInWindow} trades · +${(realizedPct * 100).toFixed(1)}% < +7% · cooldown 10min`;
       startCooldown(s, now, 'COOLDOWN', detail);
       return {
         allowEntry: false,
@@ -236,6 +300,7 @@ export function evaluateRiskWindow(
           open_upl: upl,
           pnl_pct: livePct,
           realized_pct: realizedPct,
+          trades_in_window: 0,
           window_remaining_sec: 0,
           cooldown_remaining_sec: Math.ceil(RISK_WINDOW_MS / 1000),
           status: 'COOLDOWN',
@@ -246,7 +311,7 @@ export function evaluateRiskWindow(
     rollFreshWindow(
       s,
       now,
-      `RISK 10min OK · +${(realizedPct * 100).toFixed(1)}% ≥ +7% · new window`
+      `RISK 10min OK · +${(realizedPct * 100).toFixed(1)}% ≥ +7% · idle until next trade`
     );
     return {
       allowEntry: true,
@@ -257,9 +322,10 @@ export function evaluateRiskWindow(
         open_upl: upl,
         pnl_pct: s.equityStart != null ? pct(upl, s.equityStart) : null,
         realized_pct: 0,
-        window_remaining_sec: Math.ceil(RISK_WINDOW_MS / 1000),
+        trades_in_window: 0,
+        window_remaining_sec: 0,
         cooldown_remaining_sec: 0,
-        status: 'ACTIVE',
+        status: 'IDLE',
         detail: s.lastDetail,
       },
     };
@@ -272,10 +338,11 @@ export function evaluateRiskWindow(
     open_upl: upl,
     pnl_pct: livePct,
     realized_pct: realizedPct,
+    trades_in_window: s.tradesInWindow,
     window_remaining_sec: Math.ceil(windowLeft / 1000),
     cooldown_remaining_sec: 0,
     status: 'ACTIVE',
-    detail: `RISK window realized ${(realizedPct * 100).toFixed(1)}% (live ${(livePct * 100).toFixed(1)}%) · target 7–10% · ${Math.ceil(windowLeft / 1000)}s left`,
+    detail: `RISK active · ${s.tradesInWindow} trades · realized ${(realizedPct * 100).toFixed(1)}% (live ${(livePct * 100).toFixed(1)}%) · target 7–10% · ${Math.ceil(windowLeft / 1000)}s left`,
   };
   s.lastStatus = 'ACTIVE';
   s.lastDetail = snapshot.detail;

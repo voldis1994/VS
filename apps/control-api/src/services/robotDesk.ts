@@ -37,6 +37,7 @@ import { allowEpicReentry, noteEpicTradeClose } from './tradeCooldown.js';
 import {
   allowRiskEntry,
   evaluateRiskWindow,
+  noteRiskTradeOpen,
   noteRiskTradePnl,
   setRiskEquity,
   type RiskSnapshot,
@@ -288,7 +289,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC → live regime (no UNKNOWN) → ENTRY/EXIT',
     note:
-      'RISK 10min: +10% early → bank/netirgo · <+7% end → cooldown · −10% stop',
+      'RISK: clock on first trade · IDLE while WAIT setup · no cooldown for 0 trades',
   };
 }
 
@@ -847,6 +848,7 @@ async function enterTrade(
   s.unrealized = 0;
   s.safety_sl = stopLevel != null && Number.isFinite(stopLevel) ? stopLevel : null;
   s.error = null;
+  noteRiskTradeOpen(s.account_id);
 
   const dealId = await resolveDealId(session, s, result.deal_reference);
   if (dealId) s.deal_id = dealId;
