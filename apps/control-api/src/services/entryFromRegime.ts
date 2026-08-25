@@ -1,7 +1,9 @@
 /**
- * Quality entry on 5m — fewer trades, larger bodies.
- * TREND pullback/resume + EXPANSION/BREAKOUT follow impulse (never fade).
- * SKIP: RANGE chop, FADE, REVERSAL, quiet.
+ * Regime-led entry on 5m.
+ * Market type (TREND / EXPANSION / BREAKOUT) is the thesis.
+ * Live bar is only a light timing trigger — do NOT wait for a fat 4–6pt
+ * candle that arrives after the move is spent.
+ * SKIP: RANGE chop, FADE, REVERSAL, quiet doji.
  */
 import type { RegimeName } from './regimes.js';
 import { normalizeRegime } from './regimes.js';
@@ -13,38 +15,36 @@ export type RegimeEntry = {
   reason: string;
 };
 
-function movingOrNull(bar: TenSecBar): boolean {
-  return isMoving5m(bar);
+/** Soft live timing once regime is known — ~2pt or soft range (not 4–6pt). */
+function softLive(bar: TenSecBar): boolean {
+  const pts = Math.abs(bar.close - bar.open);
+  return pts >= 2 || rangePct(bar) >= 0.0006 || isMoving5m(bar);
 }
 
-/** Pullback ~0.10% ≈ 4.6pt Gold. */
+function isGreen(bar: TenSecBar): boolean {
+  return bar.close > bar.open;
+}
+
+function isRed(bar: TenSecBar): boolean {
+  return bar.close < bar.open;
+}
+
+/** Clear pullback body ~0.10% ≈ 4.6pt Gold (optional stronger pullback tag). */
 const PULLBACK_BODY_PCT = 0.001;
 
 function dip(bar: TenSecBar): boolean {
-  return bodyPct(bar) <= -PULLBACK_BODY_PCT;
+  return bodyPct(bar) <= -PULLBACK_BODY_PCT || (isRed(bar) && softLive(bar));
 }
 
 function rally(bar: TenSecBar): boolean {
-  return bodyPct(bar) >= PULLBACK_BODY_PCT;
-}
-
-/** Expansion/breakout ~0.15% ≈ 7pt Gold. */
-const IMPULSE_BODY_PCT = 0.0015;
-
-function strongBody(bar: TenSecBar): boolean {
-  return Math.abs(bodyPct(bar)) >= IMPULSE_BODY_PCT || Math.abs(bar.close - bar.open) >= 6;
-}
-
-/** Softer follow when multi-bar impulse already confirmed — ~4pt Gold. */
-function followBody(bar: TenSecBar): boolean {
-  return strongBody(bar) || Math.abs(bar.close - bar.open) >= 4;
+  return bodyPct(bar) >= PULLBACK_BODY_PCT || (isGreen(bar) && softLive(bar));
 }
 
 function describe(bar: TenSecBar): string {
   return `5m O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} body=${(bodyPct(bar) * 100).toFixed(3)}% rng=${(rangePct(bar) * 100).toFixed(3)}%`;
 }
 
-/** Already spent the 5m move — ~0.45% ≈ 21pt Gold. */
+/** Single-bar exhaustion — ~0.45% ≈ 21pt Gold. */
 const LATE_SIGNAL_BODY_PCT = 0.0045;
 
 export function signalBarTooLate(bar: TenSecBar): boolean {
@@ -90,11 +90,22 @@ export function allowEntryAgainstImpulse(
   return { ok: true, reason: `impulse ${imp.dir} aligns` };
 }
 
+/**
+ * Late-chase gate applies to breakout/expansion exhaustion only.
+ * TREND regimes already ARE the move — blocking them as "late" misses the trade.
+ */
+export function lateChaseAppliesToSetup(setup: RegimeEntry['setup'], regime?: string | null): boolean {
+  const r = normalizeRegime(regime);
+  if (r === 'TREND_UP' || r === 'TREND_DOWN') return false;
+  if (r === 'PULLBACK_UPTREND' || r === 'PULLBACK_DOWNTREND') return false;
+  return setup === 'BREAKOUT' || setup === 'CONTINUATION';
+}
+
 /** Human detail when decideEntry returns null — shown on robot board. */
 export function explainNoEntry(
   bar: TenSecBar,
   regime?: string | null,
-  closedBars?: TenSecBar[] | null
+  _closedBars?: TenSecBar[] | null
 ): string {
   const r = normalizeRegime(regime);
   const body = bodyPct(bar);
@@ -104,15 +115,16 @@ export function explainNoEntry(
     `rng=${(rangePct(bar) * 100).toFixed(2)}%`,
   ];
   if (signalBarTooLate(bar)) return `late bar · ${bits.join(' ')}`;
-  if (r === 'EXPANSION' || r === 'BREAKOUT_UP' || r === 'BREAKOUT_DOWN') {
-    const imp = recentImpulse(closedBars);
-    if (!movingOrNull(bar) && !followBody(bar)) {
-      return `need stronger live body (~4–6pt) · ${bits.join(' ')}${imp.dir ? ` · impulse ${imp.dir}` : ''}`;
-    }
+  if (!softLive(bar)) {
+    return `regime ${r} · wait soft live (≥~2pt) · ${bits.join(' ')}`;
   }
-  if (r === 'TREND_UP' && !dip(bar)) return `TREND_UP waits dip · ${bits.join(' ')}`;
-  if (r === 'TREND_DOWN' && !rally(bar)) return `TREND_DOWN waits rally · ${bits.join(' ')}`;
-  return `no quality setup · ${bits.join(' ')}`;
+  if (r === 'TREND_UP' && isRed(bar) === false && isGreen(bar) === false) {
+    return `TREND_UP · flat live · ${bits.join(' ')}`;
+  }
+  if (r === 'TREND_DOWN' && isRed(bar) === false && isGreen(bar) === false) {
+    return `TREND_DOWN · flat live · ${bits.join(' ')}`;
+  }
+  return `no regime timing · ${bits.join(' ')}`;
 }
 
 export function decideEntryFrom10sRegime(
@@ -136,38 +148,49 @@ export function decideEntryFrom10sRegime(
   }
 
   if (signalBarTooLate(bar)) return null;
+  if (!softLive(bar)) return null;
 
+  // ——— TREND: market type is the thesis; soft live times entry ———
   if (r === 'TREND_UP') {
-    if (!movingOrNull(bar) || !dip(bar)) return null;
-    return { direction: 'BUY', setup: 'PULLBACK', reason: `${r} dip-buy · ${candle}` };
+    if (dip(bar) && isRed(bar)) {
+      return { direction: 'BUY', setup: 'PULLBACK', reason: `${r} dip-buy · ${candle}` };
+    }
+    if (isGreen(bar)) {
+      return { direction: 'BUY', setup: 'CONTINUATION', reason: `${r} follow · ${candle}` };
+    }
+    return null;
   }
   if (r === 'TREND_DOWN') {
-    if (!movingOrNull(bar) || !rally(bar)) return null;
-    return { direction: 'SELL', setup: 'PULLBACK', reason: `${r} rally-sell · ${candle}` };
+    if (rally(bar) && isGreen(bar)) {
+      return { direction: 'SELL', setup: 'PULLBACK', reason: `${r} rally-sell · ${candle}` };
+    }
+    if (isRed(bar)) {
+      return { direction: 'SELL', setup: 'CONTINUATION', reason: `${r} follow · ${candle}` };
+    }
+    return null;
   }
 
   if (r === 'PULLBACK_UPTREND') {
-    if (!movingOrNull(bar) || !rally(bar)) return null;
+    if (!isGreen(bar)) return null;
     return { direction: 'BUY', setup: 'CONTINUATION', reason: `${r} resume long · ${candle}` };
   }
   if (r === 'PULLBACK_DOWNTREND') {
-    if (!movingOrNull(bar) || !dip(bar)) return null;
+    if (!isRed(bar)) return null;
     return { direction: 'SELL', setup: 'CONTINUATION', reason: `${r} resume short · ${candle}` };
   }
 
   if (r === 'EXPANSION') {
     const imp = recentImpulse(closedBars);
 
-    // Follow the multi-bar impulse — never fade an UP expansion with SELL (or DOWN with BUY)
     if (imp.dir === 'UP') {
-      if (dip(bar) && movingOrNull(bar)) {
+      if (isRed(bar)) {
         return {
           direction: 'BUY',
           setup: 'PULLBACK',
           reason: `EXPANSION UP dip-buy · ${candle}`,
         };
       }
-      if (rally(bar) && followBody(bar) && movingOrNull(bar)) {
+      if (isGreen(bar)) {
         return {
           direction: 'BUY',
           setup: 'CONTINUATION',
@@ -177,14 +200,14 @@ export function decideEntryFrom10sRegime(
       return null;
     }
     if (imp.dir === 'DOWN') {
-      if (rally(bar) && movingOrNull(bar)) {
+      if (isGreen(bar)) {
         return {
           direction: 'SELL',
           setup: 'PULLBACK',
           reason: `EXPANSION DOWN rally-sell · ${candle}`,
         };
       }
-      if (dip(bar) && followBody(bar) && movingOrNull(bar)) {
+      if (isRed(bar)) {
         return {
           direction: 'SELL',
           setup: 'CONTINUATION',
@@ -194,23 +217,22 @@ export function decideEntryFrom10sRegime(
       return null;
     }
 
-    // No clear multi-bar impulse — require strong single-bar body
-    if (!movingOrNull(bar) || !strongBody(bar)) return null;
-    if (rally(bar)) {
+    // No multi-bar impulse — still follow live bar with the expansion regime
+    if (isGreen(bar)) {
       return { direction: 'BUY', setup: 'CONTINUATION', reason: `${r} follow up · ${candle}` };
     }
-    if (dip(bar)) {
+    if (isRed(bar)) {
       return { direction: 'SELL', setup: 'CONTINUATION', reason: `${r} follow down · ${candle}` };
     }
     return null;
   }
 
   if (r === 'BREAKOUT_UP') {
-    if (!movingOrNull(bar) || dip(bar) || !strongBody(bar)) return null;
+    if (isRed(bar)) return null;
     return { direction: 'BUY', setup: 'BREAKOUT', reason: `${r} follow · ${candle}` };
   }
   if (r === 'BREAKOUT_DOWN') {
-    if (!movingOrNull(bar) || rally(bar) || !strongBody(bar)) return null;
+    if (isGreen(bar)) return null;
     return { direction: 'SELL', setup: 'BREAKOUT', reason: `${r} follow · ${candle}` };
   }
 

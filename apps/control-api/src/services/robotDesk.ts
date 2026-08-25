@@ -31,7 +31,12 @@ import {
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove } from './exitManage.js';
-import { allowEntryAgainstImpulse, decideEntryFrom10sRegime, explainNoEntry } from './entryFromRegime.js';
+import {
+  allowEntryAgainstImpulse,
+  decideEntryFrom10sRegime,
+  explainNoEntry,
+  lateChaseAppliesToSetup,
+} from './entryFromRegime.js';
 import { allowEpicReentry, noteEpicTradeClose } from './tradeCooldown.js';
 import { publishEpicEntry, readEpicEntry } from './epicEntrySync.js';
 import {
@@ -309,7 +314,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC → live regime (no UNKNOWN) → ENTRY/EXIT',
     note:
-      '5m brain · LIVE entry · hold winners longer · same-epic sync',
+      '5m brain · regime-led entry (soft live timing) · hold winners',
   };
 }
 
@@ -1361,17 +1366,19 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    // No chase: 1m already spent the move
-    const hist = await fetchCapitalMinutePrices(opened.session, s.epic, 10);
-    if (hist.ok && isLateMoveOnFiveMinute(sig.direction, hist.candles)) {
-      pushTick(s, {
-        phase: 'WAIT',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `SKIP chase · late on 5m · ${sig.direction}`,
-      });
-      return;
+    // Late-chase only for breakout/expansion exhaustion — not TREND (thesis IS the move)
+    if (lateChaseAppliesToSetup(sig.setup, s.regime)) {
+      const hist = await fetchCapitalMinutePrices(opened.session, s.epic, 10);
+      if (hist.ok && isLateMoveOnFiveMinute(sig.direction, hist.candles)) {
+        pushTick(s, {
+          phase: 'WAIT',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `SKIP chase · late on 5m · ${sig.direction}`,
+        });
+        return;
+      }
     }
 
     direction = sig.direction;
