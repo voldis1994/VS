@@ -309,7 +309,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC → live regime (no UNKNOWN) → ENTRY/EXIT',
     note:
-      '5m brain · same-epic entry sync · no RISK gate · TREND/EXPANSION/BO',
+      '5m brain · LIVE candle entry + same-epic sync · no RISK gate',
   };
 }
 
@@ -1238,10 +1238,20 @@ async function robotCycleBody(s: Internal) {
       // do not return — Capital local path continues
     }
 
-    const bar = s.ohlcState.last_closed;
+    const closed = s.ohlcState.last_closed;
+    const forming = s.ohlcState.forming;
+    const justClosed = Boolean(s.ohlcState.just_closed && closed);
+    // Live 5m: take setup on forming candle; just-closed still preferred for that tick
+    const signalBar: TenSecBar | null = justClosed
+      ? closed!
+      : forming && forming.ticks >= 2
+        ? forming
+        : null;
+    const liveSignal = Boolean(signalBar && !justClosed);
     const ohlc = s.ohlc_10s;
-    const ohlcLine = bar
-      ? `5m O=${bar.open.toFixed(2)} H=${bar.high.toFixed(2)} L=${bar.low.toFixed(2)} C=${bar.close.toFixed(2)} ${s.regime} · feeds ${
+    const show = signalBar || closed;
+    const ohlcLine = show
+      ? `5m${liveSignal ? ' LIVE' : justClosed ? ' CLOSE' : ''} O=${show.open.toFixed(2)} H=${show.high.toFixed(2)} L=${show.low.toFixed(2)} C=${show.close.toFixed(2)} ${s.regime} · feeds ${
           s.feed_contributing || 0
         }/${s.feed_sender_count || 0} ${s.feed_source || 'LOCAL'} ${s.feed_agreement || ''}`
       : `5m OHLC seeding · feeds ${s.feed_contributing || 0}/${s.feed_sender_count || 0}`;
@@ -1252,7 +1262,8 @@ async function robotCycleBody(s: Internal) {
 
     // Same-epic peer already opened on this 5m — follow without waiting for own close edge
     const peerSig = readEpicEntry(s.epic);
-    const localBucketMs = bar?.open_time_ms ?? 0;
+    const localBucketMs =
+      signalBar?.open_time_ms ?? forming?.open_time_ms ?? closed?.open_time_ms ?? 0;
     const peerMatchesBar =
       Boolean(peerSig) &&
       peerSig!.sourceUnitId !== s.id &&
@@ -1290,20 +1301,19 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    // QUALITY: only closed 5m bar — never chase forming (unless peer synced above)
-    if (!(s.ohlcState.just_closed && bar)) {
+    if (!signalBar) {
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · wait closed 5m · C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'}`,
+        detail: `${ohlcLine} · seeding live 5m · C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'}`,
       });
       return;
     }
 
     if (!s.regime || s.regime === 'UNKNOWN') s.regime = 'COMPRESSION';
-    const bucketKey = String(bar.open_time_ms || 0);
+    const bucketKey = String(signalBar.open_time_ms || 0);
     if (bucketKey && bucketKey === s.last_entry_signal_key) {
       pushTick(s, {
         phase: 'DECIDE',
@@ -1315,14 +1325,14 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    const sig = decideEntryFrom10sRegime(bar, s.regime);
+    const sig = decideEntryFrom10sRegime(signalBar, s.regime);
     if (!sig) {
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · ${s.regime} · no quality setup (skip junk/fade/chase)`,
+        detail: `${ohlcLine} · ${s.regime} · no quality setup${liveSignal ? ' on live' : ''} (skip junk/fade/chase)`,
       });
       return;
     }
@@ -1366,15 +1376,15 @@ async function robotCycleBody(s: Internal) {
 
     direction = sig.direction;
     setupType = sig.setup;
-    reason = sig.reason;
+    reason = liveSignal ? `LIVE 5m · ${sig.reason}` : sig.reason;
     if (bucketKey) s.last_entry_signal_key = bucketKey;
 
-    // Publish so same-epic peers enter this bar without waiting for their own close edge
+    // Publish so same-epic peers enter this bar together
     publishEpicEntry({
       epic: s.epic,
       side: direction,
       regime: String(setupType || s.regime || ''),
-      barBucketMs: Number(bar.open_time_ms || 0),
+      barBucketMs: Number(signalBar.open_time_ms || 0),
       mid: quote.mid ?? 0,
       atMs: Date.now(),
       sourceUnitId: s.id,
