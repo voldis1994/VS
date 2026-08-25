@@ -31,7 +31,7 @@ import {
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove } from './exitManage.js';
-import { allowEntryAgainstImpulse, decideEntryFrom10sRegime } from './entryFromRegime.js';
+import { allowEntryAgainstImpulse, decideEntryFrom10sRegime, explainNoEntry } from './entryFromRegime.js';
 import { allowEpicReentry, noteEpicTradeClose } from './tradeCooldown.js';
 import { publishEpicEntry, readEpicEntry } from './epicEntrySync.js';
 import {
@@ -1325,14 +1325,14 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    const sig = decideEntryFrom10sRegime(signalBar, s.regime);
+    const sig = decideEntryFrom10sRegime(signalBar, s.regime, s.closedBars);
     if (!sig) {
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · ${s.regime} · no quality setup${liveSignal ? ' on live' : ''} (skip junk/fade/chase)`,
+        detail: `${ohlcLine} · ${s.regime} · ${explainNoEntry(signalBar, s.regime, s.closedBars)}`,
       });
       return;
     }

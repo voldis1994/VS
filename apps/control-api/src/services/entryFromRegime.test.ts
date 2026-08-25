@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   allowEntryAgainstImpulse,
   decideEntryFrom10sRegime,
+  explainNoEntry,
   recentImpulse,
   signalBarTooLate,
 } from './entryFromRegime.js';
@@ -16,6 +17,12 @@ function bar(open: number, close: number, i = 0): TenSecBar {
 // ~0.2% bodies — clear on 5m thresholds
 const dip = bar(4600, 4590);
 const rally = bar(4600, 4610);
+
+const upImpulse: TenSecBar[] = [
+  bar(4600, 4608, 0),
+  bar(4608, 4618, 1),
+  bar(4618, 4628, 2),
+];
 
 describe('5m quality entry', () => {
   it('skips chop: RANGE / UNKNOWN / FADE / REVERSAL', () => {
@@ -36,9 +43,18 @@ describe('5m quality entry', () => {
     expect(decideEntryFrom10sRegime(dip, 'TREND_DOWN')).toBeNull();
   });
 
-  it('EXPANSION / BREAKOUT follow clear body', () => {
+  it('EXPANSION without impulse: strong body follow', () => {
     expect(decideEntryFrom10sRegime(rally, 'EXPANSION')?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(dip, 'EXPANSION')?.direction).toBe('SELL');
+  });
+
+  it('EXPANSION with UP impulse: dip-buy, never fade SELL', () => {
+    expect(decideEntryFrom10sRegime(dip, 'EXPANSION', upImpulse)?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(dip, 'EXPANSION', upImpulse)?.setup).toBe('PULLBACK');
+    expect(decideEntryFrom10sRegime(rally, 'EXPANSION', upImpulse)?.direction).toBe('BUY');
+  });
+
+  it('BREAKOUT follow clear body', () => {
     expect(decideEntryFrom10sRegime(rally, 'BREAKOUT_UP')?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(dip, 'BREAKOUT_DOWN')?.direction).toBe('SELL');
   });
@@ -47,6 +63,19 @@ describe('5m quality entry', () => {
     const late = bar(4600, 4625); // ~0.54%
     expect(signalBarTooLate(late)).toBe(true);
     expect(decideEntryFrom10sRegime(late, 'BREAKOUT_UP')).toBeNull();
+  });
+
+  it('quiet live EXPANSION explains need stronger body', () => {
+    const quiet: TenSecBar = {
+      open_time_ms: 0,
+      open: 4650.73,
+      high: 4653.96,
+      low: 4649.09,
+      close: 4653.83,
+      ticks: 8,
+    };
+    expect(decideEntryFrom10sRegime(quiet, 'EXPANSION', upImpulse)).toBeNull();
+    expect(explainNoEntry(quiet, 'EXPANSION', upImpulse)).toMatch(/stronger live body|need stronger/);
   });
 
   it('quiet bar is never a trade', () => {

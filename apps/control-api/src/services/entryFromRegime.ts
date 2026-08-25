@@ -1,6 +1,6 @@
 /**
  * Quality entry on 5m — fewer trades, larger bodies.
- * TREND pullback/resume + EXPANSION/BREAKOUT follow.
+ * TREND pullback/resume + EXPANSION/BREAKOUT follow impulse (never fade).
  * SKIP: RANGE chop, FADE, REVERSAL, quiet.
  */
 import type { RegimeName } from './regimes.js';
@@ -33,6 +33,11 @@ const IMPULSE_BODY_PCT = 0.0015;
 
 function strongBody(bar: TenSecBar): boolean {
   return Math.abs(bodyPct(bar)) >= IMPULSE_BODY_PCT || Math.abs(bar.close - bar.open) >= 6;
+}
+
+/** Softer follow when multi-bar impulse already confirmed — ~4pt Gold. */
+function followBody(bar: TenSecBar): boolean {
+  return strongBody(bar) || Math.abs(bar.close - bar.open) >= 4;
 }
 
 function describe(bar: TenSecBar): string {
@@ -85,9 +90,35 @@ export function allowEntryAgainstImpulse(
   return { ok: true, reason: `impulse ${imp.dir} aligns` };
 }
 
+/** Human detail when decideEntry returns null — shown on robot board. */
+export function explainNoEntry(
+  bar: TenSecBar,
+  regime?: string | null,
+  closedBars?: TenSecBar[] | null
+): string {
+  const r = normalizeRegime(regime);
+  const body = bodyPct(bar);
+  const pts = bar.close - bar.open;
+  const bits = [
+    `body=${(body * 100).toFixed(2)}%/${pts.toFixed(1)}pt`,
+    `rng=${(rangePct(bar) * 100).toFixed(2)}%`,
+  ];
+  if (signalBarTooLate(bar)) return `late bar · ${bits.join(' ')}`;
+  if (r === 'EXPANSION' || r === 'BREAKOUT_UP' || r === 'BREAKOUT_DOWN') {
+    const imp = recentImpulse(closedBars);
+    if (!movingOrNull(bar) && !followBody(bar)) {
+      return `need stronger live body (~4–6pt) · ${bits.join(' ')}${imp.dir ? ` · impulse ${imp.dir}` : ''}`;
+    }
+  }
+  if (r === 'TREND_UP' && !dip(bar)) return `TREND_UP waits dip · ${bits.join(' ')}`;
+  if (r === 'TREND_DOWN' && !rally(bar)) return `TREND_DOWN waits rally · ${bits.join(' ')}`;
+  return `no quality setup · ${bits.join(' ')}`;
+}
+
 export function decideEntryFrom10sRegime(
   bar: TenSecBar,
-  regime?: string | null
+  regime?: string | null,
+  closedBars?: TenSecBar[] | null
 ): RegimeEntry | null {
   const r: RegimeName = normalizeRegime(regime);
   const candle = describe(bar);
@@ -125,6 +156,45 @@ export function decideEntryFrom10sRegime(
   }
 
   if (r === 'EXPANSION') {
+    const imp = recentImpulse(closedBars);
+
+    // Follow the multi-bar impulse — never fade an UP expansion with SELL (or DOWN with BUY)
+    if (imp.dir === 'UP') {
+      if (dip(bar) && movingOrNull(bar)) {
+        return {
+          direction: 'BUY',
+          setup: 'PULLBACK',
+          reason: `EXPANSION UP dip-buy · ${candle}`,
+        };
+      }
+      if (rally(bar) && followBody(bar) && movingOrNull(bar)) {
+        return {
+          direction: 'BUY',
+          setup: 'CONTINUATION',
+          reason: `EXPANSION UP follow · ${candle}`,
+        };
+      }
+      return null;
+    }
+    if (imp.dir === 'DOWN') {
+      if (rally(bar) && movingOrNull(bar)) {
+        return {
+          direction: 'SELL',
+          setup: 'PULLBACK',
+          reason: `EXPANSION DOWN rally-sell · ${candle}`,
+        };
+      }
+      if (dip(bar) && followBody(bar) && movingOrNull(bar)) {
+        return {
+          direction: 'SELL',
+          setup: 'CONTINUATION',
+          reason: `EXPANSION DOWN follow · ${candle}`,
+        };
+      }
+      return null;
+    }
+
+    // No clear multi-bar impulse — require strong single-bar body
     if (!movingOrNull(bar) || !strongBody(bar)) return null;
     if (rally(bar)) {
       return { direction: 'BUY', setup: 'CONTINUATION', reason: `${r} follow up · ${candle}` };
