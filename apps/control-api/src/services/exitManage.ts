@@ -47,10 +47,10 @@ export function thesisFailureReason(
   return null;
 }
 
-/** Robot HardInv ≈0.16% — before broker disaster SL (~0.25%, micro-friendly). */
+/** Robot HardInv ≈0.11% — ~30% tighter than 0.16% (micro: ~£0.60 not £0.89 on Gold 0.15). */
 export function hardInvalidationDistance(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.0016, 0.16);
+  return Math.max(abs * 0.00112, 0.11);
 }
 
 /** Arm protection from ≈1.0pt on Gold ~4600. */

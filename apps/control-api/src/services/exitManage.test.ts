@@ -120,11 +120,14 @@ describe('decideBestOutcomeExit', () => {
     expect(buy.exit).toBe(false);
   });
 
-  it('hard invalidation at ~0.16% adverse (before broker disaster SL)', () => {
+  it('hard invalidation at ~0.11% adverse (micro ~£0.60 not £0.89 on Gold 0.15)', () => {
     const sl = hardInvalidationDistance(2000);
-    expect(sl).toBeGreaterThanOrEqual(3.2);
-    expect(sl).toBeLessThan(4);
-    const d = decideBestOutcomeExit(snap({ open_side: 'BUY', entry_price: 2000, regime: 'RANGE' }), 1993);
+    expect(sl).toBeGreaterThanOrEqual(2.2);
+    expect(sl).toBeLessThan(2.5);
+    // Gold ~4640: ~5.2pt HardInv (was ~7.4pt at 0.16%)
+    expect(hardInvalidationDistance(4640)).toBeLessThan(5.3);
+    expect(hardInvalidationDistance(4640)).toBeGreaterThan(5.0);
+    const d = decideBestOutcomeExit(snap({ open_side: 'BUY', entry_price: 2000, regime: 'RANGE' }), 1997);
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/HardInvalidation/);
   });
