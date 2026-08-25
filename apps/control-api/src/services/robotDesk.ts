@@ -40,6 +40,7 @@ import {
 } from './entryFromRegime.js';
 import { allowEpicReentry, noteEpicTradeClose } from './tradeCooldown.js';
 import { publishEpicEntry, readEpicEntry } from './epicEntrySync.js';
+import { allowDeskSameSide, deskConflictShouldExit, deskOpensOnEpic } from './deskSideLock.js';
 import {
   allowEntryFromFeeds,
   multiFeedOwnsOhlc,
@@ -315,7 +316,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC → live regime (no UNKNOWN) → ENTRY/EXIT',
     note:
-      '5m brain · no BUY into dump · sticky TREND · regime-led',
+      '5m brain · one desk side per epic · no BUY into dump',
   };
 }
 
@@ -1153,6 +1154,19 @@ async function robotCycleBody(s: Internal) {
       if (quote.mid == null) return;
 
       const short = shortNetMove(s.closedBars, s.ohlcState.forming ?? s.ohlcState.last_closed);
+      const liveSide = s.open_side || brokerOpen?.direction || null;
+      if (liveSide === 'BUY' || liveSide === 'SELL') {
+        const desk = deskOpensOnEpic(sessions.values(), s.epic, s.id);
+        const hasOpposite =
+          (liveSide === 'BUY' && desk.sells.length > 0) ||
+          (liveSide === 'SELL' && desk.buys.length > 0);
+        const conflict = deskConflictShouldExit(liveSide, hasOpposite, short.netPct);
+        if (conflict.exit) {
+          await exitTrade(opened.session, s, quote, conflict.reason);
+          queueMicrotask(() => kickPeerManageCycles(s.id, s.epic));
+          return;
+        }
+      }
       const decision = decideBestOutcomeExit(
         { ...s, short_net_pct: short.netPct },
         quote.mid
@@ -1318,6 +1332,17 @@ async function robotCycleBody(s: Internal) {
         });
         return;
       }
+      const deskPeer = allowDeskSameSide(sessions.values(), s.epic, peerSig.side, s.id);
+      if (!deskPeer.ok) {
+        pushTick(s, {
+          phase: 'WAIT',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `${ohlcLine} · ${deskPeer.reason}`,
+        });
+        return;
+      }
       s.last_entry_signal_key = peerKey;
       direction = peerSig.side;
       setupType = peerSig.regime || 'PEER';
@@ -1382,6 +1407,18 @@ async function robotCycleBody(s: Internal) {
         ask: quote.ask,
         mid: quote.mid,
         detail: `${ohlcLine} · ${epicGate.reason}`,
+      });
+      return;
+    }
+
+    const deskGate = allowDeskSameSide(sessions.values(), s.epic, sig.direction, s.id);
+    if (!deskGate.ok) {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · ${deskGate.reason}`,
       });
       return;
     }
