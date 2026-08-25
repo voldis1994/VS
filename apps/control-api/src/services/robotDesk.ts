@@ -6,9 +6,7 @@ import {
   confirmCapitalDeal,
   createCapitalPosition,
   fetchCapitalMarketQuote,
-  fetchCapitalMinutePrices,
   fetchCapitalPrices,
-  isLateMoveOnFiveMinute,
   listCapitalOpenPositions,
   type CapitalMarketQuote,
   type CapitalOpenPosition,
@@ -35,7 +33,6 @@ import {
   allowEntryAgainstImpulse,
   decideEntryFrom10sRegime,
   explainNoEntry,
-  lateChaseAppliesToSetup,
   shortNetMove,
 } from './entryFromRegime.js';
 import { allowEpicReentry, noteEpicTradeClose } from './tradeCooldown.js';
@@ -316,7 +313,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC → live regime (no UNKNOWN) → ENTRY/EXIT',
     note:
-      '5m brain · flatten hedge · one side per epic',
+      '5m · one rule: with market direction · soft live timing',
   };
 }
 
@@ -1523,21 +1520,6 @@ async function robotCycleBody(s: Internal) {
         detail: `${ohlcLine} · ${deskGate.reason}`,
       });
       return;
-    }
-
-    // Late-chase only for breakout/expansion exhaustion — not TREND (thesis IS the move)
-    if (lateChaseAppliesToSetup(sig.setup, s.regime)) {
-      const hist = await fetchCapitalMinutePrices(opened.session, s.epic, 10);
-      if (hist.ok && isLateMoveOnFiveMinute(sig.direction, hist.candles)) {
-        pushTick(s, {
-          phase: 'WAIT',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `SKIP chase · late on 5m · ${sig.direction}`,
-        });
-        return;
-      }
     }
 
     direction = sig.direction;
