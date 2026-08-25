@@ -64,14 +64,21 @@ describe('10min risk window', () => {
     expect(r.snapshot.equity_start).toBe(100);
   });
 
-  it('+10% realized banks → cooldown; floating +10% does not bank', () => {
+  it('+10% early (realized OR live) banks → cooldown netirgo', () => {
     const t0 = 5_000_000;
     setRiskEquity(5, 100, t0);
-    expect(allowRiskEntry(5, 10, t0 + 1000).ok).toBe(true); // floating only
-    noteRiskTradePnl(5, 10, t0 + 2000);
-    const r = allowRiskEntry(5, 0, t0 + 2000);
-    expect(r.ok).toBe(false);
-    expect(r.snapshot.status).toBe('BANKED');
+    // Floating +10% mid-window → bank early
+    const live = allowRiskEntry(5, 10, t0 + 60_000);
+    expect(live.ok).toBe(false);
+    expect(live.snapshot.status).toBe('BANKED');
+    expect(live.reason).toMatch(/bank early|≥ \+10%/);
+
+    resetRiskWindows();
+    setRiskEquity(55, 100, t0);
+    noteRiskTradePnl(55, 10, t0 + 30_000);
+    const closed = allowRiskEntry(55, 0, t0 + 30_000);
+    expect(closed.ok).toBe(false);
+    expect(closed.snapshot.status).toBe('BANKED');
   });
 
   it('window clock does not run before equity seed', () => {

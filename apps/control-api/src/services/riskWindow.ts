@@ -2,11 +2,11 @@
  * Simple 10-minute account risk window (operator rules):
  * - Target profit ≈ 10% of total equity (pass band 7–10%+)
  * - Open/close trades normally inside the window
+ * - Hit +10% anytime (realized or live) before window end → bank early, cooldown 10 min
  * - End of 10 min without ≥7% realized → cooldown next 10 min
  * - −10% of total equity (realized + open UPL) → cooldown next 10 min
- * - Hit +10% realized → bank: cooldown next 10 min
  *
- * Targets use REALIZED PnL only (must close trades). Live −10% includes open UPL.
+ * +7% window-pass uses REALIZED PnL (closed trades). Early +10% bank also trips on live UPL.
  */
 
 export const RISK_WINDOW_MS = 10 * 60 * 1000;
@@ -199,9 +199,11 @@ export function evaluateRiskWindow(
     };
   }
 
-  // Bank target: +10% REALIZED (must close trades — not floating UPL)
-  if (realizedPct >= RISK_TARGET_MAX_PCT) {
-    const detail = `RISK +${(realizedPct * 100).toFixed(1)}% ≥ +10% target · bank · cooldown 10min`;
+  // Early bank: +10% anytime in the window (realized OR live with open UPL) → stop trading 10min
+  if (realizedPct >= RISK_TARGET_MAX_PCT || livePct >= RISK_TARGET_MAX_PCT) {
+    const hit = Math.max(realizedPct, livePct);
+    const via = realizedPct >= RISK_TARGET_MAX_PCT ? 'realized' : 'live';
+    const detail = `RISK +${(hit * 100).toFixed(1)}% ≥ +10% ${via} · bank early · cooldown 10min · netirgo`;
     startCooldown(s, now, 'BANKED', detail);
     return {
       allowEntry: false,
