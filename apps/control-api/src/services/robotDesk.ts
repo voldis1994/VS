@@ -313,11 +313,14 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
       ? `10s O${Number(ohlc.last_o).toFixed(2)}→C${Number(ohlc.last_c).toFixed(2)} ${ohlc.market}`
       : 'SEEDING';
   const zone = buildScalpZone(s.closedBars);
-  const feeds = `${s.multiFeed?.contributing ?? s.feed_contributing ?? 0}/${
-    s.multiFeed?.sender_count ?? s.feed_sender_count ?? 0
-  } ${s.feed_source || 'NONE'} lead=${s.multiFeed?.lead_label || '—'} ${
-    s.multiFeed?.agreement || s.feed_agreement || ''
-  }`.trim();
+  const mf = s.multiFeed;
+  const rejectN = (mf?.legs || []).filter((l) => l.role === 'REJECT').length;
+  const capLive = mf?.capital_contributing ?? s.feed_contributing ?? 0;
+  const capCfg = mf?.capital_sender_count ?? s.feed_sender_count ?? 0;
+  const pubNear = mf?.public_contributing ?? 0;
+  const feeds = `cap ${capLive}/${capCfg} · pubNear ${pubNear} · reject ${rejectN} · lead=${
+    mf?.lead_label || '—'
+  } · ${mf?.agreement || s.feed_agreement || 'NONE'}`.trim();
   let action = 'WAIT';
   if (!s.running) action = 'STOPPED';
   else if (s.open_side) action = `MANAGE ${s.open_side}`;
@@ -348,7 +351,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'LEAD/CONFIRM feeds → 10s OHLC → ZONE → regime → filters → ENTRY · BO+continuation → EXIT',
     note:
-      '10s SO · zones required · no random candle follow · BO holds on continuation · Safety SL ~0.20%',
+      '10s SO · zones required · public LEAD only if within 0.25% of Capital · FAR = REJECT · wrong epic = N/A · Safety SL on Capital.com',
   };
 }
 

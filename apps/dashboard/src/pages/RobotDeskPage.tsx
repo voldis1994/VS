@@ -337,10 +337,10 @@ export function RobotDeskPage() {
   const feedCount = board?.feed_sender_count ?? capitalSenders.length + publicSenders.length;
   const feedOk = board?.feed_contributing ?? 0;
   const chainLabel =
-    board?.chain || 'PUBLIC INTERNET + Capital → consensus mid → 10s OHLC → REGIME → ENTRY/EXIT';
+    board?.chain || 'LEAD/CONFIRM near Capital → 10s OHLC → ZONE → REGIME → ENTRY/EXIT';
   const boardNote =
     board?.note ||
-    'Public feeds: Yahoo, Aurum, Fawaz FX, Coinbase — fused with Capital for 10s OHLC';
+    'Public feeds only count when NEAR Capital CFD mid — FAR = REJECT, wrong epic = N/A (not IDLE broken)';
   const tradeTypes = board?.trade_types || ['BUY LONG', 'SELL LONG', 'BUY SCALP', 'SELL SCALP'];
   const focusLegs = focused?.feed_legs || [];
   const focusChain = focused?.decision_chain;
@@ -348,6 +348,61 @@ export function RobotDeskPage() {
   const clock = new Date().toLocaleTimeString();
   const nowDate = new Date().toLocaleDateString();
 
+  function publicFeedRow(s: (typeof publicSenders)[0]) {
+    const epic = (focused?.epic || focused?.display_name || '').toUpperCase();
+    const isMetal = /GOLD|XAU|SILVER|XAG|PLAT|XPT|PALL|XPD/.test(epic);
+    const isCrypto = /BTC|ETH|BITCOIN|ETHEREUM/.test(epic);
+    const isFx =
+      epic.length >= 6 &&
+      !isMetal &&
+      !isCrypto &&
+      /^[A-Z]{6}/.test(epic.replace(/[^A-Z]/g, ''));
+    let na: string | null = null;
+    if (epic) {
+      if ((s.kind === 'fx_reference' || s.kind === 'fx_live') && (isMetal || isCrypto)) {
+        na = 'N/A · not FX epic';
+      } else if (s.kind === 'coinbase' && !isCrypto) {
+        na = 'N/A · crypto only';
+      } else if (s.kind === 'aurum_metals' && !isMetal) {
+        na = 'N/A · metals only';
+      } else if (s.kind === 'yahoo_finance' && isFx && !isMetal) {
+        /* yahoo may still map FX — leave */
+      }
+    }
+    const leg =
+      focusLegs.find(
+        (l) =>
+          l.sender_id === s.sender_id ||
+          (l.name || '').toLowerCase().includes((s.name || '').toLowerCase().slice(0, 8)) ||
+          (l.name || '').toLowerCase().includes(String(s.kind || '').replace(/_/g, ' '))
+      ) || null;
+    if (na) {
+      return { status: 'N/A', detail: na, okClass: false, warnClass: true };
+    }
+    if (leg?.role === 'REJECT') {
+      return {
+        status: 'REJECT FAR',
+        detail: leg.detail || 'far from Capital',
+        okClass: false,
+        warnClass: false,
+      };
+    }
+    if (leg?.role === 'LEAD' || leg?.role === 'CONFIRM') {
+      return {
+        status: `${leg.role} · LIVE`,
+        detail: leg.detail || '',
+        okClass: true,
+        warnClass: false,
+      };
+    }
+    const live = s.status === 'LIVE' || s.status === 'ok' || s.status === 'live';
+    return {
+      status: String(s.status || 'IDLE'),
+      detail: '',
+      okClass: live,
+      warnClass: !live,
+    };
+  }
   const deploy = () => {
     if (!launchAccountId || !launchEpic) {
       setError('Izvēlies account + tirgu');
@@ -654,18 +709,24 @@ export function RobotDeskPage() {
 
               <div className="robot-arena-kicker" style={{ marginTop: 14 }}>PUBLIC INTERNET FEEDS</div>
               <div className="robot-feed-legs">
-                {publicSenders.map((s) => (
-                  <div
-                    key={s.sender_id}
-                    className={`robot-feed-leg ${s.status === 'LIVE' || s.status === 'ok' || s.status === 'live' ? 'ok' : ''}`}
-                  >
-                    <strong>{s.name}</strong>
-                    <span className="mono">
-                      {s.kind} · {s.status} · {s.trust}
-                      {s.latency_ms != null ? ` · ${s.latency_ms}ms` : ''}
-                    </span>
-                  </div>
-                ))}
+                {publicSenders.map((s) => {
+                  const row = publicFeedRow(s);
+                  return (
+                    <div
+                      key={s.sender_id}
+                      className={`robot-feed-leg ${row.okClass ? 'ok' : ''} ${row.warnClass ? 'warn' : ''} ${
+                        row.status.startsWith('REJECT') ? 'bad' : ''
+                      }`}
+                    >
+                      <strong>{s.name}</strong>
+                      <span className="mono">
+                        {s.kind} · {row.status} · {s.trust}
+                        {s.latency_ms != null && row.okClass ? ` · ${s.latency_ms}ms` : ''}
+                        {row.detail ? ` · ${row.detail}` : ''}
+                      </span>
+                    </div>
+                  );
+                })}
                 {publicSenders.length === 0 && <div className="mono robot-wire-empty">Nav public feeds.</div>}
               </div>
 
@@ -717,8 +778,11 @@ export function RobotDeskPage() {
                       : ''}
                   </div>
                   <div>
-                    FEEDS · {focused.feed_contributing ?? 0}/{focused.feed_sender_count ?? 0}{' '}
-                    {focused.feed_agreement || ''} · {focused.feed_source || '—'}
+                    FEEDS ·{' '}
+                    {focusChain?.feeds ||
+                      `${focused.feed_contributing ?? 0}/${focused.feed_sender_count ?? 0} ${
+                        focused.feed_agreement || ''
+                      } · ${focused.feed_source || '—'}`}
                   </div>
                   {focusLegs.length > 0 && (
                     <div className="robot-focus-legs">
