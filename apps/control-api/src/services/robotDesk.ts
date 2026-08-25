@@ -289,7 +289,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC → live regime (no UNKNOWN) → ENTRY/EXIT',
     note:
-      'RISK: clock on first trade · IDLE while WAIT setup · no cooldown for 0 trades',
+      'Entry: TREND/EXPANSION/BO follow · skip RANGE chop · RISK idle until first trade',
   };
 }
 
