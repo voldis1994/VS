@@ -65,6 +65,13 @@ import {
   type TenSecBar,
   type TenSecState,
 } from './tenSecondOhlc.js';
+import {
+  appendClosedTrade,
+  appendOpenEvent,
+  newTradeId,
+  tradeJournalPath,
+  type JournalOpenSnap,
+} from './tradeJournal.js';
 
 export type RobotTick = {
   at: string;
@@ -156,6 +163,8 @@ type Internal = RobotSession & {
   last_multi_feed_ms: number;
   multiFeed: MultiFeedPrice | null;
   cycle_busy: boolean;
+  /** Pending Excel journal row until close */
+  journal_open: JournalOpenSnap | null;
 };
 
 const ACTIVE_CADENCE_MS = 2_000;
@@ -276,6 +285,7 @@ function publicSession(s: Internal): RobotSession {
     last_multi_feed_ms: _mf,
     multiFeed: _multi,
     cycle_busy: _busy,
+    journal_open: _journal,
     ...rest
   } = s;
   const zoneSnap = buildScalpZone(s.closedBars);
@@ -379,6 +389,105 @@ function clearTradeState(s: Internal) {
   s.unrealized = null;
   s.safety_sl = null;
   s.mode = 'FLAT';
+  s.journal_open = null;
+}
+
+function buildJournalOpen(
+  s: Internal,
+  direction: 'BUY' | 'SELL',
+  reason: string,
+  setupType: string | null | undefined,
+  source: JournalOpenSnap['source']
+): JournalOpenSnap {
+  const zone = buildScalpZone(s.closedBars);
+  const ohlc = publicOhlc10s(s.ohlcState);
+  return {
+    trade_id: newTradeId(source === 'pipeline' ? 'P' : 'D'),
+    source,
+    opened_at: s.entry_at || new Date().toISOString(),
+    account_id: s.account_id,
+    client_id: s.client_id,
+    client_name: s.client_name,
+    account_name: s.account_name,
+    robot_id: s.id,
+    environment: s.environment,
+    epic: s.epic,
+    display_name: s.display_name,
+    side: direction,
+    lot_size: s.lot_size,
+    entry_price: s.entry_price,
+    safety_sl: s.safety_sl,
+    deal_id: s.deal_id,
+    deal_reference: s.last_deal_reference,
+    regime: String(s.regime || 'UNKNOWN'),
+    setup_type: setupType ?? null,
+    zone_kind: zone?.kind ?? null,
+    zone_high: zone?.high ?? null,
+    zone_low: zone?.low ?? null,
+    zone_detail: zone ? zone.detail : formatZoneInfo(null),
+    open_reason: reason,
+    feed_source: s.feed_source ?? s.multiFeed?.detail ?? null,
+    feed_agreement: s.multiFeed?.agreement ?? s.feed_agreement ?? null,
+    feed_contributing: s.multiFeed?.contributing ?? s.feed_contributing ?? null,
+    feed_sender_count: s.multiFeed?.sender_count ?? s.feed_sender_count ?? null,
+    lead_label: s.multiFeed?.lead_label ?? null,
+    ohlc_last:
+      ohlc.last_c != null
+        ? `O${ohlc.last_o} H${ohlc.last_h} L${ohlc.last_l} C${ohlc.last_c} ${ohlc.market}`
+        : null,
+    entry_enabled: s.entry_enabled,
+  };
+}
+
+function writeJournalClose(
+  s: Internal,
+  quote: Pick<CapitalMarketQuote, 'bid' | 'ask' | 'mid'>,
+  reason: string,
+  wasLoss: boolean
+): void {
+  const open = s.journal_open;
+  if (!open) return;
+  const exitMid = quote.mid;
+  const exitPrice = exitMid;
+  const pnlPts =
+    open.entry_price != null && exitMid != null
+      ? favorableMove(open.side, open.entry_price, exitMid)
+      : null;
+  const openedMs = Date.parse(open.opened_at);
+  const hold_sec = Number.isFinite(openedMs)
+    ? Math.max(0, Math.round((Date.now() - openedMs) / 1000))
+    : 0;
+  const zone = buildScalpZone(s.closedBars);
+  const written = appendClosedTrade({
+    open: {
+      ...open,
+      deal_id: s.deal_id || open.deal_id,
+      safety_sl: s.safety_sl ?? open.safety_sl,
+      entry_price: s.entry_price ?? open.entry_price,
+    },
+    closed_at: new Date().toISOString(),
+    exit_price: exitPrice,
+    exit_mid: exitMid,
+    close_reason: reason,
+    mfe: s.mfe,
+    mae: s.mae,
+    peak_retention: s.peak_retention,
+    unrealized_at_close: s.unrealized,
+    regime_at_exit: String(s.regime || 'UNKNOWN'),
+    zone_detail_at_exit: formatZoneInfo(zone),
+    was_loss: wasLoss,
+    hold_sec,
+    pnl_pts: pnlPts,
+  });
+  pushTick(s, {
+    phase: 'INFO',
+    bid: quote.bid,
+    ask: quote.ask,
+    mid: quote.mid,
+    detail: written.ok
+      ? `EXCEL journal · ${written.path} · ${open.trade_id}`
+      : written.detail,
+  });
 }
 
 /**
@@ -719,6 +828,7 @@ async function exitTrade(
       (exitSide === 'BUY' ? quote.mid < s.entry_price : quote.mid > s.entry_price));
   noteEpicTradeClose(s.epic, exitSide, wasLoss);
   s.error = null;
+  writeJournalClose(s, quote, reason, wasLoss);
   pushTick(s, {
     phase: 'EXIT',
     bid: quote.bid,
@@ -984,6 +1094,25 @@ async function enterTrade(
       dealId ? ` · dealId=${dealId}` : ''
     }`,
   });
+
+  s.journal_open = buildJournalOpen(
+    s,
+    direction,
+    reason,
+    setupType ?? null,
+    s.entry_enabled ? 'desk' : 'manage'
+  );
+  const openLog = appendOpenEvent(s.journal_open);
+  pushTick(s, {
+    phase: 'INFO',
+    bid: quote.bid,
+    ask: quote.ask,
+    mid: quote.mid,
+    detail: openLog.ok
+      ? `EXCEL open-log · ${s.journal_open.trade_id} · close → ${tradeJournalPath()}`
+      : openLog.detail,
+  });
+
   if (s.client_id) {
     emitToClient(s.client_id, {
       type: 'trade_opened',
@@ -1768,6 +1897,7 @@ export async function startRobotSession(input: {
     last_multi_feed_ms: 0,
     multiFeed: null,
     cycle_busy: false,
+    journal_open: null,
     feed_source: 'NONE',
     feed_contributing: 0,
     feed_sender_count: 0,
@@ -1790,7 +1920,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: max 1 open · BO10s + continuation hold · zones required · Safety SL ~0.20% · park when closed',
+      `Rules: max 1 open · BO10s + continuation · zones · Safety SL ~0.20% · Excel journal → ${tradeJournalPath()}`,
   });
 
   sessions.set(id, session);
@@ -1847,6 +1977,16 @@ export async function attachManageOnlyRobot(input: {
     if (input.deal_reference) existing.last_deal_reference = input.deal_reference;
     if (input.regime) existing.regime = normalizeRegime(input.regime);
     existing.orders_placed = Math.max(existing.orders_placed, 1);
+    if (!existing.journal_open) {
+      existing.journal_open = buildJournalOpen(
+        existing,
+        input.side,
+        `PIPELINE FILL · ${input.setup_type || input.regime || 'intent'}`,
+        input.setup_type ?? null,
+        'pipeline'
+      );
+      appendOpenEvent(existing.journal_open);
+    }
     pushTick(existing, {
       phase: 'ORDER',
       bid: null,
@@ -1854,7 +1994,7 @@ export async function attachManageOnlyRobot(input: {
       mid: input.entry_price,
       detail: `PIPELINE FILL ${input.side} ${input.display_name} lot=${input.lot_size} · ${
         existing.regime
-      } · manage-only (kept MFE ${existing.mfe.toFixed(5)})`,
+      } · manage-only (kept MFE ${existing.mfe.toFixed(5)}) · journal ${existing.journal_open.trade_id}`,
     });
     return publicSession(existing);
   }
@@ -1876,6 +2016,14 @@ export async function attachManageOnlyRobot(input: {
     internal.last_deal_reference = input.deal_reference || null;
     internal.orders_placed = Math.max(internal.orders_placed, 1);
     if (input.regime) internal.regime = normalizeRegime(input.regime);
+    internal.journal_open = buildJournalOpen(
+      internal,
+      input.side,
+      `PIPELINE FILL · ${input.setup_type || input.regime || 'intent'}`,
+      input.setup_type ?? null,
+      'pipeline'
+    );
+    appendOpenEvent(internal.journal_open);
     pushTick(internal, {
       phase: 'ORDER',
       bid: null,
@@ -1883,7 +2031,7 @@ export async function attachManageOnlyRobot(input: {
       mid: input.entry_price,
       detail: `PIPELINE FILL ${input.side} ${input.display_name} lot=${input.lot_size} · ${
         internal.regime
-      } · manage-only attached`,
+      } · manage-only attached · journal ${internal.journal_open.trade_id}`,
     });
   }
   return getRobotSession(session.id) || session;
