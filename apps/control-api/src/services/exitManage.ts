@@ -1,4 +1,4 @@
-/** Live Capital exit manager — 5m brain: wider stops, larger targets. */
+/** Live Capital exit manager — 5m brain: hold winners longer through noise. */
 
 export type ExitSide = 'BUY' | 'SELL';
 
@@ -44,31 +44,38 @@ export function thesisFailureReason(
   return null;
 }
 
-/** HardInv ≈0.20% — Gold ~9pt (survive 5m noise). */
+/** HardInv ≈0.22% — Gold ~10pt (survive 5m noise). */
 export function hardInvalidationDistance(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.002, 0.2);
+  return Math.max(abs * 0.0022, 0.2);
 }
 
-/** Arm peak after ~0.12% / ~5.5pt Gold. */
+/**
+ * Arm peak trail only after a real swing — ~0.28% / ~13pt Gold.
+ * (Was ~0.12% / ~5.5pt — locked too early on noise pullbacks.)
+ */
 export function bestOutcomeMfeFloor(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.0012, 4);
+  return Math.max(abs * 0.0028, 8);
 }
 
-/** Soft TP ≈0.60% — ~28pt Gold. */
+/** Soft TP ≈1.20% — ~55pt Gold — let 5m trends run. */
 export function bestOutcomeTarget(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.006, 0.6);
+  return Math.max(abs * 0.012, 1.2);
 }
 
-/** Min green soft-exit ~0.08% / ~3.7pt. */
+/** Min green soft-exit ~0.12% / ~5.5pt — don't bank micro scraps. */
 export function bestOutcomeMinGreen(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.0008, 3);
+  return Math.max(abs * 0.0012, 5);
 }
 
-export const BEST_OUTCOME_LOCK_RETENTION = 0.7;
+/**
+ * Peak trail lock: exit when retention falls below this while still green.
+ * 0.50 = allow ~50% giveback of MFE (was 0.70 → cut on tiny dips).
+ */
+export const BEST_OUTCOME_LOCK_RETENTION = 0.5;
 
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
@@ -121,8 +128,8 @@ export function decideBestOutcomeExit(
   }
 
   const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
-  // TimeDecay after ~40 min on 5m holds
-  if (heldMs > 2_400_000 && fav >= minGreen && s.mfe >= mfeFloor) {
+  // TimeDecay after ~75 min on 5m holds
+  if (heldMs > 4_500_000 && fav >= minGreen && s.mfe >= mfeFloor) {
     return {
       exit: true,
       reason: `TimeDecay · held ${Math.round(heldMs / 1000)}s · realize green UPL ${fav.toFixed(5)}`,

@@ -309,7 +309,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC → live regime (no UNKNOWN) → ENTRY/EXIT',
     note:
-      '5m brain · LIVE candle entry + same-epic sync · no RISK gate',
+      '5m brain · LIVE entry · hold winners longer · same-epic sync',
   };
 }
 
