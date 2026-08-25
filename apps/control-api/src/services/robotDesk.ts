@@ -288,7 +288,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC → live regime (no UNKNOWN) → ENTRY/EXIT',
     note:
-      'RISK 10min: target +7–10% equity · −10% stop → 10min cooldown · TREND pullback only',
+      'RISK 10min: +10% early → bank/netirgo · <+7% end → cooldown · −10% stop',
   };
 }
 
