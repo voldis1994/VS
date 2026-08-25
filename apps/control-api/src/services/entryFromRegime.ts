@@ -34,6 +34,52 @@ function followBody(bar: TenSecBar, label: string): RegimeEntry | null {
 }
 
 /**
+ * Net impulse over recent 10s bars (~lookback×10s).
+ * ~0.12% on Gold ≈ 5.5pt — blocks fading a fresh spike with counter trades.
+ */
+export function recentImpulse(
+  bars: TenSecBar[] | null | undefined,
+  lookback = 12
+): { dir: 'UP' | 'DOWN' | null; netPct: number; netPts: number } {
+  if (!bars?.length) return { dir: null, netPct: 0, netPts: 0 };
+  const window = bars.slice(-Math.max(lookback, 2));
+  if (window.length < 2) return { dir: null, netPct: 0, netPts: 0 };
+  const first = window[0]!;
+  const last = window[window.length - 1]!;
+  const netPts = last.close - first.open;
+  const mid = Math.max(Math.abs(first.open), 1e-9);
+  const netPct = netPts / mid;
+  if (netPct >= 0.0012) return { dir: 'UP', netPct, netPts };
+  if (netPct <= -0.0012) return { dir: 'DOWN', netPct, netPts };
+  return { dir: null, netPct, netPts };
+}
+
+/**
+ * Never SELL into a fresh UP impulse / BUY into a fresh DOWN dump.
+ * Fixes: close BUY on spike → next red bar opens SELL against the buy-move.
+ */
+export function allowEntryAgainstImpulse(
+  direction: 'BUY' | 'SELL',
+  bars: TenSecBar[] | null | undefined
+): { ok: boolean; reason: string } {
+  const imp = recentImpulse(bars);
+  if (!imp.dir) return { ok: true, reason: 'no strong recent impulse' };
+  if (direction === 'SELL' && imp.dir === 'UP') {
+    return {
+      ok: false,
+      reason: `BLOCK SELL · fresh UP impulse ${imp.netPts.toFixed(1)}pt (${(imp.netPct * 100).toFixed(2)}%) — no fade buy-move`,
+    };
+  }
+  if (direction === 'BUY' && imp.dir === 'DOWN') {
+    return {
+      ok: false,
+      reason: `BLOCK BUY · fresh DOWN impulse ${imp.netPts.toFixed(1)}pt (${(imp.netPct * 100).toFixed(2)}%) — no fade sell-move`,
+    };
+  }
+  return { ok: true, reason: `impulse ${imp.dir} aligns` };
+}
+
+/**
  * Suitable entry for the current 10s regime.
  * Never stalls on UNKNOWN / COMPRESSION / TRANSITION — follows the candle.
  * Does not fade a trend (no SELL in TREND_UP, no BUY in TREND_DOWN).
@@ -45,7 +91,6 @@ export function decideEntryFrom10sRegime(
   const r: RegimeName = normalizeRegime(regime);
   const candle = describe(bar);
 
-  // No wait / no UNKNOWN stall — trade the move
   if (r === 'UNKNOWN' || r === 'TRANSITION' || r === 'COMPRESSION') {
     return followBody(bar, r);
   }
@@ -97,7 +142,6 @@ export function decideEntryFrom10sRegime(
     return followBody(bar, r);
   }
 
-  // RANGE — mean-reversion on same body threshold as dip/rally (no extra wait)
   if (r === 'RANGE') {
     if (!movingOrNull(bar)) return null;
     if (dip(bar)) return { direction: 'BUY', setup: 'FADE', reason: `${r} fade dip · ${candle}` };
