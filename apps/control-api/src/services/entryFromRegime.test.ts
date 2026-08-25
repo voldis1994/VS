@@ -17,13 +17,15 @@ const dip = bar(2000, 1996);
 const rally = bar(2000, 2004);
 
 describe('quality entry only', () => {
-  it('skips junk regimes: RANGE / UNKNOWN / FADE / REVERSAL / EXPANSION', () => {
+  it('skips junk regimes: RANGE / UNKNOWN / FADE / REVERSAL / EXPANSION / BREAKOUT', () => {
     expect(decideEntryFrom10sRegime(dip, 'UNKNOWN')).toBeNull();
     expect(decideEntryFrom10sRegime(rally, 'COMPRESSION')).toBeNull();
     expect(decideEntryFrom10sRegime(dip, 'RANGE')).toBeNull();
     expect(decideEntryFrom10sRegime(dip, 'FAILED_BREAKOUT_UP')).toBeNull();
     expect(decideEntryFrom10sRegime(rally, 'REVERSAL_CANDIDATE')).toBeNull();
     expect(decideEntryFrom10sRegime(rally, 'EXPANSION')).toBeNull();
+    expect(decideEntryFrom10sRegime(rally, 'BREAKOUT_UP')).toBeNull();
+    expect(decideEntryFrom10sRegime(dip, 'BREAKOUT_DOWN')).toBeNull();
   });
 
   it('TREND_UP only dip-buys — never sells the rally', () => {
@@ -42,13 +44,11 @@ describe('quality entry only', () => {
     expect(decideEntryFrom10sRegime(dip, 'PULLBACK_UPTREND')).toBeNull();
   });
 
-  it('BREAKOUT_UP follows clear up body, not late chase', () => {
-    expect(decideEntryFrom10sRegime(rally, 'BREAKOUT_UP')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(dip, 'BREAKOUT_UP')).toBeNull();
-    // Already ran ~0.4% — too late
+  it('10s BREAKOUT is never traded (whipsaw on micro)', () => {
+    expect(decideEntryFrom10sRegime(rally, 'BREAKOUT_UP')).toBeNull();
+    expect(decideEntryFrom10sRegime(dip, 'BREAKOUT_DOWN')).toBeNull();
     const late = bar(4600, 4620);
     expect(signalBarTooLate(late)).toBe(true);
-    expect(decideEntryFrom10sRegime(late, 'BREAKOUT_UP')).toBeNull();
   });
 
   it('quiet bar is never a trade', () => {

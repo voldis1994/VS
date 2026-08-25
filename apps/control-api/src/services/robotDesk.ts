@@ -32,6 +32,7 @@ import {
 } from './regimes.js';
 import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove } from './exitManage.js';
 import { allowEntryAgainstImpulse, decideEntryFrom10sRegime } from './entryFromRegime.js';
+import { allowEpicReentry, noteEpicTradeClose } from './tradeCooldown.js';
 import {
   allowEntryFromFeeds,
   multiFeedOwnsOhlc,
@@ -273,7 +274,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC → live regime (no UNKNOWN) → ENTRY/EXIT',
     note:
-      'Quality only: TREND pullback / BO follow · no RANGE/fade junk · no chase · no SELL into buy impulse',
+      'Quality only: TREND pullback/resume · no 10s BO/RANGE/fade · 3–5min epic pause · no flip',
   };
 }
 
@@ -592,6 +593,14 @@ async function exitTrade(
   s.exits_done += 1;
   s.last_deal_reference = result.deal_reference || s.last_deal_reference;
   s.closed_at_ms = Date.now();
+  const exitSide = s.open_side;
+  const wasLoss =
+    (s.unrealized != null && s.unrealized < 0) ||
+    (quote.mid != null &&
+      s.entry_price != null &&
+      exitSide != null &&
+      (exitSide === 'BUY' ? quote.mid < s.entry_price : quote.mid > s.entry_price));
+  noteEpicTradeClose(s.epic, exitSide, wasLoss);
   s.error = null;
   pushTick(s, {
     phase: 'EXIT',
@@ -1055,6 +1064,7 @@ async function robotCycleBody(s: Internal) {
           detail: 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
         });
         s.closed_at_ms = Date.now();
+        noteEpicTradeClose(s.epic, s.open_side, true);
         clearTradeState(s);
       }
     } else {
@@ -1134,8 +1144,8 @@ async function robotCycleBody(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // After close — brief pause so we do not flip into junk reverse
-    const POST_CLOSE_MS = 45_000;
+    // After close — long pause (was 45s → ~9 trades/6min death spiral)
+    const POST_CLOSE_MS = 180_000;
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
     if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_MS) {
       pushTick(s, {
@@ -1143,7 +1153,7 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `POST-CLOSE pause ${Math.ceil((POST_CLOSE_MS - sinceClose) / 1000)}s · no flip junk`,
+        detail: `POST-CLOSE pause ${Math.ceil((POST_CLOSE_MS - sinceClose) / 1000)}s · no whipsaw`,
       });
       return;
     }
@@ -1159,14 +1169,15 @@ async function robotCycleBody(s: Internal) {
         const bars = aggregateSecondsToTen(sec.candles);
         const last = bars[bars.length - 1];
         if (last) {
-          const key = `${last.open.toFixed(4)}:${last.close.toFixed(4)}:${last.high.toFixed(4)}`;
-          const isNew = key !== s.last_closed_bar_key;
+          // Bucket time — never OHLC fingerprint (close drifts → fake just_closed spam)
+          const bucket = String(last.open_time_ms || 0);
+          const isNew = Boolean(bucket) && bucket !== s.last_closed_bar_key;
           s.ohlcState = {
             forming: s.ohlcState.forming,
             last_closed: last,
             just_closed: isNew,
           };
-          if (isNew) s.last_closed_bar_key = key;
+          if (isNew) s.last_closed_bar_key = bucket;
           s.ohlc_10s = publicOhlc10s(s.ohlcState);
           applyRobotRegime(s, bars);
         }
@@ -1243,6 +1254,18 @@ async function robotCycleBody(s: Internal) {
         ask: quote.ask,
         mid: quote.mid,
         detail: `${ohlcLine} · ${vsImpulse.reason}`,
+      });
+      return;
+    }
+
+    const epicGate = allowEpicReentry(s.epic, sig.direction);
+    if (!epicGate.ok) {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · ${epicGate.reason}`,
       });
       return;
     }
