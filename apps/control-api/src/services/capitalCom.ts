@@ -969,7 +969,7 @@ export async function createCapitalPosition(
   };
 }
 
-/** ~0.13% disaster cushion stopLevel (≥2× broker min) — wider than HardInv 0.08%. */
+/** ~0.32% disaster cushion stopLevel (≥2× broker min) — wider than HardInv 0.20%. */
 export function computeSafetyCushionStopLevel(
   direction: 'BUY' | 'SELL',
   mid: number,
@@ -999,7 +999,7 @@ export function computeSafetyCushionStopLevel(
         : abs * 0.00005;
   const brokerMin =
     opts?.minStopDistance != null && opts.minStopDistance > 0 ? opts.minStopDistance : 0;
-  const pctCushion = abs * 0.0013; // 0.13% — wider than HardInv 0.08%
+  const pctCushion = abs * 0.0032; // 0.32% — wider than HardInv 0.20%
   const floor = abs >= 1000 ? 0.35 : abs >= 100 ? 0.15 : abs >= 10 ? 0.025 : 0.00025;
   const dist = Math.max(pctCushion, brokerMin * 2, spr * 5, floor);
   const raw = direction === 'BUY' ? ref - dist : ref + dist;
@@ -1061,21 +1061,31 @@ export async function fetchCapitalMinutePrices(
 }
 
 /**
- * True if the latest 1m candle already moved hard in trade direction (~end of move).
- * Blocks chase entries — ~0.12% of price (~5.5pt Gold).
+ * True if the latest closed ~5m move (last 5×1m) already ran hard in trade direction.
+ * ~0.30% ≈ 14pt Gold — blocks chase on 5m brain.
  */
+export function isLateMoveOnFiveMinute(
+  direction: 'BUY' | 'SELL',
+  candles: CapitalPriceCandle[]
+): boolean {
+  if (candles.length < 3) return false;
+  const window = candles.slice(-5);
+  const first = window[0]!;
+  const last = window[window.length - 1]!;
+  const mid = Math.max(Math.abs(first.open), 1e-9);
+  const move = last.close - first.open;
+  const thr = Math.max(mid * 0.003, 0.5);
+  if (direction === 'BUY' && move >= thr) return true;
+  if (direction === 'SELL' && move <= -thr) return true;
+  return false;
+}
+
+/** @deprecated — prefer isLateMoveOnFiveMinute for 5m brain */
 export function isLateMoveOnOneMinute(
   direction: 'BUY' | 'SELL',
   candles: CapitalPriceCandle[]
 ): boolean {
-  if (!candles.length) return false;
-  const last = candles[candles.length - 1]!;
-  const mid = Math.max(Math.abs(last.open), 1e-9);
-  const move = last.close - last.open;
-  const thr = Math.max(mid * 0.0012, 0.05);
-  if (direction === 'BUY' && move >= thr) return true;
-  if (direction === 'SELL' && move <= -thr) return true;
-  return false;
+  return isLateMoveOnFiveMinute(direction, candles);
 }
 
 function numOrNull(v: unknown): number | null {
