@@ -33,6 +33,7 @@ import {
 import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove } from './exitManage.js';
 import { allowEntryAgainstImpulse, decideEntryFrom10sRegime } from './entryFromRegime.js';
 import { allowEpicReentry, noteEpicTradeClose } from './tradeCooldown.js';
+import { publishEpicEntry, readEpicEntry } from './epicEntrySync.js';
 import {
   allowEntryFromFeeds,
   multiFeedOwnsOhlc,
@@ -169,6 +170,40 @@ function kickPeerManageCycles(exceptId: string, epic: string) {
   }
 }
 
+/** After closed 5m / entry signal — nudge flat peers so they enter the same bar. */
+function kickPeerEntryCycles(exceptId: string, epic: string) {
+  const want = epic.trim().toLowerCase();
+  for (const peer of sessions.values()) {
+    if (peer.id === exceptId || !peer.running || peer.open_side) continue;
+    if (peer.epic.trim().toLowerCase() !== want) continue;
+    if (!peer.entry_enabled || !peer.trading_enabled) continue;
+    if (peer.cycle_busy) continue;
+    void robotCycle(peer);
+  }
+}
+
+/**
+ * Share a just-closed 5m bar with same-epic peers.
+ * Without this, only the unit whose clock edges first sees just_closed;
+ * others wait ~5m ("wait until candle closes") while the leader already trades.
+ */
+function fanoutClosedFiveMinuteBar(exceptId: string, epic: string, bar: TenSecBar) {
+  const want = epic.trim().toLowerCase();
+  const key = String(bar.open_time_ms || 0);
+  for (const peer of sessions.values()) {
+    if (peer.id === exceptId || !peer.running) continue;
+    if (peer.epic.trim().toLowerCase() !== want) continue;
+    if (key && key === peer.last_closed_bar_key && peer.ohlcState.just_closed) continue;
+    peer.ohlcState = {
+      forming: peer.ohlcState.forming,
+      last_closed: bar,
+      just_closed: true,
+    };
+    if (key) peer.last_closed_bar_key = key;
+    applyRobotRegime(peer, [bar]);
+  }
+}
+
 const sessions = new Map<string, Internal>();
 const MAX_TICKS = 200;
 
@@ -274,7 +309,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC → live regime (no UNKNOWN) → ENTRY/EXIT',
     note:
-      '5m brain · no RISK gate · TREND/EXPANSION/BO · fewer trades larger targets',
+      '5m brain · same-epic entry sync · no RISK gate · TREND/EXPANSION/BO',
   };
 }
 
@@ -1016,6 +1051,8 @@ async function robotCycleBody(s: Internal) {
       s.ohlc_10s = publicOhlc10s(s.ohlcState);
       if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
         applyRobotRegime(s, [s.ohlcState.last_closed]);
+        fanoutClosedFiveMinuteBar(s.id, s.epic, s.ohlcState.last_closed);
+        queueMicrotask(() => kickPeerEntryCycles(s.id, s.epic));
       }
     }
 
@@ -1177,7 +1214,11 @@ async function robotCycleBody(s: Internal) {
             last_closed: last,
             just_closed: isNew,
           };
-          if (isNew) s.last_closed_bar_key = bucket;
+          if (isNew) {
+            s.last_closed_bar_key = bucket;
+            fanoutClosedFiveMinuteBar(s.id, s.epic, last);
+            queueMicrotask(() => kickPeerEntryCycles(s.id, s.epic));
+          }
           s.ohlc_10s = publicOhlc10s(s.ohlcState);
           applyRobotRegime(s, bars);
         }
@@ -1209,7 +1250,47 @@ async function robotCycleBody(s: Internal) {
     let reason = '';
     let setupType: string | null = null;
 
-    // QUALITY: only closed 5m bar — never chase forming
+    // Same-epic peer already opened on this 5m — follow without waiting for own close edge
+    const peerSig = readEpicEntry(s.epic);
+    const localBucketMs = bar?.open_time_ms ?? 0;
+    const peerMatchesBar =
+      Boolean(peerSig) &&
+      peerSig!.sourceUnitId !== s.id &&
+      (peerSig!.barBucketMs === localBucketMs ||
+        localBucketMs === 0 ||
+        Math.abs(peerSig!.barBucketMs - localBucketMs) < 60_000);
+    if (peerMatchesBar && peerSig) {
+      const peerKey = `peer:${peerSig.barBucketMs}:${peerSig.side}`;
+      if (peerKey === s.last_entry_signal_key) {
+        pushTick(s, {
+          phase: 'DECIDE',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `${ohlcLine} · peer sync already used`,
+        });
+        return;
+      }
+      const epicGatePeer = allowEpicReentry(s.epic, peerSig.side);
+      if (!epicGatePeer.ok) {
+        pushTick(s, {
+          phase: 'WAIT',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `${ohlcLine} · ${epicGatePeer.reason}`,
+        });
+        return;
+      }
+      s.last_entry_signal_key = peerKey;
+      direction = peerSig.side;
+      setupType = peerSig.regime || 'PEER';
+      reason = `PEER SYNC ${peerSig.side} ← ${peerSig.sourceUnitId} · ${peerSig.regime} · mid≈${peerSig.mid}`;
+      await enterTrade(opened.session, s, direction, quote, reason, setupType);
+      return;
+    }
+
+    // QUALITY: only closed 5m bar — never chase forming (unless peer synced above)
     if (!(s.ohlcState.just_closed && bar)) {
       pushTick(s, {
         phase: 'WAIT',
@@ -1287,6 +1368,18 @@ async function robotCycleBody(s: Internal) {
     setupType = sig.setup;
     reason = sig.reason;
     if (bucketKey) s.last_entry_signal_key = bucketKey;
+
+    // Publish so same-epic peers enter this bar without waiting for their own close edge
+    publishEpicEntry({
+      epic: s.epic,
+      side: direction,
+      regime: String(setupType || s.regime || ''),
+      barBucketMs: Number(bar.open_time_ms || 0),
+      mid: quote.mid ?? 0,
+      atMs: Date.now(),
+      sourceUnitId: s.id,
+    });
+    queueMicrotask(() => kickPeerEntryCycles(s.id, s.epic));
 
     if (!direction) return;
     await enterTrade(opened.session, s, direction, quote, reason, setupType);
