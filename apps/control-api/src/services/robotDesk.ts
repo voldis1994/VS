@@ -301,7 +301,7 @@ function clearTradeState(s: Internal) {
 }
 
 /**
- * SAFETY SL as LAST RESORT (~0.18%) — ~30% tighter than 0.25% for micro accounts.
+ * SAFETY SL as LAST RESORT (~0.13%) — wider than HardInv 0.08%; micro-friendly.
  * Best Outcome / HardInvalidation must fire first; Capital Limit SL only on disaster.
  */
 function safetyStopLevel(
@@ -329,12 +329,12 @@ function safetyStopLevel(
         ? Math.max(ask - bid, 0)
         : abs * 0.00005;
 
-  const pctCushion = abs * 0.00175; // 0.18% — ~30% tighter than 0.25% (micro)
+  const pctCushion = abs * 0.0013; // 0.13% — wider than HardInv 0.08%
   const brokerMin =
     minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
       ? minStopDistance
       : 0;
-  const floor = abs >= 1000 ? 0.45 : abs >= 100 ? 0.2 : abs >= 10 ? 0.03 : abs >= 1 ? 0.0003 : 0.00003;
+  const floor = abs >= 1000 ? 0.35 : abs >= 100 ? 0.15 : abs >= 10 ? 0.025 : abs >= 1 ? 0.00025 : 0.000025;
   const dist =
     Math.max(pctCushion, brokerMin * 2, spr * 5, floor) * Math.max(loosen, 1);
 
@@ -345,14 +345,14 @@ function safetyStopLevel(
   return Math.round(raw * 1e6) / 1e6;
 }
 
-/** Cushion stopDistance in Capital POINTS (≥ 2× min, ~0.18% when point size known). */
+/** Cushion stopDistance in Capital POINTS (≥ 2× min, ~0.13% when point size known). */
 function safetyStopDistancePts(
   mid: number,
   minPts: number,
   pointSize: number | null
 ): number {
   const abs = Math.max(Math.abs(mid), 1e-9);
-  const pct = abs * 0.00175;
+  const pct = abs * 0.0013;
   let fromPct = minPts * 2;
   if (pointSize != null && pointSize > 0) {
     fromPct = Math.max(fromPct, pct / pointSize);
@@ -662,7 +662,7 @@ async function enterTrade(
     return;
   }
 
-  // SAFETY SL cushion (~0.18% / ≥2× min) — micro-friendly, not dealing-rules minimum
+  // SAFETY SL cushion (~0.13% / ≥2× min) — wider than HardInv 0.08%
   const minPts = quote.min_stop_points;
   const minPrice = quote.min_stop_distance ?? null;
   const unit = (quote.min_stop_unit || 'POINTS').toUpperCase();

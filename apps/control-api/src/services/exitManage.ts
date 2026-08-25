@@ -1,4 +1,4 @@
-/** Live Capital exit manager — lock majority of MFE; never give back into HardInv red. */
+/** Live Capital exit manager — fix win/loss asymmetry on micro (no +£0.01 vs −£0.60). */
 
 export type ExitSide = 'BUY' | 'SELL';
 
@@ -47,38 +47,41 @@ export function thesisFailureReason(
   return null;
 }
 
-/** Robot HardInv ≈0.11% — ~30% tighter than 0.16% (micro: ~£0.60 not £0.89 on Gold 0.15). */
+/** Robot HardInv ≈0.08% — Gold ~3.7pt ≈ ~£0.40 on 0.14 lot (was ~£0.60). */
 export function hardInvalidationDistance(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.00112, 0.11);
+  return Math.max(abs * 0.0008, 0.08);
 }
 
-/** Arm protection from ≈1.0pt on Gold ~4600. */
+/**
+ * Arm peak/harvest only after a REAL excursion — ~2.2pt Gold.
+ * Was ~1.0pt → locked +£0.01 noise while HardInv still took −£0.60.
+ */
 export function bestOutcomeMfeFloor(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.00022, 0.8);
+  return Math.max(abs * 0.00048, 1.8);
 }
 
-/** Soft TP ≈0.22% — take winners earlier. */
+/** Soft TP ≈0.28% — winners must grow (~13pt Gold) before target exit. */
 export function bestOutcomeTarget(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.0022, 0.22);
+  return Math.max(abs * 0.0028, 0.28);
 }
 
-/** Min green for thesis/TP on young trades (no MFE yet). */
+/**
+ * Min green to soft-exit (peak / thesis / time) — ~1.2pt Gold.
+ * Blocks micro-harvest (+£0.01 / +£0.03) that cannot cover one HardInv.
+ */
 export function bestOutcomeMinGreen(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.00004, 0.1);
+  return Math.max(abs * 0.00026, 1.0);
 }
 
-/**
- * Lock majority of peak: exit when retention drops below this (keep ~65%+ of MFE).
- * Was 0.35 → waited until 65% giveback → often flat/red before exit.
- */
-export const BEST_OUTCOME_LOCK_RETENTION = 0.65;
+/** Keep ~70%+ of peak once armed (was 65%). */
+export const BEST_OUTCOME_LOCK_RETENTION = 0.7;
 
 /**
- * Manage exit — Best Outcome locks the majority; never ride giveback into HardInv.
+ * Manage exit — smaller max loss, larger min win; no micro-green harvest.
  * MFE / retention MUST be price points (same unit as favorableMove).
  */
 export function decideBestOutcomeExit(
@@ -108,8 +111,8 @@ export function decideBestOutcomeExit(
         reason: `BestOutcome cut · gave back MFE ${s.mfe.toFixed(5)} → UPL ${fav.toFixed(5)} (lock before minus)`,
       };
     }
-    // Lock majority of peak while still green
-    if (ret != null && ret < BEST_OUTCOME_LOCK_RETENTION) {
+    // Lock majority — but only if still a meaningful green (not +0.01 noise)
+    if (ret != null && ret < BEST_OUTCOME_LOCK_RETENTION && fav >= minGreen) {
       return {
         exit: true,
         reason: `PeakProtection · keep ${(ret * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} · UPL ${fav.toFixed(5)}`,
@@ -117,7 +120,7 @@ export function decideBestOutcomeExit(
     }
   }
 
-  // Young trade / no peak yet — ignore micro noise
+  // Young / tiny green — hold (covers +£0.01…+£0.06 spam)
   if (fav < minGreen) {
     return { exit: false, reason: '' };
   }
@@ -134,16 +137,11 @@ export function decideBestOutcomeExit(
     };
   }
 
-  // Light harvest: still green, gave back ~25%+ of peak
-  if (armed && ret != null && ret < 0.75) {
-    return {
-      exit: true,
-      reason: `BestOutcome harvest · UPL ${fav.toFixed(5)} after MFE ${s.mfe.toFixed(5)} (ret ${(ret * 100).toFixed(0)}%)`,
-    };
-  }
+  // No light harvest band — PeakProtection @ 70% is enough (was double-exit noise)
 
   const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
-  if (heldMs > 240_000 && fav > 0 && s.mfe >= mfeFloor * 0.5) {
+  // TimeDecay only after real MFE and meaningful green (not flat-ish)
+  if (heldMs > 300_000 && fav >= minGreen && s.mfe >= mfeFloor) {
     return {
       exit: true,
       reason: `TimeDecay · held ${Math.round(heldMs / 1000)}s · realize green UPL ${fav.toFixed(5)}`,
@@ -173,6 +171,7 @@ export function describeBestOutcomeState(
   const fav = favorableMove(s.open_side, entry, mid);
   const sl = hardInvalidationDistance(entry);
   const mfeFloor = bestOutcomeMfeFloor(entry);
+  const minGreen = bestOutcomeMinGreen(entry);
   const ret =
     s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—';
   const lock = `${(BEST_OUTCOME_LOCK_RETENTION * 100).toFixed(0)}%`;
@@ -180,6 +179,6 @@ export function describeBestOutcomeState(
   return {
     exit: false,
     reason: '',
-    hold: `BO · UPL ${fav.toFixed(2)} · lock@${lock} · HardInv -${sl.toFixed(2)} · MFE ${s.mfe.toFixed(2)}/${mfeFloor.toFixed(2)} · ret ${ret}`,
+    hold: `BO · UPL ${fav.toFixed(2)} · min+${minGreen.toFixed(1)} · lock@${lock} · HardInv -${sl.toFixed(2)} · MFE ${s.mfe.toFixed(2)}/${mfeFloor.toFixed(2)} · ret ${ret}`,
   };
 }
