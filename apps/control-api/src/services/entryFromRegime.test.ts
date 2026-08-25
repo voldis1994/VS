@@ -1,81 +1,63 @@
 import { describe, expect, it } from 'vitest';
 import {
-  allowEntryAgainstImpulse,
+  continuationSameSide,
   decideEntryFrom10sRegime,
-  lateChaseAppliesToSetup,
-  marketDirection,
-  recentImpulse,
-  shortNetMove,
+  explainNoEntry,
 } from './entryFromRegime.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 
-function bar(open: number, close: number, i = 0): TenSecBar {
-  const high = Math.max(open, close) + 2;
-  const low = Math.min(open, close) - 1;
-  return { open_time_ms: i * 300_000, open, high, low, close, ticks: 12 };
+function bar(open: number, close: number, i = 0, w = 1.5): TenSecBar {
+  const high = Math.max(open, close) + w;
+  const low = Math.min(open, close) - w;
+  return { open_time_ms: i * 10_000, open, high, low, close, ticks: 8 };
 }
 
-const softDip = bar(4645, 4642);
-const softRally = bar(4642, 4645);
+/** Quiet base then breakout-ready history for zone. */
+function baseBars(): TenSecBar[] {
+  const out: TenSecBar[] = [];
+  for (let i = 0; i < 12; i++) {
+    const mid = 4500 + (i % 2) * 0.3;
+    out.push(bar(mid, mid + 0.2, i, 1.0));
+  }
+  return out;
+}
 
-const upImpulse: TenSecBar[] = [
-  bar(4600, 4608, 0),
-  bar(4608, 4618, 1),
-  bar(4618, 4628, 2),
-];
-
-const downImpulse: TenSecBar[] = [
-  bar(4660, 4652, 0),
-  bar(4652, 4648, 1),
-  bar(4648, 4643, 2),
-];
-
-describe('one-rule entry', () => {
-  it('skips chop regimes', () => {
-    expect(decideEntryFrom10sRegime(softDip, 'UNKNOWN')).toBeNull();
-    expect(decideEntryFrom10sRegime(softDip, 'RANGE')).toBeNull();
-    expect(decideEntryFrom10sRegime(softDip, 'COMPRESSION')).toBeNull();
+describe('10s zone entry', () => {
+  it('skips chop regimes without inventing EXPANSION trades', () => {
+    const bars = baseBars();
+    const sigBar = bar(4501, 4503, 12);
+    expect(decideEntryFrom10sRegime(sigBar, 'COMPRESSION', bars)).toBeNull();
+    expect(decideEntryFrom10sRegime(sigBar, 'RANGE', bars)).toBeNull();
+    expect(decideEntryFrom10sRegime(sigBar, 'UNKNOWN', bars)).toBeNull();
   });
 
-  it('TREND_DOWN + dump → SELL (not BUY)', () => {
-    const sig = decideEntryFrom10sRegime(softDip, 'TREND_DOWN', downImpulse);
-    expect(sig?.direction).toBe('SELL');
-    expect(marketDirection('TREND_UP', downImpulse, softDip)).toBe('SELL'); // short wins
+  it('skips EXPANSION without clear slope (no random color)', () => {
+    const bars = baseBars();
+    const green = bar(4501, 4502.2, 12);
+    expect(decideEntryFrom10sRegime(green, 'EXPANSION', bars)).toBeNull();
   });
 
-  it('dump under highs never BUYs on green bounce', () => {
-    const dump: TenSecBar[] = [
-      bar(4650, 4655, 0),
-      bar(4655, 4660, 1),
-      bar(4660, 4652, 2),
-      bar(4652, 4648, 3),
-      bar(4648, 4645, 4),
-      bar(4645, 4642, 5),
-    ];
-    const bounce = bar(4642, 4644.5, 6);
-    expect(allowEntryAgainstImpulse('BUY', dump, bounce).ok).toBe(false);
-    expect(decideEntryFrom10sRegime(bounce, 'TREND_UP', dump)?.direction).toBe('SELL');
+  it('explainNoEntry surfaces zone state', () => {
+    const bars = baseBars();
+    const quiet = bar(4500.5, 4500.55, 12, 0.2);
+    expect(explainNoEntry(quiet, 'TREND_UP', bars)).toMatch(/ZONE|soft live|waiting/i);
   });
 
-  it('clear UP short → BUY with market', () => {
-    expect(decideEntryFrom10sRegime(softRally, 'EXPANSION', upImpulse)?.direction).toBe('BUY');
-    expect(allowEntryAgainstImpulse('BUY', upImpulse, softRally).ok).toBe(true);
-    expect(allowEntryAgainstImpulse('SELL', upImpulse, softRally).ok).toBe(false);
+  it('continuationSameSide holds with TREND_UP + green', () => {
+    const bars = baseBars();
+    const green = bar(4502, 4503.5, 12);
+    const c = continuationSameSide('BUY', green, 'TREND_UP', bars);
+    expect(c.ok).toBe(true);
+    expect(c.reason).toMatch(/continuation/i);
   });
 
-  it('regime bias when short is flat', () => {
-    const flat: TenSecBar[] = [bar(4640, 4640.3, 0), bar(4640.3, 4640.1, 1)];
-    expect(marketDirection('TREND_DOWN', flat, softDip)).toBe('SELL');
-    expect(decideEntryFrom10sRegime(softDip, 'TREND_DOWN', flat)?.direction).toBe('SELL');
-  });
-
-  it('late-chase gate is off', () => {
-    expect(lateChaseAppliesToSetup('BREAKOUT', 'BREAKOUT_DOWN')).toBe(false);
-    expect(lateChaseAppliesToSetup('CONTINUATION', 'EXPANSION')).toBe(false);
-  });
-
-  it('detects impulse', () => {
-    expect(recentImpulse(upImpulse).dir).toBe('UP');
-    expect(shortNetMove(downImpulse).dir).toBe('DOWN');
+  it('continuationSameSide rejects flipped market', () => {
+    const dump: TenSecBar[] = [];
+    for (let i = 0; i < 10; i++) {
+      dump.push(bar(4520 - i * 2, 4518 - i * 2, i, 1));
+    }
+    const red = bar(4500, 4497, 10);
+    const c = continuationSameSide('BUY', red, 'TREND_DOWN', dump);
+    expect(c.ok).toBe(false);
   });
 });

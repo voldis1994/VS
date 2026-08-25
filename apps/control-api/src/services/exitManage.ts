@@ -1,4 +1,4 @@
-/** Live Capital exit manager — 5m brain: hold winners longer through noise. */
+/** Live Capital exit — 10s scalp BO with continuation hold support. */
 
 export type ExitSide = 'BUY' | 'SELL';
 
@@ -10,7 +10,6 @@ export type ExitSnapshot = {
   mae: number;
   peak_retention: number | null;
   regime?: string | null;
-  /** Short ~30m net move as fraction (e.g. -0.004 = −0.4%). Cuts BUY into dump even if regime lags. */
   short_net_pct?: number | null;
 };
 
@@ -46,42 +45,46 @@ export function thesisFailureReason(
   return null;
 }
 
-/** HardInv ≈0.22% — Gold ~10pt (survive 5m noise). */
+/** HardInv ≈0.15% — Gold ~7pt; Soft BO before Safety SL ~0.20%. */
 export function hardInvalidationDistance(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.0022, 0.2);
+  return Math.max(abs * 0.0015, 0.15);
 }
 
-/**
- * Arm peak trail only after a real swing — ~0.28% / ~13pt Gold.
- * (Was ~0.12% / ~5.5pt — locked too early on noise pullbacks.)
- */
+/** Arm peak trail after real 10s swing — ~0.12% / ~5.5pt Gold. */
 export function bestOutcomeMfeFloor(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.0028, 8);
+  return Math.max(abs * 0.0012, 4);
 }
 
-/** Soft TP ≈1.20% — ~55pt Gold — let 5m trends run. */
+/** Soft TP ≈0.45% — ~20pt Gold — 10s scalp target (not 5m 55pt). */
 export function bestOutcomeTarget(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.012, 1.2);
+  return Math.max(abs * 0.0045, 0.8);
 }
 
-/** Min green soft-exit ~0.12% / ~5.5pt — don't bank micro scraps. */
+/** Min green soft-exit ~0.08% / ~3.5pt — don't bank dust. */
 export function bestOutcomeMinGreen(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.0012, 5);
+  return Math.max(abs * 0.0008, 3);
 }
 
-/**
- * Peak trail lock: exit when retention falls below this while still green.
- * 0.50 = allow ~50% giveback of MFE (was 0.70 → cut on tiny dips).
- */
-export const BEST_OUTCOME_LOCK_RETENTION = 0.5;
+/** Allow deeper pullback while trend continues (was 0.50). */
+export const BEST_OUTCOME_LOCK_RETENTION = 0.4;
+
+export function isHardBoReason(reason: string): boolean {
+  return /HardInvalidation|ThesisFailure · short/i.test(reason);
+}
+
+export type BoExitOpts = {
+  /** When true — next entry/continuation still agrees → skip soft exits. */
+  continuationSameSide?: boolean;
+};
 
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
-  mid: number
+  mid: number,
+  opts?: BoExitOpts
 ): { exit: boolean; reason: string } {
   if (!s.open_side || s.entry_price == null) return { exit: false, reason: '' };
 
@@ -93,21 +96,21 @@ export function decideBestOutcomeExit(
   const minGreen = bestOutcomeMinGreen(entry);
   const armed = s.mfe >= mfeFloor;
   const ret = s.peak_retention;
+  const holdCont = Boolean(opts?.continuationSameSide);
 
   if (fav <= -sl) {
     return { exit: true, reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}` };
   }
 
-  // Price already dumped/rallied against us — don't wait for regime label to flip
   const short = s.short_net_pct;
   if (short != null && Number.isFinite(short)) {
-    if (s.open_side === 'BUY' && short <= -0.002) {
+    if (s.open_side === 'BUY' && short <= -0.0015) {
       return {
         exit: true,
         reason: `ThesisFailure · short dump ${(short * 100).toFixed(2)}% vs BUY`,
       };
     }
-    if (s.open_side === 'SELL' && short >= 0.002) {
+    if (s.open_side === 'SELL' && short >= 0.0015) {
       return {
         exit: true,
         reason: `ThesisFailure · short rally ${(short * 100).toFixed(2)}% vs SELL`,
@@ -115,19 +118,24 @@ export function decideBestOutcomeExit(
     }
   }
 
-  if (armed) {
-    if (fav <= 0) {
-      return {
-        exit: true,
-        reason: `BestOutcome cut · gave back MFE ${s.mfe.toFixed(5)} → UPL ${fav.toFixed(5)} (lock before minus)`,
-      };
-    }
-    if (ret != null && ret < BEST_OUTCOME_LOCK_RETENTION && fav >= minGreen) {
-      return {
-        exit: true,
-        reason: `PeakProtection · keep ${(ret * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} · UPL ${fav.toFixed(5)}`,
-      };
-    }
+  // Gave back to flat/red after a real peak — still cut (don't hold hope into minus)
+  if (armed && fav <= 0) {
+    return {
+      exit: true,
+      reason: `BestOutcome cut · gave back MFE ${s.mfe.toFixed(5)} → UPL ${fav.toFixed(5)} (lock before minus)`,
+    };
+  }
+
+  // ——— Continuation hold: do not nick +0.10 while trend still alive ———
+  if (holdCont) {
+    return { exit: false, reason: '' };
+  }
+
+  if (armed && ret != null && ret < BEST_OUTCOME_LOCK_RETENTION && fav >= minGreen) {
+    return {
+      exit: true,
+      reason: `PeakProtection · keep ${(ret * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} · UPL ${fav.toFixed(5)}`,
+    };
   }
 
   if (fav < minGreen) {
@@ -147,8 +155,8 @@ export function decideBestOutcomeExit(
   }
 
   const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
-  // TimeDecay after ~75 min on 5m holds
-  if (heldMs > 4_500_000 && fav >= minGreen && s.mfe >= mfeFloor) {
+  // TimeDecay after ~12 min on 10s holds
+  if (heldMs > 720_000 && fav >= minGreen && s.mfe >= mfeFloor) {
     return {
       exit: true,
       reason: `TimeDecay · held ${Math.round(heldMs / 1000)}s · realize green UPL ${fav.toFixed(5)}`,
@@ -160,9 +168,10 @@ export function decideBestOutcomeExit(
 
 export function describeBestOutcomeState(
   s: ExitSnapshot,
-  mid: number
+  mid: number,
+  opts?: BoExitOpts & { continuationReason?: string }
 ): { exit: boolean; reason: string; hold: string } {
-  const decision = decideBestOutcomeExit(s, mid);
+  const decision = decideBestOutcomeExit(s, mid, opts);
   if (decision.exit) return { ...decision, hold: '' };
 
   if (!s.open_side || s.entry_price == null) {
@@ -181,10 +190,16 @@ export function describeBestOutcomeState(
   const ret =
     s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—';
   const lock = `${(BEST_OUTCOME_LOCK_RETENTION * 100).toFixed(0)}%`;
+  const cont =
+    opts?.continuationSameSide && opts.continuationReason
+      ? ` · HOLD ${opts.continuationReason}`
+      : opts?.continuationSameSide
+        ? ' · HOLD continuation'
+        : '';
 
   return {
     exit: false,
     reason: '',
-    hold: `BO5m · UPL ${fav.toFixed(2)} · min+${minGreen.toFixed(1)} · lock@${lock} · HardInv -${sl.toFixed(2)} · MFE ${s.mfe.toFixed(2)}/${mfeFloor.toFixed(2)} · ret ${ret}`,
+    hold: `BO10s · UPL ${fav.toFixed(2)} · min+${minGreen.toFixed(1)} · lock@${lock} · HardInv -${sl.toFixed(2)} · MFE ${s.mfe.toFixed(2)}/${mfeFloor.toFixed(2)} · ret ${ret}${cont}`,
   };
 }

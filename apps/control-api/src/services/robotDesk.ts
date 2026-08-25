@@ -6,8 +6,10 @@ import {
   confirmCapitalDeal,
   createCapitalPosition,
   fetchCapitalMarketQuote,
+  fetchCapitalMinutePrices,
   fetchCapitalPrices,
   listCapitalOpenPositions,
+  isLateMoveOnOneMinute,
   type CapitalMarketQuote,
   type CapitalOpenPosition,
   type CapitalSession,
@@ -31,8 +33,12 @@ import {
 import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove } from './exitManage.js';
 import {
   allowEntryAgainstImpulse,
+  buildScalpZone,
+  continuationSameSide,
   decideEntryFrom10sRegime,
   explainNoEntry,
+  formatZoneInfo,
+  lateChaseAppliesToSetup,
   shortNetMove,
 } from './entryFromRegime.js';
 import { allowEpicReentry, noteEpicTradeClose } from './tradeCooldown.js';
@@ -47,10 +53,15 @@ import {
   type MultiFeedLeg,
 } from './robotReader.js';
 import {
-  aggregateMinutesToFive,
+  buildFresherRefs,
+  detectCapitalIsolatedExtreme,
+  detectStaleQuoteAdverse,
+} from './staleQuoteGuard.js';
+import {
+  aggregateSecondsToTen,
   emptyTenSecState,
   publicOhlc10s,
-  updateFiveMinuteOhlc,
+  updateTenSecondOhlc,
   type TenSecBar,
   type TenSecState,
 } from './tenSecondOhlc.js';
@@ -114,6 +125,11 @@ export type RobotSession = {
   feed_sender_count?: number;
   feed_agreement?: string | null;
   feed_legs?: MultiFeedLeg[];
+  /** Live scalp zone snapshot for INFO */
+  zone_info?: string | null;
+  zone_high?: number | null;
+  zone_low?: number | null;
+  zone_kind?: string | null;
   decision_chain?: {
     feeds: string;
     ohlc: string;
@@ -262,6 +278,7 @@ function publicSession(s: Internal): RobotSession {
     cycle_busy: _busy,
     ...rest
   } = s;
+  const zoneSnap = buildScalpZone(s.closedBars);
   return {
     ...rest,
     ohlc_10s: publicOhlc10s(s.ohlcState),
@@ -270,6 +287,10 @@ function publicSession(s: Internal): RobotSession {
     feed_sender_count: s.multiFeed?.sender_count ?? rest.feed_sender_count ?? 0,
     feed_agreement: s.multiFeed?.agreement ?? rest.feed_agreement ?? null,
     feed_legs: s.multiFeed?.legs ?? rest.feed_legs ?? [],
+    zone_info: formatZoneInfo(zoneSnap),
+    zone_high: zoneSnap?.high ?? null,
+    zone_low: zoneSnap?.low ?? null,
+    zone_kind: zoneSnap?.kind ?? null,
     decision_chain: buildDecisionChain(s),
   };
 }
@@ -278,20 +299,23 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
   const ohlc = publicOhlc10s(s.ohlcState);
   const ohlcLine =
     ohlc.last_c != null
-      ? `O${Number(ohlc.last_o).toFixed(2)}→C${Number(ohlc.last_c).toFixed(2)} ${ohlc.market}`
+      ? `10s O${Number(ohlc.last_o).toFixed(2)}→C${Number(ohlc.last_c).toFixed(2)} ${ohlc.market}`
       : 'SEEDING';
+  const zone = buildScalpZone(s.closedBars);
   const feeds = `${s.multiFeed?.contributing ?? s.feed_contributing ?? 0}/${
     s.multiFeed?.sender_count ?? s.feed_sender_count ?? 0
-  } ${s.feed_source || 'NONE'} ${s.multiFeed?.agreement || s.feed_agreement || ''}`.trim();
+  } ${s.feed_source || 'NONE'} lead=${s.multiFeed?.lead_label || '—'} ${
+    s.multiFeed?.agreement || s.feed_agreement || ''
+  }`.trim();
   let action = 'WAIT';
   if (!s.running) action = 'STOPPED';
   else if (s.open_side) action = `MANAGE ${s.open_side}`;
   else if (s.mode === 'ENTRY') action = 'SCAN ENTRY';
   return {
     feeds,
-    ohlc: ohlcLine,
+    ohlc: `${ohlcLine} · ${formatZoneInfo(zone)}`,
     regime: s.regime || 'UNKNOWN',
-    setup: null,
+    setup: zone?.kind ?? null,
     action,
   };
 }
@@ -311,9 +335,9 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     active_regimes: activeRegimes,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'Capital OHLC → live regime (no UNKNOWN) → ENTRY/EXIT',
+    chain: 'LEAD/CONFIRM feeds → 10s OHLC → ZONE → regime → filters → ENTRY · BO+continuation → EXIT',
     note:
-      '5m · one rule: with market direction · soft live timing',
+      '10s SO · zones required · no random candle follow · BO holds on continuation · Safety SL ~0.20%',
   };
 }
 
@@ -386,14 +410,14 @@ function safetyStopLevel(
         ? Math.max(ask - bid, 0)
         : abs * 0.00005;
 
-  const pctCushion = abs * 0.0032; // 0.32% — wider than HardInv 0.08%
+  const pctCushion = abs * 0.002; // 0.20% Safety SL (#136) — micro; HardInv 0.15% first
   const brokerMin =
     minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
       ? minStopDistance
       : 0;
-  const floor = abs >= 1000 ? 0.35 : abs >= 100 ? 0.15 : abs >= 10 ? 0.025 : abs >= 1 ? 0.00025 : 0.000025;
+  const floor = abs >= 1000 ? 0.25 : abs >= 100 ? 0.12 : abs >= 10 ? 0.02 : abs >= 1 ? 0.0002 : 0.00002;
   const dist =
-    Math.max(pctCushion, brokerMin * 2, spr * 5, floor) * Math.max(loosen, 1);
+    Math.max(pctCushion, brokerMin * 1.5, spr * 4, floor) * Math.max(loosen, 1);
 
   const raw = direction === 'BUY' ? ref - dist : ref + dist;
   if (abs >= 1000) return Math.round(raw * 10) / 10;
@@ -402,19 +426,19 @@ function safetyStopLevel(
   return Math.round(raw * 1e6) / 1e6;
 }
 
-/** Cushion stopDistance in Capital POINTS (≥ 2× min, ~0.32% when point size known). */
+/** Cushion stopDistance in Capital POINTS (≥ 1.5× min, ~0.20% when point size known). */
 function safetyStopDistancePts(
   mid: number,
   minPts: number,
   pointSize: number | null
 ): number {
   const abs = Math.max(Math.abs(mid), 1e-9);
-  const pct = abs * 0.0032;
-  let fromPct = minPts * 2;
+  const pct = abs * 0.002;
+  let fromPct = minPts * 1.5;
   if (pointSize != null && pointSize > 0) {
     fromPct = Math.max(fromPct, pct / pointSize);
   }
-  const distPts = Math.max(minPts * 2, fromPct, minPts + 1e-9);
+  const distPts = Math.max(minPts * 1.5, fromPct, minPts + 1e-9);
   return distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
 }
 
@@ -1116,7 +1140,7 @@ async function robotCycleBody(s: Internal) {
     }
     const warmMid = pickedWarm.mid ?? quote.mid;
     if (warmMid != null) {
-      s.ohlcState = updateFiveMinuteOhlc(s.ohlcState, warmMid, Date.now());
+      s.ohlcState = updateTenSecondOhlc(s.ohlcState, warmMid, Date.now());
       s.ohlc_10s = publicOhlc10s(s.ohlcState);
       if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
         applyRobotRegime(s, [s.ohlcState.last_closed]);
@@ -1266,9 +1290,20 @@ async function robotCycleBody(s: Internal) {
           return;
         }
       }
+
+      const signalForCont =
+        s.ohlcState.forming && s.ohlcState.forming.ticks >= 2
+          ? s.ohlcState.forming
+          : s.ohlcState.last_closed;
+      const cont =
+        liveSide === 'BUY' || liveSide === 'SELL'
+          ? continuationSameSide(liveSide, signalForCont, s.regime, s.closedBars)
+          : { ok: false, reason: '' };
+
       const decision = decideBestOutcomeExit(
         { ...s, short_net_pct: short.netPct },
-        quote.mid
+        quote.mid,
+        { continuationSameSide: cont.ok }
       );
       if (decision.exit) {
         await exitTrade(opened.session, s, quote, decision.reason);
@@ -1276,16 +1311,23 @@ async function robotCycleBody(s: Internal) {
         return;
       }
 
+      const zone = buildScalpZone(s.closedBars);
       pushTick(s, {
         phase: 'MANAGE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `MANAGE ${s.open_side} · ${s.regime} · UPL ${
+        detail: `MANAGE ${s.open_side} · ${s.regime} · ${formatZoneInfo(zone)} · UPL ${
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
-        } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
+        } · MFE ${s.mfe.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · ${describeBestOutcomeState({ ...s, short_net_pct: short.netPct }, quote.mid).hold}`,
+        } · ${
+          describeBestOutcomeState(
+            { ...s, short_net_pct: short.netPct },
+            quote.mid,
+            { continuationSameSide: cont.ok, continuationReason: cont.reason }
+          ).hold
+        }`,
       });
       return;
     }
@@ -1306,8 +1348,8 @@ async function robotCycleBody(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // After close — long pause (was 45s → ~9 trades/6min death spiral)
-    const POST_CLOSE_MS = 600_000;
+    // Short pause on 10s TF — continuation hold reduces re-entry spam
+    const POST_CLOSE_MS = 90_000;
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
     if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_MS) {
       pushTick(s, {
@@ -1322,12 +1364,12 @@ async function robotCycleBody(s: Internal) {
 
     if (quote.mid == null) return;
 
-    // Seed 5m bars from Capital MINUTE when multi-provider OHLC is NOT in charge.
-    if (!multiFeedOwnsOhlc(s.multiFeed) && Date.now() - s.last_second_fetch_ms >= 30_000) {
+    // Seed 10s bars from Capital SECOND when multi-provider OHLC is NOT in charge.
+    if (!multiFeedOwnsOhlc(s.multiFeed) && Date.now() - s.last_second_fetch_ms >= 8_000) {
       s.last_second_fetch_ms = Date.now();
-      const min = await fetchCapitalPrices(opened.session, s.epic, 'MINUTE', 20);
-      if (min.ok && min.candles.length >= 5) {
-        const bars = aggregateMinutesToFive(min.candles);
+      const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 60);
+      if (sec.ok && sec.candles.length >= 20) {
+        const bars = aggregateSecondsToTen(sec.candles);
         const last = bars[bars.length - 1];
         if (last) {
           const bucket = String(last.open_time_ms || 0);
@@ -1348,7 +1390,7 @@ async function robotCycleBody(s: Internal) {
       }
     }
 
-    // Soft advisory only — public feeds must never freeze Capital entries
+    const zoneNow = buildScalpZone(s.closedBars);
     const feedGate = allowEntryFromFeeds(s.multiFeed);
     if (!feedGate.ok) {
       pushTick(s, {
@@ -1356,34 +1398,34 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `FEED NOTE · ${feedGate.reason}`,
+        detail: `${formatZoneInfo(zoneNow)} · ${feedGate.reason}`,
       });
-      // do not return — Capital local path continues
+      return;
     }
 
     const closed = s.ohlcState.last_closed;
     const forming = s.ohlcState.forming;
     const justClosed = Boolean(s.ohlcState.just_closed && closed);
-    // Live 5m: take setup on forming candle; just-closed still preferred for that tick
+    // Prefer closed 10s; allow forming only with enough ticks (structure still from closedBars zone)
     const signalBar: TenSecBar | null = justClosed
       ? closed!
-      : forming && forming.ticks >= 2
+      : forming && forming.ticks >= 3
         ? forming
         : null;
     const liveSignal = Boolean(signalBar && !justClosed);
     const ohlc = s.ohlc_10s;
     const show = signalBar || closed;
     const ohlcLine = show
-      ? `5m${liveSignal ? ' LIVE' : justClosed ? ' CLOSE' : ''} O=${show.open.toFixed(2)} H=${show.high.toFixed(2)} L=${show.low.toFixed(2)} C=${show.close.toFixed(2)} ${s.regime} · feeds ${
+      ? `10s${liveSignal ? ' LIVE' : justClosed ? ' CLOSE' : ''} O=${show.open.toFixed(2)} H=${show.high.toFixed(2)} L=${show.low.toFixed(2)} C=${show.close.toFixed(2)} ${s.regime} · ${formatZoneInfo(zoneNow)} · feeds ${
           s.feed_contributing || 0
-        }/${s.feed_sender_count || 0} ${s.feed_source || 'LOCAL'} ${s.feed_agreement || ''}`
-      : `5m OHLC seeding · feeds ${s.feed_contributing || 0}/${s.feed_sender_count || 0}`;
+        }/${s.feed_sender_count || 0} ${s.feed_source || 'LOCAL'} lead=${s.multiFeed?.lead_label || '—'} ${s.feed_agreement || ''}`
+      : `10s OHLC seeding · ${formatZoneInfo(zoneNow)} · feeds ${s.feed_contributing || 0}/${s.feed_sender_count || 0}`;
 
     let direction: 'BUY' | 'SELL' | null = null;
     let reason = '';
     let setupType: string | null = null;
 
-    // Same-epic peer already opened on this 5m — follow without waiting for own close edge
+    // Same-epic peer already opened on this 10s — follow with filters
     const peerSig = readEpicEntry(s.epic);
     const localBucketMs =
       signalBar?.open_time_ms ?? forming?.open_time_ms ?? closed?.open_time_ms ?? 0;
@@ -1392,7 +1434,7 @@ async function robotCycleBody(s: Internal) {
       peerSig!.sourceUnitId !== s.id &&
       (peerSig!.barBucketMs === localBucketMs ||
         localBucketMs === 0 ||
-        Math.abs(peerSig!.barBucketMs - localBucketMs) < 60_000);
+        Math.abs(peerSig!.barBucketMs - localBucketMs) < 12_000);
     if (peerMatchesBar && peerSig) {
       const peerKey = `peer:${peerSig.barBucketMs}:${peerSig.side}`;
       if (peerKey === s.last_entry_signal_key) {
@@ -1456,12 +1498,13 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · seeding live 5m · C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'}`,
+        detail: `${ohlcLine} · seeding 10s · C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'}`,
       });
       return;
     }
 
-    if (!s.regime || s.regime === 'UNKNOWN') s.regime = 'COMPRESSION';
+    // Keep real regime — do NOT force EXPANSION
+    if (!s.regime) s.regime = 'UNKNOWN';
     const bucketKey = String(signalBar.open_time_ms || 0);
     if (bucketKey && bucketKey === s.last_entry_signal_key) {
       pushTick(s, {
@@ -1469,7 +1512,7 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · ${s.regime} · watching`,
+        detail: `${ohlcLine} · ${s.regime} · watching same 10s bucket`,
       });
       return;
     }
@@ -1481,7 +1524,7 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · ${s.regime} · ${explainNoEntry(signalBar, s.regime, s.closedBars)}`,
+        detail: `${ohlcLine} · ${explainNoEntry(signalBar, s.regime, s.closedBars)}`,
       });
       return;
     }
@@ -1522,12 +1565,71 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
+    if (lateChaseAppliesToSetup(sig.setup, s.regime)) {
+      const hist = await fetchCapitalMinutePrices(opened.session, s.epic, 3);
+      if (hist.ok && isLateMoveOnOneMinute(sig.direction, hist.candles)) {
+        pushTick(s, {
+          phase: 'WAIT',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `${ohlcLine} · SKIP chase · late on 1m · ${sig.direction}`,
+        });
+        return;
+      }
+    }
+
+    // Stale Capital / fake extremes (#136)
+    const publicNear = (s.multiFeed?.legs || [])
+      .filter((l) => l.ok && l.mid != null && Number.isFinite(l.mid))
+      .filter((l) => l.role === 'LEAD' || l.role === 'CONFIRM' || !String(l.detail || '').includes('FAR'))
+      .filter((l) => l.role !== 'REJECT')
+      .map((l) => ({ name: l.name, mid: l.mid as number }));
+    const refs = buildFresherRefs({
+      publicNearMids: publicNear,
+      ohlcClose: closed?.close ?? ohlc.last_c,
+      formingClose: forming?.close ?? ohlc.forming_c,
+    });
+    const lag = detectStaleQuoteAdverse(sig.direction, quote.mid, refs);
+    if (lag.block) {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · SKIP · ${lag.reason}`,
+      });
+      return;
+    }
+    const fake = detectCapitalIsolatedExtreme(
+      sig.direction,
+      quote.mid,
+      publicNear.map((p) => p.mid)
+    );
+    if (fake.block) {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · SKIP · ${fake.reason}`,
+      });
+      return;
+    }
+
     direction = sig.direction;
     setupType = sig.setup;
-    reason = liveSignal ? `LIVE 5m · ${sig.reason}` : sig.reason;
+    reason = liveSignal ? `LIVE 10s · ${sig.reason}` : sig.reason;
     if (bucketKey) s.last_entry_signal_key = bucketKey;
 
-    // Publish so same-epic peers enter this bar together
+    pushTick(s, {
+      phase: 'ORDER',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `ENTRY READY · ${reason}`,
+    });
+
     publishEpicEntry({
       epic: s.epic,
       side: direction,
@@ -1670,7 +1772,7 @@ export async function startRobotSession(input: {
     feed_contributing: 0,
     feed_sender_count: 0,
     feed_agreement: null,
-    regime: 'EXPANSION',
+    regime: 'UNKNOWN',
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
 
@@ -1680,7 +1782,7 @@ export async function startRobotSession(input: {
     bid: null,
     ask: null,
     mid: null,
-    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · 5m OHLC brain · ONE TRADE ONLY · other robots: ${others}`,
+    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · 10s ZONE brain · ONE TRADE · other robots: ${others}`,
   });
   pushTick(session, {
     phase: 'INFO',
@@ -1688,7 +1790,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: max 1 open trade · MANAGE with best-outcome · 5m OHLC · fewer trades larger targets · park when market closed',
+      'Rules: max 1 open · BO10s + continuation hold · zones required · Safety SL ~0.20% · park when closed',
   });
 
   sessions.set(id, session);

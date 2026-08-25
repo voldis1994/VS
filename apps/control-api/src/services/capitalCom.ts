@@ -969,7 +969,7 @@ export async function createCapitalPosition(
   };
 }
 
-/** ~0.32% disaster cushion stopLevel (≥2× broker min) — wider than HardInv 0.20%. */
+/** ~0.20% Safety SL (#136) — tight for micro; Soft HardInv ~0.15% fires first. */
 export function computeSafetyCushionStopLevel(
   direction: 'BUY' | 'SELL',
   mid: number,
@@ -999,9 +999,9 @@ export function computeSafetyCushionStopLevel(
         : abs * 0.00005;
   const brokerMin =
     opts?.minStopDistance != null && opts.minStopDistance > 0 ? opts.minStopDistance : 0;
-  const pctCushion = abs * 0.0032; // 0.32% — wider than HardInv 0.20%
-  const floor = abs >= 1000 ? 0.35 : abs >= 100 ? 0.15 : abs >= 10 ? 0.025 : 0.00025;
-  const dist = Math.max(pctCushion, brokerMin * 2, spr * 5, floor);
+  const pctCushion = abs * 0.002; // 0.20% — micro-safe with BO HardInv 0.15%
+  const floor = abs >= 1000 ? 0.25 : abs >= 100 ? 0.12 : abs >= 10 ? 0.02 : 0.0002;
+  const dist = Math.max(pctCushion, brokerMin * 1.5, spr * 4, floor);
   const raw = direction === 'BUY' ? ref - dist : ref + dist;
   if (abs >= 1000) return Math.round(raw * 10) / 10;
   if (abs >= 100) return Math.round(raw * 100) / 100;

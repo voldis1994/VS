@@ -758,6 +758,8 @@ export function feedsFromSenders(senders: DataSender[]) {
   });
 }
 
+export type FeedRole = 'LEAD' | 'CONFIRM' | 'EXECUTE' | 'REJECT';
+
 export type MultiFeedLeg = {
   sender_id: string;
   name: string;
@@ -765,6 +767,8 @@ export type MultiFeedLeg = {
   mid: number | null;
   latency_ms: number;
   detail?: string;
+  /** Professional multi-feed role */
+  role?: FeedRole;
 };
 
 export type MultiFeedPrice = {
@@ -783,6 +787,9 @@ export type MultiFeedPrice = {
   public_contributing?: number;
   /** True when OHLC mid is safe to use for Capital trading. */
   anchored_to_capital?: boolean;
+  /** Fastest public-near mid (LEAD truth). */
+  lead_mid?: number | null;
+  lead_label?: string | null;
 };
 
 const ANCHOR_MAX_REL = 0.008; // 0.8% — public must be near Capital CFD mid
@@ -891,6 +898,7 @@ export async function readMultiFeedPrice(
       mid: r.mid,
       latency_ms: r.latency_ms,
       detail: r.detail,
+      role: 'EXECUTE' as FeedRole,
     })),
     ...publicNear.map((r) => ({
       sender_id: r.sender_id,
@@ -898,7 +906,8 @@ export async function readMultiFeedPrice(
       ok: true,
       mid: r.mid,
       latency_ms: r.latency_ms,
-      detail: `${r.detail || ''} · near Capital`.trim(),
+      detail: `${r.detail || ''} · LEAD/CONFIRM near Capital`.trim(),
+      role: (r.latency_ms > 0 && r.latency_ms < 800 ? 'LEAD' : 'CONFIRM') as FeedRole,
     })),
     ...publicFar.map((r) => ({
       sender_id: r.sender_id,
@@ -906,9 +915,18 @@ export async function readMultiFeedPrice(
       ok: false,
       mid: r.mid,
       latency_ms: r.latency_ms,
-      detail: `${r.detail || ''} · FAR from Capital (${effectiveAnchor?.toFixed(2)}) — ignored for OHLC`.trim(),
+      detail: `${r.detail || ''} · REJECT FAR from Capital (${effectiveAnchor?.toFixed(2)})`.trim(),
+      role: 'REJECT' as FeedRole,
     })),
   ];
+
+  const leadCandidates = publicNear
+    .filter((r) => r.mid != null && Number.isFinite(r.mid))
+    .slice()
+    .sort((a, b) => a.latency_ms - b.latency_ms);
+  const lead = leadCandidates[0];
+  const lead_mid = lead?.mid ?? null;
+  const lead_label = lead ? `${lead.name} (LEAD)` : null;
 
   const sender_count =
     capitalSenders.length + publicConfiguredForEpic + (fxApplicable ? 1 : 0);
@@ -929,6 +947,8 @@ export async function readMultiFeedPrice(
         capital_sender_count: capitalSenders.length,
         public_contributing: 0,
         anchored_to_capital: true,
+        lead_mid,
+        lead_label,
       };
     }
     return {
@@ -944,6 +964,8 @@ export async function readMultiFeedPrice(
       capital_sender_count: capitalSenders.length,
       public_contributing: 0,
       anchored_to_capital: false,
+      lead_mid,
+      lead_label,
     };
   }
 
@@ -975,11 +997,15 @@ export async function readMultiFeedPrice(
     legs,
     detail: `${fused.contributing}/${sender_count} near-anchor · ${fused.agreement} · mid=${
       mid != null ? mid.toFixed(5) : '—'
-    } · capital=${capitalMids.length} publicNear=${publicNear.length} publicFar=${publicFar.length}`,
+    } · capital=${capitalMids.length} publicNear=${publicNear.length} publicFar=${publicFar.length} · lead=${
+      lead_label || '—'
+    }`,
     capital_contributing: capitalMids.length,
     capital_sender_count: capitalSenders.length,
     public_contributing: publicNear.length,
     anchored_to_capital: anchored,
+    lead_mid,
+    lead_label,
   };
 }
 
@@ -1034,40 +1060,57 @@ export function multiFeedOwnsOhlc(
 }
 
 /**
- * Entry gate is Capital-first: public internet must never freeze trading.
- * Only block when multiple Capital brokers disagree with each other.
+ * Professional feed gate:
+ * - Capital EXECUTE always required path (caller has quote)
+ * - If LEAD public exists and is DIVERGENT vs Capital cluster → hard block
+ * - Multiple Capital peers DIVERGENT → hard block
  */
 export function allowEntryFromFeeds(
   multi: Pick<
     MultiFeedPrice,
-    'contributing' | 'sender_count' | 'agreement' | 'capital_contributing' | 'capital_sender_count'
+    | 'contributing'
+    | 'sender_count'
+    | 'agreement'
+    | 'capital_contributing'
+    | 'capital_sender_count'
+    | 'public_contributing'
+    | 'lead_mid'
+    | 'mid'
   > | null | undefined
 ): { ok: boolean; reason: string } {
-  const capitalConfigured = multi?.capital_sender_count ?? 0;
-  const capitalLive = multi?.capital_contributing ?? 0;
-
-  // No / single Capital row → always trade on local Capital quote
-  if (capitalConfigured < 2) {
-    return { ok: true, reason: 'Capital-anchored — public feeds advisory only' };
-  }
-
   if (!multi) {
-    return { ok: true, reason: 'multi snapshot missing — use Capital local' };
+    return { ok: true, reason: 'multi snapshot missing — Capital local OK' };
   }
 
-  // Multiple Capital rows but none live — still allow local robot quote (caller has it)
-  if (capitalLive === 0) {
-    return { ok: true, reason: 'Capital peers offline — local Capital quote OK' };
+  const capitalLive = multi.capital_contributing ?? 0;
+  const capitalConfigured = multi.capital_sender_count ?? 0;
+  const publicLive = multi.public_contributing ?? 0;
+
+  if (capitalLive >= 2 && multi.agreement === 'DIVERGENT') {
+    return {
+      ok: false,
+      reason: `FEED BLOCK · Capital peers DIVERGENT (${capitalLive}/${capitalConfigured})`,
+    };
   }
 
-  if (capitalLive >= 2 && multi.agreement === 'DIVERGENT' && (multi.capital_contributing ?? 0) >= 2) {
-    // Only if divergence is among Capital — check capital-only would need separate field;
-    // be conservative: do not block — public can inflate DIVERGENT. Allow with note.
-    return { ok: true, reason: 'Capital live — entry allowed (public advisory)' };
+  if (
+    publicLive >= 1 &&
+    multi.lead_mid != null &&
+    multi.mid != null &&
+    Number.isFinite(multi.lead_mid) &&
+    Number.isFinite(multi.mid)
+  ) {
+    const rel = Math.abs(multi.lead_mid - multi.mid) / Math.max(Math.abs(multi.mid), 1e-9);
+    if (rel >= 0.0025 && multi.agreement === 'DIVERGENT') {
+      return {
+        ok: false,
+        reason: `FEED BLOCK · LEAD vs EXECUTE diverge ${(rel * 100).toFixed(2)}%`,
+      };
+    }
   }
 
   return {
     ok: true,
-    reason: `Capital ${capitalLive}/${capitalConfigured} · public advisory`,
+    reason: `FEED OK · Capital ${capitalLive}/${capitalConfigured} · LEAD public ${publicLive} · ${multi.agreement}`,
   };
 }

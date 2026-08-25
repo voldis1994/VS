@@ -5,7 +5,7 @@ import {
 } from './capitalCom.js';
 
 describe('safety SL cushion', () => {
-  it('places BUY stop below mid (~0.32%), wider than HardInv 0.20%', () => {
+  it('places BUY stop below mid (~0.20%), tight for micro with HardInv 0.15%', () => {
     const mid = 2000;
     const level = computeSafetyCushionStopLevel('BUY', mid, {
       bid: 1999.8,
@@ -13,13 +13,15 @@ describe('safety SL cushion', () => {
       spread: 0.4,
       minStopDistance: 0.5,
     });
-    expect(level).toBeLessThan(mid - 5);
-    expect(mid - level).toBeGreaterThanOrEqual(mid * 0.003 - 0.5);
+    expect(level).toBeLessThan(mid);
+    const dist = mid - level;
+    expect(dist).toBeGreaterThanOrEqual(mid * 0.002 - 0.5);
+    expect(dist).toBeLessThan(mid * 0.0035);
   });
 });
 
-describe('5m late-move gate', () => {
-  it('blocks BUY after strong green 5m net', () => {
+describe('late-move gate', () => {
+  it('blocks BUY after strong green net', () => {
     expect(
       isLateMoveOnFiveMinute('BUY', [
         { open: 4600, high: 4602, low: 4599, close: 4601 },
