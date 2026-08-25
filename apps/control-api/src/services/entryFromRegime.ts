@@ -1,6 +1,6 @@
 /**
  * Quality entry only — no junk fades, no mid-move chase, no “follow every red/green”.
- * After 8 months of noise: TREND pullback / resume / clear BREAKOUT only.
+ * After 8 months of noise: TREND pullback / resume only (10s BREAKOUT = whipsaw junk).
  */
 import type { RegimeName } from './regimes.js';
 import { normalizeRegime } from './regimes.js';
@@ -16,12 +16,15 @@ function movingOrNull(bar: TenSecBar): boolean {
   return isMoving10s(bar);
 }
 
+/** Clearer pullback than tick noise — ~1.0pt @ Gold 4600. */
+const PULLBACK_BODY_PCT = 0.00022;
+
 function dip(bar: TenSecBar): boolean {
-  return bodyPct(bar) <= -0.00015;
+  return bodyPct(bar) <= -PULLBACK_BODY_PCT;
 }
 
 function rally(bar: TenSecBar): boolean {
-  return bodyPct(bar) >= 0.00015;
+  return bodyPct(bar) >= PULLBACK_BODY_PCT;
 }
 
 function describe(bar: TenSecBar): string {
@@ -33,13 +36,6 @@ const LATE_SIGNAL_BODY_PCT = 0.0025;
 
 export function signalBarTooLate(bar: TenSecBar): boolean {
   return Math.abs(bodyPct(bar)) >= LATE_SIGNAL_BODY_PCT;
-}
-
-/** Breakout needs a clearer body than micro noise. */
-const BREAKOUT_BODY_PCT = 0.00028;
-
-function strongBreakoutBody(bar: TenSecBar): boolean {
-  return Math.abs(bodyPct(bar)) >= BREAKOUT_BODY_PCT || Math.abs(bar.close - bar.open) >= 0.12;
 }
 
 /**
@@ -91,9 +87,8 @@ export function allowEntryAgainstImpulse(
  * Quality entry — ONLY:
  * - TREND_UP dip-buy / TREND_DOWN rally-sell (pullback)
  * - PULLBACK_* resume with the trend
- * - CLEAR BREAKOUT_UP/DOWN follow (not late, not micro)
  *
- * SKIP junk: RANGE fade, FAILED_BO fade, REVERSAL, UNKNOWN followBody, EXPANSION chase.
+ * SKIP: RANGE/FADE/REVERSAL/EXPANSION + 10s BREAKOUT (micro whipsaw).
  */
 export function decideEntryFrom10sRegime(
   bar: TenSecBar,
@@ -102,7 +97,7 @@ export function decideEntryFrom10sRegime(
   const r: RegimeName = normalizeRegime(regime);
   const candle = describe(bar);
 
-  // Stall / noise / chop — do NOT trade
+  // Stall / noise / chop / noisy 10s breakout — do NOT trade
   if (
     r === 'UNKNOWN' ||
     r === 'TRANSITION' ||
@@ -111,7 +106,9 @@ export function decideEntryFrom10sRegime(
     r === 'REVERSAL_CANDIDATE' ||
     r === 'FAILED_BREAKOUT_UP' ||
     r === 'FAILED_BREAKOUT_DOWN' ||
-    r === 'EXPANSION'
+    r === 'EXPANSION' ||
+    r === 'BREAKOUT_UP' ||
+    r === 'BREAKOUT_DOWN'
   ) {
     return null;
   }
@@ -135,15 +132,6 @@ export function decideEntryFrom10sRegime(
   if (r === 'PULLBACK_DOWNTREND') {
     if (!movingOrNull(bar) || !dip(bar)) return null;
     return { direction: 'SELL', setup: 'CONTINUATION', reason: `${r} resume short · ${candle}` };
-  }
-
-  if (r === 'BREAKOUT_UP') {
-    if (!movingOrNull(bar) || dip(bar) || !strongBreakoutBody(bar)) return null;
-    return { direction: 'BUY', setup: 'BREAKOUT', reason: `${r} follow · ${candle}` };
-  }
-  if (r === 'BREAKOUT_DOWN') {
-    if (!movingOrNull(bar) || rally(bar) || !strongBreakoutBody(bar)) return null;
-    return { direction: 'SELL', setup: 'BREAKOUT', reason: `${r} follow · ${candle}` };
   }
 
   return null;
