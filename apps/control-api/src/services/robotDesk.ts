@@ -316,7 +316,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC → live regime (no UNKNOWN) → ENTRY/EXIT',
     note:
-      '5m brain · one desk side per epic · no BUY into dump',
+      '5m brain · flatten hedge · one side per epic',
   };
 }
 
@@ -553,12 +553,66 @@ function matchOpenOnEpic(
   positions: CapitalOpenPosition[],
   epic: string
 ): CapitalOpenPosition | null {
+  const all = allOpensOnEpic(positions, epic);
+  return all[0] || null;
+}
+
+function allOpensOnEpic(
+  positions: CapitalOpenPosition[],
+  epic: string
+): CapitalOpenPosition[] {
   const want = epic.trim().toLowerCase();
-  return (
-    positions.find((p) => p.epic.trim().toLowerCase() === want) ||
-    positions.find((p) => p.deal_id === epic) ||
-    null
+  return positions.filter(
+    (p) => p.epic.trim().toLowerCase() === want || p.deal_id === epic
   );
+}
+
+function isHedgedOpens(positions: CapitalOpenPosition[]): boolean {
+  let buy = false;
+  let sell = false;
+  for (const p of positions) {
+    if (p.direction === 'BUY') buy = true;
+    if (p.direction === 'SELL') sell = true;
+  }
+  return buy && sell;
+}
+
+/** Close every broker deal on this epic (hedge / stacked junk). */
+async function flattenBrokerOpensOnEpic(
+  session: CapitalSession,
+  s: Internal,
+  quote: { bid: number | null; ask: number | null; mid: number | null },
+  opens: CapitalOpenPosition[],
+  reason: string
+): Promise<void> {
+  if (!opens.length) return;
+  pushTick(s, {
+    phase: 'DECIDE',
+    bid: quote.bid,
+    ask: quote.ask,
+    mid: quote.mid,
+    detail: `FLATTEN ${opens.length} deals on ${s.epic} · ${reason}`,
+  });
+  let anyLoss = false;
+  let lastSide: 'BUY' | 'SELL' | null = null;
+  for (const p of opens) {
+    lastSide = p.direction;
+    if (p.upl != null && p.upl < 0) anyLoss = true;
+    const result = await closeCapitalPosition(session, p.deal_id);
+    pushTick(s, {
+      phase: result.ok ? 'EXIT' : 'ERROR',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: result.ok
+        ? `CLOSED hedge ${p.direction} dealId=${p.deal_id} · ${result.detail}`
+        : `CLOSE FAIL ${p.direction} ${p.deal_id}: ${result.detail}`,
+    });
+  }
+  s.exits_done += 1;
+  s.closed_at_ms = Date.now();
+  noteEpicTradeClose(s.epic, lastSide, anyLoss);
+  clearTradeState(s);
 }
 
 async function resolveDealId(
@@ -691,7 +745,18 @@ async function enterTrade(
   // HARD RULE: never entry while any trade open on this epic
   const listed = await listCapitalOpenPositions(session);
   if (listed.ok) {
-    const existing = matchOpenOnEpic(listed.positions, s.epic);
+    const onEpic = allOpensOnEpic(listed.positions, s.epic);
+    if (isHedgedOpens(onEpic) || onEpic.length > 1) {
+      await flattenBrokerOpensOnEpic(
+        session,
+        s,
+        quote,
+        onEpic,
+        'entry blocked — flatten hedge/stack first'
+      );
+      return;
+    }
+    const existing = onEpic[0] || null;
     if (existing) {
       s.open_side = existing.direction;
       s.deal_id = existing.deal_id;
@@ -1089,7 +1154,44 @@ async function robotCycleBody(s: Internal) {
     const listed = await listCapitalOpenPositions(opened.session);
     let brokerOpen: CapitalOpenPosition | null = null;
     if (listed.ok) {
-      brokerOpen = matchOpenOnEpic(listed.positions, s.epic);
+      const onEpic = allOpensOnEpic(listed.positions, s.epic);
+      // Hedge BUY+SELL on same epic → flatten immediately (Capital "same trade" mess)
+      if (isHedgedOpens(onEpic)) {
+        await flattenBrokerOpensOnEpic(
+          opened.session,
+          s,
+          quote,
+          onEpic,
+          'HEDGE BUY+SELL on one epic — kill both'
+        );
+        queueMicrotask(() => kickPeerManageCycles(s.id, s.epic));
+        return;
+      }
+      // Stacked same-side deals → keep one, close extras
+      if (onEpic.length > 1) {
+        const keep = onEpic[0]!;
+        const extras = onEpic.slice(1);
+        pushTick(s, {
+          phase: 'DECIDE',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `STACKED ${onEpic.length}×${keep.direction} · keep ${keep.deal_id} · close ${extras.length} extras`,
+        });
+        for (const p of extras) {
+          const result = await closeCapitalPosition(opened.session, p.deal_id);
+          pushTick(s, {
+            phase: result.ok ? 'EXIT' : 'ERROR',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: result.ok
+              ? `CLOSED extra ${p.direction} ${p.deal_id}`
+              : `CLOSE FAIL extra ${p.deal_id}: ${result.detail}`,
+          });
+        }
+      }
+      brokerOpen = onEpic[0] || null;
       if (brokerOpen) {
         s.open_side = brokerOpen.direction;
         s.deal_id = brokerOpen.deal_id;
