@@ -1,4 +1,7 @@
-/** 10s OHLC + 14-regime entry — regime is the classifier; this picks the suitable setup. */
+/**
+ * Quality entry only — no junk fades, no mid-move chase, no “follow every red/green”.
+ * After 8 months of noise: TREND pullback / resume / clear BREAKOUT only.
+ */
 import type { RegimeName } from './regimes.js';
 import { normalizeRegime } from './regimes.js';
 import { bodyPct, isMoving10s, rangePct, type TenSecBar } from './tenSecondOhlc.js';
@@ -25,12 +28,18 @@ function describe(bar: TenSecBar): string {
   return `10s O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} body=${(bodyPct(bar) * 100).toFixed(3)}% rng=${(rangePct(bar) * 100).toFixed(3)}%`;
 }
 
-/** Follow 10s body — used when regime would otherwise stall (UNKNOWN/COMPRESSION/TRANSITION). */
-function followBody(bar: TenSecBar, label: string): RegimeEntry | null {
-  if (!movingOrNull(bar)) return null;
-  if (rally(bar)) return { direction: 'BUY', setup: 'BREAKOUT', reason: `${label} follow up · ${describe(bar)}` };
-  if (dip(bar)) return { direction: 'SELL', setup: 'BREAKOUT', reason: `${label} follow down · ${describe(bar)}` };
-  return null;
+/** Signal bar already spent the move — chasing junk. ~0.25% ≈ 11pt @ Gold 4600. */
+const LATE_SIGNAL_BODY_PCT = 0.0025;
+
+export function signalBarTooLate(bar: TenSecBar): boolean {
+  return Math.abs(bodyPct(bar)) >= LATE_SIGNAL_BODY_PCT;
+}
+
+/** Breakout needs a clearer body than micro noise. */
+const BREAKOUT_BODY_PCT = 0.00028;
+
+function strongBreakoutBody(bar: TenSecBar): boolean {
+  return Math.abs(bodyPct(bar)) >= BREAKOUT_BODY_PCT || Math.abs(bar.close - bar.open) >= 0.12;
 }
 
 /**
@@ -56,7 +65,6 @@ export function recentImpulse(
 
 /**
  * Never SELL into a fresh UP impulse / BUY into a fresh DOWN dump.
- * Fixes: close BUY on spike → next red bar opens SELL against the buy-move.
  */
 export function allowEntryAgainstImpulse(
   direction: 'BUY' | 'SELL',
@@ -80,9 +88,12 @@ export function allowEntryAgainstImpulse(
 }
 
 /**
- * Suitable entry for the current 10s regime.
- * Never stalls on UNKNOWN / COMPRESSION / TRANSITION — follows the candle.
- * Does not fade a trend (no SELL in TREND_UP, no BUY in TREND_DOWN).
+ * Quality entry — ONLY:
+ * - TREND_UP dip-buy / TREND_DOWN rally-sell (pullback)
+ * - PULLBACK_* resume with the trend
+ * - CLEAR BREAKOUT_UP/DOWN follow (not late, not micro)
+ *
+ * SKIP junk: RANGE fade, FAILED_BO fade, REVERSAL, UNKNOWN followBody, EXPANSION chase.
  */
 export function decideEntryFrom10sRegime(
   bar: TenSecBar,
@@ -91,9 +102,22 @@ export function decideEntryFrom10sRegime(
   const r: RegimeName = normalizeRegime(regime);
   const candle = describe(bar);
 
-  if (r === 'UNKNOWN' || r === 'TRANSITION' || r === 'COMPRESSION') {
-    return followBody(bar, r);
+  // Stall / noise / chop — do NOT trade
+  if (
+    r === 'UNKNOWN' ||
+    r === 'TRANSITION' ||
+    r === 'COMPRESSION' ||
+    r === 'RANGE' ||
+    r === 'REVERSAL_CANDIDATE' ||
+    r === 'FAILED_BREAKOUT_UP' ||
+    r === 'FAILED_BREAKOUT_DOWN' ||
+    r === 'EXPANSION'
+  ) {
+    return null;
   }
+
+  // Never chase a bar that already ran
+  if (signalBarTooLate(bar)) return null;
 
   if (r === 'TREND_UP') {
     if (!movingOrNull(bar) || !dip(bar)) return null;
@@ -114,40 +138,13 @@ export function decideEntryFrom10sRegime(
   }
 
   if (r === 'BREAKOUT_UP') {
-    if (!movingOrNull(bar) || dip(bar)) return null;
+    if (!movingOrNull(bar) || dip(bar) || !strongBreakoutBody(bar)) return null;
     return { direction: 'BUY', setup: 'BREAKOUT', reason: `${r} follow · ${candle}` };
   }
   if (r === 'BREAKOUT_DOWN') {
-    if (!movingOrNull(bar) || rally(bar)) return null;
+    if (!movingOrNull(bar) || rally(bar) || !strongBreakoutBody(bar)) return null;
     return { direction: 'SELL', setup: 'BREAKOUT', reason: `${r} follow · ${candle}` };
   }
 
-  if (r === 'FAILED_BREAKOUT_UP') {
-    if (!movingOrNull(bar) || !dip(bar)) return null;
-    return { direction: 'SELL', setup: 'FADE', reason: `${r} fade failed long · ${candle}` };
-  }
-  if (r === 'FAILED_BREAKOUT_DOWN') {
-    if (!movingOrNull(bar) || !rally(bar)) return null;
-    return { direction: 'BUY', setup: 'FADE', reason: `${r} fade failed short · ${candle}` };
-  }
-
-  if (r === 'REVERSAL_CANDIDATE') {
-    if (!movingOrNull(bar)) return null;
-    if (dip(bar)) return { direction: 'SELL', setup: 'REVERSAL', reason: `${r} · ${candle}` };
-    if (rally(bar)) return { direction: 'BUY', setup: 'REVERSAL', reason: `${r} · ${candle}` };
-    return null;
-  }
-
-  if (r === 'EXPANSION') {
-    return followBody(bar, r);
-  }
-
-  if (r === 'RANGE') {
-    if (!movingOrNull(bar)) return null;
-    if (dip(bar)) return { direction: 'BUY', setup: 'FADE', reason: `${r} fade dip · ${candle}` };
-    if (rally(bar)) return { direction: 'SELL', setup: 'FADE', reason: `${r} fade rally · ${candle}` };
-    return null;
-  }
-
-  return followBody(bar, r || 'LIVE');
+  return null;
 }

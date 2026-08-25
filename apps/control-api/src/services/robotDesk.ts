@@ -6,7 +6,9 @@ import {
   confirmCapitalDeal,
   createCapitalPosition,
   fetchCapitalMarketQuote,
+  fetchCapitalMinutePrices,
   fetchCapitalPrices,
+  isLateMoveOnOneMinute,
   listCapitalOpenPositions,
   type CapitalMarketQuote,
   type CapitalOpenPosition,
@@ -269,7 +271,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC → live regime (no UNKNOWN) → ENTRY/EXIT',
     note:
-      'No SELL into fresh buy impulse · no BUY into dump · BO locks majority · clients persist.',
+      'Quality only: TREND pullback / BO follow · no RANGE/fade junk · no chase · no SELL into buy impulse',
   };
 }
 
@@ -1125,7 +1127,20 @@ async function robotCycleBody(s: Internal) {
     }
 
     s.mode = 'ENTRY';
-    // No post-close cooldown — enter on next valid 10s signal
+
+    // After close — brief pause so we do not flip into junk reverse
+    const POST_CLOSE_MS = 45_000;
+    const sinceClose = Date.now() - (s.closed_at_ms || 0);
+    if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_MS) {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `POST-CLOSE pause ${Math.ceil((POST_CLOSE_MS - sinceClose) / 1000)}s · no flip junk`,
+      });
+      return;
+    }
 
     if (quote.mid == null) return;
 
@@ -1166,7 +1181,6 @@ async function robotCycleBody(s: Internal) {
     }
 
     const bar = s.ohlcState.last_closed;
-    const forming = s.ohlcState.forming;
     const ohlc = s.ohlc_10s;
     const ohlcLine = bar
       ? `10s O=${bar.open.toFixed(2)} H=${bar.high.toFixed(2)} L=${bar.low.toFixed(2)} C=${bar.close.toFixed(2)} ${s.regime} · feeds ${
@@ -1178,64 +1192,73 @@ async function robotCycleBody(s: Internal) {
     let reason = '';
     let setupType: string | null = null;
 
-    // Closed bar on close; otherwise forming — never idle-wait for candle close
-    const signalBar = s.ohlcState.just_closed && bar ? bar : forming || bar;
+    // QUALITY: only closed 10s bar — never chase forming mid-candle
+    if (!(s.ohlcState.just_closed && bar)) {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · wait closed 10s · C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'}`,
+      });
+      return;
+    }
 
-    if (signalBar) {
-      if (!s.regime || s.regime === 'UNKNOWN') s.regime = 'EXPANSION';
-      const bucketKey = String(signalBar.open_time_ms || 0);
-      // One attempt per 10s bucket — not a cooldown, just no Capital spam
-      if (bucketKey && bucketKey === s.last_entry_signal_key) {
-        pushTick(s, {
-          phase: 'DECIDE',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `${ohlcLine} · ${s.regime} · watching`,
-        });
-      } else {
-        const sig = decideEntryFrom10sRegime(signalBar, s.regime);
-        if (sig) {
-          const histBars = [
-            ...s.closedBars,
-            ...(s.ohlcState.just_closed && bar ? [] : signalBar ? [signalBar] : []),
-          ];
-          const vsImpulse = allowEntryAgainstImpulse(sig.direction, histBars);
-          if (!vsImpulse.ok) {
-            pushTick(s, {
-              phase: 'DECIDE',
-              bid: quote.bid,
-              ask: quote.ask,
-              mid: quote.mid,
-              detail: `${ohlcLine} · ${vsImpulse.reason}`,
-            });
-          } else {
-            direction = sig.direction;
-            setupType = sig.setup;
-            reason = sig.reason;
-            if (bucketKey) s.last_entry_signal_key = bucketKey;
-          }
-        } else {
-          pushTick(s, {
-            phase: 'DECIDE',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: `${ohlcLine} · ${s.regime} · no moving body yet`,
-          });
-        }
-      }
-    } else {
+    if (!s.regime || s.regime === 'UNKNOWN') s.regime = 'COMPRESSION';
+    const bucketKey = String(bar.open_time_ms || 0);
+    if (bucketKey && bucketKey === s.last_entry_signal_key) {
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · seeding OHLC · C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'}`,
+        detail: `${ohlcLine} · ${s.regime} · watching`,
       });
+      return;
     }
 
-    // No late-1m / stale-quote / fake-extreme skips — enter when regime says so
+    const sig = decideEntryFrom10sRegime(bar, s.regime);
+    if (!sig) {
+      pushTick(s, {
+        phase: 'DECIDE',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · ${s.regime} · no quality setup (skip junk/fade/chase)`,
+      });
+      return;
+    }
+
+    const vsImpulse = allowEntryAgainstImpulse(sig.direction, s.closedBars);
+    if (!vsImpulse.ok) {
+      pushTick(s, {
+        phase: 'DECIDE',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · ${vsImpulse.reason}`,
+      });
+      return;
+    }
+
+    // No chase: 1m already spent the move
+    const hist = await fetchCapitalMinutePrices(opened.session, s.epic, 3);
+    if (hist.ok && isLateMoveOnOneMinute(sig.direction, hist.candles)) {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `SKIP chase · late on 1m · ${sig.direction}`,
+      });
+      return;
+    }
+
+    direction = sig.direction;
+    setupType = sig.setup;
+    reason = sig.reason;
+    if (bucketKey) s.last_entry_signal_key = bucketKey;
+
     if (!direction) return;
     await enterTrade(opened.session, s, direction, quote, reason, setupType);
   } catch (err) {
