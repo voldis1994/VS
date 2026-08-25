@@ -301,7 +301,7 @@ function clearTradeState(s: Internal) {
 }
 
 /**
- * SAFETY SL as LAST RESORT (~0.25%) — micro account friendly (was 0.50%).
+ * SAFETY SL as LAST RESORT (~0.18%) — ~30% tighter than 0.25% for micro accounts.
  * Best Outcome / HardInvalidation must fire first; Capital Limit SL only on disaster.
  */
 function safetyStopLevel(
@@ -329,14 +329,14 @@ function safetyStopLevel(
         ? Math.max(ask - bid, 0)
         : abs * 0.00005;
 
-  const pctCushion = abs * 0.0025; // 0.25% — half of 0.50% for micro accounts
+  const pctCushion = abs * 0.00175; // 0.18% — ~30% tighter than 0.25% (micro)
   const brokerMin =
     minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
       ? minStopDistance
       : 0;
-  const floor = abs >= 1000 ? 0.6 : abs >= 100 ? 0.25 : abs >= 10 ? 0.04 : abs >= 1 ? 0.0004 : 0.00004;
+  const floor = abs >= 1000 ? 0.45 : abs >= 100 ? 0.2 : abs >= 10 ? 0.03 : abs >= 1 ? 0.0003 : 0.00003;
   const dist =
-    Math.max(pctCushion, brokerMin * 2, spr * 6, floor) * Math.max(loosen, 1);
+    Math.max(pctCushion, brokerMin * 2, spr * 5, floor) * Math.max(loosen, 1);
 
   const raw = direction === 'BUY' ? ref - dist : ref + dist;
   if (abs >= 1000) return Math.round(raw * 10) / 10;
@@ -345,14 +345,14 @@ function safetyStopLevel(
   return Math.round(raw * 1e6) / 1e6;
 }
 
-/** Cushion stopDistance in Capital POINTS (≥ 2× min, ~0.25% when point size known). */
+/** Cushion stopDistance in Capital POINTS (≥ 2× min, ~0.18% when point size known). */
 function safetyStopDistancePts(
   mid: number,
   minPts: number,
   pointSize: number | null
 ): number {
   const abs = Math.max(Math.abs(mid), 1e-9);
-  const pct = abs * 0.0025;
+  const pct = abs * 0.00175;
   let fromPct = minPts * 2;
   if (pointSize != null && pointSize > 0) {
     fromPct = Math.max(fromPct, pct / pointSize);
@@ -662,7 +662,7 @@ async function enterTrade(
     return;
   }
 
-  // SAFETY SL cushion (~0.20% / ≥2.5× min) — not dealing-rules minimum
+  // SAFETY SL cushion (~0.18% / ≥2× min) — micro-friendly, not dealing-rules minimum
   const minPts = quote.min_stop_points;
   const minPrice = quote.min_stop_distance ?? null;
   const unit = (quote.min_stop_unit || 'POINTS').toUpperCase();
