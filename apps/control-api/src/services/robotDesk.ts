@@ -25,6 +25,7 @@ import {
   observeClosedBars,
   normalizeRegime,
   currentRegime,
+  MAX_REGIME_BARS,
   REGIME_NAMES,
   toLiveRegime,
   type RegimeName,
@@ -293,7 +294,9 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
       }
       s.closedBars.push(b);
     }
-    if (s.closedBars.length > 24) s.closedBars = s.closedBars.slice(-24);
+    if (s.closedBars.length > MAX_REGIME_BARS) {
+      s.closedBars = s.closedBars.slice(-MAX_REGIME_BARS);
+    }
   }
   // Always sync from shared epic book — B.O.S.S. / DIMITRIJ / GUNTIS must match
   const shared = currentRegime(s.epic);

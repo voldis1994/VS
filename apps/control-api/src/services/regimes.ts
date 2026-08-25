@@ -113,7 +113,10 @@ type Book = {
   last_update: string;
 };
 
-const MAX_BARS = 24;
+const MAX_BARS = 90; // 15 min of 10s — same context user sees on Capital chart
+/** Keep closedBars / impulse windows aligned with regime book. */
+export const MAX_REGIME_BARS = MAX_BARS;
+
 const books = new Map<string, Book>();
 
 function mean(xs: number[]): number {
@@ -127,8 +130,9 @@ function epicKey(epic: string): string {
 
 /**
  * Classify from closed 10s OHLC — same names as C++ RegimeEngine.
- * With ≥12 bars, net slope over ~16 bars beats local "inRange" / quiet COMPRESSION
- * / bare EXPANSION so a clear selloff is TREND_*, not RANGE or live EXPANSION.
+ * Short slope (~16 bars) + structure slope (~60 bars) beat local "inRange" /
+ * quiet COMPRESSION / bare EXPANSION. After a dump, bottom chop must stay
+ * TREND_DOWN — not RANGE just because the last 2 minutes are flat.
  */
 export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOWN'): RegimeName {
   if (!bars.length || bars.length < 2) return 'UNKNOWN';
@@ -162,16 +166,43 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
     (previous === 'TREND_UP' && lastVel < -0.0012 && lastRange > avgRange && !breakoutDown) ||
     (previous === 'TREND_DOWN' && lastVel > 0.0012 && lastRange > avgRange && !breakoutUp);
 
-  // ~2–3 min of 10s bars; ~0.07% ≈ 3.2pt on Gold ~4600
+  // Short ~2.5 min; structure ~10 min. ~0.07% ≈ 3.2pt, ~0.12% ≈ 5.5pt on Gold ~4600
   let slopeUp = false;
   let slopeDown = false;
+  let bounceInDown = false;
+  let dipInUp = false;
   if (bars.length >= 12) {
-    const slopeBars = bars.slice(-16);
-    const slopeOpen = slopeBars[0]!.open;
-    const slopeMid = Math.max(Math.abs(slopeOpen), 1e-9);
-    const netPct = (last.close - slopeOpen) / slopeMid;
-    slopeUp = netPct >= 0.0007;
-    slopeDown = netPct <= -0.0007;
+    const shortBars = bars.slice(-16);
+    const shortOpen = shortBars[0]!.open;
+    const shortMid = Math.max(Math.abs(shortOpen), 1e-9);
+    const shortPct = (last.close - shortOpen) / shortMid;
+    const shortUp = shortPct >= 0.0007;
+    const shortDown = shortPct <= -0.0007;
+
+    let structUp = false;
+    let structDown = false;
+    if (bars.length >= 30) {
+      const structBars = bars.slice(-60);
+      const structOpen = structBars[0]!.open;
+      const structMid = Math.max(Math.abs(structOpen), 1e-9);
+      const structPct = (last.close - structOpen) / structMid;
+      structUp = structPct >= 0.0012;
+      structDown = structPct <= -0.0012;
+      // Local bounce/dip against the bigger move — still the same trend, not RANGE
+      if (structDown && shortPct > 0.00035) bounceInDown = true;
+      if (structUp && shortPct < -0.00035) dipInUp = true;
+    }
+
+    slopeDown = shortDown || structDown;
+    slopeUp = shortUp || structUp;
+    // Structure wins when short and long disagree (bounce after dump ≠ TREND_UP)
+    if (structDown && shortUp) {
+      slopeDown = true;
+      slopeUp = false;
+    } else if (structUp && shortDown) {
+      slopeUp = true;
+      slopeDown = false;
+    }
   }
 
   if (previous === 'BREAKOUT_UP' && inRange && lastVel < 0) return 'FAILED_BREAKOUT_UP';
@@ -187,8 +218,11 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   if (previous === 'TREND_DOWN' && lastVel > 0.00008 && persistence < -0.15) {
     return 'PULLBACK_DOWNTREND';
   }
-  if (trendingUp) return 'TREND_UP';
-  if (trendingDown) return 'TREND_DOWN';
+  // Bounce/dip against longer structure before short persistence flips the trend
+  if (bounceInDown) return 'PULLBACK_DOWNTREND';
+  if (dipInUp) return 'PULLBACK_UPTREND';
+  if (trendingUp && !slopeDown) return 'TREND_UP';
+  if (trendingDown && !slopeUp) return 'TREND_DOWN';
   if (reversal) return 'REVERSAL_CANDIDATE';
   // Clear directional slope must not become RANGE just because last close is inside prior H/L
   if (slopeDown) {
