@@ -95,39 +95,39 @@ describe('multi-feed owns OHLC / entry gate', () => {
     ).toBe(false);
   });
 
-  it('hard-blocks LEAD vs Capital even when agreement is OK (false LEAD)', () => {
+  it('allows trade when public would be REJECT — only Capital matters', () => {
     expect(
       allowEntryFromFeeds({
-        contributing: 5,
-        sender_count: 5,
-        agreement: 'OK',
+        contributing: 3,
+        sender_count: 3,
+        agreement: 'STRONG',
         capital_contributing: 3,
         capital_sender_count: 3,
-        public_contributing: 2,
-        lead_mid: 4724.3,
-        mid: 4663.27,
+      }).ok
+    ).toBe(true);
+  });
+
+  it('blocks only when zero Capital quotes', () => {
+    expect(
+      allowEntryFromFeeds({
+        contributing: 0,
+        sender_count: 3,
+        agreement: 'NONE',
+        capital_contributing: 0,
+        capital_sender_count: 3,
       }).ok
     ).toBe(false);
   });
 
-  it('allows Capital-local when public-only snapshot is weak', () => {
+  it('blocks when no Capital quote at all', () => {
     expect(
       allowEntryFromFeeds({
         contributing: 0,
         sender_count: 4,
         agreement: 'INSUFFICIENT',
-        capital_contributing: 1,
-        capital_sender_count: 1,
-      }).ok
-    ).toBe(true);
-    expect(
-      allowEntryFromFeeds({
-        contributing: 2,
-        sender_count: 2,
-        agreement: 'DIVERGENT',
         capital_contributing: 0,
-        capital_sender_count: 0,
+        capital_sender_count: 3,
       }).ok
-    ).toBe(true);
+    ).toBe(false);
   });
 });

@@ -349,9 +349,9 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     active_regimes: activeRegimes,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'LEAD/CONFIRM feeds → 10s OHLC → ZONE → regime → filters → ENTRY · BO+continuation → EXIT',
+    chain: 'Capital LEAD/CONFIRM → 10s OHLC → ZONE → regime → filters → ENTRY · BO+continuation → EXIT',
     note:
-      '10s SO · zones required · public LEAD only if within 0.25% of Capital · FAR = REJECT · wrong epic = N/A · Safety SL on Capital.com',
+      'REAL feeds = Capital.com konti (B.O.S.S./guntis/dimitrij). Public = tikai ADVISORY, nekad nebloķē entry. Zones + Capital quote obligāti.',
   };
 }
 

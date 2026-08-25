@@ -707,7 +707,7 @@ export function RobotDeskPage() {
               <div className="robot-arena-kicker" style={{ marginTop: 10 }}>TRADE TYPES</div>
               <p className="mono rc-info-text">{tradeTypes.join(' · ')}</p>
 
-              <div className="robot-arena-kicker" style={{ marginTop: 14 }}>PUBLIC INTERNET FEEDS</div>
+              <div className="robot-arena-kicker" style={{ marginTop: 14 }}>OPTIONAL PUBLIC REFERENCE (never blocks trade)</div>
               <div className="robot-feed-legs">
                 {publicSenders.map((s) => {
                   const row = publicFeedRow(s);
@@ -730,7 +730,7 @@ export function RobotDeskPage() {
                 {publicSenders.length === 0 && <div className="mono robot-wire-empty">Nav public feeds.</div>}
               </div>
 
-              <div className="robot-arena-kicker" style={{ marginTop: 14 }}>CAPITAL EXECUTION</div>
+              <div className="robot-arena-kicker" style={{ marginTop: 14 }}>CAPITAL BROKER FEEDS (real — LEAD/CONFIRM/EXECUTE)</div>
               <div className="robot-feed-legs">
                 {capitalSenders.map((s) => (
                   <div

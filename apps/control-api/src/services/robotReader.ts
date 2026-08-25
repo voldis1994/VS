@@ -758,7 +758,7 @@ export function feedsFromSenders(senders: DataSender[]) {
   });
 }
 
-export type FeedRole = 'LEAD' | 'CONFIRM' | 'EXECUTE' | 'REJECT';
+export type FeedRole = 'LEAD' | 'CONFIRM' | 'EXECUTE' | 'REJECT' | 'ADVISORY';
 
 export type MultiFeedLeg = {
   sender_id: string;
@@ -895,29 +895,41 @@ export async function readMultiFeedPrice(
     ? publicOkReads.filter((r) => !nearAnchor(r.mid as number, effectiveAnchor, anchorBand))
     : [];
 
-  const fuseMids = [
-    ...capitalMids,
-    ...publicNear.map((r) => r.mid as number),
-  ];
+  const fuseMids = [...capitalMids];
+
+  const capitalOkReads = capitalReads.filter(
+    (r) => r.ok && r.mid != null && Number.isFinite(r.mid)
+  );
+  const capitalSorted = capitalOkReads.slice().sort((a, b) => a.latency_ms - b.latency_ms);
+  const leadCapital = capitalSorted[0] ?? null;
 
   const legs: MultiFeedLeg[] = [
-    ...capitalReads.map((r) => ({
-      sender_id: r.sender_id,
-      name: r.name,
-      ok: !!(r.ok && r.mid != null),
-      mid: r.mid,
-      latency_ms: r.latency_ms,
-      detail: r.detail,
-      role: 'EXECUTE' as FeedRole,
-    })),
+    ...capitalReads.map((r) => {
+      const ok = !!(r.ok && r.mid != null);
+      const isLead = leadCapital != null && r.sender_id === leadCapital.sender_id;
+      const isConfirm = ok && leadCapital != null && r.sender_id !== leadCapital.sender_id;
+      return {
+        sender_id: r.sender_id,
+        name: r.name,
+        ok,
+        mid: r.mid,
+        latency_ms: r.latency_ms,
+        detail: isLead
+          ? `${r.detail || ''} · Capital LEAD`.trim()
+          : isConfirm
+            ? `${r.detail || ''} · Capital CONFIRM`.trim()
+            : r.detail,
+        role: (isLead ? 'LEAD' : isConfirm ? 'CONFIRM' : 'EXECUTE') as FeedRole,
+      };
+    }),
     ...publicNear.map((r) => ({
       sender_id: r.sender_id,
       name: r.name,
       ok: true,
       mid: r.mid,
       latency_ms: r.latency_ms,
-      detail: `${r.detail || ''} · LEAD/CONFIRM near Capital`.trim(),
-      role: (r.latency_ms > 0 && r.latency_ms < 800 ? 'LEAD' : 'CONFIRM') as FeedRole,
+      detail: `${r.detail || ''} · ADVISORY near Capital (not LEAD)`.trim(),
+      role: 'ADVISORY' as FeedRole,
     })),
     ...publicFar.map((r) => ({
       sender_id: r.sender_id,
@@ -930,16 +942,10 @@ export async function readMultiFeedPrice(
     })),
   ];
 
-  const leadCandidates = publicNear
-    .filter((r) => r.mid != null && Number.isFinite(r.mid))
-    .slice()
-    .sort((a, b) => a.latency_ms - b.latency_ms);
-  const lead = leadCandidates[0];
-  const lead_mid = lead?.mid ?? null;
-  const lead_label = lead ? `${lead.name} (LEAD)` : null;
+  const lead_mid = leadCapital?.mid ?? effectiveAnchor ?? null;
+  const lead_label = leadCapital ? `${leadCapital.name} (LEAD)` : null;
 
-  const sender_count =
-    capitalSenders.length + publicConfiguredForEpic + (fxApplicable ? 1 : 0);
+  const sender_count = capitalSenders.length;
 
   if (fuseMids.length === 0) {
     // Fall back to anchor alone so robot can still trade on Capital quote
@@ -979,7 +985,7 @@ export async function readMultiFeedPrice(
     };
   }
 
-  const mixedPublic = publicNear.length > 0;
+  const mixedPublic = false;
   const fused = fusePriceMids(fuseMids.length ? fuseMids : effectiveAnchor != null ? [effectiveAnchor] : [], {
     mixedPublic,
   });
@@ -997,13 +1003,13 @@ export async function readMultiFeedPrice(
     mid = fused.mid;
   }
 
-  // Contributing = Capital live + public NEAR only (never count REJECT FAR as OK)
-  const contributing = capitalMids.length + publicNear.length;
+  // Contributing = Capital broker feeds only (public ADVISORY/REJECT never blocks entry)
+  const contributing = capitalMids.length;
   const agreementSource =
-    publicNear.length > 0
-      ? fused
-      : capitalMids.length
-        ? fusePriceMids(capitalMids, { mixedPublic: false })
+    capitalMids.length >= 2
+      ? fusePriceMids(capitalMids, { mixedPublic: false })
+      : capitalMids.length === 1
+        ? { agreement: 'INSUFFICIENT' as const, contributing: 1, inliers: capitalMids, mid: capitalMids[0] }
         : fused;
 
   return {
@@ -1086,10 +1092,8 @@ export function multiFeedOwnsOhlc(
 }
 
 /**
- * Professional feed gate:
- * - Capital EXECUTE always required path (caller has quote)
- * - If LEAD public exists and is DIVERGENT vs Capital cluster → hard block
- * - Multiple Capital peers DIVERGENT → hard block
+ * Professional feed gate — Capital broker peers only.
+ * Public ADVISORY/REJECT never blocks entry. Block only when ≥2 Capital accounts DIVERGE.
  */
 export function allowEntryFromFeeds(
   multi: Pick<
@@ -1099,18 +1103,14 @@ export function allowEntryFromFeeds(
     | 'agreement'
     | 'capital_contributing'
     | 'capital_sender_count'
-    | 'public_contributing'
-    | 'lead_mid'
-    | 'mid'
   > | null | undefined
 ): { ok: boolean; reason: string } {
   if (!multi) {
-    return { ok: true, reason: 'multi snapshot missing — Capital local OK' };
+    return { ok: true, reason: 'Capital local OK' };
   }
 
   const capitalLive = multi.capital_contributing ?? 0;
   const capitalConfigured = multi.capital_sender_count ?? 0;
-  const publicLive = multi.public_contributing ?? 0;
 
   if (capitalLive >= 2 && multi.agreement === 'DIVERGENT') {
     return {
@@ -1119,25 +1119,15 @@ export function allowEntryFromFeeds(
     };
   }
 
-  if (
-    publicLive >= 1 &&
-    multi.lead_mid != null &&
-    multi.mid != null &&
-    Number.isFinite(multi.lead_mid) &&
-    Number.isFinite(multi.mid)
-  ) {
-    const rel = Math.abs(multi.lead_mid - multi.mid) / Math.max(Math.abs(multi.mid), 1e-9);
-    // Hard block whenever LEAD is meaningfully off Capital — do not wait for DIVERGENT label
-    if (rel >= ANCHOR_MAX_REL) {
-      return {
-        ok: false,
-        reason: `FEED BLOCK · LEAD vs EXECUTE diverge ${(rel * 100).toFixed(2)}% (Capital mid=${multi.mid})`,
-      };
-    }
+  if (capitalLive < 1) {
+    return {
+      ok: false,
+      reason: `FEED BLOCK · no Capital quote (${capitalLive}/${capitalConfigured})`,
+    };
   }
 
   return {
     ok: true,
-    reason: `FEED OK · Capital ${capitalLive}/${capitalConfigured} · LEAD public ${publicLive} · ${multi.agreement}`,
+    reason: `FEED OK · Capital ${capitalLive}/${capitalConfigured} · ${multi.agreement}`,
   };
 }
