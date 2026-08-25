@@ -1083,7 +1083,10 @@ async function robotCycleBody(s: Internal) {
           detail: 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
         });
         s.closed_at_ms = Date.now();
-        noteEpicTradeClose(s.epic, s.open_side, true);
+        const flatPnl =
+          s.unrealized != null && Number.isFinite(s.unrealized) ? s.unrealized : 0;
+        noteRiskTradePnl(s.account_id, flatPnl);
+        noteEpicTradeClose(s.epic, s.open_side, flatPnl < 0);
         clearTradeState(s);
       }
     } else {
@@ -1101,7 +1104,9 @@ async function robotCycleBody(s: Internal) {
     }
 
     // 10min risk window — equity % of total account sum
-    if (Date.now() - s.last_equity_fetch_ms >= 60_000) {
+    const needEquity =
+      !s.risk || s.risk.status === 'SEEDING' || s.risk.equity_start == null;
+    if (needEquity || Date.now() - s.last_equity_fetch_ms >= 60_000) {
       s.last_equity_fetch_ms = Date.now();
       const eq = await fetchCapitalAccountEquity(opened.session);
       if (eq.ok && eq.equity != null) setRiskEquity(s.account_id, eq.equity);

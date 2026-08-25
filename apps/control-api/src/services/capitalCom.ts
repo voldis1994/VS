@@ -411,9 +411,15 @@ export async function fetchCapitalAccountEquity(
   }
   const bal = row.balance || row.accountBalance || {};
   const equity = numOrNull(
-    bal.balance ?? bal.equity ?? bal.amount ?? row.balance ?? row.equity
+    typeof bal === 'number'
+      ? bal
+      : (bal.balance ?? bal.equity ?? bal.amount ?? row.equity ?? row.balance?.balance)
   );
-  const available = numOrNull(bal.available ?? bal.availableBalance ?? bal.deposit);
+  const available = numOrNull(
+    typeof bal === 'object' && bal
+      ? (bal.available ?? bal.availableBalance ?? bal.deposit)
+      : null
+  );
   if (equity == null || equity <= 0) {
     return {
       ok: false,
