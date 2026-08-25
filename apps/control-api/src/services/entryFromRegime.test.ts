@@ -66,6 +66,10 @@ describe('regime-led 5m entry', () => {
     expect(decideEntryFrom10sRegime(softRally, 'EXPANSION', upImpulse)?.direction).toBe('BUY');
   });
 
+  it('EXPANSION without clear flow does not guess green=BUY', () => {
+    expect(decideEntryFrom10sRegime(softRally, 'EXPANSION', [])).toBeNull();
+  });
+
   it('BREAKOUT follows soft live with regime', () => {
     expect(decideEntryFrom10sRegime(softRally, 'BREAKOUT_UP')?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(softDip, 'BREAKOUT_DOWN')?.direction).toBe('SELL');
@@ -106,6 +110,22 @@ describe('no SELL into fresh buy impulse', () => {
   it('blocks SELL after buy spike', () => {
     expect(allowEntryAgainstImpulse('SELL', upImpulse).ok).toBe(false);
     expect(allowEntryAgainstImpulse('BUY', upImpulse).ok).toBe(true);
+  });
+
+  it('blocks BUY under swing-high dump (the mīnus long case)', () => {
+    // Rally then dump under the high — green bounce must NOT buy
+    const dump: TenSecBar[] = [
+      bar(4650, 4655, 0),
+      bar(4655, 4660, 1),
+      bar(4660, 4652, 2),
+      bar(4652, 4648, 3),
+      bar(4648, 4645, 4),
+      bar(4645, 4642, 5),
+    ];
+    const bounce = bar(4642, 4644.5, 6);
+    expect(allowEntryAgainstImpulse('BUY', dump, bounce).ok).toBe(false);
+    expect(decideEntryFrom10sRegime(bounce, 'TREND_UP', dump)).toBeNull();
+    expect(decideEntryFrom10sRegime(bounce, 'EXPANSION', dump)?.direction).toBe('SELL');
   });
 
   it('blocks BUY into short dump even with live green tick', () => {

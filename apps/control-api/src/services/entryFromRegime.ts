@@ -83,25 +83,89 @@ export function shortNetMove(
   return recentImpulse(all, 6);
 }
 
+/** Drop from recent swing high (last ~8 bars) — catches BUY under a dump even if net open→close is mixed. */
+export function selloffFromSwingHigh(
+  bars: TenSecBar[] | null | undefined,
+  liveBar?: TenSecBar | null
+): { dumpPts: number; dumpPct: number } {
+  const all = [...(bars ?? [])];
+  if (liveBar && Number.isFinite(liveBar.close)) {
+    const last = all[all.length - 1];
+    if (!last || last.open_time_ms !== liveBar.open_time_ms) all.push(liveBar);
+    else all[all.length - 1] = liveBar;
+  }
+  if (all.length < 2) return { dumpPts: 0, dumpPct: 0 };
+  const window = all.slice(-8);
+  const hi = Math.max(...window.map((b) => b.high));
+  const close = window[window.length - 1]!.close;
+  const dumpPts = hi - close;
+  const dumpPct = dumpPts / Math.max(Math.abs(hi), 1e-9);
+  return { dumpPts, dumpPct };
+}
+
+export function rallyFromSwingLow(
+  bars: TenSecBar[] | null | undefined,
+  liveBar?: TenSecBar | null
+): { rallyPts: number; rallyPct: number } {
+  const all = [...(bars ?? [])];
+  if (liveBar && Number.isFinite(liveBar.close)) {
+    const last = all[all.length - 1];
+    if (!last || last.open_time_ms !== liveBar.open_time_ms) all.push(liveBar);
+    else all[all.length - 1] = liveBar;
+  }
+  if (all.length < 2) return { rallyPts: 0, rallyPct: 0 };
+  const window = all.slice(-8);
+  const lo = Math.min(...window.map((b) => b.low));
+  const close = window[window.length - 1]!.close;
+  const rallyPts = close - lo;
+  const rallyPct = rallyPts / Math.max(Math.abs(lo), 1e-9);
+  return { rallyPts, rallyPct };
+}
+
+/** ~7pt / 0.15% Gold — any clear dump under the swing high blocks new longs. */
+const SELLOFF_BLOCK_PCT = 0.0015;
+/** Soft short-net dump — ~3.5pt. Tighter than before (−0.15%). */
+const SHORT_DUMP_BLOCK_PCT = 0.00075;
+
 export function allowEntryAgainstImpulse(
   direction: 'BUY' | 'SELL',
   bars: TenSecBar[] | null | undefined,
   liveBar?: TenSecBar | null
 ): { ok: boolean; reason: string } {
-  // Prefer short window + live — catches dump before regime label flips
   const short = shortNetMove(bars, liveBar);
-  if (direction === 'BUY' && short.netPct <= -0.0015) {
-    return {
-      ok: false,
-      reason: `BLOCK BUY · short dump ${short.netPts.toFixed(1)}pt (${(short.netPct * 100).toFixed(2)}%) — no long into selloff`,
-    };
+  const offHigh = selloffFromSwingHigh(bars, liveBar);
+  const offLow = rallyFromSwingLow(bars, liveBar);
+
+  // HARD: never BUY under an active selloff (the two mīnus BUY trades)
+  if (direction === 'BUY') {
+    if (offHigh.dumpPct >= SELLOFF_BLOCK_PCT) {
+      return {
+        ok: false,
+        reason: `BLOCK BUY · ${offHigh.dumpPts.toFixed(1)}pt under swing high (${(offHigh.dumpPct * 100).toFixed(2)}%) — no long into dump`,
+      };
+    }
+    if (short.netPct <= -SHORT_DUMP_BLOCK_PCT) {
+      return {
+        ok: false,
+        reason: `BLOCK BUY · short dump ${short.netPts.toFixed(1)}pt (${(short.netPct * 100).toFixed(2)}%) — no long into selloff`,
+      };
+    }
   }
-  if (direction === 'SELL' && short.netPct >= 0.0015) {
-    return {
-      ok: false,
-      reason: `BLOCK SELL · short rally ${short.netPts.toFixed(1)}pt (${(short.netPct * 100).toFixed(2)}%) — no short into buy-move`,
-    };
+  if (direction === 'SELL') {
+    if (offLow.rallyPct >= SELLOFF_BLOCK_PCT) {
+      return {
+        ok: false,
+        reason: `BLOCK SELL · ${offLow.rallyPts.toFixed(1)}pt off swing low (${(offLow.rallyPct * 100).toFixed(2)}%) — no short into rally`,
+      };
+    }
+    if (short.netPct >= SHORT_DUMP_BLOCK_PCT) {
+      return {
+        ok: false,
+        reason: `BLOCK SELL · short rally ${short.netPts.toFixed(1)}pt (${(short.netPct * 100).toFixed(2)}%) — no short into buy-move`,
+      };
+    }
   }
+
   const imp = recentImpulse(bars);
   if (!imp.dir) return { ok: true, reason: 'no strong recent impulse' };
   if (direction === 'SELL' && imp.dir === 'UP') {
@@ -179,8 +243,18 @@ export function decideEntryFrom10sRegime(
   if (signalBarTooLate(bar)) return null;
   if (!softLive(bar)) return null;
 
+  // Align side with short window BEFORE regime-led timing (stops green bounce BUY in a dump)
+  const short = shortNetMove(closedBars, bar);
+  const offHigh = selloffFromSwingHigh(closedBars, bar);
+  const offLow = rallyFromSwingLow(closedBars, bar);
+  const buyBlocked =
+    short.netPct <= -SHORT_DUMP_BLOCK_PCT || offHigh.dumpPct >= SELLOFF_BLOCK_PCT;
+  const sellBlocked =
+    short.netPct >= SHORT_DUMP_BLOCK_PCT || offLow.rallyPct >= SELLOFF_BLOCK_PCT;
+
   // ——— TREND: market type is the thesis; soft live times entry ———
   if (r === 'TREND_UP') {
+    if (buyBlocked) return null;
     if (dip(bar) && isRed(bar)) {
       return { direction: 'BUY', setup: 'PULLBACK', reason: `${r} dip-buy · ${candle}` };
     }
@@ -190,6 +264,7 @@ export function decideEntryFrom10sRegime(
     return null;
   }
   if (r === 'TREND_DOWN') {
+    if (sellBlocked) return null;
     if (rally(bar) && isGreen(bar)) {
       return { direction: 'SELL', setup: 'PULLBACK', reason: `${r} rally-sell · ${candle}` };
     }
@@ -200,18 +275,25 @@ export function decideEntryFrom10sRegime(
   }
 
   if (r === 'PULLBACK_UPTREND') {
-    if (!isGreen(bar)) return null;
+    if (buyBlocked || !isGreen(bar)) return null;
     return { direction: 'BUY', setup: 'CONTINUATION', reason: `${r} resume long · ${candle}` };
   }
   if (r === 'PULLBACK_DOWNTREND') {
-    if (!isRed(bar)) return null;
+    if (sellBlocked || !isRed(bar)) return null;
     return { direction: 'SELL', setup: 'CONTINUATION', reason: `${r} resume short · ${candle}` };
   }
 
   if (r === 'EXPANSION') {
     const imp = recentImpulse(closedBars);
+    // Prefer selloff/rally blocks over stale impulse label
+    const flow: 'UP' | 'DOWN' | null = buyBlocked
+      ? 'DOWN'
+      : sellBlocked
+        ? 'UP'
+        : (short.dir ?? imp.dir);
 
-    if (imp.dir === 'UP') {
+    if (flow === 'UP') {
+      if (buyBlocked) return null;
       if (isRed(bar)) {
         return {
           direction: 'BUY',
@@ -228,7 +310,8 @@ export function decideEntryFrom10sRegime(
       }
       return null;
     }
-    if (imp.dir === 'DOWN') {
+    if (flow === 'DOWN') {
+      if (sellBlocked) return null;
       if (isGreen(bar)) {
         return {
           direction: 'SELL',
@@ -246,22 +329,16 @@ export function decideEntryFrom10sRegime(
       return null;
     }
 
-    // No multi-bar impulse — still follow live bar with the expansion regime
-    if (isGreen(bar)) {
-      return { direction: 'BUY', setup: 'CONTINUATION', reason: `${r} follow up · ${candle}` };
-    }
-    if (isRed(bar)) {
-      return { direction: 'SELL', setup: 'CONTINUATION', reason: `${r} follow down · ${candle}` };
-    }
+    // No clear flow — do NOT guess green=BUY (that bought the dump)
     return null;
   }
 
   if (r === 'BREAKOUT_UP') {
-    if (isRed(bar)) return null;
+    if (buyBlocked || isRed(bar)) return null;
     return { direction: 'BUY', setup: 'BREAKOUT', reason: `${r} follow · ${candle}` };
   }
   if (r === 'BREAKOUT_DOWN') {
-    if (isGreen(bar)) return null;
+    if (sellBlocked || isGreen(bar)) return null;
     return { direction: 'SELL', setup: 'BREAKOUT', reason: `${r} follow · ${candle}` };
   }
 
