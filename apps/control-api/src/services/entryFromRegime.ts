@@ -4,10 +4,11 @@
  * No EXPANSION candle-color follow. No stupid trades without zone.
  */
 import type { RegimeName } from './regimes.js';
-import { normalizeRegime } from './regimes.js';
+import { describeRegimeContext, normalizeRegime } from './regimes.js';
 import { bodyPct, isMoving10s, rangePct, type TenSecBar } from './tenSecondOhlc.js';
 import {
   buildScalpZone,
+  diagnoseZoneBuild,
   evaluateZoneEntry,
   formatZoneInfo,
   type ScalpZone,
@@ -182,28 +183,40 @@ export function explainNoEntry(
   const r = normalizeRegime(regime);
   const zone = buildScalpZone(closedBars);
   const dir = marketDirection(regime, closedBars, bar);
-  const bits = [
-    `body=${(bodyPct(bar) * 100).toFixed(2)}%`,
-    formatZoneInfo(zone),
+  const regimeLine = describeRegimeContext(closedBars, r);
+  const zoneLine = formatZoneInfo(zone, closedBars);
+  const barLine = `signal bar body=${(bodyPct(bar) * 100).toFixed(2)}% rng=${(rangePct(bar) * 100).toFixed(3)}%`;
+
+  const noEntryRegimes: RegimeName[] = [
+    'UNKNOWN',
+    'TRANSITION',
+    'COMPRESSION',
+    'RANGE',
+    'REVERSAL_CANDIDATE',
+    'FAILED_BREAKOUT_UP',
+    'FAILED_BREAKOUT_DOWN',
   ];
-  if (
-    r === 'UNKNOWN' ||
-    r === 'TRANSITION' ||
-    r === 'COMPRESSION' ||
-    r === 'RANGE' ||
-    r === 'REVERSAL_CANDIDATE' ||
-    r === 'FAILED_BREAKOUT_UP' ||
-    r === 'FAILED_BREAKOUT_DOWN'
-  ) {
-    return `regime ${r} · no entry · ${bits.join(' · ')}`;
+  if (noEntryRegimes.includes(r)) {
+    return `WAIT · ${regimeLine} · ${zoneLine} · ${barLine}`;
   }
-  if (!zone) return `waiting zone · ${bits.join(' · ')}`;
-  if (!softLive(bar)) return `wait soft live 10s · ${bits.join(' · ')}`;
-  if (signalBarTooLate(bar)) return `late bar · ${bits.join(' · ')}`;
-  if (!dir) return `no market direction · ${r} · ${bits.join(' · ')}`;
+  if (!zone) {
+    const d = diagnoseZoneBuild(closedBars);
+    return `WAIT · zone required · ${zoneLine} · ${regimeLine} · ${barLine}`;
+  }
+  if (!softLive(bar)) {
+    return `WAIT · bar too flat (need movement) · ${zoneLine} · ${regimeLine} · ${barLine}`;
+  }
+  if (signalBarTooLate(bar)) {
+    return `WAIT · late chase bar · ${zoneLine} · ${regimeLine} · ${barLine}`;
+  }
+  if (!dir) {
+    return `WAIT · no market direction · ${regimeLine} · ${zoneLine} · ${barLine}`;
+  }
   const zv = evaluateZoneEntry(dir, bar, zone, closedBars);
-  if (!zv.ok) return `${zv.reason}`;
-  return `filters pending · ${dir} · ${bits.join(' · ')}`;
+  if (!zv.ok) {
+    return `WAIT · ${zv.reason} · ${regimeLine} · ${barLine}`;
+  }
+  return `WAIT · filters pending · ${dir} · ${zv.setup} · ${zoneLine} · ${regimeLine}`;
 }
 
 /**

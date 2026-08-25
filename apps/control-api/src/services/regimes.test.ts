@@ -8,6 +8,7 @@ import {
   resetRegimeBook,
   styleFromClassification,
   toLiveRegime,
+  describeRegimeContext,
   type RegimeName,
 } from './regimes.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
@@ -287,6 +288,17 @@ describe('classifyRegime from 10s OHLC', () => {
       bar(100.0, 100.04, 99.93, 99.94, 2),
     ];
     expect(classifyRegime(bars, 'TREND_UP')).toBe('TRANSITION');
+  });
+
+  it('describeRegimeContext shows bar windows', () => {
+    const prices = [100, 100.5, 101.2, 101.9, 102.7, 103.4, 104, 104.5];
+    const bars = prices.map((p, i) =>
+      bar(i === 0 ? p : prices[i - 1]!, p + 0.4, p - 0.4, p, i)
+    );
+    const ctx = describeRegimeContext(bars, 'TREND_UP');
+    expect(ctx).toMatch(/REGIME TREND_UP/);
+    expect(ctx).toMatch(/8×10s stored/);
+    expect(ctx).toMatch(/short\(6b\)=/);
   });
 
   it('toLiveRegime keeps stall regimes (no fake EXPANSION)', () => {

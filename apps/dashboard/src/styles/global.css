@@ -1264,6 +1264,15 @@ tr:hover td { background: rgba(57, 255, 20, 0.06); }
 .robot-focus-legs .bad {
   color: #ff6b6b;
 }
+.robot-market-closed {
+  color: #ff6b8a;
+  border: 1px solid rgba(255, 59, 107, 0.55);
+  padding: 8px 10px;
+  margin: 6px 0;
+  background: rgba(255, 59, 107, 0.08);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
 .robot-deploy-bar {
   padding: 16px;
 }
@@ -2320,7 +2329,9 @@ button.regime-chip { cursor: pointer; }
 .rc-unit-posture.long { color: var(--accent); }
 .rc-unit-posture.short { color: #ff8da8; }
 .rc-unit-posture.entry { color: var(--rc-cyan); }
+.rc-unit-posture.closed { color: #ff6b8a; font-weight: 600; }
 .rc-unit-posture.flat { color: rgba(180, 220, 235, 0.55); }
+.rc-unit.closed.on { border-color: rgba(255, 59, 107, 0.45); }
 .rc-unit-row {
   display: flex;
   justify-content: space-between;

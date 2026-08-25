@@ -260,6 +260,75 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   return 'UNKNOWN';
 }
 
+function regimePlainWhy(regime: RegimeName): string {
+  switch (regime) {
+    case 'UNKNOWN':
+      return 'not enough bars to classify';
+    case 'TRANSITION':
+      return 'between states — wait for trend/range/breakout';
+    case 'RANGE':
+      return 'price inside recent band — scalp edges only';
+    case 'COMPRESSION':
+      return 'squeezed — wait for expansion/breakout';
+    case 'EXPANSION':
+      return 'wide bar but direction unclear';
+    case 'TREND_UP':
+      return 'bias UP — BUY setups preferred';
+    case 'TREND_DOWN':
+      return 'bias DOWN — SELL setups preferred';
+    case 'PULLBACK_UPTREND':
+      return 'uptrend pullback — BUY on hold';
+    case 'PULLBACK_DOWNTREND':
+      return 'downtrend pullback — SELL on hold';
+    case 'BREAKOUT_UP':
+      return 'breakout UP active';
+    case 'BREAKOUT_DOWN':
+      return 'breakout DOWN active';
+    case 'FAILED_BREAKOUT_UP':
+      return 'failed up breakout — no fresh BUY';
+    case 'FAILED_BREAKOUT_DOWN':
+      return 'failed down breakout — no fresh SELL';
+    case 'REVERSAL_CANDIDATE':
+      return 'possible reversal — wait confirm';
+    default:
+      return '';
+  }
+}
+
+/** Honest regime context for INFO — separate from zone (different bar windows). */
+export function describeRegimeContext(
+  bars: TenSecBar[] | null | undefined,
+  regime: RegimeName | string
+): string {
+  const r = normalizeRegime(regime);
+  const n = bars?.length ?? 0;
+  if (n < 2) {
+    return `REGIME ${r} · ${n}×10s stored (need ≥2) · ${regimePlainWhy(r)}`;
+  }
+  const last = bars![bars!.length - 1]!;
+  let shortLine: string;
+  if (n >= 6) {
+    const shortOpen = bars!.slice(-6)[0]!.open;
+    const shortPct = ((last.close - shortOpen) / Math.max(Math.abs(shortOpen), 1e-9)) * 100;
+    const shortPt = last.close - shortOpen;
+    shortLine = `short(6b)=${shortPct >= 0 ? '+' : ''}${shortPct.toFixed(2)}% (${shortPt >= 0 ? '+' : ''}${shortPt.toFixed(1)}pt)`;
+  } else {
+    shortLine = `short(6b)=need ${6 - n} more bars`;
+  }
+  let structLine: string;
+  if (n >= 12) {
+    const structBars = bars!.slice(-24);
+    const structOpen = structBars[0]!.open;
+    const structPct = ((last.close - structOpen) / Math.max(Math.abs(structOpen), 1e-9)) * 100;
+    const structPt = last.close - structOpen;
+    structLine = `struct(24b)=${structPct >= 0 ? '+' : ''}${structPct.toFixed(2)}% (${structPt >= 0 ? '+' : ''}${structPt.toFixed(1)}pt)`;
+  } else {
+    structLine = `struct(24b)=need ${12 - n} more bars for structure`;
+  }
+  const why = regimePlainWhy(r);
+  return `REGIME ${r} · ${n}×10s stored · ${shortLine} · ${structLine} · ${why}`;
+}
+
 function confidenceFrom(bars: TenSecBar[], regime: RegimeName): number {
   if (regime === 'UNKNOWN' || bars.length < 2) return 0;
   const last = bars[bars.length - 1]!;

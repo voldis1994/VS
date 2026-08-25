@@ -36,7 +36,7 @@ type FeedLeg = {
   mid: number | null;
   latency_ms: number;
   detail?: string;
-  role?: 'LEAD' | 'CONFIRM' | 'EXECUTE' | 'REJECT';
+  role?: 'LEAD' | 'CONFIRM' | 'EXECUTE' | 'REJECT' | 'ADVISORY';
 };
 
 type DecisionChain = {
@@ -100,6 +100,10 @@ type RobotSession = {
   feed_agreement?: string | null;
   feed_legs?: FeedLeg[];
   zone_info?: string | null;
+  regime_info?: string | null;
+  market_status?: string | null;
+  market_tradeable?: boolean;
+  market_info?: string | null;
   zone_high?: number | null;
   zone_low?: number | null;
   zone_kind?: string | null;
@@ -127,8 +131,12 @@ function fmt(n: number | null | undefined, d = 5) {
   return n.toLocaleString(undefined, { maximumFractionDigits: d });
 }
 
-function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'flat' | 'entry' } {
+function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'flat' | 'entry' | 'closed' } {
   if (!s.running && !s.open_side) return { label: 'STOPPED', kind: 'flat' };
+  if (s.running && s.market_tradeable === false) {
+    const st = (s.market_status || 'CLOSED').toUpperCase();
+    return { label: `MARKET CLOSED · ${st}`, kind: 'closed' };
+  }
   if (s.open_side === 'BUY') {
     const t = tradeLabel(s);
     return { label: t, kind: t.includes('SCALP') ? 'short' : 'long' };
@@ -707,7 +715,7 @@ export function RobotDeskPage() {
               <div className="robot-arena-kicker" style={{ marginTop: 10 }}>TRADE TYPES</div>
               <p className="mono rc-info-text">{tradeTypes.join(' · ')}</p>
 
-              <div className="robot-arena-kicker" style={{ marginTop: 14 }}>PUBLIC INTERNET FEEDS</div>
+              <div className="robot-arena-kicker" style={{ marginTop: 14 }}>OPTIONAL PUBLIC REFERENCE (never blocks trade)</div>
               <div className="robot-feed-legs">
                 {publicSenders.map((s) => {
                   const row = publicFeedRow(s);
@@ -730,7 +738,7 @@ export function RobotDeskPage() {
                 {publicSenders.length === 0 && <div className="mono robot-wire-empty">Nav public feeds.</div>}
               </div>
 
-              <div className="robot-arena-kicker" style={{ marginTop: 14 }}>CAPITAL EXECUTION</div>
+              <div className="robot-arena-kicker" style={{ marginTop: 14 }}>CAPITAL BROKER FEEDS (real — LEAD/CONFIRM/EXECUTE)</div>
               <div className="robot-feed-legs">
                 {capitalSenders.map((s) => (
                   <div
@@ -758,6 +766,9 @@ export function RobotDeskPage() {
                   <div>ID · {focused.id}</div>
                   <div>ACCOUNT · {focused.account_name}</div>
                   <div>POSTURE · {posture(focused).label}</div>
+                  {focused.market_tradeable === false && (
+                    <div className="robot-market-closed">{focused.market_info || `MARKET CLOSED · ${focused.market_status || 'CLOSED'}`}</div>
+                  )}
                   <div>
                     CHAIN ·{' '}
                     {focusChain
@@ -770,17 +781,12 @@ export function RobotDeskPage() {
                     {focused.ohlc_10s?.market || 'SEEDING'}
                   </div>
                   <div>MODE · {focused.running ? focused.mode : 'STOPPED'}</div>
-                  <div>REGIME · {(focused.regime || 'UNKNOWN').toUpperCase()}</div>
-                  <div>
-                    ZONE · {focused.zone_info || 'forming'}
-                    {focused.zone_low != null && focused.zone_high != null
-                      ? ` · ${fmt(focused.zone_low, 2)}–${fmt(focused.zone_high, 2)}`
-                      : ''}
-                  </div>
+                  <div>{focused.regime_info || `REGIME · ${(focused.regime || 'UNKNOWN').toUpperCase()}`}</div>
+                  <div>{focused.zone_info || 'ZONE · forming'}</div>
                   <div>
                     FEEDS ·{' '}
                     {focusChain?.feeds ||
-                      `${focused.feed_contributing ?? 0}/${focused.feed_sender_count ?? 0} ${
+                      `cap ${focused.feed_contributing ?? 0}/${focused.feed_sender_count ?? 0} · ${
                         focused.feed_agreement || ''
                       } · ${focused.feed_source || '—'}`}
                   </div>
