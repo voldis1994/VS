@@ -127,7 +127,8 @@ function epicKey(epic: string): string {
 
 /**
  * Classify from closed 10s OHLC — same names as C++ RegimeEngine.
- * Failed-breakout variants are live here (reserved in C++).
+ * With ≥12 bars, net slope over ~16 bars beats local "inRange" so a clear
+ * selloff/buy is TREND_*, not RANGE (stair-step trends look "in range" on 8 bars).
  */
 export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOWN'): RegimeName {
   if (!bars.length || bars.length < 2) return 'UNKNOWN';
@@ -161,6 +162,18 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
     (previous === 'TREND_UP' && lastVel < -0.0012 && lastRange > avgRange && !breakoutDown) ||
     (previous === 'TREND_DOWN' && lastVel > 0.0012 && lastRange > avgRange && !breakoutUp);
 
+  // ~2–3 min of 10s bars; ~0.07% ≈ 3.2pt on Gold ~4600
+  let slopeUp = false;
+  let slopeDown = false;
+  if (bars.length >= 12) {
+    const slopeBars = bars.slice(-16);
+    const slopeOpen = slopeBars[0]!.open;
+    const slopeMid = Math.max(Math.abs(slopeOpen), 1e-9);
+    const netPct = (last.close - slopeOpen) / slopeMid;
+    slopeUp = netPct >= 0.0007;
+    slopeDown = netPct <= -0.0007;
+  }
+
   if (previous === 'BREAKOUT_UP' && inRange && lastVel < 0) return 'FAILED_BREAKOUT_UP';
   if (previous === 'BREAKOUT_DOWN' && inRange && lastVel > 0) return 'FAILED_BREAKOUT_DOWN';
   if (compressed && inRange) return 'COMPRESSION';
@@ -176,6 +189,15 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   if (trendingUp) return 'TREND_UP';
   if (trendingDown) return 'TREND_DOWN';
   if (reversal) return 'REVERSAL_CANDIDATE';
+  // Clear directional slope must not become RANGE just because last close is inside prior H/L
+  if (slopeDown) {
+    if (lastVel > 0.00008) return 'PULLBACK_DOWNTREND';
+    return 'TREND_DOWN';
+  }
+  if (slopeUp) {
+    if (lastVel < -0.00008) return 'PULLBACK_UPTREND';
+    return 'TREND_UP';
+  }
   if (inRange) return 'RANGE';
   if (previous !== 'UNKNOWN' && previous !== 'RANGE') return 'TRANSITION';
   return 'UNKNOWN';
