@@ -8,6 +8,7 @@ import {
   fetchCapitalMarketQuote,
   fetchCapitalMinutePrices,
   fetchCapitalPrices,
+  fetchCapitalAccountEquity,
   isLateMoveOnOneMinute,
   listCapitalOpenPositions,
   type CapitalMarketQuote,
@@ -33,6 +34,13 @@ import {
 import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove } from './exitManage.js';
 import { allowEntryAgainstImpulse, decideEntryFrom10sRegime } from './entryFromRegime.js';
 import { allowEpicReentry, noteEpicTradeClose } from './tradeCooldown.js';
+import {
+  allowRiskEntry,
+  evaluateRiskWindow,
+  noteRiskTradePnl,
+  setRiskEquity,
+  type RiskSnapshot,
+} from './riskWindow.js';
 import {
   allowEntryFromFeeds,
   multiFeedOwnsOhlc,
@@ -116,6 +124,8 @@ export type RobotSession = {
     setup: string | null;
     action: string;
   };
+  /** 10min account risk window */
+  risk?: RiskSnapshot | null;
 };
 
 type Internal = RobotSession & {
@@ -135,6 +145,8 @@ type Internal = RobotSession & {
   last_multi_feed_ms: number;
   multiFeed: MultiFeedPrice | null;
   cycle_busy: boolean;
+  last_equity_fetch_ms: number;
+  risk: RiskSnapshot | null;
 };
 
 const ACTIVE_CADENCE_MS = 2_000;
@@ -221,10 +233,12 @@ function publicSession(s: Internal): RobotSession {
     last_multi_feed_ms: _mf,
     multiFeed: _multi,
     cycle_busy: _busy,
+    last_equity_fetch_ms: _eq,
     ...rest
   } = s;
   return {
     ...rest,
+    risk: s.risk,
     ohlc_10s: publicOhlc10s(s.ohlcState),
     feed_source: rest.feed_source,
     feed_contributing: s.multiFeed?.contributing ?? rest.feed_contributing ?? 0,
@@ -274,7 +288,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC → live regime (no UNKNOWN) → ENTRY/EXIT',
     note:
-      'Quality only: TREND pullback/resume · no 10s BO/RANGE/fade · 3–5min epic pause · no flip',
+      'RISK 10min: target +7–10% equity · −10% stop → 10min cooldown · TREND pullback only',
   };
 }
 
@@ -600,6 +614,11 @@ async function exitTrade(
       s.entry_price != null &&
       exitSide != null &&
       (exitSide === 'BUY' ? quote.mid < s.entry_price : quote.mid > s.entry_price));
+  const closedPnl =
+    s.unrealized != null && Number.isFinite(s.unrealized)
+      ? s.unrealized
+      : 0;
+  noteRiskTradePnl(s.account_id, closedPnl);
   noteEpicTradeClose(s.epic, exitSide, wasLoss);
   s.error = null;
   pushTick(s, {
@@ -1081,6 +1100,15 @@ async function robotCycleBody(s: Internal) {
       updateExcursion(s, quote.mid, brokerOpen?.upl ?? s.unrealized);
     }
 
+    // 10min risk window — equity % of total account sum
+    if (Date.now() - s.last_equity_fetch_ms >= 60_000) {
+      s.last_equity_fetch_ms = Date.now();
+      const eq = await fetchCapitalAccountEquity(opened.session);
+      if (eq.ok && eq.equity != null) setRiskEquity(s.account_id, eq.equity);
+    }
+    const riskEval = evaluateRiskWindow(s.account_id, s.unrealized ?? 0);
+    s.risk = riskEval.snapshot;
+
     pushTick(s, {
       phase: 'READ',
       bid: quote.bid,
@@ -1088,7 +1116,9 @@ async function robotCycleBody(s: Internal) {
       mid: quote.mid,
       detail: `READ ${s.display_name} · bid=${quote.bid} ask=${quote.ask} mid=${quote.mid} · mode=${s.mode} · side=${
         s.open_side || 'FLAT'
-      } · UPL=${s.unrealized != null ? s.unrealized.toFixed(5) : '—'} · MFE=${s.mfe.toFixed(5)}`,
+      } · UPL=${s.unrealized != null ? s.unrealized.toFixed(5) : '—'} · MFE=${s.mfe.toFixed(5)} · ${
+        s.risk?.detail || 'RISK —'
+      }`,
     });
 
     if (!s.trading_enabled) {
@@ -1154,6 +1184,19 @@ async function robotCycleBody(s: Internal) {
         ask: quote.ask,
         mid: quote.mid,
         detail: `POST-CLOSE pause ${Math.ceil((POST_CLOSE_MS - sinceClose) / 1000)}s · no whipsaw`,
+      });
+      return;
+    }
+
+    const riskGate = allowRiskEntry(s.account_id, s.unrealized ?? 0);
+    s.risk = riskGate.snapshot;
+    if (!riskGate.ok) {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: riskGate.reason,
       });
       return;
     }
@@ -1415,6 +1458,8 @@ export async function startRobotSession(input: {
     last_multi_feed_ms: 0,
     multiFeed: null,
     cycle_busy: false,
+    last_equity_fetch_ms: 0,
+    risk: null,
     feed_source: 'NONE',
     feed_contributing: 0,
     feed_sender_count: 0,
