@@ -3,6 +3,8 @@
  * Capital shows both as separate deals → margin fight + both can lose.
  */
 
+import { SHORT_THESIS_MOVE_PCT } from './microScalpThresholds.js';
+
 export type DeskSide = 'BUY' | 'SELL';
 
 export type DeskOpenUnit = {
@@ -65,13 +67,13 @@ export function deskConflictShouldExit(
   if (shortNetPct == null || !Number.isFinite(shortNetPct)) {
     return { exit: false, reason: '' };
   }
-  if (openSide === 'BUY' && shortNetPct <= -0.0015) {
+  if (openSide === 'BUY' && shortNetPct <= -SHORT_THESIS_MOVE_PCT) {
     return {
       exit: true,
       reason: `DESK conflict · flatten BUY vs short dump (${(shortNetPct * 100).toFixed(2)}%)`,
     };
   }
-  if (openSide === 'SELL' && shortNetPct >= 0.0015) {
+  if (openSide === 'SELL' && shortNetPct >= SHORT_THESIS_MOVE_PCT) {
     return {
       exit: true,
       reason: `DESK conflict · flatten SELL vs short rally (${(shortNetPct * 100).toFixed(2)}%)`,

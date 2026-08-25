@@ -22,10 +22,25 @@ function snap(partial: Partial<ExitSnapshot> & { open_side: 'BUY' | 'SELL'; entr
 }
 
 describe('decideBestOutcomeExit 10s + continuation', () => {
-  it('HardInv ~0.15% tighter than Safety 0.20%', () => {
-    const hard = hardInvalidationDistance(4600);
-    expect(hard).toBeGreaterThanOrEqual(0.15);
-    expect(hard).toBeLessThan(4600 * 0.002);
+  it('HardInv ~2.5pt Gold — cuts before Safety SL 0.20%', () => {
+    const hard = hardInvalidationDistance(4660);
+    expect(hard).toBe(2.5);
+    expect(hard).toBeLessThan(4660 * 0.002);
+  });
+
+  it('HardInv fires at ~2.6pt adverse move on Gold', () => {
+    const cut = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: 4660, mfe: 0.5 }),
+      4657.4
+    );
+    expect(cut.exit).toBe(true);
+    expect(cut.reason).toMatch(/HardInvalidation/);
+
+    const hold = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: 4660, mfe: 0.5 }),
+      4658.0
+    );
+    expect(hold.exit).toBe(false);
   });
 
   it('holds micro green below minGreen', () => {
