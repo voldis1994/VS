@@ -1,5 +1,13 @@
 /** Live Capital exit — 10s scalp BO with continuation hold support. */
 
+import {
+  HARD_INV_GOLD_PT,
+  SHORT_THESIS_MOVE_PCT,
+  hardInvalidationDistance,
+} from './microScalpThresholds.js';
+
+export { hardInvalidationDistance };
+
 export type ExitSide = 'BUY' | 'SELL';
 
 export type ExitSnapshot = {
@@ -45,11 +53,6 @@ export function thesisFailureReason(
   return null;
 }
 
-/** HardInv ≈0.15% — Gold ~7pt; Soft BO before Safety SL ~0.20%. */
-export function hardInvalidationDistance(entry: number): number {
-  const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.0015, 0.15);
-}
 
 /** Arm peak trail after real 10s swing — ~0.12% / ~5.5pt Gold. */
 export function bestOutcomeMfeFloor(entry: number): number {
@@ -104,16 +107,16 @@ export function decideBestOutcomeExit(
 
   const short = s.short_net_pct;
   if (short != null && Number.isFinite(short)) {
-    if (s.open_side === 'BUY' && short <= -0.0015) {
+    if (s.open_side === 'BUY' && short <= -SHORT_THESIS_MOVE_PCT) {
       return {
         exit: true,
-        reason: `ThesisFailure · short dump ${(short * 100).toFixed(2)}% vs BUY`,
+        reason: `ThesisFailure · short dump ${(short * 100).toFixed(2)}% (~${HARD_INV_GOLD_PT}pt) vs BUY`,
       };
     }
-    if (s.open_side === 'SELL' && short >= 0.0015) {
+    if (s.open_side === 'SELL' && short >= SHORT_THESIS_MOVE_PCT) {
       return {
         exit: true,
-        reason: `ThesisFailure · short rally ${(short * 100).toFixed(2)}% vs SELL`,
+        reason: `ThesisFailure · short rally ${(short * 100).toFixed(2)}% (~${HARD_INV_GOLD_PT}pt) vs SELL`,
       };
     }
   }

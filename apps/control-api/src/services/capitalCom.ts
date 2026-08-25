@@ -1111,7 +1111,7 @@ export async function ensureCapitalStopVisible(
   };
 }
 
-/** ~0.20% Safety SL (#136) — tight for micro; Soft HardInv ~0.15% fires first. */
+/** ~0.20% Safety SL (#136) — broker last resort; HardInv ~2.5pt fires first on 10s Gold. */
 export function computeSafetyCushionStopLevel(
   direction: 'BUY' | 'SELL',
   mid: number,
@@ -1141,7 +1141,7 @@ export function computeSafetyCushionStopLevel(
         : abs * 0.00005;
   const brokerMin =
     opts?.minStopDistance != null && opts.minStopDistance > 0 ? opts.minStopDistance : 0;
-  const pctCushion = abs * 0.002; // 0.20% — micro-safe with BO HardInv 0.15%
+  const pctCushion = abs * 0.002; // 0.20% — last resort; BO HardInv ~2.5pt first
   const floor = abs >= 1000 ? 0.25 : abs >= 100 ? 0.12 : abs >= 10 ? 0.02 : 0.0002;
   const dist = Math.max(pctCushion, brokerMin * 1.5, spr * 4, floor);
   const raw = direction === 'BUY' ? ref - dist : ref + dist;
