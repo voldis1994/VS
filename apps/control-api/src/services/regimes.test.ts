@@ -210,6 +210,49 @@ describe('classifyRegime from 10s OHLC', () => {
     expect(snap.current).toBe('TREND_DOWN');
   });
 
+  it('dump then bottom chop stays TREND_DOWN — not RANGE (Capital chart context)', () => {
+    // ~10 min dump 4647 → 4635, then ~3 min chop at lows (what user sees as "still downtrend")
+    const prices: number[] = [];
+    let p = 4647.0;
+    for (let i = 0; i < 60; i++) {
+      p -= 0.2;
+      prices.push(p);
+    }
+    for (let i = 0; i < 18; i++) {
+      p += i % 2 === 0 ? 0.25 : -0.25;
+      prices.push(Math.min(4638.2, Math.max(4635.0, p)));
+    }
+    const bars = prices.map((close, i) => {
+      const open = i === 0 ? 4647.0 : prices[i - 1]!;
+      return bar(open, Math.max(open, close) + 0.12, Math.min(open, close) - 0.1, close, i);
+    });
+    const r = classifyRegime(bars);
+    expect(['TREND_DOWN', 'PULLBACK_DOWNTREND']).toContain(r);
+    expect(r).not.toBe('RANGE');
+  });
+
+  it('bounce after dump is PULLBACK_DOWNTREND / TREND_DOWN — not RANGE or TREND_UP', () => {
+    const prices: number[] = [];
+    let p = 4647.0;
+    for (let i = 0; i < 55; i++) {
+      p -= 0.22;
+      prices.push(p);
+    }
+    // sharp bounce like 4635 → 4640
+    for (let i = 0; i < 12; i++) {
+      p += 0.4;
+      prices.push(p);
+    }
+    const bars = prices.map((close, i) => {
+      const open = i === 0 ? 4647.0 : prices[i - 1]!;
+      return bar(open, Math.max(open, close) + 0.15, Math.min(open, close) - 0.1, close, i);
+    });
+    const r = classifyRegime(bars);
+    expect(['TREND_DOWN', 'PULLBACK_DOWNTREND']).toContain(r);
+    expect(r).not.toBe('RANGE');
+    expect(r).not.toBe('TREND_UP');
+  });
+
   it('REVERSAL_CANDIDATE after TREND_UP with a violent opposite bar still inside range', () => {
     const bars = [
       bar(100.0, 101.0, 99.6, 100.7, 0),
