@@ -131,6 +131,15 @@ function fmt(n: number | null | undefined, d = 5) {
   return n.toLocaleString(undefined, { maximumFractionDigits: d });
 }
 
+/** FLAT shows "—" today — users think robot opens naked. SL is always sent with entry. */
+function fmtSl(s: RobotSession): string {
+  if (s.safety_sl != null && Number.isFinite(s.safety_sl)) {
+    return fmt(s.safety_sl, 2);
+  }
+  if (s.open_side) return 'MISSING — check Capital.com';
+  return 'AUTO @ entry (~0.20%)';
+}
+
 function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'flat' | 'entry' | 'closed' } {
   if (!s.running && !s.open_side) return { label: 'STOPPED', kind: 'flat' };
   if (s.running && s.market_tradeable === false) {
@@ -591,13 +600,21 @@ export function RobotDeskPage() {
               <div className="robot-wire-regimes">
                 {regimes.map((r) => {
                   const name = r.toUpperCase();
-                  const live = activeRegimes.has(name);
-                  const focusHit = (focused?.regime || '').toUpperCase() === name;
+                  const parked = focused?.market_tradeable === false;
+                  const live = !parked && activeRegimes.has(name);
+                  const focusHit =
+                    !parked && (focused?.regime || '').toUpperCase() === name;
                   return (
                     <span
                       key={name}
-                      className={`robot-regime-chip ${live ? 'live' : ''} ${focusHit ? 'focus' : ''}`}
-                      title={live ? 'Active on a running robot' : 'Catalog regime'}
+                      className={`robot-regime-chip ${live ? 'live' : ''} ${focusHit ? 'focus' : ''} ${parked ? 'parked' : ''}`}
+                      title={
+                        parked
+                          ? 'Robot PARKED — regime frozen until TRADEABLE'
+                          : live
+                            ? 'Active on a running robot'
+                            : 'Catalog regime'
+                      }
                     >
                       {name}
                     </span>
@@ -682,7 +699,9 @@ export function RobotDeskPage() {
                       <div><span>MID</span><strong>{fmt(focused.last_mid)}</strong></div>
                       <div><span>10s</span><strong>{focused.ohlc_10s?.market || 'SEEDING'}</strong></div>
                       <div><span>FEEDS</span><strong>{focused.feed_contributing ?? 0}/{focused.feed_sender_count ?? 0}</strong></div>
-                      <div><span>SL</span><strong>{fmt(focused.safety_sl)}</strong></div>
+                      <div title="Safety SL on Capital.com — set automatically on every entry when flat">
+                        <span>SL</span><strong>{fmtSl(focused)}</strong>
+                      </div>
                       <div><span>UPL</span><strong className={(focused.unrealized || 0) >= 0 ? 'pos' : 'neg'}>{fmt(focused.unrealized)}</strong></div>
                       <div><span>LOT</span><strong>{focused.lot_size}</strong></div>
                     </div>
@@ -810,7 +829,7 @@ export function RobotDeskPage() {
                     ))}
                   </div>
                   <div>ENTRY · {fmt(focused.entry_price)}</div>
-                  <div>SAFETY SL · {fmt(focused.safety_sl)}</div>
+                  <div>SAFETY SL · {fmtSl(focused)}</div>
                   <div>DEAL · {focused.deal_id || '—'}</div>
                   <div>SCORE · IN {focused.orders_placed} / OUT {focused.exits_done ?? 0}</div>
                   <div>READS · {focused.reads_ok}/{focused.reads_fail}</div>
