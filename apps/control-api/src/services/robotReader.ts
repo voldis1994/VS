@@ -792,19 +792,29 @@ export type MultiFeedPrice = {
   lead_label?: string | null;
 };
 
-const ANCHOR_MAX_REL = 0.008; // 0.8% — public must be near Capital CFD mid
-/** Metals spot vs Capital GOLD CFD often sits a bit wider than FX — still usable. */
-const ANCHOR_MAX_REL_METALS = 0.015;
+const ANCHOR_MAX_REL = 0.0025; // 0.25% — public must be near Capital CFD mid
+/** Metals spot/futures vs Capital CFD — still tight for 10s (was 1.5% → false LEAD at ~60pts). */
+const ANCHOR_MAX_REL_METALS = 0.0025;
 
 function nearAnchor(mid: number, anchor: number, maxRel = ANCHOR_MAX_REL): boolean {
   if (!Number.isFinite(mid) || !Number.isFinite(anchor) || anchor === 0) return false;
   return Math.abs(mid - anchor) / Math.abs(anchor) <= maxRel;
 }
 
-function anchorRelForEpic(epic: string): number {
+/** Exported for tests / UI — max relative distance public may sit from Capital. */
+export function anchorRelForEpic(epic: string): number {
   const s = String(epic || '').toUpperCase();
   if (/GOLD|XAU|SILVER|XAG|PLAT|XPT|PALL|XPD/.test(s)) return ANCHOR_MAX_REL_METALS;
   return ANCHOR_MAX_REL;
+}
+
+/** True when public mid is near enough Capital to be LEAD/CONFIRM (not REJECT FAR). */
+export function isPublicNearCapital(
+  mid: number,
+  capitalMid: number,
+  epic: string
+): boolean {
+  return nearAnchor(mid, capitalMid, anchorRelForEpic(epic));
 }
 
 /**
@@ -987,19 +997,35 @@ export async function readMultiFeedPrice(
     mid = fused.mid;
   }
 
+  // Contributing = Capital live + public NEAR only (never count REJECT FAR as OK)
+  const contributing = capitalMids.length + publicNear.length;
+  const agreementSource =
+    publicNear.length > 0
+      ? fused
+      : capitalMids.length
+        ? fusePriceMids(capitalMids, { mixedPublic: false })
+        : fused;
+
   return {
     epic,
     mid,
-    contributing: Math.max(fused.contributing, capitalMids.length || (effectiveAnchor != null ? 1 : 0)),
+    contributing,
     sender_count,
-    agreement: fused.agreement === 'NONE' && mid != null ? 'INSUFFICIENT' : fused.agreement,
-    mids: fused.inliers.length ? fused.inliers : mid != null ? [mid] : [],
+    agreement:
+      agreementSource.agreement === 'NONE' && mid != null
+        ? 'INSUFFICIENT'
+        : agreementSource.agreement,
+    mids: capitalMids.length
+      ? capitalMids
+      : fused.inliers.length
+        ? fused.inliers
+        : mid != null
+          ? [mid]
+          : [],
     legs,
-    detail: `${fused.contributing}/${sender_count} near-anchor · ${fused.agreement} · mid=${
-      mid != null ? mid.toFixed(5) : '—'
-    } · capital=${capitalMids.length} publicNear=${publicNear.length} publicFar=${publicFar.length} · lead=${
-      lead_label || '—'
-    }`,
+    detail: `cap ${capitalMids.length}/${capitalSenders.length} · pubNear ${publicNear.length} · pubFar ${publicFar.length} · ${
+      agreementSource.agreement
+    } · mid=${mid != null ? mid.toFixed(5) : '—'} · lead=${lead_label || '—'}`,
     capital_contributing: capitalMids.length,
     capital_sender_count: capitalSenders.length,
     public_contributing: publicNear.length,
@@ -1101,10 +1127,11 @@ export function allowEntryFromFeeds(
     Number.isFinite(multi.mid)
   ) {
     const rel = Math.abs(multi.lead_mid - multi.mid) / Math.max(Math.abs(multi.mid), 1e-9);
-    if (rel >= 0.0025 && multi.agreement === 'DIVERGENT') {
+    // Hard block whenever LEAD is meaningfully off Capital — do not wait for DIVERGENT label
+    if (rel >= ANCHOR_MAX_REL) {
       return {
         ok: false,
-        reason: `FEED BLOCK · LEAD vs EXECUTE diverge ${(rel * 100).toFixed(2)}%`,
+        reason: `FEED BLOCK · LEAD vs EXECUTE diverge ${(rel * 100).toFixed(2)}% (Capital mid=${multi.mid})`,
       };
     }
   }

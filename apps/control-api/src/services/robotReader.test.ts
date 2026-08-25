@@ -1,9 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import {
   allowEntryFromFeeds,
+  isPublicNearCapital,
   multiFeedOwnsOhlc,
   pickOhlcMid,
 } from './robotReader.js';
+
+describe('Capital anchor band (no false LEAD)', () => {
+  it('rejects Yahoo ~4724 vs Capital GOLD ~4663 (~1.3%)', () => {
+    expect(isPublicNearCapital(4724.3, 4663.27, 'GOLD')).toBe(false);
+    expect(isPublicNearCapital(4723.9, 4663.27, 'GOLD')).toBe(false);
+  });
+
+  it('accepts public within ~0.25% of Capital GOLD', () => {
+    expect(isPublicNearCapital(4665, 4663.27, 'GOLD')).toBe(true);
+    expect(isPublicNearCapital(4675, 4663.27, 'GOLD')).toBe(false);
+  });
+});
 
 describe('multi-feed OHLC mid pick (Capital-anchored)', () => {
   it('uses MULTI blend when multi mid is near Capital local', () => {
@@ -78,6 +91,21 @@ describe('multi-feed owns OHLC / entry gate', () => {
         agreement: 'DIVERGENT',
         capital_contributing: 2,
         capital_sender_count: 2,
+      }).ok
+    ).toBe(false);
+  });
+
+  it('hard-blocks LEAD vs Capital even when agreement is OK (false LEAD)', () => {
+    expect(
+      allowEntryFromFeeds({
+        contributing: 5,
+        sender_count: 5,
+        agreement: 'OK',
+        capital_contributing: 3,
+        capital_sender_count: 3,
+        public_contributing: 2,
+        lead_mid: 4724.3,
+        mid: 4663.27,
       }).ok
     ).toBe(false);
   });
