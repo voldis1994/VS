@@ -32,6 +32,13 @@ vi.mock('./capitalCom.js', () => ({
   fetchCapitalMarketQuote: (...a: unknown[]) => fetchCapitalMarketQuote(...a),
   fetchCapitalMinutePrices: (...a: unknown[]) => fetchCapitalMinutePrices(...a),
   computeSafetyCushionStopLevel: () => 1995,
+  ensureCapitalStopVisible: async () => ({
+    ok: true,
+    stop_level: 1995,
+    deal_id: 'DEAL-1',
+    detail: 'Capital SL visible stopLevel=1995',
+  }),
+  closeCapitalPosition: vi.fn(async () => ({ ok: true, detail: 'closed' })),
   isLateMoveOnOneMinute: () => false,
 }));
 

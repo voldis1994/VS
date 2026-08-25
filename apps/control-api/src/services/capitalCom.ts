@@ -912,7 +912,7 @@ export async function createCapitalPosition(
     size: number;
     /** Absolute price stop (Capital stopLevel) */
     stopLevel?: number;
-    /** Distance in Capital POINTS — preferred for tightest legal SL */
+    /** Distance in Capital POINTS — preferred for min legal SL */
     stopDistance?: number;
     profitLevel?: number;
   }
@@ -957,7 +957,7 @@ export async function createCapitalPosition(
       ? ` stopDist=${input.stopDistance}`
       : input.stopLevel != null && Number.isFinite(input.stopLevel)
         ? ` stop=${input.stopLevel}`
-        : '';
+        : ' NO_SL';
   return {
     ok: true,
     status: res.status,
@@ -966,6 +966,148 @@ export async function createCapitalPosition(
     detail: dealRef
       ? `Opened ${input.direction} ${epic} size=${input.size}${slNote} dealRef=${dealRef}`
       : `Opened ${input.direction} ${epic} size=${input.size}${slNote}`,
+  };
+}
+
+/**
+ * Attach / update stop on an OPEN Capital position so SL is visible in the Capital.com app.
+ * PUT /api/v1/positions/{dealId} — only one of stopLevel / stopDistance.
+ */
+export async function updateCapitalPositionStop(
+  session: CapitalSession,
+  dealId: string,
+  input: { stopLevel?: number; stopDistance?: number }
+): Promise<{ ok: boolean; detail: string; status: number; json: any }> {
+  const id = dealId.trim();
+  if (!id) {
+    return { ok: false, status: 0, json: {}, detail: 'dealId required to attach SL' };
+  }
+  const body: Record<string, unknown> = {};
+  if (input.stopDistance != null && Number.isFinite(input.stopDistance) && input.stopDistance > 0) {
+    body.stopDistance = input.stopDistance;
+  } else if (input.stopLevel != null && Number.isFinite(input.stopLevel)) {
+    body.stopLevel = input.stopLevel;
+  } else {
+    return { ok: false, status: 0, json: {}, detail: 'stopLevel or stopDistance required' };
+  }
+  const res = await session.put(`/api/v1/positions/${encodeURIComponent(id)}`, body);
+  if (!res.ok) {
+    return {
+      ok: false,
+      status: res.status,
+      json: res.json,
+      detail: `Capital.com attach SL ${id} failed HTTP ${res.status}: ${
+        res.json?.errorCode || res.json?.message || res.text.slice(0, 240)
+      }`,
+    };
+  }
+  const note =
+    body.stopDistance != null
+      ? `stopDistance=${body.stopDistance}`
+      : `stopLevel=${body.stopLevel}`;
+  return {
+    ok: true,
+    status: res.status,
+    json: res.json,
+    detail: `SL attached on Capital dealId=${id} · ${note}`,
+  };
+}
+
+/** Read stop_level from open positions for epic (null if missing / not visible yet). */
+export async function readCapitalStopOnEpic(
+  session: CapitalSession,
+  epic: string
+): Promise<{ ok: boolean; stop_level: number | null; deal_id: string | null; detail: string }> {
+  const listed = await listCapitalOpenPositions(session);
+  if (!listed.ok) {
+    return { ok: false, stop_level: null, deal_id: null, detail: listed.detail };
+  }
+  const want = epic.trim().toUpperCase();
+  const pos =
+    listed.positions.find((p) => p.epic.toUpperCase() === want) ||
+    listed.positions.find((p) => p.epic.toUpperCase().includes(want) || want.includes(p.epic.toUpperCase()));
+  if (!pos) {
+    return { ok: false, stop_level: null, deal_id: null, detail: `no open position for ${epic}` };
+  }
+  return {
+    ok: true,
+    stop_level: pos.stop_level,
+    deal_id: pos.deal_id,
+    detail:
+      pos.stop_level != null
+        ? `Capital SL visible stopLevel=${pos.stop_level}`
+        : `Capital position ${pos.deal_id} has NO stopLevel yet`,
+  };
+}
+
+/**
+ * Ensure stop is physically visible on Capital.com (read → PUT attach → re-read).
+ * Caller must close the position if ok=false (never leave naked).
+ */
+export async function ensureCapitalStopVisible(
+  session: CapitalSession,
+  epic: string,
+  opts: {
+    dealId?: string | null;
+    stopDistance?: number | null;
+    stopLevel?: number | null;
+    minPts?: number | null;
+    attempts?: number;
+  }
+): Promise<{ ok: boolean; stop_level: number | null; deal_id: string | null; detail: string }> {
+  const attempts = Math.max(1, opts.attempts ?? 4);
+  let dealId = opts.dealId?.trim() || null;
+  let lastDetail = 'Capital SL not verified';
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 350));
+    const seen = await readCapitalStopOnEpic(session, epic);
+    if (seen.deal_id) dealId = seen.deal_id;
+    lastDetail = seen.detail;
+    if (seen.ok && seen.stop_level != null && Number.isFinite(seen.stop_level)) {
+      return {
+        ok: true,
+        stop_level: seen.stop_level,
+        deal_id: dealId,
+        detail: seen.detail,
+      };
+    }
+    if (!dealId) continue;
+
+    let up: Awaited<ReturnType<typeof updateCapitalPositionStop>>;
+    if (opts.stopDistance != null && opts.stopDistance > 0) {
+      up = await updateCapitalPositionStop(session, dealId, {
+        stopDistance: opts.stopDistance,
+      });
+    } else if (opts.stopLevel != null && Number.isFinite(opts.stopLevel)) {
+      up = await updateCapitalPositionStop(session, dealId, { stopLevel: opts.stopLevel });
+    } else if (opts.minPts != null && opts.minPts > 0) {
+      up = await updateCapitalPositionStop(session, dealId, {
+        stopDistance: Math.max(opts.minPts * 2, opts.minPts + 1),
+      });
+    } else {
+      lastDetail = 'no stopDistance/stopLevel to attach';
+      continue;
+    }
+    lastDetail = up.ok ? up.detail : `SL attach: ${up.detail}`;
+  }
+
+  await new Promise((r) => setTimeout(r, 400));
+  const again = await readCapitalStopOnEpic(session, epic);
+  if (again.deal_id) dealId = again.deal_id;
+  if (again.ok && again.stop_level != null && Number.isFinite(again.stop_level)) {
+    return {
+      ok: true,
+      stop_level: again.stop_level,
+      deal_id: dealId,
+      detail: again.detail,
+    };
+  }
+  return {
+    ok: false,
+    stop_level: null,
+    deal_id: dealId,
+    detail: `Capital.com shows NO SL — ${again.detail || lastDetail}`,
   };
 }
 

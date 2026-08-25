@@ -10,6 +10,7 @@ import {
   fetchCapitalPrices,
   listCapitalOpenPositions,
   isLateMoveOnOneMinute,
+  ensureCapitalStopVisible,
   type CapitalMarketQuote,
   type CapitalOpenPosition,
   type CapitalSession,
@@ -65,6 +66,13 @@ import {
   type TenSecBar,
   type TenSecState,
 } from './tenSecondOhlc.js';
+import {
+  appendClosedTrade,
+  appendOpenEvent,
+  newTradeId,
+  tradeJournalPath,
+  type JournalOpenSnap,
+} from './tradeJournal.js';
 
 export type RobotTick = {
   at: string;
@@ -156,6 +164,8 @@ type Internal = RobotSession & {
   last_multi_feed_ms: number;
   multiFeed: MultiFeedPrice | null;
   cycle_busy: boolean;
+  /** Pending Excel journal row until close */
+  journal_open: JournalOpenSnap | null;
 };
 
 const ACTIVE_CADENCE_MS = 2_000;
@@ -276,6 +286,7 @@ function publicSession(s: Internal): RobotSession {
     last_multi_feed_ms: _mf,
     multiFeed: _multi,
     cycle_busy: _busy,
+    journal_open: _journal,
     ...rest
   } = s;
   const zoneSnap = buildScalpZone(s.closedBars);
@@ -379,6 +390,105 @@ function clearTradeState(s: Internal) {
   s.unrealized = null;
   s.safety_sl = null;
   s.mode = 'FLAT';
+  s.journal_open = null;
+}
+
+function buildJournalOpen(
+  s: Internal,
+  direction: 'BUY' | 'SELL',
+  reason: string,
+  setupType: string | null | undefined,
+  source: JournalOpenSnap['source']
+): JournalOpenSnap {
+  const zone = buildScalpZone(s.closedBars);
+  const ohlc = publicOhlc10s(s.ohlcState);
+  return {
+    trade_id: newTradeId(source === 'pipeline' ? 'P' : 'D'),
+    source,
+    opened_at: s.entry_at || new Date().toISOString(),
+    account_id: s.account_id,
+    client_id: s.client_id,
+    client_name: s.client_name,
+    account_name: s.account_name,
+    robot_id: s.id,
+    environment: s.environment,
+    epic: s.epic,
+    display_name: s.display_name,
+    side: direction,
+    lot_size: s.lot_size,
+    entry_price: s.entry_price,
+    safety_sl: s.safety_sl,
+    deal_id: s.deal_id,
+    deal_reference: s.last_deal_reference,
+    regime: String(s.regime || 'UNKNOWN'),
+    setup_type: setupType ?? null,
+    zone_kind: zone?.kind ?? null,
+    zone_high: zone?.high ?? null,
+    zone_low: zone?.low ?? null,
+    zone_detail: zone ? zone.detail : formatZoneInfo(null),
+    open_reason: reason,
+    feed_source: s.feed_source ?? s.multiFeed?.detail ?? null,
+    feed_agreement: s.multiFeed?.agreement ?? s.feed_agreement ?? null,
+    feed_contributing: s.multiFeed?.contributing ?? s.feed_contributing ?? null,
+    feed_sender_count: s.multiFeed?.sender_count ?? s.feed_sender_count ?? null,
+    lead_label: s.multiFeed?.lead_label ?? null,
+    ohlc_last:
+      ohlc.last_c != null
+        ? `O${ohlc.last_o} H${ohlc.last_h} L${ohlc.last_l} C${ohlc.last_c} ${ohlc.market}`
+        : null,
+    entry_enabled: s.entry_enabled,
+  };
+}
+
+function writeJournalClose(
+  s: Internal,
+  quote: Pick<CapitalMarketQuote, 'bid' | 'ask' | 'mid'>,
+  reason: string,
+  wasLoss: boolean
+): void {
+  const open = s.journal_open;
+  if (!open) return;
+  const exitMid = quote.mid;
+  const exitPrice = exitMid;
+  const pnlPts =
+    open.entry_price != null && exitMid != null
+      ? favorableMove(open.side, open.entry_price, exitMid)
+      : null;
+  const openedMs = Date.parse(open.opened_at);
+  const hold_sec = Number.isFinite(openedMs)
+    ? Math.max(0, Math.round((Date.now() - openedMs) / 1000))
+    : 0;
+  const zone = buildScalpZone(s.closedBars);
+  const written = appendClosedTrade({
+    open: {
+      ...open,
+      deal_id: s.deal_id || open.deal_id,
+      safety_sl: s.safety_sl ?? open.safety_sl,
+      entry_price: s.entry_price ?? open.entry_price,
+    },
+    closed_at: new Date().toISOString(),
+    exit_price: exitPrice,
+    exit_mid: exitMid,
+    close_reason: reason,
+    mfe: s.mfe,
+    mae: s.mae,
+    peak_retention: s.peak_retention,
+    unrealized_at_close: s.unrealized,
+    regime_at_exit: String(s.regime || 'UNKNOWN'),
+    zone_detail_at_exit: formatZoneInfo(zone),
+    was_loss: wasLoss,
+    hold_sec,
+    pnl_pts: pnlPts,
+  });
+  pushTick(s, {
+    phase: 'INFO',
+    bid: quote.bid,
+    ask: quote.ask,
+    mid: quote.mid,
+    detail: written.ok
+      ? `EXCEL journal · ${written.path} · ${open.trade_id}`
+      : written.detail,
+  });
 }
 
 /**
@@ -719,6 +829,7 @@ async function exitTrade(
       (exitSide === 'BUY' ? quote.mid < s.entry_price : quote.mid > s.entry_price));
   noteEpicTradeClose(s.epic, exitSide, wasLoss);
   s.error = null;
+  writeJournalClose(s, quote, reason, wasLoss);
   pushTick(s, {
     phase: 'EXIT',
     bid: quote.bid,
@@ -816,12 +927,13 @@ async function enterTrade(
     return;
   }
 
-  // SAFETY SL cushion (~0.32% / ≥2× min) — wider than HardInv 0.08%
+  // SAFETY SL — MUST be accepted by Capital and visible in Capital.com app.
+  // Never open a naked position (old bug: "entry without SL").
   const minPts = quote.min_stop_points;
   const minPrice = quote.min_stop_distance ?? null;
   const unit = (quote.min_stop_unit || 'POINTS').toUpperCase();
   const useDistance = minPts != null && minPts > 0 && !unit.includes('PERCENT');
-  const loosenSteps = [1, 1.15, 1.35, 1.6, 2.0];
+  const loosenSteps = [1, 1.15, 1.35, 1.6, 2.0, 2.5, 3.0];
 
   let stopLevel: number | null = null;
   let usedStopDistance: number | null = null;
@@ -830,7 +942,7 @@ async function enterTrade(
   if (useDistance) {
     for (const loosen of loosenSteps) {
       const basePts = safetyStopDistancePts(mid, minPts!, quote.point_size ?? null);
-      const distPts = Math.max(basePts * loosen, minPts! * 3);
+      const distPts = Math.max(basePts * loosen, minPts! * Math.max(1.5, loosen));
       const stopDistance =
         distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
       const expect = expectedStopFromDistance(
@@ -846,7 +958,7 @@ async function enterTrade(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `Capital SAFETY SL cushion stopDistance=${stopDistance} pts (min=${minPts} · ~level ${
+        detail: `Capital SAFETY SL stopDistance=${stopDistance} pts (min=${minPts} · ~level ${
           expect ?? 'n/a'
         } · x${loosen})`,
       });
@@ -861,7 +973,7 @@ async function enterTrade(
         stopLevel = expect;
         break;
       }
-      if (!/stop|distance|validation|reject|attached|level/i.test(result.detail)) break;
+      if (!/stop|distance|validation|reject|attached|level|minimum/i.test(result.detail)) break;
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
@@ -889,9 +1001,9 @@ async function enterTrade(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `Capital SAFETY SL try stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
+        detail: `Capital SAFETY SL stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
           minPrice ?? 'n/a'
-        } · spread=${quote.spread ?? 'n/a'} · x${loosen})`,
+        } · x${loosen})`,
       });
       result = await createCapitalPosition(session, {
         epic: s.epic,
@@ -903,7 +1015,7 @@ async function enterTrade(
         stopLevel = level;
         break;
       }
-      if (!/stop|distance|validation|reject|attached|level/i.test(result.detail)) break;
+      if (!/stop|distance|validation|reject|attached|level|minimum/i.test(result.detail)) break;
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
@@ -915,30 +1027,15 @@ async function enterTrade(
   }
 
   if (!result?.ok) {
-    pushTick(s, {
-      phase: 'WAIT',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `Safety SL not accepted — entry without SL (${result?.detail || 'unknown'})`,
-    });
-    result = await createCapitalPosition(session, {
-      epic: s.epic,
-      direction,
-      size: s.lot_size,
-    });
-    stopLevel = null;
-    usedStopDistance = null;
-  }
-
-  if (!result.ok) {
-    s.error = result.detail;
+    s.error = result?.detail || 'SL required';
     pushTick(s, {
       phase: 'ERROR',
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `ORDER FAIL ${direction}: ${result.detail}`,
+      detail: `ENTRY BLOCKED — Capital rejected every Safety SL (no naked trade). ${
+        result?.detail || ''
+      }`,
     });
     return;
   }
@@ -960,30 +1057,74 @@ async function enterTrade(
   const dealId = await resolveDealId(session, s, result.deal_reference);
   if (dealId) s.deal_id = dealId;
 
-  // Prefer broker-reported stopLevel when available
-  if (dealId) {
-    try {
-      const again = await listCapitalOpenPositions(session);
-      const pos = again.ok ? matchOpenOnEpic(again.positions, s.epic) : null;
-      if (pos?.stop_level != null && Number.isFinite(pos.stop_level)) {
-        s.safety_sl = pos.stop_level;
-      }
-    } catch {
-      /* ignore */
-    }
+  // Verify SL is physically on Capital.com — attach via PUT if missing
+  const ensured = await ensureCapitalStopVisible(session, s.epic, {
+    dealId: s.deal_id,
+    stopDistance: usedStopDistance,
+    stopLevel,
+    minPts,
+  });
+  if (ensured.deal_id) s.deal_id = ensured.deal_id;
+
+  if (ensured.ok && ensured.stop_level != null) {
+    s.safety_sl = ensured.stop_level;
   }
+
+  // Still no SL on Capital → close immediately (never leave naked)
+  if (!ensured.ok || ensured.stop_level == null) {
+    pushTick(s, {
+      phase: 'ERROR',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `Capital.com shows NO SL — closing position (naked trade forbidden) · ${ensured.detail}`,
+    });
+    if (s.deal_id) {
+      await closeCapitalPosition(session, s.deal_id);
+    }
+    clearTradeState(s);
+    s.error = 'SL not visible on Capital.com — trade closed';
+    return;
+  }
+
+  pushTick(s, {
+    phase: 'INFO',
+    bid: quote.bid,
+    ask: quote.ask,
+    mid: quote.mid,
+    detail: ensured.detail,
+  });
 
   pushTick(s, {
     phase: 'ORDER',
     bid: quote.bid,
     ask: quote.ask,
     mid: quote.mid,
-    detail: `ORDER ENTRY ${direction} ${s.display_name} lot=${s.lot_size} · SL ${
-      s.safety_sl ?? 'none'
-    }${usedStopDistance != null ? ` (dist ${usedStopDistance}pts)` : ''} · ${result.detail}${
-      dealId ? ` · dealId=${dealId}` : ''
+    detail: `ORDER ENTRY ${direction} ${s.display_name} lot=${s.lot_size} · Capital SL ${
+      s.safety_sl
+    } VISIBLE${usedStopDistance != null ? ` (dist ${usedStopDistance}pts)` : ''} · ${result.detail}${
+      dealId || s.deal_id ? ` · dealId=${s.deal_id || dealId}` : ''
     }`,
   });
+
+  s.journal_open = buildJournalOpen(
+    s,
+    direction,
+    reason,
+    setupType ?? null,
+    s.entry_enabled ? 'desk' : 'manage'
+  );
+  const openLog = appendOpenEvent(s.journal_open);
+  pushTick(s, {
+    phase: 'INFO',
+    bid: quote.bid,
+    ask: quote.ask,
+    mid: quote.mid,
+    detail: openLog.ok
+      ? `EXCEL open-log · ${s.journal_open.trade_id} · close → ${tradeJournalPath()}`
+      : openLog.detail,
+  });
+
   if (s.client_id) {
     emitToClient(s.client_id, {
       type: 'trade_opened',
@@ -994,6 +1135,7 @@ async function enterTrade(
       trade_type: mapTradeType(direction, setupType, s.regime),
       lot_size: s.lot_size,
       entry_price: s.entry_price,
+      safety_sl: s.safety_sl,
     });
   }
 
@@ -1768,6 +1910,7 @@ export async function startRobotSession(input: {
     last_multi_feed_ms: 0,
     multiFeed: null,
     cycle_busy: false,
+    journal_open: null,
     feed_source: 'NONE',
     feed_contributing: 0,
     feed_sender_count: 0,
@@ -1790,7 +1933,8 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: max 1 open · BO10s + continuation hold · zones required · Safety SL ~0.20% · park when closed',
+      'Rules: max 1 open · BO10s + continuation · zones · Safety SL MUST be on Capital.com · Excel journal → ' +
+      tradeJournalPath(),
   });
 
   sessions.set(id, session);
@@ -1834,6 +1978,7 @@ export async function attachManageOnlyRobot(input: {
   deal_reference?: string | null;
   regime?: string | null;
   setup_type?: string | null;
+  safety_sl?: number | null;
 }): Promise<RobotSession> {
   const id = robotIdFor(input.account_id, input.epic);
   const existing = sessions.get(id);
@@ -1846,7 +1991,18 @@ export async function attachManageOnlyRobot(input: {
     if (!existing.entry_at) existing.entry_at = new Date().toISOString();
     if (input.deal_reference) existing.last_deal_reference = input.deal_reference;
     if (input.regime) existing.regime = normalizeRegime(input.regime);
+    if (input.safety_sl != null) existing.safety_sl = input.safety_sl;
     existing.orders_placed = Math.max(existing.orders_placed, 1);
+    if (!existing.journal_open) {
+      existing.journal_open = buildJournalOpen(
+        existing,
+        input.side,
+        `PIPELINE FILL · ${input.setup_type || input.regime || 'intent'}`,
+        input.setup_type ?? null,
+        'pipeline'
+      );
+      appendOpenEvent(existing.journal_open);
+    }
     pushTick(existing, {
       phase: 'ORDER',
       bid: null,
@@ -1854,7 +2010,7 @@ export async function attachManageOnlyRobot(input: {
       mid: input.entry_price,
       detail: `PIPELINE FILL ${input.side} ${input.display_name} lot=${input.lot_size} · ${
         existing.regime
-      } · manage-only (kept MFE ${existing.mfe.toFixed(5)})`,
+      } · manage-only (kept MFE ${existing.mfe.toFixed(5)}) · journal ${existing.journal_open.trade_id}`,
     });
     return publicSession(existing);
   }
@@ -1876,6 +2032,15 @@ export async function attachManageOnlyRobot(input: {
     internal.last_deal_reference = input.deal_reference || null;
     internal.orders_placed = Math.max(internal.orders_placed, 1);
     if (input.regime) internal.regime = normalizeRegime(input.regime);
+    if (input.safety_sl != null) internal.safety_sl = input.safety_sl;
+    internal.journal_open = buildJournalOpen(
+      internal,
+      input.side,
+      `PIPELINE FILL · ${input.setup_type || input.regime || 'intent'}`,
+      input.setup_type ?? null,
+      'pipeline'
+    );
+    appendOpenEvent(internal.journal_open);
     pushTick(internal, {
       phase: 'ORDER',
       bid: null,
@@ -1883,7 +2048,7 @@ export async function attachManageOnlyRobot(input: {
       mid: input.entry_price,
       detail: `PIPELINE FILL ${input.side} ${input.display_name} lot=${input.lot_size} · ${
         internal.regime
-      } · manage-only attached`,
+      } · manage-only attached · journal ${internal.journal_open.trade_id}`,
     });
   }
   return getRobotSession(session.id) || session;
