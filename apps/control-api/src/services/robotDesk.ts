@@ -27,7 +27,7 @@ import {
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove } from './exitManage.js';
-import { decideEntryFrom10sRegime } from './entryFromRegime.js';
+import { allowEntryAgainstImpulse, decideEntryFrom10sRegime } from './entryFromRegime.js';
 import {
   allowEntryFromFeeds,
   multiFeedOwnsOhlc,
@@ -269,7 +269,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital OHLC → live regime (no UNKNOWN) → ENTRY/EXIT',
     note:
-      'No post-close wait · no UNKNOWN/COMPRESSION stall · no late/fake/stale skips · clients persist.',
+      'No SELL into fresh buy impulse · no BUY into dump · BO locks majority · clients persist.',
   };
 }
 
@@ -282,7 +282,16 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
   if (incoming.length) {
     const snap = observeClosedBars(s.epic, incoming, s.display_name);
     s.regime = toLiveRegime(snap.current);
-    if (bars?.length) s.closedBars = bars.slice(-24);
+    // Append closed bars (do not replace a full window with a single tick bar)
+    for (const b of incoming) {
+      const last = s.closedBars[s.closedBars.length - 1];
+      const same =
+        last &&
+        last.open_time_ms === b.open_time_ms &&
+        Math.abs(last.close - b.close) < 1e-9;
+      if (!same) s.closedBars.push(b);
+    }
+    if (s.closedBars.length > 24) s.closedBars = s.closedBars.slice(-24);
   }
 }
 
@@ -1187,10 +1196,25 @@ async function robotCycleBody(s: Internal) {
       } else {
         const sig = decideEntryFrom10sRegime(signalBar, s.regime);
         if (sig) {
-          direction = sig.direction;
-          setupType = sig.setup;
-          reason = sig.reason;
-          if (bucketKey) s.last_entry_signal_key = bucketKey;
+          const histBars = [
+            ...s.closedBars,
+            ...(s.ohlcState.just_closed && bar ? [] : signalBar ? [signalBar] : []),
+          ];
+          const vsImpulse = allowEntryAgainstImpulse(sig.direction, histBars);
+          if (!vsImpulse.ok) {
+            pushTick(s, {
+              phase: 'DECIDE',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `${ohlcLine} · ${vsImpulse.reason}`,
+            });
+          } else {
+            direction = sig.direction;
+            setupType = sig.setup;
+            reason = sig.reason;
+            if (bucketKey) s.last_entry_signal_key = bucketKey;
+          }
         } else {
           pushTick(s, {
             phase: 'DECIDE',
