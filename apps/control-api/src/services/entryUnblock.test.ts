@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   allowEntryAgainstImpulse,
   blockEntryAtExtreme,
+  blockLateTrendChase,
   decideEntryFrom10sRegime,
   explainNoEntry,
   signalBarTooLate,
+  tapeSide,
 } from './entryFromRegime.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 
@@ -23,10 +25,26 @@ function quietBox(n = 20, mid = 4640): TenSecBar[] {
   return out;
 }
 
-describe('real zone setups (not mid-chase / not too late)', () => {
-  it('RANGE mid-box waits for scalp edges — no invented trend trade', () => {
+/** Steady early UP — not climax (~2–3pt, mid-range). */
+function earlyUpBars(n = 22, start = 4620): TenSecBar[] {
+  const out: TenSecBar[] = [];
+  for (let i = 0; i < n; i++) {
+    const o = start + i * 0.1;
+    out.push({
+      open_time_ms: i * 10_000,
+      open: o,
+      high: o + 0.45,
+      low: o - 0.25,
+      close: o + 0.15,
+      ticks: 8,
+    });
+  }
+  return out;
+}
+
+describe('tape-follow entry (UP→BUY / DOWN→SELL, no zone setup wait)', () => {
+  it('FLAT mid-box waits — no invented trade', () => {
     const bars = quietBox(24);
-    // Dead center of ~4638.9–4641.75 box — must NOT count as bounce
     const mid = {
       open_time_ms: 24 * 10_000,
       open: 4640.3,
@@ -35,25 +53,40 @@ describe('real zone setups (not mid-chase / not too late)', () => {
       close: 4640.35,
       ticks: 8,
     };
+    expect(tapeSide(bars, mid).dir).toBeNull();
     expect(decideEntryFrom10sRegime(mid, 'RANGE', bars)).toBeNull();
-    expect(explainNoEntry(mid, 'RANGE', bars)).toMatch(/scalp edges only|mid-zone/i);
+    expect(explainNoEntry(mid, 'RANGE', bars)).toMatch(/TAPE FLAT|need UP→BUY/i);
   });
 
-  it('RANGE enters BUY on DEMAND bounce (real setup)', () => {
-    const bars = quietBox(24, 4640);
-    // Touch demand edge (zone low ~4638.9, band ~0.57pt)
-    const bounce = {
-      open_time_ms: 24 * 10_000,
-      open: 4639.2,
-      high: 4640.0,
-      low: 4638.95,
-      close: 4639.7,
-      ticks: 8,
-    };
-    const entry = decideEntryFrom10sRegime(bounce, 'RANGE', bars);
+  it('early UP tape → BUY without waiting for zone bounce', () => {
+    const bars = earlyUpBars(22);
+    const live = bars[bars.length - 1]!;
+    expect(tapeSide(bars, live).dir).toBe('BUY');
+    const entry = decideEntryFrom10sRegime(live, 'RANGE', bars);
     expect(entry).not.toBeNull();
     expect(entry!.direction).toBe('BUY');
-    expect(entry!.reason).toMatch(/BOUNCE|SETUP/i);
+    expect(entry!.reason).toMatch(/TAPE UP/i);
+  });
+
+  it('early DOWN tape → SELL', () => {
+    const bars: TenSecBar[] = [];
+    for (let i = 0; i < 22; i++) {
+      const o = 4650 - i * 0.1;
+      bars.push({
+        open_time_ms: i * 10_000,
+        open: o,
+        high: o + 0.25,
+        low: o - 0.45,
+        close: o - 0.15,
+        ticks: 8,
+      });
+    }
+    const live = bars[bars.length - 1]!;
+    expect(tapeSide(bars, live).dir).toBe('SELL');
+    const entry = decideEntryFrom10sRegime(live, 'COMPRESSION', bars);
+    expect(entry).not.toBeNull();
+    expect(entry!.direction).toBe('SELL');
+    expect(entry!.reason).toMatch(/TAPE DOWN/i);
   });
 
   it('blocks SELL at swing low after big struct dump', () => {
@@ -85,7 +118,6 @@ describe('real zone setups (not mid-chase / not too late)', () => {
         ticks: 8,
       });
     }
-    // Last 5 bars pullback red — old bug allowed SELL here
     for (let i = 55; i < 65; i++) {
       const o = 4638 - (i - 55) * 0.25;
       bars.push({
@@ -100,5 +132,24 @@ describe('real zone setups (not mid-chase / not too late)', () => {
     const pullback = bars[bars.length - 1]!;
     expect(decideEntryFrom10sRegime(pullback, 'COMPRESSION', bars)).toBeNull();
     expect(allowEntryAgainstImpulse('SELL', bars, pullback).ok).toBe(false);
+  });
+
+  it('blocks BUY after trend already ran (late chase)', () => {
+    const bars: TenSecBar[] = [];
+    for (let i = 0; i < 60; i++) {
+      const o = 4600 + i * 0.2;
+      bars.push({
+        open_time_ms: i * 10_000,
+        open: o,
+        high: o + 0.5,
+        low: o - 0.1,
+        close: o + 0.35,
+        ticks: 8,
+      });
+    }
+    const top = bars[bars.length - 1]!;
+    expect(blockLateTrendChase('BUY', bars, top).ok).toBe(false);
+    expect(decideEntryFrom10sRegime(top, 'TREND_UP', bars)).toBeNull();
+    expect(explainNoEntry(top, 'TREND_UP', bars)).toMatch(/too late|chase top/i);
   });
 });

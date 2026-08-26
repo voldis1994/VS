@@ -36,6 +36,7 @@ import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove } from '
 import {
   allowEntryAgainstImpulse,
   blockEntryAtExtreme,
+  blockLateTrendChase,
   buildScalpZone,
   continuationSameSide,
   decideEntryFrom10sRegime,
@@ -959,6 +960,17 @@ async function enterTrade(
       ask: quote.ask,
       mid: quote.mid,
       detail: `ENTRY blocked · ${fadeGate.reason}`,
+    });
+    return;
+  }
+  const lateGate = blockLateTrendChase(direction, s.closedBars, liveBar);
+  if (!lateGate.ok) {
+    pushTick(s, {
+      phase: 'WAIT',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `ENTRY blocked · ${lateGate.reason}`,
     });
     return;
   }
