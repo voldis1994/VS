@@ -57,7 +57,7 @@ function downBars(n = 80, start = 4680, step = 0.08): TenSecBar[] {
   return out;
 }
 
-describe('no WAIT blocks — tape only', () => {
+describe('entry + TRADER vision', () => {
   it('FLAT mid-box → SCAN not WAIT ENTRY', () => {
     const bars = quietBox(40);
     const mid = {
@@ -70,23 +70,61 @@ describe('no WAIT blocks — tape only', () => {
     };
     expect(tapeSide(bars, mid).dir).toBeNull();
     expect(decideEntryFrom10sRegime(mid, 'TRANSITION', bars)).toBeNull();
-    expect(explainNoEntry(mid, 'TRANSITION', bars)).toMatch(/SCAN|TAPE FLAT/i);
+    expect(explainNoEntry(mid, 'TRANSITION', bars)).toMatch(/SCAN|TAPE FLAT|TRADER/i);
     expect(explainNoEntry(mid, 'TRANSITION', bars)).not.toMatch(/WAIT ENTRY|WAIT ·/i);
   });
 
-  it('TRANSITION / UNKNOWN never block when tape UP', () => {
-    const bars = upBars(120, 4600, 0.06);
-    const live = bars[bars.length - 1]!;
+  it('early tape UP mid-range → BUY (regime labels ignored)', () => {
+    const bars: TenSecBar[] = [];
+    let px = 4600;
+    for (let i = 0; i < 20; i++) {
+      bars.push({
+        open_time_ms: i * 10_000,
+        open: px,
+        high: px + 0.35,
+        low: px - 0.15,
+        close: px + 0.1,
+        ticks: 8,
+      });
+      px += 0.1;
+    }
+    for (let i = 20; i < 26; i++) {
+      bars.push({
+        open_time_ms: i * 10_000,
+        open: px,
+        high: px + 0.1,
+        low: px - 0.2,
+        close: px - 0.12,
+        ticks: 8,
+      });
+      px -= 0.12;
+    }
+    const live = {
+      open_time_ms: 26 * 10_000,
+      open: px,
+      high: px + 0.2,
+      low: px - 0.05,
+      close: px + 0.14,
+      ticks: 8,
+    };
     expect(tapeSide(bars, live).dir).toBe('BUY');
     for (const regime of ['UNKNOWN', 'TRANSITION', 'COMPRESSION', 'RANGE']) {
       const entry = decideEntryFrom10sRegime(live, regime, bars);
       expect(entry, regime).not.toBeNull();
       expect(entry!.direction).toBe('BUY');
+      expect(entry!.reason).toMatch(/OK BUY|TRADER/i);
     }
   });
 
-  it('5m bounce after older dump → not forced SELL (10m removed)', () => {
-    // Older dump then clear 5m bounce — direction follows 5m+1m, not stale 10m
+  it('blocks BUY at extended top (120-bar climb = swing high)', () => {
+    const bars = upBars(120, 4600, 0.06);
+    const live = bars[bars.length - 1]!;
+    expect(tapeSide(bars, live).dir).toBe('BUY');
+    expect(decideEntryFrom10sRegime(live, 'TRANSITION', bars)).toBeNull();
+    expect(explainNoEntry(live, 'TRANSITION', bars)).toMatch(/NO BUY|chase top|TRADER/i);
+  });
+
+  it('5m bounce that reaches swing HIGH → TRADER blocks chase', () => {
     const bars: TenSecBar[] = [];
     for (let i = 0; i < 50; i++) {
       const o = 4680 - i * 0.15;
@@ -99,7 +137,7 @@ describe('no WAIT blocks — tape only', () => {
         ticks: 8,
       });
     }
-    for (let i = 50; i < 80; i++) {
+    for (let i = 50; i < 72; i++) {
       const prev = bars[bars.length - 1]!.close;
       const o = prev + 0.12;
       bars.push({
@@ -112,33 +150,47 @@ describe('no WAIT blocks — tape only', () => {
       });
     }
     const live = bars[bars.length - 1]!;
-    const tape = tapeSide(bars, live);
-    expect(tape.pts5m).toBeGreaterThan(0.8);
-    expect(tape.dir).toBe('BUY');
-    expect(decideEntryFrom10sRegime(live, 'TRANSITION', bars)?.direction).toBe('BUY');
+    expect(tapeSide(bars, live).dir).toBe('BUY');
+    const entry = decideEntryFrom10sRegime(live, 'TRANSITION', bars);
+    expect(entry).toBeNull();
+    expect(explainNoEntry(live, 'TRANSITION', bars)).toMatch(/NO BUY|swing HIGH/i);
   });
 
-  it('5m+1m UP → SELL also allowed in profit mode', () => {
+  it('5m+1m UP → impulse gate still free', () => {
     const bars = upBars(40, 4580, 0.08);
     const live = bars[bars.length - 1]!;
     expect(tapeSide(bars, live).dir).toBe('BUY');
     expect(allowEntryAgainstImpulse('SELL', bars, live).ok).toBe(true);
   });
 
-  it('5m+1m DOWN → SELL', () => {
-    const bars = downBars(40, 4700, 0.12);
-    const live = bars[bars.length - 1]!;
+  it('blocks SELL at swing LOW after extended dump', () => {
+    const bars: TenSecBar[] = [];
+    let px = 4720;
+    for (let i = 0; i < 35; i++) {
+      bars.push({
+        open_time_ms: i * 10_000,
+        open: px,
+        high: px + 0.08,
+        low: px - 0.28,
+        close: px - 0.14,
+        ticks: 8,
+      });
+      px -= 0.14;
+    }
+    const live = {
+      open_time_ms: 35 * 10_000,
+      open: px + 0.03,
+      high: px + 0.05,
+      low: px - 0.18,
+      close: px - 0.11,
+      ticks: 8,
+    };
     expect(tapeSide(bars, live).dir).toBe('SELL');
-    expect(decideEntryFrom10sRegime(live, 'UNKNOWN', bars)?.direction).toBe('SELL');
+    expect(decideEntryFrom10sRegime(live, 'UNKNOWN', bars)).toBeNull();
+    expect(explainNoEntry(live, 'UNKNOWN', bars)).toMatch(/NO SELL|swing LOW|5m LOW/i);
   });
 
-  it('profit mode allows SELL into clear UP stack', () => {
-    const bars = upBars(40, 4600, 0.1);
-    const live = bars[bars.length - 1]!;
-    expect(allowEntryAgainstImpulse('SELL', bars, live).ok).toBe(true);
-  });
-
-  it('late signal bar is allowed in profit mode', () => {
+  it('late huge green at top → TRADER blocks BUY', () => {
     const bars = upBars(40, 4600, 0.08);
     const late = {
       open_time_ms: 999,
@@ -148,32 +200,89 @@ describe('no WAIT blocks — tape only', () => {
       close: 4646,
       ticks: 8,
     };
-    expect(decideEntryFrom10sRegime(late, 'TRANSITION', bars)?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(late, 'TRANSITION', bars)).toBeNull();
   });
 
-  it('early PROFIT BUY fires before finished 5m climb (~0.6pt not 1.2pt)', () => {
-    const bars: TenSecBar[] = [];
-    let px = 4640;
-    for (let i = 0; i < 36; i++) {
-      const step = i < 24 ? 0.012 : 0.05; // soft climb then early push
+  it('allows SELL on bounce mid-range (not at LOW)', () => {
+    const dump: TenSecBar[] = [];
+    let px = 4725;
+    for (let i = 0; i < 22; i++) {
       const o = px;
-      const c = px + step;
-      bars.push({
+      const c = px - 0.1;
+      dump.push({
         open_time_ms: i * 10_000,
         open: o,
-        high: c + 0.05,
-        low: o - 0.05,
+        high: o + 0.2,
+        low: c - 0.2,
         close: c,
         ticks: 8,
       });
       px = c;
     }
-    const live = bars[bars.length - 1]!;
-    const tape = tapeSide(bars, live);
+    for (let i = 22; i < 28; i++) {
+      const o = px;
+      const c = px + 0.12;
+      dump.push({
+        open_time_ms: i * 10_000,
+        open: o,
+        high: c + 0.1,
+        low: o - 0.2,
+        close: c,
+        ticks: 8,
+      });
+      px = c;
+    }
+    const red = {
+      open_time_ms: 28 * 10_000,
+      open: px,
+      high: px + 0.05,
+      low: px - 0.15,
+      close: px - 0.12,
+      ticks: 8,
+    };
+    expect(tapeSide(dump, red).dir).toBe('SELL');
+    expect(decideEntryFrom10sRegime(red, 'UNKNOWN', dump)?.direction).toBe('SELL');
+  });
+
+  it('dip-buy mid-range → BUY (trader pullback)', () => {
+    const bars: TenSecBar[] = [];
+    let px = 4588;
+    for (let i = 0; i < 22; i++) {
+      const o = px;
+      const c = px + 0.1;
+      bars.push({
+        open_time_ms: i * 10_000,
+        open: o,
+        high: c + 0.2,
+        low: o - 0.2,
+        close: c,
+        ticks: 8,
+      });
+      px = c;
+    }
+    for (let i = 22; i < 28; i++) {
+      const o = px;
+      const c = px - 0.12;
+      bars.push({
+        open_time_ms: i * 10_000,
+        open: o,
+        high: o + 0.1,
+        low: c - 0.2,
+        close: c,
+        ticks: 8,
+      });
+      px = c;
+    }
+    const live = {
+      open_time_ms: 28 * 10_000,
+      open: px,
+      high: px + 0.15,
+      low: px - 0.05,
+      close: px + 0.15,
+      ticks: 8,
+    };
     const entry = decideEntryFrom10sRegime(live, 'TRANSITION', bars);
-    expect(entry).not.toBeNull();
-    expect(entry!.direction).toBe('BUY');
-    expect(entry!.reason).toMatch(/PROFIT BUY/i);
-    expect(tape.pts5m).toBeLessThan(1.2);
+    expect(entry?.direction).toBe('BUY');
+    expect(entry!.reason).toMatch(/OK BUY|TRADER/i);
   });
 });

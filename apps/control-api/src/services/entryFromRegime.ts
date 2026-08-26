@@ -12,6 +12,7 @@ import {
   type ScalpZone,
   type ZoneSetup,
 } from './zones.js';
+import { buildTraderView, formatTraderLine, traderEntryGate } from './traderVision.js';
 
 export type RegimeEntry = {
   direction: 'BUY' | 'SELL';
@@ -240,13 +241,13 @@ export function allowEntryAgainstImpulse(
   return { ok: true, reason: `PROFIT · ${direction} free` };
 }
 
-/** PROFIT mode — no late-chase / climax block. */
+/** PROFIT mode — trader vision handles late/climax; always pass legacy hook. */
 export function blockLateTrendChase(
   _direction: 'BUY' | 'SELL',
   _bars: TenSecBar[] | null | undefined,
   _liveBar?: TenSecBar | null
 ): { ok: boolean; reason: string } {
-  return { ok: true, reason: 'PROFIT · no late block' };
+  return { ok: true, reason: 'TRADER vision · late/climax gate' };
 }
 
 export function zoneFadeAllowed(
@@ -311,18 +312,30 @@ export function explainNoEntry(
   const pts90s = netPtsLookback(closedBars, bar, 9);
   const line = `1m=${t.pts1m.toFixed(1)} 5m=${t.pts5m.toFixed(1)} 90s=${pts90s.toFixed(1)}`;
 
-  if (softBiasUp(t) && isGreen(bar)) {
+  const tape = tapeSide(closedBars, bar);
+  const view = buildTraderView(closedBars, bar);
+
+  if (view) {
+    if (softBiasUp(t) && isGreen(bar)) {
+      const gate = traderEntryGate('BUY', view, bar);
+      return gate.ok ? `SETUP BUY · ${gate.reason}` : gate.reason;
+    }
+    if (softBiasDown(t) && isRed(bar)) {
+      const gate = traderEntryGate('SELL', view, bar);
+      return gate.ok ? `SETUP SELL · ${gate.reason}` : gate.reason;
+    }
+  } else if (softBiasUp(t) && isGreen(bar)) {
     return `SETUP BUY · ${line}`;
-  }
-  if (softBiasDown(t) && isRed(bar)) {
+  } else if (softBiasDown(t) && isRed(bar)) {
     return `SETUP SELL · ${line}`;
   }
 
-  const tape = tapeSide(closedBars, bar);
   if (!tape.dir) {
-    return `SCAN · ${tape.reason} · need tape + color`;
+    return view
+      ? `${formatTraderLine(view)} · SCAN · ${tape.reason} · need tape + color`
+      : `SCAN · ${tape.reason} · need tape + color`;
   }
-  return `SCAN · ${tape.reason}`;
+  return view ? `${formatTraderLine(view)} · SCAN · ${tape.reason}` : `SCAN · ${tape.reason}`;
 }
 
 export function continuationSameSide(
@@ -458,10 +471,15 @@ export function decideEntryFrom10sRegime(
 
   if (!direction) return null;
 
+  const view = buildTraderView(closedBars, bar);
+  if (!view) return null;
+  const gate = traderEntryGate(direction, view, bar);
+  if (!gate.ok) return null;
+
   return {
     direction,
     setup,
-    reason: `${why} · ${describe(bar)}`,
+    reason: `${why} · ${gate.reason} · ${describe(bar)}`,
     zone,
     zone_setup: null,
   };
