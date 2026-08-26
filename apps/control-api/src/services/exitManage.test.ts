@@ -38,6 +38,21 @@ describe('decideBestOutcomeExit — hold until opposite', () => {
     expect(cut.reason).toMatch(/HardInvalidation/);
   });
 
+  it('short dump/rally thesis only at ~4pt (not at 2pt)', () => {
+    const hold = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: 4660, mfe: 0, short_net_pct: -0.0005 }),
+      4659.5
+    );
+    expect(hold.exit).toBe(false);
+
+    const cut = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: 4660, mfe: 0, short_net_pct: -4 / 4660 }),
+      4659.5
+    );
+    expect(cut.exit).toBe(true);
+    expect(cut.reason).toMatch(/short dump.*~4pt/);
+  });
+
   it('does NOT exit on PeakProtect / flat giveback — holds for opposite', () => {
     const hold = decideBestOutcomeExit(
       snap({

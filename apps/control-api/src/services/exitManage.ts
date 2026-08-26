@@ -1,7 +1,7 @@
 /** Live Capital exit — hold until opposite entry signal (or HardInv). */
 
 import {
-  HARD_INV_GOLD_PT,
+  SHORT_THESIS_GOLD_PT,
   SHORT_THESIS_MOVE_PCT,
   hardInvalidationDistance,
 } from './microScalpThresholds.js';
@@ -128,13 +128,13 @@ export function decideBestOutcomeExit(
     if (s.open_side === 'BUY' && short <= -SHORT_THESIS_MOVE_PCT) {
       return {
         exit: true,
-        reason: `ThesisFailure · short dump ${(short * 100).toFixed(2)}% (~${HARD_INV_GOLD_PT}pt) vs BUY`,
+        reason: `ThesisFailure · short dump ${(short * 100).toFixed(2)}% (~${SHORT_THESIS_GOLD_PT}pt) vs BUY`,
       };
     }
     if (s.open_side === 'SELL' && short >= SHORT_THESIS_MOVE_PCT) {
       return {
         exit: true,
-        reason: `ThesisFailure · short rally ${(short * 100).toFixed(2)}% (~${HARD_INV_GOLD_PT}pt) vs SELL`,
+        reason: `ThesisFailure · short rally ${(short * 100).toFixed(2)}% (~${SHORT_THESIS_GOLD_PT}pt) vs SELL`,
       };
     }
   }

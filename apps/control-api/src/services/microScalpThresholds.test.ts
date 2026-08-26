@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   HARD_INV_GOLD_PT,
   SAFETY_SL_PCT,
+  SHORT_THESIS_GOLD_PT,
   SHORT_THESIS_MOVE_PCT,
   hardInvalidationDistance,
 } from './microScalpThresholds.js';
@@ -13,8 +14,10 @@ describe('microScalpThresholds', () => {
     expect(HARD_INV_GOLD_PT).toBeLessThan(4660 * SAFETY_SL_PCT);
   });
 
-  it('short thesis pct matches ~2.0pt at Gold mid', () => {
-    expect(SHORT_THESIS_MOVE_PCT * 4660).toBeCloseTo(HARD_INV_GOLD_PT, 0);
+  it('short dump/rally thesis = 4.0pt at Gold mid', () => {
+    expect(SHORT_THESIS_GOLD_PT).toBe(4.0);
+    expect(SHORT_THESIS_MOVE_PCT * 4660).toBeCloseTo(SHORT_THESIS_GOLD_PT, 5);
+    expect(SHORT_THESIS_GOLD_PT).toBeGreaterThan(HARD_INV_GOLD_PT);
   });
 
   it('Safety SL cushion ~0.08% — wider than HardInv 2.0pt', () => {
