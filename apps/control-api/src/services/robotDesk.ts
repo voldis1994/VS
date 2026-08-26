@@ -1904,7 +1904,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: max 1 open · BO PeakProtect 75% · HardInv 2pt · Safety SL on Capital.com · Excel journal → ' +
+      'Rules: max 1 open · SETUP→ENTER early (not late chase) · BO PeakProtect 75% · HardInv 2pt · Safety SL on Capital.com · Excel journal → ' +
       tradeJournalPath(),
   });
 
