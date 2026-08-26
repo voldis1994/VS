@@ -39,6 +39,7 @@ import {
   shortNetMove,
   tapeSide,
 } from './entryFromRegime.js';
+import { formatTraderLine, buildTraderView } from './traderVision.js';
 import type { ScalpZone } from './zones.js';
 import { ZONE_WINDOW } from './zones.js';
 import { noteEpicTradeClose, lastEpicClose, pauseMsAfterClose } from './tradeCooldown.js';
@@ -373,9 +374,9 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     active_regimes: activeTapes,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'OWN Capital LEAD → own 10s OHLC → TAPE 5/1 → BUY|SELL · BO → EXIT',
+    chain: 'OWN Capital LEAD → 10s OHLC → TRADER vision → TAPE → BUY|SELL · BO → EXIT',
     note:
-      'Katram klientam savs Capital LEAD + savs 10s OHLC. Peer Capital / shared bars OFF. Public = ADVISORY only.',
+      'Katram klientam savs Capital LEAD + savs 10s OHLC. TRADER vision = swing/range/climax kā chart. Public = ADVISORY.',
   };
 }
 
@@ -385,6 +386,8 @@ function formatScanContext(
   feedNote?: string
 ): string {
   const tape = tapeSide(s.closedBars, s.ohlcState.forming ?? s.ohlcState.last_closed);
+  const liveBar = s.ohlcState.forming ?? s.ohlcState.last_closed;
+  const traderLine = formatTraderLine(buildTraderView(s.closedBars, liveBar));
   const tapeLine = `TAPE ${tape.dir ?? 'FLAT'} · ${tape.reason}`;
   const zoneLine = formatZoneInfo(zone, s.closedBars);
   const mf = s.multiFeed;
@@ -393,7 +396,7 @@ function formatScanContext(
   const feedLine =
     feedNote ||
     `FEEDS cap ${capLive}/${capCfg} · lead=${mf?.lead_label || '—'} · ${mf?.agreement || s.feed_agreement || 'NONE'}`;
-  return `${tapeLine} · ${zoneLine} · ${feedLine}`;
+  return `${traderLine} · ${tapeLine} · ${zoneLine} · ${feedLine}`;
 }
 
 function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
@@ -1572,7 +1575,7 @@ async function robotCycleBody(s: Internal) {
     if (quote.mid == null) return;
 
     // Seed 10s bars from THIS client's Capital only
-    if (Date.now() - s.last_second_fetch_ms >= 4_000) {
+    if (Date.now() - s.last_second_fetch_ms >= 2_000) {
       s.last_second_fetch_ms = Date.now();
       const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 100);
       if (sec.ok && sec.candles.length >= 20) {
@@ -1854,7 +1857,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'PROFIT engine · 0s reentry · tape+color entry · PeakProtect 75% · TP 2pt · HardInv 2pt · Safety SL 0.20% · Excel journal → ' +
+      'PROFIT+TRADER · swing/range/climax · PeakProtect 75% · TP 2pt · HardInv 2pt · Safety SL 0.20% · Excel journal → ' +
       tradeJournalPath(),
   });
 
