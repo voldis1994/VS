@@ -8,7 +8,7 @@ import {
   pauseMsAfterClose,
 } from './tradeCooldown.js';
 
-describe('epic must-flip cooldown', () => {
+describe('epic — no post-trade cooldown', () => {
   beforeEach(() => {
     resetEpicTradeCooldowns();
     vi.useFakeTimers();
@@ -17,35 +17,21 @@ describe('epic must-flip cooldown', () => {
     vi.useRealTimers();
   });
 
-  it('profit pause = 15s, loss/scratch = 20s', () => {
-    expect(EPIC_PAUSE_MS).toBe(15_000);
-    expect(EPIC_LOSS_PAUSE_MS).toBe(20_000);
-    expect(pauseMsAfterClose(false)).toBe(15_000);
-    expect(pauseMsAfterClose(true)).toBe(20_000);
+  it('all pauses are 0s', () => {
+    expect(EPIC_PAUSE_MS).toBe(0);
+    expect(EPIC_LOSS_PAUSE_MS).toBe(0);
+    expect(pauseMsAfterClose(false)).toBe(0);
+    expect(pauseMsAfterClose(true)).toBe(0);
   });
 
-  it('blocks during pause', () => {
+  it('allows opposite immediately after close', () => {
     noteEpicTradeClose('GOLD', 'BUY', false);
-    expect(allowEpicReentry('GOLD', 'SELL').ok).toBe(false);
-    expect(allowEpicReentry('GOLD', 'SELL').reason).toMatch(/pause/);
+    expect(allowEpicReentry('GOLD', 'SELL').ok).toBe(true);
   });
 
-  it('after pause: same side blocked, opposite allowed (no 5× identical)', () => {
-    noteEpicTradeClose('GOLD', 'BUY', false);
-    vi.advanceTimersByTime(EPIC_PAUSE_MS + 100);
-    const same = allowEpicReentry('GOLD', 'BUY');
-    expect(same.ok).toBe(false);
-    expect(same.reason).toMatch(/must flip|no same-side/);
-    const flip = allowEpicReentry('GOLD', 'SELL');
-    expect(flip.ok).toBe(true);
-  });
-
-  it('after opposite close, previous side becomes allowed again', () => {
-    noteEpicTradeClose('GOLD', 'BUY', false);
-    vi.advanceTimersByTime(EPIC_PAUSE_MS + 100);
-    noteEpicTradeClose('GOLD', 'SELL', false);
-    vi.advanceTimersByTime(EPIC_PAUSE_MS + 100);
+  it('allows same side immediately (no must-flip)', () => {
+    noteEpicTradeClose('GOLD', 'BUY', true);
     expect(allowEpicReentry('GOLD', 'BUY').ok).toBe(true);
-    expect(allowEpicReentry('GOLD', 'SELL').ok).toBe(false);
+    expect(allowEpicReentry('GOLD', 'SELL').ok).toBe(true);
   });
 });
