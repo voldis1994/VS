@@ -85,8 +85,8 @@ describe('no WAIT blocks — tape only', () => {
     }
   });
 
-  it('10m dump dominates (screenshot case) → SELL even if 5m bounce', () => {
-    // Hard 10m dump then mild bounce — 10m stays deeply negative
+  it('5m bounce after older dump → not forced SELL (10m removed)', () => {
+    // Older dump then clear 5m bounce — direction follows 5m+1m, not stale 10m
     const bars: TenSecBar[] = [];
     for (let i = 0; i < 50; i++) {
       const o = 4680 - i * 0.15;
@@ -99,48 +99,47 @@ describe('no WAIT blocks — tape only', () => {
         ticks: 8,
       });
     }
-    // ~5m bounce (~1.5pt) — not enough to flip 10m
-    for (let i = 50; i < 65; i++) {
+    for (let i = 50; i < 80; i++) {
       const prev = bars[bars.length - 1]!.close;
-      const o = prev + 0.08;
+      const o = prev + 0.12;
       bars.push({
         open_time_ms: i * 10_000,
         open: o,
-        high: o + 0.2,
+        high: o + 0.25,
         low: o - 0.05,
-        close: o + 0.1,
+        close: o + 0.15,
         ticks: 8,
       });
     }
     const live = bars[bars.length - 1]!;
     const tape = tapeSide(bars, live);
-    expect(tape.pts10m).toBeLessThan(-1.5);
-    expect(tape.dir).toBe('SELL');
-    expect(decideEntryFrom10sRegime(live, 'TRANSITION', bars)?.direction).toBe('SELL');
+    expect(tape.pts5m).toBeGreaterThan(0.8);
+    expect(tape.dir).toBe('BUY');
+    expect(decideEntryFrom10sRegime(live, 'TRANSITION', bars)?.direction).toBe('BUY');
   });
 
-  it('25/10/5/1 UP → BUY only', () => {
-    const bars = upBars(150, 4580, 0.05);
+  it('5m+1m UP → BUY only', () => {
+    const bars = upBars(40, 4580, 0.08);
     const live = bars[bars.length - 1]!;
     expect(tapeSide(bars, live).dir).toBe('BUY');
     expect(allowEntryAgainstImpulse('SELL', bars, live).ok).toBe(false);
   });
 
-  it('1–5m DOWN → SELL', () => {
-    const bars = downBars(50, 4700, 0.12);
+  it('5m+1m DOWN → SELL', () => {
+    const bars = downBars(40, 4700, 0.12);
     const live = bars[bars.length - 1]!;
     expect(tapeSide(bars, live).dir).toBe('SELL');
     expect(decideEntryFrom10sRegime(live, 'UNKNOWN', bars)?.direction).toBe('SELL');
   });
 
   it('blocks SELL into clear UP stack', () => {
-    const bars = upBars(100, 4600, 0.1);
+    const bars = upBars(40, 4600, 0.1);
     const live = bars[bars.length - 1]!;
     expect(allowEntryAgainstImpulse('SELL', bars, live).ok).toBe(false);
   });
 
   it('huge signal bar does NOT block (no late-bar WAIT)', () => {
-    const bars = upBars(80, 4600, 0.06);
+    const bars = upBars(40, 4600, 0.08);
     const late = {
       open_time_ms: 999,
       open: 4640,

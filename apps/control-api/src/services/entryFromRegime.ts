@@ -1,8 +1,8 @@
 /**
  * 10s multi-TF tape entry — no regime WAIT, no zone-setup wait.
- * 25m+10m+5m+1m UP → BUY only.
- * 1–5m DOWN (and longer not UP) → SELL.
- * Zone = MAP only. Regime labels never block entry.
+ * Only 5m + 1m (10m/25m removed from direction — user: too noisy/narrow).
+ * 5m+1m UP → BUY · 5m+1m DOWN → SELL.
+ * Zone (~25 min) = MAP only. Regime labels never block entry.
  */
 import type { RegimeName } from './regimes.js';
 import { normalizeRegime } from './regimes.js';
@@ -81,13 +81,13 @@ export function shortNetMove(
 }
 
 /**
- * ~10 min tape (60×10s) — scalp direction. Zone map (~25 min) is WHERE, not fade signal.
+ * ~5–10 min tape helper (legacy name). Entry direction uses 5m+1m via multiTfPts.
  */
 export function tenMinTape(
   bars: TenSecBar[] | null | undefined,
   liveBar?: TenSecBar | null
 ): { dir: 'UP' | 'DOWN' | null; netPct: number; netPts: number } {
-  return recentImpulse(withLive(bars, liveBar), 60);
+  return recentImpulse(withLive(bars, liveBar), 30);
 }
 
 export function selloffFromSwingHigh(
@@ -139,8 +139,8 @@ export function blockEntryAtExtreme(
   const all = bars ?? [];
   if (all.length < 8) return { ok: true, reason: 'no struct extreme gate' };
 
-  // Prefer ~10 min window for "already at climax"
-  const recent = all.slice(-Math.min(60, all.length));
+  // Prefer ~5 min window for "already at climax" (no 10m)
+  const recent = all.slice(-Math.min(30, all.length));
   const high = Math.max(...recent.map((b) => b.high));
   const low = Math.min(...recent.map((b) => b.low));
   const range = Math.max(high - low, 0.01);
@@ -162,11 +162,9 @@ export function blockEntryAtExtreme(
   return { ok: true, reason: 'struct extreme ok' };
 }
 
-/** 10s bars → TF windows */
+/** 10s bars → TF windows (entry uses 5m + 1m only) */
 const BARS_1M = 6;
 const BARS_5M = 30;
-const BARS_10M = 60;
-const BARS_25M = 150; // same as ZONE_WINDOW map
 
 /**
  * Hard anti-fade (10s brain).
@@ -186,8 +184,6 @@ export function netPtsLookback(
 export type MultiTfTape = {
   pts1m: number;
   pts5m: number;
-  pts10m: number;
-  pts25m: number;
 };
 
 export function multiTfPts(
@@ -197,33 +193,29 @@ export function multiTfPts(
   return {
     pts1m: netPtsLookback(bars, liveBar, BARS_1M),
     pts5m: netPtsLookback(bars, liveBar, BARS_5M),
-    pts10m: netPtsLookback(bars, liveBar, BARS_10M),
-    pts25m: netPtsLookback(bars, liveBar, BARS_25M),
   };
 }
 
 function formatTf(t: MultiTfTape): string {
-  return `1m=${t.pts1m.toFixed(1)} 5m=${t.pts5m.toFixed(1)} 10m=${t.pts10m.toFixed(1)} 25m=${t.pts25m.toFixed(1)}`;
+  return `1m=${t.pts1m.toFixed(1)} 5m=${t.pts5m.toFixed(1)}`;
 }
 
-/** Long stack UP — never SELL into this. */
+/** Clear UP stack — 5m+1m (no 10m/25m). */
 export function longTapeUp(t: MultiTfTape): boolean {
-  return t.pts25m > 1.5 && t.pts10m > 1.2 && t.pts5m > 0.6;
+  return t.pts5m > 0.8 && t.pts1m > 0.3;
 }
 
-/** Clear DOWN tape — 10m dump or 1–5m dump. */
+/** Clear DOWN tape — 5m dump or 5m+1m dump. */
 export function shortTapeDown(t: MultiTfTape): boolean {
-  if (t.pts10m < -1.5) return true;
+  if (t.pts5m < -1.2) return true;
   if (t.pts5m < -0.8 && t.pts1m < -0.35) return true;
-  if (t.pts25m < -2 && t.pts10m < -0.5) return true;
   return false;
 }
 
-/** Clear UP tape — 10m rally or stacked shorts. */
+/** Clear UP tape — 5m rally or 5m+1m. */
 export function shortTapeUp(t: MultiTfTape): boolean {
-  if (t.pts10m > 1.5) return true;
+  if (t.pts5m > 1.2) return true;
   if (t.pts5m > 0.8 && t.pts1m > 0.35) return true;
-  if (t.pts25m > 2 && t.pts10m > 0.5) return true;
   return false;
 }
 
@@ -241,7 +233,7 @@ export function allowEntryAgainstImpulse(
       reason: `BLOCK SELL · multi-TF UP ${formatTf(t)} (only BUY)`,
     };
   }
-  if (direction === 'BUY' && shortTapeDown(t) && t.pts10m < -1.5 && t.pts25m < -1) {
+  if (direction === 'BUY' && shortTapeDown(t) && t.pts5m < -1.2) {
     return {
       ok: false,
       reason: `BLOCK BUY · multi-TF DOWN ${formatTf(t)} (only SELL)`,
@@ -268,22 +260,22 @@ export function zoneFadeAllowed(
 ): { ok: boolean; reason: string } {
   const s = String(setup || '').toUpperCase();
   if (s !== 'REJECT' && s !== 'BOUNCE') return { ok: true, reason: 'not a fade setup' };
-  const pts10m = netPtsLookback(bars, liveBar, 60);
-  const pts5m = netPtsLookback(bars, liveBar, 30);
+  const pts5m = netPtsLookback(bars, liveBar, BARS_5M);
+  const pts1m = netPtsLookback(bars, liveBar, BARS_1M);
   if (direction === 'SELL' && s === 'REJECT') {
     // Must have actual down tape — SUPPLY alone is not enough
-    if (pts10m > 0 || pts5m > 0) {
+    if (pts5m > 0 || pts1m > 0) {
       return {
         ok: false,
-        reason: `BLOCK SELL REJECT · tape still UP/flat 10m=${pts10m.toFixed(1)} 5m=${pts5m.toFixed(1)} (map≠fade)`,
+        reason: `BLOCK SELL REJECT · tape still UP/flat 5m=${pts5m.toFixed(1)} 1m=${pts1m.toFixed(1)} (map≠fade)`,
       };
     }
   }
   if (direction === 'BUY' && s === 'BOUNCE') {
-    if (pts10m < -1.5 || pts5m < -1.5) {
+    if (pts5m < -1.2 || (pts5m < -0.8 && pts1m < -0.35)) {
       return {
         ok: false,
-        reason: `BLOCK BUY BOUNCE · tape DOWN 10m=${pts10m.toFixed(1)} 5m=${pts5m.toFixed(1)} (map≠fade)`,
+        reason: `BLOCK BUY BOUNCE · tape DOWN 5m=${pts5m.toFixed(1)} 1m=${pts1m.toFixed(1)} (map≠fade)`,
       };
     }
   }
@@ -365,7 +357,7 @@ export function continuationSameSide(
 }
 
 /**
- * Multi-TF tape — 10m dominates. No regime / late / bar WAIT.
+ * Multi-TF tape — 5m + 1m only. No regime / late / bar WAIT.
  * UP → BUY, DOWN → SELL.
  */
 export function tapeSide(
@@ -374,35 +366,32 @@ export function tapeSide(
 ): {
   dir: 'BUY' | 'SELL' | null;
   pts90s: number;
+  pts1m: number;
   pts5m: number;
-  pts10m: number;
-  pts25m: number;
   reason: string;
 } {
   const t = multiTfPts(bars, liveBar);
   const pts90s = netPtsLookback(bars, liveBar, 9);
   const line = formatTf(t);
 
-  // Long UP stack → BUY only (never SELL)
+  // Clear UP (5m+1m) → BUY
   if (longTapeUp(t) || shortTapeUp(t)) {
     return {
       dir: 'BUY',
       pts90s,
+      pts1m: t.pts1m,
       pts5m: t.pts5m,
-      pts10m: t.pts10m,
-      pts25m: t.pts25m,
       reason: `TAPE UP · ${line}`,
     };
   }
 
-  // Clear DOWN (10m dump or 1–5) → SELL
+  // Clear DOWN (5m or 5m+1m) → SELL
   if (shortTapeDown(t)) {
     return {
       dir: 'SELL',
       pts90s,
+      pts1m: t.pts1m,
       pts5m: t.pts5m,
-      pts10m: t.pts10m,
-      pts25m: t.pts25m,
       reason: `TAPE DOWN · ${line}`,
     };
   }
@@ -410,9 +399,8 @@ export function tapeSide(
   return {
     dir: null,
     pts90s,
+    pts1m: t.pts1m,
     pts5m: t.pts5m,
-    pts10m: t.pts10m,
-    pts25m: t.pts25m,
     reason: `TAPE FLAT · ${line}`,
   };
 }

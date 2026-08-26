@@ -7,20 +7,18 @@ import {
 } from './microScalpThresholds.js';
 
 describe('microScalpThresholds', () => {
-  it('HardInv ~0.6pt on Gold — one loss must not wipe a stack of micro wins', () => {
+  it('HardInv ~1.2pt on Gold — not the ultra-tight 0.6pt', () => {
     expect(hardInvalidationDistance(4660)).toBe(HARD_INV_GOLD_PT);
-    expect(HARD_INV_GOLD_PT).toBe(0.6);
+    expect(HARD_INV_GOLD_PT).toBe(1.2);
     expect(HARD_INV_GOLD_PT).toBeLessThan(4660 * SAFETY_SL_PCT);
-    // Old -£0.19 @ 0.09 ≈ 2.1pt must be impossible under HardInv
-    expect(HARD_INV_GOLD_PT).toBeLessThan(1.2);
   });
 
-  it('short thesis pct matches ~0.6pt at Gold mid', () => {
+  it('short thesis pct matches ~1.2pt at Gold mid', () => {
     expect(SHORT_THESIS_MOVE_PCT * 4660).toBeCloseTo(HARD_INV_GOLD_PT, 0);
   });
 
-  it('Safety SL cushion ~0.04% — not the old 0.20% hole', () => {
-    expect(SAFETY_SL_PCT).toBe(0.0004);
-    expect(SAFETY_SL_PCT).toBeLessThan(0.001);
+  it('Safety SL cushion ~0.08% — wider than HardInv, not 0.20%', () => {
+    expect(SAFETY_SL_PCT).toBe(0.0008);
+    expect(SAFETY_SL_PCT).toBeLessThan(0.002);
   });
 });
