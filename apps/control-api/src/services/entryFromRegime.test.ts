@@ -13,7 +13,6 @@ function bar(open: number, close: number, i = 0, w = 1.5): TenSecBar {
   return { open_time_ms: i * 10_000, open, high, low, close, ticks: 8 };
 }
 
-/** Quiet base — flat tape. */
 function baseBars(): TenSecBar[] {
   const out: TenSecBar[] = [];
   for (let i = 0; i < 12; i++) {
@@ -23,17 +22,16 @@ function baseBars(): TenSecBar[] {
   return out;
 }
 
-describe('10s tape-follow entry', () => {
+describe('10s multi-TF entry', () => {
   it('skips flat chop — no direction', () => {
     const bars = baseBars();
     const sigBar = bar(4500.4, 4500.5, 12, 0.3);
     expect(tapeSide(bars, sigBar).dir).toBeNull();
-    expect(decideEntryFrom10sRegime(sigBar, 'COMPRESSION', bars)).toBeNull();
-    expect(decideEntryFrom10sRegime(sigBar, 'RANGE', bars)).toBeNull();
     expect(decideEntryFrom10sRegime(sigBar, 'UNKNOWN', bars)).toBeNull();
+    expect(decideEntryFrom10sRegime(sigBar, 'COMPRESSION', bars)).toBeNull();
   });
 
-  it('skips EXPANSION without clear slope (no random color)', () => {
+  it('skips EXPANSION without clear slope', () => {
     const bars = baseBars();
     const midFlat = {
       open_time_ms: 12 * 10_000,
@@ -46,26 +44,31 @@ describe('10s tape-follow entry', () => {
     expect(decideEntryFrom10sRegime(midFlat, 'EXPANSION', bars)).toBeNull();
   });
 
-  it('explainNoEntry surfaces tape flat', () => {
+  it('explainNoEntry is NO ENTRY not regime WAIT', () => {
     const bars = baseBars();
     const quiet = bar(4500.5, 4500.55, 12, 0.2);
-    expect(explainNoEntry(quiet, 'TREND_UP', bars)).toMatch(/WAIT|TAPE FLAT|need UP→BUY/i);
+    const msg = explainNoEntry(quiet, 'UNKNOWN', bars);
+    expect(msg).toMatch(/NO ENTRY|TAPE FLAT/i);
+    expect(msg).not.toMatch(/^WAIT ·/);
   });
 
-  it('continuationSameSide holds with TREND_UP + green', () => {
-    const bars = baseBars();
-    const green = bar(4502, 4503.5, 12);
-    const c = continuationSameSide('BUY', green, 'TREND_UP', bars);
+  it('continuationSameSide holds with UP tape', () => {
+    const bars: TenSecBar[] = [];
+    for (let i = 0; i < 60; i++) {
+      const o = 4500 + i * 0.08;
+      bars.push(bar(o, o + 0.1, i, 0.3));
+    }
+    const green = bar(4505, 4505.4, 60, 0.3);
+    const c = continuationSameSide('BUY', green, 'UNKNOWN', bars);
     expect(c.ok).toBe(true);
-    expect(c.reason).toMatch(/continuation/i);
   });
 
   it('continuationSameSide rejects flipped market', () => {
     const dump: TenSecBar[] = [];
-    for (let i = 0; i < 10; i++) {
-      dump.push(bar(4520 - i * 2, 4518 - i * 2, i, 1));
+    for (let i = 0; i < 40; i++) {
+      dump.push(bar(4520 - i * 0.2, 4519.8 - i * 0.2, i, 0.4));
     }
-    const red = bar(4500, 4497, 10);
+    const red = bar(4500, 4499.5, 40, 0.3);
     const c = continuationSameSide('BUY', red, 'TREND_DOWN', dump);
     expect(c.ok).toBe(false);
   });
