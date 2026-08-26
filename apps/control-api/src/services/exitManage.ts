@@ -91,12 +91,12 @@ export function bestOutcomeMinGreen(entry: number): number {
 }
 
 /**
- * PeakProtect: exit when kept MFE drops below 75% (give back max ~25%).
- * Trigger slightly early (78%) so Capital latency doesn't land at +0.06 after +0.25.
+ * PeakProtect: exit when kept MFE drops below 70% (give back max ~30%).
+ * Trigger slightly early (73%) so Capital latency doesn't overshoot the lock.
  */
-export const BEST_OUTCOME_LOCK_RETENTION = 0.75;
-/** Fire PeakProtect when ret falls under this (buffer above 75% for exit lag). */
-export const BEST_OUTCOME_LOCK_TRIGGER = 0.78;
+export const BEST_OUTCOME_LOCK_RETENTION = 0.7;
+/** Fire PeakProtect when ret falls under this (buffer above 70% for exit lag). */
+export const BEST_OUTCOME_LOCK_TRIGGER = 0.73;
 
 export function isHardBoReason(reason: string): boolean {
   return /HardInvalidation|ThesisFailure · short|PeakProtection/i.test(reason);
@@ -154,7 +154,7 @@ export function decideBestOutcomeExit(
     };
   }
 
-  // PeakProtect — max ~25% giveback. Trigger @78% so exit lag doesn't land at +0.06 after +0.25
+  // PeakProtect — max ~30% giveback. Trigger @73% so exit lag doesn't overshoot 70% lock
   if (armed && ret != null && ret < BEST_OUTCOME_LOCK_TRIGGER && fav > 0) {
     return {
       exit: true,
