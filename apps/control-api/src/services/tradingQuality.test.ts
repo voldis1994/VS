@@ -5,7 +5,7 @@ import {
 } from './capitalCom.js';
 
 describe('safety SL cushion', () => {
-  it('places BUY stop below mid (~0.20%) — wider than HardInv ~2.5pt', () => {
+  it('places BUY stop below mid (~0.20%) — wider than HardInv ~1.9pt', () => {
     const mid = 2000;
     const level = computeSafetyCushionStopLevel('BUY', mid, {
       bid: 1999.8,

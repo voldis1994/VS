@@ -4,11 +4,11 @@
  * Safety SL ~0.20% (~9pt) stays broker last-resort only.
  */
 
-/** HardInv cut in price points — Gold ~4660 → 2.5pt max pain on 10s. */
-export const HARD_INV_GOLD_PT = 2.5;
+/** HardInv cut in price points — Gold ~4660 → 1.9pt max pain on 10s. */
+export const HARD_INV_GOLD_PT = 1.9;
 
-/** Short-window thesis failure (~6×10s bars) — ~2.5pt / 4660. */
-export const SHORT_THESIS_MOVE_PCT = 0.00054;
+/** Short-window thesis failure (~6×10s bars) — ~1.9pt / 4660. */
+export const SHORT_THESIS_MOVE_PCT = 0.000408;
 
 /** HardInv distance in price points for any instrument. */
 export function hardInvalidationDistance(entry: number): number {
