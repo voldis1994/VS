@@ -3,6 +3,7 @@ import {
   continuationSameSide,
   decideEntryFrom10sRegime,
   explainNoEntry,
+  tapeSide,
 } from './entryFromRegime.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 
@@ -12,7 +13,7 @@ function bar(open: number, close: number, i = 0, w = 1.5): TenSecBar {
   return { open_time_ms: i * 10_000, open, high, low, close, ticks: 8 };
 }
 
-/** Quiet base then breakout-ready history for zone. */
+/** Quiet base — flat tape. */
 function baseBars(): TenSecBar[] {
   const out: TenSecBar[] = [];
   for (let i = 0; i < 12; i++) {
@@ -22,10 +23,11 @@ function baseBars(): TenSecBar[] {
   return out;
 }
 
-describe('10s zone entry', () => {
-  it('skips mid-chop without zone edge', () => {
+describe('10s tape-follow entry', () => {
+  it('skips flat chop — no direction', () => {
     const bars = baseBars();
-    const sigBar = bar(4501, 4501.1, 12, 0.3);
+    const sigBar = bar(4500.4, 4500.5, 12, 0.3);
+    expect(tapeSide(bars, sigBar).dir).toBeNull();
     expect(decideEntryFrom10sRegime(sigBar, 'COMPRESSION', bars)).toBeNull();
     expect(decideEntryFrom10sRegime(sigBar, 'RANGE', bars)).toBeNull();
     expect(decideEntryFrom10sRegime(sigBar, 'UNKNOWN', bars)).toBeNull();
@@ -44,10 +46,10 @@ describe('10s zone entry', () => {
     expect(decideEntryFrom10sRegime(midFlat, 'EXPANSION', bars)).toBeNull();
   });
 
-  it('explainNoEntry surfaces zone state', () => {
+  it('explainNoEntry surfaces tape flat', () => {
     const bars = baseBars();
     const quiet = bar(4500.5, 4500.55, 12, 0.2);
-    expect(explainNoEntry(quiet, 'TREND_UP', bars)).toMatch(/WAIT|ZONE|flat/i);
+    expect(explainNoEntry(quiet, 'TREND_UP', bars)).toMatch(/WAIT|TAPE FLAT|need UP→BUY/i);
   });
 
   it('continuationSameSide holds with TREND_UP + green', () => {

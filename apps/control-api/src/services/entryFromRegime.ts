@@ -1,14 +1,13 @@
 /**
- * 10s regime + zone entry.
- * Thesis = market direction / regime; structure = zone; bar = timing.
- * No EXPANSION candle-color follow. No stupid trades without zone.
+ * 10s tape-follow entry.
+ * Rule: tape UP → BUY, tape DOWN → SELL. Zone = MAP only (not a setup wait).
+ * Still block: fade against tape, late climax chase, signal bar already ran.
  */
 import type { RegimeName } from './regimes.js';
 import { describeRegimeContext, normalizeRegime } from './regimes.js';
-import { bodyPct, isMoving10s, rangePct, type TenSecBar } from './tenSecondOhlc.js';
+import { bodyPct, rangePct, type TenSecBar } from './tenSecondOhlc.js';
 import {
   buildScalpZone,
-  diagnoseZoneBuild,
   evaluateZoneEntry,
   formatZoneInfo,
   type ScalpZone,
@@ -22,12 +21,6 @@ export type RegimeEntry = {
   zone?: ScalpZone | null;
   zone_setup?: ZoneSetup | null;
 };
-
-/** Soft live on 10s — moving bar, not flat doji. */
-function softLive(bar: TenSecBar): boolean {
-  const pts = Math.abs(bar.close - bar.open);
-  return pts >= 0.4 || rangePct(bar) >= 0.00015 || isMoving10s(bar);
-}
 
 function isGreen(bar: TenSecBar): boolean {
   return bar.close > bar.open;
@@ -143,33 +136,27 @@ export function blockEntryAtExtreme(
   bars: TenSecBar[] | null | undefined,
   bar: TenSecBar
 ): { ok: boolean; reason: string } {
-  const struct = structNetMove(bars, 24);
-  if (!bars?.length || struct.dir == null) return { ok: true, reason: 'no struct extreme gate' };
+  const all = bars ?? [];
+  if (all.length < 8) return { ok: true, reason: 'no struct extreme gate' };
 
-  const recent = bars.slice(-24);
+  // Prefer ~10 min window for "already at climax"
+  const recent = all.slice(-Math.min(60, all.length));
   const high = Math.max(...recent.map((b) => b.high));
   const low = Math.min(...recent.map((b) => b.low));
   const range = Math.max(high - low, 0.01);
   const price = bar.close;
+  const net = recent[recent.length - 1]!.close - recent[0]!.open;
 
-  if (
-    direction === 'SELL' &&
-    struct.netPct <= -0.003 &&
-    price <= low + range * 0.2
-  ) {
+  if (direction === 'SELL' && net <= -3 && price <= low + range * 0.25) {
     return {
       ok: false,
-      reason: `BLOCK SELL · struct dump ${struct.netPts.toFixed(1)}pt · at swing low (no fade bottom)`,
+      reason: `BLOCK SELL · dump ${net.toFixed(1)}pt · at swing low (no chase bottom)`,
     };
   }
-  if (
-    direction === 'BUY' &&
-    struct.netPct >= 0.003 &&
-    price >= high - range * 0.2
-  ) {
+  if (direction === 'BUY' && net >= 3 && price >= high - range * 0.25) {
     return {
       ok: false,
-      reason: `BLOCK BUY · struct rally ${struct.netPts.toFixed(1)}pt · at swing high (no chase top)`,
+      reason: `BLOCK BUY · rally ${net.toFixed(1)}pt · at swing high (no chase top)`,
     };
   }
   return { ok: true, reason: 'struct extreme ok' };
@@ -181,9 +168,6 @@ const HARD_BLOCK_REGIMES: RegimeName[] = [
   'FAILED_BREAKOUT_UP',
   'FAILED_BREAKOUT_DOWN',
 ];
-
-/** Flat labels — still trade when short/struct trend is clear (was hard-blocked → overnight WAIT). */
-const CHOP_REGIMES: RegimeName[] = ['COMPRESSION', 'RANGE', 'UNKNOWN'];
 
 /**
  * Hard anti-fade (10s brain).
@@ -242,6 +226,57 @@ export function allowEntryAgainstImpulse(
   return { ok: true, reason: 'tape aligns with entry' };
 }
 
+/**
+ * Block BUY/SELL after the move already happened (WAIT all trend → chase climax).
+ * 10s brain: enter WITH early trend / pullback — not at the end.
+ */
+export function blockLateTrendChase(
+  direction: 'BUY' | 'SELL',
+  bars: TenSecBar[] | null | undefined,
+  liveBar?: TenSecBar | null
+): { ok: boolean; reason: string } {
+  const all = withLive(bars, liveBar);
+  if (all.length < 8) return { ok: true, reason: 'not enough bars' };
+  const pts5m = netPtsLookback(bars, liveBar, 30);
+  const pts10m = netPtsLookback(bars, liveBar, 60);
+  const window = all.slice(-Math.min(60, all.length));
+  const hi = Math.max(...window.map((b) => b.high));
+  const lo = Math.min(...window.map((b) => b.low));
+  const span = Math.max(hi - lo, 0.01);
+  const price = (liveBar ?? window[window.length - 1]!).close;
+  const pos = (price - lo) / span; // 0=swing low, 1=swing high
+
+  if (direction === 'BUY') {
+    if (pts10m > 6 || pts5m > 4) {
+      return {
+        ok: false,
+        reason: `BLOCK BUY · too late · trend already ran 10m=+${pts10m.toFixed(1)} 5m=+${pts5m.toFixed(1)}`,
+      };
+    }
+    if (pts10m > 3 && pos >= 0.72) {
+      return {
+        ok: false,
+        reason: `BLOCK BUY · chase top · 10m=+${pts10m.toFixed(1)}pt · @${(pos * 100).toFixed(0)}% of range`,
+      };
+    }
+  }
+  if (direction === 'SELL') {
+    if (pts10m < -6 || pts5m < -4) {
+      return {
+        ok: false,
+        reason: `BLOCK SELL · too late · dump already ran 10m=${pts10m.toFixed(1)} 5m=${pts5m.toFixed(1)}`,
+      };
+    }
+    if (pts10m < -3 && pos <= 0.28) {
+      return {
+        ok: false,
+        reason: `BLOCK SELL · chase bottom · 10m=${pts10m.toFixed(1)}pt · @${(pos * 100).toFixed(0)}% of range`,
+      };
+    }
+  }
+  return { ok: true, reason: 'not a late chase' };
+}
+
 /** REJECT/BOUNCE fade only WITH tape — not against it. */
 export function zoneFadeAllowed(
   direction: 'BUY' | 'SELL',
@@ -275,12 +310,10 @@ export function zoneFadeAllowed(
 
 export function lateChaseAppliesToSetup(
   setup: RegimeEntry['setup'],
-  regime?: string | null
+  _regime?: string | null
 ): boolean {
-  const r = normalizeRegime(regime);
-  if (r === 'TREND_UP' || r === 'TREND_DOWN') return false;
-  if (r === 'PULLBACK_UPTREND' || r === 'PULLBACK_DOWNTREND') return false;
-  return setup === 'BREAKOUT' || setup === 'CONTINUATION';
+  // Always apply late-chase gate — TREND regimes used to skip it → BUY at climax
+  return setup === 'BREAKOUT' || setup === 'CONTINUATION' || setup === 'PULLBACK';
 }
 
 function regimeBias(r: RegimeName): 'BUY' | 'SELL' | null {
@@ -301,13 +334,6 @@ export function marketDirection(
   return regimeBias(normalizeRegime(regime));
 }
 
-function mapZoneSetup(z: ZoneSetup | null | undefined, r: RegimeName): RegimeEntry['setup'] {
-  if (z === 'BREAKOUT') return 'BREAKOUT';
-  if (z === 'BOUNCE' || z === 'REJECT' || z === 'RETEST') return 'PULLBACK';
-  if (r.includes('BREAKOUT')) return 'BREAKOUT';
-  return 'CONTINUATION';
-}
-
 export function explainNoEntry(
   bar: TenSecBar,
   regime?: string | null,
@@ -315,68 +341,28 @@ export function explainNoEntry(
 ): string {
   const r = normalizeRegime(regime);
   const zone = buildScalpZone(closedBars);
-  const short = shortNetMove(closedBars, bar);
-  const struct = structNetMove(closedBars, 24);
   const regimeLine = describeRegimeContext(closedBars, r);
   const zoneLine = formatZoneInfo(zone, closedBars);
   const barLine = `signal bar body=${(bodyPct(bar) * 100).toFixed(2)}% rng=${(rangePct(bar) * 100).toFixed(3)}%`;
+  const tape = tapeSide(closedBars, bar);
 
   if (HARD_BLOCK_REGIMES.includes(r)) {
     return `WAIT · ${regimeLine} · ${zoneLine} · ${barLine}`;
   }
-  if (!zone) {
-    return `WAIT · zone required · ${zoneLine} · ${regimeLine} · ${barLine}`;
-  }
   if (signalBarTooLate(bar)) {
-    return `WAIT · too late (bar already ran) · ${zoneLine} · ${regimeLine} · ${barLine}`;
+    return `WAIT · too late (bar already ran) · ${tape.reason} · ${barLine}`;
   }
-
-  const buyZ = evaluateZoneEntry('BUY', bar, zone, closedBars);
-  const sellZ = evaluateZoneEntry('SELL', bar, zone, closedBars);
-  if (buyZ.ok || sellZ.ok) {
-    const dir = buyZ.ok ? 'BUY' : 'SELL';
-    const vs = allowEntryAgainstImpulse(dir, closedBars, bar);
-    if (!vs.ok) {
-      return `WAIT · ${vs.reason} · ${zoneLine} · ${regimeLine}`;
-    }
-    return `WAIT · zone edge ready but filters · ${buyZ.ok ? buyZ.reason : sellZ.reason} · ${regimeLine}`;
+  if (!tape.dir) {
+    return `WAIT · ${tape.reason} · need UP→BUY or DOWN→SELL · ${zoneLine}`;
   }
-
-  // Mid-box: honest "scalp edges only"
-  return `WAIT · scalp edges only · price mid-zone · ${zoneLine} · ${regimeLine} · short ${short.netPts.toFixed(1)}pt · tape10 ${tenMinTape(closedBars, bar).netPts.toFixed(1)}pt · ${barLine}`;
+  const vs = allowEntryAgainstImpulse(tape.dir, closedBars, bar);
+  if (!vs.ok) return `WAIT · ${vs.reason} · ${tape.reason}`;
+  const late = blockLateTrendChase(tape.dir, closedBars, bar);
+  if (!late.ok) return `WAIT · ${late.reason} · ${tape.reason}`;
+  const extreme = blockEntryAtExtreme(tape.dir, closedBars, bar);
+  if (!extreme.ok) return `WAIT · ${extreme.reason} · ${tape.reason}`;
+  return `WAIT · filters · ${tape.reason} · ${regimeLine} · ${barLine}`;
 }
-
-/**
- * Pick real zone setup — BOUNCE/REJECT/RETEST/BREAKOUT at edges.
- * Does NOT invent mid-box trades from flat short slope.
- */
-function pickZoneSetup(
-  bar: TenSecBar,
-  zone: ScalpZone,
-  closedBars: TenSecBar[] | null | undefined,
-  prefer: 'BUY' | 'SELL' | null
-): { dir: 'BUY' | 'SELL'; zv: ReturnType<typeof evaluateZoneEntry> } | null {
-  const order: Array<'BUY' | 'SELL'> =
-    prefer === 'SELL' ? ['SELL', 'BUY'] : prefer === 'BUY' ? ['BUY', 'SELL'] : ['BUY', 'SELL'];
-  for (const dir of order) {
-    const zv = evaluateZoneEntry(dir, bar, zone, closedBars);
-    if (!zv.ok || !zv.setup) continue;
-    if (zv.setup === 'BOUNCE' && dir === 'BUY' && isRed(bar) && bodyPct(bar) < -0.001) continue;
-    if (zv.setup === 'REJECT' && dir === 'SELL' && isGreen(bar) && bodyPct(bar) > 0.001) continue;
-    return { dir, zv };
-  }
-  return null;
-}
-
-const TREND_REGIMES: RegimeName[] = [
-  'TREND_UP',
-  'TREND_DOWN',
-  'PULLBACK_UPTREND',
-  'PULLBACK_DOWNTREND',
-  'BREAKOUT_UP',
-  'BREAKOUT_DOWN',
-  'EXPANSION',
-];
 
 /**
  * Continuation check for BO — same side still valid (zone optional soft).
@@ -424,6 +410,57 @@ export function continuationSameSide(
   return { ok: false, reason: 'no clear continuation signal' };
 }
 
+/**
+ * Simple tape side: UP → BUY, DOWN → SELL.
+ * No "wait for perfect zone setup" — zone is map only.
+ */
+export function tapeSide(
+  bars: TenSecBar[] | null | undefined,
+  liveBar?: TenSecBar | null
+): { dir: 'BUY' | 'SELL' | null; pts90s: number; pts5m: number; pts10m: number; reason: string } {
+  const pts90s = netPtsLookback(bars, liveBar, 9);
+  const pts3m = netPtsLookback(bars, liveBar, 18);
+  const pts5m = netPtsLookback(bars, liveBar, 30);
+  const pts10m = netPtsLookback(bars, liveBar, 60);
+
+  let up = 0;
+  let down = 0;
+  if (pts90s > 0.8) up += 2;
+  if (pts90s < -0.8) down += 2;
+  if (pts3m > 1.2) up += 2;
+  if (pts3m < -1.2) down += 2;
+  if (pts5m > 1.5) up += 3;
+  if (pts5m < -1.5) down += 3;
+  if (pts10m > 2) up += 3;
+  if (pts10m < -2) down += 3;
+
+  if (up > down && up >= 2) {
+    return {
+      dir: 'BUY',
+      pts90s,
+      pts5m,
+      pts10m,
+      reason: `TAPE UP · 90s=${pts90s.toFixed(1)} 5m=${pts5m.toFixed(1)} 10m=${pts10m.toFixed(1)}`,
+    };
+  }
+  if (down > up && down >= 2) {
+    return {
+      dir: 'SELL',
+      pts90s,
+      pts5m,
+      pts10m,
+      reason: `TAPE DOWN · 90s=${pts90s.toFixed(1)} 5m=${pts5m.toFixed(1)} 10m=${pts10m.toFixed(1)}`,
+    };
+  }
+  return {
+    dir: null,
+    pts90s,
+    pts5m,
+    pts10m,
+    reason: `TAPE FLAT · 90s=${pts90s.toFixed(1)} 5m=${pts5m.toFixed(1)} 10m=${pts10m.toFixed(1)}`,
+  };
+}
+
 export function decideEntryFrom10sRegime(
   bar: TenSecBar,
   regime?: string | null,
@@ -433,68 +470,27 @@ export function decideEntryFrom10sRegime(
   const candle = describe(bar);
 
   if (HARD_BLOCK_REGIMES.includes(r)) return null;
-
-  const zone = buildScalpZone(closedBars);
-  if (!zone) return null;
-
   if (signalBarTooLate(bar)) return null;
 
-  const short = shortNetMove(closedBars, bar);
-  const struct = structNetMove(closedBars, 24);
-  const tape10 = tenMinTape(closedBars, bar);
-  const prefer =
-    short.dir === 'UP' || tape10.dir === 'UP' || struct.dir === 'UP'
-      ? 'BUY'
-      : short.dir === 'DOWN' || tape10.dir === 'DOWN' || struct.dir === 'DOWN'
-        ? 'SELL'
-        : marketDirection(regime, closedBars, bar);
+  // ——— Simple rule: tape UP = BUY, tape DOWN = SELL ———
+  const tape = tapeSide(closedBars, bar);
+  if (!tape.dir) return null;
 
-  // ——— Real setup: zone edge is MAP location — tape (10s/~10m) decides side ———
-  const picked = pickZoneSetup(bar, zone, closedBars, prefer);
-  if (picked) {
-    const vsTape = allowEntryAgainstImpulse(picked.dir, closedBars, bar);
-    if (!vsTape.ok) return null;
-    const fadeOk = zoneFadeAllowed(picked.dir, picked.zv.setup, closedBars, bar);
-    if (!fadeOk.ok) return null;
-    const extreme = blockEntryAtExtreme(picked.dir, closedBars, bar);
-    if (!extreme.ok) return null;
-    // Soft live: bounce/reject can be small — allow edge touch with ticks
-    if (!softLive(bar) && picked.zv.setup !== 'BOUNCE' && picked.zv.setup !== 'REJECT') {
-      return null;
-    }
-    return {
-      direction: picked.dir,
-      setup: mapZoneSetup(picked.zv.setup, r),
-      reason: `${r} · SETUP ${picked.zv.setup} · ${picked.zv.reason} · tape OK · ${candle}`,
-      zone,
-      zone_setup: picked.zv.setup,
-    };
-  }
+  const vsTape = allowEntryAgainstImpulse(tape.dir, closedBars, bar);
+  if (!vsTape.ok) return null;
 
-  // ——— Mid-zone: only with clear TREND regime + slope (not RANGE chase) ———
-  if (!TREND_REGIMES.includes(r)) return null;
-  if (r === 'EXPANSION' && !short.dir) return null;
+  const late = blockLateTrendChase(tape.dir, closedBars, bar);
+  if (!late.ok) return null;
 
-  let dir = marketDirection(regime, closedBars, bar);
-  if (CHOP_REGIMES.includes(r)) return null; // never mid-chase RANGE
-  if (!dir) return null;
-  if (!softLive(bar)) return null;
-
-  const extreme = blockEntryAtExtreme(dir, closedBars, bar);
+  const extreme = blockEntryAtExtreme(tape.dir, closedBars, bar);
   if (!extreme.ok) return null;
 
-  // Already ran hard in short window → too late for mid continuation
-  if (short.dir && Math.abs(short.netPct) >= 0.0015) return null;
-
-  const aligned =
-    (dir === 'BUY' && (short.dir === 'UP' || struct.dir === 'UP' || r === 'TREND_UP' || r === 'PULLBACK_UPTREND' || r === 'BREAKOUT_UP')) ||
-    (dir === 'SELL' && (short.dir === 'DOWN' || struct.dir === 'DOWN' || r === 'TREND_DOWN' || r === 'PULLBACK_DOWNTREND' || r === 'BREAKOUT_DOWN'));
-  if (!aligned) return null;
+  const zone = buildScalpZone(closedBars);
 
   return {
-    direction: dir,
+    direction: tape.dir,
     setup: 'CONTINUATION',
-    reason: `${r} · CONTINUATION trend mid-zone · short ${short.netPts.toFixed(1)}pt · ${candle}`,
+    reason: `${tape.reason} · ${r} · ${candle}`,
     zone,
     zone_setup: null,
   };
