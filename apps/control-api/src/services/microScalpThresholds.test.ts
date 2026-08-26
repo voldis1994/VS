@@ -14,8 +14,8 @@ describe('microScalpThresholds', () => {
     expect(HARD_INV_GOLD_PT).toBeLessThan(4660 * SAFETY_SL_PCT);
   });
 
-  it('short dump/rally thesis = 4.0pt at Gold mid', () => {
-    expect(SHORT_THESIS_GOLD_PT).toBe(4.0);
+  it('short dump/rally thesis = 3.0pt at Gold mid', () => {
+    expect(SHORT_THESIS_GOLD_PT).toBe(3.0);
     expect(SHORT_THESIS_MOVE_PCT * 4660).toBeCloseTo(SHORT_THESIS_GOLD_PT, 5);
     expect(SHORT_THESIS_GOLD_PT).toBeGreaterThan(HARD_INV_GOLD_PT);
   });

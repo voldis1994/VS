@@ -5,8 +5,8 @@
 /** HardInv cut in price points — Gold ~4660 → 2.0pt (user). */
 export const HARD_INV_GOLD_PT = 2.0;
 
-/** Short-window dump/rally thesis (~6–9×10s bars) — 4.0pt Gold (user). */
-export const SHORT_THESIS_GOLD_PT = 4.0;
+/** Short-window dump/rally thesis (~6–9×10s bars) — 3.0pt Gold (user). */
+export const SHORT_THESIS_GOLD_PT = 3.0;
 /** Pct form of short thesis at Gold ~4660 mid. */
 export const SHORT_THESIS_MOVE_PCT = SHORT_THESIS_GOLD_PT / 4660;
 
