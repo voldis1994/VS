@@ -23,7 +23,7 @@ function baseBars(): TenSecBar[] {
 }
 
 describe('10s zone entry', () => {
-  it('skips chop without short/struct trend', () => {
+  it('skips mid-chop without zone edge', () => {
     const bars = baseBars();
     const sigBar = bar(4501, 4501.1, 12, 0.3);
     expect(decideEntryFrom10sRegime(sigBar, 'COMPRESSION', bars)).toBeNull();
@@ -33,8 +33,15 @@ describe('10s zone entry', () => {
 
   it('skips EXPANSION without clear slope (no random color)', () => {
     const bars = baseBars();
-    const green = bar(4501, 4502.2, 12);
-    expect(decideEntryFrom10sRegime(green, 'EXPANSION', bars)).toBeNull();
+    const midFlat = {
+      open_time_ms: 12 * 10_000,
+      open: 4500.5,
+      high: 4500.7,
+      low: 4500.3,
+      close: 4500.55,
+      ticks: 8,
+    };
+    expect(decideEntryFrom10sRegime(midFlat, 'EXPANSION', bars)).toBeNull();
   });
 
   it('explainNoEntry surfaces zone state', () => {

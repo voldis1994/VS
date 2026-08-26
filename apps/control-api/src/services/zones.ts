@@ -182,13 +182,14 @@ export function evaluateZoneEntry(
   priorBars?: TenSecBar[] | null
 ): ZoneVerdict {
   const hist = [...(priorBars ?? []), bar];
-  const band = (zone.high - zone.low) * 0.35;
+  /** Edge band — 20% of box (was 35% → mid-price looked like demand bounce). */
+  const band = (zone.high - zone.low) * 0.2;
   const bp = bodyPct(bar);
 
   if (direction === 'BUY') {
     // Fresh breakout through supply/box high
     if (bar.close > zone.high && bar.open <= zone.high + band * 0.5) {
-      if (bp > 0.0035) {
+      if (bp > 0.0015) {
         return { ok: false, setup: null, reason: 'ZONE · breakout bar exhausted — no chase' };
       }
       return {
@@ -233,7 +234,7 @@ export function evaluateZoneEntry(
 
   // SELL
   if (bar.close < zone.low && bar.open >= zone.low - band * 0.5) {
-    if (bp < -0.0035) {
+    if (bp < -0.0015) {
       return { ok: false, setup: null, reason: 'ZONE · breakdown bar exhausted — no chase' };
     }
     return {
