@@ -28,7 +28,7 @@ import {
   toLiveRegime,
   type RegimeName,
 } from './regimes.js';
-import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove } from './exitManage.js';
+import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove, manageExitPrice } from './exitManage.js';
 import {
   allowEntryAgainstImpulse,
   buildScalpZone,
@@ -535,7 +535,7 @@ function writeJournalClose(
 }
 
 /**
- * SAFETY SL as LAST RESORT (~0.20% / ~9pt) — wider than HardInv ~1.9pt.
+ * SAFETY SL as LAST RESORT (~0.08% / ~3.7pt) — wider than HardInv ~1.2pt.
  * Best Outcome / HardInvalidation must fire first; Capital Limit SL only on disaster.
  */
 function safetyStopLevel(
@@ -563,7 +563,7 @@ function safetyStopLevel(
         ? Math.max(ask - bid, 0)
         : abs * 0.00005;
 
-  const pctCushion = abs * 0.002; // 0.20% Safety SL (#136) — last resort; HardInv ~1.9pt first
+  const pctCushion = abs * 0.0008; // ~0.08% Safety SL — last resort; HardInv ~1.2pt first
   const brokerMin =
     minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
       ? minStopDistance
@@ -579,14 +579,14 @@ function safetyStopLevel(
   return Math.round(raw * 1e6) / 1e6;
 }
 
-/** Cushion stopDistance in Capital POINTS (≥ 1.5× min, ~0.20% when point size known). */
+/** Cushion stopDistance in Capital POINTS (≥ 1.5× min, ~0.08% when point size known). */
 function safetyStopDistancePts(
   mid: number,
   minPts: number,
   pointSize: number | null
 ): number {
   const abs = Math.max(Math.abs(mid), 1e-9);
-  const pct = abs * 0.002;
+  const pct = abs * 0.0008;
   let fromPct = minPts * 1.5;
   if (pointSize != null && pointSize > 0) {
     fromPct = Math.max(fromPct, pct / pointSize);
@@ -1455,8 +1455,11 @@ async function robotCycleBody(s: Internal) {
       });
     }
 
-    if (quote.mid != null && s.open_side && s.entry_price != null) {
-      updateExcursion(s, quote.mid, brokerOpen?.upl ?? s.unrealized);
+    if (s.open_side && s.entry_price != null) {
+      const excPx = manageExitPrice(s.open_side, quote);
+      if (excPx != null) {
+        updateExcursion(s, excPx, brokerOpen?.upl ?? s.unrealized);
+      }
     }
 
     pushTick(s, {
@@ -1483,10 +1486,14 @@ async function robotCycleBody(s: Internal) {
     // ——— MANAGE open trade: never send entry ———
     if (s.open_side || brokerOpen) {
       s.mode = 'MANAGE';
-      if (quote.mid == null) return;
+      const liveSide = s.open_side || brokerOpen?.direction || null;
+      const exitPx =
+        liveSide === 'BUY' || liveSide === 'SELL'
+          ? manageExitPrice(liveSide, quote)
+          : quote.mid;
+      if (exitPx == null) return;
 
       const short = shortNetMove(s.closedBars, s.ohlcState.forming ?? s.ohlcState.last_closed);
-      const liveSide = s.open_side || brokerOpen?.direction || null;
       if (liveSide === 'BUY' || liveSide === 'SELL') {
         const desk = deskOpensOnEpic(sessions.values(), s.epic, s.id);
         const hasOpposite =
@@ -1509,9 +1516,10 @@ async function robotCycleBody(s: Internal) {
           ? continuationSameSide(liveSide, signalForCont, s.regime, s.closedBars)
           : { ok: false, reason: '' };
 
+      // HardInv / PeakProtect on adverse fill (bid if BUY, ask if SELL) — mid understates loss
       const decision = decideBestOutcomeExit(
         { ...s, short_net_pct: short.netPct },
-        quote.mid,
+        exitPx,
         { continuationSameSide: cont.ok }
       );
       if (decision.exit) {
@@ -1533,7 +1541,7 @@ async function robotCycleBody(s: Internal) {
         } · ${
           describeBestOutcomeState(
             { ...s, short_net_pct: short.netPct },
-            quote.mid,
+            exitPx,
             { continuationSameSide: cont.ok, continuationReason: cont.reason }
           ).hold
         }`,

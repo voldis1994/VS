@@ -25,6 +25,24 @@ export function favorableMove(side: ExitSide, entry: number, mid: number): numbe
   return side === 'BUY' ? mid - entry : entry - mid;
 }
 
+/**
+ * Price to evaluate BO exits.
+ * HardInv / PeakProtect must use adverse fill side — mid understates loss by the spread.
+ * BUY open → exit sells at bid; SELL open → exit buys at ask.
+ */
+export function manageExitPrice(
+  side: ExitSide,
+  quote: { bid?: number | null; ask?: number | null; mid?: number | null }
+): number | null {
+  if (side === 'BUY') {
+    if (quote.bid != null && Number.isFinite(quote.bid)) return quote.bid;
+  } else {
+    if (quote.ask != null && Number.isFinite(quote.ask)) return quote.ask;
+  }
+  if (quote.mid != null && Number.isFinite(quote.mid)) return quote.mid;
+  return null;
+}
+
 export function thesisFailureReason(
   side: ExitSide,
   regime?: string | null
