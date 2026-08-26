@@ -5,8 +5,10 @@
 /** HardInv cut in price points — Gold ~4660 → 2.0pt (user). */
 export const HARD_INV_GOLD_PT = 2.0;
 
-/** Short-window thesis failure (~6×10s bars) — ~2.0pt / 4660. */
-export const SHORT_THESIS_MOVE_PCT = 0.000429;
+/** Short-window dump/rally thesis (~6–9×10s bars) — 4.0pt Gold (user). */
+export const SHORT_THESIS_GOLD_PT = 4.0;
+/** Pct form of short thesis at Gold ~4660 mid. */
+export const SHORT_THESIS_MOVE_PCT = SHORT_THESIS_GOLD_PT / 4660;
 
 /**
  * Capital Safety SL last-resort cushion (~0.08% ≈ 3.7pt Gold).
