@@ -1112,7 +1112,7 @@ export async function ensureCapitalStopVisible(
   };
 }
 
-/** ~0.08% Safety SL — broker last resort; HardInv 2.0pt fires first on 10s Gold. */
+/** ~0.20% Safety SL — broker last resort; HardInv 2.0pt fires first on 10s Gold. */
 export function computeSafetyCushionStopLevel(
   direction: 'BUY' | 'SELL',
   mid: number,

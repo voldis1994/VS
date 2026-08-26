@@ -216,57 +216,37 @@ export function shortTapeUp(t: MultiTfTape): boolean {
   return false;
 }
 
-/** Soft bias — start of move (old entry waited 0.8–1.2pt = late). */
+/** Soft bias — enter early, no finished-move wait. */
 export function softBiasUp(t: MultiTfTape): boolean {
-  return t.pts5m >= 0.5 && t.pts1m > 0;
+  return t.pts5m >= 0.35 && t.pts1m >= -0.05;
 }
 export function softBiasDown(t: MultiTfTape): boolean {
-  return t.pts5m <= -0.5 && t.pts1m < 0;
+  return t.pts5m <= -0.35 && t.pts1m <= 0.05;
 }
 
-export function earlyTriggerUp(t: MultiTfTape, pts90s: number): boolean {
-  return t.pts1m >= 0.15 || pts90s >= 0.25;
+export function earlyTriggerUp(_t: MultiTfTape, pts90s: number): boolean {
+  return _t.pts1m >= 0.05 || pts90s >= 0.15;
 }
-export function earlyTriggerDown(t: MultiTfTape, pts90s: number): boolean {
-  return t.pts1m <= -0.15 || pts90s <= -0.25;
+export function earlyTriggerDown(_t: MultiTfTape, pts90s: number): boolean {
+  return _t.pts1m <= -0.05 || pts90s <= -0.15;
 }
 
+/** PROFIT mode — tape never blocks entry. */
 export function allowEntryAgainstImpulse(
   direction: 'BUY' | 'SELL',
-  bars: TenSecBar[] | null | undefined,
-  liveBar?: TenSecBar | null
+  _bars: TenSecBar[] | null | undefined,
+  _liveBar?: TenSecBar | null
 ): { ok: boolean; reason: string } {
-  const t = multiTfPts(bars, liveBar);
-
-  if (direction === 'SELL' && longTapeUp(t)) {
-    return {
-      ok: false,
-      reason: `BLOCK SELL · multi-TF UP ${formatTf(t)} (only BUY)`,
-    };
-  }
-  if (direction === 'BUY' && shortTapeDown(t) && t.pts5m < -1.2) {
-    return {
-      ok: false,
-      reason: `BLOCK BUY · multi-TF DOWN ${formatTf(t)} (only SELL)`,
-    };
-  }
-  return { ok: true, reason: 'tape aligns with entry' };
+  return { ok: true, reason: `PROFIT · ${direction} free` };
 }
 
-/** Late-chase / climax — ON (was off → entered after move finished). */
+/** PROFIT mode — no late-chase / climax block. */
 export function blockLateTrendChase(
-  direction: 'BUY' | 'SELL',
-  bars: TenSecBar[] | null | undefined,
-  liveBar?: TenSecBar | null
+  _direction: 'BUY' | 'SELL',
+  _bars: TenSecBar[] | null | undefined,
+  _liveBar?: TenSecBar | null
 ): { ok: boolean; reason: string } {
-  if (!liveBar) return { ok: true, reason: 'no live bar' };
-  if (signalBarTooLate(liveBar)) {
-    return {
-      ok: false,
-      reason: `BLOCK late bar · body ${(Math.abs(bodyPct(liveBar)) * 100).toFixed(2)}% (move already done)`,
-    };
-  }
-  return blockEntryAtExtreme(direction, bars, liveBar);
+  return { ok: true, reason: 'PROFIT · no late block' };
 }
 
 export function zoneFadeAllowed(
@@ -331,21 +311,17 @@ export function explainNoEntry(
   const pts90s = netPtsLookback(closedBars, bar, 9);
   const line = `1m=${t.pts1m.toFixed(1)} 5m=${t.pts5m.toFixed(1)} 90s=${pts90s.toFixed(1)}`;
 
-  if (softBiasUp(t) && !earlyTriggerUp(t, pts90s)) {
-    return `SETUP BUY bias · wait early trigger · ${line}`;
+  if (softBiasUp(t) && isGreen(bar)) {
+    return `SETUP BUY · ${line}`;
   }
-  if (softBiasDown(t) && !earlyTriggerDown(t, pts90s)) {
-    return `SETUP SELL bias · wait early trigger · ${line}`;
+  if (softBiasDown(t) && isRed(bar)) {
+    return `SETUP SELL · ${line}`;
   }
 
   const tape = tapeSide(closedBars, bar);
   if (!tape.dir) {
-    return `SCAN · ${tape.reason} · need early SETUP (5m≥0.5 + 1m/90s trigger)`;
+    return `SCAN · ${tape.reason} · need tape + color`;
   }
-  const late = blockLateTrendChase(tape.dir, closedBars, bar);
-  if (!late.ok) return `SCAN · ${late.reason}`;
-  const vs = allowEntryAgainstImpulse(tape.dir, closedBars, bar);
-  if (!vs.ok) return `SCAN · ${vs.reason}`;
   return `SCAN · ${tape.reason}`;
 }
 
@@ -442,51 +418,45 @@ export function decideEntryFrom10sRegime(
   let setup: RegimeEntry['setup'] = 'CONTINUATION';
   let why = '';
 
-  // Path A — early SETUP
-  if (softBiasUp(t) && earlyTriggerUp(t, pts90s) && isGreen(bar)) {
+  // Path A — soft bias + live color (no trigger wait)
+  if (softBiasUp(t) && isGreen(bar)) {
     direction = 'BUY';
     setup = t.pts5m >= 0.8 ? 'CONTINUATION' : 'PULLBACK';
-    why = `SETUP BUY · early · ${line}`;
-  } else if (softBiasDown(t) && earlyTriggerDown(t, pts90s) && isRed(bar)) {
+    why = `PROFIT BUY · bias · ${line}`;
+  } else if (softBiasDown(t) && isRed(bar)) {
     direction = 'SELL';
     setup = t.pts5m <= -0.8 ? 'CONTINUATION' : 'PULLBACK';
-    why = `SETUP SELL · early · ${line}`;
+    why = `PROFIT SELL · bias · ${line}`;
   }
 
-  // Path B — impulse break while 5m still soft
-  if (!direction && Math.abs(t.pts5m) < 0.8) {
-    if (pts90s >= 0.45 && t.pts1m >= 0.2 && isGreen(bar)) {
+  // Path B — impulse break
+  if (!direction) {
+    if (pts90s >= 0.3 && isGreen(bar)) {
       direction = 'BUY';
       setup = 'BREAKOUT';
-      why = `SETUP BUY · impulse break · ${line}`;
-    } else if (pts90s <= -0.45 && t.pts1m <= -0.2 && isRed(bar)) {
+      why = `PROFIT BUY · impulse · ${line}`;
+    } else if (pts90s <= -0.3 && isRed(bar)) {
       direction = 'SELL';
       setup = 'BREAKOUT';
-      why = `SETUP SELL · impulse break · ${line}`;
+      why = `PROFIT SELL · impulse · ${line}`;
     }
   }
 
-  // Path C — clear strong tape + live color
+  // Path C — clear tape + live color
   if (!direction) {
     const tape = tapeSide(closedBars, bar);
     if (tape.dir === 'BUY' && isGreen(bar)) {
       direction = 'BUY';
       setup = 'CONTINUATION';
-      why = `SETUP BUY · clear tape · ${tape.reason}`;
+      why = `PROFIT BUY · tape · ${tape.reason}`;
     } else if (tape.dir === 'SELL' && isRed(bar)) {
       direction = 'SELL';
       setup = 'CONTINUATION';
-      why = `SETUP SELL · clear tape · ${tape.reason}`;
+      why = `PROFIT SELL · tape · ${tape.reason}`;
     }
   }
 
   if (!direction) return null;
-
-  const vsTape = allowEntryAgainstImpulse(direction, closedBars, bar);
-  if (!vsTape.ok) return null;
-
-  const late = blockLateTrendChase(direction, closedBars, bar);
-  if (!late.ok) return null;
 
   return {
     direction,

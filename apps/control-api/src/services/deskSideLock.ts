@@ -35,23 +35,14 @@ export function deskOpensOnEpic(
   return { buys, sells };
 }
 
-/** Block opening the opposite side while a peer is already in the trade. */
+/** PROFIT mode — no desk-side lock; each robot trades freely. */
 export function allowDeskSameSide(
-  units: Iterable<DeskOpenUnit>,
-  epic: string,
-  direction: DeskSide,
-  exceptId?: string
+  _units: Iterable<DeskOpenUnit>,
+  _epic: string,
+  _direction: DeskSide,
+  _exceptId?: string
 ): { ok: boolean; reason: string } {
-  const { buys, sells } = deskOpensOnEpic(units, epic, exceptId);
-  if (direction === 'BUY' && sells.length) {
-    const who = sells.map((u) => u.display_name || u.id).join(',');
-    return { ok: false, reason: `DESK lock · ${who} already SELL · no opposite BUY` };
-  }
-  if (direction === 'SELL' && buys.length) {
-    const who = buys.map((u) => u.display_name || u.id).join(',');
-    return { ok: false, reason: `DESK lock · ${who} already BUY · no opposite SELL` };
-  }
-  return { ok: true, reason: 'desk same-side ok' };
+  return { ok: true, reason: 'PROFIT · desk free' };
 }
 
 /**

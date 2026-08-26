@@ -118,11 +118,11 @@ describe('no WAIT blocks — tape only', () => {
     expect(decideEntryFrom10sRegime(live, 'TRANSITION', bars)?.direction).toBe('BUY');
   });
 
-  it('5m+1m UP → BUY only', () => {
+  it('5m+1m UP → SELL also allowed in profit mode', () => {
     const bars = upBars(40, 4580, 0.08);
     const live = bars[bars.length - 1]!;
     expect(tapeSide(bars, live).dir).toBe('BUY');
-    expect(allowEntryAgainstImpulse('SELL', bars, live).ok).toBe(false);
+    expect(allowEntryAgainstImpulse('SELL', bars, live).ok).toBe(true);
   });
 
   it('5m+1m DOWN → SELL', () => {
@@ -132,13 +132,13 @@ describe('no WAIT blocks — tape only', () => {
     expect(decideEntryFrom10sRegime(live, 'UNKNOWN', bars)?.direction).toBe('SELL');
   });
 
-  it('blocks SELL into clear UP stack', () => {
+  it('profit mode allows SELL into clear UP stack', () => {
     const bars = upBars(40, 4600, 0.1);
     const live = bars[bars.length - 1]!;
-    expect(allowEntryAgainstImpulse('SELL', bars, live).ok).toBe(false);
+    expect(allowEntryAgainstImpulse('SELL', bars, live).ok).toBe(true);
   });
 
-  it('huge late signal bar is blocked (move already done)', () => {
+  it('late signal bar is allowed in profit mode', () => {
     const bars = upBars(40, 4600, 0.08);
     const late = {
       open_time_ms: 999,
@@ -148,13 +148,10 @@ describe('no WAIT blocks — tape only', () => {
       close: 4646,
       ticks: 8,
     };
-    const withLate = [...bars, late];
-    const entry = decideEntryFrom10sRegime(late, 'TRANSITION', withLate);
-    expect(entry).toBeNull();
-    expect(explainNoEntry(late, 'TRANSITION', withLate)).toMatch(/late bar|move already done|swing high/i);
+    expect(decideEntryFrom10sRegime(late, 'TRANSITION', bars)?.direction).toBe('BUY');
   });
 
-  it('early SETUP BUY fires before finished 5m climb (~0.6pt not 1.2pt)', () => {
+  it('early PROFIT BUY fires before finished 5m climb (~0.6pt not 1.2pt)', () => {
     const bars: TenSecBar[] = [];
     let px = 4640;
     for (let i = 0; i < 36; i++) {
@@ -176,7 +173,7 @@ describe('no WAIT blocks — tape only', () => {
     const entry = decideEntryFrom10sRegime(live, 'TRANSITION', bars);
     expect(entry).not.toBeNull();
     expect(entry!.direction).toBe('BUY');
-    expect(entry!.reason).toMatch(/SETUP BUY/i);
+    expect(entry!.reason).toMatch(/PROFIT BUY/i);
     expect(tape.pts5m).toBeLessThan(1.2);
   });
 });
