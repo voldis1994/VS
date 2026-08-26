@@ -43,6 +43,7 @@ import {
   formatZoneInfo,
   lateChaseAppliesToSetup,
   shortNetMove,
+  zoneFadeAllowed,
 } from './entryFromRegime.js';
 import type { ScalpZone } from './zones.js';
 import { ZONE_WINDOW } from './zones.js';
@@ -937,6 +938,31 @@ async function enterTrade(
   reason: string,
   setupType?: string | null
 ) {
+  // Last gate — peer/zone must never open against 10s/10m tape
+  const liveBar = s.ohlcState.forming ?? s.ohlcState.last_closed;
+  const tapeGate = allowEntryAgainstImpulse(direction, s.closedBars, liveBar);
+  if (!tapeGate.ok) {
+    pushTick(s, {
+      phase: 'WAIT',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `ENTRY blocked · ${tapeGate.reason}`,
+    });
+    return;
+  }
+  const fadeGate = zoneFadeAllowed(direction, setupType, s.closedBars, liveBar);
+  if (!fadeGate.ok) {
+    pushTick(s, {
+      phase: 'WAIT',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `ENTRY blocked · ${fadeGate.reason}`,
+    });
+    return;
+  }
+
   // HARD RULE: never entry while any trade open on this epic
   const listed = await listCapitalOpenPositions(session);
   if (listed.ok) {

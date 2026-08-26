@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  allowEntryAgainstImpulse,
   blockEntryAtExtreme,
   decideEntryFrom10sRegime,
   explainNoEntry,
@@ -71,29 +72,33 @@ describe('real zone setups (not mid-chase / not too late)', () => {
     expect(decideEntryFrom10sRegime(late, 'TREND_UP', quietBox())).toBeNull();
   });
 
-  it('blocks SELL into 10s/10min UP tape — zone map is not a fade', () => {
+  it('blocks SELL on pullback at top of UP tape (not just green bars)', () => {
     const bars: TenSecBar[] = [];
-    for (let i = 0; i < 70; i++) {
-      const o = 4625 + i * 0.12;
+    for (let i = 0; i < 55; i++) {
+      const o = 4627 + i * 0.2;
       bars.push({
         open_time_ms: i * 10_000,
         open: o,
-        high: o + 0.8,
-        low: o - 0.3,
-        close: o + 0.5,
+        high: o + 0.6,
+        low: o - 0.2,
+        close: o + 0.4,
         ticks: 8,
       });
     }
-    // Price at "supply" after rally — would have been REJECT SELL before
-    const atTop = {
-      open_time_ms: 70 * 10_000,
-      open: 4633.5,
-      high: 4634.0,
-      low: 4632.8,
-      close: 4633.2,
-      ticks: 8,
-    };
-    expect(decideEntryFrom10sRegime(atTop, 'COMPRESSION', bars)).toBeNull();
-    expect(explainNoEntry(atTop, 'COMPRESSION', bars)).toMatch(/BLOCK SELL|tape UP/i);
+    // Last 5 bars pullback red — old bug allowed SELL here
+    for (let i = 55; i < 65; i++) {
+      const o = 4638 - (i - 55) * 0.25;
+      bars.push({
+        open_time_ms: i * 10_000,
+        open: o,
+        high: o + 0.2,
+        low: o - 0.4,
+        close: o - 0.2,
+        ticks: 8,
+      });
+    }
+    const pullback = bars[bars.length - 1]!;
+    expect(decideEntryFrom10sRegime(pullback, 'COMPRESSION', bars)).toBeNull();
+    expect(allowEntryAgainstImpulse('SELL', bars, pullback).ok).toBe(false);
   });
 });

@@ -186,58 +186,91 @@ const HARD_BLOCK_REGIMES: RegimeName[] = [
 const CHOP_REGIMES: RegimeName[] = ['COMPRESSION', 'RANGE', 'UNKNOWN'];
 
 /**
- * Never fade the 10s / ~10 min tape.
- * Zone (~150×10s) is a MAP for levels — not a reason to SELL into UP or BUY into DOWN.
+ * Hard anti-fade (10s brain).
+ * Zone (~150×10s) = MAP only. Absolute point nets — not soft % dir that pullbacks wipe.
  */
+export function netPtsLookback(
+  bars: TenSecBar[] | null | undefined,
+  liveBar: TenSecBar | null | undefined,
+  lookback: number
+): number {
+  const all = withLive(bars, liveBar);
+  if (all.length < 2) return 0;
+  const window = all.slice(-Math.max(lookback, 2));
+  return window[window.length - 1]!.close - window[0]!.open;
+}
+
 export function allowEntryAgainstImpulse(
   direction: 'BUY' | 'SELL',
   bars: TenSecBar[] | null | undefined,
   liveBar?: TenSecBar | null
 ): { ok: boolean; reason: string } {
-  const short = shortNetMove(bars, liveBar);
-  const midImp = recentImpulse(withLive(bars, liveBar), 18); // ~3 min
-  const tape10 = tenMinTape(bars, liveBar);
-  const struct = structNetMove(bars, 24);
+  const pts90s = netPtsLookback(bars, liveBar, 9);
+  const pts3m = netPtsLookback(bars, liveBar, 18);
+  const pts5m = netPtsLookback(bars, liveBar, 30);
+  const pts10m = netPtsLookback(bars, liveBar, 60);
 
-  const up =
-    short.dir === 'UP' ||
-    midImp.dir === 'UP' ||
-    tape10.dir === 'UP' ||
-    struct.dir === 'UP';
-  const down =
-    short.dir === 'DOWN' ||
-    midImp.dir === 'DOWN' ||
-    tape10.dir === 'DOWN' ||
-    struct.dir === 'DOWN';
-
-  if (direction === 'SELL' && up) {
-    const pts = tape10.dir === 'UP' ? tape10.netPts : midImp.dir === 'UP' ? midImp.netPts : short.netPts;
-    return {
-      ok: false,
-      reason: `BLOCK SELL · tape UP ${pts.toFixed(1)}pt (10s brain — zone map ≠ fade)`,
-    };
+  // Absolute veto — pullback at top must NOT allow SELL into 10m UP
+  if (direction === 'SELL') {
+    if (pts10m > 2) {
+      return { ok: false, reason: `BLOCK SELL · 10m UP ${pts10m.toFixed(1)}pt (zone≠fade)` };
+    }
+    if (pts5m > 1.5) {
+      return { ok: false, reason: `BLOCK SELL · 5m UP ${pts5m.toFixed(1)}pt (zone≠fade)` };
+    }
+    if (pts3m > 1.2) {
+      return { ok: false, reason: `BLOCK SELL · 3m UP ${pts3m.toFixed(1)}pt (zone≠fade)` };
+    }
+    if (pts90s > 0.8) {
+      return { ok: false, reason: `BLOCK SELL · 90s UP ${pts90s.toFixed(1)}pt (zone≠fade)` };
+    }
   }
-  if (direction === 'BUY' && down) {
-    const pts = tape10.dir === 'DOWN' ? tape10.netPts : midImp.dir === 'DOWN' ? midImp.netPts : short.netPts;
-    return {
-      ok: false,
-      reason: `BLOCK BUY · tape DOWN ${pts.toFixed(1)}pt (10s brain — zone map ≠ fade)`,
-    };
-  }
-  // Mild short thresholds (backup)
-  if (direction === 'BUY' && short.netPct <= -0.0005) {
-    return {
-      ok: false,
-      reason: `BLOCK BUY · short dump ${short.netPts.toFixed(1)}pt`,
-    };
-  }
-  if (direction === 'SELL' && short.netPct >= 0.0005) {
-    return {
-      ok: false,
-      reason: `BLOCK SELL · short rally ${short.netPts.toFixed(1)}pt`,
-    };
+  if (direction === 'BUY') {
+    if (pts10m < -2) {
+      return { ok: false, reason: `BLOCK BUY · 10m DOWN ${pts10m.toFixed(1)}pt (zone≠fade)` };
+    }
+    if (pts5m < -1.5) {
+      return { ok: false, reason: `BLOCK BUY · 5m DOWN ${pts5m.toFixed(1)}pt (zone≠fade)` };
+    }
+    if (pts3m < -1.2) {
+      return { ok: false, reason: `BLOCK BUY · 3m DOWN ${pts3m.toFixed(1)}pt (zone≠fade)` };
+    }
+    if (pts90s < -0.8) {
+      return { ok: false, reason: `BLOCK BUY · 90s DOWN ${pts90s.toFixed(1)}pt (zone≠fade)` };
+    }
   }
   return { ok: true, reason: 'tape aligns with entry' };
+}
+
+/** REJECT/BOUNCE fade only WITH tape — not against it. */
+export function zoneFadeAllowed(
+  direction: 'BUY' | 'SELL',
+  setup: string | null | undefined,
+  bars: TenSecBar[] | null | undefined,
+  liveBar?: TenSecBar | null
+): { ok: boolean; reason: string } {
+  const s = String(setup || '').toUpperCase();
+  if (s !== 'REJECT' && s !== 'BOUNCE') return { ok: true, reason: 'not a fade setup' };
+  const pts10m = netPtsLookback(bars, liveBar, 60);
+  const pts5m = netPtsLookback(bars, liveBar, 30);
+  if (direction === 'SELL' && s === 'REJECT') {
+    // Must have actual down tape — SUPPLY alone is not enough
+    if (pts10m > 0 || pts5m > 0) {
+      return {
+        ok: false,
+        reason: `BLOCK SELL REJECT · tape still UP/flat 10m=${pts10m.toFixed(1)} 5m=${pts5m.toFixed(1)} (map≠fade)`,
+      };
+    }
+  }
+  if (direction === 'BUY' && s === 'BOUNCE') {
+    if (pts10m < -1.5 || pts5m < -1.5) {
+      return {
+        ok: false,
+        reason: `BLOCK BUY BOUNCE · tape DOWN 10m=${pts10m.toFixed(1)} 5m=${pts5m.toFixed(1)} (map≠fade)`,
+      };
+    }
+  }
+  return { ok: true, reason: 'fade aligns with tape' };
 }
 
 export function lateChaseAppliesToSetup(
@@ -421,6 +454,8 @@ export function decideEntryFrom10sRegime(
   if (picked) {
     const vsTape = allowEntryAgainstImpulse(picked.dir, closedBars, bar);
     if (!vsTape.ok) return null;
+    const fadeOk = zoneFadeAllowed(picked.dir, picked.zv.setup, closedBars, bar);
+    if (!fadeOk.ok) return null;
     const extreme = blockEntryAtExtreme(picked.dir, closedBars, bar);
     if (!extreme.ok) return null;
     // Soft live: bounce/reject can be small — allow edge touch with ticks
