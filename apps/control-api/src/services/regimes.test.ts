@@ -5,6 +5,7 @@ import {
   OPERATING_MODES,
   classifyRegime,
   observeClosedBars,
+  currentRegime,
   resetRegimeBook,
   styleFromClassification,
   toLiveRegime,
@@ -326,6 +327,24 @@ describe('regime book + trade style', () => {
     expect(snap.current).toBe('TREND_UP');
     expect(snap.display_name).toBe('Gold');
     expect(REGIME_NAMES).toContain(snap.current);
+  });
+
+  it('isolates regime books per clientId on same epic', () => {
+    const up = [100, 100.5, 101.2, 101.9, 102.7, 103.4].map((p, i, a) =>
+      bar(i === 0 ? p : a[i - 1]!, p + 0.4, p - 0.4, p, i)
+    );
+    const down = [110, 109.5, 108.8, 108.1, 107.3, 106.6].map((p, i, a) =>
+      bar(i === 0 ? p : a[i - 1]!, p + 0.4, p - 0.4, p, i)
+    );
+    observeClosedBars('GOLD', up, 'B.O.S.S.', 1);
+    observeClosedBars('GOLD', down, 'DIMITRIJ', 2);
+    const a = currentRegime('GOLD', 1);
+    const b = currentRegime('GOLD', 2);
+    expect(a?.current).toBe('TREND_UP');
+    expect(b?.current).toBe('TREND_DOWN');
+    expect(a?.bar_count).not.toBe(b?.bar_count + 1000); // both have their own bars
+    expect(a?.display_name).toBe('B.O.S.S.');
+    expect(b?.display_name).toBe('DIMITRIJ');
   });
 
   it('maps trend regimes to LONG and breakout/range to SCALP', () => {

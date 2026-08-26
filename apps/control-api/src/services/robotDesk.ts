@@ -42,12 +42,9 @@ import {
 import type { ScalpZone } from './zones.js';
 import { ZONE_WINDOW } from './zones.js';
 import { allowEpicReentry, noteEpicTradeClose } from './tradeCooldown.js';
-import { publishEpicEntry, readEpicEntry } from './epicEntrySync.js';
 import { allowDeskSameSide, deskConflictShouldExit, deskOpensOnEpic } from './deskSideLock.js';
 import {
   allowEntryFromFeeds,
-  multiFeedOwnsOhlc,
-  pickOhlcMid,
   readMultiFeedPrice,
   type MultiFeedPrice,
   type MultiFeedLeg,
@@ -208,50 +205,25 @@ function setRobotCadence(s: Internal, ms: number) {
   s.timer = setInterval(() => void robotCycle(s), ms);
 }
 
-/** After one client exits, nudge peers on same epic so they don't wait a full cadence. */
+/** After one client exits, nudge same-client manage only — no cross-client OHLC share. */
 function kickPeerManageCycles(exceptId: string, epic: string) {
   const want = epic.trim().toLowerCase();
+  const self = sessions.get(exceptId);
+  const clientId = self?.client_id;
   for (const peer of sessions.values()) {
     if (peer.id === exceptId || !peer.running || !peer.open_side) continue;
     if (peer.epic.trim().toLowerCase() !== want) continue;
-    if (peer.cycle_busy) continue;
-    void robotCycle(peer);
-  }
-}
-
-/** After closed 5m / entry signal — nudge flat peers so they enter the same bar. */
-function kickPeerEntryCycles(exceptId: string, epic: string) {
-  const want = epic.trim().toLowerCase();
-  for (const peer of sessions.values()) {
-    if (peer.id === exceptId || !peer.running || peer.open_side) continue;
-    if (peer.epic.trim().toLowerCase() !== want) continue;
-    if (!peer.entry_enabled || !peer.trading_enabled) continue;
+    // Same client only (multi-account same person) — never other clients' OHLC/feed
+    if (clientId != null && peer.client_id !== clientId) continue;
     if (peer.cycle_busy) continue;
     void robotCycle(peer);
   }
 }
 
 /**
- * Share a just-closed 5m bar with same-epic peers.
- * Without this, only the unit whose clock edges first sees just_closed;
- * others wait ~5m ("wait until candle closes") while the leader already trades.
+ * Per-client 10s OHLC — never fanout bars to other clients (disabled).
  */
-function fanoutClosedFiveMinuteBar(exceptId: string, epic: string, bar: TenSecBar) {
-  const want = epic.trim().toLowerCase();
-  const key = String(bar.open_time_ms || 0);
-  for (const peer of sessions.values()) {
-    if (peer.id === exceptId || !peer.running) continue;
-    if (peer.epic.trim().toLowerCase() !== want) continue;
-    if (key && key === peer.last_closed_bar_key && peer.ohlcState.just_closed) continue;
-    peer.ohlcState = {
-      forming: peer.ohlcState.forming,
-      last_closed: bar,
-      just_closed: true,
-    };
-    if (key) peer.last_closed_bar_key = key;
-    applyRobotRegime(peer, [bar]);
-  }
-}
+void 0;
 
 const sessions = new Map<string, Internal>();
 const MAX_TICKS = 200;
@@ -401,9 +373,9 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     active_regimes: activeTapes,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'Capital LEAD → 10s OHLC → TAPE 25/10/5/1 → BUY|SELL · BO → EXIT',
+    chain: 'OWN Capital LEAD → own 10s OHLC → TAPE 25/10/5/1 → BUY|SELL · BO → EXIT',
     note:
-      'Entry = multi-TF tape only. No WAIT ENTRY · TRANSITION. Zone = map. Public feeds advisory.',
+      'Katram klientam savs Capital LEAD + savs 10s OHLC. Peer Capital / shared bars OFF. Public = ADVISORY only.',
   };
 }
 
@@ -431,8 +403,7 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
       ? [s.ohlcState.last_closed]
       : [];
   if (incoming.length) {
-    observeClosedBars(s.epic, incoming, s.display_name);
-    // Append closed bars (do not replace a full window with a single tick bar)
+    observeClosedBars(s.epic, incoming, s.display_name, s.client_id);
     for (const b of incoming) {
       const last = s.closedBars[s.closedBars.length - 1];
       if (last && last.open_time_ms === b.open_time_ms) {
@@ -445,9 +416,9 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
       s.closedBars = s.closedBars.slice(-MAX_REGIME_BARS);
     }
   }
-  // Always sync from shared epic book — B.O.S.S. / DIMITRIJ / GUNTIS must match
-  const shared = currentRegime(s.epic);
-  if (shared) s.regime = toLiveRegime(shared.current);
+  // Per-client book only — never sync from another client's epic book
+  const own = currentRegime(s.epic, s.client_id);
+  if (own) s.regime = toLiveRegime(own.current);
 }
 
 function clearTradeState(s: Internal) {
@@ -1351,33 +1322,29 @@ async function robotCycleBody(s: Internal) {
     s.market_status = quote.market_status;
     s.market_tradeable = marketAllowsTrading(quote.market_status);
 
-    // Always refresh feeds (even when parked) so FEEDS board is not stuck IDLE 0/0
+    // Always refresh feeds (even when parked) — OWN Capital LEAD only
     if (Date.now() - s.last_multi_feed_ms >= 4_000) {
       s.last_multi_feed_ms = Date.now();
       try {
-        s.multiFeed = await readMultiFeedPrice(s.epic, { anchorMid: quote.mid });
+        s.multiFeed = await readMultiFeedPrice(s.epic, {
+          anchorMid: quote.mid,
+          connectionId: s.connection_id,
+        });
       } catch {
         /* keep previous */
       }
     }
-    const pickedWarm = pickOhlcMid(quote.mid, s.multiFeed);
-    s.feed_source = pickedWarm.source;
-    s.feed_contributing = s.multiFeed?.contributing ?? 0;
-    s.feed_sender_count = s.multiFeed?.sender_count ?? 0;
-    s.feed_agreement = s.multiFeed?.agreement ?? null;
-    if (quote.mid != null && (s.feed_contributing || 0) < 1) {
-      s.feed_source = 'LOCAL';
-      s.feed_contributing = 1;
-      s.feed_sender_count = Math.max(1, s.feed_sender_count || 0);
-    }
-    const warmMid = pickedWarm.mid ?? quote.mid;
+    // 10s OHLC from THIS client's Capital mid only — never peer blend
+    const warmMid = quote.mid;
+    s.feed_source = 'LOCAL';
+    s.feed_contributing = warmMid != null ? 1 : s.multiFeed?.capital_contributing ?? 0;
+    s.feed_sender_count = 1;
+    s.feed_agreement = s.multiFeed?.agreement ?? 'INSUFFICIENT';
     if (warmMid != null) {
       s.ohlcState = updateTenSecondOhlc(s.ohlcState, warmMid, Date.now());
       s.ohlc_10s = publicOhlc10s(s.ohlcState);
       if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
         applyRobotRegime(s, [s.ohlcState.last_closed]);
-        fanoutClosedFiveMinuteBar(s.id, s.epic, s.ohlcState.last_closed);
-        queueMicrotask(() => kickPeerEntryCycles(s.id, s.epic));
       }
     }
 
@@ -1606,8 +1573,8 @@ async function robotCycleBody(s: Internal) {
 
     if (quote.mid == null) return;
 
-    // Seed 10s bars from Capital — prefer SECOND; backfill to 150×10s (~25 min) via MINUTE.
-    if (!multiFeedOwnsOhlc(s.multiFeed) && Date.now() - s.last_second_fetch_ms >= 8_000) {
+    // Seed 10s bars from THIS client's Capital only
+    if (Date.now() - s.last_second_fetch_ms >= 8_000) {
       s.last_second_fetch_ms = Date.now();
       const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 100);
       if (sec.ok && sec.candles.length >= 20) {
@@ -1623,14 +1590,12 @@ async function robotCycleBody(s: Internal) {
           };
           if (isNew) {
             s.last_closed_bar_key = bucket;
-            fanoutClosedFiveMinuteBar(s.id, s.epic, last);
-            queueMicrotask(() => kickPeerEntryCycles(s.id, s.epic));
           }
           s.ohlc_10s = publicOhlc10s(s.ohlcState);
           applyRobotRegime(s, bars);
         }
       }
-      // Cold start: backfill last ~25 min (150×10s) from Capital MINUTE for zone lookback
+      // Cold start: backfill last ~25 min (150×10s) from OWN Capital MINUTE
       if (s.closedBars.length < 30) {
         const needMin = Math.ceil(ZONE_WINDOW / 6) + 5;
         const min = await fetchCapitalPrices(opened.session, s.epic, 'MINUTE', needMin);
@@ -1638,15 +1603,15 @@ async function robotCycleBody(s: Internal) {
           const seeded = expandMinutesToTenSec(min.candles).slice(-ZONE_WINDOW);
           if (seeded.length >= 20) {
             s.closedBars = seeded;
-            observeClosedBars(s.epic, seeded, s.display_name);
-            const shared = currentRegime(s.epic);
-            if (shared) s.regime = toLiveRegime(shared.current);
+            observeClosedBars(s.epic, seeded, s.display_name, s.client_id);
+            const own = currentRegime(s.epic, s.client_id);
+            if (own) s.regime = toLiveRegime(own.current);
             pushTick(s, {
               phase: 'INFO',
               bid: quote.bid,
               ask: quote.ask,
               mid: quote.mid,
-              detail: `ZONE seed · ${s.closedBars.length}/${ZONE_WINDOW}×10s from Capital MINUTE (${min.candles.length}m)`,
+              detail: `ZONE seed · OWN ${s.closedBars.length}/${ZONE_WINDOW}×10s from Capital MINUTE (${min.candles.length}m)`,
             });
           }
         }
@@ -1655,7 +1620,8 @@ async function robotCycleBody(s: Internal) {
 
     const zoneNow = buildScalpZone(s.closedBars);
     const feedGate = allowEntryFromFeeds(s.multiFeed);
-    if (!feedGate.ok) {
+    // Own Capital quote is enough — multi-feed is advisory display only
+    if (!feedGate.ok && quote.mid == null) {
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
@@ -1686,72 +1652,7 @@ async function robotCycleBody(s: Internal) {
     let reason = '';
     let setupType: string | null = null;
 
-    // Same-epic peer already opened on this 10s — follow with filters
-    const peerSig = readEpicEntry(s.epic);
-    const localBucketMs =
-      signalBar?.open_time_ms ?? forming?.open_time_ms ?? closed?.open_time_ms ?? 0;
-    const peerMatchesBar =
-      Boolean(peerSig) &&
-      peerSig!.sourceUnitId !== s.id &&
-      (peerSig!.barBucketMs === localBucketMs ||
-        localBucketMs === 0 ||
-        Math.abs(peerSig!.barBucketMs - localBucketMs) < 12_000);
-    if (peerMatchesBar && peerSig) {
-      const peerKey = `peer:${peerSig.barBucketMs}:${peerSig.side}`;
-      if (peerKey === s.last_entry_signal_key) {
-        pushTick(s, {
-          phase: 'DECIDE',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `${ohlcLine} · peer sync already used`,
-        });
-        return;
-      }
-      const epicGatePeer = allowEpicReentry(s.epic, peerSig.side);
-      if (!epicGatePeer.ok) {
-        pushTick(s, {
-          phase: 'DECIDE',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `${ohlcLine} · ${epicGatePeer.reason}`,
-        });
-        return;
-      }
-      const peerVs = allowEntryAgainstImpulse(
-        peerSig.side,
-        s.closedBars,
-        signalBar ?? forming ?? closed
-      );
-      if (!peerVs.ok) {
-        pushTick(s, {
-          phase: 'DECIDE',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `${ohlcLine} · peer blocked · ${peerVs.reason}`,
-        });
-        return;
-      }
-      const deskPeer = allowDeskSameSide(sessions.values(), s.epic, peerSig.side, s.id);
-      if (!deskPeer.ok) {
-        pushTick(s, {
-          phase: 'DECIDE',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `${ohlcLine} · ${deskPeer.reason}`,
-        });
-        return;
-      }
-      s.last_entry_signal_key = peerKey;
-      direction = peerSig.side;
-      setupType = peerSig.regime || 'PEER';
-      reason = `PEER SYNC ${peerSig.side} ← ${peerSig.sourceUnitId} · ${peerSig.regime} · mid≈${peerSig.mid}`;
-      await enterTrade(opened.session, s, direction, quote, reason, setupType);
-      return;
-    }
+    // Per-client brain — no PEER SYNC from other clients' entries
 
     if (!signalBar) {
       pushTick(s, {
@@ -1839,16 +1740,6 @@ async function robotCycleBody(s: Internal) {
       detail: `ENTRY READY · ${reason}`,
     });
 
-    publishEpicEntry({
-      epic: s.epic,
-      side: direction,
-      regime: String(setupType || s.regime || ''),
-      barBucketMs: Number(signalBar.open_time_ms || 0),
-      mid: quote.mid ?? 0,
-      atMs: Date.now(),
-      sourceUnitId: s.id,
-    });
-    queueMicrotask(() => kickPeerEntryCycles(s.id, s.epic));
     await enterTrade(opened.session, s, direction, quote, reason, setupType);
   } catch (err) {
     s.reads_fail += 1;

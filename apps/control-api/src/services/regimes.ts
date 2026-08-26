@@ -125,6 +125,13 @@ function epicKey(epic: string): string {
   return String(epic || '').trim().toUpperCase();
 }
 
+/** Per-client regime book — B.O.S.S. / DIMITRIJ / GUNTIS never share bars. */
+export function regimeBookKey(epic: string, clientId?: number | null): string {
+  const e = epicKey(epic);
+  if (clientId != null && Number.isFinite(clientId)) return `c${Number(clientId)}:${e}`;
+  return e;
+}
+
 /**
  * Classify from closed 10s OHLC — same names as C++ RegimeEngine.
  * Short slope (~9×10s ≈ 90s) + structure (~36×10s ≈ 6m).
@@ -350,8 +357,8 @@ function toSnapshot(epic: string, b: Book): RegimeSnapshot {
   };
 }
 
-function ensureBook(epic: string, displayName?: string): Book {
-  const key = epicKey(epic);
+function ensureBook(epic: string, displayName?: string, clientId?: number | null): Book {
+  const key = regimeBookKey(epic, clientId);
   let b = books.get(key);
   if (!b) {
     const now = new Date().toISOString();
@@ -372,7 +379,7 @@ function ensureBook(epic: string, displayName?: string): Book {
   return b;
 }
 
-function applyClassify(epic: string, b: Book): RegimeSnapshot {
+function applyClassify(epic: string, b: Book, clientId?: number | null): RegimeSnapshot {
   const next = toLiveRegime(classifyRegime(b.bars, b.current));
   const now = new Date().toISOString();
   if (next !== b.current) {
@@ -383,20 +390,21 @@ function applyClassify(epic: string, b: Book): RegimeSnapshot {
   b.confidence = confidenceFrom(b.bars, b.current);
   b.last_update = now;
   if (b.bars.length) b.last_mid = b.bars[b.bars.length - 1]!.close;
-  return toSnapshot(epic, b);
+  return toSnapshot(regimeBookKey(epic, clientId), b);
 }
 
 export function observeClosedBars(
   epic: string,
   bars: TenSecBar[],
-  displayName?: string
+  displayName?: string,
+  clientId?: number | null
 ): RegimeSnapshot {
-  const key = epicKey(epic);
-  const b = ensureBook(epic, displayName);
+  const key = regimeBookKey(epic, clientId);
+  const b = ensureBook(epic, displayName, clientId);
   for (const bar of bars) {
     if (!bar || !Number.isFinite(bar.close)) continue;
     const last = b.bars[b.bars.length - 1];
-    // Same 10s bucket from another unit — replace, do not append (book pollution → wrong regime)
+    // Same 10s bucket — replace, do not append
     if (last && last.open_time_ms === bar.open_time_ms) {
       if ((bar.ticks || 0) >= (last.ticks || 0)) b.bars[b.bars.length - 1] = bar;
       continue;
@@ -410,15 +418,16 @@ export function observeClosedBars(
     b.bars.push(bar);
   }
   if (b.bars.length > MAX_BARS) b.bars.splice(0, b.bars.length - MAX_BARS);
-  return applyClassify(key, b);
+  return applyClassify(epic, b, clientId);
 }
 
 export function notePipelineRegime(
   epic: string,
   regime: string | null | undefined,
-  displayName?: string
+  displayName?: string,
+  clientId?: number | null
 ): RegimeSnapshot {
-  const b = ensureBook(epic, displayName);
+  const b = ensureBook(epic, displayName, clientId);
   const next = toLiveRegime(normalizeRegime(regime));
   const now = new Date().toISOString();
   if (next !== b.current) {
@@ -428,14 +437,17 @@ export function notePipelineRegime(
   }
   b.last_update = now;
   b.confidence = Math.max(b.confidence, 0.55);
-  return toSnapshot(epicKey(epic), b);
+  return toSnapshot(regimeBookKey(epic, clientId), b);
 }
 
-export function currentRegime(epic: string | null | undefined): RegimeSnapshot | null {
+export function currentRegime(
+  epic: string | null | undefined,
+  clientId?: number | null
+): RegimeSnapshot | null {
   if (!epic) return null;
-  const b = books.get(epicKey(epic));
+  const b = books.get(regimeBookKey(epic, clientId));
   if (!b) return null;
-  return toSnapshot(epicKey(epic), b);
+  return toSnapshot(regimeBookKey(epic, clientId), b);
 }
 
 export function listRegimeSnapshots(): RegimeSnapshot[] {
