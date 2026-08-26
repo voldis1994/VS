@@ -60,7 +60,7 @@ export function recentImpulse(
   const netPts = last.close - first.open;
   const mid = Math.max(Math.abs(first.open), 1e-9);
   const netPct = netPts / mid;
-  // ~0.08% ≈ 3.7pt over ~1 min — pick up overnight drift sooner
+  // ~0.08% ≈ 3.7pt over lookback
   if (netPct >= 0.0008) return { dir: 'UP', netPct, netPts };
   if (netPct <= -0.0008) return { dir: 'DOWN', netPct, netPts };
   return { dir: null, netPct, netPts };
@@ -85,6 +85,16 @@ export function shortNetMove(
   liveBar?: TenSecBar | null
 ): { dir: 'UP' | 'DOWN' | null; netPct: number; netPts: number } {
   return recentImpulse(withLive(bars, liveBar), 9);
+}
+
+/**
+ * ~10 min tape (60×10s) — scalp direction. Zone map (~25 min) is WHERE, not fade signal.
+ */
+export function tenMinTape(
+  bars: TenSecBar[] | null | undefined,
+  liveBar?: TenSecBar | null
+): { dir: 'UP' | 'DOWN' | null; netPct: number; netPts: number } {
+  return recentImpulse(withLive(bars, liveBar), 60);
 }
 
 export function selloffFromSwingHigh(
@@ -175,39 +185,59 @@ const HARD_BLOCK_REGIMES: RegimeName[] = [
 /** Flat labels — still trade when short/struct trend is clear (was hard-blocked → overnight WAIT). */
 const CHOP_REGIMES: RegimeName[] = ['COMPRESSION', 'RANGE', 'UNKNOWN'];
 
+/**
+ * Never fade the 10s / ~10 min tape.
+ * Zone (~150×10s) is a MAP for levels — not a reason to SELL into UP or BUY into DOWN.
+ */
 export function allowEntryAgainstImpulse(
   direction: 'BUY' | 'SELL',
   bars: TenSecBar[] | null | undefined,
   liveBar?: TenSecBar | null
 ): { ok: boolean; reason: string } {
   const short = shortNetMove(bars, liveBar);
-  if (direction === 'BUY' && short.netPct <= -0.0009) {
+  const midImp = recentImpulse(withLive(bars, liveBar), 18); // ~3 min
+  const tape10 = tenMinTape(bars, liveBar);
+  const struct = structNetMove(bars, 24);
+
+  const up =
+    short.dir === 'UP' ||
+    midImp.dir === 'UP' ||
+    tape10.dir === 'UP' ||
+    struct.dir === 'UP';
+  const down =
+    short.dir === 'DOWN' ||
+    midImp.dir === 'DOWN' ||
+    tape10.dir === 'DOWN' ||
+    struct.dir === 'DOWN';
+
+  if (direction === 'SELL' && up) {
+    const pts = tape10.dir === 'UP' ? tape10.netPts : midImp.dir === 'UP' ? midImp.netPts : short.netPts;
     return {
       ok: false,
-      reason: `BLOCK BUY · short dump ${short.netPts.toFixed(1)}pt (${(short.netPct * 100).toFixed(2)}%)`,
+      reason: `BLOCK SELL · tape UP ${pts.toFixed(1)}pt (10s brain — zone map ≠ fade)`,
     };
   }
-  if (direction === 'SELL' && short.netPct >= 0.0009) {
+  if (direction === 'BUY' && down) {
+    const pts = tape10.dir === 'DOWN' ? tape10.netPts : midImp.dir === 'DOWN' ? midImp.netPts : short.netPts;
     return {
       ok: false,
-      reason: `BLOCK SELL · short rally ${short.netPts.toFixed(1)}pt (${(short.netPct * 100).toFixed(2)}%)`,
+      reason: `BLOCK BUY · tape DOWN ${pts.toFixed(1)}pt (10s brain — zone map ≠ fade)`,
     };
   }
-  const imp = recentImpulse(bars);
-  if (!imp.dir) return { ok: true, reason: 'no strong recent impulse' };
-  if (direction === 'SELL' && imp.dir === 'UP') {
+  // Mild short thresholds (backup)
+  if (direction === 'BUY' && short.netPct <= -0.0005) {
     return {
       ok: false,
-      reason: `BLOCK SELL · fresh UP ${imp.netPts.toFixed(1)}pt — no fade`,
+      reason: `BLOCK BUY · short dump ${short.netPts.toFixed(1)}pt`,
     };
   }
-  if (direction === 'BUY' && imp.dir === 'DOWN') {
+  if (direction === 'SELL' && short.netPct >= 0.0005) {
     return {
       ok: false,
-      reason: `BLOCK BUY · fresh DOWN ${imp.netPts.toFixed(1)}pt — no fade`,
+      reason: `BLOCK SELL · short rally ${short.netPts.toFixed(1)}pt`,
     };
   }
-  return { ok: true, reason: `impulse ${imp.dir} aligns` };
+  return { ok: true, reason: 'tape aligns with entry' };
 }
 
 export function lateChaseAppliesToSetup(
@@ -271,11 +301,16 @@ export function explainNoEntry(
   const buyZ = evaluateZoneEntry('BUY', bar, zone, closedBars);
   const sellZ = evaluateZoneEntry('SELL', bar, zone, closedBars);
   if (buyZ.ok || sellZ.ok) {
+    const dir = buyZ.ok ? 'BUY' : 'SELL';
+    const vs = allowEntryAgainstImpulse(dir, closedBars, bar);
+    if (!vs.ok) {
+      return `WAIT · ${vs.reason} · ${zoneLine} · ${regimeLine}`;
+    }
     return `WAIT · zone edge ready but filters · ${buyZ.ok ? buyZ.reason : sellZ.reason} · ${regimeLine}`;
   }
 
   // Mid-box: honest "scalp edges only"
-  return `WAIT · scalp edges only · price mid-zone · ${zoneLine} · ${regimeLine} · short ${short.netPts.toFixed(1)}pt · struct ${struct.netPts.toFixed(1)}pt · ${barLine}`;
+  return `WAIT · scalp edges only · price mid-zone · ${zoneLine} · ${regimeLine} · short ${short.netPts.toFixed(1)}pt · tape10 ${tenMinTape(closedBars, bar).netPts.toFixed(1)}pt · ${barLine}`;
 }
 
 /**
@@ -373,16 +408,19 @@ export function decideEntryFrom10sRegime(
 
   const short = shortNetMove(closedBars, bar);
   const struct = structNetMove(closedBars, 24);
+  const tape10 = tenMinTape(closedBars, bar);
   const prefer =
-    short.dir === 'UP' || struct.dir === 'UP'
+    short.dir === 'UP' || tape10.dir === 'UP' || struct.dir === 'UP'
       ? 'BUY'
-      : short.dir === 'DOWN' || struct.dir === 'DOWN'
+      : short.dir === 'DOWN' || tape10.dir === 'DOWN' || struct.dir === 'DOWN'
         ? 'SELL'
         : marketDirection(regime, closedBars, bar);
 
-  // ——— Real setup: zone edge (BOUNCE / REJECT / RETEST / BREAKOUT) ———
+  // ——— Real setup: zone edge is MAP location — tape (10s/~10m) decides side ———
   const picked = pickZoneSetup(bar, zone, closedBars, prefer);
   if (picked) {
+    const vsTape = allowEntryAgainstImpulse(picked.dir, closedBars, bar);
+    if (!vsTape.ok) return null;
     const extreme = blockEntryAtExtreme(picked.dir, closedBars, bar);
     if (!extreme.ok) return null;
     // Soft live: bounce/reject can be small — allow edge touch with ticks
@@ -392,7 +430,7 @@ export function decideEntryFrom10sRegime(
     return {
       direction: picked.dir,
       setup: mapZoneSetup(picked.zv.setup, r),
-      reason: `${r} · SETUP ${picked.zv.setup} · ${picked.zv.reason} · ${candle}`,
+      reason: `${r} · SETUP ${picked.zv.setup} · ${picked.zv.reason} · tape OK · ${candle}`,
       zone,
       zone_setup: picked.zv.setup,
     };

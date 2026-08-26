@@ -71,7 +71,29 @@ describe('real zone setups (not mid-chase / not too late)', () => {
     expect(decideEntryFrom10sRegime(late, 'TREND_UP', quietBox())).toBeNull();
   });
 
-  it('still blocks TRANSITION', () => {
-    expect(decideEntryFrom10sRegime(bar(4501, 4503, 12), 'TRANSITION', quietBox())).toBeNull();
+  it('blocks SELL into 10s/10min UP tape — zone map is not a fade', () => {
+    const bars: TenSecBar[] = [];
+    for (let i = 0; i < 70; i++) {
+      const o = 4625 + i * 0.12;
+      bars.push({
+        open_time_ms: i * 10_000,
+        open: o,
+        high: o + 0.8,
+        low: o - 0.3,
+        close: o + 0.5,
+        ticks: 8,
+      });
+    }
+    // Price at "supply" after rally — would have been REJECT SELL before
+    const atTop = {
+      open_time_ms: 70 * 10_000,
+      open: 4633.5,
+      high: 4634.0,
+      low: 4632.8,
+      close: 4633.2,
+      ticks: 8,
+    };
+    expect(decideEntryFrom10sRegime(atTop, 'COMPRESSION', bars)).toBeNull();
+    expect(explainNoEntry(atTop, 'COMPRESSION', bars)).toMatch(/BLOCK SELL|tape UP/i);
   });
 });
