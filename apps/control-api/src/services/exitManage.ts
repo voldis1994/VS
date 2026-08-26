@@ -1,4 +1,4 @@
-/** Live Capital exit — Best Outcome PeakProtect 75% + HardInv + opposite tape. */
+/** Live Capital exit — close only on flip (or HardInv). No BUY→BUY / SELL→SELL. */
 
 import {
   SHORT_THESIS_GOLD_PT,
@@ -27,8 +27,7 @@ export function favorableMove(side: ExitSide, entry: number, mid: number): numbe
 
 /**
  * Price to evaluate BO exits.
- * HardInv / PeakProtect must use adverse fill side — mid understates loss by the spread.
- * BUY open → exit sells at bid; SELL open → exit buys at ask.
+ * HardInv must use adverse fill side — mid understates loss by the spread.
  */
 export function manageExitPrice(
   side: ExitSide,
@@ -71,53 +70,46 @@ export function thesisFailureReason(
   return null;
 }
 
-/**
- * Arm PeakProtect only after a real swing (~1.0pt Gold).
- * Too-low floor (0.2pt) caused £0 PeakProtect spam.
- */
+/** MFE floor for INFO / journal (PeakProtect no longer soft-exits alone). */
 export function bestOutcomeMfeFloor(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
   return Math.max(abs * 0.00022, 1.0);
 }
 
-/** Soft TP ≈0.53% — ~25pt Gold. */
 export function bestOutcomeTarget(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
   return Math.max(abs * 0.0053, 0.8);
 }
 
-/** Min green for soft TP / timeDecay. */
 export function bestOutcomeMinGreen(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
   return Math.max(abs * 0.00015, 0.5);
 }
 
-/**
- * PeakProtect: keep 75% of MFE (give back max ~25%).
- * Trigger @78% so Capital latency doesn't overshoot the 75% lock.
- */
+/** Display lock % — soft PeakProtect does not close; flip-only exit. */
 export const BEST_OUTCOME_LOCK_RETENTION = 0.75;
 export const BEST_OUTCOME_LOCK_TRIGGER = 0.78;
 
 export function isHardBoReason(reason: string): boolean {
-  return /HardInvalidation|ThesisFailure · short|PeakProtection|OppositeSignal/i.test(reason);
+  return /HardInvalidation|ThesisFailure · short|OppositeSignal/i.test(reason);
 }
 
 export type BoExitOpts = {
-  /** True when 5m+1m tape clearly flipped vs open side. */
+  /** True when next setup is the opposite side — ONLY green-path close allowed. */
   oppositeEntrySignal?: boolean;
   oppositeReason?: string;
-  /** Skip soft TP / thesis / timeDecay. Does NOT skip PeakProtect, HardInv, OppositeSignal. */
   continuationSameSide?: boolean;
 };
 
 /**
- * Exit priority:
- * 1) HardInv 2.0pt
- * 2) Short dump/rally thesis 3pt
- * 3) PeakProtect 75% of MFE (armed ≥1.0pt)
- * 4) Opposite tape signal
- * 5) Soft TP / thesis / timeDecay (skipped if continuation)
+ * User rule: close ONLY when next is NOT same side (no SELL→SELL / BUY→BUY).
+ *
+ * Allowed exits:
+ * 1) HardInv 2.0pt (disaster)
+ * 2) Short dump/rally thesis 3pt (violent adverse)
+ * 3) OppositeSignal — next entry would be the other side
+ *
+ * PeakProtect / soft TP / timeDecay do NOT close alone (that caused same-side reopen).
  */
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
@@ -128,14 +120,7 @@ export function decideBestOutcomeExit(
 
   const entry = s.entry_price;
   const fav = favorableMove(s.open_side, entry, mid);
-  const tp = bestOutcomeTarget(entry);
   const sl = hardInvalidationDistance(entry);
-  const mfeFloor = bestOutcomeMfeFloor(entry);
-  const minGreen = bestOutcomeMinGreen(entry);
-  const armed = s.mfe >= mfeFloor;
-  const liveRet = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
-  const ret = liveRet ?? s.peak_retention;
-  const holdCont = Boolean(opts?.continuationSameSide);
 
   if (fav <= -sl) {
     return { exit: true, reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}` };
@@ -157,60 +142,26 @@ export function decideBestOutcomeExit(
     }
   }
 
-  // Armed peak → flat/red: bank before minus
-  if (armed && fav <= 0) {
-    return {
-      exit: true,
-      reason: `BestOutcome cut · gave back MFE ${s.mfe.toFixed(5)} → UPL ${fav.toFixed(5)} (lock before minus)`,
-    };
-  }
-
-  // PeakProtect 75% — continuation does NOT skip
-  if (armed && ret != null && ret < BEST_OUTCOME_LOCK_TRIGGER && fav > 0) {
-    return {
-      exit: true,
-      reason: `PeakProtection · keep ${(ret * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} · UPL ${fav.toFixed(5)} · lock@${(
-        BEST_OUTCOME_LOCK_RETENTION * 100
-      ).toFixed(0)}% (trig@${(BEST_OUTCOME_LOCK_TRIGGER * 100).toFixed(0)}%)`,
-    };
-  }
-
+  // Flip-only green exit — next must be opposite (no BUY→BUY / SELL→SELL)
   if (opts?.oppositeEntrySignal) {
-    const why = opts.oppositeReason || 'tape flipped';
+    const why = opts.oppositeReason || 'next setup is opposite';
+    const mfeFloor = bestOutcomeMfeFloor(entry);
+    const armed = s.mfe >= mfeFloor;
+    const liveRet = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
+    const ret = liveRet ?? s.peak_retention;
+    const lockNote =
+      armed && ret != null
+        ? ` · MFE ${s.mfe.toFixed(2)} ret ${(ret * 100).toFixed(0)}% (lock@${(
+            BEST_OUTCOME_LOCK_RETENTION * 100
+          ).toFixed(0)}%)`
+        : '';
     return {
       exit: true,
-      reason: `OppositeSignal · exit ${s.open_side} · ${why}`,
+      reason: `OppositeSignal · exit ${s.open_side} · next ≠ same · ${why}${lockNote}`,
     };
   }
 
-  if (holdCont) {
-    return { exit: false, reason: '' };
-  }
-
-  if (fav < minGreen) {
-    return { exit: false, reason: '' };
-  }
-
-  const thesis = thesisFailureReason(s.open_side, s.regime);
-  if (thesis) {
-    return { exit: true, reason: `${thesis} · lock green ${fav.toFixed(5)}` };
-  }
-
-  if (fav >= tp) {
-    return {
-      exit: true,
-      reason: `Target / best outcome · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)}`,
-    };
-  }
-
-  const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
-  if (heldMs > 720_000 && fav >= minGreen && s.mfe >= mfeFloor) {
-    return {
-      exit: true,
-      reason: `TimeDecay · held ${Math.round(heldMs / 1000)}s · realize green UPL ${fav.toFixed(5)}`,
-    };
-  }
-
+  // Hold — same-side continuation; PeakProtect does not close alone
   return { exit: false, reason: '' };
 }
 
@@ -244,6 +195,6 @@ export function describeBestOutcomeState(
   return {
     exit: false,
     reason: '',
-    hold: `BO10s · UPL ${fav.toFixed(2)} · HardInv -${sl.toFixed(2)} · MFE ${s.mfe.toFixed(2)} (${armed}) · ret ${retTxt} · lock@${lock}${cont}`,
+    hold: `HOLD until flip · UPL ${fav.toFixed(2)} · HardInv -${sl.toFixed(2)} · MFE ${s.mfe.toFixed(2)} (${armed}) · ret ${retTxt} · lock@${lock} INFO${cont}`,
   };
 }

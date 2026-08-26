@@ -1,6 +1,6 @@
 /**
- * Post-trade gates — user: NO cooldown seconds after any trade.
- * Reentry follows tape immediately (same side allowed).
+ * After close: 0s pause, but MUST flip side.
+ * User: no SELL→SELL / BUY→BUY — next trade must be opposite.
  */
 
 export type ExitSide = 'BUY' | 'SELL';
@@ -13,14 +13,14 @@ type EpicCooldown = {
 
 const byEpic = new Map<string, EpicCooldown>();
 
-/** No time pause after profit close. */
+/** No time pause after profit. */
 export const EPIC_PAUSE_MS = 0;
-/** No time pause after loss/scratch close. */
+/** No time pause after loss/scratch. */
 export const EPIC_LOSS_PAUSE_MS = 0;
 /** @deprecated */
 export const EPIC_FLIP_BLOCK_MS = 0;
-/** Same-side reopen allowed — no must-flip block. */
-export const EPIC_SAME_SIDE_BLOCK_MS = 0;
+/** Same side blocked until opposite trade closes. */
+export const EPIC_SAME_SIDE_BLOCK_MS = Number.POSITIVE_INFINITY;
 
 function key(epic: string): string {
   return String(epic || '')
@@ -48,12 +48,18 @@ export function noteEpicTradeClose(
 
 export function allowEpicReentry(
   epic: string,
-  _direction: ExitSide
+  direction: ExitSide
 ): { ok: boolean; reason: string } {
   const g = byEpic.get(key(epic));
   if (!g || !g.closedAtMs) return { ok: true, reason: 'no recent epic close' };
-  // User: nekāda cooldown — tape decides immediately
-  return { ok: true, reason: 'no cooldown · tape free' };
+  // Must flip — last BUY → only SELL next (no BUY→BUY / SELL→SELL)
+  if (g.side && g.side === direction) {
+    return {
+      ok: false,
+      reason: `EPIC must flip · last ${g.side} · no ${direction}→${direction}`,
+    };
+  }
+  return { ok: true, reason: 'flip ok · 0s pause' };
 }
 
 /** Lookup last close for desk INFO (same epic). */
