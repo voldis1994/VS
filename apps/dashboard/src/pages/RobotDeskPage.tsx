@@ -12,22 +12,7 @@ type RobotTick = {
   detail: string;
 };
 
-const ALL_REGIMES = [
-  'UNKNOWN',
-  'RANGE',
-  'TREND_UP',
-  'TREND_DOWN',
-  'PULLBACK_UPTREND',
-  'PULLBACK_DOWNTREND',
-  'COMPRESSION',
-  'EXPANSION',
-  'BREAKOUT_UP',
-  'BREAKOUT_DOWN',
-  'FAILED_BREAKOUT_UP',
-  'FAILED_BREAKOUT_DOWN',
-  'REVERSAL_CANDIDATE',
-  'TRANSITION',
-] as const;
+const ALL_REGIMES = ['TREND_UP', 'TREND_DOWN', 'RANGE'] as const;
 
 type FeedLeg = {
   sender_id: string;
@@ -94,6 +79,8 @@ type RobotSession = {
   unrealized: number | null;
   mode: 'FLAT' | 'MANAGE' | 'ENTRY';
   regime?: string;
+  tape_dir?: 'BUY' | 'SELL' | null;
+  tape_reason?: string | null;
   feed_source?: 'MULTI' | 'LOCAL' | 'NONE';
   feed_contributing?: number;
   feed_sender_count?: number;
@@ -147,41 +134,18 @@ function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'fl
     return { label: `MARKET CLOSED · ${st}`, kind: 'closed' };
   }
   if (s.open_side === 'BUY') {
-    const t = tradeLabel(s);
-    return { label: t, kind: t.includes('SCALP') ? 'short' : 'long' };
+    return { label: 'BUY', kind: 'long' };
   }
   if (s.open_side === 'SELL') {
-    const t = tradeLabel(s);
-    return { label: t, kind: t.includes('LONG') ? 'long' : 'short' };
+    return { label: 'SELL', kind: 'short' };
   }
   if (s.running && !s.open_side) {
-    const r = (s.regime || 'UNKNOWN').toUpperCase();
-    return { label: `WAIT ENTRY · ${r}`, kind: 'entry' };
+    const dir = (s.tape_dir || '').toUpperCase();
+    if (dir === 'BUY') return { label: 'READY BUY', kind: 'entry' };
+    if (dir === 'SELL') return { label: 'READY SELL', kind: 'entry' };
+    return { label: 'SCAN · TAPE FLAT', kind: 'entry' };
   }
   return { label: 'FLAT', kind: 'flat' };
-}
-
-function tradeLabel(s: RobotSession): string {
-  if (!s.open_side) return 'FLAT';
-  const r = (s.regime || '').toUpperCase();
-  const long =
-    r === 'TREND_UP' ||
-    r === 'TREND_DOWN' ||
-    r === 'PULLBACK_UPTREND' ||
-    r === 'PULLBACK_DOWNTREND';
-  const scalp =
-    r === 'BREAKOUT_UP' ||
-    r === 'BREAKOUT_DOWN' ||
-    r === 'FAILED_BREAKOUT_UP' ||
-    r === 'FAILED_BREAKOUT_DOWN' ||
-    r === 'COMPRESSION' ||
-    r === 'EXPANSION' ||
-    r === 'RANGE' ||
-    r === 'REVERSAL_CANDIDATE' ||
-    r === 'TRANSITION';
-  if (long) return `${s.open_side} LONG`;
-  if (scalp) return `${s.open_side} SCALP`;
-  return s.open_side;
 }
 
 function lastLog(s: RobotSession): string {
@@ -595,8 +559,8 @@ export function RobotDeskPage() {
 
         {view === 'command' ? (
           <>
-            <section className="rc-regimes" aria-label="Wired regimes">
-              <div className="robot-arena-kicker">WIRED CHAIN</div>
+            <section className="rc-regimes" aria-label="Tape chain">
+              <div className="robot-arena-kicker">TAPE CHAIN · 25/10/5/1</div>
               <div className="robot-wire-regimes">
                 {regimes.map((r) => {
                   const name = r.toUpperCase();
@@ -610,10 +574,10 @@ export function RobotDeskPage() {
                       className={`robot-regime-chip ${live ? 'live' : ''} ${focusHit ? 'focus' : ''} ${parked ? 'parked' : ''}`}
                       title={
                         parked
-                          ? 'Robot PARKED — regime frozen until TRADEABLE'
+                          ? 'Robot PARKED — market closed'
                           : live
-                            ? 'Active on a running robot'
-                            : 'Catalog regime'
+                            ? 'Active tape side'
+                            : 'Tape state'
                       }
                     >
                       {name}
@@ -800,7 +764,7 @@ export function RobotDeskPage() {
                     {focused.ohlc_10s?.market || 'SEEDING'}
                   </div>
                   <div>MODE · {focused.running ? focused.mode : 'STOPPED'}</div>
-                  <div>{focused.regime_info || `REGIME · ${(focused.regime || 'UNKNOWN').toUpperCase()}`}</div>
+                  <div>{focused.tape_reason || focused.regime_info || `TAPE · ${focused.tape_dir || 'FLAT'}`}</div>
                   <div>{focused.zone_info || 'ZONE · forming'}</div>
                   <div>
                     FEEDS ·{' '}

@@ -25,22 +25,19 @@ import {
   normalizeRegime,
   currentRegime,
   MAX_REGIME_BARS,
-  REGIME_NAMES,
-  describeRegimeContext,
   toLiveRegime,
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove } from './exitManage.js';
 import {
   allowEntryAgainstImpulse,
-  blockLateTrendChase,
   buildScalpZone,
   continuationSameSide,
   decideEntryFrom10sRegime,
   explainNoEntry,
   formatZoneInfo,
   shortNetMove,
-  zoneFadeAllowed,
+  tapeSide,
 } from './entryFromRegime.js';
 import type { ScalpZone } from './zones.js';
 import { ZONE_WINDOW } from './zones.js';
@@ -55,11 +52,6 @@ import {
   type MultiFeedPrice,
   type MultiFeedLeg,
 } from './robotReader.js';
-import {
-  buildFresherRefs,
-  detectCapitalIsolatedExtreme,
-  detectStaleQuoteAdverse,
-} from './staleQuoteGuard.js';
 import {
   aggregateSecondsToTen,
   emptyTenSecState,
@@ -147,6 +139,9 @@ export type RobotSession = {
   market_status?: string | null;
   market_tradeable?: boolean;
   market_info?: string | null;
+  /** Live multi-TF tape for desk UI — never WAIT ENTRY · TRANSITION */
+  tape_dir?: 'BUY' | 'SELL' | null;
+  tape_reason?: string | null;
   decision_chain?: {
     feeds: string;
     ohlc: string;
@@ -314,8 +309,14 @@ function publicSession(s: Internal): RobotSession {
     ...rest
   } = s;
   const zoneSnap = buildScalpZone(s.closedBars);
+  const liveBar = s.ohlcState.forming ?? s.ohlcState.last_closed;
+  const tape = tapeSide(s.closedBars, liveBar);
+  // Display regime from tape — never sticky TRANSITION/UNKNOWN on the board
+  const displayRegime =
+    tape.dir === 'BUY' ? 'TREND_UP' : tape.dir === 'SELL' ? 'TREND_DOWN' : 'RANGE';
   return {
     ...rest,
+    regime: displayRegime,
     ohlc_10s: publicOhlc10s(s.ohlcState),
     feed_source: rest.feed_source,
     feed_contributing: s.multiFeed?.contributing ?? rest.feed_contributing ?? 0,
@@ -323,18 +324,23 @@ function publicSession(s: Internal): RobotSession {
     feed_agreement: s.multiFeed?.agreement ?? rest.feed_agreement ?? null,
     feed_legs: s.multiFeed?.legs ?? rest.feed_legs ?? [],
     zone_info: formatZoneInfo(zoneSnap, s.closedBars),
-    regime_info: describeRegimeContext(s.closedBars, s.regime || 'UNKNOWN'),
+    regime_info: `TAPE ${tape.dir ?? 'FLAT'} · ${tape.reason}`,
+    tape_dir: tape.dir,
+    tape_reason: tape.reason,
     zone_high: zoneSnap?.high ?? null,
     zone_low: zoneSnap?.low ?? null,
     zone_kind: zoneSnap?.kind ?? null,
     market_status: s.market_status ?? null,
     market_tradeable: s.market_tradeable ?? true,
     market_info: formatMarketInfo(s.market_status, s.market_tradeable ?? true, s.cadence_ms / 1000),
-    decision_chain: buildDecisionChain(s),
+    decision_chain: buildDecisionChain(s, tape),
   };
 }
 
-function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_chain']> {
+function buildDecisionChain(
+  s: Internal,
+  tape = tapeSide(s.closedBars, s.ohlcState.forming ?? s.ohlcState.last_closed)
+): NonNullable<RobotSession['decision_chain']> {
   const tradeable = s.market_tradeable ?? true;
   const marketLine = formatMarketInfo(s.market_status, tradeable, s.cadence_ms / 1000);
   if (!tradeable) {
@@ -361,24 +367,28 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
   const capCfg = mf?.capital_sender_count ?? s.feed_sender_count ?? 0;
   const pubNear = mf?.public_contributing ?? 0;
   const feeds = `FEEDS cap ${capLive}/${capCfg} · pubAdv ${pubNear} · reject ${rejectN} · lead=${mf?.lead_label || '—'} · ${mf?.agreement || s.feed_agreement || 'NONE'}`.trim();
-  const regimeLine = describeRegimeContext(s.closedBars, s.regime || 'UNKNOWN');
   const zoneLine = formatZoneInfo(zone, s.closedBars);
-  let action = 'WAIT';
+  let action = `SCAN · ${tape.reason}`;
   if (!s.running) action = 'STOPPED';
   else if (s.open_side) action = `MANAGE ${s.open_side}`;
-  else if (s.mode === 'ENTRY') action = 'SCAN ENTRY';
+  else if (tape.dir === 'BUY') action = `READY BUY · ${tape.reason}`;
+  else if (tape.dir === 'SELL') action = `READY SELL · ${tape.reason}`;
   return {
     feeds,
     ohlc: `${ohlcLine} · ${zoneLine}`,
-    regime: regimeLine,
-    setup: zone?.kind ?? null,
+    regime: `TAPE ${tape.dir ?? 'FLAT'} · ${tape.reason}`,
+    setup: tape.dir,
     action,
   };
 }
 
 export function robotBoardMeta(sessions: RobotSession[]) {
-  const activeRegimes = [
-    ...new Set(sessions.filter((s) => s.running).map((s) => s.regime || 'UNKNOWN')),
+  const activeTapes = [
+    ...new Set(
+      sessions
+        .filter((s) => s.running)
+        .map((s) => (s.tape_dir === 'BUY' ? 'TREND_UP' : s.tape_dir === 'SELL' ? 'TREND_DOWN' : 'RANGE'))
+    ),
   ];
   const maxFeeds = sessions.reduce(
     (n, s) => Math.max(n, s.feed_sender_count || 0, s.feed_legs?.length || 0),
@@ -386,14 +396,14 @@ export function robotBoardMeta(sessions: RobotSession[]) {
   );
   const contributing = sessions.reduce((n, s) => Math.max(n, s.feed_contributing || 0), 0);
   return {
-    regimes: [...REGIME_NAMES],
-    trade_types: ['BUY LONG', 'SELL LONG', 'BUY SCALP', 'SELL SCALP'],
-    active_regimes: activeRegimes,
+    regimes: ['TREND_UP', 'TREND_DOWN', 'RANGE'],
+    trade_types: ['BUY', 'SELL'],
+    active_regimes: activeTapes,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'Capital LEAD/CONFIRM → 10s OHLC → ZONE → regime → filters → ENTRY · BO+continuation → EXIT',
+    chain: 'Capital LEAD → 10s OHLC → TAPE 25/10/5/1 → BUY|SELL · BO → EXIT',
     note:
-      'REAL feeds = Capital.com konti (B.O.S.S./guntis/dimitrij). Public = tikai ADVISORY, nekad nebloķē entry. Zones + Capital quote obligāti.',
+      'Entry = multi-TF tape only. No WAIT ENTRY · TRANSITION. Zone = map. Public feeds advisory.',
   };
 }
 
@@ -402,7 +412,8 @@ function formatScanContext(
   zone: ScalpZone | null,
   feedNote?: string
 ): string {
-  const regimeLine = describeRegimeContext(s.closedBars, s.regime || 'UNKNOWN');
+  const tape = tapeSide(s.closedBars, s.ohlcState.forming ?? s.ohlcState.last_closed);
+  const tapeLine = `TAPE ${tape.dir ?? 'FLAT'} · ${tape.reason}`;
   const zoneLine = formatZoneInfo(zone, s.closedBars);
   const mf = s.multiFeed;
   const capLive = mf?.capital_contributing ?? s.feed_contributing ?? 0;
@@ -410,7 +421,7 @@ function formatScanContext(
   const feedLine =
     feedNote ||
     `FEEDS cap ${capLive}/${capCfg} · lead=${mf?.lead_label || '—'} · ${mf?.agreement || s.feed_agreement || 'NONE'}`;
-  return `${regimeLine} · ${zoneLine} · ${feedLine}`;
+  return `${tapeLine} · ${zoneLine} · ${feedLine}`;
 }
 
 function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
@@ -935,12 +946,12 @@ async function enterTrade(
   reason: string,
   setupType?: string | null
 ) {
-  // Last gate — peer/zone must never open against 10s/10m tape
+  // Only hard anti-fade — never open against clear opposite multi-TF stack
   const liveBar = s.ohlcState.forming ?? s.ohlcState.last_closed;
   const tapeGate = allowEntryAgainstImpulse(direction, s.closedBars, liveBar);
   if (!tapeGate.ok) {
     pushTick(s, {
-      phase: 'WAIT',
+      phase: 'DECIDE',
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
@@ -948,28 +959,7 @@ async function enterTrade(
     });
     return;
   }
-  const fadeGate = zoneFadeAllowed(direction, setupType, s.closedBars, liveBar);
-  if (!fadeGate.ok) {
-    pushTick(s, {
-      phase: 'WAIT',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `ENTRY blocked · ${fadeGate.reason}`,
-    });
-    return;
-  }
-  const lateGate = blockLateTrendChase(direction, s.closedBars, liveBar);
-  if (!lateGate.ok) {
-    pushTick(s, {
-      phase: 'WAIT',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `ENTRY blocked · ${lateGate.reason}`,
-    });
-    return;
-  }
+  void setupType;
 
   // HARD RULE: never entry while any trade open on this epic
   const listed = await listCapitalOpenPositions(session);
@@ -1667,11 +1657,11 @@ async function robotCycleBody(s: Internal) {
     const feedGate = allowEntryFromFeeds(s.multiFeed);
     if (!feedGate.ok) {
       pushTick(s, {
-        phase: 'WAIT',
+        phase: 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `WAIT · ${formatScanContext(s, zoneNow, feedGate.reason)}`,
+        detail: `SCAN · feeds · ${formatScanContext(s, zoneNow, feedGate.reason)}`,
       });
       return;
     }
@@ -1721,7 +1711,7 @@ async function robotCycleBody(s: Internal) {
       const epicGatePeer = allowEpicReentry(s.epic, peerSig.side);
       if (!epicGatePeer.ok) {
         pushTick(s, {
-          phase: 'WAIT',
+          phase: 'DECIDE',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
@@ -1736,7 +1726,7 @@ async function robotCycleBody(s: Internal) {
       );
       if (!peerVs.ok) {
         pushTick(s, {
-          phase: 'WAIT',
+          phase: 'DECIDE',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
@@ -1747,7 +1737,7 @@ async function robotCycleBody(s: Internal) {
       const deskPeer = allowDeskSameSide(sessions.values(), s.epic, peerSig.side, s.id);
       if (!deskPeer.ok) {
         pushTick(s, {
-          phase: 'WAIT',
+          phase: 'DECIDE',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
@@ -1765,17 +1755,17 @@ async function robotCycleBody(s: Internal) {
 
     if (!signalBar) {
       pushTick(s, {
-        phase: 'WAIT',
+        phase: 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `WAIT · ${ohlcLine} · collecting 10s bars · ${formatScanContext(s, zoneNow)}`,
+        detail: `SCAN · ${ohlcLine} · collecting 10s bars · ${formatScanContext(s, zoneNow)}`,
       });
       return;
     }
 
-    // Keep real regime for INFO display only — never blocks entry
-    if (!s.regime) s.regime = 'UNKNOWN';
+    // Internal label only — public API maps to tape TREND_UP/DOWN/RANGE
+    if (!s.regime) s.regime = 'RANGE';
     const bucketKey = String(signalBar.open_time_ms || 0);
     if (bucketKey && bucketKey === s.last_entry_signal_key) {
       pushTick(s, {
@@ -1815,7 +1805,7 @@ async function robotCycleBody(s: Internal) {
     const epicGate = allowEpicReentry(s.epic, sig.direction);
     if (!epicGate.ok) {
       pushTick(s, {
-        phase: 'WAIT',
+        phase: 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
@@ -1827,49 +1817,11 @@ async function robotCycleBody(s: Internal) {
     const deskGate = allowDeskSameSide(sessions.values(), s.epic, sig.direction, s.id);
     if (!deskGate.ok) {
       pushTick(s, {
-        phase: 'WAIT',
+        phase: 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
         detail: `${ohlcLine} · ${deskGate.reason}`,
-      });
-      return;
-    }
-
-    // Stale Capital / fake extremes (#136)
-    const publicNear = (s.multiFeed?.legs || [])
-      .filter((l) => l.ok && l.mid != null && Number.isFinite(l.mid))
-      .filter((l) => l.role === 'LEAD' || l.role === 'CONFIRM' || !String(l.detail || '').includes('FAR'))
-      .filter((l) => l.role !== 'REJECT')
-      .map((l) => ({ name: l.name, mid: l.mid as number }));
-    const refs = buildFresherRefs({
-      publicNearMids: publicNear,
-      ohlcClose: closed?.close ?? ohlc.last_c,
-      formingClose: forming?.close ?? ohlc.forming_c,
-    });
-    const lag = detectStaleQuoteAdverse(sig.direction, quote.mid, refs);
-    if (lag.block) {
-      pushTick(s, {
-        phase: 'WAIT',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `${ohlcLine} · SKIP · ${lag.reason}`,
-      });
-      return;
-    }
-    const fake = detectCapitalIsolatedExtreme(
-      sig.direction,
-      quote.mid,
-      publicNear.map((p) => p.mid)
-    );
-    if (fake.block) {
-      pushTick(s, {
-        phase: 'WAIT',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `${ohlcLine} · SKIP · ${fake.reason}`,
       });
       return;
     }
@@ -1897,8 +1849,6 @@ async function robotCycleBody(s: Internal) {
       sourceUnitId: s.id,
     });
     queueMicrotask(() => kickPeerEntryCycles(s.id, s.epic));
-
-    if (!direction) return;
     await enterTrade(opened.session, s, direction, quote, reason, setupType);
   } catch (err) {
     s.reads_fail += 1;
