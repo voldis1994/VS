@@ -535,7 +535,7 @@ function writeJournalClose(
 }
 
 /**
- * SAFETY SL as LAST RESORT (~0.20% / ~9pt) — wider than HardInv ~2.5pt.
+ * SAFETY SL as LAST RESORT (~0.20% / ~9pt) — wider than HardInv ~1.9pt.
  * Best Outcome / HardInvalidation must fire first; Capital Limit SL only on disaster.
  */
 function safetyStopLevel(
@@ -563,7 +563,7 @@ function safetyStopLevel(
         ? Math.max(ask - bid, 0)
         : abs * 0.00005;
 
-  const pctCushion = abs * 0.002; // 0.20% Safety SL (#136) — last resort; HardInv ~2.5pt first
+  const pctCushion = abs * 0.002; // 0.20% Safety SL (#136) — last resort; HardInv ~1.9pt first
   const brokerMin =
     minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
       ? minStopDistance

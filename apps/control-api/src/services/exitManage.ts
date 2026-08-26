@@ -60,10 +60,10 @@ export function bestOutcomeMfeFloor(entry: number): number {
   return Math.max(abs * 0.0003, 1.0);
 }
 
-/** Soft TP ≈0.45% — ~20pt Gold — 10s scalp target (not 5m 55pt). */
+/** Soft TP ≈0.53% — ~25pt Gold — 10s scalp target. */
 export function bestOutcomeTarget(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.0045, 0.8);
+  return Math.max(abs * 0.0053, 0.8);
 }
 
 /** Min green for soft TP / timeDecay — ~0.5pt (PeakProtect uses any green). */
