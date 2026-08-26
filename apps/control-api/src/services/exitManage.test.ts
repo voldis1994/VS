@@ -49,10 +49,15 @@ describe('decideBestOutcomeExit 10s + PeakProtect 70%', () => {
     expect(hold.exit).toBe(false);
   });
 
-  it('MFE floor arms on micro ~0.20pt (not 1pt — user +0.25 case)', () => {
-    expect(bestOutcomeMfeFloor(4640)).toBeLessThanOrEqual(0.25);
-    expect(bestOutcomeMfeFloor(4640)).toBeGreaterThanOrEqual(0.2);
-    expect(bestOutcomeMinGreen(4640)).toBeLessThanOrEqual(1);
+  it('MFE floor arms at ~1.0pt — not 0.20pt (stops £0 nules)', () => {
+    expect(bestOutcomeMfeFloor(4640)).toBeGreaterThanOrEqual(1.0);
+    expect(bestOutcomeMinGreen(4640)).toBeGreaterThanOrEqual(1.0);
+    // Micro +0.25 never arms PeakProtect → no flat/£0 exit spam
+    const noArm = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: 4640, mfe: 0.25, peak_retention: 0.2 }),
+      4640.0
+    );
+    expect(noArm.exit).toBe(false);
   });
 
   it('PeakProtect @70% cuts deep giveback even with continuation', () => {
@@ -73,29 +78,24 @@ describe('decideBestOutcomeExit 10s + PeakProtect 70%', () => {
     expect(cut.reason).toMatch(/70%/);
   });
 
-  it('PeakProtect arms on +0.25 and cuts before +0.06 giveback', () => {
-    expect(bestOutcomeMfeFloor(4640)).toBeLessThanOrEqual(0.25);
+  it('PeakProtect arms only after ≥1.0pt MFE then locks 70%', () => {
+    expect(bestOutcomeMfeFloor(4640)).toBeGreaterThanOrEqual(1.0);
     const cut = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: 4640,
-        mfe: 0.25,
-        peak_retention: 0.06 / 0.25,
+        mfe: 1.2,
+        peak_retention: 0.5,
       }),
-      4640.06,
+      4640.6,
       { continuationSameSide: true }
     );
     expect(cut.exit).toBe(true);
     expect(cut.reason).toMatch(/PeakProtection/);
-    // 0.18/0.25=0.72 < trigger 0.73 → cut; 0.19/0.25=0.76 → hold
-    const early = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: 4640, mfe: 0.25, peak_retention: 0.9 }),
-      4640.18
-    );
-    expect(early.exit).toBe(true);
+    // 0.9/1.2=0.75 ≥ trigger 0.73 → hold
     const keep = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: 4640, mfe: 0.25, peak_retention: 0.9 }),
-      4640.19
+      snap({ open_side: 'BUY', entry_price: 4640, mfe: 1.2, peak_retention: 0.9 }),
+      4640.9
     );
     expect(keep.exit).toBe(false);
   });

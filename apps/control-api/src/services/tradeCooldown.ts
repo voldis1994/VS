@@ -1,6 +1,7 @@
 /**
  * Anti-whipsaw gate after close.
- * Profit → 10s · Loss → 30s. Shared per epic on multi-unit desks.
+ * Stops £0 “nules” → instant same-side reopen spam.
+ * Profit → 45s · Scratch/Loss → 60s · same-side block 60s.
  */
 
 export type ExitSide = 'BUY' | 'SELL';
@@ -13,12 +14,14 @@ type EpicCooldown = {
 
 const byEpic = new Map<string, EpicCooldown>();
 
-/** After profit close — quick re-entry OK. */
-export const EPIC_PAUSE_MS = 10_000; // 10s
-/** After loss close — slightly longer cool-off. */
-export const EPIC_LOSS_PAUSE_MS = 30_000; // 30s
-/** Block opposite flip a bit longer than profit pause. */
-export const EPIC_FLIP_BLOCK_MS = 30_000; // 30s
+/** After real profit close. */
+export const EPIC_PAUSE_MS = 45_000; // 45s
+/** After loss OR scratch (£0) close. */
+export const EPIC_LOSS_PAUSE_MS = 60_000; // 60s
+/** Block opposite flip. */
+export const EPIC_FLIP_BLOCK_MS = 60_000; // 60s
+/** Block reopening the SAME side — user: “ver to pašu treidu vaļā”. */
+export const EPIC_SAME_SIDE_BLOCK_MS = 60_000; // 60s
 
 function key(epic: string): string {
   return String(epic || '')
@@ -56,8 +59,16 @@ export function allowEpicReentry(
     return {
       ok: false,
       reason: `EPIC pause ${Math.ceil((pause - ago) / 1000)}s · ${
-        g.wasLoss ? 'after loss' : 'after profit'
+        g.wasLoss ? 'after loss/scratch' : 'after profit'
       } · no whipsaw`,
+    };
+  }
+  if (g.side && g.side === direction && ago < EPIC_SAME_SIDE_BLOCK_MS) {
+    return {
+      ok: false,
+      reason: `EPIC no-repeat · last ${g.side} · block same ${Math.ceil(
+        (EPIC_SAME_SIDE_BLOCK_MS - ago) / 1000
+      )}s`,
     };
   }
   if (g.side && g.side !== direction && ago < EPIC_FLIP_BLOCK_MS) {

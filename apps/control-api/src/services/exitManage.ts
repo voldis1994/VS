@@ -72,10 +72,10 @@ export function thesisFailureReason(
 }
 
 
-/** Arm PeakProtect on micro swing — ≥0.20pt Gold (was 1.0pt → +0.25 never locked). */
+/** Arm PeakProtect only on real swing — ≥1.0pt Gold (0.20pt → £0 “nules” @ 0.05). */
 export function bestOutcomeMfeFloor(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.00004, 0.2);
+  return Math.max(abs * 0.00022, 1.0);
 }
 
 /** Soft TP ≈0.53% — ~25pt Gold — 10s scalp target. */
@@ -84,10 +84,10 @@ export function bestOutcomeTarget(entry: number): number {
   return Math.max(abs * 0.0053, 0.8);
 }
 
-/** Min green for soft TP / timeDecay — ~0.5pt (PeakProtect uses any green). */
+/** Min green for soft TP / timeDecay — ~1.0pt (no micro harvest → £0). */
 export function bestOutcomeMinGreen(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.00015, 0.5);
+  return Math.max(abs * 0.00022, 1.0);
 }
 
 /**

@@ -866,11 +866,11 @@ async function exitTrade(
   s.closed_at_ms = Date.now();
   const exitSide = s.open_side;
   const wasLoss =
-    (s.unrealized != null && s.unrealized < 0) ||
+    (s.unrealized != null && s.unrealized <= 0) ||
     (quote.mid != null &&
       s.entry_price != null &&
       exitSide != null &&
-      (exitSide === 'BUY' ? quote.mid < s.entry_price : quote.mid > s.entry_price));
+      (exitSide === 'BUY' ? quote.mid <= s.entry_price : quote.mid >= s.entry_price));
   noteEpicTradeClose(s.epic, exitSide, wasLoss);
   s.error = null;
   writeJournalClose(s, quote, reason, wasLoss);
@@ -1443,7 +1443,7 @@ async function robotCycleBody(s: Internal) {
         s.closed_at_ms = Date.now();
         const flatPnl =
           s.unrealized != null && Number.isFinite(s.unrealized) ? s.unrealized : 0;
-        noteEpicTradeClose(s.epic, s.open_side, flatPnl < 0);
+        noteEpicTradeClose(s.epic, s.open_side, flatPnl <= 0);
         clearTradeState(s);
       }
     } else {
@@ -1566,7 +1566,7 @@ async function robotCycleBody(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // Post-close: profit 10s · loss 30s (same as EPIC pause)
+    // Post-close: profit 45s · loss/scratch 60s (same as EPIC pause)
     const lastClose = lastEpicClose(s.epic);
     if (lastClose) {
       const pauseMs = pauseMsAfterClose(lastClose.wasLoss);
@@ -1578,7 +1578,7 @@ async function robotCycleBody(s: Internal) {
           ask: quote.ask,
           mid: quote.mid,
           detail: `POST-CLOSE pause ${Math.ceil((pauseMs - sinceClose) / 1000)}s · ${
-            lastClose.wasLoss ? 'after loss' : 'after profit'
+            lastClose.wasLoss ? 'after loss/scratch' : 'after profit'
           }`,
         });
         return;
