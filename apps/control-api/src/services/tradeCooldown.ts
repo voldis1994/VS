@@ -14,9 +14,9 @@ type EpicCooldown = {
 const byEpic = new Map<string, EpicCooldown>();
 
 /** After any close — short pause on 10s TF (continuation hold reduces re-entry spam). */
-export const EPIC_PAUSE_MS = 90_000; // 90s
-export const EPIC_LOSS_PAUSE_MS = 180_000; // 3 min
-export const EPIC_FLIP_BLOCK_MS = 180_000; // 3 min
+export const EPIC_PAUSE_MS = 60_000; // 60s
+export const EPIC_LOSS_PAUSE_MS = 90_000; // 90s (was 3min — blocked re-entry all night)
+export const EPIC_FLIP_BLOCK_MS = 120_000; // 2 min
 
 function key(epic: string): string {
   return String(epic || '')

@@ -35,6 +35,7 @@ import {
 import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove } from './exitManage.js';
 import {
   allowEntryAgainstImpulse,
+  blockEntryAtExtreme,
   buildScalpZone,
   continuationSameSide,
   decideEntryFrom10sRegime,
@@ -1750,6 +1751,18 @@ async function robotCycleBody(s: Internal) {
         ask: quote.ask,
         mid: quote.mid,
         detail: `${ohlcLine} · ${vsImpulse.reason}`,
+      });
+      return;
+    }
+
+    const vsExtreme = blockEntryAtExtreme(sig.direction, s.closedBars, signalBar);
+    if (!vsExtreme.ok) {
+      pushTick(s, {
+        phase: 'DECIDE',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · ${vsExtreme.reason}`,
       });
       return;
     }

@@ -23,7 +23,7 @@ function baseBars(): TenSecBar[] {
 }
 
 describe('10s zone entry', () => {
-  it('skips chop regimes without inventing EXPANSION trades', () => {
+  it('skips chop without struct trend', () => {
     const bars = baseBars();
     const sigBar = bar(4501, 4503, 12);
     expect(decideEntryFrom10sRegime(sigBar, 'COMPRESSION', bars)).toBeNull();

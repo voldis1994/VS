@@ -26,8 +26,10 @@ export type ZoneVerdict = {
   reason: string;
 };
 
-/** Scalp box: not micro-noise, not a runaway range. Gold@4500 → ~1.8–18pt. */
-const MIN_WIDTH_PCT = 0.0004;
+/** Scalp box: Gold@4640 → min ~1.0pt (was 0.04% ≈1.85pt — blocked most overnight). */
+const MIN_WIDTH_PCT = 0.00025;
+/** Point floor for metals — 1.3pt band must qualify on Gold. */
+const MIN_WIDTH_PT = 1.0;
 const MAX_WIDTH_PCT = 0.004;
 const MIN_ZONE_BARS = 8;
 const ZONE_WINDOW = 18;
@@ -84,7 +86,8 @@ export function diagnoseZoneBuild(
   const mid = (high + low) / 2;
   const width_pts = high - low;
   const width_pct = width_pts / Math.max(Math.abs(mid), 1e-9);
-  if (width_pct < MIN_WIDTH_PCT) {
+  const minWidthPct = Math.max(MIN_WIDTH_PCT, MIN_WIDTH_PT / Math.max(Math.abs(mid), 1e-9));
+  if (width_pct < minWidthPct) {
     return {
       zone: null,
       closed_bars,
@@ -284,7 +287,7 @@ export function formatZoneInfo(
     case 'SEEDING':
       return `ZONE seeding · ${d.closed_bars}/${d.min_bars}×10s closed (need ${Math.max(0, d.min_bars - d.closed_bars)} more · ~${Math.max(0, d.min_bars - d.closed_bars) * 10}s)`;
     case 'TOO_NARROW':
-      return `ZONE invalid · ${d.closed_bars} bars · band ${wPt} ${wPct} too tight (min ${(MIN_WIDTH_PCT * 100).toFixed(3)}%) — micro noise`;
+      return `ZONE invalid · ${d.closed_bars} bars · band ${wPt} ${wPct} too tight (min ${MIN_WIDTH_PT}pt) — micro noise`;
     case 'TOO_WIDE':
       return `ZONE invalid · ${d.closed_bars} bars · band ${wPt} ${wPct} too wide (max ${(MAX_WIDTH_PCT * 100).toFixed(3)}%) — trending not box`;
     case 'NO_STRUCT':

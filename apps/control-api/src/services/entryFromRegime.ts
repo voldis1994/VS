@@ -26,7 +26,7 @@ export type RegimeEntry = {
 /** Soft live on 10s — moving bar, not flat doji. */
 function softLive(bar: TenSecBar): boolean {
   const pts = Math.abs(bar.close - bar.open);
-  return pts >= 0.6 || rangePct(bar) >= 0.0002 || isMoving10s(bar);
+  return pts >= 0.4 || rangePct(bar) >= 0.00015 || isMoving10s(bar);
 }
 
 function isGreen(bar: TenSecBar): boolean {
@@ -60,9 +60,9 @@ export function recentImpulse(
   const netPts = last.close - first.open;
   const mid = Math.max(Math.abs(first.open), 1e-9);
   const netPct = netPts / mid;
-  // ~0.12% ≈ 5.5pt over ~1 min of 10s bars
-  if (netPct >= 0.0012) return { dir: 'UP', netPct, netPts };
-  if (netPct <= -0.0012) return { dir: 'DOWN', netPct, netPts };
+  // ~0.08% ≈ 3.7pt over ~1 min — pick up overnight drift sooner
+  if (netPct >= 0.0008) return { dir: 'UP', netPct, netPts };
+  if (netPct <= -0.0008) return { dir: 'DOWN', netPct, netPts };
   return { dir: null, netPct, netPts };
 }
 
@@ -104,6 +104,77 @@ export function rallyFromSwingLow(
   if (s.netPct <= 0) return { rallyPts: 0, rallyPct: 0 };
   return { rallyPts: s.netPts, rallyPct: s.netPct };
 }
+
+/** ~4 min struct net — catches overnight drift on 10s stack. */
+export function structNetMove(
+  bars: TenSecBar[] | null | undefined,
+  lookback = 24
+): { dir: 'UP' | 'DOWN' | null; netPct: number; netPts: number } {
+  if (!bars?.length) return { dir: null, netPct: 0, netPts: 0 };
+  const window = bars.slice(-Math.max(lookback, 8));
+  if (window.length < 8) return { dir: null, netPct: 0, netPts: 0 };
+  const first = window[0]!;
+  const last = window[window.length - 1]!;
+  const netPts = last.close - first.open;
+  const mid = Math.max(Math.abs(first.open), 1e-9);
+  const netPct = netPts / mid;
+  // ~0.10% ≈ 4.6pt Gold over ~4 min — enough struct, not overnight silence
+  if (netPct >= 0.001) return { dir: 'UP', netPct, netPts };
+  if (netPct <= -0.001) return { dir: 'DOWN', netPct, netPts };
+  return { dir: null, netPct, netPts };
+}
+
+/**
+ * Block chasing into swing extremes after a big struct move.
+ * Prevents SELL at dump bottom / BUY at rally top (02:00 SELL @4633 case).
+ */
+export function blockEntryAtExtreme(
+  direction: 'BUY' | 'SELL',
+  bars: TenSecBar[] | null | undefined,
+  bar: TenSecBar
+): { ok: boolean; reason: string } {
+  const struct = structNetMove(bars, 24);
+  if (!bars?.length || struct.dir == null) return { ok: true, reason: 'no struct extreme gate' };
+
+  const recent = bars.slice(-24);
+  const high = Math.max(...recent.map((b) => b.high));
+  const low = Math.min(...recent.map((b) => b.low));
+  const range = Math.max(high - low, 0.01);
+  const price = bar.close;
+
+  if (
+    direction === 'SELL' &&
+    struct.netPct <= -0.003 &&
+    price <= low + range * 0.2
+  ) {
+    return {
+      ok: false,
+      reason: `BLOCK SELL · struct dump ${struct.netPts.toFixed(1)}pt · at swing low (no fade bottom)`,
+    };
+  }
+  if (
+    direction === 'BUY' &&
+    struct.netPct >= 0.003 &&
+    price >= high - range * 0.2
+  ) {
+    return {
+      ok: false,
+      reason: `BLOCK BUY · struct rally ${struct.netPts.toFixed(1)}pt · at swing high (no chase top)`,
+    };
+  }
+  return { ok: true, reason: 'struct extreme ok' };
+}
+
+const HARD_BLOCK_REGIMES: RegimeName[] = [
+  'UNKNOWN',
+  'TRANSITION',
+  'REVERSAL_CANDIDATE',
+  'FAILED_BREAKOUT_UP',
+  'FAILED_BREAKOUT_DOWN',
+];
+
+/** COMPRESSION/RANGE trade when struct trend is clear (not flat chop). */
+const CHOP_REGIMES: RegimeName[] = ['COMPRESSION', 'RANGE'];
 
 export function allowEntryAgainstImpulse(
   direction: 'BUY' | 'SELL',
@@ -187,17 +258,15 @@ export function explainNoEntry(
   const zoneLine = formatZoneInfo(zone, closedBars);
   const barLine = `signal bar body=${(bodyPct(bar) * 100).toFixed(2)}% rng=${(rangePct(bar) * 100).toFixed(3)}%`;
 
-  const noEntryRegimes: RegimeName[] = [
-    'UNKNOWN',
-    'TRANSITION',
-    'COMPRESSION',
-    'RANGE',
-    'REVERSAL_CANDIDATE',
-    'FAILED_BREAKOUT_UP',
-    'FAILED_BREAKOUT_DOWN',
-  ];
+  const noEntryRegimes: RegimeName[] = [...HARD_BLOCK_REGIMES];
   if (noEntryRegimes.includes(r)) {
     return `WAIT · ${regimeLine} · ${zoneLine} · ${barLine}`;
+  }
+  if (CHOP_REGIMES.includes(r)) {
+    const struct = structNetMove(closedBars, 24);
+    if (!struct.dir) {
+      return `WAIT · ${regimeLine} · no struct trend yet · ${zoneLine} · ${barLine}`;
+    }
   }
   if (!zone) {
     const d = diagnoseZoneBuild(closedBars);
@@ -211,6 +280,10 @@ export function explainNoEntry(
   }
   if (!dir) {
     return `WAIT · no market direction · ${regimeLine} · ${zoneLine} · ${barLine}`;
+  }
+  const extreme = blockEntryAtExtreme(dir, closedBars, bar);
+  if (!extreme.ok) {
+    return `WAIT · ${extreme.reason} · ${regimeLine} · ${barLine}`;
   }
   const zv = evaluateZoneEntry(dir, bar, zone, closedBars);
   if (!zv.ok) {
@@ -273,22 +346,22 @@ export function decideEntryFrom10sRegime(
   const r: RegimeName = normalizeRegime(regime);
   const candle = describe(bar);
 
-  if (
-    r === 'UNKNOWN' ||
-    r === 'TRANSITION' ||
-    r === 'COMPRESSION' ||
-    r === 'RANGE' ||
-    r === 'REVERSAL_CANDIDATE' ||
-    r === 'FAILED_BREAKOUT_UP' ||
-    r === 'FAILED_BREAKOUT_DOWN'
-  ) {
-    return null;
+  if (HARD_BLOCK_REGIMES.includes(r)) return null;
+
+  let dir = marketDirection(regime, closedBars, bar);
+
+  // COMPRESSION/RANGE: allow when ~4 min struct trend is clear
+  if (CHOP_REGIMES.includes(r)) {
+    const struct = structNetMove(closedBars, 24);
+    if (!struct.dir) return null;
+    dir = struct.dir === 'UP' ? 'BUY' : 'SELL';
   }
 
-  // EXPANSION alone without clear slope → no entry (was random color follow)
-  const dir = marketDirection(regime, closedBars, bar);
   if (!dir) return null;
   if (r === 'EXPANSION' && !shortNetMove(closedBars, bar).dir) return null;
+
+  const extreme = blockEntryAtExtreme(dir, closedBars, bar);
+  if (!extreme.ok) return null;
 
   if (!softLive(bar)) return null;
   if (signalBarTooLate(bar)) return null;
@@ -307,10 +380,12 @@ export function decideEntryFrom10sRegime(
     return null;
   }
 
+  const setupLabel = CHOP_REGIMES.includes(r) ? 'CONTINUATION' : mapZoneSetup(zv.setup, r);
+
   return {
     direction: dir,
-    setup: mapZoneSetup(zv.setup, r),
-    reason: `${r} · ${zv.reason} · ${candle}`,
+    setup: setupLabel,
+    reason: `${r} · struct ${structNetMove(closedBars, 24).netPts.toFixed(1)}pt · ${zv.reason} · ${candle}`,
     zone,
     zone_setup: zv.setup,
   };
