@@ -30,21 +30,22 @@ describe('decideBestOutcomeExit 10s + PeakProtect 75%', () => {
 
   it('HardInv fires at ~2.0pt adverse move on Gold', () => {
     const cut = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: 4660, mfe: 0.5 }),
+      snap({ open_side: 'BUY', entry_price: 4660, mfe: 0 }),
       4658.0
     );
     expect(cut.exit).toBe(true);
     expect(cut.reason).toMatch(/HardInvalidation/);
 
     const hold = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: 4660, mfe: 0.5 }),
+      snap({ open_side: 'BUY', entry_price: 4660, mfe: 0 }),
       4658.2
     );
     expect(hold.exit).toBe(false);
   });
 
-  it('MFE floor arms on micro ~1pt (not 4pt)', () => {
-    expect(bestOutcomeMfeFloor(4640)).toBeLessThanOrEqual(1.5);
+  it('MFE floor arms on micro ~0.20pt (not 1pt — user +0.25 case)', () => {
+    expect(bestOutcomeMfeFloor(4640)).toBeLessThanOrEqual(0.25);
+    expect(bestOutcomeMfeFloor(4640)).toBeGreaterThanOrEqual(0.2);
     expect(bestOutcomeMinGreen(4640)).toBeLessThanOrEqual(1);
   });
 
@@ -64,6 +65,29 @@ describe('decideBestOutcomeExit 10s + PeakProtect 75%', () => {
     expect(cut.exit).toBe(true);
     expect(cut.reason).toMatch(/PeakProtection/);
     expect(cut.reason).toMatch(/75%/);
+  });
+
+  it('PeakProtect arms on +0.25 and cuts before +0.06 giveback', () => {
+    // User case: peak +0.25 → must NOT hold until +0.06 (that was ~76% giveback)
+    expect(bestOutcomeMfeFloor(4640)).toBeLessThanOrEqual(0.25);
+    const cut = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4640,
+        mfe: 0.25,
+        peak_retention: 0.06 / 0.25,
+      }),
+      4640.06,
+      { continuationSameSide: true }
+    );
+    expect(cut.exit).toBe(true);
+    expect(cut.reason).toMatch(/PeakProtection/);
+    // At +0.19 (76% of 0.25) still ok; at +0.18 (~72%) must cut via trigger 78%
+    const early = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: 4640, mfe: 0.25, peak_retention: 0.9 }),
+      4640.19
+    );
+    expect(early.exit).toBe(true); // 0.19/0.25=0.76 < 0.78 trigger
   });
 
   it('PeakProtect holds while still ≥75% of MFE', () => {
@@ -105,6 +129,7 @@ describe('decideBestOutcomeExit 10s + PeakProtect 75%', () => {
   });
 
   it('continuation still skips soft TP while PeakProtect not breached', () => {
+    // fav 12 / mfe 15 = 80% ≥ trigger 78% — hold; soft TP skipped by continuation
     const hold = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -112,7 +137,7 @@ describe('decideBestOutcomeExit 10s + PeakProtect 75%', () => {
         mfe: 15,
         peak_retention: 0.9,
       }),
-      4610,
+      4612,
       { continuationSameSide: true }
     );
     expect(hold.exit).toBe(false);
@@ -121,7 +146,7 @@ describe('decideBestOutcomeExit 10s + PeakProtect 75%', () => {
   it('describe shows lock@75%', () => {
     const s = describeBestOutcomeState(
       snap({ open_side: 'BUY', entry_price: 4600, mfe: 15, peak_retention: 0.9 }),
-      4610,
+      4612,
       { continuationSameSide: true, continuationReason: 'continuation · TREND_UP' }
     );
     expect(s.hold).toMatch(/BO10s/);

@@ -54,10 +54,10 @@ export function thesisFailureReason(
 }
 
 
-/** Arm PeakProtect after real micro swing — ~0.03% / ≥1.0pt Gold (was 4pt — never armed on +0.35). */
+/** Arm PeakProtect on micro swing — ≥0.20pt Gold (was 1.0pt → +0.25 never locked). */
 export function bestOutcomeMfeFloor(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.0003, 1.0);
+  return Math.max(abs * 0.00004, 0.2);
 }
 
 /** Soft TP ≈0.53% — ~25pt Gold — 10s scalp target. */
@@ -72,8 +72,13 @@ export function bestOutcomeMinGreen(entry: number): number {
   return Math.max(abs * 0.00015, 0.5);
 }
 
-/** PeakProtect: exit when kept MFE drops below 75%. */
+/**
+ * PeakProtect: exit when kept MFE drops below 75% (give back max ~25%).
+ * Trigger slightly early (78%) so Capital latency doesn't land at +0.06 after +0.25.
+ */
 export const BEST_OUTCOME_LOCK_RETENTION = 0.75;
+/** Fire PeakProtect when ret falls under this (buffer above 75% for exit lag). */
+export const BEST_OUTCOME_LOCK_TRIGGER = 0.78;
 
 export function isHardBoReason(reason: string): boolean {
   return /HardInvalidation|ThesisFailure · short|PeakProtection/i.test(reason);
@@ -98,7 +103,9 @@ export function decideBestOutcomeExit(
   const mfeFloor = bestOutcomeMfeFloor(entry);
   const minGreen = bestOutcomeMinGreen(entry);
   const armed = s.mfe >= mfeFloor;
-  const ret = s.peak_retention;
+  // Live retention from points — never trust stale peak_retention alone
+  const liveRet = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
+  const ret = liveRet ?? s.peak_retention;
   const holdCont = Boolean(opts?.continuationSameSide);
 
   if (fav <= -sl) {
@@ -129,13 +136,13 @@ export function decideBestOutcomeExit(
     };
   }
 
-  // PeakProtect @ 75% — NEVER skipped by continuation (that was the +0.35→+0.10 bug)
-  if (armed && ret != null && ret < BEST_OUTCOME_LOCK_RETENTION && fav > 0) {
+  // PeakProtect — max ~25% giveback. Trigger @78% so exit lag doesn't land at +0.06 after +0.25
+  if (armed && ret != null && ret < BEST_OUTCOME_LOCK_TRIGGER && fav > 0) {
     return {
       exit: true,
       reason: `PeakProtection · keep ${(ret * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} · UPL ${fav.toFixed(5)} · lock@${(
         BEST_OUTCOME_LOCK_RETENTION * 100
-      ).toFixed(0)}%`,
+      ).toFixed(0)}% (trig@${(BEST_OUTCOME_LOCK_TRIGGER * 100).toFixed(0)}%)`,
     };
   }
 
