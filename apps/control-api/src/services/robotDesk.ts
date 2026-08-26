@@ -1524,7 +1524,7 @@ async function robotCycleBody(s: Internal) {
           ? continuationSameSide(liveSide, signalForCont, s.regime, s.closedBars)
           : { ok: false, reason: '' };
 
-      // Hold until opposite tape signal (or HardInv) — no PeakProtect £0 cuts
+      // PeakProtect 75% of MFE · HardInv · OppositeSignal
       const decision = decideBestOutcomeExit(
         { ...s, short_net_pct: short.netPct },
         exitPx,
@@ -1904,7 +1904,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: max 1 open · BO10s + continuation · zones · Safety SL MUST be on Capital.com · Excel journal → ' +
+      'Rules: max 1 open · BO PeakProtect 75% · HardInv 2pt · Safety SL on Capital.com · Excel journal → ' +
       tradeJournalPath(),
   });
 
