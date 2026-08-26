@@ -8,7 +8,7 @@ import {
   pauseMsAfterClose,
 } from './tradeCooldown.js';
 
-describe('epic — no post-trade cooldown', () => {
+describe('epic — 0s pause but must flip (no BUY→BUY / SELL→SELL)', () => {
   beforeEach(() => {
     resetEpicTradeCooldowns();
     vi.useFakeTimers();
@@ -24,14 +24,24 @@ describe('epic — no post-trade cooldown', () => {
     expect(pauseMsAfterClose(true)).toBe(0);
   });
 
-  it('allows opposite immediately after close', () => {
+  it('after BUY close: SELL ok, BUY blocked', () => {
     noteEpicTradeClose('GOLD', 'BUY', false);
     expect(allowEpicReentry('GOLD', 'SELL').ok).toBe(true);
+    const same = allowEpicReentry('GOLD', 'BUY');
+    expect(same.ok).toBe(false);
+    expect(same.reason).toMatch(/must flip|BUY→BUY/);
   });
 
-  it('allows same side immediately (no must-flip)', () => {
-    noteEpicTradeClose('GOLD', 'BUY', true);
+  it('after SELL close: BUY ok, SELL blocked', () => {
+    noteEpicTradeClose('GOLD', 'SELL', true);
     expect(allowEpicReentry('GOLD', 'BUY').ok).toBe(true);
-    expect(allowEpicReentry('GOLD', 'SELL').ok).toBe(true);
+    expect(allowEpicReentry('GOLD', 'SELL').ok).toBe(false);
+  });
+
+  it('after opposite close, previous side allowed again', () => {
+    noteEpicTradeClose('GOLD', 'BUY', false);
+    noteEpicTradeClose('GOLD', 'SELL', false);
+    expect(allowEpicReentry('GOLD', 'BUY').ok).toBe(true);
+    expect(allowEpicReentry('GOLD', 'SELL').ok).toBe(false);
   });
 });

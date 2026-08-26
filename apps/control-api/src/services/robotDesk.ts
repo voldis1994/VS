@@ -1516,21 +1516,29 @@ async function robotCycleBody(s: Internal) {
         liveSide === 'BUY' || liveSide === 'SELL'
           ? tapeSide(s.closedBars, signalForCont)
           : { dir: null as 'BUY' | 'SELL' | null, reason: '' };
+      // Next setup must be opposite — no BUY→BUY / SELL→SELL close
+      const nextSetup =
+        signalForCont && (liveSide === 'BUY' || liveSide === 'SELL')
+          ? decideEntryFrom10sRegime(signalForCont, s.regime, s.closedBars)
+          : null;
       const oppositeEntrySignal = Boolean(
-        liveSide && tapeNow.dir && tapeNow.dir !== liveSide
+        liveSide &&
+          ((nextSetup?.direction && nextSetup.direction !== liveSide) ||
+            (tapeNow.dir && tapeNow.dir !== liveSide))
       );
+      const oppositeReason = nextSetup?.reason || tapeNow.reason || 'next ≠ same';
       const cont =
         liveSide === 'BUY' || liveSide === 'SELL'
           ? continuationSameSide(liveSide, signalForCont, s.regime, s.closedBars)
           : { ok: false, reason: '' };
 
-      // PeakProtect 75% of MFE · HardInv · OppositeSignal
+      // Close only on flip (or HardInv) — PeakProtect alone never closes
       const decision = decideBestOutcomeExit(
         { ...s, short_net_pct: short.netPct },
         exitPx,
         {
           oppositeEntrySignal,
-          oppositeReason: tapeNow.reason,
+          oppositeReason,
           continuationSameSide: cont.ok && !oppositeEntrySignal,
         }
       );
@@ -1556,9 +1564,9 @@ async function robotCycleBody(s: Internal) {
             exitPx,
             {
               oppositeEntrySignal,
-              oppositeReason: tapeNow.reason,
+              oppositeReason,
               continuationSameSide: cont.ok && !oppositeEntrySignal,
-              continuationReason: cont.ok ? cont.reason : tapeNow.reason || 'waiting opposite',
+              continuationReason: cont.ok ? cont.reason : 'HOLD until opposite setup',
             }
           ).hold
         }`,
@@ -1904,7 +1912,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: max 1 open · SETUP→ENTER early (not late chase) · BO PeakProtect 75% · HardInv 2pt · Safety SL on Capital.com · Excel journal → ' +
+      'Rules: max 1 open · close ONLY on flip (no BUY→BUY/SELL→SELL) · SETUP→ENTER · HardInv 2pt · Safety SL · Excel → ' +
       tradeJournalPath(),
   });
 
