@@ -110,8 +110,8 @@ type Book = {
   last_update: string;
 };
 
-const MAX_BARS = 90; // ~15 min of 10s bars
-/** Keep closedBars / impulse windows aligned with regime book. */
+const MAX_BARS = 150; // last 150×10s ≈ 25 min — zone lookback
+/** Keep closedBars / impulse windows aligned with regime book + zones. */
 export const MAX_REGIME_BARS = MAX_BARS;
 
 const books = new Map<string, Book>();

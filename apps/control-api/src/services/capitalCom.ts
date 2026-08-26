@@ -1166,7 +1166,7 @@ export async function fetchCapitalPrices(
   max = 5
 ): Promise<{ ok: boolean; candles: CapitalPriceCandle[]; detail: string }> {
   const encoded = encodeURIComponent(epic.trim());
-  const cap = resolution === 'SECOND' ? 50 : 20;
+  const cap = resolution === 'SECOND' ? 100 : 100;
   const q = new URLSearchParams({
     resolution,
     max: String(Math.min(Math.max(max, 1), cap)),

@@ -1,6 +1,6 @@
 /**
  * 10s scalp zones — structure before entry.
- * Built from closed 10s bars (~2–3 min lookback). Not candle-color.
+ * Built from last 150×10s closed bars (~25 min). Not candle-color.
  */
 import type { TenSecBar } from './tenSecondOhlc.js';
 import { bodyPct, rangePct } from './tenSecondOhlc.js';
@@ -26,13 +26,15 @@ export type ZoneVerdict = {
   reason: string;
 };
 
-/** Scalp box: Gold@4640 → min ~1.0pt (was 0.04% ≈1.85pt — blocked most overnight). */
+/** Scalp box: Gold@4640 → min ~1.0pt. */
 const MIN_WIDTH_PCT = 0.00025;
 /** Point floor for metals — 1.3pt band must qualify on Gold. */
 const MIN_WIDTH_PT = 1.0;
-const MAX_WIDTH_PCT = 0.004;
+/** ~25 min lookback can span ~45pt Gold overnight — allow session structure. */
+const MAX_WIDTH_PCT = 0.01;
 const MIN_ZONE_BARS = 8;
-const ZONE_WINDOW = 18;
+/** Last 150 × 10s candles (~25 minutes). */
+export const ZONE_WINDOW = 150;
 
 export type ZoneBuildStatus =
   | 'READY'
@@ -278,7 +280,7 @@ export function formatZoneInfo(
 ): string {
   if (zone) {
     const wPt = (zone.high - zone.low).toFixed(1);
-    return `ZONE OK · ${zone.kind} ${zone.low.toFixed(2)}–${zone.high.toFixed(2)} · ${zone.bars_used} struct · w=${(zone.width_pct * 100).toFixed(3)}% (${wPt}pt)`;
+    return `ZONE OK · ${zone.kind} ${zone.low.toFixed(2)}–${zone.high.toFixed(2)} · ${zone.bars_used}/${ZONE_WINDOW} struct · w=${(zone.width_pct * 100).toFixed(3)}% (${wPt}pt)`;
   }
   const d = diagnoseZoneBuild(bars);
   const wPct = d.width_pct != null ? `${(d.width_pct * 100).toFixed(3)}%` : '—';

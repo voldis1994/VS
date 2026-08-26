@@ -19,6 +19,18 @@ describe('buildScalpZone 10s', () => {
     expect(z!.detail).toMatch(/BOX|DEMAND|SUPPLY/);
   });
 
+  it('uses up to last 150×10s bars for structure', () => {
+    const bars: TenSecBar[] = [];
+    for (let i = 0; i < 160; i++) {
+      const mid = 4500 + (i % 5) * 0.3;
+      bars.push(bar(mid, mid + 1.0, mid - 1.0, mid + 0.1, i));
+    }
+    const z = buildScalpZone(bars);
+    expect(z).not.toBeNull();
+    expect(z!.bars_used).toBeLessThanOrEqual(150);
+    expect(z!.bars_used).toBeGreaterThanOrEqual(140);
+  });
+
   it('rejects runaway range as non-zone', () => {
     const bars = [
       bar(4500, 4510, 4490, 4505, 0),

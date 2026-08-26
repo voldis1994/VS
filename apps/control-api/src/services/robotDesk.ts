@@ -45,6 +45,7 @@ import {
   shortNetMove,
 } from './entryFromRegime.js';
 import type { ScalpZone } from './zones.js';
+import { ZONE_WINDOW } from './zones.js';
 import { allowEpicReentry, noteEpicTradeClose } from './tradeCooldown.js';
 import { publishEpicEntry, readEpicEntry } from './epicEntrySync.js';
 import { allowDeskSameSide, deskConflictShouldExit, deskOpensOnEpic } from './deskSideLock.js';
@@ -64,6 +65,7 @@ import {
 import {
   aggregateSecondsToTen,
   emptyTenSecState,
+  expandMinutesToTenSec,
   publicOhlc10s,
   updateTenSecondOhlc,
   type TenSecBar,
@@ -1580,10 +1582,10 @@ async function robotCycleBody(s: Internal) {
 
     if (quote.mid == null) return;
 
-    // Seed 10s bars from Capital SECOND when multi-provider OHLC is NOT in charge.
+    // Seed 10s bars from Capital — prefer SECOND; backfill to 150×10s (~25 min) via MINUTE.
     if (!multiFeedOwnsOhlc(s.multiFeed) && Date.now() - s.last_second_fetch_ms >= 8_000) {
       s.last_second_fetch_ms = Date.now();
-      const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 60);
+      const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 100);
       if (sec.ok && sec.candles.length >= 20) {
         const bars = aggregateSecondsToTen(sec.candles);
         const last = bars[bars.length - 1];
@@ -1602,6 +1604,27 @@ async function robotCycleBody(s: Internal) {
           }
           s.ohlc_10s = publicOhlc10s(s.ohlcState);
           applyRobotRegime(s, bars);
+        }
+      }
+      // Cold start: backfill last ~25 min (150×10s) from Capital MINUTE for zone lookback
+      if (s.closedBars.length < 30) {
+        const needMin = Math.ceil(ZONE_WINDOW / 6) + 5;
+        const min = await fetchCapitalPrices(opened.session, s.epic, 'MINUTE', needMin);
+        if (min.ok && min.candles.length >= 10) {
+          const seeded = expandMinutesToTenSec(min.candles).slice(-ZONE_WINDOW);
+          if (seeded.length >= 20) {
+            s.closedBars = seeded;
+            observeClosedBars(s.epic, seeded, s.display_name);
+            const shared = currentRegime(s.epic);
+            if (shared) s.regime = toLiveRegime(shared.current);
+            pushTick(s, {
+              phase: 'INFO',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `ZONE seed · ${s.closedBars.length}/${ZONE_WINDOW}×10s from Capital MINUTE (${min.candles.length}m)`,
+            });
+          }
         }
       }
     }

@@ -127,6 +127,34 @@ export function aggregateSecondsToTen(seconds: CapitalOhlc[]): TenSecBar[] {
 }
 
 /**
+ * Expand Capital MINUTE candles into synthetic 10s bars (6 per minute).
+ * Seeds ~25 min zone history when SECOND feed alone cannot fill 150 bars.
+ */
+export function expandMinutesToTenSec(
+  minutes: CapitalOhlc[],
+  endMs = Date.now()
+): TenSecBar[] {
+  if (!minutes.length) return [];
+  const bars: TenSecBar[] = [];
+  const startMs = endMs - minutes.length * 60_000;
+  for (let mi = 0; mi < minutes.length; mi++) {
+    const m = minutes[mi]!;
+    const minuteStart = startMs + mi * 60_000;
+    for (let s = 0; s < 6; s++) {
+      bars.push({
+        open_time_ms: minuteStart + s * 10_000,
+        open: m.open,
+        high: m.high,
+        low: m.low,
+        close: m.close,
+        ticks: 6,
+      });
+    }
+  }
+  return bars;
+}
+
+/**
  * Fold Capital MINUTE candles into completed 5-minute bars (oldest → newest).
  * Chunks of 5 by array order (Capital returns chronological).
  */
