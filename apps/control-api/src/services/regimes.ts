@@ -270,9 +270,9 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
 function regimePlainWhy(regime: RegimeName): string {
   switch (regime) {
     case 'UNKNOWN':
-      return 'label only — entry uses 25/10/5/1 tape';
+      return 'label only — entry uses 5m+1m tape';
     case 'TRANSITION':
-      return 'label only — entry uses 25/10/5/1 tape';
+      return 'label only — entry uses 5m+1m tape';
     case 'RANGE':
       return 'label only — tape decides BUY/SELL';
     case 'COMPRESSION':
