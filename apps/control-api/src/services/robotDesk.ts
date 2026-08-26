@@ -6,10 +6,8 @@ import {
   confirmCapitalDeal,
   createCapitalPosition,
   fetchCapitalMarketQuote,
-  fetchCapitalMinutePrices,
   fetchCapitalPrices,
   listCapitalOpenPositions,
-  isLateMoveOnOneMinute,
   ensureCapitalStopVisible,
   type CapitalMarketQuote,
   type CapitalOpenPosition,
@@ -35,14 +33,12 @@ import {
 import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove } from './exitManage.js';
 import {
   allowEntryAgainstImpulse,
-  blockEntryAtExtreme,
   blockLateTrendChase,
   buildScalpZone,
   continuationSameSide,
   decideEntryFrom10sRegime,
   explainNoEntry,
   formatZoneInfo,
-  lateChaseAppliesToSetup,
   shortNetMove,
   zoneFadeAllowed,
 } from './entryFromRegime.js';
@@ -1778,7 +1774,7 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    // Keep real regime — do NOT force EXPANSION
+    // Keep real regime for INFO display only — never blocks entry
     if (!s.regime) s.regime = 'UNKNOWN';
     const bucketKey = String(signalBar.open_time_ms || 0);
     if (bucketKey && bucketKey === s.last_entry_signal_key) {
@@ -1816,18 +1812,6 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    const vsExtreme = blockEntryAtExtreme(sig.direction, s.closedBars, signalBar);
-    if (!vsExtreme.ok) {
-      pushTick(s, {
-        phase: 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `${ohlcLine} · ${vsExtreme.reason}`,
-      });
-      return;
-    }
-
     const epicGate = allowEpicReentry(s.epic, sig.direction);
     if (!epicGate.ok) {
       pushTick(s, {
@@ -1850,20 +1834,6 @@ async function robotCycleBody(s: Internal) {
         detail: `${ohlcLine} · ${deskGate.reason}`,
       });
       return;
-    }
-
-    if (lateChaseAppliesToSetup(sig.setup, s.regime)) {
-      const hist = await fetchCapitalMinutePrices(opened.session, s.epic, 3);
-      if (hist.ok && isLateMoveOnOneMinute(sig.direction, hist.candles)) {
-        pushTick(s, {
-          phase: 'WAIT',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `${ohlcLine} · SKIP chase · late on 1m · ${sig.direction}`,
-        });
-        return;
-      }
     }
 
     // Stale Capital / fake extremes (#136)
