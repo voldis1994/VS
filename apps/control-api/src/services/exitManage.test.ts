@@ -81,9 +81,21 @@ describe('decideBestOutcomeExit — PeakProtect 75%', () => {
     expect(cut.reason).toMatch(/75%/);
   });
 
-  it('PeakProtect holds while still ≥78% of MFE', () => {
-    // MFE 4pt, fav 3.2 → ret=80% ≥ 78% → hold
+  it('PeakProtect holds while still ≥78% of MFE (below TP)', () => {
     const hold = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4640,
+        mfe: 1.5,
+        peak_retention: 0.9,
+      }),
+      4641.2
+    );
+    expect(hold.exit).toBe(false);
+  });
+
+  it('TP fires at 2pt before extended hold', () => {
+    const cut = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: 4640,
@@ -92,7 +104,8 @@ describe('decideBestOutcomeExit — PeakProtect 75%', () => {
       }),
       4643.2
     );
-    expect(hold.exit).toBe(false);
+    expect(cut.exit).toBe(true);
+    expect(cut.reason).toMatch(/Target \/ best outcome/);
   });
 
   it('does not arm PeakProtect below 1.0pt MFE', () => {
@@ -145,13 +158,37 @@ describe('decideBestOutcomeExit — PeakProtect 75%', () => {
     expect(hi.reason).toMatch(/HardInvalidation/);
   });
 
-  it('describe shows lock@75%', () => {
+  it('describe shows PROFIT lock@75%', () => {
     const s = describeBestOutcomeState(
-      snap({ open_side: 'BUY', entry_price: 4600, mfe: 15, peak_retention: 0.9 }),
-      4612,
+      snap({ open_side: 'BUY', entry_price: 4600, mfe: 1.5, peak_retention: 0.85 }),
+      4601.2,
       { continuationReason: 'continuation · TAPE UP' }
     );
-    expect(s.hold).toMatch(/BO10s/);
+    expect(s.hold).toMatch(/PROFIT/);
     expect(s.hold).toMatch(/lock@75%/);
+  });
+
+  it('TP at 2pt Gold closes green', () => {
+    const cut = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: 4660, mfe: 2.5 }),
+      4662.1
+    );
+    expect(cut.exit).toBe(true);
+    expect(cut.reason).toMatch(/Target \/ best outcome/);
+  });
+
+  it('TimeDecay at 3min banks green when retention still high', () => {
+    const cut = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4660,
+        mfe: 1.5,
+        peak_retention: 0.85,
+        entry_at: new Date(Date.now() - 181_000).toISOString(),
+      }),
+      4661.2
+    );
+    expect(cut.exit).toBe(true);
+    expect(cut.reason).toMatch(/TimeDecay/);
   });
 });

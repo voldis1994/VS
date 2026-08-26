@@ -31,7 +31,6 @@ import {
 import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove, manageExitPrice } from './exitManage.js';
 import { SAFETY_SL_PCT } from './microScalpThresholds.js';
 import {
-  allowEntryAgainstImpulse,
   buildScalpZone,
   continuationSameSide,
   decideEntryFrom10sRegime,
@@ -42,8 +41,8 @@ import {
 } from './entryFromRegime.js';
 import type { ScalpZone } from './zones.js';
 import { ZONE_WINDOW } from './zones.js';
-import { allowEpicReentry, noteEpicTradeClose, lastEpicClose, pauseMsAfterClose } from './tradeCooldown.js';
-import { allowDeskSameSide, deskConflictShouldExit, deskOpensOnEpic } from './deskSideLock.js';
+import { noteEpicTradeClose, lastEpicClose, pauseMsAfterClose } from './tradeCooldown.js';
+import { deskConflictShouldExit, deskOpensOnEpic } from './deskSideLock.js';
 import {
   allowEntryFromFeeds,
   readMultiFeedPrice,
@@ -536,8 +535,8 @@ function writeJournalClose(
 }
 
 /**
- * SAFETY SL as LAST RESORT (~0.08% / ~3.7pt) — wider than HardInv 2.0pt.
- * Best Outcome / HardInvalidation must fire first; Capital Limit SL only on disaster.
+ * SAFETY SL as LAST RESORT (~0.20% / ~9pt) — wider than HardInv 2.0pt.
+ * PeakProtect / HardInvalidation must fire first; Capital Limit SL only on disaster.
  */
 function safetyStopLevel(
   direction: 'BUY' | 'SELL',
@@ -918,19 +917,6 @@ async function enterTrade(
   reason: string,
   setupType?: string | null
 ) {
-  // Only hard anti-fade — never open against clear opposite multi-TF stack
-  const liveBar = s.ohlcState.forming ?? s.ohlcState.last_closed;
-  const tapeGate = allowEntryAgainstImpulse(direction, s.closedBars, liveBar);
-  if (!tapeGate.ok) {
-    pushTick(s, {
-      phase: 'DECIDE',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `ENTRY blocked · ${tapeGate.reason}`,
-    });
-    return;
-  }
   void setupType;
 
   // HARD RULE: never entry while any trade open on this epic
@@ -1524,7 +1510,7 @@ async function robotCycleBody(s: Internal) {
           ? continuationSameSide(liveSide, signalForCont, s.regime, s.closedBars)
           : { ok: false, reason: '' };
 
-      // PeakProtect 75% of MFE · HardInv · OppositeSignal
+      // PROFIT engine — bank 75% · TP 2pt · HardInv · flip exit
       const decision = decideBestOutcomeExit(
         { ...s, short_net_pct: short.netPct },
         exitPx,
@@ -1586,7 +1572,7 @@ async function robotCycleBody(s: Internal) {
     if (quote.mid == null) return;
 
     // Seed 10s bars from THIS client's Capital only
-    if (Date.now() - s.last_second_fetch_ms >= 8_000) {
+    if (Date.now() - s.last_second_fetch_ms >= 4_000) {
       s.last_second_fetch_ms = Date.now();
       const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 100);
       if (sec.ok && sec.candles.length >= 20) {
@@ -1680,7 +1666,7 @@ async function robotCycleBody(s: Internal) {
     // Internal label only — public API maps to tape TREND_UP/DOWN/RANGE
     if (!s.regime) s.regime = 'RANGE';
     const bucketKey = String(signalBar.open_time_ms || 0);
-    if (bucketKey && bucketKey === s.last_entry_signal_key) {
+    if (bucketKey && bucketKey === s.last_entry_signal_key && !liveSignal) {
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
@@ -1699,42 +1685,6 @@ async function robotCycleBody(s: Internal) {
         ask: quote.ask,
         mid: quote.mid,
         detail: `DECIDE · ${ohlcLine} · ${explainNoEntry(signalBar, s.regime, s.closedBars)}`,
-      });
-      return;
-    }
-
-    const vsImpulse = allowEntryAgainstImpulse(sig.direction, s.closedBars, signalBar);
-    if (!vsImpulse.ok) {
-      pushTick(s, {
-        phase: 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `${ohlcLine} · ${vsImpulse.reason}`,
-      });
-      return;
-    }
-
-    const epicGate = allowEpicReentry(s.epic, sig.direction);
-    if (!epicGate.ok) {
-      pushTick(s, {
-        phase: 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `${ohlcLine} · ${epicGate.reason}`,
-      });
-      return;
-    }
-
-    const deskGate = allowDeskSameSide(sessions.values(), s.epic, sig.direction, s.id);
-    if (!deskGate.ok) {
-      pushTick(s, {
-        phase: 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `${ohlcLine} · ${deskGate.reason}`,
       });
       return;
     }
@@ -1904,7 +1854,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: max 1 open · SETUP→ENTER early (not late chase) · BO PeakProtect 75% · HardInv 2pt · Safety SL on Capital.com · Excel journal → ' +
+      'PROFIT engine · 0s reentry · tape+color entry · PeakProtect 75% · TP 2pt · HardInv 2pt · Safety SL 0.20% · Excel journal → ' +
       tradeJournalPath(),
   });
 

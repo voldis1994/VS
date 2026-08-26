@@ -5,7 +5,7 @@ import {
 } from './capitalCom.js';
 
 describe('safety SL cushion', () => {
-  it('places BUY stop below mid (~0.08%) — wider than HardInv 2.0pt on Gold', () => {
+  it('places BUY stop below mid (~0.20%) — wider than HardInv 2.0pt on Gold', () => {
     const mid = 4660;
     const level = computeSafetyCushionStopLevel('BUY', mid, {
       bid: 4659.8,
@@ -15,8 +15,8 @@ describe('safety SL cushion', () => {
     });
     expect(level).toBeLessThan(mid);
     const dist = mid - level;
-    expect(dist).toBeGreaterThanOrEqual(mid * 0.0008 - 0.1);
-    expect(dist).toBeLessThan(mid * 0.0015);
+    expect(dist).toBeGreaterThanOrEqual(mid * 0.002 - 0.1);
+    expect(dist).toBeLessThan(mid * 0.0025 + 0.5);
     expect(dist).toBeGreaterThan(2.0);
   });
 });

@@ -1,6 +1,8 @@
-/** Live Capital exit — Best Outcome PeakProtect 75% + HardInv + opposite tape. */
+/** PROFIT engine — bank green fast, cut red at HardInv, zero flip-only hold. */
 
 import {
+  PROFIT_TIME_DECAY_MS,
+  PROFIT_TP_GOLD_PT,
   SHORT_THESIS_GOLD_PT,
   SHORT_THESIS_MOVE_PCT,
   hardInvalidationDistance,
@@ -25,11 +27,6 @@ export function favorableMove(side: ExitSide, entry: number, mid: number): numbe
   return side === 'BUY' ? mid - entry : entry - mid;
 }
 
-/**
- * Price to evaluate BO exits.
- * HardInv / PeakProtect must use adverse fill side — mid understates loss by the spread.
- * BUY open → exit sells at bid; SELL open → exit buys at ask.
- */
 export function manageExitPrice(
   side: ExitSide,
   quote: { bid?: number | null; ask?: number | null; mid?: number | null }
@@ -71,53 +68,50 @@ export function thesisFailureReason(
   return null;
 }
 
-/**
- * Arm PeakProtect only after a real swing (~1.0pt Gold).
- * Too-low floor (0.2pt) caused £0 PeakProtect spam.
- */
+/** Arm PeakProtect after ~1.0pt MFE — real swing, not micro noise. */
 export function bestOutcomeMfeFloor(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
   return Math.max(abs * 0.00022, 1.0);
 }
 
-/** Soft TP ≈0.53% — ~25pt Gold. */
+/** Micro-scalp TP — 2pt Gold, pct-scaled elsewhere. */
 export function bestOutcomeTarget(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.0053, 0.8);
+  if (abs >= 1000) return PROFIT_TP_GOLD_PT;
+  return Math.max(abs * 0.00043, 0.8);
 }
 
-/** Min green for soft TP / timeDecay. */
 export function bestOutcomeMinGreen(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
   return Math.max(abs * 0.00015, 0.5);
 }
 
-/**
- * PeakProtect: keep 75% of MFE (give back max ~25%).
- * Trigger @78% so Capital latency doesn't overshoot the 75% lock.
- */
 export const BEST_OUTCOME_LOCK_RETENTION = 0.75;
 export const BEST_OUTCOME_LOCK_TRIGGER = 0.78;
 
 export function isHardBoReason(reason: string): boolean {
-  return /HardInvalidation|ThesisFailure · short|PeakProtection|OppositeSignal/i.test(reason);
+  return /HardInvalidation|ThesisFailure · short|PeakProtection|OppositeSignal|Target \/ best outcome|TimeDecay|BestOutcome cut/i.test(
+    reason
+  );
 }
 
 export type BoExitOpts = {
-  /** True when 5m+1m tape clearly flipped vs open side. */
   oppositeEntrySignal?: boolean;
   oppositeReason?: string;
-  /** Skip soft TP / thesis / timeDecay. Does NOT skip PeakProtect, HardInv, OppositeSignal. */
+  /** @deprecated profit mode ignores — never skip bank paths */
   continuationSameSide?: boolean;
 };
 
 /**
- * Exit priority:
- * 1) HardInv 2.0pt
- * 2) Short dump/rally thesis 3pt
- * 3) PeakProtect 75% of MFE (armed ≥1.0pt)
- * 4) Opposite tape signal
- * 5) Soft TP / thesis / timeDecay (skipped if continuation)
+ * Exit priority (all active — no hold-until-flip):
+ * 1) HardInv 2pt
+ * 2) Short thesis 3pt
+ * 3) Armed flat → cut before minus
+ * 4) PeakProtect 75%
+ * 5) Opposite tape
+ * 6) Thesis vs regime (green lock)
+ * 7) TP 2pt
+ * 8) TimeDecay 3min green
  */
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
@@ -135,7 +129,6 @@ export function decideBestOutcomeExit(
   const armed = s.mfe >= mfeFloor;
   const liveRet = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
   const ret = liveRet ?? s.peak_retention;
-  const holdCont = Boolean(opts?.continuationSameSide);
 
   if (fav <= -sl) {
     return { exit: true, reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}` };
@@ -157,7 +150,6 @@ export function decideBestOutcomeExit(
     }
   }
 
-  // Armed peak → flat/red: bank before minus
   if (armed && fav <= 0) {
     return {
       exit: true,
@@ -165,7 +157,6 @@ export function decideBestOutcomeExit(
     };
   }
 
-  // PeakProtect 75% — continuation does NOT skip
   if (armed && ret != null && ret < BEST_OUTCOME_LOCK_TRIGGER && fav > 0) {
     return {
       exit: true,
@@ -183,17 +174,11 @@ export function decideBestOutcomeExit(
     };
   }
 
-  if (holdCont) {
-    return { exit: false, reason: '' };
-  }
-
-  if (fav < minGreen) {
-    return { exit: false, reason: '' };
-  }
-
-  const thesis = thesisFailureReason(s.open_side, s.regime);
-  if (thesis) {
-    return { exit: true, reason: `${thesis} · lock green ${fav.toFixed(5)}` };
+  if (fav >= minGreen) {
+    const thesis = thesisFailureReason(s.open_side, s.regime);
+    if (thesis) {
+      return { exit: true, reason: `${thesis} · lock green ${fav.toFixed(5)}` };
+    }
   }
 
   if (fav >= tp) {
@@ -204,7 +189,7 @@ export function decideBestOutcomeExit(
   }
 
   const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
-  if (heldMs > 720_000 && fav >= minGreen && s.mfe >= mfeFloor) {
+  if (heldMs > PROFIT_TIME_DECAY_MS && fav >= minGreen && s.mfe >= mfeFloor) {
     return {
       exit: true,
       reason: `TimeDecay · held ${Math.round(heldMs / 1000)}s · realize green UPL ${fav.toFixed(5)}`,
@@ -226,13 +211,14 @@ export function describeBestOutcomeState(
     return {
       exit: false,
       reason: '',
-      hold: 'BO blocked — missing entry_price (manage robot not seeded?)',
+      hold: 'PROFIT blocked — missing entry_price',
     };
   }
 
   const entry = s.entry_price;
   const fav = favorableMove(s.open_side, entry, mid);
   const sl = hardInvalidationDistance(entry);
+  const tp = bestOutcomeTarget(entry);
   const mfeFloor = bestOutcomeMfeFloor(entry);
   const liveRet = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
   const ret = liveRet ?? s.peak_retention;
@@ -244,6 +230,6 @@ export function describeBestOutcomeState(
   return {
     exit: false,
     reason: '',
-    hold: `BO10s · UPL ${fav.toFixed(2)} · HardInv -${sl.toFixed(2)} · MFE ${s.mfe.toFixed(2)} (${armed}) · ret ${retTxt} · lock@${lock}${cont}`,
+    hold: `PROFIT · UPL ${fav.toFixed(2)} · TP ${tp.toFixed(1)} · HardInv -${sl.toFixed(2)} · MFE ${s.mfe.toFixed(2)} (${armed}) · ret ${retTxt} · lock@${lock}${cont}`,
   };
 }

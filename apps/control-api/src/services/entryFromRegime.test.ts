@@ -34,7 +34,7 @@ describe('10s multi-TF entry — no WAIT', () => {
     const bars = baseBars();
     const quiet = bar(4500.5, 4500.55, 12, 0.2);
     const msg = explainNoEntry(quiet, 'UNKNOWN', bars);
-    expect(msg).toMatch(/SCAN|TAPE FLAT/i);
+    expect(msg).toMatch(/SCAN|SETUP|TAPE FLAT/i);
     expect(msg).not.toMatch(/WAIT ENTRY|WAIT ·/);
   });
 

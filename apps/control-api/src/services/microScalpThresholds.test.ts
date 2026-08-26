@@ -20,8 +20,8 @@ describe('microScalpThresholds', () => {
     expect(SHORT_THESIS_GOLD_PT).toBeGreaterThan(HARD_INV_GOLD_PT);
   });
 
-  it('Safety SL cushion ~0.08% — wider than HardInv 2.0pt', () => {
-    expect(SAFETY_SL_PCT).toBe(0.0008);
+  it('Safety SL cushion ~0.20% — wider than HardInv 2.0pt', () => {
+    expect(SAFETY_SL_PCT).toBe(0.002);
     expect(SAFETY_SL_PCT * 4660).toBeGreaterThan(HARD_INV_GOLD_PT);
   });
 });

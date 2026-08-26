@@ -11,10 +11,16 @@ export const SHORT_THESIS_GOLD_PT = 3.0;
 export const SHORT_THESIS_MOVE_PCT = SHORT_THESIS_GOLD_PT / 4660;
 
 /**
- * Capital Safety SL last-resort cushion (~0.08% ≈ 3.7pt Gold).
- * Wider than HardInv 2.0pt; must NOT be the old 0.20% (~9pt) hole.
+ * Capital Safety SL last-resort (~0.20% ≈ 9pt Gold).
+ * Wider than HardInv 2.0pt — wicks survive; HardInv cuts first.
  */
-export const SAFETY_SL_PCT = 0.0008;
+export const SAFETY_SL_PCT = 0.002;
+
+/** Realistic micro-scalp TP on Gold (~£0.40). */
+export const PROFIT_TP_GOLD_PT = 2.0;
+
+/** Bank green if move stalls — no 12min dead hold. */
+export const PROFIT_TIME_DECAY_MS = 180_000;
 
 /** HardInv distance in price points for any instrument. */
 export function hardInvalidationDistance(entry: number): number {

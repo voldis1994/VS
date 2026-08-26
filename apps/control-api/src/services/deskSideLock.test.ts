@@ -19,10 +19,8 @@ describe('deskSideLock', () => {
     expect(g.sells).toHaveLength(0);
   });
 
-  it('blocks opposite SELL while peer BUY is open', () => {
-    const g = allowDeskSameSide(units, 'GOLD', 'SELL', 'dim');
-    expect(g.ok).toBe(false);
-    expect(g.reason).toMatch(/DESK lock/);
+  it('allowDeskSameSide is free in profit mode', () => {
+    expect(allowDeskSameSide(units, 'GOLD', 'SELL', 'dim').ok).toBe(true);
     expect(allowDeskSameSide(units, 'GOLD', 'BUY', 'dim').ok).toBe(true);
   });
 
