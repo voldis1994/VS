@@ -72,8 +72,8 @@ export function bestOutcomeMinGreen(entry: number): number {
   return Math.max(abs * 0.0008, 3);
 }
 
-/** Allow deeper pullback while trend continues (was 0.50). */
-export const BEST_OUTCOME_LOCK_RETENTION = 0.4;
+/** PeakProtect: exit when kept MFE drops below 75% (was 40% — gave back too much). */
+export const BEST_OUTCOME_LOCK_RETENTION = 0.75;
 
 export function isHardBoReason(reason: string): boolean {
   return /HardInvalidation|ThesisFailure · short/i.test(reason);

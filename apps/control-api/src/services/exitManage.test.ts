@@ -53,7 +53,7 @@ describe('decideBestOutcomeExit 10s + continuation', () => {
   });
 
   it('PeakProtect without continuation after deep giveback', () => {
-    expect(BEST_OUTCOME_LOCK_RETENTION).toBe(0.4);
+    expect(BEST_OUTCOME_LOCK_RETENTION).toBe(0.75);
     const cut = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
