@@ -560,7 +560,7 @@ export function RobotDeskPage() {
         {view === 'command' ? (
           <>
             <section className="rc-regimes" aria-label="Tape chain">
-              <div className="robot-arena-kicker">TAPE CHAIN · 25/10/5/1</div>
+              <div className="robot-arena-kicker">TAPE CHAIN · 5/1</div>
               <div className="robot-wire-regimes">
                 {regimes.map((r) => {
                   const name = r.toUpperCase();

@@ -68,7 +68,7 @@ export function normalizeRegime(value: string | null | undefined): RegimeName {
 
 /**
  * Keep real classifier output — do NOT map COMPRESSION/UNKNOWN → EXPANSION.
- * Regime is INFO label only; entry uses multi-TF tape (25/10/5/1).
+ * Regime is INFO label only; entry uses multi-TF tape (5m+1m).
  */
 export function toLiveRegime(regime: RegimeName): RegimeName {
   return regime;

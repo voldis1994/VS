@@ -374,7 +374,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     active_regimes: activeTapes,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'OWN Capital LEAD → own 10s OHLC → TAPE 25/10/5/1 → BUY|SELL · BO → EXIT',
+    chain: 'OWN Capital LEAD → own 10s OHLC → TAPE 5/1 → BUY|SELL · BO → EXIT',
     note:
       'Katram klientam savs Capital LEAD + savs 10s OHLC. Peer Capital / shared bars OFF. Public = ADVISORY only.',
   };
