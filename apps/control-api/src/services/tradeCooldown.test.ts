@@ -1,49 +1,51 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import {
   allowEpicReentry,
   noteEpicTradeClose,
   resetEpicTradeCooldowns,
   EPIC_PAUSE_MS,
   EPIC_LOSS_PAUSE_MS,
-  EPIC_SAME_SIDE_BLOCK_MS,
   pauseMsAfterClose,
 } from './tradeCooldown.js';
 
-describe('epic anti-whipsaw cooldown', () => {
-  beforeEach(() => resetEpicTradeCooldowns());
-
-  it('profit pause = 45s, loss/scratch pause = 60s', () => {
-    expect(EPIC_PAUSE_MS).toBe(45_000);
-    expect(EPIC_LOSS_PAUSE_MS).toBe(60_000);
-    expect(EPIC_SAME_SIDE_BLOCK_MS).toBe(60_000);
-    expect(pauseMsAfterClose(false)).toBe(45_000);
-    expect(pauseMsAfterClose(true)).toBe(60_000);
+describe('epic must-flip cooldown', () => {
+  beforeEach(() => {
+    resetEpicTradeCooldowns();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
-  it('blocks re-entry inside pause after profit close', () => {
+  it('profit pause = 15s, loss/scratch = 20s', () => {
+    expect(EPIC_PAUSE_MS).toBe(15_000);
+    expect(EPIC_LOSS_PAUSE_MS).toBe(20_000);
+    expect(pauseMsAfterClose(false)).toBe(15_000);
+    expect(pauseMsAfterClose(true)).toBe(20_000);
+  });
+
+  it('blocks during pause', () => {
     noteEpicTradeClose('GOLD', 'BUY', false);
-    const g = allowEpicReentry('GOLD', 'BUY');
-    expect(g.ok).toBe(false);
-    expect(g.reason).toMatch(/EPIC pause|after profit/);
-  });
-
-  it('blocks opposite flip after close', () => {
-    noteEpicTradeClose('GOLD', 'SELL', true);
-    expect(allowEpicReentry('GOLD', 'BUY').ok).toBe(false);
-    expect(allowEpicReentry('GOLD', 'BUY').reason).toMatch(/no-flip|pause/);
-  });
-
-  it('uses longer pause after a loss/scratch', () => {
-    expect(EPIC_LOSS_PAUSE_MS).toBeGreaterThan(EPIC_PAUSE_MS);
-    noteEpicTradeClose('GOLD', 'BUY', true);
-    const g = allowEpicReentry('gold', 'BUY');
-    expect(g.ok).toBe(false);
-    expect(g.reason).toMatch(/after loss/);
-  });
-
-  it('blocks same-side reopen (no “to pašu treidu” spam)', () => {
-    noteEpicTradeClose('GOLD', 'SELL', true);
     expect(allowEpicReentry('GOLD', 'SELL').ok).toBe(false);
-    expect(allowEpicReentry('GOLD', 'SELL').reason).toMatch(/pause|no-repeat/);
+    expect(allowEpicReentry('GOLD', 'SELL').reason).toMatch(/pause/);
+  });
+
+  it('after pause: same side blocked, opposite allowed (no 5× identical)', () => {
+    noteEpicTradeClose('GOLD', 'BUY', false);
+    vi.advanceTimersByTime(EPIC_PAUSE_MS + 100);
+    const same = allowEpicReentry('GOLD', 'BUY');
+    expect(same.ok).toBe(false);
+    expect(same.reason).toMatch(/must flip|no same-side/);
+    const flip = allowEpicReentry('GOLD', 'SELL');
+    expect(flip.ok).toBe(true);
+  });
+
+  it('after opposite close, previous side becomes allowed again', () => {
+    noteEpicTradeClose('GOLD', 'BUY', false);
+    vi.advanceTimersByTime(EPIC_PAUSE_MS + 100);
+    noteEpicTradeClose('GOLD', 'SELL', false);
+    vi.advanceTimersByTime(EPIC_PAUSE_MS + 100);
+    expect(allowEpicReentry('GOLD', 'BUY').ok).toBe(true);
+    expect(allowEpicReentry('GOLD', 'SELL').ok).toBe(false);
   });
 });

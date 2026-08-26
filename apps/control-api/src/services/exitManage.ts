@@ -1,4 +1,4 @@
-/** Live Capital exit — 10s scalp BO with continuation hold support. */
+/** Live Capital exit — hold until opposite entry signal (or HardInv). */
 
 import {
   HARD_INV_GOLD_PT,
@@ -27,7 +27,7 @@ export function favorableMove(side: ExitSide, entry: number, mid: number): numbe
 
 /**
  * Price to evaluate BO exits.
- * HardInv / PeakProtect must use adverse fill side — mid understates loss by the spread.
+ * HardInv must use adverse fill side — mid understates loss by the spread.
  * BUY open → exit sells at bid; SELL open → exit buys at ask.
  */
 export function manageExitPrice(
@@ -71,42 +71,42 @@ export function thesisFailureReason(
   return null;
 }
 
-
-/** Arm PeakProtect only on real swing — ≥1.0pt Gold (0.20pt → £0 “nules” @ 0.05). */
+/** Kept for UI / journal — PeakProtect no longer soft-exits (hold until opposite). */
 export function bestOutcomeMfeFloor(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
   return Math.max(abs * 0.00022, 1.0);
 }
 
-/** Soft TP ≈0.53% — ~25pt Gold — 10s scalp target. */
 export function bestOutcomeTarget(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
   return Math.max(abs * 0.0053, 0.8);
 }
 
-/** Min green for soft TP / timeDecay — ~1.0pt (no micro harvest → £0). */
 export function bestOutcomeMinGreen(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
   return Math.max(abs * 0.00022, 1.0);
 }
 
-/**
- * PeakProtect: exit when kept MFE drops below 70% (give back max ~30%).
- * Trigger slightly early (73%) so Capital latency doesn't overshoot the lock.
- */
+/** Display lock % — soft PeakProtect disabled; hold until opposite. */
 export const BEST_OUTCOME_LOCK_RETENTION = 0.7;
-/** Fire PeakProtect when ret falls under this (buffer above 70% for exit lag). */
 export const BEST_OUTCOME_LOCK_TRIGGER = 0.73;
 
 export function isHardBoReason(reason: string): boolean {
-  return /HardInvalidation|ThesisFailure · short|PeakProtection/i.test(reason);
+  return /HardInvalidation|ThesisFailure · short|OppositeSignal/i.test(reason);
 }
 
 export type BoExitOpts = {
-  /** When true — skip soft TP / thesis / timeDecay. Does NOT skip PeakProtect or HardInv. */
+  /** True when 5m+1m tape clearly flipped vs open side. */
+  oppositeEntrySignal?: boolean;
+  oppositeReason?: string;
+  /** @deprecated soft continuation — hold-until-opposite ignores PeakProtect anyway */
   continuationSameSide?: boolean;
 };
 
+/**
+ * Hold until opposite entry signal (tape flip) or HardInv.
+ * No PeakProtect / soft TP / £0 giveback cuts — those caused 5× same-side spam.
+ */
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
   mid: number,
@@ -116,20 +116,13 @@ export function decideBestOutcomeExit(
 
   const entry = s.entry_price;
   const fav = favorableMove(s.open_side, entry, mid);
-  const tp = bestOutcomeTarget(entry);
   const sl = hardInvalidationDistance(entry);
-  const mfeFloor = bestOutcomeMfeFloor(entry);
-  const minGreen = bestOutcomeMinGreen(entry);
-  const armed = s.mfe >= mfeFloor;
-  // Live retention from points — never trust stale peak_retention alone
-  const liveRet = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
-  const ret = liveRet ?? s.peak_retention;
-  const holdCont = Boolean(opts?.continuationSameSide);
 
   if (fav <= -sl) {
     return { exit: true, reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}` };
   }
 
+  // Violent short-window dump/rally vs open — treat as opposite pressure
   const short = s.short_net_pct;
   if (short != null && Number.isFinite(short)) {
     if (s.open_side === 'BUY' && short <= -SHORT_THESIS_MOVE_PCT) {
@@ -146,54 +139,15 @@ export function decideBestOutcomeExit(
     }
   }
 
-  // Gave back to flat/red after a real peak — still cut (don't hold hope into minus)
-  if (armed && fav <= 0) {
+  if (opts?.oppositeEntrySignal) {
+    const why = opts.oppositeReason || 'tape flipped';
     return {
       exit: true,
-      reason: `BestOutcome cut · gave back MFE ${s.mfe.toFixed(5)} → UPL ${fav.toFixed(5)} (lock before minus)`,
+      reason: `OppositeSignal · exit ${s.open_side} · ${why}`,
     };
   }
 
-  // PeakProtect — max ~30% giveback. Trigger @73% so exit lag doesn't overshoot 70% lock
-  if (armed && ret != null && ret < BEST_OUTCOME_LOCK_TRIGGER && fav > 0) {
-    return {
-      exit: true,
-      reason: `PeakProtection · keep ${(ret * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} · UPL ${fav.toFixed(5)} · lock@${(
-        BEST_OUTCOME_LOCK_RETENTION * 100
-      ).toFixed(0)}% (trig@${(BEST_OUTCOME_LOCK_TRIGGER * 100).toFixed(0)}%)`,
-    };
-  }
-
-  // Continuation: only soft exits skipped (TP / thesis / timeDecay)
-  if (holdCont) {
-    return { exit: false, reason: '' };
-  }
-
-  if (fav < minGreen) {
-    return { exit: false, reason: '' };
-  }
-
-  const thesis = thesisFailureReason(s.open_side, s.regime);
-  if (thesis) {
-    return { exit: true, reason: `${thesis} · lock green ${fav.toFixed(5)}` };
-  }
-
-  if (fav >= tp) {
-    return {
-      exit: true,
-      reason: `Target / best outcome · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)}`,
-    };
-  }
-
-  const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
-  // TimeDecay after ~12 min on 10s holds
-  if (heldMs > 720_000 && fav >= minGreen && s.mfe >= mfeFloor) {
-    return {
-      exit: true,
-      reason: `TimeDecay · held ${Math.round(heldMs / 1000)}s · realize green UPL ${fav.toFixed(5)}`,
-    };
-  }
-
+  // Hold — wait for opposite entry signal (or HardInv above)
   return { exit: false, reason: '' };
 }
 
@@ -216,21 +170,13 @@ export function describeBestOutcomeState(
   const entry = s.entry_price;
   const fav = favorableMove(s.open_side, entry, mid);
   const sl = hardInvalidationDistance(entry);
-  const mfeFloor = bestOutcomeMfeFloor(entry);
-  const minGreen = bestOutcomeMinGreen(entry);
-  const ret =
-    s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—';
-  const lock = `${(BEST_OUTCOME_LOCK_RETENTION * 100).toFixed(0)}%`;
-  const cont =
-    opts?.continuationSameSide && opts.continuationReason
-      ? ` · HOLD ${opts.continuationReason}`
-      : opts?.continuationSameSide
-        ? ' · HOLD continuation'
-        : '';
+  const wait = opts?.continuationReason
+    ? ` · HOLD until opposite · ${opts.continuationReason}`
+    : ' · HOLD until opposite entry signal';
 
   return {
     exit: false,
     reason: '',
-    hold: `BO10s · UPL ${fav.toFixed(2)} · min+${minGreen.toFixed(1)} · lock@${lock} · HardInv -${sl.toFixed(2)} · MFE ${s.mfe.toFixed(2)}/${mfeFloor.toFixed(2)} · ret ${ret}${cont}`,
+    hold: `BO10s · UPL ${fav.toFixed(2)} · HardInv -${sl.toFixed(2)} · MFE ${s.mfe.toFixed(2)}${wait}`,
   };
 }

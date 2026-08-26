@@ -1,7 +1,7 @@
 /**
- * Anti-whipsaw gate after close.
- * Stops £0 “nules” → instant same-side reopen spam.
- * Profit → 45s · Scratch/Loss → 60s · same-side block 60s.
+ * Anti-whipsaw after close.
+ * Must flip side — never 5× identical same-side orders.
+ * Short pause then only opposite direction allowed.
  */
 
 export type ExitSide = 'BUY' | 'SELL';
@@ -14,14 +14,14 @@ type EpicCooldown = {
 
 const byEpic = new Map<string, EpicCooldown>();
 
-/** After real profit close. */
-export const EPIC_PAUSE_MS = 45_000; // 45s
-/** After loss OR scratch (£0) close. */
-export const EPIC_LOSS_PAUSE_MS = 60_000; // 60s
-/** Block opposite flip. */
-export const EPIC_FLIP_BLOCK_MS = 60_000; // 60s
-/** Block reopening the SAME side — user: “ver to pašu treidu vaļā”. */
-export const EPIC_SAME_SIDE_BLOCK_MS = 60_000; // 60s
+/** Brief cool-off after any close before opposite entry. */
+export const EPIC_PAUSE_MS = 15_000; // 15s
+/** After loss/scratch — slightly longer before flip entry. */
+export const EPIC_LOSS_PAUSE_MS = 20_000; // 20s
+/** @deprecated flip is required; kept for tests/compat */
+export const EPIC_FLIP_BLOCK_MS = 0;
+/** Same side never repeats until opposite trade closes. */
+export const EPIC_SAME_SIDE_BLOCK_MS = Number.POSITIVE_INFINITY;
 
 function key(epic: string): string {
   return String(epic || '')
@@ -60,26 +60,17 @@ export function allowEpicReentry(
       ok: false,
       reason: `EPIC pause ${Math.ceil((pause - ago) / 1000)}s · ${
         g.wasLoss ? 'after loss/scratch' : 'after profit'
-      } · no whipsaw`,
+      } · wait flip`,
     };
   }
-  if (g.side && g.side === direction && ago < EPIC_SAME_SIDE_BLOCK_MS) {
+  // Must flip — last BUY → only SELL next (stops 5× identical orders)
+  if (g.side && g.side === direction) {
     return {
       ok: false,
-      reason: `EPIC no-repeat · last ${g.side} · block same ${Math.ceil(
-        (EPIC_SAME_SIDE_BLOCK_MS - ago) / 1000
-      )}s`,
+      reason: `EPIC must flip · last ${g.side} · no same-side reopen`,
     };
   }
-  if (g.side && g.side !== direction && ago < EPIC_FLIP_BLOCK_MS) {
-    return {
-      ok: false,
-      reason: `EPIC no-flip · last ${g.side} · block ${direction} ${Math.ceil(
-        (EPIC_FLIP_BLOCK_MS - ago) / 1000
-      )}s`,
-    };
-  }
-  return { ok: true, reason: 'epic cool' };
+  return { ok: true, reason: 'epic cool · flip ok' };
 }
 
 /** Lookup last close for desk POST-CLOSE (same epic). */

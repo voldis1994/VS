@@ -1512,16 +1512,27 @@ async function robotCycleBody(s: Internal) {
         s.ohlcState.forming && s.ohlcState.forming.ticks >= 2
           ? s.ohlcState.forming
           : s.ohlcState.last_closed;
+      const tapeNow =
+        liveSide === 'BUY' || liveSide === 'SELL'
+          ? tapeSide(s.closedBars, signalForCont)
+          : { dir: null as 'BUY' | 'SELL' | null, reason: '' };
+      const oppositeEntrySignal = Boolean(
+        liveSide && tapeNow.dir && tapeNow.dir !== liveSide
+      );
       const cont =
         liveSide === 'BUY' || liveSide === 'SELL'
           ? continuationSameSide(liveSide, signalForCont, s.regime, s.closedBars)
           : { ok: false, reason: '' };
 
-      // HardInv / PeakProtect on adverse fill (bid if BUY, ask if SELL) — mid understates loss
+      // Hold until opposite tape signal (or HardInv) — no PeakProtect £0 cuts
       const decision = decideBestOutcomeExit(
         { ...s, short_net_pct: short.netPct },
         exitPx,
-        { continuationSameSide: cont.ok }
+        {
+          oppositeEntrySignal,
+          oppositeReason: tapeNow.reason,
+          continuationSameSide: cont.ok && !oppositeEntrySignal,
+        }
       );
       if (decision.exit) {
         await exitTrade(opened.session, s, quote, decision.reason);
@@ -1543,7 +1554,12 @@ async function robotCycleBody(s: Internal) {
           describeBestOutcomeState(
             { ...s, short_net_pct: short.netPct },
             exitPx,
-            { continuationSameSide: cont.ok, continuationReason: cont.reason }
+            {
+              oppositeEntrySignal,
+              oppositeReason: tapeNow.reason,
+              continuationSameSide: cont.ok && !oppositeEntrySignal,
+              continuationReason: cont.ok ? cont.reason : tapeNow.reason || 'waiting opposite',
+            }
           ).hold
         }`,
       });
@@ -1566,7 +1582,7 @@ async function robotCycleBody(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // Post-close: profit 45s · loss/scratch 60s (same as EPIC pause)
+    // Post-close: short pause then must flip side (no same-side spam)
     const lastClose = lastEpicClose(s.epic);
     if (lastClose) {
       const pauseMs = pauseMsAfterClose(lastClose.wasLoss);
@@ -1577,7 +1593,7 @@ async function robotCycleBody(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `POST-CLOSE pause ${Math.ceil((pauseMs - sinceClose) / 1000)}s · ${
+          detail: `POST-CLOSE pause ${Math.ceil((pauseMs - sinceClose) / 1000)}s · then must flip · ${
             lastClose.wasLoss ? 'after loss/scratch' : 'after profit'
           }`,
         });
