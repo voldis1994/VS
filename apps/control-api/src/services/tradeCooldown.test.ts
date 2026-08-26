@@ -5,16 +5,24 @@ import {
   resetEpicTradeCooldowns,
   EPIC_PAUSE_MS,
   EPIC_LOSS_PAUSE_MS,
+  pauseMsAfterClose,
 } from './tradeCooldown.js';
 
 describe('epic anti-whipsaw cooldown', () => {
   beforeEach(() => resetEpicTradeCooldowns());
 
-  it('blocks re-entry inside pause after close', () => {
+  it('profit pause = 10s, loss pause = 30s', () => {
+    expect(EPIC_PAUSE_MS).toBe(10_000);
+    expect(EPIC_LOSS_PAUSE_MS).toBe(30_000);
+    expect(pauseMsAfterClose(false)).toBe(10_000);
+    expect(pauseMsAfterClose(true)).toBe(30_000);
+  });
+
+  it('blocks re-entry inside pause after profit close', () => {
     noteEpicTradeClose('GOLD', 'BUY', false);
     const g = allowEpicReentry('GOLD', 'BUY');
     expect(g.ok).toBe(false);
-    expect(g.reason).toMatch(/EPIC pause/);
+    expect(g.reason).toMatch(/EPIC pause|after profit/);
   });
 
   it('blocks opposite flip after close', () => {

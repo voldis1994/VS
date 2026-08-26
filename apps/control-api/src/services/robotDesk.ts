@@ -41,7 +41,7 @@ import {
 } from './entryFromRegime.js';
 import type { ScalpZone } from './zones.js';
 import { ZONE_WINDOW } from './zones.js';
-import { allowEpicReentry, noteEpicTradeClose } from './tradeCooldown.js';
+import { allowEpicReentry, noteEpicTradeClose, lastEpicClose, pauseMsAfterClose } from './tradeCooldown.js';
 import { allowDeskSameSide, deskConflictShouldExit, deskOpensOnEpic } from './deskSideLock.js';
 import {
   allowEntryFromFeeds,
@@ -1557,18 +1557,23 @@ async function robotCycleBody(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // Short pause on 10s TF — continuation hold reduces re-entry spam
-    const POST_CLOSE_MS = 90_000;
-    const sinceClose = Date.now() - (s.closed_at_ms || 0);
-    if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_MS) {
-      pushTick(s, {
-        phase: 'WAIT',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `POST-CLOSE pause ${Math.ceil((POST_CLOSE_MS - sinceClose) / 1000)}s · no whipsaw`,
-      });
-      return;
+    // Post-close: profit 10s · loss 30s (same as EPIC pause)
+    const lastClose = lastEpicClose(s.epic);
+    if (lastClose) {
+      const pauseMs = pauseMsAfterClose(lastClose.wasLoss);
+      const sinceClose = Date.now() - lastClose.closedAtMs;
+      if (sinceClose < pauseMs) {
+        pushTick(s, {
+          phase: 'WAIT',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `POST-CLOSE pause ${Math.ceil((pauseMs - sinceClose) / 1000)}s · ${
+            lastClose.wasLoss ? 'after loss' : 'after profit'
+          }`,
+        });
+        return;
+      }
     }
 
     if (quote.mid == null) return;
