@@ -68,7 +68,7 @@ export function normalizeRegime(value: string | null | undefined): RegimeName {
 
 /**
  * Keep real classifier output — do NOT map COMPRESSION/UNKNOWN → EXPANSION.
- * That mapping caused random candle-follow BUY/SELL. Stall regimes → WAIT in INFO.
+ * Regime is INFO label only; entry uses multi-TF tape (25/10/5/1).
  */
 export function toLiveRegime(regime: RegimeName): RegimeName {
   return regime;
@@ -263,33 +263,33 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
 function regimePlainWhy(regime: RegimeName): string {
   switch (regime) {
     case 'UNKNOWN':
-      return 'not enough bars to classify';
+      return 'label only — entry uses 25/10/5/1 tape';
     case 'TRANSITION':
-      return 'between states — wait for trend/range/breakout';
+      return 'label only — entry uses 25/10/5/1 tape';
     case 'RANGE':
-      return 'price inside recent band — scalp edges only';
+      return 'label only — tape decides BUY/SELL';
     case 'COMPRESSION':
-      return 'squeezed — wait for expansion/breakout';
+      return 'label only — tape decides BUY/SELL';
     case 'EXPANSION':
-      return 'wide bar but direction unclear';
+      return 'wide bar — tape decides direction';
     case 'TREND_UP':
-      return 'bias UP — BUY setups preferred';
+      return 'bias UP';
     case 'TREND_DOWN':
-      return 'bias DOWN — SELL setups preferred';
+      return 'bias DOWN';
     case 'PULLBACK_UPTREND':
-      return 'uptrend pullback — BUY on hold';
+      return 'uptrend pullback';
     case 'PULLBACK_DOWNTREND':
-      return 'downtrend pullback — SELL on hold';
+      return 'downtrend pullback';
     case 'BREAKOUT_UP':
-      return 'breakout UP active';
+      return 'breakout UP';
     case 'BREAKOUT_DOWN':
-      return 'breakout DOWN active';
+      return 'breakout DOWN';
     case 'FAILED_BREAKOUT_UP':
-      return 'failed up breakout — no fresh BUY';
+      return 'failed up breakout (label)';
     case 'FAILED_BREAKOUT_DOWN':
-      return 'failed down breakout — no fresh SELL';
+      return 'failed down breakout (label)';
     case 'REVERSAL_CANDIDATE':
-      return 'possible reversal — wait confirm';
+      return 'label only — tape decides';
     default:
       return '';
   }
