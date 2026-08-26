@@ -19,6 +19,8 @@ import {
 import { formatTradeLabel } from './tradePresentation.js';
 import { notePipelineRegime } from './regimes.js';
 import { attachManageOnlyRobot } from './robotDesk.js';
+import { allowEpicReentry } from './tradeCooldown.js';
+import { SAFETY_SL_PCT } from './microScalpThresholds.js';
 
 export { stopEntryRobotsForAccount } from './robotDesk.js';
 
@@ -280,6 +282,19 @@ async function executeForSubscription(
 
     // (late-1m gate removed — never skip client fanout entries)
 
+    // Same anti-whipsaw as desk — profit 10s / loss 30s (stops 7×/min spam)
+    const epicGate = allowEpicReentry(sub.epic, direction);
+    if (!epicGate.ok) {
+      return finish({
+        client_id: sub.client_id,
+        account_id: sub.account_id,
+        lot_size: sub.lot_size,
+        ok: false,
+        detail: epicGate.reason,
+        entry_price: null,
+      });
+    }
+
     // SAFETY SL — must be accepted by Capital and visible in Capital.com (never naked)
     const q = await fetchCapitalMarketQuote(opened.session, sub.epic);
     const mid =
@@ -312,7 +327,7 @@ async function executeForSubscription(
     if (useDistance) {
       for (const loosen of loosenSteps) {
         const abs = Math.max(Math.abs(mid), 1e-9);
-        const pct = abs * 0.002;
+        const pct = abs * SAFETY_SL_PCT;
         let fromPct = minPts! * 1.5;
         if (q.point_size != null && q.point_size > 0) {
           fromPct = Math.max(fromPct, pct / q.point_size);
@@ -357,7 +372,7 @@ async function executeForSubscription(
         });
         // Widen slightly on each loosen (cushion already ≥ broker min)
         const abs = Math.max(Math.abs(mid), 1e-9);
-        const extra = abs * 0.002 * (loosen - 1);
+        const extra = abs * SAFETY_SL_PCT * (loosen - 1);
         const widened =
           direction === 'BUY' ? level - extra : level + extra;
         result = await createCapitalPosition(opened.session, {

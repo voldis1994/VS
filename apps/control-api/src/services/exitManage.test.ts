@@ -23,10 +23,10 @@ function snap(partial: Partial<ExitSnapshot> & { open_side: 'BUY' | 'SELL'; entr
 }
 
 describe('decideBestOutcomeExit 10s + PeakProtect 75%', () => {
-  it('HardInv ~1.2pt Gold — cuts before Safety SL ~0.08%', () => {
+  it('HardInv ~0.6pt Gold — cuts before Safety SL ~0.04%', () => {
     const hard = hardInvalidationDistance(4660);
-    expect(hard).toBe(1.2);
-    expect(hard).toBeLessThan(4660 * 0.0008);
+    expect(hard).toBe(0.6);
+    expect(hard).toBeLessThan(4660 * 0.0004);
   });
 
   it('manageExitPrice uses bid for BUY / ask for SELL (not mid)', () => {
@@ -34,17 +34,17 @@ describe('decideBestOutcomeExit 10s + PeakProtect 75%', () => {
     expect(manageExitPrice('SELL', { bid: 4659.4, ask: 4659.8, mid: 4659.6 })).toBe(4659.8);
   });
 
-  it('HardInv fires at ~1.2pt adverse move on Gold', () => {
+  it('HardInv fires at ~0.6pt adverse move on Gold', () => {
     const cut = decideBestOutcomeExit(
       snap({ open_side: 'BUY', entry_price: 4660, mfe: 0 }),
-      4658.7
+      4659.3
     );
     expect(cut.exit).toBe(true);
     expect(cut.reason).toMatch(/HardInvalidation/);
 
     const hold = decideBestOutcomeExit(
       snap({ open_side: 'BUY', entry_price: 4660, mfe: 0 }),
-      4658.9
+      4659.5
     );
     expect(hold.exit).toBe(false);
   });

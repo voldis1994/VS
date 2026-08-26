@@ -29,6 +29,7 @@ import {
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove, manageExitPrice } from './exitManage.js';
+import { SAFETY_SL_PCT } from './microScalpThresholds.js';
 import {
   allowEntryAgainstImpulse,
   buildScalpZone,
@@ -535,7 +536,7 @@ function writeJournalClose(
 }
 
 /**
- * SAFETY SL as LAST RESORT (~0.08% / ~3.7pt) — wider than HardInv ~1.2pt.
+ * SAFETY SL as LAST RESORT (~0.04% / ~1.9pt) — wider than HardInv ~0.6pt.
  * Best Outcome / HardInvalidation must fire first; Capital Limit SL only on disaster.
  */
 function safetyStopLevel(
@@ -563,7 +564,7 @@ function safetyStopLevel(
         ? Math.max(ask - bid, 0)
         : abs * 0.00005;
 
-  const pctCushion = abs * 0.0008; // ~0.08% Safety SL — last resort; HardInv ~1.2pt first
+  const pctCushion = abs * SAFETY_SL_PCT; // last resort; HardInv ~0.6pt first
   const brokerMin =
     minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
       ? minStopDistance
@@ -579,14 +580,14 @@ function safetyStopLevel(
   return Math.round(raw * 1e6) / 1e6;
 }
 
-/** Cushion stopDistance in Capital POINTS (≥ 1.5× min, ~0.08% when point size known). */
+/** Cushion stopDistance in Capital POINTS (≥ 1.5× min, ~0.04% when point size known). */
 function safetyStopDistancePts(
   mid: number,
   minPts: number,
   pointSize: number | null
 ): number {
   const abs = Math.max(Math.abs(mid), 1e-9);
-  const pct = abs * 0.0008;
+  const pct = abs * SAFETY_SL_PCT;
   let fromPct = minPts * 1.5;
   if (pointSize != null && pointSize > 0) {
     fromPct = Math.max(fromPct, pct / pointSize);
