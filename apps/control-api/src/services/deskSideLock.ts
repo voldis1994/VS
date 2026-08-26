@@ -1,6 +1,7 @@
 /**
- * Multi-client desk: never hold BUY and SELL on the same epic at once.
- * Capital shows both as separate deals → margin fight + both can lose.
+ * Multi-account desk lock — SAME CLIENT only.
+ * Different clients must trade independently (own Capital + own 10s OHLC).
+ * Within one client: never hold BUY and SELL on the same epic (margin fight).
  */
 
 import { SHORT_THESIS_MOVE_PCT } from './microScalpThresholds.js';
@@ -13,12 +14,15 @@ export type DeskOpenUnit = {
   running: boolean;
   open_side: DeskSide | null;
   display_name?: string;
+  /** Required for isolation — peers without matching client_id are ignored. */
+  client_id?: number | null;
 };
 
 export function deskOpensOnEpic(
   units: Iterable<DeskOpenUnit>,
   epic: string,
-  exceptId?: string
+  exceptId?: string,
+  clientId?: number | null
 ): { buys: DeskOpenUnit[]; sells: DeskOpenUnit[] } {
   const want = String(epic || '')
     .trim()
@@ -29,20 +33,25 @@ export function deskOpensOnEpic(
     if (!u.running || !u.open_side) continue;
     if (exceptId && u.id === exceptId) continue;
     if (u.epic.trim().toLowerCase() !== want) continue;
+    // Cross-client isolation: only same client (or unknown client_id legacy)
+    if (clientId != null && Number.isFinite(clientId)) {
+      if (u.client_id != null && Number(u.client_id) !== Number(clientId)) continue;
+    }
     if (u.open_side === 'BUY') buys.push(u);
     else sells.push(u);
   }
   return { buys, sells };
 }
 
-/** Block opening the opposite side while a peer is already in the trade. */
+/** Block opposite side only vs same-client peers on this epic. */
 export function allowDeskSameSide(
   units: Iterable<DeskOpenUnit>,
   epic: string,
   direction: DeskSide,
-  exceptId?: string
+  exceptId?: string,
+  clientId?: number | null
 ): { ok: boolean; reason: string } {
-  const { buys, sells } = deskOpensOnEpic(units, epic, exceptId);
+  const { buys, sells } = deskOpensOnEpic(units, epic, exceptId, clientId);
   if (direction === 'BUY' && sells.length) {
     const who = sells.map((u) => u.display_name || u.id).join(',');
     return { ok: false, reason: `DESK lock · ${who} already SELL · no opposite BUY` };
@@ -55,8 +64,7 @@ export function allowDeskSameSide(
 }
 
 /**
- * If desk already has both sides open, the unit fighting the short slope must exit.
- * shortNetPct: e.g. -0.004 dump → flatten BUY; +0.004 rally → flatten SELL.
+ * If same-client desk already has both sides open, the unit fighting the short slope must exit.
  */
 export function deskConflictShouldExit(
   openSide: DeskSide,

@@ -376,7 +376,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'OWN Capital LEAD → own 10s OHLC → TAPE 5/1 → BUY|SELL · BO → EXIT',
     note:
-      'Katram klientam savs Capital LEAD + savs 10s OHLC. Peer Capital / shared bars OFF. Public = ADVISORY only.',
+      'Katram klientam savs Capital LEAD + savs 10s OHLC. Desk lock tikai tajā pašā klientā. Public = ADVISORY only.',
   };
 }
 
@@ -1496,7 +1496,7 @@ async function robotCycleBody(s: Internal) {
 
       const short = shortNetMove(s.closedBars, s.ohlcState.forming ?? s.ohlcState.last_closed);
       if (liveSide === 'BUY' || liveSide === 'SELL') {
-        const desk = deskOpensOnEpic(sessions.values(), s.epic, s.id);
+        const desk = deskOpensOnEpic(sessions.values(), s.epic, s.id, s.client_id);
         const hasOpposite =
           (liveSide === 'BUY' && desk.sells.length > 0) ||
           (liveSide === 'SELL' && desk.buys.length > 0);
@@ -1727,7 +1727,7 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    const deskGate = allowDeskSameSide(sessions.values(), s.epic, sig.direction, s.id);
+    const deskGate = allowDeskSameSide(sessions.values(), s.epic, sig.direction, s.id, s.client_id);
     if (!deskGate.ok) {
       pushTick(s, {
         phase: 'DECIDE',
