@@ -54,10 +54,10 @@ export function thesisFailureReason(
 }
 
 
-/** Arm peak trail after real 10s swing — ~0.12% / ~5.5pt Gold. */
+/** Arm PeakProtect after real micro swing — ~0.03% / ≥1.0pt Gold (was 4pt — never armed on +0.35). */
 export function bestOutcomeMfeFloor(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.0012, 4);
+  return Math.max(abs * 0.0003, 1.0);
 }
 
 /** Soft TP ≈0.45% — ~20pt Gold — 10s scalp target (not 5m 55pt). */
@@ -66,21 +66,21 @@ export function bestOutcomeTarget(entry: number): number {
   return Math.max(abs * 0.0045, 0.8);
 }
 
-/** Min green soft-exit ~0.08% / ~3.5pt — don't bank dust. */
+/** Min green for soft TP / timeDecay — ~0.5pt (PeakProtect uses any green). */
 export function bestOutcomeMinGreen(entry: number): number {
   const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.0008, 3);
+  return Math.max(abs * 0.00015, 0.5);
 }
 
-/** PeakProtect: exit when kept MFE drops below 75% (was 40% — gave back too much). */
+/** PeakProtect: exit when kept MFE drops below 75%. */
 export const BEST_OUTCOME_LOCK_RETENTION = 0.75;
 
 export function isHardBoReason(reason: string): boolean {
-  return /HardInvalidation|ThesisFailure · short/i.test(reason);
+  return /HardInvalidation|ThesisFailure · short|PeakProtection/i.test(reason);
 }
 
 export type BoExitOpts = {
-  /** When true — next entry/continuation still agrees → skip soft exits. */
+  /** When true — skip soft TP / thesis / timeDecay. Does NOT skip PeakProtect or HardInv. */
   continuationSameSide?: boolean;
 };
 
@@ -129,16 +129,19 @@ export function decideBestOutcomeExit(
     };
   }
 
-  // ——— Continuation hold: do not nick +0.10 while trend still alive ———
-  if (holdCont) {
-    return { exit: false, reason: '' };
-  }
-
-  if (armed && ret != null && ret < BEST_OUTCOME_LOCK_RETENTION && fav >= minGreen) {
+  // PeakProtect @ 75% — NEVER skipped by continuation (that was the +0.35→+0.10 bug)
+  if (armed && ret != null && ret < BEST_OUTCOME_LOCK_RETENTION && fav > 0) {
     return {
       exit: true,
-      reason: `PeakProtection · keep ${(ret * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} · UPL ${fav.toFixed(5)}`,
+      reason: `PeakProtection · keep ${(ret * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} · UPL ${fav.toFixed(5)} · lock@${(
+        BEST_OUTCOME_LOCK_RETENTION * 100
+      ).toFixed(0)}%`,
     };
+  }
+
+  // Continuation: only soft exits skipped (TP / thesis / timeDecay)
+  if (holdCont) {
+    return { exit: false, reason: '' };
   }
 
   if (fav < minGreen) {
