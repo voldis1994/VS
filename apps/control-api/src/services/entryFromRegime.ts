@@ -166,15 +166,14 @@ export function blockEntryAtExtreme(
 }
 
 const HARD_BLOCK_REGIMES: RegimeName[] = [
-  'UNKNOWN',
   'TRANSITION',
   'REVERSAL_CANDIDATE',
   'FAILED_BREAKOUT_UP',
   'FAILED_BREAKOUT_DOWN',
 ];
 
-/** COMPRESSION/RANGE trade when struct trend is clear (not flat chop). */
-const CHOP_REGIMES: RegimeName[] = ['COMPRESSION', 'RANGE'];
+/** Flat labels — still trade when short/struct trend is clear (was hard-blocked → overnight WAIT). */
+const CHOP_REGIMES: RegimeName[] = ['COMPRESSION', 'RANGE', 'UNKNOWN'];
 
 export function allowEntryAgainstImpulse(
   direction: 'BUY' | 'SELL',
@@ -264,8 +263,9 @@ export function explainNoEntry(
   }
   if (CHOP_REGIMES.includes(r)) {
     const struct = structNetMove(closedBars, 24);
-    if (!struct.dir) {
-      return `WAIT · ${regimeLine} · no struct trend yet · ${zoneLine} · ${barLine}`;
+    const short = shortNetMove(closedBars, bar);
+    if (!struct.dir && !short.dir) {
+      return `WAIT · ${regimeLine} · no short/struct trend yet · ${zoneLine} · ${barLine}`;
     }
   }
   if (!zone) {
@@ -349,16 +349,18 @@ export function decideEntryFrom10sRegime(
   if (HARD_BLOCK_REGIMES.includes(r)) return null;
 
   let dir = marketDirection(regime, closedBars, bar);
+  const struct = structNetMove(closedBars, 24);
+  const short = shortNetMove(closedBars, bar);
 
-  // COMPRESSION/RANGE: allow when ~4 min struct trend is clear
+  // UNKNOWN/RANGE/COMPRESSION: need short OR struct slope (no random color)
   if (CHOP_REGIMES.includes(r)) {
-    const struct = structNetMove(closedBars, 24);
-    if (!struct.dir) return null;
-    dir = struct.dir === 'UP' ? 'BUY' : 'SELL';
+    if (short.dir) dir = short.dir === 'UP' ? 'BUY' : 'SELL';
+    else if (struct.dir) dir = struct.dir === 'UP' ? 'BUY' : 'SELL';
+    else return null;
   }
 
   if (!dir) return null;
-  if (r === 'EXPANSION' && !shortNetMove(closedBars, bar).dir) return null;
+  if (r === 'EXPANSION' && !short.dir) return null;
 
   const extreme = blockEntryAtExtreme(dir, closedBars, bar);
   if (!extreme.ok) return null;
@@ -367,28 +369,56 @@ export function decideEntryFrom10sRegime(
   if (signalBarTooLate(bar)) return null;
 
   const zone = buildScalpZone(closedBars);
-  if (!zone) return null;
 
-  const zv = evaluateZoneEntry(dir, bar, zone, closedBars);
-  if (!zv.ok || !zv.setup) return null;
-
-  // Mild timing agreement — don't require color for breakout/retest already validated
-  if (zv.setup === 'BOUNCE' && dir === 'BUY' && isRed(bar) && bodyPct(bar) < -0.001) {
-    return null; // bounce failed
-  }
-  if (zv.setup === 'REJECT' && dir === 'SELL' && isGreen(bar) && bodyPct(bar) > 0.001) {
+  // Prefer zone touch; if mid-box but trend clear → CONTINUATION (was forever WAIT)
+  if (zone) {
+    const zv = evaluateZoneEntry(dir, bar, zone, closedBars);
+    if (zv.ok && zv.setup) {
+      if (zv.setup === 'BOUNCE' && dir === 'BUY' && isRed(bar) && bodyPct(bar) < -0.001) {
+        return null;
+      }
+      if (zv.setup === 'REJECT' && dir === 'SELL' && isGreen(bar) && bodyPct(bar) > 0.001) {
+        return null;
+      }
+      const setupLabel = CHOP_REGIMES.includes(r) ? 'CONTINUATION' : mapZoneSetup(zv.setup, r);
+      return {
+        direction: dir,
+        setup: setupLabel,
+        reason: `${r} · struct ${struct.netPts.toFixed(1)}pt · ${zv.reason} · ${candle}`,
+        zone,
+        zone_setup: zv.setup,
+      };
+    }
+    // Mid-zone / no touch — still enter with clear short or struct trend
+    if (short.dir || struct.dir) {
+      const aligned =
+        (dir === 'BUY' && (short.dir === 'UP' || struct.dir === 'UP')) ||
+        (dir === 'SELL' && (short.dir === 'DOWN' || struct.dir === 'DOWN'));
+      if (aligned) {
+        return {
+          direction: dir,
+          setup: 'CONTINUATION',
+          reason: `${r} · CONTINUATION mid-zone · short ${short.netPts.toFixed(1)}pt · struct ${struct.netPts.toFixed(1)}pt · ${candle}`,
+          zone,
+          zone_setup: null,
+        };
+      }
+    }
     return null;
   }
 
-  const setupLabel = CHOP_REGIMES.includes(r) ? 'CONTINUATION' : mapZoneSetup(zv.setup, r);
+  // No zone yet — allow only with clear short slope (seed/overnight)
+  if (short.dir && ((dir === 'BUY' && short.dir === 'UP') || (dir === 'SELL' && short.dir === 'DOWN'))) {
+    return {
+      direction: dir,
+      setup: 'CONTINUATION',
+      reason: `${r} · CONTINUATION no-zone · short ${short.netPts.toFixed(1)}pt · ${candle}`,
+      zone: null,
+      zone_setup: null,
+    };
+  }
 
-  return {
-    direction: dir,
-    setup: setupLabel,
-    reason: `${r} · struct ${structNetMove(closedBars, 24).netPts.toFixed(1)}pt · ${zv.reason} · ${candle}`,
-    zone,
-    zone_setup: zv.setup,
-  };
+  return null;
 }
 
 export { buildScalpZone, formatZoneInfo, type ScalpZone };

@@ -47,7 +47,19 @@ describe('unblocked entry', () => {
     expect(gate.reason).toMatch(/swing low/);
   });
 
-  it('still blocks UNKNOWN without inventing trades', () => {
-    expect(decideEntryFrom10sRegime(bar(4501, 4503, 12), 'UNKNOWN', baseBars())).toBeNull();
+  it('still blocks TRANSITION without inventing trades', () => {
+    expect(decideEntryFrom10sRegime(bar(4501, 4503, 12), 'TRANSITION', baseBars())).toBeNull();
+  });
+
+  it('UNKNOWN enters on clear short UP (not forever WAIT)', () => {
+    const bars: TenSecBar[] = [];
+    for (let i = 0; i < 12; i++) {
+      const o = 4638 + i * 0.4;
+      bars.push(bar(o, o + 0.3, i, 1.0));
+    }
+    const sig = bar(4642.5, 4643.2, 12, 1.0);
+    const entry = decideEntryFrom10sRegime(sig, 'UNKNOWN', bars);
+    expect(entry).not.toBeNull();
+    expect(entry!.direction).toBe('BUY');
   });
 });

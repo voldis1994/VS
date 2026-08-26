@@ -1622,12 +1622,12 @@ async function robotCycleBody(s: Internal) {
     const closed = s.ohlcState.last_closed;
     const forming = s.ohlcState.forming;
     const justClosed = Boolean(s.ohlcState.just_closed && closed);
-    // Prefer closed 10s; allow forming only with enough ticks (structure still from closedBars zone)
+    // Prefer just-closed; else live forming (≥2 ticks); else last closed — never idle "collecting" when bars exist
     const signalBar: TenSecBar | null = justClosed
       ? closed!
-      : forming && forming.ticks >= 3
+      : forming && forming.ticks >= 2
         ? forming
-        : null;
+        : closed || null;
     const liveSignal = Boolean(signalBar && !justClosed);
     const ohlc = s.ohlc_10s;
     const show = signalBar || closed;

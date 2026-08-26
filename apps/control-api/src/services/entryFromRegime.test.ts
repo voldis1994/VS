@@ -23,9 +23,9 @@ function baseBars(): TenSecBar[] {
 }
 
 describe('10s zone entry', () => {
-  it('skips chop without struct trend', () => {
+  it('skips chop without short/struct trend', () => {
     const bars = baseBars();
-    const sigBar = bar(4501, 4503, 12);
+    const sigBar = bar(4501, 4501.1, 12, 0.3);
     expect(decideEntryFrom10sRegime(sigBar, 'COMPRESSION', bars)).toBeNull();
     expect(decideEntryFrom10sRegime(sigBar, 'RANGE', bars)).toBeNull();
     expect(decideEntryFrom10sRegime(sigBar, 'UNKNOWN', bars)).toBeNull();
