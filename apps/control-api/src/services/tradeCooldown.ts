@@ -1,7 +1,6 @@
 /**
- * Anti-whipsaw after close.
- * Must flip side — never 5× identical same-side orders.
- * Short pause then only opposite direction allowed.
+ * Post-trade gates — user: NO cooldown seconds after any trade.
+ * Reentry follows tape immediately (same side allowed).
  */
 
 export type ExitSide = 'BUY' | 'SELL';
@@ -14,14 +13,14 @@ type EpicCooldown = {
 
 const byEpic = new Map<string, EpicCooldown>();
 
-/** Brief cool-off after any close before opposite entry. */
-export const EPIC_PAUSE_MS = 15_000; // 15s
-/** After loss/scratch — slightly longer before flip entry. */
-export const EPIC_LOSS_PAUSE_MS = 20_000; // 20s
-/** @deprecated flip is required; kept for tests/compat */
+/** No time pause after profit close. */
+export const EPIC_PAUSE_MS = 0;
+/** No time pause after loss/scratch close. */
+export const EPIC_LOSS_PAUSE_MS = 0;
+/** @deprecated */
 export const EPIC_FLIP_BLOCK_MS = 0;
-/** Same side never repeats until opposite trade closes. */
-export const EPIC_SAME_SIDE_BLOCK_MS = Number.POSITIVE_INFINITY;
+/** Same-side reopen allowed — no must-flip block. */
+export const EPIC_SAME_SIDE_BLOCK_MS = 0;
 
 function key(epic: string): string {
   return String(epic || '')
@@ -29,8 +28,8 @@ function key(epic: string): string {
     .toUpperCase();
 }
 
-export function pauseMsAfterClose(wasLoss: boolean): number {
-  return wasLoss ? EPIC_LOSS_PAUSE_MS : EPIC_PAUSE_MS;
+export function pauseMsAfterClose(_wasLoss: boolean): number {
+  return 0;
 }
 
 export function noteEpicTradeClose(
@@ -49,31 +48,15 @@ export function noteEpicTradeClose(
 
 export function allowEpicReentry(
   epic: string,
-  direction: ExitSide
+  _direction: ExitSide
 ): { ok: boolean; reason: string } {
   const g = byEpic.get(key(epic));
   if (!g || !g.closedAtMs) return { ok: true, reason: 'no recent epic close' };
-  const ago = Date.now() - g.closedAtMs;
-  const pause = pauseMsAfterClose(g.wasLoss);
-  if (ago < pause) {
-    return {
-      ok: false,
-      reason: `EPIC pause ${Math.ceil((pause - ago) / 1000)}s · ${
-        g.wasLoss ? 'after loss/scratch' : 'after profit'
-      } · wait flip`,
-    };
-  }
-  // Must flip — last BUY → only SELL next (stops 5× identical orders)
-  if (g.side && g.side === direction) {
-    return {
-      ok: false,
-      reason: `EPIC must flip · last ${g.side} · no same-side reopen`,
-    };
-  }
-  return { ok: true, reason: 'epic cool · flip ok' };
+  // User: nekāda cooldown — tape decides immediately
+  return { ok: true, reason: 'no cooldown · tape free' };
 }
 
-/** Lookup last close for desk POST-CLOSE (same epic). */
+/** Lookup last close for desk INFO (same epic). */
 export function lastEpicClose(
   epic: string
 ): { closedAtMs: number; wasLoss: boolean; side: ExitSide | null } | null {

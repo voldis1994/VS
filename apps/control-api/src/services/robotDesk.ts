@@ -1582,25 +1582,7 @@ async function robotCycleBody(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // Post-close: short pause then must flip side (no same-side spam)
-    const lastClose = lastEpicClose(s.epic);
-    if (lastClose) {
-      const pauseMs = pauseMsAfterClose(lastClose.wasLoss);
-      const sinceClose = Date.now() - lastClose.closedAtMs;
-      if (sinceClose < pauseMs) {
-        pushTick(s, {
-          phase: 'WAIT',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `POST-CLOSE pause ${Math.ceil((pauseMs - sinceClose) / 1000)}s · then must flip · ${
-            lastClose.wasLoss ? 'after loss/scratch' : 'after profit'
-          }`,
-        });
-        return;
-      }
-    }
-
+    // No post-close time pause (user: nekāda cooldown)
     if (quote.mid == null) return;
 
     // Seed 10s bars from THIS client's Capital only
