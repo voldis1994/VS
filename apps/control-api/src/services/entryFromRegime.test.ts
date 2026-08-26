@@ -22,34 +22,20 @@ function baseBars(): TenSecBar[] {
   return out;
 }
 
-describe('10s multi-TF entry', () => {
-  it('skips flat chop — no direction', () => {
+describe('10s multi-TF entry — no WAIT', () => {
+  it('skips flat chop', () => {
     const bars = baseBars();
     const sigBar = bar(4500.4, 4500.5, 12, 0.3);
     expect(tapeSide(bars, sigBar).dir).toBeNull();
-    expect(decideEntryFrom10sRegime(sigBar, 'UNKNOWN', bars)).toBeNull();
-    expect(decideEntryFrom10sRegime(sigBar, 'COMPRESSION', bars)).toBeNull();
+    expect(decideEntryFrom10sRegime(sigBar, 'TRANSITION', bars)).toBeNull();
   });
 
-  it('skips EXPANSION without clear slope', () => {
-    const bars = baseBars();
-    const midFlat = {
-      open_time_ms: 12 * 10_000,
-      open: 4500.5,
-      high: 4500.7,
-      low: 4500.3,
-      close: 4500.55,
-      ticks: 8,
-    };
-    expect(decideEntryFrom10sRegime(midFlat, 'EXPANSION', bars)).toBeNull();
-  });
-
-  it('explainNoEntry is NO ENTRY not regime WAIT', () => {
+  it('explainNoEntry is SCAN not WAIT', () => {
     const bars = baseBars();
     const quiet = bar(4500.5, 4500.55, 12, 0.2);
     const msg = explainNoEntry(quiet, 'UNKNOWN', bars);
-    expect(msg).toMatch(/NO ENTRY|TAPE FLAT/i);
-    expect(msg).not.toMatch(/^WAIT ·/);
+    expect(msg).toMatch(/SCAN|TAPE FLAT/i);
+    expect(msg).not.toMatch(/WAIT ENTRY|WAIT ·/);
   });
 
   it('continuationSameSide holds with UP tape', () => {
@@ -59,8 +45,7 @@ describe('10s multi-TF entry', () => {
       bars.push(bar(o, o + 0.1, i, 0.3));
     }
     const green = bar(4505, 4505.4, 60, 0.3);
-    const c = continuationSameSide('BUY', green, 'UNKNOWN', bars);
-    expect(c.ok).toBe(true);
+    expect(continuationSameSide('BUY', green, 'TRANSITION', bars).ok).toBe(true);
   });
 
   it('continuationSameSide rejects flipped market', () => {
@@ -69,7 +54,6 @@ describe('10s multi-TF entry', () => {
       dump.push(bar(4520 - i * 0.2, 4519.8 - i * 0.2, i, 0.4));
     }
     const red = bar(4500, 4499.5, 40, 0.3);
-    const c = continuationSameSide('BUY', red, 'TREND_DOWN', dump);
-    expect(c.ok).toBe(false);
+    expect(continuationSameSide('BUY', red, 'TREND_DOWN', dump).ok).toBe(false);
   });
 });

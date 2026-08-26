@@ -211,9 +211,20 @@ export function longTapeUp(t: MultiTfTape): boolean {
   return t.pts25m > 1.5 && t.pts10m > 1.2 && t.pts5m > 0.6;
 }
 
-/** Short dump — SELL only when longer TFs are not UP. */
+/** Clear DOWN tape — 10m dump or 1–5m dump. */
 export function shortTapeDown(t: MultiTfTape): boolean {
-  return t.pts5m < -0.8 && t.pts1m < -0.4;
+  if (t.pts10m < -1.5) return true;
+  if (t.pts5m < -0.8 && t.pts1m < -0.35) return true;
+  if (t.pts25m < -2 && t.pts10m < -0.5) return true;
+  return false;
+}
+
+/** Clear UP tape — 10m rally or stacked shorts. */
+export function shortTapeUp(t: MultiTfTape): boolean {
+  if (t.pts10m > 1.5) return true;
+  if (t.pts5m > 0.8 && t.pts1m > 0.35) return true;
+  if (t.pts25m > 2 && t.pts10m > 0.5) return true;
+  return false;
 }
 
 export function allowEntryAgainstImpulse(
@@ -223,57 +234,29 @@ export function allowEntryAgainstImpulse(
 ): { ok: boolean; reason: string } {
   const t = multiTfPts(bars, liveBar);
 
-  // Absolute veto — never SELL into 25/10/5 UP stack
-  if (direction === 'SELL') {
-    if (longTapeUp(t)) {
-      return {
-        ok: false,
-        reason: `BLOCK SELL · multi-TF UP ${formatTf(t)} (only BUY)`,
-      };
-    }
-    if (t.pts10m > 2) {
-      return { ok: false, reason: `BLOCK SELL · 10m UP ${t.pts10m.toFixed(1)}pt` };
-    }
-    if (t.pts25m > 3) {
-      return { ok: false, reason: `BLOCK SELL · 25m UP ${t.pts25m.toFixed(1)}pt` };
-    }
+  // Only hard veto: never fade the clear opposite multi-TF stack
+  if (direction === 'SELL' && longTapeUp(t)) {
+    return {
+      ok: false,
+      reason: `BLOCK SELL · multi-TF UP ${formatTf(t)} (only BUY)`,
+    };
   }
-  if (direction === 'BUY') {
-    if (shortTapeDown(t) && t.pts10m < -1 && t.pts25m < -1) {
-      return {
-        ok: false,
-        reason: `BLOCK BUY · multi-TF DOWN ${formatTf(t)} (only SELL)`,
-      };
-    }
-    if (t.pts5m < -2 && t.pts1m < -1) {
-      return { ok: false, reason: `BLOCK BUY · 1–5m DOWN ${formatTf(t)}` };
-    }
+  if (direction === 'BUY' && shortTapeDown(t) && t.pts10m < -1.5 && t.pts25m < -1) {
+    return {
+      ok: false,
+      reason: `BLOCK BUY · multi-TF DOWN ${formatTf(t)} (only SELL)`,
+    };
   }
   return { ok: true, reason: 'tape aligns with entry' };
 }
 
-/**
- * Soft climax gate only — huge already-ran move, not a regime WAIT.
- */
+/** Disabled — user: no WAIT / late-chase blocks. Kept export for callers. */
 export function blockLateTrendChase(
-  direction: 'BUY' | 'SELL',
-  bars: TenSecBar[] | null | undefined,
-  liveBar?: TenSecBar | null
+  _direction: 'BUY' | 'SELL',
+  _bars: TenSecBar[] | null | undefined,
+  _liveBar?: TenSecBar | null
 ): { ok: boolean; reason: string } {
-  const t = multiTfPts(bars, liveBar);
-  if (direction === 'BUY' && t.pts10m > 10 && t.pts5m > 6) {
-    return {
-      ok: false,
-      reason: `BLOCK BUY · climax 10m=+${t.pts10m.toFixed(1)} 5m=+${t.pts5m.toFixed(1)}`,
-    };
-  }
-  if (direction === 'SELL' && t.pts10m < -10 && t.pts5m < -6) {
-    return {
-      ok: false,
-      reason: `BLOCK SELL · climax 10m=${t.pts10m.toFixed(1)} 5m=${t.pts5m.toFixed(1)}`,
-    };
-  }
-  return { ok: true, reason: 'not a late chase' };
+  return { ok: true, reason: 'late-chase gate off' };
 }
 
 /** REJECT/BOUNCE fade only WITH tape — not against it. */
@@ -335,24 +318,16 @@ export function marketDirection(
 
 export function explainNoEntry(
   bar: TenSecBar,
-  regime?: string | null,
+  _regime?: string | null,
   closedBars?: TenSecBar[] | null
 ): string {
   const tape = tapeSide(closedBars, bar);
-  const zone = buildScalpZone(closedBars);
-  const zoneLine = formatZoneInfo(zone, closedBars);
-
-  if (signalBarTooLate(bar)) {
-    return `NO ENTRY · bar already ran · ${tape.reason}`;
-  }
   if (!tape.dir) {
-    return `NO ENTRY · ${tape.reason} · need 25/10/5/1 UP→BUY or 1–5 DOWN→SELL · ${zoneLine}`;
+    return `SCAN · ${tape.reason} · need clear UP→BUY or DOWN→SELL`;
   }
   const vs = allowEntryAgainstImpulse(tape.dir, closedBars, bar);
-  if (!vs.ok) return `NO ENTRY · ${vs.reason}`;
-  const late = blockLateTrendChase(tape.dir, closedBars, bar);
-  if (!late.ok) return `NO ENTRY · ${late.reason}`;
-  return `NO ENTRY · ${tape.reason}`;
+  if (!vs.ok) return `SCAN · ${vs.reason}`;
+  return `SCAN · ${tape.reason}`;
 }
 
 /**
@@ -390,10 +365,8 @@ export function continuationSameSide(
 }
 
 /**
- * Multi-TF tape:
- * - 25m / 10m / 5m / 1m UP → BUY only
- * - 1–5m DOWN (longer not UP) → SELL
- * Regime / UNKNOWN never blocks.
+ * Multi-TF tape — 10m dominates. No regime / late / bar WAIT.
+ * UP → BUY, DOWN → SELL.
  */
 export function tapeSide(
   bars: TenSecBar[] | null | undefined,
@@ -410,24 +383,8 @@ export function tapeSide(
   const pts90s = netPtsLookback(bars, liveBar, 9);
   const line = formatTf(t);
 
-  // ——— BUY: multi-TF UP stack ———
-  const upVotes =
-    (t.pts1m > 0.35 ? 1 : 0) +
-    (t.pts5m > 0.7 ? 1 : 0) +
-    (t.pts10m > 1.0 ? 1 : 0) +
-    (t.pts25m > 1.5 ? 1 : 0);
-
-  if (longTapeUp(t) || (upVotes >= 3 && t.pts5m > 0.5 && t.pts10m > 0.8)) {
-    return {
-      dir: 'BUY',
-      pts90s,
-      pts5m: t.pts5m,
-      pts10m: t.pts10m,
-      pts25m: t.pts25m,
-      reason: `TAPE UP · ${line}`,
-    };
-  }
-  if (t.pts10m > 1.2 && t.pts5m > 0.8 && t.pts1m > 0.35) {
+  // Long UP stack → BUY only (never SELL)
+  if (longTapeUp(t) || shortTapeUp(t)) {
     return {
       dir: 'BUY',
       pts90s,
@@ -438,18 +395,8 @@ export function tapeSide(
     };
   }
 
-  // ——— SELL: 1–5m DOWN, and NOT long UP ———
-  if (!longTapeUp(t) && shortTapeDown(t)) {
-    return {
-      dir: 'SELL',
-      pts90s,
-      pts5m: t.pts5m,
-      pts10m: t.pts10m,
-      pts25m: t.pts25m,
-      reason: `TAPE DOWN · ${line}`,
-    };
-  }
-  if (!longTapeUp(t) && t.pts5m < -1.0 && t.pts10m < -0.5) {
+  // Clear DOWN (10m dump or 1–5) → SELL
+  if (shortTapeDown(t)) {
     return {
       dir: 'SELL',
       pts90s,
@@ -475,17 +422,12 @@ export function decideEntryFrom10sRegime(
   _regime?: string | null,
   closedBars?: TenSecBar[] | null
 ): RegimeEntry | null {
-  // Regime labels (UNKNOWN / TRANSITION / …) never block — tape only.
-  if (signalBarTooLate(bar)) return null;
-
+  // No regime / late-bar / climax WAIT — tape only.
   const tape = tapeSide(closedBars, bar);
   if (!tape.dir) return null;
 
   const vsTape = allowEntryAgainstImpulse(tape.dir, closedBars, bar);
   if (!vsTape.ok) return null;
-
-  const late = blockLateTrendChase(tape.dir, closedBars, bar);
-  if (!late.ok) return null;
 
   const zone = buildScalpZone(closedBars);
 
