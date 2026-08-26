@@ -15,9 +15,9 @@ function bar(open: number, close: number, i = 0, w = 1.5): TenSecBar {
 
 function baseBars(): TenSecBar[] {
   const out: TenSecBar[] = [];
-  for (let i = 0; i < 12; i++) {
-    const mid = 4500 + (i % 2) * 0.3;
-    out.push(bar(mid, mid + 0.2, i, 1.0));
+  for (let i = 0; i < 40; i++) {
+    const mid = 4500 + ((i % 4) - 1.5) * 0.05; // tight chop ±0.075
+    out.push(bar(mid, mid + 0.02, i, 0.15));
   }
   return out;
 }
@@ -25,7 +25,7 @@ function baseBars(): TenSecBar[] {
 describe('10s multi-TF entry — no WAIT', () => {
   it('skips flat chop', () => {
     const bars = baseBars();
-    const sigBar = bar(4500.4, 4500.5, 12, 0.3);
+    const sigBar = bar(4500.02, 4500.03, 40, 0.1);
     expect(tapeSide(bars, sigBar).dir).toBeNull();
     expect(decideEntryFrom10sRegime(sigBar, 'TRANSITION', bars)).toBeNull();
   });

@@ -138,7 +138,7 @@ describe('no WAIT blocks — tape only', () => {
     expect(allowEntryAgainstImpulse('SELL', bars, live).ok).toBe(false);
   });
 
-  it('huge signal bar does NOT block (no late-bar WAIT)', () => {
+  it('huge late signal bar is blocked (move already done)', () => {
     const bars = upBars(40, 4600, 0.08);
     const late = {
       open_time_ms: 999,
@@ -148,10 +148,35 @@ describe('no WAIT blocks — tape only', () => {
       close: 4646,
       ticks: 8,
     };
-    // Append so tape still UP
     const withLate = [...bars, late];
     const entry = decideEntryFrom10sRegime(late, 'TRANSITION', withLate);
+    expect(entry).toBeNull();
+    expect(explainNoEntry(late, 'TRANSITION', withLate)).toMatch(/late bar|move already done|swing high/i);
+  });
+
+  it('early SETUP BUY fires before finished 5m climb (~0.6pt not 1.2pt)', () => {
+    const bars: TenSecBar[] = [];
+    let px = 4640;
+    for (let i = 0; i < 36; i++) {
+      const step = i < 24 ? 0.012 : 0.05; // soft climb then early push
+      const o = px;
+      const c = px + step;
+      bars.push({
+        open_time_ms: i * 10_000,
+        open: o,
+        high: c + 0.05,
+        low: o - 0.05,
+        close: c,
+        ticks: 8,
+      });
+      px = c;
+    }
+    const live = bars[bars.length - 1]!;
+    const tape = tapeSide(bars, live);
+    const entry = decideEntryFrom10sRegime(live, 'TRANSITION', bars);
     expect(entry).not.toBeNull();
     expect(entry!.direction).toBe('BUY');
+    expect(entry!.reason).toMatch(/SETUP BUY/i);
+    expect(tape.pts5m).toBeLessThan(1.2);
   });
 });
