@@ -273,7 +273,7 @@ export function publicOhlc10s(state: TenSecState): {
   last_c: number | null;
   forming_c: number | null;
   body_pct: number | null;
-  market: 'MOVING' | 'QUIET' | 'SEEDING';
+  market: 'MOVING' | 'QUIET' | 'SEEDING' | 'OFF';
 } {
   const last = state.last_closed;
   if (!last) {
@@ -295,5 +295,26 @@ export function publicOhlc10s(state: TenSecState): {
     forming_c: state.forming?.close ?? null,
     body_pct: bodyPct(last),
     market: isMoving10s(last) ? 'MOVING' : 'QUIET',
+  };
+}
+
+/** Desk snapshot when native 10s pipeline is killed. */
+export function publicOhlc10sOff(): {
+  last_o: number | null;
+  last_h: number | null;
+  last_l: number | null;
+  last_c: number | null;
+  forming_c: number | null;
+  body_pct: number | null;
+  market: 'OFF';
+} {
+  return {
+    last_o: null,
+    last_h: null,
+    last_l: null,
+    last_c: null,
+    forming_c: null,
+    body_pct: null,
+    market: 'OFF',
   };
 }

@@ -29,6 +29,7 @@ import {
   type ArmedTriggerState,
   type EarlyEntrySignal,
 } from './earlyEntryArmed.js';
+import { TEN_SEC_OHLC_ENABLED } from './tenSecOhlcFlag.js';
 export type { ArmedTriggerState, EarlyEntrySignal };
 export { idleArmedState, advanceEarlyEntryArmed, earlyDirectionBlockedByRegime };
 
@@ -504,6 +505,12 @@ export function decideEntryFrom10sRegime(
       structural_sl: decision.structural_sl,
       evidence_score: decision.evidence_score,
     };
+  }
+
+  // 10s OHLC temporarily OFF — no EARLY micro path (needs 10s confirms).
+  if (!TEN_SEC_OHLC_ENABLED) {
+    opts?.on_armed_state?.(idleArmedState());
+    return null;
   }
 
   // Early path: SETUP→ARMED→TRIGGERED without waiting for full 5m BOS/CHoCH.

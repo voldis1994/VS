@@ -697,7 +697,7 @@ export function RobotDeskPage() {
                     </div>
                     <div className="rc-focus-metrics mono">
                       <div><span>MID</span><strong>{fmt(focused.last_mid)}</strong></div>
-                      <div><span>10s</span><strong>{focused.ohlc_10s?.market || 'SEEDING'}</strong></div>
+                      <div><span>10s</span><strong>{focused.ohlc_10s?.market === 'OFF' ? 'OFF' : focused.ohlc_10s?.market || 'SEEDING'}</strong></div>
                       <div><span>FEEDS</span><strong>{focused.feed_contributing ?? 0}/{focused.feed_sender_count ?? 0}</strong></div>
                       <div title="Safety SL on Capital.com — set automatically on every entry when flat">
                         <span>SL</span><strong>{fmtSl(focused)}</strong>
@@ -855,9 +855,9 @@ export function RobotDeskPage() {
                       : chainLabel}
                   </div>
                   <div>
-                    10s OHLC · O {fmt(focused.ohlc_10s?.last_o, 2)} H {fmt(focused.ohlc_10s?.last_h, 2)} L{' '}
-                    {fmt(focused.ohlc_10s?.last_l, 2)} C {fmt(focused.ohlc_10s?.last_c, 2)} ·{' '}
-                    {focused.ohlc_10s?.market || 'SEEDING'}
+                    {focused.ohlc_10s?.market === 'OFF'
+                      ? '10s OHLC OFF · entry uses Capital 1m/5m only'
+                      : `10s OHLC · O ${fmt(focused.ohlc_10s?.last_o, 2)} H ${fmt(focused.ohlc_10s?.last_h, 2)} L ${fmt(focused.ohlc_10s?.last_l, 2)} C ${fmt(focused.ohlc_10s?.last_c, 2)} · ${focused.ohlc_10s?.market || 'SEEDING'}`}
                   </div>
                   <div>MODE · {focused.running ? focused.mode : 'STOPPED'}</div>
                   <div>{focused.tape_reason || focused.regime_info || `TAPE · ${focused.tape_dir || 'FLAT'}`}</div>

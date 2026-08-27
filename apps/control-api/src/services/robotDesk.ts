@@ -55,10 +55,43 @@ import {
   aggregateSecondsToTen,
   emptyTenSecState,
   publicOhlc10s,
+  publicOhlc10sOff,
   updateTenSecondOhlc,
   type TenSecBar,
   type TenSecState,
 } from './tenSecondOhlc.js';
+import { TEN_SEC_OHLC_ENABLED, tenSecOhlcStatusLine } from './tenSecOhlcFlag.js';
+
+/** Map Capital multi-TF bars into the legacy TenSecBar shape when 10s OHLC is OFF. */
+function barsAsTenSec(
+  bars: Array<{
+    open_time_ms: number;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    ticks?: number;
+    provenance?: string;
+    forming?: boolean;
+  }>
+): TenSecBar[] {
+  return bars
+    .filter((b) => !b.forming)
+    .map((b) => ({
+      open_time_ms: b.open_time_ms,
+      open: b.open,
+      high: b.high,
+      low: b.low,
+      close: b.close,
+      ticks: b.ticks ?? 8,
+      provenance: (b.provenance as TenSecBar['provenance']) ?? 'REAL',
+    }));
+}
+
+function deskClosedBars(s: { closedBars: TenSecBar[]; multiTf: { books: { '1m': { bars: any[] } } } }): TenSecBar[] {
+  if (TEN_SEC_OHLC_ENABLED) return s.closedBars;
+  return barsAsTenSec(s.multiTf.books['1m']?.bars ?? []);
+}
 import {
   appendClosedTrade,
   appendOpenEvent,
@@ -172,7 +205,7 @@ export type RobotSession = {
     last_c: number | null;
     forming_c: number | null;
     body_pct: number | null;
-    market: 'MOVING' | 'QUIET' | 'SEEDING';
+    market: 'MOVING' | 'QUIET' | 'SEEDING' | 'OFF';
   };
   feed_source?: 'MULTI' | 'LOCAL' | 'NONE';
   feed_contributing?: number;
@@ -351,24 +384,26 @@ function publicSession(s: Internal): RobotSession {
     last_quote_fetch_ms: _lqf,
     ...rest
   } = s;
-  const zoneSnap = buildScalpZone(s.closedBars);
-  const liveBar = s.ohlcState.forming ?? s.ohlcState.last_closed;
-  const tape = tapeSide(s.closedBars, liveBar);
+  const zoneSnap = buildScalpZone(deskClosedBars(s));
+  const liveBar = TEN_SEC_OHLC_ENABLED
+    ? s.ohlcState.forming ?? s.ohlcState.last_closed
+    : deskClosedBars(s).slice(-1)[0] ?? null;
+  const tape = tapeSide(deskClosedBars(s), liveBar);
   // Display regime from tape — never sticky TRANSITION/UNKNOWN on the board
   const displayRegime =
     tape.dir === 'BUY' ? 'TREND_UP' : tape.dir === 'SELL' ? 'TREND_DOWN' : 'RANGE';
   const entryPlan = buildLiveEntryPlan({
     price: s.last_mid,
-    armed: s.armed_trigger,
+    armed: TEN_SEC_OHLC_ENABLED ? s.armed_trigger : idleArmedState(),
     multiTf: s.multiTf,
-    closedBars: s.closedBars,
+    closedBars: deskClosedBars(s),
     open_side: s.open_side,
     running: s.running,
   });
   return {
     ...rest,
     regime: displayRegime,
-    ohlc_10s: publicOhlc10s(s.ohlcState),
+    ohlc_10s: TEN_SEC_OHLC_ENABLED ? publicOhlc10s(s.ohlcState) : publicOhlc10sOff(),
     feed_source: rest.feed_source,
     feed_contributing: s.multiFeed?.contributing ?? rest.feed_contributing ?? 0,
     feed_sender_count: s.multiFeed?.sender_count ?? rest.feed_sender_count ?? 0,
@@ -408,11 +443,13 @@ function buildDecisionChain(
       action: `PARKED · ${String(s.market_status || 'CLOSED').toUpperCase()}`,
     };
   }
-  const ohlc = publicOhlc10s(s.ohlcState);
+  const ohlc = TEN_SEC_OHLC_ENABLED ? publicOhlc10s(s.ohlcState) : publicOhlc10sOff();
   const ohlcLine =
-    ohlc.last_c != null
-      ? `10s O${Number(ohlc.last_o).toFixed(2)}→C${Number(ohlc.last_c).toFixed(2)} ${ohlc.market}`
-      : 'SEEDING';
+    ohlc.market === 'OFF'
+      ? tenSecOhlcStatusLine()
+      : ohlc.last_c != null
+        ? `10s O${Number(ohlc.last_o).toFixed(2)}→C${Number(ohlc.last_c).toFixed(2)} ${ohlc.market}`
+        : 'SEEDING';
   const zone = buildScalpZone(s.closedBars);
   const mf = s.multiFeed;
   const rejectN = (mf?.legs || []).filter((l) => l.role === 'REJECT').length;
@@ -457,9 +494,12 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     active_regimes: activeTapes,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'OWN Capital LEAD → own 10s OHLC → TAPE 5/1 → BUY|SELL · BO → EXIT',
-    note:
-      'Katram klientam savs Capital LEAD + savs 10s OHLC. Peer Capital / shared bars OFF. Public = ADVISORY only.',
+    chain: TEN_SEC_OHLC_ENABLED
+      ? 'OWN Capital LEAD → own 10s OHLC → TAPE 5/1 → BUY|SELL · BO → EXIT'
+      : 'OWN Capital LEAD → 1m/5m only (10s OHLC OFF) → BUY|SELL · BO → EXIT',
+    note: TEN_SEC_OHLC_ENABLED
+      ? 'Katram klientam savs Capital LEAD + savs 10s OHLC. Peer Capital / shared bars OFF. Public = ADVISORY only.'
+      : `${tenSecOhlcStatusLine()}. Peer Capital / shared bars OFF. Public = ADVISORY only.`,
   };
 }
 
@@ -468,9 +508,9 @@ function formatScanContext(
   zone: ScalpZone | null,
   feedNote?: string
 ): string {
-  const tape = tapeSide(s.closedBars, s.ohlcState.forming ?? s.ohlcState.last_closed);
+  const tape = tapeSide(deskClosedBars(s), TEN_SEC_OHLC_ENABLED ? s.ohlcState.forming ?? s.ohlcState.last_closed : deskClosedBars(s).slice(-1)[0] ?? null);
   const tapeLine = `TAPE ${tape.dir ?? 'FLAT'} · ${tape.reason}`;
-  const zoneLine = formatZoneInfo(zone, s.closedBars);
+  const zoneLine = formatZoneInfo(zone, deskClosedBars(s));
   const mf = s.multiFeed;
   const capLive = mf?.capital_contributing ?? s.feed_contributing ?? 0;
   const capCfg = mf?.capital_sender_count ?? s.feed_sender_count ?? 0;
@@ -1610,18 +1650,26 @@ async function robotCycleBody(s: Internal) {
         /* keep previous */
       }
     }
-    // 10s OHLC from THIS client's Capital mid only — never peer blend
+    // 10s OHLC from THIS client's Capital mid only — never peer blend (kill-switch OFF → skip)
     const warmMid = quote.mid;
     s.feed_source = 'LOCAL';
     s.feed_contributing = warmMid != null ? 1 : s.multiFeed?.capital_contributing ?? 0;
     s.feed_sender_count = 1;
     s.feed_agreement = s.multiFeed?.agreement ?? 'INSUFFICIENT';
-    if (warmMid != null) {
+    if (TEN_SEC_OHLC_ENABLED && warmMid != null) {
       s.ohlcState = updateTenSecondOhlc(s.ohlcState, warmMid, Date.now());
       s.ohlc_10s = publicOhlc10s(s.ohlcState);
       if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
         applyRobotRegime(s, [s.ohlcState.last_closed]);
       }
+    } else if (!TEN_SEC_OHLC_ENABLED) {
+      s.ohlc_10s = publicOhlc10sOff();
+      s.ohlcState = emptyTenSecState();
+      s.closedBars = [];
+      s.armed_trigger = idleArmedState();
+      // Regime from Capital 1m when 10s is off
+      const oneMin = barsAsTenSec(s.multiTf.books['1m']?.bars ?? []);
+      if (oneMin.length >= 2) applyRobotRegime(s, oneMin.slice(-8));
     }
 
     // Market closed / offline → park: no positions sync, no MANAGE, no entry (anti-spam Capital)
@@ -1910,7 +1958,12 @@ async function robotCycleBody(s: Internal) {
           : quote.mid;
       if (exitPx == null) return;
 
-      const short = shortNetMove(s.closedBars, s.ohlcState.forming ?? s.ohlcState.last_closed);
+      const short = shortNetMove(
+        deskClosedBars(s),
+        TEN_SEC_OHLC_ENABLED
+          ? s.ohlcState.forming ?? s.ohlcState.last_closed
+          : deskClosedBars(s).slice(-1)[0] ?? null
+      );
       if (liveSide === 'BUY' || liveSide === 'SELL') {
         const desk = deskOpensOnEpic(sessions.values(), s.epic, s.id);
         const hasOpposite =
@@ -1925,25 +1978,29 @@ async function robotCycleBody(s: Internal) {
       }
 
       const signalForCont =
-        s.ohlcState.forming && s.ohlcState.forming.ticks >= 2
+        TEN_SEC_OHLC_ENABLED && s.ohlcState.forming && s.ohlcState.forming.ticks >= 2
           ? s.ohlcState.forming
-          : s.ohlcState.last_closed;
+          : TEN_SEC_OHLC_ENABLED
+            ? s.ohlcState.last_closed
+            : deskClosedBars(s).slice(-1)[0] ?? null;
       const tapeNow =
         liveSide === 'BUY' || liveSide === 'SELL'
-          ? tapeSide(s.closedBars, signalForCont)
+          ? tapeSide(deskClosedBars(s), signalForCont)
           : { dir: null as 'BUY' | 'SELL' | null, reason: '' };
       const oppositeEntrySignal = Boolean(
         liveSide && tapeNow.dir && tapeNow.dir !== liveSide
       );
       const cont =
         liveSide === 'BUY' || liveSide === 'SELL'
-          ? continuationSameSide(liveSide, signalForCont, s.regime, s.closedBars)
+          ? continuationSameSide(liveSide, signalForCont, s.regime, deskClosedBars(s))
           : { ok: false, reason: '' };
 
       // 5m BO — prefer Capital-native 5m ATR
       const fiveNative = s.multiTf.books['5m'].bars;
       const five =
-        fiveNative.length >= 8 ? fiveNative : aggregateTenSecToFiveMin(s.closedBars);
+        fiveNative.length >= 8
+          ? fiveNative
+          : aggregateTenSecToFiveMin(deskClosedBars(s));
       s.atr_5m = atrWilder(five, 14);
 
       // Structure / liquidity target — refresh when a farther swing appears (never freeze forever).
@@ -1961,7 +2018,7 @@ async function robotCycleBody(s: Internal) {
           })),
           { pivotLeft: 1, pivotRight: 1 }
         );
-        const zone = buildScalpZone(s.closedBars);
+        const zone = buildScalpZone(deskClosedBars(s));
         let next: number | null = null;
         if (s.open_side === 'BUY') {
           let lvl = ms.last_swing_high?.price ?? null;
@@ -2006,15 +2063,17 @@ async function robotCycleBody(s: Internal) {
         provenance: b.provenance,
         forming: b.forming,
       }));
-      const bars10sForBo = s.closedBars.map((b) => ({
-        open_time_ms: b.open_time_ms,
-        open: b.open,
-        high: b.high,
-        low: b.low,
-        close: b.close,
-        ticks: b.ticks,
-        provenance: b.provenance,
-      }));
+      const bars10sForBo = TEN_SEC_OHLC_ENABLED
+        ? s.closedBars.map((b) => ({
+            open_time_ms: b.open_time_ms,
+            open: b.open,
+            high: b.high,
+            low: b.low,
+            close: b.close,
+            ticks: b.ticks,
+            provenance: b.provenance,
+          }))
+        : [];
 
       // Exit regime: if tape fights open side, use tape so ThesisFailure/#218 flip fires
       // (board shows TREND_DOWN while sticky s.regime can still be TREND_UP).
@@ -2176,18 +2235,22 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    // Keep armed SETUP→ARMED machine fresh for UI + early entry between 10s buckets
-    s.armed_trigger = refreshArmedTriggerState(s.armed_trigger, {
-      price: analysisPrice,
-      multiTf: s.multiTf,
-      closedBars: s.closedBars,
-      spread: quote.spread ?? null,
-      tick_size: quote.point_size ?? null,
-      broker_min_stop: quote.min_stop_distance ?? null,
-    });
+    // Keep armed SETUP→ARMED only while native 10s OHLC is ON
+    if (TEN_SEC_OHLC_ENABLED) {
+      s.armed_trigger = refreshArmedTriggerState(s.armed_trigger, {
+        price: analysisPrice,
+        multiTf: s.multiTf,
+        closedBars: s.closedBars,
+        spread: quote.spread ?? null,
+        tick_size: quote.point_size ?? null,
+        broker_min_stop: quote.min_stop_distance ?? null,
+      });
+    } else {
+      s.armed_trigger = idleArmedState();
+    }
 
-    // 10s for microstructure / trigger only (not HTF)
-    if (Date.now() - s.last_second_fetch_ms >= 4_000) {
+    // 10s for microstructure / timing only (not HTF) — fully skipped when OFF
+    if (TEN_SEC_OHLC_ENABLED && Date.now() - s.last_second_fetch_ms >= 4_000) {
       s.last_second_fetch_ms = Date.now();
       const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 100);
       if (sec.ok && sec.candles.length >= 20) {
@@ -2216,7 +2279,7 @@ async function robotCycleBody(s: Internal) {
       }
     }
 
-    const zoneNow = buildScalpZone(s.closedBars);
+    const zoneNow = buildScalpZone(deskClosedBars(s));
     const feedGate = allowEntryFromFeeds(s.multiFeed);
     if (!feedGate.ok) {
       pushTick(s, {
@@ -2255,20 +2318,27 @@ async function robotCycleBody(s: Internal) {
     const risk = allowRiskEntry(s.account_id, s.unrealized ?? 0);
     persistRiskSnapshotJson(s.account_id, risk.snapshot);
 
-    const closed = s.ohlcState.last_closed;
-    const forming = s.ohlcState.forming;
-    const justClosed = Boolean(s.ohlcState.just_closed && closed);
-    const signalBar: TenSecBar | null = justClosed
-      ? closed!
-      : forming && forming.ticks >= 2
-        ? forming
-        : closed || null;
-    const liveSignal = Boolean(signalBar && !justClosed);
-    const ohlc = s.ohlc_10s;
+    const oneMinBars = barsAsTenSec(s.multiTf.books['1m']?.bars ?? []);
+    const closed = TEN_SEC_OHLC_ENABLED ? s.ohlcState.last_closed : oneMinBars.slice(-1)[0] ?? null;
+    const forming = TEN_SEC_OHLC_ENABLED ? s.ohlcState.forming : null;
+    const justClosed = TEN_SEC_OHLC_ENABLED
+      ? Boolean(s.ohlcState.just_closed && closed)
+      : Boolean(closed);
+    const signalBar: TenSecBar | null = TEN_SEC_OHLC_ENABLED
+      ? justClosed
+        ? closed!
+        : forming && forming.ticks >= 2
+          ? forming
+          : closed || null
+      : closed;
+    const liveSignal = Boolean(TEN_SEC_OHLC_ENABLED && signalBar && !justClosed);
+    const ohlc = TEN_SEC_OHLC_ENABLED ? s.ohlc_10s : publicOhlc10sOff();
     const show = signalBar || closed;
-    const ohlcLine = show
-      ? `10s${liveSignal ? ' LIVE' : justClosed ? ' CLOSE' : ''} O=${show.open.toFixed(2)} H=${show.high.toFixed(2)} L=${show.low.toFixed(2)} C=${show.close.toFixed(2)}${show.provenance === 'SYNTHETIC' ? ' SYN' : ''}`
-      : `10s OHLC seeding · C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'}`;
+    const ohlcLine = !TEN_SEC_OHLC_ENABLED
+      ? tenSecOhlcStatusLine()
+      : show
+        ? `10s${liveSignal ? ' LIVE' : justClosed ? ' CLOSE' : ''} O=${show.open.toFixed(2)} H=${show.high.toFixed(2)} L=${show.low.toFixed(2)} C=${show.close.toFixed(2)}${show.provenance === 'SYNTHETIC' ? ' SYN' : ''}`
+        : `10s OHLC seeding · C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'}`;
 
     let direction: 'BUY' | 'SELL' | null = null;
     let reason = '';
@@ -2285,7 +2355,7 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    if (signalBar.provenance === 'SYNTHETIC') {
+    if (TEN_SEC_OHLC_ENABLED && signalBar.provenance === 'SYNTHETIC') {
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
@@ -2298,7 +2368,12 @@ async function robotCycleBody(s: Internal) {
 
     if (!s.regime) s.regime = 'RANGE';
     const bucketKey = String(signalBar.open_time_ms || 0);
-    if (bucketKey && bucketKey === s.last_entry_signal_key && !liveSignal) {
+    if (
+      TEN_SEC_OHLC_ENABLED &&
+      bucketKey &&
+      bucketKey === s.last_entry_signal_key &&
+      !liveSignal
+    ) {
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
@@ -2324,7 +2399,7 @@ async function robotCycleBody(s: Internal) {
     const bars1m = s.multiTf.books['1m'].bars;
     const bars15m = s.multiTf.books['15m'].bars;
 
-    const sig = decideEntryFrom10sRegime(signalBar, s.regime, s.closedBars, {
+    const sig = decideEntryFrom10sRegime(signalBar, s.regime, deskClosedBars(s), {
       spread: quote.spread ?? execQ.spread,
       feed_agreement: refAgree.agreement,
       broker_min_stop: quote.min_stop_distance,
@@ -2346,14 +2421,14 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `NO ENTRY · decide null · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)} · ${ohlcLine} · ${explainNoEntry(signalBar, s.regime, s.closedBars, {
+        detail: `NO ENTRY · decide null · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)} · ${ohlcLine} · ${explainNoEntry(signalBar, s.regime, deskClosedBars(s), {
           multiTfReady: s.multiTf.ready,
           analysis_price: analysisPrice,
           armed_state: s.armed_trigger,
           htf,
           bars5m,
           bars1m,
-          tape_dir: tapeSide(s.closedBars, signalBar).dir,
+          tape_dir: tapeSide(deskClosedBars(s), signalBar).dir,
         })} · HTF ${htf.detail}`,
       });
       return;
