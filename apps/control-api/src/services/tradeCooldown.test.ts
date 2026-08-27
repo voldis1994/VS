@@ -24,16 +24,26 @@ describe('epic anti machine-gun reentry pause', () => {
     expect(pauseMsAfterClose(true)).toBe(90_000);
   });
 
-  it('blocks reentry immediately after close', () => {
+  it('blocks SAME-side reentry immediately after close', () => {
     noteEpicTradeClose('GOLD', 'BUY', true);
     const blocked = allowEpicReentry('GOLD', 'BUY');
     expect(blocked.ok).toBe(false);
     expect(blocked.reason).toMatch(/REENTRY PAUSE/);
   });
 
-  it('allows reentry after pause elapses', () => {
+  it('allows OPPOSITE-side FLIP immediately (bad BUY → SELL on dump)', () => {
+    noteEpicTradeClose('GOLD', 'BUY', true);
+    const flip = allowEpicReentry('GOLD', 'SELL');
+    expect(flip.ok).toBe(true);
+    expect(flip.reason).toMatch(/FLIP/i);
+    // same side still blocked
+    expect(allowEpicReentry('GOLD', 'BUY').ok).toBe(false);
+  });
+
+  it('allows same-side reentry after pause elapses', () => {
     noteEpicTradeClose('GOLD', 'BUY', false);
-    expect(allowEpicReentry('GOLD', 'SELL').ok).toBe(false);
+    expect(allowEpicReentry('GOLD', 'BUY').ok).toBe(false);
+    expect(allowEpicReentry('GOLD', 'SELL').ok).toBe(true);
     vi.advanceTimersByTime(90_000);
     expect(allowEpicReentry('GOLD', 'BUY').ok).toBe(true);
     expect(allowEpicReentry('GOLD', 'SELL').ok).toBe(true);
