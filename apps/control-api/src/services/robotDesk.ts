@@ -2157,18 +2157,10 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
+    // riskWindow is monitor/PnL stats only — NEVER an entry blocker (manual lot_size is authoritative;
+    // entry does not depend on Capital balance/equity).
     const risk = allowRiskEntry(s.account_id, s.unrealized ?? 0);
     persistRiskSnapshotJson(s.account_id, risk.snapshot);
-    if (!risk.ok) {
-      pushTick(s, {
-        phase: 'WAIT',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `RISK gate · ${risk.reason}`,
-      });
-      return;
-    }
 
     const closed = s.ohlcState.last_closed;
     const forming = s.ohlcState.forming;
