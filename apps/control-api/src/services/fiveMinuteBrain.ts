@@ -16,7 +16,7 @@ import {
   type StructureBar,
 } from './marketStructure.js';
 import { allowMicrostructureFromBars, syntheticRatio } from './ohlcQuality.js';
-import { atrWilder, moveThresholdPts } from './volatilityNorm.js';
+import { atrWilder, atrPctScore, moveThresholdPts } from './volatilityNorm.js';
 import type { RegimeName } from './regimes.js';
 import { normalizeRegime } from './regimes.js';
 
@@ -71,6 +71,7 @@ export type BrainInput = {
   spread?: number | null;
   feed_agreement?: number | null; // 0..1
   broker_min_stop?: number | null;
+  tick_size?: number | null;
 };
 
 export type BrainDecision = {
@@ -229,8 +230,8 @@ export function blockLateChaseAdaptive(
   const window = bars5m.slice(-6);
   const net = last.close - window[0]!.open;
   const price = Math.max(Math.abs(last.close), 1e-9);
-  const climax = moveThresholdPts(price, atr, 1.2, 0.0025);
-  const extending = moveThresholdPts(price, atr, 0.35, 0.0006);
+  const climax = moveThresholdPts(price, atr, 1.2, 0.0025) ?? price * 0.0025;
+  const extending = moveThresholdPts(price, atr, 0.35, 0.0006) ?? price * 0.0006;
 
   if (direction === 'BUY' && net >= climax) {
     const tail = bars5m.slice(-2);
@@ -285,7 +286,7 @@ function ltfConfirm(
   const net = series[series.length - 1]!.close - series[Math.max(0, series.length - 6)]!.open;
   const thr = moveThresholdPts(price, atr, 0.08, 0.00015);
   const mom: 'UP' | 'DOWN' | null =
-    net >= thr ? 'UP' : net <= -thr ? 'DOWN' : null;
+    thr == null ? null : net >= thr ? 'UP' : net <= -thr ? 'DOWN' : null;
 
   const sprOk =
     spread == null ||
@@ -343,7 +344,10 @@ export function decideFromLtfAlone(
 }
 
 export function decideFiveMinuteEntry(input: BrainInput): BrainDecision {
-  const bars5m = (input.bars5m ?? []).filter((b) => b.provenance !== 'SYNTHETIC');
+  // Forming candles must never confirm structure (#67)
+  const bars5m = (input.bars5m ?? []).filter(
+    (b) => b.provenance !== 'SYNTHETIC' && !(b as { forming?: boolean }).forming
+  );
   const syn = syntheticRatio(input.bars5m);
   if (bars5m.length < 8) {
     const ms = analyzeMarketStructure(bars5m);
@@ -439,6 +443,7 @@ export function decideFiveMinuteEntry(input: BrainInput): BrainDecision {
         spread: input.spread,
         brokerMinStop: input.broker_min_stop,
         price: input.price,
+        tickSize: input.tick_size,
       }),
       hard_block: 'LTF_PENDING',
     };
@@ -487,15 +492,13 @@ export function decideFiveMinuteEntry(input: BrainInput): BrainDecision {
     detail: ltf.detail,
   });
 
-  const atrScore =
-    atr != null && atr > 0
-      ? atr / Math.max(Math.abs(input.price) * 0.002, atr)
-      : 0.5;
+  // #61 — reachable volatility score (old atrScore>2 was unreachable)
+  const vol = atrPctScore(atr, input.price);
   evidence.push({
     key: 'volatility',
     weight: 0.05,
-    score: Math.min(1, Math.max(0.3, atrScore > 2 ? 0.4 : 0.85)),
-    detail: atr != null ? `ATR ${atr.toFixed(5)}` : 'ATR n/a',
+    score: vol.score,
+    detail: vol.detail,
   });
 
   const spr =
@@ -526,6 +529,7 @@ export function decideFiveMinuteEntry(input: BrainInput): BrainDecision {
     spread: input.spread,
     brokerMinStop: input.broker_min_stop,
     price: input.price,
+    tickSize: input.tick_size,
   });
 
   if (score < ENTRY_SCORE_MIN) {
@@ -555,7 +559,9 @@ export function decideFiveMinuteEntry(input: BrainInput): BrainDecision {
   };
 }
 
-/** Aggregate N×10s REAL bars into 5m OHLC with clock-aligned boundaries. */
+/** Aggregate N×10s REAL bars into 5m OHLC with clock-aligned boundaries.
+ * Gaps must not compress time — require full contiguous 30×10s coverage.
+ */
 export function aggregateTenSecToFiveMin(
   tens: StructureBar[],
   barsPerFive = 30,
@@ -564,7 +570,7 @@ export function aggregateTenSecToFiveMin(
   const FIVE = 300_000;
   const TEN = 10_000;
   const real = tens.filter((b) => b.provenance !== 'SYNTHETIC');
-  if (real.length < Math.floor(barsPerFive * 0.6)) return [];
+  if (real.length < barsPerFive) return [];
   const buckets = new Map<number, StructureBar[]>();
   for (const b of real) {
     if (b.open_time_ms % TEN !== 0) continue;
@@ -577,15 +583,28 @@ export function aggregateTenSecToFiveMin(
   const out: StructureBar[] = [];
   for (const key of [...buckets.keys()].sort((a, b) => a - b)) {
     const chunk = (buckets.get(key) ?? []).sort((a, b) => a.open_time_ms - b.open_time_ms);
-    if (chunk.length < Math.floor(barsPerFive * 0.6)) continue;
-    const first = chunk[0]!;
+    const byT = new Map<number, StructureBar>();
+    for (const c of chunk) byT.set(c.open_time_ms, c);
+    const ordered: StructureBar[] = [];
+    let complete = true;
+    for (let i = 0; i < barsPerFive; i++) {
+      const need = key + i * TEN;
+      const hit = byT.get(need);
+      if (!hit) {
+        complete = false;
+        break;
+      }
+      ordered.push(hit);
+    }
+    if (!complete) continue;
+    const first = ordered[0]!;
     out.push({
       open_time_ms: key,
       open: first.open,
-      high: Math.max(...chunk.map((c) => c.high)),
-      low: Math.min(...chunk.map((c) => c.low)),
-      close: chunk[chunk.length - 1]!.close,
-      ticks: chunk.reduce((a, c) => a + (c.ticks ?? 1), 0),
+      high: Math.max(...ordered.map((c) => c.high)),
+      low: Math.min(...ordered.map((c) => c.low)),
+      close: ordered[ordered.length - 1]!.close,
+      ticks: ordered.reduce((a, c) => a + (c.ticks ?? 1), 0),
       provenance: 'REAL',
     });
   }
@@ -600,7 +619,7 @@ export function aggregateTenSecToOneMin(
   const ONE = 60_000;
   const TEN = 10_000;
   const real = tens.filter((b) => b.provenance !== 'SYNTHETIC');
-  if (real.length < Math.floor(barsPerMin * 0.6)) return [];
+  if (real.length < barsPerMin) return [];
   const buckets = new Map<number, StructureBar[]>();
   for (const b of real) {
     if (b.open_time_ms % TEN !== 0) continue;
@@ -613,15 +632,28 @@ export function aggregateTenSecToOneMin(
   const out: StructureBar[] = [];
   for (const key of [...buckets.keys()].sort((a, b) => a - b)) {
     const chunk = (buckets.get(key) ?? []).sort((a, b) => a.open_time_ms - b.open_time_ms);
-    if (chunk.length < Math.floor(barsPerMin * 0.6)) continue;
-    const first = chunk[0]!;
+    const byT = new Map<number, StructureBar>();
+    for (const c of chunk) byT.set(c.open_time_ms, c);
+    const ordered: StructureBar[] = [];
+    let complete = true;
+    for (let i = 0; i < barsPerMin; i++) {
+      const need = key + i * TEN;
+      const hit = byT.get(need);
+      if (!hit) {
+        complete = false;
+        break;
+      }
+      ordered.push(hit);
+    }
+    if (!complete) continue;
+    const first = ordered[0]!;
     out.push({
       open_time_ms: key,
       open: first.open,
-      high: Math.max(...chunk.map((c) => c.high)),
-      low: Math.min(...chunk.map((c) => c.low)),
-      close: chunk[chunk.length - 1]!.close,
-      ticks: chunk.reduce((a, c) => a + (c.ticks ?? 1), 0),
+      high: Math.max(...ordered.map((c) => c.high)),
+      low: Math.min(...ordered.map((c) => c.low)),
+      close: ordered[ordered.length - 1]!.close,
+      ticks: ordered.reduce((a, c) => a + (c.ticks ?? 1), 0),
       provenance: 'REAL',
     });
   }

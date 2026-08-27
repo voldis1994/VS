@@ -4,7 +4,7 @@
 import type { TenSecBar } from './tenSecondOhlc.js';
 import { bodyPct, rangePct } from './tenSecondOhlc.js';
 import { findPivots, analyzeMarketStructure } from './marketStructure.js';
-import { atrWilder, magnitudeFloor } from './volatilityNorm.js';
+import { atrWilder, instrumentFloor } from './volatilityNorm.js';
 import { realBarsOnly } from './ohlcQuality.js';
 
 export type ZoneKind = 'BOX' | 'DEMAND' | 'SUPPLY';
@@ -51,8 +51,11 @@ export type ZoneBuildDiag = {
   status: ZoneBuildStatus;
 };
 
-function minWidthPt(mid: number): number {
-  return Math.max(magnitudeFloor(mid), Math.abs(mid) * 0.0002);
+/** Prefer tick_size metadata; never invent magnitude floors (#56). */
+function minWidthPt(mid: number, tickSize?: number | null): number {
+  const floor = instrumentFloor({ tick_size: tickSize });
+  const rel = Math.abs(mid) * 0.0002;
+  return floor != null ? Math.max(floor, rel) : rel;
 }
 
 export function diagnoseZoneBuild(

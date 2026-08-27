@@ -66,6 +66,7 @@ import {
 } from './tradeJournal.js';
 import { allowEntryFromDataQuality } from './dataQuality.js';
 import { atrWilder } from './volatilityNorm.js';
+import { analysisMid } from './analysisPrice.js';
 import {
   noteRiskTradeOpen,
   noteRiskTradePnl,
@@ -1262,11 +1263,19 @@ async function enterTrade(
   const fill = resolveEntryPrice({
     broker_open_level: brokerLevel,
     confirm_level: confirmLevel,
-    signal_mid: signalMid,
   });
   if (fill != null) {
     s.entry_price = fill;
     s.peak_favorable = fill;
+  } else {
+    // CRITICAL UNKNOWN fill — keep provisional signal mid for recovery, never claim broker truth
+    pushTick(s, {
+      phase: 'INFO',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `FILL UNKNOWN · broker/confirm level missing · provisional signal mid ${signalMid} (not execution truth)`,
+    });
   }
   if (brokerLevel != null && signalMid != null && Math.abs(brokerLevel - signalMid) > 1e-9) {
     pushTick(s, {
@@ -1603,9 +1612,11 @@ async function robotCycleBody(s: Internal) {
         s.deal_id = brokerOpen.deal_id;
         const fill = resolveEntryPrice({
           broker_open_level: brokerOpen.open_level,
-          signal_mid: s.entry_price ?? quote.mid,
         });
         if (fill != null) s.entry_price = fill;
+        else if (s.entry_price == null && prior?.entry_price != null) {
+          s.entry_price = prior.entry_price;
+        }
         if (!s.entry_at) s.entry_at = prior?.entry_at || new Date().toISOString();
         if (prior) {
           s.mfe = Math.max(s.mfe, prior.mfe);
@@ -1857,7 +1868,18 @@ async function robotCycleBody(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    if (quote.mid == null) return;
+    // Analysis domain = MID (#66). Bid/ask reserved for execution / realizable PnL.
+    const analysisPrice = analysisMid(quote);
+    if (analysisPrice == null) {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: 'ENTRY BLOCKED · analysis MID UNKNOWN · no trade',
+      });
+      return;
+    }
 
     // Seed / refresh Capital-native multi-TF history (primary) before any ENTRY READY
     const needSeed =
@@ -1899,6 +1921,26 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
+    // Structure books must be present (closed bars only — forming never confirms)
+    const structReady =
+      s.multiTf.books['4H'].ready &&
+      s.multiTf.books['1H'].ready &&
+      s.multiTf.books['15m'].ready &&
+      s.multiTf.books['5m'].ready &&
+      s.multiTf.books['1m'].ready &&
+      s.multiTf.books['5m'].bars.length >= 8 &&
+      s.multiTf.books['5m'].atr != null;
+    if (!structReady) {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: 'ENTRY BLOCKED · structure/data-quality NOT_READY · no trade',
+      });
+      return;
+    }
+
     // 10s for microstructure / trigger only (not HTF)
     if (Date.now() - s.last_second_fetch_ms >= 4_000) {
       s.last_second_fetch_ms = Date.now();
@@ -1931,7 +1973,7 @@ async function robotCycleBody(s: Internal) {
 
     const zoneNow = buildScalpZone(s.closedBars);
     const feedGate = allowEntryFromFeeds(s.multiFeed);
-    if (!feedGate.ok && quote.mid == null) {
+    if (!feedGate.ok && analysisPrice == null) {
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
@@ -1946,7 +1988,7 @@ async function robotCycleBody(s: Internal) {
     const sourceMs = quote.update_time ? Date.parse(quote.update_time) : null;
     const dq = allowEntryFromDataQuality(
       {
-        mid: quote.mid!,
+        mid: analysisPrice,
         fetch_ms: quoteFetchMs,
         source_ms: sourceMs != null && Number.isFinite(sourceMs) ? sourceMs : null,
       },
@@ -2033,14 +2075,14 @@ async function robotCycleBody(s: Internal) {
     const execQ = tagExecutionQuote({
       bid: quote.bid,
       ask: quote.ask,
-      mid: quote.mid!,
+      mid: analysisPrice,
     });
     const confLegs = (s.feed_legs || [])
       .filter((l) => l.mid != null)
       .map((l) => tagConfirmationQuote(l.name || l.sender_id || 'feed', Number(l.mid)));
     const refAgree = referenceAgreement(execQ.mid, confLegs);
 
-    const htf = buildHtfContextFromBooks(s.multiTf, quote.mid!);
+    const htf = buildHtfContextFromBooks(s.multiTf, analysisPrice);
     const bars5m = s.multiTf.books['5m'].bars;
     const bars1m = s.multiTf.books['1m'].bars;
     const bars15m = s.multiTf.books['15m'].bars;
@@ -2054,6 +2096,8 @@ async function robotCycleBody(s: Internal) {
       bars1m,
       bars15m,
       multiTfReady: s.multiTf.ready,
+      analysis_price: analysisPrice,
+      tick_size: quote.point_size ?? null,
     });
     if (!sig) {
       pushTick(s, {
@@ -2068,7 +2112,7 @@ async function robotCycleBody(s: Internal) {
 
     const staleDir = detectStaleQuoteAdverse(
       sig.direction,
-      quote.mid,
+      analysisPrice,
       confLegs.map((c) => ({ label: c.label, mid: c.mid }))
     );
     if (staleDir.block) {

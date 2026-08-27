@@ -14,6 +14,8 @@ export type StructureBar = {
   close: number;
   ticks?: number;
   provenance?: DataProvenance;
+  /** Forming candle — must not confirm structure (#67) */
+  forming?: boolean;
 };
 
 export type Pivot = {
@@ -57,7 +59,7 @@ const PIVOT_LEFT = 2;
 const PIVOT_RIGHT = 2;
 
 function realOnly(bars: StructureBar[]): StructureBar[] {
-  return bars.filter((b) => !isSyntheticBar(b));
+  return bars.filter((b) => !isSyntheticBar(b) && !b.forming);
 }
 
 /** Classic fractal pivots — needs `right` closed bars after the candidate. */
@@ -145,10 +147,12 @@ export function wickOnlyBeyond(
 export function detectDisplacement(
   bar: StructureBar,
   atr: number | null,
-  price: number
+  price: number,
+  meta?: { tick_size?: number | null; point_size?: number | null }
 ): boolean {
   const body = Math.abs(bar.close - bar.open);
-  const thr = moveThresholdPts(price, atr, 0.6, 0.0008);
+  const thr = moveThresholdPts(price, atr, 0.6, 0.0008, meta);
+  if (thr == null) return false; // UNKNOWN — do not invent displacement
   return body >= thr;
 }
 
@@ -181,7 +185,7 @@ export function analyzeMarketStructure(
   const lastIdx = bars.length - 1;
   const last = bars[lastIdx]!;
   const price = last.close;
-  const thr = moveThresholdPts(price, atr, 0.15, 0.0002);
+  const thr = moveThresholdPts(price, atr, 0.15, 0.0002) ?? 0;
 
   const sh = swings.lastHigh;
   const sl = swings.lastLow;
@@ -407,6 +411,8 @@ export function structuralStopLevel(
     spread?: number | null;
     brokerMinStop?: number | null;
     price: number;
+    tickSize?: number | null;
+    pointSize?: number | null;
   }
 ): number | null {
   if (!pivot) return null;
@@ -415,7 +421,10 @@ export function structuralStopLevel(
     atr: opts.atr,
     spread: opts.spread,
     brokerMinStop: opts.brokerMinStop,
+    tickSize: opts.tickSize,
+    pointSize: opts.pointSize,
     atrMult: 0.2,
   });
+  if (buf == null) return null; // UNKNOWN buffer — BLOCK structural SL invent
   return side === 'BUY' ? pivot.price - buf : pivot.price + buf;
 }

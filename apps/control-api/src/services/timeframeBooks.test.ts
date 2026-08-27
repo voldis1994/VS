@@ -52,7 +52,7 @@ describe('timeframe boundaries', () => {
   it('aggregateAligned uses 5m clock boundaries not raw slice count', () => {
     const now = Date.UTC(2024, 0, 2, 12, 0, 0);
     const bars: TfBar[] = [];
-    // 12 minutes of 1m bars aligned
+    // 12 minutes of 1m bars aligned — complete 5m buckets only
     for (let i = 0; i < 12; i++) {
       const t = now - (12 - i) * 60_000;
       const aligned = alignBucketMs(t, TF_MS['1m']);
@@ -64,6 +64,13 @@ describe('timeframe boundaries', () => {
       expect(b.open_time_ms % TF_MS['5m']).toBe(0);
       expect(b.open_time_ms + TF_MS['5m']).toBeLessThanOrEqual(now);
     }
+  });
+
+  it('does not compress gapped 1m into fake 5m', () => {
+    const now = Date.UTC(2024, 0, 2, 12, 0, 0);
+    const bucket = now - 300_000;
+    const bars = [0, 1, 2, 4].map((i) => mkBar(bucket + i * 60_000, 100, 101, 99, 100));
+    expect(aggregateAligned(bars, '1m', '5m', now)).toHaveLength(0);
   });
 
   it('excludes forming higher-TF bucket (look-ahead prevention)', () => {
@@ -193,11 +200,11 @@ describe('stale + 10s aggregate look-ahead', () => {
     ).toBe(false);
   });
 
-  it('10s→5m aggregate skips current forming bucket', () => {
+  it('10s→5m aggregate skips current forming bucket and requires full coverage', () => {
     const now = Date.UTC(2024, 5, 1, 10, 2, 30);
     const bucket = alignBucketMs(now, TF_MS['5m']);
     const tens = [];
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 30; i++) {
       tens.push({
         open_time_ms: bucket - 300_000 + i * 10_000,
         open: 100,
@@ -208,7 +215,7 @@ describe('stale + 10s aggregate look-ahead', () => {
         provenance: 'REAL' as const,
       });
     }
-    // forming bucket bars
+    // forming bucket bars (incomplete + look-ahead)
     for (let i = 0; i < 10; i++) {
       tens.push({
         open_time_ms: bucket + i * 10_000,
@@ -223,6 +230,7 @@ describe('stale + 10s aggregate look-ahead', () => {
     const five = aggregateTenSecToFiveMin(tens, 30, now);
     expect(five.every((b) => b.open_time_ms !== bucket)).toBe(true);
     expect(five.every((b) => b.close < 150)).toBe(true); // no look-ahead into 200s
+    expect(five.length).toBeGreaterThanOrEqual(1);
   });
 });
 

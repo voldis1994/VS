@@ -1,6 +1,8 @@
 /**
  * Multi-timeframe candle books — Capital historical is primary.
  * 10s is microstructure only; HTF must not be built primarily from 10s.
+ *
+ * Critical UNKNOWN = BLOCK. Never invent timestamps. Gaps must not compress time.
  */
 
 import type { DataProvenance } from './ohlcQuality.js';
@@ -10,6 +12,7 @@ import {
   detectDuplicateBar,
   type BarSeriesQuality,
 } from './dataQuality.js';
+import { atrWilder } from './volatilityNorm.js';
 
 export type TfKey = '10s' | '1m' | '5m' | '15m' | '1H' | '4H';
 
@@ -51,7 +54,10 @@ export const TF_RESOLUTION: Record<Exclude<TfKey, '10s'>, CapitalResolution> = {
   '4H': 'HOUR_4',
 };
 
-/** Minimum closed bars before trading allowed. */
+/**
+ * Warmup closed-bar counts — enough for Wilder ATR(14) + structure span.
+ * Readiness also requires ATR computable (not mere count).
+ */
 export const TF_MIN_CLOSED: Record<Exclude<TfKey, '10s'>, number> = {
   '1m': 30,
   '5m': 40,
@@ -81,26 +87,35 @@ export function isClosedBar(bar: TfBar, nowMs: number, tfMs: number): boolean {
   return bar.open_time_ms + tfMs <= nowMs;
 }
 
-/** Closed-only series — prevents look-ahead on forming candle. */
+/** Closed-only series — prevents look-ahead on forming candle (#67). */
 export function closedBarsOnly(bars: TfBar[], nowMs: number, tf: TfKey): TfBar[] {
   const tfMs = TF_MS[tf];
   return bars.filter((b) => isClosedBar(b, nowMs, tfMs) && b.provenance !== 'SYNTHETIC');
 }
 
-export function parseCandleTimeMs(raw: unknown, fallbackIndex: number, stepMs: number, endMs: number): number {
+/**
+ * Parse candle timestamp — NEVER invent (#64/#65).
+ * Missing / unparseable / future → null (caller blocks context).
+ */
+export function parseCandleTimeMs(raw: unknown, nowMs?: number): number | null {
+  const now = nowMs ?? Date.now();
   if (typeof raw === 'number' && Number.isFinite(raw)) {
-    return raw > 1e12 ? raw : raw * 1000;
+    const ms = raw > 1e12 ? raw : raw * 1000;
+    if (!(ms > 0) || ms > now + 5_000) return null;
+    return Math.floor(ms);
   }
   if (typeof raw === 'string' && raw.trim()) {
     const t = Date.parse(raw);
-    if (Number.isFinite(t)) return t;
+    if (!Number.isFinite(t) || t <= 0 || t > now + 5_000) return null;
+    return t;
   }
-  // Fallback: chronological oldest→newest ending at endMs
-  return endMs - stepMs * (fallbackIndex + 1);
+  return null;
 }
 
 /**
- * Aggregate lower TF into higher TF using clock-aligned boundaries.
+ * Aggregate lower TF into higher TF using clock-aligned boundaries (#57).
+ * Gaps must NOT compress time (#58): bucket accepted only when every expected
+ * lower-TF step inside the bucket is present and contiguous.
  * Fallback only when native Capital resolution unavailable.
  */
 export function aggregateAligned(
@@ -112,46 +127,57 @@ export function aggregateAligned(
   const fromMs = TF_MS[fromTf];
   const toMs = TF_MS[toTf];
   if (toMs <= fromMs) return [];
+  const expected = Math.round(toMs / fromMs);
+  if (expected < 2) return [];
+
   const closed = closedBarsOnly(source, nowMs, fromTf);
   if (!closed.length) return [];
 
   const buckets = new Map<number, TfBar[]>();
   for (const b of closed) {
-    const key = alignBucketMs(b.open_time_ms, toMs);
     // Reject bars that don't sit on a valid lower-TF boundary
     if (alignBucketMs(b.open_time_ms, fromMs) !== b.open_time_ms) continue;
+    const key = alignBucketMs(b.open_time_ms, toMs);
     const arr = buckets.get(key) ?? [];
     arr.push(b);
     buckets.set(key, arr);
   }
 
-  const expected = Math.round(toMs / fromMs);
   const out: TfBar[] = [];
   const keys = [...buckets.keys()].sort((a, b) => a - b);
   for (const key of keys) {
     // Forming higher TF bucket — exclude (look-ahead)
     if (key + toMs > nowMs) continue;
+
     const chunk = (buckets.get(key) ?? []).sort((a, b) => a.open_time_ms - b.open_time_ms);
-    if (chunk.length < Math.max(2, Math.floor(expected * 0.6))) continue;
-    // Contiguity check on aligned steps
-    let contiguous = true;
-    for (let i = 1; i < chunk.length; i++) {
-      if (chunk[i]!.open_time_ms - chunk[i - 1]!.open_time_ms !== fromMs) {
-        contiguous = false;
+    // Dedup by open_time
+    const byT = new Map<number, TfBar>();
+    for (const c of chunk) byT.set(c.open_time_ms, c);
+
+    // Full coverage required — do not compress gaps into a shorter bar
+    let complete = true;
+    const ordered: TfBar[] = [];
+    for (let i = 0; i < expected; i++) {
+      const need = key + i * fromMs;
+      const hit = byT.get(need);
+      if (!hit) {
+        complete = false;
         break;
       }
+      ordered.push(hit);
     }
-    if (!contiguous && chunk.length < expected) continue;
-    const first = chunk[0]!;
-    const last = chunk[chunk.length - 1]!;
+    if (!complete || ordered.length !== expected) continue;
+
+    const first = ordered[0]!;
+    const last = ordered[ordered.length - 1]!;
     out.push({
       open_time_ms: key,
       open: first.open,
-      high: Math.max(...chunk.map((c) => c.high)),
-      low: Math.min(...chunk.map((c) => c.low)),
+      high: Math.max(...ordered.map((c) => c.high)),
+      low: Math.min(...ordered.map((c) => c.low)),
       close: last.close,
-      ticks: chunk.reduce((a, c) => a + (c.ticks || 1), 0),
-      provenance: chunk.every((c) => c.provenance === 'REAL') ? 'REAL' : 'SYNTHETIC',
+      ticks: ordered.reduce((a, c) => a + (c.ticks || 1), 0),
+      provenance: ordered.every((c) => c.provenance === 'REAL') ? 'REAL' : 'SYNTHETIC',
       forming: false,
       source_tf: toTf,
     });
@@ -167,6 +193,7 @@ export type TfBook = {
   ready: boolean;
   detail: string;
   last_seed_ms: number;
+  atr: number | null;
 };
 
 export type MultiTfState = {
@@ -185,6 +212,7 @@ export function emptyTfBook(tf: Exclude<TfKey, '10s'>): TfBook {
     ready: false,
     detail: 'not seeded',
     last_seed_ms: 0,
+    atr: null,
   };
 }
 
@@ -203,6 +231,10 @@ export function emptyMultiTfState(): MultiTfState {
   };
 }
 
+/**
+ * Readiness = warmup closed count + Wilder ATR computable + quality (#69).
+ * Mere candle count is not enough.
+ */
 export function evaluateTfBook(
   tf: Exclude<TfKey, '10s'>,
   bars: TfBar[],
@@ -212,21 +244,57 @@ export function evaluateTfBook(
   const closed = closedBarsOnly(bars, nowMs, tf);
   const quality = assessBarSeries(closed, TF_MS[tf]);
   const min = TF_MIN_CLOSED[tf];
+  const ohlc = closed.map((b) => ({
+    open: b.open,
+    high: b.high,
+    low: b.low,
+    close: b.close,
+  }));
+  const atr = atrWilder(ohlc, 14);
+
+  const gapBudget = Math.max(2, Math.floor(closed.length * 0.05));
+  const spanOk =
+    closed.length >= 2
+      ? closed[closed.length - 1]!.open_time_ms - closed[0]!.open_time_ms >=
+        (min - 1) * TF_MS[tf] * 0.75
+      : false;
+
   const ready =
     closed.length >= min &&
+    atr != null &&
+    atr > 0 &&
     quality.ok &&
     quality.duplicates < Math.max(2, closed.length * 0.1) &&
+    quality.gaps <= gapBudget &&
+    spanOk &&
     source !== 'EMPTY';
+
+  let detail: string;
+  if (ready) {
+    detail = `${tf} OK · ${closed.length} closed · ATR ${atr!.toFixed(6)} · ${source} · gaps=${quality.gaps}`;
+  } else if (closed.length < min) {
+    detail = `${tf} NOT READY · warmup ${closed.length}/${min} · ${source}`;
+  } else if (atr == null) {
+    detail = `${tf} NOT READY · ATR warmup incomplete · ${closed.length} closed · ${source}`;
+  } else if (!quality.ok) {
+    detail = `${tf} NOT READY · quality ${quality.reason} · ${source}`;
+  } else if (quality.gaps > gapBudget) {
+    detail = `${tf} NOT READY · excessive gaps ${quality.gaps} · ${source}`;
+  } else if (!spanOk) {
+    detail = `${tf} NOT READY · insufficient span · ${source}`;
+  } else {
+    detail = `${tf} NOT READY · ${closed.length}/${min} · ${quality.reason} · ${source}`;
+  }
+
   return {
     tf,
     bars: closed,
     quality,
     source,
     ready,
-    detail: ready
-      ? `${tf} OK · ${closed.length} closed · ${source} · gaps=${quality.gaps}`
-      : `${tf} NOT READY · ${closed.length}/${min} · ${quality.reason} · ${source}`,
+    detail,
     last_seed_ms: nowMs,
+    atr,
   };
 }
 
@@ -248,7 +316,7 @@ export function evaluateMultiTfReady(state: MultiTfState): MultiTfState {
   };
 }
 
-/** HTF context from real 4H/1H/15m — not 10s zone. */
+/** HTF context from real 4H/1H/15m — not 10s zone. Closed bars only. */
 export function buildHtfContextFromBooks(
   state: MultiTfState,
   price: number
@@ -293,6 +361,7 @@ export function mergeUniqueBars(existing: TfBar[], incoming: TfBar[]): TfBar[] {
   const byTime = new Map<number, TfBar>();
   for (const b of existing) byTime.set(b.open_time_ms, b);
   for (const b of incoming) {
+    if (!Number.isFinite(b.open_time_ms) || b.open_time_ms < 0) continue;
     const prev = byTime.get(b.open_time_ms);
     if (!prev) {
       byTime.set(b.open_time_ms, b);
@@ -304,7 +373,12 @@ export function mergeUniqueBars(existing: TfBar[], incoming: TfBar[]): TfBar[] {
     } else if (prev.forming && !b.forming) {
       byTime.set(b.open_time_ms, b);
     } else if (!detectDuplicateBar(prev, b)) {
-      byTime.set(b.open_time_ms, { ...prev, ...b, high: Math.max(prev.high, b.high), low: Math.min(prev.low, b.low) });
+      byTime.set(b.open_time_ms, {
+        ...prev,
+        ...b,
+        high: Math.max(prev.high, b.high),
+        low: Math.min(prev.low, b.low),
+      });
     }
   }
   return [...byTime.values()].sort((a, b) => a.open_time_ms - b.open_time_ms);

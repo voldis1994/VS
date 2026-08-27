@@ -54,9 +54,13 @@ export function shouldRetryClose(phase: ClosePhase): boolean {
 }
 
 /** Prefer broker fill over signal mid. */
+/**
+ * Broker / confirm fill only. Signal mid is NEVER execution truth (#CRITICAL UNKNOWN).
+ */
 export function resolveEntryPrice(opts: {
   broker_open_level?: number | null;
   confirm_level?: number | null;
+  /** @deprecated provisional only — ignored for fill truth */
   signal_mid?: number | null;
 }): number | null {
   if (opts.broker_open_level != null && Number.isFinite(opts.broker_open_level)) {
@@ -64,9 +68,6 @@ export function resolveEntryPrice(opts: {
   }
   if (opts.confirm_level != null && Number.isFinite(opts.confirm_level)) {
     return opts.confirm_level;
-  }
-  if (opts.signal_mid != null && Number.isFinite(opts.signal_mid)) {
-    return opts.signal_mid;
   }
   return null;
 }

@@ -312,10 +312,12 @@ describe('execution truth + close + recovery', () => {
     expect(bo.entry_price).toBe(4651.2);
   });
 
-  it('2. slippage handling prefers broker over signal', () => {
+  it('2. slippage handling prefers broker over signal; signal alone is NOT fill truth', () => {
     expect(
       resolveEntryPrice({ broker_open_level: 1.1005, signal_mid: 1.1, confirm_level: 1.1002 })
     ).toBe(1.1005);
+    expect(resolveEntryPrice({ signal_mid: 1.1 })).toBeNull();
+    expect(resolveEntryPrice({ confirm_level: 1.1002, signal_mid: 1.1 })).toBe(1.1002);
   });
 
   it('3. close ok + broker still open → NOT CLOSED', () => {

@@ -402,6 +402,8 @@ export function decideEntryFrom10sRegime(
     bars1m?: StructureBar[] | null;
     bars15m?: StructureBar[] | null;
     multiTfReady?: boolean;
+    analysis_price?: number | null;
+    tick_size?: number | null;
   }
 ): RegimeEntry | null {
   if (opts?.multiTfReady === false) {
@@ -428,16 +430,23 @@ export function decideEntryFrom10sRegime(
     return null;
   }
 
+  // Analysis price = MID when provided; never invent from LTF alone without mid
+  const price =
+    opts?.analysis_price != null && Number.isFinite(opts.analysis_price)
+      ? opts.analysis_price
+      : bar.close;
+
   const decision = decideFiveMinuteEntry({
     bars5m,
     bars1m,
     bars10s: microGate.ok ? series.slice(-30) : [],
     htf: opts?.htf ?? null,
     regime,
-    price: bar.close,
+    price,
     spread: opts?.spread,
     feed_agreement: opts?.feed_agreement,
     broker_min_stop: opts?.broker_min_stop,
+    tick_size: opts?.tick_size,
   });
 
   const zone = buildScalpZone(closedBars);

@@ -1216,13 +1216,18 @@ function parsePriceTimeMs(p: any): number | null {
   return null;
 }
 
-/** Capital OHLC — native resolutions preferred (MINUTE_5 / HOUR_4 etc.). */
+/** Capital OHLC — native resolutions. NEVER invent timestamps. */
 export async function fetchCapitalPrices(
   session: CapitalSession,
   epic: string,
   resolution: CapitalPriceResolution = 'MINUTE',
   max = 5
-): Promise<{ ok: boolean; candles: CapitalPriceCandle[]; detail: string }> {
+): Promise<{
+  ok: boolean;
+  candles: CapitalPriceCandle[];
+  detail: string;
+  rejected_no_timestamp: number;
+}> {
   const encoded = encodeURIComponent(epic.trim());
   const hardCap = resolution === 'SECOND' ? 100 : 1000;
   const want = Math.min(Math.max(max, 1), hardCap);
@@ -1247,56 +1252,72 @@ export async function fetchCapitalPrices(
       detail: `Capital prices ${resolution} HTTP ${res.status}: ${
         res.json?.errorCode || res.json?.message || res.text.slice(0, 120)
       }`,
+      rejected_no_timestamp: 0,
     };
   }
   const prices = (res.json?.prices || res.json?.candles || []) as any[];
   const step = RESOLUTION_STEP_MS[resolution] ?? 60_000;
-  const endMs = Date.now();
+  const nowMs = Date.now();
   const candles: CapitalPriceCandle[] = [];
+  let rejected_no_timestamp = 0;
+  let rejected_future = 0;
+
   for (let i = 0; i < prices.length; i++) {
     const p = prices[i]!;
-    const open = numOrNull(p.openPrice?.bid ?? p.openPrice?.ask ?? p.open ?? p.o);
-    const high = numOrNull(p.highPrice?.bid ?? p.highPrice?.ask ?? p.high ?? p.h);
-    const low = numOrNull(p.lowPrice?.bid ?? p.lowPrice?.ask ?? p.low ?? p.l);
-    const close = numOrNull(p.closePrice?.bid ?? p.closePrice?.ask ?? p.close ?? p.c);
+    const oBid = numOrNull(p.openPrice?.bid);
+    const oAsk = numOrNull(p.openPrice?.ask);
+    const hBid = numOrNull(p.highPrice?.bid);
+    const hAsk = numOrNull(p.highPrice?.ask);
+    const lBid = numOrNull(p.lowPrice?.bid);
+    const lAsk = numOrNull(p.lowPrice?.ask);
+    const cBid = numOrNull(p.closePrice?.bid);
+    const cAsk = numOrNull(p.closePrice?.ask);
+
+    const open =
+      midOfPair(oBid, oAsk) ?? numOrNull(p.openPrice?.bid ?? p.openPrice?.ask ?? p.open ?? p.o);
+    const high =
+      midOfPair(hBid, hAsk) ?? numOrNull(p.highPrice?.bid ?? p.highPrice?.ask ?? p.high ?? p.h);
+    const low =
+      midOfPair(lBid, lAsk) ?? numOrNull(p.lowPrice?.bid ?? p.lowPrice?.ask ?? p.low ?? p.l);
+    const close =
+      midOfPair(cBid, cAsk) ?? numOrNull(p.closePrice?.bid ?? p.closePrice?.ask ?? p.close ?? p.c);
     if (open == null || high == null || low == null || close == null) continue;
-    const open_time_ms = parsePriceTimeMs(p);
+
+    const rawTs = parsePriceTimeMs(p);
+    if (rawTs == null) {
+      rejected_no_timestamp += 1;
+      continue; // CRITICAL UNKNOWN — never invent
+    }
+    if (rawTs > nowMs + 5_000) {
+      rejected_future += 1;
+      continue;
+    }
+    const open_time_ms = Math.floor(rawTs / step) * step;
     candles.push({
       open,
       high,
       low,
       close,
       open_time_ms,
-      snapshot_time_ms: open_time_ms,
+      snapshot_time_ms: rawTs,
     });
   }
-  // Fill missing timestamps chronologically (oldest → newest)
-  const missing = candles.every((c) => c.open_time_ms == null);
-  if (missing && candles.length) {
-    for (let i = 0; i < candles.length; i++) {
-      const age = candles.length - 1 - i;
-      candles[i]!.open_time_ms = alignFloor(endMs - age * step, step);
-      candles[i]!.snapshot_time_ms = candles[i]!.open_time_ms;
-    }
-  } else {
-    for (let i = 0; i < candles.length; i++) {
-      if (candles[i]!.open_time_ms == null) {
-        const prev = candles[i - 1]?.open_time_ms;
-        candles[i]!.open_time_ms =
-          prev != null ? prev + step : alignFloor(endMs - (candles.length - i) * step, step);
-      }
-      candles[i]!.open_time_ms = alignFloor(candles[i]!.open_time_ms!, step);
-    }
-  }
+
+  const detailParts = [`${candles.length} ${resolution} candles`];
+  if (rejected_no_timestamp) detailParts.push(`rejected_no_ts=${rejected_no_timestamp}`);
+  if (rejected_future) detailParts.push(`rejected_future=${rejected_future}`);
+
   return {
     ok: candles.length > 0,
     candles,
-    detail: `${candles.length} ${resolution} candles`,
+    detail: detailParts.join(' · '),
+    rejected_no_timestamp,
   };
 }
 
-function alignFloor(ts: number, step: number): number {
-  return Math.floor(ts / step) * step;
+function midOfPair(bid: number | null, ask: number | null): number | null {
+  if (bid != null && ask != null) return (bid + ask) / 2;
+  return bid ?? ask ?? null;
 }
 
 export async function fetchCapitalMinutePrices(
