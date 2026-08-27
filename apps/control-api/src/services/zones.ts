@@ -1,9 +1,11 @@
 /**
- * 10s scalp zones — structure before entry.
- * Built from last 150×10s closed bars (~25 min). Not candle-color.
+ * Structure zones — pivots / reaction / rejection / displacement, not range-third DEMAND/SUPPLY.
  */
 import type { TenSecBar } from './tenSecondOhlc.js';
 import { bodyPct, rangePct } from './tenSecondOhlc.js';
+import { findPivots, analyzeMarketStructure } from './marketStructure.js';
+import { atrWilder, magnitudeFloor } from './volatilityNorm.js';
+import { realBarsOnly } from './ohlcQuality.js';
 
 export type ZoneKind = 'BOX' | 'DEMAND' | 'SUPPLY';
 
@@ -26,14 +28,10 @@ export type ZoneVerdict = {
   reason: string;
 };
 
-/** Scalp box: Gold@4640 → min ~1.0pt. */
 const MIN_WIDTH_PCT = 0.00025;
-/** Point floor for metals — 1.3pt band must qualify on Gold. */
-const MIN_WIDTH_PT = 1.0;
-/** ~25 min lookback can span ~45pt Gold overnight — allow session structure. */
 const MAX_WIDTH_PCT = 0.01;
 const MIN_ZONE_BARS = 8;
-/** Last 150 × 10s candles (~25 minutes). */
+/** Last 150 × 10s candles (~25 minutes) — HTF seed / location. */
 export const ZONE_WINDOW = 150;
 
 export type ZoneBuildStatus =
@@ -53,7 +51,10 @@ export type ZoneBuildDiag = {
   status: ZoneBuildStatus;
 };
 
-/** Why zone is null or ready — for honest INFO. */
+function minWidthPt(mid: number): number {
+  return Math.max(magnitudeFloor(mid), Math.abs(mid) * 0.0002);
+}
+
 export function diagnoseZoneBuild(
   bars: TenSecBar[] | null | undefined,
   nowMs = Date.now()
@@ -71,7 +72,9 @@ export function diagnoseZoneBuild(
     };
   }
   const window = bars.slice(-ZONE_WINDOW);
-  const struct = window.length > 10 ? window.slice(0, -2) : window.slice(0, -1);
+  const real = realBarsOnly(window);
+  const structSource = real.length >= 6 ? real : window;
+  const struct = structSource.length > 10 ? structSource.slice(0, -2) : structSource.slice(0, -1);
   if (struct.length < 6) {
     return {
       zone: null,
@@ -83,13 +86,24 @@ export function diagnoseZoneBuild(
       status: 'NO_STRUCT',
     };
   }
-  const high = Math.max(...struct.map((b) => b.high));
-  const low = Math.min(...struct.map((b) => b.low));
+
+  const pivots = findPivots(struct, 2, 2);
+  const pivotHighs = pivots.filter((p) => p.kind === 'HIGH').map((p) => p.price);
+  const pivotLows = pivots.filter((p) => p.kind === 'LOW').map((p) => p.price);
+
+  const high =
+    pivotHighs.length >= 1
+      ? Math.max(...pivotHighs)
+      : Math.max(...struct.map((b) => b.high));
+  const low =
+    pivotLows.length >= 1
+      ? Math.min(...pivotLows)
+      : Math.min(...struct.map((b) => b.low));
   const mid = (high + low) / 2;
   const width_pts = high - low;
   const width_pct = width_pts / Math.max(Math.abs(mid), 1e-9);
-  const minWidthPct = Math.max(MIN_WIDTH_PCT, MIN_WIDTH_PT / Math.max(Math.abs(mid), 1e-9));
-  if (width_pct < minWidthPct) {
+  const minW = Math.max(MIN_WIDTH_PCT, minWidthPt(mid) / Math.max(Math.abs(mid), 1e-9));
+  if (width_pct < minW) {
     return {
       zone: null,
       closed_bars,
@@ -111,7 +125,7 @@ export function diagnoseZoneBuild(
       status: 'TOO_WIDE',
     };
   }
-  const zone = composeScalpZone(window, struct, nowMs);
+  const zone = composeStructureZone(window, struct, high, low, pivots.length, nowMs);
   return {
     zone,
     closed_bars,
@@ -123,24 +137,42 @@ export function diagnoseZoneBuild(
   };
 }
 
-function composeScalpZone(
+function composeStructureZone(
   window: TenSecBar[],
   struct: TenSecBar[],
+  high: number,
+  low: number,
+  pivotCount: number,
   nowMs: number
 ): ScalpZone {
-  const high = Math.max(...struct.map((b) => b.high));
-  const low = Math.min(...struct.map((b) => b.low));
   const mid = (high + low) / 2;
   const width = high - low;
   const width_pct = width / Math.max(Math.abs(mid), 1e-9);
   const last = window[window.length - 1]!;
-  const third = width / 3;
+  const atr = atrWilder(struct, 14);
+  const ms = analyzeMarketStructure(struct);
+
   let kind: ZoneKind = 'BOX';
-  if (last.close <= low + third) kind = 'DEMAND';
-  else if (last.close >= high - third) kind = 'SUPPLY';
+  const nearLow = last.low <= low + width * 0.2 || last.close <= low + width * 0.25;
+  const nearHigh = last.high >= high - width * 0.2 || last.close >= high - width * 0.25;
+  const bullReact =
+    ms.events.some((e) => e.kind === 'RECLAIM' && e.side === 'BULL') ||
+    ms.events.some((e) => e.kind === 'SWEEP' && e.side === 'BULL');
+  const bearReact =
+    ms.events.some((e) => e.kind === 'RECLAIM' && e.side === 'BEAR') ||
+    ms.events.some((e) => e.kind === 'SWEEP' && e.side === 'BEAR');
+
+  if ((nearLow && (bullReact || last.close > last.open)) || (ms.trend === 'UP' && nearLow)) {
+    kind = 'DEMAND';
+  } else if (
+    (nearHigh && (bearReact || last.close < last.open)) ||
+    (ms.trend === 'DOWN' && nearHigh)
+  ) {
+    kind = 'SUPPLY';
+  }
 
   const ranges = struct.map(rangePct);
-  const avgR = ranges.reduce((a, b) => a + b, 0) / ranges.length;
+  const avgR = ranges.reduce((a, b) => a + b, 0) / Math.max(ranges.length, 1);
   const quiet = avgR < width_pct * 0.85;
 
   return {
@@ -151,9 +183,9 @@ function composeScalpZone(
     width_pct,
     bars_used: struct.length,
     formed_at_ms: struct[0]!.open_time_ms,
-    detail: `${kind} ${low.toFixed(2)}–${high.toFixed(2)} · w=${(width_pct * 100).toFixed(3)}% · ${struct.length} struct bars${
+    detail: `${kind} ${low.toFixed(2)}–${high.toFixed(2)} · pivots=${pivotCount} · w=${(width_pct * 100).toFixed(3)}% · ${struct.length} struct${
       quiet ? ' · base' : ''
-    } · age ${Math.max(0, Math.round((nowMs - struct[0]!.open_time_ms) / 1000))}s`,
+    }${atr != null ? ` · ATR ${atr.toFixed(3)}` : ''} · age ${Math.max(0, Math.round((nowMs - struct[0]!.open_time_ms) / 1000))}s`,
   };
 }
 
@@ -165,16 +197,13 @@ export function buildScalpZone(
 }
 
 function brokeAbove(bars: TenSecBar[], level: number): boolean {
-  return bars.slice(-4).some((b) => b.close > level || b.high > level);
+  return bars.slice(-4).some((b) => b.close > level);
 }
 
 function brokeBelow(bars: TenSecBar[], level: number): boolean {
-  return bars.slice(-4).some((b) => b.close < level || b.low < level);
+  return bars.slice(-4).some((b) => b.close < level);
 }
 
-/**
- * Zone must agree with intended side — no random color follow outside structure.
- */
 export function evaluateZoneEntry(
   direction: 'BUY' | 'SELL',
   bar: TenSecBar,
@@ -182,13 +211,14 @@ export function evaluateZoneEntry(
   priorBars?: TenSecBar[] | null
 ): ZoneVerdict {
   const hist = [...(priorBars ?? []), bar];
-  /** Edge band — 20% of box (was 35% → mid-price looked like demand bounce). */
   const band = (zone.high - zone.low) * 0.2;
   const bp = bodyPct(bar);
 
   if (direction === 'BUY') {
-    // Fresh breakout through supply/box high
     if (bar.close > zone.high && bar.open <= zone.high + band * 0.5) {
+      if (bar.high > zone.high && bar.close <= zone.high) {
+        return { ok: false, setup: null, reason: 'ZONE · wick-only ≠ breakout' };
+      }
       if (bp > 0.0015) {
         return { ok: false, setup: null, reason: 'ZONE · breakout bar exhausted — no chase' };
       }
@@ -198,7 +228,6 @@ export function evaluateZoneEntry(
         reason: `ZONE BREAKOUT ↑ through ${zone.high.toFixed(2)} · ${zone.detail}`,
       };
     }
-    // Retest: already broke above, now dips into top of zone and holds
     if (
       brokeAbove(hist.slice(0, -1), zone.high) &&
       bar.low <= zone.high + band * 0.15 &&
@@ -212,7 +241,6 @@ export function evaluateZoneEntry(
         reason: `ZONE RETEST ↑ hold ${zone.high.toFixed(2)} · ${zone.detail}`,
       };
     }
-    // Demand bounce from box low
     if (
       bar.low <= zone.low + band &&
       bar.low >= zone.low - band * 0.5 &&
@@ -232,8 +260,10 @@ export function evaluateZoneEntry(
     };
   }
 
-  // SELL
   if (bar.close < zone.low && bar.open >= zone.low - band * 0.5) {
+    if (bar.low < zone.low && bar.close >= zone.low) {
+      return { ok: false, setup: null, reason: 'ZONE · wick-only ≠ breakout' };
+    }
     if (bp < -0.0015) {
       return { ok: false, setup: null, reason: 'ZONE · breakdown bar exhausted — no chase' };
     }
@@ -290,7 +320,7 @@ export function formatZoneInfo(
     case 'SEEDING':
       return `ZONE seeding · ${d.closed_bars}/${d.min_bars}×10s closed (need ${Math.max(0, d.min_bars - d.closed_bars)} more · ~${Math.max(0, d.min_bars - d.closed_bars) * 10}s)`;
     case 'TOO_NARROW':
-      return `ZONE invalid · ${d.closed_bars} bars · band ${wPt} ${wPct} too tight (min ${MIN_WIDTH_PT}pt) — micro noise`;
+      return `ZONE invalid · ${d.closed_bars} bars · band ${wPt} ${wPct} too tight — micro noise`;
     case 'TOO_WIDE':
       return `ZONE invalid · ${d.closed_bars} bars · band ${wPt} ${wPct} too wide (max ${(MAX_WIDTH_PCT * 100).toFixed(3)}%) — trending not box`;
     case 'NO_STRUCT':

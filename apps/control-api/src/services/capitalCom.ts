@@ -852,11 +852,11 @@ export async function listCapitalOpenPositions(
   return { ok: true, positions, detail: `${positions.length} open` };
 }
 
-/** Resolve dealReference → dealId after open. */
+/** Resolve dealReference → dealId (+ fill level when Capital returns it). */
 export async function confirmCapitalDeal(
   session: CapitalSession,
   dealReference: string
-): Promise<{ ok: boolean; deal_id?: string; detail: string }> {
+): Promise<{ ok: boolean; deal_id?: string; level?: number | null; detail: string }> {
   const ref = dealReference.trim();
   if (!ref) return { ok: false, detail: 'Empty dealReference' };
   const res = await session.get(`/api/v1/confirms/${encodeURIComponent(ref)}`);
@@ -872,7 +872,19 @@ export async function confirmCapitalDeal(
   if (!dealId) {
     return { ok: false, detail: `Confirm OK but no dealId for ${ref}` };
   }
-  return { ok: true, deal_id: dealId, detail: `Confirmed dealId=${dealId}` };
+  const rawLevel =
+    res.json?.level ??
+    res.json?.affectedDeals?.[0]?.level ??
+    res.json?.affectedDeals?.[0]?.price ??
+    null;
+  const level =
+    rawLevel != null && Number.isFinite(Number(rawLevel)) ? Number(rawLevel) : null;
+  return {
+    ok: true,
+    deal_id: dealId,
+    level,
+    detail: level != null ? `Confirmed dealId=${dealId} level=${level}` : `Confirmed dealId=${dealId}`,
+  };
 }
 
 /** Close one open position by dealId. */

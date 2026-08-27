@@ -35,7 +35,7 @@ type AccountRisk = {
   lastDetail: string;
   /** Equity known */
   equityReady: boolean;
-  /** 10min clock running (after first trade) */
+  /** 60min clock running (after first trade) */
   clockRunning: boolean;
 };
 
@@ -74,7 +74,7 @@ function armEquity(s: AccountRisk, equity: number) {
   }
 }
 
-/** Seed / refresh equity. Does NOT start the 10min clock. */
+/** Seed / refresh equity. Does NOT start the 60min clock. */
 export function setRiskEquity(accountId: number, equity: number, now = Date.now()): void {
   if (!Number.isFinite(accountId) || accountId <= 0) return;
   if (!Number.isFinite(equity) || equity <= 0) return;
@@ -91,7 +91,7 @@ function startClock(s: AccountRisk, now: number) {
   if (!s.equityReady && s.lastSeenEquity != null) armEquity(s, s.lastSeenEquity);
 }
 
-/** Call when a trade is opened — starts the 10min risk clock. */
+/** Call when a trade is opened — starts the 60min risk clock. */
 export function noteRiskTradeOpen(accountId: number, now = Date.now()): void {
   if (!Number.isFinite(accountId) || accountId <= 0) return;
   const s = ensure(accountId, now);
@@ -196,7 +196,7 @@ export function evaluateRiskWindow(
 
   const equity = s.equityStart;
 
-  // Idle: waiting for quality setup — do NOT burn 10min clock, do NOT cooldown
+  // Idle: waiting for quality setup — do NOT burn 60min clock, do NOT cooldown
   if (!s.clockRunning) {
     const snapshot: RiskSnapshot = {
       account_id: accountId,
@@ -221,7 +221,7 @@ export function evaluateRiskWindow(
   const windowLeft = Math.max(0, RISK_WINDOW_MS - (now - s.windowStartMs));
 
   if (livePct <= -RISK_MAX_LOSS_PCT) {
-    const detail = `RISK −${(Math.abs(livePct) * 100).toFixed(1)}% ≤ −10% · cooldown 10min`;
+    const detail = `RISK −${(Math.abs(livePct) * 100).toFixed(1)}% ≤ −10% · cooldown 60min`;
     startCooldown(s, now, 'STOPPED_LOSS', detail);
     return {
       allowEntry: false,
@@ -244,7 +244,7 @@ export function evaluateRiskWindow(
   if (realizedPct >= RISK_TARGET_MAX_PCT || livePct >= RISK_TARGET_MAX_PCT) {
     const hit = Math.max(realizedPct, livePct);
     const via = realizedPct >= RISK_TARGET_MAX_PCT ? 'realized' : 'live';
-    const detail = `RISK +${(hit * 100).toFixed(1)}% ≥ +10% ${via} · bank early · cooldown 10min · netirgo`;
+    const detail = `RISK +${(hit * 100).toFixed(1)}% ≥ +10% ${via} · bank early · cooldown 60min · netirgo`;
     startCooldown(s, now, 'BANKED', detail);
     return {
       allowEntry: false,
@@ -267,7 +267,7 @@ export function evaluateRiskWindow(
   if (windowLeft <= 0) {
     // No trades taken (shouldn't normally happen if clock starts on trade) — no penalty
     if (s.tradesInWindow <= 0) {
-      rollFreshWindow(s, now, 'RISK 10min · 0 trades · no penalty · idle');
+      rollFreshWindow(s, now, 'RISK 60min · 0 trades · no penalty · idle');
       return {
         allowEntry: true,
         snapshot: {
@@ -286,7 +286,7 @@ export function evaluateRiskWindow(
       };
     }
     if (realizedPct < RISK_TARGET_MIN_PCT) {
-      const detail = `RISK 10min done · ${s.tradesInWindow} trades · +${(realizedPct * 100).toFixed(1)}% < +7% · cooldown 10min`;
+      const detail = `RISK 60min done · ${s.tradesInWindow} trades · +${(realizedPct * 100).toFixed(1)}% < +7% · cooldown 60min`;
       startCooldown(s, now, 'COOLDOWN', detail);
       return {
         allowEntry: false,
@@ -308,7 +308,7 @@ export function evaluateRiskWindow(
     rollFreshWindow(
       s,
       now,
-      `RISK 10min OK · +${(realizedPct * 100).toFixed(1)}% ≥ +7% · idle until next trade`
+      `RISK 60min OK · +${(realizedPct * 100).toFixed(1)}% ≥ +7% · idle until next trade`
     );
     return {
       allowEntry: true,

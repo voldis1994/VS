@@ -1,7 +1,6 @@
 /**
- * 10s multi-TF entry — SETUP then ENTER (early), not wait for finished move.
- * Only 5m + 1m (10m/25m removed from direction).
- * Zone (~25 min) = MAP. Regime labels never block entry.
+ * Entry facade — canonical path is fiveMinuteBrain (5m authoritative).
+ * Keeps legacy helpers for BO / tape / tests.
  */
 import type { RegimeName } from './regimes.js';
 import { normalizeRegime } from './regimes.js';
@@ -12,13 +11,25 @@ import {
   type ScalpZone,
   type ZoneSetup,
 } from './zones.js';
+import {
+  aggregateTenSecToFiveMin,
+  aggregateTenSecToOneMin,
+  decideFiveMinuteEntry,
+  decideFromLtfAlone,
+  blockLateChaseAdaptive,
+  type BrainSetup,
+} from './fiveMinuteBrain.js';
+import { allowMicrostructureFromBars } from './ohlcQuality.js';
+import { atrWilder } from './volatilityNorm.js';
 
 export type RegimeEntry = {
   direction: 'BUY' | 'SELL';
-  setup: 'CONTINUATION' | 'PULLBACK' | 'BREAKOUT' | 'FADE' | 'REVERSAL';
+  setup: 'CONTINUATION' | 'PULLBACK' | 'BREAKOUT' | 'FADE' | 'REVERSAL' | 'SWEEP_RECLAIM' | 'FAILED_BREAKOUT';
   reason: string;
   zone?: ScalpZone | null;
   zone_setup?: ZoneSetup | null;
+  structural_sl?: number | null;
+  evidence_score?: number;
 };
 
 function isGreen(bar: TenSecBar): boolean {
@@ -33,7 +44,7 @@ function describe(bar: TenSecBar): string {
   return `10s O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} body=${(bodyPct(bar) * 100).toFixed(3)}% rng=${(rangePct(bar) * 100).toFixed(3)}%`;
 }
 
-/** Late chase on 10s — ~0.12% ≈ 5.5pt Gold — move already done. */
+/** Late chase on LTF — relative body, not Gold pt. */
 const LATE_SIGNAL_BODY_PCT = 0.0012;
 
 export function signalBarTooLate(bar: TenSecBar): boolean {
@@ -70,7 +81,6 @@ function withLive(
   return all;
 }
 
-/** Short ~60–90s net including live bar. */
 export function shortNetMove(
   bars: TenSecBar[] | null | undefined,
   liveBar?: TenSecBar | null
@@ -120,50 +130,14 @@ export function structNetMove(
   return { dir: null, netPct, netPts };
 }
 
-/**
- * Block chasing into swing extremes only when a large 5m move has stalled
- * at the extreme (last ~30s quiet). Mid-trend SETUP with live continuation passes.
- */
 export function blockEntryAtExtreme(
   direction: 'BUY' | 'SELL',
   bars: TenSecBar[] | null | undefined,
   bar: TenSecBar
 ): { ok: boolean; reason: string } {
-  const all = bars ?? [];
-  if (all.length < 8) return { ok: true, reason: 'no struct extreme gate' };
-
-  const t = multiTfPts(all, bar);
-  if (direction === 'BUY' && t.pts5m < 3.0) return { ok: true, reason: 'early/mid move — no climax yet' };
-  if (direction === 'SELL' && t.pts5m > -3.0) return { ok: true, reason: 'early/mid move — no climax yet' };
-
-  // Still extending in last ~30s → not finished; allow SETUP
-  const tail = withLive(all, bar).slice(-3);
-  if (tail.length >= 2) {
-    const tailNet = tail[tail.length - 1]!.close - tail[0]!.open;
-    if (direction === 'BUY' && tailNet >= 0.25) return { ok: true, reason: 'still extending up' };
-    if (direction === 'SELL' && tailNet <= -0.25) return { ok: true, reason: 'still extending down' };
-  }
-
-  const recent = all.slice(-Math.min(30, all.length));
-  const high = Math.max(...recent.map((b) => b.high));
-  const low = Math.min(...recent.map((b) => b.low));
-  const range = Math.max(high - low, 0.01);
-  const price = bar.close;
-  const net = recent[recent.length - 1]!.close - recent[0]!.open;
-
-  if (direction === 'SELL' && net <= -3 && price <= low + range * 0.25) {
-    return {
-      ok: false,
-      reason: `BLOCK SELL · dump ${net.toFixed(1)}pt · stalled at swing low (no chase bottom)`,
-    };
-  }
-  if (direction === 'BUY' && net >= 3 && price >= high - range * 0.25) {
-    return {
-      ok: false,
-      reason: `BLOCK BUY · rally ${net.toFixed(1)}pt · stalled at swing high (no chase top)`,
-    };
-  }
-  return { ok: true, reason: 'struct extreme ok' };
+  const five = aggregateTenSecToFiveMin(withLive(bars, bar));
+  const atr = atrWilder(five.length ? five : withLive(bars, bar), 14);
+  return blockLateChaseAdaptive(direction, five.length ? five : withLive(bars, bar), atr);
 }
 
 const BARS_1M = 6;
@@ -199,54 +173,55 @@ function formatTf(t: MultiTfTape): string {
   return `1m=${t.pts1m.toFixed(1)} 5m=${t.pts5m.toFixed(1)}`;
 }
 
-/** Clear UP stack — anti-fade / continuation (stricter than entry SETUP). */
 export function longTapeUp(t: MultiTfTape): boolean {
-  return t.pts5m > 0.8 && t.pts1m > 0.3;
+  return t.pts5m > 0.15 && t.pts1m > 0.05;
 }
 
 export function shortTapeDown(t: MultiTfTape): boolean {
-  if (t.pts5m < -1.2) return true;
-  if (t.pts5m < -0.8 && t.pts1m < -0.35) return true;
-  return false;
+  return t.pts5m < -0.15 && t.pts1m < -0.05;
 }
 
 export function shortTapeUp(t: MultiTfTape): boolean {
-  if (t.pts5m > 1.2) return true;
-  if (t.pts5m > 0.8 && t.pts1m > 0.35) return true;
-  return false;
+  return t.pts5m > 0.15 && t.pts1m > 0.05;
 }
 
-/** Soft bias — enter early, no finished-move wait. */
 export function softBiasUp(t: MultiTfTape): boolean {
-  return t.pts5m >= 0.35 && t.pts1m >= -0.05;
+  return t.pts5m > 0 && t.pts1m >= 0;
 }
 export function softBiasDown(t: MultiTfTape): boolean {
-  return t.pts5m <= -0.35 && t.pts1m <= 0.05;
+  return t.pts5m < 0 && t.pts1m <= 0;
 }
 
 export function earlyTriggerUp(_t: MultiTfTape, pts90s: number): boolean {
-  return _t.pts1m >= 0.05 || pts90s >= 0.15;
+  return _t.pts1m > 0 || pts90s > 0;
 }
 export function earlyTriggerDown(_t: MultiTfTape, pts90s: number): boolean {
-  return _t.pts1m <= -0.05 || pts90s <= -0.15;
+  return _t.pts1m < 0 || pts90s < 0;
 }
 
-/** PROFIT mode — tape never blocks entry. */
+/** Anti-fade — block entry against clear impulse (no PROFIT bypass). */
 export function allowEntryAgainstImpulse(
   direction: 'BUY' | 'SELL',
-  _bars: TenSecBar[] | null | undefined,
-  _liveBar?: TenSecBar | null
+  bars: TenSecBar[] | null | undefined,
+  liveBar?: TenSecBar | null
 ): { ok: boolean; reason: string } {
-  return { ok: true, reason: `PROFIT · ${direction} free` };
+  const t = multiTfPts(bars, liveBar);
+  if (direction === 'BUY' && shortTapeDown(t)) {
+    return { ok: false, reason: `BLOCK BUY · impulse DOWN · ${formatTf(t)}` };
+  }
+  if (direction === 'SELL' && longTapeUp(t)) {
+    return { ok: false, reason: `BLOCK SELL · impulse UP · ${formatTf(t)}` };
+  }
+  return { ok: true, reason: `${direction} vs impulse ok` };
 }
 
-/** PROFIT mode — no late-chase / climax block. */
+/** Adaptive late-chase / climax block (no PROFIT bypass). */
 export function blockLateTrendChase(
-  _direction: 'BUY' | 'SELL',
-  _bars: TenSecBar[] | null | undefined,
-  _liveBar?: TenSecBar | null
+  direction: 'BUY' | 'SELL',
+  bars: TenSecBar[] | null | undefined,
+  liveBar?: TenSecBar | null
 ): { ok: boolean; reason: string } {
-  return { ok: true, reason: 'PROFIT · no late block' };
+  return blockEntryAtExtreme(direction, bars, liveBar ?? bars?.[bars.length - 1]!);
 }
 
 export function zoneFadeAllowed(
@@ -268,7 +243,7 @@ export function zoneFadeAllowed(
     }
   }
   if (direction === 'BUY' && s === 'BOUNCE') {
-    if (pts5m < -1.2 || (pts5m < -0.8 && pts1m < -0.35)) {
+    if (pts5m < 0 && pts1m < 0) {
       return {
         ok: false,
         reason: `BLOCK BUY BOUNCE · tape DOWN 5m=${pts5m.toFixed(1)} 1m=${pts1m.toFixed(1)} (map≠fade)`,
@@ -282,7 +257,12 @@ export function lateChaseAppliesToSetup(
   setup: RegimeEntry['setup'],
   _regime?: string | null
 ): boolean {
-  return setup === 'BREAKOUT' || setup === 'CONTINUATION' || setup === 'PULLBACK';
+  return (
+    setup === 'BREAKOUT' ||
+    setup === 'CONTINUATION' ||
+    setup === 'PULLBACK' ||
+    setup === 'SWEEP_RECLAIM'
+  );
 }
 
 function regimeBias(r: RegimeName): 'BUY' | 'SELL' | null {
@@ -304,25 +284,13 @@ export function marketDirection(
 
 export function explainNoEntry(
   bar: TenSecBar,
-  _regime?: string | null,
+  regime?: string | null,
   closedBars?: TenSecBar[] | null
 ): string {
+  const decision = decideEntryFrom10sRegime(bar, regime, closedBars);
+  if (decision) return `SETUP ${decision.direction} · ${decision.reason}`;
   const t = multiTfPts(closedBars, bar);
-  const pts90s = netPtsLookback(closedBars, bar, 9);
-  const line = `1m=${t.pts1m.toFixed(1)} 5m=${t.pts5m.toFixed(1)} 90s=${pts90s.toFixed(1)}`;
-
-  if (softBiasUp(t) && isGreen(bar)) {
-    return `SETUP BUY · ${line}`;
-  }
-  if (softBiasDown(t) && isRed(bar)) {
-    return `SETUP SELL · ${line}`;
-  }
-
-  const tape = tapeSide(closedBars, bar);
-  if (!tape.dir) {
-    return `SCAN · ${tape.reason} · need tape + color`;
-  }
-  return `SCAN · ${tape.reason}`;
+  return `SCAN · waiting 5m structure · ${formatTf(t)}`;
 }
 
 export function continuationSameSide(
@@ -355,7 +323,6 @@ export function continuationSameSide(
   return { ok: false, reason: `no continuation · ${tape.reason}` };
 }
 
-/** Clear tape label (INFO / opposite exit). Stricter than entry SETUP. */
 export function tapeSide(
   bars: TenSecBar[] | null | undefined,
   liveBar?: TenSecBar | null
@@ -399,72 +366,82 @@ export function tapeSide(
   };
 }
 
+function mapSetup(s: BrainSetup | null): RegimeEntry['setup'] {
+  if (!s) return 'CONTINUATION';
+  if (s === 'SWEEP_RECLAIM') return 'SWEEP_RECLAIM';
+  if (s === 'FAILED_BREAKOUT') return 'FAILED_BREAKOUT';
+  if (s === 'REVERSAL') return 'REVERSAL';
+  if (s === 'BREAKOUT') return 'BREAKOUT';
+  if (s === 'PULLBACK') return 'PULLBACK';
+  return 'CONTINUATION';
+}
+
 /**
- * SETUP → ENTER early.
- * Soft 5m bias (≥0.35pt) + early 1m/90s trigger + live bar color.
- * Blocks climax chase. Does NOT wait for finished 5m move (old 0.8–1.2pt).
+ * Canonical entry: 5m structure + LTF confirm.
+ * Rejects: synthetic microstructure, LTF-alone, late chase.
  */
 export function decideEntryFrom10sRegime(
   bar: TenSecBar,
-  _regime?: string | null,
-  closedBars?: TenSecBar[] | null
+  regime?: string | null,
+  closedBars?: TenSecBar[] | null,
+  opts?: {
+    spread?: number | null;
+    feed_agreement?: number | null;
+    broker_min_stop?: number | null;
+    htf?: { trend?: 'UP' | 'DOWN' | 'RANGE' | null; near_support?: boolean; near_resistance?: boolean } | null;
+  }
 ): RegimeEntry | null {
-  const t = multiTfPts(closedBars, bar);
-  const pts90s = netPtsLookback(closedBars, bar, 9);
+  // Hard reject: synthetic bar as microstructure trigger
+  if (bar.provenance === 'SYNTHETIC') {
+    return null;
+  }
+
+  const series = withLive(closedBars, bar);
+  const microGate = allowMicrostructureFromBars(series.slice(-30));
+  // Still allow if we have enough real 5m structure even if seed was synthetic
+  const bars5m = aggregateTenSecToFiveMin(series);
+  const bars1m = aggregateTenSecToOneMin(series);
+
+  if (!bars5m.length) {
+    // LTF alone must never open
+    void decideFromLtfAlone(series);
+    return null;
+  }
+
+  const decision = decideFiveMinuteEntry({
+    bars5m,
+    bars1m,
+    bars10s: microGate.ok ? series.slice(-30) : [],
+    htf: opts?.htf ?? null,
+    regime,
+    price: bar.close,
+    spread: opts?.spread,
+    feed_agreement: opts?.feed_agreement,
+    broker_min_stop: opts?.broker_min_stop,
+  });
+
   const zone = buildScalpZone(closedBars);
-  const line = `1m=${t.pts1m.toFixed(1)} 5m=${t.pts5m.toFixed(1)} 90s=${pts90s.toFixed(1)}`;
 
-  let direction: 'BUY' | 'SELL' | null = null;
-  let setup: RegimeEntry['setup'] = 'CONTINUATION';
-  let why = '';
-
-  // Path A — soft bias + live color (no trigger wait)
-  if (softBiasUp(t) && isGreen(bar)) {
-    direction = 'BUY';
-    setup = t.pts5m >= 0.8 ? 'CONTINUATION' : 'PULLBACK';
-    why = `PROFIT BUY · bias · ${line}`;
-  } else if (softBiasDown(t) && isRed(bar)) {
-    direction = 'SELL';
-    setup = t.pts5m <= -0.8 ? 'CONTINUATION' : 'PULLBACK';
-    why = `PROFIT SELL · bias · ${line}`;
+  if (!decision.entry || !decision.direction) {
+    return null;
   }
 
-  // Path B — impulse break
-  if (!direction) {
-    if (pts90s >= 0.3 && isGreen(bar)) {
-      direction = 'BUY';
-      setup = 'BREAKOUT';
-      why = `PROFIT BUY · impulse · ${line}`;
-    } else if (pts90s <= -0.3 && isRed(bar)) {
-      direction = 'SELL';
-      setup = 'BREAKOUT';
-      why = `PROFIT SELL · impulse · ${line}`;
-    }
-  }
+  const impulse = allowEntryAgainstImpulse(decision.direction, closedBars, bar);
+  if (!impulse.ok) return null;
 
-  // Path C — clear tape + live color
-  if (!direction) {
-    const tape = tapeSide(closedBars, bar);
-    if (tape.dir === 'BUY' && isGreen(bar)) {
-      direction = 'BUY';
-      setup = 'CONTINUATION';
-      why = `PROFIT BUY · tape · ${tape.reason}`;
-    } else if (tape.dir === 'SELL' && isRed(bar)) {
-      direction = 'SELL';
-      setup = 'CONTINUATION';
-      why = `PROFIT SELL · tape · ${tape.reason}`;
-    }
-  }
-
-  if (!direction) return null;
+  const late = blockLateTrendChase(decision.direction, closedBars, bar);
+  if (!late.ok) return null;
 
   return {
-    direction,
-    setup,
-    reason: `${why} · ${describe(bar)}`,
+    direction: decision.direction,
+    setup: mapSetup(decision.setup),
+    reason: `${decision.reason} · ${describe(bar)}`,
     zone,
     zone_setup: null,
+    structural_sl: decision.structural_sl,
+    evidence_score: decision.evidence_score,
   };
 }
 
 export { buildScalpZone, formatZoneInfo, type ScalpZone };
+export { decideFiveMinuteEntry, aggregateTenSecToFiveMin, aggregateTenSecToOneMin };

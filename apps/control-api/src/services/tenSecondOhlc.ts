@@ -1,4 +1,6 @@
-/** OHLC bars — live brain uses 10-SECOND buckets (SO scalp). */
+/** OHLC bars — LTF timing. Primary trading TF is 5m (see fiveMinuteBrain). */
+import type { DataProvenance } from './ohlcQuality.js';
+
 export const TEN_SEC_MS = 10_000;
 /** Legacy helper kept for tests / aggregateMinutesToFive. */
 export const FIVE_MIN_MS = 300_000;
@@ -10,6 +12,8 @@ export type TenSecBar = {
   low: number;
   close: number;
   ticks: number;
+  /** REAL tick/SECOND aggregate vs SYNTHETIC 1m expansion */
+  provenance?: DataProvenance;
 };
 
 export type TenSecState = {
@@ -85,6 +89,7 @@ function updateBucketOhlc(
       low: price,
       close: price,
       ticks: 1,
+      provenance: 'REAL',
     };
   } else {
     forming = {
@@ -121,14 +126,15 @@ export function aggregateSecondsToTen(seconds: CapitalOhlc[]): TenSecBar[] {
       low: Math.min(...chunk.map((c) => c.low)),
       close: chunk[chunk.length - 1]!.close,
       ticks: chunk.length,
+      provenance: 'REAL',
     });
   }
   return bars;
 }
 
 /**
- * Expand Capital MINUTE candles into synthetic 10s bars (6 per minute).
- * Seeds ~25 min zone history when SECOND feed alone cannot fill 150 bars.
+ * Expand Capital MINUTE candles into SYNTHETIC 10s bars (6 identical clones / minute).
+ * For zone/regime seed ONLY — never microstructure / BOS / 10s entry.
  */
 export function expandMinutesToTenSec(
   minutes: CapitalOhlc[],
@@ -148,6 +154,7 @@ export function expandMinutesToTenSec(
         low: m.low,
         close: m.close,
         ticks: 6,
+        provenance: 'SYNTHETIC',
       });
     }
   }
@@ -172,6 +179,7 @@ export function aggregateMinutesToFive(minutes: CapitalOhlc[]): TenSecBar[] {
       low: Math.min(...chunk.map((c) => c.low)),
       close: chunk[chunk.length - 1]!.close,
       ticks: chunk.length,
+      provenance: 'REAL',
     });
   }
   return bars;
