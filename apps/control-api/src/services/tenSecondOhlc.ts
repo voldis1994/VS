@@ -112,29 +112,59 @@ export function updateFiveMinuteOhlc(state: TenSecState, price: number, tsMs: nu
   return updateBucketOhlc(state, price, tsMs, FIVE_MIN_MS);
 }
 
-/** Fold Capital 1-second candles into completed 10-second bars (oldest → newest). */
-export function aggregateSecondsToTen(seconds: CapitalOhlc[]): TenSecBar[] {
+/** Fold Capital 1-second candles into completed 10-second bars by clock buckets.
+ * Requires real timestamps — never invents i*1000 (#15/#16).
+ * Gaps inside a bucket → skip that bucket (no time compression).
+ */
+export function aggregateSecondsToTen(
+  seconds: Array<CapitalOhlc & { open_time_ms?: number | null }>
+): TenSecBar[] {
   if (seconds.length < 2) return [];
-  const bars: TenSecBar[] = [];
-  const withTime = seconds as Array<CapitalOhlc & { open_time_ms?: number | null }>;
-  for (let i = 0; i + 10 <= withTime.length; i += 10) {
-    const chunk = withTime.slice(i, i + 10);
-    const first = chunk[0]!;
-    const t0 =
-      first.open_time_ms != null && Number.isFinite(first.open_time_ms)
-        ? Math.floor(first.open_time_ms / 10_000) * 10_000
-        : i * 1000;
-    bars.push({
-      open_time_ms: t0,
+  const TEN = 10_000;
+  const byBucket = new Map<number, Array<CapitalOhlc & { open_time_ms: number }>>();
+
+  for (const c of seconds) {
+    const t = c.open_time_ms;
+    if (t == null || !Number.isFinite(t) || t <= 0) continue;
+    const bucket = Math.floor(t / TEN) * TEN;
+    // Second candles should land on 1s grid; refuse sub-ms invent
+    const aligned = Math.floor(t / 1000) * 1000;
+    const arr = byBucket.get(bucket) ?? [];
+    arr.push({ ...c, open_time_ms: aligned });
+    byBucket.set(bucket, arr);
+  }
+
+  const out: TenSecBar[] = [];
+  const keys = [...byBucket.keys()].sort((a, b) => a - b);
+  for (const bucket of keys) {
+    const rows = (byBucket.get(bucket) ?? []).sort((a, b) => a.open_time_ms - b.open_time_ms);
+    const bySec = new Map<number, (typeof rows)[0]>();
+    for (const r of rows) bySec.set(r.open_time_ms, r);
+    // Full contiguous 10 seconds required
+    let complete = true;
+    const ordered: typeof rows = [];
+    for (let i = 0; i < 10; i++) {
+      const need = bucket + i * 1000;
+      const hit = bySec.get(need);
+      if (!hit) {
+        complete = false;
+        break;
+      }
+      ordered.push(hit);
+    }
+    if (!complete) continue;
+    const first = ordered[0]!;
+    out.push({
+      open_time_ms: bucket,
       open: first.open,
-      high: Math.max(...chunk.map((c) => c.high)),
-      low: Math.min(...chunk.map((c) => c.low)),
-      close: chunk[chunk.length - 1]!.close,
-      ticks: chunk.length,
+      high: Math.max(...ordered.map((c) => c.high)),
+      low: Math.min(...ordered.map((c) => c.low)),
+      close: ordered[ordered.length - 1]!.close,
+      ticks: ordered.length,
       provenance: 'REAL',
     });
   }
-  return bars;
+  return out;
 }
 
 /**
@@ -167,27 +197,52 @@ export function expandMinutesToTenSec(
 }
 
 /**
- * Fold Capital MINUTE candles into completed 5-minute bars (oldest → newest).
- * Chunks of 5 by array order (Capital returns chronological).
+ * Fold Capital MINUTE candles into completed 5-minute bars — clock-aligned only.
+ * Requires open_time_ms on candles; never invents i*60_000.
  */
-export function aggregateMinutesToFive(minutes: CapitalOhlc[]): TenSecBar[] {
+export function aggregateMinutesToFive(
+  minutes: Array<CapitalOhlc & { open_time_ms?: number | null }>
+): TenSecBar[] {
   if (minutes.length < 5) return [];
-  const bars: TenSecBar[] = [];
-  const complete = Math.floor(minutes.length / 5) * 5;
-  for (let i = 0; i + 5 <= complete; i += 5) {
-    const chunk = minutes.slice(i, i + 5);
-    const first = chunk[0]!;
-    bars.push({
-      open_time_ms: i * 60_000,
+  const FIVE = FIVE_MIN_MS;
+  const ONE = 60_000;
+  const byBucket = new Map<number, Array<CapitalOhlc & { open_time_ms: number }>>();
+  for (const m of minutes) {
+    const t = m.open_time_ms;
+    if (t == null || !Number.isFinite(t) || t <= 0) continue;
+    const aligned = Math.floor(t / ONE) * ONE;
+    const bucket = Math.floor(aligned / FIVE) * FIVE;
+    const arr = byBucket.get(bucket) ?? [];
+    arr.push({ ...m, open_time_ms: aligned });
+    byBucket.set(bucket, arr);
+  }
+  const out: TenSecBar[] = [];
+  for (const bucket of [...byBucket.keys()].sort((a, b) => a - b)) {
+    const rows = (byBucket.get(bucket) ?? []).sort((a, b) => a.open_time_ms - b.open_time_ms);
+    const byT = new Map(rows.map((r) => [r.open_time_ms, r]));
+    const ordered: typeof rows = [];
+    let complete = true;
+    for (let i = 0; i < 5; i++) {
+      const hit = byT.get(bucket + i * ONE);
+      if (!hit) {
+        complete = false;
+        break;
+      }
+      ordered.push(hit);
+    }
+    if (!complete) continue;
+    const first = ordered[0]!;
+    out.push({
+      open_time_ms: bucket,
       open: first.open,
-      high: Math.max(...chunk.map((c) => c.high)),
-      low: Math.min(...chunk.map((c) => c.low)),
-      close: chunk[chunk.length - 1]!.close,
-      ticks: chunk.length,
+      high: Math.max(...ordered.map((c) => c.high)),
+      low: Math.min(...ordered.map((c) => c.low)),
+      close: ordered[ordered.length - 1]!.close,
+      ticks: ordered.length,
       provenance: 'REAL',
     });
   }
-  return bars;
+  return out;
 }
 
 export function decideFromClosed10s(

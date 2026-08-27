@@ -53,9 +53,16 @@ describe('10s OHLC', () => {
 
   it('aggregates 1s Capital candles into 10s bars', () => {
     const seconds = [];
+    const t0 = 1_700_000_000_000; // must be clock-aligned to full seconds
     for (let i = 0; i < 20; i++) {
       const p = 4389 + i * 0.5;
-      seconds.push({ open: p, high: p + 0.2, low: p - 0.1, close: p + 0.1 });
+      seconds.push({
+        open_time_ms: t0 + i * 1000,
+        open: p,
+        high: p + 0.2,
+        low: p - 0.1,
+        close: p + 0.1,
+      });
     }
     const tens = aggregateSecondsToTen(seconds);
     expect(tens).toHaveLength(2);

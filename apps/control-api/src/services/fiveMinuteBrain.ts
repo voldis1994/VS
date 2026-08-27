@@ -126,9 +126,9 @@ function mapRegimeToBrain(regime: string | null | undefined): RegimeName {
   return r;
 }
 
-function htfEvidence(htf: HtfContext | null | undefined, direction: 'BUY' | 'SELL'): EvidenceItem {
-  if (!htf) {
-    return { key: 'htf_location', weight: 0.12, score: 0.5, detail: 'HTF unknown · soft' };
+function htfEvidence(htf: HtfContext | null | undefined, direction: 'BUY' | 'SELL'): EvidenceItem | null {
+  if (!htf || htf.trend == null) {
+    return null; // UNKNOWN HTF → caller blocks entry (#5)
   }
   if (direction === 'BUY' && htf.near_support) {
     return { key: 'htf_location', weight: 0.12, score: 0.95, detail: htf.detail || 'HTF near support' };
@@ -230,8 +230,12 @@ export function blockLateChaseAdaptive(
   const window = bars5m.slice(-6);
   const net = last.close - window[0]!.open;
   const price = Math.max(Math.abs(last.close), 1e-9);
-  const climax = moveThresholdPts(price, atr, 1.2, 0.0025) ?? price * 0.0025;
-  const extending = moveThresholdPts(price, atr, 0.35, 0.0006) ?? price * 0.0006;
+  const climax = moveThresholdPts(price, atr, 1.2, 0.0025);
+  const extending = moveThresholdPts(price, atr, 0.35, 0.0006);
+  // UNKNOWN normalized threshold → BLOCK chase validation (#8)
+  if (climax == null || extending == null) {
+    return { ok: false, reason: 'ANTI-CHASE BLOCK · threshold UNKNOWN (no ATR/tick)' };
+  }
 
   if (direction === 'BUY' && net >= climax) {
     const tail = bars5m.slice(-2);
@@ -285,13 +289,17 @@ function ltfConfirm(
   }
   const net = series[series.length - 1]!.close - series[Math.max(0, series.length - 6)]!.open;
   const thr = moveThresholdPts(price, atr, 0.08, 0.00015);
+  if (thr == null) {
+    return { ok: false, momentum: null, spread_ok: false, detail: 'LTF threshold UNKNOWN' };
+  }
   const mom: 'UP' | 'DOWN' | null =
-    thr == null ? null : net >= thr ? 'UP' : net <= -thr ? 'DOWN' : null;
+    net >= thr ? 'UP' : net <= -thr ? 'DOWN' : null;
 
-  const sprOk =
-    spread == null ||
-    !Number.isFinite(spread) ||
-    spread <= Math.max((atr ?? price * 0.001) * 0.35, price * 0.0002);
+  // Spread UNKNOWN/invalid → NO ENTRY (#7)
+  if (spread == null || !Number.isFinite(spread) || spread < 0) {
+    return { ok: false, momentum: mom, spread_ok: false, detail: 'spread UNKNOWN' };
+  }
+  const sprOk = spread <= Math.max((atr ?? price * 0.001) * 0.35, price * 0.0002);
 
   if (direction === 'BUY' && mom === 'DOWN') {
     return { ok: false, momentum: mom, spread_ok: sprOk, detail: 'LTF momentum against BUY' };
@@ -302,14 +310,15 @@ function ltfConfirm(
   if (!sprOk) {
     return { ok: false, momentum: mom, spread_ok: false, detail: 'spread too wide' };
   }
-  if (mom == null && series.length < 4) {
-    return { ok: false, momentum: null, spread_ok: sprOk, detail: 'LTF flat' };
+  // LTF momentum UNKNOWN (flat) → NO soft invent (#6)
+  if (mom == null) {
+    return { ok: false, momentum: null, spread_ok: sprOk, detail: 'LTF momentum UNKNOWN' };
   }
   return {
     ok: true,
-    momentum: mom ?? (direction === 'BUY' ? 'UP' : 'DOWN'),
+    momentum: mom,
     spread_ok: true,
-    detail: `LTF confirm · mom=${mom ?? 'soft'}`,
+    detail: `LTF confirm · mom=${mom}`,
   };
 }
 
@@ -418,6 +427,21 @@ export function decideFiveMinuteEntry(input: BrainInput): BrainDecision {
     };
   }
 
+  const htfItem = htfEvidence(input.htf, direction);
+  if (!htfItem) {
+    return {
+      entry: false,
+      direction,
+      setup: setupHit.setup,
+      reason: 'HTF UNKNOWN · NO ENTRY',
+      evidence: [],
+      evidence_score: 0,
+      structure: ms,
+      structural_sl: null,
+      hard_block: 'HTF_UNKNOWN',
+    };
+  }
+
   const ltf = ltfConfirm(
     direction,
     input.bars10s,
@@ -449,8 +473,36 @@ export function decideFiveMinuteEntry(input: BrainInput): BrainDecision {
     };
   }
 
+  if (input.spread == null || !Number.isFinite(input.spread) || input.spread < 0) {
+    return {
+      entry: false,
+      direction,
+      setup: setupHit.setup,
+      reason: 'spread UNKNOWN · NO ENTRY',
+      evidence: [],
+      evidence_score: 0,
+      structure: ms,
+      structural_sl: null,
+      hard_block: 'SPREAD_UNKNOWN',
+    };
+  }
+
+  if (input.feed_agreement == null || !Number.isFinite(input.feed_agreement)) {
+    return {
+      entry: false,
+      direction,
+      setup: setupHit.setup,
+      reason: 'feed agreement UNKNOWN · NO ENTRY',
+      evidence: [],
+      evidence_score: 0,
+      structure: ms,
+      structural_sl: null,
+      hard_block: 'FEED_UNKNOWN',
+    };
+  }
+
   const evidence: EvidenceItem[] = [];
-  evidence.push(htfEvidence(input.htf, direction));
+  evidence.push(htfItem);
   evidence.push({
     key: 'structure_5m',
     weight: 0.22,
@@ -492,7 +544,6 @@ export function decideFiveMinuteEntry(input: BrainInput): BrainDecision {
     detail: ltf.detail,
   });
 
-  // #61 — reachable volatility score (old atrScore>2 was unreachable)
   const vol = atrPctScore(atr, input.price);
   evidence.push({
     key: 'volatility',
@@ -501,21 +552,16 @@ export function decideFiveMinuteEntry(input: BrainInput): BrainDecision {
     detail: vol.detail,
   });
 
-  const spr =
-    input.spread != null && input.spread > 0
-      ? 1 - Math.min(1, input.spread / Math.max(atr ?? input.price * 0.001, 1e-9))
-      : 0.7;
+  const sprScore =
+    1 - Math.min(1, input.spread / Math.max(atr ?? input.price * 0.001, 1e-9));
   evidence.push({
     key: 'spread',
     weight: 0.04,
-    score: Math.max(0, spr),
-    detail: input.spread != null ? `spread ${input.spread}` : 'spread n/a',
+    score: Math.max(0, sprScore),
+    detail: `spread ${input.spread}`,
   });
 
-  const feed =
-    input.feed_agreement != null && Number.isFinite(input.feed_agreement)
-      ? Math.max(0, Math.min(1, input.feed_agreement))
-      : 0.6;
+  const feed = Math.max(0, Math.min(1, input.feed_agreement));
   evidence.push({
     key: 'feed_agreement',
     weight: 0.04,
@@ -531,6 +577,21 @@ export function decideFiveMinuteEntry(input: BrainInput): BrainDecision {
     price: input.price,
     tickSize: input.tick_size,
   });
+
+  // Entry requires structural SL (#11)
+  if (sl == null) {
+    return {
+      entry: false,
+      direction,
+      setup: setupHit.setup,
+      reason: 'structural SL UNKNOWN · NO ENTRY',
+      evidence,
+      evidence_score: score,
+      structure: ms,
+      structural_sl: null,
+      hard_block: 'STRUCT_SL_UNKNOWN',
+    };
+  }
 
   if (score < ENTRY_SCORE_MIN) {
     return {

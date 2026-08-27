@@ -185,7 +185,8 @@ export function analyzeMarketStructure(
   const lastIdx = bars.length - 1;
   const last = bars[lastIdx]!;
   const price = last.close;
-  const thr = moveThresholdPts(price, atr, 0.15, 0.0002) ?? 0;
+  const thr = moveThresholdPts(price, atr, 0.15, 0.0002);
+  // UNKNOWN thr → never invent 0; breakout requires detectDisplacement (#3/#4)
 
   const sh = swings.lastHigh;
   const sl = swings.lastLow;
@@ -228,10 +229,10 @@ export function analyzeMarketStructure(
     }
   }
 
-  // Breakout = close acceptance beyond swing (not wick-only)
-  if (sh && closeBreaksLevel(last, sh.price + thr * 0.05, 'ABOVE')) {
-    const bodyOk = detectDisplacement(last, atr, price) || last.close > last.open;
-    if (bodyOk) {
+  // Breakout = close acceptance + displacement (no candle-color fallback)
+  const bullLvl = sh ? (thr != null ? sh.price + thr * 0.05 : sh.price) : null;
+  if (sh && bullLvl != null && closeBreaksLevel(last, bullLvl, 'ABOVE')) {
+    if (detectDisplacement(last, atr, price)) {
       events.push({
         kind: 'BREAKOUT',
         side: 'BULL',
@@ -259,9 +260,9 @@ export function analyzeMarketStructure(
     }
   }
 
-  if (sl && closeBreaksLevel(last, sl.price - thr * 0.05, 'BELOW')) {
-    const bodyOk = detectDisplacement(last, atr, price) || last.close < last.open;
-    if (bodyOk) {
+  const bearLvl = sl ? (thr != null ? sl.price - thr * 0.05 : sl.price) : null;
+  if (sl && bearLvl != null && closeBreaksLevel(last, bearLvl, 'BELOW')) {
+    if (detectDisplacement(last, atr, price)) {
       events.push({
         kind: 'BREAKOUT',
         side: 'BEAR',
@@ -324,7 +325,7 @@ export function analyzeMarketStructure(
   }
 
   // Retest: broke previously, now touches level and holds
-  if (bars.length >= 3 && sh) {
+  if (bars.length >= 3 && sh && thr != null) {
     const hist = bars.slice(0, -1);
     const broke = hist.some((b) => closeBreaksLevel(b, sh.price, 'ABOVE'));
     if (
@@ -343,7 +344,7 @@ export function analyzeMarketStructure(
       });
     }
   }
-  if (bars.length >= 3 && sl) {
+  if (bars.length >= 3 && sl && thr != null) {
     const hist = bars.slice(0, -1);
     const broke = hist.some((b) => closeBreaksLevel(b, sl.price, 'BELOW'));
     if (

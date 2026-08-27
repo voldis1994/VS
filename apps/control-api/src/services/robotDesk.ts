@@ -71,6 +71,9 @@ import {
   noteRiskTradeOpen,
   noteRiskTradePnl,
   allowRiskEntry,
+  hydrateRiskState,
+  exportRiskState,
+  type PersistedRiskState,
 } from './riskWindow.js';
 import {
   buildBoStateFromOpen,
@@ -79,12 +82,14 @@ import {
   loadBoState,
   loadPendingExecution,
   nextClosePhaseAfterBrokerAck,
+  nextClosePhaseAfterListFailure,
   recoverPendingExecution,
   resolveEntryPrice,
   saveBoState,
   savePendingExecution,
   shouldClearTradeState,
   persistRiskSnapshotJson,
+  canClearPendingExecution,
   type ClosePhase,
 } from './tradeRecovery.js';
 import {
@@ -98,7 +103,9 @@ import {
   buildHtfContextFromBooks,
   type MultiTfState,
 } from './timeframeBooks.js';
-import { seedMultiTfHistory, refreshTfBook } from './seedMultiTf.js';
+import { seedMultiTfHistory, refreshDueTfBooks } from './seedMultiTf.js';
+import { computeInstrumentSafetyStop } from './safetyStop.js';
+import { loadJson } from './persistentStore.js';
 
 export type RobotTick = {
   at: string;
@@ -223,10 +230,13 @@ function marketAllowsTrading(status: string | null | undefined): boolean {
   const s = String(status || '')
     .trim()
     .toUpperCase();
-  // Missing status → do not park (Capital sometimes omits it)
-  if (!s) return true;
+  // Missing/unknown status → NO NEW ENTRY (#17)
+  if (!s) return false;
   return s === 'TRADEABLE' || s === 'OPEN';
 }
+
+/** Exported for tests (#52). */
+export { marketAllowsTrading };
 
 /** Human INFO line — must scream when Capital market is not TRADEABLE (#136 / Aug13). */
 export function formatMarketInfo(
@@ -611,8 +621,7 @@ function writeJournalClose(
 }
 
 /**
- * SAFETY SL as LAST RESORT (~0.20% / ~9pt) — wider than HardInv 2.0pt.
- * PeakProtect / HardInvalidation must fire first; Capital Limit SL only on disaster.
+ * SAFETY SL — instrument metadata only (#33/#34). No magnitude floors.
  */
 function safetyStopLevel(
   direction: 'BUY' | 'SELL',
@@ -621,37 +630,21 @@ function safetyStopLevel(
   ask: number | null,
   spread: number | null,
   minStopDistance: number | null,
-  loosen = 1
-): number {
-  const ref =
-    direction === 'BUY'
-      ? bid != null && Number.isFinite(bid)
-        ? bid
-        : mid
-      : ask != null && Number.isFinite(ask)
-        ? ask
-        : mid;
-  const abs = Math.max(Math.abs(ref), 1e-9);
-  const spr =
-    spread != null && Number.isFinite(spread) && spread > 0
-      ? spread
-      : bid != null && ask != null
-        ? Math.max(ask - bid, 0)
-        : abs * 0.00005;
-
-  const pctCushion = abs * SAFETY_SL_PCT; // last resort; HardInv 2.0pt first
-  const brokerMin =
-    minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
-      ? minStopDistance
-      : 0;
-  const floor = abs >= 100 ? 0.12 : abs >= 10 ? 0.02 : abs >= 1 ? 0.0002 : 0.00002;
-  const dist =
-    Math.max(pctCushion, brokerMin * 1.5, spr * 4, floor) * Math.max(loosen, 1);
-
-  const raw = direction === 'BUY' ? ref - dist : ref + dist;
-  if (abs >= 100) return Math.round(raw * 100) / 100;
-  if (abs >= 1) return Math.round(raw * 10000) / 10000;
-  return Math.round(raw * 1e6) / 1e6;
+  loosen = 1,
+  meta?: { pointSize?: number | null; tickSize?: number | null }
+): number | null {
+  const r = computeInstrumentSafetyStop({
+    direction,
+    mid,
+    bid,
+    ask,
+    spread,
+    minStopDistance,
+    pointSize: meta?.pointSize,
+    tickSize: meta?.tickSize,
+    loosen,
+  });
+  return r.ok ? r.stop_level : null;
 }
 
 /** Cushion stopDistance in Capital POINTS (≥ 1.5× min, ~0.08% when point size known). */
@@ -990,8 +983,12 @@ async function exitTrade(
       exitSide != null &&
       (exitSide === 'BUY' ? quote.mid <= s.entry_price : quote.mid >= s.entry_price));
   noteEpicTradeClose(s.epic, exitSide, wasLoss);
-  if (s.unrealized != null && Number.isFinite(s.unrealized)) {
-    noteRiskTradePnl(s.account_id, s.unrealized);
+  // #29 — only broker-confirmed realized; never last unrealized UPL
+  // Caller must pass realized via s.last_realized_pnl when known; else skip risk PnL.
+  const realized =
+    (s as Internal & { last_realized_pnl?: number | null }).last_realized_pnl;
+  if (realized != null && Number.isFinite(realized)) {
+    noteRiskTradePnl(s.account_id, realized);
   }
   s.error = null;
   writeJournalClose(s, quote, reason, wasLoss);
@@ -1154,7 +1151,7 @@ async function enterTrade(
     }
   }
 
-  if (!result?.ok) {
+    if (!result?.ok) {
     for (const loosen of loosenSteps) {
       const level = safetyStopLevel(
         direction,
@@ -1163,8 +1160,19 @@ async function enterTrade(
         quote.ask,
         quote.spread ?? null,
         minPrice,
-        loosen
+        loosen,
+        { pointSize: quote.point_size ?? null, tickSize: quote.point_size ?? null }
       );
+      if (level == null) {
+        pushTick(s, {
+          phase: 'ERROR',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: 'ENTRY BLOCKED — Safety SL UNKNOWN (no tick/minStop metadata)',
+        });
+        return;
+      }
       const dist = direction === 'BUY' ? mid - level : level - mid;
       pushTick(s, {
         phase: 'INFO',
@@ -1212,13 +1220,12 @@ async function enterTrade(
 
   s.orders_placed += 1;
   s.open_side = direction;
-  s.mode = 'MANAGE';
+  s.mode = 'FLAT'; // MANAGE only after broker fill confirmed (#25)
   s.close_phase = 'OPEN';
   s.last_deal_reference = result.deal_reference || null;
   s.pending_deal_reference = result.deal_reference || null;
-  // Signal mid is provisional — broker fill replaces below
   const signalMid = mid;
-  s.entry_price = signalMid;
+  s.entry_price = null; // never seed BO with signal mid
   s.entry_at = new Date().toISOString();
   s.mfe = 0;
   s.mae = 0;
@@ -1267,14 +1274,17 @@ async function enterTrade(
   if (fill != null) {
     s.entry_price = fill;
     s.peak_favorable = fill;
+    s.mode = 'MANAGE';
+    noteRiskTradeOpen(s.account_id);
   } else {
-    // CRITICAL UNKNOWN fill — keep provisional signal mid for recovery, never claim broker truth
+    s.mode = 'FLAT';
+    s.entry_price = null;
     pushTick(s, {
-      phase: 'INFO',
+      phase: 'WAIT',
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `FILL UNKNOWN · broker/confirm level missing · provisional signal mid ${signalMid} (not execution truth)`,
+      detail: `FILL UNKNOWN · waiting broker open_level · signal mid ${signalMid} not used for BO`,
     });
   }
   if (brokerLevel != null && signalMid != null && Math.abs(brokerLevel - signalMid) > 1e-9) {
@@ -1286,11 +1296,20 @@ async function enterTrade(
       detail: `FILL · broker ${brokerLevel} vs signal mid ${signalMid} · slippage ${(brokerLevel - signalMid).toFixed(5)} · BO uses broker`,
     });
   }
-  // Keep pending until broker open confirmed — crash recovery needs it
-  if (brokerLevel != null || s.deal_id) {
+  // #26 — clear pending only when broker position + fill confirmed
+  if (
+    canClearPendingExecution({
+      brokerOpen: brokerLevel != null || Boolean(s.deal_id),
+      fillLevel: fill,
+    })
+  ) {
     clearPendingExecution(s.id);
   }
   persistBoFromSession(s);
+
+  if (fill == null) {
+    return;
+  }
 
   // Verify SL is physically on Capital.com — attach via PUT if missing
   const ensured = await ensureCapitalStopVisible(session, s.epic, {
@@ -1674,10 +1693,8 @@ async function robotCycleBody(s: Internal) {
             detail: 'Broker flat after CLOSE_UNCERTAIN — confirmed CLOSED',
           });
           s.closed_at_ms = Date.now();
-          const flatPnl =
-            s.unrealized != null && Number.isFinite(s.unrealized) ? s.unrealized : 0;
-          noteEpicTradeClose(s.epic, s.open_side, flatPnl <= 0);
-          noteRiskTradePnl(s.account_id, flatPnl);
+          // #30 — skip risk PnL without broker-confirmed realized (do not use cached UPL)
+          noteEpicTradeClose(s.epic, s.open_side, (s.unrealized ?? 0) <= 0);
           clearTradeState(s);
         } else {
           pushTick(s, {
@@ -1688,10 +1705,7 @@ async function robotCycleBody(s: Internal) {
             detail: 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
           });
           s.closed_at_ms = Date.now();
-          const flatPnl =
-            s.unrealized != null && Number.isFinite(s.unrealized) ? s.unrealized : 0;
-          noteEpicTradeClose(s.epic, s.open_side, flatPnl <= 0);
-          noteRiskTradePnl(s.account_id, flatPnl);
+          noteEpicTradeClose(s.epic, s.open_side, (s.unrealized ?? 0) <= 0);
           clearTradeState(s);
         }
       } else {
@@ -1904,9 +1918,8 @@ async function robotCycleBody(s: Internal) {
           detail: `TF seed fail · ${err instanceof Error ? err.message : String(err)}`,
         };
       }
-    } else if (Date.now() - s.last_multi_tf_seed_ms >= 15_000) {
-      s.multiTf = await refreshTfBook(opened.session, s.epic, s.multiTf, '1m');
-      s.multiTf = await refreshTfBook(opened.session, s.epic, s.multiTf, '5m');
+    } else {
+      s.multiTf = await refreshDueTfBooks(opened.session, s.epic, s.multiTf);
       s.last_multi_tf_seed_ms = Date.now();
     }
 

@@ -1,6 +1,14 @@
 /**
  * Close confirmation + execution / BO restart recovery helpers.
+ * Persistent file store survives process crash (#27).
  */
+
+import {
+  deleteJson,
+  loadJson,
+  persistJson,
+  resetPersistNamespace,
+} from './persistentStore.js';
 
 export type ClosePhase =
   | 'OPEN'
@@ -27,6 +35,8 @@ export type PersistedBoState = {
   account_id: number;
   robot_id: string;
   updated_at: string;
+  /** True only when entry_price is broker/confirm fill */
+  fill_confirmed?: boolean;
 };
 
 export type PendingExecution = {
@@ -39,10 +49,17 @@ export type PendingExecution = {
   signal_mid: number | null;
 };
 
-/** After closeCapitalPosition().ok — do NOT mark CLOSED until broker flat. */
 export function nextClosePhaseAfterBrokerAck(stillOpenOnBroker: boolean): ClosePhase {
   if (stillOpenOnBroker) return 'CLOSE_UNCERTAIN';
   return 'CLOSED';
+}
+
+/** List failure → stay RECONCILING (#56). */
+export function nextClosePhaseAfterListFailure(current: ClosePhase): ClosePhase {
+  if (current === 'CLOSE_REQUESTED' || current === 'BROKER_CLOSE_SENT' || current === 'CLOSE_UNCERTAIN') {
+    return 'RECONCILING';
+  }
+  return 'RECONCILING';
 }
 
 export function shouldClearTradeState(phase: ClosePhase): boolean {
@@ -53,14 +70,12 @@ export function shouldRetryClose(phase: ClosePhase): boolean {
   return phase === 'CLOSE_UNCERTAIN' || phase === 'RECONCILING' || phase === 'CLOSE_REQUESTED';
 }
 
-/** Prefer broker fill over signal mid. */
 /**
- * Broker / confirm fill only. Signal mid is NEVER execution truth (#CRITICAL UNKNOWN).
+ * Broker / confirm fill only. Signal mid is NEVER execution truth.
  */
 export function resolveEntryPrice(opts: {
   broker_open_level?: number | null;
   confirm_level?: number | null;
-  /** @deprecated provisional only — ignored for fill truth */
   signal_mid?: number | null;
 }): number | null {
   if (opts.broker_open_level != null && Number.isFinite(opts.broker_open_level)) {
@@ -88,6 +103,7 @@ export function buildBoStateFromOpen(input: {
   epic: string;
   account_id: number;
   robot_id: string;
+  fill_confirmed?: boolean;
 }): PersistedBoState {
   return {
     deal_id: input.deal_id,
@@ -106,10 +122,10 @@ export function buildBoStateFromOpen(input: {
     account_id: input.account_id,
     robot_id: input.robot_id,
     updated_at: new Date().toISOString(),
+    fill_confirmed: input.fill_confirmed ?? false,
   };
 }
 
-/** Merge broker open position into BO state after restart. */
 export function adoptBrokerOpenForBo(opts: {
   prior: PersistedBoState | null;
   deal_id: string;
@@ -127,6 +143,7 @@ export function adoptBrokerOpenForBo(opts: {
   if (entry == null || !Number.isFinite(entry)) {
     throw new Error('cannot adopt BO without entry price');
   }
+  const fillConfirmed = opts.open_level != null && Number.isFinite(opts.open_level);
   return {
     deal_id: opts.deal_id,
     side: opts.side,
@@ -144,12 +161,12 @@ export function adoptBrokerOpenForBo(opts: {
     account_id: opts.account_id,
     robot_id: opts.robot_id,
     updated_at: new Date().toISOString(),
+    fill_confirmed: fillConfirmed,
   };
 }
 
 /**
- * Crash after claim / order accepted but DB incomplete:
- * if broker has open on epic → adopt, do not re-order.
+ * Crash recovery: clear pending only when broker open + fill known (#26).
  */
 export function recoverPendingExecution(opts: {
   pending: PendingExecution | null;
@@ -160,62 +177,93 @@ export function recoverPendingExecution(opts: {
 } {
   if (!opts.pending) return { action: 'NONE', detail: 'no pending' };
   if (opts.brokerOpen) {
+    if (opts.brokerOpen.open_level == null || !Number.isFinite(opts.brokerOpen.open_level)) {
+      return {
+        action: 'WAIT',
+        detail: 'broker open without fill/open_level · keep pending',
+      };
+    }
     return {
       action: 'ADOPT',
-      detail: `recover · broker open ${opts.brokerOpen.direction} ${opts.brokerOpen.deal_id} · skip duplicate`,
+      detail: `recover · broker open ${opts.brokerOpen.direction} ${opts.brokerOpen.deal_id} · fill ${opts.brokerOpen.open_level}`,
     };
   }
   if (opts.pending.deal_reference) {
     return { action: 'WAIT', detail: 'pending dealRef · reconcile confirm' };
   }
-  return { action: 'CLEAR_PENDING', detail: 'pending claim without broker open · clear' };
+  return { action: 'WAIT', detail: 'pending claim · waiting broker position · keep pending' };
 }
 
-// ——— in-memory persist (survives within process; DB migration optional later) ———
+/** Clear pending only when broker position + fill confirmed (#26). */
+export function canClearPendingExecution(opts: {
+  brokerOpen: boolean;
+  fillLevel: number | null | undefined;
+}): boolean {
+  return opts.brokerOpen && opts.fillLevel != null && Number.isFinite(opts.fillLevel);
+}
+
+// ——— persistent + in-memory cache ———
 
 const boByRobot = new Map<string, PersistedBoState>();
 const pendingByRobot = new Map<string, PendingExecution>();
-const riskSnapByAccount = new Map<
-  number,
-  { json: string; updated_at: string }
->();
+const riskSnapByAccount = new Map<number, { json: string; updated_at: string }>();
 
 export function saveBoState(state: PersistedBoState): void {
-  boByRobot.set(state.robot_id, { ...state, updated_at: new Date().toISOString() });
+  const next = { ...state, updated_at: new Date().toISOString() };
+  boByRobot.set(state.robot_id, next);
+  persistJson('bo', state.robot_id, next);
 }
 
 export function loadBoState(robotId: string): PersistedBoState | null {
-  return boByRobot.get(robotId) ?? null;
+  const mem = boByRobot.get(robotId);
+  if (mem) return mem;
+  const disk = loadJson<PersistedBoState>('bo', robotId);
+  if (disk) boByRobot.set(robotId, disk);
+  return disk;
 }
 
 export function clearBoState(robotId: string): void {
   boByRobot.delete(robotId);
+  deleteJson('bo', robotId);
 }
 
 export function savePendingExecution(p: PendingExecution): void {
   pendingByRobot.set(p.robot_id, p);
+  persistJson('pending', p.robot_id, p);
 }
 
 export function loadPendingExecution(robotId: string): PendingExecution | null {
-  return pendingByRobot.get(robotId) ?? null;
+  const mem = pendingByRobot.get(robotId);
+  if (mem) return mem;
+  const disk = loadJson<PendingExecution>('pending', robotId);
+  if (disk) pendingByRobot.set(robotId, disk);
+  return disk;
 }
 
 export function clearPendingExecution(robotId: string): void {
   pendingByRobot.delete(robotId);
+  deleteJson('pending', robotId);
 }
 
 export function persistRiskSnapshotJson(accountId: number, snapshot: unknown): void {
-  riskSnapByAccount.set(accountId, {
-    json: JSON.stringify(snapshot),
-    updated_at: new Date().toISOString(),
-  });
+  const row = { json: JSON.stringify(snapshot), updated_at: new Date().toISOString() };
+  riskSnapByAccount.set(accountId, row);
+  persistJson('risk-snap', String(accountId), row);
 }
 
 export function loadRiskSnapshotJson(accountId: number): unknown | null {
-  const row = riskSnapByAccount.get(accountId);
-  if (!row) return null;
+  const mem = riskSnapByAccount.get(accountId);
+  if (mem) {
+    try {
+      return JSON.parse(mem.json);
+    } catch {
+      /* fall through */
+    }
+  }
+  const disk = loadJson<{ json: string }>('risk-snap', String(accountId));
+  if (!disk?.json) return null;
   try {
-    return JSON.parse(row.json);
+    return JSON.parse(disk.json);
   } catch {
     return null;
   }
@@ -225,4 +273,8 @@ export function resetTradeRecoveryStore(): void {
   boByRobot.clear();
   pendingByRobot.clear();
   riskSnapByAccount.clear();
+  resetPersistNamespace('bo');
+  resetPersistNamespace('pending');
+  resetPersistNamespace('risk-snap');
+  resetPersistNamespace('risk-state');
 }

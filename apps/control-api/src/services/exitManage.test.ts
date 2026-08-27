@@ -10,6 +10,8 @@ import {
   type ExitSnapshot,
 } from './exitManage.js';
 
+const GOLD_META = { tick_size: 0.01 };
+
 function snap(partial: Partial<ExitSnapshot> & { open_side: 'BUY' | 'SELL'; entry_price: number }): ExitSnapshot {
   return {
     mfe: 0,
@@ -17,13 +19,14 @@ function snap(partial: Partial<ExitSnapshot> & { open_side: 'BUY' | 'SELL'; entr
     peak_retention: null,
     entry_at: new Date().toISOString(),
     regime: 'TREND_UP',
+    tick_size: GOLD_META.tick_size,
     ...partial,
   };
 }
 
 describe('decideBestOutcomeExit — PeakProtect 75%', () => {
   it('HardInv ~0.043% of Gold mid', () => {
-    expect(hardInvalidationDistance(4660)).toBeCloseTo(4660 * 0.00043, 2);
+    expect(hardInvalidationDistance(4660, null, GOLD_META)).toBeCloseTo(4660 * 0.00043, 2);
   });
 
   it('manageExitPrice uses bid for BUY / ask for SELL', () => {
@@ -32,7 +35,7 @@ describe('decideBestOutcomeExit — PeakProtect 75%', () => {
   });
 
   it('HardInv fires at adverse beyond threshold', () => {
-    const sl = hardInvalidationDistance(4660);
+    const sl = hardInvalidationDistance(4660, null, GOLD_META)!;
     const cut = decideBestOutcomeExit(
       snap({ open_side: 'BUY', entry_price: 4660, mfe: 0 }),
       4660 - sl - 0.01
@@ -62,7 +65,10 @@ describe('decideBestOutcomeExit — PeakProtect 75%', () => {
   });
 
   it('MFE floor is half HardInv', () => {
-    expect(bestOutcomeMfeFloor(4640)).toBeCloseTo(hardInvalidationDistance(4640) * 0.5, 5);
+    expect(bestOutcomeMfeFloor(4640, null, GOLD_META)).toBeCloseTo(
+      hardInvalidationDistance(4640, null, GOLD_META)! * 0.5,
+      5
+    );
   });
 
   it('PeakProtect @75% cuts deep giveback even with continuation', () => {
@@ -96,7 +102,7 @@ describe('decideBestOutcomeExit — PeakProtect 75%', () => {
 
   it('TP fires at HardInv-distance target', () => {
     const entry = 4640;
-    const tp = hardInvalidationDistance(entry);
+    const tp = hardInvalidationDistance(entry, null, GOLD_META)!;
     const cut = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -111,7 +117,7 @@ describe('decideBestOutcomeExit — PeakProtect 75%', () => {
   });
 
   it('does not arm PeakProtect below MFE floor', () => {
-    const floor = bestOutcomeMfeFloor(4640);
+    const floor = bestOutcomeMfeFloor(4640, null, GOLD_META)!;
     const hold = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -125,7 +131,7 @@ describe('decideBestOutcomeExit — PeakProtect 75%', () => {
   });
 
   it('armed peak → flat cuts before minus', () => {
-    const floor = bestOutcomeMfeFloor(4640);
+    const floor = bestOutcomeMfeFloor(4640, null, GOLD_META)!;
     const cut = decideBestOutcomeExit(
       snap({ open_side: 'BUY', entry_price: 4640, mfe: floor + 0.5, peak_retention: 0 }),
       4640.0
@@ -173,7 +179,7 @@ describe('decideBestOutcomeExit — PeakProtect 75%', () => {
   });
 
   it('TimeDecay at 15min banks green when retention still high', () => {
-    const floor = bestOutcomeMfeFloor(4660);
+    const floor = bestOutcomeMfeFloor(4660, null, GOLD_META)!;
     const mfe = floor + 0.2;
     const cut = decideBestOutcomeExit(
       snap({

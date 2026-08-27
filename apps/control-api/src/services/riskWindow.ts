@@ -3,9 +3,12 @@
  * - Clock starts on FIRST trade — IDLE while waiting for setup
  * - 60min window · +10% early bank · −10% stop · ≥7% pass
  * - Zero trades → no penalty cooldown
+ * - State persisted to disk for restart (#28)
  */
 
-export const RISK_WINDOW_MS = 60 * 60 * 1000; // 60 min — fits 5m holds
+import { deleteJson, loadJson, persistJson, resetPersistNamespace } from './persistentStore.js';
+
+export const RISK_WINDOW_MS = 60 * 60 * 1000;
 export const RISK_TARGET_MIN_PCT = 0.07;
 export const RISK_TARGET_MAX_PCT = 0.1;
 export const RISK_MAX_LOSS_PCT = 0.1;
@@ -24,7 +27,7 @@ export type RiskSnapshot = {
   detail: string;
 };
 
-type AccountRisk = {
+export type PersistedRiskState = {
   windowStartMs: number;
   equityStart: number | null;
   lastSeenEquity: number | null;
@@ -33,17 +36,31 @@ type AccountRisk = {
   cooldownUntilMs: number;
   lastStatus: RiskSnapshot['status'];
   lastDetail: string;
-  /** Equity known */
   equityReady: boolean;
-  /** 60min clock running (after first trade) */
   clockRunning: boolean;
 };
 
+type AccountRisk = PersistedRiskState;
+
 const byAccount = new Map<number, AccountRisk>();
+
+function persistAccount(accountId: number, s: AccountRisk): void {
+  persistJson('risk-state', String(accountId), s);
+}
+
+function loadAccountFromDisk(accountId: number): AccountRisk | null {
+  return loadJson<PersistedRiskState>('risk-state', String(accountId));
+}
 
 function ensure(accountId: number, now: number): AccountRisk {
   let s = byAccount.get(accountId);
   if (!s) {
+    const disk = loadAccountFromDisk(accountId);
+    if (disk) {
+      s = disk;
+      byAccount.set(accountId, s);
+      return s;
+    }
     s = {
       windowStartMs: now,
       equityStart: null,
@@ -57,8 +74,19 @@ function ensure(accountId: number, now: number): AccountRisk {
       clockRunning: false,
     };
     byAccount.set(accountId, s);
+    persistAccount(accountId, s);
   }
   return s;
+}
+
+/** Restore risk state machine from persistence (#28). */
+export function hydrateRiskState(accountId: number, state: PersistedRiskState): void {
+  byAccount.set(accountId, { ...state });
+  persistAccount(accountId, state);
+}
+
+export function exportRiskState(accountId: number): PersistedRiskState | null {
+  return byAccount.get(accountId) ?? loadAccountFromDisk(accountId);
 }
 
 function pct(pnl: number, equity: number): number {
@@ -80,8 +108,12 @@ export function setRiskEquity(accountId: number, equity: number, now = Date.now(
   if (!Number.isFinite(equity) || equity <= 0) return;
   const s = ensure(accountId, now);
   s.lastSeenEquity = equity;
-  if (s.cooldownUntilMs > now) return;
+  if (s.cooldownUntilMs > now) {
+    persistAccount(accountId, s);
+    return;
+  }
   armEquity(s, equity);
+  persistAccount(accountId, s);
 }
 
 function startClock(s: AccountRisk, now: number) {
@@ -98,9 +130,13 @@ export function noteRiskTradeOpen(accountId: number, now = Date.now()): void {
   if (s.cooldownUntilMs > now) return;
   startClock(s, now);
   s.tradesInWindow += 1;
+  persistAccount(accountId, s);
 }
 
-/** Record realized P&L when a trade closes (account currency). */
+/**
+ * Record broker-confirmed realized P&L when a trade closes (#29/#30).
+ * Do NOT pass unrealized / cached UPL.
+ */
 export function noteRiskTradePnl(accountId: number, pnl: number, now = Date.now()): void {
   if (!Number.isFinite(accountId) || accountId <= 0) return;
   if (!Number.isFinite(pnl)) return;
@@ -109,6 +145,7 @@ export function noteRiskTradePnl(accountId: number, pnl: number, now = Date.now(
   startClock(s, now);
   if (s.tradesInWindow < 1) s.tradesInWindow = 1;
   s.realizedPnl += pnl;
+  persistAccount(accountId, s);
 }
 
 function startCooldown(s: AccountRisk, now: number, status: RiskSnapshot['status'], detail: string) {
@@ -148,6 +185,17 @@ export function evaluateRiskWindow(
   accountId: number,
   openUpl: number,
   now = Date.now()
+): { allowEntry: boolean; snapshot: RiskSnapshot } {
+  const result = evaluateRiskWindowInner(accountId, openUpl, now);
+  const s = byAccount.get(accountId);
+  if (s) persistAccount(accountId, s);
+  return result;
+}
+
+function evaluateRiskWindowInner(
+  accountId: number,
+  openUpl: number,
+  now: number
 ): { allowEntry: boolean; snapshot: RiskSnapshot } {
   const s = ensure(accountId, now);
   const upl = Number.isFinite(openUpl) ? openUpl : 0;
@@ -370,4 +418,5 @@ export function getRiskSnapshot(
 /** Test helper */
 export function resetRiskWindows(): void {
   byAccount.clear();
+  resetPersistNamespace('risk-state');
 }

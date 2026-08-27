@@ -13,6 +13,27 @@ import {
   type BarSeriesQuality,
 } from './dataQuality.js';
 import { atrWilder } from './volatilityNorm.js';
+import { analyzeMarketStructure, type StructureBar } from './marketStructure.js';
+import { buildScalpZone } from './zones.js';
+
+/** Classify gap: session (weekend/off-hours) vs missing data (#19/#62). */
+export function classifyBarGap(
+  prevMs: number,
+  nextMs: number,
+  stepMs: number
+): 'none' | 'session' | 'missing' | 'unknown' {
+  const delta = nextMs - prevMs;
+  if (delta <= stepMs * 1.5) return 'none';
+  // Weekend-sized gap (Fri→Mon) on FX/indices: ≥ ~48h
+  if (delta >= 48 * 3_600_000 && delta <= 72 * 3_600_000) return 'session';
+  // Daily session break ~8–18h for indices — treat as session when step is intraday
+  if (stepMs <= 3_600_000 && delta >= 6 * 3_600_000 && delta <= 20 * 3_600_000) {
+    return 'session';
+  }
+  // Otherwise missing data — or unknown if we cannot classify calendar
+  if (delta > stepMs * 1.5 && delta < 6 * 3_600_000) return 'missing';
+  return 'unknown';
+}
 
 export type TfKey = '10s' | '1m' | '5m' | '15m' | '1H' | '4H';
 
@@ -201,6 +222,11 @@ export type MultiTfState = {
   ready: boolean;
   detail: string;
   seeded_at_ms: number | null;
+  /** Seed retry backoff (#22) */
+  seed_fail_count?: number;
+  seed_next_allowed_ms?: number;
+  /** Per-TF last refresh (#23) */
+  last_refresh_ms?: Partial<Record<Exclude<TfKey, '10s'>, number>>;
 };
 
 export function emptyTfBook(tf: Exclude<TfKey, '10s'>): TfBook {
@@ -228,7 +254,24 @@ export function emptyMultiTfState(): MultiTfState {
     ready: false,
     detail: 'multi-TF history not loaded',
     seeded_at_ms: null,
+    seed_fail_count: 0,
+    seed_next_allowed_ms: 0,
+    last_refresh_ms: {},
   };
+}
+
+/** Refresh cadence per TF (#23/#60). */
+export const TF_REFRESH_MS: Record<Exclude<TfKey, '10s'>, number> = {
+  '1m': 15_000,
+  '5m': 30_000,
+  '15m': 90_000,
+  '1H': 300_000,
+  '4H': 900_000,
+};
+
+export function seedBackoffMs(failCount: number): number {
+  // 5s, 10s, 20s, 40s … cap 5min
+  return Math.min(300_000, 5_000 * Math.pow(2, Math.max(0, failCount - 1)));
 }
 
 /**
@@ -252,7 +295,21 @@ export function evaluateTfBook(
   }));
   const atr = atrWilder(ohlc, 14);
 
-  const gapBudget = Math.max(2, Math.floor(closed.length * 0.05));
+  // Gap policy: session gaps OK; missing/unknown → NOT_READY (#19)
+  let missingGaps = 0;
+  let unknownGaps = 0;
+  let sessionGaps = 0;
+  for (let i = 1; i < closed.length; i++) {
+    const kind = classifyBarGap(
+      closed[i - 1]!.open_time_ms,
+      closed[i]!.open_time_ms,
+      TF_MS[tf]
+    );
+    if (kind === 'missing') missingGaps += 1;
+    else if (kind === 'unknown') unknownGaps += 1;
+    else if (kind === 'session') sessionGaps += 1;
+  }
+
   const spanOk =
     closed.length >= 2
       ? closed[closed.length - 1]!.open_time_ms - closed[0]!.open_time_ms >=
@@ -265,21 +322,24 @@ export function evaluateTfBook(
     atr > 0 &&
     quality.ok &&
     quality.duplicates < Math.max(2, closed.length * 0.1) &&
-    quality.gaps <= gapBudget &&
+    missingGaps === 0 &&
+    unknownGaps === 0 &&
     spanOk &&
     source !== 'EMPTY';
 
   let detail: string;
   if (ready) {
-    detail = `${tf} OK · ${closed.length} closed · ATR ${atr!.toFixed(6)} · ${source} · gaps=${quality.gaps}`;
+    detail = `${tf} OK · ${closed.length} closed · ATR ${atr!.toFixed(6)} · ${source} · sessionGaps=${sessionGaps}`;
+  } else if (missingGaps > 0) {
+    detail = `${tf} NOT READY · missing-data gaps ${missingGaps} · ${source}`;
+  } else if (unknownGaps > 0) {
+    detail = `${tf} NOT READY · unknown gaps ${unknownGaps} · ${source}`;
   } else if (closed.length < min) {
     detail = `${tf} NOT READY · warmup ${closed.length}/${min} · ${source}`;
   } else if (atr == null) {
     detail = `${tf} NOT READY · ATR warmup incomplete · ${closed.length} closed · ${source}`;
   } else if (!quality.ok) {
     detail = `${tf} NOT READY · quality ${quality.reason} · ${source}`;
-  } else if (quality.gaps > gapBudget) {
-    detail = `${tf} NOT READY · excessive gaps ${quality.gaps} · ${source}`;
   } else if (!spanOk) {
     detail = `${tf} NOT READY · insufficient span · ${source}`;
   } else {
@@ -289,7 +349,7 @@ export function evaluateTfBook(
   return {
     tf,
     bars: closed,
-    quality,
+    quality: { ...quality, gaps: missingGaps + unknownGaps },
     source,
     ready,
     detail,
@@ -316,7 +376,7 @@ export function evaluateMultiTfReady(state: MultiTfState): MultiTfState {
   };
 }
 
-/** HTF context from real 4H/1H/15m — not 10s zone. Closed bars only. */
+/** HTF context from 4H + 1H + 15m hierarchy with market structure (#20/#21). */
 export function buildHtfContextFromBooks(
   state: MultiTfState,
   price: number
@@ -326,34 +386,73 @@ export function buildHtfContextFromBooks(
   near_resistance: boolean;
   detail: string;
 } {
-  const h4 = state.books['4H'].bars;
-  const h1 = state.books['1H'].bars;
-  const m15 = state.books['15m'].bars;
-  const series = h4.length >= 8 ? h4 : h1.length >= 8 ? h1 : m15;
-  if (series.length < 8) {
-    return { trend: null, near_support: false, near_resistance: false, detail: 'HTF seeding' };
-  }
-  const window = series.slice(-20);
-  const first = window[0]!;
-  const last = window[window.length - 1]!;
-  const net = last.close - first.open;
-  const atrProxy =
-    window.reduce((a, b) => a + (b.high - b.low), 0) / Math.max(window.length, 1);
-  const thr = Math.max(atrProxy * 0.5, Math.abs(price) * 0.0008);
-  let trend: 'UP' | 'DOWN' | 'RANGE' = 'RANGE';
-  if (net >= thr) trend = 'UP';
-  else if (net <= -thr) trend = 'DOWN';
+  const toStruct = (bars: TfBar[]): StructureBar[] =>
+    bars.map((b) => ({
+      open_time_ms: b.open_time_ms,
+      open: b.open,
+      high: b.high,
+      low: b.low,
+      close: b.close,
+      ticks: b.ticks,
+      provenance: b.provenance,
+      forming: b.forming,
+    }));
 
-  const high = Math.max(...window.map((b) => b.high));
-  const low = Math.min(...window.map((b) => b.low));
-  const band = Math.max(high - low, atrProxy);
-  const near_support = price <= low + band * 0.25;
-  const near_resistance = price >= high - band * 0.25;
+  const h4 = state.books['4H'];
+  const h1 = state.books['1H'];
+  const m15 = state.books['15m'];
+
+  // Require all three books ready — no single-TF fallback invent (#20)
+  if (!h4.ready || !h1.ready || !m15.ready) {
+    return {
+      trend: null,
+      near_support: false,
+      near_resistance: false,
+      detail: 'HTF NOT READY · need 4H+1H+15m',
+    };
+  }
+
+  const ms4 = analyzeMarketStructure(toStruct(h4.bars), { pivotLeft: 1, pivotRight: 1 });
+  const ms1 = analyzeMarketStructure(toStruct(h1.bars), { pivotLeft: 1, pivotRight: 1 });
+  const ms15 = analyzeMarketStructure(toStruct(m15.bars), { pivotLeft: 1, pivotRight: 1 });
+
+  const biasOf = (trend: string | null | undefined): number =>
+    trend === 'UP' ? 1 : trend === 'DOWN' ? -1 : 0;
+  // Weight 4H > 1H > 15m
+  const score = biasOf(ms4.trend) * 3 + biasOf(ms1.trend) * 2 + biasOf(ms15.trend) * 1;
+  let trend: 'UP' | 'DOWN' | 'RANGE' | null = 'RANGE';
+  if (score >= 3) trend = 'UP';
+  else if (score <= -3) trend = 'DOWN';
+  else if (ms4.trend === 'UP' || ms4.trend === 'DOWN') trend = ms4.trend;
+  else trend = 'RANGE';
+
+  const zone15 = buildScalpZone(
+    m15.bars.map((b) => ({
+      open_time_ms: b.open_time_ms,
+      open: b.open,
+      high: b.high,
+      low: b.low,
+      close: b.close,
+      ticks: b.ticks,
+      provenance: b.provenance,
+    }))
+  );
+  const near_support =
+    (ms15.last_swing_low != null && price <= ms15.last_swing_low.price * 1.001) ||
+    (zone15 != null && price <= zone15.low + (zone15.high - zone15.low) * 0.25);
+  const near_resistance =
+    (ms15.last_swing_high != null && price >= ms15.last_swing_high.price * 0.999) ||
+    (zone15 != null && price >= zone15.high - (zone15.high - zone15.low) * 0.25);
+
+  const bos =
+    ms4.events.some((e) => e.kind === 'BOS' || e.kind === 'CHOCH') ||
+    ms1.events.some((e) => e.kind === 'BOS' || e.kind === 'CHOCH');
+
   return {
     trend,
-    near_support,
-    near_resistance,
-    detail: `HTF ${trend} · nearS=${near_support} nearR=${near_resistance} · bars=${window.length}`,
+    near_support: Boolean(near_support),
+    near_resistance: Boolean(near_resistance),
+    detail: `HTF ${trend} · 4H ${ms4.trend}/${ms4.swing_labels.high}/${ms4.swing_labels.low} · 1H ${ms1.trend} · 15m ${ms15.trend} · bos/choch=${bos} · nearS=${Boolean(near_support)} nearR=${Boolean(near_resistance)}`,
   };
 }
 

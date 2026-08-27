@@ -177,12 +177,28 @@ describe('historical → LIVE readiness gate', () => {
   it('HTF context from books not 10s zone', () => {
     const state = emptyMultiTfState();
     const now = Date.now();
-    const bars: TfBar[] = [];
-    for (let i = 0; i < 30; i++) {
-      const t = alignBucketMs(now - (30 - i) * TF_MS['1H'], TF_MS['1H']);
-      bars.push(mkBar(t, 100 + i, 101 + i, 99 + i, 100.5 + i));
-    }
-    state.books['1H'] = evaluateTfBook('1H', bars, 'CAPITAL_NATIVE', now);
+    // Alternating zigzag (not a flat monotonic ramp) so pivotLeft/Right=1 fractal
+    // detection inside buildHtfContextFromBooks actually finds HH/HL → trend UP.
+    const fillUp = (tf: '4H' | '1H' | '15m', n: number) => {
+      const bars: TfBar[] = [];
+      for (let i = 0; i < n; i++) {
+        const trend = 100 + i * 1.2;
+        const t = alignBucketMs(now - (n - i) * TF_MS[tf], TF_MS[tf]);
+        if (i % 2 === 0) {
+          bars.push(mkBar(t, trend - 0.2, trend + 0.1, trend - 1.5, trend));
+        } else {
+          bars.push(mkBar(t, trend, trend + 1.5, trend - 0.1, trend + 0.3));
+        }
+      }
+      state.books[tf] = evaluateTfBook(tf, bars, 'CAPITAL_NATIVE', now);
+    };
+    // buildHtfContextFromBooks requires 4H + 1H + 15m ALL ready — fill every book.
+    fillUp('4H', 25);
+    fillUp('1H', 30);
+    fillUp('15m', 40);
+    expect(state.books['4H'].ready).toBe(true);
+    expect(state.books['1H'].ready).toBe(true);
+    expect(state.books['15m'].ready).toBe(true);
     const htf = buildHtfContextFromBooks(state, 130);
     expect(htf.trend).toBe('UP');
     expect(htf.detail).toMatch(/HTF/);

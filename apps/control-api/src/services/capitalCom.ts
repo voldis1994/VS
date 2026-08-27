@@ -1,5 +1,9 @@
 import { createPublicKey, publicEncrypt, constants } from 'crypto';
 import { SAFETY_SL_PCT } from './microScalpThresholds.js';
+import {
+  computeInstrumentSafetyStop,
+  computeSafetyCushionStopLevel as computeSafetyFromMeta,
+} from './safetyStop.js';
 
 export type CapitalComEnv = 'demo' | 'live';
 
@@ -1124,7 +1128,7 @@ export async function ensureCapitalStopVisible(
   };
 }
 
-/** ~0.20% Safety SL — broker last resort; HardInv 2.0pt fires first on 10s Gold. */
+/** Instrument-aware Safety SL — delegates to safetyStop (#33/#34). */
 export function computeSafetyCushionStopLevel(
   direction: 'BUY' | 'SELL',
   mid: number,
@@ -1133,35 +1137,20 @@ export function computeSafetyCushionStopLevel(
     ask?: number | null;
     spread?: number | null;
     minStopDistance?: number | null;
+    pointSize?: number | null;
+    tickSize?: number | null;
+    loosen?: number;
   }
 ): number {
-  const bid = opts?.bid ?? null;
-  const ask = opts?.ask ?? null;
-  const ref =
-    direction === 'BUY'
-      ? bid != null && Number.isFinite(bid)
-        ? bid
-        : mid
-      : ask != null && Number.isFinite(ask)
-        ? ask
-        : mid;
-  const abs = Math.max(Math.abs(ref), 1e-9);
-  const spr =
-    opts?.spread != null && opts.spread > 0
-      ? opts.spread
-      : bid != null && ask != null
-        ? Math.max(ask - bid, 0)
-        : abs * 0.00005;
-  const brokerMin =
-    opts?.minStopDistance != null && opts.minStopDistance > 0 ? opts.minStopDistance : 0;
-  // Keep in sync with SAFETY_SL_PCT — last resort; BO HardInv fires first
-  const pctCushion = abs * SAFETY_SL_PCT;
-  const floor = abs >= 100 ? 0.12 : abs >= 10 ? 0.02 : abs >= 1 ? 0.0002 : 0.00002;
-  const dist = Math.max(pctCushion, brokerMin * 1.5, spr * 4, floor);
-  const raw = direction === 'BUY' ? ref - dist : ref + dist;
-  if (abs >= 100) return Math.round(raw * 100) / 100;
-  if (abs >= 1) return Math.round(raw * 10000) / 10000;
-  return Math.round(raw * 1e6) / 1e6;
+  const level = computeSafetyFromMeta(direction, mid, opts?.bid ?? null, opts?.ask ?? null, {
+    spread: opts?.spread,
+    minStopDistance: opts?.minStopDistance,
+    pointSize: opts?.pointSize,
+    tickSize: opts?.tickSize,
+    loosen: opts?.loosen,
+  });
+  if (level != null) return level;
+  throw new Error('Safety SL UNKNOWN · missing tick/point/minStop metadata');
 }
 
 export type CapitalPriceCandle = {
@@ -1273,14 +1262,11 @@ export async function fetchCapitalPrices(
     const cBid = numOrNull(p.closePrice?.bid);
     const cAsk = numOrNull(p.closePrice?.ask);
 
-    const open =
-      midOfPair(oBid, oAsk) ?? numOrNull(p.openPrice?.bid ?? p.openPrice?.ask ?? p.open ?? p.o);
-    const high =
-      midOfPair(hBid, hAsk) ?? numOrNull(p.highPrice?.bid ?? p.highPrice?.ask ?? p.high ?? p.h);
-    const low =
-      midOfPair(lBid, lAsk) ?? numOrNull(p.lowPrice?.bid ?? p.lowPrice?.ask ?? p.low ?? p.l);
-    const close =
-      midOfPair(cBid, cAsk) ?? numOrNull(p.closePrice?.bid ?? p.closePrice?.ask ?? p.close ?? p.c);
+    const open = midOfPair(oBid, oAsk);
+    const high = midOfPair(hBid, hAsk);
+    const low = midOfPair(lBid, lAsk);
+    const close = midOfPair(cBid, cAsk);
+    // Require true MID from BOTH bid+ask on every OHLC leg — no one-sided invent (#2)
     if (open == null || high == null || low == null || close == null) continue;
 
     const rawTs = parsePriceTimeMs(p);
@@ -1316,8 +1302,17 @@ export async function fetchCapitalPrices(
 }
 
 function midOfPair(bid: number | null, ask: number | null): number | null {
-  if (bid != null && ask != null) return (bid + ask) / 2;
-  return bid ?? ask ?? null;
+  if (
+    bid != null &&
+    ask != null &&
+    Number.isFinite(bid) &&
+    Number.isFinite(ask) &&
+    bid > 0 &&
+    ask > 0
+  ) {
+    return (bid + ask) / 2;
+  }
+  return null;
 }
 
 export async function fetchCapitalMinutePrices(

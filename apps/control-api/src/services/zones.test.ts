@@ -3,7 +3,7 @@ import { buildScalpZone, evaluateZoneEntry, formatZoneInfo } from './zones.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 
 function bar(o: number, h: number, l: number, c: number, i: number): TenSecBar {
-  return { open_time_ms: i * 10_000, open: o, high: h, low: l, close: c, ticks: 8 };
+  return { open_time_ms: i * 10_000, open: o, high: h, low: l, close: c, ticks: 8, provenance: 'REAL' };
 }
 
 describe('buildScalpZone 10s', () => {

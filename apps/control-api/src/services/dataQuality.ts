@@ -65,6 +65,17 @@ export function validateQuoteTiming(
     };
   }
 
+  if (quote.source_ms == null || !Number.isFinite(quote.source_ms)) {
+    return {
+      ok: false,
+      reason: 'source timestamp UNKNOWN · NO ENTRY',
+      stale: false,
+      duplicate: false,
+      gap: false,
+      timestamp_invalid: true,
+    };
+  }
+
   if (quote.source_ms != null && Number.isFinite(quote.source_ms)) {
     if (quote.source_ms > now + 5_000) {
       return {

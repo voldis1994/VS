@@ -406,11 +406,16 @@ export function decideEntryFrom10sRegime(
     tick_size?: number | null;
   }
 ): RegimeEntry | null {
-  if (opts?.multiTfReady === false) {
+  // multiTfReady must be explicitly true (#12)
+  if (opts?.multiTfReady !== true) {
     return null;
   }
   // Hard reject: synthetic bar as microstructure trigger
   if (bar.provenance === 'SYNTHETIC') {
+    return null;
+  }
+  // Missing provenance is not REAL (#14)
+  if (bar.provenance !== 'REAL') {
     return null;
   }
 
@@ -418,11 +423,11 @@ export function decideEntryFrom10sRegime(
   const microGate = allowMicrostructureFromBars(series.slice(-30));
   const bars5m =
     opts?.bars5m && opts.bars5m.length >= 8
-      ? opts.bars5m.filter((b) => b.provenance !== 'SYNTHETIC')
+      ? opts.bars5m.filter((b) => b.provenance === 'REAL')
       : aggregateTenSecToFiveMin(series);
   const bars1m =
     opts?.bars1m && opts.bars1m.length >= 4
-      ? opts.bars1m.filter((b) => b.provenance !== 'SYNTHETIC')
+      ? opts.bars1m.filter((b) => b.provenance === 'REAL')
       : aggregateTenSecToOneMin(series);
 
   if (!bars5m.length) {
@@ -430,11 +435,11 @@ export function decideEntryFrom10sRegime(
     return null;
   }
 
-  // Analysis price = MID when provided; never invent from LTF alone without mid
-  const price =
-    opts?.analysis_price != null && Number.isFinite(opts.analysis_price)
-      ? opts.analysis_price
-      : bar.close;
+  // Analysis MID required — never fallback to bar.close (#13)
+  if (opts?.analysis_price == null || !Number.isFinite(opts.analysis_price)) {
+    return null;
+  }
+  const price = opts.analysis_price;
 
   const decision = decideFiveMinuteEntry({
     bars5m,

@@ -155,12 +155,14 @@ describe('#64/#65 never invent timestamps', () => {
 });
 
 describe('#66 analysis MID domain', () => {
-  it('analysisMid prefers mid then (bid+ask)/2 — never invents', () => {
+  it('analysisMid requires bid+ask — explicit mid alone never trusted', () => {
     expect(analysisMid(null)).toBeNull();
     expect(analysisMid({})).toBeNull();
     expect(analysisMid({ bid: 10 })).toBeNull();
+    expect(analysisMid({ mid: 11.5 })).toBeNull();
     expect(analysisMid({ bid: 10, ask: 12 })).toBe(11);
-    expect(analysisMid({ mid: 11.5, bid: 10, ask: 12 })).toBe(11.5);
+    // Even when an explicit mid is present, only bid+ask are trusted for analysis.
+    expect(analysisMid({ mid: 11.5, bid: 10, ask: 12 })).toBe(11);
   });
 });
 
@@ -191,17 +193,29 @@ describe('#67 forming candle ≠ confirmed structure', () => {
         forming: true,
       },
     ];
-    const ms = analyzeMarketStructure(withForming, { pivotLeft: 1, pivotRight: 1 });
-    // Last confirmed close must not be the forming 240
-    expect(ms.events.every((e) => e.bar_index < withForming.length - 1 || true)).toBe(true);
+    const msWithForming = analyzeMarketStructure(withForming, { pivotLeft: 1, pivotRight: 1 });
+    const msClosedOnly = analyzeMarketStructure(series, { pivotLeft: 1, pivotRight: 1 });
+    // Appending a forming candle must not change ATR, trend, or events at all —
+    // structure must be computed strictly from closed/REAL bars.
+    expect(msWithForming.atr).toBe(msClosedOnly.atr);
+    expect(msWithForming.trend).toBe(msClosedOnly.trend);
+    expect(msWithForming.events).toEqual(msClosedOnly.events);
+    // No pivot/event may ever reference the forming bar's index (20).
+    expect(msWithForming.pivots.every((p) => p.index !== series.length)).toBe(true);
+    expect(msWithForming.events.every((e) => e.bar_index !== series.length)).toBe(true);
+
     const d = decideFiveMinuteEntry({
       bars5m: withForming,
       bars1m: series.slice(-6),
       price: 240,
       regime: 'TREND_UP',
     });
-    // Decision must not treat forming spike as sole thesis without closed structure
-    expect(d.hard_block === 'INSUFFICIENT_5M' || d.structure != null).toBe(true);
+    // The forming spike to 240 must not be treated as a thesis on its own —
+    // with a flat monotonic real series there is no swing structure yet.
+    expect(d.entry).toBe(false);
+    expect(d.direction).toBeNull();
+    expect(d.hard_block).toBe('NO_5M_THESIS');
+    expect(d.reason).not.toMatch(/240/);
   });
 });
 

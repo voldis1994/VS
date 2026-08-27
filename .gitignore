@@ -58,3 +58,7 @@ coverage/
 *.pem
 *.key
 credentials.json
+
+# LIVE robot persistent state (local)
+.vs-live-state/
+apps/control-api/.vs-live-state/

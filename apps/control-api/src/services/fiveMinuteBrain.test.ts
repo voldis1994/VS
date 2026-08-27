@@ -121,32 +121,67 @@ function ltfConfirmDown(price: number): StructureBar[] {
   return out;
 }
 
+/** Clean alternating zigzag — every bar is a fractal extreme (works with pivotLeft/Right=1). */
+function zigzagUp(n: number, startTrend = 100, step = 1.2): StructureBar[] {
+  const bars: StructureBar[] = [];
+  for (let i = 0; i < n; i++) {
+    const trend = startTrend + i * step;
+    let o: number, h: number, l: number, c: number;
+    if (i % 2 === 0) {
+      l = trend - 1.5;
+      h = trend + 0.1;
+      o = trend - 0.2;
+      c = trend;
+    } else {
+      h = trend + 1.5;
+      l = trend - 0.1;
+      o = trend;
+      c = trend + 0.3;
+    }
+    bars.push(bar(i * 300_000, o, h, l, c));
+  }
+  return bars;
+}
+
+function zigzagDown(n: number, startTrend = 200, step = 1.2): StructureBar[] {
+  const bars: StructureBar[] = [];
+  for (let i = 0; i < n; i++) {
+    const trend = startTrend - i * step;
+    let o: number, h: number, l: number, c: number;
+    if (i % 2 === 0) {
+      h = trend + 1.5;
+      l = trend - 0.1;
+      o = trend;
+      c = trend - 0.3;
+    } else {
+      l = trend - 1.5;
+      h = trend + 0.1;
+      o = trend - 0.2;
+      c = trend - 0.5;
+    }
+    bars.push(bar(i * 300_000, o, h, l, c));
+  }
+  return bars;
+}
+
+/** Smooth sine-wave zigzag — survives the default (left=2,right=2) pivot window. */
+function waveUp(n: number, base = 100, amp = 3, period = 10, drift = 0.6): StructureBar[] {
+  const bars: StructureBar[] = [];
+  for (let i = 0; i < n; i++) {
+    const center = base + i * drift + amp * Math.sin((2 * Math.PI * i) / period);
+    bars.push(bar(i * 300_000, center - 0.1, center + 0.5, center - 0.5, center + 0.1));
+  }
+  return bars;
+}
+
 describe('5m market structure', () => {
   it('14. labels HH/HL on rising pivots', () => {
-    const bars: StructureBar[] = [];
-    // Explicit pivot pattern: low, high, higher low, higher high
-    const seq = [
-      [10, 10.2, 9.5, 9.8],
-      [9.8, 10.5, 9.7, 10.4],
-      [10.4, 10.6, 10.0, 10.1],
-      [10.1, 11.0, 10.0, 10.9],
-      [10.9, 11.1, 10.5, 10.6],
-      [10.6, 11.5, 10.5, 11.4],
-      [11.4, 11.6, 11.0, 11.1],
-      [11.1, 12.0, 11.0, 11.9],
-      [11.9, 12.1, 11.5, 11.6],
-      [11.6, 12.5, 11.5, 12.4],
-      [12.4, 12.6, 12.0, 12.1],
-      [12.1, 12.3, 11.9, 12.0],
-    ];
-    seq.forEach((s, i) => bars.push(bar(i * 300_000, s[0]!, s[1]!, s[2]!, s[3]!)));
+    const bars = zigzagUp(20);
     const ms = analyzeMarketStructure(bars, { pivotLeft: 1, pivotRight: 1 });
     expect(ms.pivots.length).toBeGreaterThan(0);
-    // With rising structure we expect HH or HL somewhere
-    const labels = `${ms.swing_labels.high}/${ms.swing_labels.low}`;
-    expect(labels === 'null/null' || ms.trend === 'UP' || ms.swing_labels.high === 'HH' || ms.swing_labels.low === 'HL').toBe(
-      true
-    );
+    expect(ms.trend).toBe('UP');
+    expect(ms.swing_labels.high).toBe('HH');
+    expect(ms.swing_labels.low).toBe('HL');
   });
 
   it('12. wick-only beyond level is NOT breakout', () => {
@@ -155,56 +190,79 @@ describe('5m market structure', () => {
     expect(closeBreaksLevel(b, 103, 'ABOVE')).toBe(false);
   });
 
-  it('15/16. BOS / CHoCH detected on close acceptance', () => {
-    // Explicit: swing high at 105, then close accept above
-    const bars: StructureBar[] = [];
-    const seq: [number, number, number, number][] = [
-      [100, 101, 99, 100.5],
-      [100.5, 103, 100, 102.5], // high pivot candidate
-      [102.5, 102.8, 101, 101.5],
-      [101.5, 102, 100.5, 101],
-      [101, 101.5, 99.5, 100], // low
-      [100, 101, 99.8, 100.5],
-      [100.5, 102, 100, 101.5],
-      [101.5, 103.2, 101.2, 103], // approach
-      [103, 106, 102.8, 105.5], // close break above ~103
-      [105.5, 106.2, 105, 105.8],
-      [105.8, 106.5, 105.2, 106],
-      [106, 106.5, 105.5, 106.2],
-    ];
-    seq.forEach((s, i) => bars.push(bar(i * 300_000, s[0], s[1], s[2], s[3])));
-    const ms = analyzeMarketStructure(bars, { pivotLeft: 1, pivotRight: 1 });
+  it('15. BOS detected on bullish continuation close acceptance', () => {
+    const base = zigzagUp(21);
+    const ms0 = analyzeMarketStructure(base, { pivotLeft: 1, pivotRight: 1 });
+    const sh = ms0.last_swing_high!.price;
+    const breakout = bar(
+      base[base.length - 1]!.open_time_ms + 300_000,
+      sh - 0.2,
+      sh + 2.5,
+      sh - 0.3,
+      sh + 2.2
+    );
+    const ms = analyzeMarketStructure([...base, breakout], { pivotLeft: 1, pivotRight: 1 });
     const kinds = ms.events.map((e) => e.kind);
-    expect(
-      kinds.some((k) => k === 'BOS' || k === 'BREAKOUT' || k === 'CHOCH' || k === 'DISPLACEMENT') ||
-        closeBreaksLevel(bars[bars.length - 4]!, 103, 'ABOVE')
-    ).toBe(true);
+    expect(kinds).toContain('BOS');
+    expect(kinds).toContain('BREAKOUT');
+    expect(kinds).toContain('DISPLACEMENT');
+    expect(ms.events.find((e) => e.kind === 'BOS')!.side).toBe('BULL');
+  });
+
+  it('16. CHoCH detected when a prior downtrend breaks bullish', () => {
+    const base = zigzagDown(20);
+    const ms0 = analyzeMarketStructure(base, { pivotLeft: 1, pivotRight: 1 });
+    expect(ms0.trend).toBe('DOWN');
+    const sh = ms0.last_swing_high!.price;
+    const breakout = bar(
+      base[base.length - 1]!.open_time_ms + 300_000,
+      sh - 0.2,
+      sh + 2.5,
+      sh - 0.3,
+      sh + 2.2
+    );
+    const ms = analyzeMarketStructure([...base, breakout], { pivotLeft: 1, pivotRight: 1 });
+    const kinds = ms.events.map((e) => e.kind);
+    expect(kinds).toContain('CHOCH');
+    expect(kinds).toContain('BREAKOUT');
+    expect(ms.events.find((e) => e.kind === 'CHOCH')!.side).toBe('BULL');
   });
 
   it('13. sweep + reclaim on wick through swing low', () => {
-    const bars = bullishBosSeries(30);
-    const ms0 = analyzeMarketStructure(bars.slice(0, -1), { pivotLeft: 1, pivotRight: 1 });
-    const sl = ms0.last_swing_low?.price ?? bars[bars.length - 5]!.low;
+    const base = zigzagUp(20);
+    const ms0 = analyzeMarketStructure(base, { pivotLeft: 1, pivotRight: 1 });
+    const sl = ms0.last_swing_low!.price;
     const sweepBar = bar(
-      bars[bars.length - 1]!.open_time_ms + 300_000,
-      sl + 0.2,
-      sl + 0.4,
-      sl - 0.5,
-      sl + 0.15
+      base[base.length - 1]!.open_time_ms + 300_000,
+      sl + 0.3,
+      sl + 0.5,
+      sl - 0.6,
+      sl + 0.2
     );
-    const ms = analyzeMarketStructure([...bars.slice(0, -1), sweepBar], { pivotLeft: 1, pivotRight: 1 });
+    const ms = analyzeMarketStructure([...base, sweepBar], { pivotLeft: 1, pivotRight: 1 });
     const kinds = ms.events.map((e) => e.kind);
-    expect(kinds.includes('SWEEP') || wickOnlyBeyond(sweepBar, sl, 'BELOW')).toBe(true);
+    expect(wickOnlyBeyond(sweepBar, sl, 'BELOW')).toBe(true);
+    expect(kinds).toContain('SWEEP');
+    expect(kinds).toContain('RECLAIM');
+    expect(ms.events.find((e) => e.kind === 'SWEEP')!.side).toBe('BULL');
+    expect(ms.events.find((e) => e.kind === 'RECLAIM')!.side).toBe('BULL');
   });
 
   it('17. failed breakout after close beyond then reject', () => {
-    const bars = bullishBosSeries(25);
-    const ms0 = analyzeMarketStructure(bars, { pivotLeft: 1, pivotRight: 1 });
-    const sh = ms0.last_swing_high?.price ?? bars[bars.length - 1]!.high;
-    const breakBar = bar(1e9, sh - 0.1, sh + 0.8, sh - 0.2, sh + 0.5);
-    const failBar = bar(1e9 + 300_000, sh + 0.4, sh + 0.5, sh - 0.3, sh - 0.2);
-    const ms = analyzeMarketStructure([...bars, breakBar, failBar], { pivotLeft: 1, pivotRight: 1 });
-    expect(ms.events.some((e) => e.kind === 'FAILED_BREAKOUT') || failBar.close < sh).toBe(true);
+    const base = zigzagUp(21);
+    const ms0 = analyzeMarketStructure(base, { pivotLeft: 1, pivotRight: 1 });
+    const sh = ms0.last_swing_high!.price;
+    const t0 = base[base.length - 1]!.open_time_ms;
+    // Small wick above sh so this bar itself does not become a new fractal high.
+    const breakBar = bar(t0 + 300_000, sh - 0.1, sh + 0.3, sh - 0.2, sh + 0.15);
+    const failBar = bar(t0 + 600_000, sh + 0.1, sh + 0.4, sh - 0.5, sh - 0.2);
+    expect(closeBreaksLevel(breakBar, sh, 'ABOVE')).toBe(true);
+    expect(failBar.close).toBeLessThan(sh);
+    expect(failBar.close).toBeLessThan(breakBar.close);
+    const ms = analyzeMarketStructure([...base, breakBar, failBar], { pivotLeft: 1, pivotRight: 1 });
+    const kinds = ms.events.map((e) => e.kind);
+    expect(kinds).toContain('FAILED_BREAKOUT');
+    expect(ms.events.find((e) => e.kind === 'FAILED_BREAKOUT')!.side).toBe('BEAR');
   });
 
   it('18. structural SL BUY below pivot low + buffer', () => {
@@ -242,7 +300,19 @@ describe('5m entry pipeline', () => {
   });
 
   it('21. valid 5m setup + LTF confirmation can open', () => {
-    const bars5m = bullishBosSeries(45);
+    // Smooth wave uptrend (survives default left=2/right=2 pivots) + a displacement
+    // breakout candle on the last closed 5m bar → clean BOS + full evidence stack.
+    const base = waveUp(30);
+    const ms0 = analyzeMarketStructure(base);
+    const sh = ms0.last_swing_high!.price;
+    const breakout = bar(
+      base[base.length - 1]!.open_time_ms + 300_000,
+      sh - 0.3,
+      sh + 2.5,
+      sh - 0.4,
+      sh + 2.2
+    );
+    const bars5m = [...base, breakout];
     const price = bars5m[bars5m.length - 1]!.close;
     const d = decideFiveMinuteEntry({
       bars5m,
@@ -253,14 +323,14 @@ describe('5m entry pipeline', () => {
       spread: 0.05,
       feed_agreement: 0.9,
       htf: { trend: 'UP', near_support: true },
+      tick_size: 0.01,
     });
-    // May be LTF_PENDING or entry depending on events — must not be LTF_ONLY
-    expect(d.hard_block).not.toBe('LTF_ONLY');
-    if (d.structure.events.length > 0 && d.setup) {
-      expect(['CONTINUATION', 'BREAKOUT', 'PULLBACK', 'REVERSAL', 'SWEEP_RECLAIM', 'FAILED_BREAKOUT']).toContain(
-        d.setup
-      );
-    }
+    expect(d.hard_block).toBeNull();
+    expect(d.entry).toBe(true);
+    expect(d.direction).toBe('BUY');
+    expect(d.setup).toBe('CONTINUATION');
+    expect(d.structural_sl).not.toBeNull();
+    expect(d.structure.events.map((e) => e.kind)).toContain('BOS');
   });
 
   it('10. synthetic data cannot trigger microstructure', () => {
@@ -346,7 +416,9 @@ describe('execution truth + close + recovery', () => {
       brokerOpen: { deal_id: 'D', direction: 'BUY', open_level: 10.1 },
     });
     expect(adopt.action).toBe('ADOPT');
-    const clear = recoverPendingExecution({
+    // Without any broker position and no deal reference, we cannot yet tell
+    // whether the order truly failed or simply hasn't synced — WAIT, never clear blind.
+    const wait = recoverPendingExecution({
       pending: {
         robot_id: '1:X',
         account_id: 1,
@@ -358,7 +430,7 @@ describe('execution truth + close + recovery', () => {
       },
       brokerOpen: null,
     });
-    expect(clear.action).toBe('CLEAR_PENDING');
+    expect(wait.action).toBe('WAIT');
   });
 
   it('6/7. restart with open position + MFE/MAE recovery', () => {
@@ -405,10 +477,11 @@ describe('execution truth + close + recovery', () => {
 
 describe('universality + feeds + isolation', () => {
   it('9. Gold/FX/index/crypto same HardInv logic (no abs>=1000 Gold branch)', () => {
-    const gold = thrHard(4660);
-    const fx = thrHard(1.1);
-    const idx = thrHard(450);
-    const crypto = thrHard(65000);
+    const meta = { tick_size: 0.01 };
+    const gold = thrHard(4660, null, meta)!;
+    const fx = thrHard(1.1, null, { tick_size: 0.0001 })!;
+    const idx = thrHard(450, null, meta)!;
+    const crypto = thrHard(65000, null, { tick_size: 1 })!;
     expect(gold).toBeGreaterThan(0);
     expect(fx).toBeGreaterThan(0);
     expect(idx).toBeGreaterThan(0);
@@ -437,6 +510,7 @@ describe('universality + feeds + isolation', () => {
         mfe: 4,
         mae: 0,
         peak_retention: 0.5,
+        tick_size: 0.01,
       },
       102
     );
