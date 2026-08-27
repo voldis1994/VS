@@ -223,7 +223,7 @@ export function peakProtectTrigger(
 }
 
 export function isHardBoReason(reason: string): boolean {
-  return /HardInvalidation|StructuralInvalidation|ThesisFailure|PeakProtection|PeakTrail|OppositeSignal|TargetEnd|Target \/|StructureReversal|StructureBreak|BO BLOCK/i.test(
+  return /HardInvalidation|StructuralInvalidation|ThesisFailure|GivebackBE|PeakProtection|PeakTrail|OppositeSignal|TargetEnd|Target \/|StructureReversal|StructureBreak|BO BLOCK/i.test(
     reason
   );
 }
