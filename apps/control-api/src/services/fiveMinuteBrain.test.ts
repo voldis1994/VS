@@ -501,10 +501,10 @@ describe('universality + feeds + isolation', () => {
     expect(robotIdFor(1, 'GOLD')).not.toBe(robotIdFor(2, 'GOLD'));
   });
 
-  it('24. BO deep retrace with continuation → HOLD (no PeakProtect scalp)', () => {
+  it('24. BO hybrid PeakTrail after arm on deep giveback', () => {
     const entry = 100;
     const atr = 3;
-    const hold = decideBestOutcomeExit(
+    const cut = decideBestOutcomeExit(
       {
         open_side: 'BUY',
         entry_price: entry,
@@ -520,7 +520,8 @@ describe('universality + feeds + isolation', () => {
       entry + 2,
       { continuationSameSide: true }
     );
-    expect(hold.exit).toBe(false);
+    expect(cut.exit).toBe(true);
+    expect(cut.reason).toMatch(/PeakTrail/);
   });
 
   it('structural invalidation BUY', () => {

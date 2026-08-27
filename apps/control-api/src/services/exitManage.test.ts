@@ -1,12 +1,15 @@
 /**
- * BO 5m — MAX OUTCOME MEMORY + STRUCTURE REVERSAL EXIT.
+ * BO hybrid — structure reversal primary + soft ATR trail after arm.
  */
 import { describe, expect, it } from 'vitest';
 import {
   decideBestOutcomeExit,
   describeBestOutcomeState,
   hardInvalidationDistance,
+  hybridProtectedFloor,
   manageExitPrice,
+  peakProtectArmThreshold,
+  peakProtectK,
   type ExitSnapshot,
 } from './exitManage.js';
 import type { StructureBar } from './marketStructure.js';
@@ -47,7 +50,7 @@ function bullBars(n = 12): StructureBar[] {
   return out;
 }
 
-describe('BO 5m structure reversal / HOLD', () => {
+describe('BO hybrid structure + PeakTrail', () => {
   it('manageExitPrice uses bid for BUY / ask for SELL', () => {
     expect(manageExitPrice('BUY', { bid: 4659.4, ask: 4659.8, mid: 4659.6 })).toBe(4659.4);
     expect(manageExitPrice('SELL', { bid: 4659.4, ask: 4659.8, mid: 4659.6 })).toBe(4659.8);
@@ -83,11 +86,40 @@ describe('BO 5m structure reversal / HOLD', () => {
     expect(cut.reason).toMatch(/ThesisFailure/);
   });
 
-  it('large MFE retrace with alive thesis → HOLD (no PeakProtect scalp)', () => {
+  it('K bands are wide (hybrid, not scalp)', () => {
+    expect(peakProtectK('TREND_UP', { continuationSameSide: true })).toEqual(
+      expect.objectContaining({ k: 2.5, strength: 'strong' })
+    );
+    expect(peakProtectK('PULLBACK_UPTREND').k).toBe(1.5);
+    expect(peakProtectK('RANGE').k).toBe(1.0);
+  });
+
+  it('below arm: deep % giveback → HOLD (no trail)', () => {
+    const entry = 4640;
+    const atr = 5;
+    const arm = peakProtectArmThreshold(entry, atr, META)!;
+    const bars = bullBars();
+    const hold = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: entry,
+        mfe: arm * 0.4,
+        atr,
+        regime: 'TREND_UP',
+      }),
+      entry + arm * 0.05,
+      { continuationSameSide: true, bars5m: bars }
+    );
+    expect(hold.exit).toBe(false);
+  });
+
+  it('after arm: moderate retrace above floor → HOLD', () => {
     const entry = 4640;
     const atr = 4;
-    const arm = hardInvalidationDistance(entry, atr, META)!;
-    const mfe = arm * 3;
+    const arm = peakProtectArmThreshold(entry, atr, META)!;
+    const mfe = Math.max(arm, atr) * 3;
+    const { k } = peakProtectK('TREND_UP', { continuationSameSide: true });
+    const floor = hybridProtectedFloor(mfe, atr, k);
     const bars = bullBars();
     const hold = decideBestOutcomeExit(
       snap({
@@ -96,32 +128,46 @@ describe('BO 5m structure reversal / HOLD', () => {
         mfe,
         atr,
         regime: 'TREND_UP',
-        structure_target: arm * 4,
+        structure_target: arm * 5,
       }),
-      entry + arm * 0.3,
-      { continuationSameSide: true, bars5m: bars, bars1m: bars.slice(-6) }
+      entry + floor + 0.5,
+      { continuationSameSide: true, bars5m: bars }
     );
     expect(hold.exit).toBe(false);
   });
 
-  it('strong continuation → HOLD past 1R toward structure', () => {
+  it('after arm: giveback below floor → PeakTrail EXIT', () => {
     const entry = 4640;
-    const atr = 3;
-    const oneR = hardInvalidationDistance(entry, atr, META)!;
+    const atr = 4;
+    const arm = peakProtectArmThreshold(entry, atr, META)!;
+    const mfe = Math.max(arm, atr) * 3;
+    const { k } = peakProtectK('TREND_UP', { continuationSameSide: true });
+    const floor = hybridProtectedFloor(mfe, atr, k);
+    expect(floor).toBeGreaterThan(0);
     const bars = bullBars();
-    const holdStruct = decideBestOutcomeExit(
+    const cut = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: entry,
-        mfe: oneR * 1.2,
+        mfe,
         atr,
-        structure_target: oneR * 2.5,
         regime: 'TREND_UP',
+        structure_target: arm * 5,
       }),
-      entry + oneR * 1.1,
+      entry + Math.max(0, floor - 0.5),
       { continuationSameSide: true, bars5m: bars }
     );
-    expect(holdStruct.exit).toBe(false);
+    expect(cut.exit).toBe(true);
+    expect(cut.reason).toMatch(/PeakTrail/);
+  });
+
+  it('MFE=1000 ATR=50 strong → floor 875 (giveback max 125, not 1000)', () => {
+    const floor = hybridProtectedFloor(1000, 50, 2.5);
+    expect(floor).toBe(875);
+  });
+
+  it('armed trail never below breakeven', () => {
+    expect(hybridProtectedFloor(3, 5, 2.5)).toBe(0);
   });
 
   it('structure target + continuation ended → TargetEnd exit', () => {
@@ -146,37 +192,16 @@ describe('BO 5m structure reversal / HOLD', () => {
     expect(cut.reason).toMatch(/TargetEnd|structure/);
   });
 
-  it('describe shows peak MFE + thesis ALIVE (not PeakProtect)', () => {
+  it('describe shows hybrid HOLD + trail state', () => {
     const bars = bullBars();
     const s = describeBestOutcomeState(
       snap({ open_side: 'BUY', entry_price: 4600, mfe: 12, atr: 5, regime: 'TREND_UP' }),
       4608,
       { continuationReason: 'continuation · TAPE UP', continuationSameSide: true, bars5m: bars }
     );
-    expect(s.hold).toMatch(/BO 5m HOLD/);
+    expect(s.hold).toMatch(/BO hybrid HOLD/);
     expect(s.hold).toMatch(/peak MFE/);
     expect(s.hold).toMatch(/thesis ALIVE/);
-    expect(s.hold).not.toMatch(/PP arm/);
-  });
-
-  it('no TimeDecay / small-profit exit on modest green', () => {
-    const entry = 4660;
-    const atr = 4;
-    const arm = hardInvalidationDistance(entry, atr, META)!;
-    const bars = bullBars();
-    const hold = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: entry,
-        mfe: arm * 0.4,
-        atr,
-        peak_retention: 0.95,
-        entry_at: new Date(Date.now() - 20 * 60_000).toISOString(),
-        regime: 'TREND_UP',
-      }),
-      entry + arm * 0.35,
-      { bars5m: bars }
-    );
-    expect(hold.exit).toBe(false);
+    expect(s.hold).toMatch(/trail/);
   });
 });
