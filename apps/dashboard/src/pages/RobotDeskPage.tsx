@@ -32,6 +32,23 @@ type DecisionChain = {
   action: string;
 };
 
+type EntryPlan = {
+  state: 'WATCHING' | 'ARMED' | 'TRIGGERED' | 'INVALIDATED';
+  bias: 'BUY' | 'SELL' | null;
+  entry_zone: { low: number; high: number } | null;
+  trigger_zone: { low: number; high: number } | null;
+  current_price: number | null;
+  invalidation: number | null;
+  structure_target: number | null;
+  waiting_for: string;
+  trigger_10s: string;
+  trigger_1m: string;
+  htf_context: string;
+  micro_score: number;
+  micro_confirms: string[];
+  detail: string;
+};
+
 type BoardMeta = {
   regimes: string[];
   trade_types: string[];
@@ -95,6 +112,7 @@ type RobotSession = {
   zone_low?: number | null;
   zone_kind?: string | null;
   decision_chain?: DecisionChain;
+  entry_plan?: EntryPlan | null;
   ohlc_10s?: {
     last_o: number | null;
     last_h: number | null;
@@ -127,6 +145,20 @@ function fmtSl(s: RobotSession): string {
   return 'AUTO @ entry (~0.20%)';
 }
 
+function entryPlanLabel(s: RobotSession): { label: string; kind: 'long' | 'short' | 'flat' | 'entry' | 'closed' } | null {
+  const plan = s.entry_plan;
+  if (!plan || s.open_side || !s.running) return null;
+  const bias = plan.bias;
+  const state = plan.state;
+  if (bias === 'BUY') {
+    return { label: `ENTRY · ${state} · BUY`, kind: 'entry' };
+  }
+  if (bias === 'SELL') {
+    return { label: `ENTRY · ${state} · SELL`, kind: 'entry' };
+  }
+  return { label: `ENTRY · ${state}`, kind: 'entry' };
+}
+
 function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'flat' | 'entry' | 'closed' } {
   if (!s.running && !s.open_side) return { label: 'STOPPED', kind: 'flat' };
   if (s.running && s.market_tradeable === false) {
@@ -139,11 +171,13 @@ function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'fl
   if (s.open_side === 'SELL') {
     return { label: 'SELL', kind: 'short' };
   }
+  const planPosture = entryPlanLabel(s);
+  if (planPosture) return planPosture;
   if (s.running && !s.open_side) {
     const dir = (s.tape_dir || '').toUpperCase();
     if (dir === 'BUY') return { label: 'READY BUY', kind: 'entry' };
     if (dir === 'SELL') return { label: 'READY SELL', kind: 'entry' };
-    return { label: 'SCAN · TAPE FLAT', kind: 'entry' };
+    return { label: 'WATCHING · scan', kind: 'entry' };
   }
   return { label: 'FLAT', kind: 'flat' };
 }
@@ -669,6 +703,46 @@ export function RobotDeskPage() {
                       <div><span>UPL</span><strong className={(focused.unrealized || 0) >= 0 ? 'pos' : 'neg'}>{fmt(focused.unrealized)}</strong></div>
                       <div><span>LOT</span><strong>{focused.lot_size}</strong></div>
                     </div>
+                    {focused.entry_plan && !focused.open_side && focused.running && (
+                      <div className="rc-entry-plan mono">
+                        <div className="rc-entry-plan-head">
+                          <span className={`rc-entry-state ${focused.entry_plan.state.toLowerCase()}`}>
+                            {focused.entry_plan.state}
+                          </span>
+                          <span className={`rc-entry-bias ${(focused.entry_plan.bias || '').toLowerCase()}`}>
+                            {focused.entry_plan.bias ?? '—'}
+                          </span>
+                        </div>
+                        <div className="rc-entry-plan-grid">
+                          <div><span>PRICE</span><strong>{fmt(focused.entry_plan.current_price)}</strong></div>
+                          <div>
+                            <span>ENTRY ZONE</span>
+                            <strong>
+                              {focused.entry_plan.entry_zone
+                                ? `${fmt(focused.entry_plan.entry_zone.low, 2)}–${fmt(focused.entry_plan.entry_zone.high, 2)}`
+                                : '—'}
+                            </strong>
+                          </div>
+                          <div>
+                            <span>TRIGGER</span>
+                            <strong>
+                              {focused.entry_plan.trigger_zone
+                                ? `${fmt(focused.entry_plan.trigger_zone.low, 2)}–${fmt(focused.entry_plan.trigger_zone.high, 2)}`
+                                : '—'}
+                            </strong>
+                          </div>
+                          <div><span>INVALID</span><strong>{fmt(focused.entry_plan.invalidation, 2)}</strong></div>
+                          <div><span>STRUCT TGT</span><strong>{fmt(focused.entry_plan.structure_target, 2)}</strong></div>
+                          <div><span>MICRO</span><strong>{focused.entry_plan.micro_score}/2 · {focused.entry_plan.micro_confirms.join('+') || '—'}</strong></div>
+                        </div>
+                        <div className="rc-entry-wait">{focused.entry_plan.waiting_for}</div>
+                        <div className="rc-entry-triggers">
+                          <span>{focused.entry_plan.trigger_10s}</span>
+                          <span>{focused.entry_plan.trigger_1m}</span>
+                        </div>
+                        <div className="rc-entry-htf">{focused.entry_plan.htf_context}</div>
+                      </div>
+                    )}
                     <div className="rc-focus-log mono">{lastLog(focused)}</div>
                     <button type="button" className="btn rc-more" onClick={() => setView('info')}>
                       FULL DETAIL → INFO

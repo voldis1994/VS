@@ -247,10 +247,10 @@ describe('#5 BO continuation / structure_target priority', () => {
     expect(bestOutcomeTarget(entry, null, GOLD_META, oneR * 3)).toBeCloseTo(oneR, 8);
   });
 
-  it('without continuation, 1R closes even if structure_target is farther', () => {
+  it('without continuation at 1R, HOLD until structure reversal (no 1R scalp)', () => {
     const entry = 4640;
     const oneR = hardInvalidationDistance(entry, null, GOLD_META)!;
-    const cut = decideBestOutcomeExit(
+    const hold = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: entry,
@@ -261,8 +261,7 @@ describe('#5 BO continuation / structure_target priority', () => {
       entry + oneR,
       { continuationSameSide: false }
     );
-    expect(cut.exit).toBe(true);
-    expect(cut.reason).toMatch(/Target \/ best outcome/);
+    expect(hold.exit).toBe(false);
   });
 
   it('with continuation + valid structure_target > 1R, holds past 1R', () => {
@@ -282,12 +281,12 @@ describe('#5 BO continuation / structure_target priority', () => {
     expect(hold.exit).toBe(false);
   });
 
-  it('continuation hold still yields to PeakProtect and HardInvalidation', () => {
+  it('deep retrace with continuation + alive thesis → HOLD; HardInv still exits', () => {
     const entry = 4600;
     const atr = 5;
     const oneR = hardInvalidationDistance(entry, atr, GOLD_META)!;
     const mfe = Math.max(oneR, atr) * 4;
-    const pp = decideBestOutcomeExit(
+    const hold = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: entry,
@@ -300,8 +299,7 @@ describe('#5 BO continuation / structure_target priority', () => {
       entry + atr * 0.2,
       { continuationSameSide: true }
     );
-    expect(pp.exit).toBe(true);
-    expect(pp.reason).toMatch(/PeakProtection/);
+    expect(hold.exit).toBe(false);
 
     const hi = decideBestOutcomeExit(
       snap({
@@ -320,11 +318,11 @@ describe('#5 BO continuation / structure_target priority', () => {
     expect(hi.reason).toMatch(/HardInvalidation/);
   });
 
-  it('hits structure_target when continuation held past 1R', () => {
+  it('at structure target with continuation → HOLD; without continuation → TargetEnd', () => {
     const entry = 4640;
     const oneR = hardInvalidationDistance(entry, null, GOLD_META)!;
     const struct = oneR * 2.2;
-    const cut = decideBestOutcomeExit(
+    const hold = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: entry,
@@ -335,8 +333,21 @@ describe('#5 BO continuation / structure_target priority', () => {
       entry + struct + 0.01,
       { continuationSameSide: true }
     );
+    expect(hold.exit).toBe(false);
+
+    const cut = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: entry,
+        mfe: struct + 0.05,
+        peak_retention: 0.95,
+        structure_target: struct,
+      }),
+      entry + struct + 0.01,
+      { continuationSameSide: false }
+    );
     expect(cut.exit).toBe(true);
-    expect(cut.reason).toMatch(/structure/);
+    expect(cut.reason).toMatch(/TargetEnd|structure/);
   });
 
   it('robotDesk LIVE path wires structure_target into decideBestOutcomeExit', () => {

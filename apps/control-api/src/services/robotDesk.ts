@@ -110,6 +110,7 @@ import {
 import { seedMultiTfHistory, refreshDueTfBooks } from './seedMultiTf.js';
 import { computeInstrumentSafetyStop } from './safetyStop.js';
 import { loadJson } from './persistentStore.js';
+import { buildLiveEntryPlan, refreshArmedTriggerState, type EntryPlan } from './entryPlan.js';
 
 export type RobotTick = {
   at: string;
@@ -199,6 +200,8 @@ export type RobotSession = {
     setup: string | null;
     action: string;
   };
+  /** Live ENTRY plan — WHERE/WHY/WAIT before fill (MAIN screen) */
+  entry_plan?: EntryPlan | null;
 };
 
 type Internal = RobotSession & {
@@ -354,6 +357,14 @@ function publicSession(s: Internal): RobotSession {
   // Display regime from tape — never sticky TRANSITION/UNKNOWN on the board
   const displayRegime =
     tape.dir === 'BUY' ? 'TREND_UP' : tape.dir === 'SELL' ? 'TREND_DOWN' : 'RANGE';
+  const entryPlan = buildLiveEntryPlan({
+    price: s.last_mid,
+    armed: s.armed_trigger,
+    multiTf: s.multiTf,
+    closedBars: s.closedBars,
+    open_side: s.open_side,
+    running: s.running,
+  });
   return {
     ...rest,
     regime: displayRegime,
@@ -373,13 +384,15 @@ function publicSession(s: Internal): RobotSession {
     market_status: s.market_status ?? null,
     market_tradeable: s.market_tradeable ?? true,
     market_info: formatMarketInfo(s.market_status, s.market_tradeable ?? true, s.cadence_ms / 1000),
-    decision_chain: buildDecisionChain(s, tape),
+    decision_chain: buildDecisionChain(s, tape, entryPlan),
+    entry_plan: entryPlan,
   };
 }
 
 function buildDecisionChain(
   s: Internal,
-  tape = tapeSide(s.closedBars, s.ohlcState.forming ?? s.ohlcState.last_closed)
+  tape = tapeSide(s.closedBars, s.ohlcState.forming ?? s.ohlcState.last_closed),
+  entryPlan?: EntryPlan | null
 ): NonNullable<RobotSession['decision_chain']> {
   const tradeable = s.market_tradeable ?? true;
   const marketLine = formatMarketInfo(s.market_status, tradeable, s.cadence_ms / 1000);
@@ -409,6 +422,10 @@ function buildDecisionChain(
   const feeds = `FEEDS cap ${capLive}/${capCfg} · pubAdv ${pubNear} · reject ${rejectN} · lead=${mf?.lead_label || '—'} · ${mf?.agreement || s.feed_agreement || 'NONE'}`.trim();
   const zoneLine = formatZoneInfo(zone, s.closedBars);
   let action = `SCAN · ${tape.reason}`;
+  if (entryPlan && !s.open_side && s.running) {
+    const bias = entryPlan.bias ?? '—';
+    action = `ENTRY · ${entryPlan.state} · ${bias} · ${entryPlan.waiting_for}`;
+  }
   if (!s.running) action = 'STOPPED';
   else if (s.open_side) action = `MANAGE ${s.open_side}`;
   else if (tape.dir === 'BUY') action = `READY BUY · ${tape.reason}`;
@@ -1952,6 +1969,35 @@ async function robotCycleBody(s: Internal) {
         if (s.structure_target != null) persistBoFromSession(s);
       }
 
+      const bars5mForBo = fiveNative.map((b) => ({
+        open_time_ms: b.open_time_ms,
+        open: b.open,
+        high: b.high,
+        low: b.low,
+        close: b.close,
+        ticks: b.ticks,
+        provenance: b.provenance,
+      }));
+      const bars1mForBo = s.multiTf.books['1m'].bars.map((b) => ({
+        open_time_ms: b.open_time_ms,
+        open: b.open,
+        high: b.high,
+        low: b.low,
+        close: b.close,
+        ticks: b.ticks,
+        provenance: b.provenance,
+        forming: b.forming,
+      }));
+      const bars10sForBo = s.closedBars.map((b) => ({
+        open_time_ms: b.open_time_ms,
+        open: b.open,
+        high: b.high,
+        low: b.low,
+        close: b.close,
+        ticks: b.ticks,
+        provenance: b.provenance,
+      }));
+
       const decision = decideBestOutcomeExit(
         {
           ...s,
@@ -1967,6 +2013,9 @@ async function robotCycleBody(s: Internal) {
           oppositeReason: tapeNow.reason,
           continuationSameSide: cont.ok && !oppositeEntrySignal,
           ignoreMicroOpposite: Boolean(cont.ok && s.mfe >= (s.atr_5m ?? 0) * 0.25),
+          bars5m: bars5mForBo,
+          bars1m: bars1mForBo,
+          bars10s: bars10sForBo,
         }
       );
       if (decision.exit) {
@@ -2001,6 +2050,9 @@ async function robotCycleBody(s: Internal) {
               oppositeReason: tapeNow.reason,
               continuationSameSide: cont.ok && !oppositeEntrySignal,
               continuationReason: cont.ok ? cont.reason : tapeNow.reason || 'waiting opposite',
+              bars5m: bars5mForBo,
+              bars1m: bars1mForBo,
+              bars10s: bars10sForBo,
             }
           ).hold
         }`,
@@ -2095,6 +2147,16 @@ async function robotCycleBody(s: Internal) {
       });
       return;
     }
+
+    // Keep armed SETUP→ARMED machine fresh for UI + early entry between 10s buckets
+    s.armed_trigger = refreshArmedTriggerState(s.armed_trigger, {
+      price: analysisPrice,
+      multiTf: s.multiTf,
+      closedBars: s.closedBars,
+      spread: quote.spread ?? null,
+      tick_size: quote.point_size ?? null,
+      broker_min_stop: quote.min_stop_distance ?? null,
+    });
 
     // 10s for microstructure / trigger only (not HTF)
     if (Date.now() - s.last_second_fetch_ms >= 4_000) {

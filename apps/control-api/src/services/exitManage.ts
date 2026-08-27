@@ -1,6 +1,7 @@
 /**
  * Best Outcome — 5m trade management.
- * HOLD while thesis/structure is alive; PeakProtect only after meaningful MFE.
+ * MAX OUTCOME MEMORY + STRUCTURE REVERSAL EXIT.
+ * HOLD while thesis/structure is alive; normal retrace is NOT an exit.
  * Capital Safety SL is separate (broker). Manual lot_size unchanged.
  */
 
@@ -9,6 +10,12 @@ import {
   shortThesisMovePct,
   shortThesisPts,
 } from './microScalpThresholds.js';
+import {
+  detectStructureReversalExit,
+  thesisAlive5m,
+  type StructureReversalInput,
+} from './structureReversalExit.js';
+import type { StructureBar } from './marketStructure.js';
 
 export { hardInvalidationDistance };
 
@@ -213,6 +220,11 @@ export type BoExitOpts = {
   continuationSameSide?: boolean;
   ignoreMicroOpposite?: boolean;
   peakProtectStrength?: PeakProtectStrength;
+  /** 5m/1m/10s bars for structure-reversal exit (preferred over PeakProtect). */
+  bars5m?: StructureBar[] | null;
+  bars1m?: StructureBar[] | null;
+  bars10s?: StructureBar[] | null;
+  structureReversal?: StructureReversalInput | null;
 };
 
 function structuralInvalidationDistance(
@@ -300,65 +312,58 @@ export function decideBestOutcomeExit(
     return { exit: true, reason: regimeThesis };
   }
 
-  const oneR = hardInv;
   const structTarget =
     s.structure_target != null && Number.isFinite(s.structure_target) && s.structure_target > 0
       ? s.structure_target
       : null;
 
-  // 4) Structure/liquidity target hit → EXIT (even with continuation)
-  if (structTarget != null && fav + hitEps >= structTarget) {
+  // 4a) Structure target reached + continuation ended → EXIT (no bars required)
+  if (structTarget != null && fav + hitEps >= structTarget && !cont) {
     return {
       exit: true,
-      reason: `Target / structure · UPL ${fav.toFixed(5)} ≥ structure ${structTarget.toFixed(5)}`,
+      reason: `TargetEnd · UPL ${fav.toFixed(5)} ≥ structure ${structTarget.toFixed(5)} · continuation ended`,
     };
   }
 
-  // 5) 1R / target without continuation → EXIT; strong continuation → HOLD past 1R
-  if (oneR != null && fav + hitEps >= oneR) {
-    const canHoldPast1R =
-      cont && structTarget != null && structTarget > oneR + hitEps;
-    if (canHoldPast1R) {
-      // HOLD toward structure/liquidity — PeakProtect / HardInv still apply
-    } else if (cont && structTarget == null) {
-      // Strong continuation without explicit structure target: HOLD past 1R
-    } else {
-      return {
-        exit: true,
-        reason: `Target / best outcome · UPL ${fav.toFixed(5)} ≥ 1R ${oneR.toFixed(5)} · no continuation`,
-      };
+  // 4) Structure reversal exit — CHoCH / HL-LH break / failed continuation
+  const revInput: StructureReversalInput | null =
+    opts?.structureReversal ??
+    (opts?.bars5m && opts.bars5m.length >= 4
+      ? {
+          side: s.open_side,
+          price: mid,
+          entry,
+          mfe: s.mfe,
+          bars5m: opts.bars5m,
+          bars1m: opts.bars1m,
+          bars10s: opts.bars10s,
+          atr,
+          tick_size: s.tick_size,
+          structure_target: structTarget,
+          continuationSameSide: cont,
+        }
+      : null);
+
+  if (revInput) {
+    const rev = detectStructureReversalExit(revInput);
+    if (rev.exit) {
+      return { exit: true, reason: rev.reason };
     }
   }
 
-  // 6) PeakProtect — only after MFE ≥ max(1R, ATR_5m)
-  const armAt = peakProtectArmThreshold(entry, atr, meta);
-  const atrBuf = peakProtectAtrBuffer(entry, atr, meta);
-  if (armAt != null && atrBuf != null && s.mfe + hitEps >= armAt) {
-    const { k, strength, detail } = peakProtectK(s.regime, {
-      continuationSameSide: cont,
-      strength: opts?.peakProtectStrength,
-    });
-    const protectedLvl = protectedProfitLevel(s.mfe, atrBuf, k);
-    if (fav + hitEps < protectedLvl) {
-      return {
-        exit: true,
-        reason: `PeakProtection · UPL ${fav.toFixed(5)} < protected ${protectedLvl.toFixed(5)} · MFE ${s.mfe.toFixed(5)} − K×ATR (${detail} · ATR ${atrBuf.toFixed(5)} · arm@${armAt.toFixed(5)} · ${strength})`,
-      };
-    }
-  }
-
-  // 7) Opposite micro signal — only if PeakProtect already armed and floor breached path didn't fire;
-  //    never scalp-exit a young 5m thesis on tape flicker alone.
+  // 5) Opposite tape — only when structure thesis dead (not a scalp on retrace)
   if (opts?.oppositeEntrySignal && !opts?.ignoreMicroOpposite && !cont) {
-    if (armAt != null && s.mfe + hitEps >= armAt) {
+    const bars = opts?.bars5m ?? revInput?.bars5m ?? [];
+    const thesis = bars.length >= 4 ? thesisAlive5m(s.open_side, bars) : { alive: true, detail: '' };
+    if (!thesis.alive) {
       return {
         exit: true,
-        reason: `OppositeSignal · exit ${s.open_side} · ${opts.oppositeReason || 'tape flipped'}`,
+        reason: `OppositeSignal · ${opts.oppositeReason || 'tape flipped'} · ${thesis.detail}`,
       };
     }
   }
 
-  // HOLD — thesis alive, PeakProtect not breached, no target without continuation
+  // HOLD — max outcome memory (MFE tracked on session); normal retrace ≠ exit
   return { exit: false, reason: '' };
 }
 
@@ -386,16 +391,12 @@ export function describeBestOutcomeState(
   const hardInv = hardInvalidationDistance(entry, atr, meta);
   const sl = structDist ?? hardInv;
   const tp = bestOutcomeTarget(entry, atr, meta, s.structure_target);
-  const armAt = peakProtectArmThreshold(entry, atr, meta);
-  const atrBuf = peakProtectAtrBuffer(entry, atr, meta);
   const cont = Boolean(opts?.continuationSameSide);
-  const { k, strength, detail } = peakProtectK(s.regime, {
-    continuationSameSide: cont,
-    strength: opts?.peakProtectStrength,
-  });
-  const armed = armAt != null && s.mfe >= armAt;
-  const prot =
-    armed && atrBuf != null ? protectedProfitLevel(s.mfe, atrBuf, k) : null;
+  const bars = opts?.bars5m ?? [];
+  const thesis =
+    bars.length >= 4
+      ? thesisAlive5m(s.open_side, bars)
+      : { alive: true, detail: 'structure seeding' };
   const contTxt = opts?.continuationReason ? ` · ${opts.continuationReason}` : '';
   const structTxt =
     s.structural_sl != null ? ` · structSL ${s.structural_sl.toFixed(2)}` : '';
@@ -403,10 +404,10 @@ export function describeBestOutcomeState(
   return {
     exit: false,
     reason: '',
-    hold: `BO 5m HOLD · UPL ${fav.toFixed(2)} · 1R ${tp?.toFixed(2) ?? 'UNKNOWN'}${
+    hold: `BO 5m HOLD · UPL ${fav.toFixed(2)} · peak MFE ${s.mfe.toFixed(2)} · 1R ${tp?.toFixed(2) ?? 'UNKNOWN'}${
       s.structure_target != null ? ` · structTgt ${s.structure_target.toFixed(2)}` : ''
-    } · HardInv -${sl?.toFixed(2) ?? 'UNKNOWN'}${structTxt} · MFE ${s.mfe.toFixed(2)} (${
-      armed ? `PP armed · prot ${prot?.toFixed(2) ?? '—'}` : `PP arm@${armAt?.toFixed(2) ?? '?'}`
-    }) · ${detail} · ${strength}${contTxt}`,
+    } · HardInv -${sl?.toFixed(2) ?? 'UNKNOWN'}${structTxt} · thesis ${thesis.alive ? 'ALIVE' : 'BREAK'} · ${
+      thesis.detail
+    }${contTxt}`,
   };
 }
