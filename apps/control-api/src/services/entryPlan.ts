@@ -3,6 +3,7 @@
  */
 
 import {
+  ZONE_PAD_FRAC,
   advanceEarlyEntryArmed,
   idleArmedState,
   locateEarlyZone,
@@ -110,7 +111,7 @@ export function classifyPriceVsZone(
   price: number,
   low: number,
   high: number,
-  padFrac = 0.02
+  padFrac = ZONE_PAD_FRAC
 ): PriceVsZone {
   const w = Math.max(high - low, 1e-9);
   const pad = w * padFrac;

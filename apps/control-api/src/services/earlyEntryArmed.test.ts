@@ -105,6 +105,24 @@ function microRejectSell(resist: number): StructureBar[] {
 }
 
 describe('early ENTRY armed trigger', () => {
+
+  it('blocks EARLY BUY locate when tape SELL / TREND_DOWN', () => {
+    const bars5m = supportUptrendNoBos();
+    const support = analyzeMarketStructure(bars5m).last_swing_low!.price;
+    const blocked = locateEarlyZone({
+      now_ms: Date.now(),
+      price: support + 0.1,
+      bars5m,
+      htf: { trend: 'UP', near_support: true },
+      tape_dir: 'SELL',
+      regime: 'TREND_DOWN',
+      tick_size: 0.01,
+      spread: 0.05,
+    });
+    expect(blocked).toBeNull();
+  });
+
+
   it('1. valid support + micro reclaim → BUY before 5m BOS', () => {
     const bars5m = supportUptrendNoBos();
     const ms = analyzeMarketStructure(bars5m);

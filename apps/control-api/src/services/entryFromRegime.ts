@@ -24,12 +24,13 @@ import { allowMicrostructureFromBars } from './ohlcQuality.js';
 import { atrWilder } from './volatilityNorm.js';
 import {
   advanceEarlyEntryArmed,
+  earlyDirectionBlockedByRegime,
   idleArmedState,
   type ArmedTriggerState,
   type EarlyEntrySignal,
 } from './earlyEntryArmed.js';
 export type { ArmedTriggerState, EarlyEntrySignal };
-export { idleArmedState, advanceEarlyEntryArmed };
+export { idleArmedState, advanceEarlyEntryArmed, earlyDirectionBlockedByRegime };
 
 export type RegimeEntry = {
   direction: 'BUY' | 'SELL';
@@ -301,9 +302,31 @@ export function marketDirection(
 export function explainNoEntry(
   bar: TenSecBar,
   regime?: string | null,
-  closedBars?: TenSecBar[] | null
+  closedBars?: TenSecBar[] | null,
+  opts?: {
+    multiTfReady?: boolean;
+    analysis_price?: number | null;
+    armed_state?: ArmedTriggerState | null;
+    htf?: {
+      trend?: 'UP' | 'DOWN' | 'RANGE' | null;
+      near_support?: boolean;
+      near_resistance?: boolean;
+      detail?: string;
+    } | null;
+    bars5m?: StructureBar[] | null;
+    bars1m?: StructureBar[] | null;
+    tape_dir?: 'BUY' | 'SELL' | null;
+  }
 ): string {
-  const decision = decideEntryFrom10sRegime(bar, regime, closedBars);
+  // Desk already gated multi-TF; pass ready so diagnose matches live decide path.
+  const decision = decideEntryFrom10sRegime(bar, regime, closedBars, {
+    multiTfReady: opts?.multiTfReady ?? true,
+    analysis_price: opts?.analysis_price ?? bar.close,
+    armed_state: opts?.armed_state,
+    htf: opts?.htf,
+    bars5m: opts?.bars5m,
+    bars1m: opts?.bars1m,
+  });
   if (decision) return `SETUP ${decision.direction} · ${decision.reason}`;
   const t = multiTfPts(closedBars, bar);
   return `SCAN · waiting 5m structure · ${formatTf(t)}`;
@@ -469,11 +492,8 @@ export function decideEntryFrom10sRegime(
   const zone = buildScalpZone(closedBars);
 
   // Strong/late path: full 5m BOS/CHoCH (+ LTF) still enters when ready.
+  // No post-decision impulse/chase veto — brain already gated chase; silent nulls hid why.
   if (decision.entry && decision.direction) {
-    const impulse = allowEntryAgainstImpulse(decision.direction, closedBars, bar);
-    if (!impulse.ok) return null;
-    const late = blockLateTrendChase(decision.direction, closedBars, bar);
-    if (!late.ok) return null;
     opts?.on_armed_state?.(idleArmedState());
     return {
       direction: decision.direction,
@@ -487,6 +507,7 @@ export function decideEntryFrom10sRegime(
   }
 
   // Early path: SETUP→ARMED→TRIGGERED without waiting for full 5m BOS/CHoCH.
+  const tape = tapeSide(closedBars, bar);
   const early = advanceEarlyEntryArmed(opts?.armed_state ?? idleArmedState(), {
     now_ms: opts?.now_ms ?? Date.now(),
     price,
@@ -494,12 +515,21 @@ export function decideEntryFrom10sRegime(
     bars1m,
     bars10s: microGate.ok ? series.slice(-40) : series.slice(-40),
     htf: opts?.htf ?? null,
+    tape_dir: tape.dir,
+    regime,
     spread: opts?.spread,
     tick_size: opts?.tick_size,
     broker_min_stop: opts?.broker_min_stop,
   });
   opts?.on_armed_state?.(early.state);
   if (!early.signal) return null;
+
+  // Hard block: never EARLY BUY into dump / EARLY SELL into rally
+  const against = earlyDirectionBlockedByRegime(early.signal.direction, regime, tape.dir);
+  if (against) {
+    opts?.on_armed_state?.(idleArmedState());
+    return null;
+  }
 
   // TRIGGERED → fill. No post-trigger impulse/chase veto (those wait for "perfect"
   // alignment while the 5m move dies). Setup/micro already decided the fire.

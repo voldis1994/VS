@@ -40,6 +40,15 @@ describe('epic anti machine-gun reentry pause', () => {
     expect(allowEpicReentry('GOLD', 'BUY').ok).toBe(false);
   });
 
+  it('blocks SAME-side EARLY reentry for 90s (machine-gun)', () => {
+    noteEpicTradeClose('GOLD', 'BUY', true);
+    expect(allowEpicReentry('GOLD', 'BUY').ok).toBe(false);
+    vi.advanceTimersByTime(89_000);
+    expect(allowEpicReentry('GOLD', 'BUY').ok).toBe(false);
+    vi.advanceTimersByTime(1_000);
+    expect(allowEpicReentry('GOLD', 'BUY').ok).toBe(true);
+  });
+
   it('allows same-side reentry after pause elapses', () => {
     noteEpicTradeClose('GOLD', 'BUY', false);
     expect(allowEpicReentry('GOLD', 'BUY').ok).toBe(false);
