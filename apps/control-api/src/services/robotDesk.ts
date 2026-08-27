@@ -422,13 +422,12 @@ function buildDecisionChain(
   const feeds = `FEEDS cap ${capLive}/${capCfg} · pubAdv ${pubNear} · reject ${rejectN} · lead=${mf?.lead_label || '—'} · ${mf?.agreement || s.feed_agreement || 'NONE'}`.trim();
   const zoneLine = formatZoneInfo(zone, s.closedBars);
   let action = `SCAN · ${tape.reason}`;
-  if (entryPlan && !s.open_side && s.running) {
-    const bias = entryPlan.bias ?? '—';
-    action = `ENTRY · ${entryPlan.state} · ${bias} · ${entryPlan.block_reason} · ${entryPlan.waiting_for}`;
-  }
   if (!s.running) action = 'STOPPED';
   else if (s.open_side) action = `MANAGE ${s.open_side}`;
-  else if (tape.dir === 'BUY') action = `READY BUY · ${tape.reason}`;
+  else if (entryPlan) {
+    const bias = entryPlan.bias ?? '—';
+    action = `ENTRY · ${entryPlan.state} · ${bias} · ${entryPlan.block_reason} · ${entryPlan.waiting_for}`;
+  } else if (tape.dir === 'BUY') action = `READY BUY · ${tape.reason}`;
   else if (tape.dir === 'SELL') action = `READY SELL · ${tape.reason}`;
   return {
     feeds,
@@ -1947,8 +1946,8 @@ async function robotCycleBody(s: Internal) {
         fiveNative.length >= 8 ? fiveNative : aggregateTenSecToFiveMin(s.closedBars);
       s.atr_5m = atrWilder(five, 14);
 
-      // Structure / liquidity target distance (favorable pts) for continuation hold
-      if (s.structure_target == null && s.entry_price != null && five.length >= 8) {
+      // Structure / liquidity target — refresh when a farther swing appears (never freeze forever).
+      if (s.entry_price != null && five.length >= 8) {
         // Pass provenance as-is — analyzeMarketStructure keeps only explicit REAL
         const ms = analyzeMarketStructure(
           five.map((b) => ({
@@ -1963,14 +1962,29 @@ async function robotCycleBody(s: Internal) {
           { pivotLeft: 1, pivotRight: 1 }
         );
         const zone = buildScalpZone(s.closedBars);
+        let next: number | null = null;
         if (s.open_side === 'BUY') {
-          const lvl = ms.last_swing_high?.price ?? zone?.high ?? null;
-          if (lvl != null && lvl > s.entry_price) s.structure_target = lvl - s.entry_price;
+          let lvl = ms.last_swing_high?.price ?? null;
+          if (lvl != null && zone?.high != null && lvl <= zone.high + 1e-9) {
+            const highs = ms.pivots.filter((p) => p.kind === 'HIGH' && p.price > zone.high!);
+            lvl = highs[highs.length - 1]?.price ?? null;
+          }
+          if (lvl != null && lvl > s.entry_price) next = lvl - s.entry_price;
         } else if (s.open_side === 'SELL') {
-          const lvl = ms.last_swing_low?.price ?? zone?.low ?? null;
-          if (lvl != null && lvl < s.entry_price) s.structure_target = s.entry_price - lvl;
+          let lvl = ms.last_swing_low?.price ?? null;
+          if (lvl != null && zone?.low != null && lvl >= zone.low - 1e-9) {
+            const lows = ms.pivots.filter((p) => p.kind === 'LOW' && p.price < zone.low!);
+            lvl = lows[lows.length - 1]?.price ?? null;
+          }
+          if (lvl != null && lvl < s.entry_price) next = s.entry_price - lvl;
         }
-        if (s.structure_target != null) persistBoFromSession(s);
+        if (
+          next != null &&
+          (s.structure_target == null || next > s.structure_target + 1e-9)
+        ) {
+          s.structure_target = next;
+          persistBoFromSession(s);
+        }
       }
 
       const bars5mForBo = fiveNative.map((b) => ({
@@ -2002,9 +2016,19 @@ async function robotCycleBody(s: Internal) {
         provenance: b.provenance,
       }));
 
+      // Exit regime: if tape fights open side, use tape so ThesisFailure/#218 flip fires
+      // (board shows TREND_DOWN while sticky s.regime can still be TREND_UP).
+      const exitRegime =
+        liveSide === 'BUY' && tapeNow.dir === 'SELL'
+          ? 'TREND_DOWN'
+          : liveSide === 'SELL' && tapeNow.dir === 'BUY'
+            ? 'TREND_UP'
+            : s.regime;
+
       const decision = decideBestOutcomeExit(
         {
           ...s,
+          regime: exitRegime,
           short_net_pct: short.netPct,
           atr: s.atr_5m,
           structural_sl: s.structural_sl,
@@ -2322,25 +2346,34 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `NO ENTRY · decide null · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)} · ${ohlcLine} · ${explainNoEntry(signalBar, s.regime, s.closedBars)} · HTF ${htf.detail}`,
+        detail: `NO ENTRY · decide null · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)} · ${ohlcLine} · ${explainNoEntry(signalBar, s.regime, s.closedBars, {
+          multiTfReady: s.multiTf.ready,
+          analysis_price: analysisPrice,
+          armed_state: s.armed_trigger,
+          htf,
+          bars5m,
+          bars1m,
+          tape_dir: tapeSide(s.closedBars, signalBar).dir,
+        })} · HTF ${htf.detail}`,
       });
       return;
     }
 
-    // EARLY TRIGGERED → execute. No post-trigger stale/reentry veto (5m move won't wait).
+    // Same-side 90s pause always (anti machine-gun). Opposite FLIP still allowed in cooldown.
+    // EARLY only skips stale-guard (5m move won't wait on advisory lag).
     const isEarlyTrigger = /EARLY|TRIGGERED/i.test(sig.reason);
+    const reentry = allowEpicReentry(s.epic, sig.direction);
+    if (!reentry.ok) {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `NO ENTRY · ${reentry.reason} · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)}`,
+      });
+      return;
+    }
     if (!isEarlyTrigger) {
-      const reentry = allowEpicReentry(s.epic, sig.direction);
-      if (!reentry.ok) {
-        pushTick(s, {
-          phase: 'WAIT',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `NO ENTRY · ${reentry.reason} · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)}`,
-        });
-        return;
-      }
       const staleDir = detectStaleQuoteAdverse(
         sig.direction,
         analysisPrice,

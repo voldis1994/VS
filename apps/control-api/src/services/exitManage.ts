@@ -374,16 +374,17 @@ export function decideBestOutcomeExit(
     }
   }
 
-  // 5) Opposite tape when 5m thesis dead → EXIT anytime (enables flip to new trend)
+  // 5) Opposite tape + no continuation → EXIT anytime (flip without waiting 5m CHoCH)
   if (opts?.oppositeEntrySignal && !opts?.ignoreMicroOpposite && !cont) {
     const bars = opts?.bars5m ?? revInput?.bars5m ?? [];
-    const thesis = bars.length >= 4 ? thesisAlive5m(s.open_side, bars) : { alive: true, detail: '' };
-    if (!thesis.alive) {
-      return {
-        exit: true,
-        reason: `OppositeSignal · ${opts.oppositeReason || 'tape flipped'} · ${thesis.detail}`,
-      };
-    }
+    const thesis =
+      bars.length >= 4 ? thesisAlive5m(s.open_side, bars) : { alive: false, detail: 'no 5m thesis' };
+    return {
+      exit: true,
+      reason: `OppositeSignal · ${opts.oppositeReason || 'tape flipped'} · ${
+        thesis.alive ? 'cont ended' : thesis.detail
+      }`,
+    };
   }
 
   // Soft profit-management only after young window (anti open→PeakTrail→reentry spam)

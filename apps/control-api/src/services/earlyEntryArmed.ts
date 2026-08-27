@@ -53,6 +53,10 @@ export type EarlyEntryCtx = {
   bars1m?: StructureBar[] | null;
   bars10s?: StructureBar[] | null;
   htf?: HtfContext | null;
+  /** Live tape direction — blocks EARLY against the tape (no BUY into dump). */
+  tape_dir?: 'BUY' | 'SELL' | null;
+  /** Sticky/classified regime — blocks EARLY into TREND_DOWN etc. */
+  regime?: string | null;
   spread?: number | null;
   tick_size?: number | null;
   broker_min_stop?: number | null;
@@ -61,6 +65,8 @@ export type EarlyEntryCtx = {
 const MICRO_SCORE_ENTRY = 2;
 /** Max distance beyond zone far edge as fraction of zone width (plus ATR) before chase. */
 const CHASE_ZONE_MULT = 0.75;
+/** Shared with entryPlan UI — arming pad must match PRICE ABOVE/BELOW badge. */
+export const ZONE_PAD_FRAC = 0.05;
 
 export function idleArmedState(): ArmedTriggerState {
   return {
@@ -86,7 +92,7 @@ function zoneWidth(low: number, high: number): number {
   return Math.max(high - low, 1e-9);
 }
 
-function inBand(price: number, low: number, high: number, padFrac = 0.15): boolean {
+function inBand(price: number, low: number, high: number, padFrac = ZONE_PAD_FRAC): boolean {
   const w = zoneWidth(low, high);
   return price >= low - w * padFrac && price <= high + w * padFrac;
 }
@@ -99,6 +105,39 @@ function nearLow(price: number, low: number, high: number): boolean {
 function nearHigh(price: number, low: number, high: number): boolean {
   const w = zoneWidth(low, high);
   return price >= high - w * 0.35 && price <= high + w * 0.2;
+}
+
+/** Hard block EARLY BUY into downtrend / EARLY SELL into uptrend. */
+export function earlyDirectionBlockedByRegime(
+  direction: 'BUY' | 'SELL',
+  regime?: string | null,
+  tapeDir?: 'BUY' | 'SELL' | null
+): string | null {
+  const r = String(regime || '')
+    .trim()
+    .toUpperCase();
+  if (direction === 'BUY') {
+    if (
+      r === 'TREND_DOWN' ||
+      r === 'BREAKOUT_DOWN' ||
+      r === 'PULLBACK_DOWNTREND' ||
+      r === 'FAILED_BREAKOUT_UP'
+    ) {
+      return `EARLY BUY blocked · regime ${r}`;
+    }
+    if (tapeDir === 'SELL') return 'EARLY BUY blocked · tape SELL (dump)';
+  } else {
+    if (
+      r === 'TREND_UP' ||
+      r === 'BREAKOUT_UP' ||
+      r === 'PULLBACK_UPTREND' ||
+      r === 'FAILED_BREAKOUT_DOWN'
+    ) {
+      return `EARLY SELL blocked · regime ${r}`;
+    }
+    if (tapeDir === 'BUY') return 'EARLY SELL blocked · tape BUY (rally)';
+  }
+  return null;
 }
 
 type LocatedZone = {
@@ -137,14 +176,21 @@ export function locateEarlyZone(ctx: EarlyEntryCtx): LocatedZone | null {
 
   const htf = ctx.htf;
   const htfOk = htf != null && htf.trend != null;
+  const htfDown = htfOk && htf!.trend === 'DOWN';
+  const htfUp = htfOk && htf!.trend === 'UP';
+  const regimeBlockBuy = earlyDirectionBlockedByRegime('BUY', ctx.regime, ctx.tape_dir);
+  const regimeBlockSell = earlyDirectionBlockedByRegime('SELL', ctx.regime, ctx.tape_dir);
 
-  // BUY support / liquidity / reversal
+  // BUY support — never locate BUY into HTF DOWN / tape dump / down regime
   const supportPivot = ms.last_swing_low;
   const buyLoc =
-    (htfOk && (htf!.near_support || htf!.trend === 'UP')) ||
-    ms.trend === 'UP' ||
-    zone?.kind === 'DEMAND' ||
-    hasEvent(ms, 'SWEEP', 'BULL') != null;
+    !regimeBlockBuy &&
+    !htfDown &&
+    ms.trend !== 'DOWN' &&
+    ((htfOk && (htf!.near_support || htf!.trend === 'UP')) ||
+      ms.trend === 'UP' ||
+      zone?.kind === 'DEMAND' ||
+      hasEvent(ms, 'SWEEP', 'BULL') != null);
 
   if (buyLoc && supportPivot) {
     const low = Math.min(
@@ -165,18 +211,21 @@ export function locateEarlyZone(ctx: EarlyEntryCtx): LocatedZone | null {
         high,
         invalidation: low - buf,
         detail: `support ${low.toFixed(4)}–${high.toFixed(4)} · 5m ${ms.trend} · HTF ${htf?.trend ?? '?'}`,
-        setupBias: ms.trend === 'DOWN' || hasEvent(ms, 'SWEEP', 'BULL') ? 'REVERSAL' : 'PULLBACK',
+        setupBias: hasEvent(ms, 'SWEEP', 'BULL') ? 'REVERSAL' : 'PULLBACK',
       };
     }
   }
 
-  // SELL resistance
+  // SELL resistance — never locate SELL into HTF UP / tape rally / up regime
   const resistPivot = ms.last_swing_high;
   const sellLoc =
-    (htfOk && (htf!.near_resistance || htf!.trend === 'DOWN')) ||
-    ms.trend === 'DOWN' ||
-    zone?.kind === 'SUPPLY' ||
-    hasEvent(ms, 'SWEEP', 'BEAR') != null;
+    !regimeBlockSell &&
+    !htfUp &&
+    ms.trend !== 'UP' &&
+    ((htfOk && (htf!.near_resistance || htf!.trend === 'DOWN')) ||
+      ms.trend === 'DOWN' ||
+      zone?.kind === 'SUPPLY' ||
+      hasEvent(ms, 'SWEEP', 'BEAR') != null);
 
   if (sellLoc && resistPivot) {
     const high = Math.max(
@@ -398,6 +447,23 @@ export function advanceEarlyEntryArmed(
       };
     }
     return { state: idleArmedState(), signal: null };
+  }
+
+  // Kill armed side if regime/tape flipped against it mid-setup
+  const against = earlyDirectionBlockedByRegime(
+    located.direction,
+    ctx.regime,
+    ctx.tape_dir
+  );
+  if (against) {
+    return {
+      state: {
+        ...idleArmedState(),
+        phase: 'INVALIDATED',
+        detail: against,
+      },
+      signal: null,
+    };
   }
 
   // Fresh SETUP when idle / after invalidate / direction flip
