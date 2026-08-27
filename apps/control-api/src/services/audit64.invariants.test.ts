@@ -257,26 +257,12 @@ describe('#64 seed/refresh cadence', () => {
 });
 
 describe('#64 classifyBarGap', () => {
-  it('requires session metadata — heuristic weekend ranges alone are not enough', () => {
+  it('requires Capital openingHours — gap length alone never proves session', () => {
     const step = TF_MS['1H'];
     expect(classifyBarGap(0, step, step)).toBe('none');
-    // Without session meta, large gaps are UNKNOWN (cannot prove session break)
+    // Without Capital hours, large gaps are UNKNOWN (cannot prove session break)
     expect(classifyBarGap(0, 60 * 3_600_000, step)).toBe('unknown');
     expect(classifyBarGap(0, 4 * 3_600_000, step)).toBe('unknown');
-    // FX with session meta: weekend-sized gap can be session
-    expect(
-      classifyBarGap(0, 60 * 3_600_000, step, {
-        kind: 'fx',
-        max_session_gap_ms: 72 * 3_600_000,
-      })
-    ).toBe('session');
-    // Crypto 24/7: any excess gap is missing data
-    expect(
-      classifyBarGap(0, 60 * 3_600_000, step, {
-        kind: 'crypto_24x7',
-        max_session_gap_ms: null,
-      })
-    ).toBe('missing');
   });
 });
 

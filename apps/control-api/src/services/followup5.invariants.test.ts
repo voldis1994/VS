@@ -25,13 +25,9 @@ import {
   resetRiskWindows,
   setRiskEquity,
 } from './riskWindow.js';
-import {
-  classifyBarGapWithSession,
-  sessionMetaForCategory,
-  sessionMetaForEpic,
-} from './tradingSessions.js';
 import { classifyBarGap, TF_MS, evaluateTfBook } from './timeframeBooks.js';
 import type { TfBar } from './timeframeBooks.js';
+import { parseCapitalOpeningHours, classifyBarGapWithOpeningHours } from './tradingSessions.js';
 
 const GOLD_META = { tick_size: 0.01 };
 const here = dirname(fileURLToPath(import.meta.url));
@@ -167,47 +163,52 @@ describe('#3 marketStructure provenance === REAL only', () => {
   });
 });
 
-describe('#4 universal gap / session classification', () => {
-  it('without session meta: excess gap is UNKNOWN (NOT_READY)', () => {
+describe('#4 Capital openingHours gap classification (no epic guess)', () => {
+  it('without Capital hours: excess gap is UNKNOWN (NOT_READY)', () => {
     const step = TF_MS['1H'];
     expect(classifyBarGap(0, step, step)).toBe('none');
     expect(classifyBarGap(0, 60 * 3_600_000, step)).toBe('unknown');
     expect(classifyBarGap(0, 10 * 3_600_000, step)).toBe('unknown');
-    expect(classifyBarGapWithSession(0, 60 * 3_600_000, step, null)).toBe('unknown');
+    expect(classifyBarGapWithOpeningHours(0, 60 * 3_600_000, step, null)).toBe('unknown');
   });
 
-  it('crypto 24/7 never treats weekend-sized gaps as session breaks', () => {
-    const crypto = sessionMetaForCategory('crypto');
-    expect(crypto.kind).toBe('crypto_24x7');
-    expect(crypto.max_session_gap_ms).toBeNull();
+  it('Capital 24/7 hours: excess gap is missing — never session from length', () => {
+    const slot = [{ openTime: '00:00', closeTime: '23:59:59' }];
+    const crypto = parseCapitalOpeningHours(
+      {
+        sunday: slot,
+        monday: slot,
+        tuesday: slot,
+        wednesday: slot,
+        thursday: slot,
+        friday: slot,
+        saturday: slot,
+      },
+      { timezone: 'UTC' }
+    )!;
+    expect(crypto.continuously_open).toBe(true);
     expect(
-      classifyBarGapWithSession(0, 60 * 3_600_000, TF_MS['1H'], crypto)
-    ).toBe('missing');
-    expect(
-      classifyBarGapWithSession(0, 8 * 3_600_000, TF_MS['1H'], crypto)
+      classifyBarGapWithOpeningHours(0, 60 * 3_600_000, TF_MS['1H'], crypto)
     ).toBe('missing');
   });
 
-  it('FX with metadata may classify weekend-sized gap as session', () => {
-    const fx = sessionMetaForCategory('fx');
+  it('Capital weekday hours: weekend closed gap can be session', () => {
+    const slot = [{ openTime: '07:00', closeTime: '21:00' }];
+    const fx = parseCapitalOpeningHours(
+      {
+        monday: slot,
+        tuesday: slot,
+        wednesday: slot,
+        thursday: slot,
+        friday: slot,
+      },
+      { timezone: 'UTC' }
+    )!;
+    const fri20 = Date.UTC(2024, 0, 5, 20, 0, 0);
+    const mon07 = Date.UTC(2024, 0, 8, 7, 0, 0);
     expect(
-      classifyBarGapWithSession(0, 60 * 3_600_000, TF_MS['1H'], fx)
+      classifyBarGapWithOpeningHours(fri20, mon07, TF_MS['1H'], fx)
     ).toBe('session');
-  });
-
-  it('indices daily break within max_session_gap is session; beyond is missing', () => {
-    const ix = sessionMetaForCategory('indices');
-    expect(
-      classifyBarGapWithSession(0, 12 * 3_600_000, TF_MS['1H'], ix)
-    ).toBe('session');
-    expect(
-      classifyBarGapWithSession(0, 30 * 3_600_000, TF_MS['1H'], ix)
-    ).toBe('missing');
-  });
-
-  it('epic heuristics: BTC → crypto; EURUSD → fx', () => {
-    expect(sessionMetaForEpic('BTCUSD').kind).toBe('crypto_24x7');
-    expect(sessionMetaForEpic('EURUSD').kind).toBe('fx');
   });
 
   it('evaluateTfBook: unknown gaps → NOT_READY', () => {

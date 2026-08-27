@@ -29,6 +29,8 @@ export type PersistedBoState = {
   peak_retention: number | null;
   structural_sl: number | null;
   safety_sl: number | null;
+  /** Favorable distance to structure/liquidity target — survive restart */
+  structure_target: number | null;
   close_phase: ClosePhase;
   pending_deal_reference: string | null;
   epic: string;
@@ -98,6 +100,7 @@ export function buildBoStateFromOpen(input: {
   peak_retention?: number | null;
   structural_sl?: number | null;
   safety_sl?: number | null;
+  structure_target?: number | null;
   close_phase?: ClosePhase;
   pending_deal_reference?: string | null;
   epic: string;
@@ -116,6 +119,10 @@ export function buildBoStateFromOpen(input: {
     peak_retention: input.peak_retention ?? null,
     structural_sl: input.structural_sl ?? null,
     safety_sl: input.safety_sl ?? null,
+    structure_target:
+      input.structure_target != null && Number.isFinite(input.structure_target)
+        ? input.structure_target
+        : null,
     close_phase: input.close_phase ?? 'OPEN',
     pending_deal_reference: input.pending_deal_reference ?? null,
     epic: input.epic,
@@ -155,6 +162,7 @@ export function adoptBrokerOpenForBo(opts: {
     peak_retention: opts.prior?.peak_retention ?? null,
     structural_sl: opts.prior?.structural_sl ?? null,
     safety_sl: opts.stop_level ?? opts.prior?.safety_sl ?? null,
+    structure_target: opts.prior?.structure_target ?? null,
     close_phase: 'OPEN',
     pending_deal_reference: null,
     epic: opts.epic,

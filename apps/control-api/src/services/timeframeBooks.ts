@@ -16,23 +16,21 @@ import { atrWilder } from './volatilityNorm.js';
 import { analyzeMarketStructure, type StructureBar } from './marketStructure.js';
 import { buildScalpZone } from './zones.js';
 import {
-  classifyBarGapWithSession,
-  sessionMetaForEpic,
-  type TradingSessionMeta,
+  classifyBarGapWithOpeningHours,
+  type CapitalOpeningHours,
 } from './tradingSessions.js';
 
 /**
- * Classify gap — requires session metadata.
- * Without proven session break → unknown (#4 audit follow-up).
- * @deprecated Prefer classifyBarGapWithSession(session)
+ * Classify gap using Capital opening hours.
+ * Without proven Capital hours → unknown (#4 follow-up).
  */
 export function classifyBarGap(
   prevMs: number,
   nextMs: number,
   stepMs: number,
-  session?: TradingSessionMeta | null
+  hours?: CapitalOpeningHours | null
 ): 'none' | 'session' | 'missing' | 'unknown' {
-  return classifyBarGapWithSession(prevMs, nextMs, stepMs, session ?? null);
+  return classifyBarGapWithOpeningHours(prevMs, nextMs, stepMs, hours ?? null);
 }
 
 export type TfKey = '10s' | '1m' | '5m' | '15m' | '1H' | '4H';
@@ -227,6 +225,9 @@ export type MultiTfState = {
   seed_next_allowed_ms?: number;
   /** Per-TF last refresh (#23) */
   last_refresh_ms?: Partial<Record<Exclude<TfKey, '10s'>, number>>;
+  /** Capital instrument opening hours — never epic-guessed */
+  opening_hours?: CapitalOpeningHours | null;
+  opening_hours_detail?: string;
 };
 
 export function emptyTfBook(tf: Exclude<TfKey, '10s'>): TfBook {
@@ -276,14 +277,14 @@ export function seedBackoffMs(failCount: number): number {
 
 /**
  * Readiness = warmup closed count + Wilder ATR computable + quality (#69).
- * Gaps classified with instrument session metadata — UNKNOWN gap = NOT_READY.
+ * Gaps classified with Capital opening hours — UNKNOWN gap = NOT_READY.
  */
 export function evaluateTfBook(
   tf: Exclude<TfKey, '10s'>,
   bars: TfBar[],
   source: TfBook['source'],
   nowMs = Date.now(),
-  session?: TradingSessionMeta | null
+  hours?: CapitalOpeningHours | null
 ): TfBook {
   const closed = closedBarsOnly(bars, nowMs, tf);
   const quality = assessBarSeries(closed, TF_MS[tf]);
@@ -296,7 +297,7 @@ export function evaluateTfBook(
   }));
   const atr = atrWilder(ohlc, 14);
 
-  const sess = session ?? null;
+  const sess = hours ?? null;
   let missingGaps = 0;
   let unknownGaps = 0;
   let sessionGaps = 0;
@@ -333,7 +334,7 @@ export function evaluateTfBook(
   if (ready) {
     detail = `${tf} OK · ${closed.length} closed · ATR ${atr!.toFixed(6)} · ${source} · sessionGaps=${sessionGaps}`;
   } else if (unknownGaps > 0) {
-    detail = `${tf} NOT READY · unknown gaps ${unknownGaps} (need session metadata) · ${source}`;
+    detail = `${tf} NOT READY · unknown gaps ${unknownGaps} (need Capital openingHours) · ${source}`;
   } else if (missingGaps > 0) {
     detail = `${tf} NOT READY · missing-data gaps ${missingGaps} · ${source}`;
   } else if (closed.length < min) {

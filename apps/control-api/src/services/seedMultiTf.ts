@@ -1,12 +1,16 @@
 /**
  * Seed multi-TF books from Capital historical candles.
  * Backoff on failure (#22). Prefer valid fallback over insufficient native (#24).
+ * Gap classification uses Capital openingHours only — never epic/category guess.
  */
 import type { CapitalSession } from './capitalCom.js';
-import { fetchCapitalPrices, type CapitalPriceCandle } from './capitalCom.js';
+import {
+  fetchCapitalOpeningHours,
+  fetchCapitalPrices,
+  type CapitalPriceCandle,
+} from './capitalCom.js';
 import {
   TF_MS,
-  TF_MIN_CLOSED,
   TF_REFRESH_MS,
   TF_RESOLUTION,
   TF_SEED_MAX,
@@ -21,7 +25,7 @@ import {
   type TfBook,
   type TfKey,
 } from './timeframeBooks.js';
-import { sessionMetaForEpic } from './tradingSessions.js';
+import type { CapitalOpeningHours } from './tradingSessions.js';
 
 export function capitalCandlesToTfBars(
   candles: CapitalPriceCandle[],
@@ -57,22 +61,21 @@ function pickBestBook(
   aggBars: TfBar[],
   nowMs: number,
   nativeDetail: string,
-  epic: string
+  hours: CapitalOpeningHours | null
 ): { book: TfBook; detail: string } {
-  const sess = sessFor(epic);
   const nativeEval = evaluateTfBook(
     tf,
     nativeBars,
     nativeBars.length ? 'CAPITAL_NATIVE' : 'EMPTY',
     nowMs,
-    sess
+    hours
   );
   const aggEval = evaluateTfBook(
     tf,
     aggBars,
     aggBars.length ? 'AGGREGATED_FALLBACK' : 'EMPTY',
     nowMs,
-    sess
+    hours
   );
 
   // #24: insufficient native must not block valid fallback
@@ -92,10 +95,6 @@ function pickBestBook(
   return { book: nativeEval, detail: nativeEval.detail };
 }
 
-function sessFor(epic: string) {
-  return sessionMetaForEpic(epic);
-}
-
 async function fetchNativeBars(
   session: CapitalSession,
   epic: string,
@@ -111,6 +110,20 @@ async function fetchNativeBars(
   };
 }
 
+async function ensureOpeningHours(
+  session: CapitalSession,
+  epic: string,
+  state: MultiTfState
+): Promise<MultiTfState> {
+  if (state.opening_hours != null) return state;
+  const got = await fetchCapitalOpeningHours(session, epic);
+  return {
+    ...state,
+    opening_hours: got.hours,
+    opening_hours_detail: got.detail,
+  };
+}
+
 /** Load 1m→5m→15m→1H→4H with backoff. */
 export async function seedMultiTfHistory(
   session: CapitalSession,
@@ -118,7 +131,7 @@ export async function seedMultiTfHistory(
   prior?: MultiTfState | null,
   nowMs = Date.now()
 ): Promise<MultiTfState> {
-  const state = prior ? { ...prior, books: { ...prior.books } } : emptyMultiTfState();
+  let state = prior ? { ...prior, books: { ...prior.books } } : emptyMultiTfState();
 
   // #22 backoff — do not hammer Capital every 2s
   if ((state.seed_next_allowed_ms ?? 0) > nowMs && !state.ready) {
@@ -130,58 +143,61 @@ export async function seedMultiTfHistory(
   }
 
   try {
+    state = await ensureOpeningHours(session, epic, state);
+    const hours = state.opening_hours ?? null;
+
     const m1n = await fetchNativeBars(session, epic, '1m', nowMs);
-    const m1 = pickBestBook('1m', m1n.bars, [], nowMs, m1n.detail, epic);
+    const m1 = pickBestBook('1m', m1n.bars, [], nowMs, m1n.detail, hours);
     state.books['1m'] = evaluateTfBook(
       '1m',
       mergeUniqueBars(state.books['1m'].bars, m1.book.bars),
       m1.book.source,
       nowMs,
-      sessFor(epic)
+      hours
     );
 
     const m5n = await fetchNativeBars(session, epic, '5m', nowMs);
     const m5agg = aggregateAligned(state.books['1m'].bars, '1m', '5m', nowMs);
-    const m5 = pickBestBook('5m', m5n.bars, m5agg, nowMs, m5n.detail, epic);
+    const m5 = pickBestBook('5m', m5n.bars, m5agg, nowMs, m5n.detail, hours);
     state.books['5m'] = evaluateTfBook(
       '5m',
       mergeUniqueBars(state.books['5m'].bars, m5.book.bars),
       m5.book.source,
       nowMs,
-      sessFor(epic)
+      hours
     );
 
     const m15n = await fetchNativeBars(session, epic, '15m', nowMs);
     const m15agg = aggregateAligned(state.books['5m'].bars, '5m', '15m', nowMs);
-    const m15 = pickBestBook('15m', m15n.bars, m15agg, nowMs, m15n.detail, epic);
+    const m15 = pickBestBook('15m', m15n.bars, m15agg, nowMs, m15n.detail, hours);
     state.books['15m'] = evaluateTfBook(
       '15m',
       mergeUniqueBars(state.books['15m'].bars, m15.book.bars),
       m15.book.source,
       nowMs,
-      sessFor(epic)
+      hours
     );
 
     const h1n = await fetchNativeBars(session, epic, '1H', nowMs);
     const h1agg = aggregateAligned(state.books['15m'].bars, '15m', '1H', nowMs);
-    const h1 = pickBestBook('1H', h1n.bars, h1agg, nowMs, h1n.detail, epic);
+    const h1 = pickBestBook('1H', h1n.bars, h1agg, nowMs, h1n.detail, hours);
     state.books['1H'] = evaluateTfBook(
       '1H',
       mergeUniqueBars(state.books['1H'].bars, h1.book.bars),
       h1.book.source,
       nowMs,
-      sessFor(epic)
+      hours
     );
 
     const h4n = await fetchNativeBars(session, epic, '4H', nowMs);
     const h4agg = aggregateAligned(state.books['1H'].bars, '1H', '4H', nowMs);
-    const h4 = pickBestBook('4H', h4n.bars, h4agg, nowMs, h4n.detail, epic);
+    const h4 = pickBestBook('4H', h4n.bars, h4agg, nowMs, h4n.detail, hours);
     state.books['4H'] = evaluateTfBook(
       '4H',
       mergeUniqueBars(state.books['4H'].bars, h4.book.bars),
       h4.book.source,
       nowMs,
-      sessFor(epic)
+      hours
     );
 
     state.seeded_at_ms = nowMs;
@@ -189,6 +205,8 @@ export async function seedMultiTfHistory(
     if (ready.ready) {
       ready.seed_fail_count = 0;
       ready.seed_next_allowed_ms = 0;
+      ready.opening_hours = state.opening_hours;
+      ready.opening_hours_detail = state.opening_hours_detail;
       ready.last_refresh_ms = {
         '1m': nowMs,
         '5m': nowMs,
@@ -203,6 +221,8 @@ export async function seedMultiTfHistory(
     const backoff = seedBackoffMs(fails);
     return {
       ...ready,
+      opening_hours: state.opening_hours,
+      opening_hours_detail: state.opening_hours_detail,
       seed_fail_count: fails,
       seed_next_allowed_ms: nowMs + backoff,
       detail: `${ready.detail} · backoff ${Math.round(backoff / 1000)}s`,
@@ -227,7 +247,12 @@ export async function refreshDueTfBooks(
   state: MultiTfState,
   nowMs = Date.now()
 ): Promise<MultiTfState> {
-  let next = { ...state, books: { ...state.books }, last_refresh_ms: { ...(state.last_refresh_ms || {}) } };
+  let next: MultiTfState = {
+    ...state,
+    books: { ...state.books },
+    last_refresh_ms: { ...(state.last_refresh_ms || {}) },
+  };
+  next = await ensureOpeningHours(session, epic, next);
   const order: Array<Exclude<TfKey, '10s'>> = ['1m', '5m', '15m', '1H', '4H'];
   for (const tf of order) {
     const last = next.last_refresh_ms?.[tf] ?? 0;
@@ -235,7 +260,10 @@ export async function refreshDueTfBooks(
     const refreshed = await refreshTfBook(session, epic, next, tf, nowMs);
     next = {
       ...refreshed,
-      last_refresh_ms: { ...(refreshed.last_refresh_ms || next.last_refresh_ms || {}), [tf]: nowMs },
+      last_refresh_ms: {
+        ...(refreshed.last_refresh_ms || next.last_refresh_ms || {}),
+        [tf]: nowMs,
+      },
     };
   }
   return next;
@@ -248,7 +276,9 @@ export async function refreshTfBook(
   tf: Exclude<TfKey, '10s'>,
   nowMs = Date.now()
 ): Promise<MultiTfState> {
-  const next = { ...state, books: { ...state.books } };
+  let next = { ...state, books: { ...state.books } };
+  next = await ensureOpeningHours(session, epic, next);
+  const hours = next.opening_hours ?? null;
   const lowerBars =
     tf === '5m'
       ? next.books['1m'].bars
@@ -263,15 +293,14 @@ export async function refreshTfBook(
     tf === '5m' ? '1m' : tf === '15m' ? '5m' : tf === '1H' ? '15m' : tf === '4H' ? '1H' : null;
 
   const native = await fetchNativeBars(session, epic, tf, nowMs);
-  const agg =
-    lowerTf != null ? aggregateAligned(lowerBars, lowerTf, tf, nowMs) : [];
-  const picked = pickBestBook(tf, native.bars, agg, nowMs, native.detail, epic);
+  const agg = lowerTf != null ? aggregateAligned(lowerBars, lowerTf, tf, nowMs) : [];
+  const picked = pickBestBook(tf, native.bars, agg, nowMs, native.detail, hours);
   next.books[tf] = evaluateTfBook(
     tf,
     mergeUniqueBars(next.books[tf].bars, picked.book.bars),
     picked.book.source === 'EMPTY' ? next.books[tf].source : picked.book.source,
     nowMs,
-    sessFor(epic)
+    hours
   );
   return evaluateMultiTfReady(next);
 }

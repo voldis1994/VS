@@ -4,6 +4,10 @@ import {
   computeInstrumentSafetyStop,
   computeSafetyCushionStopLevel as computeSafetyFromMeta,
 } from './safetyStop.js';
+import {
+  parseCapitalOpeningHours,
+  type CapitalOpeningHours,
+} from './tradingSessions.js';
 
 export type CapitalComEnv = 'demo' | 'live';
 
@@ -617,6 +621,9 @@ export interface CapitalMarketQuote {
   point_size?: number | null;
   /** Minimum stop distance in PRICE units */
   min_stop_distance?: number | null;
+  /** Capital instrument.openingHours when present on markets/{epic} */
+  opening_hours_raw?: unknown;
+  instrument_timezone?: string | null;
 }
 
 function inferPointSize(json: any, mid: number | null): number {
@@ -733,6 +740,7 @@ export async function fetchCapitalMarketQuote(
     }
 
     const snap = (res.json?.snapshot || res.json?.marketSnapshot || {}) as Record<string, unknown>;
+    const instrument = (res.json?.instrument || {}) as Record<string, unknown>;
     const bid = numOrNull(snap.bid ?? snap.bidPrice);
     const ask = numOrNull(snap.offer ?? snap.ask ?? snap.offerPrice);
     let mid: number | null = null;
@@ -740,6 +748,11 @@ export async function fetchCapitalMarketQuote(
     else mid = numOrNull(snap.mid ?? snap.lastTraded);
     const spread = bid != null && ask != null ? ask - bid : null;
     const stops = parseStopRules(res.json, mid);
+    const tz =
+      strOrNull(instrument.timeZone) ||
+      strOrNull(instrument.timezone) ||
+      strOrNull(instrument.timeZoneId) ||
+      null;
 
     return {
       epic: candidate,
@@ -747,7 +760,7 @@ export async function fetchCapitalMarketQuote(
       ask,
       mid,
       spread,
-      market_status: strOrNull(snap.marketStatus ?? res.json?.instrument?.marketStatus),
+      market_status: strOrNull(snap.marketStatus ?? instrument.marketStatus),
       update_time: strOrNull(snap.updateTime ?? snap.updateTimeUTC ?? snap.binaryUpdateTime),
       percentage_change: numOrNull(snap.percentageChange),
       high: numOrNull(snap.high),
@@ -757,6 +770,8 @@ export async function fetchCapitalMarketQuote(
       min_stop_unit: stops.min_stop_unit,
       point_size: stops.point_size,
       min_stop_distance: stops.min_stop_distance,
+      opening_hours_raw: instrument.openingHours ?? instrument.opening_hours ?? null,
+      instrument_timezone: tz,
       detail: bid == null && ask == null ? 'Snapshot returned without bid/offer' : undefined,
     };
   };
@@ -774,6 +789,39 @@ export async function fetchCapitalMarketQuote(
     }
   }
   return quote;
+}
+
+/**
+ * Fetch Capital instrument opening/trading hours for gap classification.
+ * Never invent from epic/category — missing hours → caller treats gaps as UNKNOWN.
+ */
+export async function fetchCapitalOpeningHours(
+  session: CapitalSession,
+  epic: string
+): Promise<{
+  ok: boolean;
+  hours: CapitalOpeningHours | null;
+  detail: string;
+}> {
+  const quote = await fetchCapitalMarketQuote(session, epic);
+  if (!quote.raw_ok && quote.opening_hours_raw == null) {
+    return {
+      ok: false,
+      hours: null,
+      detail: `Capital opening hours UNKNOWN · ${quote.detail || 'market fetch failed'}`,
+    };
+  }
+  const hours = parseCapitalOpeningHours(quote.opening_hours_raw, {
+    timezone: quote.instrument_timezone,
+  });
+  if (!hours) {
+    return {
+      ok: true,
+      hours: null,
+      detail: 'Capital markets OK but openingHours missing/unparseable · gaps=UNKNOWN',
+    };
+  }
+  return { ok: true, hours, detail: hours.detail };
 }
 
 /** Search Capital.com markets API for an epic/name (e.g. gold → GOLD). */

@@ -69,7 +69,6 @@ import { allowEntryFromDataQuality } from './dataQuality.js';
 import { atrWilder } from './volatilityNorm.js';
 import { analysisMid } from './analysisPrice.js';
 import { analyzeMarketStructure } from './marketStructure.js';
-import { sessionMetaForEpic } from './tradingSessions.js';
 import {
   noteRiskTradeOpen,
   noteRiskTradePnl,
@@ -522,6 +521,7 @@ function persistBoFromSession(s: Internal) {
       peak_retention: s.peak_retention,
       structural_sl: s.structural_sl,
       safety_sl: s.safety_sl,
+      structure_target: s.structure_target,
       close_phase: s.close_phase,
       pending_deal_reference: s.pending_deal_reference,
       epic: s.epic,
@@ -1669,6 +1669,9 @@ async function robotCycleBody(s: Internal) {
           s.peak_favorable = prior.peak_favorable || s.peak_favorable;
           s.peak_retention = prior.peak_retention ?? s.peak_retention;
           if (s.structural_sl == null) s.structural_sl = prior.structural_sl;
+          if (s.structure_target == null && prior.structure_target != null) {
+            s.structure_target = prior.structure_target;
+          }
         }
         if (brokerOpen.stop_level != null) s.safety_sl = brokerOpen.stop_level;
         s.mode = 'MANAGE';
@@ -1864,6 +1867,7 @@ async function robotCycleBody(s: Internal) {
           const lvl = ms.last_swing_low?.price ?? zone?.low ?? null;
           if (lvl != null && lvl < s.entry_price) s.structure_target = s.entry_price - lvl;
         }
+        if (s.structure_target != null) persistBoFromSession(s);
       }
 
       const decision = decideBestOutcomeExit(
@@ -2393,6 +2397,7 @@ export async function startRobotSession(input: {
     session.peak_retention = priorBo.peak_retention;
     session.structural_sl = priorBo.structural_sl;
     session.safety_sl = priorBo.safety_sl;
+    session.structure_target = priorBo.structure_target ?? null;
     session.mode = 'MANAGE';
     session.close_phase = priorBo.close_phase === 'CLOSED' ? 'OPEN' : priorBo.close_phase;
     pushTick(session, {
@@ -2400,7 +2405,9 @@ export async function startRobotSession(input: {
       bid: null,
       ask: null,
       mid: null,
-      detail: `BO recover · prior state deal=${priorBo.deal_id} MFE=${priorBo.mfe} · will sync Capital`,
+      detail: `BO recover · prior state deal=${priorBo.deal_id} MFE=${priorBo.mfe}${
+        priorBo.structure_target != null ? ` structTgt=${priorBo.structure_target}` : ''
+      } · will sync Capital`,
     });
   }
 
