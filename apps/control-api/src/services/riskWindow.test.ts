@@ -12,10 +12,14 @@ import {
 describe('60min risk window', () => {
   beforeEach(() => resetRiskWindows());
 
-  it('blocks entry until equity is seeded', () => {
+  it('UNKNOWN equity does not block entry (manual lot_size path)', () => {
     const t0 = 1_000_000;
-    expect(allowRiskEntry(1, 0, t0).ok).toBe(false);
-    expect(allowRiskEntry(1, 0, t0).snapshot.status).toBe('SEEDING');
+    const r = allowRiskEntry(1, 0, t0);
+    expect(r.ok).toBe(true);
+    expect(r.snapshot.status).toBe('SEEDING');
+    expect(r.snapshot.equity_start).toBeNull();
+    expect(r.reason).not.toMatch(/no entry until/i);
+    expect(r.reason).toMatch(/manual lot_size/i);
     setRiskEquity(1, 100, t0);
     expect(allowRiskEntry(1, 0, t0).ok).toBe(true);
     expect(allowRiskEntry(1, 0, t0).snapshot.status).toBe('IDLE');

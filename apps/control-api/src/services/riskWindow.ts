@@ -1,8 +1,9 @@
 /**
- * Simple account risk window for 5m brain:
+ * Account risk window — monitor / PnL stats for the 5m brain.
  * - Clock starts on FIRST trade — IDLE while waiting for setup
- * - 60min window · +10% early bank · −10% stop · ≥7% pass
- * - Zero trades → no penalty cooldown
+ * - 60min window · +10% early bank · −10% stop · ≥7% pass (informational % when equity known)
+ * - Equity UNKNOWN never blocks LIVE entry (manual lot_size is authoritative)
+ * - LIVE entry path must not treat this as a mandatory gate
  * - State persisted to disk for restart (#28)
  */
 
@@ -69,7 +70,7 @@ function ensure(accountId: number, now: number): AccountRisk {
       tradesInWindow: 0,
       cooldownUntilMs: 0,
       lastStatus: 'SEEDING',
-      lastDetail: 'waiting equity',
+      lastDetail: 'RISK monitor · equity UNKNOWN · entry uses manual lot_size',
       equityReady: false,
       clockRunning: false,
     };
@@ -223,6 +224,7 @@ function evaluateRiskWindowInner(
     armEquity(s, s.lastSeenEquity);
   }
 
+  // Equity UNKNOWN: informational only — NEVER block LIVE entry (manual lot_size is authoritative).
   if (!s.equityReady || s.equityStart == null || s.equityStart <= 0) {
     const snapshot: RiskSnapshot = {
       account_id: accountId,
@@ -231,15 +233,15 @@ function evaluateRiskWindowInner(
       open_upl: upl,
       pnl_pct: null,
       realized_pct: null,
-      trades_in_window: 0,
+      trades_in_window: s.clockRunning ? s.tradesInWindow : 0,
       window_remaining_sec: 0,
       cooldown_remaining_sec: 0,
       status: 'SEEDING',
-      detail: 'RISK wait equity · no entry until Capital balance known',
+      detail: 'RISK monitor · equity UNKNOWN · entry uses manual lot_size',
     };
     s.lastStatus = 'SEEDING';
     s.lastDetail = snapshot.detail;
-    return { allowEntry: false, snapshot };
+    return { allowEntry: true, snapshot };
   }
 
   const equity = s.equityStart;
