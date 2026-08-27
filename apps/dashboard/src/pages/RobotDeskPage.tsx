@@ -149,7 +149,8 @@ function fmtSl(s: RobotSession): string {
 
 function entryPlanLabel(s: RobotSession): { label: string; kind: 'long' | 'short' | 'flat' | 'entry' | 'closed' } | null {
   const plan = s.entry_plan;
-  if (!plan || s.open_side || !s.running) return null;
+  // 10s OHLC OFF → no EARLY plan / WAIT BAND / MICRO / "10s idle" UI
+  if (!plan || s.open_side || !s.running || s.ohlc_10s?.market === 'OFF') return null;
   const bias = plan.bias;
   const state = plan.state;
   if (bias === 'BUY') {
@@ -354,7 +355,7 @@ export function RobotDeskPage() {
   const feedCount = board?.feed_sender_count ?? capitalSenders.length + publicSenders.length;
   const feedOk = board?.feed_contributing ?? 0;
   const chainLabel =
-    board?.chain || 'LEAD/CONFIRM near Capital → 10s OHLC → ZONE → REGIME → ENTRY/EXIT';
+    board?.chain || 'OWN Capital LEAD → 1m/5m (10s OHLC OFF) → BUY|SELL · BO → EXIT';
   const boardNote =
     board?.note ||
     'Public feeds only count when NEAR Capital CFD mid — FAR = REJECT, wrong epic = N/A (not IDLE broken)';
@@ -705,7 +706,10 @@ export function RobotDeskPage() {
                       <div><span>UPL</span><strong className={(focused.unrealized || 0) >= 0 ? 'pos' : 'neg'}>{fmt(focused.unrealized)}</strong></div>
                       <div><span>LOT</span><strong>{focused.lot_size}</strong></div>
                     </div>
-                    {focused.entry_plan && !focused.open_side && focused.running && (
+                    {focused.entry_plan &&
+                      focused.ohlc_10s?.market !== 'OFF' &&
+                      !focused.open_side &&
+                      focused.running && (
                       <div className="rc-entry-plan mono">
                         <div className="rc-entry-plan-head">
                           <span className={`rc-entry-state ${focused.entry_plan.state.toLowerCase()}`}>
