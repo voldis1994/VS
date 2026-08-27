@@ -1,6 +1,6 @@
 /**
- * Post-trade gates — user: NO cooldown seconds after any trade.
- * Reentry follows tape immediately (same side allowed).
+ * Post-trade gates — anti machine-gun reentry.
+ * Same side may reopen after a short pause; zero pause caused open→close loops.
  */
 
 export type ExitSide = 'BUY' | 'SELL';
@@ -13,13 +13,13 @@ type EpicCooldown = {
 
 const byEpic = new Map<string, EpicCooldown>();
 
-/** No time pause after profit close. */
-export const EPIC_PAUSE_MS = 0;
-/** No time pause after loss/scratch close. */
-export const EPIC_LOSS_PAUSE_MS = 0;
+/** Minimum pause after any close before same-epic reentry (stop open/close spam). */
+export const EPIC_PAUSE_MS = 90_000;
+/** Same pause after loss/scratch — machine-gun was worse on scratches. */
+export const EPIC_LOSS_PAUSE_MS = 90_000;
 /** @deprecated */
 export const EPIC_FLIP_BLOCK_MS = 0;
-/** Same-side reopen allowed — no must-flip block. */
+/** Same-side reopen allowed after pause — no must-flip block. */
 export const EPIC_SAME_SIDE_BLOCK_MS = 0;
 
 function key(epic: string): string {
@@ -28,8 +28,8 @@ function key(epic: string): string {
     .toUpperCase();
 }
 
-export function pauseMsAfterClose(_wasLoss: boolean): number {
-  return 0;
+export function pauseMsAfterClose(wasLoss: boolean): number {
+  return wasLoss ? EPIC_LOSS_PAUSE_MS : EPIC_PAUSE_MS;
 }
 
 export function noteEpicTradeClose(
@@ -52,8 +52,15 @@ export function allowEpicReentry(
 ): { ok: boolean; reason: string } {
   const g = byEpic.get(key(epic));
   if (!g || !g.closedAtMs) return { ok: true, reason: 'no recent epic close' };
-  // User: nekāda cooldown — tape decides immediately
-  return { ok: true, reason: 'no cooldown · tape free' };
+  const need = pauseMsAfterClose(g.wasLoss);
+  const left = g.closedAtMs + need - Date.now();
+  if (left > 0) {
+    return {
+      ok: false,
+      reason: `REENTRY PAUSE · ${Math.ceil(left / 1000)}s left after close · anti machine-gun`,
+    };
+  }
+  return { ok: true, reason: 'pause cleared · tape free' };
 }
 
 /** Lookup last close for desk INFO (same epic). */

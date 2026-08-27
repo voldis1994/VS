@@ -23,7 +23,8 @@ function snap(
     mfe: 0,
     mae: 0,
     peak_retention: null,
-    entry_at: new Date().toISOString(),
+    // Default: past young-trade grace so soft BO exits still testable
+    entry_at: new Date(Date.now() - 120_000).toISOString(),
     regime: 'TREND_UP',
     tick_size: META.tick_size,
     ...partial,
@@ -84,6 +85,24 @@ describe('BO hybrid structure + PeakTrail', () => {
     );
     expect(cut.exit).toBe(true);
     expect(cut.reason).toMatch(/ThesisFailure/);
+  });
+
+  it('young trade (<60s): soft StructureReversal/Thesis HOLD; HardInv still exits', () => {
+    const young = snap({
+      open_side: 'BUY',
+      entry_price: 100,
+      mfe: 0.2,
+      atr: 1,
+      regime: 'TREND_DOWN',
+      entry_at: new Date().toISOString(),
+    });
+    const soft = decideBestOutcomeExit(young, 100.1);
+    expect(soft.exit).toBe(false);
+
+    const sl = hardInvalidationDistance(100, 1, META)!;
+    const hard = decideBestOutcomeExit(young, 100 - sl - 0.01);
+    expect(hard.exit).toBe(true);
+    expect(hard.reason).toMatch(/HardInvalidation/);
   });
 
   it('K bands are wide (hybrid, not scalp)', () => {
