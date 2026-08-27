@@ -2395,6 +2395,63 @@ button.regime-chip { cursor: pointer; }
   overflow: hidden;
   max-height: 3.2em;
 }
+.rc-entry-plan {
+  border: 1px solid var(--rc-cyan-dim);
+  background: rgba(0, 12, 18, 0.55);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.rc-entry-plan-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.rc-entry-state {
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--rc-cyan);
+}
+.rc-entry-state.armed { color: #ffd166; }
+.rc-entry-state.triggered { color: var(--accent); }
+.rc-entry-state.invalidated { color: var(--danger); }
+.rc-entry-bias.buy { color: var(--accent); font-weight: 700; }
+.rc-entry-bias.sell { color: #ff8da8; font-weight: 700; }
+.rc-entry-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+.rc-entry-plan-grid > div {
+  border: 1px solid rgba(92, 225, 255, 0.15);
+  padding: 4px 6px;
+  background: rgba(0, 0, 0, 0.25);
+}
+.rc-entry-plan-grid span {
+  display: block;
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  color: rgba(180, 220, 235, 0.45);
+}
+.rc-entry-plan-grid strong {
+  font-size: 11px;
+  color: var(--rc-cyan);
+}
+.rc-entry-wait { color: rgba(200, 235, 245, 0.85); }
+.rc-entry-triggers {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: rgba(180, 220, 235, 0.65);
+  font-size: 10px;
+}
+.rc-entry-htf {
+  color: rgba(160, 210, 225, 0.55);
+  font-size: 10px;
+}
 .rc-more { align-self: flex-start; margin-top: auto; }
 .rc-emblem {
   position: relative;
