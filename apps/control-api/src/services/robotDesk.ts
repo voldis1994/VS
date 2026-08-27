@@ -43,7 +43,7 @@ import {
   idleArmedState,
 } from './entryFromRegime.js';
 import type { ScalpZone } from './zones.js';
-import { noteEpicTradeClose, lastEpicClose, pauseMsAfterClose } from './tradeCooldown.js';
+import { noteEpicTradeClose, lastEpicClose, pauseMsAfterClose, allowEpicReentry } from './tradeCooldown.js';
 import { deskConflictShouldExit, deskOpensOnEpic } from './deskSideLock.js';
 import {
   allowEntryFromFeeds,
@@ -525,6 +525,8 @@ function clearTradeState(s: Internal) {
   s.mode = 'FLAT';
   s.journal_open = null;
   s.pending_deal_reference = null;
+  // Consume armed fire — leaving ARMED+micro hot caused immediate re-entry loops.
+  s.armed_trigger = idleArmedState();
   clearBoState(s.id);
   clearPendingExecution(s.id);
 }
@@ -1342,6 +1344,8 @@ async function enterTrade(
     s.entry_price = fill;
     s.peak_favorable = fill;
     s.mode = 'MANAGE';
+    // Setup consumed on fill — do not keep ARMED hot for a second fire.
+    s.armed_trigger = idleArmedState();
     // Risk clock NOT here — wait until Safety SL visible
   } else {
     s.mode = 'FLAT';
@@ -2085,6 +2089,19 @@ async function robotCycleBody(s: Internal) {
         ask: quote.ask,
         mid: quote.mid,
         detail: 'ENTRY BLOCKED · analysis MID UNKNOWN · no trade',
+      });
+      return;
+    }
+
+    // Anti machine-gun: after any close, wait before same-epic reentry
+    const reentry = allowEpicReentry(s.epic, 'BUY'); // side-agnostic pause
+    if (!reentry.ok) {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `NO ENTRY · ${reentry.reason} · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)}`,
       });
       return;
     }

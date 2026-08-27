@@ -8,7 +8,7 @@ import {
   pauseMsAfterClose,
 } from './tradeCooldown.js';
 
-describe('epic — no post-trade cooldown', () => {
+describe('epic anti machine-gun reentry pause', () => {
   beforeEach(() => {
     resetEpicTradeCooldowns();
     vi.useFakeTimers();
@@ -17,20 +17,24 @@ describe('epic — no post-trade cooldown', () => {
     vi.useRealTimers();
   });
 
-  it('all pauses are 0s', () => {
-    expect(EPIC_PAUSE_MS).toBe(0);
-    expect(EPIC_LOSS_PAUSE_MS).toBe(0);
-    expect(pauseMsAfterClose(false)).toBe(0);
-    expect(pauseMsAfterClose(true)).toBe(0);
+  it('pause is 90s after profit or loss', () => {
+    expect(EPIC_PAUSE_MS).toBe(90_000);
+    expect(EPIC_LOSS_PAUSE_MS).toBe(90_000);
+    expect(pauseMsAfterClose(false)).toBe(90_000);
+    expect(pauseMsAfterClose(true)).toBe(90_000);
   });
 
-  it('allows opposite immediately after close', () => {
-    noteEpicTradeClose('GOLD', 'BUY', false);
-    expect(allowEpicReentry('GOLD', 'SELL').ok).toBe(true);
-  });
-
-  it('allows same side immediately (no must-flip)', () => {
+  it('blocks reentry immediately after close', () => {
     noteEpicTradeClose('GOLD', 'BUY', true);
+    const blocked = allowEpicReentry('GOLD', 'BUY');
+    expect(blocked.ok).toBe(false);
+    expect(blocked.reason).toMatch(/REENTRY PAUSE/);
+  });
+
+  it('allows reentry after pause elapses', () => {
+    noteEpicTradeClose('GOLD', 'BUY', false);
+    expect(allowEpicReentry('GOLD', 'SELL').ok).toBe(false);
+    vi.advanceTimersByTime(90_000);
     expect(allowEpicReentry('GOLD', 'BUY').ok).toBe(true);
     expect(allowEpicReentry('GOLD', 'SELL').ok).toBe(true);
   });
