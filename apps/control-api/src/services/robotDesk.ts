@@ -2257,7 +2257,9 @@ async function robotCycleBody(s: Internal) {
     const staleDir = detectStaleQuoteAdverse(
       sig.direction,
       analysisPrice,
-      confLegs.map((c) => ({ label: c.label, mid: c.mid }))
+      confLegs.map((c) => ({ label: c.label, mid: c.mid })),
+      // Capital LIVE is source of truth — cross-feed confirmation is optional evidence only.
+      { requireRefs: false }
     );
     if (staleDir.block) {
       pushTick(s, {
