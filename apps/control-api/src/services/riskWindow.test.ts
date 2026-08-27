@@ -9,7 +9,7 @@ import {
   setRiskEquity,
 } from './riskWindow.js';
 
-describe('10min risk window', () => {
+describe('60min risk window', () => {
   beforeEach(() => resetRiskWindows());
 
   it('blocks entry until equity is seeded', () => {
@@ -21,7 +21,7 @@ describe('10min risk window', () => {
     expect(allowRiskEntry(1, 0, t0).snapshot.status).toBe('IDLE');
   });
 
-  it('IDLE waiting for setup does not burn clock or cooldown after 10min', () => {
+  it('IDLE waiting for setup does not burn clock or cooldown after 60min', () => {
     const t0 = 1_100_000;
     setRiskEquity(1, 100, t0);
     expect(allowRiskEntry(1, 0, t0).snapshot.status).toBe('IDLE');

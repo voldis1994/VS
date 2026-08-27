@@ -7,6 +7,7 @@ import {
   createCapitalPosition,
   fetchCapitalMarketQuote,
   fetchCapitalPrices,
+  fetchCapitalConfirmedProfit,
   listCapitalOpenPositions,
   ensureCapitalStopVisible,
   type CapitalMarketQuote,
@@ -38,9 +39,9 @@ import {
   formatZoneInfo,
   shortNetMove,
   tapeSide,
+  aggregateTenSecToFiveMin,
 } from './entryFromRegime.js';
 import type { ScalpZone } from './zones.js';
-import { ZONE_WINDOW } from './zones.js';
 import { noteEpicTradeClose, lastEpicClose, pauseMsAfterClose } from './tradeCooldown.js';
 import { deskConflictShouldExit, deskOpensOnEpic } from './deskSideLock.js';
 import {
@@ -52,7 +53,6 @@ import {
 import {
   aggregateSecondsToTen,
   emptyTenSecState,
-  expandMinutesToTenSec,
   publicOhlc10s,
   updateTenSecondOhlc,
   type TenSecBar,
@@ -65,6 +65,49 @@ import {
   tradeJournalPath,
   type JournalOpenSnap,
 } from './tradeJournal.js';
+import { allowEntryFromDataQuality } from './dataQuality.js';
+import { atrWilder } from './volatilityNorm.js';
+import { analysisMid } from './analysisPrice.js';
+import { analyzeMarketStructure } from './marketStructure.js';
+import {
+  noteRiskTradeOpen,
+  noteRiskTradePnl,
+  allowRiskEntry,
+  hydrateRiskState,
+  exportRiskState,
+  type PersistedRiskState,
+} from './riskWindow.js';
+import {
+  buildBoStateFromOpen,
+  clearBoState,
+  clearPendingExecution,
+  loadBoState,
+  loadPendingExecution,
+  nextClosePhaseAfterBrokerAck,
+  nextClosePhaseAfterListFailure,
+  recoverPendingExecution,
+  resolveEntryPrice,
+  saveBoState,
+  savePendingExecution,
+  shouldClearTradeState,
+  persistRiskSnapshotJson,
+  canClearPendingExecution,
+  type ClosePhase,
+} from './tradeRecovery.js';
+import {
+  referenceAgreement,
+  tagConfirmationQuote,
+  tagExecutionQuote,
+} from './multiFeedRoles.js';
+import { detectStaleQuoteAdverse } from './staleQuoteGuard.js';
+import {
+  emptyMultiTfState,
+  buildHtfContextFromBooks,
+  type MultiTfState,
+} from './timeframeBooks.js';
+import { seedMultiTfHistory, refreshDueTfBooks } from './seedMultiTf.js';
+import { computeInstrumentSafetyStop } from './safetyStop.js';
+import { loadJson } from './persistentStore.js';
 
 export type RobotTick = {
   at: string;
@@ -108,6 +151,14 @@ export type RobotSession = {
   reads_fail: number;
   open_side: 'BUY' | 'SELL' | null;
   safety_sl: number | null;
+  /** Soft 5m structural invalidation (software BO) — separate from Capital Safety SL */
+  structural_sl: number | null;
+  /** Favorable-distance target beyond 1R (swing/liquidity) for continuation hold */
+  structure_target: number | null;
+  atr_5m: number | null;
+  /** RiskWindow trade counter already noted for this open (exactly once) */
+  risk_open_noted: boolean;
+  close_phase: ClosePhase;
   error: string | null;
   /** When false, robot never invents entries — pipeline fan-out only */
   entry_enabled: boolean;
@@ -169,6 +220,11 @@ type Internal = RobotSession & {
   cycle_busy: boolean;
   /** Pending Excel journal row until close */
   journal_open: JournalOpenSnap | null;
+  pending_deal_reference: string | null;
+  /** Capital-native multi-TF historical books */
+  multiTf: MultiTfState;
+  last_multi_tf_seed_ms: number;
+  last_quote_fetch_ms: number;
 };
 
 const ACTIVE_CADENCE_MS = 2_000;
@@ -180,10 +236,13 @@ function marketAllowsTrading(status: string | null | undefined): boolean {
   const s = String(status || '')
     .trim()
     .toUpperCase();
-  // Missing status → do not park (Capital sometimes omits it)
-  if (!s) return true;
+  // Missing/unknown status → NO NEW ENTRY (#17)
+  if (!s) return false;
   return s === 'TRADEABLE' || s === 'OPEN';
 }
+
+/** Exported for tests (#52). */
+export { marketAllowsTrading };
 
 /** Human INFO line — must scream when Capital market is not TRADEABLE (#136 / Aug13). */
 export function formatMarketInfo(
@@ -191,7 +250,8 @@ export function formatMarketInfo(
   tradeable: boolean,
   pollSec = CLOSED_MARKET_CADENCE_MS / 1000
 ): string {
-  const st = String(status || 'CLOSED').trim().toUpperCase() || 'CLOSED';
+  const raw = String(status || '').trim().toUpperCase();
+  const st = raw || 'UNKNOWN';
   if (tradeable) {
     return `MARKET OPEN · Capital=${st} · entry/manage allowed`;
   }
@@ -278,6 +338,10 @@ function publicSession(s: Internal): RobotSession {
     multiFeed: _multi,
     cycle_busy: _busy,
     journal_open: _journal,
+    pending_deal_reference: _pend,
+    multiTf: _mtf,
+    last_multi_tf_seed_ms: _mtfs,
+    last_quote_fetch_ms: _lqf,
     ...rest
   } = s;
   const zoneSnap = buildScalpZone(s.closedBars);
@@ -432,8 +496,40 @@ function clearTradeState(s: Internal) {
   s.peak_retention = null;
   s.unrealized = null;
   s.safety_sl = null;
+  s.structural_sl = null;
+  s.structure_target = null;
+  s.atr_5m = null;
+  s.risk_open_noted = false;
+  s.close_phase = 'CLOSED';
   s.mode = 'FLAT';
   s.journal_open = null;
+  s.pending_deal_reference = null;
+  clearBoState(s.id);
+  clearPendingExecution(s.id);
+}
+
+function persistBoFromSession(s: Internal) {
+  if (!s.open_side || s.entry_price == null) return;
+  saveBoState(
+    buildBoStateFromOpen({
+      deal_id: s.deal_id,
+      side: s.open_side,
+      entry_price: s.entry_price,
+      entry_at: s.entry_at,
+      mfe: s.mfe,
+      mae: s.mae,
+      peak_favorable: s.peak_favorable,
+      peak_retention: s.peak_retention,
+      structural_sl: s.structural_sl,
+      safety_sl: s.safety_sl,
+      structure_target: s.structure_target,
+      close_phase: s.close_phase,
+      pending_deal_reference: s.pending_deal_reference,
+      epic: s.epic,
+      account_id: s.account_id,
+      robot_id: s.id,
+    })
+  );
 }
 
 function buildJournalOpen(
@@ -535,8 +631,7 @@ function writeJournalClose(
 }
 
 /**
- * SAFETY SL as LAST RESORT (~0.20% / ~9pt) — wider than HardInv 2.0pt.
- * PeakProtect / HardInvalidation must fire first; Capital Limit SL only on disaster.
+ * SAFETY SL — instrument metadata only (#33/#34). No magnitude floors.
  */
 function safetyStopLevel(
   direction: 'BUY' | 'SELL',
@@ -545,38 +640,21 @@ function safetyStopLevel(
   ask: number | null,
   spread: number | null,
   minStopDistance: number | null,
-  loosen = 1
-): number {
-  const ref =
-    direction === 'BUY'
-      ? bid != null && Number.isFinite(bid)
-        ? bid
-        : mid
-      : ask != null && Number.isFinite(ask)
-        ? ask
-        : mid;
-  const abs = Math.max(Math.abs(ref), 1e-9);
-  const spr =
-    spread != null && Number.isFinite(spread) && spread > 0
-      ? spread
-      : bid != null && ask != null
-        ? Math.max(ask - bid, 0)
-        : abs * 0.00005;
-
-  const pctCushion = abs * SAFETY_SL_PCT; // last resort; HardInv 2.0pt first
-  const brokerMin =
-    minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
-      ? minStopDistance
-      : 0;
-  const floor = abs >= 1000 ? 0.25 : abs >= 100 ? 0.12 : abs >= 10 ? 0.02 : abs >= 1 ? 0.0002 : 0.00002;
-  const dist =
-    Math.max(pctCushion, brokerMin * 1.5, spr * 4, floor) * Math.max(loosen, 1);
-
-  const raw = direction === 'BUY' ? ref - dist : ref + dist;
-  if (abs >= 1000) return Math.round(raw * 10) / 10;
-  if (abs >= 100) return Math.round(raw * 100) / 100;
-  if (abs >= 1) return Math.round(raw * 10000) / 10000;
-  return Math.round(raw * 1e6) / 1e6;
+  loosen = 1,
+  meta?: { pointSize?: number | null; tickSize?: number | null }
+): number | null {
+  const r = computeInstrumentSafetyStop({
+    direction,
+    mid,
+    bid,
+    ask,
+    spread,
+    minStopDistance,
+    pointSize: meta?.pointSize,
+    tickSize: meta?.tickSize,
+    loosen,
+  });
+  return r.ok ? r.stop_level : null;
 }
 
 /** Cushion stopDistance in Capital POINTS (≥ 1.5× min, ~0.08% when point size known). */
@@ -625,15 +703,16 @@ function expectedStopFromDistance(
 function updateExcursion(s: Internal, mid: number, brokerUpl?: number | null) {
   if (!s.open_side || s.entry_price == null) return;
   const fav = favorableMove(s.open_side, s.entry_price, mid);
-  // Display: prefer broker cash UPL when present; BO math uses fav/mfe points
+  // Display UPL = Capital broker cash only — never invent from price fav
   s.unrealized =
-    brokerUpl != null && Number.isFinite(brokerUpl) ? Number(brokerUpl) : fav;
+    brokerUpl != null && Number.isFinite(brokerUpl) ? Number(brokerUpl) : null;
   if (fav > s.mfe) {
     s.mfe = fav;
     s.peak_favorable = mid;
   }
   if (fav < s.mae) s.mae = fav;
   s.peak_retention = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
+  persistBoFromSession(s);
 }
 
 /** Exact id only — never returns a different robot */
@@ -836,40 +915,100 @@ async function exitTrade(
       detail: 'EXIT blocked — no dealId (cannot close). Will keep MANAGE, no new entry.',
     });
     s.mode = 'MANAGE';
+    s.close_phase = 'CLOSE_UNCERTAIN';
     return;
   }
+
+  s.close_phase = 'CLOSE_REQUESTED';
+  persistBoFromSession(s);
 
   pushTick(s, {
     phase: 'DECIDE',
     bid: quote.bid,
     ask: quote.ask,
     mid: quote.mid,
-    detail: `EXIT NOW · ${reason}`,
+    detail: `EXIT NOW · CLOSE_REQUESTED · ${reason}`,
   });
 
   const result = await closeCapitalPosition(session, dealId);
   if (!result.ok) {
     s.error = result.detail;
+    s.close_phase = 'CLOSE_UNCERTAIN';
     pushTick(s, {
       phase: 'ERROR',
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `CLOSE FAIL: ${result.detail}`,
+      detail: `CLOSE FAIL: ${result.detail} · state CLOSE_UNCERTAIN (not CLOSED)`,
     });
     return;
   }
 
-  s.exits_done += 1;
+  s.close_phase = 'BROKER_CLOSE_SENT';
   s.last_deal_reference = result.deal_reference || s.last_deal_reference;
+
+  // Reconcile — HTTP ok is not CLOSED proof
+  const listed = await listCapitalOpenPositions(session);
+  let stillOpen = false;
+  if (listed.ok) {
+    stillOpen = allOpensOnEpic(listed.positions, s.epic).some(
+      (p) => p.deal_id === dealId || p.deal_id === s.deal_id
+    );
+  } else {
+    s.close_phase = 'RECONCILING';
+    pushTick(s, {
+      phase: 'WAIT',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `CLOSE sent · broker list fail — RECONCILING (not marking CLOSED) · ${listed.detail}`,
+    });
+    persistBoFromSession(s);
+    s.mode = 'MANAGE';
+    return;
+  }
+
+  const phase = nextClosePhaseAfterBrokerAck(stillOpen);
+  s.close_phase = phase;
+  if (stillOpen || !shouldClearTradeState(phase)) {
+    pushTick(s, {
+      phase: 'WAIT',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `CLOSE ok but broker still open dealId=${dealId} · CLOSE_UNCERTAIN · retry reconcile · keep management`,
+    });
+    persistBoFromSession(s);
+    s.mode = 'MANAGE';
+    return;
+  }
+
+  s.exits_done += 1;
   s.closed_at_ms = Date.now();
   const exitSide = s.open_side;
-  const wasLoss =
-    (s.unrealized != null && s.unrealized <= 0) ||
-    (quote.mid != null &&
-      s.entry_price != null &&
-      exitSide != null &&
-      (exitSide === 'BUY' ? quote.mid <= s.entry_price : quote.mid >= s.entry_price));
+  // Broker-confirmed realized only — never invent wasLoss / PnL from UPL or mid
+  const profitRef = result.deal_reference || s.last_deal_reference;
+  const realizedGot = await fetchCapitalConfirmedProfit(session, profitRef);
+  let wasLoss = false;
+  if (realizedGot.ok && realizedGot.profit != null && Number.isFinite(realizedGot.profit)) {
+    wasLoss = realizedGot.profit <= 0;
+    noteRiskTradePnl(s.account_id, realizedGot.profit);
+    pushTick(s, {
+      phase: 'INFO',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `RISK PnL · broker realized ${realizedGot.profit} · ${realizedGot.detail}`,
+    });
+  } else {
+    pushTick(s, {
+      phase: 'INFO',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `RISK PnL UNKNOWN · skipped noteRiskTradePnl · ${realizedGot.detail}`,
+    });
+  }
   noteEpicTradeClose(s.epic, exitSide, wasLoss);
   s.error = null;
   writeJournalClose(s, quote, reason, wasLoss);
@@ -878,7 +1017,7 @@ async function exitTrade(
     bid: quote.bid,
     ask: quote.ask,
     mid: quote.mid,
-    detail: `CLOSED ${s.open_side} ${s.display_name} · ${result.detail} · ${reason}`,
+    detail: `CLOSED ${s.open_side} ${s.display_name} · broker flat confirmed · ${result.detail} · ${reason}`,
   });
   if (s.client_id) {
     emitToClient(s.client_id, {
@@ -915,9 +1054,12 @@ async function enterTrade(
   direction: 'BUY' | 'SELL',
   quote: CapitalMarketQuote,
   reason: string,
-  setupType?: string | null
+  setupType?: string | null,
+  structuralSl?: number | null
 ) {
-  void setupType;
+  if (structuralSl != null && Number.isFinite(structuralSl)) {
+    s.structural_sl = structuralSl;
+  }
 
   // HARD RULE: never entry while any trade open on this epic
   const listed = await listCapitalOpenPositions(session);
@@ -937,7 +1079,20 @@ async function enterTrade(
     if (existing) {
       s.open_side = existing.direction;
       s.deal_id = existing.deal_id;
-      s.entry_price = existing.open_level ?? quote.mid;
+      // Broker open_level only — never seed entry from quote.mid
+      const fill = resolveEntryPrice({ broker_open_level: existing.open_level });
+      if (fill != null) s.entry_price = fill;
+      else {
+        s.entry_price = null;
+        pushTick(s, {
+          phase: 'WAIT',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `ONE TRADE · broker open ${existing.direction} dealId=${existing.deal_id} · FILL UNKNOWN (no open_level)`,
+        });
+        return;
+      }
       s.entry_at = s.entry_at || new Date().toISOString();
       s.mode = 'MANAGE';
       if (existing.stop_level != null) s.safety_sl = existing.stop_level;
@@ -973,11 +1128,24 @@ async function enterTrade(
   }
 
   // SAFETY SL — MUST be accepted by Capital and visible in Capital.com app.
-  // Never open a naked position (old bug: "entry without SL").
+  // Never open a naked position. Capital min-stop metadata required.
   const minPts = quote.min_stop_points;
   const minPrice = quote.min_stop_distance ?? null;
   const unit = (quote.min_stop_unit || 'POINTS').toUpperCase();
   const useDistance = minPts != null && minPts > 0 && !unit.includes('PERCENT');
+  if (
+    (minPts == null || minPts <= 0) &&
+    (minPrice == null || minPrice <= 0)
+  ) {
+    pushTick(s, {
+      phase: 'ERROR',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: 'ENTRY BLOCKED — Capital minStop metadata UNKNOWN',
+    });
+    return;
+  }
   const loosenSteps = [1, 1.15, 1.35, 1.6, 2.0, 2.5, 3.0];
 
   let stopLevel: number | null = null;
@@ -1029,7 +1197,7 @@ async function enterTrade(
     }
   }
 
-  if (!result?.ok) {
+    if (!result?.ok) {
     for (const loosen of loosenSteps) {
       const level = safetyStopLevel(
         direction,
@@ -1038,8 +1206,19 @@ async function enterTrade(
         quote.ask,
         quote.spread ?? null,
         minPrice,
-        loosen
+        loosen,
+        { pointSize: quote.point_size ?? null, tickSize: quote.point_size ?? null }
       );
+      if (level == null) {
+        pushTick(s, {
+          phase: 'ERROR',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: 'ENTRY BLOCKED — Safety SL UNKNOWN (no tick/minStop metadata)',
+        });
+        return;
+      }
       const dist = direction === 'BUY' ? mid - level : level - mid;
       pushTick(s, {
         phase: 'INFO',
@@ -1087,9 +1266,12 @@ async function enterTrade(
 
   s.orders_placed += 1;
   s.open_side = direction;
-  s.mode = 'MANAGE';
+  s.mode = 'FLAT'; // MANAGE only after broker fill confirmed (#25)
+  s.close_phase = 'OPEN';
   s.last_deal_reference = result.deal_reference || null;
-  s.entry_price = mid;
+  s.pending_deal_reference = result.deal_reference || null;
+  const signalMid = mid;
+  s.entry_price = null; // never seed BO with signal mid
   s.entry_at = new Date().toISOString();
   s.mfe = 0;
   s.mae = 0;
@@ -1099,8 +1281,81 @@ async function enterTrade(
   s.safety_sl = stopLevel != null && Number.isFinite(stopLevel) ? stopLevel : null;
   s.error = null;
 
+  savePendingExecution({
+    robot_id: s.id,
+    account_id: s.account_id,
+    epic: s.epic,
+    side: direction,
+    deal_reference: result.deal_reference || null,
+    claimed_at: new Date().toISOString(),
+    signal_mid: signalMid,
+  });
+
+  let confirmLevel: number | null = null;
   const dealId = await resolveDealId(session, s, result.deal_reference);
   if (dealId) s.deal_id = dealId;
+  if (result.deal_reference) {
+    const conf = await confirmCapitalDeal(session, result.deal_reference);
+    if (conf.ok) {
+      if (conf.deal_id) s.deal_id = conf.deal_id;
+      if (conf.level != null) confirmLevel = conf.level;
+    }
+  }
+
+  // Broker open_level = execution truth
+  const listedAfter = await listCapitalOpenPositions(session);
+  let brokerLevel: number | null = null;
+  if (listedAfter.ok) {
+    const hit = matchOpenOnEpic(listedAfter.positions, s.epic);
+    if (hit) {
+      s.deal_id = hit.deal_id;
+      brokerLevel = hit.open_level;
+      if (hit.stop_level != null) s.safety_sl = hit.stop_level;
+    }
+  }
+  const fill = resolveEntryPrice({
+    broker_open_level: brokerLevel,
+    confirm_level: confirmLevel,
+  });
+  if (fill != null) {
+    s.entry_price = fill;
+    s.peak_favorable = fill;
+    s.mode = 'MANAGE';
+    // Risk clock NOT here — wait until Safety SL visible
+  } else {
+    s.mode = 'FLAT';
+    s.entry_price = null;
+    pushTick(s, {
+      phase: 'WAIT',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `FILL UNKNOWN · waiting broker open_level · signal mid ${signalMid} not used for BO`,
+    });
+  }
+  if (brokerLevel != null && signalMid != null && Math.abs(brokerLevel - signalMid) > 1e-9) {
+    pushTick(s, {
+      phase: 'INFO',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `FILL · broker ${brokerLevel} vs signal mid ${signalMid} · slippage ${(brokerLevel - signalMid).toFixed(5)} · BO uses broker`,
+    });
+  }
+  // #26 — clear pending only when broker position + fill confirmed
+  if (
+    canClearPendingExecution({
+      brokerOpen: brokerLevel != null || Boolean(s.deal_id),
+      fillLevel: fill,
+    })
+  ) {
+    clearPendingExecution(s.id);
+  }
+  persistBoFromSession(s);
+
+  if (fill == null) {
+    return;
+  }
 
   // Verify SL is physically on Capital.com — attach via PUT if missing
   const ensured = await ensureCapitalStopVisible(session, s.epic, {
@@ -1132,6 +1387,13 @@ async function enterTrade(
     return;
   }
 
+  // Risk clock / trade counter — exactly once after broker fill AND Safety SL confirmed
+  if (!s.risk_open_noted) {
+    noteRiskTradeOpen(s.account_id);
+    s.risk_open_noted = true;
+  }
+  persistBoFromSession(s);
+
   pushTick(s, {
     phase: 'INFO',
     bid: quote.bid,
@@ -1145,9 +1407,11 @@ async function enterTrade(
     bid: quote.bid,
     ask: quote.ask,
     mid: quote.mid,
-    detail: `ORDER ENTRY ${direction} ${s.display_name} lot=${s.lot_size} · Capital SL ${
+    detail: `ORDER ENTRY ${direction} ${s.display_name} lot=${s.lot_size} · entry=${s.entry_price} (broker fill) · Capital Safety SL ${
       s.safety_sl
-    } VISIBLE${usedStopDistance != null ? ` (dist ${usedStopDistance}pts)` : ''} · ${result.detail}${
+    } VISIBLE${usedStopDistance != null ? ` (dist ${usedStopDistance}pts)` : ''}${
+      s.structural_sl != null ? ` · structSL ${s.structural_sl}` : ''
+    } · ${result.detail}${
       dealId || s.deal_id ? ` · dealId=${s.deal_id || dealId}` : ''
     }`,
   });
@@ -1198,7 +1462,7 @@ async function enterTrade(
         s.account_id,
         m.rows[0]?.id || 0,
         direction === 'BUY' ? 'LONG' : 'SHORT',
-        quote.mid || 0,
+        s.entry_price, // broker fill only — never quote.mid invent
         s.lot_size,
       ]
     );
@@ -1301,6 +1565,7 @@ async function robotCycleBody(s: Internal) {
     s.reads_ok += 1;
     s.error = null;
     s.last_quote_at = new Date().toISOString();
+    s.last_quote_fetch_ms = Date.now();
     if (quote.epic && quote.epic !== s.epic) {
       s.epic = quote.epic;
     }
@@ -1410,27 +1675,113 @@ async function robotCycleBody(s: Internal) {
       }
       brokerOpen = onEpic[0] || null;
       if (brokerOpen) {
+        const prior = loadBoState(s.id);
         s.open_side = brokerOpen.direction;
         s.deal_id = brokerOpen.deal_id;
-        if (s.entry_price == null) s.entry_price = brokerOpen.open_level ?? quote.mid;
-        if (!s.entry_at) s.entry_at = new Date().toISOString();
+        const fill = resolveEntryPrice({
+          broker_open_level: brokerOpen.open_level,
+        });
+        if (fill != null) s.entry_price = fill;
+        else if (s.entry_price == null && prior?.entry_price != null) {
+          s.entry_price = prior.entry_price;
+        }
+        if (!s.entry_at) s.entry_at = prior?.entry_at || new Date().toISOString();
+        if (prior) {
+          s.mfe = Math.max(s.mfe, prior.mfe);
+          s.mae = Math.min(s.mae, prior.mae);
+          s.peak_favorable = prior.peak_favorable || s.peak_favorable;
+          s.peak_retention = prior.peak_retention ?? s.peak_retention;
+          if (s.structural_sl == null) s.structural_sl = prior.structural_sl;
+          if (s.structure_target == null && prior.structure_target != null) {
+            s.structure_target = prior.structure_target;
+          }
+        }
+        if (brokerOpen.stop_level != null) s.safety_sl = brokerOpen.stop_level;
         s.mode = 'MANAGE';
+        s.close_phase = 'OPEN';
         setRobotCadence(s, MANAGE_CADENCE_MS);
         if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
-      } else if (s.open_side) {
-        // Local thought open but broker flat → treat as closed
-        pushTick(s, {
-          phase: 'INFO',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
+        persistBoFromSession(s);
+
+        // Pending execution recovery — never duplicate
+        const pending = loadPendingExecution(s.id);
+        const rec = recoverPendingExecution({
+          pending,
+          brokerOpen: {
+            deal_id: brokerOpen.deal_id,
+            direction: brokerOpen.direction,
+            open_level: brokerOpen.open_level,
+          },
         });
-        s.closed_at_ms = Date.now();
-        const flatPnl =
-          s.unrealized != null && Number.isFinite(s.unrealized) ? s.unrealized : 0;
-        noteEpicTradeClose(s.epic, s.open_side, flatPnl <= 0);
-        clearTradeState(s);
+        if (rec.action === 'ADOPT') {
+          clearPendingExecution(s.id);
+          pushTick(s, {
+            phase: 'INFO',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: rec.detail,
+          });
+        }
+      } else if (s.open_side) {
+        const pending = loadPendingExecution(s.id);
+        // Do not clear in-flight entry while pending claim exists (listing lag)
+        if (pending) {
+          pushTick(s, {
+            phase: 'WAIT',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `Broker list flat but pending execution ${pending.deal_reference || 'claim'} — RECONCILING (not clearing)`,
+          });
+          s.close_phase = 'RECONCILING';
+          persistBoFromSession(s);
+        } else if (s.close_phase === 'CLOSE_UNCERTAIN' || s.close_phase === 'RECONCILING') {
+          pushTick(s, {
+            phase: 'EXIT',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: 'Broker flat after CLOSE_UNCERTAIN — confirmed CLOSED',
+          });
+          s.closed_at_ms = Date.now();
+          // Realized UNKNOWN on external flat — do not invent wasLoss from UPL
+          noteEpicTradeClose(s.epic, s.open_side, false);
+          clearTradeState(s);
+        } else {
+          pushTick(s, {
+            phase: 'INFO',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
+          });
+          s.closed_at_ms = Date.now();
+          noteEpicTradeClose(s.epic, s.open_side, false);
+          clearTradeState(s);
+        }
+      } else {
+        // Flat + pending claim without broker open
+        const pending = loadPendingExecution(s.id);
+        const rec = recoverPendingExecution({ pending, brokerOpen: null });
+        if (rec.action === 'CLEAR_PENDING') {
+          clearPendingExecution(s.id);
+          pushTick(s, {
+            phase: 'INFO',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: rec.detail,
+          });
+        } else if (rec.action === 'WAIT') {
+          pushTick(s, {
+            phase: 'WAIT',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: rec.detail,
+          });
+        }
       }
     } else {
       pushTick(s, {
@@ -1510,14 +1861,52 @@ async function robotCycleBody(s: Internal) {
           ? continuationSameSide(liveSide, signalForCont, s.regime, s.closedBars)
           : { ok: false, reason: '' };
 
-      // PROFIT engine — bank 75% · TP 2pt · HardInv · flip exit
+      // 5m BO — prefer Capital-native 5m ATR
+      const fiveNative = s.multiTf.books['5m'].bars;
+      const five =
+        fiveNative.length >= 8 ? fiveNative : aggregateTenSecToFiveMin(s.closedBars);
+      s.atr_5m = atrWilder(five, 14);
+
+      // Structure / liquidity target distance (favorable pts) for continuation hold
+      if (s.structure_target == null && s.entry_price != null && five.length >= 8) {
+        // Pass provenance as-is — analyzeMarketStructure keeps only explicit REAL
+        const ms = analyzeMarketStructure(
+          five.map((b) => ({
+            open_time_ms: b.open_time_ms,
+            open: b.open,
+            high: b.high,
+            low: b.low,
+            close: b.close,
+            ticks: b.ticks,
+            provenance: b.provenance,
+          })),
+          { pivotLeft: 1, pivotRight: 1 }
+        );
+        const zone = buildScalpZone(s.closedBars);
+        if (s.open_side === 'BUY') {
+          const lvl = ms.last_swing_high?.price ?? zone?.high ?? null;
+          if (lvl != null && lvl > s.entry_price) s.structure_target = lvl - s.entry_price;
+        } else if (s.open_side === 'SELL') {
+          const lvl = ms.last_swing_low?.price ?? zone?.low ?? null;
+          if (lvl != null && lvl < s.entry_price) s.structure_target = s.entry_price - lvl;
+        }
+        if (s.structure_target != null) persistBoFromSession(s);
+      }
+
       const decision = decideBestOutcomeExit(
-        { ...s, short_net_pct: short.netPct },
+        {
+          ...s,
+          short_net_pct: short.netPct,
+          atr: s.atr_5m,
+          structural_sl: s.structural_sl,
+          structure_target: s.structure_target,
+        },
         exitPx,
         {
           oppositeEntrySignal,
           oppositeReason: tapeNow.reason,
           continuationSameSide: cont.ok && !oppositeEntrySignal,
+          ignoreMicroOpposite: Boolean(cont.ok && s.mfe >= (s.atr_5m ?? 0) * 0.25),
         }
       );
       if (decision.exit) {
@@ -1538,7 +1927,13 @@ async function robotCycleBody(s: Internal) {
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
         } · ${
           describeBestOutcomeState(
-            { ...s, short_net_pct: short.netPct },
+            {
+              ...s,
+              short_net_pct: short.netPct,
+              atr: s.atr_5m,
+              structural_sl: s.structural_sl,
+              structure_target: s.structure_target,
+            },
             exitPx,
             {
               oppositeEntrySignal,
@@ -1568,10 +1963,79 @@ async function robotCycleBody(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // No post-close time pause (user: nekāda cooldown)
-    if (quote.mid == null) return;
+    // Analysis domain = MID (#66). Bid/ask reserved for execution / realizable PnL.
+    const analysisPrice = analysisMid(quote);
+    if (analysisPrice == null) {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: 'ENTRY BLOCKED · analysis MID UNKNOWN · no trade',
+      });
+      return;
+    }
 
-    // Seed 10s bars from THIS client's Capital only
+    // Seed / refresh Capital-native multi-TF history (primary) before any ENTRY READY
+    const needSeed =
+      !s.multiTf.ready ||
+      Date.now() - s.last_multi_tf_seed_ms >= 60_000 ||
+      s.multiTf.seeded_at_ms == null;
+    if (needSeed) {
+      s.last_multi_tf_seed_ms = Date.now();
+      try {
+        s.multiTf = await seedMultiTfHistory(opened.session, s.epic, s.multiTf);
+        pushTick(s, {
+          phase: 'INFO',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `TF seed · ${s.multiTf.detail}`,
+        });
+      } catch (err) {
+        s.multiTf = {
+          ...s.multiTf,
+          ready: false,
+          detail: `TF seed fail · ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    } else {
+      s.multiTf = await refreshDueTfBooks(opened.session, s.epic, s.multiTf);
+      s.last_multi_tf_seed_ms = Date.now();
+    }
+
+    if (!s.multiTf.ready) {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `ENTRY BLOCKED · multi-TF history not ready · ${s.multiTf.detail}`,
+      });
+      return;
+    }
+
+    // Structure books must be present (closed bars only — forming never confirms)
+    const structReady =
+      s.multiTf.books['4H'].ready &&
+      s.multiTf.books['1H'].ready &&
+      s.multiTf.books['15m'].ready &&
+      s.multiTf.books['5m'].ready &&
+      s.multiTf.books['1m'].ready &&
+      s.multiTf.books['5m'].bars.length >= 8 &&
+      s.multiTf.books['5m'].atr != null;
+    if (!structReady) {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: 'ENTRY BLOCKED · structure/data-quality NOT_READY · no trade',
+      });
+      return;
+    }
+
+    // 10s for microstructure / trigger only (not HTF)
     if (Date.now() - s.last_second_fetch_ms >= 4_000) {
       s.last_second_fetch_ms = Date.now();
       const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 100);
@@ -1586,31 +2050,16 @@ async function robotCycleBody(s: Internal) {
             last_closed: last,
             just_closed: isNew,
           };
-          if (isNew) {
-            s.last_closed_bar_key = bucket;
-          }
+          if (isNew) s.last_closed_bar_key = bucket;
           s.ohlc_10s = publicOhlc10s(s.ohlcState);
           applyRobotRegime(s, bars);
-        }
-      }
-      // Cold start: backfill last ~25 min (150×10s) from OWN Capital MINUTE
-      if (s.closedBars.length < 30) {
-        const needMin = Math.ceil(ZONE_WINDOW / 6) + 5;
-        const min = await fetchCapitalPrices(opened.session, s.epic, 'MINUTE', needMin);
-        if (min.ok && min.candles.length >= 10) {
-          const seeded = expandMinutesToTenSec(min.candles).slice(-ZONE_WINDOW);
-          if (seeded.length >= 20) {
-            s.closedBars = seeded;
-            observeClosedBars(s.epic, seeded, s.display_name, s.client_id);
-            const own = currentRegime(s.epic, s.client_id);
-            if (own) s.regime = toLiveRegime(own.current);
-            pushTick(s, {
-              phase: 'INFO',
-              bid: quote.bid,
-              ask: quote.ask,
-              mid: quote.mid,
-              detail: `ZONE seed · OWN ${s.closedBars.length}/${ZONE_WINDOW}×10s from Capital MINUTE (${min.candles.length}m)`,
-            });
+          for (const b of bars) {
+            const prev = s.closedBars[s.closedBars.length - 1];
+            if (prev && prev.open_time_ms === b.open_time_ms) s.closedBars[s.closedBars.length - 1] = b;
+            else s.closedBars.push(b);
+          }
+          if (s.closedBars.length > MAX_REGIME_BARS) {
+            s.closedBars = s.closedBars.slice(-MAX_REGIME_BARS);
           }
         }
       }
@@ -1618,8 +2067,7 @@ async function robotCycleBody(s: Internal) {
 
     const zoneNow = buildScalpZone(s.closedBars);
     const feedGate = allowEntryFromFeeds(s.multiFeed);
-    // Own Capital quote is enough — multi-feed is advisory display only
-    if (!feedGate.ok && quote.mid == null) {
+    if (!feedGate.ok && analysisPrice == null) {
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
@@ -1630,10 +2078,43 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
+    const quoteFetchMs = s.last_quote_fetch_ms || Date.now();
+    const sourceMs = quote.update_time ? Date.parse(quote.update_time) : null;
+    const dq = allowEntryFromDataQuality(
+      {
+        mid: analysisPrice,
+        fetch_ms: quoteFetchMs,
+        source_ms: sourceMs != null && Number.isFinite(sourceMs) ? sourceMs : null,
+      },
+      { nowMs: Date.now(), maxStaleMs: 15_000 }
+    );
+    if (!dq.ok) {
+      pushTick(s, {
+        phase: 'DECIDE',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `SCAN · data quality · ${dq.reason}`,
+      });
+      return;
+    }
+
+    const risk = allowRiskEntry(s.account_id, s.unrealized ?? 0);
+    persistRiskSnapshotJson(s.account_id, risk.snapshot);
+    if (!risk.ok) {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `RISK gate · ${risk.reason}`,
+      });
+      return;
+    }
+
     const closed = s.ohlcState.last_closed;
     const forming = s.ohlcState.forming;
     const justClosed = Boolean(s.ohlcState.just_closed && closed);
-    // Prefer just-closed; else live forming (≥2 ticks); else last closed — never idle "collecting" when bars exist
     const signalBar: TenSecBar | null = justClosed
       ? closed!
       : forming && forming.ticks >= 2
@@ -1643,14 +2124,12 @@ async function robotCycleBody(s: Internal) {
     const ohlc = s.ohlc_10s;
     const show = signalBar || closed;
     const ohlcLine = show
-      ? `10s${liveSignal ? ' LIVE' : justClosed ? ' CLOSE' : ''} O=${show.open.toFixed(2)} H=${show.high.toFixed(2)} L=${show.low.toFixed(2)} C=${show.close.toFixed(2)}`
+      ? `10s${liveSignal ? ' LIVE' : justClosed ? ' CLOSE' : ''} O=${show.open.toFixed(2)} H=${show.high.toFixed(2)} L=${show.low.toFixed(2)} C=${show.close.toFixed(2)}${show.provenance === 'SYNTHETIC' ? ' SYN' : ''}`
       : `10s OHLC seeding · C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'}`;
 
     let direction: 'BUY' | 'SELL' | null = null;
     let reason = '';
     let setupType: string | null = null;
-
-    // Per-client brain — no PEER SYNC from other clients' entries
 
     if (!signalBar) {
       pushTick(s, {
@@ -1658,12 +2137,22 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `SCAN · ${ohlcLine} · collecting 10s bars · ${formatScanContext(s, zoneNow)}`,
+        detail: `SCAN · ${ohlcLine} · waiting LTF trigger · ${formatScanContext(s, zoneNow)} · ${s.multiTf.detail}`,
       });
       return;
     }
 
-    // Internal label only — public API maps to tape TREND_UP/DOWN/RANGE
+    if (signalBar.provenance === 'SYNTHETIC') {
+      pushTick(s, {
+        phase: 'DECIDE',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `SCAN · synthetic 10s barred from entry · ${formatScanContext(s, zoneNow)}`,
+      });
+      return;
+    }
+
     if (!s.regime) s.regime = 'RANGE';
     const bucketKey = String(signalBar.open_time_ms || 0);
     if (bucketKey && bucketKey === s.last_entry_signal_key && !liveSignal) {
@@ -1677,21 +2166,64 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    const sig = decideEntryFrom10sRegime(signalBar, s.regime, s.closedBars);
+    const execQ = tagExecutionQuote({
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: analysisPrice,
+    });
+    const confLegs = (s.feed_legs || [])
+      .filter((l) => l.mid != null)
+      .map((l) => tagConfirmationQuote(l.name || l.sender_id || 'feed', Number(l.mid)));
+    const refAgree = referenceAgreement(execQ.mid, confLegs);
+
+    const htf = buildHtfContextFromBooks(s.multiTf, analysisPrice);
+    const bars5m = s.multiTf.books['5m'].bars;
+    const bars1m = s.multiTf.books['1m'].bars;
+    const bars15m = s.multiTf.books['15m'].bars;
+
+    const sig = decideEntryFrom10sRegime(signalBar, s.regime, s.closedBars, {
+      spread: quote.spread ?? execQ.spread,
+      feed_agreement: refAgree.agreement,
+      broker_min_stop: quote.min_stop_distance,
+      htf,
+      bars5m,
+      bars1m,
+      bars15m,
+      multiTfReady: s.multiTf.ready,
+      analysis_price: analysisPrice,
+      tick_size: quote.point_size ?? null,
+    });
     if (!sig) {
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `DECIDE · ${ohlcLine} · ${explainNoEntry(signalBar, s.regime, s.closedBars)}`,
+        detail: `DECIDE · ${ohlcLine} · ${explainNoEntry(signalBar, s.regime, s.closedBars)} · HTF ${htf.detail}`,
+      });
+      return;
+    }
+
+    const staleDir = detectStaleQuoteAdverse(
+      sig.direction,
+      analysisPrice,
+      confLegs.map((c) => ({ label: c.label, mid: c.mid }))
+    );
+    if (staleDir.block) {
+      pushTick(s, {
+        phase: 'DECIDE',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `DECIDE · ${staleDir.reason}`,
       });
       return;
     }
 
     direction = sig.direction;
     setupType = sig.setup;
-    reason = liveSignal ? `LIVE 10s · ${sig.reason}` : sig.reason;
+    if (sig.structural_sl != null) s.structural_sl = sig.structural_sl;
+    reason = liveSignal ? `LIVE LTF confirm · ${sig.reason}` : sig.reason;
     if (bucketKey) s.last_entry_signal_key = bucketKey;
 
     pushTick(s, {
@@ -1699,10 +2231,18 @@ async function robotCycleBody(s: Internal) {
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `ENTRY READY · ${reason}`,
+      detail: `ENTRY READY · ${reason} · ${htf.detail}`,
     });
 
-    await enterTrade(opened.session, s, direction, quote, reason, setupType);
+    await enterTrade(
+      opened.session,
+      s,
+      direction,
+      quote,
+      reason,
+      setupType,
+      sig.structural_sl
+    );
   } catch (err) {
     s.reads_fail += 1;
     const detail = err instanceof Error ? err.message : String(err);
@@ -1813,6 +2353,11 @@ export async function startRobotSession(input: {
     reads_fail: 0,
     open_side: null,
     safety_sl: null,
+    structural_sl: null,
+    structure_target: null,
+    atr_5m: null,
+    risk_open_noted: false,
+    close_phase: 'CLOSED',
     error: null,
     entry_enabled: input.entry_enabled !== false,
     timer: null,
@@ -1832,6 +2377,10 @@ export async function startRobotSession(input: {
     multiFeed: null,
     cycle_busy: false,
     journal_open: null,
+    pending_deal_reference: null,
+    multiTf: emptyMultiTfState(),
+    last_multi_tf_seed_ms: 0,
+    last_quote_fetch_ms: 0,
     feed_source: 'NONE',
     feed_contributing: 0,
     feed_sender_count: 0,
@@ -1846,7 +2395,7 @@ export async function startRobotSession(input: {
     bid: null,
     ask: null,
     mid: null,
-    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · 10s ZONE brain · ONE TRADE · other robots: ${others}`,
+    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · multi-TF Capital history · ONE TRADE · other robots: ${others}`,
   });
   pushTick(session, {
     phase: 'INFO',
@@ -1854,9 +2403,36 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'PROFIT engine · 0s reentry · tape+color entry · PeakProtect 75% · TP 2pt · HardInv 2pt · Safety SL 0.20% · Excel journal → ' +
+      '4H/1H→15m→5m→1m→10s brain · ENTRY blocked until TF seed ready · structural SL + Safety SL · BO · journal → ' +
       tradeJournalPath(),
   });
+
+  // Restart recovery — Capital open = truth
+  const priorBo = loadBoState(id);
+  if (priorBo) {
+    session.open_side = priorBo.side;
+    session.deal_id = priorBo.deal_id;
+    session.entry_price = priorBo.entry_price;
+    session.entry_at = priorBo.entry_at;
+    session.mfe = priorBo.mfe;
+    session.mae = priorBo.mae;
+    session.peak_favorable = priorBo.peak_favorable;
+    session.peak_retention = priorBo.peak_retention;
+    session.structural_sl = priorBo.structural_sl;
+    session.safety_sl = priorBo.safety_sl;
+    session.structure_target = priorBo.structure_target ?? null;
+    session.mode = 'MANAGE';
+    session.close_phase = priorBo.close_phase === 'CLOSED' ? 'OPEN' : priorBo.close_phase;
+    pushTick(session, {
+      phase: 'INFO',
+      bid: null,
+      ask: null,
+      mid: null,
+      detail: `BO recover · prior state deal=${priorBo.deal_id} MFE=${priorBo.mfe}${
+        priorBo.structure_target != null ? ` structTgt=${priorBo.structure_target}` : ''
+      } · will sync Capital`,
+    });
+  }
 
   sessions.set(id, session);
   try {

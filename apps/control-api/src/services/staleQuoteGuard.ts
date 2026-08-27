@@ -1,6 +1,6 @@
 /**
- * Guard against Capital quote lag vs fresher price truth (#136 speaker).
- * Classic fail: public/10s already dropped, Capital still high → BUY into dump.
+ * Guard against Capital quote lag vs fresher confirmation feeds (#37/#38).
+ * When cross-feed confirmation is required, missing refs → BLOCK (not silent allow).
  */
 
 export type PriceRef = { label: string; mid: number };
@@ -14,7 +14,17 @@ export type StaleQuoteVerdict = {
   rel: number;
 };
 
-const DEFAULT_MIN_REL = 0.0012; // 0.12% ≈ ~5pts on Gold 4350
+/** Relative move threshold — volatility-aware when ATR known. */
+export function staleRelThreshold(
+  capitalMid: number,
+  atr?: number | null,
+  fallbackRel = 0.0012
+): number {
+  if (atr != null && atr > 0 && Number.isFinite(capitalMid) && capitalMid !== 0) {
+    return Math.max(atr / Math.abs(capitalMid) * 0.35, fallbackRel * 0.5);
+  }
+  return fallbackRel;
+}
 
 function relMove(from: number, to: number): number {
   if (!Number.isFinite(from) || !Number.isFinite(to) || from === 0) return 0;
@@ -26,13 +36,13 @@ export function detectStaleQuoteAdverse(
   direction: 'BUY' | 'SELL',
   capitalMid: number | null | undefined,
   refs: PriceRef[],
-  opts?: { minRel?: number }
+  opts?: { minRel?: number; atr?: number | null; requireRefs?: boolean }
 ): StaleQuoteVerdict {
-  const minRel = opts?.minRel ?? DEFAULT_MIN_REL;
+  const requireRefs = opts?.requireRefs !== false; // default: confirmation required
   if (capitalMid == null || !Number.isFinite(capitalMid)) {
     return {
-      block: false,
-      reason: 'no capital mid',
+      block: true,
+      reason: 'STALE GUARD · capital mid UNKNOWN · NO ENTRY',
       capital_mid: NaN,
       lead_mid: null,
       lead_label: null,
@@ -40,11 +50,14 @@ export function detectStaleQuoteAdverse(
     };
   }
 
+  const minRel = opts?.minRel ?? staleRelThreshold(capitalMid, opts?.atr);
   const usable = refs.filter((r) => r.mid != null && Number.isFinite(r.mid));
   if (usable.length === 0) {
     return {
-      block: false,
-      reason: 'no fresher refs',
+      block: requireRefs,
+      reason: requireRefs
+        ? 'STALE GUARD · cross-feed confirmation required · no fresher refs · NO ENTRY'
+        : 'no fresher refs · allow (confirmation optional)',
       capital_mid: capitalMid,
       lead_mid: null,
       lead_label: null,
@@ -96,34 +109,31 @@ export function detectStaleQuoteAdverse(
   };
 }
 
-/**
- * Capital fake extreme vs public-near (#136).
- * BUY blocked: Capital alone below public (fake dip).
- * SELL blocked: Capital alone above public (fake rally).
- * No public → allow (do not miss Capital-only moves).
- */
 export function detectCapitalIsolatedExtreme(
   direction: 'BUY' | 'SELL',
   capitalMid: number | null | undefined,
   publicNearMids: number[],
-  opts?: { minRel?: number }
+  opts?: { minRel?: number; atr?: number | null; requirePublic?: boolean }
 ): StaleQuoteVerdict {
-  const minRel = opts?.minRel ?? 0.0008;
+  const requirePublic = opts?.requirePublic === true;
   if (capitalMid == null || !Number.isFinite(capitalMid)) {
     return {
-      block: false,
-      reason: 'no capital mid',
+      block: true,
+      reason: 'capital mid UNKNOWN',
       capital_mid: NaN,
       lead_mid: null,
       lead_label: null,
       rel: 0,
     };
   }
+  const minRel = opts?.minRel ?? staleRelThreshold(capitalMid, opts?.atr, 0.0008);
   const pubs = publicNearMids.filter((m) => Number.isFinite(m));
   if (pubs.length === 0) {
     return {
-      block: false,
-      reason: 'no public-near feeds — Capital-only OK',
+      block: requirePublic,
+      reason: requirePublic
+        ? 'public-near confirmation required · NONE · NO ENTRY'
+        : 'no public-near feeds · Capital-only allowed',
       capital_mid: capitalMid,
       lead_mid: null,
       lead_label: null,

@@ -46,7 +46,7 @@ describe('detectCapitalIsolatedExtreme', () => {
   it('allows when no public-near (do not miss Capital-only moves)', () => {
     const v = detectCapitalIsolatedExtreme('BUY', 4519, []);
     expect(v.block).toBe(false);
-    expect(v.reason).toMatch(/Capital-only OK/);
+    expect(v.reason).toMatch(/Capital-only allowed/);
   });
 
   it('blocks BUY on Capital fake dump vs public', () => {

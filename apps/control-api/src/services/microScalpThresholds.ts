@@ -1,31 +1,52 @@
 /**
- * 10s Gold micro scalp — point-first thresholds.
+ * Universal thresholds — ATR / tick metadata required for HardInv/thesis (#32).
+ * Critical UNKNOWN = BLOCK (null). No price-percentage invent.
  */
 
-/** HardInv cut in price points — Gold ~4660 → 2.0pt (user). */
+import { instrumentFloor, magnitudeFloor, moveThresholdPts, type InstrumentMeta } from './volatilityNorm.js';
+
+/** @deprecated legacy name */
 export const HARD_INV_GOLD_PT = 2.0;
-
-/** Short-window dump/rally thesis (~6–9×10s bars) — 3.0pt Gold (user). */
+/** @deprecated */
 export const SHORT_THESIS_GOLD_PT = 3.0;
-/** Pct form of short thesis at Gold ~4660 mid. */
-export const SHORT_THESIS_MOVE_PCT = SHORT_THESIS_GOLD_PT / 4660;
+export const SHORT_THESIS_MOVE_PCT = 3.0 / 4660;
+export const HARD_INV_MOVE_PCT = 0.00043;
 
-/**
- * Capital Safety SL last-resort (~0.20% ≈ 9pt Gold).
- * Wider than HardInv 2.0pt — wicks survive; HardInv cuts first.
- */
+/** Capital Safety SL last-resort (~0.20%) — used with instrument metadata only. */
 export const SAFETY_SL_PCT = 0.002;
 
-/** Realistic micro-scalp TP on Gold (~£0.40). */
+/** @deprecated */
 export const PROFIT_TP_GOLD_PT = 2.0;
 
-/** Bank green if move stalls — no 12min dead hold. */
-export const PROFIT_TIME_DECAY_MS = 180_000;
+export const PROFIT_TIME_DECAY_MS = 15 * 60_000;
 
-/** HardInv distance in price points for any instrument. */
-export function hardInvalidationDistance(entry: number): number {
-  const abs = Math.max(Math.abs(entry), 1e-9);
-  if (abs >= 1000) return HARD_INV_GOLD_PT;
-  if (abs >= 100) return Math.max(abs * 0.0004, 0.2);
-  return Math.max(abs * 0.0008, 0.08);
+/**
+ * HardInv distance — ATR + tick required. UNKNOWN → null (#32).
+ */
+export function hardInvalidationDistance(
+  entry: number,
+  atr?: number | null,
+  meta?: InstrumentMeta | null
+): number | null {
+  return moveThresholdPts(entry, atr ?? null, 0.5, HARD_INV_MOVE_PCT, meta);
 }
+
+export function shortThesisMovePct(
+  entry: number,
+  atr?: number | null,
+  meta?: InstrumentMeta | null
+): number | null {
+  const abs = Math.max(Math.abs(entry), 1e-9);
+  const pts = shortThesisPts(entry, atr, meta);
+  return pts == null ? null : pts / abs;
+}
+
+export function shortThesisPts(
+  entry: number,
+  atr?: number | null,
+  meta?: InstrumentMeta | null
+): number | null {
+  return moveThresholdPts(entry, atr ?? null, 0.75, SHORT_THESIS_MOVE_PCT, meta);
+}
+
+export { magnitudeFloor, instrumentFloor };

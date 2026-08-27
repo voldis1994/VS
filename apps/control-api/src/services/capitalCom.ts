@@ -1,5 +1,13 @@
 import { createPublicKey, publicEncrypt, constants } from 'crypto';
 import { SAFETY_SL_PCT } from './microScalpThresholds.js';
+import {
+  computeInstrumentSafetyStop,
+  computeSafetyCushionStopLevel as computeSafetyFromMeta,
+} from './safetyStop.js';
+import {
+  parseCapitalOpeningHours,
+  type CapitalOpeningHours,
+} from './tradingSessions.js';
 
 export type CapitalComEnv = 'demo' | 'live';
 
@@ -613,31 +621,34 @@ export interface CapitalMarketQuote {
   point_size?: number | null;
   /** Minimum stop distance in PRICE units */
   min_stop_distance?: number | null;
+  /** Capital instrument.openingHours when present on markets/{epic} */
+  opening_hours_raw?: unknown;
+  instrument_timezone?: string | null;
 }
 
-function inferPointSize(json: any, mid: number | null): number {
+/**
+ * Capital point/tick size from instrument metadata ONLY.
+ * Never invent from price magnitude. Missing → null (BLOCK).
+ */
+export function extractCapitalPointSize(json: any): number | null {
   const snap = (json?.snapshot || json?.marketSnapshot || {}) as Record<string, unknown>;
+  const instrument = (json?.instrument || {}) as Record<string, unknown>;
   const rules = (json?.dealingRules || json?.dealing_rules || {}) as Record<string, any>;
   const decimalPlaces =
-    numOrNull(snap.decimalPlacesFactor) ??
-    numOrNull((json?.instrument as any)?.decimalPlacesFactor);
-  const scaling = numOrNull(snap.scalingFactor) ?? 1;
+    numOrNull(snap.decimalPlacesFactor) ?? numOrNull(instrument.decimalPlacesFactor);
+  const scalingRaw = numOrNull(snap.scalingFactor) ?? numOrNull(instrument.scalingFactor);
+  // Capital omits scalingFactor → treat as 1 only when decimalPlacesFactor is present (Capital wire)
   if (decimalPlaces != null && decimalPlaces >= 0 && decimalPlaces <= 8) {
-    return Math.pow(10, -decimalPlaces) * (scaling > 0 ? scaling : 1);
+    const scaling = scalingRaw != null && scalingRaw > 0 ? scalingRaw : 1;
+    return Math.pow(10, -decimalPlaces) * scaling;
   }
   const stepRaw = rules.minStepDistance;
   const stepVal = numOrNull(stepRaw?.value ?? stepRaw);
   const stepUnit = String(stepRaw?.unit || '').toUpperCase();
   if (stepVal != null && stepVal > 0 && !stepUnit.includes('PERCENT')) {
-    // When Capital quotes minStep in POINTS, value is often already the price increment
     return stepVal;
   }
-  const m = mid != null && Number.isFinite(mid) ? Math.abs(mid) : 1;
-  if (m >= 1000) return 0.1;
-  if (m >= 100) return 0.1;
-  if (m >= 10) return 0.01;
-  if (m >= 1) return 0.0001;
-  return 0.00001;
+  return null;
 }
 
 function parseStopRules(
@@ -646,7 +657,7 @@ function parseStopRules(
 ): {
   min_stop_points: number | null;
   min_stop_unit: string | null;
-  point_size: number;
+  point_size: number | null;
   min_stop_distance: number | null;
 } {
   const rules = (json?.dealingRules || json?.dealing_rules || {}) as Record<string, any>;
@@ -657,7 +668,7 @@ function parseStopRules(
     rules.minControlledRiskStopDistance;
   const pts = numOrNull(raw?.value ?? raw);
   const unit = String(raw?.unit || 'POINTS').toUpperCase();
-  const pointSize = inferPointSize(json, mid);
+  const pointSize = extractCapitalPointSize(json);
   if (pts == null || pts <= 0) {
     return {
       min_stop_points: null,
@@ -667,15 +678,31 @@ function parseStopRules(
     };
   }
   if (unit.includes('PERCENT')) {
-    const m = mid != null && Number.isFinite(mid) ? Math.abs(mid) : 1;
+    // Convert Capital % min-stop using Capital bid+ask mid only
+    if (mid == null || !Number.isFinite(mid) || mid <= 0) {
+      return {
+        min_stop_points: pts,
+        min_stop_unit: unit,
+        point_size: pointSize,
+        min_stop_distance: null,
+      };
+    }
     return {
       min_stop_points: pts,
       min_stop_unit: unit,
       point_size: pointSize,
-      min_stop_distance: (m * pts) / 100,
+      min_stop_distance: (Math.abs(mid) * pts) / 100,
     };
   }
-  // POINTS → price via instrument point size
+  // POINTS → price only when Capital point_size known
+  if (pointSize == null || pointSize <= 0) {
+    return {
+      min_stop_points: pts,
+      min_stop_unit: unit,
+      point_size: null,
+      min_stop_distance: null,
+    };
+  }
   return {
     min_stop_points: pts,
     min_stop_unit: unit,
@@ -729,13 +756,19 @@ export async function fetchCapitalMarketQuote(
     }
 
     const snap = (res.json?.snapshot || res.json?.marketSnapshot || {}) as Record<string, unknown>;
+    const instrument = (res.json?.instrument || {}) as Record<string, unknown>;
     const bid = numOrNull(snap.bid ?? snap.bidPrice);
     const ask = numOrNull(snap.offer ?? snap.ask ?? snap.offerPrice);
-    let mid: number | null = null;
-    if (bid != null && ask != null) mid = (bid + ask) / 2;
-    else mid = numOrNull(snap.mid ?? snap.lastTraded);
+    // LIVE analysis MID = Capital BID+ASK only — never lastTraded / one-sided invent
+    const mid =
+      bid != null && ask != null && bid > 0 && ask > 0 ? (bid + ask) / 2 : null;
     const spread = bid != null && ask != null ? ask - bid : null;
     const stops = parseStopRules(res.json, mid);
+    const tz =
+      strOrNull(instrument.timeZone) ||
+      strOrNull(instrument.timezone) ||
+      strOrNull(instrument.timeZoneId) ||
+      null;
 
     return {
       epic: candidate,
@@ -743,17 +776,22 @@ export async function fetchCapitalMarketQuote(
       ask,
       mid,
       spread,
-      market_status: strOrNull(snap.marketStatus ?? res.json?.instrument?.marketStatus),
+      market_status: strOrNull(snap.marketStatus ?? instrument.marketStatus),
       update_time: strOrNull(snap.updateTime ?? snap.updateTimeUTC ?? snap.binaryUpdateTime),
       percentage_change: numOrNull(snap.percentageChange),
       high: numOrNull(snap.high),
       low: numOrNull(snap.low),
-      raw_ok: bid != null || ask != null || mid != null,
+      raw_ok: bid != null || ask != null,
       min_stop_points: stops.min_stop_points,
       min_stop_unit: stops.min_stop_unit,
       point_size: stops.point_size,
       min_stop_distance: stops.min_stop_distance,
-      detail: bid == null && ask == null ? 'Snapshot returned without bid/offer' : undefined,
+      opening_hours_raw: instrument.openingHours ?? instrument.opening_hours ?? null,
+      instrument_timezone: tz,
+      detail:
+        bid == null || ask == null
+          ? 'Capital bid+ask incomplete · analysis MID UNKNOWN'
+          : undefined,
     };
   };
 
@@ -770,6 +808,39 @@ export async function fetchCapitalMarketQuote(
     }
   }
   return quote;
+}
+
+/**
+ * Fetch Capital instrument opening/trading hours for gap classification.
+ * Never invent from epic/category — missing hours → caller treats gaps as UNKNOWN.
+ */
+export async function fetchCapitalOpeningHours(
+  session: CapitalSession,
+  epic: string
+): Promise<{
+  ok: boolean;
+  hours: CapitalOpeningHours | null;
+  detail: string;
+}> {
+  const quote = await fetchCapitalMarketQuote(session, epic);
+  if (!quote.raw_ok && quote.opening_hours_raw == null) {
+    return {
+      ok: false,
+      hours: null,
+      detail: `Capital opening hours UNKNOWN · ${quote.detail || 'market fetch failed'}`,
+    };
+  }
+  const hours = parseCapitalOpeningHours(quote.opening_hours_raw, {
+    timezone: quote.instrument_timezone,
+  });
+  if (!hours) {
+    return {
+      ok: true,
+      hours: null,
+      detail: 'Capital markets OK but openingHours missing/unparseable · gaps=UNKNOWN',
+    };
+  }
+  return { ok: true, hours, detail: hours.detail };
 }
 
 /** Search Capital.com markets API for an epic/name (e.g. gold → GOLD). */
@@ -852,11 +923,18 @@ export async function listCapitalOpenPositions(
   return { ok: true, positions, detail: `${positions.length} open` };
 }
 
-/** Resolve dealReference → dealId after open. */
+/** Resolve dealReference → dealId (+ fill level + profit when Capital returns it). */
 export async function confirmCapitalDeal(
   session: CapitalSession,
   dealReference: string
-): Promise<{ ok: boolean; deal_id?: string; detail: string }> {
+): Promise<{
+  ok: boolean;
+  deal_id?: string;
+  level?: number | null;
+  /** Broker-confirmed realized profit in account currency when present */
+  profit?: number | null;
+  detail: string;
+}> {
   const ref = dealReference.trim();
   if (!ref) return { ok: false, detail: 'Empty dealReference' };
   const res = await session.get(`/api/v1/confirms/${encodeURIComponent(ref)}`);
@@ -872,7 +950,52 @@ export async function confirmCapitalDeal(
   if (!dealId) {
     return { ok: false, detail: `Confirm OK but no dealId for ${ref}` };
   }
-  return { ok: true, deal_id: dealId, detail: `Confirmed dealId=${dealId}` };
+  const rawLevel =
+    res.json?.level ??
+    res.json?.affectedDeals?.[0]?.level ??
+    res.json?.affectedDeals?.[0]?.price ??
+    null;
+  const level =
+    rawLevel != null && Number.isFinite(Number(rawLevel)) ? Number(rawLevel) : null;
+
+  const rawProfit =
+    res.json?.profit ??
+    res.json?.profitAndLoss ??
+    res.json?.realizedProfit ??
+    res.json?.affectedDeals?.[0]?.profit ??
+    res.json?.affectedDeals?.[0]?.profitAndLoss ??
+    null;
+  const profit =
+    rawProfit != null && Number.isFinite(Number(rawProfit)) ? Number(rawProfit) : null;
+
+  return {
+    ok: true,
+    deal_id: dealId,
+    level,
+    profit,
+    detail:
+      level != null
+        ? `Confirmed dealId=${dealId} level=${level}${profit != null ? ` profit=${profit}` : ''}`
+        : `Confirmed dealId=${dealId}${profit != null ? ` profit=${profit}` : ''}`,
+  };
+}
+
+/**
+ * Fetch broker-confirmed realized PnL for a close dealReference.
+ * Returns null when Capital does not expose profit — caller must NOT invent.
+ */
+export async function fetchCapitalConfirmedProfit(
+  session: CapitalSession,
+  dealReference: string | null | undefined
+): Promise<{ ok: boolean; profit: number | null; detail: string }> {
+  const ref = String(dealReference || '').trim();
+  if (!ref) return { ok: false, profit: null, detail: 'no dealReference for profit' };
+  const conf = await confirmCapitalDeal(session, ref);
+  if (!conf.ok) return { ok: false, profit: null, detail: conf.detail };
+  if (conf.profit == null || !Number.isFinite(conf.profit)) {
+    return { ok: true, profit: null, detail: 'confirm OK but realized profit UNKNOWN' };
+  }
+  return { ok: true, profit: conf.profit, detail: conf.detail };
 }
 
 /** Close one open position by dealId. */
@@ -1112,7 +1235,7 @@ export async function ensureCapitalStopVisible(
   };
 }
 
-/** ~0.20% Safety SL — broker last resort; HardInv 2.0pt fires first on 10s Gold. */
+/** Instrument-aware Safety SL — delegates to safetyStop (#33/#34). null = UNKNOWN BLOCK. */
 export function computeSafetyCushionStopLevel(
   direction: 'BUY' | 'SELL',
   mid: number,
@@ -1121,36 +1244,18 @@ export function computeSafetyCushionStopLevel(
     ask?: number | null;
     spread?: number | null;
     minStopDistance?: number | null;
+    pointSize?: number | null;
+    tickSize?: number | null;
+    loosen?: number;
   }
-): number {
-  const bid = opts?.bid ?? null;
-  const ask = opts?.ask ?? null;
-  const ref =
-    direction === 'BUY'
-      ? bid != null && Number.isFinite(bid)
-        ? bid
-        : mid
-      : ask != null && Number.isFinite(ask)
-        ? ask
-        : mid;
-  const abs = Math.max(Math.abs(ref), 1e-9);
-  const spr =
-    opts?.spread != null && opts.spread > 0
-      ? opts.spread
-      : bid != null && ask != null
-        ? Math.max(ask - bid, 0)
-        : abs * 0.00005;
-  const brokerMin =
-    opts?.minStopDistance != null && opts.minStopDistance > 0 ? opts.minStopDistance : 0;
-  // Keep in sync with SAFETY_SL_PCT — last resort; BO HardInv fires first
-  const pctCushion = abs * SAFETY_SL_PCT;
-  const floor = abs >= 1000 ? 0.25 : abs >= 100 ? 0.12 : abs >= 10 ? 0.02 : 0.0002;
-  const dist = Math.max(pctCushion, brokerMin * 1.5, spr * 4, floor);
-  const raw = direction === 'BUY' ? ref - dist : ref + dist;
-  if (abs >= 1000) return Math.round(raw * 10) / 10;
-  if (abs >= 100) return Math.round(raw * 100) / 100;
-  if (abs >= 1) return Math.round(raw * 10000) / 10000;
-  return Math.round(raw * 1e6) / 1e6;
+): number | null {
+  return computeSafetyFromMeta(direction, mid, opts?.bid ?? null, opts?.ask ?? null, {
+    spread: opts?.spread,
+    minStopDistance: opts?.minStopDistance,
+    pointSize: opts?.pointSize,
+    tickSize: opts?.tickSize,
+    loosen: opts?.loosen,
+  });
 }
 
 export type CapitalPriceCandle = {
@@ -1158,20 +1263,71 @@ export type CapitalPriceCandle = {
   high: number;
   low: number;
   close: number;
+  /** Market/source open time when Capital provides it */
+  open_time_ms: number | null;
+  snapshot_time_ms?: number | null;
 };
 
-/** Capital OHLC — SECOND for 10s bars, MINUTE for chase filter. */
+export type CapitalPriceResolution =
+  | 'SECOND'
+  | 'MINUTE'
+  | 'MINUTE_5'
+  | 'MINUTE_15'
+  | 'MINUTE_30'
+  | 'HOUR'
+  | 'HOUR_4'
+  | 'DAY'
+  | 'WEEK';
+
+const RESOLUTION_STEP_MS: Record<string, number> = {
+  SECOND: 1000,
+  MINUTE: 60_000,
+  MINUTE_5: 300_000,
+  MINUTE_15: 900_000,
+  MINUTE_30: 1_800_000,
+  HOUR: 3_600_000,
+  HOUR_4: 14_400_000,
+  DAY: 86_400_000,
+  WEEK: 604_800_000,
+};
+
+function parsePriceTimeMs(p: any): number | null {
+  const raw =
+    p.snapshotTime ??
+    p.snapshotTimeUTC ??
+    p.timestamp ??
+    p.openTime ??
+    p.time ??
+    p.t ??
+    null;
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return raw > 1e12 ? raw : raw * 1000;
+  }
+  if (typeof raw === 'string' && raw.trim()) {
+    const t = Date.parse(raw);
+    if (Number.isFinite(t)) return t;
+  }
+  return null;
+}
+
+/** Capital OHLC — native resolutions. NEVER invent timestamps. */
 export async function fetchCapitalPrices(
   session: CapitalSession,
   epic: string,
-  resolution: 'SECOND' | 'MINUTE' = 'MINUTE',
+  resolution: CapitalPriceResolution = 'MINUTE',
   max = 5
-): Promise<{ ok: boolean; candles: CapitalPriceCandle[]; detail: string }> {
+): Promise<{
+  ok: boolean;
+  candles: CapitalPriceCandle[];
+  detail: string;
+  rejected_no_timestamp: number;
+}> {
   const encoded = encodeURIComponent(epic.trim());
-  const cap = resolution === 'SECOND' ? 100 : 100;
+  const hardCap = resolution === 'SECOND' ? 100 : 1000;
+  const want = Math.min(Math.max(max, 1), hardCap);
   const q = new URLSearchParams({
     resolution,
-    max: String(Math.min(Math.max(max, 1), cap)),
+    max: String(want),
   });
   let res = await session.get(`/api/v1/prices/${encoded}?${q.toString()}`);
   if (!res.ok) {
@@ -1180,20 +1336,88 @@ export async function fetchCapitalPrices(
   }
   if (!res.ok) {
     res = await session.get(
-      `/api/v1/history/prices?epic=${encoded}&resolution=${resolution}&max=${Math.min(Math.max(max, 1), cap)}`
+      `/api/v1/history/prices?epic=${encoded}&resolution=${resolution}&max=${want}`
     );
   }
-  const prices = (res.json?.prices || res.json?.candles || []) as any[];
-  const candles: CapitalPriceCandle[] = [];
-  for (const p of prices) {
-    const open = numOrNull(p.openPrice?.bid ?? p.openPrice?.ask ?? p.open ?? p.o);
-    const high = numOrNull(p.highPrice?.bid ?? p.highPrice?.ask ?? p.high ?? p.h);
-    const low = numOrNull(p.lowPrice?.bid ?? p.lowPrice?.ask ?? p.low ?? p.l);
-    const close = numOrNull(p.closePrice?.bid ?? p.closePrice?.ask ?? p.close ?? p.c);
-    if (open == null || high == null || low == null || close == null) continue;
-    candles.push({ open, high, low, close });
+  if (!res.ok) {
+    return {
+      ok: false,
+      candles: [],
+      detail: `Capital prices ${resolution} HTTP ${res.status}: ${
+        res.json?.errorCode || res.json?.message || res.text.slice(0, 120)
+      }`,
+      rejected_no_timestamp: 0,
+    };
   }
-  return { ok: candles.length > 0, candles, detail: `${candles.length} ${resolution} candles` };
+  const prices = (res.json?.prices || res.json?.candles || []) as any[];
+  const step = RESOLUTION_STEP_MS[resolution] ?? 60_000;
+  const nowMs = Date.now();
+  const candles: CapitalPriceCandle[] = [];
+  let rejected_no_timestamp = 0;
+  let rejected_future = 0;
+
+  for (let i = 0; i < prices.length; i++) {
+    const p = prices[i]!;
+    const oBid = numOrNull(p.openPrice?.bid);
+    const oAsk = numOrNull(p.openPrice?.ask);
+    const hBid = numOrNull(p.highPrice?.bid);
+    const hAsk = numOrNull(p.highPrice?.ask);
+    const lBid = numOrNull(p.lowPrice?.bid);
+    const lAsk = numOrNull(p.lowPrice?.ask);
+    const cBid = numOrNull(p.closePrice?.bid);
+    const cAsk = numOrNull(p.closePrice?.ask);
+
+    const open = midOfPair(oBid, oAsk);
+    const high = midOfPair(hBid, hAsk);
+    const low = midOfPair(lBid, lAsk);
+    const close = midOfPair(cBid, cAsk);
+    // Require true MID from BOTH bid+ask on every OHLC leg — no one-sided invent (#2)
+    if (open == null || high == null || low == null || close == null) continue;
+
+    const rawTs = parsePriceTimeMs(p);
+    if (rawTs == null) {
+      rejected_no_timestamp += 1;
+      continue; // CRITICAL UNKNOWN — never invent
+    }
+    if (rawTs > nowMs + 5_000) {
+      rejected_future += 1;
+      continue;
+    }
+    const open_time_ms = Math.floor(rawTs / step) * step;
+    candles.push({
+      open,
+      high,
+      low,
+      close,
+      open_time_ms,
+      snapshot_time_ms: rawTs,
+    });
+  }
+
+  const detailParts = [`${candles.length} ${resolution} candles`];
+  if (rejected_no_timestamp) detailParts.push(`rejected_no_ts=${rejected_no_timestamp}`);
+  if (rejected_future) detailParts.push(`rejected_future=${rejected_future}`);
+
+  return {
+    ok: candles.length > 0,
+    candles,
+    detail: detailParts.join(' · '),
+    rejected_no_timestamp,
+  };
+}
+
+function midOfPair(bid: number | null, ask: number | null): number | null {
+  if (
+    bid != null &&
+    ask != null &&
+    Number.isFinite(bid) &&
+    Number.isFinite(ask) &&
+    bid > 0 &&
+    ask > 0
+  ) {
+    return (bid + ask) / 2;
+  }
+  return null;
 }
 
 export async function fetchCapitalMinutePrices(
@@ -1205,8 +1429,8 @@ export async function fetchCapitalMinutePrices(
 }
 
 /**
- * True if the latest closed ~5m move (last 5×1m) already ran hard in trade direction.
- * ~0.30% ≈ 14pt Gold — blocks chase on 5m brain.
+ * True if latest closed ~5m move already ran hard in trade direction.
+ * Relative threshold only (no Gold points).
  */
 export function isLateMoveOnFiveMinute(
   direction: 'BUY' | 'SELL',
@@ -1218,7 +1442,7 @@ export function isLateMoveOnFiveMinute(
   const last = window[window.length - 1]!;
   const mid = Math.max(Math.abs(first.open), 1e-9);
   const move = last.close - first.open;
-  const thr = Math.max(mid * 0.003, 0.5);
+  const thr = Math.max(mid * 0.003, mid * 0.0001);
   if (direction === 'BUY' && move >= thr) return true;
   if (direction === 'SELL' && move <= -thr) return true;
   return false;

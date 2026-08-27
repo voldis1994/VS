@@ -1,11 +1,10 @@
-/** PROFIT engine — bank green fast, cut red at HardInv, zero flip-only hold. */
+/** Best Outcome — 5m trade management. Structural SL + Capital Safety SL separated. */
 
 import {
   PROFIT_TIME_DECAY_MS,
-  PROFIT_TP_GOLD_PT,
-  SHORT_THESIS_GOLD_PT,
-  SHORT_THESIS_MOVE_PCT,
   hardInvalidationDistance,
+  shortThesisMovePct,
+  shortThesisPts,
 } from './microScalpThresholds.js';
 
 export { hardInvalidationDistance };
@@ -21,6 +20,11 @@ export type ExitSnapshot = {
   peak_retention: number | null;
   regime?: string | null;
   short_net_pct?: number | null;
+  atr?: number | null;
+  structural_sl?: number | null;
+  /** Optional liquidity / structure target beyond 1R */
+  structure_target?: number | null;
+  tick_size?: number | null;
 };
 
 export function favorableMove(side: ExitSide, entry: number, mid: number): number {
@@ -68,29 +72,74 @@ export function thesisFailureReason(
   return null;
 }
 
-/** Arm PeakProtect after ~1.0pt MFE — real swing, not micro noise. */
-export function bestOutcomeMfeFloor(entry: number): number {
-  const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.00022, 1.0);
+export function bestOutcomeMfeFloor(
+  entry: number,
+  atr?: number | null,
+  meta?: { tick_size?: number | null }
+): number | null {
+  const d = hardInvalidationDistance(entry, atr, meta);
+  return d == null ? null : d * 0.5;
 }
 
-/** Micro-scalp TP — 2pt Gold, pct-scaled elsewhere. */
-export function bestOutcomeTarget(entry: number): number {
-  const abs = Math.max(Math.abs(entry), 1e-9);
-  if (abs >= 1000) return PROFIT_TP_GOLD_PT;
-  return Math.max(abs * 0.00043, 0.8);
+/** Primary 1R target distance (HardInv). Structure target is separate (#36/#5). */
+export function bestOutcomeTarget(
+  entry: number,
+  atr?: number | null,
+  meta?: { tick_size?: number | null },
+  _structureTarget?: number | null
+): number | null {
+  return hardInvalidationDistance(entry, atr, meta);
 }
 
-export function bestOutcomeMinGreen(entry: number): number {
-  const abs = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(abs * 0.00015, 0.5);
+export function bestOutcomeMinGreen(
+  entry: number,
+  atr?: number | null,
+  meta?: { tick_size?: number | null }
+): number | null {
+  const floor = bestOutcomeMfeFloor(entry, atr, meta);
+  return floor == null ? null : floor * 0.5;
 }
 
+/** Default PeakProtect policy — configurable; volatility-aware (#35). */
 export const BEST_OUTCOME_LOCK_RETENTION = 0.75;
 export const BEST_OUTCOME_LOCK_TRIGGER = 0.78;
 
+/**
+ * Adaptive PeakProtect trigger: quieter ATR% → tighter lock; expansion → slightly looser.
+ * Still configurable via opts override.
+ */
+export function peakProtectTrigger(
+  entry: number,
+  atr: number | null | undefined,
+  regime?: string | null
+): { retention: number; trigger: number; detail: string } {
+  let trigger = BEST_OUTCOME_LOCK_TRIGGER;
+  let retention = BEST_OUTCOME_LOCK_RETENTION;
+  const abs = Math.max(Math.abs(entry), 1e-9);
+  if (atr != null && atr > 0) {
+    const pct = atr / abs;
+    if (pct < 0.0005) {
+      trigger = 0.82;
+      retention = 0.8;
+    } else if (pct > 0.02) {
+      trigger = 0.72;
+      retention = 0.68;
+    }
+  }
+  const r = String(regime || '').toUpperCase();
+  if (r === 'EXPANSION' || r === 'BREAKOUT_UP' || r === 'BREAKOUT_DOWN') {
+    trigger = Math.min(trigger, 0.74);
+    retention = Math.min(retention, 0.7);
+  }
+  return {
+    retention,
+    trigger,
+    detail: `PeakProtect policy ret=${retention} trig=${trigger} (configurable)`,
+  };
+}
+
 export function isHardBoReason(reason: string): boolean {
-  return /HardInvalidation|ThesisFailure · short|PeakProtection|OppositeSignal|Target \/ best outcome|TimeDecay|BestOutcome cut/i.test(
+  return /HardInvalidation|StructuralInvalidation|ThesisFailure · short|PeakProtection|OppositeSignal|Target \/ best outcome|TimeDecay|BestOutcome cut|BO BLOCK/i.test(
     reason
   );
 }
@@ -98,21 +147,24 @@ export function isHardBoReason(reason: string): boolean {
 export type BoExitOpts = {
   oppositeEntrySignal?: boolean;
   oppositeReason?: string;
-  /** @deprecated profit mode ignores — never skip bank paths */
   continuationSameSide?: boolean;
+  ignoreMicroOpposite?: boolean;
 };
 
-/**
- * Exit priority (all active — no hold-until-flip):
- * 1) HardInv 2pt
- * 2) Short thesis 3pt
- * 3) Armed flat → cut before minus
- * 4) PeakProtect 75%
- * 5) Opposite tape
- * 6) Thesis vs regime (green lock)
- * 7) TP 2pt
- * 8) TimeDecay 3min green
- */
+function structuralInvalidationDistance(
+  side: ExitSide,
+  entry: number,
+  structuralSl: number | null | undefined
+): number | null {
+  if (structuralSl == null || !Number.isFinite(structuralSl)) return null;
+  if (side === 'BUY') {
+    const d = entry - structuralSl;
+    return d > 0 ? d : null;
+  }
+  const d = structuralSl - entry;
+  return d > 0 ? d : null;
+}
+
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
   mid: number,
@@ -121,31 +173,61 @@ export function decideBestOutcomeExit(
   if (!s.open_side || s.entry_price == null) return { exit: false, reason: '' };
 
   const entry = s.entry_price;
+  const atr = s.atr ?? null;
+  const meta = { tick_size: s.tick_size };
   const fav = favorableMove(s.open_side, entry, mid);
-  const tp = bestOutcomeTarget(entry);
-  const sl = hardInvalidationDistance(entry);
-  const mfeFloor = bestOutcomeMfeFloor(entry);
-  const minGreen = bestOutcomeMinGreen(entry);
+  const hardInv = hardInvalidationDistance(entry, atr, meta);
+  const structDist = structuralInvalidationDistance(s.open_side, entry, s.structural_sl);
+
+  // Critical UNKNOWN HardInv without structural SL → cannot manage (#32)
+  if (hardInv == null && structDist == null) {
+    return {
+      exit: true,
+      reason: 'BO BLOCK · HardInv/structural SL UNKNOWN · close to safety',
+    };
+  }
+
+  const sl = structDist ?? hardInv!;
+  const mfeFloor = bestOutcomeMfeFloor(entry, atr, meta) ?? sl * 0.5;
+  const minGreen = bestOutcomeMinGreen(entry, atr, meta) ?? mfeFloor * 0.5;
   const armed = s.mfe >= mfeFloor;
   const liveRet = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
   const ret = liveRet ?? s.peak_retention;
+  const pp = peakProtectTrigger(entry, atr, s.regime);
+
+  if (s.structural_sl != null && Number.isFinite(s.structural_sl)) {
+    if (s.open_side === 'BUY' && mid <= s.structural_sl) {
+      return {
+        exit: true,
+        reason: `StructuralInvalidation · mid ${mid.toFixed(5)} ≤ SL ${s.structural_sl.toFixed(5)}`,
+      };
+    }
+    if (s.open_side === 'SELL' && mid >= s.structural_sl) {
+      return {
+        exit: true,
+        reason: `StructuralInvalidation · mid ${mid.toFixed(5)} ≥ SL ${s.structural_sl.toFixed(5)}`,
+      };
+    }
+  }
 
   if (fav <= -sl) {
     return { exit: true, reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}` };
   }
 
+  const thesisPct = shortThesisMovePct(entry, atr, meta);
+  const thesisPts = shortThesisPts(entry, atr, meta);
   const short = s.short_net_pct;
-  if (short != null && Number.isFinite(short)) {
-    if (s.open_side === 'BUY' && short <= -SHORT_THESIS_MOVE_PCT) {
+  if (thesisPct != null && thesisPts != null && short != null && Number.isFinite(short)) {
+    if (s.open_side === 'BUY' && short <= -thesisPct) {
       return {
         exit: true,
-        reason: `ThesisFailure · short dump ${(short * 100).toFixed(2)}% (~${SHORT_THESIS_GOLD_PT}pt) vs BUY`,
+        reason: `ThesisFailure · short dump ${(short * 100).toFixed(2)}% (~${thesisPts.toFixed(2)}pt) vs BUY`,
       };
     }
-    if (s.open_side === 'SELL' && short >= SHORT_THESIS_MOVE_PCT) {
+    if (s.open_side === 'SELL' && short >= thesisPct) {
       return {
         exit: true,
-        reason: `ThesisFailure · short rally ${(short * 100).toFixed(2)}% (~${SHORT_THESIS_GOLD_PT}pt) vs SELL`,
+        reason: `ThesisFailure · short rally ${(short * 100).toFixed(2)}% (~${thesisPts.toFixed(2)}pt) vs SELL`,
       };
     }
   }
@@ -157,21 +239,23 @@ export function decideBestOutcomeExit(
     };
   }
 
-  if (armed && ret != null && ret < BEST_OUTCOME_LOCK_TRIGGER && fav > 0) {
+  if (armed && ret != null && ret < pp.trigger && fav > 0) {
     return {
       exit: true,
       reason: `PeakProtection · keep ${(ret * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} · UPL ${fav.toFixed(5)} · lock@${(
-        BEST_OUTCOME_LOCK_RETENTION * 100
-      ).toFixed(0)}% (trig@${(BEST_OUTCOME_LOCK_TRIGGER * 100).toFixed(0)}%)`,
+        pp.retention * 100
+      ).toFixed(0)}% (trig@${(pp.trigger * 100).toFixed(0)}%) · ${pp.detail}`,
     };
   }
 
-  if (opts?.oppositeEntrySignal) {
+  if (opts?.oppositeEntrySignal && !opts?.ignoreMicroOpposite) {
     const why = opts.oppositeReason || 'tape flipped';
-    return {
-      exit: true,
-      reason: `OppositeSignal · exit ${s.open_side} · ${why}`,
-    };
+    if (!armed || (ret != null && ret < 0.9) || fav < minGreen) {
+      return {
+        exit: true,
+        reason: `OppositeSignal · exit ${s.open_side} · ${why}`,
+      };
+    }
   }
 
   if (fav >= minGreen) {
@@ -181,10 +265,42 @@ export function decideBestOutcomeExit(
     }
   }
 
-  if (fav >= tp) {
+  // 1R / structure target — continuation can hold past 1R toward structure_target
+  const oneR = hardInv;
+  const structTarget =
+    s.structure_target != null && Number.isFinite(s.structure_target) && s.structure_target > 0
+      ? s.structure_target
+      : null;
+  // Price float epsilon so entry+target mid round-trips still count as hit
+  const hitEps = Math.max(Math.abs(entry) * 1e-12, 1e-9);
+
+  if (oneR != null && fav + hitEps >= oneR) {
+    const hitStruct = structTarget != null && fav + hitEps >= structTarget;
+    const canHoldPast1R =
+      Boolean(opts?.continuationSameSide) &&
+      structTarget != null &&
+      structTarget > oneR + hitEps &&
+      !hitStruct;
+    if (canHoldPast1R) {
+      // hold toward structure/liquidity target — PeakProtect/HardInv already above
+    } else if (hitStruct) {
+      return {
+        exit: true,
+        reason: `Target / structure · UPL ${fav.toFixed(5)} ≥ structure ${structTarget!.toFixed(5)}`,
+      };
+    } else {
+      return {
+        exit: true,
+        reason: `Target / best outcome · UPL ${fav.toFixed(5)} ≥ 1R ${oneR.toFixed(5)}`,
+      };
+    }
+  }
+
+  // Structure target hit even if 1R unknown (still after safety exits)
+  if (structTarget != null && fav + hitEps >= structTarget) {
     return {
       exit: true,
-      reason: `Target / best outcome · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)}`,
+      reason: `Target / structure · UPL ${fav.toFixed(5)} ≥ structure ${structTarget.toFixed(5)}`,
     };
   }
 
@@ -211,25 +327,34 @@ export function describeBestOutcomeState(
     return {
       exit: false,
       reason: '',
-      hold: 'PROFIT blocked — missing entry_price',
+      hold: 'BO blocked — missing entry_price',
     };
   }
 
   const entry = s.entry_price;
+  const atr = s.atr ?? null;
+  const meta = { tick_size: s.tick_size };
   const fav = favorableMove(s.open_side, entry, mid);
-  const sl = hardInvalidationDistance(entry);
-  const tp = bestOutcomeTarget(entry);
-  const mfeFloor = bestOutcomeMfeFloor(entry);
+  const structDist = structuralInvalidationDistance(s.open_side, entry, s.structural_sl);
+  const hardInv = hardInvalidationDistance(entry, atr, meta);
+  const sl = structDist ?? hardInv;
+  const tp = bestOutcomeTarget(entry, atr, meta, s.structure_target);
+  const mfeFloor = bestOutcomeMfeFloor(entry, atr, meta);
   const liveRet = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
   const ret = liveRet ?? s.peak_retention;
-  const lock = `${(BEST_OUTCOME_LOCK_RETENTION * 100).toFixed(0)}%`;
+  const pp = peakProtectTrigger(entry, atr, s.regime);
   const retTxt = ret != null ? `${(ret * 100).toFixed(0)}%` : '—';
-  const armed = s.mfe >= mfeFloor ? 'armed' : `arm@${mfeFloor.toFixed(1)}`;
+  const armed =
+    mfeFloor != null && s.mfe >= mfeFloor ? 'armed' : `arm@${mfeFloor?.toFixed(2) ?? '?'}`;
   const cont = opts?.continuationReason ? ` · ${opts.continuationReason}` : '';
+  const structTxt =
+    s.structural_sl != null ? ` · structSL ${s.structural_sl.toFixed(2)}` : '';
 
   return {
     exit: false,
     reason: '',
-    hold: `PROFIT · UPL ${fav.toFixed(2)} · TP ${tp.toFixed(1)} · HardInv -${sl.toFixed(2)} · MFE ${s.mfe.toFixed(2)} (${armed}) · ret ${retTxt} · lock@${lock}${cont}`,
+    hold: `BO · UPL ${fav.toFixed(2)} · 1R ${tp?.toFixed(2) ?? 'UNKNOWN'}${
+      s.structure_target != null ? ` · structTgt ${s.structure_target.toFixed(2)}` : ''
+    } · HardInv -${sl?.toFixed(2) ?? 'UNKNOWN'}${structTxt} · MFE ${s.mfe.toFixed(2)} (${armed}) · ret ${retTxt} · lock@${(pp.retention * 100).toFixed(0)}%${cont}`,
   };
 }
