@@ -22,6 +22,14 @@ import {
 import type { StructureBar } from './marketStructure.js';
 import { allowMicrostructureFromBars } from './ohlcQuality.js';
 import { atrWilder } from './volatilityNorm.js';
+import {
+  advanceEarlyEntryArmed,
+  idleArmedState,
+  type ArmedTriggerState,
+  type EarlyEntrySignal,
+} from './earlyEntryArmed.js';
+export type { ArmedTriggerState, EarlyEntrySignal };
+export { idleArmedState, advanceEarlyEntryArmed };
 
 export type RegimeEntry = {
   direction: 'BUY' | 'SELL';
@@ -404,6 +412,10 @@ export function decideEntryFrom10sRegime(
     multiTfReady?: boolean;
     analysis_price?: number | null;
     tick_size?: number | null;
+    /** Stateful early ARMED→TRIGGERED machine (persisted by desk). */
+    armed_state?: ArmedTriggerState | null;
+    on_armed_state?: (s: ArmedTriggerState) => void;
+    now_ms?: number;
   }
 ): RegimeEntry | null {
   // multiTfReady must be explicitly true (#12)
@@ -456,24 +468,52 @@ export function decideEntryFrom10sRegime(
 
   const zone = buildScalpZone(closedBars);
 
-  if (!decision.entry || !decision.direction) {
-    return null;
+  // Strong/late path: full 5m BOS/CHoCH (+ LTF) still enters when ready.
+  if (decision.entry && decision.direction) {
+    const impulse = allowEntryAgainstImpulse(decision.direction, closedBars, bar);
+    if (!impulse.ok) return null;
+    const late = blockLateTrendChase(decision.direction, closedBars, bar);
+    if (!late.ok) return null;
+    opts?.on_armed_state?.(idleArmedState());
+    return {
+      direction: decision.direction,
+      setup: mapSetup(decision.setup),
+      reason: `${decision.reason} · ${describe(bar)}`,
+      zone,
+      zone_setup: null,
+      structural_sl: decision.structural_sl,
+      evidence_score: decision.evidence_score,
+    };
   }
 
-  const impulse = allowEntryAgainstImpulse(decision.direction, closedBars, bar);
-  if (!impulse.ok) return null;
+  // Early path: SETUP→ARMED→TRIGGERED without waiting for full 5m BOS/CHoCH.
+  const early = advanceEarlyEntryArmed(opts?.armed_state ?? idleArmedState(), {
+    now_ms: opts?.now_ms ?? Date.now(),
+    price,
+    bars5m,
+    bars1m,
+    bars10s: microGate.ok ? series.slice(-40) : series.slice(-40),
+    htf: opts?.htf ?? null,
+    spread: opts?.spread,
+    tick_size: opts?.tick_size,
+    broker_min_stop: opts?.broker_min_stop,
+  });
+  opts?.on_armed_state?.(early.state);
+  if (!early.signal) return null;
 
-  const late = blockLateTrendChase(decision.direction, closedBars, bar);
+  const impulse = allowEntryAgainstImpulse(early.signal.direction, closedBars, bar);
+  if (!impulse.ok) return null;
+  const late = blockLateTrendChase(early.signal.direction, closedBars, bar);
   if (!late.ok) return null;
 
   return {
-    direction: decision.direction,
-    setup: mapSetup(decision.setup),
-    reason: `${decision.reason} · ${describe(bar)}`,
+    direction: early.signal.direction,
+    setup: early.signal.setup,
+    reason: `${early.signal.reason} · ${describe(bar)}`,
     zone,
     zone_setup: null,
-    structural_sl: decision.structural_sl,
-    evidence_score: decision.evidence_score,
+    structural_sl: early.signal.structural_sl,
+    evidence_score: 0.7,
   };
 }
 
