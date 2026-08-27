@@ -501,18 +501,24 @@ describe('universality + feeds + isolation', () => {
     expect(robotIdFor(1, 'GOLD')).not.toBe(robotIdFor(2, 'GOLD'));
   });
 
-  it('24. BO PeakProtect still works', () => {
+  it('24. BO PeakProtect after max(1R, ATR) arm', () => {
+    const entry = 100;
+    const atr = 3;
     const cut = decideBestOutcomeExit(
       {
         open_side: 'BUY',
-        entry_price: 100,
+        entry_price: entry,
         entry_at: new Date().toISOString(),
-        mfe: 4,
+        mfe: 12,
         mae: 0,
         peak_retention: 0.5,
+        atr,
         tick_size: 0.01,
+        regime: 'TREND_UP',
+        structure_target: 20,
       },
-      102
+      entry + 2,
+      { continuationSameSide: true }
     );
     expect(cut.exit).toBe(true);
     expect(cut.reason).toMatch(/PeakProtection/);

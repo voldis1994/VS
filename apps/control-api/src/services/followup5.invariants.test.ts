@@ -284,16 +284,20 @@ describe('#5 BO continuation / structure_target priority', () => {
 
   it('continuation hold still yields to PeakProtect and HardInvalidation', () => {
     const entry = 4600;
-    const oneR = hardInvalidationDistance(entry, null, GOLD_META)!;
+    const atr = 5;
+    const oneR = hardInvalidationDistance(entry, atr, GOLD_META)!;
+    const mfe = Math.max(oneR, atr) * 4;
     const pp = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: entry,
-        mfe: 20,
+        mfe,
+        atr,
         peak_retention: 0.35,
         structure_target: oneR * 3,
+        regime: 'TREND_UP',
       }),
-      4608,
+      entry + atr * 0.2,
       { continuationSameSide: true }
     );
     expect(pp.exit).toBe(true);
@@ -304,8 +308,10 @@ describe('#5 BO continuation / structure_target priority', () => {
         open_side: 'BUY',
         entry_price: entry,
         mfe: 10,
+        atr,
         peak_retention: 0.9,
         structure_target: oneR * 3,
+        regime: 'TREND_UP',
       }),
       4580,
       { continuationSameSide: true }
