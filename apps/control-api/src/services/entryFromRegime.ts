@@ -502,9 +502,24 @@ export function decideEntryFrom10sRegime(
   if (!early.signal) return null;
 
   const impulse = allowEntryAgainstImpulse(early.signal.direction, closedBars, bar);
-  if (!impulse.ok) return null;
+  if (!impulse.ok) {
+    // Do not leave phase=TRIGGERED — that would reset SETUP next tick and drop the fire forever.
+    opts?.on_armed_state?.({
+      ...early.state,
+      phase: 'ARMED',
+      detail: `ARMED · post-trigger blocked · impulse · ${impulse.reason}`,
+    });
+    return null;
+  }
   const late = blockLateTrendChase(early.signal.direction, closedBars, bar);
-  if (!late.ok) return null;
+  if (!late.ok) {
+    opts?.on_armed_state?.({
+      ...early.state,
+      phase: 'ARMED',
+      detail: `ARMED · post-trigger blocked · late-chase · ${late.reason}`,
+    });
+    return null;
+  }
 
   return {
     direction: early.signal.direction,

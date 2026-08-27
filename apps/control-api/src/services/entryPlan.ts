@@ -267,7 +267,11 @@ export function buildLiveEntryPlan(input: BuildEntryPlanInput): EntryPlan | null
   };
 }
 
-/** Advance armed state on desk tick when flat — keeps UI + machine fresh between 10s buckets. */
+/** Advance armed state on desk tick when flat — keeps UI + machine fresh between 10s buckets.
+ * MUST NOT consume TRIGGERED: a prior UI refresh that fires+discards the signal causes the next
+ * advanceEarlyEntryArmed() to reset TRIGGERED→SETUP and the fill never reaches enterTrade.
+ * Cap at ARMED (preserve micro score) so decideEntryFrom10sRegime can still emit the signal.
+ */
 export function refreshArmedTriggerState(
   prev: ArmedTriggerState,
   ctx: {
@@ -310,7 +314,7 @@ export function refreshArmedTriggerState(
     provenance: b.provenance,
   }));
   const htf = buildHtfContextFromBooks(ctx.multiTf, ctx.price);
-  const { state } = advanceEarlyEntryArmed(prev ?? idleArmedState(), {
+  const { state, signal } = advanceEarlyEntryArmed(prev ?? idleArmedState(), {
     now_ms: Date.now(),
     price: ctx.price,
     bars5m,
@@ -321,5 +325,53 @@ export function refreshArmedTriggerState(
     tick_size: ctx.tick_size,
     broker_min_stop: ctx.broker_min_stop,
   });
+  return holdTriggeredForDecidePath(state, signal);
+}
+
+/**
+ * UI refresh must not leave phase=TRIGGERED — advanceEarlyEntryArmed resets
+ * TRIGGERED→SETUP on the next call, which drops the fire before enterTrade.
+ */
+export function holdTriggeredForDecidePath(
+  state: ArmedTriggerState,
+  signal: { direction: 'BUY' | 'SELL' } | null
+): ArmedTriggerState {
+  if (signal != null || state.phase === 'TRIGGERED') {
+    return {
+      ...state,
+      phase: 'ARMED',
+      detail: `ARMED · pending execution · micro ${state.micro_score}/2 · ${state.confirms.join('+') || 'ready'}`,
+    };
+  }
   return state;
+}
+
+/** Exact block line for ARMED ticks that did not reach enterTrade. */
+export function formatArmedTriggerDiag(
+  armed: ArmedTriggerState,
+  price: number | null | undefined
+): string {
+  const z =
+    armed.zone_low != null && armed.zone_high != null
+      ? `${armed.zone_low.toFixed(2)}–${armed.zone_high.toFixed(2)}`
+      : '—';
+  const px = price != null && Number.isFinite(price) ? price.toFixed(2) : '—';
+  let vs = '';
+  if (price != null && Number.isFinite(price) && armed.zone_low != null && armed.zone_high != null) {
+    if (price > armed.zone_high) vs = 'ABOVE';
+    else if (price < armed.zone_low) vs = 'BELOW';
+    else vs = 'IN';
+  }
+  const need = Math.max(0, 2 - (armed.micro_score || 0));
+  let why = armed.detail || armed.phase;
+  if (armed.phase === 'ARMED' && need > 0) {
+    why = `NEED_MICRO ${armed.micro_score}/2 (need +${need}) · touch≠ENTRY`;
+  } else if (armed.phase === 'ARMED' && need === 0) {
+    why = `MICRO_OK · awaiting decideEntry→ORDER path · ${armed.detail}`;
+  } else if (armed.phase === 'SETUP' || armed.phase === 'IDLE') {
+    why = `NOT_ARMED · ${armed.phase} · wait price in zone`;
+  } else if (armed.phase === 'INVALIDATED') {
+    why = `INVALIDATED · ${armed.detail}`;
+  }
+  return `ARMED_DIAG · ${armed.phase} · ${armed.direction ?? 'FLAT'} · px ${px} ${vs} zone ${z} · micro ${armed.micro_score}/2 · ${why}`;
 }
