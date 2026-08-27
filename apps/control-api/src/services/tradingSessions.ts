@@ -1,7 +1,13 @@
 /**
  * Capital.com instrument opening hours for gap classification.
- * NEVER guess from EPIC name, asset type, or gap length.
- * Without proven Capital hours → UNKNOWN = NOT_READY.
+ * Real Capital `/markets/{epic}` shape (Postman official sample):
+ *   openingHours: {
+ *     mon: ["00:00 - 22:00", "23:05 - 00:00"],
+ *     tue: [...], ..., sat: [], sun: ["23:05 - 00:00"],
+ *     zone: "UTC"
+ *   }
+ * NEVER guess from EPIC / asset class / gap length.
+ * Without proven Capital hours + zone → UNKNOWN = NOT_READY.
  */
 
 export type CapitalDayWindow = {
@@ -14,7 +20,7 @@ export type CapitalDayWindow = {
 };
 
 export type CapitalOpeningHours = {
-  /** IANA / UTC — from Capital when present, else UTC wire default */
+  /** From Capital openingHours.zone (or instrument timezone when Capital provides it) */
   timezone: string;
   timezone_from_capital: boolean;
   windows: CapitalDayWindow[];
@@ -54,27 +60,78 @@ export function parseHmToMinutes(raw: string | null | undefined): number | null 
   return h * 60 + min;
 }
 
+/**
+ * Capital range strings: "00:00 - 22:00" or "23:05 - 00:00".
+ * Also accepts en-dash / without spaces.
+ */
+export function parseCapitalRangeString(
+  raw: string
+): { open_min: number; close_min: number; overnight: boolean } | null {
+  const s = String(raw || '').trim();
+  const m = /^(\d{1,2}:\d{2}(?::\d{2})?)\s*[-–—]\s*(\d{1,2}:\d{2}(?::\d{2})?)$/.exec(s);
+  if (!m) return null;
+  const open_min = parseHmToMinutes(m[1]);
+  const close_min = parseHmToMinutes(m[2]);
+  if (open_min == null || close_min == null) return null;
+  // "23:05 - 00:00" → overnight to next midnight
+  const overnight = close_min <= open_min;
+  return { open_min, close_min, overnight };
+}
+
 function dowFromKey(key: string): number | null {
   const k = key.trim().toLowerCase();
   if (!k) return null;
   if (k in DAY_NAME_TO_DOW) return DAY_NAME_TO_DOW[k]!;
-  // Reject bare '' / non-numeric — Number('') === 0 would falsely map to Sunday
   if (!/^\d+$/.test(k)) return null;
   const n = Number(k);
   if (Number.isInteger(n) && n >= 0 && n <= 6) return n;
   return null;
 }
 
-/**
- * Parts helpers for a timezone. Uses Intl — invalid TZ throws → caller treats UNKNOWN.
- */
+function pushDaySlot(
+  windows: CapitalDayWindow[],
+  dow: number,
+  open_min: number,
+  closeRaw: number,
+  overnight: boolean
+): void {
+  if (overnight || closeRaw <= open_min) {
+    windows.push({
+      open_dow: dow,
+      open_min,
+      close_dow: (dow + 1) % 7,
+      close_min: closeRaw,
+    });
+    return;
+  }
+  // 23:59 / 23:59:59 → end of local day
+  const endOfDay = closeRaw >= 23 * 60 + 59;
+  if (endOfDay && open_min === 0) {
+    windows.push({
+      open_dow: dow,
+      open_min: 0,
+      close_dow: (dow + 1) % 7,
+      close_min: 0,
+    });
+    return;
+  }
+  windows.push({
+    open_dow: dow,
+    open_min,
+    close_dow: dow,
+    close_min: endOfDay ? 24 * 60 : closeRaw,
+  });
+}
+
 function zonedParts(
   ms: number,
   timeZone: string
 ): { dow: number; minutes: number } | null {
   try {
+    // Capital zone is often "UTC" — Intl accepts it
+    const tz = timeZone === 'UTC' || timeZone === 'GMT' ? 'UTC' : timeZone;
     const fmt = new Intl.DateTimeFormat('en-US', {
-      timeZone,
+      timeZone: tz,
       weekday: 'short',
       hour: '2-digit',
       minute: '2-digit',
@@ -104,12 +161,10 @@ function zonedParts(
 function pointInWindow(dow: number, minutes: number, w: CapitalDayWindow): boolean {
   const start = w.open_dow * 1440 + w.open_min;
   let end = w.close_dow * 1440 + Math.min(w.close_min, 1440);
-  // Same-day exclusive midnight end encoded as close_min=1440
   if (w.close_dow === w.open_dow && w.close_min >= 1440) {
     end = w.open_dow * 1440 + 1440;
   }
   const point = dow * 1440 + minutes;
-  // Window that wraps week (e.g. Fri 22:00 → Sun 22:00)
   if (end <= start) {
     end += 7 * 1440;
     const p2 = point < start ? point + 7 * 1440 : point;
@@ -149,10 +204,9 @@ function coverageMinutesPerDow(windows: CapitalDayWindow[]): number[] {
 }
 
 /**
- * Parse Capital instrument.openingHours.
- * Capital shape (capital-api-client): { monday: [{openTime,closeTime}], ... }
- * Also accepts legacy { marketTimes: [...] } when days are explicit.
- * Returns null when hours cannot be proven.
+ * Parse Capital instrument.openingHours from real `/markets/{epic}` response.
+ * Primary shape: { mon: ["00:00 - 22:00"], ..., zone: "UTC" }
+ * Also accepts object slots {openTime,closeTime} and legacy marketTimes with days.
  */
 export function parseCapitalOpeningHours(
   raw: unknown,
@@ -160,14 +214,16 @@ export function parseCapitalOpeningHours(
 ): CapitalOpeningHours | null {
   if (raw == null || typeof raw !== 'object') return null;
 
-  // Capital timezone required — without it absolute open/closed cannot be proven
-  const tzFromCapital = String(opts?.timezone || '').trim();
-  if (!tzFromCapital) return null;
-  const timezone = tzFromCapital;
+  const obj = raw as Record<string, unknown>;
+  // Capital puts timezone inside openingHours.zone (official Postman sample)
+  const zoneFromHours = String(
+    obj.zone ?? obj.Zone ?? obj.timezone ?? obj.timeZone ?? ''
+  ).trim();
+  const zoneFromOpts = String(opts?.timezone || '').trim();
+  const timezone = zoneFromHours || zoneFromOpts;
+  if (!timezone) return null; // cannot prove absolute open/closed without Capital zone
   const timezone_from_capital = true;
   const windows: CapitalDayWindow[] = [];
-
-  const obj = raw as Record<string, unknown>;
 
   // Legacy IG-style marketTimes with explicit days
   const marketTimes = obj.marketTimes;
@@ -179,53 +235,40 @@ export function parseCapitalOpeningHours(
       const closeDay = dowFromKey(String(r.closeDay ?? r.close_day ?? openDay ?? ''));
       const open_min = parseHmToMinutes(String(r.openTime ?? r.open_time ?? ''));
       const close_min = parseHmToMinutes(String(r.closeTime ?? r.close_time ?? ''));
-      if (openDay == null || closeDay == null || open_min == null || close_min == null) {
-        // Incomplete row without days → cannot prove
-        continue;
-      }
+      if (openDay == null || closeDay == null || open_min == null || close_min == null) continue;
       windows.push({ open_dow: openDay, open_min, close_dow: closeDay, close_min });
     }
   }
 
-  // Capital per-day map: { monday: [{openTime,closeTime}], ... }
+  // Capital per-day map
   for (const [key, val] of Object.entries(obj)) {
-    if (key === 'marketTimes' || key === 'timezone' || key === 'timeZone') continue;
+    if (
+      key === 'marketTimes' ||
+      key === 'timezone' ||
+      key === 'timeZone' ||
+      key === 'zone' ||
+      key === 'Zone'
+    ) {
+      continue;
+    }
     const dow = dowFromKey(key);
     if (dow == null) continue;
     const slots = Array.isArray(val) ? val : [val];
     for (const slot of slots) {
-      if (!slot || typeof slot !== 'object') continue;
+      if (slot == null) continue;
+      // Capital string ranges: "00:00 - 22:00"
+      if (typeof slot === 'string') {
+        const range = parseCapitalRangeString(slot);
+        if (!range) continue;
+        pushDaySlot(windows, dow, range.open_min, range.close_min, range.overnight);
+        continue;
+      }
+      if (typeof slot !== 'object') continue;
       const s = slot as Record<string, unknown>;
       const open_min = parseHmToMinutes(String(s.openTime ?? s.open_time ?? s.open ?? ''));
       const closeRaw = parseHmToMinutes(String(s.closeTime ?? s.close_time ?? s.close ?? ''));
       if (open_min == null || closeRaw == null) continue;
-      // 23:59 / 23:59:59 → end of local day (exclusive next midnight)
-      const endOfDay = closeRaw >= 23 * 60 + 59;
-      if (endOfDay && open_min === 0) {
-        windows.push({
-          open_dow: dow,
-          open_min: 0,
-          close_dow: (dow + 1) % 7,
-          close_min: 0,
-        });
-        continue;
-      }
-      if (closeRaw <= open_min) {
-        // Overnight session into next weekday
-        windows.push({
-          open_dow: dow,
-          open_min,
-          close_dow: (dow + 1) % 7,
-          close_min: closeRaw,
-        });
-        continue;
-      }
-      windows.push({
-        open_dow: dow,
-        open_min,
-        close_dow: dow,
-        close_min: endOfDay ? 24 * 60 : closeRaw,
-      });
+      pushDaySlot(windows, dow, open_min, closeRaw, closeRaw <= open_min);
     }
   }
 
@@ -240,8 +283,8 @@ export function parseCapitalOpeningHours(
     windows,
     continuously_open,
     detail: continuously_open
-      ? `Capital hours 24/7 · TZ ${timezone}`
-      : `Capital hours ${windows.length} windows · TZ ${timezone}`,
+      ? `Capital hours 24/7 · zone ${timezone}`
+      : `Capital hours ${windows.length} windows · zone ${timezone}`,
   };
 }
 
@@ -263,10 +306,8 @@ export function classifyBarGapWithOpeningHours(
 
   if (!hours || !hours.windows.length) return 'unknown';
 
-  // Continuously open markets: any excess gap is missing data
   if (hours.continuously_open) return 'missing';
 
-  // Sample expected bar opens on the TF grid — open slot without a bar = missing data
   for (let t = prevMs + stepMs; t < nextMs; t += stepMs) {
     const open = isCapitalMarketOpenAt(t, hours);
     if (open == null) return 'unknown';
@@ -275,7 +316,7 @@ export function classifyBarGapWithOpeningHours(
   return 'session';
 }
 
-/** @deprecated Use classifyBarGapWithOpeningHours — kept name for call-site clarity */
+/** @deprecated Prefer classifyBarGapWithOpeningHours */
 export function classifyBarGapWithSession(
   prevMs: number,
   nextMs: number,

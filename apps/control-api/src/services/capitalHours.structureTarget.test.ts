@@ -61,8 +61,17 @@ describe('Capital openingHours — never guess from epic/gap length', () => {
     expect(parseCapitalOpeningHours({ marketTimes: [{ openTime: '07:00', closeTime: '21:00' }] })).toBeNull();
   });
 
-  it('parses Capital per-day openingHours', () => {
-    const hours = parseCapitalOpeningHours(weekdayHoursRaw(), { timezone: 'UTC' });
+  it('parses Capital per-day openingHours (string ranges + zone)', () => {
+    const hours = parseCapitalOpeningHours({
+      mon: ['07:00 - 21:00'],
+      tue: ['07:00 - 21:00'],
+      wed: ['07:00 - 21:00'],
+      thu: ['07:00 - 21:00'],
+      fri: ['07:00 - 21:00'],
+      sat: [],
+      sun: [],
+      zone: 'UTC',
+    });
     expect(hours).not.toBeNull();
     expect(hours!.windows.length).toBe(5);
     expect(hours!.continuously_open).toBe(false);

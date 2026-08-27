@@ -35,13 +35,26 @@ describe('Capital truth — marketStatus', () => {
 });
 
 describe('Capital truth — openingHours + timezone', () => {
-  it('hours without Capital timezone → null (UNKNOWN)', () => {
-    const raw = {
+  it('hours without Capital zone → null; zone inside openingHours is enough', () => {
+    const rawNoZone = {
       monday: [{ openTime: '07:00', closeTime: '21:00' }],
     };
-    expect(parseCapitalOpeningHours(raw)).toBeNull();
-    expect(parseCapitalOpeningHours(raw, { timezone: null })).toBeNull();
-    expect(parseCapitalOpeningHours(raw, { timezone: 'UTC' })).not.toBeNull();
+    expect(parseCapitalOpeningHours(rawNoZone)).toBeNull();
+    expect(parseCapitalOpeningHours(rawNoZone, { timezone: null })).toBeNull();
+    // Official Capital shape: zone inside openingHours
+    expect(
+      parseCapitalOpeningHours({
+        mon: ['07:00 - 21:00'],
+        tue: ['07:00 - 21:00'],
+        wed: ['07:00 - 21:00'],
+        thu: ['07:00 - 21:00'],
+        fri: ['07:00 - 21:00'],
+        sat: [],
+        sun: [],
+        zone: 'UTC',
+      })
+    ).not.toBeNull();
+    expect(parseCapitalOpeningHours(rawNoZone, { timezone: 'UTC' })).not.toBeNull();
   });
 
   it('excess gap without hours → unknown; never from gap length alone', () => {

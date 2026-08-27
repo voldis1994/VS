@@ -764,7 +764,15 @@ export async function fetchCapitalMarketQuote(
       bid != null && ask != null && bid > 0 && ask > 0 ? (bid + ask) / 2 : null;
     const spread = bid != null && ask != null ? ask - bid : null;
     const stops = parseStopRules(res.json, mid);
+    const openingHoursRaw = instrument.openingHours ?? instrument.opening_hours ?? null;
+    const hoursObj =
+      openingHoursRaw && typeof openingHoursRaw === 'object'
+        ? (openingHoursRaw as Record<string, unknown>)
+        : null;
+    // Capital timezone lives in openingHours.zone (official API sample)
     const tz =
+      strOrNull(hoursObj?.zone) ||
+      strOrNull(hoursObj?.Zone) ||
       strOrNull(instrument.timeZone) ||
       strOrNull(instrument.timezone) ||
       strOrNull(instrument.timeZoneId) ||
@@ -786,7 +794,7 @@ export async function fetchCapitalMarketQuote(
       min_stop_unit: stops.min_stop_unit,
       point_size: stops.point_size,
       min_stop_distance: stops.min_stop_distance,
-      opening_hours_raw: instrument.openingHours ?? instrument.opening_hours ?? null,
+      opening_hours_raw: openingHoursRaw,
       instrument_timezone: tz,
       detail:
         bid == null || ask == null
@@ -830,6 +838,7 @@ export async function fetchCapitalOpeningHours(
       detail: `Capital opening hours UNKNOWN · ${quote.detail || 'market fetch failed'}`,
     };
   }
+  // Prefer zone embedded in openingHours; opts timezone is fallback
   const hours = parseCapitalOpeningHours(quote.opening_hours_raw, {
     timezone: quote.instrument_timezone,
   });
@@ -837,7 +846,7 @@ export async function fetchCapitalOpeningHours(
     return {
       ok: true,
       hours: null,
-      detail: 'Capital markets OK but openingHours missing/unparseable · gaps=UNKNOWN',
+      detail: 'Capital markets OK but openingHours/zone missing/unparseable · gaps=UNKNOWN',
     };
   }
   return { ok: true, hours, detail: hours.detail };

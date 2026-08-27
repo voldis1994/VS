@@ -17,6 +17,7 @@ const acquireCapitalSession = vi.fn();
 const listCapitalOpenPositions = vi.fn();
 const fetchCapitalMarketQuote = vi.fn();
 const fetchCapitalMinutePrices = vi.fn();
+const confirmCapitalDeal = vi.fn();
 const emitToClient = vi.fn();
 const listActiveSubscriptionsForEpic = vi.fn();
 const poolQuery = vi.fn();
@@ -31,6 +32,7 @@ vi.mock('./capitalCom.js', () => ({
   listCapitalOpenPositions: (...a: unknown[]) => listCapitalOpenPositions(...a),
   fetchCapitalMarketQuote: (...a: unknown[]) => fetchCapitalMarketQuote(...a),
   fetchCapitalMinutePrices: (...a: unknown[]) => fetchCapitalMinutePrices(...a),
+  confirmCapitalDeal: (...a: unknown[]) => confirmCapitalDeal(...a),
   computeSafetyCushionStopLevel: () => 1995,
   ensureCapitalStopVisible: async () => ({
     ok: true,
@@ -161,7 +163,33 @@ beforeEach(() => {
   });
 
   acquireCapitalSession.mockResolvedValue({ ok: true, session: { token: 't' } });
-  listCapitalOpenPositions.mockResolvedValue({ ok: true, positions: [] });
+  // First call = pre-entry flat; later calls = broker fill present
+  listCapitalOpenPositions.mockImplementation(async () => {
+    if (createCapitalPosition.mock.calls.length === 0) {
+      return { ok: true, positions: [] };
+    }
+    return {
+      ok: true,
+      positions: [
+        {
+          deal_id: 'DEAL-1',
+          deal_reference: 'DR-1',
+          epic: 'XAUUSD',
+          direction: 'BUY',
+          size: 0.1,
+          open_level: 2000.1,
+          upl: 0,
+          stop_level: 1995,
+        },
+      ],
+    };
+  });
+  confirmCapitalDeal.mockResolvedValue({
+    ok: true,
+    deal_id: 'DEAL-1',
+    level: 2000.1,
+    detail: 'confirmed',
+  });
   fetchCapitalMarketQuote.mockResolvedValue({
     epic: 'XAUUSD',
     bid: 2000,
@@ -169,6 +197,9 @@ beforeEach(() => {
     mid: 2000.25,
     spread: 0.5,
     min_stop_distance: 0.5,
+    min_stop_points: 50,
+    min_stop_unit: 'POINTS',
+    point_size: 0.01,
     raw_ok: true,
   });
   fetchCapitalMinutePrices.mockResolvedValue({
