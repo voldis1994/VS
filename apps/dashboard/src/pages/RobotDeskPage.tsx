@@ -41,6 +41,8 @@ type EntryPlan = {
   invalidation: number | null;
   structure_target: number | null;
   waiting_for: string;
+  block_reason?: string;
+  price_vs_zone?: 'IN' | 'ABOVE' | 'BELOW' | null;
   trigger_10s: string;
   trigger_1m: string;
   htf_context: string;
@@ -712,6 +714,17 @@ export function RobotDeskPage() {
                           <span className={`rc-entry-bias ${(focused.entry_plan.bias || '').toLowerCase()}`}>
                             {focused.entry_plan.bias ?? '—'}
                           </span>
+                          {focused.entry_plan.price_vs_zone && (
+                            <span className={`rc-entry-vs ${focused.entry_plan.price_vs_zone.toLowerCase()}`}>
+                              PRICE {focused.entry_plan.price_vs_zone} ZONE
+                            </span>
+                          )}
+                        </div>
+                        <div className={`rc-entry-block ${focused.entry_plan.state === 'TRIGGERED' ? 'ok' : 'wait'}`}>
+                          {focused.entry_plan.block_reason
+                            ? `${focused.entry_plan.block_reason} · `
+                            : ''}
+                          {focused.entry_plan.waiting_for}
                         </div>
                         <div className="rc-entry-plan-grid">
                           <div><span>PRICE</span><strong>{fmt(focused.entry_plan.current_price)}</strong></div>
@@ -724,7 +737,7 @@ export function RobotDeskPage() {
                             </strong>
                           </div>
                           <div>
-                            <span>TRIGGER</span>
+                            <span>WAIT BAND</span>
                             <strong>
                               {focused.entry_plan.trigger_zone
                                 ? `${fmt(focused.entry_plan.trigger_zone.low, 2)}–${fmt(focused.entry_plan.trigger_zone.high, 2)}`
@@ -733,14 +746,23 @@ export function RobotDeskPage() {
                           </div>
                           <div><span>INVALID</span><strong>{fmt(focused.entry_plan.invalidation, 2)}</strong></div>
                           <div><span>STRUCT TGT</span><strong>{fmt(focused.entry_plan.structure_target, 2)}</strong></div>
-                          <div><span>MICRO</span><strong>{focused.entry_plan.micro_score}/2 · {focused.entry_plan.micro_confirms.join('+') || '—'}</strong></div>
+                          <div>
+                            <span>MICRO</span>
+                            <strong>
+                              {focused.entry_plan.micro_score}/2
+                              {focused.entry_plan.micro_score < 2 ? ' · need confirms' : ' · ok'}
+                              {focused.entry_plan.micro_confirms.length
+                                ? ` · ${focused.entry_plan.micro_confirms.join('+')}`
+                                : ''}
+                            </strong>
+                          </div>
                         </div>
-                        <div className="rc-entry-wait">{focused.entry_plan.waiting_for}</div>
                         <div className="rc-entry-triggers">
                           <span>{focused.entry_plan.trigger_10s}</span>
                           <span>{focused.entry_plan.trigger_1m}</span>
                         </div>
                         <div className="rc-entry-htf">{focused.entry_plan.htf_context}</div>
+                        <div className="rc-entry-note">Zone / wait band ≠ ENTRY. Fill only after micro 2/2.</div>
                       </div>
                     )}
                     <div className="rc-focus-log mono">{lastLog(focused)}</div>

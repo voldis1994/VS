@@ -424,7 +424,7 @@ function buildDecisionChain(
   let action = `SCAN · ${tape.reason}`;
   if (entryPlan && !s.open_side && s.running) {
     const bias = entryPlan.bias ?? '—';
-    action = `ENTRY · ${entryPlan.state} · ${bias} · ${entryPlan.waiting_for}`;
+    action = `ENTRY · ${entryPlan.state} · ${bias} · ${entryPlan.block_reason} · ${entryPlan.waiting_for}`;
   }
   if (!s.running) action = 'STOPPED';
   else if (s.open_side) action = `MANAGE ${s.open_side}`;
@@ -1947,7 +1947,8 @@ async function robotCycleBody(s: Internal) {
         fiveNative.length >= 8 ? fiveNative : aggregateTenSecToFiveMin(s.closedBars);
       s.atr_5m = atrWilder(five, 14);
 
-      // Structure / liquidity target distance (favorable pts) for continuation hold
+      // Structure / liquidity target distance (favorable pts) for continuation hold.
+      // Prefer swing beyond the scalp zone — zone edge itself is not a trade target.
       if (s.structure_target == null && s.entry_price != null && five.length >= 8) {
         // Pass provenance as-is — analyzeMarketStructure keeps only explicit REAL
         const ms = analyzeMarketStructure(
@@ -1964,10 +1965,18 @@ async function robotCycleBody(s: Internal) {
         );
         const zone = buildScalpZone(s.closedBars);
         if (s.open_side === 'BUY') {
-          const lvl = ms.last_swing_high?.price ?? zone?.high ?? null;
+          let lvl = ms.last_swing_high?.price ?? null;
+          if (lvl != null && zone?.high != null && lvl <= zone.high + 1e-9) {
+            const highs = ms.pivots.filter((p) => p.kind === 'HIGH' && p.price > zone.high!);
+            lvl = highs[highs.length - 1]?.price ?? null;
+          }
           if (lvl != null && lvl > s.entry_price) s.structure_target = lvl - s.entry_price;
         } else if (s.open_side === 'SELL') {
-          const lvl = ms.last_swing_low?.price ?? zone?.low ?? null;
+          let lvl = ms.last_swing_low?.price ?? null;
+          if (lvl != null && zone?.low != null && lvl >= zone.low - 1e-9) {
+            const lows = ms.pivots.filter((p) => p.kind === 'LOW' && p.price < zone.low!);
+            lvl = lows[lows.length - 1]?.price ?? null;
+          }
           if (lvl != null && lvl < s.entry_price) s.structure_target = s.entry_price - lvl;
         }
         if (s.structure_target != null) persistBoFromSession(s);
@@ -2322,7 +2331,14 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `NO ENTRY · decide null · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)} · ${ohlcLine} · ${explainNoEntry(signalBar, s.regime, s.closedBars)} · HTF ${htf.detail}`,
+        detail: `NO ENTRY · decide null · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)} · ${ohlcLine} · ${explainNoEntry(signalBar, s.regime, s.closedBars, {
+          multiTfReady: s.multiTf.ready,
+          analysis_price: analysisPrice,
+          armed_state: s.armed_trigger,
+          htf,
+          bars5m,
+          bars1m,
+        })} · HTF ${htf.detail}`,
       });
       return;
     }

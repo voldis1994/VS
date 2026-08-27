@@ -301,9 +301,30 @@ export function marketDirection(
 export function explainNoEntry(
   bar: TenSecBar,
   regime?: string | null,
-  closedBars?: TenSecBar[] | null
+  closedBars?: TenSecBar[] | null,
+  opts?: {
+    multiTfReady?: boolean;
+    analysis_price?: number | null;
+    armed_state?: ArmedTriggerState | null;
+    htf?: {
+      trend?: 'UP' | 'DOWN' | 'RANGE' | null;
+      near_support?: boolean;
+      near_resistance?: boolean;
+      detail?: string;
+    } | null;
+    bars5m?: StructureBar[] | null;
+    bars1m?: StructureBar[] | null;
+  }
 ): string {
-  const decision = decideEntryFrom10sRegime(bar, regime, closedBars);
+  // Desk already gated multi-TF; pass ready so diagnose matches live decide path.
+  const decision = decideEntryFrom10sRegime(bar, regime, closedBars, {
+    multiTfReady: opts?.multiTfReady ?? true,
+    analysis_price: opts?.analysis_price,
+    armed_state: opts?.armed_state,
+    htf: opts?.htf,
+    bars5m: opts?.bars5m,
+    bars1m: opts?.bars1m,
+  });
   if (decision) return `SETUP ${decision.direction} · ${decision.reason}`;
   const t = multiTfPts(closedBars, bar);
   return `SCAN · waiting 5m structure · ${formatTf(t)}`;
@@ -469,11 +490,8 @@ export function decideEntryFrom10sRegime(
   const zone = buildScalpZone(closedBars);
 
   // Strong/late path: full 5m BOS/CHoCH (+ LTF) still enters when ready.
+  // No post-decision impulse/chase veto — same rule as EARLY TRIGGERED→fill.
   if (decision.entry && decision.direction) {
-    const impulse = allowEntryAgainstImpulse(decision.direction, closedBars, bar);
-    if (!impulse.ok) return null;
-    const late = blockLateTrendChase(decision.direction, closedBars, bar);
-    if (!late.ok) return null;
     opts?.on_armed_state?.(idleArmedState());
     return {
       direction: decision.direction,
