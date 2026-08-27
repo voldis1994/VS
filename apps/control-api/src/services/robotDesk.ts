@@ -110,7 +110,7 @@ import {
 import { seedMultiTfHistory, refreshDueTfBooks } from './seedMultiTf.js';
 import { computeInstrumentSafetyStop } from './safetyStop.js';
 import { loadJson } from './persistentStore.js';
-import { buildLiveEntryPlan, refreshArmedTriggerState, type EntryPlan } from './entryPlan.js';
+import { buildLiveEntryPlan, refreshArmedTriggerState, formatArmedTriggerDiag, type EntryPlan } from './entryPlan.js';
 
 export type RobotTick = {
   at: string;
@@ -2196,7 +2196,7 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `SCAN · feeds · ${formatScanContext(s, zoneNow, feedGate.reason)}`,
+        detail: `NO ENTRY · feeds · ${feedGate.reason} · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)} · ${formatScanContext(s, zoneNow, feedGate.reason)}`,
       });
       return;
     }
@@ -2217,7 +2217,7 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `SCAN · data quality · ${dq.reason}`,
+        detail: `NO ENTRY · data quality · ${dq.reason} · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)}`,
       });
       return;
     }
@@ -2252,7 +2252,7 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `SCAN · ${ohlcLine} · waiting LTF trigger · ${formatScanContext(s, zoneNow)} · ${s.multiTf.detail}`,
+        detail: `NO ENTRY · no LTF signal bar · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)} · ${ohlcLine} · ${formatScanContext(s, zoneNow)}`,
       });
       return;
     }
@@ -2263,7 +2263,7 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `SCAN · synthetic 10s barred from entry · ${formatScanContext(s, zoneNow)}`,
+        detail: `NO ENTRY · synthetic 10s barred · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)} · ${formatScanContext(s, zoneNow)}`,
       });
       return;
     }
@@ -2276,7 +2276,7 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `DECIDE · ${ohlcLine} · same 10s bucket already scanned · ${formatScanContext(s, zoneNow)}`,
+        detail: `NO ENTRY · same 10s bucket already scanned · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)} · ${ohlcLine}`,
       });
       return;
     }
@@ -2318,7 +2318,7 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `DECIDE · ${ohlcLine} · ${explainNoEntry(signalBar, s.regime, s.closedBars)} · HTF ${htf.detail}`,
+        detail: `NO ENTRY · decide null · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)} · ${ohlcLine} · ${explainNoEntry(signalBar, s.regime, s.closedBars)} · HTF ${htf.detail}`,
       });
       return;
     }
@@ -2336,7 +2336,7 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `DECIDE · ${staleDir.reason}`,
+        detail: `NO ENTRY · stale guard · ${staleDir.reason} · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)}`,
       });
       return;
     }
