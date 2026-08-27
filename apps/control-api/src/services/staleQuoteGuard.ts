@@ -1,6 +1,8 @@
 /**
- * Guard against Capital quote lag vs fresher confirmation feeds (#37/#38).
- * When cross-feed confirmation is required, missing refs → BLOCK (not silent allow).
+ * Capital LIVE is primary / source of truth for STALE GUARD.
+ * Cross-feed refs are optional confirmation/evidence — missing or stale
+ * public refs must NOT block entry when Capital bid+ask mid is valid.
+ * Adverse move vs fresher refs may still flag Capital lag when refs exist.
  */
 
 export type PriceRef = { label: string; mid: number };
@@ -31,14 +33,20 @@ function relMove(from: number, to: number): number {
   return (to - from) / Math.abs(from);
 }
 
-/** Block when fresher refs already moved against the intended side. */
+/**
+ * Detect Capital lag vs optional fresher confirmation feeds.
+ * - Capital mid UNKNOWN → BLOCK
+ * - No fresher refs → ALLOW (Capital primary; cross-feed not mandatory)
+ * - Adverse fresher refs → BLOCK (evidence Capital quote already moved against)
+ */
 export function detectStaleQuoteAdverse(
   direction: 'BUY' | 'SELL',
   capitalMid: number | null | undefined,
   refs: PriceRef[],
   opts?: { minRel?: number; atr?: number | null; requireRefs?: boolean }
 ): StaleQuoteVerdict {
-  const requireRefs = opts?.requireRefs !== false; // default: confirmation required
+  // Capital-primary: cross-feed confirmation is optional unless explicitly required.
+  const requireRefs = opts?.requireRefs === true;
   if (capitalMid == null || !Number.isFinite(capitalMid)) {
     return {
       block: true,
@@ -57,7 +65,7 @@ export function detectStaleQuoteAdverse(
       block: requireRefs,
       reason: requireRefs
         ? 'STALE GUARD · cross-feed confirmation required · no fresher refs · NO ENTRY'
-        : 'no fresher refs · allow (confirmation optional)',
+        : 'STALE GUARD · Capital primary · no fresher refs · continue',
       capital_mid: capitalMid,
       lead_mid: null,
       lead_label: null,
