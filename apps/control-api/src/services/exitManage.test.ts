@@ -57,6 +57,35 @@ describe('BO hybrid structure + PeakTrail', () => {
     expect(manageExitPrice('SELL', { bid: 4659.4, ask: 4659.8, mid: 4659.6 })).toBe(4659.8);
   });
 
+  it('GivebackBE: was minGreen then back to flat/red → EXIT anytime (incl young)', () => {
+    const entry = 4660;
+    const atr = 4;
+    const oneR = hardInvalidationDistance(entry, atr, META)!;
+    const minGreen = oneR * 0.35;
+    const young = snap({
+      open_side: 'BUY',
+      entry_price: entry,
+      mfe: minGreen + 0.01,
+      atr,
+      regime: 'TREND_UP',
+      entry_at: new Date().toISOString(),
+    });
+    const cut = decideBestOutcomeExit(young, entry); // fav = 0
+    expect(cut.exit).toBe(true);
+    expect(cut.reason).toMatch(/GivebackBE/);
+
+    const stillGreen = decideBestOutcomeExit(young, entry + minGreen * 0.5);
+    expect(stillGreen.exit).toBe(false);
+  });
+
+  it('peakProtectArmThreshold is 1R (not max(1R, ATR))', () => {
+    const entry = 4660;
+    const atr = 8;
+    const oneR = hardInvalidationDistance(entry, atr, META)!;
+    expect(oneR).toBeLessThan(atr);
+    expect(peakProtectArmThreshold(entry, atr, META)).toBe(oneR);
+  });
+
   it('HardInvalidation → EXIT', () => {
     const entry = 4660;
     const atr = 5;
@@ -135,11 +164,12 @@ describe('BO hybrid structure + PeakTrail', () => {
     expect(youngHold.exit).toBe(false);
 
     // Mild adverse move (not yet HardInv) + regime flip → ThesisFailure while young
+    // (mfe below minGreen so GivebackBE does not fire first)
     const dumpFlip = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: entry,
-        mfe: 0.5,
+        mfe: 0.1,
         atr,
         regime: 'TREND_DOWN',
         entry_at: new Date().toISOString(),
