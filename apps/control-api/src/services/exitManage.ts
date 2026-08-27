@@ -1,7 +1,9 @@
 /**
- * Best Outcome — 5m trade management.
- * MAX OUTCOME MEMORY + STRUCTURE REVERSAL EXIT.
- * HOLD while thesis/structure is alive; normal retrace is NOT an exit.
+ * Best Outcome — hybrid:
+ * 1) Structure reversal is primary (HOLD while thesis alive; normal retrace ≠ exit).
+ * 2) After MFE ≥ max(1R, ATR_5m): soft ATR trail + breakeven lock
+ *    Protected = max(0, MFE − K×ATR) with wide K (strong 2.5 / normal 1.5 / weak 1.0).
+ *    Not legacy 75% PeakProtect — that scalped small winners.
  * Capital Safety SL is separate (broker). Manual lot_size unchanged.
  */
 
@@ -130,7 +132,8 @@ export function bestOutcomeMinGreen(
 }
 
 /**
- * Retrace allowance K for ProtectedProfit = MFE − K×ATR_5m.
+ * Hybrid trail K for ProtectedProfit = max(0, MFE − K×ATR_5m).
+ * Wide bands so runners can retrace; not the old tight 0.4–1.0 scalp K.
  * Strong continuation → larger K (more room). Weak/choppy → tighter.
  */
 export function peakProtectK(
@@ -139,7 +142,7 @@ export function peakProtectK(
 ): { k: number; strength: PeakProtectStrength; detail: string } {
   if (opts?.strength) {
     const k =
-      opts.strength === 'strong' ? 1.0 : opts.strength === 'weak' ? 0.4 : 0.7;
+      opts.strength === 'strong' ? 2.5 : opts.strength === 'weak' ? 1.0 : 1.5;
     return { k, strength: opts.strength, detail: `K=${k} (${opts.strength})` };
   }
   const r = String(regime || '')
@@ -154,7 +157,7 @@ export function peakProtectK(
       r === 'PULLBACK_UPTREND' ||
       r === 'PULLBACK_DOWNTREND')
   ) {
-    return { k: 1.0, strength: 'strong', detail: 'K=1.0 (strong continuation)' };
+    return { k: 2.5, strength: 'strong', detail: 'K=2.5 (strong continuation)' };
   }
   if (
     r === 'RANGE' ||
@@ -164,9 +167,18 @@ export function peakProtectK(
     r === 'UNKNOWN' ||
     !r
   ) {
-    return { k: 0.4, strength: 'weak', detail: 'K=0.4 (weak/choppy)' };
+    return { k: 1.0, strength: 'weak', detail: 'K=1.0 (weak/choppy)' };
   }
-  return { k: 0.7, strength: 'normal', detail: 'K=0.7 (normal)' };
+  return { k: 1.5, strength: 'normal', detail: 'K=1.5 (normal)' };
+}
+
+/** Soft floor after arm: never trail below breakeven once runner is armed. */
+export function hybridProtectedFloor(
+  mfe: number,
+  atrBuffer: number,
+  k: number
+): number {
+  return Math.max(0, protectedProfitLevel(mfe, atrBuffer, k));
 }
 
 /**
@@ -209,7 +221,7 @@ export function peakProtectTrigger(
 }
 
 export function isHardBoReason(reason: string): boolean {
-  return /HardInvalidation|StructuralInvalidation|ThesisFailure|PeakProtection|OppositeSignal|Target \/|BO BLOCK/i.test(
+  return /HardInvalidation|StructuralInvalidation|ThesisFailure|PeakProtection|PeakTrail|OppositeSignal|TargetEnd|Target \/|StructureReversal|StructureBreak|BO BLOCK/i.test(
     reason
   );
 }
@@ -351,7 +363,24 @@ export function decideBestOutcomeExit(
     }
   }
 
-  // 5) Opposite tape — only when structure thesis dead (not a scalp on retrace)
+  // 5) Soft hybrid trail — only after MFE ≥ max(1R, ATR). Wide K; floor ≥ 0 (BE lock).
+  const armAt = peakProtectArmThreshold(entry, atr, meta);
+  const atrBuf = peakProtectAtrBuffer(entry, atr, meta);
+  if (armAt != null && atrBuf != null && s.mfe + hitEps >= armAt) {
+    const { k, strength, detail } = peakProtectK(s.regime, {
+      continuationSameSide: cont,
+      strength: opts?.peakProtectStrength,
+    });
+    const protectedLvl = hybridProtectedFloor(s.mfe, atrBuf, k);
+    if (fav + hitEps < protectedLvl) {
+      return {
+        exit: true,
+        reason: `PeakTrail · UPL ${fav.toFixed(5)} < floor ${protectedLvl.toFixed(5)} · MFE ${s.mfe.toFixed(5)} − K×ATR (${detail} · ATR ${atrBuf.toFixed(5)} · arm@${armAt.toFixed(5)} · ${strength} · BE lock)`,
+      };
+    }
+  }
+
+  // 6) Opposite tape — only when structure thesis dead (not a scalp on retrace)
   if (opts?.oppositeEntrySignal && !opts?.ignoreMicroOpposite && !cont) {
     const bars = opts?.bars5m ?? revInput?.bars5m ?? [];
     const thesis = bars.length >= 4 ? thesisAlive5m(s.open_side, bars) : { alive: true, detail: '' };
@@ -363,7 +392,7 @@ export function decideBestOutcomeExit(
     }
   }
 
-  // HOLD — max outcome memory (MFE tracked on session); normal retrace ≠ exit
+  // HOLD — structure alive + soft trail not breached
   return { exit: false, reason: '' };
 }
 
@@ -397,6 +426,14 @@ export function describeBestOutcomeState(
     bars.length >= 4
       ? thesisAlive5m(s.open_side, bars)
       : { alive: true, detail: 'structure seeding' };
+  const armAt = peakProtectArmThreshold(entry, atr, meta);
+  const atrBuf = peakProtectAtrBuffer(entry, atr, meta);
+  const { k, strength, detail } = peakProtectK(s.regime, {
+    continuationSameSide: cont,
+    strength: opts?.peakProtectStrength,
+  });
+  const armed = armAt != null && atrBuf != null && s.mfe >= armAt;
+  const prot = armed ? hybridProtectedFloor(s.mfe, atrBuf!, k) : null;
   const contTxt = opts?.continuationReason ? ` · ${opts.continuationReason}` : '';
   const structTxt =
     s.structural_sl != null ? ` · structSL ${s.structural_sl.toFixed(2)}` : '';
@@ -404,10 +441,12 @@ export function describeBestOutcomeState(
   return {
     exit: false,
     reason: '',
-    hold: `BO 5m HOLD · UPL ${fav.toFixed(2)} · peak MFE ${s.mfe.toFixed(2)} · 1R ${tp?.toFixed(2) ?? 'UNKNOWN'}${
+    hold: `BO hybrid HOLD · UPL ${fav.toFixed(2)} · peak MFE ${s.mfe.toFixed(2)} · 1R ${tp?.toFixed(2) ?? 'UNKNOWN'}${
       s.structure_target != null ? ` · structTgt ${s.structure_target.toFixed(2)}` : ''
     } · HardInv -${sl?.toFixed(2) ?? 'UNKNOWN'}${structTxt} · thesis ${thesis.alive ? 'ALIVE' : 'BREAK'} · ${
       thesis.detail
-    }${contTxt}`,
+    } · trail ${
+      armed ? `ON floor ${prot?.toFixed(2) ?? '—'} (${detail})` : `off until arm@${armAt?.toFixed(2) ?? '?'}`
+    } · ${strength}${contTxt}`,
   };
 }

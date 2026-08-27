@@ -281,12 +281,12 @@ describe('#5 BO continuation / structure_target priority', () => {
     expect(hold.exit).toBe(false);
   });
 
-  it('deep retrace with continuation + alive thesis → HOLD; HardInv still exits', () => {
+  it('deep retrace after arm → PeakTrail; HardInv still exits', () => {
     const entry = 4600;
     const atr = 5;
     const oneR = hardInvalidationDistance(entry, atr, GOLD_META)!;
     const mfe = Math.max(oneR, atr) * 4;
-    const hold = decideBestOutcomeExit(
+    const pp = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: entry,
@@ -299,7 +299,8 @@ describe('#5 BO continuation / structure_target priority', () => {
       entry + atr * 0.2,
       { continuationSameSide: true }
     );
-    expect(hold.exit).toBe(false);
+    expect(pp.exit).toBe(true);
+    expect(pp.reason).toMatch(/PeakTrail/);
 
     const hi = decideBestOutcomeExit(
       snap({
