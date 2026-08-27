@@ -626,29 +626,29 @@ export interface CapitalMarketQuote {
   instrument_timezone?: string | null;
 }
 
-function inferPointSize(json: any, mid: number | null): number {
+/**
+ * Capital point/tick size from instrument metadata ONLY.
+ * Never invent from price magnitude. Missing → null (BLOCK).
+ */
+export function extractCapitalPointSize(json: any): number | null {
   const snap = (json?.snapshot || json?.marketSnapshot || {}) as Record<string, unknown>;
+  const instrument = (json?.instrument || {}) as Record<string, unknown>;
   const rules = (json?.dealingRules || json?.dealing_rules || {}) as Record<string, any>;
   const decimalPlaces =
-    numOrNull(snap.decimalPlacesFactor) ??
-    numOrNull((json?.instrument as any)?.decimalPlacesFactor);
-  const scaling = numOrNull(snap.scalingFactor) ?? 1;
+    numOrNull(snap.decimalPlacesFactor) ?? numOrNull(instrument.decimalPlacesFactor);
+  const scalingRaw = numOrNull(snap.scalingFactor) ?? numOrNull(instrument.scalingFactor);
+  // Capital omits scalingFactor → treat as 1 only when decimalPlacesFactor is present (Capital wire)
   if (decimalPlaces != null && decimalPlaces >= 0 && decimalPlaces <= 8) {
-    return Math.pow(10, -decimalPlaces) * (scaling > 0 ? scaling : 1);
+    const scaling = scalingRaw != null && scalingRaw > 0 ? scalingRaw : 1;
+    return Math.pow(10, -decimalPlaces) * scaling;
   }
   const stepRaw = rules.minStepDistance;
   const stepVal = numOrNull(stepRaw?.value ?? stepRaw);
   const stepUnit = String(stepRaw?.unit || '').toUpperCase();
   if (stepVal != null && stepVal > 0 && !stepUnit.includes('PERCENT')) {
-    // When Capital quotes minStep in POINTS, value is often already the price increment
     return stepVal;
   }
-  const m = mid != null && Number.isFinite(mid) ? Math.abs(mid) : 1;
-  if (m >= 1000) return 0.1;
-  if (m >= 100) return 0.1;
-  if (m >= 10) return 0.01;
-  if (m >= 1) return 0.0001;
-  return 0.00001;
+  return null;
 }
 
 function parseStopRules(
@@ -657,7 +657,7 @@ function parseStopRules(
 ): {
   min_stop_points: number | null;
   min_stop_unit: string | null;
-  point_size: number;
+  point_size: number | null;
   min_stop_distance: number | null;
 } {
   const rules = (json?.dealingRules || json?.dealing_rules || {}) as Record<string, any>;
@@ -668,7 +668,7 @@ function parseStopRules(
     rules.minControlledRiskStopDistance;
   const pts = numOrNull(raw?.value ?? raw);
   const unit = String(raw?.unit || 'POINTS').toUpperCase();
-  const pointSize = inferPointSize(json, mid);
+  const pointSize = extractCapitalPointSize(json);
   if (pts == null || pts <= 0) {
     return {
       min_stop_points: null,
@@ -678,15 +678,31 @@ function parseStopRules(
     };
   }
   if (unit.includes('PERCENT')) {
-    const m = mid != null && Number.isFinite(mid) ? Math.abs(mid) : 1;
+    // Convert Capital % min-stop using Capital bid+ask mid only
+    if (mid == null || !Number.isFinite(mid) || mid <= 0) {
+      return {
+        min_stop_points: pts,
+        min_stop_unit: unit,
+        point_size: pointSize,
+        min_stop_distance: null,
+      };
+    }
     return {
       min_stop_points: pts,
       min_stop_unit: unit,
       point_size: pointSize,
-      min_stop_distance: (m * pts) / 100,
+      min_stop_distance: (Math.abs(mid) * pts) / 100,
     };
   }
-  // POINTS → price via instrument point size
+  // POINTS → price only when Capital point_size known
+  if (pointSize == null || pointSize <= 0) {
+    return {
+      min_stop_points: pts,
+      min_stop_unit: unit,
+      point_size: null,
+      min_stop_distance: null,
+    };
+  }
   return {
     min_stop_points: pts,
     min_stop_unit: unit,
@@ -743,9 +759,9 @@ export async function fetchCapitalMarketQuote(
     const instrument = (res.json?.instrument || {}) as Record<string, unknown>;
     const bid = numOrNull(snap.bid ?? snap.bidPrice);
     const ask = numOrNull(snap.offer ?? snap.ask ?? snap.offerPrice);
-    let mid: number | null = null;
-    if (bid != null && ask != null) mid = (bid + ask) / 2;
-    else mid = numOrNull(snap.mid ?? snap.lastTraded);
+    // LIVE analysis MID = Capital BID+ASK only — never lastTraded / one-sided invent
+    const mid =
+      bid != null && ask != null && bid > 0 && ask > 0 ? (bid + ask) / 2 : null;
     const spread = bid != null && ask != null ? ask - bid : null;
     const stops = parseStopRules(res.json, mid);
     const tz =
@@ -765,14 +781,17 @@ export async function fetchCapitalMarketQuote(
       percentage_change: numOrNull(snap.percentageChange),
       high: numOrNull(snap.high),
       low: numOrNull(snap.low),
-      raw_ok: bid != null || ask != null || mid != null,
+      raw_ok: bid != null || ask != null,
       min_stop_points: stops.min_stop_points,
       min_stop_unit: stops.min_stop_unit,
       point_size: stops.point_size,
       min_stop_distance: stops.min_stop_distance,
       opening_hours_raw: instrument.openingHours ?? instrument.opening_hours ?? null,
       instrument_timezone: tz,
-      detail: bid == null && ask == null ? 'Snapshot returned without bid/offer' : undefined,
+      detail:
+        bid == null || ask == null
+          ? 'Capital bid+ask incomplete · analysis MID UNKNOWN'
+          : undefined,
     };
   };
 
@@ -1216,7 +1235,7 @@ export async function ensureCapitalStopVisible(
   };
 }
 
-/** Instrument-aware Safety SL — delegates to safetyStop (#33/#34). */
+/** Instrument-aware Safety SL — delegates to safetyStop (#33/#34). null = UNKNOWN BLOCK. */
 export function computeSafetyCushionStopLevel(
   direction: 'BUY' | 'SELL',
   mid: number,
@@ -1229,16 +1248,14 @@ export function computeSafetyCushionStopLevel(
     tickSize?: number | null;
     loosen?: number;
   }
-): number {
-  const level = computeSafetyFromMeta(direction, mid, opts?.bid ?? null, opts?.ask ?? null, {
+): number | null {
+  return computeSafetyFromMeta(direction, mid, opts?.bid ?? null, opts?.ask ?? null, {
     spread: opts?.spread,
     minStopDistance: opts?.minStopDistance,
     pointSize: opts?.pointSize,
     tickSize: opts?.tickSize,
     loosen: opts?.loosen,
   });
-  if (level != null) return level;
-  throw new Error('Safety SL UNKNOWN · missing tick/point/minStop metadata');
 }
 
 export type CapitalPriceCandle = {

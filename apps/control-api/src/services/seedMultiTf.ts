@@ -78,21 +78,21 @@ function pickBestBook(
     hours
   );
 
-  // #24: insufficient native must not block valid fallback
+  // #24: native Capital resolution is primary; aggregated lower-TF only when native EMPTY
   if (nativeEval.ready) {
     return { book: nativeEval, detail: `native ${nativeDetail}` };
   }
-  if (aggEval.ready) {
+  if (!nativeBars.length && aggEval.ready) {
     return {
       book: aggEval,
-      detail: `fallback preferred · native not ready (${nativeEval.detail})`,
+      detail: `fallback · native EMPTY · ${aggEval.detail}`,
     };
   }
-  // Prefer whichever has more closed bars / ATR
-  if ((aggEval.bars.length || 0) > (nativeEval.bars.length || 0)) {
-    return { book: aggEval, detail: `partial fallback · ${aggEval.detail}` };
+  if (nativeBars.length) {
+    // Native present but not ready — do not substitute aggregated as primary HTF
+    return { book: nativeEval, detail: `native not ready · ${nativeEval.detail}` };
   }
-  return { book: nativeEval, detail: nativeEval.detail };
+  return { book: aggEval.bars.length ? aggEval : nativeEval, detail: aggEval.detail || nativeEval.detail };
 }
 
 async function fetchNativeBars(

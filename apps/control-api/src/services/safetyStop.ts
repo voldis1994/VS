@@ -75,21 +75,20 @@ export function computeInstrumentSafetyStop(input: SafetyStopInput): SafetyStopR
       ? input.minStopDistance
       : null;
 
-  const pctCushion = Math.abs(ref) * SAFETY_SL_PCT;
-  const parts: number[] = [pctCushion];
-  if (brokerMin != null) parts.push(brokerMin * 1.5);
-  if (spr != null && spr > 0) parts.push(spr * 4);
-  if (tick != null) parts.push(tick * 4);
-
-  // Need at least pct + one instrument-aware term, or broker min
-  if (brokerMin == null && tick == null && pointSize == null) {
+  // Capital min-stop is mandatory — SAFETY_SL_PCT alone is not broker truth
+  if (brokerMin == null) {
     return {
       ok: false,
       stop_level: null,
       stop_distance_pts: null,
-      detail: 'Safety SL UNKNOWN · missing tick/point/minStop metadata',
+      detail: 'Safety SL UNKNOWN · Capital minStopDistance missing',
     };
   }
+
+  const pctCushion = Math.abs(ref) * SAFETY_SL_PCT;
+  const parts: number[] = [brokerMin * 1.5, pctCushion];
+  if (spr != null && spr > 0) parts.push(spr * 4);
+  if (tick != null) parts.push(tick * 4);
 
   const loosen = Math.max(input.loosen ?? 1, 1);
   const dist = Math.max(...parts) * loosen;

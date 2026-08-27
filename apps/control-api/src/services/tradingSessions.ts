@@ -160,9 +160,11 @@ export function parseCapitalOpeningHours(
 ): CapitalOpeningHours | null {
   if (raw == null || typeof raw !== 'object') return null;
 
+  // Capital timezone required — without it absolute open/closed cannot be proven
   const tzFromCapital = String(opts?.timezone || '').trim();
-  const timezone = tzFromCapital || 'UTC';
-  const timezone_from_capital = Boolean(tzFromCapital);
+  if (!tzFromCapital) return null;
+  const timezone = tzFromCapital;
+  const timezone_from_capital = true;
   const windows: CapitalDayWindow[] = [];
 
   const obj = raw as Record<string, unknown>;
@@ -238,10 +240,8 @@ export function parseCapitalOpeningHours(
     windows,
     continuously_open,
     detail: continuously_open
-      ? `Capital hours 24/7 · TZ ${timezone}${timezone_from_capital ? '' : ' (wire default)'}`
-      : `Capital hours ${windows.length} windows · TZ ${timezone}${
-          timezone_from_capital ? '' : ' (wire default)'
-        }`,
+      ? `Capital hours 24/7 · TZ ${timezone}`
+      : `Capital hours ${windows.length} windows · TZ ${timezone}`,
   };
 }
 

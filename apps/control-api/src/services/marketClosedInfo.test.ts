@@ -11,6 +11,10 @@ describe('formatMarketInfo (#136 / Aug13 park messaging)', () => {
     expect(line).toMatch(/NO orders/);
   });
 
+  it('missing status shows UNKNOWN — does not invent CLOSED label from clock', () => {
+    expect(formatMarketInfo(null, false)).toMatch(/Capital=UNKNOWN/);
+  });
+
   it('shows OPEN when tradeable', () => {
     expect(formatMarketInfo('TRADEABLE', true)).toMatch(/MARKET OPEN/);
   });
@@ -24,10 +28,12 @@ describe('marketAllowsTrading (#17)', () => {
     expect(marketAllowsTrading('   ')).toBe(false);
   });
 
-  it('TRADEABLE/OPEN allow trading; other statuses do not', () => {
+  it('TRADEABLE/OPEN allow trading; CLOSED/SUSPENDED/UNKNOWN do not', () => {
     expect(marketAllowsTrading('TRADEABLE')).toBe(true);
     expect(marketAllowsTrading('OPEN')).toBe(true);
     expect(marketAllowsTrading('CLOSED')).toBe(false);
+    expect(marketAllowsTrading('SUSPENDED')).toBe(false);
+    expect(marketAllowsTrading('UNKNOWN')).toBe(false);
     expect(marketAllowsTrading('EDIT')).toBe(false);
   });
 });

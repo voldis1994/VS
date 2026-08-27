@@ -250,7 +250,8 @@ export function formatMarketInfo(
   tradeable: boolean,
   pollSec = CLOSED_MARKET_CADENCE_MS / 1000
 ): string {
-  const st = String(status || 'CLOSED').trim().toUpperCase() || 'CLOSED';
+  const raw = String(status || '').trim().toUpperCase();
+  const st = raw || 'UNKNOWN';
   if (tradeable) {
     return `MARKET OPEN · Capital=${st} · entry/manage allowed`;
   }
@@ -702,9 +703,9 @@ function expectedStopFromDistance(
 function updateExcursion(s: Internal, mid: number, brokerUpl?: number | null) {
   if (!s.open_side || s.entry_price == null) return;
   const fav = favorableMove(s.open_side, s.entry_price, mid);
-  // Display: prefer broker cash UPL when present; BO math uses fav/mfe points
+  // Display UPL = Capital broker cash only — never invent from price fav
   s.unrealized =
-    brokerUpl != null && Number.isFinite(brokerUpl) ? Number(brokerUpl) : fav;
+    brokerUpl != null && Number.isFinite(brokerUpl) ? Number(brokerUpl) : null;
   if (fav > s.mfe) {
     s.mfe = fav;
     s.peak_favorable = mid;
@@ -985,17 +986,12 @@ async function exitTrade(
   s.exits_done += 1;
   s.closed_at_ms = Date.now();
   const exitSide = s.open_side;
-  const wasLoss =
-    (s.unrealized != null && s.unrealized <= 0) ||
-    (quote.mid != null &&
-      s.entry_price != null &&
-      exitSide != null &&
-      (exitSide === 'BUY' ? quote.mid <= s.entry_price : quote.mid >= s.entry_price));
-  noteEpicTradeClose(s.epic, exitSide, wasLoss);
-  // Broker-confirmed realized only — never invent from unrealized
+  // Broker-confirmed realized only — never invent wasLoss / PnL from UPL or mid
   const profitRef = result.deal_reference || s.last_deal_reference;
   const realizedGot = await fetchCapitalConfirmedProfit(session, profitRef);
+  let wasLoss = false;
   if (realizedGot.ok && realizedGot.profit != null && Number.isFinite(realizedGot.profit)) {
+    wasLoss = realizedGot.profit <= 0;
     noteRiskTradePnl(s.account_id, realizedGot.profit);
     pushTick(s, {
       phase: 'INFO',
@@ -1013,6 +1009,7 @@ async function exitTrade(
       detail: `RISK PnL UNKNOWN · skipped noteRiskTradePnl · ${realizedGot.detail}`,
     });
   }
+  noteEpicTradeClose(s.epic, exitSide, wasLoss);
   s.error = null;
   writeJournalClose(s, quote, reason, wasLoss);
   pushTick(s, {
@@ -1082,7 +1079,20 @@ async function enterTrade(
     if (existing) {
       s.open_side = existing.direction;
       s.deal_id = existing.deal_id;
-      s.entry_price = existing.open_level ?? quote.mid;
+      // Broker open_level only — never seed entry from quote.mid
+      const fill = resolveEntryPrice({ broker_open_level: existing.open_level });
+      if (fill != null) s.entry_price = fill;
+      else {
+        s.entry_price = null;
+        pushTick(s, {
+          phase: 'WAIT',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `ONE TRADE · broker open ${existing.direction} dealId=${existing.deal_id} · FILL UNKNOWN (no open_level)`,
+        });
+        return;
+      }
       s.entry_at = s.entry_at || new Date().toISOString();
       s.mode = 'MANAGE';
       if (existing.stop_level != null) s.safety_sl = existing.stop_level;
@@ -1118,11 +1128,24 @@ async function enterTrade(
   }
 
   // SAFETY SL — MUST be accepted by Capital and visible in Capital.com app.
-  // Never open a naked position (old bug: "entry without SL").
+  // Never open a naked position. Capital min-stop metadata required.
   const minPts = quote.min_stop_points;
   const minPrice = quote.min_stop_distance ?? null;
   const unit = (quote.min_stop_unit || 'POINTS').toUpperCase();
   const useDistance = minPts != null && minPts > 0 && !unit.includes('PERCENT');
+  if (
+    (minPts == null || minPts <= 0) &&
+    (minPrice == null || minPrice <= 0)
+  ) {
+    pushTick(s, {
+      phase: 'ERROR',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: 'ENTRY BLOCKED — Capital minStop metadata UNKNOWN',
+    });
+    return;
+  }
   const loosenSteps = [1, 1.15, 1.35, 1.6, 2.0, 2.5, 3.0];
 
   let stopLevel: number | null = null;
@@ -1439,7 +1462,7 @@ async function enterTrade(
         s.account_id,
         m.rows[0]?.id || 0,
         direction === 'BUY' ? 'LONG' : 'SHORT',
-        s.entry_price ?? quote.mid ?? 0,
+        s.entry_price, // broker fill only — never quote.mid invent
         s.lot_size,
       ]
     );
@@ -1722,8 +1745,8 @@ async function robotCycleBody(s: Internal) {
             detail: 'Broker flat after CLOSE_UNCERTAIN — confirmed CLOSED',
           });
           s.closed_at_ms = Date.now();
-          // #30 — skip risk PnL without broker-confirmed realized (do not use cached UPL)
-          noteEpicTradeClose(s.epic, s.open_side, (s.unrealized ?? 0) <= 0);
+          // Realized UNKNOWN on external flat — do not invent wasLoss from UPL
+          noteEpicTradeClose(s.epic, s.open_side, false);
           clearTradeState(s);
         } else {
           pushTick(s, {
@@ -1734,7 +1757,7 @@ async function robotCycleBody(s: Internal) {
             detail: 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
           });
           s.closed_at_ms = Date.now();
-          noteEpicTradeClose(s.epic, s.open_side, (s.unrealized ?? 0) <= 0);
+          noteEpicTradeClose(s.epic, s.open_side, false);
           clearTradeState(s);
         }
       } else {
