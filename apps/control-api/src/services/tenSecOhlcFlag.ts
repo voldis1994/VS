@@ -18,5 +18,5 @@ export const TEN_SEC_OHLC_ENABLED = envEnabled();
 export function tenSecOhlcStatusLine(): string {
   return TEN_SEC_OHLC_ENABLED
     ? '10s OHLC ON'
-    : '10s OHLC OFF · entry/manage use Capital 1m/5m only';
+    : '10s OHLC OFF · EARLY uses Capital 1m confirms (not waiting only 5m BOS)';
 }

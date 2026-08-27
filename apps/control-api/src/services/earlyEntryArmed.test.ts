@@ -7,6 +7,7 @@ import {
   idleArmedState,
   isChasedFromZone,
   locateEarlyZone,
+  scoreMicroConfirmation,
   type ArmedTriggerState,
 } from './earlyEntryArmed.js';
 import { analyzeMarketStructure, type StructureBar } from './marketStructure.js';
@@ -301,6 +302,40 @@ describe('early ENTRY armed trigger', () => {
     );
     expect(r.signal).toBeNull();
     expect(r.state.detail).toMatch(/chased/i);
+  });
+
+  it('micro score works with 1m LTF when bars10s empty (10s OHLC OFF)', () => {
+    const bars5m = supportUptrendNoBos(24);
+    const ms = analyzeMarketStructure(bars5m);
+    const low = ms.last_swing_low!.price;
+    const high = low + 1.2;
+    const bars1m: StructureBar[] = [];
+    const t0 = 1_000_000;
+    for (let i = 0; i < 8; i++) {
+      bars1m.push(sb(t0 + i * 60_000, low + 0.4, low + 0.8, low + 0.2, low + 0.5));
+    }
+    bars1m.push(sb(t0 + 8 * 60_000, low + 0.2, low + 0.6, low - 0.3, low + 0.4));
+    const state: ArmedTriggerState = {
+      ...idleArmedState(),
+      phase: 'ARMED',
+      direction: 'BUY',
+      zone_low: low,
+      zone_high: high,
+      micro_score: 0,
+      confirms: [],
+    };
+    const scored = scoreMicroConfirmation(state, {
+      now_ms: Date.now(),
+      price: low + 0.4,
+      bars5m,
+      bars1m,
+      bars10s: [],
+      htf: { trend: 'UP', near_support: true },
+      tape_dir: 'BUY',
+      regime: 'TREND_UP',
+    });
+    expect(scored.detail).not.toMatch(/no 10s/);
+    expect(scored.score).toBeGreaterThan(0);
   });
 
   it('6. full 5m BOS/CHoCH still yields confirmation entry', () => {

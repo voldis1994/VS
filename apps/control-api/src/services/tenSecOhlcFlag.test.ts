@@ -13,8 +13,9 @@ describe('10s OHLC kill-switch', () => {
     expect(publicOhlc10sOff().market).toBe('OFF');
   });
 
-  it('status line does not advertise EARLY/micro path when OFF', () => {
-    expect(tenSecOhlcStatusLine()).not.toMatch(/EARLY|micro|WAIT BAND/i);
-    expect(tenSecOhlcStatusLine()).toMatch(/1m\/5m/);
+  it('status line says EARLY uses 1m when 10s OFF (not dead wait-only-5m)', () => {
+    expect(tenSecOhlcStatusLine()).toMatch(/10s OHLC OFF/i);
+    expect(tenSecOhlcStatusLine()).toMatch(/1m/i);
+    expect(tenSecOhlcStatusLine()).toMatch(/EARLY/i);
   });
 });

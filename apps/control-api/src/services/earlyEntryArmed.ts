@@ -162,8 +162,11 @@ export function locateEarlyZone(ctx: EarlyEntryCtx): LocatedZone | null {
     (atr != null && atr > 0 ? atr * 0.15 : null);
   if (buf == null) return null;
 
+  const zoneSrc = realSeries(ctx.bars10s).length
+    ? realSeries(ctx.bars10s)
+    : realSeries(ctx.bars1m);
   const zone: ScalpZone | null = buildScalpZone(
-    realSeries(ctx.bars10s).map((b) => ({
+    zoneSrc.map((b) => ({
       open_time_ms: b.open_time_ms,
       open: b.open,
       high: b.high,
@@ -276,9 +279,17 @@ export function scoreMicroConfirmation(
   const high = state.zone_high;
   const bars10 = realSeries(ctx.bars10s);
   const bars1m = realSeries(ctx.bars1m);
-  const last10 = bars10[bars10.length - 1];
-  const prev10 = bars10[bars10.length - 2];
-  if (!last10) return { score: state.micro_score, kinds: state.confirms, detail: 'no 10s' };
+  // Prefer native 10s; when OFF / empty, score on Capital 1m so EARLY can still fire.
+  const ltf = bars10.length >= 1 ? bars10 : bars1m;
+  const last10 = ltf[ltf.length - 1];
+  const prev10 = ltf[ltf.length - 2];
+  if (!last10) {
+    return {
+      score: state.micro_score,
+      kinds: state.confirms,
+      detail: bars10.length ? 'no 10s' : 'no 1m LTF',
+    };
+  }
 
   const next: ArmedTriggerState = {
     ...state,
@@ -319,8 +330,8 @@ export function scoreMicroConfirmation(
         addConfirm(next, 'impulse_fade', 1);
       }
     }
-    // Micro structure shift on 1m or 10s (not 5m BOS)
-    const microBars = bars1m.length >= 6 ? bars1m : bars10.slice(-30);
+    // Micro structure shift on 1m or LTF (not 5m BOS)
+    const microBars = bars1m.length >= 6 ? bars1m : ltf.slice(-30);
     if (microBars.length >= 6) {
       const ms = analyzeMarketStructure(microBars, { pivotLeft: 1, pivotRight: 1 });
       if (
@@ -355,7 +366,7 @@ export function scoreMicroConfirmation(
         addConfirm(next, 'impulse_fade', 1);
       }
     }
-    const microBars = bars1m.length >= 6 ? bars1m : bars10.slice(-30);
+    const microBars = bars1m.length >= 6 ? bars1m : ltf.slice(-30);
     if (microBars.length >= 6) {
       const ms = analyzeMarketStructure(microBars, { pivotLeft: 1, pivotRight: 1 });
       if (
@@ -428,7 +439,9 @@ export function advanceEarlyEntryArmed(
   const bars5m = realSeries(ctx.bars5m);
   const atr = atrWilder(bars5m, 14) ?? analyzeMarketStructure(bars5m).atr;
   const bars10 = realSeries(ctx.bars10s);
-  const last10 = bars10[bars10.length - 1];
+  const bars1mLtf = realSeries(ctx.bars1m);
+  const ltf = bars10.length >= 1 ? bars10 : bars1mLtf;
+  const last10 = ltf[ltf.length - 1];
   const barMs = last10?.open_time_ms ?? null;
 
   // Same bar — do not double-count micro confirms
