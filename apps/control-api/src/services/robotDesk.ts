@@ -7,6 +7,7 @@ import {
   createCapitalPosition,
   fetchCapitalMarketQuote,
   fetchCapitalPrices,
+  fetchCapitalConfirmedProfit,
   listCapitalOpenPositions,
   ensureCapitalStopVisible,
   type CapitalMarketQuote,
@@ -67,6 +68,8 @@ import {
 import { allowEntryFromDataQuality } from './dataQuality.js';
 import { atrWilder } from './volatilityNorm.js';
 import { analysisMid } from './analysisPrice.js';
+import { analyzeMarketStructure } from './marketStructure.js';
+import { sessionMetaForEpic } from './tradingSessions.js';
 import {
   noteRiskTradeOpen,
   noteRiskTradePnl,
@@ -151,7 +154,11 @@ export type RobotSession = {
   safety_sl: number | null;
   /** Soft 5m structural invalidation (software BO) — separate from Capital Safety SL */
   structural_sl: number | null;
+  /** Favorable-distance target beyond 1R (swing/liquidity) for continuation hold */
+  structure_target: number | null;
   atr_5m: number | null;
+  /** RiskWindow trade counter already noted for this open (exactly once) */
+  risk_open_noted: boolean;
   close_phase: ClosePhase;
   error: string | null;
   /** When false, robot never invents entries — pipeline fan-out only */
@@ -490,7 +497,9 @@ function clearTradeState(s: Internal) {
   s.unrealized = null;
   s.safety_sl = null;
   s.structural_sl = null;
+  s.structure_target = null;
   s.atr_5m = null;
+  s.risk_open_noted = false;
   s.close_phase = 'CLOSED';
   s.mode = 'FLAT';
   s.journal_open = null;
@@ -983,12 +992,26 @@ async function exitTrade(
       exitSide != null &&
       (exitSide === 'BUY' ? quote.mid <= s.entry_price : quote.mid >= s.entry_price));
   noteEpicTradeClose(s.epic, exitSide, wasLoss);
-  // #29 — only broker-confirmed realized; never last unrealized UPL
-  // Caller must pass realized via s.last_realized_pnl when known; else skip risk PnL.
-  const realized =
-    (s as Internal & { last_realized_pnl?: number | null }).last_realized_pnl;
-  if (realized != null && Number.isFinite(realized)) {
-    noteRiskTradePnl(s.account_id, realized);
+  // Broker-confirmed realized only — never invent from unrealized
+  const profitRef = result.deal_reference || s.last_deal_reference;
+  const realizedGot = await fetchCapitalConfirmedProfit(session, profitRef);
+  if (realizedGot.ok && realizedGot.profit != null && Number.isFinite(realizedGot.profit)) {
+    noteRiskTradePnl(s.account_id, realizedGot.profit);
+    pushTick(s, {
+      phase: 'INFO',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `RISK PnL · broker realized ${realizedGot.profit} · ${realizedGot.detail}`,
+    });
+  } else {
+    pushTick(s, {
+      phase: 'INFO',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `RISK PnL UNKNOWN · skipped noteRiskTradePnl · ${realizedGot.detail}`,
+    });
   }
   s.error = null;
   writeJournalClose(s, quote, reason, wasLoss);
@@ -1275,7 +1298,7 @@ async function enterTrade(
     s.entry_price = fill;
     s.peak_favorable = fill;
     s.mode = 'MANAGE';
-    noteRiskTradeOpen(s.account_id);
+    // Risk clock NOT here — wait until Safety SL visible
   } else {
     s.mode = 'FLAT';
     s.entry_price = null;
@@ -1341,8 +1364,11 @@ async function enterTrade(
     return;
   }
 
-  // Risk clock only after Safety SL verified live
-  noteRiskTradeOpen(s.account_id);
+  // Risk clock / trade counter — exactly once after broker fill AND Safety SL confirmed
+  if (!s.risk_open_noted) {
+    noteRiskTradeOpen(s.account_id);
+    s.risk_open_noted = true;
+  }
   persistBoFromSession(s);
 
   pushTick(s, {
@@ -1814,12 +1840,39 @@ async function robotCycleBody(s: Internal) {
       const five =
         fiveNative.length >= 8 ? fiveNative : aggregateTenSecToFiveMin(s.closedBars);
       s.atr_5m = atrWilder(five, 14);
+
+      // Structure / liquidity target distance (favorable pts) for continuation hold
+      if (s.structure_target == null && s.entry_price != null && five.length >= 8) {
+        // Pass provenance as-is — analyzeMarketStructure keeps only explicit REAL
+        const ms = analyzeMarketStructure(
+          five.map((b) => ({
+            open_time_ms: b.open_time_ms,
+            open: b.open,
+            high: b.high,
+            low: b.low,
+            close: b.close,
+            ticks: b.ticks,
+            provenance: b.provenance,
+          })),
+          { pivotLeft: 1, pivotRight: 1 }
+        );
+        const zone = buildScalpZone(s.closedBars);
+        if (s.open_side === 'BUY') {
+          const lvl = ms.last_swing_high?.price ?? zone?.high ?? null;
+          if (lvl != null && lvl > s.entry_price) s.structure_target = lvl - s.entry_price;
+        } else if (s.open_side === 'SELL') {
+          const lvl = ms.last_swing_low?.price ?? zone?.low ?? null;
+          if (lvl != null && lvl < s.entry_price) s.structure_target = s.entry_price - lvl;
+        }
+      }
+
       const decision = decideBestOutcomeExit(
         {
           ...s,
           short_net_pct: short.netPct,
           atr: s.atr_5m,
           structural_sl: s.structural_sl,
+          structure_target: s.structure_target,
         },
         exitPx,
         {
@@ -1852,6 +1905,7 @@ async function robotCycleBody(s: Internal) {
               short_net_pct: short.netPct,
               atr: s.atr_5m,
               structural_sl: s.structural_sl,
+              structure_target: s.structure_target,
             },
             exitPx,
             {
@@ -2273,7 +2327,9 @@ export async function startRobotSession(input: {
     open_side: null,
     safety_sl: null,
     structural_sl: null,
+    structure_target: null,
     atr_5m: null,
+    risk_open_noted: false,
     close_phase: 'CLOSED',
     error: null,
     entry_enabled: input.entry_enabled !== false,

@@ -4,7 +4,7 @@
  */
 
 import { adaptiveBufferPts, atrWilder, moveThresholdPts } from './volatilityNorm.js';
-import { isSyntheticBar, type DataProvenance } from './ohlcQuality.js';
+import { isRealBar, type DataProvenance } from './ohlcQuality.js';
 
 export type StructureBar = {
   open_time_ms: number;
@@ -58,8 +58,9 @@ export type MarketStructure = {
 const PIVOT_LEFT = 2;
 const PIVOT_RIGHT = 2;
 
+/** Explicit REAL only — missing provenance is UNKNOWN (not REAL). */
 function realOnly(bars: StructureBar[]): StructureBar[] {
-  return bars.filter((b) => !isSyntheticBar(b) && !b.forming);
+  return bars.filter((b) => isRealBar(b) && !b.forming);
 }
 
 /** Classic fractal pivots — needs `right` closed bars after the candidate. */

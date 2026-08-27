@@ -15,24 +15,24 @@ import {
 import { atrWilder } from './volatilityNorm.js';
 import { analyzeMarketStructure, type StructureBar } from './marketStructure.js';
 import { buildScalpZone } from './zones.js';
+import {
+  classifyBarGapWithSession,
+  sessionMetaForEpic,
+  type TradingSessionMeta,
+} from './tradingSessions.js';
 
-/** Classify gap: session (weekend/off-hours) vs missing data (#19/#62). */
+/**
+ * Classify gap — requires session metadata.
+ * Without proven session break → unknown (#4 audit follow-up).
+ * @deprecated Prefer classifyBarGapWithSession(session)
+ */
 export function classifyBarGap(
   prevMs: number,
   nextMs: number,
-  stepMs: number
+  stepMs: number,
+  session?: TradingSessionMeta | null
 ): 'none' | 'session' | 'missing' | 'unknown' {
-  const delta = nextMs - prevMs;
-  if (delta <= stepMs * 1.5) return 'none';
-  // Weekend-sized gap (Fri→Mon) on FX/indices: ≥ ~48h
-  if (delta >= 48 * 3_600_000 && delta <= 72 * 3_600_000) return 'session';
-  // Daily session break ~8–18h for indices — treat as session when step is intraday
-  if (stepMs <= 3_600_000 && delta >= 6 * 3_600_000 && delta <= 20 * 3_600_000) {
-    return 'session';
-  }
-  // Otherwise missing data — or unknown if we cannot classify calendar
-  if (delta > stepMs * 1.5 && delta < 6 * 3_600_000) return 'missing';
-  return 'unknown';
+  return classifyBarGapWithSession(prevMs, nextMs, stepMs, session ?? null);
 }
 
 export type TfKey = '10s' | '1m' | '5m' | '15m' | '1H' | '4H';
@@ -276,13 +276,14 @@ export function seedBackoffMs(failCount: number): number {
 
 /**
  * Readiness = warmup closed count + Wilder ATR computable + quality (#69).
- * Mere candle count is not enough.
+ * Gaps classified with instrument session metadata — UNKNOWN gap = NOT_READY.
  */
 export function evaluateTfBook(
   tf: Exclude<TfKey, '10s'>,
   bars: TfBar[],
   source: TfBook['source'],
-  nowMs = Date.now()
+  nowMs = Date.now(),
+  session?: TradingSessionMeta | null
 ): TfBook {
   const closed = closedBarsOnly(bars, nowMs, tf);
   const quality = assessBarSeries(closed, TF_MS[tf]);
@@ -295,7 +296,7 @@ export function evaluateTfBook(
   }));
   const atr = atrWilder(ohlc, 14);
 
-  // Gap policy: session gaps OK; missing/unknown → NOT_READY (#19)
+  const sess = session ?? null;
   let missingGaps = 0;
   let unknownGaps = 0;
   let sessionGaps = 0;
@@ -303,7 +304,8 @@ export function evaluateTfBook(
     const kind = classifyBarGap(
       closed[i - 1]!.open_time_ms,
       closed[i]!.open_time_ms,
-      TF_MS[tf]
+      TF_MS[tf],
+      sess
     );
     if (kind === 'missing') missingGaps += 1;
     else if (kind === 'unknown') unknownGaps += 1;
@@ -330,10 +332,10 @@ export function evaluateTfBook(
   let detail: string;
   if (ready) {
     detail = `${tf} OK · ${closed.length} closed · ATR ${atr!.toFixed(6)} · ${source} · sessionGaps=${sessionGaps}`;
+  } else if (unknownGaps > 0) {
+    detail = `${tf} NOT READY · unknown gaps ${unknownGaps} (need session metadata) · ${source}`;
   } else if (missingGaps > 0) {
     detail = `${tf} NOT READY · missing-data gaps ${missingGaps} · ${source}`;
-  } else if (unknownGaps > 0) {
-    detail = `${tf} NOT READY · unknown gaps ${unknownGaps} · ${source}`;
   } else if (closed.length < min) {
     detail = `${tf} NOT READY · warmup ${closed.length}/${min} · ${source}`;
   } else if (atr == null) {

@@ -856,11 +856,18 @@ export async function listCapitalOpenPositions(
   return { ok: true, positions, detail: `${positions.length} open` };
 }
 
-/** Resolve dealReference → dealId (+ fill level when Capital returns it). */
+/** Resolve dealReference → dealId (+ fill level + profit when Capital returns it). */
 export async function confirmCapitalDeal(
   session: CapitalSession,
   dealReference: string
-): Promise<{ ok: boolean; deal_id?: string; level?: number | null; detail: string }> {
+): Promise<{
+  ok: boolean;
+  deal_id?: string;
+  level?: number | null;
+  /** Broker-confirmed realized profit in account currency when present */
+  profit?: number | null;
+  detail: string;
+}> {
   const ref = dealReference.trim();
   if (!ref) return { ok: false, detail: 'Empty dealReference' };
   const res = await session.get(`/api/v1/confirms/${encodeURIComponent(ref)}`);
@@ -883,12 +890,45 @@ export async function confirmCapitalDeal(
     null;
   const level =
     rawLevel != null && Number.isFinite(Number(rawLevel)) ? Number(rawLevel) : null;
+
+  const rawProfit =
+    res.json?.profit ??
+    res.json?.profitAndLoss ??
+    res.json?.realizedProfit ??
+    res.json?.affectedDeals?.[0]?.profit ??
+    res.json?.affectedDeals?.[0]?.profitAndLoss ??
+    null;
+  const profit =
+    rawProfit != null && Number.isFinite(Number(rawProfit)) ? Number(rawProfit) : null;
+
   return {
     ok: true,
     deal_id: dealId,
     level,
-    detail: level != null ? `Confirmed dealId=${dealId} level=${level}` : `Confirmed dealId=${dealId}`,
+    profit,
+    detail:
+      level != null
+        ? `Confirmed dealId=${dealId} level=${level}${profit != null ? ` profit=${profit}` : ''}`
+        : `Confirmed dealId=${dealId}${profit != null ? ` profit=${profit}` : ''}`,
   };
+}
+
+/**
+ * Fetch broker-confirmed realized PnL for a close dealReference.
+ * Returns null when Capital does not expose profit — caller must NOT invent.
+ */
+export async function fetchCapitalConfirmedProfit(
+  session: CapitalSession,
+  dealReference: string | null | undefined
+): Promise<{ ok: boolean; profit: number | null; detail: string }> {
+  const ref = String(dealReference || '').trim();
+  if (!ref) return { ok: false, profit: null, detail: 'no dealReference for profit' };
+  const conf = await confirmCapitalDeal(session, ref);
+  if (!conf.ok) return { ok: false, profit: null, detail: conf.detail };
+  if (conf.profit == null || !Number.isFinite(conf.profit)) {
+    return { ok: true, profit: null, detail: 'confirm OK but realized profit UNKNOWN' };
+  }
+  return { ok: true, profit: conf.profit, detail: conf.detail };
 }
 
 /** Close one open position by dealId. */

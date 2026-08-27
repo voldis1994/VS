@@ -81,19 +81,14 @@ export function bestOutcomeMfeFloor(
   return d == null ? null : d * 0.5;
 }
 
-/** Primary 1R target; structure_target may extend (#36). */
+/** Primary 1R target distance (HardInv). Structure target is separate (#36/#5). */
 export function bestOutcomeTarget(
   entry: number,
   atr?: number | null,
   meta?: { tick_size?: number | null },
-  structureTarget?: number | null
+  _structureTarget?: number | null
 ): number | null {
-  const oneR = hardInvalidationDistance(entry, atr, meta);
-  if (oneR == null) return null;
-  if (structureTarget != null && Number.isFinite(structureTarget) && structureTarget > oneR) {
-    return structureTarget;
-  }
-  return oneR;
+  return hardInvalidationDistance(entry, atr, meta);
 }
 
 export function bestOutcomeMinGreen(
@@ -181,7 +176,6 @@ export function decideBestOutcomeExit(
   const atr = s.atr ?? null;
   const meta = { tick_size: s.tick_size };
   const fav = favorableMove(s.open_side, entry, mid);
-  const tp = bestOutcomeTarget(entry, atr, meta, s.structure_target);
   const hardInv = hardInvalidationDistance(entry, atr, meta);
   const structDist = structuralInvalidationDistance(s.open_side, entry, s.structural_sl);
 
@@ -271,22 +265,43 @@ export function decideBestOutcomeExit(
     }
   }
 
-  if (tp != null && fav >= tp) {
-    return {
-      exit: true,
-      reason: `Target / best outcome · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)}`,
-    };
+  // 1R / structure target — continuation can hold past 1R toward structure_target
+  const oneR = hardInv;
+  const structTarget =
+    s.structure_target != null && Number.isFinite(s.structure_target) && s.structure_target > 0
+      ? s.structure_target
+      : null;
+  // Price float epsilon so entry+target mid round-trips still count as hit
+  const hitEps = Math.max(Math.abs(entry) * 1e-12, 1e-9);
+
+  if (oneR != null && fav + hitEps >= oneR) {
+    const hitStruct = structTarget != null && fav + hitEps >= structTarget;
+    const canHoldPast1R =
+      Boolean(opts?.continuationSameSide) &&
+      structTarget != null &&
+      structTarget > oneR + hitEps &&
+      !hitStruct;
+    if (canHoldPast1R) {
+      // hold toward structure/liquidity target — PeakProtect/HardInv already above
+    } else if (hitStruct) {
+      return {
+        exit: true,
+        reason: `Target / structure · UPL ${fav.toFixed(5)} ≥ structure ${structTarget!.toFixed(5)}`,
+      };
+    } else {
+      return {
+        exit: true,
+        reason: `Target / best outcome · UPL ${fav.toFixed(5)} ≥ 1R ${oneR.toFixed(5)}`,
+      };
+    }
   }
 
-  // Continuation-aware: if continuation flag and below structure target, hold past 1R
-  if (
-    opts?.continuationSameSide &&
-    s.structure_target != null &&
-    tp != null &&
-    fav >= tp * 0.9 &&
-    fav < s.structure_target
-  ) {
-    // do not exit on 1R yet — fall through unless PeakProtect already fired
+  // Structure target hit even if 1R unknown (still after safety exits)
+  if (structTarget != null && fav + hitEps >= structTarget) {
+    return {
+      exit: true,
+      reason: `Target / structure · UPL ${fav.toFixed(5)} ≥ structure ${structTarget.toFixed(5)}`,
+    };
   }
 
   const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
@@ -338,6 +353,8 @@ export function describeBestOutcomeState(
   return {
     exit: false,
     reason: '',
-    hold: `BO · UPL ${fav.toFixed(2)} · TP ${tp?.toFixed(2) ?? 'UNKNOWN'} · HardInv -${sl?.toFixed(2) ?? 'UNKNOWN'}${structTxt} · MFE ${s.mfe.toFixed(2)} (${armed}) · ret ${retTxt} · lock@${(pp.retention * 100).toFixed(0)}%${cont}`,
+    hold: `BO · UPL ${fav.toFixed(2)} · 1R ${tp?.toFixed(2) ?? 'UNKNOWN'}${
+      s.structure_target != null ? ` · structTgt ${s.structure_target.toFixed(2)}` : ''
+    } · HardInv -${sl?.toFixed(2) ?? 'UNKNOWN'}${structTxt} · MFE ${s.mfe.toFixed(2)} (${armed}) · ret ${retTxt} · lock@${(pp.retention * 100).toFixed(0)}%${cont}`,
   };
 }
