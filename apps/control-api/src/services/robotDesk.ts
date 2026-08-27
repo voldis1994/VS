@@ -43,7 +43,7 @@ import {
   idleArmedState,
 } from './entryFromRegime.js';
 import type { ScalpZone } from './zones.js';
-import { noteEpicTradeClose, lastEpicClose, pauseMsAfterClose, allowEpicReentry } from './tradeCooldown.js';
+import { noteEpicTradeClose, allowEpicReentry } from './tradeCooldown.js';
 import { deskConflictShouldExit, deskOpensOnEpic } from './deskSideLock.js';
 import {
   allowEntryFromFeeds,
