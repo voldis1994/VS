@@ -500,7 +500,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: TEN_SEC_OHLC_ENABLED
       ? 'OWN Capital LEAD → own 10s OHLC → TAPE 5/1 → BUY|SELL · BO → EXIT'
-      : 'OWN Capital LEAD → 1m/5m only (10s OHLC OFF) → BUY|SELL · BO → EXIT',
+      : 'OWN Capital LEAD → 1m/5m EARLY (10s OHLC OFF) → BUY|SELL · BO → EXIT',
     note: TEN_SEC_OHLC_ENABLED
       ? 'Katram klientam savs Capital LEAD + savs 10s OHLC. Peer Capital / shared bars OFF. Public = ADVISORY only.'
       : `${tenSecOhlcStatusLine()}. Peer Capital / shared bars OFF. Public = ADVISORY only.`,
@@ -1670,7 +1670,7 @@ async function robotCycleBody(s: Internal) {
       s.ohlc_10s = publicOhlc10sOff();
       s.ohlcState = emptyTenSecState();
       s.closedBars = [];
-      s.armed_trigger = idleArmedState();
+      // Do NOT idle armed_trigger here — EARLY accumulates on Capital 1m across ticks.
       // Regime from Capital 1m when 10s is off
       const oneMin = barsAsTenSec(s.multiTf.books['1m']?.bars ?? []);
       if (oneMin.length >= 2) applyRobotRegime(s, oneMin.slice(-8));
@@ -2239,19 +2239,17 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    // Keep armed SETUP→ARMED only while native 10s OHLC is ON
-    if (TEN_SEC_OHLC_ENABLED) {
-      s.armed_trigger = refreshArmedTriggerState(s.armed_trigger, {
-        price: analysisPrice,
-        multiTf: s.multiTf,
-        closedBars: s.closedBars,
-        spread: quote.spread ?? null,
-        tick_size: quote.point_size ?? null,
-        broker_min_stop: quote.min_stop_distance ?? null,
-      });
-    } else {
-      s.armed_trigger = idleArmedState();
-    }
+    // Keep armed SETUP→ARMED for EARLY. When 10s OHLC is OFF, closedBars are
+    // Capital 1m (deskClosedBars) — still need stateful micro score across ticks.
+    // Previously idleArmedState() every cycle → zero entries + "waiting 5m structure".
+    s.armed_trigger = refreshArmedTriggerState(s.armed_trigger, {
+      price: analysisPrice,
+      multiTf: s.multiTf,
+      closedBars: deskClosedBars(s),
+      spread: quote.spread ?? null,
+      tick_size: quote.point_size ?? null,
+      broker_min_stop: quote.min_stop_distance ?? null,
+    });
 
     // 10s for microstructure / timing only (not HTF) — fully skipped when OFF
     if (TEN_SEC_OHLC_ENABLED && Date.now() - s.last_second_fetch_ms >= 4_000) {

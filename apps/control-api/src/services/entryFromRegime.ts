@@ -507,20 +507,21 @@ export function decideEntryFrom10sRegime(
     };
   }
 
-  // 10s OHLC temporarily OFF — no EARLY micro path (needs 10s confirms).
-  if (!TEN_SEC_OHLC_ENABLED) {
-    opts?.on_armed_state?.(idleArmedState());
-    return null;
-  }
-
   // Early path: SETUP→ARMED→TRIGGERED without waiting for full 5m BOS/CHoCH.
+  // When native 10s OHLC is OFF, LTF confirms use Capital 1m bars (deskClosedBars),
+  // not an empty 10s book — otherwise decide stays null forever.
   const tape = tapeSide(closedBars, bar);
+  const ltfBars = TEN_SEC_OHLC_ENABLED
+    ? series.slice(-40)
+    : bars1m.length >= 4
+      ? bars1m
+      : series.slice(-40);
   const early = advanceEarlyEntryArmed(opts?.armed_state ?? idleArmedState(), {
     now_ms: opts?.now_ms ?? Date.now(),
     price,
     bars5m,
     bars1m,
-    bars10s: microGate.ok ? series.slice(-40) : series.slice(-40),
+    bars10s: ltfBars,
     htf: opts?.htf ?? null,
     tape_dir: tape.dir,
     regime,
