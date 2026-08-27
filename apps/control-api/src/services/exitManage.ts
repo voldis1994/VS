@@ -1,10 +1,13 @@
 /**
  * Best Outcome — hybrid:
- * 1) Structure reversal is primary (HOLD while thesis alive; normal retrace ≠ exit).
- * 2) After MFE ≥ max(1R, ATR_5m): soft ATR trail + breakeven lock
+ * 1) Structure / thesis / HardInv cut losers (anytime).
+ * 2) Early BE lock: once MFE ≥ minGreen (~0.35×1R), never give green back to flat/red.
+ * 3) After MFE ≥ 1R: soft ATR trail + breakeven floor
  *    Protected = max(0, MFE − K×ATR) with wide K (strong 2.5 / normal 1.5 / weak 1.0).
- *    Not legacy 75% PeakProtect — that scalped small winners.
  * Capital Safety SL is separate (broker). Manual lot_size unchanged.
+ *
+ * Asymmetry rule: a trade that was green must not be allowed to become a full HardInv red
+ * — that was "plus smaller than minus" in live Capital history.
  */
 
 import {
@@ -97,8 +100,9 @@ export function bestOutcomeTarget(
 }
 
 /**
- * PeakProtect arms only when MFE ≥ max(1R, ATR_5m).
- * Below that: HOLD through normal 5m retrace (no small-profit scalp exits).
+ * PeakProtect / trail arms when MFE ≥ 1R (HardInv distance).
+ * Earlier arm (was max(1R, ATR)) meant trail almost never engaged before flip exits
+ * — winners stayed tiny while losers ran to full HardInv.
  */
 export function peakProtectArmThreshold(
   entry: number,
@@ -107,13 +111,10 @@ export function peakProtectArmThreshold(
 ): number | null {
   const oneR = hardInvalidationDistance(entry, atr, meta);
   if (oneR == null || !(oneR > 0)) return null;
-  if (atr != null && Number.isFinite(atr) && atr > 0) {
-    return Math.max(oneR, atr);
-  }
   return oneR;
 }
 
-/** @deprecated alias — arm threshold is max(1R, ATR), not half HardInv */
+/** @deprecated alias — arm threshold is 1R */
 export function bestOutcomeMfeFloor(
   entry: number,
   atr?: number | null,
@@ -122,13 +123,14 @@ export function bestOutcomeMfeFloor(
   return peakProtectArmThreshold(entry, atr, meta);
 }
 
+/** Green enough to lock breakeven — do not give this back to red. */
 export function bestOutcomeMinGreen(
   entry: number,
   atr?: number | null,
   meta?: { tick_size?: number | null }
 ): number | null {
-  const floor = peakProtectArmThreshold(entry, atr, meta);
-  return floor == null ? null : floor * 0.35;
+  const oneR = hardInvalidationDistance(entry, atr, meta);
+  return oneR == null || !(oneR > 0) ? null : oneR * 0.35;
 }
 
 /**
@@ -313,6 +315,16 @@ export function decideBestOutcomeExit(
     return { exit: true, reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}` };
   }
 
+  // 2b) Early BE lock (anytime, including young): was green enough → never finish red/flat.
+  // Fixes live asymmetry where flip exits banked +£0.02 while givebacks ran to −£0.37.
+  const minGreen = bestOutcomeMinGreen(entry, atr, meta);
+  if (minGreen != null && s.mfe + hitEps >= minGreen && fav <= 0) {
+    return {
+      exit: true,
+      reason: `GivebackBE · was green MFE ${s.mfe.toFixed(5)} ≥ minGreen ${minGreen.toFixed(5)} · now UPL ${fav.toFixed(5)} ≤ 0 · lock BE`,
+    };
+  }
+
   // 3) Thesis failure (regime flip / short dump against side) → EXIT anytime
   // Chart case: BUY into dump → TREND_DOWN / short dump must flip immediately, not wait 5m.
   const thesisPct = shortThesisMovePct(entry, atr, meta);
@@ -387,7 +399,8 @@ export function decideBestOutcomeExit(
     };
   }
 
-  // Soft profit-management only after young window (anti open→PeakTrail→reentry spam)
+  // Soft profit-management only after young window (anti open→PeakTrail→reentry spam).
+  // GivebackBE above already fired anytime — young mute does not override BE lock.
   if (young) {
     return { exit: false, reason: '' };
   }
@@ -400,7 +413,7 @@ export function decideBestOutcomeExit(
     };
   }
 
-  // 7) Soft hybrid trail — only after MFE ≥ max(1R, ATR). Wide K; floor ≥ 0 (BE lock).
+  // 7) Soft hybrid trail — after MFE ≥ 1R. Wide K; floor ≥ 0 (BE lock).
   const armAt = peakProtectArmThreshold(entry, atr, meta);
   const atrBuf = peakProtectAtrBuffer(entry, atr, meta);
   if (armAt != null && atrBuf != null && s.mfe + hitEps >= armAt) {
@@ -453,12 +466,14 @@ export function describeBestOutcomeState(
       : { alive: true, detail: 'structure seeding' };
   const armAt = peakProtectArmThreshold(entry, atr, meta);
   const atrBuf = peakProtectAtrBuffer(entry, atr, meta);
+  const minGreen = bestOutcomeMinGreen(entry, atr, meta);
   const { k, strength, detail } = peakProtectK(s.regime, {
     continuationSameSide: cont,
     strength: opts?.peakProtectStrength,
   });
   const armed = armAt != null && atrBuf != null && s.mfe >= armAt;
-  const prot = armed ? hybridProtectedFloor(s.mfe, atrBuf!, k) : null;
+  const beLocked = minGreen != null && s.mfe >= minGreen;
+  const prot = armed ? hybridProtectedFloor(s.mfe, atrBuf!, k) : beLocked ? 0 : null;
   const contTxt = opts?.continuationReason ? ` · ${opts.continuationReason}` : '';
   const structTxt =
     s.structural_sl != null ? ` · structSL ${s.structural_sl.toFixed(2)}` : '';
@@ -471,7 +486,11 @@ export function describeBestOutcomeState(
     } · HardInv -${sl?.toFixed(2) ?? 'UNKNOWN'}${structTxt} · thesis ${thesis.alive ? 'ALIVE' : 'BREAK'} · ${
       thesis.detail
     } · trail ${
-      armed ? `ON floor ${prot?.toFixed(2) ?? '—'} (${detail})` : `off until arm@${armAt?.toFixed(2) ?? '?'}`
+      armed
+        ? `ON floor ${prot?.toFixed(2) ?? '—'} (${detail})`
+        : beLocked
+          ? `BE lock (minGreen ${minGreen?.toFixed(2)}) · full trail@${armAt?.toFixed(2) ?? '?'}`
+          : `off until minGreen ${minGreen?.toFixed(2) ?? '?'} / arm@${armAt?.toFixed(2) ?? '?'}`
     } · ${strength}${contTxt}`,
   };
 }
