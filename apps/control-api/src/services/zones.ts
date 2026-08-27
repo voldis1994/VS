@@ -73,7 +73,19 @@ export function diagnoseZoneBuild(
   }
   const window = bars.slice(-ZONE_WINDOW);
   const real = realBarsOnly(window);
-  const structSource = real.length >= 6 ? real : window;
+  // Never fall back to SYNTHETIC for structure/HTF evidence
+  if (real.length < 6) {
+    return {
+      zone: null,
+      closed_bars,
+      min_bars: MIN_ZONE_BARS,
+      struct_bars: real.length,
+      width_pct: null,
+      width_pts: null,
+      status: real.length < MIN_ZONE_BARS ? 'SEEDING' : 'NO_STRUCT',
+    };
+  }
+  const structSource = real;
   const struct = structSource.length > 10 ? structSource.slice(0, -2) : structSource.slice(0, -1);
   if (struct.length < 6) {
     return {

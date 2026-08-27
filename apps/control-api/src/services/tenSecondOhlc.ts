@@ -116,11 +116,16 @@ export function updateFiveMinuteOhlc(state: TenSecState, price: number, tsMs: nu
 export function aggregateSecondsToTen(seconds: CapitalOhlc[]): TenSecBar[] {
   if (seconds.length < 2) return [];
   const bars: TenSecBar[] = [];
-  for (let i = 0; i + 10 <= seconds.length; i += 10) {
-    const chunk = seconds.slice(i, i + 10);
+  const withTime = seconds as Array<CapitalOhlc & { open_time_ms?: number | null }>;
+  for (let i = 0; i + 10 <= withTime.length; i += 10) {
+    const chunk = withTime.slice(i, i + 10);
     const first = chunk[0]!;
+    const t0 =
+      first.open_time_ms != null && Number.isFinite(first.open_time_ms)
+        ? Math.floor(first.open_time_ms / 10_000) * 10_000
+        : i * 1000;
     bars.push({
-      open_time_ms: i * 1000,
+      open_time_ms: t0,
       open: first.open,
       high: Math.max(...chunk.map((c) => c.high)),
       low: Math.min(...chunk.map((c) => c.low)),

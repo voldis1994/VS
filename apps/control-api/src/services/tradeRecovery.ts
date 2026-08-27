@@ -82,6 +82,8 @@ export function buildBoStateFromOpen(input: {
   peak_retention?: number | null;
   structural_sl?: number | null;
   safety_sl?: number | null;
+  close_phase?: ClosePhase;
+  pending_deal_reference?: string | null;
   epic: string;
   account_id: number;
   robot_id: string;
@@ -97,8 +99,8 @@ export function buildBoStateFromOpen(input: {
     peak_retention: input.peak_retention ?? null,
     structural_sl: input.structural_sl ?? null,
     safety_sl: input.safety_sl ?? null,
-    close_phase: 'OPEN',
-    pending_deal_reference: null,
+    close_phase: input.close_phase ?? 'OPEN',
+    pending_deal_reference: input.pending_deal_reference ?? null,
     epic: input.epic,
     account_id: input.account_id,
     robot_id: input.robot_id,

@@ -19,6 +19,7 @@ import {
   blockLateChaseAdaptive,
   type BrainSetup,
 } from './fiveMinuteBrain.js';
+import type { StructureBar } from './marketStructure.js';
 import { allowMicrostructureFromBars } from './ohlcQuality.js';
 import { atrWilder } from './volatilityNorm.js';
 
@@ -173,16 +174,22 @@ function formatTf(t: MultiTfTape): string {
   return `1m=${t.pts1m.toFixed(1)} 5m=${t.pts5m.toFixed(1)}`;
 }
 
-export function longTapeUp(t: MultiTfTape): boolean {
-  return t.pts5m > 0.15 && t.pts1m > 0.05;
+export function longTapeUp(t: MultiTfTape, price = 1): boolean {
+  const abs = Math.max(Math.abs(price), Math.abs(t.pts5m) || 1, 1e-9);
+  const thr5 = Math.max(abs * 0.00015, abs * 1e-6);
+  const thr1 = Math.max(abs * 0.00005, abs * 1e-7);
+  return t.pts5m > thr5 && t.pts1m > thr1;
 }
 
-export function shortTapeDown(t: MultiTfTape): boolean {
-  return t.pts5m < -0.15 && t.pts1m < -0.05;
+export function shortTapeDown(t: MultiTfTape, price = 1): boolean {
+  const abs = Math.max(Math.abs(price), Math.abs(t.pts5m) || 1, 1e-9);
+  const thr5 = Math.max(abs * 0.00015, abs * 1e-6);
+  const thr1 = Math.max(abs * 0.00005, abs * 1e-7);
+  return t.pts5m < -thr5 && t.pts1m < -thr1;
 }
 
-export function shortTapeUp(t: MultiTfTape): boolean {
-  return t.pts5m > 0.15 && t.pts1m > 0.05;
+export function shortTapeUp(t: MultiTfTape, price = 1): boolean {
+  return longTapeUp(t, price);
 }
 
 export function softBiasUp(t: MultiTfTape): boolean {
@@ -206,10 +213,11 @@ export function allowEntryAgainstImpulse(
   liveBar?: TenSecBar | null
 ): { ok: boolean; reason: string } {
   const t = multiTfPts(bars, liveBar);
-  if (direction === 'BUY' && shortTapeDown(t)) {
+  const price = liveBar?.close ?? bars?.[bars.length - 1]?.close ?? 1;
+  if (direction === 'BUY' && shortTapeDown(t, price)) {
     return { ok: false, reason: `BLOCK BUY · impulse DOWN · ${formatTf(t)}` };
   }
-  if (direction === 'SELL' && longTapeUp(t)) {
+  if (direction === 'SELL' && longTapeUp(t, price)) {
     return { ok: false, reason: `BLOCK SELL · impulse UP · ${formatTf(t)}` };
   }
   return { ok: true, reason: `${direction} vs impulse ok` };
@@ -314,10 +322,10 @@ export function continuationSameSide(
   if (dir === openSide) {
     return { ok: true, reason: `continuation · market ${dir}` };
   }
-  if (openSide === 'BUY' && isGreen(bar) && !shortTapeDown(multiTfPts(closedBars, bar))) {
+  if (openSide === 'BUY' && isGreen(bar) && !shortTapeDown(multiTfPts(closedBars, bar), bar.close)) {
     return { ok: true, reason: 'continuation · live green' };
   }
-  if (openSide === 'SELL' && isRed(bar) && !longTapeUp(multiTfPts(closedBars, bar))) {
+  if (openSide === 'SELL' && isRed(bar) && !longTapeUp(multiTfPts(closedBars, bar), bar.close)) {
     return { ok: true, reason: 'continuation · live red' };
   }
   return { ok: false, reason: `no continuation · ${tape.reason}` };
@@ -335,9 +343,10 @@ export function tapeSide(
 } {
   const t = multiTfPts(bars, liveBar);
   const pts90s = netPtsLookback(bars, liveBar, 9);
+  const price = liveBar?.close ?? bars?.[bars.length - 1]?.close ?? 1;
   const line = formatTf(t);
 
-  if (longTapeUp(t) || shortTapeUp(t)) {
+  if (longTapeUp(t, price) || shortTapeUp(t, price)) {
     return {
       dir: 'BUY',
       pts90s,
@@ -347,7 +356,7 @@ export function tapeSide(
     };
   }
 
-  if (shortTapeDown(t)) {
+  if (shortTapeDown(t, price)) {
     return {
       dir: 'SELL',
       pts90s,
@@ -378,7 +387,7 @@ function mapSetup(s: BrainSetup | null): RegimeEntry['setup'] {
 
 /**
  * Canonical entry: 5m structure + LTF confirm.
- * Rejects: synthetic microstructure, LTF-alone, late chase.
+ * Prefer Capital-native 5m/1m books; 10s only as trigger/microstructure.
  */
 export function decideEntryFrom10sRegime(
   bar: TenSecBar,
@@ -388,9 +397,16 @@ export function decideEntryFrom10sRegime(
     spread?: number | null;
     feed_agreement?: number | null;
     broker_min_stop?: number | null;
-    htf?: { trend?: 'UP' | 'DOWN' | 'RANGE' | null; near_support?: boolean; near_resistance?: boolean } | null;
+    htf?: { trend?: 'UP' | 'DOWN' | 'RANGE' | null; near_support?: boolean; near_resistance?: boolean; detail?: string } | null;
+    bars5m?: StructureBar[] | null;
+    bars1m?: StructureBar[] | null;
+    bars15m?: StructureBar[] | null;
+    multiTfReady?: boolean;
   }
 ): RegimeEntry | null {
+  if (opts?.multiTfReady === false) {
+    return null;
+  }
   // Hard reject: synthetic bar as microstructure trigger
   if (bar.provenance === 'SYNTHETIC') {
     return null;
@@ -398,12 +414,16 @@ export function decideEntryFrom10sRegime(
 
   const series = withLive(closedBars, bar);
   const microGate = allowMicrostructureFromBars(series.slice(-30));
-  // Still allow if we have enough real 5m structure even if seed was synthetic
-  const bars5m = aggregateTenSecToFiveMin(series);
-  const bars1m = aggregateTenSecToOneMin(series);
+  const bars5m =
+    opts?.bars5m && opts.bars5m.length >= 8
+      ? opts.bars5m.filter((b) => b.provenance !== 'SYNTHETIC')
+      : aggregateTenSecToFiveMin(series);
+  const bars1m =
+    opts?.bars1m && opts.bars1m.length >= 4
+      ? opts.bars1m.filter((b) => b.provenance !== 'SYNTHETIC')
+      : aggregateTenSecToOneMin(series);
 
   if (!bars5m.length) {
-    // LTF alone must never open
     void decideFromLtfAlone(series);
     return null;
   }

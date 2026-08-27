@@ -555,20 +555,32 @@ export function decideFiveMinuteEntry(input: BrainInput): BrainDecision {
   };
 }
 
-/** Aggregate N×10s REAL bars into 5m OHLC (30×10s = 5m). */
+/** Aggregate N×10s REAL bars into 5m OHLC with clock-aligned boundaries. */
 export function aggregateTenSecToFiveMin(
   tens: StructureBar[],
-  barsPerFive = 30
+  barsPerFive = 30,
+  nowMs = Date.now()
 ): StructureBar[] {
+  const FIVE = 300_000;
+  const TEN = 10_000;
   const real = tens.filter((b) => b.provenance !== 'SYNTHETIC');
-  if (real.length < barsPerFive) return [];
+  if (real.length < Math.floor(barsPerFive * 0.6)) return [];
+  const buckets = new Map<number, StructureBar[]>();
+  for (const b of real) {
+    if (b.open_time_ms % TEN !== 0) continue;
+    const key = Math.floor(b.open_time_ms / FIVE) * FIVE;
+    if (key + FIVE > nowMs) continue; // forming — no look-ahead
+    const arr = buckets.get(key) ?? [];
+    arr.push(b);
+    buckets.set(key, arr);
+  }
   const out: StructureBar[] = [];
-  const complete = Math.floor(real.length / barsPerFive) * barsPerFive;
-  for (let i = 0; i + barsPerFive <= complete; i += barsPerFive) {
-    const chunk = real.slice(i, i + barsPerFive);
+  for (const key of [...buckets.keys()].sort((a, b) => a - b)) {
+    const chunk = (buckets.get(key) ?? []).sort((a, b) => a.open_time_ms - b.open_time_ms);
+    if (chunk.length < Math.floor(barsPerFive * 0.6)) continue;
     const first = chunk[0]!;
     out.push({
-      open_time_ms: first.open_time_ms,
+      open_time_ms: key,
       open: first.open,
       high: Math.max(...chunk.map((c) => c.high)),
       low: Math.min(...chunk.map((c) => c.low)),
@@ -580,16 +592,31 @@ export function aggregateTenSecToFiveMin(
   return out;
 }
 
-export function aggregateTenSecToOneMin(tens: StructureBar[], barsPerMin = 6): StructureBar[] {
+export function aggregateTenSecToOneMin(
+  tens: StructureBar[],
+  barsPerMin = 6,
+  nowMs = Date.now()
+): StructureBar[] {
+  const ONE = 60_000;
+  const TEN = 10_000;
   const real = tens.filter((b) => b.provenance !== 'SYNTHETIC');
-  if (real.length < barsPerMin) return [];
+  if (real.length < Math.floor(barsPerMin * 0.6)) return [];
+  const buckets = new Map<number, StructureBar[]>();
+  for (const b of real) {
+    if (b.open_time_ms % TEN !== 0) continue;
+    const key = Math.floor(b.open_time_ms / ONE) * ONE;
+    if (key + ONE > nowMs) continue;
+    const arr = buckets.get(key) ?? [];
+    arr.push(b);
+    buckets.set(key, arr);
+  }
   const out: StructureBar[] = [];
-  const complete = Math.floor(real.length / barsPerMin) * barsPerMin;
-  for (let i = 0; i + barsPerMin <= complete; i += barsPerMin) {
-    const chunk = real.slice(i, i + barsPerMin);
+  for (const key of [...buckets.keys()].sort((a, b) => a - b)) {
+    const chunk = (buckets.get(key) ?? []).sort((a, b) => a.open_time_ms - b.open_time_ms);
+    if (chunk.length < Math.floor(barsPerMin * 0.6)) continue;
     const first = chunk[0]!;
     out.push({
-      open_time_ms: first.open_time_ms,
+      open_time_ms: key,
       open: first.open,
       high: Math.max(...chunk.map((c) => c.high)),
       low: Math.min(...chunk.map((c) => c.low)),

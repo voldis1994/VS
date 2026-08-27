@@ -53,7 +53,6 @@ import {
 import {
   aggregateSecondsToTen,
   emptyTenSecState,
-  expandMinutesToTenSec,
   publicOhlc10s,
   updateTenSecondOhlc,
   type TenSecBar,
@@ -94,6 +93,12 @@ import {
   tagExecutionQuote,
 } from './multiFeedRoles.js';
 import { detectStaleQuoteAdverse } from './staleQuoteGuard.js';
+import {
+  emptyMultiTfState,
+  buildHtfContextFromBooks,
+  type MultiTfState,
+} from './timeframeBooks.js';
+import { seedMultiTfHistory, refreshTfBook } from './seedMultiTf.js';
 
 export type RobotTick = {
   at: string;
@@ -203,6 +208,10 @@ type Internal = RobotSession & {
   /** Pending Excel journal row until close */
   journal_open: JournalOpenSnap | null;
   pending_deal_reference: string | null;
+  /** Capital-native multi-TF historical books */
+  multiTf: MultiTfState;
+  last_multi_tf_seed_ms: number;
+  last_quote_fetch_ms: number;
 };
 
 const ACTIVE_CADENCE_MS = 2_000;
@@ -312,6 +321,10 @@ function publicSession(s: Internal): RobotSession {
     multiFeed: _multi,
     cycle_busy: _busy,
     journal_open: _journal,
+    pending_deal_reference: _pend,
+    multiTf: _mtf,
+    last_multi_tf_seed_ms: _mtfs,
+    last_quote_fetch_ms: _lqf,
     ...rest
   } = s;
   const zoneSnap = buildScalpZone(s.closedBars);
@@ -490,6 +503,8 @@ function persistBoFromSession(s: Internal) {
       peak_retention: s.peak_retention,
       structural_sl: s.structural_sl,
       safety_sl: s.safety_sl,
+      close_phase: s.close_phase,
+      pending_deal_reference: s.pending_deal_reference,
       epic: s.epic,
       account_id: s.account_id,
       robot_id: s.id,
@@ -1263,9 +1278,11 @@ async function enterTrade(
       detail: `FILL · broker ${brokerLevel} vs signal mid ${signalMid} · slippage ${(brokerLevel - signalMid).toFixed(5)} · BO uses broker`,
     });
   }
-  clearPendingExecution(s.id);
+  // Keep pending until broker open confirmed — crash recovery needs it
+  if (brokerLevel != null || s.deal_id) {
+    clearPendingExecution(s.id);
+  }
   persistBoFromSession(s);
-  noteRiskTradeOpen(s.account_id);
 
   // Verify SL is physically on Capital.com — attach via PUT if missing
   const ensured = await ensureCapitalStopVisible(session, s.epic, {
@@ -1296,6 +1313,10 @@ async function enterTrade(
     s.error = 'SL not visible on Capital.com — trade closed';
     return;
   }
+
+  // Risk clock only after Safety SL verified live
+  noteRiskTradeOpen(s.account_id);
+  persistBoFromSession(s);
 
   pushTick(s, {
     phase: 'INFO',
@@ -1468,6 +1489,7 @@ async function robotCycleBody(s: Internal) {
     s.reads_ok += 1;
     s.error = null;
     s.last_quote_at = new Date().toISOString();
+    s.last_quote_fetch_ms = Date.now();
     if (quote.epic && quote.epic !== s.epic) {
       s.epic = quote.epic;
     }
@@ -1621,8 +1643,19 @@ async function robotCycleBody(s: Internal) {
           });
         }
       } else if (s.open_side) {
-        // Local thought open but broker flat → only clear if not mid-close uncertain
-        if (s.close_phase === 'CLOSE_UNCERTAIN' || s.close_phase === 'RECONCILING') {
+        const pending = loadPendingExecution(s.id);
+        // Do not clear in-flight entry while pending claim exists (listing lag)
+        if (pending) {
+          pushTick(s, {
+            phase: 'WAIT',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `Broker list flat but pending execution ${pending.deal_reference || 'claim'} — RECONCILING (not clearing)`,
+          });
+          s.close_phase = 'RECONCILING';
+          persistBoFromSession(s);
+        } else if (s.close_phase === 'CLOSE_UNCERTAIN' || s.close_phase === 'RECONCILING') {
           pushTick(s, {
             phase: 'EXIT',
             bid: quote.bid,
@@ -1630,6 +1663,12 @@ async function robotCycleBody(s: Internal) {
             mid: quote.mid,
             detail: 'Broker flat after CLOSE_UNCERTAIN — confirmed CLOSED',
           });
+          s.closed_at_ms = Date.now();
+          const flatPnl =
+            s.unrealized != null && Number.isFinite(s.unrealized) ? s.unrealized : 0;
+          noteEpicTradeClose(s.epic, s.open_side, flatPnl <= 0);
+          noteRiskTradePnl(s.account_id, flatPnl);
+          clearTradeState(s);
         } else {
           pushTick(s, {
             phase: 'INFO',
@@ -1638,13 +1677,13 @@ async function robotCycleBody(s: Internal) {
             mid: quote.mid,
             detail: 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
           });
+          s.closed_at_ms = Date.now();
+          const flatPnl =
+            s.unrealized != null && Number.isFinite(s.unrealized) ? s.unrealized : 0;
+          noteEpicTradeClose(s.epic, s.open_side, flatPnl <= 0);
+          noteRiskTradePnl(s.account_id, flatPnl);
+          clearTradeState(s);
         }
-        s.closed_at_ms = Date.now();
-        const flatPnl =
-          s.unrealized != null && Number.isFinite(s.unrealized) ? s.unrealized : 0;
-        noteEpicTradeClose(s.epic, s.open_side, flatPnl <= 0);
-        noteRiskTradePnl(s.account_id, flatPnl);
-        clearTradeState(s);
       } else {
         // Flat + pending claim without broker open
         const pending = loadPendingExecution(s.id);
@@ -1746,8 +1785,10 @@ async function robotCycleBody(s: Internal) {
           ? continuationSameSide(liveSide, signalForCont, s.regime, s.closedBars)
           : { ok: false, reason: '' };
 
-      // 5m BO — structural SL + PeakProtect; LTF opposite ignored when armed strong
-      const five = aggregateTenSecToFiveMin(s.closedBars);
+      // 5m BO — prefer Capital-native 5m ATR
+      const fiveNative = s.multiTf.books['5m'].bars;
+      const five =
+        fiveNative.length >= 8 ? fiveNative : aggregateTenSecToFiveMin(s.closedBars);
       s.atr_5m = atrWilder(five, 14);
       const decision = decideBestOutcomeExit(
         {
@@ -1817,10 +1858,49 @@ async function robotCycleBody(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // No post-close time pause (user: nekāda cooldown)
     if (quote.mid == null) return;
 
-    // Seed 10s bars from THIS client's Capital only
+    // Seed / refresh Capital-native multi-TF history (primary) before any ENTRY READY
+    const needSeed =
+      !s.multiTf.ready ||
+      Date.now() - s.last_multi_tf_seed_ms >= 60_000 ||
+      s.multiTf.seeded_at_ms == null;
+    if (needSeed) {
+      s.last_multi_tf_seed_ms = Date.now();
+      try {
+        s.multiTf = await seedMultiTfHistory(opened.session, s.epic, s.multiTf);
+        pushTick(s, {
+          phase: 'INFO',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `TF seed · ${s.multiTf.detail}`,
+        });
+      } catch (err) {
+        s.multiTf = {
+          ...s.multiTf,
+          ready: false,
+          detail: `TF seed fail · ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    } else if (Date.now() - s.last_multi_tf_seed_ms >= 15_000) {
+      s.multiTf = await refreshTfBook(opened.session, s.epic, s.multiTf, '1m');
+      s.multiTf = await refreshTfBook(opened.session, s.epic, s.multiTf, '5m');
+      s.last_multi_tf_seed_ms = Date.now();
+    }
+
+    if (!s.multiTf.ready) {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `ENTRY BLOCKED · multi-TF history not ready · ${s.multiTf.detail}`,
+      });
+      return;
+    }
+
+    // 10s for microstructure / trigger only (not HTF)
     if (Date.now() - s.last_second_fetch_ms >= 4_000) {
       s.last_second_fetch_ms = Date.now();
       const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 100);
@@ -1835,31 +1915,16 @@ async function robotCycleBody(s: Internal) {
             last_closed: last,
             just_closed: isNew,
           };
-          if (isNew) {
-            s.last_closed_bar_key = bucket;
-          }
+          if (isNew) s.last_closed_bar_key = bucket;
           s.ohlc_10s = publicOhlc10s(s.ohlcState);
           applyRobotRegime(s, bars);
-        }
-      }
-      // Cold start: backfill last ~25 min (150×10s) from OWN Capital MINUTE
-      if (s.closedBars.length < 30) {
-        const needMin = Math.ceil(ZONE_WINDOW / 6) + 5;
-        const min = await fetchCapitalPrices(opened.session, s.epic, 'MINUTE', needMin);
-        if (min.ok && min.candles.length >= 10) {
-          const seeded = expandMinutesToTenSec(min.candles).slice(-ZONE_WINDOW);
-          if (seeded.length >= 20) {
-            s.closedBars = seeded;
-            observeClosedBars(s.epic, seeded, s.display_name, s.client_id);
-            const own = currentRegime(s.epic, s.client_id);
-            if (own) s.regime = toLiveRegime(own.current);
-            pushTick(s, {
-              phase: 'INFO',
-              bid: quote.bid,
-              ask: quote.ask,
-              mid: quote.mid,
-              detail: `ZONE seed · SYNTHETIC ${s.closedBars.length}/${ZONE_WINDOW}×10s from Capital MINUTE (${min.candles.length}m) · not for microstructure entry`,
-            });
+          for (const b of bars) {
+            const prev = s.closedBars[s.closedBars.length - 1];
+            if (prev && prev.open_time_ms === b.open_time_ms) s.closedBars[s.closedBars.length - 1] = b;
+            else s.closedBars.push(b);
+          }
+          if (s.closedBars.length > MAX_REGIME_BARS) {
+            s.closedBars = s.closedBars.slice(-MAX_REGIME_BARS);
           }
         }
       }
@@ -1867,7 +1932,6 @@ async function robotCycleBody(s: Internal) {
 
     const zoneNow = buildScalpZone(s.closedBars);
     const feedGate = allowEntryFromFeeds(s.multiFeed);
-    // Own Capital quote is enough — multi-feed is advisory display only
     if (!feedGate.ok && quote.mid == null) {
       pushTick(s, {
         phase: 'DECIDE',
@@ -1879,11 +1943,16 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    const dq = allowEntryFromDataQuality({
-      mid: quote.mid!,
-      fetch_ms: Date.now(),
-      source_ms: null,
-    });
+    const quoteFetchMs = s.last_quote_fetch_ms || Date.now();
+    const sourceMs = quote.update_time ? Date.parse(quote.update_time) : null;
+    const dq = allowEntryFromDataQuality(
+      {
+        mid: quote.mid!,
+        fetch_ms: quoteFetchMs,
+        source_ms: sourceMs != null && Number.isFinite(sourceMs) ? sourceMs : null,
+      },
+      { nowMs: Date.now(), maxStaleMs: 15_000 }
+    );
     if (!dq.ok) {
       pushTick(s, {
         phase: 'DECIDE',
@@ -1933,7 +2002,7 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `SCAN · ${ohlcLine} · collecting 10s bars · ${formatScanContext(s, zoneNow)}`,
+        detail: `SCAN · ${ohlcLine} · waiting LTF trigger · ${formatScanContext(s, zoneNow)} · ${s.multiTf.detail}`,
       });
       return;
     }
@@ -1972,17 +2041,20 @@ async function robotCycleBody(s: Internal) {
       .map((l) => tagConfirmationQuote(l.name || l.sender_id || 'feed', Number(l.mid)));
     const refAgree = referenceAgreement(execQ.mid, confLegs);
 
+    const htf = buildHtfContextFromBooks(s.multiTf, quote.mid!);
+    const bars5m = s.multiTf.books['5m'].bars;
+    const bars1m = s.multiTf.books['1m'].bars;
+    const bars15m = s.multiTf.books['15m'].bars;
+
     const sig = decideEntryFrom10sRegime(signalBar, s.regime, s.closedBars, {
       spread: quote.spread ?? execQ.spread,
       feed_agreement: refAgree.agreement,
       broker_min_stop: quote.min_stop_distance,
-      htf: zoneNow
-        ? {
-            trend: null,
-            near_support: zoneNow.kind === 'DEMAND',
-            near_resistance: zoneNow.kind === 'SUPPLY',
-          }
-        : null,
+      htf,
+      bars5m,
+      bars1m,
+      bars15m,
+      multiTfReady: s.multiTf.ready,
     });
     if (!sig) {
       pushTick(s, {
@@ -1990,7 +2062,7 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `DECIDE · ${ohlcLine} · ${explainNoEntry(signalBar, s.regime, s.closedBars)}`,
+        detail: `DECIDE · ${ohlcLine} · ${explainNoEntry(signalBar, s.regime, s.closedBars)} · HTF ${htf.detail}`,
       });
       return;
     }
@@ -2022,7 +2094,7 @@ async function robotCycleBody(s: Internal) {
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `ENTRY READY · ${reason}`,
+      detail: `ENTRY READY · ${reason} · ${htf.detail}`,
     });
 
     await enterTrade(
@@ -2167,6 +2239,9 @@ export async function startRobotSession(input: {
     cycle_busy: false,
     journal_open: null,
     pending_deal_reference: null,
+    multiTf: emptyMultiTfState(),
+    last_multi_tf_seed_ms: 0,
+    last_quote_fetch_ms: 0,
     feed_source: 'NONE',
     feed_contributing: 0,
     feed_sender_count: 0,
@@ -2181,7 +2256,7 @@ export async function startRobotSession(input: {
     bid: null,
     ask: null,
     mid: null,
-    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · 5m brain · ONE TRADE · other robots: ${others}`,
+    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · multi-TF Capital history · ONE TRADE · other robots: ${others}`,
   });
   pushTick(session, {
     phase: 'INFO',
@@ -2189,7 +2264,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      '5M universal brain · HTF context · structural SL + Capital Safety SL · PeakProtect 75% · BO · Excel journal → ' +
+      '4H/1H→15m→5m→1m→10s brain · ENTRY blocked until TF seed ready · structural SL + Safety SL · BO · journal → ' +
       tradeJournalPath(),
   });
 

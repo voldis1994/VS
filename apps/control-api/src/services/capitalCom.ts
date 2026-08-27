@@ -1156,10 +1156,9 @@ export function computeSafetyCushionStopLevel(
     opts?.minStopDistance != null && opts.minStopDistance > 0 ? opts.minStopDistance : 0;
   // Keep in sync with SAFETY_SL_PCT — last resort; BO HardInv fires first
   const pctCushion = abs * SAFETY_SL_PCT;
-  const floor = abs >= 1000 ? 0.25 : abs >= 100 ? 0.12 : abs >= 10 ? 0.02 : 0.0002;
+  const floor = abs >= 100 ? 0.12 : abs >= 10 ? 0.02 : abs >= 1 ? 0.0002 : 0.00002;
   const dist = Math.max(pctCushion, brokerMin * 1.5, spr * 4, floor);
   const raw = direction === 'BUY' ? ref - dist : ref + dist;
-  if (abs >= 1000) return Math.round(raw * 10) / 10;
   if (abs >= 100) return Math.round(raw * 100) / 100;
   if (abs >= 1) return Math.round(raw * 10000) / 10000;
   return Math.round(raw * 1e6) / 1e6;
@@ -1170,20 +1169,66 @@ export type CapitalPriceCandle = {
   high: number;
   low: number;
   close: number;
+  /** Market/source open time when Capital provides it */
+  open_time_ms: number | null;
+  snapshot_time_ms?: number | null;
 };
 
-/** Capital OHLC — SECOND for 10s bars, MINUTE for chase filter. */
+export type CapitalPriceResolution =
+  | 'SECOND'
+  | 'MINUTE'
+  | 'MINUTE_5'
+  | 'MINUTE_15'
+  | 'MINUTE_30'
+  | 'HOUR'
+  | 'HOUR_4'
+  | 'DAY'
+  | 'WEEK';
+
+const RESOLUTION_STEP_MS: Record<string, number> = {
+  SECOND: 1000,
+  MINUTE: 60_000,
+  MINUTE_5: 300_000,
+  MINUTE_15: 900_000,
+  MINUTE_30: 1_800_000,
+  HOUR: 3_600_000,
+  HOUR_4: 14_400_000,
+  DAY: 86_400_000,
+  WEEK: 604_800_000,
+};
+
+function parsePriceTimeMs(p: any): number | null {
+  const raw =
+    p.snapshotTime ??
+    p.snapshotTimeUTC ??
+    p.timestamp ??
+    p.openTime ??
+    p.time ??
+    p.t ??
+    null;
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return raw > 1e12 ? raw : raw * 1000;
+  }
+  if (typeof raw === 'string' && raw.trim()) {
+    const t = Date.parse(raw);
+    if (Number.isFinite(t)) return t;
+  }
+  return null;
+}
+
+/** Capital OHLC — native resolutions preferred (MINUTE_5 / HOUR_4 etc.). */
 export async function fetchCapitalPrices(
   session: CapitalSession,
   epic: string,
-  resolution: 'SECOND' | 'MINUTE' = 'MINUTE',
+  resolution: CapitalPriceResolution = 'MINUTE',
   max = 5
 ): Promise<{ ok: boolean; candles: CapitalPriceCandle[]; detail: string }> {
   const encoded = encodeURIComponent(epic.trim());
-  const cap = resolution === 'SECOND' ? 100 : 100;
+  const hardCap = resolution === 'SECOND' ? 100 : 1000;
+  const want = Math.min(Math.max(max, 1), hardCap);
   const q = new URLSearchParams({
     resolution,
-    max: String(Math.min(Math.max(max, 1), cap)),
+    max: String(want),
   });
   let res = await session.get(`/api/v1/prices/${encoded}?${q.toString()}`);
   if (!res.ok) {
@@ -1192,20 +1237,66 @@ export async function fetchCapitalPrices(
   }
   if (!res.ok) {
     res = await session.get(
-      `/api/v1/history/prices?epic=${encoded}&resolution=${resolution}&max=${Math.min(Math.max(max, 1), cap)}`
+      `/api/v1/history/prices?epic=${encoded}&resolution=${resolution}&max=${want}`
     );
   }
+  if (!res.ok) {
+    return {
+      ok: false,
+      candles: [],
+      detail: `Capital prices ${resolution} HTTP ${res.status}: ${
+        res.json?.errorCode || res.json?.message || res.text.slice(0, 120)
+      }`,
+    };
+  }
   const prices = (res.json?.prices || res.json?.candles || []) as any[];
+  const step = RESOLUTION_STEP_MS[resolution] ?? 60_000;
+  const endMs = Date.now();
   const candles: CapitalPriceCandle[] = [];
-  for (const p of prices) {
+  for (let i = 0; i < prices.length; i++) {
+    const p = prices[i]!;
     const open = numOrNull(p.openPrice?.bid ?? p.openPrice?.ask ?? p.open ?? p.o);
     const high = numOrNull(p.highPrice?.bid ?? p.highPrice?.ask ?? p.high ?? p.h);
     const low = numOrNull(p.lowPrice?.bid ?? p.lowPrice?.ask ?? p.low ?? p.l);
     const close = numOrNull(p.closePrice?.bid ?? p.closePrice?.ask ?? p.close ?? p.c);
     if (open == null || high == null || low == null || close == null) continue;
-    candles.push({ open, high, low, close });
+    const open_time_ms = parsePriceTimeMs(p);
+    candles.push({
+      open,
+      high,
+      low,
+      close,
+      open_time_ms,
+      snapshot_time_ms: open_time_ms,
+    });
   }
-  return { ok: candles.length > 0, candles, detail: `${candles.length} ${resolution} candles` };
+  // Fill missing timestamps chronologically (oldest → newest)
+  const missing = candles.every((c) => c.open_time_ms == null);
+  if (missing && candles.length) {
+    for (let i = 0; i < candles.length; i++) {
+      const age = candles.length - 1 - i;
+      candles[i]!.open_time_ms = alignFloor(endMs - age * step, step);
+      candles[i]!.snapshot_time_ms = candles[i]!.open_time_ms;
+    }
+  } else {
+    for (let i = 0; i < candles.length; i++) {
+      if (candles[i]!.open_time_ms == null) {
+        const prev = candles[i - 1]?.open_time_ms;
+        candles[i]!.open_time_ms =
+          prev != null ? prev + step : alignFloor(endMs - (candles.length - i) * step, step);
+      }
+      candles[i]!.open_time_ms = alignFloor(candles[i]!.open_time_ms!, step);
+    }
+  }
+  return {
+    ok: candles.length > 0,
+    candles,
+    detail: `${candles.length} ${resolution} candles`,
+  };
+}
+
+function alignFloor(ts: number, step: number): number {
+  return Math.floor(ts / step) * step;
 }
 
 export async function fetchCapitalMinutePrices(
@@ -1217,8 +1308,8 @@ export async function fetchCapitalMinutePrices(
 }
 
 /**
- * True if the latest closed ~5m move (last 5×1m) already ran hard in trade direction.
- * ~0.30% ≈ 14pt Gold — blocks chase on 5m brain.
+ * True if latest closed ~5m move already ran hard in trade direction.
+ * Relative threshold only (no Gold points).
  */
 export function isLateMoveOnFiveMinute(
   direction: 'BUY' | 'SELL',
@@ -1230,7 +1321,7 @@ export function isLateMoveOnFiveMinute(
   const last = window[window.length - 1]!;
   const mid = Math.max(Math.abs(first.open), 1e-9);
   const move = last.close - first.open;
-  const thr = Math.max(mid * 0.003, 0.5);
+  const thr = Math.max(mid * 0.003, mid * 0.0001);
   if (direction === 'BUY' && move >= thr) return true;
   if (direction === 'SELL' && move <= -thr) return true;
   return false;
