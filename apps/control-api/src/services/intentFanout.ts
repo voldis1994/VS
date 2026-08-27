@@ -8,6 +8,7 @@ import {
   fetchCapitalMarketQuote,
   computeSafetyCushionStopLevel,
   ensureCapitalStopVisible,
+  confirmCapitalDeal,
 } from './capitalCom.js';
 import { emitToClient } from './clientEvents.js';
 import {
@@ -21,6 +22,7 @@ import { notePipelineRegime } from './regimes.js';
 import { attachManageOnlyRobot } from './robotDesk.js';
 import { allowEpicReentry } from './tradeCooldown.js';
 import { SAFETY_SL_PCT } from './microScalpThresholds.js';
+import { resolveEntryPrice } from './tradeRecovery.js';
 
 export { stopEntryRobotsForAccount } from './robotDesk.js';
 
@@ -451,8 +453,42 @@ async function executeForSubscription(
     }
 
     noteBrokerOk(sub.client_id);
-    const entry =
-      referencePrice != null && Number.isFinite(referencePrice) ? Number(referencePrice) : mid;
+
+    // Broker fill truth — never invent from referencePrice / signal mid
+    let confirmLevel: number | null = null;
+    let dealId: string | null = ensured.deal_id || null;
+    if (result.deal_reference) {
+      const conf = await confirmCapitalDeal(opened.session, result.deal_reference);
+      if (conf.ok) {
+        if (conf.deal_id) dealId = conf.deal_id;
+        if (conf.level != null) confirmLevel = conf.level;
+      }
+    }
+    let brokerLevel: number | null = null;
+    const listedAfter = await listCapitalOpenPositions(opened.session);
+    if (listedAfter.ok) {
+      const hit = listedAfter.positions.find(
+        (p) => p.epic.trim().toLowerCase() === sub.epic.trim().toLowerCase()
+      );
+      if (hit) {
+        dealId = hit.deal_id || dealId;
+        brokerLevel = hit.open_level;
+      }
+    }
+    const entry = resolveEntryPrice({
+      broker_open_level: brokerLevel,
+      confirm_level: confirmLevel,
+    });
+    if (entry == null) {
+      return finish({
+        client_id: sub.client_id,
+        account_id: sub.account_id,
+        lot_size: sub.lot_size,
+        ok: false,
+        detail: 'FILL UNKNOWN · waiting Capital open_level/confirm (signal mid not used)',
+        entry_price: null,
+      });
+    }
     const safetySl = ensured.stop_level;
 
     // Persist execution/position best-effort
@@ -465,7 +501,7 @@ async function executeForSubscription(
           sub.account_id,
           sub.instrument_id,
           direction === 'BUY' ? 'LONG' : 'SHORT',
-          entry ?? 0,
+          entry,
           sub.lot_size,
         ]
       );
@@ -510,7 +546,9 @@ async function executeForSubscription(
       account_id: sub.account_id,
       lot_size: sub.lot_size,
       ok: true,
-      detail: `${result.detail} · Capital SL ${safetySl} VISIBLE`,
+      detail: `${result.detail} · Capital SL ${safetySl} VISIBLE${
+        dealId ? ` · dealId=${dealId}` : ''
+      }`,
       entry_price: entry,
     });
   } catch (err) {

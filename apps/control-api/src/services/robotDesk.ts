@@ -90,6 +90,7 @@ import {
   saveBoState,
   savePendingExecution,
   shouldClearTradeState,
+  shouldRetryClose,
   persistRiskSnapshotJson,
   canClearPendingExecution,
   type ClosePhase,
@@ -1345,7 +1346,7 @@ async function enterTrade(
   // #26 — clear pending only when broker position + fill confirmed
   if (
     canClearPendingExecution({
-      brokerOpen: brokerLevel != null || Boolean(s.deal_id),
+      brokerOpen: brokerLevel != null,
       fillLevel: fill,
     })
   ) {
@@ -1698,6 +1699,18 @@ async function robotCycleBody(s: Internal) {
         }
         if (brokerOpen.stop_level != null) s.safety_sl = brokerOpen.stop_level;
         s.mode = 'MANAGE';
+        if (shouldRetryClose(s.close_phase)) {
+          persistBoFromSession(s);
+          setRobotCadence(s, MANAGE_CADENCE_MS);
+          if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
+          await exitTrade(
+            opened.session,
+            s,
+            quote,
+            `CLOSE retry · phase ${s.close_phase} · broker still open`
+          );
+          return;
+        }
         s.close_phase = 'OPEN';
         setRobotCadence(s, MANAGE_CADENCE_MS);
         if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
@@ -1745,8 +1758,35 @@ async function robotCycleBody(s: Internal) {
             detail: 'Broker flat after CLOSE_UNCERTAIN — confirmed CLOSED',
           });
           s.closed_at_ms = Date.now();
-          // Realized UNKNOWN on external flat — do not invent wasLoss from UPL
-          noteEpicTradeClose(s.epic, s.open_side, false);
+          const realizedGot = await fetchCapitalConfirmedProfit(
+            opened.session,
+            s.last_deal_reference
+          );
+          let wasLoss = false;
+          if (
+            realizedGot.ok &&
+            realizedGot.profit != null &&
+            Number.isFinite(realizedGot.profit)
+          ) {
+            wasLoss = realizedGot.profit <= 0;
+            noteRiskTradePnl(s.account_id, realizedGot.profit);
+            pushTick(s, {
+              phase: 'INFO',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `RISK PnL · broker realized ${realizedGot.profit} · ${realizedGot.detail}`,
+            });
+          } else {
+            pushTick(s, {
+              phase: 'INFO',
+              bid: quote.bid,
+              ask: quote.ask,
+              mid: quote.mid,
+              detail: `RISK PnL UNKNOWN · skipped noteRiskTradePnl · ${realizedGot.detail}`,
+            });
+          }
+          noteEpicTradeClose(s.epic, s.open_side, wasLoss);
           clearTradeState(s);
         } else {
           pushTick(s, {
@@ -1824,6 +1864,22 @@ async function robotCycleBody(s: Internal) {
     // ——— MANAGE open trade: never send entry ———
     if (s.open_side || brokerOpen) {
       s.mode = 'MANAGE';
+      // Keep Capital multi-TF seeded for ATR / structure_target during manage + restart
+      if (!s.multiTf.ready || s.multiTf.seeded_at_ms == null) {
+        try {
+          if ((s.multiTf.seed_next_allowed_ms ?? 0) <= Date.now()) {
+            s.multiTf = await seedMultiTfHistory(opened.session, s.epic, s.multiTf);
+          }
+        } catch {
+          /* manage continues with whatever books exist */
+        }
+      } else {
+        try {
+          s.multiTf = await refreshDueTfBooks(opened.session, s.epic, s.multiTf);
+        } catch {
+          /* ignore refresh errors in manage */
+        }
+      }
       const liveSide = s.open_side || brokerOpen?.direction || null;
       const exitPx =
         liveSide === 'BUY' || liveSide === 'SELL'
@@ -1900,6 +1956,7 @@ async function robotCycleBody(s: Internal) {
           atr: s.atr_5m,
           structural_sl: s.structural_sl,
           structure_target: s.structure_target,
+          tick_size: quote.point_size ?? null,
         },
         exitPx,
         {
@@ -1933,6 +1990,7 @@ async function robotCycleBody(s: Internal) {
               atr: s.atr_5m,
               structural_sl: s.structural_sl,
               structure_target: s.structure_target,
+              tick_size: quote.point_size ?? null,
             },
             exitPx,
             {
@@ -2067,7 +2125,7 @@ async function robotCycleBody(s: Internal) {
 
     const zoneNow = buildScalpZone(s.closedBars);
     const feedGate = allowEntryFromFeeds(s.multiFeed);
-    if (!feedGate.ok && analysisPrice == null) {
+    if (!feedGate.ok) {
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
