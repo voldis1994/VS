@@ -392,14 +392,18 @@ function publicSession(s: Internal): RobotSession {
   // Display regime from tape — never sticky TRANSITION/UNKNOWN on the board
   const displayRegime =
     tape.dir === 'BUY' ? 'TREND_UP' : tape.dir === 'SELL' ? 'TREND_DOWN' : 'RANGE';
-  const entryPlan = buildLiveEntryPlan({
-    price: s.last_mid,
-    armed: TEN_SEC_OHLC_ENABLED ? s.armed_trigger : idleArmedState(),
-    multiTf: s.multiTf,
-    closedBars: deskClosedBars(s),
-    open_side: s.open_side,
-    running: s.running,
-  });
+  // When 10s OHLC is OFF: no EARLY plan at all (no WAIT BAND / MICRO / "10s idle").
+  // Previous bug: still calling buildLiveEntryPlan with idle armed → UI looked "ON".
+  const entryPlan = TEN_SEC_OHLC_ENABLED
+    ? buildLiveEntryPlan({
+        price: s.last_mid,
+        armed: s.armed_trigger,
+        multiTf: s.multiTf,
+        closedBars: deskClosedBars(s),
+        open_side: s.open_side,
+        running: s.running,
+      })
+    : null;
   return {
     ...rest,
     regime: displayRegime,

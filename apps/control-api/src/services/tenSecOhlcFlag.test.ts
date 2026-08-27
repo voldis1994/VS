@@ -12,4 +12,9 @@ describe('10s OHLC kill-switch', () => {
   it('public snapshot market=OFF when disabled', () => {
     expect(publicOhlc10sOff().market).toBe('OFF');
   });
+
+  it('status line does not advertise EARLY/micro path when OFF', () => {
+    expect(tenSecOhlcStatusLine()).not.toMatch(/EARLY|micro|WAIT BAND/i);
+    expect(tenSecOhlcStatusLine()).toMatch(/1m\/5m/);
+  });
 });
