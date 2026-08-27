@@ -72,11 +72,8 @@ import {
   noteRiskTradeOpen,
   noteRiskTradePnl,
   allowRiskEntry,
-  setRiskEquity,
-  getRiskSnapshot,
 } from './riskWindow.js';
 import {
-  adoptBrokerOpenForBo,
   buildBoStateFromOpen,
   clearBoState,
   clearPendingExecution,
@@ -95,7 +92,6 @@ import {
   referenceAgreement,
   tagConfirmationQuote,
   tagExecutionQuote,
-  tagReferenceQuote,
 } from './multiFeedRoles.js';
 import { detectStaleQuoteAdverse } from './staleQuoteGuard.js';
 
