@@ -22,9 +22,31 @@ function safeKey(key: string): string {
 export function persistJson(namespace: string, key: string, value: unknown): void {
   const dir = ensureDir(path.join(DEFAULT_DIR, namespace));
   const file = path.join(dir, `${safeKey(key)}.json`);
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(value, null, 0), 'utf8');
-  fs.renameSync(tmp, file);
+  const payload = JSON.stringify(value, null, 0);
+  const writeOnce = () => {
+    const tmp = path.join(
+      dir,
+      `.${safeKey(key)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`
+    );
+    fs.writeFileSync(tmp, payload, 'utf8');
+    try {
+      fs.renameSync(tmp, file);
+    } catch (err) {
+      try {
+        fs.unlinkSync(tmp);
+      } catch {
+        /* ignore */
+      }
+      throw err;
+    }
+  };
+  try {
+    writeOnce();
+  } catch {
+    // Parallel test reset / race — recreate dir and retry once
+    ensureDir(path.join(DEFAULT_DIR, namespace));
+    writeOnce();
+  }
 }
 
 export function loadJson<T = unknown>(namespace: string, key: string): T | null {
@@ -66,7 +88,13 @@ export function resetPersistNamespace(namespace: string): void {
   try {
     if (!fs.existsSync(dir)) return;
     for (const f of fs.readdirSync(dir)) {
-      fs.unlinkSync(path.join(dir, f));
+      // Only wipe committed *.json — never parallel writers' *.tmp
+      if (!f.endsWith('.json')) continue;
+      try {
+        fs.unlinkSync(path.join(dir, f));
+      } catch {
+        /* ignore races */
+      }
     }
   } catch {
     /* ignore */
