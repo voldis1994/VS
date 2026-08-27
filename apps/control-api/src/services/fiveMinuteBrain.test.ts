@@ -508,7 +508,7 @@ describe('universality + feeds + isolation', () => {
       {
         open_side: 'BUY',
         entry_price: entry,
-        entry_at: new Date().toISOString(),
+        entry_at: new Date(Date.now() - 6 * 60_000).toISOString(),
         mfe: 12,
         mae: 0,
         peak_retention: 0.5,
@@ -529,7 +529,7 @@ describe('universality + feeds + isolation', () => {
       {
         open_side: 'BUY',
         entry_price: 100,
-        entry_at: new Date().toISOString(),
+        entry_at: new Date(Date.now() - 120_000).toISOString(),
         mfe: 0,
         mae: 0,
         peak_retention: null,

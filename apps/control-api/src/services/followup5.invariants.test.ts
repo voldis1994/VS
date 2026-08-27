@@ -39,7 +39,7 @@ function snap(
     mfe: 0,
     mae: 0,
     peak_retention: null,
-    entry_at: new Date().toISOString(),
+    entry_at: new Date(Date.now() - 6 * 60_000).toISOString(),
     regime: 'TREND_UP',
     tick_size: GOLD_META.tick_size,
     ...partial,

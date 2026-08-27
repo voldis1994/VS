@@ -269,8 +269,20 @@ export function decideBestOutcomeExit(
   const hitEps = Math.max(Math.abs(entry) * 1e-12, 1e-9);
   const cont = Boolean(opts?.continuationSameSide);
 
+  // Young trade: Hard/Structural invalidation still exit; soft BO exits wait.
+  // Prevents open→instant StructureReversal/PeakTrail→reentry machine-gun.
+  const entryAtMs = s.entry_at ? Date.parse(s.entry_at) : NaN;
+  const ageMs =
+    Number.isFinite(entryAtMs) && entryAtMs > 0 ? Date.now() - entryAtMs : 0;
+  const YOUNG_MS = 5 * 60_000; // real 5m trade — soft BO waits a full 5 minutes
+  const young = ageMs >= 0 && ageMs < YOUNG_MS;
+
   // Critical UNKNOWN HardInv without structural SL → cannot manage
   if (hardInv == null && structDist == null) {
+    // While young, HOLD rather than instant close-to-safety spam (ATR may still seed).
+    if (young) {
+      return { exit: false, reason: '' };
+    }
     return {
       exit: true,
       reason: 'BO BLOCK · HardInv/structural SL UNKNOWN · close to safety',
@@ -304,7 +316,7 @@ export function decideBestOutcomeExit(
   const thesisPct = shortThesisMovePct(entry, atr, meta);
   const thesisPts = shortThesisPts(entry, atr, meta);
   const short = s.short_net_pct;
-  if (thesisPct != null && thesisPts != null && short != null && Number.isFinite(short)) {
+  if (!young && thesisPct != null && thesisPts != null && short != null && Number.isFinite(short)) {
     if (s.open_side === 'BUY' && short <= -thesisPct) {
       return {
         exit: true,
@@ -320,7 +332,7 @@ export function decideBestOutcomeExit(
   }
 
   const regimeThesis = thesisFailureReason(s.open_side, s.regime);
-  if (regimeThesis) {
+  if (!young && regimeThesis) {
     return { exit: true, reason: regimeThesis };
   }
 
@@ -328,6 +340,11 @@ export function decideBestOutcomeExit(
     s.structure_target != null && Number.isFinite(s.structure_target) && s.structure_target > 0
       ? s.structure_target
       : null;
+
+  // Soft exits (TargetEnd / StructureReversal / PeakTrail / Opposite) — not while young
+  if (young) {
+    return { exit: false, reason: '' };
+  }
 
   // 4a) Structure target reached + continuation ended → EXIT (no bars required)
   if (structTarget != null && fav + hitEps >= structTarget && !cont) {
