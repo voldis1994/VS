@@ -269,12 +269,13 @@ export function decideBestOutcomeExit(
   const hitEps = Math.max(Math.abs(entry) * 1e-12, 1e-9);
   const cont = Boolean(opts?.continuationSameSide);
 
-  // Young trade: Hard/Structural invalidation still exit; soft BO exits wait.
-  // Prevents open→instant StructureReversal/PeakTrail→reentry machine-gun.
+  // Young trade: mute ONLY soft profit-management (PeakTrail / TargetEnd).
+  // Trend-flip exits (ThesisFailure / StructureReversal / Opposite) fire immediately —
+  // holding a bad long through a dump for 5m was the "random stuck trade" bug.
   const entryAtMs = s.entry_at ? Date.parse(s.entry_at) : NaN;
   const ageMs =
     Number.isFinite(entryAtMs) && entryAtMs > 0 ? Date.now() - entryAtMs : 0;
-  const YOUNG_MS = 5 * 60_000; // real 5m trade — soft BO waits a full 5 minutes
+  const YOUNG_MS = 5 * 60_000; // soft profit exits wait a full 5 minutes
   const young = ageMs >= 0 && ageMs < YOUNG_MS;
 
   // Critical UNKNOWN HardInv without structural SL → cannot manage
@@ -291,7 +292,7 @@ export function decideBestOutcomeExit(
 
   const sl = structDist ?? hardInv!;
 
-  // 1) Structural invalidation → EXIT
+  // 1) Structural invalidation → EXIT (anytime)
   if (s.structural_sl != null && Number.isFinite(s.structural_sl)) {
     if (s.open_side === 'BUY' && mid <= s.structural_sl) {
       return {
@@ -307,16 +308,17 @@ export function decideBestOutcomeExit(
     }
   }
 
-  // 2) Hard invalidation → EXIT
+  // 2) Hard invalidation → EXIT (anytime)
   if (fav <= -sl) {
     return { exit: true, reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}` };
   }
 
-  // 3) Thesis failure (regime flip / short dump against side) → EXIT
+  // 3) Thesis failure (regime flip / short dump against side) → EXIT anytime
+  // Chart case: BUY into dump → TREND_DOWN / short dump must flip immediately, not wait 5m.
   const thesisPct = shortThesisMovePct(entry, atr, meta);
   const thesisPts = shortThesisPts(entry, atr, meta);
   const short = s.short_net_pct;
-  if (!young && thesisPct != null && thesisPts != null && short != null && Number.isFinite(short)) {
+  if (thesisPct != null && thesisPts != null && short != null && Number.isFinite(short)) {
     if (s.open_side === 'BUY' && short <= -thesisPct) {
       return {
         exit: true,
@@ -332,7 +334,7 @@ export function decideBestOutcomeExit(
   }
 
   const regimeThesis = thesisFailureReason(s.open_side, s.regime);
-  if (!young && regimeThesis) {
+  if (regimeThesis) {
     return { exit: true, reason: regimeThesis };
   }
 
@@ -341,20 +343,7 @@ export function decideBestOutcomeExit(
       ? s.structure_target
       : null;
 
-  // Soft exits (TargetEnd / StructureReversal / PeakTrail / Opposite) — not while young
-  if (young) {
-    return { exit: false, reason: '' };
-  }
-
-  // 4a) Structure target reached + continuation ended → EXIT (no bars required)
-  if (structTarget != null && fav + hitEps >= structTarget && !cont) {
-    return {
-      exit: true,
-      reason: `TargetEnd · UPL ${fav.toFixed(5)} ≥ structure ${structTarget.toFixed(5)} · continuation ended`,
-    };
-  }
-
-  // 4) Structure reversal exit — CHoCH / HL-LH break / failed continuation
+  // 4) Structure reversal — CHoCH / HL-LH break / dead thesis → EXIT anytime (trend flip)
   const revInput: StructureReversalInput | null =
     opts?.structureReversal ??
     (opts?.bars5m && opts.bars5m.length >= 4
@@ -375,12 +364,42 @@ export function decideBestOutcomeExit(
 
   if (revInput) {
     const rev = detectStructureReversalExit(revInput);
+    // While young: only hard structure flips (not TargetEnd scalp / micro flicker)
     if (rev.exit) {
-      return { exit: true, reason: rev.reason };
+      const isSoftTarget = /^TargetEnd/i.test(rev.reason);
+      const isMicroFlicker = /^MicroReversal/i.test(rev.reason);
+      if (!(young && (isSoftTarget || isMicroFlicker))) {
+        return { exit: true, reason: rev.reason };
+      }
     }
   }
 
-  // 5) Soft hybrid trail — only after MFE ≥ max(1R, ATR). Wide K; floor ≥ 0 (BE lock).
+  // 5) Opposite tape when 5m thesis dead → EXIT anytime (enables flip to new trend)
+  if (opts?.oppositeEntrySignal && !opts?.ignoreMicroOpposite && !cont) {
+    const bars = opts?.bars5m ?? revInput?.bars5m ?? [];
+    const thesis = bars.length >= 4 ? thesisAlive5m(s.open_side, bars) : { alive: true, detail: '' };
+    if (!thesis.alive) {
+      return {
+        exit: true,
+        reason: `OppositeSignal · ${opts.oppositeReason || 'tape flipped'} · ${thesis.detail}`,
+      };
+    }
+  }
+
+  // Soft profit-management only after young window (anti open→PeakTrail→reentry spam)
+  if (young) {
+    return { exit: false, reason: '' };
+  }
+
+  // 6) Structure target reached + continuation ended → EXIT
+  if (structTarget != null && fav + hitEps >= structTarget && !cont) {
+    return {
+      exit: true,
+      reason: `TargetEnd · UPL ${fav.toFixed(5)} ≥ structure ${structTarget.toFixed(5)} · continuation ended`,
+    };
+  }
+
+  // 7) Soft hybrid trail — only after MFE ≥ max(1R, ATR). Wide K; floor ≥ 0 (BE lock).
   const armAt = peakProtectArmThreshold(entry, atr, meta);
   const atrBuf = peakProtectAtrBuffer(entry, atr, meta);
   if (armAt != null && atrBuf != null && s.mfe + hitEps >= armAt) {
@@ -393,18 +412,6 @@ export function decideBestOutcomeExit(
       return {
         exit: true,
         reason: `PeakTrail · UPL ${fav.toFixed(5)} < floor ${protectedLvl.toFixed(5)} · MFE ${s.mfe.toFixed(5)} − K×ATR (${detail} · ATR ${atrBuf.toFixed(5)} · arm@${armAt.toFixed(5)} · ${strength} · BE lock)`,
-      };
-    }
-  }
-
-  // 6) Opposite tape — only when structure thesis dead (not a scalp on retrace)
-  if (opts?.oppositeEntrySignal && !opts?.ignoreMicroOpposite && !cont) {
-    const bars = opts?.bars5m ?? revInput?.bars5m ?? [];
-    const thesis = bars.length >= 4 ? thesisAlive5m(s.open_side, bars) : { alive: true, detail: '' };
-    if (!thesis.alive) {
-      return {
-        exit: true,
-        reason: `OppositeSignal · ${opts.oppositeReason || 'tape flipped'} · ${thesis.detail}`,
       };
     }
   }

@@ -1,6 +1,6 @@
 /**
- * Post-trade gates — anti machine-gun reentry.
- * Same side may reopen after a short pause; zero pause caused open→close loops.
+ * Post-trade gates — anti machine-gun reentry on the SAME side.
+ * Opposite-side FLIP is allowed immediately (bad BUY → dump → SELL).
  */
 
 export type ExitSide = 'BUY' | 'SELL';
@@ -13,13 +13,13 @@ type EpicCooldown = {
 
 const byEpic = new Map<string, EpicCooldown>();
 
-/** Minimum pause after any close before same-epic reentry (stop open/close spam). */
+/** Minimum pause after close before SAME-side reentry (stop open/close spam). */
 export const EPIC_PAUSE_MS = 90_000;
 /** Same pause after loss/scratch — machine-gun was worse on scratches. */
 export const EPIC_LOSS_PAUSE_MS = 90_000;
-/** @deprecated */
+/** @deprecated — opposite flip is never blocked */
 export const EPIC_FLIP_BLOCK_MS = 0;
-/** Same-side reopen allowed after pause — no must-flip block. */
+/** @deprecated */
 export const EPIC_SAME_SIDE_BLOCK_MS = 0;
 
 function key(epic: string): string {
@@ -48,16 +48,20 @@ export function noteEpicTradeClose(
 
 export function allowEpicReentry(
   epic: string,
-  _direction: ExitSide
+  direction: ExitSide
 ): { ok: boolean; reason: string } {
   const g = byEpic.get(key(epic));
   if (!g || !g.closedAtMs) return { ok: true, reason: 'no recent epic close' };
+  // Opposite side = flip into new trend — never pause (chart dump while long → SELL now).
+  if (g.side && g.side !== direction) {
+    return { ok: true, reason: `FLIP ok · closed ${g.side} → enter ${direction}` };
+  }
   const need = pauseMsAfterClose(g.wasLoss);
   const left = g.closedAtMs + need - Date.now();
   if (left > 0) {
     return {
       ok: false,
-      reason: `REENTRY PAUSE · ${Math.ceil(left / 1000)}s left after close · anti machine-gun`,
+      reason: `REENTRY PAUSE · ${Math.ceil(left / 1000)}s left · same-side ${direction} anti machine-gun`,
     };
   }
   return { ok: true, reason: 'pause cleared · tape free' };

@@ -87,7 +87,7 @@ describe('BO hybrid structure + PeakTrail', () => {
     expect(cut.reason).toMatch(/ThesisFailure/);
   });
 
-  it('young trade (<60s): soft StructureReversal/Thesis HOLD; HardInv still exits', () => {
+  it('young trade: ThesisFailure / regime flip EXITS immediately (trend flip)', () => {
     const young = snap({
       open_side: 'BUY',
       entry_price: 100,
@@ -96,36 +96,77 @@ describe('BO hybrid structure + PeakTrail', () => {
       regime: 'TREND_DOWN',
       entry_at: new Date().toISOString(),
     });
-    const soft = decideBestOutcomeExit(young, 100.1);
-    expect(soft.exit).toBe(false);
+    const flip = decideBestOutcomeExit(young, 100.1);
+    expect(flip.exit).toBe(true);
+    expect(flip.reason).toMatch(/ThesisFailure/);
 
     const sl = hardInvalidationDistance(100, 1, META)!;
-    const hard = decideBestOutcomeExit(young, 100 - sl - 0.01);
+    const hard = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 100,
+        mfe: 0,
+        atr: 1,
+        regime: 'TREND_UP',
+        entry_at: new Date().toISOString(),
+      }),
+      100 - sl - 0.01
+    );
     expect(hard.exit).toBe(true);
     expect(hard.reason).toMatch(/HardInvalidation/);
   });
 
-  it('soft BO still HOLD through 4m (5m young grace); exits after 5m+', () => {
+  it('young trade: PeakTrail still HOLD (soft profit mute); ThesisFailure after dump fires', () => {
+    const entry = 4618;
+    const atr = 2;
+    const arm = peakProtectArmThreshold(entry, atr, META)!;
+    const youngHold = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: entry,
+        mfe: arm * 1.2,
+        atr,
+        regime: 'TREND_UP',
+        entry_at: new Date().toISOString(),
+      }),
+      entry + arm * 0.1, // deep giveback — would PeakTrail if aged
+      { continuationSameSide: false, bars5m: bullBars() }
+    );
+    expect(youngHold.exit).toBe(false);
+
+    // Mild adverse move (not yet HardInv) + regime flip → ThesisFailure while young
+    const dumpFlip = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: entry,
+        mfe: 0.5,
+        atr,
+        regime: 'TREND_DOWN',
+        entry_at: new Date().toISOString(),
+      }),
+      entry - 0.5
+    );
+    expect(dumpFlip.exit).toBe(true);
+    expect(dumpFlip.reason).toMatch(/ThesisFailure/);
+  });
+
+  it('soft PeakTrail still waits past 5m young grace; ThesisFailure anytime', () => {
     const at4m = snap({
       open_side: 'BUY',
       entry_price: 100,
       mfe: 0.5,
       atr: 1,
-      regime: 'TREND_DOWN',
+      regime: 'TREND_UP',
       entry_at: new Date(Date.now() - 4 * 60_000).toISOString(),
     });
     expect(decideBestOutcomeExit(at4m, 100.1).exit).toBe(false);
 
-    const at6m = snap({
-      open_side: 'BUY',
-      entry_price: 100,
-      mfe: 0.5,
-      atr: 1,
+    const at4mFlip = snap({
+      ...at4m,
       regime: 'TREND_DOWN',
-      entry_at: new Date(Date.now() - 6 * 60_000).toISOString(),
     });
-    expect(decideBestOutcomeExit(at6m, 100.1).exit).toBe(true);
-    expect(decideBestOutcomeExit(at6m, 100.1).reason).toMatch(/ThesisFailure/);
+    expect(decideBestOutcomeExit(at4mFlip, 100.1).exit).toBe(true);
+    expect(decideBestOutcomeExit(at4mFlip, 100.1).reason).toMatch(/ThesisFailure/);
   });
 
   it('K bands are wide (hybrid, not scalp)', () => {
