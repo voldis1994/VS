@@ -2441,6 +2441,35 @@ button.regime-chip { cursor: pointer; }
   color: var(--rc-cyan);
 }
 .rc-entry-wait { color: rgba(200, 235, 245, 0.85); }
+.rc-entry-block {
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 6px 8px;
+  border: 1px solid rgba(255, 209, 102, 0.35);
+  background: rgba(255, 209, 102, 0.08);
+  color: #ffe29a;
+}
+.rc-entry-block.ok {
+  border-color: rgba(80, 220, 140, 0.4);
+  background: rgba(80, 220, 140, 0.08);
+  color: #9dffc0;
+}
+.rc-entry-vs {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  padding: 2px 6px;
+  border: 1px solid rgba(255, 141, 168, 0.45);
+  color: #ff8da8;
+}
+.rc-entry-vs.in {
+  border-color: rgba(80, 220, 140, 0.45);
+  color: #9dffc0;
+}
+.rc-entry-note {
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  color: rgba(180, 220, 235, 0.45);
+}
 .rc-entry-triggers {
   display: flex;
   flex-direction: column;

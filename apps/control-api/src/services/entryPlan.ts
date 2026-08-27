@@ -18,15 +18,22 @@ import type { TenSecBar } from './tenSecondOhlc.js';
 
 export type EntryPlanUiState = 'WATCHING' | 'ARMED' | 'TRIGGERED' | 'INVALIDATED';
 
+export type PriceVsZone = 'IN' | 'ABOVE' | 'BELOW' | null;
+
 export type EntryPlan = {
   state: EntryPlanUiState;
   bias: 'BUY' | 'SELL' | null;
   entry_zone: { low: number; high: number } | null;
+  /** Soft band inside entry zone where we want price before ARMED — NOT a live order trigger. */
   trigger_zone: { low: number; high: number } | null;
   current_price: number | null;
   invalidation: number | null;
   structure_target: number | null;
+  /** Why fill has not happened yet — human-facing, primary UI line. */
   waiting_for: string;
+  /** Short block: PRICE_ABOVE_ZONE / NEED_MICRO / … */
+  block_reason: string;
+  price_vs_zone: PriceVsZone;
   trigger_10s: string;
   trigger_1m: string;
   htf_context: string;
@@ -74,21 +81,54 @@ function tfTrendLine(state: MultiTfState | null | undefined): string {
 
 function structureTargetPrice(
   bias: 'BUY' | 'SELL',
-  bars5m: StructureBar[]
+  bars5m: StructureBar[],
+  zoneHigh?: number | null,
+  zoneLow?: number | null
 ): number | null {
   const real = bars5m.filter((b) => isRealBar(b) && !b.forming);
   if (real.length < 6) return null;
   const ms = analyzeMarketStructure(real, { pivotLeft: 1, pivotRight: 1 });
-  if (bias === 'BUY') return ms.last_swing_high?.price ?? null;
-  return ms.last_swing_low?.price ?? null;
+  if (bias === 'BUY') {
+    const sh = ms.last_swing_high?.price ?? null;
+    // Prefer a target ABOVE the entry zone — zone-high itself is not a trade target.
+    if (sh != null && zoneHigh != null && sh <= zoneHigh + 1e-9) {
+      const highs = ms.pivots.filter((p) => p.kind === 'HIGH' && p.price > zoneHigh);
+      const next = highs[highs.length - 1]?.price ?? null;
+      return next;
+    }
+    return sh != null && (zoneHigh == null || sh > zoneHigh) ? sh : null;
+  }
+  const sl = ms.last_swing_low?.price ?? null;
+  if (sl != null && zoneLow != null && sl >= zoneLow - 1e-9) {
+    const lows = ms.pivots.filter((p) => p.kind === 'LOW' && p.price < zoneLow);
+    return lows[lows.length - 1]?.price ?? null;
+  }
+  return sl != null && (zoneLow == null || sl < zoneLow) ? sl : null;
+}
+
+export function classifyPriceVsZone(
+  price: number,
+  low: number,
+  high: number,
+  padFrac = 0.02
+): PriceVsZone {
+  const w = Math.max(high - low, 1e-9);
+  const pad = w * padFrac;
+  if (price < low - pad) return 'BELOW';
+  if (price > high + pad) return 'ABOVE';
+  return 'IN';
 }
 
 function trigger10sStatus(
   bias: 'BUY' | 'SELL' | null,
   bars10s: StructureBar[],
-  armed: ArmedTriggerState
+  armed: ArmedTriggerState,
+  priceVsZone: PriceVsZone
 ): string {
   if (!bias) return '—';
+  if (priceVsZone === 'ABOVE' || priceVsZone === 'BELOW') {
+    return `10s idle · price ${priceVsZone} zone · no micro yet`;
+  }
   const real = bars10s.filter((b) => isRealBar(b) && !b.forming);
   const last = real[real.length - 1];
   if (!last) return '10s seeding';
@@ -101,13 +141,17 @@ function trigger10sStatus(
       ? armed.confirms.join('+')
       : armed.phase === 'ARMED'
         ? `score ${armed.micro_score}/${MICRO_ENTRY}`
-        : 'pending';
+        : 'in band · waiting micro';
   const align =
     (bias === 'BUY' && dir === 'UP') || (bias === 'SELL' && dir === 'DOWN')
       ? 'aligned'
       : 'neutral';
   const wick =
-    bias === 'BUY' && wickLow > body ? ' · rejection wick' : bias === 'SELL' && wickHigh > body ? ' · rejection wick' : '';
+    bias === 'BUY' && wickLow > body
+      ? ' · rejection wick'
+      : bias === 'SELL' && wickHigh > body
+        ? ' · rejection wick'
+        : '';
   return `10s ${dir} ${align} · ${micro}${wick}`;
 }
 
@@ -136,23 +180,68 @@ function trigger1mStatus(bias: 'BUY' | 'SELL' | null, bars1m: StructureBar[]): s
   return `1m ${ms.trend} · waiting micro shift`;
 }
 
-function waitingForText(
-  ui: EntryPlanUiState,
-  armed: ArmedTriggerState,
-  bias: 'BUY' | 'SELL' | null
-): string {
-  if (ui === 'INVALIDATED') return armed.detail || 'setup invalidated — watching for fresh zone';
-  if (ui === 'TRIGGERED') return 'micro confirm met — entry firing';
+function waitingForText(opts: {
+  ui: EntryPlanUiState;
+  armed: ArmedTriggerState;
+  bias: 'BUY' | 'SELL' | null;
+  price: number;
+  zone: { low: number; high: number } | null;
+  priceVsZone: PriceVsZone;
+}): { waiting_for: string; block_reason: string } {
+  const { ui, armed, bias, price, zone, priceVsZone } = opts;
+  if (ui === 'INVALIDATED') {
+    return {
+      waiting_for: armed.detail || 'setup invalidated — watching for fresh zone',
+      block_reason: 'INVALIDATED',
+    };
+  }
+  if (ui === 'TRIGGERED') {
+    return {
+      waiting_for: 'micro confirm met — entry firing',
+      block_reason: 'FIRING',
+    };
+  }
   if (ui === 'ARMED') {
     const need = Math.max(0, MICRO_ENTRY - armed.micro_score);
-    const kinds =
-      need > 0
-        ? 'sweep_reclaim · rejection · reclaim · micro_shift'
-        : armed.confirms.join('+') || 'confirm';
-    return `ARMED ${bias ?? ''} · need micro ${need > 0 ? `+${need}` : 'ok'} (${kinds}) · touch≠entry`;
+    if (need > 0) {
+      return {
+        waiting_for: `IN zone · ARMED · need micro ${armed.micro_score}/${MICRO_ENTRY} (sweep/rejection/reclaim) · zone touch ≠ ENTRY`,
+        block_reason: 'NEED_MICRO',
+      };
+    }
+    return {
+      waiting_for: `IN zone · micro ok · structural SL / chase checks`,
+      block_reason: 'FINAL_CHECKS',
+    };
   }
-  if (bias) return `locate ${bias} zone · wait price at entry/trigger band`;
-  return 'scanning 5m structure for support/resistance';
+  if (zone && bias && priceVsZone === 'ABOVE') {
+    return {
+      waiting_for: `NO ENTRY · price ${price.toFixed(2)} ABOVE zone ${zone.low.toFixed(2)}–${zone.high.toFixed(2)} · need pullback into band · then micro ${MICRO_ENTRY}/2 · band ≠ fill`,
+      block_reason: 'PRICE_ABOVE_ZONE',
+    };
+  }
+  if (zone && bias && priceVsZone === 'BELOW') {
+    return {
+      waiting_for: `NO ENTRY · price ${price.toFixed(2)} BELOW zone ${zone.low.toFixed(2)}–${zone.high.toFixed(2)} · need reclaim into band · then micro ${MICRO_ENTRY}/2 · band ≠ fill`,
+      block_reason: 'PRICE_BELOW_ZONE',
+    };
+  }
+  if (zone && bias && priceVsZone === 'IN') {
+    return {
+      waiting_for: `price in zone · arming · waiting micro confirms (zone ≠ ENTRY)`,
+      block_reason: 'IN_ZONE_ARMING',
+    };
+  }
+  if (bias) {
+    return {
+      waiting_for: `locate ${bias} zone · waiting structure location`,
+      block_reason: 'LOCATING_ZONE',
+    };
+  }
+  return {
+    waiting_for: 'scanning 5m structure for support/resistance',
+    block_reason: 'SCANNING',
+  };
 }
 
 export type BuildEntryPlanInput = {
@@ -223,7 +312,12 @@ export function buildLiveEntryPlan(input: BuildEntryPlanInput): EntryPlan | null
   const low = armed.zone_low ?? located?.low ?? null;
   const high = armed.zone_high ?? located?.high ?? null;
   const inv = armed.invalidation ?? located?.invalidation ?? null;
-  const structPx = dir ? structureTargetPrice(dir, bars5m) : null;
+  const entryZone = low != null && high != null ? { low, high } : null;
+  const priceVsZone =
+    entryZone != null ? classifyPriceVsZone(input.price, entryZone.low, entryZone.high) : null;
+  const structPx = dir
+    ? structureTargetPrice(dir, bars5m, entryZone?.high ?? null, entryZone?.low ?? null)
+    : null;
 
   const microPreview =
     armed.phase === 'ARMED' && dir && low != null && high != null
@@ -237,7 +331,6 @@ export function buildLiveEntryPlan(input: BuildEntryPlanInput): EntryPlan | null
         })
       : null;
 
-  const entryZone = low != null && high != null ? { low, high } : null;
   const triggerZone =
     entryZone != null
       ? {
@@ -249,6 +342,15 @@ export function buildLiveEntryPlan(input: BuildEntryPlanInput): EntryPlan | null
   const effectiveState: EntryPlanUiState =
     ui === 'WATCHING' && dir && armed.phase === 'SETUP' ? 'WATCHING' : ui;
 
+  const wait = waitingForText({
+    ui: effectiveState,
+    armed,
+    bias: dir,
+    price: input.price,
+    zone: entryZone,
+    priceVsZone,
+  });
+
   return {
     state: effectiveState,
     bias: dir,
@@ -257,8 +359,10 @@ export function buildLiveEntryPlan(input: BuildEntryPlanInput): EntryPlan | null
     current_price: input.price,
     invalidation: inv,
     structure_target: structPx,
-    waiting_for: waitingForText(effectiveState, armed, dir),
-    trigger_10s: trigger10sStatus(dir, bars10s, armed),
+    waiting_for: wait.waiting_for,
+    block_reason: wait.block_reason,
+    price_vs_zone: priceVsZone,
+    trigger_10s: trigger10sStatus(dir, bars10s, armed, priceVsZone),
     trigger_1m: trigger1mStatus(dir, bars1m),
     htf_context: tfTrendLine(multiTf),
     micro_score: microPreview?.score ?? armed.micro_score,

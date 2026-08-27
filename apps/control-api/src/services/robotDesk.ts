@@ -424,7 +424,7 @@ function buildDecisionChain(
   let action = `SCAN · ${tape.reason}`;
   if (entryPlan && !s.open_side && s.running) {
     const bias = entryPlan.bias ?? '—';
-    action = `ENTRY · ${entryPlan.state} · ${bias} · ${entryPlan.waiting_for}`;
+    action = `ENTRY · ${entryPlan.state} · ${bias} · ${entryPlan.block_reason} · ${entryPlan.waiting_for}`;
   }
   if (!s.running) action = 'STOPPED';
   else if (s.open_side) action = `MANAGE ${s.open_side}`;
