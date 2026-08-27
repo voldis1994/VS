@@ -41,7 +41,6 @@ import {
   aggregateTenSecToFiveMin,
 } from './entryFromRegime.js';
 import type { ScalpZone } from './zones.js';
-import { ZONE_WINDOW } from './zones.js';
 import { noteEpicTradeClose, lastEpicClose, pauseMsAfterClose } from './tradeCooldown.js';
 import { deskConflictShouldExit, deskOpensOnEpic } from './deskSideLock.js';
 import {
