@@ -724,7 +724,7 @@ export function RobotDeskPage() {
                             </strong>
                           </div>
                           <div>
-                            <span>TRIGGER</span>
+                            <span>WAIT BAND</span>
                             <strong>
                               {focused.entry_plan.trigger_zone
                                 ? `${fmt(focused.entry_plan.trigger_zone.low, 2)}–${fmt(focused.entry_plan.trigger_zone.high, 2)}`
@@ -741,6 +741,9 @@ export function RobotDeskPage() {
                           <span>{focused.entry_plan.trigger_1m}</span>
                         </div>
                         <div className="rc-entry-htf">{focused.entry_plan.htf_context}</div>
+                        <div className="rc-entry-note">
+                          WAIT BAND ≠ ENTRY. Fill only when state=TRIGGERED (micro ≥ 2/2).
+                        </div>
                       </div>
                     )}
                     <div className="rc-focus-log mono">{lastLog(focused)}</div>

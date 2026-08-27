@@ -469,11 +469,8 @@ export function decideEntryFrom10sRegime(
   const zone = buildScalpZone(closedBars);
 
   // Strong/late path: full 5m BOS/CHoCH (+ LTF) still enters when ready.
+  // No post-decision impulse/chase veto — same rule as EARLY TRIGGERED→fill.
   if (decision.entry && decision.direction) {
-    const impulse = allowEntryAgainstImpulse(decision.direction, closedBars, bar);
-    if (!impulse.ok) return null;
-    const late = blockLateTrendChase(decision.direction, closedBars, bar);
-    if (!late.ok) return null;
     opts?.on_armed_state?.(idleArmedState());
     return {
       direction: decision.direction,
