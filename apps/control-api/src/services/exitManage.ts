@@ -274,7 +274,7 @@ export function decideBestOutcomeExit(
   const entryAtMs = s.entry_at ? Date.parse(s.entry_at) : NaN;
   const ageMs =
     Number.isFinite(entryAtMs) && entryAtMs > 0 ? Date.now() - entryAtMs : 0;
-  const YOUNG_MS = 60_000;
+  const YOUNG_MS = 5 * 60_000; // real 5m trade — soft BO waits a full 5 minutes
   const young = ageMs >= 0 && ageMs < YOUNG_MS;
 
   // Critical UNKNOWN HardInv without structural SL → cannot manage

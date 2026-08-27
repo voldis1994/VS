@@ -501,26 +501,8 @@ export function decideEntryFrom10sRegime(
   opts?.on_armed_state?.(early.state);
   if (!early.signal) return null;
 
-  const impulse = allowEntryAgainstImpulse(early.signal.direction, closedBars, bar);
-  if (!impulse.ok) {
-    // Do not leave phase=TRIGGERED — that would reset SETUP next tick and drop the fire forever.
-    opts?.on_armed_state?.({
-      ...early.state,
-      phase: 'ARMED',
-      detail: `ARMED · post-trigger blocked · impulse · ${impulse.reason}`,
-    });
-    return null;
-  }
-  const late = blockLateTrendChase(early.signal.direction, closedBars, bar);
-  if (!late.ok) {
-    opts?.on_armed_state?.({
-      ...early.state,
-      phase: 'ARMED',
-      detail: `ARMED · post-trigger blocked · late-chase · ${late.reason}`,
-    });
-    return null;
-  }
-
+  // TRIGGERED → fill. No post-trigger impulse/chase veto (those wait for "perfect"
+  // alignment while the 5m move dies). Setup/micro already decided the fire.
   return {
     direction: early.signal.direction,
     setup: early.signal.setup,

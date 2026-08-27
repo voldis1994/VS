@@ -2093,19 +2093,6 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    // Anti machine-gun: after any close, wait before same-epic reentry
-    const reentry = allowEpicReentry(s.epic, 'BUY'); // side-agnostic pause
-    if (!reentry.ok) {
-      pushTick(s, {
-        phase: 'WAIT',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `NO ENTRY · ${reentry.reason} · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)}`,
-      });
-      return;
-    }
-
     // Seed / refresh Capital-native multi-TF history (primary) before any ENTRY READY
     const needSeed =
       !s.multiTf.ready ||
@@ -2340,22 +2327,36 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    const staleDir = detectStaleQuoteAdverse(
-      sig.direction,
-      analysisPrice,
-      confLegs.map((c) => ({ label: c.label, mid: c.mid })),
-      // Capital LIVE is source of truth — cross-feed confirmation is optional evidence only.
-      { requireRefs: false }
-    );
-    if (staleDir.block) {
-      pushTick(s, {
-        phase: 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `NO ENTRY · stale guard · ${staleDir.reason} · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)}`,
-      });
-      return;
+    // EARLY TRIGGERED → execute. No post-trigger stale/reentry veto (5m move won't wait).
+    const isEarlyTrigger = /EARLY|TRIGGERED/i.test(sig.reason);
+    if (!isEarlyTrigger) {
+      const reentry = allowEpicReentry(s.epic, sig.direction);
+      if (!reentry.ok) {
+        pushTick(s, {
+          phase: 'WAIT',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `NO ENTRY · ${reentry.reason} · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)}`,
+        });
+        return;
+      }
+      const staleDir = detectStaleQuoteAdverse(
+        sig.direction,
+        analysisPrice,
+        confLegs.map((c) => ({ label: c.label, mid: c.mid })),
+        { requireRefs: false }
+      );
+      if (staleDir.block) {
+        pushTick(s, {
+          phase: 'DECIDE',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `NO ENTRY · stale guard · ${staleDir.reason} · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)}`,
+        });
+        return;
+      }
     }
 
     direction = sig.direction;
