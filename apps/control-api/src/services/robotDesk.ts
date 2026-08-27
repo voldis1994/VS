@@ -40,6 +40,7 @@ import {
   shortNetMove,
   tapeSide,
   aggregateTenSecToFiveMin,
+  idleArmedState,
 } from './entryFromRegime.js';
 import type { ScalpZone } from './zones.js';
 import { noteEpicTradeClose, lastEpicClose, pauseMsAfterClose } from './tradeCooldown.js';
@@ -226,6 +227,8 @@ type Internal = RobotSession & {
   multiTf: MultiTfState;
   last_multi_tf_seed_ms: number;
   last_quote_fetch_ms: number;
+  /** Stateful early ENTRY: SETUP→ARMED→TRIGGERED|INVALIDATED */
+  armed_trigger: import('./earlyEntryArmed.js').ArmedTriggerState;
 };
 
 const ACTIVE_CADENCE_MS = 2_000;
@@ -2242,6 +2245,10 @@ async function robotCycleBody(s: Internal) {
       multiTfReady: s.multiTf.ready,
       analysis_price: analysisPrice,
       tick_size: quote.point_size ?? null,
+      armed_state: s.armed_trigger,
+      on_armed_state: (st) => {
+        s.armed_trigger = st;
+      },
     });
     if (!sig) {
       pushTick(s, {
@@ -2433,6 +2440,7 @@ export async function startRobotSession(input: {
     multiTf: emptyMultiTfState(),
     last_multi_tf_seed_ms: 0,
     last_quote_fetch_ms: 0,
+    armed_trigger: idleArmedState(),
     feed_source: 'NONE',
     feed_contributing: 0,
     feed_sender_count: 0,
