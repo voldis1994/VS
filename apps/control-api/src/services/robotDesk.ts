@@ -29,7 +29,7 @@ import {
   toLiveRegime,
   type RegimeName,
 } from './regimes.js';
-import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove, manageExitPrice } from './exitManage.js';
+import { decideManageExit, describeBestOutcomeState, favorableMove, manageExitPrice } from './exitManage.js';
 import { SAFETY_SL_PCT } from './microScalpThresholds.js';
 import {
   buildScalpZone,
@@ -45,7 +45,6 @@ import {
 import { formatTraderLine, buildTraderView } from './traderVision.js';
 import type { ScalpZone } from './zones.js';
 import { noteEpicTradeClose, allowEpicReentry } from './tradeCooldown.js';
-import { deskConflictShouldExit, deskOpensOnEpic, tapeMoveShouldExit } from './deskSideLock.js';
 import {
   allowEntryFromFeeds,
   readMultiFeedPrice,
@@ -243,6 +242,8 @@ type Internal = RobotSession & {
   connection_id: number;
   closed_at_ms: number;
   peak_favorable: number;
+  /** Peak broker £ on this open — partial lock only (not BE chop) */
+  broker_peak_upl: number | null;
   /** Last Capital marketStatus — detect open→closed transitions */
   last_market_tradeable: boolean;
   /** Last time we logged "market closed" (throttle ticks) */
@@ -564,6 +565,7 @@ function clearTradeState(s: Internal) {
   s.mfe = 0;
   s.mae = 0;
   s.peak_favorable = 0;
+  s.broker_peak_upl = null;
   s.peak_retention = null;
   s.unrealized = null;
   s.safety_sl = null;
@@ -769,18 +771,22 @@ function expectedStopFromDistance(
 }
 
 /**
- * Track excursion on executable price (bid/ask) — realizable PnL for PeakProtection.
- * Broker UPL ($) is display-only on desk.
+ * Track excursion on executable price (bid/ask) + broker £ peak for partial lock.
  */
 function updateExcursion(s: Internal, exitPx: number, brokerUpl?: number | null) {
   if (!s.open_side || s.entry_price == null) return;
   const fav = favorableMove(s.open_side, s.entry_price, exitPx);
-  // Display UPL = Capital broker cash only — never invent from price fav
-  s.unrealized =
-    brokerUpl != null && Number.isFinite(brokerUpl) ? Number(brokerUpl) : null;
+  if (brokerUpl != null && Number.isFinite(brokerUpl)) {
+    s.unrealized = Number(brokerUpl);
+    if (s.broker_peak_upl == null || brokerUpl > s.broker_peak_upl) {
+      s.broker_peak_upl = brokerUpl;
+    }
+  } else {
+    s.unrealized = null;
+  }
   if (fav > s.mfe) {
     s.mfe = fav;
-    s.peak_favorable = mid;
+    s.peak_favorable = exitPx;
   }
   if (fav < s.mae) s.mae = fav;
   s.peak_retention = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
@@ -1977,30 +1983,23 @@ async function robotCycleBody(s: Internal) {
           ? s.ohlcState.forming ?? s.ohlcState.last_closed
           : deskClosedBars(s).slice(-1)[0] ?? null
       );
-      if (liveSide === 'BUY' || liveSide === 'SELL') {
-        const desk = deskOpensOnEpic(sessions.values(), s.epic, s.id);
-        const hasOpposite =
-          (liveSide === 'BUY' && desk.sells.length > 0) ||
-          (liveSide === 'SELL' && desk.buys.length > 0);
+      const signalForExit =
+        TEN_SEC_OHLC_ENABLED && s.ohlcState.forming && s.ohlcState.forming.ticks >= 2
+          ? s.ohlcState.forming
+          : TEN_SEC_OHLC_ENABLED
+            ? s.ohlcState.last_closed
+            : deskClosedBars(s).slice(-1)[0] ?? null;
+      const tapeExitSide =
+        liveSide === 'BUY' || liveSide === 'SELL'
+          ? tapeSide(deskClosedBars(s), signalForExit)
+          : { dir: null as 'BUY' | 'SELL' | null, reason: '' };
+      const exitRegime =
+        liveSide === 'BUY' && tapeExitSide.dir === 'SELL'
+          ? 'TREND_DOWN'
+          : liveSide === 'SELL' && tapeExitSide.dir === 'BUY'
+            ? 'TREND_UP'
+            : s.regime;
 
-        // Capital hedge (bloķēšana) is handled at broker sync — BUY+SELL same epic → flatten both.
-        // Tape exit runs for ANY open side (single SELL vs rally on screenshot, no peer needed).
-        const tapeExit = tapeMoveShouldExit(liveSide, short.netPct);
-        if (tapeExit.exit) {
-          await exitTrade(opened.session, s, quote, tapeExit.reason);
-          queueMicrotask(() => kickPeerManageCycles(s.id, s.epic));
-          return;
-        }
-
-        const conflict = deskConflictShouldExit(liveSide, hasOpposite, short.netPct);
-        if (conflict.exit) {
-          await exitTrade(opened.session, s, quote, conflict.reason);
-          queueMicrotask(() => kickPeerManageCycles(s.id, s.epic));
-          return;
-        }
-      }
-
-      // BO — executable bid/ask + tick floor so micro +£ wins arm PeakProtection
       const boSnap = {
         open_side: s.open_side,
         entry_price: s.entry_price,
@@ -2010,8 +2009,11 @@ async function robotCycleBody(s: Internal) {
         peak_retention: s.peak_retention,
         regime: s.regime,
         tick_size: quote.point_size ?? null,
+        broker_upl: s.unrealized,
+        broker_peak_upl: s.broker_peak_upl,
       };
-      const decision = decideBestOutcomeExit(boSnap, exitPx);
+      const manageCtx = { shortNetPct: short.netPct, exitRegime };
+      const decision = decideManageExit(boSnap, exitPx, manageCtx);
       if (decision.exit) {
         await exitTrade(opened.session, s, quote, decision.reason);
         queueMicrotask(() => kickPeerManageCycles(s.id, s.epic));
@@ -2028,7 +2030,7 @@ async function robotCycleBody(s: Internal) {
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · ${describeBestOutcomeState(boSnap, exitPx).hold}`,
+        } · ${describeBestOutcomeState(boSnap, exitPx, manageCtx).hold}`,
       });
       return;
     }
@@ -2522,6 +2524,7 @@ export async function startRobotSession(input: {
     timer: null,
     closed_at_ms: 0,
     peak_favorable: 0,
+    broker_peak_upl: null,
     last_market_closed_tick_ms: 0,
     last_market_tradeable: true,
     market_status: null,

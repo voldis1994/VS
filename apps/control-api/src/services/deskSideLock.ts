@@ -51,8 +51,13 @@ export function allowDeskSameSide(
  */
 export function tapeMoveShouldExit(
   openSide: DeskSide,
-  shortNetPct: number | null | undefined
+  shortNetPct: number | null | undefined,
+  fav?: number | null
 ): { exit: boolean; reason: string } {
+  // Green UPL — profit exits (PeakProtection / broker peak) own the trade, not tape chop.
+  if (fav != null && Number.isFinite(fav) && fav > 0) {
+    return { exit: false, reason: '' };
+  }
   if (shortNetPct == null || !Number.isFinite(shortNetPct)) {
     return { exit: false, reason: '' };
   }
