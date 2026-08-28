@@ -2097,6 +2097,8 @@ async function robotCycleBody(s: Internal) {
           structural_sl: s.structural_sl,
           structure_target: s.structure_target,
           tick_size: quote.point_size ?? null,
+          broker_upl: s.unrealized,
+          spread: quote.spread ?? null,
         },
         exitPx,
         {
@@ -2134,6 +2136,8 @@ async function robotCycleBody(s: Internal) {
               structural_sl: s.structural_sl,
               structure_target: s.structure_target,
               tick_size: quote.point_size ?? null,
+              broker_upl: s.unrealized,
+              spread: quote.spread ?? null,
             },
             exitPx,
             {

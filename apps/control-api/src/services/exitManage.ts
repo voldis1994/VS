@@ -40,6 +40,10 @@ export type ExitSnapshot = {
   /** Optional liquidity / structure target beyond 1R */
   structure_target?: number | null;
   tick_size?: number | null;
+  /** Capital broker cash UPL — preferred for BE lock (price BE ≠ £ BE after spread). */
+  broker_upl?: number | null;
+  /** Live quote spread (price units) — BE floor when broker UPL unavailable. */
+  spread?: number | null;
 };
 
 export type PeakProtectStrength = 'strong' | 'normal' | 'weak';
@@ -59,6 +63,50 @@ export function manageExitPrice(
   }
   if (quote.mid != null && Number.isFinite(quote.mid)) return quote.mid;
   return null;
+}
+
+/** Min favorable move to count as "still green" after spread (price BE ≠ £ BE). */
+export function givebackBePriceFloor(
+  spread?: number | null,
+  meta?: { tick_size?: number | null }
+): number {
+  const tick = meta?.tick_size;
+  if (spread != null && Number.isFinite(spread) && spread > 0) {
+    return spread * 0.55;
+  }
+  if (tick != null && Number.isFinite(tick) && tick > 0) {
+    return tick * 2;
+  }
+  return 0;
+}
+
+export function shouldGivebackBeExit(
+  s: ExitSnapshot,
+  fav: number,
+  hitEps: number
+): { exit: boolean; reason: string } {
+  const entry = s.entry_price;
+  if (!s.open_side || entry == null) return { exit: false, reason: '' };
+  const meta = { tick_size: s.tick_size };
+  const minGreen = bestOutcomeMinGreen(entry, s.atr ?? null, meta);
+  if (minGreen == null || !(s.mfe + hitEps >= minGreen)) {
+    return { exit: false, reason: '' };
+  }
+  const brokerUpl = s.broker_upl;
+  if (brokerUpl != null && Number.isFinite(brokerUpl) && brokerUpl <= 0) {
+    return {
+      exit: true,
+      reason: `GivebackBE · was green MFE ${s.mfe.toFixed(5)} ≥ minGreen ${minGreen.toFixed(5)} · broker UPL ${brokerUpl.toFixed(5)} ≤ 0 · lock cash BE`,
+    };
+  }
+  const floor = givebackBePriceFloor(s.spread, meta);
+  if (fav + hitEps < floor) {
+    return {
+      exit: true,
+      reason: `GivebackBE · was green MFE ${s.mfe.toFixed(5)} ≥ minGreen ${minGreen.toFixed(5)} · fav ${fav.toFixed(5)} < spread floor ${floor.toFixed(5)} · lock £ BE`,
+    };
+  }
+  return { exit: false, reason: '' };
 }
 
 export function thesisFailureReason(
@@ -315,15 +363,9 @@ export function decideBestOutcomeExit(
     return { exit: true, reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}` };
   }
 
-  // 2b) Early BE lock (anytime, including young): was green enough → never finish red/flat.
-  // Fixes live asymmetry where flip exits banked +£0.02 while givebacks ran to −£0.37.
-  const minGreen = bestOutcomeMinGreen(entry, atr, meta);
-  if (minGreen != null && s.mfe + hitEps >= minGreen && fav <= 0) {
-    return {
-      exit: true,
-      reason: `GivebackBE · was green MFE ${s.mfe.toFixed(5)} ≥ minGreen ${minGreen.toFixed(5)} · now UPL ${fav.toFixed(5)} ≤ 0 · lock BE`,
-    };
-  }
+  // 2b) Early BE lock: was green → exit before broker cash goes red (not price=0).
+  const giveback = shouldGivebackBeExit(s, fav, hitEps);
+  if (giveback.exit) return giveback;
 
   // 3) Thesis failure (regime flip / short dump against side) → EXIT anytime
   // Chart case: BUY into dump → TREND_DOWN / short dump must flip immediately, not wait 5m.

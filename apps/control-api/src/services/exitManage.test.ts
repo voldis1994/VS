@@ -69,13 +69,48 @@ describe('BO hybrid structure + PeakTrail', () => {
       atr,
       regime: 'TREND_UP',
       entry_at: new Date().toISOString(),
+      broker_upl: -0.01,
     });
-    const cut = decideBestOutcomeExit(young, entry); // fav = 0
+    const cut = decideBestOutcomeExit(young, entry);
     expect(cut.exit).toBe(true);
     expect(cut.reason).toMatch(/GivebackBE/);
+    expect(cut.reason).toMatch(/broker UPL/);
 
-    const stillGreen = decideBestOutcomeExit(young, entry + minGreen * 0.5);
+    const stillGreen = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: entry,
+        mfe: minGreen + 0.01,
+        atr,
+        regime: 'TREND_UP',
+        entry_at: new Date().toISOString(),
+        broker_upl: 0.02,
+        spread: 0.3,
+      }),
+      entry + minGreen * 0.5
+    );
     expect(stillGreen.exit).toBe(false);
+  });
+
+  it('GivebackBE: spread floor exits before price=0 (avoid -£0.01 after spread)', () => {
+    const entry = 4660;
+    const atr = 4;
+    const oneR = hardInvalidationDistance(entry, atr, META)!;
+    const minGreen = oneR * 0.35;
+    const spread = 0.3;
+    const s = snap({
+      open_side: 'BUY',
+      entry_price: entry,
+      mfe: minGreen + 0.05,
+      atr,
+      spread,
+    });
+    const floor = spread * 0.55;
+    const hold = decideBestOutcomeExit(s, entry + floor + 0.05);
+    expect(hold.exit).toBe(false);
+    const cut = decideBestOutcomeExit(s, entry + floor - 0.02);
+    expect(cut.exit).toBe(true);
+    expect(cut.reason).toMatch(/spread floor/);
   });
 
   it('peakProtectArmThreshold is 1R (not max(1R, ATR))', () => {
