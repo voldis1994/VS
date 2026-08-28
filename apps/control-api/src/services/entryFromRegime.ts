@@ -30,6 +30,7 @@ import {
   type EarlyEntrySignal,
 } from './earlyEntryArmed.js';
 import { TEN_SEC_OHLC_ENABLED } from './tenSecOhlcFlag.js';
+import { decideOneMinMoveEntry, oneMinMoveConfirm } from './oneMinMoveEntry.js';
 import { buildTraderView, formatTraderLine, traderEntryGate } from './traderVision.js';
 export type { ArmedTriggerState, EarlyEntrySignal };
 export { idleArmedState, advanceEarlyEntryArmed, earlyDirectionBlockedByRegime };
@@ -333,6 +334,20 @@ export function explainNoEntry(
   const view = buildTraderView(closedBars, bar);
   const traderLine = formatTraderLine(view);
   const t = multiTfPts(closedBars, bar);
+  if (opts?.tape_dir === 'BUY' || opts?.tape_dir === 'SELL') {
+    const moveHint = oneMinMoveConfirm(
+      opts?.bars1m,
+      opts.tape_dir,
+      opts?.analysis_price ?? bar.close,
+      null,
+      { tick_size: null }
+    );
+    if (!moveHint.ok) {
+      return view
+        ? `${traderLine} · SCAN · waiting 1m MOVE · ${moveHint.detail} · ${formatTf(t)}`
+        : `SCAN · waiting 1m MOVE · ${moveHint.detail} · ${formatTf(t)}`;
+    }
+  }
   return view
     ? `${traderLine} · SCAN · waiting 5m structure · ${formatTf(t)}`
     : `SCAN · waiting 5m structure · ${formatTf(t)}`;
@@ -457,6 +472,8 @@ export function decideEntryFrom10sRegime(
     armed_state?: ArmedTriggerState | null;
     on_armed_state?: (s: ArmedTriggerState) => void;
     now_ms?: number;
+    /** Fresh 1m close — required for 1M MOVE fast path when 10s OFF. */
+    one_min_just_closed?: boolean;
   }
 ): RegimeEntry | null {
   // multiTfReady must be explicitly true (#12)
@@ -523,10 +540,42 @@ export function decideEntryFrom10sRegime(
     };
   }
 
+  const tape = tapeSide(closedBars, bar);
+
+  // Fast path: closed 1m MOVE confirms tape — enter on move, not after full 5m BOS.
+  const moveEntry = decideOneMinMoveEntry({
+    bars5m,
+    bars1m,
+    tape_dir: tape.dir,
+    regime,
+    htf: opts?.htf ?? null,
+    price,
+    spread: opts?.spread,
+    broker_min_stop: opts?.broker_min_stop,
+    tick_size: opts?.tick_size,
+    one_min_just_closed: opts?.one_min_just_closed,
+  });
+  if (moveEntry) {
+    const vision = traderGateOrNull(moveEntry.direction, closedBars, bar);
+    if (!vision.ok) {
+      opts?.on_armed_state?.(idleArmedState());
+      return null;
+    }
+    opts?.on_armed_state?.(idleArmedState());
+    return {
+      direction: moveEntry.direction,
+      setup: moveEntry.setup,
+      reason: `${moveEntry.reason} · ${describe(bar)}`,
+      zone,
+      zone_setup: null,
+      structural_sl: moveEntry.structural_sl,
+      evidence_score: 0.72,
+    };
+  }
+
   // Early path: SETUP→ARMED→TRIGGERED without waiting for full 5m BOS/CHoCH.
   // When native 10s OHLC is OFF, LTF confirms use Capital 1m bars (deskClosedBars),
   // not an empty 10s book — otherwise decide stays null forever.
-  const tape = tapeSide(closedBars, bar);
   const ltfBars = TEN_SEC_OHLC_ENABLED
     ? series.slice(-40)
     : bars1m.length >= 4

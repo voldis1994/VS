@@ -251,6 +251,8 @@ type Internal = RobotSession & {
   ohlcState: TenSecState;
   last_second_fetch_ms: number;
   last_closed_bar_key: string;
+  /** Last closed 1m bucket — 1M MOVE fires once per fresh 1m close */
+  last_1m_close_key: string;
   /** Last entry signal fingerprint — avoid re-firing same candle body every tick */
   last_entry_signal_key: string;
   closedBars: TenSecBar[];
@@ -501,7 +503,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: TEN_SEC_OHLC_ENABLED
       ? 'OWN Capital LEAD → own 10s OHLC → TAPE 5/1 → BUY|SELL · BO → EXIT'
-      : 'OWN Capital LEAD → 1m/5m EARLY (10s OHLC OFF) → BUY|SELL · BO → EXIT',
+      : 'OWN Capital LEAD → 1m MOVE + EARLY (10s OHLC OFF) → BUY|SELL · BO → EXIT',
     note: TEN_SEC_OHLC_ENABLED
       ? 'Katram klientam savs Capital LEAD + savs 10s OHLC. Peer Capital / shared bars OFF. Public = ADVISORY only.'
       : `${tenSecOhlcStatusLine()}. Peer Capital / shared bars OFF. Public = ADVISORY only.`,
@@ -2329,19 +2331,25 @@ async function robotCycleBody(s: Internal) {
     const risk = allowRiskEntry(s.account_id, s.unrealized ?? 0);
     persistRiskSnapshotJson(s.account_id, risk.snapshot);
 
-    const oneMinBars = barsAsTenSec(s.multiTf.books['1m']?.bars ?? []);
-    const closed = TEN_SEC_OHLC_ENABLED ? s.ohlcState.last_closed : oneMinBars.slice(-1)[0] ?? null;
+    const oneMinBooks = s.multiTf.books['1m']?.bars ?? [];
+    const closed1mBook = [...oneMinBooks].reverse().find((b) => b.provenance === 'REAL' && !b.forming);
+    const closed1mBar = closed1mBook ? barsAsTenSec([closed1mBook])[0] ?? null : null;
+    const bucket1m = closed1mBook ? String(closed1mBook.open_time_ms || 0) : '';
+    const justClosed1m = Boolean(bucket1m && bucket1m !== s.last_1m_close_key);
+    if (justClosed1m) s.last_1m_close_key = bucket1m;
+
+    const closed = TEN_SEC_OHLC_ENABLED ? s.ohlcState.last_closed : closed1mBar;
     const forming = TEN_SEC_OHLC_ENABLED ? s.ohlcState.forming : null;
     const justClosed = TEN_SEC_OHLC_ENABLED
       ? Boolean(s.ohlcState.just_closed && closed)
-      : Boolean(closed);
+      : justClosed1m;
     const signalBar: TenSecBar | null = TEN_SEC_OHLC_ENABLED
       ? justClosed
         ? closed!
         : forming && forming.ticks >= 2
           ? forming
           : closed || null
-      : closed;
+      : closed1mBar;
     const liveSignal = Boolean(TEN_SEC_OHLC_ENABLED && signalBar && !justClosed);
     const ohlc = TEN_SEC_OHLC_ENABLED ? s.ohlc_10s : publicOhlc10sOff();
     const show = signalBar || closed;
@@ -2425,6 +2433,7 @@ async function robotCycleBody(s: Internal) {
       on_armed_state: (st) => {
         s.armed_trigger = st;
       },
+      one_min_just_closed: justClosed1m,
     });
     if (!sig) {
       pushTick(s, {
@@ -2629,6 +2638,7 @@ export async function startRobotSession(input: {
     ohlcState: emptyTenSecState(),
     last_second_fetch_ms: 0,
     last_closed_bar_key: '',
+    last_1m_close_key: '',
     last_entry_signal_key: '',
     closedBars: [],
     last_multi_feed_ms: 0,

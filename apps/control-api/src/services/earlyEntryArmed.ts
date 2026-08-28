@@ -17,6 +17,7 @@ import { buildScalpZone, type ScalpZone } from './zones.js';
 import { atrWilder, moveThresholdPts } from './volatilityNorm.js';
 import type { HtfContext } from './fiveMinuteBrain.js';
 import { isRealBar } from './ohlcQuality.js';
+import { oneMinMoveConfirm } from './oneMinMoveEntry.js';
 
 export type ArmedPhase = 'IDLE' | 'SETUP' | 'ARMED' | 'TRIGGERED' | 'INVALIDATED';
 
@@ -301,6 +302,16 @@ export function scoreMicroConfirmation(
   const body = Math.abs(last10.close - last10.open);
   const lowerWick = Math.min(last10.open, last10.close) - last10.low;
   const upperWick = last10.high - Math.max(last10.open, last10.close);
+
+  // Closed 1m MOVE — strong single confirm when 10s OFF (full +2 toward entry)
+  if (bars1m.length >= 1) {
+    const move = oneMinMoveConfirm(bars1m, dir, ctx.price, atrWilder(realSeries(ctx.bars5m), 14), {
+      tick_size: ctx.tick_size,
+    });
+    if (move.ok) {
+      addConfirm(next, '1m_move', 2);
+    }
+  }
 
   if (dir === 'BUY') {
     // Sweep → reclaim of support
