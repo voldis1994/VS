@@ -3,6 +3,7 @@ import {
   allowDeskSameSide,
   deskConflictShouldExit,
   deskOpensOnEpic,
+  tapeMoveShouldExit,
   type DeskOpenUnit,
 } from './deskSideLock.js';
 
@@ -28,5 +29,13 @@ describe('deskSideLock', () => {
     expect(deskConflictShouldExit('BUY', true, -0.004).exit).toBe(true);
     expect(deskConflictShouldExit('SELL', true, -0.004).exit).toBe(false);
     expect(deskConflictShouldExit('BUY', false, -0.004).exit).toBe(false);
+  });
+
+  it('tapeMoveShouldExit works without opposite peer (single SELL vs rally)', () => {
+    expect(tapeMoveShouldExit('SELL', 0.004).exit).toBe(true);
+    expect(tapeMoveShouldExit('SELL', 0.001).exit).toBe(true);
+    expect(tapeMoveShouldExit('SELL', 0.0005).exit).toBe(false);
+    expect(tapeMoveShouldExit('BUY', -0.004).exit).toBe(true);
+    expect(tapeMoveShouldExit('BUY', 0.002).exit).toBe(false);
   });
 });

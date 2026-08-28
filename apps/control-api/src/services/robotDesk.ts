@@ -45,7 +45,7 @@ import {
 import { formatTraderLine, buildTraderView } from './traderVision.js';
 import type { ScalpZone } from './zones.js';
 import { noteEpicTradeClose, allowEpicReentry } from './tradeCooldown.js';
-import { deskConflictShouldExit, deskOpensOnEpic } from './deskSideLock.js';
+import { deskConflictShouldExit, deskOpensOnEpic, tapeMoveShouldExit } from './deskSideLock.js';
 import {
   allowEntryFromFeeds,
   readMultiFeedPrice,
@@ -1982,6 +1982,16 @@ async function robotCycleBody(s: Internal) {
         const hasOpposite =
           (liveSide === 'BUY' && desk.sells.length > 0) ||
           (liveSide === 'SELL' && desk.buys.length > 0);
+
+        // Capital hedge (bloķēšana) is handled at broker sync — BUY+SELL same epic → flatten both.
+        // Tape exit runs for ANY open side (single SELL vs rally on screenshot, no peer needed).
+        const tapeExit = tapeMoveShouldExit(liveSide, short.netPct);
+        if (tapeExit.exit) {
+          await exitTrade(opened.session, s, quote, tapeExit.reason);
+          queueMicrotask(() => kickPeerManageCycles(s.id, s.epic));
+          return;
+        }
+
         const conflict = deskConflictShouldExit(liveSide, hasOpposite, short.netPct);
         if (conflict.exit) {
           await exitTrade(opened.session, s, quote, conflict.reason);
