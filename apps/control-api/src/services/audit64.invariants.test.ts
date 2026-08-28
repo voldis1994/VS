@@ -84,7 +84,7 @@ describe('#64 UNKNOWN HTF = NO ENTRY', () => {
     expect(d.entry).toBe(true);
   });
 
-  it('missing HTF trend blocks entry', () => {
+  it('missing HTF trend still enters on 5m setup (HTF neutral, no wait)', () => {
     const { bars5m, price } = validBullishScenario();
     const d = decideFiveMinuteEntry({
       bars5m,
@@ -97,13 +97,13 @@ describe('#64 UNKNOWN HTF = NO ENTRY', () => {
       htf: null,
       tick_size: 0.01,
     });
-    expect(d.entry).toBe(false);
-    expect(d.hard_block).toBe('HTF_UNKNOWN');
+    expect(d.entry).toBe(true);
+    expect(d.hard_block).toBeNull();
   });
 });
 
-describe('#64 UNKNOWN spread = NO ENTRY', () => {
-  it('missing spread blocks entry even with everything else known', () => {
+describe('#64 spread fallback — no UNKNOWN block', () => {
+  it('missing spread uses 0 fallback and still enters on 5m', () => {
     const { bars5m, price } = validBullishScenario();
     const d = decideFiveMinuteEntry({
       bars5m,
@@ -116,10 +116,8 @@ describe('#64 UNKNOWN spread = NO ENTRY', () => {
       htf: { trend: 'UP', near_support: true },
       tick_size: 0.01,
     });
-    expect(d.entry).toBe(false);
-    // Spread UNKNOWN is caught inside LTF confirmation before the outer spread gate.
-    expect(d.hard_block).toBe('LTF_PENDING');
-    expect(d.reason).toMatch(/spread UNKNOWN/);
+    expect(d.entry).toBe(true);
+    expect(d.hard_block).toBeNull();
   });
 });
 
@@ -132,8 +130,8 @@ describe('#64 UNKNOWN source_ms = NO ENTRY', () => {
   });
 });
 
-describe('#64 UNKNOWN structural_sl = NO ENTRY', () => {
-  it('direction found but no opposing-side pivot → structural SL UNKNOWN blocks entry', () => {
+describe('#64 structural SL fallback — no UNKNOWN block', () => {
+  it('uses % SL fallback when pivot missing instead of blocking', () => {
     // Strictly increasing lows never form a LOW pivot (thesisPivot('BUY') stays null),
     // while a single HIGH spike + big breakout gives a real bullish BOS/direction.
     const bars: StructureBar[] = [];
@@ -167,9 +165,9 @@ describe('#64 UNKNOWN structural_sl = NO ENTRY', () => {
       htf: { trend: 'UP', near_support: true },
     });
     expect(d.direction).toBe('BUY');
-    expect(d.structural_sl).toBeNull();
-    expect(d.entry).toBe(false);
-    expect(d.hard_block).toBe('STRUCT_SL_UNKNOWN');
+    expect(d.structural_sl).not.toBeNull();
+    expect(d.entry).toBe(true);
+    expect(d.hard_block).toBeNull();
   });
 });
 

@@ -12,7 +12,6 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   decideBestOutcomeExit,
-  decideManageExit,
   boMfeFloor,
   boTpDistance,
   boSlDistance,
@@ -242,14 +241,15 @@ describe('#4 Capital openingHours gap classification (no epic guess)', () => {
   });
 });
 
-describe('#5 BO symmetric profit', () => {
-  it('boMfeFloor is tick-based on Gold (not 5.6pt pct wall)', () => {
-    expect(boMfeFloor(4640, GOLD_META)).toBe(0.08);
+describe('#5 BO Aug 13 setup', () => {
+  it('boMfeFloor scales with entry (~0.12%)', () => {
+    const entry = 4640;
+    expect(boMfeFloor(entry)).toBeCloseTo(Math.max(entry * 0.0012, 0.12), 4);
   });
 
-  it('PeakProtection on 0.86pt micro MFE after giveback', () => {
+  it('holds below mfeFloor even on deep retention giveback', () => {
     const entry = 4640;
-    const cut = decideManageExit(
+    const hold = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: entry,
@@ -259,14 +259,13 @@ describe('#5 BO symmetric profit', () => {
       }),
       entry + 0.01
     );
-    expect(cut.exit).toBe(true);
-    expect(cut.reason).toMatch(/PeakProtection/);
+    expect(hold.exit).toBe(false);
   });
 
   it('PeakProtection after meaningful MFE and ret < 30%', () => {
     const entry = 4640;
     const mfe = 8;
-    const cut = decideManageExit(
+    const cut = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: entry,
@@ -283,7 +282,7 @@ describe('#5 BO symmetric profit', () => {
   it('HardInv still exits on full SL', () => {
     const entry = 4600;
     const sl = boSlDistance(entry);
-    const hi = decideManageExit(
+    const hi = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: entry,
@@ -297,10 +296,10 @@ describe('#5 BO symmetric profit', () => {
     expect(hi.reason).toMatch(/HardInvalidation/);
   });
 
-  it('target exit at symmetric TP', () => {
+  it('target exit at ~0.35% TP', () => {
     const entry = 4640;
-    const tp = boTpDistance(entry, GOLD_META);
-    const cut = decideManageExit(
+    const tp = boTpDistance(entry);
+    const cut = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: entry,
@@ -316,9 +315,9 @@ describe('#5 BO symmetric profit', () => {
 });
 
 describe('#5 robotDesk BO wiring', () => {
-  it('robotDesk uses unified decideManageExit', () => {
+  it('robotDesk uses Aug-13 mid-price BO snapshot', () => {
     const src = readFileSync(join(here, 'robotDesk.ts'), 'utf8');
-    expect(src).toMatch(/decideManageExit/);
-    expect(src).toMatch(/broker_peak_upl/);
+    expect(src).toMatch(/decideBestOutcomeExit\([\s\S]*quote\.mid/);
+    expect(src).toMatch(/deskConflictShouldExit/);
   });
 });

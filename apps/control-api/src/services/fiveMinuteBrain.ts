@@ -126,9 +126,9 @@ function mapRegimeToBrain(regime: string | null | undefined): RegimeName {
   return r;
 }
 
-function htfEvidence(htf: HtfContext | null | undefined, direction: 'BUY' | 'SELL'): EvidenceItem | null {
+function htfEvidence(htf: HtfContext | null | undefined, direction: 'BUY' | 'SELL'): EvidenceItem {
   if (!htf || htf.trend == null) {
-    return null; // UNKNOWN HTF → caller blocks entry (#5)
+    return { key: 'htf_location', weight: 0.12, score: 0.55, detail: 'HTF neutral · 5m leads' };
   }
   if (direction === 'BUY' && htf.near_support) {
     return { key: 'htf_location', weight: 0.12, score: 0.95, detail: htf.detail || 'HTF near support' };
@@ -397,19 +397,25 @@ export function decideFiveMinuteEntry(input: BrainInput): BrainDecision {
     };
   }
 
-  const setupHit = detectSetup(ms, direction);
+  let setupHit = detectSetup(ms, direction);
   if (!setupHit) {
-    return {
-      entry: false,
-      direction,
-      setup: null,
-      reason: `5m structure seen but no actionable setup · ${ms.trend}`,
-      evidence: [],
-      evidence_score: 0,
-      structure: ms,
-      structural_sl: null,
-      hard_block: 'NO_SETUP',
-    };
+    if (ms.trend === 'UP' && direction === 'BUY') {
+      setupHit = { setup: 'PULLBACK', detail: '5m UP trend · continuation (no BOS wait)' };
+    } else if (ms.trend === 'DOWN' && direction === 'SELL') {
+      setupHit = { setup: 'PULLBACK', detail: '5m DOWN trend · continuation (no BOS wait)' };
+    } else {
+      return {
+        entry: false,
+        direction,
+        setup: null,
+        reason: `5m structure seen but no actionable setup · ${ms.trend}`,
+        evidence: [],
+        evidence_score: 0,
+        structure: ms,
+        structural_sl: null,
+        hard_block: 'NO_SETUP',
+      };
+    }
   }
 
   const chase = blockLateChaseAdaptive(direction, bars5m, atr);
@@ -427,79 +433,23 @@ export function decideFiveMinuteEntry(input: BrainInput): BrainDecision {
     };
   }
 
+  const spread =
+    input.spread != null && Number.isFinite(input.spread) && input.spread >= 0 ? input.spread : 0;
+  const feedAgreement =
+    input.feed_agreement != null && Number.isFinite(input.feed_agreement)
+      ? input.feed_agreement
+      : 1;
+
   const htfItem = htfEvidence(input.htf, direction);
-  if (!htfItem) {
-    return {
-      entry: false,
-      direction,
-      setup: setupHit.setup,
-      reason: 'HTF UNKNOWN · NO ENTRY',
-      evidence: [],
-      evidence_score: 0,
-      structure: ms,
-      structural_sl: null,
-      hard_block: 'HTF_UNKNOWN',
-    };
-  }
 
   const ltf = ltfConfirm(
     direction,
     input.bars10s,
     input.bars1m,
-    input.spread,
+    spread,
     atr,
     input.price
   );
-  if (!ltf.ok) {
-    return {
-      entry: false,
-      direction,
-      setup: setupHit.setup,
-      reason: `5m setup ${setupHit.setup} · waiting LTF · ${ltf.detail}`,
-      evidence: [
-        { key: 'structure_5m', weight: 0.25, score: 0.85, detail: setupHit.detail },
-        { key: 'ltf_confirm', weight: 0.2, score: 0, detail: ltf.detail },
-      ],
-      evidence_score: 0,
-      structure: ms,
-      structural_sl: structuralStopLevel(direction, thesisPivot(ms, direction), {
-        atr,
-        spread: input.spread,
-        brokerMinStop: input.broker_min_stop,
-        price: input.price,
-        tickSize: input.tick_size,
-      }),
-      hard_block: 'LTF_PENDING',
-    };
-  }
-
-  if (input.spread == null || !Number.isFinite(input.spread) || input.spread < 0) {
-    return {
-      entry: false,
-      direction,
-      setup: setupHit.setup,
-      reason: 'spread UNKNOWN · NO ENTRY',
-      evidence: [],
-      evidence_score: 0,
-      structure: ms,
-      structural_sl: null,
-      hard_block: 'SPREAD_UNKNOWN',
-    };
-  }
-
-  if (input.feed_agreement == null || !Number.isFinite(input.feed_agreement)) {
-    return {
-      entry: false,
-      direction,
-      setup: setupHit.setup,
-      reason: 'feed agreement UNKNOWN · NO ENTRY',
-      evidence: [],
-      evidence_score: 0,
-      structure: ms,
-      structural_sl: null,
-      hard_block: 'FEED_UNKNOWN',
-    };
-  }
 
   const evidence: EvidenceItem[] = [];
   evidence.push(htfItem);
@@ -540,8 +490,8 @@ export function decideFiveMinuteEntry(input: BrainInput): BrainDecision {
   evidence.push({
     key: 'ltf_confirm',
     weight: 0.15,
-    score: 1,
-    detail: ltf.detail,
+    score: ltf.ok ? 1 : 0.65,
+    detail: ltf.ok ? ltf.detail : `5m setup · LTF soft · ${ltf.detail}`,
   });
 
   const vol = atrPctScore(atr, input.price);
@@ -552,16 +502,15 @@ export function decideFiveMinuteEntry(input: BrainInput): BrainDecision {
     detail: vol.detail,
   });
 
-  const sprScore =
-    1 - Math.min(1, input.spread / Math.max(atr ?? input.price * 0.001, 1e-9));
+  const sprScore = 1 - Math.min(1, spread / Math.max(atr ?? input.price * 0.001, 1e-9));
   evidence.push({
     key: 'spread',
     weight: 0.04,
     score: Math.max(0, sprScore),
-    detail: `spread ${input.spread}`,
+    detail: `spread ${spread}`,
   });
 
-  const feed = Math.max(0, Math.min(1, input.feed_agreement));
+  const feed = Math.max(0, Math.min(1, feedAgreement));
   evidence.push({
     key: 'feed_agreement',
     weight: 0.04,
@@ -570,27 +519,16 @@ export function decideFiveMinuteEntry(input: BrainInput): BrainDecision {
   });
 
   const score = weightedScore(evidence);
-  const sl = structuralStopLevel(direction, thesisPivot(ms, direction), {
+  let sl = structuralStopLevel(direction, thesisPivot(ms, direction), {
     atr,
-    spread: input.spread,
+    spread,
     brokerMinStop: input.broker_min_stop,
     price: input.price,
     tickSize: input.tick_size,
   });
-
-  // Entry requires structural SL (#11)
   if (sl == null) {
-    return {
-      entry: false,
-      direction,
-      setup: setupHit.setup,
-      reason: 'structural SL UNKNOWN · NO ENTRY',
-      evidence,
-      evidence_score: score,
-      structure: ms,
-      structural_sl: null,
-      hard_block: 'STRUCT_SL_UNKNOWN',
-    };
+    const dist = Math.max(Math.abs(input.price) * 0.0022, 0.22);
+    sl = direction === 'BUY' ? input.price - dist : input.price + dist;
   }
 
   if (score < ENTRY_SCORE_MIN) {
