@@ -1,10 +1,9 @@
 /**
- * Unified manage exit tests.
+ * BO — restored Aug 13 2026 17:43 (e0e479a).
  */
 import { describe, expect, it } from 'vitest';
 import {
   decideBestOutcomeExit,
-  decideManageExit,
   describeBestOutcomeState,
   favorableMove,
   manageExitPrice,
@@ -13,8 +12,6 @@ import {
   boTpDistance,
   type ExitSnapshot,
 } from './exitManage.js';
-
-const GOLD = { tick_size: 0.01 };
 
 function snap(
   partial: Partial<ExitSnapshot> & { open_side: 'BUY' | 'SELL'; entry_price: number }
@@ -25,9 +22,6 @@ function snap(
     peak_retention: null,
     entry_at: new Date().toISOString(),
     regime: 'TREND_UP',
-    tick_size: GOLD.tick_size,
-    broker_peak_upl: null,
-    broker_upl: null,
     ...partial,
   };
 }
@@ -44,129 +38,127 @@ describe('per-client exit isolation helpers', () => {
     expect(manageExitPrice('SELL', { bid: 4659.4, ask: 4659.8, mid: 4659.6 })).toBe(4659.8);
   });
 
-  it('thesis failure is opposite-regime only', () => {
-    expect(thesisFailureReason('BUY', 'TREND_DOWN')).toMatch(/ThesisFailure/);
+  it('does not invent thesis failure on RANGE/COMPRESSION/UNKNOWN', () => {
+    expect(thesisFailureReason('BUY', 'RANGE')).toBeNull();
+    expect(thesisFailureReason('BUY', 'COMPRESSION')).toBeNull();
+    expect(thesisFailureReason('SELL', 'UNKNOWN')).toBeNull();
     expect(thesisFailureReason('BUY', 'TREND_UP')).toBeNull();
+    expect(thesisFailureReason('SELL', 'TREND_DOWN')).toBeNull();
+  });
+
+  it('thesis failure is opposite-regime only — each side independent', () => {
+    expect(thesisFailureReason('BUY', 'TREND_DOWN')).toMatch(/ThesisFailure/);
+    expect(thesisFailureReason('BUY', 'BREAKOUT_DOWN')).toMatch(/ThesisFailure/);
+    expect(thesisFailureReason('SELL', 'TREND_UP')).toMatch(/ThesisFailure/);
+    expect(thesisFailureReason('SELL', 'BREAKOUT_UP')).toMatch(/ThesisFailure/);
+    expect(thesisFailureReason('BUY', 'TREND_UP')).toBeNull();
+    expect(thesisFailureReason('SELL', 'TREND_DOWN')).toBeNull();
   });
 });
 
-describe('decideBestOutcomeExit — profit symmetric', () => {
-  it('Gold mfeFloor is tick-based (~0.08pt)', () => {
-    expect(boMfeFloor(4660, GOLD)).toBe(0.08);
-  });
-
-  it('PeakProtection on +0.86pt micro win after giveback', () => {
-    const entry = 4660;
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: entry,
-        mfe: 0.86,
-        peak_retention: 0.01,
-      }),
-      entry + 0.01
-    );
-    expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/PeakProtection/);
-  });
-
-  it('BrokerPeakLock at 50% of £ peak — not full BE chop', () => {
-    const entry = 4660;
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: entry,
-        mfe: 1.2,
-        peak_retention: 0.4,
-        broker_peak_upl: 0.86,
-        broker_upl: 0.4,
-      }),
-      entry + 0.5
-    );
-    expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/BrokerPeakLock/);
-  });
-
-  it('does NOT BrokerPeakLock at £0.01 (no BE spam)', () => {
-    const entry = 4660;
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: entry,
-        mfe: 0.86,
-        peak_retention: 0.01,
-        broker_peak_upl: 0.86,
-        broker_upl: 0.01,
-      }),
-      entry + 0.01
-    );
-    expect(d.reason).not.toMatch(/BrokerPeakLock/);
-    expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/PeakProtection/);
-  });
-
-  it('target at symmetric TP', () => {
-    const entry = 4660;
-    const tp = boTpDistance(entry, GOLD);
-    expect(tp).toBeLessThan(16);
-    const d = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: entry, mfe: tp }),
-      entry + tp
-    );
-    expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/Target/);
-  });
-});
-
-describe('decideManageExit — unified pipeline', () => {
-  it('green SELL vs rally — HOLD (profit rules first, no tape chop)', () => {
-    const entry = 4593.52;
-    const d = decideManageExit(
-      snap({
-        open_side: 'SELL',
-        entry_price: entry,
-        mfe: 0.5,
-        peak_retention: 0.8,
-        regime: 'TREND_UP',
-      }),
-      entry - 0.2,
-      { shortNetPct: 0.004, exitRegime: 'TREND_UP' }
-    );
+describe('decideBestOutcomeExit (Aug 13 setup)', () => {
+  it('holds a young BUY in TREND_UP with small noise', () => {
+    const d = decideBestOutcomeExit(snap({ open_side: 'BUY', entry_price: 2000, mfe: 0.4 }), 2000.5);
     expect(d.exit).toBe(false);
   });
 
-  it('red SELL vs rally — TapeExit (after profit rules)', () => {
-    const entry = 4593.52;
-    const d = decideManageExit(
-      snap({
-        open_side: 'SELL',
-        entry_price: entry,
-        mfe: 0.05,
-        peak_retention: null,
-        regime: 'TREND_UP',
-      }),
-      entry + 4,
-      { shortNetPct: 0.004, exitRegime: 'TREND_UP' }
-    );
-    expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/TapeExit/);
-  });
-
-  it('ThesisFailure when red + opposite regime', () => {
-    const d = decideManageExit(
-      snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_DOWN', mfe: 0 }),
-      1999.5,
-      { exitRegime: 'TREND_DOWN' }
+  it('exits BUY on TREND_DOWN thesis failure even if still green', () => {
+    const d = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_DOWN', mfe: 2 }),
+      2001
     );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/ThesisFailure/);
   });
 
+  it('exits SELL on TREND_UP without affecting BUY rules', () => {
+    const sell = decideBestOutcomeExit(
+      snap({ open_side: 'SELL', entry_price: 2000, regime: 'TREND_UP' }),
+      1999
+    );
+    const buy = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_UP' }),
+      1999
+    );
+    expect(sell.exit).toBe(true);
+    expect(buy.exit).toBe(false);
+  });
+
+  it('hard invalidation on ~0.22% adverse', () => {
+    const d = decideBestOutcomeExit(snap({ open_side: 'BUY', entry_price: 2000, regime: 'RANGE' }), 1994);
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/HardInvalidation/);
+  });
+
+  it('peak protection after meaningful MFE giveback (ret < 30%)', () => {
+    const entry = 2000;
+    const mfe = 8;
+    const floor = boMfeFloor(entry);
+    expect(mfe).toBeGreaterThanOrEqual(floor);
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: entry,
+        regime: 'TREND_UP',
+        mfe,
+        peak_retention: 0.2,
+      }),
+      2001.6
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/PeakProtection/);
+  });
+
+  it('does NOT exit near BE when MFE was small (no GivebackBE chop)', () => {
+    const entry = 4660;
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: entry,
+        regime: 'TREND_UP',
+        mfe: 0.86,
+        peak_retention: 0.01,
+        broker_upl: 0.01,
+      }),
+      entry + 0.01
+    );
+    expect(d.exit).toBe(false);
+  });
+
+  it('target at ~0.35%', () => {
+    const entry = 2000;
+    const tp = boTpDistance(entry);
+    const d = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: entry, regime: 'TREND_UP', mfe: tp }),
+      entry + tp
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/Target/);
+  });
+
+  it('BestOutcome harvest when green after MFE floor and ret < 40%', () => {
+    const entry = 2000;
+    const mfe = 6;
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: entry,
+        regime: 'TREND_UP',
+        mfe,
+        peak_retention: 0.35,
+      }),
+      entry + 2
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/BestOutcome harvest/);
+  });
+
   it('describe shows BO HOLD state', () => {
     const s = describeBestOutcomeState(
-      snap({ open_side: 'BUY', entry_price: 4600, mfe: 2 }),
+      snap({ open_side: 'BUY', entry_price: 4600, mfe: 2, regime: 'TREND_UP' }),
       4601
     );
     expect(s.hold).toMatch(/BO HOLD/);
+    expect(s.hold).toMatch(/peak MFE/);
   });
 });

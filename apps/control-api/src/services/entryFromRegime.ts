@@ -516,11 +516,16 @@ export function decideEntryFrom10sRegime(
     return null;
   }
 
-  // Analysis MID required — never fallback to bar.close (#13)
-  if (opts?.analysis_price == null || !Number.isFinite(opts.analysis_price)) {
+  // Analysis MID preferred — fall back to bid/ask mid or bar close (never block on UNKNOWN)
+  const price =
+    opts?.analysis_price != null && Number.isFinite(opts.analysis_price)
+      ? opts.analysis_price
+      : Number.isFinite(bar.close)
+        ? bar.close
+        : null;
+  if (price == null) {
     return null;
   }
-  const price = opts.analysis_price;
 
   const decision = decideFiveMinuteEntry({
     bars5m,

@@ -1,31 +1,33 @@
 /**
- * Post-trade gates — anti machine-gun reentry on the SAME side.
- * Opposite-side FLIP is allowed immediately (bad BUY → dump → SELL).
+ * Post-trade close notes — per robot (client+epic), NO reentry pause.
+ * Each client gets its own signal path; nothing blocks the next 5m entry.
  */
 
 export type ExitSide = 'BUY' | 'SELL';
 
-type EpicCooldown = {
+type CloseNote = {
   closedAtMs: number;
   side: ExitSide | null;
   wasLoss: boolean;
 };
 
-const byEpic = new Map<string, EpicCooldown>();
+const byRobot = new Map<string, CloseNote>();
 
-/** Post-trade reentry pause — exactly 10s (same side). Opposite FLIP still immediate. */
-export const EPIC_PAUSE_MS = 10_000;
-/** @deprecated — same 10s for all closes */
-export const EPIC_LOSS_PAUSE_MS = 10_000;
-/** @deprecated — opposite flip is never blocked */
+/** Cooldown disabled — always immediate reentry allowed. */
+export const EPIC_PAUSE_MS = 0;
+/** @deprecated */
+export const EPIC_LOSS_PAUSE_MS = 0;
+/** @deprecated */
 export const EPIC_FLIP_BLOCK_MS = 0;
 /** @deprecated */
 export const EPIC_SAME_SIDE_BLOCK_MS = 0;
 
-function key(epic: string): string {
-  return String(epic || '')
+function robotKey(clientId: number | string | null | undefined, epic: string): string {
+  const c = clientId != null ? String(clientId).trim() : '';
+  const e = String(epic || '')
     .trim()
     .toUpperCase();
+  return c && e ? `${c}:${e}` : e;
 }
 
 export function pauseMsAfterClose(_wasLoss: boolean): number {
@@ -35,11 +37,12 @@ export function pauseMsAfterClose(_wasLoss: boolean): number {
 export function noteEpicTradeClose(
   epic: string,
   side: ExitSide | null | undefined,
-  wasLoss: boolean
+  wasLoss: boolean,
+  clientId?: number | string | null
 ): void {
-  const k = key(epic);
+  const k = robotKey(clientId, epic);
   if (!k) return;
-  byEpic.set(k, {
+  byRobot.set(k, {
     closedAtMs: Date.now(),
     side: side === 'BUY' || side === 'SELL' ? side : null,
     wasLoss,
@@ -48,35 +51,25 @@ export function noteEpicTradeClose(
 
 export function allowEpicReentry(
   epic: string,
-  direction: ExitSide
+  direction: ExitSide,
+  _clientId?: number | string | null
 ): { ok: boolean; reason: string } {
-  const g = byEpic.get(key(epic));
-  if (!g || !g.closedAtMs) return { ok: true, reason: 'no recent epic close' };
-  // Opposite side = flip into new trend — never pause (chart dump while long → SELL now).
-  if (g.side && g.side !== direction) {
-    return { ok: true, reason: `FLIP ok · closed ${g.side} → enter ${direction}` };
-  }
-  const need = pauseMsAfterClose(g.wasLoss);
-  const left = g.closedAtMs + need - Date.now();
-  if (left > 0) {
-    return {
-      ok: false,
-      reason: `REENTRY PAUSE · ${Math.ceil(left / 1000)}s left · same-side ${direction} anti machine-gun`,
-    };
-  }
-  return { ok: true, reason: 'pause cleared · tape free' };
+  void epic;
+  void direction;
+  return { ok: true, reason: 'no cooldown · 5m entry free' };
 }
 
-/** Lookup last close for desk INFO (same epic). */
+/** Lookup last close for desk INFO (per robot when clientId given). */
 export function lastEpicClose(
-  epic: string
+  epic: string,
+  clientId?: number | string | null
 ): { closedAtMs: number; wasLoss: boolean; side: ExitSide | null } | null {
-  const g = byEpic.get(key(epic));
+  const g = byRobot.get(robotKey(clientId, epic));
   if (!g?.closedAtMs) return null;
   return { closedAtMs: g.closedAtMs, wasLoss: g.wasLoss, side: g.side };
 }
 
 /** Test helper */
 export function resetEpicTradeCooldowns(): void {
-  byEpic.clear();
+  byRobot.clear();
 }

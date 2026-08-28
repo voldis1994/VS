@@ -29,7 +29,8 @@ import {
   toLiveRegime,
   type RegimeName,
 } from './regimes.js';
-import { decideManageExit, describeBestOutcomeState, favorableMove, manageExitPrice } from './exitManage.js';
+import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove } from './exitManage.js';
+import { deskConflictShouldExit, deskOpensOnEpic } from './deskSideLock.js';
 import { SAFETY_SL_PCT } from './microScalpThresholds.js';
 import {
   buildScalpZone,
@@ -242,8 +243,6 @@ type Internal = RobotSession & {
   connection_id: number;
   closed_at_ms: number;
   peak_favorable: number;
-  /** Peak broker £ on this open — partial lock only (not BE chop) */
-  broker_peak_upl: number | null;
   /** Last Capital marketStatus — detect open→closed transitions */
   last_market_tradeable: boolean;
   /** Last time we logged "market closed" (throttle ticks) */
@@ -565,7 +564,6 @@ function clearTradeState(s: Internal) {
   s.mfe = 0;
   s.mae = 0;
   s.peak_favorable = 0;
-  s.broker_peak_upl = null;
   s.peak_retention = null;
   s.unrealized = null;
   s.safety_sl = null;
@@ -771,22 +769,17 @@ function expectedStopFromDistance(
 }
 
 /**
- * Track excursion on executable price (bid/ask) + broker £ peak for partial lock.
+ * Track excursion in PRICE POINTS on MID (Aug-13 BO setup).
+ * Broker UPL ($) is display-only — never mix into MFE / peak_retention.
  */
-function updateExcursion(s: Internal, exitPx: number, brokerUpl?: number | null) {
+function updateExcursion(s: Internal, mid: number, brokerUpl?: number | null) {
   if (!s.open_side || s.entry_price == null) return;
-  const fav = favorableMove(s.open_side, s.entry_price, exitPx);
-  if (brokerUpl != null && Number.isFinite(brokerUpl)) {
-    s.unrealized = Number(brokerUpl);
-    if (s.broker_peak_upl == null || brokerUpl > s.broker_peak_upl) {
-      s.broker_peak_upl = brokerUpl;
-    }
-  } else {
-    s.unrealized = null;
-  }
+  const fav = favorableMove(s.open_side, s.entry_price, mid);
+  s.unrealized =
+    brokerUpl != null && Number.isFinite(brokerUpl) ? Number(brokerUpl) : null;
   if (fav > s.mfe) {
     s.mfe = fav;
-    s.peak_favorable = exitPx;
+    s.peak_favorable = mid;
   }
   if (fav < s.mae) s.mae = fav;
   s.peak_retention = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
@@ -942,7 +935,7 @@ async function flattenBrokerOpensOnEpic(
   }
   s.exits_done += 1;
   s.closed_at_ms = Date.now();
-  noteEpicTradeClose(s.epic, lastSide, anyLoss);
+  noteEpicTradeClose(s.epic, lastSide, anyLoss, s.client_id);
   clearTradeState(s);
 }
 
@@ -1087,7 +1080,7 @@ async function exitTrade(
       detail: `RISK PnL UNKNOWN · skipped noteRiskTradePnl · ${realizedGot.detail}`,
     });
   }
-  noteEpicTradeClose(s.epic, exitSide, wasLoss);
+  noteEpicTradeClose(s.epic, exitSide, wasLoss, s.client_id);
   s.error = null;
   writeJournalClose(s, quote, reason, wasLoss);
   pushTick(s, {
@@ -1873,7 +1866,7 @@ async function robotCycleBody(s: Internal) {
               detail: `RISK PnL UNKNOWN · skipped noteRiskTradePnl · ${realizedGot.detail}`,
             });
           }
-          noteEpicTradeClose(s.epic, s.open_side, wasLoss);
+          noteEpicTradeClose(s.epic, s.open_side, wasLoss, s.client_id);
           clearTradeState(s);
         } else {
           pushTick(s, {
@@ -1884,7 +1877,7 @@ async function robotCycleBody(s: Internal) {
             detail: 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
           });
           s.closed_at_ms = Date.now();
-          noteEpicTradeClose(s.epic, s.open_side, false);
+          noteEpicTradeClose(s.epic, s.open_side, false, s.client_id);
           clearTradeState(s);
         }
       } else {
@@ -1920,12 +1913,8 @@ async function robotCycleBody(s: Internal) {
       });
     }
 
-    if (s.open_side && s.entry_price != null) {
-      const excPx =
-        manageExitPrice(s.open_side, quote) ?? quote.mid;
-      if (excPx != null) {
-        updateExcursion(s, excPx, brokerOpen?.upl ?? s.unrealized);
-      }
+    if (s.open_side && s.entry_price != null && quote.mid != null) {
+      updateExcursion(s, quote.mid, brokerOpen?.upl ?? s.unrealized);
     }
 
     pushTick(s, {
@@ -1971,11 +1960,6 @@ async function robotCycleBody(s: Internal) {
       if (quote.mid == null) return;
 
       const liveSide = s.open_side || brokerOpen?.direction || null;
-      const exitPx =
-        liveSide === 'BUY' || liveSide === 'SELL'
-          ? manageExitPrice(liveSide, quote) ?? quote.mid
-          : quote.mid;
-      if (exitPx == null) return;
 
       const short = shortNetMove(
         deskClosedBars(s),
@@ -1983,23 +1967,20 @@ async function robotCycleBody(s: Internal) {
           ? s.ohlcState.forming ?? s.ohlcState.last_closed
           : deskClosedBars(s).slice(-1)[0] ?? null
       );
-      const signalForExit =
-        TEN_SEC_OHLC_ENABLED && s.ohlcState.forming && s.ohlcState.forming.ticks >= 2
-          ? s.ohlcState.forming
-          : TEN_SEC_OHLC_ENABLED
-            ? s.ohlcState.last_closed
-            : deskClosedBars(s).slice(-1)[0] ?? null;
-      const tapeExitSide =
-        liveSide === 'BUY' || liveSide === 'SELL'
-          ? tapeSide(deskClosedBars(s), signalForExit)
-          : { dir: null as 'BUY' | 'SELL' | null, reason: '' };
-      const exitRegime =
-        liveSide === 'BUY' && tapeExitSide.dir === 'SELL'
-          ? 'TREND_DOWN'
-          : liveSide === 'SELL' && tapeExitSide.dir === 'BUY'
-            ? 'TREND_UP'
-            : s.regime;
+      if (liveSide === 'BUY' || liveSide === 'SELL') {
+        const desk = deskOpensOnEpic(sessions.values(), s.epic, s.id);
+        const hasOpposite =
+          (liveSide === 'BUY' && desk.sells.length > 0) ||
+          (liveSide === 'SELL' && desk.buys.length > 0);
+        const conflict = deskConflictShouldExit(liveSide, hasOpposite, short.netPct);
+        if (conflict.exit) {
+          await exitTrade(opened.session, s, quote, conflict.reason);
+          queueMicrotask(() => kickPeerManageCycles(s.id, s.epic));
+          return;
+        }
+      }
 
+      // Aug 13 17:43 BO — mid price, simple TP/SL/peak retention (no GivebackBE / hybrid trail)
       const boSnap = {
         open_side: s.open_side,
         entry_price: s.entry_price,
@@ -2008,12 +1989,8 @@ async function robotCycleBody(s: Internal) {
         mae: s.mae,
         peak_retention: s.peak_retention,
         regime: s.regime,
-        tick_size: quote.point_size ?? null,
-        broker_upl: s.unrealized,
-        broker_peak_upl: s.broker_peak_upl,
       };
-      const manageCtx = { shortNetPct: short.netPct, exitRegime };
-      const decision = decideManageExit(boSnap, exitPx, manageCtx);
+      const decision = decideBestOutcomeExit(boSnap, quote.mid);
       if (decision.exit) {
         await exitTrade(opened.session, s, quote, decision.reason);
         queueMicrotask(() => kickPeerManageCycles(s.id, s.epic));
@@ -2030,7 +2007,7 @@ async function robotCycleBody(s: Internal) {
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · ${describeBestOutcomeState(boSnap, exitPx, manageCtx).hold}`,
+        } · ${describeBestOutcomeState(boSnap, quote.mid).hold}`,
       });
       return;
     }
@@ -2051,15 +2028,19 @@ async function robotCycleBody(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // Analysis domain = MID (#66). Bid/ask reserved for execution / realizable PnL.
-    const analysisPrice = analysisMid(quote);
+    // Analysis domain = MID — fall back to bid/ask composite (never block entry on UNKNOWN mid)
+    const analysisPrice =
+      analysisMid(quote) ??
+      (quote.bid != null && quote.ask != null && Number.isFinite(quote.bid) && Number.isFinite(quote.ask)
+        ? (quote.bid + quote.ask) / 2
+        : quote.bid ?? quote.ask ?? null);
     if (analysisPrice == null) {
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: 'ENTRY BLOCKED · analysis MID UNKNOWN · no trade',
+        detail: 'ENTRY BLOCKED · no quote price · no trade',
       });
       return;
     }
@@ -2348,10 +2329,9 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    // Same-side 10s pause after close. Opposite FLIP still allowed immediately.
-    // EARLY / 1M MOVE skip stale-guard (move won't wait on advisory lag).
-    const isEarlyTrigger = /EARLY|TRIGGERED|1M MOVE/i.test(sig.reason);
-    const reentry = allowEpicReentry(s.epic, sig.direction);
+    // No post-trade cooldown — 5m signals fire immediately per client.
+    const isEarlyTrigger = /EARLY|TRIGGERED|1M MOVE|5M/i.test(sig.reason);
+    const reentry = allowEpicReentry(s.epic, sig.direction, s.client_id);
     if (!reentry.ok) {
       pushTick(s, {
         phase: 'WAIT',
@@ -2524,7 +2504,6 @@ export async function startRobotSession(input: {
     timer: null,
     closed_at_ms: 0,
     peak_favorable: 0,
-    broker_peak_upl: null,
     last_market_closed_tick_ms: 0,
     last_market_tradeable: true,
     market_status: null,

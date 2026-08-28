@@ -1,15 +1,8 @@
 /**
- * Unified manage exit — one pipeline for open trades.
- *
- * Priority:
- *  1) HardInv (−SL)
- *  2) Profit lock (price PeakProtection / TP / harvest / broker £ peak — NOT BE chop)
- *  3) When red only: TapeExit (dump vs BUY, rally vs SELL) + ThesisFailure
- *
- * Entry bloķēšana / Capital hedge are separate — never block step 2 on open trades.
+ * Best Outcome — restored Aug 13 2026 17:43 setup (commit e0e479a).
+ * Simple % TP/SL + peak retention harvest on MID price.
+ * No GivebackBE / 5m young mute / hybrid PeakTrail (those were chopping +£0.86 → +£0.01).
  */
-
-import { tapeMoveShouldExit } from './deskSideLock.js';
 
 export type ExitSide = 'BUY' | 'SELL';
 
@@ -21,40 +14,31 @@ export type ExitSnapshot = {
   mae: number;
   peak_retention: number | null;
   regime?: string | null;
+  /** Ignored by Aug-13 BO — kept for session/journal typing */
   short_net_pct?: number | null;
   atr?: number | null;
   structural_sl?: number | null;
   structure_target?: number | null;
   tick_size?: number | null;
   broker_upl?: number | null;
-  /** Session peak broker £ — for partial lock, not full GivebackBE */
-  broker_peak_upl?: number | null;
   spread?: number | null;
 };
 
+/** Aug-13 constants */
+export const BO_TP_PCT = 0.0035;
+export const BO_TP_MIN = 0.35;
 export const BO_SL_PCT = 0.0022;
 export const BO_SL_MIN = 0.22;
-export const BO_TP_SL_RATIO = 0.65;
-export const BO_TP_PCT = 0.0012;
-export const BO_TP_MIN = 0.35;
+export const BO_MFE_FLOOR_PCT = 0.0012;
+export const BO_MFE_FLOOR_MIN = 0.12;
 export const BO_PEAK_PROTECT_RETENTION = 0.3;
 export const BO_HARVEST_RETENTION = 0.4;
 export const BO_TIME_DECAY_MS = 480_000;
-export const BO_BROKER_PEAK_MIN = 0.12;
-export const BO_BROKER_RETAIN = 0.5;
 
-export type ManageExitContext = {
-  shortNetPct?: number | null;
-  /** Tape-aware regime for thesis when red (else snapshot.regime) */
-  exitRegime?: string | null;
-};
+export type BoExitOpts = Record<string, unknown>;
 
-export type BoExitOpts = ManageExitContext;
-
-type BoMeta = { tick_size?: number | null };
-
-export function favorableMove(side: ExitSide, entry: number, px: number): number {
-  return side === 'BUY' ? px - entry : entry - px;
+export function favorableMove(side: ExitSide, entry: number, mid: number): number {
+  return side === 'BUY' ? mid - entry : entry - mid;
 }
 
 export function manageExitPrice(
@@ -70,26 +54,22 @@ export function manageExitPrice(
   return null;
 }
 
+export function boTpDistance(entry: number): number {
+  const absEntry = Math.max(Math.abs(entry), 1e-9);
+  return Math.max(absEntry * BO_TP_PCT, BO_TP_MIN);
+}
+
 export function boSlDistance(entry: number): number {
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   return Math.max(absEntry * BO_SL_PCT, BO_SL_MIN);
 }
 
-/** Tick-based floor — micro Gold wins (+0.86pt) arm PeakProtection (not 5.6pt pct wall). */
-export function boMfeFloor(entry: number, meta?: BoMeta): number {
-  const tick = meta?.tick_size;
-  const tickFloor = tick != null && Number.isFinite(tick) && tick > 0 ? tick * 2 : 0.12;
-  return Math.max(tickFloor, 0.08);
+export function boMfeFloor(entry: number): number {
+  const absEntry = Math.max(Math.abs(entry), 1e-9);
+  return Math.max(absEntry * BO_MFE_FLOOR_PCT, BO_MFE_FLOOR_MIN);
 }
 
-/** TP tied to SL — take plus as readily as minus stops. */
-export function boTpDistance(entry: number, meta?: BoMeta): number {
-  const sl = boSlDistance(entry);
-  const pctTp = Math.max(Math.abs(entry) * BO_TP_PCT, BO_TP_MIN);
-  const floor = boMfeFloor(entry, meta);
-  return Math.max(Math.min(pctTp, sl * BO_TP_SL_RATIO), floor * 1.5);
-}
-
+/** Opposite regime vs open side — original PositionManager thesis failure. */
 export function thesisFailureReason(
   side: ExitSide,
   regime?: string | null
@@ -119,68 +99,41 @@ export function thesisFailureReason(
 }
 
 export function isHardBoReason(reason: string): boolean {
-  return /HardInvalidation|ThesisFailure|TapeExit|PeakProtection|BrokerPeakLock|Target \/|BestOutcome harvest|TimeDecay/i.test(
+  return /HardInvalidation|ThesisFailure|PeakProtection|Target \/|BestOutcome harvest|TimeDecay/i.test(
     reason
   );
 }
 
-export function shouldBrokerPeakLock(
-  s: ExitSnapshot,
-  fav: number,
-  hitEps: number
-): { exit: boolean; reason: string } {
-  const peak = s.broker_peak_upl;
-  const cur = s.broker_upl;
-  if (peak == null || cur == null || !(peak + hitEps >= BO_BROKER_PEAK_MIN)) {
-    return { exit: false, reason: '' };
-  }
-  if (cur + hitEps <= 0 || fav + hitEps <= 0) {
-    return { exit: false, reason: '' };
-  }
-  const minLockGbp = Math.max(BO_BROKER_PEAK_MIN * 0.45, 0.05);
-  if (cur + hitEps < minLockGbp) {
-    return { exit: false, reason: '' };
-  }
-  if (cur + hitEps < peak * BO_BROKER_RETAIN) {
-    return {
-      exit: true,
-      reason: `BrokerPeakLock · £ ${cur.toFixed(2)} < ${(BO_BROKER_RETAIN * 100).toFixed(0)}% of peak £${peak.toFixed(2)} · lock partial profit`,
-    };
-  }
-  return { exit: false, reason: '' };
-}
-
-/** Price + broker profit exits (no tape/thesis). */
+/**
+ * Manage exit — give the trade room to develop (~10s scalp with breathing room).
+ * Broker SAFETY SL is the hard cushion; this is best-outcome + thesis management.
+ * Uses MID price (Aug 13) — never broker £ UPL for exit decisions.
+ */
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
-  exitPx: number,
+  mid: number,
   _opts?: BoExitOpts
 ): { exit: boolean; reason: string } {
   if (!s.open_side || s.entry_price == null) return { exit: false, reason: '' };
 
+  const thesis = thesisFailureReason(s.open_side, s.regime);
+  if (thesis) return { exit: true, reason: thesis };
+
   const entry = s.entry_price;
-  const meta: BoMeta = { tick_size: s.tick_size };
-  const fav = favorableMove(s.open_side, entry, exitPx);
+  const fav = favorableMove(s.open_side, entry, mid);
   const hitEps = Math.max(Math.abs(entry) * 1e-12, 1e-9);
-  const tp = boTpDistance(entry, meta);
+  const tp = boTpDistance(entry);
   const sl = boSlDistance(entry);
-  const mfeFloor = boMfeFloor(entry, meta);
+  const mfeFloor = boMfeFloor(entry);
 
   if (fav <= -sl) {
     return { exit: true, reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}` };
   }
 
-  const brokerLock = shouldBrokerPeakLock(s, fav, hitEps);
-  if (brokerLock.exit) return brokerLock;
-
-  if (
-    s.mfe + hitEps >= mfeFloor &&
-    s.peak_retention != null &&
-    s.peak_retention + hitEps < BO_PEAK_PROTECT_RETENTION
-  ) {
+  if (s.mfe >= mfeFloor && s.peak_retention != null && s.peak_retention < BO_PEAK_PROTECT_RETENTION) {
     return {
       exit: true,
-      reason: `PeakProtection · retention ${(s.peak_retention * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} · floor ${mfeFloor.toFixed(5)} → lock best`,
+      reason: `PeakProtection · retention ${(s.peak_retention * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} → lock best`,
     };
   }
 
@@ -192,10 +145,10 @@ export function decideBestOutcomeExit(
   }
 
   if (
-    s.mfe + hitEps >= mfeFloor &&
-    fav > hitEps &&
+    s.mfe >= mfeFloor &&
+    fav > 0 &&
     s.peak_retention != null &&
-    s.peak_retention + hitEps < BO_HARVEST_RETENTION
+    s.peak_retention < BO_HARVEST_RETENTION
   ) {
     return {
       exit: true,
@@ -204,7 +157,7 @@ export function decideBestOutcomeExit(
   }
 
   const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
-  if (heldMs > BO_TIME_DECAY_MS && fav + hitEps >= 0 && s.mfe + hitEps >= mfeFloor * 0.5) {
+  if (heldMs > BO_TIME_DECAY_MS && fav >= 0 && s.mfe >= mfeFloor * 0.5) {
     return {
       exit: true,
       reason: `TimeDecay · held ${Math.round(heldMs / 1000)}s · realize non-negative best UPL ${fav.toFixed(5)}`,
@@ -214,42 +167,12 @@ export function decideBestOutcomeExit(
   return { exit: false, reason: '' };
 }
 
-/** Full open-trade exit — BO profit first, tape/thesis only when red. */
-export function decideManageExit(
-  s: ExitSnapshot,
-  exitPx: number,
-  ctx?: ManageExitContext
-): { exit: boolean; reason: string } {
-  if (!s.open_side || s.entry_price == null) return { exit: false, reason: '' };
-
-  const bo = decideBestOutcomeExit(s, exitPx);
-  if (bo.exit) return bo;
-
-  const entry = s.entry_price;
-  const fav = favorableMove(s.open_side, entry, exitPx);
-  const hitEps = Math.max(Math.abs(entry) * 1e-12, 1e-9);
-
-  if (fav + hitEps > 0) {
-    return { exit: false, reason: '' };
-  }
-
-  const shortNet = ctx?.shortNetPct ?? s.short_net_pct;
-  const tape = tapeMoveShouldExit(s.open_side, shortNet, fav);
-  if (tape.exit) return tape;
-
-  const regime = ctx?.exitRegime ?? s.regime;
-  const thesis = thesisFailureReason(s.open_side, regime);
-  if (thesis) return { exit: true, reason: thesis };
-
-  return { exit: false, reason: '' };
-}
-
 export function describeBestOutcomeState(
   s: ExitSnapshot,
-  exitPx: number,
+  mid: number,
   _opts?: BoExitOpts & { continuationReason?: string }
 ): { exit: boolean; reason: string; hold: string } {
-  const decision = decideManageExit(s, exitPx);
+  const decision = decideBestOutcomeExit(s, mid);
   if (decision.exit) return { ...decision, hold: '' };
 
   if (!s.open_side || s.entry_price == null) {
@@ -257,18 +180,16 @@ export function describeBestOutcomeState(
   }
 
   const entry = s.entry_price;
-  const meta: BoMeta = { tick_size: s.tick_size };
-  const fav = favorableMove(s.open_side, entry, exitPx);
-  const tp = boTpDistance(entry, meta);
+  const fav = favorableMove(s.open_side, entry, mid);
+  const tp = boTpDistance(entry);
   const sl = boSlDistance(entry);
-  const mfeFloor = boMfeFloor(entry, meta);
-  const peakBroker = s.broker_peak_upl;
+  const mfeFloor = boMfeFloor(entry);
 
   return {
     exit: false,
     reason: '',
     hold: `BO HOLD · UPL ${fav.toFixed(2)} · peak MFE ${s.mfe.toFixed(2)} · TP ${tp.toFixed(2)} · SL ${sl.toFixed(2)} · floor ${mfeFloor.toFixed(2)} · ret ${
       s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-    }${peakBroker != null ? ` · peak£ ${peakBroker.toFixed(2)}` : ''}`,
+    }`,
   };
 }
