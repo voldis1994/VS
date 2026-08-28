@@ -30,6 +30,18 @@ describe('10s multi-TF entry — no WAIT', () => {
     expect(decideEntryFrom10sRegime(sigBar, 'TRANSITION', bars)).toBeNull();
   });
 
+  it('explainNoEntry never shows threshold UNKNOWN', () => {
+    const bars = baseBars();
+    const quiet = bar(4500.5, 4500.55, 12, 0.2);
+    const msg = explainNoEntry(quiet, 'RANGE', bars, {
+      analysis_price: 4500.55,
+      bars1m: [],
+      tape_dir: 'BUY',
+    });
+    expect(msg).not.toMatch(/UNKNOWN/i);
+    expect(msg).toMatch(/1m MOVE|1m displacement/i);
+  });
+
   it('explainNoEntry is SCAN not WAIT', () => {
     const bars = baseBars();
     const quiet = bar(4500.5, 4500.55, 12, 0.2);

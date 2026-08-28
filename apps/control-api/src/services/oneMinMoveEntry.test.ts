@@ -128,9 +128,9 @@ describe('1m MOVE confirm entry (fast)', () => {
     ).toBeNull();
   });
 
-  it('directionFromOneMinMove picks BUY from green body', () => {
-    const bars = [sb(60_000, 4600, 4602, 4599.5, 4601.8)];
-    const d = directionFromOneMinMove(bars, 4601.8, 3, { tick_size: 0.01 });
-    expect(d?.direction).toBe('BUY');
+  it('move threshold works without ATR or tick metadata', () => {
+    const bars = [sb(60_000, 4600.2, 4601.5, 4600.1, 4601.2, false)];
+    const r = oneMinMoveConfirm(bars, 'BUY', 4601.2, null, null);
+    expect(r.detail).not.toMatch(/UNKNOWN/i);
   });
 });

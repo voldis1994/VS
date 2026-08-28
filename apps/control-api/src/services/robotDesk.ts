@@ -2469,6 +2469,7 @@ async function robotCycleBody(s: Internal) {
           bars5m,
           bars1m,
           tape_dir: tapeSide(deskClosedBars(s), signalBar).dir,
+          tick_size: quote.point_size ?? null,
         })} · HTF ${htf.detail}`,
       });
       return;

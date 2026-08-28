@@ -30,7 +30,7 @@ import {
   type EarlyEntrySignal,
 } from './earlyEntryArmed.js';
 import { TEN_SEC_OHLC_ENABLED } from './tenSecOhlcFlag.js';
-import { decideOneMinMoveEntry, oneMinMoveConfirm } from './oneMinMoveEntry.js';
+import { decideOneMinMoveEntry, oneMinMoveConfirm, directionFromOneMinMove, inferMoveAtr } from './oneMinMoveEntry.js';
 import { buildTraderView, formatTraderLine, traderEntryGate } from './traderVision.js';
 export type { ArmedTriggerState, EarlyEntrySignal };
 export { idleArmedState, advanceEarlyEntryArmed, earlyDirectionBlockedByRegime };
@@ -319,6 +319,7 @@ export function explainNoEntry(
     bars5m?: StructureBar[] | null;
     bars1m?: StructureBar[] | null;
     tape_dir?: 'BUY' | 'SELL' | null;
+    tick_size?: number | null;
   }
 ): string {
   // Desk already gated multi-TF; pass ready so diagnose matches live decide path.
@@ -334,13 +335,23 @@ export function explainNoEntry(
   const view = buildTraderView(closedBars, bar);
   const traderLine = formatTraderLine(view);
   const t = multiTfPts(closedBars, bar);
+  const price = opts?.analysis_price ?? bar.close;
+  const meta = { tick_size: opts?.tick_size ?? null, point_size: opts?.tick_size ?? null };
+  const atrHint = inferMoveAtr(opts?.bars1m, opts?.bars5m);
+  const dirHit = directionFromOneMinMove(opts?.bars1m ?? [], price, atrHint, meta);
+  if (dirHit && !dirHit.confirm.ok) {
+    return view
+      ? `${traderLine} · SCAN · waiting 1m MOVE · ${dirHit.confirm.detail} · ${formatTf(t)}`
+      : `SCAN · waiting 1m MOVE · ${dirHit.confirm.detail} · ${formatTf(t)}`;
+  }
   if (opts?.tape_dir === 'BUY' || opts?.tape_dir === 'SELL') {
     const moveHint = oneMinMoveConfirm(
       opts?.bars1m,
       opts.tape_dir,
-      opts?.analysis_price ?? bar.close,
-      null,
-      { tick_size: null }
+      price,
+      atrHint,
+      meta,
+      { allowLive: true }
     );
     if (!moveHint.ok) {
       return view
@@ -349,8 +360,8 @@ export function explainNoEntry(
     }
   }
   return view
-    ? `${traderLine} · SCAN · waiting 5m structure · ${formatTf(t)}`
-    : `SCAN · waiting 5m structure · ${formatTf(t)}`;
+    ? `${traderLine} · SCAN · waiting 1m displacement · ${formatTf(t)}`
+    : `SCAN · waiting 1m displacement · ${formatTf(t)}`;
 }
 
 export function continuationSameSide(
