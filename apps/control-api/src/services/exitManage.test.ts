@@ -173,7 +173,7 @@ describe('BO hybrid structure + PeakTrail', () => {
     expect(cut.reason).toMatch(/StructuralInvalidation/);
   });
 
-  it('ThesisFailure regime flip → EXIT', () => {
+  it('ThesisFailure regime flip → EXIT when flat/green', () => {
     const cut = decideBestOutcomeExit(
       snap({ open_side: 'BUY', entry_price: 100, mfe: 0.5, atr: 1, regime: 'TREND_DOWN' }),
       100.2
@@ -182,7 +182,25 @@ describe('BO hybrid structure + PeakTrail', () => {
     expect(cut.reason).toMatch(/ThesisFailure/);
   });
 
-  it('young trade: ThesisFailure / regime flip EXITS immediately (trend flip)', () => {
+  it('in minus: HOLD until HardInv (no thesis/flip chop above -SL)', () => {
+    const entry = 100;
+    const atr = 1;
+    const sl = hardInvalidationDistance(entry, atr, META)!;
+    const hold = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: entry, mfe: 0, atr, regime: 'TREND_DOWN' }),
+      entry - sl * 0.5
+    );
+    expect(hold.exit).toBe(false);
+
+    const cut = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: entry, mfe: 0, atr, regime: 'TREND_DOWN' }),
+      entry - sl - 0.01
+    );
+    expect(cut.exit).toBe(true);
+    expect(cut.reason).toMatch(/HardInvalidation/);
+  });
+
+  it('young trade: ThesisFailure / regime flip EXITS immediately when flat/green', () => {
     const young = snap({
       open_side: 'BUY',
       entry_price: 100,
@@ -229,9 +247,8 @@ describe('BO hybrid structure + PeakTrail', () => {
     );
     expect(youngHold.exit).toBe(false);
 
-    // Mild adverse move (not yet HardInv) + regime flip → ThesisFailure while young
-    // (mfe below minGreen so GivebackBE does not fire first)
-    const dumpFlip = decideBestOutcomeExit(
+    // Mild adverse (in minus) + regime flip → HOLD until HardInv while young
+    const dumpHold = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: entry,
@@ -242,8 +259,7 @@ describe('BO hybrid structure + PeakTrail', () => {
       }),
       entry - 0.5
     );
-    expect(dumpFlip.exit).toBe(true);
-    expect(dumpFlip.reason).toMatch(/ThesisFailure/);
+    expect(dumpHold.exit).toBe(false);
   });
 
   it('soft PeakTrail still waits past 5m young grace; ThesisFailure anytime', () => {

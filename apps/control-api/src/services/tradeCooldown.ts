@@ -13,10 +13,10 @@ type EpicCooldown = {
 
 const byEpic = new Map<string, EpicCooldown>();
 
-/** Minimum pause after close before SAME-side reentry — one 5m window per move (anti machine-gun). */
-export const EPIC_PAUSE_MS = 300_000;
-/** Same pause after loss/scratch — scratches were re-entering every 90s on one kustība. */
-export const EPIC_LOSS_PAUSE_MS = 300_000;
+/** Post-trade reentry pause — exactly 10s (same side). Opposite FLIP still immediate. */
+export const EPIC_PAUSE_MS = 10_000;
+/** @deprecated — same 10s for all closes */
+export const EPIC_LOSS_PAUSE_MS = 10_000;
 /** @deprecated — opposite flip is never blocked */
 export const EPIC_FLIP_BLOCK_MS = 0;
 /** @deprecated */
@@ -28,8 +28,8 @@ function key(epic: string): string {
     .toUpperCase();
 }
 
-export function pauseMsAfterClose(wasLoss: boolean): number {
-  return wasLoss ? EPIC_LOSS_PAUSE_MS : EPIC_PAUSE_MS;
+export function pauseMsAfterClose(_wasLoss: boolean): number {
+  return EPIC_PAUSE_MS;
 }
 
 export function noteEpicTradeClose(

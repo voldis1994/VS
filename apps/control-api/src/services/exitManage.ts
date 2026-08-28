@@ -1,7 +1,8 @@
 /**
  * Best Outcome — hybrid:
  * 1) Structure / thesis / HardInv cut losers (anytime).
- * 2) BE lock: once MFE ≥ minGreen (1R) AND past 5m young window, never give green back to flat/red.
+ * 2) BE lock: once MFE ≥ minGreen (1R) AND past 5m young window, lock partial profit (PeakRetention / trail).
+ *    In minus (UPL < 0): only HardInv / structural SL — no thesis flip or BE chop above -SL.
  * 3) After MFE ≥ 1R: retention floor + soft ATR trail
  *    Exit if fav/MFE < 55% once green at 1R+.
  *    Protected = max(0, MFE − K×ATR) with tighter K (strong 1.5 / normal 1.0 / weak 0.75).
@@ -391,12 +392,15 @@ export function decideBestOutcomeExit(
     return { exit: true, reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}` };
   }
 
-  // 3) Thesis failure (regime flip / short dump against side) → EXIT anytime
+  // In minus: only HardInv / structural SL may close — no thesis/flip/BE chop above -SL.
+  const inMinus = fav + hitEps < 0;
+
+  // 3) Thesis failure (regime flip / short dump against side) → EXIT when flat/green
   // Chart case: BUY into dump → TREND_DOWN / short dump must flip immediately, not wait 5m.
   const thesisPct = shortThesisMovePct(entry, atr, meta);
   const thesisPts = shortThesisPts(entry, atr, meta);
   const short = s.short_net_pct;
-  if (thesisPct != null && thesisPts != null && short != null && Number.isFinite(short)) {
+  if (!inMinus && thesisPct != null && thesisPts != null && short != null && Number.isFinite(short)) {
     if (s.open_side === 'BUY' && short <= -thesisPct) {
       return {
         exit: true,
@@ -411,7 +415,7 @@ export function decideBestOutcomeExit(
     }
   }
 
-  const regimeThesis = thesisFailureReason(s.open_side, s.regime);
+  const regimeThesis = !inMinus ? thesisFailureReason(s.open_side, s.regime) : null;
   if (regimeThesis) {
     return { exit: true, reason: regimeThesis };
   }
@@ -440,7 +444,7 @@ export function decideBestOutcomeExit(
         }
       : null);
 
-  if (revInput) {
+  if (revInput && !inMinus) {
     const rev = detectStructureReversalExit(revInput);
     // While young: only hard structure flips (not TargetEnd scalp / micro flicker)
     if (rev.exit) {
@@ -452,8 +456,8 @@ export function decideBestOutcomeExit(
     }
   }
 
-  // 5) Opposite tape + no continuation → EXIT anytime (flip without waiting 5m CHoCH)
-  if (opts?.oppositeEntrySignal && !opts?.ignoreMicroOpposite && !cont) {
+  // 5) Opposite tape + no continuation → EXIT when flat/green (flip without waiting 5m CHoCH)
+  if (!inMinus && opts?.oppositeEntrySignal && !opts?.ignoreMicroOpposite && !cont) {
     const bars = opts?.bars5m ?? revInput?.bars5m ?? [];
     const thesis =
       bars.length >= 4 ? thesisAlive5m(s.open_side, bars) : { alive: false, detail: 'no 5m thesis' };
@@ -470,8 +474,8 @@ export function decideBestOutcomeExit(
     return { exit: false, reason: '' };
   }
 
-  // 5b) BE lock after young window: was green at 1R+ → exit before broker cash goes red.
-  const giveback = shouldGivebackBeExit(s, fav, hitEps);
+  // 5b) BE lock after young window — flat/green only (minus → HardInv above).
+  const giveback = !inMinus ? shouldGivebackBeExit(s, fav, hitEps) : { exit: false, reason: '' };
   if (giveback.exit) return giveback;
 
   // 5c) Partial giveback cap — once green at 1R+, do not return >45% of MFE.

@@ -2475,7 +2475,7 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    // Same-side 5m pause (anti machine-gun). Opposite FLIP still allowed in cooldown.
+    // Same-side 10s pause after close. Opposite FLIP still allowed immediately.
     // EARLY / 1M MOVE skip stale-guard (move won't wait on advisory lag).
     const isEarlyTrigger = /EARLY|TRIGGERED|1M MOVE/i.test(sig.reason);
     const reentry = allowEpicReentry(s.epic, sig.direction);
