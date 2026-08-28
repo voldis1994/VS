@@ -42,6 +42,7 @@ import {
   aggregateTenSecToFiveMin,
   idleArmedState,
 } from './entryFromRegime.js';
+import { formatTraderLine, buildTraderView } from './traderVision.js';
 import type { ScalpZone } from './zones.js';
 import { noteEpicTradeClose, allowEpicReentry } from './tradeCooldown.js';
 import { deskConflictShouldExit, deskOpensOnEpic } from './deskSideLock.js';
@@ -512,7 +513,11 @@ function formatScanContext(
   zone: ScalpZone | null,
   feedNote?: string
 ): string {
-  const tape = tapeSide(deskClosedBars(s), TEN_SEC_OHLC_ENABLED ? s.ohlcState.forming ?? s.ohlcState.last_closed : deskClosedBars(s).slice(-1)[0] ?? null);
+  const liveBar = TEN_SEC_OHLC_ENABLED
+    ? s.ohlcState.forming ?? s.ohlcState.last_closed
+    : deskClosedBars(s).slice(-1)[0] ?? null;
+  const tape = tapeSide(deskClosedBars(s), liveBar);
+  const traderLine = formatTraderLine(buildTraderView(deskClosedBars(s), liveBar));
   const tapeLine = `TAPE ${tape.dir ?? 'FLAT'} · ${tape.reason}`;
   const zoneLine = formatZoneInfo(zone, deskClosedBars(s));
   const mf = s.multiFeed;
@@ -521,7 +526,7 @@ function formatScanContext(
   const feedLine =
     feedNote ||
     `FEEDS cap ${capLive}/${capCfg} · lead=${mf?.lead_label || '—'} · ${mf?.agreement || s.feed_agreement || 'NONE'}`;
-  return `${tapeLine} · ${zoneLine} · ${feedLine}`;
+  return `${traderLine} · ${tapeLine} · ${zoneLine} · ${feedLine}`;
 }
 
 function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
@@ -2440,7 +2445,7 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    // Same-side 90s pause always (anti machine-gun). Opposite FLIP still allowed in cooldown.
+    // Same-side 5m pause (anti machine-gun). Opposite FLIP still allowed in cooldown.
     // EARLY only skips stale-guard (5m move won't wait on advisory lag).
     const isEarlyTrigger = /EARLY|TRIGGERED/i.test(sig.reason);
     const reentry = allowEpicReentry(s.epic, sig.direction);

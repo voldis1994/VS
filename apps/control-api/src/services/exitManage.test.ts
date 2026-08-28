@@ -57,21 +57,20 @@ describe('BO hybrid structure + PeakTrail', () => {
     expect(manageExitPrice('SELL', { bid: 4659.4, ask: 4659.8, mid: 4659.6 })).toBe(4659.8);
   });
 
-  it('GivebackBE: was minGreen then back to flat/red → EXIT anytime (incl young)', () => {
+  it('GivebackBE: was minGreen (1R) then back to flat/red → EXIT after young window', () => {
     const entry = 4660;
     const atr = 4;
     const oneR = hardInvalidationDistance(entry, atr, META)!;
-    const minGreen = oneR * 0.35;
-    const young = snap({
+    const minGreen = oneR;
+    const aged = snap({
       open_side: 'BUY',
       entry_price: entry,
       mfe: minGreen + 0.01,
       atr,
       regime: 'TREND_UP',
-      entry_at: new Date().toISOString(),
       broker_upl: -0.01,
     });
-    const cut = decideBestOutcomeExit(young, entry);
+    const cut = decideBestOutcomeExit(aged, entry);
     expect(cut.exit).toBe(true);
     expect(cut.reason).toMatch(/GivebackBE/);
     expect(cut.reason).toMatch(/broker UPL/);
@@ -83,7 +82,6 @@ describe('BO hybrid structure + PeakTrail', () => {
         mfe: minGreen + 0.01,
         atr,
         regime: 'TREND_UP',
-        entry_at: new Date().toISOString(),
         broker_upl: 0.02,
         spread: 0.3,
       }),
@@ -92,11 +90,28 @@ describe('BO hybrid structure + PeakTrail', () => {
     expect(stillGreen.exit).toBe(false);
   });
 
+  it('GivebackBE: muted during 5m young window (hold for runner)', () => {
+    const entry = 4660;
+    const atr = 4;
+    const oneR = hardInvalidationDistance(entry, atr, META)!;
+    const young = snap({
+      open_side: 'BUY',
+      entry_price: entry,
+      mfe: oneR + 0.5,
+      atr,
+      regime: 'TREND_UP',
+      entry_at: new Date().toISOString(),
+      broker_upl: -0.01,
+    });
+    const hold = decideBestOutcomeExit(young, entry);
+    expect(hold.exit).toBe(false);
+  });
+
   it('GivebackBE: spread floor exits before price=0 (avoid -£0.01 after spread)', () => {
     const entry = 4660;
     const atr = 4;
     const oneR = hardInvalidationDistance(entry, atr, META)!;
-    const minGreen = oneR * 0.35;
+    const minGreen = oneR;
     const spread = 0.3;
     const s = snap({
       open_side: 'BUY',

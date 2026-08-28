@@ -30,6 +30,7 @@ import {
   type EarlyEntrySignal,
 } from './earlyEntryArmed.js';
 import { TEN_SEC_OHLC_ENABLED } from './tenSecOhlcFlag.js';
+import { buildTraderView, formatTraderLine, traderEntryGate } from './traderVision.js';
 export type { ArmedTriggerState, EarlyEntrySignal };
 export { idleArmedState, advanceEarlyEntryArmed, earlyDirectionBlockedByRegime };
 
@@ -329,8 +330,12 @@ export function explainNoEntry(
     bars1m: opts?.bars1m,
   });
   if (decision) return `SETUP ${decision.direction} · ${decision.reason}`;
+  const view = buildTraderView(closedBars, bar);
+  const traderLine = formatTraderLine(view);
   const t = multiTfPts(closedBars, bar);
-  return `SCAN · waiting 5m structure · ${formatTf(t)}`;
+  return view
+    ? `${traderLine} · SCAN · waiting 5m structure · ${formatTf(t)}`
+    : `SCAN · waiting 5m structure · ${formatTf(t)}`;
 }
 
 export function continuationSameSide(
@@ -417,6 +422,18 @@ function mapSetup(s: BrainSetup | null): RegimeEntry['setup'] {
   return 'CONTINUATION';
 }
 
+/** TRADER vision gate — block chase tops/bottoms on same 5m move (PR #203). */
+function traderGateOrNull(
+  direction: 'BUY' | 'SELL',
+  closedBars: TenSecBar[] | null | undefined,
+  bar: TenSecBar
+): { ok: true } | { ok: false; reason: string } {
+  const view = buildTraderView(closedBars, bar);
+  if (!view) return { ok: true };
+  const gate = traderEntryGate(direction, view, bar);
+  return gate.ok ? { ok: true } : { ok: false, reason: gate.reason };
+}
+
 /**
  * Canonical entry: 5m structure + LTF confirm.
  * Prefer Capital-native 5m/1m books; 10s only as trigger/microstructure.
@@ -492,8 +509,7 @@ export function decideEntryFrom10sRegime(
 
   const zone = buildScalpZone(closedBars);
 
-  // Strong/late path: full 5m BOS/CHoCH (+ LTF) still enters when ready.
-  // No post-decision impulse/chase veto — brain already gated chase; silent nulls hid why.
+  // Strong/late path: full 5m BOS/CHoCH (+ LTF) — brain already anti-chase; no double veto.
   if (decision.entry && decision.direction) {
     opts?.on_armed_state?.(idleArmedState());
     return {
@@ -539,8 +555,12 @@ export function decideEntryFrom10sRegime(
     return null;
   }
 
-  // TRIGGERED → fill. No post-trigger impulse/chase veto (those wait for "perfect"
-  // alignment while the 5m move dies). Setup/micro already decided the fire.
+  // TRIGGERED → fill. TRADER vision blocks re-chase on same 5m move.
+  const vision = traderGateOrNull(early.signal.direction, closedBars, bar);
+  if (!vision.ok) {
+    opts?.on_armed_state?.(idleArmedState());
+    return null;
+  }
   return {
     direction: early.signal.direction,
     setup: early.signal.setup,

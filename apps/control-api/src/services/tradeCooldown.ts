@@ -13,10 +13,10 @@ type EpicCooldown = {
 
 const byEpic = new Map<string, EpicCooldown>();
 
-/** Minimum pause after close before SAME-side reentry (stop open/close spam). */
-export const EPIC_PAUSE_MS = 90_000;
-/** Same pause after loss/scratch — machine-gun was worse on scratches. */
-export const EPIC_LOSS_PAUSE_MS = 90_000;
+/** Minimum pause after close before SAME-side reentry — one 5m window per move (anti machine-gun). */
+export const EPIC_PAUSE_MS = 300_000;
+/** Same pause after loss/scratch — scratches were re-entering every 90s on one kustība. */
+export const EPIC_LOSS_PAUSE_MS = 300_000;
 /** @deprecated — opposite flip is never blocked */
 export const EPIC_FLIP_BLOCK_MS = 0;
 /** @deprecated */

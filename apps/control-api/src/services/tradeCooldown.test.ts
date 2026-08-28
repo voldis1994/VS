@@ -17,11 +17,11 @@ describe('epic anti machine-gun reentry pause', () => {
     vi.useRealTimers();
   });
 
-  it('pause is 90s after profit or loss', () => {
-    expect(EPIC_PAUSE_MS).toBe(90_000);
-    expect(EPIC_LOSS_PAUSE_MS).toBe(90_000);
-    expect(pauseMsAfterClose(false)).toBe(90_000);
-    expect(pauseMsAfterClose(true)).toBe(90_000);
+  it('pause is 5m after profit or loss (one move per side)', () => {
+    expect(EPIC_PAUSE_MS).toBe(300_000);
+    expect(EPIC_LOSS_PAUSE_MS).toBe(300_000);
+    expect(pauseMsAfterClose(false)).toBe(300_000);
+    expect(pauseMsAfterClose(true)).toBe(300_000);
   });
 
   it('blocks SAME-side reentry immediately after close', () => {
@@ -40,10 +40,10 @@ describe('epic anti machine-gun reentry pause', () => {
     expect(allowEpicReentry('GOLD', 'BUY').ok).toBe(false);
   });
 
-  it('blocks SAME-side EARLY reentry for 90s (machine-gun)', () => {
+  it('blocks SAME-side EARLY reentry for 5m (machine-gun)', () => {
     noteEpicTradeClose('GOLD', 'BUY', true);
     expect(allowEpicReentry('GOLD', 'BUY').ok).toBe(false);
-    vi.advanceTimersByTime(89_000);
+    vi.advanceTimersByTime(299_000);
     expect(allowEpicReentry('GOLD', 'BUY').ok).toBe(false);
     vi.advanceTimersByTime(1_000);
     expect(allowEpicReentry('GOLD', 'BUY').ok).toBe(true);
@@ -53,7 +53,7 @@ describe('epic anti machine-gun reentry pause', () => {
     noteEpicTradeClose('GOLD', 'BUY', false);
     expect(allowEpicReentry('GOLD', 'BUY').ok).toBe(false);
     expect(allowEpicReentry('GOLD', 'SELL').ok).toBe(true);
-    vi.advanceTimersByTime(90_000);
+    vi.advanceTimersByTime(300_000);
     expect(allowEpicReentry('GOLD', 'BUY').ok).toBe(true);
     expect(allowEpicReentry('GOLD', 'SELL').ok).toBe(true);
   });
