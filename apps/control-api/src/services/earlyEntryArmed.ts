@@ -305,9 +305,14 @@ export function scoreMicroConfirmation(
 
   // Closed 1m MOVE — strong single confirm when 10s OFF (full +2 toward entry)
   if (bars1m.length >= 1) {
-    const move = oneMinMoveConfirm(bars1m, dir, ctx.price, atrWilder(realSeries(ctx.bars5m), 14), {
-      tick_size: ctx.tick_size,
-    });
+    const move = oneMinMoveConfirm(
+      bars1m,
+      dir,
+      ctx.price,
+      atrWilder(realSeries(ctx.bars5m), 14),
+      { tick_size: ctx.tick_size },
+      { allowLive: true }
+    );
     if (move.ok) {
       addConfirm(next, '1m_move', 2);
     }

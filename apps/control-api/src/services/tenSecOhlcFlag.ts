@@ -18,5 +18,5 @@ export const TEN_SEC_OHLC_ENABLED = envEnabled();
 export function tenSecOhlcStatusLine(): string {
   return TEN_SEC_OHLC_ENABLED
     ? '10s OHLC ON'
-    : '10s OHLC OFF · 1m MOVE confirm + EARLY (not waiting only 5m BOS)';
+    : '10s OHLC OFF · 1m MOVE LIVE mid-candle (not waiting 5m/tape)';
 }
