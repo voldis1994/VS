@@ -29,7 +29,7 @@ import {
   toLiveRegime,
   type RegimeName,
 } from './regimes.js';
-import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove } from './exitManage.js';
+import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove, manageExitPrice } from './exitManage.js';
 import { SAFETY_SL_PCT } from './microScalpThresholds.js';
 import {
   buildScalpZone,
@@ -769,12 +769,12 @@ function expectedStopFromDistance(
 }
 
 /**
- * Track excursion in PRICE POINTS on MID (Aug-13 BO setup).
- * Broker UPL ($) is display-only — never mix into MFE / peak_retention.
+ * Track excursion on executable price (bid/ask) — realizable PnL for PeakProtection.
+ * Broker UPL ($) is display-only on desk.
  */
-function updateExcursion(s: Internal, mid: number, brokerUpl?: number | null) {
+function updateExcursion(s: Internal, exitPx: number, brokerUpl?: number | null) {
   if (!s.open_side || s.entry_price == null) return;
-  const fav = favorableMove(s.open_side, s.entry_price, mid);
+  const fav = favorableMove(s.open_side, s.entry_price, exitPx);
   // Display UPL = Capital broker cash only — never invent from price fav
   s.unrealized =
     brokerUpl != null && Number.isFinite(brokerUpl) ? Number(brokerUpl) : null;
@@ -1914,8 +1914,12 @@ async function robotCycleBody(s: Internal) {
       });
     }
 
-    if (s.open_side && s.entry_price != null && quote.mid != null) {
-      updateExcursion(s, quote.mid, brokerOpen?.upl ?? s.unrealized);
+    if (s.open_side && s.entry_price != null) {
+      const excPx =
+        manageExitPrice(s.open_side, quote) ?? quote.mid;
+      if (excPx != null) {
+        updateExcursion(s, excPx, brokerOpen?.upl ?? s.unrealized);
+      }
     }
 
     pushTick(s, {
@@ -1961,6 +1965,11 @@ async function robotCycleBody(s: Internal) {
       if (quote.mid == null) return;
 
       const liveSide = s.open_side || brokerOpen?.direction || null;
+      const exitPx =
+        liveSide === 'BUY' || liveSide === 'SELL'
+          ? manageExitPrice(liveSide, quote) ?? quote.mid
+          : quote.mid;
+      if (exitPx == null) return;
 
       const short = shortNetMove(
         deskClosedBars(s),
@@ -1981,19 +1990,18 @@ async function robotCycleBody(s: Internal) {
         }
       }
 
-      // Aug 13 17:43 BO — mid price, simple TP/SL/peak retention (no GivebackBE / hybrid trail)
-      const decision = decideBestOutcomeExit(
-        {
-          open_side: s.open_side,
-          entry_price: s.entry_price,
-          entry_at: s.entry_at,
-          mfe: s.mfe,
-          mae: s.mae,
-          peak_retention: s.peak_retention,
-          regime: s.regime,
-        },
-        quote.mid
-      );
+      // BO — executable bid/ask + tick floor so micro +£ wins arm PeakProtection
+      const boSnap = {
+        open_side: s.open_side,
+        entry_price: s.entry_price,
+        entry_at: s.entry_at,
+        mfe: s.mfe,
+        mae: s.mae,
+        peak_retention: s.peak_retention,
+        regime: s.regime,
+        tick_size: quote.point_size ?? null,
+      };
+      const decision = decideBestOutcomeExit(boSnap, exitPx);
       if (decision.exit) {
         await exitTrade(opened.session, s, quote, decision.reason);
         queueMicrotask(() => kickPeerManageCycles(s.id, s.epic));
@@ -2010,18 +2018,7 @@ async function robotCycleBody(s: Internal) {
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · ${describeBestOutcomeState(
-          {
-            open_side: s.open_side,
-            entry_price: s.entry_price,
-            entry_at: s.entry_at,
-            mfe: s.mfe,
-            mae: s.mae,
-            peak_retention: s.peak_retention,
-            regime: s.regime,
-          },
-          quote.mid
-        ).hold}`,
+        } · ${describeBestOutcomeState(boSnap, exitPx).hold}`,
       });
       return;
     }

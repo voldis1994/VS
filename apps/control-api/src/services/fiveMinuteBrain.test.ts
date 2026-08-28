@@ -505,7 +505,7 @@ describe('universality + feeds + isolation', () => {
   it('24. BO Aug-13 peak protection on deep giveback after mfe floor', () => {
     const entry = 100;
     const mfe = 8;
-    expect(mfe).toBeGreaterThanOrEqual(boMfeFloor(entry));
+    expect(mfe).toBeGreaterThanOrEqual(boMfeFloor(entry, { tick_size: 0.01 }));
     const cut = decideBestOutcomeExit(
       {
         open_side: 'BUY',

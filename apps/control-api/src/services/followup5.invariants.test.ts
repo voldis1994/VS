@@ -241,15 +241,14 @@ describe('#4 Capital openingHours gap classification (no epic guess)', () => {
   });
 });
 
-describe('#5 BO Aug 13 setup', () => {
-  it('boMfeFloor scales with entry (~0.12%)', () => {
-    const entry = 4640;
-    expect(boMfeFloor(entry)).toBeCloseTo(Math.max(entry * 0.0012, 0.12), 4);
+describe('#5 BO symmetric profit', () => {
+  it('boMfeFloor is tick-based on Gold (not 5.6pt pct wall)', () => {
+    expect(boMfeFloor(4640, GOLD_META)).toBe(0.08);
   });
 
-  it('holds below mfeFloor even on deep retention giveback', () => {
+  it('PeakProtection on 0.86pt micro MFE after giveback', () => {
     const entry = 4640;
-    const hold = decideBestOutcomeExit(
+    const cut = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: entry,
@@ -259,7 +258,8 @@ describe('#5 BO Aug 13 setup', () => {
       }),
       entry + 0.01
     );
-    expect(hold.exit).toBe(false);
+    expect(cut.exit).toBe(true);
+    expect(cut.reason).toMatch(/PeakProtection/);
   });
 
   it('PeakProtection after meaningful MFE and ret < 30%', () => {
@@ -296,9 +296,9 @@ describe('#5 BO Aug 13 setup', () => {
     expect(hi.reason).toMatch(/HardInvalidation/);
   });
 
-  it('target exit at ~0.35% TP', () => {
+  it('target exit at symmetric TP', () => {
     const entry = 4640;
-    const tp = boTpDistance(entry);
+    const tp = boTpDistance(entry, GOLD_META);
     const cut = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -315,9 +315,9 @@ describe('#5 BO Aug 13 setup', () => {
 });
 
 describe('#5 robotDesk BO wiring', () => {
-  it('robotDesk uses Aug-13 mid-price BO snapshot', () => {
+  it('robotDesk uses executable bid/ask for BO + tick_size', () => {
     const src = readFileSync(join(here, 'robotDesk.ts'), 'utf8');
-    expect(src).toMatch(/Aug 13 17:43 BO/);
-    expect(src).toMatch(/decideBestOutcomeExit\([\s\S]*quote\.mid/);
+    expect(src).toMatch(/manageExitPrice/);
+    expect(src).toMatch(/tick_size: quote\.point_size/);
   });
 });

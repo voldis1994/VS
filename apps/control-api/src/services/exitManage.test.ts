@@ -13,6 +13,8 @@ import {
   type ExitSnapshot,
 } from './exitManage.js';
 
+const GOLD = { tick_size: 0.01 };
+
 function snap(
   partial: Partial<ExitSnapshot> & { open_side: 'BUY' | 'SELL'; entry_price: number }
 ): ExitSnapshot {
@@ -22,6 +24,7 @@ function snap(
     peak_retention: null,
     entry_at: new Date().toISOString(),
     regime: 'TREND_UP',
+    tick_size: GOLD.tick_size,
     ...partial,
   };
 }
@@ -56,25 +59,37 @@ describe('per-client exit isolation helpers', () => {
   });
 });
 
-describe('decideBestOutcomeExit (Aug 13 setup)', () => {
+describe('decideBestOutcomeExit (symmetric profit)', () => {
+  it('Gold mfeFloor is tick-based (~0.02pt), not 5.6pt pct trap', () => {
+    expect(boMfeFloor(4660, GOLD)).toBe(0.08);
+  });
+
   it('holds a young BUY in TREND_UP with small noise', () => {
     const d = decideBestOutcomeExit(snap({ open_side: 'BUY', entry_price: 2000, mfe: 0.4 }), 2000.5);
     expect(d.exit).toBe(false);
   });
 
-  it('exits BUY on TREND_DOWN thesis failure even if still green', () => {
+  it('HOLD green on TREND_DOWN — profit exits before thesis flicker', () => {
     const d = decideBestOutcomeExit(
       snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_DOWN', mfe: 2 }),
       2001
+    );
+    expect(d.exit).toBe(false);
+  });
+
+  it('ThesisFailure when flat/red vs opposite regime', () => {
+    const d = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_DOWN', mfe: 0 }),
+      1999.5
     );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/ThesisFailure/);
   });
 
-  it('exits SELL on TREND_UP without affecting BUY rules', () => {
+  it('exits SELL on TREND_UP when red', () => {
     const sell = decideBestOutcomeExit(
       snap({ open_side: 'SELL', entry_price: 2000, regime: 'TREND_UP' }),
-      1999
+      2001
     );
     const buy = decideBestOutcomeExit(
       snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_UP' }),
@@ -93,7 +108,7 @@ describe('decideBestOutcomeExit (Aug 13 setup)', () => {
   it('peak protection after meaningful MFE giveback (ret < 30%)', () => {
     const entry = 2000;
     const mfe = 8;
-    const floor = boMfeFloor(entry);
+    const floor = boMfeFloor(entry, GOLD);
     expect(mfe).toBeGreaterThanOrEqual(floor);
     const d = decideBestOutcomeExit(
       snap({
@@ -109,7 +124,7 @@ describe('decideBestOutcomeExit (Aug 13 setup)', () => {
     expect(d.reason).toMatch(/PeakProtection/);
   });
 
-  it('does NOT exit near BE when MFE was small (no GivebackBE chop)', () => {
+  it('PeakProtection on +0.86 MFE micro win after giveback (Gold fix)', () => {
     const entry = 4660;
     const d = decideBestOutcomeExit(
       snap({
@@ -118,16 +133,17 @@ describe('decideBestOutcomeExit (Aug 13 setup)', () => {
         regime: 'TREND_UP',
         mfe: 0.86,
         peak_retention: 0.01,
-        broker_upl: 0.01,
       }),
       entry + 0.01
     );
-    expect(d.exit).toBe(false);
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/PeakProtection/);
   });
 
-  it('target at ~0.35%', () => {
-    const entry = 2000;
-    const tp = boTpDistance(entry);
+  it('target at symmetric TP (below old 0.35%)', () => {
+    const entry = 4660;
+    const tp = boTpDistance(entry, GOLD);
+    expect(tp).toBeLessThan(16);
     const d = decideBestOutcomeExit(
       snap({ open_side: 'BUY', entry_price: entry, regime: 'TREND_UP', mfe: tp }),
       entry + tp

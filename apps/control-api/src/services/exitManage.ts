@@ -1,7 +1,7 @@
 /**
- * Best Outcome — restored Aug 13 2026 17:43 setup (commit e0e479a).
- * Simple % TP/SL + peak retention harvest on MID price.
- * No GivebackBE / 5m young mute / hybrid PeakTrail (those were chopping +£0.86 → +£0.01).
+ * Best Outcome — Aug 13 base + symmetric profit fix.
+ * Bug: Gold SL ~10pt fired on minus while mfeFloor was ~5.6pt — micro +£ wins never armed PeakProtection.
+ * Fix: tick-based mfeFloor, TP tied to SL, profit exits BEFORE thesis flip, bid/ask executable price.
  */
 
 export type ExitSide = 'BUY' | 'SELL';
@@ -14,7 +14,6 @@ export type ExitSnapshot = {
   mae: number;
   peak_retention: number | null;
   regime?: string | null;
-  /** Ignored by Aug-13 BO — kept for session/journal typing */
   short_net_pct?: number | null;
   atr?: number | null;
   structural_sl?: number | null;
@@ -24,18 +23,18 @@ export type ExitSnapshot = {
   spread?: number | null;
 };
 
-/** Aug-13 constants */
-export const BO_TP_PCT = 0.0035;
-export const BO_TP_MIN = 0.35;
 export const BO_SL_PCT = 0.0022;
 export const BO_SL_MIN = 0.22;
-export const BO_MFE_FLOOR_PCT = 0.0012;
-export const BO_MFE_FLOOR_MIN = 0.12;
+export const BO_TP_SL_RATIO = 0.65;
+export const BO_TP_PCT = 0.0012;
+export const BO_TP_MIN = 0.35;
 export const BO_PEAK_PROTECT_RETENTION = 0.3;
 export const BO_HARVEST_RETENTION = 0.4;
 export const BO_TIME_DECAY_MS = 480_000;
 
 export type BoExitOpts = Record<string, unknown>;
+
+type BoMeta = { tick_size?: number | null };
 
 export function favorableMove(side: ExitSide, entry: number, mid: number): number {
   return side === 'BUY' ? mid - entry : entry - mid;
@@ -54,22 +53,33 @@ export function manageExitPrice(
   return null;
 }
 
-export function boTpDistance(entry: number): number {
-  const absEntry = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(absEntry * BO_TP_PCT, BO_TP_MIN);
-}
-
 export function boSlDistance(entry: number): number {
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   return Math.max(absEntry * BO_SL_PCT, BO_SL_MIN);
 }
 
-export function boMfeFloor(entry: number): number {
-  const absEntry = Math.max(Math.abs(entry), 1e-9);
-  return Math.max(absEntry * BO_MFE_FLOOR_PCT, BO_MFE_FLOOR_MIN);
+/**
+ * MFE floor — tick-based for Gold micro wins (NOT 0.12% ≈ 5.6pt which blocked +0.86pt peaks).
+ */
+export function boMfeFloor(entry: number, meta?: BoMeta): number {
+  const tick = meta?.tick_size;
+  const tickFloor = tick != null && Number.isFinite(tick) && tick > 0 ? tick * 2 : 0.12;
+  return Math.max(tickFloor, 0.08);
 }
 
-/** Opposite regime vs open side — original PositionManager thesis failure. */
+/** TP — closer than full 0.35%; tied to SL so plus exits as readily as minus stops. */
+export function boTpDistance(entry: number, meta?: BoMeta): number {
+  const sl = boSlDistance(entry);
+  const pctTp = Math.max(Math.abs(entry) * BO_TP_PCT, BO_TP_MIN);
+  const floor = boMfeFloor(entry, meta);
+  return Math.max(Math.min(pctTp, sl * BO_TP_SL_RATIO), floor * 1.5);
+}
+
+/** @deprecated Aug-13 pct floor — kept for import stability */
+export const BO_MFE_FLOOR_PCT = 0.0012;
+export const BO_MFE_FLOOR_MIN = 0.12;
+export const BO_TP_PCT_LEGACY = 0.0035;
+
 export function thesisFailureReason(
   side: ExitSide,
   regime?: string | null
@@ -104,11 +114,6 @@ export function isHardBoReason(reason: string): boolean {
   );
 }
 
-/**
- * Manage exit — give the trade room to develop (~10s scalp with breathing room).
- * Broker SAFETY SL is the hard cushion; this is best-outcome + thesis management.
- * Uses MID price (Aug 13) — never broker £ UPL for exit decisions.
- */
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
   mid: number,
@@ -116,24 +121,24 @@ export function decideBestOutcomeExit(
 ): { exit: boolean; reason: string } {
   if (!s.open_side || s.entry_price == null) return { exit: false, reason: '' };
 
-  const thesis = thesisFailureReason(s.open_side, s.regime);
-  if (thesis) return { exit: true, reason: thesis };
-
   const entry = s.entry_price;
+  const meta: BoMeta = { tick_size: s.tick_size };
   const fav = favorableMove(s.open_side, entry, mid);
   const hitEps = Math.max(Math.abs(entry) * 1e-12, 1e-9);
-  const tp = boTpDistance(entry);
+  const tp = boTpDistance(entry, meta);
   const sl = boSlDistance(entry);
-  const mfeFloor = boMfeFloor(entry);
+  const mfeFloor = boMfeFloor(entry, meta);
 
+  // 1) Hard stop — symmetric with profit rules below
   if (fav <= -sl) {
     return { exit: true, reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}` };
   }
 
-  if (s.mfe >= mfeFloor && s.peak_retention != null && s.peak_retention < BO_PEAK_PROTECT_RETENTION) {
+  // 2) Profit exits FIRST — do not let thesis flicker waste green UPL
+  if (s.mfe + hitEps >= mfeFloor && s.peak_retention != null && s.peak_retention + hitEps < BO_PEAK_PROTECT_RETENTION) {
     return {
       exit: true,
-      reason: `PeakProtection · retention ${(s.peak_retention * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} → lock best`,
+      reason: `PeakProtection · retention ${(s.peak_retention * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} · floor ${mfeFloor.toFixed(5)} → lock best`,
     };
   }
 
@@ -145,10 +150,10 @@ export function decideBestOutcomeExit(
   }
 
   if (
-    s.mfe >= mfeFloor &&
-    fav > 0 &&
+    s.mfe + hitEps >= mfeFloor &&
+    fav > hitEps &&
     s.peak_retention != null &&
-    s.peak_retention < BO_HARVEST_RETENTION
+    s.peak_retention + hitEps < BO_HARVEST_RETENTION
   ) {
     return {
       exit: true,
@@ -157,11 +162,17 @@ export function decideBestOutcomeExit(
   }
 
   const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
-  if (heldMs > BO_TIME_DECAY_MS && fav >= 0 && s.mfe >= mfeFloor * 0.5) {
+  if (heldMs > BO_TIME_DECAY_MS && fav + hitEps >= 0 && s.mfe + hitEps >= mfeFloor * 0.5) {
     return {
       exit: true,
       reason: `TimeDecay · held ${Math.round(heldMs / 1000)}s · realize non-negative best UPL ${fav.toFixed(5)}`,
     };
+  }
+
+  // 3) Thesis flip only when flat/red — never throw away open green on regime noise
+  if (fav + hitEps <= 0) {
+    const thesis = thesisFailureReason(s.open_side, s.regime);
+    if (thesis) return { exit: true, reason: thesis };
   }
 
   return { exit: false, reason: '' };
@@ -180,10 +191,11 @@ export function describeBestOutcomeState(
   }
 
   const entry = s.entry_price;
+  const meta: BoMeta = { tick_size: s.tick_size };
   const fav = favorableMove(s.open_side, entry, mid);
-  const tp = boTpDistance(entry);
+  const tp = boTpDistance(entry, meta);
   const sl = boSlDistance(entry);
-  const mfeFloor = boMfeFloor(entry);
+  const mfeFloor = boMfeFloor(entry, meta);
 
   return {
     exit: false,
