@@ -12,8 +12,39 @@ import {
 } from './marketStructure.js';
 import { earlyDirectionBlockedByRegime } from './earlyEntryArmed.js';
 import { isRealBar } from './ohlcQuality.js';
-import { atrWilder, moveThresholdPts, type InstrumentMeta } from './volatilityNorm.js';
+import { atrWilder, moveThresholdPtsOrFallback, type InstrumentMeta } from './volatilityNorm.js';
 import type { HtfContext } from './fiveMinuteBrain.js';
+
+/** ATR for 1m move — from 1m/5m books or last 1m range (never null for Gold-scale). */
+export function inferMoveAtr(
+  bars1m: StructureBar[] | null | undefined,
+  bars5m?: StructureBar[] | null
+): number | null {
+  const c1 = closedOneMinBars(bars1m);
+  if (c1.length >= 8) {
+    const a = atrWilder(c1, 14);
+    if (a != null && a > 0) return a;
+  }
+  const c5 = (bars5m ?? []).filter((b) => isRealBar(b) && !b.forming);
+  if (c5.length >= 8) {
+    const a = atrWilder(c5, 14);
+    if (a != null && a > 0) return a;
+  }
+  const last = c1[c1.length - 1];
+  if (last) {
+    const r = last.high - last.low;
+    if (r > 0) return r;
+  }
+  return null;
+}
+
+function moveThr(
+  price: number,
+  atr: number | null | undefined,
+  meta?: InstrumentMeta | null
+): number {
+  return moveThresholdPtsOrFallback(price, atr ?? null, 0.05, 0.00006, meta);
+}
 
 export type OneMinMoveConfirm = {
   ok: boolean;
@@ -118,9 +149,7 @@ export function oneMinMoveConfirm(
   meta?: InstrumentMeta | null,
   opts?: { allowLive?: boolean }
 ): OneMinMoveConfirm {
-  // Softer than 0.1 ATR — catch earlier on Gold micro moves
-  const thr = moveThresholdPts(price, atr ?? null, 0.05, 0.00006, meta);
-  if (thr == null) return { ok: false, detail: '1m move threshold UNKNOWN' };
+  const thr = moveThr(price, atr, meta);
 
   if (opts?.allowLive) {
     const live = formingOneMinBar(bars1m);
@@ -191,6 +220,7 @@ export type OneMinMoveEntryResult = {
 export function decideOneMinMoveEntry(input: OneMinMoveEntryInput): OneMinMoveEntryResult {
   const bars5m = input.bars5m.filter((b) => isRealBar(b) && !b.forming);
   const atr =
+    inferMoveAtr(input.bars1m, bars5m) ??
     (bars5m.length >= 8 ? analyzeMarketStructure(bars5m).atr : null) ??
     atrWilder(bars5m, 14) ??
     atrWilder(closedOneMinBars(input.bars1m), 14);

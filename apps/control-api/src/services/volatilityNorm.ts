@@ -150,6 +150,23 @@ export function moveThresholdPts(
   return null;
 }
 
+/**
+ * Always returns a positive move threshold for live entry hints.
+ * When ATR/tick metadata is missing, use price-relative pct (never block with UNKNOWN).
+ */
+export function moveThresholdPtsOrFallback(
+  price: number,
+  atr: number | null | undefined,
+  atrMult: number,
+  pctFallback: number,
+  meta?: InstrumentMeta | null
+): number {
+  const thr = moveThresholdPts(price, atr, atrMult, pctFallback, meta);
+  if (thr != null && thr > 0) return thr;
+  const abs = Math.max(Math.abs(price), 1e-9);
+  return Math.max(abs * pctFallback, 0.01);
+}
+
 /** Alias used by multi-TF readiness. */
 export const computeAtrWilder = atrWilder;
 
