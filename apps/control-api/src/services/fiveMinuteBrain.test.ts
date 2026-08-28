@@ -34,6 +34,7 @@ import {
 } from './tradeRecovery.js';
 import {
   decideBestOutcomeExit,
+  decideManageExit,
   boMfeFloor,
   boSlDistance,
   type ExitSnapshot,
@@ -506,7 +507,7 @@ describe('universality + feeds + isolation', () => {
     const entry = 100;
     const mfe = 8;
     expect(mfe).toBeGreaterThanOrEqual(boMfeFloor(entry, { tick_size: 0.01 }));
-    const cut = decideBestOutcomeExit(
+    const cut = decideManageExit(
       {
         open_side: 'BUY',
         entry_price: entry,
@@ -525,7 +526,7 @@ describe('universality + feeds + isolation', () => {
   it('Aug-13 BO ignores structural_sl field (HardInv is % based)', () => {
     const entry = 100;
     const sl = boSlDistance(entry);
-    const cut = decideBestOutcomeExit(
+    const cut = decideManageExit(
       {
         open_side: 'BUY',
         entry_price: entry,

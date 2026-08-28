@@ -31,11 +31,14 @@ describe('deskSideLock', () => {
     expect(deskConflictShouldExit('BUY', false, -0.004).exit).toBe(false);
   });
 
-  it('tapeMoveShouldExit works without opposite peer (single SELL vs rally)', () => {
-    expect(tapeMoveShouldExit('SELL', 0.004).exit).toBe(true);
-    expect(tapeMoveShouldExit('SELL', 0.001).exit).toBe(true);
-    expect(tapeMoveShouldExit('SELL', 0.0005).exit).toBe(false);
-    expect(tapeMoveShouldExit('BUY', -0.004).exit).toBe(true);
-    expect(tapeMoveShouldExit('BUY', 0.002).exit).toBe(false);
+  it('tapeMoveShouldExit works when red (single SELL vs rally)', () => {
+    expect(tapeMoveShouldExit('SELL', 0.004, -1).exit).toBe(true);
+    expect(tapeMoveShouldExit('SELL', 0.0005, -1).exit).toBe(false);
+    expect(tapeMoveShouldExit('BUY', -0.004, -0.5).exit).toBe(true);
+  });
+
+  it('tapeMoveShouldExit skips when still green', () => {
+    expect(tapeMoveShouldExit('SELL', 0.004, 0.5).exit).toBe(false);
+    expect(tapeMoveShouldExit('BUY', -0.004, 0.3).exit).toBe(false);
   });
 });

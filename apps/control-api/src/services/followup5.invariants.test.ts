@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   decideBestOutcomeExit,
+  decideManageExit,
   boMfeFloor,
   boTpDistance,
   boSlDistance,
@@ -248,7 +249,7 @@ describe('#5 BO symmetric profit', () => {
 
   it('PeakProtection on 0.86pt micro MFE after giveback', () => {
     const entry = 4640;
-    const cut = decideBestOutcomeExit(
+    const cut = decideManageExit(
       snap({
         open_side: 'BUY',
         entry_price: entry,
@@ -265,7 +266,7 @@ describe('#5 BO symmetric profit', () => {
   it('PeakProtection after meaningful MFE and ret < 30%', () => {
     const entry = 4640;
     const mfe = 8;
-    const cut = decideBestOutcomeExit(
+    const cut = decideManageExit(
       snap({
         open_side: 'BUY',
         entry_price: entry,
@@ -282,7 +283,7 @@ describe('#5 BO symmetric profit', () => {
   it('HardInv still exits on full SL', () => {
     const entry = 4600;
     const sl = boSlDistance(entry);
-    const hi = decideBestOutcomeExit(
+    const hi = decideManageExit(
       snap({
         open_side: 'BUY',
         entry_price: entry,
@@ -299,7 +300,7 @@ describe('#5 BO symmetric profit', () => {
   it('target exit at symmetric TP', () => {
     const entry = 4640;
     const tp = boTpDistance(entry, GOLD_META);
-    const cut = decideBestOutcomeExit(
+    const cut = decideManageExit(
       snap({
         open_side: 'BUY',
         entry_price: entry,
@@ -315,9 +316,9 @@ describe('#5 BO symmetric profit', () => {
 });
 
 describe('#5 robotDesk BO wiring', () => {
-  it('robotDesk uses executable bid/ask for BO + tick_size', () => {
+  it('robotDesk uses unified decideManageExit', () => {
     const src = readFileSync(join(here, 'robotDesk.ts'), 'utf8');
-    expect(src).toMatch(/manageExitPrice/);
-    expect(src).toMatch(/tick_size: quote\.point_size/);
+    expect(src).toMatch(/decideManageExit/);
+    expect(src).toMatch(/broker_peak_upl/);
   });
 });
