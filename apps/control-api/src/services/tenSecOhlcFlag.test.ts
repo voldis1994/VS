@@ -13,9 +13,8 @@ describe('10s OHLC kill-switch', () => {
     expect(publicOhlc10sOff().market).toBe('OFF');
   });
 
-  it('status line says EARLY uses 1m when 10s OFF (not dead wait-only-5m)', () => {
+  it('status line says 1m MOVE LIVE when 10s OFF', () => {
     expect(tenSecOhlcStatusLine()).toMatch(/10s OHLC OFF/i);
-    expect(tenSecOhlcStatusLine()).toMatch(/1m/i);
-    expect(tenSecOhlcStatusLine()).toMatch(/EARLY/i);
+    expect(tenSecOhlcStatusLine()).toMatch(/1m MOVE/i);
   });
 });

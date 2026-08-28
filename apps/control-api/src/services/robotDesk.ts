@@ -2333,24 +2333,44 @@ async function robotCycleBody(s: Internal) {
 
     const oneMinBooks = s.multiTf.books['1m']?.bars ?? [];
     const closed1mBook = [...oneMinBooks].reverse().find((b) => b.provenance === 'REAL' && !b.forming);
-    const closed1mBar = closed1mBook ? barsAsTenSec([closed1mBook])[0] ?? null : null;
+    const forming1mBook = [...oneMinBooks].reverse().find((b) => b.provenance === 'REAL' && b.forming);
+    const toSignalBar = (
+      b: (typeof oneMinBooks)[number] | undefined
+    ): TenSecBar | null =>
+      b
+        ? {
+            open_time_ms: b.open_time_ms,
+            open: b.open,
+            high: b.high,
+            low: b.low,
+            close: b.close,
+            ticks: b.ticks ?? 8,
+            provenance: (b.provenance as TenSecBar['provenance']) ?? 'REAL',
+          }
+        : null;
+    const closed1mBar = toSignalBar(closed1mBook);
+    const forming1mBar = toSignalBar(forming1mBook);
     const bucket1m = closed1mBook ? String(closed1mBook.open_time_ms || 0) : '';
-    const justClosed1m = Boolean(bucket1m && bucket1m !== s.last_1m_close_key);
-    if (justClosed1m) s.last_1m_close_key = bucket1m;
+    if (bucket1m && bucket1m !== s.last_1m_close_key) s.last_1m_close_key = bucket1m;
 
+    // Prefer forming 1m as signal when present — mid-candle MOVE catches early
     const closed = TEN_SEC_OHLC_ENABLED ? s.ohlcState.last_closed : closed1mBar;
-    const forming = TEN_SEC_OHLC_ENABLED ? s.ohlcState.forming : null;
+    const forming = TEN_SEC_OHLC_ENABLED ? s.ohlcState.forming : forming1mBar;
     const justClosed = TEN_SEC_OHLC_ENABLED
       ? Boolean(s.ohlcState.just_closed && closed)
-      : justClosed1m;
+      : false;
     const signalBar: TenSecBar | null = TEN_SEC_OHLC_ENABLED
       ? justClosed
         ? closed!
         : forming && forming.ticks >= 2
           ? forming
           : closed || null
-      : closed1mBar;
-    const liveSignal = Boolean(TEN_SEC_OHLC_ENABLED && signalBar && !justClosed);
+      : forming1mBar || closed1mBar;
+    const liveSignal = Boolean(
+      TEN_SEC_OHLC_ENABLED
+        ? signalBar && !justClosed
+        : Boolean(forming1mBar)
+    );
     const ohlc = TEN_SEC_OHLC_ENABLED ? s.ohlc_10s : publicOhlc10sOff();
     const show = signalBar || closed;
     const ohlcLine = !TEN_SEC_OHLC_ENABLED
@@ -2433,7 +2453,7 @@ async function robotCycleBody(s: Internal) {
       on_armed_state: (st) => {
         s.armed_trigger = st;
       },
-      one_min_just_closed: justClosed1m,
+      already_fired_1m_key: s.last_entry_signal_key || null,
     });
     if (!sig) {
       pushTick(s, {
@@ -2455,8 +2475,8 @@ async function robotCycleBody(s: Internal) {
     }
 
     // Same-side 5m pause (anti machine-gun). Opposite FLIP still allowed in cooldown.
-    // EARLY only skips stale-guard (5m move won't wait on advisory lag).
-    const isEarlyTrigger = /EARLY|TRIGGERED/i.test(sig.reason);
+    // EARLY / 1M MOVE skip stale-guard (move won't wait on advisory lag).
+    const isEarlyTrigger = /EARLY|TRIGGERED|1M MOVE/i.test(sig.reason);
     const reentry = allowEpicReentry(s.epic, sig.direction);
     if (!reentry.ok) {
       pushTick(s, {

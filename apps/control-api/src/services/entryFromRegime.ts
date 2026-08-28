@@ -472,8 +472,8 @@ export function decideEntryFrom10sRegime(
     armed_state?: ArmedTriggerState | null;
     on_armed_state?: (s: ArmedTriggerState) => void;
     now_ms?: number;
-    /** Fresh 1m close — required for 1M MOVE fast path when 10s OFF. */
-    one_min_just_closed?: boolean;
+    /** 1m bar key already used for entry — dedup (not just-closed tick). */
+    already_fired_1m_key?: string | null;
   }
 ): RegimeEntry | null {
   // multiTfReady must be explicitly true (#12)
@@ -542,7 +542,7 @@ export function decideEntryFrom10sRegime(
 
   const tape = tapeSide(closedBars, bar);
 
-  // Fast path: closed 1m MOVE confirms tape — enter on move, not after full 5m BOS.
+  // Fast path: 1m MOVE defines direction (live mid-candle OK) — not tape-first / not just-closed-only.
   const moveEntry = decideOneMinMoveEntry({
     bars5m,
     bars1m,
@@ -553,7 +553,7 @@ export function decideEntryFrom10sRegime(
     spread: opts?.spread,
     broker_min_stop: opts?.broker_min_stop,
     tick_size: opts?.tick_size,
-    one_min_just_closed: opts?.one_min_just_closed,
+    already_fired_bar_key: opts?.already_fired_1m_key,
   });
   if (moveEntry) {
     const vision = traderGateOrNull(moveEntry.direction, closedBars, bar);
@@ -569,7 +569,7 @@ export function decideEntryFrom10sRegime(
       zone,
       zone_setup: null,
       structural_sl: moveEntry.structural_sl,
-      evidence_score: 0.72,
+      evidence_score: moveEntry.live ? 0.68 : 0.72,
     };
   }
 
