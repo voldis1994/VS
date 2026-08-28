@@ -300,7 +300,7 @@ describe('#5 BO continuation / structure_target priority', () => {
       { continuationSameSide: true }
     );
     expect(pp.exit).toBe(true);
-    expect(pp.reason).toMatch(/PeakTrail/);
+    expect(pp.reason).toMatch(/PeakRetention|PeakTrail/);
 
     const hi = decideBestOutcomeExit(
       snap({

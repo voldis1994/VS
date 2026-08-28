@@ -521,7 +521,7 @@ describe('universality + feeds + isolation', () => {
       { continuationSameSide: true }
     );
     expect(cut.exit).toBe(true);
-    expect(cut.reason).toMatch(/PeakTrail/);
+    expect(cut.reason).toMatch(/PeakRetention|PeakTrail/);
   });
 
   it('structural invalidation BUY', () => {

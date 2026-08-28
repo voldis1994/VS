@@ -85,9 +85,24 @@ describe('BO hybrid structure + PeakTrail', () => {
         broker_upl: 0.02,
         spread: 0.3,
       }),
-      entry + minGreen * 0.5
+      entry + minGreen * 0.6
     );
     expect(stillGreen.exit).toBe(false);
+
+    const partialGiveback = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: entry,
+        mfe: minGreen + 0.01,
+        atr,
+        regime: 'TREND_UP',
+        broker_upl: 0.02,
+        spread: 0.3,
+      }),
+      entry + minGreen * 0.5
+    );
+    expect(partialGiveback.exit).toBe(true);
+    expect(partialGiveback.reason).toMatch(/PeakRetention/);
   });
 
   it('GivebackBE: muted during 5m young window (hold for runner)', () => {
@@ -121,7 +136,8 @@ describe('BO hybrid structure + PeakTrail', () => {
       spread,
     });
     const floor = spread * 0.55;
-    const hold = decideBestOutcomeExit(s, entry + floor + 0.05);
+    const holdFav = Math.max(floor + 0.05, minGreen * 0.6);
+    const hold = decideBestOutcomeExit(s, entry + holdFav);
     expect(hold.exit).toBe(false);
     const cut = decideBestOutcomeExit(s, entry + floor - 0.02);
     expect(cut.exit).toBe(true);
@@ -249,12 +265,12 @@ describe('BO hybrid structure + PeakTrail', () => {
     expect(decideBestOutcomeExit(at4mFlip, 100.1).reason).toMatch(/ThesisFailure/);
   });
 
-  it('K bands are wide (hybrid, not scalp)', () => {
+  it('K bands are tighter (less giveback before PeakTrail)', () => {
     expect(peakProtectK('TREND_UP', { continuationSameSide: true })).toEqual(
-      expect.objectContaining({ k: 2.5, strength: 'strong' })
+      expect.objectContaining({ k: 1.5, strength: 'strong' })
     );
-    expect(peakProtectK('PULLBACK_UPTREND').k).toBe(1.5);
-    expect(peakProtectK('RANGE').k).toBe(1.0);
+    expect(peakProtectK('PULLBACK_UPTREND').k).toBe(1.0);
+    expect(peakProtectK('RANGE').k).toBe(0.75);
   });
 
   it('below arm: deep % giveback → HOLD (no trail)', () => {
@@ -293,13 +309,13 @@ describe('BO hybrid structure + PeakTrail', () => {
         regime: 'TREND_UP',
         structure_target: arm * 5,
       }),
-      entry + floor + 0.5,
+      entry + floor + Math.max(0.5, mfe * 0.56 - floor),
       { continuationSameSide: true, bars5m: bars }
     );
     expect(hold.exit).toBe(false);
   });
 
-  it('after arm: giveback below floor → PeakTrail EXIT', () => {
+  it('after arm: giveback below floor → PeakRetention or PeakTrail EXIT', () => {
     const entry = 4640;
     const atr = 4;
     const arm = peakProtectArmThreshold(entry, atr, META)!;
@@ -321,16 +337,39 @@ describe('BO hybrid structure + PeakTrail', () => {
       { continuationSameSide: true, bars5m: bars }
     );
     expect(cut.exit).toBe(true);
+    expect(cut.reason).toMatch(/PeakRetention|PeakTrail/);
+  });
+
+  it('large MFE: retention ok but below ATR floor → PeakTrail EXIT', () => {
+    const entry = 4640;
+    const atr = 4;
+    const mfe = 40;
+    const { k } = peakProtectK('TREND_UP', { continuationSameSide: true });
+    const floor = hybridProtectedFloor(mfe, atr, k);
+    const fav = floor - 0.5;
+    expect(fav / mfe).toBeGreaterThan(0.55);
+    const cut = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: entry,
+        mfe,
+        atr,
+        regime: 'TREND_UP',
+      }),
+      entry + fav,
+      { continuationSameSide: true, bars5m: bullBars() }
+    );
+    expect(cut.exit).toBe(true);
     expect(cut.reason).toMatch(/PeakTrail/);
   });
 
-  it('MFE=1000 ATR=50 strong → floor 875 (giveback max 125, not 1000)', () => {
-    const floor = hybridProtectedFloor(1000, 50, 2.5);
-    expect(floor).toBe(875);
+  it('MFE=1000 ATR=50 strong → floor 925 (giveback max 75, not 125)', () => {
+    const floor = hybridProtectedFloor(1000, 50, 1.5);
+    expect(floor).toBe(925);
   });
 
   it('armed trail never below breakeven', () => {
-    expect(hybridProtectedFloor(3, 5, 2.5)).toBe(0);
+    expect(hybridProtectedFloor(3, 5, 1.5)).toBe(0);
   });
 
   it('structure target + continuation ended → TargetEnd exit', () => {

@@ -2,8 +2,9 @@
  * Best Outcome — hybrid:
  * 1) Structure / thesis / HardInv cut losers (anytime).
  * 2) BE lock: once MFE ≥ minGreen (1R) AND past 5m young window, never give green back to flat/red.
- * 3) After MFE ≥ 1R: soft ATR trail + breakeven floor
- *    Protected = max(0, MFE − K×ATR) with wide K (strong 2.5 / normal 1.5 / weak 1.0).
+ * 3) After MFE ≥ 1R: retention floor + soft ATR trail
+ *    Exit if fav/MFE < 55% once green at 1R+.
+ *    Protected = max(0, MFE − K×ATR) with tighter K (strong 1.5 / normal 1.0 / weak 0.75).
  * Capital Safety SL is separate (broker). Manual lot_size unchanged.
  *
  * Asymmetry rule: a trade that was green must not be allowed to become a full HardInv red
@@ -65,6 +66,9 @@ export function manageExitPrice(
   return null;
 }
 
+/** Once green at 1R+, exit if current fav falls below this fraction of peak MFE. */
+export const PEAK_RETENTION_EXIT_THRESHOLD = 0.55;
+
 /** Min favorable move to count as "still green" after spread (price BE ≠ £ BE). */
 export function givebackBePriceFloor(
   spread?: number | null,
@@ -104,6 +108,30 @@ export function shouldGivebackBeExit(
     return {
       exit: true,
       reason: `GivebackBE · was green MFE ${s.mfe.toFixed(5)} ≥ minGreen ${minGreen.toFixed(5)} · fav ${fav.toFixed(5)} < spread floor ${floor.toFixed(5)} · lock £ BE`,
+    };
+  }
+  return { exit: false, reason: '' };
+}
+
+export function shouldPeakRetentionExit(
+  s: ExitSnapshot,
+  fav: number,
+  hitEps: number
+): { exit: boolean; reason: string } {
+  const entry = s.entry_price;
+  if (!s.open_side || entry == null || !(s.mfe > hitEps)) {
+    return { exit: false, reason: '' };
+  }
+  const meta = { tick_size: s.tick_size };
+  const minGreen = bestOutcomeMinGreen(entry, s.atr ?? null, meta);
+  if (minGreen == null || !(s.mfe + hitEps >= minGreen)) {
+    return { exit: false, reason: '' };
+  }
+  const retention = s.mfe > 0 ? fav / s.mfe : null;
+  if (retention == null || !(retention + hitEps >= PEAK_RETENTION_EXIT_THRESHOLD)) {
+    return {
+      exit: true,
+      reason: `PeakRetention · retention ${(retention * 100).toFixed(1)}% < ${(PEAK_RETENTION_EXIT_THRESHOLD * 100).toFixed(0)}% · MFE ${s.mfe.toFixed(5)} · fav ${fav.toFixed(5)} · lock partial profit`,
     };
   }
   return { exit: false, reason: '' };
@@ -183,8 +211,8 @@ export function bestOutcomeMinGreen(
 
 /**
  * Hybrid trail K for ProtectedProfit = max(0, MFE − K×ATR_5m).
- * Wide bands so runners can retrace; not the old tight 0.4–1.0 scalp K.
- * Strong continuation → larger K (more room). Weak/choppy → tighter.
+ * Tighter than prior wide bands — less giveback before PeakTrail fires.
+ * Strong continuation → slightly wider K. Weak/choppy → tightest.
  */
 export function peakProtectK(
   regime?: string | null,
@@ -192,7 +220,7 @@ export function peakProtectK(
 ): { k: number; strength: PeakProtectStrength; detail: string } {
   if (opts?.strength) {
     const k =
-      opts.strength === 'strong' ? 2.5 : opts.strength === 'weak' ? 1.0 : 1.5;
+      opts.strength === 'strong' ? 1.5 : opts.strength === 'weak' ? 0.75 : 1.0;
     return { k, strength: opts.strength, detail: `K=${k} (${opts.strength})` };
   }
   const r = String(regime || '')
@@ -207,7 +235,7 @@ export function peakProtectK(
       r === 'PULLBACK_UPTREND' ||
       r === 'PULLBACK_DOWNTREND')
   ) {
-    return { k: 2.5, strength: 'strong', detail: 'K=2.5 (strong continuation)' };
+    return { k: 1.5, strength: 'strong', detail: 'K=1.5 (strong continuation)' };
   }
   if (
     r === 'RANGE' ||
@@ -217,9 +245,9 @@ export function peakProtectK(
     r === 'UNKNOWN' ||
     !r
   ) {
-    return { k: 1.0, strength: 'weak', detail: 'K=1.0 (weak/choppy)' };
+    return { k: 0.75, strength: 'weak', detail: 'K=0.75 (weak/choppy)' };
   }
-  return { k: 1.5, strength: 'normal', detail: 'K=1.5 (normal)' };
+  return { k: 1.0, strength: 'normal', detail: 'K=1.0 (normal)' };
 }
 
 /** Soft floor after arm: never trail below breakeven once runner is armed. */
@@ -271,7 +299,7 @@ export function peakProtectTrigger(
 }
 
 export function isHardBoReason(reason: string): boolean {
-  return /HardInvalidation|StructuralInvalidation|ThesisFailure|GivebackBE|PeakProtection|PeakTrail|OppositeSignal|TargetEnd|Target \/|StructureReversal|StructureBreak|BO BLOCK/i.test(
+  return /HardInvalidation|StructuralInvalidation|ThesisFailure|GivebackBE|PeakRetention|PeakProtection|PeakTrail|OppositeSignal|TargetEnd|Target \/|StructureReversal|StructureBreak|BO BLOCK/i.test(
     reason
   );
 }
@@ -445,6 +473,10 @@ export function decideBestOutcomeExit(
   // 5b) BE lock after young window: was green at 1R+ → exit before broker cash goes red.
   const giveback = shouldGivebackBeExit(s, fav, hitEps);
   if (giveback.exit) return giveback;
+
+  // 5c) Partial giveback cap — once green at 1R+, do not return >45% of MFE.
+  const peakRet = shouldPeakRetentionExit(s, fav, hitEps);
+  if (peakRet.exit) return peakRet;
 
   // 6) Structure target reached + continuation ended → EXIT
   if (structTarget != null && fav + hitEps >= structTarget && !cont) {
