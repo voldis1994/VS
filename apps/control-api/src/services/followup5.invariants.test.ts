@@ -12,8 +12,9 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   decideBestOutcomeExit,
-  hardInvalidationDistance,
-  bestOutcomeTarget,
+  boMfeFloor,
+  boTpDistance,
+  boSlDistance,
   type ExitSnapshot,
 } from './exitManage.js';
 import { analyzeMarketStructure } from './marketStructure.js';
@@ -240,121 +241,83 @@ describe('#4 Capital openingHours gap classification (no epic guess)', () => {
   });
 });
 
-describe('#5 BO continuation / structure_target priority', () => {
-  it('bestOutcomeTarget is 1R only — structure is separate', () => {
+describe('#5 BO Aug 13 setup', () => {
+  it('boMfeFloor scales with entry (~0.12%)', () => {
     const entry = 4640;
-    const oneR = hardInvalidationDistance(entry, null, GOLD_META)!;
-    expect(bestOutcomeTarget(entry, null, GOLD_META, oneR * 3)).toBeCloseTo(oneR, 8);
+    expect(boMfeFloor(entry)).toBeCloseTo(Math.max(entry * 0.0012, 0.12), 4);
   });
 
-  it('without continuation at 1R, HOLD until structure reversal (no 1R scalp)', () => {
+  it('holds below mfeFloor even on deep retention giveback', () => {
     const entry = 4640;
-    const oneR = hardInvalidationDistance(entry, null, GOLD_META)!;
     const hold = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: entry,
-        mfe: oneR,
-        peak_retention: 0.95,
-        structure_target: oneR * 2.5,
+        mfe: 0.86,
+        peak_retention: 0.05,
+        regime: 'TREND_UP',
       }),
-      entry + oneR,
-      { continuationSameSide: false }
+      entry + 0.01
     );
     expect(hold.exit).toBe(false);
   });
 
-  it('with continuation + valid structure_target > 1R, holds past 1R', () => {
+  it('PeakProtection after meaningful MFE and ret < 30%', () => {
     const entry = 4640;
-    const oneR = hardInvalidationDistance(entry, null, GOLD_META)!;
-    const hold = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: entry,
-        mfe: oneR * 1.1,
-        peak_retention: 0.95,
-        structure_target: oneR * 2.5,
-      }),
-      entry + oneR * 1.05,
-      { continuationSameSide: true }
-    );
-    expect(hold.exit).toBe(false);
-  });
-
-  it('deep retrace after arm → PeakTrail; HardInv still exits', () => {
-    const entry = 4600;
-    const atr = 5;
-    const oneR = hardInvalidationDistance(entry, atr, GOLD_META)!;
-    const mfe = Math.max(oneR, atr) * 4;
-    const pp = decideBestOutcomeExit(
+    const mfe = 8;
+    const cut = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: entry,
         mfe,
-        atr,
-        peak_retention: 0.35,
-        structure_target: oneR * 3,
+        peak_retention: 0.25,
         regime: 'TREND_UP',
       }),
-      entry + atr * 0.2,
-      { continuationSameSide: true }
+      entry + 2
     );
-    expect(pp.exit).toBe(true);
-    expect(pp.reason).toMatch(/PeakRetention|PeakTrail/);
+    expect(cut.exit).toBe(true);
+    expect(cut.reason).toMatch(/PeakProtection/);
+  });
 
+  it('HardInv still exits on full SL', () => {
+    const entry = 4600;
+    const sl = boSlDistance(entry);
     const hi = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: entry,
         mfe: 10,
-        atr,
         peak_retention: 0.9,
-        structure_target: oneR * 3,
         regime: 'TREND_UP',
       }),
-      4580,
-      { continuationSameSide: true }
+      entry - sl - 0.01
     );
     expect(hi.exit).toBe(true);
     expect(hi.reason).toMatch(/HardInvalidation/);
   });
 
-  it('at structure target with continuation → HOLD; without continuation → TargetEnd', () => {
+  it('target exit at ~0.35% TP', () => {
     const entry = 4640;
-    const oneR = hardInvalidationDistance(entry, null, GOLD_META)!;
-    const struct = oneR * 2.2;
-    const hold = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: entry,
-        mfe: struct + 0.05,
-        peak_retention: 0.95,
-        structure_target: struct,
-      }),
-      entry + struct + 0.01,
-      { continuationSameSide: true }
-    );
-    expect(hold.exit).toBe(false);
-
+    const tp = boTpDistance(entry);
     const cut = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: entry,
-        mfe: struct + 0.05,
-        peak_retention: 0.95,
-        structure_target: struct,
+        mfe: tp,
+        peak_retention: 1,
+        regime: 'TREND_UP',
       }),
-      entry + struct + 0.01,
-      { continuationSameSide: false }
+      entry + tp
     );
     expect(cut.exit).toBe(true);
-    expect(cut.reason).toMatch(/TargetEnd|structure/);
+    expect(cut.reason).toMatch(/Target/);
   });
+});
 
-  it('robotDesk LIVE path wires structure_target into decideBestOutcomeExit', () => {
+describe('#5 robotDesk BO wiring', () => {
+  it('robotDesk uses Aug-13 mid-price BO snapshot', () => {
     const src = readFileSync(join(here, 'robotDesk.ts'), 'utf8');
-    expect(src).toMatch(/structure_target:\s*s\.structure_target/);
-    expect(src).toMatch(/analyzeMarketStructure/);
-    expect(src).toMatch(/continuationSameSide:\s*cont\.ok/);
+    expect(src).toMatch(/Aug 13 17:43 BO/);
+    expect(src).toMatch(/decideBestOutcomeExit\([\s\S]*quote\.mid/);
   });
 });

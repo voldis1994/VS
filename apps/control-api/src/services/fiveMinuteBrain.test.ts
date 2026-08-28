@@ -34,8 +34,9 @@ import {
 } from './tradeRecovery.js';
 import {
   decideBestOutcomeExit,
-  bestOutcomeMfeFloor,
-  hardInvalidationDistance,
+  boMfeFloor,
+  boSlDistance,
+  type ExitSnapshot,
 } from './exitManage.js';
 import { hardInvalidationDistance as thrHard } from './microScalpThresholds.js';
 import { atrWilder } from './volatilityNorm.js';
@@ -501,44 +502,43 @@ describe('universality + feeds + isolation', () => {
     expect(robotIdFor(1, 'GOLD')).not.toBe(robotIdFor(2, 'GOLD'));
   });
 
-  it('24. BO hybrid PeakTrail after arm on deep giveback', () => {
+  it('24. BO Aug-13 peak protection on deep giveback after mfe floor', () => {
     const entry = 100;
-    const atr = 3;
+    const mfe = 8;
+    expect(mfe).toBeGreaterThanOrEqual(boMfeFloor(entry));
     const cut = decideBestOutcomeExit(
       {
         open_side: 'BUY',
         entry_price: entry,
-        entry_at: new Date(Date.now() - 6 * 60_000).toISOString(),
-        mfe: 12,
+        entry_at: new Date().toISOString(),
+        mfe,
         mae: 0,
-        peak_retention: 0.5,
-        atr,
-        tick_size: 0.01,
+        peak_retention: 0.25,
         regime: 'TREND_UP',
-        structure_target: 20,
       },
-      entry + 2,
-      { continuationSameSide: true }
+      entry + 2
     );
     expect(cut.exit).toBe(true);
-    expect(cut.reason).toMatch(/PeakRetention|PeakTrail/);
+    expect(cut.reason).toMatch(/PeakProtection/);
   });
 
-  it('structural invalidation BUY', () => {
+  it('Aug-13 BO ignores structural_sl field (HardInv is % based)', () => {
+    const entry = 100;
+    const sl = boSlDistance(entry);
     const cut = decideBestOutcomeExit(
       {
         open_side: 'BUY',
-        entry_price: 100,
-        entry_at: new Date(Date.now() - 120_000).toISOString(),
+        entry_price: entry,
+        entry_at: new Date().toISOString(),
         mfe: 0,
         mae: 0,
         peak_retention: null,
         structural_sl: 99,
+        regime: 'TREND_UP',
       },
-      98.5
+      entry - sl + 0.05
     );
-    expect(cut.exit).toBe(true);
-    expect(cut.reason).toMatch(/StructuralInvalidation/);
+    expect(cut.exit).toBe(false);
   });
 });
 

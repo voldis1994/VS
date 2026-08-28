@@ -29,7 +29,7 @@ import {
   toLiveRegime,
   type RegimeName,
 } from './regimes.js';
-import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove, manageExitPrice } from './exitManage.js';
+import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove } from './exitManage.js';
 import { SAFETY_SL_PCT } from './microScalpThresholds.js';
 import {
   buildScalpZone,
@@ -769,9 +769,8 @@ function expectedStopFromDistance(
 }
 
 /**
- * Track excursion in PRICE POINTS only.
- * Broker UPL ($) is display-only — never mix into MFE / peak_retention
- * or PeakProtection never arms (floor is in points).
+ * Track excursion in PRICE POINTS on MID (Aug-13 BO setup).
+ * Broker UPL ($) is display-only — never mix into MFE / peak_retention.
  */
 function updateExcursion(s: Internal, mid: number, brokerUpl?: number | null) {
   if (!s.open_side || s.entry_price == null) return;
@@ -1915,11 +1914,8 @@ async function robotCycleBody(s: Internal) {
       });
     }
 
-    if (s.open_side && s.entry_price != null) {
-      const excPx = manageExitPrice(s.open_side, quote);
-      if (excPx != null) {
-        updateExcursion(s, excPx, brokerOpen?.upl ?? s.unrealized);
-      }
+    if (s.open_side && s.entry_price != null && quote.mid != null) {
+      updateExcursion(s, quote.mid, brokerOpen?.upl ?? s.unrealized);
     }
 
     pushTick(s, {
@@ -1962,12 +1958,9 @@ async function robotCycleBody(s: Internal) {
           /* ignore refresh errors in manage */
         }
       }
+      if (quote.mid == null) return;
+
       const liveSide = s.open_side || brokerOpen?.direction || null;
-      const exitPx =
-        liveSide === 'BUY' || liveSide === 'SELL'
-          ? manageExitPrice(liveSide, quote)
-          : quote.mid;
-      if (exitPx == null) return;
 
       const short = shortNetMove(
         deskClosedBars(s),
@@ -1988,135 +1981,18 @@ async function robotCycleBody(s: Internal) {
         }
       }
 
-      const signalForCont =
-        TEN_SEC_OHLC_ENABLED && s.ohlcState.forming && s.ohlcState.forming.ticks >= 2
-          ? s.ohlcState.forming
-          : TEN_SEC_OHLC_ENABLED
-            ? s.ohlcState.last_closed
-            : deskClosedBars(s).slice(-1)[0] ?? null;
-      const tapeNow =
-        liveSide === 'BUY' || liveSide === 'SELL'
-          ? tapeSide(deskClosedBars(s), signalForCont)
-          : { dir: null as 'BUY' | 'SELL' | null, reason: '' };
-      const oppositeEntrySignal = Boolean(
-        liveSide && tapeNow.dir && tapeNow.dir !== liveSide
-      );
-      const cont =
-        liveSide === 'BUY' || liveSide === 'SELL'
-          ? continuationSameSide(liveSide, signalForCont, s.regime, deskClosedBars(s))
-          : { ok: false, reason: '' };
-
-      // 5m BO — prefer Capital-native 5m ATR
-      const fiveNative = s.multiTf.books['5m'].bars;
-      const five =
-        fiveNative.length >= 8
-          ? fiveNative
-          : aggregateTenSecToFiveMin(deskClosedBars(s));
-      s.atr_5m = atrWilder(five, 14);
-
-      // Structure / liquidity target — refresh when a farther swing appears (never freeze forever).
-      if (s.entry_price != null && five.length >= 8) {
-        // Pass provenance as-is — analyzeMarketStructure keeps only explicit REAL
-        const ms = analyzeMarketStructure(
-          five.map((b) => ({
-            open_time_ms: b.open_time_ms,
-            open: b.open,
-            high: b.high,
-            low: b.low,
-            close: b.close,
-            ticks: b.ticks,
-            provenance: b.provenance,
-          })),
-          { pivotLeft: 1, pivotRight: 1 }
-        );
-        const zone = buildScalpZone(deskClosedBars(s));
-        let next: number | null = null;
-        if (s.open_side === 'BUY') {
-          let lvl = ms.last_swing_high?.price ?? null;
-          if (lvl != null && zone?.high != null && lvl <= zone.high + 1e-9) {
-            const highs = ms.pivots.filter((p) => p.kind === 'HIGH' && p.price > zone.high!);
-            lvl = highs[highs.length - 1]?.price ?? null;
-          }
-          if (lvl != null && lvl > s.entry_price) next = lvl - s.entry_price;
-        } else if (s.open_side === 'SELL') {
-          let lvl = ms.last_swing_low?.price ?? null;
-          if (lvl != null && zone?.low != null && lvl >= zone.low - 1e-9) {
-            const lows = ms.pivots.filter((p) => p.kind === 'LOW' && p.price < zone.low!);
-            lvl = lows[lows.length - 1]?.price ?? null;
-          }
-          if (lvl != null && lvl < s.entry_price) next = s.entry_price - lvl;
-        }
-        if (
-          next != null &&
-          (s.structure_target == null || next > s.structure_target + 1e-9)
-        ) {
-          s.structure_target = next;
-          persistBoFromSession(s);
-        }
-      }
-
-      const bars5mForBo = fiveNative.map((b) => ({
-        open_time_ms: b.open_time_ms,
-        open: b.open,
-        high: b.high,
-        low: b.low,
-        close: b.close,
-        ticks: b.ticks,
-        provenance: b.provenance,
-      }));
-      const bars1mForBo = s.multiTf.books['1m'].bars.map((b) => ({
-        open_time_ms: b.open_time_ms,
-        open: b.open,
-        high: b.high,
-        low: b.low,
-        close: b.close,
-        ticks: b.ticks,
-        provenance: b.provenance,
-        forming: b.forming,
-      }));
-      const bars10sForBo = TEN_SEC_OHLC_ENABLED
-        ? s.closedBars.map((b) => ({
-            open_time_ms: b.open_time_ms,
-            open: b.open,
-            high: b.high,
-            low: b.low,
-            close: b.close,
-            ticks: b.ticks,
-            provenance: b.provenance,
-          }))
-        : [];
-
-      // Exit regime: if tape fights open side, use tape so ThesisFailure/#218 flip fires
-      // (board shows TREND_DOWN while sticky s.regime can still be TREND_UP).
-      const exitRegime =
-        liveSide === 'BUY' && tapeNow.dir === 'SELL'
-          ? 'TREND_DOWN'
-          : liveSide === 'SELL' && tapeNow.dir === 'BUY'
-            ? 'TREND_UP'
-            : s.regime;
-
+      // Aug 13 17:43 BO — mid price, simple TP/SL/peak retention (no GivebackBE / hybrid trail)
       const decision = decideBestOutcomeExit(
         {
-          ...s,
-          regime: exitRegime,
-          short_net_pct: short.netPct,
-          atr: s.atr_5m,
-          structural_sl: s.structural_sl,
-          structure_target: s.structure_target,
-          tick_size: quote.point_size ?? null,
-          broker_upl: s.unrealized,
-          spread: quote.spread ?? null,
+          open_side: s.open_side,
+          entry_price: s.entry_price,
+          entry_at: s.entry_at,
+          mfe: s.mfe,
+          mae: s.mae,
+          peak_retention: s.peak_retention,
+          regime: s.regime,
         },
-        exitPx,
-        {
-          oppositeEntrySignal,
-          oppositeReason: tapeNow.reason,
-          continuationSameSide: cont.ok && !oppositeEntrySignal,
-          ignoreMicroOpposite: Boolean(cont.ok && s.mfe >= (s.atr_5m ?? 0) * 0.25),
-          bars5m: bars5mForBo,
-          bars1m: bars1mForBo,
-          bars10s: bars10sForBo,
-        }
+        quote.mid
       );
       if (decision.exit) {
         await exitTrade(opened.session, s, quote, decision.reason);
@@ -2134,30 +2010,18 @@ async function robotCycleBody(s: Internal) {
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · ${
-          describeBestOutcomeState(
-            {
-              ...s,
-              short_net_pct: short.netPct,
-              atr: s.atr_5m,
-              structural_sl: s.structural_sl,
-              structure_target: s.structure_target,
-              tick_size: quote.point_size ?? null,
-              broker_upl: s.unrealized,
-              spread: quote.spread ?? null,
-            },
-            exitPx,
-            {
-              oppositeEntrySignal,
-              oppositeReason: tapeNow.reason,
-              continuationSameSide: cont.ok && !oppositeEntrySignal,
-              continuationReason: cont.ok ? cont.reason : tapeNow.reason || 'waiting opposite',
-              bars5m: bars5mForBo,
-              bars1m: bars1mForBo,
-              bars10s: bars10sForBo,
-            }
-          ).hold
-        }`,
+        } · ${describeBestOutcomeState(
+          {
+            open_side: s.open_side,
+            entry_price: s.entry_price,
+            entry_at: s.entry_at,
+            mfe: s.mfe,
+            mae: s.mae,
+            peak_retention: s.peak_retention,
+            regime: s.regime,
+          },
+          quote.mid
+        ).hold}`,
       });
       return;
     }

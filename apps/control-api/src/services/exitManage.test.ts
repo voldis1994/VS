@@ -1,20 +1,17 @@
 /**
- * BO hybrid — structure reversal primary + soft ATR trail after arm.
+ * BO — restored Aug 13 2026 17:43 (e0e479a).
  */
 import { describe, expect, it } from 'vitest';
 import {
   decideBestOutcomeExit,
   describeBestOutcomeState,
-  hardInvalidationDistance,
-  hybridProtectedFloor,
+  favorableMove,
   manageExitPrice,
-  peakProtectArmThreshold,
-  peakProtectK,
+  thesisFailureReason,
+  boMfeFloor,
+  boTpDistance,
   type ExitSnapshot,
 } from './exitManage.js';
-import type { StructureBar } from './marketStructure.js';
-
-const META = { tick_size: 0.01 };
 
 function snap(
   partial: Partial<ExitSnapshot> & { open_side: 'BUY' | 'SELL'; entry_price: number }
@@ -23,403 +20,145 @@ function snap(
     mfe: 0,
     mae: 0,
     peak_retention: null,
-    // Default: past 5m young-trade grace so soft BO exits still testable
-    entry_at: new Date(Date.now() - 6 * 60_000).toISOString(),
+    entry_at: new Date().toISOString(),
     regime: 'TREND_UP',
-    tick_size: META.tick_size,
     ...partial,
   };
 }
 
-function bullBars(n = 12): StructureBar[] {
-  const out: StructureBar[] = [];
-  let px = 4640;
-  for (let i = 0; i < n; i++) {
-    const o = px;
-    const c = px + (i % 2 === 0 ? 1.5 : 0.8);
-    out.push({
-      open_time_ms: i * 300_000,
-      open: o,
-      high: Math.max(o, c) + 0.4,
-      low: Math.min(o, c) - 0.3,
-      close: c,
-      ticks: 10,
-      provenance: 'REAL',
-    });
-    px = c;
-  }
-  return out;
-}
+describe('per-client exit isolation helpers', () => {
+  it('favorableMove is side-correct (BUY vs SELL do not share PnL sign)', () => {
+    expect(favorableMove('BUY', 2000, 2005)).toBe(5);
+    expect(favorableMove('SELL', 2000, 2005)).toBe(-5);
+    expect(favorableMove('SELL', 2000, 1995)).toBe(5);
+  });
 
-describe('BO hybrid structure + PeakTrail', () => {
   it('manageExitPrice uses bid for BUY / ask for SELL', () => {
     expect(manageExitPrice('BUY', { bid: 4659.4, ask: 4659.8, mid: 4659.6 })).toBe(4659.4);
     expect(manageExitPrice('SELL', { bid: 4659.4, ask: 4659.8, mid: 4659.6 })).toBe(4659.8);
   });
 
-  it('GivebackBE: was minGreen (1R) then back to flat/red → EXIT after young window', () => {
-    const entry = 4660;
-    const atr = 4;
-    const oneR = hardInvalidationDistance(entry, atr, META)!;
-    const minGreen = oneR;
-    const aged = snap({
-      open_side: 'BUY',
-      entry_price: entry,
-      mfe: minGreen + 0.01,
-      atr,
-      regime: 'TREND_UP',
-      broker_upl: -0.01,
-    });
-    const cut = decideBestOutcomeExit(aged, entry);
-    expect(cut.exit).toBe(true);
-    expect(cut.reason).toMatch(/GivebackBE/);
-    expect(cut.reason).toMatch(/broker UPL/);
+  it('does not invent thesis failure on RANGE/COMPRESSION/UNKNOWN', () => {
+    expect(thesisFailureReason('BUY', 'RANGE')).toBeNull();
+    expect(thesisFailureReason('BUY', 'COMPRESSION')).toBeNull();
+    expect(thesisFailureReason('SELL', 'UNKNOWN')).toBeNull();
+    expect(thesisFailureReason('BUY', 'TREND_UP')).toBeNull();
+    expect(thesisFailureReason('SELL', 'TREND_DOWN')).toBeNull();
+  });
 
-    const stillGreen = decideBestOutcomeExit(
+  it('thesis failure is opposite-regime only — each side independent', () => {
+    expect(thesisFailureReason('BUY', 'TREND_DOWN')).toMatch(/ThesisFailure/);
+    expect(thesisFailureReason('BUY', 'BREAKOUT_DOWN')).toMatch(/ThesisFailure/);
+    expect(thesisFailureReason('SELL', 'TREND_UP')).toMatch(/ThesisFailure/);
+    expect(thesisFailureReason('SELL', 'BREAKOUT_UP')).toMatch(/ThesisFailure/);
+    expect(thesisFailureReason('BUY', 'TREND_UP')).toBeNull();
+    expect(thesisFailureReason('SELL', 'TREND_DOWN')).toBeNull();
+  });
+});
+
+describe('decideBestOutcomeExit (Aug 13 setup)', () => {
+  it('holds a young BUY in TREND_UP with small noise', () => {
+    const d = decideBestOutcomeExit(snap({ open_side: 'BUY', entry_price: 2000, mfe: 0.4 }), 2000.5);
+    expect(d.exit).toBe(false);
+  });
+
+  it('exits BUY on TREND_DOWN thesis failure even if still green', () => {
+    const d = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_DOWN', mfe: 2 }),
+      2001
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/ThesisFailure/);
+  });
+
+  it('exits SELL on TREND_UP without affecting BUY rules', () => {
+    const sell = decideBestOutcomeExit(
+      snap({ open_side: 'SELL', entry_price: 2000, regime: 'TREND_UP' }),
+      1999
+    );
+    const buy = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_UP' }),
+      1999
+    );
+    expect(sell.exit).toBe(true);
+    expect(buy.exit).toBe(false);
+  });
+
+  it('hard invalidation on ~0.22% adverse', () => {
+    const d = decideBestOutcomeExit(snap({ open_side: 'BUY', entry_price: 2000, regime: 'RANGE' }), 1994);
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/HardInvalidation/);
+  });
+
+  it('peak protection after meaningful MFE giveback (ret < 30%)', () => {
+    const entry = 2000;
+    const mfe = 8;
+    const floor = boMfeFloor(entry);
+    expect(mfe).toBeGreaterThanOrEqual(floor);
+    const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: entry,
-        mfe: minGreen + 0.01,
-        atr,
         regime: 'TREND_UP',
-        broker_upl: 0.02,
-        spread: 0.3,
-      }),
-      entry + minGreen * 0.6
-    );
-    expect(stillGreen.exit).toBe(false);
-
-    const partialGiveback = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: entry,
-        mfe: minGreen + 0.01,
-        atr,
-        regime: 'TREND_UP',
-        broker_upl: 0.02,
-        spread: 0.3,
-      }),
-      entry + minGreen * 0.5
-    );
-    expect(partialGiveback.exit).toBe(true);
-    expect(partialGiveback.reason).toMatch(/PeakRetention/);
-  });
-
-  it('GivebackBE: muted during 5m young window (hold for runner)', () => {
-    const entry = 4660;
-    const atr = 4;
-    const oneR = hardInvalidationDistance(entry, atr, META)!;
-    const young = snap({
-      open_side: 'BUY',
-      entry_price: entry,
-      mfe: oneR + 0.5,
-      atr,
-      regime: 'TREND_UP',
-      entry_at: new Date().toISOString(),
-      broker_upl: -0.01,
-    });
-    const hold = decideBestOutcomeExit(young, entry);
-    expect(hold.exit).toBe(false);
-  });
-
-  it('GivebackBE: spread floor exits before price=0 (avoid -£0.01 after spread)', () => {
-    const entry = 4660;
-    const atr = 4;
-    const oneR = hardInvalidationDistance(entry, atr, META)!;
-    const minGreen = oneR;
-    const spread = 0.3;
-    const s = snap({
-      open_side: 'BUY',
-      entry_price: entry,
-      mfe: minGreen + 0.05,
-      atr,
-      spread,
-    });
-    const floor = spread * 0.55;
-    const holdFav = Math.max(floor + 0.05, minGreen * 0.6);
-    const hold = decideBestOutcomeExit(s, entry + holdFav);
-    expect(hold.exit).toBe(false);
-    const cut = decideBestOutcomeExit(s, entry + floor - 0.02);
-    expect(cut.exit).toBe(true);
-    expect(cut.reason).toMatch(/spread floor/);
-  });
-
-  it('peakProtectArmThreshold is 1R (not max(1R, ATR))', () => {
-    const entry = 4660;
-    const atr = 8;
-    const oneR = hardInvalidationDistance(entry, atr, META)!;
-    expect(oneR).toBeLessThan(atr);
-    expect(peakProtectArmThreshold(entry, atr, META)).toBe(oneR);
-  });
-
-  it('HardInvalidation → EXIT', () => {
-    const entry = 4660;
-    const atr = 5;
-    const sl = hardInvalidationDistance(entry, atr, META)!;
-    const cut = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: entry, mfe: 0, atr }),
-      entry - sl - 0.01
-    );
-    expect(cut.exit).toBe(true);
-    expect(cut.reason).toMatch(/HardInvalidation/);
-  });
-
-  it('StructuralInvalidation → EXIT', () => {
-    const cut = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: 100, structural_sl: 99, atr: 1 }),
-      98.5
-    );
-    expect(cut.exit).toBe(true);
-    expect(cut.reason).toMatch(/StructuralInvalidation/);
-  });
-
-  it('ThesisFailure regime flip → EXIT when flat/green', () => {
-    const cut = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: 100, mfe: 0.5, atr: 1, regime: 'TREND_DOWN' }),
-      100.2
-    );
-    expect(cut.exit).toBe(true);
-    expect(cut.reason).toMatch(/ThesisFailure/);
-  });
-
-  it('in minus: HOLD until HardInv (no thesis/flip chop above -SL)', () => {
-    const entry = 100;
-    const atr = 1;
-    const sl = hardInvalidationDistance(entry, atr, META)!;
-    const hold = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: entry, mfe: 0, atr, regime: 'TREND_DOWN' }),
-      entry - sl * 0.5
-    );
-    expect(hold.exit).toBe(false);
-
-    const cut = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: entry, mfe: 0, atr, regime: 'TREND_DOWN' }),
-      entry - sl - 0.01
-    );
-    expect(cut.exit).toBe(true);
-    expect(cut.reason).toMatch(/HardInvalidation/);
-  });
-
-  it('young trade: ThesisFailure / regime flip EXITS immediately when flat/green', () => {
-    const young = snap({
-      open_side: 'BUY',
-      entry_price: 100,
-      mfe: 0.2,
-      atr: 1,
-      regime: 'TREND_DOWN',
-      entry_at: new Date().toISOString(),
-    });
-    const flip = decideBestOutcomeExit(young, 100.1);
-    expect(flip.exit).toBe(true);
-    expect(flip.reason).toMatch(/ThesisFailure/);
-
-    const sl = hardInvalidationDistance(100, 1, META)!;
-    const hard = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 100,
-        mfe: 0,
-        atr: 1,
-        regime: 'TREND_UP',
-        entry_at: new Date().toISOString(),
-      }),
-      100 - sl - 0.01
-    );
-    expect(hard.exit).toBe(true);
-    expect(hard.reason).toMatch(/HardInvalidation/);
-  });
-
-  it('young trade: PeakTrail still HOLD (soft profit mute); ThesisFailure after dump fires', () => {
-    const entry = 4618;
-    const atr = 2;
-    const arm = peakProtectArmThreshold(entry, atr, META)!;
-    const youngHold = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: entry,
-        mfe: arm * 1.2,
-        atr,
-        regime: 'TREND_UP',
-        entry_at: new Date().toISOString(),
-      }),
-      entry + arm * 0.1, // deep giveback — would PeakTrail if aged
-      { continuationSameSide: false, bars5m: bullBars() }
-    );
-    expect(youngHold.exit).toBe(false);
-
-    // Mild adverse (in minus) + regime flip → HOLD until HardInv while young
-    const dumpHold = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: entry,
-        mfe: 0.1,
-        atr,
-        regime: 'TREND_DOWN',
-        entry_at: new Date().toISOString(),
-      }),
-      entry - 0.5
-    );
-    expect(dumpHold.exit).toBe(false);
-  });
-
-  it('soft PeakTrail still waits past 5m young grace; ThesisFailure anytime', () => {
-    const at4m = snap({
-      open_side: 'BUY',
-      entry_price: 100,
-      mfe: 0.5,
-      atr: 1,
-      regime: 'TREND_UP',
-      entry_at: new Date(Date.now() - 4 * 60_000).toISOString(),
-    });
-    expect(decideBestOutcomeExit(at4m, 100.1).exit).toBe(false);
-
-    const at4mFlip = snap({
-      ...at4m,
-      regime: 'TREND_DOWN',
-    });
-    expect(decideBestOutcomeExit(at4mFlip, 100.1).exit).toBe(true);
-    expect(decideBestOutcomeExit(at4mFlip, 100.1).reason).toMatch(/ThesisFailure/);
-  });
-
-  it('K bands are tighter (less giveback before PeakTrail)', () => {
-    expect(peakProtectK('TREND_UP', { continuationSameSide: true })).toEqual(
-      expect.objectContaining({ k: 1.5, strength: 'strong' })
-    );
-    expect(peakProtectK('PULLBACK_UPTREND').k).toBe(1.0);
-    expect(peakProtectK('RANGE').k).toBe(0.75);
-  });
-
-  it('below arm: deep % giveback → HOLD (no trail)', () => {
-    const entry = 4640;
-    const atr = 5;
-    const arm = peakProtectArmThreshold(entry, atr, META)!;
-    const bars = bullBars();
-    const hold = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: entry,
-        mfe: arm * 0.4,
-        atr,
-        regime: 'TREND_UP',
-      }),
-      entry + arm * 0.05,
-      { continuationSameSide: true, bars5m: bars }
-    );
-    expect(hold.exit).toBe(false);
-  });
-
-  it('after arm: moderate retrace above floor → HOLD', () => {
-    const entry = 4640;
-    const atr = 4;
-    const arm = peakProtectArmThreshold(entry, atr, META)!;
-    const mfe = Math.max(arm, atr) * 3;
-    const { k } = peakProtectK('TREND_UP', { continuationSameSide: true });
-    const floor = hybridProtectedFloor(mfe, atr, k);
-    const bars = bullBars();
-    const hold = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: entry,
         mfe,
-        atr,
-        regime: 'TREND_UP',
-        structure_target: arm * 5,
+        peak_retention: 0.2,
       }),
-      entry + floor + Math.max(0.5, mfe * 0.56 - floor),
-      { continuationSameSide: true, bars5m: bars }
+      2001.6
     );
-    expect(hold.exit).toBe(false);
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/PeakProtection/);
   });
 
-  it('after arm: giveback below floor → PeakRetention or PeakTrail EXIT', () => {
-    const entry = 4640;
-    const atr = 4;
-    const arm = peakProtectArmThreshold(entry, atr, META)!;
-    const mfe = Math.max(arm, atr) * 3;
-    const { k } = peakProtectK('TREND_UP', { continuationSameSide: true });
-    const floor = hybridProtectedFloor(mfe, atr, k);
-    expect(floor).toBeGreaterThan(0);
-    const bars = bullBars();
-    const cut = decideBestOutcomeExit(
+  it('does NOT exit near BE when MFE was small (no GivebackBE chop)', () => {
+    const entry = 4660;
+    const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: entry,
+        regime: 'TREND_UP',
+        mfe: 0.86,
+        peak_retention: 0.01,
+        broker_upl: 0.01,
+      }),
+      entry + 0.01
+    );
+    expect(d.exit).toBe(false);
+  });
+
+  it('target at ~0.35%', () => {
+    const entry = 2000;
+    const tp = boTpDistance(entry);
+    const d = decideBestOutcomeExit(
+      snap({ open_side: 'BUY', entry_price: entry, regime: 'TREND_UP', mfe: tp }),
+      entry + tp
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/Target/);
+  });
+
+  it('BestOutcome harvest when green after MFE floor and ret < 40%', () => {
+    const entry = 2000;
+    const mfe = 6;
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: entry,
+        regime: 'TREND_UP',
         mfe,
-        atr,
-        regime: 'TREND_UP',
-        structure_target: arm * 5,
+        peak_retention: 0.35,
       }),
-      entry + Math.max(0, floor - 0.5),
-      { continuationSameSide: true, bars5m: bars }
+      entry + 2
     );
-    expect(cut.exit).toBe(true);
-    expect(cut.reason).toMatch(/PeakRetention|PeakTrail/);
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/BestOutcome harvest/);
   });
 
-  it('large MFE: retention ok but below ATR floor → PeakTrail EXIT', () => {
-    const entry = 4640;
-    const atr = 4;
-    const mfe = 40;
-    const { k } = peakProtectK('TREND_UP', { continuationSameSide: true });
-    const floor = hybridProtectedFloor(mfe, atr, k);
-    const fav = floor - 0.5;
-    expect(fav / mfe).toBeGreaterThan(0.55);
-    const cut = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: entry,
-        mfe,
-        atr,
-        regime: 'TREND_UP',
-      }),
-      entry + fav,
-      { continuationSameSide: true, bars5m: bullBars() }
-    );
-    expect(cut.exit).toBe(true);
-    expect(cut.reason).toMatch(/PeakTrail/);
-  });
-
-  it('MFE=1000 ATR=50 strong → floor 925 (giveback max 75, not 125)', () => {
-    const floor = hybridProtectedFloor(1000, 50, 1.5);
-    expect(floor).toBe(925);
-  });
-
-  it('armed trail never below breakeven', () => {
-    expect(hybridProtectedFloor(3, 5, 1.5)).toBe(0);
-  });
-
-  it('structure target + continuation ended → TargetEnd exit', () => {
-    const entry = 4640;
-    const atr = 3;
-    const oneR = hardInvalidationDistance(entry, atr, META)!;
-    const struct = oneR * 2.2;
-    const bars = bullBars();
-    const cut = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: entry,
-        mfe: struct + 0.05,
-        atr,
-        structure_target: struct,
-        regime: 'TREND_UP',
-      }),
-      entry + struct + 0.01,
-      { continuationSameSide: false, bars5m: bars }
-    );
-    expect(cut.exit).toBe(true);
-    expect(cut.reason).toMatch(/TargetEnd|structure/);
-  });
-
-  it('describe shows hybrid HOLD + trail state', () => {
-    const bars = bullBars();
+  it('describe shows BO HOLD state', () => {
     const s = describeBestOutcomeState(
-      snap({ open_side: 'BUY', entry_price: 4600, mfe: 12, atr: 5, regime: 'TREND_UP' }),
-      4608,
-      { continuationReason: 'continuation · TAPE UP', continuationSameSide: true, bars5m: bars }
+      snap({ open_side: 'BUY', entry_price: 4600, mfe: 2, regime: 'TREND_UP' }),
+      4601
     );
-    expect(s.hold).toMatch(/BO hybrid HOLD/);
+    expect(s.hold).toMatch(/BO HOLD/);
     expect(s.hold).toMatch(/peak MFE/);
-    expect(s.hold).toMatch(/thesis ALIVE/);
-    expect(s.hold).toMatch(/trail/);
   });
 });

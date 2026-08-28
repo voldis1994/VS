@@ -1,30 +1,8 @@
 /**
- * Best Outcome — hybrid:
- * 1) Structure / thesis / HardInv cut losers (anytime).
- * 2) BE lock: once MFE ≥ minGreen (1R) AND past 5m young window, lock partial profit (PeakRetention / trail).
- *    In minus (UPL < 0): only HardInv / structural SL — no thesis flip or BE chop above -SL.
- * 3) After MFE ≥ 1R: retention floor + soft ATR trail
- *    Exit if fav/MFE < 55% once green at 1R+.
- *    Protected = max(0, MFE − K×ATR) with tighter K (strong 1.5 / normal 1.0 / weak 0.75).
- * Capital Safety SL is separate (broker). Manual lot_size unchanged.
- *
- * Asymmetry rule: a trade that was green must not be allowed to become a full HardInv red
- * — that was "plus smaller than minus" in live Capital history.
+ * Best Outcome — restored Aug 13 2026 17:43 setup (commit e0e479a).
+ * Simple % TP/SL + peak retention harvest on MID price.
+ * No GivebackBE / 5m young mute / hybrid PeakTrail (those were chopping +£0.86 → +£0.01).
  */
-
-import {
-  hardInvalidationDistance,
-  shortThesisMovePct,
-  shortThesisPts,
-} from './microScalpThresholds.js';
-import {
-  detectStructureReversalExit,
-  thesisAlive5m,
-  type StructureReversalInput,
-} from './structureReversalExit.js';
-import type { StructureBar } from './marketStructure.js';
-
-export { hardInvalidationDistance };
 
 export type ExitSide = 'BUY' | 'SELL';
 
@@ -36,19 +14,28 @@ export type ExitSnapshot = {
   mae: number;
   peak_retention: number | null;
   regime?: string | null;
+  /** Ignored by Aug-13 BO — kept for session/journal typing */
   short_net_pct?: number | null;
   atr?: number | null;
   structural_sl?: number | null;
-  /** Optional liquidity / structure target beyond 1R */
   structure_target?: number | null;
   tick_size?: number | null;
-  /** Capital broker cash UPL — preferred for BE lock (price BE ≠ £ BE after spread). */
   broker_upl?: number | null;
-  /** Live quote spread (price units) — BE floor when broker UPL unavailable. */
   spread?: number | null;
 };
 
-export type PeakProtectStrength = 'strong' | 'normal' | 'weak';
+/** Aug-13 constants */
+export const BO_TP_PCT = 0.0035;
+export const BO_TP_MIN = 0.35;
+export const BO_SL_PCT = 0.0022;
+export const BO_SL_MIN = 0.22;
+export const BO_MFE_FLOOR_PCT = 0.0012;
+export const BO_MFE_FLOOR_MIN = 0.12;
+export const BO_PEAK_PROTECT_RETENTION = 0.3;
+export const BO_HARVEST_RETENTION = 0.4;
+export const BO_TIME_DECAY_MS = 480_000;
+
+export type BoExitOpts = Record<string, unknown>;
 
 export function favorableMove(side: ExitSide, entry: number, mid: number): number {
   return side === 'BUY' ? mid - entry : entry - mid;
@@ -67,77 +54,22 @@ export function manageExitPrice(
   return null;
 }
 
-/** Once green at 1R+, exit if current fav falls below this fraction of peak MFE. */
-export const PEAK_RETENTION_EXIT_THRESHOLD = 0.55;
-
-/** Min favorable move to count as "still green" after spread (price BE ≠ £ BE). */
-export function givebackBePriceFloor(
-  spread?: number | null,
-  meta?: { tick_size?: number | null }
-): number {
-  const tick = meta?.tick_size;
-  if (spread != null && Number.isFinite(spread) && spread > 0) {
-    return spread * 0.55;
-  }
-  if (tick != null && Number.isFinite(tick) && tick > 0) {
-    return tick * 2;
-  }
-  return 0;
+export function boTpDistance(entry: number): number {
+  const absEntry = Math.max(Math.abs(entry), 1e-9);
+  return Math.max(absEntry * BO_TP_PCT, BO_TP_MIN);
 }
 
-export function shouldGivebackBeExit(
-  s: ExitSnapshot,
-  fav: number,
-  hitEps: number
-): { exit: boolean; reason: string } {
-  const entry = s.entry_price;
-  if (!s.open_side || entry == null) return { exit: false, reason: '' };
-  const meta = { tick_size: s.tick_size };
-  const minGreen = bestOutcomeMinGreen(entry, s.atr ?? null, meta);
-  if (minGreen == null || !(s.mfe + hitEps >= minGreen)) {
-    return { exit: false, reason: '' };
-  }
-  const brokerUpl = s.broker_upl;
-  if (brokerUpl != null && Number.isFinite(brokerUpl) && brokerUpl <= 0) {
-    return {
-      exit: true,
-      reason: `GivebackBE · was green MFE ${s.mfe.toFixed(5)} ≥ minGreen ${minGreen.toFixed(5)} · broker UPL ${brokerUpl.toFixed(5)} ≤ 0 · lock cash BE`,
-    };
-  }
-  const floor = givebackBePriceFloor(s.spread, meta);
-  if (fav + hitEps < floor) {
-    return {
-      exit: true,
-      reason: `GivebackBE · was green MFE ${s.mfe.toFixed(5)} ≥ minGreen ${minGreen.toFixed(5)} · fav ${fav.toFixed(5)} < spread floor ${floor.toFixed(5)} · lock £ BE`,
-    };
-  }
-  return { exit: false, reason: '' };
+export function boSlDistance(entry: number): number {
+  const absEntry = Math.max(Math.abs(entry), 1e-9);
+  return Math.max(absEntry * BO_SL_PCT, BO_SL_MIN);
 }
 
-export function shouldPeakRetentionExit(
-  s: ExitSnapshot,
-  fav: number,
-  hitEps: number
-): { exit: boolean; reason: string } {
-  const entry = s.entry_price;
-  if (!s.open_side || entry == null || !(s.mfe > hitEps)) {
-    return { exit: false, reason: '' };
-  }
-  const meta = { tick_size: s.tick_size };
-  const minGreen = bestOutcomeMinGreen(entry, s.atr ?? null, meta);
-  if (minGreen == null || !(s.mfe + hitEps >= minGreen)) {
-    return { exit: false, reason: '' };
-  }
-  const retention = s.mfe > 0 ? fav / s.mfe : null;
-  if (retention == null || !(retention + hitEps >= PEAK_RETENTION_EXIT_THRESHOLD)) {
-    return {
-      exit: true,
-      reason: `PeakRetention · retention ${(retention * 100).toFixed(1)}% < ${(PEAK_RETENTION_EXIT_THRESHOLD * 100).toFixed(0)}% · MFE ${s.mfe.toFixed(5)} · fav ${fav.toFixed(5)} · lock partial profit`,
-    };
-  }
-  return { exit: false, reason: '' };
+export function boMfeFloor(entry: number): number {
+  const absEntry = Math.max(Math.abs(entry), 1e-9);
+  return Math.max(absEntry * BO_MFE_FLOOR_PCT, BO_MFE_FLOOR_MIN);
 }
 
+/** Opposite regime vs open side — original PositionManager thesis failure. */
 export function thesisFailureReason(
   side: ExitSide,
   regime?: string | null
@@ -166,408 +98,98 @@ export function thesisFailureReason(
   return null;
 }
 
-/** 1R distance (HardInv). Structure target is separate. */
-export function bestOutcomeTarget(
-  entry: number,
-  atr?: number | null,
-  meta?: { tick_size?: number | null },
-  _structureTarget?: number | null
-): number | null {
-  return hardInvalidationDistance(entry, atr, meta);
-}
-
-/**
- * PeakProtect / trail arms when MFE ≥ 1R (HardInv distance).
- * Earlier arm (was max(1R, ATR)) meant trail almost never engaged before flip exits
- * — winners stayed tiny while losers ran to full HardInv.
- */
-export function peakProtectArmThreshold(
-  entry: number,
-  atr?: number | null,
-  meta?: { tick_size?: number | null }
-): number | null {
-  const oneR = hardInvalidationDistance(entry, atr, meta);
-  if (oneR == null || !(oneR > 0)) return null;
-  return oneR;
-}
-
-/** @deprecated alias — arm threshold is 1R */
-export function bestOutcomeMfeFloor(
-  entry: number,
-  atr?: number | null,
-  meta?: { tick_size?: number | null }
-): number | null {
-  return peakProtectArmThreshold(entry, atr, meta);
-}
-
-/** Green enough to lock breakeven — do not give this back to red. */
-export function bestOutcomeMinGreen(
-  entry: number,
-  atr?: number | null,
-  meta?: { tick_size?: number | null }
-): number | null {
-  const oneR = hardInvalidationDistance(entry, atr, meta);
-  return oneR == null || !(oneR > 0) ? null : oneR;
-}
-
-/**
- * Hybrid trail K for ProtectedProfit = max(0, MFE − K×ATR_5m).
- * Tighter than prior wide bands — less giveback before PeakTrail fires.
- * Strong continuation → slightly wider K. Weak/choppy → tightest.
- */
-export function peakProtectK(
-  regime?: string | null,
-  opts?: { continuationSameSide?: boolean; strength?: PeakProtectStrength }
-): { k: number; strength: PeakProtectStrength; detail: string } {
-  if (opts?.strength) {
-    const k =
-      opts.strength === 'strong' ? 1.5 : opts.strength === 'weak' ? 0.75 : 1.0;
-    return { k, strength: opts.strength, detail: `K=${k} (${opts.strength})` };
-  }
-  const r = String(regime || '')
-    .trim()
-    .toUpperCase();
-  if (
-    opts?.continuationSameSide &&
-    (r === 'TREND_UP' ||
-      r === 'TREND_DOWN' ||
-      r === 'BREAKOUT_UP' ||
-      r === 'BREAKOUT_DOWN' ||
-      r === 'PULLBACK_UPTREND' ||
-      r === 'PULLBACK_DOWNTREND')
-  ) {
-    return { k: 1.5, strength: 'strong', detail: 'K=1.5 (strong continuation)' };
-  }
-  if (
-    r === 'RANGE' ||
-    r === 'TRANSITION' ||
-    r === 'REVERSAL_CANDIDATE' ||
-    r === 'EXPANSION' ||
-    r === 'UNKNOWN' ||
-    !r
-  ) {
-    return { k: 0.75, strength: 'weak', detail: 'K=0.75 (weak/choppy)' };
-  }
-  return { k: 1.0, strength: 'normal', detail: 'K=1.0 (normal)' };
-}
-
-/** Soft floor after arm: never trail below breakeven once runner is armed. */
-export function hybridProtectedFloor(
-  mfe: number,
-  atrBuffer: number,
-  k: number
-): number {
-  return Math.max(0, protectedProfitLevel(mfe, atrBuffer, k));
-}
-
-/**
- * ATR buffer for PeakProtect. Prefer ATR_5m; fall back to 1R only when ATR UNKNOWN
- * so we do not invent a synthetic ATR magnitude.
- */
-export function peakProtectAtrBuffer(
-  entry: number,
-  atr: number | null | undefined,
-  meta?: { tick_size?: number | null }
-): number | null {
-  if (atr != null && Number.isFinite(atr) && atr > 0) return atr;
-  return hardInvalidationDistance(entry, atr, meta);
-}
-
-export function protectedProfitLevel(
-  mfe: number,
-  atrBuffer: number,
-  k: number
-): number {
-  return mfe - k * atrBuffer;
-}
-
-/** @deprecated legacy % PeakProtect — kept for import stability; unused by 5m BO */
-export const BEST_OUTCOME_LOCK_RETENTION = 0.75;
-export const BEST_OUTCOME_LOCK_TRIGGER = 0.78;
-
-/** @deprecated — 5m BO uses K×ATR ProtectedProfit, not % retention trigger */
-export function peakProtectTrigger(
-  entry: number,
-  atr: number | null | undefined,
-  regime?: string | null
-): { retention: number; trigger: number; detail: string } {
-  const { k, strength, detail } = peakProtectK(regime);
-  return {
-    retention: BEST_OUTCOME_LOCK_RETENTION,
-    trigger: BEST_OUTCOME_LOCK_TRIGGER,
-    detail: `legacy% unused · 5m ${detail} strength=${strength} entry=${entry} atr=${atr ?? '—'}`,
-  };
-}
-
 export function isHardBoReason(reason: string): boolean {
-  return /HardInvalidation|StructuralInvalidation|ThesisFailure|GivebackBE|PeakRetention|PeakProtection|PeakTrail|OppositeSignal|TargetEnd|Target \/|StructureReversal|StructureBreak|BO BLOCK/i.test(
+  return /HardInvalidation|ThesisFailure|PeakProtection|Target \/|BestOutcome harvest|TimeDecay/i.test(
     reason
   );
 }
 
-export type BoExitOpts = {
-  oppositeEntrySignal?: boolean;
-  oppositeReason?: string;
-  continuationSameSide?: boolean;
-  ignoreMicroOpposite?: boolean;
-  peakProtectStrength?: PeakProtectStrength;
-  /** 5m/1m/10s bars for structure-reversal exit (preferred over PeakProtect). */
-  bars5m?: StructureBar[] | null;
-  bars1m?: StructureBar[] | null;
-  bars10s?: StructureBar[] | null;
-  structureReversal?: StructureReversalInput | null;
-};
-
-function structuralInvalidationDistance(
-  side: ExitSide,
-  entry: number,
-  structuralSl: number | null | undefined
-): number | null {
-  if (structuralSl == null || !Number.isFinite(structuralSl)) return null;
-  if (side === 'BUY') {
-    const d = entry - structuralSl;
-    return d > 0 ? d : null;
-  }
-  const d = structuralSl - entry;
-  return d > 0 ? d : null;
-}
-
+/**
+ * Manage exit — give the trade room to develop (~10s scalp with breathing room).
+ * Broker SAFETY SL is the hard cushion; this is best-outcome + thesis management.
+ * Uses MID price (Aug 13) — never broker £ UPL for exit decisions.
+ */
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
   mid: number,
-  opts?: BoExitOpts
+  _opts?: BoExitOpts
 ): { exit: boolean; reason: string } {
   if (!s.open_side || s.entry_price == null) return { exit: false, reason: '' };
 
+  const thesis = thesisFailureReason(s.open_side, s.regime);
+  if (thesis) return { exit: true, reason: thesis };
+
   const entry = s.entry_price;
-  const atr = s.atr ?? null;
-  const meta = { tick_size: s.tick_size };
   const fav = favorableMove(s.open_side, entry, mid);
-  const hardInv = hardInvalidationDistance(entry, atr, meta);
-  const structDist = structuralInvalidationDistance(s.open_side, entry, s.structural_sl);
   const hitEps = Math.max(Math.abs(entry) * 1e-12, 1e-9);
-  const cont = Boolean(opts?.continuationSameSide);
+  const tp = boTpDistance(entry);
+  const sl = boSlDistance(entry);
+  const mfeFloor = boMfeFloor(entry);
 
-  // Young trade: mute ONLY soft profit-management (PeakTrail / TargetEnd).
-  // Trend-flip exits (ThesisFailure / StructureReversal / Opposite) fire immediately —
-  // holding a bad long through a dump for 5m was the "random stuck trade" bug.
-  const entryAtMs = s.entry_at ? Date.parse(s.entry_at) : NaN;
-  const ageMs =
-    Number.isFinite(entryAtMs) && entryAtMs > 0 ? Date.now() - entryAtMs : 0;
-  const YOUNG_MS = 5 * 60_000; // soft profit exits wait a full 5 minutes
-  const young = ageMs >= 0 && ageMs < YOUNG_MS;
-
-  // Critical UNKNOWN HardInv without structural SL → cannot manage
-  if (hardInv == null && structDist == null) {
-    // While young, HOLD rather than instant close-to-safety spam (ATR may still seed).
-    if (young) {
-      return { exit: false, reason: '' };
-    }
-    return {
-      exit: true,
-      reason: 'BO BLOCK · HardInv/structural SL UNKNOWN · close to safety',
-    };
-  }
-
-  const sl = structDist ?? hardInv!;
-
-  // 1) Structural invalidation → EXIT (anytime)
-  if (s.structural_sl != null && Number.isFinite(s.structural_sl)) {
-    if (s.open_side === 'BUY' && mid <= s.structural_sl) {
-      return {
-        exit: true,
-        reason: `StructuralInvalidation · mid ${mid.toFixed(5)} ≤ SL ${s.structural_sl.toFixed(5)}`,
-      };
-    }
-    if (s.open_side === 'SELL' && mid >= s.structural_sl) {
-      return {
-        exit: true,
-        reason: `StructuralInvalidation · mid ${mid.toFixed(5)} ≥ SL ${s.structural_sl.toFixed(5)}`,
-      };
-    }
-  }
-
-  // 2) Hard invalidation → EXIT (anytime)
   if (fav <= -sl) {
     return { exit: true, reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}` };
   }
 
-  // In minus: only HardInv / structural SL may close — no thesis/flip/BE chop above -SL.
-  const inMinus = fav + hitEps < 0;
-
-  // 3) Thesis failure (regime flip / short dump against side) → EXIT when flat/green
-  // Chart case: BUY into dump → TREND_DOWN / short dump must flip immediately, not wait 5m.
-  const thesisPct = shortThesisMovePct(entry, atr, meta);
-  const thesisPts = shortThesisPts(entry, atr, meta);
-  const short = s.short_net_pct;
-  if (!inMinus && thesisPct != null && thesisPts != null && short != null && Number.isFinite(short)) {
-    if (s.open_side === 'BUY' && short <= -thesisPct) {
-      return {
-        exit: true,
-        reason: `ThesisFailure · short dump ${(short * 100).toFixed(2)}% (~${thesisPts.toFixed(2)}pt) vs BUY`,
-      };
-    }
-    if (s.open_side === 'SELL' && short >= thesisPct) {
-      return {
-        exit: true,
-        reason: `ThesisFailure · short rally ${(short * 100).toFixed(2)}% (~${thesisPts.toFixed(2)}pt) vs SELL`,
-      };
-    }
-  }
-
-  const regimeThesis = !inMinus ? thesisFailureReason(s.open_side, s.regime) : null;
-  if (regimeThesis) {
-    return { exit: true, reason: regimeThesis };
-  }
-
-  const structTarget =
-    s.structure_target != null && Number.isFinite(s.structure_target) && s.structure_target > 0
-      ? s.structure_target
-      : null;
-
-  // 4) Structure reversal — CHoCH / HL-LH break / dead thesis → EXIT anytime (trend flip)
-  const revInput: StructureReversalInput | null =
-    opts?.structureReversal ??
-    (opts?.bars5m && opts.bars5m.length >= 4
-      ? {
-          side: s.open_side,
-          price: mid,
-          entry,
-          mfe: s.mfe,
-          bars5m: opts.bars5m,
-          bars1m: opts.bars1m,
-          bars10s: opts.bars10s,
-          atr,
-          tick_size: s.tick_size,
-          structure_target: structTarget,
-          continuationSameSide: cont,
-        }
-      : null);
-
-  if (revInput && !inMinus) {
-    const rev = detectStructureReversalExit(revInput);
-    // While young: only hard structure flips (not TargetEnd scalp / micro flicker)
-    if (rev.exit) {
-      const isSoftTarget = /^TargetEnd/i.test(rev.reason);
-      const isMicroFlicker = /^MicroReversal/i.test(rev.reason);
-      if (!(young && (isSoftTarget || isMicroFlicker))) {
-        return { exit: true, reason: rev.reason };
-      }
-    }
-  }
-
-  // 5) Opposite tape + no continuation → EXIT when flat/green (flip without waiting 5m CHoCH)
-  if (!inMinus && opts?.oppositeEntrySignal && !opts?.ignoreMicroOpposite && !cont) {
-    const bars = opts?.bars5m ?? revInput?.bars5m ?? [];
-    const thesis =
-      bars.length >= 4 ? thesisAlive5m(s.open_side, bars) : { alive: false, detail: 'no 5m thesis' };
+  if (s.mfe >= mfeFloor && s.peak_retention != null && s.peak_retention < BO_PEAK_PROTECT_RETENTION) {
     return {
       exit: true,
-      reason: `OppositeSignal · ${opts.oppositeReason || 'tape flipped'} · ${
-        thesis.alive ? 'cont ended' : thesis.detail
-      }`,
+      reason: `PeakProtection · retention ${(s.peak_retention * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} → lock best`,
     };
   }
 
-  // Soft profit-management only after young window (anti open→GivebackBE/PeakTrail→reentry spam).
-  if (young) {
-    return { exit: false, reason: '' };
-  }
-
-  // 5b) BE lock after young window — flat/green only (minus → HardInv above).
-  const giveback = !inMinus ? shouldGivebackBeExit(s, fav, hitEps) : { exit: false, reason: '' };
-  if (giveback.exit) return giveback;
-
-  // 5c) Partial giveback cap — once green at 1R+, do not return >45% of MFE.
-  const peakRet = shouldPeakRetentionExit(s, fav, hitEps);
-  if (peakRet.exit) return peakRet;
-
-  // 6) Structure target reached + continuation ended → EXIT
-  if (structTarget != null && fav + hitEps >= structTarget && !cont) {
+  if (fav + hitEps >= tp) {
     return {
       exit: true,
-      reason: `TargetEnd · UPL ${fav.toFixed(5)} ≥ structure ${structTarget.toFixed(5)} · continuation ended`,
+      reason: `Target / best outcome · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)}`,
     };
   }
 
-  // 7) Soft hybrid trail — after MFE ≥ 1R. Wide K; floor ≥ 0 (BE lock).
-  const armAt = peakProtectArmThreshold(entry, atr, meta);
-  const atrBuf = peakProtectAtrBuffer(entry, atr, meta);
-  if (armAt != null && atrBuf != null && s.mfe + hitEps >= armAt) {
-    const { k, strength, detail } = peakProtectK(s.regime, {
-      continuationSameSide: cont,
-      strength: opts?.peakProtectStrength,
-    });
-    const protectedLvl = hybridProtectedFloor(s.mfe, atrBuf, k);
-    if (fav + hitEps < protectedLvl) {
-      return {
-        exit: true,
-        reason: `PeakTrail · UPL ${fav.toFixed(5)} < floor ${protectedLvl.toFixed(5)} · MFE ${s.mfe.toFixed(5)} − K×ATR (${detail} · ATR ${atrBuf.toFixed(5)} · arm@${armAt.toFixed(5)} · ${strength} · BE lock)`,
-      };
-    }
+  if (
+    s.mfe >= mfeFloor &&
+    fav > 0 &&
+    s.peak_retention != null &&
+    s.peak_retention < BO_HARVEST_RETENTION
+  ) {
+    return {
+      exit: true,
+      reason: `BestOutcome harvest · UPL ${fav.toFixed(5)} after MFE ${s.mfe.toFixed(5)} (ret ${(s.peak_retention * 100).toFixed(0)}%)`,
+    };
   }
 
-  // HOLD — structure alive + soft trail not breached
+  const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
+  if (heldMs > BO_TIME_DECAY_MS && fav >= 0 && s.mfe >= mfeFloor * 0.5) {
+    return {
+      exit: true,
+      reason: `TimeDecay · held ${Math.round(heldMs / 1000)}s · realize non-negative best UPL ${fav.toFixed(5)}`,
+    };
+  }
+
   return { exit: false, reason: '' };
 }
 
 export function describeBestOutcomeState(
   s: ExitSnapshot,
   mid: number,
-  opts?: BoExitOpts & { continuationReason?: string }
+  _opts?: BoExitOpts & { continuationReason?: string }
 ): { exit: boolean; reason: string; hold: string } {
-  const decision = decideBestOutcomeExit(s, mid, opts);
+  const decision = decideBestOutcomeExit(s, mid);
   if (decision.exit) return { ...decision, hold: '' };
 
   if (!s.open_side || s.entry_price == null) {
-    return {
-      exit: false,
-      reason: '',
-      hold: 'BO blocked — missing entry_price',
-    };
+    return { exit: false, reason: '', hold: 'BO blocked — missing entry_price' };
   }
 
   const entry = s.entry_price;
-  const atr = s.atr ?? null;
-  const meta = { tick_size: s.tick_size };
   const fav = favorableMove(s.open_side, entry, mid);
-  const structDist = structuralInvalidationDistance(s.open_side, entry, s.structural_sl);
-  const hardInv = hardInvalidationDistance(entry, atr, meta);
-  const sl = structDist ?? hardInv;
-  const tp = bestOutcomeTarget(entry, atr, meta, s.structure_target);
-  const cont = Boolean(opts?.continuationSameSide);
-  const bars = opts?.bars5m ?? [];
-  const thesis =
-    bars.length >= 4
-      ? thesisAlive5m(s.open_side, bars)
-      : { alive: true, detail: 'structure seeding' };
-  const armAt = peakProtectArmThreshold(entry, atr, meta);
-  const atrBuf = peakProtectAtrBuffer(entry, atr, meta);
-  const minGreen = bestOutcomeMinGreen(entry, atr, meta);
-  const { k, strength, detail } = peakProtectK(s.regime, {
-    continuationSameSide: cont,
-    strength: opts?.peakProtectStrength,
-  });
-  const armed = armAt != null && atrBuf != null && s.mfe >= armAt;
-  const beLocked = minGreen != null && s.mfe >= minGreen;
-  const prot = armed ? hybridProtectedFloor(s.mfe, atrBuf!, k) : beLocked ? 0 : null;
-  const contTxt = opts?.continuationReason ? ` · ${opts.continuationReason}` : '';
-  const structTxt =
-    s.structural_sl != null ? ` · structSL ${s.structural_sl.toFixed(2)}` : '';
+  const tp = boTpDistance(entry);
+  const sl = boSlDistance(entry);
+  const mfeFloor = boMfeFloor(entry);
 
   return {
     exit: false,
     reason: '',
-    hold: `BO hybrid HOLD · UPL ${fav.toFixed(2)} · peak MFE ${s.mfe.toFixed(2)} · 1R ${tp?.toFixed(2) ?? 'UNKNOWN'}${
-      s.structure_target != null ? ` · structTgt ${s.structure_target.toFixed(2)}` : ''
-    } · HardInv -${sl?.toFixed(2) ?? 'UNKNOWN'}${structTxt} · thesis ${thesis.alive ? 'ALIVE' : 'BREAK'} · ${
-      thesis.detail
-    } · trail ${
-      armed
-        ? `ON floor ${prot?.toFixed(2) ?? '—'} (${detail})`
-        : beLocked
-          ? `BE lock (minGreen ${minGreen?.toFixed(2)}) · full trail@${armAt?.toFixed(2) ?? '?'}`
-          : `off until minGreen ${minGreen?.toFixed(2) ?? '?'} / arm@${armAt?.toFixed(2) ?? '?'}`
-    } · ${strength}${contTxt}`,
+    hold: `BO HOLD · UPL ${fav.toFixed(2)} · peak MFE ${s.mfe.toFixed(2)} · TP ${tp.toFixed(2)} · SL ${sl.toFixed(2)} · floor ${mfeFloor.toFixed(2)} · ret ${
+      s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
+    }`,
   };
 }
