@@ -1,7 +1,7 @@
 /**
  * Best Outcome — hybrid:
  * 1) Structure / thesis / HardInv cut losers (anytime).
- * 2) Early BE lock: once MFE ≥ minGreen (~0.35×1R), never give green back to flat/red.
+ * 2) BE lock: once MFE ≥ minGreen (1R) AND past 5m young window, never give green back to flat/red.
  * 3) After MFE ≥ 1R: soft ATR trail + breakeven floor
  *    Protected = max(0, MFE − K×ATR) with wide K (strong 2.5 / normal 1.5 / weak 1.0).
  * Capital Safety SL is separate (broker). Manual lot_size unchanged.
@@ -178,7 +178,7 @@ export function bestOutcomeMinGreen(
   meta?: { tick_size?: number | null }
 ): number | null {
   const oneR = hardInvalidationDistance(entry, atr, meta);
-  return oneR == null || !(oneR > 0) ? null : oneR * 0.35;
+  return oneR == null || !(oneR > 0) ? null : oneR;
 }
 
 /**
@@ -363,10 +363,6 @@ export function decideBestOutcomeExit(
     return { exit: true, reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}` };
   }
 
-  // 2b) Early BE lock: was green → exit before broker cash goes red (not price=0).
-  const giveback = shouldGivebackBeExit(s, fav, hitEps);
-  if (giveback.exit) return giveback;
-
   // 3) Thesis failure (regime flip / short dump against side) → EXIT anytime
   // Chart case: BUY into dump → TREND_DOWN / short dump must flip immediately, not wait 5m.
   const thesisPct = shortThesisMovePct(entry, atr, meta);
@@ -441,11 +437,14 @@ export function decideBestOutcomeExit(
     };
   }
 
-  // Soft profit-management only after young window (anti open→PeakTrail→reentry spam).
-  // GivebackBE above already fired anytime — young mute does not override BE lock.
+  // Soft profit-management only after young window (anti open→GivebackBE/PeakTrail→reentry spam).
   if (young) {
     return { exit: false, reason: '' };
   }
+
+  // 5b) BE lock after young window: was green at 1R+ → exit before broker cash goes red.
+  const giveback = shouldGivebackBeExit(s, fav, hitEps);
+  if (giveback.exit) return giveback;
 
   // 6) Structure target reached + continuation ended → EXIT
   if (structTarget != null && fav + hitEps >= structTarget && !cont) {
