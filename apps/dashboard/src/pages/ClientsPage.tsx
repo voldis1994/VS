@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { useApi, apiFetch } from '../hooks/useApi';
 
 interface LiveTrade {
@@ -37,36 +37,17 @@ interface TradingAccount {
 
 export function ClientsPage() {
   const { data, error, loading, refresh } = useApi<ClientRow[]>('/api/clients');
-  const [params] = useSearchParams();
-  const navigate = useNavigate();
-  const view = params.get('view') === 'info' ? 'info' : 'command';
-  const setView = (next: 'command' | 'info') => {
-    const q = new URLSearchParams(params);
-    if (next === 'info') q.set('view', 'info');
-    else q.delete('view');
-    navigate({ pathname: '/clients', search: q.toString() ? `?${q}` : '' }, { replace: true });
-  };
-
   const [accounts, setAccounts] = useState<TradingAccount[]>([]);
   const [name, setName] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [issuedCode, setIssuedCode] = useState<{ client_id: number; code: string } | null>(null);
-  const [focusId, setFocusId] = useState<number | null>(null);
 
   useEffect(() => {
     void apiFetch<TradingAccount[]>('/api/trading/accounts')
       .then((rows) => setAccounts(rows || []))
       .catch(() => setAccounts([]));
   }, []);
-
-  useEffect(() => {
-    if (!data?.length) {
-      setFocusId(null);
-      return;
-    }
-    setFocusId((prev) => (prev && data.some((c) => c.id === prev) ? prev : data[0].id));
-  }, [data]);
 
   const handleCreate = async () => {
     if (!name.trim()) return;
@@ -106,7 +87,7 @@ export function ClientsPage() {
     try {
       const res = await apiFetch<{ access_code: string; client_id: number }>(
         `/api/clients/${client.id}/access-code`,
-        { method: 'POST', body: JSON.stringify({}) },
+        { method: 'POST', body: JSON.stringify({}) }
       );
       setIssuedCode({ client_id: res.client_id, code: res.access_code });
       setMsg(`Access code issued for #${client.id}. Copy it now — shown once.`);
@@ -147,7 +128,7 @@ export function ClientsPage() {
 
   const handleDelete = async (client: ClientRow) => {
     const ok = window.confirm(
-      `DELETE account "${client.name}" (#${client.id})?\n\nThis permanently removes brokers, credentials, and trading settings.`,
+      `DELETE account "${client.name}" (#${client.id})?\n\nThis permanently removes brokers, credentials, and trading settings.`
     );
     if (!ok) return;
     setMsg(null);
@@ -163,245 +144,164 @@ export function ClientsPage() {
   if (loading) return <div className="empty-state">LOADING ACCOUNTS...</div>;
   if (error) return <div className="error-state">{error}</div>;
 
-  const rows = data || [];
-  const focused = rows.find((c) => c.id === focusId) || null;
-  const focusAccounts = focused ? accounts.filter((a) => a.client_id === focused.id) : [];
-  const online = rows.filter((c) => c.enabled).length;
-  const panelOn = rows.filter((c) => c.access_enabled && c.has_access_code).length;
-  const robotsOn = rows.filter((c) => c.robot_status === 'RUNNING').length;
-  const shareUrl =
-    import.meta.env.VITE_CLIENT_PANEL_URL ||
-    'Double-click VS.bat → copy https://….trycloudflare.com from that window';
-
   return (
-    <div className="cl-shell">
-      <header className="cl-top">
-        <div>
-          <div className="robot-arena-kicker">VS SYSTEM // CLIENT DESKS</div>
-          <h1 className="cl-title">CLIENTS</h1>
+    <div>
+      <h1 className="page-title">Clients</h1>
+      <p className="page-subtitle">
+        Client desks + access codes. Send clients this link (not the admin desk):
+      </p>
+      <div className="card" style={{ marginBottom: 16, padding: '12px 16px' }}>
+        <div className="section-title" style={{ marginBottom: 8 }}>
+          Client panel URL (share this)
         </div>
-        <div className="cl-stats">
-          <div className="cl-stat">
-            <span>TOTAL</span>
-            <strong>{rows.length}</strong>
-          </div>
-          <div className="cl-stat">
-            <span>ENABLED</span>
-            <strong>{online}</strong>
-          </div>
-          <div className="cl-stat">
-            <span>PANEL</span>
-            <strong>{panelOn}</strong>
-          </div>
-          <div className="cl-stat">
-            <span>ROBOTS</span>
-            <strong>{robotsOn}</strong>
-          </div>
-        </div>
-        <div className="cl-actions">
-          <button
-            type="button"
-            className={`btn ${view === 'command' ? 'btn-primary' : ''}`}
-            onClick={() => setView('command')}
-          >
-            ROSTER
+        <p className="mono" style={{ fontSize: 14, wordBreak: 'break-all' }}>
+          {import.meta.env.VITE_CLIENT_PANEL_URL ||
+            'Double-click VS.bat → copy https://….trycloudflare.com from that window'}
+        </p>
+        <p style={{ marginTop: 8, fontSize: 12, opacity: 0.7 }}>
+          Client is <strong>not</strong> on your Wi‑Fi — do not send a 192.168.x.x IP. Keep{' '}
+          <code>VS.bat</code> open, send the https tunnel link + access code. Admin preview:{' '}
+          <Link to="/client">/client</Link>
+        </p>
+      </div>
+
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="section-title">Add Client</div>
+        <div className="actions">
+          <input
+            className="input"
+            placeholder="Account / client name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            style={{ maxWidth: 320 }}
+          />
+          <button className="btn btn-primary" onClick={handleCreate} disabled={submitting}>
+            Add Client
           </button>
-          <button
-            type="button"
-            className={`btn ${view === 'info' ? 'btn-primary' : ''}`}
-            onClick={() => setView('info')}
-          >
-            INFO
-          </button>
-          <Link className="btn" to="/robot">
-            ROBOT →
-          </Link>
         </div>
-      </header>
-
-      {view === 'command' ? (
-        <>
-          <div className="cl-add">
-            <input
-              className="input"
-              placeholder="Account / client name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void handleCreate();
-              }}
-            />
-            <button className="btn btn-primary" onClick={() => void handleCreate()} disabled={submitting}>
-              ADD CLIENT
-            </button>
-            {msg && <span className="cl-msg mono">{msg}</span>}
-            {issuedCode && (
-              <span className="cl-code mono">
-                CODE #{issuedCode.client_id}: <strong>{issuedCode.code}</strong>
-              </span>
-            )}
+        {msg && <p style={{ marginTop: 10, fontFamily: 'var(--font-mono)', fontSize: 12 }}>{msg}</p>}
+        {issuedCode && (
+          <div className="error-state" style={{ marginTop: 12, color: 'var(--accent)' }}>
+            Access code for client #{issuedCode.client_id}:{' '}
+            <strong className="mono">{issuedCode.code}</strong>
           </div>
+        )}
+      </div>
 
-          <section className="cl-stage">
-            <div className="cl-roster">
-              {rows.length === 0 && <div className="empty-state">NO CLIENTS YET</div>}
-              {rows.map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  className={`cl-row ${focusId === c.id ? 'active' : ''} ${c.enabled ? 'on' : 'off'}`}
-                  onClick={() => setFocusId(c.id)}
-                >
-                  <span className="mono">#{c.id}</span>
-                  <strong>{c.name}</strong>
-                  <span className={`badge ${c.enabled ? 'badge-healthy' : 'badge-unhealthy'}`}>
-                    {c.enabled ? 'ON' : 'OFF'}
-                  </span>
-                  <span
-                    className={`badge ${
-                      c.access_enabled && c.has_access_code ? 'badge-healthy' : 'badge-unhealthy'
-                    }`}
-                  >
-                    {c.access_enabled && c.has_access_code ? 'PANEL' : 'NO ACCESS'}
-                  </span>
-                  <span
-                    className={`badge ${
-                      c.robot_status === 'RUNNING' ? 'badge-healthy' : 'badge-unhealthy'
-                    }`}
-                  >
-                    {c.robot_status || 'STOPPED'}
-                  </span>
-                  <span className="mono cl-row-trade">
-                    {c.live_trade ? `${c.live_trade.trade_type} ${c.live_trade.lot_size}` : '—'}
-                  </span>
-                </button>
-              ))}
-            </div>
-
-            <div className="cl-focus">
-              {focused ? (
-                <>
-                  <div className="robot-arena-kicker">FOCUS CLIENT</div>
-                  <div className="cl-focus-name">
-                    #{focused.id} · {focused.name}
-                  </div>
-                  <div className="cl-focus-grid mono">
-                    <div>
-                      <span>MARKET</span>
-                      <strong>
-                        {focused.panel_display_name || focused.panel_epic || '—'}
-                        {focused.panel_lot_size != null ? ` / ${focused.panel_lot_size}` : ''}
-                      </strong>
-                    </div>
-                    <div>
-                      <span>LAST SEEN</span>
-                      <strong>
-                        {focused.last_seen_at
-                          ? new Date(focused.last_seen_at).toLocaleString()
-                          : '—'}
-                      </strong>
-                    </div>
-                    <div>
-                      <span>BROKER</span>
+      <div className="card">
+        <div className="section-title">Client Roster</div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Enabled</th>
+                <th>Access</th>
+                <th>Broker account</th>
+                <th>Market / Lot</th>
+                <th>Robot</th>
+                <th>Trade</th>
+                <th>Last seen</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(data || []).map((c) => {
+                const clientAccounts = accounts.filter((a) => a.client_id === c.id);
+                return (
+                  <tr key={c.id}>
+                    <td className="mono">#{c.id}</td>
+                    <td>{c.name}</td>
+                    <td>
+                      <span className={`badge ${c.enabled ? 'badge-healthy' : 'badge-unhealthy'}`}>
+                        {c.enabled ? 'ON' : 'OFF'}
+                      </span>
+                    </td>
+                    <td>
+                      <span
+                        className={`badge ${
+                          c.access_enabled && c.has_access_code ? 'badge-healthy' : 'badge-unhealthy'
+                        }`}
+                      >
+                        {c.access_enabled && c.has_access_code ? 'PANEL' : 'NO ACCESS'}
+                      </span>
+                    </td>
+                    <td>
                       <select
                         className="input"
-                        value={focused.preferred_broker_account_id ?? focused.account_id ?? ''}
+                        style={{ minWidth: 160 }}
+                        value={c.preferred_broker_account_id ?? c.account_id ?? ''}
                         onChange={(e) =>
                           void handlePreferredAccount(
-                            focused,
-                            e.target.value === '' ? '' : Number(e.target.value),
+                            c,
+                            e.target.value === '' ? '' : Number(e.target.value)
                           )
                         }
                       >
                         <option value="">Auto / first</option>
-                        {focusAccounts.map((a) => (
+                        {clientAccounts.map((a) => (
                           <option key={a.account_id} value={a.account_id}>
                             #{a.account_id} · {a.display_name} ({a.environment})
                           </option>
                         ))}
                       </select>
-                    </div>
-                  </div>
-                  <div className="cl-focus-actions">
-                    <button className="btn" type="button" onClick={() => void handleToggle(focused)}>
-                      {focused.enabled ? 'DISABLE' : 'ENABLE'}
-                    </button>
-                    <button
-                      className="btn btn-go"
-                      type="button"
-                      onClick={() => void handleGenerateCode(focused)}
-                    >
-                      {focused.has_access_code ? 'RESET CODE' : 'GENERATE CODE'}
-                    </button>
-                    <button
-                      className="btn"
-                      type="button"
-                      onClick={() => void handleAccessToggle(focused)}
-                    >
-                      {focused.access_enabled ? 'ACCESS OFF' : 'ACCESS ON'}
-                    </button>
-                    <button className="btn" type="button" onClick={() => void handleRevoke(focused)}>
-                      REVOKE
-                    </button>
-                    <button
-                      className="btn btn-stop"
-                      type="button"
-                      disabled={focused.robot_status !== 'RUNNING'}
-                      onClick={() => void handleAdminStop(focused)}
-                    >
-                      STOP
-                    </button>
-                    <button
-                      className="btn btn-danger"
-                      type="button"
-                      onClick={() => void handleDelete(focused)}
-                    >
-                      DELETE
-                    </button>
-                  </div>
-                  <button type="button" className="btn cl-more" onClick={() => setView('info')}>
-                    SHARE URL / NOTES → INFO
-                  </button>
-                </>
-              ) : (
-                <div className="empty-state">SELECT A CLIENT</div>
-              )}
-            </div>
-          </section>
-        </>
-      ) : (
-        <section className="cl-info">
-          <div className="cl-info-panel">
-            <div className="section-title">Client panel URL (share this)</div>
-            <p className="mono cl-info-url">{shareUrl}</p>
-            <p className="cl-info-note">
-              Client is <strong>not</strong> on your Wi‑Fi — do not send a 192.168.x.x IP. Keep{' '}
-              <code>VS.bat</code> open, send the https tunnel link + access code. Admin preview:{' '}
-              <Link to="/client">/client</Link>
-            </p>
-          </div>
-          <div className="cl-info-panel">
-            <div className="section-title">How access works</div>
-            <ul className="cl-info-list mono">
-              <li>GENERATE CODE → rāda kodu vienreiz</li>
-              <li>ACCESS ON → atļauj Client Panel</li>
-              <li>REVOKE → noņem paneli</li>
-              <li>STOP → admin stop robotam</li>
-            </ul>
-          </div>
-          <div className="cl-info-panel">
-            <div className="section-title">Roster snapshot</div>
-            <div className="mono cl-info-note">
-              {rows.length} clients · {online} enabled · {panelOn} panel · {robotsOn} robots running
-            </div>
-            {issuedCode && (
-              <div className="cl-code mono" style={{ marginTop: 10 }}>
-                LAST CODE #{issuedCode.client_id}: <strong>{issuedCode.code}</strong>
-              </div>
-            )}
-          </div>
-        </section>
-      )}
+                    </td>
+                    <td className="mono">
+                      {c.panel_display_name || c.panel_epic || '—'}
+                      {c.panel_lot_size != null ? ` / ${c.panel_lot_size}` : ''}
+                    </td>
+                    <td>
+                      <span
+                        className={`badge ${
+                          c.robot_status === 'RUNNING' ? 'badge-healthy' : 'badge-unhealthy'
+                        }`}
+                      >
+                        {c.robot_status || 'STOPPED'}
+                      </span>
+                    </td>
+                    <td className="mono">
+                      {c.live_trade
+                        ? `${c.live_trade.trade_type} ${c.live_trade.lot_size}`
+                        : '—'}
+                    </td>
+                    <td className="mono">
+                      {c.last_seen_at ? new Date(c.last_seen_at).toLocaleString() : '—'}
+                    </td>
+                    <td>
+                      <div className="actions" style={{ flexWrap: 'wrap' }}>
+                        <button className="btn" onClick={() => void handleToggle(c)}>
+                          {c.enabled ? 'Disable' : 'Enable'}
+                        </button>
+                        <button className="btn btn-go" onClick={() => void handleGenerateCode(c)}>
+                          {c.has_access_code ? 'Reset Code' : 'Generate Code'}
+                        </button>
+                        <button className="btn" onClick={() => void handleAccessToggle(c)}>
+                          {c.access_enabled ? 'Access Off' : 'Access On'}
+                        </button>
+                        <button className="btn" onClick={() => void handleRevoke(c)}>
+                          Revoke
+                        </button>
+                        <button
+                          className="btn btn-stop"
+                          disabled={c.robot_status !== 'RUNNING'}
+                          onClick={() => void handleAdminStop(c)}
+                        >
+                          STOP
+                        </button>
+                        <button className="btn btn-danger" onClick={() => void handleDelete(c)}>
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {(!data || data.length === 0) && <div className="empty-state">NO CLIENTS YET</div>}
+      </div>
     </div>
   );
 }

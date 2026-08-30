@@ -66,14 +66,6 @@ export function normalizeRegime(value: string | null | undefined): RegimeName {
   return isRegimeName(v) ? v : 'UNKNOWN';
 }
 
-/**
- * Keep real classifier output — do NOT map COMPRESSION/UNKNOWN → EXPANSION.
- * Regime is INFO label only; entry uses multi-TF tape (5m+1m).
- */
-export function toLiveRegime(regime: RegimeName): RegimeName {
-  return regime;
-}
-
 export function styleFromClassification(
   regime?: string | null,
   setupType?: string | null
@@ -110,10 +102,7 @@ type Book = {
   last_update: string;
 };
 
-const MAX_BARS = 150; // last 150×10s ≈ 25 min — zone lookback
-/** Keep closedBars / impulse windows aligned with regime book + zones. */
-export const MAX_REGIME_BARS = MAX_BARS;
-
+const MAX_BARS = 24;
 const books = new Map<string, Book>();
 
 function mean(xs: number[]): number {
@@ -125,16 +114,9 @@ function epicKey(epic: string): string {
   return String(epic || '').trim().toUpperCase();
 }
 
-/** Per-client regime book — B.O.S.S. / DIMITRIJ / GUNTIS never share bars. */
-export function regimeBookKey(epic: string, clientId?: number | null): string {
-  const e = epicKey(epic);
-  if (clientId != null && Number.isFinite(clientId)) return `c${Number(clientId)}:${e}`;
-  return e;
-}
-
 /**
  * Classify from closed 10s OHLC — same names as C++ RegimeEngine.
- * Short slope (~9×10s ≈ 90s) + structure (~36×10s ≈ 6m).
+ * Failed-breakout variants are live here (reserved in C++).
  */
 export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOWN'): RegimeName {
   if (!bars.length || bars.length < 2) return 'UNKNOWN';
@@ -152,188 +134,40 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   const lastRange = rangePct(last);
   const persistWindow = velocities.slice(-6);
   const persistence = mean(
-    persistWindow.map((v) => (v > 0.00025 ? 1 : v < -0.00025 ? -1 : 0))
+    persistWindow.map((v) => (v > 0.00008 ? 1 : v < -0.00008 ? -1 : 0))
   );
 
-  const trendingUp = persistence > 0.35 && lastVel > 0.00015;
-  const trendingDown = persistence < -0.35 && lastVel < -0.00015;
-  const compressed = lastRange < avgRange * 0.55 && lastRange < 0.0008;
-  const expanding = lastRange > avgRange * 1.45 && lastRange >= 0.001;
+  const trendingUp = persistence > 0.35 && lastVel > 0.00005;
+  const trendingDown = persistence < -0.35 && lastVel < -0.00005;
+  const compressed = lastRange < avgRange * 0.55 && lastRange < 0.00022;
+  const expanding = lastRange > avgRange * 1.45 && lastRange >= 0.00025;
   const hi = Math.max(...prior.map((b) => b.high));
   const lo = Math.min(...prior.map((b) => b.low));
   const inRange = last.close <= hi && last.close >= lo;
   const breakoutUp = last.close > hi;
   const breakoutDown = last.close < lo;
   const reversal =
-    (previous === 'TREND_UP' && lastVel < -0.0025 && lastRange > avgRange && !breakoutDown) ||
-    (previous === 'TREND_DOWN' && lastVel > 0.0025 && lastRange > avgRange && !breakoutUp);
-
-  // Short ~30 min; structure ~2h. ~0.15% ≈ 7pt, ~0.25% ≈ 11.5pt on Gold ~4600
-  let slopeUp = false;
-  let slopeDown = false;
-  let bounceInDown = false;
-  let dipInUp = false;
-  let shortPct = 0;
-  if (bars.length >= 4) {
-    const shortBars = bars.slice(-6);
-    const shortOpen = shortBars[0]!.open;
-    const shortMid = Math.max(Math.abs(shortOpen), 1e-9);
-    shortPct = (last.close - shortOpen) / shortMid;
-    const shortUp = shortPct >= 0.0012;
-    const shortDown = shortPct <= -0.0012;
-
-    let structUp = false;
-    let structDown = false;
-    if (bars.length >= 12) {
-      const structBars = bars.slice(-24);
-      const structOpen = structBars[0]!.open;
-      const structMid = Math.max(Math.abs(structOpen), 1e-9);
-      const structPct = (last.close - structOpen) / structMid;
-      structUp = structPct >= 0.002;
-      structDown = structPct <= -0.002;
-      if (structDown && shortPct > 0.0008) bounceInDown = true;
-      if (structUp && shortPct < -0.0008 && shortPct > -0.0025) dipInUp = true;
-    }
-
-    slopeDown = shortDown || structDown;
-    slopeUp = shortUp || structUp;
-
-    // Decisive ~30m move overrides stale 2h structure.
-    // Old bug: structUp+shortDown kept TREND_UP → BUY into the dump.
-    const SHORT_OVERRIDE = 0.0025; // ~11.5pt Gold
-    if (shortPct <= -SHORT_OVERRIDE) {
-      slopeDown = true;
-      slopeUp = false;
-      dipInUp = false;
-    } else if (shortPct >= SHORT_OVERRIDE) {
-      slopeUp = true;
-      slopeDown = false;
-      bounceInDown = false;
-    } else if (structDown && shortUp) {
-      slopeDown = true;
-      slopeUp = false;
-    } else if (structUp && shortDown) {
-      slopeUp = true;
-      slopeDown = false;
-    }
-  }
+    (previous === 'TREND_UP' && lastVel < -0.0012 && lastRange > avgRange && !breakoutDown) ||
+    (previous === 'TREND_DOWN' && lastVel > 0.0012 && lastRange > avgRange && !breakoutUp);
 
   if (previous === 'BREAKOUT_UP' && inRange && lastVel < 0) return 'FAILED_BREAKOUT_UP';
   if (previous === 'BREAKOUT_DOWN' && inRange && lastVel > 0) return 'FAILED_BREAKOUT_DOWN';
-  if (compressed && inRange && !slopeUp && !slopeDown) return 'COMPRESSION';
-  if (expanding && breakoutUp && (trendingUp || lastVel > 0 || slopeUp)) return 'BREAKOUT_UP';
-  if (expanding && breakoutDown && (trendingDown || lastVel < 0 || slopeDown)) return 'BREAKOUT_DOWN';
-  if (expanding && !slopeUp && !slopeDown) return 'EXPANSION';
-  if (previous === 'TREND_UP' && lastVel < -0.00025 && persistence > 0.15) {
+  if (compressed && inRange) return 'COMPRESSION';
+  if (expanding && breakoutUp && (trendingUp || lastVel > 0)) return 'BREAKOUT_UP';
+  if (expanding && breakoutDown && (trendingDown || lastVel < 0)) return 'BREAKOUT_DOWN';
+  if (expanding) return 'EXPANSION';
+  if (previous === 'TREND_UP' && lastVel < -0.00008 && persistence > 0.15) {
     return 'PULLBACK_UPTREND';
   }
-  if (previous === 'TREND_DOWN' && lastVel > 0.00025 && persistence < -0.15) {
+  if (previous === 'TREND_DOWN' && lastVel > 0.00008 && persistence < -0.15) {
     return 'PULLBACK_DOWNTREND';
   }
-  if (bounceInDown) return 'PULLBACK_DOWNTREND';
-  if (dipInUp) return 'PULLBACK_UPTREND';
-  // Sticky: once in TREND_DOWN, do not flip to TREND_UP on one green tick of structure
-  if (
-    previous === 'TREND_DOWN' &&
-    slopeUp &&
-    !slopeDown &&
-    shortPct < 0.0025 &&
-    persistence < 0.35
-  ) {
-    return 'PULLBACK_DOWNTREND';
-  }
-  if (
-    previous === 'TREND_UP' &&
-    slopeDown &&
-    !slopeUp &&
-    shortPct > -0.0025 &&
-    persistence > -0.35
-  ) {
-    return 'PULLBACK_UPTREND';
-  }
-  if (trendingUp && !slopeDown) return 'TREND_UP';
-  if (trendingDown && !slopeUp) return 'TREND_DOWN';
+  if (trendingUp) return 'TREND_UP';
+  if (trendingDown) return 'TREND_DOWN';
   if (reversal) return 'REVERSAL_CANDIDATE';
-  if (slopeDown) {
-    if (lastVel > 0.00025) return 'PULLBACK_DOWNTREND';
-    return 'TREND_DOWN';
-  }
-  if (slopeUp) {
-    if (lastVel < -0.00025) return 'PULLBACK_UPTREND';
-    return 'TREND_UP';
-  }
   if (inRange) return 'RANGE';
   if (previous !== 'UNKNOWN' && previous !== 'RANGE') return 'TRANSITION';
   return 'UNKNOWN';
-}
-
-function regimePlainWhy(regime: RegimeName): string {
-  switch (regime) {
-    case 'UNKNOWN':
-      return 'label only — entry uses 5m+1m tape';
-    case 'TRANSITION':
-      return 'label only — entry uses 5m+1m tape';
-    case 'RANGE':
-      return 'label only — tape decides BUY/SELL';
-    case 'COMPRESSION':
-      return 'label only — tape decides BUY/SELL';
-    case 'EXPANSION':
-      return 'wide bar — tape decides direction';
-    case 'TREND_UP':
-      return 'bias UP';
-    case 'TREND_DOWN':
-      return 'bias DOWN';
-    case 'PULLBACK_UPTREND':
-      return 'uptrend pullback';
-    case 'PULLBACK_DOWNTREND':
-      return 'downtrend pullback';
-    case 'BREAKOUT_UP':
-      return 'breakout UP';
-    case 'BREAKOUT_DOWN':
-      return 'breakout DOWN';
-    case 'FAILED_BREAKOUT_UP':
-      return 'failed up breakout (label)';
-    case 'FAILED_BREAKOUT_DOWN':
-      return 'failed down breakout (label)';
-    case 'REVERSAL_CANDIDATE':
-      return 'label only — tape decides';
-    default:
-      return '';
-  }
-}
-
-/** Honest regime context for INFO — separate from zone (different bar windows). */
-export function describeRegimeContext(
-  bars: TenSecBar[] | null | undefined,
-  regime: RegimeName | string
-): string {
-  const r = normalizeRegime(regime);
-  const n = bars?.length ?? 0;
-  if (n < 2) {
-    return `REGIME ${r} · ${n}×10s stored (need ≥2) · ${regimePlainWhy(r)}`;
-  }
-  const last = bars![bars!.length - 1]!;
-  let shortLine: string;
-  if (n >= 6) {
-    const shortOpen = bars!.slice(-6)[0]!.open;
-    const shortPct = ((last.close - shortOpen) / Math.max(Math.abs(shortOpen), 1e-9)) * 100;
-    const shortPt = last.close - shortOpen;
-    shortLine = `short(6b)=${shortPct >= 0 ? '+' : ''}${shortPct.toFixed(2)}% (${shortPt >= 0 ? '+' : ''}${shortPt.toFixed(1)}pt)`;
-  } else {
-    shortLine = `short(6b)=need ${6 - n} more bars`;
-  }
-  let structLine: string;
-  if (n >= 12) {
-    const structBars = bars!.slice(-24);
-    const structOpen = structBars[0]!.open;
-    const structPct = ((last.close - structOpen) / Math.max(Math.abs(structOpen), 1e-9)) * 100;
-    const structPt = last.close - structOpen;
-    structLine = `struct(24b)=${structPct >= 0 ? '+' : ''}${structPct.toFixed(2)}% (${structPt >= 0 ? '+' : ''}${structPt.toFixed(1)}pt)`;
-  } else {
-    structLine = `struct(24b)=need ${12 - n} more bars for structure`;
-  }
-  const why = regimePlainWhy(r);
-  return `REGIME ${r} · ${n}×10s stored · ${shortLine} · ${structLine} · ${why}`;
 }
 
 function confidenceFrom(bars: TenSecBar[], regime: RegimeName): number {
@@ -357,8 +191,8 @@ function toSnapshot(epic: string, b: Book): RegimeSnapshot {
   };
 }
 
-function ensureBook(epic: string, displayName?: string, clientId?: number | null): Book {
-  const key = regimeBookKey(epic, clientId);
+function ensureBook(epic: string, displayName?: string): Book {
+  const key = epicKey(epic);
   let b = books.get(key);
   if (!b) {
     const now = new Date().toISOString();
@@ -379,8 +213,8 @@ function ensureBook(epic: string, displayName?: string, clientId?: number | null
   return b;
 }
 
-function applyClassify(epic: string, b: Book, clientId?: number | null): RegimeSnapshot {
-  const next = toLiveRegime(classifyRegime(b.bars, b.current));
+function applyClassify(epic: string, b: Book): RegimeSnapshot {
+  const next = classifyRegime(b.bars, b.current);
   const now = new Date().toISOString();
   if (next !== b.current) {
     b.previous = b.current;
@@ -390,25 +224,19 @@ function applyClassify(epic: string, b: Book, clientId?: number | null): RegimeS
   b.confidence = confidenceFrom(b.bars, b.current);
   b.last_update = now;
   if (b.bars.length) b.last_mid = b.bars[b.bars.length - 1]!.close;
-  return toSnapshot(regimeBookKey(epic, clientId), b);
+  return toSnapshot(epic, b);
 }
 
 export function observeClosedBars(
   epic: string,
   bars: TenSecBar[],
-  displayName?: string,
-  clientId?: number | null
+  displayName?: string
 ): RegimeSnapshot {
-  const key = regimeBookKey(epic, clientId);
-  const b = ensureBook(epic, displayName, clientId);
+  const key = epicKey(epic);
+  const b = ensureBook(epic, displayName);
   for (const bar of bars) {
     if (!bar || !Number.isFinite(bar.close)) continue;
     const last = b.bars[b.bars.length - 1];
-    // Same 10s bucket — replace, do not append
-    if (last && last.open_time_ms === bar.open_time_ms) {
-      if ((bar.ticks || 0) >= (last.ticks || 0)) b.bars[b.bars.length - 1] = bar;
-      continue;
-    }
     const same =
       last &&
       Math.abs(last.open - bar.open) < 1e-9 &&
@@ -418,17 +246,16 @@ export function observeClosedBars(
     b.bars.push(bar);
   }
   if (b.bars.length > MAX_BARS) b.bars.splice(0, b.bars.length - MAX_BARS);
-  return applyClassify(epic, b, clientId);
+  return applyClassify(key, b);
 }
 
 export function notePipelineRegime(
   epic: string,
   regime: string | null | undefined,
-  displayName?: string,
-  clientId?: number | null
+  displayName?: string
 ): RegimeSnapshot {
-  const b = ensureBook(epic, displayName, clientId);
-  const next = toLiveRegime(normalizeRegime(regime));
+  const b = ensureBook(epic, displayName);
+  const next = normalizeRegime(regime);
   const now = new Date().toISOString();
   if (next !== b.current) {
     b.previous = b.current;
@@ -436,18 +263,15 @@ export function notePipelineRegime(
     b.since = now;
   }
   b.last_update = now;
-  b.confidence = Math.max(b.confidence, 0.55);
-  return toSnapshot(regimeBookKey(epic, clientId), b);
+  if (next !== 'UNKNOWN') b.confidence = Math.max(b.confidence, 0.55);
+  return toSnapshot(epicKey(epic), b);
 }
 
-export function currentRegime(
-  epic: string | null | undefined,
-  clientId?: number | null
-): RegimeSnapshot | null {
+export function currentRegime(epic: string | null | undefined): RegimeSnapshot | null {
   if (!epic) return null;
-  const b = books.get(regimeBookKey(epic, clientId));
+  const b = books.get(epicKey(epic));
   if (!b) return null;
-  return toSnapshot(regimeBookKey(epic, clientId), b);
+  return toSnapshot(epicKey(epic), b);
 }
 
 export function listRegimeSnapshots(): RegimeSnapshot[] {

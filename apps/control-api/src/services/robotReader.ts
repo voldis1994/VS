@@ -758,8 +758,6 @@ export function feedsFromSenders(senders: DataSender[]) {
   });
 }
 
-export type FeedRole = 'LEAD' | 'CONFIRM' | 'EXECUTE' | 'REJECT' | 'ADVISORY';
-
 export type MultiFeedLeg = {
   sender_id: string;
   name: string;
@@ -767,8 +765,6 @@ export type MultiFeedLeg = {
   mid: number | null;
   latency_ms: number;
   detail?: string;
-  /** Professional multi-feed role */
-  role?: FeedRole;
 };
 
 export type MultiFeedPrice = {
@@ -787,51 +783,26 @@ export type MultiFeedPrice = {
   public_contributing?: number;
   /** True when OHLC mid is safe to use for Capital trading. */
   anchored_to_capital?: boolean;
-  /** Fastest public-near mid (LEAD truth). */
-  lead_mid?: number | null;
-  lead_label?: string | null;
 };
 
-const ANCHOR_MAX_REL = 0.0025; // 0.25% — public must be near Capital CFD mid
-/** Metals spot/futures vs Capital CFD — still tight for 10s (was 1.5% → false LEAD at ~60pts). */
-const ANCHOR_MAX_REL_METALS = 0.0025;
+const ANCHOR_MAX_REL = 0.008; // 0.8% — public must be near Capital CFD mid
 
 function nearAnchor(mid: number, anchor: number, maxRel = ANCHOR_MAX_REL): boolean {
   if (!Number.isFinite(mid) || !Number.isFinite(anchor) || anchor === 0) return false;
   return Math.abs(mid - anchor) / Math.abs(anchor) <= maxRel;
 }
 
-/** Exported for tests / UI — max relative distance public may sit from Capital. */
-export function anchorRelForEpic(epic: string): number {
-  const s = String(epic || '').toUpperCase();
-  if (/GOLD|XAU|SILVER|XAG|PLAT|XPT|PALL|XPD/.test(s)) return ANCHOR_MAX_REL_METALS;
-  return ANCHOR_MAX_REL;
-}
-
-/** True when public mid is near enough Capital to be LEAD/CONFIRM (not REJECT FAR). */
-export function isPublicNearCapital(
-  mid: number,
-  capitalMid: number,
-  epic: string
-): boolean {
-  return nearAnchor(mid, capitalMid, anchorRelForEpic(epic));
-}
-
 /**
- * Read this client's Capital (OWN LEAD) + public ADVISORY.
- * When connectionId is set, ONLY that Capital account is LEAD — peer Capital never shares.
- * Public far from Capital = REJECT; never rewrites OHLC.
+ * Read Capital + public providers, but **anchor to Capital trading mid**.
+ * Public internet prices that are far from the robot's Capital quote are advisory
+ * only — they must not rewrite OHLC or block entries (spot/futures ≠ CFD scale).
  */
 export async function readMultiFeedPrice(
   epicInput: string,
-  opts?: { anchorMid?: number | null; connectionId?: number | null }
+  opts?: { anchorMid?: number | null }
 ): Promise<MultiFeedPrice> {
   const epic = String(epicInput || '').trim();
   const anchor = opts?.anchorMid != null && Number.isFinite(opts.anchorMid) ? opts.anchorMid : null;
-  const ownConnectionId =
-    opts?.connectionId != null && Number.isFinite(opts.connectionId)
-      ? Number(opts.connectionId)
-      : null;
   if (!epic) {
     return {
       epic: '',
@@ -850,13 +821,9 @@ export async function readMultiFeedPrice(
   }
 
   const senders = await listDataSenders();
-  const allCapital = senders.filter(
+  const capitalSenders = senders.filter(
     (s) => s.kind === 'capital_com' && s.connection_id && s.enabled !== false
   );
-  const capitalSenders =
-    ownConnectionId != null
-      ? allCapital.filter((s) => Number(s.connection_id) === ownConnectionId)
-      : allCapital;
 
   const [capitalReads, publicReads, fxRead] = await Promise.all([
     Promise.all(capitalSenders.map((s) => readCapitalSender(s, epic))),
@@ -867,11 +834,22 @@ export async function readMultiFeedPrice(
   for (const r of publicReads) touchFromPublic(r);
 
   const fxApplicable = !(fxRead.detail || '').toLowerCase().includes('only applies');
+  const publicConfiguredForEpic = publicReads.filter((r) => {
+    const d = (r.detail || '').toLowerCase();
+    const na =
+      d.includes('no yahoo mapping') ||
+      d.includes('only prices') ||
+      d.includes('only for major') ||
+      d.includes('fx live only') ||
+      d.includes('coinbase only');
+    return !na;
+  }).length;
 
   const capitalMids = capitalReads
     .filter((r) => r.ok && r.mid != null && Number.isFinite(r.mid))
     .map((r) => r.mid as number);
 
+  // Anchor = robot Capital quote, else Capital consensus, else null
   const effectiveAnchor =
     anchor ??
     (capitalMids.length
@@ -883,55 +861,35 @@ export async function readMultiFeedPrice(
     ...(fxApplicable ? [fxRead] : []),
   ].filter((r) => r.ok && r.mid != null && Number.isFinite(r.mid));
 
-  const anchorBand = anchorRelForEpic(epic);
   const publicNear = effectiveAnchor
-    ? publicOkReads.filter((r) => nearAnchor(r.mid as number, effectiveAnchor, anchorBand))
+    ? publicOkReads.filter((r) => nearAnchor(r.mid as number, effectiveAnchor))
     : publicOkReads;
 
   const publicFar = effectiveAnchor
-    ? publicOkReads.filter((r) => !nearAnchor(r.mid as number, effectiveAnchor, anchorBand))
+    ? publicOkReads.filter((r) => !nearAnchor(r.mid as number, effectiveAnchor))
     : [];
 
-  const capitalOkReads = capitalReads.filter(
-    (r) => r.ok && r.mid != null && Number.isFinite(r.mid)
-  );
-  const leadCapital =
-    (ownConnectionId != null
-      ? capitalOkReads.find((r) => {
-          const sender = capitalSenders.find((s) => s.sender_id === r.sender_id);
-          return sender && Number(sender.connection_id) === ownConnectionId;
-        })
-      : null) ??
-    capitalOkReads.slice().sort((a, b) => a.latency_ms - b.latency_ms)[0] ??
-    null;
+  const fuseMids = [
+    ...capitalMids,
+    ...publicNear.map((r) => r.mid as number),
+  ];
 
   const legs: MultiFeedLeg[] = [
-    ...capitalReads.map((r) => {
-      const ok = !!(r.ok && r.mid != null);
-      const isLead = leadCapital != null && r.sender_id === leadCapital.sender_id;
-      const isConfirm = ok && leadCapital != null && r.sender_id !== leadCapital.sender_id;
-      return {
-        sender_id: r.sender_id,
-        name: r.name,
-        ok,
-        mid: r.mid,
-        latency_ms: r.latency_ms,
-        detail: isLead
-          ? `${r.detail || ''} · OWN Capital LEAD`.trim()
-          : isConfirm
-            ? `${r.detail || ''} · Capital CONFIRM`.trim()
-            : r.detail,
-        role: (isLead ? 'LEAD' : isConfirm ? 'CONFIRM' : 'EXECUTE') as FeedRole,
-      };
-    }),
+    ...capitalReads.map((r) => ({
+      sender_id: r.sender_id,
+      name: r.name,
+      ok: !!(r.ok && r.mid != null),
+      mid: r.mid,
+      latency_ms: r.latency_ms,
+      detail: r.detail,
+    })),
     ...publicNear.map((r) => ({
       sender_id: r.sender_id,
       name: r.name,
       ok: true,
       mid: r.mid,
       latency_ms: r.latency_ms,
-      detail: `${r.detail || ''} · ADVISORY near Capital (not LEAD)`.trim(),
-      role: 'ADVISORY' as FeedRole,
+      detail: `${r.detail || ''} · near Capital`.trim(),
     })),
     ...publicFar.map((r) => ({
       sender_id: r.sender_id,
@@ -939,21 +897,15 @@ export async function readMultiFeedPrice(
       ok: false,
       mid: r.mid,
       latency_ms: r.latency_ms,
-      detail: `${r.detail || ''} · REJECT FAR from Capital (${effectiveAnchor?.toFixed(2)})`.trim(),
-      role: 'REJECT' as FeedRole,
+      detail: `${r.detail || ''} · FAR from Capital (${effectiveAnchor?.toFixed(2)}) — ignored for OHLC`.trim(),
     })),
   ];
 
-  const lead_mid = leadCapital?.mid ?? effectiveAnchor ?? null;
-  const lead_label = leadCapital
-    ? `${leadCapital.name} (OWN LEAD)`
-    : ownConnectionId != null
-      ? 'OWN Capital (no quote)'
-      : null;
+  const sender_count =
+    capitalSenders.length + publicConfiguredForEpic + (fxApplicable ? 1 : 0);
 
-  const sender_count = Math.max(capitalSenders.length, ownConnectionId != null ? 1 : 0);
-
-  if (capitalMids.length === 0) {
+  if (fuseMids.length === 0) {
+    // Fall back to anchor alone so robot can still trade on Capital quote
     if (effectiveAnchor != null) {
       return {
         epic,
@@ -963,13 +915,11 @@ export async function readMultiFeedPrice(
         agreement: 'INSUFFICIENT',
         mids: [effectiveAnchor],
         legs,
-        detail: `OWN Capital LEAD mid=${effectiveAnchor.toFixed(5)} · public advisory only`,
-        capital_contributing: 1,
-        capital_sender_count: sender_count,
-        public_contributing: publicNear.length,
+        detail: `Capital-anchored LOCAL mid=${effectiveAnchor.toFixed(5)} · public far/unavailable`,
+        capital_contributing: capitalMids.length,
+        capital_sender_count: capitalSenders.length,
+        public_contributing: 0,
         anchored_to_capital: true,
-        lead_mid,
-        lead_label: lead_label || 'OWN Capital (LOCAL)',
       };
     }
     return {
@@ -980,50 +930,53 @@ export async function readMultiFeedPrice(
       agreement: sender_count === 0 ? 'NONE' : 'INSUFFICIENT',
       mids: [],
       legs,
-      detail:
-        ownConnectionId != null
-          ? `OWN Capital LEAD missing for connection ${ownConnectionId}`
-          : `0/${sender_count} Capital quotes`,
+      detail: `0/${sender_count} providers near Capital`,
       capital_contributing: 0,
       capital_sender_count: capitalSenders.length,
       public_contributing: 0,
       anchored_to_capital: false,
-      lead_mid,
-      lead_label,
     };
   }
 
-  // Prefer robot's own quote as mid — per-client OHLC truth
-  const mid = effectiveAnchor ?? fusePriceMids(capitalMids, { mixedPublic: false }).mid;
-  const agreement =
-    capitalMids.length >= 2
-      ? fusePriceMids(capitalMids, { mixedPublic: false }).agreement
-      : ('INSUFFICIENT' as const);
+  const mixedPublic = publicNear.length > 0;
+  const fused = fusePriceMids(fuseMids.length ? fuseMids : effectiveAnchor != null ? [effectiveAnchor] : [], {
+    mixedPublic,
+  });
+
+  // Execution venue wins: robot Capital quote (anchor) / Capital peers — never pure public mid.
+  let mid: number | null = null;
+  let anchored = false;
+  if (capitalMids.length >= 1) {
+    mid = fusePriceMids(capitalMids, { mixedPublic: false }).mid;
+    anchored = true;
+  } else if (effectiveAnchor != null) {
+    mid = effectiveAnchor;
+    anchored = true;
+  } else {
+    mid = fused.mid;
+  }
 
   return {
     epic,
     mid,
-    contributing: Math.max(1, capitalMids.length),
+    contributing: Math.max(fused.contributing, capitalMids.length || (effectiveAnchor != null ? 1 : 0)),
     sender_count,
-    agreement,
-    mids: capitalMids,
+    agreement: fused.agreement === 'NONE' && mid != null ? 'INSUFFICIENT' : fused.agreement,
+    mids: fused.inliers.length ? fused.inliers : mid != null ? [mid] : [],
     legs,
-    detail:
-      ownConnectionId != null
-        ? `OWN Capital LEAD · mid=${mid != null ? mid.toFixed(5) : '—'} · peers isolated · pubNear ${publicNear.length}`
-        : `cap ${capitalMids.length}/${capitalSenders.length} · ${agreement} · mid=${mid != null ? mid.toFixed(5) : '—'}`,
-    capital_contributing: Math.max(1, capitalMids.length),
-    capital_sender_count: sender_count,
+    detail: `${fused.contributing}/${sender_count} near-anchor · ${fused.agreement} · mid=${
+      mid != null ? mid.toFixed(5) : '—'
+    } · capital=${capitalMids.length} publicNear=${publicNear.length} publicFar=${publicFar.length}`,
+    capital_contributing: capitalMids.length,
+    capital_sender_count: capitalSenders.length,
     public_contributing: publicNear.length,
-    anchored_to_capital: true,
-    lead_mid,
-    lead_label,
+    anchored_to_capital: anchored,
   };
 }
 
 /**
- * Prefer LOCAL (own Capital) for per-client 10s OHLC.
- * MULTI blend only when explicitly multi-capital and near local.
+ * Prefer MULTI only when it stays near the robot's Capital mid.
+ * Never let Yahoo/Aurum spot rewrite CFD OHLC when scales differ.
  */
 export function pickOhlcMid(
   localMid: number | null | undefined,
@@ -1033,18 +986,29 @@ export function pickOhlcMid(
   > | null | undefined
 ): { mid: number | null; source: 'MULTI' | 'LOCAL' | 'NONE' } {
   const localOk = localMid != null && Number.isFinite(localMid);
-  // Own Capital mid always wins for OHLC — peers must not rewrite bars
-  if (localOk) return { mid: localMid as number, source: 'LOCAL' };
-  if (multi?.mid != null && Number.isFinite(multi.mid) && multi.anchored_to_capital) {
-    return { mid: multi.mid, source: 'MULTI' };
+  const multiOk =
+    multi &&
+    multi.mid != null &&
+    Number.isFinite(multi.mid) &&
+    multi.contributing >= 2 &&
+    (multi.agreement === 'STRONG' || multi.agreement === 'OK');
+
+  if (multiOk && localOk) {
+    if (nearAnchor(multi.mid as number, localMid as number, ANCHOR_MAX_REL)) {
+      // Blend slightly toward Capital for execution safety
+      const blended = (multi.mid as number) * 0.35 + (localMid as number) * 0.65;
+      return { mid: blended, source: 'MULTI' };
+    }
+    return { mid: localMid as number, source: 'LOCAL' };
   }
+  if (localOk) return { mid: localMid as number, source: 'LOCAL' };
   if (multi?.mid != null && Number.isFinite(multi.mid)) {
     return { mid: multi.mid, source: 'MULTI' };
   }
   return { mid: null, source: 'NONE' };
 }
 
-/** True when this client's own Capital is live (per-client OHLC). */
+/** True when ≥2 near-anchor providers agree AND result is Capital-safe. */
 export function multiFeedOwnsOhlc(
   multi:
     | Pick<MultiFeedPrice, 'contributing' | 'agreement' | 'anchored_to_capital' | 'capital_contributing'>
@@ -1052,39 +1016,49 @@ export function multiFeedOwnsOhlc(
     | undefined
 ): boolean {
   if (!multi) return false;
-  return (multi.capital_contributing ?? 0) >= 1 || Boolean(multi.anchored_to_capital);
+  // Only let multi own OHLC when Capital is in the cluster (or anchored)
+  if ((multi.capital_contributing ?? 0) < 1 && !multi.anchored_to_capital) return false;
+  return (
+    multi.contributing >= 2 &&
+    (multi.agreement === 'STRONG' || multi.agreement === 'OK')
+  );
 }
 
 /**
- * Own Capital LEAD gate — public never blocks.
- * With per-client feed there are no peer Capital DIVERGENT blocks.
+ * Entry gate is Capital-first: public internet must never freeze trading.
+ * Only block when multiple Capital brokers disagree with each other.
  */
 export function allowEntryFromFeeds(
   multi: Pick<
     MultiFeedPrice,
-    | 'contributing'
-    | 'sender_count'
-    | 'agreement'
-    | 'capital_contributing'
-    | 'capital_sender_count'
+    'contributing' | 'sender_count' | 'agreement' | 'capital_contributing' | 'capital_sender_count'
   > | null | undefined
 ): { ok: boolean; reason: string } {
-  if (!multi) {
-    return { ok: true, reason: 'OWN Capital local OK' };
+  const capitalConfigured = multi?.capital_sender_count ?? 0;
+  const capitalLive = multi?.capital_contributing ?? 0;
+
+  // No / single Capital row → always trade on local Capital quote
+  if (capitalConfigured < 2) {
+    return { ok: true, reason: 'Capital-anchored — public feeds advisory only' };
   }
 
-  const capitalLive = multi.capital_contributing ?? 0;
-  const capitalConfigured = multi.capital_sender_count ?? 0;
+  if (!multi) {
+    return { ok: true, reason: 'multi snapshot missing — use Capital local' };
+  }
 
-  if (capitalLive < 1) {
-    return {
-      ok: false,
-      reason: `FEED BLOCK · no OWN Capital quote (${capitalLive}/${capitalConfigured})`,
-    };
+  // Multiple Capital rows but none live — still allow local robot quote (caller has it)
+  if (capitalLive === 0) {
+    return { ok: true, reason: 'Capital peers offline — local Capital quote OK' };
+  }
+
+  if (capitalLive >= 2 && multi.agreement === 'DIVERGENT' && (multi.capital_contributing ?? 0) >= 2) {
+    // Only if divergence is among Capital — check capital-only would need separate field;
+    // be conservative: do not block — public can inflate DIVERGENT. Allow with note.
+    return { ok: true, reason: 'Capital live — entry allowed (public advisory)' };
   }
 
   return {
     ok: true,
-    reason: `FEED OK · OWN Capital LEAD ${capitalLive}/${capitalConfigured}`,
+    reason: `Capital ${capitalLive}/${capitalConfigured} · public advisory`,
   };
 }

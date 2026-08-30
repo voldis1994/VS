@@ -2,13 +2,12 @@ import { pool } from '../db/pool.js';
 import { decrypt } from '../security/encryption.js';
 import {
   acquireCapitalSession,
-  closeCapitalPosition,
   createCapitalPosition,
   listCapitalOpenPositions,
   fetchCapitalMarketQuote,
+  fetchCapitalMinutePrices,
   computeSafetyCushionStopLevel,
-  ensureCapitalStopVisible,
-  confirmCapitalDeal,
+  isLateMoveOnOneMinute,
 } from './capitalCom.js';
 import { emitToClient } from './clientEvents.js';
 import {
@@ -20,9 +19,6 @@ import {
 import { formatTradeLabel } from './tradePresentation.js';
 import { notePipelineRegime } from './regimes.js';
 import { attachManageOnlyRobot } from './robotDesk.js';
-import { allowEpicReentry } from './tradeCooldown.js';
-import { SAFETY_SL_PCT } from './microScalpThresholds.js';
-import { resolveEntryPrice } from './tradeRecovery.js';
 
 export { stopEntryRobotsForAccount } from './robotDesk.js';
 
@@ -282,214 +278,65 @@ async function executeForSubscription(
       }
     }
 
-    // (late-1m gate removed — never skip client fanout entries)
-
-    // Same anti-whipsaw as desk — profit 10s / loss 30s (stops 7×/min spam)
-    const epicGate = allowEpicReentry(sub.epic, direction);
-    if (!epicGate.ok) {
+    // Avoid chasing end of 1m move (10s scalp guided by Capital 1m OHLC)
+    const hist = await fetchCapitalMinutePrices(opened.session, sub.epic, 3);
+    if (hist.ok && isLateMoveOnOneMinute(direction, hist.candles)) {
+      noteBrokerOk(sub.client_id);
       return finish({
         client_id: sub.client_id,
         account_id: sub.account_id,
         lot_size: sub.lot_size,
         ok: false,
-        detail: epicGate.reason,
+        detail: 'Skip entry — late on 1m candle (end of move)',
         entry_price: null,
       });
     }
 
-    // SAFETY SL — Capital BID+ASK mid + Capital minStop only (never referencePrice invent)
+    // SAFETY SL cushion (~0.20%), not broker minimum
     const q = await fetchCapitalMarketQuote(opened.session, sub.epic);
     const mid =
-      q.bid != null &&
-      q.ask != null &&
-      Number.isFinite(q.bid) &&
-      Number.isFinite(q.ask) &&
-      q.bid > 0 &&
-      q.ask > 0
-        ? (q.bid + q.ask) / 2
-        : q.mid != null && Number.isFinite(q.mid)
-          ? q.mid
+      q.mid != null && Number.isFinite(q.mid)
+        ? q.mid
+        : referencePrice != null && Number.isFinite(referencePrice)
+          ? Number(referencePrice)
           : null;
-    if (mid == null || !Number.isFinite(mid)) {
-      noteBrokerError(sub.client_id, 'no Capital bid+ask mid for safety SL');
-      return finish({
-        client_id: sub.client_id,
-        account_id: sub.account_id,
-        lot_size: sub.lot_size,
-        ok: false,
-        detail: 'ENTRY blocked — Capital bid+ask MID UNKNOWN (naked open forbidden)',
-        entry_price: null,
+    let stopLevel: number | undefined;
+    if (mid != null) {
+      stopLevel = computeSafetyCushionStopLevel(direction, mid, {
+        bid: q.bid,
+        ask: q.ask,
+        spread: q.spread,
+        minStopDistance: q.min_stop_distance,
       });
     }
 
-    const minPts = q.min_stop_points;
-    const minPrice = q.min_stop_distance ?? null;
-    const unit = (q.min_stop_unit || 'POINTS').toUpperCase();
-    const useDistance = minPts != null && minPts > 0 && !unit.includes('PERCENT');
-    if ((minPts == null || minPts <= 0) && (minPrice == null || minPrice <= 0)) {
-      return finish({
-        client_id: sub.client_id,
-        account_id: sub.account_id,
-        lot_size: sub.lot_size,
-        ok: false,
-        detail: 'ENTRY BLOCKED — Capital minStop metadata UNKNOWN',
-        entry_price: null,
-      });
-    }
-    const loosenSteps = [1, 1.15, 1.35, 1.6, 2.0, 2.5, 3.0];
-    let usedStopDistance: number | null = null;
-    let stopLevel: number | null = null;
-    let result: Awaited<ReturnType<typeof createCapitalPosition>> | null = null;
-
-    if (useDistance) {
-      for (const loosen of loosenSteps) {
-        const abs = Math.max(Math.abs(mid), 1e-9);
-        const pct = abs * SAFETY_SL_PCT;
-        let fromPct = minPts! * 1.5;
-        if (q.point_size != null && q.point_size > 0) {
-          fromPct = Math.max(fromPct, pct / q.point_size);
-        }
-        const basePts = Math.max(minPts! * 1.5, fromPct, minPts! + 1e-9);
-        const distPts = Math.max(basePts * loosen, minPts! * Math.max(1.5, loosen));
-        const stopDistance =
-          distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
-        result = await createCapitalPosition(opened.session, {
-          epic: sub.epic,
-          direction,
-          size: sub.lot_size,
-          stopDistance,
-        });
-        if (result.ok) {
-          usedStopDistance = stopDistance;
-          const ps = q.point_size != null && q.point_size > 0 ? q.point_size : null;
-          if (ps != null) {
-            const ref =
-              direction === 'BUY'
-                ? q.bid != null && Number.isFinite(q.bid)
-                  ? q.bid
-                  : mid
-                : q.ask != null && Number.isFinite(q.ask)
-                  ? q.ask
-                  : mid;
-            stopLevel = direction === 'BUY' ? ref - stopDistance * ps : ref + stopDistance * ps;
-          }
-          break;
-        }
-        if (!/stop|distance|validation|reject|attached|level|minimum/i.test(result.detail)) break;
-      }
-    }
-
-    if (!result?.ok) {
-      for (const loosen of loosenSteps) {
-        const level = computeSafetyCushionStopLevel(direction, mid, {
-          bid: q.bid,
-          ask: q.ask,
-          spread: q.spread,
-          minStopDistance: minPrice,
-          pointSize: q.point_size,
-          tickSize: q.point_size,
-          loosen,
-        });
-        if (level == null) {
-          return finish({
-            client_id: sub.client_id,
-            account_id: sub.account_id,
-            lot_size: sub.lot_size,
-            ok: false,
-            detail: 'ENTRY BLOCKED — Safety SL UNKNOWN (Capital minStop/metadata)',
-            entry_price: null,
-          });
-        }
-        result = await createCapitalPosition(opened.session, {
-          epic: sub.epic,
-          direction,
-          size: sub.lot_size,
-          stopLevel: level,
-        });
-        if (result.ok) {
-          stopLevel = level;
-          break;
-        }
-        if (!/stop|distance|validation|reject|attached|level|minimum/i.test(result.detail)) break;
-      }
-    }
-
-    if (!result?.ok) {
-      const detail = result?.detail || 'Capital rejected every Safety SL';
-      noteBrokerError(sub.client_id, detail);
-      emitToClient(sub.client_id, { type: 'error', message: detail });
-      return finish({
-        client_id: sub.client_id,
-        account_id: sub.account_id,
-        lot_size: sub.lot_size,
-        ok: false,
-        detail: `ENTRY BLOCKED — no naked trade. ${detail}`,
-        entry_price: null,
-      });
-    }
-
-    // Confirm SL is physically on Capital.com — attach or close
-    const ensured = await ensureCapitalStopVisible(opened.session, sub.epic, {
-      dealId: null,
-      stopDistance: usedStopDistance,
-      stopLevel,
-      minPts: minPts ?? null,
+    const result = await createCapitalPosition(opened.session, {
+      epic: sub.epic,
+      direction,
+      size: sub.lot_size,
+      ...(stopLevel != null ? { stopLevel } : {}),
     });
-    if (!ensured.ok || ensured.stop_level == null) {
-      if (ensured.deal_id) {
-        await closeCapitalPosition(opened.session, ensured.deal_id);
-      }
-      const detail = `Capital.com shows NO SL — closed naked open · ${ensured.detail}`;
-      noteBrokerError(sub.client_id, detail);
-      emitToClient(sub.client_id, { type: 'error', message: detail });
+
+    if (!result.ok) {
+      noteBrokerError(sub.client_id, result.detail);
+      emitToClient(sub.client_id, {
+        type: 'error',
+        message: result.detail,
+      });
+      // NO trade_opened on failure
       return finish({
         client_id: sub.client_id,
         account_id: sub.account_id,
         lot_size: sub.lot_size,
         ok: false,
-        detail,
+        detail: result.detail,
         entry_price: null,
       });
     }
 
     noteBrokerOk(sub.client_id);
-
-    // Broker fill truth — never invent from referencePrice / signal mid
-    let confirmLevel: number | null = null;
-    let dealId: string | null = ensured.deal_id || null;
-    if (result.deal_reference) {
-      const conf = await confirmCapitalDeal(opened.session, result.deal_reference);
-      if (conf.ok) {
-        if (conf.deal_id) dealId = conf.deal_id;
-        if (conf.level != null) confirmLevel = conf.level;
-      }
-    }
-    let brokerLevel: number | null = null;
-    const listedAfter = await listCapitalOpenPositions(opened.session);
-    if (listedAfter.ok) {
-      const hit = listedAfter.positions.find(
-        (p) => p.epic.trim().toLowerCase() === sub.epic.trim().toLowerCase()
-      );
-      if (hit) {
-        dealId = hit.deal_id || dealId;
-        brokerLevel = hit.open_level;
-      }
-    }
-    const entry = resolveEntryPrice({
-      broker_open_level: brokerLevel,
-      confirm_level: confirmLevel,
-    });
-    if (entry == null) {
-      return finish({
-        client_id: sub.client_id,
-        account_id: sub.account_id,
-        lot_size: sub.lot_size,
-        ok: false,
-        detail: 'FILL UNKNOWN · waiting Capital open_level/confirm (signal mid not used)',
-        entry_price: null,
-      });
-    }
-    const safetySl = ensured.stop_level;
+    const entry =
+      referencePrice != null && Number.isFinite(referencePrice) ? Number(referencePrice) : null;
 
     // Persist execution/position best-effort
     try {
@@ -501,7 +348,7 @@ async function executeForSubscription(
           sub.account_id,
           sub.instrument_id,
           direction === 'BUY' ? 'LONG' : 'SHORT',
-          entry,
+          entry ?? 0,
           sub.lot_size,
         ]
       );
@@ -517,7 +364,6 @@ async function executeForSubscription(
       trade_type: formatTradeLabel(direction, setupType, regime),
       lot_size: sub.lot_size,
       entry_price: entry,
-      safety_sl: safetySl,
       account_id: sub.account_id,
       setup_type: setupType,
       regime,
@@ -535,7 +381,6 @@ async function executeForSubscription(
         deal_reference: result.deal_reference || null,
         regime,
         setup_type: setupType,
-        safety_sl: safetySl,
       });
     } catch {
       /* manage attach best-effort */
@@ -546,9 +391,7 @@ async function executeForSubscription(
       account_id: sub.account_id,
       lot_size: sub.lot_size,
       ok: true,
-      detail: `${result.detail} · Capital SL ${safetySl} VISIBLE${
-        dealId ? ` · dealId=${dealId}` : ''
-      }`,
+      detail: result.detail,
       entry_price: entry,
     });
   } catch (err) {

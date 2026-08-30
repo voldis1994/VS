@@ -1,13 +1,4 @@
 import { createPublicKey, publicEncrypt, constants } from 'crypto';
-import { SAFETY_SL_PCT } from './microScalpThresholds.js';
-import {
-  computeInstrumentSafetyStop,
-  computeSafetyCushionStopLevel as computeSafetyFromMeta,
-} from './safetyStop.js';
-import {
-  parseCapitalOpeningHours,
-  type CapitalOpeningHours,
-} from './tradingSessions.js';
 
 export type CapitalComEnv = 'demo' | 'live';
 
@@ -396,55 +387,6 @@ export async function listCapitalAccounts(
   return { ok: true, accounts, detail: `${accounts.length} accounts` };
 }
 
-/** Account equity/balance for 10min risk window (% of total sum). */
-export async function fetchCapitalAccountEquity(
-  session: CapitalSession
-): Promise<{ ok: boolean; equity: number | null; available: number | null; detail: string }> {
-  const res = await session.get('/api/v1/accounts');
-  if (!res.ok) {
-    return {
-      ok: false,
-      equity: null,
-      available: null,
-      detail: `accounts HTTP ${res.status}: ${res.json?.errorCode || res.json?.message || res.text.slice(0, 120)}`,
-    };
-  }
-  const raw = Array.isArray(res.json?.accounts) ? res.json.accounts : [];
-  const want = String(session.currentAccountId || '').trim();
-  const row =
-    (want && raw.find((a: any) => String(a.accountId || a.account_id || '').trim() === want)) ||
-    raw.find((a: any) => a.preferred) ||
-    raw[0];
-  if (!row) {
-    return { ok: false, equity: null, available: null, detail: 'no Capital accounts in response' };
-  }
-  const bal = row.balance || row.accountBalance || {};
-  const equity = numOrNull(
-    typeof bal === 'number'
-      ? bal
-      : (bal.balance ?? bal.equity ?? bal.amount ?? row.equity ?? row.balance?.balance)
-  );
-  const available = numOrNull(
-    typeof bal === 'object' && bal
-      ? (bal.available ?? bal.availableBalance ?? bal.deposit)
-      : null
-  );
-  if (equity == null || equity <= 0) {
-    return {
-      ok: false,
-      equity: null,
-      available,
-      detail: `no equity on account ${row.accountId || '?'}`,
-    };
-  }
-  return {
-    ok: true,
-    equity,
-    available,
-    detail: `equity=${equity}${available != null ? ` available=${available}` : ''}`,
-  };
-}
-
 export async function switchCapitalAccount(
   session: CapitalSession,
   capitalAccountId: string
@@ -621,34 +563,31 @@ export interface CapitalMarketQuote {
   point_size?: number | null;
   /** Minimum stop distance in PRICE units */
   min_stop_distance?: number | null;
-  /** Capital instrument.openingHours when present on markets/{epic} */
-  opening_hours_raw?: unknown;
-  instrument_timezone?: string | null;
 }
 
-/**
- * Capital point/tick size from instrument metadata ONLY.
- * Never invent from price magnitude. Missing → null (BLOCK).
- */
-export function extractCapitalPointSize(json: any): number | null {
+function inferPointSize(json: any, mid: number | null): number {
   const snap = (json?.snapshot || json?.marketSnapshot || {}) as Record<string, unknown>;
-  const instrument = (json?.instrument || {}) as Record<string, unknown>;
   const rules = (json?.dealingRules || json?.dealing_rules || {}) as Record<string, any>;
   const decimalPlaces =
-    numOrNull(snap.decimalPlacesFactor) ?? numOrNull(instrument.decimalPlacesFactor);
-  const scalingRaw = numOrNull(snap.scalingFactor) ?? numOrNull(instrument.scalingFactor);
-  // Capital omits scalingFactor → treat as 1 only when decimalPlacesFactor is present (Capital wire)
+    numOrNull(snap.decimalPlacesFactor) ??
+    numOrNull((json?.instrument as any)?.decimalPlacesFactor);
+  const scaling = numOrNull(snap.scalingFactor) ?? 1;
   if (decimalPlaces != null && decimalPlaces >= 0 && decimalPlaces <= 8) {
-    const scaling = scalingRaw != null && scalingRaw > 0 ? scalingRaw : 1;
-    return Math.pow(10, -decimalPlaces) * scaling;
+    return Math.pow(10, -decimalPlaces) * (scaling > 0 ? scaling : 1);
   }
   const stepRaw = rules.minStepDistance;
   const stepVal = numOrNull(stepRaw?.value ?? stepRaw);
   const stepUnit = String(stepRaw?.unit || '').toUpperCase();
   if (stepVal != null && stepVal > 0 && !stepUnit.includes('PERCENT')) {
+    // When Capital quotes minStep in POINTS, value is often already the price increment
     return stepVal;
   }
-  return null;
+  const m = mid != null && Number.isFinite(mid) ? Math.abs(mid) : 1;
+  if (m >= 1000) return 0.1;
+  if (m >= 100) return 0.1;
+  if (m >= 10) return 0.01;
+  if (m >= 1) return 0.0001;
+  return 0.00001;
 }
 
 function parseStopRules(
@@ -657,7 +596,7 @@ function parseStopRules(
 ): {
   min_stop_points: number | null;
   min_stop_unit: string | null;
-  point_size: number | null;
+  point_size: number;
   min_stop_distance: number | null;
 } {
   const rules = (json?.dealingRules || json?.dealing_rules || {}) as Record<string, any>;
@@ -668,7 +607,7 @@ function parseStopRules(
     rules.minControlledRiskStopDistance;
   const pts = numOrNull(raw?.value ?? raw);
   const unit = String(raw?.unit || 'POINTS').toUpperCase();
-  const pointSize = extractCapitalPointSize(json);
+  const pointSize = inferPointSize(json, mid);
   if (pts == null || pts <= 0) {
     return {
       min_stop_points: null,
@@ -678,31 +617,15 @@ function parseStopRules(
     };
   }
   if (unit.includes('PERCENT')) {
-    // Convert Capital % min-stop using Capital bid+ask mid only
-    if (mid == null || !Number.isFinite(mid) || mid <= 0) {
-      return {
-        min_stop_points: pts,
-        min_stop_unit: unit,
-        point_size: pointSize,
-        min_stop_distance: null,
-      };
-    }
+    const m = mid != null && Number.isFinite(mid) ? Math.abs(mid) : 1;
     return {
       min_stop_points: pts,
       min_stop_unit: unit,
       point_size: pointSize,
-      min_stop_distance: (Math.abs(mid) * pts) / 100,
+      min_stop_distance: (m * pts) / 100,
     };
   }
-  // POINTS → price only when Capital point_size known
-  if (pointSize == null || pointSize <= 0) {
-    return {
-      min_stop_points: pts,
-      min_stop_unit: unit,
-      point_size: null,
-      min_stop_distance: null,
-    };
-  }
+  // POINTS → price via instrument point size
   return {
     min_stop_points: pts,
     min_stop_unit: unit,
@@ -756,27 +679,13 @@ export async function fetchCapitalMarketQuote(
     }
 
     const snap = (res.json?.snapshot || res.json?.marketSnapshot || {}) as Record<string, unknown>;
-    const instrument = (res.json?.instrument || {}) as Record<string, unknown>;
     const bid = numOrNull(snap.bid ?? snap.bidPrice);
     const ask = numOrNull(snap.offer ?? snap.ask ?? snap.offerPrice);
-    // LIVE analysis MID = Capital BID+ASK only — never lastTraded / one-sided invent
-    const mid =
-      bid != null && ask != null && bid > 0 && ask > 0 ? (bid + ask) / 2 : null;
+    let mid: number | null = null;
+    if (bid != null && ask != null) mid = (bid + ask) / 2;
+    else mid = numOrNull(snap.mid ?? snap.lastTraded);
     const spread = bid != null && ask != null ? ask - bid : null;
     const stops = parseStopRules(res.json, mid);
-    const openingHoursRaw = instrument.openingHours ?? instrument.opening_hours ?? null;
-    const hoursObj =
-      openingHoursRaw && typeof openingHoursRaw === 'object'
-        ? (openingHoursRaw as Record<string, unknown>)
-        : null;
-    // Capital timezone lives in openingHours.zone (official API sample)
-    const tz =
-      strOrNull(hoursObj?.zone) ||
-      strOrNull(hoursObj?.Zone) ||
-      strOrNull(instrument.timeZone) ||
-      strOrNull(instrument.timezone) ||
-      strOrNull(instrument.timeZoneId) ||
-      null;
 
     return {
       epic: candidate,
@@ -784,22 +693,17 @@ export async function fetchCapitalMarketQuote(
       ask,
       mid,
       spread,
-      market_status: strOrNull(snap.marketStatus ?? instrument.marketStatus),
+      market_status: strOrNull(snap.marketStatus ?? res.json?.instrument?.marketStatus),
       update_time: strOrNull(snap.updateTime ?? snap.updateTimeUTC ?? snap.binaryUpdateTime),
       percentage_change: numOrNull(snap.percentageChange),
       high: numOrNull(snap.high),
       low: numOrNull(snap.low),
-      raw_ok: bid != null || ask != null,
+      raw_ok: bid != null || ask != null || mid != null,
       min_stop_points: stops.min_stop_points,
       min_stop_unit: stops.min_stop_unit,
       point_size: stops.point_size,
       min_stop_distance: stops.min_stop_distance,
-      opening_hours_raw: openingHoursRaw,
-      instrument_timezone: tz,
-      detail:
-        bid == null || ask == null
-          ? 'Capital bid+ask incomplete · analysis MID UNKNOWN'
-          : undefined,
+      detail: bid == null && ask == null ? 'Snapshot returned without bid/offer' : undefined,
     };
   };
 
@@ -816,40 +720,6 @@ export async function fetchCapitalMarketQuote(
     }
   }
   return quote;
-}
-
-/**
- * Fetch Capital instrument opening/trading hours for gap classification.
- * Never invent from epic/category — missing hours → caller treats gaps as UNKNOWN.
- */
-export async function fetchCapitalOpeningHours(
-  session: CapitalSession,
-  epic: string
-): Promise<{
-  ok: boolean;
-  hours: CapitalOpeningHours | null;
-  detail: string;
-}> {
-  const quote = await fetchCapitalMarketQuote(session, epic);
-  if (!quote.raw_ok && quote.opening_hours_raw == null) {
-    return {
-      ok: false,
-      hours: null,
-      detail: `Capital opening hours UNKNOWN · ${quote.detail || 'market fetch failed'}`,
-    };
-  }
-  // Prefer zone embedded in openingHours; opts timezone is fallback
-  const hours = parseCapitalOpeningHours(quote.opening_hours_raw, {
-    timezone: quote.instrument_timezone,
-  });
-  if (!hours) {
-    return {
-      ok: true,
-      hours: null,
-      detail: 'Capital markets OK but openingHours/zone missing/unparseable · gaps=UNKNOWN',
-    };
-  }
-  return { ok: true, hours, detail: hours.detail };
 }
 
 /** Search Capital.com markets API for an epic/name (e.g. gold → GOLD). */
@@ -932,18 +802,11 @@ export async function listCapitalOpenPositions(
   return { ok: true, positions, detail: `${positions.length} open` };
 }
 
-/** Resolve dealReference → dealId (+ fill level + profit when Capital returns it). */
+/** Resolve dealReference → dealId after open. */
 export async function confirmCapitalDeal(
   session: CapitalSession,
   dealReference: string
-): Promise<{
-  ok: boolean;
-  deal_id?: string;
-  level?: number | null;
-  /** Broker-confirmed realized profit in account currency when present */
-  profit?: number | null;
-  detail: string;
-}> {
+): Promise<{ ok: boolean; deal_id?: string; detail: string }> {
   const ref = dealReference.trim();
   if (!ref) return { ok: false, detail: 'Empty dealReference' };
   const res = await session.get(`/api/v1/confirms/${encodeURIComponent(ref)}`);
@@ -959,52 +822,7 @@ export async function confirmCapitalDeal(
   if (!dealId) {
     return { ok: false, detail: `Confirm OK but no dealId for ${ref}` };
   }
-  const rawLevel =
-    res.json?.level ??
-    res.json?.affectedDeals?.[0]?.level ??
-    res.json?.affectedDeals?.[0]?.price ??
-    null;
-  const level =
-    rawLevel != null && Number.isFinite(Number(rawLevel)) ? Number(rawLevel) : null;
-
-  const rawProfit =
-    res.json?.profit ??
-    res.json?.profitAndLoss ??
-    res.json?.realizedProfit ??
-    res.json?.affectedDeals?.[0]?.profit ??
-    res.json?.affectedDeals?.[0]?.profitAndLoss ??
-    null;
-  const profit =
-    rawProfit != null && Number.isFinite(Number(rawProfit)) ? Number(rawProfit) : null;
-
-  return {
-    ok: true,
-    deal_id: dealId,
-    level,
-    profit,
-    detail:
-      level != null
-        ? `Confirmed dealId=${dealId} level=${level}${profit != null ? ` profit=${profit}` : ''}`
-        : `Confirmed dealId=${dealId}${profit != null ? ` profit=${profit}` : ''}`,
-  };
-}
-
-/**
- * Fetch broker-confirmed realized PnL for a close dealReference.
- * Returns null when Capital does not expose profit — caller must NOT invent.
- */
-export async function fetchCapitalConfirmedProfit(
-  session: CapitalSession,
-  dealReference: string | null | undefined
-): Promise<{ ok: boolean; profit: number | null; detail: string }> {
-  const ref = String(dealReference || '').trim();
-  if (!ref) return { ok: false, profit: null, detail: 'no dealReference for profit' };
-  const conf = await confirmCapitalDeal(session, ref);
-  if (!conf.ok) return { ok: false, profit: null, detail: conf.detail };
-  if (conf.profit == null || !Number.isFinite(conf.profit)) {
-    return { ok: true, profit: null, detail: 'confirm OK but realized profit UNKNOWN' };
-  }
-  return { ok: true, profit: conf.profit, detail: conf.detail };
+  return { ok: true, deal_id: dealId, detail: `Confirmed dealId=${dealId}` };
 }
 
 /** Close one open position by dealId. */
@@ -1045,7 +863,7 @@ export async function createCapitalPosition(
     size: number;
     /** Absolute price stop (Capital stopLevel) */
     stopLevel?: number;
-    /** Distance in Capital POINTS — preferred for min legal SL */
+    /** Distance in Capital POINTS — preferred for tightest legal SL */
     stopDistance?: number;
     profitLevel?: number;
   }
@@ -1090,7 +908,7 @@ export async function createCapitalPosition(
       ? ` stopDist=${input.stopDistance}`
       : input.stopLevel != null && Number.isFinite(input.stopLevel)
         ? ` stop=${input.stopLevel}`
-        : ' NO_SL';
+        : '';
   return {
     ok: true,
     status: res.status,
@@ -1102,149 +920,7 @@ export async function createCapitalPosition(
   };
 }
 
-/**
- * Attach / update stop on an OPEN Capital position so SL is visible in the Capital.com app.
- * PUT /api/v1/positions/{dealId} — only one of stopLevel / stopDistance.
- */
-export async function updateCapitalPositionStop(
-  session: CapitalSession,
-  dealId: string,
-  input: { stopLevel?: number; stopDistance?: number }
-): Promise<{ ok: boolean; detail: string; status: number; json: any }> {
-  const id = dealId.trim();
-  if (!id) {
-    return { ok: false, status: 0, json: {}, detail: 'dealId required to attach SL' };
-  }
-  const body: Record<string, unknown> = {};
-  if (input.stopDistance != null && Number.isFinite(input.stopDistance) && input.stopDistance > 0) {
-    body.stopDistance = input.stopDistance;
-  } else if (input.stopLevel != null && Number.isFinite(input.stopLevel)) {
-    body.stopLevel = input.stopLevel;
-  } else {
-    return { ok: false, status: 0, json: {}, detail: 'stopLevel or stopDistance required' };
-  }
-  const res = await session.put(`/api/v1/positions/${encodeURIComponent(id)}`, body);
-  if (!res.ok) {
-    return {
-      ok: false,
-      status: res.status,
-      json: res.json,
-      detail: `Capital.com attach SL ${id} failed HTTP ${res.status}: ${
-        res.json?.errorCode || res.json?.message || res.text.slice(0, 240)
-      }`,
-    };
-  }
-  const note =
-    body.stopDistance != null
-      ? `stopDistance=${body.stopDistance}`
-      : `stopLevel=${body.stopLevel}`;
-  return {
-    ok: true,
-    status: res.status,
-    json: res.json,
-    detail: `SL attached on Capital dealId=${id} · ${note}`,
-  };
-}
-
-/** Read stop_level from open positions for epic (null if missing / not visible yet). */
-export async function readCapitalStopOnEpic(
-  session: CapitalSession,
-  epic: string
-): Promise<{ ok: boolean; stop_level: number | null; deal_id: string | null; detail: string }> {
-  const listed = await listCapitalOpenPositions(session);
-  if (!listed.ok) {
-    return { ok: false, stop_level: null, deal_id: null, detail: listed.detail };
-  }
-  const want = epic.trim().toUpperCase();
-  const pos =
-    listed.positions.find((p) => p.epic.toUpperCase() === want) ||
-    listed.positions.find((p) => p.epic.toUpperCase().includes(want) || want.includes(p.epic.toUpperCase()));
-  if (!pos) {
-    return { ok: false, stop_level: null, deal_id: null, detail: `no open position for ${epic}` };
-  }
-  return {
-    ok: true,
-    stop_level: pos.stop_level,
-    deal_id: pos.deal_id,
-    detail:
-      pos.stop_level != null
-        ? `Capital SL visible stopLevel=${pos.stop_level}`
-        : `Capital position ${pos.deal_id} has NO stopLevel yet`,
-  };
-}
-
-/**
- * Ensure stop is physically visible on Capital.com (read → PUT attach → re-read).
- * Caller must close the position if ok=false (never leave naked).
- */
-export async function ensureCapitalStopVisible(
-  session: CapitalSession,
-  epic: string,
-  opts: {
-    dealId?: string | null;
-    stopDistance?: number | null;
-    stopLevel?: number | null;
-    minPts?: number | null;
-    attempts?: number;
-  }
-): Promise<{ ok: boolean; stop_level: number | null; deal_id: string | null; detail: string }> {
-  const attempts = Math.max(1, opts.attempts ?? 4);
-  let dealId = opts.dealId?.trim() || null;
-  let lastDetail = 'Capital SL not verified';
-
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    if (attempt > 0) await new Promise((r) => setTimeout(r, 350));
-    const seen = await readCapitalStopOnEpic(session, epic);
-    if (seen.deal_id) dealId = seen.deal_id;
-    lastDetail = seen.detail;
-    if (seen.ok && seen.stop_level != null && Number.isFinite(seen.stop_level)) {
-      return {
-        ok: true,
-        stop_level: seen.stop_level,
-        deal_id: dealId,
-        detail: seen.detail,
-      };
-    }
-    if (!dealId) continue;
-
-    let up: Awaited<ReturnType<typeof updateCapitalPositionStop>>;
-    if (opts.stopDistance != null && opts.stopDistance > 0) {
-      up = await updateCapitalPositionStop(session, dealId, {
-        stopDistance: opts.stopDistance,
-      });
-    } else if (opts.stopLevel != null && Number.isFinite(opts.stopLevel)) {
-      up = await updateCapitalPositionStop(session, dealId, { stopLevel: opts.stopLevel });
-    } else if (opts.minPts != null && opts.minPts > 0) {
-      up = await updateCapitalPositionStop(session, dealId, {
-        stopDistance: Math.max(opts.minPts * 2, opts.minPts + 1),
-      });
-    } else {
-      lastDetail = 'no stopDistance/stopLevel to attach';
-      continue;
-    }
-    lastDetail = up.ok ? up.detail : `SL attach: ${up.detail}`;
-  }
-
-  await new Promise((r) => setTimeout(r, 400));
-  const again = await readCapitalStopOnEpic(session, epic);
-  if (again.deal_id) dealId = again.deal_id;
-  if (again.ok && again.stop_level != null && Number.isFinite(again.stop_level)) {
-    return {
-      ok: true,
-      stop_level: again.stop_level,
-      deal_id: dealId,
-      detail: again.detail,
-    };
-  }
-  return {
-    ok: false,
-    stop_level: null,
-    deal_id: dealId,
-    detail: `Capital.com shows NO SL — ${again.detail || lastDetail}`,
-  };
-}
-
-/** Instrument-aware Safety SL — delegates to safetyStop (#33/#34). null = UNKNOWN BLOCK. */
+/** ~0.20% cushion stopLevel (≥2.5× broker min) — safety pillow, not min legal SL. */
 export function computeSafetyCushionStopLevel(
   direction: 'BUY' | 'SELL',
   mid: number,
@@ -1253,18 +929,35 @@ export function computeSafetyCushionStopLevel(
     ask?: number | null;
     spread?: number | null;
     minStopDistance?: number | null;
-    pointSize?: number | null;
-    tickSize?: number | null;
-    loosen?: number;
   }
-): number | null {
-  return computeSafetyFromMeta(direction, mid, opts?.bid ?? null, opts?.ask ?? null, {
-    spread: opts?.spread,
-    minStopDistance: opts?.minStopDistance,
-    pointSize: opts?.pointSize,
-    tickSize: opts?.tickSize,
-    loosen: opts?.loosen,
-  });
+): number {
+  const bid = opts?.bid ?? null;
+  const ask = opts?.ask ?? null;
+  const ref =
+    direction === 'BUY'
+      ? bid != null && Number.isFinite(bid)
+        ? bid
+        : mid
+      : ask != null && Number.isFinite(ask)
+        ? ask
+        : mid;
+  const abs = Math.max(Math.abs(ref), 1e-9);
+  const spr =
+    opts?.spread != null && opts.spread > 0
+      ? opts.spread
+      : bid != null && ask != null
+        ? Math.max(ask - bid, 0)
+        : abs * 0.00005;
+  const brokerMin =
+    opts?.minStopDistance != null && opts.minStopDistance > 0 ? opts.minStopDistance : 0;
+  const pctCushion = abs * 0.002; // 0.20% (was 0.25%)
+  const floor = abs >= 1000 ? 0.5 : abs >= 100 ? 0.25 : abs >= 10 ? 0.05 : 0.0005;
+  const dist = Math.max(pctCushion, brokerMin * 2.5, spr * 8, floor);
+  const raw = direction === 'BUY' ? ref - dist : ref + dist;
+  if (abs >= 1000) return Math.round(raw * 10) / 10;
+  if (abs >= 100) return Math.round(raw * 100) / 100;
+  if (abs >= 1) return Math.round(raw * 10000) / 10000;
+  return Math.round(raw * 1e6) / 1e6;
 }
 
 export type CapitalPriceCandle = {
@@ -1272,71 +965,20 @@ export type CapitalPriceCandle = {
   high: number;
   low: number;
   close: number;
-  /** Market/source open time when Capital provides it */
-  open_time_ms: number | null;
-  snapshot_time_ms?: number | null;
 };
 
-export type CapitalPriceResolution =
-  | 'SECOND'
-  | 'MINUTE'
-  | 'MINUTE_5'
-  | 'MINUTE_15'
-  | 'MINUTE_30'
-  | 'HOUR'
-  | 'HOUR_4'
-  | 'DAY'
-  | 'WEEK';
-
-const RESOLUTION_STEP_MS: Record<string, number> = {
-  SECOND: 1000,
-  MINUTE: 60_000,
-  MINUTE_5: 300_000,
-  MINUTE_15: 900_000,
-  MINUTE_30: 1_800_000,
-  HOUR: 3_600_000,
-  HOUR_4: 14_400_000,
-  DAY: 86_400_000,
-  WEEK: 604_800_000,
-};
-
-function parsePriceTimeMs(p: any): number | null {
-  const raw =
-    p.snapshotTime ??
-    p.snapshotTimeUTC ??
-    p.timestamp ??
-    p.openTime ??
-    p.time ??
-    p.t ??
-    null;
-  if (typeof raw === 'number' && Number.isFinite(raw)) {
-    return raw > 1e12 ? raw : raw * 1000;
-  }
-  if (typeof raw === 'string' && raw.trim()) {
-    const t = Date.parse(raw);
-    if (Number.isFinite(t)) return t;
-  }
-  return null;
-}
-
-/** Capital OHLC — native resolutions. NEVER invent timestamps. */
+/** Capital OHLC — SECOND for 10s bars, MINUTE for chase filter. */
 export async function fetchCapitalPrices(
   session: CapitalSession,
   epic: string,
-  resolution: CapitalPriceResolution = 'MINUTE',
+  resolution: 'SECOND' | 'MINUTE' = 'MINUTE',
   max = 5
-): Promise<{
-  ok: boolean;
-  candles: CapitalPriceCandle[];
-  detail: string;
-  rejected_no_timestamp: number;
-}> {
+): Promise<{ ok: boolean; candles: CapitalPriceCandle[]; detail: string }> {
   const encoded = encodeURIComponent(epic.trim());
-  const hardCap = resolution === 'SECOND' ? 100 : 1000;
-  const want = Math.min(Math.max(max, 1), hardCap);
+  const cap = resolution === 'SECOND' ? 50 : 20;
   const q = new URLSearchParams({
     resolution,
-    max: String(want),
+    max: String(Math.min(Math.max(max, 1), cap)),
   });
   let res = await session.get(`/api/v1/prices/${encoded}?${q.toString()}`);
   if (!res.ok) {
@@ -1345,88 +987,20 @@ export async function fetchCapitalPrices(
   }
   if (!res.ok) {
     res = await session.get(
-      `/api/v1/history/prices?epic=${encoded}&resolution=${resolution}&max=${want}`
+      `/api/v1/history/prices?epic=${encoded}&resolution=${resolution}&max=${Math.min(Math.max(max, 1), cap)}`
     );
   }
-  if (!res.ok) {
-    return {
-      ok: false,
-      candles: [],
-      detail: `Capital prices ${resolution} HTTP ${res.status}: ${
-        res.json?.errorCode || res.json?.message || res.text.slice(0, 120)
-      }`,
-      rejected_no_timestamp: 0,
-    };
-  }
   const prices = (res.json?.prices || res.json?.candles || []) as any[];
-  const step = RESOLUTION_STEP_MS[resolution] ?? 60_000;
-  const nowMs = Date.now();
   const candles: CapitalPriceCandle[] = [];
-  let rejected_no_timestamp = 0;
-  let rejected_future = 0;
-
-  for (let i = 0; i < prices.length; i++) {
-    const p = prices[i]!;
-    const oBid = numOrNull(p.openPrice?.bid);
-    const oAsk = numOrNull(p.openPrice?.ask);
-    const hBid = numOrNull(p.highPrice?.bid);
-    const hAsk = numOrNull(p.highPrice?.ask);
-    const lBid = numOrNull(p.lowPrice?.bid);
-    const lAsk = numOrNull(p.lowPrice?.ask);
-    const cBid = numOrNull(p.closePrice?.bid);
-    const cAsk = numOrNull(p.closePrice?.ask);
-
-    const open = midOfPair(oBid, oAsk);
-    const high = midOfPair(hBid, hAsk);
-    const low = midOfPair(lBid, lAsk);
-    const close = midOfPair(cBid, cAsk);
-    // Require true MID from BOTH bid+ask on every OHLC leg — no one-sided invent (#2)
+  for (const p of prices) {
+    const open = numOrNull(p.openPrice?.bid ?? p.openPrice?.ask ?? p.open ?? p.o);
+    const high = numOrNull(p.highPrice?.bid ?? p.highPrice?.ask ?? p.high ?? p.h);
+    const low = numOrNull(p.lowPrice?.bid ?? p.lowPrice?.ask ?? p.low ?? p.l);
+    const close = numOrNull(p.closePrice?.bid ?? p.closePrice?.ask ?? p.close ?? p.c);
     if (open == null || high == null || low == null || close == null) continue;
-
-    const rawTs = parsePriceTimeMs(p);
-    if (rawTs == null) {
-      rejected_no_timestamp += 1;
-      continue; // CRITICAL UNKNOWN — never invent
-    }
-    if (rawTs > nowMs + 5_000) {
-      rejected_future += 1;
-      continue;
-    }
-    const open_time_ms = Math.floor(rawTs / step) * step;
-    candles.push({
-      open,
-      high,
-      low,
-      close,
-      open_time_ms,
-      snapshot_time_ms: rawTs,
-    });
+    candles.push({ open, high, low, close });
   }
-
-  const detailParts = [`${candles.length} ${resolution} candles`];
-  if (rejected_no_timestamp) detailParts.push(`rejected_no_ts=${rejected_no_timestamp}`);
-  if (rejected_future) detailParts.push(`rejected_future=${rejected_future}`);
-
-  return {
-    ok: candles.length > 0,
-    candles,
-    detail: detailParts.join(' · '),
-    rejected_no_timestamp,
-  };
-}
-
-function midOfPair(bid: number | null, ask: number | null): number | null {
-  if (
-    bid != null &&
-    ask != null &&
-    Number.isFinite(bid) &&
-    Number.isFinite(ask) &&
-    bid > 0 &&
-    ask > 0
-  ) {
-    return (bid + ask) / 2;
-  }
-  return null;
+  return { ok: candles.length > 0, candles, detail: `${candles.length} ${resolution} candles` };
 }
 
 export async function fetchCapitalMinutePrices(
@@ -1438,31 +1012,21 @@ export async function fetchCapitalMinutePrices(
 }
 
 /**
- * True if latest closed ~5m move already ran hard in trade direction.
- * Relative threshold only (no Gold points).
+ * True if the latest 1m candle already moved hard in trade direction (~end of move).
+ * Threshold ~0.12% of price — block chase entries.
  */
-export function isLateMoveOnFiveMinute(
-  direction: 'BUY' | 'SELL',
-  candles: CapitalPriceCandle[]
-): boolean {
-  if (candles.length < 3) return false;
-  const window = candles.slice(-5);
-  const first = window[0]!;
-  const last = window[window.length - 1]!;
-  const mid = Math.max(Math.abs(first.open), 1e-9);
-  const move = last.close - first.open;
-  const thr = Math.max(mid * 0.003, mid * 0.0001);
-  if (direction === 'BUY' && move >= thr) return true;
-  if (direction === 'SELL' && move <= -thr) return true;
-  return false;
-}
-
-/** @deprecated — prefer isLateMoveOnFiveMinute for 5m brain */
 export function isLateMoveOnOneMinute(
   direction: 'BUY' | 'SELL',
   candles: CapitalPriceCandle[]
 ): boolean {
-  return isLateMoveOnFiveMinute(direction, candles);
+  if (!candles.length) return false;
+  const last = candles[candles.length - 1]!;
+  const mid = Math.max(Math.abs(last.open), 1e-9);
+  const move = last.close - last.open;
+  const thr = Math.max(mid * 0.0012, 0.05);
+  if (direction === 'BUY' && move >= thr) return true;
+  if (direction === 'SELL' && move <= -thr) return true;
+  return false;
 }
 
 function numOrNull(v: unknown): number | null {

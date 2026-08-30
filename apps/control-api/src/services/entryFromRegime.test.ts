@@ -1,71 +1,66 @@
 import { describe, expect, it } from 'vitest';
-import {
-  continuationSameSide,
-  decideEntryFrom10sRegime,
-  explainNoEntry,
-  tapeSide,
-} from './entryFromRegime.js';
+import { decideEntryFrom10sRegime } from './entryFromRegime.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 
-function bar(open: number, close: number, i = 0, w = 1.5): TenSecBar {
-  const high = Math.max(open, close) + w;
-  const low = Math.min(open, close) - w;
-  return { open_time_ms: i * 10_000, open, high, low, close, ticks: 8 };
+function bar(open: number, close: number): TenSecBar {
+  const high = Math.max(open, close) + 0.8;
+  const low = Math.min(open, close) - 0.4;
+  return { open_time_ms: 0, open, high, low, close, ticks: 12 };
 }
 
-function baseBars(): TenSecBar[] {
-  const out: TenSecBar[] = [];
-  for (let i = 0; i < 40; i++) {
-    const mid = 4500 + ((i % 4) - 1.5) * 0.05; // tight chop ±0.075
-    out.push(bar(mid, mid + 0.02, i, 0.15));
-  }
-  return out;
-}
+const dip = bar(2000, 1996); // ~0.2% down — moving
+const rally = bar(2000, 2004);
 
-describe('10s multi-TF entry — no WAIT', () => {
-  it('skips flat chop', () => {
-    const bars = baseBars();
-    const sigBar = bar(4500.02, 4500.03, 40, 0.1);
-    expect(tapeSide(bars, sigBar).dir).toBeNull();
-    expect(decideEntryFrom10sRegime(sigBar, 'TRANSITION', bars)).toBeNull();
+describe('10s + 14-regime suitable entry', () => {
+  it('waits in UNKNOWN / COMPRESSION / TRANSITION', () => {
+    expect(decideEntryFrom10sRegime(dip, 'UNKNOWN')).toBeNull();
+    expect(decideEntryFrom10sRegime(dip, 'COMPRESSION')).toBeNull();
+    expect(decideEntryFrom10sRegime(rally, 'TRANSITION')).toBeNull();
   });
 
-  it('explainNoEntry never shows threshold UNKNOWN', () => {
-    const bars = baseBars();
-    const quiet = bar(4500.5, 4500.55, 12, 0.2);
-    const msg = explainNoEntry(quiet, 'RANGE', bars, {
-      analysis_price: 4500.55,
-      bars1m: [],
-      tape_dir: 'BUY',
-    });
-    expect(msg).not.toMatch(/UNKNOWN/i);
-    expect(msg).toMatch(/1m MOVE|1m displacement/i);
+  it('TREND_UP only dip-buys — never sells the rally', () => {
+    expect(decideEntryFrom10sRegime(dip, 'TREND_UP')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(dip, 'TREND_UP')?.setup).toBe('PULLBACK');
+    expect(decideEntryFrom10sRegime(rally, 'TREND_UP')).toBeNull();
   });
 
-  it('explainNoEntry is SCAN not WAIT', () => {
-    const bars = baseBars();
-    const quiet = bar(4500.5, 4500.55, 12, 0.2);
-    const msg = explainNoEntry(quiet, 'UNKNOWN', bars);
-    expect(msg).toMatch(/SCAN|SETUP|TAPE FLAT/i);
-    expect(msg).not.toMatch(/WAIT ENTRY|WAIT ·/);
+  it('TREND_DOWN only rally-sells — never buys the dump', () => {
+    expect(decideEntryFrom10sRegime(rally, 'TREND_DOWN')?.direction).toBe('SELL');
+    expect(decideEntryFrom10sRegime(dip, 'TREND_DOWN')).toBeNull();
   });
 
-  it('continuationSameSide holds with UP tape', () => {
-    const bars: TenSecBar[] = [];
-    for (let i = 0; i < 60; i++) {
-      const o = 4500 + i * 0.08;
-      bars.push(bar(o, o + 0.1, i, 0.3));
-    }
-    const green = bar(4505, 4505.4, 60, 0.3);
-    expect(continuationSameSide('BUY', green, 'TRANSITION', bars).ok).toBe(true);
+  it('PULLBACK_UPTREND resumes long on the turn-up bar', () => {
+    expect(decideEntryFrom10sRegime(rally, 'PULLBACK_UPTREND')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(rally, 'PULLBACK_UPTREND')?.setup).toBe('CONTINUATION');
+    expect(decideEntryFrom10sRegime(dip, 'PULLBACK_UPTREND')).toBeNull();
   });
 
-  it('continuationSameSide rejects flipped market', () => {
-    const dump: TenSecBar[] = [];
-    for (let i = 0; i < 40; i++) {
-      dump.push(bar(4520 - i * 0.2, 4519.8 - i * 0.2, i, 0.4));
-    }
-    const red = bar(4500, 4499.5, 40, 0.3);
-    expect(continuationSameSide('BUY', red, 'TREND_DOWN', dump).ok).toBe(false);
+  it('BREAKOUT_UP follows up, not the failed red bar', () => {
+    expect(decideEntryFrom10sRegime(rally, 'BREAKOUT_UP')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(dip, 'BREAKOUT_UP')).toBeNull();
+  });
+
+  it('FAILED_BREAKOUT_UP fades — SELL, not chase', () => {
+    expect(decideEntryFrom10sRegime(dip, 'FAILED_BREAKOUT_UP')?.direction).toBe('SELL');
+    expect(decideEntryFrom10sRegime(rally, 'FAILED_BREAKOUT_UP')).toBeNull();
+  });
+
+  it('RANGE still mean-reverts on a real 10s body', () => {
+    expect(decideEntryFrom10sRegime(dip, 'RANGE')?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(rally, 'RANGE')?.direction).toBe('SELL');
+  });
+
+  it('quiet bar is never a trade in any regime', () => {
+    const quiet: TenSecBar = {
+      open_time_ms: 0,
+      open: 2000,
+      high: 2000.1,
+      low: 1999.95,
+      close: 2000.05,
+      ticks: 8,
+    };
+    expect(decideEntryFrom10sRegime(quiet, 'TREND_UP')).toBeNull();
+    expect(decideEntryFrom10sRegime(quiet, 'RANGE')).toBeNull();
+    expect(decideEntryFrom10sRegime(quiet, 'BREAKOUT_UP')).toBeNull();
   });
 });
