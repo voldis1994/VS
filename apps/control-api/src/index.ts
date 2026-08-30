@@ -26,8 +26,6 @@ import {
   extractClientToken,
   resolveClientSession,
 } from './security/clientSession.js';
-import { restorePersistedRobotSessions } from './services/robotDesk.js';
-import { countPersistedClients } from './services/robotDeskPersist.js';
 
 const PORT = parseInt(process.env.CONTROL_API_PORT || '3000', 10);
 const HOST = process.env.CONTROL_API_HOST || '0.0.0.0';
@@ -167,24 +165,6 @@ async function main() {
 
   await app.listen({ port: PORT, host: HOST });
   console.log(`Control API listening on ${HOST}:${PORT}`);
-
-  try {
-    const stats = await countPersistedClients();
-    console.log(
-      `[persist] DB clients=${stats.clients} · panel RUNNING=${stats.running_panel} · brokers=${stats.brokers}`
-    );
-  } catch (err) {
-    console.warn('[persist] client count failed', err);
-  }
-
-  try {
-    const resume = await restorePersistedRobotSessions();
-    console.log(
-      `[persist] robot desk restored=${resume.restored} failed=${resume.failed}`
-    );
-  } catch (err) {
-    console.warn('[persist] robot restore failed', err);
-  }
 
   setInterval(() => {
     telemetry.broadcast({

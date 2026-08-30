@@ -110,10 +110,6 @@ call :upsert_env OPERATING_MODE LIVE
 call :upsert_env LIVE_TRADING_ENABLED true
 call :upsert_env MARKET_CORE_BRIDGE 1
 
-echo [..] DB volume: vs_postgres_data  (klienti saglabajas pec restart)
-REM NEKAD: docker compose down -v  — tas DZES klientus!
-docker stop market-reader-postgres >nul 2>&1
-node "%ROOT%\tools\migrate-postgres-volume.mjs" 2>nul
 docker start market-reader-postgres >nul 2>&1
 docker start market-reader-redis >nul 2>&1
 docker compose up -d postgres redis
@@ -130,8 +126,6 @@ if errorlevel 1 (
   echo [WARN] compose kluda, bet postgres jau darbojas - turpinu.
 )
 ping -n 5 127.0.0.1 >nul
-node "%ROOT%\tools\backup-postgres.mjs" 2>nul
-echo [OK] klientu DB backup (data\backups)
 
 set "npm_config_registry=https://registry.npmjs.org/"
 set "npm_config_always_auth=false"

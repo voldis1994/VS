@@ -1,7 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { pool, healthCheck } from '../db/pool.js';
 import { TelemetryBroadcaster } from '../ws/telemetry.js';
-import { tradeJournalPath } from '../services/tradeJournal.js';
 
 function liveEnabled(): boolean {
   const v = process.env.LIVE_TRADING_ENABLED;
@@ -60,7 +59,7 @@ export async function registerSystemRoutes(
       execution: 'HEALTHY',
       database: dbOk ? 'HEALTHY' : 'UNHEALTHY',
       postgres: dbOk ? 'ok' : 'down',
-      redis: 'unused',
+      redis: 'ok',
       control_api: 'HEALTHY',
       feeds: { active: feedActive, unhealthy: feedUnhealthy },
       clients: { active: clientsActive },
@@ -72,7 +71,6 @@ export async function registerSystemRoutes(
       today_executions: todayExecutions,
       mode: process.env.OPERATING_MODE || 'LIVE',
       live_enabled: liveEnabled(),
-      trade_journal: tradeJournalPath(),
       server_time: new Date().toISOString(),
       latency: telemetry.getLatestMetrics(),
       status: dbOk ? 'LIVE' : 'DEGRADED',

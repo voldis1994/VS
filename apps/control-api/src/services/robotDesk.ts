@@ -6,145 +6,41 @@ import {
   confirmCapitalDeal,
   createCapitalPosition,
   fetchCapitalMarketQuote,
+  fetchCapitalMinutePrices,
   fetchCapitalPrices,
-  fetchCapitalConfirmedProfit,
+  isLateMoveOnOneMinute,
   listCapitalOpenPositions,
-  ensureCapitalStopVisible,
   type CapitalMarketQuote,
   type CapitalOpenPosition,
   type CapitalSession,
 } from './capitalCom.js';
 import { emitToClient } from './clientEvents.js';
-import {
-  listDesiredRunningRobots,
-  markRobotDesiredRunning,
-  markRobotDesiredStopped,
-} from './robotDeskPersist.js';
 import { mapTradeType } from './tradePresentation.js';
 import {
   observeClosedBars,
   normalizeRegime,
-  currentRegime,
-  MAX_REGIME_BARS,
-  toLiveRegime,
+  REGIME_NAMES,
   type RegimeName,
 } from './regimes.js';
-import { decideBestOutcomeExit, describeBestOutcomeState, favorableMove } from './exitManage.js';
-import { deskConflictShouldExit, deskOpensOnEpic } from './deskSideLock.js';
-import { SAFETY_SL_PCT } from './microScalpThresholds.js';
-import {
-  buildScalpZone,
-  continuationSameSide,
-  decideEntryFrom10sRegime,
-  explainNoEntry,
-  formatZoneInfo,
-  shortNetMove,
-  tapeSide,
-  aggregateTenSecToFiveMin,
-  idleArmedState,
-} from './entryFromRegime.js';
-import { formatTraderLine, buildTraderView } from './traderVision.js';
-import type { ScalpZone } from './zones.js';
-import { noteEpicTradeClose, allowEpicReentry } from './tradeCooldown.js';
+import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
+import { decideEntryFrom10sRegime } from './entryFromRegime.js';
 import {
   allowEntryFromFeeds,
+  multiFeedOwnsOhlc,
+  pickOhlcMid,
   readMultiFeedPrice,
   type MultiFeedPrice,
   type MultiFeedLeg,
 } from './robotReader.js';
+import { buildFresherRefs, detectStaleQuoteAdverse } from './staleQuoteGuard.js';
 import {
   aggregateSecondsToTen,
   emptyTenSecState,
   publicOhlc10s,
-  publicOhlc10sOff,
   updateTenSecondOhlc,
   type TenSecBar,
   type TenSecState,
 } from './tenSecondOhlc.js';
-import { TEN_SEC_OHLC_ENABLED, tenSecOhlcStatusLine } from './tenSecOhlcFlag.js';
-
-/** Map Capital multi-TF bars into the legacy TenSecBar shape when 10s OHLC is OFF. */
-function barsAsTenSec(
-  bars: Array<{
-    open_time_ms: number;
-    open: number;
-    high: number;
-    low: number;
-    close: number;
-    ticks?: number;
-    provenance?: string;
-    forming?: boolean;
-  }>
-): TenSecBar[] {
-  return bars
-    .filter((b) => !b.forming)
-    .map((b) => ({
-      open_time_ms: b.open_time_ms,
-      open: b.open,
-      high: b.high,
-      low: b.low,
-      close: b.close,
-      ticks: b.ticks ?? 8,
-      provenance: (b.provenance as TenSecBar['provenance']) ?? 'REAL',
-    }));
-}
-
-function deskClosedBars(s: { closedBars: TenSecBar[]; multiTf: { books: { '1m': { bars: any[] } } } }): TenSecBar[] {
-  if (TEN_SEC_OHLC_ENABLED) return s.closedBars;
-  return barsAsTenSec(s.multiTf.books['1m']?.bars ?? []);
-}
-import {
-  appendClosedTrade,
-  appendOpenEvent,
-  newTradeId,
-  tradeJournalPath,
-  type JournalOpenSnap,
-} from './tradeJournal.js';
-import { allowEntryFromDataQuality } from './dataQuality.js';
-import { atrWilder } from './volatilityNorm.js';
-import { analysisMid } from './analysisPrice.js';
-import { analyzeMarketStructure } from './marketStructure.js';
-import {
-  noteRiskTradeOpen,
-  noteRiskTradePnl,
-  allowRiskEntry,
-  hydrateRiskState,
-  exportRiskState,
-  type PersistedRiskState,
-} from './riskWindow.js';
-import {
-  buildBoStateFromOpen,
-  clearBoState,
-  clearPendingExecution,
-  loadBoState,
-  loadPendingExecution,
-  nextClosePhaseAfterBrokerAck,
-  nextClosePhaseAfterListFailure,
-  recoverPendingExecution,
-  resolveEntryPrice,
-  saveBoState,
-  savePendingExecution,
-  shouldClearTradeState,
-  shouldRetryClose,
-  persistRiskSnapshotJson,
-  canClearPendingExecution,
-  type ClosePhase,
-} from './tradeRecovery.js';
-import {
-  referenceAgreement,
-  tagConfirmationQuote,
-  tagExecutionQuote,
-} from './multiFeedRoles.js';
-import { detectStaleQuoteAdverse } from './staleQuoteGuard.js';
-import {
-  emptyMultiTfState,
-  buildHtfContextFromBooks,
-  type MultiTfState,
-} from './timeframeBooks.js';
-import { seedMultiTfHistory, refreshDueTfBooks } from './seedMultiTf.js';
-import { computeInstrumentSafetyStop } from './safetyStop.js';
-import { loadJson } from './persistentStore.js';
-import { buildLiveEntryPlan, refreshArmedTriggerState, formatArmedTriggerDiag, type EntryPlan } from './entryPlan.js';
 
 export type RobotTick = {
   at: string;
@@ -188,14 +84,6 @@ export type RobotSession = {
   reads_fail: number;
   open_side: 'BUY' | 'SELL' | null;
   safety_sl: number | null;
-  /** Soft 5m structural invalidation (software BO) — separate from Capital Safety SL */
-  structural_sl: number | null;
-  /** Favorable-distance target beyond 1R (swing/liquidity) for continuation hold */
-  structure_target: number | null;
-  atr_5m: number | null;
-  /** RiskWindow trade counter already noted for this open (exactly once) */
-  risk_open_noted: boolean;
-  close_phase: ClosePhase;
   error: string | null;
   /** When false, robot never invents entries — pipeline fan-out only */
   entry_enabled: boolean;
@@ -206,27 +94,13 @@ export type RobotSession = {
     last_c: number | null;
     forming_c: number | null;
     body_pct: number | null;
-    market: 'MOVING' | 'QUIET' | 'SEEDING' | 'OFF';
+    market: 'MOVING' | 'QUIET' | 'SEEDING';
   };
   feed_source?: 'MULTI' | 'LOCAL' | 'NONE';
   feed_contributing?: number;
   feed_sender_count?: number;
   feed_agreement?: string | null;
   feed_legs?: MultiFeedLeg[];
-  /** Live scalp zone snapshot for INFO */
-  zone_info?: string | null;
-  /** Regime context with bar counts — separate from zone */
-  regime_info?: string | null;
-  zone_high?: number | null;
-  zone_low?: number | null;
-  zone_kind?: string | null;
-  /** Capital.com marketStatus snapshot — TRADEABLE vs CLOSED/OFFLINE */
-  market_status?: string | null;
-  market_tradeable?: boolean;
-  market_info?: string | null;
-  /** Live multi-TF tape for desk UI — never WAIT ENTRY · TRANSITION */
-  tape_dir?: 'BUY' | 'SELL' | null;
-  tape_reason?: string | null;
   decision_chain?: {
     feeds: string;
     ohlc: string;
@@ -234,8 +108,6 @@ export type RobotSession = {
     setup: string | null;
     action: string;
   };
-  /** Live ENTRY plan — WHERE/WHY/WAIT before fill (MAIN screen) */
-  entry_plan?: EntryPlan | null;
 };
 
 type Internal = RobotSession & {
@@ -243,62 +115,28 @@ type Internal = RobotSession & {
   connection_id: number;
   closed_at_ms: number;
   peak_favorable: number;
-  /** Last Capital marketStatus — detect open→closed transitions */
-  last_market_tradeable: boolean;
   /** Last time we logged "market closed" (throttle ticks) */
   last_market_closed_tick_ms: number;
   cadence_ms: number;
   ohlcState: TenSecState;
   last_second_fetch_ms: number;
   last_closed_bar_key: string;
-  /** Last closed 1m bucket — 1M MOVE fires once per fresh 1m close */
-  last_1m_close_key: string;
-  /** Last entry signal fingerprint — avoid re-firing same candle body every tick */
-  last_entry_signal_key: string;
   closedBars: TenSecBar[];
   last_multi_feed_ms: number;
   multiFeed: MultiFeedPrice | null;
-  cycle_busy: boolean;
-  /** Pending Excel journal row until close */
-  journal_open: JournalOpenSnap | null;
-  pending_deal_reference: string | null;
-  /** Capital-native multi-TF historical books */
-  multiTf: MultiTfState;
-  last_multi_tf_seed_ms: number;
-  last_quote_fetch_ms: number;
-  /** Stateful early ENTRY: SETUP→ARMED→TRIGGERED|INVALIDATED */
-  armed_trigger: import('./earlyEntryArmed.js').ArmedTriggerState;
 };
 
 const ACTIVE_CADENCE_MS = 2_000;
-const MANAGE_CADENCE_MS = 500;
-const CLOSED_MARKET_CADENCE_MS = 15_000;
-const CLOSED_MARKET_TICK_EVERY_MS = 15_000;
+const CLOSED_MARKET_CADENCE_MS = 90_000;
+const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
 
 function marketAllowsTrading(status: string | null | undefined): boolean {
   const s = String(status || '')
     .trim()
     .toUpperCase();
-  // Missing/unknown status → NO NEW ENTRY (#17)
-  if (!s) return false;
+  // Missing status → do not park (Capital sometimes omits it)
+  if (!s) return true;
   return s === 'TRADEABLE' || s === 'OPEN';
-}
-
-/** Exported for tests (#52). */
-export { marketAllowsTrading };
-
-/** Human INFO line — must scream when Capital market is not TRADEABLE (#136 / Aug13). */
-export function formatMarketInfo(
-  status: string | null | undefined,
-  tradeable: boolean,
-  pollSec = CLOSED_MARKET_CADENCE_MS / 1000
-): string {
-  const raw = String(status || '').trim().toUpperCase();
-  const st = raw || 'UNKNOWN';
-  if (tradeable) {
-    return `MARKET OPEN · Capital=${st} · entry/manage allowed`;
-  }
-  return `MARKET CLOSED · Capital=${st} · app chart/prices can still move · NO orders until TRADEABLE · robot PARKED · poll ${pollSec}s`;
 }
 
 function setRobotCadence(s: Internal, ms: number) {
@@ -307,26 +145,6 @@ function setRobotCadence(s: Internal, ms: number) {
   s.cadence_ms = ms;
   s.timer = setInterval(() => void robotCycle(s), ms);
 }
-
-/** After one client exits, nudge same-client manage only — no cross-client OHLC share. */
-function kickPeerManageCycles(exceptId: string, epic: string) {
-  const want = epic.trim().toLowerCase();
-  const self = sessions.get(exceptId);
-  const clientId = self?.client_id;
-  for (const peer of sessions.values()) {
-    if (peer.id === exceptId || !peer.running || !peer.open_side) continue;
-    if (peer.epic.trim().toLowerCase() !== want) continue;
-    // Same client only (multi-account same person) — never other clients' OHLC/feed
-    if (clientId != null && peer.client_id !== clientId) continue;
-    if (peer.cycle_busy) continue;
-    void robotCycle(peer);
-  }
-}
-
-/**
- * Per-client 10s OHLC — never fanout bars to other clients (disabled).
- */
-void 0;
 
 const sessions = new Map<string, Internal>();
 const MAX_TICKS = 200;
@@ -375,120 +193,48 @@ function publicSession(s: Internal): RobotSession {
     ohlcState: _ohlc,
     last_second_fetch_ms: _sec,
     last_closed_bar_key: _bar,
-    last_entry_signal_key: _sig,
     closedBars: _bars,
     last_multi_feed_ms: _mf,
     multiFeed: _multi,
-    cycle_busy: _busy,
-    journal_open: _journal,
-    pending_deal_reference: _pend,
-    multiTf: _mtf,
-    last_multi_tf_seed_ms: _mtfs,
-    last_quote_fetch_ms: _lqf,
     ...rest
   } = s;
-  const zoneSnap = buildScalpZone(deskClosedBars(s));
-  const liveBar = TEN_SEC_OHLC_ENABLED
-    ? s.ohlcState.forming ?? s.ohlcState.last_closed
-    : deskClosedBars(s).slice(-1)[0] ?? null;
-  const tape = tapeSide(deskClosedBars(s), liveBar);
-  // Display regime from tape — never sticky TRANSITION/UNKNOWN on the board
-  const displayRegime =
-    tape.dir === 'BUY' ? 'TREND_UP' : tape.dir === 'SELL' ? 'TREND_DOWN' : 'RANGE';
-  // When 10s OHLC is OFF: no EARLY plan at all (no WAIT BAND / MICRO / "10s idle").
-  // Previous bug: still calling buildLiveEntryPlan with idle armed → UI looked "ON".
-  const entryPlan = TEN_SEC_OHLC_ENABLED
-    ? buildLiveEntryPlan({
-        price: s.last_mid,
-        armed: s.armed_trigger,
-        multiTf: s.multiTf,
-        closedBars: deskClosedBars(s),
-        open_side: s.open_side,
-        running: s.running,
-      })
-    : null;
   return {
     ...rest,
-    regime: displayRegime,
-    ohlc_10s: TEN_SEC_OHLC_ENABLED ? publicOhlc10s(s.ohlcState) : publicOhlc10sOff(),
+    ohlc_10s: publicOhlc10s(s.ohlcState),
     feed_source: rest.feed_source,
     feed_contributing: s.multiFeed?.contributing ?? rest.feed_contributing ?? 0,
     feed_sender_count: s.multiFeed?.sender_count ?? rest.feed_sender_count ?? 0,
     feed_agreement: s.multiFeed?.agreement ?? rest.feed_agreement ?? null,
     feed_legs: s.multiFeed?.legs ?? rest.feed_legs ?? [],
-    zone_info: formatZoneInfo(zoneSnap, s.closedBars),
-    regime_info: `TAPE ${tape.dir ?? 'FLAT'} · ${tape.reason}`,
-    tape_dir: tape.dir,
-    tape_reason: tape.reason,
-    zone_high: zoneSnap?.high ?? null,
-    zone_low: zoneSnap?.low ?? null,
-    zone_kind: zoneSnap?.kind ?? null,
-    market_status: s.market_status ?? null,
-    market_tradeable: s.market_tradeable ?? true,
-    market_info: formatMarketInfo(s.market_status, s.market_tradeable ?? true, s.cadence_ms / 1000),
-    decision_chain: buildDecisionChain(s, tape, entryPlan),
-    entry_plan: entryPlan,
+    decision_chain: buildDecisionChain(s),
   };
 }
 
-function buildDecisionChain(
-  s: Internal,
-  tape = tapeSide(s.closedBars, s.ohlcState.forming ?? s.ohlcState.last_closed),
-  entryPlan?: EntryPlan | null
-): NonNullable<RobotSession['decision_chain']> {
-  const tradeable = s.market_tradeable ?? true;
-  const marketLine = formatMarketInfo(s.market_status, tradeable, s.cadence_ms / 1000);
-  if (!tradeable) {
-    const mf = s.multiFeed;
-    const capLive = mf?.capital_contributing ?? s.feed_contributing ?? 0;
-    const capCfg = mf?.capital_sender_count ?? s.feed_sender_count ?? 0;
-    return {
-      feeds: `FEEDS cap ${capLive}/${capCfg} (warm while parked)`,
-      ohlc: marketLine,
-      regime: marketLine,
-      setup: null,
-      action: `PARKED · ${String(s.market_status || 'CLOSED').toUpperCase()}`,
-    };
-  }
-  const ohlc = TEN_SEC_OHLC_ENABLED ? publicOhlc10s(s.ohlcState) : publicOhlc10sOff();
+function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_chain']> {
+  const ohlc = publicOhlc10s(s.ohlcState);
   const ohlcLine =
-    ohlc.market === 'OFF'
-      ? tenSecOhlcStatusLine()
-      : ohlc.last_c != null
-        ? `10s O${Number(ohlc.last_o).toFixed(2)}→C${Number(ohlc.last_c).toFixed(2)} ${ohlc.market}`
-        : 'SEEDING';
-  const zone = buildScalpZone(s.closedBars);
-  const mf = s.multiFeed;
-  const rejectN = (mf?.legs || []).filter((l) => l.role === 'REJECT').length;
-  const capLive = mf?.capital_contributing ?? s.feed_contributing ?? 0;
-  const capCfg = mf?.capital_sender_count ?? s.feed_sender_count ?? 0;
-  const pubNear = mf?.public_contributing ?? 0;
-  const feeds = `FEEDS cap ${capLive}/${capCfg} · pubAdv ${pubNear} · reject ${rejectN} · lead=${mf?.lead_label || '—'} · ${mf?.agreement || s.feed_agreement || 'NONE'}`.trim();
-  const zoneLine = formatZoneInfo(zone, s.closedBars);
-  let action = `SCAN · ${tape.reason}`;
+    ohlc.last_c != null
+      ? `O${Number(ohlc.last_o).toFixed(2)}→C${Number(ohlc.last_c).toFixed(2)} ${ohlc.market}`
+      : 'SEEDING';
+  const feeds = `${s.multiFeed?.contributing ?? s.feed_contributing ?? 0}/${
+    s.multiFeed?.sender_count ?? s.feed_sender_count ?? 0
+  } ${s.feed_source || 'NONE'} ${s.multiFeed?.agreement || s.feed_agreement || ''}`.trim();
+  let action = 'WAIT';
   if (!s.running) action = 'STOPPED';
   else if (s.open_side) action = `MANAGE ${s.open_side}`;
-  else if (entryPlan) {
-    const bias = entryPlan.bias ?? '—';
-    action = `ENTRY · ${entryPlan.state} · ${bias} · ${entryPlan.block_reason} · ${entryPlan.waiting_for}`;
-  } else if (tape.dir === 'BUY') action = `READY BUY · ${tape.reason}`;
-  else if (tape.dir === 'SELL') action = `READY SELL · ${tape.reason}`;
+  else if (s.mode === 'ENTRY') action = 'SCAN ENTRY';
   return {
     feeds,
-    ohlc: `${ohlcLine} · ${zoneLine}`,
-    regime: `TAPE ${tape.dir ?? 'FLAT'} · ${tape.reason}`,
-    setup: tape.dir,
+    ohlc: ohlcLine,
+    regime: s.regime || 'UNKNOWN',
+    setup: null,
     action,
   };
 }
 
 export function robotBoardMeta(sessions: RobotSession[]) {
-  const activeTapes = [
-    ...new Set(
-      sessions
-        .filter((s) => s.running)
-        .map((s) => (s.tape_dir === 'BUY' ? 'TREND_UP' : s.tape_dir === 'SELL' ? 'TREND_DOWN' : 'RANGE'))
-    ),
+  const activeRegimes = [
+    ...new Set(sessions.filter((s) => s.running).map((s) => s.regime || 'UNKNOWN')),
   ];
   const maxFeeds = sessions.reduce(
     (n, s) => Math.max(n, s.feed_sender_count || 0, s.feed_legs?.length || 0),
@@ -496,39 +242,15 @@ export function robotBoardMeta(sessions: RobotSession[]) {
   );
   const contributing = sessions.reduce((n, s) => Math.max(n, s.feed_contributing || 0), 0);
   return {
-    regimes: ['TREND_UP', 'TREND_DOWN', 'RANGE'],
-    trade_types: ['BUY', 'SELL'],
-    active_regimes: activeTapes,
+    regimes: [...REGIME_NAMES],
+    trade_types: ['BUY LONG', 'SELL LONG', 'BUY SCALP', 'SELL SCALP'],
+    active_regimes: activeRegimes,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: TEN_SEC_OHLC_ENABLED
-      ? 'OWN Capital LEAD → own 10s OHLC → TAPE 5/1 → BUY|SELL · BO → EXIT'
-      : 'OWN Capital LEAD → 1m MOVE + EARLY (10s OHLC OFF) → BUY|SELL · BO → EXIT',
-    note: TEN_SEC_OHLC_ENABLED
-      ? 'Katram klientam savs Capital LEAD + savs 10s OHLC. Peer Capital / shared bars OFF. Public = ADVISORY only.'
-      : `${tenSecOhlcStatusLine()}. Peer Capital / shared bars OFF. Public = ADVISORY only.`,
+    chain: 'Capital OHLC (anchor) + public near Capital → REGIME → ENTRY/EXIT',
+    note:
+      'Public feeds (Yahoo/Aurum/FX/Coinbase) confirm when near Capital CFD mid; far public prices are ignored so they cannot block or distort trades.',
   };
-}
-
-function formatScanContext(
-  s: Internal,
-  zone: ScalpZone | null,
-  feedNote?: string
-): string {
-  const liveBar = TEN_SEC_OHLC_ENABLED
-    ? s.ohlcState.forming ?? s.ohlcState.last_closed
-    : deskClosedBars(s).slice(-1)[0] ?? null;
-  const tape = tapeSide(deskClosedBars(s), liveBar);
-  const traderLine = formatTraderLine(buildTraderView(deskClosedBars(s), liveBar));
-  const tapeLine = `TAPE ${tape.dir ?? 'FLAT'} · ${tape.reason}`;
-  const zoneLine = formatZoneInfo(zone, deskClosedBars(s));
-  const mf = s.multiFeed;
-  const capLive = mf?.capital_contributing ?? s.feed_contributing ?? 0;
-  const capCfg = mf?.capital_sender_count ?? s.feed_sender_count ?? 0;
-  const feedLine =
-    feedNote ||
-    `FEEDS cap ${capLive}/${capCfg} · lead=${mf?.lead_label || '—'} · ${mf?.agreement || s.feed_agreement || 'NONE'}`;
-  return `${traderLine} · ${tapeLine} · ${zoneLine} · ${feedLine}`;
 }
 
 function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
@@ -538,22 +260,10 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
       ? [s.ohlcState.last_closed]
       : [];
   if (incoming.length) {
-    observeClosedBars(s.epic, incoming, s.display_name, s.client_id);
-    for (const b of incoming) {
-      const last = s.closedBars[s.closedBars.length - 1];
-      if (last && last.open_time_ms === b.open_time_ms) {
-        s.closedBars[s.closedBars.length - 1] = b;
-        continue;
-      }
-      s.closedBars.push(b);
-    }
-    if (s.closedBars.length > MAX_REGIME_BARS) {
-      s.closedBars = s.closedBars.slice(-MAX_REGIME_BARS);
-    }
+    const snap = observeClosedBars(s.epic, incoming, s.display_name);
+    s.regime = snap.current;
+    if (bars?.length) s.closedBars = bars.slice(-24);
   }
-  // Per-client book only — never sync from another client's epic book
-  const own = currentRegime(s.epic, s.client_id);
-  if (own) s.regime = toLiveRegime(own.current);
 }
 
 function clearTradeState(s: Internal) {
@@ -567,144 +277,13 @@ function clearTradeState(s: Internal) {
   s.peak_retention = null;
   s.unrealized = null;
   s.safety_sl = null;
-  s.structural_sl = null;
-  s.structure_target = null;
-  s.atr_5m = null;
-  s.risk_open_noted = false;
-  s.close_phase = 'CLOSED';
   s.mode = 'FLAT';
-  s.journal_open = null;
-  s.pending_deal_reference = null;
-  // Consume armed fire — leaving ARMED+micro hot caused immediate re-entry loops.
-  s.armed_trigger = idleArmedState();
-  clearBoState(s.id);
-  clearPendingExecution(s.id);
-}
-
-function persistBoFromSession(s: Internal) {
-  if (!s.open_side || s.entry_price == null) return;
-  saveBoState(
-    buildBoStateFromOpen({
-      deal_id: s.deal_id,
-      side: s.open_side,
-      entry_price: s.entry_price,
-      entry_at: s.entry_at,
-      mfe: s.mfe,
-      mae: s.mae,
-      peak_favorable: s.peak_favorable,
-      peak_retention: s.peak_retention,
-      structural_sl: s.structural_sl,
-      safety_sl: s.safety_sl,
-      structure_target: s.structure_target,
-      close_phase: s.close_phase,
-      pending_deal_reference: s.pending_deal_reference,
-      epic: s.epic,
-      account_id: s.account_id,
-      robot_id: s.id,
-    })
-  );
-}
-
-function buildJournalOpen(
-  s: Internal,
-  direction: 'BUY' | 'SELL',
-  reason: string,
-  setupType: string | null | undefined,
-  source: JournalOpenSnap['source']
-): JournalOpenSnap {
-  const zone = buildScalpZone(s.closedBars);
-  const ohlc = publicOhlc10s(s.ohlcState);
-  return {
-    trade_id: newTradeId(source === 'pipeline' ? 'P' : 'D'),
-    source,
-    opened_at: s.entry_at || new Date().toISOString(),
-    account_id: s.account_id,
-    client_id: s.client_id,
-    client_name: s.client_name,
-    account_name: s.account_name,
-    robot_id: s.id,
-    environment: s.environment,
-    epic: s.epic,
-    display_name: s.display_name,
-    side: direction,
-    lot_size: s.lot_size,
-    entry_price: s.entry_price,
-    safety_sl: s.safety_sl,
-    deal_id: s.deal_id,
-    deal_reference: s.last_deal_reference,
-    regime: String(s.regime || 'UNKNOWN'),
-    setup_type: setupType ?? null,
-    zone_kind: zone?.kind ?? null,
-    zone_high: zone?.high ?? null,
-    zone_low: zone?.low ?? null,
-    zone_detail: zone ? zone.detail : formatZoneInfo(null, s.closedBars),
-    open_reason: reason,
-    feed_source: s.feed_source ?? s.multiFeed?.detail ?? null,
-    feed_agreement: s.multiFeed?.agreement ?? s.feed_agreement ?? null,
-    feed_contributing: s.multiFeed?.contributing ?? s.feed_contributing ?? null,
-    feed_sender_count: s.multiFeed?.sender_count ?? s.feed_sender_count ?? null,
-    lead_label: s.multiFeed?.lead_label ?? null,
-    ohlc_last:
-      ohlc.last_c != null
-        ? `O${ohlc.last_o} H${ohlc.last_h} L${ohlc.last_l} C${ohlc.last_c} ${ohlc.market}`
-        : null,
-    entry_enabled: s.entry_enabled,
-  };
-}
-
-function writeJournalClose(
-  s: Internal,
-  quote: Pick<CapitalMarketQuote, 'bid' | 'ask' | 'mid'>,
-  reason: string,
-  wasLoss: boolean
-): void {
-  const open = s.journal_open;
-  if (!open) return;
-  const exitMid = quote.mid;
-  const exitPrice = exitMid;
-  const pnlPts =
-    open.entry_price != null && exitMid != null
-      ? favorableMove(open.side, open.entry_price, exitMid)
-      : null;
-  const openedMs = Date.parse(open.opened_at);
-  const hold_sec = Number.isFinite(openedMs)
-    ? Math.max(0, Math.round((Date.now() - openedMs) / 1000))
-    : 0;
-  const zone = buildScalpZone(s.closedBars);
-  const written = appendClosedTrade({
-    open: {
-      ...open,
-      deal_id: s.deal_id || open.deal_id,
-      safety_sl: s.safety_sl ?? open.safety_sl,
-      entry_price: s.entry_price ?? open.entry_price,
-    },
-    closed_at: new Date().toISOString(),
-    exit_price: exitPrice,
-    exit_mid: exitMid,
-    close_reason: reason,
-    mfe: s.mfe,
-    mae: s.mae,
-    peak_retention: s.peak_retention,
-    unrealized_at_close: s.unrealized,
-    regime_at_exit: String(s.regime || 'UNKNOWN'),
-    zone_detail_at_exit: formatZoneInfo(zone, s.closedBars),
-    was_loss: wasLoss,
-    hold_sec,
-    pnl_pts: pnlPts,
-  });
-  pushTick(s, {
-    phase: 'INFO',
-    bid: quote.bid,
-    ask: quote.ask,
-    mid: quote.mid,
-    detail: written.ok
-      ? `EXCEL journal · ${written.path} · ${open.trade_id}`
-      : written.detail,
-  });
 }
 
 /**
- * SAFETY SL — instrument metadata only (#33/#34). No magnitude floors.
+ * SAFETY SL as a true cushion — NOT dealing-rules minimum.
+ * Target ~0.20% of price, at least ~2.5× broker min / wide vs spread,
+ * so noise does not stop every trade (slightly tighter than 0.25%).
  */
 function safetyStopLevel(
   direction: 'BUY' | 'SELL',
@@ -713,36 +292,53 @@ function safetyStopLevel(
   ask: number | null,
   spread: number | null,
   minStopDistance: number | null,
-  loosen = 1,
-  meta?: { pointSize?: number | null; tickSize?: number | null }
-): number | null {
-  const r = computeInstrumentSafetyStop({
-    direction,
-    mid,
-    bid,
-    ask,
-    spread,
-    minStopDistance,
-    pointSize: meta?.pointSize,
-    tickSize: meta?.tickSize,
-    loosen,
-  });
-  return r.ok ? r.stop_level : null;
+  loosen = 1
+): number {
+  const ref =
+    direction === 'BUY'
+      ? bid != null && Number.isFinite(bid)
+        ? bid
+        : mid
+      : ask != null && Number.isFinite(ask)
+        ? ask
+        : mid;
+  const abs = Math.max(Math.abs(ref), 1e-9);
+  const spr =
+    spread != null && Number.isFinite(spread) && spread > 0
+      ? spread
+      : bid != null && ask != null
+        ? Math.max(ask - bid, 0)
+        : abs * 0.00005;
+
+  const pctCushion = abs * 0.002; // 0.20% safety cushion (was 0.25%)
+  const brokerMin =
+    minStopDistance != null && Number.isFinite(minStopDistance) && minStopDistance > 0
+      ? minStopDistance
+      : 0;
+  const floor = abs >= 1000 ? 0.5 : abs >= 100 ? 0.25 : abs >= 10 ? 0.05 : abs >= 1 ? 0.0005 : 0.00005;
+  const dist =
+    Math.max(pctCushion, brokerMin * 2.5, spr * 8, floor) * Math.max(loosen, 1);
+
+  const raw = direction === 'BUY' ? ref - dist : ref + dist;
+  if (abs >= 1000) return Math.round(raw * 10) / 10;
+  if (abs >= 100) return Math.round(raw * 100) / 100;
+  if (abs >= 1) return Math.round(raw * 10000) / 10000;
+  return Math.round(raw * 1e6) / 1e6;
 }
 
-/** Cushion stopDistance in Capital POINTS (≥ 1.5× min, ~0.08% when point size known). */
+/** Cushion stopDistance in Capital POINTS (≥ 2.5× min, ~0.20% of price when point size known). */
 function safetyStopDistancePts(
   mid: number,
   minPts: number,
   pointSize: number | null
 ): number {
   const abs = Math.max(Math.abs(mid), 1e-9);
-  const pct = abs * SAFETY_SL_PCT;
-  let fromPct = minPts * 1.5;
+  const pct = abs * 0.002;
+  let fromPct = minPts * 2.5;
   if (pointSize != null && pointSize > 0) {
     fromPct = Math.max(fromPct, pct / pointSize);
   }
-  const distPts = Math.max(minPts * 1.5, fromPct, minPts + 1e-9);
+  const distPts = Math.max(minPts * 2.5, fromPct, minPts + 1e-9);
   return distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
 }
 
@@ -768,22 +364,16 @@ function expectedStopFromDistance(
   return direction === 'BUY' ? ref - dist : ref + dist;
 }
 
-/**
- * Track excursion in PRICE POINTS on MID (Aug-13 BO setup).
- * Broker UPL ($) is display-only — never mix into MFE / peak_retention.
- */
-function updateExcursion(s: Internal, mid: number, brokerUpl?: number | null) {
+function updateExcursion(s: Internal, mid: number) {
   if (!s.open_side || s.entry_price == null) return;
   const fav = favorableMove(s.open_side, s.entry_price, mid);
-  s.unrealized =
-    brokerUpl != null && Number.isFinite(brokerUpl) ? Number(brokerUpl) : null;
+  s.unrealized = fav;
   if (fav > s.mfe) {
     s.mfe = fav;
     s.peak_favorable = mid;
   }
   if (fav < s.mae) s.mae = fav;
   s.peak_retention = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
-  persistBoFromSession(s);
 }
 
 /** Exact id only — never returns a different robot */
@@ -865,11 +455,6 @@ export async function stopRobotSession(id: string): Promise<RobotSession | null>
       robot_status: 'STOPPED',
     });
   }
-  try {
-    await markRobotDesiredStopped(id);
-  } catch (err) {
-    console.warn('[robot-desk] persist stop failed', err);
-  }
   return publicSession(s);
 }
 
@@ -877,66 +462,12 @@ function matchOpenOnEpic(
   positions: CapitalOpenPosition[],
   epic: string
 ): CapitalOpenPosition | null {
-  const all = allOpensOnEpic(positions, epic);
-  return all[0] || null;
-}
-
-function allOpensOnEpic(
-  positions: CapitalOpenPosition[],
-  epic: string
-): CapitalOpenPosition[] {
   const want = epic.trim().toLowerCase();
-  return positions.filter(
-    (p) => p.epic.trim().toLowerCase() === want || p.deal_id === epic
+  return (
+    positions.find((p) => p.epic.trim().toLowerCase() === want) ||
+    positions.find((p) => p.deal_id === epic) ||
+    null
   );
-}
-
-function isHedgedOpens(positions: CapitalOpenPosition[]): boolean {
-  let buy = false;
-  let sell = false;
-  for (const p of positions) {
-    if (p.direction === 'BUY') buy = true;
-    if (p.direction === 'SELL') sell = true;
-  }
-  return buy && sell;
-}
-
-/** Close every broker deal on this epic (hedge / stacked junk). */
-async function flattenBrokerOpensOnEpic(
-  session: CapitalSession,
-  s: Internal,
-  quote: { bid: number | null; ask: number | null; mid: number | null },
-  opens: CapitalOpenPosition[],
-  reason: string
-): Promise<void> {
-  if (!opens.length) return;
-  pushTick(s, {
-    phase: 'DECIDE',
-    bid: quote.bid,
-    ask: quote.ask,
-    mid: quote.mid,
-    detail: `FLATTEN ${opens.length} deals on ${s.epic} · ${reason}`,
-  });
-  let anyLoss = false;
-  let lastSide: 'BUY' | 'SELL' | null = null;
-  for (const p of opens) {
-    lastSide = p.direction;
-    if (p.upl != null && p.upl < 0) anyLoss = true;
-    const result = await closeCapitalPosition(session, p.deal_id);
-    pushTick(s, {
-      phase: result.ok ? 'EXIT' : 'ERROR',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: result.ok
-        ? `CLOSED hedge ${p.direction} dealId=${p.deal_id} · ${result.detail}`
-        : `CLOSE FAIL ${p.direction} ${p.deal_id}: ${result.detail}`,
-    });
-  }
-  s.exits_done += 1;
-  s.closed_at_ms = Date.now();
-  noteEpicTradeClose(s.epic, lastSide, anyLoss, s.client_id);
-  clearTradeState(s);
 }
 
 async function resolveDealId(
@@ -986,109 +517,40 @@ async function exitTrade(
       detail: 'EXIT blocked — no dealId (cannot close). Will keep MANAGE, no new entry.',
     });
     s.mode = 'MANAGE';
-    s.close_phase = 'CLOSE_UNCERTAIN';
     return;
   }
-
-  s.close_phase = 'CLOSE_REQUESTED';
-  persistBoFromSession(s);
 
   pushTick(s, {
     phase: 'DECIDE',
     bid: quote.bid,
     ask: quote.ask,
     mid: quote.mid,
-    detail: `EXIT NOW · CLOSE_REQUESTED · ${reason}`,
+    detail: `EXIT NOW · ${reason}`,
   });
 
   const result = await closeCapitalPosition(session, dealId);
   if (!result.ok) {
     s.error = result.detail;
-    s.close_phase = 'CLOSE_UNCERTAIN';
     pushTick(s, {
       phase: 'ERROR',
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `CLOSE FAIL: ${result.detail} · state CLOSE_UNCERTAIN (not CLOSED)`,
+      detail: `CLOSE FAIL: ${result.detail}`,
     });
-    return;
-  }
-
-  s.close_phase = 'BROKER_CLOSE_SENT';
-  s.last_deal_reference = result.deal_reference || s.last_deal_reference;
-
-  // Reconcile — HTTP ok is not CLOSED proof
-  const listed = await listCapitalOpenPositions(session);
-  let stillOpen = false;
-  if (listed.ok) {
-    stillOpen = allOpensOnEpic(listed.positions, s.epic).some(
-      (p) => p.deal_id === dealId || p.deal_id === s.deal_id
-    );
-  } else {
-    s.close_phase = 'RECONCILING';
-    pushTick(s, {
-      phase: 'WAIT',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `CLOSE sent · broker list fail — RECONCILING (not marking CLOSED) · ${listed.detail}`,
-    });
-    persistBoFromSession(s);
-    s.mode = 'MANAGE';
-    return;
-  }
-
-  const phase = nextClosePhaseAfterBrokerAck(stillOpen);
-  s.close_phase = phase;
-  if (stillOpen || !shouldClearTradeState(phase)) {
-    pushTick(s, {
-      phase: 'WAIT',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `CLOSE ok but broker still open dealId=${dealId} · CLOSE_UNCERTAIN · retry reconcile · keep management`,
-    });
-    persistBoFromSession(s);
-    s.mode = 'MANAGE';
     return;
   }
 
   s.exits_done += 1;
+  s.last_deal_reference = result.deal_reference || s.last_deal_reference;
   s.closed_at_ms = Date.now();
-  const exitSide = s.open_side;
-  // Broker-confirmed realized only — never invent wasLoss / PnL from UPL or mid
-  const profitRef = result.deal_reference || s.last_deal_reference;
-  const realizedGot = await fetchCapitalConfirmedProfit(session, profitRef);
-  let wasLoss = false;
-  if (realizedGot.ok && realizedGot.profit != null && Number.isFinite(realizedGot.profit)) {
-    wasLoss = realizedGot.profit <= 0;
-    noteRiskTradePnl(s.account_id, realizedGot.profit);
-    pushTick(s, {
-      phase: 'INFO',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `RISK PnL · broker realized ${realizedGot.profit} · ${realizedGot.detail}`,
-    });
-  } else {
-    pushTick(s, {
-      phase: 'INFO',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `RISK PnL UNKNOWN · skipped noteRiskTradePnl · ${realizedGot.detail}`,
-    });
-  }
-  noteEpicTradeClose(s.epic, exitSide, wasLoss, s.client_id);
   s.error = null;
-  writeJournalClose(s, quote, reason, wasLoss);
   pushTick(s, {
     phase: 'EXIT',
     bid: quote.bid,
     ask: quote.ask,
     mid: quote.mid,
-    detail: `CLOSED ${s.open_side} ${s.display_name} · broker flat confirmed · ${result.detail} · ${reason}`,
+    detail: `CLOSED ${s.open_side} ${s.display_name} · ${result.detail} · ${reason}`,
   });
   if (s.client_id) {
     emitToClient(s.client_id, {
@@ -1125,45 +587,16 @@ async function enterTrade(
   direction: 'BUY' | 'SELL',
   quote: CapitalMarketQuote,
   reason: string,
-  setupType?: string | null,
-  structuralSl?: number | null
+  setupType?: string | null
 ) {
-  if (structuralSl != null && Number.isFinite(structuralSl)) {
-    s.structural_sl = structuralSl;
-  }
-
   // HARD RULE: never entry while any trade open on this epic
   const listed = await listCapitalOpenPositions(session);
   if (listed.ok) {
-    const onEpic = allOpensOnEpic(listed.positions, s.epic);
-    if (isHedgedOpens(onEpic) || onEpic.length > 1) {
-      await flattenBrokerOpensOnEpic(
-        session,
-        s,
-        quote,
-        onEpic,
-        'entry blocked — flatten hedge/stack first'
-      );
-      return;
-    }
-    const existing = onEpic[0] || null;
+    const existing = matchOpenOnEpic(listed.positions, s.epic);
     if (existing) {
       s.open_side = existing.direction;
       s.deal_id = existing.deal_id;
-      // Broker open_level only — never seed entry from quote.mid
-      const fill = resolveEntryPrice({ broker_open_level: existing.open_level });
-      if (fill != null) s.entry_price = fill;
-      else {
-        s.entry_price = null;
-        pushTick(s, {
-          phase: 'WAIT',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `ONE TRADE · broker open ${existing.direction} dealId=${existing.deal_id} · FILL UNKNOWN (no open_level)`,
-        });
-        return;
-      }
+      s.entry_price = existing.open_level ?? quote.mid;
       s.entry_at = s.entry_at || new Date().toISOString();
       s.mode = 'MANAGE';
       if (existing.stop_level != null) s.safety_sl = existing.stop_level;
@@ -1198,26 +631,12 @@ async function enterTrade(
     return;
   }
 
-  // SAFETY SL — MUST be accepted by Capital and visible in Capital.com app.
-  // Never open a naked position. Capital min-stop metadata required.
+  // SAFETY SL cushion (~0.20% / ≥2.5× min) — not dealing-rules minimum
   const minPts = quote.min_stop_points;
   const minPrice = quote.min_stop_distance ?? null;
   const unit = (quote.min_stop_unit || 'POINTS').toUpperCase();
   const useDistance = minPts != null && minPts > 0 && !unit.includes('PERCENT');
-  if (
-    (minPts == null || minPts <= 0) &&
-    (minPrice == null || minPrice <= 0)
-  ) {
-    pushTick(s, {
-      phase: 'ERROR',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: 'ENTRY BLOCKED — Capital minStop metadata UNKNOWN',
-    });
-    return;
-  }
-  const loosenSteps = [1, 1.15, 1.35, 1.6, 2.0, 2.5, 3.0];
+  const loosenSteps = [1, 1.15, 1.35, 1.6, 2.0];
 
   let stopLevel: number | null = null;
   let usedStopDistance: number | null = null;
@@ -1226,7 +645,7 @@ async function enterTrade(
   if (useDistance) {
     for (const loosen of loosenSteps) {
       const basePts = safetyStopDistancePts(mid, minPts!, quote.point_size ?? null);
-      const distPts = Math.max(basePts * loosen, minPts! * Math.max(1.5, loosen));
+      const distPts = Math.max(basePts * loosen, minPts! * 3);
       const stopDistance =
         distPts >= 10 ? Math.ceil(distPts) : Math.round(distPts * 100) / 100;
       const expect = expectedStopFromDistance(
@@ -1242,7 +661,7 @@ async function enterTrade(
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `Capital SAFETY SL stopDistance=${stopDistance} pts (min=${minPts} · ~level ${
+        detail: `Capital SAFETY SL cushion stopDistance=${stopDistance} pts (min=${minPts} · ~level ${
           expect ?? 'n/a'
         } · x${loosen})`,
       });
@@ -1257,7 +676,7 @@ async function enterTrade(
         stopLevel = expect;
         break;
       }
-      if (!/stop|distance|validation|reject|attached|level|minimum/i.test(result.detail)) break;
+      if (!/stop|distance|validation|reject|attached|level/i.test(result.detail)) break;
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
@@ -1268,7 +687,7 @@ async function enterTrade(
     }
   }
 
-    if (!result?.ok) {
+  if (!result?.ok) {
     for (const loosen of loosenSteps) {
       const level = safetyStopLevel(
         direction,
@@ -1277,28 +696,17 @@ async function enterTrade(
         quote.ask,
         quote.spread ?? null,
         minPrice,
-        loosen,
-        { pointSize: quote.point_size ?? null, tickSize: quote.point_size ?? null }
+        loosen
       );
-      if (level == null) {
-        pushTick(s, {
-          phase: 'ERROR',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: 'ENTRY BLOCKED — Safety SL UNKNOWN (no tick/minStop metadata)',
-        });
-        return;
-      }
       const dist = direction === 'BUY' ? mid - level : level - mid;
       pushTick(s, {
         phase: 'INFO',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `Capital SAFETY SL stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
+        detail: `Capital SAFETY SL try stopLevel=${level} (dist≈${dist.toFixed(5)} · minPrice=${
           minPrice ?? 'n/a'
-        } · x${loosen})`,
+        } · spread=${quote.spread ?? 'n/a'} · x${loosen})`,
       });
       result = await createCapitalPosition(session, {
         epic: s.epic,
@@ -1310,7 +718,7 @@ async function enterTrade(
         stopLevel = level;
         break;
       }
-      if (!/stop|distance|validation|reject|attached|level|minimum/i.test(result.detail)) break;
+      if (!/stop|distance|validation|reject|attached|level/i.test(result.detail)) break;
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
@@ -1322,27 +730,39 @@ async function enterTrade(
   }
 
   if (!result?.ok) {
-    s.error = result?.detail || 'SL required';
+    pushTick(s, {
+      phase: 'WAIT',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `Safety SL not accepted — entry without SL (${result?.detail || 'unknown'})`,
+    });
+    result = await createCapitalPosition(session, {
+      epic: s.epic,
+      direction,
+      size: s.lot_size,
+    });
+    stopLevel = null;
+    usedStopDistance = null;
+  }
+
+  if (!result.ok) {
+    s.error = result.detail;
     pushTick(s, {
       phase: 'ERROR',
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `ENTRY BLOCKED — Capital rejected every Safety SL (no naked trade). ${
-        result?.detail || ''
-      }`,
+      detail: `ORDER FAIL ${direction}: ${result.detail}`,
     });
     return;
   }
 
   s.orders_placed += 1;
   s.open_side = direction;
-  s.mode = 'FLAT'; // MANAGE only after broker fill confirmed (#25)
-  s.close_phase = 'OPEN';
+  s.mode = 'MANAGE';
   s.last_deal_reference = result.deal_reference || null;
-  s.pending_deal_reference = result.deal_reference || null;
-  const signalMid = mid;
-  s.entry_price = null; // never seed BO with signal mid
+  s.entry_price = mid;
   s.entry_at = new Date().toISOString();
   s.mfe = 0;
   s.mae = 0;
@@ -1352,161 +772,33 @@ async function enterTrade(
   s.safety_sl = stopLevel != null && Number.isFinite(stopLevel) ? stopLevel : null;
   s.error = null;
 
-  savePendingExecution({
-    robot_id: s.id,
-    account_id: s.account_id,
-    epic: s.epic,
-    side: direction,
-    deal_reference: result.deal_reference || null,
-    claimed_at: new Date().toISOString(),
-    signal_mid: signalMid,
-  });
-
-  let confirmLevel: number | null = null;
   const dealId = await resolveDealId(session, s, result.deal_reference);
   if (dealId) s.deal_id = dealId;
-  if (result.deal_reference) {
-    const conf = await confirmCapitalDeal(session, result.deal_reference);
-    if (conf.ok) {
-      if (conf.deal_id) s.deal_id = conf.deal_id;
-      if (conf.level != null) confirmLevel = conf.level;
+
+  // Prefer broker-reported stopLevel when available
+  if (dealId) {
+    try {
+      const again = await listCapitalOpenPositions(session);
+      const pos = again.ok ? matchOpenOnEpic(again.positions, s.epic) : null;
+      if (pos?.stop_level != null && Number.isFinite(pos.stop_level)) {
+        s.safety_sl = pos.stop_level;
+      }
+    } catch {
+      /* ignore */
     }
   }
-
-  // Broker open_level = execution truth
-  const listedAfter = await listCapitalOpenPositions(session);
-  let brokerLevel: number | null = null;
-  if (listedAfter.ok) {
-    const hit = matchOpenOnEpic(listedAfter.positions, s.epic);
-    if (hit) {
-      s.deal_id = hit.deal_id;
-      brokerLevel = hit.open_level;
-      if (hit.stop_level != null) s.safety_sl = hit.stop_level;
-    }
-  }
-  const fill = resolveEntryPrice({
-    broker_open_level: brokerLevel,
-    confirm_level: confirmLevel,
-  });
-  if (fill != null) {
-    s.entry_price = fill;
-    s.peak_favorable = fill;
-    s.mode = 'MANAGE';
-    // Setup consumed on fill — do not keep ARMED hot for a second fire.
-    s.armed_trigger = idleArmedState();
-    // Risk clock NOT here — wait until Safety SL visible
-  } else {
-    s.mode = 'FLAT';
-    s.entry_price = null;
-    pushTick(s, {
-      phase: 'WAIT',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `FILL UNKNOWN · waiting broker open_level · signal mid ${signalMid} not used for BO`,
-    });
-  }
-  if (brokerLevel != null && signalMid != null && Math.abs(brokerLevel - signalMid) > 1e-9) {
-    pushTick(s, {
-      phase: 'INFO',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `FILL · broker ${brokerLevel} vs signal mid ${signalMid} · slippage ${(brokerLevel - signalMid).toFixed(5)} · BO uses broker`,
-    });
-  }
-  // #26 — clear pending only when broker position + fill confirmed
-  if (
-    canClearPendingExecution({
-      brokerOpen: brokerLevel != null,
-      fillLevel: fill,
-    })
-  ) {
-    clearPendingExecution(s.id);
-  }
-  persistBoFromSession(s);
-
-  if (fill == null) {
-    return;
-  }
-
-  // Verify SL is physically on Capital.com — attach via PUT if missing
-  const ensured = await ensureCapitalStopVisible(session, s.epic, {
-    dealId: s.deal_id,
-    stopDistance: usedStopDistance,
-    stopLevel,
-    minPts,
-  });
-  if (ensured.deal_id) s.deal_id = ensured.deal_id;
-
-  if (ensured.ok && ensured.stop_level != null) {
-    s.safety_sl = ensured.stop_level;
-  }
-
-  // Still no SL on Capital → close immediately (never leave naked)
-  if (!ensured.ok || ensured.stop_level == null) {
-    pushTick(s, {
-      phase: 'ERROR',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `Capital.com shows NO SL — closing position (naked trade forbidden) · ${ensured.detail}`,
-    });
-    if (s.deal_id) {
-      await closeCapitalPosition(session, s.deal_id);
-    }
-    clearTradeState(s);
-    s.error = 'SL not visible on Capital.com — trade closed';
-    return;
-  }
-
-  // Risk clock / trade counter — exactly once after broker fill AND Safety SL confirmed
-  if (!s.risk_open_noted) {
-    noteRiskTradeOpen(s.account_id);
-    s.risk_open_noted = true;
-  }
-  persistBoFromSession(s);
-
-  pushTick(s, {
-    phase: 'INFO',
-    bid: quote.bid,
-    ask: quote.ask,
-    mid: quote.mid,
-    detail: ensured.detail,
-  });
 
   pushTick(s, {
     phase: 'ORDER',
     bid: quote.bid,
     ask: quote.ask,
     mid: quote.mid,
-    detail: `ORDER ENTRY ${direction} ${s.display_name} lot=${s.lot_size} · entry=${s.entry_price} (broker fill) · Capital Safety SL ${
-      s.safety_sl
-    } VISIBLE${usedStopDistance != null ? ` (dist ${usedStopDistance}pts)` : ''}${
-      s.structural_sl != null ? ` · structSL ${s.structural_sl}` : ''
-    } · ${result.detail}${
-      dealId || s.deal_id ? ` · dealId=${s.deal_id || dealId}` : ''
+    detail: `ORDER ENTRY ${direction} ${s.display_name} lot=${s.lot_size} · SL ${
+      s.safety_sl ?? 'none'
+    }${usedStopDistance != null ? ` (dist ${usedStopDistance}pts)` : ''} · ${result.detail}${
+      dealId ? ` · dealId=${dealId}` : ''
     }`,
   });
-
-  s.journal_open = buildJournalOpen(
-    s,
-    direction,
-    reason,
-    setupType ?? null,
-    s.entry_enabled ? 'desk' : 'manage'
-  );
-  const openLog = appendOpenEvent(s.journal_open);
-  pushTick(s, {
-    phase: 'INFO',
-    bid: quote.bid,
-    ask: quote.ask,
-    mid: quote.mid,
-    detail: openLog.ok
-      ? `EXCEL open-log · ${s.journal_open.trade_id} · close → ${tradeJournalPath()}`
-      : openLog.detail,
-  });
-
   if (s.client_id) {
     emitToClient(s.client_id, {
       type: 'trade_opened',
@@ -1517,7 +809,6 @@ async function enterTrade(
       trade_type: mapTradeType(direction, setupType, s.regime),
       lot_size: s.lot_size,
       entry_price: s.entry_price,
-      safety_sl: s.safety_sl,
     });
   }
 
@@ -1535,7 +826,7 @@ async function enterTrade(
         s.account_id,
         m.rows[0]?.id || 0,
         direction === 'BUY' ? 'LONG' : 'SHORT',
-        s.entry_price, // broker fill only — never quote.mid invent
+        quote.mid || 0,
         s.lot_size,
       ]
     );
@@ -1546,16 +837,6 @@ async function enterTrade(
 
 
 async function robotCycle(s: Internal) {
-  if (!s.running || s.cycle_busy) return;
-  s.cycle_busy = true;
-  try {
-    await robotCycleBody(s);
-  } finally {
-    s.cycle_busy = false;
-  }
-}
-
-async function robotCycleBody(s: Internal) {
   if (!s.running) return;
 
   const { rows } = await pool.query(
@@ -1638,270 +919,83 @@ async function robotCycleBody(s: Internal) {
     s.reads_ok += 1;
     s.error = null;
     s.last_quote_at = new Date().toISOString();
-    s.last_quote_fetch_ms = Date.now();
     if (quote.epic && quote.epic !== s.epic) {
       s.epic = quote.epic;
     }
-    if (quote.mid != null) s.last_mid = quote.mid;
-
-    s.market_status = quote.market_status;
-    s.market_tradeable = marketAllowsTrading(quote.market_status);
-
-    // Always refresh feeds (even when parked) — OWN Capital LEAD only
-    if (Date.now() - s.last_multi_feed_ms >= 4_000) {
-      s.last_multi_feed_ms = Date.now();
-      try {
-        s.multiFeed = await readMultiFeedPrice(s.epic, {
-          anchorMid: quote.mid,
-          connectionId: s.connection_id,
-        });
-      } catch {
-        /* keep previous */
-      }
-    }
-    // 10s OHLC from THIS client's Capital mid only — never peer blend (kill-switch OFF → skip)
-    const warmMid = quote.mid;
-    s.feed_source = 'LOCAL';
-    s.feed_contributing = warmMid != null ? 1 : s.multiFeed?.capital_contributing ?? 0;
-    s.feed_sender_count = 1;
-    s.feed_agreement = s.multiFeed?.agreement ?? 'INSUFFICIENT';
-    if (TEN_SEC_OHLC_ENABLED && warmMid != null) {
-      s.ohlcState = updateTenSecondOhlc(s.ohlcState, warmMid, Date.now());
-      s.ohlc_10s = publicOhlc10s(s.ohlcState);
-      if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
-        applyRobotRegime(s, [s.ohlcState.last_closed]);
-      }
-    } else if (!TEN_SEC_OHLC_ENABLED) {
-      s.ohlc_10s = publicOhlc10sOff();
-      s.ohlcState = emptyTenSecState();
-      s.closedBars = [];
-      // Do NOT idle armed_trigger here — EARLY accumulates on Capital 1m across ticks.
-      // Regime from Capital 1m when 10s is off
-      const oneMin = barsAsTenSec(s.multiTf.books['1m']?.bars ?? []);
-      if (oneMin.length >= 2) applyRobotRegime(s, oneMin.slice(-8));
-    }
 
     // Market closed / offline → park: no positions sync, no MANAGE, no entry (anti-spam Capital)
-    if (!s.market_tradeable) {
+    if (!marketAllowsTrading(quote.market_status)) {
       setRobotCadence(s, CLOSED_MARKET_CADENCE_MS);
       const now = Date.now();
-      const justClosed = s.last_market_tradeable && !s.market_tradeable;
-      s.last_market_tradeable = false;
-      const marketLine = formatMarketInfo(
-        s.market_status,
-        false,
-        CLOSED_MARKET_CADENCE_MS / 1000
-      );
-      if (
-        justClosed ||
-        now - s.last_market_closed_tick_ms >= CLOSED_MARKET_TICK_EVERY_MS
-      ) {
+      if (now - s.last_market_closed_tick_ms >= CLOSED_MARKET_TICK_EVERY_MS) {
         s.last_market_closed_tick_ms = now;
         pushTick(s, {
-          phase: justClosed ? 'INFO' : 'WAIT',
+          phase: 'WAIT',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${marketLine} · feeds cap ${s.feed_contributing ?? 0}/${s.feed_sender_count ?? 0} ${s.feed_source || 'LOCAL'}`,
+          detail: `MARKET ${quote.market_status || 'CLOSED'} — park robot (no manage / no entry / no position spam) · poll ${
+            CLOSED_MARKET_CADENCE_MS / 1000
+          }s until TRADEABLE`,
         });
       }
       return;
     }
 
-    s.last_market_tradeable = true;
-
     // Restore normal cadence after a successful tradeable read (may have been slowed by 429 / closed)
-    setRobotCadence(s, s.open_side ? MANAGE_CADENCE_MS : ACTIVE_CADENCE_MS);
+    setRobotCadence(s, ACTIVE_CADENCE_MS);
+    s.last_mid = quote.mid;
+
+    // Multi-provider read (Capital + public near Capital). Throttle to protect Capital API.
+    if (Date.now() - s.last_multi_feed_ms >= 4_000) {
+      s.last_multi_feed_ms = Date.now();
+      try {
+        s.multiFeed = await readMultiFeedPrice(s.epic, { anchorMid: quote.mid });
+      } catch {
+        /* keep previous multiFeed snapshot */
+      }
+    } else if (s.multiFeed && quote.mid != null) {
+      // Re-anchor pick every tick even if multi snapshot is cached
+    }
+    const picked = pickOhlcMid(quote.mid, s.multiFeed);
+    s.feed_source = picked.source;
+    s.feed_contributing = s.multiFeed?.contributing ?? 0;
+    s.feed_sender_count = s.multiFeed?.sender_count ?? 0;
+    s.feed_agreement = s.multiFeed?.agreement ?? null;
+
+    // OHLC always from Capital-safe mid (LOCAL Capital quote if public is far)
+    const ohlcMid = picked.mid ?? quote.mid;
+    if (ohlcMid != null) {
+      s.ohlcState = updateTenSecondOhlc(s.ohlcState, ohlcMid, Date.now());
+      s.ohlc_10s = publicOhlc10s(s.ohlcState);
+      if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
+        applyRobotRegime(s, [s.ohlcState.last_closed]);
+      }
+    }
 
     // Sync truth from broker — source of ONE TRADE ONLY
     const listed = await listCapitalOpenPositions(opened.session);
     let brokerOpen: CapitalOpenPosition | null = null;
     if (listed.ok) {
-      const onEpic = allOpensOnEpic(listed.positions, s.epic);
-      // Hedge BUY+SELL on same epic → flatten immediately (Capital "same trade" mess)
-      if (isHedgedOpens(onEpic)) {
-        await flattenBrokerOpensOnEpic(
-          opened.session,
-          s,
-          quote,
-          onEpic,
-          'HEDGE BUY+SELL on one epic — kill both'
-        );
-        queueMicrotask(() => kickPeerManageCycles(s.id, s.epic));
-        return;
-      }
-      // Stacked same-side deals → keep one, close extras
-      if (onEpic.length > 1) {
-        const keep = onEpic[0]!;
-        const extras = onEpic.slice(1);
+      brokerOpen = matchOpenOnEpic(listed.positions, s.epic);
+      if (brokerOpen) {
+        s.open_side = brokerOpen.direction;
+        s.deal_id = brokerOpen.deal_id;
+        if (s.entry_price == null) s.entry_price = brokerOpen.open_level ?? quote.mid;
+        if (!s.entry_at) s.entry_at = new Date().toISOString();
+        s.mode = 'MANAGE';
+        if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
+      } else if (s.open_side) {
+        // Local thought open but broker flat → treat as closed
         pushTick(s, {
-          phase: 'DECIDE',
+          phase: 'INFO',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `STACKED ${onEpic.length}×${keep.direction} · keep ${keep.deal_id} · close ${extras.length} extras`,
+          detail: 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
         });
-        for (const p of extras) {
-          const result = await closeCapitalPosition(opened.session, p.deal_id);
-          pushTick(s, {
-            phase: result.ok ? 'EXIT' : 'ERROR',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: result.ok
-              ? `CLOSED extra ${p.direction} ${p.deal_id}`
-              : `CLOSE FAIL extra ${p.deal_id}: ${result.detail}`,
-          });
-        }
-      }
-      brokerOpen = onEpic[0] || null;
-      if (brokerOpen) {
-        const prior = loadBoState(s.id);
-        s.open_side = brokerOpen.direction;
-        s.deal_id = brokerOpen.deal_id;
-        const fill = resolveEntryPrice({
-          broker_open_level: brokerOpen.open_level,
-        });
-        if (fill != null) s.entry_price = fill;
-        else if (s.entry_price == null && prior?.entry_price != null) {
-          s.entry_price = prior.entry_price;
-        }
-        if (!s.entry_at) s.entry_at = prior?.entry_at || new Date().toISOString();
-        if (prior) {
-          s.mfe = Math.max(s.mfe, prior.mfe);
-          s.mae = Math.min(s.mae, prior.mae);
-          s.peak_favorable = prior.peak_favorable || s.peak_favorable;
-          s.peak_retention = prior.peak_retention ?? s.peak_retention;
-          if (s.structural_sl == null) s.structural_sl = prior.structural_sl;
-          if (s.structure_target == null && prior.structure_target != null) {
-            s.structure_target = prior.structure_target;
-          }
-        }
-        if (brokerOpen.stop_level != null) s.safety_sl = brokerOpen.stop_level;
-        s.mode = 'MANAGE';
-        if (shouldRetryClose(s.close_phase)) {
-          persistBoFromSession(s);
-          setRobotCadence(s, MANAGE_CADENCE_MS);
-          if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
-          await exitTrade(
-            opened.session,
-            s,
-            quote,
-            `CLOSE retry · phase ${s.close_phase} · broker still open`
-          );
-          return;
-        }
-        s.close_phase = 'OPEN';
-        setRobotCadence(s, MANAGE_CADENCE_MS);
-        if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
-        persistBoFromSession(s);
-
-        // Pending execution recovery — never duplicate
-        const pending = loadPendingExecution(s.id);
-        const rec = recoverPendingExecution({
-          pending,
-          brokerOpen: {
-            deal_id: brokerOpen.deal_id,
-            direction: brokerOpen.direction,
-            open_level: brokerOpen.open_level,
-          },
-        });
-        if (rec.action === 'ADOPT') {
-          clearPendingExecution(s.id);
-          pushTick(s, {
-            phase: 'INFO',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: rec.detail,
-          });
-        }
-      } else if (s.open_side) {
-        const pending = loadPendingExecution(s.id);
-        // Do not clear in-flight entry while pending claim exists (listing lag)
-        if (pending) {
-          pushTick(s, {
-            phase: 'WAIT',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: `Broker list flat but pending execution ${pending.deal_reference || 'claim'} — RECONCILING (not clearing)`,
-          });
-          s.close_phase = 'RECONCILING';
-          persistBoFromSession(s);
-        } else if (s.close_phase === 'CLOSE_UNCERTAIN' || s.close_phase === 'RECONCILING') {
-          pushTick(s, {
-            phase: 'EXIT',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: 'Broker flat after CLOSE_UNCERTAIN — confirmed CLOSED',
-          });
-          s.closed_at_ms = Date.now();
-          const realizedGot = await fetchCapitalConfirmedProfit(
-            opened.session,
-            s.last_deal_reference
-          );
-          let wasLoss = false;
-          if (
-            realizedGot.ok &&
-            realizedGot.profit != null &&
-            Number.isFinite(realizedGot.profit)
-          ) {
-            wasLoss = realizedGot.profit <= 0;
-            noteRiskTradePnl(s.account_id, realizedGot.profit);
-            pushTick(s, {
-              phase: 'INFO',
-              bid: quote.bid,
-              ask: quote.ask,
-              mid: quote.mid,
-              detail: `RISK PnL · broker realized ${realizedGot.profit} · ${realizedGot.detail}`,
-            });
-          } else {
-            pushTick(s, {
-              phase: 'INFO',
-              bid: quote.bid,
-              ask: quote.ask,
-              mid: quote.mid,
-              detail: `RISK PnL UNKNOWN · skipped noteRiskTradePnl · ${realizedGot.detail}`,
-            });
-          }
-          noteEpicTradeClose(s.epic, s.open_side, wasLoss, s.client_id);
-          clearTradeState(s);
-        } else {
-          pushTick(s, {
-            phase: 'INFO',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
-          });
-          s.closed_at_ms = Date.now();
-          noteEpicTradeClose(s.epic, s.open_side, false, s.client_id);
-          clearTradeState(s);
-        }
-      } else {
-        // Flat + pending claim without broker open
-        const pending = loadPendingExecution(s.id);
-        const rec = recoverPendingExecution({ pending, brokerOpen: null });
-        if (rec.action === 'CLEAR_PENDING') {
-          clearPendingExecution(s.id);
-          pushTick(s, {
-            phase: 'INFO',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: rec.detail,
-          });
-        } else if (rec.action === 'WAIT') {
-          pushTick(s, {
-            phase: 'WAIT',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: rec.detail,
-          });
-        }
+        s.closed_at_ms = Date.now();
+        clearTradeState(s);
       }
     } else {
       pushTick(s, {
@@ -1913,8 +1007,8 @@ async function robotCycleBody(s: Internal) {
       });
     }
 
-    if (s.open_side && s.entry_price != null && quote.mid != null) {
-      updateExcursion(s, quote.mid, brokerOpen?.upl ?? s.unrealized);
+    if (quote.mid != null && s.open_side && s.entry_price != null) {
+      updateExcursion(s, quote.mid);
     }
 
     pushTick(s, {
@@ -1941,73 +1035,24 @@ async function robotCycleBody(s: Internal) {
     // ——— MANAGE open trade: never send entry ———
     if (s.open_side || brokerOpen) {
       s.mode = 'MANAGE';
-      // Keep Capital multi-TF seeded for ATR / structure_target during manage + restart
-      if (!s.multiTf.ready || s.multiTf.seeded_at_ms == null) {
-        try {
-          if ((s.multiTf.seed_next_allowed_ms ?? 0) <= Date.now()) {
-            s.multiTf = await seedMultiTfHistory(opened.session, s.epic, s.multiTf);
-          }
-        } catch {
-          /* manage continues with whatever books exist */
-        }
-      } else {
-        try {
-          s.multiTf = await refreshDueTfBooks(opened.session, s.epic, s.multiTf);
-        } catch {
-          /* ignore refresh errors in manage */
-        }
-      }
       if (quote.mid == null) return;
 
-      const liveSide = s.open_side || brokerOpen?.direction || null;
-
-      const short = shortNetMove(
-        deskClosedBars(s),
-        TEN_SEC_OHLC_ENABLED
-          ? s.ohlcState.forming ?? s.ohlcState.last_closed
-          : deskClosedBars(s).slice(-1)[0] ?? null
-      );
-      if (liveSide === 'BUY' || liveSide === 'SELL') {
-        const desk = deskOpensOnEpic(sessions.values(), s.epic, s.id);
-        const hasOpposite =
-          (liveSide === 'BUY' && desk.sells.length > 0) ||
-          (liveSide === 'SELL' && desk.buys.length > 0);
-        const conflict = deskConflictShouldExit(liveSide, hasOpposite, short.netPct);
-        if (conflict.exit) {
-          await exitTrade(opened.session, s, quote, conflict.reason);
-          queueMicrotask(() => kickPeerManageCycles(s.id, s.epic));
-          return;
-        }
-      }
-
-      // Aug 13 17:43 BO — mid price, simple TP/SL/peak retention (no GivebackBE / hybrid trail)
-      const boSnap = {
-        open_side: s.open_side,
-        entry_price: s.entry_price,
-        entry_at: s.entry_at,
-        mfe: s.mfe,
-        mae: s.mae,
-        peak_retention: s.peak_retention,
-        regime: s.regime,
-      };
-      const decision = decideBestOutcomeExit(boSnap, quote.mid);
+      const decision = decideBestOutcomeExit(s, quote.mid);
       if (decision.exit) {
         await exitTrade(opened.session, s, quote, decision.reason);
-        queueMicrotask(() => kickPeerManageCycles(s.id, s.epic));
         return;
       }
 
-      const zone = buildScalpZone(s.closedBars);
       pushTick(s, {
         phase: 'MANAGE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${formatScanContext(s, zone)} · UPL ${
+        detail: `ONE TRADE · manage ${s.open_side} · ${s.regime} · UPL ${
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
-        } · MFE ${s.mfe.toFixed(5)} · ret ${
+        } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · ${describeBestOutcomeState(boSnap, quote.mid).hold}`,
+        } · no new orders`,
       });
       return;
     }
@@ -2027,363 +1072,133 @@ async function robotCycleBody(s: Internal) {
     }
 
     s.mode = 'ENTRY';
-
-    // Analysis domain = MID — fall back to bid/ask composite (never block entry on UNKNOWN mid)
-    const analysisPrice =
-      analysisMid(quote) ??
-      (quote.bid != null && quote.ask != null && Number.isFinite(quote.bid) && Number.isFinite(quote.ask)
-        ? (quote.bid + quote.ask) / 2
-        : quote.bid ?? quote.ask ?? null);
-    if (analysisPrice == null) {
+    const sinceClose = Date.now() - (s.closed_at_ms || 0);
+    if (s.closed_at_ms > 0 && sinceClose < 20_000) {
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: 'ENTRY BLOCKED · no quote price · no trade',
+        detail: `10s OHLC cooldown ${Math.ceil((20_000 - sinceClose) / 1000)}s after close · then next bar`,
       });
       return;
     }
 
-    // Seed / refresh Capital-native multi-TF history (primary) before any ENTRY READY
-    const needSeed =
-      !s.multiTf.ready ||
-      Date.now() - s.last_multi_tf_seed_ms >= 60_000 ||
-      s.multiTf.seeded_at_ms == null;
-    if (needSeed) {
-      s.last_multi_tf_seed_ms = Date.now();
-      try {
-        s.multiTf = await seedMultiTfHistory(opened.session, s.epic, s.multiTf);
-        pushTick(s, {
-          phase: 'INFO',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `TF seed · ${s.multiTf.detail}`,
-        });
-      } catch (err) {
-        s.multiTf = {
-          ...s.multiTf,
-          ready: false,
-          detail: `TF seed fail · ${err instanceof Error ? err.message : String(err)}`,
-        };
-      }
-    } else {
-      s.multiTf = await refreshDueTfBooks(opened.session, s.epic, s.multiTf);
-      s.last_multi_tf_seed_ms = Date.now();
-    }
+    if (quote.mid == null) return;
 
-    if (!s.multiTf.ready) {
-      pushTick(s, {
-        phase: 'WAIT',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `ENTRY BLOCKED · multi-TF history not ready · ${s.multiTf.detail}`,
-      });
-      return;
-    }
-
-    // Structure books must be present (closed bars only — forming never confirms)
-    const structReady =
-      s.multiTf.books['4H'].ready &&
-      s.multiTf.books['1H'].ready &&
-      s.multiTf.books['15m'].ready &&
-      s.multiTf.books['5m'].ready &&
-      s.multiTf.books['1m'].ready &&
-      s.multiTf.books['5m'].bars.length >= 8 &&
-      s.multiTf.books['5m'].atr != null;
-    if (!structReady) {
-      pushTick(s, {
-        phase: 'WAIT',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: 'ENTRY BLOCKED · structure/data-quality NOT_READY · no trade',
-      });
-      return;
-    }
-
-    // Keep armed SETUP→ARMED for EARLY. When 10s OHLC is OFF, closedBars are
-    // Capital 1m (deskClosedBars) — still need stateful micro score across ticks.
-    // Previously idleArmedState() every cycle → zero entries + "waiting 5m structure".
-    s.armed_trigger = refreshArmedTriggerState(s.armed_trigger, {
-      price: analysisPrice,
-      multiTf: s.multiTf,
-      closedBars: deskClosedBars(s),
-      spread: quote.spread ?? null,
-      tick_size: quote.point_size ?? null,
-      broker_min_stop: quote.min_stop_distance ?? null,
-    });
-
-    // 10s for microstructure / timing only (not HTF) — fully skipped when OFF
-    if (TEN_SEC_OHLC_ENABLED && Date.now() - s.last_second_fetch_ms >= 4_000) {
+    // Seed from this account's SECOND candles only when multi-provider OHLC is NOT in charge.
+    // Otherwise a single Capital row would overwrite consensus bars used for regime/entry.
+    if (!multiFeedOwnsOhlc(s.multiFeed) && Date.now() - s.last_second_fetch_ms >= 8_000) {
       s.last_second_fetch_ms = Date.now();
-      const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 100);
-      if (sec.ok && sec.candles.length >= 20) {
+      const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 40);
+      if (sec.ok && sec.candles.length >= 10) {
         const bars = aggregateSecondsToTen(sec.candles);
         const last = bars[bars.length - 1];
         if (last) {
-          const bucket = String(last.open_time_ms || 0);
-          const isNew = Boolean(bucket) && bucket !== s.last_closed_bar_key;
+          const key = `${last.open.toFixed(4)}:${last.close.toFixed(4)}:${last.high.toFixed(4)}`;
+          const isNew = key !== s.last_closed_bar_key;
           s.ohlcState = {
             forming: s.ohlcState.forming,
             last_closed: last,
             just_closed: isNew,
           };
-          if (isNew) s.last_closed_bar_key = bucket;
+          if (isNew) s.last_closed_bar_key = key;
           s.ohlc_10s = publicOhlc10s(s.ohlcState);
           applyRobotRegime(s, bars);
-          for (const b of bars) {
-            const prev = s.closedBars[s.closedBars.length - 1];
-            if (prev && prev.open_time_ms === b.open_time_ms) s.closedBars[s.closedBars.length - 1] = b;
-            else s.closedBars.push(b);
-          }
-          if (s.closedBars.length > MAX_REGIME_BARS) {
-            s.closedBars = s.closedBars.slice(-MAX_REGIME_BARS);
-          }
         }
       }
     }
 
-    const zoneNow = buildScalpZone(deskClosedBars(s));
+    // Soft advisory only — public feeds must never freeze Capital entries
     const feedGate = allowEntryFromFeeds(s.multiFeed);
     if (!feedGate.ok) {
-      pushTick(s, {
-        phase: 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `NO ENTRY · feeds · ${feedGate.reason} · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)} · ${formatScanContext(s, zoneNow, feedGate.reason)}`,
-      });
-      return;
-    }
-
-    const quoteFetchMs = s.last_quote_fetch_ms || Date.now();
-    const sourceMs = quote.update_time ? Date.parse(quote.update_time) : null;
-    const dq = allowEntryFromDataQuality(
-      {
-        mid: analysisPrice,
-        fetch_ms: quoteFetchMs,
-        source_ms: sourceMs != null && Number.isFinite(sourceMs) ? sourceMs : null,
-      },
-      { nowMs: Date.now(), maxStaleMs: 15_000 }
-    );
-    if (!dq.ok) {
-      pushTick(s, {
-        phase: 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `NO ENTRY · data quality · ${dq.reason} · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)}`,
-      });
-      return;
-    }
-
-    // riskWindow is monitor/PnL stats only — NEVER an entry blocker (manual lot_size is authoritative;
-    // entry does not depend on Capital balance/equity).
-    const risk = allowRiskEntry(s.account_id, s.unrealized ?? 0);
-    persistRiskSnapshotJson(s.account_id, risk.snapshot);
-
-    const oneMinBooks = s.multiTf.books['1m']?.bars ?? [];
-    const closed1mBook = [...oneMinBooks].reverse().find((b) => b.provenance === 'REAL' && !b.forming);
-    const forming1mBook = [...oneMinBooks].reverse().find((b) => b.provenance === 'REAL' && b.forming);
-    const toSignalBar = (
-      b: (typeof oneMinBooks)[number] | undefined
-    ): TenSecBar | null =>
-      b
-        ? {
-            open_time_ms: b.open_time_ms,
-            open: b.open,
-            high: b.high,
-            low: b.low,
-            close: b.close,
-            ticks: b.ticks ?? 8,
-            provenance: (b.provenance as TenSecBar['provenance']) ?? 'REAL',
-          }
-        : null;
-    const closed1mBar = toSignalBar(closed1mBook);
-    const forming1mBar = toSignalBar(forming1mBook);
-    const bucket1m = closed1mBook ? String(closed1mBook.open_time_ms || 0) : '';
-    if (bucket1m && bucket1m !== s.last_1m_close_key) s.last_1m_close_key = bucket1m;
-
-    // Prefer forming 1m as signal when present — mid-candle MOVE catches early
-    const closed = TEN_SEC_OHLC_ENABLED ? s.ohlcState.last_closed : closed1mBar;
-    const forming = TEN_SEC_OHLC_ENABLED ? s.ohlcState.forming : forming1mBar;
-    const justClosed = TEN_SEC_OHLC_ENABLED
-      ? Boolean(s.ohlcState.just_closed && closed)
-      : false;
-    const signalBar: TenSecBar | null = TEN_SEC_OHLC_ENABLED
-      ? justClosed
-        ? closed!
-        : forming && forming.ticks >= 2
-          ? forming
-          : closed || null
-      : forming1mBar || closed1mBar;
-    const liveSignal = Boolean(
-      TEN_SEC_OHLC_ENABLED
-        ? signalBar && !justClosed
-        : Boolean(forming1mBar)
-    );
-    const ohlc = TEN_SEC_OHLC_ENABLED ? s.ohlc_10s : publicOhlc10sOff();
-    const show = signalBar || closed;
-    const ohlcLine = !TEN_SEC_OHLC_ENABLED
-      ? tenSecOhlcStatusLine()
-      : show
-        ? `10s${liveSignal ? ' LIVE' : justClosed ? ' CLOSE' : ''} O=${show.open.toFixed(2)} H=${show.high.toFixed(2)} L=${show.low.toFixed(2)} C=${show.close.toFixed(2)}${show.provenance === 'SYNTHETIC' ? ' SYN' : ''}`
-        : `10s OHLC seeding · C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'}`;
-
-    let direction: 'BUY' | 'SELL' | null = null;
-    let reason = '';
-    let setupType: string | null = null;
-
-    if (!signalBar) {
-      pushTick(s, {
-        phase: 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `NO ENTRY · no LTF signal bar · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)} · ${ohlcLine} · ${formatScanContext(s, zoneNow)}`,
-      });
-      return;
-    }
-
-    if (TEN_SEC_OHLC_ENABLED && signalBar.provenance === 'SYNTHETIC') {
-      pushTick(s, {
-        phase: 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `NO ENTRY · synthetic 10s barred · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)} · ${formatScanContext(s, zoneNow)}`,
-      });
-      return;
-    }
-
-    if (!s.regime) s.regime = 'RANGE';
-    const bucketKey = String(signalBar.open_time_ms || 0);
-    if (
-      TEN_SEC_OHLC_ENABLED &&
-      bucketKey &&
-      bucketKey === s.last_entry_signal_key &&
-      !liveSignal
-    ) {
-      pushTick(s, {
-        phase: 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `NO ENTRY · same 10s bucket already scanned · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)} · ${ohlcLine}`,
-      });
-      return;
-    }
-
-    const execQ = tagExecutionQuote({
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: analysisPrice,
-    });
-    const confLegs = (s.feed_legs || [])
-      .filter((l) => l.mid != null)
-      .map((l) => tagConfirmationQuote(l.name || l.sender_id || 'feed', Number(l.mid)));
-    const refAgree = referenceAgreement(execQ.mid, confLegs);
-
-    const htf = buildHtfContextFromBooks(s.multiTf, analysisPrice);
-    const bars5m = s.multiTf.books['5m'].bars;
-    const bars1m = s.multiTf.books['1m'].bars;
-    const bars15m = s.multiTf.books['15m'].bars;
-
-    const sig = decideEntryFrom10sRegime(signalBar, s.regime, deskClosedBars(s), {
-      spread: quote.spread ?? execQ.spread,
-      feed_agreement: refAgree.agreement,
-      broker_min_stop: quote.min_stop_distance,
-      htf,
-      bars5m,
-      bars1m,
-      bars15m,
-      multiTfReady: s.multiTf.ready,
-      analysis_price: analysisPrice,
-      tick_size: quote.point_size ?? null,
-      armed_state: s.armed_trigger,
-      on_armed_state: (st) => {
-        s.armed_trigger = st;
-      },
-      already_fired_1m_key: s.last_entry_signal_key || null,
-    });
-    if (!sig) {
-      pushTick(s, {
-        phase: 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `NO ENTRY · decide null · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)} · ${ohlcLine} · ${explainNoEntry(signalBar, s.regime, deskClosedBars(s), {
-          multiTfReady: s.multiTf.ready,
-          analysis_price: analysisPrice,
-          armed_state: s.armed_trigger,
-          htf,
-          bars5m,
-          bars1m,
-          tape_dir: tapeSide(deskClosedBars(s), signalBar).dir,
-          tick_size: quote.point_size ?? null,
-        })} · HTF ${htf.detail}`,
-      });
-      return;
-    }
-
-    // No post-trade cooldown — 5m signals fire immediately per client.
-    const isEarlyTrigger = /EARLY|TRIGGERED|1M MOVE|5M/i.test(sig.reason);
-    const reentry = allowEpicReentry(s.epic, sig.direction, s.client_id);
-    if (!reentry.ok) {
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `NO ENTRY · ${reentry.reason} · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)}`,
+        detail: `FEED NOTE · ${feedGate.reason}`,
       });
-      return;
+      // do not return — Capital local path continues
     }
-    if (!isEarlyTrigger) {
-      const staleDir = detectStaleQuoteAdverse(
-        sig.direction,
-        analysisPrice,
-        confLegs.map((c) => ({ label: c.label, mid: c.mid })),
-        { requireRefs: false }
-      );
-      if (staleDir.block) {
+
+    const bar = s.ohlcState.last_closed;
+    const ohlc = s.ohlc_10s;
+    const ohlcLine = bar
+      ? `10s O=${bar.open.toFixed(2)} H=${bar.high.toFixed(2)} L=${bar.low.toFixed(2)} C=${bar.close.toFixed(2)} ${s.regime} · feeds ${
+          s.feed_contributing || 0
+        }/${s.feed_sender_count || 0} ${s.feed_source || 'LOCAL'} ${s.feed_agreement || ''}`
+      : `10s OHLC seeding · feeds ${s.feed_contributing || 0}/${s.feed_sender_count || 0}`;
+
+    let direction: 'BUY' | 'SELL' | null = null;
+    let reason = '';
+    let setupType: string | null = null;
+
+    if (s.ohlcState.just_closed && bar) {
+      const sig = decideEntryFrom10sRegime(bar, s.regime);
+      if (sig) {
+        direction = sig.direction;
+        setupType = sig.setup;
+        reason = sig.reason;
+      } else {
         pushTick(s, {
           phase: 'DECIDE',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `NO ENTRY · stale guard · ${staleDir.reason} · ${formatArmedTriggerDiag(s.armed_trigger, analysisPrice)}`,
+          detail: `${ohlcLine} · ${s.regime} not suitable on this 10s close · wait next candle`,
         });
-        return;
+      }
+    } else {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · forming C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'} · wait bar close`,
+      });
+    }
+
+    if (direction) {
+      const hist = await fetchCapitalMinutePrices(opened.session, s.epic, 3);
+      if (hist.ok && isLateMoveOnOneMinute(direction, hist.candles)) {
+        pushTick(s, {
+          phase: 'WAIT',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `SKIP · late on 1m candle (end of move) · ${direction}`,
+        });
+        direction = null;
       }
     }
 
-    direction = sig.direction;
-    setupType = sig.setup;
-    if (sig.structural_sl != null) s.structural_sl = sig.structural_sl;
-    reason = liveSignal ? `LIVE LTF confirm · ${sig.reason}` : sig.reason;
-    if (bucketKey) s.last_entry_signal_key = bucketKey;
+    // Capital button lag vs already-printed drop/rally (chart/public/10s OHLC)
+    if (direction && quote.mid != null) {
+      const publicNear = (s.multiFeed?.legs || [])
+        .filter((l) => l.ok && l.mid != null && Number.isFinite(l.mid))
+        .filter((l) => !String(l.detail || '').includes('FAR from Capital'))
+        .map((l) => ({ name: l.name, mid: l.mid as number }));
+      const refs = buildFresherRefs({
+        publicNearMids: publicNear,
+        ohlcClose: s.ohlcState.last_closed?.close ?? s.ohlc_10s?.last_c ?? null,
+        formingClose: s.ohlcState.forming?.close ?? s.ohlc_10s?.forming_c ?? null,
+      });
+      const lag = detectStaleQuoteAdverse(direction, quote.mid, refs);
+      if (lag.block) {
+        pushTick(s, {
+          phase: 'WAIT',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `SKIP · ${lag.reason}`,
+        });
+        direction = null;
+      }
+    }
 
-    pushTick(s, {
-      phase: 'ORDER',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `ENTRY READY · ${reason} · ${htf.detail}`,
-    });
-
-    await enterTrade(
-      opened.session,
-      s,
-      direction,
-      quote,
-      reason,
-      setupType,
-      sig.structural_sl
-    );
+    if (!direction) return;
+    await enterTrade(opened.session, s, direction, quote, reason, setupType);
   } catch (err) {
     s.reads_fail += 1;
     const detail = err instanceof Error ? err.message : String(err);
@@ -2494,36 +1309,19 @@ export async function startRobotSession(input: {
     reads_fail: 0,
     open_side: null,
     safety_sl: null,
-    structural_sl: null,
-    structure_target: null,
-    atr_5m: null,
-    risk_open_noted: false,
-    close_phase: 'CLOSED',
     error: null,
     entry_enabled: input.entry_enabled !== false,
     timer: null,
     closed_at_ms: 0,
     peak_favorable: 0,
     last_market_closed_tick_ms: 0,
-    last_market_tradeable: true,
-    market_status: null,
-    market_tradeable: true,
     cadence_ms: 0,
     ohlcState: emptyTenSecState(),
     last_second_fetch_ms: 0,
     last_closed_bar_key: '',
-    last_1m_close_key: '',
-    last_entry_signal_key: '',
     closedBars: [],
     last_multi_feed_ms: 0,
     multiFeed: null,
-    cycle_busy: false,
-    journal_open: null,
-    pending_deal_reference: null,
-    multiTf: emptyMultiTfState(),
-    last_multi_tf_seed_ms: 0,
-    last_quote_fetch_ms: 0,
-    armed_trigger: idleArmedState(),
     feed_source: 'NONE',
     feed_contributing: 0,
     feed_sender_count: 0,
@@ -2538,7 +1336,7 @@ export async function startRobotSession(input: {
     bid: null,
     ask: null,
     mid: null,
-    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · multi-TF Capital history · ONE TRADE · other robots: ${others}`,
+    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · 10s OHLC from multi-feed consensus · ONE TRADE ONLY · other robots: ${others}`,
   });
   pushTick(session, {
     phase: 'INFO',
@@ -2546,51 +1344,10 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      '4H/1H→15m→5m→1m→10s brain · ENTRY blocked until TF seed ready · structural SL + Safety SL · BO · journal → ' +
-      tradeJournalPath(),
+      'Rules: max 1 open trade · MANAGE with best-outcome · 10s OHLC from ALL Capital feeds when they agree · park when market closed',
   });
 
-  // Restart recovery — Capital open = truth
-  const priorBo = loadBoState(id);
-  if (priorBo) {
-    session.open_side = priorBo.side;
-    session.deal_id = priorBo.deal_id;
-    session.entry_price = priorBo.entry_price;
-    session.entry_at = priorBo.entry_at;
-    session.mfe = priorBo.mfe;
-    session.mae = priorBo.mae;
-    session.peak_favorable = priorBo.peak_favorable;
-    session.peak_retention = priorBo.peak_retention;
-    session.structural_sl = priorBo.structural_sl;
-    session.safety_sl = priorBo.safety_sl;
-    session.structure_target = priorBo.structure_target ?? null;
-    session.mode = 'MANAGE';
-    session.close_phase = priorBo.close_phase === 'CLOSED' ? 'OPEN' : priorBo.close_phase;
-    pushTick(session, {
-      phase: 'INFO',
-      bid: null,
-      ask: null,
-      mid: null,
-      detail: `BO recover · prior state deal=${priorBo.deal_id} MFE=${priorBo.mfe}${
-        priorBo.structure_target != null ? ` structTgt=${priorBo.structure_target}` : ''
-      } · will sync Capital`,
-    });
-  }
-
   sessions.set(id, session);
-  try {
-    await markRobotDesiredRunning({
-      id,
-      account_id: acc.id,
-      epic,
-      display_name: displayName,
-      lot_size: lot,
-      trading_enabled: session.trading_enabled,
-      entry_enabled: session.entry_enabled,
-    });
-  } catch (err) {
-    console.warn('[robot-desk] persist start failed', err);
-  }
   emitToClient(acc.client_id, {
     type: 'robot_started',
     robot_id: id,
@@ -2618,7 +1375,6 @@ export async function attachManageOnlyRobot(input: {
   deal_reference?: string | null;
   regime?: string | null;
   setup_type?: string | null;
-  safety_sl?: number | null;
 }): Promise<RobotSession> {
   const id = robotIdFor(input.account_id, input.epic);
   const existing = sessions.get(id);
@@ -2631,18 +1387,7 @@ export async function attachManageOnlyRobot(input: {
     if (!existing.entry_at) existing.entry_at = new Date().toISOString();
     if (input.deal_reference) existing.last_deal_reference = input.deal_reference;
     if (input.regime) existing.regime = normalizeRegime(input.regime);
-    if (input.safety_sl != null) existing.safety_sl = input.safety_sl;
     existing.orders_placed = Math.max(existing.orders_placed, 1);
-    if (!existing.journal_open) {
-      existing.journal_open = buildJournalOpen(
-        existing,
-        input.side,
-        `PIPELINE FILL · ${input.setup_type || input.regime || 'intent'}`,
-        input.setup_type ?? null,
-        'pipeline'
-      );
-      appendOpenEvent(existing.journal_open);
-    }
     pushTick(existing, {
       phase: 'ORDER',
       bid: null,
@@ -2650,7 +1395,7 @@ export async function attachManageOnlyRobot(input: {
       mid: input.entry_price,
       detail: `PIPELINE FILL ${input.side} ${input.display_name} lot=${input.lot_size} · ${
         existing.regime
-      } · manage-only (kept MFE ${existing.mfe.toFixed(5)}) · journal ${existing.journal_open.trade_id}`,
+      } · manage-only (kept MFE ${existing.mfe.toFixed(5)})`,
     });
     return publicSession(existing);
   }
@@ -2672,15 +1417,6 @@ export async function attachManageOnlyRobot(input: {
     internal.last_deal_reference = input.deal_reference || null;
     internal.orders_placed = Math.max(internal.orders_placed, 1);
     if (input.regime) internal.regime = normalizeRegime(input.regime);
-    if (input.safety_sl != null) internal.safety_sl = input.safety_sl;
-    internal.journal_open = buildJournalOpen(
-      internal,
-      input.side,
-      `PIPELINE FILL · ${input.setup_type || input.regime || 'intent'}`,
-      input.setup_type ?? null,
-      'pipeline'
-    );
-    appendOpenEvent(internal.journal_open);
     pushTick(internal, {
       phase: 'ORDER',
       bid: null,
@@ -2688,47 +1424,8 @@ export async function attachManageOnlyRobot(input: {
       mid: input.entry_price,
       detail: `PIPELINE FILL ${input.side} ${input.display_name} lot=${input.lot_size} · ${
         internal.regime
-      } · manage-only attached · journal ${internal.journal_open.trade_id}`,
+      } · manage-only attached`,
     });
   }
   return getRobotSession(session.id) || session;
-}
-
-/** After API/PC restart — bring back robots that were running (Postgres persist). */
-export async function restorePersistedRobotSessions(): Promise<{
-  restored: number;
-  failed: number;
-}> {
-  const desired = await listDesiredRunningRobots();
-  let restored = 0;
-  let failed = 0;
-  for (const row of desired) {
-    try {
-      const id = robotIdFor(row.account_id, row.epic);
-      const existing = sessions.get(id);
-      if (existing?.running) {
-        restored += 1;
-        continue;
-      }
-      await startRobotSession({
-        account_id: row.account_id,
-        epic: row.epic,
-        display_name: row.display_name || undefined,
-        lot_size: row.lot_size,
-        trading_enabled: row.trading_enabled,
-        entry_enabled: row.entry_enabled,
-      });
-      restored += 1;
-      console.log(
-        `[robot-desk] restored ${row.display_name || row.epic} · account #${row.account_id}`
-      );
-    } catch (err) {
-      failed += 1;
-      console.warn(
-        `[robot-desk] restore failed account=${row.account_id} epic=${row.epic}:`,
-        err instanceof Error ? err.message : err
-      );
-    }
-  }
-  return { restored, failed };
 }

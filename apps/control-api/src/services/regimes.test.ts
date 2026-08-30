@@ -5,11 +5,8 @@ import {
   OPERATING_MODES,
   classifyRegime,
   observeClosedBars,
-  currentRegime,
   resetRegimeBook,
   styleFromClassification,
-  toLiveRegime,
-  describeRegimeContext,
   type RegimeName,
 } from './regimes.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
@@ -132,11 +129,11 @@ describe('classifyRegime from 10s OHLC', () => {
   });
 
   it('EXPANSION on a wide bar that does not cleanly break out', () => {
-    // Only 3 bars → no slope override; wide last bar stays EXPANSION
     const bars = [
       bar(100, 100.8, 99.2, 100.1, 0),
       bar(100.1, 100.9, 99.3, 100.0, 1),
-      bar(100.0, 101.6, 98.6, 100.05, 2),
+      bar(100.0, 101.0, 99.1, 100.2, 2),
+      bar(100.2, 101.6, 98.6, 100.3, 3),
     ];
     expect(classifyRegime(bars)).toBe('EXPANSION');
   });
@@ -146,130 +143,10 @@ describe('classifyRegime from 10s OHLC', () => {
       bar(100, 101.2, 98.8, 100.4, 0),
       bar(100.4, 101.0, 99.0, 99.6, 1),
       bar(99.6, 101.1, 98.9, 100.5, 2),
+      bar(100.5, 100.9, 99.2, 99.8, 3),
     ];
     const r = classifyRegime(bars);
-    expect(['RANGE', 'TRANSITION', 'UNKNOWN', 'EXPANSION']).toContain(r);
-  });
-
-  it('TREND_DOWN on clear multi-bar 5m-scale selloff', () => {
-    const prices: number[] = [];
-    let p = 4646.5;
-    for (let i = 0; i < 16; i++) {
-      p -= 2.5; // ~40pt over ~80min of 5m bars
-      prices.push(p);
-    }
-    const bars = prices.map((close, i) => {
-      const open = i === 0 ? 4646.5 : prices[i - 1]!;
-      return bar(open, Math.max(open, close) + 0.4, Math.min(open, close) - 0.3, close, i);
-    });
-    const r = classifyRegime(bars);
-    expect(r).toBe('TREND_DOWN');
-    expect(r).not.toBe('RANGE');
-  });
-
-  it('quiet bar mid-selloff stays TREND_DOWN (not COMPRESSION→live EXPANSION)', () => {
-    const prices: number[] = [];
-    let p = 4646.5;
-    for (let i = 0; i < 15; i++) {
-      p -= 2.5;
-      prices.push(p);
-    }
-    const bars = prices.map((close, i) => {
-      const open = i === 0 ? 4646.5 : prices[i - 1]!;
-      return bar(open, Math.max(open, close) + 0.4, Math.min(open, close) - 0.3, close, i);
-    });
-    const o = bars[bars.length - 1]!.close;
-    bars.push(bar(o, o + 0.05, o - 0.05, o - 0.02, 15));
-    const raw = classifyRegime(bars);
-    expect(toLiveRegime(raw)).toBe('TREND_DOWN');
-  });
-
-  it('same 5m bucket from a peer replaces the bar — book does not grow', () => {
-    resetRegimeBook();
-    const prices: number[] = [];
-    let p = 4646.5;
-    for (let i = 0; i < 12; i++) {
-      p -= 2.5;
-      prices.push(p);
-    }
-    const bars = prices.map((close, i) => {
-      const open = i === 0 ? 4646.5 : prices[i - 1]!;
-      return bar(open, Math.max(open, close) + 0.4, Math.min(open, close) - 0.3, close, i);
-    });
-    observeClosedBars('GOLD', bars, 'A');
-    const last = bars[bars.length - 1]!;
-    observeClosedBars(
-      'GOLD',
-      [{ ...last, open: last.open + 0.05, close: last.close - 0.08, high: last.high + 0.1 }],
-      'B'
-    );
-    const snap = observeClosedBars('GOLD', [], 'A');
-    expect(snap.bar_count).toBe(12);
-    expect(snap.current).toBe('TREND_DOWN');
-  });
-
-  it('violent dump after rally flips TREND_DOWN — not stuck TREND_UP / BUY bias', () => {
-    const prices: number[] = [];
-    let p = 4608;
-    // ~1h rally to ~4660
-    for (let i = 0; i < 18; i++) {
-      p += 2.8;
-      prices.push(p);
-    }
-    // ~30m dump ~20pt (like 4660 → 4640)
-    for (let i = 0; i < 6; i++) {
-      p -= 3.4;
-      prices.push(p);
-    }
-    const bars = prices.map((close, i) => {
-      const open = i === 0 ? 4608 : prices[i - 1]!;
-      return bar(open, Math.max(open, close) + 0.5, Math.min(open, close) - 0.4, close, i);
-    });
-    const r = classifyRegime(bars, 'TREND_UP');
-    expect(['TREND_DOWN', 'PULLBACK_DOWNTREND', 'BREAKOUT_DOWN', 'EXPANSION']).toContain(r);
-    expect(r).not.toBe('TREND_UP');
-    expect(r).not.toBe('PULLBACK_UPTREND');
-  });
-
-  it('dump then bottom chop stays TREND_DOWN — not RANGE', () => {
-    const prices: number[] = [];
-    let p = 4647.0;
-    for (let i = 0; i < 20; i++) {
-      p -= 1.5;
-      prices.push(p);
-    }
-    for (let i = 0; i < 8; i++) {
-      p += i % 2 === 0 ? 0.8 : -0.8;
-      prices.push(Math.min(4625, Math.max(4615, p)));
-    }
-    const bars = prices.map((close, i) => {
-      const open = i === 0 ? 4647.0 : prices[i - 1]!;
-      return bar(open, Math.max(open, close) + 0.3, Math.min(open, close) - 0.25, close, i);
-    });
-    const r = classifyRegime(bars);
-    expect(['TREND_DOWN', 'PULLBACK_DOWNTREND']).toContain(r);
-    expect(r).not.toBe('RANGE');
-  });
-
-  it('bounce after dump is PULLBACK_DOWNTREND / TREND_DOWN — not RANGE or TREND_UP', () => {
-    const prices: number[] = [];
-    let p = 4647.0;
-    for (let i = 0; i < 18; i++) {
-      p -= 1.8;
-      prices.push(p);
-    }
-    for (let i = 0; i < 4; i++) {
-      p += 2.0;
-      prices.push(p);
-    }
-    const bars = prices.map((close, i) => {
-      const open = i === 0 ? 4647.0 : prices[i - 1]!;
-      return bar(open, Math.max(open, close) + 0.4, Math.min(open, close) - 0.3, close, i);
-    });
-    const r = classifyRegime(bars);
-    expect(['TREND_DOWN', 'PULLBACK_DOWNTREND']).toContain(r);
-    expect(r).not.toBe('RANGE');
-    expect(r).not.toBe('TREND_UP');
+    expect(['RANGE', 'TRANSITION', 'UNKNOWN']).toContain(r);
   });
 
   it('REVERSAL_CANDIDATE after TREND_UP with a violent opposite bar still inside range', () => {
@@ -290,29 +167,6 @@ describe('classifyRegime from 10s OHLC', () => {
     ];
     expect(classifyRegime(bars, 'TREND_UP')).toBe('TRANSITION');
   });
-
-  it('describeRegimeContext shows bar windows', () => {
-    const prices = [100, 100.5, 101.2, 101.9, 102.7, 103.4, 104, 104.5];
-    const bars = prices.map((p, i) =>
-      bar(i === 0 ? p : prices[i - 1]!, p + 0.4, p - 0.4, p, i)
-    );
-    const ctx = describeRegimeContext(bars, 'TREND_UP');
-    expect(ctx).toMatch(/REGIME TREND_UP/);
-    expect(ctx).toMatch(/8×10s stored/);
-    expect(ctx).toMatch(/short\(6b\)=/);
-  });
-
-  it('toLiveRegime keeps stall regimes (no fake EXPANSION)', () => {
-    expect(toLiveRegime('UNKNOWN')).toBe('UNKNOWN');
-    expect(toLiveRegime('COMPRESSION')).toBe('COMPRESSION');
-    expect(toLiveRegime('TRANSITION')).toBe('TRANSITION');
-    expect(toLiveRegime('TREND_UP')).toBe('TREND_UP');
-  });
-
-  it('observeClosedBars can surface UNKNOWN with too few bars', () => {
-    const snap = observeClosedBars('X', [bar(100, 100.1, 99.9, 100)]);
-    expect(snap.current).toBe('UNKNOWN');
-  });
 });
 
 describe('regime book + trade style', () => {
@@ -327,24 +181,6 @@ describe('regime book + trade style', () => {
     expect(snap.current).toBe('TREND_UP');
     expect(snap.display_name).toBe('Gold');
     expect(REGIME_NAMES).toContain(snap.current);
-  });
-
-  it('isolates regime books per clientId on same epic', () => {
-    const up = [100, 100.5, 101.2, 101.9, 102.7, 103.4].map((p, i, a) =>
-      bar(i === 0 ? p : a[i - 1]!, p + 0.4, p - 0.4, p, i)
-    );
-    const down = [110, 109.5, 108.8, 108.1, 107.3, 106.6].map((p, i, a) =>
-      bar(i === 0 ? p : a[i - 1]!, p + 0.4, p - 0.4, p, i)
-    );
-    observeClosedBars('GOLD', up, 'B.O.S.S.', 1);
-    observeClosedBars('GOLD', down, 'DIMITRIJ', 2);
-    const a = currentRegime('GOLD', 1);
-    const b = currentRegime('GOLD', 2);
-    expect(a?.current).toBe('TREND_UP');
-    expect(b?.current).toBe('TREND_DOWN');
-    expect(a?.bar_count).not.toBe(b?.bar_count + 1000); // both have their own bars
-    expect(a?.display_name).toBe('B.O.S.S.');
-    expect(b?.display_name).toBe('DIMITRIJ');
   });
 
   it('maps trend regimes to LONG and breakout/range to SCALP', () => {

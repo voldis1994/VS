@@ -12,7 +12,22 @@ type RobotTick = {
   detail: string;
 };
 
-const ALL_REGIMES = ['TREND_UP', 'TREND_DOWN', 'RANGE'] as const;
+const ALL_REGIMES = [
+  'UNKNOWN',
+  'RANGE',
+  'TREND_UP',
+  'TREND_DOWN',
+  'PULLBACK_UPTREND',
+  'PULLBACK_DOWNTREND',
+  'COMPRESSION',
+  'EXPANSION',
+  'BREAKOUT_UP',
+  'BREAKOUT_DOWN',
+  'FAILED_BREAKOUT_UP',
+  'FAILED_BREAKOUT_DOWN',
+  'REVERSAL_CANDIDATE',
+  'TRANSITION',
+] as const;
 
 type FeedLeg = {
   sender_id: string;
@@ -21,7 +36,6 @@ type FeedLeg = {
   mid: number | null;
   latency_ms: number;
   detail?: string;
-  role?: 'LEAD' | 'CONFIRM' | 'EXECUTE' | 'REJECT' | 'ADVISORY';
 };
 
 type DecisionChain = {
@@ -30,25 +44,6 @@ type DecisionChain = {
   regime: string;
   setup: string | null;
   action: string;
-};
-
-type EntryPlan = {
-  state: 'WATCHING' | 'ARMED' | 'TRIGGERED' | 'INVALIDATED';
-  bias: 'BUY' | 'SELL' | null;
-  entry_zone: { low: number; high: number } | null;
-  trigger_zone: { low: number; high: number } | null;
-  current_price: number | null;
-  invalidation: number | null;
-  structure_target: number | null;
-  waiting_for: string;
-  block_reason?: string;
-  price_vs_zone?: 'IN' | 'ABOVE' | 'BELOW' | null;
-  trigger_10s: string;
-  trigger_1m: string;
-  htf_context: string;
-  micro_score: number;
-  micro_confirms: string[];
-  detail: string;
 };
 
 type BoardMeta = {
@@ -98,23 +93,12 @@ type RobotSession = {
   unrealized: number | null;
   mode: 'FLAT' | 'MANAGE' | 'ENTRY';
   regime?: string;
-  tape_dir?: 'BUY' | 'SELL' | null;
-  tape_reason?: string | null;
   feed_source?: 'MULTI' | 'LOCAL' | 'NONE';
   feed_contributing?: number;
   feed_sender_count?: number;
   feed_agreement?: string | null;
   feed_legs?: FeedLeg[];
-  zone_info?: string | null;
-  regime_info?: string | null;
-  market_status?: string | null;
-  market_tradeable?: boolean;
-  market_info?: string | null;
-  zone_high?: number | null;
-  zone_low?: number | null;
-  zone_kind?: string | null;
   decision_chain?: DecisionChain;
-  entry_plan?: EntryPlan | null;
   ohlc_10s?: {
     last_o: number | null;
     last_h: number | null;
@@ -138,51 +122,44 @@ function fmt(n: number | null | undefined, d = 5) {
   return n.toLocaleString(undefined, { maximumFractionDigits: d });
 }
 
-/** FLAT shows "—" today — users think robot opens naked. SL is always sent with entry. */
-function fmtSl(s: RobotSession): string {
-  if (s.safety_sl != null && Number.isFinite(s.safety_sl)) {
-    return fmt(s.safety_sl, 2);
-  }
-  if (s.open_side) return 'MISSING — check Capital.com';
-  return 'AUTO @ entry (~0.20%)';
-}
-
-function entryPlanLabel(s: RobotSession): { label: string; kind: 'long' | 'short' | 'flat' | 'entry' | 'closed' } | null {
-  const plan = s.entry_plan;
-  // 10s OHLC OFF → no EARLY plan / WAIT BAND / MICRO / "10s idle" UI
-  if (!plan || s.open_side || !s.running || s.ohlc_10s?.market === 'OFF') return null;
-  const bias = plan.bias;
-  const state = plan.state;
-  if (bias === 'BUY') {
-    return { label: `ENTRY · ${state} · BUY`, kind: 'entry' };
-  }
-  if (bias === 'SELL') {
-    return { label: `ENTRY · ${state} · SELL`, kind: 'entry' };
-  }
-  return { label: `ENTRY · ${state}`, kind: 'entry' };
-}
-
-function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'flat' | 'entry' | 'closed' } {
+function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'flat' | 'entry' } {
   if (!s.running && !s.open_side) return { label: 'STOPPED', kind: 'flat' };
-  if (s.running && s.market_tradeable === false) {
-    const st = (s.market_status || 'CLOSED').toUpperCase();
-    return { label: `MARKET CLOSED · ${st}`, kind: 'closed' };
-  }
   if (s.open_side === 'BUY') {
-    return { label: 'BUY', kind: 'long' };
+    const t = tradeLabel(s);
+    return { label: t, kind: t.includes('SCALP') ? 'short' : 'long' };
   }
   if (s.open_side === 'SELL') {
-    return { label: 'SELL', kind: 'short' };
+    const t = tradeLabel(s);
+    return { label: t, kind: t.includes('LONG') ? 'long' : 'short' };
   }
-  const planPosture = entryPlanLabel(s);
-  if (planPosture) return planPosture;
   if (s.running && !s.open_side) {
-    const dir = (s.tape_dir || '').toUpperCase();
-    if (dir === 'BUY') return { label: 'READY BUY', kind: 'entry' };
-    if (dir === 'SELL') return { label: 'READY SELL', kind: 'entry' };
-    return { label: 'WATCHING · scan', kind: 'entry' };
+    const r = (s.regime || 'UNKNOWN').toUpperCase();
+    return { label: `WAIT ENTRY · ${r}`, kind: 'entry' };
   }
   return { label: 'FLAT', kind: 'flat' };
+}
+
+function tradeLabel(s: RobotSession): string {
+  if (!s.open_side) return 'FLAT';
+  const r = (s.regime || '').toUpperCase();
+  const long =
+    r === 'TREND_UP' ||
+    r === 'TREND_DOWN' ||
+    r === 'PULLBACK_UPTREND' ||
+    r === 'PULLBACK_DOWNTREND';
+  const scalp =
+    r === 'BREAKOUT_UP' ||
+    r === 'BREAKOUT_DOWN' ||
+    r === 'FAILED_BREAKOUT_UP' ||
+    r === 'FAILED_BREAKOUT_DOWN' ||
+    r === 'COMPRESSION' ||
+    r === 'EXPANSION' ||
+    r === 'RANGE' ||
+    r === 'REVERSAL_CANDIDATE' ||
+    r === 'TRANSITION';
+  if (long) return `${s.open_side} LONG`;
+  if (scalp) return `${s.open_side} SCALP`;
+  return s.open_side;
 }
 
 function lastLog(s: RobotSession): string {
@@ -324,14 +301,6 @@ export function RobotDeskPage() {
       .slice(0, 200);
   }, [launchMarkets, launchFilter]);
 
-  const view = params.get('view') === 'info' ? 'info' : 'command';
-  const setView = (next: 'command' | 'info') => {
-    const q = new URLSearchParams(params);
-    if (next === 'info') q.set('view', 'info');
-    else q.delete('view');
-    navigate({ pathname: '/robot', search: q.toString() ? `?${q}` : '' }, { replace: true });
-  };
-
   const focused = sessions.find((s) => s.id === focusId) || null;
   const runningCount = sessions.filter((s) => s.running).length;
   const regimes = board?.regimes?.length ? board.regimes : [...ALL_REGIMES];
@@ -355,72 +324,14 @@ export function RobotDeskPage() {
   const feedCount = board?.feed_sender_count ?? capitalSenders.length + publicSenders.length;
   const feedOk = board?.feed_contributing ?? 0;
   const chainLabel =
-    board?.chain || 'OWN Capital LEAD → 1m/5m (10s OHLC OFF) → BUY|SELL · BO → EXIT';
+    board?.chain || 'PUBLIC INTERNET + Capital → consensus mid → 10s OHLC → REGIME → ENTRY/EXIT';
   const boardNote =
     board?.note ||
-    'Public feeds only count when NEAR Capital CFD mid — FAR = REJECT, wrong epic = N/A (not IDLE broken)';
+    'Public feeds: Yahoo, Aurum, Fawaz FX, Coinbase — fused with Capital for 10s OHLC';
   const tradeTypes = board?.trade_types || ['BUY LONG', 'SELL LONG', 'BUY SCALP', 'SELL SCALP'];
   const focusLegs = focused?.feed_legs || [];
   const focusChain = focused?.decision_chain;
-  const focusPosture = focused ? posture(focused) : null;
-  const clock = new Date().toLocaleTimeString();
-  const nowDate = new Date().toLocaleDateString();
 
-  function publicFeedRow(s: (typeof publicSenders)[0]) {
-    const epic = (focused?.epic || focused?.display_name || '').toUpperCase();
-    const isMetal = /GOLD|XAU|SILVER|XAG|PLAT|XPT|PALL|XPD/.test(epic);
-    const isCrypto = /BTC|ETH|BITCOIN|ETHEREUM/.test(epic);
-    const isFx =
-      epic.length >= 6 &&
-      !isMetal &&
-      !isCrypto &&
-      /^[A-Z]{6}/.test(epic.replace(/[^A-Z]/g, ''));
-    let na: string | null = null;
-    if (epic) {
-      if ((s.kind === 'fx_reference' || s.kind === 'fx_live') && (isMetal || isCrypto)) {
-        na = 'N/A · not FX epic';
-      } else if (s.kind === 'coinbase' && !isCrypto) {
-        na = 'N/A · crypto only';
-      } else if (s.kind === 'aurum_metals' && !isMetal) {
-        na = 'N/A · metals only';
-      } else if (s.kind === 'yahoo_finance' && isFx && !isMetal) {
-        /* yahoo may still map FX — leave */
-      }
-    }
-    const leg =
-      focusLegs.find(
-        (l) =>
-          l.sender_id === s.sender_id ||
-          (l.name || '').toLowerCase().includes((s.name || '').toLowerCase().slice(0, 8)) ||
-          (l.name || '').toLowerCase().includes(String(s.kind || '').replace(/_/g, ' '))
-      ) || null;
-    if (na) {
-      return { status: 'N/A', detail: na, okClass: false, warnClass: true };
-    }
-    if (leg?.role === 'REJECT') {
-      return {
-        status: 'REJECT FAR',
-        detail: leg.detail || 'far from Capital',
-        okClass: false,
-        warnClass: false,
-      };
-    }
-    if (leg?.role === 'LEAD' || leg?.role === 'CONFIRM') {
-      return {
-        status: `${leg.role} · LIVE`,
-        detail: leg.detail || '',
-        okClass: true,
-        warnClass: false,
-      };
-    }
-    const live = s.status === 'LIVE' || s.status === 'ok' || s.status === 'live';
-    return {
-      status: String(s.status || 'IDLE'),
-      detail: '',
-      okClass: live,
-      warnClass: !live,
-    };
-  }
   const deploy = () => {
     if (!launchAccountId || !launchEpic) {
       setError('Izvēlies account + tirgu');
@@ -493,62 +404,124 @@ export function RobotDeskPage() {
   };
 
   return (
-    <div className="rc-shell" ref={shellRef}>
-      <aside className="rc-rail">
-        <div className="rc-rail-brand">
-          <Logo size={54} wordmark />
-        </div>
-        <nav className="rc-rail-nav">
-          <Link className={view === 'command' ? 'active' : ''} to="/robot" onClick={(e) => { e.preventDefault(); setView('command'); }}>
-            COMMAND
-          </Link>
-          <button type="button" className={view === 'info' ? 'active' : ''} onClick={() => setView('info')}>
-            INFO
-          </button>
-          <Link to="/market">REGIMES</Link>
-          <Link to="/feeds">FEEDS</Link>
-          <Link to="/trading">EXECUTION</Link>
-          <Link to="/settings">SETTINGS</Link>
-        </nav>
-        <div className="rc-rail-meta mono">
-          <div>{nowDate}</div>
-          <div>{clock}</div>
-        </div>
-      </aside>
-
-      <div className="rc-main">
-        <header className="rc-top">
-          <div className="rc-title-block">
-            <div className="robot-arena-kicker">VS SYSTEM // MULTI-CLIENT BOARD</div>
-            <h1 className="rc-title">ROBOT COMMAND</h1>
+    <div className="robot-fs-shell robot-board-shell" ref={shellRef}>
+      <div className="robot-desk robot-desk-fs robot-board">
+        <div className="robot-board-top">
+          <div className="robot-arena-brand">
+            <Logo size={72} wordmark />
+            <div>
+              <div className="robot-arena-kicker">VS SYSTEM // MULTI-CLIENT BOARD</div>
+              <h1 className="robot-arena-title">ROBOT COMMAND</h1>
+              <p className="robot-arena-sub">
+                {chainLabel} · {tradeTypes.join(' · ')}
+              </p>
+            </div>
           </div>
-          <div className="rc-stats">
-            <div className="rc-stat"><span>UNITS</span><strong>{sessions.length}</strong></div>
-            <div className="rc-stat"><span>ONLINE</span><strong>{runningCount}</strong></div>
-            <div className="rc-stat"><span>FEEDS</span><strong>{feedOk}/{feedCount || '—'}</strong></div>
-            <div className="rc-stat"><span>REGIMES</span><strong>{regimes.length}</strong></div>
+          <div className="robot-board-stats">
+            <div className="robot-mode-banner entry">
+              <div className="label">UNITS</div>
+              <div className="value">{sessions.length}</div>
+            </div>
+            <div className={`robot-mode-banner ${runningCount ? 'manage' : 'flat'}`}>
+              <div className="label">ONLINE</div>
+              <div className="value">{runningCount}</div>
+            </div>
+            <div className={`robot-mode-banner ${feedCount ? 'manage' : 'flat'}`}>
+              <div className="label">FEEDS</div>
+              <div className="value">
+                {feedOk}/{feedCount || '—'}
+              </div>
+            </div>
+            <div className="robot-mode-banner entry">
+              <div className="label">REGIMES</div>
+              <div className="value">{regimes.length}</div>
+            </div>
           </div>
-          <div className="rc-actions">
+          <div className="actions">
             <button className="btn btn-primary" type="button" onClick={() => setShowDeploy((v) => !v)}>
-              {showDeploy ? 'CLOSE' : '+ DEPLOY'}
+              {showDeploy ? 'CLOSE DEPLOY' : '+ DEPLOY'}
             </button>
-            <button className="btn" type="button" onClick={() => setView(view === 'info' ? 'command' : 'info')}>
-              {view === 'info' ? '← COMMAND' : 'INFO →'}
-            </button>
-            <Link className="btn" to="/">← BASE</Link>
+            <Link className="btn" to="/">
+              ← BASE
+            </Link>
           </div>
-        </header>
+        </div>
 
-        {error && <div className="error-state rc-banner">{error}</div>}
-        {busy && <div className="mono rc-banner rc-busy">Syncing combat units…</div>}
+        {error && <div className="error-state">{error}</div>}
+        {busy && <div className="mono" style={{ color: 'var(--cyan)' }}>Syncing combat units…</div>}
+
+        <div className="robot-wire-panel">
+          <div className="robot-wire-head">
+            <div className="robot-arena-kicker">WIRED CHAIN</div>
+            <div className="robot-wire-chain mono">{chainLabel}</div>
+          </div>
+          <div className="robot-wire-regimes">
+            {regimes.map((r) => {
+              const name = r.toUpperCase();
+              const live = activeRegimes.has(name);
+              const focusHit = (focused?.regime || '').toUpperCase() === name;
+              return (
+                <span
+                  key={name}
+                  className={`robot-regime-chip ${live ? 'live' : ''} ${focusHit ? 'focus' : ''}`}
+                  title={live ? 'Active on a running robot' : 'Catalog regime'}
+                >
+                  {name}
+                </span>
+              );
+            })}
+          </div>
+          <div className="robot-wire-feeds">
+            <div className="robot-arena-kicker">PUBLIC INTERNET FEEDS</div>
+            <div className="mono robot-wire-empty" style={{ marginBottom: 6 }}>
+              {boardNote}
+            </div>
+            <div className="robot-feed-legs">
+              {publicSenders.map((s) => (
+                <div
+                  key={s.sender_id}
+                  className={`robot-feed-leg ${s.status === 'LIVE' || s.status === 'ok' || s.status === 'live' ? 'ok' : ''}`}
+                >
+                  <strong>{s.name}</strong>
+                  <span className="mono">
+                    {s.kind} · {s.status} · {s.trust}
+                    {s.latency_ms != null ? ` · ${s.latency_ms}ms` : ''}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="robot-arena-kicker" style={{ marginTop: 10 }}>
+              CAPITAL EXECUTION PROVIDERS
+            </div>
+            {capitalSenders.length === 0 && (
+              <div className="mono robot-wire-empty">
+                Nav enabled Capital — orderiem vajag brokeri (Brokers). OHLC joprojām var nākt no public feeds.
+              </div>
+            )}
+            <div className="robot-feed-legs">
+              {capitalSenders.map((s) => (
+                <div
+                  key={s.sender_id}
+                  className={`robot-feed-leg ${s.status === 'LIVE' || s.status === 'ok' || s.status === 'live' ? 'ok' : ''}`}
+                >
+                  <strong>{s.name}</strong>
+                  <span className="mono">
+                    {s.kind} · {s.status} · {s.trust}
+                    {s.latency_ms != null ? ` · ${s.latency_ms}ms` : ''}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
 
         {showDeploy && (
-          <div className="rc-deploy">
+          <div className="robot-empty robot-deploy-bar">
             <div className="section-title">DEPLOY CLIENT ROBOT</div>
             <div className="actions" style={{ marginTop: 8, flexWrap: 'wrap' }}>
               <select
                 className="input"
-                style={{ maxWidth: 280 }}
+                style={{ maxWidth: 320 }}
                 value={launchAccountId ?? ''}
                 onChange={(e) => setLaunchAccountId(Number(e.target.value))}
               >
@@ -560,14 +533,14 @@ export function RobotDeskPage() {
               </select>
               <input
                 className="input"
-                style={{ maxWidth: 160 }}
+                style={{ maxWidth: 180 }}
                 placeholder="Search market…"
                 value={launchFilter}
                 onChange={(e) => setLaunchFilter(e.target.value)}
               />
               <select
                 className="input"
-                style={{ maxWidth: 280 }}
+                style={{ maxWidth: 320 }}
                 value={launchEpic}
                 onChange={(e) => {
                   setLaunchEpic(e.target.value);
@@ -583,7 +556,7 @@ export function RobotDeskPage() {
               </select>
               <input
                 className="input"
-                style={{ maxWidth: 80 }}
+                style={{ maxWidth: 90 }}
                 value={launchLot}
                 onChange={(e) => setLaunchLot(e.target.value)}
               />
@@ -594,333 +567,197 @@ export function RobotDeskPage() {
           </div>
         )}
 
-        {view === 'command' ? (
-          <>
-            <section className="rc-regimes" aria-label="Tape chain">
-              <div className="robot-arena-kicker">TAPE CHAIN · 5/1</div>
-              <div className="robot-wire-regimes">
-                {regimes.map((r) => {
-                  const name = r.toUpperCase();
-                  const parked = focused?.market_tradeable === false;
-                  const live = !parked && activeRegimes.has(name);
-                  const focusHit =
-                    !parked && (focused?.regime || '').toUpperCase() === name;
-                  return (
-                    <span
-                      key={name}
-                      className={`robot-regime-chip ${live ? 'live' : ''} ${focusHit ? 'focus' : ''} ${parked ? 'parked' : ''}`}
-                      title={
-                        parked
-                          ? 'Robot PARKED — market closed'
-                          : live
-                            ? 'Active tape side'
-                            : 'Tape state'
-                      }
-                    >
-                      {name}
-                    </span>
-                  );
-                })}
-              </div>
-            </section>
+        {sessions.length === 0 && !busy && (
+          <div className="robot-empty">
+            <div className="robot-arena-kicker">EMPTY BOARD</div>
+            <p style={{ marginBottom: 12 }}>Vēl nav robotu. Spied + DEPLOY vai Trading → START ROBOT.</p>
+            <button className="btn btn-primary" type="button" onClick={() => setShowDeploy(true)}>
+              + DEPLOY FIRST UNIT
+            </button>
+          </div>
+        )}
 
-            <section className="rc-stage">
-              <div className="rc-units">
-                {sessions.length === 0 && !busy && (
-                  <div className="rc-empty">
-                    <div className="robot-arena-kicker">EMPTY BOARD</div>
-                    <p>Nav robotu. Spied + DEPLOY.</p>
-                    <button className="btn btn-primary" type="button" onClick={() => setShowDeploy(true)}>
-                      + DEPLOY
-                    </button>
-                  </div>
-                )}
-                {sessions.map((s) => {
-                  const p = posture(s);
-                  const active = focusId === s.id;
-                  return (
-                    <button
-                      key={s.id}
-                      type="button"
-                      className={`rc-unit ${p.kind} ${s.running ? 'on' : 'off'} ${active ? 'active' : ''}`}
-                      onClick={() => setFocusId(s.id)}
-                    >
-                      <div className="rc-unit-head">
-                        <span>{(s.client_name || s.account_name).toUpperCase()}</span>
-                        <span className={`robot-mini-dot ${s.running ? 'on' : 'off'}`} />
-                      </div>
-                      <div className="rc-unit-market">{s.display_name}</div>
-                      <div className={`rc-unit-posture ${p.kind}`}>{p.label}</div>
-                      <div className="rc-unit-row mono">
-                        <span>MID</span>
-                        <strong>{fmt(s.last_mid)}</strong>
-                      </div>
-                      <div className="rc-unit-row mono">
-                        <span>UPL</span>
-                        <strong className={(s.unrealized || 0) >= 0 ? 'pos' : 'neg'}>{fmt(s.unrealized)}</strong>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="rc-focus">
-                {focused ? (
-                  <>
-                    <div className="rc-focus-head">
-                      <div>
-                        <div className="robot-arena-kicker">FOCUS UNIT</div>
-                        <div className="rc-focus-name">
-                          {(focused.client_name || focused.account_name).toUpperCase()} · {focused.display_name}
-                        </div>
-                        <div className={`rc-unit-posture ${focusPosture?.kind || 'flat'}`}>
-                          {focusPosture?.label}
-                        </div>
-                      </div>
-                      <div className="robot-ctrl robot-ctrl-lg">
-                        <button
-                          type="button"
-                          className="btn btn-go"
-                          disabled={busy || focused.running}
-                          onClick={() => void startOne(focused)}
-                        >
-                          START
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-stop"
-                          disabled={busy || !focused.running}
-                          onClick={() => void stopOne(focused)}
-                        >
-                          STOP
-                        </button>
-                      </div>
-                    </div>
-                    <div className="rc-focus-metrics mono">
-                      <div><span>MID</span><strong>{fmt(focused.last_mid)}</strong></div>
-                      <div><span>10s</span><strong>{focused.ohlc_10s?.market === 'OFF' ? 'OFF' : focused.ohlc_10s?.market || 'SEEDING'}</strong></div>
-                      <div><span>FEEDS</span><strong>{focused.feed_contributing ?? 0}/{focused.feed_sender_count ?? 0}</strong></div>
-                      <div title="Safety SL on Capital.com — set automatically on every entry when flat">
-                        <span>SL</span><strong>{fmtSl(focused)}</strong>
-                      </div>
-                      <div><span>UPL</span><strong className={(focused.unrealized || 0) >= 0 ? 'pos' : 'neg'}>{fmt(focused.unrealized)}</strong></div>
-                      <div><span>LOT</span><strong>{focused.lot_size}</strong></div>
-                    </div>
-                    {focused.entry_plan &&
-                      focused.ohlc_10s?.market !== 'OFF' &&
-                      !focused.open_side &&
-                      focused.running && (
-                      <div className="rc-entry-plan mono">
-                        <div className="rc-entry-plan-head">
-                          <span className={`rc-entry-state ${focused.entry_plan.state.toLowerCase()}`}>
-                            {focused.entry_plan.state}
-                          </span>
-                          <span className={`rc-entry-bias ${(focused.entry_plan.bias || '').toLowerCase()}`}>
-                            {focused.entry_plan.bias ?? '—'}
-                          </span>
-                          {focused.entry_plan.price_vs_zone && (
-                            <span className={`rc-entry-vs ${focused.entry_plan.price_vs_zone.toLowerCase()}`}>
-                              PRICE {focused.entry_plan.price_vs_zone} ZONE
-                            </span>
-                          )}
-                        </div>
-                        <div className={`rc-entry-block ${focused.entry_plan.state === 'TRIGGERED' ? 'ok' : 'wait'}`}>
-                          {focused.entry_plan.block_reason
-                            ? `${focused.entry_plan.block_reason} · `
-                            : ''}
-                          {focused.entry_plan.waiting_for}
-                        </div>
-                        <div className="rc-entry-plan-grid">
-                          <div><span>PRICE</span><strong>{fmt(focused.entry_plan.current_price)}</strong></div>
-                          <div>
-                            <span>ENTRY ZONE</span>
-                            <strong>
-                              {focused.entry_plan.entry_zone
-                                ? `${fmt(focused.entry_plan.entry_zone.low, 2)}–${fmt(focused.entry_plan.entry_zone.high, 2)}`
-                                : '—'}
-                            </strong>
-                          </div>
-                          <div>
-                            <span>WAIT BAND</span>
-                            <strong>
-                              {focused.entry_plan.trigger_zone
-                                ? `${fmt(focused.entry_plan.trigger_zone.low, 2)}–${fmt(focused.entry_plan.trigger_zone.high, 2)}`
-                                : '—'}
-                            </strong>
-                          </div>
-                          <div><span>INVALID</span><strong>{fmt(focused.entry_plan.invalidation, 2)}</strong></div>
-                          <div><span>STRUCT TGT</span><strong>{fmt(focused.entry_plan.structure_target, 2)}</strong></div>
-                          <div>
-                            <span>MICRO</span>
-                            <strong>
-                              {focused.entry_plan.micro_score}/2
-                              {focused.entry_plan.micro_score < 2 ? ' · need confirms' : ' · ok'}
-                              {focused.entry_plan.micro_confirms.length
-                                ? ` · ${focused.entry_plan.micro_confirms.join('+')}`
-                                : ''}
-                            </strong>
-                          </div>
-                        </div>
-                        <div className="rc-entry-triggers">
-                          <span>{focused.entry_plan.trigger_10s}</span>
-                          <span>{focused.entry_plan.trigger_1m}</span>
-                        </div>
-                        <div className="rc-entry-htf">{focused.entry_plan.htf_context}</div>
-                        <div className="rc-entry-note">Zone / wait band ≠ ENTRY. Fill only after micro 2/2.</div>
-                      </div>
-                    )}
-                    <div className="rc-focus-log mono">{lastLog(focused)}</div>
-                    <button type="button" className="btn rc-more" onClick={() => setView('info')}>
-                      FULL DETAIL → INFO
-                    </button>
-                  </>
-                ) : (
-                  <div className="rc-empty">
-                    <div className="robot-arena-kicker">NO FOCUS</div>
-                    <p>Deploy or select a unit.</p>
-                  </div>
-                )}
-              </div>
-
-              <div className="rc-emblem" aria-hidden>
-                <Logo size={120} />
-                <div className="rc-emblem-ring" />
-                <div className="mono rc-emblem-tag">PRECISION · CONTROL · EXECUTION</div>
-              </div>
-            </section>
-          </>
-        ) : (
-          <section className="rc-info">
-            <div className="rc-info-col">
-              <div className="robot-arena-kicker">WIRED CHAIN</div>
-              <p className="mono rc-info-text">{chainLabel}</p>
-              <p className="mono rc-info-text">{boardNote}</p>
-              <div className="robot-arena-kicker" style={{ marginTop: 10 }}>TRADE TYPES</div>
-              <p className="mono rc-info-text">{tradeTypes.join(' · ')}</p>
-
-              <div className="robot-arena-kicker" style={{ marginTop: 14 }}>OPTIONAL PUBLIC REFERENCE (never blocks trade)</div>
-              <div className="robot-feed-legs">
-                {publicSenders.map((s) => {
-                  const row = publicFeedRow(s);
-                  return (
-                    <div
-                      key={s.sender_id}
-                      className={`robot-feed-leg ${row.okClass ? 'ok' : ''} ${row.warnClass ? 'warn' : ''} ${
-                        row.status.startsWith('REJECT') ? 'bad' : ''
-                      }`}
-                    >
-                      <strong>{s.name}</strong>
-                      <span className="mono">
-                        {s.kind} · {row.status} · {s.trust}
-                        {s.latency_ms != null && row.okClass ? ` · ${s.latency_ms}ms` : ''}
-                        {row.detail ? ` · ${row.detail}` : ''}
+        <div className="robot-board-grid">
+          {sessions.map((s) => {
+            const p = posture(s);
+            const active = focusId === s.id;
+            return (
+              <div
+                key={s.id}
+                role="button"
+                tabIndex={0}
+                className={`robot-mini ${p.kind} ${s.running ? 'on' : 'off'} ${active ? 'active' : ''}`}
+                onClick={() => setFocusId(s.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setFocusId(s.id);
+                  }
+                }}
+              >
+                <div className="robot-mini-head">
+                  <span className="robot-mini-client">
+                    {(s.client_name || s.account_name).toUpperCase()}
+                  </span>
+                  <span className={`robot-mini-dot ${s.running ? 'on' : 'off'}`} />
+                </div>
+                <div className="robot-mini-market">{s.display_name}</div>
+                <div className={`robot-mini-posture ${p.kind}`}>{p.label}</div>
+                <div className="robot-mini-regime mono">{(s.regime || 'UNKNOWN').toUpperCase()}</div>
+                <div className="robot-mini-row">
+                  <span>MID</span>
+                  <strong>{fmt(s.last_mid)}</strong>
+                </div>
+                <div className="robot-mini-row">
+                  <span>10s</span>
+                  <strong>
+                    {s.ohlc_10s?.last_c != null
+                      ? `${fmt(s.ohlc_10s.last_o, 2)}→${fmt(s.ohlc_10s.last_c, 2)} ${s.ohlc_10s.market}`
+                      : 'SEEDING'}
+                  </strong>
+                </div>
+                <div className="robot-mini-row">
+                  <span>FEEDS</span>
+                  <strong>
+                    {s.feed_contributing ?? 0}/{s.feed_sender_count ?? 0} {s.feed_source || '—'}
+                  </strong>
+                </div>
+                <div className="robot-mini-row">
+                  <span>UPL</span>
+                  <strong className={(s.unrealized || 0) >= 0 ? 'pos' : 'neg'}>{fmt(s.unrealized)}</strong>
+                </div>
+                <div className="robot-mini-row">
+                  <span>LOT / SL</span>
+                  <strong>
+                    {s.lot_size} / {fmt(s.safety_sl)}
+                  </strong>
+                </div>
+                <div className="robot-mini-mode">
+                  {s.running
+                    ? s.decision_chain
+                      ? `${s.decision_chain.feeds} → ${s.decision_chain.regime} → ${s.decision_chain.action}`
+                      : `${s.mode} · ${s.regime || 'UNKNOWN'}`
+                    : 'STOPPED'}
+                </div>
+                {(s.feed_legs?.length ?? 0) > 0 && (
+                  <div className="robot-mini-legs mono">
+                    {s.feed_legs!.slice(0, 4).map((leg) => (
+                      <span key={leg.sender_id} className={leg.ok ? 'ok' : 'bad'}>
+                        {leg.name}:{leg.ok ? fmt(leg.mid, 2) : '×'}
                       </span>
-                    </div>
-                  );
-                })}
-                {publicSenders.length === 0 && <div className="mono robot-wire-empty">Nav public feeds.</div>}
-              </div>
-
-              <div className="robot-arena-kicker" style={{ marginTop: 14 }}>CAPITAL BROKER FEEDS (real — LEAD/CONFIRM/EXECUTE)</div>
-              <div className="robot-feed-legs">
-                {capitalSenders.map((s) => (
-                  <div
-                    key={s.sender_id}
-                    className={`robot-feed-leg ${s.status === 'LIVE' || s.status === 'ok' || s.status === 'live' ? 'ok' : ''}`}
-                  >
-                    <strong>{s.name}</strong>
-                    <span className="mono">
-                      {s.kind} · {s.status} · {s.trust}
-                      {s.latency_ms != null ? ` · ${s.latency_ms}ms` : ''}
-                    </span>
+                    ))}
                   </div>
-                ))}
-                {capitalSenders.length === 0 && (
-                  <div className="mono robot-wire-empty">Nav enabled Capital — Brokers.</div>
                 )}
+                <div className="robot-mini-log mono">{lastLog(s)}</div>
+                <div className="robot-mini-actions">
+                  <span className="mono">{s.environment.toUpperCase()}</span>
+                  <div className="robot-ctrl" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      className="btn btn-go"
+                      disabled={busy || s.running}
+                      onClick={() => void startOne(s)}
+                    >
+                      START
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-stop"
+                      disabled={busy || !s.running}
+                      onClick={() => void stopOne(s)}
+                    >
+                      STOP
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {focused && (
+          <div className="robot-board-focus robot-hud-panel">
+            <div className="robot-board-focus-head">
+              <div className="section-title" style={{ margin: 0 }}>
+                FOCUS · {(focused.client_name || focused.account_name).toUpperCase()} ·{' '}
+                {focused.display_name}
+              </div>
+              <div className="robot-ctrl robot-ctrl-lg">
+                <button
+                  type="button"
+                  className="btn btn-go"
+                  disabled={busy || focused.running}
+                  onClick={() => void startOne(focused)}
+                >
+                  START
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-stop"
+                  disabled={busy || !focused.running}
+                  onClick={() => void stopOne(focused)}
+                >
+                  STOP
+                </button>
               </div>
             </div>
-
-            <div className="rc-info-col">
-              <div className="robot-arena-kicker">FOCUS DETAIL</div>
-              {focused ? (
-                <div className="mono rc-info-text" style={{ lineHeight: 1.7 }}>
-                  <div>STATUS · {focused.running ? 'ONLINE' : 'STOPPED'}</div>
-                  <div>ID · {focused.id}</div>
-                  <div>ACCOUNT · {focused.account_name}</div>
-                  <div>POSTURE · {posture(focused).label}</div>
-                  {focused.market_tradeable === false && (
-                    <div className="robot-market-closed">{focused.market_info || `MARKET CLOSED · ${focused.market_status || 'CLOSED'}`}</div>
-                  )}
-                  <div>
-                    CHAIN ·{' '}
-                    {focusChain
-                      ? `${focusChain.feeds} → ${focusChain.ohlc} → ${focusChain.regime} → ${focusChain.action}`
-                      : chainLabel}
-                  </div>
-                  <div>
-                    {focused.ohlc_10s?.market === 'OFF'
-                      ? '10s OHLC OFF · entry uses Capital 1m/5m only'
-                      : `10s OHLC · O ${fmt(focused.ohlc_10s?.last_o, 2)} H ${fmt(focused.ohlc_10s?.last_h, 2)} L ${fmt(focused.ohlc_10s?.last_l, 2)} C ${fmt(focused.ohlc_10s?.last_c, 2)} · ${focused.ohlc_10s?.market || 'SEEDING'}`}
-                  </div>
-                  <div>MODE · {focused.running ? focused.mode : 'STOPPED'}</div>
-                  <div>{focused.tape_reason || focused.regime_info || `TAPE · ${focused.tape_dir || 'FLAT'}`}</div>
-                  <div>{focused.zone_info || 'ZONE · forming'}</div>
-                  <div>
-                    FEEDS ·{' '}
-                    {focusChain?.feeds ||
-                      `cap ${focused.feed_contributing ?? 0}/${focused.feed_sender_count ?? 0} · ${
-                        focused.feed_agreement || ''
-                      } · ${focused.feed_source || '—'}`}
-                  </div>
-                  {focusLegs.length > 0 && (
-                    <div className="robot-focus-legs">
-                      {focusLegs.map((leg) => (
-                        <div key={leg.sender_id} className={leg.ok ? 'ok' : 'bad'}>
-                          {leg.role ? `[${leg.role}] ` : ''}
-                          {leg.name} · {leg.ok ? fmt(leg.mid, 2) : 'FAIL'} · {leg.latency_ms}ms
-                          {leg.detail ? ` · ${leg.detail}` : ''}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div className="robot-focus-legs" style={{ marginTop: 10 }}>
-                    <div style={{ opacity: 0.7, marginBottom: 4 }}>LIVE TICKS (what is really happening)</div>
-                    {(focused.ticks || []).slice(0, 8).map((t, i) => (
-                      <div key={`${t.at}-${i}`}>
-                        {t.phase} · {t.detail}
+            <div className="robot-board-focus-grid">
+              <div className="mono" style={{ lineHeight: 1.7 }}>
+                <div>STATUS · {focused.running ? 'ONLINE' : 'STOPPED'}</div>
+                <div>ID · {focused.id}</div>
+                <div>ACCOUNT · {focused.account_name}</div>
+                <div>POSTURE · {posture(focused).label}</div>
+                <div className="robot-focus-chain">
+                  CHAIN ·{' '}
+                  {focusChain
+                    ? `${focusChain.feeds} → ${focusChain.ohlc} → ${focusChain.regime} → ${focusChain.action}`
+                    : chainLabel}
+                </div>
+                <div>
+                  10s OHLC · O {fmt(focused.ohlc_10s?.last_o, 2)} H {fmt(focused.ohlc_10s?.last_h, 2)} L{' '}
+                  {fmt(focused.ohlc_10s?.last_l, 2)} C {fmt(focused.ohlc_10s?.last_c, 2)} ·{' '}
+                  {focused.ohlc_10s?.market || 'SEEDING'}
+                </div>
+                <div>MODE · {focused.running ? focused.mode : 'STOPPED'}</div>
+                <div>REGIME · {(focused.regime || 'UNKNOWN').toUpperCase()}</div>
+                <div>
+                  FEEDS · {focused.feed_contributing ?? 0}/{focused.feed_sender_count ?? 0}{' '}
+                  {focused.feed_agreement || ''} · {focused.feed_source || '—'}
+                </div>
+                {focusLegs.length > 0 && (
+                  <div className="robot-focus-legs">
+                    {focusLegs.map((leg) => (
+                      <div key={leg.sender_id} className={leg.ok ? 'ok' : 'bad'}>
+                        {leg.name} · {leg.ok ? fmt(leg.mid, 2) : 'FAIL'} · {leg.latency_ms}ms
+                        {leg.detail ? ` · ${leg.detail}` : ''}
                       </div>
                     ))}
                   </div>
-                  <div>ENTRY · {fmt(focused.entry_price)}</div>
-                  <div>SAFETY SL · {fmtSl(focused)}</div>
-                  <div>DEAL · {focused.deal_id || '—'}</div>
-                  <div>SCORE · IN {focused.orders_placed} / OUT {focused.exits_done ?? 0}</div>
-                  <div>READS · {focused.reads_ok}/{focused.reads_fail}</div>
-                  {focused.error && <div className="error-state" style={{ marginTop: 8 }}>{focused.error}</div>}
+                )}
+                <div>ENTRY · {fmt(focused.entry_price)}</div>
+                <div>SAFETY SL · {fmt(focused.safety_sl)}</div>
+                <div>DEAL · {focused.deal_id || '—'}</div>
+                <div>
+                  SCORE · IN {focused.orders_placed} / OUT {focused.exits_done ?? 0}
                 </div>
-              ) : (
-                <div className="mono robot-wire-empty">Nav focus unit.</div>
-              )}
-            </div>
-
-            <div className="rc-info-col rc-info-log">
-              <div className="robot-arena-kicker">SYSTEM LOG</div>
+                <div>
+                  READS · {focused.reads_ok}/{focused.reads_fail}
+                </div>
+                {focused.error && <div className="error-state" style={{ marginTop: 8 }}>{focused.error}</div>}
+              </div>
               <div className="robot-feed">
-                {(focused?.ticks || []).slice(0, 60).map((t, i) => (
+                {focused.ticks.slice(0, 40).map((t, i) => (
                   <div key={`${t.at}-${i}`} className={`robot-feed-line phase-${t.phase.toLowerCase()}`}>
                     <span className="mono time">{new Date(t.at).toLocaleTimeString()}</span>
                     <span className="badge phase">{t.phase}</span>
                     <span className="detail">{t.detail}</span>
                   </div>
                 ))}
-                {(!focused || focused.ticks.length === 0) && <div className="mono">Waiting for feed…</div>}
+                {focused.ticks.length === 0 && <div className="mono">Waiting for feed…</div>}
               </div>
             </div>
-          </section>
+          </div>
         )}
-
-        <footer className="rc-motto">PRECISION · CONTROL · EXECUTION</footer>
       </div>
     </div>
   );

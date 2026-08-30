@@ -1,43 +1,33 @@
 import { describe, expect, it } from 'vitest';
 import {
   computeSafetyCushionStopLevel,
-  isLateMoveOnFiveMinute,
+  isLateMoveOnOneMinute,
 } from './capitalCom.js';
 
 describe('safety SL cushion', () => {
-  it('places BUY stop below mid (~0.20%) — wider than HardInv 2.0pt on Gold', () => {
-    const mid = 4660;
+  it('places BUY stop well below mid (~0.20%), not at spread min', () => {
+    const mid = 2000;
     const level = computeSafetyCushionStopLevel('BUY', mid, {
-      bid: 4659.8,
-      ask: 4660.2,
+      bid: 1999.8,
+      ask: 2000.2,
       spread: 0.4,
       minStopDistance: 0.5,
     });
-    expect(level).toBeLessThan(mid);
-    const dist = mid - level;
-    expect(dist).toBeGreaterThanOrEqual(mid * 0.002 - 0.1);
-    expect(dist).toBeLessThan(mid * 0.0025 + 0.5);
-    expect(dist).toBeGreaterThan(2.0);
+    expect(level).toBeLessThan(mid - 3);
+    expect(mid - level).toBeGreaterThanOrEqual(mid * 0.002 - 0.01);
+    expect(mid - level).toBeLessThan(mid * 0.0025 + 0.5);
   });
 });
 
-describe('late-move gate', () => {
-  it('blocks BUY after strong green net', () => {
+describe('1m late-move gate', () => {
+  it('blocks BUY after strong green 1m candle', () => {
     expect(
-      isLateMoveOnFiveMinute('BUY', [
-        { open: 4600, high: 4602, low: 4599, close: 4601 },
-        { open: 4601, high: 4608, low: 4600, close: 4607 },
-        { open: 4607, high: 4616, low: 4606, close: 4615 },
-      ])
+      isLateMoveOnOneMinute('BUY', [{ open: 2000, high: 2005, low: 1999, close: 2004 }])
     ).toBe(true);
   });
-  it('allows BUY on flat/red net', () => {
+  it('allows BUY on flat/red 1m candle', () => {
     expect(
-      isLateMoveOnFiveMinute('BUY', [
-        { open: 4600, high: 4601, low: 4598, close: 4599 },
-        { open: 4599, high: 4600, low: 4597, close: 4598 },
-        { open: 4598, high: 4599, low: 4596, close: 4597 },
-      ])
+      isLateMoveOnOneMinute('BUY', [{ open: 2000, high: 2000.2, low: 1999.5, close: 1999.8 }])
     ).toBe(false);
   });
 });
