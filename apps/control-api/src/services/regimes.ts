@@ -114,6 +114,18 @@ function epicKey(epic: string): string {
   return String(epic || '').trim().toUpperCase();
 }
 
+/** Book key: epic alone (admin/pipeline) or scope::epic (per-robot / per-client). */
+function bookKey(epic: string, scopeKey?: string | null): string {
+  const e = epicKey(epic);
+  const scope = String(scopeKey || '').trim();
+  return scope ? `${scope}::${e}` : e;
+}
+
+function epicFromBookKey(key: string): string {
+  const i = key.lastIndexOf('::');
+  return i >= 0 ? key.slice(i + 2) : key;
+}
+
 /**
  * Classify from closed 10s OHLC — same names as C++ RegimeEngine.
  * Failed-breakout variants are live here (reserved in C++).
@@ -191,8 +203,8 @@ function toSnapshot(epic: string, b: Book): RegimeSnapshot {
   };
 }
 
-function ensureBook(epic: string, displayName?: string): Book {
-  const key = epicKey(epic);
+function ensureBook(epic: string, displayName?: string, scopeKey?: string | null): Book {
+  const key = bookKey(epic, scopeKey);
   let b = books.get(key);
   if (!b) {
     const now = new Date().toISOString();
@@ -230,10 +242,11 @@ function applyClassify(epic: string, b: Book): RegimeSnapshot {
 export function observeClosedBars(
   epic: string,
   bars: TenSecBar[],
-  displayName?: string
+  displayName?: string,
+  scopeKey?: string | null
 ): RegimeSnapshot {
-  const key = epicKey(epic);
-  const b = ensureBook(epic, displayName);
+  const key = bookKey(epic, scopeKey);
+  const b = ensureBook(epic, displayName, scopeKey);
   for (const bar of bars) {
     if (!bar || !Number.isFinite(bar.close)) continue;
     const last = b.bars[b.bars.length - 1];
@@ -246,7 +259,7 @@ export function observeClosedBars(
     b.bars.push(bar);
   }
   if (b.bars.length > MAX_BARS) b.bars.splice(0, b.bars.length - MAX_BARS);
-  return applyClassify(key, b);
+  return applyClassify(epicKey(epic), b);
 }
 
 export function notePipelineRegime(
@@ -254,7 +267,8 @@ export function notePipelineRegime(
   regime: string | null | undefined,
   displayName?: string
 ): RegimeSnapshot {
-  const b = ensureBook(epic, displayName);
+  // Pipeline annotations stay on an isolated book — never merge into a live robot's regime.
+  const b = ensureBook(epic, displayName, 'pipeline');
   const next = normalizeRegime(regime);
   const now = new Date().toISOString();
   if (next !== b.current) {
@@ -267,15 +281,18 @@ export function notePipelineRegime(
   return toSnapshot(epicKey(epic), b);
 }
 
-export function currentRegime(epic: string | null | undefined): RegimeSnapshot | null {
+export function currentRegime(
+  epic: string | null | undefined,
+  scopeKey?: string | null
+): RegimeSnapshot | null {
   if (!epic) return null;
-  const b = books.get(epicKey(epic));
+  const b = books.get(bookKey(epic, scopeKey));
   if (!b) return null;
   return toSnapshot(epicKey(epic), b);
 }
 
 export function listRegimeSnapshots(): RegimeSnapshot[] {
-  return [...books.entries()].map(([epic, b]) => toSnapshot(epic, b));
+  return [...books.entries()].map(([key, b]) => toSnapshot(epicFromBookKey(key), b));
 }
 
 export function regimeCatalog() {

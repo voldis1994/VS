@@ -260,7 +260,7 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
       ? [s.ohlcState.last_closed]
       : [];
   if (incoming.length) {
-    const snap = observeClosedBars(s.epic, incoming, s.display_name);
+    const snap = observeClosedBars(s.epic, incoming, s.display_name, s.id);
     s.regime = snap.current;
     if (bars?.length) s.closedBars = bars.slice(-24);
   }
@@ -950,7 +950,10 @@ async function robotCycle(s: Internal) {
     if (Date.now() - s.last_multi_feed_ms >= 4_000) {
       s.last_multi_feed_ms = Date.now();
       try {
-        s.multiFeed = await readMultiFeedPrice(s.epic, { anchorMid: quote.mid });
+        s.multiFeed = await readMultiFeedPrice(s.epic, {
+          anchorMid: quote.mid,
+          connectionId: s.connection_id,
+        });
       } catch {
         /* keep previous multiFeed snapshot */
       }
