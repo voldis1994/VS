@@ -152,11 +152,8 @@ export function regimeForEntry(
   if (!zones.ready) {
     return { regime: r, led: false, reason: `10s ${r} · zones not ready` };
   }
-  const lagging =
-    r === 'RANGE' ||
-    r === 'UNKNOWN' ||
-    r === 'TRANSITION' ||
-    r === 'COMPRESSION';
+  // RANGE / COMPRESSION can lag a live minute trend — follow zones
+  const lagging = r === 'RANGE' || r === 'COMPRESSION';
   if (!lagging) {
     return { regime: r, led: false, reason: `10s ${r}` };
   }
@@ -208,8 +205,8 @@ export function regimeConfirmedByZones(
 
   const r = normalizeRegime(regime10s);
 
-  if (r === 'UNKNOWN' || r === 'TRANSITION' || r === 'COMPRESSION') {
-    return { ok: false, reason: `WAIT regime ${r} · structure ${zones.structure}` };
+  if (r === 'COMPRESSION') {
+    return { ok: false, reason: `WAIT regime COMPRESSION · structure ${zones.structure}` };
   }
 
   const s = zones.structure;
@@ -282,6 +279,6 @@ export function regimeConfirmedByZones(
 
 /** Map structure hint toward a regime name for diagnostics. */
 export function structureAsRegime(s: StructureHint): RegimeName {
-  if (s === 'UNKNOWN') return 'UNKNOWN';
+  if (s === 'UNKNOWN') return 'RANGE';
   return s as RegimeName;
 }

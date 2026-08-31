@@ -22,9 +22,9 @@ const quiet: TenSecBar = {
 };
 
 describe('10s playbook suitable entry', () => {
-  it('waits in UNKNOWN / COMPRESSION / TRANSITION', () => {
-    expect(decideEntryFrom10sRegime(longDip, 'UNKNOWN', ctx)).toBeNull();
+  it('waits on COMPRESSION; UNKNOWN/TRANSITION collapse to RANGE (need edge)', () => {
     expect(decideEntryFrom10sRegime(longDip, 'COMPRESSION', ctx)).toBeNull();
+    expect(decideEntryFrom10sRegime(longDip, 'UNKNOWN', ctx)).toBeNull();
     expect(decideEntryFrom10sRegime(longRally, 'TRANSITION', ctx)).toBeNull();
   });
 

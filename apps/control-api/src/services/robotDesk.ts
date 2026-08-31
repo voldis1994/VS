@@ -281,7 +281,7 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
   return {
     feeds,
     ohlc: ohlcLine,
-    regime: s.regime || 'UNKNOWN',
+    regime: s.regime || 'RANGE',
     zones: zonesLine,
     setup: s.entry_setup || (s.playbook ? String(s.playbook) : null),
     action,
@@ -317,7 +317,7 @@ async function refreshStructureZones(
 
 export function robotBoardMeta(sessions: RobotSession[]) {
   const activeRegimes = [
-    ...new Set(sessions.filter((s) => s.running).map((s) => s.regime || 'UNKNOWN')),
+    ...new Set(sessions.filter((s) => s.running).map((s) => s.regime || 'RANGE')),
   ];
   const maxFeeds = sessions.reduce(
     (n, s) => Math.max(n, s.feed_sender_count || 0, s.feed_legs?.length || 0),
@@ -1275,7 +1275,7 @@ async function robotCycle(s: Internal) {
     let entryPlaybook: TradePlaybook | null = null;
 
     if (s.ohlcState.just_closed && bar) {
-      // If 10s still says RANGE/UNKNOWN while minutes show TREND/BREAKOUT — follow zones
+      // If 10s still says RANGE while minutes show TREND/BREAKOUT — follow zones
       const led = regimeForEntry(s.regime, s.zoneBook);
       const entryRegime = led.regime;
       const zoneGate = regimeConfirmedByZones(entryRegime, s.zoneBook);
@@ -1513,10 +1513,10 @@ export async function startRobotSession(input: {
     feed_contributing: 0,
     feed_sender_count: 0,
     feed_agreement: null,
-    regime: 'UNKNOWN',
+    regime: 'RANGE',
     playbook: null,
     entry_setup: null,
-    previous_regime: 'UNKNOWN',
+    previous_regime: 'RANGE',
     regime_age_bars: 0,
     playbook_age_bars: 0,
     playbook_watch: 'WAIT',

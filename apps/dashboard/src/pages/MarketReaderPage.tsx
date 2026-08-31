@@ -2,7 +2,6 @@ import { Link } from 'react-router-dom';
 import { useApi } from '../hooks/useApi';
 
 const REGIME_NAMES = [
-  'UNKNOWN',
   'RANGE',
   'TREND_UP',
   'TREND_DOWN',
@@ -15,7 +14,6 @@ const REGIME_NAMES = [
   'FAILED_BREAKOUT_UP',
   'FAILED_BREAKOUT_DOWN',
   'REVERSAL_CANDIDATE',
-  'TRANSITION',
 ] as const;
 
 const TRADE_TYPES = ['BUY LONG', 'SELL LONG', 'BUY SCALP', 'SELL SCALP'] as const;
@@ -44,7 +42,7 @@ function regimeClass(name: string): string {
   const n = name.toUpperCase();
   if (n.includes('UP') || n === 'EXPANSION') return 'up';
   if (n.includes('DOWN') || n === 'COMPRESSION') return 'down';
-  if (n === 'RANGE' || n === 'UNKNOWN' || n === 'TRANSITION') return 'flat';
+  if (n === 'RANGE') return 'flat';
   return 'scalp';
 }
 

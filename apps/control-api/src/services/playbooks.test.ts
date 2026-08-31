@@ -28,7 +28,8 @@ describe('playbookFromRegime', () => {
     expect(playbookFromRegime('RANGE')).toBe('FADE');
     expect(playbookFromRegime('FAILED_BREAKOUT_UP')).toBe('FADE');
     expect(playbookFromRegime('COMPRESSION')).toBe('WAIT');
-    expect(playbookFromRegime('UNKNOWN')).toBe('WAIT');
+    expect(playbookFromRegime('UNKNOWN')).toBe('FADE'); // collapsed → RANGE
+    expect(playbookFromRegime('TRANSITION')).toBe('FADE');
   });
 });
 
@@ -39,9 +40,12 @@ describe('playbook entry', () => {
   const scalpRally = bar(2000, 2000.8); // 0.04%
   const fadeDip = bar(2000, 1999.4); // 0.03%
 
-  it('WAIT regimes never enter', () => {
-    expect(decideEntryFrom10sRegime(longDip, 'UNKNOWN', { playbookAgeBars: 5 })).toBeNull();
+  it('WAIT only on COMPRESSION — UNKNOWN/TRANSITION collapse to RANGE FADE', () => {
     expect(decideEntryFrom10sRegime(longDip, 'COMPRESSION', { playbookAgeBars: 5 })).toBeNull();
+    // UNKNOWN → RANGE → FADE needs zone/edge; without edge still null but not WAIT-book
+    expect(
+      decideEntryFrom10sRegime(longDip, 'UNKNOWN', { playbookAgeBars: 5 })
+    ).toBeNull();
   });
 
   it('LONG needs family age ≥2 and strong dip', () => {

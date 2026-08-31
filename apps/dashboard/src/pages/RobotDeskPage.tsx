@@ -13,7 +13,6 @@ type RobotTick = {
 };
 
 const ALL_REGIMES = [
-  'UNKNOWN',
   'RANGE',
   'TREND_UP',
   'TREND_DOWN',
@@ -26,7 +25,6 @@ const ALL_REGIMES = [
   'FAILED_BREAKOUT_UP',
   'FAILED_BREAKOUT_DOWN',
   'REVERSAL_CANDIDATE',
-  'TRANSITION',
 ] as const;
 
 type FeedLeg = {
@@ -142,7 +140,7 @@ function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'fl
     return { label: t, kind: t.includes('LONG') ? 'long' : 'short' };
   }
   if (s.running && !s.open_side) {
-    const r = (s.regime || 'UNKNOWN').toUpperCase();
+    const r = (s.regime || 'RANGE').toUpperCase();
     return { label: `WAIT ENTRY · ${r}`, kind: 'entry' };
   }
   return { label: 'FLAT', kind: 'flat' };
@@ -164,8 +162,7 @@ function tradeLabel(s: RobotSession): string {
     r === 'COMPRESSION' ||
     r === 'EXPANSION' ||
     r === 'RANGE' ||
-    r === 'REVERSAL_CANDIDATE' ||
-    r === 'TRANSITION';
+    r === 'REVERSAL_CANDIDATE';
   if (long) return `${s.open_side} LONG`;
   if (scalp) return `${s.open_side} SCALP`;
   return s.open_side;
@@ -316,7 +313,7 @@ export function RobotDeskPage() {
   const activeRegimes = new Set(
     (board?.active_regimes?.length
       ? board.active_regimes
-      : sessions.filter((s) => s.running).map((s) => s.regime || 'UNKNOWN')
+      : sessions.filter((s) => s.running).map((s) => s.regime || 'RANGE')
     ).map((r) => r.toUpperCase()),
   );
   const capitalSenders = senders.filter(
@@ -612,7 +609,7 @@ export function RobotDeskPage() {
                 </div>
                 <div className="robot-mini-market">{s.display_name}</div>
                 <div className={`robot-mini-posture ${p.kind}`}>{p.label}</div>
-                <div className="robot-mini-regime mono">{(s.regime || 'UNKNOWN').toUpperCase()}</div>
+                <div className="robot-mini-regime mono">{(s.regime || 'RANGE').toUpperCase()}</div>
                 <div className="robot-mini-row">
                   <span>MID</span>
                   <strong>{fmt(s.last_mid)}</strong>
@@ -645,7 +642,7 @@ export function RobotDeskPage() {
                   {s.running
                     ? s.decision_chain
                       ? `${s.decision_chain.feeds} → ${s.decision_chain.zones || 'zones?'} → ${s.decision_chain.regime} → ${s.decision_chain.action}`
-                      : `${s.mode} · ${s.regime || 'UNKNOWN'}`
+                      : `${s.mode} · ${s.regime || 'RANGE'}`
                     : 'STOPPED'}
                 </div>
                 {(s.feed_legs?.length ?? 0) > 0 && (
@@ -728,7 +725,7 @@ export function RobotDeskPage() {
                   {focused.ohlc_10s?.market || 'SEEDING'}
                 </div>
                 <div>MODE · {focused.running ? focused.mode : 'STOPPED'}</div>
-                <div>REGIME · {(focused.regime || 'UNKNOWN').toUpperCase()}</div>
+                <div>REGIME · {(focused.regime || 'RANGE').toUpperCase()}</div>
                 <div>
                   FEEDS · {focused.feed_contributing ?? 0}/{focused.feed_sender_count ?? 0}{' '}
                   {focused.feed_agreement || ''} · {focused.feed_source || '—'}
