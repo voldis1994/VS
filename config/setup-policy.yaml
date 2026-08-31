@@ -1,9 +1,20 @@
 setup_policy:
+  # Setup-first model (LIVE desk = marketSetup.ts)
+  # structure (1h+1m swing) → sticky setup → entry on closed 10s → best outcome
   horizon_ms: 10000
   min_confidence: 0.0
   confirm_confidence: 0.0
   expiry_ms: 30000
+  sticky_confirm_updates: 2
   types:
     - CONTINUATION
     - PULLBACK
     - BREAKOUT
+    - FADE
+    - FAILED_BREAK
+    - NONE
+  rules:
+    - no_wait_regime
+    - no_tick_setup_flip
+    - entry_only_on_closed_10s
+    - freeze_setup_while_open

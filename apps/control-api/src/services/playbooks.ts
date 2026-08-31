@@ -74,18 +74,26 @@ export const PLAYBOOK_ENTRY_BODY: Record<TradePlaybook, number> = {
   FADE: 0.00025,
 };
 
+/**
+ * Diagnostic only — LIVE entry uses playbookFromSetup (marketSetup).
+ * COMPRESSION/quiet → null (NONE), never a WAIT "regime playbook".
+ */
 export function playbookFromRegime(regime?: string | null): Playbook {
   const r = normalizeRegime(regime);
-  // Only true quiet — never UNKNOWN/TRANSITION (those are gone)
-  if (r === 'COMPRESSION') return 'WAIT';
+  if (r === 'COMPRESSION') return 'WAIT'; // legacy alias = no book; desk treats as NONE
   if (r === 'TREND_UP' || r === 'TREND_DOWN') return 'LONG';
   if (r === 'PULLBACK_UPTREND' || r === 'PULLBACK_DOWNTREND') return 'LONG';
   if (r === 'BREAKOUT_UP' || r === 'BREAKOUT_DOWN') return 'SCALP';
   if (r === 'EXPANSION' || r === 'REVERSAL_CANDIDATE') return 'SCALP';
-  // Failed break that is still running = scalp the direction, not fade mid-move
-  if (r === 'FAILED_BREAKOUT_UP' || r === 'FAILED_BREAKOUT_DOWN') return 'SCALP';
+  if (r === 'FAILED_BREAKOUT_UP' || r === 'FAILED_BREAKOUT_DOWN') return 'FADE';
   if (r === 'RANGE') return 'FADE';
   return 'WAIT';
+}
+
+/** Prefer setup playbook; never invent WAIT as a trading book. */
+export function tradePlaybookOrNull(p?: Playbook | null): TradePlaybook | null {
+  if (p === 'LONG' || p === 'SCALP' || p === 'FADE') return p;
+  return null;
 }
 
 export function isLongFamily(regime?: string | null): boolean {

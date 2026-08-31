@@ -26,8 +26,8 @@ describe('playbookFromRegime', () => {
     expect(playbookFromRegime('BREAKOUT_UP')).toBe('SCALP');
     expect(playbookFromRegime('EXPANSION')).toBe('SCALP');
     expect(playbookFromRegime('RANGE')).toBe('FADE');
-    expect(playbookFromRegime('FAILED_BREAKOUT_UP')).toBe('SCALP');
-    expect(playbookFromRegime('FAILED_BREAKOUT_DOWN')).toBe('SCALP');
+    expect(playbookFromRegime('FAILED_BREAKOUT_UP')).toBe('FADE');
+    expect(playbookFromRegime('FAILED_BREAKOUT_DOWN')).toBe('FADE');
     expect(playbookFromRegime('COMPRESSION')).toBe('WAIT');
     expect(playbookFromRegime('UNKNOWN')).toBe('FADE'); // collapsed → RANGE
     expect(playbookFromRegime('TRANSITION')).toBe('FADE');

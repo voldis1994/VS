@@ -300,27 +300,8 @@ export function decideEntryFrom10sRegime(
       }
       return null;
     }
-    // Still dumping after failed break down → sell with the move (not fade-buy)
-    if (r === 'FAILED_BREAKOUT_DOWN') {
-      if (dipFor(bar, 'SCALP') || bodyPct(bar) < 0) {
-        return {
-          direction: 'SELL',
-          setup: 'BREAKOUT',
-          playbook: 'SCALP',
-          reason: `SCALP · ${r} follow dump · ${candle}`,
-        };
-      }
-      return null;
-    }
-    if (r === 'FAILED_BREAKOUT_UP') {
-      if (rallyFor(bar, 'SCALP') || bodyPct(bar) > 0) {
-        return {
-          direction: 'BUY',
-          setup: 'BREAKOUT',
-          playbook: 'SCALP',
-          reason: `SCALP · ${r} follow rally · ${candle}`,
-        };
-      }
+    // Still dumping after failed break down — handled in FADE book (bounce), not SCALP chase
+    if (r === 'FAILED_BREAKOUT_DOWN' || r === 'FAILED_BREAKOUT_UP') {
       return null;
     }
     return null;
@@ -332,6 +313,29 @@ export function decideEntryFrom10sRegime(
     }
     if (!movingFor(bar, 'FADE') || !bodyStrongEnough(bar, 'FADE')) return null;
 
+    // Legacy 10s FAILED labels — real failed-break is minute setup (FADE)
+    if (r === 'FAILED_BREAKOUT_DOWN') {
+      if (rallyFor(bar, 'FADE') || bodyPct(bar) > 0) {
+        return {
+          direction: 'BUY',
+          setup: 'FADE',
+          playbook: 'FADE',
+          reason: `FADE · ${r} bounce after fail-down · ${candle}`,
+        };
+      }
+      return null;
+    }
+    if (r === 'FAILED_BREAKOUT_UP') {
+      if (dipFor(bar, 'FADE') || bodyPct(bar) < 0) {
+        return {
+          direction: 'SELL',
+          setup: 'FADE',
+          playbook: 'FADE',
+          reason: `FADE · ${r} reject after fail-up · ${candle}`,
+        };
+      }
+      return null;
+    }
     if (r === 'RANGE') {
       const zones = ctx?.zones;
       const prior = ctx?.priorBars || [];
