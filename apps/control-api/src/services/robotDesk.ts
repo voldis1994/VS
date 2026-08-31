@@ -1283,9 +1283,9 @@ async function robotCycle(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // After close: short pause; after HardInv/thesis — longer (stop BUY↔SELL machine-gun)
+    // After close: brief pause so next 10s bar can fire; after HardInv — a bit longer
     const hardAgo = s.last_hard_exit_ms > 0 ? Date.now() - s.last_hard_exit_ms : Infinity;
-    const POST_CLOSE_COOLDOWN_MS = hardAgo < 180_000 ? 90_000 : 35_000;
+    const POST_CLOSE_COOLDOWN_MS = hardAgo < 180_000 ? 45_000 : 15_000;
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
     if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
       pushTick(s, {
@@ -1416,9 +1416,9 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // Opposite-side lock: 90s normal, 4 min after HardInv/thesis (no instant flip)
+    // Opposite-side lock: short enough for 10s cadence; longer only after HardInv
     const hardRecent = s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < 300_000;
-    const SIDE_LOCK_MS = hardRecent ? 240_000 : 90_000;
+    const SIDE_LOCK_MS = hardRecent ? 90_000 : 45_000;
     if (
       s.last_entry_side &&
       s.last_entry_side !== entry.direction &&
