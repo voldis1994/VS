@@ -8,7 +8,6 @@ import {
   fetchCapitalMarketQuote,
   fetchCapitalMinutePrices,
   fetchCapitalPrices,
-  isLateMoveOnOneMinute,
   listCapitalOpenPositions,
   type CapitalMarketQuote,
   type CapitalOpenPosition,
@@ -23,7 +22,7 @@ import {
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
-import { decideEntryFrom10sRegime, decideMoveEntry } from './entryFromRegime.js';
+import { decideEntryFrom10sRegime, decideMoveEntry, decidePriceMove } from './entryFromRegime.js';
 import {
   playbookFromRegime,
   type Playbook,
@@ -32,7 +31,6 @@ import {
 import {
   buildZonesFromMinutes,
   emptyZones,
-  regimeConfirmedByZones,
   regimeForEntry,
   type MarketZoneBook,
 } from './structureZones.js';
@@ -44,7 +42,6 @@ import {
   type MultiFeedPrice,
   type MultiFeedLeg,
 } from './robotReader.js';
-import { buildFresherRefs, detectStaleQuoteAdverse } from './staleQuoteGuard.js';
 import {
   aggregateSecondsToTen,
   emptyTenSecState,
@@ -155,6 +152,8 @@ type Internal = RobotSession & {
   /** Real structure from Capital minute history */
   zoneBook: MarketZoneBook;
   last_zones_fetch_ms: number;
+  /** Debounce Capital order spam between attempts */
+  last_entry_attempt_ms: number;
 };
 
 const ZONE_REFRESH_MS = 45_000;
@@ -236,6 +235,7 @@ function publicSession(s: Internal): RobotSession {
     playbook_watch: _pbWatch,
     zoneBook: _zoneBook,
     last_zones_fetch_ms: _zonesAt,
+    last_entry_attempt_ms: _entryAt,
     ...rest
   } = s;
   const z = s.zoneBook;
@@ -1205,19 +1205,7 @@ async function robotCycle(s: Internal) {
         s.playbook_watch = watch;
       }
     }
-    // Was 90s — blocked re-entry on the next visible move
-    const POST_CLOSE_COOLDOWN_MS = 30_000;
-    const sinceClose = Date.now() - (s.closed_at_ms || 0);
-    if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
-      pushTick(s, {
-        phase: 'WAIT',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `10s OHLC cooldown ${Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000)}s after close · then next bar`,
-      });
-      return;
-    }
+    // No post-close cooldown — user: move finishes while waiting
 
     if (quote.mid == null) return;
 
@@ -1240,7 +1228,6 @@ async function robotCycle(s: Internal) {
           if (isNew) {
             s.last_closed_bar_key = key;
             s.ohlc_10s = publicOhlc10s(s.ohlcState);
-            // Only advance regime on a new closed 10s bar — never every poll
             applyRobotRegime(s, bars);
           } else {
             s.ohlc_10s = publicOhlc10s(s.ohlcState);
@@ -1253,25 +1240,24 @@ async function robotCycle(s: Internal) {
     const feedGate = allowEntryFromFeeds(s.multiFeed);
     if (!feedGate.ok) {
       pushTick(s, {
-        phase: 'WAIT',
+        phase: 'INFO',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
         detail: `FEED NOTE · ${feedGate.reason}`,
       });
-      // do not return — Capital local path continues
     }
 
-    // Zones first: Capital minute structure before any 10s entry
-    const zoneForce = !s.zoneBook.ready || s.ohlcState.just_closed;
-    const zoneRefresh = await refreshStructureZones(
+    // Zones for context only — never a hard entry block
+    await refreshStructureZones(
       opened.session,
       s,
       quote.mid,
-      zoneForce
+      !s.zoneBook.ready || s.ohlcState.just_closed
     );
 
     const bar = s.ohlcState.last_closed;
+    const forming = s.ohlcState.forming;
     const ohlc = s.ohlc_10s;
     const zoneLine = s.zoneBook.ready
       ? `zones ${s.zoneBook.structure} H${s.zoneBook.high.toFixed(2)}/L${s.zoneBook.low.toFixed(2)}`
@@ -1287,131 +1273,107 @@ async function robotCycle(s: Internal) {
     let setupType: string | null = null;
     let entryPlaybook: TradePlaybook | null = null;
 
-    if (s.ohlcState.just_closed && bar) {
-      // If 10s still says RANGE while minutes show TREND/BREAKOUT — follow zones
-      const led = regimeForEntry(s.regime, s.zoneBook);
-      const entryRegime = led.regime;
-      const zoneGate = regimeConfirmedByZones(entryRegime, s.zoneBook);
-      const priorBars = s.closedBars.filter(
-        (b) =>
-          !(
-            Math.abs(b.open - bar.open) < 1e-9 &&
-            Math.abs(b.close - bar.close) < 1e-9 &&
-            Math.abs(b.high - bar.high) < 1e-9
-          )
-      );
-      const ageBars = led.led
-        ? Math.max(s.playbook_age_bars, s.regime_age_bars, 1)
-        : Math.max(s.playbook_age_bars, 1);
-      let sig =
-        zoneGate.ok
-          ? decideEntryFrom10sRegime(bar, entryRegime, {
-              regimeAgeBars: led.led ? Math.max(s.regime_age_bars, 1) : s.regime_age_bars,
-              playbookAgeBars: ageBars,
-              previousRegime: s.previous_regime,
-              priorBars,
-              zones: s.zoneBook,
-            })
-          : null;
+    const led = regimeForEntry(s.regime, s.zoneBook);
+    const entryRegime = led.regime;
+    const priorBars = s.closedBars.filter(
+      (b) =>
+        !(
+          bar &&
+          Math.abs(b.open - bar.open) < 1e-9 &&
+          Math.abs(b.close - bar.close) < 1e-9 &&
+          Math.abs(b.high - bar.high) < 1e-9
+        )
+    );
+    const ageBars = Math.max(s.playbook_age_bars, s.regime_age_bars, 1);
 
-      // Hard rule: clear 10s dump/rally → OPEN trade (do not sit on WAIT labels)
-      if (!sig) {
-        const move = decideMoveEntry(bar);
-        if (move) {
-          const contradict =
-            s.zoneBook.ready &&
-            ((move.direction === 'BUY' &&
-              (s.zoneBook.structure === 'TREND_DOWN' ||
-                s.zoneBook.structure === 'BREAKOUT_DOWN')) ||
-              (move.direction === 'SELL' &&
-                (s.zoneBook.structure === 'TREND_UP' ||
-                  s.zoneBook.structure === 'BREAKOUT_UP')));
-          if (!contradict) {
-            sig = move;
-          }
-        }
-      }
-
+    // 1) Playbook on closed bar (no zone gate)
+    if (bar) {
+      const sig = decideEntryFrom10sRegime(bar, entryRegime, {
+        regimeAgeBars: ageBars,
+        playbookAgeBars: ageBars,
+        previousRegime: s.previous_regime,
+        priorBars,
+        zones: s.zoneBook,
+      });
       if (sig) {
         direction = sig.direction;
         setupType = sig.setup;
-        reason = `${sig.reason} · ${led.reason}${zoneGate.ok ? ` · ${zoneGate.reason}` : ' · MOVE override'}`;
+        reason = `${sig.reason} · ${led.reason}`;
         entryPlaybook = sig.playbook;
-        s.playbook = sig.playbook;
-        s.entry_setup = sig.setup;
-      } else {
+      }
+    }
+
+    // 2) MOVE on closed or forming 10s body — do not wait for "perfect" close
+    if (!direction) {
+      const moveBar = forming || bar;
+      if (moveBar) {
+        const move = decideMoveEntry(moveBar);
+        if (move) {
+          direction = move.direction;
+          setupType = move.setup;
+          reason = `${move.reason} · ${led.reason}`;
+          entryPlaybook = move.playbook;
+        }
+      }
+    }
+
+    // 3) Live mid vs recent H/L — opens during QUIET forming while dump already printed
+    if (!direction && quote.mid != null) {
+      const recent = [...s.closedBars.slice(-8), bar, forming].filter(Boolean) as TenSecBar[];
+      const refHigh = recent.length
+        ? Math.max(...recent.map((b) => b.high))
+        : s.zoneBook.ready
+          ? s.zoneBook.high
+          : null;
+      const refLow = recent.length
+        ? Math.min(...recent.map((b) => b.low))
+        : s.zoneBook.ready
+          ? s.zoneBook.low
+          : null;
+      const midMove = decidePriceMove(quote.mid, refHigh, refLow);
+      if (midMove) {
+        direction = midMove.direction;
+        setupType = midMove.setup;
+        reason = `${midMove.reason} · ${led.reason}`;
+        entryPlaybook = midMove.playbook;
+      }
+    }
+
+    if (direction) {
+      s.playbook = entryPlaybook;
+      s.entry_setup = setupType;
+      // Debounce only — never "late move" / stale quote / zone blocks
+      const sinceAttempt = Date.now() - (s.last_entry_attempt_ms || 0);
+      if (sinceAttempt < 8_000) {
         pushTick(s, {
           phase: 'DECIDE',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${ohlcLine} · ${led.reason} · ${zoneGate.reason} · ${entryRegime} quiet 10s · no open`,
+          detail: `${ohlcLine} · ${reason} · order debounce ${Math.ceil((8_000 - sinceAttempt) / 1000)}s`,
         });
+        return;
       }
-    } else {
+      s.last_entry_attempt_ms = Date.now();
       pushTick(s, {
-        phase: 'WAIT',
+        phase: 'ORDER',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · forming C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'} · wait bar close`,
+        detail: `${ohlcLine} · OPEN ${direction} · ${reason}`,
       });
+      await enterTrade(opened.session, s, direction, quote, reason, setupType, entryPlaybook);
+      return;
     }
 
-    // Late-move only blocks FADE / unclear structure — never blocks MOVE/trend follow
-    if (direction && entryPlaybook !== 'SCALP') {
-      let lateCandles = zoneRefresh.candles;
-      if (lateCandles.length < 3) {
-        const hist = await fetchCapitalMinutePrices(opened.session, s.epic, 3);
-        if (hist.ok) lateCandles = hist.candles;
-      }
-      const structureFollow =
-        (direction === 'BUY' &&
-          (s.zoneBook.structure === 'TREND_UP' || s.zoneBook.structure === 'BREAKOUT_UP')) ||
-        (direction === 'SELL' &&
-          (s.zoneBook.structure === 'TREND_DOWN' || s.zoneBook.structure === 'BREAKOUT_DOWN'));
-      if (
-        !structureFollow &&
-        lateCandles.length >= 1 &&
-        isLateMoveOnOneMinute(direction, lateCandles)
-      ) {
-        pushTick(s, {
-          phase: 'WAIT',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `SKIP · late on 1m candle (end of move) · ${direction}`,
-        });
-        direction = null;
-      }
-    }
-
-    // Capital button lag vs already-printed drop/rally (chart/public/10s OHLC)
-    if (direction && quote.mid != null) {
-      const publicNear = (s.multiFeed?.legs || [])
-        .filter((l) => l.ok && l.mid != null && Number.isFinite(l.mid))
-        .filter((l) => !String(l.detail || '').includes('FAR from Capital'))
-        .map((l) => ({ name: l.name, mid: l.mid as number }));
-      const refs = buildFresherRefs({
-        publicNearMids: publicNear,
-        ohlcClose: s.ohlcState.last_closed?.close ?? s.ohlc_10s?.last_c ?? null,
-        formingClose: s.ohlcState.forming?.close ?? s.ohlc_10s?.forming_c ?? null,
-      });
-      const lag = detectStaleQuoteAdverse(direction, quote.mid, refs);
-      if (lag.block) {
-        pushTick(s, {
-          phase: 'WAIT',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `SKIP · ${lag.reason}`,
-        });
-        direction = null;
-      }
-    }
-
-    if (!direction) return;
-    await enterTrade(opened.session, s, direction, quote, reason, setupType, entryPlaybook);
+    pushTick(s, {
+      phase: 'DECIDE',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `${ohlcLine} · forming C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'} · no MOVE yet`,
+    });
+    return;
   } catch (err) {
     s.reads_fail += 1;
     const detail = err instanceof Error ? err.message : String(err);
@@ -1548,6 +1510,7 @@ export async function startRobotSession(input: {
     playbook_watch: 'WAIT',
     zoneBook: emptyZones('awaiting minute history'),
     last_zones_fetch_ms: 0,
+    last_entry_attempt_ms: 0,
 
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
