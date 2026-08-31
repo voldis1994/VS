@@ -104,9 +104,24 @@ type Book = {
   display_name: string;
   last_mid: number | null;
   last_update: string;
+  /** Candidate next regime awaiting confirmation bars */
+  pending: RegimeName | null;
+  pending_bars: number;
+  /** Bars spent in current regime */
+  hold_bars: number;
 };
 
 const MAX_BARS = 24;
+/** Need this many agreeing 10s bars (~30s) before a normal regime flip */
+const REGIME_CONFIRM_BARS = 3;
+/** Breakouts / failed breaks / hard reversals confirm faster */
+const FAST_REGIMES = new Set<RegimeName>([
+  'BREAKOUT_UP',
+  'BREAKOUT_DOWN',
+  'FAILED_BREAKOUT_UP',
+  'FAILED_BREAKOUT_DOWN',
+  'REVERSAL_CANDIDATE',
+]);
 const books = new Map<string, Book>();
 
 function mean(xs: number[]): number {
@@ -183,15 +198,21 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'RANGE'
   if (trendingUp) return 'TREND_UP';
   if (trendingDown) return 'TREND_DOWN';
   if (reversal) return 'REVERSAL_CANDIDATE';
-  if (inRange) return 'RANGE';
+  if (inRange) {
+    // Stay in trend family on quiet in-range noise — do not flip to RANGE every bar
+    if (prev === 'TREND_UP' || prev === 'PULLBACK_UPTREND') return 'PULLBACK_UPTREND';
+    if (prev === 'TREND_DOWN' || prev === 'PULLBACK_DOWNTREND') return 'PULLBACK_DOWNTREND';
+    return 'RANGE';
+  }
 
-  // Was TRANSITION / UNKNOWN — pick the closest real state from price action
+  // Out of prior micro-range — prefer sticky / slow labels over single-bar TREND flips
   if (breakoutUp) return lastVel >= 0 ? 'BREAKOUT_UP' : 'REVERSAL_CANDIDATE';
   if (breakoutDown) return lastVel <= 0 ? 'BREAKOUT_DOWN' : 'REVERSAL_CANDIDATE';
-  if (lastVel > 0.00012) return 'TREND_UP';
-  if (lastVel < -0.00012) return 'TREND_DOWN';
-  if (Math.abs(lastVel) >= 0.00008 || lastRange >= avgRange * 0.9) return 'EXPANSION';
-  return 'RANGE';
+  if (lastVel > 0.00012 && persistence > 0.15) return 'TREND_UP';
+  if (lastVel < -0.00012 && persistence < -0.15) return 'TREND_DOWN';
+  if (Math.abs(lastVel) >= 0.0001 || lastRange >= avgRange * 1.1) return 'EXPANSION';
+  // Unclear → keep previous (hysteresis at classify level)
+  return prev;
 }
 
 function confidenceFrom(bars: TenSecBar[], regime: RegimeName): number {
@@ -229,6 +250,9 @@ function ensureBook(epic: string, displayName?: string, scopeKey?: string | null
       display_name: displayName || epic,
       last_mid: null,
       last_update: now,
+      pending: null,
+      pending_bars: 0,
+      hold_bars: 0,
     };
     books.set(key, b);
   } else if (displayName) {
@@ -237,16 +261,46 @@ function ensureBook(epic: string, displayName?: string, scopeKey?: string | null
   // Migrate any book that still holds dead labels
   b.current = normalizeRegime(b.current as string);
   b.previous = normalizeRegime(b.previous as string);
+  if (b.pending != null) b.pending = normalizeRegime(b.pending as string);
+  if (b.pending_bars == null) b.pending_bars = 0;
+  if (b.hold_bars == null) b.hold_bars = 0;
   return b;
 }
 
-function applyClassify(epic: string, b: Book): RegimeSnapshot {
-  const next = classifyRegime(b.bars, b.current);
+function confirmNeed(raw: RegimeName): number {
+  return FAST_REGIMES.has(raw) ? 1 : REGIME_CONFIRM_BARS;
+}
+
+function applyClassify(epic: string, b: Book, newBarCount: number): RegimeSnapshot {
   const now = new Date().toISOString();
-  if (next !== b.current) {
-    b.previous = b.current;
-    b.current = next;
-    b.since = now;
+  // Re-classify only when new bars arrived — never flicker on repeat polls
+  if (newBarCount <= 0) {
+    b.last_update = now;
+    if (b.bars.length) b.last_mid = b.bars[b.bars.length - 1]!.close;
+    b.confidence = confidenceFrom(b.bars, b.current);
+    return toSnapshot(epic, b);
+  }
+
+  const raw = classifyRegime(b.bars, b.current);
+  if (raw === b.current) {
+    b.pending = null;
+    b.pending_bars = 0;
+    b.hold_bars += newBarCount;
+  } else {
+    if (b.pending === raw) {
+      b.pending_bars += newBarCount;
+    } else {
+      b.pending = raw;
+      b.pending_bars = newBarCount;
+    }
+    if (b.pending_bars >= confirmNeed(raw)) {
+      b.previous = b.current;
+      b.current = raw;
+      b.pending = null;
+      b.pending_bars = 0;
+      b.hold_bars = newBarCount;
+      b.since = now;
+    }
   }
   b.confidence = confidenceFrom(b.bars, b.current);
   b.last_update = now;
@@ -260,8 +314,8 @@ export function observeClosedBars(
   displayName?: string,
   scopeKey?: string | null
 ): RegimeSnapshot {
-  const key = bookKey(epic, scopeKey);
   const b = ensureBook(epic, displayName, scopeKey);
+  let added = 0;
   for (const bar of bars) {
     if (!bar || !Number.isFinite(bar.close)) continue;
     const last = b.bars[b.bars.length - 1];
@@ -272,9 +326,10 @@ export function observeClosedBars(
       Math.abs(last.high - bar.high) < 1e-9;
     if (same) continue;
     b.bars.push(bar);
+    added += 1;
   }
   if (b.bars.length > MAX_BARS) b.bars.splice(0, b.bars.length - MAX_BARS);
-  return applyClassify(epicKey(epic), b);
+  return applyClassify(epicKey(epic), b, added);
 }
 
 export function notePipelineRegime(

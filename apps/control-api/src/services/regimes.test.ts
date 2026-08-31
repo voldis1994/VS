@@ -178,6 +178,33 @@ describe('classifyRegime from 10s OHLC', () => {
   });
 });
 
+describe('regime hysteresis', () => {
+  beforeEach(() => resetRegimeBook());
+
+  it('does not flip on a single disagreeing bar', () => {
+    const up = [100, 100.5, 101.2, 101.9, 102.7, 103.4].map((p, i, a) =>
+      bar(i === 0 ? p : a[i - 1]!, p + 0.4, p - 0.4, p, i)
+    );
+    expect(observeClosedBars('GOLD', up, 'Gold', 'bot1').current).toBe('TREND_UP');
+
+    // One red bar alone must not kill TREND_UP
+    const dip = bar(103.4, 103.5, 102.9, 103.0, 6);
+    const afterOne = observeClosedBars('GOLD', [dip], 'Gold', 'bot1');
+    expect(afterOne.current).toBe('TREND_UP');
+  });
+
+  it('ignores re-polls with the same bars (no tick flicker)', () => {
+    const prices = [100, 100.4, 100.9, 101.5, 102.2, 103.0];
+    const bars = prices.map((p, i, a) =>
+      bar(i === 0 ? p : a[i - 1]!, p + 0.4, p - 0.4, p, i)
+    );
+    const a = observeClosedBars('SILVER', bars, 'Silver', 'bot2');
+    const b = observeClosedBars('SILVER', bars, 'Silver', 'bot2');
+    expect(b.current).toBe(a.current);
+    expect(b.since).toBe(a.since);
+  });
+});
+
 describe('regime book + trade style', () => {
   beforeEach(() => resetRegimeBook());
 
