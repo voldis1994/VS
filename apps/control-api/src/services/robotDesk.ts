@@ -338,9 +338,9 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     active_regimes: activeRegimes,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'Capital OHLC → sticky REGIME (3×10s) → zones → ENTRY/EXIT',
+    chain: 'Capital mid MOVE-first (all regimes) → label playbook → ORDER',
     note:
-      'Regime flips only after ~3 agreeing 10s bars (~30s), except breakouts/reversals. Public feeds confirm near Capital; they never set regime alone.',
+      'Entry is MOVE-first for every regime: forming body / mid vs H-L / tick dump|rally. Regime only labels LONG/SCALP/FADE — never blocks. One open trade; 5s order debounce.',
   };
 }
 
