@@ -110,6 +110,69 @@ describe('marketSetup', () => {
     expect(decideEntryFromSetup(tipBuyAttempt, bar10(2009, 2009.5, 2008.8, 2009.3))).toBeNull();
   });
 
+  it('does not FADE SELL mid-rally on a stale swing high (4434 while climb continues)', () => {
+    const bars: CapitalPriceCandle[] = [];
+    // Base range then old local high ~4434, then strong rally toward 4437
+    for (let i = 0; i < 22; i++) {
+      bars.push(candle(4428, 4430, 4426, 4428));
+    }
+    // Print swing high around 4434
+    bars.push(candle(4430, 4434.3, 4429, 4433));
+    bars.push(candle(4433, 4434.2, 4431, 4432));
+    bars.push(candle(4432, 4433, 4430, 4431));
+    // Continue rally — impulse UP, price leaves the old high behind mid-move
+    for (let i = 0; i < 10; i++) {
+      const o = 4431 + i * 0.55;
+      bars.push(candle(o, o + 0.7, o - 0.15, o + 0.5));
+    }
+    const last = bars[bars.length - 1]!;
+    // Sticky prev structure keeps old high ~4434 while price is higher mid-rally
+    const prev = buildStructure({ minutes: bars.slice(0, 26), mid: 4433 });
+    const st = buildStructure({
+      minutes: bars,
+      mid: last.close,
+      prev: { ...prev, swing_high: 4434.24, ready: true },
+    });
+    let setup = emptySetup();
+    setup = updateSetupSticky(setup, st, bars);
+    // Must not arm FADE/FAILED_BREAK SELL into the live rally
+    if (setup.side === 'SELL') {
+      expect(setup.kind).not.toMatch(/FADE|FAILED_BREAK/);
+    }
+    expect(setup.kind === 'CONTINUATION' || setup.kind === 'NONE' || setup.kind === 'BREAKOUT').toBe(
+      true
+    );
+    if (setup.kind === 'NONE') {
+      expect(setup.reason).toMatch(/stale high|rally impulse|no FADE SELL|mid swing|impulse/i);
+    }
+  });
+
+  it('does not FADE BUY mid-dump on a stale swing low', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) {
+      bars.push(candle(4430, 4432, 4428, 4430));
+    }
+    bars.push(candle(4430, 4431, 4426.5, 4427));
+    bars.push(candle(4427, 4428, 4426.4, 4427.2));
+    for (let i = 0; i < 10; i++) {
+      const o = 4427 - i * 0.6;
+      bars.push(candle(o, o + 0.2, o - 0.8, o - 0.55));
+    }
+    const last = bars[bars.length - 1]!;
+    const prev = buildStructure({ minutes: bars.slice(0, 26), mid: 4427 });
+    const st = buildStructure({
+      minutes: bars,
+      mid: last.close,
+      prev: { ...prev, swing_low: 4426.5, ready: true },
+    });
+    let setup = emptySetup();
+    setup = updateSetupSticky(setup, st, bars);
+    if (setup.side === 'BUY') {
+      expect(setup.kind).not.toMatch(/FADE|FAILED_BREAK/);
+    }
+    expect(setup.side === 'SELL' || setup.kind === 'NONE' || setup.kind === 'BREAKOUT').toBe(true);
+  });
+
   it('drops sticky FAILED_BREAK BUY when dump impulse continues (no holding into fall)', () => {
     const base = rangeMinutes();
     // Arm a BUY near low first
