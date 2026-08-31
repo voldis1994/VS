@@ -65,4 +65,18 @@ describe('per-client robot + Capital feed contract', () => {
     expect(src).toMatch(/connectionId/);
     expect(src).toMatch(/never fuse another client's Capital/);
   });
+
+  it('fanout skips clients that already run an own entry brain', () => {
+    const src = readFileSync(fileURLToPath(new URL('./intentFanout.ts', import.meta.url)), 'utf8');
+    expect(src).toMatch(/hasRunningEntryBrain/);
+    expect(src).toMatch(/skipped — client runs own entry brain/);
+  });
+
+  it('active fanout subscriptions require ais.trading_enabled', () => {
+    const src = readFileSync(
+      fileURLToPath(new URL('./clientSubscriptions.ts', import.meta.url)),
+      'utf8'
+    );
+    expect(src).toMatch(/COALESCE\(ais\.trading_enabled, false\) = true/);
+  });
 });

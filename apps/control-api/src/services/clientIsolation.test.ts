@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { robotIdFor } from '../services/robotDesk.js';
 import { isPublicUnauthedPath } from '../middleware/auth.js';
+import { computeClientRobotStatus } from '../services/clientPanel.js';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 describe('multi-client isolation invariants', () => {
   it('STOP kills entry brains only — manage-only open trade on same account survives', () => {
@@ -29,6 +32,33 @@ describe('multi-client isolation invariants', () => {
     expect(aGold).not.toBe(aEur);
     expect(aGold).toContain('17');
     expect(bGold).toContain('18');
+  });
+
+  it('Client Panel START uses own desk brain — not Market Core fanout subscription', () => {
+    const src = readFileSync(fileURLToPath(new URL('./clientPanel.ts', import.meta.url)), 'utf8');
+    expect(src).toMatch(/startRobotSession/);
+    expect(src).toMatch(/mode: 'own_brain'/);
+    expect(src).toMatch(/Does NOT subscribe to shared Market Core/);
+    expect(src).not.toMatch(/\bactivateSubscription\b/);
+  });
+
+  it('own-brain status ignores Market Core heartbeat', () => {
+    expect(
+      computeClientRobotStatus({
+        requestedRunning: true,
+        hasAccount: true,
+        hasEpic: true,
+        deskEntryRunning: true,
+      }).robot_status
+    ).toBe('RUNNING');
+    expect(
+      computeClientRobotStatus({
+        requestedRunning: true,
+        hasAccount: true,
+        hasEpic: true,
+        deskEntryRunning: false,
+      }).robot_status
+    ).toBe('STARTING');
   });
 
   it('admin client list path is not under client API prefix', () => {

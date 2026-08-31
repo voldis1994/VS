@@ -100,7 +100,7 @@ export type RobotSession = {
   open_side: 'BUY' | 'SELL' | null;
   safety_sl: number | null;
   error: string | null;
-  /** When false, robot never invents entries — pipeline fan-out only */
+  /** When false, robot never invents entries — manage-only / legacy fanout attach */
   entry_enabled: boolean;
   ohlc_10s: {
     last_o: number | null;
@@ -575,6 +575,17 @@ export function listRobotSessions(): RobotSession[] {
   return [...sessions.values()]
     .sort((a, b) => b.started_at.localeCompare(a.started_at))
     .map(publicSession);
+}
+
+/** True when this account already runs its own entry brain (not manage-only / not fanout). */
+export function hasRunningEntryBrain(accountId: number, epic?: string | null): boolean {
+  const want = epic ? String(epic).trim().toLowerCase() : null;
+  for (const s of sessions.values()) {
+    if (!s.running || !s.entry_enabled || s.account_id !== accountId) continue;
+    if (want && s.epic.trim().toLowerCase() !== want) continue;
+    return true;
+  }
+  return false;
 }
 
 /** Stop only entry brains — never kill a manage-only robot sitting on an open trade. */
@@ -1564,7 +1575,7 @@ export async function startRobotSession(input: {
     bid: null,
     ask: null,
     mid: null,
-    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · setup-first · ONE TRADE ONLY · other robots: ${others}`,
+    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · OWN BRAIN · client=${acc.client_name} · other robots: ${others}`,
   });
   pushTick(session, {
     phase: 'INFO',
@@ -1572,10 +1583,21 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: structure(1h+1m swing) → sticky SETUP → entry on closed 10s confirm → BEST OUTCOME manage · no WAIT regime · park when market closed',
+      'Rules: this client alone — structure(1h+1m) → sticky SETUP → closed 10s entry → BEST OUTCOME · never shared Market Core fanout',
   });
 
   sessions.set(id, session);
+  // Own entry brain owns this account — leave Market Core fanout so clients never share one signal
+  if (session.entry_enabled) {
+    void pool
+      .query(
+        `UPDATE account_instrument_settings
+         SET trading_enabled = false, updated_at = NOW()
+         WHERE broker_account_id = $1`,
+        [acc.id]
+      )
+      .catch(() => undefined);
+  }
   emitToClient(acc.client_id, {
     type: 'robot_started',
     robot_id: id,
