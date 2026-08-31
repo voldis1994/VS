@@ -110,6 +110,37 @@ describe('marketSetup', () => {
     expect(decideEntryFromSetup(tipBuyAttempt, bar10(2009, 2009.5, 2008.8, 2009.3))).toBeNull();
   });
 
+  it('drops sticky FAILED_BREAK BUY when dump impulse continues (no holding into fall)', () => {
+    const base = rangeMinutes();
+    // Arm a BUY near low first
+    const nearLow = buildStructure({ minutes: base, mid: 2001 });
+    let setup = emptySetup();
+    setup = updateSetupSticky(setup, nearLow, base);
+    setup = updateSetupSticky(setup, nearLow, base);
+    // Force sticky BUY FADE state
+    setup = {
+      ...setup,
+      kind: 'FAILED_BREAK',
+      side: 'BUY',
+      playbook: 'FADE',
+      status: 'ARMED',
+      confirm: 3,
+      swing_high: nearLow.swing_high,
+      swing_low: nearLow.swing_low,
+      reason: 'FAILED_BREAK at swing low → FADE BUY',
+    };
+    // Continue dump minutes → impulse DOWN, candidate may be NONE/SELL
+    const dump = [...base];
+    for (let i = 0; i < 8; i++) {
+      const o = 2001 - i * 1.1;
+      dump.push(candle(o, o + 0.2, o - 1.4, o - 1.1));
+    }
+    const stDump = buildStructure({ minutes: dump, mid: dump[dump.length - 1]!.close });
+    const next = updateSetupSticky(setup, stDump, dump);
+    expect(next.side).not.toBe('BUY');
+    expect(next.reason).toMatch(/dropped sticky BUY|CONTINUATION SELL|NONE|FADE SELL|BREAKOUT/);
+  });
+
   it('local dump impulse arms CONTINUATION SELL — not mid-NONE', () => {
     const bars: CapitalPriceCandle[] = [];
     // Quiet base then hard dump ~8 minutes

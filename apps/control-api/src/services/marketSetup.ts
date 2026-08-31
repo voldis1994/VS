@@ -439,6 +439,10 @@ function rawSetupFromStructure(
 /**
  * Sticky setup update — never flip on a single disagreeing refresh.
  * Call only from structure refresh / closed minute path — not every quote tick.
+ *
+ * Hard rule: never keep a BUY sticky while the local move is still dumping
+ * (and never keep SELL sticky while still rallying). That caused Client A
+ * "LOOKING FOR BUY" / FAILED_BREAK hold while Gold was still falling.
  */
 export function updateSetupSticky(
   prev: MarketSetup | null | undefined,
@@ -448,6 +452,8 @@ export function updateSetupSticky(
   const raw = rawSetupFromStructure(structure, minutes);
   const now = new Date().toISOString();
   const prevSafe = prev || emptySetup();
+  const imp = recentImpulse(minutes);
+  const last = minutes[minutes.length - 1];
 
   const same =
     prevSafe.kind === raw.kind &&
@@ -493,6 +499,34 @@ export function updateSetupSticky(
     return {
       ...raw,
       confirm: SETUP_CONFIRM,
+      updated_at: now,
+    };
+  }
+
+  // Dump kills sticky BUY; rally kills sticky SELL — no "holding BUY" into a fall
+  const stickyBuyDead =
+    prevSafe.side === 'BUY' &&
+    (imp === 'DOWN' ||
+      raw.side === 'SELL' ||
+      (last != null &&
+        prevSafe.swing_low > 0 &&
+        last.close < prevSafe.swing_low - edgeEps(last.close, Math.max(structure.span, 1))));
+  const stickySellDead =
+    prevSafe.side === 'SELL' &&
+    (imp === 'UP' ||
+      raw.side === 'BUY' ||
+      (last != null &&
+        prevSafe.swing_high > 0 &&
+        last.close > prevSafe.swing_high + edgeEps(last.close, Math.max(structure.span, 1))));
+
+  if (stickyBuyDead || stickySellDead) {
+    return {
+      ...raw,
+      status: raw.kind === 'NONE' ? 'NONE' : raw.status === 'FORMING' ? 'FORMING' : 'ARMED',
+      confirm: raw.kind === 'NONE' ? 0 : SETUP_CONFIRM,
+      reason:
+        raw.reason +
+        (stickyBuyDead ? ' · dropped sticky BUY (dump/adverse)' : ' · dropped sticky SELL (rally/adverse)'),
       updated_at: now,
     };
   }
@@ -553,9 +587,16 @@ export function decideEntryFromSetup(
 
   if (setup.kind === 'FADE' || setup.kind === 'FAILED_BREAK') {
     if (setup.side === 'BUY') {
-      // Bounce: touched near low, closed up
+      // Bounce: touched near low, closed up — refuse if bar still makes a new dump low
       const touched = bar.low <= lo + eps;
-      if (touched && body >= thr * 0.85 && bar.close > bar.open) {
+      const stillDumping = bar.close < bar.open || bar.low < lo - eps * 0.35;
+      if (
+        touched &&
+        !stillDumping &&
+        body >= thr * 0.85 &&
+        bar.close > bar.open &&
+        bar.close >= lo
+      ) {
         return {
           direction: 'BUY',
           setup: setup.kind,
@@ -567,7 +608,14 @@ export function decideEntryFromSetup(
     }
     // SELL rejection at high
     const touched = bar.high >= hi - eps;
-    if (touched && body <= -thr * 0.85 && bar.close < bar.open) {
+    const stillRallying = bar.close > bar.open || bar.high > hi + eps * 0.35;
+    if (
+      touched &&
+      !stillRallying &&
+      body <= -thr * 0.85 &&
+      bar.close < bar.open &&
+      bar.close <= hi
+    ) {
       return {
         direction: 'SELL',
         setup: setup.kind,
