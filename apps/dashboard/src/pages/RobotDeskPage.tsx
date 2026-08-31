@@ -12,19 +12,13 @@ type RobotTick = {
   detail: string;
 };
 
-const ALL_REGIMES = [
-  'RANGE',
-  'TREND_UP',
-  'TREND_DOWN',
-  'PULLBACK_UPTREND',
-  'PULLBACK_DOWNTREND',
-  'COMPRESSION',
-  'EXPANSION',
-  'BREAKOUT_UP',
-  'BREAKOUT_DOWN',
-  'FAILED_BREAKOUT_UP',
-  'FAILED_BREAKOUT_DOWN',
-  'REVERSAL_CANDIDATE',
+const ALL_SETUPS = [
+  'CONTINUATION',
+  'PULLBACK',
+  'BREAKOUT',
+  'FADE',
+  'FAILED_BREAK',
+  'NONE',
 ] as const;
 
 type FeedLeg = {
@@ -94,6 +88,13 @@ type RobotSession = {
   regime?: string;
   playbook?: string | null;
   entry_setup?: string | null;
+  market_setup?: {
+    kind: string;
+    side: string | null;
+    status: string;
+    playbook: string | null;
+    reason: string;
+  } | null;
   feed_source?: 'MULTI' | 'LOCAL' | 'NONE';
   feed_contributing?: number;
   feed_sender_count?: number;
@@ -135,43 +136,35 @@ function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'fl
   if (!s.running && !s.open_side) return { label: 'STOPPED', kind: 'flat' };
   if (s.open_side === 'BUY') {
     const t = tradeLabel(s);
-    return { label: t, kind: t.includes('SCALP') ? 'short' : 'long' };
+    return { label: t, kind: t.includes('SCALP') || t.includes('FADE') ? 'short' : 'long' };
   }
   if (s.open_side === 'SELL') {
     const t = tradeLabel(s);
     return { label: t, kind: t.includes('LONG') ? 'long' : 'short' };
   }
   if (s.running && !s.open_side) {
-    const r = (s.regime || 'RANGE').toUpperCase();
-    const setup = String(s.entry_setup || s.playbook || '').trim().toUpperCase();
-    // Regime/setup = ENTRY posture — never "WAIT ENTRY"
-    if (setup && setup !== 'WAIT') {
-      return { label: `ENTRY · ${setup} · ${r}`, kind: 'entry' };
-    }
-    return { label: `ENTRY · ${r}`, kind: 'entry' };
+    const ms = s.market_setup;
+    const kind = String(ms?.kind || s.entry_setup || 'NONE').toUpperCase();
+    const status = String(ms?.status || '').toUpperCase();
+    const side = ms?.side ? ` ${ms.side}` : '';
+    if (kind === 'NONE') return { label: 'NONE · no setup', kind: 'flat' };
+    if (status === 'ARMED') return { label: `ARMED · ${kind}${side}`, kind: 'entry' };
+    if (status === 'FORMING') return { label: `FORMING · ${kind}${side}`, kind: 'entry' };
+    return { label: `SETUP · ${kind}${side}`, kind: 'entry' };
   }
   return { label: 'FLAT', kind: 'flat' };
 }
 
 function tradeLabel(s: RobotSession): string {
   if (!s.open_side) return 'FLAT';
-  const r = (s.regime || '').toUpperCase();
-  const long =
-    r === 'TREND_UP' ||
-    r === 'TREND_DOWN' ||
-    r === 'PULLBACK_UPTREND' ||
-    r === 'PULLBACK_DOWNTREND';
-  const scalp =
-    r === 'BREAKOUT_UP' ||
-    r === 'BREAKOUT_DOWN' ||
-    r === 'FAILED_BREAKOUT_UP' ||
-    r === 'FAILED_BREAKOUT_DOWN' ||
-    r === 'COMPRESSION' ||
-    r === 'EXPANSION' ||
-    r === 'RANGE' ||
-    r === 'REVERSAL_CANDIDATE';
-  if (long) return `${s.open_side} LONG`;
-  if (scalp) return `${s.open_side} SCALP`;
+  const book = String(s.playbook || s.market_setup?.playbook || '').toUpperCase();
+  if (book === 'LONG' || book === 'SCALP' || book === 'FADE') {
+    return `${s.open_side} ${book}`;
+  }
+  const setup = String(s.entry_setup || s.market_setup?.kind || '').toUpperCase();
+  if (setup === 'CONTINUATION' || setup === 'PULLBACK') return `${s.open_side} LONG`;
+  if (setup === 'BREAKOUT') return `${s.open_side} SCALP`;
+  if (setup === 'FADE' || setup === 'FAILED_BREAK') return `${s.open_side} FADE`;
   return s.open_side;
 }
 
@@ -316,11 +309,11 @@ export function RobotDeskPage() {
 
   const focused = sessions.find((s) => s.id === focusId) || null;
   const runningCount = sessions.filter((s) => s.running).length;
-  const regimes = board?.regimes?.length ? board.regimes : [...ALL_REGIMES];
+  const regimes = board?.regimes?.length ? board.regimes : [...ALL_SETUPS];
   const activeRegimes = new Set(
     (board?.active_regimes?.length
       ? board.active_regimes
-      : sessions.filter((s) => s.running).map((s) => s.regime || 'RANGE')
+      : sessions.filter((s) => s.running).map((s) => s.market_setup?.kind || s.entry_setup || 'NONE')
     ).map((r) => r.toUpperCase()),
   );
   const capitalSenders = senders.filter(
@@ -337,11 +330,13 @@ export function RobotDeskPage() {
   const feedCount = board?.feed_sender_count ?? capitalSenders.length + publicSenders.length;
   const feedOk = board?.feed_contributing ?? 0;
   const chainLabel =
-    board?.chain || 'PUBLIC INTERNET + Capital → consensus mid → 10s OHLC → REGIME → ENTRY/EXIT';
+    board?.chain ||
+    'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME';
   const boardNote =
     board?.note ||
-    'Public feeds: Yahoo, Aurum, Fawaz FX, Coinbase — fused with Capital for 10s OHLC';
-  const tradeTypes = board?.trade_types || ['BUY LONG', 'SELL LONG', 'BUY SCALP', 'SELL SCALP'];
+    'Setup-first: NONE = no setup. ARMED = ready. No WAIT regime. No tick flips. Best outcome after fill.';
+  const tradeTypes =
+    board?.trade_types || ['BUY LONG', 'SELL LONG', 'BUY SCALP', 'SELL SCALP', 'BUY FADE', 'SELL FADE'];
   const focusLegs = focused?.feed_legs || [];
   const focusChain = focused?.decision_chain;
 
@@ -446,7 +441,7 @@ export function RobotDeskPage() {
               </div>
             </div>
             <div className="robot-mode-banner entry">
-              <div className="label">REGIMES</div>
+              <div className="label">SETUPS</div>
               <div className="value">{regimes.length}</div>
             </div>
           </div>
@@ -472,12 +467,13 @@ export function RobotDeskPage() {
             {regimes.map((r) => {
               const name = r.toUpperCase();
               const live = activeRegimes.has(name);
-              const focusHit = (focused?.regime || '').toUpperCase() === name;
+              const focusHit =
+                (focused?.market_setup?.kind || focused?.entry_setup || '').toUpperCase() === name;
               return (
                 <span
                   key={name}
                   className={`robot-regime-chip ${live ? 'live' : ''} ${focusHit ? 'focus' : ''}`}
-                  title={live ? 'Active on a running robot' : 'Catalog regime'}
+                  title={live ? 'Active setup on a running robot' : 'Setup catalog'}
                 >
                   {name}
                 </span>
@@ -616,7 +612,10 @@ export function RobotDeskPage() {
                 </div>
                 <div className="robot-mini-market">{s.display_name}</div>
                 <div className={`robot-mini-posture ${p.kind}`}>{p.label}</div>
-                <div className="robot-mini-regime mono">{(s.regime || 'RANGE').toUpperCase()}</div>
+                <div className="robot-mini-regime mono">
+                  {(s.market_setup?.kind || s.entry_setup || 'NONE').toUpperCase()}
+                  {s.market_setup?.status ? ` · ${s.market_setup.status}` : ''}
+                </div>
                 <div className="robot-mini-row">
                   <span>MID</span>
                   <strong>{fmt(s.last_mid)}</strong>
@@ -648,8 +647,8 @@ export function RobotDeskPage() {
                 <div className="robot-mini-mode">
                   {s.running
                     ? s.decision_chain
-                      ? `${s.decision_chain.feeds} → ${s.decision_chain.zones || 'zones?'} → ${s.decision_chain.regime} → ${s.decision_chain.action}`
-                      : `${s.mode} · ${s.regime || 'RANGE'}`
+                      ? `${s.decision_chain.zones || 'swing'} → ${s.decision_chain.setup || 'NONE'} → ${s.decision_chain.action}`
+                      : `${s.mode} · ${s.market_setup?.kind || 'NONE'}`
                     : 'STOPPED'}
                 </div>
                 {(s.feed_legs?.length ?? 0) > 0 && (
@@ -723,7 +722,7 @@ export function RobotDeskPage() {
                 <div className="robot-focus-chain">
                   CHAIN ·{' '}
                   {focusChain
-                    ? `${focusChain.feeds} → ${focusChain.ohlc} → ${focusChain.zones || 'zones?'} → ${focusChain.regime} → ${focusChain.action}`
+                    ? `${focusChain.feeds} → ${focusChain.ohlc} → ${focusChain.zones || 'swing?'} → ${focusChain.setup || 'NONE'} → ${focusChain.action}`
                     : chainLabel}
                 </div>
                 <div>
@@ -732,7 +731,15 @@ export function RobotDeskPage() {
                   {focused.ohlc_10s?.market || 'SEEDING'}
                 </div>
                 <div>MODE · {focused.running ? focused.mode : 'STOPPED'}</div>
-                <div>REGIME · {(focused.regime || 'RANGE').toUpperCase()}</div>
+                <div>
+                  SETUP ·{' '}
+                  {(focused.market_setup?.kind || focused.entry_setup || 'NONE').toUpperCase()}
+                  {focused.market_setup?.status
+                    ? ` · ${focused.market_setup.status}`
+                    : ''}
+                  {focused.market_setup?.side ? ` · ${focused.market_setup.side}` : ''}
+                </div>
+                <div>DIAG 10s · {(focused.regime || 'RANGE').toUpperCase()}</div>
                 <div>
                   FEEDS · {focused.feed_contributing ?? 0}/{focused.feed_sender_count ?? 0}{' '}
                   {focused.feed_agreement || ''} · {focused.feed_source || '—'}

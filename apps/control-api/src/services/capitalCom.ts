@@ -989,16 +989,15 @@ export type CapitalPriceCandle = {
   close: number;
 };
 
-/** Capital OHLC — SECOND for 10s bars, MINUTE for chase filter. */
+/** Capital OHLC — SECOND (10s timing), MINUTE (swing/setup), HOUR (context). */
 export async function fetchCapitalPrices(
   session: CapitalSession,
   epic: string,
-  resolution: 'SECOND' | 'MINUTE' = 'MINUTE',
+  resolution: 'SECOND' | 'MINUTE' | 'HOUR' = 'MINUTE',
   max = 5
 ): Promise<{ ok: boolean; candles: CapitalPriceCandle[]; detail: string }> {
   const encoded = encodeURIComponent(epic.trim());
-  // Minutes: need enough history for real structure zones (≥8, prefer ~60)
-  const cap = resolution === 'SECOND' ? 50 : 100;
+  const cap = resolution === 'SECOND' ? 50 : resolution === 'HOUR' ? 48 : 120;
   const q = new URLSearchParams({
     resolution,
     max: String(Math.min(Math.max(max, 1), cap)),
@@ -1032,6 +1031,14 @@ export async function fetchCapitalMinutePrices(
   max = 5
 ): Promise<{ ok: boolean; candles: CapitalPriceCandle[]; detail: string }> {
   return fetchCapitalPrices(session, epic, 'MINUTE', max);
+}
+
+export async function fetchCapitalHourPrices(
+  session: CapitalSession,
+  epic: string,
+  max = 24
+): Promise<{ ok: boolean; candles: CapitalPriceCandle[]; detail: string }> {
+  return fetchCapitalPrices(session, epic, 'HOUR', max);
 }
 
 /**

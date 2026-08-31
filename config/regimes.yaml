@@ -1,9 +1,11 @@
 regimes:
+  # Diagnostic 10s labels only for LIVE desk — entry authority is marketSetup (setup-first).
+  # All flips require ≥3 agreeing 10s bars (~30s). No 1-bar fast regimes.
   primary_horizon_ms: 10000
   transition_smoothing: 0.1
   confidence_threshold: 0.5
+  confirm_bars: 3
   supported:
-    - UNKNOWN
     - RANGE
     - TREND_UP
     - TREND_DOWN
@@ -16,4 +18,3 @@ regimes:
     - FAILED_BREAKOUT_UP
     - FAILED_BREAKOUT_DOWN
     - REVERSAL_CANDIDATE
-    - TRANSITION

@@ -86,12 +86,12 @@ describe('10s playbook suitable entry', () => {
     expect(labelPlaybookForMove('BUY', 'RANGE', 'FADE').playbook).toBe('FADE');
   });
 
-  it('FAILED_BREAKOUT_DOWN follows dump as SCALP SELL', () => {
-    expect(decideEntryFrom10sRegime(longDip, 'FAILED_BREAKOUT_DOWN', ctx)?.direction).toBe(
-      'SELL'
+  it('FAILED_BREAKOUT_DOWN fades bounce as FADE BUY (not scalp chase)', () => {
+    expect(decideEntryFrom10sRegime(longRally, 'FAILED_BREAKOUT_DOWN', ctx)?.direction).toBe(
+      'BUY'
     );
-    expect(decideEntryFrom10sRegime(longDip, 'FAILED_BREAKOUT_DOWN', ctx)?.playbook).toBe(
-      'SCALP'
+    expect(decideEntryFrom10sRegime(longRally, 'FAILED_BREAKOUT_DOWN', ctx)?.playbook).toBe(
+      'FADE'
     );
   });
 

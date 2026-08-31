@@ -112,14 +112,8 @@ type Book = {
 };
 
 const MAX_BARS = 24;
-/** Need this many agreeing 10s bars (~30s) before a normal regime flip */
+/** Diagnostic 10s labels only — never flip faster than ~30s (3 bars). No 1-bar "fast" regimes. */
 const REGIME_CONFIRM_BARS = 3;
-/** Only true expansion breaks confirm faster — NOT failed-break (that is minute-zone only) */
-const FAST_REGIMES = new Set<RegimeName>([
-  'BREAKOUT_UP',
-  'BREAKOUT_DOWN',
-  'REVERSAL_CANDIDATE',
-]);
 const books = new Map<string, Book>();
 
 function mean(xs: number[]): number {
@@ -268,8 +262,8 @@ function ensureBook(epic: string, displayName?: string, scopeKey?: string | null
   return b;
 }
 
-function confirmNeed(raw: RegimeName): number {
-  return FAST_REGIMES.has(raw) ? 1 : REGIME_CONFIRM_BARS;
+function confirmNeed(_raw: RegimeName): number {
+  return REGIME_CONFIRM_BARS;
 }
 
 function applyClassify(epic: string, b: Book, newBarCount: number): RegimeSnapshot {
