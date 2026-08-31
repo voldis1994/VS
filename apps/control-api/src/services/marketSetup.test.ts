@@ -97,17 +97,17 @@ describe('marketSetup', () => {
     expect(setup.kind === 'FADE' || setup.kind === 'FAILED_BREAK' || setup.kind === 'PULLBACK').toBe(
       true
     );
-    // Entry at the tip with a green bar must not BUY
-    const tipBuyAttempt = {
+    // FADE BUY at the tip must still be blocked; CONTINUATION may ride impulse through
+    const tipFadeBuy = {
       ...setup,
-      kind: 'CONTINUATION' as const,
+      kind: 'FADE' as const,
       side: 'BUY' as const,
       status: 'ARMED' as const,
-      playbook: 'LONG' as const,
+      playbook: 'FADE' as const,
       swing_high: nearHigh.swing_high,
       swing_low: nearHigh.swing_low,
     };
-    expect(decideEntryFromSetup(tipBuyAttempt, bar10(2009, 2009.5, 2008.8, 2009.3))).toBeNull();
+    expect(decideEntryFromSetup(tipFadeBuy, bar10(2009, 2009.5, 2008.8, 2009.3))).toBeNull();
   });
 
   it('does not FADE SELL mid-rally on a stale swing high (4434 while climb continues)', () => {

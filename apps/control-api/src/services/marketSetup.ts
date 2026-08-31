@@ -69,7 +69,7 @@ const PIVOT_LEFT = 3;
 const PIVOT_RIGHT = 3;
 const SETUP_CONFIRM = 2;
 /** FADE / FAILED_BREAK only if swing extreme printed within this many 1m bars */
-const FRESH_SWING_BARS = 8;
+const FRESH_SWING_BARS = 12;
 
 /** Edge band in price points — Gold-friendly floor */
 function edgeEps(px: number, span: number): number {
@@ -708,15 +708,21 @@ export function updateSetupSticky(
  * Entry trigger on CLOSED 10s only — confirms an ARMED setup.
  * Rejection/bounce at swing for FADE/FAILED_BREAK; impulse for BREAKOUT/CONTINUATION.
  */
-/** Block tip-chase: BUY into swing high / SELL into swing low (except true BREAKOUT). */
+/** Block tip-chase only for FADE/PULLBACK at the extreme tip — not CONTINUATION/BREAKOUT. */
 export function isTipChaseEntry(setup: MarketSetup, bar: TenSecBar): boolean {
-  if (!setup.side || setup.kind === 'NONE' || setup.kind === 'BREAKOUT') return false;
+  if (!setup.side || setup.kind === 'NONE' || setup.kind === 'BREAKOUT' || setup.kind === 'CONTINUATION') {
+    return false;
+  }
+  if (setup.kind !== 'FADE' && setup.kind !== 'FAILED_BREAK' && setup.kind !== 'PULLBACK') {
+    return false;
+  }
   const hi = setup.swing_high;
   const lo = setup.swing_low;
   if (!(hi > lo)) return false;
   const eps = edgeEps(bar.close, hi - lo);
-  if (setup.side === 'BUY' && bar.close >= hi - eps * 0.65) return true;
-  if (setup.side === 'SELL' && bar.close <= lo + eps * 0.65) return true;
+  // Narrower band — was 0.65 (blocked too many valid 10s entries)
+  if (setup.side === 'BUY' && bar.close >= hi - eps * 0.3) return true;
+  if (setup.side === 'SELL' && bar.close <= lo + eps * 0.3) return true;
   return false;
 }
 
@@ -735,23 +741,16 @@ export function decideEntryFromSetup(
   const lo = setup.swing_low;
   const eps = edgeEps(bar.close, Math.max(hi - lo, 1));
 
-  // Hard guard — the 16:00 BUY @ swing high class of mistake
   if (isTipChaseEntry(setup, bar)) {
     return null;
   }
 
   if (setup.kind === 'FADE' || setup.kind === 'FAILED_BREAK') {
     if (setup.side === 'BUY') {
-      // Bounce: touched near low, closed up — refuse if bar still makes a new dump low
       const touched = bar.low <= lo + eps;
-      const stillDumping = bar.close < bar.open || bar.low < lo - eps * 0.35;
-      if (
-        touched &&
-        !stillDumping &&
-        body >= thr * 0.85 &&
-        bar.close > bar.open &&
-        bar.close >= lo
-      ) {
+      // Only block if bar is clearly dumping through the floor
+      const stillDumping = bar.close < bar.open && bar.low < lo - eps * 0.5;
+      if (touched && !stillDumping && body >= thr * 0.55 && bar.close > bar.open) {
         return {
           direction: 'BUY',
           setup: setup.kind,
@@ -761,16 +760,9 @@ export function decideEntryFromSetup(
       }
       return null;
     }
-    // SELL rejection at high
     const touched = bar.high >= hi - eps;
-    const stillRallying = bar.close > bar.open || bar.high > hi + eps * 0.35;
-    if (
-      touched &&
-      !stillRallying &&
-      body <= -thr * 0.85 &&
-      bar.close < bar.open &&
-      bar.close <= hi
-    ) {
+    const stillRallying = bar.close > bar.open && bar.high > hi + eps * 0.5;
+    if (touched && !stillRallying && body <= -thr * 0.55 && bar.close < bar.open) {
       return {
         direction: 'SELL',
         setup: setup.kind,
@@ -782,7 +774,7 @@ export function decideEntryFromSetup(
   }
 
   if (setup.kind === 'BREAKOUT') {
-    if (setup.side === 'BUY' && body >= thr && bar.close > hi - eps) {
+    if (setup.side === 'BUY' && body >= thr * 0.6 && bar.close > hi - eps) {
       return {
         direction: 'BUY',
         setup: 'BREAKOUT',
@@ -790,7 +782,7 @@ export function decideEntryFromSetup(
         reason: `ENTRY · BREAKOUT BUY · ${setup.reason}`,
       };
     }
-    if (setup.side === 'SELL' && body <= -thr && bar.close < lo + eps) {
+    if (setup.side === 'SELL' && body <= -thr * 0.6 && bar.close < lo + eps) {
       return {
         direction: 'SELL',
         setup: 'BREAKOUT',
@@ -802,7 +794,11 @@ export function decideEntryFromSetup(
   }
 
   if (setup.kind === 'PULLBACK') {
-    if (setup.side === 'BUY' && body >= thr && (bar.low <= lo + eps * 1.5 || bar.close < setup.swing_high)) {
+    if (
+      setup.side === 'BUY' &&
+      body >= thr * 0.6 &&
+      (bar.low <= lo + eps * 1.5 || bar.close < setup.swing_high)
+    ) {
       return {
         direction: 'BUY',
         setup: 'PULLBACK',
@@ -810,7 +806,11 @@ export function decideEntryFromSetup(
         reason: `ENTRY · PULLBACK BUY · ${setup.reason}`,
       };
     }
-    if (setup.side === 'SELL' && body <= -thr && (bar.high >= hi - eps * 1.5 || bar.close > setup.swing_low)) {
+    if (
+      setup.side === 'SELL' &&
+      body <= -thr * 0.6 &&
+      (bar.high >= hi - eps * 1.5 || bar.close > setup.swing_low)
+    ) {
       return {
         direction: 'SELL',
         setup: 'PULLBACK',
@@ -822,7 +822,7 @@ export function decideEntryFromSetup(
   }
 
   if (setup.kind === 'CONTINUATION') {
-    if (setup.side === 'BUY' && body >= thr) {
+    if (setup.side === 'BUY' && body >= thr * 0.55) {
       return {
         direction: 'BUY',
         setup: 'CONTINUATION',
@@ -830,7 +830,7 @@ export function decideEntryFromSetup(
         reason: `ENTRY · CONTINUATION BUY · ${setup.reason}`,
       };
     }
-    if (setup.side === 'SELL' && body <= -thr) {
+    if (setup.side === 'SELL' && body <= -thr * 0.55) {
       return {
         direction: 'SELL',
         setup: 'CONTINUATION',

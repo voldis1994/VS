@@ -67,11 +67,11 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
   },
 };
 
-/** Entry body — needs a real 10s impulse, not every wick. */
+/** Entry body — 10s Gold-friendly (was too strict → missed real 10s moves). */
 export const PLAYBOOK_ENTRY_BODY: Record<TradePlaybook, number> = {
-  LONG: 0.00035, // 0.035%
-  SCALP: 0.0003, // 0.03% ≈ ~1.3pt Gold
-  FADE: 0.00025,
+  LONG: 0.00018, // ~0.8pt Gold @ 4400
+  SCALP: 0.00015, // ~0.65pt
+  FADE: 0.00012, // ~0.55pt bounce/reject
 };
 
 /**
