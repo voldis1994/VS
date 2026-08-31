@@ -42,6 +42,7 @@ type DecisionChain = {
   feeds: string;
   ohlc: string;
   regime: string;
+  zones?: string;
   setup: string | null;
   action: string;
 };
@@ -99,6 +100,14 @@ type RobotSession = {
   feed_agreement?: string | null;
   feed_legs?: FeedLeg[];
   decision_chain?: DecisionChain;
+  zones?: {
+    ready: boolean;
+    structure: string;
+    high: number;
+    low: number;
+    bias: string;
+    detail: string;
+  } | null;
   ohlc_10s?: {
     last_o: number | null;
     last_h: number | null;
@@ -635,7 +644,7 @@ export function RobotDeskPage() {
                 <div className="robot-mini-mode">
                   {s.running
                     ? s.decision_chain
-                      ? `${s.decision_chain.feeds} → ${s.decision_chain.regime} → ${s.decision_chain.action}`
+                      ? `${s.decision_chain.feeds} → ${s.decision_chain.zones || 'zones?'} → ${s.decision_chain.regime} → ${s.decision_chain.action}`
                       : `${s.mode} · ${s.regime || 'UNKNOWN'}`
                     : 'STOPPED'}
                 </div>
@@ -710,7 +719,7 @@ export function RobotDeskPage() {
                 <div className="robot-focus-chain">
                   CHAIN ·{' '}
                   {focusChain
-                    ? `${focusChain.feeds} → ${focusChain.ohlc} → ${focusChain.regime} → ${focusChain.action}`
+                    ? `${focusChain.feeds} → ${focusChain.ohlc} → ${focusChain.zones || 'zones?'} → ${focusChain.regime} → ${focusChain.action}`
                     : chainLabel}
                 </div>
                 <div>
