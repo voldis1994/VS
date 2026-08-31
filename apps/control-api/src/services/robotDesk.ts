@@ -330,9 +330,9 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     active_regimes: activeRegimes,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'Capital OHLC (anchor) + public near Capital → REGIME → ENTRY/EXIT',
+    chain: 'Capital OHLC → sticky REGIME (3×10s) → zones → ENTRY/EXIT',
     note:
-      'Public feeds (Yahoo/Aurum/FX/Coinbase) confirm when near Capital CFD mid; far public prices are ignored so they cannot block or distort trades.',
+      'Regime flips only after ~3 agreeing 10s bars (~30s), except breakouts/reversals. Public feeds confirm near Capital; they never set regime alone.',
   };
 }
 
@@ -1237,9 +1237,14 @@ async function robotCycle(s: Internal) {
             last_closed: last,
             just_closed: isNew,
           };
-          if (isNew) s.last_closed_bar_key = key;
-          s.ohlc_10s = publicOhlc10s(s.ohlcState);
-          applyRobotRegime(s, bars);
+          if (isNew) {
+            s.last_closed_bar_key = key;
+            s.ohlc_10s = publicOhlc10s(s.ohlcState);
+            // Only advance regime on a new closed 10s bar — never every poll
+            applyRobotRegime(s, bars);
+          } else {
+            s.ohlc_10s = publicOhlc10s(s.ohlcState);
+          }
         }
       }
     }
