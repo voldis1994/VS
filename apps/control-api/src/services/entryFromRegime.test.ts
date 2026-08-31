@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decideEntryFrom10sRegime, decideMoveEntry } from './entryFromRegime.js';
+import { decideEntryFrom10sRegime, decideMoveEntry, decidePriceMove } from './entryFromRegime.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 
 function bar(open: number, close: number): TenSecBar {
@@ -60,6 +60,21 @@ describe('10s playbook suitable entry', () => {
     expect(decideMoveEntry(longDip)?.direction).toBe('SELL');
     expect(decideMoveEntry(longRally)?.direction).toBe('BUY');
     expect(decideMoveEntry(quiet)).toBeNull();
+  });
+
+  it('price move opens SELL when mid dumps vs recent high', () => {
+    expect(decidePriceMove(4454, 4460, 4448)?.direction).toBe('SELL');
+    expect(decidePriceMove(4462, 4460, 4448)?.direction).toBe('BUY');
+    expect(decidePriceMove(4455, 4455.2, 4454.8)).toBeNull();
+  });
+
+  it('FAILED_BREAKOUT_DOWN follows dump as SCALP SELL', () => {
+    expect(decideEntryFrom10sRegime(longDip, 'FAILED_BREAKOUT_DOWN', ctx)?.direction).toBe(
+      'SELL'
+    );
+    expect(decideEntryFrom10sRegime(longDip, 'FAILED_BREAKOUT_DOWN', ctx)?.playbook).toBe(
+      'SCALP'
+    );
   });
 
   it('RANGE FADE uses real minute zones when ready', () => {

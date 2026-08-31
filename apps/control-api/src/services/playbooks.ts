@@ -67,11 +67,11 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
   },
 };
 
-/** Entry body thresholds (fraction of price). */
+/** Entry body thresholds (fraction of price) — open on real Gold noise, not perfection. */
 export const PLAYBOOK_ENTRY_BODY: Record<TradePlaybook, number> = {
-  LONG: 0.00035, // 0.035% — was 0.05%, missed smaller Gold 10s bodies
-  SCALP: 0.00022, // 0.022%
-  FADE: 0.0002, // 0.02%
+  LONG: 0.0002, // 0.02%
+  SCALP: 0.00012, // 0.012% ≈ ~0.5pt on Gold 4450
+  FADE: 0.00012,
 };
 
 export function playbookFromRegime(regime?: string | null): Playbook {
@@ -82,7 +82,9 @@ export function playbookFromRegime(regime?: string | null): Playbook {
   if (r === 'PULLBACK_UPTREND' || r === 'PULLBACK_DOWNTREND') return 'LONG';
   if (r === 'BREAKOUT_UP' || r === 'BREAKOUT_DOWN') return 'SCALP';
   if (r === 'EXPANSION' || r === 'REVERSAL_CANDIDATE') return 'SCALP';
-  if (r === 'RANGE' || r === 'FAILED_BREAKOUT_UP' || r === 'FAILED_BREAKOUT_DOWN') return 'FADE';
+  // Failed break that is still running = scalp the direction, not fade mid-move
+  if (r === 'FAILED_BREAKOUT_UP' || r === 'FAILED_BREAKOUT_DOWN') return 'SCALP';
+  if (r === 'RANGE') return 'FADE';
   return 'WAIT';
 }
 

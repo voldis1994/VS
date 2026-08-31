@@ -74,6 +74,42 @@ export function decideMoveEntry(bar: TenSecBar): RegimeEntry | null {
 }
 
 /**
+ * Live mid vs recent reference — open even while 10s bar is still forming / "QUIET".
+ * thr ~0.015% of price (~0.7pt Gold).
+ */
+export function decidePriceMove(
+  mid: number,
+  refHigh: number | null | undefined,
+  refLow: number | null | undefined,
+  thr = 0.00015
+): RegimeEntry | null {
+  if (!Number.isFinite(mid)) return null;
+  if (refHigh != null && Number.isFinite(refHigh) && refHigh > 0) {
+    const drop = (mid - refHigh) / Math.abs(refHigh);
+    if (drop <= -thr) {
+      return {
+        direction: 'SELL',
+        setup: 'BREAKOUT',
+        playbook: 'SCALP',
+        reason: `MOVE · mid dump vs recent H${refHigh.toFixed(2)} (${(drop * 100).toFixed(3)}%)`,
+      };
+    }
+  }
+  if (refLow != null && Number.isFinite(refLow) && refLow > 0) {
+    const rise = (mid - refLow) / Math.abs(refLow);
+    if (rise >= thr) {
+      return {
+        direction: 'BUY',
+        setup: 'BREAKOUT',
+        playbook: 'SCALP',
+        reason: `MOVE · mid rally vs recent L${refLow.toFixed(2)} (${(rise * 100).toFixed(3)}%)`,
+      };
+    }
+  }
+  return null;
+}
+
+/**
  * Suitable entry for the current 10s regime via playbook rules.
  * Returns null = no playbook fit (caller may still use decideMoveEntry).
  */
@@ -212,6 +248,29 @@ export function decideEntryFrom10sRegime(
       }
       return null;
     }
+    // Still dumping after failed break down → sell with the move (not fade-buy)
+    if (r === 'FAILED_BREAKOUT_DOWN') {
+      if (dipFor(bar, 'SCALP') || bodyPct(bar) < 0) {
+        return {
+          direction: 'SELL',
+          setup: 'BREAKOUT',
+          playbook: 'SCALP',
+          reason: `SCALP · ${r} follow dump · ${candle}`,
+        };
+      }
+      return null;
+    }
+    if (r === 'FAILED_BREAKOUT_UP') {
+      if (rallyFor(bar, 'SCALP') || bodyPct(bar) > 0) {
+        return {
+          direction: 'BUY',
+          setup: 'BREAKOUT',
+          playbook: 'SCALP',
+          reason: `SCALP · ${r} follow rally · ${candle}`,
+        };
+      }
+      return null;
+    }
     return null;
   }
 
@@ -220,25 +279,6 @@ export function decideEntryFrom10sRegime(
       return null;
     }
     if (!movingFor(bar, 'FADE') || !bodyStrongEnough(bar, 'FADE')) return null;
-
-    if (r === 'FAILED_BREAKOUT_UP') {
-      if (!dipFor(bar, 'FADE')) return null;
-      return {
-        direction: 'SELL',
-        setup: 'FADE',
-        playbook: 'FADE',
-        reason: `FADE · ${r} · ${candle}`,
-      };
-    }
-    if (r === 'FAILED_BREAKOUT_DOWN') {
-      if (!rallyFor(bar, 'FADE')) return null;
-      return {
-        direction: 'BUY',
-        setup: 'FADE',
-        playbook: 'FADE',
-        reason: `FADE · ${r} · ${candle}`,
-      };
-    }
 
     if (r === 'RANGE') {
       const zones = ctx?.zones;
