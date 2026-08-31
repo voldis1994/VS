@@ -131,6 +131,8 @@ export type RobotSession = {
     status: string;
     playbook: string | null;
     reason: string;
+    swing_high?: number;
+    swing_low?: number;
   } | null;
   decision_chain?: {
     feeds: string;
@@ -173,6 +175,8 @@ type Internal = RobotSession & {
   /** Last opened side — block opposite flip spam */
   last_entry_side: 'BUY' | 'SELL' | null;
   last_entry_side_ms: number;
+  /** After HardInvalidation / thesis fail — longer flip lock */
+  last_hard_exit_ms: number;
 };
 
 const STRUCTURE_REFRESH_MS = 20_000;
@@ -261,6 +265,7 @@ function publicSession(s: Internal): RobotSession {
     last_flat_mid: _flatMid,
     last_entry_side: _entrySide,
     last_entry_side_ms: _entrySideAt,
+    last_hard_exit_ms: _hardExit,
     ...rest
   } = s;
   const st = s.structureBook;
@@ -287,6 +292,8 @@ function publicSession(s: Internal): RobotSession {
       status: setup.status,
       playbook: setup.playbook,
       reason: setup.reason,
+      swing_high: setup.swing_high || st.swing_high,
+      swing_low: setup.swing_low || st.swing_low,
     },
     decision_chain: buildDecisionChain(s),
   };
@@ -720,6 +727,9 @@ async function exitTrade(
   s.exits_done += 1;
   s.last_deal_reference = result.deal_reference || s.last_deal_reference;
   s.closed_at_ms = Date.now();
+  if (/HardInvalidation|ThesisFailure|thesis/i.test(reason)) {
+    s.last_hard_exit_ms = Date.now();
+  }
   s.error = null;
   pushTick(s, {
     phase: 'EXIT',
@@ -1264,8 +1274,9 @@ async function robotCycle(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // After close: short pause only — do not miss the next leg of a good move
-    const POST_CLOSE_COOLDOWN_MS = 35_000;
+    // After close: short pause; after HardInv/thesis — longer (stop BUY↔SELL machine-gun)
+    const hardAgo = s.last_hard_exit_ms > 0 ? Date.now() - s.last_hard_exit_ms : Infinity;
+    const POST_CLOSE_COOLDOWN_MS = hardAgo < 180_000 ? 90_000 : 35_000;
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
     if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
       pushTick(s, {
@@ -1273,7 +1284,9 @@ async function robotCycle(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `cooldown ${Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000)}s after close`,
+        detail: `cooldown ${Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000)}s after close${
+          hardAgo < 180_000 ? ' · hard-exit lock' : ''
+        }`,
       });
       return;
     }
@@ -1377,18 +1390,26 @@ async function robotCycle(s: Internal) {
     if (quote.mid != null) s.last_flat_mid = quote.mid;
 
     if (!entry) {
+      const tipNote =
+        setup.side &&
+        bar &&
+        ((setup.side === 'BUY' && st.ready && bar.close >= st.swing_high - Math.max(st.span * 0.08, 0.8)) ||
+          (setup.side === 'SELL' && st.ready && bar.close <= st.swing_low + Math.max(st.span * 0.08, 0.8)))
+          ? ' · blocked tip-chase'
+          : '';
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · ARMED · no 10s confirm yet · ${setup.reason}`,
+        detail: `${ohlcLine} · ARMED · no 10s confirm yet${tipNote} · ${setup.reason}`,
       });
       return;
     }
 
-    // Opposite-side lock only (90s). Same-side continuation allowed after cooldown.
-    const SIDE_LOCK_MS = 90_000;
+    // Opposite-side lock: 90s normal, 4 min after HardInv/thesis (no instant flip)
+    const hardRecent = s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < 300_000;
+    const SIDE_LOCK_MS = hardRecent ? 240_000 : 90_000;
     if (
       s.last_entry_side &&
       s.last_entry_side !== entry.direction &&
@@ -1399,7 +1420,9 @@ async function robotCycle(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · side-lock ${s.last_entry_side} · no flip to ${entry.direction}`,
+        detail: `${ohlcLine} · side-lock ${s.last_entry_side} ${Math.ceil(
+          (SIDE_LOCK_MS - (Date.now() - s.last_entry_side_ms)) / 1000
+        )}s · no flip to ${entry.direction}${hardRecent ? ' · after hard exit' : ''}`,
       });
       return;
     }
@@ -1565,6 +1588,7 @@ export async function startRobotSession(input: {
     last_flat_mid: null,
     last_entry_side: null,
     last_entry_side_ms: 0,
+    last_hard_exit_ms: 0,
 
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
