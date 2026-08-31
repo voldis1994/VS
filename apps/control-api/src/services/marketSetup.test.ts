@@ -3,7 +3,9 @@ import type { CapitalPriceCandle } from './capitalCom.js';
 import {
   buildStructure,
   decideEntryFromSetup,
+  decideEntryFromTenSecMove,
   emptySetup,
+  recentImpulse,
   updateSetupSticky,
 } from './marketSetup.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
@@ -253,5 +255,39 @@ describe('marketSetup', () => {
     expect(setup.kind).not.toBe('NONE');
     expect(setup.side).toBe('SELL');
     expect(setup.status).toBe('ARMED');
+  });
+
+  it('sharp V-leg impulse fires even when longer window nets near zero', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) {
+      bars.push(candle(4435, 4437, 4433, 4435));
+    }
+    // Dump then equal rally — classic cancel over 5–8m, but last 2m must still read UP
+    bars.push(candle(4435, 4435.5, 4431, 4431.5));
+    bars.push(candle(4431.5, 4432, 4430.8, 4431));
+    bars.push(candle(4431, 4434, 4430.9, 4433.5));
+    bars.push(candle(4433.5, 4437.2, 4433, 4436.8));
+    expect(recentImpulse(bars, 'flip')).toBe('UP');
+  });
+
+  it('decideEntryFromTenSecMove trades strong 10s when structure mid-NONE', () => {
+    const minutes = rangeMinutes();
+    const st = buildStructure({ minutes, mid: 2005 });
+    expect(st.ready).toBe(true);
+    const buyBar = bar10(2004.5, 2006.2, 2004.4, 2006.0);
+    const buy = decideEntryFromTenSecMove(st, buyBar);
+    expect(buy?.direction).toBe('BUY');
+    expect(buy?.setup).toBe('CONTINUATION');
+    const sellBar = bar10(2005.5, 2005.6, 2003.8, 2004.0);
+    const sell = decideEntryFromTenSecMove(st, sellBar);
+    expect(sell?.direction).toBe('SELL');
+  });
+
+  it('decideEntryFromTenSecMove refuses tip-chase BUY at swing high', () => {
+    const minutes = rangeMinutes();
+    const st = buildStructure({ minutes, mid: 2009.2 });
+    expect(st.near_high).toBe(true);
+    const tip = bar10(2008.8, 2009.6, 2008.7, 2009.4);
+    expect(decideEntryFromTenSecMove(st, tip)).toBeNull();
   });
 });

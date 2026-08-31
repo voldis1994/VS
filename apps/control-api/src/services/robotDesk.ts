@@ -30,6 +30,7 @@ import {
 import {
   buildStructure,
   decideEntryFromSetup,
+  decideEntryFromTenSecMove,
   emptySetup,
   emptyStructure,
   playbookFromSetup,
@@ -1283,9 +1284,9 @@ async function robotCycle(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // After close: brief pause so next 10s bar can fire; after HardInv — a bit longer
+    // After close: 1×10s bar pause; after HardInv — brief lock
     const hardAgo = s.last_hard_exit_ms > 0 ? Date.now() - s.last_hard_exit_ms : Infinity;
-    const POST_CLOSE_COOLDOWN_MS = hardAgo < 180_000 ? 45_000 : 15_000;
+    const POST_CLOSE_COOLDOWN_MS = hardAgo < 180_000 ? 25_000 : 10_000;
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
     if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
       pushTick(s, {
@@ -1358,20 +1359,47 @@ async function robotCycle(s: Internal) {
       ? `10s O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · ${structLine} · ${setupLine}`
       : `10s seeding · ${structLine} · ${setupLine}`;
 
-    if (setup.kind === 'NONE' || setup.status === 'NONE') {
-      if (quote.mid != null) s.last_flat_mid = quote.mid;
+    if (quote.mid != null) s.last_flat_mid = quote.mid;
+
+    // Need a just-closed 10s bar for any entry (setup confirm OR move-from-NONE)
+    if (!s.ohlcState.just_closed || !bar) {
+      const waitNote =
+        setup.kind === 'NONE' || setup.status === 'NONE'
+          ? `NONE · ${setup.reason}`
+          : setup.status === 'FORMING'
+            ? `FORMING · ${setup.reason}`
+            : `ARMED · waiting closed 10s confirm`;
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · NONE · ${setup.reason}`,
+        detail: `${ohlcLine} · ${waitNote}`,
       });
       return;
     }
 
-    if (setup.status === 'FORMING') {
-      if (quote.mid != null) s.last_flat_mid = quote.mid;
+    let entry =
+      setup.kind !== 'NONE' && setup.status === 'ARMED'
+        ? decideEntryFromSetup(setup, bar)
+        : null;
+
+    // Mid-swing NONE was starving every real 10s V-leg — trade the move
+    if (!entry && (setup.kind === 'NONE' || setup.status === 'NONE')) {
+      entry = decideEntryFromTenSecMove(st, bar);
+      if (!entry) {
+        pushTick(s, {
+          phase: 'DECIDE',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `${ohlcLine} · NONE · ${setup.reason}`,
+        });
+        return;
+      }
+    }
+
+    if (setup.status === 'FORMING' && !entry) {
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
@@ -1382,28 +1410,15 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // ARMED — need closed 10s confirm (rejection/bounce/impulse), never forming wick
-    if (!s.ohlcState.just_closed || !bar) {
-      if (quote.mid != null) s.last_flat_mid = quote.mid;
-      pushTick(s, {
-        phase: 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `${ohlcLine} · ARMED · waiting closed 10s confirm`,
-      });
-      return;
-    }
-
-    const entry = decideEntryFromSetup(setup, bar);
-    if (quote.mid != null) s.last_flat_mid = quote.mid;
-
     if (!entry) {
       const tipNote =
         setup.side &&
-        bar &&
-        ((setup.side === 'BUY' && st.ready && bar.close >= st.swing_high - Math.max(st.span * 0.08, 0.8)) ||
-          (setup.side === 'SELL' && st.ready && bar.close <= st.swing_low + Math.max(st.span * 0.08, 0.8)))
+        ((setup.side === 'BUY' &&
+          st.ready &&
+          bar.close >= st.swing_high - Math.max(st.span * 0.08, 0.8)) ||
+          (setup.side === 'SELL' &&
+            st.ready &&
+            bar.close <= st.swing_low + Math.max(st.span * 0.08, 0.8)))
           ? ' · blocked tip-chase'
           : '';
       pushTick(s, {
@@ -1416,9 +1431,9 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // Opposite-side lock: short enough for 10s cadence; longer only after HardInv
+    // Opposite-side lock: brief for 10s V-flips; longer only after HardInv
     const hardRecent = s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < 300_000;
-    const SIDE_LOCK_MS = hardRecent ? 90_000 : 45_000;
+    const SIDE_LOCK_MS = hardRecent ? 45_000 : 20_000;
     if (
       s.last_entry_side &&
       s.last_entry_side !== entry.direction &&
