@@ -50,7 +50,7 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
     mfeFloorAbs: 0.15,
     peakRet: 0.55,
     harvestRet: 0.65,
-    thesisMinHoldMs: 45_000,
+    thesisMinHoldMs: 90_000,
     timeDecayMs: 480_000,
   },
   FADE: {
@@ -62,16 +62,16 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
     mfeFloorAbs: 0.12,
     peakRet: 0.5,
     harvestRet: 0.55,
-    thesisMinHoldMs: 60_000,
+    thesisMinHoldMs: 90_000,
     timeDecayMs: 240_000,
   },
 };
 
-/** Entry body — real 10s move, not every colored wick. */
+/** Entry body — needs a real 10s impulse, not every wick. */
 export const PLAYBOOK_ENTRY_BODY: Record<TradePlaybook, number> = {
-  LONG: 0.00025, // 0.025%
-  SCALP: 0.0002, // 0.02% ≈ ~0.9pt Gold
-  FADE: 0.0002,
+  LONG: 0.00035, // 0.035%
+  SCALP: 0.0003, // 0.03% ≈ ~1.3pt Gold
+  FADE: 0.00025,
 };
 
 export function playbookFromRegime(regime?: string | null): Playbook {

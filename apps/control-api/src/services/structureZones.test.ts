@@ -121,4 +121,34 @@ describe('structureZones', () => {
     expect(edgeSides.sell).toBe(true);
     expect(edgeSides.playbook).toBe('FADE');
   });
+
+  it('does not invent TREND from one green breakout candle / mid bias', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 14; i++) {
+      const up = i % 2 === 0;
+      bars.push(candle(up ? 2003 : 2007, 2009.5, 2000.5, up ? 2006.5 : 2003.5));
+    }
+    // One green close above prior H — no multi-bar persistence
+    bars.push(candle(2008, 2012, 2007.5, 2011.5));
+    const z = buildZonesFromMinutes(bars, 2011.5);
+    expect(z.ready).toBe(true);
+    expect(z.structure).not.toBe('BREAKOUT_UP');
+    expect(z.structure).not.toBe('TREND_UP');
+    const sides = allowedSidesFromZones(z);
+    // Mid-bias alone must not unlock BUY
+    if (z.structure === 'RANGE' || z.structure === 'UNKNOWN') {
+      expect(sides.buy).toBe(z.near_low);
+      expect(sides.sell).toBe(z.near_high);
+    }
+  });
+
+  it('requires ≥12 minute bars (not one candle zones)', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 11; i++) {
+      bars.push(candle(2000 + i, 2001 + i, 1999 + i, 2000.5 + i));
+    }
+    expect(buildZonesFromMinutes(bars, 2010).ready).toBe(false);
+    bars.push(candle(2011, 2012, 2010, 2011.5));
+    expect(buildZonesFromMinutes(bars, 2011.5).ready).toBe(true);
+  });
 });
