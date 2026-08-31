@@ -1,19 +1,21 @@
 import { pool } from '../db/pool.js';
-import { listRobotSessions, stopEntryRobotsForAccount, stopFlatManageRobotsForAccount } from './robotDesk.js';
+import {
+  listRobotSessions,
+  startRobotSession,
+  stopEntryRobotsForAccount,
+  stopFlatManageRobotsForAccount,
+  stopRobotSession,
+  robotIdFor,
+} from './robotDesk.js';
 import { emitToClient } from './clientEvents.js';
 import { formatTradeLabel } from './tradePresentation.js';
 import { currentRegime } from './regimes.js';
 import {
-  activateSubscription,
   deactivateSubscription,
   getBrokerHealth,
   noteBrokerError,
   noteBrokerOk,
 } from './clientSubscriptions.js';
-import {
-  getPipelineBridgeStatus,
-  isEpicBeingAnalyzed,
-} from './pipelineBridge.js';
 import {
   acquireCapitalSession,
   listCapitalOpenPositions,
@@ -46,7 +48,7 @@ export type ClientPanelStatus = {
   client_id: number;
   client_name: string;
   connection_status: 'ONLINE' | 'LOST' | 'ERROR';
-  /** REQUESTED vs CONFIRMED: STARTING until Market Reader bridge analyzes the epic */
+  /** REQUESTED vs CONFIRMED: STARTING until this client's own desk brain is live */
   robot_status: 'RUNNING' | 'STARTING' | 'STOPPED' | 'ERROR';
   requested_status: 'RUNNING' | 'STOPPED';
   broker_status: 'CONNECTED' | 'DEGRADED' | 'UNKNOWN';
@@ -66,21 +68,21 @@ export type ClientPanelStatus = {
   connection_ok: boolean;
 };
 
+/**
+ * Per-client own-brain status.
+ * RUNNING only when this client's desk entry session is live — never via shared Market Core fanout.
+ */
 export function computeClientRobotStatus(input: {
   requestedRunning: boolean;
   hasAccount: boolean;
   hasEpic: boolean;
-  bridgeHealthy: boolean;
-  marketAnalyzed: boolean;
+  deskEntryRunning: boolean;
 }): { robot_status: ClientPanelStatus['robot_status']; status_reason: string | null } {
   if (!input.requestedRunning) return { robot_status: 'STOPPED', status_reason: null };
   if (!input.hasAccount) return { robot_status: 'ERROR', status_reason: 'No broker account' };
   if (!input.hasEpic) return { robot_status: 'ERROR', status_reason: 'No market selected' };
-  if (!input.bridgeHealthy) {
-    return { robot_status: 'ERROR', status_reason: 'Market Core heartbeat unavailable' };
-  }
-  if (!input.marketAnalyzed) {
-    return { robot_status: 'STARTING', status_reason: 'Waiting for Market Core to analyze market' };
+  if (!input.deskEntryRunning) {
+    return { robot_status: 'STARTING', status_reason: 'Starting this client\'s own robot brain' };
   }
   return { robot_status: 'RUNNING', status_reason: null };
 }
@@ -228,14 +230,14 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
   const account = await resolveClientTradingAccount(clientId);
   const requestedRunning = String(c.panel_robot_requested || '').toUpperCase() === 'RUNNING';
   const robot = account ? robotForAccount(account.account_id, c.panel_epic) : null;
+  const deskEntryRunning = Boolean(robot?.running && robot.entry_enabled);
   const health = getBrokerHealth(clientId);
-  const bridge = getPipelineBridgeStatus();
-  const marketAnalyzed = isEpicBeingAnalyzed(c.panel_epic);
 
   let live_trade: ClientLiveTrade = null;
   if (robot?.running && robot.open_side) {
     const side = robot.open_side as 'BUY' | 'SELL';
-    const regime = robot.regime || currentRegime(robot.epic)?.current || null;
+    const regime =
+      robot.regime || currentRegime(robot.epic, robot.id)?.current || null;
     live_trade = {
       market: robot.epic,
       display_name: robot.display_name,
@@ -291,7 +293,8 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
             : null;
           if (match) {
             const side = match.direction;
-            const regime = currentRegime(match.epic)?.current || null;
+            const scope = robot?.id || null;
+            const regime = currentRegime(match.epic, scope)?.current || null;
             live_trade = {
               market: match.epic,
               display_name: c.panel_display_name || match.epic,
@@ -321,14 +324,10 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
     requestedRunning,
     hasAccount: Boolean(account),
     hasEpic: Boolean(c.panel_epic),
-    bridgeHealthy: bridge.healthy,
-    marketAnalyzed,
+    deskEntryRunning,
   });
   const robot_status = computed.robot_status;
-  const status_reason =
-    robot_status === 'ERROR' && bridge.last_error && !bridge.healthy
-      ? bridge.last_error
-      : computed.status_reason;
+  const status_reason = computed.status_reason;
 
   let connection_status: ClientPanelStatus['connection_status'] = 'ONLINE';
   if (robot_status === 'ERROR' || health.broker_status === 'DEGRADED' || health.last_error) {
@@ -343,8 +342,8 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
     robot_status,
     requested_status: requestedRunning ? 'RUNNING' : 'STOPPED',
     broker_status: health.broker_status,
-    pipeline_healthy: bridge.healthy,
-    market_analyzed: marketAnalyzed,
+    pipeline_healthy: true,
+    market_analyzed: deskEntryRunning,
     last_broker_ok_at: health.last_ok_at,
     broker_error: health.last_error || status_reason,
     status_reason,
@@ -387,8 +386,8 @@ export async function saveClientConfig(
 }
 
 /**
- * Client START = activate subscription for pipeline fan-out.
- * Does NOT start robotDesk entry strategy.
+ * Client START = this client's own desk brain (structure → setup → entry → best outcome).
+ * Does NOT subscribe to shared Market Core fan-out — each client trades alone.
  */
 export async function startClientRobot(clientId: number): Promise<ClientPanelStatus> {
   const { rows } = await pool.query(
@@ -419,26 +418,42 @@ export async function startClientRobot(clientId: number): Promise<ClientPanelSta
   const account = await resolveClientTradingAccount(clientId);
   if (!account) throw new Error('No broker account linked to this client');
 
-  // Kill entry brains only — keep manage-only robot if a trade is already open
-  await stopEntryRobotsForAccount(account.account_id);
+  // Leave fanout: disable ais trading so Market Core cannot open for this client
+  await pool.query(
+    `UPDATE account_instrument_settings
+     SET trading_enabled = false, updated_at = NOW()
+     WHERE broker_account_id = $1`,
+    [account.account_id]
+  );
+  await pool.query(
+    `UPDATE clients SET
+       panel_epic = $2,
+       panel_display_name = $3,
+       panel_lot_size = $4,
+       panel_robot_requested = 'RUNNING',
+       updated_at = NOW()
+     WHERE id = $1`,
+    [clientId, market.epic, market.display_name, lot]
+  );
 
-  await activateSubscription({
-    clientId,
-    accountId: account.account_id,
-    instrumentId: market.instrument_id,
+  const session = await startRobotSession({
+    account_id: account.account_id,
     epic: market.epic,
-    displayName: market.display_name,
-    lotSize: lot,
+    display_name: market.display_name,
+    lot_size: lot,
+    trading_enabled: true,
+    entry_enabled: true,
   });
 
   const status = await getClientPanelStatus(clientId);
   emitToClient(clientId, {
     type: 'robot_started',
+    robot_id: session.id,
     market: status.market,
     display_name: status.display_name,
     lot_size: status.lot_size,
     robot_status: status.robot_status,
-    mode: 'subscription',
+    mode: 'own_brain',
   });
   emitToClient(clientId, { type: 'client_status', ...status });
   return status;
@@ -457,8 +472,15 @@ export async function stopClientRobot(clientId: number): Promise<ClientPanelStat
     instrumentId = m?.instrument_id ?? null;
   }
   if (account) {
+    // Stop this client's own brain (entry + flat manage). Open-trade manage keeps running
+    // until flat — stopEntry then stopFlat; if still managing an open trade, leave it.
     await stopEntryRobotsForAccount(account.account_id);
     await stopFlatManageRobotsForAccount(account.account_id);
+    if (epic) {
+      const id = robotIdFor(account.account_id, epic);
+      const still = listRobotSessions().find((s) => s.id === id && s.running && !s.open_side);
+      if (still) await stopRobotSession(id);
+    }
     await deactivateSubscription({
       clientId,
       accountId: account.account_id,
