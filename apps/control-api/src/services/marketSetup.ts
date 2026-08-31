@@ -231,6 +231,20 @@ function persistence(minutes: CapitalPriceCandle[], n = 12): number {
   return mean(bodies.map((v) => (v > 0.00015 ? 1 : v < -0.00015 ? -1 : 0)));
 }
 
+/** Local impulse from last ~8 minutes — dumps/rallies even mid an old wide swing. */
+function recentImpulse(minutes: CapitalPriceCandle[]): 'UP' | 'DOWN' | null {
+  const slice = minutes.slice(-8);
+  if (slice.length < 5) return null;
+  const first = slice[0]!;
+  const last = slice[slice.length - 1]!;
+  const pers = persistence(slice, slice.length);
+  const net = last.close - first.open;
+  const thr = Math.max(Math.abs(first.open) * 0.0007, 2.5);
+  if (pers <= -0.35 && net <= -thr) return 'DOWN';
+  if (pers >= 0.35 && net >= thr) return 'UP';
+  return null;
+}
+
 function rawSetupFromStructure(
   structure: StructureBook,
   minutes: CapitalPriceCandle[]
@@ -384,6 +398,31 @@ function rawSetupFromStructure(
     };
   }
 
+  // Real local move mid old swing — never sit NONE while dump/rally is live
+  const imp = recentImpulse(minutes);
+  if (imp === 'DOWN') {
+    return {
+      kind: 'CONTINUATION',
+      side: 'SELL',
+      playbook: 'LONG',
+      status: 'ARMED',
+      swing_high: hi,
+      swing_low: lo,
+      reason: `CONTINUATION SELL · local dump impulse (not mid-NONE)`,
+    };
+  }
+  if (imp === 'UP') {
+    return {
+      kind: 'CONTINUATION',
+      side: 'BUY',
+      playbook: 'LONG',
+      status: 'ARMED',
+      swing_high: hi,
+      swing_low: lo,
+      reason: `CONTINUATION BUY · local rally impulse (not mid-NONE)`,
+    };
+  }
+
   return {
     kind: 'NONE',
     side: null,
@@ -391,7 +430,7 @@ function rawSetupFromStructure(
     status: 'NONE',
     swing_high: hi,
     swing_low: lo,
-    reason: `NONE · mid swing H${hi.toFixed(2)}/L${lo.toFixed(2)} · no edge setup`,
+    reason: `NONE · mid swing H${hi.toFixed(2)}/L${lo.toFixed(2)} · no edge · no impulse`,
   };
 }
 
@@ -429,6 +468,29 @@ export function updateSetupSticky(
       confirm,
       swing_high: structure.swing_high || raw.swing_high,
       swing_low: structure.swing_low || raw.swing_low,
+      updated_at: now,
+    };
+  }
+
+  // Leaving NONE for a real setup is instant — do not miss dumps waiting sticky
+  if (prevSafe.kind === 'NONE' && raw.kind !== 'NONE' && raw.side) {
+    return {
+      ...raw,
+      status: raw.status === 'FORMING' ? 'FORMING' : 'ARMED',
+      confirm: SETUP_CONFIRM,
+      updated_at: now,
+    };
+  }
+
+  // Breakout / continuation impulse arms immediately when freshly detected
+  if (
+    (raw.kind === 'BREAKOUT' || raw.kind === 'CONTINUATION') &&
+    raw.side &&
+    raw.status === 'ARMED'
+  ) {
+    return {
+      ...raw,
+      confirm: SETUP_CONFIRM,
       updated_at: now,
     };
   }

@@ -175,7 +175,7 @@ type Internal = RobotSession & {
   last_entry_side_ms: number;
 };
 
-const STRUCTURE_REFRESH_MS = 45_000;
+const STRUCTURE_REFRESH_MS = 20_000;
 const STRUCTURE_MINUTE_BARS = 120;
 const STRUCTURE_HOUR_BARS = 24;
 
@@ -392,7 +392,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
     note:
-      'Setup-first: no WAIT regime, no tick flips. NONE = no setup. ARMED = ready. Entry only on closed 10s confirm at swing. Open trade freezes setup; manage = best outcome.',
+      'Setup-first: NONE only when truly quiet. Local dump/rally impulse arms CONTINUATION. Same-side re-entry after 35s; opposite lock 90s. Entry on closed 10s confirm.',
   };
 }
 
@@ -1253,8 +1253,8 @@ async function robotCycle(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // Stop ±BUY/SELL machine-gun after a close
-    const POST_CLOSE_COOLDOWN_MS = 90_000;
+    // After close: short pause only — do not miss the next leg of a good move
+    const POST_CLOSE_COOLDOWN_MS = 35_000;
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
     if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
       pushTick(s, {
@@ -1376,7 +1376,8 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    const SIDE_LOCK_MS = 180_000;
+    // Opposite-side lock only (90s). Same-side continuation allowed after cooldown.
+    const SIDE_LOCK_MS = 90_000;
     if (
       s.last_entry_side &&
       s.last_entry_side !== entry.direction &&
