@@ -12,6 +12,9 @@ export type ExitSnapshot = {
   regime?: string | null;
 };
 
+/** Ignore ThesisFailure for this long after entry — stop 10s flip chop. */
+export const THESIS_MIN_HOLD_MS = 60_000;
+
 export function favorableMove(side: ExitSide, entry: number, mid: number): number {
   return side === 'BUY' ? mid - entry : entry - mid;
 }
@@ -47,6 +50,8 @@ export function thesisFailureReason(
 
 /**
  * Manage exit — give the trade room to develop (~10s scalp with breathing room).
+ * Tuned less aggressive vs Aug-13 defaults: higher MFE floor, looser peak/harvest,
+ * ThesisFailure only after THESIS_MIN_HOLD_MS.
  * Broker SAFETY SL is the hard cushion; this is best-outcome + thesis management.
  * Isolated: caller must pass ONE robot's snapshot (never mix clients).
  */
@@ -56,21 +61,28 @@ export function decideBestOutcomeExit(
 ): { exit: boolean; reason: string } {
   if (!s.open_side || s.entry_price == null) return { exit: false, reason: '' };
 
+  const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
+
   const thesis = thesisFailureReason(s.open_side, s.regime);
-  if (thesis) return { exit: true, reason: thesis };
+  if (thesis && heldMs >= THESIS_MIN_HOLD_MS) {
+    return { exit: true, reason: thesis };
+  }
 
   const entry = s.entry_price;
   const fav = favorableMove(s.open_side, entry, mid);
   const absEntry = Math.max(Math.abs(entry), 1e-9);
+  // Unchanged target / soft SL — problem was early peak/harvest, not TP
   const tp = Math.max(absEntry * 0.0035, 0.35);
   const sl = Math.max(absEntry * 0.0022, 0.22);
-  const mfeFloor = Math.max(absEntry * 0.0012, 0.12);
+  // Was 0.12% — micro ±0.09 chop armed PeakProtect too early
+  const mfeFloor = Math.max(absEntry * 0.0018, 0.18);
 
   if (fav <= -sl) {
     return { exit: true, reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}` };
   }
 
-  if (s.mfe >= mfeFloor && s.peak_retention != null && s.peak_retention < 0.3) {
+  // Was <0.3 — allow ~50% giveback of peak before lock
+  if (s.mfe >= mfeFloor && s.peak_retention != null && s.peak_retention < 0.5) {
     return {
       exit: true,
       reason: `PeakProtection · retention ${(s.peak_retention * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} → lock best`,
@@ -84,14 +96,14 @@ export function decideBestOutcomeExit(
     };
   }
 
-  if (s.mfe >= mfeFloor && fav > 0 && s.peak_retention != null && s.peak_retention < 0.4) {
+  // Was <0.4 — harvest only after more of peak is given back
+  if (s.mfe >= mfeFloor && fav > 0 && s.peak_retention != null && s.peak_retention < 0.55) {
     return {
       exit: true,
       reason: `BestOutcome harvest · UPL ${fav.toFixed(5)} after MFE ${s.mfe.toFixed(5)} (ret ${(s.peak_retention * 100).toFixed(0)}%)`,
     };
   }
 
-  const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
   if (heldMs > 480_000 && fav >= 0 && s.mfe >= mfeFloor * 0.5) {
     return {
       exit: true,
