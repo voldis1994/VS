@@ -44,13 +44,13 @@ describe('playbook entry', () => {
     expect(decideEntryFrom10sRegime(longDip, 'COMPRESSION', { playbookAgeBars: 5 })).toBeNull();
   });
 
-  it('LONG needs family age ≥3 and strong dip', () => {
+  it('LONG needs family age ≥2 and strong dip', () => {
     expect(
-      decideEntryFrom10sRegime(longDip, 'TREND_UP', { playbookAgeBars: 2, regimeAgeBars: 2 })
+      decideEntryFrom10sRegime(longDip, 'TREND_UP', { playbookAgeBars: 1, regimeAgeBars: 1 })
     ).toBeNull();
     const sig = decideEntryFrom10sRegime(longDip, 'TREND_UP', {
-      playbookAgeBars: 3,
-      regimeAgeBars: 3,
+      playbookAgeBars: 2,
+      regimeAgeBars: 2,
     });
     expect(sig?.playbook).toBe('LONG');
     expect(sig?.direction).toBe('BUY');
@@ -67,11 +67,11 @@ describe('playbook entry', () => {
     ).toBeNull();
   });
 
-  it('SCALP BREAKOUT needs age ≥2', () => {
+  it('SCALP BREAKOUT needs age ≥1', () => {
     expect(
-      decideEntryFrom10sRegime(scalpRally, 'BREAKOUT_UP', { playbookAgeBars: 1 })
+      decideEntryFrom10sRegime(scalpRally, 'BREAKOUT_UP', { playbookAgeBars: 0 })
     ).toBeNull();
-    const sig = decideEntryFrom10sRegime(scalpRally, 'BREAKOUT_UP', { playbookAgeBars: 2 });
+    const sig = decideEntryFrom10sRegime(scalpRally, 'BREAKOUT_UP', { playbookAgeBars: 1 });
     expect(sig?.playbook).toBe('SCALP');
     expect(sig?.direction).toBe('BUY');
   });

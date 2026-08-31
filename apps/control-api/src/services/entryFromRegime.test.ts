@@ -28,10 +28,27 @@ describe('10s playbook suitable entry', () => {
     expect(decideEntryFrom10sRegime(longRally, 'TRANSITION', ctx)).toBeNull();
   });
 
-  it('TREND_UP only dip-buys — never sells the rally', () => {
+  it('TREND_UP dip-buys; rally follow only with bullish zones', () => {
     expect(decideEntryFrom10sRegime(longDip, 'TREND_UP', ctx)?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(longDip, 'TREND_UP', ctx)?.playbook).toBe('LONG');
     expect(decideEntryFrom10sRegime(longRally, 'TREND_UP', ctx)).toBeNull();
+    const zonesUp = {
+      ready: true,
+      high: 2010,
+      low: 1990,
+      mid: 2000,
+      span: 20,
+      bias: 'ABOVE' as const,
+      near_high: true,
+      near_low: false,
+      structure: 'TREND_UP' as const,
+      bar_count: 40,
+      updated_at: new Date().toISOString(),
+      detail: 'test',
+    };
+    expect(decideEntryFrom10sRegime(longRally, 'TREND_UP', { ...ctx, zones: zonesUp })?.setup).toBe(
+      'CONTINUATION'
+    );
   });
 
   it('TREND_DOWN only rally-sells', () => {

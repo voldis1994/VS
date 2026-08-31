@@ -16,6 +16,8 @@ import {
 } from './playbooks.js';
 import {
   nearRealZoneEdge,
+  zonesSupportLong,
+  zonesSupportShort,
   type MarketZoneBook,
 } from './structureZones.js';
 
@@ -34,7 +36,7 @@ export type EntryContext = {
   previousRegime?: string | null;
   /** Prior closed bars (excluding the signal bar) — fallback micro edge */
   priorBars?: TenSecBar[];
-  /** Real Capital minute zones — preferred for FADE edges */
+  /** Real Capital minute zones — preferred for FADE edges + trend follow */
   zones?: MarketZoneBook | null;
 };
 
@@ -62,29 +64,51 @@ export function decideEntryFrom10sRegime(
   if (book === 'WAIT') return null;
 
   if (book === 'LONG') {
-    if (!familyAgeOk(ctx, 3)) return null;
+    // 2 bars in family — was 3 and missed short Gold impulses
+    if (!familyAgeOk(ctx, 2)) return null;
     if (wasRangeOrExpansion(ctx?.previousRegime) && (ctx?.regimeAgeBars ?? 0) < 2) {
       return null;
     }
     if (!movingFor(bar, 'LONG') || !bodyStrongEnough(bar, 'LONG')) return null;
 
     if (r === 'TREND_UP') {
-      if (!dipFor(bar, 'LONG')) return null;
-      return {
-        direction: 'BUY',
-        setup: 'PULLBACK',
-        playbook: 'LONG',
-        reason: `LONG · ${r} dip-buy · ${candle}`,
-      };
+      // Pullback dip preferred; impulse rally OK when minute zones confirm up
+      if (dipFor(bar, 'LONG')) {
+        return {
+          direction: 'BUY',
+          setup: 'PULLBACK',
+          playbook: 'LONG',
+          reason: `LONG · ${r} dip-buy · ${candle}`,
+        };
+      }
+      if (rallyFor(bar, 'LONG') && zonesSupportLong(ctx?.zones)) {
+        return {
+          direction: 'BUY',
+          setup: 'CONTINUATION',
+          playbook: 'LONG',
+          reason: `LONG · ${r} trend-follow · ${candle}`,
+        };
+      }
+      return null;
     }
     if (r === 'TREND_DOWN') {
-      if (!rallyFor(bar, 'LONG')) return null;
-      return {
-        direction: 'SELL',
-        setup: 'PULLBACK',
-        playbook: 'LONG',
-        reason: `LONG · ${r} rally-sell · ${candle}`,
-      };
+      if (rallyFor(bar, 'LONG')) {
+        return {
+          direction: 'SELL',
+          setup: 'PULLBACK',
+          playbook: 'LONG',
+          reason: `LONG · ${r} rally-sell · ${candle}`,
+        };
+      }
+      if (dipFor(bar, 'LONG') && zonesSupportShort(ctx?.zones)) {
+        return {
+          direction: 'SELL',
+          setup: 'CONTINUATION',
+          playbook: 'LONG',
+          reason: `LONG · ${r} trend-follow · ${candle}`,
+        };
+      }
+      return null;
     }
     if (r === 'PULLBACK_UPTREND') {
       if (!rallyFor(bar, 'LONG')) return null;
@@ -108,7 +132,7 @@ export function decideEntryFrom10sRegime(
   }
 
   if (book === 'SCALP') {
-    if (!familyAgeOk(ctx, 2)) return null;
+    if (!familyAgeOk(ctx, 1)) return null;
     if (!movingFor(bar, 'SCALP') || !bodyStrongEnough(bar, 'SCALP')) return null;
 
     if (r === 'BREAKOUT_UP') {
