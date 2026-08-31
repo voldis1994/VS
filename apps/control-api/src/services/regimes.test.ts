@@ -114,7 +114,7 @@ describe('classifyRegime from 10s OHLC', () => {
     expect(classifyRegime(bars)).toBe('BREAKOUT_DOWN');
   });
 
-  it('FAILED_BREAKOUT_UP after a breakout fades back inside', () => {
+  it('after 10s breakout fades inside → RANGE (failed-break is minute-zone only)', () => {
     const prior: RegimeName = 'BREAKOUT_UP';
     const bars = [
       bar(100, 100.4, 99.7, 100.1, 0),
@@ -122,17 +122,17 @@ describe('classifyRegime from 10s OHLC', () => {
       bar(100.2, 100.45, 99.9, 100.15, 2),
       bar(100.15, 100.3, 99.85, 99.95, 3),
     ];
-    expect(classifyRegime(bars, prior)).toBe('FAILED_BREAKOUT_UP');
+    expect(classifyRegime(bars, prior)).toBe('RANGE');
   });
 
-  it('FAILED_BREAKOUT_DOWN after a breakdown fades back inside', () => {
+  it('after 10s breakdown fades inside → RANGE (not fake FAILED_BREAKOUT_DOWN)', () => {
     const bars = [
       bar(100, 100.4, 99.6, 99.9, 0),
       bar(99.9, 100.3, 99.5, 99.8, 1),
       bar(99.8, 100.2, 99.55, 99.85, 2),
       bar(99.85, 100.25, 99.7, 100.05, 3),
     ];
-    expect(classifyRegime(bars, 'BREAKOUT_DOWN')).toBe('FAILED_BREAKOUT_DOWN');
+    expect(classifyRegime(bars, 'BREAKOUT_DOWN')).toBe('RANGE');
   });
 
   it('EXPANSION on a wide bar that does not cleanly break out', () => {

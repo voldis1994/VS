@@ -151,4 +151,35 @@ describe('structureZones', () => {
     bars.push(candle(2011, 2012, 2010, 2011.5));
     expect(buildZonesFromMinutes(bars, 2011.5).ready).toBe(true);
   });
+
+  it('FAILED_BREAKOUT needs multi-minute base+probe — not 3 short bars', () => {
+    // Too few bars → no failed label
+    const tiny: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 10; i++) {
+      tiny.push(candle(2003, 2009.5, 2000.5, 2005));
+    }
+    tiny.push(candle(2008, 2015, 2007, 2014)); // poke high
+    tiny.push(candle(2010, 2012, 2004, 2005)); // back inside red
+    expect(buildZonesFromMinutes(tiny, 2005).structure).not.toBe('FAILED_BREAKOUT_UP');
+
+    // ≥12 base + 6 probe with clear fail-up
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 14; i++) {
+      const up = i % 2 === 0;
+      bars.push(candle(up ? 2003 : 2007, 2009.5, 2000.5, up ? 2006.5 : 2003.5));
+    }
+    // probe: break above then return inside on last (red)
+    bars.push(candle(2008, 2011, 2007, 2010));
+    bars.push(candle(2010, 2014, 2009, 2013)); // close above prior ~2009.5
+    bars.push(candle(2012, 2015, 2011, 2014));
+    bars.push(candle(2013, 2014, 2008, 2009));
+    bars.push(candle(2009, 2010, 2005, 2006));
+    bars.push(candle(2006, 2008, 2004, 2005)); // back inside, red
+    const z = buildZonesFromMinutes(bars, 2005);
+    expect(z.structure).toBe('FAILED_BREAKOUT_UP');
+    const sides = allowedSidesFromZones(z);
+    expect(sides.sell).toBe(true);
+    expect(sides.buy).toBe(false);
+    expect(sides.playbook).toBe('FADE');
+  });
 });
