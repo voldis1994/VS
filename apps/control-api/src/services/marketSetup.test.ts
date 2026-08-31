@@ -201,7 +201,39 @@ describe('marketSetup', () => {
     const stDump = buildStructure({ minutes: dump, mid: dump[dump.length - 1]!.close });
     const next = updateSetupSticky(setup, stDump, dump);
     expect(next.side).not.toBe('BUY');
-    expect(next.reason).toMatch(/dropped sticky BUY|CONTINUATION SELL|NONE|FADE SELL|BREAKOUT/);
+    expect(next.reason).toMatch(
+      /dropped sticky BUY|flipped|IMPULSE DOWN|CONTINUATION SELL|NONE|FADE SELL|BREAKOUT/i
+    );
+  });
+
+  it('impulse UP flips sticky SELL to BUY immediately (through swing high)', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) {
+      bars.push(candle(4430, 4432, 4428, 4430));
+    }
+    // Stale SELL fade armed at high
+    let setup: ReturnType<typeof emptySetup> = {
+      ...emptySetup(),
+      kind: 'FADE',
+      side: 'SELL',
+      playbook: 'FADE',
+      status: 'ARMED',
+      confirm: 3,
+      swing_high: 4434,
+      swing_low: 4428,
+      reason: 'FADE SELL at swing high',
+    };
+    // Hard rally through high
+    for (let i = 0; i < 6; i++) {
+      const o = 4432 + i * 1.1;
+      bars.push(candle(o, o + 1.2, o - 0.2, o + 1.0));
+    }
+    const st = buildStructure({ minutes: bars, mid: bars[bars.length - 1]!.close });
+    setup = updateSetupSticky(setup, st, bars);
+    expect(setup.side).toBe('BUY');
+    expect(setup.status).toBe('ARMED');
+    expect(setup.reason).toMatch(/IMPULSE UP|BREAKOUT|flipped/i);
+    expect(setup.watch_buy).toBeTruthy();
   });
 
   it('local dump impulse arms CONTINUATION SELL — not mid-NONE', () => {

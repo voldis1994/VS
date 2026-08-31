@@ -87,6 +87,8 @@ type RobotSession = {
     reason: string;
     swing_high?: number;
     swing_low?: number;
+    watch_buy?: string | null;
+    watch_sell?: string | null;
   } | null;
   feed_source?: 'MULTI' | 'LOCAL' | 'NONE';
   feed_contributing?: number;
@@ -514,6 +516,12 @@ export function RobotDeskPage() {
                       {s.market_setup?.playbook ? ` · ${s.market_setup.playbook}` : ''}
                     </div>
                     <div className="robot-mini-row">
+                      <span>WATCH</span>
+                      <strong className="robot-watch-both">
+                        {s.market_setup?.watch_buy || 'BUY—'} · {s.market_setup?.watch_sell || 'SELL—'}
+                      </strong>
+                    </div>
+                    <div className="robot-mini-row">
                       <span>SWING</span>
                       <strong>{swingLine(s)}</strong>
                     </div>
@@ -616,6 +624,12 @@ export function RobotDeskPage() {
                   <div className="robot-arena-kicker">KĀPĒC</div>
                   <p className="robot-story-reason">{setupWhy(focused)}</p>
                   <div className="robot-story-meta mono">
+                    <div>
+                      WATCH BUY · {focused.market_setup?.watch_buy || '—'}
+                    </div>
+                    <div>
+                      WATCH SELL · {focused.market_setup?.watch_sell || '—'}
+                    </div>
                     <div>SWING · {swingLine(focused)}</div>
                     <div>{ohlcLine(focused)}</div>
                     <div>
