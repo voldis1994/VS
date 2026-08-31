@@ -143,8 +143,59 @@ export function nearRealZoneEdge(
   return edge === 'low' ? zones.near_low : zones.near_high;
 }
 
+/** When 10s regime lags a real minute move, follow structure for entry. */
+export function regimeForEntry(
+  regime10s: string | null | undefined,
+  zones: MarketZoneBook
+): { regime: RegimeName; led: boolean; reason: string } {
+  const r = normalizeRegime(regime10s);
+  if (!zones.ready) {
+    return { regime: r, led: false, reason: `10s ${r} · zones not ready` };
+  }
+  const lagging =
+    r === 'RANGE' ||
+    r === 'UNKNOWN' ||
+    r === 'TRANSITION' ||
+    r === 'COMPRESSION';
+  if (!lagging) {
+    return { regime: r, led: false, reason: `10s ${r}` };
+  }
+  const s = zones.structure;
+  if (s === 'BREAKOUT_UP') {
+    return { regime: 'BREAKOUT_UP', led: true, reason: `zone-led BREAKOUT_UP (10s was ${r})` };
+  }
+  if (s === 'BREAKOUT_DOWN') {
+    return { regime: 'BREAKOUT_DOWN', led: true, reason: `zone-led BREAKOUT_DOWN (10s was ${r})` };
+  }
+  if (s === 'TREND_UP') {
+    return { regime: 'TREND_UP', led: true, reason: `zone-led TREND_UP (10s was ${r})` };
+  }
+  if (s === 'TREND_DOWN') {
+    return { regime: 'TREND_DOWN', led: true, reason: `zone-led TREND_DOWN (10s was ${r})` };
+  }
+  return { regime: r, led: false, reason: `10s ${r} · structure ${s}` };
+}
+
+export function zonesSupportLong(zones?: MarketZoneBook | null): boolean {
+  if (!zones?.ready) return false;
+  return (
+    zones.structure === 'TREND_UP' ||
+    zones.structure === 'BREAKOUT_UP' ||
+    zones.bias === 'ABOVE'
+  );
+}
+
+export function zonesSupportShort(zones?: MarketZoneBook | null): boolean {
+  if (!zones?.ready) return false;
+  return (
+    zones.structure === 'TREND_DOWN' ||
+    zones.structure === 'BREAKOUT_DOWN' ||
+    zones.bias === 'BELOW'
+  );
+}
+
 /**
- * Regime (10s) must agree with minute structure before entry.
+ * Regime (10s or zone-led) must agree with minute structure before entry.
  * Returns ok=false → WAIT (structure first).
  */
 export function regimeConfirmedByZones(

@@ -33,6 +33,7 @@ import {
   buildZonesFromMinutes,
   emptyZones,
   regimeConfirmedByZones,
+  regimeForEntry,
   type MarketZoneBook,
 } from './structureZones.js';
 import {
@@ -1274,14 +1275,17 @@ async function robotCycle(s: Internal) {
     let entryPlaybook: TradePlaybook | null = null;
 
     if (s.ohlcState.just_closed && bar) {
-      const zoneGate = regimeConfirmedByZones(s.regime, s.zoneBook);
+      // If 10s still says RANGE/UNKNOWN while minutes show TREND/BREAKOUT — follow zones
+      const led = regimeForEntry(s.regime, s.zoneBook);
+      const entryRegime = led.regime;
+      const zoneGate = regimeConfirmedByZones(entryRegime, s.zoneBook);
       if (!zoneGate.ok) {
         pushTick(s, {
           phase: 'WAIT',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${ohlcLine} · ${zoneGate.reason}`,
+          detail: `${ohlcLine} · ${led.reason} · ${zoneGate.reason}`,
         });
       } else {
         const priorBars = s.closedBars.filter(
@@ -1292,9 +1296,13 @@ async function robotCycle(s: Internal) {
               Math.abs(b.high - bar.high) < 1e-9
             )
         );
-        const sig = decideEntryFrom10sRegime(bar, s.regime, {
-          regimeAgeBars: s.regime_age_bars,
-          playbookAgeBars: s.playbook_age_bars,
+        // Zone-led playbook age: don't wait for 10s family to catch up on a live move
+        const ageBars = led.led
+          ? Math.max(s.playbook_age_bars, s.regime_age_bars, 2)
+          : s.playbook_age_bars;
+        const sig = decideEntryFrom10sRegime(bar, entryRegime, {
+          regimeAgeBars: led.led ? Math.max(s.regime_age_bars, 2) : s.regime_age_bars,
+          playbookAgeBars: ageBars,
           previousRegime: s.previous_regime,
           priorBars,
           zones: s.zoneBook,
@@ -1302,7 +1310,7 @@ async function robotCycle(s: Internal) {
         if (sig) {
           direction = sig.direction;
           setupType = sig.setup;
-          reason = `${sig.reason} · ${zoneGate.reason}`;
+          reason = `${sig.reason} · ${led.reason} · ${zoneGate.reason}`;
           entryPlaybook = sig.playbook;
         } else {
           pushTick(s, {
@@ -1310,7 +1318,7 @@ async function robotCycle(s: Internal) {
             bid: quote.bid,
             ask: quote.ask,
             mid: quote.mid,
-            detail: `${ohlcLine} · ${zoneGate.reason} · ${s.regime} not suitable on this 10s close · wait next candle`,
+            detail: `${ohlcLine} · ${led.reason} · ${zoneGate.reason} · ${entryRegime} not suitable on this 10s close · wait next candle`,
           });
         }
       }
@@ -1330,7 +1338,17 @@ async function robotCycle(s: Internal) {
         const hist = await fetchCapitalMinutePrices(opened.session, s.epic, 3);
         if (hist.ok) lateCandles = hist.candles;
       }
-      if (lateCandles.length >= 1 && isLateMoveOnOneMinute(direction, lateCandles)) {
+      // Confirmed minute TREND/BREAKOUT in trade direction = follow the move, not "late chase"
+      const structureFollow =
+        (direction === 'BUY' &&
+          (s.zoneBook.structure === 'TREND_UP' || s.zoneBook.structure === 'BREAKOUT_UP')) ||
+        (direction === 'SELL' &&
+          (s.zoneBook.structure === 'TREND_DOWN' || s.zoneBook.structure === 'BREAKOUT_DOWN'));
+      if (
+        !structureFollow &&
+        lateCandles.length >= 1 &&
+        isLateMoveOnOneMinute(direction, lateCandles)
+      ) {
         pushTick(s, {
           phase: 'WAIT',
           bid: quote.bid,

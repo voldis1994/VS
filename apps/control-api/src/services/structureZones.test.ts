@@ -3,6 +3,7 @@ import {
   buildZonesFromMinutes,
   nearRealZoneEdge,
   regimeConfirmedByZones,
+  regimeForEntry,
 } from './structureZones.js';
 import type { CapitalPriceCandle } from './capitalCom.js';
 
@@ -82,5 +83,18 @@ describe('structureZones', () => {
     const gate = regimeConfirmedByZones('TREND_UP', buildZonesFromMinutes([], null));
     expect(gate.ok).toBe(false);
     expect(gate.reason).toMatch(/ZONES/);
+  });
+
+  it('zone-leads entry when 10s still RANGE on a TREND move', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 14; i++) {
+      const base = 1990 + i * 1.5;
+      bars.push(candle(base, base + 1.8, base - 0.3, base + 1.2));
+    }
+    const z = buildZonesFromMinutes(bars, bars[bars.length - 1]!.close);
+    expect(['TREND_UP', 'BREAKOUT_UP'].includes(z.structure)).toBe(true);
+    const led = regimeForEntry('RANGE', z);
+    expect(led.led).toBe(true);
+    expect(led.regime === 'TREND_UP' || led.regime === 'BREAKOUT_UP').toBe(true);
   });
 });
