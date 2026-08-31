@@ -266,25 +266,41 @@ function persistence(minutes: CapitalPriceCandle[], n = 12): number {
   return mean(bodies.map((v) => (v > 0.00015 ? 1 : v < -0.00015 ? -1 : 0)));
 }
 
-/** Local impulse from last ~8 minutes — dumps/rallies even mid an old wide swing. */
+/**
+ * Local impulse from last few 1m bars — each V-leg must fire (dump then rally),
+ * not cancel to net≈0 over a long window (that caused ZERO trades on 10s swings).
+ * Must NOT fire on quiet range oscillation (false CONTINUATION).
+ */
 export function recentImpulse(
   minutes: CapitalPriceCandle[],
   mode: 'normal' | 'flip' = 'normal'
 ): 'UP' | 'DOWN' | null {
-  const n = mode === 'flip' ? 5 : 8;
+  const n = mode === 'flip' ? 3 : 5;
   const slice = minutes.slice(-n);
-  if (slice.length < (mode === 'flip' ? 4 : 5)) return null;
+  if (slice.length < (mode === 'flip' ? 3 : 4)) return null;
   const first = slice[0]!;
   const last = slice[slice.length - 1]!;
   const pers = persistence(slice, slice.length);
   const net = last.close - first.open;
   const thr =
     mode === 'flip'
-      ? Math.max(Math.abs(first.open) * 0.0005, 1.8)
-      : Math.max(Math.abs(first.open) * 0.0007, 2.5);
-  const persThr = mode === 'flip' ? 0.25 : 0.35;
+      ? Math.max(Math.abs(first.open) * 0.00035, 1.2)
+      : Math.max(Math.abs(first.open) * 0.0005, 1.8);
+  const persThr = mode === 'flip' ? 0.4 : 0.35;
   if (pers <= -persThr && net <= -thr) return 'DOWN';
   if (pers >= persThr && net >= thr) return 'UP';
+
+  // Sharp last 2 minutes same direction — live V-leg without waiting for longer net
+  if (slice.length >= 2) {
+    const a = slice[slice.length - 2]!;
+    const b = last;
+    const sharp = b.close - a.open;
+    const sharpThr = Math.max(Math.abs(a.open) * 0.00045, 2.0);
+    const bothDown = a.close <= a.open && b.close < b.open;
+    const bothUp = a.close >= a.open && b.close > b.open;
+    if (sharp <= -sharpThr && bothDown) return 'DOWN';
+    if (sharp >= sharpThr && bothUp) return 'UP';
+  }
   return null;
 }
 
@@ -840,6 +856,45 @@ export function decideEntryFromSetup(
     }
   }
 
+  return null;
+}
+
+/**
+ * When sticky setup is NONE mid-swing but the closed 10s bar is a real Gold move,
+ * enter CONTINUATION in the bar direction — do not sit out every V-leg as "NONE".
+ * Still refuse tip-chase BUY at H / SELL at L.
+ */
+export function decideEntryFromTenSecMove(
+  structure: StructureBook,
+  bar: TenSecBar
+): SetupEntry | null {
+  if (!structure.ready || !(structure.swing_high > structure.swing_low)) return null;
+  const thr = PLAYBOOK_ENTRY_BODY.SCALP;
+  const body = bodyPct(bar);
+  const hi = structure.swing_high;
+  const lo = structure.swing_low;
+  const eps = edgeEps(bar.close, Math.max(hi - lo, structure.span, 1));
+  const need = thr * 0.65;
+
+  if (body >= need) {
+    // Tip-chase: green bar parked at swing high — skip
+    if (bar.close >= hi - eps * 0.3 && bar.close <= hi + eps * 0.15) return null;
+    return {
+      direction: 'BUY',
+      setup: 'CONTINUATION',
+      playbook: 'SCALP',
+      reason: `ENTRY · 10s MOVE BUY O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · setup was NONE`,
+    };
+  }
+  if (body <= -need) {
+    if (bar.close <= lo + eps * 0.3 && bar.close >= lo - eps * 0.15) return null;
+    return {
+      direction: 'SELL',
+      setup: 'CONTINUATION',
+      playbook: 'SCALP',
+      reason: `ENTRY · 10s MOVE SELL O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · setup was NONE`,
+    };
+  }
   return null;
 }
 
