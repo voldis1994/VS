@@ -65,9 +65,39 @@ const MIN_SWING_BARS = 20;
 const PIVOT_LEFT = 3;
 const PIVOT_RIGHT = 3;
 const SETUP_CONFIRM = 2;
+/** FADE / FAILED_BREAK only if swing extreme printed within this many 1m bars */
+const FRESH_SWING_BARS = 8;
+
 /** Edge band in price points — Gold-friendly floor */
 function edgeEps(px: number, span: number): number {
   return Math.max(Math.abs(px) * 0.00035, span * 0.08, 0.8);
+}
+
+/**
+ * Swing high/low is fresh only if a recent 1m bar actually printed that extreme.
+ * Blocks FADE SELL on a stale H mid-rally (4434 while climb continues to 4437)
+ * and FADE BUY on a stale L mid-dump.
+ */
+export function isFreshSwingHigh(
+  minutes: CapitalPriceCandle[],
+  hi: number,
+  eps: number,
+  maxAgeBars = FRESH_SWING_BARS
+): boolean {
+  if (!(hi > 0) || minutes.length < 2) return false;
+  const slice = minutes.slice(-Math.max(2, maxAgeBars));
+  return slice.some((c) => c.high >= hi - eps * 0.2);
+}
+
+export function isFreshSwingLow(
+  minutes: CapitalPriceCandle[],
+  lo: number,
+  eps: number,
+  maxAgeBars = FRESH_SWING_BARS
+): boolean {
+  if (!(lo > 0) || minutes.length < 2) return false;
+  const slice = minutes.slice(-Math.max(2, maxAgeBars));
+  return slice.some((c) => c.low <= lo + eps * 0.2);
 }
 
 export function emptyStructure(detail = 'structure seeding'): StructureBook {
@@ -265,13 +295,24 @@ function rawSetupFromStructure(
   const hi = structure.swing_high;
   const lo = structure.swing_low;
   const pers = persistence(minutes);
+  const eps = edgeEps(last.close, Math.max(hi - lo, structure.span, 1));
   const closedAbove = last.close > hi;
   const closedBelow = last.close < lo;
   const pokeAbove = minutes.slice(-6).some((c) => c.high > hi && c.close <= hi);
   const pokeBelow = minutes.slice(-6).some((c) => c.low < lo && c.close >= lo);
+  const imp = recentImpulse(minutes);
+  const freshHi = isFreshSwingHigh(minutes, hi, eps);
+  const freshLo = isFreshSwingLow(minutes, lo, eps);
 
-  // FAILED_BREAK — poke beyond swing then close back inside (multi-minute)
-  if (pokeAbove && last.close <= hi && last.close >= lo && last.close < last.open) {
+  // FAILED_BREAK — only on a FRESH swing extreme, never mid-rally / mid-dump fade
+  if (
+    pokeAbove &&
+    freshHi &&
+    imp !== 'UP' &&
+    last.close <= hi &&
+    last.close >= lo &&
+    last.close < last.open
+  ) {
     return {
       kind: 'FAILED_BREAK',
       side: 'SELL',
@@ -279,10 +320,17 @@ function rawSetupFromStructure(
       status: 'ARMED',
       swing_high: hi,
       swing_low: lo,
-      reason: `FAILED_BREAK at swing high ${hi.toFixed(2)} → FADE SELL`,
+      reason: `FAILED_BREAK at fresh swing high ${hi.toFixed(2)} → FADE SELL`,
     };
   }
-  if (pokeBelow && last.close >= lo && last.close <= hi && last.close > last.open) {
+  if (
+    pokeBelow &&
+    freshLo &&
+    imp !== 'DOWN' &&
+    last.close >= lo &&
+    last.close <= hi &&
+    last.close > last.open
+  ) {
     return {
       kind: 'FAILED_BREAK',
       side: 'BUY',
@@ -290,7 +338,7 @@ function rawSetupFromStructure(
       status: 'ARMED',
       swing_high: hi,
       swing_low: lo,
-      reason: `FAILED_BREAK at swing low ${lo.toFixed(2)} → FADE BUY`,
+      reason: `FAILED_BREAK at fresh swing low ${lo.toFixed(2)} → FADE BUY`,
     };
   }
 
@@ -318,8 +366,8 @@ function rawSetupFromStructure(
     };
   }
 
-  // FADE at swing edges FIRST — never arm BUY at the tip / SELL at the low
-  if (structure.near_high && !closedAbove) {
+  // FADE at FRESH swing edges only — never SELL mid-rally / BUY mid-dump on stale level
+  if (structure.near_high && !closedAbove && freshHi && imp !== 'UP') {
     return {
       kind: 'FADE',
       side: 'SELL',
@@ -327,10 +375,10 @@ function rawSetupFromStructure(
       status: 'ARMED',
       swing_high: hi,
       swing_low: lo,
-      reason: `FADE SELL at swing high ${hi.toFixed(2)} · no BUY at tip`,
+      reason: `FADE SELL at fresh swing high ${hi.toFixed(2)} · no BUY at tip`,
     };
   }
-  if (structure.near_low && !closedBelow) {
+  if (structure.near_low && !closedBelow && freshLo && imp !== 'DOWN') {
     return {
       kind: 'FADE',
       side: 'BUY',
@@ -338,7 +386,7 @@ function rawSetupFromStructure(
       status: 'ARMED',
       swing_high: hi,
       swing_low: lo,
-      reason: `FADE BUY at swing low ${lo.toFixed(2)} · no SELL at floor`,
+      reason: `FADE BUY at fresh swing low ${lo.toFixed(2)} · no SELL at floor`,
     };
   }
 
@@ -360,7 +408,7 @@ function rawSetupFromStructure(
         reason: `PULLBACK in up structure · buy toward ${lo.toFixed(2)}`,
       };
     }
-    if (pers > 0.4 && structure.bias === 'ABOVE' && last.close < hi - edgeEps(last.close, hi - lo)) {
+    if (pers > 0.4 && structure.bias === 'ABOVE' && last.close < hi - eps) {
       return {
         kind: 'CONTINUATION',
         side: 'BUY',
@@ -385,7 +433,7 @@ function rawSetupFromStructure(
         reason: `PULLBACK in down structure · sell toward ${hi.toFixed(2)}`,
       };
     }
-    if (pers < -0.4 && structure.bias === 'BELOW' && last.close > lo + edgeEps(last.close, hi - lo)) {
+    if (pers < -0.4 && structure.bias === 'BELOW' && last.close > lo + eps) {
       return {
         kind: 'CONTINUATION',
         side: 'SELL',
@@ -400,8 +448,7 @@ function rawSetupFromStructure(
 
   // Real local move mid old swing — never sit NONE while dump/rally is live
   // Still refuse tip-chase: UP impulse at/near high → already FADE; DOWN at/near low → FADE
-  const imp = recentImpulse(minutes);
-  const tipEps = edgeEps(last.close, Math.max(hi - lo, 1));
+  const tipEps = eps;
   if (imp === 'DOWN' && last.close > lo + tipEps) {
     return {
       kind: 'CONTINUATION',
@@ -422,6 +469,30 @@ function rawSetupFromStructure(
       swing_high: hi,
       swing_low: lo,
       reason: `CONTINUATION BUY · local rally impulse (not mid-NONE)`,
+    };
+  }
+
+  // Stale edge while impulse is against fade → explicit NONE reason (readable on desk)
+  if (structure.near_high && (!freshHi || imp === 'UP')) {
+    return {
+      kind: 'NONE',
+      side: null,
+      playbook: null,
+      status: 'NONE',
+      swing_high: hi,
+      swing_low: lo,
+      reason: `NONE · near H${hi.toFixed(2)} but ${!freshHi ? 'stale high' : 'rally impulse'} · no FADE SELL mid-move`,
+    };
+  }
+  if (structure.near_low && (!freshLo || imp === 'DOWN')) {
+    return {
+      kind: 'NONE',
+      side: null,
+      playbook: null,
+      status: 'NONE',
+      swing_high: hi,
+      swing_low: lo,
+      reason: `NONE · near L${lo.toFixed(2)} but ${!freshLo ? 'stale low' : 'dump impulse'} · no FADE BUY mid-move`,
     };
   }
 
