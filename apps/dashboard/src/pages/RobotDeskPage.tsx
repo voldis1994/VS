@@ -369,10 +369,10 @@ export function RobotDeskPage() {
 
   return (
     <div className="robot-fs-shell robot-board-shell" ref={shellRef}>
-      <div className="robot-desk robot-desk-fs robot-board robot-board-v2">
-        <div className="robot-board-top">
+      <div className="robot-desk robot-desk-fs robot-board robot-board-v2 robot-board-fill">
+        <header className="robot-board-top">
           <div className="robot-arena-brand">
-            <Logo size={56} wordmark />
+            <Logo size={48} wordmark />
             <div>
               <div className="robot-arena-kicker">VS · OWN BRAIN PER CLIENT</div>
               <h1 className="robot-arena-title">ROBOT DESK</h1>
@@ -406,7 +406,7 @@ export function RobotDeskPage() {
               ← BASE
             </Link>
           </div>
-        </div>
+        </header>
 
         {error && <div className="error-state">{error}</div>}
         {busy && <div className="mono" style={{ color: 'var(--cyan)' }}>Sync…</div>}
@@ -463,188 +463,192 @@ export function RobotDeskPage() {
           </div>
         )}
 
-        {sessions.length === 0 && !busy && (
-          <div className="robot-empty">
-            <div className="robot-arena-kicker">EMPTY BOARD</div>
-            <p style={{ marginBottom: 12 }}>Vēl nav robotu. Spied + DEPLOY.</p>
-            <button className="btn btn-primary" type="button" onClick={() => setShowDeploy(true)}>
-              + DEPLOY FIRST UNIT
-            </button>
-          </div>
-        )}
-
-        <div className="robot-board-grid">
-          {sessions.map((s) => {
-            const look = lookingFor(s);
-            const active = focusId === s.id;
-            const setupKind = (s.market_setup?.kind || s.entry_setup || 'NONE').toUpperCase();
-            const setupStatus = (s.market_setup?.status || '').toUpperCase();
-            return (
-              <div
-                key={s.id}
-                role="button"
-                tabIndex={0}
-                className={`robot-mini robot-mini-v2 ${look.kind} ${s.running ? 'on' : 'off'} ${active ? 'active' : ''}`}
-                onClick={() => setFocusId(s.id)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    setFocusId(s.id);
-                  }
-                }}
-              >
-                <div className="robot-mini-head">
-                  <span className="robot-mini-client">
-                    {(s.client_name || s.account_name).toUpperCase()}
-                  </span>
-                  <span className={`robot-mini-dot ${s.running ? 'on' : 'off'}`} />
-                </div>
-                <div className="robot-mini-market">
-                  {s.display_name}{' '}
-                  <span className="mono" style={{ opacity: 0.7 }}>
-                    {fmt(s.last_mid, 2)}
-                  </span>
-                </div>
-                <div className={`robot-look ${look.kind}`}>{look.text}</div>
-                <div className="robot-mini-regime mono">
-                  {setupKind}
-                  {setupStatus ? ` · ${setupStatus}` : ''}
-                  {s.market_setup?.playbook ? ` · ${s.market_setup.playbook}` : ''}
-                </div>
-                <div className="robot-mini-row">
-                  <span>SWING</span>
-                  <strong>{swingLine(s)}</strong>
-                </div>
-                <div className="robot-mini-row">
-                  <span>10s</span>
-                  <strong className={s.ohlc_10s?.market === 'MOVING' ? 'pos' : ''}>
-                    {ohlcLine(s)}
-                  </strong>
-                </div>
-                <div className="robot-mini-row">
-                  <span>UPL</span>
-                  <strong className={(s.unrealized || 0) >= 0 ? 'pos' : 'neg'}>{fmt(s.unrealized)}</strong>
-                </div>
-                <div className="robot-mini-why mono">{setupWhy(s)}</div>
-                <div className="robot-mini-actions">
-                  <span className="mono">{s.environment.toUpperCase()}</span>
-                  <div className="robot-ctrl" onClick={(e) => e.stopPropagation()}>
-                    <button
-                      type="button"
-                      className="btn btn-go"
-                      disabled={busy || s.running}
-                      onClick={() => void startOne(s)}
-                    >
-                      START
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-stop"
-                      disabled={busy || !s.running}
-                      onClick={() => void stopOne(s)}
-                    >
-                      STOP
-                    </button>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {focused && (
-          <div className="robot-story">
-            <div className="robot-story-head">
-              <div>
-                <div className="robot-arena-kicker">FOCUS CLIENT</div>
-                <div className="robot-story-title">
-                  {(focused.client_name || focused.account_name).toUpperCase()} · {focused.display_name}
-                </div>
-              </div>
-              <div className="robot-ctrl robot-ctrl-lg">
-                <button
-                  type="button"
-                  className="btn btn-go"
-                  disabled={busy || focused.running}
-                  onClick={() => void startOne(focused)}
-                >
-                  START
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-stop"
-                  disabled={busy || !focused.running}
-                  onClick={() => void stopOne(focused)}
-                >
-                  STOP
-                </button>
-              </div>
+        <section className="robot-board-body">
+          {sessions.length === 0 && !busy && (
+            <div className="robot-empty">
+              <div className="robot-arena-kicker">EMPTY BOARD</div>
+              <p style={{ marginBottom: 12 }}>Vēl nav robotu. Spied + DEPLOY.</p>
+              <button className="btn btn-primary" type="button" onClick={() => setShowDeploy(true)}>
+                + DEPLOY FIRST UNIT
+              </button>
             </div>
+          )}
 
-            <div className="robot-story-hero">
-              <div className={`robot-story-look ${lookingFor(focused).kind}`}>
-                <div className="label">TAGAD</div>
-                <div className="value">{lookingFor(focused).text}</div>
-              </div>
-              <div className="robot-story-block">
-                <div className="label">SETUP</div>
-                <div className="value">
-                  {(focused.market_setup?.kind || 'NONE').toUpperCase()}
-                  {focused.market_setup?.status ? ` · ${focused.market_setup.status}` : ''}
-                  {focused.market_setup?.side ? ` · ${focused.market_setup.side}` : ''}
-                </div>
-              </div>
-              <div className="robot-story-block">
-                <div className="label">MID / LOT</div>
-                <div className="value">
-                  {fmt(focused.last_mid, 2)} · {focused.lot_size}
-                </div>
-              </div>
-              <div className="robot-story-block">
-                <div className="label">UPL</div>
-                <div className={`value ${(focused.unrealized || 0) >= 0 ? 'pos' : 'neg'}`}>
-                  {fmt(focused.unrealized)}
-                </div>
-              </div>
-            </div>
-
-            <div className="robot-story-grid">
-              <div className="robot-story-panel">
-                <div className="robot-arena-kicker">KĀPĒC</div>
-                <p className="robot-story-reason">{setupWhy(focused)}</p>
-                <div className="robot-story-meta mono">
-                  <div>SWING · {swingLine(focused)}</div>
-                  <div>{ohlcLine(focused)}</div>
-                  <div>
-                    PLAYBOOK · {(focused.playbook || focused.market_setup?.playbook || '—').toString()}
-                  </div>
-                  <div>
-                    ENTRY · {fmt(focused.entry_price)} · SL {fmt(focused.safety_sl)}
-                  </div>
-                  <div>
-                    SCORE · IN {focused.orders_placed} / OUT {focused.exits_done ?? 0} · READS{' '}
-                    {focused.reads_ok}/{focused.reads_fail}
-                  </div>
-                  <div>ID · {focused.id}</div>
-                  {focused.error && <div className="error-state">{focused.error}</div>}
-                </div>
-              </div>
-              <div className="robot-story-panel robot-story-log">
-                <div className="robot-arena-kicker">LIVE LOG</div>
-                <div className="robot-feed">
-                  {focused.ticks.slice(0, 28).map((t, i) => (
-                    <div key={`${t.at}-${i}`} className={`robot-feed-line phase-${t.phase.toLowerCase()}`}>
-                      <span className="mono time">{new Date(t.at).toLocaleTimeString()}</span>
-                      <span className="badge phase">{t.phase}</span>
-                      <span className="detail">{t.detail}</span>
+          {sessions.length > 0 && (
+            <div className="robot-board-grid">
+              {sessions.map((s) => {
+                const look = lookingFor(s);
+                const active = focusId === s.id;
+                const setupKind = (s.market_setup?.kind || s.entry_setup || 'NONE').toUpperCase();
+                const setupStatus = (s.market_setup?.status || '').toUpperCase();
+                return (
+                  <div
+                    key={s.id}
+                    role="button"
+                    tabIndex={0}
+                    className={`robot-mini robot-mini-v2 ${look.kind} ${s.running ? 'on' : 'off'} ${active ? 'active' : ''}`}
+                    onClick={() => setFocusId(s.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setFocusId(s.id);
+                      }
+                    }}
+                  >
+                    <div className="robot-mini-head">
+                      <span className="robot-mini-client">
+                        {(s.client_name || s.account_name).toUpperCase()}
+                      </span>
+                      <span className={`robot-mini-dot ${s.running ? 'on' : 'off'}`} />
                     </div>
-                  ))}
-                  {focused.ticks.length === 0 && <div className="mono">Waiting for feed…</div>}
+                    <div className="robot-mini-market">
+                      {s.display_name}{' '}
+                      <span className="mono" style={{ opacity: 0.7 }}>
+                        {fmt(s.last_mid, 2)}
+                      </span>
+                    </div>
+                    <div className={`robot-look ${look.kind}`}>{look.text}</div>
+                    <div className="robot-mini-regime mono">
+                      {setupKind}
+                      {setupStatus ? ` · ${setupStatus}` : ''}
+                      {s.market_setup?.playbook ? ` · ${s.market_setup.playbook}` : ''}
+                    </div>
+                    <div className="robot-mini-row">
+                      <span>SWING</span>
+                      <strong>{swingLine(s)}</strong>
+                    </div>
+                    <div className="robot-mini-row">
+                      <span>10s</span>
+                      <strong className={s.ohlc_10s?.market === 'MOVING' ? 'pos' : ''}>
+                        {ohlcLine(s)}
+                      </strong>
+                    </div>
+                    <div className="robot-mini-row">
+                      <span>UPL</span>
+                      <strong className={(s.unrealized || 0) >= 0 ? 'pos' : 'neg'}>{fmt(s.unrealized)}</strong>
+                    </div>
+                    <div className="robot-mini-why mono">{setupWhy(s)}</div>
+                    <div className="robot-mini-actions">
+                      <span className="mono">{s.environment.toUpperCase()}</span>
+                      <div className="robot-ctrl" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          className="btn btn-go"
+                          disabled={busy || s.running}
+                          onClick={() => void startOne(s)}
+                        >
+                          START
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-stop"
+                          disabled={busy || !s.running}
+                          onClick={() => void stopOne(s)}
+                        >
+                          STOP
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {focused && (
+            <div className="robot-story">
+              <div className="robot-story-head">
+                <div>
+                  <div className="robot-arena-kicker">FOCUS CLIENT</div>
+                  <div className="robot-story-title">
+                    {(focused.client_name || focused.account_name).toUpperCase()} · {focused.display_name}
+                  </div>
+                </div>
+                <div className="robot-ctrl robot-ctrl-lg">
+                  <button
+                    type="button"
+                    className="btn btn-go"
+                    disabled={busy || focused.running}
+                    onClick={() => void startOne(focused)}
+                  >
+                    START
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-stop"
+                    disabled={busy || !focused.running}
+                    onClick={() => void stopOne(focused)}
+                  >
+                    STOP
+                  </button>
+                </div>
+              </div>
+
+              <div className="robot-story-hero">
+                <div className={`robot-story-look ${lookingFor(focused).kind}`}>
+                  <div className="label">TAGAD</div>
+                  <div className="value">{lookingFor(focused).text}</div>
+                </div>
+                <div className="robot-story-block">
+                  <div className="label">SETUP</div>
+                  <div className="value">
+                    {(focused.market_setup?.kind || 'NONE').toUpperCase()}
+                    {focused.market_setup?.status ? ` · ${focused.market_setup.status}` : ''}
+                    {focused.market_setup?.side ? ` · ${focused.market_setup.side}` : ''}
+                  </div>
+                </div>
+                <div className="robot-story-block">
+                  <div className="label">MID / LOT</div>
+                  <div className="value">
+                    {fmt(focused.last_mid, 2)} · {focused.lot_size}
+                  </div>
+                </div>
+                <div className="robot-story-block">
+                  <div className="label">UPL</div>
+                  <div className={`value ${(focused.unrealized || 0) >= 0 ? 'pos' : 'neg'}`}>
+                    {fmt(focused.unrealized)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="robot-story-grid">
+                <div className="robot-story-panel">
+                  <div className="robot-arena-kicker">KĀPĒC</div>
+                  <p className="robot-story-reason">{setupWhy(focused)}</p>
+                  <div className="robot-story-meta mono">
+                    <div>SWING · {swingLine(focused)}</div>
+                    <div>{ohlcLine(focused)}</div>
+                    <div>
+                      PLAYBOOK · {(focused.playbook || focused.market_setup?.playbook || '—').toString()}
+                    </div>
+                    <div>
+                      ENTRY · {fmt(focused.entry_price)} · SL {fmt(focused.safety_sl)}
+                    </div>
+                    <div>
+                      SCORE · IN {focused.orders_placed} / OUT {focused.exits_done ?? 0} · READS{' '}
+                      {focused.reads_ok}/{focused.reads_fail}
+                    </div>
+                    <div>ID · {focused.id}</div>
+                    {focused.error && <div className="error-state">{focused.error}</div>}
+                  </div>
+                </div>
+                <div className="robot-story-panel robot-story-log">
+                  <div className="robot-arena-kicker">LIVE LOG</div>
+                  <div className="robot-feed">
+                    {focused.ticks.slice(0, 40).map((t, i) => (
+                      <div key={`${t.at}-${i}`} className={`robot-feed-line phase-${t.phase.toLowerCase()}`}>
+                        <span className="mono time">{new Date(t.at).toLocaleTimeString()}</span>
+                        <span className="badge phase">{t.phase}</span>
+                        <span className="detail">{t.detail}</span>
+                      </div>
+                    ))}
+                    {focused.ticks.length === 0 && <div className="mono">Waiting for feed…</div>}
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
+        </section>
       </div>
     </div>
   );
