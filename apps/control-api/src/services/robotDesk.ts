@@ -1381,12 +1381,12 @@ async function robotCycle(s: Internal) {
 
     let entry =
       setup.kind !== 'NONE' && setup.status === 'ARMED'
-        ? decideEntryFromSetup(setup, bar)
+        ? decideEntryFromSetup(setup, bar, s.last_minute_candles)
         : null;
 
-    // Mid-swing NONE was starving every real 10s V-leg — trade the move
+    // Mid-swing NONE was starving every real 10s V-leg — trade the move (never against dump/rally)
     if (!entry && (setup.kind === 'NONE' || setup.status === 'NONE')) {
-      entry = decideEntryFromTenSecMove(st, bar);
+      entry = decideEntryFromTenSecMove(st, bar, s.last_minute_candles);
       if (!entry) {
         pushTick(s, {
           phase: 'DECIDE',
