@@ -22,7 +22,12 @@ import {
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
-import { decideEntryFrom10sRegime, decideMoveEntry, decidePriceMove } from './entryFromRegime.js';
+import {
+  decideMoveEntry,
+  decidePriceMove,
+  decideTickMove,
+  labelPlaybookForMove,
+} from './entryFromRegime.js';
 import {
   playbookFromRegime,
   type Playbook,
@@ -154,6 +159,8 @@ type Internal = RobotSession & {
   last_zones_fetch_ms: number;
   /** Debounce Capital order spam between attempts */
   last_entry_attempt_ms: number;
+  /** Last flat mid — tick MOVE for every regime */
+  last_flat_mid: number | null;
 };
 
 const ZONE_REFRESH_MS = 45_000;
@@ -236,6 +243,7 @@ function publicSession(s: Internal): RobotSession {
     zoneBook: _zoneBook,
     last_zones_fetch_ms: _zonesAt,
     last_entry_attempt_ms: _entryAt,
+    last_flat_mid: _flatMid,
     ...rest
   } = s;
   const z = s.zoneBook;
@@ -1275,49 +1283,16 @@ async function robotCycle(s: Internal) {
 
     const led = regimeForEntry(s.regime, s.zoneBook);
     const entryRegime = led.regime;
-    const priorBars = s.closedBars.filter(
-      (b) =>
-        !(
-          bar &&
-          Math.abs(b.open - bar.open) < 1e-9 &&
-          Math.abs(b.close - bar.close) < 1e-9 &&
-          Math.abs(b.high - bar.high) < 1e-9
-        )
-    );
-    const ageBars = Math.max(s.playbook_age_bars, s.regime_age_bars, 1);
 
-    // 1) Playbook on closed bar (no zone gate)
-    if (bar) {
-      const sig = decideEntryFrom10sRegime(bar, entryRegime, {
-        regimeAgeBars: ageBars,
-        playbookAgeBars: ageBars,
-        previousRegime: s.previous_regime,
-        priorBars,
-        zones: s.zoneBook,
-      });
-      if (sig) {
-        direction = sig.direction;
-        setupType = sig.setup;
-        reason = `${sig.reason} · ${led.reason}`;
-        entryPlaybook = sig.playbook;
+    // MOVE-FIRST for ALL regimes — direction from price, regime only labels playbook
+    const moveBar = forming || bar;
+    if (moveBar) {
+      const move = decideMoveEntry(moveBar);
+      if (move) {
+        direction = move.direction;
+        reason = `${move.reason} · ${led.reason}`;
       }
     }
-
-    // 2) MOVE on closed or forming 10s body — do not wait for "perfect" close
-    if (!direction) {
-      const moveBar = forming || bar;
-      if (moveBar) {
-        const move = decideMoveEntry(moveBar);
-        if (move) {
-          direction = move.direction;
-          setupType = move.setup;
-          reason = `${move.reason} · ${led.reason}`;
-          entryPlaybook = move.playbook;
-        }
-      }
-    }
-
-    // 3) Live mid vs recent H/L — opens during QUIET forming while dump already printed
     if (!direction && quote.mid != null) {
       const recent = [...s.closedBars.slice(-8), bar, forming].filter(Boolean) as TenSecBar[];
       const refHigh = recent.length
@@ -1333,24 +1308,34 @@ async function robotCycle(s: Internal) {
       const midMove = decidePriceMove(quote.mid, refHigh, refLow);
       if (midMove) {
         direction = midMove.direction;
-        setupType = midMove.setup;
         reason = `${midMove.reason} · ${led.reason}`;
-        entryPlaybook = midMove.playbook;
       }
     }
+    if (!direction && quote.mid != null) {
+      const tick = decideTickMove(quote.mid, s.last_flat_mid);
+      if (tick) {
+        direction = tick.direction;
+        reason = `${tick.reason} · ${led.reason}`;
+      }
+    }
+    if (quote.mid != null) s.last_flat_mid = quote.mid;
 
     if (direction) {
+      const labeled = labelPlaybookForMove(direction, entryRegime);
+      setupType = labeled.setup;
+      entryPlaybook = labeled.playbook;
       s.playbook = entryPlaybook;
       s.entry_setup = setupType;
-      // Debounce only — never "late move" / stale quote / zone blocks
+      reason = `${reason} · ${entryPlaybook}/${setupType}`;
+
       const sinceAttempt = Date.now() - (s.last_entry_attempt_ms || 0);
-      if (sinceAttempt < 8_000) {
+      if (sinceAttempt < 5_000) {
         pushTick(s, {
           phase: 'DECIDE',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${ohlcLine} · ${reason} · order debounce ${Math.ceil((8_000 - sinceAttempt) / 1000)}s`,
+          detail: `${ohlcLine} · ${reason} · order debounce ${Math.ceil((5_000 - sinceAttempt) / 1000)}s`,
         });
         return;
       }
@@ -1511,6 +1496,7 @@ export async function startRobotSession(input: {
     zoneBook: emptyZones('awaiting minute history'),
     last_zones_fetch_ms: 0,
     last_entry_attempt_ms: 0,
+    last_flat_mid: null,
 
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };

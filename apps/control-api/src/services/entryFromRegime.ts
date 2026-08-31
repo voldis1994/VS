@@ -75,13 +75,13 @@ export function decideMoveEntry(bar: TenSecBar): RegimeEntry | null {
 
 /**
  * Live mid vs recent reference — open even while 10s bar is still forming / "QUIET".
- * thr ~0.015% of price (~0.7pt Gold).
+ * thr ~0.01% of price (~0.45pt Gold) — any real print, every regime.
  */
 export function decidePriceMove(
   mid: number,
   refHigh: number | null | undefined,
   refLow: number | null | undefined,
-  thr = 0.00015
+  thr = 0.0001
 ): RegimeEntry | null {
   if (!Number.isFinite(mid)) return null;
   if (refHigh != null && Number.isFinite(refHigh) && refHigh > 0) {
@@ -107,6 +107,55 @@ export function decidePriceMove(
     }
   }
   return null;
+}
+
+/** Tick-to-tick mid change — works for EVERY regime, not one special case. */
+export function decideTickMove(
+  mid: number,
+  prevMid: number | null | undefined,
+  thr = 0.0001
+): RegimeEntry | null {
+  if (prevMid == null || !Number.isFinite(prevMid) || !Number.isFinite(mid) || prevMid === 0) {
+    return null;
+  }
+  const rel = (mid - prevMid) / Math.abs(prevMid);
+  if (rel <= -thr) {
+    return {
+      direction: 'SELL',
+      setup: 'BREAKOUT',
+      playbook: 'SCALP',
+      reason: `MOVE · tick dump ${(rel * 100).toFixed(3)}%`,
+    };
+  }
+  if (rel >= thr) {
+    return {
+      direction: 'BUY',
+      setup: 'BREAKOUT',
+      playbook: 'SCALP',
+      reason: `MOVE · tick rally ${(rel * 100).toFixed(3)}%`,
+    };
+  }
+  return null;
+}
+
+/** Label playbook from regime after direction is known (never blocks entry). */
+export function labelPlaybookForMove(
+  direction: 'BUY' | 'SELL',
+  regime?: string | null
+): { playbook: TradePlaybook; setup: RegimeEntry['setup'] } {
+  const book = playbookFromRegime(regime);
+  if (book === 'LONG') {
+    return { playbook: 'LONG', setup: 'CONTINUATION' };
+  }
+  if (book === 'FADE') {
+    return { playbook: 'FADE', setup: 'FADE' };
+  }
+  if (book === 'SCALP') {
+    const r = normalizeRegime(regime);
+    if (r === 'REVERSAL_CANDIDATE') return { playbook: 'SCALP', setup: 'REVERSAL' };
+    return { playbook: 'SCALP', setup: 'BREAKOUT' };
+  }
+  return { playbook: 'SCALP', setup: 'BREAKOUT' };
 }
 
 /**

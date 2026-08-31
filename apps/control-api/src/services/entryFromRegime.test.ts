@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { decideEntryFrom10sRegime, decideMoveEntry, decidePriceMove } from './entryFromRegime.js';
+import {
+  decideEntryFrom10sRegime,
+  decideMoveEntry,
+  decidePriceMove,
+  decideTickMove,
+  labelPlaybookForMove,
+} from './entryFromRegime.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 
 function bar(open: number, close: number): TenSecBar {
@@ -66,6 +72,18 @@ describe('10s playbook suitable entry', () => {
     expect(decidePriceMove(4454, 4460, 4448)?.direction).toBe('SELL');
     expect(decidePriceMove(4462, 4460, 4448)?.direction).toBe('BUY');
     expect(decidePriceMove(4455, 4455.2, 4454.8)).toBeNull();
+  });
+
+  it('tick move works for every regime context', () => {
+    expect(decideTickMove(4454, 4455)?.direction).toBe('SELL');
+    expect(decideTickMove(4456, 4455)?.direction).toBe('BUY');
+    expect(decideTickMove(4455, 4455)).toBeNull();
+  });
+
+  it('labelPlaybookForMove tags LONG/SCALP/FADE from regime without blocking', () => {
+    expect(labelPlaybookForMove('SELL', 'TREND_DOWN').playbook).toBe('LONG');
+    expect(labelPlaybookForMove('SELL', 'FAILED_BREAKOUT_DOWN').playbook).toBe('SCALP');
+    expect(labelPlaybookForMove('BUY', 'RANGE').playbook).toBe('FADE');
   });
 
   it('FAILED_BREAKOUT_DOWN follows dump as SCALP SELL', () => {
