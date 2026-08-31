@@ -25,6 +25,11 @@ import {
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
 import { decideEntryFrom10sRegime } from './entryFromRegime.js';
 import {
+  playbookFromRegime,
+  type Playbook,
+  type TradePlaybook,
+} from './playbooks.js';
+import {
   allowEntryFromFeeds,
   multiFeedOwnsOhlc,
   pickOhlcMid,
@@ -78,6 +83,8 @@ export type RobotSession = {
   unrealized: number | null;
   mode: 'FLAT' | 'MANAGE' | 'ENTRY';
   regime: RegimeName;
+  playbook: Playbook | null;
+  entry_setup: string | null;
   orders_placed: number;
   exits_done: number;
   reads_ok: number;
@@ -124,6 +131,10 @@ type Internal = RobotSession & {
   closedBars: TenSecBar[];
   last_multi_feed_ms: number;
   multiFeed: MultiFeedPrice | null;
+  previous_regime: RegimeName;
+  regime_age_bars: number;
+  playbook_age_bars: number;
+  playbook_watch: Playbook;
 };
 
 const ACTIVE_CADENCE_MS = 2_000;
@@ -196,6 +207,10 @@ function publicSession(s: Internal): RobotSession {
     closedBars: _bars,
     last_multi_feed_ms: _mf,
     multiFeed: _multi,
+    previous_regime: _prevReg,
+    regime_age_bars: _regAge,
+    playbook_age_bars: _pbAge,
+    playbook_watch: _pbWatch,
     ...rest
   } = s;
   return {
@@ -227,7 +242,7 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
     feeds,
     ohlc: ohlcLine,
     regime: s.regime || 'UNKNOWN',
-    setup: null,
+    setup: s.entry_setup || (s.playbook ? String(s.playbook) : null),
     action,
   };
 }
@@ -261,8 +276,33 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
       : [];
   if (incoming.length) {
     const snap = observeClosedBars(s.epic, incoming, s.display_name, s.id);
-    s.regime = snap.current;
+    const next = snap.current;
+    const nextBook = playbookFromRegime(next);
+    if (next === s.regime) {
+      s.regime_age_bars += Math.max(1, incoming.length);
+    } else {
+      s.previous_regime = s.regime;
+      s.regime = next;
+      s.regime_age_bars = 1;
+    }
+    if (nextBook === s.playbook_watch) {
+      s.playbook_age_bars += Math.max(1, incoming.length);
+    } else {
+      s.playbook_watch = nextBook;
+      s.playbook_age_bars = 1;
+    }
     if (bars?.length) s.closedBars = bars.slice(-24);
+    else if (s.ohlcState.last_closed) {
+      const last = s.ohlcState.last_closed;
+      const prev = s.closedBars[s.closedBars.length - 1];
+      const same =
+        prev &&
+        Math.abs(prev.open - last.open) < 1e-9 &&
+        Math.abs(prev.close - last.close) < 1e-9;
+      if (!same) {
+        s.closedBars = [...s.closedBars, last].slice(-24);
+      }
+    }
   }
 }
 
@@ -277,6 +317,8 @@ function clearTradeState(s: Internal) {
   s.peak_retention = null;
   s.unrealized = null;
   s.safety_sl = null;
+  s.playbook = null;
+  s.entry_setup = null;
   s.mode = 'FLAT';
 }
 
@@ -559,7 +601,7 @@ async function exitTrade(
       market: s.epic,
       display_name: s.display_name,
       side: s.open_side,
-      trade_type: mapTradeType(s.open_side, null, s.regime),
+      trade_type: mapTradeType(s.open_side, s.entry_setup, s.regime),
       lot_size: s.lot_size,
       reason,
     });
@@ -587,7 +629,8 @@ async function enterTrade(
   direction: 'BUY' | 'SELL',
   quote: CapitalMarketQuote,
   reason: string,
-  setupType?: string | null
+  setupType?: string | null,
+  playbook?: TradePlaybook | null
 ) {
   // HARD RULE: never entry while any trade open on this epic
   const listed = await listCapitalOpenPositions(session);
@@ -598,6 +641,10 @@ async function enterTrade(
       s.deal_id = existing.deal_id;
       s.entry_price = existing.open_level ?? quote.mid;
       s.entry_at = s.entry_at || new Date().toISOString();
+      if (!s.playbook || s.playbook === 'WAIT') {
+        s.playbook = playbookFromRegime(s.regime);
+        if (s.playbook === 'WAIT') s.playbook = 'SCALP';
+      }
       s.mode = 'MANAGE';
       if (existing.stop_level != null) s.safety_sl = existing.stop_level;
       pushTick(s, {
@@ -760,6 +807,9 @@ async function enterTrade(
 
   s.orders_placed += 1;
   s.open_side = direction;
+  s.playbook = playbook || playbookFromRegime(s.regime);
+  if (s.playbook === 'WAIT') s.playbook = 'SCALP';
+  s.entry_setup = setupType || null;
   s.mode = 'MANAGE';
   s.last_deal_reference = result.deal_reference || null;
   s.entry_price = mid;
@@ -986,6 +1036,10 @@ async function robotCycle(s: Internal) {
         s.deal_id = brokerOpen.deal_id;
         if (s.entry_price == null) s.entry_price = brokerOpen.open_level ?? quote.mid;
         if (!s.entry_at) s.entry_at = new Date().toISOString();
+        if (!s.playbook || s.playbook === 'WAIT') {
+          s.playbook = playbookFromRegime(s.regime);
+          if (s.playbook === 'WAIT') s.playbook = 'SCALP';
+        }
         s.mode = 'MANAGE';
         if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
       } else if (s.open_side) {
@@ -1051,7 +1105,7 @@ async function robotCycle(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `ONE TRADE · manage ${s.open_side} · ${s.regime} · UPL ${
+        detail: `ONE TRADE · manage ${s.open_side} · ${s.playbook || '?'} · ${s.regime} · UPL ${
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
@@ -1138,13 +1192,28 @@ async function robotCycle(s: Internal) {
     let direction: 'BUY' | 'SELL' | null = null;
     let reason = '';
     let setupType: string | null = null;
+    let entryPlaybook: TradePlaybook | null = null;
 
     if (s.ohlcState.just_closed && bar) {
-      const sig = decideEntryFrom10sRegime(bar, s.regime);
+      const priorBars = s.closedBars.filter(
+        (b) =>
+          !(
+            Math.abs(b.open - bar.open) < 1e-9 &&
+            Math.abs(b.close - bar.close) < 1e-9 &&
+            Math.abs(b.high - bar.high) < 1e-9
+          )
+      );
+      const sig = decideEntryFrom10sRegime(bar, s.regime, {
+        regimeAgeBars: s.regime_age_bars,
+        playbookAgeBars: s.playbook_age_bars,
+        previousRegime: s.previous_regime,
+        priorBars,
+      });
       if (sig) {
         direction = sig.direction;
         setupType = sig.setup;
         reason = sig.reason;
+        entryPlaybook = sig.playbook;
       } else {
         pushTick(s, {
           phase: 'DECIDE',
@@ -1203,7 +1272,7 @@ async function robotCycle(s: Internal) {
     }
 
     if (!direction) return;
-    await enterTrade(opened.session, s, direction, quote, reason, setupType);
+    await enterTrade(opened.session, s, direction, quote, reason, setupType, entryPlaybook);
   } catch (err) {
     s.reads_fail += 1;
     const detail = err instanceof Error ? err.message : String(err);
@@ -1332,6 +1401,13 @@ export async function startRobotSession(input: {
     feed_sender_count: 0,
     feed_agreement: null,
     regime: 'UNKNOWN',
+    playbook: null,
+    entry_setup: null,
+    previous_regime: 'UNKNOWN',
+    regime_age_bars: 0,
+    playbook_age_bars: 0,
+    playbook_watch: 'WAIT',
+
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
 
@@ -1387,6 +1463,11 @@ export async function attachManageOnlyRobot(input: {
     existing.entry_enabled = false;
     existing.trading_enabled = true;
     existing.open_side = input.side;
+    existing.playbook =
+      (input as { playbook?: TradePlaybook | null }).playbook ||
+      playbookFromRegime(input.regime) ||
+      'SCALP';
+    if (input.setup_type) existing.entry_setup = String(input.setup_type);
     existing.mode = 'MANAGE';
     if (existing.entry_price == null) existing.entry_price = input.entry_price;
     if (!existing.entry_at) existing.entry_at = new Date().toISOString();
@@ -1416,6 +1497,9 @@ export async function attachManageOnlyRobot(input: {
   const internal = sessions.get(session.id);
   if (internal) {
     internal.open_side = input.side;
+    internal.playbook = playbookFromRegime(input.regime);
+    if (internal.playbook === 'WAIT') internal.playbook = 'SCALP';
+    if (input.setup_type) internal.entry_setup = String(input.setup_type);
     internal.entry_price = input.entry_price;
     internal.entry_at = new Date().toISOString();
     internal.mode = 'MANAGE';

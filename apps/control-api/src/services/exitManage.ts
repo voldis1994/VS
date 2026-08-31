@@ -1,4 +1,11 @@
-/** Live Capital exit manager — per-robot, best-outcome + thesis failure from regime. */
+/** Live Capital exit — playbook-specific Best Outcome + thesis. */
+import {
+  PLAYBOOK_EXIT,
+  playbookFromRegime,
+  thesisFailureForPlaybook,
+  type Playbook,
+  type TradePlaybook,
+} from './playbooks.js';
 
 export type ExitSide = 'BUY' | 'SELL';
 
@@ -10,50 +17,36 @@ export type ExitSnapshot = {
   mae: number;
   peak_retention: number | null;
   regime?: string | null;
+  /** Locked at entry — drives exit policy */
+  playbook?: Playbook | null;
 };
 
-/** Ignore ThesisFailure for this long after entry — stop 10s flip chop. */
+/** @deprecated use playbook thesisMinHold — kept for tests importing name */
 export const THESIS_MIN_HOLD_MS = 60_000;
 
 export function favorableMove(side: ExitSide, entry: number, mid: number): number {
   return side === 'BUY' ? mid - entry : entry - mid;
 }
 
-/** Opposite regime vs open side — original PositionManager thesis failure. */
+/** Legacy helper — SCALP-style list; prefer thesisFailureForPlaybook. */
 export function thesisFailureReason(
   side: ExitSide,
   regime?: string | null
 ): string | null {
-  const r = String(regime || '')
-    .trim()
-    .toUpperCase();
-  if (!r || r === 'UNKNOWN') return null;
-  if (side === 'BUY') {
-    if (
-      r === 'TREND_DOWN' ||
-      r === 'BREAKOUT_DOWN' ||
-      r === 'PULLBACK_DOWNTREND' ||
-      r === 'FAILED_BREAKOUT_UP'
-    ) {
-      return `ThesisFailure · BUY vs ${r}`;
-    }
-  } else if (
-    r === 'TREND_UP' ||
-    r === 'BREAKOUT_UP' ||
-    r === 'PULLBACK_UPTREND' ||
-    r === 'FAILED_BREAKOUT_DOWN'
-  ) {
-    return `ThesisFailure · SELL vs ${r}`;
-  }
-  return null;
+  return thesisFailureForPlaybook(side, regime, 'SCALP');
+}
+
+function resolvePlaybook(s: ExitSnapshot): TradePlaybook {
+  const p = s.playbook;
+  if (p === 'LONG' || p === 'SCALP' || p === 'FADE') return p;
+  const fromRegime = playbookFromRegime(s.regime);
+  if (fromRegime === 'WAIT') return 'SCALP';
+  return fromRegime;
 }
 
 /**
- * Manage exit — give the trade room to develop (~10s scalp with breathing room).
- * Tuned less aggressive vs Aug-13 defaults: higher MFE floor, looser peak/harvest,
- * ThesisFailure only after THESIS_MIN_HOLD_MS.
- * Broker SAFETY SL is the hard cushion; this is best-outcome + thesis management.
- * Isolated: caller must pass ONE robot's snapshot (never mix clients).
+ * Manage exit divided by playbook (LONG / SCALP / FADE).
+ * Broker SAFETY SL remains the hard cushion outside this function.
  */
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
@@ -61,53 +54,60 @@ export function decideBestOutcomeExit(
 ): { exit: boolean; reason: string } {
   if (!s.open_side || s.entry_price == null) return { exit: false, reason: '' };
 
+  const book = resolvePlaybook(s);
+  const p = PLAYBOOK_EXIT[book];
   const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
 
-  const thesis = thesisFailureReason(s.open_side, s.regime);
-  if (thesis && heldMs >= THESIS_MIN_HOLD_MS) {
-    return { exit: true, reason: thesis };
+  const thesis = thesisFailureForPlaybook(s.open_side, s.regime, book);
+  if (thesis && heldMs >= p.thesisMinHoldMs) {
+    return { exit: true, reason: `${thesis} · ${book}` };
   }
 
   const entry = s.entry_price;
   const fav = favorableMove(s.open_side, entry, mid);
   const absEntry = Math.max(Math.abs(entry), 1e-9);
-  // Unchanged target / soft SL — problem was early peak/harvest, not TP
-  const tp = Math.max(absEntry * 0.0035, 0.35);
-  const sl = Math.max(absEntry * 0.0022, 0.22);
-  // Was 0.12% — micro ±0.09 chop armed PeakProtect too early
-  const mfeFloor = Math.max(absEntry * 0.0018, 0.18);
+  const tp = Math.max(absEntry * p.tpPct, p.tpFloor);
+  const sl = Math.max(absEntry * p.slPct, p.slFloor);
+  const mfeFloor = Math.max(absEntry * p.mfeFloorPct, p.mfeFloorAbs);
 
   if (fav <= -sl) {
-    return { exit: true, reason: `HardInvalidation · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}` };
-  }
-
-  // Was <0.3 — allow ~50% giveback of peak before lock
-  if (s.mfe >= mfeFloor && s.peak_retention != null && s.peak_retention < 0.5) {
     return {
       exit: true,
-      reason: `PeakProtection · retention ${(s.peak_retention * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} → lock best`,
+      reason: `HardInvalidation · ${book} · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}`,
+    };
+  }
+
+  if (s.mfe >= mfeFloor && s.peak_retention != null && s.peak_retention < p.peakRet) {
+    return {
+      exit: true,
+      reason: `PeakProtection · ${book} · retention ${(s.peak_retention * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)}`,
     };
   }
 
   if (fav >= tp) {
     return {
       exit: true,
-      reason: `Target / best outcome · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)}`,
+      reason: `Target · ${book} · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)}`,
     };
   }
 
-  // Was <0.4 — harvest only after more of peak is given back
-  if (s.mfe >= mfeFloor && fav > 0 && s.peak_retention != null && s.peak_retention < 0.55) {
+  if (
+    s.mfe >= mfeFloor &&
+    fav > 0 &&
+    s.peak_retention != null &&
+    s.peak_retention < p.harvestRet &&
+    s.peak_retention >= p.peakRet
+  ) {
     return {
       exit: true,
-      reason: `BestOutcome harvest · UPL ${fav.toFixed(5)} after MFE ${s.mfe.toFixed(5)} (ret ${(s.peak_retention * 100).toFixed(0)}%)`,
+      reason: `BestOutcome harvest · ${book} · UPL ${fav.toFixed(5)} after MFE ${s.mfe.toFixed(5)} (ret ${(s.peak_retention * 100).toFixed(0)}%)`,
     };
   }
 
-  if (heldMs > 480_000 && fav >= 0 && s.mfe >= mfeFloor * 0.5) {
+  if (heldMs > p.timeDecayMs && fav >= 0 && s.mfe >= mfeFloor * 0.5) {
     return {
       exit: true,
-      reason: `TimeDecay · held ${Math.round(heldMs / 1000)}s · realize non-negative best UPL ${fav.toFixed(5)}`,
+      reason: `TimeDecay · ${book} · held ${Math.round(heldMs / 1000)}s · UPL ${fav.toFixed(5)}`,
     };
   }
 
