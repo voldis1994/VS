@@ -114,12 +114,10 @@ type Book = {
 const MAX_BARS = 24;
 /** Need this many agreeing 10s bars (~30s) before a normal regime flip */
 const REGIME_CONFIRM_BARS = 3;
-/** Breakouts / failed breaks / hard reversals confirm faster */
+/** Only true expansion breaks confirm faster — NOT failed-break (that is minute-zone only) */
 const FAST_REGIMES = new Set<RegimeName>([
   'BREAKOUT_UP',
   'BREAKOUT_DOWN',
-  'FAILED_BREAKOUT_UP',
-  'FAILED_BREAKOUT_DOWN',
   'REVERSAL_CANDIDATE',
 ]);
 const books = new Map<string, Book>();
@@ -183,8 +181,11 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'RANGE'
     (prev === 'TREND_UP' && lastVel < -0.0012 && lastRange > avgRange && !breakoutDown) ||
     (prev === 'TREND_DOWN' && lastVel > 0.0012 && lastRange > avgRange && !breakoutUp);
 
-  if (prev === 'BREAKOUT_UP' && inRange && lastVel < 0) return 'FAILED_BREAKOUT_UP';
-  if (prev === 'BREAKOUT_DOWN' && inRange && lastVel > 0) return 'FAILED_BREAKOUT_DOWN';
+  // FAILED_BREAKOUT is NOT classified from 10s micro H/L (that was 1–3 bar fake).
+  // Real failed breaks come from structureZones (multi-minute base + probe).
+  // After a 10s "breakout" fades back inside → RANGE (wait for minute zones).
+  if (prev === 'BREAKOUT_UP' && inRange && lastVel < 0) return 'RANGE';
+  if (prev === 'BREAKOUT_DOWN' && inRange && lastVel > 0) return 'RANGE';
   if (compressed && inRange) return 'COMPRESSION';
   if (expanding && breakoutUp && (trendingUp || lastVel > 0)) return 'BREAKOUT_UP';
   if (expanding && breakoutDown && (trendingDown || lastVel < 0)) return 'BREAKOUT_DOWN';

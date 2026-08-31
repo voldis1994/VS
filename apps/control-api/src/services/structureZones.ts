@@ -14,6 +14,8 @@ export type StructureHint =
   | 'TREND_DOWN'
   | 'BREAKOUT_UP'
   | 'BREAKOUT_DOWN'
+  | 'FAILED_BREAKOUT_UP'
+  | 'FAILED_BREAKOUT_DOWN'
   | 'UNKNOWN';
 
 export type MarketZoneBook = {
@@ -32,6 +34,9 @@ export type MarketZoneBook = {
 };
 
 const MIN_BARS = 12;
+/** Minute bars after a stable base that must prove break-then-fail (not 3×10s). */
+const FAILED_BREAK_PROBE_BARS = 6;
+const FAILED_BREAK_MIN_TOTAL = MIN_BARS + FAILED_BREAK_PROBE_BARS;
 
 function mean(xs: number[]): number {
   if (!xs.length) return 0;
@@ -56,8 +61,44 @@ export function emptyZones(detail = 'zones not seeded'): MarketZoneBook {
 }
 
 /**
+ * Failed breakout from MULTI-MINUTE structure only.
+ * Needs a stable base range (≥12m) then ≥6m probe that broke outside and closed back inside.
+ * Not "3×10s wick back inside a micro H/L".
+ */
+export function detectFailedBreakFromMinutes(
+  candles: CapitalPriceCandle[]
+): 'FAILED_BREAKOUT_UP' | 'FAILED_BREAKOUT_DOWN' | null {
+  if (candles.length < FAILED_BREAK_MIN_TOTAL) return null;
+
+  const base = candles.slice(0, -FAILED_BREAK_PROBE_BARS);
+  const probe = candles.slice(-FAILED_BREAK_PROBE_BARS);
+  if (base.length < MIN_BARS || probe.length < FAILED_BREAK_PROBE_BARS) return null;
+
+  const hi = Math.max(...base.map((c) => c.high));
+  const lo = Math.min(...base.map((c) => c.low));
+  const last = probe[probe.length - 1]!;
+  const backInside = last.close <= hi && last.close >= lo;
+  if (!backInside) return null;
+
+  let brokeAbove = false;
+  let brokeBelow = false;
+  for (const c of probe.slice(0, -1)) {
+    if (c.close > hi) brokeAbove = true;
+    if (c.close < lo) brokeBelow = true;
+  }
+
+  const lastBody = last.close - last.open;
+  // Fail-up: poked above multi-minute H, last minute back inside and red
+  if (brokeAbove && !brokeBelow && lastBody < 0) return 'FAILED_BREAKOUT_UP';
+  // Fail-down: poked below multi-minute L, last minute back inside and green
+  if (brokeBelow && !brokeAbove && lastBody > 0) return 'FAILED_BREAKOUT_DOWN';
+  return null;
+}
+
+/**
  * Build structure zones from Capital MINUTE candles + current mid.
  * Prior window (all but last) defines the range; last bar tests breakout.
+ * Failed breakout requires a multi-minute probe — never 10s micro noise.
  */
 export function buildZonesFromMinutes(
   candles: CapitalPriceCandle[],
@@ -69,8 +110,14 @@ export function buildZonesFromMinutes(
 
   const prior = candles.slice(0, -1);
   const last = candles[candles.length - 1]!;
-  const hi = Math.max(...prior.map((c) => c.high));
-  const lo = Math.min(...prior.map((c) => c.low));
+  const failed = detectFailedBreakFromMinutes(candles);
+  // On failed break, H/L = stable base (exclude probe) so "inside" is the real zone
+  const rangeBars =
+    failed && candles.length >= FAILED_BREAK_MIN_TOTAL
+      ? candles.slice(0, -FAILED_BREAK_PROBE_BARS)
+      : prior;
+  const hi = Math.max(...rangeBars.map((c) => c.high));
+  const lo = Math.min(...rangeBars.map((c) => c.low));
   const mid = (hi + lo) / 2;
   const span = Math.max(hi - lo, Math.abs(mid) * 1e-9);
   const px =
@@ -95,8 +142,10 @@ export function buildZonesFromMinutes(
   const compressed = lastRange < avgRange * 0.65 && span / Math.max(Math.abs(mid), 1) < 0.004;
 
   let structure: StructureHint = 'UNKNOWN';
-  // Breakout = outside prior multi-minute H/L with persistence — not one stray wick
-  if (last.close > hi && persistence > 0.25 && last.close - last.open > 0) {
+  if (failed) {
+    structure = failed;
+  } else if (last.close > hi && persistence > 0.25 && last.close - last.open > 0) {
+    // Breakout = outside prior multi-minute H/L with persistence — not one stray wick
     structure = 'BREAKOUT_UP';
   } else if (last.close < lo && persistence < -0.25 && last.close - last.open < 0) {
     structure = 'BREAKOUT_DOWN';
@@ -148,12 +197,30 @@ export function regimeForEntry(
   if (!zones.ready) {
     return { regime: r, led: false, reason: `10s ${r} · zones not ready` };
   }
-  // RANGE / COMPRESSION can lag a live minute trend — follow zones
-  const lagging = r === 'RANGE' || r === 'COMPRESSION';
+  // RANGE / COMPRESSION / micro FAILED labels lag real minute structure — follow zones
+  const lagging =
+    r === 'RANGE' ||
+    r === 'COMPRESSION' ||
+    r === 'FAILED_BREAKOUT_UP' ||
+    r === 'FAILED_BREAKOUT_DOWN';
   if (!lagging) {
     return { regime: r, led: false, reason: `10s ${r}` };
   }
   const s = zones.structure;
+  if (s === 'FAILED_BREAKOUT_UP') {
+    return {
+      regime: 'FAILED_BREAKOUT_UP',
+      led: true,
+      reason: `zone-led FAILED_BREAKOUT_UP (1m×${zones.bar_count}, not 10s micro)`,
+    };
+  }
+  if (s === 'FAILED_BREAKOUT_DOWN') {
+    return {
+      regime: 'FAILED_BREAKOUT_DOWN',
+      led: true,
+      reason: `zone-led FAILED_BREAKOUT_DOWN (1m×${zones.bar_count}, not 10s micro)`,
+    };
+  }
   if (s === 'BREAKOUT_UP') {
     return { regime: 'BREAKOUT_UP', led: true, reason: `zone-led BREAKOUT_UP (10s was ${r})` };
   }
@@ -165,6 +232,10 @@ export function regimeForEntry(
   }
   if (s === 'TREND_DOWN') {
     return { regime: 'TREND_DOWN', led: true, reason: `zone-led TREND_DOWN (10s was ${r})` };
+  }
+  // 10s said failed-break but minutes disagree → do not keep the fake label
+  if (r === 'FAILED_BREAKOUT_UP' || r === 'FAILED_BREAKOUT_DOWN') {
+    return { regime: 'RANGE', led: true, reason: `drop fake 10s ${r} · minute structure ${s}` };
   }
   return { regime: r, led: false, reason: `10s ${r} · structure ${s}` };
 }
@@ -198,6 +269,23 @@ export function allowedSidesFromZones(zones: MarketZoneBook): {
   }
   if (s === 'BREAKOUT_DOWN') {
     return { buy: false, sell: true, playbook: 'SCALP', reason: `zones BREAKOUT_DOWN → SELL only` };
+  }
+  // Real failed break = fade back into multi-minute zone (not 10s micro fail)
+  if (s === 'FAILED_BREAKOUT_UP') {
+    return {
+      buy: false,
+      sell: true,
+      playbook: 'FADE',
+      reason: `zones FAILED_BREAKOUT_UP (1m×${zones.bar_count}) → FADE SELL`,
+    };
+  }
+  if (s === 'FAILED_BREAKOUT_DOWN') {
+    return {
+      buy: true,
+      sell: false,
+      playbook: 'FADE',
+      reason: `zones FAILED_BREAKOUT_DOWN (1m×${zones.bar_count}) → FADE BUY`,
+    };
   }
   if (s === 'TREND_UP') {
     return { buy: true, sell: false, playbook: 'LONG', reason: `zones TREND_UP → BUY only` };
@@ -297,11 +385,12 @@ export function regimeConfirmedByZones(
   }
 
   if (r === 'FAILED_BREAKOUT_UP' || r === 'FAILED_BREAKOUT_DOWN') {
-    // Failed break: price back inside prior range
-    if (zones.bias === 'INSIDE' || s === 'RANGE') {
-      return { ok: true, reason: `OK · ${r} back inside zones` };
-    }
-    return { ok: false, reason: `BLOCK · ${r} but still outside (${s})` };
+    // 10s micro "fail" is not enough — minutes must show real multi-bar fail
+    if (s === r) return { ok: true, reason: `OK · minute ${s}` };
+    return {
+      ok: false,
+      reason: `BLOCK · 10s ${r} without minute failed-break (structure ${s})`,
+    };
   }
 
   return { ok: false, reason: `BLOCK · unhandled ${r}` };

@@ -342,9 +342,9 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     active_regimes: activeRegimes,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: '1m×N zones → side → closed 10s MOVE → ORDER (90s cooldown)',
+    chain: '1m×N zones → side (incl. real failed-break) → closed 10s MOVE → ORDER',
     note:
-      'Zones from ≥12 minute bars (not one candle). Entry only on closed 10s impulse matching zone side. 90s post-close cooldown + 3m opposite-side lock stops machine-gun ±flips.',
+      'Zones from ≥12 minute bars. FAILED_BREAKOUT only from multi-minute break+fail (≥6m probe), never 10s micro. Entry on closed 10s matching zone side. 90s cooldown + 3m side-lock.',
   };
 }
 
