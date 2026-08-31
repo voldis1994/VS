@@ -85,4 +85,23 @@ describe('marketSetup', () => {
   it('decideEntryFromSetup returns null when NONE', () => {
     expect(decideEntryFromSetup(emptySetup(), bar10(100, 101, 99, 100.5))).toBeNull();
   });
+
+  it('local dump impulse arms CONTINUATION SELL — not mid-NONE', () => {
+    const bars: CapitalPriceCandle[] = [];
+    // Quiet base then hard dump ~8 minutes
+    for (let i = 0; i < 25; i++) {
+      bars.push(candle(4430, 4432, 4428, 4430));
+    }
+    for (let i = 0; i < 8; i++) {
+      const o = 4430 - i * 1.2;
+      bars.push(candle(o, o + 0.3, o - 1.5, o - 1.2));
+    }
+    const st = buildStructure({ minutes: bars, mid: bars[bars.length - 1]!.close });
+    expect(st.ready).toBe(true);
+    let setup = emptySetup();
+    setup = updateSetupSticky(setup, st, bars);
+    expect(setup.kind).not.toBe('NONE');
+    expect(setup.side).toBe('SELL');
+    expect(setup.status).toBe('ARMED');
+  });
 });
