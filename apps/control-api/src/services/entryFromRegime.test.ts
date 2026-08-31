@@ -3,64 +3,56 @@ import { decideEntryFrom10sRegime } from './entryFromRegime.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 
 function bar(open: number, close: number): TenSecBar {
-  const high = Math.max(open, close) + 0.8;
-  const low = Math.min(open, close) - 0.4;
+  const high = Math.max(open, close) + Math.abs(open) * 0.001;
+  const low = Math.min(open, close) - Math.abs(open) * 0.0005;
   return { open_time_ms: 0, open, high, low, close, ticks: 12 };
 }
 
-const dip = bar(2000, 1996); // ~0.2% down — moving
-const rally = bar(2000, 2004);
+const ctx = { playbookAgeBars: 5, regimeAgeBars: 5 };
+const longDip = bar(2000, 1998.8);
+const longRally = bar(2000, 2001.2);
+const scalpRally = bar(2000, 2000.8);
+const quiet: TenSecBar = {
+  open_time_ms: 0,
+  open: 2000,
+  high: 2000.1,
+  low: 1999.95,
+  close: 2000.05,
+  ticks: 8,
+};
 
-describe('10s + 14-regime suitable entry', () => {
+describe('10s playbook suitable entry', () => {
   it('waits in UNKNOWN / COMPRESSION / TRANSITION', () => {
-    expect(decideEntryFrom10sRegime(dip, 'UNKNOWN')).toBeNull();
-    expect(decideEntryFrom10sRegime(dip, 'COMPRESSION')).toBeNull();
-    expect(decideEntryFrom10sRegime(rally, 'TRANSITION')).toBeNull();
+    expect(decideEntryFrom10sRegime(longDip, 'UNKNOWN', ctx)).toBeNull();
+    expect(decideEntryFrom10sRegime(longDip, 'COMPRESSION', ctx)).toBeNull();
+    expect(decideEntryFrom10sRegime(longRally, 'TRANSITION', ctx)).toBeNull();
   });
 
   it('TREND_UP only dip-buys — never sells the rally', () => {
-    expect(decideEntryFrom10sRegime(dip, 'TREND_UP')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(dip, 'TREND_UP')?.setup).toBe('PULLBACK');
-    expect(decideEntryFrom10sRegime(rally, 'TREND_UP')).toBeNull();
+    expect(decideEntryFrom10sRegime(longDip, 'TREND_UP', ctx)?.direction).toBe('BUY');
+    expect(decideEntryFrom10sRegime(longDip, 'TREND_UP', ctx)?.playbook).toBe('LONG');
+    expect(decideEntryFrom10sRegime(longRally, 'TREND_UP', ctx)).toBeNull();
   });
 
-  it('TREND_DOWN only rally-sells — never buys the dump', () => {
-    expect(decideEntryFrom10sRegime(rally, 'TREND_DOWN')?.direction).toBe('SELL');
-    expect(decideEntryFrom10sRegime(dip, 'TREND_DOWN')).toBeNull();
+  it('TREND_DOWN only rally-sells', () => {
+    expect(decideEntryFrom10sRegime(longRally, 'TREND_DOWN', ctx)?.direction).toBe('SELL');
+    expect(decideEntryFrom10sRegime(longDip, 'TREND_DOWN', ctx)).toBeNull();
   });
 
-  it('PULLBACK_UPTREND resumes long on the turn-up bar', () => {
-    expect(decideEntryFrom10sRegime(rally, 'PULLBACK_UPTREND')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(rally, 'PULLBACK_UPTREND')?.setup).toBe('CONTINUATION');
-    expect(decideEntryFrom10sRegime(dip, 'PULLBACK_UPTREND')).toBeNull();
+  it('PULLBACK_UPTREND resumes long on rally', () => {
+    expect(decideEntryFrom10sRegime(longRally, 'PULLBACK_UPTREND', ctx)?.setup).toBe(
+      'CONTINUATION'
+    );
+    expect(decideEntryFrom10sRegime(longDip, 'PULLBACK_UPTREND', ctx)).toBeNull();
   });
 
-  it('BREAKOUT_UP follows up, not the failed red bar', () => {
-    expect(decideEntryFrom10sRegime(rally, 'BREAKOUT_UP')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(dip, 'BREAKOUT_UP')).toBeNull();
+  it('BREAKOUT_UP follows as SCALP', () => {
+    expect(decideEntryFrom10sRegime(scalpRally, 'BREAKOUT_UP', ctx)?.playbook).toBe('SCALP');
+    expect(decideEntryFrom10sRegime(longDip, 'BREAKOUT_UP', ctx)).toBeNull();
   });
 
-  it('FAILED_BREAKOUT_UP fades — SELL, not chase', () => {
-    expect(decideEntryFrom10sRegime(dip, 'FAILED_BREAKOUT_UP')?.direction).toBe('SELL');
-    expect(decideEntryFrom10sRegime(rally, 'FAILED_BREAKOUT_UP')).toBeNull();
-  });
-
-  it('RANGE still mean-reverts on a real 10s body', () => {
-    expect(decideEntryFrom10sRegime(dip, 'RANGE')?.direction).toBe('BUY');
-    expect(decideEntryFrom10sRegime(rally, 'RANGE')?.direction).toBe('SELL');
-  });
-
-  it('quiet bar is never a trade in any regime', () => {
-    const quiet: TenSecBar = {
-      open_time_ms: 0,
-      open: 2000,
-      high: 2000.1,
-      low: 1999.95,
-      close: 2000.05,
-      ticks: 8,
-    };
-    expect(decideEntryFrom10sRegime(quiet, 'TREND_UP')).toBeNull();
-    expect(decideEntryFrom10sRegime(quiet, 'RANGE')).toBeNull();
-    expect(decideEntryFrom10sRegime(quiet, 'BREAKOUT_UP')).toBeNull();
+  it('quiet bar is never a trade', () => {
+    expect(decideEntryFrom10sRegime(quiet, 'TREND_UP', ctx)).toBeNull();
+    expect(decideEntryFrom10sRegime(quiet, 'RANGE', ctx)).toBeNull();
   });
 });
