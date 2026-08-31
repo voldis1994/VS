@@ -92,6 +92,8 @@ type RobotSession = {
   unrealized: number | null;
   mode: 'FLAT' | 'MANAGE' | 'ENTRY';
   regime?: string;
+  playbook?: string | null;
+  entry_setup?: string | null;
   feed_source?: 'MULTI' | 'LOCAL' | 'NONE';
   feed_contributing?: number;
   feed_sender_count?: number;
@@ -141,7 +143,12 @@ function posture(s: RobotSession): { label: string; kind: 'long' | 'short' | 'fl
   }
   if (s.running && !s.open_side) {
     const r = (s.regime || 'RANGE').toUpperCase();
-    return { label: `WAIT ENTRY · ${r}`, kind: 'entry' };
+    const setup = String(s.entry_setup || s.playbook || '').trim().toUpperCase();
+    // Regime/setup = ENTRY posture — never "WAIT ENTRY"
+    if (setup && setup !== 'WAIT') {
+      return { label: `ENTRY · ${setup} · ${r}`, kind: 'entry' };
+    }
+    return { label: `ENTRY · ${r}`, kind: 'entry' };
   }
   return { label: 'FLAT', kind: 'flat' };
 }

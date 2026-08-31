@@ -23,7 +23,7 @@ import {
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
-import { decideEntryFrom10sRegime } from './entryFromRegime.js';
+import { decideEntryFrom10sRegime, decideMoveEntry } from './entryFromRegime.js';
 import {
   playbookFromRegime,
   type Playbook,
@@ -273,7 +273,7 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
   let action = 'WAIT';
   if (!s.running) action = 'STOPPED';
   else if (s.open_side) action = `MANAGE ${s.open_side}`;
-  else if (s.mode === 'ENTRY') action = 'SCAN ENTRY';
+  else if (s.mode === 'ENTRY') action = 'ENTRY';
   const z = s.zoneBook;
   const zonesLine = z?.ready
     ? `${z.structure} H${z.high.toFixed(2)}/L${z.low.toFixed(2)}`
@@ -1197,8 +1197,16 @@ async function robotCycle(s: Internal) {
     }
 
     s.mode = 'ENTRY';
-    // Was 20s — Gold chop re-entered too fast after PeakProtect/Harvest closes
-    const POST_CLOSE_COOLDOWN_MS = 90_000;
+    // Keep setup visible on board while scanning (not "WAIT ENTRY")
+    {
+      const watch = playbookFromRegime(s.regime);
+      if (watch !== 'WAIT') {
+        s.playbook = watch;
+        s.playbook_watch = watch;
+      }
+    }
+    // Was 90s — blocked re-entry on the next visible move
+    const POST_CLOSE_COOLDOWN_MS = 30_000;
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
     if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
       pushTick(s, {
@@ -1279,48 +1287,61 @@ async function robotCycle(s: Internal) {
       const led = regimeForEntry(s.regime, s.zoneBook);
       const entryRegime = led.regime;
       const zoneGate = regimeConfirmedByZones(entryRegime, s.zoneBook);
-      if (!zoneGate.ok) {
+      const priorBars = s.closedBars.filter(
+        (b) =>
+          !(
+            Math.abs(b.open - bar.open) < 1e-9 &&
+            Math.abs(b.close - bar.close) < 1e-9 &&
+            Math.abs(b.high - bar.high) < 1e-9
+          )
+      );
+      const ageBars = led.led
+        ? Math.max(s.playbook_age_bars, s.regime_age_bars, 1)
+        : Math.max(s.playbook_age_bars, 1);
+      let sig =
+        zoneGate.ok
+          ? decideEntryFrom10sRegime(bar, entryRegime, {
+              regimeAgeBars: led.led ? Math.max(s.regime_age_bars, 1) : s.regime_age_bars,
+              playbookAgeBars: ageBars,
+              previousRegime: s.previous_regime,
+              priorBars,
+              zones: s.zoneBook,
+            })
+          : null;
+
+      // Hard rule: clear 10s dump/rally → OPEN trade (do not sit on WAIT labels)
+      if (!sig) {
+        const move = decideMoveEntry(bar);
+        if (move) {
+          const contradict =
+            s.zoneBook.ready &&
+            ((move.direction === 'BUY' &&
+              (s.zoneBook.structure === 'TREND_DOWN' ||
+                s.zoneBook.structure === 'BREAKOUT_DOWN')) ||
+              (move.direction === 'SELL' &&
+                (s.zoneBook.structure === 'TREND_UP' ||
+                  s.zoneBook.structure === 'BREAKOUT_UP')));
+          if (!contradict) {
+            sig = move;
+          }
+        }
+      }
+
+      if (sig) {
+        direction = sig.direction;
+        setupType = sig.setup;
+        reason = `${sig.reason} · ${led.reason}${zoneGate.ok ? ` · ${zoneGate.reason}` : ' · MOVE override'}`;
+        entryPlaybook = sig.playbook;
+        s.playbook = sig.playbook;
+        s.entry_setup = sig.setup;
+      } else {
         pushTick(s, {
-          phase: 'WAIT',
+          phase: 'DECIDE',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${ohlcLine} · ${led.reason} · ${zoneGate.reason}`,
+          detail: `${ohlcLine} · ${led.reason} · ${zoneGate.reason} · ${entryRegime} quiet 10s · no open`,
         });
-      } else {
-        const priorBars = s.closedBars.filter(
-          (b) =>
-            !(
-              Math.abs(b.open - bar.open) < 1e-9 &&
-              Math.abs(b.close - bar.close) < 1e-9 &&
-              Math.abs(b.high - bar.high) < 1e-9
-            )
-        );
-        // Zone-led playbook age: don't wait for 10s family to catch up on a live move
-        const ageBars = led.led
-          ? Math.max(s.playbook_age_bars, s.regime_age_bars, 2)
-          : s.playbook_age_bars;
-        const sig = decideEntryFrom10sRegime(bar, entryRegime, {
-          regimeAgeBars: led.led ? Math.max(s.regime_age_bars, 2) : s.regime_age_bars,
-          playbookAgeBars: ageBars,
-          previousRegime: s.previous_regime,
-          priorBars,
-          zones: s.zoneBook,
-        });
-        if (sig) {
-          direction = sig.direction;
-          setupType = sig.setup;
-          reason = `${sig.reason} · ${led.reason} · ${zoneGate.reason}`;
-          entryPlaybook = sig.playbook;
-        } else {
-          pushTick(s, {
-            phase: 'DECIDE',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: `${ohlcLine} · ${led.reason} · ${zoneGate.reason} · ${entryRegime} not suitable on this 10s close · wait next candle`,
-          });
-        }
       }
     } else {
       pushTick(s, {
@@ -1332,13 +1353,13 @@ async function robotCycle(s: Internal) {
       });
     }
 
-    if (direction) {
+    // Late-move only blocks FADE / unclear structure — never blocks MOVE/trend follow
+    if (direction && entryPlaybook !== 'SCALP') {
       let lateCandles = zoneRefresh.candles;
       if (lateCandles.length < 3) {
         const hist = await fetchCapitalMinutePrices(opened.session, s.epic, 3);
         if (hist.ok) lateCandles = hist.candles;
       }
-      // Confirmed minute TREND/BREAKOUT in trade direction = follow the move, not "late chase"
       const structureFollow =
         (direction === 'BUY' &&
           (s.zoneBook.structure === 'TREND_UP' || s.zoneBook.structure === 'BREAKOUT_UP')) ||

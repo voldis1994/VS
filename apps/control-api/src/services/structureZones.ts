@@ -164,10 +164,10 @@ export function regimeForEntry(
   if (s === 'BREAKOUT_DOWN') {
     return { regime: 'BREAKOUT_DOWN', led: true, reason: `zone-led BREAKOUT_DOWN (10s was ${r})` };
   }
-  if (s === 'TREND_UP') {
+  if (s === 'TREND_UP' || zones.bias === 'ABOVE') {
     return { regime: 'TREND_UP', led: true, reason: `zone-led TREND_UP (10s was ${r})` };
   }
-  if (s === 'TREND_DOWN') {
+  if (s === 'TREND_DOWN' || zones.bias === 'BELOW') {
     return { regime: 'TREND_DOWN', led: true, reason: `zone-led TREND_DOWN (10s was ${r})` };
   }
   return { regime: r, led: false, reason: `10s ${r} · structure ${s}` };
