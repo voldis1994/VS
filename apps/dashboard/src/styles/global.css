@@ -2107,3 +2107,121 @@ button.regime-chip { cursor: pointer; }
 .regime-chip.flat.on {
   border-color: rgba(200, 200, 180, 0.4);
 }
+
+/* —— Robot Desk v2: readable story —— */
+.robot-board-v2 .robot-wire-panel { display: none; }
+.robot-look {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  padding: 4px 0 2px;
+}
+.robot-look.buy { color: var(--accent); }
+.robot-look.sell { color: #ff8da8; }
+.robot-look.open { color: var(--cyan); }
+.robot-look.flat { color: var(--text-secondary); }
+.robot-mini-v2 { min-height: 200px; gap: 5px; }
+.robot-mini-why {
+  font-size: 10px;
+  color: var(--text-secondary);
+  line-height: 1.35;
+  max-height: 40px;
+  overflow: hidden;
+  border-top: 1px solid rgba(180, 255, 0, 0.12);
+  padding-top: 6px;
+}
+.robot-story {
+  margin-top: 14px;
+  border: 1px solid rgba(180, 255, 0, 0.28);
+  background: rgba(4, 10, 4, 0.92);
+  clip-path: var(--clip-panel);
+  padding: 16px 18px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.robot-story-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.robot-story-title {
+  font-family: var(--font-display);
+  font-size: 18px;
+  letter-spacing: 0.08em;
+  margin-top: 2px;
+}
+.robot-story-hero {
+  display: grid;
+  grid-template-columns: 1.4fr repeat(3, 1fr);
+  gap: 10px;
+}
+@media (max-width: 900px) {
+  .robot-story-hero { grid-template-columns: 1fr 1fr; }
+}
+.robot-story-look,
+.robot-story-block {
+  border: 1px solid rgba(180, 255, 0, 0.2);
+  background: rgba(0, 0, 0, 0.35);
+  padding: 12px 14px;
+  min-height: 72px;
+}
+.robot-story-look .label,
+.robot-story-block .label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+.robot-story-look .value,
+.robot-story-block .value {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+}
+.robot-story-look.buy .value { color: var(--accent); }
+.robot-story-look.sell .value { color: #ff8da8; }
+.robot-story-look.open .value { color: var(--cyan); }
+.robot-story-look.flat .value { color: var(--text-secondary); }
+.robot-story-block .value.pos { color: var(--accent); }
+.robot-story-block .value.neg { color: var(--danger); }
+.robot-story-grid {
+  display: grid;
+  grid-template-columns: 0.9fr 1.1fr;
+  gap: 12px;
+  min-height: 0;
+}
+@media (max-width: 900px) {
+  .robot-story-grid { grid-template-columns: 1fr; }
+}
+.robot-story-panel {
+  border: 1px solid rgba(180, 255, 0, 0.16);
+  background: rgba(0, 0, 0, 0.28);
+  padding: 12px 14px;
+  min-height: 180px;
+}
+.robot-story-reason {
+  font-size: 15px;
+  line-height: 1.45;
+  margin: 8px 0 12px;
+  color: var(--text-primary);
+}
+.robot-story-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+.robot-story-log .robot-feed {
+  max-height: 280px;
+  overflow: auto;
+  margin-top: 8px;
+}

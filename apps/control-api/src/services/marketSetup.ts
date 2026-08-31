@@ -318,75 +318,8 @@ function rawSetupFromStructure(
     };
   }
 
-  // CONTINUATION / PULLBACK in trend (hour + minute persistence)
-  const trendUp =
-    pers > 0.35 || structure.hour_bias === 'UP' || structure.bias === 'ABOVE';
-  const trendDown =
-    pers < -0.35 || structure.hour_bias === 'DOWN' || structure.bias === 'BELOW';
-
-  if (trendUp && !closedBelow) {
-    if (structure.near_low || (last.close < structure.mid && last.close > lo)) {
-      return {
-        kind: 'PULLBACK',
-        side: 'BUY',
-        playbook: 'LONG',
-        status: structure.near_low ? 'ARMED' : 'FORMING',
-        swing_high: hi,
-        swing_low: lo,
-        reason: `PULLBACK in up structure · buy toward ${lo.toFixed(2)}`,
-      };
-    }
-    if (pers > 0.4 && structure.bias === 'ABOVE') {
-      return {
-        kind: 'CONTINUATION',
-        side: 'BUY',
-        playbook: 'LONG',
-        status: 'ARMED',
-        swing_high: hi,
-        swing_low: lo,
-        reason: `CONTINUATION up · above mid ${structure.mid.toFixed(2)}`,
-      };
-    }
-  }
-
-  if (trendDown && !closedAbove) {
-    if (structure.near_high || (last.close > structure.mid && last.close < hi)) {
-      return {
-        kind: 'PULLBACK',
-        side: 'SELL',
-        playbook: 'LONG',
-        status: structure.near_high ? 'ARMED' : 'FORMING',
-        swing_high: hi,
-        swing_low: lo,
-        reason: `PULLBACK in down structure · sell toward ${hi.toFixed(2)}`,
-      };
-    }
-    if (pers < -0.4 && structure.bias === 'BELOW') {
-      return {
-        kind: 'CONTINUATION',
-        side: 'SELL',
-        playbook: 'LONG',
-        status: 'ARMED',
-        swing_high: hi,
-        swing_low: lo,
-        reason: `CONTINUATION down · below mid ${structure.mid.toFixed(2)}`,
-      };
-    }
-  }
-
-  // FADE at swing edges in balanced / range structure
-  if (structure.near_low) {
-    return {
-      kind: 'FADE',
-      side: 'BUY',
-      playbook: 'FADE',
-      status: 'ARMED',
-      swing_high: hi,
-      swing_low: lo,
-      reason: `FADE BUY at swing low ${lo.toFixed(2)}`,
-    };
-  }
-  if (structure.near_high) {
+  // FADE at swing edges FIRST — never arm BUY at the tip / SELL at the low
+  if (structure.near_high && !closedAbove) {
     return {
       kind: 'FADE',
       side: 'SELL',
@@ -394,13 +327,82 @@ function rawSetupFromStructure(
       status: 'ARMED',
       swing_high: hi,
       swing_low: lo,
-      reason: `FADE SELL at swing high ${hi.toFixed(2)}`,
+      reason: `FADE SELL at swing high ${hi.toFixed(2)} · no BUY at tip`,
+    };
+  }
+  if (structure.near_low && !closedBelow) {
+    return {
+      kind: 'FADE',
+      side: 'BUY',
+      playbook: 'FADE',
+      status: 'ARMED',
+      swing_high: hi,
+      swing_low: lo,
+      reason: `FADE BUY at swing low ${lo.toFixed(2)} · no SELL at floor`,
     };
   }
 
+  // CONTINUATION / PULLBACK in trend (hour + minute persistence) — mid/pullback only
+  const trendUp =
+    pers > 0.35 || structure.hour_bias === 'UP' || structure.bias === 'ABOVE';
+  const trendDown =
+    pers < -0.35 || structure.hour_bias === 'DOWN' || structure.bias === 'BELOW';
+
+  if (trendUp && !closedBelow && !structure.near_high) {
+    if (last.close < structure.mid && last.close > lo) {
+      return {
+        kind: 'PULLBACK',
+        side: 'BUY',
+        playbook: 'LONG',
+        status: 'FORMING',
+        swing_high: hi,
+        swing_low: lo,
+        reason: `PULLBACK in up structure · buy toward ${lo.toFixed(2)}`,
+      };
+    }
+    if (pers > 0.4 && structure.bias === 'ABOVE' && last.close < hi - edgeEps(last.close, hi - lo)) {
+      return {
+        kind: 'CONTINUATION',
+        side: 'BUY',
+        playbook: 'LONG',
+        status: 'ARMED',
+        swing_high: hi,
+        swing_low: lo,
+        reason: `CONTINUATION up · above mid ${structure.mid.toFixed(2)} · below tip ${hi.toFixed(2)}`,
+      };
+    }
+  }
+
+  if (trendDown && !closedAbove && !structure.near_low) {
+    if (last.close > structure.mid && last.close < hi) {
+      return {
+        kind: 'PULLBACK',
+        side: 'SELL',
+        playbook: 'LONG',
+        status: 'FORMING',
+        swing_high: hi,
+        swing_low: lo,
+        reason: `PULLBACK in down structure · sell toward ${hi.toFixed(2)}`,
+      };
+    }
+    if (pers < -0.4 && structure.bias === 'BELOW' && last.close > lo + edgeEps(last.close, hi - lo)) {
+      return {
+        kind: 'CONTINUATION',
+        side: 'SELL',
+        playbook: 'LONG',
+        status: 'ARMED',
+        swing_high: hi,
+        swing_low: lo,
+        reason: `CONTINUATION down · below mid ${structure.mid.toFixed(2)} · above floor ${lo.toFixed(2)}`,
+      };
+    }
+  }
+
   // Real local move mid old swing — never sit NONE while dump/rally is live
+  // Still refuse tip-chase: UP impulse at/near high → already FADE; DOWN at/near low → FADE
   const imp = recentImpulse(minutes);
-  if (imp === 'DOWN') {
+  const tipEps = edgeEps(last.close, Math.max(hi - lo, 1));
+  if (imp === 'DOWN' && last.close > lo + tipEps) {
     return {
       kind: 'CONTINUATION',
       side: 'SELL',
@@ -411,7 +413,7 @@ function rawSetupFromStructure(
       reason: `CONTINUATION SELL · local dump impulse (not mid-NONE)`,
     };
   }
-  if (imp === 'UP') {
+  if (imp === 'UP' && last.close < hi - tipEps) {
     return {
       kind: 'CONTINUATION',
       side: 'BUY',
@@ -517,6 +519,18 @@ export function updateSetupSticky(
  * Entry trigger on CLOSED 10s only — confirms an ARMED setup.
  * Rejection/bounce at swing for FADE/FAILED_BREAK; impulse for BREAKOUT/CONTINUATION.
  */
+/** Block tip-chase: BUY into swing high / SELL into swing low (except true BREAKOUT). */
+export function isTipChaseEntry(setup: MarketSetup, bar: TenSecBar): boolean {
+  if (!setup.side || setup.kind === 'NONE' || setup.kind === 'BREAKOUT') return false;
+  const hi = setup.swing_high;
+  const lo = setup.swing_low;
+  if (!(hi > lo)) return false;
+  const eps = edgeEps(bar.close, hi - lo);
+  if (setup.side === 'BUY' && bar.close >= hi - eps * 0.65) return true;
+  if (setup.side === 'SELL' && bar.close <= lo + eps * 0.65) return true;
+  return false;
+}
+
 export function decideEntryFromSetup(
   setup: MarketSetup,
   bar: TenSecBar
@@ -531,6 +545,11 @@ export function decideEntryFromSetup(
   const hi = setup.swing_high;
   const lo = setup.swing_low;
   const eps = edgeEps(bar.close, Math.max(hi - lo, 1));
+
+  // Hard guard — the 16:00 BUY @ swing high class of mistake
+  if (isTipChaseEntry(setup, bar)) {
+    return null;
+  }
 
   if (setup.kind === 'FADE' || setup.kind === 'FAILED_BREAK') {
     if (setup.side === 'BUY') {

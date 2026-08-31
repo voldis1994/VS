@@ -86,6 +86,30 @@ describe('marketSetup', () => {
     expect(decideEntryFromSetup(emptySetup(), bar10(100, 101, 99, 100.5))).toBeNull();
   });
 
+  it('never arms BUY at swing high — FADE SELL instead (no tip chase)', () => {
+    const minutes = rangeMinutes();
+    const nearHigh = buildStructure({ minutes, mid: 2009.2 });
+    expect(nearHigh.near_high).toBe(true);
+    let setup = emptySetup();
+    setup = updateSetupSticky(setup, nearHigh, minutes);
+    setup = updateSetupSticky(setup, nearHigh, minutes);
+    expect(setup.side).toBe('SELL');
+    expect(setup.kind === 'FADE' || setup.kind === 'FAILED_BREAK' || setup.kind === 'PULLBACK').toBe(
+      true
+    );
+    // Entry at the tip with a green bar must not BUY
+    const tipBuyAttempt = {
+      ...setup,
+      kind: 'CONTINUATION' as const,
+      side: 'BUY' as const,
+      status: 'ARMED' as const,
+      playbook: 'LONG' as const,
+      swing_high: nearHigh.swing_high,
+      swing_low: nearHigh.swing_low,
+    };
+    expect(decideEntryFromSetup(tipBuyAttempt, bar10(2009, 2009.5, 2008.8, 2009.3))).toBeNull();
+  });
+
   it('local dump impulse arms CONTINUATION SELL — not mid-NONE', () => {
     const bars: CapitalPriceCandle[] = [];
     // Quiet base then hard dump ~8 minutes
