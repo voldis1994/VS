@@ -392,7 +392,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
     note:
-      'Setup-first: NONE only when truly quiet. Local dump/rally impulse arms CONTINUATION. Same-side re-entry after 35s; opposite lock 90s. Entry on closed 10s confirm.',
+      'Setup-first: NONE only when quiet. CONTINUATION/PULLBACK/FADE bounce rides rally (tp≥3–4pt, not +£0.07 scalp). Entry on closed 10s confirm.',
   };
 }
 
