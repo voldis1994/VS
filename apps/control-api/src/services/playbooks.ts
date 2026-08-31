@@ -67,11 +67,11 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
   },
 };
 
-/** Entry body thresholds (fraction of price) — open on real Gold noise, not perfection. */
+/** Entry body thresholds — any visible Gold print. */
 export const PLAYBOOK_ENTRY_BODY: Record<TradePlaybook, number> = {
-  LONG: 0.0002, // 0.02%
-  SCALP: 0.00012, // 0.012% ≈ ~0.5pt on Gold 4450
-  FADE: 0.00012,
+  LONG: 0.00012, // 0.012%
+  SCALP: 0.00008, // 0.008% ≈ ~0.35pt on Gold 4450
+  FADE: 0.00008,
 };
 
 export function playbookFromRegime(regime?: string | null): Playbook {

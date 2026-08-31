@@ -37,7 +37,7 @@ describe('playbookFromRegime', () => {
 describe('playbook entry', () => {
   const longDip = bar(2000, 1998.8); // 0.06% down — LONG body
   const longRally = bar(2000, 2001.2);
-  const microDip = bar(2000, 1999.7); // 0.015% — old threshold, too small for LONG
+  const microDip = bar(2000, 1999.95); // 0.0025% — below LONG body
   const scalpRally = bar(2000, 2000.8); // 0.04%
   const fadeDip = bar(2000, 1999.4); // 0.03%
 
