@@ -9,15 +9,13 @@ import {
   nearRangeEdge,
   playbookFromRegime,
   rallyFor,
-  wasRangeOrExpansion,
   wasTrend,
+  PLAYBOOK_ENTRY_BODY,
   type Playbook,
   type TradePlaybook,
 } from './playbooks.js';
 import {
   nearRealZoneEdge,
-  zonesSupportLong,
-  zonesSupportShort,
   type MarketZoneBook,
 } from './structureZones.js';
 
@@ -49,8 +47,35 @@ function familyAgeOk(ctx: EntryContext | undefined, need: number): boolean {
 }
 
 /**
+ * Visible 10s move → open a trade (SCALP). Used when playbook/zones would
+ * otherwise sit idle while price is clearly dumping or rallying.
+ */
+export function decideMoveEntry(bar: TenSecBar): RegimeEntry | null {
+  const thr = PLAYBOOK_ENTRY_BODY.SCALP;
+  const body = bodyPct(bar);
+  const candle = describe(bar);
+  if (body >= thr) {
+    return {
+      direction: 'BUY',
+      setup: 'BREAKOUT',
+      playbook: 'SCALP',
+      reason: `MOVE · rally open BUY · ${candle}`,
+    };
+  }
+  if (body <= -thr) {
+    return {
+      direction: 'SELL',
+      setup: 'BREAKOUT',
+      playbook: 'SCALP',
+      reason: `MOVE · dump open SELL · ${candle}`,
+    };
+  }
+  return null;
+}
+
+/**
  * Suitable entry for the current 10s regime via playbook rules.
- * Returns null = WAIT.
+ * Returns null = no playbook fit (caller may still use decideMoveEntry).
  */
 export function decideEntryFrom10sRegime(
   bar: TenSecBar,
@@ -64,15 +89,10 @@ export function decideEntryFrom10sRegime(
   if (book === 'WAIT') return null;
 
   if (book === 'LONG') {
-    // 2 bars in family — was 3 and missed short Gold impulses
-    if (!familyAgeOk(ctx, 2)) return null;
-    if (wasRangeOrExpansion(ctx?.previousRegime) && (ctx?.regimeAgeBars ?? 0) < 2) {
-      return null;
-    }
+    if (!familyAgeOk(ctx, 1)) return null;
     if (!movingFor(bar, 'LONG') || !bodyStrongEnough(bar, 'LONG')) return null;
 
     if (r === 'TREND_UP') {
-      // Pullback dip preferred; impulse rally OK when minute zones confirm up
       if (dipFor(bar, 'LONG')) {
         return {
           direction: 'BUY',
@@ -81,7 +101,8 @@ export function decideEntryFrom10sRegime(
           reason: `LONG · ${r} dip-buy · ${candle}`,
         };
       }
-      if (rallyFor(bar, 'LONG') && zonesSupportLong(ctx?.zones)) {
+      // Impulse follow — open BUY on rally (do not require zones again)
+      if (rallyFor(bar, 'LONG')) {
         return {
           direction: 'BUY',
           setup: 'CONTINUATION',
@@ -100,7 +121,7 @@ export function decideEntryFrom10sRegime(
           reason: `LONG · ${r} rally-sell · ${candle}`,
         };
       }
-      if (dipFor(bar, 'LONG') && zonesSupportShort(ctx?.zones)) {
+      if (dipFor(bar, 'LONG')) {
         return {
           direction: 'SELL',
           setup: 'CONTINUATION',

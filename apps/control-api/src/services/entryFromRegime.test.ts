@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decideEntryFrom10sRegime } from './entryFromRegime.js';
+import { decideEntryFrom10sRegime, decideMoveEntry } from './entryFromRegime.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 
 function bar(open: number, close: number): TenSecBar {
@@ -28,32 +28,15 @@ describe('10s playbook suitable entry', () => {
     expect(decideEntryFrom10sRegime(longRally, 'TRANSITION', ctx)).toBeNull();
   });
 
-  it('TREND_UP dip-buys; rally follow only with bullish zones', () => {
+  it('TREND_UP dip-buys and follows rally', () => {
     expect(decideEntryFrom10sRegime(longDip, 'TREND_UP', ctx)?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(longDip, 'TREND_UP', ctx)?.playbook).toBe('LONG');
-    expect(decideEntryFrom10sRegime(longRally, 'TREND_UP', ctx)).toBeNull();
-    const zonesUp = {
-      ready: true,
-      high: 2010,
-      low: 1990,
-      mid: 2000,
-      span: 20,
-      bias: 'ABOVE' as const,
-      near_high: true,
-      near_low: false,
-      structure: 'TREND_UP' as const,
-      bar_count: 40,
-      updated_at: new Date().toISOString(),
-      detail: 'test',
-    };
-    expect(decideEntryFrom10sRegime(longRally, 'TREND_UP', { ...ctx, zones: zonesUp })?.setup).toBe(
-      'CONTINUATION'
-    );
+    expect(decideEntryFrom10sRegime(longRally, 'TREND_UP', ctx)?.setup).toBe('CONTINUATION');
   });
 
-  it('TREND_DOWN only rally-sells', () => {
+  it('TREND_DOWN rally-sells and dump-follows', () => {
     expect(decideEntryFrom10sRegime(longRally, 'TREND_DOWN', ctx)?.direction).toBe('SELL');
-    expect(decideEntryFrom10sRegime(longDip, 'TREND_DOWN', ctx)).toBeNull();
+    expect(decideEntryFrom10sRegime(longDip, 'TREND_DOWN', ctx)?.direction).toBe('SELL');
   });
 
   it('PULLBACK_UPTREND resumes long on rally', () => {
@@ -71,6 +54,12 @@ describe('10s playbook suitable entry', () => {
   it('quiet bar is never a trade', () => {
     expect(decideEntryFrom10sRegime(quiet, 'TREND_UP', ctx)).toBeNull();
     expect(decideEntryFrom10sRegime(quiet, 'RANGE', ctx)).toBeNull();
+  });
+
+  it('MOVE entry opens SELL on dump and BUY on rally', () => {
+    expect(decideMoveEntry(longDip)?.direction).toBe('SELL');
+    expect(decideMoveEntry(longRally)?.direction).toBe('BUY');
+    expect(decideMoveEntry(quiet)).toBeNull();
   });
 
   it('RANGE FADE uses real minute zones when ready', () => {

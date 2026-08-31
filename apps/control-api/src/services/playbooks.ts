@@ -69,9 +69,9 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
 
 /** Entry body thresholds (fraction of price). */
 export const PLAYBOOK_ENTRY_BODY: Record<TradePlaybook, number> = {
-  LONG: 0.0005, // 0.05%
-  SCALP: 0.0003, // 0.03%
-  FADE: 0.00025, // 0.025%
+  LONG: 0.00035, // 0.035% — was 0.05%, missed smaller Gold 10s bodies
+  SCALP: 0.00022, // 0.022%
+  FADE: 0.0002, // 0.02%
 };
 
 export function playbookFromRegime(regime?: string | null): Playbook {

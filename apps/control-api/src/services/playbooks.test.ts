@@ -48,27 +48,26 @@ describe('playbook entry', () => {
     ).toBeNull();
   });
 
-  it('LONG needs family age ≥2 and strong dip', () => {
+  it('LONG needs family age ≥1 and strong dip', () => {
     expect(
-      decideEntryFrom10sRegime(longDip, 'TREND_UP', { playbookAgeBars: 1, regimeAgeBars: 1 })
+      decideEntryFrom10sRegime(longDip, 'TREND_UP', { playbookAgeBars: 0, regimeAgeBars: 0 })
     ).toBeNull();
     const sig = decideEntryFrom10sRegime(longDip, 'TREND_UP', {
-      playbookAgeBars: 2,
-      regimeAgeBars: 2,
+      playbookAgeBars: 1,
+      regimeAgeBars: 1,
     });
     expect(sig?.playbook).toBe('LONG');
     expect(sig?.direction).toBe('BUY');
     expect(decideEntryFrom10sRegime(microDip, 'TREND_UP', { playbookAgeBars: 5 })).toBeNull();
   });
 
-  it('LONG pauses 1 bar after RANGE/EXPANSION flip', () => {
-    expect(
-      decideEntryFrom10sRegime(longDip, 'TREND_UP', {
-        playbookAgeBars: 5,
-        regimeAgeBars: 1,
-        previousRegime: 'RANGE',
-      })
-    ).toBeNull();
+  it('LONG allows entry right after RANGE flip when body is strong', () => {
+    const sig = decideEntryFrom10sRegime(longDip, 'TREND_UP', {
+      playbookAgeBars: 5,
+      regimeAgeBars: 1,
+      previousRegime: 'RANGE',
+    });
+    expect(sig?.direction).toBe('BUY');
   });
 
   it('SCALP BREAKOUT needs age ≥1', () => {
