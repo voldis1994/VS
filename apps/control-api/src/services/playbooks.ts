@@ -96,6 +96,49 @@ export function tradePlaybookOrNull(p?: Playbook | null): TradePlaybook | null {
   return null;
 }
 
+/** Manage exit tuned by locked entry setup — ride bounce/continuation, not +£0.07 scalp. */
+export function exitParamsForTrade(
+  playbook: TradePlaybook,
+  entrySetup?: string | null
+): PlaybookExitParams {
+  const base = PLAYBOOK_EXIT[playbook];
+  const setup = String(entrySetup || '').trim().toUpperCase();
+
+  // V-bounce / dump continuation — hold for the leg to swing high (not tpFloor 0.18)
+  if (setup === 'CONTINUATION' || setup === 'PULLBACK') {
+    return {
+      ...base,
+      tpPct: 0.0028,
+      tpFloor: 4.0,
+      slPct: base.slPct,
+      slFloor: base.slFloor,
+      mfeFloorPct: 0.00055,
+      mfeFloorAbs: 2.5,
+      peakRet: 0.28,
+      harvestRet: 0.38,
+      thesisMinHoldMs: 180_000,
+      timeDecayMs: 600_000,
+    };
+  }
+
+  // FADE / failed-break bounce from low — still room to mid, not instant 0.18pt target
+  if (setup === 'FADE' || setup === 'FAILED_BREAK') {
+    return {
+      ...base,
+      tpPct: 0.0022,
+      tpFloor: 3.0,
+      mfeFloorPct: 0.00045,
+      mfeFloorAbs: 1.8,
+      peakRet: 0.32,
+      harvestRet: 0.42,
+      thesisMinHoldMs: 120_000,
+      timeDecayMs: 420_000,
+    };
+  }
+
+  return base;
+}
+
 export function isLongFamily(regime?: string | null): boolean {
   const r = normalizeRegime(regime);
   return (

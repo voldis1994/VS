@@ -77,4 +77,51 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/Target/);
   });
+
+  it('CONTINUATION bounce holds past +1.5pt — does not FADE-scalp at tpFloor 0.18', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4419,
+        entry_at: ago(120_000),
+        mfe: 2.0,
+        peak_retention: 0.7,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+      }),
+      4420.68
+    );
+    expect(d.exit).toBe(false);
+  });
+
+  it('CONTINUATION exits on real target ~12pt rally', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4419,
+        entry_at: ago(200_000),
+        mfe: 14,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+      }),
+      4432
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/Target/);
+  });
+
+  it('FADE bounce holds past +1.5pt — tpFloor 3 not 0.18', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4419,
+        entry_at: ago(90_000),
+        mfe: 1.8,
+        playbook: 'FADE',
+        entry_setup: 'FADE',
+      }),
+      4420.68
+    );
+    expect(d.exit).toBe(false);
+  });
 });

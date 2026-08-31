@@ -1,6 +1,6 @@
 /** Live Capital exit — playbook-specific Best Outcome + thesis. */
 import {
-  PLAYBOOK_EXIT,
+  exitParamsForTrade,
   playbookFromRegime,
   thesisFailureForPlaybook,
   type Playbook,
@@ -19,6 +19,8 @@ export type ExitSnapshot = {
   regime?: string | null;
   /** Locked at entry — drives exit policy */
   playbook?: Playbook | null;
+  /** Locked setup kind at entry — CONTINUATION/PULLBACK/FADE tune hold vs scalp */
+  entry_setup?: string | null;
 };
 
 /** @deprecated use playbook thesisMinHold — kept for tests importing name */
@@ -55,12 +57,12 @@ export function decideBestOutcomeExit(
   if (!s.open_side || s.entry_price == null) return { exit: false, reason: '' };
 
   const book = resolvePlaybook(s);
-  const p = PLAYBOOK_EXIT[book];
+  const p = exitParamsForTrade(book, s.entry_setup);
   const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
 
   const thesis = thesisFailureForPlaybook(s.open_side, s.regime, book);
   if (thesis && heldMs >= p.thesisMinHoldMs) {
-    return { exit: true, reason: `${thesis} · ${book}` };
+    return { exit: true, reason: `${thesis} · ${book} · ${s.entry_setup || 'setup?'}` };
   }
 
   const entry = s.entry_price;
@@ -87,7 +89,7 @@ export function decideBestOutcomeExit(
   if (fav >= tp) {
     return {
       exit: true,
-      reason: `Target · ${book} · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)}`,
+      reason: `Target · ${book} · ${s.entry_setup || ''} · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)}`,
     };
   }
 
