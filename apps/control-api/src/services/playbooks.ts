@@ -76,7 +76,8 @@ export const PLAYBOOK_ENTRY_BODY: Record<TradePlaybook, number> = {
 
 export function playbookFromRegime(regime?: string | null): Playbook {
   const r = normalizeRegime(regime);
-  if (r === 'UNKNOWN' || r === 'TRANSITION' || r === 'COMPRESSION') return 'WAIT';
+  // Only true quiet — never UNKNOWN/TRANSITION (those are gone)
+  if (r === 'COMPRESSION') return 'WAIT';
   if (r === 'TREND_UP' || r === 'TREND_DOWN') return 'LONG';
   if (r === 'PULLBACK_UPTREND' || r === 'PULLBACK_DOWNTREND') return 'LONG';
   if (r === 'BREAKOUT_UP' || r === 'BREAKOUT_DOWN') return 'SCALP';
@@ -114,7 +115,7 @@ export function thesisFailureForPlaybook(
   const r = String(regime || '')
     .trim()
     .toUpperCase() as RegimeName | string;
-  if (!r || r === 'UNKNOWN') return null;
+  if (!r) return null;
 
   if (playbook === 'LONG') {
     // Only clear opposite trend / breakout — pullback against is still hold

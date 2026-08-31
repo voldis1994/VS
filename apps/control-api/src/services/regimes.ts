@@ -1,9 +1,8 @@
-/** Original spec §13 — all regime names. Regime is a market-state classifier, not an entry. */
+/** Regime classifier — real market states only (no UNKNOWN / TRANSITION). */
 import type { TenSecBar } from './tenSecondOhlc.js';
 import { bodyPct, rangePct } from './tenSecondOhlc.js';
 
 export const REGIME_NAMES = [
-  'UNKNOWN',
   'RANGE',
   'TREND_UP',
   'TREND_DOWN',
@@ -16,10 +15,12 @@ export const REGIME_NAMES = [
   'FAILED_BREAKOUT_UP',
   'FAILED_BREAKOUT_DOWN',
   'REVERSAL_CANDIDATE',
-  'TRANSITION',
 ] as const;
 
 export type RegimeName = (typeof REGIME_NAMES)[number];
+
+/** Legacy dead labels — never emit; always collapse to a real regime. */
+const DEAD_REGIMES = new Set(['UNKNOWN', 'TRANSITION']);
 
 export const OPERATING_MODES = ['REPLAY', 'PAPER', 'DEMO', 'LIVE'] as const;
 export type OperatingModeName = (typeof OPERATING_MODES)[number];
@@ -45,7 +46,6 @@ const SCALP_REGIMES = new Set<string>([
   'EXPANSION',
   'RANGE',
   'REVERSAL_CANDIDATE',
-  'TRANSITION',
 ]);
 
 export function isRegimeName(value: string | null | undefined): value is RegimeName {
@@ -61,9 +61,11 @@ export function parseRegimeFromExplanation(text?: string | null): RegimeName | n
   return isRegimeName(name) ? name : null;
 }
 
+/** Never returns UNKNOWN/TRANSITION — those are not market states. */
 export function normalizeRegime(value: string | null | undefined): RegimeName {
   const v = String(value || '').trim().toUpperCase();
-  return isRegimeName(v) ? v : 'UNKNOWN';
+  if (DEAD_REGIMES.has(v) || !v) return 'RANGE';
+  return isRegimeName(v) ? v : 'RANGE';
 }
 
 export function styleFromClassification(
@@ -73,7 +75,9 @@ export function styleFromClassification(
   const setup = String(setupType || '').trim().toUpperCase();
   if (setup === 'CONTINUATION' || setup === 'PULLBACK') return 'LONG';
   if (setup === 'BREAKOUT' || setup === 'FADE' || setup === 'REVERSAL') return 'SCALP';
-  const r = String(regime || '').trim().toUpperCase();
+  const raw = String(regime || '').trim().toUpperCase();
+  if (!raw) return null; // no classification yet — do not invent from empty
+  const r = normalizeRegime(regime);
   if (LONG_REGIMES.has(r)) return 'LONG';
   if (SCALP_REGIMES.has(r)) return 'SCALP';
   return null;
@@ -127,16 +131,17 @@ function epicFromBookKey(key: string): string {
 }
 
 /**
- * Classify from closed 10s OHLC — same names as C++ RegimeEngine.
- * Failed-breakout variants are live here (reserved in C++).
+ * Classify from closed 10s OHLC.
+ * Always returns a real operating regime — never UNKNOWN / TRANSITION.
  */
-export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOWN'): RegimeName {
-  if (!bars.length || bars.length < 2) return 'UNKNOWN';
+export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'RANGE'): RegimeName {
+  const prev = normalizeRegime(previous);
+  if (!bars.length || bars.length < 2) return 'RANGE';
 
   const window = bars.slice(-8);
   const last = window[window.length - 1]!;
   const prior = window.slice(0, -1);
-  if (!prior.length) return 'UNKNOWN';
+  if (!prior.length) return 'RANGE';
 
   const velocities = window.map(bodyPct);
   const ranges = window.map(rangePct);
@@ -149,8 +154,9 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
     persistWindow.map((v) => (v > 0.00008 ? 1 : v < -0.00008 ? -1 : 0))
   );
 
-  const trendingUp = persistence > 0.35 && lastVel > 0.00005;
-  const trendingDown = persistence < -0.35 && lastVel < -0.00005;
+  // Slightly looser than before so real Gold dumps/rallies register as TREND
+  const trendingUp = persistence > 0.25 && lastVel > 0.00004;
+  const trendingDown = persistence < -0.25 && lastVel < -0.00004;
   const compressed = lastRange < avgRange * 0.55 && lastRange < 0.00022;
   const expanding = lastRange > avgRange * 1.45 && lastRange >= 0.00025;
   const hi = Math.max(...prior.map((b) => b.high));
@@ -159,31 +165,37 @@ export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'UNKNOW
   const breakoutUp = last.close > hi;
   const breakoutDown = last.close < lo;
   const reversal =
-    (previous === 'TREND_UP' && lastVel < -0.0012 && lastRange > avgRange && !breakoutDown) ||
-    (previous === 'TREND_DOWN' && lastVel > 0.0012 && lastRange > avgRange && !breakoutUp);
+    (prev === 'TREND_UP' && lastVel < -0.0012 && lastRange > avgRange && !breakoutDown) ||
+    (prev === 'TREND_DOWN' && lastVel > 0.0012 && lastRange > avgRange && !breakoutUp);
 
-  if (previous === 'BREAKOUT_UP' && inRange && lastVel < 0) return 'FAILED_BREAKOUT_UP';
-  if (previous === 'BREAKOUT_DOWN' && inRange && lastVel > 0) return 'FAILED_BREAKOUT_DOWN';
+  if (prev === 'BREAKOUT_UP' && inRange && lastVel < 0) return 'FAILED_BREAKOUT_UP';
+  if (prev === 'BREAKOUT_DOWN' && inRange && lastVel > 0) return 'FAILED_BREAKOUT_DOWN';
   if (compressed && inRange) return 'COMPRESSION';
   if (expanding && breakoutUp && (trendingUp || lastVel > 0)) return 'BREAKOUT_UP';
   if (expanding && breakoutDown && (trendingDown || lastVel < 0)) return 'BREAKOUT_DOWN';
   if (expanding) return 'EXPANSION';
-  if (previous === 'TREND_UP' && lastVel < -0.00008 && persistence > 0.15) {
+  if (prev === 'TREND_UP' && lastVel < -0.00008 && persistence > 0.15) {
     return 'PULLBACK_UPTREND';
   }
-  if (previous === 'TREND_DOWN' && lastVel > 0.00008 && persistence < -0.15) {
+  if (prev === 'TREND_DOWN' && lastVel > 0.00008 && persistence < -0.15) {
     return 'PULLBACK_DOWNTREND';
   }
   if (trendingUp) return 'TREND_UP';
   if (trendingDown) return 'TREND_DOWN';
   if (reversal) return 'REVERSAL_CANDIDATE';
   if (inRange) return 'RANGE';
-  if (previous !== 'UNKNOWN' && previous !== 'RANGE') return 'TRANSITION';
-  return 'UNKNOWN';
+
+  // Was TRANSITION / UNKNOWN — pick the closest real state from price action
+  if (breakoutUp) return lastVel >= 0 ? 'BREAKOUT_UP' : 'REVERSAL_CANDIDATE';
+  if (breakoutDown) return lastVel <= 0 ? 'BREAKOUT_DOWN' : 'REVERSAL_CANDIDATE';
+  if (lastVel > 0.00012) return 'TREND_UP';
+  if (lastVel < -0.00012) return 'TREND_DOWN';
+  if (Math.abs(lastVel) >= 0.00008 || lastRange >= avgRange * 0.9) return 'EXPANSION';
+  return 'RANGE';
 }
 
 function confidenceFrom(bars: TenSecBar[], regime: RegimeName): number {
-  if (regime === 'UNKNOWN' || bars.length < 2) return 0;
+  if (bars.length < 2) return 0.2;
   const last = bars[bars.length - 1]!;
   const strength = Math.min(1, Math.abs(bodyPct(last)) / 0.0008 + rangePct(last) / 0.001);
   return Math.max(0.2, Math.min(0.95, 0.35 + strength * 0.5));
@@ -193,8 +205,8 @@ function toSnapshot(epic: string, b: Book): RegimeSnapshot {
   return {
     epic,
     display_name: b.display_name || epic,
-    current: b.current,
-    previous: b.previous,
+    current: normalizeRegime(b.current),
+    previous: normalizeRegime(b.previous),
     confidence: b.confidence,
     since: b.since,
     last_update: b.last_update,
@@ -210,8 +222,8 @@ function ensureBook(epic: string, displayName?: string, scopeKey?: string | null
     const now = new Date().toISOString();
     b = {
       bars: [],
-      current: 'UNKNOWN',
-      previous: 'UNKNOWN',
+      current: 'RANGE',
+      previous: 'RANGE',
       confidence: 0,
       since: now,
       display_name: displayName || epic,
@@ -222,6 +234,9 @@ function ensureBook(epic: string, displayName?: string, scopeKey?: string | null
   } else if (displayName) {
     b.display_name = displayName;
   }
+  // Migrate any book that still holds dead labels
+  b.current = normalizeRegime(b.current as string);
+  b.previous = normalizeRegime(b.previous as string);
   return b;
 }
 
@@ -277,7 +292,7 @@ export function notePipelineRegime(
     b.since = now;
   }
   b.last_update = now;
-  if (next !== 'UNKNOWN') b.confidence = Math.max(b.confidence, 0.55);
+  b.confidence = Math.max(b.confidence, 0.55);
   return toSnapshot(epicKey(epic), b);
 }
 

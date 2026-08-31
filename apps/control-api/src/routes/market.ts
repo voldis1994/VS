@@ -12,7 +12,7 @@ import {
 } from '../services/regimes.js';
 
 /**
- * Market Reader — live regime board with the original 14 names.
+ * Market Reader — live regime board (real operating regimes only).
  */
 export async function registerMarketRoutes(
   app: FastifyInstance,
@@ -37,8 +37,8 @@ export async function registerMarketRoutes(
         byEpic.set(key, {
           epic: s.epic,
           display_name: s.display_name,
-          current: (s.regime || snap?.current || 'UNKNOWN') as (typeof REGIME_NAMES)[number],
-          previous: snap?.previous || 'UNKNOWN',
+          current: (s.regime || snap?.current || 'RANGE') as (typeof REGIME_NAMES)[number],
+          previous: snap?.previous || 'RANGE',
           confidence: snap?.confidence || 0,
           since: snap?.since || s.started_at,
           last_update: s.last_quote_at || new Date().toISOString(),
@@ -55,13 +55,13 @@ export async function registerMarketRoutes(
       regime: row.current,
       previous_regime: row.previous,
       setup: null,
-      evidence_state: row.current === 'UNKNOWN' ? 'SEEDING' : 'LIVE',
+      evidence_state: row.bar_count < 2 ? 'SEEDING' : 'LIVE',
       direction_pressure: 0,
       probability: row.confidence,
       expected_edge: 0,
       data_quality: row.bar_count >= 2 ? 1 : 0.3,
       feed_consensus: 1,
-      entry_state: row.current === 'UNKNOWN' ? 'WAIT' : 'CLASSIFIED',
+      entry_state: row.bar_count < 2 ? 'WAIT' : 'CLASSIFIED',
       last_update: row.last_update,
       last_mid: row.last_mid,
       confidence: row.confidence,
@@ -84,9 +84,9 @@ export async function registerMarketRoutes(
     const row = all[idx] || currentRegime(instrumentId);
     return {
       instrument_id: parseInt(instrumentId, 10) || 0,
-      regime: row?.current || 'UNKNOWN',
-      previous_regime: row?.previous || 'UNKNOWN',
-      setup_lifecycle: row && row.current !== 'UNKNOWN' ? 'LIVE' : 'SEEDING',
+      regime: row?.current || 'RANGE',
+      previous_regime: row?.previous || 'RANGE',
+      setup_lifecycle: row && row.bar_count >= 2 ? 'LIVE' : 'SEEDING',
       evidence_timeline: [],
       supporting: [],
       contradicting: [],

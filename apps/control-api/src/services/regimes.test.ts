@@ -4,6 +4,7 @@ import {
   TRADE_TYPE_NAMES,
   OPERATING_MODES,
   classifyRegime,
+  normalizeRegime,
   observeClosedBars,
   resetRegimeBook,
   styleFromClassification,
@@ -16,7 +17,7 @@ function bar(open: number, high: number, low: number, close: number, i = 0): Ten
   return { open_time_ms: i * 10_000, open, high, low, close, ticks: 10 };
 }
 
-function run(prices: number[], previous: RegimeName = 'UNKNOWN'): RegimeName {
+function run(prices: number[], previous: RegimeName = 'RANGE'): RegimeName {
   const bars = prices.map((p, i) => {
     const prev = i === 0 ? p : prices[i - 1]!;
     const high = Math.max(prev, p) + 0.4;
@@ -26,10 +27,9 @@ function run(prices: number[], previous: RegimeName = 'UNKNOWN'): RegimeName {
   return classifyRegime(bars, previous);
 }
 
-describe('original regime names', () => {
-  it('exposes all 14 names from the original spec', () => {
+describe('operating regime names', () => {
+  it('exposes real regimes only — no UNKNOWN / TRANSITION', () => {
     expect([...REGIME_NAMES]).toEqual([
-      'UNKNOWN',
       'RANGE',
       'TREND_UP',
       'TREND_DOWN',
@@ -42,8 +42,15 @@ describe('original regime names', () => {
       'FAILED_BREAKOUT_UP',
       'FAILED_BREAKOUT_DOWN',
       'REVERSAL_CANDIDATE',
-      'TRANSITION',
     ]);
+    expect(REGIME_NAMES).not.toContain('UNKNOWN');
+    expect(REGIME_NAMES).not.toContain('TRANSITION');
+  });
+
+  it('collapses dead labels to RANGE', () => {
+    expect(normalizeRegime('UNKNOWN')).toBe('RANGE');
+    expect(normalizeRegime('TRANSITION')).toBe('RANGE');
+    expect(normalizeRegime(null)).toBe('RANGE');
   });
 
   it('exposes all four operating modes and four trade-type names', () => {
@@ -53,8 +60,8 @@ describe('original regime names', () => {
 });
 
 describe('classifyRegime from 10s OHLC', () => {
-  it('UNKNOWN with too few bars', () => {
-    expect(classifyRegime([bar(100, 100.1, 99.9, 100)])).toBe('UNKNOWN');
+  it('RANGE with too few bars (never UNKNOWN)', () => {
+    expect(classifyRegime([bar(100, 100.1, 99.9, 100)])).toBe('RANGE');
   });
 
   it('TREND_UP on a persistent rally', () => {
@@ -145,8 +152,7 @@ describe('classifyRegime from 10s OHLC', () => {
       bar(99.6, 101.1, 98.9, 100.5, 2),
       bar(100.5, 100.9, 99.2, 99.8, 3),
     ];
-    const r = classifyRegime(bars);
-    expect(['RANGE', 'TRANSITION', 'UNKNOWN']).toContain(r);
+    expect(classifyRegime(bars)).toBe('RANGE');
   });
 
   it('REVERSAL_CANDIDATE after TREND_UP with a violent opposite bar still inside range', () => {
@@ -159,13 +165,16 @@ describe('classifyRegime from 10s OHLC', () => {
     expect(classifyRegime(bars, 'TREND_UP')).toBe('REVERSAL_CANDIDATE');
   });
 
-  it('TRANSITION when leaving a named regime without a clean next state', () => {
+  it('never emits TRANSITION — uses a real state instead', () => {
     const bars = [
       bar(100.0, 100.1, 99.95, 100.02, 0),
       bar(100.02, 100.08, 99.96, 100.0, 1),
       bar(100.0, 100.04, 99.93, 99.94, 2),
     ];
-    expect(classifyRegime(bars, 'TREND_UP')).toBe('TRANSITION');
+    const r = classifyRegime(bars, 'TREND_UP');
+    expect(r).not.toBe('TRANSITION' as RegimeName);
+    expect(r).not.toBe('UNKNOWN' as RegimeName);
+    expect(REGIME_NAMES).toContain(r);
   });
 });
 
@@ -188,7 +197,8 @@ describe('regime book + trade style', () => {
     expect(styleFromClassification('PULLBACK_DOWNTREND')).toBe('LONG');
     expect(styleFromClassification('BREAKOUT_UP')).toBe('SCALP');
     expect(styleFromClassification('COMPRESSION')).toBe('SCALP');
-    expect(styleFromClassification('UNKNOWN')).toBeNull();
+    // dead labels collapse to RANGE → SCALP style
+    expect(styleFromClassification('UNKNOWN')).toBe('SCALP');
     expect(styleFromClassification(null, 'CONTINUATION')).toBe('LONG');
     expect(styleFromClassification(null, 'BREAKOUT')).toBe('SCALP');
   });
