@@ -3,8 +3,13 @@ import {
   decideBestOutcomeExit,
   favorableMove,
   thesisFailureReason,
+  THESIS_MIN_HOLD_MS,
   type ExitSnapshot,
 } from './exitManage.js';
+
+function ago(ms: number): string {
+  return new Date(Date.now() - ms).toISOString();
+}
 
 function snap(partial: Partial<ExitSnapshot> & { open_side: 'BUY' | 'SELL'; entry_price: number }): ExitSnapshot {
   return {
@@ -48,22 +53,43 @@ describe('decideBestOutcomeExit', () => {
     expect(d.exit).toBe(false);
   });
 
-  it('exits BUY on TREND_DOWN thesis failure even if still green', () => {
+  it('ignores ThesisFailure until min hold elapsed', () => {
     const d = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_DOWN', mfe: 2 }),
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        regime: 'TREND_DOWN',
+        mfe: 2,
+        entry_at: ago(10_000),
+      }),
+      2001
+    );
+    expect(d.exit).toBe(false);
+  });
+
+  it('exits BUY on TREND_DOWN thesis failure after min hold', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        regime: 'TREND_DOWN',
+        mfe: 2,
+        entry_at: ago(THESIS_MIN_HOLD_MS + 5_000),
+      }),
       2001
     );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/ThesisFailure/);
   });
 
-  it('exits SELL on TREND_UP without affecting BUY rules', () => {
+  it('exits SELL on TREND_UP without affecting BUY rules (after min hold)', () => {
+    const aged = ago(THESIS_MIN_HOLD_MS + 5_000);
     const sell = decideBestOutcomeExit(
-      snap({ open_side: 'SELL', entry_price: 2000, regime: 'TREND_UP' }),
+      snap({ open_side: 'SELL', entry_price: 2000, regime: 'TREND_UP', entry_at: aged }),
       1999
     );
     const buy = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_UP' }),
+      snap({ open_side: 'BUY', entry_price: 2000, regime: 'TREND_UP', entry_at: aged }),
       1999
     );
     expect(sell.exit).toBe(true);
@@ -76,7 +102,22 @@ describe('decideBestOutcomeExit', () => {
     expect(d.reason).toMatch(/HardInvalidation/);
   });
 
-  it('peak protection after meaningful MFE giveback', () => {
+  it('does not PeakProtect on micro MFE below ~0.18% floor', () => {
+    // 0.15 pts << 0.18% of 2000 (= 3.6) — old 0.12 floor would have armed
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        regime: 'TREND_UP',
+        mfe: 0.15,
+        peak_retention: 0.2,
+      }),
+      2000.03
+    );
+    expect(d.exit).toBe(false);
+  });
+
+  it('peak protection after meaningful MFE giveback (ret < 50%)', () => {
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -89,6 +130,20 @@ describe('decideBestOutcomeExit', () => {
     );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/PeakProtection/);
+  });
+
+  it('holds when peak retention still above 50%', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        regime: 'TREND_UP',
+        mfe: 8,
+        peak_retention: 0.6,
+      }),
+      2004.8
+    );
+    expect(d.exit).toBe(false);
   });
 
   it('target at ~0.35%', () => {

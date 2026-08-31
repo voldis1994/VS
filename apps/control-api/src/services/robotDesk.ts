@@ -1075,14 +1075,16 @@ async function robotCycle(s: Internal) {
     }
 
     s.mode = 'ENTRY';
+    // Was 20s — Gold chop re-entered too fast after PeakProtect/Harvest closes
+    const POST_CLOSE_COOLDOWN_MS = 90_000;
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
-    if (s.closed_at_ms > 0 && sinceClose < 20_000) {
+    if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
       pushTick(s, {
         phase: 'WAIT',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `10s OHLC cooldown ${Math.ceil((20_000 - sinceClose) / 1000)}s after close · then next bar`,
+        detail: `10s OHLC cooldown ${Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000)}s after close · then next bar`,
       });
       return;
     }
