@@ -52,6 +52,9 @@ export type MarketSetup = {
   /** Sticky confirm counter — setup flips only after enough agreeing updates */
   confirm: number;
   updated_at: string;
+  /** Both sides watched at once — desk shows BUY & SELL candidates */
+  watch_buy?: string | null;
+  watch_sell?: string | null;
 };
 
 export type SetupEntry = {
@@ -128,6 +131,8 @@ export function emptySetup(reason = 'no setup'): MarketSetup {
     reason,
     confirm: 0,
     updated_at: new Date().toISOString(),
+    watch_buy: null,
+    watch_sell: null,
   };
 }
 
@@ -262,17 +267,64 @@ function persistence(minutes: CapitalPriceCandle[], n = 12): number {
 }
 
 /** Local impulse from last ~8 minutes — dumps/rallies even mid an old wide swing. */
-function recentImpulse(minutes: CapitalPriceCandle[]): 'UP' | 'DOWN' | null {
-  const slice = minutes.slice(-8);
-  if (slice.length < 5) return null;
+export function recentImpulse(
+  minutes: CapitalPriceCandle[],
+  mode: 'normal' | 'flip' = 'normal'
+): 'UP' | 'DOWN' | null {
+  const n = mode === 'flip' ? 5 : 8;
+  const slice = minutes.slice(-n);
+  if (slice.length < (mode === 'flip' ? 4 : 5)) return null;
   const first = slice[0]!;
   const last = slice[slice.length - 1]!;
   const pers = persistence(slice, slice.length);
   const net = last.close - first.open;
-  const thr = Math.max(Math.abs(first.open) * 0.0007, 2.5);
-  if (pers <= -0.35 && net <= -thr) return 'DOWN';
-  if (pers >= 0.35 && net >= thr) return 'UP';
+  const thr =
+    mode === 'flip'
+      ? Math.max(Math.abs(first.open) * 0.0005, 1.8)
+      : Math.max(Math.abs(first.open) * 0.0007, 2.5);
+  const persThr = mode === 'flip' ? 0.25 : 0.35;
+  if (pers <= -persThr && net <= -thr) return 'DOWN';
+  if (pers >= persThr && net >= thr) return 'UP';
   return null;
+}
+
+/** Dual-side watch labels — desk shows both, not only the armed side. */
+export function dualSideWatch(
+  structure: StructureBook,
+  minutes: CapitalPriceCandle[]
+): { watch_buy: string | null; watch_sell: string | null } {
+  if (!structure.ready || minutes.length < MIN_SWING_BARS) {
+    return { watch_buy: null, watch_sell: null };
+  }
+  const last = minutes[minutes.length - 1]!;
+  const hi = structure.swing_high;
+  const lo = structure.swing_low;
+  const eps = edgeEps(last.close, Math.max(hi - lo, structure.span, 1));
+  const imp = recentImpulse(minutes, 'flip') || recentImpulse(minutes);
+  const freshHi = isFreshSwingHigh(minutes, hi, eps);
+  const freshLo = isFreshSwingLow(minutes, lo, eps);
+  let watch_buy: string | null = null;
+  let watch_sell: string | null = null;
+
+  if (imp === 'UP' || last.close > hi || (last.close > structure.mid && structure.bias !== 'BELOW')) {
+    watch_buy =
+      last.close > hi
+        ? `BUY break/through H${hi.toFixed(2)}`
+        : `BUY cont · mid ${structure.mid.toFixed(2)}`;
+  }
+  if (imp === 'DOWN' || last.close < lo || (last.close < structure.mid && structure.bias !== 'ABOVE')) {
+    watch_sell =
+      last.close < lo
+        ? `SELL break/through L${lo.toFixed(2)}`
+        : `SELL cont · mid ${structure.mid.toFixed(2)}`;
+  }
+  if (freshHi && structure.near_high && imp !== 'UP') {
+    watch_sell = `SELL fade H${hi.toFixed(2)}`;
+  }
+  if (freshLo && structure.near_low && imp !== 'DOWN') {
+    watch_buy = `BUY fade L${lo.toFixed(2)}`;
+  }
+  return { watch_buy, watch_sell };
 }
 
 function rawSetupFromStructure(
@@ -300,15 +352,60 @@ function rawSetupFromStructure(
   const closedBelow = last.close < lo;
   const pokeAbove = minutes.slice(-6).some((c) => c.high > hi && c.close <= hi);
   const pokeBelow = minutes.slice(-6).some((c) => c.low < lo && c.close >= lo);
-  const imp = recentImpulse(minutes);
+  const imp = recentImpulse(minutes, 'flip') || recentImpulse(minutes);
   const freshHi = isFreshSwingHigh(minutes, hi, eps);
   const freshLo = isFreshSwingLow(minutes, lo, eps);
+
+  // ——— IMPULSE FIRST — instant flip side, do not wait for sticky opposite to die ———
+  if (imp === 'UP') {
+    if (closedAbove || last.close >= hi - eps * 0.5) {
+      return {
+        kind: 'BREAKOUT',
+        side: 'BUY',
+        playbook: 'SCALP',
+        status: 'ARMED',
+        swing_high: hi,
+        swing_low: lo,
+        reason: `IMPULSE UP through H${hi.toFixed(2)} → BUY flip now`,
+      };
+    }
+    return {
+      kind: 'CONTINUATION',
+      side: 'BUY',
+      playbook: 'LONG',
+      status: 'ARMED',
+      swing_high: hi,
+      swing_low: lo,
+      reason: `IMPULSE UP → BUY flip now · mid ${structure.mid.toFixed(2)}`,
+    };
+  }
+  if (imp === 'DOWN') {
+    if (closedBelow || last.close <= lo + eps * 0.5) {
+      return {
+        kind: 'BREAKOUT',
+        side: 'SELL',
+        playbook: 'SCALP',
+        status: 'ARMED',
+        swing_high: hi,
+        swing_low: lo,
+        reason: `IMPULSE DOWN through L${lo.toFixed(2)} → SELL flip now`,
+      };
+    }
+    return {
+      kind: 'CONTINUATION',
+      side: 'SELL',
+      playbook: 'LONG',
+      status: 'ARMED',
+      swing_high: hi,
+      swing_low: lo,
+      reason: `IMPULSE DOWN → SELL flip now · mid ${structure.mid.toFixed(2)}`,
+    };
+  }
 
   // FAILED_BREAK — only on a FRESH swing extreme, never mid-rally / mid-dump fade
   if (
     pokeAbove &&
     freshHi &&
-    imp !== 'UP' &&
     last.close <= hi &&
     last.close >= lo &&
     last.close < last.open
@@ -326,7 +423,6 @@ function rawSetupFromStructure(
   if (
     pokeBelow &&
     freshLo &&
-    imp !== 'DOWN' &&
     last.close >= lo &&
     last.close <= hi &&
     last.close > last.open
@@ -342,8 +438,8 @@ function rawSetupFromStructure(
     };
   }
 
-  // BREAKOUT — close outside swing with persistence
-  if (closedAbove && pers > 0.2 && last.close > last.open) {
+  // BREAKOUT — close outside swing with persistence (no live impulse needed)
+  if (closedAbove && pers > 0.2) {
     return {
       kind: 'BREAKOUT',
       side: 'BUY',
@@ -354,7 +450,7 @@ function rawSetupFromStructure(
       reason: `BREAKOUT above ${hi.toFixed(2)} → BUY`,
     };
   }
-  if (closedBelow && pers < -0.2 && last.close < last.open) {
+  if (closedBelow && pers < -0.2) {
     return {
       kind: 'BREAKOUT',
       side: 'SELL',
@@ -367,7 +463,7 @@ function rawSetupFromStructure(
   }
 
   // FADE at FRESH swing edges only — never SELL mid-rally / BUY mid-dump on stale level
-  if (structure.near_high && !closedAbove && freshHi && imp !== 'UP') {
+  if (structure.near_high && !closedAbove && freshHi) {
     return {
       kind: 'FADE',
       side: 'SELL',
@@ -378,7 +474,7 @@ function rawSetupFromStructure(
       reason: `FADE SELL at fresh swing high ${hi.toFixed(2)} · no BUY at tip`,
     };
   }
-  if (structure.near_low && !closedBelow && freshLo && imp !== 'DOWN') {
+  if (structure.near_low && !closedBelow && freshLo) {
     return {
       kind: 'FADE',
       side: 'BUY',
@@ -446,34 +542,8 @@ function rawSetupFromStructure(
     }
   }
 
-  // Real local move mid old swing — never sit NONE while dump/rally is live
-  // Still refuse tip-chase: UP impulse at/near high → already FADE; DOWN at/near low → FADE
-  const tipEps = eps;
-  if (imp === 'DOWN' && last.close > lo + tipEps) {
-    return {
-      kind: 'CONTINUATION',
-      side: 'SELL',
-      playbook: 'LONG',
-      status: 'ARMED',
-      swing_high: hi,
-      swing_low: lo,
-      reason: `CONTINUATION SELL · local dump impulse (not mid-NONE)`,
-    };
-  }
-  if (imp === 'UP' && last.close < hi - tipEps) {
-    return {
-      kind: 'CONTINUATION',
-      side: 'BUY',
-      playbook: 'LONG',
-      status: 'ARMED',
-      swing_high: hi,
-      swing_low: lo,
-      reason: `CONTINUATION BUY · local rally impulse (not mid-NONE)`,
-    };
-  }
-
-  // Stale edge while impulse is against fade → explicit NONE reason (readable on desk)
-  if (structure.near_high && (!freshHi || imp === 'UP')) {
+  // Stale edge → readable NONE
+  if (structure.near_high && !freshHi) {
     return {
       kind: 'NONE',
       side: null,
@@ -481,10 +551,10 @@ function rawSetupFromStructure(
       status: 'NONE',
       swing_high: hi,
       swing_low: lo,
-      reason: `NONE · near H${hi.toFixed(2)} but ${!freshHi ? 'stale high' : 'rally impulse'} · no FADE SELL mid-move`,
+      reason: `NONE · near H${hi.toFixed(2)} but stale high · watch both sides`,
     };
   }
-  if (structure.near_low && (!freshLo || imp === 'DOWN')) {
+  if (structure.near_low && !freshLo) {
     return {
       kind: 'NONE',
       side: null,
@@ -492,7 +562,7 @@ function rawSetupFromStructure(
       status: 'NONE',
       swing_high: hi,
       swing_low: lo,
-      reason: `NONE · near L${lo.toFixed(2)} but ${!freshLo ? 'stale low' : 'dump impulse'} · no FADE BUY mid-move`,
+      reason: `NONE · near L${lo.toFixed(2)} but stale low · watch both sides`,
     };
   }
 
@@ -503,17 +573,13 @@ function rawSetupFromStructure(
     status: 'NONE',
     swing_high: hi,
     swing_low: lo,
-    reason: `NONE · mid swing H${hi.toFixed(2)}/L${lo.toFixed(2)} · no edge · no impulse`,
+    reason: `NONE · mid swing H${hi.toFixed(2)}/L${lo.toFixed(2)} · watching BUY&SELL · no impulse yet`,
   };
 }
 
 /**
- * Sticky setup update — never flip on a single disagreeing refresh.
- * Call only from structure refresh / closed minute path — not every quote tick.
- *
- * Hard rule: never keep a BUY sticky while the local move is still dumping
- * (and never keep SELL sticky while still rallying). That caused Client A
- * "LOOKING FOR BUY" / FAILED_BREAK hold while Gold was still falling.
+ * Sticky setup update — impulse FLIPS instantly (BUY↔SELL).
+ * Dual watch always attached so desk sees both sides.
  */
 export function updateSetupSticky(
   prev: MarketSetup | null | undefined,
@@ -523,8 +589,15 @@ export function updateSetupSticky(
   const raw = rawSetupFromStructure(structure, minutes);
   const now = new Date().toISOString();
   const prevSafe = prev || emptySetup();
-  const imp = recentImpulse(minutes);
+  const imp = recentImpulse(minutes, 'flip') || recentImpulse(minutes);
   const last = minutes[minutes.length - 1];
+  const watch = dualSideWatch(structure, minutes);
+
+  const withWatch = (s: MarketSetup): MarketSetup => ({
+    ...s,
+    watch_buy: watch.watch_buy,
+    watch_sell: watch.watch_sell,
+  });
 
   const same =
     prevSafe.kind === raw.kind &&
@@ -541,40 +614,46 @@ export function updateSetupSticky(
             ? 'FORMING'
             : 'ARMED'
           : 'FORMING';
-    return {
+    return withWatch({
       ...raw,
       status: raw.kind === 'NONE' ? 'NONE' : status,
       confirm,
       swing_high: structure.swing_high || raw.swing_high,
       swing_low: structure.swing_low || raw.swing_low,
       updated_at: now,
-    };
+    });
   }
 
-  // Leaving NONE for a real setup is instant — do not miss dumps waiting sticky
+  // Impulse / breakout / continuation — INSTANT arm (flip without waiting sticky)
+  if (
+    raw.side &&
+    (String(raw.reason).includes('IMPULSE') ||
+      raw.kind === 'BREAKOUT' ||
+      raw.kind === 'CONTINUATION')
+  ) {
+    return withWatch({
+      ...raw,
+      status: 'ARMED',
+      confirm: SETUP_CONFIRM,
+      reason:
+        prevSafe.side && prevSafe.side !== raw.side
+          ? `${raw.reason} · flipped from ${prevSafe.side}`
+          : raw.reason,
+      updated_at: now,
+    });
+  }
+
+  // Leaving NONE for a real setup is instant
   if (prevSafe.kind === 'NONE' && raw.kind !== 'NONE' && raw.side) {
-    return {
+    return withWatch({
       ...raw,
       status: raw.status === 'FORMING' ? 'FORMING' : 'ARMED',
       confirm: SETUP_CONFIRM,
       updated_at: now,
-    };
+    });
   }
 
-  // Breakout / continuation impulse arms immediately when freshly detected
-  if (
-    (raw.kind === 'BREAKOUT' || raw.kind === 'CONTINUATION') &&
-    raw.side &&
-    raw.status === 'ARMED'
-  ) {
-    return {
-      ...raw,
-      confirm: SETUP_CONFIRM,
-      updated_at: now,
-    };
-  }
-
-  // Dump kills sticky BUY; rally kills sticky SELL — no "holding BUY" into a fall
+  // Dump kills sticky BUY; rally kills sticky SELL; opposite raw side also flips
   const stickyBuyDead =
     prevSafe.side === 'BUY' &&
     (imp === 'DOWN' ||
@@ -591,33 +670,38 @@ export function updateSetupSticky(
         last.close > prevSafe.swing_high + edgeEps(last.close, Math.max(structure.span, 1))));
 
   if (stickyBuyDead || stickySellDead) {
-    return {
+    return withWatch({
       ...raw,
       status: raw.kind === 'NONE' ? 'NONE' : raw.status === 'FORMING' ? 'FORMING' : 'ARMED',
       confirm: raw.kind === 'NONE' ? 0 : SETUP_CONFIRM,
       reason:
         raw.reason +
-        (stickyBuyDead ? ' · dropped sticky BUY (dump/adverse)' : ' · dropped sticky SELL (rally/adverse)'),
+        (stickyBuyDead ? ' · flipped off sticky BUY' : ' · flipped off sticky SELL'),
       updated_at: now,
-    };
+    });
   }
 
-  // Candidate change — need confirm; until then keep previous if it was armed
-  if (prevSafe.kind !== 'NONE' && prevSafe.confirm >= SETUP_CONFIRM && raw.kind !== prevSafe.kind) {
-    return {
+  // Same-family candidate change — brief hold only if NOT opposite side
+  if (
+    prevSafe.kind !== 'NONE' &&
+    prevSafe.confirm >= SETUP_CONFIRM &&
+    raw.kind !== prevSafe.kind &&
+    !(prevSafe.side && raw.side && prevSafe.side !== raw.side)
+  ) {
+    return withWatch({
       ...prevSafe,
       confirm: Math.max(0, prevSafe.confirm - 1),
       reason: `${prevSafe.reason} · holding (candidate ${raw.kind})`,
       updated_at: now,
-    };
+    });
   }
 
-  return {
+  return withWatch({
     ...raw,
     status: raw.kind === 'NONE' ? 'NONE' : 'FORMING',
     confirm: 1,
     updated_at: now,
-  };
+  });
 }
 
 /**

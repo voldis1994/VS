@@ -133,6 +133,8 @@ export type RobotSession = {
     reason: string;
     swing_high?: number;
     swing_low?: number;
+    watch_buy?: string | null;
+    watch_sell?: string | null;
   } | null;
   decision_chain?: {
     feeds: string;
@@ -179,7 +181,7 @@ type Internal = RobotSession & {
   last_hard_exit_ms: number;
 };
 
-const STRUCTURE_REFRESH_MS = 20_000;
+const STRUCTURE_REFRESH_MS = 10_000;
 const STRUCTURE_MINUTE_BARS = 120;
 const STRUCTURE_HOUR_BARS = 24;
 
@@ -294,6 +296,8 @@ function publicSession(s: Internal): RobotSession {
       reason: setup.reason,
       swing_high: setup.swing_high || st.swing_high,
       swing_low: setup.swing_low || st.swing_low,
+      watch_buy: setup.watch_buy ?? null,
+      watch_sell: setup.watch_sell ?? null,
     },
     decision_chain: buildDecisionChain(s),
   };
@@ -342,7 +346,12 @@ async function refreshStructureAndSetup(
     s.structureBook.ready &&
     now - s.last_structure_fetch_ms < STRUCTURE_REFRESH_MS
   ) {
-    return;
+    // Price left the swing band — refresh early so impulse flip is not 20s late
+    const drifted =
+      mid != null &&
+      (mid > s.structureBook.swing_high + Math.max(s.structureBook.span * 0.15, 1.2) ||
+        mid < s.structureBook.swing_low - Math.max(s.structureBook.span * 0.15, 1.2));
+    if (!drifted) return;
   }
   const [hist, hours] = await Promise.all([
     fetchCapitalMinutePrices(session, s.epic, STRUCTURE_MINUTE_BARS),
