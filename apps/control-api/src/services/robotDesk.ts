@@ -24,7 +24,6 @@ import {
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
 import {
   decideMoveEntry,
-  decidePriceMove,
   labelPlaybookForMove,
 } from './entryFromRegime.js';
 import {
@@ -159,8 +158,11 @@ type Internal = RobotSession & {
   last_zones_fetch_ms: number;
   /** Debounce Capital order spam between attempts */
   last_entry_attempt_ms: number;
-  /** Last flat mid — tick MOVE for every regime */
+  /** Last flat mid — diagnostics only */
   last_flat_mid: number | null;
+  /** Last opened side — block opposite flip spam */
+  last_entry_side: 'BUY' | 'SELL' | null;
+  last_entry_side_ms: number;
 };
 
 const ZONE_REFRESH_MS = 45_000;
@@ -244,6 +246,8 @@ function publicSession(s: Internal): RobotSession {
     last_zones_fetch_ms: _zonesAt,
     last_entry_attempt_ms: _entryAt,
     last_flat_mid: _flatMid,
+    last_entry_side: _entrySide,
+    last_entry_side_ms: _entrySideAt,
     ...rest
   } = s;
   const z = s.zoneBook;
@@ -338,9 +342,9 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     active_regimes: activeRegimes,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: '1m ZONES → allowed side → 10s/mid MOVE confirm → ORDER',
+    chain: '1m×N zones → side → closed 10s MOVE → ORDER (90s cooldown)',
     note:
-      'Zones (1m H/L) choose BUY or SELL. MOVE only times the fill. No tick-noise entries; no late/stale blocks. RANGE = fade edges only.',
+      'Zones from ≥12 minute bars (not one candle). Entry only on closed 10s impulse matching zone side. 90s post-close cooldown + 3m opposite-side lock stops machine-gun ±flips.',
   };
 }
 
@@ -1205,7 +1209,6 @@ async function robotCycle(s: Internal) {
     }
 
     s.mode = 'ENTRY';
-    // Keep setup visible on board while scanning (not "WAIT ENTRY")
     {
       const watch = playbookFromRegime(s.regime);
       if (watch !== 'WAIT') {
@@ -1213,7 +1216,20 @@ async function robotCycle(s: Internal) {
         s.playbook_watch = watch;
       }
     }
-    // No post-close cooldown — user: move finishes while waiting
+
+    // Stop ±BUY/SELL every minute after a close
+    const POST_CLOSE_COOLDOWN_MS = 90_000;
+    const sinceClose = Date.now() - (s.closed_at_ms || 0);
+    if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `cooldown ${Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000)}s after close · no machine-gun reentry`,
+      });
+      return;
+    }
 
     if (quote.mid == null) return;
 
@@ -1265,8 +1281,6 @@ async function robotCycle(s: Internal) {
     );
 
     const bar = s.ohlcState.last_closed;
-    const forming = s.ohlcState.forming;
-    const ohlc = s.ohlc_10s;
     const zoneLine = s.zoneBook.ready
       ? `zones ${s.zoneBook.structure} H${s.zoneBook.high.toFixed(2)}/L${s.zoneBook.low.toFixed(2)}`
       : `zones ${s.zoneBook.detail}`;
@@ -1282,7 +1296,7 @@ async function robotCycle(s: Internal) {
     let entryPlaybook: TradePlaybook | null = null;
 
     const led = regimeForEntry(s.regime, s.zoneBook);
-    // 1m zones decide allowed side — why we fetch minute history
+    // 1m multi-bar zones decide allowed side — never from one 10s wick
     const sides = allowedSidesFromZones(s.zoneBook);
 
     if (!sides.buy && !sides.sell) {
@@ -1297,23 +1311,20 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // Timing: real MOVE that agrees with zones (not every colored wick / tick)
-    const moveBar = forming || bar;
-    let move = moveBar ? decideMoveEntry(moveBar) : null;
-    if (!move && quote.mid != null && s.zoneBook.ready) {
-      // Prefer 1m zone H/L as the reference — that is the structure
-      move = decidePriceMove(quote.mid, s.zoneBook.high, s.zoneBook.low);
+    // Timing only on a CLOSED 10s bar — forming wick ≠ entry
+    if (!s.ohlcState.just_closed || !bar) {
+      if (quote.mid != null) s.last_flat_mid = quote.mid;
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · ${sides.reason} · wait 10s close (not forming wick)`,
+      });
+      return;
     }
-    if (!move && quote.mid != null) {
-      const recent = [...s.closedBars.slice(-8), bar, forming].filter(Boolean) as TenSecBar[];
-      if (recent.length) {
-        move = decidePriceMove(
-          quote.mid,
-          Math.max(...recent.map((b) => b.high)),
-          Math.min(...recent.map((b) => b.low))
-        );
-      }
-    }
+
+    const move = decideMoveEntry(bar);
     if (quote.mid != null) s.last_flat_mid = quote.mid;
 
     if (!move) {
@@ -1322,7 +1333,7 @@ async function robotCycle(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · ${sides.reason} · no confirming MOVE yet`,
+        detail: `${ohlcLine} · ${sides.reason} · closed 10s not strong enough`,
       });
       return;
     }
@@ -1333,7 +1344,7 @@ async function robotCycle(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · SKIP BUY · ${sides.reason} · saw ${move.reason}`,
+        detail: `${ohlcLine} · SKIP BUY · ${sides.reason}`,
       });
       return;
     }
@@ -1343,7 +1354,24 @@ async function robotCycle(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · SKIP SELL · ${sides.reason} · saw ${move.reason}`,
+        detail: `${ohlcLine} · SKIP SELL · ${sides.reason}`,
+      });
+      return;
+    }
+
+    // Block BUY↔SELL flip spam for 3 minutes unless same side continuation
+    const SIDE_LOCK_MS = 180_000;
+    if (
+      s.last_entry_side &&
+      s.last_entry_side !== move.direction &&
+      Date.now() - s.last_entry_side_ms < SIDE_LOCK_MS
+    ) {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · side-lock ${s.last_entry_side} · no flip to ${move.direction} yet`,
       });
       return;
     }
@@ -1356,18 +1384,9 @@ async function robotCycle(s: Internal) {
     s.playbook = entryPlaybook;
     s.entry_setup = setupType;
 
-    const sinceAttempt = Date.now() - (s.last_entry_attempt_ms || 0);
-    if (sinceAttempt < 5_000) {
-      pushTick(s, {
-        phase: 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `${ohlcLine} · ${reason} · order debounce ${Math.ceil((5_000 - sinceAttempt) / 1000)}s`,
-      });
-      return;
-    }
     s.last_entry_attempt_ms = Date.now();
+    s.last_entry_side = direction;
+    s.last_entry_side_ms = Date.now();
     pushTick(s, {
       phase: 'ORDER',
       bid: quote.bid,
@@ -1515,6 +1534,8 @@ export async function startRobotSession(input: {
     last_zones_fetch_ms: 0,
     last_entry_attempt_ms: 0,
     last_flat_mid: null,
+    last_entry_side: null,
+    last_entry_side_ms: 0,
 
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };

@@ -31,7 +31,7 @@ export type MarketZoneBook = {
   detail: string;
 };
 
-const MIN_BARS = 8;
+const MIN_BARS = 12;
 
 function mean(xs: number[]): number {
   if (!xs.length) return 0;
@@ -95,25 +95,21 @@ export function buildZonesFromMinutes(
   const compressed = lastRange < avgRange * 0.65 && span / Math.max(Math.abs(mid), 1) < 0.004;
 
   let structure: StructureHint = 'UNKNOWN';
-  if (last.close > hi && (persistence > 0.15 || last.close - last.open > 0)) {
+  // Breakout = outside prior multi-minute H/L with persistence — not one stray wick
+  if (last.close > hi && persistence > 0.25 && last.close - last.open > 0) {
     structure = 'BREAKOUT_UP';
-  } else if (last.close < lo && (persistence < -0.15 || last.close - last.open < 0)) {
+  } else if (last.close < lo && persistence < -0.25 && last.close - last.open < 0) {
     structure = 'BREAKOUT_DOWN';
+  } else if (persistence > 0.4) {
+    structure = 'TREND_UP';
+  } else if (persistence < -0.4) {
+    structure = 'TREND_DOWN';
   } else if (
     compressed ||
-    Math.abs(persistence) < 0.25 ||
-    // Still inside prior H/L — edge touches are RANGE, not TREND
-    (px <= hi && px >= lo && (near_high || near_low))
+    Math.abs(persistence) < 0.3 ||
+    (px <= hi && px >= lo)
   ) {
     structure = 'RANGE';
-  } else if (persistence > 0.35) {
-    structure = 'TREND_UP';
-  } else if (persistence < -0.35) {
-    structure = 'TREND_DOWN';
-  } else if (bias === 'ABOVE') {
-    structure = 'TREND_UP';
-  } else if (bias === 'BELOW') {
-    structure = 'TREND_DOWN';
   } else {
     structure = 'RANGE';
   }
@@ -164,10 +160,10 @@ export function regimeForEntry(
   if (s === 'BREAKOUT_DOWN') {
     return { regime: 'BREAKOUT_DOWN', led: true, reason: `zone-led BREAKOUT_DOWN (10s was ${r})` };
   }
-  if (s === 'TREND_UP' || zones.bias === 'ABOVE') {
+  if (s === 'TREND_UP') {
     return { regime: 'TREND_UP', led: true, reason: `zone-led TREND_UP (10s was ${r})` };
   }
-  if (s === 'TREND_DOWN' || zones.bias === 'BELOW') {
+  if (s === 'TREND_DOWN') {
     return { regime: 'TREND_DOWN', led: true, reason: `zone-led TREND_DOWN (10s was ${r})` };
   }
   return { regime: r, led: false, reason: `10s ${r} · structure ${s}` };
@@ -175,20 +171,12 @@ export function regimeForEntry(
 
 export function zonesSupportLong(zones?: MarketZoneBook | null): boolean {
   if (!zones?.ready) return false;
-  return (
-    zones.structure === 'TREND_UP' ||
-    zones.structure === 'BREAKOUT_UP' ||
-    zones.bias === 'ABOVE'
-  );
+  return zones.structure === 'TREND_UP' || zones.structure === 'BREAKOUT_UP';
 }
 
 export function zonesSupportShort(zones?: MarketZoneBook | null): boolean {
   if (!zones?.ready) return false;
-  return (
-    zones.structure === 'TREND_DOWN' ||
-    zones.structure === 'BREAKOUT_DOWN' ||
-    zones.bias === 'BELOW'
-  );
+  return zones.structure === 'TREND_DOWN' || zones.structure === 'BREAKOUT_DOWN';
 }
 
 /**
@@ -211,13 +199,13 @@ export function allowedSidesFromZones(zones: MarketZoneBook): {
   if (s === 'BREAKOUT_DOWN') {
     return { buy: false, sell: true, playbook: 'SCALP', reason: `zones BREAKOUT_DOWN → SELL only` };
   }
-  if (s === 'TREND_UP' || (s !== 'RANGE' && zones.bias === 'ABOVE')) {
-    return { buy: true, sell: false, playbook: 'LONG', reason: `zones ${s}/${zones.bias} → BUY only` };
+  if (s === 'TREND_UP') {
+    return { buy: true, sell: false, playbook: 'LONG', reason: `zones TREND_UP → BUY only` };
   }
-  if (s === 'TREND_DOWN' || (s !== 'RANGE' && zones.bias === 'BELOW')) {
-    return { buy: false, sell: true, playbook: 'LONG', reason: `zones ${s}/${zones.bias} → SELL only` };
+  if (s === 'TREND_DOWN') {
+    return { buy: false, sell: true, playbook: 'LONG', reason: `zones TREND_DOWN → SELL only` };
   }
-  // Real range: fade edges only (why we built 1m H/L)
+  // Real range from multi-minute H/L — fade edges only (not bias-from-one-bar)
   if (s === 'RANGE' || s === 'UNKNOWN') {
     return {
       buy: zones.near_low,
