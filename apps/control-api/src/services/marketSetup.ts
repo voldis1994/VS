@@ -304,6 +304,36 @@ export function recentImpulse(
   return null;
 }
 
+/**
+ * Dump / rally bias including slow grinds (small red candles) that miss impulse persistence.
+ * Used to hard-block BUY into dump / SELL into rally.
+ */
+export function priceFlowBias(
+  minutes: CapitalPriceCandle[] | null | undefined
+): 'UP' | 'DOWN' | null {
+  if (!minutes || minutes.length < 4) return null;
+  const imp = recentImpulse(minutes, 'flip') || recentImpulse(minutes);
+  if (imp) return imp;
+  const slice = minutes.slice(-6);
+  const first = slice[0]!;
+  const last = slice[slice.length - 1]!;
+  const net = last.close - first.open;
+  const thr = Math.max(Math.abs(first.open) * 0.00035, 1.4);
+  // Count red vs green closes in window
+  let down = 0;
+  let up = 0;
+  for (const c of slice) {
+    if (c.close < c.open) down += 1;
+    else if (c.close > c.open) up += 1;
+  }
+  if (net <= -thr && down >= up) return 'DOWN';
+  if (net >= thr && up >= down) return 'UP';
+  // Lower-high grind: last close below open of window start by thr even if mixed
+  if (net <= -thr * 1.25) return 'DOWN';
+  if (net >= thr * 1.25) return 'UP';
+  return null;
+}
+
 /** Dual-side watch labels — desk shows both, not only the armed side. */
 export function dualSideWatch(
   structure: StructureBook,
@@ -479,7 +509,9 @@ function rawSetupFromStructure(
   }
 
   // FADE at FRESH swing edges only — never SELL mid-rally / BUY mid-dump on stale level
-  if (structure.near_high && !closedAbove && freshHi) {
+  // Also: if price is still dumping, do NOT arm FADE BUY (falling knife) — ride SELL
+  const flow = priceFlowBias(minutes);
+  if (structure.near_high && !closedAbove && freshHi && flow !== 'UP') {
     return {
       kind: 'FADE',
       side: 'SELL',
@@ -490,7 +522,18 @@ function rawSetupFromStructure(
       reason: `FADE SELL at fresh swing high ${hi.toFixed(2)} · no BUY at tip`,
     };
   }
-  if (structure.near_low && !closedBelow && freshLo) {
+  if (structure.near_high && !closedAbove && freshHi && flow === 'UP') {
+    return {
+      kind: 'CONTINUATION',
+      side: 'BUY',
+      playbook: 'LONG',
+      status: 'ARMED',
+      swing_high: hi,
+      swing_low: lo,
+      reason: `Rally through high zone · BUY not FADE · H${hi.toFixed(2)}`,
+    };
+  }
+  if (structure.near_low && !closedBelow && freshLo && flow !== 'DOWN') {
     return {
       kind: 'FADE',
       side: 'BUY',
@@ -499,6 +542,17 @@ function rawSetupFromStructure(
       swing_high: hi,
       swing_low: lo,
       reason: `FADE BUY at fresh swing low ${lo.toFixed(2)} · no SELL at floor`,
+    };
+  }
+  if (structure.near_low && !closedBelow && freshLo && flow === 'DOWN') {
+    return {
+      kind: 'CONTINUATION',
+      side: 'SELL',
+      playbook: 'LONG',
+      status: 'ARMED',
+      swing_high: hi,
+      swing_low: lo,
+      reason: `Dump through low zone · SELL not FADE BUY · L${lo.toFixed(2)}`,
     };
   }
 
@@ -744,7 +798,8 @@ export function isTipChaseEntry(setup: MarketSetup, bar: TenSecBar): boolean {
 
 export function decideEntryFromSetup(
   setup: MarketSetup,
-  bar: TenSecBar
+  bar: TenSecBar,
+  minutes?: CapitalPriceCandle[] | null
 ): SetupEntry | null {
   if (setup.kind === 'NONE' || setup.status !== 'ARMED' || !setup.side || !setup.playbook) {
     return null;
@@ -756,6 +811,11 @@ export function decideEntryFromSetup(
   const hi = setup.swing_high;
   const lo = setup.swing_low;
   const eps = edgeEps(bar.close, Math.max(hi - lo, 1));
+  const flow = priceFlowBias(minutes);
+
+  // Hard: never BUY into a dump / SELL into a rally (green blip mid-dump class)
+  if (setup.side === 'BUY' && flow === 'DOWN') return null;
+  if (setup.side === 'SELL' && flow === 'UP') return null;
 
   if (isTipChaseEntry(setup, bar)) {
     return null;
@@ -862,11 +922,12 @@ export function decideEntryFromSetup(
 /**
  * When sticky setup is NONE mid-swing but the closed 10s bar is a real Gold move,
  * enter CONTINUATION in the bar direction — do not sit out every V-leg as "NONE".
- * Still refuse tip-chase BUY at H / SELL at L.
+ * Still refuse tip-chase and refuse BUY into dump / SELL into rally.
  */
 export function decideEntryFromTenSecMove(
   structure: StructureBook,
-  bar: TenSecBar
+  bar: TenSecBar,
+  minutes?: CapitalPriceCandle[] | null
 ): SetupEntry | null {
   if (!structure.ready || !(structure.swing_high > structure.swing_low)) return null;
   const thr = PLAYBOOK_ENTRY_BODY.SCALP;
@@ -875,8 +936,10 @@ export function decideEntryFromTenSecMove(
   const lo = structure.swing_low;
   const eps = edgeEps(bar.close, Math.max(hi - lo, structure.span, 1));
   const need = thr * 0.65;
+  const flow = priceFlowBias(minutes);
 
   if (body >= need) {
+    if (flow === 'DOWN' || structure.bias === 'BELOW') return null;
     // Tip-chase: green bar parked at swing high — skip
     if (bar.close >= hi - eps * 0.3 && bar.close <= hi + eps * 0.15) return null;
     return {
@@ -887,6 +950,7 @@ export function decideEntryFromTenSecMove(
     };
   }
   if (body <= -need) {
+    if (flow === 'UP' || structure.bias === 'ABOVE') return null;
     if (bar.close <= lo + eps * 0.3 && bar.close >= lo - eps * 0.15) return null;
     return {
       direction: 'SELL',

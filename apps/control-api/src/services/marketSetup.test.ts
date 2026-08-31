@@ -5,6 +5,7 @@ import {
   decideEntryFromSetup,
   decideEntryFromTenSecMove,
   emptySetup,
+  priceFlowBias,
   recentImpulse,
   updateSetupSticky,
 } from './marketSetup.js';
@@ -275,11 +276,11 @@ describe('marketSetup', () => {
     const st = buildStructure({ minutes, mid: 2005 });
     expect(st.ready).toBe(true);
     const buyBar = bar10(2004.5, 2006.2, 2004.4, 2006.0);
-    const buy = decideEntryFromTenSecMove(st, buyBar);
+    const buy = decideEntryFromTenSecMove(st, buyBar, minutes);
     expect(buy?.direction).toBe('BUY');
     expect(buy?.setup).toBe('CONTINUATION');
     const sellBar = bar10(2005.5, 2005.6, 2003.8, 2004.0);
-    const sell = decideEntryFromTenSecMove(st, sellBar);
+    const sell = decideEntryFromTenSecMove(st, sellBar, minutes);
     expect(sell?.direction).toBe('SELL');
   });
 
@@ -288,6 +289,38 @@ describe('marketSetup', () => {
     const st = buildStructure({ minutes, mid: 2009.2 });
     expect(st.near_high).toBe(true);
     const tip = bar10(2008.8, 2009.6, 2008.7, 2009.4);
-    expect(decideEntryFromTenSecMove(st, tip)).toBeNull();
+    expect(decideEntryFromTenSecMove(st, tip, minutes)).toBeNull();
+  });
+
+  it('never BUY into a dump — green 10s blip mid-dump is blocked', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) {
+      bars.push(candle(4436, 4438, 4434, 4436));
+    }
+    // Slow grind dump like 18:00→4431 (BUY @ 4433.90 class of mistake)
+    for (let i = 0; i < 8; i++) {
+      const o = 4436 - i * 0.55;
+      bars.push(candle(o, o + 0.25, o - 0.7, o - 0.5));
+    }
+    expect(priceFlowBias(bars)).toBe('DOWN');
+    const st = buildStructure({ minutes: bars, mid: bars[bars.length - 1]!.close });
+    const greenBlip = bar10(4433.5, 4434.3, 4433.4, 4434.1);
+    expect(decideEntryFromTenSecMove(st, greenBlip, bars)).toBeNull();
+    // Armed FADE BUY must also refuse entry while dumping
+    const fadeBuy = {
+      ...emptySetup(),
+      kind: 'FADE' as const,
+      side: 'BUY' as const,
+      playbook: 'FADE' as const,
+      status: 'ARMED' as const,
+      confirm: 3,
+      swing_high: st.swing_high,
+      swing_low: st.swing_low,
+    };
+    expect(decideEntryFromSetup(fadeBuy, greenBlip, bars)).toBeNull();
+    // Setup itself should prefer SELL not FADE BUY at low while dumping
+    let setup = emptySetup();
+    setup = updateSetupSticky(setup, st, bars);
+    expect(setup.side).not.toBe('BUY');
   });
 });
