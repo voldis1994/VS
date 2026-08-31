@@ -2225,3 +2225,124 @@ button.regime-chip { cursor: pointer; }
   overflow: auto;
   margin-top: 8px;
 }
+
+/* —— Robot Desk FULL VIEWPORT (no clipped half-screen) —— */
+html:has(.robot-fs-shell),
+body:has(.robot-fs-shell),
+#root:has(.robot-fs-shell) {
+  height: 100%;
+  max-height: none;
+  overflow: auto;
+}
+.robot-fs-shell.robot-board-shell {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0;
+  height: 100dvh;
+  min-height: 100dvh;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  overflow-x: hidden;
+  overflow-y: auto;
+  position: relative;
+}
+.robot-board-fill {
+  width: 100% !important;
+  max-width: none !important;
+  min-height: 100dvh;
+  height: auto;
+  margin: 0;
+  padding: 12px 20px 20px !important;
+  box-sizing: border-box;
+  display: flex !important;
+  flex-direction: column;
+  gap: 12px;
+}
+.robot-board-fill .robot-board-top {
+  width: 100%;
+  flex: 0 0 auto;
+  grid-template-columns: minmax(0, 1.6fr) auto auto;
+}
+.robot-board-fill .robot-arena-sub {
+  max-width: none;
+}
+.robot-board-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.robot-board-fill .robot-board-grid {
+  width: 100%;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: 12px;
+}
+.robot-board-fill .robot-mini {
+  clip-path: none;
+  border-radius: 4px;
+  min-height: 220px;
+  width: 100%;
+}
+.robot-board-fill .robot-story {
+  flex: 1 1 auto;
+  width: 100%;
+  margin-top: 0;
+  clip-path: none;
+  border-radius: 4px;
+  min-height: min(52dvh, 560px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px 18px;
+  box-sizing: border-box;
+}
+.robot-board-fill .robot-story-hero {
+  width: 100%;
+  grid-template-columns: minmax(220px, 1.5fr) repeat(3, minmax(140px, 1fr));
+}
+.robot-board-fill .robot-story-grid {
+  flex: 1 1 auto;
+  min-height: 240px;
+  width: 100%;
+  grid-template-columns: minmax(280px, 0.95fr) minmax(320px, 1.15fr);
+}
+.robot-board-fill .robot-story-panel {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.robot-board-fill .robot-story-reason {
+  font-size: 16px;
+  word-break: break-word;
+}
+.robot-board-fill .robot-story-log {
+  min-height: 0;
+}
+.robot-board-fill .robot-story-log .robot-feed {
+  flex: 1 1 auto;
+  max-height: none !important;
+  min-height: 220px;
+  height: 100%;
+  overflow: auto;
+}
+.robot-board-fill .robot-feed-line {
+  grid-template-columns: 72px 72px minmax(0, 1fr);
+}
+.robot-board-fill .robot-feed-line .detail {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 1100px) {
+  .robot-board-fill .robot-board-top {
+    grid-template-columns: 1fr;
+  }
+  .robot-board-fill .robot-story-hero {
+    grid-template-columns: 1fr 1fr;
+  }
+  .robot-board-fill .robot-story-grid {
+    grid-template-columns: 1fr;
+  }
+}
