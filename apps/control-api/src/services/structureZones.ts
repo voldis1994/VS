@@ -192,6 +192,48 @@ export function zonesSupportShort(zones?: MarketZoneBook | null): boolean {
 }
 
 /**
+ * 1m zones decide WHICH side is allowed. 10s MOVE only times the fill.
+ * Not a "wait forever" gate — RANGE mid simply has no side until edge.
+ */
+export function allowedSidesFromZones(zones: MarketZoneBook): {
+  buy: boolean;
+  sell: boolean;
+  playbook: 'LONG' | 'SCALP' | 'FADE' | 'WAIT';
+  reason: string;
+} {
+  if (!zones.ready) {
+    return { buy: false, sell: false, playbook: 'WAIT', reason: `ZONES seeding · ${zones.detail}` };
+  }
+  const s = zones.structure;
+  if (s === 'BREAKOUT_UP') {
+    return { buy: true, sell: false, playbook: 'SCALP', reason: `zones BREAKOUT_UP → BUY only` };
+  }
+  if (s === 'BREAKOUT_DOWN') {
+    return { buy: false, sell: true, playbook: 'SCALP', reason: `zones BREAKOUT_DOWN → SELL only` };
+  }
+  if (s === 'TREND_UP' || (s !== 'RANGE' && zones.bias === 'ABOVE')) {
+    return { buy: true, sell: false, playbook: 'LONG', reason: `zones ${s}/${zones.bias} → BUY only` };
+  }
+  if (s === 'TREND_DOWN' || (s !== 'RANGE' && zones.bias === 'BELOW')) {
+    return { buy: false, sell: true, playbook: 'LONG', reason: `zones ${s}/${zones.bias} → SELL only` };
+  }
+  // Real range: fade edges only (why we built 1m H/L)
+  if (s === 'RANGE' || s === 'UNKNOWN') {
+    return {
+      buy: zones.near_low,
+      sell: zones.near_high,
+      playbook: zones.near_low || zones.near_high ? 'FADE' : 'WAIT',
+      reason: zones.near_low
+        ? `zones RANGE edge-low → FADE BUY`
+        : zones.near_high
+          ? `zones RANGE edge-high → FADE SELL`
+          : `zones RANGE mid H${zones.high.toFixed(2)}/L${zones.low.toFixed(2)} · wait edge`,
+    };
+  }
+  return { buy: false, sell: false, playbook: 'WAIT', reason: `zones ${s} · no side` };
+}
+
+/**
  * Regime (10s or zone-led) must agree with minute structure before entry.
  * Returns ok=false → WAIT (structure first).
  */

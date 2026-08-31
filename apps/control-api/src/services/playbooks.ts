@@ -67,11 +67,11 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
   },
 };
 
-/** Entry body thresholds — any visible Gold print. */
+/** Entry body — real 10s move, not every colored wick. */
 export const PLAYBOOK_ENTRY_BODY: Record<TradePlaybook, number> = {
-  LONG: 0.00012, // 0.012%
-  SCALP: 0.00008, // 0.008% ≈ ~0.35pt on Gold 4450
-  FADE: 0.00008,
+  LONG: 0.00025, // 0.025%
+  SCALP: 0.0002, // 0.02% ≈ ~0.9pt Gold
+  FADE: 0.0002,
 };
 
 export function playbookFromRegime(regime?: string | null): Playbook {

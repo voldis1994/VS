@@ -25,7 +25,6 @@ import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
 import {
   decideMoveEntry,
   decidePriceMove,
-  decideTickMove,
   labelPlaybookForMove,
 } from './entryFromRegime.js';
 import {
@@ -34,6 +33,7 @@ import {
   type TradePlaybook,
 } from './playbooks.js';
 import {
+  allowedSidesFromZones,
   buildZonesFromMinutes,
   emptyZones,
   regimeForEntry,
@@ -338,9 +338,9 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     active_regimes: activeRegimes,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'Capital mid MOVE-first (all regimes) → label playbook → ORDER',
+    chain: '1m ZONES → allowed side → 10s/mid MOVE confirm → ORDER',
     note:
-      'Entry is MOVE-first for every regime: forming body / mid vs H-L / tick dump|rally. Regime only labels LONG/SCALP/FADE — never blocks. One open trade; 5s order debounce.',
+      'Zones (1m H/L) choose BUY or SELL. MOVE only times the fill. No tick-noise entries; no late/stale blocks. RANGE = fade edges only.',
   };
 }
 
@@ -1282,82 +1282,100 @@ async function robotCycle(s: Internal) {
     let entryPlaybook: TradePlaybook | null = null;
 
     const led = regimeForEntry(s.regime, s.zoneBook);
-    const entryRegime = led.regime;
+    // 1m zones decide allowed side — why we fetch minute history
+    const sides = allowedSidesFromZones(s.zoneBook);
 
-    // MOVE-FIRST for ALL regimes — direction from price, regime only labels playbook
+    if (!sides.buy && !sides.sell) {
+      if (quote.mid != null) s.last_flat_mid = quote.mid;
+      pushTick(s, {
+        phase: 'DECIDE',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · ${sides.reason} · ${led.reason}`,
+      });
+      return;
+    }
+
+    // Timing: real MOVE that agrees with zones (not every colored wick / tick)
     const moveBar = forming || bar;
-    if (moveBar) {
-      const move = decideMoveEntry(moveBar);
-      if (move) {
-        direction = move.direction;
-        reason = `${move.reason} · ${led.reason}`;
-      }
+    let move = moveBar ? decideMoveEntry(moveBar) : null;
+    if (!move && quote.mid != null && s.zoneBook.ready) {
+      // Prefer 1m zone H/L as the reference — that is the structure
+      move = decidePriceMove(quote.mid, s.zoneBook.high, s.zoneBook.low);
     }
-    if (!direction && quote.mid != null) {
+    if (!move && quote.mid != null) {
       const recent = [...s.closedBars.slice(-8), bar, forming].filter(Boolean) as TenSecBar[];
-      const refHigh = recent.length
-        ? Math.max(...recent.map((b) => b.high))
-        : s.zoneBook.ready
-          ? s.zoneBook.high
-          : null;
-      const refLow = recent.length
-        ? Math.min(...recent.map((b) => b.low))
-        : s.zoneBook.ready
-          ? s.zoneBook.low
-          : null;
-      const midMove = decidePriceMove(quote.mid, refHigh, refLow);
-      if (midMove) {
-        direction = midMove.direction;
-        reason = `${midMove.reason} · ${led.reason}`;
-      }
-    }
-    if (!direction && quote.mid != null) {
-      const tick = decideTickMove(quote.mid, s.last_flat_mid);
-      if (tick) {
-        direction = tick.direction;
-        reason = `${tick.reason} · ${led.reason}`;
+      if (recent.length) {
+        move = decidePriceMove(
+          quote.mid,
+          Math.max(...recent.map((b) => b.high)),
+          Math.min(...recent.map((b) => b.low))
+        );
       }
     }
     if (quote.mid != null) s.last_flat_mid = quote.mid;
 
-    if (direction) {
-      const labeled = labelPlaybookForMove(direction, entryRegime);
-      setupType = labeled.setup;
-      entryPlaybook = labeled.playbook;
-      s.playbook = entryPlaybook;
-      s.entry_setup = setupType;
-      reason = `${reason} · ${entryPlaybook}/${setupType}`;
-
-      const sinceAttempt = Date.now() - (s.last_entry_attempt_ms || 0);
-      if (sinceAttempt < 5_000) {
-        pushTick(s, {
-          phase: 'DECIDE',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `${ohlcLine} · ${reason} · order debounce ${Math.ceil((5_000 - sinceAttempt) / 1000)}s`,
-        });
-        return;
-      }
-      s.last_entry_attempt_ms = Date.now();
+    if (!move) {
       pushTick(s, {
-        phase: 'ORDER',
+        phase: 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · OPEN ${direction} · ${reason}`,
+        detail: `${ohlcLine} · ${sides.reason} · no confirming MOVE yet`,
       });
-      await enterTrade(opened.session, s, direction, quote, reason, setupType, entryPlaybook);
       return;
     }
 
+    if (move.direction === 'BUY' && !sides.buy) {
+      pushTick(s, {
+        phase: 'DECIDE',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · SKIP BUY · ${sides.reason} · saw ${move.reason}`,
+      });
+      return;
+    }
+    if (move.direction === 'SELL' && !sides.sell) {
+      pushTick(s, {
+        phase: 'DECIDE',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · SKIP SELL · ${sides.reason} · saw ${move.reason}`,
+      });
+      return;
+    }
+
+    direction = move.direction;
+    const labeled = labelPlaybookForMove(direction, led.regime, sides.playbook);
+    setupType = labeled.setup;
+    entryPlaybook = labeled.playbook;
+    reason = `${move.reason} · ${sides.reason} · ${led.reason} · ${entryPlaybook}/${setupType}`;
+    s.playbook = entryPlaybook;
+    s.entry_setup = setupType;
+
+    const sinceAttempt = Date.now() - (s.last_entry_attempt_ms || 0);
+    if (sinceAttempt < 5_000) {
+      pushTick(s, {
+        phase: 'DECIDE',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · ${reason} · order debounce ${Math.ceil((5_000 - sinceAttempt) / 1000)}s`,
+      });
+      return;
+    }
+    s.last_entry_attempt_ms = Date.now();
     pushTick(s, {
-      phase: 'DECIDE',
+      phase: 'ORDER',
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `${ohlcLine} · forming C=${ohlc.forming_c != null ? ohlc.forming_c.toFixed(2) : '—'} · no MOVE yet`,
+      detail: `${ohlcLine} · OPEN ${direction} · ${reason}`,
     });
+    await enterTrade(opened.session, s, direction, quote, reason, setupType, entryPlaybook);
     return;
   } catch (err) {
     s.reads_fail += 1;

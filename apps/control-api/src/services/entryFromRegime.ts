@@ -74,14 +74,14 @@ export function decideMoveEntry(bar: TenSecBar): RegimeEntry | null {
 }
 
 /**
- * Live mid vs recent reference — open even while 10s bar is still forming / "QUIET".
- * thr ~0.01% of price (~0.45pt Gold) — any real print, every regime.
+ * Live mid vs 1m zone H/L (or recent refs) — timing only, not a naked candle chase.
+ * thr ~0.02% (~0.9pt Gold).
  */
 export function decidePriceMove(
   mid: number,
   refHigh: number | null | undefined,
   refLow: number | null | undefined,
-  thr = 0.0001
+  thr = 0.0002
 ): RegimeEntry | null {
   if (!Number.isFinite(mid)) return null;
   if (refHigh != null && Number.isFinite(refHigh) && refHigh > 0) {
@@ -91,7 +91,7 @@ export function decidePriceMove(
         direction: 'SELL',
         setup: 'BREAKOUT',
         playbook: 'SCALP',
-        reason: `MOVE · mid dump vs recent H${refHigh.toFixed(2)} (${(drop * 100).toFixed(3)}%)`,
+        reason: `MOVE · mid dump vs H${refHigh.toFixed(2)} (${(drop * 100).toFixed(3)}%)`,
       };
     }
   }
@@ -102,18 +102,18 @@ export function decidePriceMove(
         direction: 'BUY',
         setup: 'BREAKOUT',
         playbook: 'SCALP',
-        reason: `MOVE · mid rally vs recent L${refLow.toFixed(2)} (${(rise * 100).toFixed(3)}%)`,
+        reason: `MOVE · mid rally vs L${refLow.toFixed(2)} (${(rise * 100).toFixed(3)}%)`,
       };
     }
   }
   return null;
 }
 
-/** Tick-to-tick mid change — works for EVERY regime, not one special case. */
+/** @deprecated tick noise — do not use for live entry */
 export function decideTickMove(
   mid: number,
   prevMid: number | null | undefined,
-  thr = 0.0001
+  thr = 0.00025
 ): RegimeEntry | null {
   if (prevMid == null || !Number.isFinite(prevMid) || !Number.isFinite(mid) || prevMid === 0) {
     return null;
@@ -138,23 +138,26 @@ export function decideTickMove(
   return null;
 }
 
-/** Label playbook from regime after direction is known (never blocks entry). */
+/** Playbook/setup from 1m zones side + optional 10s regime. */
 export function labelPlaybookForMove(
   direction: 'BUY' | 'SELL',
-  regime?: string | null
+  regime?: string | null,
+  zonePlaybook?: 'LONG' | 'SCALP' | 'FADE' | 'WAIT' | null
 ): { playbook: TradePlaybook; setup: RegimeEntry['setup'] } {
-  const book = playbookFromRegime(regime);
-  if (book === 'LONG') {
+  if (zonePlaybook === 'LONG') {
     return { playbook: 'LONG', setup: 'CONTINUATION' };
   }
-  if (book === 'FADE') {
+  if (zonePlaybook === 'FADE') {
     return { playbook: 'FADE', setup: 'FADE' };
   }
-  if (book === 'SCALP') {
-    const r = normalizeRegime(regime);
-    if (r === 'REVERSAL_CANDIDATE') return { playbook: 'SCALP', setup: 'REVERSAL' };
+  if (zonePlaybook === 'SCALP') {
     return { playbook: 'SCALP', setup: 'BREAKOUT' };
   }
+  const book = playbookFromRegime(regime);
+  if (book === 'LONG') return { playbook: 'LONG', setup: 'CONTINUATION' };
+  if (book === 'FADE') return { playbook: 'FADE', setup: 'FADE' };
+  const r = normalizeRegime(regime);
+  if (r === 'REVERSAL_CANDIDATE') return { playbook: 'SCALP', setup: 'REVERSAL' };
   return { playbook: 'SCALP', setup: 'BREAKOUT' };
 }
 

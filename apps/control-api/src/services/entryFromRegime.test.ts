@@ -74,16 +74,16 @@ describe('10s playbook suitable entry', () => {
     expect(decidePriceMove(4455, 4455.2, 4454.8)).toBeNull();
   });
 
-  it('tick move works for every regime context', () => {
-    expect(decideTickMove(4454, 4455)?.direction).toBe('SELL');
-    expect(decideTickMove(4456, 4455)?.direction).toBe('BUY');
-    expect(decideTickMove(4455, 4455)).toBeNull();
+  it('tick move helper still exists but needs a larger print', () => {
+    expect(decideTickMove(4454, 4456)?.direction).toBe('SELL');
+    expect(decideTickMove(4457, 4455)?.direction).toBe('BUY');
+    expect(decideTickMove(4455, 4455.2)).toBeNull();
   });
 
-  it('labelPlaybookForMove tags LONG/SCALP/FADE from regime without blocking', () => {
-    expect(labelPlaybookForMove('SELL', 'TREND_DOWN').playbook).toBe('LONG');
-    expect(labelPlaybookForMove('SELL', 'FAILED_BREAKOUT_DOWN').playbook).toBe('SCALP');
-    expect(labelPlaybookForMove('BUY', 'RANGE').playbook).toBe('FADE');
+  it('labelPlaybookForMove prefers zone playbook', () => {
+    expect(labelPlaybookForMove('SELL', 'RANGE', 'LONG').playbook).toBe('LONG');
+    expect(labelPlaybookForMove('SELL', 'FAILED_BREAKOUT_DOWN', 'SCALP').playbook).toBe('SCALP');
+    expect(labelPlaybookForMove('BUY', 'RANGE', 'FADE').playbook).toBe('FADE');
   });
 
   it('FAILED_BREAKOUT_DOWN follows dump as SCALP SELL', () => {

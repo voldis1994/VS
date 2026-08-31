@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  allowedSidesFromZones,
   buildZonesFromMinutes,
   nearRealZoneEdge,
   regimeConfirmedByZones,
@@ -96,5 +97,28 @@ describe('structureZones', () => {
     const led = regimeForEntry('RANGE', z);
     expect(led.led).toBe(true);
     expect(led.regime === 'TREND_UP' || led.regime === 'BREAKOUT_UP').toBe(true);
+  });
+
+  it('allowedSidesFromZones: trend = one side; range mid = none; edge = fade', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 14; i++) {
+      const base = 1990 + i * 1.5;
+      bars.push(candle(base, base + 1.8, base - 0.3, base + 1.2));
+    }
+    const up = buildZonesFromMinutes(bars, bars[bars.length - 1]!.close);
+    const upSides = allowedSidesFromZones(up);
+    expect(upSides.buy).toBe(true);
+    expect(upSides.sell).toBe(false);
+
+    const mid = rangeBook(2005);
+    const midSides = allowedSidesFromZones(mid);
+    expect(midSides.buy).toBe(false);
+    expect(midSides.sell).toBe(false);
+    expect(midSides.playbook).toBe('WAIT');
+
+    const edge = rangeBook(2009.3);
+    const edgeSides = allowedSidesFromZones(edge);
+    expect(edgeSides.sell).toBe(true);
+    expect(edgeSides.playbook).toBe('FADE');
   });
 });
