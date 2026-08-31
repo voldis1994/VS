@@ -55,4 +55,32 @@ describe('10s playbook suitable entry', () => {
     expect(decideEntryFrom10sRegime(quiet, 'TREND_UP', ctx)).toBeNull();
     expect(decideEntryFrom10sRegime(quiet, 'RANGE', ctx)).toBeNull();
   });
+
+  it('RANGE FADE uses real minute zones when ready', () => {
+    const zones = {
+      ready: true,
+      high: 2010,
+      low: 2000,
+      mid: 2005,
+      span: 10,
+      bias: 'BELOW' as const,
+      near_high: false,
+      near_low: true,
+      structure: 'RANGE' as const,
+      bar_count: 40,
+      updated_at: new Date().toISOString(),
+      detail: 'test',
+    };
+    const buy = decideEntryFrom10sRegime(longDip, 'RANGE', { ...ctx, zones });
+    expect(buy?.direction).toBe('BUY');
+    expect(buy?.reason).toMatch(/zone-low/);
+
+    const noEdge = {
+      ...zones,
+      near_low: false,
+      near_high: false,
+      bias: 'INSIDE' as const,
+    };
+    expect(decideEntryFrom10sRegime(longDip, 'RANGE', { ...ctx, zones: noEdge })).toBeNull();
+  });
 });

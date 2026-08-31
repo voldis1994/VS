@@ -30,6 +30,12 @@ import {
   type TradePlaybook,
 } from './playbooks.js';
 import {
+  buildZonesFromMinutes,
+  emptyZones,
+  regimeConfirmedByZones,
+  type MarketZoneBook,
+} from './structureZones.js';
+import {
   allowEntryFromFeeds,
   multiFeedOwnsOhlc,
   pickOhlcMid,
@@ -108,10 +114,20 @@ export type RobotSession = {
   feed_sender_count?: number;
   feed_agreement?: string | null;
   feed_legs?: MultiFeedLeg[];
+  /** Real minute structure zones (Capital history) — before entry */
+  zones?: {
+    ready: boolean;
+    structure: string;
+    high: number;
+    low: number;
+    bias: string;
+    detail: string;
+  } | null;
   decision_chain?: {
     feeds: string;
     ohlc: string;
     regime: string;
+    zones: string;
     setup: string | null;
     action: string;
   };
@@ -135,7 +151,13 @@ type Internal = RobotSession & {
   regime_age_bars: number;
   playbook_age_bars: number;
   playbook_watch: Playbook;
+  /** Real structure from Capital minute history */
+  zoneBook: MarketZoneBook;
+  last_zones_fetch_ms: number;
 };
+
+const ZONE_REFRESH_MS = 45_000;
+const ZONE_MINUTE_BARS = 60;
 
 const ACTIVE_CADENCE_MS = 2_000;
 const CLOSED_MARKET_CADENCE_MS = 90_000;
@@ -211,8 +233,11 @@ function publicSession(s: Internal): RobotSession {
     regime_age_bars: _regAge,
     playbook_age_bars: _pbAge,
     playbook_watch: _pbWatch,
+    zoneBook: _zoneBook,
+    last_zones_fetch_ms: _zonesAt,
     ...rest
   } = s;
+  const z = s.zoneBook;
   return {
     ...rest,
     ohlc_10s: publicOhlc10s(s.ohlcState),
@@ -221,6 +246,16 @@ function publicSession(s: Internal): RobotSession {
     feed_sender_count: s.multiFeed?.sender_count ?? rest.feed_sender_count ?? 0,
     feed_agreement: s.multiFeed?.agreement ?? rest.feed_agreement ?? null,
     feed_legs: s.multiFeed?.legs ?? rest.feed_legs ?? [],
+    zones: z
+      ? {
+          ready: z.ready,
+          structure: z.structure,
+          high: z.high,
+          low: z.low,
+          bias: z.bias,
+          detail: z.detail,
+        }
+      : null,
     decision_chain: buildDecisionChain(s),
   };
 }
@@ -238,13 +273,45 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
   if (!s.running) action = 'STOPPED';
   else if (s.open_side) action = `MANAGE ${s.open_side}`;
   else if (s.mode === 'ENTRY') action = 'SCAN ENTRY';
+  const z = s.zoneBook;
+  const zonesLine = z?.ready
+    ? `${z.structure} H${z.high.toFixed(2)}/L${z.low.toFixed(2)}`
+    : z?.detail || 'SEEDING';
   return {
     feeds,
     ohlc: ohlcLine,
     regime: s.regime || 'UNKNOWN',
+    zones: zonesLine,
     setup: s.entry_setup || (s.playbook ? String(s.playbook) : null),
     action,
   };
+}
+
+/** Fetch Capital minute history → real zones. Returns candles for late-move reuse. */
+async function refreshStructureZones(
+  session: CapitalSession,
+  s: Internal,
+  mid: number | null,
+  force = false
+): Promise<{ candles: Awaited<ReturnType<typeof fetchCapitalMinutePrices>>['candles'] }> {
+  const now = Date.now();
+  if (
+    !force &&
+    s.zoneBook.ready &&
+    now - s.last_zones_fetch_ms < ZONE_REFRESH_MS
+  ) {
+    return { candles: [] };
+  }
+  const hist = await fetchCapitalMinutePrices(session, s.epic, ZONE_MINUTE_BARS);
+  s.last_zones_fetch_ms = now;
+  if (!hist.ok || !hist.candles.length) {
+    if (!s.zoneBook.ready) {
+      s.zoneBook = emptyZones(hist.detail || 'minute history unavailable');
+    }
+    return { candles: [] };
+  }
+  s.zoneBook = buildZonesFromMinutes(hist.candles, mid);
+  return { candles: hist.candles };
 }
 
 export function robotBoardMeta(sessions: RobotSession[]) {
@@ -1181,13 +1248,25 @@ async function robotCycle(s: Internal) {
       // do not return — Capital local path continues
     }
 
+    // Zones first: Capital minute structure before any 10s entry
+    const zoneForce = !s.zoneBook.ready || s.ohlcState.just_closed;
+    const zoneRefresh = await refreshStructureZones(
+      opened.session,
+      s,
+      quote.mid,
+      zoneForce
+    );
+
     const bar = s.ohlcState.last_closed;
     const ohlc = s.ohlc_10s;
+    const zoneLine = s.zoneBook.ready
+      ? `zones ${s.zoneBook.structure} H${s.zoneBook.high.toFixed(2)}/L${s.zoneBook.low.toFixed(2)}`
+      : `zones ${s.zoneBook.detail}`;
     const ohlcLine = bar
-      ? `10s O=${bar.open.toFixed(2)} H=${bar.high.toFixed(2)} L=${bar.low.toFixed(2)} C=${bar.close.toFixed(2)} ${s.regime} · feeds ${
+      ? `10s O=${bar.open.toFixed(2)} H=${bar.high.toFixed(2)} L=${bar.low.toFixed(2)} C=${bar.close.toFixed(2)} ${s.regime} · ${zoneLine} · feeds ${
           s.feed_contributing || 0
         }/${s.feed_sender_count || 0} ${s.feed_source || 'LOCAL'} ${s.feed_agreement || ''}`
-      : `10s OHLC seeding · feeds ${s.feed_contributing || 0}/${s.feed_sender_count || 0}`;
+      : `10s OHLC seeding · ${zoneLine} · feeds ${s.feed_contributing || 0}/${s.feed_sender_count || 0}`;
 
     let direction: 'BUY' | 'SELL' | null = null;
     let reason = '';
@@ -1195,33 +1274,45 @@ async function robotCycle(s: Internal) {
     let entryPlaybook: TradePlaybook | null = null;
 
     if (s.ohlcState.just_closed && bar) {
-      const priorBars = s.closedBars.filter(
-        (b) =>
-          !(
-            Math.abs(b.open - bar.open) < 1e-9 &&
-            Math.abs(b.close - bar.close) < 1e-9 &&
-            Math.abs(b.high - bar.high) < 1e-9
-          )
-      );
-      const sig = decideEntryFrom10sRegime(bar, s.regime, {
-        regimeAgeBars: s.regime_age_bars,
-        playbookAgeBars: s.playbook_age_bars,
-        previousRegime: s.previous_regime,
-        priorBars,
-      });
-      if (sig) {
-        direction = sig.direction;
-        setupType = sig.setup;
-        reason = sig.reason;
-        entryPlaybook = sig.playbook;
-      } else {
+      const zoneGate = regimeConfirmedByZones(s.regime, s.zoneBook);
+      if (!zoneGate.ok) {
         pushTick(s, {
-          phase: 'DECIDE',
+          phase: 'WAIT',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `${ohlcLine} · ${s.regime} not suitable on this 10s close · wait next candle`,
+          detail: `${ohlcLine} · ${zoneGate.reason}`,
         });
+      } else {
+        const priorBars = s.closedBars.filter(
+          (b) =>
+            !(
+              Math.abs(b.open - bar.open) < 1e-9 &&
+              Math.abs(b.close - bar.close) < 1e-9 &&
+              Math.abs(b.high - bar.high) < 1e-9
+            )
+        );
+        const sig = decideEntryFrom10sRegime(bar, s.regime, {
+          regimeAgeBars: s.regime_age_bars,
+          playbookAgeBars: s.playbook_age_bars,
+          previousRegime: s.previous_regime,
+          priorBars,
+          zones: s.zoneBook,
+        });
+        if (sig) {
+          direction = sig.direction;
+          setupType = sig.setup;
+          reason = `${sig.reason} · ${zoneGate.reason}`;
+          entryPlaybook = sig.playbook;
+        } else {
+          pushTick(s, {
+            phase: 'DECIDE',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `${ohlcLine} · ${zoneGate.reason} · ${s.regime} not suitable on this 10s close · wait next candle`,
+          });
+        }
       }
     } else {
       pushTick(s, {
@@ -1234,8 +1325,12 @@ async function robotCycle(s: Internal) {
     }
 
     if (direction) {
-      const hist = await fetchCapitalMinutePrices(opened.session, s.epic, 3);
-      if (hist.ok && isLateMoveOnOneMinute(direction, hist.candles)) {
+      let lateCandles = zoneRefresh.candles;
+      if (lateCandles.length < 3) {
+        const hist = await fetchCapitalMinutePrices(opened.session, s.epic, 3);
+        if (hist.ok) lateCandles = hist.candles;
+      }
+      if (lateCandles.length >= 1 && isLateMoveOnOneMinute(direction, lateCandles)) {
         pushTick(s, {
           phase: 'WAIT',
           bid: quote.bid,
@@ -1407,6 +1502,8 @@ export async function startRobotSession(input: {
     regime_age_bars: 0,
     playbook_age_bars: 0,
     playbook_watch: 'WAIT',
+    zoneBook: emptyZones('awaiting minute history'),
+    last_zones_fetch_ms: 0,
 
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
@@ -1425,7 +1522,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: max 1 open trade · MANAGE with best-outcome · 10s OHLC from ALL Capital feeds when they agree · park when market closed',
+      'Rules: max 1 open trade · zones(1m) → regime(10s) → entry · MANAGE best-outcome · park when market closed',
   });
 
   sessions.set(id, session);

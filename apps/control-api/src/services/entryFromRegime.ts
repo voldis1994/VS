@@ -14,6 +14,10 @@ import {
   type Playbook,
   type TradePlaybook,
 } from './playbooks.js';
+import {
+  nearRealZoneEdge,
+  type MarketZoneBook,
+} from './structureZones.js';
 
 export type RegimeEntry = {
   direction: 'BUY' | 'SELL';
@@ -28,8 +32,10 @@ export type EntryContext = {
   /** Consecutive bars in the same playbook family (LONG/SCALP/FADE) */
   playbookAgeBars?: number;
   previousRegime?: string | null;
-  /** Prior closed bars (excluding the signal bar) for RANGE edge */
+  /** Prior closed bars (excluding the signal bar) — fallback micro edge */
   priorBars?: TenSecBar[];
+  /** Real Capital minute zones — preferred for FADE edges */
+  zones?: MarketZoneBook | null;
 };
 
 function describe(bar: TenSecBar): string {
@@ -190,23 +196,30 @@ export function decideEntryFrom10sRegime(
     }
 
     if (r === 'RANGE') {
+      const zones = ctx?.zones;
       const prior = ctx?.priorBars || [];
+      const lowOk = zones?.ready
+        ? nearRealZoneEdge(zones, 'low')
+        : nearRangeEdge(bar, prior, 'low');
+      const highOk = zones?.ready
+        ? nearRealZoneEdge(zones, 'high')
+        : nearRangeEdge(bar, prior, 'high');
       if (dipFor(bar, 'FADE')) {
-        if (!nearRangeEdge(bar, prior, 'low')) return null;
+        if (!lowOk) return null;
         return {
           direction: 'BUY',
           setup: 'FADE',
           playbook: 'FADE',
-          reason: `FADE · ${r} edge-low · ${candle}`,
+          reason: `FADE · ${r} zone-low · ${candle}`,
         };
       }
       if (rallyFor(bar, 'FADE')) {
-        if (!nearRangeEdge(bar, prior, 'high')) return null;
+        if (!highOk) return null;
         return {
           direction: 'SELL',
           setup: 'FADE',
           playbook: 'FADE',
-          reason: `FADE · ${r} edge-high · ${candle}`,
+          reason: `FADE · ${r} zone-high · ${candle}`,
         };
       }
       return null;
