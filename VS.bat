@@ -29,7 +29,8 @@ cd /d "%ROOT%"
 
 echo.
 echo ============================================================
-echo   VS  -  KLIENTA PANELIS CAUR :18080  (NE VITE)
+echo   VS  -  VIENS FAILS: VS.bat  (C:\VS mapē)
+echo   Klienta panelis :18080  |  Admin :5173  |  Robot :5173/robot
 echo ============================================================
 echo   Mape: %ROOT%
 echo.
@@ -45,6 +46,7 @@ echo [1/5] Apturu vecos procesus + Vite...
 taskkill /F /FI "WINDOWTITLE eq MR-*" >nul 2>&1
 taskkill /F /IM market-core.exe >nul 2>&1
 taskkill /F /IM execution-service.exe >nul 2>&1
+taskkill /F /IM vs-calc.exe >nul 2>&1
 taskkill /F /IM cloudflared.exe >nul 2>&1
 powershell -NoProfile -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and ($_.CommandLine -match 'vite') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":3000 " ^| findstr LISTENING') do taskkill /F /PID %%P >nul 2>&1
@@ -250,8 +252,11 @@ echo.
 start "MR-Dashboard" /D "%ROOT%\apps\dashboard" cmd /k npm run dev
 start "" "http://127.0.0.1:18080"
 start http://localhost:5173/clients
+start http://localhost:5173/robot
 echo [OK] lokali panelis http://127.0.0.1:18080
 echo [OK] admin lokali http://localhost:5173/  (klientam NESUTI)
+echo [OK] robot desk http://localhost:5173/robot  (tavs GOLD robots)
+echo [INFO] Nepalaid atsevišķi vs-calc.exe — entry ir control-api MarketBrain
 echo.
 
 echo [5/5] Klienta tunelis uz :18080  (NE Vite, NE :5173, NE :5174)

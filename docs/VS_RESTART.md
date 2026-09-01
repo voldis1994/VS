@@ -15,4 +15,7 @@ https://….trycloudflare.com
 
 To + access code (`http://localhost:5173/clients`) sūti klientam.
 
-Admin: `http://localhost:5173/`
+Admin: `http://localhost:5173/`  
+Robot desk (GOLD u.c.): `http://localhost:5173/robot`
+
+**Nepalaid atsevišķi** veco `vs-calc.exe` — `VS.bat` pats aptur to un entry notiek caur control-api MarketBrain.
