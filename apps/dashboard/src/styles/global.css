@@ -1352,6 +1352,7 @@ tr:hover td { background: rgba(57, 255, 20, 0.06); }
   align-items: center;
   margin-top: auto;
   gap: 8px;
+  flex-wrap: wrap;
 }
 .robot-mini-actions .btn {
   padding: 4px 8px;
@@ -1361,6 +1362,7 @@ tr:hover td { background: rgba(57, 255, 20, 0.06); }
   display: inline-flex;
   gap: 6px;
   align-items: center;
+  flex-wrap: wrap;
 }
 .robot-ctrl .btn:disabled {
   opacity: 0.35;

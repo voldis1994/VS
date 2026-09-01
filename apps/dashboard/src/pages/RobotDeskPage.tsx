@@ -2,6 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiFetch } from '../hooks/useApi';
 import { Logo } from '../components/Logo';
+import {
+  isEurUsdMarket,
+  lotForMarket,
+  marketKey,
+  pickSwitchTarget,
+} from '../lib/preferMarket';
 
 type RobotTick = {
   at: string;
@@ -284,26 +290,30 @@ export function RobotDeskPage() {
     if (!launchAccountId) return;
     void apiFetch<typeof launchMarkets>(`/api/trading/accounts/${launchAccountId}/instruments`)
       .then((rows) => {
-        setLaunchMarkets(rows || []);
-        if (rows?.[0]) {
-          setLaunchEpic(rows[0].epic || rows[0].symbol);
-          setLaunchLot(String(rows[0].lot_size || rows[0].min_lot || 0.1));
-        }
+        const list = rows || [];
+        setLaunchMarkets(list);
+        const pick = pickSwitchTarget(list, focused?.epic);
+        if (!pick) return;
+        setLaunchEpic(marketKey(pick));
+        setLaunchLot(String(lotForMarket(pick)));
       })
       .catch(() => setLaunchMarkets([]));
-  }, [launchAccountId]);
+  }, [launchAccountId, focused?.epic]);
 
   const filteredLaunch = useMemo(() => {
     const q = launchFilter.trim().toLowerCase();
-    if (!q) return launchMarkets.slice(0, 200);
-    return launchMarkets
-      .filter(
-        (m) =>
-          m.display_name.toLowerCase().includes(q) ||
-          (m.epic || m.symbol).toLowerCase().includes(q),
-      )
-      .slice(0, 200);
+    const rows = !q
+      ? [...launchMarkets]
+      : launchMarkets.filter(
+          (m) =>
+            m.display_name.toLowerCase().includes(q) ||
+            (m.epic || m.symbol).toLowerCase().includes(q),
+        );
+    rows.sort((a, b) => Number(isEurUsdMarket(b)) - Number(isEurUsdMarket(a)));
+    return rows.slice(0, 200);
   }, [launchMarkets, launchFilter]);
+
+  const eurUsdMarket = useMemo(() => launchMarkets.find(isEurUsdMarket) || null, [launchMarkets]);
 
   const deploy = () => {
     if (!launchAccountId || !launchEpic) {
@@ -376,19 +386,31 @@ export function RobotDeskPage() {
     }
   };
 
-  const switchFocusedMarket = async () => {
-    if (!focused || !launchEpic) return;
-    const m = launchMarkets.find((x) => (x.epic || x.symbol) === launchEpic);
-    const lot = Number(launchLot || m?.min_lot || 0.1);
+  const switchSessionToMarket = async (
+    s: RobotSession,
+    epic: string,
+    displayName?: string,
+    lotSize?: number,
+  ) => {
+    const m = launchMarkets.find((x) => marketKey(x) === epic);
+    const lot = Number(lotSize ?? launchLot ?? lotForMarket(m));
+    if (!epic) {
+      setError('Izvēlies tirgu');
+      return;
+    }
+    if (!Number.isFinite(lot) || lot <= 0) {
+      setError('Lot > 0');
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
       const res = await apiFetch<{ session: RobotSession }>('/api/robot-desk/start', {
         method: 'POST',
         body: JSON.stringify({
-          account_id: focused.account_id,
-          epic: launchEpic,
-          display_name: m?.display_name || launchEpic,
+          account_id: s.account_id,
+          epic,
+          display_name: displayName || m?.display_name || epic,
           lot_size: lot,
           trading_enabled: true,
         }),
@@ -402,6 +424,26 @@ export function RobotDeskPage() {
       setBusy(false);
     }
   };
+
+  const switchFocusedMarket = async () => {
+    if (!focused || !launchEpic) return;
+    const m = launchMarkets.find((x) => marketKey(x) === launchEpic);
+    await switchSessionToMarket(focused, launchEpic, m?.display_name, Number(launchLot));
+  };
+
+  const switchToEurUsd = async (s: RobotSession) => {
+    const m = eurUsdMarket || pickSwitchTarget(launchMarkets, s.epic);
+    if (!m || !isEurUsdMarket(m)) {
+      setError('EUR/USD nav katalogā — pull Capital markets, tad SWITCH');
+      setShowDeploy(true);
+      setLaunchFilter('eur');
+      return;
+    }
+    await switchSessionToMarket(s, marketKey(m), m.display_name, lotForMarket(m));
+  };
+
+  const sessionIsEurUsd = (s: RobotSession) =>
+    isEurUsdMarket({ epic: s.epic, symbol: s.epic, display_name: s.display_name });
 
   return (
     <div className="robot-fs-shell robot-board-shell" ref={shellRef}>
@@ -435,6 +477,16 @@ export function RobotDeskPage() {
             </div>
           </div>
           <div className="actions">
+            {focused && !sessionIsEurUsd(focused) && (
+              <button
+                className="btn btn-go"
+                type="button"
+                disabled={busy}
+                onClick={() => void switchToEurUsd(focused)}
+              >
+                {(focused.client_name || focused.account_name).toUpperCase()} → EUR/USD
+              </button>
+            )}
             <button className="btn btn-primary" type="button" onClick={() => setShowDeploy((v) => !v)}>
               {showDeploy ? 'CLOSE' : '+ DEPLOY'}
             </button>
@@ -451,7 +503,7 @@ export function RobotDeskPage() {
           <div className="robot-empty robot-deploy-bar">
             <div className="section-title">
               {focused
-                ? `SWITCH ${ (focused.client_name || focused.account_name).toUpperCase() } MARKET (stops ${focused.display_name})`
+                ? `SWITCH ${(focused.client_name || focused.account_name).toUpperCase()} — default EUR/USD (stops ${focused.display_name})`
                 : 'DEPLOY CLIENT ROBOT'}
             </div>
             <div className="actions" style={{ marginTop: 8, flexWrap: 'wrap' }}>
@@ -577,6 +629,33 @@ export function RobotDeskPage() {
                     <div className="robot-mini-actions">
                       <span className="mono">{s.environment.toUpperCase()}</span>
                       <div className="robot-ctrl" onClick={(e) => e.stopPropagation()}>
+                        {!sessionIsEurUsd(s) && (
+                          <button
+                            type="button"
+                            className="btn btn-go"
+                            disabled={busy}
+                            onClick={() => void switchToEurUsd(s)}
+                          >
+                            → EUR/USD
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          disabled={busy}
+                          onClick={() => {
+                            setFocusId(s.id);
+                            setShowDeploy(true);
+                            setLaunchFilter('eur');
+                            const pick = pickSwitchTarget(launchMarkets, s.epic);
+                            if (pick) {
+                              setLaunchEpic(marketKey(pick));
+                              setLaunchLot(String(lotForMarket(pick)));
+                            }
+                          }}
+                        >
+                          SWITCH
+                        </button>
                         <button
                           type="button"
                           className="btn btn-go"
@@ -611,6 +690,27 @@ export function RobotDeskPage() {
                   </div>
                 </div>
                 <div className="robot-ctrl robot-ctrl-lg">
+                  {!sessionIsEurUsd(focused) && (
+                    <button
+                      type="button"
+                      className="btn btn-go"
+                      disabled={busy}
+                      onClick={() => void switchToEurUsd(focused)}
+                    >
+                      → EUR/USD
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={busy}
+                    onClick={() => {
+                      setShowDeploy(true);
+                      setLaunchFilter('eur');
+                    }}
+                  >
+                    SWITCH
+                  </button>
                   <button
                     type="button"
                     className="btn btn-go"

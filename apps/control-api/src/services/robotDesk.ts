@@ -1665,6 +1665,18 @@ export async function startRobotSession(input: {
   });
 
   sessions.set(id, session);
+  await pool
+    .query(
+      `UPDATE clients SET
+         panel_epic = $2,
+         panel_display_name = $3,
+         panel_lot_size = $4,
+         panel_robot_requested = 'RUNNING',
+         updated_at = NOW()
+       WHERE id = $1`,
+      [acc.client_id, epic, displayName, lot]
+    )
+    .catch(() => undefined);
   // Own entry brain owns this account — leave Market Core fanout so clients never share one signal
   if (session.entry_enabled) {
     void pool
