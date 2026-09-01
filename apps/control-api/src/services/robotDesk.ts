@@ -25,8 +25,11 @@ import {
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
 import {
   brainEntryAllowed,
+  formatBrainLine,
   lockBrainAtEntry,
+  summarizeBrain,
   type BrainState,
+  type BrainSummary,
   type LockedBrainEntry,
 } from './marketBrain.js';
 import { minSwingSpan, scaleFromGold } from './instrumentScale.js';
@@ -152,10 +155,13 @@ export type RobotSession = {
     zones: string;
     setup: string | null;
     action: string;
+    brain: string;
   };
+  /** Unified MarketBrain snapshot for dashboard */
+  brain?: BrainSummary | null;
 };
 
-type Internal = RobotSession & {
+type Internal = Omit<RobotSession, 'brain'> & {
   timer: ReturnType<typeof setInterval> | null;
   connection_id: number;
   closed_at_ms: number;
@@ -285,8 +291,10 @@ function publicSession(s: Internal): RobotSession {
   } = s;
   const st = s.structureBook;
   const setup = s.marketSetup;
+  const brainSummary = summarizeBrain(s.brain, s.brain_locked);
   return {
     ...rest,
+    brain: brainSummary,
     ohlc_10s: publicOhlc10s(s.ohlcState),
     feed_source: rest.feed_source,
     feed_contributing: s.multiFeed?.contributing ?? rest.feed_contributing ?? 0,
@@ -339,10 +347,11 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
   return {
     feeds,
     ohlc: ohlcLine,
-    regime: `diag ${s.regime || 'RANGE'}`,
+    regime: s.brain?.ready ? `${s.brain.macro} · ${s.regime}` : `diag ${s.regime || 'RANGE'}`,
     zones: zonesLine,
     setup: `${setup.kind}/${setup.status}${setup.side ? ` ${setup.side}` : ''}`,
     action,
+    brain: formatBrainLine(summarizeBrain(s.brain, s.brain_locked)),
   };
 }
 
@@ -1317,7 +1326,7 @@ async function robotCycle(s: Internal) {
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · no new orders`,
+        } · ${formatBrainLine(summarizeBrain(s.brain ?? currentRegime(s.epic, s.id)?.brain ?? null, s.brain_locked))} · no new orders`,
       });
       return;
     }

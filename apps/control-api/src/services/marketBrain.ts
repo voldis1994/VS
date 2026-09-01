@@ -503,5 +503,76 @@ export function brainExitThesis(
   return null;
 }
 
+/** Compact brain payload for API / dashboard. */
+export type BrainSummary = {
+  ready: boolean;
+  macro: string;
+  regime: string;
+  confidence: number;
+  move_state: MoveState | 'UNKNOWN';
+  survival: number;
+  exhaustion: number;
+  used_pct: number;
+  remaining_pct: number;
+  adjusted_target: number | null;
+  r_side: number;
+  break_valid: boolean;
+  impulse: number;
+  side_confirmed: boolean;
+  side_end: boolean;
+  locked: boolean;
+  locked_target: number | null;
+  locked_r_side: number | null;
+};
+
+export function summarizeBrain(
+  state: BrainState | null | undefined,
+  locked: LockedBrainEntry | null | undefined
+): BrainSummary | null {
+  if (!state) return null;
+  return {
+    ready: state.ready,
+    macro: state.macro,
+    regime: state.regime,
+    confidence: state.confidence,
+    move_state: state.move_state,
+    survival: state.survival,
+    exhaustion: state.exhaustion,
+    used_pct: Math.round(state.used_potential * 100),
+    remaining_pct: Math.round(state.remaining_pct),
+    adjusted_target: state.ready ? state.adjusted_target : null,
+    r_side: state.r_side,
+    break_valid: state.break_valid,
+    impulse: state.impulse,
+    side_confirmed: state.side_confirmed,
+    side_end: state.side_end,
+    locked: locked != null,
+    locked_target: locked?.adjusted_target ?? null,
+    locked_r_side: locked?.r_side ?? null,
+  };
+}
+
+export function formatBrainLine(summary: BrainSummary | null | undefined): string {
+  if (!summary) return 'BRAIN · offline';
+  if (!summary.ready) return 'BRAIN · seeding (vajag ~137 closed 10s bars)';
+  const parts = [
+    summary.macro,
+    summary.regime,
+    summary.move_state,
+    `surv ${(summary.survival * 100).toFixed(0)}%`,
+    `exh ${(summary.exhaustion * 100).toFixed(0)}%`,
+  ];
+  if (summary.break_valid) parts.push('BREAK✓');
+  if (summary.side_end) parts.push('SIDE_END');
+  if (summary.locked) {
+    parts.push(`used ${summary.used_pct}%`);
+    parts.push(`rem ${summary.remaining_pct}%`);
+    if (summary.locked_target != null) parts.push(`T→${summary.locked_target.toFixed(2)}`);
+  } else if (summary.adjusted_target != null) {
+    parts.push(`T→${summary.adjusted_target.toFixed(2)}`);
+  }
+  return `BRAIN · ${parts.join(' · ')}`;
+}
+
 export { computeSignalEngine, SIGNAL_SCALES };
 export type { MacroRegime, OperatingRegime, SignalOutput, SignalScale };
