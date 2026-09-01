@@ -184,8 +184,8 @@ async function loadMarketForClient(
 function robotForAccount(accountId: number, epic?: string | null) {
   const all = listRobotSessions().filter((s) => s.account_id === accountId);
   if (epic) {
-    const exact = all.find((s) => s.epic === epic && s.running);
-    if (exact) return exact;
+    const want = epic.trim().toLowerCase();
+    return all.find((s) => s.epic.trim().toLowerCase() === want && s.running) || null;
   }
   return all.find((s) => s.running) || all[0] || null;
 }

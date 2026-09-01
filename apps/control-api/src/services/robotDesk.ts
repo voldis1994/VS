@@ -615,6 +615,26 @@ export async function stopEntryRobotsForAccount(accountId: number): Promise<void
   }
 }
 
+/**
+ * One account = one live market. Starting EURUSD must not leave a Kimly (or any other epic)
+ * robot running on the same account. Manage-only with an OPEN trade is left alone.
+ */
+export async function stopOtherRobotsForAccount(
+  accountId: number,
+  keepEpic: string
+): Promise<string[]> {
+  const keep = String(keepEpic || '').trim().toLowerCase();
+  const stopped: string[] = [];
+  for (const s of [...sessions.values()]) {
+    if (s.account_id !== accountId || !s.running) continue;
+    if (s.epic.trim().toLowerCase() === keep) continue;
+    if (!s.entry_enabled && s.open_side) continue;
+    await stopRobotSession(s.id);
+    stopped.push(`${s.display_name} (${s.epic})`);
+  }
+  return stopped;
+}
+
 /** Stop manage-only robots that are already flat (client STOP, no open trade). */
 export async function stopFlatManageRobotsForAccount(accountId: number): Promise<void> {
   for (const s of [...sessions.values()]) {
@@ -1552,6 +1572,8 @@ export async function startRobotSession(input: {
   }
   sessions.delete(id);
 
+  const dropped = await stopOtherRobotsForAccount(acc.id, epic);
+
   const session: Internal = {
     id,
     account_id: acc.id,
@@ -1622,13 +1644,14 @@ export async function startRobotSession(input: {
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
 
-  const others = [...sessions.values()].filter((x) => x.running && x.id !== id).length;
   pushTick(session, {
     phase: 'INFO',
     bid: null,
     ask: null,
     mid: null,
-    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · OWN BRAIN · client=${acc.client_name} · other robots: ${others}`,
+    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · OWN BRAIN · client=${acc.client_name}${
+      dropped.length ? ` · stopped other markets: ${dropped.join(', ')}` : ''
+    }`,
   });
   pushTick(session, {
     phase: 'INFO',
