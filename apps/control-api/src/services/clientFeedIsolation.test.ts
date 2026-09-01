@@ -15,17 +15,37 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 function bars(direction: 'up' | 'down'): TenSecBar[] {
-  return [0, 1, 2, 3, 4, 5, 6, 7].map((i) => {
-    const base = direction === 'up' ? 2000 + i * 0.8 : 2000 - i * 0.8;
-    return {
+  const warm: TenSecBar[] = [];
+  let p = 2000;
+  for (let i = 0; i < 140; i++) {
+    const c = p + Math.sin(i / 7) * 0.05;
+    warm.push({
       open_time_ms: i * 10_000,
-      open: base,
-      high: base + 0.35,
-      low: base - 0.15,
-      close: direction === 'up' ? base + 0.25 : base - 0.25,
+      open: p,
+      high: c + 0.08,
+      low: c - 0.08,
+      close: c,
       ticks: 10,
-    };
-  });
+    });
+    p = c;
+  }
+  const tail = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35].map(
+    (i) => {
+      const step = direction === 'up' ? 0.55 : -0.55;
+      const base = 2000 + (direction === 'up' ? i * step : i * step);
+      const open = i === 0 ? 2000 : base - step;
+      const close = base;
+      return {
+        open_time_ms: (140 + i) * 10_000,
+        open,
+        high: Math.max(open, close) + 0.35,
+        low: Math.min(open, close) - 0.15,
+        close,
+        ticks: 10,
+      };
+    }
+  );
+  return [...warm, ...tail];
 }
 
 describe('per-client regime book isolation', () => {

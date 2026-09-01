@@ -1,6 +1,6 @@
-/** Regime classifier — real market states only (no UNKNOWN / TRANSITION). */
+/** Regime classifier — multi-scale signal engine (Units 1–29), production. */
 import type { TenSecBar } from './tenSecondOhlc.js';
-import { bodyPct, rangePct } from './tenSecondOhlc.js';
+import { computeSignalEngine, type SignalOutput } from './signalEngine.js';
 
 export const REGIME_NAMES = [
   'RANGE',
@@ -93,6 +93,8 @@ export type RegimeSnapshot = {
   last_update: string;
   last_mid: number | null;
   bar_count: number;
+  /** Full signal engine output when bar history is warm (≥137 closed 10s bars). */
+  signal: SignalOutput | null;
 };
 
 type Book = {
@@ -109,17 +111,14 @@ type Book = {
   pending_bars: number;
   /** Bars spent in current regime */
   hold_bars: number;
+  signal: SignalOutput | null;
 };
 
-const MAX_BARS = 24;
-/** Diagnostic 10s labels only — never flip faster than ~30s (3 bars). No 1-bar "fast" regimes. */
+/** Enough history for L=256 rolling stats + N=128 scale. */
+const MAX_BARS = 280;
+/** Never flip faster than ~30s (3 bars). No 1-bar "fast" regimes. */
 const REGIME_CONFIRM_BARS = 3;
 const books = new Map<string, Book>();
-
-function mean(xs: number[]): number {
-  if (!xs.length) return 0;
-  return xs.reduce((a, b) => a + b, 0) / xs.length;
-}
 
 function epicKey(epic: string): string {
   return String(epic || '').trim().toUpperCase();
@@ -137,84 +136,31 @@ function epicFromBookKey(key: string): string {
   return i >= 0 ? key.slice(i + 2) : key;
 }
 
+export type ClassifyResult = {
+  regime: RegimeName;
+  confidence: number;
+  signal: SignalOutput;
+};
+
 /**
- * Classify from closed 10s OHLC.
+ * Classify from closed 10s OHLC via multi-scale signal engine.
  * Always returns a real operating regime — never UNKNOWN / TRANSITION.
  */
 export function classifyRegime(bars: TenSecBar[], previous: RegimeName = 'RANGE'): RegimeName {
-  const prev = normalizeRegime(previous);
-  if (!bars.length || bars.length < 2) return 'RANGE';
-
-  const window = bars.slice(-8);
-  const last = window[window.length - 1]!;
-  const prior = window.slice(0, -1);
-  if (!prior.length) return 'RANGE';
-
-  const velocities = window.map(bodyPct);
-  const ranges = window.map(rangePct);
-  const priorRanges = prior.map(rangePct);
-  const avgRange = Math.max(mean(priorRanges.length ? priorRanges : ranges), 1e-9);
-  const lastVel = bodyPct(last);
-  const lastRange = rangePct(last);
-  const persistWindow = velocities.slice(-6);
-  const persistence = mean(
-    persistWindow.map((v) => (v > 0.00008 ? 1 : v < -0.00008 ? -1 : 0))
-  );
-
-  // Slightly looser than before so real Gold dumps/rallies register as TREND
-  const trendingUp = persistence > 0.25 && lastVel > 0.00004;
-  const trendingDown = persistence < -0.25 && lastVel < -0.00004;
-  const compressed = lastRange < avgRange * 0.55 && lastRange < 0.00022;
-  const expanding = lastRange > avgRange * 1.45 && lastRange >= 0.00025;
-  const hi = Math.max(...prior.map((b) => b.high));
-  const lo = Math.min(...prior.map((b) => b.low));
-  const inRange = last.close <= hi && last.close >= lo;
-  const breakoutUp = last.close > hi;
-  const breakoutDown = last.close < lo;
-  const reversal =
-    (prev === 'TREND_UP' && lastVel < -0.0012 && lastRange > avgRange && !breakoutDown) ||
-    (prev === 'TREND_DOWN' && lastVel > 0.0012 && lastRange > avgRange && !breakoutUp);
-
-  // FAILED_BREAKOUT is NOT classified from 10s micro H/L (that was 1–3 bar fake).
-  // Real failed breaks come from structureZones (multi-minute base + probe).
-  // After a 10s "breakout" fades back inside → RANGE (wait for minute zones).
-  if (prev === 'BREAKOUT_UP' && inRange && lastVel < 0) return 'RANGE';
-  if (prev === 'BREAKOUT_DOWN' && inRange && lastVel > 0) return 'RANGE';
-  if (compressed && inRange) return 'COMPRESSION';
-  if (expanding && breakoutUp && (trendingUp || lastVel > 0)) return 'BREAKOUT_UP';
-  if (expanding && breakoutDown && (trendingDown || lastVel < 0)) return 'BREAKOUT_DOWN';
-  if (expanding) return 'EXPANSION';
-  if (prev === 'TREND_UP' && lastVel < -0.00008 && persistence > 0.15) {
-    return 'PULLBACK_UPTREND';
-  }
-  if (prev === 'TREND_DOWN' && lastVel > 0.00008 && persistence < -0.15) {
-    return 'PULLBACK_DOWNTREND';
-  }
-  if (trendingUp) return 'TREND_UP';
-  if (trendingDown) return 'TREND_DOWN';
-  if (reversal) return 'REVERSAL_CANDIDATE';
-  if (inRange) {
-    // Stay in trend family on quiet in-range noise — do not flip to RANGE every bar
-    if (prev === 'TREND_UP' || prev === 'PULLBACK_UPTREND') return 'PULLBACK_UPTREND';
-    if (prev === 'TREND_DOWN' || prev === 'PULLBACK_DOWNTREND') return 'PULLBACK_DOWNTREND';
-    return 'RANGE';
-  }
-
-  // Out of prior micro-range — prefer sticky / slow labels over single-bar TREND flips
-  if (breakoutUp) return lastVel >= 0 ? 'BREAKOUT_UP' : 'REVERSAL_CANDIDATE';
-  if (breakoutDown) return lastVel <= 0 ? 'BREAKOUT_DOWN' : 'REVERSAL_CANDIDATE';
-  if (lastVel > 0.00012 && persistence > 0.15) return 'TREND_UP';
-  if (lastVel < -0.00012 && persistence < -0.15) return 'TREND_DOWN';
-  if (Math.abs(lastVel) >= 0.0001 || lastRange >= avgRange * 1.1) return 'EXPANSION';
-  // Unclear → keep previous (hysteresis at classify level)
-  return prev;
+  return classifyRegimeDetailed(bars, previous).regime;
 }
 
-function confidenceFrom(bars: TenSecBar[], regime: RegimeName): number {
-  if (bars.length < 2) return 0.2;
-  const last = bars[bars.length - 1]!;
-  const strength = Math.min(1, Math.abs(bodyPct(last)) / 0.0008 + rangePct(last) / 0.001);
-  return Math.max(0.2, Math.min(0.95, 0.35 + strength * 0.5));
+export function classifyRegimeDetailed(
+  bars: TenSecBar[],
+  previous: RegimeName = 'RANGE'
+): ClassifyResult {
+  const prev = normalizeRegime(previous);
+  const signal = computeSignalEngine(bars, prev);
+  return {
+    regime: normalizeRegime(signal.regime),
+    confidence: signal.confidence,
+    signal,
+  };
 }
 
 function toSnapshot(epic: string, b: Book): RegimeSnapshot {
@@ -228,6 +174,7 @@ function toSnapshot(epic: string, b: Book): RegimeSnapshot {
     last_update: b.last_update,
     last_mid: b.last_mid,
     bar_count: b.bars.length,
+    signal: b.signal,
   };
 }
 
@@ -248,6 +195,7 @@ function ensureBook(epic: string, displayName?: string, scopeKey?: string | null
       pending: null,
       pending_bars: 0,
       hold_bars: 0,
+      signal: null,
     };
     books.set(key, b);
   } else if (displayName) {
@@ -272,11 +220,13 @@ function applyClassify(epic: string, b: Book, newBarCount: number): RegimeSnapsh
   if (newBarCount <= 0) {
     b.last_update = now;
     if (b.bars.length) b.last_mid = b.bars[b.bars.length - 1]!.close;
-    b.confidence = confidenceFrom(b.bars, b.current);
     return toSnapshot(epic, b);
   }
 
-  const raw = classifyRegime(b.bars, b.current);
+  const detail = classifyRegimeDetailed(b.bars, b.current);
+  b.signal = detail.signal;
+  const raw = detail.regime;
+  b.confidence = detail.confidence;
   if (raw === b.current) {
     b.pending = null;
     b.pending_bars = 0;
@@ -297,7 +247,6 @@ function applyClassify(epic: string, b: Book, newBarCount: number): RegimeSnapsh
       b.since = now;
     }
   }
-  b.confidence = confidenceFrom(b.bars, b.current);
   b.last_update = now;
   if (b.bars.length) b.last_mid = b.bars[b.bars.length - 1]!.close;
   return toSnapshot(epic, b);

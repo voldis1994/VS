@@ -431,7 +431,7 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
       s.regime = next;
       s.regime_age_bars = 1;
     }
-    if (bars?.length) s.closedBars = bars.slice(-24);
+    if (bars?.length) s.closedBars = bars.slice(-280);
     else if (s.ohlcState.last_closed) {
       const last = s.ohlcState.last_closed;
       const prev = s.closedBars[s.closedBars.length - 1];
@@ -441,7 +441,7 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
         Math.abs(prev.close - last.close) < 1e-9;
       if (!same) {
         s.closedBars.push(last);
-        if (s.closedBars.length > 24) s.closedBars = s.closedBars.slice(-24);
+        if (s.closedBars.length > 280) s.closedBars = s.closedBars.slice(-280);
       }
     }
   }

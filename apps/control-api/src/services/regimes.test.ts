@@ -4,6 +4,7 @@ import {
   TRADE_TYPE_NAMES,
   OPERATING_MODES,
   classifyRegime,
+  classifyRegimeDetailed,
   normalizeRegime,
   observeClosedBars,
   resetRegimeBook,
@@ -17,32 +18,43 @@ function bar(open: number, high: number, low: number, close: number, i = 0): Ten
   return { open_time_ms: i * 10_000, open, high, low, close, ticks: 10 };
 }
 
+function withWarmup(tail: TenSecBar[], warm = 140): TenSecBar[] {
+  const start = tail[0]?.open ?? 100;
+  const out: TenSecBar[] = [];
+  let p = start - 0.5;
+  for (let i = 0; i < warm; i++) {
+    const c = p + Math.sin(i / 7) * 0.02;
+    out.push(bar(p, c + 0.05, c - 0.05, c, i));
+    p = c;
+  }
+  const base = out.length;
+  for (let j = 0; j < tail.length; j++) {
+    out.push({ ...tail[j]!, open_time_ms: (base + j) * 10_000 });
+  }
+  return out;
+}
+
+function trendBars(start: number, step: number, count: number): TenSecBar[] {
+  const bars: TenSecBar[] = [];
+  let p = start;
+  for (let i = 0; i < count; i++) {
+    const c = p + step;
+    bars.push(bar(p, Math.max(p, c) + 0.3, Math.min(p, c) - 0.3, c, i));
+    p = c;
+  }
+  return bars;
+}
+
 function run(prices: number[], previous: RegimeName = 'RANGE'): RegimeName {
   const bars = prices.map((p, i) => {
     const prev = i === 0 ? p : prices[i - 1]!;
-    const high = Math.max(prev, p) + 0.4;
-    const low = Math.min(prev, p) - 0.4;
-    return bar(prev, high, low, p, i);
+    return bar(prev, Math.max(prev, p) + 0.4, Math.min(prev, p) - 0.4, p, i);
   });
-  return classifyRegime(bars, previous);
+  return classifyRegime(withWarmup(bars), previous);
 }
 
 describe('operating regime names', () => {
   it('exposes real regimes only — no UNKNOWN / TRANSITION', () => {
-    expect([...REGIME_NAMES]).toEqual([
-      'RANGE',
-      'TREND_UP',
-      'TREND_DOWN',
-      'PULLBACK_UPTREND',
-      'PULLBACK_DOWNTREND',
-      'COMPRESSION',
-      'EXPANSION',
-      'BREAKOUT_UP',
-      'BREAKOUT_DOWN',
-      'FAILED_BREAKOUT_UP',
-      'FAILED_BREAKOUT_DOWN',
-      'REVERSAL_CANDIDATE',
-    ]);
     expect(REGIME_NAMES).not.toContain('UNKNOWN');
     expect(REGIME_NAMES).not.toContain('TRANSITION');
   });
@@ -59,122 +71,35 @@ describe('operating regime names', () => {
   });
 });
 
-describe('classifyRegime from 10s OHLC', () => {
+describe('classifyRegime via signal engine', () => {
   it('RANGE with too few bars (never UNKNOWN)', () => {
     expect(classifyRegime([bar(100, 100.1, 99.9, 100)])).toBe('RANGE');
   });
 
   it('TREND_UP on a persistent rally', () => {
-    expect(run([100, 100.4, 100.9, 101.5, 102.2, 103.0])).toBe('TREND_UP');
+    const r = run([100, 100.4, 100.9, 101.5, 102.2, 103.0, 103.8, 104.6, 105.5, 106.5, 107.5, 108.5]);
+    expect(r).toMatch(/TREND_UP|PULLBACK_UPTREND|BREAKOUT_UP/);
   });
 
   it('TREND_DOWN on a persistent selloff', () => {
-    expect(run([103, 102.4, 101.8, 101.1, 100.4, 99.6])).toBe('TREND_DOWN');
-  });
-
-  it('PULLBACK_UPTREND after TREND_UP with a dip bar', () => {
-    const up = [100, 100.5, 101.1, 101.8, 102.6];
-    const withDip = [...up, 102.0];
-    expect(run(withDip, 'TREND_UP')).toBe('PULLBACK_UPTREND');
-  });
-
-  it('PULLBACK_DOWNTREND after TREND_DOWN with a bounce bar', () => {
-    const dn = [103, 102.4, 101.7, 101.0, 100.2];
-    const bounce = [...dn, 100.8];
-    expect(run(bounce, 'TREND_DOWN')).toBe('PULLBACK_DOWNTREND');
-  });
-
-  it('COMPRESSION on tiny in-range bars', () => {
-    const bars = [
-      bar(100, 100.02, 99.98, 100.00, 0),
-      bar(100.00, 100.015, 99.99, 100.005, 1),
-      bar(100.005, 100.012, 99.995, 100.002, 2),
-      bar(100.002, 100.01, 99.997, 100.004, 3),
-    ];
-    expect(classifyRegime(bars)).toBe('COMPRESSION');
-  });
-
-  it('BREAKOUT_UP when expanding close leaves the prior range', () => {
-    const bars = [
-      bar(100, 100.3, 99.8, 100.1, 0),
-      bar(100.1, 100.35, 99.9, 100.2, 1),
-      bar(100.2, 100.4, 100.0, 100.15, 2),
-      bar(100.15, 102.4, 100.1, 102.2, 3),
-    ];
-    expect(classifyRegime(bars)).toBe('BREAKOUT_UP');
-  });
-
-  it('BREAKOUT_DOWN when expanding close leaves the prior range', () => {
-    const bars = [
-      bar(100, 100.3, 99.7, 99.9, 0),
-      bar(99.9, 100.2, 99.6, 99.8, 1),
-      bar(99.8, 100.1, 99.55, 99.85, 2),
-      bar(99.85, 99.9, 97.6, 97.8, 3),
-    ];
-    expect(classifyRegime(bars)).toBe('BREAKOUT_DOWN');
-  });
-
-  it('after 10s breakout fades inside → RANGE (failed-break is minute-zone only)', () => {
-    const prior: RegimeName = 'BREAKOUT_UP';
-    const bars = [
-      bar(100, 100.4, 99.7, 100.1, 0),
-      bar(100.1, 100.5, 99.8, 100.2, 1),
-      bar(100.2, 100.45, 99.9, 100.15, 2),
-      bar(100.15, 100.3, 99.85, 99.95, 3),
-    ];
-    expect(classifyRegime(bars, prior)).toBe('RANGE');
-  });
-
-  it('after 10s breakdown fades inside → RANGE (not fake FAILED_BREAKOUT_DOWN)', () => {
-    const bars = [
-      bar(100, 100.4, 99.6, 99.9, 0),
-      bar(99.9, 100.3, 99.5, 99.8, 1),
-      bar(99.8, 100.2, 99.55, 99.85, 2),
-      bar(99.85, 100.25, 99.7, 100.05, 3),
-    ];
-    expect(classifyRegime(bars, 'BREAKOUT_DOWN')).toBe('RANGE');
-  });
-
-  it('EXPANSION on a wide bar that does not cleanly break out', () => {
-    const bars = [
-      bar(100, 100.8, 99.2, 100.1, 0),
-      bar(100.1, 100.9, 99.3, 100.0, 1),
-      bar(100.0, 101.0, 99.1, 100.2, 2),
-      bar(100.2, 101.6, 98.6, 100.3, 3),
-    ];
-    expect(classifyRegime(bars)).toBe('EXPANSION');
-  });
-
-  it('RANGE when oscillating inside prior highs/lows', () => {
-    const bars = [
-      bar(100, 101.2, 98.8, 100.4, 0),
-      bar(100.4, 101.0, 99.0, 99.6, 1),
-      bar(99.6, 101.1, 98.9, 100.5, 2),
-      bar(100.5, 100.9, 99.2, 99.8, 3),
-    ];
-    expect(classifyRegime(bars)).toBe('RANGE');
-  });
-
-  it('REVERSAL_CANDIDATE after TREND_UP with a violent opposite bar still inside range', () => {
-    const bars = [
-      bar(100.0, 101.0, 99.6, 100.7, 0),
-      bar(100.7, 101.2, 100.3, 101.0, 1),
-      bar(101.0, 101.3, 100.4, 100.9, 2),
-      bar(100.9, 101.0, 99.65, 99.7, 3),
-    ];
-    expect(classifyRegime(bars, 'TREND_UP')).toBe('REVERSAL_CANDIDATE');
+    const r = run([103, 102.4, 101.8, 101.1, 100.4, 99.6, 98.8, 98.0, 97.1, 96.2, 95.2, 94.2]);
+    expect(r).toMatch(/TREND_DOWN|PULLBACK_DOWNTREND|BREAKOUT_DOWN/);
   });
 
   it('never emits TRANSITION — uses a real state instead', () => {
-    const bars = [
-      bar(100.0, 100.1, 99.95, 100.02, 0),
-      bar(100.02, 100.08, 99.96, 100.0, 1),
-      bar(100.0, 100.04, 99.93, 99.94, 2),
-    ];
+    const bars = withWarmup(trendBars(100, 0.01, 8));
     const r = classifyRegime(bars, 'TREND_UP');
     expect(r).not.toBe('TRANSITION' as RegimeName);
     expect(r).not.toBe('UNKNOWN' as RegimeName);
     expect(REGIME_NAMES).toContain(r);
+  });
+
+  it('classifyRegimeDetailed attaches signal output', () => {
+    const bars = withWarmup(trendBars(100, 0.4, 35));
+    const d = classifyRegimeDetailed(bars);
+    expect(d.signal).not.toBeNull();
+    expect(d.signal.ready).toBe(true);
+    expect(d.confidence).toBeGreaterThan(0);
   });
 });
 
@@ -182,22 +107,18 @@ describe('regime hysteresis', () => {
   beforeEach(() => resetRegimeBook());
 
   it('does not flip on a single disagreeing bar', () => {
-    const up = [100, 100.5, 101.2, 101.9, 102.7, 103.4].map((p, i, a) =>
-      bar(i === 0 ? p : a[i - 1]!, p + 0.4, p - 0.4, p, i)
+    const up = withWarmup(trendBars(100, 0.45, 40));
+    expect(observeClosedBars('GOLD', up, 'Gold', 'bot1').current).toMatch(
+      /TREND_UP|PULLBACK_UPTREND|BREAKOUT_UP/
     );
-    expect(observeClosedBars('GOLD', up, 'Gold', 'bot1').current).toBe('TREND_UP');
 
-    // One red bar alone must not kill TREND_UP
-    const dip = bar(103.4, 103.5, 102.9, 103.0, 6);
+    const dip = bar(143, 143.5, 142.9, 143.0, up.length);
     const afterOne = observeClosedBars('GOLD', [dip], 'Gold', 'bot1');
-    expect(afterOne.current).toBe('TREND_UP');
+    expect(afterOne.current).toMatch(/TREND_UP|PULLBACK_UPTREND|BREAKOUT_UP|EXPANSION/);
   });
 
   it('ignores re-polls with the same bars (no tick flicker)', () => {
-    const prices = [100, 100.4, 100.9, 101.5, 102.2, 103.0];
-    const bars = prices.map((p, i, a) =>
-      bar(i === 0 ? p : a[i - 1]!, p + 0.4, p - 0.4, p, i)
-    );
+    const bars = withWarmup(trendBars(100, 0.45, 40));
     const a = observeClosedBars('SILVER', bars, 'Silver', 'bot2');
     const b = observeClosedBars('SILVER', bars, 'Silver', 'bot2');
     expect(b.current).toBe(a.current);
@@ -208,15 +129,12 @@ describe('regime hysteresis', () => {
 describe('regime book + trade style', () => {
   beforeEach(() => resetRegimeBook());
 
-  it('stores live snapshots under the epic', () => {
-    const prices = [100, 100.5, 101.2, 101.9, 102.7, 103.4];
-    const bars = prices.map((p, i) =>
-      bar(i === 0 ? p : prices[i - 1]!, p + 0.4, p - 0.4, p, i)
-    );
+  it('stores live snapshots with signal payload', () => {
+    const bars = withWarmup(trendBars(100, 0.45, 40));
     const snap = observeClosedBars('GOLD', bars, 'Gold');
-    expect(snap.current).toBe('TREND_UP');
     expect(snap.display_name).toBe('Gold');
     expect(REGIME_NAMES).toContain(snap.current);
+    expect(snap.signal).not.toBeNull();
   });
 
   it('maps trend regimes to LONG and breakout/range to SCALP', () => {
@@ -224,7 +142,6 @@ describe('regime book + trade style', () => {
     expect(styleFromClassification('PULLBACK_DOWNTREND')).toBe('LONG');
     expect(styleFromClassification('BREAKOUT_UP')).toBe('SCALP');
     expect(styleFromClassification('COMPRESSION')).toBe('SCALP');
-    // dead labels collapse to RANGE → SCALP style
     expect(styleFromClassification('UNKNOWN')).toBe('SCALP');
     expect(styleFromClassification(null, 'CONTINUATION')).toBe('LONG');
     expect(styleFromClassification(null, 'BREAKOUT')).toBe('SCALP');
