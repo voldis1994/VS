@@ -5,10 +5,12 @@ import {
   decideEntryFromSetup,
   decideEntryFromTenSecMove,
   emptySetup,
+  isTipChaseEntry,
   priceFlowBias,
   recentImpulse,
   updateSetupSticky,
 } from './marketSetup.js';
+import { minSwingSpan } from './instrumentScale.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 
 function candle(o: number, h: number, l: number, c: number): CapitalPriceCandle {
@@ -329,5 +331,52 @@ describe('marketSetup', () => {
     let setup = emptySetup();
     setup = updateSetupSticky(setup, st, bars);
     expect(setup.side).not.toBe('BUY');
+  });
+
+  it('EUR/USD flat compression does not ARM stuck FADE at H≈L', () => {
+    const minutes: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 28; i++) {
+      minutes.push(candle(1.1599, 1.15995, 1.15985, 1.1599));
+    }
+    const st = buildStructure({ minutes, mid: 1.1599 });
+    expect(st.ready).toBe(true);
+    const span = st.swing_high - st.swing_low;
+    if (span < minSwingSpan(1.16)) {
+      let setup = emptySetup();
+      setup = updateSetupSticky(setup, st, minutes);
+      expect(setup.kind).not.toBe('FADE');
+    } else {
+      // still must not tip-chase block at identical H/L display
+      const fadeBuy = {
+        kind: 'FADE' as const,
+        side: 'BUY' as const,
+        playbook: 'FADE' as const,
+        status: 'ARMED' as const,
+        swing_high: st.swing_high,
+        swing_low: st.swing_low,
+      };
+      expect(isTipChaseEntry(fadeBuy as never, bar10(1.1599, 1.16, 1.1598, 1.1599))).toBe(false);
+    }
+  });
+
+  it('decideEntryFromTenSecMove trades EUR/USD when swing span is tiny', () => {
+    const minutes: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 28; i++) {
+      minutes.push(candle(1.1598, 1.16, 1.1596, 1.1599));
+    }
+    const st = buildStructure({ minutes, mid: 1.1599 });
+    const moveBar = bar10(1.1598, 1.1603, 1.1597, 1.1602);
+    expect(decideEntryFromTenSecMove(st, moveBar, minutes)?.direction).toBe('BUY');
+  });
+
+  it('isTipChaseEntry skips flat H≈L compression', () => {
+    const fadeBuy = {
+      kind: 'FADE' as const,
+      side: 'BUY' as const,
+      swing_high: 1.16,
+      swing_low: 1.16,
+    };
+    const bar = bar10(1.16, 1.16, 1.16, 1.16);
+    expect(isTipChaseEntry(fadeBuy as never, bar)).toBe(false);
   });
 });

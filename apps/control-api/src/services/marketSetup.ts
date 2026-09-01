@@ -10,7 +10,7 @@
  * - Open trade freezes setup; manage = best outcome only
  */
 import type { CapitalPriceCandle } from './capitalCom.js';
-import { edgeEps, scaleFromGold, refPx } from './instrumentScale.js';
+import { edgeEps, minSwingSpan, scaleFromGold, refPx } from './instrumentScale.js';
 import type { TradePlaybook } from './playbooks.js';
 import { PLAYBOOK_ENTRY_BODY } from './playbooks.js';
 import { bodyPct, type TenSecBar } from './tenSecondOhlc.js';
@@ -504,6 +504,43 @@ function rawSetupFromStructure(
     };
   }
 
+  // Flat compression (EUR/USD quiet: H≈L) — FADE at a fake edge blocks every entry via tip-chase
+  const span = hi - lo;
+  const minSpan = minSwingSpan(last.close);
+  if (span < minSpan) {
+    if (imp === 'UP') {
+      return {
+        kind: 'CONTINUATION',
+        side: 'BUY',
+        playbook: 'SCALP',
+        status: 'ARMED',
+        swing_high: hi,
+        swing_low: lo,
+        reason: `COMPRESSION · tight span · 10s UP → BUY`,
+      };
+    }
+    if (imp === 'DOWN') {
+      return {
+        kind: 'CONTINUATION',
+        side: 'SELL',
+        playbook: 'SCALP',
+        status: 'ARMED',
+        swing_high: hi,
+        swing_low: lo,
+        reason: `COMPRESSION · tight span · 10s DOWN → SELL`,
+      };
+    }
+    return {
+      kind: 'NONE',
+      side: null,
+      playbook: null,
+      status: 'NONE',
+      swing_high: hi,
+      swing_low: lo,
+      reason: `NONE · compression H${hi.toFixed(4)}/L${lo.toFixed(4)} · wait 10s move`,
+    };
+  }
+
   // FADE at FRESH swing edges only — never SELL mid-rally / BUY mid-dump on stale level
   // Also: if price is still dumping, do NOT arm FADE BUY (falling knife) — ride SELL
   const flow = priceFlowBias(minutes);
@@ -784,8 +821,9 @@ export function isTipChaseEntry(setup: MarketSetup, bar: TenSecBar): boolean {
   }
   const hi = setup.swing_high;
   const lo = setup.swing_low;
-  if (!(hi > lo)) return false;
-  const eps = edgeEps(bar.close, hi - lo);
+  const span = hi - lo;
+  if (span < minSwingSpan(bar.close)) return false;
+  const eps = edgeEps(bar.close, span);
   // Narrower band — was 0.65 (blocked too many valid 10s entries)
   if (setup.side === 'BUY' && bar.close >= hi - eps * 0.3) return true;
   if (setup.side === 'SELL' && bar.close <= lo + eps * 0.3) return true;
@@ -925,12 +963,14 @@ export function decideEntryFromTenSecMove(
   bar: TenSecBar,
   minutes?: CapitalPriceCandle[] | null
 ): SetupEntry | null {
-  if (!structure.ready || !(structure.swing_high > structure.swing_low)) return null;
+  if (!structure.ready) return null;
   const thr = PLAYBOOK_ENTRY_BODY.SCALP;
   const body = bodyPct(bar);
   const hi = structure.swing_high;
   const lo = structure.swing_low;
-  const eps = edgeEps(bar.close, Math.max(hi - lo, structure.span, 1));
+  const minSpan = minSwingSpan(bar.close);
+  const span = Math.max(hi - lo, structure.span, minSpan);
+  const eps = edgeEps(bar.close, span);
   const need = thr * 0.65;
   const flow = priceFlowBias(minutes);
 
