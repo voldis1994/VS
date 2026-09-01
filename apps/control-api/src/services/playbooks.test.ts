@@ -173,7 +173,7 @@ describe('playbook exit', () => {
     expect(aged.reason).toMatch(/LONG/);
   });
 
-  it('SCALP PeakProtect at ret < 55%, LONG at < 40%', () => {
+  it('SCALP PeakProtect at ret < 42%, LONG at < 40%', () => {
     const scalp = decideBestOutcomeExit(
       {
         open_side: 'BUY',
@@ -181,7 +181,7 @@ describe('playbook exit', () => {
         entry_at: ago(60_000),
         mfe: 5,
         mae: 0,
-        peak_retention: 0.5,
+        peak_retention: 0.38,
         regime: 'BREAKOUT_UP',
         playbook: 'SCALP',
       },
@@ -189,6 +189,21 @@ describe('playbook exit', () => {
     );
     expect(scalp.exit).toBe(true);
     expect(scalp.reason).toMatch(/PeakProtection/);
+
+    const scalpHold = decideBestOutcomeExit(
+      {
+        open_side: 'BUY',
+        entry_price: 2000,
+        entry_at: ago(60_000),
+        mfe: 5,
+        mae: 0,
+        peak_retention: 0.56,
+        regime: 'BREAKOUT_UP',
+        playbook: 'SCALP',
+      },
+      2002.5
+    );
+    expect(scalpHold.exit).toBe(false);
 
     const longHold = decideBestOutcomeExit(
       {
@@ -248,5 +263,14 @@ describe('thesisFailureForPlaybook', () => {
     expect(thesisFailureForPlaybook('BUY', 'PULLBACK_DOWNTREND', 'LONG')).toBeNull();
     expect(thesisFailureForPlaybook('BUY', 'PULLBACK_DOWNTREND', 'SCALP')).toMatch(/SCALP/);
     expect(thesisFailureForPlaybook('BUY', 'TREND_DOWN', 'FADE')).toMatch(/FADE/);
+  });
+
+  it('SCALP leg ride ignores pullback regime noise', () => {
+    expect(
+      thesisFailureForPlaybook('SELL', 'PULLBACK_UPTREND', 'SCALP', 'BREAKOUT')
+    ).toBeNull();
+    expect(
+      thesisFailureForPlaybook('SELL', 'BREAKOUT_UP', 'SCALP', 'BREAKOUT')
+    ).toMatch(/leg SELL/);
   });
 });

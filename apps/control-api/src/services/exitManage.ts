@@ -1,6 +1,7 @@
 /** Live Capital exit — playbook Best Outcome + unified MarketBrain dynamics. */
 import {
   exitParamsForTrade,
+  isLegRideSetup,
   playbookFromRegime,
   thesisFailureForPlaybook,
   type Playbook,
@@ -80,11 +81,11 @@ export function decideBestOutcomeExit(
 
   const brainThesis =
     brain != null ? brainExitThesis(brain, s.open_side, book) : null;
-  if (brainThesis && heldMs >= p.thesisMinHoldMs * 0.5) {
+  if (brainThesis && heldMs >= p.thesisMinHoldMs * 0.85) {
     return { exit: true, reason: `${brainThesis} · ${book}` };
   }
 
-  const thesis = thesisFailureForPlaybook(s.open_side, s.regime, book);
+  const thesis = thesisFailureForPlaybook(s.open_side, s.regime, book, s.entry_setup);
   if (thesis && heldMs >= p.thesisMinHoldMs) {
     return { exit: true, reason: `${thesis} · ${book} · ${s.entry_setup || 'setup?'}` };
   }
@@ -98,6 +99,8 @@ export function decideBestOutcomeExit(
   }
   const sl = Math.max(absEntry * p.slPct, p.slFloor);
   const mfeFloor = Math.max(absEntry * p.mfeFloorPct, p.mfeFloorAbs);
+  const legRide = isLegRideSetup(s.entry_setup);
+  const peakMinHoldMs = legRide ? 90_000 : Math.min(p.thesisMinHoldMs * 0.5, 60_000);
 
   if (fav <= -sl) {
     return {
@@ -106,7 +109,12 @@ export function decideBestOutcomeExit(
     };
   }
 
-  if (s.mfe >= mfeFloor && s.peak_retention != null && s.peak_retention < peakRet) {
+  if (
+    heldMs >= peakMinHoldMs &&
+    s.mfe >= mfeFloor &&
+    s.peak_retention != null &&
+    s.peak_retention < peakRet
+  ) {
     return {
       exit: true,
       reason: `PeakProtection · ${book} · retention ${(s.peak_retention * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)}${brain ? ` · ${brain.move_state}` : ''}`,
@@ -125,7 +133,8 @@ export function decideBestOutcomeExit(
     fav > 0 &&
     s.peak_retention != null &&
     s.peak_retention < harvestRet &&
-    s.peak_retention >= peakRet
+    s.peak_retention >= peakRet &&
+    s.mfe - fav >= Math.max(mfeFloor * 0.4, absEntry * 0.00035)
   ) {
     return {
       exit: true,
@@ -133,7 +142,13 @@ export function decideBestOutcomeExit(
     };
   }
 
-  if (heldMs > timeDecayMs && fav >= 0 && s.mfe >= mfeFloor * 0.5) {
+  const moveStillLive =
+    fav > 0 &&
+    s.peak_retention != null &&
+    s.peak_retention >= 0.45 &&
+    fav >= s.mfe * 0.55;
+
+  if (heldMs > timeDecayMs && !moveStillLive && fav >= -mfeFloor * 0.2 && s.mfe >= mfeFloor * 0.5) {
     return {
       exit: true,
       reason: `TimeDecay · ${book} · held ${Math.round(heldMs / 1000)}s · UPL ${fav.toFixed(5)}${brain?.move_state === 'EXHAUSTING' ? ' · exhausting' : ''}`,

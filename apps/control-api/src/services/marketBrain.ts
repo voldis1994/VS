@@ -489,10 +489,14 @@ export function brainExitThesis(
   side: 'BUY' | 'SELL',
   playbook: TradePlaybook
 ): string | null {
-  if (state.move_state === 'EXHAUSTING' && state.exhaustion > state.survival) {
+  if (state.move_state === 'EXHAUSTING' && state.exhaustion > state.survival + 0.15) {
     return `BrainExhaustion · ${playbook} · ${state.move_state}`;
   }
-  if (state.side_end && (playbook === 'FADE' || playbook === 'SCALP')) {
+  if (
+    state.side_end &&
+    (playbook === 'FADE' || playbook === 'SCALP') &&
+    state.exhaustion > 0.65
+  ) {
     return `BrainSideEnd · ${playbook} · breakout pressure`;
   }
   if (playbook === 'FADE' && state.break_valid && state.break_dir !== 0) {
