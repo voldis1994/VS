@@ -10,9 +10,25 @@ export function marketKey(m: CatalogMarket): string {
   return (m.epic || m.symbol || '').trim();
 }
 
+function marketText(m: CatalogMarket): string {
+  return `${m.display_name} ${m.epic || ''} ${m.symbol}`.toLowerCase();
+}
+
 export function isEurUsdMarket(m: CatalogMarket): boolean {
-  const t = `${m.display_name} ${m.epic || ''} ${m.symbol}`.toLowerCase();
+  const t = marketText(m);
   return t.includes('eurusd') || /eur\s*\/\s*usd/.test(t);
+}
+
+export function isGoldMarket(m: CatalogMarket): boolean {
+  const t = marketText(m);
+  return t.includes('xau') || /\bgold\b/.test(t);
+}
+
+/** Shortcut only for leftover stocks like $ Kimly — never on Gold / FX that the client chose. */
+export function offerEurUsdShortcut(m: CatalogMarket): boolean {
+  if (isEurUsdMarket(m) || isGoldMarket(m)) return false;
+  const t = marketText(m);
+  return t.includes('kimly') || t.includes('$') || t.includes('stock') || t.includes('share');
 }
 
 /** Capital catalog is A–Z; "$ Kimly" sorts first. Never default SWITCH to that. */

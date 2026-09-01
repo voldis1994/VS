@@ -11,5 +11,7 @@ describe('RobotDesk multi-client deploy', () => {
     expect(src).toMatch(/panelMode === 'switch'/);
     expect(src).toMatch(/pickDeployAccount/);
     expect(src).toMatch(/DEPLOY citu klientu/);
+    expect(src).toMatch(/offerEurUsdShortcut/);
+    expect(src).toMatch(/sessionInTrade/);
   });
 });

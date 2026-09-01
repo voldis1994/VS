@@ -45,6 +45,22 @@ describe('multi-client isolation invariants', () => {
     expect(robots.find((s) => s.id === 'g-manage')?.open_side).toBe('BUY');
   });
 
+  it('never stops a robot that is IN TRADE to switch market', () => {
+    const robots = [
+      { id: 'boss-gold', account_id: 18, epic: 'GOLD', running: true, entry_enabled: true, open_side: 'BUY' as const },
+    ];
+    const keep = 'EURUSD';
+    const stopped = robots
+      .filter((s) => {
+        if (s.account_id !== 18 || !s.running) return false;
+        if (s.epic === keep) return false;
+        if (s.open_side) return false;
+        return true;
+      })
+      .map((s) => s.id);
+    expect(stopped).toEqual([]);
+  });
+
   it('robot ids are per account+epic (Client A ≠ Client B)', () => {
     const aGold = robotIdFor(17, 'GOLD');
     const bGold = robotIdFor(18, 'GOLD');
@@ -65,6 +81,7 @@ describe('multi-client isolation invariants', () => {
     const desk = readFileSync(fileURLToPath(new URL('./robotDesk.ts', import.meta.url)), 'utf8');
     expect(desk).toMatch(/stopOtherRobotsForAccount/);
     expect(desk).toMatch(/panel_epic/);
+    expect(desk).toMatch(/IN TRADE/);
   });
 
   it('own-brain status ignores Market Core heartbeat', () => {

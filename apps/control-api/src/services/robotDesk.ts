@@ -628,7 +628,8 @@ export async function stopOtherRobotsForAccount(
   for (const s of [...sessions.values()]) {
     if (s.account_id !== accountId || !s.running) continue;
     if (s.epic.trim().toLowerCase() === keep) continue;
-    if (!s.entry_enabled && s.open_side) continue;
+    // Never kill a live trade to switch market (Gold BUY must not become EUR/USD).
+    if (s.open_side) continue;
     await stopRobotSession(s.id);
     stopped.push(`${s.display_name} (${s.epic})`);
   }
@@ -1566,6 +1567,19 @@ export async function startRobotSession(input: {
 
   const lot = Number(input.lot_size);
   if (!Number.isFinite(lot) || lot <= 0) throw new Error('lot_size must be > 0');
+
+  const liveTrade = [...sessions.values()].find(
+    (s) =>
+      s.account_id === acc.id &&
+      s.running &&
+      Boolean(s.open_side) &&
+      s.epic.trim().toLowerCase() !== epic.trim().toLowerCase()
+  );
+  if (liveTrade) {
+    throw new Error(
+      `IN TRADE ${liveTrade.display_name} ${liveTrade.open_side} — nevar SWITCH kamēr treids vaļā`
+    );
+  }
 
   const id = robotIdFor(acc.id, epic);
   const existing = sessions.get(id);
