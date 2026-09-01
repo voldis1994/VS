@@ -3,6 +3,7 @@ import type { CapitalPriceCandle } from './capitalCom.js';
 import {
   buildStructure,
   decideEntryFromSetup,
+  decideEntryFromFormingSetup,
   decideEntryFromTenSecMove,
   emptySetup,
   isTipChaseEntry,
@@ -378,5 +379,23 @@ describe('marketSetup', () => {
     };
     const bar = bar10(1.16, 1.16, 1.16, 1.16);
     expect(isTipChaseEntry(fadeBuy as never, bar)).toBe(false);
+  });
+
+  it('CONTINUATION forming bar fires before bucket close on live impulse', () => {
+    const armed = {
+      ...emptySetup(),
+      kind: 'CONTINUATION' as const,
+      side: 'BUY' as const,
+      playbook: 'SCALP' as const,
+      status: 'ARMED' as const,
+      reason: 'IMPULSE UP',
+      swing_high: 4358,
+      swing_low: 4334,
+    };
+    const forming = bar10(4340.5, 4341.8, 4340.4, 4341.55);
+    forming.ticks = 6;
+    const hit = decideEntryFromFormingSetup(armed, forming, []);
+    expect(hit?.direction).toBe('BUY');
+    expect(hit?.reason).toMatch(/live 10s/);
   });
 });

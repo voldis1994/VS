@@ -120,7 +120,7 @@ describe('marketBrain unified state', () => {
     );
     const line = formatBrainLine(summary);
     expect(line).toMatch(/BRAIN · BREAKOUT/);
-    expect(line).toMatch(/DEVELOPING/);
+    expect(line).toMatch(/surv 72% \(10s\)/);
     expect(line).toMatch(/4371.50/);
   });
 
