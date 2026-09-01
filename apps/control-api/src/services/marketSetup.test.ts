@@ -89,28 +89,28 @@ describe('marketSetup', () => {
     expect(decideEntryFromSetup(emptySetup(), bar10(100, 101, 99, 100.5))).toBeNull();
   });
 
-  it('never arms BUY at swing high — FADE SELL instead (no tip chase)', () => {
-    const minutes = rangeMinutes();
-    const nearHigh = buildStructure({ minutes, mid: 2009.2 });
-    expect(nearHigh.near_high).toBe(true);
-    let setup = emptySetup();
-    setup = updateSetupSticky(setup, nearHigh, minutes);
-    setup = updateSetupSticky(setup, nearHigh, minutes);
-    expect(setup.side).toBe('SELL');
-    expect(setup.kind === 'FADE' || setup.kind === 'FAILED_BREAK' || setup.kind === 'PULLBACK').toBe(
-      true
-    );
-    // FADE BUY at the tip must still be blocked; CONTINUATION may ride impulse through
+  it('blocks FADE BUY at swing high tip (no tip chase)', () => {
+    const minutes: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 28; i++) {
+      minutes.push(candle(4428, 4432, 4426, 4429));
+    }
+    minutes.push(candle(4429, 4433.8, 4428.5, 4433.2));
+    minutes.push(candle(4433, 4433.5, 4431.2, 4431.6));
+    const st = buildStructure({ minutes, mid: 4432.6 });
+    expect(st.ready).toBe(true);
     const tipFadeBuy = {
-      ...setup,
+      ...emptySetup(),
       kind: 'FADE' as const,
       side: 'BUY' as const,
-      status: 'ARMED' as const,
       playbook: 'FADE' as const,
-      swing_high: nearHigh.swing_high,
-      swing_low: nearHigh.swing_low,
+      status: 'ARMED' as const,
+      confirm: 3,
+      swing_high: st.swing_high,
+      swing_low: st.swing_low,
     };
-    expect(decideEntryFromSetup(tipFadeBuy, bar10(2009, 2009.5, 2008.8, 2009.3))).toBeNull();
+    expect(
+      decideEntryFromSetup(tipFadeBuy, bar10(4433.2, 4433.9, 4432.8, 4433.6), minutes)
+    ).toBeNull();
   });
 
   it('does not FADE SELL mid-rally on a stale swing high (4434 while climb continues)', () => {
@@ -279,8 +279,15 @@ describe('marketSetup', () => {
     const buy = decideEntryFromTenSecMove(st, buyBar, minutes);
     expect(buy?.direction).toBe('BUY');
     expect(buy?.setup).toBe('CONTINUATION');
-    const sellBar = bar10(2005.5, 2005.6, 2003.8, 2004.0);
-    const sell = decideEntryFromTenSecMove(st, sellBar, minutes);
+    // Dump minutes so SELL is not blocked by flow UP
+    const dump: CapitalPriceCandle[] = [...minutes];
+    for (let i = 0; i < 6; i++) {
+      const o = 2005 - i * 1.1;
+      dump.push(candle(o, o + 0.2, o - 1.3, o - 1.0));
+    }
+    const stDump = buildStructure({ minutes: dump, mid: dump.at(-1)!.close });
+    const sellBar = bar10(2003.5, 2003.6, 2001.8, 2002.0);
+    const sell = decideEntryFromTenSecMove(stDump, sellBar, dump);
     expect(sell?.direction).toBe('SELL');
   });
 

@@ -57,7 +57,7 @@ export function decideBestOutcomeExit(
   if (!s.open_side || s.entry_price == null) return { exit: false, reason: '' };
 
   const book = resolvePlaybook(s);
-  const p = exitParamsForTrade(book, s.entry_setup);
+  const p = exitParamsForTrade(book, s.entry_setup, s.entry_price);
   const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
 
   const thesis = thesisFailureForPlaybook(s.open_side, s.regime, book);

@@ -8,6 +8,10 @@ import {
   robotIdFor,
 } from './robotDesk.js';
 import { emitToClient } from './clientEvents.js';
+import {
+  listAllMarketsForClient,
+  resolveMarketForClient,
+} from './capitalMarketsCatalog.js';
 import { formatTradeLabel } from './tradePresentation.js';
 import { currentRegime } from './regimes.js';
 import {
@@ -152,24 +156,7 @@ export async function resolveClientTradingAccount(clientId: number): Promise<{
 
 export async function listClientMarkets(clientId: number): Promise<ClientMarket[]> {
   const account = await resolveClientTradingAccount(clientId);
-  if (!account) return [];
-  const { rows } = await pool.query(
-    `SELECT id, epic, symbol, display_name, category, min_lot, max_lot, lot_step
-     FROM capital_markets
-     WHERE broker_connection_id = $1
-     ORDER BY display_name ASC`,
-    [account.connection_id]
-  );
-  return rows.map((m) => ({
-    instrument_id: Number(m.id),
-    epic: String(m.epic),
-    symbol: String(m.symbol || m.epic),
-    display_name: String(m.display_name),
-    category: String(m.category || 'other'),
-    min_lot: Number(m.min_lot),
-    max_lot: Number(m.max_lot),
-    lot_step: Number(m.lot_step),
-  }));
+  return listAllMarketsForClient(account?.connection_id ?? null);
 }
 
 async function loadMarketForClient(
@@ -178,24 +165,17 @@ async function loadMarketForClient(
 ): Promise<(ClientMarket & { connection_id: number; account_id: number }) | null> {
   const account = await resolveClientTradingAccount(clientId);
   if (!account) return null;
-  const { rows } = await pool.query(
-    `SELECT id, epic, symbol, display_name, category, min_lot, max_lot, lot_step
-     FROM capital_markets
-     WHERE broker_connection_id = $1 AND epic = $2
-     LIMIT 1`,
-    [account.connection_id, epic]
-  );
-  if (!rows.length) return null;
-  const m = rows[0];
+  const m = await resolveMarketForClient(account.connection_id, epic);
+  if (!m) return null;
   return {
-    instrument_id: Number(m.id),
-    epic: String(m.epic),
-    symbol: String(m.symbol || m.epic),
-    display_name: String(m.display_name),
-    category: String(m.category || 'other'),
-    min_lot: Number(m.min_lot),
-    max_lot: Number(m.max_lot),
-    lot_step: Number(m.lot_step),
+    instrument_id: m.instrument_id,
+    epic: m.epic,
+    symbol: m.symbol,
+    display_name: m.display_name,
+    category: m.category,
+    min_lot: m.min_lot,
+    max_lot: m.max_lot,
+    lot_step: m.lot_step,
     connection_id: account.connection_id,
     account_id: account.account_id,
   };

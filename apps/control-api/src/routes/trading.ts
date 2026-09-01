@@ -4,6 +4,11 @@ import { decrypt } from '../security/encryption.js';
 import { logAudit } from '../services/audit.js';
 import { getInstrumentById } from '../config/instruments.js';
 import { fetchAllCapitalMarkets, acquireCapitalSession, createCapitalPosition } from '../services/capitalCom.js';
+import {
+  replicateMarketsToSiblingConnections,
+  upsertMarketsForConnection,
+  type PulledMarket,
+} from '../services/capitalMarketsCatalog.js';
 
 export async function ensureBrokerAccount(connectionId: number, displayName: string): Promise<number> {
   const existing = await pool.query(
@@ -249,35 +254,22 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
       }
 
       // Upsert Capital.com catalog (keep stable IDs via epic unique key).
-      const seenEpics: string[] = [];
-      for (const m of markets) {
-        seenEpics.push(m.epic);
-        await pool.query(
-          `INSERT INTO capital_markets
-           (broker_connection_id, epic, symbol, display_name, instrument_type, category, min_lot, max_lot, lot_step)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-           ON CONFLICT (broker_connection_id, epic) DO UPDATE SET
-             symbol = EXCLUDED.symbol,
-             display_name = EXCLUDED.display_name,
-             instrument_type = EXCLUDED.instrument_type,
-             category = EXCLUDED.category,
-             min_lot = EXCLUDED.min_lot,
-             max_lot = EXCLUDED.max_lot,
-             lot_step = EXCLUDED.lot_step,
-             updated_at = NOW()`,
-          [
-            conn.connection_id,
-            m.epic,
-            m.symbol,
-            m.display_name,
-            m.instrument_type,
-            m.category,
-            m.min_lot,
-            m.max_lot,
-            m.lot_step,
-          ]
-        );
-      }
+      const pulled: PulledMarket[] = markets.map((m) => ({
+        epic: m.epic,
+        symbol: m.symbol,
+        display_name: m.display_name,
+        instrument_type: m.instrument_type,
+        category: m.category,
+        min_lot: m.min_lot,
+        max_lot: m.max_lot,
+        lot_step: m.lot_step,
+      }));
+      const seenEpics = await upsertMarketsForConnection(conn.connection_id, pulled);
+      const replicated = await replicateMarketsToSiblingConnections(
+        conn.connection_id,
+        conn.environment,
+        pulled
+      );
 
       // Remove markets that disappeared from Capital.com for this connection.
       if (seenEpics.length > 0) {
@@ -301,15 +293,125 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
       await logAudit('admin', 'capital_markets_pulled', 'broker_connection', String(conn.connection_id), null, {
         count: markets.length,
         environment: conn.environment,
+        replicated_connections: replicated,
       });
 
       return {
         success: true,
         count: markets.length,
+        replicated_connections: replicated,
         sample: markets.slice(0, 8).map((m) => ({ epic: m.epic, name: m.display_name })),
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Pull markets failed';
+      return reply.code(500).send({ error: message, message });
+    }
+  });
+
+  /**
+   * Pull Capital markets once per broker connection (demo + live each once).
+   * Each pull also replicates the catalog to sibling connections on the same environment.
+   */
+  app.post('/api/trading/pull-all-capital-markets', async (_request, reply) => {
+    try {
+      const { rows } = await pool.query(
+        `SELECT DISTINCT ON (bc.id)
+                ba.id as account_id, bc.id as connection_id, bc.environment, bc.identifier, bc.broker_name
+         FROM broker_connections bc
+         JOIN broker_accounts ba ON ba.broker_connection_id = bc.id
+         WHERE bc.broker_name = 'capital_com' AND bc.enabled = true
+         ORDER BY bc.id, ba.id ASC`
+      );
+      if (rows.length === 0) {
+        return reply.code(400).send({ error: 'No Capital.com broker connections found' });
+      }
+      const outcomes: Array<{
+        account_id: number;
+        connection_id: number;
+        environment: string;
+        ok: boolean;
+        count?: number;
+        replicated_connections?: number;
+        error?: string;
+      }> = [];
+
+      for (const conn of rows) {
+        const row = conn as {
+          account_id: number;
+          connection_id: number;
+          environment: string;
+          identifier: string | null;
+        };
+        try {
+          const creds = await loadCredentialMap(row.connection_id);
+          const apiKey = creds.api_key || '';
+          const password = creds.password || '';
+          const identifier = (row.identifier || '').trim();
+          if (!apiKey || !password || !identifier) {
+            outcomes.push({
+              ...row,
+              ok: false,
+              error: 'Missing credentials',
+            });
+            continue;
+          }
+          const opened = await acquireCapitalSession({
+            environment: row.environment,
+            apiKey,
+            identifier,
+            password,
+            connectionId: row.connection_id,
+          });
+          if (!opened.ok) {
+            outcomes.push({ ...row, ok: false, error: opened.result.detail });
+            continue;
+          }
+          const markets = await fetchAllCapitalMarkets(opened.session);
+          if (markets.length === 0) {
+            outcomes.push({ ...row, ok: false, error: 'Capital returned 0 markets' });
+            continue;
+          }
+          const pulled: PulledMarket[] = markets.map((m) => ({
+            epic: m.epic,
+            symbol: m.symbol,
+            display_name: m.display_name,
+            instrument_type: m.instrument_type,
+            category: m.category,
+            min_lot: m.min_lot,
+            max_lot: m.max_lot,
+            lot_step: m.lot_step,
+          }));
+          await upsertMarketsForConnection(row.connection_id, pulled);
+          const replicated = await replicateMarketsToSiblingConnections(
+            row.connection_id,
+            row.environment,
+            pulled
+          );
+          await seedAccountInstruments(row.account_id);
+          outcomes.push({
+            ...row,
+            ok: true,
+            count: markets.length,
+            replicated_connections: replicated,
+          });
+        } catch (err) {
+          outcomes.push({
+            ...row,
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      const ok = outcomes.filter((o) => o.ok);
+      return {
+        success: ok.length > 0,
+        pulled_connections: ok.length,
+        total_connections: outcomes.length,
+        outcomes,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Bulk pull failed';
       return reply.code(500).send({ error: message, message });
     }
   });
