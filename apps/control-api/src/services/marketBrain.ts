@@ -27,6 +27,8 @@ const EPS = 1e-10;
 
 /** Closed 10s bars required before brain.ready (max scale + lag + buffer). */
 export const BRAIN_WARMUP_BARS = Math.max(...SIGNAL_SCALES) + K_LAG + 5;
+/** Leg entries (BREAKOUT/CONTINUATION) allowed once mid-scale 10s history exists (~11 min). */
+export const BRAIN_FAST_ENTRY_BARS = 64;
 
 export type BrainMemory = {
   bar_count: number;
@@ -581,8 +583,8 @@ export function formatBrainLine(summary: BrainSummary | null | undefined): strin
     summary.macro,
     summary.regime,
     summary.move_state,
-    `surv ${(summary.survival * 100).toFixed(0)}%`,
-    `exh ${(summary.exhaustion * 100).toFixed(0)}%`,
+    `surv ${(summary.survival * 100).toFixed(0)}% (10s)`,
+    `exh ${(summary.exhaustion * 100).toFixed(0)}% (10s)`,
   ];
   if (summary.break_valid) parts.push('BREAK✓');
   if (summary.side_end) parts.push('SIDE_END');

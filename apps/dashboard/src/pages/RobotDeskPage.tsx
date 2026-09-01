@@ -209,8 +209,8 @@ function brainLine(s: RobotSession): string {
     b.macro,
     b.regime,
     b.move_state,
-    `surv ${(b.survival * 100).toFixed(0)}%`,
-    `exh ${(b.exhaustion * 100).toFixed(0)}%`,
+    `surv ${(b.survival * 100).toFixed(0)}% (10s)`,
+    `exh ${(b.exhaustion * 100).toFixed(0)}% (10s)`,
   ];
   if (b.break_valid) parts.push('BREAK✓');
   if (b.side_end) parts.push('SIDE_END');

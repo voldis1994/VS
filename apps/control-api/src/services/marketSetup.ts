@@ -932,7 +932,7 @@ export function decideEntryFromSetup(
   }
 
   if (setup.kind === 'CONTINUATION') {
-    if (setup.side === 'BUY' && body >= thr * 0.55) {
+    if (setup.side === 'BUY' && body >= thr * 0.38) {
       return {
         direction: 'BUY',
         setup: 'CONTINUATION',
@@ -940,7 +940,7 @@ export function decideEntryFromSetup(
         reason: `ENTRY · CONTINUATION BUY · ${setup.reason}`,
       };
     }
-    if (setup.side === 'SELL' && body <= -thr * 0.55) {
+    if (setup.side === 'SELL' && body <= -thr * 0.38) {
       return {
         direction: 'SELL',
         setup: 'CONTINUATION',
@@ -950,6 +950,71 @@ export function decideEntryFromSetup(
     }
   }
 
+  return null;
+}
+
+/**
+ * Live forming 10s bar — catch impulse legs without waiting for bucket close + one tick.
+ * Requires several quote updates in the bucket so one spike does not fire alone.
+ */
+export function decideEntryFromFormingSetup(
+  setup: MarketSetup,
+  forming: TenSecBar,
+  minutes?: CapitalPriceCandle[] | null
+): SetupEntry | null {
+  if (setup.kind !== 'CONTINUATION' && setup.kind !== 'BREAKOUT') return null;
+  if (setup.status !== 'ARMED' || !setup.side || !setup.playbook) return null;
+  if (forming.ticks < 4) return null;
+
+  const book = setup.playbook;
+  const thr = PLAYBOOK_ENTRY_BODY[book];
+  const body = bodyPct(forming);
+  const flow = priceFlowBias(minutes);
+
+  if (setup.side === 'BUY' && flow === 'DOWN') return null;
+  if (setup.side === 'SELL' && flow === 'UP') return null;
+  if (isTipChaseEntry(setup, forming)) return null;
+
+  const need = thr * 0.42;
+  if (setup.kind === 'CONTINUATION') {
+    if (setup.side === 'BUY' && body >= need) {
+      return {
+        direction: 'BUY',
+        setup: 'CONTINUATION',
+        playbook: book,
+        reason: `ENTRY · CONTINUATION BUY (live 10s) C=${forming.close.toFixed(2)} · ${setup.reason}`,
+      };
+    }
+    if (setup.side === 'SELL' && body <= -need) {
+      return {
+        direction: 'SELL',
+        setup: 'CONTINUATION',
+        playbook: book,
+        reason: `ENTRY · CONTINUATION SELL (live 10s) C=${forming.close.toFixed(2)} · ${setup.reason}`,
+      };
+    }
+    return null;
+  }
+
+  const hi = setup.swing_high;
+  const lo = setup.swing_low;
+  const eps = edgeEps(forming.close, Math.max(hi - lo, 1));
+  if (setup.side === 'BUY' && body >= need && forming.close > hi - eps) {
+    return {
+      direction: 'BUY',
+      setup: 'BREAKOUT',
+      playbook: book,
+      reason: `ENTRY · BREAKOUT BUY (live 10s) · ${setup.reason}`,
+    };
+  }
+  if (setup.side === 'SELL' && body <= -need && forming.close < lo + eps) {
+    return {
+      direction: 'SELL',
+      setup: 'BREAKOUT',
+      playbook: book,
+      reason: `ENTRY · BREAKOUT SELL (live 10s) · ${setup.reason}`,
+    };
+  }
   return null;
 }
 

@@ -28,6 +28,7 @@ import {
   formatBrainLine,
   lockBrainAtEntry,
   summarizeBrain,
+  BRAIN_FAST_ENTRY_BARS,
   BRAIN_WARMUP_BARS,
   type BrainState,
   type BrainSummary,
@@ -43,6 +44,7 @@ import {
   buildStructure,
   decideEntryFromSetup,
   decideEntryFromTenSecMove,
+  decideEntryFromFormingSetup,
   emptySetup,
   emptyStructure,
   playbookFromSetup,
@@ -59,6 +61,7 @@ import {
   type MultiFeedPrice,
   type MultiFeedLeg,
 } from './robotReader.js';
+import { isLegRideSetup } from './playbooks.js';
 import {
   aggregateSecondsToTen,
   emptyTenSecState,
@@ -205,13 +208,16 @@ type Internal = Omit<RobotSession, 'brain'> & {
   brain: BrainState | null;
   /** Locked at entry for dynamic exit targets */
   brain_locked: LockedBrainEntry | null;
+  /** Retry ARMED confirm for a few seconds after each closed 10s bar */
+  entry_window_until_ms: number;
 };
 
 const STRUCTURE_REFRESH_MS = 10_000;
 const STRUCTURE_MINUTE_BARS = 120;
 const STRUCTURE_HOUR_BARS = 24;
+const ENTRY_WINDOW_MS = 12_000;
 
-const ACTIVE_CADENCE_MS = 2_000;
+const ACTIVE_CADENCE_MS = 1_500;
 const CLOSED_MARKET_CADENCE_MS = 90_000;
 const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
 
@@ -1323,6 +1329,7 @@ async function robotCycle(s: Internal) {
       s.ohlcState = updateTenSecondOhlc(s.ohlcState, ohlcMid, Date.now());
       s.ohlc_10s = publicOhlc10s(s.ohlcState);
       if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
+        s.entry_window_until_ms = Date.now() + ENTRY_WINDOW_MS;
         applyRobotRegime(s, [s.ohlcState.last_closed]);
         maybeLockBrainMidTrade(s);
       }
@@ -1473,7 +1480,7 @@ async function robotCycle(s: Internal) {
     if (quote.mid == null) return;
 
     // Seed SECOND→10s when multi-feed does not own OHLC
-    if (!multiFeedOwnsOhlc(s.multiFeed) && Date.now() - s.last_second_fetch_ms >= 8_000) {
+    if (!multiFeedOwnsOhlc(s.multiFeed) && Date.now() - s.last_second_fetch_ms >= 4_000) {
       s.last_second_fetch_ms = Date.now();
       const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 40);
       if (sec.ok && sec.candles.length >= 10) {
@@ -1489,6 +1496,7 @@ async function robotCycle(s: Internal) {
           };
           if (isNew) {
             s.last_closed_bar_key = key;
+            s.entry_window_until_ms = Date.now() + ENTRY_WINDOW_MS;
             s.ohlc_10s = publicOhlc10s(s.ohlcState);
             applyRobotRegime(s, bars);
           } else {
@@ -1518,20 +1526,32 @@ async function robotCycle(s: Internal) {
     );
 
     const bar = s.ohlcState.last_closed;
+    const forming = s.ohlcState.forming;
     const st = s.structureBook;
     const setup = s.marketSetup;
     const structLine = st.ready
       ? `swing H${st.swing_high.toFixed(2)}/L${st.swing_low.toFixed(2)}`
       : st.detail;
     const setupLine = `${setup.kind}/${setup.status}${setup.side ? ` ${setup.side}` : ''}`;
+    const liveBit =
+      forming && bar && Math.abs(forming.close - bar.close) > 0.01
+        ? ` · live C=${forming.close.toFixed(2)}`
+        : forming && !bar
+          ? ` · live C=${forming.close.toFixed(2)}`
+          : '';
     const ohlcLine = bar
-      ? `10s O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · ${structLine} · ${setupLine}`
-      : `10s seeding · ${structLine} · ${setupLine}`;
+      ? `10s O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)}${liveBit} · ${structLine} · ${setupLine}`
+      : forming
+        ? `10s forming C=${forming.close.toFixed(2)} · ${structLine} · ${setupLine}`
+        : `10s seeding · ${structLine} · ${setupLine}`;
 
     if (quote.mid != null) s.last_flat_mid = quote.mid;
 
-    // Need a just-closed 10s bar for any entry (setup confirm OR move-from-NONE)
-    if (!s.ohlcState.just_closed || !bar) {
+    const inEntryWindow =
+      s.ohlcState.just_closed || (Date.now() < s.entry_window_until_ms && bar != null);
+
+    // Closed-bar confirm OR short retry window OR live forming impulse
+    if (!inEntryWindow && !forming) {
       const waitNote =
         setup.kind === 'NONE' || setup.status === 'NONE'
           ? `NONE · ${setup.reason}`
@@ -1549,12 +1569,16 @@ async function robotCycle(s: Internal) {
     }
 
     let entry =
-      setup.kind !== 'NONE' && setup.status === 'ARMED'
+      setup.kind !== 'NONE' && setup.status === 'ARMED' && bar && inEntryWindow
         ? decideEntryFromSetup(setup, bar, s.last_minute_candles)
         : null;
 
+    if (!entry && setup.status === 'ARMED' && forming) {
+      entry = decideEntryFromFormingSetup(setup, forming, s.last_minute_candles);
+    }
+
     // Mid-swing NONE was starving every real 10s V-leg — trade the move (never against dump/rally)
-    if (!entry && (setup.kind === 'NONE' || setup.status === 'NONE')) {
+    if (!entry && (setup.kind === 'NONE' || setup.status === 'NONE') && bar && inEntryWindow) {
       entry = decideEntryFromTenSecMove(st, bar, s.last_minute_candles);
       if (!entry) {
         pushTick(s, {
@@ -1638,27 +1662,33 @@ async function robotCycle(s: Internal) {
     const reason = entry.reason;
 
     const brainGate = s.brain ?? currentRegime(s.epic, s.id)?.brain ?? null;
-    if (!brainGate?.ready) {
-      const n = brainGate?.bar_count ?? 0;
+    const barCount = brainGate?.bar_count ?? 0;
+    const legSetup = isLegRideSetup(setupType);
+    const brainWarm =
+      brainGate?.ready || (legSetup && barCount >= BRAIN_FAST_ENTRY_BARS);
+    if (!brainWarm) {
+      const need = legSetup ? BRAIN_FAST_ENTRY_BARS : BRAIN_WARMUP_BARS;
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · brain seeding ${n}/${BRAIN_WARMUP_BARS} — entry blocked (setup ${setupType} ignored)`,
+        detail: `${ohlcLine} · brain seeding ${barCount}/${need} — entry blocked (setup ${setupType} ignored)`,
       });
       return;
     }
-    const gate = brainEntryAllowed(brainGate, setupType);
-    if (!gate.ok) {
-      pushTick(s, {
-        phase: 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `${ohlcLine} · brain block · ${gate.reason}`,
-      });
-      return;
+    if (brainGate?.ready) {
+      const gate = brainEntryAllowed(brainGate, setupType);
+      if (!gate.ok) {
+        pushTick(s, {
+          phase: 'DECIDE',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `${ohlcLine} · brain block · ${gate.reason}`,
+        });
+        return;
+      }
     }
 
     s.playbook = entryPlaybook;
@@ -1823,6 +1853,7 @@ export async function startRobotSession(input: {
     last_hard_exit_ms: 0,
     brain: null,
     brain_locked: null,
+    entry_window_until_ms: 0,
 
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
