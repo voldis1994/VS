@@ -270,6 +270,10 @@ export function RobotDeskPage() {
       .catch(() => setLaunchAccounts([]));
   }, [launchAccountId]);
 
+  const focused = sessions.find((s) => s.id === focusId) || sessions.find((s) => s.running) || null;
+  const liveSessions = sessions.filter((s) => s.running);
+  const runningCount = liveSessions.length;
+
   useEffect(() => {
     if (focused?.account_id && focused.account_id !== launchAccountId) {
       setLaunchAccountId(focused.account_id);
@@ -300,10 +304,6 @@ export function RobotDeskPage() {
       )
       .slice(0, 200);
   }, [launchMarkets, launchFilter]);
-
-  const focused = sessions.find((s) => s.id === focusId) || sessions.find((s) => s.running) || null;
-  const liveSessions = sessions.filter((s) => s.running);
-  const runningCount = liveSessions.length;
 
   const deploy = () => {
     if (!launchAccountId || !launchEpic) {
