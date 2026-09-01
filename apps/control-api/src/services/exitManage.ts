@@ -1,4 +1,4 @@
-/** Live Capital exit — playbook-specific Best Outcome + thesis. */
+/** Live Capital exit — playbook Best Outcome + unified MarketBrain dynamics. */
 import {
   exitParamsForTrade,
   playbookFromRegime,
@@ -6,6 +6,12 @@ import {
   type Playbook,
   type TradePlaybook,
 } from './playbooks.js';
+import {
+  brainExitParams,
+  brainExitThesis,
+  type BrainState,
+  type LockedBrainEntry,
+} from './marketBrain.js';
 
 export type ExitSide = 'BUY' | 'SELL';
 
@@ -17,10 +23,12 @@ export type ExitSnapshot = {
   mae: number;
   peak_retention: number | null;
   regime?: string | null;
-  /** Locked at entry — drives exit policy */
   playbook?: Playbook | null;
-  /** Locked setup kind at entry — CONTINUATION/PULLBACK/FADE tune hold vs scalp */
   entry_setup?: string | null;
+  /** Live MarketBrain — dynamic TP / survival / exhaustion */
+  brain?: BrainState | null;
+  /** Snapshot locked at entry */
+  brain_locked?: LockedBrainEntry | null;
 };
 
 /** @deprecated use playbook thesisMinHold — kept for tests importing name */
@@ -47,7 +55,7 @@ function resolvePlaybook(s: ExitSnapshot): TradePlaybook {
 }
 
 /**
- * Manage exit divided by playbook (LONG / SCALP / FADE).
+ * Manage exit: playbook floors + MarketBrain dynamic targets when available.
  * Broker SAFETY SL remains the hard cushion outside this function.
  */
 export function decideBestOutcomeExit(
@@ -58,7 +66,23 @@ export function decideBestOutcomeExit(
 
   const book = resolvePlaybook(s);
   const p = exitParamsForTrade(book, s.entry_setup, s.entry_price);
+  const brain = s.brain?.ready ? s.brain : null;
+  const dynamic =
+    brain != null
+      ? brainExitParams(brain, s.brain_locked ?? null, mid, s.open_side)
+      : null;
+
+  const peakRet = dynamic?.peakRet ?? p.peakRet;
+  const harvestRet = dynamic?.harvestRet ?? p.harvestRet;
+  const timeDecayMs = dynamic ? p.timeDecayMs * dynamic.timeDecayScale : p.timeDecayMs;
+
   const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
+
+  const brainThesis =
+    brain != null ? brainExitThesis(brain, s.open_side, book) : null;
+  if (brainThesis && heldMs >= p.thesisMinHoldMs * 0.5) {
+    return { exit: true, reason: `${brainThesis} · ${book}` };
+  }
 
   const thesis = thesisFailureForPlaybook(s.open_side, s.regime, book);
   if (thesis && heldMs >= p.thesisMinHoldMs) {
@@ -68,7 +92,10 @@ export function decideBestOutcomeExit(
   const entry = s.entry_price;
   const fav = favorableMove(s.open_side, entry, mid);
   const absEntry = Math.max(Math.abs(entry), 1e-9);
-  const tp = Math.max(absEntry * p.tpPct, p.tpFloor);
+  let tp = Math.max(absEntry * p.tpPct, p.tpFloor);
+  if (dynamic?.tpDistance != null && dynamic.tpDistance > 0) {
+    tp = Math.max(tp, dynamic.tpDistance);
+  }
   const sl = Math.max(absEntry * p.slPct, p.slFloor);
   const mfeFloor = Math.max(absEntry * p.mfeFloorPct, p.mfeFloorAbs);
 
@@ -79,17 +106,17 @@ export function decideBestOutcomeExit(
     };
   }
 
-  if (s.mfe >= mfeFloor && s.peak_retention != null && s.peak_retention < p.peakRet) {
+  if (s.mfe >= mfeFloor && s.peak_retention != null && s.peak_retention < peakRet) {
     return {
       exit: true,
-      reason: `PeakProtection · ${book} · retention ${(s.peak_retention * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)}`,
+      reason: `PeakProtection · ${book} · retention ${(s.peak_retention * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)}${brain ? ` · ${brain.move_state}` : ''}`,
     };
   }
 
   if (fav >= tp) {
     return {
       exit: true,
-      reason: `Target · ${book} · ${s.entry_setup || ''} · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)}`,
+      reason: `Target · ${book} · ${s.entry_setup || ''} · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)}${brain ? ` · brain ${brain.move_state}` : ''}`,
     };
   }
 
@@ -97,8 +124,8 @@ export function decideBestOutcomeExit(
     s.mfe >= mfeFloor &&
     fav > 0 &&
     s.peak_retention != null &&
-    s.peak_retention < p.harvestRet &&
-    s.peak_retention >= p.peakRet
+    s.peak_retention < harvestRet &&
+    s.peak_retention >= peakRet
   ) {
     return {
       exit: true,
@@ -106,10 +133,10 @@ export function decideBestOutcomeExit(
     };
   }
 
-  if (heldMs > p.timeDecayMs && fav >= 0 && s.mfe >= mfeFloor * 0.5) {
+  if (heldMs > timeDecayMs && fav >= 0 && s.mfe >= mfeFloor * 0.5) {
     return {
       exit: true,
-      reason: `TimeDecay · ${book} · held ${Math.round(heldMs / 1000)}s · UPL ${fav.toFixed(5)}`,
+      reason: `TimeDecay · ${book} · held ${Math.round(heldMs / 1000)}s · UPL ${fav.toFixed(5)}${brain?.move_state === 'EXHAUSTING' ? ' · exhausting' : ''}`,
     };
   }
 

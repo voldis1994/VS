@@ -18,10 +18,17 @@ import { emitToClient } from './clientEvents.js';
 import { mapTradeType } from './tradePresentation.js';
 import {
   observeClosedBars,
+  currentRegime,
   normalizeRegime,
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
+import {
+  brainEntryAllowed,
+  lockBrainAtEntry,
+  type BrainState,
+  type LockedBrainEntry,
+} from './marketBrain.js';
 import { minSwingSpan, scaleFromGold } from './instrumentScale.js';
 import {
   playbookFromRegime,
@@ -181,6 +188,10 @@ type Internal = RobotSession & {
   last_entry_side_ms: number;
   /** After HardInvalidation / thesis fail — longer flip lock */
   last_hard_exit_ms: number;
+  /** Live MarketBrain snapshot from last bar update */
+  brain: BrainState | null;
+  /** Locked at entry for dynamic exit targets */
+  brain_locked: LockedBrainEntry | null;
 };
 
 const STRUCTURE_REFRESH_MS = 10_000;
@@ -423,6 +434,7 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
       : [];
   if (incoming.length) {
     const snap = observeClosedBars(s.epic, incoming, s.display_name, s.id);
+    s.brain = snap.brain;
     const next = snap.current;
     if (next === s.regime) {
       s.regime_age_bars += Math.max(1, incoming.length);
@@ -460,6 +472,7 @@ function clearTradeState(s: Internal) {
   s.safety_sl = null;
   s.playbook = null;
   s.entry_setup = null;
+  s.brain_locked = null;
   s.mode = 'FLAT';
 }
 
@@ -999,6 +1012,9 @@ async function enterTrade(
   s.safety_sl = stopLevel != null && Number.isFinite(stopLevel) ? stopLevel : null;
   s.error = null;
 
+  const brain = s.brain ?? currentRegime(s.epic, s.id)?.brain ?? null;
+  if (brain?.ready) s.brain_locked = lockBrainAtEntry(brain, mid);
+
   const dealId = await resolveDealId(session, s, result.deal_reference);
   if (dealId) s.deal_id = dealId;
 
@@ -1271,7 +1287,22 @@ async function robotCycle(s: Internal) {
       s.mode = 'MANAGE';
       if (quote.mid == null) return;
 
-      const decision = decideBestOutcomeExit(s, quote.mid);
+      const decision = decideBestOutcomeExit(
+        {
+          open_side: s.open_side,
+          entry_price: s.entry_price,
+          entry_at: s.entry_at,
+          mfe: s.mfe,
+          mae: s.mae,
+          peak_retention: s.peak_retention,
+          regime: s.regime,
+          playbook: s.playbook,
+          entry_setup: s.entry_setup,
+          brain: s.brain ?? currentRegime(s.epic, s.id)?.brain ?? null,
+          brain_locked: s.brain_locked,
+        },
+        quote.mid
+      );
       if (decision.exit) {
         await exitTrade(opened.session, s, quote, decision.reason);
         return;
@@ -1490,6 +1521,22 @@ async function robotCycle(s: Internal) {
     const setupType = entry.setup;
     const entryPlaybook = entry.playbook;
     const reason = entry.reason;
+
+    const brainGate = s.brain ?? currentRegime(s.epic, s.id)?.brain ?? null;
+    if (brainGate?.ready) {
+      const gate = brainEntryAllowed(brainGate, setupType);
+      if (!gate.ok) {
+        pushTick(s, {
+          phase: 'DECIDE',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `${ohlcLine} · brain block · ${gate.reason}`,
+        });
+        return;
+      }
+    }
+
     s.playbook = entryPlaybook;
     s.entry_setup = setupType;
 
@@ -1650,6 +1697,8 @@ export async function startRobotSession(input: {
     last_entry_side: null,
     last_entry_side_ms: 0,
     last_hard_exit_ms: 0,
+    brain: null,
+    brain_locked: null,
 
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };

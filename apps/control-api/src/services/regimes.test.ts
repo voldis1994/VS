@@ -97,8 +97,8 @@ describe('classifyRegime via signal engine', () => {
   it('classifyRegimeDetailed attaches signal output', () => {
     const bars = withWarmup(trendBars(100, 0.4, 35));
     const d = classifyRegimeDetailed(bars);
-    expect(d.signal).not.toBeNull();
-    expect(d.signal.ready).toBe(true);
+    expect(d.brain).not.toBeNull();
+    expect(d.brain.ready).toBe(true);
     expect(d.confidence).toBeGreaterThan(0);
   });
 });
@@ -134,7 +134,7 @@ describe('regime book + trade style', () => {
     const snap = observeClosedBars('GOLD', bars, 'Gold');
     expect(snap.display_name).toBe('Gold');
     expect(REGIME_NAMES).toContain(snap.current);
-    expect(snap.signal).not.toBeNull();
+    expect(snap.brain).not.toBeNull();
   });
 
   it('maps trend regimes to LONG and breakout/range to SCALP', () => {
