@@ -53,8 +53,15 @@ export async function registerClientPanelRoutes(app: FastifyInstance): Promise<v
     const session = await requireClientSession(request, reply);
     if (!session) return;
     // Ignore any client_id in body — session is source of truth
+    // epic/lot in body = switch market (stops leftover Kimly etc.)
     try {
-      const status = await startClientRobot(session.client_id);
+      const body = (request.body || {}) as { epic?: string; lot_size?: number };
+      const status = await startClientRobot(
+        session.client_id,
+        body.epic
+          ? { epic: String(body.epic), lot_size: body.lot_size != null ? Number(body.lot_size) : undefined }
+          : undefined
+      );
       assertNoSecrets(status);
       // Subscription activated. RUNNING / STARTING / ERROR come from backend health.
       if (status.robot_status === 'STOPPED') {

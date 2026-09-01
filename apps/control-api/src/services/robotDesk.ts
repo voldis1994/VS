@@ -669,7 +669,9 @@ export async function stopRobotSession(id: string): Promise<RobotSession | null>
       robot_status: 'STOPPED',
     });
   }
-  return publicSession(s);
+  const pub = publicSession(s);
+  if (!s.running && !s.open_side) sessions.delete(s.id);
+  return pub;
 }
 
 function matchOpenOnEpic(

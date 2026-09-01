@@ -369,7 +369,20 @@ export async function saveClientConfig(
  * Client START = this client's own desk brain (structure → setup → entry → best outcome).
  * Does NOT subscribe to shared Market Core fan-out — each client trades alone.
  */
-export async function startClientRobot(clientId: number): Promise<ClientPanelStatus> {
+export async function startClientRobot(
+  clientId: number,
+  override?: { epic?: string; lot_size?: number }
+): Promise<ClientPanelStatus> {
+  if (override?.epic) {
+    const wanted = override.epic.trim();
+    const preview = await loadMarketForClient(clientId, wanted);
+    const lot =
+      override.lot_size != null && Number.isFinite(Number(override.lot_size))
+        ? Number(override.lot_size)
+        : preview?.min_lot ?? 0.1;
+    await saveClientConfig(clientId, { epic: wanted, lot_size: lot });
+  }
+
   const { rows } = await pool.query(
     `SELECT panel_epic, panel_display_name, panel_lot_size, enabled, access_enabled
      FROM clients WHERE id = $1`,
