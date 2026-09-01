@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { edgeEps, scaleExitFloors, scaleFromGold } from './instrumentScale.js';
+import { edgeEps, minSwingSpan, scaleExitFloors, scaleFromGold } from './instrumentScale.js';
 import { exitParamsForTrade } from './playbooks.js';
 import { recentImpulse } from './marketSetup.js';
 import type { CapitalPriceCandle } from './capitalCom.js';
@@ -23,6 +23,11 @@ describe('instrumentScale', () => {
   it('edgeEps is not stuck at 0.8 on FX', () => {
     expect(edgeEps(1.085, 0.002)).toBeLessThan(0.001);
     expect(edgeEps(4430, 3)).toBeGreaterThan(0.5);
+  });
+
+  it('minSwingSpan detects flat EUR/USD compression', () => {
+    expect(minSwingSpan(1.16)).toBeGreaterThan(0.0002);
+    expect(0.0001).toBeLessThan(minSwingSpan(1.16));
   });
 
   it('exitParamsForTrade scales CONTINUATION TP for EURUSD vs Gold', () => {

@@ -20,6 +20,12 @@ export function edgeEps(px: number, span: number): number {
   return Math.max(r * 0.00035, span * 0.08, scaleFromGold(r, 0.8));
 }
 
+/** Minimum H–L before FADE/tip-chase — flat FX (H≈L) must not ARM FADE forever. */
+export function minSwingSpan(px: number | null | undefined): number {
+  const r = refPx(px);
+  return Math.max(r * 0.00025, scaleFromGold(r, 0.35));
+}
+
 /** Scale playbook exit absolute floors (tpFloor, slFloor, mfeFloorAbs) for entry price. */
 export function scaleExitFloors(
   px: number | null | undefined,

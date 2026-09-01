@@ -22,7 +22,7 @@ import {
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
-import { scaleFromGold } from './instrumentScale.js';
+import { minSwingSpan, scaleFromGold } from './instrumentScale.js';
 import {
   playbookFromRegime,
   type Playbook,
@@ -1422,6 +1422,11 @@ async function robotCycle(s: Internal) {
       }
     }
 
+    // FX quiet: FADE ARMED on H≈L never confirms — still trade real closed 10s moves
+    if (!entry && setup.status === 'ARMED' && bar) {
+      entry = decideEntryFromTenSecMove(st, bar, s.last_minute_candles);
+    }
+
     if (setup.status === 'FORMING' && !entry) {
       pushTick(s, {
         phase: 'DECIDE',
@@ -1434,8 +1439,11 @@ async function robotCycle(s: Internal) {
     }
 
     if (!entry) {
+      const minSpan = minSwingSpan(st.mid || quote.mid);
+      const hasSpan = st.ready && st.swing_high - st.swing_low >= minSpan;
       const tipNote =
         setup.side &&
+        hasSpan &&
         ((setup.side === 'BUY' &&
           st.ready &&
           bar.close >=
