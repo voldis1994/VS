@@ -22,6 +22,7 @@ import {
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
+import { scaleFromGold } from './instrumentScale.js';
 import {
   playbookFromRegime,
   type Playbook,
@@ -1415,10 +1416,14 @@ async function robotCycle(s: Internal) {
         setup.side &&
         ((setup.side === 'BUY' &&
           st.ready &&
-          bar.close >= st.swing_high - Math.max(st.span * 0.08, 0.8)) ||
+          bar.close >=
+            st.swing_high -
+            Math.max(st.span * 0.08, scaleFromGold(st.mid || quote.mid, 0.8))) ||
           (setup.side === 'SELL' &&
             st.ready &&
-            bar.close <= st.swing_low + Math.max(st.span * 0.08, 0.8)))
+            bar.close <=
+              st.swing_low +
+              Math.max(st.span * 0.08, scaleFromGold(st.mid || quote.mid, 0.8))))
           ? ' · blocked tip-chase'
           : '';
       pushTick(s, {

@@ -10,6 +10,7 @@
  * - Open trade freezes setup; manage = best outcome only
  */
 import type { CapitalPriceCandle } from './capitalCom.js';
+import { edgeEps, scaleFromGold, refPx } from './instrumentScale.js';
 import type { TradePlaybook } from './playbooks.js';
 import { PLAYBOOK_ENTRY_BODY } from './playbooks.js';
 import { bodyPct, type TenSecBar } from './tenSecondOhlc.js';
@@ -70,11 +71,6 @@ const PIVOT_RIGHT = 3;
 const SETUP_CONFIRM = 2;
 /** FADE / FAILED_BREAK only if swing extreme printed within this many 1m bars */
 const FRESH_SWING_BARS = 12;
-
-/** Edge band in price points — Gold-friendly floor */
-function edgeEps(px: number, span: number): number {
-  return Math.max(Math.abs(px) * 0.00035, span * 0.08, 0.8);
-}
 
 /**
  * Swing high/low is fresh only if a recent 1m bar actually printed that extreme.
@@ -284,8 +280,8 @@ export function recentImpulse(
   const net = last.close - first.open;
   const thr =
     mode === 'flip'
-      ? Math.max(Math.abs(first.open) * 0.00035, 1.2)
-      : Math.max(Math.abs(first.open) * 0.0005, 1.8);
+      ? Math.max(refPx(first.open) * 0.00035, scaleFromGold(first.open, 1.2))
+      : Math.max(refPx(first.open) * 0.0005, scaleFromGold(first.open, 1.8));
   const persThr = mode === 'flip' ? 0.4 : 0.35;
   if (pers <= -persThr && net <= -thr) return 'DOWN';
   if (pers >= persThr && net >= thr) return 'UP';
@@ -295,7 +291,7 @@ export function recentImpulse(
     const a = slice[slice.length - 2]!;
     const b = last;
     const sharp = b.close - a.open;
-    const sharpThr = Math.max(Math.abs(a.open) * 0.00045, 2.0);
+    const sharpThr = Math.max(refPx(a.open) * 0.00045, scaleFromGold(a.open, 2.0));
     const bothDown = a.close <= a.open && b.close < b.open;
     const bothUp = a.close >= a.open && b.close > b.open;
     if (sharp <= -sharpThr && bothDown) return 'DOWN';
@@ -318,7 +314,7 @@ export function priceFlowBias(
   const first = slice[0]!;
   const last = slice[slice.length - 1]!;
   const net = last.close - first.open;
-  const thr = Math.max(Math.abs(first.open) * 0.00035, 1.4);
+  const thr = Math.max(refPx(first.open) * 0.00035, scaleFromGold(first.open, 1.4));
   // Count red vs green closes in window
   let down = 0;
   let up = 0;

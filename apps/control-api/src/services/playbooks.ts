@@ -1,6 +1,7 @@
 /** Playbooks: regime picks the book; book owns entry + exit policy. */
 import type { RegimeName } from './regimes.js';
 import { normalizeRegime } from './regimes.js';
+import { scaleExitFloors } from './instrumentScale.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 import { bodyPct, rangePct } from './tenSecondOhlc.js';
 
@@ -99,21 +100,25 @@ export function tradePlaybookOrNull(p?: Playbook | null): TradePlaybook | null {
 /** Manage exit tuned by locked entry setup — ride bounce/continuation, not +£0.07 scalp. */
 export function exitParamsForTrade(
   playbook: TradePlaybook,
-  entrySetup?: string | null
+  entrySetup?: string | null,
+  entryPrice?: number | null
 ): PlaybookExitParams {
-  const base = PLAYBOOK_EXIT[playbook];
+  const px = entryPrice;
+  const baseRaw = PLAYBOOK_EXIT[playbook];
+  const base = { ...baseRaw, ...scaleExitFloors(px, baseRaw) };
   const setup = String(entrySetup || '').trim().toUpperCase();
 
   // V-bounce / dump continuation — hold for the leg to swing high (not tpFloor 0.18)
   if (setup === 'CONTINUATION' || setup === 'PULLBACK') {
+    const leg = scaleExitFloors(px, { tpFloor: 4.0, slFloor: baseRaw.slFloor, mfeFloorAbs: 2.5 });
     return {
       ...base,
       tpPct: 0.0028,
-      tpFloor: 4.0,
+      tpFloor: leg.tpFloor,
       slPct: base.slPct,
-      slFloor: base.slFloor,
+      slFloor: leg.slFloor,
       mfeFloorPct: 0.00055,
-      mfeFloorAbs: 2.5,
+      mfeFloorAbs: leg.mfeFloorAbs,
       peakRet: 0.28,
       harvestRet: 0.38,
       thesisMinHoldMs: 180_000,
@@ -123,12 +128,13 @@ export function exitParamsForTrade(
 
   // FADE / failed-break bounce from low — still room to mid, not instant 0.18pt target
   if (setup === 'FADE' || setup === 'FAILED_BREAK') {
+    const fade = scaleExitFloors(px, { tpFloor: 3.0, slFloor: baseRaw.slFloor, mfeFloorAbs: 1.8 });
     return {
       ...base,
       tpPct: 0.0022,
-      tpFloor: 3.0,
+      tpFloor: fade.tpFloor,
       mfeFloorPct: 0.00045,
-      mfeFloorAbs: 1.8,
+      mfeFloorAbs: fade.mfeFloorAbs,
       peakRet: 0.32,
       harvestRet: 0.42,
       thesisMinHoldMs: 120_000,
