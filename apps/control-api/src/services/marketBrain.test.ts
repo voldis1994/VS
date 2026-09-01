@@ -114,6 +114,7 @@ describe('marketBrain unified state', () => {
         impulse: 0.65,
         side_confirmed: false,
         side_end: false,
+        bar_count: 140,
       } as any,
       { adjusted_target: 4371.5, r_side: 5.4 } as any
     );
@@ -121,5 +122,22 @@ describe('marketBrain unified state', () => {
     expect(line).toMatch(/BRAIN · BREAKOUT/);
     expect(line).toMatch(/DEVELOPING/);
     expect(line).toMatch(/4371.50/);
+  });
+
+  it('formatBrainLine blocks entry while seeding', () => {
+    const summary = summarizeBrain(
+      { ready: false, bar_count: 45, macro: 'SIDEWAYS', regime: 'RANGE' } as any,
+      null
+    );
+    expect(formatBrainLine(summary)).toMatch(/seeding 45\/137 — entry blocked/);
+  });
+
+  it('formatBrainLine shows manage mode while warming in trade', () => {
+    const summary = summarizeBrain(
+      { ready: false, bar_count: 90, macro: 'SIDEWAYS', regime: 'RANGE' } as any,
+      null,
+      { inTrade: true }
+    );
+    expect(formatBrainLine(summary)).toMatch(/warming 90\/137 · MANAGE \(playbook exit\)/);
   });
 });

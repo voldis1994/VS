@@ -25,6 +25,9 @@ const L = 256;
 const K_LAG = 4;
 const EPS = 1e-10;
 
+/** Closed 10s bars required before brain.ready (max scale + lag + buffer). */
+export const BRAIN_WARMUP_BARS = Math.max(...SIGNAL_SCALES) + K_LAG + 5;
+
 export type BrainMemory = {
   bar_count: number;
   /** Bar index when SIDE_CONFIRMED last fired */
@@ -506,6 +509,9 @@ export function brainExitThesis(
 /** Compact brain payload for API / dashboard. */
 export type BrainSummary = {
   ready: boolean;
+  bar_count: number;
+  bars_needed: number;
+  in_trade: boolean;
   macro: string;
   regime: string;
   confidence: number;
@@ -527,11 +533,15 @@ export type BrainSummary = {
 
 export function summarizeBrain(
   state: BrainState | null | undefined,
-  locked: LockedBrainEntry | null | undefined
+  locked: LockedBrainEntry | null | undefined,
+  opts?: { inTrade?: boolean }
 ): BrainSummary | null {
   if (!state) return null;
   return {
     ready: state.ready,
+    bar_count: state.bar_count,
+    bars_needed: BRAIN_WARMUP_BARS,
+    in_trade: opts?.inTrade ?? false,
     macro: state.macro,
     regime: state.regime,
     confidence: state.confidence,
@@ -554,7 +564,15 @@ export function summarizeBrain(
 
 export function formatBrainLine(summary: BrainSummary | null | undefined): string {
   if (!summary) return 'BRAIN · offline';
-  if (!summary.ready) return 'BRAIN · seeding (vajag ~137 closed 10s bars)';
+  if (!summary.ready) {
+    const prog = `${summary.bar_count}/${summary.bars_needed}`;
+    if (summary.in_trade) {
+      return summary.locked
+        ? `BRAIN · warming ${prog} · MANAGE locked`
+        : `BRAIN · warming ${prog} · MANAGE (playbook exit)`;
+    }
+    return `BRAIN · seeding ${prog} — entry blocked`;
+  }
   const parts = [
     summary.macro,
     summary.regime,

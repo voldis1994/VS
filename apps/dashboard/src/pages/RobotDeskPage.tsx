@@ -40,6 +40,9 @@ type DecisionChain = {
 
 type BrainSummary = {
   ready: boolean;
+  bar_count?: number;
+  bars_needed?: number;
+  in_trade?: boolean;
   macro: string;
   regime: string;
   confidence: number;
@@ -190,7 +193,18 @@ function brainLine(s: RobotSession): string {
   if (s.decision_chain?.brain) return s.decision_chain.brain;
   const b = s.brain;
   if (!b) return 'BRAIN · offline';
-  if (!b.ready) return 'BRAIN · seeding (~23 min)';
+  if (!b.ready) {
+    const prog =
+      b.bar_count != null && b.bars_needed
+        ? `${b.bar_count}/${b.bars_needed}`
+        : '~137';
+    if (s.open_side || b.in_trade) {
+      return b.locked
+        ? `BRAIN · warming ${prog} · MANAGE locked`
+        : `BRAIN · warming ${prog} · MANAGE (playbook exit)`;
+    }
+    return `BRAIN · seeding ${prog} — entry blocked`;
+  }
   const parts = [
     b.macro,
     b.regime,
@@ -212,6 +226,7 @@ function brainLine(s: RobotSession): string {
 
 function brainStateClass(s: RobotSession): string {
   const b = s.brain;
+  if (s.open_side && !b?.ready) return 'brain-live';
   if (!b?.ready) return 'brain-seeding';
   if (b.move_state === 'EXHAUSTING') return 'brain-exhaust';
   if (b.side_end) return 'brain-warn';
