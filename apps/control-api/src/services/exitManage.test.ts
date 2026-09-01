@@ -110,6 +110,23 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     expect(d.reason).toMatch(/Target/);
   });
 
+  it('BREAKOUT impulse holds past +1.5pt — not default SCALP tpFloor 0.22', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'SELL',
+        entry_price: 4370,
+        entry_at: ago(120_000),
+        mfe: 2.0,
+        peak_retention: 0.7,
+        playbook: 'SCALP',
+        entry_setup: 'BREAKOUT',
+        regime: 'BREAKOUT_DOWN',
+      }),
+      4368.5
+    );
+    expect(d.exit).toBe(false);
+  });
+
   it('FADE bounce holds past +1.5pt — tpFloor 3 not 0.18', () => {
     const d = decideBestOutcomeExit(
       snap({
