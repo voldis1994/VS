@@ -202,7 +202,6 @@ export function ClientPanelPage() {
   };
 
   const onMarketChange = async (value: string) => {
-    if (requestedActive) return;
     const m = markets.find((x) => x.epic === value);
     if (!m) return;
     setEpic(m.epic);
@@ -210,6 +209,13 @@ export function ClientPanelPage() {
     setError(null);
     try {
       await persistConfig(m.epic, m.min_lot);
+      if (requestedActive) {
+        const res = await clientFetch<{ status: Status }>('/api/client/start', {
+          method: 'POST',
+          body: JSON.stringify({ epic: m.epic, lot_size: m.min_lot }),
+        });
+        setStatus(res.status);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Market update failed');
     }
@@ -225,7 +231,7 @@ export function ClientPanelPage() {
         await persistConfig(epic, lot);
         const res = await clientFetch<{ status: Status }>('/api/client/start', {
           method: 'POST',
-          body: JSON.stringify({}),
+          body: JSON.stringify({ epic, lot_size: lot }),
         });
         setStatus(res.status);
         if (res.status.robot_status === 'ERROR') {
@@ -331,7 +337,7 @@ export function ClientPanelPage() {
           <select
             className="ccp-select"
             value={epic}
-            disabled={requestedActive || busy || markets.length === 0}
+            disabled={busy || markets.length === 0}
             onChange={(e) => void onMarketChange(e.target.value)}
           >
             {markets.length === 0 && <option value="">No markets — ask admin to pull Capital markets</option>}

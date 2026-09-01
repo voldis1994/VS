@@ -61,6 +61,7 @@ describe('multi-client isolation invariants', () => {
     expect(src).toMatch(/mode: 'own_brain'/);
     expect(src).toMatch(/Does NOT subscribe to shared Market Core/);
     expect(src).not.toMatch(/\bactivateSubscription\b/);
+    expect(src).toMatch(/override\?\.epic/);
     const desk = readFileSync(fileURLToPath(new URL('./robotDesk.ts', import.meta.url)), 'utf8');
     expect(desk).toMatch(/stopOtherRobotsForAccount/);
   });

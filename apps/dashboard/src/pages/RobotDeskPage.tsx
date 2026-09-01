@@ -271,6 +271,12 @@ export function RobotDeskPage() {
   }, [launchAccountId]);
 
   useEffect(() => {
+    if (focused?.account_id && focused.account_id !== launchAccountId) {
+      setLaunchAccountId(focused.account_id);
+    }
+  }, [focused?.account_id, launchAccountId]);
+
+  useEffect(() => {
     if (!launchAccountId) return;
     void apiFetch<typeof launchMarkets>(`/api/trading/accounts/${launchAccountId}/instruments`)
       .then((rows) => {
@@ -295,8 +301,9 @@ export function RobotDeskPage() {
       .slice(0, 200);
   }, [launchMarkets, launchFilter]);
 
-  const focused = sessions.find((s) => s.id === focusId) || null;
-  const runningCount = sessions.filter((s) => s.running).length;
+  const focused = sessions.find((s) => s.id === focusId) || sessions.find((s) => s.running) || null;
+  const liveSessions = sessions.filter((s) => s.running);
+  const runningCount = liveSessions.length;
 
   const deploy = () => {
     if (!launchAccountId || !launchEpic) {
@@ -369,6 +376,33 @@ export function RobotDeskPage() {
     }
   };
 
+  const switchFocusedMarket = async () => {
+    if (!focused || !launchEpic) return;
+    const m = launchMarkets.find((x) => (x.epic || x.symbol) === launchEpic);
+    const lot = Number(launchLot || m?.min_lot || 0.1);
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await apiFetch<{ session: RobotSession }>('/api/robot-desk/start', {
+        method: 'POST',
+        body: JSON.stringify({
+          account_id: focused.account_id,
+          epic: launchEpic,
+          display_name: m?.display_name || launchEpic,
+          lot_size: lot,
+          trading_enabled: true,
+        }),
+      });
+      setFocusId(res.session.id);
+      setShowDeploy(false);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Switch market failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="robot-fs-shell robot-board-shell" ref={shellRef}>
       <div className="robot-desk robot-desk-fs robot-board robot-board-v2 robot-board-fill">
@@ -386,7 +420,7 @@ export function RobotDeskPage() {
           <div className="robot-board-stats">
             <div className="robot-mode-banner entry">
               <div className="label">CLIENTS</div>
-              <div className="value">{sessions.length}</div>
+              <div className="value">{liveSessions.length}</div>
             </div>
             <div className={`robot-mode-banner ${runningCount ? 'manage' : 'flat'}`}>
               <div className="label">LIVE</div>
@@ -415,7 +449,11 @@ export function RobotDeskPage() {
 
         {showDeploy && (
           <div className="robot-empty robot-deploy-bar">
-            <div className="section-title">DEPLOY CLIENT ROBOT</div>
+            <div className="section-title">
+              {focused
+                ? `SWITCH ${ (focused.client_name || focused.account_name).toUpperCase() } MARKET (stops ${focused.display_name})`
+                : 'DEPLOY CLIENT ROBOT'}
+            </div>
             <div className="actions" style={{ marginTop: 8, flexWrap: 'wrap' }}>
               <select
                 className="input"
@@ -458,15 +496,15 @@ export function RobotDeskPage() {
                 value={launchLot}
                 onChange={(e) => setLaunchLot(e.target.value)}
               />
-              <button className="btn btn-go" type="button" disabled={busy} onClick={deploy}>
-                DEPLOY
+              <button className="btn btn-go" type="button" disabled={busy} onClick={focused ? switchFocusedMarket : deploy}>
+                {focused ? 'SWITCH' : 'DEPLOY'}
               </button>
             </div>
           </div>
         )}
 
         <section className="robot-board-body">
-          {sessions.length === 0 && !busy && (
+          {liveSessions.length === 0 && !busy && (
             <div className="robot-empty">
               <div className="robot-arena-kicker">EMPTY BOARD</div>
               <p style={{ marginBottom: 12 }}>Vēl nav robotu. Spied + DEPLOY.</p>
@@ -476,9 +514,9 @@ export function RobotDeskPage() {
             </div>
           )}
 
-          {sessions.length > 0 && (
+          {liveSessions.length > 0 && (
             <div className="robot-board-grid">
-              {sessions.map((s) => {
+              {liveSessions.map((s) => {
                 const look = lookingFor(s);
                 const active = focusId === s.id;
                 const setupKind = (s.market_setup?.kind || s.entry_setup || 'NONE').toUpperCase();
