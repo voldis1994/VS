@@ -2222,6 +2222,34 @@ button.regime-chip { cursor: pointer; }
   color: var(--text-secondary);
   line-height: 1.45;
 }
+.robot-brain-hero {
+  border: 1px solid rgba(0, 255, 200, 0.25);
+  background: rgba(0, 255, 200, 0.04);
+}
+.robot-brain-hero.brain-seeding {
+  border-color: rgba(255, 200, 80, 0.35);
+  background: rgba(255, 200, 80, 0.05);
+}
+.robot-brain-hero.brain-exhaust {
+  border-color: rgba(255, 100, 120, 0.45);
+  background: rgba(255, 80, 100, 0.06);
+}
+.robot-brain-hero.brain-hot {
+  border-color: rgba(0, 255, 160, 0.45);
+  background: rgba(0, 255, 160, 0.07);
+}
+.robot-brain-hero .brain-hero-value {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--cyan);
+}
+.robot-brain-meta {
+  color: var(--cyan);
+  font-weight: 500;
+}
+.robot-brain-meta.brain-seeding { color: #e6c066; }
+.robot-brain-meta.brain-exhaust { color: #ff8da8; }
+.robot-brain-meta.brain-warn { color: #ffb347; }
 .robot-story-log .robot-feed {
   max-height: 280px;
   overflow: auto;

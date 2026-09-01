@@ -4,7 +4,9 @@ import {
   brainExitParams,
   brainExitThesis,
   emptyBrainMemory,
+  formatBrainLine,
   lockBrainAtEntry,
+  summarizeBrain,
   updateMarketBrain,
 } from './marketBrain.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
@@ -92,5 +94,32 @@ describe('marketBrain unified state', () => {
       used_potential: 0.5,
     };
     expect(brainExitThesis(fake as any, 'BUY', 'LONG')).toMatch(/BrainExhaustion/);
+  });
+
+  it('formatBrainLine summarizes for dashboard', () => {
+    const summary = summarizeBrain(
+      {
+        ready: true,
+        macro: 'BREAKOUT',
+        regime: 'BREAKOUT_UP',
+        confidence: 0.7,
+        move_state: 'DEVELOPING',
+        survival: 0.72,
+        exhaustion: 0.2,
+        used_potential: 0.41,
+        remaining_pct: 59,
+        adjusted_target: 4371.5,
+        r_side: 5.4,
+        break_valid: true,
+        impulse: 0.65,
+        side_confirmed: false,
+        side_end: false,
+      } as any,
+      { adjusted_target: 4371.5, r_side: 5.4 } as any
+    );
+    const line = formatBrainLine(summary);
+    expect(line).toMatch(/BRAIN · BREAKOUT/);
+    expect(line).toMatch(/DEVELOPING/);
+    expect(line).toMatch(/4371.50/);
   });
 });

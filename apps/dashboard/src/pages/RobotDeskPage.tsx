@@ -35,6 +35,28 @@ type DecisionChain = {
   zones?: string;
   setup: string | null;
   action: string;
+  brain?: string;
+};
+
+type BrainSummary = {
+  ready: boolean;
+  macro: string;
+  regime: string;
+  confidence: number;
+  move_state: string;
+  survival: number;
+  exhaustion: number;
+  used_pct: number;
+  remaining_pct: number;
+  adjusted_target: number | null;
+  r_side: number;
+  break_valid: boolean;
+  impulse: number;
+  side_confirmed: boolean;
+  side_end: boolean;
+  locked: boolean;
+  locked_target: number | null;
+  locked_r_side: number | null;
 };
 
 type BoardMeta = {
@@ -127,6 +149,7 @@ type RobotSession = {
   open_side: string | null;
   safety_sl: number | null;
   error: string | null;
+  brain?: BrainSummary | null;
 };
 
 function fmt(n: number | null | undefined, d = 5) {
@@ -161,6 +184,39 @@ function ohlcLine(s: RobotSession): string {
   const o = s.ohlc_10s;
   if (!o || o.last_c == null) return '10s SEEDING';
   return `10s ${fmt(o.last_o, 2)}→${fmt(o.last_c, 2)} · ${o.market}`;
+}
+
+function brainLine(s: RobotSession): string {
+  if (s.decision_chain?.brain) return s.decision_chain.brain;
+  const b = s.brain;
+  if (!b) return 'BRAIN · offline';
+  if (!b.ready) return 'BRAIN · seeding (~23 min)';
+  const parts = [
+    b.macro,
+    b.regime,
+    b.move_state,
+    `surv ${(b.survival * 100).toFixed(0)}%`,
+    `exh ${(b.exhaustion * 100).toFixed(0)}%`,
+  ];
+  if (b.break_valid) parts.push('BREAK✓');
+  if (b.side_end) parts.push('SIDE_END');
+  if (b.locked) {
+    parts.push(`used ${b.used_pct}%`);
+    parts.push(`rem ${b.remaining_pct}%`);
+    if (b.locked_target != null) parts.push(`T→${fmt(b.locked_target, 2)}`);
+  } else if (b.adjusted_target != null) {
+    parts.push(`T→${fmt(b.adjusted_target, 2)}`);
+  }
+  return `BRAIN · ${parts.join(' · ')}`;
+}
+
+function brainStateClass(s: RobotSession): string {
+  const b = s.brain;
+  if (!b?.ready) return 'brain-seeding';
+  if (b.move_state === 'EXHAUSTING') return 'brain-exhaust';
+  if (b.side_end) return 'brain-warn';
+  if (b.break_valid || b.macro === 'BREAKOUT' || b.macro === 'TREND') return 'brain-hot';
+  return 'brain-live';
 }
 
 function lastLog(s: RobotSession): string {
@@ -793,6 +849,10 @@ export function RobotDeskPage() {
                     {fmt(focused.unrealized)}
                   </div>
                 </div>
+                <div className={`robot-story-block robot-brain-hero ${brainStateClass(focused)}`}>
+                  <div className="label">BRAIN</div>
+                  <div className="value mono brain-hero-value">{brainLine(focused)}</div>
+                </div>
               </div>
 
               <div className="robot-story-grid">
@@ -811,6 +871,15 @@ export function RobotDeskPage() {
                     <div>
                       PLAYBOOK · {(focused.playbook || focused.market_setup?.playbook || '—').toString()}
                     </div>
+                    <div className={`robot-brain-meta ${brainStateClass(focused)}`}>
+                      {brainLine(focused)}
+                    </div>
+                    {focused.brain?.locked && focused.brain.locked_r_side != null && (
+                      <div>
+                        BRAIN LOCK · R {fmt(focused.brain.locked_r_side, 2)} · conf{' '}
+                        {(focused.brain.confidence * 100).toFixed(0)}%
+                      </div>
+                    )}
                     <div>
                       ENTRY · {fmt(focused.entry_price)} · SL {fmt(focused.safety_sl)}
                     </div>
