@@ -8,6 +8,7 @@ import {
   notePipelineBridgeError,
   notePipelineHeartbeat,
 } from '../services/pipelineBridge.js';
+import { listCalcSnapshots } from '../services/robotDesk.js';
 
 function requirePipelineAuth(
   request: { headers: Record<string, unknown> },
@@ -58,6 +59,14 @@ export async function registerPipelineRoutes(app: FastifyInstance): Promise<void
   app.get('/api/pipeline/bridge-status', async (request, reply) => {
     if (!requirePipelineAuth(request, reply)) return;
     return getPipelineBridgeStatus();
+  });
+
+  app.get('/api/pipeline/calc-snapshot', async (request, reply) => {
+    if (!requirePipelineAuth(request, reply)) return;
+    return {
+      snapshots: listCalcSnapshots(),
+      bridge: getPipelineBridgeStatus(),
+    };
   });
 
   app.post('/api/pipeline/intents', async (request, reply) => {

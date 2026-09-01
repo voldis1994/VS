@@ -66,6 +66,12 @@ import {
   type TenSecBar,
   type TenSecState,
 } from './tenSecondOhlc.js';
+import {
+  aggregateMinutes,
+  barBodyPressure,
+  countCandlePolarity,
+  toCompactBar,
+} from './candleTf.js';
 
 export type RobotTick = {
   at: string;
@@ -615,6 +621,88 @@ export function listRobotSessions(): RobotSession[] {
   return [...sessions.values()]
     .sort((a, b) => b.started_at.localeCompare(a.started_at))
     .map(publicSession);
+}
+
+/** Quote + 10s/1m bars for legacy vs-calc. Robot desk holds Capital; calc never talks to the broker. */
+export function listCalcSnapshots(): Array<{
+  epic: string;
+  mid: number | null;
+  bid: number | null;
+  ask: number | null;
+  bars: Array<{ o: number; h: number; l: number; c: number }>;
+  bars_1m: Array<{ o: number; h: number; l: number; c: number }>;
+  bars_5m: Array<{ o: number; h: number; l: number; c: number }>;
+  bars_15m: Array<{ o: number; h: number; l: number; c: number }>;
+  regime: string;
+  bias: string;
+  running: boolean;
+  feed_contributing: number;
+  feed_sender_count: number;
+  feed_agreement: string;
+  feeds: Array<{ name: string; mid: number | null; ok: boolean }>;
+  pressure_net: number;
+  pressure_buy: number;
+  pressure_sell: number;
+  pressure_detail: string;
+  candle200_n: number;
+  candle200_bull: number;
+  candle200_bear: number;
+  candle200_doji: number;
+  body_pressure_1m: number;
+  body_pressure_5m: number;
+  body_pressure_15m: number;
+}> {
+  return [...sessions.values()]
+    .filter((s) => s.running)
+    .map((s) => {
+      const tick = s.ticks.find((t) => t.bid != null || t.ask != null) || s.ticks[0];
+      const mins = s.last_minute_candles || [];
+      const bars5 = aggregateMinutes(mins, 5);
+      const bars15 = aggregateMinutes(mins, 15);
+      const pol = countCandlePolarity(mins, 200);
+      const legs = (s.feed_legs?.length ? s.feed_legs : s.multiFeed?.legs) || [];
+      const bias =
+        s.structureBook?.hour_bias && s.structureBook.hour_bias !== 'UNKNOWN'
+          ? s.structureBook.hour_bias
+          : s.structureBook?.bias || '';
+      return {
+        epic: s.epic,
+        mid: s.last_mid,
+        bid: tick?.bid ?? null,
+        ask: tick?.ask ?? null,
+        bars: s.closedBars.slice(-40).map((b) => ({
+          o: b.open,
+          h: b.high,
+          l: b.low,
+          c: b.close,
+        })),
+        bars_1m: mins.slice(-200).map(toCompactBar),
+        bars_5m: bars5.slice(-40).map(toCompactBar),
+        bars_15m: bars15.slice(-20).map(toCompactBar),
+        regime: String(s.regime || ''),
+        bias: String(bias),
+        running: s.running,
+        feed_contributing: s.feed_contributing ?? s.multiFeed?.contributing ?? 0,
+        feed_sender_count: s.feed_sender_count ?? s.multiFeed?.sender_count ?? 0,
+        feed_agreement: String(s.feed_agreement ?? s.multiFeed?.agreement ?? 'NONE'),
+        feeds: legs.map((l) => ({
+          name: String(l.name || l.sender_id || ''),
+          mid: l.mid ?? null,
+          ok: Boolean(l.ok),
+        })),
+        pressure_net: 0,
+        pressure_buy: 0,
+        pressure_sell: 0,
+        pressure_detail: 'NO CROSS-MARKET DATA',
+        candle200_n: pol.n,
+        candle200_bull: pol.bullish,
+        candle200_bear: pol.bearish,
+        candle200_doji: pol.doji,
+        body_pressure_1m: barBodyPressure(mins.slice(-20)),
+        body_pressure_5m: barBodyPressure(bars5.slice(-12)),
+        body_pressure_15m: barBodyPressure(bars15.slice(-8)),
+      };
+    });
 }
 
 /** True when this account already runs its own entry brain (not manage-only / not fanout). */
