@@ -47,6 +47,7 @@ import {
   decideEntryFromFormingSetup,
   emptySetup,
   emptyStructure,
+  isLegFloorChase,
   playbookFromSetup,
   setupCatalog,
   updateSetupSticky,
@@ -1611,27 +1612,29 @@ async function robotCycle(s: Internal) {
     if (!entry) {
       const minSpan = minSwingSpan(st.mid || quote.mid);
       const hasSpan = st.ready && st.swing_high - st.swing_low >= minSpan;
-      const tipNote =
-        setup.side &&
-        hasSpan &&
-        ((setup.side === 'BUY' &&
-          st.ready &&
-          bar.close >=
-            st.swing_high -
-            Math.max(st.span * 0.08, scaleFromGold(st.mid || quote.mid, 0.8))) ||
-          (setup.side === 'SELL' &&
-            st.ready &&
-            bar.close <=
-              st.swing_low +
-              Math.max(st.span * 0.08, scaleFromGold(st.mid || quote.mid, 0.8))))
-          ? ' · blocked tip-chase'
-          : '';
+      const blockNote =
+        bar && setup.side === 'SELL' && isLegFloorChase(setup, bar)
+          ? ' · blocked floor-chase'
+          : setup.side &&
+              hasSpan &&
+              ((setup.side === 'BUY' &&
+                st.ready &&
+                bar.close >=
+                  st.swing_high -
+                  Math.max(st.span * 0.08, scaleFromGold(st.mid || quote.mid, 0.8))) ||
+                (setup.side === 'SELL' &&
+                  st.ready &&
+                  bar.close <=
+                    st.swing_low +
+                    Math.max(st.span * 0.08, scaleFromGold(st.mid || quote.mid, 0.8))))
+            ? ' · blocked tip-chase'
+            : '';
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · ARMED · no 10s confirm yet${tipNote} · ${setup.reason}`,
+        detail: `${ohlcLine} · ARMED · no 10s confirm yet${blockNote} · ${setup.reason}`,
       });
       return;
     }

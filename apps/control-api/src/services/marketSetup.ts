@@ -400,7 +400,28 @@ function rawSetupFromStructure(
 
   // ——— IMPULSE FIRST — instant flip side, do not wait for sticky opposite to die ———
   if (imp === 'UP') {
-    if (closedAbove || last.close >= hi - eps * 0.5) {
+    const atCeilingZone = last.close >= hi - eps * 0.5 || last.high >= hi - eps * 0.25;
+    const lastBar = {
+      open: last.open,
+      high: last.high,
+      low: last.low,
+      close: last.close,
+      open_time_ms: 0,
+      ticks: 1,
+    };
+    const breakingFreshHigh = closedAbove || isFreshBreakoutAbove(hi, lastBar, eps);
+    if (atCeilingZone && !breakingFreshHigh) {
+      return {
+        kind: 'NONE',
+        side: null,
+        playbook: null,
+        status: 'NONE',
+        swing_high: hi,
+        swing_low: lo,
+        reason: `IMPULSE UP at ceiling H${hi.toFixed(2)} — wait breakout above H`,
+      };
+    }
+    if (breakingFreshHigh) {
       return {
         kind: 'BREAKOUT',
         side: 'BUY',
@@ -422,7 +443,30 @@ function rawSetupFromStructure(
     };
   }
   if (imp === 'DOWN') {
-    if (closedBelow || last.close <= lo + eps * 0.5) {
+    const atFloorZone = last.close <= lo + eps * 0.5 || last.low <= lo + eps * 0.25;
+    const lastBar = {
+      open: last.open,
+      high: last.high,
+      low: last.low,
+      close: last.close,
+      open_time_ms: 0,
+      ticks: 1,
+    };
+    const breakingFreshLow = closedBelow || isFreshBreakdownBelow(lo, lastBar, eps);
+    if (atFloorZone && !breakingFreshLow) {
+      return {
+        kind: 'NONE',
+        side: null,
+        playbook: null,
+        status: 'NONE',
+        swing_high: hi,
+        swing_low: lo,
+        reason: isBounceOffLow(minutes, lo, eps)
+          ? `IMPULSE DOWN at L${lo.toFixed(2)} · bounce forming — no SELL at floor`
+          : `IMPULSE DOWN at floor L${lo.toFixed(2)} — wait breakdown below L`,
+      };
+    }
+    if (breakingFreshLow) {
       return {
         kind: 'BREAKOUT',
         side: 'SELL',
@@ -830,6 +874,66 @@ export function isTipChaseEntry(setup: MarketSetup, bar: TenSecBar): boolean {
   return false;
 }
 
+/** Minimum points below swing L before a SELL leg is "fresh breakdown", not V-bottom poke. */
+function minBreakBelow(lo: number, px: number, eps: number): number {
+  return Math.max(eps * 0.25, scaleFromGold(px, 1.0));
+}
+
+function minBreakAbove(hi: number, px: number, eps: number): number {
+  return Math.max(eps * 0.25, scaleFromGold(px, 1.0));
+}
+
+export function isFreshBreakdownBelow(lo: number, bar: TenSecBar, eps: number): boolean {
+  const need = minBreakBelow(lo, bar.close, eps);
+  return bar.close < lo - need || bar.low < lo - need * 1.15;
+}
+
+export function isFreshBreakoutAbove(hi: number, bar: TenSecBar, eps: number): boolean {
+  const need = minBreakAbove(hi, bar.close, eps);
+  return bar.close > hi + need || bar.high > hi + need * 1.15;
+}
+
+/** CONTINUATION/BREAKOUT SELL at swing floor without breaking below — classic V-bottom trap. */
+export function isLegFloorChase(setup: MarketSetup, bar: TenSecBar): boolean {
+  if (setup.side !== 'SELL') return false;
+  if (setup.kind !== 'CONTINUATION' && setup.kind !== 'BREAKOUT') return false;
+  const lo = setup.swing_low;
+  const hi = setup.swing_high;
+  if (!(lo > 0) || hi <= lo) return false;
+  const eps = edgeEps(bar.close, Math.max(hi - lo, 1));
+  const atFloor = bar.close <= lo + eps * 0.35 || bar.low <= lo + eps * 0.2;
+  return atFloor && !isFreshBreakdownBelow(lo, bar, eps);
+}
+
+/** CONTINUATION/BREAKOUT BUY at swing ceiling without breaking above — chase the top. */
+export function isLegCeilingChase(setup: MarketSetup, bar: TenSecBar): boolean {
+  if (setup.side !== 'BUY') return false;
+  if (setup.kind !== 'CONTINUATION' && setup.kind !== 'BREAKOUT') return false;
+  const hi = setup.swing_high;
+  const lo = setup.swing_low;
+  if (!(hi > 0) || hi <= lo) return false;
+  const eps = edgeEps(bar.close, Math.max(hi - lo, 1));
+  const atCeiling = bar.close >= hi - eps * 0.35 || bar.high >= hi - eps * 0.2;
+  return atCeiling && !isFreshBreakoutAbove(hi, bar, eps);
+}
+
+/** 1m bounce off swing low — block SELL into V-recovery (screenshot: sell @4329 then rally). */
+export function isBounceOffLow(
+  minutes: CapitalPriceCandle[] | null | undefined,
+  lo: number,
+  eps: number
+): boolean {
+  if (!minutes || minutes.length < 2 || !(lo > 0)) return false;
+  const last = minutes[minutes.length - 1]!;
+  const prev = minutes[minutes.length - 2]!;
+  const touchedLow = prev.low <= lo + eps || last.low <= lo + eps;
+  const greenBounce = last.close > last.open && last.close >= prev.close;
+  const hammer =
+    last.close > last.open &&
+    last.close - last.low > Math.max((last.high - last.close) * 1.1, eps * 0.3);
+  return touchedLow && (greenBounce || hammer);
+}
+
 export function decideEntryFromSetup(
   setup: MarketSetup,
   bar: TenSecBar,
@@ -854,6 +958,9 @@ export function decideEntryFromSetup(
   if (isTipChaseEntry(setup, bar)) {
     return null;
   }
+  if (setup.side === 'SELL' && isLegFloorChase(setup, bar)) return null;
+  if (setup.side === 'BUY' && isLegCeilingChase(setup, bar)) return null;
+  if (setup.side === 'SELL' && isBounceOffLow(minutes, lo, eps)) return null;
 
   if (setup.kind === 'FADE' || setup.kind === 'FAILED_BREAK') {
     if (setup.side === 'BUY') {
@@ -892,7 +999,7 @@ export function decideEntryFromSetup(
         reason: `ENTRY · BREAKOUT BUY · ${setup.reason}`,
       };
     }
-    if (setup.side === 'SELL' && body <= -thr * 0.6 && bar.close < lo + eps) {
+    if (setup.side === 'SELL' && body <= -thr * 0.6 && isFreshBreakdownBelow(lo, bar, eps)) {
       return {
         direction: 'SELL',
         setup: 'BREAKOUT',
@@ -974,6 +1081,12 @@ export function decideEntryFromFormingSetup(
   if (setup.side === 'BUY' && flow === 'DOWN') return null;
   if (setup.side === 'SELL' && flow === 'UP') return null;
   if (isTipChaseEntry(setup, forming)) return null;
+  if (setup.side === 'SELL' && isLegFloorChase(setup, forming)) return null;
+  if (setup.side === 'BUY' && isLegCeilingChase(setup, forming)) return null;
+  const lo = setup.swing_low;
+  const hi = setup.swing_high;
+  const eps = edgeEps(forming.close, Math.max(hi - lo, 1));
+  if (setup.side === 'SELL' && isBounceOffLow(minutes, lo, eps)) return null;
 
   const need = thr * 0.42;
   if (setup.kind === 'CONTINUATION') {
@@ -996,9 +1109,6 @@ export function decideEntryFromFormingSetup(
     return null;
   }
 
-  const hi = setup.swing_high;
-  const lo = setup.swing_low;
-  const eps = edgeEps(forming.close, Math.max(hi - lo, 1));
   if (setup.side === 'BUY' && body >= need && forming.close > hi - eps) {
     return {
       direction: 'BUY',
@@ -1007,7 +1117,7 @@ export function decideEntryFromFormingSetup(
       reason: `ENTRY · BREAKOUT BUY (live 10s) · ${setup.reason}`,
     };
   }
-  if (setup.side === 'SELL' && body <= -need && forming.close < lo + eps) {
+  if (setup.side === 'SELL' && body <= -need && isFreshBreakdownBelow(lo, forming, eps)) {
     return {
       direction: 'SELL',
       setup: 'BREAKOUT',

@@ -6,6 +6,8 @@ import {
   decideEntryFromFormingSetup,
   decideEntryFromTenSecMove,
   emptySetup,
+  isBounceOffLow,
+  isLegFloorChase,
   isTipChaseEntry,
   priceFlowBias,
   recentImpulse,
@@ -397,5 +399,56 @@ describe('marketSetup', () => {
     const hit = decideEntryFromFormingSetup(armed, forming, []);
     expect(hit?.direction).toBe('BUY');
     expect(hit?.reason).toMatch(/live 10s/);
+  });
+
+  it('blocks SELL at swing floor without fresh breakdown (V-bottom trap)', () => {
+    const lo = 4330.31;
+    const hi = 4358.79;
+    const armed = {
+      ...emptySetup(),
+      kind: 'CONTINUATION' as const,
+      side: 'SELL' as const,
+      playbook: 'LONG' as const,
+      status: 'ARMED' as const,
+      reason: 'IMPULSE DOWN at floor',
+      swing_high: hi,
+      swing_low: lo,
+    };
+    const atFloor = bar10(4330.5, 4330.8, 4329.2, 4329.5);
+    expect(isLegFloorChase(armed, atFloor)).toBe(true);
+    expect(decideEntryFromSetup(armed, atFloor, [])).toBeNull();
+
+    const breaking = bar10(4330.2, 4330.3, 4327.5, 4327.8);
+    expect(isLegFloorChase(armed, breaking)).toBe(false);
+    expect(decideEntryFromSetup(armed, breaking, [])).not.toBeNull();
+  });
+
+  it('IMPULSE DOWN at floor does not produce SELL entry on V-bottom poke', () => {
+    const lo = 4330.31;
+    const hi = 4358.79;
+    const armed = {
+      ...emptySetup(),
+      kind: 'BREAKOUT' as const,
+      side: 'SELL' as const,
+      playbook: 'SCALP' as const,
+      status: 'ARMED' as const,
+      reason: `IMPULSE DOWN through L${lo.toFixed(2)} → SELL flip now`,
+      swing_high: hi,
+      swing_low: lo,
+    };
+    const poke = bar10(4330.5, 4330.8, 4329.2, 4329.5);
+    const minutes = [candle(4330, 4331, 4329.5, 4330), candle(4330, 4331.5, 4329.8, 4331.2)];
+    expect(decideEntryFromSetup(armed, poke, minutes)).toBeNull();
+    expect(decideEntryFromFormingSetup(armed, { ...poke, ticks: 6 }, minutes)).toBeNull();
+  });
+
+  it('isBounceOffLow detects green recovery after touching low', () => {
+    const lo = 4330;
+    const eps = 1.5;
+    const minutes = [
+      candle(4331, 4332, 4329.5, 4330),
+      candle(4330, 4331.5, 4329.8, 4331.2),
+    ];
+    expect(isBounceOffLow(minutes, lo, eps)).toBe(true);
   });
 });
