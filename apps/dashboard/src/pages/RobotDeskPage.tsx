@@ -3,9 +3,9 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiFetch } from '../hooks/useApi';
 import { Logo } from '../components/Logo';
 import {
-  isEurUsdMarket,
   lotForMarket,
   marketKey,
+  offerEurUsdShortcut,
   pickDeployAccount,
   pickSwitchTarget,
 } from '../lib/preferMarket';
@@ -437,6 +437,10 @@ export function RobotDeskPage() {
   };
 
   const switchToEurUsd = async (s: RobotSession) => {
+    if (s.open_side) {
+      setError('IN TRADE — vispirms aizver treidu, tad SWITCH');
+      return;
+    }
     const m = eurUsdMarket || pickSwitchTarget(launchMarkets, s.epic);
     if (!m || !isEurUsdMarket(m)) {
       setError('EUR/USD nav katalogā — pull Capital markets, tad SWITCH');
@@ -446,8 +450,10 @@ export function RobotDeskPage() {
     await switchSessionToMarket(s, marketKey(m), m.display_name, lotForMarket(m));
   };
 
-  const sessionIsEurUsd = (s: RobotSession) =>
-    isEurUsdMarket({ epic: s.epic, symbol: s.epic, display_name: s.display_name });
+  const sessionInTrade = (s: RobotSession) => Boolean(s.open_side);
+  const showEurUsdShortcut = (s: RobotSession) =>
+    !sessionInTrade(s) &&
+    offerEurUsdShortcut({ epic: s.epic, symbol: s.epic, display_name: s.display_name });
 
   const openDeploy = () => {
     setPanelMode('deploy');
@@ -459,6 +465,10 @@ export function RobotDeskPage() {
   };
 
   const openSwitch = (s: RobotSession) => {
+    if (s.open_side) {
+      setError('IN TRADE — vispirms aizver treidu, tad SWITCH');
+      return;
+    }
     setPanelMode('switch');
     setSwitchSessionId(s.id);
     setFocusId(s.id);
@@ -510,7 +520,7 @@ export function RobotDeskPage() {
             </div>
           </div>
           <div className="actions">
-            {focused && !sessionIsEurUsd(focused) && (
+            {focused && showEurUsdShortcut(focused) && (
               <button
                 className="btn btn-go"
                 type="button"
@@ -679,7 +689,7 @@ export function RobotDeskPage() {
                     <div className="robot-mini-actions">
                       <span className="mono">{s.environment.toUpperCase()}</span>
                       <div className="robot-ctrl" onClick={(e) => e.stopPropagation()}>
-                        {!sessionIsEurUsd(s) && (
+                        {showEurUsdShortcut(s) && (
                           <button
                             type="button"
                             className="btn btn-go"
@@ -692,7 +702,7 @@ export function RobotDeskPage() {
                         <button
                           type="button"
                           className="btn btn-primary"
-                          disabled={busy}
+                          disabled={busy || sessionInTrade(s)}
                           onClick={() => openSwitch(s)}
                         >
                           SWITCH
@@ -731,7 +741,7 @@ export function RobotDeskPage() {
                   </div>
                 </div>
                 <div className="robot-ctrl robot-ctrl-lg">
-                  {!sessionIsEurUsd(focused) && (
+                  {showEurUsdShortcut(focused) && (
                     <button
                       type="button"
                       className="btn btn-go"
@@ -744,7 +754,7 @@ export function RobotDeskPage() {
                   <button
                     type="button"
                     className="btn btn-primary"
-                    disabled={busy}
+                    disabled={busy || sessionInTrade(focused)}
                     onClick={() => openSwitch(focused)}
                   >
                     SWITCH

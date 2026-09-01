@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isEurUsdMarket, pickDeployAccount, pickSwitchTarget } from './preferMarket';
+import { isEurUsdMarket, offerEurUsdShortcut, pickDeployAccount, pickSwitchTarget } from './preferMarket';
 
 const kimly = { epic: 'KIMLY', symbol: 'KIMLY', display_name: '$ Kimly', min_lot: 1 };
 const eurusd = { epic: 'CS.D.EURUSD.MINI.IP', symbol: 'EURUSD', display_name: 'EUR/USD', min_lot: 0.1 };
@@ -14,6 +14,12 @@ describe('pickSwitchTarget', () => {
   it('matches Capital-style EURUSD epic', () => {
     expect(isEurUsdMarket(eurusd)).toBe(true);
     expect(isEurUsdMarket(kimly)).toBe(false);
+  });
+
+  it('does not offer → EUR/USD on Gold (only leftover stocks like Kimly)', () => {
+    expect(offerEurUsdShortcut(gold)).toBe(false);
+    expect(offerEurUsdShortcut(eurusd)).toBe(false);
+    expect(offerEurUsdShortcut(kimly)).toBe(true);
   });
 
   it('does not pick the currently running epic when another market exists', () => {
