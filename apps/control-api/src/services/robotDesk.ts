@@ -28,6 +28,7 @@ import {
   formatBrainLine,
   lockBrainAtEntry,
   summarizeBrain,
+  BRAIN_WARMUP_BARS,
   type BrainState,
   type BrainSummary,
   type LockedBrainEntry,
@@ -297,7 +298,7 @@ function publicSession(s: Internal): RobotSession {
   } = s;
   const st = s.structureBook;
   const setup = s.marketSetup;
-  const brainSummary = summarizeBrain(s.brain, s.brain_locked);
+  const brainSummary = summarizeBrain(s.brain, s.brain_locked, { inTrade: !!s.open_side });
   return {
     ...rest,
     brain: brainSummary,
@@ -357,7 +358,9 @@ function buildDecisionChain(s: Internal): NonNullable<RobotSession['decision_cha
     zones: zonesLine,
     setup: `${setup.kind}/${setup.status}${setup.side ? ` ${setup.side}` : ''}`,
     action,
-    brain: formatBrainLine(summarizeBrain(s.brain, s.brain_locked)),
+    brain: formatBrainLine(
+      summarizeBrain(s.brain, s.brain_locked, { inTrade: !!s.open_side })
+    ),
   };
 }
 
@@ -438,6 +441,14 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     note:
       'Setup-first: NONE only when quiet. CONTINUATION/PULLBACK/FADE bounce rides rally (tp≥3–4pt, not +£0.07 scalp). Entry on closed 10s confirm.',
   };
+}
+
+/** When brain finishes warm-up during an open trade, attach locked exit targets. */
+function maybeLockBrainMidTrade(s: Internal) {
+  if (!s.open_side || s.brain_locked || !s.brain?.ready) return;
+  const ref = s.entry_price ?? s.last_mid;
+  if (ref == null || !Number.isFinite(ref)) return;
+  s.brain_locked = lockBrainAtEntry(s.brain, ref);
 }
 
 function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
@@ -1313,6 +1324,7 @@ async function robotCycle(s: Internal) {
       s.ohlc_10s = publicOhlc10s(s.ohlcState);
       if (s.ohlcState.just_closed && s.ohlcState.last_closed) {
         applyRobotRegime(s, [s.ohlcState.last_closed]);
+        maybeLockBrainMidTrade(s);
       }
     }
 
@@ -1414,7 +1426,13 @@ async function robotCycle(s: Internal) {
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · ${formatBrainLine(summarizeBrain(s.brain ?? currentRegime(s.epic, s.id)?.brain ?? null, s.brain_locked))} · no new orders`,
+        } · ${formatBrainLine(
+          summarizeBrain(
+            s.brain ?? currentRegime(s.epic, s.id)?.brain ?? null,
+            s.brain_locked,
+            { inTrade: true }
+          )
+        )} · no new orders`,
       });
       return;
     }
@@ -1620,18 +1638,27 @@ async function robotCycle(s: Internal) {
     const reason = entry.reason;
 
     const brainGate = s.brain ?? currentRegime(s.epic, s.id)?.brain ?? null;
-    if (brainGate?.ready) {
-      const gate = brainEntryAllowed(brainGate, setupType);
-      if (!gate.ok) {
-        pushTick(s, {
-          phase: 'DECIDE',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `${ohlcLine} · brain block · ${gate.reason}`,
-        });
-        return;
-      }
+    if (!brainGate?.ready) {
+      const n = brainGate?.bar_count ?? 0;
+      pushTick(s, {
+        phase: 'DECIDE',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · brain seeding ${n}/${BRAIN_WARMUP_BARS} — entry blocked (setup ${setupType} ignored)`,
+      });
+      return;
+    }
+    const gate = brainEntryAllowed(brainGate, setupType);
+    if (!gate.ok) {
+      pushTick(s, {
+        phase: 'DECIDE',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · brain block · ${gate.reason}`,
+      });
+      return;
     }
 
     s.playbook = entryPlaybook;
