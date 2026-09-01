@@ -32,3 +32,13 @@ export function lotForMarket(m: CatalogMarket | null | undefined, fallback = 0.1
   const n = Number(m?.lot_size || m?.min_lot || fallback);
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
+
+/** Next +DEPLOY target: a client who is not already live. Never steal the focused card. */
+export function pickDeployAccount<T extends { account_id: number }>(
+  accounts: T[],
+  liveAccountIds: number[],
+): T | null {
+  if (!accounts.length) return null;
+  const live = new Set(liveAccountIds);
+  return accounts.find((a) => !live.has(a.account_id)) || accounts[0];
+}
