@@ -64,6 +64,7 @@ describe('multi-client isolation invariants', () => {
     expect(src).toMatch(/override\?\.epic/);
     const desk = readFileSync(fileURLToPath(new URL('./robotDesk.ts', import.meta.url)), 'utf8');
     expect(desk).toMatch(/stopOtherRobotsForAccount/);
+    expect(desk).toMatch(/panel_epic/);
   });
 
   it('own-brain status ignores Market Core heartbeat', () => {
