@@ -136,7 +136,7 @@ describe('playbook exit', () => {
         regime: 'PULLBACK_DOWNTREND',
         playbook: 'LONG',
       },
-      2002
+      { mid: 2002 }
     );
     expect(d.exit).toBe(false);
   });
@@ -153,7 +153,7 @@ describe('playbook exit', () => {
         regime: 'TREND_DOWN',
         playbook: 'LONG',
       },
-      2001
+      { mid: 2001 }
     );
     expect(young.exit).toBe(false);
     const aged = decideBestOutcomeExit(
@@ -167,7 +167,7 @@ describe('playbook exit', () => {
         regime: 'TREND_DOWN',
         playbook: 'LONG',
       },
-      2001
+      { mid: 2001 }
     );
     expect(aged.exit).toBe(true);
     expect(aged.reason).toMatch(/LONG/);
@@ -185,7 +185,7 @@ describe('playbook exit', () => {
         regime: 'BREAKOUT_UP',
         playbook: 'SCALP',
       },
-      2002.5
+      { mid: 2002.5 }
     );
     expect(scalp.exit).toBe(true);
     expect(scalp.reason).toMatch(/PeakProtection/);
@@ -201,7 +201,7 @@ describe('playbook exit', () => {
         regime: 'BREAKOUT_UP',
         playbook: 'SCALP',
       },
-      2002.5
+      { mid: 2002.5 }
     );
     expect(scalpHold.exit).toBe(false);
 
@@ -216,7 +216,7 @@ describe('playbook exit', () => {
         regime: 'TREND_UP',
         playbook: 'LONG',
       },
-      2003
+      { mid: 2003 }
     );
     expect(longHold.exit).toBe(false);
   });
@@ -233,7 +233,7 @@ describe('playbook exit', () => {
         regime: 'RANGE',
         playbook: 'FADE',
       },
-      2000.5
+      { mid: 2000.5 }
     );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/TimeDecay/);

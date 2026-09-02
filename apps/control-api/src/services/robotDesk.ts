@@ -22,7 +22,7 @@ import {
   normalizeRegime,
   type RegimeName,
 } from './regimes.js';
-import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
+import { decideBestOutcomeExit, executableFavorableMove, favorableMove } from './exitManage.js';
 import {
   brainEntryAllowed,
   formatBrainLine,
@@ -594,13 +594,16 @@ function expectedStopFromDistance(
   return direction === 'BUY' ? ref - dist : ref + dist;
 }
 
-function updateExcursion(s: Internal, mid: number) {
+function updateExcursion(
+  s: Internal,
+  quote: { mid: number; bid?: number | null; ask?: number | null }
+) {
   if (!s.open_side || s.entry_price == null) return;
-  const fav = favorableMove(s.open_side, s.entry_price, mid);
+  const fav = executableFavorableMove(s.open_side, s.entry_price, quote);
   s.unrealized = fav;
   if (fav > s.mfe) {
     s.mfe = fav;
-    s.peak_favorable = mid;
+    s.peak_favorable = quote.mid;
   }
   if (fav < s.mae) s.mae = fav;
   s.peak_retention = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
@@ -1376,7 +1379,7 @@ async function robotCycle(s: Internal) {
     }
 
     if (quote.mid != null && s.open_side && s.entry_price != null) {
-      updateExcursion(s, quote.mid);
+      updateExcursion(s, { mid: quote.mid, bid: quote.bid, ask: quote.ask });
     }
 
     pushTick(s, {
@@ -1419,7 +1422,7 @@ async function robotCycle(s: Internal) {
           brain: s.brain ?? currentRegime(s.epic, s.id)?.brain ?? null,
           brain_locked: s.brain_locked,
         },
-        quote.mid
+        { mid: quote.mid, bid: quote.bid, ask: quote.ask }
       );
       if (decision.exit) {
         await exitTrade(opened.session, s, quote, decision.reason);
