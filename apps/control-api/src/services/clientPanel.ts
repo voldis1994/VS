@@ -8,10 +8,6 @@ import {
   robotIdFor,
 } from './robotDesk.js';
 import { emitToClient } from './clientEvents.js';
-import {
-  listAllMarketsForClient,
-  resolveMarketForClient,
-} from './capitalMarketsCatalog.js';
 import { formatTradeLabel } from './tradePresentation.js';
 import { currentRegime } from './regimes.js';
 import {
@@ -156,7 +152,24 @@ export async function resolveClientTradingAccount(clientId: number): Promise<{
 
 export async function listClientMarkets(clientId: number): Promise<ClientMarket[]> {
   const account = await resolveClientTradingAccount(clientId);
-  return listAllMarketsForClient(account?.connection_id ?? null);
+  if (!account) return [];
+  const { rows } = await pool.query(
+    `SELECT id, epic, symbol, display_name, category, min_lot, max_lot, lot_step
+     FROM capital_markets
+     WHERE broker_connection_id = $1
+     ORDER BY display_name ASC`,
+    [account.connection_id]
+  );
+  return rows.map((m) => ({
+    instrument_id: Number(m.id),
+    epic: String(m.epic),
+    symbol: String(m.symbol || m.epic),
+    display_name: String(m.display_name),
+    category: String(m.category || 'other'),
+    min_lot: Number(m.min_lot),
+    max_lot: Number(m.max_lot),
+    lot_step: Number(m.lot_step),
+  }));
 }
 
 async function loadMarketForClient(
@@ -165,17 +178,24 @@ async function loadMarketForClient(
 ): Promise<(ClientMarket & { connection_id: number; account_id: number }) | null> {
   const account = await resolveClientTradingAccount(clientId);
   if (!account) return null;
-  const m = await resolveMarketForClient(account.connection_id, epic);
-  if (!m) return null;
+  const { rows } = await pool.query(
+    `SELECT id, epic, symbol, display_name, category, min_lot, max_lot, lot_step
+     FROM capital_markets
+     WHERE broker_connection_id = $1 AND epic = $2
+     LIMIT 1`,
+    [account.connection_id, epic]
+  );
+  if (!rows.length) return null;
+  const m = rows[0];
   return {
-    instrument_id: m.instrument_id,
-    epic: m.epic,
-    symbol: m.symbol,
-    display_name: m.display_name,
-    category: m.category,
-    min_lot: m.min_lot,
-    max_lot: m.max_lot,
-    lot_step: m.lot_step,
+    instrument_id: Number(m.id),
+    epic: String(m.epic),
+    symbol: String(m.symbol || m.epic),
+    display_name: String(m.display_name),
+    category: String(m.category || 'other'),
+    min_lot: Number(m.min_lot),
+    max_lot: Number(m.max_lot),
+    lot_step: Number(m.lot_step),
     connection_id: account.connection_id,
     account_id: account.account_id,
   };
@@ -184,8 +204,8 @@ async function loadMarketForClient(
 function robotForAccount(accountId: number, epic?: string | null) {
   const all = listRobotSessions().filter((s) => s.account_id === accountId);
   if (epic) {
-    const want = epic.trim().toLowerCase();
-    return all.find((s) => s.epic.trim().toLowerCase() === want && s.running) || null;
+    const exact = all.find((s) => s.epic === epic && s.running);
+    if (exact) return exact;
   }
   return all.find((s) => s.running) || all[0] || null;
 }
@@ -369,20 +389,7 @@ export async function saveClientConfig(
  * Client START = this client's own desk brain (structure → setup → entry → best outcome).
  * Does NOT subscribe to shared Market Core fan-out — each client trades alone.
  */
-export async function startClientRobot(
-  clientId: number,
-  override?: { epic?: string; lot_size?: number }
-): Promise<ClientPanelStatus> {
-  if (override?.epic) {
-    const wanted = override.epic.trim();
-    const preview = await loadMarketForClient(clientId, wanted);
-    const lot =
-      override.lot_size != null && Number.isFinite(Number(override.lot_size))
-        ? Number(override.lot_size)
-        : preview?.min_lot ?? 0.1;
-    await saveClientConfig(clientId, { epic: wanted, lot_size: lot });
-  }
-
+export async function startClientRobot(clientId: number): Promise<ClientPanelStatus> {
   const { rows } = await pool.query(
     `SELECT panel_epic, panel_display_name, panel_lot_size, enabled, access_enabled
      FROM clients WHERE id = $1`,

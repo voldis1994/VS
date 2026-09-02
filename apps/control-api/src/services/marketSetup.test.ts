@@ -2,16 +2,13 @@ import { describe, expect, it } from 'vitest';
 import type { CapitalPriceCandle } from './capitalCom.js';
 import {
   buildStructure,
-  decideEntryFromImpulseCandle,
   decideEntryFromSetup,
   decideEntryFromTenSecMove,
   emptySetup,
-  isImpulseAgainstSide,
   priceFlowBias,
   recentImpulse,
   updateSetupSticky,
 } from './marketSetup.js';
-import { minSwingSpan } from './instrumentScale.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 
 function candle(o: number, h: number, l: number, c: number): CapitalPriceCandle {
@@ -92,29 +89,28 @@ describe('marketSetup', () => {
     expect(decideEntryFromSetup(emptySetup(), bar10(100, 101, 99, 100.5))).toBeNull();
   });
 
-  it('FADE BUY needs bounce at low — green tip bar without low touch is not an entry', () => {
-    const minutes: CapitalPriceCandle[] = [];
-    for (let i = 0; i < 28; i++) {
-      minutes.push(candle(4428, 4432, 4426, 4429));
-    }
-    minutes.push(candle(4429, 4433.8, 4428.5, 4433.2));
-    minutes.push(candle(4433, 4433.5, 4431.2, 4431.6));
-    const st = buildStructure({ minutes, mid: 4432.6 });
-    expect(st.ready).toBe(true);
+  it('never arms BUY at swing high — FADE SELL instead (no tip chase)', () => {
+    const minutes = rangeMinutes();
+    const nearHigh = buildStructure({ minutes, mid: 2009.2 });
+    expect(nearHigh.near_high).toBe(true);
+    let setup = emptySetup();
+    setup = updateSetupSticky(setup, nearHigh, minutes);
+    setup = updateSetupSticky(setup, nearHigh, minutes);
+    expect(setup.side).toBe('SELL');
+    expect(setup.kind === 'FADE' || setup.kind === 'FAILED_BREAK' || setup.kind === 'PULLBACK').toBe(
+      true
+    );
+    // FADE BUY at the tip must still be blocked; CONTINUATION may ride impulse through
     const tipFadeBuy = {
-      ...emptySetup(),
+      ...setup,
       kind: 'FADE' as const,
       side: 'BUY' as const,
-      playbook: 'FADE' as const,
       status: 'ARMED' as const,
-      confirm: 3,
-      swing_high: st.swing_high,
-      swing_low: st.swing_low,
+      playbook: 'FADE' as const,
+      swing_high: nearHigh.swing_high,
+      swing_low: nearHigh.swing_low,
     };
-    // No tip-chase gate — still null because FADE BUY requires touch of swing low
-    expect(
-      decideEntryFromSetup(tipFadeBuy, bar10(4433.2, 4433.9, 4432.8, 4433.6), minutes)
-    ).toBeNull();
+    expect(decideEntryFromSetup(tipFadeBuy, bar10(2009, 2009.5, 2008.8, 2009.3))).toBeNull();
   });
 
   it('does not FADE SELL mid-rally on a stale swing high (4434 while climb continues)', () => {
@@ -260,22 +256,6 @@ describe('marketSetup', () => {
     expect(setup.kind).not.toBe('NONE');
     expect(setup.side).toBe('SELL');
     expect(setup.status).toBe('ARMED');
-    expect(isImpulseAgainstSide('BUY', bars)).toBe(true);
-    expect(isImpulseAgainstSide('SELL', bars)).toBe(false);
-  });
-
-  it('MoveFlip signal is symmetric — SELL dies on UP impulse too', () => {
-    const bars: CapitalPriceCandle[] = [];
-    for (let i = 0; i < 22; i++) {
-      bars.push(candle(4420, 4422, 4418, 4420));
-    }
-    for (let i = 0; i < 6; i++) {
-      const o = 4420 + i * 1.3;
-      bars.push(candle(o, o + 1.6, o - 0.2, o + 1.3));
-    }
-    expect(recentImpulse(bars, 'flip') || recentImpulse(bars)).toBe('UP');
-    expect(isImpulseAgainstSide('SELL', bars)).toBe(true);
-    expect(isImpulseAgainstSide('BUY', bars)).toBe(false);
   });
 
   it('sharp V-leg impulse fires even when longer window nets near zero', () => {
@@ -299,26 +279,17 @@ describe('marketSetup', () => {
     const buy = decideEntryFromTenSecMove(st, buyBar, minutes);
     expect(buy?.direction).toBe('BUY');
     expect(buy?.setup).toBe('CONTINUATION');
-    // Dump minutes so SELL is not blocked by flow UP
-    const dump: CapitalPriceCandle[] = [...minutes];
-    for (let i = 0; i < 6; i++) {
-      const o = 2005 - i * 1.1;
-      dump.push(candle(o, o + 0.2, o - 1.3, o - 1.0));
-    }
-    const stDump = buildStructure({ minutes: dump, mid: dump.at(-1)!.close });
-    const sellBar = bar10(2003.5, 2003.6, 2001.8, 2002.0);
-    const sell = decideEntryFromTenSecMove(stDump, sellBar, dump);
+    const sellBar = bar10(2005.5, 2005.6, 2003.8, 2004.0);
+    const sell = decideEntryFromTenSecMove(st, sellBar, minutes);
     expect(sell?.direction).toBe('SELL');
   });
 
-  it('decideEntryFromTenSecMove may BUY near high when flow is not DOWN (MoveFlip corrects)', () => {
+  it('decideEntryFromTenSecMove refuses tip-chase BUY at swing high', () => {
     const minutes = rangeMinutes();
     const st = buildStructure({ minutes, mid: 2009.2 });
     expect(st.near_high).toBe(true);
     const tip = bar10(2008.8, 2009.6, 2008.7, 2009.4);
-    const entry = decideEntryFromTenSecMove(st, tip, minutes);
-    // Tip-chase removed — either BUY continuation or null from flow/bias, not tip gate
-    if (entry) expect(entry.direction).toBe('BUY');
+    expect(decideEntryFromTenSecMove(st, tip, minutes)).toBeNull();
   });
 
   it('never BUY into a dump — green 10s blip mid-dump is blocked', () => {
@@ -351,90 +322,5 @@ describe('marketSetup', () => {
     let setup = emptySetup();
     setup = updateSetupSticky(setup, st, bars);
     expect(setup.side).not.toBe('BUY');
-  });
-
-  it('EUR/USD flat compression does not ARM stuck FADE at H≈L', () => {
-    const minutes: CapitalPriceCandle[] = [];
-    for (let i = 0; i < 28; i++) {
-      minutes.push(candle(1.1599, 1.15995, 1.15985, 1.1599));
-    }
-    const st = buildStructure({ minutes, mid: 1.1599 });
-    expect(st.ready).toBe(true);
-    const span = st.swing_high - st.swing_low;
-    if (span < minSwingSpan(1.16)) {
-      let setup = emptySetup();
-      setup = updateSetupSticky(setup, st, minutes);
-      expect(setup.kind).not.toBe('FADE');
-    }
-  });
-
-  it('decideEntryFromTenSecMove trades EUR/USD when swing span is tiny', () => {
-    const minutes: CapitalPriceCandle[] = [];
-    for (let i = 0; i < 28; i++) {
-      minutes.push(candle(1.1598, 1.16, 1.1596, 1.1599));
-    }
-    const st = buildStructure({ minutes, mid: 1.1599 });
-    const moveBar = bar10(1.1598, 1.1603, 1.1597, 1.1602);
-    expect(decideEntryFromTenSecMove(st, moveBar, minutes)?.direction).toBe('BUY');
-  });
-
-  it('decideEntryFromImpulseCandle SELLs on red candle when flow is DOWN', () => {
-    const bars: CapitalPriceCandle[] = [];
-    for (let i = 0; i < 22; i++) bars.push(candle(4318, 4320, 4316, 4318));
-    for (let i = 0; i < 6; i++) {
-      const o = 4316 - i * 1.5;
-      bars.push(candle(o, o + 0.3, o - 1.8, o - 1.4));
-    }
-    expect(priceFlowBias(bars) || recentImpulse(bars)).toBe('DOWN');
-    const red = bar10(4310.5, 4310.6, 4308.2, 4308.5);
-    const entry = decideEntryFromImpulseCandle(red, bars);
-    expect(entry?.direction).toBe('SELL');
-    expect(entry?.setup).toBe('CONTINUATION');
-  });
-
-  it('decideEntryFromImpulseCandle BUYs on green candle when flow is UP', () => {
-    const bars: CapitalPriceCandle[] = [];
-    for (let i = 0; i < 22; i++) bars.push(candle(4305, 4307, 4303, 4305));
-    for (let i = 0; i < 6; i++) {
-      const o = 4306 + i * 1.5;
-      bars.push(candle(o, o + 1.8, o - 0.3, o + 1.4));
-    }
-    expect(priceFlowBias(bars) || recentImpulse(bars)).toBe('UP');
-    const green = bar10(4312.0, 4314.2, 4311.8, 4313.8);
-    const entry = decideEntryFromImpulseCandle(green, bars);
-    expect(entry?.direction).toBe('BUY');
-  });
-
-  it('decideEntryFromImpulseCandle refuses wrong-color candle against flow', () => {
-    const bars: CapitalPriceCandle[] = [];
-    for (let i = 0; i < 22; i++) bars.push(candle(4318, 4320, 4316, 4318));
-    for (let i = 0; i < 6; i++) {
-      const o = 4316 - i * 1.5;
-      bars.push(candle(o, o + 0.3, o - 1.8, o - 1.4));
-    }
-    const greenBlip = bar10(4308.0, 4309.5, 4307.8, 4309.2);
-    expect(decideEntryFromImpulseCandle(greenBlip, bars)).toBeNull();
-  });
-
-  it('CONTINUATION FORMING still enters when candle confirms', () => {
-    const setup = {
-      ...emptySetup(),
-      kind: 'CONTINUATION' as const,
-      side: 'SELL' as const,
-      playbook: 'LONG' as const,
-      status: 'FORMING' as const,
-      confirm: 1,
-      swing_high: 4318,
-      swing_low: 4305,
-      reason: 'IMPULSE DOWN → SELL flip now',
-    };
-    const dump: CapitalPriceCandle[] = [];
-    for (let i = 0; i < 22; i++) dump.push(candle(4318, 4320, 4316, 4318));
-    for (let i = 0; i < 6; i++) {
-      const o = 4316 - i * 1.5;
-      dump.push(candle(o, o + 0.3, o - 1.8, o - 1.4));
-    }
-    const red = bar10(4310.5, 4310.6, 4308.2, 4308.5);
-    expect(decideEntryFromSetup(setup, red, dump)?.direction).toBe('SELL');
   });
 });
