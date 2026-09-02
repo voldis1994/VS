@@ -36,7 +36,6 @@ import {
   emptyStructure,
   flowAgreesWithSide,
   liveFlow,
-  marketTrend,
   minuteConfirmBar,
   playbookFromSetup,
   setupCatalog,
@@ -192,6 +191,11 @@ type Internal = RobotSession & {
   cycle_busy: boolean;
   /** Block double Capital order while entry awaits broker */
   entry_inflight: boolean;
+  /**
+   * 1m system clock: floor(Date.now()/60s) when we last exited (or 0 = free).
+   * New impulse/NONE entries only on a later 1m bucket — not tick flip spam.
+   */
+  entry_minute_bucket: number;
 };
 
 const STRUCTURE_REFRESH_MS = 10_000;
@@ -285,6 +289,7 @@ function publicSession(s: Internal): RobotSession {
     last_hard_exit_ms: _hardExit,
     cycle_busy: _cycleBusy,
     entry_inflight: _entryInflight,
+    entry_minute_bucket: _entryMinuteBucket,
     ...rest
   } = s;
   const st = s.structureBook;
@@ -476,6 +481,8 @@ function clearTradeState(s: Internal) {
   s.playbook = null;
   s.entry_setup = null;
   s.mode = 'FLAT';
+  // Next impulse/NONE entry waits for the following 1m clock bucket
+  s.entry_minute_bucket = Math.floor(Date.now() / 60_000);
 }
 
 /**
@@ -1449,20 +1456,6 @@ async function robotCycleBody(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // Micro-swing: one 1m settle after close — no instant SELL→BUY flip spam
-    const POST_EXIT_SETTLE_MS = 60_000;
-    const sinceClose = Date.now() - (s.closed_at_ms || 0);
-    if (s.closed_at_ms > 0 && sinceClose < POST_EXIT_SETTLE_MS) {
-      pushTick(s, {
-        phase: 'INFO',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `1m settle ${Math.ceil((POST_EXIT_SETTLE_MS - sinceClose) / 1000)}s after close · no instant flip`,
-      });
-      return;
-    }
-
     if (quote.mid == null) return;
 
     // Seed SECOND→10s when multi-feed does not own OHLC
@@ -1538,26 +1531,36 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    // 1) Live market impulse (1m flow) → entry NOW
-    let entry = decideEntryFromImpulseCandle(bar, s.last_minute_candles);
+    // 1m system: impulse/NONE only on a new minute after exit — not every 500ms tick
+    const minuteBucket = Math.floor(Date.now() / 60_000);
+    const newMinute =
+      !s.entry_minute_bucket || minuteBucket > s.entry_minute_bucket;
 
-    // 2) Armed setup: live price through level / 1m flow confirm
+    // 1) Live market impulse (1m flow) — only on new 1m bar
+    let entry = newMinute
+      ? decideEntryFromImpulseCandle(bar, s.last_minute_candles)
+      : null;
+
+    // 2) Armed setup: BREAKOUT through level can fire live; else wait new 1m
     if (!entry && setup.kind !== 'NONE' && setup.status === 'ARMED') {
-      entry = decideEntryFromSetup(setup, bar, s.last_minute_candles, livePx);
+      if (setup.kind === 'BREAKOUT' || newMinute) {
+        entry = decideEntryFromSetup(setup, bar, s.last_minute_candles, livePx);
+      }
     }
 
-    // 3) Mid-swing NONE — trade the 1m move
-    if (!entry && (setup.kind === 'NONE' || setup.status === 'NONE')) {
+    // 3) Mid-swing NONE — only on new 1m
+    if (!entry && newMinute && (setup.kind === 'NONE' || setup.status === 'NONE')) {
       entry = decideEntryFromTenSecMove(st, bar, s.last_minute_candles);
     }
 
-    if (!entry && setup.status === 'ARMED') {
+    if (!entry && newMinute && setup.status === 'ARMED') {
       entry = decideEntryFromTenSecMove(st, bar, s.last_minute_candles);
     }
 
     if (!entry) {
-      const waitNote =
-        setup.kind === 'NONE' || setup.status === 'NONE'
+      const waitNote = !newMinute
+        ? `1m system · wait next minute bar · ${setup.kind}/${setup.status}`
+        : setup.kind === 'NONE' || setup.status === 'NONE'
           ? `NONE · ${setup.reason}`
           : setup.status === 'FORMING'
             ? `FORMING · ${setup.reason}`
@@ -1585,25 +1588,6 @@ async function robotCycleBody(s: Internal) {
           ask: quote.ask,
           mid: quote.mid,
           detail: `${ohlcLine} · same-side dead ${s.last_exit_side} until flip (flow ${flow || '—'}) · no spam re-entry`,
-        });
-        return;
-      }
-    }
-
-    // Opposite flip after exit: market must own the new side (not bounce blip)
-    if (s.last_exit_side && entry.direction !== s.last_exit_side) {
-      const trend = marketTrend(s.last_minute_candles);
-      const flow = liveFlow(s.last_minute_candles);
-      const against =
-        (entry.direction === 'BUY' && (trend === 'DOWN' || flow === 'DOWN')) ||
-        (entry.direction === 'SELL' && (trend === 'UP' || flow === 'UP'));
-      if (against || !flow) {
-        pushTick(s, {
-          phase: 'INFO',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `${ohlcLine} · no instant flip to ${entry.direction} · trend ${trend || '—'} flow ${flow || '—'}`,
         });
         return;
       }
@@ -1792,6 +1776,7 @@ export async function startRobotSession(input: {
     last_hard_exit_ms: 0,
     cycle_busy: false,
     entry_inflight: false,
+    entry_minute_bucket: 0,
 
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };

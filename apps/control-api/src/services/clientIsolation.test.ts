@@ -44,11 +44,12 @@ describe('multi-client isolation invariants', () => {
     expect(src).toMatch(/async function robotCycleBody/);
   });
 
-  it('micro-swing waits 1m after close — no instant SELL→BUY flip', () => {
+  it('1m system waits next minute bar after exit — not settle/flip filter stack', () => {
     const src = readFileSync(fileURLToPath(new URL('./robotDesk.ts', import.meta.url)), 'utf8');
-    expect(src).toMatch(/POST_EXIT_SETTLE_MS = 60_000/);
-    expect(src).toMatch(/no instant flip/);
-    expect(src).toMatch(/no instant flip to/);
+    expect(src).toMatch(/entry_minute_bucket/);
+    expect(src).toMatch(/wait next minute bar/);
+    expect(src).not.toMatch(/POST_EXIT_SETTLE_MS/);
+    expect(src).not.toMatch(/no instant flip to/);
   });
 
   it('fanout refuses entry when position list fails or another market is open', () => {
