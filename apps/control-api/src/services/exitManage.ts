@@ -28,6 +28,8 @@ export type ExitSnapshot = {
   playbook?: Playbook | null;
   /** Locked setup kind at entry — CONTINUATION/PULLBACK/FADE tune hold vs scalp */
   entry_setup?: string | null;
+  /** Live 1m flow — preferred thesis for legs (not flickering 10s regime) */
+  flow_bias?: 'UP' | 'DOWN' | null;
 };
 
 /** @deprecated use playbook thesisMinHold — kept for tests importing name */
@@ -148,7 +150,19 @@ export function decideBestOutcomeExit(
     };
   }
 
-  const thesis = thesisFailureForPlaybook(s.open_side, s.regime, book);
+  const thesis = (() => {
+    // Micro-swing legs: thesis from 1m flow against the trade — not diagnostic 10s regime flips
+    if (legRide && s.flow_bias) {
+      if (s.open_side === 'BUY' && s.flow_bias === 'DOWN') {
+        return `ThesisFailure · leg BUY vs 1m flow DOWN`;
+      }
+      if (s.open_side === 'SELL' && s.flow_bias === 'UP') {
+        return `ThesisFailure · leg SELL vs 1m flow UP`;
+      }
+      return null;
+    }
+    return thesisFailureForPlaybook(s.open_side, s.regime, book);
+  })();
   if (thesis && heldMs >= p.thesisMinHoldMs) {
     return { exit: true, reason: `${thesis} · ${book} · ${s.entry_setup || 'setup?'}` };
   }

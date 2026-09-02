@@ -5,6 +5,7 @@ import {
   decideEntryFromImpulseCandle,
   decideEntryFromSetup,
   decideEntryFromTenSecMove,
+  decideUnifiedEntry,
   emptySetup,
   flowAgreesWithSide,
   liveFlow,
@@ -15,6 +16,8 @@ import {
   priceFlowBias,
   recentImpulse,
   updateSetupSticky,
+  type MarketSetup,
+  type StructureBook,
 } from './marketSetup.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 
@@ -529,5 +532,126 @@ describe('marketSetup', () => {
     // First dump leg — large red body, still mid move (not stalled at floor)
     bars.push(candle(4343.8, 4344.0, 4339.2, 4339.5));
     expect(moveAlreadyFinished('SELL', bars, 4339.5)).toBe(false);
+  });
+});
+
+describe('decideUnifiedEntry', () => {
+  function readyStructure(bias: StructureBook['bias'] = 'INSIDE'): StructureBook {
+    return {
+      ready: true,
+      swing_high: 2010,
+      swing_low: 2000,
+      mid: 2005,
+      span: 10,
+      bias,
+      near_high: false,
+      near_low: false,
+      hour_bias: 'FLAT',
+      bar_count: 30,
+      detail: 'test',
+      updated_at: new Date().toISOString(),
+    };
+  }
+
+  function armedFadeBuy(): MarketSetup {
+    return {
+      kind: 'FADE',
+      side: 'BUY',
+      playbook: 'FADE',
+      status: 'ARMED',
+      swing_high: 2010,
+      swing_low: 2000,
+      reason: 'FADE BUY test',
+      confirm: 2,
+      updated_at: new Date().toISOString(),
+    };
+  }
+
+  it('does not let DOWN impulse override ARMED FADE BUY', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 20; i++) bars.push(candle(2005, 2006, 2004, 2005));
+    bars.push(candle(2005, 2005.2, 1998, 1998.5)); // dump impulse
+    const bar = bar10(2000, 2000.5, 1998, 1998.5);
+    const entry = decideUnifiedEntry({
+      setup: armedFadeBuy(),
+      structure: readyStructure('BELOW'),
+      bar,
+      minutes: bars,
+      livePx: 1998.5,
+    });
+    // Must not open SELL CONTINUATION against sticky FADE BUY
+    expect(entry?.direction).not.toBe('SELL');
+  });
+
+  it('ARMED setup path still allows FADE BUY bounce', () => {
+    const mins = rangeMinutes();
+    mins.push(candle(2004, 2005, 2000.2, 2000.8));
+    mins.push(candle(2000.8, 2002.5, 2000.3, 2002.2)); // reclaim
+    const setup = armedFadeBuy();
+    const bar = bar10(2000.8, 2002.5, 2000.3, 2002.2);
+    const entry = decideUnifiedEntry({
+      setup,
+      structure: readyStructure('INSIDE'),
+      bar,
+      minutes: mins,
+      livePx: 2002.2,
+    });
+    if (entry) {
+      expect(entry.direction).toBe('BUY');
+      expect(entry.setup).toMatch(/FADE|FAILED/);
+    }
+  });
+
+  it('NONE can still catch filtered impulse (profitable move path)', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 18; i++) bars.push(candle(2005, 2006, 2004, 2005));
+    bars.push(candle(2005, 2012, 2004.5, 2011.5));
+    bars.push(candle(2011.5, 2014, 2011, 2013.5)); // UP still printing
+    const bar = bar10(2011.5, 2014, 2011, 2013.5);
+    const entry = decideUnifiedEntry({
+      setup: emptySetup(),
+      structure: readyStructure('ABOVE'),
+      bar,
+      minutes: bars,
+      livePx: 2013.5,
+      allowNoneImpulse: true,
+    });
+    expect(entry?.direction).toBe('BUY');
+  });
+
+  it('allowNoneImpulse false blocks NONE entries', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 18; i++) bars.push(candle(2005, 2006, 2004, 2005));
+    bars.push(candle(2005, 2012, 2004.5, 2011.5));
+    bars.push(candle(2011.5, 2014, 2011, 2013.5));
+    const bar = bar10(2011.5, 2014, 2011, 2013.5);
+    expect(
+      decideUnifiedEntry({
+        setup: emptySetup(),
+        structure: readyStructure('ABOVE'),
+        bar,
+        minutes: bars,
+        allowNoneImpulse: false,
+      })
+    ).toBeNull();
+  });
+
+  it('PULLBACK requires pull-zone touch, not any bar under high', () => {
+    const setup: MarketSetup = {
+      kind: 'PULLBACK',
+      side: 'BUY',
+      playbook: 'LONG',
+      status: 'ARMED',
+      swing_high: 2010,
+      swing_low: 2000,
+      reason: 'PULLBACK test',
+      confirm: 2,
+      updated_at: new Date().toISOString(),
+    };
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 20; i++) bars.push(candle(2008, 2009, 2007, 2008.5));
+    bars.push(candle(2008.5, 2009.5, 2008, 2009.2)); // near high, UP — not a pullback
+    const tipBar = bar10(2008.5, 2009.5, 2008.2, 2009.2);
+    expect(decideEntryFromSetup(setup, tipBar, bars, 2009.2)).toBeNull();
   });
 });

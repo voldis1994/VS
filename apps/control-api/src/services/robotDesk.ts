@@ -29,9 +29,7 @@ import {
 } from './playbooks.js';
 import {
   buildStructure,
-  decideEntryFromImpulseCandle,
-  decideEntryFromSetup,
-  decideEntryFromTenSecMove,
+  decideUnifiedEntry,
   emptySetup,
   emptyStructure,
   flowAgreesWithSide,
@@ -302,9 +300,10 @@ function publicSession(s: Internal): RobotSession {
     feed_sender_count: s.multiFeed?.sender_count ?? rest.feed_sender_count ?? 0,
     feed_agreement: s.multiFeed?.agreement ?? rest.feed_agreement ?? null,
     feed_legs: s.multiFeed?.legs ?? rest.feed_legs ?? [],
+    // "zones" key kept for API compat — values are swing STRUCTURE, not setup kind
     zones: {
       ready: st.ready,
-      structure: setup.kind === 'NONE' ? 'NONE' : setup.kind,
+      structure: st.ready ? st.bias : 'SEEDING',
       high: st.swing_high,
       low: st.swing_low,
       bias: st.bias,
@@ -428,9 +427,10 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     active_regimes: activeSetups,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
+    chain:
+      'Capital 1h+1m → STRUCTURE(swing) → SETUP(sticky ARMED) → ENTRY(1m confirm) → BEST OUTCOME · SAFETY SL required',
     note:
-      'Setup-first: NONE only when quiet. CONTINUATION/PULLBACK/FADE bounce rides rally (tp≥3–4pt, not +£0.07 scalp). Entry on closed 10s confirm.',
+      'Unified brain: ARMED setup owns entries; NONE only trades filtered 1m impulse/through-level; never open without broker SL; legs ride tp≥5pt.',
   };
 }
 
@@ -1018,31 +1018,15 @@ async function enterTrade(
     }
   }
 
+  // Hard safety: never open a live position without broker SAFETY SL
   if (!result?.ok) {
-    pushTick(s, {
-      phase: 'WAIT',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `Safety SL not accepted — entry without SL (${result?.detail || 'unknown'})`,
-    });
-    result = await createCapitalPosition(session, {
-      epic: s.epic,
-      direction,
-      size: s.lot_size,
-    });
-    stopLevel = null;
-    usedStopDistance = null;
-  }
-
-  if (!result.ok) {
-    s.error = result.detail;
+    s.error = result?.detail || 'Safety SL not accepted';
     pushTick(s, {
       phase: 'ERROR',
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `ORDER FAIL ${direction}: ${result.detail}`,
+      detail: `ORDER BLOCKED ${direction}: Safety SL required — refused naked entry (${result?.detail || 'unknown'})`,
     });
     return;
   }
@@ -1400,11 +1384,17 @@ async function robotCycleBody(s: Internal) {
         Date.now() - s.last_structure_fetch_ms >= 2_000
       );
 
-      const decision = decideBestOutcomeExit(s, {
-        mid: quote.mid,
-        bid: quote.bid,
-        ask: quote.ask,
-      });
+      const decision = decideBestOutcomeExit(
+        {
+          ...s,
+          flow_bias: liveFlow(s.last_minute_candles),
+        },
+        {
+          mid: quote.mid,
+          bid: quote.bid,
+          ask: quote.ask,
+        }
+      );
       if (decision.exit) {
         const softExit = /PeakProtection|ProfitGiveback|BestOutcome harvest|TimeDecay|^Target/i.test(
           decision.reason
@@ -1531,34 +1521,27 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    // 1m system: impulse/NONE only on a new minute after exit — not every 500ms tick
+    // 1m system: unified entry on new minute; BREAKOUT ARMED may fire live through level
     const minuteBucket = Math.floor(Date.now() / 60_000);
     const newMinute =
       !s.entry_minute_bucket || minuteBucket > s.entry_minute_bucket;
+    const liveBreakout =
+      setup.status === 'ARMED' && setup.kind === 'BREAKOUT';
 
-    // 1) Live market impulse (1m flow) — only on new 1m bar
-    let entry = newMinute
-      ? decideEntryFromImpulseCandle(bar, s.last_minute_candles)
-      : null;
-
-    // 2) Armed setup: BREAKOUT through level can fire live; else wait new 1m
-    if (!entry && setup.kind !== 'NONE' && setup.status === 'ARMED') {
-      if (setup.kind === 'BREAKOUT' || newMinute) {
-        entry = decideEntryFromSetup(setup, bar, s.last_minute_candles, livePx);
-      }
-    }
-
-    // 3) Mid-swing NONE — only on new 1m
-    if (!entry && newMinute && (setup.kind === 'NONE' || setup.status === 'NONE')) {
-      entry = decideEntryFromTenSecMove(st, bar, s.last_minute_candles);
-    }
-
-    if (!entry && newMinute && setup.status === 'ARMED') {
-      entry = decideEntryFromTenSecMove(st, bar, s.last_minute_candles);
-    }
+    let entry =
+      newMinute || liveBreakout
+        ? decideUnifiedEntry({
+            setup,
+            structure: st,
+            bar,
+            minutes: s.last_minute_candles,
+            livePx,
+            allowNoneImpulse: true,
+          })
+        : null;
 
     if (!entry) {
-      const waitNote = !newMinute
+      const waitNote = !newMinute && !liveBreakout
         ? `1m system · wait next minute bar · ${setup.kind}/${setup.status}`
         : setup.kind === 'NONE' || setup.status === 'NONE'
           ? `NONE · ${setup.reason}`

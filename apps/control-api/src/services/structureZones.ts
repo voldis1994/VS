@@ -1,4 +1,7 @@
 /**
+ * LEGACY / NOT LIVE — Robot Desk uses marketSetup.buildStructure (not this zone book).
+ * Kept for entryFromRegime tests only. Do not rewire into robotDesk.
+ *
  * Real market zones from Capital minute history.
  * Order: zones → confirm regime → entry (never entry before structure is ready).
  */
