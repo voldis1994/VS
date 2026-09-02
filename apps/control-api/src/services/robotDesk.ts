@@ -187,13 +187,16 @@ type Internal = RobotSession & {
   last_soft_exit_side: 'BUY' | 'SELL' | null;
 };
 
-const STRUCTURE_REFRESH_MS = 10_000;
+const STRUCTURE_REFRESH_MS = 5_000;
 const STRUCTURE_MINUTE_BARS = 120;
 const STRUCTURE_HOUR_BARS = 24;
 
-const ACTIVE_CADENCE_MS = 2_000;
+/** Live desk loop — quote / manage exit / OHLC seed. Was 2s; faster for exit + flip. */
+const ACTIVE_CADENCE_MS = 500;
 const CLOSED_MARKET_CADENCE_MS = 90_000;
 const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
+const MULTI_FEED_REFRESH_MS = 1_500;
+const SECOND_OHLC_FETCH_MS = 2_000;
 
 function marketAllowsTrading(status: string | null | undefined): boolean {
   const s = String(status || '')
@@ -380,7 +383,7 @@ async function refreshStructureAndSetup(
     mid,
     prev: s.structureBook.ready ? s.structureBook : null,
   });
-  // Setup sticky update only here (structure cadence) — not every 2s quote
+  // Setup sticky update only here (structure cadence) — not every quote tick
   if (!s.open_side) {
     s.marketSetup = updateSetupSticky(s.marketSetup, s.structureBook, hist.candles);
     const pb = playbookFromSetup(s.marketSetup);
@@ -1184,7 +1187,7 @@ async function robotCycle(s: Internal) {
     s.last_mid = quote.mid;
 
     // Multi-provider read (Capital + public near Capital). Throttle to protect Capital API.
-    if (Date.now() - s.last_multi_feed_ms >= 4_000) {
+    if (Date.now() - s.last_multi_feed_ms >= MULTI_FEED_REFRESH_MS) {
       s.last_multi_feed_ms = Date.now();
       try {
         s.multiFeed = await readMultiFeedPrice(s.epic, {
@@ -1341,7 +1344,7 @@ async function robotCycle(s: Internal) {
     if (quote.mid == null) return;
 
     // Seed SECOND→10s when multi-feed does not own OHLC
-    if (!multiFeedOwnsOhlc(s.multiFeed) && Date.now() - s.last_second_fetch_ms >= 8_000) {
+    if (!multiFeedOwnsOhlc(s.multiFeed) && Date.now() - s.last_second_fetch_ms >= SECOND_OHLC_FETCH_MS) {
       s.last_second_fetch_ms = Date.now();
       const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 40);
       if (sec.ok && sec.candles.length >= 10) {
