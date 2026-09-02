@@ -173,7 +173,7 @@ describe('playbook exit', () => {
     expect(aged.reason).toMatch(/LONG/);
   });
 
-  it('SCALP PeakProtect at ret < 55%, LONG at < 40%', () => {
+  it('SCALP PeakProtect at ret < 65%, LONG holds above 70%', () => {
     const scalp = decideBestOutcomeExit(
       {
         open_side: 'BUY',
@@ -197,13 +197,31 @@ describe('playbook exit', () => {
         entry_at: ago(60_000),
         mfe: 5,
         mae: 0,
-        peak_retention: 0.6,
+        peak_retention: 0.75,
         regime: 'TREND_UP',
         playbook: 'LONG',
       },
-      2003
+      2003.75
     );
     expect(longHold.exit).toBe(false);
+  });
+
+  it('LONG harvests after ~30% giveback (ret < 70%)', () => {
+    const d = decideBestOutcomeExit(
+      {
+        open_side: 'BUY',
+        entry_price: 2000,
+        entry_at: ago(60_000),
+        mfe: 5,
+        mae: 0,
+        peak_retention: 0.62,
+        regime: 'TREND_UP',
+        playbook: 'LONG',
+      },
+      2003.1
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/harvest|PeakProtection/i);
   });
 
   it('FADE TimeDecay at 4 min when non-negative', () => {
@@ -224,8 +242,11 @@ describe('playbook exit', () => {
     expect(d.reason).toMatch(/TimeDecay/);
   });
 
-  it('exit params match the drawing', () => {
-    expect(PLAYBOOK_EXIT.LONG.peakRet).toBe(0.4);
+  it('exit params keep win — max ~45% MFE giveback', () => {
+    expect(PLAYBOOK_EXIT.LONG.peakRet).toBe(0.55);
+    expect(PLAYBOOK_EXIT.LONG.harvestRet).toBe(0.7);
+    expect(PLAYBOOK_EXIT.SCALP.peakRet).toBe(0.65);
+    expect(PLAYBOOK_EXIT.FADE.peakRet).toBe(0.6);
     expect(PLAYBOOK_EXIT.LONG.thesisMinHoldMs).toBe(120_000);
     expect(PLAYBOOK_EXIT.SCALP.tpPct).toBe(0.0022);
     expect(PLAYBOOK_EXIT.FADE.timeDecayMs).toBe(240_000);

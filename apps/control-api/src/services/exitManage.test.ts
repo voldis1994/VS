@@ -54,16 +54,16 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     expect(d.reason).toMatch(/HardInvalidation/);
   });
 
-  it('LONG peak protect below 40% retention', () => {
+  it('LONG peak protect below 55% retention', () => {
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: 2000,
         mfe: 8,
-        peak_retention: 0.3,
+        peak_retention: 0.45,
         playbook: 'LONG',
       }),
-      2002.4
+      2003.6
     );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/PeakProtection/);
