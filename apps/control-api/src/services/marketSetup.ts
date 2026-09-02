@@ -363,12 +363,18 @@ export function marketTrend(
 /**
  * Dump / rally bias including slow grinds (small red candles) that miss impulse persistence.
  * Used to hard-block BUY into dump / SELL into rally.
- * Longer marketTrend wins over a short bounce/retracement impulse.
+ * Longer marketTrend wins over a short bounce/retracement impulse —
+ * EXCEPT a clear V-flip at a fresh extreme (2–3 agreeing 1m bars still printing).
  */
 export function priceFlowBias(
   minutes: CapitalPriceCandle[] | null | undefined
 ): 'UP' | 'DOWN' | null {
   if (!minutes || minutes.length < 4) return null;
+
+  // Flip-first at fresh swing extreme — do not late-SELL into BUY leg (Gold 19:45 class)
+  const flipExtreme = flowFlipAtExtreme(minutes);
+  if (flipExtreme) return flipExtreme;
+
   const trend = marketTrend(minutes);
   const imp = recentImpulse(minutes, 'flip') || recentImpulse(minutes);
   // Bounce mid-dump / dip mid-rally — market owns direction, not the 2–3m blip
@@ -392,6 +398,72 @@ export function priceFlowBias(
   // Lower-high grind: last close below open of window start by thr even if mixed
   if (net <= -thr * 1.25) return 'DOWN';
   if (net >= thr * 1.25) return 'UP';
+  return null;
+}
+
+/**
+ * Clear V-reversal at a fresh local high/low — short reclaim beats sticky 20m trend.
+ * Gold 19:45 class: dump to fresh low then 2–3 green 1m still printing → UP (block late SELL).
+ * Mid-dump bounce tips that stall (last bar against the bounce) stay null.
+ */
+export function flowFlipAtExtreme(
+  minutes: CapitalPriceCandle[] | null | undefined
+): 'UP' | 'DOWN' | null {
+  if (!minutes || minutes.length < 8) return null;
+  const window = minutes.slice(-20);
+  const last = window[window.length - 1]!;
+  const hi = Math.max(...window.map((c) => c.high));
+  const lo = Math.min(...window.map((c) => c.low));
+  const span = hi - lo;
+  const minSpan = Math.max(Math.abs(last.close) * 0.0005, 2.0);
+  if (span < minSpan) return null;
+
+  const trend = marketTrend(minutes);
+  const eps = edgeEps(last.close, span);
+  const recent = minutes.slice(-4);
+  const printedLow = recent.some((c) => c.low <= lo + eps * 0.35);
+  const printedHigh = recent.some((c) => c.high >= hi - eps * 0.35);
+  const last3 = minutes.slice(-3);
+  if (last3.length < 2) return null;
+
+  const greens = last3.filter((c) => c.close > c.open).length;
+  const reds = last3.filter((c) => c.close < c.open).length;
+  const net3 = last.close - last3[0]!.open;
+  // Lighter than recentImpulse — real Gold V-legs are often ~1–2pt over 2–3m
+  const netThr = Math.max(Math.abs(last.close) * 0.00022, 0.9);
+
+  // Dump → reclaim UP off fresh low (must still be printing green)
+  if (
+    trend === 'DOWN' &&
+    printedLow &&
+    greens >= 2 &&
+    net3 >= netThr &&
+    moveStillPrinting('UP', minutes) &&
+    last.close >= lo + span * 0.12
+  ) {
+    return 'UP';
+  }
+
+  // Rally → reject DOWN off fresh high
+  if (
+    trend === 'UP' &&
+    printedHigh &&
+    reds >= 2 &&
+    net3 <= -netThr &&
+    moveStillPrinting('DOWN', minutes) &&
+    last.close <= hi - span * 0.12
+  ) {
+    return 'DOWN';
+  }
+
+  // Stronger impulse flip (when it fires) with same extreme+printing guards
+  const flip = recentImpulse(minutes, 'flip');
+  if (flip === 'UP' && printedLow && moveStillPrinting('UP', minutes) && greens >= 2) {
+    if (last.close >= lo + span * 0.12) return 'UP';
+  }
+  if (flip === 'DOWN' && printedHigh && moveStillPrinting('DOWN', minutes) && reds >= 2) {
+    if (last.close <= hi - span * 0.12) return 'DOWN';
+  }
   return null;
 }
 
@@ -555,11 +627,10 @@ function rawSetupFromStructure(
   // ——— IMPULSE FIRST — real extension only (not bounce mid-dump / late under high) ———
   if (imp === 'UP') {
     const flow = priceFlowBias(minutes);
-    const trend = marketTrend(minutes);
     const span = Math.max(hi - lo, structure.span, 1);
     const fromHi = hi - last.close;
-    // Bounce tip mid-dump — market still DOWN even if last 2–3m look UP
-    const bounceInDump = trend === 'DOWN' || flow === 'DOWN';
+    // Bounce tip mid-dump — trust flow (flip-first), not sticky 20m trend alone
+    const bounceInDump = flow === 'DOWN';
     // Not through high and already gave back from swing high — UP move finished
     const lateUnderHigh =
       !closedAbove &&
@@ -590,10 +661,9 @@ function rawSetupFromStructure(
   }
   if (imp === 'DOWN') {
     const flow = priceFlowBias(minutes);
-    const trend = marketTrend(minutes);
     const span = Math.max(hi - lo, structure.span, 1);
     const fromLo = last.close - lo;
-    const bounceInRally = trend === 'UP' || flow === 'UP';
+    const bounceInRally = flow === 'UP';
     const lateAboveFloor =
       !closedBelow &&
       last.close > lo + eps * 0.5 &&
@@ -989,9 +1059,10 @@ export function decideEntryFromSetup(
   const eps = edgeEps(px, Math.max(hi - lo, 1));
   const flow = priceFlowBias(minutes);
 
-  // Hard: never BUY into a dump / SELL into a rally (green blip mid-dump class)
-  if (setup.side === 'BUY' && (flow === 'DOWN' || marketTrend(minutes) === 'DOWN')) return null;
-  if (setup.side === 'SELL' && (flow === 'UP' || marketTrend(minutes) === 'UP')) return null;
+  // Hard: never BUY into a dump / SELL into a rally (green blip mid-dump class).
+  // Direction = priceFlowBias (flip-first at extremes) — not raw 20m marketTrend alone.
+  if (setup.side === 'BUY' && flow === 'DOWN') return null;
+  if (setup.side === 'SELL' && flow === 'UP') return null;
 
   if (isTipChaseEntry(setup, { ...bar, close: px })) {
     return null;
@@ -1118,10 +1189,15 @@ export function decideEntryFromImpulseCandle(
   const short = recentImpulse(mins, 'flip') || recentImpulse(mins);
   const flow = liveFlow(mins);
   if (!flow) return null;
-  // Bounce/dip against market — do not BUY the tip or SELL the bounce; wait for tape to resolve
-  if (trend && short && trend !== short) return null;
-  if (trend === 'DOWN' && flow === 'UP') return null;
-  if (trend === 'UP' && flow === 'DOWN') return null;
+  // Bounce/dip against market — block unless clear V-flip at fresh extreme already owns flow
+  const flipped = flowFlipAtExtreme(mins);
+  if (!flipped) {
+    if (trend && short && trend !== short) return null;
+    if (trend === 'DOWN' && flow === 'UP') return null;
+    if (trend === 'UP' && flow === 'DOWN') return null;
+  } else if (flipped !== flow) {
+    return null;
+  }
   // Signal finished — last 1m already turned against the move
   if (!moveStillPrinting(flow, mins)) return null;
   const direction: 'BUY' | 'SELL' = flow === 'UP' ? 'BUY' : 'SELL';
@@ -1164,7 +1240,6 @@ export function decideEntryFromTenSecMove(
   const need = thr * 0.55;
   const flow = priceFlowBias(minutes);
   const live = liveFlow(minutes);
-  const trend = marketTrend(minutes);
   // Move already finished on the last 1m — late entry, skip
   if (live && !moveStillPrinting(live, minutes)) return null;
 
@@ -1173,7 +1248,8 @@ export function decideEntryFromTenSecMove(
   const throughLow = bar.close < lo - eps * 0.05;
 
   if (body >= need || throughHigh) {
-    if (flow === 'DOWN' || trend === 'DOWN' || structure.bias === 'BELOW') return null;
+    // flow owns direction (incl. V-flip); do not also require bias away from BELOW
+    if (flow === 'DOWN' || (structure.bias === 'BELOW' && flow !== 'UP')) return null;
     if (moveAlreadyFinished('BUY', minutes, bar.close)) return null;
     // Tip-chase: parked at swing high without clear break — skip
     if (!throughHigh && bar.close >= hi - eps * 0.3 && bar.close <= hi + eps * 0.15) return null;
@@ -1185,7 +1261,7 @@ export function decideEntryFromTenSecMove(
     };
   }
   if (body <= -need || throughLow) {
-    if (flow === 'UP' || trend === 'UP' || structure.bias === 'ABOVE') return null;
+    if (flow === 'UP' || (structure.bias === 'ABOVE' && flow !== 'DOWN')) return null;
     if (moveAlreadyFinished('SELL', minutes, bar.close)) return null;
     if (!throughLow && bar.close <= lo + eps * 0.3 && bar.close >= lo - eps * 0.15) return null;
     return {
@@ -1254,8 +1330,11 @@ export function decideUnifiedEntry(opts: {
 
     const impulse = decideEntryFromImpulseCandle(bar, minutes);
     if (impulse) {
-      if (impulse.direction === 'BUY' && structure.bias === 'BELOW') return null;
-      if (impulse.direction === 'SELL' && structure.bias === 'ABOVE') return null;
+      // After V-flip, bias may still be BELOW/ABOVE from the old swing — trust flow
+      if (!flowFlipAtExtreme(minutes)) {
+        if (impulse.direction === 'BUY' && structure.bias === 'BELOW') return null;
+        if (impulse.direction === 'SELL' && structure.bias === 'ABOVE') return null;
+      }
       return {
         ...impulse,
         reason: `${impulse.reason} · unified NONE`,
