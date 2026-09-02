@@ -27,7 +27,7 @@ describe('instrumentScale', () => {
   it('exitParamsForTrade scales CONTINUATION TP for EURUSD vs Gold', () => {
     const gold = exitParamsForTrade('SCALP', 'CONTINUATION', 4430);
     const eur = exitParamsForTrade('SCALP', 'CONTINUATION', 1.085);
-    expect(gold.tpFloor).toBeCloseTo(4.0, 1);
+    expect(gold.tpFloor).toBeCloseTo(5.0, 1);
     expect(eur.tpFloor).toBeLessThan(0.002);
     expect(eur.tpFloor).toBeGreaterThan(0.0005);
   });
