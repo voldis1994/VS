@@ -4,6 +4,7 @@ import {
   thesisFailureForPlaybook,
   nearRangeEdge,
   PLAYBOOK_EXIT,
+  exitParamsForTrade,
 } from './playbooks.js';
 import { decideEntryFrom10sRegime } from './entryFromRegime.js';
 import { decideBestOutcomeExit, THESIS_MIN_HOLD_MS } from './exitManage.js';
@@ -229,6 +230,15 @@ describe('playbook exit', () => {
     expect(PLAYBOOK_EXIT.LONG.thesisMinHoldMs).toBe(120_000);
     expect(PLAYBOOK_EXIT.SCALP.tpPct).toBe(0.0022);
     expect(PLAYBOOK_EXIT.FADE.timeDecayMs).toBe(240_000);
+  });
+
+  it('CONTINUATION/FADE keep ≥55% MFE — 72% giveback is not normal', () => {
+    const cont = exitParamsForTrade('LONG', 'CONTINUATION');
+    expect(cont.peakRet).toBe(0.55);
+    expect(cont.harvestRet).toBe(0.65);
+    const fade = exitParamsForTrade('FADE', 'FADE');
+    expect(fade.peakRet).toBe(0.55);
+    expect(fade.harvestRet).toBe(0.65);
   });
 });
 

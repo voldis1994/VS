@@ -104,7 +104,7 @@ export function exitParamsForTrade(
   const base = PLAYBOOK_EXIT[playbook];
   const setup = String(entrySetup || '').trim().toUpperCase();
 
-  // V-bounce / dump continuation — hold for the leg to swing high (not tpFloor 0.18)
+  // V-bounce / dump continuation — ride the leg, but keep ≥55% of MFE (72% giveback is not normal)
   if (setup === 'CONTINUATION' || setup === 'PULLBACK') {
     return {
       ...base,
@@ -114,14 +114,14 @@ export function exitParamsForTrade(
       slFloor: base.slFloor,
       mfeFloorPct: 0.00055,
       mfeFloorAbs: 2.5,
-      peakRet: 0.28,
-      harvestRet: 0.38,
+      peakRet: 0.55, // was 0.28
+      harvestRet: 0.65, // was 0.38
       thesisMinHoldMs: 180_000,
       timeDecayMs: 600_000,
     };
   }
 
-  // FADE / failed-break bounce from low — still room to mid, not instant 0.18pt target
+  // FADE / failed-break bounce from low — room to mid, not instant scalp; keep the win
   if (setup === 'FADE' || setup === 'FAILED_BREAK') {
     return {
       ...base,
@@ -129,8 +129,8 @@ export function exitParamsForTrade(
       tpFloor: 3.0,
       mfeFloorPct: 0.00045,
       mfeFloorAbs: 1.8,
-      peakRet: 0.32,
-      harvestRet: 0.42,
+      peakRet: 0.55, // was 0.32
+      harvestRet: 0.65, // was 0.42
       thesisMinHoldMs: 120_000,
       timeDecayMs: 420_000,
     };
