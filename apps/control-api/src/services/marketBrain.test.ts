@@ -138,12 +138,20 @@ describe('marketBrain unified state', () => {
     expect(line).toMatch(/4371.50/);
   });
 
-  it('formatBrainLine blocks entry while seeding', () => {
+  it('formatBrainLine shows short wait while seeding under fast gate', () => {
+    const summary = summarizeBrain(
+      { ready: false, bar_count: 6, macro: 'SIDEWAYS', regime: 'RANGE' } as any,
+      null
+    );
+    expect(formatBrainLine(summary)).toMatch(/seeding 6\/18/);
+  });
+
+  it('formatBrainLine allows entry during long warm-up after fast gate', () => {
     const summary = summarizeBrain(
       { ready: false, bar_count: 45, macro: 'SIDEWAYS', regime: 'RANGE' } as any,
       null
     );
-    expect(formatBrainLine(summary)).toMatch(/seeding 45\/137 — entry blocked/);
+    expect(formatBrainLine(summary)).toMatch(/entry OK/);
   });
 
   it('formatBrainLine shows manage mode while warming in trade', () => {

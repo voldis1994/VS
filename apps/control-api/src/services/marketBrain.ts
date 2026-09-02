@@ -25,10 +25,13 @@ const L = 256;
 const K_LAG = 4;
 const EPS = 1e-10;
 
-/** Closed 10s bars required before brain.ready (max scale + lag + buffer). */
+/** Closed 10s bars before full multi-scale brain.ready (scale-128 math). Background only. */
 export const BRAIN_WARMUP_BARS = Math.max(...SIGNAL_SCALES) + K_LAG + 5;
-/** Leg entries (BREAKOUT/CONTINUATION) allowed once mid-scale 10s history exists (~4 min). */
-export const BRAIN_FAST_ENTRY_BARS = 24;
+/**
+ * Entry gate — do NOT wait for 137 bars (~23 min). Structure + setup trade after ~3 min.
+ * Full brain.ready still warms in background for dynamic TP / surv labels.
+ */
+export const BRAIN_FAST_ENTRY_BARS = 18;
 
 export type BrainMemory = {
   bar_count: number;
@@ -582,7 +585,10 @@ export function formatBrainLine(summary: BrainSummary | null | undefined): strin
         ? `BRAIN · warming ${prog} · MANAGE locked`
         : `BRAIN · warming ${prog} · MANAGE (playbook exit)`;
     }
-    return `BRAIN · seeding ${prog} — entry blocked`;
+    if (summary.bar_count >= BRAIN_FAST_ENTRY_BARS) {
+      return `BRAIN · warm-up ${prog} · entry OK (playbook)`;
+    }
+    return `BRAIN · seeding ${summary.bar_count}/${BRAIN_FAST_ENTRY_BARS} — wait ~${Math.max(0, Math.ceil(((BRAIN_FAST_ENTRY_BARS - summary.bar_count) * 10) / 60))}m`;
   }
   const parts = [
     summary.macro,

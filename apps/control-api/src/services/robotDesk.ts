@@ -29,7 +29,6 @@ import {
   lockBrainAtEntry,
   summarizeBrain,
   BRAIN_FAST_ENTRY_BARS,
-  BRAIN_WARMUP_BARS,
   type BrainState,
   type BrainSummary,
   type LockedBrainEntry,
@@ -64,7 +63,6 @@ import {
   type MultiFeedPrice,
   type MultiFeedLeg,
 } from './robotReader.js';
-import { isLegRideSetup } from './playbooks.js';
 import {
   aggregateSecondsToTen,
   emptyTenSecState,
@@ -1689,20 +1687,19 @@ async function robotCycle(s: Internal) {
 
     const brainGate = s.brain ?? currentRegime(s.epic, s.id)?.brain ?? null;
     const barCount = brainGate?.bar_count ?? 0;
-    const legSetup = isLegRideSetup(setupType);
-    const brainWarm =
-      brainGate?.ready || (legSetup && barCount >= BRAIN_FAST_ENTRY_BARS);
+    // Entry after FAST bars (~3 min) — never block on full 137-bar brain warm-up
+    const brainWarm = brainGate?.ready || barCount >= BRAIN_FAST_ENTRY_BARS;
     if (!brainWarm) {
-      const need = legSetup ? BRAIN_FAST_ENTRY_BARS : BRAIN_WARMUP_BARS;
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · brain seeding ${barCount}/${need} — entry blocked (setup ${setupType} ignored)`,
+        detail: `${ohlcLine} · brain seeding ${barCount}/${BRAIN_FAST_ENTRY_BARS} (~3 min) — entry blocked`,
       });
       return;
     }
+    // Full brain gates only when ready; until then playbook/setup decide
     if (brainGate?.ready) {
       const gate = brainEntryAllowed(brainGate, setupType);
       if (!gate.ok) {
