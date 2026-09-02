@@ -111,12 +111,54 @@ export function decideBestOutcomeExit(
     ? Math.max(scaleFromGold(absEntry, 0.4), absEntry * 0.00004)
     : Math.max(scaleFromGold(absEntry, 0.25), absEntry * 0.00002);
 
+  const sl = Math.max(absEntry * p.slPct, p.slFloor);
+  const mfeFloor = Math.max(absEntry * p.mfeFloorPct, p.mfeFloorAbs);
+  const peakMinHoldMs = legRide ? 45_000 : Math.min(p.thesisMinHoldMs * 0.5, 60_000);
+  const pressureMinMfe = Math.max(
+    mfeFloor,
+    legRide ? scaleFromGold(absEntry, 1.8) : scaleFromGold(absEntry, 1.0)
+  );
+  const givebackRet = legRide ? 0.5 : 0.55;
+  const hadProvenRun = s.mfe >= pressureMinMfe;
+
+  if (fav <= -sl) {
+    return {
+      exit: true,
+      reason: `HardInvalidation · ${book} · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}`,
+    };
+  }
+
+  // Had real profit, now underwater — cut reversal before riding to full SL (4329→4318 class)
+  if (
+    hadProvenRun &&
+    fav < 0 &&
+    heldMs >= Math.min(peakMinHoldMs, 60_000)
+  ) {
+    return {
+      exit: true,
+      reason: `ReversalStop · ${book} · had MFE ${s.mfe.toFixed(5)} now ${fav.toFixed(5)} · closeable loss capped`,
+    };
+  }
+
+  // Gave back half the leg while still green — bank it (do not wait for BE)
+  if (
+    hadProvenRun &&
+    fav >= 0 &&
+    s.peak_retention != null &&
+    s.peak_retention < givebackRet &&
+    heldMs >= Math.min(peakMinHoldMs, 45_000)
+  ) {
+    return {
+      exit: true,
+      reason: `ProfitGiveback · ${book} · kept ${(s.peak_retention * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} · closeable ${fav.toFixed(5)}`,
+    };
+  }
+
   const brainThesis =
     brain != null ? brainExitThesis(brain, s.open_side, book, s.entry_setup) : null;
   const brainThesisHold = legRide ? p.thesisMinHoldMs : p.thesisMinHoldMs * 0.85;
   if (brainThesis && heldMs >= brainThesisHold) {
-    // Leg rides: brain pressure exits only while still green at bid/ask — not BE/minus
-    if (!legRide || fav >= minProfitExit * 0.5) {
+    if (!legRide || fav >= 0 || hadProvenRun) {
       return { exit: true, reason: `${brainThesis} · ${book}` };
     }
   }
@@ -130,24 +172,10 @@ export function decideBestOutcomeExit(
   if (dynamic?.tpDistance != null && dynamic.tpDistance > 0) {
     tp = Math.max(tp, dynamic.tpDistance);
   }
-  const sl = Math.max(absEntry * p.slPct, p.slFloor);
-  const mfeFloor = Math.max(absEntry * p.mfeFloorPct, p.mfeFloorAbs);
-  const peakMinHoldMs = legRide ? 120_000 : Math.min(p.thesisMinHoldMs * 0.5, 60_000);
-  const pressureMinMfe = Math.max(
-    mfeFloor,
-    legRide ? scaleFromGold(absEntry, 1.8) : scaleFromGold(absEntry, 1.0)
-  );
-
-  if (fav <= -sl) {
-    return {
-      exit: true,
-      reason: `HardInvalidation · ${book} · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}`,
-    };
-  }
 
   if (
     heldMs >= peakMinHoldMs &&
-    s.mfe >= pressureMinMfe &&
+    hadProvenRun &&
     fav >= minProfitExit &&
     s.peak_retention != null &&
     s.peak_retention < peakRet
@@ -166,7 +194,7 @@ export function decideBestOutcomeExit(
   }
 
   if (
-    s.mfe >= pressureMinMfe &&
+    hadProvenRun &&
     fav >= minProfitExit &&
     s.peak_retention != null &&
     s.peak_retention < harvestRet &&

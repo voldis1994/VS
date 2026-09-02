@@ -76,7 +76,7 @@ describe('decideBestOutcomeExit playbook-aware', () => {
       q(2002.4)
     );
     expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/PeakProtection/);
+    expect(d.reason).toMatch(/ProfitGiveback|PeakProtection/);
   });
 
   it('target uses playbook TP', () => {
@@ -152,7 +152,7 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     expect(d.exit).toBe(false);
   });
 
-  it('never PeakProtection at a loss after real MFE', () => {
+  it('ReversalStop fires instead of holding to full SL after MFE lost', () => {
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -165,7 +165,8 @@ describe('decideBestOutcomeExit playbook-aware', () => {
       }),
       q(4309.5, 4309.2, 4309.7)
     );
-    expect(d.exit).toBe(false);
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/ReversalStop/);
   });
 
   it('mid looked green but bid is red — does not harvest', () => {
@@ -182,5 +183,39 @@ describe('decideBestOutcomeExit playbook-aware', () => {
       q(4310.3, 4309.8, 4310.8)
     );
     expect(d.exit).toBe(false);
+  });
+
+  it('ProfitGiveback exits after half the leg is returned while still green', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4322.51,
+        entry_at: ago(300_000),
+        mfe: 6.5,
+        peak_retention: 0.42,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+      }),
+      q(4325.2, 4325.0, 4325.5)
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/ProfitGiveback/);
+  });
+
+  it('ReversalStop cuts when proven MFE trade goes underwater', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4322.51,
+        entry_at: ago(480_000),
+        mfe: 6.5,
+        peak_retention: 0,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+      }),
+      q(4318.5, 4318.34, 4318.84)
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/ReversalStop/);
   });
 });

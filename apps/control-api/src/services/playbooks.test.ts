@@ -188,7 +188,7 @@ describe('playbook exit', () => {
       { mid: 2002.5 }
     );
     expect(scalp.exit).toBe(true);
-    expect(scalp.reason).toMatch(/PeakProtection/);
+    expect(scalp.reason).toMatch(/ProfitGiveback|PeakProtection/);
 
     const scalpHold = decideBestOutcomeExit(
       {
