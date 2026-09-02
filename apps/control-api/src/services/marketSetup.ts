@@ -302,7 +302,8 @@ export function recentImpulse(
 
 /**
  * True when 1m impulse has turned against an open side — simple flip signal.
- * BUY + DOWN / SELL + UP → close and reverse with the move.
+ * BUY + DOWN → close BUY, open SELL with the dump.
+ * SELL + UP → close SELL, open BUY with the rally.
  */
 export function isImpulseAgainstSide(
   side: 'BUY' | 'SELL' | null | undefined,

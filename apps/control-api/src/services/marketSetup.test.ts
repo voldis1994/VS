@@ -263,6 +263,20 @@ describe('marketSetup', () => {
     expect(isImpulseAgainstSide('SELL', bars)).toBe(false);
   });
 
+  it('MoveFlip signal is symmetric — SELL dies on UP impulse too', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) {
+      bars.push(candle(4420, 4422, 4418, 4420));
+    }
+    for (let i = 0; i < 6; i++) {
+      const o = 4420 + i * 1.3;
+      bars.push(candle(o, o + 1.6, o - 0.2, o + 1.3));
+    }
+    expect(recentImpulse(bars, 'flip') || recentImpulse(bars)).toBe('UP');
+    expect(isImpulseAgainstSide('SELL', bars)).toBe(true);
+    expect(isImpulseAgainstSide('BUY', bars)).toBe(false);
+  });
+
   it('sharp V-leg impulse fires even when longer window nets near zero', () => {
     const bars: CapitalPriceCandle[] = [];
     for (let i = 0; i < 22; i++) {
