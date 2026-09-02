@@ -11,7 +11,7 @@ import {
   type SignalOutput,
   type SignalScale,
 } from './signalEngine.js';
-import type { TradePlaybook } from './playbooks.js';
+import { isLegRideSetup, type TradePlaybook } from './playbooks.js';
 
 export type MoveState =
   | 'EARLY'
@@ -27,8 +27,8 @@ const EPS = 1e-10;
 
 /** Closed 10s bars required before brain.ready (max scale + lag + buffer). */
 export const BRAIN_WARMUP_BARS = Math.max(...SIGNAL_SCALES) + K_LAG + 5;
-/** Leg entries (BREAKOUT/CONTINUATION) allowed once mid-scale 10s history exists (~11 min). */
-export const BRAIN_FAST_ENTRY_BARS = 64;
+/** Leg entries (BREAKOUT/CONTINUATION) allowed once mid-scale 10s history exists (~4 min). */
+export const BRAIN_FAST_ENTRY_BARS = 24;
 
 export type BrainMemory = {
   bar_count: number;
@@ -489,9 +489,12 @@ export function brainExitParams(
 export function brainExitThesis(
   state: BrainState,
   side: 'BUY' | 'SELL',
-  playbook: TradePlaybook
+  playbook: TradePlaybook,
+  entrySetup?: string | null
 ): string | null {
+  const legRide = isLegRideSetup(entrySetup);
   if (state.move_state === 'EXHAUSTING' && state.exhaustion > state.survival + 0.15) {
+    if (legRide && state.exhaustion < state.survival + 0.4) return null;
     return `BrainExhaustion · ${playbook} · ${state.move_state}`;
   }
   if (
@@ -499,6 +502,7 @@ export function brainExitThesis(
     (playbook === 'FADE' || playbook === 'SCALP') &&
     state.exhaustion > 0.65
   ) {
+    if (legRide) return null;
     return `BrainSideEnd · ${playbook} · breakout pressure`;
   }
   if (playbook === 'FADE' && state.break_valid && state.break_dir !== 0) {
@@ -507,6 +511,7 @@ export function brainExitThesis(
     if (against) return `BrainBreakInvalid · FADE vs breakout dir ${state.break_dir}`;
   }
   if (state.used_potential >= 0.95 && state.exhaustion > 0.55) {
+    if (legRide && state.used_potential < 0.98) return null;
     return `BrainExtended · used ${(state.used_potential * 100).toFixed(0)}%`;
   }
   return null;

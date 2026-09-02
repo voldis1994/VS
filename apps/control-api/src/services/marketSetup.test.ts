@@ -5,6 +5,7 @@ import {
   decideEntryFromSetup,
   decideEntryFromFormingSetup,
   decideEntryFromTenSecMove,
+  decideEntryFromImpulseMove,
   emptySetup,
   isBounceOffLow,
   isLegFloorChase,
@@ -399,6 +400,73 @@ describe('marketSetup', () => {
     const hit = decideEntryFromFormingSetup(armed, forming, []);
     expect(hit?.direction).toBe('BUY');
     expect(hit?.reason).toMatch(/live 10s/);
+  });
+
+  it('CONTINUATION FORMING status can enter on live 10s bar', () => {
+    const formingSetup = {
+      ...emptySetup(),
+      kind: 'CONTINUATION' as const,
+      side: 'BUY' as const,
+      playbook: 'LONG' as const,
+      status: 'FORMING' as const,
+      reason: 'PULLBACK in up structure',
+      swing_high: 4314,
+      swing_low: 4304,
+    };
+    const live = bar10(4308.2, 4309.5, 4308.1, 4309.3);
+    live.ticks = 5;
+    expect(decideEntryFromFormingSetup(formingSetup, live, [])?.direction).toBe('BUY');
+  });
+
+  it('decideEntryFromImpulseMove enters rally leg without waiting ARMED setup', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) {
+      bars.push(candle(4304, 4306, 4303, 4304.5));
+    }
+    bars.push(candle(4304.5, 4305, 4304, 4304.2));
+    bars.push(candle(4304.2, 4307, 4304, 4306.5));
+    bars.push(candle(4306.5, 4310, 4306, 4309.8));
+    bars.push(candle(4309.8, 4313.5, 4309.5, 4313.2));
+    expect(recentImpulse(bars, 'flip')).toBe('UP');
+    const st = buildStructure({ minutes: bars, mid: bars.at(-1)!.close });
+    const live = bar10(4312.5, 4313.8, 4312.4, 4313.6);
+    live.ticks = 4;
+    const hit = decideEntryFromImpulseMove(st, bars, live);
+    expect(hit?.direction).toBe('BUY');
+    expect(hit?.setup).toBe('CONTINUATION');
+    expect(hit?.playbook).toBe('LONG');
+    expect(hit?.reason).toMatch(/1m IMPULSE BUY/);
+  });
+
+  it('decideEntryFromImpulseMove blocks SELL at floor without breakdown', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) {
+      bars.push(candle(4348, 4350, 4346, 4348));
+    }
+    for (let i = 0; i < 4; i++) {
+      const o = 4348 - i * 4.5;
+      bars.push(candle(o, o + 0.4, o - 4.8, o - 4.2));
+    }
+    expect(recentImpulse(bars, 'flip')).toBe('DOWN');
+    const st = buildStructure({ minutes: bars, mid: bars.at(-1)!.close });
+    const lo = st.swing_low;
+    const atFloor = bar10(lo + 0.35, lo + 0.4, lo + 0.08, lo + 0.1);
+    atFloor.ticks = 5;
+    expect(
+      isLegFloorChase(
+        {
+          ...emptySetup(),
+          kind: 'CONTINUATION',
+          side: 'SELL',
+          playbook: 'LONG',
+          status: 'ARMED',
+          swing_high: st.swing_high,
+          swing_low: lo,
+        },
+        atFloor
+      )
+    ).toBe(true);
+    expect(decideEntryFromImpulseMove(st, bars, atFloor)).toBeNull();
   });
 
   it('blocks SELL at swing floor without fresh breakdown (V-bottom trap)', () => {

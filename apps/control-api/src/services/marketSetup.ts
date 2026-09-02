@@ -1070,7 +1070,9 @@ export function decideEntryFromFormingSetup(
   minutes?: CapitalPriceCandle[] | null
 ): SetupEntry | null {
   if (setup.kind !== 'CONTINUATION' && setup.kind !== 'BREAKOUT') return null;
-  if (setup.status !== 'ARMED' || !setup.side || !setup.playbook) return null;
+  if ((setup.status !== 'ARMED' && setup.status !== 'FORMING') || !setup.side || !setup.playbook) {
+    return null;
+  }
   if (forming.ticks < 4) return null;
 
   const book = setup.playbook;
@@ -1146,7 +1148,7 @@ export function decideEntryFromTenSecMove(
   const minSpan = minSwingSpan(bar.close);
   const span = Math.max(hi - lo, structure.span, minSpan);
   const eps = edgeEps(bar.close, span);
-  const need = thr * 0.65;
+  const need = thr * 0.48;
   const flow = priceFlowBias(minutes);
 
   if (body >= need) {
@@ -1156,7 +1158,7 @@ export function decideEntryFromTenSecMove(
     return {
       direction: 'BUY',
       setup: 'CONTINUATION',
-      playbook: 'SCALP',
+      playbook: 'LONG',
       reason: `ENTRY · 10s MOVE BUY O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · setup was NONE`,
     };
   }
@@ -1166,10 +1168,81 @@ export function decideEntryFromTenSecMove(
     return {
       direction: 'SELL',
       setup: 'CONTINUATION',
-      playbook: 'SCALP',
+      playbook: 'LONG',
       reason: `ENTRY · 10s MOVE SELL O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · setup was NONE`,
     };
   }
+  return null;
+}
+
+/**
+ * Enter on live 10s when 1m already shows impulse — do not wait for sticky ARMED + closed bar
+ * while the leg runs (4306→4314 class misses).
+ */
+export function decideEntryFromImpulseMove(
+  structure: StructureBook,
+  minutes: CapitalPriceCandle[] | null | undefined,
+  bar: TenSecBar
+): SetupEntry | null {
+  if (!structure.ready || !minutes || minutes.length < 4) return null;
+  const imp = recentImpulse(minutes, 'flip') || recentImpulse(minutes);
+  if (!imp) return null;
+
+  const body = bodyPct(bar);
+  const thr = PLAYBOOK_ENTRY_BODY.SCALP;
+  const need = thr * 0.35;
+  const hi = structure.swing_high;
+  const lo = structure.swing_low;
+  const span = Math.max(hi - lo, structure.span, minSwingSpan(bar.close));
+  const eps = edgeEps(bar.close, span);
+
+  if (imp === 'UP') {
+    if (body < need || bar.close <= bar.open) return null;
+    if (bar.close >= hi - eps * 0.3 && bar.close <= hi + eps * 0.15) return null;
+    const leg: MarketSetup = {
+      kind: 'CONTINUATION',
+      side: 'BUY',
+      playbook: 'LONG',
+      status: 'ARMED',
+      swing_high: hi,
+      swing_low: lo,
+      reason: '',
+      confirm: 2,
+      updated_at: '',
+    };
+    if (isLegCeilingChase(leg, bar)) return null;
+    return {
+      direction: 'BUY',
+      setup: 'CONTINUATION',
+      playbook: 'LONG',
+      reason: `ENTRY · 1m IMPULSE BUY (live 10s) O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)}`,
+    };
+  }
+
+  if (imp === 'DOWN') {
+    if (body > -need || bar.close >= bar.open) return null;
+    if (bar.close <= lo + eps * 0.3 && bar.close >= lo - eps * 0.15) return null;
+    const leg: MarketSetup = {
+      kind: 'CONTINUATION',
+      side: 'SELL',
+      playbook: 'LONG',
+      status: 'ARMED',
+      swing_high: hi,
+      swing_low: lo,
+      reason: '',
+      confirm: 2,
+      updated_at: '',
+    };
+    if (isLegFloorChase(leg, bar)) return null;
+    if (isBounceOffLow(minutes, lo, eps)) return null;
+    return {
+      direction: 'SELL',
+      setup: 'CONTINUATION',
+      playbook: 'LONG',
+      reason: `ENTRY · 1m IMPULSE SELL (live 10s) O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)}`,
+    };
+  }
+
   return null;
 }
 

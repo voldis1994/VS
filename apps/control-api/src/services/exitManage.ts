@@ -7,6 +7,7 @@ import {
   type Playbook,
   type TradePlaybook,
 } from './playbooks.js';
+import { scaleFromGold } from './instrumentScale.js';
 import {
   brainExitParams,
   brainExitThesis,
@@ -78,10 +79,12 @@ export function decideBestOutcomeExit(
   const timeDecayMs = dynamic ? p.timeDecayMs * dynamic.timeDecayScale : p.timeDecayMs;
 
   const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
+  const legRide = isLegRideSetup(s.entry_setup);
 
   const brainThesis =
-    brain != null ? brainExitThesis(brain, s.open_side, book) : null;
-  if (brainThesis && heldMs >= p.thesisMinHoldMs * 0.85) {
+    brain != null ? brainExitThesis(brain, s.open_side, book, s.entry_setup) : null;
+  const brainThesisHold = legRide ? p.thesisMinHoldMs : p.thesisMinHoldMs * 0.85;
+  if (brainThesis && heldMs >= brainThesisHold) {
     return { exit: true, reason: `${brainThesis} · ${book}` };
   }
 
@@ -99,8 +102,11 @@ export function decideBestOutcomeExit(
   }
   const sl = Math.max(absEntry * p.slPct, p.slFloor);
   const mfeFloor = Math.max(absEntry * p.mfeFloorPct, p.mfeFloorAbs);
-  const legRide = isLegRideSetup(s.entry_setup);
-  const peakMinHoldMs = legRide ? 90_000 : Math.min(p.thesisMinHoldMs * 0.5, 60_000);
+  const peakMinHoldMs = legRide ? 120_000 : Math.min(p.thesisMinHoldMs * 0.5, 60_000);
+  const pressureMinMfe = Math.max(
+    mfeFloor,
+    legRide ? scaleFromGold(absEntry, 1.8) : scaleFromGold(absEntry, 1.0)
+  );
 
   if (fav <= -sl) {
     return {
@@ -111,7 +117,7 @@ export function decideBestOutcomeExit(
 
   if (
     heldMs >= peakMinHoldMs &&
-    s.mfe >= mfeFloor &&
+    s.mfe >= pressureMinMfe &&
     s.peak_retention != null &&
     s.peak_retention < peakRet
   ) {
@@ -129,12 +135,12 @@ export function decideBestOutcomeExit(
   }
 
   if (
-    s.mfe >= mfeFloor &&
+    s.mfe >= pressureMinMfe &&
     fav > 0 &&
     s.peak_retention != null &&
     s.peak_retention < harvestRet &&
     s.peak_retention >= peakRet &&
-    s.mfe - fav >= Math.max(mfeFloor * 0.4, absEntry * 0.00035)
+    s.mfe - fav >= Math.max(pressureMinMfe * 0.35, absEntry * 0.0005)
   ) {
     return {
       exit: true,
@@ -145,8 +151,8 @@ export function decideBestOutcomeExit(
   const moveStillLive =
     fav > 0 &&
     s.peak_retention != null &&
-    s.peak_retention >= 0.45 &&
-    fav >= s.mfe * 0.55;
+    s.peak_retention >= 0.35 &&
+    fav >= s.mfe * 0.45;
 
   if (heldMs > timeDecayMs && !moveStillLive && fav >= -mfeFloor * 0.2 && s.mfe >= mfeFloor * 0.5) {
     return {

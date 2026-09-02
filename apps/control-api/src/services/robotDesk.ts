@@ -45,6 +45,7 @@ import {
   decideEntryFromSetup,
   decideEntryFromTenSecMove,
   decideEntryFromFormingSetup,
+  decideEntryFromImpulseMove,
   emptySetup,
   emptyStructure,
   isLegFloorChase,
@@ -1574,7 +1575,16 @@ async function robotCycle(s: Internal) {
         ? decideEntryFromSetup(setup, bar, s.last_minute_candles)
         : null;
 
-    if (!entry && setup.status === 'ARMED' && forming) {
+    // 1m impulse + live 10s — enter the leg while setup is still FORMING/NONE
+    if (!entry && s.last_minute_candles?.length) {
+      const impulseBar =
+        forming && forming.ticks >= 3 ? forming : bar && inEntryWindow ? bar : null;
+      if (impulseBar) {
+        entry = decideEntryFromImpulseMove(st, s.last_minute_candles, impulseBar);
+      }
+    }
+
+    if (!entry && (setup.status === 'ARMED' || setup.status === 'FORMING') && forming) {
       entry = decideEntryFromFormingSetup(setup, forming, s.last_minute_candles);
     }
 

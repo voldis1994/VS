@@ -119,10 +119,10 @@ export function exitParamsForTrade(
       slFloor: leg.slFloor,
       mfeFloorPct: 0.00055,
       mfeFloorAbs: leg.mfeFloorAbs,
-      peakRet: 0.28,
-      harvestRet: 0.38,
-      thesisMinHoldMs: 180_000,
-      timeDecayMs: 600_000,
+      peakRet: 0.2,
+      harvestRet: 0.28,
+      thesisMinHoldMs: 240_000,
+      timeDecayMs: 720_000,
     };
   }
 

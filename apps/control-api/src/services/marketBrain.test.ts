@@ -96,6 +96,20 @@ describe('marketBrain unified state', () => {
     expect(brainExitThesis(fake as any, 'BUY', 'LONG')).toMatch(/BrainExhaustion/);
   });
 
+  it('brainExitThesis skips BrainSideEnd for leg rides', () => {
+    const fake = {
+      move_state: 'LATE' as const,
+      exhaustion: 0.8,
+      survival: 0.2,
+      side_end: true,
+      break_valid: false,
+      break_dir: 0 as const,
+      used_potential: 0.6,
+    };
+    expect(brainExitThesis(fake as any, 'BUY', 'SCALP', 'CONTINUATION')).toBeNull();
+    expect(brainExitThesis(fake as any, 'BUY', 'SCALP')).toMatch(/BrainSideEnd/);
+  });
+
   it('formatBrainLine summarizes for dashboard', () => {
     const summary = summarizeBrain(
       {
