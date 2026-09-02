@@ -1458,10 +1458,10 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // 1) Impulse/flow + confirming candle → entry NOW (both ways)
+    // 1) Live market impulse (flow) → entry NOW — not candle color
     let entry = decideEntryFromImpulseCandle(bar, s.last_minute_candles);
 
-    // 2) Armed setup with candle confirm
+    // 2) Armed setup: price through level / flow confirm
     if (!entry && setup.kind !== 'NONE' && setup.status === 'ARMED') {
       entry = decideEntryFromSetup(setup, bar, s.last_minute_candles);
     }
@@ -1481,7 +1481,7 @@ async function robotCycle(s: Internal) {
           ? `NONE · ${setup.reason}`
           : setup.status === 'FORMING'
             ? `FORMING · ${setup.reason}`
-            : `ARMED · waiting candle confirm · ${setup.reason}`;
+            : `ARMED · waiting price through level · ${setup.reason}`;
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,

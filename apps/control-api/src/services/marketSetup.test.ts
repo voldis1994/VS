@@ -382,6 +382,56 @@ describe('marketSetup', () => {
     expect(decideEntryFromImpulseCandle(sellBar, bars)?.direction).toBe('SELL');
   });
 
+  it('BREAKOUT BUY enters on price through H — not candle body/color', () => {
+    // Screenshot class: ARMED BREAKOUT BUY, live ~4342 above H4341.40, flat 2s body
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) {
+      bars.push(candle(4332, 4336, 4330, 4334));
+    }
+    for (let i = 0; i < 4; i++) {
+      const o = 4334 + i * 1.5;
+      bars.push(candle(o, o + 2, o - 0.2, o + 1.8));
+    }
+    const hi = 4341.4;
+    const lo = 4330.26;
+    const breakoutBuy = {
+      ...emptySetup(),
+      kind: 'BREAKOUT' as const,
+      side: 'BUY' as const,
+      playbook: 'SCALP' as const,
+      status: 'ARMED' as const,
+      confirm: 3,
+      swing_high: hi,
+      swing_low: lo,
+      reason: `IMPULSE UP through H${hi.toFixed(2)} → BUY flip now`,
+    };
+    // Tiny green body — old bodyPct gate would block (~0.0016% << thr)
+    const flatThrough = bar10(4342.75, 4342.9, 4342.7, 4342.82);
+    const entry = decideEntryFromSetup(breakoutBuy, flatThrough, bars);
+    expect(entry?.direction).toBe('BUY');
+    expect(entry?.setup).toBe('BREAKOUT');
+    expect(entry?.reason).toMatch(/through H/i);
+    // Slight red forming while still above H — still enter (market, not candle color)
+    const redThrough = bar10(4342.9, 4342.95, 4342.2, 4342.28);
+    expect(decideEntryFromSetup(breakoutBuy, redThrough, bars)?.direction).toBe('BUY');
+  });
+
+  it('impulse enters on market flow without requiring green/red candle', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 20; i++) {
+      const o = 2600 + i * 0.4;
+      bars.push(candle(o, o + 0.6, o - 0.1, o + 0.45));
+    }
+    bars.push(candle(2610, 2610.2, 2606, 2606.5));
+    bars.push(candle(2606.5, 2606.8, 2604, 2604.5));
+    expect(liveFlow(bars)).toBe('DOWN');
+    expect(moveStillPrinting('DOWN', bars)).toBe(true);
+    // Flat / tiny green 2s during dump — still SELL on flow
+    const flatBar = bar10(2604.4, 2604.55, 2604.35, 2604.48);
+    expect(decideEntryFromImpulseCandle(flatBar, bars)?.direction).toBe('SELL');
+    expect(decideEntryFromImpulseCandle(flatBar, bars)?.reason).toMatch(/market flow/i);
+  });
+
   it('flowAgreesWithSide matches open trade to live dump/rally', () => {
     const dump: CapitalPriceCandle[] = [];
     for (let i = 0; i < 22; i++) {
