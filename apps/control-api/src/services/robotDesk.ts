@@ -27,7 +27,6 @@ import {
   formatBrainLine,
   lockBrainAtEntry,
   summarizeBrain,
-  BRAIN_FAST_ENTRY_BARS,
   type BrainState,
   type BrainSummary,
   type LockedBrainEntry,
@@ -1684,21 +1683,7 @@ async function robotCycle(s: Internal) {
     const entryPlaybook = entry.playbook;
     const reason = entry.reason;
 
-    const brainGate = s.brain ?? currentRegime(s.epic, s.id)?.brain ?? null;
-    const barCount = brainGate?.bar_count ?? 0;
-    // Entry after FAST bars (~3 min). Brain is advisory only — never blocks setups.
-    const brainWarm = brainGate?.ready || barCount >= BRAIN_FAST_ENTRY_BARS;
-    if (!brainWarm) {
-      pushTick(s, {
-        phase: 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `${ohlcLine} · brain seeding ${barCount}/${BRAIN_FAST_ENTRY_BARS} (~3 min) — entry blocked`,
-      });
-      return;
-    }
-
+    // Brain is UI-only — never block entries on seeding/warm-up
     s.playbook = entryPlaybook;
     s.entry_setup = setupType;
 

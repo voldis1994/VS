@@ -586,10 +586,7 @@ export function formatBrainLine(summary: BrainSummary | null | undefined): strin
         ? `BRAIN · warming ${prog} · MANAGE locked`
         : `BRAIN · warming ${prog} · MANAGE (playbook exit)`;
     }
-    if (summary.bar_count >= BRAIN_FAST_ENTRY_BARS) {
-      return `BRAIN · warm-up ${prog} · entry OK (playbook)`;
-    }
-    return `BRAIN · seeding ${summary.bar_count}/${BRAIN_FAST_ENTRY_BARS} — wait ~${Math.max(0, Math.ceil(((BRAIN_FAST_ENTRY_BARS - summary.bar_count) * 10) / 60))}m`;
+    return `BRAIN · warm-up ${prog} · entry OK (UI only)`;
   }
   const parts = [
     summary.macro,
