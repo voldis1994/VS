@@ -10,6 +10,7 @@ import {
   pickDeployAccount,
   pickSwitchTarget,
   pickUs100,
+  preferScore,
 } from '../lib/preferMarket';
 
 type RobotTick = {
@@ -306,11 +307,7 @@ export function RobotDeskPage() {
             m.display_name.toLowerCase().includes(q) ||
             (m.epic || m.symbol).toLowerCase().includes(q),
         );
-    rows.sort((a, b) => {
-      const score = (m: (typeof rows)[0]) =>
-        isUs100Market(m) ? 3 : isJunkStockMarket(m) ? -1 : 1;
-      return score(b) - score(a);
-    });
+    rows.sort((a, b) => preferScore(b) - preferScore(a));
     return rows.slice(0, 200);
   }, [launchMarkets, launchFilter]);
 

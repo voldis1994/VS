@@ -14,29 +14,62 @@ function marketText(m: CatalogMarket): string {
   return `${m.display_name} ${m.epic || ''} ${m.symbol}`.toLowerCase();
 }
 
+function normEpicToken(epic: string): string {
+  return String(epic || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+}
+
+/** ETFs / options / yield products that mention Nasdaq 100 but are NOT the index. */
+export function isUs100Impostor(m: CatalogMarket): boolean {
+  const t = marketText(m);
+  return /etf|options?|0\s*dte|0dte|enhanced|income|defiance|leveraged|inverse|yield|covered\s*call|qqq\b/.test(
+    t,
+  );
+}
+
 /** Capital A–Z catalog starts with "$ Kimly" etc — never a real desk default. */
 export function isJunkStockMarket(m: CatalogMarket): boolean {
   const t = marketText(m);
   if (t.includes('kimly')) return true;
-  // Dollar-prefixed equity names from Capital ("$ Kimly", "$ Foo")
   if (/^\s*\$/.test(m.display_name || '')) return true;
+  if (isUs100Impostor(m)) return true;
   return false;
 }
 
+/**
+ * Real Capital index only: US100 / NAS100 / USTEC / "US Tech 100".
+ * Never Defiance Nasdaq 100 ETF or other products that merely mention Nasdaq 100.
+ */
 export function isUs100Market(m: CatalogMarket): boolean {
+  if (isUs100Impostor(m)) return false;
+  const epic = normEpicToken(marketKey(m));
+  if (
+    /^(US100|NAS100|USTEC|USTECH|NDX100|US100CASH)\b/.test(epic) ||
+    epic === 'US100' ||
+    epic === 'NAS100' ||
+    epic === 'USTEC' ||
+    epic === 'USTECH' ||
+    epic === 'NDX100' ||
+    epic === 'US100CASH' ||
+    epic.startsWith('US100') ||
+    epic.startsWith('NAS100') ||
+    epic.startsWith('USTEC')
+  ) {
+    return true;
+  }
   const t = marketText(m);
-  return (
-    t.includes('us100') ||
-    t.includes('nas100') ||
-    t.includes('ustec') ||
-    t.includes('ndx') ||
-    /nasdaq\s*100/.test(t) ||
-    /us\s*tech\s*100/.test(t)
-  );
+  // Short Capital index labels — not long ETF titles
+  if (/us\s*tech\s*100/.test(t)) return true;
+  if (/\bus100\b/.test(t) && t.length < 48) return true;
+  if (/\bnas100\b|\bustec\b|\bustech\b/.test(t) && t.length < 48) return true;
+  return false;
 }
 
 export function isGoldMarket(m: CatalogMarket): boolean {
   const t = marketText(m);
+  if (/etf|miner|mining|royalty/.test(t)) return false;
   return t.includes('xau') || /\bgold\b/.test(t);
 }
 
@@ -45,12 +78,17 @@ export function isEurUsdMarket(m: CatalogMarket): boolean {
   return t.includes('eurusd') || /eur\s*\/\s*usd/.test(t);
 }
 
-/** Liquid desk markets first — never fall through to $ Kimly. */
+/** Liquid desk markets first — never fall through to $ Kimly / Defiance ETF. */
 export function preferScore(m: CatalogMarket): number {
-  if (isUs100Market(m)) return 100;
+  if (isJunkStockMarket(m)) return -100;
+  if (isUs100Market(m)) {
+    const epic = normEpicToken(marketKey(m));
+    if (epic === 'US100' || epic.startsWith('US100')) return 110;
+    if (/us\s*tech\s*100/.test(marketText(m))) return 108;
+    return 100;
+  }
   if (isGoldMarket(m)) return 90;
   if (isEurUsdMarket(m)) return 80;
-  if (isJunkStockMarket(m)) return -100;
   const t = marketText(m);
   if (/\bus30\b|\bus500\b|\buk100\b|\bger40\b/.test(t)) return 70;
   if (t.includes('usd') || t.includes('fx') || t.includes('/')) return 40;
@@ -58,8 +96,8 @@ export function preferScore(m: CatalogMarket): number {
 }
 
 /**
- * Capital catalog is A–Z; "$ Kimly" sorts first.
- * Prefer US100 → Gold → EUR/USD → any non-junk. Never default to Kimly.
+ * Capital catalog is A–Z; "$ Kimly" / Defiance ETF sort first.
+ * Prefer real US100 → Gold → EUR/USD → any non-junk.
  */
 export function pickSwitchTarget(
   markets: CatalogMarket[],
@@ -70,15 +108,12 @@ export function pickSwitchTarget(
   const ranked = [...markets].sort((a, b) => preferScore(b) - preferScore(a));
   const notCurrent = (m: CatalogMarket) => marketKey(m).toLowerCase() !== cur;
 
-  // Switch away from current: best liquid market that is not current
   const preferredOther = ranked.find((m) => preferScore(m) >= 70 && notCurrent(m));
   if (preferredOther) return preferredOther;
 
-  // No other liquid — any non-junk that is not current (leave Kimly last)
   const nonJunkOther = ranked.find((m) => !isJunkStockMarket(m) && notCurrent(m));
   if (nonJunkOther) return nonJunkOther;
 
-  // Stay on current liquid if nothing else real exists
   const samePreferred = ranked.find((m) => preferScore(m) >= 70);
   if (samePreferred) return samePreferred;
 
@@ -89,7 +124,10 @@ export function pickSwitchTarget(
 }
 
 export function pickUs100(markets: CatalogMarket[]): CatalogMarket | null {
-  return markets.find(isUs100Market) || null;
+  const hits = markets.filter(isUs100Market);
+  if (!hits.length) return null;
+  hits.sort((a, b) => preferScore(b) - preferScore(a));
+  return hits[0] || null;
 }
 
 export function lotForMarket(m: CatalogMarket | null | undefined, fallback = 0.1): number {
