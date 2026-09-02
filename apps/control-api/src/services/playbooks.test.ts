@@ -226,18 +226,18 @@ describe('playbook exit', () => {
   });
 
   it('exit params match the drawing', () => {
-    expect(PLAYBOOK_EXIT.LONG.peakRet).toBe(0.7);
+    expect(PLAYBOOK_EXIT.LONG.peakRet).toBe(0.65);
     expect(PLAYBOOK_EXIT.LONG.thesisMinHoldMs).toBe(120_000);
     expect(PLAYBOOK_EXIT.SCALP.tpPct).toBe(0.0022);
     expect(PLAYBOOK_EXIT.FADE.timeDecayMs).toBe(240_000);
   });
 
-  it('CONTINUATION/FADE keep ≥70% MFE — +0.43→+0.18 giveback is not normal', () => {
+  it('CONTINUATION/FADE keep ≥65% MFE — max 35% giveback', () => {
     const cont = exitParamsForTrade('LONG', 'CONTINUATION', 28932);
-    expect(cont.peakRet).toBe(0.7);
-    expect(cont.harvestRet).toBe(0.8);
+    expect(cont.peakRet).toBe(0.65);
+    expect(cont.harvestRet).toBe(0.75);
     const fade = exitParamsForTrade('FADE', 'FADE', 28932);
-    expect(fade.peakRet).toBe(0.7);
+    expect(fade.peakRet).toBe(0.65);
   });
 });
 

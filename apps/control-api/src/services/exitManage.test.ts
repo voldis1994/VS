@@ -141,7 +141,7 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     expect(d.exit).toBe(false);
   });
 
-  it('ProfitGiveback locks ≥70% of MFE (US100 +0.43 must not close at +0.18)', () => {
+  it('ProfitGiveback locks ≥65% of MFE (US100 +0.43 must not close at +0.18)', () => {
     // Peak ~42 pts from 28932 → closeable 16.5 pts ≈ 39% retention → must exit
     const d = decideBestOutcomeExit(
       snap({
@@ -157,5 +157,22 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/PeakProtection|ProfitGiveback/);
+  });
+
+  it('holds when retention still ≥65% (35% giveback allowed)', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 28932.6,
+        entry_at: ago(60_000),
+        mfe: 42,
+        peak_retention: 0.66,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+      }),
+      { mid: 28960.3, bid: 28960.3, ask: 28961.5 }
+    );
+    // closeable ≈ 27.7 / 42 ≈ 66% — above floor, no giveback exit
+    expect(d.exit).toBe(false);
   });
 });

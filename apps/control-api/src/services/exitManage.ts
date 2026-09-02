@@ -112,8 +112,8 @@ export function decideBestOutcomeExit(
   const protectAfterMfe = Math.max(scaleFromGold(absEntry, 0.9), absEntry * 0.00018);
   const hadProtectedRun = s.mfe >= protectAfterMfe;
   const minProfitExit = Math.max(scaleFromGold(absEntry, 0.35), absEntry * 0.00004);
-  // Keep ≥70% of peak — +0.43 → +0.18 (~42%) is not acceptable
-  const keepFrac = Math.max(p.peakRet, 0.7);
+  // Keep ≥65% of peak — max 35% giveback
+  const keepFrac = Math.max(p.peakRet, 0.65);
   const givebackFloor = Math.max(minProfitExit, s.mfe * keepFrac);
   const peakMinHoldMs = legRide ? 8_000 : Math.min(p.thesisMinHoldMs * 0.35, 20_000);
 
@@ -166,7 +166,7 @@ export function decideBestOutcomeExit(
     };
   }
 
-  // Fav-based trail when retention missing / lagging — lock ≥70% of MFE
+  // Fav-based trail when retention missing / lagging — lock ≥65% of MFE
   if (
     hadProtectedRun &&
     fav >= 0 &&
