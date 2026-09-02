@@ -5,6 +5,7 @@ import {
   decideEntryFromSetup,
   decideEntryFromTenSecMove,
   emptySetup,
+  isImpulseAgainstSide,
   isTipChaseEntry,
   priceFlowBias,
   recentImpulse,
@@ -258,6 +259,8 @@ describe('marketSetup', () => {
     expect(setup.kind).not.toBe('NONE');
     expect(setup.side).toBe('SELL');
     expect(setup.status).toBe('ARMED');
+    expect(isImpulseAgainstSide('BUY', bars)).toBe(true);
+    expect(isImpulseAgainstSide('SELL', bars)).toBe(false);
   });
 
   it('sharp V-leg impulse fires even when longer window nets near zero', () => {
