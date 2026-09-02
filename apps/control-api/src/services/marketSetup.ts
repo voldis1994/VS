@@ -301,6 +301,21 @@ export function recentImpulse(
 }
 
 /**
+ * True when 1m impulse has turned against an open side — simple flip signal.
+ * BUY + DOWN / SELL + UP → close and reverse with the move.
+ */
+export function isImpulseAgainstSide(
+  side: 'BUY' | 'SELL' | null | undefined,
+  minutes: CapitalPriceCandle[] | null | undefined
+): boolean {
+  if (!side || !minutes?.length) return false;
+  const imp = recentImpulse(minutes, 'flip') || recentImpulse(minutes);
+  if (side === 'BUY' && imp === 'DOWN') return true;
+  if (side === 'SELL' && imp === 'UP') return true;
+  return false;
+}
+
+/**
  * Dump / rally bias including slow grinds (small red candles) that miss impulse persistence.
  * Used to hard-block BUY into dump / SELL into rally.
  */

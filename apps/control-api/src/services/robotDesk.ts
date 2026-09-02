@@ -34,6 +34,7 @@ import {
   decideEntryFromTenSecMove,
   emptySetup,
   emptyStructure,
+  isImpulseAgainstSide,
   playbookFromSetup,
   recentImpulse,
   setupCatalog,
@@ -182,9 +183,11 @@ type Internal = RobotSession & {
   last_entry_side_ms: number;
   /** After HardInvalidation / thesis fail — longer flip lock */
   last_hard_exit_ms: number;
-  /** After Target/harvest/giveback — stop same-side spam on next 10s bar */
+  /** After Target/harvest/giveback — stop same-side spam on next confirm bar */
   last_soft_exit_ms: number;
   last_soft_exit_side: 'BUY' | 'SELL' | null;
+  /** After MoveFlip close — allow opposite side immediately */
+  last_move_flip_ms: number;
 };
 
 const STRUCTURE_REFRESH_MS = 5_000;
@@ -279,6 +282,7 @@ function publicSession(s: Internal): RobotSession {
     last_hard_exit_ms: _hardExit,
     last_soft_exit_ms: _softExit,
     last_soft_exit_side: _softSide,
+    last_move_flip_ms: _moveFlip,
     ...rest
   } = s;
   const st = s.structureBook;
@@ -773,6 +777,12 @@ async function exitTrade(
     s.last_hard_exit_ms = Date.now();
   }
   if (/Target|PeakProtection|harvest|ProfitGiveback|TimeDecay/i.test(reason)) {
+    s.last_soft_exit_ms = Date.now();
+    s.last_soft_exit_side = s.open_side;
+  }
+  if (/MoveFlip/i.test(reason)) {
+    s.last_move_flip_ms = Date.now();
+    // Block re-opening the dead side; opposite must be free
     s.last_soft_exit_ms = Date.now();
     s.last_soft_exit_side = s.open_side;
   }
@@ -1284,6 +1294,26 @@ async function robotCycle(s: Internal) {
       s.mode = 'MANAGE';
       if (quote.mid == null) return;
 
+      // Keep 1m impulse fresh while in trade — otherwise flip never sees the dump
+      const needImpulseRefresh = Date.now() - s.last_structure_fetch_ms >= 2_000;
+      await refreshStructureAndSetup(opened.session, s, quote.mid, needImpulseRefresh);
+
+      const liveImpulse =
+        recentImpulse(s.last_minute_candles, 'flip') || recentImpulse(s.last_minute_candles);
+      const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
+      const impulseAgainst = isImpulseAgainstSide(s.open_side, s.last_minute_candles);
+
+      // Simple flip: move turned against us → close, then opposite may open
+      if (impulseAgainst && heldMs >= 8_000 && s.open_side) {
+        await exitTrade(
+          opened.session,
+          s,
+          quote,
+          `MoveFlip · close ${s.open_side} · impulse now ${liveImpulse} · reverse with the move`
+        );
+        return;
+      }
+
       const decision = decideBestOutcomeExit(s, quote.mid);
       if (decision.exit) {
         await exitTrade(opened.session, s, quote, decision.reason);
@@ -1299,7 +1329,7 @@ async function robotCycle(s: Internal) {
           s.unrealized != null ? s.unrealized.toFixed(5) : '—'
         } · MFE ${s.mfe.toFixed(5)} · MAE ${s.mae.toFixed(5)} · ret ${
           s.peak_retention != null ? `${(s.peak_retention * 100).toFixed(0)}%` : '—'
-        } · no new orders`,
+        } · impulse ${liveImpulse || '—'} · no new orders`,
       });
       return;
     }
@@ -1320,9 +1350,11 @@ async function robotCycle(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // After close: short pause; after HardInv — brief lock
+    // After close: short pause; MoveFlip → almost immediate opposite
     const hardAgo = s.last_hard_exit_ms > 0 ? Date.now() - s.last_hard_exit_ms : Infinity;
-    const POST_CLOSE_COOLDOWN_MS = hardAgo < 180_000 ? 18_000 : 8_000;
+    const flipAgo = s.last_move_flip_ms > 0 ? Date.now() - s.last_move_flip_ms : Infinity;
+    const justMoveFlip = flipAgo < 90_000;
+    const POST_CLOSE_COOLDOWN_MS = justMoveFlip ? 2_000 : hardAgo < 180_000 ? 18_000 : 8_000;
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
     if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
       pushTick(s, {
@@ -1331,7 +1363,7 @@ async function robotCycle(s: Internal) {
         ask: quote.ask,
         mid: quote.mid,
         detail: `cooldown ${Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000)}s after close${
-          hardAgo < 180_000 ? ' · hard-exit lock' : ''
+          justMoveFlip ? ' · MoveFlip' : hardAgo < 180_000 ? ' · hard-exit lock' : ''
         }`,
       });
       return;
@@ -1483,7 +1515,7 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // Opposite-side lock: skip when impulse confirms the flip; otherwise brief
+    // Opposite-side lock: MoveFlip / live impulse → free flip; otherwise brief
     const hardRecent = s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < 300_000;
     const liveFlip =
       recentImpulse(s.last_minute_candles, 'flip') || recentImpulse(s.last_minute_candles);
@@ -1491,7 +1523,9 @@ async function robotCycle(s: Internal) {
       !!liveFlip &&
       ((liveFlip === 'UP' && entry.direction === 'BUY') ||
         (liveFlip === 'DOWN' && entry.direction === 'SELL'));
-    const SIDE_LOCK_MS = impulseConfirmsFlip ? 0 : hardRecent ? 25_000 : 8_000;
+    const justMoveFlipEntry = s.last_move_flip_ms > 0 && Date.now() - s.last_move_flip_ms < 90_000;
+    const SIDE_LOCK_MS =
+      justMoveFlipEntry || impulseConfirmsFlip ? 0 : hardRecent ? 25_000 : 8_000;
 
     // After soft profit exit — do not re-fire the same side on the next confirm
     if (
@@ -1695,6 +1729,7 @@ export async function startRobotSession(input: {
     last_hard_exit_ms: 0,
     last_soft_exit_ms: 0,
     last_soft_exit_side: null,
+    last_move_flip_ms: 0,
 
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
