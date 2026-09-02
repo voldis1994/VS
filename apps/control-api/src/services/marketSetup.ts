@@ -627,11 +627,10 @@ function rawSetupFromStructure(
   // ——— IMPULSE FIRST — real extension only (not bounce mid-dump / late under high) ———
   if (imp === 'UP') {
     const flow = priceFlowBias(minutes);
-    const trend = marketTrend(minutes);
     const span = Math.max(hi - lo, structure.span, 1);
     const fromHi = hi - last.close;
-    // Bounce tip mid-dump — market still DOWN even if last 2–3m look UP
-    const bounceInDump = trend === 'DOWN' || flow === 'DOWN';
+    // Bounce tip mid-dump — trust flow (flip-first), not sticky 20m trend alone
+    const bounceInDump = flow === 'DOWN';
     // Not through high and already gave back from swing high — UP move finished
     const lateUnderHigh =
       !closedAbove &&
@@ -662,10 +661,9 @@ function rawSetupFromStructure(
   }
   if (imp === 'DOWN') {
     const flow = priceFlowBias(minutes);
-    const trend = marketTrend(minutes);
     const span = Math.max(hi - lo, structure.span, 1);
     const fromLo = last.close - lo;
-    const bounceInRally = trend === 'UP' || flow === 'UP';
+    const bounceInRally = flow === 'UP';
     const lateAboveFloor =
       !closedBelow &&
       last.close > lo + eps * 0.5 &&
