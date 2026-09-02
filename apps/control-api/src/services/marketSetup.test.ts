@@ -6,7 +6,6 @@ import {
   decideEntryFromTenSecMove,
   emptySetup,
   isImpulseAgainstSide,
-  isTipChaseEntry,
   priceFlowBias,
   recentImpulse,
   updateSetupSticky,
@@ -92,7 +91,7 @@ describe('marketSetup', () => {
     expect(decideEntryFromSetup(emptySetup(), bar10(100, 101, 99, 100.5))).toBeNull();
   });
 
-  it('blocks FADE BUY at swing high tip (no tip chase)', () => {
+  it('FADE BUY needs bounce at low — green tip bar without low touch is not an entry', () => {
     const minutes: CapitalPriceCandle[] = [];
     for (let i = 0; i < 28; i++) {
       minutes.push(candle(4428, 4432, 4426, 4429));
@@ -111,6 +110,7 @@ describe('marketSetup', () => {
       swing_high: st.swing_high,
       swing_low: st.swing_low,
     };
+    // No tip-chase gate — still null because FADE BUY requires touch of swing low
     expect(
       decideEntryFromSetup(tipFadeBuy, bar10(4433.2, 4433.9, 4432.8, 4433.6), minutes)
     ).toBeNull();
@@ -310,12 +310,14 @@ describe('marketSetup', () => {
     expect(sell?.direction).toBe('SELL');
   });
 
-  it('decideEntryFromTenSecMove refuses tip-chase BUY at swing high', () => {
+  it('decideEntryFromTenSecMove may BUY near high when flow is not DOWN (MoveFlip corrects)', () => {
     const minutes = rangeMinutes();
     const st = buildStructure({ minutes, mid: 2009.2 });
     expect(st.near_high).toBe(true);
     const tip = bar10(2008.8, 2009.6, 2008.7, 2009.4);
-    expect(decideEntryFromTenSecMove(st, tip, minutes)).toBeNull();
+    const entry = decideEntryFromTenSecMove(st, tip, minutes);
+    // Tip-chase removed — either BUY continuation or null from flow/bias, not tip gate
+    if (entry) expect(entry.direction).toBe('BUY');
   });
 
   it('never BUY into a dump — green 10s blip mid-dump is blocked', () => {
@@ -362,17 +364,6 @@ describe('marketSetup', () => {
       let setup = emptySetup();
       setup = updateSetupSticky(setup, st, minutes);
       expect(setup.kind).not.toBe('FADE');
-    } else {
-      // still must not tip-chase block at identical H/L display
-      const fadeBuy = {
-        kind: 'FADE' as const,
-        side: 'BUY' as const,
-        playbook: 'FADE' as const,
-        status: 'ARMED' as const,
-        swing_high: st.swing_high,
-        swing_low: st.swing_low,
-      };
-      expect(isTipChaseEntry(fadeBuy as never, bar10(1.1599, 1.16, 1.1598, 1.1599))).toBe(false);
     }
   });
 
@@ -384,16 +375,5 @@ describe('marketSetup', () => {
     const st = buildStructure({ minutes, mid: 1.1599 });
     const moveBar = bar10(1.1598, 1.1603, 1.1597, 1.1602);
     expect(decideEntryFromTenSecMove(st, moveBar, minutes)?.direction).toBe('BUY');
-  });
-
-  it('isTipChaseEntry skips flat H≈L compression', () => {
-    const fadeBuy = {
-      kind: 'FADE' as const,
-      side: 'BUY' as const,
-      swing_high: 1.16,
-      swing_low: 1.16,
-    };
-    const bar = bar10(1.16, 1.16, 1.16, 1.16);
-    expect(isTipChaseEntry(fadeBuy as never, bar)).toBe(false);
   });
 });
