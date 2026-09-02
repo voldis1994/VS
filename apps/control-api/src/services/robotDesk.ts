@@ -21,7 +21,7 @@ import {
   normalizeRegime,
   type RegimeName,
 } from './regimes.js';
-import { decideBestOutcomeExit, executableFavorableMove, favorableMove } from './exitManage.js';
+import { decideBestOutcomeExit, executableFavorableMove } from './exitManage.js';
 import {
   playbookFromRegime,
   type Playbook,
