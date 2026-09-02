@@ -296,17 +296,11 @@ describe('marketSetup', () => {
     const buy = decideEntryFromTenSecMove(st, buyBar, minutes);
     expect(buy?.direction).toBe('BUY');
     expect(buy?.setup).toBe('CONTINUATION');
-    const dump: CapitalPriceCandle[] = [...minutes];
-    for (let i = 0; i < 4; i++) {
-      const o = dump.at(-1)!.close;
-      dump.push(candle(o, o + 0.2, o - 1.5, o - 1.3));
-    }
-    expect(recentImpulse(dump, 'flip')).toBe('DOWN');
-    const stDump = buildStructure({ minutes: dump, mid: dump.at(-1)!.close });
-    const last = dump.at(-1)!.close;
-    const sellBar = bar10(last + 0.4, last + 0.5, last - 1.2, last - 1.0);
-    const sell = decideEntryFromTenSecMove(stDump, sellBar, dump);
-    expect(sell?.direction).toBe('SELL');
+    // Without 1m impulse — no random 10s scalp
+    const flat: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 28; i++) flat.push(candle(2005, 2005.3, 2004.7, 2005.1));
+    const stFlat = buildStructure({ minutes: flat, mid: 2005 });
+    expect(decideEntryFromTenSecMove(stFlat, buyBar, flat)).toBeNull();
   });
 
   it('decideEntryFromTenSecMove refuses tip-chase BUY at swing high', () => {
