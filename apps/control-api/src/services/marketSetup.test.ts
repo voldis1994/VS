@@ -8,6 +8,7 @@ import {
   decideUnifiedEntry,
   emptySetup,
   flowAgreesWithSide,
+  flowFlipAtExtreme,
   liveFlow,
   marketTrend,
   minuteConfirmBar,
@@ -385,6 +386,7 @@ describe('marketSetup', () => {
     bars.push(candle(4368.9, 4370.1, 4368.7, 4369.6));
     bars.push(candle(4369.6, 4370.0, 4369.1, 4369.4));
     expect(marketTrend(bars)).toBe('DOWN');
+    expect(flowFlipAtExtreme(bars)).toBeNull(); // stalled last bar — not a live V-flip
     expect(priceFlowBias(bars)).toBe('DOWN');
     expect(recentImpulse(bars, 'flip')).toBe('UP'); // local bounce still UP
     const buyTip = bar10(4369.1, 4369.5, 4369.0, 4369.3);
@@ -398,6 +400,38 @@ describe('marketSetup', () => {
       expect(decideEntryFromSetup(setup, buyTip, bars)).toBeNull();
     }
     expect(decideEntryFromTenSecMove(st, buyTip, bars)).toBeNull();
+  });
+
+  it('Gold 19:45 V-flip — flow flips UP, no late SELL into BUY leg', () => {
+    // Dump 4380→4372 then 3+ green 1m reclaiming toward 4374.8 (screenshot class)
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 14; i++) {
+      bars.push(candle(4376, 4378, 4375, 4377));
+    }
+    bars.push(candle(4377, 4380.2, 4376.5, 4379.5));
+    bars.push(candle(4379.5, 4380.0, 4376.0, 4376.5));
+    bars.push(candle(4376.5, 4377.0, 4374.0, 4374.5));
+    bars.push(candle(4374.5, 4375.0, 4372.2, 4372.5)); // fresh low ~19:45
+    bars.push(candle(4372.5, 4373.4, 4372.3, 4373.2)); // green
+    bars.push(candle(4373.2, 4374.0, 4373.0, 4373.8)); // green
+    bars.push(candle(4373.8, 4374.5, 4373.6, 4374.3)); // green — still printing UP
+    expect(marketTrend(bars)).toBe('DOWN'); // sticky 20m dump still DOWN
+    expect(flowFlipAtExtreme(bars)).toBe('UP');
+    expect(priceFlowBias(bars)).toBe('UP');
+    expect(liveFlow(bars)).toBe('UP');
+    const sellBar = bar10(4374.0, 4374.5, 4373.7, 4374.3);
+    expect(decideEntryFromImpulseCandle(sellBar, bars)?.direction).not.toBe('SELL');
+    expect(decideEntryFromImpulseCandle(sellBar, bars)?.direction).toBe('BUY');
+    const st = buildStructure({ minutes: bars, mid: 4374.3 });
+    expect(
+      decideUnifiedEntry({
+        setup: emptySetup(),
+        structure: st,
+        bar: sellBar,
+        minutes: bars,
+        livePx: 4374.3,
+      })?.direction
+    ).toBe('BUY');
   });
 
   it('refuses impulse entry when last 1m already flipped against the move', () => {
