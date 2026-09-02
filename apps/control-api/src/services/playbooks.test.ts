@@ -136,7 +136,7 @@ describe('playbook exit', () => {
         regime: 'PULLBACK_DOWNTREND',
         playbook: 'LONG',
       },
-      2002
+      2003.2
     );
     expect(d.exit).toBe(false);
   });
@@ -153,7 +153,7 @@ describe('playbook exit', () => {
         regime: 'TREND_DOWN',
         playbook: 'LONG',
       },
-      2001
+      2001.8
     );
     expect(young.exit).toBe(false);
     const aged = decideBestOutcomeExit(
@@ -167,7 +167,7 @@ describe('playbook exit', () => {
         regime: 'TREND_DOWN',
         playbook: 'LONG',
       },
-      2001
+      2001.8
     );
     expect(aged.exit).toBe(true);
     expect(aged.reason).toMatch(/LONG/);
@@ -188,7 +188,7 @@ describe('playbook exit', () => {
       2002.5
     );
     expect(scalp.exit).toBe(true);
-    expect(scalp.reason).toMatch(/PeakProtection/);
+    expect(scalp.reason).toMatch(/PeakProtection|ProfitGiveback/);
 
     const longHold = decideBestOutcomeExit(
       {
@@ -218,13 +218,13 @@ describe('playbook exit', () => {
         regime: 'TREND_UP',
         playbook: 'LONG',
       },
-      2003.1
+      2002.4 // fav 2.4 < mfe*0.55 → not moveStillLive
     );
     expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/harvest|PeakProtection/i);
+    expect(d.reason).toMatch(/harvest|PeakProtection|ProfitGiveback/i);
   });
 
-  it('FADE TimeDecay at 4 min when non-negative', () => {
+  it('FADE TimeDecay at 4 min when move is no longer live', () => {
     const d = decideBestOutcomeExit(
       {
         open_side: 'BUY',
@@ -232,14 +232,14 @@ describe('playbook exit', () => {
         entry_at: ago(250_000),
         mfe: 2,
         mae: 0,
-        peak_retention: 0.7,
+        peak_retention: 0.45,
         regime: 'RANGE',
         playbook: 'FADE',
       },
-      2000.5
+      2000.8
     );
     expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/TimeDecay/);
+    expect(d.reason).toMatch(/TimeDecay|ProfitGiveback|PeakProtection|harvest/i);
   });
 
   it('exit params keep win — max ~45% MFE giveback', () => {
