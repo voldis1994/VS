@@ -37,8 +37,8 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
     slFloor: 0.25,
     mfeFloorPct: 0.0018,
     mfeFloorAbs: 0.18,
-    peakRet: 0.55, // max ~45% giveback
-    harvestRet: 0.7,
+    peakRet: 0.7, // max ~30% giveback
+    harvestRet: 0.8,
     thesisMinHoldMs: 120_000,
     timeDecayMs: 480_000,
   },
@@ -49,8 +49,8 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
     slFloor: 0.19,
     mfeFloorPct: 0.0015,
     mfeFloorAbs: 0.15,
-    peakRet: 0.65, // max ~35% giveback
-    harvestRet: 0.75,
+    peakRet: 0.75, // max ~25% giveback
+    harvestRet: 0.85,
     thesisMinHoldMs: 90_000,
     timeDecayMs: 480_000,
   },
@@ -61,8 +61,8 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
     slFloor: 0.18,
     mfeFloorPct: 0.0012,
     mfeFloorAbs: 0.12,
-    peakRet: 0.6, // max ~40% giveback
-    harvestRet: 0.7,
+    peakRet: 0.7, // max ~30% giveback
+    harvestRet: 0.8,
     thesisMinHoldMs: 90_000,
     timeDecayMs: 240_000,
   },
@@ -108,7 +108,7 @@ export function exitParamsForTrade(
   const base = { ...baseRaw, ...scaleExitFloors(px, baseRaw) };
   const setup = String(entrySetup || '').trim().toUpperCase();
 
-  // V-bounce / dump continuation — ride the leg, but keep ≥55% of MFE
+  // V-bounce / dump continuation — ride the leg, but keep ≥70% of MFE
   if (setup === 'CONTINUATION' || setup === 'PULLBACK') {
     const leg = scaleExitFloors(px, { tpFloor: 4.0, slFloor: baseRaw.slFloor, mfeFloorAbs: 2.5 });
     return {
@@ -119,8 +119,8 @@ export function exitParamsForTrade(
       slFloor: leg.slFloor,
       mfeFloorPct: 0.00055,
       mfeFloorAbs: leg.mfeFloorAbs,
-      peakRet: 0.55,
-      harvestRet: 0.65,
+      peakRet: 0.7,
+      harvestRet: 0.8,
       thesisMinHoldMs: 180_000,
       timeDecayMs: 600_000,
     };
@@ -135,8 +135,8 @@ export function exitParamsForTrade(
       tpFloor: fade.tpFloor,
       mfeFloorPct: 0.00045,
       mfeFloorAbs: fade.mfeFloorAbs,
-      peakRet: 0.55,
-      harvestRet: 0.65,
+      peakRet: 0.7,
+      harvestRet: 0.8,
       thesisMinHoldMs: 120_000,
       timeDecayMs: 420_000,
     };

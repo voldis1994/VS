@@ -29,6 +29,7 @@ import {
 } from './playbooks.js';
 import {
   buildStructure,
+  decideEntryFromImpulseCandle,
   decideEntryFromSetup,
   decideEntryFromTenSecMove,
   emptySetup,
@@ -186,7 +187,7 @@ const STRUCTURE_REFRESH_MS = 10_000;
 const STRUCTURE_MINUTE_BARS = 120;
 const STRUCTURE_HOUR_BARS = 24;
 
-const ACTIVE_CADENCE_MS = 2_000;
+const ACTIVE_CADENCE_MS = 500;
 const CLOSED_MARKET_CADENCE_MS = 90_000;
 const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
 
@@ -1382,15 +1383,25 @@ async function robotCycle(s: Internal) {
       });
     }
 
-    // Structure + sticky setup (1h+1m) — not every quote tick
+    // Structure + sticky setup — refresh often so impulse is not late
     await refreshStructureAndSetup(
       opened.session,
       s,
       quote.mid,
-      !s.structureBook.ready || s.ohlcState.just_closed
+      !s.structureBook.ready ||
+        s.ohlcState.just_closed ||
+        Date.now() - s.last_structure_fetch_ms >= 2_000
     );
 
-    const bar = s.ohlcState.last_closed;
+    const forming = s.ohlcState.forming;
+    const closed = s.ohlcState.last_closed;
+    // Prefer live forming candle when it already confirms — do not wait for bar close
+    const bar =
+      forming && forming.ticks >= 1
+        ? forming
+        : s.ohlcState.just_closed && closed
+          ? closed
+          : closed;
     const st = s.structureBook;
     const setup = s.marketSetup;
     const structLine = st.ready
@@ -1398,97 +1409,54 @@ async function robotCycle(s: Internal) {
       : st.detail;
     const setupLine = `${setup.kind}/${setup.status}${setup.side ? ` ${setup.side}` : ''}`;
     const ohlcLine = bar
-      ? `10s O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · ${structLine} · ${setupLine}`
-      : `10s seeding · ${structLine} · ${setupLine}`;
+      ? `2s O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)}${
+          forming && bar === forming ? ' · forming' : ''
+        } · ${structLine} · ${setupLine}`
+      : `2s seeding · ${structLine} · ${setupLine}`;
 
     if (quote.mid != null) s.last_flat_mid = quote.mid;
 
-    // Need a just-closed 10s bar for any entry (setup confirm OR move-from-NONE)
-    if (!s.ohlcState.just_closed || !bar) {
+    if (!bar) {
+      pushTick(s, {
+        phase: 'DECIDE',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · seeding candle`,
+      });
+      return;
+    }
+
+    // 1) Impulse/flow + confirming candle → entry NOW (both ways)
+    let entry = decideEntryFromImpulseCandle(bar, s.last_minute_candles);
+
+    // 2) Armed setup with candle confirm
+    if (!entry && setup.kind !== 'NONE' && setup.status === 'ARMED') {
+      entry = decideEntryFromSetup(setup, bar, s.last_minute_candles);
+    }
+
+    // 3) Mid-swing NONE — trade the move
+    if (!entry && (setup.kind === 'NONE' || setup.status === 'NONE')) {
+      entry = decideEntryFromTenSecMove(st, bar, s.last_minute_candles);
+    }
+
+    if (!entry && setup.status === 'ARMED') {
+      entry = decideEntryFromTenSecMove(st, bar, s.last_minute_candles);
+    }
+
+    if (!entry) {
       const waitNote =
         setup.kind === 'NONE' || setup.status === 'NONE'
           ? `NONE · ${setup.reason}`
           : setup.status === 'FORMING'
             ? `FORMING · ${setup.reason}`
-            : `ARMED · waiting closed 10s confirm`;
+            : `ARMED · waiting candle confirm · ${setup.reason}`;
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
         detail: `${ohlcLine} · ${waitNote}`,
-      });
-      return;
-    }
-
-    let entry =
-      setup.kind !== 'NONE' && setup.status === 'ARMED'
-        ? decideEntryFromSetup(setup, bar, s.last_minute_candles)
-        : null;
-
-    // Mid-swing NONE was starving every real 10s V-leg — trade the move (never against dump/rally)
-    if (!entry && (setup.kind === 'NONE' || setup.status === 'NONE')) {
-      entry = decideEntryFromTenSecMove(st, bar, s.last_minute_candles);
-      if (!entry) {
-        pushTick(s, {
-          phase: 'DECIDE',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `${ohlcLine} · NONE · ${setup.reason}`,
-        });
-        return;
-      }
-    }
-
-    if (setup.status === 'FORMING' && !entry) {
-      pushTick(s, {
-        phase: 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `${ohlcLine} · FORMING · ${setup.reason}`,
-      });
-      return;
-    }
-
-    if (!entry) {
-      const tipNote =
-        setup.side &&
-        ((setup.side === 'BUY' &&
-          st.ready &&
-          bar.close >= st.swing_high - Math.max(st.span * 0.08, 0.8)) ||
-          (setup.side === 'SELL' &&
-            st.ready &&
-            bar.close <= st.swing_low + Math.max(st.span * 0.08, 0.8)))
-          ? ' · blocked tip-chase'
-          : '';
-      pushTick(s, {
-        phase: 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `${ohlcLine} · ARMED · no 10s confirm yet${tipNote} · ${setup.reason}`,
-      });
-      return;
-    }
-
-    // Opposite-side lock: brief for 10s V-flips; longer only after HardInv
-    const hardRecent = s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < 300_000;
-    const SIDE_LOCK_MS = hardRecent ? 45_000 : 20_000;
-    if (
-      s.last_entry_side &&
-      s.last_entry_side !== entry.direction &&
-      Date.now() - s.last_entry_side_ms < SIDE_LOCK_MS
-    ) {
-      pushTick(s, {
-        phase: 'INFO',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `${ohlcLine} · side-lock ${s.last_entry_side} ${Math.ceil(
-          (SIDE_LOCK_MS - (Date.now() - s.last_entry_side_ms)) / 1000
-        )}s · no flip to ${entry.direction}${hardRecent ? ' · after hard exit' : ''}`,
       });
       return;
     }

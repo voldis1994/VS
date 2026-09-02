@@ -198,11 +198,11 @@ describe('playbook exit', () => {
         entry_at: ago(60_000),
         mfe: 5,
         mae: 0,
-        peak_retention: 0.6,
+        peak_retention: 0.85,
         regime: 'TREND_UP',
         playbook: 'LONG',
       },
-      2003
+      2004.2
     );
     expect(longHold.exit).toBe(false);
   });
@@ -215,30 +215,29 @@ describe('playbook exit', () => {
         entry_at: ago(250_000),
         mfe: 2,
         mae: 0,
-        peak_retention: 0.7,
+        peak_retention: 0.9,
         regime: 'RANGE',
         playbook: 'FADE',
       },
       2000.5
     );
     expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/TimeDecay/);
+    expect(d.reason).toMatch(/TimeDecay|harvest/);
   });
 
   it('exit params match the drawing', () => {
-    expect(PLAYBOOK_EXIT.LONG.peakRet).toBe(0.55);
+    expect(PLAYBOOK_EXIT.LONG.peakRet).toBe(0.7);
     expect(PLAYBOOK_EXIT.LONG.thesisMinHoldMs).toBe(120_000);
     expect(PLAYBOOK_EXIT.SCALP.tpPct).toBe(0.0022);
     expect(PLAYBOOK_EXIT.FADE.timeDecayMs).toBe(240_000);
   });
 
-  it('CONTINUATION/FADE keep ≥55% MFE — 72% giveback is not normal', () => {
-    const cont = exitParamsForTrade('LONG', 'CONTINUATION');
-    expect(cont.peakRet).toBe(0.55);
-    expect(cont.harvestRet).toBe(0.65);
-    const fade = exitParamsForTrade('FADE', 'FADE');
-    expect(fade.peakRet).toBe(0.55);
-    expect(fade.harvestRet).toBe(0.65);
+  it('CONTINUATION/FADE keep ≥70% MFE — +0.43→+0.18 giveback is not normal', () => {
+    const cont = exitParamsForTrade('LONG', 'CONTINUATION', 28932);
+    expect(cont.peakRet).toBe(0.7);
+    expect(cont.harvestRet).toBe(0.8);
+    const fade = exitParamsForTrade('FADE', 'FADE', 28932);
+    expect(fade.peakRet).toBe(0.7);
   });
 });
 

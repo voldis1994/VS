@@ -920,6 +920,40 @@ export function decideEntryFromSetup(
 }
 
 /**
+ * Instant entry when dump/rally bias is clear and the confirm candle agrees.
+ * Uses forming OR closed bar — do not wait for bar close after the move is over.
+ */
+export function decideEntryFromImpulseCandle(
+  bar: TenSecBar,
+  minutes?: CapitalPriceCandle[] | null
+): SetupEntry | null {
+  if (!bar || bar.ticks < 1) return null;
+  const flow =
+    priceFlowBias(minutes) ||
+    (minutes?.length ? recentImpulse(minutes, 'flip') || recentImpulse(minutes) : null);
+  if (!flow) return null;
+  const body = bodyPct(bar);
+  const need = PLAYBOOK_ENTRY_BODY.SCALP * 0.35;
+  if (flow === 'DOWN' && bar.close < bar.open && body <= -need) {
+    return {
+      direction: 'SELL',
+      setup: 'CONTINUATION',
+      playbook: 'LONG',
+      reason: `ENTRY · DOWN + candle confirm O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)}`,
+    };
+  }
+  if (flow === 'UP' && bar.close > bar.open && body >= need) {
+    return {
+      direction: 'BUY',
+      setup: 'CONTINUATION',
+      playbook: 'LONG',
+      reason: `ENTRY · UP + candle confirm O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)}`,
+    };
+  }
+  return null;
+}
+
+/**
  * When sticky setup is NONE mid-swing but the closed 10s bar is a real Gold move,
  * enter CONTINUATION in the bar direction — do not sit out every V-leg as "NONE".
  * Still refuse tip-chase and refuse BUY into dump / SELL into rally.

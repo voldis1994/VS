@@ -108,17 +108,20 @@ export function decideBestOutcomeExit(
   const mfeFloor = Math.max(absEntry * p.mfeFloorPct, p.mfeFloorAbs);
 
   // Arm trail/giveback only after a real run — not on +£0.05 noise
+  // US100 @ ~29k: 0.9 Gold-pts ≈ 5.9 index pts — enough to ignore spread noise
   const protectAfterMfe = Math.max(scaleFromGold(absEntry, 0.9), absEntry * 0.00018);
   const hadProtectedRun = s.mfe >= protectAfterMfe;
   const minProfitExit = Math.max(scaleFromGold(absEntry, 0.35), absEntry * 0.00004);
-  const givebackFloor = Math.max(minProfitExit, s.mfe * 0.55);
-  const peakMinHoldMs = legRide ? 30_000 : Math.min(p.thesisMinHoldMs * 0.5, 45_000);
+  // Keep ≥70% of peak — +0.43 → +0.18 (~42%) is not acceptable
+  const keepFrac = Math.max(p.peakRet, 0.7);
+  const givebackFloor = Math.max(minProfitExit, s.mfe * keepFrac);
+  const peakMinHoldMs = legRide ? 8_000 : Math.min(p.thesisMinHoldMs * 0.35, 20_000);
 
   const moveStillLive =
     fav > 0 &&
     s.peak_retention != null &&
-    s.peak_retention >= 0.55 &&
-    fav >= s.mfe * 0.55;
+    s.peak_retention >= keepFrac &&
+    fav >= s.mfe * keepFrac;
 
   if (fav <= -sl) {
     return {
@@ -163,13 +166,13 @@ export function decideBestOutcomeExit(
     };
   }
 
-  // Fav-based trail when retention missing / lagging — only below 55% keep
+  // Fav-based trail when retention missing / lagging — lock ≥70% of MFE
   if (
     hadProtectedRun &&
     fav >= 0 &&
     fav < givebackFloor &&
-    heldMs >= 12_000 &&
-    (s.peak_retention == null || s.peak_retention < 0.55)
+    heldMs >= 8_000 &&
+    (s.peak_retention == null || s.peak_retention < keepFrac)
   ) {
     return {
       exit: true,

@@ -141,19 +141,21 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     expect(d.exit).toBe(false);
   });
 
-  it('FADE bounce holds past +1.5pt — tpFloor 3 not 0.18', () => {
+  it('ProfitGiveback locks ≥70% of MFE (US100 +0.43 must not close at +0.18)', () => {
+    // Peak ~42 pts from 28932 → closeable 16.5 pts ≈ 39% retention → must exit
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
-        entry_price: 4419,
-        entry_at: ago(90_000),
-        mfe: 1.8,
-        peak_retention: 0.8,
-        playbook: 'FADE',
-        entry_setup: 'FADE',
+        entry_price: 28932.6,
+        entry_at: ago(60_000),
+        mfe: 42,
+        peak_retention: 0.39,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
       }),
-      4420.68
+      { mid: 28949.1, bid: 28949.1, ask: 28950.9 }
     );
-    expect(d.exit).toBe(false);
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/PeakProtection|ProfitGiveback/);
   });
 });
