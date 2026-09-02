@@ -44,7 +44,7 @@ export async function registerMarketRoutes(
           last_update: s.last_quote_at || new Date().toISOString(),
           last_mid: s.last_mid,
           bar_count: snap?.bar_count || 0,
-          brain: snap?.brain ?? null,
+          signal: snap?.signal ?? null,
         });
       }
     }
@@ -66,19 +66,15 @@ export async function registerMarketRoutes(
       last_update: row.last_update,
       last_mid: row.last_mid,
       confidence: row.confidence,
-      brain: row.brain ?? null,
-      side_start: row.brain?.side_start ?? false,
-      side_confirmed: row.brain?.side_confirmed ?? false,
-      side_end: row.brain?.side_end ?? false,
-      macro_regime: row.brain?.macro ?? null,
-      p_trend: row.brain?.p_trend ?? null,
-      p_transition: row.brain?.p_transition ?? null,
-      p_sideways: row.brain?.p_sideways ?? null,
-      p_breakout: row.brain?.p_breakout ?? null,
-      move_state: row.brain?.move_state ?? null,
-      survival: row.brain?.survival ?? null,
-      exhaustion: row.brain?.exhaustion ?? null,
-      adjusted_target: row.brain?.adjusted_target ?? null,
+      signal: row.signal,
+      side_start: row.signal?.side_start ?? false,
+      side_confirmed: row.signal?.side_confirmed ?? false,
+      side_end: row.signal?.side_end ?? false,
+      macro_regime: row.signal?.macro ?? null,
+      p_trend: row.signal?.p_trend ?? null,
+      p_transition: row.signal?.p_transition ?? null,
+      p_sideways: row.signal?.p_sideways ?? null,
+      p_breakout: row.signal?.p_breakout ?? null,
     }));
   });
 

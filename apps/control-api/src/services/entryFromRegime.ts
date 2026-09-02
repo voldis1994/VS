@@ -18,7 +18,7 @@ import {
   nearRealZoneEdge,
   type MarketZoneBook,
 } from './structureZones.js';
-import type { BrainState } from './marketBrain.js';
+import type { SignalOutput } from './signalEngine.js';
 
 export type RegimeEntry = {
   direction: 'BUY' | 'SELL';
@@ -39,17 +39,8 @@ export type EntryContext = {
   zones?: MarketZoneBook | null;
   /** Multi-scale signal engine lifecycle (Units 27–29). */
   signal?: Pick<
-    BrainState,
-    | 'side_start'
-    | 'side_confirmed'
-    | 'side_end'
-    | 'side_active'
-    | 'mr'
-    | 'ti'
-    | 'p_sideways'
-    | 'macro'
-    | 'ready'
-    | 'break_valid'
+    SignalOutput,
+    'side_start' | 'side_confirmed' | 'side_end' | 'mr' | 'ti' | 'p_sideways' | 'macro' | 'ready'
   > | null;
 };
 

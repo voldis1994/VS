@@ -136,9 +136,8 @@ describe('playbook exit', () => {
         regime: 'PULLBACK_DOWNTREND',
         playbook: 'LONG',
       },
-      { mid: 2003.5 }
+      2002
     );
-    // Still above 55% trail of MFE 4 → hold
     expect(d.exit).toBe(false);
   });
 
@@ -154,7 +153,7 @@ describe('playbook exit', () => {
         regime: 'TREND_DOWN',
         playbook: 'LONG',
       },
-      { mid: 2001.8 }
+      2001
     );
     expect(young.exit).toBe(false);
     const aged = decideBestOutcomeExit(
@@ -168,13 +167,13 @@ describe('playbook exit', () => {
         regime: 'TREND_DOWN',
         playbook: 'LONG',
       },
-      { mid: 2001.8 }
+      2001
     );
     expect(aged.exit).toBe(true);
-    expect(aged.reason).toMatch(/LONG|ProfitGiveback/);
+    expect(aged.reason).toMatch(/LONG/);
   });
 
-  it('SCALP PeakProtect at ret < 42%, LONG at < 40%', () => {
+  it('SCALP PeakProtect at ret < 55%, LONG at < 40%', () => {
     const scalp = decideBestOutcomeExit(
       {
         open_side: 'BUY',
@@ -182,29 +181,14 @@ describe('playbook exit', () => {
         entry_at: ago(60_000),
         mfe: 5,
         mae: 0,
-        peak_retention: 0.38,
+        peak_retention: 0.5,
         regime: 'BREAKOUT_UP',
         playbook: 'SCALP',
       },
-      { mid: 2002.5 }
+      2002.5
     );
     expect(scalp.exit).toBe(true);
-    expect(scalp.reason).toMatch(/ProfitGiveback|PeakProtection/);
-
-    const scalpHold = decideBestOutcomeExit(
-      {
-        open_side: 'BUY',
-        entry_price: 2000,
-        entry_at: ago(60_000),
-        mfe: 5,
-        mae: 0,
-        peak_retention: 0.7,
-        regime: 'BREAKOUT_UP',
-        playbook: 'SCALP',
-      },
-      { mid: 2003.8 }
-    );
-    expect(scalpHold.exit).toBe(false);
+    expect(scalp.reason).toMatch(/PeakProtection/);
 
     const longHold = decideBestOutcomeExit(
       {
@@ -213,16 +197,16 @@ describe('playbook exit', () => {
         entry_at: ago(60_000),
         mfe: 5,
         mae: 0,
-        peak_retention: 0.7,
+        peak_retention: 0.6,
         regime: 'TREND_UP',
         playbook: 'LONG',
       },
-      { mid: 2003.8 }
+      2003
     );
     expect(longHold.exit).toBe(false);
   });
 
-  it('FADE TimeDecay or ProfitGiveback when giveback after MFE', () => {
+  it('FADE TimeDecay at 4 min when non-negative', () => {
     const d = decideBestOutcomeExit(
       {
         open_side: 'BUY',
@@ -234,10 +218,10 @@ describe('playbook exit', () => {
         regime: 'RANGE',
         playbook: 'FADE',
       },
-      { mid: 2000.5 }
+      2000.5
     );
     expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/TimeDecay|ProfitGiveback/);
+    expect(d.reason).toMatch(/TimeDecay/);
   });
 
   it('exit params match the drawing', () => {
@@ -264,14 +248,5 @@ describe('thesisFailureForPlaybook', () => {
     expect(thesisFailureForPlaybook('BUY', 'PULLBACK_DOWNTREND', 'LONG')).toBeNull();
     expect(thesisFailureForPlaybook('BUY', 'PULLBACK_DOWNTREND', 'SCALP')).toMatch(/SCALP/);
     expect(thesisFailureForPlaybook('BUY', 'TREND_DOWN', 'FADE')).toMatch(/FADE/);
-  });
-
-  it('SCALP leg ride ignores pullback regime noise', () => {
-    expect(
-      thesisFailureForPlaybook('SELL', 'PULLBACK_UPTREND', 'SCALP', 'BREAKOUT')
-    ).toBeNull();
-    expect(
-      thesisFailureForPlaybook('SELL', 'BREAKOUT_UP', 'SCALP', 'BREAKOUT')
-    ).toMatch(/leg SELL/);
   });
 });

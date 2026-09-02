@@ -1,11 +1,6 @@
-/** Regime + MarketBrain — unified perception/regime/structure/action. */
+/** Regime classifier — multi-scale signal engine (Units 1–29), production. */
 import type { TenSecBar } from './tenSecondOhlc.js';
-import {
-  emptyBrainMemory,
-  updateMarketBrain,
-  type BrainMemory,
-  type BrainState,
-} from './marketBrain.js';
+import { computeSignalEngine, type SignalOutput } from './signalEngine.js';
 
 export const REGIME_NAMES = [
   'RANGE',
@@ -98,8 +93,8 @@ export type RegimeSnapshot = {
   last_update: string;
   last_mid: number | null;
   bar_count: number;
-  /** Unified MarketBrain state (Units 1–70) when warm. */
-  brain: BrainState | null;
+  /** Full signal engine output when bar history is warm (≥137 closed 10s bars). */
+  signal: SignalOutput | null;
 };
 
 type Book = {
@@ -116,8 +111,7 @@ type Book = {
   pending_bars: number;
   /** Bars spent in current regime */
   hold_bars: number;
-  brain: BrainState | null;
-  brain_memory: BrainMemory;
+  signal: SignalOutput | null;
 };
 
 /** Enough history for L=256 rolling stats + N=128 scale. */
@@ -145,11 +139,8 @@ function epicFromBookKey(key: string): string {
 export type ClassifyResult = {
   regime: RegimeName;
   confidence: number;
-  brain: BrainState;
+  signal: SignalOutput;
 };
-
-/** @deprecated alias */
-export type SignalOutput = BrainState;
 
 /**
  * Classify from closed 10s OHLC via multi-scale signal engine.
@@ -164,11 +155,11 @@ export function classifyRegimeDetailed(
   previous: RegimeName = 'RANGE'
 ): ClassifyResult {
   const prev = normalizeRegime(previous);
-  const { state: brain } = updateMarketBrain(bars, prev, emptyBrainMemory());
+  const signal = computeSignalEngine(bars, prev);
   return {
-    regime: normalizeRegime(brain.regime),
-    confidence: brain.confidence,
-    brain,
+    regime: normalizeRegime(signal.regime),
+    confidence: signal.confidence,
+    signal,
   };
 }
 
@@ -183,7 +174,7 @@ function toSnapshot(epic: string, b: Book): RegimeSnapshot {
     last_update: b.last_update,
     last_mid: b.last_mid,
     bar_count: b.bars.length,
-    brain: b.brain,
+    signal: b.signal,
   };
 }
 
@@ -204,8 +195,7 @@ function ensureBook(epic: string, displayName?: string, scopeKey?: string | null
       pending: null,
       pending_bars: 0,
       hold_bars: 0,
-      brain: null,
-      brain_memory: emptyBrainMemory(),
+      signal: null,
     };
     books.set(key, b);
   } else if (displayName) {
@@ -234,11 +224,9 @@ function applyClassify(epic: string, b: Book, newBarCount: number): RegimeSnapsh
   }
 
   const detail = classifyRegimeDetailed(b.bars, b.current);
-  const { state, memory } = updateMarketBrain(b.bars, b.current, b.brain_memory);
-  b.brain = state;
-  b.brain_memory = memory;
-  const raw = state.regime;
-  b.confidence = state.confidence;
+  b.signal = detail.signal;
+  const raw = detail.regime;
+  b.confidence = detail.confidence;
   if (raw === b.current) {
     b.pending = null;
     b.pending_bars = 0;
