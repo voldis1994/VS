@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   decideBestOutcomeExit,
+  executableFavorableMove,
   favorableMove,
   thesisFailureReason,
   type ExitSnapshot,
@@ -30,6 +31,11 @@ describe('per-client exit isolation helpers', () => {
     expect(favorableMove('SELL', 2000, 2005)).toBe(-5);
   });
 
+  it('executableFavorableMove uses bid for BUY / ask for SELL', () => {
+    expect(executableFavorableMove('BUY', 2000, { mid: 2005, bid: 2004, ask: 2006 })).toBe(4);
+    expect(executableFavorableMove('SELL', 2000, { mid: 1995, bid: 1994, ask: 1996 })).toBe(4);
+  });
+
   it('legacy thesisFailureReason stays SCALP-style', () => {
     expect(thesisFailureReason('BUY', 'TREND_DOWN')).toMatch(/ThesisFailure/);
     expect(thesisFailureReason('BUY', 'RANGE')).toBeNull();
@@ -54,28 +60,69 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     expect(d.reason).toMatch(/HardInvalidation/);
   });
 
-  it('LONG peak protect below 40% retention', () => {
+  it('holds live green move past first TP touch', () => {
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
-        entry_price: 2000,
-        mfe: 8,
-        peak_retention: 0.3,
+        entry_price: 4430,
+        entry_at: ago(60_000),
+        mfe: 5,
+        peak_retention: 0.9,
         playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
       }),
-      2002.4
+      4434.5
     );
-    expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/PeakProtection/);
+    expect(d.exit).toBe(false);
   });
 
-  it('target uses playbook TP', () => {
+  it('ReversalStop cuts after protected MFE goes red', () => {
     const d = decideBestOutcomeExit(
-      snap({ open_side: 'BUY', entry_price: 2000, mfe: 8, playbook: 'LONG' }),
-      2008
+      snap({
+        open_side: 'BUY',
+        entry_price: 4430,
+        entry_at: ago(60_000),
+        mfe: 2.0,
+        peak_retention: 0,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+      }),
+      4429.5
     );
     expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/Target/);
+    expect(d.reason).toMatch(/ReversalStop/);
+  });
+
+  it('EarlyCut soft-SL before max when no protected MFE', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4430,
+        entry_at: ago(40_000),
+        mfe: 0.1,
+        playbook: 'LONG',
+      }),
+      4430 - 4430 * 0.0025 * 0.6
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/EarlyCut|HardInvalidation/);
+  });
+
+  it('never PeakProtect into a red closeable P&L', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4430,
+        entry_at: ago(60_000),
+        mfe: 2.5,
+        peak_retention: 0.2,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+      }),
+      { mid: 4431, bid: 4429.5, ask: 4431.2 }
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/ReversalStop/);
   });
 
   it('CONTINUATION bounce holds past +1.5pt — does not FADE-scalp at tpFloor 0.18', () => {
@@ -94,22 +141,6 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     expect(d.exit).toBe(false);
   });
 
-  it('CONTINUATION exits on real target ~12pt rally', () => {
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 4419,
-        entry_at: ago(200_000),
-        mfe: 14,
-        playbook: 'LONG',
-        entry_setup: 'CONTINUATION',
-      }),
-      4432
-    );
-    expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/Target/);
-  });
-
   it('FADE bounce holds past +1.5pt — tpFloor 3 not 0.18', () => {
     const d = decideBestOutcomeExit(
       snap({
@@ -117,6 +148,7 @@ describe('decideBestOutcomeExit playbook-aware', () => {
         entry_price: 4419,
         entry_at: ago(90_000),
         mfe: 1.8,
+        peak_retention: 0.8,
         playbook: 'FADE',
         entry_setup: 'FADE',
       }),

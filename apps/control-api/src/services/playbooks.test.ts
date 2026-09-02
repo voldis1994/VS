@@ -226,7 +226,7 @@ describe('playbook exit', () => {
   });
 
   it('exit params match the drawing', () => {
-    expect(PLAYBOOK_EXIT.LONG.peakRet).toBe(0.4);
+    expect(PLAYBOOK_EXIT.LONG.peakRet).toBe(0.55);
     expect(PLAYBOOK_EXIT.LONG.thesisMinHoldMs).toBe(120_000);
     expect(PLAYBOOK_EXIT.SCALP.tpPct).toBe(0.0022);
     expect(PLAYBOOK_EXIT.FADE.timeDecayMs).toBe(240_000);

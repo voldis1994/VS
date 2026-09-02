@@ -21,7 +21,7 @@ import {
   normalizeRegime,
   type RegimeName,
 } from './regimes.js';
-import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
+import { decideBestOutcomeExit, executableFavorableMove, favorableMove } from './exitManage.js';
 import {
   playbookFromRegime,
   type Playbook,
@@ -546,13 +546,16 @@ function expectedStopFromDistance(
   return direction === 'BUY' ? ref - dist : ref + dist;
 }
 
-function updateExcursion(s: Internal, mid: number) {
+function updateExcursion(
+  s: Internal,
+  quote: { mid: number; bid?: number | null; ask?: number | null }
+) {
   if (!s.open_side || s.entry_price == null) return;
-  const fav = favorableMove(s.open_side, s.entry_price, mid);
+  const fav = executableFavorableMove(s.open_side, s.entry_price, quote);
   s.unrealized = fav;
   if (fav > s.mfe) {
     s.mfe = fav;
-    s.peak_favorable = mid;
+    s.peak_favorable = quote.mid;
   }
   if (fav < s.mae) s.mae = fav;
   s.peak_retention = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
@@ -988,11 +991,20 @@ async function enterTrade(
   s.entry_setup = setupType || null;
   s.mode = 'MANAGE';
   s.last_deal_reference = result.deal_reference || null;
-  s.entry_price = mid;
+  // BUY fills near ask, SELL near bid — mid made tiny wins look green then close red
+  const fillPx =
+    direction === 'BUY'
+      ? quote.ask != null && Number.isFinite(quote.ask)
+        ? quote.ask
+        : mid
+      : quote.bid != null && Number.isFinite(quote.bid)
+        ? quote.bid
+        : mid;
+  s.entry_price = fillPx;
   s.entry_at = new Date().toISOString();
   s.mfe = 0;
   s.mae = 0;
-  s.peak_favorable = mid;
+  s.peak_favorable = fillPx;
   s.peak_retention = null;
   s.unrealized = 0;
   s.safety_sl = stopLevel != null && Number.isFinite(stopLevel) ? stopLevel : null;
@@ -1001,11 +1013,15 @@ async function enterTrade(
   const dealId = await resolveDealId(session, s, result.deal_reference);
   if (dealId) s.deal_id = dealId;
 
-  // Prefer broker-reported stopLevel when available
+  // Prefer broker-reported stopLevel / open level when available
   if (dealId) {
     try {
       const again = await listCapitalOpenPositions(session);
       const pos = again.ok ? matchOpenOnEpic(again.positions, s.epic) : null;
+      if (pos?.open_level != null && Number.isFinite(pos.open_level)) {
+        s.entry_price = pos.open_level;
+        s.peak_favorable = pos.open_level;
+      }
       if (pos?.stop_level != null && Number.isFinite(pos.stop_level)) {
         s.safety_sl = pos.stop_level;
       }
@@ -1241,7 +1257,7 @@ async function robotCycle(s: Internal) {
     }
 
     if (quote.mid != null && s.open_side && s.entry_price != null) {
-      updateExcursion(s, quote.mid);
+      updateExcursion(s, quote);
     }
 
     pushTick(s, {
@@ -1270,7 +1286,11 @@ async function robotCycle(s: Internal) {
       s.mode = 'MANAGE';
       if (quote.mid == null) return;
 
-      const decision = decideBestOutcomeExit(s, quote.mid);
+      const decision = decideBestOutcomeExit(s, {
+        mid: quote.mid,
+        bid: quote.bid,
+        ask: quote.ask,
+      });
       if (decision.exit) {
         await exitTrade(opened.session, s, quote, decision.reason);
         return;

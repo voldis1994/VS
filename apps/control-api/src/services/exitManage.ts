@@ -1,4 +1,4 @@
-/** Live Capital exit — playbook-specific Best Outcome + thesis. */
+/** Live Capital exit — hold live wins, cut failed runs early; use closeable bid/ask. */
 import {
   exitParamsForTrade,
   playbookFromRegime,
@@ -6,8 +6,15 @@ import {
   type Playbook,
   type TradePlaybook,
 } from './playbooks.js';
+import { scaleFromGold } from './instrumentScale.js';
 
 export type ExitSide = 'BUY' | 'SELL';
+
+export type ExitQuote = {
+  mid: number;
+  bid?: number | null;
+  ask?: number | null;
+};
 
 export type ExitSnapshot = {
   open_side: ExitSide | null;
@@ -30,6 +37,28 @@ export function favorableMove(side: ExitSide, entry: number, mid: number): numbe
   return side === 'BUY' ? mid - entry : entry - mid;
 }
 
+/** Closeable P&L — BUY exits at bid, SELL exits at ask (not mid). */
+export function executableFavorableMove(
+  side: ExitSide,
+  entry: number,
+  quote: ExitQuote
+): number {
+  const px =
+    side === 'BUY'
+      ? quote.bid != null && Number.isFinite(quote.bid)
+        ? quote.bid
+        : quote.mid
+      : quote.ask != null && Number.isFinite(quote.ask)
+        ? quote.ask
+        : quote.mid;
+  return favorableMove(side, entry, px);
+}
+
+function asQuote(midOrQuote: number | ExitQuote): ExitQuote {
+  if (typeof midOrQuote === 'number') return { mid: midOrQuote };
+  return midOrQuote;
+}
+
 /** Legacy helper — SCALP-style list; prefer thesisFailureForPlaybook. */
 export function thesisFailureReason(
   side: ExitSide,
@@ -46,31 +75,50 @@ function resolvePlaybook(s: ExitSnapshot): TradePlaybook {
   return fromRegime;
 }
 
+function isLegRide(setup?: string | null): boolean {
+  const s = String(setup || '').trim().toUpperCase();
+  return s === 'CONTINUATION' || s === 'PULLBACK' || s === 'BREAKOUT';
+}
+
 /**
  * Manage exit divided by playbook (LONG / SCALP / FADE).
+ * - Hold green while move still live (≥55% of MFE kept)
+ * - Trail / bank only after a real protected run (~0.9pt Gold), not +0.05 blips
+ * - Cut underwater early after a protected run (do not ride to full SL)
+ * - Decisions use closeable bid/ask so spread cannot turn green mid into red close
  * Broker SAFETY SL remains the hard cushion outside this function.
  */
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
-  mid: number
+  midOrQuote: number | ExitQuote
 ): { exit: boolean; reason: string } {
   if (!s.open_side || s.entry_price == null) return { exit: false, reason: '' };
 
+  const quote = asQuote(midOrQuote);
   const book = resolvePlaybook(s);
-  const p = exitParamsForTrade(book, s.entry_setup);
+  const p = exitParamsForTrade(book, s.entry_setup, s.entry_price);
   const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
-
-  const thesis = thesisFailureForPlaybook(s.open_side, s.regime, book);
-  if (thesis && heldMs >= p.thesisMinHoldMs) {
-    return { exit: true, reason: `${thesis} · ${book} · ${s.entry_setup || 'setup?'}` };
-  }
+  const legRide = isLegRide(s.entry_setup);
 
   const entry = s.entry_price;
-  const fav = favorableMove(s.open_side, entry, mid);
+  const fav = executableFavorableMove(s.open_side, entry, quote);
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   const tp = Math.max(absEntry * p.tpPct, p.tpFloor);
   const sl = Math.max(absEntry * p.slPct, p.slFloor);
   const mfeFloor = Math.max(absEntry * p.mfeFloorPct, p.mfeFloorAbs);
+
+  // Arm trail/giveback only after a real run — not on +£0.05 noise
+  const protectAfterMfe = Math.max(scaleFromGold(absEntry, 0.9), absEntry * 0.00018);
+  const hadProtectedRun = s.mfe >= protectAfterMfe;
+  const minProfitExit = Math.max(scaleFromGold(absEntry, 0.35), absEntry * 0.00004);
+  const givebackFloor = Math.max(minProfitExit, s.mfe * 0.55);
+  const peakMinHoldMs = legRide ? 30_000 : Math.min(p.thesisMinHoldMs * 0.5, 45_000);
+
+  const moveStillLive =
+    fav > 0 &&
+    s.peak_retention != null &&
+    s.peak_retention >= 0.55 &&
+    fav >= s.mfe * 0.55;
 
   if (fav <= -sl) {
     return {
@@ -79,14 +127,58 @@ export function decideBestOutcomeExit(
     };
   }
 
-  if (s.mfe >= mfeFloor && s.peak_retention != null && s.peak_retention < p.peakRet) {
+  // Had real profit, now underwater — cut before full SL
+  if (hadProtectedRun && fav < 0 && heldMs >= 8_000) {
+    return {
+      exit: true,
+      reason: `ReversalStop · ${book} · had MFE ${s.mfe.toFixed(5)} now ${fav.toFixed(5)} · loss capped`,
+    };
+  }
+
+  // Never printed a real run, but deep red — soft cut at ~55% of SL (do not wait for max)
+  const softSl = sl * 0.55;
+  if (!hadProtectedRun && fav <= -softSl && heldMs >= 25_000) {
+    return {
+      exit: true,
+      reason: `EarlyCut · ${book} · UPL ${fav.toFixed(5)} ≤ -softSL ${softSl.toFixed(5)} · no protected MFE`,
+    };
+  }
+
+  const thesis = thesisFailureForPlaybook(s.open_side, s.regime, book);
+  if (thesis && heldMs >= p.thesisMinHoldMs) {
+    return { exit: true, reason: `${thesis} · ${book} · ${s.entry_setup || 'setup?'}` };
+  }
+
+  // Never PeakProtect / harvest into a red closeable P&L
+  if (
+    heldMs >= peakMinHoldMs &&
+    hadProtectedRun &&
+    fav >= 0 &&
+    s.peak_retention != null &&
+    s.peak_retention < p.peakRet
+  ) {
     return {
       exit: true,
       reason: `PeakProtection · ${book} · retention ${(s.peak_retention * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)}`,
     };
   }
 
-  if (fav >= tp) {
+  // Fav-based trail when retention missing / lagging — only below 55% keep
+  if (
+    hadProtectedRun &&
+    fav >= 0 &&
+    fav < givebackFloor &&
+    heldMs >= 12_000 &&
+    (s.peak_retention == null || s.peak_retention < 0.55)
+  ) {
+    return {
+      exit: true,
+      reason: `ProfitGiveback · ${book} · floor ${givebackFloor.toFixed(5)} of MFE ${s.mfe.toFixed(5)} · closeable ${fav.toFixed(5)}`,
+    };
+  }
+
+  // Hit TP — but if move still live, ride (extended target only)
+  if (fav >= tp && (!moveStillLive || fav >= tp * 1.25)) {
     return {
       exit: true,
       reason: `Target · ${book} · ${s.entry_setup || ''} · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)}`,
@@ -94,7 +186,8 @@ export function decideBestOutcomeExit(
   }
 
   if (
-    s.mfe >= mfeFloor &&
+    hadProtectedRun &&
+    !moveStillLive &&
     fav > 0 &&
     s.peak_retention != null &&
     s.peak_retention < p.harvestRet &&
@@ -106,7 +199,12 @@ export function decideBestOutcomeExit(
     };
   }
 
-  if (heldMs > p.timeDecayMs && fav >= 0 && s.mfe >= mfeFloor * 0.5) {
+  if (
+    heldMs > p.timeDecayMs &&
+    !moveStillLive &&
+    fav >= 0 &&
+    s.mfe >= Math.min(mfeFloor, protectAfterMfe) * 0.5
+  ) {
     return {
       exit: true,
       reason: `TimeDecay · ${book} · held ${Math.round(heldMs / 1000)}s · UPL ${fav.toFixed(5)}`,
