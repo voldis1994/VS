@@ -1170,7 +1170,7 @@ export function decideEntryFromTenSecMove(
       direction: 'BUY',
       setup: 'CONTINUATION',
       playbook: 'SCALP',
-      reason: `ENTRY · 10s MOVE BUY O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · setup was NONE`,
+      reason: `ENTRY · 2s MOVE BUY O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · setup was NONE`,
     };
   }
   if (body <= -need) {
@@ -1182,7 +1182,7 @@ export function decideEntryFromTenSecMove(
       direction: 'SELL',
       setup: 'CONTINUATION',
       playbook: 'SCALP',
-      reason: `ENTRY · 10s MOVE SELL O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · setup was NONE`,
+      reason: `ENTRY · 2s MOVE SELL O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · setup was NONE`,
     };
   }
   return null;

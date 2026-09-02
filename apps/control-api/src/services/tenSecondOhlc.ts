@@ -1,4 +1,7 @@
-/** Native 10-second OHLC — same TF as Capital.com 10s chart. */
+/** Entry confirm OHLC — was Capital-style 10s; now 2s for faster arm→entry. */
+
+/** Closed-bar confirm period for setup entry (was 10_000). */
+export const ENTRY_BAR_MS = 2_000;
 
 export type TenSecBar = {
   open_time_ms: number;
@@ -23,7 +26,7 @@ export type CapitalOhlc = {
 };
 
 export function tenSecBucketMs(tsMs: number): number {
-  return Math.floor(tsMs / 10_000) * 10_000;
+  return Math.floor(tsMs / ENTRY_BAR_MS) * ENTRY_BAR_MS;
 }
 
 export function bodyPct(bar: Pick<TenSecBar, 'open' | 'close'>): number {
@@ -36,7 +39,7 @@ export function rangePct(bar: Pick<TenSecBar, 'open' | 'high' | 'low'>): number 
   return (bar.high - bar.low) / mid;
 }
 
-/** Visible on a Capital 10s chart — not tick-to-tick noise. */
+/** Visible move on the confirm bar — not tick-to-tick noise. */
 export function isMoving10s(bar: TenSecBar | null | undefined): boolean {
   if (!bar) return false;
   return Math.abs(bodyPct(bar)) >= 0.00015 || rangePct(bar) >= 0.00025;
@@ -80,20 +83,24 @@ export function updateTenSecondOhlc(state: TenSecState, price: number, tsMs: num
   return { forming, last_closed: lastClosed, just_closed: justClosed };
 }
 
-/** Fold Capital 1-second candles into completed 10-second bars (oldest → newest). */
+/**
+ * Fold Capital 1-second candles into completed confirm bars (oldest → newest).
+ * Chunk size follows ENTRY_BAR_MS (2s → 2×1s candles).
+ */
 export function aggregateSecondsToTen(seconds: CapitalOhlc[]): TenSecBar[] {
-  if (seconds.length < 2) return [];
+  const chunk = Math.max(1, Math.round(ENTRY_BAR_MS / 1000));
+  if (seconds.length < chunk) return [];
   const bars: TenSecBar[] = [];
-  for (let i = 0; i + 10 <= seconds.length; i += 10) {
-    const chunk = seconds.slice(i, i + 10);
-    const first = chunk[0]!;
+  for (let i = 0; i + chunk <= seconds.length; i += chunk) {
+    const slice = seconds.slice(i, i + chunk);
+    const first = slice[0]!;
     bars.push({
       open_time_ms: i * 1000,
       open: first.open,
-      high: Math.max(...chunk.map((c) => c.high)),
-      low: Math.min(...chunk.map((c) => c.low)),
-      close: chunk[chunk.length - 1]!.close,
-      ticks: chunk.length,
+      high: Math.max(...slice.map((c) => c.high)),
+      low: Math.min(...slice.map((c) => c.low)),
+      close: slice[slice.length - 1]!.close,
+      ticks: slice.length,
     });
   }
   return bars;
@@ -108,16 +115,15 @@ export function decideFromClosed10s(
   if (bp <= -0.00015) {
     return {
       direction: 'BUY',
-      reason: `10s OHLC pullback O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} body=${(bp * 100).toFixed(3)}% range=${(rng * 100).toFixed(3)}% → BUY`,
+      reason: `2s OHLC pullback O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} body=${(bp * 100).toFixed(3)}% range=${(rng * 100).toFixed(3)}% → BUY`,
     };
   }
   if (bp >= 0.00015) {
     return {
       direction: 'SELL',
-      reason: `10s OHLC rally O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} body=${(bp * 100).toFixed(3)}% range=${(rng * 100).toFixed(3)}% → SELL`,
+      reason: `2s OHLC rally O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} body=${(bp * 100).toFixed(3)}% range=${(rng * 100).toFixed(3)}% → SELL`,
     };
   }
-  // Wick/range without directional body — still not FLAT, but no fade signal
   return null;
 }
 
