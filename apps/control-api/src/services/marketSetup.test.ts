@@ -8,6 +8,7 @@ import {
   emptySetup,
   flowAgreesWithSide,
   liveFlow,
+  marketTrend,
   moveAlreadyFinished,
   moveStillPrinting,
   priceFlowBias,
@@ -352,6 +353,38 @@ describe('marketSetup', () => {
     let setup = emptySetup();
     setup = updateSetupSticky(setup, st, bars);
     expect(setup.side).not.toBe('BUY');
+  });
+
+  it('Gold 4369 bounce tip mid-dump — no BUY (market still DOWN)', () => {
+    // 17:05 peak ~4374.5 → dump → bounce cluster ~4369–4370 → BUY@4369.30 then dump to 4365
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 12; i++) {
+      bars.push(candle(4368, 4370, 4367, 4369));
+    }
+    // Spike / peak then dump
+    bars.push(candle(4369, 4374.5, 4368.5, 4373.8));
+    bars.push(candle(4373.8, 4374.2, 4371, 4371.5));
+    bars.push(candle(4371.5, 4372, 4369.2, 4369.5));
+    bars.push(candle(4369.5, 4370, 4368, 4368.4));
+    bars.push(candle(4368.4, 4369, 4367.2, 4367.6));
+    // Bounce tip into 4369–4370 (looks UP locally — old liveFlow flipped BUY)
+    bars.push(candle(4367.6, 4369.2, 4367.4, 4368.9));
+    bars.push(candle(4368.9, 4370.1, 4368.7, 4369.6));
+    bars.push(candle(4369.6, 4370.0, 4369.1, 4369.4));
+    expect(marketTrend(bars)).toBe('DOWN');
+    expect(priceFlowBias(bars)).toBe('DOWN');
+    expect(recentImpulse(bars, 'flip')).toBe('UP'); // local bounce still UP
+    const buyTip = bar10(4369.1, 4369.5, 4369.0, 4369.3);
+    expect(decideEntryFromImpulseCandle(buyTip, bars)).toBeNull();
+    const st = buildStructure({ minutes: bars, mid: 4369.3 });
+    let setup = emptySetup();
+    setup = updateSetupSticky(setup, st, bars);
+    setup = updateSetupSticky(setup, st, bars);
+    expect(setup.side).not.toBe('BUY');
+    if (setup.status === 'ARMED' && setup.side === 'BUY') {
+      expect(decideEntryFromSetup(setup, buyTip, bars)).toBeNull();
+    }
+    expect(decideEntryFromTenSecMove(st, buyTip, bars)).toBeNull();
   });
 
   it('refuses impulse entry when last 1m already flipped against the move', () => {

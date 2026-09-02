@@ -306,14 +306,52 @@ export function recentImpulse(
 }
 
 /**
+ * Longer market direction (~20×1m). Bounce tips must not erase a live dump/rally.
+ * Gold 17:41 class: BUY @ 4369 after 4374→ dump — short impulse said UP, market was DOWN.
+ * Left-behind extremes (failed to remake high/low) beat 2–3m bounce color.
+ */
+export function marketTrend(
+  minutes: CapitalPriceCandle[] | null | undefined
+): 'UP' | 'DOWN' | null {
+  if (!minutes || minutes.length < 8) return null;
+  const slice = minutes.slice(-20);
+  const first = slice[0]!;
+  const last = slice[slice.length - 1]!;
+  const hi = Math.max(...slice.map((c) => c.high));
+  const lo = Math.min(...slice.map((c) => c.low));
+  const span = hi - lo;
+  const thr = Math.max(Math.abs(last.close) * 0.0005, 2.0);
+  if (span < thr) return null;
+  const fromHi = hi - last.close;
+  const fromLo = last.close - lo;
+  const net = last.close - first.open;
+  // Dump owns tape: left a clear high behind and not remaking it (bounce tip stays DOWN)
+  if (fromHi >= thr && last.high < hi - thr * 0.25 && fromHi >= fromLo * 0.85) {
+    return 'DOWN';
+  }
+  // Rally owns tape: left a clear low behind and not remaking it
+  if (fromLo >= thr && last.low > lo + thr * 0.25 && fromLo >= fromHi * 0.85) {
+    return 'UP';
+  }
+  if (net <= -thr) return 'DOWN';
+  if (net >= thr) return 'UP';
+  return null;
+}
+
+/**
  * Dump / rally bias including slow grinds (small red candles) that miss impulse persistence.
  * Used to hard-block BUY into dump / SELL into rally.
+ * Longer marketTrend wins over a short bounce/retracement impulse.
  */
 export function priceFlowBias(
   minutes: CapitalPriceCandle[] | null | undefined
 ): 'UP' | 'DOWN' | null {
   if (!minutes || minutes.length < 4) return null;
+  const trend = marketTrend(minutes);
   const imp = recentImpulse(minutes, 'flip') || recentImpulse(minutes);
+  // Bounce mid-dump / dip mid-rally — market owns direction, not the 2–3m blip
+  if (trend && imp && trend !== imp) return trend;
+  if (trend) return trend;
   if (imp) return imp;
   const slice = minutes.slice(-6);
   const first = slice[0]!;
@@ -335,7 +373,7 @@ export function priceFlowBias(
   return null;
 }
 
-/** Current dump/rally — flip first, then impulse, then grind. */
+/** Current dump/rally — market trend first, then flip/impulse. */
 export function liveFlow(
   minutes: CapitalPriceCandle[] | null | undefined
 ): 'UP' | 'DOWN' | null {
@@ -495,10 +533,11 @@ function rawSetupFromStructure(
   // ——— IMPULSE FIRST — real extension only (not bounce mid-dump / late under high) ———
   if (imp === 'UP') {
     const flow = priceFlowBias(minutes);
+    const trend = marketTrend(minutes);
     const span = Math.max(hi - lo, structure.span, 1);
     const fromHi = hi - last.close;
-    // Gold 13:50: bounce blip read IMPULSE UP while dump bias still DOWN → false BUY flip
-    const bounceInDump = flow === 'DOWN';
+    // Bounce tip mid-dump — market still DOWN even if last 2–3m look UP
+    const bounceInDump = trend === 'DOWN' || flow === 'DOWN';
     // Not through high and already gave back from swing high — UP move finished
     const lateUnderHigh =
       !closedAbove &&
@@ -529,9 +568,10 @@ function rawSetupFromStructure(
   }
   if (imp === 'DOWN') {
     const flow = priceFlowBias(minutes);
+    const trend = marketTrend(minutes);
     const span = Math.max(hi - lo, structure.span, 1);
     const fromLo = last.close - lo;
-    const bounceInRally = flow === 'UP';
+    const bounceInRally = trend === 'UP' || flow === 'UP';
     const lateAboveFloor =
       !closedBelow &&
       last.close > lo + eps * 0.5 &&
@@ -925,8 +965,8 @@ export function decideEntryFromSetup(
   const flow = priceFlowBias(minutes);
 
   // Hard: never BUY into a dump / SELL into a rally (green blip mid-dump class)
-  if (setup.side === 'BUY' && flow === 'DOWN') return null;
-  if (setup.side === 'SELL' && flow === 'UP') return null;
+  if (setup.side === 'BUY' && (flow === 'DOWN' || marketTrend(minutes) === 'DOWN')) return null;
+  if (setup.side === 'SELL' && (flow === 'UP' || marketTrend(minutes) === 'UP')) return null;
 
   if (isTipChaseEntry(setup, bar)) {
     return null;
@@ -1049,8 +1089,14 @@ export function decideEntryFromImpulseCandle(
   minutes?: CapitalPriceCandle[] | null
 ): SetupEntry | null {
   if (!bar || bar.ticks < 1) return null;
+  const trend = marketTrend(minutes);
+  const short = recentImpulse(minutes, 'flip') || recentImpulse(minutes);
   const flow = liveFlow(minutes);
   if (!flow) return null;
+  // Bounce/dip against market — do not BUY the tip or SELL the bounce; wait for tape to resolve
+  if (trend && short && trend !== short) return null;
+  if (trend === 'DOWN' && flow === 'UP') return null;
+  if (trend === 'UP' && flow === 'DOWN') return null;
   // Signal finished — last 1m already turned against the move
   if (!moveStillPrinting(flow, minutes)) return null;
   const direction: 'BUY' | 'SELL' = flow === 'UP' ? 'BUY' : 'SELL';
@@ -1094,6 +1140,7 @@ export function decideEntryFromTenSecMove(
   const need = thr * 0.45;
   const flow = priceFlowBias(minutes);
   const live = liveFlow(minutes);
+  const trend = marketTrend(minutes);
   // Move already finished on the last 1m — late entry, skip
   if (live && !moveStillPrinting(live, minutes)) return null;
 
@@ -1102,7 +1149,7 @@ export function decideEntryFromTenSecMove(
   const throughLow = bar.close < lo - eps * 0.05;
 
   if (body >= need || throughHigh) {
-    if (flow === 'DOWN' || structure.bias === 'BELOW') return null;
+    if (flow === 'DOWN' || trend === 'DOWN' || structure.bias === 'BELOW') return null;
     if (moveAlreadyFinished('BUY', minutes, bar.close)) return null;
     // Tip-chase: parked at swing high without clear break — skip
     if (!throughHigh && bar.close >= hi - eps * 0.3 && bar.close <= hi + eps * 0.15) return null;
@@ -1114,7 +1161,7 @@ export function decideEntryFromTenSecMove(
     };
   }
   if (body <= -need || throughLow) {
-    if (flow === 'UP' || structure.bias === 'ABOVE') return null;
+    if (flow === 'UP' || trend === 'UP' || structure.bias === 'ABOVE') return null;
     if (moveAlreadyFinished('SELL', minutes, bar.close)) return null;
     if (!throughLow && bar.close <= lo + eps * 0.3 && bar.close >= lo - eps * 0.15) return null;
     return {
