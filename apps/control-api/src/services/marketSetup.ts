@@ -487,50 +487,72 @@ function rawSetupFromStructure(
   const freshHi = isFreshSwingHigh(minutes, hi, eps);
   const freshLo = isFreshSwingLow(minutes, lo, eps);
 
-  // ——— IMPULSE FIRST — instant flip side, do not wait for sticky opposite to die ———
+  // ——— IMPULSE FIRST — real extension only (not bounce mid-dump / late under high) ———
   if (imp === 'UP') {
-    if (closedAbove || last.close >= hi - eps * 0.5) {
+    const flow = priceFlowBias(minutes);
+    const span = Math.max(hi - lo, structure.span, 1);
+    const fromHi = hi - last.close;
+    // Gold 13:50: bounce blip read IMPULSE UP while dump bias still DOWN → false BUY flip
+    const bounceInDump = flow === 'DOWN';
+    // Not through high and already gave back from swing high — UP move finished
+    const lateUnderHigh =
+      !closedAbove &&
+      last.close < hi - eps * 0.5 &&
+      fromHi >= Math.max(span * 0.22, eps * 2.5);
+    if (!bounceInDump && !lateUnderHigh) {
+      if (closedAbove || last.close >= hi - eps * 0.5) {
+        return {
+          kind: 'BREAKOUT',
+          side: 'BUY',
+          playbook: 'SCALP',
+          status: 'ARMED',
+          swing_high: hi,
+          swing_low: lo,
+          reason: `IMPULSE UP through H${hi.toFixed(2)} → BUY flip now`,
+        };
+      }
       return {
-        kind: 'BREAKOUT',
+        kind: 'CONTINUATION',
         side: 'BUY',
-        playbook: 'SCALP',
+        playbook: 'LONG',
         status: 'ARMED',
         swing_high: hi,
         swing_low: lo,
-        reason: `IMPULSE UP through H${hi.toFixed(2)} → BUY flip now`,
+        reason: `IMPULSE UP → BUY flip now · mid ${structure.mid.toFixed(2)}`,
       };
     }
-    return {
-      kind: 'CONTINUATION',
-      side: 'BUY',
-      playbook: 'LONG',
-      status: 'ARMED',
-      swing_high: hi,
-      swing_low: lo,
-      reason: `IMPULSE UP → BUY flip now · mid ${structure.mid.toFixed(2)}`,
-    };
   }
   if (imp === 'DOWN') {
-    if (closedBelow || last.close <= lo + eps * 0.5) {
+    const flow = priceFlowBias(minutes);
+    const span = Math.max(hi - lo, structure.span, 1);
+    const fromLo = last.close - lo;
+    const bounceInRally = flow === 'UP';
+    const lateAboveFloor =
+      !closedBelow &&
+      last.close > lo + eps * 0.5 &&
+      fromLo >= Math.max(span * 0.22, eps * 2.5);
+    if (!bounceInRally && !lateAboveFloor) {
+      if (closedBelow || last.close <= lo + eps * 0.5) {
+        return {
+          kind: 'BREAKOUT',
+          side: 'SELL',
+          playbook: 'SCALP',
+          status: 'ARMED',
+          swing_high: hi,
+          swing_low: lo,
+          reason: `IMPULSE DOWN through L${lo.toFixed(2)} → SELL flip now`,
+        };
+      }
       return {
-        kind: 'BREAKOUT',
+        kind: 'CONTINUATION',
         side: 'SELL',
-        playbook: 'SCALP',
+        playbook: 'LONG',
         status: 'ARMED',
         swing_high: hi,
         swing_low: lo,
-        reason: `IMPULSE DOWN through L${lo.toFixed(2)} → SELL flip now`,
+        reason: `IMPULSE DOWN → SELL flip now · mid ${structure.mid.toFixed(2)}`,
       };
     }
-    return {
-      kind: 'CONTINUATION',
-      side: 'SELL',
-      playbook: 'LONG',
-      status: 'ARMED',
-      swing_high: hi,
-      swing_low: lo,
-      reason: `IMPULSE DOWN → SELL flip now · mid ${structure.mid.toFixed(2)}`,
-    };
   }
 
   // FAILED_BREAK — only on a FRESH swing extreme, never mid-rally / mid-dump fade

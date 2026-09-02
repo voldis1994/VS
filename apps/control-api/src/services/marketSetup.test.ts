@@ -244,6 +244,31 @@ describe('marketSetup', () => {
     expect(setup.watch_buy).toBeTruthy();
   });
 
+  it('does NOT arm IMPULSE UP BUY flip on bounce under swing high after dump (Gold 13:50)', () => {
+    // Spike ~4344 then dump to ~4328, bounce toward mid — desk said IMPULSE UP→BUY mid 4334
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 20; i++) {
+      const o = 4324 + i * 0.35;
+      bars.push(candle(o, o + 0.4, o - 0.2, o + 0.3));
+    }
+    bars.push(candle(4332, 4338, 4331, 4337));
+    bars.push(candle(4337, 4344.2, 4336.5, 4343.5));
+    bars.push(candle(4343.5, 4344, 4335, 4335.5));
+    bars.push(candle(4335.5, 4336, 4328, 4328.5));
+    bars.push(candle(4328.5, 4330, 4327.2, 4329));
+    // Bounce blip — can look like IMPULSE UP locally
+    bars.push(candle(4329, 4335, 4328.8, 4334.5));
+    bars.push(candle(4334.5, 4339, 4334, 4337.5));
+    const st = buildStructure({ minutes: bars, mid: bars[bars.length - 1]!.close });
+    let setup = emptySetup();
+    setup = updateSetupSticky(setup, st, bars);
+    setup = updateSetupSticky(setup, st, bars);
+    expect(setup.reason).not.toMatch(/IMPULSE UP → BUY flip/i);
+    expect(setup.side).not.toBe('BUY');
+    const buyBar = bar10(4337.0, 4338.8, 4336.9, 4338.5);
+    expect(decideEntryFromImpulseCandle(buyBar, bars)).toBeNull();
+  });
+
   it('local dump impulse arms CONTINUATION SELL — not mid-NONE', () => {
     const bars: CapitalPriceCandle[] = [];
     // Quiet base then hard dump ~8 minutes
