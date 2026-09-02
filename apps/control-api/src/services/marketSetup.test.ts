@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest';
 import type { CapitalPriceCandle } from './capitalCom.js';
 import {
   buildStructure,
+  decideEntryFromImpulseCandle,
   decideEntryFromSetup,
   decideEntryFromTenSecMove,
   emptySetup,
+  flowAgreesWithSide,
+  liveFlow,
+  moveStillPrinting,
   priceFlowBias,
   recentImpulse,
   updateSetupSticky,
@@ -322,5 +326,43 @@ describe('marketSetup', () => {
     let setup = emptySetup();
     setup = updateSetupSticky(setup, st, bars);
     expect(setup.side).not.toBe('BUY');
+  });
+
+  it('refuses impulse entry when last 1m already flipped against the move', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) {
+      const o = 4436 - i * 0.55;
+      bars.push(candle(o, o + 0.2, o - 0.75, o - 0.5));
+    }
+    // Tiny green against the dump — signal finished, do not chase SELL
+    bars.push(candle(4423.5, 4424.8, 4423.3, 4424.4));
+    expect(liveFlow(bars)).toBe('DOWN');
+    expect(moveStillPrinting('DOWN', bars)).toBe(false);
+    const redBlip = bar10(4424.2, 4424.3, 4422.8, 4423.0);
+    expect(decideEntryFromImpulseCandle(redBlip, bars)).toBeNull();
+  });
+
+  it('allows impulse entry while move still printing', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 20; i++) {
+      const o = 2600 + i * 0.4;
+      bars.push(candle(o, o + 0.6, o - 0.1, o + 0.45));
+    }
+    bars.push(candle(2610, 2610.2, 2606, 2606.5));
+    bars.push(candle(2606.5, 2606.8, 2604, 2604.5));
+    expect(liveFlow(bars)).toBe('DOWN');
+    expect(moveStillPrinting('DOWN', bars)).toBe(true);
+    const sellBar = bar10(2605.2, 2605.3, 2603.8, 2604.0);
+    expect(decideEntryFromImpulseCandle(sellBar, bars)?.direction).toBe('SELL');
+  });
+
+  it('flowAgreesWithSide matches open trade to live dump/rally', () => {
+    const dump: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) {
+      const o = 4436 - i * 0.5;
+      dump.push(candle(o, o + 0.2, o - 0.7, o - 0.45));
+    }
+    expect(flowAgreesWithSide('SELL', dump)).toBe(true);
+    expect(flowAgreesWithSide('BUY', dump)).toBe(false);
   });
 });

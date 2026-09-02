@@ -334,6 +334,38 @@ export function priceFlowBias(
   return null;
 }
 
+/** Current dump/rally — flip first, then impulse, then grind. */
+export function liveFlow(
+  minutes: CapitalPriceCandle[] | null | undefined
+): 'UP' | 'DOWN' | null {
+  if (!minutes?.length) return null;
+  return priceFlowBias(minutes) || recentImpulse(minutes, 'flip') || recentImpulse(minutes);
+}
+
+export function flowAgreesWithSide(
+  side: 'BUY' | 'SELL' | null | undefined,
+  minutes?: CapitalPriceCandle[] | null
+): boolean {
+  if (!side) return false;
+  const f = liveFlow(minutes);
+  if (!f) return false;
+  return (side === 'BUY' && f === 'UP') || (side === 'SELL' && f === 'DOWN');
+}
+
+/**
+ * Move still printing on the latest 1m candle.
+ * If last minute already flipped against flow — entry is late (signal finished).
+ */
+export function moveStillPrinting(
+  flow: 'UP' | 'DOWN',
+  minutes?: CapitalPriceCandle[] | null
+): boolean {
+  if (!minutes?.length) return false;
+  const last = minutes[minutes.length - 1]!;
+  if (flow === 'UP') return last.close >= last.open;
+  return last.close <= last.open;
+}
+
 /** Dual-side watch labels — desk shows both, not only the armed side. */
 export function dualSideWatch(
   structure: StructureBook,
@@ -898,6 +930,8 @@ export function decideEntryFromSetup(
   }
 
   if (setup.kind === 'CONTINUATION') {
+    const contFlow = liveFlow(minutes);
+    if (contFlow && !moveStillPrinting(contFlow, minutes)) return null;
     if (setup.side === 'BUY' && body >= thr * 0.55) {
       return {
         direction: 'BUY',
@@ -928,10 +962,10 @@ export function decideEntryFromImpulseCandle(
   minutes?: CapitalPriceCandle[] | null
 ): SetupEntry | null {
   if (!bar || bar.ticks < 1) return null;
-  const flow =
-    priceFlowBias(minutes) ||
-    (minutes?.length ? recentImpulse(minutes, 'flip') || recentImpulse(minutes) : null);
+  const flow = liveFlow(minutes);
   if (!flow) return null;
+  // Signal finished — last 1m already turned against the move
+  if (!moveStillPrinting(flow, minutes)) return null;
   const body = bodyPct(bar);
   const need = PLAYBOOK_ENTRY_BODY.SCALP * 0.35;
   if (flow === 'DOWN' && bar.close < bar.open && body <= -need) {
@@ -971,6 +1005,9 @@ export function decideEntryFromTenSecMove(
   const eps = edgeEps(bar.close, Math.max(hi - lo, structure.span, 1));
   const need = thr * 0.65;
   const flow = priceFlowBias(minutes);
+  const live = liveFlow(minutes);
+  // Move already finished on the last 1m — late entry, skip
+  if (live && !moveStillPrinting(live, minutes)) return null;
 
   if (body >= need) {
     if (flow === 'DOWN' || structure.bias === 'BELOW') return null;

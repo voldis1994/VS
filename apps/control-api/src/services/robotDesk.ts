@@ -34,6 +34,8 @@ import {
   decideEntryFromTenSecMove,
   emptySetup,
   emptyStructure,
+  flowAgreesWithSide,
+  liveFlow,
   playbookFromSetup,
   setupCatalog,
   updateSetupSticky,
@@ -176,9 +178,12 @@ type Internal = RobotSession & {
   last_entry_attempt_ms: number;
   /** Last flat mid — diagnostics only */
   last_flat_mid: number | null;
-  /** Last opened side — block opposite flip spam */
+  /** Last opened side — used with last_exit_side for flip-only re-entry */
   last_entry_side: 'BUY' | 'SELL' | null;
   last_entry_side_ms: number;
+  /** Side we just closed — same side stays dead until flow flips */
+  last_exit_side: 'BUY' | 'SELL' | null;
+  last_exit_ms: number;
   /** After HardInvalidation / thesis fail — longer flip lock */
   last_hard_exit_ms: number;
 };
@@ -269,6 +274,8 @@ function publicSession(s: Internal): RobotSession {
     last_flat_mid: _flatMid,
     last_entry_side: _entrySide,
     last_entry_side_ms: _entrySideAt,
+    last_exit_side: _exitSide,
+    last_exit_ms: _exitAt,
     last_hard_exit_ms: _hardExit,
     ...rest
   } = s;
@@ -763,6 +770,8 @@ async function exitTrade(
   s.exits_done += 1;
   s.last_deal_reference = result.deal_reference || s.last_deal_reference;
   s.closed_at_ms = Date.now();
+  s.last_exit_side = s.open_side;
+  s.last_exit_ms = Date.now();
   if (/HardInvalidation|ThesisFailure|thesis/i.test(reason)) {
     s.last_hard_exit_ms = Date.now();
   }
@@ -1244,6 +1253,8 @@ async function robotCycle(s: Internal) {
           mid: quote.mid,
           detail: 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
         });
+        s.last_exit_side = s.open_side;
+        s.last_exit_ms = Date.now();
         s.closed_at_ms = Date.now();
         clearTradeState(s);
       }
@@ -1287,12 +1298,36 @@ async function robotCycle(s: Internal) {
       s.mode = 'MANAGE';
       if (quote.mid == null) return;
 
+      // Keep 1m flow fresh so we know if soft-exit would just re-open same side
+      await refreshStructureAndSetup(
+        opened.session,
+        s,
+        quote.mid,
+        Date.now() - s.last_structure_fetch_ms >= 2_000
+      );
+
       const decision = decideBestOutcomeExit(s, {
         mid: quote.mid,
         bid: quote.bid,
         ask: quote.ask,
       });
       if (decision.exit) {
+        const softExit = /PeakProtection|ProfitGiveback|BestOutcome harvest|TimeDecay|^Target/i.test(
+          decision.reason
+        );
+        // Do NOT exit a green/soft trail if flow still agrees — next trade would be same side
+        if (softExit && flowAgreesWithSide(s.open_side, s.last_minute_candles)) {
+          pushTick(s, {
+            phase: 'MANAGE',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `HOLD · flow still ${liveFlow(s.last_minute_candles)} with ${s.open_side} · skip soft exit (would re-enter same side) · UPL ${
+              s.unrealized != null ? s.unrealized.toFixed(5) : '—'
+            } · MFE ${s.mfe.toFixed(5)}`,
+          });
+          return;
+        }
         await exitTrade(opened.session, s, quote, decision.reason);
         return;
       }
@@ -1327,19 +1362,15 @@ async function robotCycle(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // After close: 1×10s bar pause; after HardInv — brief lock
-    const hardAgo = s.last_hard_exit_ms > 0 ? Date.now() - s.last_hard_exit_ms : Infinity;
-    const POST_CLOSE_COOLDOWN_MS = hardAgo < 180_000 ? 25_000 : 10_000;
+    // Brief settle only — same-side gate below is the real lock
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
-    if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
+    if (s.closed_at_ms > 0 && sinceClose < 3_000) {
       pushTick(s, {
         phase: 'INFO',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `cooldown ${Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000)}s after close${
-          hardAgo < 180_000 ? ' · hard-exit lock' : ''
-        }`,
+        detail: `settle ${Math.ceil((3_000 - sinceClose) / 1000)}s after close`,
       });
       return;
     }
@@ -1461,6 +1492,24 @@ async function robotCycle(s: Internal) {
       return;
     }
 
+    // ONE rule: after exit, same side is dead until flow flips opposite
+    if (s.last_exit_side && entry.direction === s.last_exit_side) {
+      const flow = liveFlow(s.last_minute_candles);
+      const flipped =
+        (s.last_exit_side === 'BUY' && flow === 'DOWN') ||
+        (s.last_exit_side === 'SELL' && flow === 'UP');
+      if (!flipped) {
+        pushTick(s, {
+          phase: 'INFO',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `${ohlcLine} · same-side dead ${s.last_exit_side} until flip (flow ${flow || '—'}) · no spam re-entry`,
+        });
+        return;
+      }
+    }
+
     const direction = entry.direction;
     const setupType = entry.setup;
     const entryPlaybook = entry.playbook;
@@ -1471,6 +1520,11 @@ async function robotCycle(s: Internal) {
     s.last_entry_attempt_ms = Date.now();
     s.last_entry_side = direction;
     s.last_entry_side_ms = Date.now();
+    // Opposite fill clears same-side lock
+    if (s.last_exit_side && direction !== s.last_exit_side) {
+      s.last_exit_side = null;
+      s.last_exit_ms = 0;
+    }
     pushTick(s, {
       phase: 'ORDER',
       bid: quote.bid,
@@ -1624,6 +1678,8 @@ export async function startRobotSession(input: {
     last_flat_mid: null,
     last_entry_side: null,
     last_entry_side_ms: 0,
+    last_exit_side: null,
+    last_exit_ms: 0,
     last_hard_exit_ms: 0,
 
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
