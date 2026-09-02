@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 import type { CapitalPriceCandle } from './capitalCom.js';
 import {
   buildStructure,
+  decideEntryFromImpulseCandle,
   decideEntryFromSetup,
   decideEntryFromTenSecMove,
   emptySetup,
   isImpulseAgainstSide,
-  isTipChaseEntry,
   priceFlowBias,
   recentImpulse,
   updateSetupSticky,
@@ -92,7 +92,7 @@ describe('marketSetup', () => {
     expect(decideEntryFromSetup(emptySetup(), bar10(100, 101, 99, 100.5))).toBeNull();
   });
 
-  it('blocks FADE BUY at swing high tip (no tip chase)', () => {
+  it('FADE BUY needs bounce at low — green tip bar without low touch is not an entry', () => {
     const minutes: CapitalPriceCandle[] = [];
     for (let i = 0; i < 28; i++) {
       minutes.push(candle(4428, 4432, 4426, 4429));
@@ -111,6 +111,7 @@ describe('marketSetup', () => {
       swing_high: st.swing_high,
       swing_low: st.swing_low,
     };
+    // No tip-chase gate — still null because FADE BUY requires touch of swing low
     expect(
       decideEntryFromSetup(tipFadeBuy, bar10(4433.2, 4433.9, 4432.8, 4433.6), minutes)
     ).toBeNull();
@@ -310,12 +311,14 @@ describe('marketSetup', () => {
     expect(sell?.direction).toBe('SELL');
   });
 
-  it('decideEntryFromTenSecMove refuses tip-chase BUY at swing high', () => {
+  it('decideEntryFromTenSecMove may BUY near high when flow is not DOWN (MoveFlip corrects)', () => {
     const minutes = rangeMinutes();
     const st = buildStructure({ minutes, mid: 2009.2 });
     expect(st.near_high).toBe(true);
     const tip = bar10(2008.8, 2009.6, 2008.7, 2009.4);
-    expect(decideEntryFromTenSecMove(st, tip, minutes)).toBeNull();
+    const entry = decideEntryFromTenSecMove(st, tip, minutes);
+    // Tip-chase removed — either BUY continuation or null from flow/bias, not tip gate
+    if (entry) expect(entry.direction).toBe('BUY');
   });
 
   it('never BUY into a dump — green 10s blip mid-dump is blocked', () => {
@@ -362,17 +365,6 @@ describe('marketSetup', () => {
       let setup = emptySetup();
       setup = updateSetupSticky(setup, st, minutes);
       expect(setup.kind).not.toBe('FADE');
-    } else {
-      // still must not tip-chase block at identical H/L display
-      const fadeBuy = {
-        kind: 'FADE' as const,
-        side: 'BUY' as const,
-        playbook: 'FADE' as const,
-        status: 'ARMED' as const,
-        swing_high: st.swing_high,
-        swing_low: st.swing_low,
-      };
-      expect(isTipChaseEntry(fadeBuy as never, bar10(1.1599, 1.16, 1.1598, 1.1599))).toBe(false);
     }
   });
 
@@ -386,14 +378,63 @@ describe('marketSetup', () => {
     expect(decideEntryFromTenSecMove(st, moveBar, minutes)?.direction).toBe('BUY');
   });
 
-  it('isTipChaseEntry skips flat H≈L compression', () => {
-    const fadeBuy = {
-      kind: 'FADE' as const,
-      side: 'BUY' as const,
-      swing_high: 1.16,
-      swing_low: 1.16,
+  it('decideEntryFromImpulseCandle SELLs on red candle when flow is DOWN', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) bars.push(candle(4318, 4320, 4316, 4318));
+    for (let i = 0; i < 6; i++) {
+      const o = 4316 - i * 1.5;
+      bars.push(candle(o, o + 0.3, o - 1.8, o - 1.4));
+    }
+    expect(priceFlowBias(bars) || recentImpulse(bars)).toBe('DOWN');
+    const red = bar10(4310.5, 4310.6, 4308.2, 4308.5);
+    const entry = decideEntryFromImpulseCandle(red, bars);
+    expect(entry?.direction).toBe('SELL');
+    expect(entry?.setup).toBe('CONTINUATION');
+  });
+
+  it('decideEntryFromImpulseCandle BUYs on green candle when flow is UP', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) bars.push(candle(4305, 4307, 4303, 4305));
+    for (let i = 0; i < 6; i++) {
+      const o = 4306 + i * 1.5;
+      bars.push(candle(o, o + 1.8, o - 0.3, o + 1.4));
+    }
+    expect(priceFlowBias(bars) || recentImpulse(bars)).toBe('UP');
+    const green = bar10(4312.0, 4314.2, 4311.8, 4313.8);
+    const entry = decideEntryFromImpulseCandle(green, bars);
+    expect(entry?.direction).toBe('BUY');
+  });
+
+  it('decideEntryFromImpulseCandle refuses wrong-color candle against flow', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) bars.push(candle(4318, 4320, 4316, 4318));
+    for (let i = 0; i < 6; i++) {
+      const o = 4316 - i * 1.5;
+      bars.push(candle(o, o + 0.3, o - 1.8, o - 1.4));
+    }
+    const greenBlip = bar10(4308.0, 4309.5, 4307.8, 4309.2);
+    expect(decideEntryFromImpulseCandle(greenBlip, bars)).toBeNull();
+  });
+
+  it('CONTINUATION FORMING still enters when candle confirms', () => {
+    const setup = {
+      ...emptySetup(),
+      kind: 'CONTINUATION' as const,
+      side: 'SELL' as const,
+      playbook: 'LONG' as const,
+      status: 'FORMING' as const,
+      confirm: 1,
+      swing_high: 4318,
+      swing_low: 4305,
+      reason: 'IMPULSE DOWN → SELL flip now',
     };
-    const bar = bar10(1.16, 1.16, 1.16, 1.16);
-    expect(isTipChaseEntry(fadeBuy as never, bar)).toBe(false);
+    const dump: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) dump.push(candle(4318, 4320, 4316, 4318));
+    for (let i = 0; i < 6; i++) {
+      const o = 4316 - i * 1.5;
+      dump.push(candle(o, o + 0.3, o - 1.8, o - 1.4));
+    }
+    const red = bar10(4310.5, 4310.6, 4308.2, 4308.5);
+    expect(decideEntryFromSetup(setup, red, dump)?.direction).toBe('SELL');
   });
 });
