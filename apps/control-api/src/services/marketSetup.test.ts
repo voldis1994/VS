@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { CapitalPriceCandle } from './capitalCom.js';
 import {
   buildStructure,
+  decideEntryFromImpulseCandle,
   decideEntryFromSetup,
   decideEntryFromTenSecMove,
   emptySetup,
@@ -375,5 +376,65 @@ describe('marketSetup', () => {
     const st = buildStructure({ minutes, mid: 1.1599 });
     const moveBar = bar10(1.1598, 1.1603, 1.1597, 1.1602);
     expect(decideEntryFromTenSecMove(st, moveBar, minutes)?.direction).toBe('BUY');
+  });
+
+  it('decideEntryFromImpulseCandle SELLs on red candle when flow is DOWN', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) bars.push(candle(4318, 4320, 4316, 4318));
+    for (let i = 0; i < 6; i++) {
+      const o = 4316 - i * 1.5;
+      bars.push(candle(o, o + 0.3, o - 1.8, o - 1.4));
+    }
+    expect(priceFlowBias(bars) || recentImpulse(bars)).toBe('DOWN');
+    const red = bar10(4310.5, 4310.6, 4308.2, 4308.5);
+    const entry = decideEntryFromImpulseCandle(red, bars);
+    expect(entry?.direction).toBe('SELL');
+    expect(entry?.setup).toBe('CONTINUATION');
+  });
+
+  it('decideEntryFromImpulseCandle BUYs on green candle when flow is UP', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) bars.push(candle(4305, 4307, 4303, 4305));
+    for (let i = 0; i < 6; i++) {
+      const o = 4306 + i * 1.5;
+      bars.push(candle(o, o + 1.8, o - 0.3, o + 1.4));
+    }
+    expect(priceFlowBias(bars) || recentImpulse(bars)).toBe('UP');
+    const green = bar10(4312.0, 4314.2, 4311.8, 4313.8);
+    const entry = decideEntryFromImpulseCandle(green, bars);
+    expect(entry?.direction).toBe('BUY');
+  });
+
+  it('decideEntryFromImpulseCandle refuses wrong-color candle against flow', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) bars.push(candle(4318, 4320, 4316, 4318));
+    for (let i = 0; i < 6; i++) {
+      const o = 4316 - i * 1.5;
+      bars.push(candle(o, o + 0.3, o - 1.8, o - 1.4));
+    }
+    const greenBlip = bar10(4308.0, 4309.5, 4307.8, 4309.2);
+    expect(decideEntryFromImpulseCandle(greenBlip, bars)).toBeNull();
+  });
+
+  it('CONTINUATION FORMING still enters when candle confirms', () => {
+    const setup = {
+      ...emptySetup(),
+      kind: 'CONTINUATION' as const,
+      side: 'SELL' as const,
+      playbook: 'LONG' as const,
+      status: 'FORMING' as const,
+      confirm: 1,
+      swing_high: 4318,
+      swing_low: 4305,
+      reason: 'IMPULSE DOWN → SELL flip now',
+    };
+    const dump: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) dump.push(candle(4318, 4320, 4316, 4318));
+    for (let i = 0; i < 6; i++) {
+      const o = 4316 - i * 1.5;
+      dump.push(candle(o, o + 0.3, o - 1.8, o - 1.4));
+    }
+    const red = bar10(4310.5, 4310.6, 4308.2, 4308.5);
+    expect(decideEntryFromSetup(setup, red, dump)?.direction).toBe('SELL');
   });
 });

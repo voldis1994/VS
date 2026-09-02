@@ -6,7 +6,8 @@
  * Hard rules:
  * - Setup changes only on structure refresh / closed bars — never on every quote tick
  * - NONE = no tradeable setup (not a "WAIT regime")
- * - ARMED = setup ready; entry only on closed 10s confirm at the level
+ * - ARMED = setup ready; entry on forming or closed confirm bar when candle agrees
+ * - Impulse/flow + confirming candle → instant BUY/SELL (no wait for bar close)
  * - Open trade freezes setup; manage = best outcome only
  */
 import type { CapitalPriceCandle } from './capitalCom.js';
@@ -725,13 +726,15 @@ export function updateSetupSticky(
 
   if (same) {
     const confirm = Math.min(prevSafe.confirm + 1, SETUP_CONFIRM + 2);
+    // CONTINUATION / BREAKOUT never stay FORMING forever — arm as soon as confirm hits
+    const rideKind = raw.kind === 'CONTINUATION' || raw.kind === 'BREAKOUT';
     const status: SetupStatus =
       raw.kind === 'NONE'
         ? 'NONE'
         : confirm >= SETUP_CONFIRM
-          ? raw.status === 'FORMING'
-            ? 'FORMING'
-            : 'ARMED'
+          ? rideKind || raw.status !== 'FORMING'
+            ? 'ARMED'
+            : 'FORMING'
           : 'FORMING';
     return withWatch({
       ...raw,
@@ -762,11 +765,12 @@ export function updateSetupSticky(
     });
   }
 
-  // Leaving NONE for a real setup is instant
+  // Leaving NONE for a real setup is instant — CONTINUATION/BREAKOUT always ARMED
   if (prevSafe.kind === 'NONE' && raw.kind !== 'NONE' && raw.side) {
+    const rideKind = raw.kind === 'CONTINUATION' || raw.kind === 'BREAKOUT';
     return withWatch({
       ...raw,
-      status: raw.status === 'FORMING' ? 'FORMING' : 'ARMED',
+      status: rideKind || raw.status !== 'FORMING' ? 'ARMED' : 'FORMING',
       confirm: SETUP_CONFIRM,
       updated_at: now,
     });
@@ -824,15 +828,56 @@ export function updateSetupSticky(
 }
 
 /**
- * Entry trigger on CLOSED confirm bar — confirms an ARMED setup.
+ * Instant entry when dump/rally bias is clear and the confirm candle agrees.
+ * Uses forming OR closed bar — do not wait for bar close / sticky ARMED.
+ * MoveFlip corrects if impulse turns after fill.
+ */
+export function decideEntryFromImpulseCandle(
+  bar: TenSecBar,
+  minutes?: CapitalPriceCandle[] | null
+): SetupEntry | null {
+  if (!bar || bar.ticks < 1) return null;
+  const flow =
+    priceFlowBias(minutes) ||
+    (minutes?.length ? recentImpulse(minutes, 'flip') || recentImpulse(minutes) : null);
+  if (!flow) return null;
+  const body = bodyPct(bar);
+  // Light body confirm — any real red/green candle in the impulse direction
+  const need = PLAYBOOK_ENTRY_BODY.SCALP * 0.35;
+  if (flow === 'DOWN' && bar.close < bar.open && body <= -need) {
+    return {
+      direction: 'SELL',
+      setup: 'CONTINUATION',
+      playbook: 'LONG',
+      reason: `ENTRY · DOWN + candle confirm O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)}`,
+    };
+  }
+  if (flow === 'UP' && bar.close > bar.open && body >= need) {
+    return {
+      direction: 'BUY',
+      setup: 'CONTINUATION',
+      playbook: 'LONG',
+      reason: `ENTRY · UP + candle confirm O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)}`,
+    };
+  }
+  return null;
+}
+
+/**
+ * Entry trigger on confirm bar (forming or closed) — confirms an ARMED setup.
  * Tip-chase gates removed: MoveFlip closes and reverses when impulse turns.
+ * CONTINUATION/BREAKOUT may also fire while FORMING once the candle agrees.
  */
 export function decideEntryFromSetup(
   setup: MarketSetup,
   bar: TenSecBar,
   minutes?: CapitalPriceCandle[] | null
 ): SetupEntry | null {
-  if (setup.kind === 'NONE' || setup.status !== 'ARMED' || !setup.side || !setup.playbook) {
+  if (setup.kind === 'NONE' || !setup.side || !setup.playbook) {
+    return null;
+  }
+  const rideKind = setup.kind === 'CONTINUATION' || setup.kind === 'BREAKOUT';
+  if (setup.status !== 'ARMED' && !(setup.status === 'FORMING' && rideKind)) {
     return null;
   }
 
@@ -849,6 +894,7 @@ export function decideEntryFromSetup(
   if (setup.side === 'SELL' && flow === 'UP') return null;
 
   if (setup.kind === 'FADE' || setup.kind === 'FAILED_BREAK') {
+    if (setup.status !== 'ARMED') return null;
     if (setup.side === 'BUY') {
       const touched = bar.low <= lo + eps;
       const stillDumping = bar.close < bar.open && bar.low < lo - eps * 0.5;
@@ -876,7 +922,10 @@ export function decideEntryFromSetup(
   }
 
   if (setup.kind === 'BREAKOUT') {
-    if (setup.side === 'BUY' && body >= thr * 0.6 && bar.close > hi - eps) {
+    // Impulse-aligned breakout: light body once through level
+    const buyNeed = flow === 'UP' ? thr * 0.35 : thr * 0.6;
+    const sellNeed = flow === 'DOWN' ? thr * 0.35 : thr * 0.6;
+    if (setup.side === 'BUY' && body >= buyNeed && bar.close > hi - eps) {
       return {
         direction: 'BUY',
         setup: 'BREAKOUT',
@@ -884,7 +933,7 @@ export function decideEntryFromSetup(
         reason: `ENTRY · BREAKOUT BUY · ${setup.reason}`,
       };
     }
-    if (setup.side === 'SELL' && body <= -thr * 0.6 && bar.close < lo + eps) {
+    if (setup.side === 'SELL' && body <= -sellNeed && bar.close < lo + eps) {
       return {
         direction: 'SELL',
         setup: 'BREAKOUT',
@@ -896,6 +945,7 @@ export function decideEntryFromSetup(
   }
 
   if (setup.kind === 'PULLBACK') {
+    if (setup.status !== 'ARMED') return null;
     if (
       setup.side === 'BUY' &&
       body >= thr * 0.6 &&
@@ -924,7 +974,11 @@ export function decideEntryFromSetup(
   }
 
   if (setup.kind === 'CONTINUATION') {
-    if (setup.side === 'BUY' && body >= thr * 0.55) {
+    // Impulse-aligned continuation: enter as soon as candle color agrees
+    const buyNeed = flow === 'UP' || String(setup.reason).includes('IMPULSE') ? thr * 0.35 : thr * 0.55;
+    const sellNeed =
+      flow === 'DOWN' || String(setup.reason).includes('IMPULSE') ? thr * 0.35 : thr * 0.55;
+    if (setup.side === 'BUY' && body >= buyNeed && bar.close > bar.open) {
       return {
         direction: 'BUY',
         setup: 'CONTINUATION',
@@ -932,7 +986,7 @@ export function decideEntryFromSetup(
         reason: `ENTRY · CONTINUATION BUY · ${setup.reason}`,
       };
     }
-    if (setup.side === 'SELL' && body <= -thr * 0.55) {
+    if (setup.side === 'SELL' && body <= -sellNeed && bar.close < bar.open) {
       return {
         direction: 'SELL',
         setup: 'CONTINUATION',
