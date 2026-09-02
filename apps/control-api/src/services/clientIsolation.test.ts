@@ -34,6 +34,22 @@ describe('multi-client isolation invariants', () => {
     expect(bGold).toContain('18');
   });
 
+  it('desk enforces one cycle + one entry flight + fail-closed position sync', () => {
+    const src = readFileSync(fileURLToPath(new URL('./robotDesk.ts', import.meta.url)), 'utf8');
+    expect(src).toMatch(/cycle_busy/);
+    expect(src).toMatch(/entry_inflight/);
+    expect(src).toMatch(/ONE TRADE PER CLIENT/);
+    expect(src).toMatch(/cannot verify flat/);
+    expect(src).toMatch(/if \(!s\.open_side\) return/);
+    expect(src).toMatch(/async function robotCycleBody/);
+  });
+
+  it('fanout refuses entry when position list fails or another market is open', () => {
+    const src = readFileSync(fileURLToPath(new URL('./intentFanout.ts', import.meta.url)), 'utf8');
+    expect(src).toMatch(/Cannot verify flat/);
+    expect(src).toMatch(/ONE TRADE PER CLIENT/);
+  });
+
   it('Client Panel START uses own desk brain — not Market Core fanout subscription', () => {
     const src = readFileSync(fileURLToPath(new URL('./clientPanel.ts', import.meta.url)), 'utf8');
     expect(src).toMatch(/startRobotSession/);

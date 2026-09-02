@@ -186,6 +186,10 @@ type Internal = RobotSession & {
   last_exit_ms: number;
   /** After HardInvalidation / thesis fail — longer flip lock */
   last_hard_exit_ms: number;
+  /** Skip overlapping setInterval ticks — one cycle at a time per robot */
+  cycle_busy: boolean;
+  /** Block double Capital order while entry awaits broker */
+  entry_inflight: boolean;
 };
 
 const STRUCTURE_REFRESH_MS = 10_000;
@@ -277,6 +281,8 @@ function publicSession(s: Internal): RobotSession {
     last_exit_side: _exitSide,
     last_exit_ms: _exitAt,
     last_hard_exit_ms: _hardExit,
+    cycle_busy: _cycleBusy,
+    entry_inflight: _entryInflight,
     ...rest
   } = s;
   const st = s.structureBook;
@@ -635,8 +641,9 @@ export async function stopFlatManageRobotsForAccount(accountId: number): Promise
 }
 
 /**
- * One account = one live market. Starting US100 must not leave a Kimly (or any other epic)
- * robot running on the same account. Manage-only with an OPEN trade is left alone.
+ * One account = one live robot market. Starting US100 must not leave another epic
+ * entry brain running. Manage-only with an OPEN trade is left alone (cannot open a
+ * second market until that trade is flat — enforced in enterTrade / robotCycle).
  */
 export async function stopOtherRobotsForAccount(
   accountId: number,
@@ -821,9 +828,35 @@ async function enterTrade(
   setupType?: string | null,
   playbook?: TradePlaybook | null
 ) {
-  // HARD RULE: never entry while any trade open on this epic
+  // HARD RULE: one Capital order at a time per robot (blocks overlapping cycles)
+  if (s.entry_inflight || s.open_side) {
+    pushTick(s, {
+      phase: 'WAIT',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: s.open_side
+        ? `ONE TRADE ONLY — already ${s.open_side} · no second entry`
+        : 'ONE TRADE ONLY — entry already in flight · no second order',
+    });
+    return;
+  }
+  s.entry_inflight = true;
+
+  try {
+  // HARD RULE: never entry while ANY open position on this Capital account
   const listed = await listCapitalOpenPositions(session);
-  if (listed.ok) {
+  if (!listed.ok) {
+    pushTick(s, {
+      phase: 'WAIT',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `ONE TRADE — cannot verify flat (${listed.detail}) · no entry`,
+    });
+    return;
+  }
+  {
     const existing = matchOpenOnEpic(listed.positions, s.epic);
     if (existing) {
       s.open_side = existing.direction;
@@ -842,6 +875,17 @@ async function enterTrade(
         ask: quote.ask,
         mid: quote.mid,
         detail: `ONE TRADE ONLY — broker already open ${existing.direction} dealId=${existing.deal_id} · no new entry`,
+      });
+      return;
+    }
+    if (listed.positions.length > 0) {
+      const other = listed.positions[0]!;
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `ONE TRADE PER CLIENT — account already open ${other.direction} ${other.epic} · no second market`,
       });
       return;
     }
@@ -1085,10 +1129,23 @@ async function enterTrade(
   } catch {
     /* Capital order already live */
   }
+  } finally {
+    s.entry_inflight = false;
+  }
 }
 
 
 async function robotCycle(s: Internal) {
+  if (!s.running || s.cycle_busy) return;
+  s.cycle_busy = true;
+  try {
+  await robotCycleBody(s);
+  } finally {
+    s.cycle_busy = false;
+  }
+}
+
+async function robotCycleBody(s: Internal) {
   if (!s.running) return;
 
   const { rows } = await pool.query(
@@ -1228,7 +1285,7 @@ async function robotCycle(s: Internal) {
       }
     }
 
-    // Sync truth from broker — source of ONE TRADE ONLY
+    // Sync truth from broker — source of ONE TRADE ONLY (per client account)
     const listed = await listCapitalOpenPositions(opened.session);
     let brokerOpen: CapitalOpenPosition | null = null;
     if (listed.ok) {
@@ -1245,18 +1302,44 @@ async function robotCycle(s: Internal) {
         s.mode = 'MANAGE';
         if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
       } else if (s.open_side) {
-        // Local thought open but broker flat → treat as closed
+        // Local thought open but broker flat on this epic
+        if (listed.positions.length > 0) {
+          // Still open elsewhere — do not clear local if sync weird; block new entry below
+          pushTick(s, {
+            phase: 'INFO',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: `Broker flat on ${s.epic} but account still has ${listed.positions.length} open · no new entry`,
+          });
+          s.last_exit_side = s.open_side;
+          s.last_exit_ms = Date.now();
+          s.closed_at_ms = Date.now();
+          clearTradeState(s);
+        } else {
+          pushTick(s, {
+            phase: 'INFO',
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            detail: 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
+          });
+          s.last_exit_side = s.open_side;
+          s.last_exit_ms = Date.now();
+          s.closed_at_ms = Date.now();
+          clearTradeState(s);
+        }
+      } else if (listed.positions.length > 0) {
+        // Flat on this epic but another market open on same account — one trade per client
+        const other = listed.positions[0]!;
         pushTick(s, {
-          phase: 'INFO',
+          phase: 'WAIT',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
+          detail: `ONE TRADE PER CLIENT — ${other.direction} ${other.epic} still open · this robot waits`,
         });
-        s.last_exit_side = s.open_side;
-        s.last_exit_ms = Date.now();
-        s.closed_at_ms = Date.now();
-        clearTradeState(s);
+        return;
       }
     } else {
       pushTick(s, {
@@ -1266,6 +1349,8 @@ async function robotCycle(s: Internal) {
         mid: quote.mid,
         detail: `Position sync warn: ${listed.detail} · holding ONE TRADE rule (no new entry if unsure)`,
       });
+      // Fail closed: only continue into MANAGE when we already track an open trade
+      if (!s.open_side) return;
     }
 
     if (quote.mid != null && s.open_side && s.entry_price != null) {
@@ -1532,6 +1617,16 @@ async function robotCycle(s: Internal) {
       mid: quote.mid,
       detail: `${ohlcLine} · OPEN ${direction} · ${reason}`,
     });
+    if (s.entry_inflight || s.open_side) {
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: 'ONE TRADE — entry locked · skip duplicate open',
+      });
+      return;
+    }
     await enterTrade(opened.session, s, direction, quote, reason, setupType, entryPlaybook);
     return;
   } catch (err) {
@@ -1681,6 +1776,8 @@ export async function startRobotSession(input: {
     last_exit_side: null,
     last_exit_ms: 0,
     last_hard_exit_ms: 0,
+    cycle_busy: false,
+    entry_inflight: false,
 
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
