@@ -1578,20 +1578,32 @@ async function robotCycle(s: Internal) {
         ? decideEntryFromSetup(setup, bar, s.last_minute_candles)
         : null;
 
-    // 1m impulse + live 10s — enter the leg while setup is still FORMING/NONE
-    if (!entry && s.last_minute_candles?.length) {
+    // Live impulse only for NONE or same-family CONTINUATION/BREAKOUT — never override FADE/PULLBACK
+    const impulseFamily =
+      setup.kind === 'NONE' ||
+      setup.status === 'NONE' ||
+      setup.kind === 'CONTINUATION' ||
+      setup.kind === 'BREAKOUT';
+    if (!entry && impulseFamily && s.last_minute_candles?.length) {
       const impulseBar =
-        forming && forming.ticks >= 3 ? forming : bar && inEntryWindow ? bar : null;
+        forming && forming.ticks >= 5 ? forming : bar && inEntryWindow ? bar : null;
       if (impulseBar) {
-        entry = decideEntryFromImpulseMove(st, s.last_minute_candles, impulseBar);
+        const impulse = decideEntryFromImpulseMove(st, s.last_minute_candles, impulseBar);
+        if (
+          impulse &&
+          (!setup.side || setup.kind === 'NONE' || setup.status === 'NONE' || setup.side === impulse.direction)
+        ) {
+          entry = impulse;
+        }
       }
     }
 
-    if (!entry && (setup.status === 'ARMED' || setup.status === 'FORMING') && forming) {
+    // Live forming — ARMED CONTINUATION/BREAKOUT only (not FORMING noise)
+    if (!entry && setup.status === 'ARMED' && forming) {
       entry = decideEntryFromFormingSetup(setup, forming, s.last_minute_candles);
     }
 
-    // Mid-swing NONE was starving every real 10s V-leg — trade the move (never against dump/rally)
+    // NONE: only a strong closed 10s that agrees with 1m impulse (no random scalp)
     if (!entry && (setup.kind === 'NONE' || setup.status === 'NONE') && bar && inEntryWindow) {
       entry = decideEntryFromTenSecMove(st, bar, s.last_minute_candles);
       if (!entry) {
@@ -1604,11 +1616,6 @@ async function robotCycle(s: Internal) {
         });
         return;
       }
-    }
-
-    // FX quiet: FADE ARMED on H≈L never confirms — still trade real closed 10s moves
-    if (!entry && setup.status === 'ARMED' && bar) {
-      entry = decideEntryFromTenSecMove(st, bar, s.last_minute_candles);
     }
 
     if (setup.status === 'FORMING' && !entry) {
@@ -1658,9 +1665,9 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // Opposite-side lock: short — long locks forced tip entries after the flip already ran
+    // Opposite-side lock — stop flip spam / random BUY↔SELL
     const hardRecent = s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < 300_000;
-    const SIDE_LOCK_MS = hardRecent ? 35_000 : 18_000;
+    const SIDE_LOCK_MS = hardRecent ? 60_000 : 45_000;
     if (
       s.last_entry_side &&
       s.last_entry_side !== entry.direction &&

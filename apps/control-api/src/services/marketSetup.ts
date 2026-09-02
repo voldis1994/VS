@@ -1152,10 +1152,8 @@ export function decideEntryFromFormingSetup(
   minutes?: CapitalPriceCandle[] | null
 ): SetupEntry | null {
   if (setup.kind !== 'CONTINUATION' && setup.kind !== 'BREAKOUT') return null;
-  if ((setup.status !== 'ARMED' && setup.status !== 'FORMING') || !setup.side || !setup.playbook) {
-    return null;
-  }
-  if (forming.ticks < 4) return null;
+  if (setup.status !== 'ARMED' || !setup.side || !setup.playbook) return null;
+  if (forming.ticks < 5) return null;
 
   const book = setup.playbook;
   const thr = PLAYBOOK_ENTRY_BODY[book];
@@ -1226,6 +1224,8 @@ export function decideEntryFromTenSecMove(
 ): SetupEntry | null {
   if (!structure.ready) return null;
   if (isQuietSideways(minutes)) return null;
+  const imp = recentImpulse(minutes || [], 'flip') || recentImpulse(minutes || []);
+  if (!imp) return null; // no random 10s scalp without 1m impulse
   const thr = PLAYBOOK_ENTRY_BODY.SCALP;
   const body = bodyPct(bar);
   const hi = structure.swing_high;
@@ -1233,22 +1233,23 @@ export function decideEntryFromTenSecMove(
   const minSpan = minSwingSpan(bar.close);
   const span = Math.max(hi - lo, structure.span, minSpan);
   const eps = edgeEps(bar.close, span);
-  const need = thr * 0.48;
+  const need = thr * 0.85; // stronger than scalp noise
   const flow = priceFlowBias(minutes);
 
   if (body >= need) {
+    if (imp !== 'UP') return null;
     if (flow === 'DOWN' || structure.bias === 'BELOW') return null;
-    // Tip-chase: green bar parked at swing high — skip
     if (bar.close >= hi - eps * 0.3 && bar.close <= hi + eps * 0.15) return null;
     if (isLateChaseOnLocalLeg('BUY', minutes, bar)) return null;
     return {
       direction: 'BUY',
       setup: 'CONTINUATION',
       playbook: 'LONG',
-      reason: `ENTRY · 10s MOVE BUY O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · setup was NONE`,
+      reason: `ENTRY · 10s MOVE BUY O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · 1m impulse UP`,
     };
   }
   if (body <= -need) {
+    if (imp !== 'DOWN') return null;
     if (flow === 'UP' || structure.bias === 'ABOVE') return null;
     if (bar.close <= lo + eps * 0.3 && bar.close >= lo - eps * 0.15) return null;
     if (isLateChaseOnLocalLeg('SELL', minutes, bar)) return null;
@@ -1256,7 +1257,7 @@ export function decideEntryFromTenSecMove(
       direction: 'SELL',
       setup: 'CONTINUATION',
       playbook: 'LONG',
-      reason: `ENTRY · 10s MOVE SELL O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · setup was NONE`,
+      reason: `ENTRY · 10s MOVE SELL O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · 1m impulse DOWN`,
     };
   }
   return null;
@@ -1278,13 +1279,15 @@ export function decideEntryFromImpulseMove(
 
   const body = bodyPct(bar);
   const thr = PLAYBOOK_ENTRY_BODY.SCALP;
-  const need = thr * 0.35;
+  const need = thr * 0.55;
   const hi = structure.swing_high;
   const lo = structure.swing_low;
   const span = Math.max(hi - lo, structure.span, minSwingSpan(bar.close));
   const eps = edgeEps(bar.close, span);
+  const flow = priceFlowBias(minutes);
 
   if (imp === 'UP') {
+    if (flow === 'DOWN') return null;
     if (body < need || bar.close <= bar.open) return null;
     if (bar.close >= hi - eps * 0.3 && bar.close <= hi + eps * 0.15) return null;
     const leg: MarketSetup = {
@@ -1310,6 +1313,7 @@ export function decideEntryFromImpulseMove(
   }
 
   if (imp === 'DOWN') {
+    if (flow === 'UP') return null;
     if (body > -need || bar.close >= bar.open) return null;
     if (bar.close <= lo + eps * 0.3 && bar.close >= lo - eps * 0.15) return null;
     const leg: MarketSetup = {

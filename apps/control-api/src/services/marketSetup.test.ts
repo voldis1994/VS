@@ -280,26 +280,31 @@ describe('marketSetup', () => {
   });
 
   it('decideEntryFromTenSecMove trades strong 10s when structure mid-NONE', () => {
-    // Directional grind so isQuietSideways is false
+    // Strong directional impulse so 10s path is not random
     const minutes: CapitalPriceCandle[] = [];
-    for (let i = 0; i < 22; i++) {
-      minutes.push(candle(2000 + i * 0.15, 2000.4 + i * 0.15, 1999.8 + i * 0.15, 2000.2 + i * 0.15));
+    for (let i = 0; i < 20; i++) {
+      minutes.push(candle(2000, 2001, 1999.5, 2000.2));
     }
+    minutes.push(candle(2000.2, 2001, 2000, 2000.5));
+    minutes.push(candle(2000.5, 2003, 2000.4, 2002.8));
+    minutes.push(candle(2002.8, 2005.5, 2002.5, 2005.2));
+    expect(recentImpulse(minutes, 'flip')).toBe('UP');
     const st = buildStructure({ minutes, mid: minutes.at(-1)!.close });
     expect(st.ready).toBe(true);
     expect(isQuietSideways(minutes)).toBe(false);
-    const buyBar = bar10(2003.2, 2004.5, 2003.1, 2004.3);
+    const buyBar = bar10(2004.0, 2005.2, 2003.9, 2005.0);
     const buy = decideEntryFromTenSecMove(st, buyBar, minutes);
     expect(buy?.direction).toBe('BUY');
     expect(buy?.setup).toBe('CONTINUATION');
     const dump: CapitalPriceCandle[] = [...minutes];
-    for (let i = 0; i < 6; i++) {
-      const o = dump.at(-1)!.close - 1.1;
-      dump.push(candle(o + 1.1, o + 1.3, o - 0.2, o));
+    for (let i = 0; i < 4; i++) {
+      const o = dump.at(-1)!.close;
+      dump.push(candle(o, o + 0.2, o - 1.5, o - 1.3));
     }
+    expect(recentImpulse(dump, 'flip')).toBe('DOWN');
     const stDump = buildStructure({ minutes: dump, mid: dump.at(-1)!.close });
     const last = dump.at(-1)!.close;
-    const sellBar = bar10(last + 0.3, last + 0.4, last - 1.5, last - 1.2);
+    const sellBar = bar10(last + 0.4, last + 0.5, last - 1.2, last - 1.0);
     const sell = decideEntryFromTenSecMove(stDump, sellBar, dump);
     expect(sell?.direction).toBe('SELL');
   });
@@ -409,7 +414,7 @@ describe('marketSetup', () => {
     expect(hit?.reason).toMatch(/live 10s/);
   });
 
-  it('CONTINUATION FORMING status can enter on live 10s bar', () => {
+  it('CONTINUATION FORMING status does not enter — wait ARMED', () => {
     const formingSetup = {
       ...emptySetup(),
       kind: 'CONTINUATION' as const,
@@ -422,7 +427,7 @@ describe('marketSetup', () => {
     };
     const live = bar10(4308.2, 4309.5, 4308.1, 4309.3);
     live.ticks = 5;
-    expect(decideEntryFromFormingSetup(formingSetup, live, [])?.direction).toBe('BUY');
+    expect(decideEntryFromFormingSetup(formingSetup, live, [])).toBeNull();
   });
 
   it('decideEntryFromImpulseMove enters rally leg without waiting ARMED setup', () => {
