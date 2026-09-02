@@ -1303,13 +1303,14 @@ async function robotCycle(s: Internal) {
       const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
       const impulseAgainst = isImpulseAgainstSide(s.open_side, s.last_minute_candles);
 
-      // Simple flip: move turned against us → close, then opposite may open
+      // Simple flip both ways: BUY↔SELL when impulse turns against the open side
       if (impulseAgainst && heldMs >= 8_000 && s.open_side) {
+        const reverse = s.open_side === 'BUY' ? 'SELL' : 'BUY';
         await exitTrade(
           opened.session,
           s,
           quote,
-          `MoveFlip · close ${s.open_side} · impulse now ${liveImpulse} · reverse with the move`
+          `MoveFlip · close ${s.open_side} → allow ${reverse} · impulse now ${liveImpulse}`
         );
         return;
       }
