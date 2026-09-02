@@ -16,17 +16,20 @@ import { PLAYBOOK_ENTRY_BODY } from './playbooks.js';
 import { bodyPct, type TenSecBar } from './tenSecondOhlc.js';
 
 /**
- * Micro-swing confirm bar = last Capital 1m (+ live mid overlay).
- * 2s OHLC stays for UI/diagnostics — entry decisions use this 1m bar.
+ * Micro-swing confirm bar = last Capital 1m.
+ * By default NO live mid overlay — live mid turns a forming wick into a fake body (spike chase).
+ * Pass liveMid only for level-through checks (BREAKOUT), not for candle color confirm.
  */
 export function minuteConfirmBar(
   minutes: CapitalPriceCandle[] | null | undefined,
-  liveMid?: number | null
+  liveMid?: number | null,
+  opts?: { overlayLive?: boolean }
 ): TenSecBar | null {
   if (!minutes?.length) return null;
   const m = minutes[minutes.length - 1]!;
+  const overlay = opts?.overlayLive === true;
   const live =
-    liveMid != null && Number.isFinite(liveMid) ? Number(liveMid) : m.close;
+    overlay && liveMid != null && Number.isFinite(liveMid) ? Number(liveMid) : m.close;
   return {
     open_time_ms: 0,
     open: m.open,
@@ -35,6 +38,76 @@ export function minuteConfirmBar(
     close: live,
     ticks: Math.max(1, 5),
   };
+}
+
+/**
+ * True when this 1m bar is a spike vs recent bodies — do not enter ON it; wait next confirm.
+ * Gold 20:29 class: selling the impulse/first twitch without a confirming closed candle.
+ */
+export function isSpikeCandle(
+  bar: CapitalPriceCandle,
+  prior: CapitalPriceCandle[] | null | undefined
+): boolean {
+  if (!bar || !prior?.length) return false;
+  const body = Math.abs(bar.close - bar.open);
+  const range = Math.max(bar.high - bar.low, 1e-9);
+  const px = Math.max(Math.abs(bar.close), 1e-9);
+  const minSpike = Math.max(px * 0.00045, 1.8); // ~2pt Gold
+  if (body < minSpike && range < minSpike * 1.15) return false;
+  const sample = prior.slice(-8);
+  if (sample.length < 3) return body >= minSpike * 1.5;
+  const bodies = sample.map((c) => Math.abs(c.close - c.open)).sort((a, b) => a - b);
+  const med = bodies[Math.floor(bodies.length / 2)]!;
+  const typical = Math.max(med, px * 0.00012, 0.35);
+  // Spike = body much larger than typical recent OR almost all-range wick thrust
+  if (body >= typical * 2.8 && body >= minSpike) return true;
+  if (range >= typical * 3.2 && body >= minSpike * 0.85) return true;
+  return false;
+}
+
+/**
+ * Entry requires a closed 1m candle that confirms direction — not a spike, not opposite color.
+ * After a spike the OTHER way, need the next bar to close beyond the spike close (your old rule).
+ * Returns null if OK, or a short wait reason.
+ */
+export function entryCandleConfirmDeny(
+  direction: 'BUY' | 'SELL',
+  minutes?: CapitalPriceCandle[] | null
+): string | null {
+  if (!minutes || minutes.length < 2) return 'wait · need closed 1m confirm';
+  const cur = minutes[minutes.length - 1]!;
+  const prev = minutes[minutes.length - 2]!;
+  const prior = minutes.slice(0, -1);
+
+  // Never enter on the spike candle itself
+  if (isSpikeCandle(cur, prior)) {
+    return 'wait · spike 1m — need next candle confirm';
+  }
+
+  // Closed candle must agree with side (no BUY on red / SELL on green)
+  if (direction === 'BUY' && !(cur.close > cur.open)) {
+    return 'wait · need closed green 1m confirm';
+  }
+  if (direction === 'SELL' && !(cur.close < cur.open)) {
+    return 'wait · need closed red 1m confirm';
+  }
+
+  // After a large spike against us / exhaustion: confirm closes beyond spike close
+  if (isSpikeCandle(prev, minutes.slice(0, -2))) {
+    if (direction === 'SELL') {
+      // Prior was UP spike — only SELL if this red closes below the spike close
+      if (!(prev.close > prev.open && cur.close < prev.close)) {
+        return 'wait · confirm after UP spike (close below spike)';
+      }
+    }
+    if (direction === 'BUY') {
+      if (!(prev.close < prev.open && cur.close > prev.close)) {
+        return 'wait · confirm after DOWN spike (close above spike)';
+      }
+    }
+  }
+
+  return null;
 }
 
 export const SETUP_KINDS = [
@@ -1384,6 +1457,8 @@ export function decideUnifiedEntry(opts: {
 
   if (!entry) return null;
   if (entryFightsStickyTrend(entry.direction, minutes)) return null;
+  const candleDeny = entryCandleConfirmDeny(entry.direction, minutes);
+  if (candleDeny) return null;
   return entry;
 }
 

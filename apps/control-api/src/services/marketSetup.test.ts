@@ -41,9 +41,10 @@ function rangeMinutes(): CapitalPriceCandle[] {
 }
 
 describe('marketSetup', () => {
-  it('minuteConfirmBar overlays live mid on last 1m candle', () => {
+  it('minuteConfirmBar overlays live mid only when requested', () => {
     const minutes = [candle(100, 101, 99, 100.5), candle(100.5, 101.2, 100.4, 101.0)];
-    const bar = minuteConfirmBar(minutes, 101.4);
+    expect(minuteConfirmBar(minutes, 101.4)?.close).toBe(101.0);
+    const bar = minuteConfirmBar(minutes, 101.4, { overlayLive: true });
     expect(bar?.open).toBe(100.5);
     expect(bar?.close).toBe(101.4);
     expect(bar?.high).toBe(101.4);
@@ -638,16 +639,18 @@ describe('decideUnifiedEntry', () => {
 
   it('NONE can still catch filtered impulse (profitable move path)', () => {
     const bars: CapitalPriceCandle[] = [];
-    for (let i = 0; i < 18; i++) bars.push(candle(2005, 2006, 2004, 2005));
-    bars.push(candle(2005, 2012, 2004.5, 2011.5));
-    bars.push(candle(2011.5, 2014, 2011, 2013.5)); // UP still printing
-    const bar = bar10(2011.5, 2014, 2011, 2013.5);
+    for (let i = 0; i < 14; i++) bars.push(candle(2005, 2006.5, 2004, 2005.5));
+    // Gradual UP (not one spike candle) — closed green confirms
+    bars.push(candle(2005.5, 2007.5, 2005.2, 2007.2));
+    bars.push(candle(2007.2, 2009.0, 2007.0, 2008.8));
+    bars.push(candle(2008.8, 2010.5, 2008.5, 2010.2));
+    const bar = minuteConfirmBar(bars)!;
     const entry = decideUnifiedEntry({
       setup: emptySetup(),
       structure: readyStructure('ABOVE'),
       bar,
       minutes: bars,
-      livePx: 2013.5,
+      livePx: 2010.2,
       allowNoneImpulse: true,
     });
     expect(entry?.direction).toBe('BUY');
