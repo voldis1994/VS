@@ -9,6 +9,7 @@ import {
   flowAgreesWithSide,
   liveFlow,
   marketTrend,
+  minuteConfirmBar,
   moveAlreadyFinished,
   moveStillPrinting,
   priceFlowBias,
@@ -36,6 +37,14 @@ function rangeMinutes(): CapitalPriceCandle[] {
 }
 
 describe('marketSetup', () => {
+  it('minuteConfirmBar overlays live mid on last 1m candle', () => {
+    const minutes = [candle(100, 101, 99, 100.5), candle(100.5, 101.2, 100.4, 101.0)];
+    const bar = minuteConfirmBar(minutes, 101.4);
+    expect(bar?.open).toBe(100.5);
+    expect(bar?.close).toBe(101.4);
+    expect(bar?.high).toBe(101.4);
+  });
+
   it('needs enough minutes before structure ready', () => {
     const st = buildStructure({ minutes: [candle(1, 2, 0.5, 1.5)], mid: 1.5 });
     expect(st.ready).toBe(false);
@@ -310,6 +319,7 @@ describe('marketSetup', () => {
     const buy = decideEntryFromTenSecMove(st, buyBar, minutes);
     expect(buy?.direction).toBe('BUY');
     expect(buy?.setup).toBe('CONTINUATION');
+    expect(buy?.playbook).toBe('LONG');
     const sellBar = bar10(2005.5, 2005.6, 2003.8, 2004.0);
     const sell = decideEntryFromTenSecMove(st, sellBar, minutes);
     expect(sell?.direction).toBe('SELL');

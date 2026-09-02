@@ -36,6 +36,7 @@ import {
   emptyStructure,
   flowAgreesWithSide,
   liveFlow,
+  minuteConfirmBar,
   playbookFromSetup,
   setupCatalog,
   updateSetupSticky,
@@ -1509,15 +1510,9 @@ async function robotCycleBody(s: Internal) {
         Date.now() - s.last_structure_fetch_ms >= 2_000
     );
 
-    const forming = s.ohlcState.forming;
-    const closed = s.ohlcState.last_closed;
-    // Prefer live forming candle when it already confirms — do not wait for bar close
-    const bar =
-      forming && forming.ticks >= 1
-        ? forming
-        : s.ohlcState.just_closed && closed
-          ? closed
-          : closed;
+    const livePx = quote.mid;
+    // Micro-swing: decide on 1m structure (+ live mid). 2s OHLC is display/regime only.
+    const bar = minuteConfirmBar(s.last_minute_candles, livePx);
     const st = s.structureBook;
     const setup = s.marketSetup;
     const structLine = st.ready
@@ -1525,10 +1520,8 @@ async function robotCycleBody(s: Internal) {
       : st.detail;
     const setupLine = `${setup.kind}/${setup.status}${setup.side ? ` ${setup.side}` : ''}`;
     const ohlcLine = bar
-      ? `2s O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)}${
-          forming && bar === forming ? ' · forming' : ''
-        } · ${structLine} · ${setupLine}`
-      : `2s seeding · ${structLine} · ${setupLine}`;
+      ? `1m O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · ${structLine} · ${setupLine}`
+      : `1m seeding · ${structLine} · ${setupLine}`;
 
     if (quote.mid != null) s.last_flat_mid = quote.mid;
 
@@ -1538,20 +1531,20 @@ async function robotCycleBody(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · seeding candle`,
+        detail: `${ohlcLine} · seeding 1m`,
       });
       return;
     }
 
-    // 1) Live market impulse (flow) → entry NOW — not candle color
+    // 1) Live market impulse (1m flow) → entry NOW
     let entry = decideEntryFromImpulseCandle(bar, s.last_minute_candles);
 
-    // 2) Armed setup: price through level / flow confirm
+    // 2) Armed setup: live price through level / 1m flow confirm
     if (!entry && setup.kind !== 'NONE' && setup.status === 'ARMED') {
-      entry = decideEntryFromSetup(setup, bar, s.last_minute_candles);
+      entry = decideEntryFromSetup(setup, bar, s.last_minute_candles, livePx);
     }
 
-    // 3) Mid-swing NONE — trade the move
+    // 3) Mid-swing NONE — trade the 1m move
     if (!entry && (setup.kind === 'NONE' || setup.status === 'NONE')) {
       entry = decideEntryFromTenSecMove(st, bar, s.last_minute_candles);
     }

@@ -236,8 +236,16 @@ describe('playbook exit', () => {
     const cont = exitParamsForTrade('LONG', 'CONTINUATION', 28932);
     expect(cont.peakRet).toBe(0.65);
     expect(cont.harvestRet).toBe(0.75);
+    expect(cont.thesisMinHoldMs).toBe(240_000);
     const fade = exitParamsForTrade('FADE', 'FADE', 28932);
     expect(fade.peakRet).toBe(0.65);
+  });
+
+  it('BREAKOUT uses micro-swing leg exits (not scalp floors)', () => {
+    const bo = exitParamsForTrade('SCALP', 'BREAKOUT', 4430);
+    expect(bo.tpFloor).toBeGreaterThanOrEqual(4);
+    expect(bo.mfeFloorAbs).toBeGreaterThanOrEqual(2.5);
+    expect(bo.thesisMinHoldMs).toBeGreaterThanOrEqual(180_000);
   });
 });
 

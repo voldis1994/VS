@@ -15,6 +15,28 @@ import type { TradePlaybook } from './playbooks.js';
 import { PLAYBOOK_ENTRY_BODY } from './playbooks.js';
 import { bodyPct, type TenSecBar } from './tenSecondOhlc.js';
 
+/**
+ * Micro-swing confirm bar = last Capital 1m (+ live mid overlay).
+ * 2s OHLC stays for UI/diagnostics — entry decisions use this 1m bar.
+ */
+export function minuteConfirmBar(
+  minutes: CapitalPriceCandle[] | null | undefined,
+  liveMid?: number | null
+): TenSecBar | null {
+  if (!minutes?.length) return null;
+  const m = minutes[minutes.length - 1]!;
+  const live =
+    liveMid != null && Number.isFinite(liveMid) ? Number(liveMid) : m.close;
+  return {
+    open_time_ms: 0,
+    open: m.open,
+    high: Math.max(m.high, live),
+    low: Math.min(m.low, live),
+    close: live,
+    ticks: Math.max(1, 5),
+  };
+}
+
 export const SETUP_KINDS = [
   'CONTINUATION',
   'PULLBACK',
@@ -952,7 +974,8 @@ export function isTipChaseEntry(setup: MarketSetup, bar: TenSecBar): boolean {
 export function decideEntryFromSetup(
   setup: MarketSetup,
   bar: TenSecBar,
-  minutes?: CapitalPriceCandle[] | null
+  minutes?: CapitalPriceCandle[] | null,
+  livePx?: number | null
 ): SetupEntry | null {
   if (setup.kind === 'NONE' || setup.status !== 'ARMED' || !setup.side || !setup.playbook) {
     return null;
@@ -961,14 +984,16 @@ export function decideEntryFromSetup(
   const book = setup.playbook;
   const hi = setup.swing_high;
   const lo = setup.swing_low;
-  const eps = edgeEps(bar.close, Math.max(hi - lo, 1));
+  const px =
+    livePx != null && Number.isFinite(livePx) ? Number(livePx) : bar.close;
+  const eps = edgeEps(px, Math.max(hi - lo, 1));
   const flow = priceFlowBias(minutes);
 
   // Hard: never BUY into a dump / SELL into a rally (green blip mid-dump class)
   if (setup.side === 'BUY' && (flow === 'DOWN' || marketTrend(minutes) === 'DOWN')) return null;
   if (setup.side === 'SELL' && (flow === 'UP' || marketTrend(minutes) === 'UP')) return null;
 
-  if (isTipChaseEntry(setup, bar)) {
+  if (isTipChaseEntry(setup, { ...bar, close: px })) {
     return null;
   }
 
@@ -976,9 +1001,9 @@ export function decideEntryFromSetup(
     if (setup.side === 'BUY') {
       const touched = bar.low <= lo + eps;
       // Only block if bar is clearly dumping through the floor
-      const stillDumping = bar.close < bar.open && bar.low < lo - eps * 0.5;
-      // Reclaim above the touch — market structure, not green-body size
-      const reclaimed = bar.close >= lo + eps * 0.15 && bar.close > bar.low + eps * 0.2;
+      const stillDumping = px < bar.open && bar.low < lo - eps * 0.5;
+      // Reclaim above the touch — 1m structure + live price
+      const reclaimed = px >= lo + eps * 0.15 && px > bar.low + eps * 0.2;
       if (touched && !stillDumping && reclaimed) {
         return {
           direction: 'BUY',
@@ -990,8 +1015,8 @@ export function decideEntryFromSetup(
       return null;
     }
     const touched = bar.high >= hi - eps;
-    const stillRallying = bar.close > bar.open && bar.high > hi + eps * 0.5;
-    const rejected = bar.close <= hi - eps * 0.15 && bar.close < bar.high - eps * 0.2;
+    const stillRallying = px > bar.open && bar.high > hi + eps * 0.5;
+    const rejected = px <= hi - eps * 0.15 && px < bar.high - eps * 0.2;
     if (touched && !stillRallying && rejected) {
       return {
         direction: 'SELL',
@@ -1004,23 +1029,23 @@ export function decideEntryFromSetup(
   }
 
   if (setup.kind === 'BREAKOUT') {
-    // Price already through swing — enter on market level, not 2s candle color/body
-    if (setup.side === 'BUY' && bar.close > hi - eps * 0.15) {
-      if (moveAlreadyFinished('BUY', minutes, bar.close)) return null;
+    // Live price through swing — micro-swing level, not 2s candle body
+    if (setup.side === 'BUY' && px > hi - eps * 0.15) {
+      if (moveAlreadyFinished('BUY', minutes, px)) return null;
       return {
         direction: 'BUY',
         setup: 'BREAKOUT',
         playbook: book,
-        reason: `ENTRY · BREAKOUT BUY through H${hi.toFixed(2)} @ ${bar.close.toFixed(2)} · ${setup.reason}`,
+        reason: `ENTRY · BREAKOUT BUY through H${hi.toFixed(2)} @ ${px.toFixed(2)} · ${setup.reason}`,
       };
     }
-    if (setup.side === 'SELL' && bar.close < lo + eps * 0.15) {
-      if (moveAlreadyFinished('SELL', minutes, bar.close)) return null;
+    if (setup.side === 'SELL' && px < lo + eps * 0.15) {
+      if (moveAlreadyFinished('SELL', minutes, px)) return null;
       return {
         direction: 'SELL',
         setup: 'BREAKOUT',
         playbook: book,
-        reason: `ENTRY · BREAKOUT SELL through L${lo.toFixed(2)} @ ${bar.close.toFixed(2)} · ${setup.reason}`,
+        reason: `ENTRY · BREAKOUT SELL through L${lo.toFixed(2)} @ ${px.toFixed(2)} · ${setup.reason}`,
       };
     }
     return null;
@@ -1122,9 +1147,8 @@ export function decideEntryFromImpulseCandle(
 }
 
 /**
- * When sticky setup is NONE mid-swing but the market is moving through structure,
- * enter CONTINUATION with flow — do not sit out every V-leg as "NONE".
- * Uses price vs swing / displacement, not candle color as the primary gate.
+ * When sticky setup is NONE mid-swing but the 1m market is moving through structure,
+ * enter CONTINUATION with flow — micro-swing on 1m, not 2s body color.
  */
 export function decideEntryFromTenSecMove(
   structure: StructureBook,
@@ -1132,19 +1156,19 @@ export function decideEntryFromTenSecMove(
   minutes?: CapitalPriceCandle[] | null
 ): SetupEntry | null {
   if (!structure.ready || !(structure.swing_high > structure.swing_low)) return null;
-  const thr = PLAYBOOK_ENTRY_BODY.SCALP;
+  const thr = PLAYBOOK_ENTRY_BODY.LONG;
   const body = bodyPct(bar);
   const hi = structure.swing_high;
   const lo = structure.swing_low;
   const eps = edgeEps(bar.close, Math.max(hi - lo, structure.span, 1));
-  const need = thr * 0.45;
+  const need = thr * 0.55;
   const flow = priceFlowBias(minutes);
   const live = liveFlow(minutes);
   const trend = marketTrend(minutes);
   // Move already finished on the last 1m — late entry, skip
   if (live && !moveStillPrinting(live, minutes)) return null;
 
-  // Market through level OR strong displacement — not green/red as primary gate
+  // 1m through level OR 1m displacement — not 2s green/red
   const throughHigh = bar.close > hi + eps * 0.05;
   const throughLow = bar.close < lo - eps * 0.05;
 
@@ -1156,8 +1180,8 @@ export function decideEntryFromTenSecMove(
     return {
       direction: 'BUY',
       setup: 'CONTINUATION',
-      playbook: 'SCALP',
-      reason: `ENTRY · market MOVE BUY @ ${bar.close.toFixed(2)} · setup was NONE`,
+      playbook: 'LONG',
+      reason: `ENTRY · 1m micro-swing BUY @ ${bar.close.toFixed(2)} · setup was NONE`,
     };
   }
   if (body <= -need || throughLow) {
@@ -1167,8 +1191,8 @@ export function decideEntryFromTenSecMove(
     return {
       direction: 'SELL',
       setup: 'CONTINUATION',
-      playbook: 'SCALP',
-      reason: `ENTRY · market MOVE SELL @ ${bar.close.toFixed(2)} · setup was NONE`,
+      playbook: 'LONG',
+      reason: `ENTRY · 1m micro-swing SELL @ ${bar.close.toFixed(2)} · setup was NONE`,
     };
   }
   return null;

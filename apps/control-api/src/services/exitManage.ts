@@ -82,10 +82,9 @@ function isLegRide(setup?: string | null): boolean {
 
 /**
  * Manage exit divided by playbook (LONG / SCALP / FADE).
- * - Hold green while move still live (≥55% of MFE kept)
- * - Trail / bank only after a real protected run (~0.9pt Gold), not +0.05 blips
- * - Cut underwater early after a protected run (do not ride to full SL)
- * - Decisions use closeable bid/ask so spread cannot turn green mid into red close
+ * Micro-swing legs (CONTINUATION/BREAKOUT/PULLBACK): hold the 1m move —
+ * trail only after a real run, not 2s blips.
+ * Decisions use closeable bid/ask so spread cannot turn green mid into red close.
  * Broker SAFETY SL remains the hard cushion outside this function.
  */
 export function decideBestOutcomeExit(
@@ -107,15 +106,17 @@ export function decideBestOutcomeExit(
   const sl = Math.max(absEntry * p.slPct, p.slFloor);
   const mfeFloor = Math.max(absEntry * p.mfeFloorPct, p.mfeFloorAbs);
 
-  // Arm trail/giveback only after a real run — not on +£0.05 noise
-  // US100 @ ~29k: 0.9 Gold-pts ≈ 5.9 index pts — enough to ignore spread noise
-  const protectAfterMfe = Math.max(scaleFromGold(absEntry, 0.9), absEntry * 0.00018);
+  // Arm trail/giveback only after a real 1m-scale run (legs) — not +£0.05 / 2s noise
+  const protectAfterMfe = legRide
+    ? Math.max(scaleFromGold(absEntry, 2.0), absEntry * 0.0004)
+    : Math.max(scaleFromGold(absEntry, 0.9), absEntry * 0.00018);
   const hadProtectedRun = s.mfe >= protectAfterMfe;
   const minProfitExit = Math.max(scaleFromGold(absEntry, 0.35), absEntry * 0.00004);
   // Keep ≥65% of peak — max 35% giveback
   const keepFrac = Math.max(p.peakRet, 0.65);
   const givebackFloor = Math.max(minProfitExit, s.mfe * keepFrac);
-  const peakMinHoldMs = legRide ? 8_000 : Math.min(p.thesisMinHoldMs * 0.35, 20_000);
+  // Micro-swing: do not PeakProtect / giveback in the first ~60s of a leg
+  const peakMinHoldMs = legRide ? 60_000 : Math.min(p.thesisMinHoldMs * 0.35, 20_000);
 
   const moveStillLive =
     fav > 0 &&
@@ -131,7 +132,7 @@ export function decideBestOutcomeExit(
   }
 
   // Had real profit, now underwater — cut before full SL
-  if (hadProtectedRun && fav < 0 && heldMs >= 8_000) {
+  if (hadProtectedRun && fav < 0 && heldMs >= (legRide ? 15_000 : 8_000)) {
     return {
       exit: true,
       reason: `ReversalStop · ${book} · had MFE ${s.mfe.toFixed(5)} now ${fav.toFixed(5)} · loss capped`,
@@ -171,7 +172,7 @@ export function decideBestOutcomeExit(
     hadProtectedRun &&
     fav >= 0 &&
     fav < givebackFloor &&
-    heldMs >= 8_000 &&
+    heldMs >= peakMinHoldMs &&
     (s.peak_retention == null || s.peak_retention < keepFrac)
   ) {
     return {
@@ -192,6 +193,7 @@ export function decideBestOutcomeExit(
     hadProtectedRun &&
     !moveStillLive &&
     fav > 0 &&
+    heldMs >= peakMinHoldMs &&
     s.peak_retention != null &&
     s.peak_retention < p.harvestRet &&
     s.peak_retention >= p.peakRet

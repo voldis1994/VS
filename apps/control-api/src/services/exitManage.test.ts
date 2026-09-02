@@ -175,4 +175,20 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     // closeable ≈ 27.7 / 42 ≈ 66% — above floor, no giveback exit
     expect(d.exit).toBe(false);
   });
+
+  it('micro-swing CONTINUATION does not PeakProtect in first 15s on sub-2pt MFE', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4430,
+        entry_at: ago(12_000),
+        mfe: 1.2,
+        peak_retention: 0.4,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+      }),
+      4430.5
+    );
+    expect(d.exit).toBe(false);
+  });
 });

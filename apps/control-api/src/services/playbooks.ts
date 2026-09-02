@@ -108,21 +108,21 @@ export function exitParamsForTrade(
   const base = { ...baseRaw, ...scaleExitFloors(px, baseRaw) };
   const setup = String(entrySetup || '').trim().toUpperCase();
 
-  // V-bounce / dump continuation — ride the leg, keep ≥65% of MFE (max 35% giveback)
-  if (setup === 'CONTINUATION' || setup === 'PULLBACK') {
-    const leg = scaleExitFloors(px, { tpFloor: 4.0, slFloor: baseRaw.slFloor, mfeFloorAbs: 2.5 });
+  // Micro-swing 1m legs — ride the move, not 2s scalp harvest
+  if (setup === 'CONTINUATION' || setup === 'PULLBACK' || setup === 'BREAKOUT') {
+    const leg = scaleExitFloors(px, { tpFloor: 5.0, slFloor: baseRaw.slFloor, mfeFloorAbs: 3.0 });
     return {
       ...base,
-      tpPct: 0.0028,
+      tpPct: 0.0032,
       tpFloor: leg.tpFloor,
       slPct: base.slPct,
       slFloor: leg.slFloor,
-      mfeFloorPct: 0.00055,
+      mfeFloorPct: 0.00065,
       mfeFloorAbs: leg.mfeFloorAbs,
       peakRet: 0.65,
       harvestRet: 0.75,
-      thesisMinHoldMs: 180_000,
-      timeDecayMs: 600_000,
+      thesisMinHoldMs: 240_000,
+      timeDecayMs: 900_000,
     };
   }
 
