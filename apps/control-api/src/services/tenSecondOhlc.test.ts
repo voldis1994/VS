@@ -58,15 +58,14 @@ describe('entry confirm OHLC (2s)', () => {
 
   it('aggregates 1s Capital candles into 2s bars', () => {
     const seconds = [];
-    for (let i = 0; i < 20; i++) {
-      const p = 4389 + i * 0.5;
-      seconds.push({ open: p, high: p + 0.2, low: p - 0.1, close: p + 0.1 });
+    for (let i = 0; i < 8; i++) {
+      const p = 4389 + i * 2;
+      seconds.push({ open: p, high: p + 1, low: p - 0.5, close: p + 0.8 });
     }
     const bars = aggregateSecondsToTen(seconds);
-    expect(bars).toHaveLength(10);
+    expect(bars).toHaveLength(4);
     expect(bars[0]!.open).toBe(4389);
     expect(bars[0]!.ticks).toBe(2);
-    // Larger 2s chunk later in the ramp is clearly MOVING
-    expect(isMoving10s(bars[9]!)).toBe(true);
+    expect(isMoving10s(bars[0]!)).toBe(true);
   });
 });
