@@ -366,6 +366,59 @@ export function moveStillPrinting(
   return last.close <= last.open;
 }
 
+/**
+ * True when chasing a move that already finished (tip / rolled spike).
+ * Gold 13:24 SELL @ dump floor 4334.90 after 4344→4335 — late.
+ * Gold 13:29 BUY @ 4337 after UP spike already gave back — late.
+ * Does not replace moveStillPrinting — callers check candle agree separately.
+ */
+export function moveAlreadyFinished(
+  direction: 'BUY' | 'SELL',
+  minutes?: CapitalPriceCandle[] | null,
+  price?: number
+): boolean {
+  if (!minutes || minutes.length < 4) return false;
+
+  const px = price ?? minutes[minutes.length - 1]!.close;
+  // Tight window = the impulse itself, not quiet range before it
+  const slice = minutes.slice(-5);
+  const last = slice[slice.length - 1]!;
+  const hi = Math.max(...slice.map((c) => c.high));
+  const lo = Math.min(...slice.map((c) => c.low));
+  const span = hi - lo;
+  const minSpan = Math.max(Math.abs(px) * 0.0007, 2.5);
+  if (span < minSpan) return false;
+
+  const lastBody = Math.abs(last.close - last.open);
+  const hiAt = slice.reduce((best, c, i) => (c.high >= slice[best]!.high ? i : best), 0);
+  const loAt = slice.reduce((best, c, i) => (c.low <= slice[best]!.low ? i : best), 0);
+  const lastI = slice.length - 1;
+
+  if (direction === 'SELL') {
+    const fromPeak = hi - px;
+    // Dump mostly done + stalling at floor (tiny last body) — late short
+    if (fromPeak >= span * 0.7 && last.low <= lo + span * 0.1 && lastBody < span * 0.2) {
+      return true;
+    }
+    // Low printed earlier and price already bounced off it
+    if (loAt <= lastI - 1 && px >= lo + span * 0.2 && fromPeak >= span * 0.55) {
+      return true;
+    }
+    return false;
+  }
+
+  // BUY — tip chase or buying after the UP spike already rolled over
+  const givenBack = hi - px;
+  if (givenBack <= span * 0.12 && lastBody < span * 0.2 && last.high >= hi - span * 0.1) {
+    return true;
+  }
+  const rallyInto = hi - slice[0]!.low;
+  if (hiAt <= lastI - 2 && givenBack >= span * 0.22 && rallyInto >= minSpan) {
+    return true;
+  }
+  return false;
+}
+
 /** Dual-side watch labels — desk shows both, not only the armed side. */
 export function dualSideWatch(
   structure: StructureBook,
@@ -932,6 +985,7 @@ export function decideEntryFromSetup(
   if (setup.kind === 'CONTINUATION') {
     const contFlow = liveFlow(minutes);
     if (contFlow && !moveStillPrinting(contFlow, minutes)) return null;
+    if (moveAlreadyFinished(setup.side, minutes, bar.close)) return null;
     if (setup.side === 'BUY' && body >= thr * 0.55) {
       return {
         direction: 'BUY',
@@ -966,6 +1020,9 @@ export function decideEntryFromImpulseCandle(
   if (!flow) return null;
   // Signal finished — last 1m already turned against the move
   if (!moveStillPrinting(flow, minutes)) return null;
+  const direction: 'BUY' | 'SELL' = flow === 'UP' ? 'BUY' : 'SELL';
+  // Tip / rolled move — Gold dump-floor SELL and post-spike BUY
+  if (moveAlreadyFinished(direction, minutes, bar.close)) return null;
   const body = bodyPct(bar);
   const need = PLAYBOOK_ENTRY_BODY.SCALP * 0.35;
   if (flow === 'DOWN' && bar.close < bar.open && body <= -need) {
@@ -1011,6 +1068,7 @@ export function decideEntryFromTenSecMove(
 
   if (body >= need) {
     if (flow === 'DOWN' || structure.bias === 'BELOW') return null;
+    if (moveAlreadyFinished('BUY', minutes, bar.close)) return null;
     // Tip-chase: green bar parked at swing high — skip
     if (bar.close >= hi - eps * 0.3 && bar.close <= hi + eps * 0.15) return null;
     return {
@@ -1022,6 +1080,7 @@ export function decideEntryFromTenSecMove(
   }
   if (body <= -need) {
     if (flow === 'UP' || structure.bias === 'ABOVE') return null;
+    if (moveAlreadyFinished('SELL', minutes, bar.close)) return null;
     if (bar.close <= lo + eps * 0.3 && bar.close >= lo - eps * 0.15) return null;
     return {
       direction: 'SELL',

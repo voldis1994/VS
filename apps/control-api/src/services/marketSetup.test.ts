@@ -8,6 +8,7 @@ import {
   emptySetup,
   flowAgreesWithSide,
   liveFlow,
+  moveAlreadyFinished,
   moveStillPrinting,
   priceFlowBias,
   recentImpulse,
@@ -364,5 +365,51 @@ describe('marketSetup', () => {
     }
     expect(flowAgreesWithSide('SELL', dump)).toBe(true);
     expect(flowAgreesWithSide('BUY', dump)).toBe(false);
+  });
+
+  /** Gold 02 Sep 13:20 spike ~4344 then dump to ~4335 — real late entries */
+  function goldSpikeThenDumpFloor(): CapitalPriceCandle[] {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 18; i++) {
+      const o = 4324 + i * 0.4;
+      bars.push(candle(o, o + 0.5, o - 0.2, o + 0.35));
+    }
+    // Spike
+    bars.push(candle(4332, 4338, 4331.5, 4337.5));
+    bars.push(candle(4337.5, 4344.2, 4337, 4343.5));
+    // Dump to floor
+    bars.push(candle(4343.5, 4344, 4336, 4336.5));
+    bars.push(candle(4336.5, 4337, 4334.2, 4334.8));
+    // Stall / tiny red at floor (13:24 SELL class)
+    bars.push(candle(4334.8, 4335.2, 4334.5, 4334.9));
+    return bars;
+  }
+
+  it('blocks SELL at dump floor after spike (Gold 4334.90 late short)', () => {
+    const bars = goldSpikeThenDumpFloor();
+    expect(moveAlreadyFinished('SELL', bars, 4334.9)).toBe(true);
+    const sellBar = bar10(4335.1, 4335.2, 4334.6, 4334.85);
+    expect(decideEntryFromImpulseCandle(sellBar, bars)).toBeNull();
+  });
+
+  it('blocks BUY after UP spike already gave back (Gold 4337.33 late long)', () => {
+    const bars = goldSpikeThenDumpFloor();
+    // Continue dump / chop below peak
+    bars.push(candle(4334.9, 4339.8, 4334.7, 4338.5));
+    bars.push(candle(4338.5, 4339.5, 4336.8, 4337.2));
+    expect(moveAlreadyFinished('BUY', bars, 4337.33)).toBe(true);
+    const buyBar = bar10(4336.9, 4337.6, 4336.8, 4337.4);
+    expect(decideEntryFromImpulseCandle(buyBar, bars)).toBeNull();
+  });
+
+  it('allows SELL mid-dump while still extending (not at finished floor)', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 18; i++) {
+      bars.push(candle(4340, 4341, 4339, 4340));
+    }
+    bars.push(candle(4340, 4344.5, 4339.5, 4343.8));
+    // First dump leg — large red body, still mid move (not stalled at floor)
+    bars.push(candle(4343.8, 4344.0, 4339.2, 4339.5));
+    expect(moveAlreadyFinished('SELL', bars, 4339.5)).toBe(false);
   });
 });
