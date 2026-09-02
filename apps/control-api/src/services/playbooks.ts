@@ -48,11 +48,11 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
     slPct: 0.0019,
     slFloor: 0.19,
     mfeFloorPct: 0.0015,
-    mfeFloorAbs: 0.28,
-    peakRet: 0.42,
-    harvestRet: 0.52,
-    thesisMinHoldMs: 120_000,
-    timeDecayMs: 540_000,
+    mfeFloorAbs: 0.15,
+    peakRet: 0.55,
+    harvestRet: 0.65,
+    thesisMinHoldMs: 90_000,
+    timeDecayMs: 480_000,
   },
   FADE: {
     tpPct: 0.0018,
@@ -68,11 +68,11 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
   },
 };
 
-/** Entry body — require a real 10s move (was too loose → random noise entries). */
+/** Entry body — 10s Gold-friendly (was too strict → missed real 10s moves). */
 export const PLAYBOOK_ENTRY_BODY: Record<TradePlaybook, number> = {
-  LONG: 0.00022, // ~1.0pt Gold @ 4400
-  SCALP: 0.0002, // ~0.9pt
-  FADE: 0.00016, // ~0.7pt bounce/reject
+  LONG: 0.00018, // ~0.8pt Gold @ 4400
+  SCALP: 0.00015, // ~0.65pt
+  FADE: 0.00012, // ~0.55pt bounce/reject
 };
 
 /**
@@ -108,8 +108,8 @@ export function exitParamsForTrade(
   const base = { ...baseRaw, ...scaleExitFloors(px, baseRaw) };
   const setup = String(entrySetup || '').trim().toUpperCase();
 
-  // Breakout / impulse leg — same wide hold as continuation (was falling through to tpFloor 0.22)
-  if (setup === 'BREAKOUT' || setup === 'CONTINUATION' || setup === 'PULLBACK') {
+  // V-bounce / dump continuation — hold for the leg to swing high (not tpFloor 0.18)
+  if (setup === 'CONTINUATION' || setup === 'PULLBACK') {
     const leg = scaleExitFloors(px, { tpFloor: 4.0, slFloor: baseRaw.slFloor, mfeFloorAbs: 2.5 });
     return {
       ...base,
@@ -119,10 +119,10 @@ export function exitParamsForTrade(
       slFloor: leg.slFloor,
       mfeFloorPct: 0.00055,
       mfeFloorAbs: leg.mfeFloorAbs,
-      peakRet: 0.45,
-      harvestRet: 0.55,
-      thesisMinHoldMs: 240_000,
-      timeDecayMs: 720_000,
+      peakRet: 0.28,
+      harvestRet: 0.38,
+      thesisMinHoldMs: 180_000,
+      timeDecayMs: 600_000,
     };
   }
 
@@ -165,18 +165,11 @@ export function wasTrend(regime?: string | null): boolean {
   return r === 'TREND_UP' || r === 'TREND_DOWN';
 }
 
-/** Ride-the-leg entries — ignore 10s pullback regime noise on exit thesis. */
-export function isLegRideSetup(entrySetup?: string | null): boolean {
-  const s = String(entrySetup || '').trim().toUpperCase();
-  return s === 'BREAKOUT' || s === 'CONTINUATION' || s === 'PULLBACK';
-}
-
 /** ThesisFailure — divided by playbook (not one list for all). */
 export function thesisFailureForPlaybook(
   side: ExitSide,
   regime: string | null | undefined,
-  playbook: TradePlaybook,
-  entrySetup?: string | null
+  playbook: TradePlaybook
 ): string | null {
   const r = String(regime || '')
     .trim()
@@ -196,16 +189,6 @@ export function thesisFailureForPlaybook(
   }
 
   if (playbook === 'SCALP') {
-    if (isLegRideSetup(entrySetup)) {
-      if (side === 'BUY') {
-        if (r === 'TREND_DOWN' || r === 'BREAKOUT_DOWN') {
-          return `ThesisFailure · SCALP leg BUY vs ${r}`;
-        }
-      } else if (r === 'TREND_UP' || r === 'BREAKOUT_UP') {
-        return `ThesisFailure · SCALP leg SELL vs ${r}`;
-      }
-      return null;
-    }
     if (side === 'BUY') {
       if (
         r === 'TREND_DOWN' ||

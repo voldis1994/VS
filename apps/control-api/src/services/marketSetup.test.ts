@@ -3,14 +3,8 @@ import type { CapitalPriceCandle } from './capitalCom.js';
 import {
   buildStructure,
   decideEntryFromSetup,
-  decideEntryFromFormingSetup,
   decideEntryFromTenSecMove,
-  decideEntryFromImpulseMove,
   emptySetup,
-  isBounceOffLow,
-  isLateChaseOnLocalLeg,
-  isLegFloorChase,
-  isQuietSideways,
   isTipChaseEntry,
   priceFlowBias,
   recentImpulse,
@@ -280,27 +274,23 @@ describe('marketSetup', () => {
   });
 
   it('decideEntryFromTenSecMove trades strong 10s when structure mid-NONE', () => {
-    // Strong directional impulse so 10s path is not random
-    const minutes: CapitalPriceCandle[] = [];
-    for (let i = 0; i < 20; i++) {
-      minutes.push(candle(2000, 2001, 1999.5, 2000.2));
-    }
-    minutes.push(candle(2000.2, 2001, 2000, 2000.5));
-    minutes.push(candle(2000.5, 2003, 2000.4, 2002.8));
-    minutes.push(candle(2002.8, 2005.5, 2002.5, 2005.2));
-    expect(recentImpulse(minutes, 'flip')).toBe('UP');
-    const st = buildStructure({ minutes, mid: minutes.at(-1)!.close });
+    const minutes = rangeMinutes();
+    const st = buildStructure({ minutes, mid: 2005 });
     expect(st.ready).toBe(true);
-    expect(isQuietSideways(minutes)).toBe(false);
-    const buyBar = bar10(2004.0, 2005.2, 2003.9, 2005.0);
+    const buyBar = bar10(2004.5, 2006.2, 2004.4, 2006.0);
     const buy = decideEntryFromTenSecMove(st, buyBar, minutes);
     expect(buy?.direction).toBe('BUY');
     expect(buy?.setup).toBe('CONTINUATION');
-    // Without 1m impulse — no random 10s scalp
-    const flat: CapitalPriceCandle[] = [];
-    for (let i = 0; i < 28; i++) flat.push(candle(2005, 2005.3, 2004.7, 2005.1));
-    const stFlat = buildStructure({ minutes: flat, mid: 2005 });
-    expect(decideEntryFromTenSecMove(stFlat, buyBar, flat)).toBeNull();
+    // Dump minutes so SELL is not blocked by flow UP
+    const dump: CapitalPriceCandle[] = [...minutes];
+    for (let i = 0; i < 6; i++) {
+      const o = 2005 - i * 1.1;
+      dump.push(candle(o, o + 0.2, o - 1.3, o - 1.0));
+    }
+    const stDump = buildStructure({ minutes: dump, mid: dump.at(-1)!.close });
+    const sellBar = bar10(2003.5, 2003.6, 2001.8, 2002.0);
+    const sell = decideEntryFromTenSecMove(stDump, sellBar, dump);
+    expect(sell?.direction).toBe('SELL');
   });
 
   it('decideEntryFromTenSecMove refuses tip-chase BUY at swing high', () => {
@@ -369,14 +359,14 @@ describe('marketSetup', () => {
     }
   });
 
-  it('decideEntryFromTenSecMove skips EUR/USD dead compression (sideways)', () => {
+  it('decideEntryFromTenSecMove trades EUR/USD when swing span is tiny', () => {
     const minutes: CapitalPriceCandle[] = [];
     for (let i = 0; i < 28; i++) {
       minutes.push(candle(1.1598, 1.16, 1.1596, 1.1599));
     }
     const st = buildStructure({ minutes, mid: 1.1599 });
     const moveBar = bar10(1.1598, 1.1603, 1.1597, 1.1602);
-    expect(decideEntryFromTenSecMove(st, moveBar, minutes)).toBeNull();
+    expect(decideEntryFromTenSecMove(st, moveBar, minutes)?.direction).toBe('BUY');
   });
 
   it('isTipChaseEntry skips flat H≈L compression', () => {
@@ -388,193 +378,5 @@ describe('marketSetup', () => {
     };
     const bar = bar10(1.16, 1.16, 1.16, 1.16);
     expect(isTipChaseEntry(fadeBuy as never, bar)).toBe(false);
-  });
-
-  it('CONTINUATION forming bar fires before bucket close on live impulse', () => {
-    const armed = {
-      ...emptySetup(),
-      kind: 'CONTINUATION' as const,
-      side: 'BUY' as const,
-      playbook: 'SCALP' as const,
-      status: 'ARMED' as const,
-      reason: 'IMPULSE UP',
-      swing_high: 4358,
-      swing_low: 4334,
-    };
-    const forming = bar10(4340.5, 4341.8, 4340.4, 4341.55);
-    forming.ticks = 6;
-    const hit = decideEntryFromFormingSetup(armed, forming, []);
-    expect(hit?.direction).toBe('BUY');
-    expect(hit?.reason).toMatch(/live 10s/);
-  });
-
-  it('CONTINUATION FORMING status does not enter — wait ARMED', () => {
-    const formingSetup = {
-      ...emptySetup(),
-      kind: 'CONTINUATION' as const,
-      side: 'BUY' as const,
-      playbook: 'LONG' as const,
-      status: 'FORMING' as const,
-      reason: 'PULLBACK in up structure',
-      swing_high: 4314,
-      swing_low: 4304,
-    };
-    const live = bar10(4308.2, 4309.5, 4308.1, 4309.3);
-    live.ticks = 5;
-    expect(decideEntryFromFormingSetup(formingSetup, live, [])).toBeNull();
-  });
-
-  it('decideEntryFromImpulseMove enters rally leg without waiting ARMED setup', () => {
-    const bars: CapitalPriceCandle[] = [];
-    // Wide prior swing so structure H stays above the entry zone
-    for (let i = 0; i < 20; i++) {
-      bars.push(candle(4304, 4318, 4302, 4308));
-    }
-    bars.push(candle(4308, 4309, 4305, 4305.5));
-    bars.push(candle(4305.5, 4306, 4304, 4304.5));
-    bars.push(candle(4304.5, 4308, 4304, 4307.5));
-    bars.push(candle(4307.5, 4311, 4307, 4310.2));
-    expect(recentImpulse(bars, 'flip')).toBe('UP');
-    const st = buildStructure({ minutes: bars, mid: 4308.5 });
-    // Mid-leg — below local tip 4311 and below structure H
-    const live = bar10(4308.0, 4308.9, 4307.9, 4308.7);
-    live.ticks = 4;
-    expect(isLateChaseOnLocalLeg('BUY', bars, live)).toBe(false);
-    const hit = decideEntryFromImpulseMove(st, bars, live);
-    expect(hit?.direction).toBe('BUY');
-    expect(hit?.setup).toBe('CONTINUATION');
-    expect(hit?.playbook).toBe('LONG');
-    expect(hit?.reason).toMatch(/1m IMPULSE BUY/);
-  });
-
-  it('isQuietSideways blocks impulse entry in a dead chop band', () => {
-    const bars: CapitalPriceCandle[] = [];
-    for (let i = 0; i < 28; i++) {
-      const wobble = (i % 2 === 0 ? 0.4 : -0.35);
-      bars.push(candle(4324 + wobble, 4325, 4323.5, 4324.2 + wobble * 0.2));
-    }
-    expect(isQuietSideways(bars)).toBe(true);
-    const st = buildStructure({ minutes: bars, mid: bars.at(-1)!.close });
-    const live = bar10(4324.0, 4324.8, 4323.9, 4324.5);
-    live.ticks = 5;
-    expect(decideEntryFromImpulseMove(st, bars, live)).toBeNull();
-    expect(decideEntryFromTenSecMove(st, live, bars)).toBeNull();
-  });
-
-  it('allows mid-leg BUY during live UP impulse (not blocked as late chase)', () => {
-    const bars: CapitalPriceCandle[] = [];
-    for (let i = 0; i < 20; i++) {
-      bars.push(candle(4304, 4318, 4302, 4308));
-    }
-    bars.push(candle(4308, 4309, 4305, 4305.5));
-    bars.push(candle(4305.5, 4306, 4304, 4304.5));
-    bars.push(candle(4304.5, 4309, 4304, 4308.5));
-    bars.push(candle(4308.5, 4314, 4308, 4313.2)); // vertical in progress
-    expect(recentImpulse(bars, 'flip')).toBe('UP');
-    // ~60% up the local leg — must NOT be late chase
-    const mid = bar10(4310.0, 4311.2, 4309.8, 4311.0);
-    mid.ticks = 5;
-    expect(isLateChaseOnLocalLeg('BUY', bars, mid)).toBe(false);
-    const st = buildStructure({ minutes: bars, mid: 4311 });
-    expect(decideEntryFromImpulseMove(st, bars, mid)?.direction).toBe('BUY');
-  });
-
-  it('blocks BUY at local spike tip even when structure H is higher (4325 vs H4329)', () => {
-    const bars: CapitalPriceCandle[] = [];
-    for (let i = 0; i < 18; i++) {
-      bars.push(candle(4324, 4329, 4322, 4325));
-    }
-    // Dump then vertical recovery — tip chase at 4325.75 with structure H still ~4329
-    bars.push(candle(4325, 4326, 4318, 4318.5));
-    bars.push(candle(4318.5, 4319, 4317, 4317.5));
-    bars.push(candle(4317.5, 4322, 4317, 4321.5));
-    bars.push(candle(4321.5, 4326.2, 4321, 4325.8));
-    const tip = bar10(4325.2, 4326.0, 4325.1, 4325.75);
-    tip.ticks = 5;
-    expect(isLateChaseOnLocalLeg('BUY', bars, tip)).toBe(true);
-    const st = buildStructure({ minutes: bars, mid: tip.close });
-    expect(decideEntryFromImpulseMove(st, bars, tip)).toBeNull();
-  });
-
-  it('decideEntryFromImpulseMove blocks SELL at floor without breakdown', () => {
-    const bars: CapitalPriceCandle[] = [];
-    for (let i = 0; i < 22; i++) {
-      bars.push(candle(4348, 4350, 4346, 4348));
-    }
-    for (let i = 0; i < 4; i++) {
-      const o = 4348 - i * 4.5;
-      bars.push(candle(o, o + 0.4, o - 4.8, o - 4.2));
-    }
-    expect(recentImpulse(bars, 'flip')).toBe('DOWN');
-    const st = buildStructure({ minutes: bars, mid: bars.at(-1)!.close });
-    const lo = st.swing_low;
-    const atFloor = bar10(lo + 0.35, lo + 0.4, lo + 0.08, lo + 0.1);
-    atFloor.ticks = 5;
-    expect(
-      isLegFloorChase(
-        {
-          ...emptySetup(),
-          kind: 'CONTINUATION',
-          side: 'SELL',
-          playbook: 'LONG',
-          status: 'ARMED',
-          swing_high: st.swing_high,
-          swing_low: lo,
-        },
-        atFloor
-      )
-    ).toBe(true);
-    expect(decideEntryFromImpulseMove(st, bars, atFloor)).toBeNull();
-  });
-
-  it('blocks SELL at swing floor without fresh breakdown (V-bottom trap)', () => {
-    const lo = 4330.31;
-    const hi = 4358.79;
-    const armed = {
-      ...emptySetup(),
-      kind: 'CONTINUATION' as const,
-      side: 'SELL' as const,
-      playbook: 'LONG' as const,
-      status: 'ARMED' as const,
-      reason: 'IMPULSE DOWN at floor',
-      swing_high: hi,
-      swing_low: lo,
-    };
-    const atFloor = bar10(4330.5, 4330.8, 4329.2, 4329.5);
-    expect(isLegFloorChase(armed, atFloor)).toBe(true);
-    expect(decideEntryFromSetup(armed, atFloor, [])).toBeNull();
-
-    const breaking = bar10(4330.2, 4330.3, 4327.5, 4327.8);
-    expect(isLegFloorChase(armed, breaking)).toBe(false);
-    expect(decideEntryFromSetup(armed, breaking, [])).not.toBeNull();
-  });
-
-  it('IMPULSE DOWN at floor does not produce SELL entry on V-bottom poke', () => {
-    const lo = 4330.31;
-    const hi = 4358.79;
-    const armed = {
-      ...emptySetup(),
-      kind: 'BREAKOUT' as const,
-      side: 'SELL' as const,
-      playbook: 'SCALP' as const,
-      status: 'ARMED' as const,
-      reason: `IMPULSE DOWN through L${lo.toFixed(2)} → SELL flip now`,
-      swing_high: hi,
-      swing_low: lo,
-    };
-    const poke = bar10(4330.5, 4330.8, 4329.2, 4329.5);
-    const minutes = [candle(4330, 4331, 4329.5, 4330), candle(4330, 4331.5, 4329.8, 4331.2)];
-    expect(decideEntryFromSetup(armed, poke, minutes)).toBeNull();
-    expect(decideEntryFromFormingSetup(armed, { ...poke, ticks: 6 }, minutes)).toBeNull();
-  });
-
-  it('isBounceOffLow detects green recovery after touching low', () => {
-    const lo = 4330;
-    const eps = 1.5;
-    const minutes = [
-      candle(4331, 4332, 4329.5, 4330),
-      candle(4330, 4331.5, 4329.8, 4331.2),
-    ];
-    expect(isBounceOffLow(minutes, lo, eps)).toBe(true);
   });
 });
