@@ -462,6 +462,24 @@ describe('marketSetup', () => {
     expect(decideEntryFromTenSecMove(st, live, bars)).toBeNull();
   });
 
+  it('allows mid-leg BUY during live UP impulse (not blocked as late chase)', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 20; i++) {
+      bars.push(candle(4304, 4318, 4302, 4308));
+    }
+    bars.push(candle(4308, 4309, 4305, 4305.5));
+    bars.push(candle(4305.5, 4306, 4304, 4304.5));
+    bars.push(candle(4304.5, 4309, 4304, 4308.5));
+    bars.push(candle(4308.5, 4314, 4308, 4313.2)); // vertical in progress
+    expect(recentImpulse(bars, 'flip')).toBe('UP');
+    // ~60% up the local leg — must NOT be late chase
+    const mid = bar10(4310.0, 4311.2, 4309.8, 4311.0);
+    mid.ticks = 5;
+    expect(isLateChaseOnLocalLeg('BUY', bars, mid)).toBe(false);
+    const st = buildStructure({ minutes: bars, mid: 4311 });
+    expect(decideEntryFromImpulseMove(st, bars, mid)?.direction).toBe('BUY');
+  });
+
   it('blocks BUY at local spike tip even when structure H is higher (4325 vs H4329)', () => {
     const bars: CapitalPriceCandle[] = [];
     for (let i = 0; i < 18; i++) {

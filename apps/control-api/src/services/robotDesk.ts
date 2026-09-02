@@ -1659,9 +1659,9 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // Opposite-side lock: wait for real confirm — no instant V-flip spam at tip/floor
+    // Opposite-side lock: short — long locks forced tip entries after the flip already ran
     const hardRecent = s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < 300_000;
-    const SIDE_LOCK_MS = hardRecent ? 90_000 : 60_000;
+    const SIDE_LOCK_MS = hardRecent ? 35_000 : 18_000;
     if (
       s.last_entry_side &&
       s.last_entry_side !== entry.direction &&

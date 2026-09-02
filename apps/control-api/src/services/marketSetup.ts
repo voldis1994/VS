@@ -918,8 +918,9 @@ export function isLegCeilingChase(setup: MarketSetup, bar: TenSecBar): boolean {
 }
 
 /**
- * Block BUY at local spike tip / SELL at local trough — even when structure H/L is far away.
- * Screenshot class: rally 4317→4326 then BUY @4325.75 (structure H still ~4329 → ceiling chase missed).
+ * Block only exhausted tip-chase — NOT mid-leg continuation.
+ * Prior version used ~22% tip band + hard 1m run → blocked every live impulse,
+ * so entry only "confirmed" at the tip after the move was gone.
  */
 export function isLateChaseOnLocalLeg(
   direction: 'BUY' | 'SELL',
@@ -927,35 +928,58 @@ export function isLateChaseOnLocalLeg(
   bar: TenSecBar
 ): boolean {
   if (!minutes || minutes.length < 3) return false;
-  const slice = minutes.slice(-5);
+  // Local leg only (3×1m) — wider window pulled in stale swing H and blocked mid-recovery
+  const slice = minutes.slice(-3);
   const legHi = Math.max(...slice.map((c) => c.high));
   const legLo = Math.min(...slice.map((c) => c.low));
   const span = Math.max(legHi - legLo, minSwingSpan(bar.close));
-  if (span < scaleFromGold(bar.close, 2.5)) return false;
-  const tipBand = Math.max(span * 0.22, scaleFromGold(bar.close, 1.8));
+  if (span < scaleFromGold(bar.close, 2.0)) return false;
+
+  // Tight tip only (~10% / ~1pt Gold) — mid-leg must stay open
+  const tipBand = Math.max(span * 0.1, scaleFromGold(bar.close, 1.0));
   const last = slice[slice.length - 1]!;
   const lastRun = last.close - last.open;
-  const hardRun = scaleFromGold(bar.close, 3.5);
+  const hardRun = scaleFromGold(bar.close, 5.0);
+  const liveImpulse = recentImpulse(minutes, 'flip') || recentImpulse(minutes);
 
   if (direction === 'BUY') {
-    const nearLocalHigh = bar.close >= legHi - tipBand || bar.high >= legHi - tipBand * 0.7;
-    const brokeAbove = bar.close > legHi + scaleFromGold(bar.close, 0.6);
-    if (nearLocalHigh && !brokeAbove) return true;
-    // Vertical 1m already printed — do not chase its close tip
-    if (lastRun >= hardRun && bar.close >= last.high - scaleFromGold(bar.close, 1.5)) return true;
-    // Upper wick rejection on last 1m
+    const progress = (bar.close - legLo) / span;
+    const nearTip = bar.close >= legHi - tipBand;
+    const brokeAbove = bar.close > legHi + scaleFromGold(bar.close, 0.4);
+
+    // Fresh breakout through local high with green bar — allow
+    if (brokeAbove && bar.close > bar.open) return false;
+
+    // Active UP impulse and still mid-leg (<85%) — allow (catch the move, not the tip)
+    if (liveImpulse === 'UP' && progress < 0.85 && !nearTip) return false;
+    if (liveImpulse === 'UP' && progress < 0.75) return false;
+
+    if (!nearTip && progress < 0.88) return false;
+
+    // At tip: block on rejection / already-spent vertical 1m, not on live push
     const upperWick = last.high - Math.max(last.close, last.open);
-    if (upperWick >= scaleFromGold(bar.close, 1.5) && bar.close >= last.high - tipBand) return true;
-    return false;
+    const rejecting =
+      bar.close < bar.open ||
+      upperWick >= scaleFromGold(bar.close, 1.5) ||
+      (lastRun >= hardRun && bar.close >= last.high - scaleFromGold(bar.close, 1.0));
+    return rejecting || progress >= 0.92;
   }
 
-  const nearLocalLow = bar.close <= legLo + tipBand || bar.low <= legLo + tipBand * 0.7;
-  const brokeBelow = bar.close < legLo - scaleFromGold(bar.close, 0.6);
-  if (nearLocalLow && !brokeBelow) return true;
-  if (lastRun <= -hardRun && bar.close <= last.low + scaleFromGold(bar.close, 1.5)) return true;
+  const progress = (legHi - bar.close) / span;
+  const nearTip = bar.close <= legLo + tipBand;
+  const brokeBelow = bar.close < legLo - scaleFromGold(bar.close, 0.4);
+
+  if (brokeBelow && bar.close < bar.open) return false;
+  if (liveImpulse === 'DOWN' && progress < 0.85 && !nearTip) return false;
+  if (liveImpulse === 'DOWN' && progress < 0.75) return false;
+  if (!nearTip && progress < 0.88) return false;
+
   const lowerWick = Math.min(last.close, last.open) - last.low;
-  if (lowerWick >= scaleFromGold(bar.close, 1.5) && bar.close <= last.low + tipBand) return true;
-  return false;
+  const rejecting =
+    bar.close > bar.open ||
+    lowerWick >= scaleFromGold(bar.close, 1.5) ||
+    (lastRun <= -hardRun && bar.close <= last.low + scaleFromGold(bar.close, 1.0));
+  return rejecting || progress >= 0.92;
 }
 
 /** 1m bounce off swing low — block SELL into V-recovery (screenshot: sell @4329 then rally). */
@@ -1011,7 +1035,14 @@ export function decideEntryFromSetup(
   if (setup.side === 'BUY' && isLegCeilingChase(setup, bar)) return null;
   if (setup.side === 'SELL' && isBounceOffLow(minutes, lo, eps)) return null;
   if (isLateChaseOnLocalLeg(setup.side, minutes, bar)) return null;
-  if (minutes && isLateMoveOnOneMinute(setup.side, minutes)) return null;
+  // Late 1m body gate only for FADE/PULLBACK — CONTINUATION/BREAKOUT must catch the leg
+  if (
+    (setup.kind === 'FADE' || setup.kind === 'FAILED_BREAK' || setup.kind === 'PULLBACK') &&
+    minutes &&
+    isLateMoveOnOneMinute(setup.side, minutes)
+  ) {
+    return null;
+  }
 
   if (setup.kind === 'FADE' || setup.kind === 'FAILED_BREAK') {
     if (setup.side === 'BUY') {
@@ -1142,7 +1173,6 @@ export function decideEntryFromFormingSetup(
   const eps = edgeEps(forming.close, Math.max(hi - lo, 1));
   if (setup.side === 'SELL' && isBounceOffLow(minutes, lo, eps)) return null;
   if (isLateChaseOnLocalLeg(setup.side, minutes, forming)) return null;
-  if (minutes && isLateMoveOnOneMinute(setup.side, minutes)) return null;
 
   const need = thr * 0.42;
   if (setup.kind === 'CONTINUATION') {
@@ -1211,7 +1241,6 @@ export function decideEntryFromTenSecMove(
     // Tip-chase: green bar parked at swing high — skip
     if (bar.close >= hi - eps * 0.3 && bar.close <= hi + eps * 0.15) return null;
     if (isLateChaseOnLocalLeg('BUY', minutes, bar)) return null;
-    if (minutes && isLateMoveOnOneMinute('BUY', minutes)) return null;
     return {
       direction: 'BUY',
       setup: 'CONTINUATION',
@@ -1223,7 +1252,6 @@ export function decideEntryFromTenSecMove(
     if (flow === 'UP' || structure.bias === 'ABOVE') return null;
     if (bar.close <= lo + eps * 0.3 && bar.close >= lo - eps * 0.15) return null;
     if (isLateChaseOnLocalLeg('SELL', minutes, bar)) return null;
-    if (minutes && isLateMoveOnOneMinute('SELL', minutes)) return null;
     return {
       direction: 'SELL',
       setup: 'CONTINUATION',
@@ -1272,7 +1300,7 @@ export function decideEntryFromImpulseMove(
     };
     if (isLegCeilingChase(leg, bar)) return null;
     if (isLateChaseOnLocalLeg('BUY', minutes, bar)) return null;
-    if (isLateMoveOnOneMinute('BUY', minutes)) return null;
+    // Do NOT use isLateMoveOnOneMinute here — that blocks mid-leg while the candle runs
     return {
       direction: 'BUY',
       setup: 'CONTINUATION',
@@ -1298,7 +1326,6 @@ export function decideEntryFromImpulseMove(
     if (isLegFloorChase(leg, bar)) return null;
     if (isBounceOffLow(minutes, lo, eps)) return null;
     if (isLateChaseOnLocalLeg('SELL', minutes, bar)) return null;
-    if (isLateMoveOnOneMinute('SELL', minutes)) return null;
     return {
       direction: 'SELL',
       setup: 'CONTINUATION',
