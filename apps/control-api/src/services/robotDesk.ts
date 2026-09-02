@@ -1354,7 +1354,7 @@ async function robotCycleBody(s: Internal) {
     }
 
     if (quote.mid != null && s.open_side && s.entry_price != null) {
-      updateExcursion(s, quote);
+      updateExcursion(s, { mid: quote.mid, bid: quote.bid, ask: quote.ask });
     }
 
     pushTick(s, {
