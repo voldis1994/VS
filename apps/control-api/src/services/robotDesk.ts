@@ -36,6 +36,7 @@ import {
   emptyStructure,
   flowAgreesWithSide,
   liveFlow,
+  marketTrend,
   minuteConfirmBar,
   playbookFromSetup,
   setupCatalog,
@@ -1448,15 +1449,16 @@ async function robotCycleBody(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // Brief settle only — same-side gate below is the real lock
+    // Micro-swing: one 1m settle after close — no instant SELL→BUY flip spam
+    const POST_EXIT_SETTLE_MS = 60_000;
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
-    if (s.closed_at_ms > 0 && sinceClose < 3_000) {
+    if (s.closed_at_ms > 0 && sinceClose < POST_EXIT_SETTLE_MS) {
       pushTick(s, {
         phase: 'INFO',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `settle ${Math.ceil((3_000 - sinceClose) / 1000)}s after close`,
+        detail: `1m settle ${Math.ceil((POST_EXIT_SETTLE_MS - sinceClose) / 1000)}s after close · no instant flip`,
       });
       return;
     }
@@ -1583,6 +1585,25 @@ async function robotCycleBody(s: Internal) {
           ask: quote.ask,
           mid: quote.mid,
           detail: `${ohlcLine} · same-side dead ${s.last_exit_side} until flip (flow ${flow || '—'}) · no spam re-entry`,
+        });
+        return;
+      }
+    }
+
+    // Opposite flip after exit: market must own the new side (not bounce blip)
+    if (s.last_exit_side && entry.direction !== s.last_exit_side) {
+      const trend = marketTrend(s.last_minute_candles);
+      const flow = liveFlow(s.last_minute_candles);
+      const against =
+        (entry.direction === 'BUY' && (trend === 'DOWN' || flow === 'DOWN')) ||
+        (entry.direction === 'SELL' && (trend === 'UP' || flow === 'UP'));
+      if (against || !flow) {
+        pushTick(s, {
+          phase: 'INFO',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `${ohlcLine} · no instant flip to ${entry.direction} · trend ${trend || '—'} flow ${flow || '—'}`,
         });
         return;
       }

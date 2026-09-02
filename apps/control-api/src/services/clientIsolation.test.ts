@@ -44,6 +44,13 @@ describe('multi-client isolation invariants', () => {
     expect(src).toMatch(/async function robotCycleBody/);
   });
 
+  it('micro-swing waits 1m after close — no instant SELL→BUY flip', () => {
+    const src = readFileSync(fileURLToPath(new URL('./robotDesk.ts', import.meta.url)), 'utf8');
+    expect(src).toMatch(/POST_EXIT_SETTLE_MS = 60_000/);
+    expect(src).toMatch(/no instant flip/);
+    expect(src).toMatch(/no instant flip to/);
+  });
+
   it('fanout refuses entry when position list fails or another market is open', () => {
     const src = readFileSync(fileURLToPath(new URL('./intentFanout.ts', import.meta.url)), 'utf8');
     expect(src).toMatch(/Cannot verify flat/);
