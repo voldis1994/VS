@@ -10,6 +10,7 @@
  * - Open trade freezes setup; manage = best outcome only
  */
 import type { CapitalPriceCandle } from './capitalCom.js';
+import { isLateMoveOnOneMinute } from './capitalCom.js';
 import { edgeEps, minSwingSpan, scaleFromGold, refPx } from './instrumentScale.js';
 import type { TradePlaybook } from './playbooks.js';
 import { PLAYBOOK_ENTRY_BODY } from './playbooks.js';
@@ -917,6 +918,47 @@ export function isLegCeilingChase(setup: MarketSetup, bar: TenSecBar): boolean {
   return atCeiling && !isFreshBreakoutAbove(hi, bar, eps);
 }
 
+/**
+ * Block BUY at local spike tip / SELL at local trough — even when structure H/L is far away.
+ * Screenshot class: rally 4317→4326 then BUY @4325.75 (structure H still ~4329 → ceiling chase missed).
+ */
+export function isLateChaseOnLocalLeg(
+  direction: 'BUY' | 'SELL',
+  minutes: CapitalPriceCandle[] | null | undefined,
+  bar: TenSecBar
+): boolean {
+  if (!minutes || minutes.length < 3) return false;
+  const slice = minutes.slice(-5);
+  const legHi = Math.max(...slice.map((c) => c.high));
+  const legLo = Math.min(...slice.map((c) => c.low));
+  const span = Math.max(legHi - legLo, minSwingSpan(bar.close));
+  if (span < scaleFromGold(bar.close, 2.5)) return false;
+  const tipBand = Math.max(span * 0.22, scaleFromGold(bar.close, 1.8));
+  const last = slice[slice.length - 1]!;
+  const lastRun = last.close - last.open;
+  const hardRun = scaleFromGold(bar.close, 3.5);
+
+  if (direction === 'BUY') {
+    const nearLocalHigh = bar.close >= legHi - tipBand || bar.high >= legHi - tipBand * 0.7;
+    const brokeAbove = bar.close > legHi + scaleFromGold(bar.close, 0.6);
+    if (nearLocalHigh && !brokeAbove) return true;
+    // Vertical 1m already printed — do not chase its close tip
+    if (lastRun >= hardRun && bar.close >= last.high - scaleFromGold(bar.close, 1.5)) return true;
+    // Upper wick rejection on last 1m
+    const upperWick = last.high - Math.max(last.close, last.open);
+    if (upperWick >= scaleFromGold(bar.close, 1.5) && bar.close >= last.high - tipBand) return true;
+    return false;
+  }
+
+  const nearLocalLow = bar.close <= legLo + tipBand || bar.low <= legLo + tipBand * 0.7;
+  const brokeBelow = bar.close < legLo - scaleFromGold(bar.close, 0.6);
+  if (nearLocalLow && !brokeBelow) return true;
+  if (lastRun <= -hardRun && bar.close <= last.low + scaleFromGold(bar.close, 1.5)) return true;
+  const lowerWick = Math.min(last.close, last.open) - last.low;
+  if (lowerWick >= scaleFromGold(bar.close, 1.5) && bar.close <= last.low + tipBand) return true;
+  return false;
+}
+
 /** 1m bounce off swing low — block SELL into V-recovery (screenshot: sell @4329 then rally). */
 export function isBounceOffLow(
   minutes: CapitalPriceCandle[] | null | undefined,
@@ -961,6 +1003,8 @@ export function decideEntryFromSetup(
   if (setup.side === 'SELL' && isLegFloorChase(setup, bar)) return null;
   if (setup.side === 'BUY' && isLegCeilingChase(setup, bar)) return null;
   if (setup.side === 'SELL' && isBounceOffLow(minutes, lo, eps)) return null;
+  if (isLateChaseOnLocalLeg(setup.side, minutes, bar)) return null;
+  if (minutes && isLateMoveOnOneMinute(setup.side, minutes)) return null;
 
   if (setup.kind === 'FADE' || setup.kind === 'FAILED_BREAK') {
     if (setup.side === 'BUY') {
@@ -1089,6 +1133,8 @@ export function decideEntryFromFormingSetup(
   const hi = setup.swing_high;
   const eps = edgeEps(forming.close, Math.max(hi - lo, 1));
   if (setup.side === 'SELL' && isBounceOffLow(minutes, lo, eps)) return null;
+  if (isLateChaseOnLocalLeg(setup.side, minutes, forming)) return null;
+  if (minutes && isLateMoveOnOneMinute(setup.side, minutes)) return null;
 
   const need = thr * 0.42;
   if (setup.kind === 'CONTINUATION') {
@@ -1155,6 +1201,8 @@ export function decideEntryFromTenSecMove(
     if (flow === 'DOWN' || structure.bias === 'BELOW') return null;
     // Tip-chase: green bar parked at swing high — skip
     if (bar.close >= hi - eps * 0.3 && bar.close <= hi + eps * 0.15) return null;
+    if (isLateChaseOnLocalLeg('BUY', minutes, bar)) return null;
+    if (minutes && isLateMoveOnOneMinute('BUY', minutes)) return null;
     return {
       direction: 'BUY',
       setup: 'CONTINUATION',
@@ -1165,6 +1213,8 @@ export function decideEntryFromTenSecMove(
   if (body <= -need) {
     if (flow === 'UP' || structure.bias === 'ABOVE') return null;
     if (bar.close <= lo + eps * 0.3 && bar.close >= lo - eps * 0.15) return null;
+    if (isLateChaseOnLocalLeg('SELL', minutes, bar)) return null;
+    if (minutes && isLateMoveOnOneMinute('SELL', minutes)) return null;
     return {
       direction: 'SELL',
       setup: 'CONTINUATION',
@@ -1211,6 +1261,8 @@ export function decideEntryFromImpulseMove(
       updated_at: '',
     };
     if (isLegCeilingChase(leg, bar)) return null;
+    if (isLateChaseOnLocalLeg('BUY', minutes, bar)) return null;
+    if (isLateMoveOnOneMinute('BUY', minutes)) return null;
     return {
       direction: 'BUY',
       setup: 'CONTINUATION',
@@ -1235,6 +1287,8 @@ export function decideEntryFromImpulseMove(
     };
     if (isLegFloorChase(leg, bar)) return null;
     if (isBounceOffLow(minutes, lo, eps)) return null;
+    if (isLateChaseOnLocalLeg('SELL', minutes, bar)) return null;
+    if (isLateMoveOnOneMinute('SELL', minutes)) return null;
     return {
       direction: 'SELL',
       setup: 'CONTINUATION',

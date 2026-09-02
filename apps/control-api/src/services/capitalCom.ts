@@ -1043,7 +1043,7 @@ export async function fetchCapitalHourPrices(
 
 /**
  * True if the latest 1m candle already moved hard in trade direction (~end of move).
- * Threshold ~0.25% of price — was 0.12% and blocked every Gold impulse.
+ * Gold: ~4pt / 0.10% — blocks tip-chase after a vertical 1m spike (was 0.25% ≈ 10pt, too late).
  */
 export function isLateMoveOnOneMinute(
   direction: 'BUY' | 'SELL',
@@ -1053,7 +1053,7 @@ export function isLateMoveOnOneMinute(
   const last = candles[candles.length - 1]!;
   const mid = Math.max(Math.abs(last.open), 1e-9);
   const move = last.close - last.open;
-  const thr = Math.max(mid * 0.0025, 0.12);
+  const thr = Math.max(mid * 0.001, 0.12, mid >= 1000 ? 4.0 : mid * 0.001);
   if (direction === 'BUY' && move >= thr) return true;
   if (direction === 'SELL' && move <= -thr) return true;
   return false;

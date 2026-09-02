@@ -48,6 +48,7 @@ import {
   decideEntryFromImpulseMove,
   emptySetup,
   emptyStructure,
+  isLateChaseOnLocalLeg,
   isLegFloorChase,
   playbookFromSetup,
   setupCatalog,
@@ -1625,19 +1626,25 @@ async function robotCycle(s: Internal) {
     if (!entry) {
       const minSpan = minSwingSpan(st.mid || quote.mid);
       const hasSpan = st.ready && st.swing_high - st.swing_low >= minSpan;
+      const chaseBar = forming && forming.ticks >= 3 ? forming : bar;
       const blockNote =
-        bar && setup.side === 'SELL' && isLegFloorChase(setup, bar)
+        chaseBar && setup.side === 'SELL' && isLegFloorChase(setup, chaseBar)
           ? ' · blocked floor-chase'
+          : chaseBar &&
+              setup.side &&
+              isLateChaseOnLocalLeg(setup.side, s.last_minute_candles, chaseBar)
+            ? ' · blocked late local tip'
           : setup.side &&
               hasSpan &&
+              chaseBar &&
               ((setup.side === 'BUY' &&
                 st.ready &&
-                bar.close >=
+                chaseBar.close >=
                   st.swing_high -
                   Math.max(st.span * 0.08, scaleFromGold(st.mid || quote.mid, 0.8))) ||
                 (setup.side === 'SELL' &&
                   st.ready &&
-                  bar.close <=
+                  chaseBar.close <=
                     st.swing_low +
                     Math.max(st.span * 0.08, scaleFromGold(st.mid || quote.mid, 0.8))))
             ? ' · blocked tip-chase'
@@ -1652,9 +1659,9 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // Opposite-side lock: brief for 10s V-flips; longer only after HardInv
+    // Opposite-side lock: wait for real confirm — no instant V-flip spam at tip/floor
     const hardRecent = s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < 300_000;
-    const SIDE_LOCK_MS = hardRecent ? 45_000 : 20_000;
+    const SIDE_LOCK_MS = hardRecent ? 90_000 : 60_000;
     if (
       s.last_entry_side &&
       s.last_entry_side !== entry.direction &&

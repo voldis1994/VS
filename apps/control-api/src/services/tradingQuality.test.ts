@@ -20,13 +20,16 @@ describe('safety SL cushion', () => {
 });
 
 describe('1m late-move gate', () => {
-  it('blocks BUY only after extreme green 1m (~0.25%+)', () => {
+  it('blocks BUY after ~4pt+ green Gold 1m (tip of spike)', () => {
+    expect(
+      isLateMoveOnOneMinute('BUY', [{ open: 4317, high: 4326, low: 4316.5, close: 4325.5 }])
+    ).toBe(true);
     expect(
       isLateMoveOnOneMinute('BUY', [{ open: 2000, high: 2008, low: 1999, close: 2006 }])
     ).toBe(true);
-    // ~0.20% — still allow (was blocked at old 0.12%)
+    // Small 1–2pt tick — still allow
     expect(
-      isLateMoveOnOneMinute('BUY', [{ open: 2000, high: 2005, low: 1999, close: 2004 }])
+      isLateMoveOnOneMinute('BUY', [{ open: 4320, high: 4321.2, low: 4319.8, close: 4321 }])
     ).toBe(false);
   });
   it('allows BUY on flat/red 1m candle', () => {

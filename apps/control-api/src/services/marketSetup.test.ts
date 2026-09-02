@@ -8,6 +8,7 @@ import {
   decideEntryFromImpulseMove,
   emptySetup,
   isBounceOffLow,
+  isLateChaseOnLocalLeg,
   isLegFloorChase,
   isTipChaseEntry,
   priceFlowBias,
@@ -420,22 +421,42 @@ describe('marketSetup', () => {
 
   it('decideEntryFromImpulseMove enters rally leg without waiting ARMED setup', () => {
     const bars: CapitalPriceCandle[] = [];
-    for (let i = 0; i < 22; i++) {
-      bars.push(candle(4304, 4306, 4303, 4304.5));
+    // Wide prior swing so structure H stays above the entry zone
+    for (let i = 0; i < 20; i++) {
+      bars.push(candle(4304, 4318, 4302, 4308));
     }
-    bars.push(candle(4304.5, 4305, 4304, 4304.2));
-    bars.push(candle(4304.2, 4307, 4304, 4306.5));
-    bars.push(candle(4306.5, 4310, 4306, 4309.8));
-    bars.push(candle(4309.8, 4313.5, 4309.5, 4313.2));
+    bars.push(candle(4308, 4309, 4305, 4305.5));
+    bars.push(candle(4305.5, 4306, 4304, 4304.5));
+    bars.push(candle(4304.5, 4308, 4304, 4307.5));
+    bars.push(candle(4307.5, 4311, 4307, 4310.2));
     expect(recentImpulse(bars, 'flip')).toBe('UP');
-    const st = buildStructure({ minutes: bars, mid: bars.at(-1)!.close });
-    const live = bar10(4312.5, 4313.8, 4312.4, 4313.6);
+    const st = buildStructure({ minutes: bars, mid: 4308.5 });
+    // Mid-leg — below local tip 4311 and below structure H
+    const live = bar10(4308.0, 4308.9, 4307.9, 4308.7);
     live.ticks = 4;
+    expect(isLateChaseOnLocalLeg('BUY', bars, live)).toBe(false);
     const hit = decideEntryFromImpulseMove(st, bars, live);
     expect(hit?.direction).toBe('BUY');
     expect(hit?.setup).toBe('CONTINUATION');
     expect(hit?.playbook).toBe('LONG');
     expect(hit?.reason).toMatch(/1m IMPULSE BUY/);
+  });
+
+  it('blocks BUY at local spike tip even when structure H is higher (4325 vs H4329)', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 18; i++) {
+      bars.push(candle(4324, 4329, 4322, 4325));
+    }
+    // Dump then vertical recovery — tip chase at 4325.75 with structure H still ~4329
+    bars.push(candle(4325, 4326, 4318, 4318.5));
+    bars.push(candle(4318.5, 4319, 4317, 4317.5));
+    bars.push(candle(4317.5, 4322, 4317, 4321.5));
+    bars.push(candle(4321.5, 4326.2, 4321, 4325.8));
+    const tip = bar10(4325.2, 4326.0, 4325.1, 4325.75);
+    tip.ticks = 5;
+    expect(isLateChaseOnLocalLeg('BUY', bars, tip)).toBe(true);
+    const st = buildStructure({ minutes: bars, mid: tip.close });
+    expect(decideEntryFromImpulseMove(st, bars, tip)).toBeNull();
   });
 
   it('decideEntryFromImpulseMove blocks SELL at floor without breakdown', () => {
