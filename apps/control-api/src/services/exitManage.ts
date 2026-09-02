@@ -1,4 +1,4 @@
-/** Live Capital exit — playbook Best Outcome + unified MarketBrain dynamics. */
+/** Live Capital exit — playbook Best Outcome (brain is advisory UI only). */
 import {
   exitParamsForTrade,
   isLegRideSetup,
@@ -8,12 +8,7 @@ import {
   type TradePlaybook,
 } from './playbooks.js';
 import { scaleFromGold } from './instrumentScale.js';
-import {
-  brainExitParams,
-  brainExitThesis,
-  type BrainState,
-  type LockedBrainEntry,
-} from './marketBrain.js';
+import type { BrainState, LockedBrainEntry } from './marketBrain.js';
 
 export type ExitSide = 'BUY' | 'SELL';
 
@@ -91,15 +86,10 @@ export function decideBestOutcomeExit(
 
   const book = resolvePlaybook(s);
   const p = exitParamsForTrade(book, s.entry_setup, s.entry_price);
-  const brain = s.brain?.ready ? s.brain : null;
-  const dynamic =
-    brain != null
-      ? brainExitParams(brain, s.brain_locked ?? null, quote.mid, s.open_side)
-      : null;
-
-  const peakRet = dynamic?.peakRet ?? p.peakRet;
-  const harvestRet = dynamic?.harvestRet ?? p.harvestRet;
-  const timeDecayMs = dynamic ? p.timeDecayMs * dynamic.timeDecayScale : p.timeDecayMs;
+  // Brain is advisory (UI / labels only) — exits follow playbook trail, not brain TP/thesis
+  const peakRet = p.peakRet;
+  const harvestRet = p.harvestRet;
+  const timeDecayMs = p.timeDecayMs;
 
   const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
   const legRide = isLegRideSetup(s.entry_setup);
@@ -113,12 +103,10 @@ export function decideBestOutcomeExit(
   const sl = Math.max(absEntry * p.slPct, p.slFloor);
   const mfeFloor = Math.max(absEntry * p.mfeFloorPct, p.mfeFloorAbs);
   const peakMinHoldMs = legRide ? 30_000 : Math.min(p.thesisMinHoldMs * 0.5, 45_000);
-  // Peak/harvest still want a fuller run — do NOT use mfeFloor (2.5) here
   const pressureMinMfe = Math.max(
     scaleFromGold(absEntry, legRide ? 1.5 : 1.0),
     absEntry * 0.00025
   );
-  // Giveback/reversal: fire after ~+£0.15-class MFE (~0.9–1.0pt Gold), not after 2.5pt
   const protectAfterMfe = Math.max(scaleFromGold(absEntry, 0.9), absEntry * 0.00018);
   const hadProtectedRun = s.mfe >= protectAfterMfe;
   const hadProvenRun = s.mfe >= pressureMinMfe;
@@ -131,7 +119,6 @@ export function decideBestOutcomeExit(
     };
   }
 
-  // Had visible profit, now underwater — cut immediately (do not wait for full SL)
   if (hadProtectedRun && fav < 0 && heldMs >= 8_000) {
     return {
       exit: true,
@@ -139,7 +126,6 @@ export function decideBestOutcomeExit(
     };
   }
 
-  // Trail: once MFE printed, exit when closeable drops below 55% of peak (still green)
   if (
     hadProtectedRun &&
     fav >= 0 &&
@@ -152,7 +138,6 @@ export function decideBestOutcomeExit(
     };
   }
 
-  // Mid showed profit that bid already gave back past floor — same lock
   if (
     hadProtectedRun &&
     midFav >= givebackFloor &&
@@ -166,24 +151,12 @@ export function decideBestOutcomeExit(
     };
   }
 
-  const brainThesis =
-    brain != null ? brainExitThesis(brain, s.open_side, book, s.entry_setup) : null;
-  const brainThesisHold = legRide ? p.thesisMinHoldMs : p.thesisMinHoldMs * 0.85;
-  if (brainThesis && heldMs >= brainThesisHold) {
-    if (!legRide || fav >= 0 || hadProtectedRun) {
-      return { exit: true, reason: `${brainThesis} · ${book}` };
-    }
-  }
-
   const thesis = thesisFailureForPlaybook(s.open_side, s.regime, book, s.entry_setup);
   if (thesis && heldMs >= p.thesisMinHoldMs) {
     return { exit: true, reason: `${thesis} · ${book} · ${s.entry_setup || 'setup?'}` };
   }
 
-  let tp = Math.max(absEntry * p.tpPct, p.tpFloor);
-  if (dynamic?.tpDistance != null && dynamic.tpDistance > 0) {
-    tp = Math.max(tp, dynamic.tpDistance);
-  }
+  const tp = Math.max(absEntry * p.tpPct, p.tpFloor);
 
   if (
     heldMs >= peakMinHoldMs &&
@@ -194,14 +167,14 @@ export function decideBestOutcomeExit(
   ) {
     return {
       exit: true,
-      reason: `PeakProtection · ${book} · retention ${(s.peak_retention * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} · closeable ${fav.toFixed(5)}${brain ? ` · ${brain.move_state}` : ''}`,
+      reason: `PeakProtection · ${book} · retention ${(s.peak_retention * 100).toFixed(0)}% of MFE ${s.mfe.toFixed(5)} · closeable ${fav.toFixed(5)}`,
     };
   }
 
   if (fav >= tp) {
     return {
       exit: true,
-      reason: `Target · ${book} · ${s.entry_setup || ''} · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)}${brain ? ` · brain ${brain.move_state}` : ''}`,
+      reason: `Target · ${book} · ${s.entry_setup || ''} · UPL ${fav.toFixed(5)} ≥ TP ${tp.toFixed(5)}`,
     };
   }
 
@@ -236,7 +209,7 @@ export function decideBestOutcomeExit(
   ) {
     return {
       exit: true,
-      reason: `TimeDecay · ${book} · held ${Math.round(heldMs / 1000)}s · UPL ${fav.toFixed(5)}${brain?.move_state === 'EXHAUSTING' ? ' · exhausting' : ''}`,
+      reason: `TimeDecay · ${book} · held ${Math.round(heldMs / 1000)}s · UPL ${fav.toFixed(5)}`,
     };
   }
 

@@ -10,6 +10,7 @@ import {
   isBounceOffLow,
   isLateChaseOnLocalLeg,
   isLegFloorChase,
+  isQuietSideways,
   isTipChaseEntry,
   priceFlowBias,
   recentImpulse,
@@ -279,21 +280,26 @@ describe('marketSetup', () => {
   });
 
   it('decideEntryFromTenSecMove trades strong 10s when structure mid-NONE', () => {
-    const minutes = rangeMinutes();
-    const st = buildStructure({ minutes, mid: 2005 });
+    // Directional grind so isQuietSideways is false
+    const minutes: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) {
+      minutes.push(candle(2000 + i * 0.15, 2000.4 + i * 0.15, 1999.8 + i * 0.15, 2000.2 + i * 0.15));
+    }
+    const st = buildStructure({ minutes, mid: minutes.at(-1)!.close });
     expect(st.ready).toBe(true);
-    const buyBar = bar10(2004.5, 2006.2, 2004.4, 2006.0);
+    expect(isQuietSideways(minutes)).toBe(false);
+    const buyBar = bar10(2003.2, 2004.5, 2003.1, 2004.3);
     const buy = decideEntryFromTenSecMove(st, buyBar, minutes);
     expect(buy?.direction).toBe('BUY');
     expect(buy?.setup).toBe('CONTINUATION');
-    // Dump minutes so SELL is not blocked by flow UP
     const dump: CapitalPriceCandle[] = [...minutes];
     for (let i = 0; i < 6; i++) {
-      const o = 2005 - i * 1.1;
-      dump.push(candle(o, o + 0.2, o - 1.3, o - 1.0));
+      const o = dump.at(-1)!.close - 1.1;
+      dump.push(candle(o + 1.1, o + 1.3, o - 0.2, o));
     }
     const stDump = buildStructure({ minutes: dump, mid: dump.at(-1)!.close });
-    const sellBar = bar10(2003.5, 2003.6, 2001.8, 2002.0);
+    const last = dump.at(-1)!.close;
+    const sellBar = bar10(last + 0.3, last + 0.4, last - 1.5, last - 1.2);
     const sell = decideEntryFromTenSecMove(stDump, sellBar, dump);
     expect(sell?.direction).toBe('SELL');
   });
@@ -364,14 +370,14 @@ describe('marketSetup', () => {
     }
   });
 
-  it('decideEntryFromTenSecMove trades EUR/USD when swing span is tiny', () => {
+  it('decideEntryFromTenSecMove skips EUR/USD dead compression (sideways)', () => {
     const minutes: CapitalPriceCandle[] = [];
     for (let i = 0; i < 28; i++) {
       minutes.push(candle(1.1598, 1.16, 1.1596, 1.1599));
     }
     const st = buildStructure({ minutes, mid: 1.1599 });
     const moveBar = bar10(1.1598, 1.1603, 1.1597, 1.1602);
-    expect(decideEntryFromTenSecMove(st, moveBar, minutes)?.direction).toBe('BUY');
+    expect(decideEntryFromTenSecMove(st, moveBar, minutes)).toBeNull();
   });
 
   it('isTipChaseEntry skips flat H≈L compression', () => {
@@ -440,6 +446,20 @@ describe('marketSetup', () => {
     expect(hit?.setup).toBe('CONTINUATION');
     expect(hit?.playbook).toBe('LONG');
     expect(hit?.reason).toMatch(/1m IMPULSE BUY/);
+  });
+
+  it('isQuietSideways blocks impulse entry in a dead chop band', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 28; i++) {
+      const wobble = (i % 2 === 0 ? 0.4 : -0.35);
+      bars.push(candle(4324 + wobble, 4325, 4323.5, 4324.2 + wobble * 0.2));
+    }
+    expect(isQuietSideways(bars)).toBe(true);
+    const st = buildStructure({ minutes: bars, mid: bars.at(-1)!.close });
+    const live = bar10(4324.0, 4324.8, 4323.9, 4324.5);
+    live.ticks = 5;
+    expect(decideEntryFromImpulseMove(st, bars, live)).toBeNull();
+    expect(decideEntryFromTenSecMove(st, live, bars)).toBeNull();
   });
 
   it('blocks BUY at local spike tip even when structure H is higher (4325 vs H4329)', () => {

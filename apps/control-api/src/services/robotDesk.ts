@@ -24,7 +24,6 @@ import {
 } from './regimes.js';
 import { decideBestOutcomeExit, executableFavorableMove, favorableMove } from './exitManage.js';
 import {
-  brainEntryAllowed,
   formatBrainLine,
   lockBrainAtEntry,
   summarizeBrain,
@@ -444,9 +443,9 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     active_regimes: activeSetups,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
+    chain: 'Capital 1h+1m+10s → STRUCTURE → SETUP → ENTRY → playbook exit (brain = UI only)',
     note:
-      'Setup-first: NONE only when quiet. CONTINUATION/PULLBACK/FADE bounce rides rally (tp≥3–4pt, not +£0.07 scalp). Entry on closed 10s confirm.',
+      'Setup-first. Brain never blocks orders. No sideways CONTINUATION. No tip-chase. ProfitGiveback trail.',
   };
 }
 
@@ -1687,7 +1686,7 @@ async function robotCycle(s: Internal) {
 
     const brainGate = s.brain ?? currentRegime(s.epic, s.id)?.brain ?? null;
     const barCount = brainGate?.bar_count ?? 0;
-    // Entry after FAST bars (~3 min) — never block on full 137-bar brain warm-up
+    // Entry after FAST bars (~3 min). Brain is advisory only — never blocks setups.
     const brainWarm = brainGate?.ready || barCount >= BRAIN_FAST_ENTRY_BARS;
     if (!brainWarm) {
       pushTick(s, {
@@ -1698,20 +1697,6 @@ async function robotCycle(s: Internal) {
         detail: `${ohlcLine} · brain seeding ${barCount}/${BRAIN_FAST_ENTRY_BARS} (~3 min) — entry blocked`,
       });
       return;
-    }
-    // Full brain gates only when ready; until then playbook/setup decide
-    if (brainGate?.ready) {
-      const gate = brainEntryAllowed(brainGate, setupType);
-      if (!gate.ok) {
-        pushTick(s, {
-          phase: 'DECIDE',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `${ohlcLine} · brain block · ${gate.reason}`,
-        });
-        return;
-      }
     }
 
     s.playbook = entryPlaybook;

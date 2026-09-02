@@ -549,32 +549,10 @@ function rawSetupFromStructure(
     };
   }
 
-  // Flat compression (EUR/USD quiet: H≈L) — FADE at a fake edge blocks every entry via tip-chase
+  // Flat compression — do NOT invent CONTINUATION in a dead band (sideways trap)
   const span = hi - lo;
   const minSpan = minSwingSpan(last.close);
   if (span < minSpan) {
-    if (imp === 'UP') {
-      return {
-        kind: 'CONTINUATION',
-        side: 'BUY',
-        playbook: 'SCALP',
-        status: 'ARMED',
-        swing_high: hi,
-        swing_low: lo,
-        reason: `COMPRESSION · tight span · 10s UP → BUY`,
-      };
-    }
-    if (imp === 'DOWN') {
-      return {
-        kind: 'CONTINUATION',
-        side: 'SELL',
-        playbook: 'SCALP',
-        status: 'ARMED',
-        swing_high: hi,
-        swing_low: lo,
-        reason: `COMPRESSION · tight span · 10s DOWN → SELL`,
-      };
-    }
     return {
       kind: 'NONE',
       side: null,
@@ -582,7 +560,7 @@ function rawSetupFromStructure(
       status: 'NONE',
       swing_high: hi,
       swing_low: lo,
-      reason: `NONE · compression H${hi.toFixed(4)}/L${lo.toFixed(4)} · wait 10s move`,
+      reason: `NONE · compression H${hi.toFixed(4)}/L${lo.toFixed(4)} · wait real swing`,
     };
   }
 
@@ -894,6 +872,27 @@ export function isFreshBreakoutAbove(hi: number, bar: TenSecBar, eps: number): b
   return bar.close > hi + need || bar.high > hi + need * 1.15;
 }
 
+/**
+ * Quiet chop / sideways — last ~8×1m go nowhere. No CONTINUATION / impulse chase here.
+ */
+export function isQuietSideways(
+  minutes: CapitalPriceCandle[] | null | undefined
+): boolean {
+  if (!minutes || minutes.length < 6) return false;
+  const slice = minutes.slice(-8);
+  const hi = Math.max(...slice.map((c) => c.high));
+  const lo = Math.min(...slice.map((c) => c.low));
+  const first = slice[0]!;
+  const last = slice[slice.length - 1]!;
+  const span = hi - lo;
+  const net = Math.abs(last.close - first.open);
+  const chopBand = scaleFromGold(last.close, 3.0);
+  const minNet = scaleFromGold(last.close, 1.2);
+  if (span <= chopBand && net < minNet * 1.5) return true;
+  if (span > chopBand && net < span * 0.28) return true;
+  return false;
+}
+
 /** CONTINUATION/BREAKOUT SELL at swing floor without breaking below — classic V-bottom trap. */
 export function isLegFloorChase(setup: MarketSetup, bar: TenSecBar): boolean {
   if (setup.side !== 'SELL') return false;
@@ -996,6 +995,14 @@ export function decideEntryFromSetup(
   // Hard: never BUY into a dump / SELL into a rally (green blip mid-dump class)
   if (setup.side === 'BUY' && flow === 'DOWN') return null;
   if (setup.side === 'SELL' && flow === 'UP') return null;
+
+  // Sideways chop — only FADE/FAILED_BREAK at edges; no mid-band CONTINUATION
+  if (
+    (setup.kind === 'CONTINUATION' || setup.kind === 'BREAKOUT' || setup.kind === 'PULLBACK') &&
+    isQuietSideways(minutes)
+  ) {
+    return null;
+  }
 
   if (isTipChaseEntry(setup, bar)) {
     return null;
@@ -1126,6 +1133,7 @@ export function decideEntryFromFormingSetup(
 
   if (setup.side === 'BUY' && flow === 'DOWN') return null;
   if (setup.side === 'SELL' && flow === 'UP') return null;
+  if (isQuietSideways(minutes)) return null;
   if (isTipChaseEntry(setup, forming)) return null;
   if (setup.side === 'SELL' && isLegFloorChase(setup, forming)) return null;
   if (setup.side === 'BUY' && isLegCeilingChase(setup, forming)) return null;
@@ -1187,6 +1195,7 @@ export function decideEntryFromTenSecMove(
   minutes?: CapitalPriceCandle[] | null
 ): SetupEntry | null {
   if (!structure.ready) return null;
+  if (isQuietSideways(minutes)) return null;
   const thr = PLAYBOOK_ENTRY_BODY.SCALP;
   const body = bodyPct(bar);
   const hi = structure.swing_high;
@@ -1235,6 +1244,7 @@ export function decideEntryFromImpulseMove(
   bar: TenSecBar
 ): SetupEntry | null {
   if (!structure.ready || !minutes || minutes.length < 4) return null;
+  if (isQuietSideways(minutes)) return null;
   const imp = recentImpulse(minutes, 'flip') || recentImpulse(minutes);
   if (!imp) return null;
 

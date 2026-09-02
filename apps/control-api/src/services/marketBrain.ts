@@ -429,6 +429,7 @@ export function brainEntryAllowed(
   state: BrainState,
   setupKind: string
 ): { ok: boolean; reason: string } {
+  // Advisory helper only — robot desk does NOT call this to block orders.
   const k = String(setupKind || '').toUpperCase();
   if (!state.ready) return { ok: false, reason: 'brain seeding' };
 
