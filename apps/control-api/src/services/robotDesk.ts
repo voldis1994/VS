@@ -35,6 +35,7 @@ import {
   emptySetup,
   emptyStructure,
   playbookFromSetup,
+  recentImpulse,
   setupCatalog,
   updateSetupSticky,
   type MarketSetup,
@@ -181,6 +182,9 @@ type Internal = RobotSession & {
   last_entry_side_ms: number;
   /** After HardInvalidation / thesis fail — longer flip lock */
   last_hard_exit_ms: number;
+  /** After Target/harvest/giveback — stop same-side spam on next 10s bar */
+  last_soft_exit_ms: number;
+  last_soft_exit_side: 'BUY' | 'SELL' | null;
 };
 
 const STRUCTURE_REFRESH_MS = 10_000;
@@ -270,6 +274,8 @@ function publicSession(s: Internal): RobotSession {
     last_entry_side: _entrySide,
     last_entry_side_ms: _entrySideAt,
     last_hard_exit_ms: _hardExit,
+    last_soft_exit_ms: _softExit,
+    last_soft_exit_side: _softSide,
     ...rest
   } = s;
   const st = s.structureBook;
@@ -760,8 +766,12 @@ async function exitTrade(
   s.exits_done += 1;
   s.last_deal_reference = result.deal_reference || s.last_deal_reference;
   s.closed_at_ms = Date.now();
-  if (/HardInvalidation|ThesisFailure|thesis/i.test(reason)) {
+  if (/HardInvalidation|ThesisFailure|thesis|EarlyCut|ReversalStop/i.test(reason)) {
     s.last_hard_exit_ms = Date.now();
+  }
+  if (/Target|PeakProtection|harvest|ProfitGiveback|TimeDecay/i.test(reason)) {
+    s.last_soft_exit_ms = Date.now();
+    s.last_soft_exit_side = s.open_side;
   }
   s.error = null;
   pushTick(s, {
@@ -1307,9 +1317,9 @@ async function robotCycle(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // After close: 1×10s bar pause; after HardInv — brief lock
+    // After close: short pause; after HardInv — brief lock
     const hardAgo = s.last_hard_exit_ms > 0 ? Date.now() - s.last_hard_exit_ms : Infinity;
-    const POST_CLOSE_COOLDOWN_MS = hardAgo < 180_000 ? 25_000 : 10_000;
+    const POST_CLOSE_COOLDOWN_MS = hardAgo < 180_000 ? 18_000 : 8_000;
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
     if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
       pushTick(s, {
@@ -1323,6 +1333,10 @@ async function robotCycle(s: Internal) {
       });
       return;
     }
+
+    // Same-side spam after tiny profit exit — wait for a real new leg / opposite flip
+    const softAgo = s.last_soft_exit_ms > 0 ? Date.now() - s.last_soft_exit_ms : Infinity;
+    const SAME_SIDE_COOLDOWN_MS = 40_000;
 
     if (quote.mid == null) return;
 
@@ -1466,10 +1480,36 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // Opposite-side lock: brief for 10s V-flips; longer only after HardInv
+    // Opposite-side lock: skip when impulse confirms the flip; otherwise brief
     const hardRecent = s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < 300_000;
-    const SIDE_LOCK_MS = hardRecent ? 45_000 : 20_000;
+    const liveFlip =
+      recentImpulse(s.last_minute_candles, 'flip') || recentImpulse(s.last_minute_candles);
+    const impulseConfirmsFlip =
+      !!liveFlip &&
+      ((liveFlip === 'UP' && entry.direction === 'BUY') ||
+        (liveFlip === 'DOWN' && entry.direction === 'SELL'));
+    const SIDE_LOCK_MS = impulseConfirmsFlip ? 0 : hardRecent ? 25_000 : 8_000;
+
+    // After soft profit exit — do not re-fire the same side on the next confirm
     if (
+      softAgo < SAME_SIDE_COOLDOWN_MS &&
+      s.last_soft_exit_side &&
+      s.last_soft_exit_side === entry.direction
+    ) {
+      pushTick(s, {
+        phase: 'INFO',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · same-side cooldown ${Math.ceil(
+          (SAME_SIDE_COOLDOWN_MS - softAgo) / 1000
+        )}s after soft exit ${s.last_soft_exit_side} · wait new leg or flip`,
+      });
+      return;
+    }
+
+    if (
+      SIDE_LOCK_MS > 0 &&
       s.last_entry_side &&
       s.last_entry_side !== entry.direction &&
       Date.now() - s.last_entry_side_ms < SIDE_LOCK_MS
@@ -1650,6 +1690,8 @@ export async function startRobotSession(input: {
     last_entry_side: null,
     last_entry_side_ms: 0,
     last_hard_exit_ms: 0,
+    last_soft_exit_ms: 0,
+    last_soft_exit_side: null,
 
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };

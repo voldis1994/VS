@@ -66,7 +66,56 @@ describe('decideBestOutcomeExit playbook-aware', () => {
       2003.6
     );
     expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/PeakProtection/);
+    expect(d.reason).toMatch(/PeakProtection|ProfitGiveback/);
+  });
+
+  it('holds live green move past first TP touch', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4419,
+        entry_at: ago(90_000),
+        mfe: 6,
+        peak_retention: 0.85,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+      }),
+      4424.1 // ~5.1pt — above small targets, still ≥55% of MFE
+    );
+    expect(d.exit).toBe(false);
+  });
+
+  it('ReversalStop cuts after protected MFE goes red', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4419,
+        entry_at: ago(40_000),
+        mfe: 3.5,
+        peak_retention: 0,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+      }),
+      4418.2
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/ReversalStop/);
+  });
+
+  it('EarlyCut soft-SL before max when no protected MFE', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        entry_at: ago(40_000),
+        mfe: 0.05,
+        peak_retention: null,
+        playbook: 'SCALP',
+      }),
+      1996.5
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/EarlyCut|HardInvalidation/);
   });
 
   it('target uses playbook TP', () => {
