@@ -33,6 +33,7 @@ import {
   emptySetup,
   emptyStructure,
   flowAgreesWithSide,
+  flowFlipAtExtreme,
   liveFlow,
   minuteConfirmBar,
   playbookFromSetup,
@@ -467,7 +468,7 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
   }
 }
 
-function clearTradeState(s: Internal) {
+function clearTradeState(s: Internal, opts?: { allowImmediateReverse?: boolean }) {
   s.open_side = null;
   s.deal_id = null;
   s.entry_price = null;
@@ -481,8 +482,13 @@ function clearTradeState(s: Internal) {
   s.playbook = null;
   s.entry_setup = null;
   s.mode = 'FLAT';
-  // Next impulse/NONE entry waits for the following 1m clock bucket
-  s.entry_minute_bucket = Math.floor(Date.now() / 60_000);
+  // MoveFlip: allow opposite entry this same 1m — waiting next clock was the lag
+  if (opts?.allowImmediateReverse) {
+    s.entry_minute_bucket = 0;
+  } else {
+    // Next impulse/NONE entry waits for the following 1m clock bucket
+    s.entry_minute_bucket = Math.floor(Date.now() / 60_000);
+  }
 }
 
 /**
@@ -825,7 +831,7 @@ async function exitTrade(
     /* best effort */
   }
 
-  clearTradeState(s);
+  clearTradeState(s, { allowImmediateReverse: /MoveFlip/i.test(reason) });
 }
 
 async function enterTrade(
@@ -1388,6 +1394,7 @@ async function robotCycleBody(s: Internal) {
         {
           ...s,
           flow_bias: liveFlow(s.last_minute_candles),
+          flow_flip: flowFlipAtExtreme(s.last_minute_candles),
         },
         {
           mid: quote.mid,

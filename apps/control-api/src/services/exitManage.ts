@@ -30,6 +30,8 @@ export type ExitSnapshot = {
   entry_setup?: string | null;
   /** Live 1m flow — preferred thesis for legs (not flickering 10s regime) */
   flow_bias?: 'UP' | 'DOWN' | null;
+  /** Clear V-flip at fresh extreme — exit NOW and reverse (not 4min thesis) */
+  flow_flip?: 'UP' | 'DOWN' | null;
 };
 
 /** @deprecated use playbook thesisMinHold — kept for tests importing name */
@@ -150,6 +152,23 @@ export function decideBestOutcomeExit(
     };
   }
 
+  // V-flip at fresh extreme against the open leg — cut NOW (screenshot 20:00 class).
+  // Do not wait CONTINUATION thesisMinHold 240s while price already ran the other way.
+  if (legRide && s.flow_flip && heldMs >= 12_000) {
+    if (s.open_side === 'BUY' && s.flow_flip === 'DOWN') {
+      return {
+        exit: true,
+        reason: `MoveFlip · BUY vs V-flip DOWN · ${s.entry_setup || 'leg'}`,
+      };
+    }
+    if (s.open_side === 'SELL' && s.flow_flip === 'UP') {
+      return {
+        exit: true,
+        reason: `MoveFlip · SELL vs V-flip UP · ${s.entry_setup || 'leg'}`,
+      };
+    }
+  }
+
   const thesis = (() => {
     // Micro-swing legs: thesis from 1m flow against the trade — not diagnostic 10s regime flips
     if (legRide && s.flow_bias) {
@@ -163,7 +182,14 @@ export function decideBestOutcomeExit(
     }
     return thesisFailureForPlaybook(s.open_side, s.regime, book);
   })();
-  if (thesis && heldMs >= p.thesisMinHoldMs) {
+  // Against-flow legs: max 45s — 240s thesis was the "can't switch" lag
+  const againstFlow =
+    legRide &&
+    !!s.flow_bias &&
+    ((s.open_side === 'BUY' && s.flow_bias === 'DOWN') ||
+      (s.open_side === 'SELL' && s.flow_bias === 'UP'));
+  const thesisHold = againstFlow ? Math.min(p.thesisMinHoldMs, 45_000) : p.thesisMinHoldMs;
+  if (thesis && heldMs >= thesisHold) {
     return { exit: true, reason: `${thesis} · ${book} · ${s.entry_setup || 'setup?'}` };
   }
 
