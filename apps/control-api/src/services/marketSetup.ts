@@ -475,6 +475,22 @@ export function liveFlow(
   return priceFlowBias(minutes) || recentImpulse(minutes, 'flip') || recentImpulse(minutes);
 }
 
+/**
+ * Block SELL into a live UP tape / BUY into live DOWN tape unless clear V-flip.
+ * Gold 20:29 class: SELL @ 4381 right after winning BUY while rally still UP.
+ */
+export function entryFightsStickyTrend(
+  direction: 'BUY' | 'SELL',
+  minutes?: CapitalPriceCandle[] | null
+): boolean {
+  const trend = marketTrend(minutes);
+  if (!trend) return false;
+  const flip = flowFlipAtExtreme(minutes);
+  if (direction === 'SELL' && trend === 'UP' && flip !== 'DOWN') return true;
+  if (direction === 'BUY' && trend === 'DOWN' && flip !== 'UP') return true;
+  return false;
+}
+
 export function flowAgreesWithSide(
   side: 'BUY' | 'SELL' | null | undefined,
   minutes?: CapitalPriceCandle[] | null
@@ -552,6 +568,24 @@ export function moveAlreadyFinished(
   const rallyInto = hi - slice[0]!.low;
   if (hiAt <= lastI - 2 && givenBack >= span * 0.22 && rallyInto >= minSpan) {
     return true;
+  }
+  // Long UP leg already ran — buying while parked/consolidating in top ~15% is tip-chase
+  // (Gold 20:34 BUY @ 4383 after 4372→4383). Still-thrusting breakouts may continue.
+  const win = minutes.slice(-20);
+  const wHi = Math.max(...win.map((c) => c.high));
+  const wLo = Math.min(...win.map((c) => c.low));
+  const wSpan = wHi - wLo;
+  const wNet = win[win.length - 1]!.close - win[0]!.open;
+  if (
+    wSpan >= minSpan &&
+    wNet >= Math.max(Math.abs(px) * 0.001, 4.0) &&
+    px >= wHi - wSpan * 0.15
+  ) {
+    const thrusting =
+      last.close > last.open &&
+      last.high >= wHi - wSpan * 0.08 &&
+      lastBody >= Math.max(wSpan * 0.12, Math.abs(px) * 0.00025);
+    if (!thrusting) return true;
   }
   return false;
 }
@@ -1063,6 +1097,7 @@ export function decideEntryFromSetup(
   // Direction = priceFlowBias (flip-first at extremes) — not raw 20m marketTrend alone.
   if (setup.side === 'BUY' && flow === 'DOWN') return null;
   if (setup.side === 'SELL' && flow === 'UP') return null;
+  if (entryFightsStickyTrend(setup.side, minutes)) return null;
 
   if (isTipChaseEntry(setup, { ...bar, close: px })) {
     return null;
@@ -1201,6 +1236,8 @@ export function decideEntryFromImpulseCandle(
   // Signal finished — last 1m already turned against the move
   if (!moveStillPrinting(flow, mins)) return null;
   const direction: 'BUY' | 'SELL' = flow === 'UP' ? 'BUY' : 'SELL';
+  // Never SELL mid-rally / BUY mid-dump without V-flip (20:29 −£0.13 class)
+  if (entryFightsStickyTrend(direction, mins)) return null;
   // Tip / rolled move — Gold dump-floor SELL and post-spike BUY
   if (moveAlreadyFinished(direction, mins, bar.close)) return null;
   if (flow === 'DOWN') {
@@ -1250,6 +1287,7 @@ export function decideEntryFromTenSecMove(
   if (body >= need || throughHigh) {
     // flow owns direction (incl. V-flip); do not also require bias away from BELOW
     if (flow === 'DOWN' || (structure.bias === 'BELOW' && flow !== 'UP')) return null;
+    if (entryFightsStickyTrend('BUY', minutes)) return null;
     if (moveAlreadyFinished('BUY', minutes, bar.close)) return null;
     // Tip-chase: parked at swing high without clear break — skip
     if (!throughHigh && bar.close >= hi - eps * 0.3 && bar.close <= hi + eps * 0.15) return null;
@@ -1262,6 +1300,7 @@ export function decideEntryFromTenSecMove(
   }
   if (body <= -need || throughLow) {
     if (flow === 'UP' || (structure.bias === 'ABOVE' && flow !== 'DOWN')) return null;
+    if (entryFightsStickyTrend('SELL', minutes)) return null;
     if (moveAlreadyFinished('SELL', minutes, bar.close)) return null;
     if (!throughLow && bar.close <= lo + eps * 0.3 && bar.close >= lo - eps * 0.15) return null;
     return {
@@ -1305,15 +1344,17 @@ export function decideUnifiedEntry(opts: {
   const armed =
     setup.status === 'ARMED' && setup.kind !== 'NONE' && !!setup.side && !!setup.playbook;
 
+  let entry: SetupEntry | null = null;
+
   if (armed) {
     const fromSetup = decideEntryFromSetup(setup, bar, minutes, livePx);
-    if (fromSetup) return fromSetup;
-
-    // Same-side impulse only — never flip against sticky ARMED FADE/PULLBACK
-    if (setup.kind === 'CONTINUATION' || setup.kind === 'BREAKOUT') {
+    if (fromSetup) {
+      entry = fromSetup;
+    } else if (setup.kind === 'CONTINUATION' || setup.kind === 'BREAKOUT') {
+      // Same-side impulse only — never flip against sticky ARMED FADE/PULLBACK
       const impulse = decideEntryFromImpulseCandle(bar, minutes);
       if (impulse && impulse.direction === setup.side) {
-        return {
+        entry = {
           direction: impulse.direction,
           setup: setup.kind,
           playbook: setup.playbook || impulse.playbook,
@@ -1321,10 +1362,7 @@ export function decideUnifiedEntry(opts: {
         };
       }
     }
-    return null;
-  }
-
-  if (setup.kind === 'NONE' || setup.status === 'NONE') {
+  } else if (setup.kind === 'NONE' || setup.status === 'NONE') {
     if (!allowNoneImpulse) return null;
     if (!structure.ready || !(structure.swing_high > structure.swing_low)) return null;
 
@@ -1335,16 +1373,18 @@ export function decideUnifiedEntry(opts: {
         if (impulse.direction === 'BUY' && structure.bias === 'BELOW') return null;
         if (impulse.direction === 'SELL' && structure.bias === 'ABOVE') return null;
       }
-      return {
+      entry = {
         ...impulse,
         reason: `${impulse.reason} · unified NONE`,
       };
+    } else {
+      entry = decideEntryFromTenSecMove(structure, bar, minutes);
     }
-    return decideEntryFromTenSecMove(structure, bar, minutes);
   }
 
-  // FORMING — confirm sticky, do not scalp mid-form
-  return null;
+  if (!entry) return null;
+  if (entryFightsStickyTrend(entry.direction, minutes)) return null;
+  return entry;
 }
 
 export function playbookFromSetup(setup: MarketSetup | null | undefined): TradePlaybook | null {

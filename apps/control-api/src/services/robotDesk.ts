@@ -1583,6 +1583,27 @@ async function robotCycleBody(s: Internal) {
       }
     }
 
+    // After exit, opposite side needs real V-flip for 3m — not first pullback SELL into rally
+    // Gold 20:28 BUY win → 20:29 SELL @ 4381 → −£0.13
+    if (
+      s.last_exit_side &&
+      entry.direction !== s.last_exit_side &&
+      Date.now() - s.last_exit_ms < 180_000
+    ) {
+      const flip = flowFlipAtExtreme(s.last_minute_candles);
+      const need: 'UP' | 'DOWN' = entry.direction === 'SELL' ? 'DOWN' : 'UP';
+      if (flip !== need) {
+        pushTick(s, {
+          phase: 'INFO',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `${ohlcLine} · reverse blocked · need V-flip ${need} after ${s.last_exit_side} exit (have ${flip || 'none'})`,
+        });
+        return;
+      }
+    }
+
     const direction = entry.direction;
     const setupType = entry.setup;
     const entryPlaybook = entry.playbook;
