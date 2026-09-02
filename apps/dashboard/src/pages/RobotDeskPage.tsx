@@ -2,6 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiFetch } from '../hooks/useApi';
 import { Logo } from '../components/Logo';
+import {
+  isJunkStockMarket,
+  isUs100Market,
+  lotForMarket,
+  marketKey,
+  pickDeployAccount,
+  pickSwitchTarget,
+  pickUs100,
+} from '../lib/preferMarket';
 
 type RobotTick = {
   at: string;
@@ -270,51 +279,76 @@ export function RobotDeskPage() {
       .catch(() => setLaunchAccounts([]));
   }, [launchAccountId]);
 
+  const focused = sessions.find((s) => s.id === focusId) || null;
+  const runningCount = sessions.filter((s) => s.running).length;
+
   useEffect(() => {
     if (!launchAccountId) return;
     void apiFetch<typeof launchMarkets>(`/api/trading/accounts/${launchAccountId}/instruments`)
       .then((rows) => {
-        setLaunchMarkets(rows || []);
-        if (rows?.[0]) {
-          setLaunchEpic(rows[0].epic || rows[0].symbol);
-          setLaunchLot(String(rows[0].lot_size || rows[0].min_lot || 0.1));
-        }
+        const list = rows || [];
+        setLaunchMarkets(list);
+        // Never default to Capital A–Z first row ($ Kimly)
+        const pick = pickSwitchTarget(list, focused?.epic);
+        if (!pick) return;
+        setLaunchEpic(marketKey(pick));
+        setLaunchLot(String(lotForMarket(pick)));
       })
       .catch(() => setLaunchMarkets([]));
-  }, [launchAccountId]);
+  }, [launchAccountId, focused?.epic]);
 
   const filteredLaunch = useMemo(() => {
     const q = launchFilter.trim().toLowerCase();
-    if (!q) return launchMarkets.slice(0, 200);
-    return launchMarkets
-      .filter(
-        (m) =>
-          m.display_name.toLowerCase().includes(q) ||
-          (m.epic || m.symbol).toLowerCase().includes(q),
-      )
-      .slice(0, 200);
+    const rows = !q
+      ? [...launchMarkets]
+      : launchMarkets.filter(
+          (m) =>
+            m.display_name.toLowerCase().includes(q) ||
+            (m.epic || m.symbol).toLowerCase().includes(q),
+        );
+    rows.sort((a, b) => {
+      const score = (m: (typeof rows)[0]) =>
+        isUs100Market(m) ? 3 : isJunkStockMarket(m) ? -1 : 1;
+      return score(b) - score(a);
+    });
+    return rows.slice(0, 200);
   }, [launchMarkets, launchFilter]);
 
-  const focused = sessions.find((s) => s.id === focusId) || null;
-  const runningCount = sessions.filter((s) => s.running).length;
+  const us100Market = useMemo(() => pickUs100(launchMarkets), [launchMarkets]);
 
   const deploy = () => {
     if (!launchAccountId || !launchEpic) {
       setError('Izvēlies account + tirgu');
       return;
     }
+    // Guard: never deploy $ Kimly by accident from A–Z default
+    const m = launchMarkets.find((x) => marketKey(x) === launchEpic);
+    if (m && isJunkStockMarket(m)) {
+      const fix = pickSwitchTarget(launchMarkets, null);
+      if (fix && !isJunkStockMarket(fix)) {
+        setLaunchEpic(marketKey(fix));
+        setLaunchLot(String(lotForMarket(fix)));
+        setError(`Nevis ${m.display_name} — izvēlies ${fix.display_name} (US100/Gold/EUR)`);
+        return;
+      }
+    }
     const lotN = Number(launchLot);
     if (!Number.isFinite(lotN) || lotN <= 0) {
       setError('Lot > 0');
       return;
     }
-    const m = launchMarkets.find((x) => (x.epic || x.symbol) === launchEpic);
+    const liveIds = sessions.filter((s) => s.running).map((s) => s.account_id);
+    const accountId =
+      pickDeployAccount(
+        launchAccounts.map((a) => ({ account_id: a.account_id })),
+        liveIds,
+      )?.account_id || launchAccountId;
     setBusy(true);
     setError(null);
     void apiFetch<{ session: RobotSession }>('/api/robot-desk/start', {
       method: 'POST',
       body: JSON.stringify({
-        account_id: launchAccountId,
+        account_id: accountId,
         epic: launchEpic,
         display_name: m?.display_name || launchEpic,
         lot_size: lotN,
@@ -369,6 +403,62 @@ export function RobotDeskPage() {
     }
   };
 
+  const switchSessionToMarket = async (
+    s: RobotSession,
+    epic: string,
+    displayName?: string,
+    lotSize?: number,
+  ) => {
+    const m = launchMarkets.find((x) => marketKey(x) === epic);
+    const lot = Number(lotSize ?? launchLot ?? lotForMarket(m));
+    if (!epic) {
+      setError('Izvēlies tirgu');
+      return;
+    }
+    if (!Number.isFinite(lot) || lot <= 0) {
+      setError('Lot > 0');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await apiFetch<{ session: RobotSession }>('/api/robot-desk/start', {
+        method: 'POST',
+        body: JSON.stringify({
+          account_id: s.account_id,
+          epic,
+          display_name: displayName || m?.display_name || epic,
+          lot_size: lot,
+          trading_enabled: true,
+        }),
+      });
+      setFocusId(res.session.id);
+      setShowDeploy(false);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Switch failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const switchToUs100 = async (s: RobotSession) => {
+    const m = us100Market || pickSwitchTarget(launchMarkets, s.epic);
+    if (!m || !isUs100Market(m)) {
+      setError('US100 nav katalogā — pull Capital markets, tad meklē US100');
+      setShowDeploy(true);
+      setLaunchFilter('us100');
+      return;
+    }
+    await switchSessionToMarket(s, marketKey(m), m.display_name, lotForMarket(m));
+  };
+
+  const sessionIsUs100 = (s: RobotSession) =>
+    isUs100Market({ epic: s.epic, symbol: s.epic, display_name: s.display_name });
+
+  const sessionIsJunk = (s: RobotSession) =>
+    isJunkStockMarket({ epic: s.epic, symbol: s.epic, display_name: s.display_name });
+
   return (
     <div className="robot-fs-shell robot-board-shell" ref={shellRef}>
       <div className="robot-desk robot-desk-fs robot-board robot-board-v2 robot-board-fill">
@@ -401,6 +491,16 @@ export function RobotDeskPage() {
             </div>
           </div>
           <div className="actions">
+            {focused && (sessionIsJunk(focused) || !sessionIsUs100(focused)) && (
+              <button
+                className="btn btn-go"
+                type="button"
+                disabled={busy}
+                onClick={() => void switchToUs100(focused)}
+              >
+                {(focused.client_name || focused.account_name).toUpperCase()} → US100
+              </button>
+            )}
             <button className="btn btn-primary" type="button" onClick={() => setShowDeploy((v) => !v)}>
               {showDeploy ? 'CLOSE' : '+ DEPLOY'}
             </button>
@@ -415,7 +515,11 @@ export function RobotDeskPage() {
 
         {showDeploy && (
           <div className="robot-empty robot-deploy-bar">
-            <div className="section-title">DEPLOY CLIENT ROBOT</div>
+            <div className="section-title">
+              {focused
+                ? `SWITCH ${(focused.client_name || focused.account_name).toUpperCase()} — default US100 (stops ${focused.display_name})`
+                : 'DEPLOY CLIENT ROBOT'}
+            </div>
             <div className="actions" style={{ marginTop: 8, flexWrap: 'wrap' }}>
               <select
                 className="input"
@@ -432,7 +536,7 @@ export function RobotDeskPage() {
               <input
                 className="input"
                 style={{ maxWidth: 180 }}
-                placeholder="Search market…"
+                placeholder="Search US100 / Gold…"
                 value={launchFilter}
                 onChange={(e) => setLaunchFilter(e.target.value)}
               />
@@ -442,8 +546,8 @@ export function RobotDeskPage() {
                 value={launchEpic}
                 onChange={(e) => {
                   setLaunchEpic(e.target.value);
-                  const m = launchMarkets.find((x) => (x.epic || x.symbol) === e.target.value);
-                  if (m) setLaunchLot(String(m.lot_size || m.min_lot || 0.1));
+                  const m = launchMarkets.find((x) => marketKey(x) === e.target.value);
+                  if (m) setLaunchLot(String(lotForMarket(m)));
                 }}
               >
                 {filteredLaunch.map((m) => (
@@ -459,7 +563,7 @@ export function RobotDeskPage() {
                 onChange={(e) => setLaunchLot(e.target.value)}
               />
               <button className="btn btn-go" type="button" disabled={busy} onClick={deploy}>
-                DEPLOY
+                {focused ? 'SWITCH' : 'DEPLOY'}
               </button>
             </div>
           </div>
@@ -539,6 +643,33 @@ export function RobotDeskPage() {
                     <div className="robot-mini-actions">
                       <span className="mono">{s.environment.toUpperCase()}</span>
                       <div className="robot-ctrl" onClick={(e) => e.stopPropagation()}>
+                        {!sessionIsUs100(s) && (
+                          <button
+                            type="button"
+                            className="btn btn-go"
+                            disabled={busy}
+                            onClick={() => void switchToUs100(s)}
+                          >
+                            → US100
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          disabled={busy}
+                          onClick={() => {
+                            setFocusId(s.id);
+                            setShowDeploy(true);
+                            setLaunchFilter('us100');
+                            const pick = pickSwitchTarget(launchMarkets, s.epic);
+                            if (pick) {
+                              setLaunchEpic(marketKey(pick));
+                              setLaunchLot(String(lotForMarket(pick)));
+                            }
+                          }}
+                        >
+                          SWITCH
+                        </button>
                         <button
                           type="button"
                           className="btn btn-go"
@@ -573,6 +704,32 @@ export function RobotDeskPage() {
                   </div>
                 </div>
                 <div className="robot-ctrl robot-ctrl-lg">
+                  {!sessionIsUs100(focused) && (
+                    <button
+                      type="button"
+                      className="btn btn-go"
+                      disabled={busy}
+                      onClick={() => void switchToUs100(focused)}
+                    >
+                      → US100
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={busy}
+                    onClick={() => {
+                      setShowDeploy(true);
+                      setLaunchFilter('us100');
+                      const pick = pickSwitchTarget(launchMarkets, focused.epic);
+                      if (pick) {
+                        setLaunchEpic(marketKey(pick));
+                        setLaunchLot(String(lotForMarket(pick)));
+                      }
+                    }}
+                  >
+                    SWITCH
+                  </button>
                   <button
                     type="button"
                     className="btn btn-go"
