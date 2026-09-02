@@ -24,27 +24,6 @@ describe('multi-client isolation invariants', () => {
     expect(robots.find((s) => s.id === 'b-manage')?.running).toBe(true);
   });
 
-  it('START on one epic stops other flat robots on the same account (not other clients)', () => {
-    const robots = [
-      { id: 'g-kimly', account_id: 17, epic: 'KIMLY', running: true, entry_enabled: true, open_side: null },
-      { id: 'g-eur', account_id: 17, epic: 'EURUSD', running: false, entry_enabled: true, open_side: null },
-      { id: 'boss-gold', account_id: 18, epic: 'GOLD', running: true, entry_enabled: true, open_side: null },
-      { id: 'g-manage', account_id: 17, epic: 'OIL_BRENT', running: true, entry_enabled: false, open_side: 'BUY' as const },
-    ];
-    const keep = 'EURUSD';
-    const stopped = robots
-      .filter((s) => {
-        if (s.account_id !== 17 || !s.running) return false;
-        if (s.epic === keep) return false;
-        if (!s.entry_enabled && s.open_side) return false;
-        return true;
-      })
-      .map((s) => s.id);
-    expect(stopped).toEqual(['g-kimly']);
-    expect(robots.find((s) => s.id === 'boss-gold')?.running).toBe(true);
-    expect(robots.find((s) => s.id === 'g-manage')?.open_side).toBe('BUY');
-  });
-
   it('robot ids are per account+epic (Client A ≠ Client B)', () => {
     const aGold = robotIdFor(17, 'GOLD');
     const bGold = robotIdFor(18, 'GOLD');
@@ -61,11 +40,6 @@ describe('multi-client isolation invariants', () => {
     expect(src).toMatch(/mode: 'own_brain'/);
     expect(src).toMatch(/Does NOT subscribe to shared Market Core/);
     expect(src).not.toMatch(/\bactivateSubscription\b/);
-    expect(src).toMatch(/override\?\.epic/);
-    const desk = readFileSync(fileURLToPath(new URL('./robotDesk.ts', import.meta.url)), 'utf8');
-    expect(desk).toMatch(/stopOtherRobotsForAccount/);
-    expect(desk).toMatch(/panel_epic/);
-    expect(desk).toMatch(/decideEntryFromTenSecMove/);
   });
 
   it('own-brain status ignores Market Core heartbeat', () => {

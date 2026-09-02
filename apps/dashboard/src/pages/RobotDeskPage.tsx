@@ -2,13 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiFetch } from '../hooks/useApi';
 import { Logo } from '../components/Logo';
-import {
-  isEurUsdMarket,
-  lotForMarket,
-  marketKey,
-  pickDeployAccount,
-  pickSwitchTarget,
-} from '../lib/preferMarket';
 
 type RobotTick = {
   at: string;
@@ -159,8 +152,8 @@ function swingLine(s: RobotSession): string {
 
 function ohlcLine(s: RobotSession): string {
   const o = s.ohlc_10s;
-  if (!o || o.last_c == null) return '2s SEEDING';
-  return `2s ${fmt(o.last_o, 2)}→${fmt(o.last_c, 2)} · ${o.market}`;
+  if (!o || o.last_c == null) return '10s SEEDING';
+  return `10s ${fmt(o.last_o, 2)}→${fmt(o.last_c, 2)} · ${o.market}`;
 }
 
 function lastLog(s: RobotSession): string {
@@ -205,8 +198,6 @@ export function RobotDeskPage() {
   const [launchEpic, setLaunchEpic] = useState('');
   const [launchLot, setLaunchLot] = useState('0.1');
   const [showDeploy, setShowDeploy] = useState(false);
-  const [panelMode, setPanelMode] = useState<'deploy' | 'switch'>('deploy');
-  const [switchSessionId, setSwitchSessionId] = useState<string | null>(null);
 
   const accountId = params.get('account_id');
   const epic = params.get('epic');
@@ -279,45 +270,33 @@ export function RobotDeskPage() {
       .catch(() => setLaunchAccounts([]));
   }, [launchAccountId]);
 
-  const focused = sessions.find((s) => s.id === focusId) || sessions.find((s) => s.running) || null;
-  const liveSessions = sessions.filter((s) => s.running);
-  const runningCount = liveSessions.length;
-  const switchSession =
-    sessions.find((s) => s.id === switchSessionId) ||
-    (panelMode === 'switch' ? focused : null);
-  const liveAccountIds = liveSessions.map((s) => s.account_id);
-
   useEffect(() => {
     if (!launchAccountId) return;
-    const liveEpic = liveSessions.find((s) => s.account_id === launchAccountId)?.epic;
     void apiFetch<typeof launchMarkets>(`/api/trading/accounts/${launchAccountId}/instruments`)
       .then((rows) => {
-        const list = rows || [];
-        setLaunchMarkets(list);
-        const pick = pickSwitchTarget(list, liveEpic);
-        if (!pick) return;
-        setLaunchEpic(marketKey(pick));
-        setLaunchLot(String(lotForMarket(pick)));
+        setLaunchMarkets(rows || []);
+        if (rows?.[0]) {
+          setLaunchEpic(rows[0].epic || rows[0].symbol);
+          setLaunchLot(String(rows[0].lot_size || rows[0].min_lot || 0.1));
+        }
       })
       .catch(() => setLaunchMarkets([]));
-    // liveEpic is derived from launchAccountId + sessions; do not retrigger on every tick
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [launchAccountId]);
 
   const filteredLaunch = useMemo(() => {
     const q = launchFilter.trim().toLowerCase();
-    const rows = !q
-      ? [...launchMarkets]
-      : launchMarkets.filter(
-          (m) =>
-            m.display_name.toLowerCase().includes(q) ||
-            (m.epic || m.symbol).toLowerCase().includes(q),
-        );
-    rows.sort((a, b) => Number(isEurUsdMarket(b)) - Number(isEurUsdMarket(a)));
-    return rows.slice(0, 200);
+    if (!q) return launchMarkets.slice(0, 200);
+    return launchMarkets
+      .filter(
+        (m) =>
+          m.display_name.toLowerCase().includes(q) ||
+          (m.epic || m.symbol).toLowerCase().includes(q),
+      )
+      .slice(0, 200);
   }, [launchMarkets, launchFilter]);
 
-  const eurUsdMarket = useMemo(() => launchMarkets.find(isEurUsdMarket) || null, [launchMarkets]);
+  const focused = sessions.find((s) => s.id === focusId) || null;
+  const runningCount = sessions.filter((s) => s.running).length;
 
   const deploy = () => {
     if (!launchAccountId || !launchEpic) {
@@ -390,94 +369,6 @@ export function RobotDeskPage() {
     }
   };
 
-  const switchSessionToMarket = async (
-    s: RobotSession,
-    epic: string,
-    displayName?: string,
-    lotSize?: number,
-  ) => {
-    const m = launchMarkets.find((x) => marketKey(x) === epic);
-    const lot = Number(lotSize ?? launchLot ?? lotForMarket(m));
-    if (!epic) {
-      setError('Izvēlies tirgu');
-      return;
-    }
-    if (!Number.isFinite(lot) || lot <= 0) {
-      setError('Lot > 0');
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await apiFetch<{ session: RobotSession }>('/api/robot-desk/start', {
-        method: 'POST',
-        body: JSON.stringify({
-          account_id: s.account_id,
-          epic,
-          display_name: displayName || m?.display_name || epic,
-          lot_size: lot,
-          trading_enabled: true,
-        }),
-      });
-      setFocusId(res.session.id);
-      setShowDeploy(false);
-      await refresh();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Switch market failed');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const switchFocusedMarket = async () => {
-    const s = switchSession || focused;
-    if (!s || !launchEpic) return;
-    const m = launchMarkets.find((x) => marketKey(x) === launchEpic);
-    await switchSessionToMarket(s, launchEpic, m?.display_name, Number(launchLot));
-  };
-
-  const switchToEurUsd = async (s: RobotSession) => {
-    const m = eurUsdMarket || pickSwitchTarget(launchMarkets, s.epic);
-    if (!m || !isEurUsdMarket(m)) {
-      setError('EUR/USD nav katalogā — pull Capital markets, tad SWITCH');
-      openSwitch(s);
-      return;
-    }
-    await switchSessionToMarket(s, marketKey(m), m.display_name, lotForMarket(m));
-  };
-
-  const sessionIsEurUsd = (s: RobotSession) =>
-    isEurUsdMarket({ epic: s.epic, symbol: s.epic, display_name: s.display_name });
-
-  const openDeploy = () => {
-    setPanelMode('deploy');
-    setSwitchSessionId(null);
-    setLaunchFilter('');
-    const next = pickDeployAccount(launchAccounts, liveAccountIds);
-    if (next) setLaunchAccountId(next.account_id);
-    setShowDeploy(true);
-  };
-
-  const openSwitch = (s: RobotSession) => {
-    setPanelMode('switch');
-    setSwitchSessionId(s.id);
-    setFocusId(s.id);
-    setLaunchAccountId(s.account_id);
-    setLaunchFilter('eur');
-    const pick = pickSwitchTarget(launchMarkets, s.epic);
-    if (pick) {
-      setLaunchEpic(marketKey(pick));
-      setLaunchLot(String(lotForMarket(pick)));
-    }
-    setShowDeploy(true);
-  };
-
-  const closePanel = () => {
-    setShowDeploy(false);
-    setPanelMode('deploy');
-    setSwitchSessionId(null);
-  };
-
   return (
     <div className="robot-fs-shell robot-board-shell" ref={shellRef}>
       <div className="robot-desk robot-desk-fs robot-board robot-board-v2 robot-board-fill">
@@ -495,7 +386,7 @@ export function RobotDeskPage() {
           <div className="robot-board-stats">
             <div className="robot-mode-banner entry">
               <div className="label">CLIENTS</div>
-              <div className="value">{liveSessions.length}</div>
+              <div className="value">{sessions.length}</div>
             </div>
             <div className={`robot-mode-banner ${runningCount ? 'manage' : 'flat'}`}>
               <div className="label">LIVE</div>
@@ -510,22 +401,8 @@ export function RobotDeskPage() {
             </div>
           </div>
           <div className="actions">
-            {focused && !sessionIsEurUsd(focused) && (
-              <button
-                className="btn btn-go"
-                type="button"
-                disabled={busy}
-                onClick={() => void switchToEurUsd(focused)}
-              >
-                {(focused.client_name || focused.account_name).toUpperCase()} → EUR/USD
-              </button>
-            )}
-            <button
-              className="btn btn-primary"
-              type="button"
-              onClick={() => (showDeploy && panelMode === 'deploy' ? closePanel() : openDeploy())}
-            >
-              {showDeploy && panelMode === 'deploy' ? 'CLOSE' : '+ DEPLOY'}
+            <button className="btn btn-primary" type="button" onClick={() => setShowDeploy((v) => !v)}>
+              {showDeploy ? 'CLOSE' : '+ DEPLOY'}
             </button>
             <Link className="btn" to="/">
               ← BASE
@@ -538,23 +415,17 @@ export function RobotDeskPage() {
 
         {showDeploy && (
           <div className="robot-empty robot-deploy-bar">
-            <div className="section-title">
-              {panelMode === 'switch' && switchSession
-                ? `SWITCH ${(switchSession.client_name || switchSession.account_name).toUpperCase()} tirgu (aptur ${switchSession.display_name}) · citi klienti paliek`
-                : 'DEPLOY citu klientu — katram savs robots un savs tirgus. Citi LIVE paliek.'}
-            </div>
+            <div className="section-title">DEPLOY CLIENT ROBOT</div>
             <div className="actions" style={{ marginTop: 8, flexWrap: 'wrap' }}>
               <select
                 className="input"
                 style={{ maxWidth: 320 }}
                 value={launchAccountId ?? ''}
-                disabled={panelMode === 'switch'}
                 onChange={(e) => setLaunchAccountId(Number(e.target.value))}
               >
                 {launchAccounts.map((a) => (
                   <option key={a.account_id} value={a.account_id}>
                     {a.client_name} · #{a.account_id} ({a.environment})
-                    {liveAccountIds.includes(a.account_id) ? ' · LIVE' : ''}
                   </option>
                 ))}
               </select>
@@ -587,38 +458,27 @@ export function RobotDeskPage() {
                 value={launchLot}
                 onChange={(e) => setLaunchLot(e.target.value)}
               />
-              <button
-                className="btn btn-go"
-                type="button"
-                disabled={busy}
-                onClick={() => {
-                  if (panelMode === 'switch' && switchSession) {
-                    void switchFocusedMarket();
-                  } else {
-                    deploy();
-                  }
-                }}
-              >
-                {panelMode === 'switch' ? 'SWITCH' : 'DEPLOY'}
+              <button className="btn btn-go" type="button" disabled={busy} onClick={deploy}>
+                DEPLOY
               </button>
             </div>
           </div>
         )}
 
         <section className="robot-board-body">
-          {liveSessions.length === 0 && !busy && (
+          {sessions.length === 0 && !busy && (
             <div className="robot-empty">
               <div className="robot-arena-kicker">EMPTY BOARD</div>
               <p style={{ marginBottom: 12 }}>Vēl nav robotu. Spied + DEPLOY.</p>
-              <button className="btn btn-primary" type="button" onClick={openDeploy}>
+              <button className="btn btn-primary" type="button" onClick={() => setShowDeploy(true)}>
                 + DEPLOY FIRST UNIT
               </button>
             </div>
           )}
 
-          {liveSessions.length > 0 && (
+          {sessions.length > 0 && (
             <div className="robot-board-grid">
-              {liveSessions.map((s) => {
+              {sessions.map((s) => {
                 const look = lookingFor(s);
                 const active = focusId === s.id;
                 const setupKind = (s.market_setup?.kind || s.entry_setup || 'NONE').toUpperCase();
@@ -666,7 +526,7 @@ export function RobotDeskPage() {
                       <strong>{swingLine(s)}</strong>
                     </div>
                     <div className="robot-mini-row">
-                      <span>2s</span>
+                      <span>10s</span>
                       <strong className={s.ohlc_10s?.market === 'MOVING' ? 'pos' : ''}>
                         {ohlcLine(s)}
                       </strong>
@@ -679,24 +539,6 @@ export function RobotDeskPage() {
                     <div className="robot-mini-actions">
                       <span className="mono">{s.environment.toUpperCase()}</span>
                       <div className="robot-ctrl" onClick={(e) => e.stopPropagation()}>
-                        {!sessionIsEurUsd(s) && (
-                          <button
-                            type="button"
-                            className="btn btn-go"
-                            disabled={busy}
-                            onClick={() => void switchToEurUsd(s)}
-                          >
-                            → EUR/USD
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          className="btn btn-primary"
-                          disabled={busy}
-                          onClick={() => openSwitch(s)}
-                        >
-                          SWITCH
-                        </button>
                         <button
                           type="button"
                           className="btn btn-go"
@@ -731,24 +573,6 @@ export function RobotDeskPage() {
                   </div>
                 </div>
                 <div className="robot-ctrl robot-ctrl-lg">
-                  {!sessionIsEurUsd(focused) && (
-                    <button
-                      type="button"
-                      className="btn btn-go"
-                      disabled={busy}
-                      onClick={() => void switchToEurUsd(focused)}
-                    >
-                      → EUR/USD
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    disabled={busy}
-                    onClick={() => openSwitch(focused)}
-                  >
-                    SWITCH
-                  </button>
                   <button
                     type="button"
                     className="btn btn-go"

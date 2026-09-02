@@ -18,7 +18,6 @@ import {
   nearRealZoneEdge,
   type MarketZoneBook,
 } from './structureZones.js';
-import type { SignalOutput } from './signalEngine.js';
 
 export type RegimeEntry = {
   direction: 'BUY' | 'SELL';
@@ -37,11 +36,6 @@ export type EntryContext = {
   priorBars?: TenSecBar[];
   /** Real Capital minute zones — preferred for FADE edges + trend follow */
   zones?: MarketZoneBook | null;
-  /** Multi-scale signal engine lifecycle (Units 27–29). */
-  signal?: Pick<
-    SignalOutput,
-    'side_start' | 'side_confirmed' | 'side_end' | 'mr' | 'ti' | 'p_sideways' | 'macro' | 'ready'
-  > | null;
 };
 
 function describe(bar: TenSecBar): string {
@@ -314,12 +308,9 @@ export function decideEntryFrom10sRegime(
   }
 
   if (book === 'FADE') {
-    if (wasTrend(ctx?.previousRegime) && (ctx?.regimeAgeBars ?? 0) <= 1 && !ctx?.signal?.side_start) {
+    if (wasTrend(ctx?.previousRegime) && (ctx?.regimeAgeBars ?? 0) <= 1) {
       return null;
     }
-    const sideLife =
-      ctx?.signal?.side_confirmed || ctx?.signal?.side_start || (ctx?.signal?.p_sideways ?? 0) > 0.35;
-    if (!sideLife && r === 'RANGE' && (ctx?.signal?.ready ?? false)) return null;
     if (!movingFor(bar, 'FADE') || !bodyStrongEnough(bar, 'FADE')) return null;
 
     // Legacy 10s FAILED labels — real failed-break is minute setup (FADE)

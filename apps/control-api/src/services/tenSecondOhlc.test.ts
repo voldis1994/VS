@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ENTRY_BAR_MS,
   aggregateSecondsToTen,
   bodyPct,
   decideFromClosed10s,
@@ -9,18 +8,14 @@ import {
   emptyTenSecState,
 } from './tenSecondOhlc.js';
 
-describe('entry confirm OHLC (2s)', () => {
-  it('uses 2s buckets', () => {
-    expect(ENTRY_BAR_MS).toBe(2_000);
-  });
-
-  it('closes a bar after 2 seconds and keeps forming the next', () => {
+describe('10s OHLC', () => {
+  it('closes a bar after 10 seconds and keeps forming the next', () => {
     let s = emptyTenSecState();
-    const t0 = 1_700_000_000_000;
+    const t0 = 1_700_000_000_000; // aligned-ish
     s = updateTenSecondOhlc(s, 4380, t0);
-    s = updateTenSecondOhlc(s, 4385, t0 + 800);
+    s = updateTenSecondOhlc(s, 4385, t0 + 3000);
     expect(s.just_closed).toBe(false);
-    s = updateTenSecondOhlc(s, 4370, t0 + ENTRY_BAR_MS);
+    s = updateTenSecondOhlc(s, 4370, t0 + 10_000);
     expect(s.just_closed).toBe(true);
     expect(s.last_closed?.open).toBe(4380);
     expect(s.last_closed?.high).toBe(4385);
@@ -28,7 +23,7 @@ describe('entry confirm OHLC (2s)', () => {
     expect(s.forming?.open).toBe(4370);
   });
 
-  it('treats a Capital-style spike as MOVING, not flat tick noise', () => {
+  it('treats a Capital-style 10s spike as MOVING, not flat tick noise', () => {
     const bar = {
       open_time_ms: 0,
       open: 4389,
@@ -56,16 +51,16 @@ describe('entry confirm OHLC (2s)', () => {
     expect(decideFromClosed10s(bar)).toBeNull();
   });
 
-  it('aggregates 1s Capital candles into 2s bars', () => {
+  it('aggregates 1s Capital candles into 10s bars', () => {
     const seconds = [];
-    for (let i = 0; i < 8; i++) {
-      const p = 4389 + i * 2;
-      seconds.push({ open: p, high: p + 1, low: p - 0.5, close: p + 0.8 });
+    for (let i = 0; i < 20; i++) {
+      const p = 4389 + i * 0.5;
+      seconds.push({ open: p, high: p + 0.2, low: p - 0.1, close: p + 0.1 });
     }
-    const bars = aggregateSecondsToTen(seconds);
-    expect(bars).toHaveLength(4);
-    expect(bars[0]!.open).toBe(4389);
-    expect(bars[0]!.ticks).toBe(2);
-    expect(isMoving10s(bars[0]!)).toBe(true);
+    const tens = aggregateSecondsToTen(seconds);
+    expect(tens).toHaveLength(2);
+    expect(tens[0]!.open).toBe(4389);
+    expect(tens[1]!.ticks).toBe(10);
+    expect(isMoving10s(tens[1]!)).toBe(true);
   });
 });
