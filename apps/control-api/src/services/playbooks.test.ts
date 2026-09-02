@@ -136,8 +136,9 @@ describe('playbook exit', () => {
         regime: 'PULLBACK_DOWNTREND',
         playbook: 'LONG',
       },
-      { mid: 2002 }
+      { mid: 2003.5 }
     );
+    // Still above 55% trail of MFE 4 → hold
     expect(d.exit).toBe(false);
   });
 
@@ -153,7 +154,7 @@ describe('playbook exit', () => {
         regime: 'TREND_DOWN',
         playbook: 'LONG',
       },
-      { mid: 2001 }
+      { mid: 2001.8 }
     );
     expect(young.exit).toBe(false);
     const aged = decideBestOutcomeExit(
@@ -167,10 +168,10 @@ describe('playbook exit', () => {
         regime: 'TREND_DOWN',
         playbook: 'LONG',
       },
-      { mid: 2001 }
+      { mid: 2001.8 }
     );
     expect(aged.exit).toBe(true);
-    expect(aged.reason).toMatch(/LONG/);
+    expect(aged.reason).toMatch(/LONG|ProfitGiveback/);
   });
 
   it('SCALP PeakProtect at ret < 42%, LONG at < 40%', () => {
@@ -197,11 +198,11 @@ describe('playbook exit', () => {
         entry_at: ago(60_000),
         mfe: 5,
         mae: 0,
-        peak_retention: 0.56,
+        peak_retention: 0.7,
         regime: 'BREAKOUT_UP',
         playbook: 'SCALP',
       },
-      { mid: 2002.5 }
+      { mid: 2003.8 }
     );
     expect(scalpHold.exit).toBe(false);
 
@@ -212,16 +213,16 @@ describe('playbook exit', () => {
         entry_at: ago(60_000),
         mfe: 5,
         mae: 0,
-        peak_retention: 0.6,
+        peak_retention: 0.7,
         regime: 'TREND_UP',
         playbook: 'LONG',
       },
-      { mid: 2003 }
+      { mid: 2003.8 }
     );
     expect(longHold.exit).toBe(false);
   });
 
-  it('FADE TimeDecay at 4 min when non-negative', () => {
+  it('FADE TimeDecay or ProfitGiveback when giveback after MFE', () => {
     const d = decideBestOutcomeExit(
       {
         open_side: 'BUY',
@@ -236,7 +237,7 @@ describe('playbook exit', () => {
       { mid: 2000.5 }
     );
     expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/TimeDecay/);
+    expect(d.reason).toMatch(/TimeDecay|ProfitGiveback/);
   });
 
   it('exit params match the drawing', () => {

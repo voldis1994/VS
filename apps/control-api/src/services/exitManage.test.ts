@@ -88,7 +88,7 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     expect(d.reason).toMatch(/Target/);
   });
 
-  it('CONTINUATION bounce holds past +1.5pt — does not FADE-scalp at tpFloor 0.18', () => {
+  it('CONTINUATION bounce holds while still above 55% MFE trail', () => {
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -169,20 +169,39 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     expect(d.reason).toMatch(/ReversalStop/);
   });
 
-  it('mid looked green but bid is red — does not harvest', () => {
+  it('bid red after MFE — ReversalStop, never ride to minus from +0.18', () => {
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
-        entry_price: 4310,
-        entry_at: ago(130_000),
+        entry_price: 4326.78,
+        entry_at: ago(200_000),
         mfe: 2.0,
-        peak_retention: 0.15,
+        peak_retention: 0,
         playbook: 'LONG',
         entry_setup: 'CONTINUATION',
       }),
-      q(4310.3, 4309.8, 4310.8)
+      q(4326.7, 4326.63, 4327.13)
     );
-    expect(d.exit).toBe(false);
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/ReversalStop/);
+  });
+
+  it('ProfitGiveback banks +£0.18-class peak when trail breaks (still green)', () => {
+    // Entry 4326.78, MFE ~+2.0 (~£0.18), now only +0.7 left → below 55% floor
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4326.78,
+        entry_at: ago(90_000),
+        mfe: 2.0,
+        peak_retention: 0.35,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+      }),
+      q(4327.5, 4327.45, 4327.95)
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/ProfitGiveback/);
   });
 
   it('ProfitGiveback exits after half the leg is returned while still green', () => {

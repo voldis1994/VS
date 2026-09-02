@@ -600,14 +600,17 @@ function updateExcursion(
   quote: { mid: number; bid?: number | null; ask?: number | null }
 ) {
   if (!s.open_side || s.entry_price == null) return;
-  const fav = executableFavorableMove(s.open_side, s.entry_price, quote);
-  s.unrealized = fav;
-  if (fav > s.mfe) {
-    s.mfe = fav;
+  const closeFav = executableFavorableMove(s.open_side, s.entry_price, quote);
+  const midFav = favorableMove(s.open_side, s.entry_price, quote.mid);
+  // Track peak on the better of mid (broker UPL) and closeable — so +£0.18 is not missed
+  const peakFav = Math.max(closeFav, midFav);
+  s.unrealized = closeFav;
+  if (peakFav > s.mfe) {
+    s.mfe = peakFav;
     s.peak_favorable = quote.mid;
   }
-  if (fav < s.mae) s.mae = fav;
-  s.peak_retention = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
+  if (closeFav < s.mae) s.mae = closeFav;
+  s.peak_retention = s.mfe > 0 ? Math.max(0, closeFav / s.mfe) : null;
 }
 
 /** Exact id only — never returns a different robot */
