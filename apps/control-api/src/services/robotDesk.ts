@@ -417,9 +417,9 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     active_regimes: activeSetups,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
+    chain: 'Capital 1h+1m+2s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 2s) → BEST OUTCOME',
     note:
-      'Setup-first: NONE only when quiet. CONTINUATION/PULLBACK/FADE bounce rides rally (tp≥3–4pt, not +£0.07 scalp). Entry on closed 10s confirm.',
+      'Setup-first: NONE only when quiet. CONTINUATION/PULLBACK/FADE bounce rides rally (tp≥3–4pt, not +£0.07 scalp). Entry on closed 2s confirm.',
   };
 }
 
@@ -1343,7 +1343,7 @@ async function robotCycle(s: Internal) {
 
     if (quote.mid == null) return;
 
-    // Seed SECOND→10s when multi-feed does not own OHLC
+    // Seed SECOND→2s when multi-feed does not own OHLC
     if (!multiFeedOwnsOhlc(s.multiFeed) && Date.now() - s.last_second_fetch_ms >= SECOND_OHLC_FETCH_MS) {
       s.last_second_fetch_ms = Date.now();
       const sec = await fetchCapitalPrices(opened.session, s.epic, 'SECOND', 40);
@@ -1396,19 +1396,19 @@ async function robotCycle(s: Internal) {
       : st.detail;
     const setupLine = `${setup.kind}/${setup.status}${setup.side ? ` ${setup.side}` : ''}`;
     const ohlcLine = bar
-      ? `10s O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · ${structLine} · ${setupLine}`
-      : `10s seeding · ${structLine} · ${setupLine}`;
+      ? `2s O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · ${structLine} · ${setupLine}`
+      : `2s seeding · ${structLine} · ${setupLine}`;
 
     if (quote.mid != null) s.last_flat_mid = quote.mid;
 
-    // Need a just-closed 10s bar for any entry (setup confirm OR move-from-NONE)
+    // Need a just-closed 2s bar for any entry (setup confirm OR move-from-NONE)
     if (!s.ohlcState.just_closed || !bar) {
       const waitNote =
         setup.kind === 'NONE' || setup.status === 'NONE'
           ? `NONE · ${setup.reason}`
           : setup.status === 'FORMING'
             ? `FORMING · ${setup.reason}`
-            : `ARMED · waiting closed 10s confirm`;
+            : `ARMED · waiting closed 2s confirm`;
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
@@ -1478,7 +1478,7 @@ async function robotCycle(s: Internal) {
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · ARMED · no 10s confirm yet${tipNote} · ${setup.reason}`,
+        detail: `${ohlcLine} · ARMED · no 2s confirm yet${tipNote} · ${setup.reason}`,
       });
       return;
     }
@@ -1714,7 +1714,7 @@ export async function startRobotSession(input: {
     ask: null,
     mid: null,
     detail:
-      'Rules: this client alone — structure(1h+1m) → sticky SETUP → closed 10s entry → BEST OUTCOME · never shared Market Core fanout',
+      'Rules: this client alone — structure(1h+1m) → sticky SETUP → closed 2s entry → BEST OUTCOME · never shared Market Core fanout',
   });
 
   sessions.set(id, session);

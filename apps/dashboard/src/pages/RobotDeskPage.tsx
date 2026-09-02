@@ -159,8 +159,8 @@ function swingLine(s: RobotSession): string {
 
 function ohlcLine(s: RobotSession): string {
   const o = s.ohlc_10s;
-  if (!o || o.last_c == null) return '10s SEEDING';
-  return `10s ${fmt(o.last_o, 2)}→${fmt(o.last_c, 2)} · ${o.market}`;
+  if (!o || o.last_c == null) return '2s SEEDING';
+  return `2s ${fmt(o.last_o, 2)}→${fmt(o.last_c, 2)} · ${o.market}`;
 }
 
 function lastLog(s: RobotSession): string {
@@ -666,7 +666,7 @@ export function RobotDeskPage() {
                       <strong>{swingLine(s)}</strong>
                     </div>
                     <div className="robot-mini-row">
-                      <span>10s</span>
+                      <span>2s</span>
                       <strong className={s.ohlc_10s?.market === 'MOVING' ? 'pos' : ''}>
                         {ohlcLine(s)}
                       </strong>
