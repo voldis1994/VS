@@ -191,4 +191,40 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     );
     expect(d.exit).toBe(false);
   });
+
+  it('leg thesis uses 1m flow_bias, not flickering 10s TREND_DOWN', () => {
+    // Would thesis-fail on regime TREND_DOWN for SCALP — legs ignore regime when flow still UP
+    const hold = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4430,
+        entry_at: ago(250_000),
+        mfe: 3,
+        peak_retention: 0.9,
+        playbook: 'SCALP',
+        entry_setup: 'CONTINUATION',
+        regime: 'TREND_DOWN',
+        flow_bias: 'UP',
+      }),
+      4432
+    );
+    expect(hold.exit).toBe(false);
+
+    const cut = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4430,
+        entry_at: ago(250_000),
+        mfe: 3,
+        peak_retention: 0.9,
+        playbook: 'SCALP',
+        entry_setup: 'CONTINUATION',
+        regime: 'TREND_UP',
+        flow_bias: 'DOWN',
+      }),
+      4432
+    );
+    expect(cut.exit).toBe(true);
+    expect(cut.reason).toMatch(/1m flow DOWN/);
+  });
 });

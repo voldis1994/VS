@@ -1,14 +1,14 @@
 /**
- * Setup-first market model (LIVE desk brain).
+ * Setup-first market model (LIVE desk brain) — unified Aug13+Aug31.
  *
- * Capital quote + 1m (+ optional 1h) + 10s → STRUCTURE → SETUP → ENTRY → BEST OUTCOME
+ * Capital quote + 1m (+ optional 1h) → STRUCTURE → SETUP → decideUnifiedEntry → BEST OUTCOME
  *
  * Hard rules:
  * - Setup changes only on structure refresh / closed bars — never on every quote tick
- * - NONE = no tradeable setup (not a "WAIT regime")
- * - ARMED = setup ready; BREAKOUT/CONT enter on price through level / live flow
- *   (not green/red candle body on a 2s bar)
+ * - NONE = no sticky setup; may still trade filtered 1m impulse (allowNoneImpulse)
+ * - ARMED setup owns entry — impulse never opens against opposite ARMED side
  * - Open trade freezes setup; manage = best outcome only
+ * - robotDesk refuses entry without broker SAFETY SL
  */
 import type { CapitalPriceCandle } from './capitalCom.js';
 import type { TradePlaybook } from './playbooks.js';
@@ -1053,14 +1053,14 @@ export function decideEntryFromSetup(
 
   if (setup.kind === 'PULLBACK') {
     const contFlow = liveFlow(minutes);
+    const mid = (hi + lo) / 2;
     if (setup.side === 'BUY') {
       if (flow === 'DOWN') return null;
       if (moveAlreadyFinished('BUY', minutes, bar.close)) return null;
-      const atDip =
-        bar.low <= lo + eps * 1.5 ||
-        bar.close <= setup.swing_high - eps * 0.5 ||
-        (contFlow === 'UP' && bar.close < hi);
-      if (atDip) {
+      // Must touch pullback zone (near swing low / below mid) AND resume UP — not any bar under high
+      const inPullZone = bar.low <= lo + eps * 1.5 || px <= mid + eps * 0.25;
+      const resume = contFlow === 'UP' || px > bar.open;
+      if (inPullZone && resume) {
         return {
           direction: 'BUY',
           setup: 'PULLBACK',
@@ -1072,11 +1072,9 @@ export function decideEntryFromSetup(
     }
     if (flow === 'UP') return null;
     if (moveAlreadyFinished('SELL', minutes, bar.close)) return null;
-    const atRally =
-      bar.high >= hi - eps * 1.5 ||
-      bar.close >= setup.swing_low + eps * 0.5 ||
-      (contFlow === 'DOWN' && bar.close > lo);
-    if (atRally) {
+    const inPullZone = bar.high >= hi - eps * 1.5 || px >= mid - eps * 0.25;
+    const resume = contFlow === 'DOWN' || px < bar.open;
+    if (inPullZone && resume) {
       return {
         direction: 'SELL',
         setup: 'PULLBACK',
@@ -1114,19 +1112,21 @@ export function decideEntryFromImpulseCandle(
   minutes?: CapitalPriceCandle[] | null
 ): SetupEntry | null {
   if (!bar || bar.ticks < 1) return null;
-  const trend = marketTrend(minutes);
-  const short = recentImpulse(minutes, 'flip') || recentImpulse(minutes);
-  const flow = liveFlow(minutes);
+  if (!minutes?.length) return null;
+  const mins = minutes;
+  const trend = marketTrend(mins);
+  const short = recentImpulse(mins, 'flip') || recentImpulse(mins);
+  const flow = liveFlow(mins);
   if (!flow) return null;
   // Bounce/dip against market — do not BUY the tip or SELL the bounce; wait for tape to resolve
   if (trend && short && trend !== short) return null;
   if (trend === 'DOWN' && flow === 'UP') return null;
   if (trend === 'UP' && flow === 'DOWN') return null;
   // Signal finished — last 1m already turned against the move
-  if (!moveStillPrinting(flow, minutes)) return null;
+  if (!moveStillPrinting(flow, mins)) return null;
   const direction: 'BUY' | 'SELL' = flow === 'UP' ? 'BUY' : 'SELL';
   // Tip / rolled move — Gold dump-floor SELL and post-spike BUY
-  if (moveAlreadyFinished(direction, minutes, bar.close)) return null;
+  if (moveAlreadyFinished(direction, mins, bar.close)) return null;
   if (flow === 'DOWN') {
     return {
       direction: 'SELL',
@@ -1195,6 +1195,76 @@ export function decideEntryFromTenSecMove(
       reason: `ENTRY · 1m micro-swing SELL @ ${bar.close.toFixed(2)} · setup was NONE`,
     };
   }
+  return null;
+}
+
+/**
+ * Unified profitable brain (Aug13 clarity + Aug31 structure/safety).
+ *
+ * One dispatcher — never impulse-first against an ARMED opposite setup:
+ * 1) ARMED setup owns entry (levels + dump/rally + tip-chase)
+ * 2) ARMED CONTINUATION/BREAKOUT may confirm via same-side impulse
+ * 3) NONE + ready structure → trade real 1m impulse / through-level (filtered)
+ * 4) FORMING → wait
+ */
+export function decideUnifiedEntry(opts: {
+  setup: MarketSetup;
+  structure: StructureBook;
+  bar: TenSecBar;
+  minutes?: CapitalPriceCandle[] | null;
+  livePx?: number | null;
+  /** When false, NONE never opens (strict setup-only). Default true = catch real moves. */
+  allowNoneImpulse?: boolean;
+}): SetupEntry | null {
+  const {
+    setup,
+    structure,
+    bar,
+    minutes,
+    livePx,
+    allowNoneImpulse = true,
+  } = opts;
+  if (!bar || bar.ticks < 1) return null;
+
+  const armed =
+    setup.status === 'ARMED' && setup.kind !== 'NONE' && !!setup.side && !!setup.playbook;
+
+  if (armed) {
+    const fromSetup = decideEntryFromSetup(setup, bar, minutes, livePx);
+    if (fromSetup) return fromSetup;
+
+    // Same-side impulse only — never flip against sticky ARMED FADE/PULLBACK
+    if (setup.kind === 'CONTINUATION' || setup.kind === 'BREAKOUT') {
+      const impulse = decideEntryFromImpulseCandle(bar, minutes);
+      if (impulse && impulse.direction === setup.side) {
+        return {
+          direction: impulse.direction,
+          setup: setup.kind,
+          playbook: setup.playbook || impulse.playbook,
+          reason: `ENTRY · ${setup.kind} via impulse · ${impulse.reason}`,
+        };
+      }
+    }
+    return null;
+  }
+
+  if (setup.kind === 'NONE' || setup.status === 'NONE') {
+    if (!allowNoneImpulse) return null;
+    if (!structure.ready || !(structure.swing_high > structure.swing_low)) return null;
+
+    const impulse = decideEntryFromImpulseCandle(bar, minutes);
+    if (impulse) {
+      if (impulse.direction === 'BUY' && structure.bias === 'BELOW') return null;
+      if (impulse.direction === 'SELL' && structure.bias === 'ABOVE') return null;
+      return {
+        ...impulse,
+        reason: `${impulse.reason} · unified NONE`,
+      };
+    }
+    return decideEntryFromTenSecMove(structure, bar, minutes);
+  }
+
+  // FORMING — confirm sticky, do not scalp mid-form
   return null;
 }
 

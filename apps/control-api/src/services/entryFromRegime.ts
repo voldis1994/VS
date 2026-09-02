@@ -1,4 +1,9 @@
-/** 10s OHLC + playbook entry — regime picks LONG / SCALP / FADE / WAIT. */
+/**
+ * LEGACY / NOT LIVE — Robot Desk uses marketSetup.decideUnifiedEntry.
+ * Kept for unit tests and historical playbook mapping only. Do not rewire into robotDesk.
+ *
+ * 10s OHLC + playbook entry — regime picks LONG / SCALP / FADE / WAIT.
+ */
 import type { RegimeName } from './regimes.js';
 import { normalizeRegime } from './regimes.js';
 import { bodyPct, rangePct, type TenSecBar } from './tenSecondOhlc.js';
