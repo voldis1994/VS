@@ -32,7 +32,9 @@ import {
   decideUnifiedEntry,
   emptySetup,
   emptyStructure,
+  entryCandleConfirmDeny,
   flowAgreesWithSide,
+  flowFlipAtExtreme,
   liveFlow,
   minuteConfirmBar,
   playbookFromSetup,
@@ -467,7 +469,7 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
   }
 }
 
-function clearTradeState(s: Internal) {
+function clearTradeState(s: Internal, opts?: { allowImmediateReverse?: boolean }) {
   s.open_side = null;
   s.deal_id = null;
   s.entry_price = null;
@@ -481,8 +483,13 @@ function clearTradeState(s: Internal) {
   s.playbook = null;
   s.entry_setup = null;
   s.mode = 'FLAT';
-  // Next impulse/NONE entry waits for the following 1m clock bucket
-  s.entry_minute_bucket = Math.floor(Date.now() / 60_000);
+  // MoveFlip: allow opposite entry this same 1m — waiting next clock was the lag
+  if (opts?.allowImmediateReverse) {
+    s.entry_minute_bucket = 0;
+  } else {
+    // Next impulse/NONE entry waits for the following 1m clock bucket
+    s.entry_minute_bucket = Math.floor(Date.now() / 60_000);
+  }
 }
 
 /**
@@ -825,7 +832,7 @@ async function exitTrade(
     /* best effort */
   }
 
-  clearTradeState(s);
+  clearTradeState(s, { allowImmediateReverse: /MoveFlip/i.test(reason) });
 }
 
 async function enterTrade(
@@ -1388,6 +1395,7 @@ async function robotCycleBody(s: Internal) {
         {
           ...s,
           flow_bias: liveFlow(s.last_minute_candles),
+          flow_flip: flowFlipAtExtreme(s.last_minute_candles),
         },
         {
           mid: quote.mid,
@@ -1496,8 +1504,8 @@ async function robotCycleBody(s: Internal) {
     );
 
     const livePx = quote.mid;
-    // Micro-swing: decide on 1m structure (+ live mid). 2s OHLC is display/regime only.
-    const bar = minuteConfirmBar(s.last_minute_candles, livePx);
+    // Closed 1m body for confirm — do NOT overlay live mid (that was spike-chase entry)
+    const bar = minuteConfirmBar(s.last_minute_candles, livePx, { overlayLive: false });
     const st = s.structureBook;
     const setup = s.marketSetup;
     const structLine = st.ready
@@ -1521,33 +1529,38 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    // 1m system: unified entry on new minute; BREAKOUT ARMED may fire live through level
+    // 1m system: entry on new minute with closed-candle confirm (not forming spike)
     const minuteBucket = Math.floor(Date.now() / 60_000);
     const newMinute =
       !s.entry_minute_bucket || minuteBucket > s.entry_minute_bucket;
-    const liveBreakout =
-      setup.status === 'ARMED' && setup.kind === 'BREAKOUT';
 
-    let entry =
-      newMinute || liveBreakout
-        ? decideUnifiedEntry({
-            setup,
-            structure: st,
-            bar,
-            minutes: s.last_minute_candles,
-            livePx,
-            allowNoneImpulse: true,
-          })
-        : null;
+    let entry = newMinute
+      ? decideUnifiedEntry({
+          setup,
+          structure: st,
+          bar,
+          minutes: s.last_minute_candles,
+          livePx,
+          allowNoneImpulse: true,
+        })
+      : null;
 
     if (!entry) {
-      const waitNote = !newMinute && !liveBreakout
-        ? `1m system · wait next minute bar · ${setup.kind}/${setup.status}`
-        : setup.kind === 'NONE' || setup.status === 'NONE'
-          ? `NONE · ${setup.reason}`
-          : setup.status === 'FORMING'
-            ? `FORMING · ${setup.reason}`
-            : `ARMED · waiting price through level · ${setup.reason}`;
+      const candleNote = newMinute
+        ? entryCandleConfirmDeny(
+            setup.side === 'SELL' ? 'SELL' : 'BUY',
+            s.last_minute_candles
+          )
+        : null;
+      const waitNote = !newMinute
+        ? `1m system · wait next closed minute · ${setup.kind}/${setup.status}`
+        : candleNote && setup.status === 'ARMED'
+          ? `${candleNote} · ${setup.reason}`
+          : setup.kind === 'NONE' || setup.status === 'NONE'
+            ? `NONE · ${setup.reason}`
+            : setup.status === 'FORMING'
+              ? `FORMING · ${setup.reason}`
+              : `ARMED · waiting closed 1m confirm · ${setup.reason}`;
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
@@ -1571,6 +1584,27 @@ async function robotCycleBody(s: Internal) {
           ask: quote.ask,
           mid: quote.mid,
           detail: `${ohlcLine} · same-side dead ${s.last_exit_side} until flip (flow ${flow || '—'}) · no spam re-entry`,
+        });
+        return;
+      }
+    }
+
+    // After exit, opposite side needs real V-flip for 3m — not first pullback SELL into rally
+    // Gold 20:28 BUY win → 20:29 SELL @ 4381 → −£0.13
+    if (
+      s.last_exit_side &&
+      entry.direction !== s.last_exit_side &&
+      Date.now() - s.last_exit_ms < 180_000
+    ) {
+      const flip = flowFlipAtExtreme(s.last_minute_candles);
+      const need: 'UP' | 'DOWN' = entry.direction === 'SELL' ? 'DOWN' : 'UP';
+      if (flip !== need) {
+        pushTick(s, {
+          phase: 'INFO',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `${ohlcLine} · reverse blocked · need V-flip ${need} after ${s.last_exit_side} exit (have ${flip || 'none'})`,
         });
         return;
       }

@@ -214,7 +214,7 @@ describe('decideBestOutcomeExit playbook-aware', () => {
       snap({
         open_side: 'BUY',
         entry_price: 4430,
-        entry_at: ago(250_000),
+        entry_at: ago(50_000),
         mfe: 3,
         peak_retention: 0.9,
         playbook: 'SCALP',
@@ -226,5 +226,41 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     );
     expect(cut.exit).toBe(true);
     expect(cut.reason).toMatch(/1m flow DOWN/);
+  });
+
+  it('MoveFlip cuts SELL within ~12s when V-flip UP (screenshot 20:00 class)', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'SELL',
+        entry_price: 4373.99,
+        entry_at: ago(20_000),
+        mfe: 0.05,
+        peak_retention: 0.5,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+        flow_bias: 'UP',
+        flow_flip: 'UP',
+      }),
+      { mid: 4375.69, bid: 4375.69, ask: 4376.13 }
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/MoveFlip · SELL vs V-flip UP/);
+  });
+
+  it('MoveFlip does not fire in first 12s (avoid entry noise)', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'SELL',
+        entry_price: 4374,
+        entry_at: ago(5_000),
+        mfe: 0,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+        flow_bias: 'UP',
+        flow_flip: 'UP',
+      }),
+      4375
+    );
+    expect(d.exit).toBe(false);
   });
 });

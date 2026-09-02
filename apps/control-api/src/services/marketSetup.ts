@@ -16,17 +16,20 @@ import { PLAYBOOK_ENTRY_BODY } from './playbooks.js';
 import { bodyPct, type TenSecBar } from './tenSecondOhlc.js';
 
 /**
- * Micro-swing confirm bar = last Capital 1m (+ live mid overlay).
- * 2s OHLC stays for UI/diagnostics — entry decisions use this 1m bar.
+ * Micro-swing confirm bar = last Capital 1m.
+ * By default NO live mid overlay — live mid turns a forming wick into a fake body (spike chase).
+ * Pass liveMid only for level-through checks (BREAKOUT), not for candle color confirm.
  */
 export function minuteConfirmBar(
   minutes: CapitalPriceCandle[] | null | undefined,
-  liveMid?: number | null
+  liveMid?: number | null,
+  opts?: { overlayLive?: boolean }
 ): TenSecBar | null {
   if (!minutes?.length) return null;
   const m = minutes[minutes.length - 1]!;
+  const overlay = opts?.overlayLive === true;
   const live =
-    liveMid != null && Number.isFinite(liveMid) ? Number(liveMid) : m.close;
+    overlay && liveMid != null && Number.isFinite(liveMid) ? Number(liveMid) : m.close;
   return {
     open_time_ms: 0,
     open: m.open,
@@ -35,6 +38,76 @@ export function minuteConfirmBar(
     close: live,
     ticks: Math.max(1, 5),
   };
+}
+
+/**
+ * True when this 1m bar is a spike vs recent bodies — do not enter ON it; wait next confirm.
+ * Gold 20:29 class: selling the impulse/first twitch without a confirming closed candle.
+ */
+export function isSpikeCandle(
+  bar: CapitalPriceCandle,
+  prior: CapitalPriceCandle[] | null | undefined
+): boolean {
+  if (!bar || !prior?.length) return false;
+  const body = Math.abs(bar.close - bar.open);
+  const range = Math.max(bar.high - bar.low, 1e-9);
+  const px = Math.max(Math.abs(bar.close), 1e-9);
+  const minSpike = Math.max(px * 0.00045, 1.8); // ~2pt Gold
+  if (body < minSpike && range < minSpike * 1.15) return false;
+  const sample = prior.slice(-8);
+  if (sample.length < 3) return body >= minSpike * 1.5;
+  const bodies = sample.map((c) => Math.abs(c.close - c.open)).sort((a, b) => a - b);
+  const med = bodies[Math.floor(bodies.length / 2)]!;
+  const typical = Math.max(med, px * 0.00012, 0.35);
+  // Spike = body much larger than typical recent OR almost all-range wick thrust
+  if (body >= typical * 2.8 && body >= minSpike) return true;
+  if (range >= typical * 3.2 && body >= minSpike * 0.85) return true;
+  return false;
+}
+
+/**
+ * Entry requires a closed 1m candle that confirms direction — not a spike, not opposite color.
+ * After a spike the OTHER way, need the next bar to close beyond the spike close (your old rule).
+ * Returns null if OK, or a short wait reason.
+ */
+export function entryCandleConfirmDeny(
+  direction: 'BUY' | 'SELL',
+  minutes?: CapitalPriceCandle[] | null
+): string | null {
+  if (!minutes || minutes.length < 2) return 'wait · need closed 1m confirm';
+  const cur = minutes[minutes.length - 1]!;
+  const prev = minutes[minutes.length - 2]!;
+  const prior = minutes.slice(0, -1);
+
+  // Never enter on the spike candle itself
+  if (isSpikeCandle(cur, prior)) {
+    return 'wait · spike 1m — need next candle confirm';
+  }
+
+  // Closed candle must agree with side (no BUY on red / SELL on green)
+  if (direction === 'BUY' && !(cur.close > cur.open)) {
+    return 'wait · need closed green 1m confirm';
+  }
+  if (direction === 'SELL' && !(cur.close < cur.open)) {
+    return 'wait · need closed red 1m confirm';
+  }
+
+  // After a large spike against us / exhaustion: confirm closes beyond spike close
+  if (isSpikeCandle(prev, minutes.slice(0, -2))) {
+    if (direction === 'SELL') {
+      // Prior was UP spike — only SELL if this red closes below the spike close
+      if (!(prev.close > prev.open && cur.close < prev.close)) {
+        return 'wait · confirm after UP spike (close below spike)';
+      }
+    }
+    if (direction === 'BUY') {
+      if (!(prev.close < prev.open && cur.close > prev.close)) {
+        return 'wait · confirm after DOWN spike (close above spike)';
+      }
+    }
+  }
+
+  return null;
 }
 
 export const SETUP_KINDS = [
@@ -475,6 +548,22 @@ export function liveFlow(
   return priceFlowBias(minutes) || recentImpulse(minutes, 'flip') || recentImpulse(minutes);
 }
 
+/**
+ * Block SELL into a live UP tape / BUY into live DOWN tape unless clear V-flip.
+ * Gold 20:29 class: SELL @ 4381 right after winning BUY while rally still UP.
+ */
+export function entryFightsStickyTrend(
+  direction: 'BUY' | 'SELL',
+  minutes?: CapitalPriceCandle[] | null
+): boolean {
+  const trend = marketTrend(minutes);
+  if (!trend) return false;
+  const flip = flowFlipAtExtreme(minutes);
+  if (direction === 'SELL' && trend === 'UP' && flip !== 'DOWN') return true;
+  if (direction === 'BUY' && trend === 'DOWN' && flip !== 'UP') return true;
+  return false;
+}
+
 export function flowAgreesWithSide(
   side: 'BUY' | 'SELL' | null | undefined,
   minutes?: CapitalPriceCandle[] | null
@@ -552,6 +641,24 @@ export function moveAlreadyFinished(
   const rallyInto = hi - slice[0]!.low;
   if (hiAt <= lastI - 2 && givenBack >= span * 0.22 && rallyInto >= minSpan) {
     return true;
+  }
+  // Long UP leg already ran — buying while parked/consolidating in top ~15% is tip-chase
+  // (Gold 20:34 BUY @ 4383 after 4372→4383). Still-thrusting breakouts may continue.
+  const win = minutes.slice(-20);
+  const wHi = Math.max(...win.map((c) => c.high));
+  const wLo = Math.min(...win.map((c) => c.low));
+  const wSpan = wHi - wLo;
+  const wNet = win[win.length - 1]!.close - win[0]!.open;
+  if (
+    wSpan >= minSpan &&
+    wNet >= Math.max(Math.abs(px) * 0.001, 4.0) &&
+    px >= wHi - wSpan * 0.15
+  ) {
+    const thrusting =
+      last.close > last.open &&
+      last.high >= wHi - wSpan * 0.08 &&
+      lastBody >= Math.max(wSpan * 0.12, Math.abs(px) * 0.00025);
+    if (!thrusting) return true;
   }
   return false;
 }
@@ -1063,6 +1170,7 @@ export function decideEntryFromSetup(
   // Direction = priceFlowBias (flip-first at extremes) — not raw 20m marketTrend alone.
   if (setup.side === 'BUY' && flow === 'DOWN') return null;
   if (setup.side === 'SELL' && flow === 'UP') return null;
+  if (entryFightsStickyTrend(setup.side, minutes)) return null;
 
   if (isTipChaseEntry(setup, { ...bar, close: px })) {
     return null;
@@ -1201,6 +1309,8 @@ export function decideEntryFromImpulseCandle(
   // Signal finished — last 1m already turned against the move
   if (!moveStillPrinting(flow, mins)) return null;
   const direction: 'BUY' | 'SELL' = flow === 'UP' ? 'BUY' : 'SELL';
+  // Never SELL mid-rally / BUY mid-dump without V-flip (20:29 −£0.13 class)
+  if (entryFightsStickyTrend(direction, mins)) return null;
   // Tip / rolled move — Gold dump-floor SELL and post-spike BUY
   if (moveAlreadyFinished(direction, mins, bar.close)) return null;
   if (flow === 'DOWN') {
@@ -1250,6 +1360,7 @@ export function decideEntryFromTenSecMove(
   if (body >= need || throughHigh) {
     // flow owns direction (incl. V-flip); do not also require bias away from BELOW
     if (flow === 'DOWN' || (structure.bias === 'BELOW' && flow !== 'UP')) return null;
+    if (entryFightsStickyTrend('BUY', minutes)) return null;
     if (moveAlreadyFinished('BUY', minutes, bar.close)) return null;
     // Tip-chase: parked at swing high without clear break — skip
     if (!throughHigh && bar.close >= hi - eps * 0.3 && bar.close <= hi + eps * 0.15) return null;
@@ -1262,6 +1373,7 @@ export function decideEntryFromTenSecMove(
   }
   if (body <= -need || throughLow) {
     if (flow === 'UP' || (structure.bias === 'ABOVE' && flow !== 'DOWN')) return null;
+    if (entryFightsStickyTrend('SELL', minutes)) return null;
     if (moveAlreadyFinished('SELL', minutes, bar.close)) return null;
     if (!throughLow && bar.close <= lo + eps * 0.3 && bar.close >= lo - eps * 0.15) return null;
     return {
@@ -1305,15 +1417,17 @@ export function decideUnifiedEntry(opts: {
   const armed =
     setup.status === 'ARMED' && setup.kind !== 'NONE' && !!setup.side && !!setup.playbook;
 
+  let entry: SetupEntry | null = null;
+
   if (armed) {
     const fromSetup = decideEntryFromSetup(setup, bar, minutes, livePx);
-    if (fromSetup) return fromSetup;
-
-    // Same-side impulse only — never flip against sticky ARMED FADE/PULLBACK
-    if (setup.kind === 'CONTINUATION' || setup.kind === 'BREAKOUT') {
+    if (fromSetup) {
+      entry = fromSetup;
+    } else if (setup.kind === 'CONTINUATION' || setup.kind === 'BREAKOUT') {
+      // Same-side impulse only — never flip against sticky ARMED FADE/PULLBACK
       const impulse = decideEntryFromImpulseCandle(bar, minutes);
       if (impulse && impulse.direction === setup.side) {
-        return {
+        entry = {
           direction: impulse.direction,
           setup: setup.kind,
           playbook: setup.playbook || impulse.playbook,
@@ -1321,10 +1435,7 @@ export function decideUnifiedEntry(opts: {
         };
       }
     }
-    return null;
-  }
-
-  if (setup.kind === 'NONE' || setup.status === 'NONE') {
+  } else if (setup.kind === 'NONE' || setup.status === 'NONE') {
     if (!allowNoneImpulse) return null;
     if (!structure.ready || !(structure.swing_high > structure.swing_low)) return null;
 
@@ -1335,16 +1446,20 @@ export function decideUnifiedEntry(opts: {
         if (impulse.direction === 'BUY' && structure.bias === 'BELOW') return null;
         if (impulse.direction === 'SELL' && structure.bias === 'ABOVE') return null;
       }
-      return {
+      entry = {
         ...impulse,
         reason: `${impulse.reason} · unified NONE`,
       };
+    } else {
+      entry = decideEntryFromTenSecMove(structure, bar, minutes);
     }
-    return decideEntryFromTenSecMove(structure, bar, minutes);
   }
 
-  // FORMING — confirm sticky, do not scalp mid-form
-  return null;
+  if (!entry) return null;
+  if (entryFightsStickyTrend(entry.direction, minutes)) return null;
+  const candleDeny = entryCandleConfirmDeny(entry.direction, minutes);
+  if (candleDeny) return null;
+  return entry;
 }
 
 export function playbookFromSetup(setup: MarketSetup | null | undefined): TradePlaybook | null {
