@@ -22,7 +22,6 @@ import {
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
-import { minSwingSpan, scaleFromGold } from './instrumentScale.js';
 import {
   playbookFromRegime,
   type Playbook,
@@ -1489,29 +1488,12 @@ async function robotCycle(s: Internal) {
     }
 
     if (!entry) {
-      const minSpan = minSwingSpan(st.mid || quote.mid);
-      const hasSpan = st.ready && st.swing_high - st.swing_low >= minSpan;
-      const tipNote =
-        setup.side &&
-        hasSpan &&
-        ((setup.side === 'BUY' &&
-          st.ready &&
-          bar.close >=
-            st.swing_high -
-            Math.max(st.span * 0.08, scaleFromGold(st.mid || quote.mid, 0.8))) ||
-          (setup.side === 'SELL' &&
-            st.ready &&
-            bar.close <=
-              st.swing_low +
-              Math.max(st.span * 0.08, scaleFromGold(st.mid || quote.mid, 0.8))))
-          ? ' · blocked tip-chase'
-          : '';
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · ARMED · no 2s confirm yet${tipNote} · ${setup.reason}`,
+        detail: `${ohlcLine} · ARMED · no 2s confirm yet · ${setup.reason}`,
       });
       return;
     }
