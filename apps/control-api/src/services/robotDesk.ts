@@ -36,6 +36,7 @@ import {
   entryCandleConfirmDeny,
   flowAgreesWithSide,
   flowFlipAtExtreme,
+  isSoftCandleSetupReason,
   LIVE_CONTINUATION_POLICY,
   liveFlow,
   minuteConfirmBar,
@@ -445,7 +446,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     chain:
       'Capital 1h+1m → STRUCTURE → SETUP(ARMED only) → closed 1m confirm → BEST OUTCOME · MoveFlip reverses next 1m',
     note:
-      'Quality gate: no NONE impulse chop; no IMPULSE→CONTINUATION; FADE vs hour blocked; CONT needs room+persist; closed candle confirm; MoveFlip→switch now; other exits 5m cool-down; SAFETY SL required.',
+      'Quality gate: both sides; mid-swing/mid-leg SELL soft 1m (pause doji OK); dump flips sticky BUY; MoveFlip→switch now; SAFETY SL required.',
   };
 }
 
@@ -1546,8 +1547,7 @@ async function robotCycleBody(s: Internal) {
     const newMinute =
       !s.entry_minute_bucket || minuteBucket > s.entry_minute_bucket;
 
-    // ARMED setup only — NONE impulse was the overnight chop engine
-    // Live: no IMPULSE → CONTINUATION (Gold day 0-MFE spam)
+    // ARMED setup only — both sides; dump flips sticky BUY off via liveFlow
     let entry = newMinute
       ? decideUnifiedEntry({
           setup,
@@ -1561,21 +1561,25 @@ async function robotCycleBody(s: Internal) {
       : null;
 
     if (!entry) {
+      const softCandle =
+        (setup.kind === 'CONTINUATION' || setup.kind === 'BREAKOUT') &&
+        isSoftCandleSetupReason(setup.reason);
       const candleNote = newMinute
         ? entryCandleConfirmDeny(
             setup.side === 'SELL' ? 'SELL' : 'BUY',
-            s.last_minute_candles
+            s.last_minute_candles,
+            { soft: softCandle }
           )
         : null;
       const waitNote = !newMinute
         ? `1m system · wait next closed minute · ${setup.kind}/${setup.status}`
         : setup.kind === 'NONE' || setup.status === 'NONE'
-          ? `NONE · no trade — wait ARMED setup · ${setup.reason}`
+          ? `NONE · wait ARMED · ${setup.reason}`
           : candleNote && setup.status === 'ARMED'
             ? `${candleNote} · ${setup.reason}`
             : setup.status === 'FORMING'
               ? `FORMING · ${setup.reason}`
-              : `ARMED · waiting closed 1m confirm · ${setup.reason}`;
+              : `ARMED · waiting 1m confirm · ${setup.reason}`;
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,

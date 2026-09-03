@@ -705,9 +705,12 @@ describe('CONTINUATION policies (ablation)', () => {
       false
     );
     expect(isImpulseContinuationReason('IMPULSE UP through H4340 → BUY flip now')).toBe(false);
+    // Mid-leg quality arm must NOT be treated as tip-blip ban text
+    expect(isImpulseContinuationReason('IMPULSE DOWN mid-leg SELL · mid 4430')).toBe(false);
+    expect(isImpulseContinuationReason('IMPULSE UP mid-leg BUY · mid 4430')).toBe(false);
   });
 
-  it('no_impulse policy does not arm IMPULSE → CONTINUATION', () => {
+  it('no_impulse policy does not arm raw IMPULSE → CONTINUATION', () => {
     const bars: CapitalPriceCandle[] = [];
     for (let i = 0; i < 25; i++) {
       bars.push(candle(4430, 4432, 4428, 4430));
@@ -721,11 +724,108 @@ describe('CONTINUATION policies (ablation)', () => {
       continuationPolicy: 'default',
     });
     const live = updateSetupSticky(emptySetup(), st, bars); // LIVE = no_impulse
-    // Legacy may arm IMPULSE CONTINUATION — live must not keep IMPULSE→CONT
+    // Legacy may arm IMPULSE CONTINUATION — live must not keep IMPULSE→CONT tip-blip text
     if (isImpulseContinuationReason(legacy.reason)) {
       expect(isImpulseContinuationReason(live.reason)).toBe(false);
     }
     expect(live.reason).not.toMatch(/IMPULSE (UP|DOWN) →/);
+  });
+
+  it('no_impulse still arms mid-leg SELL when dump already underway', () => {
+    // Dump from local tip with room — midLegImpulseArmOk (not tip-blip)
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 18; i++) bars.push(candle(4435, 4437, 4433, 4435));
+    bars.push(candle(4435, 4442, 4434, 4441)); // tip
+    for (let i = 0; i < 5; i++) {
+      const o = 4440 - i * 1.4;
+      bars.push(candle(o, o + 0.2, o - 1.6, o - 1.4));
+    }
+    const st = buildStructure({ minutes: bars, mid: bars[bars.length - 1]!.close });
+    const midSt: StructureBook = {
+      ...st,
+      at_tip: false,
+      at_floor: false,
+      near_high: false,
+      near_low: false,
+      bias: 'BELOW',
+    };
+    const live = updateSetupSticky(emptySetup(), midSt, bars, {
+      continuationPolicy: 'no_impulse',
+    });
+    expect(live.side).toBe('SELL');
+    expect(['CONTINUATION', 'BREAKOUT']).toContain(live.kind);
+    expect(live.status).toBe('ARMED');
+    expect(isImpulseContinuationReason(live.reason)).toBe(false);
+  });
+
+  it('liveFlow DOWN kills sticky BUY and arms mid-leg SELL when dump underway', () => {
+    const stickyBuy: MarketSetup = {
+      kind: 'CONTINUATION',
+      side: 'BUY',
+      playbook: 'LONG',
+      status: 'ARMED',
+      swing_high: 4442,
+      swing_low: 4425,
+      reason: 'CONTINUATION up · above mid · below tip',
+      confirm: 3,
+      updated_at: new Date().toISOString(),
+    };
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 20; i++) bars.push(candle(4434, 4436, 4432, 4434));
+    bars.push(candle(4434, 4442, 4433, 4441)); // tip
+    // Mid-leg dump — still room above local floor (not climax)
+    bars.push(candle(4441, 4441.2, 4438, 4438.5));
+    bars.push(candle(4438.5, 4438.7, 4436, 4436.5));
+    bars.push(candle(4436.5, 4436.8, 4434.5, 4435.0));
+    bars.push(candle(4435.0, 4435.3, 4433.5, 4434.0));
+    const st = buildStructure({ minutes: bars, mid: bars[bars.length - 1]!.close });
+    const midSt: StructureBook = {
+      ...st,
+      at_tip: false,
+      at_floor: false,
+      near_high: false,
+      near_low: false,
+      bias: 'BELOW',
+      swing_high: 4442,
+      swing_low: 4425,
+      mid: (4442 + 4425) / 2,
+      span: 17,
+    };
+    const next = updateSetupSticky(stickyBuy, midSt, bars, {
+      continuationPolicy: 'no_impulse',
+    });
+    expect(next.reason).toMatch(/flipped off sticky BUY/i);
+    expect(next.side).toBe('SELL');
+    expect(next.kind).toBe('CONTINUATION');
+    expect(next.status).toBe('ARMED');
+    expect(next.reason).toMatch(/FLOW flip mid-leg SELL/i);
+  });
+
+  it('liveFlow DOWN kills sticky BUY even if opposite not yet mid-leg', () => {
+    const stickyBuy: MarketSetup = {
+      kind: 'CONTINUATION',
+      side: 'BUY',
+      playbook: 'LONG',
+      status: 'ARMED',
+      swing_high: 4442,
+      swing_low: 4430,
+      reason: 'CONTINUATION up · above mid · below tip',
+      confirm: 3,
+      updated_at: new Date().toISOString(),
+    };
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 12; i++) bars.push(candle(4436, 4438, 4434, 4436));
+    // Mild dump — may not pass midLegImpulseArmOk but must still leave BUY
+    for (let i = 0; i < 3; i++) {
+      const o = 4436 - i * 0.4;
+      bars.push(candle(o, o + 0.1, o - 0.5, o - 0.4));
+    }
+    const st = buildStructure({ minutes: bars, mid: bars[bars.length - 1]!.close });
+    const next = updateSetupSticky(stickyBuy, { ...st, at_tip: false, at_floor: false }, bars, {
+      continuationPolicy: 'no_impulse',
+    });
+    expect(next.reason).toMatch(/flipped off sticky BUY/i);
+    expect(next.side).not.toBe('BUY');
   });
 
   it('narrow mid-leg helper rejects impulse and tip-zone reasons', () => {

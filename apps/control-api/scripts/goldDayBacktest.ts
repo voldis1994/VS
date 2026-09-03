@@ -26,6 +26,7 @@ import {
   entryAgainstMarketMove,
   entryCandleConfirmDeny,
   flowFlipAtExtreme,
+  isSoftCandleSetupReason,
   LIVE_CONTINUATION_POLICY,
   liveFlow,
   microChopEntryOk,
@@ -513,7 +514,13 @@ function main() {
           setup.playbook &&
           setup.kind !== 'NONE'
         ) {
-          const candleDeny = opts.loose ? null : entryCandleConfirmDeny(setup.side, minutes);
+          const candleDeny = opts.loose
+            ? null
+            : entryCandleConfirmDeny(setup.side, minutes, {
+                soft:
+                  (setup.kind === 'CONTINUATION' || setup.kind === 'BREAKOUT') &&
+                  isSoftCandleSetupReason(setup.reason),
+              });
           if (candleDeny) {
             recordMiss(
               candleDeny,

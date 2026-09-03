@@ -66,44 +66,85 @@ export function isSpikeCandle(
 }
 
 /**
- * Entry requires a closed 1m candle that confirms direction — not a spike, not opposite color.
- * After a spike the OTHER way, need the next bar to close beyond the spike close (your old rule).
- * Returns null if OK, or a short wait reason.
+ * Entry candle confirm — closed 1m agrees with side.
+ *
+ * Soft (mid-swing / mid-leg CONT): do NOT sit through a dump waiting for a perfect
+ * red after 5 reds + a doji pause. Allow tiny pause bars when recent bars already
+ * print the move; skip 2-bar momentum; allow directional dump/rally spikes.
+ * Strict (FADE / tip paths): 2 same-color + no entry on spike + no opposite color.
  */
 export function entryCandleConfirmDeny(
   direction: 'BUY' | 'SELL',
-  minutes?: CapitalPriceCandle[] | null
+  minutes?: CapitalPriceCandle[] | null,
+  opts?: { soft?: boolean }
 ): string | null {
   if (!minutes || minutes.length < 2) return 'wait · need closed 1m confirm';
+  const soft = !!opts?.soft;
   const cur = minutes[minutes.length - 1]!;
   const prev = minutes[minutes.length - 2]!;
   const prior = minutes.slice(0, -1);
+  const body = Math.abs(cur.close - cur.open);
+  const px = Math.abs(cur.close) || 1;
+  const tinyBody = body <= Math.max(px * 0.00005, 0.2);
 
-  // Never enter on the spike candle itself
+  const curBuy = cur.close > cur.open;
+  const curSell = cur.close < cur.open;
+  const curAgrees = direction === 'BUY' ? curBuy : curSell;
+  // Real opposite body (not a doji pause mid-leg)
+  const curFights =
+    direction === 'BUY' ? curSell && !tinyBody : curBuy && !tinyBody;
+
+  // Spike: always wait next bar — dump spike chase was soft P&L poison
   if (isSpikeCandle(cur, prior)) {
     return 'wait · spike 1m — need next candle confirm';
   }
 
-  // Closed candle must agree with side (no BUY on red / SELL on green)
-  if (direction === 'BUY' && !(cur.close > cur.open)) {
-    return 'wait · need closed green 1m confirm';
-  }
-  if (direction === 'SELL' && !(cur.close < cur.open)) {
-    return 'wait · need closed red 1m confirm';
-  }
-
-  // Momentum: two consecutive same-color 1m — one blip mid-move was the against-leg engine
-  if (direction === 'BUY' && !(prev.close > prev.open)) {
-    return 'wait · need 2 green 1m (momentum)';
-  }
-  if (direction === 'SELL' && !(prev.close < prev.open)) {
-    return 'wait · need 2 red 1m (momentum)';
+  if (!soft) {
+    if (direction === 'BUY' && !curBuy) return 'wait · need closed green 1m confirm';
+    if (direction === 'SELL' && !curSell) return 'wait · need closed red 1m confirm';
+    if (direction === 'BUY' && !(prev.close > prev.open)) {
+      return 'wait · need 2 green 1m (momentum)';
+    }
+    if (direction === 'SELL' && !(prev.close < prev.open)) {
+      return 'wait · need 2 red 1m (momentum)';
+    }
+  } else {
+    // Soft = pause-doji exception only. If last bar is directional, keep strict 2-bar.
+    // Live fail: 5 reds then O≈C doji → "need closed red" forever while dump runs.
+    if (curAgrees) {
+      if (direction === 'BUY' && !(prev.close > prev.open)) {
+        return 'wait · need 2 green 1m (momentum)';
+      }
+      if (direction === 'SELL' && !(prev.close < prev.open)) {
+        return 'wait · need 2 red 1m (momentum)';
+      }
+    } else if (curFights) {
+      return direction === 'BUY'
+        ? 'wait · need closed green 1m confirm'
+        : 'wait · need closed red 1m confirm';
+    } else {
+      // Tiny pause / doji — allow only if dump/rally already proven
+      const win = minutes.slice(-5);
+      const dirBars = win.filter((c) =>
+        direction === 'BUY' ? c.close > c.open : c.close < c.open
+      ).length;
+      const lastW = win[win.length - 1]!;
+      const run =
+        direction === 'BUY'
+          ? lastW.close - Math.min(...win.map((c) => c.low))
+          : Math.max(...win.map((c) => c.high)) - lastW.close;
+      if (!(dirBars >= 3 && run >= 2.0)) {
+        return direction === 'BUY'
+          ? 'wait · need closed green 1m confirm'
+          : 'wait · need closed red 1m confirm';
+      }
+    }
   }
 
   // After a large spike against us / exhaustion: confirm closes beyond spike close
+  // (strict even for soft mid-leg — relaxing this regressed day P&L £2.61→£2.06)
   if (isSpikeCandle(prev, minutes.slice(0, -2))) {
     if (direction === 'SELL') {
-      // Prior was UP spike — only SELL if this red closes below the spike close
       if (!(prev.close > prev.open && cur.close < prev.close)) {
         return 'wait · confirm after UP spike (close below spike)';
       }
@@ -116,6 +157,13 @@ export function entryCandleConfirmDeny(
   }
 
   return null;
+}
+
+/** Soft candle — mid-swing / flow-flip mid-leg only (not tip CONTINUATION up/down). */
+export function isSoftCandleSetupReason(reason: string | null | undefined): boolean {
+  return /FLOW flip mid-leg|IMPULSE (UP|DOWN) mid-leg|CONTINUATION mid-swing/i.test(
+    String(reason || '')
+  );
 }
 
 export const SETUP_KINDS = [
@@ -640,6 +688,34 @@ export function continuationEntryQualityOk(opts: {
 }
 
 /**
+ * Extra gate for no_impulse mid-leg impulse arm — dump/rally must already be underway.
+ * Plain continuationEntryQualityOk alone re-opened early tip-blip CONT (£−0.74 / £−0.63).
+ */
+export function midLegImpulseArmOk(opts: {
+  direction: 'BUY' | 'SELL';
+  structure: StructureBook;
+  minutes?: CapitalPriceCandle[] | null;
+}): boolean {
+  const { direction, structure, minutes } = opts;
+  if (!continuationEntryQualityOk({ direction, structure, minutes }).ok) return false;
+  if (!minutes?.length) return false;
+  const last = minutes[minutes.length - 1]!;
+  const local = recentLocalRange(minutes, 12);
+  const flow = priceFlowBias(minutes);
+  const minRun = Math.max(local.span * 0.35, 2.5);
+  if (direction === 'SELL') {
+    if (flow !== 'DOWN') return false;
+    if (local.hi - last.close < minRun) return false;
+    if (persistence(minutes) > -0.2) return false;
+  } else {
+    if (flow !== 'UP') return false;
+    if (last.close - local.lo < minRun) return false;
+    if (persistence(minutes) < 0.2) return false;
+  }
+  return true;
+}
+
+/**
  * Longer market direction (~20×1m). Bounce tips must not erase a live dump/rally.
  * Gold 17:41 class: BUY @ 4369 after 4374→ dump — short impulse said UP, market was DOWN.
  * Left-behind extremes (failed to remake high/low) beat 2–3m bounce color.
@@ -1046,8 +1122,9 @@ export function dualSideWatch(
 export type ContinuationPolicy = 'default' | 'no_impulse' | 'narrow_midleg';
 
 /**
- * Live desk policy — Gold 2026-09-02: IMPULSE → CONTINUATION drove £−0.38 day
- * (0 MFE flip spam). no_impulse → £+1.45 on same day. Narrow mid-leg same P&L.
+ * Live desk policy — blank no_impulse left desk stuck on sticky BUY / NONE mid-dump
+ * while watch already said SELL. Tip-blip IMPULSE→CONT stays banned; flow flip arms
+ * mid-leg opposite CONT when dump/rally is already underway (see midLegImpulseArmOk).
  */
 export const LIVE_CONTINUATION_POLICY: ContinuationPolicy = 'no_impulse';
 
@@ -1145,18 +1222,18 @@ function rawSetupFromStructure(
           reason: `IMPULSE UP through H${hi.toFixed(2)} → BUY flip now`,
         };
       }
-      // Ablation: no_impulse / narrow_midleg — do not arm CONTINUATION from raw impulse blip
-      if (!skipImpulseCont) {
-        return {
-          kind: 'CONTINUATION',
-          side: 'BUY',
-          playbook: 'LONG',
-          status: 'ARMED',
-          swing_high: hi,
-          swing_low: lo,
-          reason: `IMPULSE UP → BUY flip now · mid ${structure.mid.toFixed(2)}`,
-        };
-      }
+      const impulseBuy = {
+        kind: 'CONTINUATION' as const,
+        side: 'BUY' as const,
+        playbook: 'LONG' as const,
+        status: 'ARMED' as const,
+        swing_high: hi,
+        swing_low: lo,
+        reason: `IMPULSE UP → BUY flip now · mid ${structure.mid.toFixed(2)}`,
+      };
+      // Raw tip-blip ban stays — mid-leg impulse re-arm regressed Gold day (£2.54→£1.71).
+      // Both-sides speed = sticky liveFlow flip + dual watch, not raw impulse CONT under no_impulse.
+      if (!skipImpulseCont) return impulseBuy;
     }
   }
   if (imp === 'DOWN') {
@@ -1185,17 +1262,16 @@ function rawSetupFromStructure(
           reason: `IMPULSE DOWN through L${lo.toFixed(2)} → SELL flip now`,
         };
       }
-      if (!skipImpulseCont) {
-        return {
-          kind: 'CONTINUATION',
-          side: 'SELL',
-          playbook: 'LONG',
-          status: 'ARMED',
-          swing_high: hi,
-          swing_low: lo,
-          reason: `IMPULSE DOWN → SELL flip now · mid ${structure.mid.toFixed(2)}`,
-        };
-      }
+      const impulseSell = {
+        kind: 'CONTINUATION' as const,
+        side: 'SELL' as const,
+        playbook: 'LONG' as const,
+        status: 'ARMED' as const,
+        swing_high: hi,
+        swing_low: lo,
+        reason: `IMPULSE DOWN → SELL flip now · mid ${structure.mid.toFixed(2)}`,
+      };
+      if (!skipImpulseCont) return impulseSell;
     }
   }
 
@@ -1463,6 +1539,7 @@ export function updateSetupSticky(
   const now = new Date().toISOString();
   const prevSafe = prev || emptySetup();
   const imp = recentImpulse(minutes, 'flip') || recentImpulse(minutes);
+  const flowNow = liveFlow(minutes);
   const last = minutes[minutes.length - 1];
   const watch = dualSideWatch(structure, minutes);
 
@@ -1526,10 +1603,11 @@ export function updateSetupSticky(
     });
   }
 
-  // Dump kills sticky BUY; rally kills sticky SELL; opposite raw side also flips
+  // Dump kills sticky BUY; rally kills sticky SELL — liveFlow flips without waiting impulse label
   const stickyBuyDead =
     prevSafe.side === 'BUY' &&
     (imp === 'DOWN' ||
+      flowNow === 'DOWN' ||
       raw.side === 'SELL' ||
       (last != null &&
         prevSafe.swing_low > 0 &&
@@ -1537,18 +1615,43 @@ export function updateSetupSticky(
   const stickySellDead =
     prevSafe.side === 'SELL' &&
     (imp === 'UP' ||
+      flowNow === 'UP' ||
       raw.side === 'BUY' ||
       (last != null &&
         prevSafe.swing_high > 0 &&
         last.close > prevSafe.swing_high + edgeEps(last.close, Math.max(structure.span, 1))));
 
   if (stickyBuyDead || stickySellDead) {
+    // Don't dump into NONE / weak opposite mid-move — arm mid-leg CONT when dump/rally underway
+    let flipped = { ...raw };
+    if (stickyBuyDead && midLegImpulseArmOk({ direction: 'SELL', structure, minutes })) {
+      flipped = {
+        kind: 'CONTINUATION',
+        side: 'SELL',
+        playbook: 'LONG',
+        status: 'ARMED',
+        swing_high: structure.swing_high,
+        swing_low: structure.swing_low,
+        reason: `FLOW flip mid-leg SELL · was sticky BUY · mid ${structure.mid.toFixed(2)}`,
+      };
+    } else if (stickySellDead && midLegImpulseArmOk({ direction: 'BUY', structure, minutes })) {
+      flipped = {
+        kind: 'CONTINUATION',
+        side: 'BUY',
+        playbook: 'LONG',
+        status: 'ARMED',
+        swing_high: structure.swing_high,
+        swing_low: structure.swing_low,
+        reason: `FLOW flip mid-leg BUY · was sticky SELL · mid ${structure.mid.toFixed(2)}`,
+      };
+    }
     return withWatch({
-      ...raw,
-      status: raw.kind === 'NONE' ? 'NONE' : raw.status === 'FORMING' ? 'FORMING' : 'ARMED',
-      confirm: raw.kind === 'NONE' ? 0 : SETUP_CONFIRM,
+      ...flipped,
+      status:
+        flipped.kind === 'NONE' ? 'NONE' : flipped.status === 'FORMING' ? 'FORMING' : 'ARMED',
+      confirm: flipped.kind === 'NONE' ? 0 : SETUP_CONFIRM,
       reason:
-        raw.reason +
+        flipped.reason +
         (stickyBuyDead ? ' · flipped off sticky BUY' : ' · flipped off sticky SELL'),
       updated_at: now,
     });
@@ -1753,7 +1856,7 @@ export function decideEntryFromSetup(
     if (!moveStillPrinting(contFlow, minutes)) return null;
     if (moveAlreadyFinished(setup.side, minutes, bar.close)) return null;
     // Mid-swing / mid-leg CONTINUATION — room + climax; tip-zone dump/rally keeps lighter gates
-    if (/mid-swing|CONTINUATION (up|down) ·/.test(setup.reason)) {
+    if (/mid-swing|CONTINUATION (up|down) ·|mid-leg/.test(setup.reason)) {
       const contQ = continuationEntryQualityOk({
         direction: setup.side,
         structure: structure ?? structLike,
@@ -1960,8 +2063,7 @@ export function decideUnifiedEntry(opts: {
 
   if (!entry) return null;
 
-  // Live entry quality — FADE tip always; CONTINUATION mid-leg only on ARMED CONT
-  // (NONE→impulse CONTINUATION is ablation-only and keeps its own filters)
+  // Live entry quality — FADE tip always; CONTINUATION mid-leg / mid-swing / mid-leg impulse
   if (entry.setup === 'FADE' || entry.setup === 'FAILED_BREAK') {
     const fadeQ = fadeEntryQualityOk({
       direction: entry.direction,
@@ -1977,7 +2079,7 @@ export function decideUnifiedEntry(opts: {
     entry.setup === 'CONTINUATION' &&
     armed &&
     setup.kind === 'CONTINUATION' &&
-    /mid-swing|CONTINUATION (up|down) ·/.test(setup.reason)
+    /mid-swing|CONTINUATION (up|down) ·|mid-leg/.test(setup.reason)
   ) {
     const contQ = continuationEntryQualityOk({
       direction: entry.direction,
@@ -1987,21 +2089,18 @@ export function decideUnifiedEntry(opts: {
     if (!contQ.ok) return null;
   }
 
-  // CONTINUATION ablation gates (setup sticky may still carry legacy IMPULSE reason)
+  // CONTINUATION ablation gates (legacy IMPULSE → tip-blip text only)
   if (entry.setup === 'CONTINUATION') {
     if (
       continuationPolicy === 'no_impulse' &&
-      (isImpulseContinuationReason(setup.reason) ||
-        isImpulseContinuationReason(entry.reason))
+      isImpulseContinuationReason(setup.reason)
     ) {
       return null;
     }
     if (continuationPolicy === 'narrow_midleg') {
-      // Armed mid-leg path: require narrow quality on sticky setup
       if (armed && setup.kind === 'CONTINUATION') {
         if (!isNarrowMidlegContinuation(setup, structure, minutes)) return null;
       } else {
-        // NONE→impulse CONTINUATION path is never narrow mid-leg
         return null;
       }
     }
@@ -2009,12 +2108,17 @@ export function decideUnifiedEntry(opts: {
 
   if (entryFightsStickyTrend(entry.direction, minutes)) return null;
   if (structureBlocksEntry(entry.direction, structure, entry.setup)) return null;
-  // Hard: never open against the real move (bounce tip / finished impulse / local climax)
   if (!skipAgainstMove && entryAgainstMarketMove(entry.direction, minutes, entry.setup)) {
     return null;
   }
   if (!skipCandleConfirm) {
-    const candleDeny = entryCandleConfirmDeny(entry.direction, minutes);
+    // Soft on mid-swing / mid-leg CONT — pause doji after dump must not block forever
+    const softCandle =
+      (entry.setup === 'CONTINUATION' || entry.setup === 'BREAKOUT') &&
+      isSoftCandleSetupReason(setup.reason);
+    const candleDeny = entryCandleConfirmDeny(entry.direction, minutes, {
+      soft: softCandle,
+    });
     if (candleDeny) return null;
   }
   return entry;
