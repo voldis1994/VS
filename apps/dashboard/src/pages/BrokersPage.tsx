@@ -18,6 +18,7 @@ interface BrokerRow {
 export function BrokersPage() {
   const { data, error, loading, refresh } = useApi<BrokerRow[]>('/api/brokers');
   const { data: clients, refresh: refreshClients } = useApi<Client[]>('/api/clients');
+  const bookerDefaultClientName = 'Kimly defolt';
   const [form, setForm] = useState({
     client_id: '',
     broker_name: 'capital_com',
@@ -45,7 +46,7 @@ export function BrokersPage() {
     if (clients && clients.length > 0) return clients[0].id;
     const created = await apiFetch<Client>('/api/clients', {
       method: 'POST',
-      body: JSON.stringify({ name: form.identifier.trim() || 'Default Client' }),
+      body: JSON.stringify({ name: form.identifier.trim() || bookerDefaultClientName }),
     });
     refreshClients();
     setForm((prev) => ({ ...prev, client_id: String(created.id) }));
@@ -153,7 +154,9 @@ export function BrokersPage() {
               value={form.client_id}
               onChange={(e) => setForm({ ...form, client_id: e.target.value })}
             >
-              {clientOptions.length === 0 && <option value="">Will create Default Client</option>}
+              {clientOptions.length === 0 && (
+                <option value="">Will create {bookerDefaultClientName}</option>
+              )}
               {clientOptions.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name} (#{c.id})
