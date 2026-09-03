@@ -6,8 +6,9 @@ setup_policy:
   confirm_confidence: 0.0
   expiry_ms: 60000
   sticky_confirm_updates: 2
-  post_exit_cooldown_ms: 300000
-  reverse_needs_vflip_ms: 480000
+  post_exit_cooldown_ms: 300000  # non-flip exits only
+  reverse_needs_vflip_ms: 480000  # non-flip reverses only
+  moveflip_immediate_reverse: true
   types:
     - CONTINUATION
     - PULLBACK
@@ -20,8 +21,13 @@ setup_policy:
     - no_none_impulse_chop
     - closed_1m_candle_confirm
     - no_entry_on_spike
-    - post_exit_cooldown_5m
-    - reverse_needs_vflip
+    - moveflip_reverse_next_1m
+    - post_exit_cooldown_5m_non_flip
+    - reverse_needs_vflip_non_flip
     - refuse_entry_without_safety_sl
     - freeze_setup_while_open
     - structure_blocks_tip_floor_only  # at_tip/at_floor — not wide near_high/near_low (that froze CONTINUATION)
+    - mid_swing_uses_local_range       # late/impulse vs recent 12–15m range, not sticky overnight H/L
+    - no_entry_against_market_move     # no BUY vs DOWN trend / SELL vs UP (unless V-flip)
+    - two_candle_momentum_confirm     # need 2 same-color 1m (kill one-blip flips)
+    - no_continuation_at_local_climax  # block CONTINUATION at tip/floor of last 8m
