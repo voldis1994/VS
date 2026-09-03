@@ -145,6 +145,9 @@ function parseArgs(argv: string[]) {
     lot: 0.1,
     spread: 0.5,
     warmup: 60,
+    /** Ablation: drop candle+2bar+spike and against-move/climax gates */
+    loose: false,
+    tag: '' as string,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -152,7 +155,10 @@ function parseArgs(argv: string[]) {
     else if (a === '--lot') out.lot = Number(argv[++i]);
     else if (a === '--spread') out.spread = Number(argv[++i]);
     else if (a === '--warmup') out.warmup = Number(argv[++i]);
+    else if (a === '--loose') out.loose = true;
+    else if (a === '--tag') out.tag = String(argv[++i] || '');
   }
+  if (!out.tag) out.tag = out.loose ? 'loose' : 'strict';
   return out;
 }
 
@@ -421,6 +427,8 @@ function main() {
         minutes,
         livePx: mid,
         allowNoneImpulse: false,
+        skipCandleConfirm: opts.loose,
+        skipAgainstMove: opts.loose,
       });
 
       if (!entry) {
@@ -431,7 +439,7 @@ function main() {
           setup.playbook &&
           setup.kind !== 'NONE'
         ) {
-          const candleDeny = entryCandleConfirmDeny(setup.side, minutes);
+          const candleDeny = opts.loose ? null : entryCandleConfirmDeny(setup.side, minutes);
           if (candleDeny) {
             recordMiss(
               candleDeny,
@@ -443,7 +451,10 @@ function main() {
               i,
               last.ts
             );
-          } else if (entryAgainstMarketMove(setup.side, minutes, setup.kind)) {
+          } else if (
+            !opts.loose &&
+            entryAgainstMarketMove(setup.side, minutes, setup.kind)
+          ) {
             recordMiss(
               'against-move / local climax',
               'against_move',
@@ -558,6 +569,10 @@ function main() {
   const summary = {
     source: 'Yahoo Finance GC=F (public)',
     day: '2026-09-02',
+    mode: opts.loose
+      ? 'loose (no candle/2bar/spike, no against-move/climax)'
+      : 'strict (all quality gates)',
+    loose: opts.loose,
     bars: bars.length,
     warmup: opts.warmup,
     lot: opts.lot,
@@ -603,15 +618,17 @@ function main() {
   const reportDir = resolve(__dirname, 'reports');
   mkdirSync(outDir, { recursive: true });
   mkdirSync(reportDir, { recursive: true });
-  const jsonPath = resolve(outDir, 'gold-2026-09-02-backtest.json');
-  const mdPath = resolve(outDir, 'gold-2026-09-02-backtest.md');
-  const jsonReport = resolve(reportDir, 'gold-2026-09-02-backtest.json');
-  const mdReport = resolve(reportDir, 'gold-2026-09-02-backtest.md');
+  const stem = `gold-2026-09-02-backtest-${opts.tag}`;
+  const jsonPath = resolve(outDir, `${stem}.json`);
+  const mdPath = resolve(outDir, `${stem}.md`);
+  const jsonReport = resolve(reportDir, `${stem}.json`);
+  const mdReport = resolve(reportDir, `${stem}.md`);
 
   const md = [
-    `# Gold backtest — 2026-09-02 (1m)`,
+    `# Gold backtest — 2026-09-02 (1m) · ${opts.tag}`,
     ``,
     `Source: **Yahoo Finance GC=F** (public). Lot **${opts.lot}**. Spread **${opts.spread}**.`,
+    `Mode: **${summary.mode}**.`,
     `PnL: **£${gbpPerPoint.toFixed(2)} / point** (£1/pt @ 1.0 lot).`,
     ``,
     `## Result`,
@@ -674,7 +691,7 @@ function main() {
       return `| ${t.i} | ${t.side} | ${t.setup} | ${fmtTs(t.entryTs).slice(11, 16)} | ${fmtTs(t.exitTs).slice(11, 16)} | ${t.points.toFixed(2)} | ${t.pnlGbp.toFixed(2)} | ${t.mfe.toFixed(2)} | ${t.holdBars}m | ${t.exitReason.split('·')[0]!.trim()} | ${wrong} |`;
     }),
     ``,
-    `Full JSON: \`scripts/reports/gold-2026-09-02-backtest.json\``,
+    `Full JSON: \`scripts/reports/${stem}.json\``,
     ``,
   ].join('\n');
 
@@ -682,6 +699,12 @@ function main() {
   writeFileSync(mdPath, md);
   writeFileSync(jsonReport, JSON.stringify({ summary, trades, missed }, null, 2));
   writeFileSync(mdReport, md);
+
+  // Keep untagged alias for the strict/default run
+  if (!opts.loose) {
+    writeFileSync(resolve(reportDir, 'gold-2026-09-02-backtest.json'), JSON.stringify({ summary, trades, missed }, null, 2));
+    writeFileSync(resolve(reportDir, 'gold-2026-09-02-backtest.md'), md);
+  }
 
   console.log(JSON.stringify(summary, null, 2));
   console.log(`\nWrote ${mdPath}`);

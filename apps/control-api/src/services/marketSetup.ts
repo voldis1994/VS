@@ -1622,6 +1622,10 @@ export function decideUnifiedEntry(opts: {
   livePx?: number | null;
   /** When false, NONE never opens (strict setup-only). Default true = catch real moves. */
   allowNoneImpulse?: boolean;
+  /** Ablation / backtest: skip closed-candle + 2-bar momentum + spike gates */
+  skipCandleConfirm?: boolean;
+  /** Ablation / backtest: skip against-move + local climax gate */
+  skipAgainstMove?: boolean;
 }): SetupEntry | null {
   const {
     setup,
@@ -1630,6 +1634,8 @@ export function decideUnifiedEntry(opts: {
     minutes,
     livePx,
     allowNoneImpulse = true,
+    skipCandleConfirm = false,
+    skipAgainstMove = false,
   } = opts;
   if (!bar || bar.ticks < 1) return null;
 
@@ -1678,9 +1684,13 @@ export function decideUnifiedEntry(opts: {
   if (entryFightsStickyTrend(entry.direction, minutes)) return null;
   if (structureBlocksEntry(entry.direction, structure, entry.setup)) return null;
   // Hard: never open against the real move (bounce tip / finished impulse / local climax)
-  if (entryAgainstMarketMove(entry.direction, minutes, entry.setup)) return null;
-  const candleDeny = entryCandleConfirmDeny(entry.direction, minutes);
-  if (candleDeny) return null;
+  if (!skipAgainstMove && entryAgainstMarketMove(entry.direction, minutes, entry.setup)) {
+    return null;
+  }
+  if (!skipCandleConfirm) {
+    const candleDeny = entryCandleConfirmDeny(entry.direction, minutes);
+    if (candleDeny) return null;
+  }
   return entry;
 }
 
