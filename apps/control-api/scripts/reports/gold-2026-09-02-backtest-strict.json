@@ -4,6 +4,7 @@
     "day": "2026-09-02",
     "mode": "strict (all quality gates)",
     "loose": false,
+    "continuation_policy": "default",
     "bars": 1379,
     "warmup": 60,
     "lot": 0.1,

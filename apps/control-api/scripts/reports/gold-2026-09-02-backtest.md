@@ -1,6 +1,7 @@
-# Gold backtest — 2026-09-02 (1m)
+# Gold backtest — 2026-09-02 (1m) · strict
 
 Source: **Yahoo Finance GC=F** (public). Lot **0.1**. Spread **0.5**.
+Mode: **strict (all quality gates)**.
 PnL: **£0.10 / point** (£1/pt @ 1.0 lot).
 
 ## Result
@@ -101,4 +102,4 @@ Shadow = ja būtu iegujuši ar to pašu exit smadzenēm. Unnecessary = shadow pe
 | 33 | SELL | CONTINUATION | 22:21 | 22:23 | -1.80 | -0.18 | 0.00 | 2m | MoveFlip | Loss with no real MFE run (<0.8pt) — wro |
 | 34 | BUY | CONTINUATION | 23:56 | 23:57 | -2.00 | -0.20 | 0.00 | 1m | ThesisFailure | Loss with no real MFE run (<0.8pt) — wro |
 
-Full JSON: `scripts/reports/gold-2026-09-02-backtest.json`
+Full JSON: `scripts/reports/gold-2026-09-02-backtest-strict.json`

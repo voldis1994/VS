@@ -102,4 +102,4 @@ Shadow = ja būtu iegujuši ar to pašu exit smadzenēm. Unnecessary = shadow pe
 | 33 | SELL | CONTINUATION | 22:21 | 22:23 | -1.80 | -0.18 | 0.00 | 2m | MoveFlip | Loss with no real MFE run (<0.8pt) — wro |
 | 34 | BUY | CONTINUATION | 23:56 | 23:57 | -2.00 | -0.20 | 0.00 | 1m | ThesisFailure | Loss with no real MFE run (<0.8pt) — wro |
 
-Full JSON: `scripts/reports/gold-2026-09-02-backtest.json`
+Full JSON: `scripts/reports/gold-2026-09-02-backtest-strict.json`
