@@ -198,7 +198,7 @@ type Internal = RobotSession & {
   entry_minute_bucket: number;
 };
 
-const STRUCTURE_REFRESH_MS = 10_000;
+const STRUCTURE_REFRESH_MS = 3_000;
 const STRUCTURE_MINUTE_BARS = 120;
 const STRUCTURE_HOUR_BARS = 24;
 
@@ -369,12 +369,17 @@ async function refreshStructureAndSetup(
     s.structureBook.ready &&
     now - s.last_structure_fetch_ms < STRUCTURE_REFRESH_MS
   ) {
-    // Price left the swing band — refresh early so impulse flip is not 20s late
+    // Refresh early when price left the band OR is hugging an edge (need live low/high NOW)
+    const spanPad = Math.max(s.structureBook.span * 0.12, 1.0);
     const drifted =
       mid != null &&
-      (mid > s.structureBook.swing_high + Math.max(s.structureBook.span * 0.15, 1.2) ||
-        mid < s.structureBook.swing_low - Math.max(s.structureBook.span * 0.15, 1.2));
-    if (!drifted) return;
+      (mid > s.structureBook.swing_high + spanPad ||
+        mid < s.structureBook.swing_low - spanPad);
+    const huggingEdge =
+      mid != null &&
+      (mid >= s.structureBook.swing_high - spanPad ||
+        mid <= s.structureBook.swing_low + spanPad);
+    if (!drifted && !(huggingEdge && now - s.last_structure_fetch_ms >= 2_000)) return;
   }
   const [hist, hours] = await Promise.all([
     fetchCapitalMinutePrices(session, s.epic, STRUCTURE_MINUTE_BARS),
