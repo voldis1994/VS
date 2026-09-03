@@ -36,6 +36,7 @@ import {
   entryCandleConfirmDeny,
   flowAgreesWithSide,
   flowFlipAtExtreme,
+  LIVE_CONTINUATION_POLICY,
   liveFlow,
   minuteConfirmBar,
   playbookFromSetup,
@@ -405,8 +406,11 @@ async function refreshStructureAndSetup(
     prev: s.structureBook.ready ? s.structureBook : null,
   });
   // Setup sticky update only here (structure cadence) — not every 2s quote
+  // Live: no IMPULSE → CONTINUATION (Gold day loss driver)
   if (!s.open_side) {
-    s.marketSetup = updateSetupSticky(s.marketSetup, s.structureBook, hist.candles);
+    s.marketSetup = updateSetupSticky(s.marketSetup, s.structureBook, hist.candles, {
+      continuationPolicy: LIVE_CONTINUATION_POLICY,
+    });
     const pb = playbookFromSetup(s.marketSetup);
     if (pb) {
       s.playbook = pb;
@@ -1543,6 +1547,7 @@ async function robotCycleBody(s: Internal) {
       !s.entry_minute_bucket || minuteBucket > s.entry_minute_bucket;
 
     // ARMED setup only — NONE impulse was the overnight chop engine
+    // Live: no IMPULSE → CONTINUATION (Gold day 0-MFE spam)
     let entry = newMinute
       ? decideUnifiedEntry({
           setup,
@@ -1551,6 +1556,7 @@ async function robotCycleBody(s: Internal) {
           minutes: s.last_minute_candles,
           livePx,
           allowNoneImpulse: false,
+          continuationPolicy: LIVE_CONTINUATION_POLICY,
         })
       : null;
 

@@ -717,15 +717,15 @@ describe('CONTINUATION policies (ablation)', () => {
       bars.push(candle(o, o + 0.3, o - 1.5, o - 1.2));
     }
     const st = buildStructure({ minutes: bars, mid: bars[bars.length - 1]!.close });
-    const def = updateSetupSticky(emptySetup(), st, bars);
-    const noImp = updateSetupSticky(emptySetup(), st, bars, {
-      continuationPolicy: 'no_impulse',
+    const legacy = updateSetupSticky(emptySetup(), st, bars, {
+      continuationPolicy: 'default',
     });
-    // Default may arm IMPULSE CONTINUATION or BREAKOUT/FADE — policy must not keep IMPULSE→CONT
-    if (isImpulseContinuationReason(def.reason)) {
-      expect(isImpulseContinuationReason(noImp.reason)).toBe(false);
+    const live = updateSetupSticky(emptySetup(), st, bars); // LIVE = no_impulse
+    // Legacy may arm IMPULSE CONTINUATION — live must not keep IMPULSE→CONT
+    if (isImpulseContinuationReason(legacy.reason)) {
+      expect(isImpulseContinuationReason(live.reason)).toBe(false);
     }
-    expect(noImp.reason).not.toMatch(/IMPULSE (UP|DOWN) →/);
+    expect(live.reason).not.toMatch(/IMPULSE (UP|DOWN) →/);
   });
 
   it('narrow mid-leg helper rejects impulse and tip-zone reasons', () => {

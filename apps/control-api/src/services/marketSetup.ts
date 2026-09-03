@@ -846,6 +846,12 @@ export function dualSideWatch(
 /** Ablation / policy: how CONTINUATION is armed from structure. */
 export type ContinuationPolicy = 'default' | 'no_impulse' | 'narrow_midleg';
 
+/**
+ * Live desk policy — Gold 2026-09-02: IMPULSE → CONTINUATION drove £−0.38 day
+ * (0 MFE flip spam). no_impulse → £+1.45 on same day. Narrow mid-leg same P&L.
+ */
+export const LIVE_CONTINUATION_POLICY: ContinuationPolicy = 'no_impulse';
+
 /** Raw impulse blip → CONTINUATION (the Gold-day 0-MFE loss driver). */
 export function isImpulseContinuationReason(reason: string | null | undefined): boolean {
   return /IMPULSE (UP|DOWN) →/.test(String(reason || ''));
@@ -880,7 +886,7 @@ function rawSetupFromStructure(
   minutes: CapitalPriceCandle[],
   opts?: { continuationPolicy?: ContinuationPolicy }
 ): Omit<MarketSetup, 'confirm' | 'updated_at'> {
-  const contPolicy = opts?.continuationPolicy ?? 'default';
+  const contPolicy = opts?.continuationPolicy ?? LIVE_CONTINUATION_POLICY;
   const skipImpulseCont =
     contPolicy === 'no_impulse' || contPolicy === 'narrow_midleg';
   const narrowOnly = contPolicy === 'narrow_midleg';
@@ -1687,7 +1693,7 @@ export function decideUnifiedEntry(opts: {
     allowNoneImpulse = true,
     skipCandleConfirm = false,
     skipAgainstMove = false,
-    continuationPolicy = 'default',
+    continuationPolicy = LIVE_CONTINUATION_POLICY,
   } = opts;
   if (!bar || bar.ticks < 1) return null;
 

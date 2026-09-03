@@ -25,9 +25,9 @@ Removing **IMPULSE → CONTINUATION** flips the day from **£−0.38 → £+1.45
 
 On this sample, **no_impulse** and **narrow_midleg** produce the **same 8 trades / same P&L** (trade #1 differs only in arm text: tip-zone “Dump through low” vs mid-swing — same fill/exit). Extra narrow filters did not change the day further.
 
-**Recommendation:** ship **`no_impulse`** as the simpler default (kills the loss driver). Keep `narrow_midleg` as optional stricter policy if tip-zone CONTINUATION starts bleeding on other days.
+**Shipped live:** `LIVE_CONTINUATION_POLICY = 'no_impulse'` in `marketSetup.ts` + robot desk. Backtest default matches live (`--impulse-cont` restores legacy).
 
-## Remaining losses (both fix modes)
+## Remaining losses (live / no_impulse)
 
 | # | Side | Setup | £ | Note |
 | --- | --- | --- | ---: | --- |
