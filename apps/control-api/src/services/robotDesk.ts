@@ -22,6 +22,7 @@ import {
   type RegimeName,
 } from './regimes.js';
 import { decideBestOutcomeExit, executableFavorableMove } from './exitManage.js';
+import { postExitEntryGate } from './exitReentry.js';
 import {
   playbookFromRegime,
   type Playbook,
@@ -35,6 +36,7 @@ import {
   entryCandleConfirmDeny,
   flowAgreesWithSide,
   flowFlipAtExtreme,
+  LIVE_CONTINUATION_POLICY,
   liveFlow,
   minuteConfirmBar,
   playbookFromSetup,
@@ -185,6 +187,8 @@ type Internal = RobotSession & {
   /** Side we just closed — same side stays dead until flow flips */
   last_exit_side: 'BUY' | 'SELL' | null;
   last_exit_ms: number;
+  /** Exit reason — MoveFlip/ThesisFailure may reverse immediately */
+  last_exit_reason: string | null;
   /** After HardInvalidation / thesis fail — longer flip lock */
   last_hard_exit_ms: number;
   /** Skip overlapping setInterval ticks — one cycle at a time per robot */
@@ -286,6 +290,7 @@ function publicSession(s: Internal): RobotSession {
     last_entry_side_ms: _entrySideAt,
     last_exit_side: _exitSide,
     last_exit_ms: _exitAt,
+    last_exit_reason: _exitReason,
     last_hard_exit_ms: _hardExit,
     cycle_busy: _cycleBusy,
     entry_inflight: _entryInflight,
@@ -401,8 +406,11 @@ async function refreshStructureAndSetup(
     prev: s.structureBook.ready ? s.structureBook : null,
   });
   // Setup sticky update only here (structure cadence) — not every 2s quote
+  // Live: no IMPULSE → CONTINUATION (Gold day loss driver)
   if (!s.open_side) {
-    s.marketSetup = updateSetupSticky(s.marketSetup, s.structureBook, hist.candles);
+    s.marketSetup = updateSetupSticky(s.marketSetup, s.structureBook, hist.candles, {
+      continuationPolicy: LIVE_CONTINUATION_POLICY,
+    });
     const pb = playbookFromSetup(s.marketSetup);
     if (pb) {
       s.playbook = pb;
@@ -435,9 +443,9 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
     chain:
-      'Capital 1h+1m → STRUCTURE → SETUP(ARMED only) → closed 1m confirm → BEST OUTCOME · 5m post-exit cool-down',
+      'Capital 1h+1m → STRUCTURE → SETUP(ARMED only) → closed 1m confirm → BEST OUTCOME · MoveFlip reverses next 1m',
     note:
-      'Quality gate: no NONE impulse chop; closed candle confirm (no spike); 5m cool-down after exit; reverse needs V-flip; SAFETY SL required.',
+      'Quality gate: no NONE impulse chop; no IMPULSE→CONTINUATION; FADE vs hour blocked; CONT needs room+persist; closed candle confirm; MoveFlip→switch now; other exits 5m cool-down; SAFETY SL required.',
   };
 }
 
@@ -489,6 +497,7 @@ function clearTradeState(s: Internal) {
   s.entry_setup = null;
   s.mode = 'FLAT';
   // Always wait next 1m+ after exit — same-minute MoveFlip reverse caused overnight BUY↔SELL chop
+  // (wait next minute bar before any re-entry / reverse)
   s.entry_minute_bucket = Math.floor(Date.now() / 60_000);
 }
 
@@ -795,6 +804,7 @@ async function exitTrade(
   s.closed_at_ms = Date.now();
   s.last_exit_side = s.open_side;
   s.last_exit_ms = Date.now();
+  s.last_exit_reason = reason;
   if (/HardInvalidation|ThesisFailure|thesis/i.test(reason)) {
     s.last_hard_exit_ms = Date.now();
   }
@@ -1314,6 +1324,7 @@ async function robotCycleBody(s: Internal) {
           });
           s.last_exit_side = s.open_side;
           s.last_exit_ms = Date.now();
+          s.last_exit_reason = 'broker sync · flat elsewhere';
           s.closed_at_ms = Date.now();
           clearTradeState(s);
         } else {
@@ -1326,6 +1337,7 @@ async function robotCycleBody(s: Internal) {
           });
           s.last_exit_side = s.open_side;
           s.last_exit_ms = Date.now();
+          s.last_exit_reason = 'broker sync · closed externally';
           s.closed_at_ms = Date.now();
           clearTradeState(s);
         }
@@ -1534,21 +1546,8 @@ async function robotCycleBody(s: Internal) {
     const newMinute =
       !s.entry_minute_bucket || minuteBucket > s.entry_minute_bucket;
 
-    // Hard cool-down after ANY exit — overnight Gold chop was BUY↔SELL every ~5m
-    const EXIT_COOLDOWN_MS = 5 * 60_000;
-    if (s.last_exit_ms > 0 && Date.now() - s.last_exit_ms < EXIT_COOLDOWN_MS) {
-      const left = Math.ceil((EXIT_COOLDOWN_MS - (Date.now() - s.last_exit_ms)) / 1000);
-      pushTick(s, {
-        phase: 'WAIT',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `${ohlcLine} · post-exit cool-down ${left}s · quality over frequency`,
-      });
-      return;
-    }
-
     // ARMED setup only — NONE impulse was the overnight chop engine
+    // Live: no IMPULSE → CONTINUATION (Gold day 0-MFE spam)
     let entry = newMinute
       ? decideUnifiedEntry({
           setup,
@@ -1557,6 +1556,7 @@ async function robotCycleBody(s: Internal) {
           minutes: s.last_minute_candles,
           livePx,
           allowNoneImpulse: false,
+          continuationPolicy: LIVE_CONTINUATION_POLICY,
         })
       : null;
 
@@ -1586,42 +1586,27 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    // ONE rule: after exit, same side is dead until flow flips opposite
-    if (s.last_exit_side && entry.direction === s.last_exit_side) {
-      const flow = liveFlow(s.last_minute_candles);
-      const flipped =
-        (s.last_exit_side === 'BUY' && flow === 'DOWN') ||
-        (s.last_exit_side === 'SELL' && flow === 'UP');
-      if (!flipped) {
-        pushTick(s, {
-          phase: 'INFO',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `${ohlcLine} · same-side dead ${s.last_exit_side} until flip (flow ${flow || '—'}) · no spam re-entry`,
-        });
-        return;
-      }
-    }
-
-    // After cool-down, opposite still needs real V-flip for 8m (not first pullback)
-    if (
-      s.last_exit_side &&
-      entry.direction !== s.last_exit_side &&
-      Date.now() - s.last_exit_ms < 8 * 60_000
-    ) {
-      const flip = flowFlipAtExtreme(s.last_minute_candles);
-      const need: 'UP' | 'DOWN' = entry.direction === 'SELL' ? 'DOWN' : 'UP';
-      if (flip !== need) {
-        pushTick(s, {
-          phase: 'INFO',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `${ohlcLine} · reverse blocked · need V-flip ${need} after ${s.last_exit_side} exit (have ${flip || 'none'})`,
-        });
-        return;
-      }
+    // MoveFlip/ThesisFailure → reverse next 1m; other exits keep 5m cool-down
+    const reentry = postExitEntryGate({
+      nowMs: Date.now(),
+      lastExitMs: s.last_exit_ms,
+      lastExitSide: s.last_exit_side,
+      lastExitReason: s.last_exit_reason,
+      entryDirection: entry.direction,
+      flow: liveFlow(s.last_minute_candles),
+      vflip: flowFlipAtExtreme(s.last_minute_candles),
+      entrySetup: entry.setup,
+      entryReason: entry.reason,
+    });
+    if (!reentry.allow) {
+      pushTick(s, {
+        phase: reentry.detail?.includes('cool-down') ? 'WAIT' : 'INFO',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · ${reentry.detail}`,
+      });
+      return;
     }
 
     const direction = entry.direction;
@@ -1638,6 +1623,7 @@ async function robotCycleBody(s: Internal) {
     if (s.last_exit_side && direction !== s.last_exit_side) {
       s.last_exit_side = null;
       s.last_exit_ms = 0;
+      s.last_exit_reason = null;
     }
     pushTick(s, {
       phase: 'ORDER',
@@ -1804,6 +1790,7 @@ export async function startRobotSession(input: {
     last_entry_side_ms: 0,
     last_exit_side: null,
     last_exit_ms: 0,
+    last_exit_reason: null,
     last_hard_exit_ms: 0,
     cycle_busy: false,
     entry_inflight: false,

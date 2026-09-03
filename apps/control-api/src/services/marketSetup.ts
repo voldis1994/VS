@@ -92,6 +92,14 @@ export function entryCandleConfirmDeny(
     return 'wait · need closed red 1m confirm';
   }
 
+  // Momentum: two consecutive same-color 1m — one blip mid-move was the against-leg engine
+  if (direction === 'BUY' && !(prev.close > prev.open)) {
+    return 'wait · need 2 green 1m (momentum)';
+  }
+  if (direction === 'SELL' && !(prev.close < prev.open)) {
+    return 'wait · need 2 red 1m (momentum)';
+  }
+
   // After a large spike against us / exhaustion: confirm closes beyond spike close
   if (isSpikeCandle(prev, minutes.slice(0, -2))) {
     if (direction === 'SELL') {
@@ -421,6 +429,216 @@ export function recentImpulse(
   return null;
 }
 
+/** Recent local high/low — sticky overnight swing span must not decide "late". */
+export function recentLocalRange(
+  minutes: CapitalPriceCandle[],
+  n = 15
+): { hi: number; lo: number; span: number } {
+  const slice = minutes.slice(-Math.max(4, n));
+  const hi = Math.max(...slice.map((c) => c.high));
+  const lo = Math.min(...slice.map((c) => c.low));
+  return { hi, lo, span: Math.max(hi - lo, 1) };
+}
+
+/** Chop / micro-NONE entry quality filters (ablation). */
+export type MicroChopQuality =
+  | 'raw'
+  | 'hour'
+  | 'impulse'
+  | 'persist'
+  | 'room'
+  | 'cooldown'
+  | 'strict';
+
+/**
+ * Extra gates for NONE→micro entries. Raw = only existing against-move/candle.
+ * Strict stacks hour + impulse + mid-room + tip/floor + 8m cooldown.
+ */
+export function microChopEntryOk(opts: {
+  quality: MicroChopQuality;
+  direction: 'BUY' | 'SELL';
+  structure: StructureBook;
+  minutes: CapitalPriceCandle[];
+  lastMicroEntryMs?: number | null;
+  nowMs?: number;
+}): { ok: boolean; detail: string } {
+  const { quality, direction, structure, minutes } = opts;
+  if (quality === 'raw') return { ok: true, detail: 'raw' };
+
+  const last = minutes[minutes.length - 1];
+  if (!last) return { ok: false, detail: 'no bars' };
+  const imp = recentImpulse(minutes, 'flip') || recentImpulse(minutes);
+  const pers = persistence(minutes);
+  const local = recentLocalRange(minutes, 12);
+  const nowMs = opts.nowMs ?? Date.now();
+  const lastMicro = opts.lastMicroEntryMs ?? 0;
+
+  const needHour = quality === 'hour' || quality === 'strict';
+  const needImp = quality === 'impulse' || quality === 'strict';
+  const needPers = quality === 'persist' || quality === 'strict';
+  const needRoom = quality === 'room' || quality === 'strict';
+  const needCd = quality === 'cooldown' || quality === 'strict';
+  const cdMs = quality === 'strict' ? 8 * 60_000 : 10 * 60_000;
+
+  if (needHour) {
+    if (direction === 'BUY' && structure.hour_bias !== 'UP') {
+      return { ok: false, detail: `hour_bias ${structure.hour_bias}≠UP` };
+    }
+    if (direction === 'SELL' && structure.hour_bias !== 'DOWN') {
+      return { ok: false, detail: `hour_bias ${structure.hour_bias}≠DOWN` };
+    }
+  }
+  if (needImp) {
+    if (direction === 'BUY' && imp !== 'UP') {
+      return { ok: false, detail: `no UP impulse (${imp || 'none'})` };
+    }
+    if (direction === 'SELL' && imp !== 'DOWN') {
+      return { ok: false, detail: `no DOWN impulse (${imp || 'none'})` };
+    }
+  }
+  if (needPers) {
+    if (direction === 'BUY' && pers < 0.4) {
+      return { ok: false, detail: `persist ${pers.toFixed(2)} < 0.4` };
+    }
+    if (direction === 'SELL' && pers > -0.4) {
+      return { ok: false, detail: `persist ${pers.toFixed(2)} > -0.4` };
+    }
+  }
+  if (needRoom) {
+    if (local.span < 2.5) return { ok: false, detail: `local span ${local.span.toFixed(1)} < 2.5` };
+    const pos = (last.close - local.lo) / local.span;
+    // Need room to run — not buying local tip / selling local floor of the micro-range
+    if (direction === 'BUY' && pos > 0.82) {
+      return { ok: false, detail: `BUY late in local range (${(pos * 100).toFixed(0)}%)` };
+    }
+    if (direction === 'SELL' && pos < 0.18) {
+      return { ok: false, detail: `SELL late in local range (${(pos * 100).toFixed(0)}%)` };
+    }
+  }
+  if (quality === 'strict') {
+    if (direction === 'BUY' && structure.at_tip) return { ok: false, detail: 'at_tip' };
+    if (direction === 'SELL' && structure.at_floor) return { ok: false, detail: 'at_floor' };
+  }
+  if (needCd && lastMicro > 0 && nowMs - lastMicro < cdMs) {
+    return {
+      ok: false,
+      detail: `micro cool-down ${Math.round((cdMs - (nowMs - lastMicro)) / 1000)}s`,
+    };
+  }
+  return { ok: true, detail: quality };
+}
+
+/**
+ * Live FADE quality — Gold 13:37 FADE SELL into UP marketTrend = −£0.63.
+ * Hour alone is too blunt (blocked 03:37 FADE BUY winner during DOWN hour V-flip).
+ * Gate on marketTrend; allow V-flip at extreme against hour.
+ */
+export function fadeEntryQualityOk(opts: {
+  direction: 'BUY' | 'SELL';
+  structure: StructureBook;
+  minutes?: CapitalPriceCandle[] | null;
+  bar: TenSecBar;
+  swingHigh: number;
+  swingLow: number;
+}): { ok: boolean; detail: string } {
+  const { direction, structure, minutes, bar, swingHigh, swingLow } = opts;
+  const hour = structure.hour_bias;
+  const flip = minutes?.length ? flowFlipAtExtreme(minutes) : null;
+  const trend = minutes?.length ? marketTrend(minutes) : null;
+
+  // Hard for SELL fades into UP trend — no exception (13:37 −£0.63 class).
+  // BUY fade against DOWN trend OK only on V-flip UP (03:37 floor bounce).
+  if (direction === 'SELL' && trend === 'UP') {
+    return { ok: false, detail: 'FADE SELL vs marketTrend UP' };
+  }
+  if (direction === 'BUY' && trend === 'DOWN' && flip !== 'UP') {
+    return { ok: false, detail: 'FADE BUY vs marketTrend DOWN' };
+  }
+  // Hour fight only when no V-flip covering the fade
+  if (direction === 'SELL' && hour === 'UP' && flip !== 'DOWN') {
+    return { ok: false, detail: 'FADE SELL vs hour UP' };
+  }
+  if (direction === 'BUY' && hour === 'DOWN' && flip !== 'UP') {
+    return { ok: false, detail: 'FADE BUY vs hour DOWN' };
+  }
+  if (!minutes?.length) {
+    return { ok: true, detail: 'fade ok · no minutes' };
+  }
+  const last = minutes[minutes.length - 1]!;
+  const eps = edgeEps(last.close, Math.max(swingHigh - swingLow, structure.span, 1));
+  if (direction === 'SELL') {
+    if (!isFreshSwingHigh(minutes, swingHigh, eps)) {
+      return { ok: false, detail: 'FADE SELL · stale high' };
+    }
+    if (!(last.close <= swingHigh - eps * 0.1)) {
+      return { ok: false, detail: 'FADE SELL · no reclaim under high' };
+    }
+    if (last.close > last.open && last.high > swingHigh + eps * 0.25) {
+      return { ok: false, detail: 'FADE SELL · still thrusting green' };
+    }
+  } else {
+    if (!isFreshSwingLow(minutes, swingLow, eps)) {
+      return { ok: false, detail: 'FADE BUY · stale low' };
+    }
+    if (!(last.close >= swingLow + eps * 0.1)) {
+      return { ok: false, detail: 'FADE BUY · no reclaim over low' };
+    }
+    if (last.close < last.open && last.low < swingLow - eps * 0.25) {
+      return { ok: false, detail: 'FADE BUY · still thrusting red' };
+    }
+  }
+  if (direction === 'SELL' && bar.high < swingHigh - eps * 1.25) {
+    return { ok: false, detail: 'FADE SELL · did not tag high' };
+  }
+  if (direction === 'BUY' && bar.low > swingLow + eps * 1.25) {
+    return { ok: false, detail: 'FADE BUY · did not tag low' };
+  }
+  return { ok: true, detail: 'fade ok' };
+}
+
+/**
+ * Live CONTINUATION quality — room + climax + tip/floor.
+ * Persist kept light so real mid-leg dumps (01:57 winner) still fire.
+ */
+export function continuationEntryQualityOk(opts: {
+  direction: 'BUY' | 'SELL';
+  structure: StructureBook;
+  minutes?: CapitalPriceCandle[] | null;
+}): { ok: boolean; detail: string } {
+  const { direction, structure, minutes } = opts;
+  if (!minutes?.length) return { ok: true, detail: 'cont ok · no minutes' };
+  const last = minutes[minutes.length - 1]!;
+  const local = recentLocalRange(minutes, 12);
+
+  if (direction === 'BUY' && structure.at_tip) {
+    return { ok: false, detail: 'CONT BUY at_tip' };
+  }
+  if (direction === 'SELL' && structure.at_floor) {
+    return { ok: false, detail: 'CONT SELL at_floor' };
+  }
+  if (direction === 'BUY' && structure.bias === 'BELOW') {
+    return { ok: false, detail: 'CONT BUY vs bias BELOW' };
+  }
+  if (direction === 'SELL' && structure.bias === 'ABOVE') {
+    return { ok: false, detail: 'CONT SELL vs bias ABOVE' };
+  }
+  if (local.span < 2.0) {
+    return { ok: false, detail: `CONT local span ${local.span.toFixed(1)}` };
+  }
+  const pos = (last.close - local.lo) / local.span;
+  // Room to run — not buying local tip / selling local floor of micro-range
+  if (direction === 'BUY' && pos > 0.88) {
+    return { ok: false, detail: `CONT BUY late local ${(pos * 100).toFixed(0)}%` };
+  }
+  if (direction === 'SELL' && pos < 0.12) {
+    return { ok: false, detail: `CONT SELL late local ${(pos * 100).toFixed(0)}%` };
+  }
+  if (minutes.length >= 5 && atLocalClimax(direction, minutes)) {
+    return { ok: false, detail: 'CONT at local climax' };
+  }
+  return { ok: true, detail: 'cont ok' };
+}
+
 /**
  * Longer market direction (~20×1m). Bounce tips must not erase a live dump/rally.
  * Gold 17:41 class: BUY @ 4369 after 4374→ dump — short impulse said UP, market was DOWN.
@@ -629,6 +847,86 @@ export function moveStillPrinting(
 }
 
 /**
+ * Confirm bar is still pushing — used for diagnostics / tests.
+ * Prefer atLocalClimax for entry gates (new-extreme pushes late tip entries).
+ */
+export function confirmBarExtendsMove(
+  direction: 'BUY' | 'SELL',
+  minutes?: CapitalPriceCandle[] | null
+): boolean {
+  if (!minutes || minutes.length < 3) return false;
+  const cur = minutes[minutes.length - 1]!;
+  const prior = minutes.slice(-6, -1);
+  const priorHi = Math.max(...prior.map((c) => c.high));
+  const priorLo = Math.min(...prior.map((c) => c.low));
+  if (direction === 'BUY') return cur.high >= priorHi;
+  return cur.low <= priorLo;
+}
+
+/**
+ * Buying the local tip / selling the local floor of the last ~8×1m — climax chase.
+ * Gold day wrong entries: IMPULSE at end of micro-leg → 0 MFE reverse.
+ */
+export function atLocalClimax(
+  direction: 'BUY' | 'SELL',
+  minutes?: CapitalPriceCandle[] | null
+): boolean {
+  if (!minutes || minutes.length < 5) return false;
+  const slice = minutes.slice(-8);
+  const last = slice[slice.length - 1]!;
+  const hi = Math.max(...slice.map((c) => c.high));
+  const lo = Math.min(...slice.map((c) => c.low));
+  const span = hi - lo;
+  const minSpan = Math.max(Math.abs(last.close) * 0.00045, 1.6);
+  if (span < minSpan) return false;
+  if (direction === 'BUY') {
+    return last.close >= hi - span * 0.12 || last.high >= hi - span * 0.05;
+  }
+  return last.close <= lo + span * 0.12 || last.low <= lo + span * 0.05;
+}
+
+/**
+ * True when entry would fight the real market move (bounce tip / late flip / climax).
+ * Gold backtest 2026-09-02: CONTINUATION entered on brief flow blip vs sticky trend
+ * → 0 MFE then ThesisFailure/MoveFlip within 1–3m.
+ * V-flip at fresh extreme is the only exception for trend fights.
+ * BREAKOUT may still fire at the edge — climax block is for CONTINUATION-style rides.
+ */
+export function entryAgainstMarketMove(
+  direction: 'BUY' | 'SELL',
+  minutes?: CapitalPriceCandle[] | null,
+  setupKind?: string | null
+): boolean {
+  if (!minutes?.length) return true;
+  const flow = liveFlow(minutes);
+  if (!flow) return true;
+  if (direction === 'BUY' && flow !== 'UP') return true;
+  if (direction === 'SELL' && flow !== 'DOWN') return true;
+
+  const flip = flowFlipAtExtreme(minutes);
+  const trend = marketTrend(minutes);
+  const kind = String(setupKind || '').trim().toUpperCase();
+
+  if (flip) {
+    if (direction === 'BUY' && flip !== 'UP') return true;
+    if (direction === 'SELL' && flip !== 'DOWN') return true;
+    if (!moveStillPrinting(flow, minutes)) return true;
+    if (moveAlreadyFinished(direction, minutes)) return true;
+    // V-flip leg may reclaim through the local window — climax check would block the turn
+    return false;
+  }
+  if (trend) {
+    if (direction === 'BUY' && trend === 'DOWN') return true;
+    if (direction === 'SELL' && trend === 'UP') return true;
+  }
+
+  if (!moveStillPrinting(flow, minutes)) return true;
+  if (moveAlreadyFinished(direction, minutes)) return true;
+  if (kind !== 'BREAKOUT' && atLocalClimax(direction, minutes)) return true;
+  return false;
+}
+
+/**
  * True when chasing a move that already finished (tip / rolled spike).
  * Gold 13:24 SELL @ dump floor 4334.90 after 4344→4335 — late.
  * Gold 13:29 BUY @ 4337 after UP spike already gave back — late.
@@ -657,8 +955,9 @@ export function moveAlreadyFinished(
   const lastI = slice.length - 1;
 
   if (direction === 'SELL') {
-    // Still extending through lows — not finished
+    // Still extending / owning the live low with a red body — not finished
     if (px < lo) return false;
+    if (loAt === lastI && last.close <= last.open) return false;
     const fromPeak = hi - px;
     // Dump mostly done + stalling at floor (tiny last body) — late short
     if (fromPeak >= span * 0.7 && last.low <= lo + span * 0.1 && lastBody < span * 0.2) {
@@ -672,8 +971,9 @@ export function moveAlreadyFinished(
   }
 
   // BUY — tip chase or buying after the UP spike already rolled over
-  // Still extending through highs — not finished
+  // Still extending / owning the live high with a green body — not finished
   if (px > hi) return false;
+  if (hiAt === lastI && last.close >= last.open) return false;
   const givenBack = hi - px;
   if (givenBack <= span * 0.12 && lastBody < span * 0.2 && last.high >= hi - span * 0.1) {
     return true;
@@ -742,10 +1042,54 @@ export function dualSideWatch(
   return { watch_buy, watch_sell };
 }
 
+/** Ablation / policy: how CONTINUATION is armed from structure. */
+export type ContinuationPolicy = 'default' | 'no_impulse' | 'narrow_midleg';
+
+/**
+ * Live desk policy — Gold 2026-09-02: IMPULSE → CONTINUATION drove £−0.38 day
+ * (0 MFE flip spam). no_impulse → £+1.45 on same day. Narrow mid-leg same P&L.
+ */
+export const LIVE_CONTINUATION_POLICY: ContinuationPolicy = 'no_impulse';
+
+/** Raw impulse blip → CONTINUATION (the Gold-day 0-MFE loss driver). */
+export function isImpulseContinuationReason(reason: string | null | undefined): boolean {
+  return /IMPULSE (UP|DOWN) →/.test(String(reason || ''));
+}
+
+/**
+ * True mid-leg CONTINUATION (not tip-zone ride, not raw impulse arm).
+ * Used by narrow_midleg policy at arm + entry.
+ */
+export function isNarrowMidlegContinuation(
+  setup: { kind: string; side: 'BUY' | 'SELL' | null; reason: string },
+  structure: StructureBook,
+  minutes?: CapitalPriceCandle[] | null
+): boolean {
+  if (setup.kind !== 'CONTINUATION' || !setup.side) return false;
+  if (isImpulseContinuationReason(setup.reason)) return false;
+  const r = String(setup.reason || '');
+  // Explicit mid-leg / mid-swing arms only — tip-zone "Rally/Dump through" stays out
+  const midReason =
+    /CONTINUATION (up|down) ·/.test(r) || /CONTINUATION mid-swing/.test(r);
+  if (!midReason) return false;
+  if (setup.side === 'BUY' && structure.at_tip) return false;
+  if (setup.side === 'SELL' && structure.at_floor) return false;
+  if (setup.side === 'BUY' && structure.bias === 'BELOW') return false;
+  if (setup.side === 'SELL' && structure.bias === 'ABOVE') return false;
+  if (minutes?.length && atLocalClimax(setup.side, minutes)) return false;
+  return true;
+}
+
 function rawSetupFromStructure(
   structure: StructureBook,
-  minutes: CapitalPriceCandle[]
+  minutes: CapitalPriceCandle[],
+  opts?: { continuationPolicy?: ContinuationPolicy }
 ): Omit<MarketSetup, 'confirm' | 'updated_at'> {
+  const contPolicy = opts?.continuationPolicy ?? LIVE_CONTINUATION_POLICY;
+  const skipImpulseCont =
+    contPolicy === 'no_impulse' || contPolicy === 'narrow_midleg';
+  const narrowOnly = contPolicy === 'narrow_midleg';
+
   if (!structure.ready || minutes.length < MIN_SWING_BARS) {
     return {
       kind: 'NONE',
@@ -772,17 +1116,23 @@ function rawSetupFromStructure(
   const freshLo = isFreshSwingLow(minutes, lo, eps);
 
   // ——— IMPULSE FIRST — real extension only (not bounce mid-dump / late under high) ———
+  // When book H/L is still the LOCAL extreme, keep the classic "late" distance vs swing span.
+  // When book H/L is sticky overnight (far outside local range), only local late applies —
+  // otherwise mid @4422 with H4440/L4417 is always "late" → eternal NONE · mid swing.
   if (imp === 'UP') {
     const flow = priceFlowBias(minutes);
-    const span = Math.max(hi - lo, structure.span, 1);
+    const local = recentLocalRange(minutes);
+    const fromLocalHi = local.hi - last.close;
     const fromHi = hi - last.close;
-    // Bounce tip mid-dump — trust flow (flip-first), not sticky 20m trend alone
+    const span = Math.max(hi - lo, structure.span, 1);
     const bounceInDump = flow === 'DOWN';
-    // Not through high and already gave back from swing high — UP move finished
+    const hiIsLocal = hi <= local.hi + eps * 0.25;
     const lateUnderHigh =
       !closedAbove &&
       last.close < hi - eps * 0.5 &&
-      fromHi >= Math.max(span * 0.22, eps * 2.5);
+      (hiIsLocal
+        ? fromHi >= Math.max(span * 0.22, eps * 2.5)
+        : fromLocalHi >= Math.max(local.span * 0.5, eps * 1.5, 2.5));
     if (!bounceInDump && !lateUnderHigh) {
       if (closedAbove || last.close >= hi - eps * 0.5) {
         return {
@@ -795,26 +1145,34 @@ function rawSetupFromStructure(
           reason: `IMPULSE UP through H${hi.toFixed(2)} → BUY flip now`,
         };
       }
-      return {
-        kind: 'CONTINUATION',
-        side: 'BUY',
-        playbook: 'LONG',
-        status: 'ARMED',
-        swing_high: hi,
-        swing_low: lo,
-        reason: `IMPULSE UP → BUY flip now · mid ${structure.mid.toFixed(2)}`,
-      };
+      // Ablation: no_impulse / narrow_midleg — do not arm CONTINUATION from raw impulse blip
+      if (!skipImpulseCont) {
+        return {
+          kind: 'CONTINUATION',
+          side: 'BUY',
+          playbook: 'LONG',
+          status: 'ARMED',
+          swing_high: hi,
+          swing_low: lo,
+          reason: `IMPULSE UP → BUY flip now · mid ${structure.mid.toFixed(2)}`,
+        };
+      }
     }
   }
   if (imp === 'DOWN') {
     const flow = priceFlowBias(minutes);
-    const span = Math.max(hi - lo, structure.span, 1);
+    const local = recentLocalRange(minutes);
+    const fromLocalLo = last.close - local.lo;
     const fromLo = last.close - lo;
+    const span = Math.max(hi - lo, structure.span, 1);
     const bounceInRally = flow === 'UP';
+    const loIsLocal = lo >= local.lo - eps * 0.25;
     const lateAboveFloor =
       !closedBelow &&
       last.close > lo + eps * 0.5 &&
-      fromLo >= Math.max(span * 0.22, eps * 2.5);
+      (loIsLocal
+        ? fromLo >= Math.max(span * 0.22, eps * 2.5)
+        : fromLocalLo >= Math.max(local.span * 0.5, eps * 1.5, 2.5));
     if (!bounceInRally && !lateAboveFloor) {
       if (closedBelow || last.close <= lo + eps * 0.5) {
         return {
@@ -827,19 +1185,22 @@ function rawSetupFromStructure(
           reason: `IMPULSE DOWN through L${lo.toFixed(2)} → SELL flip now`,
         };
       }
-      return {
-        kind: 'CONTINUATION',
-        side: 'SELL',
-        playbook: 'LONG',
-        status: 'ARMED',
-        swing_high: hi,
-        swing_low: lo,
-        reason: `IMPULSE DOWN → SELL flip now · mid ${structure.mid.toFixed(2)}`,
-      };
+      if (!skipImpulseCont) {
+        return {
+          kind: 'CONTINUATION',
+          side: 'SELL',
+          playbook: 'LONG',
+          status: 'ARMED',
+          swing_high: hi,
+          swing_low: lo,
+          reason: `IMPULSE DOWN → SELL flip now · mid ${structure.mid.toFixed(2)}`,
+        };
+      }
     }
   }
 
   // FAILED_BREAK — only on a FRESH swing extreme, never mid-rally / mid-dump fade
+  // Trend fights gated at entry (fadeEntryQualityOk)
   if (
     pokeAbove &&
     freshHi &&
@@ -901,6 +1262,7 @@ function rawSetupFromStructure(
 
   // FADE at FRESH swing edges only — never SELL mid-rally / BUY mid-dump on stale level
   // Also: if price is still dumping, do NOT arm FADE BUY (falling knife) — ride SELL
+  // Hour/trend fights are gated at entry (fadeEntryQualityOk) so V-flip floors can still arm
   const flow = priceFlowBias(minutes);
   if (structure.near_high && !closedAbove && freshHi && flow !== 'UP') {
     return {
@@ -913,7 +1275,8 @@ function rawSetupFromStructure(
       reason: `FADE SELL at fresh swing high ${hi.toFixed(2)} · no BUY at tip`,
     };
   }
-  if (structure.near_high && !closedAbove && freshHi && flow === 'UP') {
+  // Tip-zone ride (not true mid-leg) — skip under narrow_midleg
+  if (!narrowOnly && structure.near_high && !closedAbove && freshHi && flow === 'UP') {
     return {
       kind: 'CONTINUATION',
       side: 'BUY',
@@ -935,7 +1298,7 @@ function rawSetupFromStructure(
       reason: `FADE BUY at fresh swing low ${lo.toFixed(2)} · no SELL at floor`,
     };
   }
-  if (structure.near_low && !closedBelow && freshLo && flow === 'DOWN') {
+  if (!narrowOnly && structure.near_low && !closedBelow && freshLo && flow === 'DOWN') {
     return {
       kind: 'CONTINUATION',
       side: 'SELL',
@@ -1005,6 +1368,52 @@ function rawSetupFromStructure(
     }
   }
 
+  // Mid-swing ride — only when book H/L is sticky-wide vs local (overnight trap).
+  // Do NOT use on normal local swings (Gold 13:50 bounce under high must stay blocked).
+  {
+    const local = recentLocalRange(minutes, 12);
+    const flowNow = priceFlowBias(minutes);
+    const stickyWide = span > local.span * 1.6;
+    if (
+      stickyWide &&
+      !structure.at_floor &&
+      !closedAbove &&
+      flowNow === 'DOWN' &&
+      last.close < structure.mid &&
+      local.hi - last.close >= Math.max(local.span * 0.35, 1.5) &&
+      pers <= -0.15
+    ) {
+      return {
+        kind: 'CONTINUATION',
+        side: 'SELL',
+        playbook: 'LONG',
+        status: 'ARMED',
+        swing_high: hi,
+        swing_low: lo,
+        reason: `CONTINUATION mid-swing SELL · local dump from ${local.hi.toFixed(2)} · below mid ${structure.mid.toFixed(2)}`,
+      };
+    }
+    if (
+      stickyWide &&
+      !structure.at_tip &&
+      !closedBelow &&
+      flowNow === 'UP' &&
+      last.close > structure.mid &&
+      last.close - local.lo >= Math.max(local.span * 0.35, 1.5) &&
+      pers >= 0.15
+    ) {
+      return {
+        kind: 'CONTINUATION',
+        side: 'BUY',
+        playbook: 'LONG',
+        status: 'ARMED',
+        swing_high: hi,
+        swing_low: lo,
+        reason: `CONTINUATION mid-swing BUY · local rally from ${local.lo.toFixed(2)} · above mid ${structure.mid.toFixed(2)}`,
+      };
+    }
+  }
+
   // Stale edge → readable NONE
   if (structure.near_high && !freshHi) {
     return {
@@ -1047,9 +1456,10 @@ function rawSetupFromStructure(
 export function updateSetupSticky(
   prev: MarketSetup | null | undefined,
   structure: StructureBook,
-  minutes: CapitalPriceCandle[]
+  minutes: CapitalPriceCandle[],
+  opts?: { continuationPolicy?: ContinuationPolicy }
 ): MarketSetup {
-  const raw = rawSetupFromStructure(structure, minutes);
+  const raw = rawSetupFromStructure(structure, minutes, opts);
   const now = new Date().toISOString();
   const prevSafe = prev || emptySetup();
   const imp = recentImpulse(minutes, 'flip') || recentImpulse(minutes);
@@ -1194,7 +1604,8 @@ export function decideEntryFromSetup(
   setup: MarketSetup,
   bar: TenSecBar,
   minutes?: CapitalPriceCandle[] | null,
-  livePx?: number | null
+  livePx?: number | null,
+  structure?: StructureBook | null
 ): SetupEntry | null {
   if (setup.kind === 'NONE' || setup.status !== 'ARMED' || !setup.side || !setup.playbook) {
     return null;
@@ -1221,12 +1632,12 @@ export function decideEntryFromSetup(
     swing_low: lo,
     mid: (hi + lo) / 2,
     span: Math.max(hi - lo, 1),
-    bias: 'INSIDE',
+    bias: structure?.bias ?? 'INSIDE',
     near_high: px >= hi - eps,
     near_low: px <= lo + eps,
-    at_tip: px >= hi - tipEps,
-    at_floor: px <= lo + tipEps,
-    hour_bias: 'UNKNOWN',
+    at_tip: structure?.at_tip ?? px >= hi - tipEps,
+    at_floor: structure?.at_floor ?? px <= lo + tipEps,
+    hour_bias: structure?.hour_bias ?? 'UNKNOWN',
     bar_count: minutes?.length ?? 0,
     detail: '',
     updated_at: '',
@@ -1238,6 +1649,15 @@ export function decideEntryFromSetup(
   }
 
   if (setup.kind === 'FADE' || setup.kind === 'FAILED_BREAK') {
+    const fadeQ = fadeEntryQualityOk({
+      direction: setup.side,
+      structure: structLike,
+      minutes,
+      bar: { ...bar, close: px },
+      swingHigh: hi,
+      swingLow: lo,
+    });
+    if (!fadeQ.ok) return null;
     if (setup.side === 'BUY') {
       const touched = bar.low <= lo + eps;
       // Only block if bar is clearly dumping through the floor
@@ -1332,6 +1752,15 @@ export function decideEntryFromSetup(
     if (setup.side === 'SELL' && contFlow !== 'DOWN') return null;
     if (!moveStillPrinting(contFlow, minutes)) return null;
     if (moveAlreadyFinished(setup.side, minutes, bar.close)) return null;
+    // Mid-swing / mid-leg CONTINUATION — room + climax; tip-zone dump/rally keeps lighter gates
+    if (/mid-swing|CONTINUATION (up|down) ·/.test(setup.reason)) {
+      const contQ = continuationEntryQualityOk({
+        direction: setup.side,
+        structure: structure ?? structLike,
+        minutes,
+      });
+      if (!contQ.ok) return null;
+    }
     return {
       direction: setup.side,
       setup: 'CONTINUATION',
@@ -1464,6 +1893,16 @@ export function decideUnifiedEntry(opts: {
   livePx?: number | null;
   /** When false, NONE never opens (strict setup-only). Default true = catch real moves. */
   allowNoneImpulse?: boolean;
+  /** Ablation / backtest: skip closed-candle + 2-bar momentum + spike gates */
+  skipCandleConfirm?: boolean;
+  /** Ablation / backtest: skip against-move + local climax gate */
+  skipAgainstMove?: boolean;
+  /**
+   * CONTINUATION policy (ablation / candidate fix):
+   * - no_impulse: refuse entries whose setup reason is raw IMPULSE → CONTINUATION
+   * - narrow_midleg: only true mid-leg CONTINUATION (bias + not climax + mid reason)
+   */
+  continuationPolicy?: ContinuationPolicy;
 }): SetupEntry | null {
   const {
     setup,
@@ -1472,6 +1911,9 @@ export function decideUnifiedEntry(opts: {
     minutes,
     livePx,
     allowNoneImpulse = true,
+    skipCandleConfirm = false,
+    skipAgainstMove = false,
+    continuationPolicy = LIVE_CONTINUATION_POLICY,
   } = opts;
   if (!bar || bar.ticks < 1) return null;
 
@@ -1481,7 +1923,7 @@ export function decideUnifiedEntry(opts: {
   let entry: SetupEntry | null = null;
 
   if (armed) {
-    const fromSetup = decideEntryFromSetup(setup, bar, minutes, livePx);
+    const fromSetup = decideEntryFromSetup(setup, bar, minutes, livePx, structure);
     if (fromSetup) {
       entry = fromSetup;
     } else if (setup.kind === 'CONTINUATION' || setup.kind === 'BREAKOUT') {
@@ -1517,10 +1959,64 @@ export function decideUnifiedEntry(opts: {
   }
 
   if (!entry) return null;
+
+  // Live entry quality — FADE tip always; CONTINUATION mid-leg only on ARMED CONT
+  // (NONE→impulse CONTINUATION is ablation-only and keeps its own filters)
+  if (entry.setup === 'FADE' || entry.setup === 'FAILED_BREAK') {
+    const fadeQ = fadeEntryQualityOk({
+      direction: entry.direction,
+      structure,
+      minutes,
+      bar,
+      swingHigh: setup.swing_high || structure.swing_high,
+      swingLow: setup.swing_low || structure.swing_low,
+    });
+    if (!fadeQ.ok) return null;
+  }
+  if (
+    entry.setup === 'CONTINUATION' &&
+    armed &&
+    setup.kind === 'CONTINUATION' &&
+    /mid-swing|CONTINUATION (up|down) ·/.test(setup.reason)
+  ) {
+    const contQ = continuationEntryQualityOk({
+      direction: entry.direction,
+      structure,
+      minutes,
+    });
+    if (!contQ.ok) return null;
+  }
+
+  // CONTINUATION ablation gates (setup sticky may still carry legacy IMPULSE reason)
+  if (entry.setup === 'CONTINUATION') {
+    if (
+      continuationPolicy === 'no_impulse' &&
+      (isImpulseContinuationReason(setup.reason) ||
+        isImpulseContinuationReason(entry.reason))
+    ) {
+      return null;
+    }
+    if (continuationPolicy === 'narrow_midleg') {
+      // Armed mid-leg path: require narrow quality on sticky setup
+      if (armed && setup.kind === 'CONTINUATION') {
+        if (!isNarrowMidlegContinuation(setup, structure, minutes)) return null;
+      } else {
+        // NONE→impulse CONTINUATION path is never narrow mid-leg
+        return null;
+      }
+    }
+  }
+
   if (entryFightsStickyTrend(entry.direction, minutes)) return null;
   if (structureBlocksEntry(entry.direction, structure, entry.setup)) return null;
-  const candleDeny = entryCandleConfirmDeny(entry.direction, minutes);
-  if (candleDeny) return null;
+  // Hard: never open against the real move (bounce tip / finished impulse / local climax)
+  if (!skipAgainstMove && entryAgainstMarketMove(entry.direction, minutes, entry.setup)) {
+    return null;
+  }
+  if (!skipCandleConfirm) {
+    const candleDeny = entryCandleConfirmDeny(entry.direction, minutes);
+    if (candleDeny) return null;
+  }
   return entry;
 }
 
