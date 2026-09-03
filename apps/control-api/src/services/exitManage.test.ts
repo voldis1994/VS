@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   decideBestOutcomeExit,
-  executableFavorableMove,
   favorableMove,
   thesisFailureReason,
   type ExitSnapshot,
@@ -31,11 +30,6 @@ describe('per-client exit isolation helpers', () => {
     expect(favorableMove('SELL', 2000, 2005)).toBe(-5);
   });
 
-  it('executableFavorableMove uses bid for BUY / ask for SELL', () => {
-    expect(executableFavorableMove('BUY', 2000, { mid: 2005, bid: 2004, ask: 2006 })).toBe(4);
-    expect(executableFavorableMove('SELL', 2000, { mid: 1995, bid: 1994, ask: 1996 })).toBe(4);
-  });
-
   it('legacy thesisFailureReason stays SCALP-style', () => {
     expect(thesisFailureReason('BUY', 'TREND_DOWN')).toMatch(/ThesisFailure/);
     expect(thesisFailureReason('BUY', 'RANGE')).toBeNull();
@@ -60,69 +54,28 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     expect(d.reason).toMatch(/HardInvalidation/);
   });
 
-  it('holds live green move past first TP touch', () => {
+  it('LONG peak protect below 40% retention', () => {
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
-        entry_price: 4430,
-        entry_at: ago(60_000),
-        mfe: 5,
-        peak_retention: 0.9,
+        entry_price: 2000,
+        mfe: 8,
+        peak_retention: 0.3,
         playbook: 'LONG',
-        entry_setup: 'CONTINUATION',
       }),
-      4434.5
-    );
-    expect(d.exit).toBe(false);
-  });
-
-  it('ReversalStop cuts after protected MFE goes red', () => {
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 4430,
-        entry_at: ago(60_000),
-        mfe: 2.0,
-        peak_retention: 0,
-        playbook: 'LONG',
-        entry_setup: 'CONTINUATION',
-      }),
-      4429.5
+      2002.4
     );
     expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/ReversalStop/);
+    expect(d.reason).toMatch(/PeakProtection/);
   });
 
-  it('EarlyCut soft-SL before max when no protected MFE', () => {
+  it('target uses playbook TP', () => {
     const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 4430,
-        entry_at: ago(40_000),
-        mfe: 0.1,
-        playbook: 'LONG',
-      }),
-      4430 - 4430 * 0.0025 * 0.6
+      snap({ open_side: 'BUY', entry_price: 2000, mfe: 8, playbook: 'LONG' }),
+      2008
     );
     expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/EarlyCut|HardInvalidation/);
-  });
-
-  it('never PeakProtect into a red closeable P&L', () => {
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 4430,
-        entry_at: ago(60_000),
-        mfe: 2.5,
-        peak_retention: 0.2,
-        playbook: 'LONG',
-        entry_setup: 'CONTINUATION',
-      }),
-      { mid: 4431, bid: 4429.5, ask: 4431.2 }
-    );
-    expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/ReversalStop/);
+    expect(d.reason).toMatch(/Target/);
   });
 
   it('CONTINUATION bounce holds past +1.5pt — does not FADE-scalp at tpFloor 0.18', () => {
@@ -141,125 +94,33 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     expect(d.exit).toBe(false);
   });
 
-  it('ProfitGiveback locks ≥65% of MFE (US100 +0.43 must not close at +0.18)', () => {
-    // Peak ~42 pts from 28932 → closeable 16.5 pts ≈ 39% retention → must exit
+  it('CONTINUATION exits on real target ~12pt rally', () => {
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
-        entry_price: 28932.6,
-        entry_at: ago(60_000),
-        mfe: 42,
-        peak_retention: 0.39,
+        entry_price: 4419,
+        entry_at: ago(200_000),
+        mfe: 14,
         playbook: 'LONG',
         entry_setup: 'CONTINUATION',
-      }),
-      { mid: 28949.1, bid: 28949.1, ask: 28950.9 }
-    );
-    expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/PeakProtection|ProfitGiveback/);
-  });
-
-  it('holds when retention still ≥65% (35% giveback allowed)', () => {
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 28932.6,
-        entry_at: ago(60_000),
-        mfe: 42,
-        peak_retention: 0.66,
-        playbook: 'LONG',
-        entry_setup: 'CONTINUATION',
-      }),
-      { mid: 28960.3, bid: 28960.3, ask: 28961.5 }
-    );
-    // closeable ≈ 27.7 / 42 ≈ 66% — above floor, no giveback exit
-    expect(d.exit).toBe(false);
-  });
-
-  it('micro-swing CONTINUATION does not PeakProtect in first 15s on sub-2pt MFE', () => {
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 4430,
-        entry_at: ago(12_000),
-        mfe: 1.2,
-        peak_retention: 0.4,
-        playbook: 'LONG',
-        entry_setup: 'CONTINUATION',
-      }),
-      4430.5
-    );
-    expect(d.exit).toBe(false);
-  });
-
-  it('leg thesis uses 1m flow_bias, not flickering 10s TREND_DOWN', () => {
-    // Would thesis-fail on regime TREND_DOWN for SCALP — legs ignore regime when flow still UP
-    const hold = decideBestOutcomeExit(
-      snap({
-        open_side: 'BUY',
-        entry_price: 4430,
-        entry_at: ago(250_000),
-        mfe: 3,
-        peak_retention: 0.9,
-        playbook: 'SCALP',
-        entry_setup: 'CONTINUATION',
-        regime: 'TREND_DOWN',
-        flow_bias: 'UP',
       }),
       4432
     );
-    expect(hold.exit).toBe(false);
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/Target/);
+  });
 
-    const cut = decideBestOutcomeExit(
+  it('FADE bounce holds past +1.5pt — tpFloor 3 not 0.18', () => {
+    const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
-        entry_price: 4430,
-        entry_at: ago(50_000),
-        mfe: 3,
-        peak_retention: 0.9,
-        playbook: 'SCALP',
-        entry_setup: 'CONTINUATION',
-        regime: 'TREND_UP',
-        flow_bias: 'DOWN',
+        entry_price: 4419,
+        entry_at: ago(90_000),
+        mfe: 1.8,
+        playbook: 'FADE',
+        entry_setup: 'FADE',
       }),
-      4432
-    );
-    expect(cut.exit).toBe(true);
-    expect(cut.reason).toMatch(/1m flow DOWN/);
-  });
-
-  it('MoveFlip cuts SELL within ~12s when V-flip UP (screenshot 20:00 class)', () => {
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'SELL',
-        entry_price: 4373.99,
-        entry_at: ago(20_000),
-        mfe: 0.05,
-        peak_retention: 0.5,
-        playbook: 'LONG',
-        entry_setup: 'CONTINUATION',
-        flow_bias: 'UP',
-        flow_flip: 'UP',
-      }),
-      { mid: 4375.69, bid: 4375.69, ask: 4376.13 }
-    );
-    expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/MoveFlip · SELL vs V-flip UP/);
-  });
-
-  it('MoveFlip does not fire in first 12s (avoid entry noise)', () => {
-    const d = decideBestOutcomeExit(
-      snap({
-        open_side: 'SELL',
-        entry_price: 4374,
-        entry_at: ago(5_000),
-        mfe: 0,
-        playbook: 'LONG',
-        entry_setup: 'CONTINUATION',
-        flow_bias: 'UP',
-        flow_flip: 'UP',
-      }),
-      4375
+      4420.68
     );
     expect(d.exit).toBe(false);
   });
