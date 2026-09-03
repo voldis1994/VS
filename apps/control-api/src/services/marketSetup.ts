@@ -92,6 +92,14 @@ export function entryCandleConfirmDeny(
     return 'wait · need closed red 1m confirm';
   }
 
+  // Momentum: two consecutive same-color 1m — one blip mid-move was the against-leg engine
+  if (direction === 'BUY' && !(prev.close > prev.open)) {
+    return 'wait · need 2 green 1m (momentum)';
+  }
+  if (direction === 'SELL' && !(prev.close < prev.open)) {
+    return 'wait · need 2 red 1m (momentum)';
+  }
+
   // After a large spike against us / exhaustion: confirm closes beyond spike close
   if (isSpikeCandle(prev, minutes.slice(0, -2))) {
     if (direction === 'SELL') {
@@ -640,6 +648,86 @@ export function moveStillPrinting(
 }
 
 /**
+ * Confirm bar is still pushing — used for diagnostics / tests.
+ * Prefer atLocalClimax for entry gates (new-extreme pushes late tip entries).
+ */
+export function confirmBarExtendsMove(
+  direction: 'BUY' | 'SELL',
+  minutes?: CapitalPriceCandle[] | null
+): boolean {
+  if (!minutes || minutes.length < 3) return false;
+  const cur = minutes[minutes.length - 1]!;
+  const prior = minutes.slice(-6, -1);
+  const priorHi = Math.max(...prior.map((c) => c.high));
+  const priorLo = Math.min(...prior.map((c) => c.low));
+  if (direction === 'BUY') return cur.high >= priorHi;
+  return cur.low <= priorLo;
+}
+
+/**
+ * Buying the local tip / selling the local floor of the last ~8×1m — climax chase.
+ * Gold day wrong entries: IMPULSE at end of micro-leg → 0 MFE reverse.
+ */
+export function atLocalClimax(
+  direction: 'BUY' | 'SELL',
+  minutes?: CapitalPriceCandle[] | null
+): boolean {
+  if (!minutes || minutes.length < 5) return false;
+  const slice = minutes.slice(-8);
+  const last = slice[slice.length - 1]!;
+  const hi = Math.max(...slice.map((c) => c.high));
+  const lo = Math.min(...slice.map((c) => c.low));
+  const span = hi - lo;
+  const minSpan = Math.max(Math.abs(last.close) * 0.00045, 1.6);
+  if (span < minSpan) return false;
+  if (direction === 'BUY') {
+    return last.close >= hi - span * 0.12 || last.high >= hi - span * 0.05;
+  }
+  return last.close <= lo + span * 0.12 || last.low <= lo + span * 0.05;
+}
+
+/**
+ * True when entry would fight the real market move (bounce tip / late flip / climax).
+ * Gold backtest 2026-09-02: CONTINUATION entered on brief flow blip vs sticky trend
+ * → 0 MFE then ThesisFailure/MoveFlip within 1–3m.
+ * V-flip at fresh extreme is the only exception for trend fights.
+ * BREAKOUT may still fire at the edge — climax block is for CONTINUATION-style rides.
+ */
+export function entryAgainstMarketMove(
+  direction: 'BUY' | 'SELL',
+  minutes?: CapitalPriceCandle[] | null,
+  setupKind?: string | null
+): boolean {
+  if (!minutes?.length) return true;
+  const flow = liveFlow(minutes);
+  if (!flow) return true;
+  if (direction === 'BUY' && flow !== 'UP') return true;
+  if (direction === 'SELL' && flow !== 'DOWN') return true;
+
+  const flip = flowFlipAtExtreme(minutes);
+  const trend = marketTrend(minutes);
+  const kind = String(setupKind || '').trim().toUpperCase();
+
+  if (flip) {
+    if (direction === 'BUY' && flip !== 'UP') return true;
+    if (direction === 'SELL' && flip !== 'DOWN') return true;
+    if (!moveStillPrinting(flow, minutes)) return true;
+    if (moveAlreadyFinished(direction, minutes)) return true;
+    // V-flip leg may reclaim through the local window — climax check would block the turn
+    return false;
+  }
+  if (trend) {
+    if (direction === 'BUY' && trend === 'DOWN') return true;
+    if (direction === 'SELL' && trend === 'UP') return true;
+  }
+
+  if (!moveStillPrinting(flow, minutes)) return true;
+  if (moveAlreadyFinished(direction, minutes)) return true;
+  if (kind !== 'BREAKOUT' && atLocalClimax(direction, minutes)) return true;
+  return false;
+}
+
+/**
  * True when chasing a move that already finished (tip / rolled spike).
  * Gold 13:24 SELL @ dump floor 4334.90 after 4344→4335 — late.
  * Gold 13:29 BUY @ 4337 after UP spike already gave back — late.
@@ -668,8 +756,9 @@ export function moveAlreadyFinished(
   const lastI = slice.length - 1;
 
   if (direction === 'SELL') {
-    // Still extending through lows — not finished
+    // Still extending / owning the live low with a red body — not finished
     if (px < lo) return false;
+    if (loAt === lastI && last.close <= last.open) return false;
     const fromPeak = hi - px;
     // Dump mostly done + stalling at floor (tiny last body) — late short
     if (fromPeak >= span * 0.7 && last.low <= lo + span * 0.1 && lastBody < span * 0.2) {
@@ -683,8 +772,9 @@ export function moveAlreadyFinished(
   }
 
   // BUY — tip chase or buying after the UP spike already rolled over
-  // Still extending through highs — not finished
+  // Still extending / owning the live high with a green body — not finished
   if (px > hi) return false;
+  if (hiAt === lastI && last.close >= last.open) return false;
   const givenBack = hi - px;
   if (givenBack <= span * 0.12 && lastBody < span * 0.2 && last.high >= hi - span * 0.1) {
     return true;
@@ -1587,6 +1677,8 @@ export function decideUnifiedEntry(opts: {
   if (!entry) return null;
   if (entryFightsStickyTrend(entry.direction, minutes)) return null;
   if (structureBlocksEntry(entry.direction, structure, entry.setup)) return null;
+  // Hard: never open against the real move (bounce tip / finished impulse / local climax)
+  if (entryAgainstMarketMove(entry.direction, minutes, entry.setup)) return null;
   const candleDeny = entryCandleConfirmDeny(entry.direction, minutes);
   if (candleDeny) return null;
   return entry;

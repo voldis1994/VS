@@ -42,8 +42,17 @@ describe('closed candle confirm — not spike (old rule)', () => {
     const bars: CapitalPriceCandle[] = [];
     for (let i = 0; i < 8; i++) bars.push(candle(4375, 4375.5, 4374.6, 4375.2));
     bars.push(candle(4375.2, 4381.5, 4375.0, 4381.2)); // UP spike
-    bars.push(candle(4381.2, 4381.4, 4379.5, 4379.8)); // red confirm below spike close
+    bars.push(candle(4381.2, 4381.3, 4380.2, 4380.4)); // first red
+    bars.push(candle(4380.4, 4380.5, 4379.5, 4379.8)); // 2nd red confirm below spike close
     expect(entryCandleConfirmDeny('SELL', bars)).toBeNull();
+  });
+
+  it('denies SELL on single red after green (need 2-red momentum)', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 8; i++) bars.push(candle(4375, 4375.5, 4374.6, 4375.2));
+    bars.push(candle(4375.2, 4376.0, 4375.0, 4375.8)); // green
+    bars.push(candle(4375.8, 4375.9, 4374.5, 4374.7)); // only one red
+    expect(entryCandleConfirmDeny('SELL', bars)).toMatch(/2 red|momentum/i);
   });
 
   it('denies SELL if after UP spike the next bar is still green (no confirm)', () => {
