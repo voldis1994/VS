@@ -21,8 +21,7 @@ import {
   normalizeRegime,
   type RegimeName,
 } from './regimes.js';
-import { decideBestOutcomeExit, executableFavorableMove } from './exitManage.js';
-import { postExitEntryGate } from './exitReentry.js';
+import { decideBestOutcomeExit, favorableMove } from './exitManage.js';
 import {
   playbookFromRegime,
   type Playbook,
@@ -30,16 +29,10 @@ import {
 } from './playbooks.js';
 import {
   buildStructure,
-  decideUnifiedEntry,
+  decideEntryFromSetup,
+  decideEntryFromTenSecMove,
   emptySetup,
   emptyStructure,
-  entryCandleConfirmDeny,
-  flowAgreesWithSide,
-  flowFlipAtExtreme,
-  isSoftCandleSetupReason,
-  LIVE_CONTINUATION_POLICY,
-  liveFlow,
-  minuteConfirmBar,
   playbookFromSetup,
   setupCatalog,
   updateSetupSticky,
@@ -182,32 +175,18 @@ type Internal = RobotSession & {
   last_entry_attempt_ms: number;
   /** Last flat mid — diagnostics only */
   last_flat_mid: number | null;
-  /** Last opened side — used with last_exit_side for flip-only re-entry */
+  /** Last opened side — block opposite flip spam */
   last_entry_side: 'BUY' | 'SELL' | null;
   last_entry_side_ms: number;
-  /** Side we just closed — same side stays dead until flow flips */
-  last_exit_side: 'BUY' | 'SELL' | null;
-  last_exit_ms: number;
-  /** Exit reason — MoveFlip/ThesisFailure may reverse immediately */
-  last_exit_reason: string | null;
   /** After HardInvalidation / thesis fail — longer flip lock */
   last_hard_exit_ms: number;
-  /** Skip overlapping setInterval ticks — one cycle at a time per robot */
-  cycle_busy: boolean;
-  /** Block double Capital order while entry awaits broker */
-  entry_inflight: boolean;
-  /**
-   * 1m system clock: floor(Date.now()/60s) when we last exited (or 0 = free).
-   * New impulse/NONE entries only on a later 1m bucket — not tick flip spam.
-   */
-  entry_minute_bucket: number;
 };
 
-const STRUCTURE_REFRESH_MS = 3_000;
+const STRUCTURE_REFRESH_MS = 10_000;
 const STRUCTURE_MINUTE_BARS = 120;
 const STRUCTURE_HOUR_BARS = 24;
 
-const ACTIVE_CADENCE_MS = 500;
+const ACTIVE_CADENCE_MS = 2_000;
 const CLOSED_MARKET_CADENCE_MS = 90_000;
 const CLOSED_MARKET_TICK_EVERY_MS = 5 * 60_000;
 
@@ -289,13 +268,7 @@ function publicSession(s: Internal): RobotSession {
     last_flat_mid: _flatMid,
     last_entry_side: _entrySide,
     last_entry_side_ms: _entrySideAt,
-    last_exit_side: _exitSide,
-    last_exit_ms: _exitAt,
-    last_exit_reason: _exitReason,
     last_hard_exit_ms: _hardExit,
-    cycle_busy: _cycleBusy,
-    entry_inflight: _entryInflight,
-    entry_minute_bucket: _entryMinuteBucket,
     ...rest
   } = s;
   const st = s.structureBook;
@@ -308,10 +281,9 @@ function publicSession(s: Internal): RobotSession {
     feed_sender_count: s.multiFeed?.sender_count ?? rest.feed_sender_count ?? 0,
     feed_agreement: s.multiFeed?.agreement ?? rest.feed_agreement ?? null,
     feed_legs: s.multiFeed?.legs ?? rest.feed_legs ?? [],
-    // "zones" key kept for API compat — values are swing STRUCTURE, not setup kind
     zones: {
       ready: st.ready,
-      structure: st.ready ? st.bias : 'SEEDING',
+      structure: setup.kind === 'NONE' ? 'NONE' : setup.kind,
       high: st.swing_high,
       low: st.swing_low,
       bias: st.bias,
@@ -375,17 +347,12 @@ async function refreshStructureAndSetup(
     s.structureBook.ready &&
     now - s.last_structure_fetch_ms < STRUCTURE_REFRESH_MS
   ) {
-    // Refresh early when price left the band OR is hugging an edge (need live low/high NOW)
-    const spanPad = Math.max(s.structureBook.span * 0.12, 1.0);
+    // Price left the swing band — refresh early so impulse flip is not 20s late
     const drifted =
       mid != null &&
-      (mid > s.structureBook.swing_high + spanPad ||
-        mid < s.structureBook.swing_low - spanPad);
-    const huggingEdge =
-      mid != null &&
-      (mid >= s.structureBook.swing_high - spanPad ||
-        mid <= s.structureBook.swing_low + spanPad);
-    if (!drifted && !(huggingEdge && now - s.last_structure_fetch_ms >= 2_000)) return;
+      (mid > s.structureBook.swing_high + Math.max(s.structureBook.span * 0.15, 1.2) ||
+        mid < s.structureBook.swing_low - Math.max(s.structureBook.span * 0.15, 1.2));
+    if (!drifted) return;
   }
   const [hist, hours] = await Promise.all([
     fetchCapitalMinutePrices(session, s.epic, STRUCTURE_MINUTE_BARS),
@@ -407,11 +374,8 @@ async function refreshStructureAndSetup(
     prev: s.structureBook.ready ? s.structureBook : null,
   });
   // Setup sticky update only here (structure cadence) — not every 2s quote
-  // Live: no IMPULSE → CONTINUATION (Gold day loss driver)
   if (!s.open_side) {
-    s.marketSetup = updateSetupSticky(s.marketSetup, s.structureBook, hist.candles, {
-      continuationPolicy: LIVE_CONTINUATION_POLICY,
-    });
+    s.marketSetup = updateSetupSticky(s.marketSetup, s.structureBook, hist.candles);
     const pb = playbookFromSetup(s.marketSetup);
     if (pb) {
       s.playbook = pb;
@@ -443,10 +407,9 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     active_regimes: activeSetups,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain:
-      'Capital 1h+1m → STRUCTURE → SETUP(ARMED only) → closed 1m confirm → BEST OUTCOME · MoveFlip reverses next 1m',
+    chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
     note:
-      'Quality gate: 1m dump-ride; soft-harvest→re-SELL while flow DOWN; longDump mid-swing arm; MoveFlip→switch; SAFETY SL required.',
+      'Setup-first: NONE only when quiet. CONTINUATION/PULLBACK/FADE bounce rides rally (tp≥3–4pt, not +£0.07 scalp). Entry on closed 10s confirm.',
   };
 }
 
@@ -497,9 +460,6 @@ function clearTradeState(s: Internal) {
   s.playbook = null;
   s.entry_setup = null;
   s.mode = 'FLAT';
-  // Always wait next 1m+ after exit — same-minute MoveFlip reverse caused overnight BUY↔SELL chop
-  // (wait next minute bar before any re-entry / reverse)
-  s.entry_minute_bucket = Math.floor(Date.now() / 60_000);
 }
 
 /**
@@ -586,16 +546,13 @@ function expectedStopFromDistance(
   return direction === 'BUY' ? ref - dist : ref + dist;
 }
 
-function updateExcursion(
-  s: Internal,
-  quote: { mid: number; bid?: number | null; ask?: number | null }
-) {
+function updateExcursion(s: Internal, mid: number) {
   if (!s.open_side || s.entry_price == null) return;
-  const fav = executableFavorableMove(s.open_side, s.entry_price, quote);
+  const fav = favorableMove(s.open_side, s.entry_price, mid);
   s.unrealized = fav;
   if (fav > s.mfe) {
     s.mfe = fav;
-    s.peak_favorable = quote.mid;
+    s.peak_favorable = mid;
   }
   if (fav < s.mae) s.mae = fav;
   s.peak_retention = s.mfe > 0 ? Math.max(0, fav / s.mfe) : null;
@@ -666,27 +623,6 @@ export async function stopFlatManageRobotsForAccount(accountId: number): Promise
   }
 }
 
-/**
- * One account = one live robot market. Starting US100 must not leave another epic
- * entry brain running. Manage-only with an OPEN trade is left alone (cannot open a
- * second market until that trade is flat — enforced in enterTrade / robotCycle).
- */
-export async function stopOtherRobotsForAccount(
-  accountId: number,
-  keepEpic: string
-): Promise<string[]> {
-  const keep = String(keepEpic || '').trim().toLowerCase();
-  const stopped: string[] = [];
-  for (const s of [...sessions.values()]) {
-    if (s.account_id !== accountId || !s.running) continue;
-    if (s.epic.trim().toLowerCase() === keep) continue;
-    if (!s.entry_enabled && s.open_side) continue;
-    await stopRobotSession(s.id);
-    stopped.push(`${s.display_name} (${s.epic})`);
-  }
-  return stopped;
-}
-
 export async function stopRobotSession(id: string): Promise<RobotSession | null> {
   const s = sessions.get(id);
   if (!s) return null;
@@ -712,9 +648,7 @@ export async function stopRobotSession(id: string): Promise<RobotSession | null>
       robot_status: 'STOPPED',
     });
   }
-  const pub = publicSession(s);
-  if (!s.running && !s.open_side) sessions.delete(s.id);
-  return pub;
+  return publicSession(s);
 }
 
 function matchOpenOnEpic(
@@ -803,9 +737,6 @@ async function exitTrade(
   s.exits_done += 1;
   s.last_deal_reference = result.deal_reference || s.last_deal_reference;
   s.closed_at_ms = Date.now();
-  s.last_exit_side = s.open_side;
-  s.last_exit_ms = Date.now();
-  s.last_exit_reason = reason;
   if (/HardInvalidation|ThesisFailure|thesis/i.test(reason)) {
     s.last_hard_exit_ms = Date.now();
   }
@@ -855,35 +786,9 @@ async function enterTrade(
   setupType?: string | null,
   playbook?: TradePlaybook | null
 ) {
-  // HARD RULE: one Capital order at a time per robot (blocks overlapping cycles)
-  if (s.entry_inflight || s.open_side) {
-    pushTick(s, {
-      phase: 'WAIT',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: s.open_side
-        ? `ONE TRADE ONLY — already ${s.open_side} · no second entry`
-        : 'ONE TRADE ONLY — entry already in flight · no second order',
-    });
-    return;
-  }
-  s.entry_inflight = true;
-
-  try {
-  // HARD RULE: never entry while ANY open position on this Capital account
+  // HARD RULE: never entry while any trade open on this epic
   const listed = await listCapitalOpenPositions(session);
-  if (!listed.ok) {
-    pushTick(s, {
-      phase: 'WAIT',
-      bid: quote.bid,
-      ask: quote.ask,
-      mid: quote.mid,
-      detail: `ONE TRADE — cannot verify flat (${listed.detail}) · no entry`,
-    });
-    return;
-  }
-  {
+  if (listed.ok) {
     const existing = matchOpenOnEpic(listed.positions, s.epic);
     if (existing) {
       s.open_side = existing.direction;
@@ -902,17 +807,6 @@ async function enterTrade(
         ask: quote.ask,
         mid: quote.mid,
         detail: `ONE TRADE ONLY — broker already open ${existing.direction} dealId=${existing.deal_id} · no new entry`,
-      });
-      return;
-    }
-    if (listed.positions.length > 0) {
-      const other = listed.positions[0]!;
-      pushTick(s, {
-        phase: 'WAIT',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `ONE TRADE PER CLIENT — account already open ${other.direction} ${other.epic} · no second market`,
       });
       return;
     }
@@ -1036,15 +930,31 @@ async function enterTrade(
     }
   }
 
-  // Hard safety: never open a live position without broker SAFETY SL
   if (!result?.ok) {
-    s.error = result?.detail || 'Safety SL not accepted';
+    pushTick(s, {
+      phase: 'WAIT',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: `Safety SL not accepted — entry without SL (${result?.detail || 'unknown'})`,
+    });
+    result = await createCapitalPosition(session, {
+      epic: s.epic,
+      direction,
+      size: s.lot_size,
+    });
+    stopLevel = null;
+    usedStopDistance = null;
+  }
+
+  if (!result.ok) {
+    s.error = result.detail;
     pushTick(s, {
       phase: 'ERROR',
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `ORDER BLOCKED ${direction}: Safety SL required — refused naked entry (${result?.detail || 'unknown'})`,
+      detail: `ORDER FAIL ${direction}: ${result.detail}`,
     });
     return;
   }
@@ -1056,20 +966,11 @@ async function enterTrade(
   s.entry_setup = setupType || null;
   s.mode = 'MANAGE';
   s.last_deal_reference = result.deal_reference || null;
-  // BUY fills near ask, SELL near bid — mid made tiny wins look green then close red
-  const fillPx =
-    direction === 'BUY'
-      ? quote.ask != null && Number.isFinite(quote.ask)
-        ? quote.ask
-        : mid
-      : quote.bid != null && Number.isFinite(quote.bid)
-        ? quote.bid
-        : mid;
-  s.entry_price = fillPx;
+  s.entry_price = mid;
   s.entry_at = new Date().toISOString();
   s.mfe = 0;
   s.mae = 0;
-  s.peak_favorable = fillPx;
+  s.peak_favorable = mid;
   s.peak_retention = null;
   s.unrealized = 0;
   s.safety_sl = stopLevel != null && Number.isFinite(stopLevel) ? stopLevel : null;
@@ -1078,15 +979,11 @@ async function enterTrade(
   const dealId = await resolveDealId(session, s, result.deal_reference);
   if (dealId) s.deal_id = dealId;
 
-  // Prefer broker-reported stopLevel / open level when available
+  // Prefer broker-reported stopLevel when available
   if (dealId) {
     try {
       const again = await listCapitalOpenPositions(session);
       const pos = again.ok ? matchOpenOnEpic(again.positions, s.epic) : null;
-      if (pos?.open_level != null && Number.isFinite(pos.open_level)) {
-        s.entry_price = pos.open_level;
-        s.peak_favorable = pos.open_level;
-      }
       if (pos?.stop_level != null && Number.isFinite(pos.stop_level)) {
         s.safety_sl = pos.stop_level;
       }
@@ -1140,23 +1037,10 @@ async function enterTrade(
   } catch {
     /* Capital order already live */
   }
-  } finally {
-    s.entry_inflight = false;
-  }
 }
 
 
 async function robotCycle(s: Internal) {
-  if (!s.running || s.cycle_busy) return;
-  s.cycle_busy = true;
-  try {
-  await robotCycleBody(s);
-  } finally {
-    s.cycle_busy = false;
-  }
-}
-
-async function robotCycleBody(s: Internal) {
   if (!s.running) return;
 
   const { rows } = await pool.query(
@@ -1296,7 +1180,7 @@ async function robotCycleBody(s: Internal) {
       }
     }
 
-    // Sync truth from broker — source of ONE TRADE ONLY (per client account)
+    // Sync truth from broker — source of ONE TRADE ONLY
     const listed = await listCapitalOpenPositions(opened.session);
     let brokerOpen: CapitalOpenPosition | null = null;
     if (listed.ok) {
@@ -1313,46 +1197,16 @@ async function robotCycleBody(s: Internal) {
         s.mode = 'MANAGE';
         if (brokerOpen.upl != null) s.unrealized = brokerOpen.upl;
       } else if (s.open_side) {
-        // Local thought open but broker flat on this epic
-        if (listed.positions.length > 0) {
-          // Still open elsewhere — do not clear local if sync weird; block new entry below
-          pushTick(s, {
-            phase: 'INFO',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: `Broker flat on ${s.epic} but account still has ${listed.positions.length} open · no new entry`,
-          });
-          s.last_exit_side = s.open_side;
-          s.last_exit_ms = Date.now();
-          s.last_exit_reason = 'broker sync · flat elsewhere';
-          s.closed_at_ms = Date.now();
-          clearTradeState(s);
-        } else {
-          pushTick(s, {
-            phase: 'INFO',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
-          });
-          s.last_exit_side = s.open_side;
-          s.last_exit_ms = Date.now();
-          s.last_exit_reason = 'broker sync · closed externally';
-          s.closed_at_ms = Date.now();
-          clearTradeState(s);
-        }
-      } else if (listed.positions.length > 0) {
-        // Flat on this epic but another market open on same account — one trade per client
-        const other = listed.positions[0]!;
+        // Local thought open but broker flat → treat as closed
         pushTick(s, {
-          phase: 'WAIT',
+          phase: 'INFO',
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: `ONE TRADE PER CLIENT — ${other.direction} ${other.epic} still open · this robot waits`,
+          detail: 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
         });
-        return;
+        s.closed_at_ms = Date.now();
+        clearTradeState(s);
       }
     } else {
       pushTick(s, {
@@ -1362,12 +1216,10 @@ async function robotCycleBody(s: Internal) {
         mid: quote.mid,
         detail: `Position sync warn: ${listed.detail} · holding ONE TRADE rule (no new entry if unsure)`,
       });
-      // Fail closed: only continue into MANAGE when we already track an open trade
-      if (!s.open_side) return;
     }
 
     if (quote.mid != null && s.open_side && s.entry_price != null) {
-      updateExcursion(s, { mid: quote.mid, bid: quote.bid, ask: quote.ask });
+      updateExcursion(s, quote.mid);
     }
 
     pushTick(s, {
@@ -1396,43 +1248,8 @@ async function robotCycleBody(s: Internal) {
       s.mode = 'MANAGE';
       if (quote.mid == null) return;
 
-      // Keep 1m flow fresh so we know if soft-exit would just re-open same side
-      await refreshStructureAndSetup(
-        opened.session,
-        s,
-        quote.mid,
-        Date.now() - s.last_structure_fetch_ms >= 2_000
-      );
-
-      const decision = decideBestOutcomeExit(
-        {
-          ...s,
-          flow_bias: liveFlow(s.last_minute_candles),
-          flow_flip: flowFlipAtExtreme(s.last_minute_candles),
-        },
-        {
-          mid: quote.mid,
-          bid: quote.bid,
-          ask: quote.ask,
-        }
-      );
+      const decision = decideBestOutcomeExit(s, quote.mid);
       if (decision.exit) {
-        const softExit = /PeakProtection|ProfitGiveback|BestOutcome harvest|TimeDecay|^Target/i.test(
-          decision.reason
-        );
-        // Do NOT exit a green/soft trail if flow still agrees — next trade would be same side
-        if (softExit && flowAgreesWithSide(s.open_side, s.last_minute_candles)) {
-          pushTick(s, {
-            phase: 'MANAGE',
-            bid: quote.bid,
-            ask: quote.ask,
-            mid: quote.mid,
-            detail: `HOLD · flow still ${liveFlow(s.last_minute_candles)} with ${s.open_side} · skip soft exit (would re-enter same side) · UPL ${
-              s.unrealized != null ? s.unrealized.toFixed(5) : '—'
-            } · MFE ${s.mfe.toFixed(5)}`,
-          });
-          return;
-        }
         await exitTrade(opened.session, s, quote, decision.reason);
         return;
       }
@@ -1466,6 +1283,23 @@ async function robotCycleBody(s: Internal) {
     }
 
     s.mode = 'ENTRY';
+
+    // After close: 1×10s bar pause; after HardInv — brief lock
+    const hardAgo = s.last_hard_exit_ms > 0 ? Date.now() - s.last_hard_exit_ms : Infinity;
+    const POST_CLOSE_COOLDOWN_MS = hardAgo < 180_000 ? 25_000 : 10_000;
+    const sinceClose = Date.now() - (s.closed_at_ms || 0);
+    if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
+      pushTick(s, {
+        phase: 'INFO',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `cooldown ${Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000)}s after close${
+          hardAgo < 180_000 ? ' · hard-exit lock' : ''
+        }`,
+      });
+      return;
+    }
 
     if (quote.mid == null) return;
 
@@ -1506,19 +1340,15 @@ async function robotCycleBody(s: Internal) {
       });
     }
 
-    // Structure + sticky setup — refresh often so impulse is not late
+    // Structure + sticky setup (1h+1m) — not every quote tick
     await refreshStructureAndSetup(
       opened.session,
       s,
       quote.mid,
-      !s.structureBook.ready ||
-        s.ohlcState.just_closed ||
-        Date.now() - s.last_structure_fetch_ms >= 2_000
+      !s.structureBook.ready || s.ohlcState.just_closed
     );
 
-    const livePx = quote.mid;
-    // Closed 1m body for confirm — do NOT overlay live mid (that was spike-chase entry)
-    const bar = minuteConfirmBar(s.last_minute_candles, livePx, { overlayLive: false });
+    const bar = s.ohlcState.last_closed;
     const st = s.structureBook;
     const setup = s.marketSetup;
     const structLine = st.ready
@@ -1526,60 +1356,19 @@ async function robotCycleBody(s: Internal) {
       : st.detail;
     const setupLine = `${setup.kind}/${setup.status}${setup.side ? ` ${setup.side}` : ''}`;
     const ohlcLine = bar
-      ? `1m O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · ${structLine} · ${setupLine}`
-      : `1m seeding · ${structLine} · ${setupLine}`;
+      ? `10s O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · ${structLine} · ${setupLine}`
+      : `10s seeding · ${structLine} · ${setupLine}`;
 
     if (quote.mid != null) s.last_flat_mid = quote.mid;
 
-    if (!bar) {
-      pushTick(s, {
-        phase: 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `${ohlcLine} · seeding 1m`,
-      });
-      return;
-    }
-
-    // 1m system: entry on new minute with closed-candle confirm (not forming spike)
-    const minuteBucket = Math.floor(Date.now() / 60_000);
-    const newMinute =
-      !s.entry_minute_bucket || minuteBucket > s.entry_minute_bucket;
-
-    // ARMED setup only — both sides; dump flips sticky BUY off via liveFlow
-    let entry = newMinute
-      ? decideUnifiedEntry({
-          setup,
-          structure: st,
-          bar,
-          minutes: s.last_minute_candles,
-          livePx,
-          allowNoneImpulse: false,
-          continuationPolicy: LIVE_CONTINUATION_POLICY,
-        })
-      : null;
-
-    if (!entry) {
-      const softCandle =
-        (setup.kind === 'CONTINUATION' || setup.kind === 'BREAKOUT') &&
-        isSoftCandleSetupReason(setup.reason);
-      const candleNote = newMinute
-        ? entryCandleConfirmDeny(
-            setup.side === 'SELL' ? 'SELL' : 'BUY',
-            s.last_minute_candles,
-            { soft: softCandle }
-          )
-        : null;
-      const waitNote = !newMinute
-        ? `1m system · wait next closed minute · ${setup.kind}/${setup.status}`
-        : setup.kind === 'NONE' || setup.status === 'NONE'
-          ? `NONE · wait ARMED · ${setup.reason}`
-          : candleNote && setup.status === 'ARMED'
-            ? `${candleNote} · ${setup.reason}`
-            : setup.status === 'FORMING'
-              ? `FORMING · ${setup.reason}`
-              : `ARMED · waiting 1m confirm · ${setup.reason}`;
+    // Need a just-closed 10s bar for any entry (setup confirm OR move-from-NONE)
+    if (!s.ohlcState.just_closed || !bar) {
+      const waitNote =
+        setup.kind === 'NONE' || setup.status === 'NONE'
+          ? `NONE · ${setup.reason}`
+          : setup.status === 'FORMING'
+            ? `FORMING · ${setup.reason}`
+            : `ARMED · waiting closed 10s confirm`;
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
@@ -1590,25 +1379,74 @@ async function robotCycleBody(s: Internal) {
       return;
     }
 
-    // MoveFlip/ThesisFailure → reverse next 1m; other exits keep 5m cool-down
-    const reentry = postExitEntryGate({
-      nowMs: Date.now(),
-      lastExitMs: s.last_exit_ms,
-      lastExitSide: s.last_exit_side,
-      lastExitReason: s.last_exit_reason,
-      entryDirection: entry.direction,
-      flow: liveFlow(s.last_minute_candles),
-      vflip: flowFlipAtExtreme(s.last_minute_candles),
-      entrySetup: entry.setup,
-      entryReason: entry.reason,
-    });
-    if (!reentry.allow) {
+    let entry =
+      setup.kind !== 'NONE' && setup.status === 'ARMED'
+        ? decideEntryFromSetup(setup, bar, s.last_minute_candles)
+        : null;
+
+    // Mid-swing NONE was starving every real 10s V-leg — trade the move (never against dump/rally)
+    if (!entry && (setup.kind === 'NONE' || setup.status === 'NONE')) {
+      entry = decideEntryFromTenSecMove(st, bar, s.last_minute_candles);
+      if (!entry) {
+        pushTick(s, {
+          phase: 'DECIDE',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: `${ohlcLine} · NONE · ${setup.reason}`,
+        });
+        return;
+      }
+    }
+
+    if (setup.status === 'FORMING' && !entry) {
       pushTick(s, {
-        phase: reentry.detail?.includes('cool-down') ? 'WAIT' : 'INFO',
+        phase: 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · ${reentry.detail}`,
+        detail: `${ohlcLine} · FORMING · ${setup.reason}`,
+      });
+      return;
+    }
+
+    if (!entry) {
+      const tipNote =
+        setup.side &&
+        ((setup.side === 'BUY' &&
+          st.ready &&
+          bar.close >= st.swing_high - Math.max(st.span * 0.08, 0.8)) ||
+          (setup.side === 'SELL' &&
+            st.ready &&
+            bar.close <= st.swing_low + Math.max(st.span * 0.08, 0.8)))
+          ? ' · blocked tip-chase'
+          : '';
+      pushTick(s, {
+        phase: 'DECIDE',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · ARMED · no 10s confirm yet${tipNote} · ${setup.reason}`,
+      });
+      return;
+    }
+
+    // Opposite-side lock: brief for 10s V-flips; longer only after HardInv
+    const hardRecent = s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < 300_000;
+    const SIDE_LOCK_MS = hardRecent ? 45_000 : 20_000;
+    if (
+      s.last_entry_side &&
+      s.last_entry_side !== entry.direction &&
+      Date.now() - s.last_entry_side_ms < SIDE_LOCK_MS
+    ) {
+      pushTick(s, {
+        phase: 'INFO',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · side-lock ${s.last_entry_side} ${Math.ceil(
+          (SIDE_LOCK_MS - (Date.now() - s.last_entry_side_ms)) / 1000
+        )}s · no flip to ${entry.direction}${hardRecent ? ' · after hard exit' : ''}`,
       });
       return;
     }
@@ -1623,12 +1461,6 @@ async function robotCycleBody(s: Internal) {
     s.last_entry_attempt_ms = Date.now();
     s.last_entry_side = direction;
     s.last_entry_side_ms = Date.now();
-    // Opposite fill clears same-side lock
-    if (s.last_exit_side && direction !== s.last_exit_side) {
-      s.last_exit_side = null;
-      s.last_exit_ms = 0;
-      s.last_exit_reason = null;
-    }
     pushTick(s, {
       phase: 'ORDER',
       bid: quote.bid,
@@ -1636,16 +1468,6 @@ async function robotCycleBody(s: Internal) {
       mid: quote.mid,
       detail: `${ohlcLine} · OPEN ${direction} · ${reason}`,
     });
-    if (s.entry_inflight || s.open_side) {
-      pushTick(s, {
-        phase: 'WAIT',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: 'ONE TRADE — entry locked · skip duplicate open',
-      });
-      return;
-    }
     await enterTrade(opened.session, s, direction, quote, reason, setupType, entryPlaybook);
     return;
   } catch (err) {
@@ -1725,8 +1547,6 @@ export async function startRobotSession(input: {
   }
   sessions.delete(id);
 
-  const dropped = await stopOtherRobotsForAccount(acc.id, epic);
-
   const session: Internal = {
     id,
     account_id: acc.id,
@@ -1792,25 +1612,18 @@ export async function startRobotSession(input: {
     last_flat_mid: null,
     last_entry_side: null,
     last_entry_side_ms: 0,
-    last_exit_side: null,
-    last_exit_ms: 0,
-    last_exit_reason: null,
     last_hard_exit_ms: 0,
-    cycle_busy: false,
-    entry_inflight: false,
-    entry_minute_bucket: 0,
 
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
 
+  const others = [...sessions.values()].filter((x) => x.running && x.id !== id).length;
   pushTick(session, {
     phase: 'INFO',
     bid: null,
     ask: null,
     mid: null,
-    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · OWN BRAIN · client=${acc.client_name}${
-      dropped.length ? ` · stopped other markets: ${dropped.join(', ')}` : ''
-    }`,
+    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · OWN BRAIN · client=${acc.client_name} · other robots: ${others}`,
   });
   pushTick(session, {
     phase: 'INFO',
@@ -1822,18 +1635,6 @@ export async function startRobotSession(input: {
   });
 
   sessions.set(id, session);
-  await pool
-    .query(
-      `UPDATE clients SET
-         panel_epic = $2,
-         panel_display_name = $3,
-         panel_lot_size = $4,
-         panel_robot_requested = 'RUNNING',
-         updated_at = NOW()
-       WHERE id = $1`,
-      [acc.client_id, epic, displayName, lot]
-    )
-    .catch(() => undefined);
   // Own entry brain owns this account — leave Market Core fanout so clients never share one signal
   if (session.entry_enabled) {
     void pool

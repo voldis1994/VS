@@ -271,18 +271,7 @@ async function executeForSubscription(
     }
 
     const listed = await listCapitalOpenPositions(opened.session);
-    if (!listed.ok) {
-      noteBrokerError(sub.client_id, listed.detail);
-      return finish({
-        client_id: sub.client_id,
-        account_id: sub.account_id,
-        lot_size: sub.lot_size,
-        ok: false,
-        detail: `Cannot verify flat — ${listed.detail} · no entry`,
-        entry_price: null,
-      });
-    }
-    {
+    if (listed.ok) {
       const existing = listed.positions.find(
         (p) => p.epic.toUpperCase() === sub.epic.toUpperCase()
       );
@@ -295,18 +284,6 @@ async function executeForSubscription(
           ok: false,
           detail: 'Already open on epic — skip',
           entry_price: existing.open_level,
-        });
-      }
-      if (listed.positions.length > 0) {
-        const other = listed.positions[0]!;
-        noteBrokerOk(sub.client_id);
-        return finish({
-          client_id: sub.client_id,
-          account_id: sub.account_id,
-          lot_size: sub.lot_size,
-          ok: false,
-          detail: `ONE TRADE PER CLIENT — already open ${other.direction} ${other.epic}`,
-          entry_price: other.open_level,
         });
       }
     }

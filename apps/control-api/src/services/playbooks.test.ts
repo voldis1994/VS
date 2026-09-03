@@ -4,7 +4,6 @@ import {
   thesisFailureForPlaybook,
   nearRangeEdge,
   PLAYBOOK_EXIT,
-  exitParamsForTrade,
 } from './playbooks.js';
 import { decideEntryFrom10sRegime } from './entryFromRegime.js';
 import { decideBestOutcomeExit, THESIS_MIN_HOLD_MS } from './exitManage.js';
@@ -198,11 +197,11 @@ describe('playbook exit', () => {
         entry_at: ago(60_000),
         mfe: 5,
         mae: 0,
-        peak_retention: 0.85,
+        peak_retention: 0.6,
         regime: 'TREND_UP',
         playbook: 'LONG',
       },
-      2004.2
+      2003
     );
     expect(longHold.exit).toBe(false);
   });
@@ -215,37 +214,21 @@ describe('playbook exit', () => {
         entry_at: ago(250_000),
         mfe: 2,
         mae: 0,
-        peak_retention: 0.9,
+        peak_retention: 0.7,
         regime: 'RANGE',
         playbook: 'FADE',
       },
       2000.5
     );
     expect(d.exit).toBe(true);
-    expect(d.reason).toMatch(/TimeDecay|harvest/);
+    expect(d.reason).toMatch(/TimeDecay/);
   });
 
   it('exit params match the drawing', () => {
-    expect(PLAYBOOK_EXIT.LONG.peakRet).toBe(0.65);
+    expect(PLAYBOOK_EXIT.LONG.peakRet).toBe(0.4);
     expect(PLAYBOOK_EXIT.LONG.thesisMinHoldMs).toBe(120_000);
     expect(PLAYBOOK_EXIT.SCALP.tpPct).toBe(0.0022);
     expect(PLAYBOOK_EXIT.FADE.timeDecayMs).toBe(240_000);
-  });
-
-  it('CONTINUATION/FADE keep ≥65% MFE — max 35% giveback', () => {
-    const cont = exitParamsForTrade('LONG', 'CONTINUATION', 28932);
-    expect(cont.peakRet).toBe(0.65);
-    expect(cont.harvestRet).toBe(0.75);
-    expect(cont.thesisMinHoldMs).toBe(240_000);
-    const fade = exitParamsForTrade('FADE', 'FADE', 28932);
-    expect(fade.peakRet).toBe(0.65);
-  });
-
-  it('BREAKOUT uses micro-swing leg exits (not scalp floors)', () => {
-    const bo = exitParamsForTrade('SCALP', 'BREAKOUT', 4430);
-    expect(bo.tpFloor).toBeGreaterThanOrEqual(4);
-    expect(bo.mfeFloorAbs).toBeGreaterThanOrEqual(2.5);
-    expect(bo.thesisMinHoldMs).toBeGreaterThanOrEqual(180_000);
   });
 });
 

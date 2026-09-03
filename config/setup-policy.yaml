@@ -1,14 +1,11 @@
 setup_policy:
-  # Quality gate (LIVE desk) — fewer trades, higher confirm
-  # Capital 1h+1m → STRUCTURE → SETUP(ARMED only) → closed 1m confirm → BEST OUTCOME
-  horizon_ms: 60000
+  # Setup-first model (LIVE desk = marketSetup.ts)
+  # structure (1h+1m swing) → sticky setup → entry on closed 10s → best outcome
+  horizon_ms: 10000
   min_confidence: 0.0
   confirm_confidence: 0.0
-  expiry_ms: 60000
+  expiry_ms: 30000
   sticky_confirm_updates: 2
-  post_exit_cooldown_ms: 300000  # non-flip exits only
-  reverse_needs_vflip_ms: 480000  # non-flip reverses only
-  moveflip_immediate_reverse: true
   types:
     - CONTINUATION
     - PULLBACK
@@ -17,17 +14,7 @@ setup_policy:
     - FAILED_BREAK
     - NONE
   rules:
-    - armed_setup_only
-    - no_none_impulse_chop
-    - closed_1m_candle_confirm
-    - no_entry_on_spike
-    - moveflip_reverse_next_1m
-    - post_exit_cooldown_5m_non_flip
-    - reverse_needs_vflip_non_flip
-    - refuse_entry_without_safety_sl
+    - no_wait_regime
+    - no_tick_setup_flip
+    - entry_only_on_closed_10s
     - freeze_setup_while_open
-    - structure_blocks_tip_floor_only  # at_tip/at_floor — not wide near_high/near_low (that froze CONTINUATION)
-    - mid_swing_uses_local_range       # late/impulse vs recent 12–15m range, not sticky overnight H/L
-    - no_entry_against_market_move     # no BUY vs DOWN trend / SELL vs UP (unless V-flip)
-    - two_candle_momentum_confirm     # need 2 same-color 1m (kill one-blip flips)
-    - no_continuation_at_local_climax  # block CONTINUATION at tip/floor of last 8m

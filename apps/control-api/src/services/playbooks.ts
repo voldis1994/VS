@@ -3,7 +3,6 @@ import type { RegimeName } from './regimes.js';
 import { normalizeRegime } from './regimes.js';
 import type { TenSecBar } from './tenSecondOhlc.js';
 import { bodyPct, rangePct } from './tenSecondOhlc.js';
-import { scaleExitFloors } from './instrumentScale.js';
 
 export const PLAYBOOKS = ['LONG', 'SCALP', 'FADE', 'WAIT'] as const;
 export type Playbook = (typeof PLAYBOOKS)[number];
@@ -28,7 +27,7 @@ export type PlaybookExitParams = {
   timeDecayMs: number;
 };
 
-/** Exact set — keep wins; losses must not outrun profits. */
+/** Exact set from the agreed playbook drawing. */
 export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
   LONG: {
     tpPct: 0.0035,
@@ -37,8 +36,8 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
     slFloor: 0.25,
     mfeFloorPct: 0.0018,
     mfeFloorAbs: 0.18,
-    peakRet: 0.65, // max 35% giveback → keep ≥65%
-    harvestRet: 0.75,
+    peakRet: 0.4,
+    harvestRet: 0.55,
     thesisMinHoldMs: 120_000,
     timeDecayMs: 480_000,
   },
@@ -49,8 +48,8 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
     slFloor: 0.19,
     mfeFloorPct: 0.0015,
     mfeFloorAbs: 0.15,
-    peakRet: 0.65, // max 35% giveback → keep ≥65%
-    harvestRet: 0.75,
+    peakRet: 0.55,
+    harvestRet: 0.65,
     thesisMinHoldMs: 90_000,
     timeDecayMs: 480_000,
   },
@@ -61,8 +60,8 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
     slFloor: 0.18,
     mfeFloorPct: 0.0012,
     mfeFloorAbs: 0.12,
-    peakRet: 0.65, // max 35% giveback → keep ≥65%
-    harvestRet: 0.75,
+    peakRet: 0.5,
+    harvestRet: 0.55,
     thesisMinHoldMs: 90_000,
     timeDecayMs: 240_000,
   },
@@ -100,43 +99,38 @@ export function tradePlaybookOrNull(p?: Playbook | null): TradePlaybook | null {
 /** Manage exit tuned by locked entry setup — ride bounce/continuation, not +£0.07 scalp. */
 export function exitParamsForTrade(
   playbook: TradePlaybook,
-  entrySetup?: string | null,
-  entryPrice?: number | null
+  entrySetup?: string | null
 ): PlaybookExitParams {
-  const px = entryPrice;
-  const baseRaw = PLAYBOOK_EXIT[playbook];
-  const base = { ...baseRaw, ...scaleExitFloors(px, baseRaw) };
+  const base = PLAYBOOK_EXIT[playbook];
   const setup = String(entrySetup || '').trim().toUpperCase();
 
-  // Micro-swing 1m legs — ride the move, not 2s scalp harvest
-  if (setup === 'CONTINUATION' || setup === 'PULLBACK' || setup === 'BREAKOUT') {
-    const leg = scaleExitFloors(px, { tpFloor: 5.0, slFloor: baseRaw.slFloor, mfeFloorAbs: 3.0 });
+  // V-bounce / dump continuation — hold for the leg to swing high (not tpFloor 0.18)
+  if (setup === 'CONTINUATION' || setup === 'PULLBACK') {
     return {
       ...base,
-      tpPct: 0.0032,
-      tpFloor: leg.tpFloor,
+      tpPct: 0.0028,
+      tpFloor: 4.0,
       slPct: base.slPct,
-      slFloor: leg.slFloor,
-      mfeFloorPct: 0.00065,
-      mfeFloorAbs: leg.mfeFloorAbs,
-      peakRet: 0.65,
-      harvestRet: 0.75,
-      thesisMinHoldMs: 240_000,
-      timeDecayMs: 900_000,
+      slFloor: base.slFloor,
+      mfeFloorPct: 0.00055,
+      mfeFloorAbs: 2.5,
+      peakRet: 0.28,
+      harvestRet: 0.38,
+      thesisMinHoldMs: 180_000,
+      timeDecayMs: 600_000,
     };
   }
 
-  // FADE / failed-break bounce from low — room to mid; keep the win
+  // FADE / failed-break bounce from low — still room to mid, not instant 0.18pt target
   if (setup === 'FADE' || setup === 'FAILED_BREAK') {
-    const fade = scaleExitFloors(px, { tpFloor: 3.0, slFloor: baseRaw.slFloor, mfeFloorAbs: 1.8 });
     return {
       ...base,
       tpPct: 0.0022,
-      tpFloor: fade.tpFloor,
+      tpFloor: 3.0,
       mfeFloorPct: 0.00045,
-      mfeFloorAbs: fade.mfeFloorAbs,
-      peakRet: 0.65,
-      harvestRet: 0.75,
+      mfeFloorAbs: 1.8,
+      peakRet: 0.32,
+      harvestRet: 0.42,
       thesisMinHoldMs: 120_000,
       timeDecayMs: 420_000,
     };
