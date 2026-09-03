@@ -2,11 +2,11 @@
   "summary": {
     "source": "Yahoo Finance GC=F (public)",
     "day": "2026-09-02",
-    "mode": "live (no impulse CONTINUATION — matches desk)",
+    "mode": "live + micro-chop (persist filter, SCALP book)",
     "loose": false,
-    "micro_scalp": false,
-    "micro_filter": null,
-    "micro_book": null,
+    "micro_scalp": true,
+    "micro_filter": "persist",
+    "micro_book": "SCALP",
     "continuation_policy": "no_impulse",
     "live_policy": "no_impulse",
     "bars": 1379,
@@ -51,8 +51,8 @@
       "wait · need 2 red 1m (momentum)": 21,
       "same-side dead BUY until flip (flow UP) · no spam re-entry": 19,
       "wait · confirm after DOWN spike (close above spike)": 12,
-      "wait · confirm after UP spike (close below spike)": 8,
-      "same-side dead SELL until flip (flow DOWN) · no spam re-entry": 4
+      "micro-filter · persist 0.00 > -0.4": 9,
+      "micro-filter · persist -0.08 < 0.4": 9
     },
     "missed_candidates": 120,
     "unnecessary_blocks": 36,

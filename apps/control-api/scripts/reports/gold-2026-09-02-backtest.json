@@ -5,6 +5,8 @@
     "mode": "live (no impulse CONTINUATION — matches desk)",
     "loose": false,
     "micro_scalp": false,
+    "micro_filter": null,
+    "micro_book": null,
     "continuation_policy": "no_impulse",
     "live_policy": "no_impulse",
     "bars": 1379,

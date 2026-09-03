@@ -178,13 +178,16 @@ function parseArgs(argv: string[]) {
     else if (a === '--warmup') out.warmup = Number(argv[++i]);
     else if (a === '--loose') out.loose = true;
     else if (a === '--micro-scalp') out.microScalp = true;
-    else if (a === '--micro-filter') {
+    else if (a === '--micro-filter' || a.startsWith('--micro-filter=')) {
       out.microScalp = true;
-      out.microFilter = String(argv[++i] || 'raw') as MicroChopQuality;
-    } else if (a === '--micro-book') {
+      const v = a.includes('=') ? a.split('=').slice(1).join('=') : String(argv[++i] || 'raw');
+      out.microFilter = v as MicroChopQuality;
+    } else if (a === '--micro-book' || a.startsWith('--micro-book=')) {
       out.microScalp = true;
-      const b = String(argv[++i] || 'SCALP').toUpperCase();
-      out.microBook = b === 'LONG' ? 'LONG' : 'SCALP';
+      const v = a.includes('=')
+        ? a.split('=').slice(1).join('=')
+        : String(argv[++i] || 'SCALP');
+      out.microBook = v.toUpperCase() === 'LONG' ? 'LONG' : 'SCALP';
     } else if (a === '--impulse-cont') out.continuation = 'default';
     else if (a === '--no-impulse-cont') out.continuation = 'no_impulse';
     else if (a === '--narrow-midleg') out.continuation = 'narrow_midleg';
