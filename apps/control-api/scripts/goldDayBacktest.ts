@@ -17,6 +17,7 @@ import {
   decideUnifiedEntry,
   emptySetup,
   emptyStructure,
+  entryAgainstMarketMove,
   entryCandleConfirmDeny,
   flowFlipAtExtreme,
   liveFlow,
@@ -62,6 +63,81 @@ type TradeRow = {
   wrong: boolean;
   wrongWhy: string | null;
 };
+
+type MissedRow = {
+  ts: number;
+  side: 'BUY' | 'SELL';
+  setup: string;
+  block: string;
+  category: 'post_exit' | 'against_move' | 'candle' | 'climax_or_other';
+  shadowPts: number;
+  shadowPnlGbp: number;
+  shadowMfe: number;
+  shadowHold: number;
+  shadowExit: string;
+  unnecessary: boolean;
+};
+
+function shadowForward(opts: {
+  bars: Bar[];
+  startI: number;
+  side: 'BUY' | 'SELL';
+  playbook: string;
+  setupKind: string;
+  entryFill: number;
+  entryTs: number;
+  halfSpread: number;
+  gbpPerPoint: number;
+  setNow: (ms: number) => void;
+}): Omit<MissedRow, 'ts' | 'side' | 'setup' | 'block' | 'category' | 'unnecessary'> {
+  const { bars, startI, side, playbook, setupKind, entryFill, halfSpread, gbpPerPoint, setNow } =
+    opts;
+  let mfe = 0;
+  let mae = 0;
+  for (let j = startI + 1; j < bars.length; j++) {
+    const window = bars.slice(Math.max(0, j + 1 - 120), j + 1);
+    const minutes = window.map(({ open, high, low, close }) => ({ open, high, low, close }));
+    const last = bars[j]!;
+    setNow(last.ts * 1000);
+    const mid = last.close;
+    const bid = mid - halfSpread;
+    const ask = mid + halfSpread;
+    const favMid = favorableMove(side, entryFill, mid);
+    mfe = Math.max(mfe, favMid);
+    mae = Math.min(mae, favMid);
+    const snap: ExitSnapshot = {
+      open_side: side,
+      entry_price: entryFill,
+      entry_at: new Date(opts.entryTs * 1000).toISOString(),
+      mfe,
+      mae,
+      peak_retention: mfe > 1e-9 ? Math.max(0, favMid) / mfe : null,
+      playbook: playbook as 'LONG' | 'SCALP' | 'FADE',
+      entry_setup: setupKind,
+      flow_bias: liveFlow(minutes),
+      flow_flip: flowFlipAtExtreme(minutes),
+    };
+    const decision = decideBestOutcomeExit(snap, { mid, bid, ask });
+    const end = j === bars.length - 1;
+    if (decision.exit || end) {
+      const points = executableFavorableMove(side, entryFill, { mid, bid, ask });
+      return {
+        shadowPts: points,
+        shadowPnlGbp: points * gbpPerPoint,
+        shadowMfe: mfe,
+        shadowHold: j - startI,
+        shadowExit: end && !decision.exit ? 'EOD flatten' : decision.reason,
+      };
+    }
+  }
+  return {
+    shadowPts: 0,
+    shadowPnlGbp: 0,
+    shadowMfe: mfe,
+    shadowHold: 0,
+    shadowExit: 'no forward bars',
+  };
+}
 
 function parseArgs(argv: string[]) {
   const out = {
@@ -185,10 +261,58 @@ function main() {
   let entryMinuteBucket = 0;
 
   const trades: TradeRow[] = [];
+  const missed: MissedRow[] = [];
   const blockReasons = new Map<string, number>();
+  /** Debounce: one shadow miss per side per 5m (avoid counting same leg 20×) */
+  let lastShadowSide: 'BUY' | 'SELL' | null = null;
+  let lastShadowMs = 0;
 
   const bumpBlock = (why: string) => {
     blockReasons.set(why, (blockReasons.get(why) || 0) + 1);
+  };
+
+  const recordMiss = (
+    why: string,
+    category: MissedRow['category'],
+    side: 'BUY' | 'SELL',
+    setupKind: string,
+    playbook: string,
+    fill: number,
+    barI: number,
+    ts: number
+  ) => {
+    bumpBlock(why);
+    const ms = ts * 1000;
+    if (lastShadowSide === side && ms - lastShadowMs < 5 * 60_000) {
+      return; // same blocked leg — already counted
+    }
+    lastShadowSide = side;
+    lastShadowMs = ms;
+    const sh = shadowForward({
+      bars,
+      startI: barI,
+      side,
+      playbook,
+      setupKind,
+      entryFill: fill,
+      entryTs: ts,
+      halfSpread,
+      gbpPerPoint,
+      setNow: (t) => {
+        simNow = t;
+      },
+    });
+    // Unnecessary = would have made money with a real run (not noise)
+    const unnecessary = sh.shadowPnlGbp > 0.05 && sh.shadowMfe >= 0.8;
+    missed.push({
+      ts,
+      side,
+      setup: setupKind,
+      block: why,
+      category,
+      ...sh,
+      unnecessary,
+    });
   };
 
   try {
@@ -300,16 +424,45 @@ function main() {
       });
 
       if (!entry) {
-        if (setup.kind === 'NONE' || setup.status === 'NONE') {
+        // Candidate existed (ARMED + side) but unified gate killed it — shadow it
+        if (
+          setup.status === 'ARMED' &&
+          setup.side &&
+          setup.playbook &&
+          setup.kind !== 'NONE'
+        ) {
+          const candleDeny = entryCandleConfirmDeny(setup.side, minutes);
+          if (candleDeny) {
+            recordMiss(
+              candleDeny,
+              'candle',
+              setup.side,
+              setup.kind,
+              setup.playbook,
+              setup.side === 'BUY' ? ask : bid,
+              i,
+              last.ts
+            );
+          } else if (entryAgainstMarketMove(setup.side, minutes, setup.kind)) {
+            recordMiss(
+              'against-move / local climax',
+              'against_move',
+              setup.side,
+              setup.kind,
+              setup.playbook,
+              setup.side === 'BUY' ? ask : bid,
+              i,
+              last.ts
+            );
+          } else {
+            bumpBlock('ARMED no confirm');
+          }
+        } else if (setup.kind === 'NONE' || setup.status === 'NONE') {
           bumpBlock('wait ARMED setup (NONE)');
         } else if (setup.status === 'FORMING') {
           bumpBlock('FORMING only');
         } else {
-          const deny = entryCandleConfirmDeny(
-            setup.side === 'SELL' ? 'SELL' : 'BUY',
-            minutes
-          );
-          bumpBlock(deny || 'ARMED no confirm');
+          bumpBlock('ARMED no confirm');
         }
         continue;
       }
@@ -324,7 +477,17 @@ function main() {
         vflip: flowFlipAtExtreme(minutes),
       });
       if (!reentry.allow) {
-        bumpBlock(reentry.detail || 'post-exit gate');
+        const fill = entry.direction === 'BUY' ? ask : bid;
+        recordMiss(
+          reentry.detail || 'post-exit gate',
+          'post_exit',
+          entry.direction,
+          entry.setup,
+          entry.playbook,
+          fill,
+          i,
+          last.ts
+        );
         continue;
       }
 
@@ -376,6 +539,19 @@ function main() {
     setupWhy.set(t.setup, (setupWhy.get(t.setup) || 0) + 1);
   }
 
+  const unnecessary = missed.filter((m) => m.unnecessary);
+  const justifiedMiss = missed.filter((m) => !m.unnecessary);
+  const missByCat = new Map<string, number>();
+  const unnecByBlock = new Map<string, number>();
+  let missedPnlLeft = 0;
+  for (const m of missed) {
+    missByCat.set(m.category, (missByCat.get(m.category) || 0) + 1);
+    if (m.unnecessary) {
+      unnecByBlock.set(m.block, (unnecByBlock.get(m.block) || 0) + 1);
+      missedPnlLeft += m.shadowPnlGbp;
+    }
+  }
+
   const fmtTs = (ts: number) =>
     new Date(ts * 1000).toISOString().replace('.000Z', 'Z');
 
@@ -405,7 +581,21 @@ function main() {
     ),
     setups: Object.fromEntries([...setupWhy.entries()].sort((a, b) => b[1] - a[1])),
     top_blocks: Object.fromEntries(
-      [...blockReasons.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)
+      [...blockReasons.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12)
+    ),
+    missed_candidates: missed.length,
+    unnecessary_blocks: unnecessary.length,
+    justified_blocks: justifiedMiss.length,
+    unnecessary_rate:
+      missed.length > 0
+        ? Number(((unnecessary.length / missed.length) * 100).toFixed(1))
+        : 0,
+    unnecessary_pnl_left_on_table_gbp: Number(missedPnlLeft.toFixed(2)),
+    missed_by_category: Object.fromEntries(
+      [...missByCat.entries()].sort((a, b) => b[1] - a[1])
+    ),
+    unnecessary_by_block: Object.fromEntries(
+      [...unnecByBlock.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10)
     ),
   };
 
@@ -434,6 +624,27 @@ function main() {
     `| Total P&L | **£${totalPnl.toFixed(2)}** |`,
     `| Avg / trade | £${summary.avg_pnl_gbp} |`,
     `| Wrong entries | **${wrongs.length}** (${summary.wrong_entry_rate}%) |`,
+    `| Missed candidates (shadow) | **${missed.length}** |`,
+    `| Unnecessary blocks | **${unnecessary.length}** (${summary.unnecessary_rate}%) |`,
+    `| £ left on table (unnecessary) | **£${missedPnlLeft.toFixed(2)}** |`,
+    ``,
+    `## Unnecessary blocks`,
+    ``,
+    `Shadow = ja būtu iegujuši ar to pašu exit smadzenēm. Unnecessary = shadow peļņa > £0.05 un MFE ≥ 0.8pt.`,
+    ``,
+    ...[...unnecByBlock.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, n]) => `- **${n}×** ${k}`),
+    unnecessary.length ? `` : `- (none)`,
+    ``,
+    `### By category`,
+    ``,
+    ...[...missByCat.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, n]) => {
+        const un = unnecessary.filter((m) => m.category === k).length;
+        return `- **${k}**: ${n} blocked · **${un}** unnecessary`;
+      }),
     ``,
     `## Wrong entries — main reasons`,
     ``,
@@ -467,9 +678,9 @@ function main() {
     ``,
   ].join('\n');
 
-  writeFileSync(jsonPath, JSON.stringify({ summary, trades }, null, 2));
+  writeFileSync(jsonPath, JSON.stringify({ summary, trades, missed }, null, 2));
   writeFileSync(mdPath, md);
-  writeFileSync(jsonReport, JSON.stringify({ summary, trades }, null, 2));
+  writeFileSync(jsonReport, JSON.stringify({ summary, trades, missed }, null, 2));
   writeFileSync(mdReport, md);
 
   console.log(JSON.stringify(summary, null, 2));

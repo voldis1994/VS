@@ -13,6 +13,32 @@ PnL: **£0.10 / point** (£1/pt @ 1.0 lot).
 | Total P&L | **£-0.38** |
 | Avg / trade | £-0.01 |
 | Wrong entries | **19** (55.9%) |
+| Missed candidates (shadow) | **236** |
+| Unnecessary blocks | **66** (28%) |
+| £ left on table (unnecessary) | **£20.20** |
+
+## Unnecessary blocks
+
+Shadow = ja būtu iegujuši ar to pašu exit smadzenēm. Unnecessary = shadow peļņa > £0.05 un MFE ≥ 0.8pt.
+
+- **14×** wait · spike 1m — need next candle confirm
+- **13×** against-move / local climax
+- **12×** wait · need 2 green 1m (momentum)
+- **8×** wait · need closed green 1m confirm
+- **6×** wait · need 2 red 1m (momentum)
+- **5×** wait · need closed red 1m confirm
+- **3×** wait · confirm after UP spike (close below spike)
+- **2×** same-side dead SELL until flip (flow DOWN) · no spam re-entry
+- **1×** wait · confirm after DOWN spike (close above spike)
+- **1×** same-side dead BUY until flip (flow UP) · no spam re-entry
+- **1×** post-exit cool-down 240s · quality over frequency
+
+
+### By category
+
+- **candle**: 162 blocked · **49** unnecessary
+- **against_move**: 55 blocked · **13** unnecessary
+- **post_exit**: 19 blocked · **4** unnecessary
 
 ## Wrong entries — main reasons
 
