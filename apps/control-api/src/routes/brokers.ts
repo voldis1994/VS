@@ -5,6 +5,8 @@ import { logAudit } from '../services/audit.js';
 import { acquireCapitalSession, listCapitalAccounts, testCapitalComSession } from '../services/capitalCom.js';
 import { ensureBrokerAccount, seedAccountInstruments } from './trading.js';
 
+const BOOKER_DEFAULT_CLIENT_NAME = 'Kimly defolt';
+
 async function ensureClientId(preferredId: number | undefined, fallbackName: string): Promise<number> {
   if (preferredId && Number.isFinite(preferredId) && preferredId > 0) {
     const existing = await pool.query('SELECT id FROM clients WHERE id = $1', [preferredId]);
@@ -16,7 +18,7 @@ async function ensureClientId(preferredId: number | undefined, fallbackName: str
 
   const created = await pool.query(
     'INSERT INTO clients (name) VALUES ($1) RETURNING id',
-    [fallbackName || 'Default Client']
+    [fallbackName || BOOKER_DEFAULT_CLIENT_NAME]
   );
   return created.rows[0].id as number;
 }
@@ -100,7 +102,7 @@ export async function registerBrokerRoutes(app: FastifyInstance): Promise<void> 
 
       const clientId = await ensureClientId(
         body.client_id !== undefined ? Number(body.client_id) : undefined,
-        body.identifier?.trim() || 'Default Client'
+        body.identifier?.trim() || BOOKER_DEFAULT_CLIENT_NAME
       );
 
       const { rows } = await pool.query(
@@ -137,7 +139,7 @@ export async function registerBrokerRoutes(app: FastifyInstance): Promise<void> 
       });
 
       const client = await pool.query('SELECT name FROM clients WHERE id = $1', [clientId]);
-      const clientName = (client.rows[0]?.name as string) || 'Default Client';
+      const clientName = (client.rows[0]?.name as string) || BOOKER_DEFAULT_CLIENT_NAME;
       const accountId = await ensureBrokerAccount(
         conn.id as number,
         `${clientName} / ${body.broker_name} (${body.environment})`
