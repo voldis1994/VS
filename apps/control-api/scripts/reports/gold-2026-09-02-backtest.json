@@ -4,6 +4,7 @@
     "day": "2026-09-02",
     "mode": "live (no impulse CONTINUATION — matches desk)",
     "loose": false,
+    "micro_scalp": false,
     "continuation_policy": "no_impulse",
     "live_policy": "no_impulse",
     "bars": 1379,
