@@ -25,3 +25,5 @@ setup_policy:
     - refuse_entry_without_safety_sl
     - freeze_setup_while_open
     - structure_blocks_tip_floor_only  # at_tip/at_floor — not wide near_high/near_low (that froze CONTINUATION)
+    - mid_swing_uses_local_range       # late/impulse vs recent 12–15m range, not sticky overnight H/L
+    - no_entry_against_market_move     # block bounce tip / late flip vs sticky trend (unless V-flip)
