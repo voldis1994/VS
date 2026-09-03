@@ -80,4 +80,13 @@ describe('closed candle confirm — not spike (old rule)', () => {
       })
     ).toBeNull();
   });
+
+  it('soft: one green enough — strict still wants 2-green momentum', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 8; i++) bars.push(candle(4375, 4375.5, 4374.6, 4375.2));
+    bars.push(candle(4375.2, 4375.9, 4374.8, 4374.9)); // red
+    bars.push(candle(4374.9, 4376.2, 4374.8, 4376.0)); // one green
+    expect(entryCandleConfirmDeny('BUY', bars)).toMatch(/2 green|momentum/i);
+    expect(entryCandleConfirmDeny('BUY', bars, { soft: true })).toBeNull();
+  });
 });

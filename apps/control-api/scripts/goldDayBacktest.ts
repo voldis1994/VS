@@ -513,7 +513,13 @@ function main() {
           setup.playbook &&
           setup.kind !== 'NONE'
         ) {
-          const candleDeny = opts.loose ? null : entryCandleConfirmDeny(setup.side, minutes);
+          const candleDeny = opts.loose
+            ? null
+            : entryCandleConfirmDeny(setup.side, minutes, {
+                soft:
+                  (setup.kind === 'CONTINUATION' || setup.kind === 'BREAKOUT') &&
+                  /FLOW flip mid-leg|mid-leg (BUY|SELL)/i.test(String(setup.reason || '')),
+              });
           if (candleDeny) {
             recordMiss(
               candleDeny,
