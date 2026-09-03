@@ -417,14 +417,13 @@ function main() {
   };
 
   const outDir = resolve(__dirname, 'out');
+  const reportDir = resolve(__dirname, 'reports');
   mkdirSync(outDir, { recursive: true });
+  mkdirSync(reportDir, { recursive: true });
   const jsonPath = resolve(outDir, 'gold-2026-09-02-backtest.json');
   const mdPath = resolve(outDir, 'gold-2026-09-02-backtest.md');
-
-  writeFileSync(
-    jsonPath,
-    JSON.stringify({ summary, trades }, null, 2)
-  );
+  const jsonReport = resolve(reportDir, 'gold-2026-09-02-backtest.json');
+  const mdReport = resolve(reportDir, 'gold-2026-09-02-backtest.md');
 
   const md = [
     `# Gold backtest — 2026-09-02 (1m)`,
@@ -471,15 +470,19 @@ function main() {
       return `| ${t.i} | ${t.side} | ${t.setup} | ${fmtTs(t.entryTs).slice(11, 16)} | ${fmtTs(t.exitTs).slice(11, 16)} | ${t.points.toFixed(2)} | ${t.pnlGbp.toFixed(2)} | ${t.mfe.toFixed(2)} | ${t.holdBars}m | ${t.exitReason.split('·')[0]!.trim()} | ${wrong} |`;
     }),
     ``,
-    `Full JSON: \`scripts/out/gold-2026-09-02-backtest.json\``,
+    `Full JSON: \`scripts/reports/gold-2026-09-02-backtest.json\``,
     ``,
   ].join('\n');
 
+  writeFileSync(jsonPath, JSON.stringify({ summary, trades }, null, 2));
   writeFileSync(mdPath, md);
+  writeFileSync(jsonReport, JSON.stringify({ summary, trades }, null, 2));
+  writeFileSync(mdReport, md);
 
   console.log(JSON.stringify(summary, null, 2));
   console.log(`\nWrote ${mdPath}`);
   console.log(`Wrote ${jsonPath}`);
+  console.log(`Wrote ${mdReport}`);
 }
 
 main();

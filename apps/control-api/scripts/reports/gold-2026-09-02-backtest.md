@@ -94,4 +94,4 @@ PnL: **£0.10 / point** (£1/pt @ 1.0 lot).
 | 53 | SELL | CONTINUATION | 22:16 | 22:23 | -1.20 | -0.12 | 0.85 | 7m | MoveFlip |  |
 | 54 | BUY | CONTINUATION | 23:42 | 23:48 | 1.80 | 0.18 | 3.15 | 6m | BestOutcome harvest |  |
 
-Full JSON: `scripts/out/gold-2026-09-02-backtest.json`
+Full JSON: `scripts/reports/gold-2026-09-02-backtest.json`
