@@ -1,12 +1,13 @@
 setup_policy:
-  # Unified profitable brain (LIVE = marketSetup.decideUnifiedEntry + robotDesk)
-  # Capital 1h+1m → STRUCTURE(swing) → SETUP(sticky) → ENTRY(1m) → BEST OUTCOME
-  # Hard: never open without broker SAFETY SL
+  # Quality gate (LIVE desk) — fewer trades, higher confirm
+  # Capital 1h+1m → STRUCTURE → SETUP(ARMED only) → closed 1m confirm → BEST OUTCOME
   horizon_ms: 60000
   min_confidence: 0.0
   confirm_confidence: 0.0
   expiry_ms: 60000
   sticky_confirm_updates: 2
+  post_exit_cooldown_ms: 300000
+  reverse_needs_vflip_ms: 480000
   types:
     - CONTINUATION
     - PULLBACK
@@ -15,9 +16,11 @@ setup_policy:
     - FAILED_BREAK
     - NONE
   rules:
-    - armed_setup_owns_entry
-    - none_only_filtered_1m_impulse
-    - no_impulse_against_armed_setup
+    - armed_setup_only
+    - no_none_impulse_chop
+    - closed_1m_candle_confirm
+    - no_entry_on_spike
+    - post_exit_cooldown_5m
+    - reverse_needs_vflip
     - refuse_entry_without_safety_sl
     - freeze_setup_while_open
-    - thesis_legs_use_1m_flow
