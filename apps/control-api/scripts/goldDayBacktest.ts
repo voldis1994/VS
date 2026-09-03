@@ -4,6 +4,9 @@
  * Usage:
  *   npx tsx scripts/goldDayBacktest.ts
  *   npx tsx scripts/goldDayBacktest.ts --csv scripts/data/gc_f_2026-09-02_1m.csv --lot 0.1
+ *   npx tsx scripts/goldDayBacktest.ts --no-impulse-cont
+ *   npx tsx scripts/goldDayBacktest.ts --narrow-midleg
+ *   npx tsx scripts/goldDayBacktest.ts --loose
  *
  * PnL model (Capital-style Gold CFD, GBP account): £1 per point per 1.0 lot
  * → lot 0.1 = £0.10 / point. Spread default 0.50 (half each side).
@@ -23,6 +26,7 @@ import {
   liveFlow,
   minuteConfirmBar,
   updateSetupSticky,
+  type ContinuationPolicy,
   type MarketSetup,
   type StructureBook,
 } from '../src/services/marketSetup.js';
@@ -147,6 +151,8 @@ function parseArgs(argv: string[]) {
     warmup: 60,
     /** Ablation: drop candle+2bar+spike and against-move/climax gates */
     loose: false,
+    /** CONTINUATION arm/entry policy */
+    continuation: 'default' as ContinuationPolicy,
     tag: '' as string,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -156,9 +162,15 @@ function parseArgs(argv: string[]) {
     else if (a === '--spread') out.spread = Number(argv[++i]);
     else if (a === '--warmup') out.warmup = Number(argv[++i]);
     else if (a === '--loose') out.loose = true;
+    else if (a === '--no-impulse-cont') out.continuation = 'no_impulse';
+    else if (a === '--narrow-midleg') out.continuation = 'narrow_midleg';
     else if (a === '--tag') out.tag = String(argv[++i] || '');
   }
-  if (!out.tag) out.tag = out.loose ? 'loose' : 'strict';
+  if (!out.tag) {
+    if (out.continuation === 'no_impulse') out.tag = 'no-impulse-cont';
+    else if (out.continuation === 'narrow_midleg') out.tag = 'narrow-midleg';
+    else out.tag = out.loose ? 'loose' : 'strict';
+  }
   return out;
 }
 
@@ -339,7 +351,9 @@ function main() {
         mid,
         prev: structure.ready ? structure : null,
       });
-      setup = updateSetupSticky(setup, structure, minutes);
+      setup = updateSetupSticky(setup, structure, minutes, {
+        continuationPolicy: opts.continuation,
+      });
 
       // ——— manage open ———
       if (open) {
@@ -429,6 +443,7 @@ function main() {
         allowNoneImpulse: false,
         skipCandleConfirm: opts.loose,
         skipAgainstMove: opts.loose,
+        continuationPolicy: opts.continuation,
       });
 
       if (!entry) {
@@ -566,13 +581,21 @@ function main() {
   const fmtTs = (ts: number) =>
     new Date(ts * 1000).toISOString().replace('.000Z', 'Z');
 
+  const contModeLabel =
+    opts.continuation === 'no_impulse'
+      ? 'no impulse CONTINUATION (keep mid-trend / breakout / fade)'
+      : opts.continuation === 'narrow_midleg'
+        ? 'narrow mid-leg CONTINUATION only (bias + not climax + mid reason)'
+        : opts.loose
+          ? 'loose (no candle/2bar/spike, no against-move/climax)'
+          : 'strict (all quality gates)';
+
   const summary = {
     source: 'Yahoo Finance GC=F (public)',
     day: '2026-09-02',
-    mode: opts.loose
-      ? 'loose (no candle/2bar/spike, no against-move/climax)'
-      : 'strict (all quality gates)',
+    mode: contModeLabel,
     loose: opts.loose,
+    continuation_policy: opts.continuation,
     bars: bars.length,
     warmup: opts.warmup,
     lot: opts.lot,
@@ -700,8 +723,8 @@ function main() {
   writeFileSync(jsonReport, JSON.stringify({ summary, trades, missed }, null, 2));
   writeFileSync(mdReport, md);
 
-  // Keep untagged alias for the strict/default run
-  if (!opts.loose) {
+  // Keep untagged alias for the strict/default run only
+  if (opts.tag === 'strict' && opts.continuation === 'default' && !opts.loose) {
     writeFileSync(resolve(reportDir, 'gold-2026-09-02-backtest.json'), JSON.stringify({ summary, trades, missed }, null, 2));
     writeFileSync(resolve(reportDir, 'gold-2026-09-02-backtest.md'), md);
   }

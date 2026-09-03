@@ -843,10 +843,48 @@ export function dualSideWatch(
   return { watch_buy, watch_sell };
 }
 
+/** Ablation / policy: how CONTINUATION is armed from structure. */
+export type ContinuationPolicy = 'default' | 'no_impulse' | 'narrow_midleg';
+
+/** Raw impulse blip → CONTINUATION (the Gold-day 0-MFE loss driver). */
+export function isImpulseContinuationReason(reason: string | null | undefined): boolean {
+  return /IMPULSE (UP|DOWN) →/.test(String(reason || ''));
+}
+
+/**
+ * True mid-leg CONTINUATION (not tip-zone ride, not raw impulse arm).
+ * Used by narrow_midleg policy at arm + entry.
+ */
+export function isNarrowMidlegContinuation(
+  setup: { kind: string; side: 'BUY' | 'SELL' | null; reason: string },
+  structure: StructureBook,
+  minutes?: CapitalPriceCandle[] | null
+): boolean {
+  if (setup.kind !== 'CONTINUATION' || !setup.side) return false;
+  if (isImpulseContinuationReason(setup.reason)) return false;
+  const r = String(setup.reason || '');
+  // Explicit mid-leg / mid-swing arms only — tip-zone "Rally/Dump through" stays out
+  const midReason =
+    /CONTINUATION (up|down) ·/.test(r) || /CONTINUATION mid-swing/.test(r);
+  if (!midReason) return false;
+  if (setup.side === 'BUY' && structure.at_tip) return false;
+  if (setup.side === 'SELL' && structure.at_floor) return false;
+  if (setup.side === 'BUY' && structure.bias === 'BELOW') return false;
+  if (setup.side === 'SELL' && structure.bias === 'ABOVE') return false;
+  if (minutes?.length && atLocalClimax(setup.side, minutes)) return false;
+  return true;
+}
+
 function rawSetupFromStructure(
   structure: StructureBook,
-  minutes: CapitalPriceCandle[]
+  minutes: CapitalPriceCandle[],
+  opts?: { continuationPolicy?: ContinuationPolicy }
 ): Omit<MarketSetup, 'confirm' | 'updated_at'> {
+  const contPolicy = opts?.continuationPolicy ?? 'default';
+  const skipImpulseCont =
+    contPolicy === 'no_impulse' || contPolicy === 'narrow_midleg';
+  const narrowOnly = contPolicy === 'narrow_midleg';
+
   if (!structure.ready || minutes.length < MIN_SWING_BARS) {
     return {
       kind: 'NONE',
@@ -902,15 +940,18 @@ function rawSetupFromStructure(
           reason: `IMPULSE UP through H${hi.toFixed(2)} → BUY flip now`,
         };
       }
-      return {
-        kind: 'CONTINUATION',
-        side: 'BUY',
-        playbook: 'LONG',
-        status: 'ARMED',
-        swing_high: hi,
-        swing_low: lo,
-        reason: `IMPULSE UP → BUY flip now · mid ${structure.mid.toFixed(2)}`,
-      };
+      // Ablation: no_impulse / narrow_midleg — do not arm CONTINUATION from raw impulse blip
+      if (!skipImpulseCont) {
+        return {
+          kind: 'CONTINUATION',
+          side: 'BUY',
+          playbook: 'LONG',
+          status: 'ARMED',
+          swing_high: hi,
+          swing_low: lo,
+          reason: `IMPULSE UP → BUY flip now · mid ${structure.mid.toFixed(2)}`,
+        };
+      }
     }
   }
   if (imp === 'DOWN') {
@@ -939,15 +980,17 @@ function rawSetupFromStructure(
           reason: `IMPULSE DOWN through L${lo.toFixed(2)} → SELL flip now`,
         };
       }
-      return {
-        kind: 'CONTINUATION',
-        side: 'SELL',
-        playbook: 'LONG',
-        status: 'ARMED',
-        swing_high: hi,
-        swing_low: lo,
-        reason: `IMPULSE DOWN → SELL flip now · mid ${structure.mid.toFixed(2)}`,
-      };
+      if (!skipImpulseCont) {
+        return {
+          kind: 'CONTINUATION',
+          side: 'SELL',
+          playbook: 'LONG',
+          status: 'ARMED',
+          swing_high: hi,
+          swing_low: lo,
+          reason: `IMPULSE DOWN → SELL flip now · mid ${structure.mid.toFixed(2)}`,
+        };
+      }
     }
   }
 
@@ -1025,7 +1068,8 @@ function rawSetupFromStructure(
       reason: `FADE SELL at fresh swing high ${hi.toFixed(2)} · no BUY at tip`,
     };
   }
-  if (structure.near_high && !closedAbove && freshHi && flow === 'UP') {
+  // Tip-zone ride (not true mid-leg) — skip under narrow_midleg
+  if (!narrowOnly && structure.near_high && !closedAbove && freshHi && flow === 'UP') {
     return {
       kind: 'CONTINUATION',
       side: 'BUY',
@@ -1047,7 +1091,7 @@ function rawSetupFromStructure(
       reason: `FADE BUY at fresh swing low ${lo.toFixed(2)} · no SELL at floor`,
     };
   }
-  if (structure.near_low && !closedBelow && freshLo && flow === 'DOWN') {
+  if (!narrowOnly && structure.near_low && !closedBelow && freshLo && flow === 'DOWN') {
     return {
       kind: 'CONTINUATION',
       side: 'SELL',
@@ -1205,9 +1249,10 @@ function rawSetupFromStructure(
 export function updateSetupSticky(
   prev: MarketSetup | null | undefined,
   structure: StructureBook,
-  minutes: CapitalPriceCandle[]
+  minutes: CapitalPriceCandle[],
+  opts?: { continuationPolicy?: ContinuationPolicy }
 ): MarketSetup {
-  const raw = rawSetupFromStructure(structure, minutes);
+  const raw = rawSetupFromStructure(structure, minutes, opts);
   const now = new Date().toISOString();
   const prevSafe = prev || emptySetup();
   const imp = recentImpulse(minutes, 'flip') || recentImpulse(minutes);
@@ -1626,6 +1671,12 @@ export function decideUnifiedEntry(opts: {
   skipCandleConfirm?: boolean;
   /** Ablation / backtest: skip against-move + local climax gate */
   skipAgainstMove?: boolean;
+  /**
+   * CONTINUATION policy (ablation / candidate fix):
+   * - no_impulse: refuse entries whose setup reason is raw IMPULSE → CONTINUATION
+   * - narrow_midleg: only true mid-leg CONTINUATION (bias + not climax + mid reason)
+   */
+  continuationPolicy?: ContinuationPolicy;
 }): SetupEntry | null {
   const {
     setup,
@@ -1636,6 +1687,7 @@ export function decideUnifiedEntry(opts: {
     allowNoneImpulse = true,
     skipCandleConfirm = false,
     skipAgainstMove = false,
+    continuationPolicy = 'default',
   } = opts;
   if (!bar || bar.ticks < 1) return null;
 
@@ -1681,6 +1733,27 @@ export function decideUnifiedEntry(opts: {
   }
 
   if (!entry) return null;
+
+  // CONTINUATION ablation gates (setup sticky may still carry legacy IMPULSE reason)
+  if (entry.setup === 'CONTINUATION') {
+    if (
+      continuationPolicy === 'no_impulse' &&
+      (isImpulseContinuationReason(setup.reason) ||
+        isImpulseContinuationReason(entry.reason))
+    ) {
+      return null;
+    }
+    if (continuationPolicy === 'narrow_midleg') {
+      // Armed mid-leg path: require narrow quality on sticky setup
+      if (armed && setup.kind === 'CONTINUATION') {
+        if (!isNarrowMidlegContinuation(setup, structure, minutes)) return null;
+      } else {
+        // NONE→impulse CONTINUATION path is never narrow mid-leg
+        return null;
+      }
+    }
+  }
+
   if (entryFightsStickyTrend(entry.direction, minutes)) return null;
   if (structureBlocksEntry(entry.direction, structure, entry.setup)) return null;
   // Hard: never open against the real move (bounce tip / finished impulse / local climax)

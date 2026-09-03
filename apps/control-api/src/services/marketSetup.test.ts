@@ -9,6 +9,8 @@ import {
   emptySetup,
   flowAgreesWithSide,
   flowFlipAtExtreme,
+  isImpulseContinuationReason,
+  isNarrowMidlegContinuation,
   liveFlow,
   marketTrend,
   minuteConfirmBar,
@@ -692,5 +694,84 @@ describe('decideUnifiedEntry', () => {
     bars.push(candle(2008.5, 2009.5, 2008, 2009.2)); // near high, UP — not a pullback
     const tipBar = bar10(2008.5, 2009.5, 2008.2, 2009.2);
     expect(decideEntryFromSetup(setup, tipBar, bars, 2009.2)).toBeNull();
+  });
+});
+
+describe('CONTINUATION policies (ablation)', () => {
+  it('isImpulseContinuationReason matches raw IMPULSE arm text', () => {
+    expect(isImpulseContinuationReason('IMPULSE UP → BUY flip now · mid 4330')).toBe(true);
+    expect(isImpulseContinuationReason('IMPULSE DOWN → SELL flip now · mid 4330')).toBe(true);
+    expect(isImpulseContinuationReason('CONTINUATION up · above mid 4330 · below tip')).toBe(
+      false
+    );
+    expect(isImpulseContinuationReason('IMPULSE UP through H4340 → BUY flip now')).toBe(false);
+  });
+
+  it('no_impulse policy does not arm IMPULSE → CONTINUATION', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 25; i++) {
+      bars.push(candle(4430, 4432, 4428, 4430));
+    }
+    for (let i = 0; i < 8; i++) {
+      const o = 4430 - i * 1.2;
+      bars.push(candle(o, o + 0.3, o - 1.5, o - 1.2));
+    }
+    const st = buildStructure({ minutes: bars, mid: bars[bars.length - 1]!.close });
+    const def = updateSetupSticky(emptySetup(), st, bars);
+    const noImp = updateSetupSticky(emptySetup(), st, bars, {
+      continuationPolicy: 'no_impulse',
+    });
+    // Default may arm IMPULSE CONTINUATION or BREAKOUT/FADE — policy must not keep IMPULSE→CONT
+    if (isImpulseContinuationReason(def.reason)) {
+      expect(isImpulseContinuationReason(noImp.reason)).toBe(false);
+    }
+    expect(noImp.reason).not.toMatch(/IMPULSE (UP|DOWN) →/);
+  });
+
+  it('narrow mid-leg helper rejects impulse and tip-zone reasons', () => {
+    const st = {
+      ready: true,
+      swing_high: 4340,
+      swing_low: 4320,
+      span: 20,
+      mid: 4330,
+      bias: 'BELOW' as const,
+      hour_bias: 'DOWN' as const,
+      near_high: false,
+      near_low: false,
+      at_tip: false,
+      at_floor: false,
+      detail: 'test',
+    } as StructureBook;
+    expect(
+      isNarrowMidlegContinuation(
+        {
+          kind: 'CONTINUATION',
+          side: 'SELL',
+          reason: 'IMPULSE DOWN → SELL flip now · mid 4330',
+        },
+        st
+      )
+    ).toBe(false);
+    expect(
+      isNarrowMidlegContinuation(
+        {
+          kind: 'CONTINUATION',
+          side: 'SELL',
+          reason: 'Dump through low zone · SELL not FADE BUY · L4320',
+        },
+        st
+      )
+    ).toBe(false);
+    expect(
+      isNarrowMidlegContinuation(
+        {
+          kind: 'CONTINUATION',
+          side: 'SELL',
+          reason: 'CONTINUATION down · below mid 4330.00 · above floor 4320.00',
+        },
+        st
+      )
+    ).toBe(true);
   });
 });
