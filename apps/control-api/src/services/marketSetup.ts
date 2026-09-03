@@ -66,12 +66,12 @@ export function isSpikeCandle(
 }
 
 /**
- * Entry requires a closed 1m candle that confirms direction — not a spike, not opposite color.
- * After a spike the OTHER way, need the next bar to close beyond the spike close (your old rule).
- * Returns null if OK, or a short wait reason.
+ * Entry candle confirm — closed 1m agrees with side.
  *
- * Soft (CONTINUATION / BREAKOUT): still need color + spike rules, but skip 2-bar momentum
- * so a mid-leg dump isn't stuck waiting a second same-color while the move runs.
+ * Soft (mid-swing / mid-leg CONT): do NOT sit through a dump waiting for a perfect
+ * red after 5 reds + a doji pause. Allow tiny pause bars when recent bars already
+ * print the move; skip 2-bar momentum; allow directional dump/rally spikes.
+ * Strict (FADE / tip paths): 2 same-color + no entry on spike + no opposite color.
  */
 export function entryCandleConfirmDeny(
   direction: 'BUY' | 'SELL',
@@ -83,45 +83,100 @@ export function entryCandleConfirmDeny(
   const cur = minutes[minutes.length - 1]!;
   const prev = minutes[minutes.length - 2]!;
   const prior = minutes.slice(0, -1);
+  const body = Math.abs(cur.close - cur.open);
+  const px = Math.abs(cur.close) || 1;
+  const tinyBody = body <= Math.max(px * 0.00005, 0.2);
 
-  // Never enter on the spike candle itself
+  const curBuy = cur.close > cur.open;
+  const curSell = cur.close < cur.open;
+  const curAgrees = direction === 'BUY' ? curBuy : curSell;
+  // Real opposite body (not a doji pause mid-leg)
+  const curFights =
+    direction === 'BUY' ? curSell && !tinyBody : curBuy && !tinyBody;
+
+  // Spike: always wait next bar — dump spike chase was soft P&L poison
   if (isSpikeCandle(cur, prior)) {
     return 'wait · spike 1m — need next candle confirm';
   }
 
-  // Closed candle must agree with side (no BUY on red / SELL on green)
-  if (direction === 'BUY' && !(cur.close > cur.open)) {
-    return 'wait · need closed green 1m confirm';
-  }
-  if (direction === 'SELL' && !(cur.close < cur.open)) {
-    return 'wait · need closed red 1m confirm';
-  }
-
-  // Momentum: two consecutive same-color 1m — soft skips (mid-leg already proved by quality)
   if (!soft) {
+    if (direction === 'BUY' && !curBuy) return 'wait · need closed green 1m confirm';
+    if (direction === 'SELL' && !curSell) return 'wait · need closed red 1m confirm';
+    // Strict: two consecutive same-color 1m
     if (direction === 'BUY' && !(prev.close > prev.open)) {
       return 'wait · need 2 green 1m (momentum)';
     }
     if (direction === 'SELL' && !(prev.close < prev.open)) {
       return 'wait · need 2 red 1m (momentum)';
     }
+  } else {
+    // Soft mid-leg: only when a multi-bar dump/rally is already proven.
+    // Blocks one-blip CONT; allows pause doji after 3+ directional bars (live 5-red fail).
+    if (curFights) {
+      return direction === 'BUY'
+        ? 'wait · need closed green 1m confirm'
+        : 'wait · need closed red 1m confirm';
+    }
+    const win = minutes.slice(-5);
+    const dirBars = win.filter((c) =>
+      direction === 'BUY' ? c.close > c.open : c.close < c.open
+    ).length;
+    const lastW = win[win.length - 1]!;
+    const run =
+      direction === 'BUY'
+        ? lastW.close - Math.min(...win.map((c) => c.low))
+        : Math.max(...win.map((c) => c.high)) - lastW.close;
+    const dumpProven = dirBars >= 3 && run >= 2.0;
+    if (!dumpProven) {
+      // Fall back to strict color + 2-bar until the leg is real
+      if (direction === 'BUY' && !curBuy) return 'wait · need closed green 1m confirm';
+      if (direction === 'SELL' && !curSell) return 'wait · need closed red 1m confirm';
+      if (direction === 'BUY' && !(prev.close > prev.open)) {
+        return 'wait · need 2 green 1m (momentum)';
+      }
+      if (direction === 'SELL' && !(prev.close < prev.open)) {
+        return 'wait · need 2 red 1m (momentum)';
+      }
+    }
+    // dumpProven: pause doji OR single directional bar is enough
   }
 
   // After a large spike against us / exhaustion: confirm closes beyond spike close
   if (isSpikeCandle(prev, minutes.slice(0, -2))) {
     if (direction === 'SELL') {
       if (!(prev.close > prev.open && cur.close < prev.close)) {
-        return 'wait · confirm after UP spike (close below spike)';
+        if (!soft) return 'wait · confirm after UP spike (close below spike)';
+        const win = minutes.slice(-5);
+        const reds = win.filter((c) => c.close < c.open).length;
+        const lastW = win[win.length - 1]!;
+        const drop = Math.max(...win.map((c) => c.high)) - lastW.close;
+        if (!(reds >= 3 && drop >= 2.0)) {
+          return 'wait · confirm after UP spike (close below spike)';
+        }
       }
     }
     if (direction === 'BUY') {
       if (!(prev.close < prev.open && cur.close > prev.close)) {
-        return 'wait · confirm after DOWN spike (close above spike)';
+        if (!soft) return 'wait · confirm after DOWN spike (close above spike)';
+        const win = minutes.slice(-5);
+        const greens = win.filter((c) => c.close > c.open).length;
+        const lastW = win[win.length - 1]!;
+        const rise = lastW.close - Math.min(...win.map((c) => c.low));
+        if (!(greens >= 3 && rise >= 2.0)) {
+          return 'wait · confirm after DOWN spike (close above spike)';
+        }
       }
     }
   }
 
   return null;
+}
+
+/** Soft candle — mid-swing / flow-flip mid-leg only (not tip CONTINUATION up/down). */
+export function isSoftCandleSetupReason(reason: string | null | undefined): boolean {
+  return /FLOW flip mid-leg|IMPULSE (UP|DOWN) mid-leg|CONTINUATION mid-swing/i.test(
+    String(reason || '')
+  );
 }
 
 export const SETUP_KINDS = [
@@ -2070,11 +2125,10 @@ export function decideUnifiedEntry(opts: {
     return null;
   }
   if (!skipCandleConfirm) {
-    // Soft only on flow-flip mid-leg CONT — tip-blip / normal CONT keep 2-bar momentum
-    // (blank soft CONT regressed Gold day £2.54→£1.73).
+    // Soft on mid-swing / mid-leg CONT — pause doji after dump must not block forever
     const softCandle =
       (entry.setup === 'CONTINUATION' || entry.setup === 'BREAKOUT') &&
-      /FLOW flip mid-leg|mid-leg (BUY|SELL)/i.test(String(setup.reason || ''));
+      isSoftCandleSetupReason(setup.reason);
     const candleDeny = entryCandleConfirmDeny(entry.direction, minutes, {
       soft: softCandle,
     });

@@ -81,12 +81,46 @@ describe('closed candle confirm — not spike (old rule)', () => {
     ).toBeNull();
   });
 
-  it('soft: one green enough — strict still wants 2-green momentum', () => {
+  it('soft: one green NOT enough without proven rally — strict still wants 2-green', () => {
     const bars: CapitalPriceCandle[] = [];
     for (let i = 0; i < 8; i++) bars.push(candle(4375, 4375.5, 4374.6, 4375.2));
     bars.push(candle(4375.2, 4375.9, 4374.8, 4374.9)); // red
     bars.push(candle(4374.9, 4376.2, 4374.8, 4376.0)); // one green
     expect(entryCandleConfirmDeny('BUY', bars)).toMatch(/2 green|momentum/i);
-    expect(entryCandleConfirmDeny('BUY', bars, { soft: true })).toBeNull();
+    expect(entryCandleConfirmDeny('BUY', bars, { soft: true })).toMatch(/2 green|momentum|green/i);
+  });
+
+  it('soft: pause doji after dump reds does NOT block SELL (5-red class)', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 6; i++) bars.push(candle(4436, 4437, 4435, 4436));
+    // 5 red dump
+    bars.push(candle(4436, 4436.2, 4434, 4434.2));
+    bars.push(candle(4434.2, 4434.3, 4432, 4432.1));
+    bars.push(candle(4432.1, 4432.2, 4430, 4430.2));
+    bars.push(candle(4430.2, 4430.3, 4428.5, 4428.6));
+    bars.push(candle(4428.6, 4428.7, 4427.5, 4427.6));
+    // Pause doji / micro-green — live desk said "need closed red" forever
+    bars.push(candle(4427.6, 4427.8, 4427.5, 4427.7));
+    expect(entryCandleConfirmDeny('SELL', bars)).toMatch(/red/i);
+    expect(entryCandleConfirmDeny('SELL', bars, { soft: true })).toBeNull();
+  });
+
+  it('soft: proven dump + last red enters without 2-red wait', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 6; i++) bars.push(candle(4436, 4437, 4435, 4436));
+    bars.push(candle(4436, 4436.2, 4434, 4434.2));
+    bars.push(candle(4434.2, 4434.3, 4432, 4432.1));
+    bars.push(candle(4432.1, 4432.5, 4431.8, 4432.3)); // small green blip
+    bars.push(candle(4432.3, 4432.4, 4430.5, 4430.6)); // red — only one after green
+    expect(entryCandleConfirmDeny('SELL', bars)).toMatch(/2 red|momentum/i);
+    expect(entryCandleConfirmDeny('SELL', bars, { soft: true })).toBeNull();
+  });
+
+  it('soft: directional dump spike still waits next bar', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 8; i++) bars.push(candle(4435, 4435.4, 4434.6, 4435.1));
+    bars.push(candle(4435.1, 4435.2, 4428.0, 4428.2)); // dump spike red
+    expect(entryCandleConfirmDeny('SELL', bars)).toMatch(/spike/i);
+    expect(entryCandleConfirmDeny('SELL', bars, { soft: true })).toMatch(/spike/i);
   });
 });

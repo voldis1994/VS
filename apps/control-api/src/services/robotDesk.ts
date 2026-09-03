@@ -36,6 +36,7 @@ import {
   entryCandleConfirmDeny,
   flowAgreesWithSide,
   flowFlipAtExtreme,
+  isSoftCandleSetupReason,
   LIVE_CONTINUATION_POLICY,
   liveFlow,
   minuteConfirmBar,
@@ -445,7 +446,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     chain:
       'Capital 1h+1m → STRUCTURE → SETUP(ARMED only) → closed 1m confirm → BEST OUTCOME · MoveFlip reverses next 1m',
     note:
-      'Quality gate: both sides; dump flips sticky BUY→mid-leg SELL (soft 1m); FADE SELL blocked vs UP; MoveFlip→switch now; SAFETY SL required.',
+      'Quality gate: both sides; mid-swing/mid-leg SELL soft 1m (pause doji OK); dump flips sticky BUY; MoveFlip→switch now; SAFETY SL required.',
   };
 }
 
@@ -1562,7 +1563,7 @@ async function robotCycleBody(s: Internal) {
     if (!entry) {
       const softCandle =
         (setup.kind === 'CONTINUATION' || setup.kind === 'BREAKOUT') &&
-        /FLOW flip mid-leg|mid-leg (BUY|SELL)/i.test(String(setup.reason || ''));
+        isSoftCandleSetupReason(setup.reason);
       const candleNote = newMinute
         ? entryCandleConfirmDeny(
             setup.side === 'SELL' ? 'SELL' : 'BUY',

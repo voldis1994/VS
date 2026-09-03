@@ -26,6 +26,7 @@ import {
   entryAgainstMarketMove,
   entryCandleConfirmDeny,
   flowFlipAtExtreme,
+  isSoftCandleSetupReason,
   LIVE_CONTINUATION_POLICY,
   liveFlow,
   microChopEntryOk,
@@ -518,7 +519,7 @@ function main() {
             : entryCandleConfirmDeny(setup.side, minutes, {
                 soft:
                   (setup.kind === 'CONTINUATION' || setup.kind === 'BREAKOUT') &&
-                  /FLOW flip mid-leg|mid-leg (BUY|SELL)/i.test(String(setup.reason || '')),
+                  isSoftCandleSetupReason(setup.reason),
               });
           if (candleDeny) {
             recordMiss(
