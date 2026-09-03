@@ -31,6 +31,7 @@ import {
   favorableMove,
   type ExitSnapshot,
 } from '../src/services/exitManage.js';
+import { postExitEntryGate } from '../src/services/exitReentry.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -180,6 +181,7 @@ function main() {
 
   let lastExitMs = 0;
   let lastExitSide: 'BUY' | 'SELL' | null = null;
+  let lastExitReason: string | null = null;
   let entryMinuteBucket = 0;
 
   const trades: TradeRow[] = [];
@@ -267,18 +269,14 @@ function main() {
           trades.push(row);
           lastExitMs = simNow;
           lastExitSide = open.side;
+          lastExitReason = row.exitReason;
+          entryMinuteBucket = Math.floor(last.ts / 60); // wait next 1m (desk clearTradeState)
           open = null;
         }
         continue; // one position — desk freezes setup while open
       }
 
       // ——— entry ———
-      const EXIT_COOLDOWN_MS = 5 * 60_000;
-      if (lastExitMs > 0 && simNow - lastExitMs < EXIT_COOLDOWN_MS) {
-        bumpBlock('post-exit cool-down 5m');
-        continue;
-      }
-
       const minuteBucket = Math.floor(last.ts / 60);
       const newMinute = !entryMinuteBucket || minuteBucket > entryMinuteBucket;
       if (!newMinute) {
@@ -316,31 +314,26 @@ function main() {
         continue;
       }
 
-      if (lastExitSide && entry.direction === lastExitSide) {
-        const flow = liveFlow(minutes);
-        const flipped =
-          (lastExitSide === 'BUY' && flow === 'DOWN') ||
-          (lastExitSide === 'SELL' && flow === 'UP');
-        if (!flipped) {
-          bumpBlock(`same-side dead until flip (${lastExitSide})`);
-          continue;
-        }
-      }
-
-      if (
-        lastExitSide &&
-        entry.direction !== lastExitSide &&
-        simNow - lastExitMs < 8 * 60_000
-      ) {
-        const flip = flowFlipAtExtreme(minutes);
-        const need: 'UP' | 'DOWN' = entry.direction === 'SELL' ? 'DOWN' : 'UP';
-        if (flip !== need) {
-          bumpBlock(`reverse needs V-flip ${need}`);
-          continue;
-        }
+      const reentry = postExitEntryGate({
+        nowMs: simNow,
+        lastExitMs,
+        lastExitSide,
+        lastExitReason,
+        entryDirection: entry.direction,
+        flow: liveFlow(minutes),
+        vflip: flowFlipAtExtreme(minutes),
+      });
+      if (!reentry.allow) {
+        bumpBlock(reentry.detail || 'post-exit gate');
+        continue;
       }
 
       entryMinuteBucket = minuteBucket;
+      if (lastExitSide && entry.direction !== lastExitSide) {
+        lastExitSide = null;
+        lastExitMs = 0;
+        lastExitReason = null;
+      }
       const fill = entry.direction === 'BUY' ? ask : bid;
       open = {
         side: entry.direction,

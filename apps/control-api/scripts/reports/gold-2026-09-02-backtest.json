@@ -8,38 +8,41 @@
     "spread": 0.5,
     "gbp_per_point": 0.1,
     "pnl_model": "£1 per point per 1.0 lot (Capital-style Gold CFD, GBP)",
-    "trades": 30,
-    "wins": 10,
-    "losses": 20,
+    "trades": 34,
+    "wins": 12,
+    "losses": 22,
     "flats": 0,
-    "total_pnl_gbp": -2.34,
-    "avg_pnl_gbp": -0.08,
-    "wrong_entries": 17,
-    "wrong_entry_rate": 56.7,
+    "total_pnl_gbp": -0.38,
+    "avg_pnl_gbp": -0.01,
+    "wrong_entries": 19,
+    "wrong_entry_rate": 55.9,
     "wrong_reasons": {
-      "Loss with no real MFE run (<0.8pt) — wrong side / late": 17
+      "Loss with no real MFE run (<0.8pt) — wrong side / late": 18,
+      "Fast fail (2m) · ReversalStop": 1
     },
     "exit_reasons": {
-      "ThesisFailure": 14,
+      "ThesisFailure": 15,
       "MoveFlip": 8,
+      "PeakProtection": 4,
       "EarlyCut": 3,
-      "PeakProtection": 3,
-      "BestOutcome harvest": 2
+      "BestOutcome harvest": 2,
+      "ReversalStop": 1,
+      "Target": 1
     },
     "setups": {
-      "CONTINUATION": 27,
-      "BREAKOUT": 2,
-      "FADE": 1
+      "CONTINUATION": 29,
+      "BREAKOUT": 3,
+      "FADE": 2
     },
     "top_blocks": {
-      "wait ARMED setup (NONE)": 345,
-      "ARMED no confirm": 172,
-      "wait · need closed green 1m confirm": 146,
-      "post-exit cool-down 5m": 118,
-      "wait · need closed red 1m confirm": 106,
-      "wait · need 2 green 1m (momentum)": 82,
-      "wait · spike 1m — need next candle confirm": 74,
-      "wait · need 2 red 1m (momentum)": 55
+      "wait ARMED setup (NONE)": 372,
+      "ARMED no confirm": 184,
+      "wait · need closed green 1m confirm": 160,
+      "wait · need closed red 1m confirm": 116,
+      "wait · need 2 green 1m (momentum)": 92,
+      "wait · spike 1m — need next candle confirm": 76,
+      "wait · need 2 red 1m (momentum)": 64,
+      "wait · confirm after UP spike (close below spike)": 23
     }
   },
   "trades": [
@@ -298,6 +301,56 @@
       "side": "SELL",
       "setup": "CONTINUATION",
       "playbook": "LONG",
+      "entryReason": "ENTRY · CONTINUATION SELL · flow DOWN @ 4363.70 · IMPULSE DOWN → SELL flip now · mid 4355.05",
+      "entryTs": 1788340260,
+      "entryMid": 4363.7001953125,
+      "entryFill": 4363.4501953125,
+      "exitTs": 1788340560,
+      "exitMid": 4361.7998046875,
+      "exitFill": 4362.0498046875,
+      "points": 1.400390625,
+      "pnlGbp": 0.1400390625,
+      "mfe": 2.75,
+      "mae": -0.44970703125,
+      "holdBars": 5,
+      "exitReason": "PeakProtection · LONG · retention 60% of MFE 2.75000",
+      "atTip": false,
+      "atFloor": false,
+      "nearHigh": false,
+      "nearLow": false,
+      "wrong": false,
+      "wrongWhy": null
+    },
+    {
+      "i": 12,
+      "side": "BUY",
+      "setup": "CONTINUATION",
+      "playbook": "LONG",
+      "entryReason": "ENTRY · CONTINUATION BUY · flow UP @ 4356.10 · IMPULSE UP → BUY flip now · mid 4355.05",
+      "entryTs": 1788341340,
+      "entryMid": 4356.10009765625,
+      "entryFill": 4356.35009765625,
+      "exitTs": 1788341400,
+      "exitMid": 4356,
+      "exitFill": 4355.75,
+      "points": -0.60009765625,
+      "pnlGbp": -0.060009765625,
+      "mfe": 0,
+      "mae": -0.35009765625,
+      "holdBars": 1,
+      "exitReason": "ThesisFailure · leg BUY vs 1m flow DOWN · LONG · CONTINUATION",
+      "atTip": false,
+      "atFloor": false,
+      "nearHigh": false,
+      "nearLow": false,
+      "wrong": true,
+      "wrongWhy": "Loss with no real MFE run (<0.8pt) — wrong side / late"
+    },
+    {
+      "i": 13,
+      "side": "SELL",
+      "setup": "CONTINUATION",
+      "playbook": "LONG",
       "entryReason": "ENTRY · CONTINUATION SELL · flow DOWN @ 4352.80 · IMPULSE DOWN → SELL flip now · mid 4355.05",
       "entryTs": 1788346320,
       "entryMid": 4352.7998046875,
@@ -319,7 +372,7 @@
       "wrongWhy": "Loss with no real MFE run (<0.8pt) — wrong side / late"
     },
     {
-      "i": 12,
+      "i": 14,
       "side": "BUY",
       "setup": "CONTINUATION",
       "playbook": "LONG",
@@ -344,7 +397,7 @@
       "wrongWhy": null
     },
     {
-      "i": 13,
+      "i": 15,
       "side": "SELL",
       "setup": "CONTINUATION",
       "playbook": "LONG",
@@ -369,7 +422,7 @@
       "wrongWhy": "Loss with no real MFE run (<0.8pt) — wrong side / late"
     },
     {
-      "i": 14,
+      "i": 16,
       "side": "BUY",
       "setup": "CONTINUATION",
       "playbook": "LONG",
@@ -394,7 +447,7 @@
       "wrongWhy": null
     },
     {
-      "i": 15,
+      "i": 17,
       "side": "SELL",
       "setup": "CONTINUATION",
       "playbook": "LONG",
@@ -419,7 +472,7 @@
       "wrongWhy": "Loss with no real MFE run (<0.8pt) — wrong side / late"
     },
     {
-      "i": 16,
+      "i": 18,
       "side": "BUY",
       "setup": "CONTINUATION",
       "playbook": "LONG",
@@ -444,7 +497,7 @@
       "wrongWhy": "Loss with no real MFE run (<0.8pt) — wrong side / late"
     },
     {
-      "i": 17,
+      "i": 19,
       "side": "SELL",
       "setup": "CONTINUATION",
       "playbook": "LONG",
@@ -469,7 +522,7 @@
       "wrongWhy": "Loss with no real MFE run (<0.8pt) — wrong side / late"
     },
     {
-      "i": 18,
+      "i": 20,
       "side": "BUY",
       "setup": "BREAKOUT",
       "playbook": "SCALP",
@@ -494,7 +547,57 @@
       "wrongWhy": "Loss with no real MFE run (<0.8pt) — wrong side / late"
     },
     {
-      "i": 19,
+      "i": 21,
+      "side": "SELL",
+      "setup": "FADE",
+      "playbook": "FADE",
+      "entryReason": "ENTRY · FADE SELL reject @ H4391.50 · FADE SELL at fresh swing high 4391.50 · no BUY at tip",
+      "entryTs": 1788354720,
+      "entryMid": 4386.60009765625,
+      "entryFill": 4386.35009765625,
+      "exitTs": 1788354840,
+      "exitMid": 4386.5,
+      "exitFill": 4386.75,
+      "points": -0.39990234375,
+      "pnlGbp": -0.039990234375,
+      "mfe": 1.14990234375,
+      "mae": -0.14990234375,
+      "holdBars": 2,
+      "exitReason": "ReversalStop · FADE · had MFE 1.14990 now -0.39990 · loss capped",
+      "atTip": false,
+      "atFloor": false,
+      "nearHigh": true,
+      "nearLow": false,
+      "wrong": true,
+      "wrongWhy": "Fast fail (2m) · ReversalStop"
+    },
+    {
+      "i": 22,
+      "side": "BUY",
+      "setup": "BREAKOUT",
+      "playbook": "SCALP",
+      "entryReason": "ENTRY · BREAKOUT BUY through H4392.40 @ 4391.90 · IMPULSE UP through H4392.40 → BUY flip now",
+      "entryTs": 1788355320,
+      "entryMid": 4391.89990234375,
+      "entryFill": 4392.14990234375,
+      "exitTs": 1788355860,
+      "exitMid": 4411.60009765625,
+      "exitFill": 4411.35009765625,
+      "points": 19.2001953125,
+      "pnlGbp": 1.9200195312500001,
+      "mfe": 19.4501953125,
+      "mae": 0,
+      "holdBars": 9,
+      "exitReason": "Target · SCALP · BREAKOUT · UPL 19.20020 ≥ TP 14.05488",
+      "atTip": false,
+      "atFloor": false,
+      "nearHigh": true,
+      "nearLow": false,
+      "wrong": false,
+      "wrongWhy": null
+    },
+    {
+      "i": 23,
       "side": "SELL",
       "setup": "FADE",
       "playbook": "FADE",
@@ -519,7 +622,7 @@
       "wrongWhy": "Loss with no real MFE run (<0.8pt) — wrong side / late"
     },
     {
-      "i": 20,
+      "i": 24,
       "side": "BUY",
       "setup": "BREAKOUT",
       "playbook": "SCALP",
@@ -544,7 +647,7 @@
       "wrongWhy": null
     },
     {
-      "i": 21,
+      "i": 25,
       "side": "SELL",
       "setup": "CONTINUATION",
       "playbook": "LONG",
@@ -569,7 +672,7 @@
       "wrongWhy": null
     },
     {
-      "i": 22,
+      "i": 26,
       "side": "BUY",
       "setup": "CONTINUATION",
       "playbook": "LONG",
@@ -594,7 +697,7 @@
       "wrongWhy": "Loss with no real MFE run (<0.8pt) — wrong side / late"
     },
     {
-      "i": 23,
+      "i": 27,
       "side": "SELL",
       "setup": "CONTINUATION",
       "playbook": "LONG",
@@ -619,7 +722,7 @@
       "wrongWhy": null
     },
     {
-      "i": 24,
+      "i": 28,
       "side": "BUY",
       "setup": "CONTINUATION",
       "playbook": "LONG",
@@ -644,7 +747,7 @@
       "wrongWhy": null
     },
     {
-      "i": 25,
+      "i": 29,
       "side": "SELL",
       "setup": "CONTINUATION",
       "playbook": "LONG",
@@ -669,7 +772,7 @@
       "wrongWhy": null
     },
     {
-      "i": 26,
+      "i": 30,
       "side": "BUY",
       "setup": "CONTINUATION",
       "playbook": "LONG",
@@ -694,7 +797,7 @@
       "wrongWhy": "Loss with no real MFE run (<0.8pt) — wrong side / late"
     },
     {
-      "i": 27,
+      "i": 31,
       "side": "SELL",
       "setup": "CONTINUATION",
       "playbook": "LONG",
@@ -719,7 +822,7 @@
       "wrongWhy": "Loss with no real MFE run (<0.8pt) — wrong side / late"
     },
     {
-      "i": 28,
+      "i": 32,
       "side": "BUY",
       "setup": "CONTINUATION",
       "playbook": "LONG",
@@ -744,7 +847,7 @@
       "wrongWhy": "Loss with no real MFE run (<0.8pt) — wrong side / late"
     },
     {
-      "i": 29,
+      "i": 33,
       "side": "SELL",
       "setup": "CONTINUATION",
       "playbook": "LONG",
@@ -769,7 +872,7 @@
       "wrongWhy": "Loss with no real MFE run (<0.8pt) — wrong side / late"
     },
     {
-      "i": 30,
+      "i": 34,
       "side": "BUY",
       "setup": "CONTINUATION",
       "playbook": "LONG",
