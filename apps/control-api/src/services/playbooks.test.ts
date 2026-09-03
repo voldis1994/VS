@@ -3,6 +3,7 @@ import {
   playbookFromRegime,
   thesisFailureForPlaybook,
   nearRangeEdge,
+  exitParamsForTrade,
   PLAYBOOK_EXIT,
 } from './playbooks.js';
 import { decideEntryFrom10sRegime } from './entryFromRegime.js';
@@ -173,7 +174,7 @@ describe('playbook exit', () => {
     expect(aged.reason).toMatch(/LONG/);
   });
 
-  it('SCALP PeakProtect at ret < 55%, LONG at < 40%', () => {
+  it('all books PeakProtect below 65% retention (unified 35% giveback)', () => {
     const scalp = decideBestOutcomeExit(
       {
         open_side: 'BUY',
@@ -190,6 +191,22 @@ describe('playbook exit', () => {
     expect(scalp.exit).toBe(true);
     expect(scalp.reason).toMatch(/PeakProtection/);
 
+    const longCut = decideBestOutcomeExit(
+      {
+        open_side: 'BUY',
+        entry_price: 2000,
+        entry_at: ago(60_000),
+        mfe: 5,
+        mae: 0,
+        peak_retention: 0.5,
+        regime: 'TREND_UP',
+        playbook: 'LONG',
+      },
+      2002.5
+    );
+    expect(longCut.exit).toBe(true);
+    expect(longCut.reason).toMatch(/PeakProtection/);
+
     const longHold = decideBestOutcomeExit(
       {
         open_side: 'BUY',
@@ -197,11 +214,11 @@ describe('playbook exit', () => {
         entry_at: ago(60_000),
         mfe: 5,
         mae: 0,
-        peak_retention: 0.6,
+        peak_retention: 0.8,
         regime: 'TREND_UP',
         playbook: 'LONG',
       },
-      2003
+      2004
     );
     expect(longHold.exit).toBe(false);
   });
@@ -214,7 +231,7 @@ describe('playbook exit', () => {
         entry_at: ago(250_000),
         mfe: 2,
         mae: 0,
-        peak_retention: 0.7,
+        peak_retention: 0.8,
         regime: 'RANGE',
         playbook: 'FADE',
       },
@@ -224,11 +241,19 @@ describe('playbook exit', () => {
     expect(d.reason).toMatch(/TimeDecay/);
   });
 
-  it('exit params match the drawing', () => {
-    expect(PLAYBOOK_EXIT.LONG.peakRet).toBe(0.4);
+  it('exit params: unified 35% giveback (= keep 65%)', () => {
+    expect(PLAYBOOK_EXIT.LONG.peakRet).toBe(0.65);
+    expect(PLAYBOOK_EXIT.SCALP.peakRet).toBe(0.65);
+    expect(PLAYBOOK_EXIT.FADE.peakRet).toBe(0.65);
     expect(PLAYBOOK_EXIT.LONG.thesisMinHoldMs).toBe(120_000);
     expect(PLAYBOOK_EXIT.SCALP.tpPct).toBe(0.0022);
     expect(PLAYBOOK_EXIT.FADE.timeDecayMs).toBe(240_000);
+  });
+
+  it('CONTINUATION setup also uses 65% retention (not old 28%)', () => {
+    const p = exitParamsForTrade('LONG', 'CONTINUATION');
+    expect(p.peakRet).toBe(0.65);
+    expect(p.harvestRet).toBe(0.7);
   });
 });
 

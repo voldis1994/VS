@@ -54,19 +54,33 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     expect(d.reason).toMatch(/HardInvalidation/);
   });
 
-  it('LONG peak protect below 40% retention', () => {
+  it('LONG peak protect below 65% retention (max 35% giveback)', () => {
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: 2000,
         mfe: 8,
-        peak_retention: 0.3,
+        peak_retention: 0.5,
         playbook: 'LONG',
       }),
-      2002.4
+      2004
     );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/PeakProtection/);
+  });
+
+  it('holds while retention still ≥65%', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        mfe: 8,
+        peak_retention: 0.7,
+        playbook: 'LONG',
+      }),
+      2005.6
+    );
+    expect(d.exit).toBe(false);
   });
 
   it('target uses playbook TP', () => {
