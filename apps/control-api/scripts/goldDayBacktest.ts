@@ -6,6 +6,8 @@
  *   npx tsx scripts/goldDayBacktest.ts --csv scripts/data/gc_f_2026-09-02_1m.csv --lot 0.1
  *   npx tsx scripts/goldDayBacktest.ts --impulse-cont   # legacy IMPULSE CONTINUATION
  *   npx tsx scripts/goldDayBacktest.ts --micro-scalp    # live + NONE micro-move SCALP
+ *   npx tsx scripts/goldDayBacktest.ts --micro-scalp --micro-filter=strict
+ *   npx tsx scripts/goldDayBacktest.ts --micro-scalp --micro-book=LONG
  *   npx tsx scripts/goldDayBacktest.ts --narrow-midleg
  *   npx tsx scripts/goldDayBacktest.ts --loose
  *
@@ -26,10 +28,12 @@ import {
   flowFlipAtExtreme,
   LIVE_CONTINUATION_POLICY,
   liveFlow,
+  microChopEntryOk,
   minuteConfirmBar,
   updateSetupSticky,
   type ContinuationPolicy,
   type MarketSetup,
+  type MicroChopQuality,
   type StructureBook,
 } from '../src/services/marketSetup.js';
 import {
@@ -158,6 +162,10 @@ function parseArgs(argv: string[]) {
      * and manage as SCALP (faster exits) — "kārtīgs scalpings" test.
      */
     microScalp: false,
+    /** Extra quality on NONE→micro entries */
+    microFilter: 'raw' as MicroChopQuality,
+    /** Playbook for NONE→micro entries */
+    microBook: 'SCALP' as 'SCALP' | 'LONG',
     /** CONTINUATION arm/entry policy — default matches live desk */
     continuation: LIVE_CONTINUATION_POLICY as ContinuationPolicy,
     tag: '' as string,
@@ -170,17 +178,28 @@ function parseArgs(argv: string[]) {
     else if (a === '--warmup') out.warmup = Number(argv[++i]);
     else if (a === '--loose') out.loose = true;
     else if (a === '--micro-scalp') out.microScalp = true;
-    else if (a === '--impulse-cont') out.continuation = 'default';
+    else if (a === '--micro-filter') {
+      out.microScalp = true;
+      out.microFilter = String(argv[++i] || 'raw') as MicroChopQuality;
+    } else if (a === '--micro-book') {
+      out.microScalp = true;
+      const b = String(argv[++i] || 'SCALP').toUpperCase();
+      out.microBook = b === 'LONG' ? 'LONG' : 'SCALP';
+    } else if (a === '--impulse-cont') out.continuation = 'default';
     else if (a === '--no-impulse-cont') out.continuation = 'no_impulse';
     else if (a === '--narrow-midleg') out.continuation = 'narrow_midleg';
     else if (a === '--tag') out.tag = String(argv[++i] || '');
   }
   if (!out.tag) {
-    if (out.microScalp) out.tag = 'micro-scalp';
-    else if (out.continuation === 'default') out.tag = 'impulse-cont';
+    if (out.microScalp) {
+      const parts = ['micro', out.microFilter];
+      if (out.microBook !== 'SCALP') parts.push(out.microBook.toLowerCase());
+      if (out.loose) parts.push('loose');
+      out.tag = parts.join('-');
+    } else if (out.continuation === 'default') out.tag = 'impulse-cont';
     else if (out.continuation === 'narrow_midleg') out.tag = 'narrow-midleg';
     else if (out.loose) out.tag = 'loose';
-    else out.tag = 'live'; // matches LIVE_CONTINUATION_POLICY (no_impulse)
+    else out.tag = 'live';
   }
   return out;
 }
@@ -288,6 +307,7 @@ function main() {
   let lastExitSide: 'BUY' | 'SELL' | null = null;
   let lastExitReason: string | null = null;
   let entryMinuteBucket = 0;
+  let lastMicroEntryMs = 0;
 
   const trades: TradeRow[] = [];
   const missed: MissedRow[] = [];
@@ -456,18 +476,30 @@ function main() {
         skipAgainstMove: opts.loose,
         continuationPolicy: opts.continuation,
       });
-      // Micro-scalp: NONE path → SCALP playbook (faster PeakProtect / thesis)
-      if (
-        entry &&
-        opts.microScalp &&
+      // Micro-chop: NONE path → optional quality filter + SCALP/LONG book
+      const fromNone =
+        !!entry &&
         (setup.kind === 'NONE' || setup.status === 'NONE') &&
-        /unified NONE|setup was NONE|market flow/i.test(entry.reason)
-      ) {
-        entry = {
-          ...entry,
-          playbook: 'SCALP',
-          reason: `${entry.reason} · micro-SCALP`,
-        };
+        /unified NONE|setup was NONE|market flow/i.test(entry.reason);
+      if (entry && fromNone && opts.microScalp) {
+        const q = microChopEntryOk({
+          quality: opts.microFilter,
+          direction: entry.direction,
+          structure,
+          minutes,
+          lastMicroEntryMs,
+          nowMs: simNow,
+        });
+        if (!q.ok) {
+          bumpBlock(`micro-filter · ${q.detail}`);
+          entry = null;
+        } else {
+          entry = {
+            ...entry,
+            playbook: opts.microBook,
+            reason: `${entry.reason} · micro-${opts.microBook} · ${opts.microFilter}`,
+          };
+        }
       }
 
       if (!entry) {
@@ -542,6 +574,7 @@ function main() {
       }
 
       entryMinuteBucket = minuteBucket;
+      if (fromNone) lastMicroEntryMs = simNow;
       if (lastExitSide && entry.direction !== lastExitSide) {
         lastExitSide = null;
         lastExitMs = 0;
@@ -606,7 +639,7 @@ function main() {
     new Date(ts * 1000).toISOString().replace('.000Z', 'Z');
 
   const contModeLabel = opts.microScalp
-    ? 'live + micro-SCALP (NONE 1m impulse/micro-swing, SCALP exits)'
+    ? `live + micro-chop (${opts.microFilter} filter, ${opts.microBook} book${opts.loose ? ', loose gates' : ''})`
     : opts.continuation === 'default'
       ? 'legacy impulse CONTINUATION armed (ablation baseline)'
       : opts.continuation === 'narrow_midleg'
@@ -621,6 +654,8 @@ function main() {
     mode: contModeLabel,
     loose: opts.loose,
     micro_scalp: opts.microScalp,
+    micro_filter: opts.microScalp ? opts.microFilter : null,
+    micro_book: opts.microScalp ? opts.microBook : null,
     continuation_policy: opts.continuation,
     live_policy: LIVE_CONTINUATION_POLICY,
     bars: bars.length,

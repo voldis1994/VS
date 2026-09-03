@@ -440,6 +440,94 @@ export function recentLocalRange(
   return { hi, lo, span: Math.max(hi - lo, 1) };
 }
 
+/** Chop / micro-NONE entry quality filters (ablation). */
+export type MicroChopQuality =
+  | 'raw'
+  | 'hour'
+  | 'impulse'
+  | 'persist'
+  | 'room'
+  | 'cooldown'
+  | 'strict';
+
+/**
+ * Extra gates for NONE→micro entries. Raw = only existing against-move/candle.
+ * Strict stacks hour + impulse + mid-room + tip/floor + 8m cooldown.
+ */
+export function microChopEntryOk(opts: {
+  quality: MicroChopQuality;
+  direction: 'BUY' | 'SELL';
+  structure: StructureBook;
+  minutes: CapitalPriceCandle[];
+  lastMicroEntryMs?: number | null;
+  nowMs?: number;
+}): { ok: boolean; detail: string } {
+  const { quality, direction, structure, minutes } = opts;
+  if (quality === 'raw') return { ok: true, detail: 'raw' };
+
+  const last = minutes[minutes.length - 1];
+  if (!last) return { ok: false, detail: 'no bars' };
+  const imp = recentImpulse(minutes, 'flip') || recentImpulse(minutes);
+  const pers = persistence(minutes);
+  const local = recentLocalRange(minutes, 12);
+  const nowMs = opts.nowMs ?? Date.now();
+  const lastMicro = opts.lastMicroEntryMs ?? 0;
+
+  const needHour = quality === 'hour' || quality === 'strict';
+  const needImp = quality === 'impulse' || quality === 'strict';
+  const needPers = quality === 'persist' || quality === 'strict';
+  const needRoom = quality === 'room' || quality === 'strict';
+  const needCd = quality === 'cooldown' || quality === 'strict';
+  const cdMs = quality === 'strict' ? 8 * 60_000 : 10 * 60_000;
+
+  if (needHour) {
+    if (direction === 'BUY' && structure.hour_bias !== 'UP') {
+      return { ok: false, detail: `hour_bias ${structure.hour_bias}≠UP` };
+    }
+    if (direction === 'SELL' && structure.hour_bias !== 'DOWN') {
+      return { ok: false, detail: `hour_bias ${structure.hour_bias}≠DOWN` };
+    }
+  }
+  if (needImp) {
+    if (direction === 'BUY' && imp !== 'UP') {
+      return { ok: false, detail: `no UP impulse (${imp || 'none'})` };
+    }
+    if (direction === 'SELL' && imp !== 'DOWN') {
+      return { ok: false, detail: `no DOWN impulse (${imp || 'none'})` };
+    }
+  }
+  if (needPers) {
+    if (direction === 'BUY' && pers < 0.4) {
+      return { ok: false, detail: `persist ${pers.toFixed(2)} < 0.4` };
+    }
+    if (direction === 'SELL' && pers > -0.4) {
+      return { ok: false, detail: `persist ${pers.toFixed(2)} > -0.4` };
+    }
+  }
+  if (needRoom) {
+    if (local.span < 2.5) return { ok: false, detail: `local span ${local.span.toFixed(1)} < 2.5` };
+    const pos = (last.close - local.lo) / local.span;
+    // Need room to run — not buying local tip / selling local floor of the micro-range
+    if (direction === 'BUY' && pos > 0.82) {
+      return { ok: false, detail: `BUY late in local range (${(pos * 100).toFixed(0)}%)` };
+    }
+    if (direction === 'SELL' && pos < 0.18) {
+      return { ok: false, detail: `SELL late in local range (${(pos * 100).toFixed(0)}%)` };
+    }
+  }
+  if (quality === 'strict') {
+    if (direction === 'BUY' && structure.at_tip) return { ok: false, detail: 'at_tip' };
+    if (direction === 'SELL' && structure.at_floor) return { ok: false, detail: 'at_floor' };
+  }
+  if (needCd && lastMicro > 0 && nowMs - lastMicro < cdMs) {
+    return {
+      ok: false,
+      detail: `micro cool-down ${Math.round((cdMs - (nowMs - lastMicro)) / 1000)}s`,
+    };
+  }
+  return { ok: true, detail: quality };
+}
+
 /**
  * Longer market direction (~20×1m). Bounce tips must not erase a live dump/rally.
  * Gold 17:41 class: BUY @ 4369 after 4374→ dump — short impulse said UP, market was DOWN.
