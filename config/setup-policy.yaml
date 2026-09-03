@@ -24,3 +24,4 @@ setup_policy:
     - reverse_needs_vflip
     - refuse_entry_without_safety_sl
     - freeze_setup_while_open
+    - structure_blocks_tip_floor_only  # at_tip/at_floor — not wide near_high/near_low (that froze CONTINUATION)

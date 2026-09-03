@@ -131,6 +131,10 @@ export type StructureBook = {
   bias: 'ABOVE' | 'BELOW' | 'INSIDE';
   near_high: boolean;
   near_low: boolean;
+  /** True tip — tighter than near_high. Live swing hugs price mid-leg so near_* is often true. */
+  at_tip: boolean;
+  /** True floor — tighter than near_low. Blocks SELL-the-bottom without freezing mid-dump CONTINUATION. */
+  at_floor: boolean;
   hour_bias: 'UP' | 'DOWN' | 'FLAT' | 'UNKNOWN';
   bar_count: number;
   detail: string;
@@ -174,6 +178,15 @@ function edgeEps(px: number, span: number): number {
 }
 
 /**
+ * True tip/floor band — much tighter than near_*.
+ * Live swing high/low tracks price, so near_high/near_low stay true mid-leg;
+ * only the printed extreme itself should block BUY/SELL.
+ */
+function tipFloorEps(px: number, span: number): number {
+  return Math.max(Math.abs(px) * 0.00008, Math.min(span * 0.025, 0.45), 0.25);
+}
+
+/**
  * Swing high/low is fresh only if a recent 1m bar actually printed that extreme.
  * Blocks FADE SELL on a stale H mid-rally (4434 while climb continues to 4437)
  * and FADE BUY on a stale L mid-dump.
@@ -210,6 +223,8 @@ export function emptyStructure(detail = 'structure seeding'): StructureBook {
     bias: 'INSIDE',
     near_high: false,
     near_low: false,
+    at_tip: false,
+    at_floor: false,
     hour_bias: 'UNKNOWN',
     bar_count: 0,
     detail,
@@ -333,8 +348,11 @@ export function buildStructure(input: {
       ? lastMid
       : minutes[minutes.length - 1]!.close;
   const eps = edgeEps(px, span);
+  const tipEps = tipFloorEps(px, span);
   const near_high = px >= hi - eps;
   const near_low = px <= lo + eps;
+  const at_tip = px >= hi - tipEps;
+  const at_floor = px <= lo + tipEps;
   let bias: StructureBook['bias'] = 'INSIDE';
   if (px > midZ + span * 0.1) bias = 'ABOVE';
   else if (px < midZ - span * 0.1) bias = 'BELOW';
@@ -350,6 +368,8 @@ export function buildStructure(input: {
     bias,
     near_high,
     near_low,
+    at_tip,
+    at_floor,
     hour_bias: hb,
     bar_count: minutes.length,
     detail: `swing H${hi.toFixed(2)} L${lo.toFixed(2)} · ${bias} · 1h ${hb} · 1m×${minutes.length}`,
@@ -566,9 +586,10 @@ export function entryFightsStickyTrend(
 }
 
 /**
- * ONE structure rule: do not SELL at/near swing low, do not BUY at/near swing high.
+ * ONE structure rule: do not SELL at the printed floor, do not BUY at the printed tip.
+ * Uses at_tip/at_floor (tight) — NOT near_high/near_low.
+ * Live swing tracks price, so near_* stays true mid-leg and was freezing CONTINUATION.
  * BREAKOUT through the edge is allowed (that is the breakout).
- * Gold 06:30 SELL @ 4424 floor — flow said DOWN, structure must forbid.
  */
 export function structureBlocksEntry(
   direction: 'BUY' | 'SELL',
@@ -578,8 +599,8 @@ export function structureBlocksEntry(
   if (!structure?.ready) return false;
   const kind = String(setupKind || '').trim().toUpperCase();
   if (kind === 'BREAKOUT') return false;
-  if (direction === 'SELL' && structure.near_low) return true;
-  if (direction === 'BUY' && structure.near_high) return true;
+  if (direction === 'SELL' && structure.at_floor) return true;
+  if (direction === 'BUY' && structure.at_tip) return true;
   return false;
 }
 
@@ -927,12 +948,14 @@ function rawSetupFromStructure(
   }
 
   // CONTINUATION / PULLBACK in trend (hour + minute persistence) — mid/pullback only
+  // Gate on at_tip/at_floor (tight), not near_* — live swing hugs price so near_* freezes the leg.
+  const span = Math.max(hi - lo, structure.span, 1);
   const trendUp =
     pers > 0.35 || structure.hour_bias === 'UP' || structure.bias === 'ABOVE';
   const trendDown =
     pers < -0.35 || structure.hour_bias === 'DOWN' || structure.bias === 'BELOW';
 
-  if (trendUp && !closedBelow && !structure.near_high) {
+  if (trendUp && !closedBelow && !structure.at_tip) {
     if (last.close < structure.mid && last.close > lo) {
       return {
         kind: 'PULLBACK',
@@ -944,7 +967,7 @@ function rawSetupFromStructure(
         reason: `PULLBACK in up structure · buy toward ${lo.toFixed(2)}`,
       };
     }
-    if (pers > 0.4 && structure.bias === 'ABOVE' && last.close < hi - eps) {
+    if (pers > 0.4 && structure.bias === 'ABOVE' && last.close < hi - tipFloorEps(last.close, span)) {
       return {
         kind: 'CONTINUATION',
         side: 'BUY',
@@ -957,7 +980,7 @@ function rawSetupFromStructure(
     }
   }
 
-  if (trendDown && !closedAbove && !structure.near_low) {
+  if (trendDown && !closedAbove && !structure.at_floor) {
     if (last.close > structure.mid && last.close < hi) {
       return {
         kind: 'PULLBACK',
@@ -969,7 +992,7 @@ function rawSetupFromStructure(
         reason: `PULLBACK in down structure · sell toward ${hi.toFixed(2)}`,
       };
     }
-    if (pers < -0.4 && structure.bias === 'BELOW' && last.close > lo + eps) {
+    if (pers < -0.4 && structure.bias === 'BELOW' && last.close > lo + tipFloorEps(last.close, span)) {
       return {
         kind: 'CONTINUATION',
         side: 'SELL',
@@ -1190,7 +1213,8 @@ export function decideEntryFromSetup(
   if (setup.side === 'BUY' && flow === 'DOWN') return null;
   if (setup.side === 'SELL' && flow === 'UP') return null;
   if (entryFightsStickyTrend(setup.side, minutes)) return null;
-  // near_low / near_high from structure book on the setup swings
+  // near_low / near_high / tip-floor from structure book on the setup swings
+  const tipEps = tipFloorEps(px, Math.max(hi - lo, 1));
   const structLike: StructureBook = {
     ready: true,
     swing_high: hi,
@@ -1200,6 +1224,8 @@ export function decideEntryFromSetup(
     bias: 'INSIDE',
     near_high: px >= hi - eps,
     near_low: px <= lo + eps,
+    at_tip: px >= hi - tipEps,
+    at_floor: px <= lo + tipEps,
     hour_bias: 'UNKNOWN',
     bar_count: minutes?.length ?? 0,
     detail: '',
