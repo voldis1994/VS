@@ -62,4 +62,29 @@ describe('faster structure — live low visible now', () => {
       })?.direction
     ).not.toBe('SELL');
   });
+
+  it('structureBlocksEntry — no BUY at near_high (virsotne)', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 18; i++) bars.push(candle(4420, 4422, 4419, 4421));
+    bars.push(candle(4421, 4428, 4420, 4427));
+    bars.push(candle(4427, 4434, 4426, 4433));
+    bars.push(candle(4433, 4436.5, 4432, 4436.2)); // tip
+    const st = buildStructure({ minutes: bars, mid: 4436.2 });
+    expect(st.near_high).toBe(true);
+    expect(structureBlocksEntry('BUY', st)).toBe(true);
+    expect(structureBlocksEntry('SELL', st)).toBe(false);
+    // BREAKOUT through high still allowed
+    expect(structureBlocksEntry('BUY', st, 'BREAKOUT')).toBe(false);
+    const bar = minuteConfirmBar(bars)!;
+    expect(
+      decideUnifiedEntry({
+        setup: emptySetup(),
+        structure: st,
+        bar,
+        minutes: bars,
+        livePx: 4436.2,
+        allowNoneImpulse: true,
+      })?.direction
+    ).not.toBe('BUY');
+  });
 });
