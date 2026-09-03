@@ -105,7 +105,7 @@ describe('closed candle confirm — not spike (old rule)', () => {
     expect(entryCandleConfirmDeny('SELL', bars, { soft: true })).toBeNull();
   });
 
-  it('soft: proven dump + last red enters without 2-red wait', () => {
+  it('soft: proven dump + last red still needs 2-red (soft is pause-only)', () => {
     const bars: CapitalPriceCandle[] = [];
     for (let i = 0; i < 6; i++) bars.push(candle(4436, 4437, 4435, 4436));
     bars.push(candle(4436, 4436.2, 4434, 4434.2));
@@ -113,7 +113,7 @@ describe('closed candle confirm — not spike (old rule)', () => {
     bars.push(candle(4432.1, 4432.5, 4431.8, 4432.3)); // small green blip
     bars.push(candle(4432.3, 4432.4, 4430.5, 4430.6)); // red — only one after green
     expect(entryCandleConfirmDeny('SELL', bars)).toMatch(/2 red|momentum/i);
-    expect(entryCandleConfirmDeny('SELL', bars, { soft: true })).toBeNull();
+    expect(entryCandleConfirmDeny('SELL', bars, { soft: true })).toMatch(/2 red|momentum/i);
   });
 
   it('soft: directional dump spike still waits next bar', () => {

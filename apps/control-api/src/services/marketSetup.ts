@@ -102,7 +102,6 @@ export function entryCandleConfirmDeny(
   if (!soft) {
     if (direction === 'BUY' && !curBuy) return 'wait · need closed green 1m confirm';
     if (direction === 'SELL' && !curSell) return 'wait · need closed red 1m confirm';
-    // Strict: two consecutive same-color 1m
     if (direction === 'BUY' && !(prev.close > prev.open)) {
       return 'wait · need 2 green 1m (momentum)';
     }
@@ -110,35 +109,36 @@ export function entryCandleConfirmDeny(
       return 'wait · need 2 red 1m (momentum)';
     }
   } else {
-    // Soft mid-leg: only when a multi-bar dump/rally is already proven.
-    // Blocks one-blip CONT; allows pause doji after 3+ directional bars (live 5-red fail).
-    if (curFights) {
-      return direction === 'BUY'
-        ? 'wait · need closed green 1m confirm'
-        : 'wait · need closed red 1m confirm';
-    }
-    const win = minutes.slice(-5);
-    const dirBars = win.filter((c) =>
-      direction === 'BUY' ? c.close > c.open : c.close < c.open
-    ).length;
-    const lastW = win[win.length - 1]!;
-    const run =
-      direction === 'BUY'
-        ? lastW.close - Math.min(...win.map((c) => c.low))
-        : Math.max(...win.map((c) => c.high)) - lastW.close;
-    const dumpProven = dirBars >= 3 && run >= 2.0;
-    if (!dumpProven) {
-      // Fall back to strict color + 2-bar until the leg is real
-      if (direction === 'BUY' && !curBuy) return 'wait · need closed green 1m confirm';
-      if (direction === 'SELL' && !curSell) return 'wait · need closed red 1m confirm';
+    // Soft = pause-doji exception only. If last bar is directional, keep strict 2-bar.
+    // Live fail: 5 reds then O≈C doji → "need closed red" forever while dump runs.
+    if (curAgrees) {
       if (direction === 'BUY' && !(prev.close > prev.open)) {
         return 'wait · need 2 green 1m (momentum)';
       }
       if (direction === 'SELL' && !(prev.close < prev.open)) {
         return 'wait · need 2 red 1m (momentum)';
       }
+    } else if (curFights) {
+      return direction === 'BUY'
+        ? 'wait · need closed green 1m confirm'
+        : 'wait · need closed red 1m confirm';
+    } else {
+      // Tiny pause / doji — allow only if dump/rally already proven
+      const win = minutes.slice(-5);
+      const dirBars = win.filter((c) =>
+        direction === 'BUY' ? c.close > c.open : c.close < c.open
+      ).length;
+      const lastW = win[win.length - 1]!;
+      const run =
+        direction === 'BUY'
+          ? lastW.close - Math.min(...win.map((c) => c.low))
+          : Math.max(...win.map((c) => c.high)) - lastW.close;
+      if (!(dirBars >= 3 && run >= 2.0)) {
+        return direction === 'BUY'
+          ? 'wait · need closed green 1m confirm'
+          : 'wait · need closed red 1m confirm';
+      }
     }
-    // dumpProven: pause doji OR single directional bar is enough
   }
 
   // After a large spike against us / exhaustion: confirm closes beyond spike close
