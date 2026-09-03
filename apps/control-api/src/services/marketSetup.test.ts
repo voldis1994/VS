@@ -581,6 +581,8 @@ describe('decideUnifiedEntry', () => {
       bias,
       near_high: false,
       near_low: false,
+      at_tip: false,
+      at_floor: false,
       hour_bias: 'FLAT',
       bar_count: 30,
       detail: 'test',
