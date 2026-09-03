@@ -161,8 +161,9 @@ export type SetupEntry = {
 };
 
 const MIN_SWING_BARS = 20;
-const PIVOT_LEFT = 3;
-const PIVOT_RIGHT = 3;
+/** Faster pivots — old RIGHT=3 meant a new low was invisible for ~3 minutes (SELL-the-bottom class). */
+const PIVOT_LEFT = 2;
+const PIVOT_RIGHT = 1;
 const SETUP_CONFIRM = 2;
 /** FADE / FAILED_BREAK only if swing extreme printed within this many 1m bars */
 const FRESH_SWING_BARS = 12;
@@ -237,7 +238,7 @@ function mean(xs: number[]): number {
   return xs.reduce((a, b) => a + b, 0) / xs.length;
 }
 
-/** Last swing high/low from minute pivots — remembered structure, not raw rolling max. */
+/** Last swing high/low from minute pivots + live running extreme (last bar included). */
 export function detectSwingLevels(minutes: CapitalPriceCandle[]): {
   high: number;
   low: number;
@@ -261,15 +262,14 @@ export function detectSwingLevels(minutes: CapitalPriceCandle[]): {
     if (isHi) pivotsHi.push(c.high);
     if (isLo) pivotsLo.push(c.low);
   }
-  // Prefer recent pivots; fall back to window extremes if sparse
-  const high =
-    pivotsHi.length > 0
-      ? pivotsHi[pivotsHi.length - 1]!
-      : Math.max(...minutes.slice(0, -1).map((c) => c.high));
-  const low =
-    pivotsLo.length > 0
-      ? pivotsLo[pivotsLo.length - 1]!
-      : Math.min(...minutes.slice(0, -1).map((c) => c.low));
+  // Running extreme INCLUDES the last bar — provisional structure at the live low/high
+  const runHi = Math.max(...minutes.map((c) => c.high));
+  const runLo = Math.min(...minutes.map((c) => c.low));
+  const pivotHi = pivotsHi.length > 0 ? pivotsHi[pivotsHi.length - 1]! : runHi;
+  const pivotLo = pivotsLo.length > 0 ? pivotsLo[pivotsLo.length - 1]! : runLo;
+  // Prefer the more extreme of pivot vs live run — so a new dump low is visible NOW
+  const high = Math.max(pivotHi, runHi);
+  const low = Math.min(pivotLo, runLo);
   if (!(high > low)) return { high: 0, low: 0, ok: false };
   return { high, low, ok: true };
 }
@@ -305,11 +305,11 @@ export function buildStructure(input: {
   let hi = swing.high;
   let lo = swing.low;
 
-  // Stickiness: keep previous swing until price closes beyond it with room
+  // Stickiness: keep previous swing until price breaks it (wick OR close) — then snap to live extreme
   if (prev?.ready && prev.swing_high > prev.swing_low) {
     const last = minutes[minutes.length - 1]!;
-    const brokeHigh = last.close > prev.swing_high * 1.00015;
-    const brokeLow = last.close < prev.swing_low * 0.99985;
+    const brokeHigh = last.high > prev.swing_high || last.close > prev.swing_high * 1.00015;
+    const brokeLow = last.low < prev.swing_low || last.close < prev.swing_low * 0.99985;
     if (!brokeHigh && Math.abs(hi - prev.swing_high) / Math.max(prev.swing_high, 1) < 0.002) {
       hi = prev.swing_high;
     } else if (!brokeHigh && hi < prev.swing_high) {
@@ -321,8 +321,9 @@ export function buildStructure(input: {
     } else if (!brokeLow && lo > prev.swing_low) {
       lo = prev.swing_low;
     }
-    if (brokeHigh && swing.high > prev.swing_high) hi = swing.high;
-    if (brokeLow && swing.low < prev.swing_low) lo = swing.low;
+    // Extend immediately to the printed break wick/close — do not wait 3m for a new pivot
+    if (brokeHigh) hi = Math.max(swing.high, last.high, prev.swing_high);
+    if (brokeLow) lo = Math.min(swing.low, last.low, prev.swing_low);
   }
 
   const midZ = (hi + lo) / 2;
@@ -561,6 +562,24 @@ export function entryFightsStickyTrend(
   const flip = flowFlipAtExtreme(minutes);
   if (direction === 'SELL' && trend === 'UP' && flip !== 'DOWN') return true;
   if (direction === 'BUY' && trend === 'DOWN' && flip !== 'UP') return true;
+  return false;
+}
+
+/**
+ * ONE structure rule: do not SELL at/near swing low, do not BUY at/near swing high.
+ * BREAKOUT through the edge is allowed (that is the breakout).
+ * Gold 06:30 SELL @ 4424 floor — flow said DOWN, structure must forbid.
+ */
+export function structureBlocksEntry(
+  direction: 'BUY' | 'SELL',
+  structure: StructureBook | null | undefined,
+  setupKind?: string | null
+): boolean {
+  if (!structure?.ready) return false;
+  const kind = String(setupKind || '').trim().toUpperCase();
+  if (kind === 'BREAKOUT') return false;
+  if (direction === 'SELL' && structure.near_low) return true;
+  if (direction === 'BUY' && structure.near_high) return true;
   return false;
 }
 
@@ -1171,6 +1190,22 @@ export function decideEntryFromSetup(
   if (setup.side === 'BUY' && flow === 'DOWN') return null;
   if (setup.side === 'SELL' && flow === 'UP') return null;
   if (entryFightsStickyTrend(setup.side, minutes)) return null;
+  // near_low / near_high from structure book on the setup swings
+  const structLike: StructureBook = {
+    ready: true,
+    swing_high: hi,
+    swing_low: lo,
+    mid: (hi + lo) / 2,
+    span: Math.max(hi - lo, 1),
+    bias: 'INSIDE',
+    near_high: px >= hi - eps,
+    near_low: px <= lo + eps,
+    hour_bias: 'UNKNOWN',
+    bar_count: minutes?.length ?? 0,
+    detail: '',
+    updated_at: '',
+  };
+  if (structureBlocksEntry(setup.side, structLike, setup.kind)) return null;
 
   if (isTipChaseEntry(setup, { ...bar, close: px })) {
     return null;
@@ -1457,6 +1492,7 @@ export function decideUnifiedEntry(opts: {
 
   if (!entry) return null;
   if (entryFightsStickyTrend(entry.direction, minutes)) return null;
+  if (structureBlocksEntry(entry.direction, structure, entry.setup)) return null;
   const candleDeny = entryCandleConfirmDeny(entry.direction, minutes);
   if (candleDeny) return null;
   return entry;
