@@ -529,6 +529,117 @@ export function microChopEntryOk(opts: {
 }
 
 /**
+ * Live FADE quality — Gold 13:37 FADE SELL into UP marketTrend = −£0.63.
+ * Hour alone is too blunt (blocked 03:37 FADE BUY winner during DOWN hour V-flip).
+ * Gate on marketTrend; allow V-flip at extreme against hour.
+ */
+export function fadeEntryQualityOk(opts: {
+  direction: 'BUY' | 'SELL';
+  structure: StructureBook;
+  minutes?: CapitalPriceCandle[] | null;
+  bar: TenSecBar;
+  swingHigh: number;
+  swingLow: number;
+}): { ok: boolean; detail: string } {
+  const { direction, structure, minutes, bar, swingHigh, swingLow } = opts;
+  const hour = structure.hour_bias;
+  const flip = minutes?.length ? flowFlipAtExtreme(minutes) : null;
+  const trend = minutes?.length ? marketTrend(minutes) : null;
+
+  // Hard for SELL fades into UP trend — no exception (13:37 −£0.63 class).
+  // BUY fade against DOWN trend OK only on V-flip UP (03:37 floor bounce).
+  if (direction === 'SELL' && trend === 'UP') {
+    return { ok: false, detail: 'FADE SELL vs marketTrend UP' };
+  }
+  if (direction === 'BUY' && trend === 'DOWN' && flip !== 'UP') {
+    return { ok: false, detail: 'FADE BUY vs marketTrend DOWN' };
+  }
+  // Hour fight only when no V-flip covering the fade
+  if (direction === 'SELL' && hour === 'UP' && flip !== 'DOWN') {
+    return { ok: false, detail: 'FADE SELL vs hour UP' };
+  }
+  if (direction === 'BUY' && hour === 'DOWN' && flip !== 'UP') {
+    return { ok: false, detail: 'FADE BUY vs hour DOWN' };
+  }
+  if (!minutes?.length) {
+    return { ok: true, detail: 'fade ok · no minutes' };
+  }
+  const last = minutes[minutes.length - 1]!;
+  const eps = edgeEps(last.close, Math.max(swingHigh - swingLow, structure.span, 1));
+  if (direction === 'SELL') {
+    if (!isFreshSwingHigh(minutes, swingHigh, eps)) {
+      return { ok: false, detail: 'FADE SELL · stale high' };
+    }
+    if (!(last.close <= swingHigh - eps * 0.1)) {
+      return { ok: false, detail: 'FADE SELL · no reclaim under high' };
+    }
+    if (last.close > last.open && last.high > swingHigh + eps * 0.25) {
+      return { ok: false, detail: 'FADE SELL · still thrusting green' };
+    }
+  } else {
+    if (!isFreshSwingLow(minutes, swingLow, eps)) {
+      return { ok: false, detail: 'FADE BUY · stale low' };
+    }
+    if (!(last.close >= swingLow + eps * 0.1)) {
+      return { ok: false, detail: 'FADE BUY · no reclaim over low' };
+    }
+    if (last.close < last.open && last.low < swingLow - eps * 0.25) {
+      return { ok: false, detail: 'FADE BUY · still thrusting red' };
+    }
+  }
+  if (direction === 'SELL' && bar.high < swingHigh - eps * 1.25) {
+    return { ok: false, detail: 'FADE SELL · did not tag high' };
+  }
+  if (direction === 'BUY' && bar.low > swingLow + eps * 1.25) {
+    return { ok: false, detail: 'FADE BUY · did not tag low' };
+  }
+  return { ok: true, detail: 'fade ok' };
+}
+
+/**
+ * Live CONTINUATION quality — room + climax + tip/floor.
+ * Persist kept light so real mid-leg dumps (01:57 winner) still fire.
+ */
+export function continuationEntryQualityOk(opts: {
+  direction: 'BUY' | 'SELL';
+  structure: StructureBook;
+  minutes?: CapitalPriceCandle[] | null;
+}): { ok: boolean; detail: string } {
+  const { direction, structure, minutes } = opts;
+  if (!minutes?.length) return { ok: true, detail: 'cont ok · no minutes' };
+  const last = minutes[minutes.length - 1]!;
+  const local = recentLocalRange(minutes, 12);
+
+  if (direction === 'BUY' && structure.at_tip) {
+    return { ok: false, detail: 'CONT BUY at_tip' };
+  }
+  if (direction === 'SELL' && structure.at_floor) {
+    return { ok: false, detail: 'CONT SELL at_floor' };
+  }
+  if (direction === 'BUY' && structure.bias === 'BELOW') {
+    return { ok: false, detail: 'CONT BUY vs bias BELOW' };
+  }
+  if (direction === 'SELL' && structure.bias === 'ABOVE') {
+    return { ok: false, detail: 'CONT SELL vs bias ABOVE' };
+  }
+  if (local.span < 2.0) {
+    return { ok: false, detail: `CONT local span ${local.span.toFixed(1)}` };
+  }
+  const pos = (last.close - local.lo) / local.span;
+  // Room to run — not buying local tip / selling local floor of micro-range
+  if (direction === 'BUY' && pos > 0.88) {
+    return { ok: false, detail: `CONT BUY late local ${(pos * 100).toFixed(0)}%` };
+  }
+  if (direction === 'SELL' && pos < 0.12) {
+    return { ok: false, detail: `CONT SELL late local ${(pos * 100).toFixed(0)}%` };
+  }
+  if (minutes.length >= 5 && atLocalClimax(direction, minutes)) {
+    return { ok: false, detail: 'CONT at local climax' };
+  }
+  return { ok: true, detail: 'cont ok' };
+}
+
+/**
  * Longer market direction (~20×1m). Bounce tips must not erase a live dump/rally.
  * Gold 17:41 class: BUY @ 4369 after 4374→ dump — short impulse said UP, market was DOWN.
  * Left-behind extremes (failed to remake high/low) beat 2–3m bounce color.
@@ -1089,6 +1200,7 @@ function rawSetupFromStructure(
   }
 
   // FAILED_BREAK — only on a FRESH swing extreme, never mid-rally / mid-dump fade
+  // Trend fights gated at entry (fadeEntryQualityOk)
   if (
     pokeAbove &&
     freshHi &&
@@ -1150,6 +1262,7 @@ function rawSetupFromStructure(
 
   // FADE at FRESH swing edges only — never SELL mid-rally / BUY mid-dump on stale level
   // Also: if price is still dumping, do NOT arm FADE BUY (falling knife) — ride SELL
+  // Hour/trend fights are gated at entry (fadeEntryQualityOk) so V-flip floors can still arm
   const flow = priceFlowBias(minutes);
   if (structure.near_high && !closedAbove && freshHi && flow !== 'UP') {
     return {
@@ -1491,7 +1604,8 @@ export function decideEntryFromSetup(
   setup: MarketSetup,
   bar: TenSecBar,
   minutes?: CapitalPriceCandle[] | null,
-  livePx?: number | null
+  livePx?: number | null,
+  structure?: StructureBook | null
 ): SetupEntry | null {
   if (setup.kind === 'NONE' || setup.status !== 'ARMED' || !setup.side || !setup.playbook) {
     return null;
@@ -1518,12 +1632,12 @@ export function decideEntryFromSetup(
     swing_low: lo,
     mid: (hi + lo) / 2,
     span: Math.max(hi - lo, 1),
-    bias: 'INSIDE',
+    bias: structure?.bias ?? 'INSIDE',
     near_high: px >= hi - eps,
     near_low: px <= lo + eps,
-    at_tip: px >= hi - tipEps,
-    at_floor: px <= lo + tipEps,
-    hour_bias: 'UNKNOWN',
+    at_tip: structure?.at_tip ?? px >= hi - tipEps,
+    at_floor: structure?.at_floor ?? px <= lo + tipEps,
+    hour_bias: structure?.hour_bias ?? 'UNKNOWN',
     bar_count: minutes?.length ?? 0,
     detail: '',
     updated_at: '',
@@ -1535,6 +1649,15 @@ export function decideEntryFromSetup(
   }
 
   if (setup.kind === 'FADE' || setup.kind === 'FAILED_BREAK') {
+    const fadeQ = fadeEntryQualityOk({
+      direction: setup.side,
+      structure: structLike,
+      minutes,
+      bar: { ...bar, close: px },
+      swingHigh: hi,
+      swingLow: lo,
+    });
+    if (!fadeQ.ok) return null;
     if (setup.side === 'BUY') {
       const touched = bar.low <= lo + eps;
       // Only block if bar is clearly dumping through the floor
@@ -1629,6 +1752,15 @@ export function decideEntryFromSetup(
     if (setup.side === 'SELL' && contFlow !== 'DOWN') return null;
     if (!moveStillPrinting(contFlow, minutes)) return null;
     if (moveAlreadyFinished(setup.side, minutes, bar.close)) return null;
+    // Mid-swing / mid-leg CONTINUATION — room + climax; tip-zone dump/rally keeps lighter gates
+    if (/mid-swing|CONTINUATION (up|down) ·/.test(setup.reason)) {
+      const contQ = continuationEntryQualityOk({
+        direction: setup.side,
+        structure: structure ?? structLike,
+        minutes,
+      });
+      if (!contQ.ok) return null;
+    }
     return {
       direction: setup.side,
       setup: 'CONTINUATION',
@@ -1791,7 +1923,7 @@ export function decideUnifiedEntry(opts: {
   let entry: SetupEntry | null = null;
 
   if (armed) {
-    const fromSetup = decideEntryFromSetup(setup, bar, minutes, livePx);
+    const fromSetup = decideEntryFromSetup(setup, bar, minutes, livePx, structure);
     if (fromSetup) {
       entry = fromSetup;
     } else if (setup.kind === 'CONTINUATION' || setup.kind === 'BREAKOUT') {
@@ -1827,6 +1959,33 @@ export function decideUnifiedEntry(opts: {
   }
 
   if (!entry) return null;
+
+  // Live entry quality — FADE tip always; CONTINUATION mid-leg only on ARMED CONT
+  // (NONE→impulse CONTINUATION is ablation-only and keeps its own filters)
+  if (entry.setup === 'FADE' || entry.setup === 'FAILED_BREAK') {
+    const fadeQ = fadeEntryQualityOk({
+      direction: entry.direction,
+      structure,
+      minutes,
+      bar,
+      swingHigh: setup.swing_high || structure.swing_high,
+      swingLow: setup.swing_low || structure.swing_low,
+    });
+    if (!fadeQ.ok) return null;
+  }
+  if (
+    entry.setup === 'CONTINUATION' &&
+    armed &&
+    setup.kind === 'CONTINUATION' &&
+    /mid-swing|CONTINUATION (up|down) ·/.test(setup.reason)
+  ) {
+    const contQ = continuationEntryQualityOk({
+      direction: entry.direction,
+      structure,
+      minutes,
+    });
+    if (!contQ.ok) return null;
+  }
 
   // CONTINUATION ablation gates (setup sticky may still carry legacy IMPULSE reason)
   if (entry.setup === 'CONTINUATION') {

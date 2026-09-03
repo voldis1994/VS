@@ -57,6 +57,38 @@ describe('exitReentry — MoveFlip switches, other exits cool down', () => {
     expect(g.detail).toMatch(/same-side dead/i);
   });
 
+  it('allows through-level BREAKOUT same-side after cool-down', () => {
+    const now = 1_000_000;
+    const g = postExitEntryGate({
+      nowMs: now + POST_EXIT_COOLDOWN_MS + 1_000,
+      lastExitMs: now,
+      lastExitSide: 'BUY',
+      lastExitReason: 'MoveFlip · BUY vs V-flip DOWN · CONTINUATION',
+      entryDirection: 'BUY',
+      flow: 'UP',
+      vflip: null,
+      entrySetup: 'BREAKOUT',
+      entryReason: 'ENTRY · BREAKOUT BUY through H4392.40 @ 4391.90',
+    });
+    expect(g.allow).toBe(true);
+  });
+
+  it('still blocks impulse BREAKOUT same-side spam', () => {
+    const now = 1_000_000;
+    const g = postExitEntryGate({
+      nowMs: now + POST_EXIT_COOLDOWN_MS + 1_000,
+      lastExitMs: now,
+      lastExitSide: 'BUY',
+      lastExitReason: 'MoveFlip · BUY vs V-flip DOWN · CONTINUATION',
+      entryDirection: 'BUY',
+      flow: 'UP',
+      vflip: null,
+      entrySetup: 'BREAKOUT',
+      entryReason: 'ENTRY · BREAKOUT via impulse · ENTRY · UP impulse @ 4390',
+    });
+    expect(g.allow).toBe(false);
+  });
+
   it('after cool-down non-flip reverse still needs V-flip inside 8m', () => {
     const now = 1_000_000;
     const afterCool = now + POST_EXIT_COOLDOWN_MS + 1_000;

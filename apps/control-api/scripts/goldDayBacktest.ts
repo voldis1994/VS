@@ -560,6 +560,8 @@ function main() {
         entryDirection: entry.direction,
         flow: liveFlow(minutes),
         vflip: flowFlipAtExtreme(minutes),
+        entrySetup: entry.setup,
+        entryReason: entry.reason,
       });
       if (!reentry.allow) {
         const fill = entry.direction === 'BUY' ? ask : bid;

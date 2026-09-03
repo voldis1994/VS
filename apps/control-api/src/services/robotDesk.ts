@@ -445,7 +445,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     chain:
       'Capital 1h+1m → STRUCTURE → SETUP(ARMED only) → closed 1m confirm → BEST OUTCOME · MoveFlip reverses next 1m',
     note:
-      'Quality gate: no NONE impulse chop; closed candle confirm; MoveFlip→switch now; other exits 5m cool-down; SAFETY SL required.',
+      'Quality gate: no NONE impulse chop; no IMPULSE→CONTINUATION; FADE vs hour blocked; CONT needs room+persist; closed candle confirm; MoveFlip→switch now; other exits 5m cool-down; SAFETY SL required.',
   };
 }
 
@@ -1595,6 +1595,8 @@ async function robotCycleBody(s: Internal) {
       entryDirection: entry.direction,
       flow: liveFlow(s.last_minute_candles),
       vflip: flowFlipAtExtreme(s.last_minute_candles),
+      entrySetup: entry.setup,
+      entryReason: entry.reason,
     });
     if (!reentry.allow) {
       pushTick(s, {

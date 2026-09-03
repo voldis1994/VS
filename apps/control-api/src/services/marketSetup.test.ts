@@ -85,7 +85,7 @@ describe('marketSetup', () => {
       expect(['FADE', 'PULLBACK', 'FAILED_BREAK'].includes(setup.kind)).toBe(true);
       if (setup.status === 'ARMED' && setup.side === 'BUY') {
         const bounce = bar10(2001.2, 2002.5, 2000.6, 2002.4);
-        const entry = decideEntryFromSetup(setup, bounce);
+        const entry = decideEntryFromSetup(setup, bounce, minutes, 2002.4, st);
         expect(entry?.direction).toBe('BUY');
       }
     }

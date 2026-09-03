@@ -11,11 +11,20 @@ export function isFlipExitReason(reason: string | null | undefined): boolean {
   return /MoveFlip/i.test(r) || /ThesisFailure/i.test(r);
 }
 
+/** True BREAKOUT through swing — not impulse-confirm blip. */
+export function isThroughLevelBreakout(
+  setup: string | null | undefined,
+  reason: string | null | undefined
+): boolean {
+  if (String(setup || '').toUpperCase() !== 'BREAKOUT') return false;
+  return /through H|through L|BREAKOUT (BUY|SELL) through/i.test(String(reason || ''));
+}
+
 /**
  * After an exit, may we take this entry?
  * - MoveFlip / ThesisFailure → reverse allowed immediately (next 1m bar is separate)
  * - Other exits → 5m cool-down; reverse still needs V-flip for 8m
- * - Same side → dead until flow flips, then still cool-down
+ * - Same side → dead until flow flips; exception: through-level BREAKOUT after cool-down
  */
 export function postExitEntryGate(opts: {
   nowMs: number;
@@ -25,6 +34,8 @@ export function postExitEntryGate(opts: {
   entryDirection: 'BUY' | 'SELL';
   flow: 'UP' | 'DOWN' | null;
   vflip: 'UP' | 'DOWN' | null;
+  entrySetup?: string | null;
+  entryReason?: string | null;
 }): { allow: boolean; detail: string | null } {
   const {
     nowMs,
@@ -34,6 +45,8 @@ export function postExitEntryGate(opts: {
     entryDirection,
     flow,
     vflip,
+    entrySetup,
+    entryReason,
   } = opts;
   if (!lastExitSide || !(lastExitMs > 0)) return { allow: true, detail: null };
 
@@ -42,6 +55,13 @@ export function postExitEntryGate(opts: {
   const flipExit = isFlipExitReason(lastExitReason);
 
   if (!reverse) {
+    // Through-level BREAKOUT may continue the day after cool-down (don't miss 13:22 class)
+    if (
+      isThroughLevelBreakout(entrySetup, entryReason) &&
+      age >= POST_EXIT_COOLDOWN_MS
+    ) {
+      return { allow: true, detail: null };
+    }
     const flowOk =
       (lastExitSide === 'BUY' && flow === 'DOWN') ||
       (lastExitSide === 'SELL' && flow === 'UP');

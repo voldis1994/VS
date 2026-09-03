@@ -1,4 +1,4 @@
-# Gold backtest — 2026-09-02 (1m) · live
+# Gold backtest — 2026-09-02 (1m) · live-v2
 
 Source: **Yahoo Finance GC=F** (public). Lot **0.1**. Spread **0.5**.
 Mode: **live (no impulse CONTINUATION — matches desk)**.
@@ -71,4 +71,4 @@ Shadow = ja būtu iegujuši ar to pašu exit smadzenēm. Unnecessary = shadow pe
 | 7 | BUY | BREAKOUT | 13:58 | 14:00 | 2.80 | 0.28 | 4.65 | 2m | BestOutcome harvest |  |
 | 8 | BUY | BREAKOUT | 14:05 | 14:09 | 1.00 | 0.10 | 2.85 | 4m | PeakProtection |  |
 
-Full JSON: `scripts/reports/gold-2026-09-02-backtest-live.json`
+Full JSON: `scripts/reports/gold-2026-09-02-backtest-live-v2.json`
