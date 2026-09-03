@@ -5,6 +5,7 @@
  *   npx tsx scripts/goldDayBacktest.ts
  *   npx tsx scripts/goldDayBacktest.ts --csv scripts/data/gc_f_2026-09-02_1m.csv --lot 0.1
  *   npx tsx scripts/goldDayBacktest.ts --impulse-cont   # legacy IMPULSE CONTINUATION
+ *   npx tsx scripts/goldDayBacktest.ts --micro-scalp    # live + NONE micro-move SCALP
  *   npx tsx scripts/goldDayBacktest.ts --narrow-midleg
  *   npx tsx scripts/goldDayBacktest.ts --loose
  *
@@ -152,6 +153,11 @@ function parseArgs(argv: string[]) {
     warmup: 60,
     /** Ablation: drop candle+2bar+spike and against-move/climax gates */
     loose: false,
+    /**
+     * Ablation: when setup is NONE, still catch 1m micro-swing / flow impulse
+     * and manage as SCALP (faster exits) — "kārtīgs scalpings" test.
+     */
+    microScalp: false,
     /** CONTINUATION arm/entry policy — default matches live desk */
     continuation: LIVE_CONTINUATION_POLICY as ContinuationPolicy,
     tag: '' as string,
@@ -163,13 +169,15 @@ function parseArgs(argv: string[]) {
     else if (a === '--spread') out.spread = Number(argv[++i]);
     else if (a === '--warmup') out.warmup = Number(argv[++i]);
     else if (a === '--loose') out.loose = true;
+    else if (a === '--micro-scalp') out.microScalp = true;
     else if (a === '--impulse-cont') out.continuation = 'default';
     else if (a === '--no-impulse-cont') out.continuation = 'no_impulse';
     else if (a === '--narrow-midleg') out.continuation = 'narrow_midleg';
     else if (a === '--tag') out.tag = String(argv[++i] || '');
   }
   if (!out.tag) {
-    if (out.continuation === 'default') out.tag = 'impulse-cont';
+    if (out.microScalp) out.tag = 'micro-scalp';
+    else if (out.continuation === 'default') out.tag = 'impulse-cont';
     else if (out.continuation === 'narrow_midleg') out.tag = 'narrow-midleg';
     else if (out.loose) out.tag = 'loose';
     else out.tag = 'live'; // matches LIVE_CONTINUATION_POLICY (no_impulse)
@@ -437,17 +445,30 @@ function main() {
         continue;
       }
 
-      const entry = decideUnifiedEntry({
+      let entry = decideUnifiedEntry({
         setup,
         structure,
         bar,
         minutes,
         livePx: mid,
-        allowNoneImpulse: false,
+        allowNoneImpulse: opts.microScalp,
         skipCandleConfirm: opts.loose,
         skipAgainstMove: opts.loose,
         continuationPolicy: opts.continuation,
       });
+      // Micro-scalp: NONE path → SCALP playbook (faster PeakProtect / thesis)
+      if (
+        entry &&
+        opts.microScalp &&
+        (setup.kind === 'NONE' || setup.status === 'NONE') &&
+        /unified NONE|setup was NONE|market flow/i.test(entry.reason)
+      ) {
+        entry = {
+          ...entry,
+          playbook: 'SCALP',
+          reason: `${entry.reason} · micro-SCALP`,
+        };
+      }
 
       if (!entry) {
         // Candidate existed (ARMED + side) but unified gate killed it — shadow it
@@ -584,8 +605,9 @@ function main() {
   const fmtTs = (ts: number) =>
     new Date(ts * 1000).toISOString().replace('.000Z', 'Z');
 
-  const contModeLabel =
-    opts.continuation === 'default'
+  const contModeLabel = opts.microScalp
+    ? 'live + micro-SCALP (NONE 1m impulse/micro-swing, SCALP exits)'
+    : opts.continuation === 'default'
       ? 'legacy impulse CONTINUATION armed (ablation baseline)'
       : opts.continuation === 'narrow_midleg'
         ? 'narrow mid-leg CONTINUATION only (bias + not climax + mid reason)'
@@ -598,6 +620,7 @@ function main() {
     day: '2026-09-02',
     mode: contModeLabel,
     loose: opts.loose,
+    micro_scalp: opts.microScalp,
     continuation_policy: opts.continuation,
     live_policy: LIVE_CONTINUATION_POLICY,
     bars: bars.length,
