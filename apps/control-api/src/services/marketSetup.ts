@@ -142,29 +142,16 @@ export function entryCandleConfirmDeny(
   }
 
   // After a large spike against us / exhaustion: confirm closes beyond spike close
+  // (strict even for soft mid-leg — relaxing this regressed day P&L £2.61→£2.06)
   if (isSpikeCandle(prev, minutes.slice(0, -2))) {
     if (direction === 'SELL') {
       if (!(prev.close > prev.open && cur.close < prev.close)) {
-        if (!soft) return 'wait · confirm after UP spike (close below spike)';
-        const win = minutes.slice(-5);
-        const reds = win.filter((c) => c.close < c.open).length;
-        const lastW = win[win.length - 1]!;
-        const drop = Math.max(...win.map((c) => c.high)) - lastW.close;
-        if (!(reds >= 3 && drop >= 2.0)) {
-          return 'wait · confirm after UP spike (close below spike)';
-        }
+        return 'wait · confirm after UP spike (close below spike)';
       }
     }
     if (direction === 'BUY') {
       if (!(prev.close < prev.open && cur.close > prev.close)) {
-        if (!soft) return 'wait · confirm after DOWN spike (close above spike)';
-        const win = minutes.slice(-5);
-        const greens = win.filter((c) => c.close > c.open).length;
-        const lastW = win[win.length - 1]!;
-        const rise = lastW.close - Math.min(...win.map((c) => c.low));
-        if (!(greens >= 3 && rise >= 2.0)) {
-          return 'wait · confirm after DOWN spike (close above spike)';
-        }
+        return 'wait · confirm after DOWN spike (close above spike)';
       }
     }
   }
