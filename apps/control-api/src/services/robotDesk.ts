@@ -446,7 +446,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     chain:
       'Capital 1h+1m → STRUCTURE → SETUP(ARMED only) → closed 1m confirm → BEST OUTCOME · MoveFlip reverses next 1m',
     note:
-      'Quality gate: both sides; mid-swing/mid-leg SELL soft 1m (pause doji OK); dump flips sticky BUY; MoveFlip→switch now; SAFETY SL required.',
+      'Quality gate: 1m dump-ride; soft-harvest→re-SELL while flow DOWN; longDump mid-swing arm; MoveFlip→switch; SAFETY SL required.',
   };
 }
 

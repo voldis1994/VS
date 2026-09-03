@@ -659,10 +659,18 @@ export function continuationEntryQualityOk(opts: {
   const local = recentLocalRange(minutes, 12);
 
   if (direction === 'BUY' && structure.at_tip) {
-    return { ok: false, detail: 'CONT BUY at_tip' };
+    // Live swing hugs tip — block only when local has no room left
+    const room = local.hi - last.close;
+    if (room < Math.max(local.span * 0.15, 1.2)) {
+      return { ok: false, detail: 'CONT BUY at_tip' };
+    }
   }
   if (direction === 'SELL' && structure.at_floor) {
-    return { ok: false, detail: 'CONT SELL at_floor' };
+    // Live swing hugs floor mid-dump — block only when local has no room left
+    const room = last.close - local.lo;
+    if (room < Math.max(local.span * 0.15, 1.2)) {
+      return { ok: false, detail: 'CONT SELL at_floor' };
+    }
   }
   if (direction === 'BUY' && structure.bias === 'BELOW') {
     return { ok: false, detail: 'CONT BUY vs bias BELOW' };
@@ -1444,15 +1452,28 @@ function rawSetupFromStructure(
     }
   }
 
-  // Mid-swing ride — only when book H/L is sticky-wide vs local (overnight trap).
-  // Do NOT use on normal local swings (Gold 13:50 bounce under high must stay blocked).
+  // Mid-swing / multi-leg 1m dump — sticky overnight OR long dump already underway.
+  // StickyWide alone freezes once local catches book; longDump keeps SELL armed 4440→4420.
   {
     const local = recentLocalRange(minutes, 12);
     const flowNow = priceFlowBias(minutes);
     const stickyWide = span > local.span * 1.6;
+    const trend = marketTrend(minutes);
+    const longDump =
+      trend === 'DOWN' &&
+      flowNow === 'DOWN' &&
+      local.hi - last.close >= Math.max(local.span * 0.45, 3.0) &&
+      pers <= -0.25;
+    const longRally =
+      trend === 'UP' &&
+      flowNow === 'UP' &&
+      last.close - local.lo >= Math.max(local.span * 0.45, 3.0) &&
+      pers >= 0.25;
+    const localRoomSell = last.close - local.lo >= Math.max(local.span * 0.15, 1.2);
+    const localRoomBuy = local.hi - last.close >= Math.max(local.span * 0.15, 1.2);
     if (
-      stickyWide &&
-      !structure.at_floor &&
+      (stickyWide || longDump) &&
+      (!structure.at_floor || localRoomSell) &&
       !closedAbove &&
       flowNow === 'DOWN' &&
       last.close < structure.mid &&
@@ -1470,8 +1491,8 @@ function rawSetupFromStructure(
       };
     }
     if (
-      stickyWide &&
-      !structure.at_tip &&
+      (stickyWide || longRally) &&
+      (!structure.at_tip || localRoomBuy) &&
       !closedBelow &&
       flowNow === 'UP' &&
       last.close > structure.mid &&

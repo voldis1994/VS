@@ -3,6 +3,7 @@ import {
   isFlipExitReason,
   postExitEntryGate,
   POST_EXIT_COOLDOWN_MS,
+  SAME_SIDE_CONTINUE_MS,
 } from './exitReentry.js';
 
 describe('exitReentry — MoveFlip switches, other exits cool down', () => {
@@ -114,5 +115,51 @@ describe('exitReentry — MoveFlip switches, other exits cool down', () => {
       vflip: 'DOWN',
     });
     expect(ok.allow).toBe(true);
+  });
+
+  it('allows same-side mid-swing SELL after soft harvest while dump continues', () => {
+    const now = 1_000_000;
+    const tooSoon = postExitEntryGate({
+      nowMs: now + 60_000,
+      lastExitMs: now,
+      lastExitSide: 'SELL',
+      lastExitReason: 'PeakProtection · LONG',
+      entryDirection: 'SELL',
+      flow: 'DOWN',
+      vflip: null,
+      entrySetup: 'CONTINUATION',
+      entryReason: 'ENTRY · CONTINUATION SELL · CONTINUATION mid-swing SELL · local dump',
+    });
+    expect(tooSoon.allow).toBe(false);
+
+    const ok = postExitEntryGate({
+      nowMs: now + SAME_SIDE_CONTINUE_MS + 1_000,
+      lastExitMs: now,
+      lastExitSide: 'SELL',
+      lastExitReason: 'PeakProtection · LONG',
+      entryDirection: 'SELL',
+      flow: 'DOWN',
+      vflip: null,
+      entrySetup: 'CONTINUATION',
+      entryReason: 'ENTRY · CONTINUATION SELL · CONTINUATION mid-swing SELL · local dump',
+    });
+    expect(ok.allow).toBe(true);
+  });
+
+  it('does not resume same-side after EarlyCut (only soft harvest)', () => {
+    const now = 1_000_000;
+    const g = postExitEntryGate({
+      nowMs: now + SAME_SIDE_CONTINUE_MS + 1_000,
+      lastExitMs: now,
+      lastExitSide: 'SELL',
+      lastExitReason: 'EarlyCut · LONG',
+      entryDirection: 'SELL',
+      flow: 'DOWN',
+      vflip: null,
+      entrySetup: 'CONTINUATION',
+      entryReason: 'ENTRY · CONTINUATION SELL · CONTINUATION mid-swing SELL · local dump',
+    });
+    expect(g.allow).toBe(false);
+    expect(g.detail).toMatch(/same-side dead/i);
   });
 });
