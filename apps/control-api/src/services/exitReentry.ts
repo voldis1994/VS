@@ -1,14 +1,22 @@
 /**
  * Post-exit re-entry policy — exit & switch on MoveFlip, cool-down on chop exits.
+ * 1m/10s desk: after a soft harvest, mid-leg CONTINUATION may resume while dump owns tape.
  */
 
 export const POST_EXIT_COOLDOWN_MS = 5 * 60_000;
 export const REVERSE_VFLIP_WINDOW_MS = 8 * 60_000;
+/** Same-side dump/rally resume after soft exit — 2m (not forever flat mid-dump) */
+export const SAME_SIDE_CONTINUE_MS = 2 * 60_000;
 
 /** MoveFlip / against-flow thesis — the tape already turned; reverse is the trade. */
 export function isFlipExitReason(reason: string | null | undefined): boolean {
   const r = String(reason || '');
   return /MoveFlip/i.test(r) || /ThesisFailure/i.test(r);
+}
+
+/** Soft harvest exits — OK to resume same-side mid-leg if flow still agrees. */
+export function isSoftHarvestExit(reason: string | null | undefined): boolean {
+  return /PeakProtection|BestOutcome|Target|ProfitGiveback|TimeDecay/i.test(String(reason || ''));
 }
 
 /** True BREAKOUT through swing — not impulse-confirm blip. */
@@ -20,11 +28,24 @@ export function isThroughLevelBreakout(
   return /through H|through L|BREAKOUT (BUY|SELL) through/i.test(String(reason || ''));
 }
 
+/** Mid-swing / flow-flip CONTINUATION only — not tip CONTINUATION up/down or IMPULSE → */
+export function isDumpRideContinuationEntry(
+  setup: string | null | undefined,
+  reason: string | null | undefined
+): boolean {
+  if (String(setup || '').toUpperCase() !== 'CONTINUATION') return false;
+  const r = String(reason || '');
+  if (/IMPULSE (UP|DOWN) →/.test(r)) return false;
+  return /mid-swing|FLOW flip mid-leg|IMPULSE (UP|DOWN) mid-leg/i.test(r);
+}
+
 /**
  * After an exit, may we take this entry?
  * - MoveFlip / ThesisFailure → reverse allowed immediately (next 1m bar is separate)
  * - Other exits → 5m cool-down; reverse still needs V-flip for 8m
- * - Same side → dead until flow flips; exception: through-level BREAKOUT after cool-down
+ * - Same side → normally dead until flow flips; EXCEPT:
+ *   - through-level BREAKOUT after 5m cool-down
+ *   - mid-swing CONTINUATION after soft harvest while flow still agrees (1m dump ride)
  */
 export function postExitEntryGate(opts: {
   nowMs: number;
@@ -62,10 +83,22 @@ export function postExitEntryGate(opts: {
     ) {
       return { allow: true, detail: null };
     }
-    const flowOk =
+    // 1m dump ride: soft harvest → re-SELL while flow still DOWN (not EarlyCut spam)
+    const flowContinues =
+      (lastExitSide === 'SELL' && flow === 'DOWN') ||
+      (lastExitSide === 'BUY' && flow === 'UP');
+    if (
+      flowContinues &&
+      isSoftHarvestExit(lastExitReason) &&
+      isDumpRideContinuationEntry(entrySetup, entryReason) &&
+      age >= SAME_SIDE_CONTINUE_MS
+    ) {
+      return { allow: true, detail: null };
+    }
+    const flowFlipped =
       (lastExitSide === 'BUY' && flow === 'DOWN') ||
       (lastExitSide === 'SELL' && flow === 'UP');
-    if (!flowOk) {
+    if (!flowFlipped) {
       return {
         allow: false,
         detail: `same-side dead ${lastExitSide} until flip (flow ${flow || '—'}) · no spam re-entry`,
