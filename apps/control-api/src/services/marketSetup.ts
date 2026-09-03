@@ -421,6 +421,17 @@ export function recentImpulse(
   return null;
 }
 
+/** Recent local high/low — sticky overnight swing span must not decide "late". */
+export function recentLocalRange(
+  minutes: CapitalPriceCandle[],
+  n = 15
+): { hi: number; lo: number; span: number } {
+  const slice = minutes.slice(-Math.max(4, n));
+  const hi = Math.max(...slice.map((c) => c.high));
+  const lo = Math.min(...slice.map((c) => c.low));
+  return { hi, lo, span: Math.max(hi - lo, 1) };
+}
+
 /**
  * Longer market direction (~20×1m). Bounce tips must not erase a live dump/rally.
  * Gold 17:41 class: BUY @ 4369 after 4374→ dump — short impulse said UP, market was DOWN.
@@ -772,17 +783,23 @@ function rawSetupFromStructure(
   const freshLo = isFreshSwingLow(minutes, lo, eps);
 
   // ——— IMPULSE FIRST — real extension only (not bounce mid-dump / late under high) ———
+  // When book H/L is still the LOCAL extreme, keep the classic "late" distance vs swing span.
+  // When book H/L is sticky overnight (far outside local range), only local late applies —
+  // otherwise mid @4422 with H4440/L4417 is always "late" → eternal NONE · mid swing.
   if (imp === 'UP') {
     const flow = priceFlowBias(minutes);
-    const span = Math.max(hi - lo, structure.span, 1);
+    const local = recentLocalRange(minutes);
+    const fromLocalHi = local.hi - last.close;
     const fromHi = hi - last.close;
-    // Bounce tip mid-dump — trust flow (flip-first), not sticky 20m trend alone
+    const span = Math.max(hi - lo, structure.span, 1);
     const bounceInDump = flow === 'DOWN';
-    // Not through high and already gave back from swing high — UP move finished
+    const hiIsLocal = hi <= local.hi + eps * 0.25;
     const lateUnderHigh =
       !closedAbove &&
       last.close < hi - eps * 0.5 &&
-      fromHi >= Math.max(span * 0.22, eps * 2.5);
+      (hiIsLocal
+        ? fromHi >= Math.max(span * 0.22, eps * 2.5)
+        : fromLocalHi >= Math.max(local.span * 0.5, eps * 1.5, 2.5));
     if (!bounceInDump && !lateUnderHigh) {
       if (closedAbove || last.close >= hi - eps * 0.5) {
         return {
@@ -808,13 +825,18 @@ function rawSetupFromStructure(
   }
   if (imp === 'DOWN') {
     const flow = priceFlowBias(minutes);
-    const span = Math.max(hi - lo, structure.span, 1);
+    const local = recentLocalRange(minutes);
+    const fromLocalLo = last.close - local.lo;
     const fromLo = last.close - lo;
+    const span = Math.max(hi - lo, structure.span, 1);
     const bounceInRally = flow === 'UP';
+    const loIsLocal = lo >= local.lo - eps * 0.25;
     const lateAboveFloor =
       !closedBelow &&
       last.close > lo + eps * 0.5 &&
-      fromLo >= Math.max(span * 0.22, eps * 2.5);
+      (loIsLocal
+        ? fromLo >= Math.max(span * 0.22, eps * 2.5)
+        : fromLocalLo >= Math.max(local.span * 0.5, eps * 1.5, 2.5));
     if (!bounceInRally && !lateAboveFloor) {
       if (closedBelow || last.close <= lo + eps * 0.5) {
         return {
@@ -1001,6 +1023,52 @@ function rawSetupFromStructure(
         swing_high: hi,
         swing_low: lo,
         reason: `CONTINUATION down · below mid ${structure.mid.toFixed(2)} · above floor ${lo.toFixed(2)}`,
+      };
+    }
+  }
+
+  // Mid-swing ride — only when book H/L is sticky-wide vs local (overnight trap).
+  // Do NOT use on normal local swings (Gold 13:50 bounce under high must stay blocked).
+  {
+    const local = recentLocalRange(minutes, 12);
+    const flowNow = priceFlowBias(minutes);
+    const stickyWide = span > local.span * 1.6;
+    if (
+      stickyWide &&
+      !structure.at_floor &&
+      !closedAbove &&
+      flowNow === 'DOWN' &&
+      last.close < structure.mid &&
+      local.hi - last.close >= Math.max(local.span * 0.35, 1.5) &&
+      pers <= -0.15
+    ) {
+      return {
+        kind: 'CONTINUATION',
+        side: 'SELL',
+        playbook: 'LONG',
+        status: 'ARMED',
+        swing_high: hi,
+        swing_low: lo,
+        reason: `CONTINUATION mid-swing SELL · local dump from ${local.hi.toFixed(2)} · below mid ${structure.mid.toFixed(2)}`,
+      };
+    }
+    if (
+      stickyWide &&
+      !structure.at_tip &&
+      !closedBelow &&
+      flowNow === 'UP' &&
+      last.close > structure.mid &&
+      last.close - local.lo >= Math.max(local.span * 0.35, 1.5) &&
+      pers >= 0.15
+    ) {
+      return {
+        kind: 'CONTINUATION',
+        side: 'BUY',
+        playbook: 'LONG',
+        status: 'ARMED',
+        swing_high: hi,
+        swing_low: lo,
+        reason: `CONTINUATION mid-swing BUY · local rally from ${local.lo.toFixed(2)} · above mid ${structure.mid.toFixed(2)}`,
       };
     }
   }
