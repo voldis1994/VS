@@ -430,9 +430,9 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
     chain:
-      'Capital 1h+1m → STRUCTURE(swing) → SETUP(sticky ARMED) → ENTRY(1m confirm) → BEST OUTCOME · SAFETY SL required',
+      'Capital 1h+1m → STRUCTURE → SETUP(ARMED only) → closed 1m confirm → BEST OUTCOME · 5m post-exit cool-down',
     note:
-      'Unified brain: ARMED setup owns entries; NONE only trades filtered 1m impulse/through-level; never open without broker SL; legs ride tp≥5pt.',
+      'Quality gate: no NONE impulse chop; closed candle confirm (no spike); 5m cool-down after exit; reverse needs V-flip; SAFETY SL required.',
   };
 }
 
@@ -469,7 +469,7 @@ function applyRobotRegime(s: Internal, bars?: TenSecBar[]) {
   }
 }
 
-function clearTradeState(s: Internal, opts?: { allowImmediateReverse?: boolean }) {
+function clearTradeState(s: Internal) {
   s.open_side = null;
   s.deal_id = null;
   s.entry_price = null;
@@ -483,13 +483,8 @@ function clearTradeState(s: Internal, opts?: { allowImmediateReverse?: boolean }
   s.playbook = null;
   s.entry_setup = null;
   s.mode = 'FLAT';
-  // MoveFlip: allow opposite entry this same 1m — waiting next clock was the lag
-  if (opts?.allowImmediateReverse) {
-    s.entry_minute_bucket = 0;
-  } else {
-    // Next impulse/NONE entry waits for the following 1m clock bucket
-    s.entry_minute_bucket = Math.floor(Date.now() / 60_000);
-  }
+  // Always wait next 1m+ after exit — same-minute MoveFlip reverse caused overnight BUY↔SELL chop
+  s.entry_minute_bucket = Math.floor(Date.now() / 60_000);
 }
 
 /**
@@ -832,7 +827,7 @@ async function exitTrade(
     /* best effort */
   }
 
-  clearTradeState(s, { allowImmediateReverse: /MoveFlip/i.test(reason) });
+  clearTradeState(s);
 }
 
 async function enterTrade(
@@ -1534,6 +1529,21 @@ async function robotCycleBody(s: Internal) {
     const newMinute =
       !s.entry_minute_bucket || minuteBucket > s.entry_minute_bucket;
 
+    // Hard cool-down after ANY exit — overnight Gold chop was BUY↔SELL every ~5m
+    const EXIT_COOLDOWN_MS = 5 * 60_000;
+    if (s.last_exit_ms > 0 && Date.now() - s.last_exit_ms < EXIT_COOLDOWN_MS) {
+      const left = Math.ceil((EXIT_COOLDOWN_MS - (Date.now() - s.last_exit_ms)) / 1000);
+      pushTick(s, {
+        phase: 'WAIT',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · post-exit cool-down ${left}s · quality over frequency`,
+      });
+      return;
+    }
+
+    // ARMED setup only — NONE impulse was the overnight chop engine
     let entry = newMinute
       ? decideUnifiedEntry({
           setup,
@@ -1541,7 +1551,7 @@ async function robotCycleBody(s: Internal) {
           bar,
           minutes: s.last_minute_candles,
           livePx,
-          allowNoneImpulse: true,
+          allowNoneImpulse: false,
         })
       : null;
 
@@ -1554,10 +1564,10 @@ async function robotCycleBody(s: Internal) {
         : null;
       const waitNote = !newMinute
         ? `1m system · wait next closed minute · ${setup.kind}/${setup.status}`
-        : candleNote && setup.status === 'ARMED'
-          ? `${candleNote} · ${setup.reason}`
-          : setup.kind === 'NONE' || setup.status === 'NONE'
-            ? `NONE · ${setup.reason}`
+        : setup.kind === 'NONE' || setup.status === 'NONE'
+          ? `NONE · no trade — wait ARMED setup · ${setup.reason}`
+          : candleNote && setup.status === 'ARMED'
+            ? `${candleNote} · ${setup.reason}`
             : setup.status === 'FORMING'
               ? `FORMING · ${setup.reason}`
               : `ARMED · waiting closed 1m confirm · ${setup.reason}`;
@@ -1589,12 +1599,11 @@ async function robotCycleBody(s: Internal) {
       }
     }
 
-    // After exit, opposite side needs real V-flip for 3m — not first pullback SELL into rally
-    // Gold 20:28 BUY win → 20:29 SELL @ 4381 → −£0.13
+    // After cool-down, opposite still needs real V-flip for 8m (not first pullback)
     if (
       s.last_exit_side &&
       entry.direction !== s.last_exit_side &&
-      Date.now() - s.last_exit_ms < 180_000
+      Date.now() - s.last_exit_ms < 8 * 60_000
     ) {
       const flip = flowFlipAtExtreme(s.last_minute_candles);
       const need: 'UP' | 'DOWN' = entry.direction === 'SELL' ? 'DOWN' : 'UP';
