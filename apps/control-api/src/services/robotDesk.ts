@@ -178,19 +178,6 @@ type Internal = RobotSession & {
   /** Last opened side — block opposite flip spam */
   last_entry_side: 'BUY' | 'SELL' | null;
   last_entry_side_ms: number;
-  /**
-   * Stage entry: after we decide, wait ~10s and then enter only if
-   * the next closed 10s candle direction matches (anti-flip guard).
-   */
-  pendingEntry:
-    | {
-        direction: 'BUY' | 'SELL';
-        setupType: string;
-        playbook: TradePlaybook;
-        reason: string;
-        queued_at_ms: number;
-      }
-    | null;
   /** After HardInvalidation / thesis fail — longer flip lock */
   last_hard_exit_ms: number;
 };
@@ -1392,85 +1379,6 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // Pending entry guard:
-    // 1) decide entry at 10s candle close
-    // 2) wait ~10s
-    // 3) execute only if the *next* closed 10s candle direction matches
-    if (s.pendingEntry) {
-      const now = Date.now();
-      const pending = s.pendingEntry;
-      const elapsed = now - pending.queued_at_ms;
-
-      const candleDirection: 'BUY' | 'SELL' | null =
-        bar.close > bar.open ? 'BUY' : bar.close < bar.open ? 'SELL' : null;
-
-      // We only expect confirmation on the next bar close (~10s later),
-      // but keep a strict time gate anyway.
-      if (elapsed >= 10_000 && candleDirection && candleDirection === pending.direction) {
-        s.pendingEntry = null;
-
-        // Opposite-side lock: brief for 10s V-flips; longer only after HardInv
-        const hardRecent = s.last_hard_exit_ms > 0 && now - s.last_hard_exit_ms < 300_000;
-        const SIDE_LOCK_MS = hardRecent ? 45_000 : 20_000;
-        if (s.last_entry_side && s.last_entry_side !== pending.direction) {
-          const sinceLast = now - s.last_entry_side_ms;
-          if (sinceLast < SIDE_LOCK_MS) {
-            pushTick(s, {
-              phase: 'INFO',
-              bid: quote.bid,
-              ask: quote.ask,
-              mid: quote.mid,
-              detail: `${ohlcLine} · side-lock ${s.last_entry_side} ${Math.ceil(
-                (SIDE_LOCK_MS - sinceLast) / 1000
-              )}s · no confirmed entry to ${pending.direction}${hardRecent ? ' · after hard exit' : ''}`,
-            });
-            return;
-          }
-        }
-
-        const direction = pending.direction;
-        const setupType = pending.setupType;
-        const entryPlaybook = pending.playbook;
-        const reason = pending.reason;
-
-        s.playbook = entryPlaybook;
-        s.entry_setup = setupType;
-
-        s.last_entry_attempt_ms = now;
-        s.last_entry_side = direction;
-        s.last_entry_side_ms = now;
-
-        pushTick(s, {
-          phase: 'ORDER',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `${ohlcLine} · OPEN ${direction} · ${reason}`,
-        });
-
-        await enterTrade(opened.session, s, direction, quote, reason, setupType, entryPlaybook);
-        return;
-      }
-
-      // Confirmation window elapsed but direction changed (or candle flat).
-      if (elapsed >= 10_000) {
-        s.pendingEntry = null;
-        pushTick(s, {
-          phase: 'INFO',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `${ohlcLine} · entry canceled — candle direction changed (was ${pending.direction}, now ${
-            candleDirection || 'FLAT'
-          })`,
-        });
-        return;
-      }
-
-      // Not time yet — keep waiting for the next closed 10s candle.
-      return;
-    }
-
     let entry =
       setup.kind !== 'NONE' && setup.status === 'ARMED'
         ? decideEntryFromSetup(setup, bar, s.last_minute_candles)
@@ -1523,23 +1431,44 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // Stage entry: wait ~10s, then enter only if the next closed 10s candle direction matches.
-    const queuedAt = Date.now();
-    s.pendingEntry = {
-      direction: entry.direction,
-      setupType: entry.setup,
-      playbook: entry.playbook,
-      reason: entry.reason,
-      queued_at_ms: queuedAt,
-    };
+    // Opposite-side lock: brief for 10s V-flips; longer only after HardInv
+    const hardRecent = s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < 300_000;
+    const SIDE_LOCK_MS = hardRecent ? 45_000 : 20_000;
+    if (
+      s.last_entry_side &&
+      s.last_entry_side !== entry.direction &&
+      Date.now() - s.last_entry_side_ms < SIDE_LOCK_MS
+    ) {
+      pushTick(s, {
+        phase: 'INFO',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: `${ohlcLine} · side-lock ${s.last_entry_side} ${Math.ceil(
+          (SIDE_LOCK_MS - (Date.now() - s.last_entry_side_ms)) / 1000
+        )}s · no flip to ${entry.direction}${hardRecent ? ' · after hard exit' : ''}`,
+      });
+      return;
+    }
 
+    const direction = entry.direction;
+    const setupType = entry.setup;
+    const entryPlaybook = entry.playbook;
+    const reason = entry.reason;
+    s.playbook = entryPlaybook;
+    s.entry_setup = setupType;
+
+    s.last_entry_attempt_ms = Date.now();
+    s.last_entry_side = direction;
+    s.last_entry_side_ms = Date.now();
     pushTick(s, {
-      phase: 'WAIT',
+      phase: 'ORDER',
       bid: quote.bid,
       ask: quote.ask,
       mid: quote.mid,
-      detail: `${ohlcLine} · ENTRY staged (${entry.direction}) · waiting 10s candle-direction confirm`,
+      detail: `${ohlcLine} · OPEN ${direction} · ${reason}`,
     });
+    await enterTrade(opened.session, s, direction, quote, reason, setupType, entryPlaybook);
     return;
   } catch (err) {
     s.reads_fail += 1;
@@ -1683,7 +1612,6 @@ export async function startRobotSession(input: {
     last_flat_mid: null,
     last_entry_side: null,
     last_entry_side_ms: 0,
-    pendingEntry: null,
     last_hard_exit_ms: 0,
 
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
