@@ -18,6 +18,12 @@ export const MAX_MFE_GIVEBACK = 0.35;
 export const MIN_MFE_RETENTION = 0.65; // keep ≥65% of MFE
 /** Soft harvest band just above hard PeakProtect (same 35% giveback family) */
 export const HARVEST_MFE_RETENTION = 0.7;
+/**
+ * PeakProtect / harvest arm only after this MFE — unified 2.5 pt for all books/setups.
+ * pct is a backstop; abs floor wins on Gold (~4400) and typical FX/metals prices.
+ */
+export const MFE_FLOOR_PCT = 0.00055;
+export const MFE_FLOOR_ABS = 2.5;
 
 export type PlaybookExitParams = {
   /** Target as fraction of entry price */
@@ -36,15 +42,15 @@ export type PlaybookExitParams = {
   timeDecayMs: number;
 };
 
-/** Exact set from the agreed playbook drawing — giveback unified at 35%. */
+/** Exact set from the agreed playbook drawing — giveback 35%, MFE floor 2.5 pt. */
 export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
   LONG: {
     tpPct: 0.0035,
     tpFloor: 0.35,
     slPct: 0.0025,
     slFloor: 0.25,
-    mfeFloorPct: 0.0018,
-    mfeFloorAbs: 0.18,
+    mfeFloorPct: MFE_FLOOR_PCT,
+    mfeFloorAbs: MFE_FLOOR_ABS,
     peakRet: MIN_MFE_RETENTION,
     harvestRet: HARVEST_MFE_RETENTION,
     thesisMinHoldMs: 120_000,
@@ -55,8 +61,8 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
     tpFloor: 0.22,
     slPct: 0.0019,
     slFloor: 0.19,
-    mfeFloorPct: 0.0015,
-    mfeFloorAbs: 0.15,
+    mfeFloorPct: MFE_FLOOR_PCT,
+    mfeFloorAbs: MFE_FLOOR_ABS,
     peakRet: MIN_MFE_RETENTION,
     harvestRet: HARVEST_MFE_RETENTION,
     thesisMinHoldMs: 90_000,
@@ -67,8 +73,8 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
     tpFloor: 0.18,
     slPct: 0.0018,
     slFloor: 0.18,
-    mfeFloorPct: 0.0012,
-    mfeFloorAbs: 0.12,
+    mfeFloorPct: MFE_FLOOR_PCT,
+    mfeFloorAbs: MFE_FLOOR_ABS,
     peakRet: MIN_MFE_RETENTION,
     harvestRet: HARVEST_MFE_RETENTION,
     thesisMinHoldMs: 90_000,
@@ -113,7 +119,7 @@ export function exitParamsForTrade(
   const base = PLAYBOOK_EXIT[playbook];
   const setup = String(entrySetup || '').trim().toUpperCase();
 
-  // V-bounce / dump continuation — hold for the leg (not tiny tpFloor), same 35% giveback
+  // V-bounce / dump continuation — hold for the leg (not tiny tpFloor), same 35% / 2.5 pt floor
   if (setup === 'CONTINUATION' || setup === 'PULLBACK') {
     return {
       ...base,
@@ -121,8 +127,8 @@ export function exitParamsForTrade(
       tpFloor: 4.0,
       slPct: base.slPct,
       slFloor: base.slFloor,
-      mfeFloorPct: 0.00055,
-      mfeFloorAbs: 2.5,
+      mfeFloorPct: MFE_FLOOR_PCT,
+      mfeFloorAbs: MFE_FLOOR_ABS,
       peakRet: MIN_MFE_RETENTION,
       harvestRet: HARVEST_MFE_RETENTION,
       thesisMinHoldMs: 180_000,
@@ -130,14 +136,14 @@ export function exitParamsForTrade(
     };
   }
 
-  // FADE / failed-break bounce from low — still room to mid, same 35% giveback
+  // FADE / failed-break bounce from low — still room to mid, same 35% / 2.5 pt floor
   if (setup === 'FADE' || setup === 'FAILED_BREAK') {
     return {
       ...base,
       tpPct: 0.0022,
       tpFloor: 3.0,
-      mfeFloorPct: 0.00045,
-      mfeFloorAbs: 1.8,
+      mfeFloorPct: MFE_FLOOR_PCT,
+      mfeFloorAbs: MFE_FLOOR_ABS,
       peakRet: MIN_MFE_RETENTION,
       harvestRet: HARVEST_MFE_RETENTION,
       thesisMinHoldMs: 120_000,
