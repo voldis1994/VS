@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiFetch } from '../hooks/useApi';
 import { Logo } from '../components/Logo';
+import { lotForMarket, pickUs100 } from '../lib/preferMarket';
 
 type RobotTick = {
   at: string;
@@ -275,7 +276,12 @@ export function RobotDeskPage() {
     void apiFetch<typeof launchMarkets>(`/api/trading/accounts/${launchAccountId}/instruments`)
       .then((rows) => {
         setLaunchMarkets(rows || []);
-        if (rows?.[0]) {
+        // Never default to A–Z first ($ Kimly) — prefer real Capital markets
+        const pick = pickUs100(rows || []);
+        if (pick) {
+          setLaunchEpic(pick.epic || pick.symbol);
+          setLaunchLot(String(lotForMarket(pick)));
+        } else if (rows?.[0]) {
           setLaunchEpic(rows[0].epic || rows[0].symbol);
           setLaunchLot(String(rows[0].lot_size || rows[0].min_lot || 0.1));
         }

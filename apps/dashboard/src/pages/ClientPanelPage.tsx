@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Logo } from '../components/Logo';
 import { clientFetch, getClientToken, setClientToken } from '../hooks/useClientApi';
 import { useClientWebSocket } from '../hooks/useClientWebSocket';
+import { lotForMarket, pickUs100 } from '../lib/preferMarket';
 
 type Market = {
   instrument_id: number;
@@ -101,9 +102,10 @@ export function ClientPanelPage() {
     setBusy(true);
     Promise.all([refresh(), loadMarkets()])
       .then(([st, mk]) => {
-        if (!st.market && mk[0]) {
-          setEpic(mk[0].epic);
-          setLot(mk[0].min_lot);
+        if (!st.market && mk.length) {
+          const pick = pickUs100(mk) || mk[0];
+          setEpic(pick.epic);
+          setLot(lotForMarket(pick, pick.min_lot));
         }
       })
       .catch((e) => {

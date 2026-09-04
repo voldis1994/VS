@@ -623,6 +623,27 @@ export async function stopFlatManageRobotsForAccount(accountId: number): Promise
   }
 }
 
+/**
+ * One account = one live market. Starting US100/Gold must not leave $ Kimly
+ * (or any other epic) running on the same account. Manage-only with an OPEN
+ * trade is left alone.
+ */
+export async function stopOtherRobotsForAccount(
+  accountId: number,
+  keepEpic: string
+): Promise<string[]> {
+  const keep = String(keepEpic || '').trim().toLowerCase();
+  const stopped: string[] = [];
+  for (const s of [...sessions.values()]) {
+    if (s.account_id !== accountId || !s.running) continue;
+    if (s.epic.trim().toLowerCase() === keep) continue;
+    if (!s.entry_enabled && s.open_side) continue;
+    await stopRobotSession(s.id);
+    stopped.push(`${s.display_name} (${s.epic})`);
+  }
+  return stopped;
+}
+
 export async function stopRobotSession(id: string): Promise<RobotSession | null> {
   const s = sessions.get(id);
   if (!s) return null;
@@ -648,7 +669,9 @@ export async function stopRobotSession(id: string): Promise<RobotSession | null>
       robot_status: 'STOPPED',
     });
   }
-  return publicSession(s);
+  const pub = publicSession(s);
+  if (!s.running && !s.open_side) sessions.delete(s.id);
+  return pub;
 }
 
 function matchOpenOnEpic(
@@ -1547,6 +1570,8 @@ export async function startRobotSession(input: {
   }
   sessions.delete(id);
 
+  const dropped = await stopOtherRobotsForAccount(acc.id, epic);
+
   const session: Internal = {
     id,
     account_id: acc.id,
@@ -1617,13 +1642,14 @@ export async function startRobotSession(input: {
     ohlc_10s: publicOhlc10s(emptyTenSecState()),
   };
 
-  const others = [...sessions.values()].filter((x) => x.running && x.id !== id).length;
   pushTick(session, {
     phase: 'INFO',
     bid: null,
     ask: null,
     mid: null,
-    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · OWN BRAIN · client=${acc.client_name} · other robots: ${others}`,
+    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · OWN BRAIN · client=${acc.client_name}${
+      dropped.length ? ` · stopped other markets: ${dropped.join(', ')}` : ''
+    }`,
   });
   pushTick(session, {
     phase: 'INFO',
@@ -1635,6 +1661,18 @@ export async function startRobotSession(input: {
   });
 
   sessions.set(id, session);
+  await pool
+    .query(
+      `UPDATE clients SET
+         panel_epic = $2,
+         panel_display_name = $3,
+         panel_lot_size = $4,
+         panel_robot_requested = 'RUNNING',
+         updated_at = NOW()
+       WHERE id = $1`,
+      [acc.client_id, epic, displayName, lot]
+    )
+    .catch(() => undefined);
   // Own entry brain owns this account — leave Market Core fanout so clients never share one signal
   if (session.entry_enabled) {
     void pool
