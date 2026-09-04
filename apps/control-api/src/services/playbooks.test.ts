@@ -241,19 +241,30 @@ describe('playbook exit', () => {
     expect(d.reason).toMatch(/TimeDecay/);
   });
 
-  it('exit params: unified 35% giveback (= keep 65%)', () => {
+  it('exit params: unified 35% giveback (= keep 65%) and 2.5 pt MFE floor', () => {
     expect(PLAYBOOK_EXIT.LONG.peakRet).toBe(0.65);
     expect(PLAYBOOK_EXIT.SCALP.peakRet).toBe(0.65);
     expect(PLAYBOOK_EXIT.FADE.peakRet).toBe(0.65);
+    expect(PLAYBOOK_EXIT.LONG.mfeFloorAbs).toBe(2.5);
+    expect(PLAYBOOK_EXIT.SCALP.mfeFloorAbs).toBe(2.5);
+    expect(PLAYBOOK_EXIT.FADE.mfeFloorAbs).toBe(2.5);
+    expect(PLAYBOOK_EXIT.LONG.mfeFloorPct).toBe(0.00055);
+    expect(PLAYBOOK_EXIT.SCALP.mfeFloorPct).toBe(0.00055);
+    expect(PLAYBOOK_EXIT.FADE.mfeFloorPct).toBe(0.00055);
     expect(PLAYBOOK_EXIT.LONG.thesisMinHoldMs).toBe(120_000);
     expect(PLAYBOOK_EXIT.SCALP.tpPct).toBe(0.0022);
     expect(PLAYBOOK_EXIT.FADE.timeDecayMs).toBe(240_000);
   });
 
-  it('CONTINUATION setup also uses 65% retention (not old 28%)', () => {
-    const p = exitParamsForTrade('LONG', 'CONTINUATION');
-    expect(p.peakRet).toBe(0.65);
-    expect(p.harvestRet).toBe(0.7);
+  it('CONTINUATION / FADE setups also use 65% retention and 2.5 pt MFE floor', () => {
+    const cont = exitParamsForTrade('LONG', 'CONTINUATION');
+    expect(cont.peakRet).toBe(0.65);
+    expect(cont.harvestRet).toBe(0.7);
+    expect(cont.mfeFloorAbs).toBe(2.5);
+    expect(cont.mfeFloorPct).toBe(0.00055);
+    const fade = exitParamsForTrade('FADE', 'FADE');
+    expect(fade.mfeFloorAbs).toBe(2.5);
+    expect(fade.mfeFloorPct).toBe(0.00055);
   });
 });
 
