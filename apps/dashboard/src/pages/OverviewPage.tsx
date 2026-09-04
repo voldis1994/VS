@@ -5,6 +5,7 @@ import { useDesk } from '../components/DeskContext';
 import { apiFetch } from '../hooks/useApi';
 import { openRobotWindow } from './RobotDeskPage';
 import { Logo } from '../components/Logo';
+import { lotForMarket, pickUs100 } from '../lib/preferMarket';
 
 type Position = {
   id: number;
@@ -107,7 +108,11 @@ export function OverviewPage() {
     void apiFetch<MarketOpt[]>(`/api/trading/accounts/${selectedAccountId}/instruments`)
       .then((rows) => {
         setMarkets(rows);
-        if (rows[0]) {
+        const pick = pickUs100(rows);
+        if (pick) {
+          setMarketEpic(pick.epic || pick.symbol);
+          setLotSize(String(lotForMarket(pick)));
+        } else if (rows[0]) {
           setMarketEpic(rows[0].epic || rows[0].symbol);
           setLotSize(String(rows[0].lot_size || rows[0].min_lot || 0.1));
         } else {

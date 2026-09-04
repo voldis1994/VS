@@ -18,7 +18,7 @@ interface BrokerRow {
 export function BrokersPage() {
   const { data, error, loading, refresh } = useApi<BrokerRow[]>('/api/brokers');
   const { data: clients, refresh: refreshClients } = useApi<Client[]>('/api/clients');
-  const bookerDefaultClientName = 'Kimly defolt';
+  const bookerDefaultClientName = 'Default Client';
   const [form, setForm] = useState({
     client_id: '',
     broker_name: 'capital_com',

@@ -5,7 +5,7 @@ import { logAudit } from '../services/audit.js';
 import { acquireCapitalSession, listCapitalAccounts, testCapitalComSession } from '../services/capitalCom.js';
 import { ensureBrokerAccount, seedAccountInstruments } from './trading.js';
 
-const BOOKER_DEFAULT_CLIENT_NAME = 'Kimly defolt';
+const BOOKER_DEFAULT_CLIENT_NAME = 'Default Client';
 
 async function ensureClientId(preferredId: number | undefined, fallbackName: string): Promise<number> {
   if (preferredId && Number.isFinite(preferredId) && preferredId > 0) {

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useApi, apiFetch } from '../hooks/useApi';
 import { openRobotWindow } from './RobotDeskPage';
+import { lotForMarket, pickUs100 } from '../lib/preferMarket';
 
 interface TradingAccount {
   account_id: number;
@@ -72,13 +73,14 @@ export function TradingPage() {
       setOrderEpic('');
       return;
     }
-    setOrderEpic((prev) =>
-      prev && instruments.some((i) => (i.epic || i.symbol) === prev)
-        ? prev
-        : instruments[0].epic || instruments[0].symbol,
-    );
+    setOrderEpic((prev) => {
+      if (prev && instruments.some((i) => (i.epic || i.symbol) === prev)) return prev;
+      const pick = pickUs100(instruments) || instruments[0];
+      return pick.epic || pick.symbol;
+    });
     if (!orderSize || orderSize === '0.1') {
-      setOrderSize(String(instruments[0].lot_size || instruments[0].min_lot || 0.1));
+      const pick = pickUs100(instruments) || instruments[0];
+      setOrderSize(String(lotForMarket(pick)));
     }
   }, [instruments]);
 
