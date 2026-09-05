@@ -1,4 +1,4 @@
-import { createHmac, randomInt } from 'crypto';
+import { createHmac } from 'crypto';
 
 /** Crypto.com Exchange REST roots (Exchange API v1). */
 export function cryptoComBaseUrl(environment: string): string {
@@ -29,7 +29,20 @@ export interface CryptoComTestResult {
 
 type Json = Record<string, unknown>;
 
-function paramsToString(obj: unknown, level = 0): string {
+/** Strip paste artifacts that break HMAC (BOM, zero-width, newlines). */
+export function sanitizeCryptoComSecret(value: string): string {
+  return value
+    .replace(/^\uFEFF/, '')
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
+    .trim();
+}
+
+/**
+ * Crypto.com parameter string for HMAC:
+ * sorted keys, each key + value, nested objects recurse, arrays concatenate elements.
+ * @see https://exchange-docs.crypto.com/exchange/v1/rest-ws/index.html#digital-signature
+ */
+export function paramsToString(obj: unknown, level = 0): string {
   if (obj === null || obj === undefined) return 'null';
   if (level >= 3) return String(obj);
   if (Array.isArray(obj)) {
@@ -45,17 +58,32 @@ function paramsToString(obj: unknown, level = 0): string {
   return String(obj);
 }
 
-function signRequest(input: {
+/** Build HMAC-SHA256 hex signature for a private request. */
+export function signRequest(input: {
   method: string;
-  id: number;
+  id: number | string;
   apiKey: string;
   params: Json;
-  nonce: number;
+  nonce: number | string;
   apiSecret: string;
 }): string {
   const paramStr = paramsToString(input.params || {});
   const payload = `${input.method}${input.id}${input.apiKey}${paramStr}${input.nonce}`;
   return createHmac('sha256', input.apiSecret).update(payload).digest('hex');
+}
+
+function authFailureHint(environment: string, code?: string | number): string {
+  const envLabel = environment === 'live' ? 'Live (production)' : 'Demo (UAT)';
+  const otherEnv = environment === 'live' ? 'Demo (UAT)' : 'Live';
+  return [
+    `Auth rejected (${code ?? 'unauthorized'}) for ${envLabel}.`,
+    'Fix checklist:',
+    '1) Key must be from Crypto.com Exchange → User Center → API (not the Crypto.com App).',
+    '2) Paste API Key in API Key and API Secret in API Secret — do not swap them.',
+    `3) Environment must match the key: ${envLabel} keys fail on ${otherEnv}.`,
+    '4) If the key has an IP whitelist, allow this server IP (error 40103 / 10003).',
+    '5) Delete the row and re-save after regenerating the key if unsure.',
+  ].join('\n');
 }
 
 async function postSigned(input: {
@@ -66,8 +94,9 @@ async function postSigned(input: {
   params?: Json;
 }): Promise<{ status: number; json: Json }> {
   const base = cryptoComBaseUrl(input.environment);
-  const id = randomInt(1, 1_000_000_000);
+  // Use millisecond nonce as id (matches working CCXT / Exchange clients).
   const nonce = Date.now();
+  const id = nonce;
   const params = input.params || {};
   const body: Json = {
     id,
@@ -133,6 +162,18 @@ function apiErrorDetail(json: Json, fallback: string): string {
   return fallback;
 }
 
+function isAuthError(code: unknown, status: number): boolean {
+  const n = Number(code);
+  return (
+    status === 401 ||
+    status === 403 ||
+    n === 10002 ||
+    n === 40101 ||
+    n === 10003 ||
+    n === 40103
+  );
+}
+
 function qtyStepFromInstrument(raw: Record<string, unknown>): number {
   const tick = Number(raw.qty_tick_size ?? raw.quantity_tick_size);
   if (Number.isFinite(tick) && tick > 0) return tick;
@@ -168,7 +209,9 @@ function normalizeInstrument(raw: Record<string, unknown>): CryptoComMarket | nu
 }
 
 /**
- * Validate API key + secret against Crypto.com Exchange (private/get-accounts).
+ * Validate API key + secret against Crypto.com Exchange (private/user-balance).
+ * Prefer user-balance over get-accounts: the latter is sub-account oriented and
+ * often returns legacy 10002 for retail keys even when the key is valid.
  * API Secret is stored in the shared `password` credential slot.
  */
 export async function testCryptoComSession(input: {
@@ -176,27 +219,38 @@ export async function testCryptoComSession(input: {
   apiKey: string;
   apiSecret: string;
 }): Promise<CryptoComTestResult> {
-  const apiKey = input.apiKey.trim();
-  const apiSecret = input.apiSecret.trim();
+  const apiKey = sanitizeCryptoComSecret(input.apiKey);
+  const apiSecret = sanitizeCryptoComSecret(input.apiSecret);
   if (!apiKey || !apiSecret) {
     return { ok: false, status: 400, detail: 'Crypto.com needs API Key and API Secret' };
+  }
+  if (apiKey === apiSecret) {
+    return {
+      ok: false,
+      status: 400,
+      detail: 'API Key and API Secret look identical — paste each value into its own field',
+    };
   }
 
   try {
     const { status, json } = await postSigned({
       environment: input.environment,
-      method: 'private/get-accounts',
+      method: 'private/user-balance',
       apiKey,
       apiSecret,
       params: {},
     });
 
-    if (status === 401 || status === 403) {
+    if (isAuthError(json.code, status)) {
+      const code = String(json.code ?? status);
+      const ipHint = Number(json.code) === 10003 || Number(json.code) === 40103;
       return {
         ok: false,
         status,
-        detail: apiErrorDetail(json, 'Unauthorized — check API Key/Secret and IP whitelist'),
-        errorCode: String(json.code ?? status),
+        detail: ipHint
+          ? `Crypto.com IP not whitelisted (code=${code}). Add this server IP to the API key whitelist, or disable IP restriction on the key.`
+          : `${apiErrorDetail(json, 'Unauthorized')}\n\n${authFailureHint(input.environment, code)}`,
+        errorCode: code,
       };
     }
 
@@ -210,15 +264,19 @@ export async function testCryptoComSession(input: {
     }
 
     const result = (json.result || {}) as Json;
-    const data = Array.isArray(result.data) ? result.data : Array.isArray(result) ? result : [];
+    const data = Array.isArray(result.data) ? result.data : [];
     const first = (data[0] || {}) as Json;
+    const instrument = String(first.instrument_name || first.currency || 'USD').trim() || 'USD';
+    const cash = first.total_cash_balance ?? first.total_available_balance;
     const label =
-      String(first.account_name || first.account_type || first.uuid || 'master').trim() || 'master';
+      cash != null && String(cash).trim()
+        ? `${instrument} bal ${String(cash)}`
+        : instrument;
 
     return {
       ok: true,
       status,
-      detail: `Crypto.com ${input.environment === 'live' ? 'LIVE' : 'UAT'} OK · account ${label}`,
+      detail: `Crypto.com ${input.environment === 'live' ? 'LIVE' : 'UAT'} OK · ${label}`,
       accountLabel: label,
     };
   } catch (err) {
@@ -289,8 +347,8 @@ export async function createCryptoComOrder(input: {
     const { status, json } = await postSigned({
       environment: input.environment,
       method: 'private/create-order',
-      apiKey: input.apiKey.trim(),
-      apiSecret: input.apiSecret.trim(),
+      apiKey: sanitizeCryptoComSecret(input.apiKey),
+      apiSecret: sanitizeCryptoComSecret(input.apiSecret),
       params,
     });
 

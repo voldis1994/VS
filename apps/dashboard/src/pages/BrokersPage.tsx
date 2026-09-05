@@ -249,9 +249,12 @@ export function BrokersPage() {
         <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>
           {form.broker_name === 'crypto_com' ? (
             <>
-              <strong>Crypto.com Exchange:</strong> create an API key with trading permission
-              (User Center → API). Paste <strong>API Key</strong> and <strong>API Secret</strong>
-              (Secret goes in the Password field). Demo = UAT sandbox, Live = production.
+              <strong>Crypto.com Exchange only:</strong> create the key at crypto.com/exchange →
+              User Center → API (not the Crypto.com App). Enable trading permission. Paste{' '}
+              <strong>API Key</strong> and <strong>API Secret</strong> into the two fields below
+              (Secret = Password field). Demo = UAT sandbox keys; Live = production keys — they
+              are not interchangeable. If Test returns UNAUTHORIZED, regenerate the key and
+              re-save (check IP whitelist too).
             </>
           ) : (
             <>
