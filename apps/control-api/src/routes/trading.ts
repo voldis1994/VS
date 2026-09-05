@@ -4,6 +4,7 @@ import { decrypt } from '../security/encryption.js';
 import { logAudit } from '../services/audit.js';
 import { getInstrumentById } from '../config/instruments.js';
 import { fetchAllCapitalMarkets, acquireCapitalSession, createCapitalPosition } from '../services/capitalCom.js';
+import { fetchAllCryptoComMarkets, createCryptoComOrder } from '../services/cryptoCom.js';
 
 export async function ensureBrokerAccount(connectionId: number, displayName: string): Promise<number> {
   const existing = await pool.query(
@@ -215,40 +216,64 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
         environment: string;
         identifier: string | null;
       };
-      if (conn.broker_name !== 'capital_com') {
-        return reply.code(400).send({ error: 'Only Capital.com connections can pull live markets' });
+      if (conn.broker_name !== 'capital_com' && conn.broker_name !== 'crypto_com') {
+        return reply.code(400).send({
+          error: `Broker ${conn.broker_name} does not support market pull yet`,
+        });
       }
 
       const creds = await loadCredentialMap(conn.connection_id);
       const apiKey = creds.api_key || '';
       const password = creds.password || '';
       const identifier = (conn.identifier || '').trim();
-      if (!apiKey || !password || !identifier) {
-        return reply.code(400).send({
-          error: 'Missing Capital.com credentials on this broker connection. Re-save Brokers first.',
+
+      let markets: Array<{
+        epic: string;
+        symbol: string;
+        display_name: string;
+        instrument_type: string;
+        category: string;
+        min_lot: number;
+        max_lot: number;
+        lot_step: number;
+      }> = [];
+
+      if (conn.broker_name === 'crypto_com') {
+        // Public instrument catalog — credentials optional for pull, required for trading
+        markets = await fetchAllCryptoComMarkets({ environment: conn.environment });
+        if (markets.length === 0) {
+          return reply.code(502).send({
+            error: 'Crypto.com returned 0 instruments. Check Demo(UAT)/Live environment.',
+          });
+        }
+      } else {
+        if (!apiKey || !password || !identifier) {
+          return reply.code(400).send({
+            error: 'Missing Capital.com credentials on this broker connection. Re-save Brokers first.',
+          });
+        }
+
+        const opened = await acquireCapitalSession({
+          environment: conn.environment,
+          apiKey,
+          identifier,
+          password,
+          connectionId: conn.connection_id,
         });
+        if (!opened.ok) {
+          return reply.code(400).send({ error: opened.result.detail, message: opened.result.detail });
+        }
+
+        markets = await fetchAllCapitalMarkets(opened.session);
+
+        if (markets.length === 0) {
+          return reply.code(502).send({
+            error: 'Capital.com returned 0 markets. Check Live/Demo environment and API key permissions.',
+          });
+        }
       }
 
-      const opened = await acquireCapitalSession({
-        environment: conn.environment,
-        apiKey,
-        identifier,
-        password,
-        connectionId: conn.connection_id,
-      });
-      if (!opened.ok) {
-        return reply.code(400).send({ error: opened.result.detail, message: opened.result.detail });
-      }
-
-      const markets = await fetchAllCapitalMarkets(opened.session);
-
-      if (markets.length === 0) {
-        return reply.code(502).send({
-          error: 'Capital.com returned 0 markets. Check Live/Demo environment and API key permissions.',
-        });
-      }
-
-      // Upsert Capital.com catalog (keep stable IDs via epic unique key).
+      // Upsert broker market catalog (stable IDs via epic unique key).
       const seenEpics: string[] = [];
       for (const m of markets) {
         seenEpics.push(m.epic);
@@ -279,7 +304,7 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
         );
       }
 
-      // Remove markets that disappeared from Capital.com for this connection.
+      // Remove markets that disappeared from the broker for this connection.
       if (seenEpics.length > 0) {
         const orphan = await pool.query(
           `SELECT id FROM capital_markets
@@ -298,14 +323,16 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
       }
 
       await seedAccountInstruments(conn.account_id);
-      await logAudit('admin', 'capital_markets_pulled', 'broker_connection', String(conn.connection_id), null, {
+      await logAudit('admin', 'broker_markets_pulled', 'broker_connection', String(conn.connection_id), null, {
         count: markets.length,
         environment: conn.environment,
+        broker_name: conn.broker_name,
       });
 
       return {
         success: true,
         count: markets.length,
+        broker_name: conn.broker_name,
         sample: markets.slice(0, 8).map((m) => ({ epic: m.epic, name: m.display_name })),
       };
     } catch (err) {
@@ -512,14 +539,76 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
         display_name: string;
         external_account_id: string | null;
       };
-      if (conn.broker_name !== 'capital_com') {
-        return reply.code(400).send({ error: 'Only Capital.com accounts can place live orders' });
+      if (conn.broker_name !== 'capital_com' && conn.broker_name !== 'crypto_com') {
+        return reply.code(400).send({
+          error: `Broker ${conn.broker_name} cannot place live orders yet`,
+        });
       }
 
       const creds = await loadCredentialMap(conn.connection_id);
       const apiKey = creds.api_key || '';
       const password = creds.password || '';
       const identifier = (conn.identifier || '').trim();
+
+      if (conn.broker_name === 'crypto_com') {
+        if (!apiKey || !password) {
+          return reply.code(400).send({
+            error: 'Missing Crypto.com API Key/Secret. Re-save Brokers and Test.',
+            message: 'Missing Crypto.com API Key/Secret. Re-save Brokers and Test.',
+          });
+        }
+        const cryptoResult = await createCryptoComOrder({
+          environment: conn.environment,
+          apiKey,
+          apiSecret: password,
+          instrument: epic,
+          side: direction as 'BUY' | 'SELL',
+          quantity: size,
+          type: 'MARKET',
+        });
+        if (!cryptoResult.ok) {
+          return reply.code(400).send({
+            error: cryptoResult.detail,
+            message: cryptoResult.detail,
+            status: cryptoResult.status,
+            broker: cryptoResult.json,
+          });
+        }
+        await logAudit('admin', 'crypto_com_order_opened', 'broker_account', String(accountId), null, {
+          epic,
+          direction,
+          size,
+          order_id: cryptoResult.orderId,
+          environment: conn.environment,
+        });
+        try {
+          const m = await pool.query(
+            `SELECT id FROM capital_markets
+             WHERE broker_connection_id = $1 AND (epic = $2 OR epic ILIKE $2 OR display_name ILIKE $3)
+             ORDER BY updated_at DESC LIMIT 1`,
+            [conn.connection_id, epic, `%${epic}%`]
+          );
+          const instrumentId = (m.rows[0]?.id as number) || 0;
+          await pool.query(
+            `INSERT INTO positions
+             (broker_account_id, instrument_id, direction, entry_price, quantity, status)
+             VALUES ($1, $2, $3, 0, $4, 'OPEN')`,
+            [accountId, instrumentId, direction === 'BUY' ? 'LONG' : 'SHORT', size]
+          );
+        } catch {
+          /* exchange order still live even if local row fails */
+        }
+        return {
+          success: true,
+          broker: 'crypto_com',
+          order_id: cryptoResult.orderId,
+          deal_reference: cryptoResult.orderId,
+          detail: cryptoResult.detail,
+          account: conn.display_name,
+          environment: conn.environment,
+        };
+      }
+
       if (!apiKey || !password || !identifier) {
         return reply.code(400).send({
           error: 'Missing Capital.com credentials. Re-save Brokers and Test.',
@@ -585,6 +674,7 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
 
       return {
         success: true,
+        broker: 'capital_com',
         deal_reference: result.deal_reference,
         detail: result.detail,
         account: conn.display_name,

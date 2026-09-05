@@ -58,8 +58,21 @@ export async function listActiveSubscriptionsForEpic(
             cm.id as instrument_id, cm.epic, cm.display_name, cm.min_lot, cm.max_lot, cm.lot_step,
             ais.lot_size as settings_lot, ais.trading_enabled
      FROM clients c
-     JOIN broker_connections bc ON bc.client_id = c.id AND bc.enabled = true
-     JOIN broker_accounts ba ON ba.broker_connection_id = bc.id AND ba.enabled = true
+     JOIN broker_accounts ba ON ba.enabled = true AND (
+       ba.id = c.preferred_broker_account_id
+       OR (
+         c.preferred_broker_account_id IS NULL
+         AND ba.id = (
+           SELECT ba2.id
+           FROM broker_accounts ba2
+           JOIN broker_connections bc2 ON bc2.id = ba2.broker_connection_id
+           WHERE bc2.client_id = c.id AND ba2.enabled = true AND bc2.enabled = true
+           ORDER BY ba2.id ASC
+           LIMIT 1
+         )
+       )
+     )
+     JOIN broker_connections bc ON bc.id = ba.broker_connection_id AND bc.enabled = true
      JOIN capital_markets cm ON cm.broker_connection_id = bc.id AND cm.epic = c.panel_epic
      LEFT JOIN account_instrument_settings ais
        ON ais.broker_account_id = ba.id AND ais.instrument_id = cm.id
@@ -68,10 +81,6 @@ export async function listActiveSubscriptionsForEpic(
        AND c.panel_robot_requested = 'RUNNING'
        AND c.panel_epic = $1
        AND COALESCE(ais.trading_enabled, false) = true
-       AND (
-         c.preferred_broker_account_id IS NULL
-         OR c.preferred_broker_account_id = ba.id
-       )
      ORDER BY c.id ASC, ba.id ASC`,
     [clean]
   );

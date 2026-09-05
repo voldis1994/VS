@@ -1059,13 +1059,23 @@ async function robotCycle(s: Internal) {
     return;
   }
   const conn = rows[0] as { environment: string; identifier: string | null; broker_name: string };
-  if (conn.broker_name !== 'capital_com') {
+  if (conn.broker_name !== 'capital_com' && conn.broker_name !== 'crypto_com') {
     pushTick(s, {
       phase: 'ERROR',
       bid: null,
       ask: null,
       mid: null,
-      detail: 'Not Capital.com',
+      detail: `Unsupported broker: ${conn.broker_name}`,
+    });
+    return;
+  }
+  if (conn.broker_name === 'crypto_com') {
+    pushTick(s, {
+      phase: 'ERROR',
+      bid: null,
+      ask: null,
+      mid: null,
+      detail: 'Crypto.com robot loop uses Exchange orders via pipeline; live quote cycle for Capital only for now',
     });
     return;
   }
@@ -1508,7 +1518,9 @@ export async function startRobotSession(input: {
     client_id: number;
     client_name: string;
   };
-  if (acc.broker_name !== 'capital_com') throw new Error('Only Capital.com accounts supported');
+  if (acc.broker_name !== 'capital_com' && acc.broker_name !== 'crypto_com') {
+    throw new Error('Only Capital.com / Crypto.com accounts supported');
+  }
 
   let displayName = (input.display_name || '').trim();
   let epic = input.epic.trim();

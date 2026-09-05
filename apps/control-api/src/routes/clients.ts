@@ -54,6 +54,55 @@ async function hardDeleteClient(clientId: string): Promise<void> {
   }
 }
 
+async function assertBrokerAccountEnabled(accountId: number): Promise<{
+  account_id: number;
+  connection_id: number;
+  display_name: string;
+  broker_name: string;
+  environment: string;
+}> {
+  const { rows } = await pool.query(
+    `SELECT ba.id as account_id, ba.display_name, bc.id as connection_id,
+            bc.broker_name, bc.environment
+     FROM broker_accounts ba
+     JOIN broker_connections bc ON bc.id = ba.broker_connection_id
+     WHERE ba.id = $1 AND ba.enabled = true AND bc.enabled = true`,
+    [accountId]
+  );
+  if (!rows.length) {
+    throw new Error(`Broker account #${accountId} not found or disabled`);
+  }
+  return {
+    account_id: Number(rows[0].account_id),
+    connection_id: Number(rows[0].connection_id),
+    display_name: String(rows[0].display_name || `#${accountId}`),
+    broker_name: String(rows[0].broker_name),
+    environment: String(rows[0].environment),
+  };
+}
+
+async function resolveMarketOnConnection(
+  connectionId: number,
+  epic: string
+): Promise<{ epic: string; display_name: string; min_lot: number; max_lot: number; lot_step: number }> {
+  const { rows } = await pool.query(
+    `SELECT epic, display_name, min_lot, max_lot, lot_step
+     FROM capital_markets
+     WHERE broker_connection_id = $1 AND epic = $2`,
+    [connectionId, epic]
+  );
+  if (!rows.length) {
+    throw new Error(`Market ${epic} not found on this broker — pull markets first`);
+  }
+  return {
+    epic: String(rows[0].epic),
+    display_name: String(rows[0].display_name || rows[0].epic),
+    min_lot: Number(rows[0].min_lot),
+    max_lot: Number(rows[0].max_lot),
+    lot_step: Number(rows[0].lot_step),
+  };
+}
+
 export async function registerClientRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/clients', async () => {
     const { rows } = await pool.query(
@@ -125,51 +174,186 @@ export async function registerClientRoutes(app: FastifyInstance): Promise<void> 
     return { ...rows[0], accounts: accounts.rows, panel };
   });
 
-  app.post('/api/clients', async (request) => {
-    const body = request.body as { name: string };
-    const { rows } = await pool.query(
-      'INSERT INTO clients (name) VALUES ($1) RETURNING id, name, enabled, access_enabled, created_at',
-      [body.name]
-    );
-    await logAudit('admin', 'client_created', 'client', String(rows[0].id), null, rows[0]);
-    return rows[0];
+  app.post('/api/clients', async (request, reply) => {
+    try {
+      const body = request.body as {
+        name: string;
+        preferred_broker_account_id?: number | null;
+        panel_epic?: string | null;
+        panel_display_name?: string | null;
+        panel_lot_size?: number | null;
+      };
+      if (!body.name?.trim()) {
+        return reply.code(400).send({ error: 'name is required' });
+      }
+
+      let preferred: number | null =
+        body.preferred_broker_account_id === undefined || body.preferred_broker_account_id === null
+          ? null
+          : Number(body.preferred_broker_account_id);
+      let panelEpic: string | null = body.panel_epic?.trim() || null;
+      let panelDisplay: string | null = body.panel_display_name?.trim() || null;
+      let panelLot: number | null =
+        body.panel_lot_size === undefined || body.panel_lot_size === null
+          ? null
+          : Number(body.panel_lot_size);
+
+      if (preferred != null) {
+        if (!Number.isFinite(preferred) || preferred <= 0) {
+          return reply.code(400).send({ error: 'Invalid preferred_broker_account_id' });
+        }
+        const account = await assertBrokerAccountEnabled(preferred);
+        if (panelEpic) {
+          const market = await resolveMarketOnConnection(account.connection_id, panelEpic);
+          panelDisplay = panelDisplay || market.display_name;
+          if (panelLot == null) panelLot = market.min_lot;
+          if (panelLot < market.min_lot || panelLot > market.max_lot) {
+            return reply.code(400).send({
+              error: `lot_size must be between ${market.min_lot} and ${market.max_lot}`,
+            });
+          }
+        }
+      } else if (panelEpic) {
+        return reply.code(400).send({
+          error: 'Select a broker account before choosing a market',
+        });
+      }
+
+      const { rows } = await pool.query(
+        `INSERT INTO clients (
+           name, preferred_broker_account_id, panel_epic, panel_display_name, panel_lot_size
+         ) VALUES ($1, $2, $3, $4, $5)
+         RETURNING id, name, enabled, access_enabled, preferred_broker_account_id,
+                   panel_epic, panel_display_name, panel_lot_size, created_at`,
+        [body.name.trim(), preferred, panelEpic, panelDisplay, panelLot]
+      );
+      await logAudit('admin', 'client_created', 'client', String(rows[0].id), null, rows[0]);
+      return rows[0];
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to create client';
+      return reply.code(400).send({ error: message, message });
+    }
   });
 
-  app.put('/api/clients/:id', async (request) => {
-    const { id } = request.params as { id: string };
-    const body = request.body as {
-      name?: string;
-      enabled?: boolean;
-      access_enabled?: boolean;
-      preferred_broker_account_id?: number | null;
-    };
-    const prev = await pool.query('SELECT * FROM clients WHERE id = $1', [id]);
-    if (!prev.rows.length) return { error: 'Not found' };
+  app.put('/api/clients/:id', async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const body = request.body as {
+        name?: string;
+        enabled?: boolean;
+        access_enabled?: boolean;
+        preferred_broker_account_id?: number | null;
+        panel_epic?: string | null;
+        panel_display_name?: string | null;
+        panel_lot_size?: number | null;
+      };
+      const prev = await pool.query('SELECT * FROM clients WHERE id = $1', [id]);
+      if (!prev.rows.length) return reply.code(404).send({ error: 'Not found' });
 
-    await pool.query(
-      `UPDATE clients SET
-        name = COALESCE($2, name),
-        enabled = COALESCE($3, enabled),
-        access_enabled = COALESCE($4, access_enabled),
-        updated_at = NOW()
-       WHERE id = $1`,
-      [id, body.name ?? null, body.enabled ?? null, body.access_enabled ?? null]
-    );
-    if (body.preferred_broker_account_id !== undefined) {
       await pool.query(
-        `UPDATE clients SET preferred_broker_account_id = $2, updated_at = NOW() WHERE id = $1`,
-        [id, body.preferred_broker_account_id]
+        `UPDATE clients SET
+          name = COALESCE($2, name),
+          enabled = COALESCE($3, enabled),
+          access_enabled = COALESCE($4, access_enabled),
+          updated_at = NOW()
+         WHERE id = $1`,
+        [id, body.name ?? null, body.enabled ?? null, body.access_enabled ?? null]
       );
+
+      if (body.preferred_broker_account_id !== undefined) {
+        const preferred =
+          body.preferred_broker_account_id === null
+            ? null
+            : Number(body.preferred_broker_account_id);
+        if (preferred != null) {
+          if (!Number.isFinite(preferred) || preferred <= 0) {
+            return reply.code(400).send({ error: 'Invalid preferred_broker_account_id' });
+          }
+          await assertBrokerAccountEnabled(preferred);
+        }
+        await pool.query(
+          `UPDATE clients SET preferred_broker_account_id = $2, updated_at = NOW() WHERE id = $1`,
+          [id, preferred]
+        );
+      }
+
+      if (
+        body.panel_epic !== undefined ||
+        body.panel_display_name !== undefined ||
+        body.panel_lot_size !== undefined
+      ) {
+        const freshPref = await pool.query(
+          `SELECT preferred_broker_account_id, panel_epic, panel_display_name, panel_lot_size
+           FROM clients WHERE id = $1`,
+          [id]
+        );
+        const cur = freshPref.rows[0] as {
+          preferred_broker_account_id: number | null;
+          panel_epic: string | null;
+          panel_display_name: string | null;
+          panel_lot_size: string | number | null;
+        };
+        let panelEpic =
+          body.panel_epic !== undefined
+            ? body.panel_epic?.trim() || null
+            : cur.panel_epic;
+        let panelDisplay =
+          body.panel_display_name !== undefined
+            ? body.panel_display_name?.trim() || null
+            : cur.panel_display_name;
+        let panelLot =
+          body.panel_lot_size !== undefined
+            ? body.panel_lot_size === null
+              ? null
+              : Number(body.panel_lot_size)
+            : cur.panel_lot_size == null
+              ? null
+              : Number(cur.panel_lot_size);
+
+        if (panelEpic) {
+          if (!cur.preferred_broker_account_id) {
+            return reply.code(400).send({
+              error: 'Select a broker account before choosing a market',
+            });
+          }
+          const account = await assertBrokerAccountEnabled(cur.preferred_broker_account_id);
+          const market = await resolveMarketOnConnection(account.connection_id, panelEpic);
+          panelDisplay = panelDisplay || market.display_name;
+          if (panelLot == null) panelLot = market.min_lot;
+          if (panelLot < market.min_lot || panelLot > market.max_lot) {
+            return reply.code(400).send({
+              error: `lot_size must be between ${market.min_lot} and ${market.max_lot}`,
+            });
+          }
+        } else {
+          panelDisplay = null;
+          panelLot = null;
+        }
+
+        await pool.query(
+          `UPDATE clients SET
+             panel_epic = $2,
+             panel_display_name = $3,
+             panel_lot_size = $4,
+             updated_at = NOW()
+           WHERE id = $1`,
+          [id, panelEpic, panelDisplay, panelLot]
+        );
+      }
+
+      const fresh = await pool.query(
+        `SELECT id, name, enabled, access_enabled, preferred_broker_account_id,
+                access_code_hash IS NOT NULL as has_access_code,
+                panel_epic, panel_display_name, panel_lot_size, last_seen_at
+         FROM clients WHERE id = $1`,
+        [id]
+      );
+      await logAudit('admin', 'client_updated', 'client', id, prev.rows[0], fresh.rows[0]);
+      return fresh.rows[0];
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to update client';
+      return reply.code(400).send({ error: message, message });
     }
-    const fresh = await pool.query(
-      `SELECT id, name, enabled, access_enabled, preferred_broker_account_id,
-              access_code_hash IS NOT NULL as has_access_code,
-              panel_epic, panel_display_name, panel_lot_size, last_seen_at
-       FROM clients WHERE id = $1`,
-      [id]
-    );
-    await logAudit('admin', 'client_updated', 'client', id, prev.rows[0], fresh.rows[0]);
-    return fresh.rows[0];
   });
 
   app.post('/api/clients/:id/access-code', async (request, reply) => {
