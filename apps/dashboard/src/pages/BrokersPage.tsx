@@ -58,7 +58,7 @@ export function BrokersPage() {
     setSaveError(null);
     setSaveOk(false);
     try {
-      if (!form.identifier.trim()) {
+      if (form.broker_name !== 'crypto_com' && !form.identifier.trim()) {
         throw new Error('Identifier (login email) is required');
       }
       if (form.broker_name === 'capital_com') {
@@ -67,6 +67,14 @@ export function BrokersPage() {
         }
         if (form.api_key.includes('@')) {
           throw new Error('API Key looks like an email — put email in Identifier, API key in API Key');
+        }
+      }
+      if (form.broker_name === 'crypto_com') {
+        if (!form.api_key.trim() || !form.password.trim()) {
+          throw new Error('Crypto.com needs API Key and API Secret (secret goes in Password)');
+        }
+        if (form.api_key.includes('@')) {
+          throw new Error('API Key looks like an email — paste the Crypto.com Exchange API Key');
         }
       }
       const clientId = await ensureClient();
@@ -142,7 +150,7 @@ export function BrokersPage() {
     <div>
       <h1 className="page-title">Brokers</h1>
       <p className="page-subtitle">
-        Add each broker connection individually (Capital.com Live / Demo for now). Then on Clients,
+        Add each broker connection individually (Capital.com or Crypto.com Exchange). Then on Clients,
         search and assign any available broker account + market to a new client. Public internet
         feeds (Yahoo/Aurum/FX/Coinbase) fuse into 10s OHLC automatically.
       </p>
@@ -174,6 +182,7 @@ export function BrokersPage() {
               onChange={(e) => setForm({ ...form, broker_name: e.target.value })}
             >
               <option value="capital_com">Capital.com</option>
+              <option value="crypto_com">Crypto.com Exchange</option>
               <option value="paper">Paper</option>
             </select>
           </label>
@@ -184,15 +193,17 @@ export function BrokersPage() {
               value={form.environment}
               onChange={(e) => setForm({ ...form, environment: e.target.value })}
             >
-<option value="demo">Demo</option>
+<option value="demo">{form.broker_name === 'crypto_com' ? 'Demo (UAT sandbox)' : 'Demo'}</option>
             <option value="live">Live (real money)</option>
             </select>
           </label>
           <label style={{ display: 'grid', gap: 4 }}>
-            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Identifier (login email)</span>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+              {form.broker_name === 'crypto_com' ? 'Label (optional)' : 'Identifier (login email)'}
+            </span>
             <input
               className="input"
-              placeholder="you@email.com"
+              placeholder={form.broker_name === 'crypto_com' ? 'e.g. main-exchange' : 'you@email.com'}
               value={form.identifier}
               onChange={(e) => setForm({ ...form, identifier: e.target.value })}
             />
@@ -202,7 +213,7 @@ export function BrokersPage() {
             <input
               className="input"
               type="password"
-              placeholder="Capital.com API key"
+              placeholder={form.broker_name === 'crypto_com' ? 'Crypto.com API key' : 'Capital.com API key'}
               value={form.api_key}
               onChange={(e) => setForm({ ...form, api_key: e.target.value })}
               autoComplete="off"
@@ -210,12 +221,16 @@ export function BrokersPage() {
           </label>
           <label style={{ display: 'grid', gap: 4 }}>
             <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-              API Password (custom password from key creation — NOT 2FA code, NOT account password)
+              {form.broker_name === 'crypto_com'
+                ? 'API Secret (from Crypto.com Exchange API key creation)'
+                : 'API Password (custom password from key creation — NOT 2FA code, NOT account password)'}
             </span>
             <input
               className="input"
               type="password"
-              placeholder="API key custom password"
+              placeholder={
+                form.broker_name === 'crypto_com' ? 'Crypto.com API secret' : 'API key custom password'
+              }
               value={form.password}
               onChange={(e) => setForm({ ...form, password: e.target.value })}
               autoComplete="off"
@@ -232,10 +247,20 @@ export function BrokersPage() {
           </p>
         )}
         <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>
-          <strong>2FA:</strong> needed only when generating the API key on Capital.com website.
-          Do not put the authenticator code in this form.
-          Password field = the <strong>custom API password</strong> you chose when creating the key
-          (Settings → API integrations), for <strong>Live</strong> or <strong>Demo</strong> separately.
+          {form.broker_name === 'crypto_com' ? (
+            <>
+              <strong>Crypto.com Exchange:</strong> create an API key with trading permission
+              (User Center → API). Paste <strong>API Key</strong> and <strong>API Secret</strong>
+              (Secret goes in the Password field). Demo = UAT sandbox, Live = production.
+            </>
+          ) : (
+            <>
+              <strong>2FA:</strong> needed only when generating the API key on Capital.com website.
+              Do not put the authenticator code in this form.
+              Password field = the <strong>custom API password</strong> you chose when creating the key
+              (Settings → API integrations), for <strong>Live</strong> or <strong>Demo</strong> separately.
+            </>
+          )}
         </p>
       </div>
       {testMessage && (

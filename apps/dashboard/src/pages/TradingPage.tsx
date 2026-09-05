@@ -128,7 +128,7 @@ export function TradingPage() {
     setBusy(true);
     setMsgOk(true);
     setMsg(
-      'Pulling ALL Capital.com markets (real epics + names). This can take 1–3 minutes — do not close the tab...'
+      'Pulling ALL markets (real epics + names). This can take 1–3 minutes — do not close the tab...'
     );
     try {
       const res = await apiFetch<{ count: number; sample?: Array<{ epic: string; name: string }> }>(
@@ -268,7 +268,7 @@ export function TradingPage() {
             Sync accounts
           </button>
           <button className="btn btn-primary" onClick={pullCapitalMarkets} disabled={busy || !accountId}>
-            Pull ALL Capital.com markets
+            Pull ALL markets (Capital / Crypto.com)
           </button>
         </div>
         {msg && (
@@ -285,7 +285,7 @@ export function TradingPage() {
         )}
         {source === 'empty' && accountId && (
           <p className="error-state" style={{ marginTop: 10 }}>
-            Nav Capital.com tirgu. Spied <strong>Pull ALL Capital.com markets</strong> — bez tā
+            Nav broker tirgu. Spied <strong>Pull ALL markets (Capital / Crypto.com)</strong> — bez tā
             rādās tukšs (fake katalogs izslēgts).
           </p>
         )}

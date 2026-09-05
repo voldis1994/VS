@@ -3,6 +3,7 @@ import { pool } from '../db/pool.js';
 import { encrypt, decrypt, maskSecret } from '../security/encryption.js';
 import { logAudit } from '../services/audit.js';
 import { acquireCapitalSession, listCapitalAccounts, testCapitalComSession } from '../services/capitalCom.js';
+import { testCryptoComSession } from '../services/cryptoCom.js';
 import { ensureBrokerAccount, seedAccountInstruments } from './trading.js';
 
 const BOOKER_DEFAULT_CLIENT_NAME = 'Kimly defolt';
@@ -100,6 +101,20 @@ export async function registerBrokerRoutes(app: FastifyInstance): Promise<void> 
         }
       }
 
+      if (body.broker_name === 'crypto_com') {
+        if (!body.api_key?.trim() || !body.password?.trim()) {
+          return reply.code(400).send({
+            error:
+              'Crypto.com needs API Key AND API Secret (Exchange → User Center → API). Put the secret in the Password field.',
+          });
+        }
+        if (body.api_key.includes('@')) {
+          return reply.code(400).send({
+            error: 'API Key looks like an email — paste the Crypto.com Exchange API Key instead.',
+          });
+        }
+      }
+
       const clientId = await ensureClientId(
         body.client_id !== undefined ? Number(body.client_id) : undefined,
         body.identifier?.trim() || BOOKER_DEFAULT_CLIENT_NAME
@@ -184,17 +199,72 @@ export async function registerBrokerRoutes(app: FastifyInstance): Promise<void> 
         };
       }
 
+      const creds = await loadCredentialMap(conn.id);
+      const apiKey = creds.api_key || '';
+      const password = creds.password || '';
+      const identifier = (conn.identifier || '').trim();
+
+      if (conn.broker_name === 'crypto_com') {
+        if (!apiKey || !password) {
+          return reply.code(400).send({
+            success: false,
+            error:
+              'Missing stored API Key or API Secret. Re-add the Crypto.com connection (Secret goes in Password).',
+          });
+        }
+        const result = await testCryptoComSession({
+          environment: conn.environment,
+          apiKey,
+          apiSecret: password,
+        });
+        if (!result.ok) {
+          return {
+            success: false,
+            error: result.detail,
+            status: result.status,
+            errorCode: result.errorCode,
+          };
+        }
+
+        // Ensure at least one broker_accounts row exists for client assignment
+        const existing = await pool.query(
+          `SELECT id FROM broker_accounts WHERE broker_connection_id = $1 ORDER BY id ASC LIMIT 1`,
+          [conn.id]
+        );
+        if (existing.rows.length) {
+          await pool.query(
+            `UPDATE broker_accounts
+             SET display_name = COALESCE(NULLIF(display_name,''), $1),
+                 external_account_id = COALESCE(NULLIF(external_account_id,''), $2)
+             WHERE id = $3`,
+            [
+              result.accountLabel || 'Crypto.com',
+              result.accountLabel || 'master',
+              existing.rows[0].id,
+            ]
+          );
+        } else {
+          await pool.query(
+            `INSERT INTO broker_accounts (broker_connection_id, external_account_id, display_name, enabled)
+             VALUES ($1, $2, $3, true)`,
+            [conn.id, result.accountLabel || 'master', result.accountLabel || 'Crypto.com']
+          );
+        }
+
+        return {
+          success: true,
+          message: result.detail,
+          accountType: result.accountLabel,
+          multi_account: false,
+        };
+      }
+
       if (conn.broker_name !== 'capital_com') {
         return reply.code(400).send({
           success: false,
           error: `Unsupported broker for live test: ${conn.broker_name}`,
         });
       }
-
-      const creds = await loadCredentialMap(conn.id);
-      const apiKey = creds.api_key || '';
-      const password = creds.password || '';
-      const identifier = (conn.identifier || '').trim();
 
       if (!identifier) {
         return reply.code(400).send({

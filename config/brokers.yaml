@@ -23,3 +23,20 @@ brokers:
       market_order: true
       stop_loss: true
       take_profit: true
+
+  - name: crypto_com
+    display_name: Crypto.com Exchange
+    environments:
+      demo:
+        base_url: https://uat-api.3ona.co/exchange/v1
+      live:
+        base_url: https://api.crypto.com/exchange/v1
+    capabilities:
+      market_order: true
+      limit_order: true
+      stop_loss: false
+      take_profit: false
+      trailing_stop: false
+      partial_close: false
+      websocket_quotes: false
+

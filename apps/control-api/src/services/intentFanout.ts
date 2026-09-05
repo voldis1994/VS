@@ -1,5 +1,3 @@
-import { pool } from '../db/pool.js';
-import { decrypt } from '../security/encryption.js';
 import {
   acquireCapitalSession,
   createCapitalPosition,
@@ -7,6 +5,9 @@ import {
   fetchCapitalMarketQuote,
   computeSafetyCushionStopLevel,
 } from './capitalCom.js';
+import { createCryptoComOrder } from './cryptoCom.js';
+import { decrypt } from '../security/encryption.js';
+import { pool } from '../db/pool.js';
 import { emitToClient } from './clientEvents.js';
 import {
   listActiveSubscriptionsForEpic,
@@ -238,17 +239,77 @@ async function executeForSubscription(
       `SELECT environment, identifier, broker_name FROM broker_connections WHERE id = $1`,
       [sub.connection_id]
     );
-    if (!connRow.rows.length || connRow.rows[0].broker_name !== 'capital_com') {
+    if (!connRow.rows.length) {
       return finish({
         client_id: sub.client_id,
         account_id: sub.account_id,
         lot_size: sub.lot_size,
         ok: false,
-        detail: 'Not Capital.com',
+        detail: 'Broker connection missing',
         entry_price: null,
       });
     }
+    const brokerName = String(connRow.rows[0].broker_name || '');
+    if (brokerName !== 'capital_com' && brokerName !== 'crypto_com') {
+      return finish({
+        client_id: sub.client_id,
+        account_id: sub.account_id,
+        lot_size: sub.lot_size,
+        ok: false,
+        detail: `Unsupported broker: ${brokerName}`,
+        entry_price: null,
+      });
+    }
+
     const creds = await loadCreds(sub.connection_id);
+
+    if (brokerName === 'crypto_com') {
+      const apiKey = creds.api_key || '';
+      const apiSecret = creds.password || '';
+      if (!apiKey || !apiSecret) {
+        return finish({
+          client_id: sub.client_id,
+          account_id: sub.account_id,
+          lot_size: sub.lot_size,
+          ok: false,
+          detail: 'Missing Crypto.com API Key/Secret',
+          entry_price: null,
+        });
+      }
+      const cryptoResult = await createCryptoComOrder({
+        environment: String(connRow.rows[0].environment || 'demo'),
+        apiKey,
+        apiSecret,
+        instrument: sub.epic,
+        side: direction,
+        quantity: sub.lot_size,
+        type: 'MARKET',
+      });
+      if (!cryptoResult.ok) {
+        noteBrokerError(sub.client_id, cryptoResult.detail);
+        emitToClient(sub.client_id, { type: 'error', message: cryptoResult.detail });
+        return finish({
+          client_id: sub.client_id,
+          account_id: sub.account_id,
+          lot_size: sub.lot_size,
+          ok: false,
+          detail: cryptoResult.detail,
+          entry_price: null,
+        });
+      }
+      noteBrokerOk(sub.client_id);
+      const entry =
+        referencePrice != null && Number.isFinite(referencePrice) ? Number(referencePrice) : null;
+      return finish({
+        client_id: sub.client_id,
+        account_id: sub.account_id,
+        lot_size: sub.lot_size,
+        ok: true,
+        detail: cryptoResult.detail,
+        entry_price: entry,
+      });
+    }
+
     const acc = await pool.query(
       `SELECT external_account_id FROM broker_accounts WHERE id = $1`,
       [sub.account_id]
