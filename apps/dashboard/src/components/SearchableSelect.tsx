@@ -18,6 +18,23 @@ type Props = {
   onOpen?: () => void;
 };
 
+/** Normalize so "crypto.com" matches "crypto_com", "BTC/USDT" matches "BTC_USDT", etc. */
+function normalizeSearch(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/\.com\b/g, 'com')
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+function matchesQuery(haystack: string, query: string): boolean {
+  const h = haystack.toLowerCase();
+  const q = query.toLowerCase();
+  if (h.includes(q)) return true;
+  const nh = normalizeSearch(haystack);
+  const nq = normalizeSearch(query);
+  return nq.length > 0 && nh.includes(nq);
+}
+
 export function SearchableSelect({
   options,
   value,
@@ -47,11 +64,11 @@ export function SearchableSelect({
   }, []);
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = query.trim();
     if (!q) return options;
     return options.filter((o) => {
-      const hay = (o.searchText || o.label).toLowerCase();
-      return hay.includes(q) || o.value.toLowerCase().includes(q);
+      const hay = `${o.searchText || o.label} ${o.value}`;
+      return matchesQuery(hay, q);
     });
   }, [options, query]);
 
@@ -141,8 +158,10 @@ export function SearchableSelect({
             </button>
           ))}
           {filtered.length === 0 && (
-            <div className="empty-state" style={{ padding: 12, fontSize: 12 }}>
-              No matches
+            <div className="empty-state" style={{ padding: 12, fontSize: 12, lineHeight: 1.4 }}>
+              {options.length === 0
+                ? 'Nothing in the pool yet — add a broker on Brokers first, then Test.'
+                : `No match for “${query.trim()}”. Try another name, or add that broker on Brokers first.`}
             </div>
           )}
         </div>

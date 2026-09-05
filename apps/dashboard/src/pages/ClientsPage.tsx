@@ -118,11 +118,20 @@ export function ClientsPage() {
 
   const accountOptions = useMemo(
     () =>
-      accounts.map((a) => ({
-        value: String(a.account_id),
-        label: accountLabel(a),
-        searchText: `${a.display_name} ${a.broker_name || ''} ${a.environment} ${a.identifier || ''} ${a.client_name} #${a.account_id}`,
-      })),
+      accounts.map((a) => {
+        const broker = a.broker_name || '';
+        const aliases =
+          broker === 'crypto_com'
+            ? 'crypto.com cryptocom crypto exchange'
+            : broker === 'capital_com'
+              ? 'capital.com capitalcom capital'
+              : '';
+        return {
+          value: String(a.account_id),
+          label: accountLabel(a),
+          searchText: `${a.display_name} ${broker} ${aliases} ${a.environment} ${a.identifier || ''} ${a.client_name} #${a.account_id}`,
+        };
+      }),
     [accounts]
   );
 
@@ -326,8 +335,10 @@ export function ClientsPage() {
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="section-title">Add Client</div>
         <p style={{ fontSize: 12, opacity: 0.75, marginBottom: 12 }}>
-          Brokers stay on <Link to="/brokers">Brokers</Link> (add each one by one). Then pick from
-          the full pool below — search by name, broker, email, or account id.
+          <strong>1)</strong> First add the broker on <Link to="/brokers">Brokers</Link> (Capital.com
+          or Crypto.com) → Test OK.{' '}
+          <strong>2)</strong> Then search it here. Searching “crypto.com” only finds a Crypto.com
+          connection that already exists in the pool — it does not create one.
         </p>
         <div className="actions" style={{ flexWrap: 'wrap', alignItems: 'flex-end', gap: 10 }}>
           <label style={{ display: 'grid', gap: 4 }}>
