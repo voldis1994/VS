@@ -142,7 +142,9 @@ export function BrokersPage() {
     <div>
       <h1 className="page-title">Brokers</h1>
       <p className="page-subtitle">
-        Capital.com Live / Demo — execution venue. Public internet feeds (Yahoo/Aurum/FX/Coinbase) fuse into 10s OHLC automatically.
+        Add each broker connection individually (Capital.com Live / Demo for now). Then on Clients,
+        search and assign any available broker account + market to a new client. Public internet
+        feeds (Yahoo/Aurum/FX/Coinbase) fuse into 10s OHLC automatically.
       </p>
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="section-title">Add Broker Connection</div>

@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useApi, apiFetch } from '../hooks/useApi';
+import { SearchableSelect } from '../components/SearchableSelect';
 
 interface LiveTrade {
   market: string;
@@ -33,30 +34,140 @@ interface TradingAccount {
   client_name: string;
   display_name: string;
   environment: string;
+  broker_name?: string;
+  identifier?: string | null;
+  capital_market_count?: number;
+}
+
+interface MarketRow {
+  instrument_id: number;
+  epic?: string;
+  symbol: string;
+  display_name: string;
+  min_lot: number;
+  max_lot: number;
+  lot_step: number;
+  lot_size: number;
+}
+
+function accountLabel(a: TradingAccount): string {
+  const broker = a.broker_name || 'broker';
+  const idPart = a.identifier ? ` · ${a.identifier}` : '';
+  const markets =
+    a.capital_market_count != null ? ` · ${a.capital_market_count} markets` : '';
+  return `#${a.account_id} · ${a.display_name} · ${broker}/${a.environment}${idPart}${markets}`;
 }
 
 export function ClientsPage() {
   const { data, error, loading, refresh } = useApi<ClientRow[]>('/api/clients');
   const [accounts, setAccounts] = useState<TradingAccount[]>([]);
   const [name, setName] = useState('');
+  const [createAccountId, setCreateAccountId] = useState('');
+  const [createEpic, setCreateEpic] = useState('');
+  const [createLot, setCreateLot] = useState('');
+  const [createMarkets, setCreateMarkets] = useState<MarketRow[]>([]);
+  const [marketsLoading, setMarketsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [issuedCode, setIssuedCode] = useState<{ client_id: number; code: string } | null>(null);
+  const [rosterMarkets, setRosterMarkets] = useState<Record<number, MarketRow[]>>({});
+
+  const loadAccounts = async () => {
+    try {
+      const rows = await apiFetch<TradingAccount[]>('/api/trading/accounts');
+      setAccounts(rows || []);
+    } catch {
+      setAccounts([]);
+    }
+  };
 
   useEffect(() => {
-    void apiFetch<TradingAccount[]>('/api/trading/accounts')
-      .then((rows) => setAccounts(rows || []))
-      .catch(() => setAccounts([]));
+    void loadAccounts();
   }, []);
+
+  useEffect(() => {
+    if (!createAccountId) {
+      setCreateMarkets([]);
+      setCreateEpic('');
+      setCreateLot('');
+      return;
+    }
+    let cancelled = false;
+    setMarketsLoading(true);
+    void apiFetch<MarketRow[]>(`/api/trading/accounts/${createAccountId}/instruments`)
+      .then((rows) => {
+        if (cancelled) return;
+        setCreateMarkets(rows || []);
+        setCreateEpic('');
+        setCreateLot('');
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCreateMarkets([]);
+          setCreateEpic('');
+          setCreateLot('');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setMarketsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [createAccountId]);
+
+  const accountOptions = useMemo(
+    () =>
+      accounts.map((a) => ({
+        value: String(a.account_id),
+        label: accountLabel(a),
+        searchText: `${a.display_name} ${a.broker_name || ''} ${a.environment} ${a.identifier || ''} ${a.client_name} #${a.account_id}`,
+      })),
+    [accounts]
+  );
+
+  const createMarketOptions = useMemo(
+    () =>
+      createMarkets.map((m) => ({
+        value: m.epic || m.symbol,
+        label: `${m.display_name} · ${m.epic || m.symbol}`,
+        searchText: `${m.display_name} ${m.epic || ''} ${m.symbol}`,
+      })),
+    [createMarkets]
+  );
+
+  const handleCreateMarketPick = (epic: string) => {
+    setCreateEpic(epic);
+    const m = createMarkets.find((x) => (x.epic || x.symbol) === epic);
+    if (m) setCreateLot(String(m.lot_size || m.min_lot || ''));
+    else setCreateLot('');
+  };
 
   const handleCreate = async () => {
     if (!name.trim()) return;
     setSubmitting(true);
     setMsg(null);
     try {
-      await apiFetch('/api/clients', { method: 'POST', body: JSON.stringify({ name }) });
+      const body: Record<string, unknown> = { name: name.trim() };
+      if (createAccountId) {
+        body.preferred_broker_account_id = Number(createAccountId);
+      }
+      if (createEpic) {
+        body.panel_epic = createEpic;
+        const m = createMarkets.find((x) => (x.epic || x.symbol) === createEpic);
+        body.panel_display_name = m?.display_name || createEpic;
+        if (createLot.trim()) body.panel_lot_size = Number(createLot);
+        else if (m) body.panel_lot_size = m.min_lot;
+      }
+      await apiFetch('/api/clients', { method: 'POST', body: JSON.stringify(body) });
       setName('');
+      setCreateAccountId('');
+      setCreateEpic('');
+      setCreateLot('');
+      setCreateMarkets([]);
+      setMsg('Client created — broker/market linked from the pool.');
       refresh();
+      void loadAccounts();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : 'Failed to create account');
     } finally {
@@ -116,14 +227,59 @@ export function ClientsPage() {
     refresh();
   };
 
+  const ensureRosterMarkets = async (accountId: number) => {
+    if (rosterMarkets[accountId]) return rosterMarkets[accountId];
+    try {
+      const rows = await apiFetch<MarketRow[]>(`/api/trading/accounts/${accountId}/instruments`);
+      setRosterMarkets((prev) => ({ ...prev, [accountId]: rows || [] }));
+      return rows || [];
+    } catch {
+      setRosterMarkets((prev) => ({ ...prev, [accountId]: [] }));
+      return [];
+    }
+  };
+
   const handlePreferredAccount = async (client: ClientRow, accountId: number | '') => {
-    await apiFetch(`/api/clients/${client.id}`, {
-      method: 'PUT',
-      body: JSON.stringify({
-        preferred_broker_account_id: accountId === '' ? null : Number(accountId),
-      }),
-    });
-    refresh();
+    setMsg(null);
+    try {
+      await apiFetch(`/api/clients/${client.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          preferred_broker_account_id: accountId === '' ? null : Number(accountId),
+          panel_epic: null,
+          panel_display_name: null,
+          panel_lot_size: null,
+        }),
+      });
+      if (accountId !== '') void ensureRosterMarkets(Number(accountId));
+      refresh();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Broker assign failed');
+    }
+  };
+
+  const handleRosterMarket = async (client: ClientRow, epic: string) => {
+    setMsg(null);
+    const accountId = client.preferred_broker_account_id ?? client.account_id;
+    if (!accountId) {
+      setMsg('Pick a broker account first');
+      return;
+    }
+    try {
+      const markets = await ensureRosterMarkets(accountId);
+      const m = markets.find((x) => (x.epic || x.symbol) === epic);
+      await apiFetch(`/api/clients/${client.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          panel_epic: epic || null,
+          panel_display_name: m?.display_name || null,
+          panel_lot_size: m ? m.lot_size || m.min_lot : null,
+        }),
+      });
+      refresh();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'Market assign failed');
+    }
   };
 
   const handleDelete = async (client: ClientRow) => {
@@ -136,6 +292,7 @@ export function ClientsPage() {
       await apiFetch(`/api/clients/${client.id}?hard=true`, { method: 'DELETE' });
       setMsg(`Deleted account #${client.id}`);
       refresh();
+      void loadAccounts();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : 'Delete failed');
     }
@@ -148,7 +305,8 @@ export function ClientsPage() {
     <div>
       <h1 className="page-title">Clients</h1>
       <p className="page-subtitle">
-        Client desks + access codes. Send clients this link (not the admin desk):
+        Add brokers individually on Brokers. Here search & assign any available broker account +
+        market when creating a client.
       </p>
       <div className="card" style={{ marginBottom: 16, padding: '12px 16px' }}>
         <div className="section-title" style={{ marginBottom: 8 }}>
@@ -167,19 +325,80 @@ export function ClientsPage() {
 
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="section-title">Add Client</div>
-        <div className="actions">
-          <input
-            className="input"
-            placeholder="Account / client name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            style={{ maxWidth: 320 }}
-          />
-          <button className="btn btn-primary" onClick={handleCreate} disabled={submitting}>
+        <p style={{ fontSize: 12, opacity: 0.75, marginBottom: 12 }}>
+          Brokers stay on <Link to="/brokers">Brokers</Link> (add each one by one). Then pick from
+          the full pool below — search by name, broker, email, or account id.
+        </p>
+        <div className="actions" style={{ flexWrap: 'wrap', alignItems: 'flex-end', gap: 10 }}>
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Client name</span>
+            <input
+              className="input"
+              placeholder="Account / client name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              style={{ minWidth: 200 }}
+            />
+          </label>
+          <label style={{ display: 'grid', gap: 4, minWidth: 280, flex: 1 }}>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+              Broker account (all available)
+            </span>
+            <SearchableSelect
+              options={accountOptions}
+              value={createAccountId}
+              onChange={setCreateAccountId}
+              placeholder="Search brokers…"
+              emptyLabel={
+                accounts.length === 0
+                  ? 'No brokers yet — open Brokers first'
+                  : 'No broker selected'
+              }
+            />
+          </label>
+          <label style={{ display: 'grid', gap: 4, minWidth: 280, flex: 1 }}>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+              Market (search catalog)
+            </span>
+            <SearchableSelect
+              options={createMarketOptions}
+              value={createEpic}
+              onChange={handleCreateMarketPick}
+              placeholder="Search markets…"
+              emptyLabel={
+                !createAccountId
+                  ? 'Pick broker first'
+                  : marketsLoading
+                    ? 'Loading markets…'
+                    : createMarkets.length === 0
+                      ? 'No markets — Trading → Pull ALL'
+                      : 'No market selected'
+              }
+              disabled={!createAccountId || marketsLoading}
+            />
+          </label>
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Lot</span>
+            <input
+              className="input"
+              placeholder="Lot"
+              value={createLot}
+              onChange={(e) => setCreateLot(e.target.value)}
+              disabled={!createEpic}
+              style={{ width: 100 }}
+            />
+          </label>
+          <button
+            className="btn btn-primary"
+            onClick={() => void handleCreate()}
+            disabled={submitting}
+          >
             Add Client
           </button>
         </div>
-        {msg && <p style={{ marginTop: 10, fontFamily: 'var(--font-mono)', fontSize: 12 }}>{msg}</p>}
+        {msg && (
+          <p style={{ marginTop: 10, fontFamily: 'var(--font-mono)', fontSize: 12 }}>{msg}</p>
+        )}
         {issuedCode && (
           <div className="error-state" style={{ marginTop: 12, color: 'var(--accent)' }}>
             Access code for client #{issuedCode.client_id}:{' '}
@@ -208,7 +427,14 @@ export function ClientsPage() {
             </thead>
             <tbody>
               {(data || []).map((c) => {
-                const clientAccounts = accounts.filter((a) => a.client_id === c.id);
+                const preferredId = c.preferred_broker_account_id ?? c.account_id ?? '';
+                const marketOpts = preferredId
+                  ? (rosterMarkets[Number(preferredId)] || []).map((m) => ({
+                      value: m.epic || m.symbol,
+                      label: `${m.display_name} · ${m.epic || m.symbol}`,
+                      searchText: `${m.display_name} ${m.epic || ''} ${m.symbol}`,
+                    }))
+                  : [];
                 return (
                   <tr key={c.id}>
                     <td className="mono">#{c.id}</td>
@@ -221,35 +447,51 @@ export function ClientsPage() {
                     <td>
                       <span
                         className={`badge ${
-                          c.access_enabled && c.has_access_code ? 'badge-healthy' : 'badge-unhealthy'
+                          c.access_enabled && c.has_access_code
+                            ? 'badge-healthy'
+                            : 'badge-unhealthy'
                         }`}
                       >
                         {c.access_enabled && c.has_access_code ? 'PANEL' : 'NO ACCESS'}
                       </span>
                     </td>
-                    <td>
-                      <select
-                        className="input"
-                        style={{ minWidth: 160 }}
-                        value={c.preferred_broker_account_id ?? c.account_id ?? ''}
-                        onChange={(e) =>
-                          void handlePreferredAccount(
-                            c,
-                            e.target.value === '' ? '' : Number(e.target.value)
-                          )
+                    <td style={{ minWidth: 220 }}>
+                      <SearchableSelect
+                        options={accountOptions}
+                        value={
+                          preferredId === '' || preferredId == null ? '' : String(preferredId)
                         }
-                      >
-                        <option value="">Auto / first</option>
-                        {clientAccounts.map((a) => (
-                          <option key={a.account_id} value={a.account_id}>
-                            #{a.account_id} · {a.display_name} ({a.environment})
-                          </option>
-                        ))}
-                      </select>
+                        onChange={(v) =>
+                          void handlePreferredAccount(c, v === '' ? '' : Number(v))
+                        }
+                        placeholder="Search brokers…"
+                        emptyLabel="Auto / first owned"
+                      />
                     </td>
-                    <td className="mono">
-                      {c.panel_display_name || c.panel_epic || '—'}
-                      {c.panel_lot_size != null ? ` / ${c.panel_lot_size}` : ''}
+                    <td style={{ minWidth: 220 }}>
+                      <SearchableSelect
+                        options={marketOpts}
+                        value={c.panel_epic || ''}
+                        onChange={(v) => void handleRosterMarket(c, v)}
+                        placeholder="Search markets…"
+                        emptyLabel={
+                          !preferredId
+                            ? 'Pick broker first'
+                            : marketOpts.length === 0
+                              ? 'Open to load / pull markets'
+                              : 'No market'
+                        }
+                        disabled={!preferredId}
+                        onOpen={() => {
+                          if (preferredId) void ensureRosterMarkets(Number(preferredId));
+                        }}
+                      />
+                      {(c.panel_display_name || c.panel_epic) && (
+                        <div className="mono" style={{ fontSize: 11, marginTop: 4, opacity: 0.7 }}>
+                          {c.panel_display_name || c.panel_epic}
+                          {c.panel_lot_size != null ? ` / ${c.panel_lot_size}` : ''}
+                        </div>
+                      )}
                     </td>
                     <td>
                       <span

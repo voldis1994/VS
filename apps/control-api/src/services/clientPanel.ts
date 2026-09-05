@@ -117,12 +117,14 @@ export async function resolveClientTradingAccount(clientId: number): Promise<{
   );
   const preferred = pref.rows[0]?.preferred_broker_account_id as number | null | undefined;
   if (preferred) {
+    // Preferred may point at any enabled broker account in the desk pool
+    // (not only connections owned by this client_id).
     const { rows } = await pool.query(
       `SELECT ba.id as account_id, ba.display_name, bc.id as connection_id
        FROM broker_accounts ba
        JOIN broker_connections bc ON bc.id = ba.broker_connection_id
-       WHERE ba.id = $1 AND bc.client_id = $2 AND ba.enabled = true AND bc.enabled = true`,
-      [preferred, clientId]
+       WHERE ba.id = $1 AND ba.enabled = true AND bc.enabled = true`,
+      [preferred]
     );
     if (rows.length) {
       return {

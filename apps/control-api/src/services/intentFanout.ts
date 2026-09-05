@@ -206,12 +206,20 @@ async function executeForSubscription(
       claimed = true;
     }
 
-    // Security boundary: account must still belong to this client and be enabled
+    // Security boundary: account must be enabled and either owned by this client
+    // or explicitly preferred on the client (shared desk broker pool).
     const own = await pool.query(
       `SELECT ba.id
        FROM broker_accounts ba
        JOIN broker_connections bc ON bc.id = ba.broker_connection_id
-       WHERE ba.id = $1 AND bc.client_id = $2 AND ba.enabled = true AND bc.enabled = true`,
+       JOIN clients c ON c.id = $2
+       WHERE ba.id = $1
+         AND ba.enabled = true
+         AND bc.enabled = true
+         AND (
+           bc.client_id = $2
+           OR c.preferred_broker_account_id = ba.id
+         )`,
       [sub.account_id, sub.client_id]
     );
     if (!own.rows.length) {
