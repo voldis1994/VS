@@ -38,6 +38,8 @@ export type ManagedPosition = {
   mae: number;
   decision: MasterDecision;
   regime_at_entry: string;
+  /** Reader-style: one scale-out already taken */
+  partial_close_applied?: boolean;
 };
 
 export type ManageTickResult = {
@@ -98,6 +100,7 @@ export class PositionManager {
       mae: 0,
       decision: input.decision,
       regime_at_entry: input.decision.analysis.regime,
+      partial_close_applied: false,
     };
     this.open.set(pos.position_id, pos);
     return pos;
@@ -111,11 +114,17 @@ export class PositionManager {
     instrument_point_value?: number;
     max_hold_ms?: number;
     breakeven_progress?: number;
+    partial_close_progress?: number;
+    partial_close_volume?: number;
+    volume_step?: number;
   }): Promise<ManageTickResult> {
     const { broker, pipeline, quote } = input;
     const pv = input.instrument_point_value ?? 1;
     const maxHold = input.max_hold_ms ?? 0;
     const beProgress = input.breakeven_progress ?? 0.5;
+    const partialProgress = input.partial_close_progress ?? 0;
+    const partialVolume = input.partial_close_volume ?? 0;
+    const volumeStep = input.volume_step ?? 0.01;
     const closed: ManageTickResult['closed'] = [];
     const close_failed: ManageTickResult['close_failed'] = [];
 
@@ -127,6 +136,65 @@ export class PositionManager {
       const peak_retention =
         pos.mfe > 1e-9 ? Math.max(0, Math.min(1, fav / pos.mfe)) : null;
       const heldMs = Date.now() - new Date(pos.entry_at).getTime();
+
+      // Reader partial scale-out before full exit (once)
+      if (
+        !pos.partial_close_applied &&
+        partialProgress > 0 &&
+        partialVolume > 0 &&
+        pos.take_profit != null
+      ) {
+        const partial = evaluatePartialClose(pos, mark, {
+          progressNeed: partialProgress,
+          volumeRatio: partialVolume,
+          volumeStep,
+        });
+        if (partial) {
+          const closeRes = await broker.closePosition(pos.position_id, {
+            size: partial.close_size,
+          });
+          if (closeRes.ok) {
+            const fill =
+              closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
+                ? Number(closeRes.fill_price)
+                : mark;
+            const pnlPts = pos.side === 'BUY' ? fill - pos.entry : pos.entry - fill;
+            const pnl = pnlPts * partial.close_size * pv;
+            const outcome: TradeOutcome = {
+              position_id: pos.position_id,
+              side: pos.side,
+              entry: pos.entry,
+              exit: fill,
+              volume: partial.close_size,
+              pnl,
+              fees: 0,
+              slippage: Math.abs(fill - quote.mid),
+              mae: pos.mae,
+              mfe: pos.mfe,
+              r_multiple: 0,
+              hold_ms: heldMs,
+              exit_reason: partial.reason,
+            };
+            pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome, {
+              epic: pos.epic,
+            });
+            const rem =
+              closeRes.remaining_size != null && Number.isFinite(closeRes.remaining_size)
+                ? Number(closeRes.remaining_size)
+                : Math.max(0, pos.size - partial.close_size);
+            if (rem > 1e-9) {
+              pos.size = rem;
+              pos.partial_close_applied = true;
+              closed.push({ position: { ...pos }, outcome, reason: partial.reason });
+              continue;
+            }
+            this.open.delete(pos.position_id);
+            closed.push({ position: pos, outcome, reason: partial.reason });
+            continue;
+          }
+          // Partial failed — fall through to full manage (do not mark applied)
+        }
+      }
 
       // Hard protective fills before soft BestOutcome / TIME_STOP
       const protective = protectiveExit(pos, quote);
@@ -374,6 +442,30 @@ function mapRegimeToPlaybook(regime: string): 'LONG' | 'SCALP' | 'FADE' {
   if (regime === 'TREND' || regime === 'BREAKOUT') return 'LONG';
   if (regime === 'RANGE' || regime === 'LOW_VOLATILITY') return 'SCALP';
   return 'SCALP';
+}
+
+/** Reader-style partial close when progress toward TP clears threshold. */
+export function evaluatePartialClose(
+  pos: Pick<ManagedPosition, 'side' | 'entry' | 'take_profit' | 'size' | 'partial_close_applied'>,
+  mark: number,
+  cfg: { progressNeed: number; volumeRatio: number; volumeStep: number }
+): { close_size: number; reason: string } | null {
+  if (pos.partial_close_applied) return null;
+  if (pos.take_profit == null) return null;
+  if (cfg.progressNeed <= 0 || cfg.volumeRatio <= 0 || cfg.volumeStep <= 0) return null;
+  const tpDist = Math.abs(pos.take_profit - pos.entry);
+  if (tpDist < 1e-9) return null;
+  const fav = favorableMove(pos.side, pos.entry, mark);
+  const progress = fav / tpDist;
+  if (progress < cfg.progressNeed) return null;
+  const raw = pos.size * cfg.volumeRatio;
+  const steps = Math.floor(raw / cfg.volumeStep + 1e-12);
+  const close_size = steps * cfg.volumeStep;
+  if (close_size <= 0 || close_size >= pos.size - 1e-12) return null;
+  return {
+    close_size,
+    reason: `PARTIAL_CLOSE · ${(cfg.volumeRatio * 100).toFixed(0)}% @ ${(progress * 100).toFixed(0)}% to TP`,
+  };
 }
 
 /** Price used to detect SL/TP hits — BUY exits on bid, SELL on ask. */

@@ -11,7 +11,7 @@ import { masterRuntime } from './runtime.js';
 import type { Bar, Quote } from './types.js';
 
 export function masterOwnsPipeline(): boolean {
-  return process.env.MASTER_OWNS_PIPELINE === 'true';
+  return masterRuntime.ownsPipelineEffective();
 }
 
 export function candlesToBars(candles: CapitalPriceCandle[]): Bar[] {

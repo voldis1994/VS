@@ -55,7 +55,7 @@ export function createCapitalBroker(creds: CapitalBrokerCreds): CapitalBroker {
         stopLevel: input.stopLevel,
         profitLevel: input.profitLevel,
       }),
-    close: async (session, dealId) => closeCapitalPosition(session, dealId),
+    close: async (session, dealId, size) => closeCapitalPosition(session, dealId, size),
     modify: async (session, input) =>
       modifyCapitalPosition(session, {
         dealId: input.dealId,
@@ -66,7 +66,12 @@ export function createCapitalBroker(creds: CapitalBrokerCreds): CapitalBroker {
     account: async (session) => {
       const eq = await fetchCapitalAccountEquity(session, creds.capitalAccountId);
       if (!eq) return null;
-      return { equity: eq.equity, balance: eq.balance, currency: eq.currency };
+      return {
+        equity: eq.equity,
+        balance: eq.balance,
+        currency: eq.currency,
+        available: eq.available,
+      };
     },
   });
 }

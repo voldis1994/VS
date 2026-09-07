@@ -337,6 +337,8 @@ describe('MASTER paper recover + protective fills + close stub', () => {
 describe('masterOwnsManageSafely', () => {
   it('defers when owns-pipeline but live Capital position and no CAPITAL broker', () => {
     const prev = process.env.MASTER_OWNS_PIPELINE;
+    const prevPref = masterRuntime.owns_pipeline_pref;
+    masterRuntime.owns_pipeline_pref = null;
     process.env.MASTER_OWNS_PIPELINE = 'true';
     masterRuntime.setMode('PAPER');
     masterRuntime.ensurePaperBroker();
@@ -345,10 +347,13 @@ describe('masterOwnsManageSafely', () => {
     expect(masterOwnsManageSafely(false)).toBe(true);
     if (prev === undefined) delete process.env.MASTER_OWNS_PIPELINE;
     else process.env.MASTER_OWNS_PIPELINE = prev;
+    masterRuntime.owns_pipeline_pref = prevPref;
   });
 
   it('pauses MASTER entries when desk owns live manage (no dual-brain)', () => {
     const prev = process.env.MASTER_OWNS_PIPELINE;
+    const prevPref = masterRuntime.owns_pipeline_pref;
+    masterRuntime.owns_pipeline_pref = null;
     process.env.MASTER_OWNS_PIPELINE = 'true';
     masterRuntime.setMode('PAPER');
     masterRuntime.ensurePaperBroker();
@@ -361,7 +366,88 @@ describe('masterOwnsManageSafely', () => {
     expect(masterRuntime.entries_pause_reason).toBeNull();
     if (prev === undefined) delete process.env.MASTER_OWNS_PIPELINE;
     else process.env.MASTER_OWNS_PIPELINE = prev;
+    masterRuntime.owns_pipeline_pref = prevPref;
     masterRuntime.setEntriesArmed(true);
+  });
+});
+
+describe('partial close scale-out', () => {
+  it('evaluatePartialClose fires at 50% to TP and paper reduces size', async () => {
+    const { evaluatePartialClose } = await import('../positionManager.js');
+    const d = evaluatePartialClose(
+      {
+        side: 'BUY',
+        entry: 4400,
+        take_profit: 4410,
+        size: 0.1,
+        partial_close_applied: false,
+      },
+      4405,
+      { progressNeed: 0.5, volumeRatio: 0.5, volumeStep: 0.01 }
+    );
+    expect(d?.close_size).toBe(0.05);
+    expect(d?.reason).toMatch(/PARTIAL_CLOSE/);
+
+    const broker = new PaperBroker();
+    await broker.connect();
+    broker.setQuote({
+      bid: 4405,
+      ask: 4405.4,
+      mid: 4405.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const pm = new PositionManager();
+    const pipe = new MasterPipeline('PAPER');
+    pm.register({
+      position_id: 'paper-partial-1',
+      opportunity_id: 'opp-partial',
+      intent_id: 'partial-aaaaaaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4400,
+      stop_loss: 4395,
+      take_profit: 4410,
+      decision: {
+        decision_id: 'd-p',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.8,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis({ regime: 'TREND' }),
+        expectancy: null,
+      },
+    });
+    // Seed paper book so close works
+    broker.seedOpens([
+      {
+        position_id: 'paper-partial-1',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 0.1,
+        open_level: 4400,
+        stop_level: 4395,
+        profit_level: 4410,
+      },
+    ]);
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: { bid: 4405, ask: 4405.4, mid: 4405.2, spread: 0.4, ts_ms: Date.now() },
+      instrument_point_value: 1,
+      partial_close_progress: 0.5,
+      partial_close_volume: 0.5,
+      volume_step: 0.01,
+    });
+    expect(managed.closed.length).toBe(1);
+    expect(managed.closed[0]!.reason).toMatch(/PARTIAL_CLOSE/);
+    expect(pm.count()).toBe(1);
+    expect(pm.list()[0]!.size).toBeCloseTo(0.05, 8);
+    expect(pm.list()[0]!.partial_close_applied).toBe(true);
   });
 });
 

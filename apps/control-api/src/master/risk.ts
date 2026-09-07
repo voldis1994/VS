@@ -1,4 +1,5 @@
 /** Risk engine — can BLOCK any decision. Equity-based sizing required for production volume. */
+import { clampSizeForBuyingPower } from './capitalSize.js';
 import type {
   AccountSnapshot,
   InstrumentSpec,
@@ -15,7 +16,7 @@ export function evaluateRisk(
   instrument: InstrumentSpec,
   quote: Quote,
   cfg: MasterConfig,
-  opts?: { last_loss_ms?: number; now_ms?: number; symbol_open?: number }
+  opts?: { last_loss_ms?: number; now_ms?: number; symbol_open?: number; epic?: string }
 ): RiskVerdict {
   const reasons: string[] = [];
   const now = opts?.now_ms ?? Date.now();
@@ -61,11 +62,36 @@ export function evaluateRisk(
   if (reasons.length) {
     return { allowed: false, volume: 0, risk_amount: 0, reasons };
   }
+
+  let volume = sizing.volume;
+  const notes: string[] = [];
+  const clamped = clampSizeForBuyingPower({
+    epic: opts?.epic || instrument.epic || 'GOLD',
+    size: volume,
+    equity: account.equity,
+    available_to_deal: account.available_to_deal,
+    rules: {
+      minSize: instrument.min_volume,
+      maxSize: instrument.max_volume,
+      step: instrument.volume_step,
+    },
+  });
+  volume = clamped.size;
+  if (clamped.adjusted) notes.push(`size_clamped:${clamped.reason || 'buying_power'}`);
+  if (volume < instrument.min_volume) {
+    return {
+      allowed: false,
+      volume: 0,
+      risk_amount: sizing.risk_amount,
+      reasons: ['buying_power_below_min'],
+    };
+  }
+
   return {
     allowed: true,
-    volume: sizing.volume,
+    volume,
     risk_amount: sizing.risk_amount,
-    reasons: [],
+    reasons: notes,
   };
 }
 
@@ -98,5 +124,6 @@ export function sizeFromEquity(
 }
 
 function roundStep(v: number, step: number) {
-  return Math.round(v / step) * step;
+  const p = Math.max(0, Math.round(-Math.log10(step)));
+  return Number(v.toFixed(p));
 }

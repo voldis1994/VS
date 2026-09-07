@@ -120,6 +120,8 @@ export type AccountSnapshot = {
   day_start_equity?: number | null;
   peak_equity: number;
   consecutive_losses: number;
+  /** Free margin / available to deal when broker provides it */
+  available_to_deal?: number | null;
 };
 
 export type InstrumentSpec = {
@@ -196,4 +198,8 @@ export type MasterConfig = {
   ai_mode: 'off' | 'advisory' | 'required';
   /** Reader OFF session — block new entries outside ASIA/LONDON/NY windows */
   block_off_hours: boolean;
+  /** Reader partial close: progress toward TP (0..1) before scaling out */
+  partial_close_progress: number;
+  /** Fraction of size to close on first scale-out (0..1) */
+  partial_close_volume: number;
 };

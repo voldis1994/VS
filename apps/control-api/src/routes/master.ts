@@ -10,6 +10,7 @@ import type { Bar, Mode } from '../master/types.js';
 export async function registerMasterRoutes(app: FastifyInstance) {
   // Postgres + file mirror so recover survives DB blips (standalone uses file-only)
   ensureMasterPersist();
+  masterRuntime.hydrateOwnsPipelinePref();
 
   app.get('/api/master/status', async () => masterRuntime.status());
 
@@ -24,9 +25,15 @@ export async function registerMasterRoutes(app: FastifyInstance) {
     positions: masterRuntime.positions.list(),
   }));
 
-  app.post<{ Body: { mode?: Mode; kill_switch?: boolean; epic?: string; ai_mode?: 'off' | 'advisory' | 'required' } }>(
-    '/api/master/control',
-    async (req) => {
+  app.post<{
+    Body: {
+      mode?: Mode;
+      kill_switch?: boolean;
+      epic?: string;
+      ai_mode?: 'off' | 'advisory' | 'required';
+      owns_pipeline?: boolean;
+    };
+  }>('/api/master/control', async (req) => {
       const body = req.body || {};
       if (body.mode) {
         if (body.mode === 'LIVE' && process.env.MASTER_LIVE_ENABLED !== 'true') {
@@ -44,6 +51,9 @@ export async function registerMasterRoutes(app: FastifyInstance) {
       if (body.epic) masterRuntime.setEpic(body.epic);
       if (body.ai_mode) {
         masterRuntime.cfg = { ...masterRuntime.cfg, ai_mode: body.ai_mode };
+      }
+      if (typeof body.owns_pipeline === 'boolean') {
+        masterRuntime.setOwnsPipeline(body.owns_pipeline);
       }
       return { ok: true, status: masterRuntime.status() };
     }
@@ -378,6 +388,7 @@ h2{font-size:13px;color:#9fb0c0;margin:22px 0 8px;text-transform:uppercase;lette
   <button id="btnRecover">Recover</button>
   <button id="btnKill">Kill switch</button>
   <button id="btnAi">AI advisory toggle</button>
+  <button id="btnOwns">MASTER owns toggle</button>
   <button id="btnCapital">Capital probe</button>
   <button id="btnMt4">Attach MT4</button>
 </div>
@@ -447,6 +458,7 @@ document.getElementById('btnStop').onclick=async()=>{const r=await fetch('/api/m
 document.getElementById('btnRecover').onclick=async()=>{const r=await fetch('/api/master/recover',{method:'POST'}).then(r=>r.json());pushLog('recover positions='+r.positions+' journal='+r.opportunities);refresh()};
 document.getElementById('btnKill').onclick=async()=>{kill=!kill;await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kill_switch:kill})});pushLog('kill_switch='+kill);refresh()};
 document.getElementById('btnAi').onclick=async()=>{ai=ai==='off'?'advisory':'off';await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ai_mode:ai})});pushLog('ai_mode='+ai);refresh()};
+document.getElementById('btnOwns').onclick=async()=>{const s=await fetch('/api/master/status').then(r=>r.json());const on=!s.owns_pipeline;await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({owns_pipeline:on})});pushLog('owns_pipeline='+on);refresh()};
 document.getElementById('btnCapital').onclick=async()=>{const r=await fetch('/api/master/broker/capital/probe',{method:'POST'}).then(r=>r.json());pushLog('capital probe '+JSON.stringify(r).slice(0,200));refresh()};
 document.getElementById('btnMt4').onclick=async()=>{const bridge=prompt('MT4 bridge root path','/tmp/vs-mt4-bridge');if(!bridge)return;const r=await fetch('/api/master/broker/mt4',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bridge_root:bridge})}).then(r=>r.json());pushLog('mt4 '+JSON.stringify(r).slice(0,200));refresh()};
 refresh();setInterval(refresh,2000);

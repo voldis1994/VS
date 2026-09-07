@@ -24,6 +24,7 @@ import { PositionManager } from './positionManager.js';
 import { evaluateRisk } from './risk.js';
 import { setupKey } from './decision.js';
 import { loadRuntimeGates, saveRuntimeGates } from './runtimeGates.js';
+import { loadOwnsPipelinePref, saveOwnsPipelinePref } from './ownsPipelinePref.js';
 import type {
   AccountSnapshot,
   Bar,
@@ -110,6 +111,8 @@ class MasterRuntime {
   /** When false, manage exits still run but new entries are blocked (desk dual-brain guard). */
   entries_armed = true;
   entries_pause_reason: string | null = null;
+  /** null = follow MASTER_OWNS_PIPELINE env; else dashboard override */
+  owns_pipeline_pref: boolean | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private liveFeedTimer: ReturnType<typeof setInterval> | null = null;
   private seenIntentSnapshot: string[] = [];
@@ -128,6 +131,22 @@ class MasterRuntime {
 
   setEpic(epic: string) {
     this.epic = epic;
+  }
+
+  /** Desk single-owner toggle — persists preference for restart. */
+  setOwnsPipeline(on: boolean) {
+    this.owns_pipeline_pref = on;
+    saveOwnsPipelinePref(on);
+  }
+
+  ownsPipelineEffective(): boolean {
+    if (this.owns_pipeline_pref != null) return this.owns_pipeline_pref;
+    return process.env.MASTER_OWNS_PIPELINE === 'true';
+  }
+
+  hydrateOwnsPipelinePref() {
+    const pref = loadOwnsPipelinePref();
+    if (pref != null) this.owns_pipeline_pref = pref;
   }
 
   /** Roll daily_pnl at UTC day boundary; seed day_start_equity for max_daily_loss. */
@@ -336,6 +355,10 @@ class MasterRuntime {
       this.account.equity = acct.equity;
       this.account.balance = acct.balance;
       this.account.currency = acct.currency;
+      this.account.available_to_deal =
+        acct.available != null && Number.isFinite(acct.available)
+          ? acct.available
+          : this.account.available_to_deal ?? null;
       this.account.peak_equity = Math.max(this.account.peak_equity, acct.equity);
       if (!this.account.day_start_equity) {
         this.account.day_start_equity = acct.equity;
@@ -357,6 +380,9 @@ class MasterRuntime {
       instrument_point_value: instrument.value_per_point_per_lot,
       max_hold_ms: this.cfg.max_hold_ms,
       breakeven_progress: this.cfg.breakeven_progress,
+      partial_close_progress: this.cfg.partial_close_progress,
+      partial_close_volume: this.cfg.partial_close_volume,
+      volume_step: instrument.volume_step,
     });
     const exit_reasons = managed.closed.map((c) => c.reason);
     if (exit_reasons.length) this.last_exit_reason = exit_reasons.at(-1)!;
@@ -839,7 +865,7 @@ class MasterRuntime {
       kill_switch: this.cfg.kill_switch,
       epic: this.epic,
       ai_mode: this.cfg.ai_mode,
-      owns_pipeline: process.env.MASTER_OWNS_PIPELINE === 'true',
+      owns_pipeline: this.ownsPipelineEffective(),
       broker: this.broker?.name ?? null,
       broker_detail: this.broker_detail,
       last_decision: this.last_decision,

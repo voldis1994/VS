@@ -106,3 +106,64 @@ export function normalizeSizeForEpic(
   const n = normalizeCapitalDealSize(raw, rules);
   return { ...n, rules };
 }
+
+/** VS-System- micro-lot: conservative max lot so START does not RISK_CHECK. */
+export function suggestMaxLotForEquity(equity: number, epic = 'GOLD'): number {
+  const eq = Number.isFinite(equity) ? equity : 0;
+  const s = String(epic ?? '').toUpperCase();
+  if (/XAU|GOLD|XAG|SILVER/.test(s)) {
+    if (eq < 150) return 0.01;
+    if (eq < 400) return 0.02;
+    if (eq < 1000) return 0.05;
+    return 0.1;
+  }
+  if (
+    /US100|UST100|USX|US500|US30|NAS|NDX|GER|DE40|UK100|FTSE|FRA40|EU50/.test(s)
+  ) {
+    if (eq < 40) return 0.001;
+    if (eq < 120) return 0.01;
+    if (eq < 300) return 0.02;
+    if (eq < 800) return 0.05;
+    return 0.1;
+  }
+  if (eq < 50) return 0.01;
+  if (eq < 200) return 0.02;
+  if (eq < 500) return 0.05;
+  return 0.1;
+}
+
+/**
+ * Clamp deal size by equity budget and optional free margin (available_to_deal).
+ * Uses the tighter of suggested max-lot and margin-based cap when available.
+ */
+export function clampSizeForBuyingPower(input: {
+  epic: string;
+  size: number;
+  equity: number;
+  available_to_deal?: number | null;
+  rules?: CapitalDealRules;
+}): { size: number; adjusted: boolean; reason?: string } {
+  const rules = input.rules ?? capitalDealRulesFallback(input.epic);
+  let size = input.size;
+  let reason: string | undefined;
+  const suggested = suggestMaxLotForEquity(input.equity, input.epic);
+  if (size > suggested + 1e-12) {
+    size = suggested;
+    reason = `equity_cap ${input.size}→${suggested}`;
+  }
+  const avail = input.available_to_deal;
+  if (avail != null && Number.isFinite(avail) && avail > 0) {
+    // Rough: allow at most suggested-for-available (free margin often << equity)
+    const byAvail = suggestMaxLotForEquity(avail, input.epic);
+    if (size > byAvail + 1e-12) {
+      size = byAvail;
+      reason = `available_to_deal_cap →${byAvail}`;
+    }
+  }
+  const n = normalizeCapitalDealSize(size, rules);
+  return {
+    size: n.size,
+    adjusted: n.adjusted || Math.abs(n.size - input.size) > 1e-12,
+    reason: reason || n.reason,
+  };
+}

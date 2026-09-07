@@ -428,7 +428,13 @@ export async function listCapitalAccounts(
 export async function fetchCapitalAccountEquity(
   session: CapitalSession,
   preferredAccountId?: string | null
-): Promise<{ equity: number; balance: number; currency: string; detail: string } | null> {
+): Promise<{
+  equity: number;
+  balance: number;
+  available?: number | null;
+  currency: string;
+  detail: string;
+} | null> {
   const listed = await listCapitalAccounts(session);
   if (!listed.ok || !listed.accounts.length) return null;
   const pref = (preferredAccountId || session.currentAccountId || '').trim();
@@ -448,6 +454,7 @@ export async function fetchCapitalAccountEquity(
   return {
     equity,
     balance: Number.isFinite(balance) ? balance : equity,
+    available: numOrNull(hit.available),
     currency: hit.currency || 'GBP',
     detail: `account=${hit.accountId}`,
   };
@@ -990,16 +997,21 @@ export async function modifyCapitalPosition(
   };
 }
 
-/** Close one open position by dealId. */
+/** Close one open position by dealId. Optional size = Capital partial close. */
 export async function closeCapitalPosition(
   session: CapitalSession,
-  dealId: string
+  dealId: string,
+  size?: number
 ): Promise<{ ok: boolean; deal_reference?: string; detail: string; status: number; json: any }> {
   const id = dealId.trim();
   if (!id) {
     return { ok: false, status: 0, json: {}, detail: 'dealId required to close' };
   }
-  const res = await session.del(`/api/v1/positions/${encodeURIComponent(id)}`);
+  const qs =
+    size != null && Number.isFinite(size) && size > 0
+      ? `?size=${encodeURIComponent(String(size))}`
+      : '';
+  const res = await session.del(`/api/v1/positions/${encodeURIComponent(id)}${qs}`);
   if (!res.ok) {
     return {
       ok: false,
@@ -1016,7 +1028,9 @@ export async function closeCapitalPosition(
     status: res.status,
     json: res.json,
     deal_reference: dealRef || undefined,
-    detail: dealRef ? `Closed dealId=${id} dealRef=${dealRef}` : `Closed dealId=${id}`,
+    detail: dealRef
+      ? `Closed dealId=${id} dealRef=${dealRef}${qs ? ` size=${size}` : ''}`
+      : `Closed dealId=${id}`,
   };
 }
 

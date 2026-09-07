@@ -310,6 +310,21 @@ export function MasterPage() {
           className="btn"
           disabled={busy}
           onClick={() =>
+            void act('owns', () =>
+              apiFetch('/api/master/control', {
+                method: 'POST',
+                body: JSON.stringify({ owns_pipeline: !status?.owns_pipeline }),
+              })
+            )
+          }
+        >
+          {status?.owns_pipeline ? 'MASTER owns ON' : 'MASTER owns OFF'}
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={busy}
+          onClick={() =>
             void act('capital-probe', () =>
               apiFetch('/api/master/broker/capital/probe', { method: 'POST' })
             )

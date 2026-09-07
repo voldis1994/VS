@@ -50,6 +50,8 @@ export type BrokerAccount = {
   equity: number;
   balance: number;
   currency: string;
+  /** Free margin / available to deal when broker provides it */
+  available?: number | null;
 };
 
 export type ListOpenResult = {
@@ -84,11 +86,15 @@ export interface MasterBroker {
   getAccount(): Promise<BrokerAccount | null>;
   listOpenPositions(epic?: string): Promise<ListOpenResult>;
   placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResult>;
-  closePosition(position_id: string): Promise<{
+  closePosition(
+    position_id: string,
+    opts?: { size?: number }
+  ): Promise<{
     ok: boolean;
     detail: string;
     fill_price?: number | null;
     deal_reference?: string;
+    remaining_size?: number | null;
   }>;
   modifyPosition?(input: {
     position_id: string;
@@ -178,22 +184,36 @@ export class PaperBroker implements MasterBroker {
     };
   }
 
-  async closePosition(position_id: string) {
+  async closePosition(position_id: string, opts?: { size?: number }) {
     const p = this.positions.get(position_id);
     if (!p) return { ok: false, detail: 'not_found' };
     const q = this.lastQuote;
     let fill_price: number | null = null;
+    const closeSize =
+      opts?.size != null && Number.isFinite(opts.size) && opts.size > 0
+        ? Math.min(opts.size, p.size)
+        : p.size;
     if (q) {
       fill_price = p.side === 'BUY' ? q.bid : q.ask;
       const pnl =
         p.side === 'BUY'
-          ? (fill_price - p.open_level) * p.size
-          : (p.open_level - fill_price) * p.size;
+          ? (fill_price - p.open_level) * closeSize
+          : (p.open_level - fill_price) * closeSize;
       this.equity += pnl;
       this.balance = this.equity;
     }
+    const remaining = Math.max(0, p.size - closeSize);
+    if (remaining > 1e-9) {
+      p.size = remaining;
+      return {
+        ok: true,
+        detail: `paper_partial_closed rem=${remaining}`,
+        fill_price,
+        remaining_size: remaining,
+      };
+    }
     this.positions.delete(position_id);
-    return { ok: true, detail: 'paper_closed', fill_price };
+    return { ok: true, detail: 'paper_closed', fill_price, remaining_size: 0 };
   }
 
   async modifyPosition(input: {
@@ -269,7 +289,7 @@ export class CapitalBroker implements MasterBroker {
       quote: (session: any, epic: string) => Promise<any>;
       list: (session: any) => Promise<any>;
       create: (session: any, input: any) => Promise<any>;
-      close: (session: any, dealId: string) => Promise<any>;
+      close: (session: any, dealId: string, size?: number) => Promise<any>;
       modify?: (
         session: any,
         input: { dealId: string; stopLevel?: number | null; profitLevel?: number | null }
@@ -287,7 +307,12 @@ export class CapitalBroker implements MasterBroker {
       }>;
       account?: (
         session: any
-      ) => Promise<{ equity: number; balance: number; currency: string } | null>;
+      ) => Promise<{
+        equity: number;
+        balance: number;
+        currency: string;
+        available?: number | null;
+      } | null>;
       credentials: any;
     }
   ) {}
@@ -436,16 +461,35 @@ export class CapitalBroker implements MasterBroker {
     const {
       normalizeSizeForEpic,
       normalizeCapitalDealSize,
+      clampSizeForBuyingPower,
       isCapitalSizeError,
     } = await import('./capitalSize.js');
     const epicKey = String(input.epic || '').toUpperCase();
     const liveRules = this.dealRulesByEpic.get(epicKey);
-    const sized = liveRules
+    let sized = liveRules
       ? {
           ...normalizeCapitalDealSize(input.size, liveRules),
           rules: liveRules,
         }
       : normalizeSizeForEpic(input.epic, input.size);
+    // Pre-send buying-power clamp (VS-System- micro-lot) — avoid RISK_CHECK when possible
+    try {
+      const acct = await this.getAccount();
+      if (acct && acct.equity > 0) {
+        const clamped = clampSizeForBuyingPower({
+          epic: input.epic,
+          size: sized.size,
+          equity: acct.equity,
+          available_to_deal: acct.available,
+          rules: sized.rules,
+        });
+        if (clamped.adjusted) {
+          sized = { ...sized, size: clamped.size, adjusted: true, reason: clamped.reason };
+        }
+      }
+    } catch {
+      /* sizing continues with step normalize only */
+    }
     let orderSize = sized.size;
 
     let opened = await this.deps.create(this.session, {
@@ -641,9 +685,9 @@ export class CapitalBroker implements MasterBroker {
     };
   }
 
-  async closePosition(position_id: string) {
+  async closePosition(position_id: string, opts?: { size?: number }) {
     if (!this.session) return { ok: false, detail: 'not_connected' };
-    const res = await this.deps.close(this.session, position_id);
+    const res = await this.deps.close(this.session, position_id, opts?.size);
     if (!res.ok) return { ok: false, detail: res.detail || 'close_failed' };
 
     let fill_price: number | null = null;
@@ -663,9 +707,13 @@ export class CapitalBroker implements MasterBroker {
       }
     }
 
-    // Prove flat — do not journal closed if deal still open
     const listed = await this.listOpenPositions();
-    if (listed.ok && listed.positions.some((p) => p.position_id === position_id)) {
+    const still = listed.ok
+      ? listed.positions.find((p) => p.position_id === position_id)
+      : undefined;
+    const partial =
+      opts?.size != null && Number.isFinite(opts.size) && opts.size > 0;
+    if (!partial && listed.ok && still) {
       return {
         ok: false,
         detail: 'close_not_confirmed_still_open',
@@ -679,10 +727,11 @@ export class CapitalBroker implements MasterBroker {
       detail: deal_reference
         ? `capital_closed deal=${position_id} ref=${deal_reference}${
             fill_price != null ? ` fill=${fill_price}` : ''
-          }`
+          }${partial ? ` partial=${opts!.size}` : ''}`
         : `capital_closed deal=${position_id}`,
       fill_price,
       deal_reference,
+      remaining_size: still?.size ?? (partial ? null : 0),
     };
   }
 
@@ -953,7 +1002,11 @@ export class Mt4FileBroker implements MasterBroker {
     };
   }
 
-  async closePosition(position_id: string) {
+  async closePosition(position_id: string, _opts?: { size?: number }) {
+    // MT4 bridge CLOSE is full ticket close (EA protocol); partial not supported yet
+    if (_opts?.size != null) {
+      return { ok: false, detail: 'mt4_partial_close_unsupported' };
+    }
     const id = randomUUID().slice(0, 12);
     const folder = join(this.bridgeRoot, 'commands');
     mkdirSync(folder, { recursive: true });

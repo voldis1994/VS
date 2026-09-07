@@ -123,6 +123,7 @@ export class MasterPipeline {
         last_loss_ms: input.last_loss_ms,
         now_ms: input.now_ms,
         symbol_open: input.symbol_open,
+        epic: input.instrument.epic,
       }
     );
     const opportunity = this.journal.recordOpportunity({
@@ -213,6 +214,8 @@ export const DEFAULT_MASTER_CONFIG: MasterConfig = {
   breakeven_progress: 0.5,
   ai_mode: 'off',
   block_off_hours: true,
+  partial_close_progress: 0.5,
+  partial_close_volume: 0.5,
 };
 
 export const GOLD_SPEC: InstrumentSpec = {
