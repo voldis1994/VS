@@ -1,6 +1,6 @@
 /** MASTER runtime — full PAPER/LIVE cycle owner + dashboard facade. */
 import type { MasterBroker } from './broker.js';
-import { PaperBroker } from './broker.js';
+import { Mt4FileBroker, PaperBroker } from './broker.js';
 import { decide } from './decision.js';
 import { executeDecision } from './execution.js';
 import {
@@ -535,9 +535,32 @@ class MasterRuntime {
       );
     }
 
+    // MT4: archive acked cmds / expire stale unacked before sync (Reader recover_pending_ack)
+    if (this.broker instanceof Mt4FileBroker) {
+      const pending = this.broker.recoverPendingCommands();
+      if (pending.applied || pending.expired || pending.still_pending) {
+        this.broker_detail = [
+          this.broker_detail,
+          `mt4_recover:applied=${pending.applied},expired=${pending.expired},pending=${pending.still_pending}`,
+        ]
+          .filter(Boolean)
+          .join(';');
+      }
+    }
+
     if (this.broker) {
       const sync = await syncPositionsWithBroker(this.positions, this.broker, this.epic);
       if (!sync.skipped) this.applySyncJournal(sync);
+    }
+
+    // Hydrate last exit for dashboard after restart
+    if (hist.outcomes.length && !this.last_exit_reason) {
+      const latest = [...hist.outcomes].sort((a, b) =>
+        String(b.created_at || '').localeCompare(String(a.created_at || ''))
+      )[0];
+      if (latest?.outcome?.exit_reason) {
+        this.last_exit_reason = latest.outcome.exit_reason;
+      }
     }
 
     this.account.open_positions = this.positions.count();

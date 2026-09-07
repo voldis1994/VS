@@ -354,6 +354,37 @@ describe('VS MASTER MT4 file bridge', () => {
       else process.env.MASTER_MT4_ACK_POLL_MS = prevMs;
     }
   });
+  it('recoverPendingCommands archives acked cmds and expires stale unacked', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-recover-'));
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    mkdirSync(join(root, 'commands'), { recursive: true });
+    mkdirSync(join(root, 'acks'), { recursive: true });
+    writeFileSync(
+      join(root, 'commands', 'cmd_acked1.json'),
+      JSON.stringify({ id: 'acked1', action: 'OPEN', symbol: 'XAUUSD', side: 'BUY', lot: 0.1 })
+    );
+    writeFileSync(
+      join(root, 'acks', 'ack_acked1.json'),
+      JSON.stringify({ ok: true, ticket: 100042 })
+    );
+    writeFileSync(
+      join(root, 'commands', 'cmd_stale1.json'),
+      JSON.stringify({ id: 'stale1', action: 'OPEN', symbol: 'XAUUSD', side: 'BUY', lot: 0.1 })
+    );
+    // Make stale1 old
+    const { utimesSync } = await import('fs');
+    const old = new Date(Date.now() - 200_000);
+    utimesSync(join(root, 'commands', 'cmd_stale1.json'), old, old);
+
+    const report = broker.recoverPendingCommands(120_000);
+    expect(report.applied).toBe(1);
+    expect(report.expired).toBe(1);
+    expect(report.still_pending).toBe(0);
+    expect(existsSync(join(root, 'commands', 'cmd_acked1.json'))).toBe(false);
+    expect(existsSync(join(root, 'commands', 'expired', 'cmd_acked1.json'))).toBe(true);
+    expect(existsSync(join(root, 'commands', 'expired', 'cmd_stale1.json'))).toBe(true);
+  });
 });
 
 describe('VS MASTER full paper tick loop', () => {

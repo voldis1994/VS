@@ -1,6 +1,6 @@
 /** Unified broker interface — strategy never talks to a concrete broker directly. */
 import { randomUUID } from 'crypto';
-import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync, readdirSync } from 'fs';
+import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import type { Side } from './types.js';
 
@@ -883,6 +883,63 @@ export class Mt4FileBroker implements MasterBroker {
     }
     this.expireCommand(id);
     return { ok: false, detail: 'mt4_modify_ack_timeout', order_id: id };
+  }
+
+  /**
+   * Reader/Check- style restart recovery — archive acked cmds, expire stale unacked.
+   * Call before position sync so status orphans from late fills are adopted cleanly.
+   */
+  recoverPendingCommands(maxAgeMs = 120_000): {
+    applied: number;
+    expired: number;
+    still_pending: number;
+    details: string[];
+  } {
+    const folder = join(this.bridgeRoot, 'commands');
+    const result = { applied: 0, expired: 0, still_pending: 0, details: [] as string[] };
+    if (!existsSync(folder)) return result;
+    const now = Date.now();
+    for (const f of readdirSync(folder)) {
+      if (!f.startsWith('cmd_') || !f.endsWith('.json')) continue;
+      const path = join(folder, f);
+      let payload: { id?: string; action?: string };
+      try {
+        payload = JSON.parse(readFileSync(path, 'utf8'));
+      } catch {
+        continue;
+      }
+      const id = String(payload.id || '');
+      if (!id) continue;
+      const action = String(payload.action || '').toUpperCase();
+      const ackPath = join(this.bridgeRoot, 'acks', `ack_${id}.json`);
+      if (existsSync(ackPath)) {
+        try {
+          const ack = JSON.parse(readFileSync(ackPath, 'utf8'));
+          result.applied += 1;
+          result.details.push(`${action}:${id}:ack_ok=${!!ack.ok}`);
+        } catch {
+          result.applied += 1;
+          result.details.push(`${action}:${id}:ack_corrupt`);
+        }
+        this.expireCommand(id);
+        continue;
+      }
+      let age = maxAgeMs + 1;
+      try {
+        age = now - statSync(path).mtimeMs;
+      } catch {
+        /* treat as stale */
+      }
+      if (age >= maxAgeMs) {
+        this.expireCommand(id);
+        result.expired += 1;
+        result.details.push(`${action}:${id}:expired_age_ms=${age}`);
+      } else {
+        result.still_pending += 1;
+        result.details.push(`${action}:${id}:pending_age_ms=${age}`);
+      }
+    }
+    return result;
   }
 }
 

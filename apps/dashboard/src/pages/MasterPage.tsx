@@ -224,10 +224,22 @@ export function MasterPage() {
                 method: 'POST',
                 body: JSON.stringify({ mode: 'LIVE', epic: epicInput }),
               });
-              return apiFetch('/api/master/start', {
+              const r = await apiFetch<{
+                ok?: boolean;
+                detail?: string;
+                status?: { mode?: string };
+              }>('/api/master/start', {
                 method: 'POST',
                 body: JSON.stringify({ mode: 'LIVE' }),
               });
+              // Server resets mode on refuse; reinforce so UI never sticks on LIVE_ARMED
+              if (r && r.ok === false) {
+                await apiFetch('/api/master/control', {
+                  method: 'POST',
+                  body: JSON.stringify({ mode: 'PAPER' }),
+                });
+              }
+              return r;
             })
           }
         >
