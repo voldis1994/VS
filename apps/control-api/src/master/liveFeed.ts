@@ -62,7 +62,8 @@ export type YahooBarsResult = {
 };
 
 /**
- * Fetch real Yahoo 1m OHLC for bootstrap — replaces synthetic seed when online.
+ * Fetch real Yahoo OHLC for bootstrap — replaces synthetic seed when online.
+ * Tries several interval/range combos (futures often empty on 1m/1d off-hours).
  */
 export async function fetchYahooMinuteBars(
   epic = 'GOLD',
@@ -72,60 +73,69 @@ export async function fetchYahooMinuteBars(
   if (!symbol) {
     return { ok: false, bars: [], detail: 'no_yahoo_symbol', symbol: null };
   }
-  try {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
-      symbol
-    )}?interval=1m&range=1d`;
-    const res = await fetch(url, {
-      headers: {
-        Accept: 'application/json',
-        'User-Agent': 'VS-MASTER/1.0 (+live-bars)',
-      },
-    });
-    const json = (await res.json().catch(() => null)) as {
-      chart?: {
-        result?: Array<{
-          timestamp?: number[];
-          indicators?: { quote?: Array<{ open?: number[]; high?: number[]; low?: number[]; close?: number[] }> };
-        }>;
-      };
-    } | null;
-    const result = json?.chart?.result?.[0];
-    const ts = result?.timestamp || [];
-    const q = result?.indicators?.quote?.[0];
-    if (!res.ok || !ts.length || !q) {
-      return { ok: false, bars: [], detail: `yahoo_http_${res.status}`, symbol };
-    }
-    const bars: Bar[] = [];
-    for (let i = 0; i < ts.length; i++) {
-      const open = Number(q.open?.[i]);
-      const high = Number(q.high?.[i]);
-      const low = Number(q.low?.[i]);
-      const close = Number(q.close?.[i]);
-      if (![open, high, low, close].every(Number.isFinite)) continue;
-      bars.push({
-        open,
-        high,
-        low,
-        close,
-        ts_ms: Number(ts[i]) * 1000,
+  const attempts = [
+    'interval=1m&range=1d',
+    'interval=5m&range=5d',
+    'interval=15m&range=5d',
+    'interval=1h&range=1mo',
+  ];
+  let lastDetail = 'yahoo_no_bars';
+  for (const q of attempts) {
+    try {
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?${q}`;
+      const res = await fetch(url, {
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': 'VS-MASTER/1.0 (+live-bars)',
+        },
       });
+      const json = (await res.json().catch(() => null)) as {
+        chart?: {
+          result?: Array<{
+            timestamp?: number[];
+            indicators?: {
+              quote?: Array<{ open?: number[]; high?: number[]; low?: number[]; close?: number[] }>;
+            };
+          }>;
+        };
+      } | null;
+      const result = json?.chart?.result?.[0];
+      const ts = result?.timestamp || [];
+      const quote = result?.indicators?.quote?.[0];
+      if (!res.ok || !ts.length || !quote) {
+        lastDetail = `yahoo_${q}_http_${res.status}_ts_${ts.length}`;
+        continue;
+      }
+      const bars: Bar[] = [];
+      for (let i = 0; i < ts.length; i++) {
+        const open = Number(quote.open?.[i]);
+        const high = Number(quote.high?.[i]);
+        const low = Number(quote.low?.[i]);
+        const close = Number(quote.close?.[i]);
+        if (![open, high, low, close].every(Number.isFinite)) continue;
+        bars.push({
+          open,
+          high,
+          low,
+          close,
+          ts_ms: Number(ts[i]) * 1000,
+        });
+      }
+      const sliced = bars.slice(-Math.max(10, maxBars));
+      if (sliced.length >= 10) {
+        return {
+          ok: true,
+          bars: sliced,
+          detail: `yahoo_${symbol}_${q}_${sliced.length}_bars`,
+          symbol,
+        };
+      }
+      lastDetail = `yahoo_${q}_finite_${sliced.length}`;
+    } catch (e) {
+      lastDetail = e instanceof Error ? e.message : String(e);
     }
-    const sliced = bars.slice(-Math.max(10, maxBars));
-    return {
-      ok: sliced.length >= 10,
-      bars: sliced,
-      detail: `yahoo_${symbol}_${sliced.length}_bars`,
-      symbol,
-    };
-  } catch (e) {
-    return {
-      ok: false,
-      bars: [],
-      detail: e instanceof Error ? e.message : String(e),
-      symbol,
-    };
   }
+  return { ok: false, bars: [], detail: lastDetail, symbol };
 }
 
 /** Rolling bar builder from live ticks — closes a bar every barMs. */
