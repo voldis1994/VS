@@ -48,6 +48,11 @@ import {
   type MultiFeedLeg,
 } from './robotReader.js';
 import {
+  ensureMasterCapitalBroker,
+  masterOwnsPipeline,
+  runMasterFromDesk,
+} from '../master/deskBridge.js';
+import {
   aggregateSecondsToTen,
   emptyTenSecState,
   publicOhlc10s,
@@ -1240,6 +1245,47 @@ async function robotCycle(s: Internal) {
         ask: quote.ask,
         mid: quote.mid,
         detail: 'Trading OFF — reading only',
+      });
+      return;
+    }
+
+    // VS MASTER owns manage+entry when MASTER_OWNS_PIPELINE=true (no dual-brain exits)
+    if (masterOwnsPipeline()) {
+      await refreshStructureAndSetup(
+        opened.session,
+        s,
+        quote.mid,
+        !s.structureBook.ready || s.ohlcState.just_closed
+      );
+      await ensureMasterCapitalBroker({
+        environment: conn.environment,
+        apiKey: creds.api_key || '',
+        identifier: (conn.identifier || '').trim(),
+        password: creds.password || '',
+        connectionId: s.connection_id,
+        capitalAccountId,
+      });
+      const master = await runMasterFromDesk({
+        epic: s.epic,
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        minuteCandles: s.last_minute_candles,
+        closed10s: s.ohlcState.last_closed,
+      });
+      // Keep desk local state aligned with broker so UI still shows side
+      if (brokerOpen) {
+        s.mode = 'MANAGE';
+      } else {
+        s.mode = 'FLAT';
+        if (s.open_side) clearTradeState(s);
+      }
+      pushTick(s, {
+        phase: master.executed ? 'ORDER' : brokerOpen ? 'MANAGE' : 'DECIDE',
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        detail: master.detail || 'MASTER cycle',
       });
       return;
     }

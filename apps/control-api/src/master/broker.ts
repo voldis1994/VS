@@ -1,0 +1,432 @@
+/** Unified broker interface — strategy never talks to a concrete broker directly. */
+import { randomUUID } from 'crypto';
+import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync, readdirSync } from 'fs';
+import { join } from 'path';
+import type { Side } from './types.js';
+
+export type BrokerQuote = {
+  bid: number;
+  ask: number;
+  mid: number;
+  spread: number;
+  epic: string;
+  ts_ms: number;
+};
+
+export type BrokerPosition = {
+  position_id: string;
+  epic: string;
+  side: Side;
+  size: number;
+  open_level: number;
+  stop_level: number | null;
+  profit_level: number | null;
+  upl: number | null;
+};
+
+export type PlaceOrderInput = {
+  intent_id: string;
+  epic: string;
+  side: Side;
+  size: number;
+  stop_level?: number;
+  profit_level?: number;
+};
+
+export type PlaceOrderResult = {
+  ok: boolean;
+  order_id: string | null;
+  position_id: string | null;
+  fill_price: number | null;
+  detail: string;
+  paper: boolean;
+};
+
+export type BrokerAccount = {
+  equity: number;
+  balance: number;
+  currency: string;
+};
+
+export interface MasterBroker {
+  readonly name: string;
+  readonly paper: boolean;
+  connect(): Promise<{ ok: boolean; detail: string }>;
+  getQuote(epic: string): Promise<BrokerQuote | null>;
+  getAccount(): Promise<BrokerAccount | null>;
+  listOpenPositions(epic?: string): Promise<BrokerPosition[]>;
+  placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResult>;
+  closePosition(position_id: string): Promise<{ ok: boolean; detail: string }>;
+}
+
+/** In-memory paper broker — real decision/risk path, simulated fills. */
+export class PaperBroker implements MasterBroker {
+  readonly name = 'PAPER';
+  readonly paper = true;
+  private positions = new Map<string, BrokerPosition>();
+  private lastQuote: BrokerQuote | null = null;
+  private processed = new Set<string>();
+  equity = 10_000;
+  balance = 10_000;
+
+  async connect() {
+    return { ok: true, detail: 'paper ready' };
+  }
+
+  setQuote(q: BrokerQuote) {
+    this.lastQuote = q;
+  }
+
+  async getQuote(epic: string) {
+    if (this.lastQuote && this.lastQuote.epic === epic) return this.lastQuote;
+    return this.lastQuote;
+  }
+
+  async getAccount() {
+    return { equity: this.equity, balance: this.balance, currency: 'GBP' };
+  }
+
+  async listOpenPositions(epic?: string) {
+    const all = [...this.positions.values()];
+    return epic ? all.filter((p) => p.epic === epic) : all;
+  }
+
+  async placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResult> {
+    if (this.processed.has(input.intent_id)) {
+      return {
+        ok: false,
+        order_id: null,
+        position_id: null,
+        fill_price: null,
+        detail: 'duplicate_intent',
+        paper: true,
+      };
+    }
+    this.processed.add(input.intent_id);
+    const q = this.lastQuote;
+    if (!q) {
+      return {
+        ok: false,
+        order_id: null,
+        position_id: null,
+        fill_price: null,
+        detail: 'no_quote',
+        paper: true,
+      };
+    }
+    const fill = input.side === 'BUY' ? q.ask : q.bid;
+    const position_id = `paper-${randomUUID()}`;
+    this.positions.set(position_id, {
+      position_id,
+      epic: input.epic,
+      side: input.side,
+      size: input.size,
+      open_level: fill,
+      stop_level: input.stop_level ?? null,
+      profit_level: input.profit_level ?? null,
+      upl: 0,
+    });
+    return {
+      ok: true,
+      order_id: `ord-${input.intent_id}`,
+      position_id,
+      fill_price: fill,
+      detail: 'paper_fill',
+      paper: true,
+    };
+  }
+
+  async closePosition(position_id: string) {
+    const p = this.positions.get(position_id);
+    if (!p) return { ok: false, detail: 'not_found' };
+    const q = this.lastQuote;
+    if (q) {
+      const exit = p.side === 'BUY' ? q.bid : q.ask;
+      const pnl =
+        p.side === 'BUY' ? (exit - p.open_level) * p.size : (p.open_level - exit) * p.size;
+      this.equity += pnl;
+      this.balance = this.equity;
+    }
+    this.positions.delete(position_id);
+    return { ok: true, detail: 'paper_closed' };
+  }
+
+  /** Mark-to-market open positions from quote. */
+  markToMarket() {
+    const q = this.lastQuote;
+    if (!q) return;
+    for (const p of this.positions.values()) {
+      const mid = q.mid;
+      p.upl = p.side === 'BUY' ? (mid - p.open_level) * p.size : (p.open_level - mid) * p.size;
+    }
+  }
+}
+
+/**
+ * Capital.com adapter — wraps existing capitalCom session helpers.
+ * Live path requires MASTER_LIVE_ENABLED=true at the runtime gate.
+ */
+export class CapitalBroker implements MasterBroker {
+  readonly name = 'CAPITAL';
+  readonly paper = false;
+  private session: any = null;
+  private processed = new Set<string>();
+
+  constructor(
+    private readonly deps: {
+      acquire: (input: any) => Promise<{ ok: boolean; session?: any; detail: string }>;
+      quote: (session: any, epic: string) => Promise<any>;
+      list: (session: any) => Promise<any>;
+      create: (session: any, input: any) => Promise<any>;
+      close: (session: any, dealId: string) => Promise<any>;
+      confirm?: (session: any, ref: string) => Promise<any>;
+      credentials: any;
+    }
+  ) {}
+
+  async connect() {
+    const opened = await this.deps.acquire(this.deps.credentials);
+    if (!opened.ok || !opened.session) return { ok: false, detail: opened.detail };
+    this.session = opened.session;
+    return { ok: true, detail: 'capital connected' };
+  }
+
+  async getQuote(epic: string): Promise<BrokerQuote | null> {
+    if (!this.session) return null;
+    const q = await this.deps.quote(this.session, epic);
+    if (q.bid == null || q.ask == null || q.mid == null) return null;
+    return {
+      bid: q.bid,
+      ask: q.ask,
+      mid: q.mid,
+      spread: q.ask - q.bid,
+      epic: q.epic || epic,
+      ts_ms: Date.now(),
+    };
+  }
+
+  async getAccount(): Promise<BrokerAccount | null> {
+    // Capital account snapshot is session-scoped; equity filled by runtime from broker/UI.
+    return { equity: 0, balance: 0, currency: 'GBP' };
+  }
+
+  async listOpenPositions(epic?: string): Promise<BrokerPosition[]> {
+    if (!this.session) return [];
+    const listed = await this.deps.list(this.session);
+    if (!listed.ok) return [];
+    return (listed.positions as any[])
+      .filter((p) => !epic || p.epic === epic)
+      .map((p) => ({
+        position_id: p.deal_id,
+        epic: p.epic,
+        side: p.direction as Side,
+        size: p.size,
+        open_level: p.open_level ?? 0,
+        stop_level: p.stop_level ?? null,
+        profit_level: null,
+        upl: p.upl ?? null,
+      }));
+  }
+
+  async placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResult> {
+    if (!this.session) {
+      return {
+        ok: false,
+        order_id: null,
+        position_id: null,
+        fill_price: null,
+        detail: 'not_connected',
+        paper: false,
+      };
+    }
+    if (this.processed.has(input.intent_id)) {
+      return {
+        ok: false,
+        order_id: null,
+        position_id: null,
+        fill_price: null,
+        detail: 'duplicate_intent',
+        paper: false,
+      };
+    }
+    this.processed.add(input.intent_id);
+    const opened = await this.deps.create(this.session, {
+      epic: input.epic,
+      direction: input.side,
+      size: input.size,
+      stopLevel: input.stop_level,
+      profitLevel: input.profit_level,
+    });
+    if (!opened.ok) {
+      return {
+        ok: false,
+        order_id: null,
+        position_id: null,
+        fill_price: null,
+        detail: opened.detail,
+        paper: false,
+      };
+    }
+    let position_id: string | null = null;
+    if (opened.deal_reference && this.deps.confirm) {
+      const conf = await this.deps.confirm(this.session, opened.deal_reference);
+      if (conf.ok) position_id = conf.deal_id || null;
+    }
+    return {
+      ok: true,
+      order_id: opened.deal_reference || null,
+      position_id,
+      fill_price: null,
+      detail: opened.detail,
+      paper: false,
+    };
+  }
+
+  async closePosition(position_id: string) {
+    if (!this.session) return { ok: false, detail: 'not_connected' };
+    const res = await this.deps.close(this.session, position_id);
+    return { ok: !!res.ok, detail: res.detail || '' };
+  }
+}
+
+/**
+ * MT4 file-bridge adapter (from Check- protocol).
+ * Writes OPEN/CLOSE/MODIFY JSON commands under bridgeRoot.
+ */
+export class Mt4FileBroker implements MasterBroker {
+  readonly name = 'MT4_FILE';
+  readonly paper = false;
+  private processed = new Set<string>();
+
+  constructor(private readonly bridgeRoot: string) {}
+
+  async connect() {
+    try {
+      mkdirSync(join(this.bridgeRoot, 'commands'), { recursive: true });
+      mkdirSync(join(this.bridgeRoot, 'acks'), { recursive: true });
+      mkdirSync(join(this.bridgeRoot, 'market'), { recursive: true });
+      mkdirSync(join(this.bridgeRoot, 'status'), { recursive: true });
+      return { ok: true, detail: `mt4 bridge ${this.bridgeRoot}` };
+    } catch (e) {
+      return { ok: false, detail: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  private readJson(rel: string): any | null {
+    const path = join(this.bridgeRoot, rel);
+    if (!existsSync(path)) return null;
+    try {
+      return JSON.parse(readFileSync(path, 'utf8'));
+    } catch {
+      return null;
+    }
+  }
+
+  async getQuote(epic: string): Promise<BrokerQuote | null> {
+    const m = this.readJson(join('market', 'latest.json'));
+    if (!m) return null;
+    const bid = Number(m.bid ?? m.Bid);
+    const ask = Number(m.ask ?? m.Ask);
+    if (!Number.isFinite(bid) || !Number.isFinite(ask)) return null;
+    return {
+      bid,
+      ask,
+      mid: (bid + ask) / 2,
+      spread: ask - bid,
+      epic: String(m.symbol || m.Symbol || epic),
+      ts_ms: Date.now(),
+    };
+  }
+
+  async getAccount(): Promise<BrokerAccount | null> {
+    const s = this.readJson(join('status', 'latest.json'));
+    if (!s) return null;
+    return {
+      equity: Number(s.equity ?? s.Equity ?? 0),
+      balance: Number(s.balance ?? s.Balance ?? 0),
+      currency: String(s.currency || 'USD'),
+    };
+  }
+
+  async listOpenPositions(epic?: string): Promise<BrokerPosition[]> {
+    const s = this.readJson(join('status', 'latest.json'));
+    const raw = Array.isArray(s?.positions) ? s.positions : [];
+    return raw
+      .map((p: any) => ({
+        position_id: String(p.ticket ?? p.Ticket ?? ''),
+        epic: String(p.symbol ?? p.Symbol ?? ''),
+        side: String(p.side || p.type || '').toUpperCase().includes('SELL')
+          ? ('SELL' as const)
+          : ('BUY' as const),
+        size: Number(p.lot ?? p.Lots ?? 0),
+        open_level: Number(p.open ?? p.OpenPrice ?? 0),
+        stop_level: numOrNull(p.sl ?? p.SL),
+        profit_level: numOrNull(p.tp ?? p.TP),
+        upl: numOrNull(p.profit ?? p.Profit),
+      }))
+      .filter((p: BrokerPosition) => p.position_id && (!epic || p.epic === epic));
+  }
+
+  async placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResult> {
+    if (this.processed.has(input.intent_id)) {
+      return {
+        ok: false,
+        order_id: null,
+        position_id: null,
+        fill_price: null,
+        detail: 'duplicate_intent',
+        paper: false,
+      };
+    }
+    this.processed.add(input.intent_id);
+    const id = input.intent_id.slice(0, 24);
+    const payload = {
+      id,
+      action: 'OPEN',
+      symbol: input.epic,
+      side: input.side,
+      lot: input.size,
+      sl: input.stop_level ?? 0,
+      tp: input.profit_level ?? 0,
+      magic: 50001,
+      reason: 'VS_MASTER',
+    };
+    const folder = join(this.bridgeRoot, 'commands');
+    mkdirSync(folder, { recursive: true });
+    const tmp = join(folder, `cmd_${id}.tmp`);
+    const path = join(folder, `cmd_${id}.json`);
+    writeFileSync(tmp, JSON.stringify(payload) + '\n', 'utf8');
+    renameSync(tmp, path);
+    return {
+      ok: true,
+      order_id: id,
+      position_id: null,
+      fill_price: null,
+      detail: 'mt4_command_written',
+      paper: false,
+    };
+  }
+
+  async closePosition(position_id: string) {
+    const id = randomUUID().slice(0, 12);
+    const folder = join(this.bridgeRoot, 'commands');
+    mkdirSync(folder, { recursive: true });
+    const payload = { id, action: 'CLOSE', ticket: Number(position_id), reason: 'VS_MASTER' };
+    const tmp = join(folder, `cmd_${id}.tmp`);
+    const path = join(folder, `cmd_${id}.json`);
+    writeFileSync(tmp, JSON.stringify(payload) + '\n', 'utf8');
+    renameSync(tmp, path);
+    return { ok: true, detail: 'mt4_close_written' };
+  }
+}
+
+function numOrNull(v: unknown): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+export function listMt4AckFiles(bridgeRoot: string): string[] {
+  const folder = join(bridgeRoot, 'acks');
+  if (!existsSync(folder)) return [];
+  return readdirSync(folder).filter((f) => f.startsWith('ack_'));
+}

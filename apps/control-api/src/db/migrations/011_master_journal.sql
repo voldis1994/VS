@@ -39,3 +39,27 @@ CREATE TABLE IF NOT EXISTS master_trade_outcomes (
 
 CREATE INDEX IF NOT EXISTS idx_master_opps_created ON master_opportunities(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_master_outcomes_setup ON master_trade_outcomes(setup_key);
+
+-- Restart recovery: open MASTER-managed positions + intent idempotency
+CREATE TABLE IF NOT EXISTS master_open_positions (
+  position_id TEXT PRIMARY KEY,
+  opportunity_id TEXT NOT NULL,
+  intent_id TEXT NOT NULL,
+  epic TEXT NOT NULL,
+  side TEXT NOT NULL,
+  size DOUBLE PRECISION NOT NULL,
+  entry DOUBLE PRECISION NOT NULL,
+  entry_at TIMESTAMPTZ NOT NULL,
+  stop_loss DOUBLE PRECISION,
+  take_profit DOUBLE PRECISION,
+  mfe DOUBLE PRECISION NOT NULL DEFAULT 0,
+  mae DOUBLE PRECISION NOT NULL DEFAULT 0,
+  regime_at_entry TEXT,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS master_seen_intents (
+  intent_id TEXT PRIMARY KEY,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
