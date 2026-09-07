@@ -13,7 +13,11 @@ import {
 } from '../pipeline.js';
 import { evaluateRisk, sizeFromEquity } from '../risk.js';
 import { validateSlTp } from '../slTp.js';
-import { clampStopForCapitalMark, capitalMinStopDistance } from '../capitalStop.js';
+import {
+  clampStopForCapitalMark,
+  capitalMinStopDistance,
+  effectiveMinStopDistance,
+} from '../capitalStop.js';
 import { replayMaster, walkForward } from '../replay.js';
 import type {
   AccountSnapshot,
@@ -206,6 +210,31 @@ describe('VS MASTER decision + risk', () => {
       { ...DEFAULT_MASTER_CONFIG, daily_loss_limit: 50, max_daily_loss_pct: 0.99 }
     );
     expect(ok.reasons).not.toContain('daily_loss_limit');
+  });
+
+  it('Check equity-delta daily PnL blocks while realized flat', () => {
+    const bars = barsTrendUp();
+    const a = analyzeBars(bars, 0.4);
+    const d = decide(a, quoteFrom(bars.at(-1)!), { ...DEFAULT_MASTER_CONFIG, min_score: 0.3 }, () => null, bars);
+    const decision =
+      d.kind === 'BUY' || d.kind === 'SELL'
+        ? d
+        : {
+            ...d,
+            kind: 'BUY' as const,
+            side: 'BUY' as const,
+            block_reason: null,
+            buy: { ...d.buy, valid: true, filter_ok: true, score: 0.9 },
+          };
+    const hit = evaluateRisk(
+      decision,
+      { ...account, equity: 9700, day_start_equity: 10_000, daily_pnl: 0 },
+      GOLD_SPEC,
+      quoteFrom(bars.at(-1)!),
+      { ...DEFAULT_MASTER_CONFIG, daily_loss_limit: 200, max_daily_loss_pct: 0.99 }
+    );
+    expect(hit.allowed).toBe(false);
+    expect(hit.reasons).toContain('daily_loss_limit');
   });
 
   it('account_not_tradeable blocks when trade_allowed is false', () => {
@@ -679,6 +708,7 @@ describe('Reader SL/TP + Check sizing', () => {
 
   it('Capital clampStopForCapitalMark keeps GOLD BE legal vs mark', () => {
     expect(capitalMinStopDistance('GOLD')).toBeCloseTo(0.02, 8);
+    expect(effectiveMinStopDistance('GOLD', 0.5)).toBeCloseTo(0.5, 8);
     const clamped = clampStopForCapitalMark({
       side: 'BUY',
       stop: 4400,
@@ -688,5 +718,15 @@ describe('Reader SL/TP + Check sizing', () => {
     });
     // mark - minDist = 4399.99 — stop clamped down from 4400
     expect(clamped).toBeCloseTo(4399.99, 2);
+    const liveClamped = clampStopForCapitalMark({
+      side: 'BUY',
+      stop: 4400.4,
+      mark: 4400.6,
+      symbol: 'GOLD',
+      current_stop: 4390,
+      min_distance: 0.5,
+    });
+    // Proposed 4400.4 is too close (mark−0.5=4400.1) → clamp down
+    expect(liveClamped).toBeCloseTo(4400.1, 6);
   });
 });

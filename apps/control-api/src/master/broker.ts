@@ -11,6 +11,8 @@ export type BrokerQuote = {
   spread: number;
   epic: string;
   ts_ms: number;
+  /** Live Capital dealingRules min stop distance when known */
+  min_stop_distance?: number | null;
 };
 
 export type BrokerPosition = {
@@ -310,6 +312,8 @@ export class CapitalBroker implements MasterBroker {
     string,
     { minSize: number; maxSize: number; step: number }
   >();
+  /** Live min-stop distance per epic from markets quote */
+  private minStopByEpic = new Map<string, number>();
 
   constructor(
     private readonly deps: {
@@ -341,6 +345,8 @@ export class CapitalBroker implements MasterBroker {
         currency: string;
         available?: number | null;
       } | null>;
+      /** Pin CFD account before mutate (VS-System ensureActiveAccount) */
+      ensureAccount?: (session: any) => Promise<{ ok: boolean; detail: string }>;
       /** Capital minute/hour OHLC for LIVE structure seeding */
       prices?: (
         session: any,
@@ -361,6 +367,13 @@ export class CapitalBroker implements MasterBroker {
       credentials: any;
     }
   ) {}
+
+  /** VS-System: pin correct Capital account before create/modify/close/list. */
+  private async ensureActiveAccount(): Promise<{ ok: boolean; detail: string }> {
+    if (!this.session) return { ok: false, detail: 'not_connected' };
+    if (!this.deps.ensureAccount) return { ok: true, detail: 'no_pin' };
+    return this.deps.ensureAccount(this.session);
+  }
 
   async connect() {
     const opened = await this.deps.acquire(this.deps.credentials);
@@ -419,6 +432,13 @@ export class CapitalBroker implements MasterBroker {
         })
       );
     }
+    const minStop =
+      q.min_stop_distance != null && Number.isFinite(Number(q.min_stop_distance))
+        ? Number(q.min_stop_distance)
+        : null;
+    if (minStop != null && minStop > 0) {
+      this.minStopByEpic.set(String(q.epic || epic).toUpperCase(), minStop);
+    }
     return {
       bid: q.bid,
       ask: q.ask,
@@ -426,7 +446,14 @@ export class CapitalBroker implements MasterBroker {
       spread: q.ask - q.bid,
       epic: q.epic || epic,
       ts_ms: Date.now(),
+      min_stop_distance: minStop,
     };
+  }
+
+  /** Cached live min-stop for epic (from last quote), if known. */
+  liveMinStopDistance(epic: string): number | null {
+    const v = this.minStopByEpic.get(String(epic || '').toUpperCase());
+    return v != null && v > 0 ? v : null;
   }
 
   async getAccount(): Promise<BrokerAccount | null> {
@@ -441,6 +468,10 @@ export class CapitalBroker implements MasterBroker {
   async listOpenPositions(epic?: string): Promise<ListOpenResult> {
     if (!this.session) {
       return { ok: false, positions: [], detail: 'not_connected' };
+    }
+    const pinned = await this.ensureActiveAccount();
+    if (!pinned.ok) {
+      return { ok: false, positions: [], detail: `account_pin:${pinned.detail}` };
     }
     const listed = await this.deps.list(this.session);
     if (!listed.ok) {
@@ -511,6 +542,17 @@ export class CapitalBroker implements MasterBroker {
         position_id: null,
         fill_price: null,
         detail: 'not_connected',
+        paper: false,
+      };
+    }
+    const pinned = await this.ensureActiveAccount();
+    if (!pinned.ok) {
+      return {
+        ok: false,
+        order_id: null,
+        position_id: null,
+        fill_price: null,
+        detail: `account_pin:${pinned.detail}`,
         paper: false,
       };
     }
@@ -756,6 +798,8 @@ export class CapitalBroker implements MasterBroker {
 
   async closePosition(position_id: string, opts?: { size?: number }) {
     if (!this.session) return { ok: false, detail: 'not_connected' };
+    const pinned = await this.ensureActiveAccount();
+    if (!pinned.ok) return { ok: false, detail: `account_pin:${pinned.detail}` };
     const res = await this.deps.close(this.session, position_id, opts?.size);
     if (!res.ok) return { ok: false, detail: res.detail || 'close_failed' };
 
@@ -811,15 +855,42 @@ export class CapitalBroker implements MasterBroker {
   }) {
     if (!this.session) return { ok: false, detail: 'not_connected' };
     if (!this.deps.modify) return { ok: false, detail: 'modify_not_wired' };
+    const pinned = await this.ensureActiveAccount();
+    if (!pinned.ok) return { ok: false, detail: `account_pin:${pinned.detail}` };
     const res = await this.deps.modify(this.session, {
       dealId: input.position_id,
       stopLevel: input.stop_level,
       profitLevel: input.profit_level,
     });
-    if (res.ok && res.deal_reference) {
-      await this.waitConfirm(res.deal_reference);
+    if (!res.ok) {
+      return { ok: false, detail: res.detail || 'modify_failed', order_id: res.deal_reference };
     }
-    return { ok: !!res.ok, detail: res.detail || '', order_id: res.deal_reference };
+    if (res.deal_reference) {
+      const conf = await this.waitConfirm(res.deal_reference);
+      if (conf.rejected) {
+        return {
+          ok: false,
+          detail: `modify_confirm_rejected:${conf.detail}`,
+          order_id: res.deal_reference,
+        };
+      }
+      if (!conf.ok && input.stop_level != null) {
+        // Timeout / lag — only accept if broker stop moved near request
+        const listed = await this.listOpenPositions();
+        const hit = listed.positions.find((p) => p.position_id === input.position_id);
+        const want = input.stop_level;
+        const got = hit?.stop_level;
+        const tol = Math.max(0.05, Math.abs(want) * 1e-5);
+        if (got == null || !Number.isFinite(got) || Math.abs(got - want) > tol) {
+          return {
+            ok: false,
+            detail: conf.detail || 'modify_confirm_unverified',
+            order_id: res.deal_reference,
+          };
+        }
+      }
+    }
+    return { ok: true, detail: res.detail || '', order_id: res.deal_reference };
   }
 }
 

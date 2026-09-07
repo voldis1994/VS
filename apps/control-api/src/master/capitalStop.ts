@@ -18,6 +18,19 @@ export function capitalMinStopDistance(symbol: string): number {
   return Math.max(pip * 2, pip);
 }
 
+/** Effective min-stop: max(soft pip floor, live dealingRules when present). */
+export function effectiveMinStopDistance(
+  symbol: string,
+  liveMinStop?: number | null
+): number {
+  const soft = capitalMinStopDistance(symbol);
+  const live =
+    liveMinStop != null && Number.isFinite(liveMinStop) && liveMinStop > 0
+      ? liveMinStop
+      : 0;
+  return Math.max(soft, live);
+}
+
 /**
  * True when stop is on the correct side of mark with enough distance for Capital.
  */
@@ -26,10 +39,11 @@ export function stopValidVsMark(input: {
   stop: number;
   mark: number;
   symbol: string;
+  min_distance?: number | null;
 }): boolean {
   const { stop, mark } = input;
   if (![stop, mark].every((n) => Number.isFinite(n))) return false;
-  const minD = capitalMinStopDistance(input.symbol);
+  const minD = effectiveMinStopDistance(input.symbol, input.min_distance);
   if (input.side === 'BUY') return mark - stop >= minD * 0.98;
   return stop - mark >= minD * 0.98;
 }
@@ -45,8 +59,10 @@ export function clampStopForCapitalMark(input: {
   mark: number;
   symbol: string;
   current_stop?: number | null;
+  /** Live dealingRules min stop when known (overrides soft floor when larger) */
+  min_distance?: number | null;
 }): number | null {
-  const minD = capitalMinStopDistance(input.symbol);
+  const minD = effectiveMinStopDistance(input.symbol, input.min_distance);
   let stop = input.stop;
   if (input.side === 'BUY') {
     const maxStop = input.mark - minD;
@@ -61,12 +77,15 @@ export function clampStopForCapitalMark(input: {
     if (input.current_stop != null && stop >= input.current_stop) return null;
     if (stop <= input.mark) return null;
   }
-  if (!stopValidVsMark({
-    side: input.side,
-    stop,
-    mark: input.mark,
-    symbol: input.symbol,
-  })) {
+  if (
+    !stopValidVsMark({
+      side: input.side,
+      stop,
+      mark: input.mark,
+      symbol: input.symbol,
+      min_distance: minD,
+    })
+  ) {
     return null;
   }
   return stop;

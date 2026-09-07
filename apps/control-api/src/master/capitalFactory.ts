@@ -66,6 +66,12 @@ export function createCapitalBroker(creds: CapitalBrokerCreds): CapitalBroker {
     confirm: async (session, ref) => confirmCapitalDeal(session, ref),
     prices: async (session, epic, resolution, max) =>
       fetchCapitalPrices(session, epic, resolution, max),
+    ensureAccount: async (session) => {
+      const id = String(creds.capitalAccountId || '').trim();
+      if (!id) return { ok: true, detail: 'no_account_id' };
+      const { switchCapitalAccount } = await import('../services/capitalCom.js');
+      return switchCapitalAccount(session, id);
+    },
     account: async (session) => {
       const eq = await fetchCapitalAccountEquity(session, creds.capitalAccountId);
       if (!eq) return null;

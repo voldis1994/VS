@@ -29,6 +29,8 @@ export type Quote = {
   mid: number;
   spread: number;
   ts_ms: number;
+  /** Optional live Capital min-stop distance from dealingRules */
+  min_stop_distance?: number | null;
 };
 
 export type ComponentScores = {
@@ -116,7 +118,10 @@ export type AccountSnapshot = {
   daily_pnl: number;
   /** UTC YYYY-MM-DD that daily_pnl accrues under */
   daily_pnl_day?: string | null;
-  /** Equity at start of daily_pnl_day — denom for max_daily_loss */
+  /**
+   * Equity at start of daily_pnl_day — denom for max_daily_loss and Check
+   * equity-delta hard $ gates (profit_lock / daily_loss_limit use equity − this).
+   */
   day_start_equity?: number | null;
   peak_equity: number;
   consecutive_losses: number;

@@ -1,7 +1,7 @@
 /** MASTER runtime — full PAPER/LIVE cycle owner + dashboard facade. */
 import { analyzeBars } from './analysis.js';
 import type { MasterBroker } from './broker.js';
-import { Mt4FileBroker, PaperBroker } from './broker.js';
+import { CapitalBroker, Mt4FileBroker, PaperBroker } from './broker.js';
 import { decide } from './decision.js';
 import { executeDecision } from './execution.js';
 import {
@@ -403,6 +403,10 @@ class MasterRuntime {
         : 0;
 
     // 1) Manage exits first (position manager owns open risk)
+    const liveMinStop =
+      broker instanceof CapitalBroker
+        ? broker.liveMinStopDistance(this.epic)
+        : quote.min_stop_distance ?? null;
     const managed = await this.positions.manageTick({
       broker,
       pipeline: this.pipeline,
@@ -424,6 +428,7 @@ class MasterRuntime {
         this.cfg.ai_mode === 'off' ? true : this.last_ai_allow_close,
       close_all_profit: this.cfg.close_all_profit,
       close_all_loss: this.cfg.close_all_loss,
+      min_stop_distance: liveMinStop,
     });
     const exit_reasons = managed.closed.map((c) => c.reason);
     if (exit_reasons.length) this.last_exit_reason = exit_reasons.at(-1)!;
@@ -547,6 +552,21 @@ class MasterRuntime {
           take_profit: rebased.take_profit,
           decision: cycle.decision,
         });
+        // Sync broker protection to fill-rebased geometry (local-only rebase left Capital at planned SL)
+        if (
+          broker.modifyPosition &&
+          (rebased.stop_loss != null || rebased.take_profit != null)
+        ) {
+          const mod = await broker.modifyPosition({
+            position_id: place.position_id,
+            stop_level: rebased.stop_loss ?? undefined,
+            profit_level: rebased.take_profit ?? undefined,
+          });
+          if (!mod.ok) {
+            this.broker_detail =
+              `post_fill_sl_sync_fail:${mod.detail}`.slice(0, 400);
+          }
+        }
       } else if (!execution.accepted) {
         this.inflight_until_ms = 0;
         if (/reject|RISK_CHECK|not_confirmed|CAPITAL_SL|unconfirmed/i.test(execution.detail)) {

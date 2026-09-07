@@ -52,6 +52,8 @@ export type ManageTickResult = {
 
 export class PositionManager {
   private open = new Map<string, ManagedPosition>();
+  /** VS-System: skip resending the same rejected trail/BE level until backoff expires */
+  private modifyBackoff = new Map<string, { until: number; level: number }>();
 
   list(): ManagedPosition[] {
     return [...this.open.values()];
@@ -137,6 +139,8 @@ export class PositionManager {
     /** Check- portfolio close-all thresholds (0 = off) */
     close_all_profit?: number;
     close_all_loss?: number;
+    /** Live Capital min-stop distance (dealingRules) when known */
+    min_stop_distance?: number | null;
   }): Promise<ManageTickResult> {
     const { broker, pipeline, quote } = input;
     const pv = input.instrument_point_value ?? 1;
@@ -152,6 +156,7 @@ export class PositionManager {
     const swingLow = input.swing_low ?? null;
     const swingHigh = input.swing_high ?? null;
     const trailBuf = input.trailing_buffer ?? 0;
+    const minStopDist = input.min_stop_distance ?? quote.min_stop_distance ?? null;
     const allowClose = input.allow_close !== false;
     const closeAllProfit = input.close_all_profit ?? 0;
     const closeAllLoss = input.close_all_loss ?? 0;
@@ -311,6 +316,7 @@ export class PositionManager {
           progressNeed: beProgress,
           offset: beOffset,
           beStart,
+          min_stop_distance: minStopDist,
         });
         await this.maybeTrailStop(broker, pos, quote, {
           swing_low: swingLow,
@@ -318,6 +324,7 @@ export class PositionManager {
           trailing_buffer: trailBuf,
           trail_start: trailStart,
           trail_lock: trailLock,
+          min_stop_distance: minStopDist,
         });
         continue;
       }
@@ -336,6 +343,7 @@ export class PositionManager {
           progressNeed: beProgress,
           offset: beOffset,
           beStart,
+          min_stop_distance: minStopDist,
         });
         await this.maybeTrailStop(broker, pos, quote, {
           swing_low: swingLow,
@@ -343,6 +351,7 @@ export class PositionManager {
           trailing_buffer: trailBuf,
           trail_start: trailStart,
           trail_lock: trailLock,
+          min_stop_distance: minStopDist,
         });
         continue;
       }
@@ -397,6 +406,55 @@ export class PositionManager {
   }
 
   /**
+   * Apply Capital-safe stop modify with per-position reject backoff
+   * (VS-System scalpModifyBackoffUntil pattern).
+   */
+  private async applyProtectiveStopModify(
+    broker: MasterBroker,
+    pos: ManagedPosition,
+    stop: number,
+    mark: number,
+    minStopDist: number | null | undefined
+  ): Promise<boolean> {
+    if (!broker.modifyPosition) return false;
+    const clamped = clampStopForCapitalMark({
+      side: pos.side,
+      stop,
+      mark,
+      symbol: pos.epic,
+      current_stop: pos.stop_loss,
+      min_distance: minStopDist,
+    });
+    if (clamped == null) return false;
+
+    const backoff = this.modifyBackoff.get(pos.position_id);
+    const now = Date.now();
+    if (
+      backoff &&
+      now < backoff.until &&
+      Math.abs(backoff.level - clamped) < 1e-9
+    ) {
+      return false;
+    }
+
+    const mod = await broker.modifyPosition({
+      position_id: pos.position_id,
+      stop_level: clamped,
+    });
+    if (mod.ok) {
+      pos.stop_loss = clamped;
+      this.modifyBackoff.delete(pos.position_id);
+      return true;
+    }
+    const { capitalModifyRejectBackoffMs } = await import('./capitalConfirm.js');
+    this.modifyBackoff.set(pos.position_id, {
+      until: now + capitalModifyRejectBackoffMs(mod.detail || ''),
+      level: clamped,
+    });
+    return false;
+  }
+
+  /**
    * Reader-style breakeven (progress-to-TP) + Check- be_start/offset.
    * Check be_start > 0 arms BE without requiring take_profit (orphan recover).
    * Only tightens; never loosens. Capital-safe vs mark.
@@ -405,7 +463,12 @@ export class PositionManager {
     broker: MasterBroker,
     pos: ManagedPosition,
     quote: Quote,
-    opts: { progressNeed: number; offset?: number; beStart?: number }
+    opts: {
+      progressNeed: number;
+      offset?: number;
+      beStart?: number;
+      min_stop_distance?: number | null;
+    }
   ): Promise<void> {
     if (!broker.modifyPosition) return;
     const offset = Math.max(0, opts.offset ?? 0);
@@ -428,19 +491,13 @@ export class PositionManager {
     const tighter =
       cur == null ? true : pos.side === 'BUY' ? be > cur : be < cur;
     if (!tighter) return;
-    const clamped = clampStopForCapitalMark({
-      side: pos.side,
-      stop: be,
+    await this.applyProtectiveStopModify(
+      broker,
+      pos,
+      be,
       mark,
-      symbol: pos.epic,
-      current_stop: cur,
-    });
-    if (clamped == null) return;
-    const mod = await broker.modifyPosition({
-      position_id: pos.position_id,
-      stop_level: clamped,
-    });
-    if (mod.ok) pos.stop_loss = clamped;
+      opts.min_stop_distance
+    );
   }
 
   /**
@@ -457,6 +514,7 @@ export class PositionManager {
       trailing_buffer?: number;
       trail_start?: number;
       trail_lock?: number;
+      min_stop_distance?: number | null;
     }
   ): Promise<void> {
     if (!broker.modifyPosition) return;
@@ -520,19 +578,13 @@ export class PositionManager {
           ? trailed > cur
           : trailed < cur;
     if (!tighter) return;
-    const clamped = clampStopForCapitalMark({
-      side: pos.side,
-      stop: trailed,
+    await this.applyProtectiveStopModify(
+      broker,
+      pos,
+      trailed,
       mark,
-      symbol: pos.epic,
-      current_stop: cur,
-    });
-    if (clamped == null) return;
-    const mod = await broker.modifyPosition({
-      position_id: pos.position_id,
-      stop_level: clamped,
-    });
-    if (mod.ok) pos.stop_loss = clamped;
+      structure?.min_stop_distance
+    );
   }
 
   /** Sync open set from broker after restart — keep local meta when known. */

@@ -443,4 +443,72 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(closed).toBe(1);
     expect(positions.size).toBe(0);
   });
+
+  it('modifyPosition treats confirm REJECTED as failure + caches live min-stop', async () => {
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number;
+        stop_level?: number | null;
+      }
+    >();
+    positions.set('d1', {
+      deal_id: 'd1',
+      epic: 'GOLD',
+      direction: 'BUY',
+      size: 0.1,
+      open_level: 4410,
+      stop_level: 4400,
+    });
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+        min_stop_distance: 0.5,
+      }),
+      list: async () => ({
+        ok: true,
+        positions: [...positions.values()].map((p) => ({
+          deal_id: p.deal_id,
+          epic: p.epic,
+          direction: p.direction,
+          size: p.size,
+          open_level: p.open_level,
+          stop_level: p.stop_level ?? null,
+        })),
+        detail: '',
+      }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({ ok: false, detail: 'unused' }),
+      modify: async () => ({
+        ok: true,
+        deal_reference: 'mod-ref-1',
+        detail: 'accepted_http',
+      }),
+      confirm: async () => ({
+        ok: false,
+        rejected: true,
+        detail: 'Capital rejected: MINIMUM_STOP_DISTANCE',
+      }),
+    });
+    await broker.connect();
+    const q = await broker.getQuote('GOLD');
+    expect(q?.min_stop_distance).toBe(0.5);
+    expect(broker.liveMinStopDistance('GOLD')).toBe(0.5);
+    const mod = await broker.modifyPosition({
+      position_id: 'd1',
+      stop_level: 4409.9,
+    });
+    expect(mod.ok).toBe(false);
+    expect(mod.detail).toMatch(/modify_confirm_rejected/);
+  });
 });
