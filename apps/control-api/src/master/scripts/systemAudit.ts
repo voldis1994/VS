@@ -62,7 +62,7 @@ async function main() {
   const analysisRaw = analyzeBars(market.bars, market.quote!.spread);
   stages.analysis_regime = {
     ok: !!analysisRaw.regime && analysisRaw.regime !== 'UNKNOWN',
-    detail: `${analysisRaw.regime}:${analysisRaw.market_state}:${analysisRaw.trend_dir}:${analysisRaw.structure_bias}`,
+    detail: `${analysisRaw.regime}:${analysisRaw.market_state}`,
   };
 
   const cfg = { ...DEFAULT_MASTER_CONFIG, min_score: 0.4 };
