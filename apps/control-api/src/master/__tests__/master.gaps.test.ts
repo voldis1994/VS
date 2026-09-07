@@ -172,6 +172,37 @@ describe('MASTER filters + dual flow', () => {
     expect(buy.valid).toBe(false);
     expect(sell.filter_reason).not.toBe('against_flow_dump');
   });
+
+  it('hard-blocks BUY late-move on last bar (Capital desk port)', () => {
+    const bars = Array.from({ length: 5 }, (_, i) => ({
+      open: 4400,
+      high: 4401,
+      low: 4399,
+      close: 4400.1,
+      ts_ms: i * 60_000,
+    }));
+    bars[bars.length - 1] = {
+      open: 4400,
+      high: 4425,
+      low: 4399,
+      close: 4420,
+      ts_ms: 5 * 60_000,
+    };
+    const { buy, sell } = buildCandidates(
+      baseAnalysis({
+        regime: 'TREND',
+        trend_dir: 'UP',
+        momentum_dir: 'UP',
+        atr: 2,
+      }),
+      quote,
+      { ...DEFAULT_MASTER_CONFIG, min_score: 0.3 },
+      bars
+    );
+    expect(buy.filter_ok).toBe(false);
+    expect(buy.filter_reason).toBe('late_move');
+    expect(sell.filter_reason).not.toBe('late_move');
+  });
 });
 
 describe('MASTER recover orphan journal', () => {
@@ -717,6 +748,25 @@ describe('buildMasterBars 10s hygiene', () => {
 });
 
 describe('MASTER epic alias sync', () => {
+  it('MT4 getAccount exposes free margin as available (equity - margin)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-margin-'));
+    mkdirSync(join(root, 'status'), { recursive: true });
+    writeFileSync(
+      join(root, 'status', 'latest.json'),
+      JSON.stringify({
+        equity: 10_000,
+        balance: 9_800,
+        margin: 1_200,
+        positions: [],
+      })
+    );
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    const acct = await broker.getAccount();
+    expect(acct?.equity).toBe(10_000);
+    expect(acct?.available).toBe(8800);
+  });
+
   it('GOLD local matches XAUUSD MT4 ticket — does not wipe as broker_flat', async () => {
     expect(normalizeEpicKey('GOLD')).toBe('XAUUSD');
     expect(epicsMatch('GOLD', 'XAUUSD')).toBe(true);

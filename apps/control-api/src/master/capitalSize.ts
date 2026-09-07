@@ -152,7 +152,14 @@ export function clampSizeForBuyingPower(input: {
     reason = `equity_cap ${input.size}→${suggested}`;
   }
   const avail = input.available_to_deal;
-  if (avail != null && Number.isFinite(avail) && avail > 0) {
+  if (avail != null && Number.isFinite(avail)) {
+    if (avail <= 0) {
+      return {
+        size: 0,
+        adjusted: true,
+        reason: 'available_to_deal_zero',
+      };
+    }
     // Rough: allow at most suggested-for-available (free margin often << equity)
     const byAvail = suggestMaxLotForEquity(avail, input.epic);
     if (size > byAvail + 1e-12) {

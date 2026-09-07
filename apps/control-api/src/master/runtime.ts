@@ -25,6 +25,7 @@ import { evaluateRisk } from './risk.js';
 import { setupKey } from './decision.js';
 import { loadRuntimeGates, saveRuntimeGates } from './runtimeGates.js';
 import { loadOwnsPipelinePref, saveOwnsPipelinePref } from './ownsPipelinePref.js';
+import { resolveNewsWindow, type NewsWindowState } from './newsGate.js';
 import type {
   AccountSnapshot,
   Bar,
@@ -64,6 +65,7 @@ export type MasterStatus = {
   last_persist_error: string | null;
   entries_armed: boolean;
   entries_pause_reason: string | null;
+  news_window: NewsWindowState;
 };
 
 export type TickResult = {
@@ -930,6 +932,7 @@ class MasterRuntime {
       last_persist_error: this.last_persist_error,
       entries_armed: this.entries_armed,
       entries_pause_reason: this.entries_pause_reason,
+      news_window: resolveNewsWindow(),
     };
   }
 }

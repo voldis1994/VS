@@ -22,6 +22,7 @@ type MasterStatus = {
     equity: number;
     balance: number;
     daily_pnl: number;
+    available_to_deal?: number | null;
   } | null;
   open_positions: number;
   performance: { expectancy?: number; max_drawdown?: number; trades?: number } | null;
@@ -34,6 +35,12 @@ type MasterStatus = {
   last_persist_error: string | null;
   entries_armed: boolean;
   entries_pause_reason: string | null;
+  news_window?: {
+    impact: string;
+    window_active: boolean;
+    source: string;
+    detail: string;
+  };
 };
 
 type ManagedPos = {
@@ -142,6 +149,20 @@ export function MasterPage() {
         {
           k: 'Equity',
           v: status.account?.equity != null ? Number(status.account.equity).toFixed(2) : '—',
+        },
+        {
+          k: 'Available',
+          v:
+            status.account?.available_to_deal != null
+              ? Number(status.account.available_to_deal).toFixed(2)
+              : '—',
+        },
+        {
+          k: 'News',
+          v: status.news_window?.window_active
+            ? `${status.news_window.impact} · ${status.news_window.source}`
+            : 'clear',
+          bad: !!status.news_window?.window_active && status.news_window?.impact === 'high',
         },
         {
           k: 'Daily PnL',

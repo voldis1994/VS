@@ -929,10 +929,19 @@ export class Mt4FileBroker implements MasterBroker {
   async getAccount(): Promise<BrokerAccount | null> {
     const s = this.readJson(join('status', 'latest.json'));
     if (!s) return null;
+    const equity = Number(s.equity ?? s.Equity ?? 0);
+    const balance = Number(s.balance ?? s.Balance ?? 0);
+    const margin = Number(s.margin ?? s.Margin ?? NaN);
+    // Check- EA exports used margin — free ≈ equity - margin
+    let available: number | null = null;
+    if (Number.isFinite(margin) && Number.isFinite(equity)) {
+      available = Math.max(0, equity - margin);
+    }
     return {
-      equity: Number(s.equity ?? s.Equity ?? 0),
-      balance: Number(s.balance ?? s.Balance ?? 0),
+      equity,
+      balance,
       currency: String(s.currency || 'USD'),
+      available,
     };
   }
 

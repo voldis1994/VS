@@ -36,6 +36,17 @@ describe('VS MASTER capital size (VS-System-)', () => {
     expect(c.adjusted).toBe(true);
   });
 
+  it('clampSizeForBuyingPower zeros size when available_to_deal is 0', () => {
+    const c = clampSizeForBuyingPower({
+      epic: 'GOLD',
+      size: 0.1,
+      equity: 10_000,
+      available_to_deal: 0,
+    });
+    expect(c.size).toBe(0);
+    expect(c.reason).toBe('available_to_deal_zero');
+  });
+
   it('classifies size and risk-check errors', () => {
     expect(isCapitalSizeError('error.positive.createpositionrequest.size')).toBe(true);
     expect(isCapitalRiskCheckError('RISK_CHECK')).toBe(true);

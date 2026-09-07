@@ -1,7 +1,9 @@
 /** Dual BUY/SELL candidates — independent component scores (heuristic, not probability). */
 import { applyMarketFilters } from './filters.js';
+import { isLateMoveOnBars } from './lateMove.js';
 import type {
   AnalysisSnapshot,
+  Bar,
   ComponentScores,
   MasterConfig,
   Quote,
@@ -73,7 +75,8 @@ export function buildSellComponents(a: AnalysisSnapshot): ComponentScores {
 export function buildCandidates(
   a: AnalysisSnapshot,
   quote: Quote,
-  cfg: MasterConfig
+  cfg: MasterConfig,
+  bars?: Bar[] | null
 ): { buy: TradeCandidate; sell: TradeCandidate } {
   // Side-aware planned entry — matches ask/bid fills (not mid)
   const buyEntry = quote.ask;
@@ -96,6 +99,9 @@ export function buildCandidates(
   // Reader-style against-flow hard reject (per side — shared filter no longer dual-starves UNKNOWN)
   const buyAgainstDump = a.momentum_dir === 'DOWN' && a.trend_dir === 'DOWN';
   const sellAgainstRally = a.momentum_dir === 'UP' && a.trend_dir === 'UP';
+  // Capital desk late-move — do not chase a bar that already ran
+  const buyLate = isLateMoveOnBars('BUY', bars);
+  const sellLate = isLateMoveOnBars('SELL', bars);
 
   const buy: TradeCandidate = {
     side: 'BUY',
@@ -103,18 +109,21 @@ export function buildCandidates(
       buyScore >= cfg.min_score &&
       filter.ok &&
       a.regime !== 'UNSTABLE' &&
-      !buyAgainstDump,
+      !buyAgainstDump &&
+      !buyLate,
     score: buyScore,
     components: buyComp,
     entry: buyEntry,
     stop_loss: buySl,
     take_profit: buyEntry + buyRisk * cfg.reward_ratio,
-    filter_ok: filter.ok && !buyAgainstDump,
+    filter_ok: filter.ok && !buyAgainstDump && !buyLate,
     filter_reason: !filter.ok
       ? filter.reason
       : buyAgainstDump
         ? 'against_flow_dump'
-        : null,
+        : buyLate
+          ? 'late_move'
+          : null,
   };
   const sell: TradeCandidate = {
     side: 'SELL',
@@ -122,18 +131,21 @@ export function buildCandidates(
       sellScore >= cfg.min_score &&
       filter.ok &&
       a.regime !== 'UNSTABLE' &&
-      !sellAgainstRally,
+      !sellAgainstRally &&
+      !sellLate,
     score: sellScore,
     components: sellComp,
     entry: sellEntry,
     stop_loss: sellSl,
     take_profit: sellEntry - sellRisk * cfg.reward_ratio,
-    filter_ok: filter.ok && !sellAgainstRally,
+    filter_ok: filter.ok && !sellAgainstRally && !sellLate,
     filter_reason: !filter.ok
       ? filter.reason
       : sellAgainstRally
         ? 'against_flow_rally'
-        : null,
+        : sellLate
+          ? 'late_move'
+          : null,
   };
   return { buy, sell };
 }

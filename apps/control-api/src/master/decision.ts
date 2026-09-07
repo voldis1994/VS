@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { buildCandidates } from './candidates.js';
 import type {
   AnalysisSnapshot,
+  Bar,
   ExpectancySnapshot,
   MasterConfig,
   MasterDecision,
@@ -14,10 +15,11 @@ export function decide(
   analysis: AnalysisSnapshot,
   quote: Quote,
   cfg: MasterConfig,
-  expectancyLookup: (setupKey: string) => ExpectancySnapshot | null
+  expectancyLookup: (setupKey: string) => ExpectancySnapshot | null,
+  bars?: Bar[] | null
 ): MasterDecision {
   const decision_id = randomUUID();
-  const { buy, sell } = buildCandidates(analysis, quote, cfg);
+  const { buy, sell } = buildCandidates(analysis, quote, cfg, bars);
 
   if (cfg.kill_switch) {
     return blocked(decision_id, buy, sell, analysis, null, 'kill_switch');

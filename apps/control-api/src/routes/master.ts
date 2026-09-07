@@ -430,6 +430,8 @@ async function refresh(){
       card('Why',why,whyCls),
       card('Last exit',s.last_exit_reason||'—'),
       card('Equity',s.account?.equity!=null?Number(s.account.equity).toFixed(2):'—'),
+      card('Available',s.account?.available_to_deal!=null?Number(s.account.available_to_deal).toFixed(2):'—'),
+      card('News',s.news_window?.window_active?(s.news_window.impact+' · '+s.news_window.source):'clear',s.news_window?.window_active&&s.news_window?.impact==='high'?'bad':''),
       card('Daily PnL',s.account?.daily_pnl!=null?Number(s.account.daily_pnl).toFixed(2):'—'),
       card('Open',s.open_positions),
       card('Trades',s.traded),

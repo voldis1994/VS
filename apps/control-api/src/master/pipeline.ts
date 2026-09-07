@@ -66,7 +66,8 @@ export class MasterPipeline {
         analysis,
         input.quote,
         { ...input.cfg, kill_switch: true },
-        () => null
+        () => null,
+        market.bars.length ? market.bars : input.bars
       );
       decision.kind = 'BLOCK';
       decision.side = null;
@@ -103,8 +104,12 @@ export class MasterPipeline {
 
     const analysis = analyzeBars(market.bars, market.quote.spread, input.now_ms);
     analysis.data_quality = Math.min(analysis.data_quality, market.quality);
-    let decision = decide(analysis, market.quote, input.cfg, (k) =>
-      this.expectancy.lookup(k)
+    let decision = decide(
+      analysis,
+      market.quote,
+      input.cfg,
+      (k) => this.expectancy.lookup(k),
+      market.bars
     );
 
     const mode = input.cfg.ai_mode;
