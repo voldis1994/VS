@@ -194,4 +194,6 @@ export type MasterConfig = {
   breakeven_progress: number;
   /** AI layer: off | advisory | required (Reader contract) */
   ai_mode: 'off' | 'advisory' | 'required';
+  /** Reader OFF session — block new entries outside ASIA/LONDON/NY windows */
+  block_off_hours: boolean;
 };

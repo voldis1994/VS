@@ -22,6 +22,8 @@ export function applyMarketFilters(
     // UNKNOWN is tradeable-with-caution; only UNSTABLE hard-blocks both sides
     regime_stable: a.regime !== 'UNSTABLE',
     volatility_ok: !(a.volatility > 0.008),
+    // Reader-style OFF session — entries only in labeled trading windows
+    session_ok: !cfg.block_off_hours || a.session !== 'OFF_HOURS',
   };
 
   if (!checks.data_quality) return { ok: false, reason: 'data_quality', checks };
@@ -29,5 +31,6 @@ export function applyMarketFilters(
   if (!checks.spread_pct) return { ok: false, reason: 'spread_pct', checks };
   if (!checks.regime_stable) return { ok: false, reason: `regime_${a.regime}`, checks };
   if (!checks.volatility_ok) return { ok: false, reason: 'abnormal_volatility', checks };
+  if (!checks.session_ok) return { ok: false, reason: 'session_off_hours', checks };
   return { ok: true, reason: null, checks };
 }

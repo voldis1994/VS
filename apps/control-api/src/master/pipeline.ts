@@ -212,6 +212,7 @@ export const DEFAULT_MASTER_CONFIG: MasterConfig = {
   max_hold_ms: 45 * 60_000,
   breakeven_progress: 0.5,
   ai_mode: 'off',
+  block_off_hours: true,
 };
 
 export const GOLD_SPEC: InstrumentSpec = {

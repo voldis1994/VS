@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { buildCandidates } from '../candidates.js';
-import { masterOwnsManageSafely, masterOwnsPipeline } from '../deskBridge.js';
+import { masterOwnsManageSafely, masterOwnsPipeline, syncMasterEntryOwnership } from '../deskBridge.js';
 import { applyMarketFilters } from '../filters.js';
 import { DEFAULT_MASTER_CONFIG, MasterPipeline } from '../pipeline.js';
 import { PositionManager } from '../positionManager.js';
@@ -56,6 +56,24 @@ describe('MASTER filters + dual flow', () => {
     const v = applyMarketFilters(baseAnalysis({ regime: 'UNSTABLE' }), quote, DEFAULT_MASTER_CONFIG);
     expect(v.ok).toBe(false);
     expect(v.reason).toMatch(/regime/);
+  });
+
+  it('hard-blocks OFF_HOURS session (Reader-style)', () => {
+    const v = applyMarketFilters(
+      baseAnalysis({ session: 'OFF_HOURS' }),
+      quote,
+      DEFAULT_MASTER_CONFIG
+    );
+    expect(v.ok).toBe(false);
+    expect(v.reason).toBe('session_off_hours');
+  });
+
+  it('allows OFF_HOURS when block_off_hours disabled', () => {
+    const v = applyMarketFilters(baseAnalysis({ session: 'OFF_HOURS' }), quote, {
+      ...DEFAULT_MASTER_CONFIG,
+      block_off_hours: false,
+    });
+    expect(v.ok).toBe(true);
   });
 
   it('blocks BUY against dump but can leave SELL valid', () => {
@@ -302,6 +320,71 @@ describe('masterOwnsManageSafely', () => {
     expect(masterOwnsManageSafely(false)).toBe(true);
     if (prev === undefined) delete process.env.MASTER_OWNS_PIPELINE;
     else process.env.MASTER_OWNS_PIPELINE = prev;
+  });
+
+  it('pauses MASTER entries when desk owns live manage (no dual-brain)', () => {
+    const prev = process.env.MASTER_OWNS_PIPELINE;
+    process.env.MASTER_OWNS_PIPELINE = 'true';
+    masterRuntime.setMode('PAPER');
+    masterRuntime.ensurePaperBroker();
+    masterRuntime.setEntriesArmed(true);
+    syncMasterEntryOwnership(true);
+    expect(masterRuntime.entries_armed).toBe(false);
+    expect(masterRuntime.entries_pause_reason).toBe('desk_live_manage_deferred');
+    syncMasterEntryOwnership(false);
+    expect(masterRuntime.entries_armed).toBe(true);
+    expect(masterRuntime.entries_pause_reason).toBeNull();
+    if (prev === undefined) delete process.env.MASTER_OWNS_PIPELINE;
+    else process.env.MASTER_OWNS_PIPELINE = prev;
+    masterRuntime.setEntriesArmed(true);
+  });
+});
+
+describe('manageTick close_failed visibility', () => {
+  it('records close_failed instead of silently continuing', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    broker.setQuote({
+      bid: 4400,
+      ask: 4400.4,
+      mid: 4400.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'close-fail-aaaaaaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      stop_level: 4390,
+    });
+    const pm = new PositionManager();
+    const pipe = new MasterPipeline('PAPER');
+    await syncPositionsWithBroker(pm, broker, 'GOLD');
+    const pos = pm.get(placed.position_id!)!;
+    pipe.journal.recordOpportunity({
+      id: pos.opportunity_id,
+      mode: 'PAPER',
+      epic: pos.epic,
+      decision: pos.decision,
+      risk: { allowed: true, volume: 1, risk_amount: 0, reasons: [] },
+      executed: true,
+    });
+    const orig = broker.closePosition.bind(broker);
+    broker.closePosition = async () => ({ ok: false, detail: 'simulated_close_fail' });
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: { bid: 4370, ask: 4370.4, mid: 4370.2, spread: 0.4, ts_ms: Date.now() },
+      instrument_point_value: 1,
+      max_hold_ms: 1, // force TIME_STOP-style exit attempt
+    });
+    broker.closePosition = orig;
+    expect(managed.closed.length).toBe(0);
+    expect(managed.close_failed.length).toBe(1);
+    expect(managed.close_failed[0]!.detail).toBe('simulated_close_fail');
+    expect(pm.get(pos.position_id)).toBeTruthy();
   });
 });
 

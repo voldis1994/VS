@@ -43,6 +43,8 @@ export type ManagedPosition = {
 export type ManageTickResult = {
   held: ManagedPosition[];
   closed: Array<{ position: ManagedPosition; outcome: TradeOutcome; reason: string }>;
+  /** Exit verdict fired but broker.closePosition failed — do not journal as closed */
+  close_failed: Array<{ position_id: string; exit_reason: string; detail: string }>;
 };
 
 export class PositionManager {
@@ -115,6 +117,7 @@ export class PositionManager {
     const maxHold = input.max_hold_ms ?? 0;
     const beProgress = input.breakeven_progress ?? 0.5;
     const closed: ManageTickResult['closed'] = [];
+    const close_failed: ManageTickResult['close_failed'] = [];
     const mid = quote.mid;
 
     for (const pos of [...this.open.values()]) {
@@ -157,7 +160,14 @@ export class PositionManager {
       }
 
       const closeRes = await broker.closePosition(pos.position_id);
-      if (!closeRes.ok) continue;
+      if (!closeRes.ok) {
+        close_failed.push({
+          position_id: pos.position_id,
+          exit_reason: verdict.reason,
+          detail: closeRes.detail || 'close_failed',
+        });
+        continue;
+      }
 
       const exit = protectiveFillPrice(pos, quote, protective?.reason ?? null);
       const pnlPts = pos.side === 'BUY' ? exit - pos.entry : pos.entry - exit;
@@ -189,7 +199,7 @@ export class PositionManager {
       closed.push({ position: pos, outcome, reason: verdict.reason });
     }
 
-    return { held: this.list(), closed };
+    return { held: this.list(), closed, close_failed };
   }
 
   /**

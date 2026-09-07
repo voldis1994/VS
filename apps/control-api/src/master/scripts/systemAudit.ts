@@ -59,13 +59,29 @@ async function main() {
     detail: market.ok ? `quality=${market.quality}` : market.reasons.join(','),
   };
 
-  const analysis = analyzeBars(market.bars, market.quote!.spread);
+  const analysisRaw = analyzeBars(market.bars, market.quote!.spread);
   stages.analysis_regime = {
-    ok: !!analysis.regime && analysis.regime !== 'UNKNOWN',
-    detail: `${analysis.regime}:${analysis.market_state}`,
+    ok: !!analysisRaw.regime && analysisRaw.regime !== 'UNKNOWN',
+    detail: `${analysisRaw.regime}:${analysisRaw.market_state}:${analysisRaw.trend_dir}:${analysisRaw.structure_bias}`,
   };
 
   const cfg = { ...DEFAULT_MASTER_CONFIG, min_score: 0.4 };
+  // Prove OFF_HOURS hard-gate independently of wall-clock
+  const offGate = applyMarketFilters(
+    { ...analysisRaw, session: 'OFF_HOURS' },
+    market.quote!,
+    cfg
+  );
+  stages.session_off_hours_gate = {
+    ok: !offGate.ok && offGate.reason === 'session_off_hours',
+    detail: offGate.reason || 'expected_block',
+  };
+
+  // Happy-path stages use a labeled trading session (wall clock may be OFF_HOURS)
+  const analysis =
+    analysisRaw.session === 'OFF_HOURS'
+      ? { ...analysisRaw, session: 'LONDON' }
+      : analysisRaw;
   const filter = applyMarketFilters(analysis, market.quote!, cfg);
   stages.filters = { ok: filter.ok, detail: filter.reason || 'pass' };
 

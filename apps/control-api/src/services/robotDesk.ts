@@ -50,6 +50,7 @@ import {
 import {
   ensureMasterCapitalBroker,
   masterOwnsManageSafely,
+  syncMasterEntryOwnership,
   masterOwnsPipeline,
   runMasterFromDesk,
 } from '../master/deskBridge.js';
@@ -1267,6 +1268,7 @@ async function robotCycle(s: Internal) {
         connectionId: s.connection_id,
         capitalAccountId,
       });
+      syncMasterEntryOwnership(!!brokerOpen);
       if (masterOwnsManageSafely(!!brokerOpen)) {
         const master = await runMasterFromDesk({
           epic: s.epic,

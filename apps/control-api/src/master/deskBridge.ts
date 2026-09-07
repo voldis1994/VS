@@ -118,6 +118,23 @@ export function masterOwnsManageSafely(brokerOpen: boolean): boolean {
 }
 
 /**
+ * When owns-pipeline but Capital LIVE manage is deferred to desk, pause MASTER
+ * autonomous entries so we do not dual-brain PAPER entries beside live desk risk.
+ * Re-arms when MASTER safely owns again (or owns-pipeline is off).
+ */
+export function syncMasterEntryOwnership(brokerOpen: boolean): void {
+  if (!masterOwnsPipeline()) {
+    masterRuntime.setEntriesArmed(true);
+    return;
+  }
+  if (masterOwnsManageSafely(brokerOpen)) {
+    masterRuntime.setEntriesArmed(true);
+  } else {
+    masterRuntime.setEntriesArmed(false, 'desk_live_manage_deferred');
+  }
+}
+
+/**
  * Run one MASTER tick from desk market data.
  * Returns detail string for desk tick log, or null if bridge inactive.
  */

@@ -60,6 +60,8 @@ export type MasterStatus = {
   recovered: boolean;
   persist_ok: boolean;
   last_persist_error: string | null;
+  entries_armed: boolean;
+  entries_pause_reason: string | null;
 };
 
 export type TickResult = {
@@ -104,6 +106,9 @@ class MasterRuntime {
   /** VS-System-: cool down after broker reject (e.g. RISK_CHECK). */
   private reject_until_ms = 0;
   broker_detail: string | null = null;
+  /** When false, manage exits still run but new entries are blocked (desk dual-brain guard). */
+  entries_armed = true;
+  entries_pause_reason: string | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private liveFeedTimer: ReturnType<typeof setInterval> | null = null;
   private seenIntentSnapshot: string[] = [];
@@ -248,6 +253,20 @@ class MasterRuntime {
     return this.paperBroker;
   }
 
+  /**
+   * Desk dual-brain guard: when Capital LIVE manage is deferred to desk,
+   * pause MASTER autonomous entries while exits still run.
+   */
+  setEntriesArmed(armed: boolean, reason?: string) {
+    this.entries_armed = armed;
+    this.entries_pause_reason = armed ? null : reason || 'entries_paused';
+    if (!armed) {
+      this.broker_detail = `${this.broker_detail || ''};entries_paused:${this.entries_pause_reason}`.slice(
+        -400
+      );
+    }
+  }
+
   /** Pure evaluation for dashboard — does not send orders (same cycle as tick, no execute). */
   async evaluate(bars: Bar[], quote: Quote) {
     this.last_bars = bars;
@@ -340,6 +359,13 @@ class MasterRuntime {
     });
     const exit_reasons = managed.closed.map((c) => c.reason);
     if (exit_reasons.length) this.last_exit_reason = exit_reasons.at(-1)!;
+    if (managed.close_failed.length) {
+      const fail = managed.close_failed[0]!;
+      this.broker_detail = `close_fail:${fail.position_id}:${fail.detail}`.slice(0, 400);
+      if (!exit_reasons.length) {
+        this.last_exit_reason = `CLOSE_FAIL · ${fail.exit_reason} · ${fail.detail}`;
+      }
+    }
     for (const c of managed.closed) {
       this.account.daily_pnl += c.outcome.pnl;
       if (c.outcome.pnl < 0) {
@@ -385,6 +411,7 @@ class MasterRuntime {
     const rejectCool = Date.now() < this.reject_until_ms;
     if (
       this.running &&
+      this.entries_armed &&
       (this.cfg.mode === 'PAPER' || allow_live) &&
       (cycle.decision.kind === 'BUY' || cycle.decision.kind === 'SELL') &&
       cycle.risk.allowed &&
@@ -443,17 +470,19 @@ class MasterRuntime {
     } else if (cycle.decision.kind === 'BUY' || cycle.decision.kind === 'SELL') {
       execution_detail = !this.running
         ? 'runtime_stopped'
-        : rejectCool
-          ? 'reject_cooldown'
-          : inflight
-            ? this.positions.count() > 0
-              ? 'one_trade_open'
-              : 'inflight_order'
-            : !cycle.risk.allowed
-              ? `risk:${cycle.risk.reasons.join(',')}`
-              : this.cfg.mode === 'LIVE' && !allow_live
-                ? 'live_gate_off'
-                : 'not_armed';
+        : !this.entries_armed
+          ? this.entries_pause_reason || 'entries_paused'
+          : rejectCool
+            ? 'reject_cooldown'
+            : inflight
+              ? this.positions.count() > 0
+                ? 'one_trade_open'
+                : 'inflight_order'
+              : !cycle.risk.allowed
+                ? `risk:${cycle.risk.reasons.join(',')}`
+                : this.cfg.mode === 'LIVE' && !allow_live
+                  ? 'live_gate_off'
+                  : 'not_armed';
       this.last_execution_detail = execution_detail;
     }
 
@@ -729,6 +758,8 @@ class MasterRuntime {
       recovered: this.recovered,
       persist_ok: this.persist_ok,
       last_persist_error: this.last_persist_error,
+      entries_armed: this.entries_armed,
+      entries_pause_reason: this.entries_pause_reason,
     };
   }
 }
