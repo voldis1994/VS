@@ -1,0 +1,50 @@
+/** Expectancy from historical setup outcomes — never invent probabilities. */
+import type { ExpectancySnapshot, TradeOutcome } from './types.js';
+
+export type SetupOutcome = {
+  setup_key: string;
+  pnl: number;
+  costs: number;
+};
+
+export class ExpectancyStore {
+  private readonly bySetup = new Map<string, SetupOutcome[]>();
+
+  record(setup_key: string, outcome: TradeOutcome) {
+    const costs = Math.max(0, outcome.fees) + Math.max(0, Math.abs(outcome.slippage));
+    const list = this.bySetup.get(setup_key) || [];
+    list.push({ setup_key, pnl: outcome.pnl, costs });
+    this.bySetup.set(setup_key, list);
+  }
+
+  lookup(setup_key: string): ExpectancySnapshot | null {
+    const list = this.bySetup.get(setup_key);
+    if (!list?.length) return null;
+    const wins = list.filter((x) => x.pnl > 0);
+    const losses = list.filter((x) => x.pnl <= 0);
+    const p_win = wins.length / list.length;
+    const p_loss = 1 - p_win;
+    const avg_win = wins.length ? wins.reduce((s, x) => s + x.pnl, 0) / wins.length : 0;
+    const avg_loss = losses.length
+      ? Math.abs(losses.reduce((s, x) => s + x.pnl, 0) / losses.length)
+      : 0;
+    const costs = list.reduce((s, x) => s + x.costs, 0) / list.length;
+    const ev = p_win * avg_win - p_loss * avg_loss - costs;
+    return {
+      setup_key,
+      samples: list.length,
+      p_win,
+      avg_win,
+      avg_loss,
+      costs,
+      ev,
+      positive: ev > 0,
+    };
+  }
+
+  all(): ExpectancySnapshot[] {
+    return [...this.bySetup.keys()]
+      .map((k) => this.lookup(k))
+      .filter((x): x is ExpectancySnapshot => !!x);
+  }
+}
