@@ -179,7 +179,16 @@ export class CapitalBroker implements MasterBroker {
       list: (session: any) => Promise<any>;
       create: (session: any, input: any) => Promise<any>;
       close: (session: any, dealId: string) => Promise<any>;
-      confirm?: (session: any, ref: string) => Promise<any>;
+      confirm?: (
+      session: any,
+      ref: string
+    ) => Promise<{
+      ok: boolean;
+      deal_id?: string;
+      fill_level?: number;
+      detail: string;
+      rejected?: boolean;
+    }>;
       credentials: any;
     }
   ) {}
@@ -268,16 +277,46 @@ export class CapitalBroker implements MasterBroker {
       };
     }
     let position_id: string | null = null;
+    let fill_price: number | null = null;
     if (opened.deal_reference && this.deps.confirm) {
-      const conf = await this.deps.confirm(this.session, opened.deal_reference);
-      if (conf.ok) position_id = conf.deal_id || null;
+      // Brief poll — Capital confirm can lag a tick
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const conf = await this.deps.confirm(this.session, opened.deal_reference);
+        if (conf.rejected) {
+          return {
+            ok: false,
+            order_id: opened.deal_reference || null,
+            position_id: null,
+            fill_price: null,
+            detail: conf.detail,
+            paper: false,
+          };
+        }
+        if (conf.ok && conf.deal_id) {
+          position_id = conf.deal_id;
+          fill_price = conf.fill_level ?? null;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 200 * (attempt + 1)));
+      }
+    }
+    // Fallback: match latest open on epic if confirm lagged
+    if (!position_id) {
+      const listed = await this.listOpenPositions(input.epic);
+      const hit = listed.find((p) => p.side === input.side && Math.abs(p.size - input.size) < 1e-9);
+      if (hit) {
+        position_id = hit.position_id;
+        fill_price = hit.open_level || null;
+      }
     }
     return {
-      ok: true,
+      ok: !!position_id || !!opened.deal_reference,
       order_id: opened.deal_reference || null,
       position_id,
-      fill_price: null,
-      detail: opened.detail,
+      fill_price,
+      detail: position_id
+        ? `capital_open deal=${position_id}${fill_price != null ? ` fill=${fill_price}` : ''}`
+        : opened.detail,
       paper: false,
     };
   }

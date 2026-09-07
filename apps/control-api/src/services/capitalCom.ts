@@ -824,11 +824,18 @@ export async function listCapitalOpenPositions(
   return { ok: true, positions, detail: `${positions.length} open` };
 }
 
-/** Resolve dealReference → dealId after open. */
+/** Resolve dealReference → dealId + fill level after open. */
 export async function confirmCapitalDeal(
   session: CapitalSession,
   dealReference: string
-): Promise<{ ok: boolean; deal_id?: string; detail: string }> {
+): Promise<{
+  ok: boolean;
+  deal_id?: string;
+  fill_level?: number;
+  deal_status?: string;
+  detail: string;
+  rejected?: boolean;
+}> {
   const ref = dealReference.trim();
   if (!ref) return { ok: false, detail: 'Empty dealReference' };
   const res = await session.get(`/api/v1/confirms/${encodeURIComponent(ref)}`);
@@ -838,13 +845,33 @@ export async function confirmCapitalDeal(
       detail: `Confirm HTTP ${res.status}: ${res.json?.errorCode || res.json?.message || res.text.slice(0, 120)}`,
     };
   }
+  const raw = (res.json || {}) as Record<string, unknown>;
   const dealId = String(
-    res.json?.dealId || res.json?.affectedDeals?.[0]?.dealId || ''
+    raw.dealId || (Array.isArray(raw.affectedDeals) ? (raw.affectedDeals[0] as any)?.dealId : '') || ''
   ).trim();
+  const levelRaw = Number(
+    raw.level ??
+      (Array.isArray(raw.affectedDeals) ? (raw.affectedDeals[0] as any)?.level : undefined)
+  );
+  const dealStatus = String(raw.dealStatus || raw.status || '').toUpperCase();
+  if (dealStatus === 'REJECTED') {
+    return {
+      ok: false,
+      rejected: true,
+      deal_status: dealStatus,
+      detail: `Capital rejected: ${raw.reason || raw.errorCode || 'REJECTED'}`,
+    };
+  }
   if (!dealId) {
     return { ok: false, detail: `Confirm OK but no dealId for ${ref}` };
   }
-  return { ok: true, deal_id: dealId, detail: `Confirmed dealId=${dealId}` };
+  return {
+    ok: true,
+    deal_id: dealId,
+    fill_level: Number.isFinite(levelRaw) ? levelRaw : undefined,
+    deal_status: dealStatus || undefined,
+    detail: `Confirmed dealId=${dealId}${Number.isFinite(levelRaw) ? ` fill=${levelRaw}` : ''}`,
+  };
 }
 
 /** Close one open position by dealId. */

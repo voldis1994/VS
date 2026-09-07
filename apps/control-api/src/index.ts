@@ -63,7 +63,19 @@ async function main() {
     process.env.OPERATING_MODE = 'LIVE';
   }
 
-  await runMigrations();
+  if (process.env.MASTER_STANDALONE === 'true') {
+    console.warn('MASTER_STANDALONE=true — skipping DB migrations');
+  } else {
+    try {
+      await runMigrations();
+    } catch (err) {
+      if (process.env.MASTER_ALLOW_NO_DB === 'true') {
+        console.warn('DB migrations failed — continuing (MASTER_ALLOW_NO_DB=true)', err);
+      } else {
+        throw err;
+      }
+    }
+  }
 
   const app = Fastify({
     logger: true,

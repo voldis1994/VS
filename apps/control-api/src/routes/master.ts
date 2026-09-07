@@ -222,55 +222,88 @@ export async function registerMasterRoutes(app: FastifyInstance) {
     open_positions: masterRuntime.positions.list(),
   }));
 
-  // Dashboard — why trading / not trading + open risk
+  // Live dashboard — polls status; start/stop controls; shows why trading / not
   app.get('/master', async (_req, reply) => {
-    const s = masterRuntime.status();
-    const positions = masterRuntime.positions.list();
-    const posHtml = positions.length
-      ? positions
-          .map(
-            (p) =>
-              `<div class="card"><div class="k">${p.side} ${p.epic}</div><div class="v">${p.entry.toFixed(2)} · sz ${p.size} · MFE ${p.mfe.toFixed(2)}</div></div>`
-          )
-          .join('')
-      : `<div class="card"><div class="k">Open</div><div class="v">FLAT</div></div>`;
     const html = `<!doctype html>
 <html><head><meta charset="utf-8"/><title>VS MASTER</title>
-<meta http-equiv="refresh" content="5"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
 <style>
-body{font-family:ui-monospace,Menlo,Consolas,monospace;background:#0b0f14;color:#d7e0ea;margin:0;padding:24px}
-h1{color:#7dffa3;margin:0 0 8px} .muted{color:#7a8794}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:16px 0}
-.card{background:#141b24;border:1px solid #243041;border-radius:8px;padding:12px}
-.k{font-size:11px;color:#7a8794;text-transform:uppercase}.v{font-size:18px;margin-top:4px;word-break:break-word}
-.bad{color:#ff7d7d}.ok{color:#7dffa3}
-h2{font-size:14px;color:#9fb0c0;margin:24px 0 8px}
+:root{--bg:#0b0f14;--card:#141b24;--line:#243041;--txt:#d7e0ea;--muted:#7a8794;--ok:#7dffa3;--bad:#ff7d7d;--accent:#5ec8ff}
+*{box-sizing:border-box}body{font-family:ui-monospace,Menlo,Consolas,monospace;background:radial-gradient(1200px 600px at 10% -10%,#132033 0%,var(--bg) 55%);color:var(--txt);margin:0;padding:24px;min-height:100vh}
+h1{color:var(--ok);margin:0 0 4px;font-size:28px;letter-spacing:.04em}
+.muted{color:var(--muted);margin:0 0 16px}
+.row{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 4px}
+button{background:#1a2433;color:var(--txt);border:1px solid var(--line);padding:8px 14px;border-radius:6px;cursor:pointer;font:inherit}
+button:hover{border-color:var(--accent);color:var(--accent)}
+button.primary{background:#163528;border-color:#2a5a45;color:var(--ok)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin:16px 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px}
+.k{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.v{font-size:17px;margin-top:6px;word-break:break-word}
+.bad{color:var(--bad)}.ok{color:var(--ok)}
+h2{font-size:13px;color:#9fb0c0;margin:22px 0 8px;text-transform:uppercase;letter-spacing:.08em}
+#log{background:#0a1018;border:1px solid var(--line);border-radius:8px;padding:12px;max-height:180px;overflow:auto;font-size:12px;color:#9fb0c0;white-space:pre-wrap}
 </style></head><body>
 <h1>VS MASTER</h1>
-<p class="muted">Authoritative pipeline · heuristic scores ≠ probability · LIVE=${process.env.MASTER_LIVE_ENABLED === 'true' ? 'armed' : 'gated'} · desk ownership=${process.env.MASTER_OWNS_PIPELINE === 'true' ? 'ON' : 'OFF'}</p>
-<div class="grid">
-<div class="card"><div class="k">Mode</div><div class="v">${s.mode}</div></div>
-<div class="card"><div class="k">Health</div><div class="v">${s.health}</div></div>
-<div class="card"><div class="k">Broker</div><div class="v">${s.broker || '—'}</div></div>
-<div class="card"><div class="k">Running</div><div class="v">${s.running ? 'YES' : 'NO'}</div></div>
-<div class="card"><div class="k">Regime</div><div class="v">${s.regime}</div></div>
-<div class="card"><div class="k">BUY score</div><div class="v">${s.buy_score.toFixed(3)}</div></div>
-<div class="card"><div class="k">SELL score</div><div class="v">${s.sell_score.toFixed(3)}</div></div>
-<div class="card"><div class="k">Decision</div><div class="v">${s.last_decision?.kind ?? '—'}</div></div>
-<div class="card"><div class="k">Why</div><div class="v ${s.last_block_reason ? 'bad' : 'ok'}">${s.last_block_reason || s.last_execution_detail || s.last_decision?.kind || '—'}</div></div>
-<div class="card"><div class="k">Last exit</div><div class="v">${s.last_exit_reason || '—'}</div></div>
-<div class="card"><div class="k">Equity</div><div class="v">${s.account?.equity?.toFixed?.(2) ?? '—'}</div></div>
-<div class="card"><div class="k">Daily PnL</div><div class="v">${s.account?.daily_pnl?.toFixed?.(2) ?? '—'}</div></div>
-<div class="card"><div class="k">Open pos</div><div class="v">${s.open_positions}</div></div>
-<div class="card"><div class="k">Trades</div><div class="v">${s.traded}</div></div>
-<div class="card"><div class="k">Blocked opps</div><div class="v">${s.blocked}</div></div>
-<div class="card"><div class="k">Expectancy</div><div class="v">${s.performance.expectancy.toFixed(3)}</div></div>
-<div class="card"><div class="k">Max DD</div><div class="v">${s.performance.max_drawdown.toFixed(2)}</div></div>
-<div class="card"><div class="k">Recovered</div><div class="v">${s.recovered ? 'YES' : '—'}</div></div>
+<p class="muted">Single authoritative pipeline · scores are heuristic — not probability · LIVE gated unless MASTER_LIVE_ENABLED</p>
+<div class="row">
+  <button class="primary" id="btnStart">Start PAPER</button>
+  <button id="btnStop">Stop</button>
+  <button id="btnRecover">Recover</button>
+  <button id="btnKill">Kill switch</button>
+  <button id="btnAi">AI advisory toggle</button>
 </div>
+<div class="grid" id="cards"></div>
 <h2>Open positions</h2>
-<div class="grid">${posHtml}</div>
-<p class="muted">API: /api/master/status · /tick · /start · /stop · /recover · /replay · /positions</p>
+<div class="grid" id="positions"></div>
+<h2>Activity</h2>
+<div id="log"></div>
+<script>
+const cards=document.getElementById('cards');
+const positions=document.getElementById('positions');
+const logEl=document.getElementById('log');
+let kill=false, ai='off';
+function card(k,v,cls){return '<div class="card"><div class="k">'+k+'</div><div class="v '+(cls||'')+'">'+v+'</div></div>'}
+function pushLog(msg){const t=new Date().toISOString().slice(11,19);logEl.textContent='['+t+'] '+msg+'\\n'+logEl.textContent.slice(0,4000)}
+async function refresh(){
+  try{
+    const s=await fetch('/api/master/status').then(r=>r.json());
+    kill=!!s.kill_switch;
+    const why=s.last_block_reason||s.last_execution_detail||s.last_decision?.kind||'—';
+    const whyCls=s.last_block_reason?'bad':'ok';
+    cards.innerHTML=[
+      card('Mode',s.mode),
+      card('Health',s.health,s.health.includes('KILL')?'bad':'ok'),
+      card('Broker',s.broker||'—'),
+      card('Running',s.running?'YES':'NO',s.running?'ok':''),
+      card('Regime',s.regime),
+      card('BUY',Number(s.buy_score||0).toFixed(3)),
+      card('SELL',Number(s.sell_score||0).toFixed(3)),
+      card('Decision',s.last_decision?.kind||'—'),
+      card('Why',why,whyCls),
+      card('Last exit',s.last_exit_reason||'—'),
+      card('Equity',s.account?.equity!=null?Number(s.account.equity).toFixed(2):'—'),
+      card('Daily PnL',s.account?.daily_pnl!=null?Number(s.account.daily_pnl).toFixed(2):'—'),
+      card('Open',s.open_positions),
+      card('Trades',s.traded),
+      card('Blocked',s.blocked),
+      card('Expectancy',Number(s.performance?.expectancy||0).toFixed(3)),
+      card('Max DD',Number(s.performance?.max_drawdown||0).toFixed(2)),
+      card('Recovered',s.recovered?'YES':'—'),
+    ].join('');
+    const pos=await fetch('/api/master/positions').then(r=>r.json());
+    const list=pos.positions||[];
+    positions.innerHTML=list.length?list.map(p=>card(p.side+' '+p.epic, Number(p.entry).toFixed(2)+' · sz '+p.size+' · MFE '+Number(p.mfe).toFixed(2))).join('')
+      :card('Open','FLAT');
+  }catch(e){pushLog('status error '+e)}
+}
+document.getElementById('btnStart').onclick=async()=>{await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'PAPER'})});const r=await fetch('/api/master/start',{method:'POST'}).then(r=>r.json());pushLog('start '+JSON.stringify(r.ok));refresh()};
+document.getElementById('btnStop').onclick=async()=>{const r=await fetch('/api/master/stop',{method:'POST'}).then(r=>r.json());pushLog('stop');refresh()};
+document.getElementById('btnRecover').onclick=async()=>{const r=await fetch('/api/master/recover',{method:'POST'}).then(r=>r.json());pushLog('recover positions='+r.positions);refresh()};
+document.getElementById('btnKill').onclick=async()=>{kill=!kill;await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kill_switch:kill})});pushLog('kill_switch='+kill);refresh()};
+document.getElementById('btnAi').onclick=async()=>{ai=ai==='off'?'advisory':'off';await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ai_mode:ai})});pushLog('ai_mode='+ai);refresh()};
+refresh();setInterval(refresh,2000);
+</script>
 </body></html>`;
     return reply.type('text/html').send(html);
   });
