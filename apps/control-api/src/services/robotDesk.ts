@@ -409,7 +409,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
     note:
-      'Setup-first. Max 35% MFE giveback everywhere (keep ≥65%). PeakProtect arms at 2.5pt MFE all books. CONTINUATION/PULLBACK/FADE ride the leg (tp≥3–4pt). Entry on closed 10s confirm.',
+      'Setup-first. Max 35% MFE giveback everywhere (keep ≥65%). CONTINUATION/PULLBACK/FADE ride the leg (tp≥3–4pt). Entry on closed 10s confirm.',
   };
 }
 
@@ -1059,23 +1059,13 @@ async function robotCycle(s: Internal) {
     return;
   }
   const conn = rows[0] as { environment: string; identifier: string | null; broker_name: string };
-  if (conn.broker_name !== 'capital_com' && conn.broker_name !== 'crypto_com') {
+  if (conn.broker_name !== 'capital_com') {
     pushTick(s, {
       phase: 'ERROR',
       bid: null,
       ask: null,
       mid: null,
-      detail: `Unsupported broker: ${conn.broker_name}`,
-    });
-    return;
-  }
-  if (conn.broker_name === 'crypto_com') {
-    pushTick(s, {
-      phase: 'ERROR',
-      bid: null,
-      ask: null,
-      mid: null,
-      detail: 'Crypto.com robot loop uses Exchange orders via pipeline; live quote cycle for Capital only for now',
+      detail: 'Not Capital.com',
     });
     return;
   }
@@ -1518,9 +1508,7 @@ export async function startRobotSession(input: {
     client_id: number;
     client_name: string;
   };
-  if (acc.broker_name !== 'capital_com' && acc.broker_name !== 'crypto_com') {
-    throw new Error('Only Capital.com / Crypto.com accounts supported');
-  }
+  if (acc.broker_name !== 'capital_com') throw new Error('Only Capital.com accounts supported');
 
   let displayName = (input.display_name || '').trim();
   let epic = input.epic.trim();
