@@ -22,6 +22,8 @@ export type BrokerPosition = {
   stop_level: number | null;
   profit_level: number | null;
   upl: number | null;
+  /** Broker open time when known — preserve TIME_STOP clock on orphan adopt */
+  opened_at?: string | null;
 };
 
 export type PlaceOrderInput = {
@@ -330,6 +332,7 @@ export class CapitalBroker implements MasterBroker {
         stop_level: p.stop_level ?? null,
         profit_level: p.profit_level ?? null,
         upl: p.upl ?? null,
+        opened_at: p.opened_at ?? null,
       }));
     return { ok: true, positions };
   }
@@ -396,8 +399,8 @@ export class CapitalBroker implements MasterBroker {
 
     const { isCapitalStopLevelReject } = await import('./capitalConfirm.js');
     const { normalizeSizeForEpic, isCapitalSizeError } = await import('./capitalSize.js');
+    let orderSize = normalizeSizeForEpic(input.epic, input.size).size;
     const sized = normalizeSizeForEpic(input.epic, input.size);
-    const orderSize = sized.size;
 
     let opened = await this.deps.create(this.session, {
       epic: input.epic,
@@ -410,10 +413,11 @@ export class CapitalBroker implements MasterBroker {
     // Size reject → retry once at epic min
     if (!opened.ok && isCapitalSizeError(String(opened.detail || ''))) {
       const minSized = normalizeSizeForEpic(input.epic, sized.rules.minSize);
+      orderSize = minSized.size;
       opened = await this.deps.create(this.session, {
         epic: input.epic,
         direction: input.side,
-        size: minSized.size,
+        size: orderSize,
         stopLevel: input.stop_level,
         profitLevel: input.profit_level,
       });
@@ -457,6 +461,25 @@ export class CapitalBroker implements MasterBroker {
     if (opened.deal_reference) {
       const conf = await this.waitConfirm(opened.deal_reference);
       if (conf.rejected) {
+        // Confirm rejected — still fail-close any same-side fill that landed
+        const listed = await this.listOpenPositions(input.epic);
+        const ghost = listed.positions.find(
+          (p) =>
+            p.side === input.side &&
+            (Math.abs(p.size - orderSize) < 1e-6 || Math.abs(p.size - input.size) < 1e-6)
+        );
+        if (ghost) {
+          await this.deps.close(this.session, ghost.position_id);
+          return {
+            ok: false,
+            order_id: opened.deal_reference || null,
+            position_id: null,
+            fill_price: null,
+            fill_size: null,
+            detail: `capital_rejected_fail_closed:${conf.detail}`,
+            paper: false,
+          };
+        }
         return {
           ok: false,
           order_id: opened.deal_reference || null,
@@ -731,6 +754,16 @@ export class Mt4FileBroker implements MasterBroker {
         stop_level: numOrNull(p.sl ?? p.SL),
         profit_level: numOrNull(p.tp ?? p.TP),
         upl: numOrNull(p.profit ?? p.Profit),
+        opened_at: (() => {
+          const rawT = p.open_time ?? p.OpenTime ?? p.time ?? p.Time ?? null;
+          if (rawT == null || rawT === '') return null;
+          if (typeof rawT === 'number' && Number.isFinite(rawT)) {
+            const ms = rawT < 1e12 ? rawT * 1000 : rawT;
+            return new Date(ms).toISOString();
+          }
+          const d = new Date(String(rawT));
+          return Number.isFinite(d.getTime()) ? d.toISOString() : null;
+        })(),
       }))
       .filter((p: BrokerPosition) => p.position_id && (!epic || epicsMatch(p.epic, epic)));
     return { ok: true, positions };
@@ -788,6 +821,7 @@ export class Mt4FileBroker implements MasterBroker {
         order_id: id,
         position_id: ticket || hit?.position_id || null,
         fill_price: hit?.open_level ?? null,
+        fill_size: hit?.size ?? input.size,
         detail: `mt4_filled ticket=${ticket || hit?.position_id}`,
         paper: false,
       };
@@ -815,6 +849,7 @@ export class Mt4FileBroker implements MasterBroker {
         order_id: id,
         position_id: late.position_id,
         fill_price: late.open_level,
+        fill_size: late.size,
         detail: `mt4_filled_late ticket=${late.position_id}`,
         paper: false,
       };

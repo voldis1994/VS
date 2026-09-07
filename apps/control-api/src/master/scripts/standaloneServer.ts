@@ -45,7 +45,7 @@ async function main() {
   masterRuntime.cfg = {
     ...DEFAULT_MASTER_CONFIG,
     mode: resolved.mode,
-    min_score: 0.4,
+    // Keep DEFAULT_MASTER_CONFIG.min_score (0.55) — do not soften to 0.4 noise trades
     ai_mode: (process.env.MASTER_AI_MODE as any) || 'advisory',
   };
   masterRuntime.attachBroker(resolved.broker);

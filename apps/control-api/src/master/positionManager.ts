@@ -270,6 +270,7 @@ export class PositionManager {
       open_level: number;
       stop_level?: number | null;
       profit_level?: number | null;
+      opened_at?: string | null;
     }>
   ) {
     const brokerIds = new Set(brokerPositions.map((p) => p.position_id));
@@ -282,10 +283,15 @@ export class PositionManager {
         // Refresh protective levels from broker truth when present
         if (bp.stop_level != null) existing.stop_loss = bp.stop_level;
         if (bp.profit_level != null) existing.take_profit = bp.profit_level;
+        if (bp.size > 0) existing.size = bp.size;
         continue;
       }
-      // Orphan broker position — adopt broker SL/TP when available
+      // Orphan broker position — adopt broker SL/TP + open time when available
       const recoverId = stableRecoverUuid(bp.position_id);
+      const entryAt =
+        bp.opened_at && Number.isFinite(Date.parse(bp.opened_at))
+          ? new Date(bp.opened_at).toISOString()
+          : new Date().toISOString();
       this.open.set(bp.position_id, {
         position_id: bp.position_id,
         opportunity_id: recoverId,
@@ -294,7 +300,7 @@ export class PositionManager {
         side: bp.side,
         size: bp.size,
         entry: bp.open_level,
-        entry_at: new Date().toISOString(),
+        entry_at: entryAt,
         stop_loss: bp.stop_level ?? null,
         take_profit: bp.profit_level ?? null,
         mfe: 0,

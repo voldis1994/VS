@@ -290,6 +290,7 @@ describe('VS MASTER MT4 file bridge', () => {
       expect(placed.detail).toMatch(/^mt4_filled/);
       expect(placed.position_id).toBeTruthy();
       expect(placed.fill_price).toBeCloseTo(4400, 5); // SELL fills at bid
+      expect(placed.fill_size).toBe(0.05);
       const ackPath = join(root, 'acks', `ack_${placed.order_id}.json`);
       const ack = JSON.parse(readFileSync(ackPath, 'utf8'));
       expect(ack.ok).toBe(true);

@@ -831,6 +831,7 @@ export type CapitalOpenPosition = {
   upl: number | null;
   stop_level: number | null;
   profit_level: number | null;
+  opened_at: string | null;
 };
 
 /** All open Capital.com positions (REST). */
@@ -867,6 +868,12 @@ export async function listCapitalOpenPositions(
       upl: numOrNull(pos.upl ?? pos.unrealizedProfit ?? pos.profit),
       stop_level: numOrNull(pos.stopLevel ?? pos.stop_level),
       profit_level: numOrNull(pos.profitLevel ?? pos.profit_level),
+      opened_at: (() => {
+        const raw = pos.createdDate ?? pos.created ?? pos.openDate ?? null;
+        if (raw == null || raw === '') return null;
+        const d = new Date(String(raw));
+        return Number.isFinite(d.getTime()) ? d.toISOString() : null;
+      })(),
     });
   }
   return { ok: true, positions, detail: `${positions.length} open` };

@@ -70,6 +70,27 @@ describe('VS MASTER recovery SL + trail', () => {
     );
   });
 
+  it('orphan adopt uses broker opened_at for TIME_STOP clock', async () => {
+    const openedAt = '2026-09-07T18:00:00.000Z';
+    const pm = new PositionManager();
+    pm.reconcileFromBroker([
+      {
+        position_id: 'ticket-old',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 0.1,
+        open_level: 4470,
+        stop_level: 4460,
+        profit_level: 4490,
+        opened_at: openedAt,
+      },
+    ]);
+    const pos = pm.get('ticket-old')!;
+    expect(pos.entry_at).toBe(openedAt);
+    const heldMs = Date.now() - new Date(pos.entry_at).getTime();
+    expect(heldMs).toBeGreaterThan(60_000);
+  });
+
   it('attaches safety SL when orphan has no broker stop', async () => {
     const broker = new PaperBroker();
     await broker.connect();

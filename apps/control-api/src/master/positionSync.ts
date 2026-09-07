@@ -69,6 +69,7 @@ export async function syncPositionsWithBroker(
       open_level: p.open_level,
       stop_level: p.stop_level,
       profit_level: p.profit_level,
+      opened_at: p.opened_at,
     }))
   );
 

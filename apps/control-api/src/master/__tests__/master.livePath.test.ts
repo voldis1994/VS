@@ -326,4 +326,54 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(placed.detail).toBe('CAPITAL_SL_ATTACH_FAILED');
     expect(positions.size).toBe(0);
   });
+
+  it('confirm reject fail-closes same-size ghost fill', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number;
+      }
+    >();
+    const session = { id: 's-rej' };
+    let closed = 0;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session, detail: 'ok' }),
+      quote: async (_s, epic) => ({ bid: 4410, ask: 4410.4, mid: 4410.2, epic, raw_ok: true }),
+      list: async () => ({ ok: true, positions: [...positions.values()], detail: '' }),
+      create: async (_s, input) => {
+        positions.set('ghost-1', {
+          deal_id: 'ghost-1',
+          epic: input.epic,
+          direction: input.direction,
+          size: input.size,
+          open_level: 4410.4,
+        });
+        return { ok: true, deal_reference: 'ref-rej', detail: 'opened' };
+      },
+      confirm: async () => ({ ok: false, rejected: true, detail: 'Capital rejected: RISK_CHECK' }),
+      close: async (_s, dealId) => {
+        closed += 1;
+        positions.delete(dealId);
+        return { ok: true, detail: 'closed' };
+      },
+    });
+    await broker.connect();
+    const placed = await broker.placeOrder({
+      intent_id: 'reject-ghost-intent',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: 4400,
+    });
+    expect(placed.ok).toBe(false);
+    expect(placed.detail).toMatch(/fail_closed/);
+    expect(closed).toBe(1);
+    expect(positions.size).toBe(0);
+  });
 });
