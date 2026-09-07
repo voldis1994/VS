@@ -317,11 +317,15 @@ export async function registerMasterRoutes(app: FastifyInstance) {
     };
   });
 
-  app.get('/api/master/journal', async () => ({
-    opportunities: masterRuntime.pipeline.journal.opportunities.slice(-200),
-    expectancy: masterRuntime.pipeline.expectancy.all(),
-    open_positions: masterRuntime.positions.list(),
-  }));
+  app.get('/api/master/journal', async () => {
+    const surface = masterRuntime.pipeline.journal.surfaceForApi();
+    return {
+      opportunities: surface.opportunities,
+      traded_count: surface.traded_count,
+      expectancy: masterRuntime.pipeline.expectancy.all(),
+      open_positions: masterRuntime.positions.list(),
+    };
+  });
 
   // Live dashboard — polls status; start/stop controls; shows why trading / not
   app.get('/master', async (_req, reply) => {

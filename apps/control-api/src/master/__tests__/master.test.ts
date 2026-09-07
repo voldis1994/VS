@@ -3,6 +3,7 @@ import { analyzeBars } from '../analysis.js';
 import { buildBuyComponents, buildSellComponents, buildCandidates } from '../candidates.js';
 import { decide } from '../decision.js';
 import { ExpectancyStore } from '../expectancy.js';
+import { MasterJournal } from '../journal.js';
 import { computePerformance, monteCarlo } from '../performance.js';
 import {
   DEFAULT_MASTER_CONFIG,
@@ -180,6 +181,68 @@ describe('VS MASTER expectancy + journal', () => {
     expect(snap.samples).toBe(3);
     expect(snap.p_win).toBeCloseTo(2 / 3, 5);
     expect(snap.ev).toBeDefined();
+  });
+
+  it('surfaceForApi keeps closed trades visible amid WAIT noise', () => {
+    const j = new MasterJournal();
+    const stubDecision = {
+      decision_id: 'd',
+      kind: 'WAIT' as const,
+      side: null,
+      score: 0,
+      block_reason: 'noise',
+      buy: null as never,
+      sell: null as never,
+      analysis: {} as never,
+      expectancy: null,
+    };
+    const stubRisk = { allowed: false, volume: 0, risk_amount: 0, reasons: ['wait'] };
+    for (let i = 0; i < 220; i++) {
+      j.recordOpportunity({
+        mode: 'PAPER',
+        epic: 'GOLD',
+        decision: stubDecision,
+        risk: stubRisk,
+        executed: false,
+      });
+    }
+    const traded = j.recordOpportunity({
+      mode: 'PAPER',
+      epic: 'GOLD',
+      decision: { ...stubDecision, kind: 'BUY', side: 'BUY', score: 0.7, block_reason: null },
+      risk: { allowed: true, volume: 1, risk_amount: 10, reasons: [] },
+      executed: true,
+      id: 'trade-time-stop',
+    });
+    j.attachOutcome(traded.id, {
+      position_id: 'p1',
+      side: 'BUY',
+      entry: 2000,
+      exit: 2001,
+      volume: 1,
+      pnl: 1,
+      fees: 0,
+      slippage: 0,
+      mae: 0,
+      mfe: 1,
+      r_multiple: 0.5,
+      hold_ms: 2_700_000,
+      exit_reason: 'TIME_STOP',
+    });
+    // Bury the closed trade under WAIT noise (naive last-200 would miss it)
+    const idx = j.opportunities.findIndex((o) => o.id === 'trade-time-stop');
+    const [row] = j.opportunities.splice(idx, 1);
+    j.opportunities.unshift(row!);
+
+    const naive = j.opportunities.slice(-200);
+    expect(naive.some((o) => o.id === 'trade-time-stop')).toBe(false);
+
+    const surface = j.surfaceForApi(50, 150);
+    expect(surface.traded_count).toBe(1);
+    expect(surface.opportunities.some((o) => o.id === 'trade-time-stop')).toBe(true);
+    expect(surface.opportunities.find((o) => o.id === 'trade-time-stop')?.outcome?.exit_reason).toBe(
+      'TIME_STOP'
+    );
   });
 });
 

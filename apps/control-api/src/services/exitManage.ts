@@ -114,11 +114,12 @@ export function decideBestOutcomeExit(
     };
   }
 
-  // TimeDecay only if trade never made the leg (stale) and not deep red
-  if (heldMs > p.timeDecayMs && fav >= 0 && s.mfe >= mfeFloor * 0.5) {
+  // TimeDecay: trade never made the leg (stale / flat) and not deep red
+  // Inverted gate was mfe >= floor*0.5 which SKIPPED flat mfe=0 holds until hard TIME_STOP
+  if (heldMs > p.timeDecayMs && fav >= 0 && s.mfe < mfeFloor) {
     return {
       exit: true,
-      reason: `TimeDecay · ${book} · held ${Math.round(heldMs / 1000)}s · UPL ${fav.toFixed(5)}`,
+      reason: `TimeDecay · ${book} · held ${Math.round(heldMs / 1000)}s · UPL ${fav.toFixed(5)} · MFE ${s.mfe.toFixed(5)}`,
     };
   }
 

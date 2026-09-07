@@ -598,6 +598,8 @@ class MasterRuntime {
     const builder = new LiveBarBuilder(10_000, 80);
     let seeded = false;
     let busy = false;
+    let lastMid: number | null = null;
+    let frozenPolls = 0;
 
     const cycle = async () => {
       if (!this.running || busy) return;
@@ -622,6 +624,17 @@ class MasterRuntime {
           }
           return;
         }
+        if (lastMid != null && Math.abs(snap.quote.mid - lastMid) < 1e-9) {
+          frozenPolls += 1;
+        } else {
+          frozenPolls = 0;
+        }
+        lastMid = snap.quote.mid;
+        // Frozen consensus mid (~60s): stamp quote stale so entries gate; exits still run
+        const quote =
+          frozenPolls >= 24
+            ? { ...snap.quote, ts_ms: Date.now() - 60_000 }
+            : snap.quote;
         if (!seeded) {
           const seedDetail = await builder.seedFromPublic(this.epic, snap.quote.mid, 50);
           seeded = true;
@@ -635,10 +648,15 @@ class MasterRuntime {
           if (refreshed) {
             this.broker_detail = `${this.broker_detail || ''};${refreshed}`.slice(-400);
           }
+          if (frozenPolls >= 24 && frozenPolls % 24 === 0) {
+            this.broker_detail = `${this.broker_detail || ''};frozen_mid:${frozenPolls}`.slice(
+              -400
+            );
+          }
         }
         const { bars } = builder.pushTick(snap.quote.mid);
         if (bars.length < 5) return;
-        await this.tick(bars, snap.quote);
+        await this.tick(bars, quote);
       } finally {
         busy = false;
       }

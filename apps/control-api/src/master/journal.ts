@@ -45,6 +45,22 @@ export class MasterJournal {
     return this.opportunities.filter((o) => o.executed && o.outcome);
   }
 
+  /**
+   * Dashboard window: always keep recent closed trades visible.
+   * A naive last-N slice can be all WAIT noise while traded_count > 0.
+   */
+  surfaceForApi(tradedCap = 50, restCap = 150): {
+    opportunities: OpportunityRecord[];
+    traded_count: number;
+  } {
+    const traded = this.traded();
+    const rest = this.opportunities.filter((o) => !(o.executed && o.outcome));
+    return {
+      opportunities: [...traded.slice(-tradedCap), ...rest.slice(-restCap)],
+      traded_count: traded.length,
+    };
+  }
+
   blocked(): OpportunityRecord[] {
     return this.opportunities.filter((o) => o.decision.kind === 'BLOCK' || !o.executed);
   }

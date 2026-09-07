@@ -203,4 +203,37 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     );
     expect(d.exit).toBe(false);
   });
+
+  it('SCALP TimeDecay exits flat mfe=0 after timeDecayMs', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        entry_at: ago(500_000),
+        mfe: 0,
+        peak_retention: null,
+        playbook: 'SCALP',
+        regime: 'RANGE',
+      }),
+      2000.1
+    );
+    expect(d.exit).toBe(true);
+    expect(d.reason).toMatch(/TimeDecay/);
+  });
+
+  it('SCALP holds when MFE already made the leg (no soft TimeDecay)', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 2000,
+        entry_at: ago(500_000),
+        mfe: 3.0, // ≥ SCALP mfeFloorAbs 2.8
+        peak_retention: 0.9,
+        playbook: 'SCALP',
+        regime: 'RANGE',
+      }),
+      2002.5
+    );
+    expect(d.exit).toBe(false);
+  });
 });

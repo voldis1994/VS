@@ -224,15 +224,15 @@ describe('playbook exit', () => {
     expect(longHold.exit).toBe(false);
   });
 
-  it('FADE TimeDecay at 5+ min when non-negative', () => {
+  it('FADE TimeDecay at 5+ min when flat / below MFE floor', () => {
     const d = decideBestOutcomeExit(
       {
         open_side: 'BUY',
         entry_price: 2000,
         entry_at: ago(310_000),
-        mfe: 2.5,
+        mfe: 0,
         mae: 0,
-        peak_retention: 0.85,
+        peak_retention: null,
         regime: 'RANGE',
         playbook: 'FADE',
       },
@@ -240,6 +240,23 @@ describe('playbook exit', () => {
     );
     expect(d.exit).toBe(true);
     expect(d.reason).toMatch(/TimeDecay/);
+  });
+
+  it('FADE does not TimeDecay after a real MFE leg', () => {
+    const d = decideBestOutcomeExit(
+      {
+        open_side: 'BUY',
+        entry_price: 2000,
+        entry_at: ago(310_000),
+        mfe: 2.5, // ≥ FADE mfeFloorAbs 2.2 — ride / peak path, not soft decay
+        mae: 0,
+        peak_retention: 0.85,
+        regime: 'RANGE',
+        playbook: 'FADE',
+      },
+      2000.5
+    );
+    expect(d.exit).toBe(false);
   });
 
   it('exit params: ride winners + tight loser cap', () => {
