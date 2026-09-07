@@ -223,12 +223,12 @@ describe('playbook exit', () => {
     expect(longHold.exit).toBe(false);
   });
 
-  it('FADE TimeDecay at 3 min when non-negative', () => {
+  it('FADE TimeDecay at 4+ min when non-negative', () => {
     const d = decideBestOutcomeExit(
       {
         open_side: 'BUY',
         entry_price: 2000,
-        entry_at: ago(190_000),
+        entry_at: ago(250_000),
         mfe: 2,
         mae: 0,
         peak_retention: 0.85,
@@ -241,20 +241,22 @@ describe('playbook exit', () => {
     expect(d.reason).toMatch(/TimeDecay/);
   });
 
-  it('exit params: LONG 65% / SCALP 72% PeakProtect', () => {
-    expect(PLAYBOOK_EXIT.LONG.peakRet).toBe(0.65);
-    expect(PLAYBOOK_EXIT.SCALP.peakRet).toBe(0.72);
-    expect(PLAYBOOK_EXIT.FADE.peakRet).toBe(0.72);
-    expect(PLAYBOOK_EXIT.LONG.thesisMinHoldMs).toBe(60_000);
-    expect(PLAYBOOK_EXIT.SCALP.tpPct).toBe(0.0022);
-    expect(PLAYBOOK_EXIT.FADE.timeDecayMs).toBe(180_000);
+  it('exit params: ride winners (55%) + capped losers', () => {
+    expect(PLAYBOOK_EXIT.LONG.peakRet).toBe(0.55);
+    expect(PLAYBOOK_EXIT.SCALP.peakRet).toBe(0.6);
+    expect(PLAYBOOK_EXIT.FADE.peakRet).toBe(0.6);
+    expect(PLAYBOOK_EXIT.LONG.slCapAbs).toBe(2.2);
+    expect(PLAYBOOK_EXIT.LONG.thesisMinHoldMs).toBe(45_000);
+    expect(PLAYBOOK_EXIT.FADE.timeDecayMs).toBe(240_000);
   });
 
-  it('CONTINUATION setup PeakProtect after ~1pt MFE (locks winners early)', () => {
+  it('CONTINUATION PeakProtect only after ~3pt MFE (not +£0.17 scalp)', () => {
     const p = exitParamsForTrade('LONG', 'CONTINUATION');
-    expect(p.peakRet).toBe(0.65);
-    expect(p.harvestRet).toBe(0.75);
-    expect(p.mfeFloorAbs).toBe(1.0);
+    expect(p.peakRet).toBe(0.55);
+    expect(p.harvestRet).toBe(0.68);
+    expect(p.mfeFloorAbs).toBe(3.0);
+    expect(p.slCapAbs).toBe(2.2);
+    expect(p.tpFloor).toBe(5.0);
   });
 });
 
