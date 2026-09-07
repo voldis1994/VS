@@ -56,3 +56,7 @@ coverage/
 *.pem
 *.key
 credentials.json
+
+# MASTER local runtime state
+.master-state/
+**/.master-state/
