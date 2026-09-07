@@ -277,7 +277,8 @@ export class LiveBarBuilder {
     return { justClosed, bars: this.getAnalysisBars() };
   }
 
-  /** Structure OHLC + meaningful tick overlay + forming bar for freshness. */
+  /** Structure OHLC + forming bar for freshness. Tick overlay kept separate —
+   * even "meaningful" 10s bars poison 5m ATR when merged into the analysis window. */
   getAnalysisBars(): Bar[] {
     const forming: Bar[] = [];
     if (this.open != null) {
@@ -289,7 +290,10 @@ export class LiveBarBuilder {
         ts_ms: this.barStart,
       });
     }
-    const merged = [...this.structureBars, ...this.tickOverlay, ...forming];
+    // Optionally tip with last meaningful tick close for momentum (max 1), not a pile
+    const tip =
+      this.tickOverlay.length > 0 ? [this.tickOverlay[this.tickOverlay.length - 1]!] : [];
+    const merged = [...this.structureBars, ...tip, ...forming];
     return merged.slice(-this.maxBars);
   }
 

@@ -305,6 +305,25 @@ describe('masterOwnsManageSafely', () => {
   });
 });
 
+describe('buildMasterBars 10s hygiene', () => {
+  it('skips flat 10s append that would poison 1m ATR', async () => {
+    const { buildMasterBars } = await import('../deskBridge.js');
+    const minutes = Array.from({ length: 10 }, (_, i) => ({
+      open: 4400 + i,
+      high: 4401 + i,
+      low: 4399 + i,
+      close: 4400.5 + i,
+      snapshotTime: new Date(1_700_000_000_000 + i * 60_000).toISOString(),
+    }));
+    const flat10 = { open: 4410, high: 4410.01, low: 4409.99, close: 4410, ts_ms: Date.now() };
+    const bars = buildMasterBars(minutes as any, flat10 as any);
+    expect(bars.length).toBe(10); // flat 10s not appended
+    const wide10 = { open: 4410, high: 4412, low: 4408, close: 4411, ts_ms: Date.now() };
+    const bars2 = buildMasterBars(minutes as any, wide10 as any);
+    expect(bars2.length).toBe(11);
+  });
+});
+
 describe('MASTER epic alias sync', () => {
   it('GOLD local matches XAUUSD MT4 ticket — does not wipe as broker_flat', async () => {
     expect(normalizeEpicKey('GOLD')).toBe('XAUUSD');

@@ -19,7 +19,13 @@ export function atr(bars: Bar[], n = 14): number {
     const p = slice[i - 1]!;
     trs.push(Math.max(c.high - c.low, Math.abs(c.high - p.close), Math.abs(c.low - p.close)));
   }
-  return mean(trs);
+  if (!trs.length) return 0;
+  // Drop micro TRs from mixed-timeframe pollution (10s onto 1m/5m structure)
+  const sorted = [...trs].sort((a, b) => a - b);
+  const med = sorted[Math.floor(sorted.length / 2)] ?? 0;
+  const usable =
+    med > 1e-9 ? trs.filter((t) => t >= med * 0.15) : trs.filter((t) => t > 0);
+  return mean(usable.length ? usable : trs);
 }
 
 export function analyzeBars(bars: Bar[], spread = 0, nowMs = Date.now()): AnalysisSnapshot {

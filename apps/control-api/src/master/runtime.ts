@@ -603,8 +603,25 @@ class MasterRuntime {
       if (!this.running || busy) return;
       busy = true;
       try {
-        const snap = await fetchLiveMarket(this.epic);
-        if (!snap.ok || !snap.quote) return;
+        let snap: Awaited<ReturnType<typeof fetchLiveMarket>> | null = null;
+        try {
+          snap = await Promise.race([
+            fetchLiveMarket(this.epic),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 8_000)),
+          ]);
+        } catch {
+          snap = null;
+        }
+        // Feed failure must not freeze exits (TIME_STOP / SL) — manage on last bars
+        if (!snap?.ok || !snap.quote) {
+          if (this.last_bars.length >= 5 && this.last_quote) {
+            await this.tick(this.last_bars, {
+              ...this.last_quote,
+              ts_ms: Date.now(),
+            });
+          }
+          return;
+        }
         if (!seeded) {
           const seedDetail = await builder.seedFromPublic(this.epic, snap.quote.mid, 50);
           seeded = true;

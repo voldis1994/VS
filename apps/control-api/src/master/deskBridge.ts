@@ -6,6 +6,7 @@
 import type { CapitalPriceCandle } from '../services/capitalCom.js';
 import type { TenSecBar } from '../services/tenSecondOhlc.js';
 import { createCapitalBroker } from './capitalFactory.js';
+import { isMeaningfulBar } from './liveFeed.js';
 import { masterRuntime } from './runtime.js';
 import type { Bar, Quote } from './types.js';
 
@@ -25,21 +26,25 @@ export function candlesToBars(candles: CapitalPriceCandle[]): Bar[] {
     }));
 }
 
-/** Prefer 1m history; append latest closed 10s bar for freshness. */
+/** Prefer 1m history; append latest closed 10s bar only when meaningful (no ATR poison). */
 export function buildMasterBars(
   minuteCandles: CapitalPriceCandle[],
   closed10s: TenSecBar | null
 ): Bar[] {
   const bars = candlesToBars(minuteCandles);
-  if (closed10s) {
-    bars.push({
-      open: closed10s.open,
-      high: closed10s.high,
-      low: closed10s.low,
-      close: closed10s.close,
-      ts_ms: Date.now(),
-    });
-  }
+  if (!closed10s) return bars;
+  const last = bars.at(-1);
+  const minRange = last
+    ? Math.max(0.05, (last.high - last.low) * 0.15)
+    : 0.05;
+  const micro: Bar = {
+    open: closed10s.open,
+    high: closed10s.high,
+    low: closed10s.low,
+    close: closed10s.close,
+    ts_ms: Date.now(),
+  };
+  if (isMeaningfulBar(micro, minRange)) bars.push(micro);
   return bars;
 }
 

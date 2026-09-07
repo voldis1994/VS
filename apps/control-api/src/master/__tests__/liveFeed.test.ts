@@ -51,6 +51,23 @@ describe('VS MASTER live bar builder', () => {
     expect(after.buy_pressure).toBeGreaterThan(0);
     expect(isMeaningfulBar({ open: 1, high: 1, low: 1, close: 1 })).toBe(false);
   });
+
+  it('ATR ignores micro TRs mixed into structure (10s onto 5m)', () => {
+    const structure = Array.from({ length: 20 }, (_, i) => {
+      const o = 4400 + i;
+      return { open: o, high: o + 2, low: o - 2, close: o + 1, ts_ms: i * 300_000 };
+    });
+    const poisoned = [
+      ...structure,
+      { open: 4420, high: 4420.02, low: 4419.98, close: 4420, ts_ms: 20 * 300_000 },
+      { open: 4420, high: 4420.01, low: 4419.99, close: 4420, ts_ms: 20 * 300_000 + 10_000 },
+    ];
+    const clean = analyzeBars(structure, 0.4);
+    const dirty = analyzeBars(poisoned, 0.4);
+    // Micro bars must not collapse ATR toward zero
+    expect(dirty.atr).toBeGreaterThan(clean.atr * 0.7);
+    expect(dirty.atr).toBeGreaterThan(1);
+  });
 });
 
 describe('MASTER TIME_STOP + breakeven', () => {
