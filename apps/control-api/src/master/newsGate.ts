@@ -5,10 +5,12 @@
  * 1. MASTER_NEWS_FILTER=true → Check- style force-block (treat as high impact)
  * 2. MASTER_NEWS_IMPACT=high|medium|low|off
  * 3. MASTER_STATE_DIR/news_window.json { impact, until_ms? }
- * 4. UTC calendar heuristic (NFP first Friday 12:25–14:30 UTC)
+ * 4. Forex Factory weekly calendar cache (VS-System faireconomy) for symbol
+ * 5. UTC calendar heuristic (NFP first Friday 12:25–14:30 UTC)
  */
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { isNewsCalendarBlocked } from './newsCalendar.js';
 
 export type NewsImpact = 'off' | 'low' | 'medium' | 'high';
 
@@ -79,7 +81,10 @@ function loadNewsFile(): NewsWindowState | null {
 }
 
 /** Resolve current news window from env / file / calendar. */
-export function resolveNewsWindow(nowMs = Date.now()): NewsWindowState {
+export function resolveNewsWindow(
+  nowMs = Date.now(),
+  symbol?: string | null
+): NewsWindowState {
   // Check- style: when filter toggle is ON, block all new entries
   const filterOn = /^(1|true|yes|on)$/i.test(
     String(process.env.MASTER_NEWS_FILTER || '')
@@ -106,6 +111,21 @@ export function resolveNewsWindow(nowMs = Date.now()): NewsWindowState {
   const file = loadNewsFile();
   if (file) return file;
 
+  // VS-System Forex Factory weekly feed (cache filled by runtime refresh)
+  const cal = isNewsCalendarBlocked({
+    symbol: symbol || 'GOLD',
+    nowMs,
+    minImpact: 'High',
+  });
+  if (cal.blocked) {
+    return {
+      impact: 'high',
+      window_active: true,
+      source: 'calendar_ff',
+      detail: cal.reason || 'forex_factory_high_impact',
+    };
+  }
+
   if (isNfpWindowUtc(nowMs)) {
     return {
       impact: 'high',
@@ -129,12 +149,20 @@ export function resolveNewsWindow(nowMs = Date.now()): NewsWindowState {
  */
 export function newsBlocksEntries(
   blockHighImpact: boolean,
-  nowMs = Date.now()
+  nowMs = Date.now(),
+  symbol?: string | null
 ): { blocked: boolean; reason: string | null; state: NewsWindowState } {
-  const state = resolveNewsWindow(nowMs);
+  const state = resolveNewsWindow(nowMs, symbol);
   const high = state.window_active && state.impact === 'high';
   if (blockHighImpact && high) {
-    return { blocked: true, reason: 'news_high_impact', state };
+    return {
+      blocked: true,
+      reason:
+        state.source === 'calendar_ff'
+          ? state.detail.slice(0, 80) || 'news_high_impact'
+          : 'news_high_impact',
+      state,
+    };
   }
   return { blocked: false, reason: null, state };
 }

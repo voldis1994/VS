@@ -29,10 +29,15 @@ export function applyMarketFilters(
   cfg: MasterConfig,
   nowMs = Date.now(),
   bars?: Bar[] | null,
-  relativeSpread?: number | null
+  relativeSpread?: number | null,
+  symbol?: string | null
 ): FilterVerdict {
   const weekend = isWeekendUtc(nowMs);
-  const news = newsBlocksEntries(cfg.block_high_impact_news, nowMs);
+  const news = newsBlocksEntries(
+    cfg.block_high_impact_news,
+    nowMs,
+    symbol ?? quote.epic ?? null
+  );
   const relVol = calculateRelativeVolatility(bars, cfg.volatility_lookback_bars);
   const relOk = relativeVolatilityAcceptable(relVol, cfg.max_relative_volatility);
   const relSpread =

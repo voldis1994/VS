@@ -141,6 +141,8 @@ async function main() {
       'src/master/scalpPctChase.ts',
       'src/master/candleBias.ts',
       'src/master/moneyExit.ts',
+      'src/master/capitalLoginLock.ts',
+      'src/master/newsCalendar.ts',
       'src/master/persist.ts',
       'src/master/filePersist.ts',
       'src/master/liveFeed.ts',

@@ -30,6 +30,7 @@ import { setupKey } from './decision.js';
 import { loadRuntimeGates, saveRuntimeGates } from './runtimeGates.js';
 import { loadOwnsPipelinePref, saveOwnsPipelinePref } from './ownsPipelinePref.js';
 import { resolveNewsWindow, type NewsWindowState } from './newsGate.js';
+import { refreshNewsCalendar } from './newsCalendar.js';
 import { SpreadHistory } from './spreadModel.js';
 import type {
   AccountSnapshot,
@@ -392,6 +393,9 @@ class MasterRuntime {
       this.spreadHistory = new SpreadHistory(this.spreadLookback);
     }
     const spreadSnap = this.spreadHistory.push(quote.spread);
+
+    // Refresh Forex Factory news calendar cache (VS-System) before entry filters
+    await refreshNewsCalendar().catch(() => undefined);
 
     // 0) Reconcile broker truth every tick — drop ghosts, adopt orphans (VS-System-)
     // Empty-book ghost wipe requires 5 consecutive successful empties (debounce).
@@ -1046,7 +1050,7 @@ class MasterRuntime {
       last_persist_error: this.last_persist_error,
       entries_armed: this.entries_armed,
       entries_pause_reason: this.entries_pause_reason,
-      news_window: resolveNewsWindow(),
+      news_window: resolveNewsWindow(Date.now(), this.epic),
     };
   }
 }

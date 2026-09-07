@@ -36,3 +36,5 @@ export * from './multiTp.js';
 export * from './moneyExit.js';
 export * from './scalpPctChase.js';
 export * from './candleBias.js';
+export * from './capitalLoginLock.js';
+export * from './newsCalendar.js';

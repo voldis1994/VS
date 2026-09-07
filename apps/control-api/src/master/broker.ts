@@ -2,6 +2,7 @@
 import { randomUUID } from 'crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
+import { createLoginLockState, withLoginLock } from './capitalLoginLock.js';
 import type { Side } from './types.js';
 
 export type BrokerQuote = {
@@ -307,6 +308,8 @@ export class CapitalBroker implements MasterBroker {
   readonly supportsPartialClose = true;
   private session: any = null;
   private processed = new Set<string>();
+  /** VS-System: serialize all Capital REST for this broker instance */
+  private readonly loginLock = createLoginLockState();
   /** Last dealingRules seen per epic from markets quote */
   private dealRulesByEpic = new Map<
     string,
@@ -316,7 +319,7 @@ export class CapitalBroker implements MasterBroker {
   private minStopByEpic = new Map<string, number>();
 
   constructor(
-    private readonly deps: {
+    rawDeps: {
       acquire: (input: any) => Promise<{ ok: boolean; session?: any; detail: string }>;
       quote: (session: any, epic: string) => Promise<any>;
       list: (session: any) => Promise<any>;
@@ -366,7 +369,83 @@ export class CapitalBroker implements MasterBroker {
       }>;
       credentials: any;
     }
-  ) {}
+  ) {
+    // VS-System withLoginLock: every Capital REST dep serializes; nested
+    // place→confirm→list reenters via AsyncLocalStorage.
+    const lock = this.loginLock;
+    this.deps = {
+      credentials: rawDeps.credentials,
+      acquire: (input) => withLoginLock(lock, () => rawDeps.acquire(input)),
+      quote: (s, e) => withLoginLock(lock, () => rawDeps.quote(s, e)),
+      list: (s) => withLoginLock(lock, () => rawDeps.list(s)),
+      create: (s, i) => withLoginLock(lock, () => rawDeps.create(s, i)),
+      close: (s, d, sz) => withLoginLock(lock, () => rawDeps.close(s, d, sz)),
+      modify: rawDeps.modify
+        ? (s, i) => withLoginLock(lock, () => rawDeps.modify!(s, i))
+        : undefined,
+      confirm: rawDeps.confirm
+        ? (s, r) => withLoginLock(lock, () => rawDeps.confirm!(s, r))
+        : undefined,
+      account: rawDeps.account
+        ? (s) => withLoginLock(lock, () => rawDeps.account!(s))
+        : undefined,
+      ensureAccount: rawDeps.ensureAccount
+        ? (s) => withLoginLock(lock, () => rawDeps.ensureAccount!(s))
+        : undefined,
+      prices: rawDeps.prices
+        ? (s, e, r, m) => withLoginLock(lock, () => rawDeps.prices!(s, e, r, m))
+        : undefined,
+    };
+  }
+
+  private readonly deps: {
+    acquire: (input: any) => Promise<{ ok: boolean; session?: any; detail: string }>;
+    quote: (session: any, epic: string) => Promise<any>;
+    list: (session: any) => Promise<any>;
+    create: (session: any, input: any) => Promise<any>;
+    close: (session: any, dealId: string, size?: number) => Promise<any>;
+    modify?: (
+      session: any,
+      input: { dealId: string; stopLevel?: number | null; profitLevel?: number | null }
+    ) => Promise<{ ok: boolean; detail: string; deal_reference?: string }>;
+    confirm?: (
+      session: any,
+      ref: string
+    ) => Promise<{
+      ok: boolean;
+      deal_id?: string;
+      fill_level?: number;
+      detail: string;
+      rejected?: boolean;
+      pending?: boolean;
+    }>;
+    account?: (
+      session: any
+    ) => Promise<{
+      equity: number;
+      balance: number;
+      currency: string;
+      available?: number | null;
+    } | null>;
+    ensureAccount?: (session: any) => Promise<{ ok: boolean; detail: string }>;
+    prices?: (
+      session: any,
+      epic: string,
+      resolution: 'MINUTE' | 'HOUR',
+      max: number
+    ) => Promise<{
+      ok: boolean;
+      candles: Array<{
+        open: number;
+        high: number;
+        low: number;
+        close: number;
+        snapshotTime?: string;
+      }>;
+      detail: string;
+    }>;
+    credentials: any;
+  };
 
   /** VS-System: pin correct Capital account before create/modify/close/list. */
   private async ensureActiveAccount(): Promise<{ ok: boolean; detail: string }> {

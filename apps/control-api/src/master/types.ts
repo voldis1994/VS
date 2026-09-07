@@ -29,6 +29,8 @@ export type Quote = {
   mid: number;
   spread: number;
   ts_ms: number;
+  /** Optional epic for news calendar / broker routing */
+  epic?: string;
   /** Optional live Capital min-stop distance from dealingRules */
   min_stop_distance?: number | null;
 };
