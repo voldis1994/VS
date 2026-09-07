@@ -21,3 +21,4 @@ export * from './capitalFactory.js';
 export * from './capitalConfirm.js';
 export * from './deskBridge.js';
 export * from './positionSync.js';
+export * from './envBroker.js';

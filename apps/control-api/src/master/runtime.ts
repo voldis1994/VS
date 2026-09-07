@@ -35,6 +35,7 @@ export type MasterStatus = {
   running: boolean;
   kill_switch: boolean;
   broker: string | null;
+  broker_detail: string | null;
   last_decision: ReturnType<typeof decide> | null;
   last_risk: ReturnType<typeof evaluateRisk> | null;
   last_block_reason: string | null;
@@ -90,6 +91,9 @@ class MasterRuntime {
   recovered = false;
   /** VS-System- style: block new entries while an order is in-flight without a position yet. */
   private inflight_until_ms = 0;
+  /** VS-System-: cool down after broker reject (e.g. RISK_CHECK). */
+  private reject_until_ms = 0;
+  broker_detail: string | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private seenIntentSnapshot: string[] = [];
   epic = GOLD_SPEC.epic;
@@ -222,12 +226,14 @@ class MasterRuntime {
 
     const inflight =
       Date.now() < this.inflight_until_ms || this.positions.count() > 0;
+    const rejectCool = Date.now() < this.reject_until_ms;
     if (
       this.running &&
       (this.cfg.mode === 'PAPER' || allow_live) &&
       (cycle.decision.kind === 'BUY' || cycle.decision.kind === 'SELL') &&
       cycle.risk.allowed &&
-      !inflight
+      !inflight &&
+      !rejectCool
     ) {
       this.inflight_until_ms = Date.now() + 90_000;
       const { execution, place } = await executeDecision({
@@ -270,19 +276,24 @@ class MasterRuntime {
         });
       } else if (!execution.accepted) {
         this.inflight_until_ms = 0;
+        if (/reject|RISK_CHECK|not_confirmed/i.test(execution.detail)) {
+          this.reject_until_ms = Date.now() + 120_000;
+        }
       }
     } else if (cycle.decision.kind === 'BUY' || cycle.decision.kind === 'SELL') {
       execution_detail = !this.running
         ? 'runtime_stopped'
-        : inflight
-          ? this.positions.count() > 0
-            ? 'one_trade_open'
-            : 'inflight_order'
-          : !cycle.risk.allowed
-            ? `risk:${cycle.risk.reasons.join(',')}`
-            : this.cfg.mode === 'LIVE' && !allow_live
-              ? 'live_gate_off'
-              : 'not_armed';
+        : rejectCool
+          ? 'reject_cooldown'
+          : inflight
+            ? this.positions.count() > 0
+              ? 'one_trade_open'
+              : 'inflight_order'
+            : !cycle.risk.allowed
+              ? `risk:${cycle.risk.reasons.join(',')}`
+              : this.cfg.mode === 'LIVE' && !allow_live
+                ? 'live_gate_off'
+                : 'not_armed';
       this.last_execution_detail = execution_detail;
     }
 
@@ -356,6 +367,7 @@ class MasterRuntime {
       running: this.running,
       kill_switch: this.cfg.kill_switch,
       broker: this.broker?.name ?? null,
+      broker_detail: this.broker_detail,
       last_decision: this.last_decision,
       last_risk: this.last_risk,
       last_block_reason:

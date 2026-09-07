@@ -1,6 +1,6 @@
 /**
  * Standalone VS MASTER HTTP server — no Postgres required.
- * Serves real dashboard + paper tick loop + file restart recovery.
+ * PAPER by default; LIVE if MASTER_LIVE_ENABLED + CAPITAL_* env present.
  *
  *   npx tsx src/master/scripts/standaloneServer.ts
  *   open http://127.0.0.1:3040/master
@@ -10,6 +10,7 @@ import { registerMasterRoutes } from '../../routes/master.js';
 import { masterRuntime } from '../runtime.js';
 import { DEFAULT_MASTER_CONFIG } from '../pipeline.js';
 import { installFilePersist } from '../filePersist.js';
+import { resolveBrokerFromEnv } from '../envBroker.js';
 import type { Bar } from '../types.js';
 
 const PORT = parseInt(process.env.MASTER_STANDALONE_PORT || '3040', 10);
@@ -39,14 +40,16 @@ async function main() {
   const stateDir = process.env.MASTER_STATE_DIR || '/tmp/vs-master-state';
   installFilePersist(stateDir);
 
+  const resolved = await resolveBrokerFromEnv();
   masterRuntime.cfg = {
     ...DEFAULT_MASTER_CONFIG,
-    mode: 'PAPER',
+    mode: resolved.mode,
     min_score: 0.4,
-    ai_mode: 'advisory',
+    ai_mode: (process.env.MASTER_AI_MODE as any) || 'advisory',
   };
-  masterRuntime.ensurePaperBroker();
-  await masterRuntime.start(); // recovers from file persist
+  masterRuntime.attachBroker(resolved.broker);
+  masterRuntime.broker_detail = resolved.detail;
+  await masterRuntime.start({ broker: resolved.broker });
 
   const app = Fastify({ logger: false });
   await registerMasterRoutes(app);
@@ -55,39 +58,45 @@ async function main() {
     master: true,
     standalone: true,
     state_dir: stateDir,
+    broker: resolved.broker.name,
+    detail: resolved.detail,
+    mode: resolved.mode,
   }));
 
-  let bars = synthBars(40, 4400, 0.7);
-  let tickN = 0;
-  setInterval(() => {
-    tickN += 1;
-    const last = bars.at(-1)!;
-    const drift = tickN < 25 ? 0.55 : -2.2;
-    const o = last.close;
-    const c = o + drift;
-    bars = [
-      ...bars.slice(-50),
-      {
-        open: o,
-        high: Math.max(o, c) + 0.35,
-        low: Math.min(o, c) - 0.25,
-        close: c,
+  // Synthetic feed only for PAPER — LIVE should be fed by desk / real quotes
+  if (resolved.mode === 'PAPER' && resolved.broker.paper) {
+    let bars = synthBars(40, 4400, 0.7);
+    let tickN = 0;
+    setInterval(() => {
+      tickN += 1;
+      const last = bars.at(-1)!;
+      const drift = tickN < 25 ? 0.55 : -2.2;
+      const o = last.close;
+      const c = o + drift;
+      bars = [
+        ...bars.slice(-50),
+        {
+          open: o,
+          high: Math.max(o, c) + 0.35,
+          low: Math.min(o, c) - 0.25,
+          close: c,
+          ts_ms: Date.now(),
+        },
+      ];
+      const mid = c;
+      void masterRuntime.tick(bars, {
+        bid: mid - 0.2,
+        ask: mid + 0.2,
+        mid,
+        spread: 0.4,
         ts_ms: Date.now(),
-      },
-    ];
-    const mid = c;
-    // Always tick so open positions can exit; execution gate honors running flag
-    void masterRuntime.tick(bars, {
-      bid: mid - 0.2,
-      ask: mid + 0.2,
-      mid,
-      spread: 0.4,
-      ts_ms: Date.now(),
-    });
-  }, 1500);
+      });
+    }, 1500);
+  }
 
   await app.listen({ port: PORT, host: HOST });
   console.log(`VS MASTER standalone on http://${HOST}:${PORT}/master`);
+  console.log(`broker=${resolved.broker.name} mode=${resolved.mode} ${resolved.detail}`);
   console.log(`state dir: ${stateDir}`);
 }
 

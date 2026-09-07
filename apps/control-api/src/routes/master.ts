@@ -49,9 +49,17 @@ export async function registerMasterRoutes(app: FastifyInstance) {
     if (masterRuntime.cfg.mode === 'LIVE' && process.env.MASTER_LIVE_ENABLED !== 'true') {
       return { ok: false, detail: 'LIVE blocked — MASTER_LIVE_ENABLED not set' };
     }
-    if (!masterRuntime.broker) masterRuntime.ensurePaperBroker();
-    await masterRuntime.start();
-    return { ok: true, status: masterRuntime.status() };
+    const { resolveBrokerFromEnv } = await import('../master/envBroker.js');
+    const resolved = await resolveBrokerFromEnv();
+    if (resolved.mode === 'LIVE' && process.env.MASTER_LIVE_ENABLED !== 'true') {
+      return { ok: false, detail: 'LIVE broker resolved but MASTER_LIVE_ENABLED not set' };
+    }
+    masterRuntime.attachBroker(resolved.broker);
+    masterRuntime.broker_detail = resolved.detail;
+    if (resolved.mode === 'LIVE') masterRuntime.setMode('LIVE');
+    else if (masterRuntime.cfg.mode !== 'LIVE') masterRuntime.setMode('PAPER');
+    await masterRuntime.start({ broker: resolved.broker });
+    return { ok: true, broker: resolved.broker.name, detail: resolved.detail, status: masterRuntime.status() };
   });
 
   app.post('/api/master/stop', async () => {
