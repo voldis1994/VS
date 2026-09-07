@@ -240,6 +240,10 @@ class MasterRuntime {
     const pnlPts = pos.side === 'BUY' ? fill - pos.entry : pos.entry - fill;
     const pnl = pnlPts * pos.size * instrument.value_per_point_per_lot;
     const heldMs = Date.now() - new Date(pos.entry_at).getTime();
+    const riskDist = Math.max(
+      Math.abs((pos.stop_loss ?? pos.entry) - pos.entry),
+      Number.EPSILON
+    );
     const outcome: TradeOutcome = {
       position_id: pos.position_id,
       side: pos.side,
@@ -251,7 +255,7 @@ class MasterRuntime {
       slippage: Math.abs(fill - quote.mid),
       mae: pos.mae,
       mfe: pos.mfe,
-      r_multiple: 0,
+      r_multiple: pnlPts / riskDist,
       hold_ms: heldMs,
       exit_reason: reason,
     };
@@ -487,7 +491,9 @@ class MasterRuntime {
     return result;
   }
 
-  private async tickUnlocked(bars: Bar[], quote: Quote): Promise<TickResult> {
+  private async tickUnlocked(bars: Bar[], quoteIn: Quote): Promise<TickResult> {
+    // Always stamp runtime epic — public/desk quotes often omit it (news targeting).
+    const quote: Quote = { ...quoteIn, epic: quoteIn.epic || this.epic };
     this.last_bars = bars;
     this.last_quote = quote;
     this.rollDailyPnl();
@@ -1149,6 +1155,11 @@ class MasterRuntime {
     if (this.liveFeedTimer) {
       clearInterval(this.liveFeedTimer);
       this.liveFeedTimer = null;
+    }
+    // Refuse empty overwrite before recover — otherwise Stop on a fresh
+    // process wipes durable opens that recover() has not loaded yet.
+    if (this.positions.count() === 0 && !this.recovered) {
+      return;
     }
     this.trackPersist('open_positions', saveOpenPositions(this.positions.list()));
   }

@@ -180,6 +180,40 @@ async function main() {
   await app.listen({ port: PORT, host: HOST });
   console.log(`Control API listening on ${HOST}:${PORT}`);
 
+  // Optional MASTER resume — recover durable opens + restart manage/feed after API boot.
+  // Off by default so desk/multi-tenant control-api does not surprise-trade.
+  if (process.env.MASTER_AUTO_START === 'true') {
+    try {
+      const { masterRuntime } = await import('./master/runtime.js');
+      const { resolveBrokerFromEnv } = await import('./master/envBroker.js');
+      const { ensureMasterPersist } = await import('./master/dualPersist.js');
+      ensureMasterPersist();
+      const resolved = await resolveBrokerFromEnv();
+      if (!resolved.ok && resolved.mode === 'LIVE') {
+        console.warn(
+          `MASTER_AUTO_START refused LIVE broker: ${resolved.detail}`
+        );
+      } else {
+        masterRuntime.attachBroker(resolved.broker);
+        masterRuntime.broker_detail = resolved.detail;
+        masterRuntime.setMode(resolved.mode);
+        const live_feed =
+          resolved.mode === 'PAPER' &&
+          resolved.broker.paper &&
+          (process.env.MASTER_LIVE_FEED || 'public') !== 'off';
+        await masterRuntime.start({
+          broker: resolved.broker,
+          live_feed,
+        });
+        console.log(
+          `MASTER_AUTO_START ok mode=${resolved.mode} detail=${resolved.detail} recovered=${masterRuntime.recovered}`
+        );
+      }
+    } catch (err) {
+      console.warn('MASTER_AUTO_START failed', err);
+    }
+  }
+
   setInterval(() => {
     telemetry.broadcast({
       type: 'heartbeat',

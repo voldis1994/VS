@@ -13,18 +13,45 @@ function barTrueRange(bar: Bar, previousClose: number | null): number {
   return Math.max(range, Math.abs(high - previousClose), Math.abs(low - previousClose));
 }
 
+function barSpan(bar: Bar): number {
+  return Math.max(
+    Number(bar.high) - Number(bar.low),
+    Math.abs(Number(bar.close) - Number(bar.open))
+  );
+}
+
+/**
+ * Drop trailing point/forming tick bars before relative-vol.
+ * Live mid tipped onto Yahoo/Capital structure creates a gap-TR spike
+ * (flat forming bar vs prior 5m close) that falsely trips the filter.
+ */
+export function structureBarsForVolatility(bars: Bar[] | null | undefined): Bar[] {
+  if (!bars?.length) return [];
+  let end = bars.length;
+  while (end > 0) {
+    const b = bars[end - 1]!;
+    if (!(barSpan(b) > 1e-9)) {
+      end -= 1;
+      continue;
+    }
+    break;
+  }
+  return bars.slice(0, end);
+}
+
 /** Current bar TR / mean TR in lookback window. 0 when empty/flat; Infinity if mean=0 but current>0. */
 export function calculateRelativeVolatility(
   bars: Bar[] | null | undefined,
   lookbackBars = 14
 ): number {
-  if (!bars?.length || lookbackBars <= 0) return 0;
-  const window = bars.slice(-lookbackBars);
-  const windowStart = bars.length - window.length;
+  const structure = structureBarsForVolatility(bars);
+  if (!structure.length || lookbackBars <= 0) return 0;
+  const window = structure.slice(-lookbackBars);
+  const windowStart = structure.length - window.length;
   const trueRanges: number[] = [];
   for (let offset = 0; offset < window.length; offset++) {
     const barIndex = windowStart + offset;
-    const prev = barIndex > 0 ? Number(bars[barIndex - 1]!.close) : null;
+    const prev = barIndex > 0 ? Number(structure[barIndex - 1]!.close) : null;
     trueRanges.push(barTrueRange(window[offset]!, prev));
   }
   const current = trueRanges[trueRanges.length - 1] ?? 0;

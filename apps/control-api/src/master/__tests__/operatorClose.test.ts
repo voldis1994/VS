@@ -98,11 +98,11 @@ describe('operator close + manage config', () => {
     expect(r.ok).toBe(true);
     expect(masterRuntime.positions.count()).toBe(0);
     expect(masterRuntime.last_exit_reason).toBe('OPERATOR_CLOSE');
-    expect(
-      masterRuntime.pipeline.journal.opportunities.some(
-        (o) => o.outcome?.exit_reason === 'OPERATOR_CLOSE'
-      )
-    ).toBe(true);
+    expect(r.pnl).toBeGreaterThan(0);
+    const opp = masterRuntime.pipeline.journal.opportunities.find(
+      (o) => o.outcome?.exit_reason === 'OPERATOR_CLOSE'
+    );
+    expect(opp?.outcome?.r_multiple).toBeGreaterThan(0);
   });
 
   it('flattenAll closes every open', async () => {

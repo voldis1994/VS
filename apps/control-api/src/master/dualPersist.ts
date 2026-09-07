@@ -35,7 +35,22 @@ export class DualPersist implements PersistClient {
     }
 
     try {
-      return await this.primary.query(sql, params);
+      const primaryResult = await this.primary.query(sql, params);
+      // Postgres up but empty/stale while mirror still has recovery rows —
+      // prefer non-empty mirror so restart does not ghost-wipe opens/journal.
+      if (
+        Array.isArray(primaryResult.rows) &&
+        primaryResult.rows.length === 0 &&
+        /master_open_positions|master_seen_intents|master_opportunities|master_trade_outcomes/i.test(
+          sql
+        )
+      ) {
+        const mirrorResult = await this.mirror.query(sql, params);
+        if (Array.isArray(mirrorResult.rows) && mirrorResult.rows.length > 0) {
+          return mirrorResult;
+        }
+      }
+      return primaryResult;
     } catch {
       return this.mirror.query(sql, params);
     }

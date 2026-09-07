@@ -76,13 +76,15 @@ async function main() {
     const ok =
       r.ok &&
       typeof demo?.status === 'string' &&
-      (demo.status === 'PASS_LIVE_DATA_TRADED' || demo.status === 'PASS_LIVE_DATA_DECIDED');
+      (demo.status === 'PASS_LIVE_DATA_TRADED' ||
+        demo.status === 'PASS_LIVE_DATA_DECIDED') &&
+      demo.forced_live_paper_fill !== true;
     checks.push({
       id: 'live_market_paper',
       requirement: 'Live market data → decision → paper execution (paper mode)',
       ok,
       detail: demo
-        ? `${demo.status} mid=${demo.first_mid} feed=${demo.feed} executed=${demo.executed_cycles}`
+        ? `${demo.status} mid=${demo.first_mid} feed=${demo.feed} executed=${demo.executed_cycles} forced=${!!demo.forced_live_paper_fill}`
         : r.out.slice(-500),
     });
   }

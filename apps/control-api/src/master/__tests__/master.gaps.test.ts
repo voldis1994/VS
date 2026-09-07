@@ -12,6 +12,7 @@ import { syncPositionsWithBroker } from '../positionSync.js';
 import { masterRuntime } from '../runtime.js';
 import { updateSpreadModel } from '../spreadModel.js';
 import type { AnalysisSnapshot, Quote } from '../types.js';
+import { calculateRelativeVolatility } from '../volatility.js';
 
 function baseAnalysis(over: Partial<AnalysisSnapshot> = {}): AnalysisSnapshot {
   return {
@@ -279,6 +280,36 @@ describe('MASTER filters + dual flow', () => {
     );
     expect(fail.ok).toBe(false);
     expect(fail.reason).toBe('relative_volatility');
+  });
+
+  it('ignores trailing flat forming tip for relative volatility (live mid gap)', () => {
+    const structure = Array.from({ length: 20 }, (_, i) => ({
+      open: 4400 + i * 0.1,
+      high: 4400.4 + i * 0.1,
+      low: 4399.7 + i * 0.1,
+      close: 4400.2 + i * 0.1,
+      ts_ms: i * 60_000,
+    }));
+    // Live tip ~20pts below last structure close — gap TR would false-trip without strip
+    const withForming = [
+      ...structure,
+      {
+        open: 4380,
+        high: 4380,
+        low: 4380,
+        close: 4380,
+        ts_ms: Date.now(),
+      },
+    ];
+    expect(calculateRelativeVolatility(withForming, 14)).toBeLessThan(1.5);
+    const pass = applyMarketFilters(
+      baseAnalysis({ volatility: 0.001 }),
+      quote,
+      DEFAULT_MASTER_CONFIG,
+      Date.UTC(2026, 8, 7, 12),
+      withForming
+    );
+    expect(pass.ok).toBe(true);
   });
 
   it('hard-blocks relative spread spike (Reader-style)', () => {

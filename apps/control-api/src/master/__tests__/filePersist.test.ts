@@ -270,6 +270,118 @@ describe('VS MASTER dual persist (DB fail → file mirror)', () => {
     installFilePersist(dir);
     expect(await loadSeenIntents()).toContain('flaky-intent');
   });
+
+  it('reads mirror when primary is up but empty (stale PG)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vs-master-dual-empty-'));
+    const mirror = new FilePersist(dir);
+    const emptyPrimary: PersistClientLike = {
+      async query(sql: string) {
+        if (/INSERT|UPDATE|DELETE/i.test(sql)) return { rows: [], rowCount: 0 };
+        return { rows: [] };
+      },
+    };
+    // Seed mirror via dual write (primary no-ops, mirror keeps rows)
+    setPersistClient(new DualPersist(emptyPrimary as any, mirror));
+    const pm = new PositionManager();
+    pm.register({
+      position_id: 'empty-pg-pos',
+      opportunity_id: '00000000-0000-4000-8000-000000000099',
+      intent_id: 'empty-pg-intent',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4410,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {
+          regime: 'RANGE',
+          market_state: 't',
+          momentum_score: 0,
+          momentum_dir: 'NEUTRAL',
+          trend_dir: 'SIDEWAYS',
+          trend_strength: 0.2,
+          structure_bias: 'NEUTRAL',
+          swing_high: 4420,
+          swing_low: 4400,
+          buy_pressure: 0.5,
+          sell_pressure: 0.5,
+          behavior_bull: 0.5,
+          behavior_bear: 0.5,
+          impact_score: 0.5,
+          context_quality: 0.5,
+          volatility: 0.001,
+          atr: 1,
+        },
+        expectancy: null,
+      },
+    });
+    expect(await saveOpenPositions(pm.list())).toBe(true);
+
+    const mirror2 = new FilePersist(dir);
+    setPersistClient(new DualPersist(emptyPrimary as any, mirror2));
+    const loaded = await loadOpenPositions();
+    expect(loaded.length).toBe(1);
+    expect(loaded[0]!.position_id).toBe('empty-pg-pos');
+  });
+});
+
+describe('VS MASTER stop() empty-wipe guard', () => {
+  afterEach(() => {
+    setPersistClient(null);
+    masterRuntime.stop();
+  });
+
+  it('does not wipe durable opens when stop() runs before recover', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vs-master-stop-guard-'));
+    installFilePersist(dir);
+    const pm = new PositionManager();
+    const pipe = new MasterPipeline('PAPER');
+    const bars = barsTrendUp();
+    const cycle = await pipe.runCycle({
+      bars,
+      quote: quoteFrom(bars.at(-1)!),
+      account: {
+        equity: 10_000,
+        balance: 10_000,
+        currency: 'GBP',
+        open_positions: 0,
+        daily_pnl: 0,
+        peak_equity: 10_000,
+        consecutive_losses: 0,
+      },
+      instrument: GOLD_SPEC,
+      cfg: DEFAULT_MASTER_CONFIG,
+    });
+    pm.register({
+      position_id: 'guard-pos-1',
+      opportunity_id: cycle.opportunity.id,
+      intent_id: 'guard-intent-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4410,
+      decision: cycle.decision,
+    });
+    expect(await saveOpenPositions(pm.list())).toBe(true);
+
+    // Fresh runtime — unrecovered, empty in-memory book
+    masterRuntime.pipeline = new MasterPipeline('PAPER');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.broker = null;
+    masterRuntime.recovered = false;
+    masterRuntime.running = false;
+    masterRuntime.stop();
+
+    const still = await loadOpenPositions();
+    expect(still.length).toBe(1);
+    expect(still[0]!.position_id).toBe('guard-pos-1');
+  });
 });
 
 type PersistClientLike = {
