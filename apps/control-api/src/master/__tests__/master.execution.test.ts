@@ -185,7 +185,7 @@ describe('VS MASTER position manager exits', () => {
       decision: { ...cycle.decision, kind: 'BUY', side: 'BUY' },
     });
 
-    // Push mid deep against BUY → HardInv
+    // Push mid through SL → STOP_HIT (protective fill before soft HardInv)
     const crash: Quote = {
       bid: entry - 20,
       ask: entry - 19.6,
@@ -208,7 +208,8 @@ describe('VS MASTER position manager exits', () => {
       instrument_point_value: 1,
     });
     expect(managed.closed.length).toBe(1);
-    expect(managed.closed[0]!.reason).toMatch(/HardInvalidation/);
+    expect(managed.closed[0]!.reason).toBe('STOP_HIT');
+    expect(managed.closed[0]!.outcome.exit).toBe(entry - 2);
     expect(managed.held.length).toBe(0);
     expect(pipe.journal.opportunities.find((o) => o.id === cycle.opportunity.id)?.outcome).toBeTruthy();
   });

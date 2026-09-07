@@ -151,8 +151,34 @@ export class MasterPipeline {
   recordTradeClose(
     opportunityId: string,
     decision: MasterDecision,
-    outcome: Parameters<MasterJournal['attachOutcome']>[1]
+    outcome: Parameters<MasterJournal['attachOutcome']>[1],
+    meta?: { epic?: string }
   ) {
+    // Never silently drop an exit — stub the opportunity row if missing
+    const exists = this.journal.opportunities.some((o) => o.id === opportunityId);
+    if (!exists) {
+      this.journal.recordOpportunity({
+        id: opportunityId,
+        mode: this.mode,
+        epic: meta?.epic || 'UNKNOWN',
+        decision,
+        risk: {
+          allowed: true,
+          volume: outcome.volume,
+          risk_amount: 0,
+          reasons: ['close_stub'],
+        },
+        executed: true,
+        execution: {
+          accepted: true,
+          intent_id: opportunityId,
+          order_id: null,
+          fill_price: outcome.entry,
+          detail: 'close_stub',
+          paper: this.mode === 'PAPER',
+        },
+      });
+    }
     this.journal.attachOutcome(opportunityId, outcome);
     if (decision.side) {
       this.expectancy.record(setupKey(decision.analysis, decision.side), outcome);

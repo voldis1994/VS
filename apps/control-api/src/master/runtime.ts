@@ -181,7 +181,9 @@ class MasterRuntime {
           },
         });
       }
-      this.pipeline.recordTradeClose(ghost.opportunity_id, ghost.decision, outcome);
+      this.pipeline.recordTradeClose(ghost.opportunity_id, ghost.decision, outcome, {
+        epic: ghost.epic,
+      });
       this.account.daily_pnl += outcome.pnl;
       this.trackPersist(
         'outcome',
@@ -500,6 +502,22 @@ class MasterRuntime {
     this.account.equity = this.account.balance + pnlAll;
     if (this.account.equity > this.account.peak_equity) {
       this.account.peak_equity = this.account.equity;
+    }
+
+    // PAPER restart: empty in-memory book must be reseeded before sync or every
+    // restored open looks like a ghost and is wiped as broker_flat.
+    if (this.broker instanceof PaperBroker) {
+      this.broker.seedOpens(
+        this.positions.list().map((p) => ({
+          position_id: p.position_id,
+          epic: p.epic,
+          side: p.side,
+          size: p.size,
+          open_level: p.entry,
+          stop_level: p.stop_loss,
+          profit_level: p.take_profit,
+        }))
+      );
     }
 
     if (this.broker) {

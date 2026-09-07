@@ -114,8 +114,12 @@ export class PositionManager {
         pos.mfe > 1e-9 ? Math.max(0, Math.min(1, fav / pos.mfe)) : null;
       const heldMs = Date.now() - new Date(pos.entry_at).getTime();
 
+      // Hard protective fills before soft BestOutcome / TIME_STOP
+      const protective = protectiveExit(pos, mid);
+
       let verdict =
-        maxHold > 0 && heldMs >= maxHold
+        protective ??
+        (maxHold > 0 && heldMs >= maxHold
           ? {
               exit: true,
               reason: `TIME_STOP · held ${Math.round(heldMs / 1000)}s ≥ ${Math.round(maxHold / 1000)}s`,
@@ -133,7 +137,7 @@ export class PositionManager {
                 entry_setup: 'CONTINUATION',
               },
               mid
-            );
+            ));
 
       if (!verdict.exit) {
         await this.maybeBreakevenStop(broker, pos, mid, beProgress);
@@ -144,8 +148,7 @@ export class PositionManager {
       const closeRes = await broker.closePosition(pos.position_id);
       if (!closeRes.ok) continue;
 
-      const exit =
-        pos.side === 'BUY' ? quote.bid : quote.ask;
+      const exit = protectiveFillPrice(pos, quote, protective?.reason ?? null);
       const pnlPts = pos.side === 'BUY' ? exit - pos.entry : pos.entry - exit;
       const pnl = pnlPts * pos.size * pv;
       const riskDist = Math.max(
@@ -168,7 +171,9 @@ export class PositionManager {
         exit_reason: verdict.reason,
       };
 
-      pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome);
+      pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome, {
+        epic: pos.epic,
+      });
       this.open.delete(pos.position_id);
       closed.push({ position: pos, outcome, reason: verdict.reason });
     }
@@ -333,4 +338,30 @@ function mapRegimeToPlaybook(regime: string): 'LONG' | 'SCALP' | 'FADE' {
   if (regime === 'TREND' || regime === 'BREAKOUT') return 'LONG';
   if (regime === 'RANGE' || regime === 'LOW_VOLATILITY') return 'SCALP';
   return 'SCALP';
+}
+
+/** Price-cross SL/TP — returns exit verdict or null when levels not breached. */
+export function protectiveExit(
+  pos: Pick<ManagedPosition, 'side' | 'stop_loss' | 'take_profit'>,
+  mid: number
+): { exit: true; reason: string } | null {
+  if (pos.stop_loss != null) {
+    const hit = pos.side === 'BUY' ? mid <= pos.stop_loss : mid >= pos.stop_loss;
+    if (hit) return { exit: true, reason: 'STOP_HIT' };
+  }
+  if (pos.take_profit != null) {
+    const hit = pos.side === 'BUY' ? mid >= pos.take_profit : mid <= pos.take_profit;
+    if (hit) return { exit: true, reason: 'TP_HIT' };
+  }
+  return null;
+}
+
+function protectiveFillPrice(
+  pos: ManagedPosition,
+  quote: Quote,
+  reason: string | null
+): number {
+  if (reason === 'STOP_HIT' && pos.stop_loss != null) return pos.stop_loss;
+  if (reason === 'TP_HIT' && pos.take_profit != null) return pos.take_profit;
+  return pos.side === 'BUY' ? quote.bid : quote.ask;
 }

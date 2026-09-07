@@ -131,8 +131,159 @@ describe('MASTER recover orphan journal', () => {
       instrument_point_value: 1,
     });
     expect(managed.closed.length).toBe(1);
+    expect(managed.closed[0]!.reason).toBe('STOP_HIT');
     const stub = pipe.journal.opportunities.find((o) => o.id === pos.opportunity_id);
     expect(stub?.outcome).toBeTruthy();
+    expect(pipe.journal.traded().length).toBe(1);
+  });
+});
+
+describe('MASTER paper recover + protective fills + close stub', () => {
+  it('seedOpens prevents recover wipe of restored PAPER opens', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    const pm = new PositionManager();
+    const decision = {
+      decision_id: 'd-seed',
+      kind: 'BUY' as const,
+      side: 'BUY' as const,
+      score: 0.7,
+      block_reason: null,
+      buy: null as never,
+      sell: null as never,
+      analysis: baseAnalysis(),
+      expectancy: null,
+    };
+    pm.register({
+      position_id: 'paper-restored-1',
+      opportunity_id: 'opp-restored-1',
+      intent_id: 'intent-restored-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      entry: 4410,
+      stop_loss: 4405,
+      take_profit: 4420,
+      decision,
+    });
+    expect((await broker.listOpenPositions()).positions.length).toBe(0);
+
+    broker.seedOpens([
+      {
+        position_id: 'paper-restored-1',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 1,
+        open_level: 4410,
+        stop_level: 4405,
+        profit_level: 4420,
+      },
+    ]);
+    const sync = await syncPositionsWithBroker(pm, broker, 'GOLD');
+    expect(sync.orphans_local.length).toBe(0);
+    expect(sync.matched).toBe(1);
+    expect(pm.count()).toBe(1);
+  });
+
+  it('closes on STOP_HIT / TP_HIT before soft exits', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    broker.setQuote({
+      bid: 4410,
+      ask: 4410.4,
+      mid: 4410.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'sl-hit-intent',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      stop_level: 4405,
+      profit_level: 4425,
+    });
+    const pm = new PositionManager();
+    const pipe = new MasterPipeline('PAPER');
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-sl-hit',
+      intent_id: 'sl-hit-intent',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      entry: placed.fill_price!,
+      stop_loss: 4405,
+      take_profit: 4425,
+      decision: {
+        decision_id: 'd-sl',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.8,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis({ regime: 'TREND' }),
+        expectancy: null,
+      },
+    });
+    broker.setQuote({
+      bid: 4404,
+      ask: 4404.4,
+      mid: 4404.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: { bid: 4404, ask: 4404.4, mid: 4404.2, spread: 0.4, ts_ms: Date.now() },
+      instrument_point_value: 1,
+    });
+    expect(managed.closed.length).toBe(1);
+    expect(managed.closed[0]!.reason).toBe('STOP_HIT');
+    expect(managed.closed[0]!.outcome.exit).toBe(4405);
+    expect(pipe.journal.traded().length).toBe(1);
+  });
+
+  it('recordTradeClose stubs missing opportunity so exits are not silent', () => {
+    const pipe = new MasterPipeline('PAPER');
+    pipe.recordTradeClose(
+      'missing-opp',
+      {
+        decision_id: 'd-miss',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.5,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis(),
+        expectancy: null,
+      },
+      {
+        position_id: 'p1',
+        side: 'BUY',
+        entry: 100,
+        exit: 99,
+        volume: 1,
+        pnl: -1,
+        fees: 0,
+        slippage: 0,
+        mae: 1,
+        mfe: 0,
+        r_multiple: -1,
+        hold_ms: 1000,
+        exit_reason: 'STOP_HIT',
+      },
+      { epic: 'GOLD' }
+    );
+    const row = pipe.journal.opportunities.find((o) => o.id === 'missing-opp');
+    expect(row?.executed).toBe(true);
+    expect(row?.outcome?.exit_reason).toBe('STOP_HIT');
+    expect(row?.epic).toBe('GOLD');
     expect(pipe.journal.traded().length).toBe(1);
   });
 });

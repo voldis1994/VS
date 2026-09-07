@@ -180,6 +180,35 @@ export class PaperBroker implements MasterBroker {
     return { ok: true, detail: 'paper_modified', order_id: `mod-${input.position_id}` };
   }
 
+  /**
+   * Restart rehydrate — put restored MASTER opens back into the empty paper book
+   * so sync does not treat them as ghosts / broker_flat.
+   */
+  seedOpens(
+    rows: Array<{
+      position_id: string;
+      epic: string;
+      side: Side;
+      size: number;
+      open_level: number;
+      stop_level?: number | null;
+      profit_level?: number | null;
+    }>
+  ) {
+    for (const r of rows) {
+      this.positions.set(r.position_id, {
+        position_id: r.position_id,
+        epic: r.epic,
+        side: r.side,
+        size: r.size,
+        open_level: r.open_level,
+        stop_level: r.stop_level ?? null,
+        profit_level: r.profit_level ?? null,
+        upl: 0,
+      });
+    }
+  }
+
   /** Mark-to-market open positions from quote. */
   markToMarket() {
     const q = this.lastQuote;

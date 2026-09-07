@@ -206,7 +206,8 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
       instrument_point_value: 1,
     });
     expect(managed.closed.length).toBe(1);
-    expect(managed.closed[0]!.reason).toMatch(/HardInvalidation/);
+    expect(managed.closed[0]!.reason).toBe('STOP_HIT');
+    expect(managed.closed[0]!.outcome.exit).toBe(4400);
     expect(await broker.listOpenPositions()).toEqual({ ok: true, positions: [] });
   });
 
