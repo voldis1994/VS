@@ -20,7 +20,16 @@ async function sleep(ms: number) {
 async function main() {
   const dir = process.env.ARTIFACT_DIR || '/opt/cursor/artifacts';
   mkdirSync(dir, { recursive: true });
-  installFilePersist('/tmp/vs-master-live-paper-state');
+  // Fresh state each run — leftover opens from a prior demo would mask new fills
+  // as one_trade_open and confuse verify (DECIDED vs TRADED).
+  const stateDir = '/tmp/vs-master-live-paper-state';
+  try {
+    const { rmSync } = await import('fs');
+    rmSync(stateDir, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+  installFilePersist(stateDir);
 
   masterRuntime.cfg = {
     ...DEFAULT_MASTER_CONFIG,
