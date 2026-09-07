@@ -1,5 +1,6 @@
 /** Single authoritative MASTER cycle — one owner per stage. */
 import { randomUUID } from 'crypto';
+import { applyAiToDecision, localAdvisor, type AiMeta } from './ai.js';
 import { analyzeBars } from './analysis.js';
 import { decide, setupKey } from './decision.js';
 import { ExpectancyStore } from './expectancy.js';
@@ -35,6 +36,7 @@ export type PipelineResult = {
   risk: RiskVerdict;
   opportunity: OpportunityRecord;
   market: MarketValidation;
+  ai: AiMeta;
 };
 
 export class MasterPipeline {
@@ -44,7 +46,7 @@ export class MasterPipeline {
 
   constructor(public mode: Mode = 'PAPER') {}
 
-  /** MARKET → VALIDATION → ANALYSIS → DECISION → RISK (execution is next step). */
+  /** MARKET → VALIDATION → ANALYSIS → DECISION → AI → RISK */
   runCycle(input: PipelineInput): PipelineResult {
     const market = validateMarket(input.bars, input.quote, {
       stale_ms: input.cfg.stale_quote_ms,
@@ -82,14 +84,46 @@ export class MasterPipeline {
         risk,
         executed: false,
       });
-      return { decision, risk, opportunity, market };
+      return {
+        decision,
+        risk,
+        opportunity,
+        market,
+        ai: {
+          ai_mode: input.cfg.ai_mode,
+          ai_available: false,
+          ai_error_type: null,
+          ai_fallback_used: false,
+          ai_reason: null,
+          system_decision_before_ai: 'BLOCK',
+          decision_after_ai: 'BLOCK',
+        },
+      };
     }
 
     const analysis = analyzeBars(market.bars, market.quote.spread, input.now_ms);
     analysis.data_quality = Math.min(analysis.data_quality, market.quality);
-    const decision = decide(analysis, market.quote, input.cfg, (k) =>
+    let decision = decide(analysis, market.quote, input.cfg, (k) =>
       this.expectancy.lookup(k)
     );
+
+    // AI layer (Reader contract). Local advisor is deterministic — not a fake LLM score.
+    const mode = input.cfg.ai_mode;
+    let aiMeta: AiMeta;
+    if (mode === 'off') {
+      const applied = applyAiToDecision(decision, 'off', null);
+      aiMeta = applied.meta;
+    } else if (mode === 'required' && !(process.env.MASTER_OPENAI_API_KEY || '').trim()) {
+      const applied = applyAiToDecision(decision, 'required', null, 'missing_key');
+      decision = applied.decision;
+      aiMeta = applied.meta;
+    } else {
+      const advisor = localAdvisor(analysis);
+      const applied = applyAiToDecision(decision, mode, advisor, null);
+      decision = applied.decision;
+      aiMeta = applied.meta;
+    }
+
     const risk = evaluateRisk(
       decision,
       input.account,
@@ -109,10 +143,9 @@ export class MasterPipeline {
       risk,
       executed: false,
     });
-    return { decision, risk, opportunity, market };
+    return { decision, risk, opportunity, market, ai: aiMeta };
   }
 
-  /** Idempotent intent claim — same intent_id cannot execute twice. */
   claimIntent(intent_id: string): boolean {
     if (this.seenIntents.has(intent_id)) return false;
     this.seenIntents.add(intent_id);
@@ -155,18 +188,18 @@ export const DEFAULT_MASTER_CONFIG: MasterConfig = {
   stale_quote_ms: 15_000,
   min_score: 0.55,
   min_expectancy_samples: 20,
-  require_positive_expectancy: false, // enable after enough samples
+  require_positive_expectancy: false,
   reward_ratio: 1.8,
   sl_buffer_atr_mult: 0.25,
   kill_switch: false,
   cooldown_ms_after_loss: 30_000,
+  ai_mode: 'off',
 };
 
 export const GOLD_SPEC: InstrumentSpec = {
   epic: 'GOLD',
   display_name: 'Gold',
   point: 0.01,
-  /** Currency PnL per 1.0 point × 1.0 lot */
   value_per_point_per_lot: 1,
   volume_step: 0.01,
   min_volume: 0.01,

@@ -183,4 +183,6 @@ export type MasterConfig = {
   sl_buffer_atr_mult: number;
   kill_switch: boolean;
   cooldown_ms_after_loss: number;
+  /** AI layer: off | advisory | required (Reader contract) */
+  ai_mode: 'off' | 'advisory' | 'required';
 };

@@ -2,7 +2,7 @@
 import type { FastifyInstance } from 'fastify';
 import { Mt4FileBroker } from '../master/broker.js';
 import { masterRuntime } from '../master/runtime.js';
-import { replayMaster, walkForward } from '../master/replay.js';
+import { replayMaster, walkForward, abCompareAi } from '../master/replay.js';
 import { DEFAULT_MASTER_CONFIG } from '../master/pipeline.js';
 import type { Bar, Mode } from '../master/types.js';
 
@@ -20,7 +20,7 @@ export async function registerMasterRoutes(app: FastifyInstance) {
     positions: masterRuntime.positions.list(),
   }));
 
-  app.post<{ Body: { mode?: Mode; kill_switch?: boolean; epic?: string } }>(
+  app.post<{ Body: { mode?: Mode; kill_switch?: boolean; epic?: string; ai_mode?: 'off' | 'advisory' | 'required' } }>(
     '/api/master/control',
     async (req) => {
       const body = req.body || {};
@@ -38,6 +38,9 @@ export async function registerMasterRoutes(app: FastifyInstance) {
         masterRuntime.setKillSwitch(body.kill_switch);
       }
       if (body.epic) masterRuntime.setEpic(body.epic);
+      if (body.ai_mode) {
+        masterRuntime.cfg = { ...masterRuntime.cfg, ai_mode: body.ai_mode };
+      }
       return { ok: true, status: masterRuntime.status() };
     }
   );
@@ -183,6 +186,34 @@ export async function registerMasterRoutes(app: FastifyInstance) {
       step: req.body?.step ?? 40,
     });
     return { ok: true, windows: wf.windows };
+  });
+
+  app.post<{
+    Body: { bars: Bar[]; spread?: number; slippage_pts?: number; commission?: number };
+  }>('/api/master/ab-ai', async (req) => {
+    const bars = req.body?.bars || [];
+    if (bars.length < 40) return { ok: false, detail: 'need ≥40 bars' };
+    const ab = abCompareAi({
+      bars,
+      spread: req.body?.spread,
+      slippage_pts: req.body?.slippage_pts,
+      commission: req.body?.commission,
+    });
+    return {
+      ok: true,
+      delta_expectancy: ab.delta_expectancy,
+      note: ab.note,
+      off: {
+        trades: ab.off.performance.trades,
+        expectancy: ab.off.performance.expectancy,
+        total_pnl: ab.off.performance.total_pnl,
+      },
+      on: {
+        trades: ab.on.performance.trades,
+        expectancy: ab.on.performance.expectancy,
+        total_pnl: ab.on.performance.total_pnl,
+      },
+    };
   });
 
   app.get('/api/master/journal', async () => ({

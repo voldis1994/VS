@@ -300,3 +300,27 @@ export function walkForward(opts: {
   }
   return { windows };
 }
+
+/** AI on/off A/B — same bars, empirical delta only (no promised edge). */
+export function abCompareAi(opts: ReplayOptions): {
+  off: ReturnType<typeof replayMaster>;
+  on: ReturnType<typeof replayMaster>;
+  delta_expectancy: number;
+  note: string;
+} {
+  const off = replayMaster({
+    ...opts,
+    cfg: { ...opts.cfg, ai_mode: 'off' },
+  });
+  const on = replayMaster({
+    ...opts,
+    cfg: { ...opts.cfg, ai_mode: 'advisory' },
+  });
+  return {
+    off,
+    on,
+    delta_expectancy: on.performance.expectancy - off.performance.expectancy,
+    note: 'Empirical A/B on identical bars — heuristic AI advisory vs off. Not a profit claim.',
+  };
+}
+

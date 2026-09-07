@@ -1,5 +1,6 @@
 export * from './types.js';
 export * from './marketData.js';
+export * from './ai.js';
 export * from './analysis.js';
 export * from './candidates.js';
 export * from './decision.js';

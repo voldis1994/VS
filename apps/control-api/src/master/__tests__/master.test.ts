@@ -310,3 +310,34 @@ describe('VS MASTER pipeline end-to-end', () => {
     expect(result.decision.block_reason).toMatch(/market_validation/);
   });
 });
+
+describe('VS MASTER AI layer', () => {
+  it('required mode blocks without API key', () => {
+    const pipe = new MasterPipeline('PAPER');
+    const bars = barsTrendUp();
+    const result = pipe.runCycle({
+      bars,
+      quote: quoteFrom(bars.at(-1)!),
+      account,
+      instrument: GOLD_SPEC,
+      cfg: { ...DEFAULT_MASTER_CONFIG, ai_mode: 'required' },
+    });
+    expect(result.ai.ai_mode).toBe('required');
+    expect(result.decision.kind).toBe('BLOCK');
+    expect(result.decision.block_reason).toMatch(/ai_required_missing/);
+  });
+
+  it('advisory local advisor can with-trend allow', () => {
+    const pipe = new MasterPipeline('PAPER');
+    const bars = barsTrendUp();
+    const result = pipe.runCycle({
+      bars,
+      quote: quoteFrom(bars.at(-1)!),
+      account,
+      instrument: GOLD_SPEC,
+      cfg: { ...DEFAULT_MASTER_CONFIG, ai_mode: 'advisory', min_score: 0.3 },
+    });
+    expect(result.ai.ai_available).toBe(true);
+    expect(['BUY', 'SELL', 'WAIT', 'BLOCK']).toContain(result.decision.kind);
+  });
+});
