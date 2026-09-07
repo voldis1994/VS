@@ -214,6 +214,7 @@ export const DEFAULT_MASTER_CONFIG: MasterConfig = {
   breakeven_progress: 0.5,
   ai_mode: 'off',
   block_off_hours: true,
+  block_high_impact_news: true,
   partial_close_progress: 0.5,
   partial_close_volume: 0.5,
 };

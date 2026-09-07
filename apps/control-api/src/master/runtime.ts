@@ -720,24 +720,51 @@ class MasterRuntime {
           return;
         }
         if (!seeded) {
-          // Structure: prefer public Yahoo when available; ticks/marks always from broker.
+          // Structure: Capital OHLC when broker provides it; else Yahoo; ticks from broker.
           // Vitest uses synthetic seed to avoid flaky Yahoo network in unit tests.
           let seedDetail: string;
           if (process.env.VITEST || process.env.MASTER_BROKER_FEED_SYNTHETIC === 'true') {
             builder.seedAround(q.mid, 50);
             seedDetail = 'synthetic_broker_seed';
           } else {
-            seedDetail = await builder.seedFromPublic(this.epic, q.mid, 50);
+            let brokerHist: Awaited<ReturnType<NonNullable<MasterBroker['getHistoryBars']>>> | null =
+              null;
+            if (typeof this.broker.getHistoryBars === 'function') {
+              try {
+                brokerHist = await Promise.race([
+                  this.broker.getHistoryBars(this.epic, 60),
+                  new Promise<null>((resolve) => setTimeout(() => resolve(null), 8_000)),
+                ]);
+              } catch {
+                brokerHist = null;
+              }
+            }
+            seedDetail = await builder.seedFromBrokerOrPublic(
+              this.epic,
+              q.mid,
+              50,
+              brokerHist
+            );
           }
           seeded = true;
           this.broker_detail = `${this.broker_detail || brokerName};broker_feed:${brokerName};seed:${seedDetail}`.slice(
             -400
           );
         } else if (!process.env.VITEST) {
+          let brokerHist: Awaited<ReturnType<NonNullable<MasterBroker['getHistoryBars']>>> | null =
+            null;
+          if (typeof this.broker.getHistoryBars === 'function') {
+            try {
+              brokerHist = await this.broker.getHistoryBars(this.epic, 60);
+            } catch {
+              brokerHist = null;
+            }
+          }
           const refreshed = await builder.refreshStructureIfStale(
             this.epic,
             q.mid,
-            120_000
+            120_000,
+            brokerHist
           );
           if (refreshed) {
             this.broker_detail = `${this.broker_detail || ''};${refreshed}`.slice(-400);

@@ -78,12 +78,31 @@ export function epicsMatch(a: string, b: string): boolean {
   return normalizeEpicKey(a) === normalizeEpicKey(b);
 }
 
+export type BrokerHistoryBars = {
+  ok: boolean;
+  bars: Array<{
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    ts_ms?: number;
+  }>;
+  detail: string;
+};
+
 export interface MasterBroker {
   readonly name: string;
   readonly paper: boolean;
+  /**
+   * When false, position manager skips Reader-style partial scale-out
+   * (Check- MT4 CLOSE always full-lots — partial would be unsafe).
+   */
+  readonly supportsPartialClose?: boolean;
   connect(): Promise<{ ok: boolean; detail: string }>;
   getQuote(epic: string): Promise<BrokerQuote | null>;
   getAccount(): Promise<BrokerAccount | null>;
+  /** Optional OHLC structure for LIVE analysis (Capital prices API). */
+  getHistoryBars?(epic: string, maxBars?: number): Promise<BrokerHistoryBars>;
   listOpenPositions(epic?: string): Promise<ListOpenResult>;
   placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResult>;
   closePosition(
@@ -107,6 +126,7 @@ export interface MasterBroker {
 export class PaperBroker implements MasterBroker {
   readonly name = 'PAPER';
   readonly paper = true;
+  readonly supportsPartialClose = true;
   private positions = new Map<string, BrokerPosition>();
   private lastQuote: BrokerQuote | null = null;
   private processed = new Set<string>();
@@ -275,6 +295,7 @@ export class PaperBroker implements MasterBroker {
 export class CapitalBroker implements MasterBroker {
   readonly name = 'CAPITAL';
   readonly paper = false;
+  readonly supportsPartialClose = true;
   private session: any = null;
   private processed = new Set<string>();
   /** Last dealingRules seen per epic from markets quote */
@@ -313,6 +334,23 @@ export class CapitalBroker implements MasterBroker {
         currency: string;
         available?: number | null;
       } | null>;
+      /** Capital minute/hour OHLC for LIVE structure seeding */
+      prices?: (
+        session: any,
+        epic: string,
+        resolution: 'MINUTE' | 'HOUR',
+        max: number
+      ) => Promise<{
+        ok: boolean;
+        candles: Array<{
+          open: number;
+          high: number;
+          low: number;
+          close: number;
+          snapshotTime?: string;
+        }>;
+        detail: string;
+      }>;
       credentials: any;
     }
   ) {}
@@ -322,6 +360,30 @@ export class CapitalBroker implements MasterBroker {
     if (!opened.ok || !opened.session) return { ok: false, detail: opened.detail };
     this.session = opened.session;
     return { ok: true, detail: 'capital connected' };
+  }
+
+  async getHistoryBars(epic: string, maxBars = 60): Promise<BrokerHistoryBars> {
+    if (!this.session || !this.deps.prices) {
+      return { ok: false, bars: [], detail: 'capital_prices_unavailable' };
+    }
+    const res = await this.deps.prices(this.session, epic, 'MINUTE', maxBars);
+    if (!res.ok || !res.candles.length) {
+      return { ok: false, bars: [], detail: res.detail || 'capital_no_candles' };
+    }
+    const bars = res.candles
+      .map((c) => ({
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+        ts_ms: c.snapshotTime ? Date.parse(c.snapshotTime) : undefined,
+      }))
+      .filter((b) => [b.open, b.high, b.low, b.close].every((n) => Number.isFinite(n) && n > 0));
+    return {
+      ok: bars.length >= 10,
+      bars,
+      detail: bars.length >= 10 ? `capital_minute_${bars.length}` : `capital_minute_short_${bars.length}`,
+    };
   }
 
   async getQuote(epic: string): Promise<BrokerQuote | null> {
@@ -761,6 +823,8 @@ export class CapitalBroker implements MasterBroker {
 export class Mt4FileBroker implements MasterBroker {
   readonly name = 'MT4_FILE';
   readonly paper = false;
+  /** Check- EA closes full OrderLots — never request partial (would full-close). */
+  readonly supportsPartialClose = false;
   private processed = new Set<string>();
 
   constructor(private readonly bridgeRoot: string) {}

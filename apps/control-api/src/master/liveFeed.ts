@@ -166,7 +166,7 @@ export class LiveBarBuilder {
   private low = 0;
   private close = 0;
   private barStart = 0;
-  seed_source: 'yahoo_ohlc' | 'synthetic_fallback' | 'none' = 'none';
+  seed_source: 'yahoo_ohlc' | 'capital_ohlc' | 'broker_ohlc' | 'synthetic_fallback' | 'none' = 'none';
   last_structure_refresh_ms = 0;
 
   constructor(
@@ -176,11 +176,11 @@ export class LiveBarBuilder {
   ) {}
 
   /** Install real OHLC history (preferred). */
-  seedBars(bars: Bar[]) {
+  seedBars(bars: Bar[], source: LiveBarBuilder['seed_source'] = 'yahoo_ohlc') {
     this.structureBars = bars.slice(-this.maxBars);
     this.tickOverlay = [];
     this.open = null;
-    this.seed_source = 'yahoo_ohlc';
+    this.seed_source = source;
     this.last_structure_refresh_ms = Date.now();
   }
 
@@ -211,24 +211,47 @@ export class LiveBarBuilder {
     this.last_structure_refresh_ms = Date.now();
   }
 
+  /**
+   * Prefer broker OHLC (Capital LIVE), then Yahoo; fall back to synthetic around mid.
+   */
+  async seedFromBrokerOrPublic(
+    epic: string,
+    liveMid: number,
+    n = 40,
+    brokerBars?: { ok: boolean; bars: Bar[]; detail: string } | null
+  ): Promise<string> {
+    if (brokerBars?.ok && brokerBars.bars.length >= 10) {
+      this.seedBars(brokerBars.bars, 'capital_ohlc');
+      return brokerBars.detail;
+    }
+    return this.seedFromPublic(epic, liveMid, n);
+  }
+
   /** Prefer Yahoo OHLC; fall back to synthetic around live mid. */
   async seedFromPublic(epic: string, liveMid: number, n = 40): Promise<string> {
     const hist = await fetchYahooMinuteBars(epic, n);
     if (hist.ok && hist.bars.length >= 10) {
-      this.seedBars(hist.bars);
+      this.seedBars(hist.bars, 'yahoo_ohlc');
       return hist.detail;
     }
     this.seedAround(liveMid, n);
     return `synthetic_fallback(${hist.detail})`;
   }
 
-  /** Refresh Yahoo structure on an interval so live PAPER keeps real ATR/trend. */
+  /** Refresh structure on an interval — broker OHLC first when provided. */
   async refreshStructureIfStale(
     epic: string,
     liveMid: number,
-    everyMs = 120_000
+    everyMs = 120_000,
+    brokerBars?: { ok: boolean; bars: Bar[]; detail: string } | null
   ): Promise<string | null> {
     if (Date.now() - this.last_structure_refresh_ms < everyMs) return null;
+    if (brokerBars?.ok && brokerBars.bars.length >= 10) {
+      this.structureBars = brokerBars.bars.slice(-this.maxBars);
+      this.seed_source = 'capital_ohlc';
+      this.last_structure_refresh_ms = Date.now();
+      return `refresh:${brokerBars.detail}`;
+    }
     const hist = await fetchYahooMinuteBars(epic, 50);
     if (hist.ok && hist.bars.length >= 10) {
       this.structureBars = hist.bars.slice(-this.maxBars);

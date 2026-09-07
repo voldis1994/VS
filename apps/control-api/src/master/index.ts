@@ -25,3 +25,4 @@ export * from './envBroker.js';
 export * from './liveFeed.js';
 export * from './mt4Sim.js';
 export * from './capitalSize.js';
+export * from './newsGate.js';

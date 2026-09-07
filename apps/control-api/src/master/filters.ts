@@ -2,6 +2,7 @@
  * FILTERS stage — shared gates applied to both BUY and SELL candidates.
  * Separated so the pipeline has one explicit filter owner (Reader-style).
  */
+import { newsBlocksEntries } from './newsGate.js';
 import type { AnalysisSnapshot, MasterConfig, Quote } from './types.js';
 
 export type FilterVerdict = {
@@ -23,6 +24,7 @@ export function applyMarketFilters(
   nowMs = Date.now()
 ): FilterVerdict {
   const weekend = isWeekendUtc(nowMs);
+  const news = newsBlocksEntries(cfg.block_high_impact_news, nowMs);
   const checks: Record<string, boolean> = {
     data_quality: a.data_quality >= 0.35,
     spread_abs: quote.spread <= cfg.max_spread_abs,
@@ -33,6 +35,8 @@ export function applyMarketFilters(
     // Reader OFF session + Check- weekend — entries only in labeled weekday windows
     session_ok:
       !cfg.block_off_hours || (a.session !== 'OFF_HOURS' && !weekend),
+    // Reader high-impact news + Check- MASTER_NEWS_FILTER
+    news_ok: !news.blocked,
   };
 
   if (!checks.data_quality) return { ok: false, reason: 'data_quality', checks };
@@ -46,6 +50,9 @@ export function applyMarketFilters(
       reason: weekend ? 'session_weekend' : 'session_off_hours',
       checks,
     };
+  }
+  if (!checks.news_ok) {
+    return { ok: false, reason: news.reason || 'news_high_impact', checks };
   }
   return { ok: true, reason: null, checks };
 }

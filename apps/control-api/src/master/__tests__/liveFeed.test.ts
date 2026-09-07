@@ -52,6 +52,22 @@ describe('VS MASTER live bar builder', () => {
     expect(isMeaningfulBar({ open: 1, high: 1, low: 1, close: 1 })).toBe(false);
   });
 
+  it('seedFromBrokerOrPublic prefers Capital OHLC over Yahoo', async () => {
+    const b = new LiveBarBuilder(1000, 40);
+    const capitalBars = Array.from({ length: 20 }, (_, i) => {
+      const o = 4400 + i;
+      return { open: o, high: o + 1, low: o - 0.5, close: o + 0.5, ts_ms: i * 60_000 };
+    });
+    const detail = await b.seedFromBrokerOrPublic('GOLD', 4420, 40, {
+      ok: true,
+      bars: capitalBars,
+      detail: 'capital_minute_20',
+    });
+    expect(detail).toBe('capital_minute_20');
+    expect(b.seed_source).toBe('capital_ohlc');
+    expect(b.structureCount()).toBe(20);
+  });
+
   it('ATR ignores micro TRs mixed into structure (10s onto 5m)', () => {
     const structure = Array.from({ length: 20 }, (_, i) => {
       const o = 4400 + i;

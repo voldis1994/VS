@@ -88,6 +88,22 @@ async function main() {
     detail: weekendGate.reason || 'expected_block',
   };
 
+  // Reader high-impact news hard-gate (force via env so wall-clock independent)
+  const prevNews = process.env.MASTER_NEWS_IMPACT;
+  process.env.MASTER_NEWS_IMPACT = 'high';
+  const newsGate = applyMarketFilters(
+    { ...analysisRaw, session: 'LONDON' },
+    market.quote!,
+    cfg,
+    Date.UTC(2026, 8, 7, 12)
+  );
+  if (prevNews === undefined) delete process.env.MASTER_NEWS_IMPACT;
+  else process.env.MASTER_NEWS_IMPACT = prevNews;
+  stages.news_high_impact_gate = {
+    ok: !newsGate.ok && newsGate.reason === 'news_high_impact',
+    detail: newsGate.reason || 'expected_block',
+  };
+
   // Happy-path stages use a labeled trading session (wall clock may be OFF_HOURS)
   const analysis =
     analysisRaw.session === 'OFF_HOURS'

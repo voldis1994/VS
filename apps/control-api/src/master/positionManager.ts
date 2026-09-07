@@ -138,7 +138,9 @@ export class PositionManager {
       const heldMs = Date.now() - new Date(pos.entry_at).getTime();
 
       // Reader partial scale-out before full exit (once)
+      // Skip when broker cannot partial (Check- MT4 full-lots CLOSE only)
       if (
+        broker.supportsPartialClose !== false &&
         !pos.partial_close_applied &&
         partialProgress > 0 &&
         partialVolume > 0 &&

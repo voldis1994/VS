@@ -198,6 +198,8 @@ export type MasterConfig = {
   ai_mode: 'off' | 'advisory' | 'required';
   /** Reader OFF session — block new entries outside ASIA/LONDON/NY windows */
   block_off_hours: boolean;
+  /** Reader high-impact news window — block new entries (exits still manage) */
+  block_high_impact_news: boolean;
   /** Reader partial close: progress toward TP (0..1) before scaling out */
   partial_close_progress: number;
   /** Fraction of size to close on first scale-out (0..1) */

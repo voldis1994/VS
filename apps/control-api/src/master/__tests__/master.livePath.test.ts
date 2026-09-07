@@ -224,6 +224,36 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(await broker.listOpenPositions()).toEqual({ ok: true, positions: [] });
   });
 
+  it('getHistoryBars maps Capital minute candles to structure bars', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const session = { id: 'hist' };
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session, detail: 'ok' }),
+      quote: async (_s, epic) => ({ bid: 4410, ask: 4410.4, mid: 4410.2, epic, raw_ok: true }),
+      list: async () => ({ ok: true, positions: [], detail: '' }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({ ok: false, detail: 'unused' }),
+      prices: async (_s, epic, resolution, max) => ({
+        ok: true,
+        detail: `${epic}_${resolution}_${max}`,
+        candles: Array.from({ length: 30 }, (_, i) => ({
+          open: 4400 + i * 0.5,
+          high: 4401 + i * 0.5,
+          low: 4399 + i * 0.5,
+          close: 4400.5 + i * 0.5,
+          snapshotTime: new Date(Date.UTC(2026, 8, 7, 10, i)).toISOString(),
+        })),
+      }),
+    });
+    await broker.connect();
+    const hist = await broker.getHistoryBars('GOLD', 60);
+    expect(hist.ok).toBe(true);
+    expect(hist.bars.length).toBe(30);
+    expect(hist.detail).toMatch(/capital_minute_30/);
+    expect(hist.bars[0]!.open).toBe(4400);
+  });
+
   it('startBrokerLiveFeed polls Capital getQuote (no silent LIVE)', async () => {
     process.env.MASTER_LIVE_ENABLED = 'true';
     const broker = mockCapitalBroker();

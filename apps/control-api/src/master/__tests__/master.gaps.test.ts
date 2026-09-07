@@ -100,6 +100,60 @@ describe('MASTER filters + dual flow', () => {
     expect(v.ok).toBe(true);
   });
 
+  it('hard-blocks high-impact news (Reader-style)', () => {
+    const prev = process.env.MASTER_NEWS_IMPACT;
+    process.env.MASTER_NEWS_IMPACT = 'high';
+    try {
+      const v = applyMarketFilters(
+        baseAnalysis({ session: 'LONDON' }),
+        quote,
+        DEFAULT_MASTER_CONFIG,
+        Date.UTC(2026, 8, 7, 12)
+      );
+      expect(v.ok).toBe(false);
+      expect(v.reason).toBe('news_high_impact');
+      expect(v.checks.news_ok).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.MASTER_NEWS_IMPACT;
+      else process.env.MASTER_NEWS_IMPACT = prev;
+    }
+  });
+
+  it('Check- MASTER_NEWS_FILTER forces entry block', () => {
+    const prev = process.env.MASTER_NEWS_FILTER;
+    process.env.MASTER_NEWS_FILTER = 'true';
+    delete process.env.MASTER_NEWS_IMPACT;
+    try {
+      const v = applyMarketFilters(
+        baseAnalysis({ session: 'LONDON' }),
+        quote,
+        DEFAULT_MASTER_CONFIG,
+        Date.UTC(2026, 8, 7, 12)
+      );
+      expect(v.ok).toBe(false);
+      expect(v.reason).toBe('news_high_impact');
+    } finally {
+      if (prev === undefined) delete process.env.MASTER_NEWS_FILTER;
+      else process.env.MASTER_NEWS_FILTER = prev;
+    }
+  });
+
+  it('allows news window when block_high_impact_news disabled', () => {
+    const prev = process.env.MASTER_NEWS_IMPACT;
+    process.env.MASTER_NEWS_IMPACT = 'high';
+    try {
+      const v = applyMarketFilters(baseAnalysis({ session: 'LONDON' }), quote, {
+        ...DEFAULT_MASTER_CONFIG,
+        block_high_impact_news: false,
+      }, Date.UTC(2026, 8, 7, 12));
+      expect(v.ok).toBe(true);
+      expect(v.checks.news_ok).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.MASTER_NEWS_IMPACT;
+      else process.env.MASTER_NEWS_IMPACT = prev;
+    }
+  });
+
   it('blocks BUY against dump but can leave SELL valid', () => {
     const a = baseAnalysis({
       regime: 'TREND',
@@ -448,6 +502,78 @@ describe('partial close scale-out', () => {
     expect(pm.count()).toBe(1);
     expect(pm.list()[0]!.size).toBeCloseTo(0.05, 8);
     expect(pm.list()[0]!.partial_close_applied).toBe(true);
+  });
+
+  it('skips partial scale-out when broker.supportsPartialClose is false', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    Object.defineProperty(broker, 'supportsPartialClose', { value: false });
+    expect(broker.supportsPartialClose).toBe(false);
+    let closeCalls = 0;
+    const origClose = broker.closePosition.bind(broker);
+    broker.closePosition = async (id, opts) => {
+      closeCalls += 1;
+      return origClose(id, opts);
+    };
+    const pm = new PositionManager();
+    const pipe = new MasterPipeline('PAPER');
+    pm.register({
+      position_id: 'paper-no-partial',
+      opportunity_id: 'opp-no-partial',
+      intent_id: 'nopart-aaaaaaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4400,
+      stop_loss: 4395,
+      take_profit: 4410,
+      decision: {
+        decision_id: 'd-np',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.8,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis({ regime: 'TREND' }),
+      },
+    });
+    broker.seedOpens([
+      {
+        position_id: 'paper-no-partial',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 0.1,
+        open_level: 4400,
+        stop_level: 4395,
+        profit_level: 4410,
+      },
+    ]);
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: { bid: 4405, ask: 4405.4, mid: 4405.2, spread: 0.4, ts_ms: Date.now() },
+      instrument_point_value: 1,
+      partial_close_progress: 0.5,
+      partial_close_volume: 0.5,
+      volume_step: 0.01,
+      max_hold_ms: 0,
+    });
+    expect(managed.closed.every((c) => !/PARTIAL_CLOSE/.test(c.reason))).toBe(true);
+    expect(pm.list()[0]!.size).toBeCloseTo(0.1, 8);
+    expect(pm.list()[0]!.partial_close_applied).toBe(false);
+    // No partial close attempted (full soft exits may still call close — only assert size untouched)
+    expect(closeCalls === 0 || managed.closed.every((c) => !/PARTIAL/.test(c.reason))).toBe(true);
+  });
+
+  it('Mt4FileBroker refuses partial close (Check- EA is full-lots only)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mt4-partial-'));
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    expect(broker.supportsPartialClose).toBe(false);
+    const res = await broker.closePosition('42', { size: 0.05 });
+    expect(res.ok).toBe(false);
+    expect(res.detail).toBe('mt4_partial_close_unsupported');
   });
 });
 
