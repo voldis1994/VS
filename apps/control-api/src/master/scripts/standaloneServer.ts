@@ -63,35 +63,55 @@ async function main() {
     mode: resolved.mode,
   }));
 
-  // Synthetic feed only for PAPER — LIVE should be fed by desk / real quotes
+  // PAPER: prefer live public market feed; fall back to synthetic if offline
   if (resolved.mode === 'PAPER' && resolved.broker.paper) {
-    let bars = synthBars(40, 4400, 0.7);
-    let tickN = 0;
-    setInterval(() => {
-      tickN += 1;
-      const last = bars.at(-1)!;
-      const drift = tickN < 25 ? 0.55 : -2.2;
-      const o = last.close;
-      const c = o + drift;
-      bars = [
-        ...bars.slice(-50),
-        {
-          open: o,
-          high: Math.max(o, c) + 0.35,
-          low: Math.min(o, c) - 0.25,
-          close: c,
+    const useLive = (process.env.MASTER_LIVE_FEED || 'public') !== 'synthetic';
+    if (useLive) {
+      const { fetchLiveMarket, LiveBarBuilder } = await import('../liveFeed.js');
+      const builder = new LiveBarBuilder(10_000, 80);
+      let seeded = false;
+      setInterval(() => {
+        void (async () => {
+          const snap = await fetchLiveMarket(process.env.MASTER_EPIC || 'GOLD');
+          if (!snap.ok || !snap.quote) return;
+          if (!seeded) {
+            builder.seedAround(snap.quote.mid, 40);
+            seeded = true;
+            masterRuntime.broker_detail = `live_feed:${snap.detail}`;
+          }
+          const { bars } = builder.pushTick(snap.quote.mid);
+          await masterRuntime.tick(bars, snap.quote);
+        })();
+      }, 2500);
+    } else {
+      let bars = synthBars(40, 4400, 0.7);
+      let tickN = 0;
+      setInterval(() => {
+        tickN += 1;
+        const last = bars.at(-1)!;
+        const drift = tickN < 25 ? 0.55 : -2.2;
+        const o = last.close;
+        const c = o + drift;
+        bars = [
+          ...bars.slice(-50),
+          {
+            open: o,
+            high: Math.max(o, c) + 0.35,
+            low: Math.min(o, c) - 0.25,
+            close: c,
+            ts_ms: Date.now(),
+          },
+        ];
+        const mid = c;
+        void masterRuntime.tick(bars, {
+          bid: mid - 0.2,
+          ask: mid + 0.2,
+          mid,
+          spread: 0.4,
           ts_ms: Date.now(),
-        },
-      ];
-      const mid = c;
-      void masterRuntime.tick(bars, {
-        bid: mid - 0.2,
-        ask: mid + 0.2,
-        mid,
-        spread: 0.4,
-        ts_ms: Date.now(),
-      });
-    }, 1500);
+        });
+      }, 1500);
+    }
   }
 
   await app.listen({ port: PORT, host: HOST });
