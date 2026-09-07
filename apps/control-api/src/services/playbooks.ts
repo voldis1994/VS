@@ -11,13 +11,14 @@ export type TradePlaybook = Exclude<Playbook, 'WAIT'>;
 export type ExitSide = 'BUY' | 'SELL';
 
 /**
- * Unified MFE trail — max 35% giveback (keep ≥65% of peak run).
- * Same for LONG / SCALP / FADE and every setup override.
+ * Unified MFE trail — max 30% giveback on SCALP moves; 35% on LONG legs.
+ * PeakProtect arms early so winners lock before giveback eats the trade.
  */
 export const MAX_MFE_GIVEBACK = 0.35;
 export const MIN_MFE_RETENTION = 0.65; // keep ≥65% of MFE
-/** Soft harvest band just above hard PeakProtect (same 35% giveback family) */
-export const HARVEST_MFE_RETENTION = 0.7;
+export const TIGHT_MFE_RETENTION = 0.72; // SCALP / 10s MOVE — lock sooner
+/** Soft harvest band just above hard PeakProtect */
+export const HARVEST_MFE_RETENTION = 0.75;
 
 export type PlaybookExitParams = {
   /** Target as fraction of entry price */
@@ -28,7 +29,7 @@ export type PlaybookExitParams = {
   slFloor: number;
   mfeFloorPct: number;
   mfeFloorAbs: number;
-  /** PeakProtect when retention below this (= keep ≥65% / max 35% giveback) */
+  /** PeakProtect when retention below this */
   peakRet: number;
   /** Harvest when retention below this and fav > 0 */
   harvestRet: number;
@@ -36,43 +37,43 @@ export type PlaybookExitParams = {
   timeDecayMs: number;
 };
 
-/** Exact set from the agreed playbook drawing — giveback unified at 35%. */
+/** Exact set from the agreed playbook drawing — PeakProtect arms on small real MFE. */
 export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
   LONG: {
     tpPct: 0.0035,
     tpFloor: 0.35,
-    slPct: 0.0025,
-    slFloor: 0.25,
-    mfeFloorPct: 0.0018,
-    mfeFloorAbs: 0.18,
+    slPct: 0.002,
+    slFloor: 0.2,
+    mfeFloorPct: 0.00035,
+    mfeFloorAbs: 0.9,
     peakRet: MIN_MFE_RETENTION,
     harvestRet: HARVEST_MFE_RETENTION,
-    thesisMinHoldMs: 120_000,
-    timeDecayMs: 480_000,
+    thesisMinHoldMs: 60_000,
+    timeDecayMs: 420_000,
   },
   SCALP: {
     tpPct: 0.0022,
     tpFloor: 0.22,
-    slPct: 0.0019,
-    slFloor: 0.19,
-    mfeFloorPct: 0.0015,
-    mfeFloorAbs: 0.15,
-    peakRet: MIN_MFE_RETENTION,
-    harvestRet: HARVEST_MFE_RETENTION,
-    thesisMinHoldMs: 90_000,
-    timeDecayMs: 480_000,
+    slPct: 0.0016,
+    slFloor: 0.16,
+    mfeFloorPct: 0.00028,
+    mfeFloorAbs: 0.7,
+    peakRet: TIGHT_MFE_RETENTION,
+    harvestRet: 0.8,
+    thesisMinHoldMs: 45_000,
+    timeDecayMs: 300_000,
   },
   FADE: {
     tpPct: 0.0018,
     tpFloor: 0.18,
-    slPct: 0.0018,
-    slFloor: 0.18,
-    mfeFloorPct: 0.0012,
-    mfeFloorAbs: 0.12,
-    peakRet: MIN_MFE_RETENTION,
-    harvestRet: HARVEST_MFE_RETENTION,
-    thesisMinHoldMs: 90_000,
-    timeDecayMs: 240_000,
+    slPct: 0.0015,
+    slFloor: 0.15,
+    mfeFloorPct: 0.00025,
+    mfeFloorAbs: 0.6,
+    peakRet: TIGHT_MFE_RETENTION,
+    harvestRet: 0.8,
+    thesisMinHoldMs: 45_000,
+    timeDecayMs: 180_000,
   },
 };
 
@@ -113,35 +114,35 @@ export function exitParamsForTrade(
   const base = PLAYBOOK_EXIT[playbook];
   const setup = String(entrySetup || '').trim().toUpperCase();
 
-  // V-bounce / dump continuation — hold for the leg (not tiny tpFloor), same 35% giveback
+  // V-bounce / dump continuation — lock PeakProtect after ~1pt MFE (was 2.5 → gave back winners)
   if (setup === 'CONTINUATION' || setup === 'PULLBACK') {
     return {
       ...base,
       tpPct: 0.0028,
-      tpFloor: 4.0,
-      slPct: base.slPct,
-      slFloor: base.slFloor,
-      mfeFloorPct: 0.00055,
-      mfeFloorAbs: 2.5,
+      tpFloor: 3.5,
+      slPct: Math.min(base.slPct, 0.0018),
+      slFloor: Math.min(base.slFloor, 0.18),
+      mfeFloorPct: 0.00028,
+      mfeFloorAbs: 1.0,
       peakRet: MIN_MFE_RETENTION,
       harvestRet: HARVEST_MFE_RETENTION,
-      thesisMinHoldMs: 180_000,
-      timeDecayMs: 600_000,
+      thesisMinHoldMs: 60_000,
+      timeDecayMs: 480_000,
     };
   }
 
-  // FADE / failed-break bounce from low — still room to mid, same 35% giveback
+  // Legacy FADE / failed-break — tight cut if somehow entered
   if (setup === 'FADE' || setup === 'FAILED_BREAK') {
     return {
       ...base,
-      tpPct: 0.0022,
-      tpFloor: 3.0,
-      mfeFloorPct: 0.00045,
-      mfeFloorAbs: 1.8,
-      peakRet: MIN_MFE_RETENTION,
-      harvestRet: HARVEST_MFE_RETENTION,
-      thesisMinHoldMs: 120_000,
-      timeDecayMs: 420_000,
+      tpPct: 0.002,
+      tpFloor: 2.0,
+      mfeFloorPct: 0.00022,
+      mfeFloorAbs: 0.8,
+      peakRet: TIGHT_MFE_RETENTION,
+      harvestRet: 0.8,
+      thesisMinHoldMs: 45_000,
+      timeDecayMs: 240_000,
     };
   }
 

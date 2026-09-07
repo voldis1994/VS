@@ -409,7 +409,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
     note:
-      'Setup-first. Max 35% MFE giveback everywhere (keep ≥65%). CONTINUATION/PULLBACK/FADE ride the leg (tp≥3–4pt). Entry on closed 10s confirm.',
+      'WITH-MOVE only (no FADE against trend). PeakProtect locks ≥65% MFE early. Entry on every closed 10s move with flow.',
   };
 }
 
@@ -1284,9 +1284,9 @@ async function robotCycle(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // After close: 1×10s bar pause; after HardInv — brief lock
+    // After close: tiny pause so next 10s move can fire; only HardInv gets a short lock
     const hardAgo = s.last_hard_exit_ms > 0 ? Date.now() - s.last_hard_exit_ms : Infinity;
-    const POST_CLOSE_COOLDOWN_MS = hardAgo < 180_000 ? 25_000 : 10_000;
+    const POST_CLOSE_COOLDOWN_MS = hardAgo < 120_000 ? 8_000 : 3_000;
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
     if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
       pushTick(s, {
@@ -1295,7 +1295,7 @@ async function robotCycle(s: Internal) {
         ask: quote.ask,
         mid: quote.mid,
         detail: `cooldown ${Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000)}s after close${
-          hardAgo < 180_000 ? ' · hard-exit lock' : ''
+          hardAgo < 120_000 ? ' · hard-exit lock' : ''
         }`,
       });
       return;
@@ -1384,57 +1384,27 @@ async function robotCycle(s: Internal) {
         ? decideEntryFromSetup(setup, bar, s.last_minute_candles)
         : null;
 
-    // Mid-swing NONE was starving every real 10s V-leg — trade the move (never against dump/rally)
-    if (!entry && (setup.kind === 'NONE' || setup.status === 'NONE')) {
+    // Trade every real 10s move — NONE / FORMING / no setup-confirm all fall through to with-flow MOVE
+    if (!entry) {
       entry = decideEntryFromTenSecMove(st, bar, s.last_minute_candles);
-      if (!entry) {
-        pushTick(s, {
-          phase: 'DECIDE',
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          detail: `${ohlcLine} · NONE · ${setup.reason}`,
-        });
-        return;
-      }
-    }
-
-    if (setup.status === 'FORMING' && !entry) {
-      pushTick(s, {
-        phase: 'DECIDE',
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        detail: `${ohlcLine} · FORMING · ${setup.reason}`,
-      });
-      return;
     }
 
     if (!entry) {
-      const tipNote =
-        setup.side &&
-        ((setup.side === 'BUY' &&
-          st.ready &&
-          bar.close >= st.swing_high - Math.max(st.span * 0.08, 0.8)) ||
-          (setup.side === 'SELL' &&
-            st.ready &&
-            bar.close <= st.swing_low + Math.max(st.span * 0.08, 0.8)))
-          ? ' · blocked tip-chase'
-          : '';
       pushTick(s, {
         phase: 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: `${ohlcLine} · ARMED · no 10s confirm yet${tipNote} · ${setup.reason}`,
+        detail: `${ohlcLine} · wait next 10s move · ${setup.reason}`,
       });
       return;
     }
 
-    // Opposite-side lock: brief for 10s V-flips; longer only after HardInv
-    const hardRecent = s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < 300_000;
-    const SIDE_LOCK_MS = hardRecent ? 45_000 : 20_000;
+    // Side-lock only after HardInvalidation — never block with-trend flips on a new move
+    const hardRecent = s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < 120_000;
+    const SIDE_LOCK_MS = hardRecent ? 12_000 : 0;
     if (
+      SIDE_LOCK_MS > 0 &&
       s.last_entry_side &&
       s.last_entry_side !== entry.direction &&
       Date.now() - s.last_entry_side_ms < SIDE_LOCK_MS
@@ -1446,7 +1416,7 @@ async function robotCycle(s: Internal) {
         mid: quote.mid,
         detail: `${ohlcLine} · side-lock ${s.last_entry_side} ${Math.ceil(
           (SIDE_LOCK_MS - (Date.now() - s.last_entry_side_ms)) / 1000
-        )}s · no flip to ${entry.direction}${hardRecent ? ' · after hard exit' : ''}`,
+        )}s · after hard exit`,
       });
       return;
     }
