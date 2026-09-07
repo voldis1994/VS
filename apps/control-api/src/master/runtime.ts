@@ -87,6 +87,8 @@ class MasterRuntime {
   last_exit_reason: string | null = null;
   last_loss_ms = 0;
   recovered = false;
+  /** VS-System- style: block new entries while an order is in-flight without a position yet. */
+  private inflight_until_ms = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
   private seenIntentSnapshot: string[] = [];
   epic = GOLD_SPEC.epic;
@@ -215,12 +217,16 @@ class MasterRuntime {
     let executed = false;
     let execution_detail: string | null = null;
 
+    const inflight =
+      Date.now() < this.inflight_until_ms || this.positions.count() > 0;
     if (
       this.running &&
       (this.cfg.mode === 'PAPER' || allow_live) &&
       (cycle.decision.kind === 'BUY' || cycle.decision.kind === 'SELL') &&
-      cycle.risk.allowed
+      cycle.risk.allowed &&
+      !inflight
     ) {
+      this.inflight_until_ms = Date.now() + 90_000;
       const { execution, place } = await executeDecision({
         broker,
         pipeline: this.pipeline,
@@ -240,6 +246,7 @@ class MasterRuntime {
 
       if (execution.accepted && place?.position_id) {
         executed = true;
+        this.inflight_until_ms = 0;
         this.seenIntentSnapshot.push(execution.intent_id);
         const fill =
           place.fill_price ??
@@ -258,15 +265,21 @@ class MasterRuntime {
           take_profit: cand.take_profit,
           decision: cycle.decision,
         });
+      } else if (!execution.accepted) {
+        this.inflight_until_ms = 0;
       }
     } else if (cycle.decision.kind === 'BUY' || cycle.decision.kind === 'SELL') {
       execution_detail = !this.running
         ? 'runtime_stopped'
-        : !cycle.risk.allowed
-          ? `risk:${cycle.risk.reasons.join(',')}`
-          : this.cfg.mode === 'LIVE' && !allow_live
-            ? 'live_gate_off'
-            : 'not_armed';
+        : inflight
+          ? this.positions.count() > 0
+            ? 'one_trade_open'
+            : 'inflight_order'
+          : !cycle.risk.allowed
+            ? `risk:${cycle.risk.reasons.join(',')}`
+            : this.cfg.mode === 'LIVE' && !allow_live
+              ? 'live_gate_off'
+              : 'not_armed';
       this.last_execution_detail = execution_detail;
     }
 
