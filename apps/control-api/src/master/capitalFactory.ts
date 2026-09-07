@@ -62,6 +62,8 @@ export function createCapitalBroker(creds: CapitalBrokerCreds): CapitalBroker {
         dealId: input.dealId,
         stopLevel: input.stopLevel,
         profitLevel: input.profitLevel,
+        stopDistance: input.stopDistance,
+        trailingStop: input.trailingStop,
       }),
     confirm: async (session, ref) => confirmCapitalDeal(session, ref),
     prices: async (session, epic, resolution, max) =>

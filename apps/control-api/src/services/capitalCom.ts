@@ -959,15 +959,25 @@ export async function modifyCapitalPosition(
     stopLevel?: number | null;
     profitLevel?: number | null;
     stopDistance?: number | null;
+    /** Native Capital trailingStop (survives process death) */
+    trailingStop?: boolean;
   }
 ): Promise<{ ok: boolean; deal_reference?: string; detail: string; status: number; json: any }> {
   const id = input.dealId.trim();
   if (!id) return { ok: false, status: 0, json: {}, detail: 'dealId required to modify' };
   const body: Record<string, unknown> = {};
   const dist = input.stopDistance != null ? Number(input.stopDistance) : NaN;
-  if (Number.isFinite(dist) && dist > 0 && input.stopLevel == null) {
+  const hasDist = Number.isFinite(dist) && dist > 0;
+  const hasLevel = input.stopLevel !== undefined && input.stopLevel !== null;
+
+  if (input.trailingStop && hasDist) {
+    // Native Capital trail — chart SL walks with price
+    body.trailingStop = true;
     body.stopDistance = dist;
-  } else if (input.stopLevel !== undefined) {
+  } else if (hasDist && !hasLevel) {
+    body.stopDistance = dist;
+  } else if (hasLevel) {
+    // Absolute stopLevel ONLY — do NOT send trailingStop:false (VS-System)
     body.stopLevel = input.stopLevel;
   }
   if (input.profitLevel !== undefined) {

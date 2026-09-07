@@ -62,6 +62,7 @@ export class FilePersist implements PersistClient {
           multi_tp_levels: p.multi_tp_levels ?? null,
           soft_trail_armed_at: p.soft_trail_armed_at ?? null,
           soft_trail_peak: p.soft_trail_peak ?? null,
+          native_trail_armed: !!p.native_trail_armed,
         },
       }));
       this.mem.intents = new Set(raw.intents || []);
@@ -160,6 +161,9 @@ export class FilePersist implements PersistClient {
         soft_trail_armed_at:
           p.soft_trail_armed_at ?? p.payload?.soft_trail_armed_at ?? null,
         soft_trail_peak: p.soft_trail_peak ?? p.payload?.soft_trail_peak ?? null,
+        native_trail_armed: !!(
+          p.native_trail_armed ?? p.payload?.native_trail_armed
+        ),
       })),
       intents: [...this.mem.intents],
     };

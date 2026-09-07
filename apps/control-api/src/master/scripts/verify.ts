@@ -143,6 +143,7 @@ async function main() {
       'src/master/moneyExit.ts',
       'src/master/capitalLoginLock.ts',
       'src/master/newsCalendar.ts',
+      'src/master/capitalStream.ts',
       'src/master/persist.ts',
       'src/master/filePersist.ts',
       'src/master/liveFeed.ts',

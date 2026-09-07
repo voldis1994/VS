@@ -816,6 +816,14 @@ class MasterRuntime {
     let busy = false;
     const brokerName = this.broker.name;
 
+    // Prefer Capital streaming when available — faster manage ticks
+    if (this.broker instanceof CapitalBroker) {
+      void this.broker.ensureMarketStream([this.epic]);
+    }
+    // Capital: poll at 1s (stream cache makes getQuote cheap when WS healthy)
+    const intervalMs =
+      this.broker instanceof CapitalBroker ? Math.min(pollMs, 1000) : pollMs;
+
     const cycle = async () => {
       if (!this.running || busy || !this.broker || this.broker.paper) return;
       busy = true;
@@ -867,7 +875,11 @@ class MasterRuntime {
             );
           }
           seeded = true;
-          this.broker_detail = `${this.broker_detail || brokerName};broker_feed:${brokerName};seed:${seedDetail}`.slice(
+          const streamNote =
+            this.broker instanceof CapitalBroker && this.broker.isMarketStreamHealthy()
+              ? 'stream:ok'
+              : 'stream:rest';
+          this.broker_detail = `${this.broker_detail || brokerName};broker_feed:${brokerName};seed:${seedDetail};${streamNote}`.slice(
             -400
           );
         } else if (!process.env.VITEST) {
@@ -897,7 +909,9 @@ class MasterRuntime {
           ask: q.ask,
           mid: q.mid,
           spread: q.spread,
+          epic: q.epic || this.epic,
           ts_ms: q.ts_ms,
+          min_stop_distance: q.min_stop_distance,
         });
       } finally {
         busy = false;
@@ -907,7 +921,7 @@ class MasterRuntime {
     await cycle();
     this.liveFeedTimer = setInterval(() => {
       void cycle();
-    }, pollMs);
+    }, intervalMs);
   }
 
   /** Attach public internet quote loop so /api/master/start trades without a separate script. */

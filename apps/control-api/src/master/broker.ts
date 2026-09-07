@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { createLoginLockState, withLoginLock } from './capitalLoginLock.js';
+import { CapitalQuoteStream } from './capitalStream.js';
 import type { Side } from './types.js';
 
 export type BrokerQuote = {
@@ -124,6 +125,10 @@ export interface MasterBroker {
     position_id: string;
     stop_level?: number;
     profit_level?: number;
+    /** VS-System native Capital trailingStop */
+    trailing_stop?: boolean;
+    /** Absolute price distance for Capital stopDistance / trailingStop */
+    stop_distance?: number;
   }): Promise<{ ok: boolean; detail: string; order_id?: string }>;
 }
 
@@ -310,6 +315,8 @@ export class CapitalBroker implements MasterBroker {
   private processed = new Set<string>();
   /** VS-System: serialize all Capital REST for this broker instance */
   private readonly loginLock = createLoginLockState();
+  /** Capital streaming quotes — REST fallback when unhealthy */
+  private readonly stream = new CapitalQuoteStream();
   /** Last dealingRules seen per epic from markets quote */
   private dealRulesByEpic = new Map<
     string,
@@ -327,7 +334,13 @@ export class CapitalBroker implements MasterBroker {
       close: (session: any, dealId: string, size?: number) => Promise<any>;
       modify?: (
         session: any,
-        input: { dealId: string; stopLevel?: number | null; profitLevel?: number | null }
+        input: {
+          dealId: string;
+          stopLevel?: number | null;
+          profitLevel?: number | null;
+          stopDistance?: number | null;
+          trailingStop?: boolean;
+        }
       ) => Promise<{ ok: boolean; detail: string; deal_reference?: string }>;
       confirm?: (
         session: any,
@@ -406,7 +419,13 @@ export class CapitalBroker implements MasterBroker {
     close: (session: any, dealId: string, size?: number) => Promise<any>;
     modify?: (
       session: any,
-      input: { dealId: string; stopLevel?: number | null; profitLevel?: number | null }
+      input: {
+        dealId: string;
+        stopLevel?: number | null;
+        profitLevel?: number | null;
+        stopDistance?: number | null;
+        trailingStop?: boolean;
+      }
     ) => Promise<{ ok: boolean; detail: string; deal_reference?: string }>;
     confirm?: (
       session: any,
@@ -458,7 +477,29 @@ export class CapitalBroker implements MasterBroker {
     const opened = await this.deps.acquire(this.deps.credentials);
     if (!opened.ok || !opened.session) return { ok: false, detail: opened.detail };
     this.session = opened.session;
+    // Wire streaming tokens (CST/security) — REST remains fallback
+    if (opened.session.cst && opened.session.securityToken && opened.session.base) {
+      this.stream.setTokens({
+        cst: String(opened.session.cst),
+        securityToken: String(opened.session.securityToken),
+        baseUrl: String(opened.session.base),
+      });
+    }
     return { ok: true, detail: 'capital connected' };
+  }
+
+  /** VS-System: true when WS is open and a quote arrived recently. */
+  isMarketStreamHealthy(maxAgeMs = 30_000): boolean {
+    return this.stream.isHealthy(maxAgeMs);
+  }
+
+  /** Subscribe epics on Capital streaming WS (best-effort). */
+  async ensureMarketStream(epics: string[]): Promise<'streaming' | 'fallback'> {
+    return this.stream.ensure(epics);
+  }
+
+  stopMarketStream() {
+    this.stream.stop();
   }
 
   async getHistoryBars(epic: string, maxBars = 60): Promise<BrokerHistoryBars> {
@@ -486,6 +527,21 @@ export class CapitalBroker implements MasterBroker {
   }
 
   async getQuote(epic: string): Promise<BrokerQuote | null> {
+    // Prefer fresh streaming mark when healthy (VS-System ensureMarketStream)
+    void this.stream.ensure([epic]);
+    const streamed = this.stream.getLatest(epic);
+    if (streamed && this.stream.isHealthy()) {
+      return {
+        bid: streamed.bid,
+        ask: streamed.offer,
+        mid: streamed.mid,
+        spread: streamed.offer - streamed.bid,
+        epic: streamed.epic || epic,
+        ts_ms: streamed.ts_ms,
+        min_stop_distance: this.liveMinStopDistance(epic),
+      };
+    }
+
     if (!this.session) return null;
     const q = await this.deps.quote(this.session, epic);
     if (q.bid == null || q.ask == null || q.mid == null) return null;
@@ -931,6 +987,8 @@ export class CapitalBroker implements MasterBroker {
     position_id: string;
     stop_level?: number;
     profit_level?: number;
+    trailing_stop?: boolean;
+    stop_distance?: number;
   }) {
     if (!this.session) return { ok: false, detail: 'not_connected' };
     if (!this.deps.modify) return { ok: false, detail: 'modify_not_wired' };
@@ -940,6 +998,8 @@ export class CapitalBroker implements MasterBroker {
       dealId: input.position_id,
       stopLevel: input.stop_level,
       profitLevel: input.profit_level,
+      stopDistance: input.stop_distance,
+      trailingStop: input.trailing_stop === true,
     });
     if (!res.ok) {
       return { ok: false, detail: res.detail || 'modify_failed', order_id: res.deal_reference };
@@ -953,7 +1013,7 @@ export class CapitalBroker implements MasterBroker {
           order_id: res.deal_reference,
         };
       }
-      if (!conf.ok && input.stop_level != null) {
+      if (!conf.ok && input.stop_level != null && !input.trailing_stop) {
         // Timeout / lag — only accept if broker stop moved near request
         const listed = await this.listOpenPositions();
         const hit = listed.positions.find((p) => p.position_id === input.position_id);

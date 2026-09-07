@@ -5,7 +5,7 @@
 import { createHash } from 'crypto';
 import { decideBestOutcomeExit, favorableMove } from '../services/exitManage.js';
 import type { MasterBroker } from './broker.js';
-import { clampStopForCapitalMark } from './capitalStop.js';
+import { clampStopForCapitalMark, effectiveMinStopDistance } from './capitalStop.js';
 import {
   clampCloseVolume,
   multiTpFinalPrice,
@@ -70,6 +70,8 @@ export type ManagedPosition = {
   soft_trail_armed_at?: string | null;
   /** Soft-trail peak mark watermark */
   soft_trail_peak?: number | null;
+  /** VS-System: Capital native trailingStop already armed */
+  native_trail_armed?: boolean;
 };
 
 export type ManageTickResult = {
@@ -502,6 +504,10 @@ export class PositionManager {
           min_stop_distance: minStopDist,
         });
         if (scalpChase) {
+          await this.maybeArmNativeTrailingStop(broker, pos, quote, {
+            lockPct: scalpLock,
+            min_stop_distance: minStopDist,
+          });
           await this.maybeScalpPctChaseStop(broker, pos, quote, {
             lockPct: scalpLock,
             min_stop_distance: minStopDist,
@@ -538,6 +544,10 @@ export class PositionManager {
           min_stop_distance: minStopDist,
         });
         if (scalpChase) {
+          await this.maybeArmNativeTrailingStop(broker, pos, quote, {
+            lockPct: scalpLock,
+            min_stop_distance: minStopDist,
+          });
           await this.maybeScalpPctChaseStop(broker, pos, quote, {
             lockPct: scalpLock,
             min_stop_distance: minStopDist,
@@ -830,6 +840,40 @@ export class PositionManager {
       until: now + capitalModifyRejectBackoffMs(mod.detail || ''),
       level: recovery,
     });
+  }
+
+  /**
+   * Arm Capital native trailingStop once in profit (survives process death).
+   * App-side 20% chase still runs; native trail is broker-side backup.
+   */
+  private async maybeArmNativeTrailingStop(
+    broker: MasterBroker,
+    pos: ManagedPosition,
+    quote: Quote,
+    opts: { lockPct: number; min_stop_distance?: number | null }
+  ): Promise<void> {
+    if (!broker.modifyPosition || pos.native_trail_armed) return;
+    const mark = protectiveMark(pos.side, quote);
+    const fav = favorableMove(pos.side, pos.entry, mark);
+    const minD = effectiveMinStopDistance(pos.epic, opts.min_stop_distance);
+    // Need clear profit beyond min-stop before asking Capital for native trail
+    if (!(fav > minD * 1.5)) return;
+
+    const dist = Math.max(minD, fav * opts.lockPct);
+    const mod = await broker.modifyPosition({
+      position_id: pos.position_id,
+      trailing_stop: true,
+      stop_distance: dist,
+    });
+    if (mod.ok) {
+      pos.native_trail_armed = true;
+      // Refresh local SL guess from mark −/+ dist
+      const guess =
+        pos.side === 'BUY' ? mark - dist : mark + dist;
+      if (pos.stop_loss == null) pos.stop_loss = guess;
+      else if (pos.side === 'BUY' && guess > pos.stop_loss) pos.stop_loss = guess;
+      else if (pos.side === 'SELL' && guess < pos.stop_loss) pos.stop_loss = guess;
+    }
   }
 
   /**
