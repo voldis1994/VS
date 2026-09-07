@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { buildCandidates } from '../candidates.js';
 import { masterOwnsManageSafely, masterOwnsPipeline } from '../deskBridge.js';
 import { applyMarketFilters } from '../filters.js';
 import { DEFAULT_MASTER_CONFIG, MasterPipeline } from '../pipeline.js';
 import { PositionManager } from '../positionManager.js';
-import { PaperBroker } from '../broker.js';
+import { Mt4FileBroker, PaperBroker, epicsMatch, normalizeEpicKey } from '../broker.js';
 import { syncPositionsWithBroker } from '../positionSync.js';
 import { masterRuntime } from '../runtime.js';
 import type { AnalysisSnapshot, Quote } from '../types.js';
@@ -299,5 +302,67 @@ describe('masterOwnsManageSafely', () => {
     expect(masterOwnsManageSafely(false)).toBe(true);
     if (prev === undefined) delete process.env.MASTER_OWNS_PIPELINE;
     else process.env.MASTER_OWNS_PIPELINE = prev;
+  });
+});
+
+describe('MASTER epic alias sync', () => {
+  it('GOLD local matches XAUUSD MT4 ticket — does not wipe as broker_flat', async () => {
+    expect(normalizeEpicKey('GOLD')).toBe('XAUUSD');
+    expect(epicsMatch('GOLD', 'XAUUSD')).toBe(true);
+
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-alias-'));
+    mkdirSync(join(root, 'status'), { recursive: true });
+    writeFileSync(
+      join(root, 'status', 'latest.json'),
+      JSON.stringify({
+        equity: 10_000,
+        balance: 10_000,
+        positions: [
+          {
+            ticket: 100001,
+            symbol: 'XAUUSD',
+            side: 'BUY',
+            lot: 0.1,
+            open: 4470,
+            sl: 4460,
+            tp: 4490,
+            profit: 0,
+          },
+        ],
+      })
+    );
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    const listed = await broker.listOpenPositions('GOLD');
+    expect(listed.ok).toBe(true);
+    expect(listed.positions.length).toBe(1);
+    expect(listed.positions[0]!.position_id).toBe('100001');
+
+    const pm = new PositionManager();
+    pm.register({
+      position_id: '100001',
+      opportunity_id: '00000000-0000-4000-8000-00000000aaaa',
+      intent_id: 'intent-alias',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4470,
+      stop_loss: 4460,
+      decision: {
+        decision_id: 'd-alias',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis({ regime: 'TREND' }),
+        expectancy: null,
+      },
+    });
+    const sync = await syncPositionsWithBroker(pm, broker, 'GOLD');
+    expect(sync.orphans_local.length).toBe(0);
+    expect(sync.matched).toBe(1);
+    expect(pm.count()).toBe(1);
   });
 });

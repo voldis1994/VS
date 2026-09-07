@@ -74,11 +74,13 @@ export async function registerMasterRoutes(app: FastifyInstance) {
         (wantMode === 'LIVE' || masterRuntime.cfg.mode === 'LIVE') &&
         process.env.MASTER_LIVE_ENABLED !== 'true'
       ) {
-        return { ok: false, detail: 'LIVE blocked — MASTER_LIVE_ENABLED not set' };
+        masterRuntime.setMode('PAPER');
+        return { ok: false, detail: 'LIVE blocked — MASTER_LIVE_ENABLED not set', status: masterRuntime.status() };
       }
       const { resolveBrokerFromEnv } = await import('../master/envBroker.js');
       const resolved = await resolveBrokerFromEnv();
       if (!resolved.ok) {
+        masterRuntime.setMode('PAPER');
         return {
           ok: false,
           detail: resolved.detail,
@@ -87,7 +89,8 @@ export async function registerMasterRoutes(app: FastifyInstance) {
         };
       }
       if (resolved.mode === 'LIVE' && process.env.MASTER_LIVE_ENABLED !== 'true') {
-        return { ok: false, detail: 'LIVE broker resolved but MASTER_LIVE_ENABLED not set' };
+        masterRuntime.setMode('PAPER');
+        return { ok: false, detail: 'LIVE broker resolved but MASTER_LIVE_ENABLED not set', status: masterRuntime.status() };
       }
       const wantLive =
         wantMode === 'LIVE' || masterRuntime.cfg.mode === 'LIVE';
@@ -95,6 +98,7 @@ export async function registerMasterRoutes(app: FastifyInstance) {
         resolved.mode === 'LIVE' && !resolved.broker.paper && resolved.ok;
       // Never label PAPER fills as LIVE — refuse rather than silent paper-as-live
       if (wantLive && !liveOk) {
+        masterRuntime.setMode('PAPER');
         return {
           ok: false,
           detail: resolved.detail || 'LIVE unavailable — refusing paper-as-live',
@@ -345,10 +349,13 @@ h2{font-size:13px;color:#9fb0c0;margin:22px 0 8px;text-transform:uppercase;lette
 <p class="muted">Single authoritative pipeline · scores are heuristic — not probability · LIVE gated unless MASTER_LIVE_ENABLED</p>
 <div class="row">
   <button class="primary" id="btnStart">Start PAPER</button>
+  <button id="btnLive">Start LIVE</button>
   <button id="btnStop">Stop</button>
   <button id="btnRecover">Recover</button>
   <button id="btnKill">Kill switch</button>
   <button id="btnAi">AI advisory toggle</button>
+  <button id="btnCapital">Capital probe</button>
+  <button id="btnMt4">Attach MT4</button>
 </div>
 <div class="grid" id="cards"></div>
 <h2>Open positions</h2>
@@ -409,11 +416,14 @@ async function refresh(){
     }).join(''):card('Journal','no closed trades yet');
   }catch(e){pushLog('status error '+e)}
 }
-document.getElementById('btnStart').onclick=async()=>{await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'PAPER'})});const r=await fetch('/api/master/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'PAPER'})}).then(r=>r.json());pushLog('start '+JSON.stringify(r.ok));refresh()};
+document.getElementById('btnStart').onclick=async()=>{await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'PAPER'})});const r=await fetch('/api/master/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'PAPER'})}).then(r=>r.json());pushLog('start PAPER ok='+r.ok+' '+(r.detail||''));refresh()};
+document.getElementById('btnLive').onclick=async()=>{await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'LIVE'})});const r=await fetch('/api/master/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'LIVE'})}).then(r=>r.json());pushLog('start LIVE ok='+r.ok+' '+(r.detail||'')+' mode='+(r.status&&r.status.mode));refresh()};
 document.getElementById('btnStop').onclick=async()=>{const r=await fetch('/api/master/stop',{method:'POST'}).then(r=>r.json());pushLog('stop');refresh()};
 document.getElementById('btnRecover').onclick=async()=>{const r=await fetch('/api/master/recover',{method:'POST'}).then(r=>r.json());pushLog('recover positions='+r.positions+' journal='+r.opportunities);refresh()};
 document.getElementById('btnKill').onclick=async()=>{kill=!kill;await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kill_switch:kill})});pushLog('kill_switch='+kill);refresh()};
 document.getElementById('btnAi').onclick=async()=>{ai=ai==='off'?'advisory':'off';await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ai_mode:ai})});pushLog('ai_mode='+ai);refresh()};
+document.getElementById('btnCapital').onclick=async()=>{const r=await fetch('/api/master/broker/capital/probe',{method:'POST'}).then(r=>r.json());pushLog('capital probe '+JSON.stringify(r).slice(0,200));refresh()};
+document.getElementById('btnMt4').onclick=async()=>{const bridge=prompt('MT4 bridge root path','/tmp/vs-mt4-bridge');if(!bridge)return;const r=await fetch('/api/master/broker/mt4',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bridge_root:bridge})}).then(r=>r.json());pushLog('mt4 '+JSON.stringify(r).slice(0,200));refresh()};
 refresh();setInterval(refresh,2000);
 </script>
 </body></html>`;

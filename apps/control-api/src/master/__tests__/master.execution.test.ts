@@ -301,52 +301,58 @@ describe('VS MASTER MT4 file bridge', () => {
         profit_level: 4370,
       });
       expect(mod.ok).toBe(true);
-      // Wait briefly for sim to consume MODIFY (or assert command shape if still pending)
-      await new Promise((r) => setTimeout(r, 120));
+      expect(mod.detail).toBe('mt4_modify_acked');
       const modAck = join(root, 'acks', `ack_${mod.order_id}.json`);
-      if (existsSync(modAck)) {
-        const modPayload = JSON.parse(readFileSync(modAck, 'utf8'));
-        expect(modPayload.ok).toBe(true);
-        expect(Number(modPayload.ticket)).toBe(Number(placed.position_id));
-      } else {
-        const modPath = join(root, 'commands', `cmd_${mod.order_id}.json`);
-        const modPayload = JSON.parse(readFileSync(modPath, 'utf8'));
-        expect(modPayload.action).toBe('MODIFY');
-        expect(modPayload.ticket).toBe(Number(placed.position_id));
-      }
-      const opens = await broker.listOpenPositions('XAUUSD');
+      expect(existsSync(modAck)).toBe(true);
+      const modPayload = JSON.parse(readFileSync(modAck, 'utf8'));
+      expect(modPayload.ok).toBe(true);
+      expect(Number(modPayload.ticket)).toBe(Number(placed.position_id));
+      const opens = await broker.listOpenPositions('GOLD'); // alias must match XAUUSD ticket
       expect(opens.ok).toBe(true);
       expect(opens.positions.some((p) => p.position_id === placed.position_id)).toBe(true);
       const hit = opens.positions.find((p) => p.position_id === placed.position_id)!;
-      expect(hit.stop_level === 4420 || hit.stop_level === 4410).toBe(true);
+      expect(hit.stop_level).toBe(4420);
     } finally {
       sim.stop();
     }
   });
 
   it('writes OPEN command and times out honestly without EA/sim', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-noack-'));
-    const broker = new Mt4FileBroker(root);
-    await broker.connect();
-    mkdirSync(join(root, 'market'), { recursive: true });
-    writeFileSync(
-      join(root, 'market', 'latest.json'),
-      JSON.stringify({ bid: 4400, ask: 4400.4, symbol: 'XAUUSD' })
-    );
-    const placed = await broker.placeOrder({
-      intent_id: 'noackintent0000000000001',
-      epic: 'XAUUSD',
-      side: 'BUY',
-      size: 0.01,
-    });
-    expect(placed.ok).toBe(false);
-    expect(placed.detail).toBe('mt4_command_written_ack_timeout');
-    expect(placed.position_id).toBeNull();
-    const cmdPath = join(root, 'commands', `cmd_${placed.order_id}.json`);
-    const payload = JSON.parse(readFileSync(cmdPath, 'utf8'));
-    expect(payload.action).toBe('OPEN');
-    expect(payload.side).toBe('BUY');
-    expect(payload.lot).toBe(0.01);
+    const prevPolls = process.env.MASTER_MT4_ACK_POLLS;
+    const prevMs = process.env.MASTER_MT4_ACK_POLL_MS;
+    process.env.MASTER_MT4_ACK_POLLS = '20';
+    process.env.MASTER_MT4_ACK_POLL_MS = '50';
+    try {
+      const root = mkdtempSync(join(tmpdir(), 'vs-mt4-noack-'));
+      const broker = new Mt4FileBroker(root);
+      await broker.connect();
+      mkdirSync(join(root, 'market'), { recursive: true });
+      writeFileSync(
+        join(root, 'market', 'latest.json'),
+        JSON.stringify({ bid: 4400, ask: 4400.4, symbol: 'XAUUSD' })
+      );
+      const placed = await broker.placeOrder({
+        intent_id: 'noackintent0000000000001',
+        epic: 'XAUUSD',
+        side: 'BUY',
+        size: 0.01,
+      });
+      expect(placed.ok).toBe(false);
+      expect(placed.detail).toBe('mt4_command_written_ack_timeout');
+      expect(placed.position_id).toBeNull();
+      // Expired so a later OPEN is not blocked forever
+      const expired = join(root, 'commands', 'expired', `cmd_${placed.order_id}.json`);
+      expect(existsSync(expired)).toBe(true);
+      const payload = JSON.parse(readFileSync(expired, 'utf8'));
+      expect(payload.action).toBe('OPEN');
+      expect(payload.side).toBe('BUY');
+      expect(payload.lot).toBe(0.01);
+    } finally {
+      if (prevPolls === undefined) delete process.env.MASTER_MT4_ACK_POLLS;
+      else process.env.MASTER_MT4_ACK_POLLS = prevPolls;
+      if (prevMs === undefined) delete process.env.MASTER_MT4_ACK_POLL_MS;
+      else process.env.MASTER_MT4_ACK_POLL_MS = prevMs;
+    }
   });
 });
 

@@ -56,6 +56,24 @@ export type ListOpenResult = {
   detail?: string;
 };
 
+/** Canonical epic family — GOLD ↔ XAUUSD must not wipe live tickets on sync. */
+export function normalizeEpicKey(epic: string): string {
+  const s = String(epic || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+  if (!s) return '';
+  if (s === 'GOLD' || s === 'XAU' || s === 'XAUUSD' || s.startsWith('XAU')) return 'XAUUSD';
+  if (s === 'SILVER' || s === 'XAG' || s === 'XAGUSD' || s.startsWith('XAG')) return 'XAGUSD';
+  return s;
+}
+
+export function epicsMatch(a: string, b: string): boolean {
+  if (!a || !b) return a === b;
+  if (a === b) return true;
+  return normalizeEpicKey(a) === normalizeEpicKey(b);
+}
+
 export interface MasterBroker {
   readonly name: string;
   readonly paper: boolean;
@@ -103,7 +121,7 @@ export class PaperBroker implements MasterBroker {
     const all = [...this.positions.values()];
     return {
       ok: true,
-      positions: epic ? all.filter((p) => p.epic === epic) : all,
+      positions: epic ? all.filter((p) => epicsMatch(p.epic, epic)) : all,
     };
   }
 
@@ -302,7 +320,7 @@ export class CapitalBroker implements MasterBroker {
       };
     }
     const positions = (listed.positions as any[])
-      .filter((p) => !epic || p.epic === epic)
+      .filter((p) => !epic || epicsMatch(p.epic, epic))
       .map((p) => ({
         position_id: p.deal_id,
         epic: p.epic,
@@ -609,6 +627,65 @@ export class Mt4FileBroker implements MasterBroker {
     }
   }
 
+  private ackBudget() {
+    // Default ~15s — real EA latency; tests override via MASTER_MT4_ACK_*
+    const pollMs = Math.max(20, Number(process.env.MASTER_MT4_ACK_POLL_MS || 100));
+    const polls = Math.max(1, Number(process.env.MASTER_MT4_ACK_POLLS || 150));
+    return { pollMs, polls };
+  }
+
+  /** Block new OPEN while an unacked OPEN command still sits in the bridge. */
+  private hasPendingOpenCommand(): boolean {
+    const folder = join(this.bridgeRoot, 'commands');
+    if (!existsSync(folder)) return false;
+    for (const f of readdirSync(folder)) {
+      if (!f.startsWith('cmd_') || !f.endsWith('.json')) continue;
+      try {
+        const payload = JSON.parse(readFileSync(join(folder, f), 'utf8'));
+        if (String(payload.action || '').toUpperCase() !== 'OPEN') continue;
+        const id = String(payload.id || '');
+        if (!id) continue;
+        if (!existsSync(join(this.bridgeRoot, 'acks', `ack_${id}.json`))) return true;
+      } catch {
+        /* ignore corrupt */
+      }
+    }
+    return false;
+  }
+
+  private expireCommand(id: string) {
+    const src = join(this.bridgeRoot, 'commands', `cmd_${id}.json`);
+    if (!existsSync(src)) return;
+    const destDir = join(this.bridgeRoot, 'commands', 'expired');
+    mkdirSync(destDir, { recursive: true });
+    try {
+      renameSync(src, join(destDir, `cmd_${id}.json`));
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  private async waitAck(
+    id: string
+  ): Promise<{ ok: boolean; ack: any | null; detail: string }> {
+    const ackPath = join(this.bridgeRoot, 'acks', `ack_${id}.json`);
+    const { pollMs, polls } = this.ackBudget();
+    for (let i = 0; i < polls; i++) {
+      await new Promise((r) => setTimeout(r, pollMs));
+      if (!existsSync(ackPath)) continue;
+      try {
+        const ack = JSON.parse(readFileSync(ackPath, 'utf8'));
+        if (!ack.ok) {
+          return { ok: false, ack, detail: `mt4_reject:${ack.detail || 'nack'}` };
+        }
+        return { ok: true, ack, detail: 'acked' };
+      } catch {
+        /* keep polling */
+      }
+    }
+    return { ok: false, ack: null, detail: 'mt4_ack_timeout' };
+  }
+
   async getQuote(epic: string): Promise<BrokerQuote | null> {
     const m = this.readJson(join('market', 'latest.json'));
     if (!m) return null;
@@ -655,7 +732,7 @@ export class Mt4FileBroker implements MasterBroker {
         profit_level: numOrNull(p.tp ?? p.TP),
         upl: numOrNull(p.profit ?? p.Profit),
       }))
-      .filter((p: BrokerPosition) => p.position_id && (!epic || p.epic === epic));
+      .filter((p: BrokerPosition) => p.position_id && (!epic || epicsMatch(p.epic, epic)));
     return { ok: true, positions };
   }
 
@@ -667,6 +744,16 @@ export class Mt4FileBroker implements MasterBroker {
         position_id: null,
         fill_price: null,
         detail: 'duplicate_intent',
+        paper: false,
+      };
+    }
+    if (this.hasPendingOpenCommand()) {
+      return {
+        ok: false,
+        order_id: null,
+        position_id: null,
+        fill_price: null,
+        detail: 'mt4_pending_open',
         paper: false,
       };
     }
@@ -690,39 +777,49 @@ export class Mt4FileBroker implements MasterBroker {
     writeFileSync(tmp, JSON.stringify(payload) + '\n', 'utf8');
     renameSync(tmp, path);
 
-    // Poll Check- ack (EA or local simulator)
-    const ackPath = join(this.bridgeRoot, 'acks', `ack_${id}.json`);
-    for (let i = 0; i < 20; i++) {
-      await new Promise((r) => setTimeout(r, 50));
-      if (!existsSync(ackPath)) continue;
-      try {
-        const ack = JSON.parse(readFileSync(ackPath, 'utf8'));
-        if (!ack.ok) {
-          return {
-            ok: false,
-            order_id: id,
-            position_id: null,
-            fill_price: null,
-            detail: `mt4_reject:${ack.detail || 'nack'}`,
-            paper: false,
-          };
-        }
-        const ticket = String(ack.ticket || '');
-        const opens = await this.listOpenPositions(input.epic);
-        const hit =
-          opens.positions.find((p) => p.position_id === ticket) || opens.positions[0];
-        return {
-          ok: true,
-          order_id: id,
-          position_id: ticket || hit?.position_id || null,
-          fill_price: hit?.open_level ?? null,
-          detail: `mt4_filled ticket=${ticket || hit?.position_id}`,
-          paper: false,
-        };
-      } catch {
-        /* keep polling */
-      }
+    const waited = await this.waitAck(id);
+    if (waited.ok && waited.ack) {
+      const ticket = String(waited.ack.ticket || '');
+      const opens = await this.listOpenPositions(input.epic);
+      const hit =
+        opens.positions.find((p) => p.position_id === ticket) || opens.positions[0];
+      return {
+        ok: true,
+        order_id: id,
+        position_id: ticket || hit?.position_id || null,
+        fill_price: hit?.open_level ?? null,
+        detail: `mt4_filled ticket=${ticket || hit?.position_id}`,
+        paper: false,
+      };
     }
+    if (waited.ack && !waited.ok) {
+      this.expireCommand(id);
+      return {
+        ok: false,
+        order_id: id,
+        position_id: null,
+        fill_price: null,
+        detail: waited.detail,
+        paper: false,
+      };
+    }
+
+    // Timeout — last-chance: EA may have filled without readable ack yet
+    const opens = await this.listOpenPositions(input.epic);
+    const late = opens.positions.find(
+      (p) => p.side === input.side && Math.abs(p.size - input.size) < 1e-6
+    );
+    if (late) {
+      return {
+        ok: true,
+        order_id: id,
+        position_id: late.position_id,
+        fill_price: late.open_level,
+        detail: `mt4_filled_late ticket=${late.position_id}`,
+        paper: false,
+      };
+    }
+    this.expireCommand(id);
     return {
       ok: false,
       order_id: id,
@@ -743,24 +840,18 @@ export class Mt4FileBroker implements MasterBroker {
     writeFileSync(tmp, JSON.stringify(payload) + '\n', 'utf8');
     renameSync(tmp, path);
 
-    const ackPath = join(this.bridgeRoot, 'acks', `ack_${id}.json`);
-    for (let i = 0; i < 20; i++) {
-      await new Promise((r) => setTimeout(r, 50));
-      if (!existsSync(ackPath)) continue;
-      try {
-        const ack = JSON.parse(readFileSync(ackPath, 'utf8'));
-        if (!ack.ok) {
-          return { ok: false, detail: `mt4_close_reject:${ack.detail || 'nack'}` };
-        }
-        return { ok: true, detail: `mt4_closed ticket=${ack.ticket || position_id}` };
-      } catch {
-        /* keep polling */
-      }
+    const waited = await this.waitAck(id);
+    if (waited.ok) {
+      return { ok: true, detail: `mt4_closed ticket=${waited.ack?.ticket || position_id}` };
     }
+    if (waited.ack) {
+      return { ok: false, detail: waited.detail };
+    }
+    this.expireCommand(id);
     return { ok: false, detail: 'mt4_close_written_ack_timeout' };
   }
 
-  /** Check- protocol MODIFY — update SL/TP on an open ticket. */
+  /** Check- protocol MODIFY — wait for ack like OPEN/CLOSE (never lie ok:true on write). */
   async modifyPosition(input: {
     position_id: string;
     stop_level?: number;
@@ -781,7 +872,17 @@ export class Mt4FileBroker implements MasterBroker {
     const path = join(folder, `cmd_${id}.json`);
     writeFileSync(tmp, JSON.stringify(payload) + '\n', 'utf8');
     renameSync(tmp, path);
-    return { ok: true, detail: 'mt4_modify_written', order_id: id };
+
+    const waited = await this.waitAck(id);
+    if (waited.ok) {
+      return { ok: true, detail: 'mt4_modify_acked', order_id: id };
+    }
+    if (waited.ack) {
+      this.expireCommand(id);
+      return { ok: false, detail: waited.detail, order_id: id };
+    }
+    this.expireCommand(id);
+    return { ok: false, detail: 'mt4_modify_ack_timeout', order_id: id };
   }
 }
 
