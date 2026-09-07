@@ -17,6 +17,7 @@ import {
 import { formatTradeLabel } from './tradePresentation.js';
 import { notePipelineRegime } from './regimes.js';
 import { attachManageOnlyRobot, hasRunningEntryBrain } from './robotDesk.js';
+import { masterOwnsPipeline } from '../master/deskBridge.js';
 
 export { stopEntryRobotsForAccount } from './robotDesk.js';
 
@@ -75,6 +76,17 @@ async function loadCreds(connectionId: number): Promise<Record<string, string>> 
 export async function executePipelineIntent(
   intent: PipelineIntentInput
 ): Promise<FanoutResult> {
+  // When MASTER owns the pipeline, Market Core fanout must not dual-enter
+  if (masterOwnsPipeline()) {
+    return {
+      epic: String(intent.epic || '').trim(),
+      direction: intent.direction === 'SELL' ? 'SELL' : 'BUY',
+      setup_type: intent.setup_type ? String(intent.setup_type) : null,
+      regime: intent.regime ? String(intent.regime) : null,
+      subscribers: 0,
+      executed: [],
+    };
+  }
   const epic = String(intent.epic || '').trim();
   const direction = intent.direction === 'SELL' ? 'SELL' : 'BUY';
   const setupType = intent.setup_type ? String(intent.setup_type) : null;

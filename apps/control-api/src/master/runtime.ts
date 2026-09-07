@@ -286,8 +286,9 @@ class MasterRuntime {
         });
       } else if (!execution.accepted) {
         this.inflight_until_ms = 0;
-        if (/reject|RISK_CHECK|not_confirmed/i.test(execution.detail)) {
-          this.reject_until_ms = Date.now() + 120_000;
+        if (/reject|RISK_CHECK|not_confirmed|CAPITAL_SL|unconfirmed/i.test(execution.detail)) {
+          const { capitalModifyRejectBackoffMs } = await import('./capitalConfirm.js');
+          this.reject_until_ms = Date.now() + capitalModifyRejectBackoffMs(execution.detail);
         }
       }
     } else if (cycle.decision.kind === 'BUY' || cycle.decision.kind === 'SELL') {

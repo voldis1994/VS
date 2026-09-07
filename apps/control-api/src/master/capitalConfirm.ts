@@ -12,6 +12,7 @@ export type CapitalConfirm = {
   direction?: string;
   epic?: string;
   reason?: string;
+  rawHint?: string;
 };
 
 function pickStr(...vals: unknown[]): string | undefined {
@@ -44,17 +45,46 @@ export function parseCapitalConfirm(
     }
   }
   const level = Number(raw.level ?? affectedLevel);
+  const dealStatus = pickStr(raw.dealStatus);
+  const status = pickStr(raw.status, affectedStatus);
+  const reason = pickStr(
+    raw.reason,
+    raw.errorCode,
+    raw.rejectReason,
+    raw.rejectionReason,
+    affectedReason
+  );
+  let rawHint: string | undefined;
+  if (!reason && (dealStatus || status)) {
+    try {
+      rawHint = JSON.stringify(raw).slice(0, 280);
+    } catch {
+      rawHint = undefined;
+    }
+  }
   return {
     dealId: pickStr(raw.dealId, fromAffected),
-    dealStatus: pickStr(raw.dealStatus),
-    status: pickStr(raw.status, affectedStatus),
+    dealStatus,
+    status,
     level: Number.isFinite(level) ? level : undefined,
     profit: Number.isFinite(Number(raw.profit)) ? Number(raw.profit) : undefined,
     size: Number.isFinite(Number(raw.size)) ? Number(raw.size) : undefined,
     direction: raw.direction != null ? String(raw.direction) : undefined,
     epic: raw.epic != null ? String(raw.epic) : undefined,
-    reason: pickStr(raw.reason, raw.errorCode, raw.rejectReason, affectedReason),
+    reason,
+    rawHint,
   };
+}
+
+/** True when confirm is a final ACCEPTED/REJECTED (or OPEN with dealId). */
+export function isCapitalConfirmTerminal(c: CapitalConfirm): boolean {
+  const ds = (c.dealStatus ?? '').toUpperCase();
+  if (ds === 'ACCEPTED' || ds === 'REJECTED') return true;
+  const st = (c.status ?? '').toUpperCase();
+  if (c.dealId && (st === 'OPEN' || st === 'DELETED' || st === 'ACCEPTED')) {
+    return true;
+  }
+  return false;
 }
 
 export function isCapitalConfirmAccepted(c: CapitalConfirm): boolean {
@@ -68,3 +98,41 @@ export function isCapitalConfirmAccepted(c: CapitalConfirm): boolean {
   if (!ds && !st) return true;
   return false;
 }
+
+export function formatCapitalConfirmRejection(c: CapitalConfirm): string {
+  const ds = (c.dealStatus ?? '').toUpperCase();
+  if (ds === 'REJECTED' || (c.status ?? '').toUpperCase() === 'REJECTED') {
+    return `Capital rejected: ${c.reason || c.rawHint || ds || 'REJECTED'}`;
+  }
+  return c.reason || c.rawHint || 'confirm_not_accepted';
+}
+
+/** Stop / min-distance / attached-order reject — widen or fail-close. */
+export function isCapitalStopLevelReject(message: string): boolean {
+  const r = String(message ?? '').toUpperCase();
+  return (
+    r.includes('STOP') ||
+    r.includes('ATTACHED') ||
+    r.includes('MINIMUM') ||
+    r.includes('MIN_DISTANCE') ||
+    r.includes('LEVEL') ||
+    r.includes('DISTANCE') ||
+    r.includes('GUARANTEED') ||
+    r.includes('SL NOT MOVED') ||
+    r.includes('STOPLEVEL') ||
+    r.includes('DID NOT ACCEPT')
+  );
+}
+
+export function capitalModifyRejectBackoffMs(message: string): number {
+  const r = String(message ?? '').toUpperCase();
+  if (r.includes('RISK_CHECK')) return 300_000;
+  if (isCapitalStopLevelReject(message)) return 120_000;
+  return 90_000;
+}
+
+/** Stepped confirm poll delays (ms) — VS-System- waitConfirm pattern (shortened in tests). */
+export const CAPITAL_CONFIRM_POLL_MS =
+  process.env.VITEST || process.env.MASTER_CONFIRM_FAST === 'true'
+    ? [5, 10, 15, 25, 40, 60]
+    : [50, 100, 150, 200, 300, 400, 500, 700, 900, 1200, 1600, 2200];

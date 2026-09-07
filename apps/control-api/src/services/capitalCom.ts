@@ -424,7 +424,7 @@ export async function listCapitalAccounts(
   return { ok: true, accounts, detail: `${accounts.length} accounts` };
 }
 
-/** Equity snapshot for MASTER sizing — from GET /accounts (VS-System- pattern). */
+/** Equity snapshot for MASTER sizing — equity = account balance (VS-System- pattern). */
 export async function fetchCapitalAccountEquity(
   session: CapitalSession,
   preferredAccountId?: string | null
@@ -435,18 +435,19 @@ export async function fetchCapitalAccountEquity(
   const hit =
     (pref && listed.accounts.find((a) => a.accountId === pref)) ||
     listed.accounts.reduce((best, a) => {
-      const e = Number(a.available ?? a.balance ?? 0);
-      const be = Number(best.available ?? best.balance ?? 0);
+      const e = Number(a.balance ?? a.available ?? 0);
+      const be = Number(best.balance ?? best.available ?? 0);
       return e >= be ? a : best;
     });
-  const equity = Number(hit.available ?? hit.balance ?? 0);
-  const balance = Number(hit.balance ?? equity);
+  // Use balance for equity sizing — available is free margin and understates risk budget
+  const balance = Number(hit.balance ?? hit.available ?? 0);
+  const equity = Number.isFinite(balance) && balance > 0 ? balance : Number(hit.available ?? 0);
   if (!Number.isFinite(equity) || equity <= 0) {
     return { equity: 0, balance: 0, currency: hit.currency || 'GBP', detail: 'no_balance_on_account' };
   }
   return {
     equity,
-    balance,
+    balance: Number.isFinite(balance) ? balance : equity,
     currency: hit.currency || 'GBP',
     detail: `account=${hit.accountId}`,
   };
@@ -869,7 +870,7 @@ export async function listCapitalOpenPositions(
   return { ok: true, positions, detail: `${positions.length} open` };
 }
 
-/** Resolve dealReference → dealId + fill level after open. */
+/** Resolve dealReference → dealId + fill level after open (terminal poll helper for callers). */
 export async function confirmCapitalDeal(
   session: CapitalSession,
   dealReference: string
@@ -880,42 +881,89 @@ export async function confirmCapitalDeal(
   deal_status?: string;
   detail: string;
   rejected?: boolean;
+  pending?: boolean;
 }> {
+  const { parseCapitalConfirm, isCapitalConfirmTerminal, isCapitalConfirmAccepted, formatCapitalConfirmRejection } =
+    await import('../master/capitalConfirm.js');
   const ref = dealReference.trim();
   if (!ref) return { ok: false, detail: 'Empty dealReference' };
   const res = await session.get(`/api/v1/confirms/${encodeURIComponent(ref)}`);
   if (!res.ok) {
     return {
       ok: false,
+      pending: res.status === 404,
       detail: `Confirm HTTP ${res.status}: ${res.json?.errorCode || res.json?.message || res.text.slice(0, 120)}`,
     };
   }
-  const raw = (res.json || {}) as Record<string, unknown>;
-  const dealId = String(
-    raw.dealId || (Array.isArray(raw.affectedDeals) ? (raw.affectedDeals[0] as any)?.dealId : '') || ''
-  ).trim();
-  const levelRaw = Number(
-    raw.level ??
-      (Array.isArray(raw.affectedDeals) ? (raw.affectedDeals[0] as any)?.level : undefined)
-  );
-  const dealStatus = String(raw.dealStatus || raw.status || '').toUpperCase();
-  if (dealStatus === 'REJECTED') {
+  const parsed = parseCapitalConfirm((res.json || {}) as Record<string, unknown>);
+  if (!isCapitalConfirmTerminal(parsed)) {
+    return {
+      ok: false,
+      pending: true,
+      detail: `Confirm pending for ${ref}`,
+      deal_status: parsed.dealStatus || parsed.status,
+    };
+  }
+  if (!isCapitalConfirmAccepted(parsed)) {
     return {
       ok: false,
       rejected: true,
-      deal_status: dealStatus,
-      detail: `Capital rejected: ${raw.reason || raw.errorCode || 'REJECTED'}`,
+      deal_status: parsed.dealStatus || parsed.status,
+      detail: formatCapitalConfirmRejection(parsed),
     };
-  }
-  if (!dealId) {
-    return { ok: false, detail: `Confirm OK but no dealId for ${ref}` };
   }
   return {
     ok: true,
-    deal_id: dealId,
-    fill_level: Number.isFinite(levelRaw) ? levelRaw : undefined,
-    deal_status: dealStatus || undefined,
-    detail: `Confirmed dealId=${dealId}${Number.isFinite(levelRaw) ? ` fill=${levelRaw}` : ''}`,
+    deal_id: parsed.dealId,
+    fill_level: parsed.level,
+    deal_status: parsed.dealStatus || parsed.status,
+    detail: `Confirmed dealId=${parsed.dealId}${parsed.level != null ? ` fill=${parsed.level}` : ''}`,
+  };
+}
+
+/** PUT /positions/{dealId} — attach/widen SL or TP (VS-System- modifyPosition). */
+export async function modifyCapitalPosition(
+  session: CapitalSession,
+  input: {
+    dealId: string;
+    stopLevel?: number | null;
+    profitLevel?: number | null;
+    stopDistance?: number | null;
+  }
+): Promise<{ ok: boolean; deal_reference?: string; detail: string; status: number; json: any }> {
+  const id = input.dealId.trim();
+  if (!id) return { ok: false, status: 0, json: {}, detail: 'dealId required to modify' };
+  const body: Record<string, unknown> = {};
+  const dist = input.stopDistance != null ? Number(input.stopDistance) : NaN;
+  if (Number.isFinite(dist) && dist > 0 && input.stopLevel == null) {
+    body.stopDistance = dist;
+  } else if (input.stopLevel !== undefined) {
+    body.stopLevel = input.stopLevel;
+  }
+  if (input.profitLevel !== undefined) {
+    body.profitLevel = input.profitLevel;
+  }
+  if (Object.keys(body).length === 0) {
+    return { ok: false, status: 0, json: {}, detail: 'Capital modify: empty body' };
+  }
+  const res = await session.put(`/api/v1/positions/${encodeURIComponent(id)}`, body);
+  if (!res.ok) {
+    return {
+      ok: false,
+      status: res.status,
+      json: res.json,
+      detail: `Capital.com modify ${id} failed HTTP ${res.status}: ${
+        res.json?.errorCode || res.json?.message || res.text.slice(0, 240)
+      }`,
+    };
+  }
+  const dealRef = String(res.json?.dealReference || res.json?.dealId || '');
+  return {
+    ok: true,
+    status: res.status,
+    json: res.json,
+    deal_reference: dealRef || undefined,
+    detail: dealRef ? `Modified dealId=${id} dealRef=${dealRef}` : `Modified dealId=${id}`,
   };
 }
 

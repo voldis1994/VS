@@ -7,6 +7,7 @@ import {
   fetchCapitalAccountEquity,
   fetchCapitalMarketQuote,
   listCapitalOpenPositions,
+  modifyCapitalPosition,
 } from '../services/capitalCom.js';
 import { CapitalBroker } from './broker.js';
 
@@ -50,6 +51,12 @@ export function createCapitalBroker(creds: CapitalBrokerCreds): CapitalBroker {
         profitLevel: input.profitLevel,
       }),
     close: async (session, dealId) => closeCapitalPosition(session, dealId),
+    modify: async (session, input) =>
+      modifyCapitalPosition(session, {
+        dealId: input.dealId,
+        stopLevel: input.stopLevel,
+        profitLevel: input.profitLevel,
+      }),
     confirm: async (session, ref) => confirmCapitalDeal(session, ref),
     account: async (session) => {
       const eq = await fetchCapitalAccountEquity(session, creds.capitalAccountId);

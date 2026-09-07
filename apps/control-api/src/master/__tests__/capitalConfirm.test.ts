@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { isCapitalConfirmAccepted, parseCapitalConfirm } from '../capitalConfirm.js';
+import {
+  isCapitalConfirmAccepted,
+  isCapitalConfirmTerminal,
+  isCapitalStopLevelReject,
+  parseCapitalConfirm,
+  formatCapitalConfirmRejection,
+  capitalModifyRejectBackoffMs,
+} from '../capitalConfirm.js';
 
 describe('VS MASTER capital confirm (VS-System-)', () => {
   it('parses dealId and fill level from confirm payload', () => {
@@ -13,6 +20,7 @@ describe('VS MASTER capital confirm (VS-System-)', () => {
     expect(c.dealId).toBe('deal-1');
     expect(c.level).toBe(4412.5);
     expect(isCapitalConfirmAccepted(c)).toBe(true);
+    expect(isCapitalConfirmTerminal(c)).toBe(true);
   });
 
   it('rejects REJECTED confirms', () => {
@@ -22,7 +30,9 @@ describe('VS MASTER capital confirm (VS-System-)', () => {
       affectedDeals: [{ dealId: 'x' }],
     });
     expect(isCapitalConfirmAccepted(c)).toBe(false);
+    expect(isCapitalConfirmTerminal(c)).toBe(true);
     expect(c.reason).toMatch(/RISK_CHECK/);
+    expect(formatCapitalConfirmRejection(c)).toMatch(/RISK_CHECK/);
   });
 
   it('reads dealId from affectedDeals when top-level missing', () => {
@@ -33,5 +43,14 @@ describe('VS MASTER capital confirm (VS-System-)', () => {
     expect(c.dealId).toBe('aff-9');
     expect(c.level).toBe(4401.2);
     expect(isCapitalConfirmAccepted(c)).toBe(true);
+    expect(isCapitalConfirmTerminal(c)).toBe(true);
+  });
+
+  it('detects stop-level rejects and VS-System- backoff', () => {
+    expect(isCapitalStopLevelReject('MINIMUM_STOP_DISTANCE')).toBe(true);
+    expect(isCapitalStopLevelReject('attached order rejected')).toBe(true);
+    expect(isCapitalStopLevelReject('RISK_CHECK')).toBe(false);
+    expect(capitalModifyRejectBackoffMs('RISK_CHECK')).toBe(300_000);
+    expect(capitalModifyRejectBackoffMs('MINIMUM_STOP_DISTANCE')).toBe(120_000);
   });
 });

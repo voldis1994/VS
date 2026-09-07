@@ -57,6 +57,11 @@ export interface MasterBroker {
   listOpenPositions(epic?: string): Promise<BrokerPosition[]>;
   placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResult>;
   closePosition(position_id: string): Promise<{ ok: boolean; detail: string }>;
+  modifyPosition?(input: {
+    position_id: string;
+    stop_level?: number;
+    profit_level?: number;
+  }): Promise<{ ok: boolean; detail: string; order_id?: string }>;
 }
 
 /** In-memory paper broker — real decision/risk path, simulated fills. */
@@ -151,6 +156,18 @@ export class PaperBroker implements MasterBroker {
     return { ok: true, detail: 'paper_closed' };
   }
 
+  async modifyPosition(input: {
+    position_id: string;
+    stop_level?: number;
+    profit_level?: number;
+  }) {
+    const p = this.positions.get(input.position_id);
+    if (!p) return { ok: false, detail: 'not_found' };
+    if (input.stop_level != null) p.stop_level = input.stop_level;
+    if (input.profit_level != null) p.profit_level = input.profit_level;
+    return { ok: true, detail: 'paper_modified', order_id: `mod-${input.position_id}` };
+  }
+
   /** Mark-to-market open positions from quote. */
   markToMarket() {
     const q = this.lastQuote;
@@ -179,6 +196,10 @@ export class CapitalBroker implements MasterBroker {
       list: (session: any) => Promise<any>;
       create: (session: any, input: any) => Promise<any>;
       close: (session: any, dealId: string) => Promise<any>;
+      modify?: (
+        session: any,
+        input: { dealId: string; stopLevel?: number | null; profitLevel?: number | null }
+      ) => Promise<{ ok: boolean; detail: string; deal_reference?: string }>;
       confirm?: (
         session: any,
         ref: string
@@ -188,6 +209,7 @@ export class CapitalBroker implements MasterBroker {
         fill_level?: number;
         detail: string;
         rejected?: boolean;
+        pending?: boolean;
       }>;
       account?: (
         session: any
@@ -244,6 +266,43 @@ export class CapitalBroker implements MasterBroker {
       }));
   }
 
+  private async waitConfirm(dealReference: string): Promise<{
+    ok: boolean;
+    deal_id?: string;
+    fill_level?: number;
+    detail: string;
+    rejected?: boolean;
+  }> {
+    if (!this.deps.confirm) {
+      return { ok: false, detail: 'no_confirm_dep' };
+    }
+    const { CAPITAL_CONFIRM_POLL_MS } = await import('./capitalConfirm.js');
+    for (const delay of CAPITAL_CONFIRM_POLL_MS) {
+      await new Promise((r) => setTimeout(r, delay));
+      const conf = await this.deps.confirm(this.session, dealReference);
+      if (conf.rejected) {
+        return { ok: false, rejected: true, detail: conf.detail };
+      }
+      if (conf.ok && conf.deal_id) {
+        return {
+          ok: true,
+          deal_id: conf.deal_id,
+          fill_level: conf.fill_level,
+          detail: conf.detail,
+        };
+      }
+      if (!conf.pending) {
+        // Non-pending failure — keep polling briefly in case of lag
+        continue;
+      }
+    }
+    return { ok: false, detail: `confirm_timeout ref=${dealReference}` };
+  }
+
+  /**
+   * Open with stopLevel; on min-distance/ATTACHED reject open bare then attach via modify
+   * (VS-System- pattern). Never treat dealReference alone as a fill.
+   */
   async placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResult> {
     if (!this.session) {
       return {
@@ -266,13 +325,28 @@ export class CapitalBroker implements MasterBroker {
       };
     }
     this.processed.add(input.intent_id);
-    const opened = await this.deps.create(this.session, {
+
+    const { isCapitalStopLevelReject } = await import('./capitalConfirm.js');
+    let opened = await this.deps.create(this.session, {
       epic: input.epic,
       direction: input.side,
       size: input.size,
       stopLevel: input.stop_level,
       profitLevel: input.profit_level,
     });
+
+    // SL rejected at create → open bare, attach after fill
+    let needAttach = false;
+    if (!opened.ok && input.stop_level != null && isCapitalStopLevelReject(String(opened.detail || ''))) {
+      needAttach = true;
+      opened = await this.deps.create(this.session, {
+        epic: input.epic,
+        direction: input.side,
+        size: input.size,
+        profitLevel: input.profit_level,
+      });
+    }
+
     if (!opened.ok) {
       return {
         ok: false,
@@ -283,31 +357,27 @@ export class CapitalBroker implements MasterBroker {
         paper: false,
       };
     }
+
     let position_id: string | null = null;
     let fill_price: number | null = null;
-    if (opened.deal_reference && this.deps.confirm) {
-      // Brief poll — Capital confirm can lag a tick
-      for (let attempt = 0; attempt < 4; attempt++) {
-        const conf = await this.deps.confirm(this.session, opened.deal_reference);
-        if (conf.rejected) {
-          return {
-            ok: false,
-            order_id: opened.deal_reference || null,
-            position_id: null,
-            fill_price: null,
-            detail: conf.detail,
-            paper: false,
-          };
-        }
-        if (conf.ok && conf.deal_id) {
-          position_id = conf.deal_id;
-          fill_price = conf.fill_level ?? null;
-          break;
-        }
-        await new Promise((r) => setTimeout(r, 200 * (attempt + 1)));
+    if (opened.deal_reference) {
+      const conf = await this.waitConfirm(opened.deal_reference);
+      if (conf.rejected) {
+        return {
+          ok: false,
+          order_id: opened.deal_reference || null,
+          position_id: null,
+          fill_price: null,
+          detail: conf.detail,
+          paper: false,
+        };
+      }
+      if (conf.ok && conf.deal_id) {
+        position_id = conf.deal_id;
+        fill_price = conf.fill_level ?? null;
       }
     }
-    // Fallback: match latest open on epic if confirm lagged
+
     if (!position_id) {
       const listed = await this.listOpenPositions(input.epic);
       const hit = listed.find((p) => p.side === input.side && Math.abs(p.size - input.size) < 1e-9);
@@ -316,14 +386,64 @@ export class CapitalBroker implements MasterBroker {
         fill_price = hit.open_level || null;
       }
     }
+
+    // Never accept dealReference alone as a live fill
+    if (!position_id) {
+      return {
+        ok: false,
+        order_id: opened.deal_reference || null,
+        position_id: null,
+        fill_price: null,
+        detail: `capital_unconfirmed:${opened.detail}`,
+        paper: false,
+      };
+    }
+
+    // Attach / verify SL after fill
+    if (input.stop_level != null && this.deps.modify) {
+      const wantSl = input.stop_level;
+      let attached = false;
+      for (let widen = 0; widen < 4 && !attached; widen++) {
+        const mid = fill_price ?? wantSl;
+        const pad = widen * Math.max(0.5, Math.abs(mid) * 0.0005);
+        const sl =
+          input.side === 'BUY' ? wantSl - pad : wantSl + pad;
+        const mod = await this.deps.modify(this.session, {
+          dealId: position_id,
+          stopLevel: sl,
+          profitLevel: input.profit_level ?? null,
+        });
+        if (mod.ok && mod.deal_reference) {
+          await this.waitConfirm(mod.deal_reference);
+        }
+        const listed = await this.listOpenPositions(input.epic);
+        const hit = listed.find((p) => p.position_id === position_id);
+        if (hit?.stop_level != null && Number.isFinite(hit.stop_level)) {
+          attached = true;
+          break;
+        }
+        if (!mod.ok && !isCapitalStopLevelReject(mod.detail)) break;
+      }
+      if (!attached && needAttach) {
+        // Fail-close naked position — never leave unprotected after forced bare open
+        await this.deps.close(this.session, position_id);
+        return {
+          ok: false,
+          order_id: opened.deal_reference || null,
+          position_id: null,
+          fill_price: null,
+          detail: 'CAPITAL_SL_ATTACH_FAILED',
+          paper: false,
+        };
+      }
+    }
+
     return {
-      ok: !!position_id || !!opened.deal_reference,
+      ok: true,
       order_id: opened.deal_reference || null,
       position_id,
       fill_price,
-      detail: position_id
-        ? `capital_open deal=${position_id}${fill_price != null ? ` fill=${fill_price}` : ''}`
-        : opened.detail,
+      detail: `capital_open deal=${position_id}${fill_price != null ? ` fill=${fill_price}` : ''}`,
       paper: false,
     };
   }
@@ -332,6 +452,24 @@ export class CapitalBroker implements MasterBroker {
     if (!this.session) return { ok: false, detail: 'not_connected' };
     const res = await this.deps.close(this.session, position_id);
     return { ok: !!res.ok, detail: res.detail || '' };
+  }
+
+  async modifyPosition(input: {
+    position_id: string;
+    stop_level?: number;
+    profit_level?: number;
+  }) {
+    if (!this.session) return { ok: false, detail: 'not_connected' };
+    if (!this.deps.modify) return { ok: false, detail: 'modify_not_wired' };
+    const res = await this.deps.modify(this.session, {
+      dealId: input.position_id,
+      stopLevel: input.stop_level,
+      profitLevel: input.profit_level,
+    });
+    if (res.ok && res.deal_reference) {
+      await this.waitConfirm(res.deal_reference);
+    }
+    return { ok: !!res.ok, detail: res.detail || '', order_id: res.deal_reference };
   }
 }
 

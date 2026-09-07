@@ -74,7 +74,7 @@ function mockCapitalBroker(opts?: { rejectConfirm?: boolean; lagConfirm?: boolea
         return { ok: false, rejected: true, detail: 'Capital rejected: RISK_CHECK' };
       }
       if (opts?.lagConfirm && confirmAttempts < 2) {
-        return { ok: false, detail: 'pending' };
+        return { ok: false, pending: true, detail: 'pending' };
       }
       const deal_id = `deal-${ref.slice(-8)}`;
       positions.set(deal_id, {
@@ -265,5 +265,64 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     }
     expect(opened).toBe(true);
     masterRuntime.stop();
+  });
+
+  it('bare-open then SL attach fail closes naked position (VS-System-)', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number;
+        stop_level?: number;
+      }
+    >();
+    const session = { id: 's' };
+    let createN = 0;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session, detail: 'ok' }),
+      quote: async (_s, epic) => ({ bid: 4410, ask: 4410.4, mid: 4410.2, epic, raw_ok: true }),
+      list: async () => ({ ok: true, positions: [...positions.values()], detail: '' }),
+      create: async (_s, input) => {
+        createN += 1;
+        if (createN === 1 && input.stopLevel != null) {
+          return { ok: false, detail: 'MINIMUM_STOP_DISTANCE' };
+        }
+        return { ok: true, deal_reference: `ref-bare-${createN}`, detail: 'opened_bare' };
+      },
+      confirm: async (_s, ref) => {
+        const deal_id = `deal-${ref}`;
+        if (!positions.has(deal_id)) {
+          positions.set(deal_id, {
+            deal_id,
+            epic: 'GOLD',
+            direction: 'BUY',
+            size: 0.1,
+            open_level: 4410.4,
+          });
+        }
+        return { ok: true, deal_id, fill_level: 4410.4, detail: 'ok' };
+      },
+      modify: async () => ({ ok: false, detail: 'MINIMUM_STOP_DISTANCE' }),
+      close: async (_s, dealId) => {
+        positions.delete(dealId);
+        return { ok: true, detail: 'closed' };
+      },
+    });
+    await broker.connect();
+    const placed = await broker.placeOrder({
+      intent_id: 'sl-attach-fail',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: 4409.9,
+    });
+    expect(placed.ok).toBe(false);
+    expect(placed.detail).toBe('CAPITAL_SL_ATTACH_FAILED');
+    expect(positions.size).toBe(0);
   });
 });
