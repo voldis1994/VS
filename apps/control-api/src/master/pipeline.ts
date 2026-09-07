@@ -241,6 +241,13 @@ export const DEFAULT_MASTER_CONFIG: MasterConfig = {
   min_score_delta: 0,
   breakeven_offset: 0,
   trading_hours: { ...DEFAULT_TRADING_HOURS },
+  max_stop_loss_pips: 0,
+  be_start: 0,
+  trail_start: 0,
+  trail_lock: 0,
+  fixed_lot: 0,
+  reduce_lot_after_loss: false,
+  reduce_lot_to: 0.01,
 };
 
 export const GOLD_SPEC: InstrumentSpec = {

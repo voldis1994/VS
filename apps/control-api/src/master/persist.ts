@@ -126,7 +126,10 @@ export async function saveOpenPositions(positions: ManagedPosition[]): Promise<b
           p.mfe,
           p.mae,
           p.regime_at_entry,
-          JSON.stringify({ decision: p.decision }),
+          JSON.stringify({
+            decision: p.decision,
+            partial_close_applied: !!p.partial_close_applied,
+          }),
         ]
       );
     }
@@ -160,6 +163,7 @@ export async function loadOpenPositions(): Promise<ManagedPosition[]> {
         mae: Number(r.mae) || 0,
         decision: payload.decision,
         regime_at_entry: r.regime_at_entry || 'UNKNOWN',
+        partial_close_applied: !!payload.partial_close_applied,
       } as ManagedPosition;
     });
   } catch {

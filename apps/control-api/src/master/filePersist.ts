@@ -56,7 +56,10 @@ export class FilePersist implements PersistClient {
         mfe: p.mfe,
         mae: p.mae,
         regime_at_entry: p.regime_at_entry,
-        payload: { decision: p.decision },
+        payload: {
+          decision: p.decision,
+          partial_close_applied: !!p.partial_close_applied,
+        },
       }));
       this.mem.intents = new Set(raw.intents || []);
       this.mem.opportunities = (raw.opportunities || []).map((o) => ({
@@ -147,6 +150,9 @@ export class FilePersist implements PersistClient {
         mae: p.mae,
         regime_at_entry: p.regime_at_entry,
         decision: p.payload?.decision || p.decision,
+        partial_close_applied: !!(
+          p.partial_close_applied ?? p.payload?.partial_close_applied
+        ),
       })),
       intents: [...this.mem.intents],
     };

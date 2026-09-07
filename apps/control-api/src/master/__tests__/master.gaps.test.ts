@@ -1084,3 +1084,105 @@ describe('MASTER epic alias sync', () => {
     expect(pm.count()).toBe(1);
   });
 });
+
+describe('partial_close persist + Check be_start', () => {
+  it('persists partial_close_applied across save/load', async () => {
+    const { MemoryPersist, setPersistClient, saveOpenPositions, loadOpenPositions } = await import(
+      '../persist.js'
+    );
+    const mem = new MemoryPersist();
+    setPersistClient(mem);
+    const pm = new PositionManager();
+    pm.register({
+      position_id: 'pc-persist-1',
+      opportunity_id: '00000000-0000-4000-8000-00000000bbbb',
+      intent_id: 'pc-intent',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4400,
+      stop_loss: 4390,
+      take_profit: 4420,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis(),
+        expectancy: null,
+      },
+    });
+    pm.get('pc-persist-1')!.partial_close_applied = true;
+    await saveOpenPositions(pm.list());
+    const loaded = await loadOpenPositions();
+    expect(loaded[0]!.partial_close_applied).toBe(true);
+    setPersistClient(null);
+  });
+
+  it('Check be_start arms BE without take_profit', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    broker.setQuote({
+      bid: entry + 0.6,
+      ask: entry + 0.7,
+      mid: entry + 0.65,
+      spread: 0.1,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'be-start-bbbbbbbbbbbbbbbb',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      stop_level: entry - 2,
+      profit_level: undefined,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-be-start',
+      intent_id: 'be-start-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      entry,
+      stop_loss: entry - 2,
+      take_profit: null,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis({ regime: 'TREND' }),
+        expectancy: null,
+      },
+    });
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: entry + 0.6,
+        ask: entry + 0.7,
+        mid: entry + 0.65,
+        spread: 0.1,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      breakeven_progress: 0,
+      be_start: 0.5,
+      breakeven_offset: 0.1,
+      max_hold_ms: 0,
+    });
+    expect(managed.closed.length).toBe(0);
+    expect(pm.get(placed.position_id!)!.stop_loss).toBeCloseTo(entry + 0.1, 6);
+  });
+});

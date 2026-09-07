@@ -251,4 +251,24 @@ export type MasterConfig = {
   breakeven_offset: number;
   /** Check- optional hard trading-hours window */
   trading_hours: import('./tradingHours.js').TradingHoursConfig;
+  /**
+   * Reader max SL distance in pips (instrument.point). 0 = disabled.
+   * When >0, oversized structure stops are rejected before ALLOW.
+   */
+  max_stop_loss_pips: number;
+  /**
+   * Check- BE arm distance in price units (favorable move). 0 = use progress-to-TP only.
+   * When >0, BE can arm without a take_profit (orphan recover).
+   */
+  be_start: number;
+  /** Check- trail arm distance in price units. 0 = structure/MFE trail only. */
+  trail_start: number;
+  /** Check- trail lock distance from mark once armed. Requires trail_start > 0. */
+  trail_lock: number;
+  /** Check- fixed lot. 0 = equity % sizing. */
+  fixed_lot: number;
+  /** Check- after a loss, next size uses reduce_lot_to instead of equity/fixed. */
+  reduce_lot_after_loss: boolean;
+  /** Lot used when reduce_lot_after_loss is active. */
+  reduce_lot_to: number;
 };

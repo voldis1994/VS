@@ -12,6 +12,8 @@ import {
   specForEpic,
 } from '../pipeline.js';
 import { evaluateRisk, sizeFromEquity } from '../risk.js';
+import { validateSlTp } from '../slTp.js';
+import { clampStopForCapitalMark, capitalMinStopDistance } from '../capitalStop.js';
 import { replayMaster, walkForward } from '../replay.js';
 import type {
   AccountSnapshot,
@@ -562,5 +564,129 @@ describe('VS MASTER AI layer', () => {
     expect(specForEpic('US100').volume_step).toBe(0.1);
     expect(specForEpic('US30').point).toBe(1);
     expect(specForEpic('GER40').display_name).toBe('GER40');
+  });
+});
+
+describe('Reader SL/TP + Check sizing', () => {
+  it('validateSlTp rejects bad BUY SL/TP and oversized stops', () => {
+    expect(
+      validateSlTp({
+        side: 'BUY',
+        entry: 4400,
+        stop_loss: 4401,
+        take_profit: 4410,
+        swing_low: 4390,
+        pip: 0.01,
+        max_stop_loss_pips: 100,
+      }).reason
+    ).toBe('buy_sl_not_below_entry');
+    expect(
+      validateSlTp({
+        side: 'BUY',
+        entry: 4400,
+        stop_loss: 4395,
+        take_profit: 4410,
+        swing_low: 4390,
+        pip: 0.01,
+        max_stop_loss_pips: 100,
+      }).reason
+    ).toBe('buy_sl_not_below_swing_low');
+    expect(
+      validateSlTp({
+        side: 'BUY',
+        entry: 4400,
+        stop_loss: 4380,
+        take_profit: 4410,
+        swing_low: 4390,
+        pip: 0.01,
+        max_stop_loss_pips: 100,
+      }).reason
+    ).toBe('max_stop_loss_pips');
+    expect(
+      validateSlTp({
+        side: 'BUY',
+        entry: 4400,
+        stop_loss: 4389,
+        take_profit: 4410,
+        swing_low: 4390,
+        pip: 0.01,
+        max_stop_loss_pips: 2000,
+      }).allowed
+    ).toBe(true);
+  });
+
+  it('Check- fixed_lot and reduce_lot_after_loss size path', () => {
+    const cand: TradeCandidate = {
+      side: 'BUY',
+      valid: true,
+      score: 0.8,
+      components: {
+        momentum: 0.8,
+        trend: 0.8,
+        structure: 0.8,
+        pressure: 0.8,
+        behavior: 0.8,
+        impact: 0.8,
+        context: 0.8,
+      },
+      entry: 4400,
+      stop_loss: 4390,
+      take_profit: 4420,
+      filter_ok: true,
+      filter_reason: null,
+    };
+    const fixed = sizeFromEquity(10_000, cand, GOLD_SPEC, {
+      ...DEFAULT_MASTER_CONFIG,
+      fixed_lot: 0.07,
+    });
+    expect(fixed.allowed).toBe(true);
+    expect(fixed.volume).toBe(0.07);
+    expect(fixed.reasons).toContain('fixed_lot');
+
+    const reduced = sizeFromEquity(
+      10_000,
+      cand,
+      GOLD_SPEC,
+      { ...DEFAULT_MASTER_CONFIG, fixed_lot: 0.07, reduce_lot_after_loss: true, reduce_lot_to: 0.01 },
+      { consecutive_losses: 1 }
+    );
+    expect(reduced.volume).toBe(0.01);
+    expect(reduced.reasons).toContain('reduce_lot_after_loss');
+  });
+
+  it('evaluateRisk blocks max_stop_loss_pips', () => {
+    const bars = barsTrendUp();
+    const a = analyzeBars(bars, 0.4);
+    const d = decide(a, quoteFrom(bars.at(-1)!), { ...DEFAULT_MASTER_CONFIG, min_score: 0.3 }, () => null, bars);
+    if (d.kind !== 'BUY' && d.kind !== 'SELL') return;
+    const cand = d.side === 'BUY' ? d.buy : d.sell;
+    const blocked = evaluateRisk(
+      {
+        ...d,
+        buy: d.side === 'BUY' ? { ...cand, stop_loss: cand.entry - 50 } : d.buy,
+        sell: d.side === 'SELL' ? { ...cand, stop_loss: cand.entry + 50 } : d.sell,
+      },
+      account,
+      GOLD_SPEC,
+      quoteFrom(bars.at(-1)!),
+      { ...DEFAULT_MASTER_CONFIG, max_stop_loss_pips: 100 }
+    );
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.reasons.some((r) => r.includes('max_stop_loss') || r.includes('swing'))).toBe(
+      true
+    );
+  });
+
+  it('Capital clampStopForCapitalMark keeps GOLD BE legal vs mark', () => {
+    expect(capitalMinStopDistance('GOLD')).toBeCloseTo(0.02, 8);
+    const clamped = clampStopForCapitalMark({
+      side: 'BUY',
+      stop: 4400,
+      mark: 4400.01,
+      symbol: 'GOLD',
+      current_stop: 4390,
+    });
+    // mark - minDist = 4399.99 — stop clamped down from 4400
+    expect(clamped).toBeCloseTo(4399.99, 2);
   });
 });

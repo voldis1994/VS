@@ -1,5 +1,6 @@
 /** Risk engine — can BLOCK any decision. Equity-based sizing required for production volume. */
 import { clampSizeForBuyingPower } from './capitalSize.js';
+import { validateSlTp } from './slTp.js';
 import type {
   AccountSnapshot,
   InstrumentSpec,
@@ -72,7 +73,22 @@ export function evaluateRisk(
   }
 
   const cand = decision.side === 'BUY' ? decision.buy : decision.sell;
-  const sizing = sizeFromEquity(account.equity, cand, instrument, cfg);
+  // Reader validate_sl_tp before sizing
+  const slTp = validateSlTp({
+    side: decision.side,
+    entry: cand.entry,
+    stop_loss: cand.stop_loss,
+    take_profit: cand.take_profit,
+    swing_low: decision.analysis?.swing_low,
+    swing_high: decision.analysis?.swing_high,
+    pip: instrument.point,
+    max_stop_loss_pips: cfg.max_stop_loss_pips,
+  });
+  if (!slTp.allowed) reasons.push(slTp.reason || 'invalid_sl_tp');
+
+  const sizing = sizeFromEquity(account.equity, cand, instrument, cfg, {
+    consecutive_losses: account.consecutive_losses,
+  });
   if (!sizing.allowed) reasons.push(...sizing.reasons);
 
   if (reasons.length) {
@@ -80,7 +96,7 @@ export function evaluateRisk(
   }
 
   let volume = sizing.volume;
-  const notes: string[] = [];
+  const notes: string[] = [...sizing.reasons];
   const clamped = clampSizeForBuyingPower({
     epic: opts?.epic || instrument.epic || 'GOLD',
     size: volume,
@@ -115,7 +131,8 @@ export function sizeFromEquity(
   equity: number,
   cand: TradeCandidate,
   instrument: InstrumentSpec,
-  cfg: MasterConfig
+  cfg: MasterConfig,
+  opts?: { consecutive_losses?: number }
 ): { allowed: boolean; volume: number; risk_amount: number; reasons: string[] } {
   const reasons: string[] = [];
   const slDist = Math.abs(cand.entry - cand.stop_loss);
@@ -123,13 +140,43 @@ export function sizeFromEquity(
     return { allowed: false, volume: 0, risk_amount: 0, reasons: ['invalid_sl_distance'] };
   }
   const risk_amount = equity * cfg.risk_per_trade_pct;
+  const step = instrument.volume_step;
+
+  // Check- fixed lot (predictable exposure) + reduce_lot_after_loss soft degrade
+  const reduceAfterLoss =
+    cfg.reduce_lot_after_loss && (opts?.consecutive_losses ?? 0) > 0;
+  if (reduceAfterLoss && cfg.reduce_lot_to > 0) {
+    const volume = roundStep(
+      Math.max(instrument.min_volume, Math.min(cfg.reduce_lot_to, instrument.max_volume)),
+      step
+    );
+    if (volume < instrument.min_volume) {
+      return { allowed: false, volume: 0, risk_amount, reasons: ['volume_below_min'] };
+    }
+    return {
+      allowed: true,
+      volume,
+      risk_amount,
+      reasons: ['reduce_lot_after_loss'],
+    };
+  }
+  if (cfg.fixed_lot > 0) {
+    const volume = roundStep(
+      Math.max(instrument.min_volume, Math.min(cfg.fixed_lot, instrument.max_volume)),
+      step
+    );
+    if (volume < instrument.min_volume) {
+      return { allowed: false, volume: 0, risk_amount, reasons: ['volume_below_min'] };
+    }
+    return { allowed: true, volume, risk_amount, reasons: ['fixed_lot'] };
+  }
+
   const points = slDist / Math.max(instrument.point, 1e-9);
   const lossPerLot = points * instrument.value_per_point_per_lot;
   if (!(lossPerLot > 0)) {
     return { allowed: false, volume: 0, risk_amount: 0, reasons: ['invalid_point_value'] };
   }
   let volume = risk_amount / lossPerLot;
-  const step = instrument.volume_step;
   volume = Math.floor(volume / step + 1e-12) * step;
   volume = Math.max(0, Math.min(volume, instrument.max_volume));
   if (volume < instrument.min_volume) {

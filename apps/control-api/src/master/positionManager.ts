@@ -5,6 +5,7 @@
 import { createHash } from 'crypto';
 import { decideBestOutcomeExit, favorableMove } from '../services/exitManage.js';
 import type { MasterBroker } from './broker.js';
+import { clampStopForCapitalMark } from './capitalStop.js';
 import type { MasterPipeline } from './pipeline.js';
 import type {
   MasterDecision,
@@ -116,6 +117,11 @@ export class PositionManager {
     breakeven_progress?: number;
     /** Check- lock past entry by this many price units */
     breakeven_offset?: number;
+    /** Check- BE arm in price units (0 = progress-to-TP path) */
+    be_start?: number;
+    /** Check- trail arm / lock in price units (0 = structure/MFE only) */
+    trail_start?: number;
+    trail_lock?: number;
     partial_close_progress?: number;
     partial_close_volume?: number;
     volume_step?: number;
@@ -137,6 +143,9 @@ export class PositionManager {
     const maxHold = input.max_hold_ms ?? 0;
     const beProgress = input.breakeven_progress ?? 0.5;
     const beOffset = input.breakeven_offset ?? 0;
+    const beStart = input.be_start ?? 0;
+    const trailStart = input.trail_start ?? 0;
+    const trailLock = input.trail_lock ?? 0;
     const partialProgress = input.partial_close_progress ?? 0;
     const partialVolume = input.partial_close_volume ?? 0;
     const volumeStep = input.volume_step ?? 0.01;
@@ -298,11 +307,17 @@ export class PositionManager {
             ));
 
       if (!verdict.exit) {
-        await this.maybeBreakevenStop(broker, pos, quote, beProgress, beOffset);
+        await this.maybeBreakevenStop(broker, pos, quote, {
+          progressNeed: beProgress,
+          offset: beOffset,
+          beStart,
+        });
         await this.maybeTrailStop(broker, pos, quote, {
           swing_low: swingLow,
           swing_high: swingHigh,
           trailing_buffer: trailBuf,
+          trail_start: trailStart,
+          trail_lock: trailLock,
         });
         continue;
       }
@@ -317,11 +332,17 @@ export class PositionManager {
           exit_reason: verdict.reason,
           detail: 'ai_veto_close',
         });
-        await this.maybeBreakevenStop(broker, pos, quote, beProgress, beOffset);
+        await this.maybeBreakevenStop(broker, pos, quote, {
+          progressNeed: beProgress,
+          offset: beOffset,
+          beStart,
+        });
         await this.maybeTrailStop(broker, pos, quote, {
           swing_low: swingLow,
           swing_high: swingHigh,
           trailing_buffer: trailBuf,
+          trail_start: trailStart,
+          trail_lock: trailLock,
         });
         continue;
       }
@@ -376,46 +397,55 @@ export class PositionManager {
   }
 
   /**
-   * Reader-style breakeven + Check- offset: lock SL at entry ± offset.
-   * Only tightens; never loosens.
+   * Reader-style breakeven (progress-to-TP) + Check- be_start/offset.
+   * Check be_start > 0 arms BE without requiring take_profit (orphan recover).
+   * Only tightens; never loosens. Capital-safe vs mark.
    */
   private async maybeBreakevenStop(
     broker: MasterBroker,
     pos: ManagedPosition,
     quote: Quote,
-    progressNeed: number,
-    offset = 0
+    opts: { progressNeed: number; offset?: number; beStart?: number }
   ): Promise<void> {
-    if (!broker.modifyPosition || progressNeed <= 0) return;
-    if (pos.take_profit == null) return;
-    const tpDist = Math.abs(pos.take_profit - pos.entry);
-    if (tpDist < 1e-9) return;
+    if (!broker.modifyPosition) return;
+    const offset = Math.max(0, opts.offset ?? 0);
+    const beStart = Math.max(0, opts.beStart ?? 0);
+    const progressNeed = opts.progressNeed;
     const mark = protectiveMark(pos.side, quote);
     const fav = favorableMove(pos.side, pos.entry, mark);
-    if (fav / tpDist < progressNeed) return;
-    const off = Math.max(0, offset);
-    const be =
-      pos.side === 'BUY' ? pos.entry + off : pos.entry - off;
+
+    let armed = false;
+    if (beStart > 0) {
+      armed = fav >= beStart;
+    } else if (progressNeed > 0 && pos.take_profit != null) {
+      const tpDist = Math.abs(pos.take_profit - pos.entry);
+      if (tpDist >= 1e-9 && fav / tpDist >= progressNeed) armed = true;
+    }
+    if (!armed) return;
+
+    const be = pos.side === 'BUY' ? pos.entry + offset : pos.entry - offset;
     const cur = pos.stop_loss;
     const tighter =
-      cur == null
-        ? true
-        : pos.side === 'BUY'
-          ? be > cur
-          : be < cur;
+      cur == null ? true : pos.side === 'BUY' ? be > cur : be < cur;
     if (!tighter) return;
-    if (pos.side === 'BUY' && be >= mark) return;
-    if (pos.side === 'SELL' && be <= mark) return;
+    const clamped = clampStopForCapitalMark({
+      side: pos.side,
+      stop: be,
+      mark,
+      symbol: pos.epic,
+      current_stop: cur,
+    });
+    if (clamped == null) return;
     const mod = await broker.modifyPosition({
       position_id: pos.position_id,
-      stop_level: be,
+      stop_level: clamped,
     });
-    if (mod.ok) pos.stop_loss = be;
+    if (mod.ok) pos.stop_loss = clamped;
   }
 
   /**
-   * Trail SL — prefer Reader structure swings (swing ± buffer), else MFE 50% ratchet.
-   * Only tightens; never loosens. Requires broker.modifyPosition.
+   * Trail SL — Check point trail, then Reader structure swings, else MFE 50% ratchet.
+   * Only tightens; never loosens. Capital-safe vs mark.
    */
   private async maybeTrailStop(
     broker: MasterBroker,
@@ -425,14 +455,27 @@ export class PositionManager {
       swing_low?: number | null;
       swing_high?: number | null;
       trailing_buffer?: number;
+      trail_start?: number;
+      trail_lock?: number;
     }
   ): Promise<void> {
     if (!broker.modifyPosition) return;
     const mark = protectiveMark(pos.side, quote);
     const buf = structure?.trailing_buffer ?? 0;
+    const trailStart = structure?.trail_start ?? 0;
+    const trailLock = structure?.trail_lock ?? 0;
     let trailed: number | null = null;
 
-    if (pos.side === 'BUY') {
+    // Check- hard-point trail (no TP required)
+    if (trailStart > 0 && trailLock > 0) {
+      const fav = favorableMove(pos.side, pos.entry, mark);
+      if (fav >= trailStart) {
+        trailed =
+          pos.side === 'BUY' ? mark - trailLock : mark + trailLock;
+      }
+    }
+
+    if (trailed == null && pos.side === 'BUY') {
       const swing = structure?.swing_low;
       if (swing != null && Number.isFinite(swing) && swing > 0 && buf >= 0) {
         const cand = swing - buf;
@@ -440,7 +483,7 @@ export class PositionManager {
           trailed = cand;
         }
       }
-    } else {
+    } else if (trailed == null) {
       const swing = structure?.swing_high;
       if (swing != null && Number.isFinite(swing) && swing > 0 && buf >= 0) {
         const cand = swing + buf;
@@ -450,7 +493,7 @@ export class PositionManager {
       }
     }
 
-    // MFE ratchet only when structure did not produce a trail (Reader swing is primary)
+    // MFE ratchet only when structure/Check did not produce a trail
     if (trailed == null) {
       const absEntry = Math.max(Math.abs(pos.entry), 1e-9);
       const mfeFloor = Math.max(absEntry * 0.00025, 0.8);
@@ -477,13 +520,19 @@ export class PositionManager {
           ? trailed > cur
           : trailed < cur;
     if (!tighter) return;
-    if (pos.side === 'BUY' && trailed >= mark) return;
-    if (pos.side === 'SELL' && trailed <= mark) return;
+    const clamped = clampStopForCapitalMark({
+      side: pos.side,
+      stop: trailed,
+      mark,
+      symbol: pos.epic,
+      current_stop: cur,
+    });
+    if (clamped == null) return;
     const mod = await broker.modifyPosition({
       position_id: pos.position_id,
-      stop_level: trailed,
+      stop_level: clamped,
     });
-    if (mod.ok) pos.stop_loss = trailed;
+    if (mod.ok) pos.stop_loss = clamped;
   }
 
   /** Sync open set from broker after restart — keep local meta when known. */
@@ -563,6 +612,7 @@ export class PositionManager {
           expectancy: null,
         },
         regime_at_entry: 'UNKNOWN',
+        partial_close_applied: false,
       });
     }
   }
