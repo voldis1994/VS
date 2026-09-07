@@ -161,13 +161,15 @@ class MasterRuntime {
         ts_ms: quote.ts_ms,
       });
       broker.markToMarket();
-      const acct = await broker.getAccount();
-      if (acct) {
-        this.account.equity = acct.equity;
-        this.account.balance = acct.balance;
-        this.account.currency = acct.currency;
-        this.account.peak_equity = Math.max(this.account.peak_equity, acct.equity);
-      }
+    }
+
+    // Refresh equity from whatever broker is attached (paper or Capital)
+    const acct = await broker.getAccount();
+    if (acct && acct.equity > 0) {
+      this.account.equity = acct.equity;
+      this.account.balance = acct.balance;
+      this.account.currency = acct.currency;
+      this.account.peak_equity = Math.max(this.account.peak_equity, acct.equity);
     }
 
     this.account.open_positions = this.positions.count();

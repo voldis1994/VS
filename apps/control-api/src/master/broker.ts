@@ -180,15 +180,18 @@ export class CapitalBroker implements MasterBroker {
       create: (session: any, input: any) => Promise<any>;
       close: (session: any, dealId: string) => Promise<any>;
       confirm?: (
-      session: any,
-      ref: string
-    ) => Promise<{
-      ok: boolean;
-      deal_id?: string;
-      fill_level?: number;
-      detail: string;
-      rejected?: boolean;
-    }>;
+        session: any,
+        ref: string
+      ) => Promise<{
+        ok: boolean;
+        deal_id?: string;
+        fill_level?: number;
+        detail: string;
+        rejected?: boolean;
+      }>;
+      account?: (
+        session: any
+      ) => Promise<{ equity: number; balance: number; currency: string } | null>;
       credentials: any;
     }
   ) {}
@@ -215,7 +218,11 @@ export class CapitalBroker implements MasterBroker {
   }
 
   async getAccount(): Promise<BrokerAccount | null> {
-    // Capital account snapshot is session-scoped; equity filled by runtime from broker/UI.
+    if (!this.session) return null;
+    if (this.deps.account) {
+      const a = await this.deps.account(this.session);
+      if (a) return a;
+    }
     return { equity: 0, balance: 0, currency: 'GBP' };
   }
 
@@ -456,6 +463,30 @@ export class Mt4FileBroker implements MasterBroker {
     writeFileSync(tmp, JSON.stringify(payload) + '\n', 'utf8');
     renameSync(tmp, path);
     return { ok: true, detail: 'mt4_close_written' };
+  }
+
+  /** Check- protocol MODIFY — update SL/TP on an open ticket. */
+  async modifyPosition(input: {
+    position_id: string;
+    stop_level?: number;
+    profit_level?: number;
+  }) {
+    const id = randomUUID().slice(0, 12);
+    const folder = join(this.bridgeRoot, 'commands');
+    mkdirSync(folder, { recursive: true });
+    const payload = {
+      id,
+      action: 'MODIFY',
+      ticket: Number(input.position_id),
+      sl: input.stop_level ?? 0,
+      tp: input.profit_level ?? 0,
+      reason: 'VS_MASTER',
+    };
+    const tmp = join(folder, `cmd_${id}.tmp`);
+    const path = join(folder, `cmd_${id}.json`);
+    writeFileSync(tmp, JSON.stringify(payload) + '\n', 'utf8');
+    renameSync(tmp, path);
+    return { ok: true, detail: 'mt4_modify_written', order_id: id };
   }
 }
 

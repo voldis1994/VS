@@ -1,4 +1,5 @@
 /** Dual BUY/SELL candidates — independent component scores (heuristic, not probability). */
+import { applyMarketFilters } from './filters.js';
 import type {
   AnalysisSnapshot,
   ComponentScores,
@@ -87,7 +88,7 @@ export function buildCandidates(
   const buyScore = weighted(buyComp);
   const sellScore = weighted(sellComp);
 
-  const filter = filterPair(a, quote, cfg);
+  const filter = applyMarketFilters(a, quote, cfg);
 
   const buy: TradeCandidate = {
     side: 'BUY',
@@ -112,21 +113,4 @@ export function buildCandidates(
     filter_reason: filter.reason,
   };
   return { buy, sell };
-}
-
-function filterPair(
-  a: AnalysisSnapshot,
-  quote: Quote,
-  cfg: MasterConfig
-): { ok: boolean; reason: string | null } {
-  if (a.data_quality < 0.35) return { ok: false, reason: 'data_quality' };
-  if (quote.spread > cfg.max_spread_abs) return { ok: false, reason: 'spread_abs' };
-  if (quote.mid > 0 && quote.spread / quote.mid > cfg.max_spread_pct) {
-    return { ok: false, reason: 'spread_pct' };
-  }
-  if (a.regime === 'UNSTABLE' || a.regime === 'UNKNOWN') {
-    return { ok: false, reason: `regime_${a.regime}` };
-  }
-  if (a.volatility > 0.008) return { ok: false, reason: 'abnormal_volatility' };
-  return { ok: true, reason: null };
 }

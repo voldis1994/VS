@@ -292,6 +292,17 @@ describe('VS MASTER MT4 file bridge', () => {
     expect(payload.action).toBe('OPEN');
     expect(payload.side).toBe('SELL');
     expect(payload.lot).toBe(0.05);
+
+    const mod = await broker.modifyPosition({
+      position_id: '12345',
+      stop_level: 4420,
+      profit_level: 4370,
+    });
+    expect(mod.ok).toBe(true);
+    const modPath = join(root, 'commands', `cmd_${mod.order_id}.json`);
+    const modPayload = JSON.parse(readFileSync(modPath, 'utf8'));
+    expect(modPayload.action).toBe('MODIFY');
+    expect(modPayload.ticket).toBe(12345);
   });
 });
 

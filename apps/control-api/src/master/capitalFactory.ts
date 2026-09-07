@@ -4,6 +4,7 @@ import {
   closeCapitalPosition,
   confirmCapitalDeal,
   createCapitalPosition,
+  fetchCapitalAccountEquity,
   fetchCapitalMarketQuote,
   listCapitalOpenPositions,
 } from '../services/capitalCom.js';
@@ -50,5 +51,10 @@ export function createCapitalBroker(creds: CapitalBrokerCreds): CapitalBroker {
       }),
     close: async (session, dealId) => closeCapitalPosition(session, dealId),
     confirm: async (session, ref) => confirmCapitalDeal(session, ref),
+    account: async (session) => {
+      const eq = await fetchCapitalAccountEquity(session, creds.capitalAccountId);
+      if (!eq) return null;
+      return { equity: eq.equity, balance: eq.balance, currency: eq.currency };
+    },
   });
 }

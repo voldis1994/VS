@@ -387,7 +387,18 @@ async function withLoginThrottle<T>(fn: () => Promise<T>): Promise<T> {
 
 export async function listCapitalAccounts(
   session: CapitalSession
-): Promise<{ ok: boolean; accounts: Array<{ accountId: string; accountName: string; accountType?: string }>; detail: string }> {
+): Promise<{
+  ok: boolean;
+  accounts: Array<{
+    accountId: string;
+    accountName: string;
+    accountType?: string;
+    balance?: number;
+    available?: number;
+    currency?: string;
+  }>;
+  detail: string;
+}> {
   const res = await session.get('/api/v1/accounts');
   if (!res.ok) {
     return {
@@ -398,13 +409,47 @@ export async function listCapitalAccounts(
   }
   const raw = Array.isArray(res.json?.accounts) ? res.json.accounts : [];
   const accounts = raw
-    .map((a: any) => ({
-      accountId: String(a.accountId || a.account_id || '').trim(),
-      accountName: String(a.accountName || a.name || a.accountId || '').trim(),
-      accountType: a.accountType ? String(a.accountType) : undefined,
-    }))
+    .map((a: any) => {
+      const bal = a.balance && typeof a.balance === 'object' ? a.balance : a;
+      return {
+        accountId: String(a.accountId || a.account_id || '').trim(),
+        accountName: String(a.accountName || a.name || a.accountId || '').trim(),
+        accountType: a.accountType ? String(a.accountType) : undefined,
+        balance: numOrNull(bal?.balance ?? a.balance),
+        available: numOrNull(bal?.available ?? a.available),
+        currency: a.currency ? String(a.currency) : undefined,
+      };
+    })
     .filter((a: { accountId: string }) => a.accountId);
   return { ok: true, accounts, detail: `${accounts.length} accounts` };
+}
+
+/** Equity snapshot for MASTER sizing — from GET /accounts (VS-System- pattern). */
+export async function fetchCapitalAccountEquity(
+  session: CapitalSession,
+  preferredAccountId?: string | null
+): Promise<{ equity: number; balance: number; currency: string; detail: string } | null> {
+  const listed = await listCapitalAccounts(session);
+  if (!listed.ok || !listed.accounts.length) return null;
+  const pref = (preferredAccountId || session.currentAccountId || '').trim();
+  const hit =
+    (pref && listed.accounts.find((a) => a.accountId === pref)) ||
+    listed.accounts.reduce((best, a) => {
+      const e = Number(a.available ?? a.balance ?? 0);
+      const be = Number(best.available ?? best.balance ?? 0);
+      return e >= be ? a : best;
+    });
+  const equity = Number(hit.available ?? hit.balance ?? 0);
+  const balance = Number(hit.balance ?? equity);
+  if (!Number.isFinite(equity) || equity <= 0) {
+    return { equity: 0, balance: 0, currency: hit.currency || 'GBP', detail: 'no_balance_on_account' };
+  }
+  return {
+    equity,
+    balance,
+    currency: hit.currency || 'GBP',
+    detail: `account=${hit.accountId}`,
+  };
 }
 
 export async function switchCapitalAccount(
