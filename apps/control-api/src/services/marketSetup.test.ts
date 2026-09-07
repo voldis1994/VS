@@ -35,7 +35,7 @@ describe('marketSetup', () => {
     expect(st.ready).toBe(false);
   });
 
-  it('builds swing structure and NONE mid-range', () => {
+  it('builds swing structure and ARMS mid-range with last 1m (no impulse starve)', () => {
     const minutes = rangeMinutes();
     const st = buildStructure({ minutes, mid: 2005 });
     expect(st.ready).toBe(true);
@@ -43,12 +43,31 @@ describe('marketSetup', () => {
     let setup = emptySetup();
     setup = updateSetupSticky(setup, st, minutes);
     setup = updateSetupSticky(setup, st, minutes);
-    // mid → NONE (not WAIT regime)
-    expect(setup.kind === 'NONE' || setup.kind === 'FADE').toBe(true);
-    if (!st.near_high && !st.near_low) {
-      expect(setup.kind).toBe('NONE');
-      expect(setup.status).toBe('NONE');
+    // Never sit NONE waiting for impulse — arm CONTINUATION from flow/1m
+    expect(setup.kind).toBe('CONTINUATION');
+    expect(setup.status).toBe('ARMED');
+    expect(setup.side === 'BUY' || setup.side === 'SELL').toBe(true);
+  });
+
+  it('Gold dump mid-swing ARMS SELL — not NONE no impulse yet', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 24; i++) {
+      const o = 4417 - i * 0.28;
+      bars.push(candle(o, o + 0.4, o - 0.5, o - 0.25));
     }
+    const last = bars[bars.length - 1]!;
+    const st = buildStructure({ minutes: bars, mid: last.close });
+    expect(st.ready).toBe(true);
+    let setup = emptySetup();
+    setup = updateSetupSticky(setup, st, bars);
+    expect(setup.kind).not.toBe('NONE');
+    expect(setup.side).toBe('SELL');
+    expect(setup.status).toBe('ARMED');
+    expect(setup.reason).not.toMatch(/no impulse yet/i);
+    const red10 = bar10(last.close + 0.05, last.close + 0.06, last.close - 0.1, last.close - 0.02);
+    const sell =
+      decideEntryFromSetup(setup, red10, bars) || decideEntryFromTenSecMove(st, red10, bars);
+    expect(sell?.direction).toBe('SELL');
   });
 
   it('arms WITH-MOVE near swing low — BUY when flow up / bounce, never FADE against dump', () => {

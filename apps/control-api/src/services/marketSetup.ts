@@ -476,9 +476,11 @@ function rawSetupFromStructure(
     };
   }
 
-  // Tip / failed poke — ride WITH flow, never fade against it
+  // Tip / failed poke — ride WITH flow (or last 1m direction). Never sit on NONE forever.
   if (structure.near_high && !closedAbove && (freshHi || pokeAbove)) {
-    if (flow === 'UP') {
+    const tipSell = flow === 'DOWN' || (flow == null && (pers < 0 || last.close < last.open));
+    const tipBuy = flow === 'UP' || (flow == null && (pers > 0 || last.close > last.open));
+    if (tipBuy && !tipSell) {
       return {
         kind: 'CONTINUATION',
         side: 'BUY',
@@ -486,10 +488,10 @@ function rawSetupFromStructure(
         status: 'ARMED',
         swing_high: hi,
         swing_low: lo,
-        reason: `Rally at high zone · BUY with flow · H${hi.toFixed(2)}`,
+        reason: `Rally at high zone · BUY · H${hi.toFixed(2)}`,
       };
     }
-    if (flow === 'DOWN') {
+    if (tipSell) {
       return {
         kind: 'CONTINUATION',
         side: 'SELL',
@@ -497,22 +499,14 @@ function rawSetupFromStructure(
         status: 'ARMED',
         swing_high: hi,
         swing_low: lo,
-        reason: `Dump from high · SELL with flow · H${hi.toFixed(2)}`,
+        reason: `Dump from high · SELL · H${hi.toFixed(2)}`,
       };
     }
-    // No clear flow yet — wait for 10s MOVE path (do not FADE)
-    return {
-      kind: 'NONE',
-      side: null,
-      playbook: null,
-      status: 'NONE',
-      swing_high: hi,
-      swing_low: lo,
-      reason: `NONE · near H${hi.toFixed(2)} · wait 10s move · no counter-trend FADE`,
-    };
   }
   if (structure.near_low && !closedBelow && (freshLo || pokeBelow)) {
-    if (flow === 'DOWN') {
+    const floorSell = flow === 'DOWN' || (flow == null && (pers < 0 || last.close < last.open));
+    const floorBuy = flow === 'UP' || (flow == null && (pers > 0 || last.close > last.open));
+    if (floorSell && !floorBuy) {
       return {
         kind: 'CONTINUATION',
         side: 'SELL',
@@ -520,10 +514,10 @@ function rawSetupFromStructure(
         status: 'ARMED',
         swing_high: hi,
         swing_low: lo,
-        reason: `Dump at low zone · SELL with flow · L${lo.toFixed(2)}`,
+        reason: `Dump at low zone · SELL · L${lo.toFixed(2)}`,
       };
     }
-    if (flow === 'UP') {
+    if (floorBuy) {
       return {
         kind: 'CONTINUATION',
         side: 'BUY',
@@ -531,112 +525,88 @@ function rawSetupFromStructure(
         status: 'ARMED',
         swing_high: hi,
         swing_low: lo,
-        reason: `Bounce from low · BUY with flow · L${lo.toFixed(2)}`,
+        reason: `Bounce from low · BUY · L${lo.toFixed(2)}`,
       };
     }
-    return {
-      kind: 'NONE',
-      side: null,
-      playbook: null,
-      status: 'NONE',
-      swing_high: hi,
-      swing_low: lo,
-      reason: `NONE · near L${lo.toFixed(2)} · wait 10s move · no counter-trend FADE`,
-    };
   }
 
-  // CONTINUATION / PULLBACK — need 1m agreement (pers/flow/bias). Hour alone cannot arm opposite side.
+  // CONTINUATION / PULLBACK — flow / pers / bias / last 1m. No "wait for impulse".
   const trendUp =
     flow === 'UP' ||
-    pers > 0.3 ||
-    (structure.bias === 'ABOVE' && structure.hour_bias !== 'DOWN' && pers >= 0);
+    pers > 0.15 ||
+    structure.bias === 'ABOVE' ||
+    (last.close > last.open && flow !== 'DOWN');
   const trendDown =
     flow === 'DOWN' ||
-    pers < -0.3 ||
-    (structure.bias === 'BELOW' && structure.hour_bias !== 'UP' && pers <= 0);
+    pers < -0.15 ||
+    structure.bias === 'BELOW' ||
+    (last.close < last.open && flow !== 'UP');
 
-  if (trendUp && !closedBelow && !structure.near_high) {
-    if (last.close < structure.mid && last.close > lo) {
-      return {
-        kind: 'PULLBACK',
-        side: 'BUY',
-        playbook: 'LONG',
-        status: 'ARMED',
-        swing_high: hi,
-        swing_low: lo,
-        reason: `PULLBACK in up move · BUY resume · L${lo.toFixed(2)}`,
-      };
-    }
-    if ((pers > 0.25 || flow === 'UP' || structure.bias === 'ABOVE') && last.close < hi - eps) {
-      return {
-        kind: 'CONTINUATION',
-        side: 'BUY',
-        playbook: 'LONG',
-        status: 'ARMED',
-        swing_high: hi,
-        swing_low: lo,
-        reason: `CONTINUATION up · above mid ${structure.mid.toFixed(2)} · below tip ${hi.toFixed(2)}`,
-      };
-    }
-  }
-
-  if (trendDown && !closedAbove && !structure.near_low) {
-    if (last.close > structure.mid && last.close < hi) {
-      return {
-        kind: 'PULLBACK',
-        side: 'SELL',
-        playbook: 'LONG',
-        status: 'ARMED',
-        swing_high: hi,
-        swing_low: lo,
-        reason: `PULLBACK in down move · SELL resume · H${hi.toFixed(2)}`,
-      };
-    }
-    if ((pers < -0.25 || flow === 'DOWN' || structure.bias === 'BELOW') && last.close > lo + eps) {
-      return {
-        kind: 'CONTINUATION',
-        side: 'SELL',
-        playbook: 'LONG',
-        status: 'ARMED',
-        swing_high: hi,
-        swing_low: lo,
-        reason: `CONTINUATION down · below mid ${structure.mid.toFixed(2)} · above floor ${lo.toFixed(2)}`,
-      };
-    }
-  }
-
-  // Stale edge → readable NONE
-  if (structure.near_high && !freshHi) {
+  if (trendDown && !trendUp) {
     return {
-      kind: 'NONE',
-      side: null,
-      playbook: null,
-      status: 'NONE',
+      kind: 'CONTINUATION',
+      side: 'SELL',
+      playbook: 'LONG',
+      status: 'ARMED',
       swing_high: hi,
       swing_low: lo,
-      reason: `NONE · near H${hi.toFixed(2)} but stale high · watch both sides`,
+      reason: `CONTINUATION SELL · flow/1m down · H${hi.toFixed(2)}/L${lo.toFixed(2)}`,
     };
   }
-  if (structure.near_low && !freshLo) {
+  if (trendUp && !trendDown) {
     return {
-      kind: 'NONE',
-      side: null,
-      playbook: null,
-      status: 'NONE',
+      kind: 'CONTINUATION',
+      side: 'BUY',
+      playbook: 'LONG',
+      status: 'ARMED',
       swing_high: hi,
       swing_low: lo,
-      reason: `NONE · near L${lo.toFixed(2)} but stale low · watch both sides`,
+      reason: `CONTINUATION BUY · flow/1m up · H${hi.toFixed(2)}/L${lo.toFixed(2)}`,
+    };
+  }
+  if (trendDown) {
+    return {
+      kind: 'CONTINUATION',
+      side: 'SELL',
+      playbook: 'LONG',
+      status: 'ARMED',
+      swing_high: hi,
+      swing_low: lo,
+      reason: `CONTINUATION SELL · down bias · H${hi.toFixed(2)}/L${lo.toFixed(2)}`,
+    };
+  }
+  if (trendUp) {
+    return {
+      kind: 'CONTINUATION',
+      side: 'BUY',
+      playbook: 'LONG',
+      status: 'ARMED',
+      swing_high: hi,
+      swing_low: lo,
+      reason: `CONTINUATION BUY · up bias · H${hi.toFixed(2)}/L${lo.toFixed(2)}`,
     };
   }
 
+  // Last resort — still arm from last closed 1m candle (never "no impulse yet")
+  if (last.close < last.open) {
+    return {
+      kind: 'CONTINUATION',
+      side: 'SELL',
+      playbook: 'LONG',
+      status: 'ARMED',
+      swing_high: hi,
+      swing_low: lo,
+      reason: `CONTINUATION SELL · last 1m red · H${hi.toFixed(2)}/L${lo.toFixed(2)}`,
+    };
+  }
   return {
-    kind: 'NONE',
-    side: null,
-    playbook: null,
-    status: 'NONE',
+    kind: 'CONTINUATION',
+    side: 'BUY',
+    playbook: 'LONG',
+    status: 'ARMED',
     swing_high: hi,
     swing_low: lo,
-    reason: `NONE · mid swing H${hi.toFixed(2)}/L${lo.toFixed(2)} · watching BUY&SELL · no impulse yet`,
+    reason: `CONTINUATION BUY · last 1m · H${hi.toFixed(2)}/L${lo.toFixed(2)}`,
   };
 }
 
@@ -877,7 +847,9 @@ export function decideEntryFromSetup(
   }
 
   if (setup.kind === 'CONTINUATION') {
-    if (setup.side === 'BUY' && body >= thr * 0.4 && bar.close >= bar.open) {
+    // Soft confirm — with clear flow, even a tiny same-color 10s is enough (was starving on 0.03pt bars)
+    const soft = thr * 0.2;
+    if (setup.side === 'BUY' && flow !== 'DOWN' && bar.close >= bar.open && (body >= soft || flow === 'UP')) {
       return {
         direction: 'BUY',
         setup: 'CONTINUATION',
@@ -885,12 +857,29 @@ export function decideEntryFromSetup(
         reason: `ENTRY · CONTINUATION BUY · ${setup.reason}`,
       };
     }
-    if (setup.side === 'SELL' && body <= -thr * 0.4 && bar.close <= bar.open) {
+    if (setup.side === 'SELL' && flow !== 'UP' && bar.close <= bar.open && (body <= -soft || flow === 'DOWN')) {
       return {
         direction: 'SELL',
         setup: 'CONTINUATION',
         playbook: book,
         reason: `ENTRY · CONTINUATION SELL · ${setup.reason}`,
+      };
+    }
+    // Flow already agrees and bar not fighting — enter on any closed 10s
+    if (setup.side === 'BUY' && flow === 'UP' && bar.close >= bar.open) {
+      return {
+        direction: 'BUY',
+        setup: 'CONTINUATION',
+        playbook: book,
+        reason: `ENTRY · CONTINUATION BUY · flow UP · ${setup.reason}`,
+      };
+    }
+    if (setup.side === 'SELL' && flow === 'DOWN' && bar.close <= bar.open) {
+      return {
+        direction: 'SELL',
+        setup: 'CONTINUATION',
+        playbook: book,
+        reason: `ENTRY · CONTINUATION SELL · flow DOWN · ${setup.reason}`,
       };
     }
   }
@@ -900,7 +889,7 @@ export function decideEntryFromSetup(
 
 /**
  * When sticky setup is NONE mid-swing but the closed 10s bar is a real Gold move,
- * enter CONTINUATION WITH the bar — block only against dump/rally (no impulse starvation).
+ * enter CONTINUATION WITH the bar — soft body; only hard-block against dump/rally.
  */
 export function decideEntryFromTenSecMove(
   structure: StructureBook,
@@ -913,27 +902,44 @@ export function decideEntryFromTenSecMove(
   const hi = structure.swing_high;
   const lo = structure.swing_low;
   const eps = edgeEps(bar.close, Math.max(hi - lo, structure.span, 1));
-  const need = thr * 0.7; // ~0.6pt Gold — open on real 10s moves again
+  const need = thr * 0.35; // ~0.3pt — don't starve on quiet closes after a dump
   const flow = priceFlowBias(minutes);
 
   if (body >= need && bar.close > bar.open) {
-    if (flow === 'DOWN') return null; // never BUY into dump
+    if (flow === 'DOWN') return null;
     if (bar.close >= hi - eps * 0.35 && bar.close <= hi + eps * 0.2) return null;
     return {
       direction: 'BUY',
       setup: 'CONTINUATION',
       playbook: 'LONG',
-      reason: `ENTRY · 10s MOVE BUY O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · with flow`,
+      reason: `ENTRY · 10s MOVE BUY O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)}`,
     };
   }
   if (body <= -need && bar.close < bar.open) {
-    if (flow === 'UP') return null; // never SELL into rally
+    if (flow === 'UP') return null;
     if (bar.close <= lo + eps * 0.35 && bar.close >= lo - eps * 0.2) return null;
     return {
       direction: 'SELL',
       setup: 'CONTINUATION',
       playbook: 'LONG',
-      reason: `ENTRY · 10s MOVE SELL O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · with flow`,
+      reason: `ENTRY · 10s MOVE SELL O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)}`,
+    };
+  }
+  // Flow dump/rally with almost-flat 10s — still enter WITH flow (chart class: grind after impulse)
+  if (flow === 'DOWN' && bar.close <= bar.open) {
+    return {
+      direction: 'SELL',
+      setup: 'CONTINUATION',
+      playbook: 'LONG',
+      reason: `ENTRY · flow DOWN SELL · 10s O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)}`,
+    };
+  }
+  if (flow === 'UP' && bar.close >= bar.open) {
+    return {
+      direction: 'BUY',
+      setup: 'CONTINUATION',
+      playbook: 'LONG',
+      reason: `ENTRY · flow UP BUY · 10s O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)}`,
     };
   }
   return null;

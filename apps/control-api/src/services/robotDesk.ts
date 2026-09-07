@@ -409,7 +409,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
     note:
-      'With-move entries open on 10s · BO keeps green · SL≈1.5pt · PeakProtect≥3.5pt · short cooldown only after hard loss.',
+      'No impulse starve — ARMED with flow/1m always. Soft 10s confirm. BO: keep green · SL≈1.5 · Peak≥3.5.',
   };
 }
 
