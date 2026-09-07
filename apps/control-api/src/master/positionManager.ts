@@ -7,13 +7,21 @@ import { decideBestOutcomeExit, favorableMove } from '../services/exitManage.js'
 import type { MasterBroker } from './broker.js';
 import { clampStopForCapitalMark } from './capitalStop.js';
 import {
-  buildEqualMultiTpPlan,
   clampCloseVolume,
   multiTpFinalPrice,
   multiTpHit,
   multiTpPendingIndex,
   type MultiTpLevel,
 } from './multiTp.js';
+import {
+  capitalSafeBreakEvenStop,
+  decideSoftTrailArm,
+  resolveFloatingMoneyPnl,
+  softTrailDistancePrice,
+  softTrailExitHit,
+  softTrailExitLevel,
+  updateSoftTrailPeak,
+} from './moneyExit.js';
 import type { MasterPipeline } from './pipeline.js';
 import type {
   MasterDecision,
@@ -51,6 +59,10 @@ export type ManagedPosition = {
   partial_close_applied?: boolean;
   /** VS-System multi-TP ladder (app-managed intermediates) */
   multi_tp_levels?: MultiTpLevel[];
+  /** Soft-trail armed timestamp (ISO) once money arm clears */
+  soft_trail_armed_at?: string | null;
+  /** Soft-trail peak mark watermark */
+  soft_trail_peak?: number | null;
 };
 
 export type ManageTickResult = {
@@ -161,6 +173,12 @@ export class PositionManager {
     close_all_loss?: number;
     /** Live Capital min-stop distance (dealingRules) when known */
     min_stop_distance?: number | null;
+    /** VS-System money BE arm (£/$). 0 = off */
+    breakeven_activation_money?: number;
+    /** Soft-trail money arm (£/$). 0 = off */
+    soft_trail_money_arm?: number;
+    /** Soft-trail pullback distance in pips (default 0.3) */
+    soft_trail_pips?: number;
   }): Promise<ManageTickResult> {
     const { broker, pipeline, quote } = input;
     const pv = input.instrument_point_value ?? 1;
@@ -168,6 +186,9 @@ export class PositionManager {
     const beProgress = input.breakeven_progress ?? 0.5;
     const beOffset = input.breakeven_offset ?? 0;
     const beStart = input.be_start ?? 0;
+    const beMoney = input.breakeven_activation_money ?? 0;
+    const softMoneyArm = input.soft_trail_money_arm ?? 0;
+    const softPips = input.soft_trail_pips ?? 0.3;
     const trailStart = input.trail_start ?? 0;
     const trailLock = input.trail_lock ?? 0;
     const partialProgress = input.partial_close_progress ?? 0;
@@ -242,6 +263,87 @@ export class PositionManager {
       const peak_retention =
         pos.mfe > 1e-9 ? Math.max(0, Math.min(1, fav / pos.mfe)) : null;
       const heldMs = Date.now() - new Date(pos.entry_at).getTime();
+
+      const moneyPnl = resolveFloatingMoneyPnl({
+        side: pos.side,
+        entry: pos.entry,
+        mark,
+        size: pos.size,
+        value_per_point_per_lot: pv,
+      });
+
+      // VS-System soft trail — software exit after money arm (not Capital min-stop trail)
+      if (allowClose && softMoneyArm > 0) {
+        const arm = decideSoftTrailArm({
+          money_pnl: moneyPnl,
+          money_arm: softMoneyArm,
+          already_armed: !!pos.soft_trail_armed_at,
+        });
+        if (arm.run) {
+          if (!pos.soft_trail_armed_at) {
+            pos.soft_trail_armed_at = new Date().toISOString();
+            pos.soft_trail_peak = mark;
+          } else {
+            pos.soft_trail_peak = updateSoftTrailPeak(
+              pos.side,
+              mark,
+              pos.soft_trail_peak
+            );
+          }
+          const dist = softTrailDistancePrice(pos.epic, softPips);
+          const peak = pos.soft_trail_peak ?? mark;
+          const exitLvl = softTrailExitLevel(pos.side, peak, dist);
+          if (softTrailExitHit(pos.side, mark, exitLvl)) {
+            if (pos.stop_loss == null) {
+              close_failed.push({
+                position_id: pos.position_id,
+                exit_reason: 'SOFT_TRAIL',
+                detail: 'close_requires_sl',
+              });
+            } else {
+              const closeRes = await broker.closePosition(pos.position_id);
+              if (closeRes.ok) {
+                const fill =
+                  closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
+                    ? Number(closeRes.fill_price)
+                    : mark;
+                const pnlPts =
+                  pos.side === 'BUY' ? fill - pos.entry : pos.entry - fill;
+                const outcome: TradeOutcome = {
+                  position_id: pos.position_id,
+                  side: pos.side,
+                  entry: pos.entry,
+                  exit: fill,
+                  volume: pos.size,
+                  pnl: pnlPts * pos.size * pv,
+                  fees: 0,
+                  slippage: Math.abs(fill - quote.mid),
+                  mae: pos.mae,
+                  mfe: pos.mfe,
+                  r_multiple: 0,
+                  hold_ms: heldMs,
+                  exit_reason: `SOFT_TRAIL · money≥${softMoneyArm} pullback ${softPips}pip`,
+                };
+                pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome, {
+                  epic: pos.epic,
+                });
+                this.open.delete(pos.position_id);
+                closed.push({
+                  position: pos,
+                  outcome,
+                  reason: outcome.exit_reason,
+                });
+                continue;
+              }
+              close_failed.push({
+                position_id: pos.position_id,
+                exit_reason: 'SOFT_TRAIL',
+                detail: closeRes.detail || 'soft_trail_close_failed',
+              });
+            }
+          }
+        }
+      }
 
       // VS-System multi-TP ladder (app-managed) before single Reader partial
       if (
@@ -366,6 +468,8 @@ export class PositionManager {
           progressNeed: beProgress,
           offset: beOffset,
           beStart,
+          moneyNeed: beMoney,
+          pointValue: pv,
           min_stop_distance: minStopDist,
         });
         await this.maybeTrailStop(broker, pos, quote, {
@@ -393,6 +497,8 @@ export class PositionManager {
           progressNeed: beProgress,
           offset: beOffset,
           beStart,
+          moneyNeed: beMoney,
+          pointValue: pv,
           min_stop_distance: minStopDist,
         });
         await this.maybeTrailStop(broker, pos, quote, {
@@ -417,6 +523,8 @@ export class PositionManager {
           progressNeed: beProgress,
           offset: beOffset,
           beStart,
+          moneyNeed: beMoney,
+          pointValue: pv,
           min_stop_distance: minStopDist,
         });
         continue;
@@ -651,37 +759,66 @@ export class PositionManager {
       progressNeed: number;
       offset?: number;
       beStart?: number;
+      moneyNeed?: number;
+      pointValue?: number;
       min_stop_distance?: number | null;
     }
   ): Promise<void> {
     if (!broker.modifyPosition) return;
     const offset = Math.max(0, opts.offset ?? 0);
     const beStart = Math.max(0, opts.beStart ?? 0);
+    const moneyNeed = Math.max(0, opts.moneyNeed ?? 0);
     const progressNeed = opts.progressNeed;
     const mark = protectiveMark(pos.side, quote);
     const fav = favorableMove(pos.side, pos.entry, mark);
+    const money = resolveFloatingMoneyPnl({
+      side: pos.side,
+      entry: pos.entry,
+      mark,
+      size: pos.size,
+      value_per_point_per_lot: opts.pointValue ?? 1,
+    });
 
     let armed = false;
-    if (beStart > 0) {
-      armed = fav >= beStart;
-    } else if (progressNeed > 0 && pos.take_profit != null) {
+    if (moneyNeed > 0 && money >= moneyNeed) armed = true;
+    if (!armed && beStart > 0) armed = fav >= beStart;
+    if (!armed && progressNeed > 0 && pos.take_profit != null) {
       const tpDist = Math.abs(pos.take_profit - pos.entry);
       if (tpDist >= 1e-9 && fav / tpDist >= progressNeed) armed = true;
     }
     if (!armed) return;
 
-    const be = pos.side === 'BUY' ? pos.entry + offset : pos.entry - offset;
-    const cur = pos.stop_loss;
-    const tighter =
-      cur == null ? true : pos.side === 'BUY' ? be > cur : be < cur;
-    if (!tighter) return;
-    await this.applyProtectiveStopModify(
-      broker,
-      pos,
-      be,
+    // Defer until entry±offset is Capital-legal — never clamp BE into a loss
+    const be = capitalSafeBreakEvenStop({
+      side: pos.side,
+      entry: pos.entry,
       mark,
-      opts.min_stop_distance
-    );
+      symbol: pos.epic,
+      offset,
+      current_stop: pos.stop_loss,
+      min_distance: opts.min_stop_distance,
+    });
+    if (be == null) return;
+
+    const backoff = this.modifyBackoff.get(pos.position_id);
+    const now = Date.now();
+    if (backoff && now < backoff.until && Math.abs(backoff.level - be) < 1e-9) {
+      return;
+    }
+    const mod = await broker.modifyPosition({
+      position_id: pos.position_id,
+      stop_level: be,
+    });
+    if (mod.ok) {
+      pos.stop_loss = be;
+      this.modifyBackoff.delete(pos.position_id);
+      return;
+    }
+    const { capitalModifyRejectBackoffMs } = await import('./capitalConfirm.js');
+    this.modifyBackoff.set(pos.position_id, {
+      until: now + capitalModifyRejectBackoffMs(mod.detail || ''),
+      level: be,
+    });
   }
 
   /**

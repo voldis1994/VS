@@ -283,4 +283,16 @@ export type MasterConfig = {
   multi_tp_count: number;
   /** Final TP distance = ATR × this when multi_tp_count ≥ 2. */
   multi_tp_atr_mult: number;
+  /**
+   * VS-System money BE arm (account currency). >0 arms BE on floating £/$ PnL.
+   * 0 = disabled (price/progress paths only).
+   */
+  breakeven_activation_money: number;
+  /**
+   * Soft-trail money arm (account currency). >0 enables software peak trail exit.
+   * 0 = off.
+   */
+  soft_trail_money_arm: number;
+  /** Soft-trail pullback distance in pips once armed (VS-System default 0.3). */
+  soft_trail_pips: number;
 };

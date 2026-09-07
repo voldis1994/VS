@@ -429,6 +429,9 @@ class MasterRuntime {
       close_all_profit: this.cfg.close_all_profit,
       close_all_loss: this.cfg.close_all_loss,
       min_stop_distance: liveMinStop,
+      breakeven_activation_money: this.cfg.breakeven_activation_money,
+      soft_trail_money_arm: this.cfg.soft_trail_money_arm,
+      soft_trail_pips: this.cfg.soft_trail_pips,
     });
     const exit_reasons = managed.closed.map((c) => c.reason);
     if (exit_reasons.length) this.last_exit_reason = exit_reasons.at(-1)!;

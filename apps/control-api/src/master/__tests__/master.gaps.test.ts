@@ -1368,4 +1368,183 @@ describe('partial_close persist + Check be_start', () => {
     expect(pm.get('ext-1')!.size).toBe(0.05);
     expect(pm.get('ext-1')!.partial_close_applied).toBe(true);
   });
+
+  it('money BE arms at £0.05 floating and defers illegal clamp', async () => {
+    const { capitalSafeBreakEvenStop, resolveFloatingMoneyPnl } = await import(
+      '../moneyExit.js'
+    );
+    expect(
+      resolveFloatingMoneyPnl({
+        side: 'BUY',
+        entry: 4400,
+        mark: 4400.5,
+        size: 0.1,
+        value_per_point_per_lot: 1,
+        broker_upl: 0,
+      })
+    ).toBeCloseTo(0.05, 8);
+    // Too close to mark for Capital live min 0.5 → defer
+    expect(
+      capitalSafeBreakEvenStop({
+        side: 'BUY',
+        entry: 4400,
+        mark: 4400.2,
+        symbol: 'GOLD',
+        offset: 0,
+        min_distance: 0.5,
+      })
+    ).toBeNull();
+
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    broker.setQuote({
+      bid: entry + 0.55,
+      ask: entry + 0.65,
+      mid: entry + 0.6,
+      spread: 0.1,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'money-be-bbbbbbbbbbbbbbbb',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: entry - 2,
+      profit_level: entry + 5,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-mbe',
+      intent_id: 'mbe-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry,
+      stop_loss: entry - 2,
+      take_profit: entry + 5,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis(),
+        expectancy: null,
+      },
+    });
+    await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: entry + 0.55,
+        ask: entry + 0.65,
+        mid: entry + 0.6,
+        spread: 0.1,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      breakeven_progress: 0,
+      breakeven_activation_money: 0.05,
+      max_hold_ms: 0,
+    });
+    expect(pm.get(placed.position_id!)!.stop_loss).toBe(entry);
+  });
+
+  it('soft trail exits after money arm + pullback', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    // Start in profit enough to arm (£0.05 at 0.1 lot → 0.5 pts)
+    broker.setQuote({
+      bid: entry + 0.6,
+      ask: entry + 0.7,
+      mid: entry + 0.65,
+      spread: 0.1,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'soft-trail-bbbbbbbbbbbbbb',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: entry - 2,
+      profit_level: entry + 10,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-st',
+      intent_id: 'st-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry,
+      stop_loss: entry - 2,
+      take_profit: entry + 10,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis(),
+        expectancy: null,
+      },
+    });
+    // Arm soft trail
+    await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: entry + 0.6,
+        ask: entry + 0.7,
+        mid: entry + 0.65,
+        spread: 0.1,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      soft_trail_money_arm: 0.05,
+      soft_trail_pips: 0.3,
+      breakeven_progress: 0,
+      max_hold_ms: 0,
+    });
+    expect(pm.get(placed.position_id!)!.soft_trail_armed_at).toBeTruthy();
+    // Pull back through soft exit (0.3 pip = 0.003 on GOLD — use larger for clear hit)
+    broker.setQuote({
+      bid: entry + 0.1,
+      ask: entry + 0.2,
+      mid: entry + 0.15,
+      spread: 0.1,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: entry + 0.1,
+        ask: entry + 0.2,
+        mid: entry + 0.15,
+        spread: 0.1,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      soft_trail_money_arm: 0.05,
+      soft_trail_pips: 0.3,
+      breakeven_progress: 0,
+      max_hold_ms: 0,
+    });
+    expect(managed.closed.some((c) => /SOFT_TRAIL/.test(c.reason))).toBe(true);
+    expect(pm.count()).toBe(0);
+  });
 });

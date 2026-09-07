@@ -130,6 +130,8 @@ export async function saveOpenPositions(positions: ManagedPosition[]): Promise<b
             decision: p.decision,
             partial_close_applied: !!p.partial_close_applied,
             multi_tp_levels: p.multi_tp_levels ?? null,
+            soft_trail_armed_at: p.soft_trail_armed_at ?? null,
+            soft_trail_peak: p.soft_trail_peak ?? null,
           }),
         ]
       );
@@ -168,6 +170,9 @@ export async function loadOpenPositions(): Promise<ManagedPosition[]> {
         multi_tp_levels: Array.isArray(payload.multi_tp_levels)
           ? payload.multi_tp_levels
           : undefined,
+        soft_trail_armed_at: payload.soft_trail_armed_at ?? null,
+        soft_trail_peak:
+          payload.soft_trail_peak != null ? Number(payload.soft_trail_peak) : null,
       } as ManagedPosition;
     });
   } catch {

@@ -1,0 +1,124 @@
+/**
+ * VS-System money PnL + soft-trail helpers for SCALPING-style exits.
+ */
+
+import { instrumentPipSize, stopValidVsMark } from './capitalStop.js';
+
+/** Price-path floating PnL in account currency (pts × lots × value/point). */
+export function instrumentMoneyPnl(input: {
+  side: 'BUY' | 'SELL';
+  entry: number;
+  mark: number;
+  size: number;
+  value_per_point_per_lot: number;
+}): number {
+  const pts =
+    input.side === 'BUY' ? input.mark - input.entry : input.entry - input.mark;
+  return pts * input.size * input.value_per_point_per_lot;
+}
+
+/**
+ * Prefer computed money when broker UPL is stale/zero while price is in profit.
+ */
+export function resolveFloatingMoneyPnl(input: {
+  side: 'BUY' | 'SELL';
+  entry: number;
+  mark: number;
+  size: number;
+  value_per_point_per_lot: number;
+  broker_upl?: number | null;
+}): number {
+  const computed = instrumentMoneyPnl(input);
+  const broker = input.broker_upl;
+  if (broker == null || !Number.isFinite(broker)) return computed;
+  if (broker <= 0 && computed > 0) return computed;
+  if (computed > 0 || broker > 0) return Math.max(broker, computed);
+  return broker;
+}
+
+/** Soft trail distance in price units (pip × count) — never floored to Capital min-stop. */
+export function softTrailDistancePrice(symbol: string, pips = 0.3): number {
+  const pip = instrumentPipSize(symbol);
+  const n = Number(pips);
+  const count = Number.isFinite(n) && n > 0 ? n : 0.3;
+  return pip * count;
+}
+
+/**
+ * Capital-safe BE stop that DEFERs (null) when ideal lock is illegal vs mark.
+ * Never clamps BE below entry (BUY) / above entry (SELL) — that would fake a lock.
+ */
+export function capitalSafeBreakEvenStop(input: {
+  side: 'BUY' | 'SELL';
+  entry: number;
+  mark: number;
+  symbol: string;
+  offset?: number;
+  current_stop?: number | null;
+  min_distance?: number | null;
+}): number | null {
+  const off = Math.max(0, input.offset ?? 0);
+  const ideal =
+    input.side === 'BUY' ? input.entry + off : input.entry - off;
+  if (
+    !stopValidVsMark({
+      side: input.side,
+      stop: ideal,
+      mark: input.mark,
+      symbol: input.symbol,
+      min_distance: input.min_distance,
+    })
+  ) {
+    return null;
+  }
+  const cur = input.current_stop;
+  const tighter =
+    cur == null
+      ? true
+      : input.side === 'BUY'
+        ? ideal > cur
+        : ideal < cur;
+  if (!tighter) return null;
+  return ideal;
+}
+
+/** Soft-trail arm gate — money PnL ≥ arm (or already armed). */
+export function decideSoftTrailArm(input: {
+  money_pnl: number;
+  money_arm: number;
+  already_armed: boolean;
+}): { run: boolean; reason: 'off' | 'below_money_arm' | 'profit_hit' | 'already_armed' } {
+  if (!(input.money_arm > 0)) return { run: false, reason: 'off' };
+  if (input.already_armed) return { run: true, reason: 'already_armed' };
+  if (Number.isFinite(input.money_pnl) && input.money_pnl >= input.money_arm) {
+    return { run: true, reason: 'profit_hit' };
+  }
+  return { run: false, reason: 'below_money_arm' };
+}
+
+/** Update peak watermark once soft trail is armed. */
+export function updateSoftTrailPeak(
+  side: 'BUY' | 'SELL',
+  mark: number,
+  peak: number | null | undefined
+): number {
+  if (peak == null || !Number.isFinite(peak)) return mark;
+  return side === 'BUY' ? Math.max(peak, mark) : Math.min(peak, mark);
+}
+
+/** Soft exit level from peak −/+ soft distance. */
+export function softTrailExitLevel(
+  side: 'BUY' | 'SELL',
+  peak: number,
+  distance: number
+): number {
+  return side === 'BUY' ? peak - distance : peak + distance;
+}
+
+export function softTrailExitHit(
+  side: 'BUY' | 'SELL',
+  mark: number,
+  exitLevel: number
+): boolean {
+  return side === 'BUY' ? mark <= exitLevel : mark >= exitLevel;
+}

@@ -250,6 +250,9 @@ export const DEFAULT_MASTER_CONFIG: MasterConfig = {
   reduce_lot_to: 0.01,
   multi_tp_count: 0,
   multi_tp_atr_mult: 1.5,
+  breakeven_activation_money: 0,
+  soft_trail_money_arm: 0,
+  soft_trail_pips: 0.3,
 };
 
 export const GOLD_SPEC: InstrumentSpec = {
