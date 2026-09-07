@@ -20,8 +20,8 @@ async function sleep(ms: number) {
 async function main() {
   const dir = process.env.ARTIFACT_DIR || '/opt/cursor/artifacts';
   mkdirSync(dir, { recursive: true });
-  // Fresh state each run — leftover opens from a prior demo would mask new fills
-  // as one_trade_open and confuse verify (DECIDED vs TRADED).
+  // Fresh state each run — leftover opens / loss cooldowns from prior demos or
+  // systemAudit would mask natural fills (one_trade_open / cooldown_after_loss).
   const stateDir = '/tmp/vs-master-live-paper-state';
   try {
     const { rmSync } = await import('fs');
@@ -29,6 +29,8 @@ async function main() {
   } catch {
     /* ignore */
   }
+  process.env.MASTER_STATE_DIR = stateDir;
+  process.env.MASTER_GATES_DIR = stateDir;
   installFilePersist(stateDir);
 
   masterRuntime.cfg = {
@@ -39,6 +41,10 @@ async function main() {
     // Demo proves live quote → decision → paper fill; session gates are covered by systemAudit.
     block_off_hours: false,
   };
+  masterRuntime.last_loss_ms = 0;
+  masterRuntime.reject_until_ms = 0;
+  masterRuntime.account.consecutive_losses = 0;
+  masterRuntime.account.daily_pnl = 0;
   masterRuntime.ensurePaperBroker();
   await masterRuntime.start();
 
