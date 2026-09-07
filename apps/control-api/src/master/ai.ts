@@ -24,6 +24,8 @@ export type AiMeta = {
   ai_error_type: string | null;
   ai_fallback_used: boolean;
   ai_reason: string | null;
+  /** Soft-exit gate for next manageTick (Reader allow_close) */
+  allow_close: boolean;
   system_decision_before_ai: string;
   decision_after_ai: string;
 };
@@ -164,6 +166,7 @@ export function applyAiToDecision(
         ai_error_type: null,
         ai_fallback_used: false,
         ai_reason: null,
+        allow_close: true,
         system_decision_before_ai: before,
         decision_after_ai: decision.kind,
       },
@@ -186,6 +189,7 @@ export function applyAiToDecision(
           ai_error_type: errorType || 'unavailable',
           ai_fallback_used: false,
           ai_reason: blocked.block_reason,
+          allow_close: true,
           system_decision_before_ai: before,
           decision_after_ai: 'BLOCK',
         },
@@ -199,6 +203,7 @@ export function applyAiToDecision(
         ai_error_type: errorType || 'missing_key',
         ai_fallback_used: true,
         ai_reason: 'ai_error_system_fallback',
+        allow_close: true,
         system_decision_before_ai: before,
         decision_after_ai: decision.kind,
       },
@@ -239,6 +244,7 @@ export function applyAiToDecision(
       ai_error_type: usedOpenAi ? null : errorType,
       ai_fallback_used: !usedOpenAi,
       ai_reason: advisor.reason,
+      allow_close: advisor.allow_close !== false,
       system_decision_before_ai: before,
       decision_after_ai: next.kind,
     },

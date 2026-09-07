@@ -121,6 +121,14 @@ export class PositionManager {
     swing_low?: number | null;
     swing_high?: number | null;
     trailing_buffer?: number;
+    /**
+     * Reader AI allow_close — soft exits (TIME_STOP / BestOutcome / partial) vetoed when false.
+     * Hard STOP_HIT / TP_HIT always close. Default true.
+     */
+    allow_close?: boolean;
+    /** Check- portfolio close-all thresholds (0 = off) */
+    close_all_profit?: number;
+    close_all_loss?: number;
   }): Promise<ManageTickResult> {
     const { broker, pipeline, quote } = input;
     const pv = input.instrument_point_value ?? 1;
@@ -132,8 +140,62 @@ export class PositionManager {
     const swingLow = input.swing_low ?? null;
     const swingHigh = input.swing_high ?? null;
     const trailBuf = input.trailing_buffer ?? 0;
+    const allowClose = input.allow_close !== false;
+    const closeAllProfit = input.close_all_profit ?? 0;
+    const closeAllLoss = input.close_all_loss ?? 0;
     const closed: ManageTickResult['closed'] = [];
     const close_failed: ManageTickResult['close_failed'] = [];
+
+    // Check- portfolio close-all on floating PnL (before per-position manage)
+    const floatPnl = floatingUnrealizedPnl(this.list(), quote, pv);
+    const portfolioReason =
+      closeAllProfit > 0 && floatPnl >= closeAllProfit
+        ? `AUTO_PROFIT_${floatPnl.toFixed(2)}`
+        : closeAllLoss > 0 && floatPnl <= -closeAllLoss
+          ? `AUTO_LOSS_${floatPnl.toFixed(2)}`
+          : null;
+    if (portfolioReason) {
+      for (const pos of [...this.open.values()]) {
+        const mark = protectiveMark(pos.side, quote);
+        const heldMs = Date.now() - new Date(pos.entry_at).getTime();
+        const closeRes = await broker.closePosition(pos.position_id);
+        if (!closeRes.ok) {
+          close_failed.push({
+            position_id: pos.position_id,
+            exit_reason: portfolioReason,
+            detail: closeRes.detail || 'close_failed',
+          });
+          continue;
+        }
+        const fill =
+          closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
+            ? Number(closeRes.fill_price)
+            : mark;
+        const pnlPts = pos.side === 'BUY' ? fill - pos.entry : pos.entry - fill;
+        const pnl = pnlPts * pos.size * pv;
+        const outcome: TradeOutcome = {
+          position_id: pos.position_id,
+          side: pos.side,
+          entry: pos.entry,
+          exit: fill,
+          volume: pos.size,
+          pnl,
+          fees: 0,
+          slippage: Math.abs(fill - quote.mid),
+          mae: pos.mae,
+          mfe: pos.mfe,
+          r_multiple: 0,
+          hold_ms: heldMs,
+          exit_reason: portfolioReason,
+        };
+        pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome, {
+          epic: pos.epic,
+        });
+        this.open.delete(pos.position_id);
+        closed.push({ position: pos, outcome, reason: portfolioReason });
+      }
+      return { closed, close_failed, open_count: this.open.size };
+    }
 
     for (const pos of [...this.open.values()]) {
       const mark = protectiveMark(pos.side, quote);
@@ -146,7 +208,9 @@ export class PositionManager {
 
       // Reader partial scale-out before full exit (once)
       // Skip when broker cannot partial (Check- MT4 full-lots CLOSE only)
+      // Reader AI allow_close gates soft closes including partial
       if (
+        allowClose &&
         broker.supportsPartialClose !== false &&
         !pos.partial_close_applied &&
         partialProgress > 0 &&
@@ -231,6 +295,25 @@ export class PositionManager {
             ));
 
       if (!verdict.exit) {
+        await this.maybeBreakevenStop(broker, pos, quote, beProgress);
+        await this.maybeTrailStop(broker, pos, quote, {
+          swing_low: swingLow,
+          swing_high: swingHigh,
+          trailing_buffer: trailBuf,
+        });
+        continue;
+      }
+
+      // Reader AI: soft exits vetoed; hard STOP/TP always fire
+      const hardProtective =
+        protective != null &&
+        (verdict.reason === 'STOP_HIT' || verdict.reason === 'TP_HIT');
+      if (!allowClose && !hardProtective) {
+        close_failed.push({
+          position_id: pos.position_id,
+          exit_reason: verdict.reason,
+          detail: 'ai_veto_close',
+        });
         await this.maybeBreakevenStop(broker, pos, quote, beProgress);
         await this.maybeTrailStop(broker, pos, quote, {
           swing_low: swingLow,
@@ -493,6 +576,21 @@ function mapRegimeToPlaybook(regime: string): 'LONG' | 'SCALP' | 'FADE' {
   if (regime === 'TREND' || regime === 'BREAKOUT') return 'LONG';
   if (regime === 'RANGE' || regime === 'LOW_VOLATILITY') return 'SCALP';
   return 'SCALP';
+}
+
+/** Floating UPL across open positions using protective marks. */
+export function floatingUnrealizedPnl(
+  positions: Array<Pick<ManagedPosition, 'side' | 'entry' | 'size'>>,
+  quote: Quote,
+  pointValue = 1
+): number {
+  let sum = 0;
+  for (const pos of positions) {
+    const mark = protectiveMark(pos.side, quote);
+    const pts = pos.side === 'BUY' ? mark - pos.entry : pos.entry - mark;
+    sum += pts * pos.size * pointValue;
+  }
+  return sum;
 }
 
 /** Reader-style partial close when progress toward TP clears threshold. */

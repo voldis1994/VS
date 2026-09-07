@@ -247,6 +247,140 @@ describe('MASTER filters + dual flow', () => {
   });
 });
 
+describe('AI allow_close + portfolio close-all', () => {
+  it('AI allow_close=false vetoes TIME_STOP but STOP_HIT still closes', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    broker.setQuote({
+      bid: entry + 0.2,
+      ask: entry + 0.6,
+      mid: entry + 0.4,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'ai-close-veto-aaaaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      stop_level: entry - 5,
+      profit_level: entry + 10,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-ai-veto',
+      intent_id: 'ai-veto-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      entry,
+      stop_loss: entry - 5,
+      take_profit: entry + 10,
+      decision: {
+        decision_id: 'd-ai',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis({ regime: 'TREND' }),
+      },
+    });
+    // Force TIME_STOP clock
+    pm.get(placed.position_id!)!.entry_at = new Date(Date.now() - 60_000).toISOString();
+    const soft = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: { bid: entry + 0.2, ask: entry + 0.6, mid: entry + 0.4, spread: 0.4, ts_ms: Date.now() },
+      max_hold_ms: 1_000,
+      allow_close: false,
+    });
+    expect(soft.closed.length).toBe(0);
+    expect(soft.close_failed.some((f) => f.detail === 'ai_veto_close')).toBe(true);
+    expect(pm.count()).toBe(1);
+
+    // Hard STOP still fires
+    const hard = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: { bid: entry - 6, ask: entry - 5.6, mid: entry - 5.8, spread: 0.4, ts_ms: Date.now() },
+      max_hold_ms: 1_000,
+      allow_close: false,
+    });
+    expect(hard.closed.length).toBe(1);
+    expect(hard.closed[0]!.reason).toBe('STOP_HIT');
+  });
+
+  it('Check- close_all_profit closes entire book on floating PnL', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    broker.setQuote({
+      bid: entry + 5,
+      ask: entry + 5.4,
+      mid: entry + 5.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const a = await broker.placeOrder({
+      intent_id: 'pf-a-aaaaaaaaaaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      stop_level: entry - 5,
+    });
+    const b = await broker.placeOrder({
+      intent_id: 'pf-b-aaaaaaaaaaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      stop_level: entry - 5,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    for (const placed of [a, b]) {
+      pm.register({
+        position_id: placed.position_id!,
+        opportunity_id: `opp-${placed.position_id}`,
+        intent_id: placed.order_id || placed.position_id!,
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 1,
+        entry,
+        stop_loss: entry - 5,
+        take_profit: entry + 20,
+        decision: {
+          decision_id: 'd-pf',
+          kind: 'BUY',
+          side: 'BUY',
+          score: 0.7,
+          block_reason: null,
+          buy: null as never,
+          sell: null as never,
+          analysis: baseAnalysis({ regime: 'TREND' }),
+        },
+      });
+    }
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: { bid: entry + 5, ask: entry + 5.4, mid: entry + 5.2, spread: 0.4, ts_ms: Date.now() },
+      instrument_point_value: 1,
+      close_all_profit: 8,
+      max_hold_ms: 0,
+    });
+    expect(managed.closed.length).toBe(2);
+    expect(managed.closed.every((c) => c.reason.startsWith('AUTO_PROFIT_'))).toBe(true);
+    expect(pm.count()).toBe(0);
+  });
+});
+
 describe('MASTER recover orphan journal', () => {
   it('attaches exit outcome to recover stub opportunity', async () => {
     const broker = new PaperBroker();

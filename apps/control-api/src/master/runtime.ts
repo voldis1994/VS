@@ -114,6 +114,11 @@ class MasterRuntime {
   /** When false, manage exits still run but new entries are blocked (desk dual-brain guard). */
   entries_armed = true;
   entries_pause_reason: string | null = null;
+  /**
+   * Last AI allow_close from pipeline cycle — soft exits on next manageTick.
+   * Defaults true (AI off / unknown).
+   */
+  last_ai_allow_close = true;
   /** null = follow MASTER_OWNS_PIPELINE env; else dashboard override */
   owns_pipeline_pref: boolean | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -309,6 +314,7 @@ class MasterRuntime {
     });
     this.last_decision = cycle.decision;
     this.last_risk = cycle.risk;
+    this.last_ai_allow_close = cycle.ai.allow_close !== false;
     this.trackPersist('opportunity', persistOpportunity(cycle.opportunity));
     return {
       decision: cycle.decision,
@@ -396,6 +402,10 @@ class MasterRuntime {
       swing_low: structure?.swing_low ?? null,
       swing_high: structure?.swing_high ?? null,
       trailing_buffer: trailBuf,
+      allow_close:
+        this.cfg.ai_mode === 'off' ? true : this.last_ai_allow_close,
+      close_all_profit: this.cfg.close_all_profit,
+      close_all_loss: this.cfg.close_all_loss,
     });
     const exit_reasons = managed.closed.map((c) => c.reason);
     if (exit_reasons.length) this.last_exit_reason = exit_reasons.at(-1)!;
@@ -447,6 +457,7 @@ class MasterRuntime {
     });
     this.last_decision = cycle.decision;
     this.last_risk = cycle.risk;
+    this.last_ai_allow_close = cycle.ai.allow_close !== false;
     this.trackPersist('opportunity', persistOpportunity(cycle.opportunity));
 
     // 3) Execution gate

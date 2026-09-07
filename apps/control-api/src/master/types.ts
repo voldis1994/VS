@@ -216,6 +216,14 @@ export type MasterConfig = {
    * 0 = disabled.
    */
   equity_floor: number;
+  /**
+   * Check- close-all when floating PnL ≥ this (account currency). 0 = disabled.
+   */
+  close_all_profit: number;
+  /**
+   * Check- close-all when floating PnL ≤ -this. 0 = disabled.
+   */
+  close_all_loss: number;
   /** Reader partial close: progress toward TP (0..1) before scaling out */
   partial_close_progress: number;
   /** Fraction of size to close on first scale-out (0..1) */
