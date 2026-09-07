@@ -317,13 +317,23 @@ describe('VS MASTER decision + risk', () => {
 
     const daily = evaluateRisk(
       forced,
-      { ...account, daily_pnl: -500, equity: 10_000 },
+      { ...account, daily_pnl: -500, equity: 10_000, day_start_equity: 10_000 },
       GOLD_SPEC,
       quoteFrom(bars.at(-1)!),
       { ...DEFAULT_MASTER_CONFIG, max_daily_loss_pct: 0.03 }
     );
     expect(daily.allowed).toBe(false);
     expect(daily.reasons).toContain('max_daily_loss');
+
+    // Floating equity drawdown (Reader) even when closed daily_pnl is flat
+    const floating = evaluateRisk(
+      forced,
+      { ...account, daily_pnl: 0, equity: 9_500, day_start_equity: 10_000 },
+      GOLD_SPEC,
+      quoteFrom(bars.at(-1)!),
+      { ...DEFAULT_MASTER_CONFIG, max_daily_loss_pct: 0.03 }
+    );
+    expect(floating.reasons).toContain('max_daily_loss');
   });
 
   it('intent idempotency — claim once', async () => {

@@ -36,10 +36,18 @@ export function evaluateRisk(
       : 0;
   if (dd >= cfg.max_drawdown_pct) reasons.push('max_drawdown');
 
-  const dailyLossPct =
-    (account.day_start_equity ?? account.equity) > 0
-      ? Math.max(0, -account.daily_pnl) / (account.day_start_equity ?? account.equity)
-      : 0;
+  const dayStart =
+    account.day_start_equity != null &&
+    Number.isFinite(account.day_start_equity) &&
+    account.day_start_equity > 0
+      ? account.day_start_equity
+      : account.equity;
+  // Reader: floating equity drawdown; also respect closed daily_pnl when worse
+  const equityDrawdownPct =
+    dayStart > 0 ? Math.max(0, dayStart - account.equity) / dayStart : 0;
+  const closedLossPct =
+    dayStart > 0 ? Math.max(0, -account.daily_pnl) / dayStart : 0;
+  const dailyLossPct = Math.max(equityDrawdownPct, closedLossPct);
   if (dailyLossPct >= cfg.max_daily_loss_pct) reasons.push('max_daily_loss');
 
   if (account.consecutive_losses >= cfg.consecutive_loss_limit) {

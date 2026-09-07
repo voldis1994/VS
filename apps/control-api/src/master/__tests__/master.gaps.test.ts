@@ -1756,4 +1756,215 @@ describe('partial_close persist + Check be_start', () => {
     expect(buy.valid).toBe(false);
     expect(buy.filter_reason).toMatch(/scalp_|bull|bear|falling|micro|edge/);
   });
+
+  it('pre-entry broker verify blocks when listOpen fails (VS-System fail-closed)', async () => {
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('PAPER');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.cfg = {
+      ...DEFAULT_MASTER_CONFIG,
+      mode: 'PAPER',
+      min_score: 0.3,
+      block_off_hours: false,
+      block_high_impact_news: false,
+      max_relative_volatility: 100,
+    };
+    const broker = masterRuntime.ensurePaperBroker();
+    broker.listOpenPositions = async () => ({
+      ok: false,
+      positions: [],
+      detail: 'forced_list_fail',
+    });
+    masterRuntime.running = true;
+    masterRuntime.entries_armed = true;
+    const bars = Array.from({ length: 40 }, (_, i) => {
+      const o = 4400 + i * 0.8;
+      return { open: o, high: o + 1.2, low: o - 0.1, close: o + 0.9, ts_ms: i * 60_000 };
+    });
+    broker.setQuote({
+      bid: 4430,
+      ask: 4430.4,
+      mid: 4430.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const r = await masterRuntime.tick(bars, {
+      bid: 4430,
+      ask: 4430.4,
+      mid: 4430.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    expect(r.executed).toBe(false);
+    if (r.decision.kind === 'BUY' || r.decision.kind === 'SELL') {
+      expect(String(r.execution_detail || '')).toMatch(/broker_verify_failed/);
+    }
+  });
+
+  it('naked recovery escalates distance after modify reject', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    broker.setQuote({
+      bid: entry,
+      ask: entry + 0.2,
+      mid: entry + 0.1,
+      spread: 0.2,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'naked-escalate-aaaaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-naked-esc',
+      intent_id: 'ne-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry,
+      stop_loss: null,
+      take_profit: null,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis(),
+        expectancy: null,
+      },
+    });
+    let attempts = 0;
+    const levels: number[] = [];
+    broker.modifyPosition = async (input) => {
+      attempts += 1;
+      if (input.stop_level != null) levels.push(Number(input.stop_level));
+      if (attempts < 3) return { ok: false, detail: 'REJECTED:MIN_DISTANCE' };
+      return { ok: true, detail: 'ok' };
+    };
+    const quote = {
+      bid: entry,
+      ask: entry + 0.2,
+      mid: entry + 0.1,
+      spread: 0.2,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    };
+    // Throttle is 8s — poke private map via successive manage with mocked clock by clearing via success path
+    // Force immediate retries by temporarily lowering throttle through rapid calls after advancing map
+    for (let i = 0; i < 3; i++) {
+      (pm as any).nakedRecoveryAt.clear();
+      await pm.manageTick({
+        broker,
+        pipeline: pipe,
+        quote,
+        instrument_point_value: 1,
+        max_hold_ms: 0,
+        allow_close: false,
+        scalp_pct_chase: true,
+      });
+    }
+    expect(attempts).toBeGreaterThanOrEqual(2);
+    // Escalation should widen protective SL (BUY → lower price farther from entry)
+    if (levels.length >= 2) {
+      expect(levels[1]!).toBeLessThanOrEqual(levels[0]!);
+    }
+    expect(pm.get(placed.position_id!)!.stop_loss).not.toBeNull();
+  });
+
+  it('Mt4FileBroker getQuote uses market file mtime (Check- stale honesty)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-stale-'));
+    mkdirSync(join(root, 'market'), { recursive: true });
+    const marketPath = join(root, 'market', 'latest.json');
+    writeFileSync(
+      marketPath,
+      JSON.stringify({ bid: 4400, ask: 4400.4, symbol: 'XAUUSD' })
+    );
+    const old = Date.now() - 120_000;
+    const { utimesSync } = await import('fs');
+    utimesSync(marketPath, new Date(old), new Date(old));
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    const q = await broker.getQuote('XAUUSD');
+    expect(q).toBeTruthy();
+    expect(q!.ts_ms).toBeLessThan(Date.now() - 60_000);
+  });
+
+  it('stale quote skips soft manage (TIME_STOP) but keeps position', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    broker.setQuote({
+      bid: entry,
+      ask: entry + 0.2,
+      mid: entry + 0.1,
+      spread: 0.2,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'stale-manage-aaaaaaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: entry - 5,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    const pos = pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-stale-m',
+      intent_id: 'sm-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry,
+      stop_loss: entry - 5,
+      take_profit: entry + 10,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis(),
+        expectancy: null,
+      },
+    });
+    // Backdate entry so TIME_STOP would fire if soft manage ran
+    (pos as { entry_at: string }).entry_at = new Date(
+      Date.now() - 3_600_000
+    ).toISOString();
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: entry,
+        ask: entry + 0.2,
+        mid: entry + 0.1,
+        spread: 0.2,
+        epic: 'GOLD',
+        ts_ms: Date.now() - 120_000,
+      },
+      instrument_point_value: 1,
+      max_hold_ms: 60_000,
+      allow_close: true,
+      stale_quote_ms: 30_000,
+    });
+    expect(managed.closed.length).toBe(0);
+    expect(pm.count()).toBe(1);
+  });
 });

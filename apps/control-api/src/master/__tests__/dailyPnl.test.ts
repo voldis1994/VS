@@ -48,17 +48,27 @@ describe('MASTER daily pnl day boundary', () => {
       },
     };
     const quote: Quote = { bid: 4430, ask: 4430.4, mid: 4430.2, spread: 0.4, ts_ms: Date.now() };
+    // Closed −200 (2%) with equity still 9_800 → under 3% gate
     const ok = evaluateRisk(
+      forced,
+      { ...account, daily_pnl: -200, day_start_equity: 10_000, equity: 9_800 },
+      GOLD_SPEC,
+      quote,
+      { ...DEFAULT_MASTER_CONFIG, max_daily_loss_pct: 0.03 }
+    );
+    expect(ok.reasons).not.toContain('max_daily_loss');
+    // Closed only −200 but floating equity at 9_000 (10% drawdown) → Reader blocks
+    const floatingBlocked = evaluateRisk(
       forced,
       { ...account, daily_pnl: -200, day_start_equity: 10_000, equity: 9_000 },
       GOLD_SPEC,
       quote,
       { ...DEFAULT_MASTER_CONFIG, max_daily_loss_pct: 0.03 }
     );
-    expect(ok.reasons).not.toContain('max_daily_loss');
+    expect(floatingBlocked.reasons).toContain('max_daily_loss');
     const blocked = evaluateRisk(
       forced,
-      { ...account, daily_pnl: -400, day_start_equity: 10_000, equity: 9_000 },
+      { ...account, daily_pnl: -400, day_start_equity: 10_000, equity: 9_600 },
       GOLD_SPEC,
       quote,
       { ...DEFAULT_MASTER_CONFIG, max_daily_loss_pct: 0.03 }

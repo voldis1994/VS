@@ -594,6 +594,7 @@ class MasterRuntime {
       soft_trail_pips: this.cfg.soft_trail_pips,
       scalp_pct_chase: this.cfg.scalp_pct_chase,
       scalp_lock_pct: this.cfg.scalp_lock_pct,
+      stale_quote_ms: this.cfg.stale_quote_ms,
     });
     const exit_reasons = managed.closed.map((c) => c.reason);
     if (exit_reasons.length) this.last_exit_reason = exit_reasons.at(-1)!;
@@ -668,6 +669,27 @@ class MasterRuntime {
       !inflight &&
       !rejectCool
     ) {
+      // VS-System fail-closed: force-list broker opens before entry — local book
+      // alone is unsafe when sync was skipped or ghosts lag.
+      let brokerVerifyOk = true;
+      try {
+        const listed = await broker.listOpenPositions(this.epic);
+        if (!listed.ok) {
+          brokerVerifyOk = false;
+          execution_detail = `broker_verify_failed:${listed.detail || 'list_failed'}`;
+          this.last_execution_detail = execution_detail;
+        } else if (listed.positions.length > 0) {
+          brokerVerifyOk = false;
+          execution_detail = `one_trade_broker_open:${listed.positions.length}`;
+          this.last_execution_detail = execution_detail;
+        }
+      } catch (err) {
+        brokerVerifyOk = false;
+        execution_detail = `broker_verify_failed:${err instanceof Error ? err.message : 'list_threw'}`;
+        this.last_execution_detail = execution_detail;
+      }
+
+      if (brokerVerifyOk) {
       this.inflight_until_ms = Date.now() + 90_000;
       const { execution, place } = await executeDecision({
         broker,
@@ -775,6 +797,7 @@ class MasterRuntime {
           );
         }
       }
+      } // brokerVerifyOk
     } else if (cycle.decision.kind === 'BUY' || cycle.decision.kind === 'SELL') {
       execution_detail = !this.running
         ? 'runtime_stopped'

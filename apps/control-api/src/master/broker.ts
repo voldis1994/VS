@@ -1135,18 +1135,31 @@ export class Mt4FileBroker implements MasterBroker {
   }
 
   async getQuote(epic: string): Promise<BrokerQuote | null> {
-    const m = this.readJson(join('market', 'latest.json'));
+    const rel = join('market', 'latest.json');
+    const path = join(this.bridgeRoot, rel);
+    const m = this.readJson(rel);
     if (!m) return null;
     const bid = Number(m.bid ?? m.Bid);
     const ask = Number(m.ask ?? m.Ask);
     if (!Number.isFinite(bid) || !Number.isFinite(ask)) return null;
+    // Check-: stamp file mtime — Date.now() would hide stale bridge data from risk/manage
+    let ts_ms = Date.now();
+    try {
+      if (existsSync(path)) ts_ms = statSync(path).mtimeMs;
+    } catch {
+      /* keep now */
+    }
+    // Prefer explicit market timestamp when EA exports one
+    const rawTs = Number(m.ts_ms ?? m.time_ms ?? m.TimeMs ?? m.timestamp);
+    if (Number.isFinite(rawTs) && rawTs > 1_000_000_000_000) ts_ms = rawTs;
+    else if (Number.isFinite(rawTs) && rawTs > 1_000_000_000) ts_ms = rawTs * 1000;
     return {
       bid,
       ask,
       mid: (bid + ask) / 2,
       spread: ask - bid,
       epic: String(m.symbol || m.Symbol || epic),
-      ts_ms: Date.now(),
+      ts_ms,
     };
   }
 

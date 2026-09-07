@@ -28,6 +28,7 @@ import {
   SCALP_SL_CHASE_MIN_INTERVAL_MS,
   scalpChaseIsImprovement,
   scalpInitialBrokerStop,
+  scalpInitialStopDistance,
   scalpPctLockBrokerStop,
 } from './scalpPctChase.js';
 import type {
@@ -89,7 +90,10 @@ export class PositionManager {
   private scalpChaseAt = new Map<string, number>();
   /** VS-System naked SL recovery throttle */
   private nakedRecoveryAt = new Map<string, number>();
+  /** VS-System escalate distance on reject: multipliers [1,2,3,5] */
+  private nakedRecoveryLevel = new Map<string, number>();
   private static readonly NAKED_RECOVERY_MS = 8_000;
+  private static readonly NAKED_RECOVERY_MULTS = [1, 2, 3, 5] as const;
 
   list(): ManagedPosition[] {
     return [...this.open.values()];
@@ -202,6 +206,11 @@ export class PositionManager {
     scalp_pct_chase?: boolean;
     /** Lock fraction (default 0.2) */
     scalp_lock_pct?: number;
+    /**
+     * When set, quotes older than this skip soft manage (BE/trail/TIME_STOP/partial)
+     * but still attempt naked SL recovery — Check- stale bridge gate.
+     */
+    stale_quote_ms?: number;
   }): Promise<ManageTickResult> {
     const { broker, pipeline, quote } = input;
     const pv = input.instrument_point_value ?? 1;
@@ -234,6 +243,21 @@ export class PositionManager {
     const closeAllLoss = input.close_all_loss ?? 0;
     const closed: ManageTickResult['closed'] = [];
     const close_failed: ManageTickResult['close_failed'] = [];
+
+    // Check- stale market: no soft manage / portfolio closes on dead quotes
+    const staleMs = input.stale_quote_ms ?? 0;
+    const quoteStale =
+      staleMs > 0 &&
+      Number.isFinite(quote.ts_ms) &&
+      Date.now() - quote.ts_ms > staleMs;
+    if (quoteStale) {
+      for (const pos of this.list()) {
+        if (pos.stop_loss == null) {
+          await this.maybeRecoverNakedStop(broker, pos, quote, minStopDist);
+        }
+      }
+      return { closed, close_failed, modified: 0 };
+    }
 
     // Check- portfolio close-all on floating PnL (before per-position manage)
     const floatPnl = floatingUnrealizedPnl(this.list(), quote, pv);
@@ -806,7 +830,7 @@ export class PositionManager {
 
   /**
    * Mid-life naked recovery — broker chart has no stop but local may have
-   * stale SL. Attach Capital-safe 10% protective (VS-System recoverScalpNakedStop).
+   * stale SL. Escalate distance on reject (VS-System multipliers 1→2→3→5).
    */
   private async maybeRecoverNakedStop(
     broker: MasterBroker,
@@ -822,13 +846,33 @@ export class PositionManager {
     this.nakedRecoveryAt.set(pos.position_id, now);
 
     const mark = protectiveMark(pos.side, quote);
-    const recovery = scalpInitialBrokerStop({
-      symbol: pos.epic,
-      direction: pos.side,
-      entry: pos.entry,
-      mark,
-      min_distance: minStopDist,
-    });
+    const level = this.nakedRecoveryLevel.get(pos.position_id) ?? 0;
+    const mult =
+      PositionManager.NAKED_RECOVERY_MULTS[
+        Math.min(level, PositionManager.NAKED_RECOVERY_MULTS.length - 1)
+      ]!;
+    const baseDist = scalpInitialStopDistance(pos.entry);
+    const dist =
+      (Number.isFinite(baseDist) ? baseDist : 0) * (level === 0 ? 1 : mult);
+
+    const { capitalSafeInitialStop } = await import('./capitalStop.js');
+    const recovery =
+      level === 0
+        ? scalpInitialBrokerStop({
+            symbol: pos.epic,
+            direction: pos.side,
+            entry: pos.entry,
+            mark,
+            min_distance: minStopDist,
+          })
+        : capitalSafeInitialStop({
+            symbol: pos.epic,
+            direction: pos.side,
+            entry: pos.entry,
+            distance: dist,
+            mark,
+            min_distance: minStopDist,
+          });
     if (recovery == null) return;
 
     const mod = await broker.modifyPosition({
@@ -838,8 +882,10 @@ export class PositionManager {
     if (mod.ok) {
       pos.stop_loss = recovery;
       this.modifyBackoff.delete(pos.position_id);
+      this.nakedRecoveryLevel.delete(pos.position_id);
       return;
     }
+    this.nakedRecoveryLevel.set(pos.position_id, level + 1);
     const { capitalModifyRejectBackoffMs } = await import('./capitalConfirm.js');
     this.modifyBackoff.set(pos.position_id, {
       until: now + capitalModifyRejectBackoffMs(mod.detail || ''),
