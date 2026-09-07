@@ -76,7 +76,8 @@ export function buildCandidates(
   a: AnalysisSnapshot,
   quote: Quote,
   cfg: MasterConfig,
-  bars?: Bar[] | null
+  bars?: Bar[] | null,
+  relativeSpread?: number | null
 ): { buy: TradeCandidate; sell: TradeCandidate } {
   // Side-aware planned entry — matches ask/bid fills (not mid)
   const buyEntry = quote.ask;
@@ -94,7 +95,7 @@ export function buildCandidates(
   const buyScore = weighted(buyComp);
   const sellScore = weighted(sellComp);
 
-  const filter = applyMarketFilters(a, quote, cfg, Date.now(), bars);
+  const filter = applyMarketFilters(a, quote, cfg, Date.now(), bars, relativeSpread);
 
   // Reader-style against-flow hard reject (per side — shared filter no longer dual-starves UNKNOWN)
   const buyAgainstDump = a.momentum_dir === 'DOWN' && a.trend_dir === 'DOWN';

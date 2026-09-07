@@ -27,6 +27,7 @@ import { setupKey } from './decision.js';
 import { loadRuntimeGates, saveRuntimeGates } from './runtimeGates.js';
 import { loadOwnsPipelinePref, saveOwnsPipelinePref } from './ownsPipelinePref.js';
 import { resolveNewsWindow, type NewsWindowState } from './newsGate.js';
+import { SpreadHistory } from './spreadModel.js';
 import type {
   AccountSnapshot,
   Bar,
@@ -126,6 +127,9 @@ class MasterRuntime {
   private seenIntentSnapshot: string[] = [];
   /** Serialize tick() across live-feed / API / desk so opens+persist never race. */
   private tickChain: Promise<unknown> = Promise.resolve();
+  /** Reader relative-spread rolling history */
+  private spreadLookback = DEFAULT_MASTER_CONFIG.spread_lookback_bars;
+  private spreadHistory = new SpreadHistory(this.spreadLookback);
   epic = GOLD_SPEC.epic;
 
   setMode(mode: Mode) {
@@ -368,11 +372,21 @@ class MasterRuntime {
         acct.available != null && Number.isFinite(acct.available)
           ? acct.available
           : this.account.available_to_deal ?? null;
+      if (typeof acct.trade_allowed === 'boolean') {
+        this.account.trade_allowed = acct.trade_allowed;
+      }
       this.account.peak_equity = Math.max(this.account.peak_equity, acct.equity);
       if (!this.account.day_start_equity) {
         this.account.day_start_equity = acct.equity;
       }
     }
+
+    // Reader relative spread — update history every tick
+    if (this.cfg.spread_lookback_bars !== this.spreadLookback) {
+      this.spreadLookback = this.cfg.spread_lookback_bars;
+      this.spreadHistory = new SpreadHistory(this.spreadLookback);
+    }
+    const spreadSnap = this.spreadHistory.push(quote.spread);
 
     // 0) Reconcile broker truth every tick — drop ghosts, adopt orphans (VS-System-)
     const sync = await syncPositionsWithBroker(this.positions, broker, this.epic);
@@ -454,6 +468,8 @@ class MasterRuntime {
       cfg: this.cfg,
       symbol_open: this.positions.countForEpic(this.epic),
       last_loss_ms: this.last_loss_ms,
+      relative_spread:
+        spreadSnap.history.length >= 3 ? spreadSnap.relative_spread : null,
     });
     this.last_decision = cycle.decision;
     this.last_risk = cycle.risk;

@@ -29,6 +29,8 @@ export type PipelineInput = {
   symbol_open?: number;
   last_loss_ms?: number;
   now_ms?: number;
+  /** Reader relative spread z-score when history available */
+  relative_spread?: number | null;
 };
 
 export type PipelineResult = {
@@ -67,7 +69,8 @@ export class MasterPipeline {
         input.quote,
         { ...input.cfg, kill_switch: true },
         () => null,
-        market.bars.length ? market.bars : input.bars
+        market.bars.length ? market.bars : input.bars,
+        input.relative_spread
       );
       decision.kind = 'BLOCK';
       decision.side = null;
@@ -110,7 +113,8 @@ export class MasterPipeline {
       market.quote,
       input.cfg,
       (k) => this.expectancy.lookup(k),
-      market.bars
+      market.bars,
+      input.relative_spread
     );
 
     const mode = input.cfg.ai_mode;
@@ -223,9 +227,12 @@ export const DEFAULT_MASTER_CONFIG: MasterConfig = {
   block_high_impact_news: true,
   volatility_lookback_bars: 14,
   max_relative_volatility: 1.5,
+  spread_lookback_bars: 20,
+  max_relative_spread: 1.5,
   trailing_buffer_atr_mult: 0.15,
   profit_lock: 0,
   equity_floor: 0,
+  daily_loss_limit: 0,
   close_all_profit: 0,
   close_all_loss: 0,
   partial_close_progress: 0.5,

@@ -122,6 +122,11 @@ export type AccountSnapshot = {
   consecutive_losses: number;
   /** Free margin / available to deal when broker provides it */
   available_to_deal?: number | null;
+  /**
+   * Broker trade permission (MT4 IsTradeAllowed / Reader trade_allowed).
+   * undefined = unknown (do not block); false = hard block entries.
+   */
+  trade_allowed?: boolean | null;
 };
 
 export type InstrumentSpec = {
@@ -204,6 +209,10 @@ export type MasterConfig = {
   volatility_lookback_bars: number;
   /** Block when relative volatility exceeds this (Reader default ~1.5) */
   max_relative_volatility: number;
+  /** Reader relative spread lookback */
+  spread_lookback_bars: number;
+  /** Block when relative spread z-score exceeds this (Reader default ~1.5) */
+  max_relative_spread: number;
   /** Reader trail buffer as ATR multiple off structure swings */
   trailing_buffer_atr_mult: number;
   /**
@@ -216,6 +225,11 @@ export type MasterConfig = {
    * 0 = disabled.
    */
   equity_floor: number;
+  /**
+   * Check- hard $ daily loss. >0 blocks when daily_pnl ≤ -limit.
+   * 0 = disabled (percent max_daily_loss_pct still applies).
+   */
+  daily_loss_limit: number;
   /**
    * Check- close-all when floating PnL ≥ this (account currency). 0 = disabled.
    */

@@ -148,6 +148,65 @@ describe('VS MASTER decision + risk', () => {
     expect(floor.reasons).toContain('equity_floor');
   });
 
+  it('Check- hard $ daily_loss_limit blocks new entries', () => {
+    const bars = barsTrendUp();
+    const a = analyzeBars(bars, 0.4);
+    const d = decide(a, quoteFrom(bars.at(-1)!), { ...DEFAULT_MASTER_CONFIG, min_score: 0.3 }, () => null, bars);
+    const decision =
+      d.kind === 'BUY' || d.kind === 'SELL'
+        ? d
+        : {
+            ...d,
+            kind: 'BUY' as const,
+            side: 'BUY' as const,
+            block_reason: null,
+            buy: { ...d.buy, valid: true, filter_ok: true, score: 0.9 },
+          };
+    const blocked = evaluateRisk(
+      decision,
+      { ...account, daily_pnl: -80 },
+      GOLD_SPEC,
+      quoteFrom(bars.at(-1)!),
+      { ...DEFAULT_MASTER_CONFIG, daily_loss_limit: 50, max_daily_loss_pct: 0.99 }
+    );
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.reasons).toContain('daily_loss_limit');
+
+    const ok = evaluateRisk(
+      decision,
+      { ...account, daily_pnl: -40 },
+      GOLD_SPEC,
+      quoteFrom(bars.at(-1)!),
+      { ...DEFAULT_MASTER_CONFIG, daily_loss_limit: 50, max_daily_loss_pct: 0.99 }
+    );
+    expect(ok.reasons).not.toContain('daily_loss_limit');
+  });
+
+  it('account_not_tradeable blocks when trade_allowed is false', () => {
+    const bars = barsTrendUp();
+    const a = analyzeBars(bars, 0.4);
+    const d = decide(a, quoteFrom(bars.at(-1)!), { ...DEFAULT_MASTER_CONFIG, min_score: 0.3 }, () => null, bars);
+    const decision =
+      d.kind === 'BUY' || d.kind === 'SELL'
+        ? d
+        : {
+            ...d,
+            kind: 'BUY' as const,
+            side: 'BUY' as const,
+            block_reason: null,
+            buy: { ...d.buy, valid: true, filter_ok: true, score: 0.9 },
+          };
+    const blocked = evaluateRisk(
+      decision,
+      { ...account, trade_allowed: false },
+      GOLD_SPEC,
+      quoteFrom(bars.at(-1)!),
+      DEFAULT_MASTER_CONFIG
+    );
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.reasons).toContain('account_not_tradeable');
+  });
+
   it('BUY/SELL symmetry — dump prefers SELL', async () => {
     const bars = barsTrendDown();
     const a = analyzeBars(bars, 0.4);

@@ -10,6 +10,7 @@ import { PositionManager } from '../positionManager.js';
 import { Mt4FileBroker, PaperBroker, epicsMatch, normalizeEpicKey } from '../broker.js';
 import { syncPositionsWithBroker } from '../positionSync.js';
 import { masterRuntime } from '../runtime.js';
+import { updateSpreadModel } from '../spreadModel.js';
 import type { AnalysisSnapshot, Quote } from '../types.js';
 
 function baseAnalysis(over: Partial<AnalysisSnapshot> = {}): AnalysisSnapshot {
@@ -244,6 +245,34 @@ describe('MASTER filters + dual flow', () => {
     );
     expect(fail.ok).toBe(false);
     expect(fail.reason).toBe('relative_volatility');
+  });
+
+  it('hard-blocks relative spread spike (Reader-style)', () => {
+    let hist: number[] = [];
+    for (let i = 0; i < 15; i++) {
+      hist = updateSpreadModel(hist, 0.3, 20).history;
+    }
+    const spiked = updateSpreadModel(hist, 1.5, 20);
+    expect(spiked.relative_spread).toBeGreaterThan(1.5);
+    const pass = applyMarketFilters(
+      baseAnalysis({ volatility: 0.001 }),
+      { ...quote, spread: 0.3 },
+      DEFAULT_MASTER_CONFIG,
+      Date.UTC(2026, 8, 7, 12),
+      null,
+      0.5
+    );
+    expect(pass.ok).toBe(true);
+    const fail = applyMarketFilters(
+      baseAnalysis({ volatility: 0.001 }),
+      { ...quote, spread: 1.5 },
+      { ...DEFAULT_MASTER_CONFIG, max_spread_abs: 5, max_spread_pct: 0.01 },
+      Date.UTC(2026, 8, 7, 12),
+      null,
+      spiked.relative_spread
+    );
+    expect(fail.ok).toBe(false);
+    expect(fail.reason).toBe('relative_spread');
   });
 });
 
@@ -941,6 +970,24 @@ describe('MASTER epic alias sync', () => {
     const acct = await broker.getAccount();
     expect(acct?.equity).toBe(10_000);
     expect(acct?.available).toBe(8800);
+  });
+
+  it('MT4 getAccount parses trading_allowed=false', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-tradeoff-'));
+    mkdirSync(join(root, 'status'), { recursive: true });
+    writeFileSync(
+      join(root, 'status', 'latest.json'),
+      JSON.stringify({
+        equity: 10_000,
+        balance: 10_000,
+        trading_allowed: false,
+        positions: [],
+      })
+    );
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    const acct = await broker.getAccount();
+    expect(acct?.trade_allowed).toBe(false);
   });
 
   it('GOLD local matches XAUUSD MT4 ticket — does not wipe as broker_flat', async () => {

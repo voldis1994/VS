@@ -52,6 +52,8 @@ export type BrokerAccount = {
   currency: string;
   /** Free margin / available to deal when broker provides it */
   available?: number | null;
+  /** MT4 IsTradeAllowed / Reader trade_allowed — undefined if unknown */
+  trade_allowed?: boolean | null;
 };
 
 export type ListOpenResult = {
@@ -147,7 +149,12 @@ export class PaperBroker implements MasterBroker {
   }
 
   async getAccount() {
-    return { equity: this.equity, balance: this.balance, currency: 'GBP' };
+    return {
+      equity: this.equity,
+      balance: this.balance,
+      currency: 'GBP',
+      trade_allowed: true,
+    };
   }
 
   async listOpenPositions(epic?: string): Promise<ListOpenResult> {
@@ -942,6 +949,14 @@ export class Mt4FileBroker implements MasterBroker {
       balance,
       currency: String(s.currency || 'USD'),
       available,
+      trade_allowed:
+        typeof s.trading_allowed === 'boolean'
+          ? s.trading_allowed
+          : typeof s.trade_allowed === 'boolean'
+            ? s.trade_allowed
+            : typeof s.TradingAllowed === 'boolean'
+              ? s.TradingAllowed
+              : null,
     };
   }
 
