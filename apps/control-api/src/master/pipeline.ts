@@ -220,6 +220,11 @@ export const DEFAULT_MASTER_CONFIG: MasterConfig = {
   ai_mode: 'off',
   block_off_hours: true,
   block_high_impact_news: true,
+  volatility_lookback_bars: 14,
+  max_relative_volatility: 1.5,
+  trailing_buffer_atr_mult: 0.15,
+  profit_lock: 0,
+  equity_floor: 0,
   partial_close_progress: 0.5,
   partial_close_volume: 0.5,
 };

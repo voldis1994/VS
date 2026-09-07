@@ -200,6 +200,22 @@ export type MasterConfig = {
   block_off_hours: boolean;
   /** Reader high-impact news window — block new entries (exits still manage) */
   block_high_impact_news: boolean;
+  /** Reader relative volatility: current TR / mean TR lookback */
+  volatility_lookback_bars: number;
+  /** Block when relative volatility exceeds this (Reader default ~1.5) */
+  max_relative_volatility: number;
+  /** Reader trail buffer as ATR multiple off structure swings */
+  trailing_buffer_atr_mult: number;
+  /**
+   * Check- profit lock (account currency). >0 blocks new entries once daily_pnl ≥ lock.
+   * 0 = disabled.
+   */
+  profit_lock: number;
+  /**
+   * Check- equity floor. >0 blocks new entries when equity ≤ floor.
+   * 0 = disabled.
+   */
+  equity_floor: number;
   /** Reader partial close: progress toward TP (0..1) before scaling out */
   partial_close_progress: number;
   /** Fraction of size to close on first scale-out (0..1) */

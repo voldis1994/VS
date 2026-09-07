@@ -196,12 +196,54 @@ describe('MASTER filters + dual flow', () => {
         atr: 2,
       }),
       quote,
-      { ...DEFAULT_MASTER_CONFIG, min_score: 0.3 },
+      {
+        ...DEFAULT_MASTER_CONFIG,
+        min_score: 0.3,
+        // Isolate late-move from relative-vol gate for this assertion
+        max_relative_volatility: 100,
+      },
       bars
     );
     expect(buy.filter_ok).toBe(false);
     expect(buy.filter_reason).toBe('late_move');
     expect(sell.filter_reason).not.toBe('late_move');
+  });
+
+  it('hard-blocks relative volatility spike (Reader-style)', () => {
+    const quiet = Array.from({ length: 20 }, (_, i) => ({
+      open: 4400 + i * 0.01,
+      high: 4400.05 + i * 0.01,
+      low: 4399.95 + i * 0.01,
+      close: 4400.02 + i * 0.01,
+      ts_ms: i * 60_000,
+    }));
+    const spiked = [
+      ...quiet.slice(0, -1),
+      {
+        open: 4400,
+        high: 4420,
+        low: 4380,
+        close: 4410,
+        ts_ms: 20 * 60_000,
+      },
+    ];
+    const pass = applyMarketFilters(
+      baseAnalysis({ volatility: 0.001 }),
+      quote,
+      DEFAULT_MASTER_CONFIG,
+      Date.UTC(2026, 8, 7, 12),
+      quiet
+    );
+    expect(pass.ok).toBe(true);
+    const fail = applyMarketFilters(
+      baseAnalysis({ volatility: 0.001 }),
+      quote,
+      DEFAULT_MASTER_CONFIG,
+      Date.UTC(2026, 8, 7, 12),
+      spiked
+    );
+    expect(fail.ok).toBe(false);
+    expect(fail.reason).toBe('relative_volatility');
   });
 });
 

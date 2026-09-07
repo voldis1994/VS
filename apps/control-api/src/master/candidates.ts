@@ -94,7 +94,7 @@ export function buildCandidates(
   const buyScore = weighted(buyComp);
   const sellScore = weighted(sellComp);
 
-  const filter = applyMarketFilters(a, quote, cfg);
+  const filter = applyMarketFilters(a, quote, cfg, Date.now(), bars);
 
   // Reader-style against-flow hard reject (per side — shared filter no longer dual-starves UNKNOWN)
   const buyAgainstDump = a.momentum_dir === 'DOWN' && a.trend_dir === 'DOWN';

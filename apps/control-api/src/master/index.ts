@@ -27,3 +27,4 @@ export * from './mt4Sim.js';
 export * from './capitalSize.js';
 export * from './newsGate.js';
 export * from './lateMove.js';
+export * from './volatility.js';

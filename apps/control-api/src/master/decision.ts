@@ -37,12 +37,16 @@ export function decide(
 
   const preferred = pickPreferred(buy, sell);
   if (!preferred) {
+    const equalScores =
+      buy.valid &&
+      sell.valid &&
+      Math.abs(buy.score - sell.score) < 1e-12;
     return {
       decision_id,
       kind: 'WAIT',
       side: null,
       score: Math.max(buy.score, sell.score),
-      block_reason: 'no_valid_candidate',
+      block_reason: equalScores ? 'equal_scores' : 'no_valid_candidate',
       buy,
       sell,
       analysis,
@@ -81,8 +85,16 @@ export function decide(
   };
 }
 
-function pickPreferred(buy: TradeCandidate, sell: TradeCandidate): TradeCandidate | null {
-  if (buy.valid && sell.valid) return buy.score >= sell.score ? buy : sell;
+/** Reader scorer: strict preference; equal valid scores → null (WAIT). */
+export function pickPreferred(
+  buy: TradeCandidate,
+  sell: TradeCandidate
+): TradeCandidate | null {
+  if (buy.valid && sell.valid) {
+    if (buy.score > sell.score) return buy;
+    if (sell.score > buy.score) return sell;
+    return null;
+  }
   if (buy.valid) return buy;
   if (sell.valid) return sell;
   return null;

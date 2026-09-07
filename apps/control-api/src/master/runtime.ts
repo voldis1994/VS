@@ -1,4 +1,5 @@
 /** MASTER runtime — full PAPER/LIVE cycle owner + dashboard facade. */
+import { analyzeBars } from './analysis.js';
 import type { MasterBroker } from './broker.js';
 import { Mt4FileBroker, PaperBroker } from './broker.js';
 import { decide } from './decision.js';
@@ -374,6 +375,13 @@ class MasterRuntime {
     this.account.open_positions = this.positions.count();
     const instrument = specForEpic(this.epic);
 
+    // Structure for Reader swing trail (from current bars — before entry cycle)
+    const structure = bars.length >= 5 ? analyzeBars(bars, quote.spread) : null;
+    const trailBuf =
+      structure && structure.atr > 0
+        ? structure.atr * this.cfg.trailing_buffer_atr_mult
+        : 0;
+
     // 1) Manage exits first (position manager owns open risk)
     const managed = await this.positions.manageTick({
       broker,
@@ -385,6 +393,9 @@ class MasterRuntime {
       partial_close_progress: this.cfg.partial_close_progress,
       partial_close_volume: this.cfg.partial_close_volume,
       volume_step: instrument.volume_step,
+      swing_low: structure?.swing_low ?? null,
+      swing_high: structure?.swing_high ?? null,
+      trailing_buffer: trailBuf,
     });
     const exit_reasons = managed.closed.map((c) => c.reason);
     if (exit_reasons.length) this.last_exit_reason = exit_reasons.at(-1)!;

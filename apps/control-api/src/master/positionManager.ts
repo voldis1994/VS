@@ -117,6 +117,10 @@ export class PositionManager {
     partial_close_progress?: number;
     partial_close_volume?: number;
     volume_step?: number;
+    /** Structure swings for Reader trailing (from live analysis) */
+    swing_low?: number | null;
+    swing_high?: number | null;
+    trailing_buffer?: number;
   }): Promise<ManageTickResult> {
     const { broker, pipeline, quote } = input;
     const pv = input.instrument_point_value ?? 1;
@@ -125,6 +129,9 @@ export class PositionManager {
     const partialProgress = input.partial_close_progress ?? 0;
     const partialVolume = input.partial_close_volume ?? 0;
     const volumeStep = input.volume_step ?? 0.01;
+    const swingLow = input.swing_low ?? null;
+    const swingHigh = input.swing_high ?? null;
+    const trailBuf = input.trailing_buffer ?? 0;
     const closed: ManageTickResult['closed'] = [];
     const close_failed: ManageTickResult['close_failed'] = [];
 
@@ -225,7 +232,11 @@ export class PositionManager {
 
       if (!verdict.exit) {
         await this.maybeBreakevenStop(broker, pos, quote, beProgress);
-        await this.maybeTrailStop(broker, pos, quote);
+        await this.maybeTrailStop(broker, pos, quote, {
+          swing_low: swingLow,
+          swing_high: swingHigh,
+          trailing_buffer: trailBuf,
+        });
         continue;
       }
 
@@ -314,21 +325,61 @@ export class PositionManager {
   }
 
   /**
-   * Ratchet broker SL once MFE clears a floor — lock ~50% of peak favorable move.
+   * Trail SL — prefer Reader structure swings (swing ± buffer), else MFE 50% ratchet.
    * Only tightens; never loosens. Requires broker.modifyPosition.
    */
   private async maybeTrailStop(
     broker: MasterBroker,
     pos: ManagedPosition,
-    quote: Quote
+    quote: Quote,
+    structure?: {
+      swing_low?: number | null;
+      swing_high?: number | null;
+      trailing_buffer?: number;
+    }
   ): Promise<void> {
     if (!broker.modifyPosition) return;
-    const absEntry = Math.max(Math.abs(pos.entry), 1e-9);
-    const mfeFloor = Math.max(absEntry * 0.00025, 0.8);
-    if (pos.mfe < mfeFloor) return;
-    const lock = pos.mfe * 0.5;
-    const trailed =
-      pos.side === 'BUY' ? pos.entry + lock : pos.entry - lock;
+    const mark = protectiveMark(pos.side, quote);
+    const buf = structure?.trailing_buffer ?? 0;
+    let trailed: number | null = null;
+
+    if (pos.side === 'BUY') {
+      const swing = structure?.swing_low;
+      if (swing != null && Number.isFinite(swing) && swing > 0 && buf >= 0) {
+        const cand = swing - buf;
+        if (cand < mark && (pos.stop_loss == null || cand > pos.stop_loss)) {
+          trailed = cand;
+        }
+      }
+    } else {
+      const swing = structure?.swing_high;
+      if (swing != null && Number.isFinite(swing) && swing > 0 && buf >= 0) {
+        const cand = swing + buf;
+        if (cand > mark && (pos.stop_loss == null || cand < pos.stop_loss)) {
+          trailed = cand;
+        }
+      }
+    }
+
+    // MFE ratchet only when structure did not produce a trail (Reader swing is primary)
+    if (trailed == null) {
+      const absEntry = Math.max(Math.abs(pos.entry), 1e-9);
+      const mfeFloor = Math.max(absEntry * 0.00025, 0.8);
+      if (pos.mfe >= mfeFloor) {
+        const lock = pos.mfe * 0.5;
+        const mfeTrail = pos.side === 'BUY' ? pos.entry + lock : pos.entry - lock;
+        const mfeOk = pos.side === 'BUY' ? mfeTrail < mark : mfeTrail > mark;
+        const tighterThanCur =
+          pos.stop_loss == null
+            ? true
+            : pos.side === 'BUY'
+              ? mfeTrail > pos.stop_loss
+              : mfeTrail < pos.stop_loss;
+        if (mfeOk && tighterThanCur) trailed = mfeTrail;
+      }
+    }
+
+    if (trailed == null) return;
     const cur = pos.stop_loss;
     const tighter =
       cur == null
@@ -337,8 +388,6 @@ export class PositionManager {
           ? trailed > cur
           : trailed < cur;
     if (!tighter) return;
-    const mark = protectiveMark(pos.side, quote);
-    // Don't trail through exitable mark (would instant-stop)
     if (pos.side === 'BUY' && trailed >= mark) return;
     if (pos.side === 'SELL' && trailed <= mark) return;
     const mod = await broker.modifyPosition({

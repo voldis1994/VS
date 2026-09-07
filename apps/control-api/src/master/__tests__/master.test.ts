@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { analyzeBars } from '../analysis.js';
 import { buildBuyComponents, buildSellComponents, buildCandidates } from '../candidates.js';
-import { decide } from '../decision.js';
+import { decide, pickPreferred } from '../decision.js';
 import { ExpectancyStore } from '../expectancy.js';
 import { MasterJournal } from '../journal.js';
 import { computePerformance, monteCarlo } from '../performance.js';
@@ -13,7 +13,13 @@ import {
 } from '../pipeline.js';
 import { evaluateRisk, sizeFromEquity } from '../risk.js';
 import { replayMaster, walkForward } from '../replay.js';
-import type { AccountSnapshot, Bar, Quote, TradeOutcome } from '../types.js';
+import type {
+  AccountSnapshot,
+  Bar,
+  Quote,
+  TradeCandidate,
+  TradeOutcome,
+} from '../types.js';
 
 function barsTrendUp(n = 40): Bar[] {
   const out: Bar[] = [];
@@ -82,6 +88,66 @@ describe('VS MASTER analysis', () => {
 });
 
 describe('VS MASTER decision + risk', () => {
+  it('equal valid scores → WAIT (Reader equal_scores)', () => {
+    const mk = (side: 'BUY' | 'SELL', score: number): TradeCandidate => ({
+      side,
+      valid: true,
+      score,
+      components: {
+        momentum: score,
+        trend: score,
+        structure: score,
+        pressure: score,
+        behavior: score,
+        impact: score,
+        context: score,
+      },
+      entry: 4400,
+      stop_loss: side === 'BUY' ? 4395 : 4405,
+      take_profit: side === 'BUY' ? 4410 : 4390,
+      filter_ok: true,
+      filter_reason: null,
+    });
+    expect(pickPreferred(mk('BUY', 0.7), mk('SELL', 0.7))).toBeNull();
+    expect(pickPreferred(mk('BUY', 0.71), mk('SELL', 0.7))?.side).toBe('BUY');
+    expect(pickPreferred(mk('BUY', 0.7), mk('SELL', 0.72))?.side).toBe('SELL');
+  });
+
+  it('Check- profit_lock and equity_floor block new entries', () => {
+    const bars = barsTrendUp();
+    const a = analyzeBars(bars, 0.4);
+    const d = decide(a, quoteFrom(bars.at(-1)!), { ...DEFAULT_MASTER_CONFIG, min_score: 0.3 }, () => null, bars);
+    const decision =
+      d.kind === 'BUY' || d.kind === 'SELL'
+        ? d
+        : {
+            ...d,
+            kind: 'BUY' as const,
+            side: 'BUY' as const,
+            block_reason: null,
+            buy: { ...d.buy, valid: true, filter_ok: true, score: 0.9 },
+          };
+    const locked = evaluateRisk(
+      decision,
+      { ...account, daily_pnl: 350 },
+      GOLD_SPEC,
+      quoteFrom(bars.at(-1)!),
+      { ...DEFAULT_MASTER_CONFIG, profit_lock: 300 }
+    );
+    expect(locked.allowed).toBe(false);
+    expect(locked.reasons).toContain('profit_lock');
+
+    const floor = evaluateRisk(
+      decision,
+      { ...account, equity: 500 },
+      GOLD_SPEC,
+      quoteFrom(bars.at(-1)!),
+      { ...DEFAULT_MASTER_CONFIG, equity_floor: 1000 }
+    );
+    expect(floor.allowed).toBe(false);
+    expect(floor.reasons).toContain('equity_floor');
+  });
+
   it('BUY/SELL symmetry — dump prefers SELL', async () => {
     const bars = barsTrendDown();
     const a = analyzeBars(bars, 0.4);

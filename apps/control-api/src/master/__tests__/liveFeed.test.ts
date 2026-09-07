@@ -257,6 +257,96 @@ describe('MASTER TIME_STOP + breakeven', () => {
     const opens = await broker.listOpenPositions('GOLD');
     expect(opens.positions[0]!.stop_level).toBe(entry);
   });
+
+  it('structure swing trail raises BUY SL to swing_low - buffer', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    broker.setQuote({
+      bid: entry + 3,
+      ask: entry + 3.4,
+      mid: entry + 3.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'swing-trail-aaaaaaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      stop_level: entry - 5,
+      profit_level: entry + 10,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-swing',
+      intent_id: 'swing-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      entry,
+      stop_loss: entry - 5,
+      take_profit: entry + 10,
+      decision: {
+        decision_id: 'd-swing',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {
+          regime: 'TREND',
+          market_state: 't',
+          momentum_score: 0.5,
+          momentum_dir: 'UP',
+          trend_dir: 'UP',
+          trend_strength: 0.5,
+          structure_bias: 'BULLISH',
+          swing_high: entry + 8,
+          swing_low: entry + 1,
+          buy_pressure: 0.6,
+          sell_pressure: 0.4,
+          behavior_bull: 0.5,
+          behavior_bear: 0.5,
+          impact_score: 0.5,
+          context_quality: 0.8,
+          volatility: 0.001,
+          atr: 1,
+          data_quality: 0.9,
+          session: 'LONDON',
+        },
+        expectancy: null,
+      },
+    });
+    // Seed MFE so manage path runs trail (structure alone is enough now)
+    const pos = pm.get(placed.position_id!)!;
+    pos.mfe = 0; // no MFE ratchet — structure only
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: entry + 3,
+        ask: entry + 3.4,
+        mid: entry + 3.2,
+        spread: 0.4,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: GOLD_SPEC.value_per_point_per_lot,
+      breakeven_progress: 0.99,
+      max_hold_ms: 0,
+      swing_low: entry + 1,
+      swing_high: entry + 8,
+      trailing_buffer: 0.2,
+    });
+    expect(managed.closed.length).toBe(0);
+    expect(pm.get(placed.position_id!)!.stop_loss).toBeCloseTo(entry + 1 - 0.2, 8);
+    const opens = await broker.listOpenPositions('GOLD');
+    expect(opens.positions[0]!.stop_level).toBeCloseTo(entry + 0.8, 8);
+  });
 });
 
 describe('analysis flat pressure', () => {

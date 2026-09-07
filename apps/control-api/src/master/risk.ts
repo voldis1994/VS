@@ -45,6 +45,14 @@ export function evaluateRisk(
     reasons.push('consecutive_loss_protection');
   }
 
+  // Check- hard $ profit lock / equity floor (0 = disabled)
+  if (cfg.profit_lock > 0 && account.daily_pnl >= cfg.profit_lock) {
+    reasons.push('profit_lock');
+  }
+  if (cfg.equity_floor > 0 && account.equity <= cfg.equity_floor) {
+    reasons.push('equity_floor');
+  }
+
   if (quote.spread > cfg.max_spread_abs) reasons.push('spread_protection');
   if (now - quote.ts_ms > cfg.stale_quote_ms) reasons.push('stale_data_protection');
 

@@ -3,7 +3,11 @@
  * Separated so the pipeline has one explicit filter owner (Reader-style).
  */
 import { newsBlocksEntries } from './newsGate.js';
-import type { AnalysisSnapshot, MasterConfig, Quote } from './types.js';
+import {
+  calculateRelativeVolatility,
+  relativeVolatilityAcceptable,
+} from './volatility.js';
+import type { AnalysisSnapshot, Bar, MasterConfig, Quote } from './types.js';
 
 export type FilterVerdict = {
   ok: boolean;
@@ -21,17 +25,21 @@ export function applyMarketFilters(
   a: AnalysisSnapshot,
   quote: Quote,
   cfg: MasterConfig,
-  nowMs = Date.now()
+  nowMs = Date.now(),
+  bars?: Bar[] | null
 ): FilterVerdict {
   const weekend = isWeekendUtc(nowMs);
   const news = newsBlocksEntries(cfg.block_high_impact_news, nowMs);
+  const relVol = calculateRelativeVolatility(bars, cfg.volatility_lookback_bars);
+  const relOk = relativeVolatilityAcceptable(relVol, cfg.max_relative_volatility);
   const checks: Record<string, boolean> = {
     data_quality: a.data_quality >= 0.35,
     spread_abs: quote.spread <= cfg.max_spread_abs,
     spread_pct: !(quote.mid > 0 && quote.spread / quote.mid > cfg.max_spread_pct),
     // UNKNOWN is tradeable-with-caution; only UNSTABLE hard-blocks both sides
     regime_stable: a.regime !== 'UNSTABLE',
-    volatility_ok: !(a.volatility > 0.008),
+    // Absolute vol (legacy) OR Reader relative TR spike
+    volatility_ok: !(a.volatility > 0.008) && relOk,
     // Reader OFF session + Check- weekend — entries only in labeled weekday windows
     session_ok:
       !cfg.block_off_hours || (a.session !== 'OFF_HOURS' && !weekend),
@@ -43,7 +51,13 @@ export function applyMarketFilters(
   if (!checks.spread_abs) return { ok: false, reason: 'spread_abs', checks };
   if (!checks.spread_pct) return { ok: false, reason: 'spread_pct', checks };
   if (!checks.regime_stable) return { ok: false, reason: `regime_${a.regime}`, checks };
-  if (!checks.volatility_ok) return { ok: false, reason: 'abnormal_volatility', checks };
+  if (!checks.volatility_ok) {
+    return {
+      ok: false,
+      reason: relOk ? 'abnormal_volatility' : 'relative_volatility',
+      checks,
+    };
+  }
   if (!checks.session_ok) {
     return {
       ok: false,
