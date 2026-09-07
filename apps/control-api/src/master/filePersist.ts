@@ -108,6 +108,7 @@ export class FilePersist implements PersistClient {
       outcomes: this.mem.outcomes.map((o) => ({
         opportunity_id: String(o.opportunity_id),
         setup_key: o.setup_key ?? null,
+        created_at: o.created_at ? String(o.created_at) : new Date().toISOString(),
         outcome: {
           position_id: String(o.position_id || o.opportunity_id),
           side: o.side,

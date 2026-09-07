@@ -35,7 +35,9 @@ export function evaluateRisk(
   if (dd >= cfg.max_drawdown_pct) reasons.push('max_drawdown');
 
   const dailyLossPct =
-    account.peak_equity > 0 ? Math.max(0, -account.daily_pnl) / account.equity : 0;
+    (account.day_start_equity ?? account.equity) > 0
+      ? Math.max(0, -account.daily_pnl) / (account.day_start_equity ?? account.equity)
+      : 0;
   if (dailyLossPct >= cfg.max_daily_loss_pct) reasons.push('max_daily_loss');
 
   if (account.consecutive_losses >= cfg.consecutive_loss_limit) {

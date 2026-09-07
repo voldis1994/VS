@@ -38,6 +38,8 @@ export type PlaceOrderResult = {
   order_id: string | null;
   position_id: string | null;
   fill_price: number | null;
+  /** Filled size when known (may differ from requested after normalize) */
+  fill_size?: number | null;
   detail: string;
   paper: boolean;
 };
@@ -145,6 +147,7 @@ export class PaperBroker implements MasterBroker {
       order_id: `ord-${input.intent_id}`,
       position_id,
       fill_price: fill,
+      fill_size: input.size,
       detail: 'paper_fill',
       paper: true,
     };
@@ -424,22 +427,43 @@ export class CapitalBroker implements MasterBroker {
 
     if (!position_id) {
       const listed = await this.listOpenPositions(input.epic);
-      const hit = listed.positions.find(
-        (p) => p.side === input.side && Math.abs(p.size - input.size) < 1e-9
-      );
+      const hit =
+        listed.positions.find(
+          (p) => p.side === input.side && Math.abs(p.size - orderSize) < 1e-6
+        ) ||
+        listed.positions.find(
+          (p) => p.side === input.side && Math.abs(p.size - input.size) < 1e-6
+        );
       if (hit) {
         position_id = hit.position_id;
         fill_price = hit.open_level || null;
       }
     }
 
-    // Never accept dealReference alone as a live fill
+    // Never accept dealReference alone as a live fill — fail-close same-size ghost if present
     if (!position_id) {
+      const listed = await this.listOpenPositions(input.epic);
+      const ghost = listed.positions.find(
+        (p) => p.side === input.side && Math.abs(p.size - orderSize) < 1e-6
+      );
+      if (ghost) {
+        await this.deps.close(this.session, ghost.position_id);
+        return {
+          ok: false,
+          order_id: opened.deal_reference || null,
+          position_id: null,
+          fill_price: null,
+          fill_size: null,
+          detail: `capital_unconfirmed_fail_closed:${opened.detail}`,
+          paper: false,
+        };
+      }
       return {
         ok: false,
         order_id: opened.deal_reference || null,
         position_id: null,
         fill_price: null,
+        fill_size: null,
         detail: `capital_unconfirmed:${opened.detail}`,
         paper: false,
       };
@@ -478,17 +502,21 @@ export class CapitalBroker implements MasterBroker {
           order_id: opened.deal_reference || null,
           position_id: null,
           fill_price: null,
+          fill_size: null,
           detail: 'CAPITAL_SL_ATTACH_FAILED',
           paper: false,
         };
       }
     }
 
+    const listedFinal = await this.listOpenPositions(input.epic);
+    const filled = listedFinal.positions.find((p) => p.position_id === position_id);
     return {
       ok: true,
       order_id: opened.deal_reference || null,
       position_id,
       fill_price,
+      fill_size: filled?.size ?? orderSize,
       detail: `capital_open deal=${position_id}${fill_price != null ? ` fill=${fill_price}` : ''}`,
       paper: false,
     };

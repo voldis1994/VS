@@ -195,7 +195,12 @@ export async function loadSeenIntents(): Promise<string[]> {
 
 export type JournalHistory = {
   opportunities: OpportunityRecord[];
-  outcomes: Array<{ opportunity_id: string; outcome: TradeOutcome; setup_key: string | null }>;
+  outcomes: Array<{
+    opportunity_id: string;
+    outcome: TradeOutcome;
+    setup_key: string | null;
+    created_at?: string;
+  }>;
 };
 
 /** Load durable journal for restart hydration (file or Postgres). */
@@ -224,12 +229,13 @@ export async function loadJournalHistory(limit = 500): Promise<JournalHistory> {
 
     const { rows: outRows } = await client.query(
       `SELECT opportunity_id, position_id, side, entry_price, exit_price, volume, pnl, fees, slippage,
-              mae, mfe, r_multiple, hold_ms, exit_reason, setup_key
+              mae, mfe, r_multiple, hold_ms, exit_reason, setup_key, created_at
        FROM master_trade_outcomes ORDER BY created_at DESC LIMIT ${Math.max(1, Math.min(limit, 2000))}`
     );
     const outcomes = [...outRows].reverse().map((r) => ({
       opportunity_id: String(r.opportunity_id),
       setup_key: r.setup_key != null ? String(r.setup_key) : null,
+      created_at: r.created_at ? new Date(r.created_at).toISOString() : undefined,
       outcome: {
         position_id: r.position_id != null ? String(r.position_id) : String(r.opportunity_id),
         side: r.side,

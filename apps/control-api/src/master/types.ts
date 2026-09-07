@@ -112,7 +112,12 @@ export type AccountSnapshot = {
   balance: number;
   currency: string;
   open_positions: number;
+  /** Realized PnL for daily_pnl_day only — rolled at UTC midnight */
   daily_pnl: number;
+  /** UTC YYYY-MM-DD that daily_pnl accrues under */
+  daily_pnl_day?: string | null;
+  /** Equity at start of daily_pnl_day — denom for max_daily_loss */
+  day_start_equity?: number | null;
   peak_equity: number;
   consecutive_losses: number;
 };

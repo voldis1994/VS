@@ -84,6 +84,8 @@ class MasterRuntime {
     currency: 'GBP',
     open_positions: 0,
     daily_pnl: 0,
+    daily_pnl_day: null,
+    day_start_equity: 10_000,
     peak_equity: 10_000,
     consecutive_losses: 0,
   };
@@ -118,6 +120,101 @@ class MasterRuntime {
 
   setEpic(epic: string) {
     this.epic = epic;
+  }
+
+  /** Roll daily_pnl at UTC day boundary; seed day_start_equity for max_daily_loss. */
+  private rollDailyPnl(nowMs = Date.now()) {
+    const day = new Date(nowMs).toISOString().slice(0, 10);
+    if (this.account.daily_pnl_day !== day) {
+      this.account.daily_pnl = 0;
+      this.account.daily_pnl_day = day;
+      this.account.day_start_equity = this.account.equity > 0 ? this.account.equity : this.account.balance;
+    }
+  }
+
+  /** Journal stubs for broker orphans + synthetic flat for local ghosts after sync. */
+  private applySyncJournal(sync: Awaited<ReturnType<typeof syncPositionsWithBroker>>, quote?: Quote) {
+    for (const ghost of sync.orphans_local) {
+      const exit = quote
+        ? ghost.side === 'BUY'
+          ? quote.bid
+          : quote.ask
+        : ghost.entry;
+      const pnlPts = ghost.side === 'BUY' ? exit - ghost.entry : ghost.entry - exit;
+      const instrument = specForEpic(ghost.epic);
+      const outcome = {
+        position_id: ghost.position_id,
+        side: ghost.side,
+        entry: ghost.entry,
+        exit,
+        volume: ghost.size,
+        pnl: pnlPts * ghost.size * instrument.value_per_point_per_lot,
+        fees: 0,
+        slippage: 0,
+        mae: ghost.mae,
+        mfe: ghost.mfe,
+        r_multiple: 0,
+        hold_ms: Date.now() - new Date(ghost.entry_at).getTime(),
+        exit_reason: 'broker_flat',
+      };
+      const exists = this.pipeline.journal.opportunities.some((o) => o.id === ghost.opportunity_id);
+      if (!exists) {
+        this.pipeline.journal.recordOpportunity({
+          id: ghost.opportunity_id,
+          mode: this.cfg.mode,
+          epic: ghost.epic,
+          decision: ghost.decision,
+          risk: {
+            allowed: true,
+            volume: ghost.size,
+            risk_amount: 0,
+            reasons: ['broker_flat'],
+          },
+          executed: true,
+          execution: {
+            accepted: true,
+            intent_id: ghost.intent_id,
+            order_id: null,
+            fill_price: ghost.entry,
+            detail: 'broker_flat',
+            paper: this.broker?.paper ?? true,
+          },
+        });
+      }
+      this.pipeline.recordTradeClose(ghost.opportunity_id, ghost.decision, outcome);
+      this.account.daily_pnl += outcome.pnl;
+      this.trackPersist(
+        'outcome',
+        persistOutcome(ghost.opportunity_id, outcome, null)
+      );
+    }
+    for (const orphan of sync.orphans_broker) {
+      const pos = this.positions.get(orphan.position_id);
+      if (!pos) continue;
+      const exists = this.pipeline.journal.opportunities.some((o) => o.id === pos.opportunity_id);
+      if (exists) continue;
+      this.pipeline.journal.recordOpportunity({
+        id: pos.opportunity_id,
+        mode: this.cfg.mode,
+        epic: pos.epic,
+        decision: pos.decision,
+        risk: {
+          allowed: true,
+          volume: pos.size,
+          risk_amount: 0,
+          reasons: ['recover_orphan'],
+        },
+        executed: true,
+        execution: {
+          accepted: true,
+          intent_id: pos.intent_id,
+          order_id: null,
+          fill_price: pos.entry,
+          detail: 'recover_orphan',
+          paper: this.broker?.paper ?? true,
+        },
+      });
+    }
   }
 
   /** Track persist Promise<boolean> results for dashboard health. */
@@ -182,6 +279,7 @@ class MasterRuntime {
   async tick(bars: Bar[], quote: Quote): Promise<TickResult> {
     this.last_bars = bars;
     this.last_quote = quote;
+    this.rollDailyPnl();
     const broker = this.broker || this.ensurePaperBroker();
 
     if (broker instanceof PaperBroker) {
@@ -203,7 +301,14 @@ class MasterRuntime {
       this.account.balance = acct.balance;
       this.account.currency = acct.currency;
       this.account.peak_equity = Math.max(this.account.peak_equity, acct.equity);
+      if (!this.account.day_start_equity) {
+        this.account.day_start_equity = acct.equity;
+      }
     }
+
+    // 0) Reconcile broker truth every tick — drop ghosts, adopt orphans (VS-System-)
+    const sync = await syncPositionsWithBroker(this.positions, broker, this.epic);
+    if (!sync.skipped) this.applySyncJournal(sync, quote);
 
     this.account.open_positions = this.positions.count();
     const instrument = specForEpic(this.epic);
@@ -304,7 +409,7 @@ class MasterRuntime {
           intent_id: execution.intent_id,
           epic: this.epic,
           side: cycle.decision.side!,
-          size: cycle.risk.volume,
+          size: place.fill_size ?? cycle.risk.volume,
           entry: fill,
           stop_loss: cand.stop_loss,
           take_profit: cand.take_profit,
@@ -373,52 +478,31 @@ class MasterRuntime {
         outcome: o.outcome,
       }))
     );
-    // Recompute account daily/peak from recovered outcomes (best-effort)
-    let pnlSum = 0;
+    // Recompute account daily/peak from recovered outcomes (today only for daily_pnl)
+    this.rollDailyPnl();
+    const today = this.account.daily_pnl_day!;
+    let pnlToday = 0;
     let losses = 0;
+    let pnlAll = 0;
     for (const o of hist.outcomes) {
-      pnlSum += o.outcome.pnl;
+      pnlAll += o.outcome.pnl;
+      const day = String(o.created_at || '').slice(0, 10);
+      if (!day || day === today) pnlToday += o.outcome.pnl;
       if (o.outcome.pnl < 0) losses += 1;
       else losses = 0;
     }
-    this.account.daily_pnl = pnlSum;
+    this.account.daily_pnl = pnlToday;
     this.account.consecutive_losses = losses;
-    this.account.equity = this.account.balance + pnlSum;
+    this.account.day_start_equity =
+      this.account.day_start_equity || this.account.balance;
+    this.account.equity = this.account.balance + pnlAll;
     if (this.account.equity > this.account.peak_equity) {
       this.account.peak_equity = this.account.equity;
     }
 
     if (this.broker) {
       const sync = await syncPositionsWithBroker(this.positions, this.broker, this.epic);
-      // Ensure recovered orphans have journal stubs so exits attach to performance
-      for (const orphan of sync.orphans_broker) {
-        const pos = this.positions.get(orphan.position_id);
-        if (!pos) continue;
-        const exists = this.pipeline.journal.opportunities.some((o) => o.id === pos.opportunity_id);
-        if (exists) continue;
-        this.pipeline.journal.recordOpportunity({
-          id: pos.opportunity_id,
-          mode: this.cfg.mode,
-          epic: pos.epic,
-          decision: pos.decision,
-          risk: {
-            allowed: true,
-            volume: pos.size,
-            risk_amount: 0,
-            reasons: ['recover_orphan'],
-          },
-          executed: true,
-          execution: {
-            accepted: true,
-            intent_id: pos.intent_id,
-            order_id: null,
-            fill_price: pos.entry,
-            detail: 'recover_orphan',
-            paper: this.broker.paper,
-          },
-        });
-      }
-      void sync.safety_sl_attached;
+      if (!sync.skipped) this.applySyncJournal(sync);
     }
 
     this.account.open_positions = this.positions.count();
