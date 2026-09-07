@@ -86,7 +86,7 @@ describe('VS MASTER recovery SL + trail', () => {
     expect(placed.ok).toBe(true);
     // Clear stop on paper position to simulate naked orphan
     const opens = await broker.listOpenPositions('GOLD');
-    const raw = opens.find((p) => p.position_id === placed.position_id)!;
+    const raw = opens.positions.find((p) => p.position_id === placed.position_id)!;
     expect(raw.stop_level).toBeNull();
 
     const pm = new PositionManager();
@@ -97,7 +97,7 @@ describe('VS MASTER recovery SL + trail', () => {
     const expected = safetyStopLevel('BUY', raw.open_level);
     expect(pos!.stop_loss).toBeCloseTo(expected, 5);
     const after = await broker.listOpenPositions('GOLD');
-    expect(after[0]!.stop_level).toBeCloseTo(expected, 5);
+    expect(after.positions[0]!.stop_level).toBeCloseTo(expected, 5);
   });
 
   it('trails stop via modifyPosition when MFE clears floor', async () => {
@@ -167,6 +167,85 @@ describe('VS MASTER recovery SL + trail', () => {
     expect(held!.stop_loss!).toBeGreaterThan(entry - 2);
     expect(held!.stop_loss!).toBeLessThan(up.mid);
     const opens = await broker.listOpenPositions('GOLD');
-    expect(opens[0]!.stop_level!).toBeCloseTo(held!.stop_loss!, 5);
+    expect(opens.positions[0]!.stop_level!).toBeCloseTo(held!.stop_loss!, 5);
+  });
+
+  it('skips reconcile when broker list fails (does not wipe locals)', async () => {
+    const pm = new PositionManager();
+    pm.register({
+      position_id: 'keep-me',
+      opportunity_id: 'opp-keep',
+      intent_id: 'intent-keep',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      entry: 4400,
+      stop_loss: 4395,
+      decision: {
+        decision_id: 'd1',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.5,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {
+          regime: 'UNKNOWN',
+          market_state: 'test',
+          momentum_score: 0,
+          momentum_dir: 'NEUTRAL',
+          trend_dir: 'SIDEWAYS',
+          trend_strength: 0,
+          structure_bias: 'NEUTRAL',
+          swing_high: 4405,
+          swing_low: 4395,
+          buy_pressure: 0.5,
+          sell_pressure: 0.5,
+          behavior_bull: 0.5,
+          behavior_bear: 0.5,
+          impact_score: 0.5,
+          context_quality: 0.5,
+          volatility: 0.001,
+          atr: 1,
+          data_quality: 0.5,
+          session: 'UNKNOWN',
+        },
+        expectancy: null,
+      },
+    });
+    const broker = {
+      name: 'MOCK_FAIL',
+      paper: false,
+      async connect() {
+        return { ok: true, detail: 'ok' };
+      },
+      async getQuote() {
+        return null;
+      },
+      async getAccount() {
+        return null;
+      },
+      async listOpenPositions() {
+        return { ok: false, positions: [], detail: 'transport_error' };
+      },
+      async placeOrder() {
+        return {
+          ok: false,
+          order_id: null,
+          position_id: null,
+          fill_price: null,
+          detail: 'n/a',
+          paper: false,
+        };
+      },
+      async closePosition() {
+        return { ok: false, detail: 'n/a' };
+      },
+    };
+    const sync = await syncPositionsWithBroker(pm, broker as any, 'GOLD');
+    expect(sync.skipped).toBe(true);
+    expect(sync.skip_reason).toMatch(/transport/);
+    expect(pm.count()).toBe(1);
+    expect(pm.get('keep-me')).toBeTruthy();
   });
 });

@@ -1,12 +1,14 @@
 /**
  * Resolve MASTER broker from environment — enables LIVE without desk/DB.
  * Uses CAPITAL_* (already in .env.example) + MASTER_* gates.
+ * LIVE connect failure does NOT silently fall back to PAPER (deskBridge parity).
  */
 import { PaperBroker, type MasterBroker } from './broker.js';
 import { createCapitalBroker } from './capitalFactory.js';
 import { Mt4FileBroker } from './broker.js';
 
 export type EnvBrokerResult = {
+  ok: boolean;
   broker: MasterBroker;
   mode: 'PAPER' | 'LIVE';
   detail: string;
@@ -26,6 +28,7 @@ export async function resolveBrokerFromEnv(): Promise<EnvBrokerResult> {
     const broker = new Mt4FileBroker(mt4);
     const c = await broker.connect();
     return {
+      ok: c.ok,
       broker,
       mode: process.env.MASTER_LIVE_ENABLED === 'true' ? 'LIVE' : 'PAPER',
       detail: c.ok ? `mt4:${mt4}` : `mt4_fail:${c.detail}`,
@@ -52,25 +55,31 @@ export async function resolveBrokerFromEnv(): Promise<EnvBrokerResult> {
     });
     const opened = await broker.connect();
     if (!opened.ok) {
-      const paper = new PaperBroker();
-      await paper.connect();
+      // Honest failure — do not swap PaperBroker while LIVE was requested
       return {
-        broker: paper,
-        mode: 'PAPER',
-        detail: `capital_connect_failed:${opened.detail}→paper_fallback`,
+        ok: false,
+        broker,
+        mode: 'LIVE',
+        detail: `capital_connect_failed:${opened.detail}`,
       };
     }
-    return { broker, mode: 'LIVE', detail: `capital_env_connected:conn=${connectionId}` };
+    return {
+      ok: true,
+      broker,
+      mode: 'LIVE',
+      detail: `capital_env_connected:conn=${connectionId}`,
+    };
   }
 
   const paper = new PaperBroker();
   await paper.connect();
   if (wantLive && !capitalEnvPresent()) {
     return {
+      ok: true,
       broker: paper,
       mode: 'PAPER',
       detail: 'live_requested_but_CAPITAL_*_missing→paper',
     };
   }
-  return { broker: paper, mode: 'PAPER', detail: 'paper_default' };
+  return { ok: true, broker: paper, mode: 'PAPER', detail: 'paper_default' };
 }

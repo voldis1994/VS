@@ -60,6 +60,7 @@ export function MasterPage() {
   const [log, setLog] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [epicInput, setEpicInput] = useState('GOLD');
 
   const pushLog = useCallback((msg: string) => {
     const t = new Date().toISOString().slice(11, 19);
@@ -74,6 +75,7 @@ export function MasterPage() {
         apiFetch<{ opportunities: JournalOpp[] }>('/api/master/journal'),
       ]);
       setStatus(s);
+      if (s.epic) setEpicInput(s.epic);
       setPositions(p.positions || []);
       setJournal((j.opportunities || []).filter((o) => o.executed && o.outcome).slice(-8).reverse());
       setError(null);
@@ -169,7 +171,30 @@ export function MasterPage() {
         MASTER_LIVE_ENABLED
       </p>
 
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16, alignItems: 'center' }}>
+        <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+          Epic{' '}
+          <input
+            value={epicInput}
+            onChange={(e) => setEpicInput(e.target.value.toUpperCase())}
+            style={{ width: 90, marginLeft: 4, padding: '4px 6px' }}
+          />
+        </label>
+        <button
+          type="button"
+          className="btn"
+          disabled={busy}
+          onClick={() =>
+            void act('epic', () =>
+              apiFetch('/api/master/control', {
+                method: 'POST',
+                body: JSON.stringify({ epic: epicInput }),
+              })
+            )
+          }
+        >
+          Set epic
+        </button>
         <button
           type="button"
           className="btn btn-primary"
@@ -178,7 +203,7 @@ export function MasterPage() {
             void act('start', async () => {
               await apiFetch('/api/master/control', {
                 method: 'POST',
-                body: JSON.stringify({ mode: 'PAPER' }),
+                body: JSON.stringify({ mode: 'PAPER', epic: epicInput }),
               });
               return apiFetch('/api/master/start', {
                 method: 'POST',
@@ -188,6 +213,25 @@ export function MasterPage() {
           }
         >
           Start PAPER
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={busy}
+          onClick={() =>
+            void act('start-live', async () => {
+              await apiFetch('/api/master/control', {
+                method: 'POST',
+                body: JSON.stringify({ mode: 'LIVE', epic: epicInput }),
+              });
+              return apiFetch('/api/master/start', {
+                method: 'POST',
+                body: JSON.stringify({ mode: 'LIVE' }),
+              });
+            })
+          }
+        >
+          Start LIVE
         </button>
         <button
           type="button"
@@ -238,6 +282,30 @@ export function MasterPage() {
           }
         >
           AI advisory toggle
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={busy}
+          onClick={() =>
+            void act('capital-probe', () =>
+              apiFetch('/api/master/broker/capital/probe', { method: 'POST' })
+            )
+          }
+        >
+          Capital probe
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={busy}
+          onClick={() =>
+            void act('mt4-attach', () =>
+              apiFetch('/api/master/broker/mt4', { method: 'POST', body: '{}' })
+            )
+          }
+        >
+          Attach MT4
         </button>
       </div>
 

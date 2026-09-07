@@ -207,7 +207,7 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     });
     expect(managed.closed.length).toBe(1);
     expect(managed.closed[0]!.reason).toMatch(/HardInvalidation/);
-    expect(await broker.listOpenPositions()).toHaveLength(0);
+    expect(await broker.listOpenPositions()).toEqual({ ok: true, positions: [] });
   });
 
   it('runtime LIVE tick opens when MASTER_LIVE_ENABLED and mocked Capital attached', async () => {

@@ -2,6 +2,7 @@
  * Broker position sync — VS-System- / Reader recovery pattern.
  * Reconcile MASTER-managed opens against broker truth after restart or missed ACKs.
  * Copies stop/profit levels; attaches a safety SL via modify when broker left the orphan naked.
+ * Never treats a failed list call as an empty book (would wipe local opens).
  */
 import type { MasterBroker, BrokerPosition } from './broker.js';
 import type { PositionManager, ManagedPosition } from './positionManager.js';
@@ -14,6 +15,8 @@ export type SyncReport = {
   dropped: number;
   matched: number;
   safety_sl_attached: number;
+  skipped: boolean;
+  skip_reason: string | null;
   orphans_broker: BrokerPosition[];
   orphans_local: ManagedPosition[];
 };
@@ -30,7 +33,25 @@ export async function syncPositionsWithBroker(
   broker: MasterBroker,
   epic?: string
 ): Promise<SyncReport> {
-  const brokerPositions = await broker.listOpenPositions(epic);
+  const before = manager.count();
+  const listed = await broker.listOpenPositions(epic);
+  if (!listed.ok) {
+    return {
+      broker_count: 0,
+      local_count_before: before,
+      local_count_after: before,
+      adopted: 0,
+      dropped: 0,
+      matched: 0,
+      safety_sl_attached: 0,
+      skipped: true,
+      skip_reason: listed.detail || 'list_failed',
+      orphans_broker: [],
+      orphans_local: [],
+    };
+  }
+
+  const brokerPositions = listed.positions;
   const local = manager.list();
   const brokerIds = new Set(brokerPositions.map((p) => p.position_id));
   const localIds = new Set(local.map((p) => p.position_id));
@@ -38,7 +59,6 @@ export async function syncPositionsWithBroker(
   const orphans_broker = brokerPositions.filter((p) => !localIds.has(p.position_id));
   const orphans_local = local.filter((p) => !brokerIds.has(p.position_id));
   const matched = brokerPositions.filter((p) => localIds.has(p.position_id)).length;
-  const before = manager.count();
 
   manager.reconcileFromBroker(
     brokerPositions.map((p) => ({
@@ -78,6 +98,8 @@ export async function syncPositionsWithBroker(
     dropped: orphans_local.length,
     matched,
     safety_sl_attached,
+    skipped: false,
+    skip_reason: null,
     orphans_broker,
     orphans_local,
   };

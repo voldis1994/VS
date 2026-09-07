@@ -78,6 +78,14 @@ export async function registerMasterRoutes(app: FastifyInstance) {
       }
       const { resolveBrokerFromEnv } = await import('../master/envBroker.js');
       const resolved = await resolveBrokerFromEnv();
+      if (!resolved.ok) {
+        return {
+          ok: false,
+          detail: resolved.detail,
+          broker: resolved.broker.name,
+          status: masterRuntime.status(),
+        };
+      }
       if (resolved.mode === 'LIVE' && process.env.MASTER_LIVE_ENABLED !== 'true') {
         return { ok: false, detail: 'LIVE broker resolved but MASTER_LIVE_ENABLED not set' };
       }

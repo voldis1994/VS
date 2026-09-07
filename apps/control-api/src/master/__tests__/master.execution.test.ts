@@ -314,8 +314,9 @@ describe('VS MASTER MT4 file bridge', () => {
         expect(modPayload.ticket).toBe(Number(placed.position_id));
       }
       const opens = await broker.listOpenPositions('XAUUSD');
-      expect(opens.some((p) => p.position_id === placed.position_id)).toBe(true);
-      const hit = opens.find((p) => p.position_id === placed.position_id)!;
+      expect(opens.ok).toBe(true);
+      expect(opens.positions.some((p) => p.position_id === placed.position_id)).toBe(true);
+      const hit = opens.positions.find((p) => p.position_id === placed.position_id)!;
       expect(hit.stop_level === 4420 || hit.stop_level === 4410).toBe(true);
     } finally {
       sim.stop();
@@ -337,7 +338,7 @@ describe('VS MASTER MT4 file bridge', () => {
       side: 'BUY',
       size: 0.01,
     });
-    expect(placed.ok).toBe(true);
+    expect(placed.ok).toBe(false);
     expect(placed.detail).toBe('mt4_command_written_ack_timeout');
     expect(placed.position_id).toBeNull();
     const cmdPath = join(root, 'commands', `cmd_${placed.order_id}.json`);

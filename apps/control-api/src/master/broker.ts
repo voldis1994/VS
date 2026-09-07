@@ -48,13 +48,19 @@ export type BrokerAccount = {
   currency: string;
 };
 
+export type ListOpenResult = {
+  ok: boolean;
+  positions: BrokerPosition[];
+  detail?: string;
+};
+
 export interface MasterBroker {
   readonly name: string;
   readonly paper: boolean;
   connect(): Promise<{ ok: boolean; detail: string }>;
   getQuote(epic: string): Promise<BrokerQuote | null>;
   getAccount(): Promise<BrokerAccount | null>;
-  listOpenPositions(epic?: string): Promise<BrokerPosition[]>;
+  listOpenPositions(epic?: string): Promise<ListOpenResult>;
   placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResult>;
   closePosition(position_id: string): Promise<{ ok: boolean; detail: string }>;
   modifyPosition?(input: {
@@ -91,9 +97,12 @@ export class PaperBroker implements MasterBroker {
     return { equity: this.equity, balance: this.balance, currency: 'GBP' };
   }
 
-  async listOpenPositions(epic?: string) {
+  async listOpenPositions(epic?: string): Promise<ListOpenResult> {
     const all = [...this.positions.values()];
-    return epic ? all.filter((p) => p.epic === epic) : all;
+    return {
+      ok: true,
+      positions: epic ? all.filter((p) => p.epic === epic) : all,
+    };
   }
 
   async placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResult> {
@@ -248,11 +257,19 @@ export class CapitalBroker implements MasterBroker {
     return { equity: 0, balance: 0, currency: 'GBP' };
   }
 
-  async listOpenPositions(epic?: string): Promise<BrokerPosition[]> {
-    if (!this.session) return [];
+  async listOpenPositions(epic?: string): Promise<ListOpenResult> {
+    if (!this.session) {
+      return { ok: false, positions: [], detail: 'not_connected' };
+    }
     const listed = await this.deps.list(this.session);
-    if (!listed.ok) return [];
-    return (listed.positions as any[])
+    if (!listed.ok) {
+      return {
+        ok: false,
+        positions: [],
+        detail: (listed as { detail?: string }).detail || 'list_failed',
+      };
+    }
+    const positions = (listed.positions as any[])
       .filter((p) => !epic || p.epic === epic)
       .map((p) => ({
         position_id: p.deal_id,
@@ -264,6 +281,7 @@ export class CapitalBroker implements MasterBroker {
         profit_level: null,
         upl: p.upl ?? null,
       }));
+    return { ok: true, positions };
   }
 
   private async waitConfirm(dealReference: string): Promise<{
@@ -406,7 +424,9 @@ export class CapitalBroker implements MasterBroker {
 
     if (!position_id) {
       const listed = await this.listOpenPositions(input.epic);
-      const hit = listed.find((p) => p.side === input.side && Math.abs(p.size - input.size) < 1e-9);
+      const hit = listed.positions.find(
+        (p) => p.side === input.side && Math.abs(p.size - input.size) < 1e-9
+      );
       if (hit) {
         position_id = hit.position_id;
         fill_price = hit.open_level || null;
@@ -443,7 +463,7 @@ export class CapitalBroker implements MasterBroker {
           await this.waitConfirm(mod.deal_reference);
         }
         const listed = await this.listOpenPositions(input.epic);
-        const hit = listed.find((p) => p.position_id === position_id);
+        const hit = listed.positions.find((p) => p.position_id === position_id);
         if (hit?.stop_level != null && Number.isFinite(hit.stop_level)) {
           attached = true;
           break;
@@ -558,10 +578,14 @@ export class Mt4FileBroker implements MasterBroker {
     };
   }
 
-  async listOpenPositions(epic?: string): Promise<BrokerPosition[]> {
+  async listOpenPositions(epic?: string): Promise<ListOpenResult> {
     const s = this.readJson(join('status', 'latest.json'));
+    if (!s) {
+      // Missing status file is ambiguous — treat as transport/bridge unread, not flat book
+      return { ok: false, positions: [], detail: 'mt4_status_missing' };
+    }
     const raw = Array.isArray(s?.positions) ? s.positions : [];
-    return raw
+    const positions = raw
       .map((p: any) => ({
         position_id: String(p.ticket ?? p.Ticket ?? ''),
         epic: String(p.symbol ?? p.Symbol ?? ''),
@@ -575,6 +599,7 @@ export class Mt4FileBroker implements MasterBroker {
         upl: numOrNull(p.profit ?? p.Profit),
       }))
       .filter((p: BrokerPosition) => p.position_id && (!epic || p.epic === epic));
+    return { ok: true, positions };
   }
 
   async placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResult> {
@@ -627,7 +652,8 @@ export class Mt4FileBroker implements MasterBroker {
         }
         const ticket = String(ack.ticket || '');
         const opens = await this.listOpenPositions(input.epic);
-        const hit = opens.find((p) => p.position_id === ticket) || opens[0];
+        const hit =
+          opens.positions.find((p) => p.position_id === ticket) || opens.positions[0];
         return {
           ok: true,
           order_id: id,
@@ -641,7 +667,7 @@ export class Mt4FileBroker implements MasterBroker {
       }
     }
     return {
-      ok: true,
+      ok: false,
       order_id: id,
       position_id: null,
       fill_price: null,
@@ -674,7 +700,7 @@ export class Mt4FileBroker implements MasterBroker {
         /* keep polling */
       }
     }
-    return { ok: true, detail: 'mt4_close_written_ack_timeout' };
+    return { ok: false, detail: 'mt4_close_written_ack_timeout' };
   }
 
   /** Check- protocol MODIFY — update SL/TP on an open ticket. */

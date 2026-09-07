@@ -52,7 +52,9 @@ async function main() {
     ? { bid: quote.bid, ask: quote.ask, mid: quote.mid, spread: quote.spread, epic: quote.epic }
     : null;
   report.account = acct;
-  report.open_positions = positions.length;
+  report.open_positions = positions.ok ? positions.positions.length : null;
+  report.list_ok = positions.ok;
+  report.list_detail = positions.detail || null;
   report.status =
     quote && acct && acct.equity > 0 ? 'OK_LIVE_CONNECTED' : 'CONNECTED_PARTIAL';
 

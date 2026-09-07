@@ -104,8 +104,8 @@ async function main() {
   // Wait for simulator to process OPEN and write ack/status
   await sleep(400);
   const openAfter = await broker.listOpenPositions('XAUUSD');
-  let position_id = place?.position_id || openAfter[0]?.position_id || null;
-  if (!position_id && openAfter[0]) position_id = openAfter[0].position_id;
+  let position_id = place?.position_id || openAfter.positions[0]?.position_id || null;
+  if (!position_id && openAfter.positions[0]) position_id = openAfter.positions[0].position_id;
 
   // If place returned null position_id (async file ack), adopt from broker list
   if (!position_id && sim.listPositions()[0]) {
@@ -120,7 +120,7 @@ async function main() {
       epic: 'XAUUSD',
       side: 'BUY',
       size: 0.05,
-      entry: openAfter[0]?.open_level || q.ask,
+      entry: openAfter.positions[0]?.open_level || q.ask,
       stop_loss: 4460,
       decision,
     });
@@ -140,15 +140,20 @@ async function main() {
   const openFinal = await broker.listOpenPositions();
   const report = {
     status:
-      execution.accepted && position_id && managed.closed.length >= 1 && openFinal.length === 0
+      execution.accepted &&
+      position_id &&
+      managed.closed.length >= 1 &&
+      openFinal.ok &&
+      openFinal.positions.length === 0
         ? 'PASS_MT4_LIVE'
         : 'FAIL',
     bridge,
     execution: { accepted: execution.accepted, detail: execution.detail, order_id: place?.order_id },
     position_id,
-    open_after_entry: openAfter.length,
+    open_after_entry: openAfter.positions.length,
     exits: managed.closed.map((c) => c.reason),
-    open_final: openFinal.length,
+    open_final: openFinal.positions.length,
+    list_ok: openFinal.ok,
     mode: 'LIVE',
     broker: 'MT4_FILE',
   };
