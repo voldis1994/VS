@@ -107,6 +107,8 @@ class MasterRuntime {
   private timer: ReturnType<typeof setInterval> | null = null;
   private liveFeedTimer: ReturnType<typeof setInterval> | null = null;
   private seenIntentSnapshot: string[] = [];
+  /** Serialize tick() across live-feed / API / desk so opens+persist never race. */
+  private tickChain: Promise<unknown> = Promise.resolve();
   epic = GOLD_SPEC.epic;
 
   setMode(mode: Mode) {
@@ -195,7 +197,7 @@ class MasterRuntime {
       if (!pos) continue;
       const exists = this.pipeline.journal.opportunities.some((o) => o.id === pos.opportunity_id);
       if (exists) continue;
-      this.pipeline.journal.recordOpportunity({
+      const stub = this.pipeline.journal.recordOpportunity({
         id: pos.opportunity_id,
         mode: this.cfg.mode,
         epic: pos.epic,
@@ -216,6 +218,7 @@ class MasterRuntime {
           paper: this.broker?.paper ?? true,
         },
       });
+      this.trackPersist('recover_orphan', persistOpportunity(stub));
     }
   }
 
@@ -277,8 +280,19 @@ class MasterRuntime {
   /**
    * One authoritative cycle:
    * MARKET → … → DECISION → RISK → EXECUTION → POSITION MANAGE → JOURNAL
+   * Serialized — concurrent callers share one chain (live feed + /tick + desk).
    */
   async tick(bars: Bar[], quote: Quote): Promise<TickResult> {
+    const run = () => this.tickUnlocked(bars, quote);
+    const result = this.tickChain.then(run, run);
+    this.tickChain = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
+
+  private async tickUnlocked(bars: Bar[], quote: Quote): Promise<TickResult> {
     this.last_bars = bars;
     this.last_quote = quote;
     this.rollDailyPnl();
@@ -491,7 +505,8 @@ class MasterRuntime {
     for (const o of hist.outcomes) {
       pnlAll += o.outcome.pnl;
       const day = String(o.created_at || '').slice(0, 10);
-      if (!day || day === today) pnlToday += o.outcome.pnl;
+      // Only today's outcomes — never treat missing/epoch created_at as today
+      if (day === today) pnlToday += o.outcome.pnl;
       if (o.outcome.pnl < 0) losses += 1;
       else losses = 0;
     }

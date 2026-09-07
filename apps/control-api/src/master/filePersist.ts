@@ -14,7 +14,13 @@ import {
 
 export type FilePersistState = {
   opportunities: OpportunityRecord[];
-  outcomes: Array<{ opportunity_id: string; outcome: TradeOutcome; setup_key?: string | null }>;
+  outcomes: Array<{
+    opportunity_id: string;
+    outcome: TradeOutcome;
+    setup_key?: string | null;
+    /** ISO timestamp — required so restart daily_pnl does not treat history as today */
+    created_at?: string;
+  }>;
   positions: ManagedPosition[];
   intents: string[];
 };
@@ -83,7 +89,8 @@ export class FilePersist implements PersistClient {
         hold_ms: o.outcome.hold_ms,
         exit_reason: o.outcome.exit_reason,
         setup_key: o.setup_key ?? null,
-        created_at: new Date().toISOString(),
+        // Preserve disk timestamp; missing → epoch so recover never counts as "today"
+        created_at: o.created_at || '1970-01-01T00:00:00.000Z',
       }));
     } catch {
       /* start clean */

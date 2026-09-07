@@ -117,6 +117,12 @@ describe('VS MASTER file persist restart', () => {
     expect(hist.opportunities.length).toBeGreaterThanOrEqual(1);
     expect(hist.outcomes.length).toBeGreaterThanOrEqual(1);
     expect(hist.outcomes[0]!.outcome.pnl).toBe(5);
+    expect(hist.outcomes[0]!.created_at).toBeTruthy();
+    // created_at must not be rewritten to "now" on every load
+    const createdBefore = hist.outcomes[0]!.created_at;
+    installFilePersist(dir);
+    const hist2 = await loadJournalHistory();
+    expect(hist2.outcomes[0]!.created_at).toBe(createdBefore);
 
     // Do not call stop() before recover — stop() persists current (empty) opens and would wipe disk.
     masterRuntime.pipeline = new MasterPipeline('PAPER');
@@ -124,11 +130,58 @@ describe('VS MASTER file persist restart', () => {
     masterRuntime.broker = null;
     masterRuntime.broker_detail = null;
     masterRuntime.running = false;
+    masterRuntime.account.daily_pnl = 0;
     const recovered = await masterRuntime.recover();
     expect(recovered.positions).toBe(1);
     expect(recovered.opportunities).toBeGreaterThanOrEqual(1);
     expect(recovered.outcomes).toBeGreaterThanOrEqual(1);
     expect(masterRuntime.pipeline.journal.opportunities.length).toBeGreaterThanOrEqual(1);
     expect(masterRuntime.pipeline.expectancy.lookup('TREND:BUY')?.samples).toBeGreaterThanOrEqual(1);
+    // Outcome stamped in this test run → counts as today
+    expect(masterRuntime.account.daily_pnl).toBe(5);
+  });
+
+  it('recover ignores outcomes with missing/epoch created_at for daily_pnl', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vs-master-fp-old-'));
+    installFilePersist(dir);
+    const { writeFileSync } = await import('fs');
+    writeFileSync(
+      join(dir, 'master_state.json'),
+      JSON.stringify({
+        opportunities: [],
+        outcomes: [
+          {
+            opportunity_id: '00000000-0000-4000-8000-000000000001',
+            setup_key: 'TREND:BUY',
+            // legacy row without created_at — load maps to epoch
+            outcome: {
+              position_id: 'p1',
+              side: 'BUY',
+              entry: 100,
+              exit: 90,
+              volume: 1,
+              pnl: -500,
+              fees: 0,
+              slippage: 0,
+              mae: 10,
+              mfe: 0,
+              r_multiple: -1,
+              hold_ms: 1000,
+              exit_reason: 'STOP_HIT',
+            },
+          },
+        ],
+        positions: [],
+        intents: [],
+      })
+    );
+    installFilePersist(dir);
+    masterRuntime.pipeline = new MasterPipeline('PAPER');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.broker = null;
+    masterRuntime.account.daily_pnl = 99;
+    await masterRuntime.recover();
+    // −500 must NOT inflate today's daily loss
+    expect(masterRuntime.account.daily_pnl).toBe(0);
   });
 });

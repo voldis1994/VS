@@ -19,7 +19,7 @@ export class MasterJournal {
     risk: RiskVerdict;
     executed: boolean;
     execution?: ExecutionResult;
-    /** Optional stable id (e.g. recover-${position_id}) so exits can attach. */
+    /** Optional stable id (e.g. recover UUID) so exits can attach. */
     id?: string;
   }): OpportunityRecord {
     const rec: OpportunityRecord = {

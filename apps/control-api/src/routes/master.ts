@@ -89,10 +89,23 @@ export async function registerMasterRoutes(app: FastifyInstance) {
       if (resolved.mode === 'LIVE' && process.env.MASTER_LIVE_ENABLED !== 'true') {
         return { ok: false, detail: 'LIVE broker resolved but MASTER_LIVE_ENABLED not set' };
       }
+      const wantLive =
+        wantMode === 'LIVE' || masterRuntime.cfg.mode === 'LIVE';
+      const liveOk =
+        resolved.mode === 'LIVE' && !resolved.broker.paper && resolved.ok;
+      // Never label PAPER fills as LIVE — refuse rather than silent paper-as-live
+      if (wantLive && !liveOk) {
+        return {
+          ok: false,
+          detail: resolved.detail || 'LIVE unavailable — refusing paper-as-live',
+          broker: resolved.broker.name,
+          status: masterRuntime.status(),
+        };
+      }
       masterRuntime.attachBroker(resolved.broker);
       masterRuntime.broker_detail = resolved.detail;
-      if (resolved.mode === 'LIVE') masterRuntime.setMode('LIVE');
-      else if (masterRuntime.cfg.mode !== 'LIVE') masterRuntime.setMode('PAPER');
+      if (liveOk) masterRuntime.setMode('LIVE');
+      else masterRuntime.setMode('PAPER');
       const live_feed =
         req.body?.live_feed === true ||
         (resolved.broker.paper && (process.env.MASTER_LIVE_FEED || 'public') !== 'off');

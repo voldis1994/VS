@@ -310,7 +310,7 @@ export class CapitalBroker implements MasterBroker {
         size: p.size,
         open_level: p.open_level ?? 0,
         stop_level: p.stop_level ?? null,
-        profit_level: null,
+        profit_level: p.profit_level ?? null,
         upl: p.upl ?? null,
       }));
     return { ok: true, positions };

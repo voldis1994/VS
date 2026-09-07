@@ -2,6 +2,7 @@
  * POSITION MANAGER + EXIT — tracks open MASTER positions and applies
  * Best Outcome exit (decideBestOutcomeExit from live desk playbooks).
  */
+import { createHash } from 'crypto';
 import { decideBestOutcomeExit, favorableMove } from '../services/exitManage.js';
 import type { MasterBroker } from './broker.js';
 import type { MasterPipeline } from './pipeline.js';
@@ -11,6 +12,16 @@ import type {
   Side,
   TradeOutcome,
 } from './types.js';
+
+/** Deterministic UUID for broker-orphan recovery — Postgres id columns require UUID. */
+export function stableRecoverUuid(positionId: string): string {
+  const h = createHash('sha256').update(`vs-master-recover:${positionId}`).digest();
+  const bytes = Buffer.from(h.subarray(0, 16));
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
 
 export type ManagedPosition = {
   position_id: string;
@@ -274,10 +285,11 @@ export class PositionManager {
         continue;
       }
       // Orphan broker position — adopt broker SL/TP when available
+      const recoverId = stableRecoverUuid(bp.position_id);
       this.open.set(bp.position_id, {
         position_id: bp.position_id,
-        opportunity_id: `recover-${bp.position_id}`,
-        intent_id: `recover-${bp.position_id}`,
+        opportunity_id: recoverId,
+        intent_id: recoverId,
         epic: bp.epic,
         side: bp.side,
         size: bp.size,
@@ -288,7 +300,7 @@ export class PositionManager {
         mfe: 0,
         mae: 0,
         decision: {
-          decision_id: `recover-${bp.position_id}`,
+          decision_id: recoverId,
           kind: bp.side,
           side: bp.side,
           score: 0,

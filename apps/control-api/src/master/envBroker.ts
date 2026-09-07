@@ -74,11 +74,12 @@ export async function resolveBrokerFromEnv(): Promise<EnvBrokerResult> {
   const paper = new PaperBroker();
   await paper.connect();
   if (wantLive && !capitalEnvPresent()) {
+    // Honest refuse — never ok:true PAPER while LIVE was requested (UI would show LIVE_RUNNING)
     return {
-      ok: true,
+      ok: false,
       broker: paper,
       mode: 'PAPER',
-      detail: 'live_requested_but_CAPITAL_*_missing→paper',
+      detail: 'live_requested_but_CAPITAL_*_missing',
     };
   }
   return { ok: true, broker: paper, mode: 'PAPER', detail: 'paper_default' };

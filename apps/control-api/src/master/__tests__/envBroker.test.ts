@@ -36,7 +36,9 @@ describe('VS MASTER env broker resolve', () => {
     for (const k of keys) delete process.env[k];
     process.env.MASTER_LIVE_ENABLED = 'true';
     const r = await resolveBrokerFromEnv();
+    expect(r.ok).toBe(false);
     expect(r.broker.paper).toBe(true);
+    expect(r.mode).toBe('PAPER');
     expect(r.detail).toMatch(/CAPITAL_/);
   });
 });

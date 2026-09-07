@@ -830,6 +830,7 @@ export type CapitalOpenPosition = {
   open_level: number | null;
   upl: number | null;
   stop_level: number | null;
+  profit_level: number | null;
 };
 
 /** All open Capital.com positions (REST). */
@@ -865,6 +866,7 @@ export async function listCapitalOpenPositions(
       open_level: numOrNull(pos.level ?? pos.openLevel ?? pos.averagePrice),
       upl: numOrNull(pos.upl ?? pos.unrealizedProfit ?? pos.profit),
       stop_level: numOrNull(pos.stopLevel ?? pos.stop_level),
+      profit_level: numOrNull(pos.profitLevel ?? pos.profit_level),
     });
   }
   return { ok: true, positions, detail: `${positions.length} open` };

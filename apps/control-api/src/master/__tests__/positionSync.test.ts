@@ -64,6 +64,10 @@ describe('VS MASTER recovery SL + trail', () => {
     expect(pos).toBeTruthy();
     expect(pos!.stop_loss).toBe(4395);
     expect(pos!.take_profit).toBe(4410);
+    // Postgres-safe UUID opportunity id (stable across restarts)
+    expect(pos!.opportunity_id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    );
   });
 
   it('attaches safety SL when orphan has no broker stop', async () => {
