@@ -51,19 +51,19 @@ describe('marketSetup', () => {
     }
   });
 
-  it('arms FADE BUY near swing low and enters on bounce 10s', () => {
+  it('arms WITH-MOVE near swing low — BUY when flow up / bounce, never FADE against dump', () => {
     const minutes = rangeMinutes();
     const st = buildStructure({ minutes, mid: 2001 });
     expect(st.near_low || st.bias === 'BELOW' || st.bias === 'INSIDE').toBe(true);
     let setup = emptySetup();
     setup = updateSetupSticky(setup, st, minutes);
     setup = updateSetupSticky(setup, st, minutes);
-    // Force near-low fade path if structure sees edge
     if (st.near_low) {
-      expect(['FADE', 'PULLBACK', 'FAILED_BREAK'].includes(setup.kind)).toBe(true);
+      expect(['CONTINUATION', 'PULLBACK', 'BREAKOUT', 'NONE'].includes(setup.kind)).toBe(true);
+      expect(setup.kind).not.toMatch(/FADE|FAILED_BREAK/);
       if (setup.status === 'ARMED' && setup.side === 'BUY') {
         const bounce = bar10(2001.2, 2002.5, 2000.6, 2002.4);
-        const entry = decideEntryFromSetup(setup, bounce);
+        const entry = decideEntryFromSetup(setup, bounce, minutes);
         expect(entry?.direction).toBe('BUY');
       }
     }
@@ -89,18 +89,19 @@ describe('marketSetup', () => {
     expect(decideEntryFromSetup(emptySetup(), bar10(100, 101, 99, 100.5))).toBeNull();
   });
 
-  it('never arms BUY at swing high — FADE SELL instead (no tip chase)', () => {
+  it('never FADE SELL at swing high into a rally — BUY with flow or wait 10s move', () => {
     const minutes = rangeMinutes();
     const nearHigh = buildStructure({ minutes, mid: 2009.2 });
     expect(nearHigh.near_high).toBe(true);
     let setup = emptySetup();
     setup = updateSetupSticky(setup, nearHigh, minutes);
     setup = updateSetupSticky(setup, nearHigh, minutes);
-    expect(setup.side).toBe('SELL');
-    expect(setup.kind === 'FADE' || setup.kind === 'FAILED_BREAK' || setup.kind === 'PULLBACK').toBe(
-      true
-    );
-    // FADE BUY at the tip must still be blocked; CONTINUATION may ride impulse through
+    expect(setup.kind).not.toMatch(/FADE|FAILED_BREAK/);
+    // If armed at tip without UP flow, must be SELL-with-dump or NONE — not FADE book
+    if (setup.status === 'ARMED') {
+      expect(setup.playbook).not.toBe('FADE');
+    }
+    // Forced FADE BUY at tip must still be blocked while glued high
     const tipFadeBuy = {
       ...setup,
       kind: 'FADE' as const,
@@ -110,10 +111,10 @@ describe('marketSetup', () => {
       swing_high: nearHigh.swing_high,
       swing_low: nearHigh.swing_low,
     };
-    expect(decideEntryFromSetup(tipFadeBuy, bar10(2009, 2009.5, 2008.8, 2009.3))).toBeNull();
+    expect(decideEntryFromSetup(tipFadeBuy, bar10(2009, 2009.5, 2008.8, 2009.3), minutes)).toBeNull();
   });
 
-  it('does not FADE SELL mid-rally on a stale swing high (4434 while climb continues)', () => {
+  it('rally climb arms BUY CONTINUATION — never FADE SELL into live UP flow', () => {
     const bars: CapitalPriceCandle[] = [];
     // Base range then old local high ~4434, then strong rally toward 4437
     for (let i = 0; i < 22; i++) {
@@ -146,7 +147,7 @@ describe('marketSetup', () => {
       true
     );
     if (setup.kind === 'NONE') {
-      expect(setup.reason).toMatch(/stale high|rally impulse|no FADE SELL|mid swing|impulse/i);
+      expect(setup.reason).toMatch(/stale high|rally|no counter-trend|mid swing|impulse|wait 10s|flow/i);
     }
   });
 
@@ -284,7 +285,7 @@ describe('marketSetup', () => {
     expect(sell?.direction).toBe('SELL');
   });
 
-  it('decideEntryFromTenSecMove refuses tip-chase BUY at swing high', () => {
+  it('decideEntryFromTenSecMove refuses weak tip-park BUY at swing high', () => {
     const minutes = rangeMinutes();
     const st = buildStructure({ minutes, mid: 2009.2 });
     expect(st.near_high).toBe(true);
@@ -292,12 +293,32 @@ describe('marketSetup', () => {
     expect(decideEntryFromTenSecMove(st, tip, minutes)).toBeNull();
   });
 
+  it('strong Gold uptrend arms BUY — never SELL against the climb (chart class)', () => {
+    const bars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 20; i++) {
+      const o = 4395 + i * 0.55;
+      bars.push(candle(o, o + 0.8, o - 0.2, o + 0.5));
+    }
+    expect(priceFlowBias(bars)).toBe('UP');
+    const st = buildStructure({ minutes: bars, mid: bars[bars.length - 1]!.close });
+    let setup = emptySetup();
+    setup = updateSetupSticky(setup, st, bars);
+    expect(setup.side).toBe('BUY');
+    expect(setup.kind).not.toMatch(/FADE|FAILED_BREAK/);
+    const redAgainst = bar10(4405, 4405.2, 4404.2, 4404.3);
+    expect(decideEntryFromTenSecMove(st, redAgainst, bars)).toBeNull();
+    const greenWith = bar10(4405, 4406.2, 4404.9, 4406.0);
+    const entry =
+      decideEntryFromSetup(setup, greenWith, bars) ||
+      decideEntryFromTenSecMove(st, greenWith, bars);
+    expect(entry?.direction).toBe('BUY');
+  });
+
   it('never BUY into a dump — green 10s blip mid-dump is blocked', () => {
     const bars: CapitalPriceCandle[] = [];
     for (let i = 0; i < 22; i++) {
       bars.push(candle(4436, 4438, 4434, 4436));
     }
-    // Slow grind dump like 18:00→4431 (BUY @ 4433.90 class of mistake)
     for (let i = 0; i < 8; i++) {
       const o = 4436 - i * 0.55;
       bars.push(candle(o, o + 0.25, o - 0.7, o - 0.5));
@@ -306,7 +327,6 @@ describe('marketSetup', () => {
     const st = buildStructure({ minutes: bars, mid: bars[bars.length - 1]!.close });
     const greenBlip = bar10(4433.5, 4434.3, 4433.4, 4434.1);
     expect(decideEntryFromTenSecMove(st, greenBlip, bars)).toBeNull();
-    // Armed FADE BUY must also refuse entry while dumping
     const fadeBuy = {
       ...emptySetup(),
       kind: 'FADE' as const,
@@ -318,7 +338,6 @@ describe('marketSetup', () => {
       swing_low: st.swing_low,
     };
     expect(decideEntryFromSetup(fadeBuy, greenBlip, bars)).toBeNull();
-    // Setup itself should prefer SELL not FADE BUY at low while dumping
     let setup = emptySetup();
     setup = updateSetupSticky(setup, st, bars);
     expect(setup.side).not.toBe('BUY');

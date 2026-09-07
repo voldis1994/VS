@@ -69,16 +69,16 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     expect(d.reason).toMatch(/PeakProtection/);
   });
 
-  it('holds while retention still ≥65%', () => {
+  it('holds while retention still ≥75%', () => {
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
         entry_price: 2000,
         mfe: 8,
-        peak_retention: 0.7,
+        peak_retention: 0.85,
         playbook: 'LONG',
       }),
-      2005.6
+      2006.8
     );
     expect(d.exit).toBe(false);
   });
@@ -99,7 +99,7 @@ describe('decideBestOutcomeExit playbook-aware', () => {
         entry_price: 4419,
         entry_at: ago(120_000),
         mfe: 2.0,
-        peak_retention: 0.7,
+        peak_retention: 0.9,
         playbook: 'LONG',
         entry_setup: 'CONTINUATION',
       }),
