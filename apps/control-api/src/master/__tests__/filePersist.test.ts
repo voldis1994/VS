@@ -3,12 +3,18 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  DualPersist,
+  resetMasterPersistInstallFlag,
+} from '../dualPersist.js';
+import {
+  FilePersist,
   installFilePersist,
 } from '../filePersist.js';
 import {
   loadJournalHistory,
   loadOpenPositions,
   loadSeenIntents,
+  MemoryPersist,
   persistOpportunity,
   persistOutcome,
   saveOpenPositions,
@@ -185,3 +191,87 @@ describe('VS MASTER file persist restart', () => {
     expect(masterRuntime.account.daily_pnl).toBe(0);
   });
 });
+
+describe('VS MASTER dual persist (DB fail → file mirror)', () => {
+  afterEach(() => {
+    setPersistClient(null);
+    resetMasterPersistInstallFlag();
+  });
+
+  it('recovers opens from file mirror when primary throws', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vs-master-dual-'));
+    const mirror = new FilePersist(dir);
+    const failingPrimary: {
+      query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }>;
+    } = {
+      query: async () => {
+        throw new Error('db_down');
+      },
+    };
+    const dual = new DualPersist(failingPrimary as any, mirror);
+    setPersistClient(dual);
+
+    const pm = new PositionManager();
+    const pipe = new MasterPipeline('PAPER');
+    const bars = barsTrendUp();
+    const cycle = await pipe.runCycle({
+      bars,
+      quote: quoteFrom(bars.at(-1)!),
+      account: {
+        equity: 10_000,
+        balance: 10_000,
+        currency: 'GBP',
+        open_positions: 0,
+        daily_pnl: 0,
+        peak_equity: 10_000,
+        consecutive_losses: 0,
+      },
+      instrument: GOLD_SPEC,
+      cfg: DEFAULT_MASTER_CONFIG,
+    });
+    pm.register({
+      position_id: 'dual-pos-1',
+      opportunity_id: cycle.opportunity.id,
+      intent_id: 'dual-intent-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4410,
+      decision: cycle.decision,
+    });
+    expect(await saveOpenPositions(pm.list())).toBe(true);
+    expect(await saveSeenIntents(['dual-intent-1'])).toBe(true);
+    expect(await persistOpportunity(cycle.opportunity)).toBe(true);
+
+    // New dual with still-failing primary reads from mirror
+    const mirror2 = new FilePersist(dir);
+    setPersistClient(new DualPersist(failingPrimary as any, mirror2));
+    const loaded = await loadOpenPositions();
+    expect(loaded.length).toBe(1);
+    expect(loaded[0]!.position_id).toBe('dual-pos-1');
+    expect(await loadSeenIntents()).toContain('dual-intent-1');
+  });
+
+  it('writes succeed via mirror even when primary fails', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vs-master-dual-w-'));
+    const mem = new MemoryPersist();
+    const mirror = new FilePersist(dir);
+    // Primary that fails only on write
+    const flaky: PersistClientLike = {
+      async query(sql: string, params: unknown[] = []) {
+        if (/INSERT|UPDATE|DELETE/i.test(sql)) throw new Error('db_write_fail');
+        return mem.query(sql, params);
+      },
+    };
+    setPersistClient(new DualPersist(flaky as any, mirror));
+    const ok = await saveSeenIntents(['flaky-intent']);
+    expect(ok).toBe(true);
+    setPersistClient(null);
+    installFilePersist(dir);
+    expect(await loadSeenIntents()).toContain('flaky-intent');
+  });
+});
+
+type PersistClientLike = {
+  query: (sql: string, params?: unknown[]) => Promise<{ rows: any[]; rowCount?: number | null }>;
+};

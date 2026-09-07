@@ -70,11 +70,22 @@ async function main() {
   const offGate = applyMarketFilters(
     { ...analysisRaw, session: 'OFF_HOURS' },
     market.quote!,
-    cfg
+    cfg,
+    Date.UTC(2026, 8, 7, 12)
   );
   stages.session_off_hours_gate = {
     ok: !offGate.ok && offGate.reason === 'session_off_hours',
     detail: offGate.reason || 'expected_block',
+  };
+  const weekendGate = applyMarketFilters(
+    { ...analysisRaw, session: 'LONDON' },
+    market.quote!,
+    cfg,
+    Date.UTC(2026, 8, 5, 10)
+  );
+  stages.session_weekend_gate = {
+    ok: !weekendGate.ok && weekendGate.reason === 'session_weekend',
+    detail: weekendGate.reason || 'expected_block',
   };
 
   // Happy-path stages use a labeled trading session (wall clock may be OFF_HOURS)
@@ -82,7 +93,7 @@ async function main() {
     analysisRaw.session === 'OFF_HOURS'
       ? { ...analysisRaw, session: 'LONDON' }
       : analysisRaw;
-  const filter = applyMarketFilters(analysis, market.quote!, cfg);
+  const filter = applyMarketFilters(analysis, market.quote!, cfg, Date.UTC(2026, 8, 7, 12));
   stages.filters = { ok: filter.ok, detail: filter.reason || 'pass' };
 
   const { buy, sell } = buildCandidates(analysis, market.quote!, cfg);

@@ -10,11 +10,19 @@ export type FilterVerdict = {
   checks: Record<string, boolean>;
 };
 
+/** Check- style weekend hard gate (UTC Sat/Sun). */
+export function isWeekendUtc(nowMs = Date.now()): boolean {
+  const d = new Date(nowMs).getUTCDay();
+  return d === 0 || d === 6;
+}
+
 export function applyMarketFilters(
   a: AnalysisSnapshot,
   quote: Quote,
-  cfg: MasterConfig
+  cfg: MasterConfig,
+  nowMs = Date.now()
 ): FilterVerdict {
+  const weekend = isWeekendUtc(nowMs);
   const checks: Record<string, boolean> = {
     data_quality: a.data_quality >= 0.35,
     spread_abs: quote.spread <= cfg.max_spread_abs,
@@ -22,8 +30,9 @@ export function applyMarketFilters(
     // UNKNOWN is tradeable-with-caution; only UNSTABLE hard-blocks both sides
     regime_stable: a.regime !== 'UNSTABLE',
     volatility_ok: !(a.volatility > 0.008),
-    // Reader-style OFF session — entries only in labeled trading windows
-    session_ok: !cfg.block_off_hours || a.session !== 'OFF_HOURS',
+    // Reader OFF session + Check- weekend — entries only in labeled weekday windows
+    session_ok:
+      !cfg.block_off_hours || (a.session !== 'OFF_HOURS' && !weekend),
   };
 
   if (!checks.data_quality) return { ok: false, reason: 'data_quality', checks };
@@ -31,6 +40,12 @@ export function applyMarketFilters(
   if (!checks.spread_pct) return { ok: false, reason: 'spread_pct', checks };
   if (!checks.regime_stable) return { ok: false, reason: `regime_${a.regime}`, checks };
   if (!checks.volatility_ok) return { ok: false, reason: 'abnormal_volatility', checks };
-  if (!checks.session_ok) return { ok: false, reason: 'session_off_hours', checks };
+  if (!checks.session_ok) {
+    return {
+      ok: false,
+      reason: weekend ? 'session_weekend' : 'session_off_hours',
+      checks,
+    };
+  }
   return { ok: true, reason: null, checks };
 }

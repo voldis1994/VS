@@ -46,14 +46,26 @@ const quote: Quote = {
 };
 
 describe('MASTER filters + dual flow', () => {
+  const weekday = Date.UTC(2026, 8, 7, 12); // Monday
+
   it('allows UNKNOWN regime through shared filters (no dual-starve)', () => {
-    const v = applyMarketFilters(baseAnalysis({ regime: 'UNKNOWN' }), quote, DEFAULT_MASTER_CONFIG);
+    const v = applyMarketFilters(
+      baseAnalysis({ regime: 'UNKNOWN' }),
+      quote,
+      DEFAULT_MASTER_CONFIG,
+      weekday
+    );
     expect(v.ok).toBe(true);
     expect(v.checks.regime_stable).toBe(true);
   });
 
   it('still hard-blocks UNSTABLE', () => {
-    const v = applyMarketFilters(baseAnalysis({ regime: 'UNSTABLE' }), quote, DEFAULT_MASTER_CONFIG);
+    const v = applyMarketFilters(
+      baseAnalysis({ regime: 'UNSTABLE' }),
+      quote,
+      DEFAULT_MASTER_CONFIG,
+      weekday
+    );
     expect(v.ok).toBe(false);
     expect(v.reason).toMatch(/regime/);
   });
@@ -62,10 +74,22 @@ describe('MASTER filters + dual flow', () => {
     const v = applyMarketFilters(
       baseAnalysis({ session: 'OFF_HOURS' }),
       quote,
-      DEFAULT_MASTER_CONFIG
+      DEFAULT_MASTER_CONFIG,
+      Date.UTC(2026, 8, 7, 12) // Monday noon UTC
     );
     expect(v.ok).toBe(false);
     expect(v.reason).toBe('session_off_hours');
+  });
+
+  it('hard-blocks weekend even in LONDON hours (Check- style)', () => {
+    const v = applyMarketFilters(
+      baseAnalysis({ session: 'LONDON' }),
+      quote,
+      DEFAULT_MASTER_CONFIG,
+      Date.UTC(2026, 8, 5, 10) // Saturday
+    );
+    expect(v.ok).toBe(false);
+    expect(v.reason).toBe('session_weekend');
   });
 
   it('allows OFF_HOURS when block_off_hours disabled', () => {

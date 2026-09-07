@@ -1,12 +1,16 @@
 /** VS MASTER dashboard + control API. LIVE off by default for master mode. */
 import type { FastifyInstance } from 'fastify';
 import { Mt4FileBroker } from '../master/broker.js';
+import { ensureMasterPersist } from '../master/dualPersist.js';
 import { masterRuntime } from '../master/runtime.js';
 import { replayMaster, walkForward, abCompareAi } from '../master/replay.js';
 import { DEFAULT_MASTER_CONFIG } from '../master/pipeline.js';
 import type { Bar, Mode } from '../master/types.js';
 
 export async function registerMasterRoutes(app: FastifyInstance) {
+  // Postgres + file mirror so recover survives DB blips (standalone uses file-only)
+  ensureMasterPersist();
+
   app.get('/api/master/status', async () => masterRuntime.status());
 
   app.get('/api/master/config', async () => ({
