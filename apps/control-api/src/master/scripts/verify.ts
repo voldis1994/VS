@@ -4,6 +4,7 @@
  *
  *   npm run master:verify
  */
+import 'dotenv/config';
 import { spawnSync } from 'child_process';
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';

@@ -4,6 +4,7 @@
  *
  *   npx tsx src/master/scripts/liveSmoke.ts
  */
+import 'dotenv/config';
 import { writeFileSync, mkdirSync } from 'fs';
 import { capitalEnvPresent, resolveBrokerFromEnv } from '../envBroker.js';
 import { GOLD_SPEC } from '../pipeline.js';

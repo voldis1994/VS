@@ -14,6 +14,7 @@
     "master:live-smoke": "tsx src/master/scripts/liveSmoke.ts",
     "master:live-paper": "tsx src/master/scripts/livePaperDemo.ts",
     "master:audit": "tsx src/master/scripts/systemAudit.ts",
+    "master:mt4-live": "tsx src/master/scripts/mt4LiveDemo.ts",
     "master:verify": "tsx src/master/scripts/verify.ts"
   },
   "dependencies": {

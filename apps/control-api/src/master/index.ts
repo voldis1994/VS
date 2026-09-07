@@ -23,3 +23,4 @@ export * from './deskBridge.js';
 export * from './positionSync.js';
 export * from './envBroker.js';
 export * from './liveFeed.js';
+export * from './mt4Sim.js';

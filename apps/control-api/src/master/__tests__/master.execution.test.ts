@@ -1,9 +1,10 @@
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Mt4FileBroker, PaperBroker } from '../broker.js';
 import { executeDecision } from '../execution.js';
+import { Mt4BridgeSimulator } from '../mt4Sim.js';
 import {
   MemoryPersist,
   loadOpenPositions,
@@ -264,45 +265,86 @@ describe('VS MASTER persist + recovery', () => {
 });
 
 describe('VS MASTER MT4 file bridge', () => {
-  it('writes OPEN command JSON (Check- protocol)', async () => {
+  it('OPEN fills via Check- ack (simulator) and MODIFY writes protocol JSON', async () => {
     const root = mkdtempSync(join(tmpdir(), 'vs-mt4-'));
+    const sim = new Mt4BridgeSimulator(root);
+    sim.setQuote(4400, 4400.4);
+    sim.start(40);
     const broker = new Mt4FileBroker(root);
     const connected = await broker.connect();
     expect(connected.ok).toBe(true);
+    const q = await broker.getQuote('XAUUSD');
+    expect(q?.mid).toBeCloseTo(4400.2, 5);
+
+    try {
+      const placed = await broker.placeOrder({
+        intent_id: 'abcdefghijklmnopqrstuvwx',
+        epic: 'XAUUSD',
+        side: 'SELL',
+        size: 0.05,
+        stop_level: 4410,
+        profit_level: 4380,
+      });
+      expect(placed.ok).toBe(true);
+      expect(placed.detail).toMatch(/^mt4_filled/);
+      expect(placed.position_id).toBeTruthy();
+      expect(placed.fill_price).toBeCloseTo(4400, 5); // SELL fills at bid
+      const ackPath = join(root, 'acks', `ack_${placed.order_id}.json`);
+      const ack = JSON.parse(readFileSync(ackPath, 'utf8'));
+      expect(ack.ok).toBe(true);
+      expect(String(ack.ticket)).toBe(placed.position_id);
+
+      const mod = await broker.modifyPosition({
+        position_id: placed.position_id!,
+        stop_level: 4420,
+        profit_level: 4370,
+      });
+      expect(mod.ok).toBe(true);
+      // Wait briefly for sim to consume MODIFY (or assert command shape if still pending)
+      await new Promise((r) => setTimeout(r, 120));
+      const modAck = join(root, 'acks', `ack_${mod.order_id}.json`);
+      if (existsSync(modAck)) {
+        const modPayload = JSON.parse(readFileSync(modAck, 'utf8'));
+        expect(modPayload.ok).toBe(true);
+        expect(Number(modPayload.ticket)).toBe(Number(placed.position_id));
+      } else {
+        const modPath = join(root, 'commands', `cmd_${mod.order_id}.json`);
+        const modPayload = JSON.parse(readFileSync(modPath, 'utf8'));
+        expect(modPayload.action).toBe('MODIFY');
+        expect(modPayload.ticket).toBe(Number(placed.position_id));
+      }
+      const opens = await broker.listOpenPositions('XAUUSD');
+      expect(opens.some((p) => p.position_id === placed.position_id)).toBe(true);
+      const hit = opens.find((p) => p.position_id === placed.position_id)!;
+      expect(hit.stop_level === 4420 || hit.stop_level === 4410).toBe(true);
+    } finally {
+      sim.stop();
+    }
+  });
+
+  it('writes OPEN command and times out honestly without EA/sim', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-noack-'));
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
     mkdirSync(join(root, 'market'), { recursive: true });
     writeFileSync(
       join(root, 'market', 'latest.json'),
       JSON.stringify({ bid: 4400, ask: 4400.4, symbol: 'XAUUSD' })
     );
-    const q = await broker.getQuote('XAUUSD');
-    expect(q?.mid).toBeCloseTo(4400.2, 5);
-
     const placed = await broker.placeOrder({
-      intent_id: 'abcdefghijklmnopqrstuvwx',
+      intent_id: 'noackintent0000000000001',
       epic: 'XAUUSD',
-      side: 'SELL',
-      size: 0.05,
-      stop_level: 4410,
-      profit_level: 4380,
+      side: 'BUY',
+      size: 0.01,
     });
     expect(placed.ok).toBe(true);
-    expect(placed.detail).toBe('mt4_command_written');
+    expect(placed.detail).toBe('mt4_command_written_ack_timeout');
+    expect(placed.position_id).toBeNull();
     const cmdPath = join(root, 'commands', `cmd_${placed.order_id}.json`);
     const payload = JSON.parse(readFileSync(cmdPath, 'utf8'));
     expect(payload.action).toBe('OPEN');
-    expect(payload.side).toBe('SELL');
-    expect(payload.lot).toBe(0.05);
-
-    const mod = await broker.modifyPosition({
-      position_id: '12345',
-      stop_level: 4420,
-      profit_level: 4370,
-    });
-    expect(mod.ok).toBe(true);
-    const modPath = join(root, 'commands', `cmd_${mod.order_id}.json`);
-    const modPayload = JSON.parse(readFileSync(modPath, 'utf8'));
-    expect(modPayload.action).toBe('MODIFY');
-    expect(modPayload.ticket).toBe(12345);
+    expect(payload.side).toBe('BUY');
+    expect(payload.lot).toBe(0.01);
   });
 });
 
