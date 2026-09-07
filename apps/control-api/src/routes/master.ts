@@ -136,17 +136,49 @@ export async function registerMasterRoutes(app: FastifyInstance) {
       spread,
       ts_ms: Date.now(),
     };
-    const result = masterRuntime.evaluate(bars, quote);
+    const result = await masterRuntime.evaluate(bars, quote);
     return {
       ok: true,
       decision: result.decision,
       risk: result.risk,
       analysis: result.analysis,
+      ai: result.ai,
       status: masterRuntime.status(),
       why:
         result.decision.block_reason ||
         result.risk.reasons.join(', ') ||
         (result.decision.kind === 'WAIT' ? 'WAIT — no valid edge' : `TRADE ${result.decision.kind}`),
+    };
+  });
+
+  /** Credential-free Capital connectivity probe — fails closed honestly without secrets. */
+  app.post('/api/master/broker/capital/probe', async () => {
+    const { openCapitalSession } = await import('../services/capitalCom.js');
+    const { capitalEnvPresent } = await import('../master/envBroker.js');
+    if (!capitalEnvPresent()) {
+      return {
+        ok: false,
+        status: 'NO_CREDENTIALS',
+        detail:
+          'CAPITAL_API_KEY / CAPITAL_IDENTIFIER / CAPITAL_API_PASSWORD not set — cannot open live Capital session',
+      };
+    }
+    const opened = await openCapitalSession({
+      environment: (process.env.CAPITAL_ENVIRONMENT || 'demo').trim(),
+      apiKey: (process.env.CAPITAL_API_KEY || '').trim(),
+      identifier: (process.env.CAPITAL_IDENTIFIER || '').trim(),
+      password: (
+        process.env.CAPITAL_API_PASSWORD ||
+        process.env.CAPITAL_PASSWORD ||
+        ''
+      ).trim(),
+      capitalAccountId: process.env.CAPITAL_ACCOUNT_ID || null,
+    });
+    return {
+      ok: opened.ok,
+      status: opened.ok ? 'CONNECTED' : 'CONNECT_FAILED',
+      detail: opened.detail,
+      environment: process.env.CAPITAL_ENVIRONMENT || 'demo',
     };
   });
 
@@ -172,7 +204,7 @@ export async function registerMasterRoutes(app: FastifyInstance) {
   }>('/api/master/replay', async (req) => {
     const bars = req.body?.bars || [];
     if (bars.length < 40) return { ok: false, detail: 'need ≥40 bars for replay' };
-    const result = replayMaster({
+    const result = await replayMaster({
       bars,
       spread: req.body?.spread,
       slippage_pts: req.body?.slippage_pts,
@@ -195,7 +227,7 @@ export async function registerMasterRoutes(app: FastifyInstance) {
   }>('/api/master/walk-forward', async (req) => {
     const bars = req.body?.bars || [];
     if (bars.length < 120) return { ok: false, detail: 'need ≥120 bars' };
-    const wf = walkForward({
+    const wf = await walkForward({
       bars,
       train: req.body?.train ?? 60,
       test: req.body?.test ?? 30,
@@ -209,7 +241,7 @@ export async function registerMasterRoutes(app: FastifyInstance) {
   }>('/api/master/ab-ai', async (req) => {
     const bars = req.body?.bars || [];
     if (bars.length < 40) return { ok: false, detail: 'need ≥40 bars' };
-    const ab = abCompareAi({
+    const ab = await abCompareAi({
       bars,
       spread: req.body?.spread,
       slippage_pts: req.body?.slippage_pts,
@@ -292,8 +324,12 @@ async function refresh(){
     const whyCls=s.last_block_reason?'bad':'ok';
     cards.innerHTML=[
       card('Mode',s.mode),
+      card('Epic',s.epic||'—'),
       card('Health',s.health,s.health.includes('KILL')?'bad':'ok'),
       card('Broker',s.broker||'—'),
+      card('Broker detail',s.broker_detail||'—'),
+      card('Owns pipeline',s.owns_pipeline?'YES':'no'),
+      card('AI mode',s.ai_mode||'—'),
       card('Running',s.running?'YES':'NO',s.running?'ok':''),
       card('Regime',s.regime),
       card('BUY',Number(s.buy_score||0).toFixed(3)),

@@ -108,7 +108,7 @@ async function main() {
     ts_ms: quote.ts_ms,
   });
   const pipe = new MasterPipeline('PAPER');
-  const cycle = pipe.runCycle({
+  const cycle = await pipe.runCycle({
     bars,
     quote,
     account,

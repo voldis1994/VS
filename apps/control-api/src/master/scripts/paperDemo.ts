@@ -81,7 +81,7 @@ async function main() {
       ts_ms: quote.ts_ms,
     });
     account.open_positions = positions.count();
-    const cycle = pipe.runCycle({
+    const cycle = await pipe.runCycle({
       bars,
       quote,
       account,
@@ -133,7 +133,7 @@ async function main() {
       epic: 'GOLD',
       ts_ms: quote.ts_ms,
     });
-    const cycle = pipe.runCycle({
+    const cycle = await pipe.runCycle({
       bars: up,
       quote,
       account,

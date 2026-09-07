@@ -1,6 +1,6 @@
 /** Single authoritative MASTER cycle — one owner per stage. */
 import { randomUUID } from 'crypto';
-import { applyAiToDecision, localAdvisor, type AiMeta } from './ai.js';
+import { applyAiToDecision, resolveAdvisor, type AiMeta } from './ai.js';
 import { analyzeBars } from './analysis.js';
 import { decide, setupKey } from './decision.js';
 import { ExpectancyStore } from './expectancy.js';
@@ -47,7 +47,7 @@ export class MasterPipeline {
   constructor(public mode: Mode = 'PAPER') {}
 
   /** MARKET → VALIDATION → ANALYSIS → DECISION → AI → RISK */
-  runCycle(input: PipelineInput): PipelineResult {
+  async runCycle(input: PipelineInput): Promise<PipelineResult> {
     const market = validateMarket(input.bars, input.quote, {
       stale_ms: input.cfg.stale_quote_ms,
       max_spread_abs: Math.max(input.cfg.max_spread_abs * 4, 5),
@@ -107,22 +107,11 @@ export class MasterPipeline {
       this.expectancy.lookup(k)
     );
 
-    // AI layer (Reader contract). Local advisor is deterministic — not a fake LLM score.
     const mode = input.cfg.ai_mode;
-    let aiMeta: AiMeta;
-    if (mode === 'off') {
-      const applied = applyAiToDecision(decision, 'off', null);
-      aiMeta = applied.meta;
-    } else if (mode === 'required' && !(process.env.MASTER_OPENAI_API_KEY || '').trim()) {
-      const applied = applyAiToDecision(decision, 'required', null, 'missing_key');
-      decision = applied.decision;
-      aiMeta = applied.meta;
-    } else {
-      const advisor = localAdvisor(analysis);
-      const applied = applyAiToDecision(decision, mode, advisor, null);
-      decision = applied.decision;
-      aiMeta = applied.meta;
-    }
+    const resolved = await resolveAdvisor(analysis, mode);
+    const applied = applyAiToDecision(decision, mode, resolved.advisor, resolved.error_type);
+    decision = applied.decision;
+    const aiMeta: AiMeta = applied.meta;
 
     const risk = evaluateRisk(
       decision,
@@ -205,3 +194,89 @@ export const GOLD_SPEC: InstrumentSpec = {
   min_volume: 0.01,
   max_volume: 5,
 };
+
+/** Resolve InstrumentSpec by epic — GOLD defaults; catalog-backed for other symbols. */
+export function specForEpic(epic: string): InstrumentSpec {
+  const raw = String(epic || 'GOLD').trim();
+  const key = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!key || key === 'GOLD' || key === 'XAUUSD' || key === 'XAU') {
+    return { ...GOLD_SPEC, epic: raw || 'GOLD' };
+  }
+  if (key === 'XAGUSD' || key === 'SILVER' || key === 'XAG') {
+    return {
+      epic: raw,
+      display_name: 'Silver',
+      point: 0.001,
+      value_per_point_per_lot: 5,
+      volume_step: 0.01,
+      min_volume: 0.01,
+      max_volume: 50,
+    };
+  }
+  if (key.includes('BTC')) {
+    return {
+      epic: raw,
+      display_name: 'Bitcoin',
+      point: 0.1,
+      value_per_point_per_lot: 1,
+      volume_step: 0.01,
+      min_volume: 0.01,
+      max_volume: 5,
+    };
+  }
+  if (key.includes('ETH')) {
+    return {
+      epic: raw,
+      display_name: 'Ethereum',
+      point: 0.01,
+      value_per_point_per_lot: 1,
+      volume_step: 0.01,
+      min_volume: 0.01,
+      max_volume: 20,
+    };
+  }
+  if (/US500|SPX|SP500/.test(key)) {
+    return {
+      epic: raw,
+      display_name: 'US500',
+      point: 0.1,
+      value_per_point_per_lot: 1,
+      volume_step: 0.1,
+      min_volume: 0.1,
+      max_volume: 50,
+    };
+  }
+  if (/EURUSD|GBPUSD|USDJPY|AUDUSD|USDCAD|USDCHF|NZDUSD|EURGBP|EURJPY|GBPJPY/.test(key)) {
+    const jpy = key.includes('JPY');
+    return {
+      epic: raw,
+      display_name: raw,
+      point: jpy ? 0.001 : 0.00001,
+      value_per_point_per_lot: jpy ? 1 : 10_000,
+      volume_step: 0.01,
+      min_volume: 0.01,
+      max_volume: 100,
+    };
+  }
+  if (/USOIL|UKOIL|OIL|WTI|BRENT/.test(key)) {
+    return {
+      epic: raw,
+      display_name: 'Oil',
+      point: 0.01,
+      value_per_point_per_lot: 10,
+      volume_step: 0.01,
+      min_volume: 0.01,
+      max_volume: 50,
+    };
+  }
+  // Conservative default — tick size from catalog when known
+  return {
+    epic: raw,
+    display_name: raw,
+    point: 0.01,
+    value_per_point_per_lot: 1,
+    volume_step: 0.01,
+    min_volume: 0.01,
+    max_volume: 20,
+  };
+}

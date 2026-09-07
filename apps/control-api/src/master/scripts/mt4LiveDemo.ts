@@ -75,7 +75,7 @@ async function main() {
   // Ensure market files visible to broker
   sim.setQuote(q.bid, q.ask);
 
-  const cycle = masterRuntime.pipeline.runCycle({
+  const cycle = await masterRuntime.pipeline.runCycle({
     bars,
     quote: q,
     account: masterRuntime.account,

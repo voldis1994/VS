@@ -37,6 +37,7 @@ export async function resolveBrokerFromEnv(): Promise<EnvBrokerResult> {
     (process.env.MASTER_MODE || '').toUpperCase() === 'LIVE';
 
   if (wantLive && capitalEnvPresent()) {
+    const connectionId = Number(process.env.MASTER_CAPITAL_CONNECTION_ID || 900001);
     const broker = createCapitalBroker({
       environment: (process.env.CAPITAL_ENVIRONMENT || 'demo').trim(),
       apiKey: (process.env.CAPITAL_API_KEY || '').trim(),
@@ -47,6 +48,7 @@ export async function resolveBrokerFromEnv(): Promise<EnvBrokerResult> {
         ''
       ).trim(),
       capitalAccountId: process.env.CAPITAL_ACCOUNT_ID || null,
+      connectionId: Number.isFinite(connectionId) && connectionId > 0 ? connectionId : 900001,
     });
     const opened = await broker.connect();
     if (!opened.ok) {
@@ -58,7 +60,7 @@ export async function resolveBrokerFromEnv(): Promise<EnvBrokerResult> {
         detail: `capital_connect_failed:${opened.detail}→paper_fallback`,
       };
     }
-    return { broker, mode: 'LIVE', detail: 'capital_env_connected' };
+    return { broker, mode: 'LIVE', detail: `capital_env_connected:conn=${connectionId}` };
   }
 
   const paper = new PaperBroker();

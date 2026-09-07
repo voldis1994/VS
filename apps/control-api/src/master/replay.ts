@@ -4,6 +4,7 @@ import {
   DEFAULT_MASTER_CONFIG,
   GOLD_SPEC,
   MasterPipeline,
+  specForEpic,
 } from './pipeline.js';
 import type {
   AccountSnapshot,
@@ -29,7 +30,7 @@ export type ReplayOptions = {
  * At index i the pipeline only sees bars[0..i] (inclusive).
  * Fills use next bar open ± slippage (latency_bars).
  */
-export function replayMaster(opts: ReplayOptions): {
+export async function replayMaster(opts: ReplayOptions): {
   opportunities: OpportunityRecord[];
   performance: ReturnType<typeof computePerformance>;
   monte_carlo: ReturnType<typeof monteCarlo>;
@@ -155,7 +156,7 @@ export function replayMaster(opts: ReplayOptions): {
       continue;
     }
 
-    const cycle = pipe.runCycle({
+    const cycle = await pipe.runCycle({
       bars: visible,
       quote,
       account: {
@@ -167,7 +168,7 @@ export function replayMaster(opts: ReplayOptions): {
         peak_equity: peak,
         consecutive_losses,
       },
-      instrument: GOLD_SPEC,
+      instrument: specForEpic(GOLD_SPEC.epic),
       cfg,
       last_loss_ms,
       now_ms: quote.ts_ms,
@@ -254,7 +255,7 @@ export function replayMaster(opts: ReplayOptions): {
 }
 
 /** Rolling walk-forward: train windows only used for expectancy; test is out-of-sample. */
-export function walkForward(opts: {
+export async function walkForward(opts: {
   bars: Bar[];
   train: number;
   test: number;
@@ -277,10 +278,10 @@ export function walkForward(opts: {
   for (let start = 0; start + train + test <= opts.bars.length; start += step) {
     const trainBars = opts.bars.slice(start, start + train);
     const testBars = opts.bars.slice(start + train - 25, start + train + test);
-    const is = replayMaster({ bars: trainBars, cfg: { ...opts.cfg, require_positive_expectancy: false } });
+    const is = await replayMaster({ bars: trainBars, cfg: { ...opts.cfg, require_positive_expectancy: false } });
     // Seed OOS pipeline expectancy from IS trades only
     const oosPipeCfg = { ...opts.cfg, require_positive_expectancy: false };
-    const oos = replayMaster({ bars: testBars, cfg: oosPipeCfg });
+    const oos = await replayMaster({ bars: testBars, cfg: oosPipeCfg });
     // Re-run OOS with expectancy required using IS store manually
     const seeded = new MasterPipeline('BACKTEST');
     for (const t of is.opportunities) {
@@ -302,17 +303,17 @@ export function walkForward(opts: {
 }
 
 /** AI on/off A/B — same bars, empirical delta only (no promised edge). */
-export function abCompareAi(opts: ReplayOptions): {
+export async function abCompareAi(opts: ReplayOptions): {
   off: ReturnType<typeof replayMaster>;
   on: ReturnType<typeof replayMaster>;
   delta_expectancy: number;
   note: string;
 } {
-  const off = replayMaster({
+  const off = await replayMaster({
     ...opts,
     cfg: { ...opts.cfg, ai_mode: 'off' },
   });
-  const on = replayMaster({
+  const on = await replayMaster({
     ...opts,
     cfg: { ...opts.cfg, ai_mode: 'advisory' },
   });

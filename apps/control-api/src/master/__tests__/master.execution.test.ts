@@ -93,7 +93,7 @@ describe('VS MASTER paper broker + execution', () => {
       epic: 'GOLD',
       ts_ms: quote.ts_ms,
     });
-    const cycle = pipe.runCycle({
+    const cycle = await pipe.runCycle({
       bars,
       quote,
       account,
@@ -166,7 +166,7 @@ describe('VS MASTER position manager exits', () => {
     });
     const pm = new PositionManager();
     const bars = barsTrendUp();
-    const cycle = pipe.runCycle({
+    const cycle = await pipe.runCycle({
       bars,
       quote: quoteFrom(bars.at(-1)!),
       account,
@@ -232,7 +232,7 @@ describe('VS MASTER persist + recovery', () => {
   it('saves and reloads open positions + intents', async () => {
     const bars = barsTrendUp();
     const pipe = new MasterPipeline('PAPER');
-    const cycle = pipe.runCycle({
+    const cycle = await pipe.runCycle({
       bars,
       quote: quoteFrom(bars.at(-1)!),
       account,
@@ -387,7 +387,7 @@ describe('VS MASTER full paper tick loop', () => {
         side: 'BUY',
         size: 1,
       });
-      const cycle = masterRuntime.pipeline.runCycle({
+      const cycle = await masterRuntime.pipeline.runCycle({
         bars,
         quote: q,
         account: masterRuntime.account,

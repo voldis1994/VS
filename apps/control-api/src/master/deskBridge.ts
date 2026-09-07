@@ -66,27 +66,38 @@ export async function ensureMasterCapitalBroker(creds: {
   password: string;
   connectionId?: number;
   capitalAccountId?: string | null;
-}) {
+}): Promise<{ ok: boolean; mode: string; detail: string }> {
   if (process.env.MASTER_LIVE_ENABLED === 'true') {
     if (masterRuntime.broker?.name !== 'CAPITAL') {
-      const broker = createCapitalBroker(creds);
+      const broker = createCapitalBroker({
+        ...creds,
+        connectionId: creds.connectionId && creds.connectionId > 0 ? creds.connectionId : 900002,
+      });
       const opened = await broker.connect();
       if (!opened.ok) {
-        // Fall back to paper rather than silently trading live-failed
         masterRuntime.setMode('PAPER');
         masterRuntime.ensurePaperBroker();
-      } else {
-        masterRuntime.attachBroker(broker);
-        masterRuntime.setMode('LIVE');
+        masterRuntime.broker_detail = `capital_connect_failed:${opened.detail}`;
+        if (!masterRuntime.running) await masterRuntime.start();
+        return { ok: false, mode: 'PAPER', detail: masterRuntime.broker_detail };
       }
+      masterRuntime.attachBroker(broker);
+      masterRuntime.setMode('LIVE');
+      masterRuntime.broker_detail = 'capital_desk_connected';
     }
   } else {
     masterRuntime.setMode('PAPER');
     if (!masterRuntime.broker || masterRuntime.broker.name !== 'PAPER') {
       masterRuntime.ensurePaperBroker();
     }
+    masterRuntime.broker_detail = masterRuntime.broker_detail || 'paper_desk';
   }
   if (!masterRuntime.running) await masterRuntime.start();
+  return {
+    ok: true,
+    mode: masterRuntime.cfg.mode,
+    detail: masterRuntime.broker_detail || masterRuntime.broker?.name || 'ok',
+  };
 }
 
 /**

@@ -48,7 +48,7 @@ describe('VS MASTER file persist restart', () => {
 
     const pipe = new MasterPipeline('PAPER');
     const bars = barsTrendUp();
-    const cycle = pipe.runCycle({
+    const cycle = await pipe.runCycle({
       bars,
       quote: quoteFrom(bars.at(-1)!),
       account: {

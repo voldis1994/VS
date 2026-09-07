@@ -1,5 +1,4 @@
 /** MASTER runtime — full PAPER/LIVE cycle owner + dashboard facade. */
-import { analyzeBars } from './analysis.js';
 import type { MasterBroker } from './broker.js';
 import { PaperBroker } from './broker.js';
 import { decide } from './decision.js';
@@ -18,6 +17,7 @@ import {
   DEFAULT_MASTER_CONFIG,
   GOLD_SPEC,
   MasterPipeline,
+  specForEpic,
 } from './pipeline.js';
 import { computePerformance, monteCarlo } from './performance.js';
 import { PositionManager } from './positionManager.js';
@@ -35,6 +35,9 @@ export type MasterStatus = {
   mode: Mode;
   running: boolean;
   kill_switch: boolean;
+  epic: string;
+  ai_mode: MasterConfig['ai_mode'];
+  owns_pipeline: boolean;
   broker: string | null;
   broker_detail: string | null;
   last_decision: ReturnType<typeof decide> | null;
@@ -123,29 +126,33 @@ class MasterRuntime {
     return this.paperBroker;
   }
 
-  /** Pure evaluation for dashboard — does not send orders. */
-  evaluate(bars: Bar[], quote: Quote) {
+  /** Pure evaluation for dashboard — does not send orders (same cycle as tick, no execute). */
+  async evaluate(bars: Bar[], quote: Quote) {
     this.last_bars = bars;
     this.last_quote = quote;
-    const analysis = analyzeBars(bars, quote.spread);
-    const decision = decide(analysis, quote, this.cfg, (k) =>
-      this.pipeline.expectancy.lookup(k)
-    );
-    const risk = evaluateRisk(decision, this.account, GOLD_SPEC, quote, this.cfg, {
+    const instrument = specForEpic(this.epic);
+    const cycle = await this.pipeline.runCycle({
+      bars,
+      quote,
+      account: {
+        ...this.account,
+        open_positions: this.positions.count(),
+      },
+      instrument,
+      cfg: this.cfg,
       symbol_open: this.positions.countForEpic(this.epic),
       last_loss_ms: this.last_loss_ms,
     });
-    this.last_decision = decision;
-    this.last_risk = risk;
-    const opp = this.pipeline.journal.recordOpportunity({
-      mode: this.cfg.mode,
-      epic: this.epic,
-      decision,
-      risk,
-      executed: false,
-    });
-    void persistOpportunity(opp);
-    return { decision, risk, analysis, opportunity: opp };
+    this.last_decision = cycle.decision;
+    this.last_risk = cycle.risk;
+    void persistOpportunity(cycle.opportunity);
+    return {
+      decision: cycle.decision,
+      risk: cycle.risk,
+      analysis: cycle.decision.analysis,
+      opportunity: cycle.opportunity,
+      ai: cycle.ai,
+    };
   }
 
   /**
@@ -179,13 +186,14 @@ class MasterRuntime {
     }
 
     this.account.open_positions = this.positions.count();
+    const instrument = specForEpic(this.epic);
 
     // 1) Manage exits first (position manager owns open risk)
     const managed = await this.positions.manageTick({
       broker,
       pipeline: this.pipeline,
       quote,
-      instrument_point_value: GOLD_SPEC.value_per_point_per_lot,
+      instrument_point_value: instrument.value_per_point_per_lot,
     });
     const exit_reasons = managed.closed.map((c) => c.reason);
     if (exit_reasons.length) this.last_exit_reason = exit_reasons.at(-1)!;
@@ -204,14 +212,14 @@ class MasterRuntime {
     }
 
     // 2) Decision + risk
-    const cycle = this.pipeline.runCycle({
+    const cycle = await this.pipeline.runCycle({
       bars,
       quote,
       account: {
         ...this.account,
         open_positions: this.positions.count(),
       },
-      instrument: { ...GOLD_SPEC, epic: this.epic },
+      instrument,
       cfg: this.cfg,
       symbol_open: this.positions.countForEpic(this.epic),
       last_loss_ms: this.last_loss_ms,
@@ -430,6 +438,9 @@ class MasterRuntime {
       mode: this.cfg.mode,
       running: this.running,
       kill_switch: this.cfg.kill_switch,
+      epic: this.epic,
+      ai_mode: this.cfg.ai_mode,
+      owns_pipeline: process.env.MASTER_OWNS_PIPELINE === 'true',
       broker: this.broker?.name ?? null,
       broker_detail: this.broker_detail,
       last_decision: this.last_decision,

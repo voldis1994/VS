@@ -112,7 +112,7 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     await broker.connect();
     const pipe = new MasterPipeline('LIVE');
     const bars = barsTrendUp();
-    const cycle = pipe.runCycle({
+    const cycle = await pipe.runCycle({
       bars,
       quote: quoteFrom(bars.at(-1)!),
       account,
@@ -152,7 +152,7 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     const pipe = new MasterPipeline('LIVE');
     const bars = barsTrendUp();
     const quote = quoteFrom(bars.at(-1)!);
-    const cycle = pipe.runCycle({
+    const cycle = await pipe.runCycle({
       bars,
       quote,
       account: { ...account, equity: acct!.equity },
@@ -237,7 +237,7 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     // Force path if filters blocked — still proves LIVE gate + capital place
     if (!opened) {
       const q = quoteFrom(bars.at(-1)!);
-      const cycle = masterRuntime.pipeline.runCycle({
+      const cycle = await masterRuntime.pipeline.runCycle({
         bars,
         quote: q,
         account: masterRuntime.account,

@@ -8,6 +8,7 @@ import {
   DEFAULT_MASTER_CONFIG,
   GOLD_SPEC,
   MasterPipeline,
+  specForEpic,
 } from '../pipeline.js';
 import { evaluateRisk, sizeFromEquity } from '../risk.js';
 import { replayMaster, walkForward } from '../replay.js';
@@ -52,7 +53,7 @@ const account: AccountSnapshot = {
 };
 
 describe('VS MASTER analysis', () => {
-  it('classifies uptrend and builds dual candidates independently', () => {
+  it('classifies uptrend and builds dual candidates independently', async () => {
     const bars = barsTrendUp();
     const a = analyzeBars(bars, 0.4);
     expect(a.trend_dir).toBe('UP');
@@ -68,7 +69,7 @@ describe('VS MASTER analysis', () => {
     expect(bc.components.momentum).not.toBe(sc.components.momentum);
   });
 
-  it('does not call heuristic score a probability', () => {
+  it('does not call heuristic score a probability', async () => {
     const bars = barsTrendUp();
     const a = analyzeBars(bars, 0.4);
     const d = decide(a, quoteFrom(bars.at(-1)!), DEFAULT_MASTER_CONFIG, () => null);
@@ -80,14 +81,14 @@ describe('VS MASTER analysis', () => {
 });
 
 describe('VS MASTER decision + risk', () => {
-  it('BUY/SELL symmetry — dump prefers SELL', () => {
+  it('BUY/SELL symmetry — dump prefers SELL', async () => {
     const bars = barsTrendDown();
     const a = analyzeBars(bars, 0.4);
     const d = decide(a, quoteFrom(bars.at(-1)!), DEFAULT_MASTER_CONFIG, () => null);
     expect(d.sell.score).toBeGreaterThan(d.buy.score);
   });
 
-  it('risk engine blocks kill switch and sizes from equity', () => {
+  it('risk engine blocks kill switch and sizes from equity', async () => {
     const bars = barsTrendUp();
     const a = analyzeBars(bars, 0.4);
     const cfg = { ...DEFAULT_MASTER_CONFIG, kill_switch: true };
@@ -117,7 +118,7 @@ describe('VS MASTER decision + risk', () => {
     expect(sized.volume).toBeGreaterThan(0);
   });
 
-  it('stale quote and max daily loss block', () => {
+  it('stale quote and max daily loss block', async () => {
     const bars = barsTrendUp();
     const a = analyzeBars(bars, 0.4);
     const d = decide(a, quoteFrom(bars.at(-1)!), DEFAULT_MASTER_CONFIG, () => null);
@@ -144,7 +145,7 @@ describe('VS MASTER decision + risk', () => {
     expect(daily.reasons).toContain('max_daily_loss');
   });
 
-  it('intent idempotency — claim once', () => {
+  it('intent idempotency — claim once', async () => {
     const pipe = new MasterPipeline('PAPER');
     const id = pipe.newIntentId('dec-1');
     expect(pipe.claimIntent(id)).toBe(true);
@@ -153,7 +154,7 @@ describe('VS MASTER decision + risk', () => {
 });
 
 describe('VS MASTER expectancy + journal', () => {
-  it('computes EV from samples only — never invents', () => {
+  it('computes EV from samples only — never invents', async () => {
     const store = new ExpectancyStore();
     expect(store.lookup('BUY|TREND|UP|LONDON')).toBeNull();
     const win: TradeOutcome = {
@@ -183,9 +184,9 @@ describe('VS MASTER expectancy + journal', () => {
 });
 
 describe('VS MASTER replay / walk-forward / monte carlo', () => {
-  it('replay uses causal bars only and returns performance', () => {
+  it('replay uses causal bars only and returns performance', async () => {
     const bars = [...barsTrendUp(80), ...barsTrendDown(80)];
-    const result = replayMaster({
+    const result = await replayMaster({
       bars,
       warmup: 30,
       spread: 0.5,
@@ -197,21 +198,21 @@ describe('VS MASTER replay / walk-forward / monte carlo', () => {
     expect(result.equity_curve.length).toBeGreaterThan(10);
   });
 
-  it('walk-forward returns in-sample and out-of-sample windows', () => {
+  it('walk-forward returns in-sample and out-of-sample windows', async () => {
     const bars = [...barsTrendUp(60), ...barsTrendDown(60), ...barsTrendUp(60)];
-    const wf = walkForward({ bars, train: 70, test: 40, step: 50 });
+    const wf = await walkForward({ bars, train: 70, test: 40, step: 50 });
     expect(wf.windows.length).toBeGreaterThan(0);
     expect(wf.windows[0]!.in_sample).toBeDefined();
     expect(wf.windows[0]!.out_of_sample).toBeDefined();
   });
 
-  it('monte carlo uses empirical pnls only', () => {
+  it('monte carlo uses empirical pnls only', async () => {
     const mc = monteCarlo([10, -5, 8, -3, 12, -7, 4], 200);
     expect(mc.drawdown_p95).toBeGreaterThanOrEqual(0);
     expect(mc.equity_p50).toBeDefined();
   });
 
-  it('performance aggregates MAE/MFE/streaks', () => {
+  it('performance aggregates MAE/MFE/streaks', async () => {
     const outcomes: TradeOutcome[] = [
       {
         position_id: 'a',
@@ -278,10 +279,10 @@ describe('VS MASTER replay / walk-forward / monte carlo', () => {
 });
 
 describe('VS MASTER pipeline end-to-end', () => {
-  it('runs MARKET→VALIDATION→DECISION→RISK in one cycle', () => {
+  it('runs MARKET→VALIDATION→DECISION→RISK in one cycle', async () => {
     const pipe = new MasterPipeline('PAPER');
     const bars = barsTrendUp();
-    const result = pipe.runCycle({
+    const result = await pipe.runCycle({
       bars,
       quote: quoteFrom(bars.at(-1)!),
       account,
@@ -296,9 +297,9 @@ describe('VS MASTER pipeline end-to-end', () => {
     expect(['BUY', 'SELL', 'WAIT', 'BLOCK']).toContain(result.decision.kind);
   });
 
-  it('blocks on invalid market data', () => {
+  it('blocks on invalid market data', async () => {
     const pipe = new MasterPipeline('PAPER');
-    const result = pipe.runCycle({
+    const result = await pipe.runCycle({
       bars: [{ open: 1, high: 1, low: 1, close: 1 }],
       quote: { bid: 1, ask: 1.01, mid: 1.005, spread: 0.01, ts_ms: Date.now() },
       account,
@@ -312,10 +313,10 @@ describe('VS MASTER pipeline end-to-end', () => {
 });
 
 describe('VS MASTER AI layer', () => {
-  it('required mode blocks without API key', () => {
+  it('required mode blocks without API key', async () => {
     const pipe = new MasterPipeline('PAPER');
     const bars = barsTrendUp();
-    const result = pipe.runCycle({
+    const result = await pipe.runCycle({
       bars,
       quote: quoteFrom(bars.at(-1)!),
       account,
@@ -327,17 +328,24 @@ describe('VS MASTER AI layer', () => {
     expect(result.decision.block_reason).toMatch(/ai_required_missing/);
   });
 
-  it('advisory local advisor can with-trend allow', () => {
+  it('advisory local advisor can with-trend allow', async () => {
     const pipe = new MasterPipeline('PAPER');
     const bars = barsTrendUp();
-    const result = pipe.runCycle({
+    const result = await pipe.runCycle({
       bars,
       quote: quoteFrom(bars.at(-1)!),
       account,
       instrument: GOLD_SPEC,
       cfg: { ...DEFAULT_MASTER_CONFIG, ai_mode: 'advisory', min_score: 0.3 },
     });
-    expect(result.ai.ai_available).toBe(true);
+    expect(result.ai.ai_available).toBe(false);
+    expect(result.ai.ai_fallback_used).toBe(true);
     expect(['BUY', 'SELL', 'WAIT', 'BLOCK']).toContain(result.decision.kind);
+  });
+
+  it('specForEpic resolves gold aliases and FX', () => {
+    expect(specForEpic('XAUUSD').value_per_point_per_lot).toBe(GOLD_SPEC.value_per_point_per_lot);
+    expect(specForEpic('EURUSD').min_volume).toBe(0.01);
+    expect(specForEpic('BTCUSD').display_name).toMatch(/Bitcoin/i);
   });
 });

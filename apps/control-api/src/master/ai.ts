@@ -30,7 +30,7 @@ export type AiMeta = {
 
 /**
  * Deterministic local advisor — vetoes UNSTABLE / low data quality.
- * This is NOT an LLM; used when API key missing or mode=advisory fallback.
+ * This is NOT an LLM; used when API key missing or OpenAI unavailable.
  */
 export function localAdvisor(analysis: AnalysisSnapshot): AiDecision {
   if (analysis.regime === 'UNSTABLE' || analysis.data_quality < 0.35) {
@@ -77,6 +77,77 @@ export function localAdvisor(analysis: AnalysisSnapshot): AiDecision {
   };
 }
 
+function parseOpenAiDecision(raw: string): AiDecision | null {
+  try {
+    const cleaned = raw.replace(/```json|```/g, '').trim();
+    const obj = JSON.parse(cleaned) as Record<string, unknown>;
+    const biasRaw = String(obj.bias || obj.stance || 'NEUTRAL').toUpperCase();
+    const bias =
+      biasRaw === 'BULLISH' || biasRaw === 'BEARISH' || biasRaw === 'AVOID'
+        ? biasRaw
+        : 'NEUTRAL';
+    const confidence = Math.max(0, Math.min(1, Number(obj.confidence ?? 0.5)));
+    return {
+      bias,
+      confidence: Number.isFinite(confidence) ? confidence : 0.5,
+      allow_buy: obj.allow_buy !== false && bias !== 'AVOID' && bias !== 'BEARISH',
+      allow_sell: obj.allow_sell !== false && bias !== 'AVOID' && bias !== 'BULLISH',
+      allow_close: obj.allow_close !== false,
+      reason: String(obj.reason || 'openai'),
+      source: 'openai',
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Real OpenAI HTTP — VS_READER_ENGINE_V2 contract. Failures return null. */
+export async function callOpenAiAdvisor(
+  analysis: AnalysisSnapshot,
+  apiKey: string
+): Promise<{ advisor: AiDecision | null; error_type: string | null }> {
+  const prompt = [
+    'Return ONLY JSON with keys: bias (BULLISH|BEARISH|NEUTRAL|AVOID),',
+    'confidence (0..1 heuristic), allow_buy, allow_sell, allow_close, reason.',
+    'Do not invent calibrated probabilities or guaranteed profits.',
+    `regime=${analysis.regime} trend=${analysis.trend_dir} mom=${analysis.momentum_dir}`,
+    `dq=${analysis.data_quality} atr=${analysis.atr} state=${analysis.market_state}`,
+  ].join('\n');
+  try {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: process.env.MASTER_OPENAI_MODEL || 'gpt-4o-mini',
+        temperature: 0,
+        messages: [
+          { role: 'system', content: 'Return strictly valid JSON only.' },
+          { role: 'user', content: prompt },
+        ],
+      }),
+    });
+    if (!res.ok) {
+      return { advisor: null, error_type: `openai_http_${res.status}` };
+    }
+    const json = (await res.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const content = json.choices?.[0]?.message?.content;
+    if (!content) return { advisor: null, error_type: 'openai_empty' };
+    const advisor = parseOpenAiDecision(content);
+    if (!advisor) return { advisor: null, error_type: 'openai_parse' };
+    return { advisor, error_type: null };
+  } catch (e) {
+    return {
+      advisor: null,
+      error_type: e instanceof Error ? e.message.slice(0, 80) : 'openai_error',
+    };
+  }
+}
+
 export function applyAiToDecision(
   decision: MasterDecision,
   mode: AiMode,
@@ -120,7 +191,6 @@ export function applyAiToDecision(
         },
       };
     }
-    // advisory fallback — keep system decision
     return {
       decision,
       meta: {
@@ -159,13 +229,15 @@ export function applyAiToDecision(
     };
   }
 
+  const usedOpenAi = advisor.source === 'openai';
   return {
     decision: next,
     meta: {
       ai_mode: mode,
-      ai_available: true,
-      ai_error_type: null,
-      ai_fallback_used: advisor.source === 'local' && !process.env.MASTER_OPENAI_API_KEY,
+      // Only true when a real OpenAI decision was applied — never for local fallback
+      ai_available: usedOpenAi,
+      ai_error_type: usedOpenAi ? null : errorType,
+      ai_fallback_used: !usedOpenAi,
       ai_reason: advisor.reason,
       system_decision_before_ai: before,
       decision_after_ai: next.kind,
@@ -179,25 +251,25 @@ export async function resolveAdvisor(
   mode: AiMode
 ): Promise<{ advisor: AiDecision | null; error_type: string | null }> {
   if (mode === 'off') return { advisor: null, error_type: null };
-  const key = (process.env.MASTER_OPENAI_API_KEY || '').trim();
+  const key = (
+    process.env.MASTER_OPENAI_API_KEY ||
+    process.env.OPENAI_API_KEY ||
+    ''
+  ).trim();
   if (!key) {
     if (mode === 'required') return { advisor: null, error_type: 'missing_key' };
     return { advisor: localAdvisor(analysis), error_type: 'missing_key' };
   }
-  // OpenAI path reserved — do not call without explicit enable (cost/latency).
   if (process.env.MASTER_OPENAI_ENABLED !== 'true') {
-    return { advisor: localAdvisor(analysis), error_type: null };
+    return { advisor: localAdvisor(analysis), error_type: 'openai_disabled_use_local' };
   }
-  // Fail closed to local rather than inventing network success in CI
-  try {
-    // Placeholder: real HTTP call can be enabled later; local remains authoritative until then.
-    return { advisor: localAdvisor(analysis), error_type: null };
-  } catch {
-    return {
-      advisor: mode === 'required' ? null : localAdvisor(analysis),
-      error_type: 'api_error',
-    };
-  }
+  const remote = await callOpenAiAdvisor(analysis, key);
+  if (remote.advisor) return remote;
+  if (mode === 'required') return { advisor: null, error_type: remote.error_type };
+  return {
+    advisor: localAdvisor(analysis),
+    error_type: remote.error_type || 'openai_fallback_local',
+  };
 }
 
 export type AbCompareResult = {
