@@ -86,11 +86,11 @@ export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
   },
 };
 
-/** Entry body — require a real 10s move (was too soft → chop every 2–3 min). */
+/** Entry body — real 10s move, not so strict that desk never arms. */
 export const PLAYBOOK_ENTRY_BODY: Record<TradePlaybook, number> = {
-  LONG: 0.00028, // ~1.2pt Gold @ 4400
-  SCALP: 0.00024, // ~1.05pt
-  FADE: 0.0002,
+  LONG: 0.0002, // ~0.9pt Gold @ 4400
+  SCALP: 0.00018, // ~0.8pt
+  FADE: 0.00015,
 };
 
 /**

@@ -409,7 +409,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
     note:
-      'With-move · never thesis-kill green · PeakProtect ≥3.5pt · SL cap ≈1.5pt · cooldown stops flip chop.',
+      'With-move entries open on 10s · BO keeps green · SL≈1.5pt · PeakProtect≥3.5pt · short cooldown only after hard loss.',
   };
 }
 
@@ -1203,10 +1203,10 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: 'Broker flat on this epic — trade closed externally · FLAT · cooldown before re-entry',
+          detail: 'Broker flat on this epic — trade closed externally · FLAT',
         });
-        s.closed_at_ms = Date.now();
-        s.last_hard_exit_ms = Date.now();
+        // Don't stamp hard-exit here — that permanently starved re-entry (75s+120s locks)
+        if (!s.closed_at_ms) s.closed_at_ms = Date.now();
         clearTradeState(s);
       }
     } else {
@@ -1285,9 +1285,9 @@ async function robotCycle(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // After close: stop 16:33→16:34 flip chop
+    // Brief pause after close — only HardInv gets a longer lock (was 45–75s starving every move)
     const hardAgo = s.last_hard_exit_ms > 0 ? Date.now() - s.last_hard_exit_ms : Infinity;
-    const POST_CLOSE_COOLDOWN_MS = hardAgo < 300_000 ? 75_000 : 45_000;
+    const POST_CLOSE_COOLDOWN_MS = hardAgo < 120_000 ? 20_000 : 8_000;
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
     if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
       pushTick(s, {
@@ -1296,7 +1296,7 @@ async function robotCycle(s: Internal) {
         ask: quote.ask,
         mid: quote.mid,
         detail: `cooldown ${Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000)}s after close${
-          hardAgo < 300_000 ? ' · hard-exit lock' : ''
+          hardAgo < 120_000 ? ' · hard-exit lock' : ''
         }`,
       });
       return;
@@ -1401,10 +1401,11 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // Opposite-side lock — and same-side re-entry after a hard loss needs a real pause
-    const hardRecent = s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < 300_000;
-    const SIDE_LOCK_MS = hardRecent ? 120_000 : 90_000;
+    // Side-lock only after HardInvalidation — normal with-trend flips must open
+    const hardRecent = s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < 120_000;
+    const SIDE_LOCK_MS = hardRecent ? 25_000 : 0;
     if (
+      SIDE_LOCK_MS > 0 &&
       s.last_entry_side &&
       s.last_entry_side !== entry.direction &&
       Date.now() - s.last_entry_side_ms < SIDE_LOCK_MS
@@ -1416,7 +1417,7 @@ async function robotCycle(s: Internal) {
         mid: quote.mid,
         detail: `${ohlcLine} · side-lock ${s.last_entry_side} ${Math.ceil(
           (SIDE_LOCK_MS - (Date.now() - s.last_entry_side_ms)) / 1000
-        )}s · no flip to ${entry.direction}${hardRecent ? ' · after hard exit' : ''}`,
+        )}s · after hard exit`,
       });
       return;
     }
