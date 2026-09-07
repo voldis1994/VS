@@ -47,4 +47,13 @@ export class ExpectancyStore {
       .map((k) => this.lookup(k))
       .filter((x): x is ExpectancySnapshot => !!x);
   }
+
+  /** Restart hydration — rebuild from durable outcomes. */
+  hydrate(rows: Array<{ setup_key: string; outcome: TradeOutcome }>) {
+    this.bySetup.clear();
+    for (const r of rows) {
+      if (!r.setup_key || !r.outcome) continue;
+      this.record(r.setup_key, r.outcome);
+    }
+  }
 }

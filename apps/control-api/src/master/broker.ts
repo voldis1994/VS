@@ -495,7 +495,22 @@ export class Mt4FileBroker implements MasterBroker {
     const path = join(folder, `cmd_${id}.json`);
     writeFileSync(tmp, JSON.stringify(payload) + '\n', 'utf8');
     renameSync(tmp, path);
-    return { ok: true, detail: 'mt4_close_written' };
+
+    const ackPath = join(this.bridgeRoot, 'acks', `ack_${id}.json`);
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      if (!existsSync(ackPath)) continue;
+      try {
+        const ack = JSON.parse(readFileSync(ackPath, 'utf8'));
+        if (!ack.ok) {
+          return { ok: false, detail: `mt4_close_reject:${ack.detail || 'nack'}` };
+        }
+        return { ok: true, detail: `mt4_closed ticket=${ack.ticket || position_id}` };
+      } catch {
+        /* keep polling */
+      }
+    }
+    return { ok: true, detail: 'mt4_close_written_ack_timeout' };
   }
 
   /** Check- protocol MODIFY — update SL/TP on an open ticket. */

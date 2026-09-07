@@ -46,4 +46,10 @@ export class MasterJournal {
   blocked(): OpportunityRecord[] {
     return this.opportunities.filter((o) => o.decision.kind === 'BLOCK' || !o.executed);
   }
+
+  /** Restart hydration — replace in-memory journal from durable store. */
+  hydrate(records: OpportunityRecord[]) {
+    this.opportunities.length = 0;
+    for (const r of records) this.opportunities.push(r);
+  }
 }

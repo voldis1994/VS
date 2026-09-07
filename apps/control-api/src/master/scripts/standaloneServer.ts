@@ -50,7 +50,14 @@ async function main() {
   };
   masterRuntime.attachBroker(resolved.broker);
   masterRuntime.broker_detail = resolved.detail;
-  await masterRuntime.start({ broker: resolved.broker });
+
+  const useLive =
+    resolved.mode === 'PAPER' &&
+    resolved.broker.paper &&
+    (process.env.MASTER_LIVE_FEED || 'public') !== 'synthetic' &&
+    (process.env.MASTER_LIVE_FEED || 'public') !== 'off';
+
+  await masterRuntime.start({ broker: resolved.broker, live_feed: useLive });
 
   const app = Fastify({ logger: false });
   await registerMasterRoutes(app);
@@ -62,62 +69,45 @@ async function main() {
     broker: resolved.broker.name,
     detail: resolved.detail,
     mode: resolved.mode,
+    live_feed: useLive,
   }));
 
-  // PAPER: prefer live public market feed; fall back to synthetic if offline
-  if (resolved.mode === 'PAPER' && resolved.broker.paper) {
-    const useLive = (process.env.MASTER_LIVE_FEED || 'public') !== 'synthetic';
-    if (useLive) {
-      const { fetchLiveMarket, LiveBarBuilder } = await import('../liveFeed.js');
-      const builder = new LiveBarBuilder(10_000, 80);
-      let seeded = false;
-      setInterval(() => {
-        void (async () => {
-          const snap = await fetchLiveMarket(process.env.MASTER_EPIC || 'GOLD');
-          if (!snap.ok || !snap.quote) return;
-          if (!seeded) {
-            builder.seedAround(snap.quote.mid, 40);
-            seeded = true;
-            masterRuntime.broker_detail = `live_feed:${snap.detail}`;
-          }
-          const { bars } = builder.pushTick(snap.quote.mid);
-          await masterRuntime.tick(bars, snap.quote);
-        })();
-      }, 2500);
-    } else {
-      let bars = synthBars(40, 4400, 0.7);
-      let tickN = 0;
-      setInterval(() => {
-        tickN += 1;
-        const last = bars.at(-1)!;
-        const drift = tickN < 25 ? 0.55 : -2.2;
-        const o = last.close;
-        const c = o + drift;
-        bars = [
-          ...bars.slice(-50),
-          {
-            open: o,
-            high: Math.max(o, c) + 0.35,
-            low: Math.min(o, c) - 0.25,
-            close: c,
-            ts_ms: Date.now(),
-          },
-        ];
-        const mid = c;
-        void masterRuntime.tick(bars, {
-          bid: mid - 0.2,
-          ask: mid + 0.2,
-          mid,
-          spread: 0.4,
+  // Synthetic-only PAPER loop when live feed disabled
+  if (resolved.mode === 'PAPER' && resolved.broker.paper && !useLive) {
+    let bars = synthBars(40, 4400, 0.7);
+    let tickN = 0;
+    setInterval(() => {
+      tickN += 1;
+      const last = bars.at(-1)!;
+      const drift = tickN < 25 ? 0.55 : -2.2;
+      const o = last.close;
+      const c = o + drift;
+      bars = [
+        ...bars.slice(-50),
+        {
+          open: o,
+          high: Math.max(o, c) + 0.35,
+          low: Math.min(o, c) - 0.25,
+          close: c,
           ts_ms: Date.now(),
-        });
-      }, 1500);
-    }
+        },
+      ];
+      const mid = c;
+      void masterRuntime.tick(bars, {
+        bid: mid - 0.2,
+        ask: mid + 0.2,
+        mid,
+        spread: 0.4,
+        ts_ms: Date.now(),
+      });
+    }, 1500);
   }
 
   await app.listen({ port: PORT, host: HOST });
   console.log(`VS MASTER standalone on http://${HOST}:${PORT}/master`);
-  console.log(`broker=${resolved.broker.name} mode=${resolved.mode} ${resolved.detail}`);
+  console.log(
+    `broker=${resolved.broker.name} mode=${resolved.mode} live_feed=${useLive} ${resolved.detail}`
+  );
   console.log(`state dir: ${stateDir}`);
 }
 

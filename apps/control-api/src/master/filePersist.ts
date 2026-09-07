@@ -1,6 +1,6 @@
 /**
  * File-backed persist for MASTER_STANDALONE (no Postgres).
- * Same recovery contract as DB tables — open positions + seen intents + outcomes.
+ * Same recovery contract as DB tables — open positions + seen intents + journal.
  */
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
@@ -21,7 +21,6 @@ export type FilePersistState = {
 
 export class FilePersist implements PersistClient {
   private mem = new MemoryPersist();
-  private dirty = false;
 
   constructor(private readonly root: string) {
     mkdirSync(root, { recursive: true });
@@ -37,11 +36,6 @@ export class FilePersist implements PersistClient {
     if (!existsSync(path)) return;
     try {
       const raw = JSON.parse(readFileSync(path, 'utf8')) as FilePersistState;
-      this.mem.positions = (raw.positions || []).map((p) => ({
-        ...p,
-        payload: { decision: (p as any).decision },
-      })) as any;
-      // Normalize for loadOpenPositions SELECT mapping
       this.mem.positions = (raw.positions || []).map((p) => ({
         position_id: p.position_id,
         opportunity_id: p.opportunity_id,
@@ -59,21 +53,76 @@ export class FilePersist implements PersistClient {
         payload: { decision: p.decision },
       }));
       this.mem.intents = new Set(raw.intents || []);
-      this.mem.opportunities = (raw.opportunities || []).map((o) => ({ id: o.id, params: [] }));
+      this.mem.opportunities = (raw.opportunities || []).map((o) => ({
+        id: o.id,
+        created_at: o.ts,
+        mode: o.mode,
+        epic: o.epic,
+        executed: o.executed,
+        payload: {
+          decision: o.decision,
+          risk: o.risk,
+          execution: o.execution ?? null,
+          outcome: o.outcome,
+        },
+      }));
       this.mem.outcomes = (raw.outcomes || []).map((o) => ({
         id: o.opportunity_id,
         opportunity_id: o.opportunity_id,
-        params: [],
+        side: o.outcome.side,
+        entry_price: o.outcome.entry,
+        exit_price: o.outcome.exit,
+        volume: o.outcome.volume,
+        pnl: o.outcome.pnl,
+        fees: o.outcome.fees,
+        slippage: o.outcome.slippage,
+        mae: o.outcome.mae,
+        mfe: o.outcome.mfe,
+        r_multiple: o.outcome.r_multiple,
+        hold_ms: o.outcome.hold_ms,
+        exit_reason: o.outcome.exit_reason,
+        setup_key: o.setup_key ?? null,
+        created_at: new Date().toISOString(),
       }));
     } catch {
       /* start clean */
     }
   }
 
-  flush(extra?: Partial<FilePersistState>) {
+  flush() {
     const state: FilePersistState = {
-      opportunities: extra?.opportunities || [],
-      outcomes: extra?.outcomes || [],
+      opportunities: this.mem.opportunities
+        .filter((o) => o.payload?.decision && o.payload?.risk)
+        .map((o) => ({
+          id: String(o.id),
+          ts: new Date(o.created_at).toISOString(),
+          mode: o.mode,
+          epic: o.epic,
+          decision: o.payload.decision,
+          risk: o.payload.risk,
+          executed: !!o.executed,
+          execution: o.payload.execution,
+          outcome: o.payload.outcome,
+        })),
+      outcomes: this.mem.outcomes.map((o) => ({
+        opportunity_id: String(o.opportunity_id),
+        setup_key: o.setup_key ?? null,
+        outcome: {
+          position_id: String(o.opportunity_id),
+          side: o.side,
+          entry: Number(o.entry_price),
+          exit: Number(o.exit_price),
+          volume: Number(o.volume),
+          pnl: Number(o.pnl),
+          fees: Number(o.fees) || 0,
+          slippage: Number(o.slippage) || 0,
+          mae: Number(o.mae) || 0,
+          mfe: Number(o.mfe) || 0,
+          r_multiple: Number(o.r_multiple) || 0,
+          hold_ms: Number(o.hold_ms) || 0,
+          exit_reason: String(o.exit_reason || ''),
+        },
+      })),
       positions: (this.mem.positions || []).map((p: any) => ({
         position_id: p.position_id,
         opportunity_id: p.opportunity_id,
@@ -93,13 +142,10 @@ export class FilePersist implements PersistClient {
       intents: [...this.mem.intents],
     };
     writeFileSync(this.statePath(), JSON.stringify(state, null, 2));
-    this.dirty = false;
   }
 
   async query(sql: string, params: unknown[] = []) {
     const result = await this.mem.query(sql, params);
-    this.dirty = true;
-    // Persist after mutating writes
     if (/INSERT|UPDATE|DELETE/i.test(sql)) {
       this.flush();
     }

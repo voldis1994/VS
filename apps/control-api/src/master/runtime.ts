@@ -5,6 +5,7 @@ import { PaperBroker } from './broker.js';
 import { decide } from './decision.js';
 import { executeDecision } from './execution.js';
 import {
+  loadJournalHistory,
   loadOpenPositions,
   loadSeenIntents,
   persistOpportunity,
@@ -95,6 +96,7 @@ class MasterRuntime {
   private reject_until_ms = 0;
   broker_detail: string | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private liveFeedTimer: ReturnType<typeof setInterval> | null = null;
   private seenIntentSnapshot: string[] = [];
   epic = GOLD_SPEC.epic;
 
@@ -313,8 +315,13 @@ class MasterRuntime {
     };
   }
 
-  /** Restart recovery — reload open positions + seen intents from DB, reconcile broker. */
-  async recover(): Promise<{ positions: number; intents: number }> {
+  /** Restart recovery — reload positions, intents, journal, expectancy; reconcile broker. */
+  async recover(): Promise<{
+    positions: number;
+    intents: number;
+    opportunities: number;
+    outcomes: number;
+  }> {
     const loaded = await loadOpenPositions();
     const valid = loaded.filter((p) => p.decision && p.position_id);
     this.positions.fromJSON(valid);
@@ -323,6 +330,29 @@ class MasterRuntime {
     for (const id of intents) this.pipeline.claimIntent(id);
     this.seenIntentSnapshot = [...intents];
 
+    const hist = await loadJournalHistory();
+    this.pipeline.journal.hydrate(hist.opportunities);
+    this.pipeline.expectancy.hydrate(
+      hist.outcomes.map((o) => ({
+        setup_key: o.setup_key || 'unknown',
+        outcome: o.outcome,
+      }))
+    );
+    // Recompute account daily/peak from recovered outcomes (best-effort)
+    let pnlSum = 0;
+    let losses = 0;
+    for (const o of hist.outcomes) {
+      pnlSum += o.outcome.pnl;
+      if (o.outcome.pnl < 0) losses += 1;
+      else losses = 0;
+    }
+    this.account.daily_pnl = pnlSum;
+    this.account.consecutive_losses = losses;
+    this.account.equity = this.account.balance + pnlSum;
+    if (this.account.equity > this.account.peak_equity) {
+      this.account.peak_equity = this.account.equity;
+    }
+
     if (this.broker) {
       const sync = await syncPositionsWithBroker(this.positions, this.broker, this.epic);
       void sync;
@@ -330,10 +360,15 @@ class MasterRuntime {
 
     this.account.open_positions = this.positions.count();
     this.recovered = true;
-    return { positions: this.positions.count(), intents: intents.length };
+    return {
+      positions: this.positions.count(),
+      intents: intents.length,
+      opportunities: hist.opportunities.length,
+      outcomes: hist.outcomes.length,
+    };
   }
 
-  async start(opts?: { interval_ms?: number; broker?: MasterBroker }) {
+  async start(opts?: { interval_ms?: number; broker?: MasterBroker; live_feed?: boolean }) {
     if (opts?.broker) this.attachBroker(opts.broker);
     else if (!this.broker) this.ensurePaperBroker();
     if (this.broker) await this.broker.connect();
@@ -346,6 +381,31 @@ class MasterRuntime {
         void this.tick(this.last_bars, this.last_quote);
       }, ms);
     }
+    const wantFeed =
+      opts?.live_feed === true || process.env.MASTER_AUTO_LIVE_FEED === 'true';
+    if (wantFeed) await this.startPublicLiveFeed();
+  }
+
+  /** Attach public internet quote loop so /api/master/start trades without a separate script. */
+  async startPublicLiveFeed(pollMs = 2500) {
+    if (this.liveFeedTimer) return;
+    const { fetchLiveMarket, LiveBarBuilder } = await import('./liveFeed.js');
+    const builder = new LiveBarBuilder(10_000, 80);
+    let seeded = false;
+    this.liveFeedTimer = setInterval(() => {
+      void (async () => {
+        if (!this.running) return;
+        const snap = await fetchLiveMarket(this.epic);
+        if (!snap.ok || !snap.quote) return;
+        if (!seeded) {
+          const seedDetail = await builder.seedFromPublic(this.epic, snap.quote.mid, 50);
+          seeded = true;
+          this.broker_detail = `${this.broker_detail || this.broker?.name || 'paper'};live_feed:${snap.detail};seed:${seedDetail}`;
+        }
+        const { bars } = builder.pushTick(snap.quote.mid);
+        await this.tick(bars, snap.quote);
+      })();
+    }, pollMs);
   }
 
   stop() {
@@ -353,6 +413,10 @@ class MasterRuntime {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
+    }
+    if (this.liveFeedTimer) {
+      clearInterval(this.liveFeedTimer);
+      this.liveFeedTimer = null;
     }
     void saveOpenPositions(this.positions.list());
   }

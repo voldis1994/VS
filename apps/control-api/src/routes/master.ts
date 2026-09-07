@@ -58,8 +58,16 @@ export async function registerMasterRoutes(app: FastifyInstance) {
     masterRuntime.broker_detail = resolved.detail;
     if (resolved.mode === 'LIVE') masterRuntime.setMode('LIVE');
     else if (masterRuntime.cfg.mode !== 'LIVE') masterRuntime.setMode('PAPER');
-    await masterRuntime.start({ broker: resolved.broker });
-    return { ok: true, broker: resolved.broker.name, detail: resolved.detail, status: masterRuntime.status() };
+    const live_feed =
+      resolved.broker.paper && (process.env.MASTER_LIVE_FEED || 'public') !== 'off';
+    await masterRuntime.start({ broker: resolved.broker, live_feed });
+    return {
+      ok: true,
+      broker: resolved.broker.name,
+      detail: resolved.detail,
+      live_feed,
+      status: masterRuntime.status(),
+    };
   });
 
   app.post('/api/master/stop', async () => {
@@ -264,11 +272,14 @@ h2{font-size:13px;color:#9fb0c0;margin:22px 0 8px;text-transform:uppercase;lette
 <div class="grid" id="cards"></div>
 <h2>Open positions</h2>
 <div class="grid" id="positions"></div>
+<h2>Journal (recent traded)</h2>
+<div class="grid" id="journal"></div>
 <h2>Activity</h2>
 <div id="log"></div>
 <script>
 const cards=document.getElementById('cards');
 const positions=document.getElementById('positions');
+const journal=document.getElementById('journal');
 const logEl=document.getElementById('log');
 let kill=false, ai='off';
 function card(k,v,cls){return '<div class="card"><div class="k">'+k+'</div><div class="v '+(cls||'')+'">'+v+'</div></div>'}
@@ -303,11 +314,17 @@ async function refresh(){
     const list=pos.positions||[];
     positions.innerHTML=list.length?list.map(p=>card(p.side+' '+p.epic, Number(p.entry).toFixed(2)+' · sz '+p.size+' · MFE '+Number(p.mfe).toFixed(2))).join('')
       :card('Open','FLAT');
+    const j=await fetch('/api/master/journal').then(r=>r.json());
+    const traded=(j.opportunities||[]).filter(o=>o.executed&&o.outcome).slice(-8).reverse();
+    journal.innerHTML=traded.length?traded.map(o=>{
+      const pn=Number(o.outcome.pnl);
+      return card(o.decision?.kind+' '+o.epic, pn.toFixed(2)+' · '+String(o.outcome.exit_reason||'').slice(0,40), pn>=0?'ok':'bad');
+    }).join(''):card('Journal','no closed trades yet');
   }catch(e){pushLog('status error '+e)}
 }
 document.getElementById('btnStart').onclick=async()=>{await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'PAPER'})});const r=await fetch('/api/master/start',{method:'POST'}).then(r=>r.json());pushLog('start '+JSON.stringify(r.ok));refresh()};
 document.getElementById('btnStop').onclick=async()=>{const r=await fetch('/api/master/stop',{method:'POST'}).then(r=>r.json());pushLog('stop');refresh()};
-document.getElementById('btnRecover').onclick=async()=>{const r=await fetch('/api/master/recover',{method:'POST'}).then(r=>r.json());pushLog('recover positions='+r.positions);refresh()};
+document.getElementById('btnRecover').onclick=async()=>{const r=await fetch('/api/master/recover',{method:'POST'}).then(r=>r.json());pushLog('recover positions='+r.positions+' journal='+r.opportunities);refresh()};
 document.getElementById('btnKill').onclick=async()=>{kill=!kill;await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kill_switch:kill})});pushLog('kill_switch='+kill);refresh()};
 document.getElementById('btnAi').onclick=async()=>{ai=ai==='off'?'advisory':'off';await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ai_mode:ai})});pushLog('ai_mode='+ai);refresh()};
 refresh();setInterval(refresh,2000);

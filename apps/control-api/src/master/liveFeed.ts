@@ -3,6 +3,7 @@
  * Enables live-data PAPER path without Capital credentials.
  */
 import {
+  epicToYahooSymbol,
   readAllPublicFeeds,
   type PublicFeedRead,
 } from '../services/publicInternetFeeds.js';
@@ -53,6 +54,80 @@ export async function fetchLiveMarket(epic = 'GOLD'): Promise<LiveMarketSnapshot
   };
 }
 
+export type YahooBarsResult = {
+  ok: boolean;
+  bars: Bar[];
+  detail: string;
+  symbol: string | null;
+};
+
+/**
+ * Fetch real Yahoo 1m OHLC for bootstrap — replaces synthetic seed when online.
+ */
+export async function fetchYahooMinuteBars(
+  epic = 'GOLD',
+  maxBars = 60
+): Promise<YahooBarsResult> {
+  const symbol = epicToYahooSymbol(epic);
+  if (!symbol) {
+    return { ok: false, bars: [], detail: 'no_yahoo_symbol', symbol: null };
+  }
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
+      symbol
+    )}?interval=1m&range=1d`;
+    const res = await fetch(url, {
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': 'VS-MASTER/1.0 (+live-bars)',
+      },
+    });
+    const json = (await res.json().catch(() => null)) as {
+      chart?: {
+        result?: Array<{
+          timestamp?: number[];
+          indicators?: { quote?: Array<{ open?: number[]; high?: number[]; low?: number[]; close?: number[] }> };
+        }>;
+      };
+    } | null;
+    const result = json?.chart?.result?.[0];
+    const ts = result?.timestamp || [];
+    const q = result?.indicators?.quote?.[0];
+    if (!res.ok || !ts.length || !q) {
+      return { ok: false, bars: [], detail: `yahoo_http_${res.status}`, symbol };
+    }
+    const bars: Bar[] = [];
+    for (let i = 0; i < ts.length; i++) {
+      const open = Number(q.open?.[i]);
+      const high = Number(q.high?.[i]);
+      const low = Number(q.low?.[i]);
+      const close = Number(q.close?.[i]);
+      if (![open, high, low, close].every(Number.isFinite)) continue;
+      bars.push({
+        open,
+        high,
+        low,
+        close,
+        ts_ms: Number(ts[i]) * 1000,
+      });
+    }
+    const sliced = bars.slice(-Math.max(10, maxBars));
+    return {
+      ok: sliced.length >= 10,
+      bars: sliced,
+      detail: `yahoo_${symbol}_${sliced.length}_bars`,
+      symbol,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      bars: [],
+      detail: e instanceof Error ? e.message : String(e),
+      symbol,
+    };
+  }
+}
+
 /** Rolling bar builder from live ticks — closes a bar every barMs. */
 export class LiveBarBuilder {
   private bars: Bar[] = [];
@@ -61,13 +136,24 @@ export class LiveBarBuilder {
   private low = 0;
   private close = 0;
   private barStart = 0;
+  seed_source: 'yahoo_ohlc' | 'synthetic_fallback' | 'none' = 'none';
 
   constructor(
     private readonly barMs = 10_000,
     private readonly maxBars = 80
   ) {}
 
-  /** Seed with synthetic history around a live mid so analysis has enough bars. */
+  /** Install real OHLC history (preferred). */
+  seedBars(bars: Bar[]) {
+    this.bars = bars.slice(-this.maxBars);
+    this.open = null;
+    this.seed_source = 'yahoo_ohlc';
+  }
+
+  /**
+   * Last-resort synthetic history when Yahoo OHLC is unavailable.
+   * Marked explicitly — not claimed as live market structure.
+   */
   seedAround(mid: number, n = 40) {
     const out: Bar[] = [];
     let px = mid - n * 0.15;
@@ -86,6 +172,18 @@ export class LiveBarBuilder {
     }
     this.bars = out;
     this.open = null;
+    this.seed_source = 'synthetic_fallback';
+  }
+
+  /** Prefer Yahoo 1m OHLC; fall back to synthetic around live mid. */
+  async seedFromPublic(epic: string, liveMid: number, n = 40): Promise<string> {
+    const hist = await fetchYahooMinuteBars(epic, n);
+    if (hist.ok && hist.bars.length >= 10) {
+      this.seedBars(hist.bars);
+      return hist.detail;
+    }
+    this.seedAround(liveMid, n);
+    return `synthetic_fallback(${hist.detail})`;
   }
 
   pushTick(mid: number, now = Date.now()): { justClosed: Bar | null; bars: Bar[] } {

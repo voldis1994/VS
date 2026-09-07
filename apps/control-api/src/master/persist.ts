@@ -191,6 +191,65 @@ export async function loadSeenIntents(): Promise<string[]> {
   }
 }
 
+export type JournalHistory = {
+  opportunities: OpportunityRecord[];
+  outcomes: Array<{ opportunity_id: string; outcome: TradeOutcome; setup_key: string | null }>;
+};
+
+/** Load durable journal for restart hydration (file or Postgres). */
+export async function loadJournalHistory(limit = 500): Promise<JournalHistory> {
+  try {
+    const { rows: oppRows } = await client.query(
+      `SELECT id, created_at, mode, epic, executed, payload
+       FROM master_opportunities ORDER BY created_at DESC LIMIT ${Math.max(1, Math.min(limit, 2000))}`
+    );
+    const opportunities: OpportunityRecord[] = [];
+    for (const r of [...oppRows].reverse()) {
+      const payload = typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload || {};
+      if (!payload.decision || !payload.risk) continue;
+      opportunities.push({
+        id: String(r.id),
+        ts: new Date(r.created_at).toISOString(),
+        mode: r.mode,
+        epic: r.epic,
+        decision: payload.decision,
+        risk: payload.risk,
+        executed: !!r.executed,
+        execution: payload.execution,
+        outcome: payload.outcome,
+      });
+    }
+
+    const { rows: outRows } = await client.query(
+      `SELECT opportunity_id, side, entry_price, exit_price, volume, pnl, fees, slippage,
+              mae, mfe, r_multiple, hold_ms, exit_reason, setup_key
+       FROM master_trade_outcomes ORDER BY created_at DESC LIMIT ${Math.max(1, Math.min(limit, 2000))}`
+    );
+    const outcomes = [...outRows].reverse().map((r) => ({
+      opportunity_id: String(r.opportunity_id),
+      setup_key: r.setup_key != null ? String(r.setup_key) : null,
+      outcome: {
+        position_id: String(r.opportunity_id),
+        side: r.side,
+        entry: Number(r.entry_price),
+        exit: Number(r.exit_price),
+        volume: Number(r.volume),
+        pnl: Number(r.pnl),
+        fees: Number(r.fees) || 0,
+        slippage: Number(r.slippage) || 0,
+        mae: Number(r.mae) || 0,
+        mfe: Number(r.mfe) || 0,
+        r_multiple: Number(r.r_multiple) || 0,
+        hold_ms: Number(r.hold_ms) || 0,
+        exit_reason: String(r.exit_reason || ''),
+      } as TradeOutcome,
+    }));
+    return { opportunities, outcomes };
+  } catch {
+    return { opportunities: [], outcomes: [] };
+  }
+}
+
 /** In-memory persist for unit tests (no Postgres). */
 export class MemoryPersist implements PersistClient {
   opportunities: any[] = [];
@@ -201,14 +260,52 @@ export class MemoryPersist implements PersistClient {
   async query(sql: string, params: unknown[] = []) {
     const s = sql.replace(/\s+/g, ' ').trim();
     if (s.startsWith('INSERT INTO master_opportunities')) {
-      this.opportunities.push({ id: params[0], params });
+      const payload = typeof params[15] === 'string' ? JSON.parse(params[15] as string) : params[15];
+      const existing = this.opportunities.findIndex((o) => o.id === params[0]);
+      const row = {
+        id: params[0],
+        created_at: params[1],
+        mode: params[2],
+        epic: params[3],
+        executed: params[14],
+        payload,
+        params,
+      };
+      if (existing >= 0) this.opportunities[existing] = { ...this.opportunities[existing], ...row };
+      else this.opportunities.push(row);
       return { rows: [] };
     }
     if (s.startsWith('INSERT INTO master_trade_outcomes')) {
-      this.outcomes.push({ id: params[0], opportunity_id: params[1], params });
+      this.outcomes.push({
+        id: params[0],
+        opportunity_id: params[1],
+        side: params[2],
+        entry_price: params[3],
+        exit_price: params[4],
+        volume: params[5],
+        pnl: params[6],
+        fees: params[7],
+        slippage: params[8],
+        mae: params[9],
+        mfe: params[10],
+        r_multiple: params[11],
+        hold_ms: params[12],
+        exit_reason: params[13],
+        setup_key: params[14],
+        created_at: new Date().toISOString(),
+        params,
+      });
       return { rows: [] };
     }
     if (s.startsWith('UPDATE master_opportunities')) {
+      const id = params[0];
+      const patch =
+        typeof params[1] === 'string' ? JSON.parse(params[1] as string) : (params[1] as object);
+      const hit = this.opportunities.find((o) => o.id === id);
+      if (hit) {
+        hit.executed = true;
+        hit.payload = { ...(hit.payload || {}), ...patch };
+      }
       return { rows: [] };
     }
     if (s.startsWith('DELETE FROM master_open_positions')) {
@@ -236,6 +333,12 @@ export class MemoryPersist implements PersistClient {
     }
     if (s.startsWith('SELECT') && s.includes('master_open_positions')) {
       return { rows: this.positions };
+    }
+    if (s.startsWith('SELECT') && s.includes('master_opportunities')) {
+      return { rows: this.opportunities };
+    }
+    if (s.startsWith('SELECT') && s.includes('master_trade_outcomes')) {
+      return { rows: this.outcomes };
     }
     if (s.startsWith('INSERT INTO master_seen_intents')) {
       this.intents.add(String(params[0]));

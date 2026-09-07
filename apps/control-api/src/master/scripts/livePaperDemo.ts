@@ -43,7 +43,7 @@ async function main() {
   }
 
   const builder = new LiveBarBuilder(3_000, 60);
-  builder.seedAround(first.quote.mid, 40);
+  const seedDetail = await builder.seedFromPublic('GOLD', first.quote.mid, 40);
 
   const ticks: Array<Record<string, unknown>> = [];
   let executed = 0;
@@ -88,6 +88,8 @@ async function main() {
           : 'PASS_LIVE_DATA_DECIDED'
         : 'FAIL',
     feed: first.detail,
+    seed: seedDetail,
+    seed_source: builder.seed_source,
     first_mid: first.quote.mid,
     contributing: first.contributing,
     executed_cycles: executed,
