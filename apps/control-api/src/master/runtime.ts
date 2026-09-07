@@ -319,6 +319,8 @@ class MasterRuntime {
       pipeline: this.pipeline,
       quote,
       instrument_point_value: instrument.value_per_point_per_lot,
+      max_hold_ms: this.cfg.max_hold_ms,
+      breakeven_progress: this.cfg.breakeven_progress,
     });
     const exit_reasons = managed.closed.map((c) => c.reason);
     if (exit_reasons.length) this.last_exit_reason = exit_reasons.at(-1)!;
@@ -551,6 +553,15 @@ class MasterRuntime {
           const seedDetail = await builder.seedFromPublic(this.epic, snap.quote.mid, 50);
           seeded = true;
           this.broker_detail = `${this.broker_detail || this.broker?.name || 'paper'};live_feed:${snap.detail};seed:${seedDetail}`;
+        } else {
+          const refreshed = await builder.refreshStructureIfStale(
+            this.epic,
+            snap.quote.mid,
+            120_000
+          );
+          if (refreshed) {
+            this.broker_detail = `${this.broker_detail || ''};${refreshed}`.slice(-400);
+          }
         }
         const { bars } = builder.pushTick(snap.quote.mid);
         if (bars.length < 5) return;

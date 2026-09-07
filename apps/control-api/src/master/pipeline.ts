@@ -182,6 +182,9 @@ export const DEFAULT_MASTER_CONFIG: MasterConfig = {
   sl_buffer_atr_mult: 0.25,
   kill_switch: false,
   cooldown_ms_after_loss: 30_000,
+  /** ~12×5m Reader-style bars — hard TIME_STOP */
+  max_hold_ms: 45 * 60_000,
+  breakeven_progress: 0.5,
   ai_mode: 'off',
 };
 

@@ -87,14 +87,22 @@ export function analyzeBars(bars: Bar[], spread = 0, nowMs = Date.now()): Analys
     if (body > 0) {
       buyBodies += body / range;
       if (body / range > 0.55) bullPat += 1;
-    } else {
+    } else if (body < 0) {
       sellBodies += -body / range;
       if (-body / range > 0.55) bearPat += 1;
     }
   }
-  const pressSum = buyBodies + sellBodies || 1;
-  const buy_pressure = buyBodies / pressSum;
-  const sell_pressure = sellBodies / pressSum;
+  // Flat / zero-body window → unknown pressure (0.5), NOT anti-edge zeros
+  let buy_pressure: number;
+  let sell_pressure: number;
+  if (buyBodies + sellBodies < 1e-12) {
+    buy_pressure = 0.5;
+    sell_pressure = 0.5;
+  } else {
+    const pressSum = buyBodies + sellBodies;
+    buy_pressure = buyBodies / pressSum;
+    sell_pressure = sellBodies / pressSum;
+  }
   const behavior_bull = clamp(bullPat / 8, 0, 1);
   const behavior_bear = clamp(bearPat / 8, 0, 1);
 

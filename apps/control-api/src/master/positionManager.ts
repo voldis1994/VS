@@ -90,15 +90,19 @@ export class PositionManager {
     return pos;
   }
 
-  /** Update MFE/MAE from mid; trail SL; decide exits; close via broker. */
+  /** Update MFE/MAE from mid; time-stop; trail/BE SL; decide exits; close via broker. */
   async manageTick(input: {
     broker: MasterBroker;
     pipeline: MasterPipeline;
     quote: Quote;
     instrument_point_value?: number;
+    max_hold_ms?: number;
+    breakeven_progress?: number;
   }): Promise<ManageTickResult> {
     const { broker, pipeline, quote } = input;
     const pv = input.instrument_point_value ?? 1;
+    const maxHold = input.max_hold_ms ?? 0;
+    const beProgress = input.breakeven_progress ?? 0.5;
     const closed: ManageTickResult['closed'] = [];
     const mid = quote.mid;
 
@@ -108,23 +112,31 @@ export class PositionManager {
       pos.mae = Math.max(pos.mae, -fav);
       const peak_retention =
         pos.mfe > 1e-9 ? Math.max(0, Math.min(1, fav / pos.mfe)) : null;
+      const heldMs = Date.now() - new Date(pos.entry_at).getTime();
 
-      const verdict = decideBestOutcomeExit(
-        {
-          open_side: pos.side,
-          entry_price: pos.entry,
-          entry_at: pos.entry_at,
-          mfe: pos.mfe,
-          mae: pos.mae,
-          peak_retention,
-          regime: pos.decision.analysis.regime,
-          playbook: mapRegimeToPlaybook(pos.regime_at_entry),
-          entry_setup: 'CONTINUATION',
-        },
-        mid
-      );
+      let verdict =
+        maxHold > 0 && heldMs >= maxHold
+          ? {
+              exit: true,
+              reason: `TIME_STOP · held ${Math.round(heldMs / 1000)}s ≥ ${Math.round(maxHold / 1000)}s`,
+            }
+          : decideBestOutcomeExit(
+              {
+                open_side: pos.side,
+                entry_price: pos.entry,
+                entry_at: pos.entry_at,
+                mfe: pos.mfe,
+                mae: pos.mae,
+                peak_retention,
+                regime: pos.decision.analysis.regime,
+                playbook: mapRegimeToPlaybook(pos.regime_at_entry),
+                entry_setup: 'CONTINUATION',
+              },
+              mid
+            );
 
       if (!verdict.exit) {
+        await this.maybeBreakevenStop(broker, pos, mid, beProgress);
         await this.maybeTrailStop(broker, pos, mid);
         continue;
       }
@@ -152,7 +164,7 @@ export class PositionManager {
         mae: pos.mae,
         mfe: pos.mfe,
         r_multiple: pnlPts / riskDist,
-        hold_ms: Date.now() - new Date(pos.entry_at).getTime(),
+        hold_ms: heldMs,
         exit_reason: verdict.reason,
       };
 
@@ -162,6 +174,40 @@ export class PositionManager {
     }
 
     return { held: this.list(), closed };
+  }
+
+  /**
+   * Reader-style breakeven: once progress toward TP clears threshold, move SL to entry.
+   * Only tightens; never loosens.
+   */
+  private async maybeBreakevenStop(
+    broker: MasterBroker,
+    pos: ManagedPosition,
+    mid: number,
+    progressNeed: number
+  ): Promise<void> {
+    if (!broker.modifyPosition || progressNeed <= 0) return;
+    if (pos.take_profit == null) return;
+    const tpDist = Math.abs(pos.take_profit - pos.entry);
+    if (tpDist < 1e-9) return;
+    const fav = favorableMove(pos.side, pos.entry, mid);
+    if (fav / tpDist < progressNeed) return;
+    const be = pos.entry;
+    const cur = pos.stop_loss;
+    const tighter =
+      cur == null
+        ? true
+        : pos.side === 'BUY'
+          ? be > cur
+          : be < cur;
+    if (!tighter) return;
+    if (pos.side === 'BUY' && be >= mid) return;
+    if (pos.side === 'SELL' && be <= mid) return;
+    const mod = await broker.modifyPosition({
+      position_id: pos.position_id,
+      stop_level: be,
+    });
+    if (mod.ok) pos.stop_loss = be;
   }
 
   /**

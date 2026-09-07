@@ -1,6 +1,9 @@
 /**
  * Live public market feed for MASTER — real internet quotes (Yahoo / Aurum / FX).
  * Enables live-data PAPER path without Capital credentials.
+ *
+ * Structure bars (Yahoo OHLC) are kept separate from 10s tick overlays so flat
+ * mid polls cannot erase real ATR / trend into neutral score starvation.
  */
 import {
   epicToYahooSymbol,
@@ -112,7 +115,9 @@ export async function fetchYahooMinuteBars(
         const high = Number(quote.high?.[i]);
         const low = Number(quote.low?.[i]);
         const close = Number(quote.close?.[i]);
-        if (![open, high, low, close].every(Number.isFinite)) continue;
+        // Yahoo pads null sessions as null → Number(null)===0; drop placeholders
+        if (![open, high, low, close].every((n) => Number.isFinite(n) && n > 0)) continue;
+        if (!(high >= low)) continue;
         bars.push({
           open,
           high,
@@ -138,26 +143,45 @@ export async function fetchYahooMinuteBars(
   return { ok: false, bars: [], detail: lastDetail, symbol };
 }
 
-/** Rolling bar builder from live ticks — closes a bar every barMs. */
+function barRange(b: Bar): number {
+  return Math.max(0, b.high - b.low);
+}
+
+/** True when closed bar has meaningful range (not a flat mid poll). */
+export function isMeaningfulBar(b: Bar, minRangeAbs = 0.05): boolean {
+  return barRange(b) >= minRangeAbs || Math.abs(b.close - b.open) >= minRangeAbs * 0.5;
+}
+
+/**
+ * Rolling bar builder from live ticks.
+ * Yahoo structure OHLC is preserved; flat 10s closes never displace it.
+ */
 export class LiveBarBuilder {
-  private bars: Bar[] = [];
+  /** Real Yahoo (or synthetic seed) structure — analysis backbone */
+  private structureBars: Bar[] = [];
+  /** Recent non-flat closed tick bars only (overlay, capped) */
+  private tickOverlay: Bar[] = [];
   private open: number | null = null;
   private high = 0;
   private low = 0;
   private close = 0;
   private barStart = 0;
   seed_source: 'yahoo_ohlc' | 'synthetic_fallback' | 'none' = 'none';
+  last_structure_refresh_ms = 0;
 
   constructor(
     private readonly barMs = 10_000,
-    private readonly maxBars = 80
+    private readonly maxBars = 80,
+    private readonly maxTickOverlay = 8
   ) {}
 
   /** Install real OHLC history (preferred). */
   seedBars(bars: Bar[]) {
-    this.bars = bars.slice(-this.maxBars);
+    this.structureBars = bars.slice(-this.maxBars);
+    this.tickOverlay = [];
     this.open = null;
     this.seed_source = 'yahoo_ohlc';
+    this.last_structure_refresh_ms = Date.now();
   }
 
   /**
@@ -180,12 +204,14 @@ export class LiveBarBuilder {
       });
       px = c;
     }
-    this.bars = out;
+    this.structureBars = out;
+    this.tickOverlay = [];
     this.open = null;
     this.seed_source = 'synthetic_fallback';
+    this.last_structure_refresh_ms = Date.now();
   }
 
-  /** Prefer Yahoo 1m OHLC; fall back to synthetic around live mid. */
+  /** Prefer Yahoo OHLC; fall back to synthetic around live mid. */
   async seedFromPublic(epic: string, liveMid: number, n = 40): Promise<string> {
     const hist = await fetchYahooMinuteBars(epic, n);
     if (hist.ok && hist.bars.length >= 10) {
@@ -196,6 +222,24 @@ export class LiveBarBuilder {
     return `synthetic_fallback(${hist.detail})`;
   }
 
+  /** Refresh Yahoo structure on an interval so live PAPER keeps real ATR/trend. */
+  async refreshStructureIfStale(
+    epic: string,
+    liveMid: number,
+    everyMs = 120_000
+  ): Promise<string | null> {
+    if (Date.now() - this.last_structure_refresh_ms < everyMs) return null;
+    const hist = await fetchYahooMinuteBars(epic, 50);
+    if (hist.ok && hist.bars.length >= 10) {
+      this.structureBars = hist.bars.slice(-this.maxBars);
+      this.seed_source = 'yahoo_ohlc';
+      this.last_structure_refresh_ms = Date.now();
+      return `refresh:${hist.detail}`;
+    }
+    this.last_structure_refresh_ms = Date.now();
+    return `refresh_failed:${hist.detail}`;
+  }
+
   pushTick(mid: number, now = Date.now()): { justClosed: Bar | null; bars: Bar[] } {
     let justClosed: Bar | null = null;
     if (this.open == null) {
@@ -204,7 +248,7 @@ export class LiveBarBuilder {
       this.low = mid;
       this.close = mid;
       this.barStart = now;
-      return { justClosed: null, bars: [...this.bars] };
+      return { justClosed: null, bars: this.getAnalysisBars() };
     }
 
     this.high = Math.max(this.high, mid);
@@ -219,7 +263,10 @@ export class LiveBarBuilder {
         close: this.close,
         ts_ms: this.barStart,
       };
-      this.bars = [...this.bars, justClosed].slice(-this.maxBars);
+      // Only keep non-flat closes — flat mid polls must not poison structure
+      if (isMeaningfulBar(justClosed)) {
+        this.tickOverlay = [...this.tickOverlay, justClosed].slice(-this.maxTickOverlay);
+      }
       this.open = mid;
       this.high = mid;
       this.low = mid;
@@ -227,18 +274,30 @@ export class LiveBarBuilder {
       this.barStart = now;
     }
 
-    // Include forming bar for decision freshness
-    const forming: Bar = {
-      open: this.open,
-      high: this.high,
-      low: this.low,
-      close: this.close,
-      ts_ms: this.barStart,
-    };
-    return { justClosed, bars: [...this.bars, forming] };
+    return { justClosed, bars: this.getAnalysisBars() };
+  }
+
+  /** Structure OHLC + meaningful tick overlay + forming bar for freshness. */
+  getAnalysisBars(): Bar[] {
+    const forming: Bar[] = [];
+    if (this.open != null) {
+      forming.push({
+        open: this.open,
+        high: this.high,
+        low: this.low,
+        close: this.close,
+        ts_ms: this.barStart,
+      });
+    }
+    const merged = [...this.structureBars, ...this.tickOverlay, ...forming];
+    return merged.slice(-this.maxBars);
   }
 
   getBars(): Bar[] {
-    return [...this.bars];
+    return this.getAnalysisBars();
+  }
+
+  structureCount() {
+    return this.structureBars.length;
   }
 }

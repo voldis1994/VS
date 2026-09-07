@@ -188,6 +188,10 @@ export type MasterConfig = {
   sl_buffer_atr_mult: number;
   kill_switch: boolean;
   cooldown_ms_after_loss: number;
+  /** Hard max hold (Reader time_stop) — close regardless of UPL */
+  max_hold_ms: number;
+  /** Progress toward TP (0..1) before moving SL to breakeven */
+  breakeven_progress: number;
   /** AI layer: off | advisory | required (Reader contract) */
   ai_mode: 'off' | 'advisory' | 'required';
 };

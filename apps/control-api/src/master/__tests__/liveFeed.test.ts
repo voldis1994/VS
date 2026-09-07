@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { LiveBarBuilder } from '../liveFeed.js';
+import { analyzeBars } from '../analysis.js';
+import { isMeaningfulBar, LiveBarBuilder } from '../liveFeed.js';
+import { PaperBroker } from '../broker.js';
+import { DEFAULT_MASTER_CONFIG, GOLD_SPEC, MasterPipeline } from '../pipeline.js';
+import { PositionManager } from '../positionManager.js';
 
 describe('VS MASTER live bar builder', () => {
   it('seeds history and closes bars on interval', () => {
     const b = new LiveBarBuilder(1000, 20);
     b.seedAround(4400, 10);
     expect(b.seed_source).toBe('synthetic_fallback');
-    expect(b.getBars().length).toBe(10);
+    expect(b.structureCount()).toBe(10);
     const t0 = 1_000_000;
     const a = b.pushTick(4401, t0);
     expect(a.justClosed).toBeNull();
@@ -22,6 +26,217 @@ describe('VS MASTER live bar builder', () => {
       { open: 1.5, high: 2.5, low: 1, close: 2, ts_ms: 2 },
     ]);
     expect(b.seed_source).toBe('yahoo_ohlc');
-    expect(b.getBars().length).toBe(2);
+    expect(b.structureCount()).toBe(2);
+  });
+
+  it('does not let flat tick closes erase Yahoo structure ATR', () => {
+    const b = new LiveBarBuilder(1000, 20);
+    const structure = Array.from({ length: 20 }, (_, i) => {
+      const o = 4400 + i * 0.8;
+      return { open: o, high: o + 1.2, low: o - 0.3, close: o + 0.7, ts_ms: i * 60_000 };
+    });
+    b.seedBars(structure);
+    const before = analyzeBars(b.getAnalysisBars(), 0.4);
+    expect(before.atr).toBeGreaterThan(0.5);
+
+    // Many flat mid polls at same price — must not wipe structure
+    let t = 2_000_000;
+    for (let i = 0; i < 30; i++) {
+      b.pushTick(4415, t);
+      t += 1001;
+    }
+    expect(b.structureCount()).toBe(20);
+    const after = analyzeBars(b.getAnalysisBars(), 0.4);
+    expect(after.atr).toBeGreaterThan(0.5);
+    expect(after.buy_pressure).toBeGreaterThan(0);
+    expect(isMeaningfulBar({ open: 1, high: 1, low: 1, close: 1 })).toBe(false);
+  });
+});
+
+describe('MASTER TIME_STOP + breakeven', () => {
+  it('force-closes when max_hold_ms exceeded', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    broker.setQuote({
+      bid: entry + 0.2,
+      ask: entry + 0.6,
+      mid: entry + 0.4,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'timestop-aaaaaaaaaaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      stop_level: entry - 2,
+      profit_level: entry + 4,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-ts',
+      intent_id: 'ts-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      entry,
+      stop_loss: entry - 2,
+      take_profit: entry + 4,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {
+          regime: 'TREND',
+          market_state: 't',
+          momentum_score: 0.5,
+          momentum_dir: 'UP',
+          trend_dir: 'UP',
+          trend_strength: 0.5,
+          structure_bias: 'BULLISH',
+          swing_high: entry + 5,
+          swing_low: entry - 5,
+          buy_pressure: 0.6,
+          sell_pressure: 0.4,
+          behavior_bull: 0.5,
+          behavior_bear: 0.5,
+          impact_score: 0.5,
+          context_quality: 0.8,
+          volatility: 0.001,
+          atr: 1,
+          data_quality: 0.9,
+          session: 'LONDON',
+        },
+        expectancy: null,
+      },
+    });
+    // Backdate entry
+    const pos = pm.get(placed.position_id!)!;
+    pos.entry_at = new Date(Date.now() - 60_000).toISOString();
+
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: entry + 0.2,
+        ask: entry + 0.6,
+        mid: entry + 0.4,
+        spread: 0.4,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      max_hold_ms: 30_000,
+    });
+    expect(managed.closed.length).toBe(1);
+    expect(managed.closed[0]!.reason).toMatch(/TIME_STOP/);
+  });
+
+  it('moves SL to breakeven once TP progress clears threshold', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    const tp = entry + 1.0; // tight TP so 0.6 fav = 60% progress without clearing trail MFE floor
+    broker.setQuote({
+      bid: entry + 0.55,
+      ask: entry + 0.65,
+      mid: entry + 0.6,
+      spread: 0.1,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'breakeven-bbbbbbbbbbbbbbbb',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      stop_level: entry - 2,
+      profit_level: tp,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-be',
+      intent_id: 'be-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      entry,
+      stop_loss: entry - 2,
+      take_profit: tp,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {
+          regime: 'TREND',
+          market_state: 't',
+          momentum_score: 0.5,
+          momentum_dir: 'UP',
+          trend_dir: 'UP',
+          trend_strength: 0.5,
+          structure_bias: 'BULLISH',
+          swing_high: entry + 5,
+          swing_low: entry - 5,
+          buy_pressure: 0.6,
+          sell_pressure: 0.4,
+          behavior_bull: 0.5,
+          behavior_bear: 0.5,
+          impact_score: 0.5,
+          context_quality: 0.8,
+          volatility: 0.001,
+          atr: 1,
+          data_quality: 0.9,
+          session: 'LONDON',
+        },
+        expectancy: null,
+      },
+    });
+
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: entry + 0.55,
+        ask: entry + 0.65,
+        mid: entry + 0.6,
+        spread: 0.1,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: GOLD_SPEC.value_per_point_per_lot,
+      breakeven_progress: 0.5,
+      max_hold_ms: 0,
+    });
+    expect(managed.closed.length).toBe(0);
+    expect(pm.get(placed.position_id!)!.stop_loss).toBe(entry);
+    const opens = await broker.listOpenPositions('GOLD');
+    expect(opens.positions[0]!.stop_level).toBe(entry);
+  });
+});
+
+describe('analysis flat pressure', () => {
+  it('uses neutral 0.5 pressure on zero-body window', () => {
+    const flat = Array.from({ length: 20 }, (_, i) => ({
+      open: 100,
+      high: 100,
+      low: 100,
+      close: 100,
+      ts_ms: i * 1000,
+    }));
+    const a = analyzeBars(flat, 0.1);
+    expect(a.buy_pressure).toBe(0.5);
+    expect(a.sell_pressure).toBe(0.5);
   });
 });
