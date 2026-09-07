@@ -27,6 +27,8 @@ async function main() {
     mode: 'PAPER',
     min_score: 0.35,
     ai_mode: 'advisory',
+    // Demo proves live quote → decision → paper fill; session gates are covered by systemAudit.
+    block_off_hours: false,
   };
   masterRuntime.ensurePaperBroker();
   await masterRuntime.start();
