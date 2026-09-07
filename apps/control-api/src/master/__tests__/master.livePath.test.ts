@@ -70,6 +70,14 @@ function mockCapitalBroker(opts?: { rejectConfirm?: boolean; lagConfirm?: boolea
     }),
     confirm: async (_s, ref) => {
       confirmAttempts += 1;
+      if (String(ref).startsWith('cref-')) {
+        return {
+          ok: true,
+          deal_id: String(ref).slice(5),
+          fill_level: 4399.5,
+          detail: `Close confirmed ${ref}`,
+        };
+      }
       if (opts?.rejectConfirm) {
         return { ok: false, rejected: true, detail: 'Capital rejected: RISK_CHECK' };
       }
@@ -89,7 +97,11 @@ function mockCapitalBroker(opts?: { rejectConfirm?: boolean; lagConfirm?: boolea
     close: async (_s, dealId) => {
       if (!positions.has(dealId)) return { ok: false, detail: 'missing' };
       positions.delete(dealId);
-      return { ok: true, detail: `closed ${dealId}` };
+      return {
+        ok: true,
+        deal_reference: `cref-${dealId}`,
+        detail: `closed ${dealId}`,
+      };
     },
   });
 }
@@ -207,8 +219,33 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     });
     expect(managed.closed.length).toBe(1);
     expect(managed.closed[0]!.reason).toBe('STOP_HIT');
-    expect(managed.closed[0]!.outcome.exit).toBe(4400);
+    // Journal uses confirmed Capital close fill when present (not synthetic SL)
+    expect(managed.closed[0]!.outcome.exit).toBe(4399.5);
     expect(await broker.listOpenPositions()).toEqual({ ok: true, positions: [] });
+  });
+
+  it('startBrokerLiveFeed polls Capital getQuote (no silent LIVE)', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const broker = mockCapitalBroker();
+    await broker.connect();
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('LIVE');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    masterRuntime.cfg = {
+      ...DEFAULT_MASTER_CONFIG,
+      mode: 'LIVE',
+      min_score: 0.99,
+      block_off_hours: false,
+    };
+    masterRuntime.setEpic('GOLD');
+    // live_feed false → must still start broker feed for non-paper
+    await masterRuntime.start({ broker, live_feed: false });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(masterRuntime.broker_detail || '').toMatch(/broker_feed:CAPITAL/);
+    expect(masterRuntime.last_quote?.mid).toBeCloseTo(4410.2, 5);
+    masterRuntime.stop();
   });
 
   it('runtime LIVE tick opens when MASTER_LIVE_ENABLED and mocked Capital attached', async () => {

@@ -169,7 +169,13 @@ export class PositionManager {
         continue;
       }
 
-      const exit = protectiveFillPrice(pos, quote, protective?.reason ?? null);
+      const brokerFill =
+        closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
+          ? Number(closeRes.fill_price)
+          : null;
+      const exit =
+        brokerFill ??
+        protectiveFillPrice(pos, quote, protective?.reason ?? null);
       const pnlPts = pos.side === 'BUY' ? exit - pos.entry : pos.entry - exit;
       const pnl = pnlPts * pos.size * pv;
       const riskDist = Math.max(

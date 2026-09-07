@@ -209,7 +209,7 @@ describe('VS MASTER position manager exits', () => {
     });
     expect(managed.closed.length).toBe(1);
     expect(managed.closed[0]!.reason).toBe('STOP_HIT');
-    expect(managed.closed[0]!.outcome.exit).toBe(entry - 2);
+    expect(managed.closed[0]!.outcome.exit).toBe(crash.bid);
     expect(managed.held.length).toBe(0);
     expect(pipe.journal.opportunities.find((o) => o.id === cycle.opportunity.id)?.outcome).toBeTruthy();
   });

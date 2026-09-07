@@ -647,9 +647,94 @@ class MasterRuntime {
         void this.tick(this.last_bars, this.last_quote);
       }, ms);
     }
-    const wantFeed =
+    const wantPublicFeed =
       opts?.live_feed === true || process.env.MASTER_AUTO_LIVE_FEED === 'true';
-    if (wantFeed) await this.startPublicLiveFeed();
+    if (wantPublicFeed) {
+      await this.startPublicLiveFeed();
+    } else if (this.broker && !this.broker.paper) {
+      // LIVE Capital/MT4: poll broker quotes — do not leave runtime silent
+      await this.startBrokerLiveFeed();
+    }
+  }
+
+  /**
+   * LIVE broker market loop — CAPITAL/MT4 getQuote → bars → tick.
+   * Public Yahoo feed stays PAPER-only; marks/exits use broker bid/ask.
+   */
+  async startBrokerLiveFeed(pollMs = 2500) {
+    if (this.liveFeedTimer) return;
+    if (!this.broker || this.broker.paper) return;
+    const { LiveBarBuilder } = await import('./liveFeed.js');
+    const builder = new LiveBarBuilder(10_000, 80);
+    let seeded = false;
+    let busy = false;
+    const brokerName = this.broker.name;
+
+    const cycle = async () => {
+      if (!this.running || busy || !this.broker || this.broker.paper) return;
+      busy = true;
+      try {
+        let q: Awaited<ReturnType<MasterBroker['getQuote']>> = null;
+        try {
+          q = await Promise.race([
+            this.broker.getQuote(this.epic),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 8_000)),
+          ]);
+        } catch {
+          q = null;
+        }
+        if (!q) {
+          // Feed miss must not freeze exits — manage on last bars/quote
+          if (this.last_bars.length >= 5 && this.last_quote) {
+            await this.tick(this.last_bars, {
+              ...this.last_quote,
+              ts_ms: Date.now(),
+            });
+          }
+          return;
+        }
+        if (!seeded) {
+          // Structure: prefer public Yahoo when available; ticks/marks always from broker.
+          // Vitest uses synthetic seed to avoid flaky Yahoo network in unit tests.
+          let seedDetail: string;
+          if (process.env.VITEST || process.env.MASTER_BROKER_FEED_SYNTHETIC === 'true') {
+            builder.seedAround(q.mid, 50);
+            seedDetail = 'synthetic_broker_seed';
+          } else {
+            seedDetail = await builder.seedFromPublic(this.epic, q.mid, 50);
+          }
+          seeded = true;
+          this.broker_detail = `${this.broker_detail || brokerName};broker_feed:${brokerName};seed:${seedDetail}`.slice(
+            -400
+          );
+        } else if (!process.env.VITEST) {
+          const refreshed = await builder.refreshStructureIfStale(
+            this.epic,
+            q.mid,
+            120_000
+          );
+          if (refreshed) {
+            this.broker_detail = `${this.broker_detail || ''};${refreshed}`.slice(-400);
+          }
+        }
+        const { bars } = builder.pushTick(q.mid);
+        if (bars.length < 5) return;
+        await this.tick(bars, {
+          bid: q.bid,
+          ask: q.ask,
+          mid: q.mid,
+          spread: q.spread,
+          ts_ms: q.ts_ms,
+        });
+      } finally {
+        busy = false;
+      }
+    };
+
+    await cycle();
+    this.liveFeedTimer = setInterval(() => {
+      void cycle();
+    }, pollMs);
   }
 
   /** Attach public internet quote loop so /api/master/start trades without a separate script. */

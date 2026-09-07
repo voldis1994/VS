@@ -289,7 +289,8 @@ describe('MASTER paper recover + protective fills + close stub', () => {
     });
     expect(managed.closed.length).toBe(1);
     expect(managed.closed[0]!.reason).toBe('STOP_HIT');
-    expect(managed.closed[0]!.outcome.exit).toBe(4405);
+    // Paper close returns bid fill when available (real exitable mark)
+    expect(managed.closed[0]!.outcome.exit).toBe(4404);
     expect(pipe.journal.traded().length).toBe(1);
   });
 

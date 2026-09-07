@@ -84,7 +84,12 @@ export interface MasterBroker {
   getAccount(): Promise<BrokerAccount | null>;
   listOpenPositions(epic?: string): Promise<ListOpenResult>;
   placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResult>;
-  closePosition(position_id: string): Promise<{ ok: boolean; detail: string }>;
+  closePosition(position_id: string): Promise<{
+    ok: boolean;
+    detail: string;
+    fill_price?: number | null;
+    deal_reference?: string;
+  }>;
   modifyPosition?(input: {
     position_id: string;
     stop_level?: number;
@@ -177,15 +182,18 @@ export class PaperBroker implements MasterBroker {
     const p = this.positions.get(position_id);
     if (!p) return { ok: false, detail: 'not_found' };
     const q = this.lastQuote;
+    let fill_price: number | null = null;
     if (q) {
-      const exit = p.side === 'BUY' ? q.bid : q.ask;
+      fill_price = p.side === 'BUY' ? q.bid : q.ask;
       const pnl =
-        p.side === 'BUY' ? (exit - p.open_level) * p.size : (p.open_level - exit) * p.size;
+        p.side === 'BUY'
+          ? (fill_price - p.open_level) * p.size
+          : (p.open_level - fill_price) * p.size;
       this.equity += pnl;
       this.balance = this.equity;
     }
     this.positions.delete(position_id);
-    return { ok: true, detail: 'paper_closed' };
+    return { ok: true, detail: 'paper_closed', fill_price };
   }
 
   async modifyPosition(input: {
@@ -636,7 +644,46 @@ export class CapitalBroker implements MasterBroker {
   async closePosition(position_id: string) {
     if (!this.session) return { ok: false, detail: 'not_connected' };
     const res = await this.deps.close(this.session, position_id);
-    return { ok: !!res.ok, detail: res.detail || '' };
+    if (!res.ok) return { ok: false, detail: res.detail || 'close_failed' };
+
+    let fill_price: number | null = null;
+    const deal_reference = res.deal_reference || undefined;
+    if (deal_reference && this.deps.confirm) {
+      const conf = await this.waitConfirm(deal_reference);
+      if (conf.rejected) {
+        return {
+          ok: false,
+          detail: `close_confirm_rejected:${conf.detail}`,
+          deal_reference,
+          fill_price: conf.fill_level ?? null,
+        };
+      }
+      if (conf.fill_level != null && Number.isFinite(conf.fill_level)) {
+        fill_price = conf.fill_level;
+      }
+    }
+
+    // Prove flat — do not journal closed if deal still open
+    const listed = await this.listOpenPositions();
+    if (listed.ok && listed.positions.some((p) => p.position_id === position_id)) {
+      return {
+        ok: false,
+        detail: 'close_not_confirmed_still_open',
+        deal_reference,
+        fill_price,
+      };
+    }
+
+    return {
+      ok: true,
+      detail: deal_reference
+        ? `capital_closed deal=${position_id} ref=${deal_reference}${
+            fill_price != null ? ` fill=${fill_price}` : ''
+          }`
+        : `capital_closed deal=${position_id}`,
+      fill_price,
+      deal_reference,
+    };
   }
 
   async modifyPosition(input: {
@@ -918,7 +965,19 @@ export class Mt4FileBroker implements MasterBroker {
 
     const waited = await this.waitAck(id);
     if (waited.ok) {
-      return { ok: true, detail: `mt4_closed ticket=${waited.ack?.ticket || position_id}` };
+      const fill =
+        waited.ack?.fill != null
+          ? Number(waited.ack.fill)
+          : waited.ack?.price != null
+            ? Number(waited.ack.price)
+            : waited.ack?.close != null
+              ? Number(waited.ack.close)
+              : null;
+      return {
+        ok: true,
+        detail: `mt4_closed ticket=${waited.ack?.ticket || position_id}`,
+        fill_price: fill != null && Number.isFinite(fill) ? fill : null,
+      };
     }
     if (waited.ack) {
       return { ok: false, detail: waited.detail };
