@@ -41,6 +41,21 @@ type MasterStatus = {
     source: string;
     detail: string;
   };
+  quote?: {
+    mid: number;
+    bid: number;
+    ask: number;
+    spread: number;
+    age_ms: number;
+    stream_healthy: boolean | null;
+  } | null;
+  floating_pnl?: number;
+  manage?: {
+    scalp_pct_chase?: boolean;
+    soft_trail_money_arm?: number;
+    multi_tp_count?: number;
+    breakeven_activation_money?: number;
+  };
 };
 
 type ManagedPos = {
@@ -52,6 +67,13 @@ type ManagedPos = {
   mfe: number;
   mae: number;
   stop_loss: number | null;
+  take_profit?: number | null;
+  upl?: number;
+  mark?: number | null;
+  soft_trail_armed_at?: string | null;
+  native_trail_armed?: boolean;
+  partial_close_applied?: boolean;
+  multi_tp_levels?: unknown[];
 };
 
 type JournalOpp = {
@@ -121,6 +143,7 @@ export function MasterPage() {
     !!status?.health?.includes('KILL') ||
     status?.health === 'PERSIST_DEGRADED' ||
     status?.persist_ok === false;
+  const quoteStale = (status?.quote?.age_ms ?? 0) > 15_000;
 
   const cards: Array<{ k: string; v: string; bad?: boolean; ok?: boolean }> = status
     ? [
@@ -129,6 +152,35 @@ export function MasterPage() {
         { k: 'Health', v: status.health, bad: healthBad, ok: !healthBad },
         { k: 'Broker', v: status.broker || '—' },
         { k: 'Broker detail', v: status.broker_detail || '—' },
+        {
+          k: 'Quote',
+          v: status.quote
+            ? `${Number(status.quote.mid).toFixed(2)} · spr ${Number(status.quote.spread).toFixed(2)} · ${Math.round(status.quote.age_ms / 1000)}s${
+                status.quote.stream_healthy === true
+                  ? ' · WS'
+                  : status.quote.stream_healthy === false
+                    ? ' · REST'
+                    : ''
+              }`
+            : '—',
+          bad: quoteStale,
+          ok: !!status.quote && !quoteStale,
+        },
+        {
+          k: 'Float UPL',
+          v:
+            status.floating_pnl != null
+              ? Number(status.floating_pnl).toFixed(2)
+              : '—',
+          bad: (status.floating_pnl ?? 0) < 0,
+          ok: (status.floating_pnl ?? 0) > 0,
+        },
+        {
+          k: 'Manage',
+          v: status.manage?.scalp_pct_chase
+            ? `SCALP chase · soft£${status.manage.soft_trail_money_arm ?? 0} · TP×${status.manage.multi_tp_count ?? 0}`
+            : 'structure/MFE (preset off)',
+        },
         { k: 'Owns pipeline', v: status.owns_pipeline ? 'YES' : 'no' },
         {
           k: 'Entries',
@@ -263,7 +315,6 @@ export function MasterPage() {
                 method: 'POST',
                 body: JSON.stringify({ mode: 'LIVE' }),
               });
-              // Server resets mode on refuse; reinforce so UI never sticks on LIVE_ARMED
               if (r && r.ok === false) {
                 await apiFetch('/api/master/control', {
                   method: 'POST',
@@ -308,6 +359,28 @@ export function MasterPage() {
           }
         >
           Kill switch
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={busy}
+          onClick={() =>
+            void act('scalp-preset', () =>
+              apiFetch('/api/master/config/scalp-preset', { method: 'POST' })
+            )
+          }
+        >
+          Arm SCALP manage
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={busy || positions.length === 0}
+          onClick={() =>
+            void act('flatten', () => apiFetch('/api/master/flatten', { method: 'POST' }))
+          }
+        >
+          Flatten all
         </button>
         <button
           type="button"
@@ -398,17 +471,60 @@ export function MasterPage() {
         {positions.length === 0 ? (
           <div className="card">FLAT</div>
         ) : (
-          positions.map((p) => (
-            <div key={p.position_id} className="card">
-              <div style={{ fontWeight: 600 }}>
-                {p.side} {p.epic}
+          positions.map((p) => {
+            const upl = Number(p.upl ?? 0);
+            return (
+              <div key={p.position_id} className="card">
+                <div style={{ fontWeight: 600, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                  <span>
+                    {p.side} {p.epic}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={busy}
+                    style={{ fontSize: 11, padding: '2px 8px' }}
+                    onClick={() =>
+                      void act('close', () =>
+                        apiFetch(`/api/master/positions/${encodeURIComponent(p.position_id)}/close`, {
+                          method: 'POST',
+                        })
+                      )
+                    }
+                  >
+                    Close
+                  </button>
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 6 }}>
+                  {Number(p.entry).toFixed(2)}
+                  {p.mark != null ? ` → ${Number(p.mark).toFixed(2)}` : ''} · sz {p.size}
+                  {p.stop_loss != null ? ` · SL ${Number(p.stop_loss).toFixed(2)}` : ' · SL —'}
+                  {p.take_profit != null ? ` · TP ${Number(p.take_profit).toFixed(2)}` : ''}
+                </div>
+                <div
+                  style={{
+                    fontSize: 13,
+                    marginTop: 4,
+                    color: upl >= 0 ? 'var(--ok, #2a7)' : 'var(--bad, #c44)',
+                  }}
+                >
+                  UPL {upl.toFixed(2)} · MFE {Number(p.mfe).toFixed(2)} · MAE {Number(p.mae).toFixed(2)}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
+                  {[
+                    p.native_trail_armed ? 'nativeTrail' : null,
+                    p.soft_trail_armed_at ? 'softTrail' : null,
+                    p.partial_close_applied ? 'partial' : null,
+                    Array.isArray(p.multi_tp_levels) && p.multi_tp_levels.length
+                      ? `multiTP×${p.multi_tp_levels.length}`
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ') || 'manage: structure/MFE'}
+                </div>
               </div>
-              <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                {Number(p.entry).toFixed(2)} · sz {p.size} · MFE {Number(p.mfe).toFixed(2)}
-                {p.stop_loss != null ? ` · SL ${Number(p.stop_loss).toFixed(2)}` : ' · SL —'}
-              </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
 

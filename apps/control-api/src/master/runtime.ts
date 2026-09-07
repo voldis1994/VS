@@ -24,7 +24,12 @@ import {
   specForEpic,
 } from './pipeline.js';
 import { computePerformance, monteCarlo } from './performance.js';
-import { PositionManager } from './positionManager.js';
+import {
+  floatingUnrealizedPnl,
+  PositionManager,
+  protectiveMark,
+  type ManagedPosition,
+} from './positionManager.js';
 import { evaluateRisk } from './risk.js';
 import { setupKey } from './decision.js';
 import { loadRuntimeGates, saveRuntimeGates } from './runtimeGates.js';
@@ -32,12 +37,21 @@ import { loadOwnsPipelinePref, saveOwnsPipelinePref } from './ownsPipelinePref.j
 import { resolveNewsWindow, type NewsWindowState } from './newsGate.js';
 import { refreshNewsCalendar } from './newsCalendar.js';
 import { SpreadHistory } from './spreadModel.js';
+import {
+  applyManageConfigPatch,
+  loadManageConfig,
+  pickManageConfig,
+  saveManageConfig,
+  SCALP_MANAGE_PRESET,
+  type ManageConfigPatch,
+} from './manageConfig.js';
 import type {
   AccountSnapshot,
   Bar,
   MasterConfig,
   Mode,
   Quote,
+  TradeOutcome,
 } from './types.js';
 
 export type MasterStatus = {
@@ -72,6 +86,17 @@ export type MasterStatus = {
   entries_armed: boolean;
   entries_pause_reason: string | null;
   news_window: NewsWindowState;
+  /** Live quote snapshot for dashboard freshness */
+  quote: {
+    mid: number;
+    bid: number;
+    ask: number;
+    spread: number;
+    age_ms: number;
+    stream_healthy: boolean | null;
+  } | null;
+  floating_pnl: number;
+  manage: ManageConfigPatch;
 };
 
 export type TickResult = {
@@ -149,6 +174,118 @@ class MasterRuntime {
 
   setEpic(epic: string) {
     this.epic = epic;
+  }
+
+  /** Apply + persist manage/exit knobs (dashboard / operator). */
+  patchManageConfig(patch: ManageConfigPatch): MasterConfig {
+    this.cfg = applyManageConfigPatch(this.cfg, patch);
+    saveManageConfig(pickManageConfig(this.cfg));
+    return this.cfg;
+  }
+
+  /** VS-System SCALPING manage preset — chase + soft trail + money BE + multi-TP. */
+  armScalpManagePreset(): MasterConfig {
+    return this.patchManageConfig(SCALP_MANAGE_PRESET);
+  }
+
+  /** Hydrate manage knobs from disk after restart. */
+  hydrateManageConfig() {
+    const saved = loadManageConfig();
+    if (saved) this.cfg = applyManageConfigPatch(this.cfg, saved);
+  }
+
+  /** Positions enriched with live UPL for dashboard. */
+  positionsForApi(): Array<
+    ManagedPosition & { upl: number; mark: number | null }
+  > {
+    const quote = this.last_quote;
+    const pv = specForEpic(this.epic).value_per_point_per_lot;
+    return this.positions.list().map((p) => {
+      if (!quote) return { ...p, upl: 0, mark: null };
+      const mark = protectiveMark(p.side, quote);
+      const pts = p.side === 'BUY' ? mark - p.entry : p.entry - mark;
+      return { ...p, upl: pts * p.size * pv, mark };
+    });
+  }
+
+  /**
+   * Operator close — bypass soft close_requires_sl for emergency flatten.
+   * Still journals outcome against opportunity when present.
+   */
+  async closePositionManual(
+    positionId: string,
+    reason = 'OPERATOR_CLOSE'
+  ): Promise<{ ok: boolean; detail: string; pnl?: number }> {
+    const broker = this.broker;
+    if (!broker) return { ok: false, detail: 'no_broker' };
+    const pos = this.positions.get(positionId);
+    if (!pos) return { ok: false, detail: 'not_found' };
+    const quote = this.last_quote || {
+      bid: pos.entry,
+      ask: pos.entry,
+      mid: pos.entry,
+      spread: 0,
+      ts_ms: Date.now(),
+    };
+    const mark = protectiveMark(pos.side, quote);
+    const closeRes = await broker.closePosition(positionId);
+    if (!closeRes.ok) {
+      return { ok: false, detail: closeRes.detail || 'close_failed' };
+    }
+    const fill =
+      closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
+        ? Number(closeRes.fill_price)
+        : mark;
+    const instrument = specForEpic(pos.epic);
+    const pnlPts = pos.side === 'BUY' ? fill - pos.entry : pos.entry - fill;
+    const pnl = pnlPts * pos.size * instrument.value_per_point_per_lot;
+    const heldMs = Date.now() - new Date(pos.entry_at).getTime();
+    const outcome: TradeOutcome = {
+      position_id: pos.position_id,
+      side: pos.side,
+      entry: pos.entry,
+      exit: fill,
+      volume: pos.size,
+      pnl,
+      fees: 0,
+      slippage: Math.abs(fill - quote.mid),
+      mae: pos.mae,
+      mfe: pos.mfe,
+      r_multiple: 0,
+      hold_ms: heldMs,
+      exit_reason: reason,
+    };
+    this.pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome, {
+      epic: pos.epic,
+    });
+    this.positions.drop(positionId);
+    this.account.daily_pnl += pnl;
+    if (pnl < 0) {
+      this.account.consecutive_losses += 1;
+      this.last_loss_ms = Date.now();
+    } else {
+      this.account.consecutive_losses = 0;
+    }
+    this.last_exit_reason = reason;
+    this.trackPersist('outcome', persistOutcome(pos.opportunity_id, outcome, null));
+    this.trackPersist('open_positions', saveOpenPositions(this.positions.list()));
+    return { ok: true, detail: reason, pnl };
+  }
+
+  async flattenAll(reason = 'OPERATOR_FLATTEN'): Promise<{
+    ok: boolean;
+    closed: number;
+    failed: string[];
+  }> {
+    const ids = this.positions.list().map((p) => p.position_id);
+    const failed: string[] = [];
+    let closed = 0;
+    for (const id of ids) {
+      const r = await this.closePositionManual(id, reason);
+      if (r.ok) closed += 1;
+      else failed.push(`${id}:${r.detail}`);
+    }
+    return { ok: failed.length === 0, closed, failed };
   }
 
   /** Desk single-owner toggle — persists preference for restart. */
@@ -674,6 +811,7 @@ class MasterRuntime {
     opportunities: number;
     outcomes: number;
   }> {
+    this.hydrateManageConfig();
     const loaded = await loadOpenPositions();
     const valid = loaded.filter((p) => p.decision && p.position_id);
     this.positions.fromJSON(valid);
@@ -1020,6 +1158,15 @@ class MasterRuntime {
     const pnls = this.pipeline.journal
       .traded()
       .map((t) => t.outcome!.pnl);
+    const quote = this.last_quote;
+    const pv = specForEpic(this.epic).value_per_point_per_lot;
+    const floating = quote
+      ? floatingUnrealizedPnl(this.positions.list(), quote, pv)
+      : 0;
+    const streamHealthy =
+      this.broker instanceof CapitalBroker
+        ? this.broker.isMarketStreamHealthy()
+        : null;
     return {
       mode: this.cfg.mode,
       running: this.running,
@@ -1065,6 +1212,18 @@ class MasterRuntime {
       entries_armed: this.entries_armed,
       entries_pause_reason: this.entries_pause_reason,
       news_window: resolveNewsWindow(Date.now(), this.epic),
+      quote: quote
+        ? {
+            mid: quote.mid,
+            bid: quote.bid,
+            ask: quote.ask,
+            spread: quote.spread,
+            age_ms: Math.max(0, Date.now() - (quote.ts_ms || 0)),
+            stream_healthy: streamHealthy,
+          }
+        : null,
+      floating_pnl: floating,
+      manage: pickManageConfig(this.cfg),
     };
   }
 }

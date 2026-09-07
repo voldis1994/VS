@@ -38,4 +38,5 @@ export * from './scalpPctChase.js';
 export * from './candleBias.js';
 export * from './capitalLoginLock.js';
 export * from './newsCalendar.js';
+export * from './manageConfig.js';
 export * from './capitalStream.js';

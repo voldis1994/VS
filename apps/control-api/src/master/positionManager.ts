@@ -99,6 +99,11 @@ export class PositionManager {
     return this.open.get(position_id) ?? null;
   }
 
+  /** Operator / manual close — remove from local book after broker close succeeds. */
+  drop(position_id: string): boolean {
+    return this.open.delete(position_id);
+  }
+
   count() {
     return this.open.size;
   }

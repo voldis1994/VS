@@ -11,6 +11,7 @@ export async function registerMasterRoutes(app: FastifyInstance) {
   // Postgres + file mirror so recover survives DB blips (standalone uses file-only)
   ensureMasterPersist();
   masterRuntime.hydrateOwnsPipelinePref();
+  masterRuntime.hydrateManageConfig();
 
   app.get('/api/master/status', async () => masterRuntime.status());
 
@@ -19,11 +20,47 @@ export async function registerMasterRoutes(app: FastifyInstance) {
     note: 'Scores are heuristic 0..1 — not calibrated trade probabilities. LIVE requires MASTER_LIVE_ENABLED=true.',
     owns_pipeline: process.env.MASTER_OWNS_PIPELINE === 'true',
     live_enabled: process.env.MASTER_LIVE_ENABLED === 'true',
+    manage: masterRuntime.status().manage,
   }));
 
+  app.patch<{ Body: Record<string, unknown> }>('/api/master/config', async (req) => {
+    const body = (req.body || {}) as Record<string, unknown>;
+    const { applyManageConfigPatch, pickManageConfig } = await import(
+      '../master/manageConfig.js'
+    );
+    const patched = applyManageConfigPatch(masterRuntime.cfg, body as never);
+    masterRuntime.cfg = patched;
+    const manage = pickManageConfig(patched);
+    const { saveManageConfig } = await import('../master/manageConfig.js');
+    saveManageConfig(manage);
+    return { ok: true, manage, cfg: masterRuntime.cfg, status: masterRuntime.status() };
+  });
+
+  app.post('/api/master/config/scalp-preset', async () => {
+    const cfg = masterRuntime.armScalpManagePreset();
+    return { ok: true, manage: masterRuntime.status().manage, cfg, status: masterRuntime.status() };
+  });
+
   app.get('/api/master/positions', async () => ({
-    positions: masterRuntime.positions.list(),
+    positions: masterRuntime.positionsForApi(),
+    floating_pnl: masterRuntime.status().floating_pnl,
   }));
+
+  app.post<{ Params: { id: string } }>(
+    '/api/master/positions/:id/close',
+    async (req) => {
+      const r = await masterRuntime.closePositionManual(
+        req.params.id,
+        'OPERATOR_CLOSE'
+      );
+      return { ...r, status: masterRuntime.status() };
+    }
+  );
+
+  app.post('/api/master/flatten', async () => {
+    const r = await masterRuntime.flattenAll('OPERATOR_FLATTEN');
+    return { ...r, status: masterRuntime.status() };
+  });
 
   app.post<{
     Body: {
@@ -387,6 +424,8 @@ h2{font-size:13px;color:#9fb0c0;margin:22px 0 8px;text-transform:uppercase;lette
   <button id="btnStop">Stop</button>
   <button id="btnRecover">Recover</button>
   <button id="btnKill">Kill switch</button>
+  <button id="btnScalp">Arm SCALP manage</button>
+  <button id="btnFlatten">Flatten all</button>
   <button id="btnAi">AI advisory toggle</button>
   <button id="btnOwns">MASTER owns toggle</button>
   <button id="btnCapital">Capital probe</button>
@@ -419,6 +458,9 @@ async function refresh(){
       card('Health',s.health,s.health.includes('KILL')?'bad':'ok'),
       card('Broker',s.broker||'—'),
       card('Broker detail',s.broker_detail||'—'),
+      card('Quote',s.quote?(Number(s.quote.mid).toFixed(2)+' · '+Math.round((s.quote.age_ms||0)/1000)+'s'+(s.quote.stream_healthy===true?' · WS':s.quote.stream_healthy===false?' · REST':'')):'—', (s.quote&&s.quote.age_ms>15000)?'bad':'ok'),
+      card('Float UPL',s.floating_pnl!=null?Number(s.floating_pnl).toFixed(2):'—', (s.floating_pnl||0)<0?'bad':(s.floating_pnl||0)>0?'ok':''),
+      card('Manage',s.manage&&s.manage.scalp_pct_chase?'SCALP chase on':'structure/MFE'),
       card('Owns pipeline',s.owns_pipeline?'YES':'no'),
       card('Entries',s.entries_armed===false?('PAUSED'+(s.entries_pause_reason?' · '+s.entries_pause_reason:'')):'armed',s.entries_armed===false?'bad':'ok'),
       card('AI mode',s.ai_mode||'—'),
@@ -444,8 +486,16 @@ async function refresh(){
     ].join('');
     const pos=await fetch('/api/master/positions').then(r=>r.json());
     const list=pos.positions||[];
-    positions.innerHTML=list.length?list.map(p=>card(p.side+' '+p.epic, Number(p.entry).toFixed(2)+' · sz '+p.size+' · MFE '+Number(p.mfe).toFixed(2))).join('')
+    positions.innerHTML=list.length?list.map(p=>{
+      const upl=Number(p.upl||0);
+      return '<div class="card"><div class="k">'+p.side+' '+p.epic+' <button data-close="'+p.position_id+'" style="float:right;font-size:11px;padding:2px 8px">Close</button></div><div class="v">'+Number(p.entry).toFixed(2)+(p.stop_loss!=null?' · SL '+Number(p.stop_loss).toFixed(2):'')+' · UPL <span class="'+(upl>=0?'ok':'bad')+'">'+upl.toFixed(2)+'</span></div></div>';
+    }).join('')
       :card('Open','FLAT');
+    positions.querySelectorAll('[data-close]').forEach(btn=>btn.onclick=async()=>{
+      const id=btn.getAttribute('data-close');
+      const r=await fetch('/api/master/positions/'+encodeURIComponent(id)+'/close',{method:'POST'}).then(r=>r.json());
+      pushLog('close '+id+' ok='+r.ok+' '+(r.detail||''));refresh();
+    });
     const j=await fetch('/api/master/journal').then(r=>r.json());
     const traded=(j.opportunities||[]).filter(o=>o.executed&&o.outcome).slice(-8).reverse();
     journal.innerHTML=traded.length?traded.map(o=>{
@@ -459,6 +509,8 @@ document.getElementById('btnLive').onclick=async()=>{await fetch('/api/master/co
 document.getElementById('btnStop').onclick=async()=>{const r=await fetch('/api/master/stop',{method:'POST'}).then(r=>r.json());pushLog('stop');refresh()};
 document.getElementById('btnRecover').onclick=async()=>{const r=await fetch('/api/master/recover',{method:'POST'}).then(r=>r.json());pushLog('recover positions='+r.positions+' journal='+r.opportunities);refresh()};
 document.getElementById('btnKill').onclick=async()=>{kill=!kill;await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kill_switch:kill})});pushLog('kill_switch='+kill);refresh()};
+document.getElementById('btnScalp').onclick=async()=>{const r=await fetch('/api/master/config/scalp-preset',{method:'POST'}).then(r=>r.json());pushLog('scalp-preset ok='+r.ok);refresh()};
+document.getElementById('btnFlatten').onclick=async()=>{const r=await fetch('/api/master/flatten',{method:'POST'}).then(r=>r.json());pushLog('flatten closed='+r.closed+' failed='+(r.failed||[]).length);refresh()};
 document.getElementById('btnAi').onclick=async()=>{ai=ai==='off'?'advisory':'off';await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ai_mode:ai})});pushLog('ai_mode='+ai);refresh()};
 document.getElementById('btnOwns').onclick=async()=>{const s=await fetch('/api/master/status').then(r=>r.json());const on=!s.owns_pipeline;await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({owns_pipeline:on})});pushLog('owns_pipeline='+on);refresh()};
 document.getElementById('btnCapital').onclick=async()=>{const r=await fetch('/api/master/broker/capital/probe',{method:'POST'}).then(r=>r.json());pushLog('capital probe '+JSON.stringify(r).slice(0,200));refresh()};
