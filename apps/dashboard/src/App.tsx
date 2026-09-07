@@ -16,6 +16,7 @@ import { TradingPage } from './pages/TradingPage';
 import { OrbitReaderPage } from './pages/OrbitReaderPage';
 import { RobotDeskPage } from './pages/RobotDeskPage';
 import { ClientPanelPage } from './pages/ClientPanelPage';
+import { MasterPage } from './pages/MasterPage';
 import { useWebSocket } from './hooks/useWebSocket';
 
 function Desk({ children }: { children: ReactNode }) {
@@ -31,6 +32,7 @@ export default function App() {
       <Route path="/robot" element={<RobotDeskPage />} />
       <Route path="/client" element={<ClientPanelPage />} />
       <Route path="/" element={<Desk><OverviewPage /></Desk>} />
+      <Route path="/master" element={<Desk><MasterPage /></Desk>} />
       <Route path="/orbit" element={<Desk><OrbitReaderPage /></Desk>} />
       <Route path="/market" element={<Desk><MarketReaderPage /></Desk>} />
       <Route path="/trading" element={<Desk><TradingPage /></Desk>} />

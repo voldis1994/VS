@@ -69,6 +69,7 @@ export class FilePersist implements PersistClient {
       this.mem.outcomes = (raw.outcomes || []).map((o) => ({
         id: o.opportunity_id,
         opportunity_id: o.opportunity_id,
+        position_id: o.outcome.position_id || o.opportunity_id,
         side: o.outcome.side,
         entry_price: o.outcome.entry,
         exit_price: o.outcome.exit,
@@ -108,7 +109,7 @@ export class FilePersist implements PersistClient {
         opportunity_id: String(o.opportunity_id),
         setup_key: o.setup_key ?? null,
         outcome: {
-          position_id: String(o.opportunity_id),
+          position_id: String(o.position_id || o.opportunity_id),
           side: o.side,
           entry: Number(o.entry_price),
           exit: Number(o.exit_price),

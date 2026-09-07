@@ -172,12 +172,11 @@ export async function registerMasterRoutes(app: FastifyInstance) {
         process.env.CAPITAL_PASSWORD ||
         ''
       ).trim(),
-      capitalAccountId: process.env.CAPITAL_ACCOUNT_ID || null,
     });
     return {
       ok: opened.ok,
       status: opened.ok ? 'CONNECTED' : 'CONNECT_FAILED',
-      detail: opened.detail,
+      detail: opened.ok ? 'session_ok' : opened.result.detail,
       environment: process.env.CAPITAL_ENVIRONMENT || 'demo',
     };
   });
@@ -345,6 +344,8 @@ async function refresh(){
       card('Expectancy',Number(s.performance?.expectancy||0).toFixed(3)),
       card('Max DD',Number(s.performance?.max_drawdown||0).toFixed(2)),
       card('Recovered',s.recovered?'YES':'—'),
+      card('Persist',s.persist_ok===false?'DEGRADED':'OK',s.persist_ok===false?'bad':'ok'),
+      card('Persist err',s.last_persist_error||'—',s.last_persist_error?'bad':''),
     ].join('');
     const pos=await fetch('/api/master/positions').then(r=>r.json());
     const list=pos.positions||[];

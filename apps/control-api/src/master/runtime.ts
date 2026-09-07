@@ -58,6 +58,8 @@ export type MasterStatus = {
   blocked: number;
   health: string;
   recovered: boolean;
+  persist_ok: boolean;
+  last_persist_error: string | null;
 };
 
 export type TickResult = {
@@ -93,6 +95,8 @@ class MasterRuntime {
   last_exit_reason: string | null = null;
   last_loss_ms = 0;
   recovered = false;
+  persist_ok = true;
+  last_persist_error: string | null = null;
   /** VS-System- style: block new entries while an order is in-flight without a position yet. */
   private inflight_until_ms = 0;
   /** VS-System-: cool down after broker reject (e.g. RISK_CHECK). */
@@ -114,6 +118,22 @@ class MasterRuntime {
 
   setEpic(epic: string) {
     this.epic = epic;
+  }
+
+  /** Track persist Promise<boolean> results for dashboard health. */
+  private trackPersist(label: string, p: Promise<boolean>) {
+    void p.then((ok) => {
+      if (ok) {
+        this.persist_ok = true;
+        this.last_persist_error = null;
+      } else {
+        this.persist_ok = false;
+        this.last_persist_error = `${label}:failed`;
+      }
+    }).catch((err) => {
+      this.persist_ok = false;
+      this.last_persist_error = `${label}:${err instanceof Error ? err.message : String(err)}`;
+    });
   }
 
   /** Attach broker — PAPER uses in-memory PaperBroker by default. */
@@ -145,7 +165,7 @@ class MasterRuntime {
     });
     this.last_decision = cycle.decision;
     this.last_risk = cycle.risk;
-    void persistOpportunity(cycle.opportunity);
+    this.trackPersist('opportunity', persistOpportunity(cycle.opportunity));
     return {
       decision: cycle.decision,
       risk: cycle.risk,
@@ -208,7 +228,10 @@ class MasterRuntime {
       const sk = c.position.decision.side
         ? setupKey(c.position.decision.analysis, c.position.decision.side)
         : null;
-      void persistOutcome(c.position.opportunity_id, c.outcome, sk);
+      this.trackPersist(
+        'outcome',
+        persistOutcome(c.position.opportunity_id, c.outcome, sk)
+      );
     }
 
     // 2) Decision + risk
@@ -226,7 +249,7 @@ class MasterRuntime {
     });
     this.last_decision = cycle.decision;
     this.last_risk = cycle.risk;
-    void persistOpportunity(cycle.opportunity);
+    this.trackPersist('opportunity', persistOpportunity(cycle.opportunity));
 
     // 3) Execution gate
     const allow_live =
@@ -257,11 +280,14 @@ class MasterRuntime {
       });
       execution_detail = execution.detail;
       this.last_execution_detail = execution.detail;
-      void persistOpportunity({
-        ...cycle.opportunity,
-        executed: execution.accepted,
-        execution,
-      });
+      this.trackPersist(
+        'opportunity_exec',
+        persistOpportunity({
+          ...cycle.opportunity,
+          executed: execution.accepted,
+          execution,
+        })
+      );
 
       if (execution.accepted && place?.position_id) {
         executed = true;
@@ -309,9 +335,9 @@ class MasterRuntime {
     }
 
     this.account.open_positions = this.positions.count();
-    void saveOpenPositions(this.positions.list());
+    this.trackPersist('open_positions', saveOpenPositions(this.positions.list()));
     if (this.seenIntentSnapshot.length) {
-      void saveSeenIntents(this.seenIntentSnapshot);
+      this.trackPersist('seen_intents', saveSeenIntents(this.seenIntentSnapshot));
     }
 
     return {
@@ -427,7 +453,7 @@ class MasterRuntime {
       clearInterval(this.liveFeedTimer);
       this.liveFeedTimer = null;
     }
-    void saveOpenPositions(this.positions.list());
+    this.trackPersist('open_positions', saveOpenPositions(this.positions.list()));
   }
 
   status(): MasterStatus {
@@ -465,14 +491,18 @@ class MasterRuntime {
       blocked: this.pipeline.journal.blocked().length,
       health: this.cfg.kill_switch
         ? 'KILL_SWITCH'
-        : this.cfg.mode === 'LIVE'
-          ? this.running
-            ? 'LIVE_RUNNING'
-            : 'LIVE_ARMED'
-          : this.running
-            ? 'PAPER_RUNNING'
-            : 'OK',
+        : !this.persist_ok
+          ? 'PERSIST_DEGRADED'
+          : this.cfg.mode === 'LIVE'
+            ? this.running
+              ? 'LIVE_RUNNING'
+              : 'LIVE_ARMED'
+            : this.running
+              ? 'PAPER_RUNNING'
+              : 'OK',
       recovered: this.recovered,
+      persist_ok: this.persist_ok,
+      last_persist_error: this.last_persist_error,
     };
   }
 }

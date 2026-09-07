@@ -67,8 +67,9 @@ export async function persistOutcome(
     await client.query(
       `INSERT INTO master_trade_outcomes (
          id, opportunity_id, side, entry_price, exit_price, volume, pnl,
-         fees, slippage, mae, mfe, r_multiple, hold_ms, exit_reason, setup_key
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+         fees, slippage, mae, mfe, r_multiple, hold_ms, exit_reason, setup_key,
+         position_id
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
       [
         randomUUID(),
         opportunityId,
@@ -85,6 +86,7 @@ export async function persistOutcome(
         outcome.hold_ms,
         outcome.exit_reason,
         setupKey ?? null,
+        outcome.position_id,
       ]
     );
     await client.query(
@@ -221,7 +223,7 @@ export async function loadJournalHistory(limit = 500): Promise<JournalHistory> {
     }
 
     const { rows: outRows } = await client.query(
-      `SELECT opportunity_id, side, entry_price, exit_price, volume, pnl, fees, slippage,
+      `SELECT opportunity_id, position_id, side, entry_price, exit_price, volume, pnl, fees, slippage,
               mae, mfe, r_multiple, hold_ms, exit_reason, setup_key
        FROM master_trade_outcomes ORDER BY created_at DESC LIMIT ${Math.max(1, Math.min(limit, 2000))}`
     );
@@ -229,7 +231,7 @@ export async function loadJournalHistory(limit = 500): Promise<JournalHistory> {
       opportunity_id: String(r.opportunity_id),
       setup_key: r.setup_key != null ? String(r.setup_key) : null,
       outcome: {
-        position_id: String(r.opportunity_id),
+        position_id: r.position_id != null ? String(r.position_id) : String(r.opportunity_id),
         side: r.side,
         entry: Number(r.entry_price),
         exit: Number(r.exit_price),
@@ -292,6 +294,7 @@ export class MemoryPersist implements PersistClient {
         hold_ms: params[12],
         exit_reason: params[13],
         setup_key: params[14],
+        position_id: params[15] != null ? String(params[15]) : String(params[1]),
         created_at: new Date().toISOString(),
         params,
       });

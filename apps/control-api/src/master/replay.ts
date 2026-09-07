@@ -30,12 +30,12 @@ export type ReplayOptions = {
  * At index i the pipeline only sees bars[0..i] (inclusive).
  * Fills use next bar open ± slippage (latency_bars).
  */
-export async function replayMaster(opts: ReplayOptions): {
+export async function replayMaster(opts: ReplayOptions): Promise<{
   opportunities: OpportunityRecord[];
   performance: ReturnType<typeof computePerformance>;
   monte_carlo: ReturnType<typeof monteCarlo>;
   equity_curve: number[];
-} {
+}> {
   const warmup = opts.warmup ?? 25;
   const cfg: MasterConfig = {
     ...DEFAULT_MASTER_CONFIG,
@@ -261,7 +261,7 @@ export async function walkForward(opts: {
   test: number;
   step: number;
   cfg?: Partial<MasterConfig>;
-}): {
+}): Promise<{
   windows: Array<{
     train_from: number;
     train_to: number;
@@ -270,7 +270,7 @@ export async function walkForward(opts: {
     in_sample: ReturnType<typeof computePerformance>;
     out_of_sample: ReturnType<typeof computePerformance>;
   }>;
-} {
+}> {
   const windows = [];
   const train = opts.train;
   const test = opts.test;
@@ -303,12 +303,12 @@ export async function walkForward(opts: {
 }
 
 /** AI on/off A/B — same bars, empirical delta only (no promised edge). */
-export async function abCompareAi(opts: ReplayOptions): {
-  off: ReturnType<typeof replayMaster>;
-  on: ReturnType<typeof replayMaster>;
+export async function abCompareAi(opts: ReplayOptions): Promise<{
+  off: Awaited<ReturnType<typeof replayMaster>>;
+  on: Awaited<ReturnType<typeof replayMaster>>;
   delta_expectancy: number;
   note: string;
-} {
+}> {
   const off = await replayMaster({
     ...opts,
     cfg: { ...opts.cfg, ai_mode: 'off' },

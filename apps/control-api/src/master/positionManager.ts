@@ -90,7 +90,7 @@ export class PositionManager {
     return pos;
   }
 
-  /** Update MFE/MAE from mid; decide exits; close via broker. */
+  /** Update MFE/MAE from mid; trail SL; decide exits; close via broker. */
   async manageTick(input: {
     broker: MasterBroker;
     pipeline: MasterPipeline;
@@ -124,7 +124,10 @@ export class PositionManager {
         mid
       );
 
-      if (!verdict.exit) continue;
+      if (!verdict.exit) {
+        await this.maybeTrailStop(broker, pos, mid);
+        continue;
+      }
 
       const closeRes = await broker.closePosition(pos.position_id);
       if (!closeRes.ok) continue;
@@ -161,15 +164,65 @@ export class PositionManager {
     return { held: this.list(), closed };
   }
 
+  /**
+   * Ratchet broker SL once MFE clears a floor — lock ~50% of peak favorable move.
+   * Only tightens; never loosens. Requires broker.modifyPosition.
+   */
+  private async maybeTrailStop(
+    broker: MasterBroker,
+    pos: ManagedPosition,
+    mid: number
+  ): Promise<void> {
+    if (!broker.modifyPosition) return;
+    const absEntry = Math.max(Math.abs(pos.entry), 1e-9);
+    const mfeFloor = Math.max(absEntry * 0.00025, 0.8);
+    if (pos.mfe < mfeFloor) return;
+    const lock = pos.mfe * 0.5;
+    const trailed =
+      pos.side === 'BUY' ? pos.entry + lock : pos.entry - lock;
+    const cur = pos.stop_loss;
+    const tighter =
+      cur == null
+        ? true
+        : pos.side === 'BUY'
+          ? trailed > cur
+          : trailed < cur;
+    if (!tighter) return;
+    // Don't trail through current mid (would instant-stop)
+    if (pos.side === 'BUY' && trailed >= mid) return;
+    if (pos.side === 'SELL' && trailed <= mid) return;
+    const mod = await broker.modifyPosition({
+      position_id: pos.position_id,
+      stop_level: trailed,
+    });
+    if (mod.ok) pos.stop_loss = trailed;
+  }
+
   /** Sync open set from broker after restart — keep local meta when known. */
-  reconcileFromBroker(brokerPositions: Array<{ position_id: string; epic: string; side: Side; size: number; open_level: number }>) {
+  reconcileFromBroker(
+    brokerPositions: Array<{
+      position_id: string;
+      epic: string;
+      side: Side;
+      size: number;
+      open_level: number;
+      stop_level?: number | null;
+      profit_level?: number | null;
+    }>
+  ) {
     const brokerIds = new Set(brokerPositions.map((p) => p.position_id));
     for (const id of [...this.open.keys()]) {
       if (!brokerIds.has(id)) this.open.delete(id);
     }
     for (const bp of brokerPositions) {
-      if (this.open.has(bp.position_id)) continue;
-      // Orphan broker position — adopt with minimal meta for exit manage
+      const existing = this.open.get(bp.position_id);
+      if (existing) {
+        // Refresh protective levels from broker truth when present
+        if (bp.stop_level != null) existing.stop_loss = bp.stop_level;
+        if (bp.profit_level != null) existing.take_profit = bp.profit_level;
+        continue;
+      }
+      // Orphan broker position — adopt broker SL/TP when available
       this.open.set(bp.position_id, {
         position_id: bp.position_id,
         opportunity_id: `recover-${bp.position_id}`,
@@ -179,8 +232,8 @@ export class PositionManager {
         size: bp.size,
         entry: bp.open_level,
         entry_at: new Date().toISOString(),
-        stop_loss: null,
-        take_profit: null,
+        stop_loss: bp.stop_level ?? null,
+        take_profit: bp.profit_level ?? null,
         mfe: 0,
         mae: 0,
         decision: {

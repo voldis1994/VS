@@ -1107,6 +1107,8 @@ export type CapitalPriceCandle = {
   high: number;
   low: number;
   close: number;
+  /** ISO timestamp from Capital prices API when present */
+  snapshotTime?: string;
 };
 
 /** Capital OHLC — SECOND (10s timing), MINUTE (swing/setup), HOUR (context). */
@@ -1140,7 +1142,13 @@ export async function fetchCapitalPrices(
     const low = numOrNull(p.lowPrice?.bid ?? p.lowPrice?.ask ?? p.low ?? p.l);
     const close = numOrNull(p.closePrice?.bid ?? p.closePrice?.ask ?? p.close ?? p.c);
     if (open == null || high == null || low == null || close == null) continue;
-    candles.push({ open, high, low, close });
+    const snapshotTime =
+      typeof p.snapshotTime === 'string'
+        ? p.snapshotTime
+        : typeof p.snapshotTimeUTC === 'string'
+          ? p.snapshotTimeUTC
+          : undefined;
+    candles.push({ open, high, low, close, snapshotTime });
   }
   return { ok: candles.length > 0, candles, detail: `${candles.length} ${resolution} candles` };
 }
