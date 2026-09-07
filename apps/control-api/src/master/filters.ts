@@ -19,7 +19,8 @@ export function applyMarketFilters(
     data_quality: a.data_quality >= 0.35,
     spread_abs: quote.spread <= cfg.max_spread_abs,
     spread_pct: !(quote.mid > 0 && quote.spread / quote.mid > cfg.max_spread_pct),
-    regime_stable: a.regime !== 'UNSTABLE' && a.regime !== 'UNKNOWN',
+    // UNKNOWN is tradeable-with-caution; only UNSTABLE hard-blocks both sides
+    regime_stable: a.regime !== 'UNSTABLE',
     volatility_ok: !(a.volatility > 0.008),
   };
 

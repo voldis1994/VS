@@ -390,7 +390,35 @@ class MasterRuntime {
 
     if (this.broker) {
       const sync = await syncPositionsWithBroker(this.positions, this.broker, this.epic);
-      void sync;
+      // Ensure recovered orphans have journal stubs so exits attach to performance
+      for (const orphan of sync.orphans_broker) {
+        const pos = this.positions.get(orphan.position_id);
+        if (!pos) continue;
+        const exists = this.pipeline.journal.opportunities.some((o) => o.id === pos.opportunity_id);
+        if (exists) continue;
+        this.pipeline.journal.recordOpportunity({
+          id: pos.opportunity_id,
+          mode: this.cfg.mode,
+          epic: pos.epic,
+          decision: pos.decision,
+          risk: {
+            allowed: true,
+            volume: pos.size,
+            risk_amount: 0,
+            reasons: ['recover_orphan'],
+          },
+          executed: true,
+          execution: {
+            accepted: true,
+            intent_id: pos.intent_id,
+            order_id: null,
+            fill_price: pos.entry,
+            detail: 'recover_orphan',
+            paper: this.broker.paper,
+          },
+        });
+      }
+      void sync.safety_sl_attached;
     }
 
     this.account.open_positions = this.positions.count();
@@ -427,9 +455,12 @@ class MasterRuntime {
     const { fetchLiveMarket, LiveBarBuilder } = await import('./liveFeed.js');
     const builder = new LiveBarBuilder(10_000, 80);
     let seeded = false;
-    this.liveFeedTimer = setInterval(() => {
-      void (async () => {
-        if (!this.running) return;
+    let busy = false;
+
+    const cycle = async () => {
+      if (!this.running || busy) return;
+      busy = true;
+      try {
         const snap = await fetchLiveMarket(this.epic);
         if (!snap.ok || !snap.quote) return;
         if (!seeded) {
@@ -438,8 +469,17 @@ class MasterRuntime {
           this.broker_detail = `${this.broker_detail || this.broker?.name || 'paper'};live_feed:${snap.detail};seed:${seedDetail}`;
         }
         const { bars } = builder.pushTick(snap.quote.mid);
+        if (bars.length < 5) return;
         await this.tick(bars, snap.quote);
-      })();
+      } finally {
+        busy = false;
+      }
+    };
+
+    // Seed+first tick before interval so overlapping polls cannot race empty bars
+    await cycle();
+    this.liveFeedTimer = setInterval(() => {
+      void cycle();
     }, pollMs);
   }
 

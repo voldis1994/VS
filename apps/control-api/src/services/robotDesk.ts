@@ -49,6 +49,7 @@ import {
 } from './robotReader.js';
 import {
   ensureMasterCapitalBroker,
+  masterOwnsManageSafely,
   masterOwnsPipeline,
   runMasterFromDesk,
 } from '../master/deskBridge.js';
@@ -1250,6 +1251,7 @@ async function robotCycle(s: Internal) {
     }
 
     // VS MASTER owns manage+entry when MASTER_OWNS_PIPELINE=true (no dual-brain exits)
+    // — but only if MASTER actually has a broker that can manage live Capital risk.
     if (masterOwnsPipeline()) {
       await refreshStructureAndSetup(
         opened.session,
@@ -1257,7 +1259,7 @@ async function robotCycle(s: Internal) {
         quote.mid,
         !s.structureBook.ready || s.ohlcState.just_closed
       );
-      await ensureMasterCapitalBroker({
+      const ensured = await ensureMasterCapitalBroker({
         environment: conn.environment,
         apiKey: creds.api_key || '',
         identifier: (conn.identifier || '').trim(),
@@ -1265,29 +1267,43 @@ async function robotCycle(s: Internal) {
         connectionId: s.connection_id,
         capitalAccountId,
       });
-      const master = await runMasterFromDesk({
-        epic: s.epic,
-        bid: quote.bid,
-        ask: quote.ask,
-        mid: quote.mid,
-        minuteCandles: s.last_minute_candles,
-        closed10s: s.ohlcState.last_closed,
-      });
-      // Keep desk local state aligned with broker so UI still shows side
-      if (brokerOpen) {
-        s.mode = 'MANAGE';
-      } else {
-        s.mode = 'FLAT';
-        if (s.open_side) clearTradeState(s);
+      if (masterOwnsManageSafely(!!brokerOpen)) {
+        const master = await runMasterFromDesk({
+          epic: s.epic,
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          minuteCandles: s.last_minute_candles,
+          closed10s: s.ohlcState.last_closed,
+        });
+        // Keep desk local state aligned with broker so UI still shows side
+        if (brokerOpen) {
+          s.mode = 'MANAGE';
+        } else {
+          s.mode = 'FLAT';
+          if (s.open_side) clearTradeState(s);
+        }
+        pushTick(s, {
+          phase: master.executed ? 'ORDER' : brokerOpen ? 'MANAGE' : 'DECIDE',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: master.detail || 'MASTER cycle',
+        });
+        return;
       }
+      // Fall through to desk Best-Outcome manage — MASTER cannot safely own live exits
       pushTick(s, {
-        phase: master.executed ? 'ORDER' : brokerOpen ? 'MANAGE' : 'DECIDE',
+        phase: brokerOpen ? 'MANAGE' : 'DECIDE',
         bid: quote.bid,
         ask: quote.ask,
         mid: quote.mid,
-        detail: master.detail || 'MASTER cycle',
+        detail: `MASTER owns-pipeline deferred · ${ensured.detail || 'no live broker'} · desk manage`,
       });
-      return;
+      if (!brokerOpen && !s.open_side) {
+        // No open risk — still skip legacy entry while owns-pipeline flag is on
+        return;
+      }
     }
 
     // ——— MANAGE open trade: never send entry ———

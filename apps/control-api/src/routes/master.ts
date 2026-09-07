@@ -45,30 +45,59 @@ export async function registerMasterRoutes(app: FastifyInstance) {
     }
   );
 
-  app.post('/api/master/start', async () => {
-    if (masterRuntime.cfg.mode === 'LIVE' && process.env.MASTER_LIVE_ENABLED !== 'true') {
-      return { ok: false, detail: 'LIVE blocked — MASTER_LIVE_ENABLED not set' };
+  app.post<{ Body: { mode?: 'PAPER' | 'LIVE' | 'BACKTEST'; live_feed?: boolean } }>(
+    '/api/master/start',
+    async (req) => {
+      const wantMode = req.body?.mode;
+      // Explicit PAPER from UI must not be upgraded to LIVE by env credentials
+      if (wantMode === 'PAPER') {
+        masterRuntime.setMode('PAPER');
+        masterRuntime.ensurePaperBroker();
+        masterRuntime.broker_detail = masterRuntime.broker_detail || 'paper_explicit';
+        const live_feed =
+          req.body?.live_feed === true ||
+          (req.body?.live_feed !== false &&
+            (process.env.MASTER_LIVE_FEED || 'public') !== 'off');
+        await masterRuntime.start({
+          broker: masterRuntime.ensurePaperBroker(),
+          live_feed,
+        });
+        return {
+          ok: true,
+          broker: 'PAPER',
+          detail: 'paper_explicit',
+          live_feed,
+          status: masterRuntime.status(),
+        };
+      }
+      if (
+        (wantMode === 'LIVE' || masterRuntime.cfg.mode === 'LIVE') &&
+        process.env.MASTER_LIVE_ENABLED !== 'true'
+      ) {
+        return { ok: false, detail: 'LIVE blocked — MASTER_LIVE_ENABLED not set' };
+      }
+      const { resolveBrokerFromEnv } = await import('../master/envBroker.js');
+      const resolved = await resolveBrokerFromEnv();
+      if (resolved.mode === 'LIVE' && process.env.MASTER_LIVE_ENABLED !== 'true') {
+        return { ok: false, detail: 'LIVE broker resolved but MASTER_LIVE_ENABLED not set' };
+      }
+      masterRuntime.attachBroker(resolved.broker);
+      masterRuntime.broker_detail = resolved.detail;
+      if (resolved.mode === 'LIVE') masterRuntime.setMode('LIVE');
+      else if (masterRuntime.cfg.mode !== 'LIVE') masterRuntime.setMode('PAPER');
+      const live_feed =
+        req.body?.live_feed === true ||
+        (resolved.broker.paper && (process.env.MASTER_LIVE_FEED || 'public') !== 'off');
+      await masterRuntime.start({ broker: resolved.broker, live_feed });
+      return {
+        ok: true,
+        broker: resolved.broker.name,
+        detail: resolved.detail,
+        live_feed,
+        status: masterRuntime.status(),
+      };
     }
-    const { resolveBrokerFromEnv } = await import('../master/envBroker.js');
-    const resolved = await resolveBrokerFromEnv();
-    if (resolved.mode === 'LIVE' && process.env.MASTER_LIVE_ENABLED !== 'true') {
-      return { ok: false, detail: 'LIVE broker resolved but MASTER_LIVE_ENABLED not set' };
-    }
-    masterRuntime.attachBroker(resolved.broker);
-    masterRuntime.broker_detail = resolved.detail;
-    if (resolved.mode === 'LIVE') masterRuntime.setMode('LIVE');
-    else if (masterRuntime.cfg.mode !== 'LIVE') masterRuntime.setMode('PAPER');
-    const live_feed =
-      resolved.broker.paper && (process.env.MASTER_LIVE_FEED || 'public') !== 'off';
-    await masterRuntime.start({ broker: resolved.broker, live_feed });
-    return {
-      ok: true,
-      broker: resolved.broker.name,
-      detail: resolved.detail,
-      live_feed,
-      status: masterRuntime.status(),
-    };
-  });
+  );
 
   app.post('/api/master/stop', async () => {
     masterRuntime.stop();
@@ -359,7 +388,7 @@ async function refresh(){
     }).join(''):card('Journal','no closed trades yet');
   }catch(e){pushLog('status error '+e)}
 }
-document.getElementById('btnStart').onclick=async()=>{await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'PAPER'})});const r=await fetch('/api/master/start',{method:'POST'}).then(r=>r.json());pushLog('start '+JSON.stringify(r.ok));refresh()};
+document.getElementById('btnStart').onclick=async()=>{await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'PAPER'})});const r=await fetch('/api/master/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'PAPER'})}).then(r=>r.json());pushLog('start '+JSON.stringify(r.ok));refresh()};
 document.getElementById('btnStop').onclick=async()=>{const r=await fetch('/api/master/stop',{method:'POST'}).then(r=>r.json());pushLog('stop');refresh()};
 document.getElementById('btnRecover').onclick=async()=>{const r=await fetch('/api/master/recover',{method:'POST'}).then(r=>r.json());pushLog('recover positions='+r.positions+' journal='+r.opportunities);refresh()};
 document.getElementById('btnKill').onclick=async()=>{kill=!kill;await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kill_switch:kill})});pushLog('kill_switch='+kill);refresh()};

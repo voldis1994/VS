@@ -137,18 +137,21 @@ async function main() {
       'src/master/runtime.ts',
       'src/master/broker.ts',
       'src/master/positionManager.ts',
+      'src/master/positionSync.ts',
       'src/master/persist.ts',
       'src/master/filePersist.ts',
       'src/master/liveFeed.ts',
       'src/master/filters.ts',
+      'src/master/deskBridge.ts',
       'src/master/mt4Sim.ts',
       'src/routes/master.ts',
       'src/db/migrations/011_master_journal.sql',
+      '../dashboard/src/pages/MasterPage.tsx',
     ];
     const missing = files.filter((f) => !existsSync(join(root, f)));
     checks.push({
       id: 'artifacts_present',
-      requirement: 'Dashboard routes, brokers, recovery, journal migration present',
+      requirement: 'Dashboard routes, brokers, recovery, desk bridge, React Master page present',
       ok: missing.length === 0,
       detail: missing.length ? `missing: ${missing.join(',')}` : `${files.length} core files present`,
     });

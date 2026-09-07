@@ -19,9 +19,11 @@ export class MasterJournal {
     risk: RiskVerdict;
     executed: boolean;
     execution?: ExecutionResult;
+    /** Optional stable id (e.g. recover-${position_id}) so exits can attach. */
+    id?: string;
   }): OpportunityRecord {
     const rec: OpportunityRecord = {
-      id: randomUUID(),
+      id: input.id ?? randomUUID(),
       ts: new Date().toISOString(),
       mode: input.mode,
       epic: input.epic,

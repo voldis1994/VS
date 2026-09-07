@@ -90,27 +90,47 @@ export function buildCandidates(
 
   const filter = applyMarketFilters(a, quote, cfg);
 
+  // Reader-style against-flow hard reject (per side — shared filter no longer dual-starves UNKNOWN)
+  const buyAgainstDump = a.momentum_dir === 'DOWN' && a.trend_dir === 'DOWN';
+  const sellAgainstRally = a.momentum_dir === 'UP' && a.trend_dir === 'UP';
+
   const buy: TradeCandidate = {
     side: 'BUY',
-    valid: buyScore >= cfg.min_score && filter.ok && a.regime !== 'UNSTABLE',
+    valid:
+      buyScore >= cfg.min_score &&
+      filter.ok &&
+      a.regime !== 'UNSTABLE' &&
+      !buyAgainstDump,
     score: buyScore,
     components: buyComp,
     entry,
     stop_loss: buySl,
     take_profit: entry + buyRisk * cfg.reward_ratio,
-    filter_ok: filter.ok,
-    filter_reason: filter.reason,
+    filter_ok: filter.ok && !buyAgainstDump,
+    filter_reason: !filter.ok
+      ? filter.reason
+      : buyAgainstDump
+        ? 'against_flow_dump'
+        : null,
   };
   const sell: TradeCandidate = {
     side: 'SELL',
-    valid: sellScore >= cfg.min_score && filter.ok && a.regime !== 'UNSTABLE',
+    valid:
+      sellScore >= cfg.min_score &&
+      filter.ok &&
+      a.regime !== 'UNSTABLE' &&
+      !sellAgainstRally,
     score: sellScore,
     components: sellComp,
     entry,
     stop_loss: sellSl,
     take_profit: entry - sellRisk * cfg.reward_ratio,
-    filter_ok: filter.ok,
-    filter_reason: filter.reason,
+    filter_ok: filter.ok && !sellAgainstRally,
+    filter_reason: !filter.ok
+      ? filter.reason
+      : sellAgainstRally
+        ? 'against_flow_rally'
+        : null,
   };
   return { buy, sell };
 }

@@ -180,7 +180,10 @@ export function MasterPage() {
                 method: 'POST',
                 body: JSON.stringify({ mode: 'PAPER' }),
               });
-              return apiFetch('/api/master/start', { method: 'POST' });
+              return apiFetch('/api/master/start', {
+                method: 'POST',
+                body: JSON.stringify({ mode: 'PAPER' }),
+              });
             })
           }
         >
