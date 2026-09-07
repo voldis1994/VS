@@ -12,6 +12,7 @@ import {
   saveOpenPositions,
   saveSeenIntents,
 } from './persist.js';
+import { syncPositionsWithBroker } from './positionSync.js';
 import {
   DEFAULT_MASTER_CONFIG,
   GOLD_SPEC,
@@ -310,16 +311,8 @@ class MasterRuntime {
     this.seenIntentSnapshot = [...intents];
 
     if (this.broker) {
-      const open = await this.broker.listOpenPositions(this.epic);
-      this.positions.reconcileFromBroker(
-        open.map((p) => ({
-          position_id: p.position_id,
-          epic: p.epic,
-          side: p.side,
-          size: p.size,
-          open_level: p.open_level,
-        }))
-      );
+      const sync = await syncPositionsWithBroker(this.positions, this.broker, this.epic);
+      void sync;
     }
 
     this.account.open_positions = this.positions.count();

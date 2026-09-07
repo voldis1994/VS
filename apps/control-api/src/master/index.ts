@@ -17,3 +17,4 @@ export * from './positionManager.js';
 export * from './persist.js';
 export * from './capitalFactory.js';
 export * from './deskBridge.js';
+export * from './positionSync.js';
