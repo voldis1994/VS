@@ -272,16 +272,32 @@ describe('marketSetup', () => {
     expect(recentImpulse(bars, 'flip')).toBe('UP');
   });
 
-  it('decideEntryFromTenSecMove trades strong 10s when structure mid-NONE', () => {
-    const minutes = rangeMinutes();
-    const st = buildStructure({ minutes, mid: 2005 });
-    expect(st.ready).toBe(true);
-    const buyBar = bar10(2004.5, 2006.2, 2004.4, 2006.0);
-    const buy = decideEntryFromTenSecMove(st, buyBar, minutes);
+  it('decideEntryFromTenSecMove trades strong 10s only with matching 1m impulse', () => {
+    const upBars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) {
+      upBars.push(candle(2000, 2002, 1998, 2000));
+    }
+    for (let i = 0; i < 5; i++) {
+      const o = 2000 + i * 1.1;
+      upBars.push(candle(o, o + 1.2, o - 0.2, o + 1.0));
+    }
+    const stUp = buildStructure({ minutes: upBars, mid: upBars[upBars.length - 1]!.close });
+    const buyBar = bar10(2005.0, 2006.8, 2004.9, 2006.5);
+    const buy = decideEntryFromTenSecMove(stUp, buyBar, upBars);
     expect(buy?.direction).toBe('BUY');
     expect(buy?.setup).toBe('CONTINUATION');
-    const sellBar = bar10(2005.5, 2005.6, 2003.8, 2004.0);
-    const sell = decideEntryFromTenSecMove(st, sellBar, minutes);
+
+    const downBars: CapitalPriceCandle[] = [];
+    for (let i = 0; i < 22; i++) {
+      downBars.push(candle(2005, 2007, 2003, 2005));
+    }
+    for (let i = 0; i < 5; i++) {
+      const o = 2005 - i * 1.1;
+      downBars.push(candle(o, o + 0.2, o - 1.3, o - 1.0));
+    }
+    const stDn = buildStructure({ minutes: downBars, mid: downBars[downBars.length - 1]!.close });
+    const sellBar = bar10(2001.5, 2001.6, 1999.5, 1999.8);
+    const sell = decideEntryFromTenSecMove(stDn, sellBar, downBars);
     expect(sell?.direction).toBe('SELL');
   });
 

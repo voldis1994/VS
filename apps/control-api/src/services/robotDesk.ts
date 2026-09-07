@@ -409,7 +409,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
     note:
-      'With-move · ride ≥3pt MFE before PeakProtect · soft SL capped ≈2.2pt · no flip chop (cooldown+side-lock).',
+      'With-move · never thesis-kill green · PeakProtect ≥3.5pt · SL cap ≈1.5pt · cooldown stops flip chop.',
   };
 }
 
@@ -1203,9 +1203,10 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
-          detail: 'Broker flat on this epic — trade closed externally · FLAT (entry allowed)',
+          detail: 'Broker flat on this epic — trade closed externally · FLAT · cooldown before re-entry',
         });
         s.closed_at_ms = Date.now();
+        s.last_hard_exit_ms = Date.now();
         clearTradeState(s);
       }
     } else {
@@ -1284,9 +1285,9 @@ async function robotCycle(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // After close: stop flip-chop (was 3s → re-enter opposite every 2–3 min)
+    // After close: stop 16:33→16:34 flip chop
     const hardAgo = s.last_hard_exit_ms > 0 ? Date.now() - s.last_hard_exit_ms : Infinity;
-    const POST_CLOSE_COOLDOWN_MS = hardAgo < 180_000 ? 35_000 : 20_000;
+    const POST_CLOSE_COOLDOWN_MS = hardAgo < 300_000 ? 75_000 : 45_000;
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
     if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
       pushTick(s, {
@@ -1295,7 +1296,7 @@ async function robotCycle(s: Internal) {
         ask: quote.ask,
         mid: quote.mid,
         detail: `cooldown ${Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000)}s after close${
-          hardAgo < 180_000 ? ' · hard-exit lock' : ''
+          hardAgo < 300_000 ? ' · hard-exit lock' : ''
         }`,
       });
       return;
@@ -1400,9 +1401,9 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // Opposite-side lock — stop BUY→SELL→BUY spam that turned +£0.17 into −£1
+    // Opposite-side lock — and same-side re-entry after a hard loss needs a real pause
     const hardRecent = s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < 300_000;
-    const SIDE_LOCK_MS = hardRecent ? 60_000 : 45_000;
+    const SIDE_LOCK_MS = hardRecent ? 120_000 : 90_000;
     if (
       s.last_entry_side &&
       s.last_entry_side !== entry.direction &&

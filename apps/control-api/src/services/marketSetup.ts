@@ -900,7 +900,7 @@ export function decideEntryFromSetup(
 
 /**
  * When sticky setup is NONE mid-swing but the closed 10s bar is a real Gold move,
- * enter CONTINUATION WITH the bar — require stronger body + matching 1m flow.
+ * enter CONTINUATION only with matching 1m impulse — skip micro chop.
  */
 export function decideEntryFromTenSecMove(
   structure: StructureBook,
@@ -913,30 +913,33 @@ export function decideEntryFromTenSecMove(
   const hi = structure.swing_high;
   const lo = structure.swing_low;
   const eps = edgeEps(bar.close, Math.max(hi - lo, structure.span, 1));
-  const need = thr * 0.85; // ~1pt Gold — skip micro chop that was flipping every 2–3 min
+  const need = thr; // full LONG body ~1.2pt — no micro flip entries
   const flow = priceFlowBias(minutes);
+  const imp = recentImpulse(minutes || [], 'flip') || recentImpulse(minutes || []);
 
   if (body >= need && bar.close > bar.open) {
-    // Require UP flow when known — null only if structure not dumping
     if (flow === 'DOWN' || structure.bias === 'BELOW') return null;
-    if (flow == null && structure.hour_bias === 'DOWN') return null;
+    if (imp === 'DOWN') return null;
+    // Prefer confirmed UP impulse; allow null impulse only if flow is UP
+    if (imp !== 'UP' && flow !== 'UP') return null;
     if (bar.close >= hi - eps * 0.35 && bar.close <= hi + eps * 0.2) return null;
     return {
       direction: 'BUY',
       setup: 'CONTINUATION',
       playbook: 'LONG',
-      reason: `ENTRY · 10s MOVE BUY O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · with flow`,
+      reason: `ENTRY · 10s MOVE BUY O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · impulse/flow UP`,
     };
   }
   if (body <= -need && bar.close < bar.open) {
     if (flow === 'UP' || structure.bias === 'ABOVE') return null;
-    if (flow == null && structure.hour_bias === 'UP') return null;
+    if (imp === 'UP') return null;
+    if (imp !== 'DOWN' && flow !== 'DOWN') return null;
     if (bar.close <= lo + eps * 0.35 && bar.close >= lo - eps * 0.2) return null;
     return {
       direction: 'SELL',
       setup: 'CONTINUATION',
       playbook: 'LONG',
-      reason: `ENTRY · 10s MOVE SELL O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · with flow`,
+      reason: `ENTRY · 10s MOVE SELL O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · impulse/flow DOWN`,
     };
   }
   return null;

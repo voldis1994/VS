@@ -49,6 +49,11 @@ function resolvePlaybook(s: ExitSnapshot): TradePlaybook {
 /**
  * Manage exit divided by playbook (LONG / SCALP / FADE).
  * Broker SAFETY SL remains the hard cushion outside this function.
+ *
+ * Order matters for R:R:
+ * 1) Cut losers (HardInv) first
+ * 2) Never Thesis-kill a green trade (regime flicker was cutting +£0.27 winners)
+ * 3) PeakProtect / Target only after a real MFE leg
  */
 export function decideBestOutcomeExit(
   s: ExitSnapshot,
@@ -60,19 +65,14 @@ export function decideBestOutcomeExit(
   const p = exitParamsForTrade(book, s.entry_setup);
   const heldMs = s.entry_at ? Date.now() - new Date(s.entry_at).getTime() : 0;
 
-  const thesis = thesisFailureForPlaybook(s.open_side, s.regime, book);
-  if (thesis && heldMs >= p.thesisMinHoldMs) {
-    return { exit: true, reason: `${thesis} · ${book} · ${s.entry_setup || 'setup?'}` };
-  }
-
   const entry = s.entry_price;
   const fav = favorableMove(s.open_side, entry, mid);
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   const tp = Math.max(absEntry * p.tpPct, p.tpFloor);
-  // Cap soft SL — Gold × % alone was ≈8pt (−£1+) while PeakProtect scalped +£0.17
   const sl = Math.min(Math.max(absEntry * p.slPct, p.slFloor), p.slCapAbs);
   const mfeFloor = Math.max(absEntry * p.mfeFloorPct, p.mfeFloorAbs);
 
+  // 1) Losers first — tight capped SL
   if (fav <= -sl) {
     return {
       exit: true,
@@ -80,6 +80,13 @@ export function decideBestOutcomeExit(
     };
   }
 
+  // 2) Thesis only when underwater — never scratch a green trade on 10s regime flicker
+  const thesis = thesisFailureForPlaybook(s.open_side, s.regime, book);
+  if (thesis && heldMs >= p.thesisMinHoldMs && fav <= 0) {
+    return { exit: true, reason: `${thesis} · ${book} · ${s.entry_setup || 'setup?'}` };
+  }
+
+  // 3) PeakProtect — only after real leg
   if (s.mfe >= mfeFloor && s.peak_retention != null && s.peak_retention < p.peakRet) {
     return {
       exit: true,
@@ -107,6 +114,7 @@ export function decideBestOutcomeExit(
     };
   }
 
+  // TimeDecay only if trade never made the leg (stale) and not deep red
   if (heldMs > p.timeDecayMs && fav >= 0 && s.mfe >= mfeFloor * 0.5) {
     return {
       exit: true,
