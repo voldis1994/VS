@@ -22,6 +22,7 @@ import {
   softTrailExitLevel,
   updateSoftTrailPeak,
 } from './moneyExit.js';
+import { closeAllowedByStopLoss } from './closeRequiresSl.js';
 import type { MasterPipeline } from './pipeline.js';
 import {
   SCALP_LOCK_PCT,
@@ -80,6 +81,22 @@ export type ManageTickResult = {
   closed: Array<{ position: ManagedPosition; outcome: TradeOutcome; reason: string }>;
   /** Exit verdict fired but broker.closePosition failed — do not journal as closed */
   close_failed: Array<{ position_id: string; exit_reason: string; detail: string }>;
+};
+
+/** Reader EXTERNAL_PARTIAL_CLOSE — closed slice detected via broker size shrink. */
+export type ExternalPartialEvent = {
+  position_id: string;
+  opportunity_id: string;
+  intent_id: string;
+  epic: string;
+  side: Side;
+  entry: number;
+  closed_size: number;
+  remaining_size: number;
+  mark_proxy: number;
+  decision: MasterDecision;
+  mae: number;
+  mfe: number;
 };
 
 export class PositionManager {
@@ -271,6 +288,14 @@ export class PositionManager {
       for (const pos of [...this.open.values()]) {
         const mark = protectiveMark(pos.side, quote);
         const heldMs = Date.now() - new Date(pos.entry_at).getTime();
+        if (await this.softCloseRequiresSlBlocked(broker, pos)) {
+          close_failed.push({
+            position_id: pos.position_id,
+            exit_reason: portfolioReason,
+            detail: 'close_requires_sl',
+          });
+          continue;
+        }
         const closeRes = await broker.closePosition(pos.position_id);
         if (!closeRes.ok) {
           close_failed.push({
@@ -286,6 +311,10 @@ export class PositionManager {
             : mark;
         const pnlPts = pos.side === 'BUY' ? fill - pos.entry : pos.entry - fill;
         const pnl = pnlPts * pos.size * pv;
+        const riskDist = Math.max(
+          Math.abs((pos.stop_loss ?? pos.entry) - pos.entry),
+          Number.EPSILON
+        );
         const outcome: TradeOutcome = {
           position_id: pos.position_id,
           side: pos.side,
@@ -297,7 +326,7 @@ export class PositionManager {
           slippage: Math.abs(fill - quote.mid),
           mae: pos.mae,
           mfe: pos.mfe,
-          r_multiple: 0,
+          r_multiple: pnlPts / riskDist,
           hold_ms: heldMs,
           exit_reason: portfolioReason,
         };
@@ -354,7 +383,7 @@ export class PositionManager {
           const peak = pos.soft_trail_peak ?? mark;
           const exitLvl = softTrailExitLevel(pos.side, peak, dist);
           if (softTrailExitHit(pos.side, mark, exitLvl)) {
-            if (pos.stop_loss == null) {
+            if (await this.softCloseRequiresSlBlocked(broker, pos)) {
               close_failed.push({
                 position_id: pos.position_id,
                 exit_reason: 'SOFT_TRAIL',
@@ -444,7 +473,7 @@ export class PositionManager {
           volumeStep,
         });
         if (partial) {
-          if (pos.stop_loss == null) {
+          if (await this.softCloseRequiresSlBlocked(broker, pos)) {
             close_failed.push({
               position_id: pos.position_id,
               exit_reason: partial.reason,
@@ -594,8 +623,8 @@ export class PositionManager {
         continue;
       }
 
-      // VS-System close-requires-SL — soft/app closes need visible protection
-      if (!hardProtective && pos.stop_loss == null) {
+      // VS-System close-requires-SL — soft/app closes need visible chart protection
+      if (!hardProtective && (await this.softCloseRequiresSlBlocked(broker, pos))) {
         close_failed.push({
           position_id: pos.position_id,
           exit_reason: verdict.reason,
@@ -697,7 +726,7 @@ export class PositionManager {
       any = true;
 
       const isFinal = idx === levels.length - 1;
-      if (pos.stop_loss == null) {
+      if (await this.softCloseRequiresSlBlocked(broker, pos)) {
         close_failed.push({
           position_id: pos.position_id,
           exit_reason: `MULTI_TP_${level.index}`,
@@ -829,9 +858,34 @@ export class PositionManager {
   }
 
   /**
-   * Mid-life naked recovery — broker chart has no stop but local may have
-   * stale SL. Escalate distance on reject (VS-System multipliers 1→2→3→5).
+   * VS-System assertStopLossBeforeClose — force-list chart SL before soft/app close.
+   * Returns true when close must be blocked (detail: close_requires_sl).
    */
+  private async softCloseRequiresSlBlocked(
+    broker: MasterBroker,
+    pos: ManagedPosition
+  ): Promise<boolean> {
+    let brokerFound: boolean | null = null;
+    let brokerStop: number | string | null = null;
+    try {
+      const listed = await broker.listOpenPositions(pos.epic);
+      if (!listed.ok) {
+        brokerFound = null;
+      } else {
+        const match = listed.positions.find((p) => p.position_id === pos.position_id);
+        brokerFound = !!match;
+        brokerStop = match?.stop_level ?? null;
+      }
+    } catch {
+      brokerFound = null;
+    }
+    return !closeAllowedByStopLoss({
+      brokerFound,
+      brokerStopLoss: brokerStop,
+      dbStopLoss: pos.stop_loss,
+    });
+  }
+
   private async maybeRecoverNakedStop(
     broker: MasterBroker,
     pos: ManagedPosition,
@@ -1186,7 +1240,8 @@ export class PositionManager {
       profit_level?: number | null;
       opened_at?: string | null;
     }>
-  ) {
+  ): { external_partials: ExternalPartialEvent[] } {
+    const external_partials: ExternalPartialEvent[] = [];
     const brokerIds = new Set(brokerPositions.map((p) => p.position_id));
     for (const id of [...this.open.keys()]) {
       if (!brokerIds.has(id)) this.open.delete(id);
@@ -1194,8 +1249,22 @@ export class PositionManager {
     for (const bp of brokerPositions) {
       const existing = this.open.get(bp.position_id);
       if (existing) {
-        // External/manual/missed-ACK shrink → never re-fire Reader partial
+        // External/manual/missed-ACK shrink → journal closed slice (Reader)
         if (bp.size > 0 && bp.size < existing.size - 1e-9) {
+          external_partials.push({
+            position_id: existing.position_id,
+            opportunity_id: existing.opportunity_id,
+            intent_id: existing.intent_id,
+            epic: existing.epic,
+            side: existing.side,
+            entry: existing.entry,
+            closed_size: existing.size - bp.size,
+            remaining_size: bp.size,
+            mark_proxy: bp.open_level,
+            decision: existing.decision,
+            mae: existing.mae,
+            mfe: existing.mfe,
+          });
           existing.partial_close_applied = true;
         }
         // Refresh protective levels from broker truth.
@@ -1264,6 +1333,7 @@ export class PositionManager {
         partial_close_applied: false,
       });
     }
+    return { external_partials };
   }
 
   /** Serialize for restart recovery. */

@@ -42,3 +42,4 @@ export * from './manageConfig.js';
 export * from './capitalStream.js';
 export * from './tradeAckJournal.js';
 export * from './runtimeGates.js';
+export * from './closeRequiresSl.js';

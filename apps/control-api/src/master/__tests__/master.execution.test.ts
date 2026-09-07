@@ -355,6 +355,32 @@ describe('VS MASTER MT4 file bridge', () => {
       else process.env.MASTER_MT4_ACK_POLL_MS = prevMs;
     }
   });
+
+  it('CLOSE ack timeout treats missing ticket as late success', async () => {
+    const prevPolls = process.env.MASTER_MT4_ACK_POLLS;
+    const prevMs = process.env.MASTER_MT4_ACK_POLL_MS;
+    process.env.MASTER_MT4_ACK_POLLS = '10';
+    process.env.MASTER_MT4_ACK_POLL_MS = '30';
+    try {
+      const root = mkdtempSync(join(tmpdir(), 'vs-mt4-closelate-'));
+      const broker = new Mt4FileBroker(root);
+      await broker.connect();
+      mkdirSync(join(root, 'status'), { recursive: true });
+      // Flat book — ticket already gone (EA closed without ack)
+      writeFileSync(
+        join(root, 'status', 'latest.json'),
+        JSON.stringify({ positions: [], equity: 10000, balance: 10000 })
+      );
+      const closed = await broker.closePosition('555001');
+      expect(closed.ok).toBe(true);
+      expect(closed.detail).toMatch(/mt4_closed_late/);
+    } finally {
+      if (prevPolls === undefined) delete process.env.MASTER_MT4_ACK_POLLS;
+      else process.env.MASTER_MT4_ACK_POLLS = prevPolls;
+      if (prevMs === undefined) delete process.env.MASTER_MT4_ACK_POLL_MS;
+      else process.env.MASTER_MT4_ACK_POLL_MS = prevMs;
+    }
+  });
   it('recoverPendingCommands archives acked cmds and expires stale unacked', async () => {
     const root = mkdtempSync(join(tmpdir(), 'vs-mt4-recover-'));
     const broker = new Mt4FileBroker(root);

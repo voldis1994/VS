@@ -148,6 +148,7 @@ async function main() {
       'src/master/capitalStream.ts',
       'src/master/manageConfig.ts',
       'src/master/tradeAckJournal.ts',
+      'src/master/closeRequiresSl.ts',
       'src/master/persist.ts',
       'src/master/filePersist.ts',
       'src/master/liveFeed.ts',

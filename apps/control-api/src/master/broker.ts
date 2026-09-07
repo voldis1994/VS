@@ -1396,6 +1396,22 @@ export class Mt4FileBroker implements MasterBroker {
       return { ok: false, detail: waited.detail };
     }
     this.expireCommand(id);
+    // Late close reconcile — EA may have closed without readable ack (VS-System idempotent)
+    try {
+      const listed = await this.listOpenPositions();
+      if (listed.ok) {
+        const still = listed.positions.some((p) => p.position_id === String(position_id));
+        if (!still) {
+          return {
+            ok: true,
+            detail: `mt4_closed_late ticket=${position_id}`,
+            fill_price: null,
+          };
+        }
+      }
+    } catch {
+      /* fall through to timeout fail */
+    }
     return { ok: false, detail: 'mt4_close_written_ack_timeout' };
   }
 

@@ -24,6 +24,7 @@ export type SyncReport = {
   ghost_drop_deferred: boolean;
   orphans_broker: BrokerPosition[];
   orphans_local: ManagedPosition[];
+  external_partials: import('./positionManager.js').ExternalPartialEvent[];
 };
 
 /** Mutable debounce counter — hold on MasterRuntime across ticks. */
@@ -64,6 +65,7 @@ export async function syncPositionsWithBroker(
       ghost_drop_deferred: false,
       orphans_broker: [],
       orphans_local: [],
+      external_partials: [],
     };
   }
 
@@ -88,6 +90,7 @@ export async function syncPositionsWithBroker(
         ghost_drop_deferred: true,
         orphans_broker: [],
         orphans_local: [],
+        external_partials: [],
       };
     }
   } else if (debounce) {
@@ -107,7 +110,7 @@ export async function syncPositionsWithBroker(
       : [];
   const matched = brokerPositions.filter((p) => localIds.has(p.position_id)).length;
 
-  manager.reconcileFromBroker(
+  const reconcile = manager.reconcileFromBroker(
     brokerPositions.map((p) => ({
       position_id: p.position_id,
       epic: p.epic,
@@ -157,5 +160,6 @@ export async function syncPositionsWithBroker(
     ghost_drop_deferred: false,
     orphans_broker,
     orphans_local,
+    external_partials: reconcile.external_partials,
   };
 }

@@ -1451,7 +1451,7 @@ describe('partial_close persist + Check be_start', () => {
       },
     });
     expect(pm.get('ext-1')!.partial_close_applied).toBe(false);
-    pm.reconcileFromBroker([
+    const { external_partials } = pm.reconcileFromBroker([
       {
         position_id: 'ext-1',
         epic: 'GOLD',
@@ -1464,6 +1464,8 @@ describe('partial_close persist + Check be_start', () => {
     ]);
     expect(pm.get('ext-1')!.size).toBe(0.05);
     expect(pm.get('ext-1')!.partial_close_applied).toBe(true);
+    expect(external_partials).toHaveLength(1);
+    expect(external_partials[0]!.closed_size).toBeCloseTo(0.05, 6);
   });
 
   it('money BE arms at £0.05 floating and defers illegal clamp', async () => {

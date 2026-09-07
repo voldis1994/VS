@@ -377,6 +377,66 @@ class MasterRuntime {
         persistOutcome(ghost.opportunity_id, outcome, null)
       );
     }
+    // Reader EXTERNAL_PARTIAL_CLOSE — journal closed slice when broker size shrinks
+    for (const partial of sync.external_partials || []) {
+      const instrument = specForEpic(partial.epic);
+      const exit = quote
+        ? partial.side === 'BUY'
+          ? quote.bid
+          : quote.ask
+        : partial.mark_proxy;
+      const pnlPts =
+        partial.side === 'BUY' ? exit - partial.entry : partial.entry - exit;
+      const outcome = {
+        position_id: partial.position_id,
+        side: partial.side,
+        entry: partial.entry,
+        exit,
+        volume: partial.closed_size,
+        pnl: pnlPts * partial.closed_size * instrument.value_per_point_per_lot,
+        fees: 0,
+        slippage: 0,
+        mae: partial.mae,
+        mfe: partial.mfe,
+        r_multiple: 0,
+        hold_ms: 0,
+        exit_reason: 'EXTERNAL_PARTIAL_CLOSE',
+      };
+      const exists = this.pipeline.journal.opportunities.some(
+        (o) => o.id === partial.opportunity_id
+      );
+      if (!exists) {
+        this.pipeline.journal.recordOpportunity({
+          id: partial.opportunity_id,
+          mode: this.cfg.mode,
+          epic: partial.epic,
+          decision: partial.decision,
+          risk: {
+            allowed: true,
+            volume: partial.closed_size + partial.remaining_size,
+            risk_amount: 0,
+            reasons: ['external_partial'],
+          },
+          executed: true,
+          execution: {
+            accepted: true,
+            intent_id: partial.intent_id,
+            order_id: null,
+            fill_price: partial.entry,
+            detail: 'external_partial',
+            paper: this.broker?.paper ?? true,
+          },
+        });
+      }
+      this.pipeline.recordTradeClose(partial.opportunity_id, partial.decision, outcome, {
+        epic: partial.epic,
+      });
+      this.account.daily_pnl += outcome.pnl;
+      this.trackPersist(
+        'external_partial',
+        persistOutcome(partial.opportunity_id, outcome, null)
+      );
+    }
     for (const orphan of sync.orphans_broker) {
       const pos = this.positions.get(orphan.position_id);
       if (!pos) continue;
@@ -783,10 +843,25 @@ class MasterRuntime {
           }
         }
       } else if (!execution.accepted) {
-        this.inflight_until_ms = 0;
-        if (/reject|RISK_CHECK|not_confirmed|CAPITAL_SL|unconfirmed/i.test(execution.detail)) {
+        // Ambiguous OPEN ACK timeout — keep inflight so we do not double-open
+        // while EA may still fill (Check- holds pending_open until ACK/timeout window).
+        const ambiguousTimeout =
+          /ack_timeout|ACK_TIMEOUT|not_confirmed|unconfirmed/i.test(
+            execution.detail || ''
+          );
+        if (!ambiguousTimeout) {
+          this.inflight_until_ms = 0;
+        }
+        if (
+          /reject|RISK_CHECK|not_confirmed|CAPITAL_SL|unconfirmed|ack_timeout|ACK_TIMEOUT/i.test(
+            execution.detail
+          )
+        ) {
           const { capitalModifyRejectBackoffMs } = await import('./capitalConfirm.js');
-          this.reject_until_ms = Date.now() + capitalModifyRejectBackoffMs(execution.detail);
+          const backoff = ambiguousTimeout
+            ? Math.max(30_000, capitalModifyRejectBackoffMs(execution.detail))
+            : capitalModifyRejectBackoffMs(execution.detail);
+          this.reject_until_ms = Date.now() + backoff;
           this.trackPersist(
             'runtime_gates',
             Promise.resolve(
