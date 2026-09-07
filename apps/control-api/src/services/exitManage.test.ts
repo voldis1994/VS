@@ -69,7 +69,7 @@ describe('decideBestOutcomeExit playbook-aware', () => {
     expect(d.reason).toMatch(/PeakProtection/);
   });
 
-  it('holds while retention still ≥75%', () => {
+  it('holds while retention high and below Target', () => {
     const d = decideBestOutcomeExit(
       snap({
         open_side: 'BUY',
@@ -78,7 +78,55 @@ describe('decideBestOutcomeExit playbook-aware', () => {
         peak_retention: 0.85,
         playbook: 'LONG',
       }),
-      2006.8
+      2003.5
+    );
+    expect(d.exit).toBe(false);
+  });
+
+  it('soft HardInv is capped (~2.2pt) — not Gold×0.18%≈8pt', () => {
+    const stillHold = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4400,
+        mfe: 0,
+        peak_retention: null,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+        entry_at: ago(10_000),
+        regime: 'TREND_UP',
+      }),
+      4398.5 // −1.5pt — inside 2.2 cap
+    );
+    expect(stillHold.exit).toBe(false);
+    const cut = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4400,
+        mfe: 0,
+        peak_retention: null,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+        entry_at: ago(10_000),
+        regime: 'TREND_UP',
+      }),
+      4397.5 // −2.5pt — beyond cap
+    );
+    expect(cut.exit).toBe(true);
+    expect(cut.reason).toMatch(/HardInvalidation/);
+  });
+
+  it('CONTINUATION does not PeakProtect on tiny +1.5pt MFE (was +£0.17 scalp)', () => {
+    const d = decideBestOutcomeExit(
+      snap({
+        open_side: 'BUY',
+        entry_price: 4419,
+        entry_at: ago(120_000),
+        mfe: 1.5,
+        peak_retention: 0.5,
+        playbook: 'LONG',
+        entry_setup: 'CONTINUATION',
+      }),
+      4419.7
     );
     expect(d.exit).toBe(false);
   });

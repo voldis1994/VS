@@ -69,7 +69,8 @@ export function decideBestOutcomeExit(
   const fav = favorableMove(s.open_side, entry, mid);
   const absEntry = Math.max(Math.abs(entry), 1e-9);
   const tp = Math.max(absEntry * p.tpPct, p.tpFloor);
-  const sl = Math.max(absEntry * p.slPct, p.slFloor);
+  // Cap soft SL — Gold × % alone was ≈8pt (−£1+) while PeakProtect scalped +£0.17
+  const sl = Math.min(Math.max(absEntry * p.slPct, p.slFloor), p.slCapAbs);
   const mfeFloor = Math.max(absEntry * p.mfeFloorPct, p.mfeFloorAbs);
 
   if (fav <= -sl) {

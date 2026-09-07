@@ -900,7 +900,7 @@ export function decideEntryFromSetup(
 
 /**
  * When sticky setup is NONE mid-swing but the closed 10s bar is a real Gold move,
- * enter CONTINUATION WITH the bar — and WITH 1m flow when known.
+ * enter CONTINUATION WITH the bar — require stronger body + matching 1m flow.
  */
 export function decideEntryFromTenSecMove(
   structure: StructureBook,
@@ -908,32 +908,34 @@ export function decideEntryFromTenSecMove(
   minutes?: CapitalPriceCandle[] | null
 ): SetupEntry | null {
   if (!structure.ready || !(structure.swing_high > structure.swing_low)) return null;
-  const thr = PLAYBOOK_ENTRY_BODY.SCALP;
+  const thr = PLAYBOOK_ENTRY_BODY.LONG;
   const body = bodyPct(bar);
   const hi = structure.swing_high;
   const lo = structure.swing_low;
   const eps = edgeEps(bar.close, Math.max(hi - lo, structure.span, 1));
-  const need = thr * 0.5;
+  const need = thr * 0.85; // ~1pt Gold — skip micro chop that was flipping every 2–3 min
   const flow = priceFlowBias(minutes);
 
   if (body >= need && bar.close > bar.open) {
-    if (flow === 'DOWN') return null;
-    // Tip park: green bar glued at swing high — wait for breakout/continuation setup
+    // Require UP flow when known — null only if structure not dumping
+    if (flow === 'DOWN' || structure.bias === 'BELOW') return null;
+    if (flow == null && structure.hour_bias === 'DOWN') return null;
     if (bar.close >= hi - eps * 0.35 && bar.close <= hi + eps * 0.2) return null;
     return {
       direction: 'BUY',
       setup: 'CONTINUATION',
-      playbook: 'SCALP',
+      playbook: 'LONG',
       reason: `ENTRY · 10s MOVE BUY O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · with flow`,
     };
   }
   if (body <= -need && bar.close < bar.open) {
-    if (flow === 'UP') return null;
+    if (flow === 'UP' || structure.bias === 'ABOVE') return null;
+    if (flow == null && structure.hour_bias === 'UP') return null;
     if (bar.close <= lo + eps * 0.35 && bar.close >= lo - eps * 0.2) return null;
     return {
       direction: 'SELL',
       setup: 'CONTINUATION',
-      playbook: 'SCALP',
+      playbook: 'LONG',
       reason: `ENTRY · 10s MOVE SELL O=${bar.open.toFixed(2)} C=${bar.close.toFixed(2)} · with flow`,
     };
   }

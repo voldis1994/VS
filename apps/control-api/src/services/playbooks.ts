@@ -11,14 +11,15 @@ export type TradePlaybook = Exclude<Playbook, 'WAIT'>;
 export type ExitSide = 'BUY' | 'SELL';
 
 /**
- * Unified MFE trail — max 30% giveback on SCALP moves; 35% on LONG legs.
- * PeakProtect arms early so winners lock before giveback eats the trade.
+ * Asymmetric PnL fix:
+ * - Winners: PeakProtect only after a REAL leg (≈3pt), allow breathe (keep ≥55%).
+ * - Losers: soft HardInv capped ≈2.2pt (was Math.max(pct) ≈8pt on Gold → −£1+).
  */
-export const MAX_MFE_GIVEBACK = 0.35;
-export const MIN_MFE_RETENTION = 0.65; // keep ≥65% of MFE
-export const TIGHT_MFE_RETENTION = 0.72; // SCALP / 10s MOVE — lock sooner
-/** Soft harvest band just above hard PeakProtect */
-export const HARVEST_MFE_RETENTION = 0.75;
+export const MAX_MFE_GIVEBACK = 0.45;
+export const MIN_MFE_RETENTION = 0.55; // ride winners — was 0.65 cutting +£0.17
+export const TIGHT_MFE_RETENTION = 0.6;
+/** Soft harvest band above PeakProtect */
+export const HARVEST_MFE_RETENTION = 0.68;
 
 export type PlaybookExitParams = {
   /** Target as fraction of entry price */
@@ -27,6 +28,11 @@ export type PlaybookExitParams = {
   /** Soft HardInvalidation */
   slPct: number;
   slFloor: number;
+  /**
+   * Cap soft SL in absolute price points.
+   * Without this, Gold @4400 × 0.18% ≈ 8pt → fat −£1 losses while wins scalp at +£0.17.
+   */
+  slCapAbs: number;
   mfeFloorPct: number;
   mfeFloorAbs: number;
   /** PeakProtect when retention below this */
@@ -37,51 +43,54 @@ export type PlaybookExitParams = {
   timeDecayMs: number;
 };
 
-/** Exact set from the agreed playbook drawing — PeakProtect arms on small real MFE. */
+/** Base books — CONTINUATION override owns live Gold legs. */
 export const PLAYBOOK_EXIT: Record<TradePlaybook, PlaybookExitParams> = {
   LONG: {
-    tpPct: 0.0035,
-    tpFloor: 0.35,
-    slPct: 0.002,
-    slFloor: 0.2,
-    mfeFloorPct: 0.00035,
-    mfeFloorAbs: 0.9,
+    tpPct: 0.0025,
+    tpFloor: 4.0,
+    slPct: 0.0005,
+    slFloor: 1.6,
+    slCapAbs: 2.2,
+    mfeFloorPct: 0.00055,
+    mfeFloorAbs: 2.5,
     peakRet: MIN_MFE_RETENTION,
     harvestRet: HARVEST_MFE_RETENTION,
-    thesisMinHoldMs: 60_000,
-    timeDecayMs: 420_000,
+    thesisMinHoldMs: 45_000,
+    timeDecayMs: 540_000,
   },
   SCALP: {
-    tpPct: 0.0022,
-    tpFloor: 0.22,
-    slPct: 0.0016,
-    slFloor: 0.16,
-    mfeFloorPct: 0.00028,
-    mfeFloorAbs: 0.7,
+    tpPct: 0.0018,
+    tpFloor: 3.0,
+    slPct: 0.00045,
+    slFloor: 1.4,
+    slCapAbs: 2.0,
+    mfeFloorPct: 0.0005,
+    mfeFloorAbs: 2.2,
     peakRet: TIGHT_MFE_RETENTION,
-    harvestRet: 0.8,
-    thesisMinHoldMs: 45_000,
-    timeDecayMs: 300_000,
+    harvestRet: 0.7,
+    thesisMinHoldMs: 40_000,
+    timeDecayMs: 360_000,
   },
   FADE: {
-    tpPct: 0.0018,
-    tpFloor: 0.18,
-    slPct: 0.0015,
-    slFloor: 0.15,
-    mfeFloorPct: 0.00025,
-    mfeFloorAbs: 0.6,
+    tpPct: 0.0015,
+    tpFloor: 2.5,
+    slPct: 0.0004,
+    slFloor: 1.2,
+    slCapAbs: 1.8,
+    mfeFloorPct: 0.0004,
+    mfeFloorAbs: 1.8,
     peakRet: TIGHT_MFE_RETENTION,
-    harvestRet: 0.8,
-    thesisMinHoldMs: 45_000,
-    timeDecayMs: 180_000,
+    harvestRet: 0.7,
+    thesisMinHoldMs: 30_000,
+    timeDecayMs: 240_000,
   },
 };
 
-/** Entry body — 10s Gold-friendly (was too strict → missed real 10s moves). */
+/** Entry body — require a real 10s move (was too soft → chop every 2–3 min). */
 export const PLAYBOOK_ENTRY_BODY: Record<TradePlaybook, number> = {
-  LONG: 0.00018, // ~0.8pt Gold @ 4400
-  SCALP: 0.00015, // ~0.65pt
-  FADE: 0.00012, // ~0.55pt bounce/reject
+  LONG: 0.00028, // ~1.2pt Gold @ 4400
+  SCALP: 0.00024, // ~1.05pt
+  FADE: 0.0002,
 };
 
 /**
@@ -106,7 +115,7 @@ export function tradePlaybookOrNull(p?: Playbook | null): TradePlaybook | null {
   return null;
 }
 
-/** Manage exit tuned by locked entry setup — ride bounce/continuation, not +£0.07 scalp. */
+/** Manage exit — ride real legs, cut losers ≈2pt, never scalp +£0.17 / bleed −£1. */
 export function exitParamsForTrade(
   playbook: TradePlaybook,
   entrySetup?: string | null
@@ -114,34 +123,38 @@ export function exitParamsForTrade(
   const base = PLAYBOOK_EXIT[playbook];
   const setup = String(entrySetup || '').trim().toUpperCase();
 
-  // V-bounce / dump continuation — lock PeakProtect after ~1pt MFE (was 2.5 → gave back winners)
-  if (setup === 'CONTINUATION' || setup === 'PULLBACK') {
+  // Live with-move legs — hold for the move (MFE ≥3pt before trail), cut losers fast
+  if (setup === 'CONTINUATION' || setup === 'PULLBACK' || setup === 'BREAKOUT') {
     return {
       ...base,
-      tpPct: 0.0028,
-      tpFloor: 3.5,
-      slPct: Math.min(base.slPct, 0.0018),
-      slFloor: Math.min(base.slFloor, 0.18),
-      mfeFloorPct: 0.00028,
-      mfeFloorAbs: 1.0,
+      tpPct: 0.0022,
+      tpFloor: 5.0,
+      slPct: 0.0005,
+      slFloor: 1.6,
+      slCapAbs: 2.2,
+      mfeFloorPct: 0.0006,
+      mfeFloorAbs: 3.0,
       peakRet: MIN_MFE_RETENTION,
       harvestRet: HARVEST_MFE_RETENTION,
-      thesisMinHoldMs: 60_000,
-      timeDecayMs: 480_000,
+      thesisMinHoldMs: 40_000,
+      timeDecayMs: 600_000,
     };
   }
 
-  // Legacy FADE / failed-break — tight cut if somehow entered
+  // Legacy FADE — tight cut
   if (setup === 'FADE' || setup === 'FAILED_BREAK') {
     return {
       ...base,
-      tpPct: 0.002,
-      tpFloor: 2.0,
-      mfeFloorPct: 0.00022,
-      mfeFloorAbs: 0.8,
+      tpPct: 0.0016,
+      tpFloor: 2.5,
+      slPct: 0.0004,
+      slFloor: 1.2,
+      slCapAbs: 1.8,
+      mfeFloorPct: 0.0004,
+      mfeFloorAbs: 2.0,
       peakRet: TIGHT_MFE_RETENTION,
-      harvestRet: 0.8,
-      thesisMinHoldMs: 45_000,
+      harvestRet: 0.7,
+      thesisMinHoldMs: 30_000,
       timeDecayMs: 240_000,
     };
   }

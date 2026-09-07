@@ -409,7 +409,7 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     feed_contributing: contributing,
     chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
     note:
-      'WITH-MOVE only (no FADE against trend). PeakProtect locks ≥65% MFE early. Entry on every closed 10s move with flow.',
+      'With-move · ride ≥3pt MFE before PeakProtect · soft SL capped ≈2.2pt · no flip chop (cooldown+side-lock).',
   };
 }
 
@@ -1284,9 +1284,9 @@ async function robotCycle(s: Internal) {
 
     s.mode = 'ENTRY';
 
-    // After close: tiny pause so next 10s move can fire; only HardInv gets a short lock
+    // After close: stop flip-chop (was 3s → re-enter opposite every 2–3 min)
     const hardAgo = s.last_hard_exit_ms > 0 ? Date.now() - s.last_hard_exit_ms : Infinity;
-    const POST_CLOSE_COOLDOWN_MS = hardAgo < 120_000 ? 8_000 : 3_000;
+    const POST_CLOSE_COOLDOWN_MS = hardAgo < 180_000 ? 35_000 : 20_000;
     const sinceClose = Date.now() - (s.closed_at_ms || 0);
     if (s.closed_at_ms > 0 && sinceClose < POST_CLOSE_COOLDOWN_MS) {
       pushTick(s, {
@@ -1295,7 +1295,7 @@ async function robotCycle(s: Internal) {
         ask: quote.ask,
         mid: quote.mid,
         detail: `cooldown ${Math.ceil((POST_CLOSE_COOLDOWN_MS - sinceClose) / 1000)}s after close${
-          hardAgo < 120_000 ? ' · hard-exit lock' : ''
+          hardAgo < 180_000 ? ' · hard-exit lock' : ''
         }`,
       });
       return;
@@ -1400,11 +1400,10 @@ async function robotCycle(s: Internal) {
       return;
     }
 
-    // Side-lock only after HardInvalidation — never block with-trend flips on a new move
-    const hardRecent = s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < 120_000;
-    const SIDE_LOCK_MS = hardRecent ? 12_000 : 0;
+    // Opposite-side lock — stop BUY→SELL→BUY spam that turned +£0.17 into −£1
+    const hardRecent = s.last_hard_exit_ms > 0 && Date.now() - s.last_hard_exit_ms < 300_000;
+    const SIDE_LOCK_MS = hardRecent ? 60_000 : 45_000;
     if (
-      SIDE_LOCK_MS > 0 &&
       s.last_entry_side &&
       s.last_entry_side !== entry.direction &&
       Date.now() - s.last_entry_side_ms < SIDE_LOCK_MS
@@ -1416,7 +1415,7 @@ async function robotCycle(s: Internal) {
         mid: quote.mid,
         detail: `${ohlcLine} · side-lock ${s.last_entry_side} ${Math.ceil(
           (SIDE_LOCK_MS - (Date.now() - s.last_entry_side_ms)) / 1000
-        )}s · after hard exit`,
+        )}s · no flip to ${entry.direction}${hardRecent ? ' · after hard exit' : ''}`,
       });
       return;
     }
