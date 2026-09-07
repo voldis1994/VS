@@ -142,39 +142,40 @@ describe('playbook exit', () => {
     expect(d.exit).toBe(false);
   });
 
-  it('LONG thesis on TREND_DOWN after 60s', () => {
-    const young = decideBestOutcomeExit(
+  it('LONG thesis only when underwater — never kill green on regime flicker', () => {
+    const green = decideBestOutcomeExit(
       {
         open_side: 'BUY',
         entry_price: 2000,
-        entry_at: ago(30_000),
+        entry_at: ago(100_000),
         mfe: 2,
         mae: 0,
         peak_retention: 0.9,
         regime: 'TREND_DOWN',
         playbook: 'LONG',
       },
-      2001
+      2001 // still green — must HOLD (was cutting +£0.27 winners)
     );
-    expect(young.exit).toBe(false);
-    const aged = decideBestOutcomeExit(
+    expect(green.exit).toBe(false);
+
+    const red = decideBestOutcomeExit(
       {
         open_side: 'BUY',
         entry_price: 2000,
-        entry_at: ago(70_000),
-        mfe: 2,
-        mae: 0,
-        peak_retention: 0.9,
+        entry_at: ago(100_000),
+        mfe: 0.5,
+        mae: 1,
+        peak_retention: 0,
         regime: 'TREND_DOWN',
         playbook: 'LONG',
       },
-      2001
+      1999.5 // underwater
     );
-    expect(aged.exit).toBe(true);
-    expect(aged.reason).toMatch(/LONG/);
+    expect(red.exit).toBe(true);
+    expect(red.reason).toMatch(/ThesisFailure|LONG/);
   });
 
-  it('PeakProtect: LONG below 65%, SCALP below 72%', () => {
+  it('PeakProtect: LONG/SCALP after real MFE leg', () => {
     const scalp = decideBestOutcomeExit(
       {
         open_side: 'BUY',
@@ -218,18 +219,18 @@ describe('playbook exit', () => {
         regime: 'TREND_UP',
         playbook: 'LONG',
       },
-      2004
+      2003.5
     );
     expect(longHold.exit).toBe(false);
   });
 
-  it('FADE TimeDecay at 4+ min when non-negative', () => {
+  it('FADE TimeDecay at 5+ min when non-negative', () => {
     const d = decideBestOutcomeExit(
       {
         open_side: 'BUY',
         entry_price: 2000,
-        entry_at: ago(250_000),
-        mfe: 2,
+        entry_at: ago(310_000),
+        mfe: 2.5,
         mae: 0,
         peak_retention: 0.85,
         regime: 'RANGE',
@@ -241,22 +242,22 @@ describe('playbook exit', () => {
     expect(d.reason).toMatch(/TimeDecay/);
   });
 
-  it('exit params: ride winners (55%) + capped losers', () => {
+  it('exit params: ride winners + tight loser cap', () => {
     expect(PLAYBOOK_EXIT.LONG.peakRet).toBe(0.55);
     expect(PLAYBOOK_EXIT.SCALP.peakRet).toBe(0.6);
     expect(PLAYBOOK_EXIT.FADE.peakRet).toBe(0.6);
-    expect(PLAYBOOK_EXIT.LONG.slCapAbs).toBe(2.2);
-    expect(PLAYBOOK_EXIT.LONG.thesisMinHoldMs).toBe(45_000);
-    expect(PLAYBOOK_EXIT.FADE.timeDecayMs).toBe(240_000);
+    expect(PLAYBOOK_EXIT.LONG.slCapAbs).toBe(1.6);
+    expect(PLAYBOOK_EXIT.LONG.thesisMinHoldMs).toBe(90_000);
+    expect(PLAYBOOK_EXIT.FADE.timeDecayMs).toBe(300_000);
   });
 
-  it('CONTINUATION PeakProtect only after ~3pt MFE (not +£0.17 scalp)', () => {
+  it('CONTINUATION PeakProtect after ~3.5pt · SL cap 1.5pt', () => {
     const p = exitParamsForTrade('LONG', 'CONTINUATION');
     expect(p.peakRet).toBe(0.55);
     expect(p.harvestRet).toBe(0.68);
-    expect(p.mfeFloorAbs).toBe(3.0);
-    expect(p.slCapAbs).toBe(2.2);
-    expect(p.tpFloor).toBe(5.0);
+    expect(p.mfeFloorAbs).toBe(3.5);
+    expect(p.slCapAbs).toBe(1.5);
+    expect(p.tpFloor).toBe(5.5);
   });
 });
 
