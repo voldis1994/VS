@@ -104,3 +104,118 @@ describe('candle bias strict entry', () => {
     ).toBe(true);
   });
 });
+
+describe('mid-life naked SL recovery', () => {
+  it('clears stale local SL when broker reports null then re-attaches 10%', async () => {
+    const { PaperBroker } = await import('../broker.js');
+    const { PositionManager } = await import('../positionManager.js');
+    const { syncPositionsWithBroker, safetyStopLevel } = await import('../positionSync.js');
+    const { MasterPipeline } = await import('../pipeline.js');
+
+    const broker = new PaperBroker();
+    await broker.connect();
+    broker.setQuote({
+      bid: 4400,
+      ask: 4400.4,
+      mid: 4400.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'midlife-naked-aaaaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      stop_level: 4395,
+    });
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-naked',
+      intent_id: 'n1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      entry: 4400,
+      stop_loss: 4395,
+      take_profit: 4420,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {
+          regime: 'RANGE',
+          market_state: 't',
+          momentum_score: 0,
+          momentum_dir: 'NEUTRAL',
+          trend_dir: 'SIDEWAYS',
+          trend_strength: 0,
+          structure_bias: 'NEUTRAL',
+          swing_high: 4405,
+          swing_low: 4395,
+          buy_pressure: 0.5,
+          sell_pressure: 0.5,
+          behavior_bull: 0.5,
+          behavior_bear: 0.5,
+          impact_score: 0.5,
+          context_quality: 0.5,
+          volatility: 0.1,
+          atr: 1,
+        },
+        expectancy: null,
+      },
+    });
+
+    // Strip broker stop — simulate Capital chart naked while local still has SL
+    await broker.modifyPosition!({
+      position_id: placed.position_id!,
+      stop_level: undefined as unknown as number,
+    });
+    // Force null on paper book
+    const listed = await broker.listOpenPositions('GOLD');
+    const raw = listed.positions[0]!;
+    // PaperBroker may not clear via undefined — seed naked
+    broker.seedOpens([
+      {
+        position_id: placed.position_id!,
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 1,
+        open_level: 4400,
+        stop_level: null,
+        profit_level: 4420,
+      },
+    ]);
+
+    const sync = await syncPositionsWithBroker(pm, broker, 'GOLD');
+    expect(sync.safety_sl_attached).toBe(1);
+    const expected = safetyStopLevel('BUY', 4400);
+    expect(pm.get(placed.position_id!)!.stop_loss).toBeCloseTo(expected, 5);
+
+    // manageTick path also recovers if somehow still null
+    pm.get(placed.position_id!)!.stop_loss = null;
+    const pipe = new MasterPipeline('PAPER');
+    await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: 4400,
+        ask: 4400.4,
+        mid: 4400.2,
+        spread: 0.4,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      allow_close: false,
+      breakeven_progress: 0,
+      max_hold_ms: 0,
+    });
+    expect(pm.get(placed.position_id!)!.stop_loss).toBeCloseTo(expected, 5);
+    void raw;
+  });
+});

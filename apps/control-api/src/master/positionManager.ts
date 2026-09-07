@@ -27,6 +27,7 @@ import {
   SCALP_LOCK_PCT,
   SCALP_SL_CHASE_MIN_INTERVAL_MS,
   scalpChaseIsImprovement,
+  scalpInitialBrokerStop,
   scalpPctLockBrokerStop,
 } from './scalpPctChase.js';
 import type {
@@ -84,6 +85,9 @@ export class PositionManager {
   private modifyBackoff = new Map<string, { until: number; level: number }>();
   /** VS-System scalp chase rate-limit (last successful/attempted improve ms) */
   private scalpChaseAt = new Map<string, number>();
+  /** VS-System naked SL recovery throttle */
+  private nakedRecoveryAt = new Map<string, number>();
+  private static readonly NAKED_RECOVERY_MS = 8_000;
 
   list(): ManagedPosition[] {
     return [...this.open.values()];
@@ -291,6 +295,11 @@ export class PositionManager {
         size: pos.size,
         value_per_point_per_lot: pv,
       });
+
+      // Never-naked: broker-truth null SL → attach 10% protective before soft exits
+      if (pos.stop_loss == null && broker.modifyPosition) {
+        await this.maybeRecoverNakedStop(broker, pos, quote, minStopDist);
+      }
 
       // VS-System soft trail — software exit after money arm (not Capital min-stop trail)
       if (allowClose && softMoneyArm > 0) {
@@ -781,6 +790,49 @@ export class PositionManager {
   }
 
   /**
+   * Mid-life naked recovery — broker chart has no stop but local may have
+   * stale SL. Attach Capital-safe 10% protective (VS-System recoverScalpNakedStop).
+   */
+  private async maybeRecoverNakedStop(
+    broker: MasterBroker,
+    pos: ManagedPosition,
+    quote: Quote,
+    minStopDist: number | null | undefined
+  ): Promise<void> {
+    if (!broker.modifyPosition) return;
+    if (pos.stop_loss != null) return;
+    const now = Date.now();
+    const last = this.nakedRecoveryAt.get(pos.position_id) ?? 0;
+    if (now - last < PositionManager.NAKED_RECOVERY_MS) return;
+    this.nakedRecoveryAt.set(pos.position_id, now);
+
+    const mark = protectiveMark(pos.side, quote);
+    const recovery = scalpInitialBrokerStop({
+      symbol: pos.epic,
+      direction: pos.side,
+      entry: pos.entry,
+      mark,
+      min_distance: minStopDist,
+    });
+    if (recovery == null) return;
+
+    const mod = await broker.modifyPosition({
+      position_id: pos.position_id,
+      stop_level: recovery,
+    });
+    if (mod.ok) {
+      pos.stop_loss = recovery;
+      this.modifyBackoff.delete(pos.position_id);
+      return;
+    }
+    const { capitalModifyRejectBackoffMs } = await import('./capitalConfirm.js');
+    this.modifyBackoff.set(pos.position_id, {
+      until: now + capitalModifyRejectBackoffMs(mod.detail || ''),
+      level: recovery,
+    });
+  }
+
+  /**
    * VS-System 10%/20% SCALPING broker SL chase — improve-only Capital stopLevel.
    * Replaces structure/MFE trail when scalp_pct_chase is enabled.
    */
@@ -1051,8 +1103,14 @@ export class PositionManager {
         if (bp.size > 0 && bp.size < existing.size - 1e-9) {
           existing.partial_close_applied = true;
         }
-        // Refresh protective levels from broker truth when present
-        if (bp.stop_level != null) existing.stop_loss = bp.stop_level;
+        // Refresh protective levels from broker truth.
+        // Null broker SL clears stale local SL so mid-life naked recovery can fire
+        // (VS-System: never trust DB/local when chart is naked).
+        if (bp.stop_level != null) {
+          existing.stop_loss = bp.stop_level;
+        } else {
+          existing.stop_loss = null;
+        }
         if (bp.profit_level != null) existing.take_profit = bp.profit_level;
         if (bp.size > 0) existing.size = bp.size;
         continue;

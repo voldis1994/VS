@@ -1311,6 +1311,9 @@ describe('partial_close persist + Check be_start', () => {
     });
     // Force old entry_at for TIME_STOP
     pos.entry_at = new Date(Date.now() - 120_000).toISOString();
+    // Strip modify so naked recovery cannot attach — close_requires_sl must hold
+    const mod = broker.modifyPosition!.bind(broker);
+    broker.modifyPosition = async () => ({ ok: false, detail: 'modify_denied' });
     const managed = await pm.manageTick({
       broker,
       pipeline: pipe,
@@ -1327,6 +1330,69 @@ describe('partial_close persist + Check be_start', () => {
     expect(managed.closed.length).toBe(0);
     expect(managed.close_failed.some((f) => f.detail === 'close_requires_sl')).toBe(true);
     expect(pm.count()).toBe(1);
+    expect(pm.get(placed.position_id!)!.stop_loss).toBeNull();
+    broker.modifyPosition = mod;
+  });
+
+  it('naked recovery attaches 10% SL then TIME_STOP can close', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    broker.setQuote({
+      bid: entry,
+      ask: entry + 0.2,
+      mid: entry + 0.1,
+      spread: 0.2,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'naked-then-time-bbbbbbbb',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      profit_level: entry + 10,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    const pos = pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-naked-ts',
+      intent_id: 'nts-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry,
+      stop_loss: null,
+      take_profit: entry + 10,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis(),
+        expectancy: null,
+      },
+    });
+    pos.entry_at = new Date(Date.now() - 120_000).toISOString();
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: entry,
+        ask: entry + 0.2,
+        mid: entry + 0.1,
+        spread: 0.2,
+        ts_ms: Date.now(),
+      },
+      max_hold_ms: 60_000,
+      breakeven_progress: 0,
+    });
+    expect(managed.closed.length).toBe(1);
+    expect(managed.closed[0]!.reason).toMatch(/TIME_STOP/);
   });
 
   it('reconcile shrink sets partial_close_applied (external partial)', () => {

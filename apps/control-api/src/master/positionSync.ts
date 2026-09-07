@@ -122,13 +122,14 @@ export async function syncPositionsWithBroker(
 
   let safety_sl_attached = 0;
   if (broker.modifyPosition) {
-    for (const orphan of orphans_broker) {
-      if (orphan.stop_level != null) continue;
-      const managed = manager.get(orphan.position_id);
+    // Orphans + matched positions that are naked on broker (mid-life strip)
+    for (const bp of brokerPositions) {
+      if (bp.stop_level != null) continue;
+      const managed = manager.get(bp.position_id);
       if (!managed || managed.stop_loss != null) continue;
-      const stop = safetyStopLevel(orphan.side, orphan.open_level);
+      const stop = safetyStopLevel(bp.side, bp.open_level);
       const mod = await broker.modifyPosition({
-        position_id: orphan.position_id,
+        position_id: bp.position_id,
         stop_level: stop,
       });
       if (mod.ok) {
