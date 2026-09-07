@@ -7,6 +7,7 @@ import { ExpectancyStore } from './expectancy.js';
 import { MasterJournal } from './journal.js';
 import { validateMarket, type MarketValidation } from './marketData.js';
 import { evaluateRisk } from './risk.js';
+import { DEFAULT_TRADING_HOURS } from './tradingHours.js';
 import type {
   AccountSnapshot,
   Bar,
@@ -237,6 +238,9 @@ export const DEFAULT_MASTER_CONFIG: MasterConfig = {
   close_all_loss: 0,
   partial_close_progress: 0.5,
   partial_close_volume: 0.5,
+  min_score_delta: 0,
+  breakeven_offset: 0,
+  trading_hours: { ...DEFAULT_TRADING_HOURS },
 };
 
 export const GOLD_SPEC: InstrumentSpec = {

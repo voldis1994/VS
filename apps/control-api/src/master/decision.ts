@@ -36,18 +36,23 @@ export function decide(
     );
   }
 
-  const preferred = pickPreferred(buy, sell);
+  const preferred = pickPreferred(buy, sell, cfg.min_score_delta);
   if (!preferred) {
-    const equalScores =
-      buy.valid &&
-      sell.valid &&
-      Math.abs(buy.score - sell.score) < 1e-12;
+    const delta = Math.abs(buy.score - sell.score);
+    const bothValid = buy.valid && sell.valid;
+    const equalScores = bothValid && delta < 1e-12;
+    const nearTie =
+      bothValid && !equalScores && cfg.min_score_delta > 0 && delta < cfg.min_score_delta;
     return {
       decision_id,
       kind: 'WAIT',
       side: null,
       score: Math.max(buy.score, sell.score),
-      block_reason: equalScores ? 'equal_scores' : 'no_valid_candidate',
+      block_reason: equalScores
+        ? 'equal_scores'
+        : nearTie
+          ? 'score_delta_too_small'
+          : 'no_valid_candidate',
       buy,
       sell,
       analysis,
@@ -86,12 +91,15 @@ export function decide(
   };
 }
 
-/** Reader scorer: strict preference; equal valid scores → null (WAIT). */
+/** Reader scorer: strict preference; equal/near-tie valid scores → null (WAIT). */
 export function pickPreferred(
   buy: TradeCandidate,
-  sell: TradeCandidate
+  sell: TradeCandidate,
+  minScoreDelta = 0
 ): TradeCandidate | null {
   if (buy.valid && sell.valid) {
+    const delta = Math.abs(buy.score - sell.score);
+    if (delta < Math.max(minScoreDelta, 0) || delta < 1e-12) return null;
     if (buy.score > sell.score) return buy;
     if (sell.score > buy.score) return sell;
     return null;

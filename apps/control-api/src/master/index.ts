@@ -29,3 +29,4 @@ export * from './newsGate.js';
 export * from './lateMove.js';
 export * from './volatility.js';
 export * from './spreadModel.js';
+export * from './tradingHours.js';

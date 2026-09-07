@@ -242,4 +242,13 @@ export type MasterConfig = {
   partial_close_progress: number;
   /** Fraction of size to close on first scale-out (0..1) */
   partial_close_volume: number;
+  /**
+   * Reader near-tie: when both sides valid and |buy−sell| < delta → WAIT.
+   * 0 = only exact equality (equal_scores).
+   */
+  min_score_delta: number;
+  /** Check- BE offset past entry (price units). 0 = lock exactly at entry. */
+  breakeven_offset: number;
+  /** Check- optional hard trading-hours window */
+  trading_hours: import('./tradingHours.js').TradingHoursConfig;
 };

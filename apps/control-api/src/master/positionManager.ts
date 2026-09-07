@@ -114,6 +114,8 @@ export class PositionManager {
     instrument_point_value?: number;
     max_hold_ms?: number;
     breakeven_progress?: number;
+    /** Check- lock past entry by this many price units */
+    breakeven_offset?: number;
     partial_close_progress?: number;
     partial_close_volume?: number;
     volume_step?: number;
@@ -134,6 +136,7 @@ export class PositionManager {
     const pv = input.instrument_point_value ?? 1;
     const maxHold = input.max_hold_ms ?? 0;
     const beProgress = input.breakeven_progress ?? 0.5;
+    const beOffset = input.breakeven_offset ?? 0;
     const partialProgress = input.partial_close_progress ?? 0;
     const partialVolume = input.partial_close_volume ?? 0;
     const volumeStep = input.volume_step ?? 0.01;
@@ -295,7 +298,7 @@ export class PositionManager {
             ));
 
       if (!verdict.exit) {
-        await this.maybeBreakevenStop(broker, pos, quote, beProgress);
+        await this.maybeBreakevenStop(broker, pos, quote, beProgress, beOffset);
         await this.maybeTrailStop(broker, pos, quote, {
           swing_low: swingLow,
           swing_high: swingHigh,
@@ -314,7 +317,7 @@ export class PositionManager {
           exit_reason: verdict.reason,
           detail: 'ai_veto_close',
         });
-        await this.maybeBreakevenStop(broker, pos, quote, beProgress);
+        await this.maybeBreakevenStop(broker, pos, quote, beProgress, beOffset);
         await this.maybeTrailStop(broker, pos, quote, {
           swing_low: swingLow,
           swing_high: swingHigh,
@@ -373,14 +376,15 @@ export class PositionManager {
   }
 
   /**
-   * Reader-style breakeven: once progress toward TP clears threshold, move SL to entry.
+   * Reader-style breakeven + Check- offset: lock SL at entry ± offset.
    * Only tightens; never loosens.
    */
   private async maybeBreakevenStop(
     broker: MasterBroker,
     pos: ManagedPosition,
     quote: Quote,
-    progressNeed: number
+    progressNeed: number,
+    offset = 0
   ): Promise<void> {
     if (!broker.modifyPosition || progressNeed <= 0) return;
     if (pos.take_profit == null) return;
@@ -389,7 +393,9 @@ export class PositionManager {
     const mark = protectiveMark(pos.side, quote);
     const fav = favorableMove(pos.side, pos.entry, mark);
     if (fav / tpDist < progressNeed) return;
-    const be = pos.entry;
+    const off = Math.max(0, offset);
+    const be =
+      pos.side === 'BUY' ? pos.entry + off : pos.entry - off;
     const cur = pos.stop_loss;
     const tighter =
       cur == null

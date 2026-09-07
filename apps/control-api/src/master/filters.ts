@@ -4,6 +4,7 @@
  */
 import { newsBlocksEntries } from './newsGate.js';
 import { relativeSpreadAcceptable } from './spreadModel.js';
+import { withinTradingHours } from './tradingHours.js';
 import {
   calculateRelativeVolatility,
   relativeVolatilityAcceptable,
@@ -39,6 +40,7 @@ export function applyMarketFilters(
   const spreadRelOk =
     relSpread == null ||
     relativeSpreadAcceptable(relSpread, cfg.max_relative_spread);
+  const hoursOk = withinTradingHours(cfg.trading_hours, nowMs);
   const checks: Record<string, boolean> = {
     data_quality: a.data_quality >= 0.35,
     spread_abs: quote.spread <= cfg.max_spread_abs,
@@ -52,6 +54,8 @@ export function applyMarketFilters(
     // Reader OFF session + Check- weekend — entries only in labeled weekday windows
     session_ok:
       !cfg.block_off_hours || (a.session !== 'OFF_HOURS' && !weekend),
+    // Check- hard weekday hour windows (optional)
+    trading_hours_ok: hoursOk,
     // Reader high-impact news + Check- MASTER_NEWS_FILTER
     news_ok: !news.blocked,
   };
@@ -74,6 +78,9 @@ export function applyMarketFilters(
       reason: weekend ? 'session_weekend' : 'session_off_hours',
       checks,
     };
+  }
+  if (!checks.trading_hours_ok) {
+    return { ok: false, reason: 'trading_hours', checks };
   }
   if (!checks.news_ok) {
     return { ok: false, reason: news.reason || 'news_high_impact', checks };

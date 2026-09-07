@@ -410,6 +410,7 @@ class MasterRuntime {
       instrument_point_value: instrument.value_per_point_per_lot,
       max_hold_ms: this.cfg.max_hold_ms,
       breakeven_progress: this.cfg.breakeven_progress,
+      breakeven_offset: this.cfg.breakeven_offset,
       partial_close_progress: this.cfg.partial_close_progress,
       partial_close_volume: this.cfg.partial_close_volume,
       volume_step: instrument.volume_step,

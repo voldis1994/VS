@@ -93,6 +93,40 @@ describe('MASTER filters + dual flow', () => {
     expect(v.reason).toBe('session_weekend');
   });
 
+  it('Check- trading_hours hard-blocks outside weekday window', () => {
+    const cfg = {
+      ...DEFAULT_MASTER_CONFIG,
+      trading_hours: {
+        enabled: true,
+        hours: {
+          '0': { on: true, start: 8, end: 16 }, // Monday
+          '1': { on: true, start: 8, end: 16 },
+          '2': { on: true, start: 8, end: 16 },
+          '3': { on: true, start: 8, end: 16 },
+          '4': { on: true, start: 8, end: 16 },
+          '5': { on: false, start: 0, end: 23 },
+          '6': { on: false, start: 0, end: 23 },
+        },
+      },
+    };
+    const outside = applyMarketFilters(
+      baseAnalysis(),
+      quote,
+      cfg,
+      Date.UTC(2026, 8, 7, 7) // Monday 07:00 UTC
+    );
+    expect(outside.ok).toBe(false);
+    expect(outside.reason).toBe('trading_hours');
+    const inside = applyMarketFilters(
+      baseAnalysis(),
+      quote,
+      cfg,
+      Date.UTC(2026, 8, 7, 12) // Monday noon
+    );
+    expect(inside.ok).toBe(true);
+    expect(inside.checks.trading_hours_ok).toBe(true);
+  });
+
   it('allows OFF_HOURS when block_off_hours disabled', () => {
     const v = applyMarketFilters(baseAnalysis({ session: 'OFF_HOURS' }), quote, {
       ...DEFAULT_MASTER_CONFIG,

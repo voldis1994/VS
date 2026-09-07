@@ -113,6 +113,30 @@ describe('VS MASTER decision + risk', () => {
     expect(pickPreferred(mk('BUY', 0.7), mk('SELL', 0.72))?.side).toBe('SELL');
   });
 
+  it('near-tie min_score_delta → WAIT (Reader score_delta_too_small)', () => {
+    const mk = (side: 'BUY' | 'SELL', score: number): TradeCandidate => ({
+      side,
+      valid: true,
+      score,
+      components: {
+        momentum: score,
+        trend: score,
+        structure: score,
+        pressure: score,
+        behavior: score,
+        impact: score,
+        context: score,
+      },
+      entry: 4400,
+      stop_loss: side === 'BUY' ? 4395 : 4405,
+      take_profit: side === 'BUY' ? 4410 : 4390,
+      filter_ok: true,
+      filter_reason: null,
+    });
+    expect(pickPreferred(mk('BUY', 0.71), mk('SELL', 0.7), 0.05)).toBeNull();
+    expect(pickPreferred(mk('BUY', 0.76), mk('SELL', 0.7), 0.05)?.side).toBe('BUY');
+  });
+
   it('Check- profit_lock and equity_floor block new entries', () => {
     const bars = barsTrendUp();
     const a = analyzeBars(bars, 0.4);

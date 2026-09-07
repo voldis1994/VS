@@ -258,6 +258,92 @@ describe('MASTER TIME_STOP + breakeven', () => {
     expect(opens.positions[0]!.stop_level).toBe(entry);
   });
 
+  it('Check- breakeven_offset locks BUY SL past entry', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    const tp = entry + 1.0;
+    const offset = 0.2;
+    broker.setQuote({
+      bid: entry + 0.55,
+      ask: entry + 0.65,
+      mid: entry + 0.6,
+      spread: 0.1,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'breakeven-offset-bbbbbbbbbb',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      stop_level: entry - 2,
+      profit_level: tp,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-be-off',
+      intent_id: 'be-off-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      entry,
+      stop_loss: entry - 2,
+      take_profit: tp,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {
+          regime: 'TREND',
+          market_state: 't',
+          momentum_score: 0.5,
+          momentum_dir: 'UP',
+          trend_dir: 'UP',
+          trend_strength: 0.5,
+          structure_bias: 'BULLISH',
+          swing_high: entry + 5,
+          swing_low: entry - 5,
+          buy_pressure: 0.6,
+          sell_pressure: 0.4,
+          behavior_bull: 0.5,
+          behavior_bear: 0.5,
+          impact_score: 0.5,
+          context_quality: 0.8,
+          volatility: 0.001,
+          atr: 1,
+          data_quality: 0.9,
+          session: 'LONDON',
+        },
+        expectancy: null,
+      },
+    });
+
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: entry + 0.55,
+        ask: entry + 0.65,
+        mid: entry + 0.6,
+        spread: 0.1,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: GOLD_SPEC.value_per_point_per_lot,
+      breakeven_progress: 0.5,
+      breakeven_offset: offset,
+      max_hold_ms: 0,
+    });
+    expect(managed.closed.length).toBe(0);
+    expect(pm.get(placed.position_id!)!.stop_loss).toBe(entry + offset);
+  });
+
   it('structure swing trail raises BUY SL to swing_low - buffer', async () => {
     const broker = new PaperBroker();
     await broker.connect();
