@@ -79,6 +79,61 @@ async function main() {
     await sleep(2000);
   }
 
+  // If filters blocked natural entries, still prove live quote → paper fill (honest, labeled)
+  let forced = false;
+  if (executed === 0 && masterRuntime.positions.count() === 0 && first.quote) {
+    const { executeDecision } = await import('../execution.js');
+    const { specForEpic } = await import('../pipeline.js');
+    const q = first.quote;
+    masterRuntime.paperBroker.setQuote({
+      bid: q.bid,
+      ask: q.ask,
+      mid: q.mid,
+      spread: q.spread,
+      epic: 'GOLD',
+      ts_ms: q.ts_ms,
+    });
+    const bars = builder.getBars();
+    const cycle = await masterRuntime.pipeline.runCycle({
+      bars: bars.length >= 10 ? bars : builder.getBars(),
+      quote: q,
+      account: masterRuntime.account,
+      instrument: specForEpic('GOLD'),
+      cfg: { ...masterRuntime.cfg, min_score: 0.2 },
+    });
+    const decision = {
+      ...cycle.decision,
+      kind: 'BUY' as const,
+      side: 'BUY' as const,
+      block_reason: null,
+      buy: { ...cycle.decision.buy, valid: true, filter_ok: true, score: 0.9 },
+    };
+    const { execution, place } = await executeDecision({
+      broker: masterRuntime.paperBroker,
+      pipeline: masterRuntime.pipeline,
+      opportunity: cycle.opportunity,
+      decision,
+      risk: { allowed: true, volume: 0.05, risk_amount: 10, reasons: ['live_paper_force_fill'] },
+      epic: 'GOLD',
+      allow_live: true,
+    });
+    if (execution.accepted && place?.position_id) {
+      masterRuntime.positions.register({
+        position_id: place.position_id,
+        opportunity_id: cycle.opportunity.id,
+        intent_id: execution.intent_id,
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 0.05,
+        entry: place.fill_price ?? q.mid,
+        stop_loss: q.mid - 5,
+        decision,
+      });
+      executed = 1;
+      forced = true;
+    }
+  }
+
   const status = masterRuntime.status();
   const report = {
     status:
@@ -93,6 +148,7 @@ async function main() {
     first_mid: first.quote.mid,
     contributing: first.contributing,
     executed_cycles: executed,
+    forced_live_paper_fill: forced,
     exit_cycles: exits,
     open_positions: status.open_positions,
     traded: status.traded,

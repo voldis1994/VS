@@ -470,6 +470,13 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
 
   /** Open a real Capital.com market order (BUY/SELL). */
   app.post('/api/trading/accounts/:accountId/orders', async (request, reply) => {
+    const { masterOwnsPipeline } = await import('../master/deskBridge.js');
+    if (masterOwnsPipeline()) {
+      return reply.code(409).send({
+        error: 'MASTER_OWNS_PIPELINE — manual Capital opens blocked; use VS MASTER runtime',
+        message: 'MASTER_OWNS_PIPELINE — manual Capital opens blocked; use VS MASTER runtime',
+      });
+    }
     const { accountId } = request.params as { accountId: string };
     const body = (request.body || {}) as {
       epic?: string;

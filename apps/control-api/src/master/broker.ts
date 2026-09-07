@@ -327,13 +327,39 @@ export class CapitalBroker implements MasterBroker {
     this.processed.add(input.intent_id);
 
     const { isCapitalStopLevelReject } = await import('./capitalConfirm.js');
+    const { normalizeSizeForEpic, isCapitalSizeError } = await import('./capitalSize.js');
+    const sized = normalizeSizeForEpic(input.epic, input.size);
+    const orderSize = sized.size;
+
     let opened = await this.deps.create(this.session, {
       epic: input.epic,
       direction: input.side,
-      size: input.size,
+      size: orderSize,
       stopLevel: input.stop_level,
       profitLevel: input.profit_level,
     });
+
+    // Size reject → retry once at epic min
+    if (!opened.ok && isCapitalSizeError(String(opened.detail || ''))) {
+      const minSized = normalizeSizeForEpic(input.epic, sized.rules.minSize);
+      opened = await this.deps.create(this.session, {
+        epic: input.epic,
+        direction: input.side,
+        size: minSized.size,
+        stopLevel: input.stop_level,
+        profitLevel: input.profit_level,
+      });
+      if (!opened.ok) {
+        return {
+          ok: false,
+          order_id: null,
+          position_id: null,
+          fill_price: null,
+          detail: `CAPITAL_SIZE_INVALID:${opened.detail}`,
+          paper: false,
+        };
+      }
+    }
 
     // SL rejected at create → open bare, attach after fill
     let needAttach = false;
@@ -342,7 +368,7 @@ export class CapitalBroker implements MasterBroker {
       opened = await this.deps.create(this.session, {
         epic: input.epic,
         direction: input.side,
-        size: input.size,
+        size: orderSize,
         profitLevel: input.profit_level,
       });
     }

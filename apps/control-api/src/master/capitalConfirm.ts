@@ -2,6 +2,8 @@
  * Capital confirm parsing — ported from VS-System- broker-adapters.
  * POST /positions returns dealReference; fill comes from GET /confirms/{ref}.
  */
+import { isCapitalRiskCheckError } from './capitalSize.js';
+
 export type CapitalConfirm = {
   dealId?: string;
   dealStatus?: string;
@@ -125,8 +127,7 @@ export function isCapitalStopLevelReject(message: string): boolean {
 }
 
 export function capitalModifyRejectBackoffMs(message: string): number {
-  const r = String(message ?? '').toUpperCase();
-  if (r.includes('RISK_CHECK')) return 300_000;
+  if (isCapitalRiskCheckError(message)) return 300_000;
   if (isCapitalStopLevelReject(message)) return 120_000;
   return 90_000;
 }
