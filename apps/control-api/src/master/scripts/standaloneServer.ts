@@ -5,6 +5,7 @@
  *   npx tsx src/master/scripts/standaloneServer.ts
  *   open http://127.0.0.1:3040/master
  */
+import 'dotenv/config';
 import Fastify from 'fastify';
 import { registerMasterRoutes } from '../../routes/master.js';
 import { masterRuntime } from '../runtime.js';

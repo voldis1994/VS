@@ -13,7 +13,8 @@
     "master:paper-demo": "tsx src/master/scripts/paperDemo.ts",
     "master:live-smoke": "tsx src/master/scripts/liveSmoke.ts",
     "master:live-paper": "tsx src/master/scripts/livePaperDemo.ts",
-    "master:audit": "tsx src/master/scripts/systemAudit.ts"
+    "master:audit": "tsx src/master/scripts/systemAudit.ts",
+    "master:verify": "tsx src/master/scripts/verify.ts"
   },
   "dependencies": {
     "@fastify/cors": "^9.0.1",
