@@ -276,4 +276,11 @@ export type MasterConfig = {
   reduce_lot_after_loss: boolean;
   /** Lot used when reduce_lot_after_loss is active. */
   reduce_lot_to: number;
+  /**
+   * VS-System multi-TP ladder count. 0 = off (single Reader partial).
+   * ≥2 builds equal ATR-spaced levels; native TP = final level.
+   */
+  multi_tp_count: number;
+  /** Final TP distance = ATR × this when multi_tp_count ≥ 2. */
+  multi_tp_atr_mult: number;
 };

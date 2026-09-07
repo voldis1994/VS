@@ -938,13 +938,20 @@ export class Mt4FileBroker implements MasterBroker {
 
   /** Block new OPEN while an unacked OPEN command still sits in the bridge. */
   private hasPendingOpenCommand(): boolean {
+    return this.hasPendingCommand(['OPEN']);
+  }
+
+  /** Reader/Check: refuse stacking CLOSE/MODIFY while any control cmd is unacked. */
+  private hasPendingCommand(actions: string[]): boolean {
+    const want = new Set(actions.map((a) => a.toUpperCase()));
     const folder = join(this.bridgeRoot, 'commands');
     if (!existsSync(folder)) return false;
     for (const f of readdirSync(folder)) {
       if (!f.startsWith('cmd_') || !f.endsWith('.json')) continue;
       try {
         const payload = JSON.parse(readFileSync(join(folder, f), 'utf8'));
-        if (String(payload.action || '').toUpperCase() !== 'OPEN') continue;
+        const action = String(payload.action || '').toUpperCase();
+        if (!want.has(action)) continue;
         const id = String(payload.id || '');
         if (!id) continue;
         if (!existsSync(join(this.bridgeRoot, 'acks', `ack_${id}.json`))) return true;
@@ -1166,6 +1173,9 @@ export class Mt4FileBroker implements MasterBroker {
     if (_opts?.size != null) {
       return { ok: false, detail: 'mt4_partial_close_unsupported' };
     }
+    if (this.hasPendingCommand(['OPEN', 'CLOSE', 'MODIFY'])) {
+      return { ok: false, detail: 'mt4_pending_control_command' };
+    }
     const id = randomUUID().slice(0, 12);
     const folder = join(this.bridgeRoot, 'commands');
     mkdirSync(folder, { recursive: true });
@@ -1204,6 +1214,9 @@ export class Mt4FileBroker implements MasterBroker {
     stop_level?: number;
     profit_level?: number;
   }) {
+    if (this.hasPendingCommand(['OPEN', 'CLOSE', 'MODIFY'])) {
+      return { ok: false, detail: 'mt4_pending_control_command' };
+    }
     const id = randomUUID().slice(0, 12);
     const folder = join(this.bridgeRoot, 'commands');
     mkdirSync(folder, { recursive: true });

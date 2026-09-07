@@ -59,6 +59,7 @@ export class FilePersist implements PersistClient {
         payload: {
           decision: p.decision,
           partial_close_applied: !!p.partial_close_applied,
+          multi_tp_levels: p.multi_tp_levels ?? null,
         },
       }));
       this.mem.intents = new Set(raw.intents || []);
@@ -153,6 +154,7 @@ export class FilePersist implements PersistClient {
         partial_close_applied: !!(
           p.partial_close_applied ?? p.payload?.partial_close_applied
         ),
+        multi_tp_levels: p.multi_tp_levels ?? p.payload?.multi_tp_levels ?? undefined,
       })),
       intents: [...this.mem.intents],
     };

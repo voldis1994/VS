@@ -32,3 +32,4 @@ export * from './spreadModel.js';
 export * from './tradingHours.js';
 export * from './slTp.js';
 export * from './capitalStop.js';
+export * from './multiTp.js';

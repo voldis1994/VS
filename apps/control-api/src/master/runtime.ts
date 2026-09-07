@@ -540,6 +540,25 @@ class MasterRuntime {
           cand.stop_loss,
           cand.take_profit
         );
+        let multiLevels: import('./multiTp.js').MultiTpLevel[] | undefined;
+        if (this.cfg.multi_tp_count >= 2) {
+          const { buildEqualMultiTpPlan } = await import('./multiTp.js');
+          const atr = Math.max(
+            cycle.decision.analysis?.atr ?? 0,
+            Math.abs(fill) * 0.0003,
+            0.5
+          );
+          const plan = buildEqualMultiTpPlan({
+            side: cycle.decision.side!,
+            entry: fill,
+            initial_volume: place.fill_size ?? cycle.risk.volume,
+            count: this.cfg.multi_tp_count,
+            atr,
+            atr_tp_mult: this.cfg.multi_tp_atr_mult,
+            volume_step: instrument.volume_step,
+          });
+          if (plan.length >= 2) multiLevels = plan;
+        }
         this.positions.register({
           position_id: place.position_id,
           opportunity_id: cycle.opportunity.id,
@@ -549,18 +568,26 @@ class MasterRuntime {
           size: place.fill_size ?? cycle.risk.volume,
           entry: fill,
           stop_loss: rebased.stop_loss,
-          take_profit: rebased.take_profit,
+          take_profit: multiLevels
+            ? multiLevels[multiLevels.length - 1]!.price
+            : rebased.take_profit,
           decision: cycle.decision,
+          multi_tp_levels: multiLevels,
         });
         // Sync broker protection to fill-rebased geometry (local-only rebase left Capital at planned SL)
         if (
           broker.modifyPosition &&
-          (rebased.stop_loss != null || rebased.take_profit != null)
+          (rebased.stop_loss != null ||
+            (multiLevels
+              ? multiLevels[multiLevels.length - 1]!.price
+              : rebased.take_profit) != null)
         ) {
           const mod = await broker.modifyPosition({
             position_id: place.position_id,
             stop_level: rebased.stop_loss ?? undefined,
-            profit_level: rebased.take_profit ?? undefined,
+            profit_level: multiLevels
+              ? multiLevels[multiLevels.length - 1]!.price
+              : rebased.take_profit ?? undefined,
           });
           if (!mod.ok) {
             this.broker_detail =

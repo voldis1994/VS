@@ -248,6 +248,8 @@ export const DEFAULT_MASTER_CONFIG: MasterConfig = {
   fixed_lot: 0,
   reduce_lot_after_loss: false,
   reduce_lot_to: 0.01,
+  multi_tp_count: 0,
+  multi_tp_atr_mult: 1.5,
 };
 
 export const GOLD_SPEC: InstrumentSpec = {

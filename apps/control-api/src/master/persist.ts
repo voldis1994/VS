@@ -129,6 +129,7 @@ export async function saveOpenPositions(positions: ManagedPosition[]): Promise<b
           JSON.stringify({
             decision: p.decision,
             partial_close_applied: !!p.partial_close_applied,
+            multi_tp_levels: p.multi_tp_levels ?? null,
           }),
         ]
       );
@@ -164,6 +165,9 @@ export async function loadOpenPositions(): Promise<ManagedPosition[]> {
         decision: payload.decision,
         regime_at_entry: r.regime_at_entry || 'UNKNOWN',
         partial_close_applied: !!payload.partial_close_applied,
+        multi_tp_levels: Array.isArray(payload.multi_tp_levels)
+          ? payload.multi_tp_levels
+          : undefined,
       } as ManagedPosition;
     });
   } catch {

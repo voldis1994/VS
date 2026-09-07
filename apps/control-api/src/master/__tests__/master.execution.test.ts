@@ -386,6 +386,27 @@ describe('VS MASTER MT4 file bridge', () => {
     expect(existsSync(join(root, 'commands', 'expired', 'cmd_acked1.json'))).toBe(true);
     expect(existsSync(join(root, 'commands', 'expired', 'cmd_stale1.json'))).toBe(true);
   });
+
+  it('refuses CLOSE/MODIFY while unacked control command pending', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-mutex-'));
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    mkdirSync(join(root, 'commands'), { recursive: true });
+    mkdirSync(join(root, 'acks'), { recursive: true });
+    writeFileSync(
+      join(root, 'commands', 'cmd_pend1.json'),
+      JSON.stringify({ id: 'pend1', action: 'MODIFY', ticket: 1, sl: 1, tp: 0 })
+    );
+    const closed = await broker.closePosition('100001');
+    expect(closed.ok).toBe(false);
+    expect(closed.detail).toBe('mt4_pending_control_command');
+    const mod = await broker.modifyPosition({
+      position_id: '100001',
+      stop_level: 4390,
+    });
+    expect(mod.ok).toBe(false);
+    expect(mod.detail).toBe('mt4_pending_control_command');
+  });
 });
 
 describe('VS MASTER full paper tick loop', () => {

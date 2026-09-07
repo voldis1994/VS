@@ -6,6 +6,14 @@ import { createHash } from 'crypto';
 import { decideBestOutcomeExit, favorableMove } from '../services/exitManage.js';
 import type { MasterBroker } from './broker.js';
 import { clampStopForCapitalMark } from './capitalStop.js';
+import {
+  buildEqualMultiTpPlan,
+  clampCloseVolume,
+  multiTpFinalPrice,
+  multiTpHit,
+  multiTpPendingIndex,
+  type MultiTpLevel,
+} from './multiTp.js';
 import type { MasterPipeline } from './pipeline.js';
 import type {
   MasterDecision,
@@ -39,8 +47,10 @@ export type ManagedPosition = {
   mae: number;
   decision: MasterDecision;
   regime_at_entry: string;
-  /** Reader-style: one scale-out already taken */
+  /** Reader-style: one scale-out already taken (or external shrink) */
   partial_close_applied?: boolean;
+  /** VS-System multi-TP ladder (app-managed intermediates) */
+  multi_tp_levels?: MultiTpLevel[];
 };
 
 export type ManageTickResult = {
@@ -87,7 +97,16 @@ export class PositionManager {
     stop_loss?: number | null;
     take_profit?: number | null;
     decision: MasterDecision;
+    multi_tp_levels?: MultiTpLevel[];
   }) {
+    let take_profit = input.take_profit ?? null;
+    const levels = input.multi_tp_levels?.length
+      ? input.multi_tp_levels.map((l) => ({ ...l }))
+      : undefined;
+    if (levels?.length) {
+      const final = multiTpFinalPrice(levels);
+      if (final != null) take_profit = final;
+    }
     const pos: ManagedPosition = {
       position_id: input.position_id,
       opportunity_id: input.opportunity_id,
@@ -98,12 +117,13 @@ export class PositionManager {
       entry: input.entry,
       entry_at: new Date().toISOString(),
       stop_loss: input.stop_loss ?? null,
-      take_profit: input.take_profit ?? null,
+      take_profit,
       mfe: 0,
       mae: 0,
       decision: input.decision,
       regime_at_entry: input.decision.analysis.regime,
       partial_close_applied: false,
+      multi_tp_levels: levels,
     };
     this.open.set(pos.position_id, pos);
     return pos;
@@ -223,10 +243,32 @@ export class PositionManager {
         pos.mfe > 1e-9 ? Math.max(0, Math.min(1, fav / pos.mfe)) : null;
       const heldMs = Date.now() - new Date(pos.entry_at).getTime();
 
-      // Reader partial scale-out before full exit (once)
-      // Skip when broker cannot partial (Check- MT4 full-lots CLOSE only)
-      // Reader AI allow_close gates soft closes including partial
+      // VS-System multi-TP ladder (app-managed) before single Reader partial
       if (
+        allowClose &&
+        broker.supportsPartialClose !== false &&
+        pos.multi_tp_levels &&
+        pos.multi_tp_levels.length >= 2
+      ) {
+        const ladder = await this.maybeMultiTpScaleOut({
+          broker,
+          pipeline,
+          pos,
+          quote,
+          mark,
+          heldMs,
+          pv,
+          volumeStep,
+        });
+        if (ladder.handled) {
+          if (ladder.closed) closed.push(...ladder.closed);
+          if (ladder.close_failed) close_failed.push(...ladder.close_failed);
+          if (ladder.removed) continue;
+          // Remaining runner — fall through to protective / trail
+        }
+      } else if (
+        // Reader partial scale-out before full exit (once)
+        // Skip when broker cannot partial (Check- MT4 full-lots CLOSE only)
         allowClose &&
         broker.supportsPartialClose !== false &&
         !pos.partial_close_applied &&
@@ -240,49 +282,57 @@ export class PositionManager {
           volumeStep,
         });
         if (partial) {
-          const closeRes = await broker.closePosition(pos.position_id, {
-            size: partial.close_size,
-          });
-          if (closeRes.ok) {
-            const fill =
-              closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
-                ? Number(closeRes.fill_price)
-                : mark;
-            const pnlPts = pos.side === 'BUY' ? fill - pos.entry : pos.entry - fill;
-            const pnl = pnlPts * partial.close_size * pv;
-            const outcome: TradeOutcome = {
+          if (pos.stop_loss == null) {
+            close_failed.push({
               position_id: pos.position_id,
-              side: pos.side,
-              entry: pos.entry,
-              exit: fill,
-              volume: partial.close_size,
-              pnl,
-              fees: 0,
-              slippage: Math.abs(fill - quote.mid),
-              mae: pos.mae,
-              mfe: pos.mfe,
-              r_multiple: 0,
-              hold_ms: heldMs,
               exit_reason: partial.reason,
-            };
-            pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome, {
-              epic: pos.epic,
+              detail: 'close_requires_sl',
             });
-            const rem =
-              closeRes.remaining_size != null && Number.isFinite(closeRes.remaining_size)
-                ? Number(closeRes.remaining_size)
-                : Math.max(0, pos.size - partial.close_size);
-            if (rem > 1e-9) {
-              pos.size = rem;
-              pos.partial_close_applied = true;
-              closed.push({ position: { ...pos }, outcome, reason: partial.reason });
+          } else {
+            const closeRes = await broker.closePosition(pos.position_id, {
+              size: partial.close_size,
+            });
+            if (closeRes.ok) {
+              const fill =
+                closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
+                  ? Number(closeRes.fill_price)
+                  : mark;
+              const pnlPts = pos.side === 'BUY' ? fill - pos.entry : pos.entry - fill;
+              const pnl = pnlPts * partial.close_size * pv;
+              const outcome: TradeOutcome = {
+                position_id: pos.position_id,
+                side: pos.side,
+                entry: pos.entry,
+                exit: fill,
+                volume: partial.close_size,
+                pnl,
+                fees: 0,
+                slippage: Math.abs(fill - quote.mid),
+                mae: pos.mae,
+                mfe: pos.mfe,
+                r_multiple: 0,
+                hold_ms: heldMs,
+                exit_reason: partial.reason,
+              };
+              pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome, {
+                epic: pos.epic,
+              });
+              const rem =
+                closeRes.remaining_size != null && Number.isFinite(closeRes.remaining_size)
+                  ? Number(closeRes.remaining_size)
+                  : Math.max(0, pos.size - partial.close_size);
+              if (rem > 1e-9) {
+                pos.size = rem;
+                pos.partial_close_applied = true;
+                closed.push({ position: { ...pos }, outcome, reason: partial.reason });
+                continue;
+              }
+              this.open.delete(pos.position_id);
+              closed.push({ position: pos, outcome, reason: partial.reason });
               continue;
             }
-            this.open.delete(pos.position_id);
-            closed.push({ position: pos, outcome, reason: partial.reason });
-            continue;
+            // Partial failed — fall through to full manage (do not mark applied)
           }
-          // Partial failed — fall through to full manage (do not mark applied)
         }
       }
 
@@ -356,6 +406,22 @@ export class PositionManager {
         continue;
       }
 
+      // VS-System close-requires-SL — soft/app closes need visible protection
+      if (!hardProtective && pos.stop_loss == null) {
+        close_failed.push({
+          position_id: pos.position_id,
+          exit_reason: verdict.reason,
+          detail: 'close_requires_sl',
+        });
+        await this.maybeBreakevenStop(broker, pos, quote, {
+          progressNeed: beProgress,
+          offset: beOffset,
+          beStart,
+          min_stop_distance: minStopDist,
+        });
+        continue;
+      }
+
       const closeRes = await broker.closePosition(pos.position_id);
       if (!closeRes.ok) {
         close_failed.push({
@@ -403,6 +469,124 @@ export class PositionManager {
     }
 
     return { held: this.list(), closed, close_failed };
+  }
+
+  /**
+   * VS-System multi-TP — process all hit PENDING/FAILED levels this tick (gap-through).
+   * Intermediate = partial; final = full close remaining.
+   */
+  private async maybeMultiTpScaleOut(input: {
+    broker: MasterBroker;
+    pipeline: MasterPipeline;
+    pos: ManagedPosition;
+    quote: Quote;
+    mark: number;
+    heldMs: number;
+    pv: number;
+    volumeStep: number;
+  }): Promise<{
+    handled: boolean;
+    removed?: boolean;
+    closed?: ManageTickResult['closed'];
+    close_failed?: ManageTickResult['close_failed'];
+  }> {
+    const { broker, pipeline, pos, quote, mark, heldMs, pv, volumeStep } = input;
+    const levels = pos.multi_tp_levels;
+    if (!levels?.length) return { handled: false };
+
+    const closed: ManageTickResult['closed'] = [];
+    const close_failed: ManageTickResult['close_failed'] = [];
+    let any = false;
+
+    // Gap-through: walk levels in order while mark still hits
+    while (true) {
+      const idx = multiTpPendingIndex(levels);
+      if (idx < 0) break;
+      const level = levels[idx]!;
+      if (!multiTpHit(pos.side, mark, level.price)) break;
+      any = true;
+
+      const isFinal = idx === levels.length - 1;
+      if (pos.stop_loss == null) {
+        close_failed.push({
+          position_id: pos.position_id,
+          exit_reason: `MULTI_TP_${level.index}`,
+          detail: 'close_requires_sl',
+        });
+        level.status = 'FAILED';
+        break;
+      }
+
+      const closeSize = clampCloseVolume(
+        level.close_volume,
+        pos.size,
+        volumeStep,
+        isFinal
+      );
+      if (closeSize == null || closeSize <= 0) {
+        level.status = 'FAILED';
+        break;
+      }
+
+      const closeRes = isFinal
+        ? await broker.closePosition(pos.position_id)
+        : await broker.closePosition(pos.position_id, { size: closeSize });
+
+      if (!closeRes.ok) {
+        level.status = 'FAILED';
+        close_failed.push({
+          position_id: pos.position_id,
+          exit_reason: `MULTI_TP_${level.index}`,
+          detail: closeRes.detail || 'multi_tp_close_failed',
+        });
+        break;
+      }
+
+      const fill =
+        closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
+          ? Number(closeRes.fill_price)
+          : mark;
+      const pnlPts = pos.side === 'BUY' ? fill - pos.entry : pos.entry - fill;
+      const vol = isFinal ? pos.size : closeSize;
+      const outcome: TradeOutcome = {
+        position_id: pos.position_id,
+        side: pos.side,
+        entry: pos.entry,
+        exit: fill,
+        volume: vol,
+        pnl: pnlPts * vol * pv,
+        fees: 0,
+        slippage: Math.abs(fill - quote.mid),
+        mae: pos.mae,
+        mfe: pos.mfe,
+        r_multiple: 0,
+        hold_ms: heldMs,
+        exit_reason: `MULTI_TP_${level.index}${isFinal ? '_FINAL' : ''}`,
+      };
+      pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome, {
+        epic: pos.epic,
+      });
+      level.status = 'EXECUTED';
+      closed.push({ position: { ...pos }, outcome, reason: outcome.exit_reason });
+
+      if (isFinal) {
+        this.open.delete(pos.position_id);
+        return { handled: true, removed: true, closed, close_failed };
+      }
+
+      const rem =
+        closeRes.remaining_size != null && Number.isFinite(closeRes.remaining_size)
+          ? Number(closeRes.remaining_size)
+          : Math.max(0, pos.size - closeSize);
+      pos.size = rem;
+      pos.partial_close_applied = true;
+      if (rem <= 1e-9) {
+        this.open.delete(pos.position_id);
+        return { handled: true, removed: true, closed, close_failed };
+      }
+    }
+
+    return { handled: any, removed: false, closed, close_failed };
   }
 
   /**
@@ -607,6 +791,10 @@ export class PositionManager {
     for (const bp of brokerPositions) {
       const existing = this.open.get(bp.position_id);
       if (existing) {
+        // External/manual/missed-ACK shrink → never re-fire Reader partial
+        if (bp.size > 0 && bp.size < existing.size - 1e-9) {
+          existing.partial_close_applied = true;
+        }
         // Refresh protective levels from broker truth when present
         if (bp.stop_level != null) existing.stop_loss = bp.stop_level;
         if (bp.profit_level != null) existing.take_profit = bp.profit_level;
