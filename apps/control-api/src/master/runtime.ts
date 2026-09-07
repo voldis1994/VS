@@ -23,6 +23,7 @@ import { computePerformance, monteCarlo } from './performance.js';
 import { PositionManager } from './positionManager.js';
 import { evaluateRisk } from './risk.js';
 import { setupKey } from './decision.js';
+import { loadRuntimeGates, saveRuntimeGates } from './runtimeGates.js';
 import type {
   AccountSnapshot,
   Bar,
@@ -371,6 +372,15 @@ class MasterRuntime {
       if (c.outcome.pnl < 0) {
         this.account.consecutive_losses += 1;
         this.last_loss_ms = Date.now();
+        this.trackPersist(
+          'runtime_gates',
+          Promise.resolve(
+            saveRuntimeGates({
+              last_loss_ms: this.last_loss_ms,
+              reject_until_ms: this.reject_until_ms,
+            })
+          )
+        );
       } else {
         this.account.consecutive_losses = 0;
       }
@@ -448,6 +458,13 @@ class MasterRuntime {
           (cycle.decision.side === 'BUY' ? quote.ask : quote.bid);
         const cand =
           cycle.decision.side === 'BUY' ? cycle.decision.buy : cycle.decision.sell;
+        const { rebaseStopsFromFill } = await import('./positionManager.js');
+        const rebased = rebaseStopsFromFill(
+          cand.entry,
+          fill,
+          cand.stop_loss,
+          cand.take_profit
+        );
         this.positions.register({
           position_id: place.position_id,
           opportunity_id: cycle.opportunity.id,
@@ -456,8 +473,8 @@ class MasterRuntime {
           side: cycle.decision.side!,
           size: place.fill_size ?? cycle.risk.volume,
           entry: fill,
-          stop_loss: cand.stop_loss,
-          take_profit: cand.take_profit,
+          stop_loss: rebased.stop_loss,
+          take_profit: rebased.take_profit,
           decision: cycle.decision,
         });
       } else if (!execution.accepted) {
@@ -465,6 +482,15 @@ class MasterRuntime {
         if (/reject|RISK_CHECK|not_confirmed|CAPITAL_SL|unconfirmed/i.test(execution.detail)) {
           const { capitalModifyRejectBackoffMs } = await import('./capitalConfirm.js');
           this.reject_until_ms = Date.now() + capitalModifyRejectBackoffMs(execution.detail);
+          this.trackPersist(
+            'runtime_gates',
+            Promise.resolve(
+              saveRuntimeGates({
+                last_loss_ms: this.last_loss_ms,
+                reject_until_ms: this.reject_until_ms,
+              })
+            )
+          );
         }
       }
     } else if (cycle.decision.kind === 'BUY' || cycle.decision.kind === 'SELL') {
@@ -546,6 +572,12 @@ class MasterRuntime {
     this.account.equity = this.account.balance + pnlAll;
     if (this.account.equity > this.account.peak_equity) {
       this.account.peak_equity = this.account.equity;
+    }
+
+    const gates = loadRuntimeGates();
+    if (gates) {
+      this.last_loss_ms = Math.max(this.last_loss_ms, gates.last_loss_ms || 0);
+      this.reject_until_ms = Math.max(this.reject_until_ms, gates.reject_until_ms || 0);
     }
 
     // PAPER restart: empty in-memory book must be reseeded before sync or every

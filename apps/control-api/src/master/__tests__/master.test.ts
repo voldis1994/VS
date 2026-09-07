@@ -410,5 +410,8 @@ describe('VS MASTER AI layer', () => {
     expect(specForEpic('XAUUSD').value_per_point_per_lot).toBe(GOLD_SPEC.value_per_point_per_lot);
     expect(specForEpic('EURUSD').min_volume).toBe(0.01);
     expect(specForEpic('BTCUSD').display_name).toMatch(/Bitcoin/i);
+    expect(specForEpic('US100').volume_step).toBe(0.1);
+    expect(specForEpic('US30').point).toBe(1);
+    expect(specForEpic('GER40').display_name).toBe('GER40');
   });
 });

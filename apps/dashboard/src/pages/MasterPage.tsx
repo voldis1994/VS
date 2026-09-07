@@ -32,6 +32,8 @@ type MasterStatus = {
   recovered: boolean;
   persist_ok: boolean;
   last_persist_error: string | null;
+  entries_armed: boolean;
+  entries_pause_reason: string | null;
 };
 
 type ManagedPos = {
@@ -121,6 +123,14 @@ export function MasterPage() {
         { k: 'Broker', v: status.broker || '—' },
         { k: 'Broker detail', v: status.broker_detail || '—' },
         { k: 'Owns pipeline', v: status.owns_pipeline ? 'YES' : 'no' },
+        {
+          k: 'Entries',
+          v: status.entries_armed === false
+            ? `PAUSED${status.entries_pause_reason ? ` · ${status.entries_pause_reason}` : ''}`
+            : 'armed',
+          bad: status.entries_armed === false,
+          ok: status.entries_armed !== false,
+        },
         { k: 'AI mode', v: status.ai_mode || '—' },
         { k: 'Running', v: status.running ? 'YES' : 'NO', ok: status.running },
         { k: 'Regime', v: status.regime },

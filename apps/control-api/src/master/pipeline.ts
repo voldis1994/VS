@@ -276,6 +276,50 @@ export function specForEpic(epic: string): InstrumentSpec {
       max_volume: 50,
     };
   }
+  if (/US100|UST100|USTECH|NASDAQ|NDX/.test(key)) {
+    return {
+      epic: raw,
+      display_name: 'US100',
+      point: 0.1,
+      value_per_point_per_lot: 1,
+      volume_step: 0.1,
+      min_volume: 0.1,
+      max_volume: 50,
+    };
+  }
+  if (/US30|DJ30|DOW|DJI/.test(key)) {
+    return {
+      epic: raw,
+      display_name: 'US30',
+      point: 1,
+      value_per_point_per_lot: 1,
+      volume_step: 0.1,
+      min_volume: 0.1,
+      max_volume: 50,
+    };
+  }
+  if (/GER40|DE40|DAX/.test(key)) {
+    return {
+      epic: raw,
+      display_name: 'GER40',
+      point: 0.1,
+      value_per_point_per_lot: 1,
+      volume_step: 0.1,
+      min_volume: 0.1,
+      max_volume: 50,
+    };
+  }
+  if (/UK100|FTSE/.test(key)) {
+    return {
+      epic: raw,
+      display_name: 'UK100',
+      point: 0.1,
+      value_per_point_per_lot: 1,
+      volume_step: 0.1,
+      min_volume: 0.1,
+      max_volume: 50,
+    };
+  }
   if (/EURUSD|GBPUSD|USDJPY|AUDUSD|USDCAD|USDCHF|NZDUSD|EURGBP|EURJPY|GBPJPY/.test(key)) {
     const jpy = key.includes('JPY');
     return {

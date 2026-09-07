@@ -75,13 +75,16 @@ export function buildCandidates(
   quote: Quote,
   cfg: MasterConfig
 ): { buy: TradeCandidate; sell: TradeCandidate } {
-  const entry = quote.mid;
-  const atr = Math.max(a.atr, Math.abs(entry) * 0.0003, 0.5);
+  // Side-aware planned entry — matches ask/bid fills (not mid)
+  const buyEntry = quote.ask;
+  const sellEntry = quote.bid;
+  const atrRef = quote.mid;
+  const atr = Math.max(a.atr, Math.abs(atrRef) * 0.0003, 0.5);
   const buffer = atr * cfg.sl_buffer_atr_mult;
-  const buySl = Math.min(a.swing_low - buffer, entry - atr);
-  const sellSl = Math.max(a.swing_high + buffer, entry + atr);
-  const buyRisk = Math.max(entry - buySl, atr * 0.5);
-  const sellRisk = Math.max(sellSl - entry, atr * 0.5);
+  const buySl = Math.min(a.swing_low - buffer, buyEntry - atr);
+  const sellSl = Math.max(a.swing_high + buffer, sellEntry + atr);
+  const buyRisk = Math.max(buyEntry - buySl, atr * 0.5);
+  const sellRisk = Math.max(sellSl - sellEntry, atr * 0.5);
 
   const buyComp = buildBuyComponents(a);
   const sellComp = buildSellComponents(a);
@@ -103,9 +106,9 @@ export function buildCandidates(
       !buyAgainstDump,
     score: buyScore,
     components: buyComp,
-    entry,
+    entry: buyEntry,
     stop_loss: buySl,
-    take_profit: entry + buyRisk * cfg.reward_ratio,
+    take_profit: buyEntry + buyRisk * cfg.reward_ratio,
     filter_ok: filter.ok && !buyAgainstDump,
     filter_reason: !filter.ok
       ? filter.reason
@@ -122,9 +125,9 @@ export function buildCandidates(
       !sellAgainstRally,
     score: sellScore,
     components: sellComp,
-    entry,
+    entry: sellEntry,
     stop_loss: sellSl,
-    take_profit: entry - sellRisk * cfg.reward_ratio,
+    take_profit: sellEntry - sellRisk * cfg.reward_ratio,
     filter_ok: filter.ok && !sellAgainstRally,
     filter_reason: !filter.ok
       ? filter.reason

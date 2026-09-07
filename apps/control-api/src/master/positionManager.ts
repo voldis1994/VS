@@ -118,10 +118,10 @@ export class PositionManager {
     const beProgress = input.breakeven_progress ?? 0.5;
     const closed: ManageTickResult['closed'] = [];
     const close_failed: ManageTickResult['close_failed'] = [];
-    const mid = quote.mid;
 
     for (const pos of [...this.open.values()]) {
-      const fav = favorableMove(pos.side, pos.entry, mid);
+      const mark = protectiveMark(pos.side, quote);
+      const fav = favorableMove(pos.side, pos.entry, mark);
       pos.mfe = Math.max(pos.mfe, fav);
       pos.mae = Math.max(pos.mae, -fav);
       const peak_retention =
@@ -129,7 +129,7 @@ export class PositionManager {
       const heldMs = Date.now() - new Date(pos.entry_at).getTime();
 
       // Hard protective fills before soft BestOutcome / TIME_STOP
-      const protective = protectiveExit(pos, mid);
+      const protective = protectiveExit(pos, quote);
 
       let verdict =
         protective ??
@@ -150,12 +150,12 @@ export class PositionManager {
                 playbook: mapRegimeToPlaybook(pos.regime_at_entry),
                 entry_setup: 'CONTINUATION',
               },
-              mid
+              mark
             ));
 
       if (!verdict.exit) {
-        await this.maybeBreakevenStop(broker, pos, mid, beProgress);
-        await this.maybeTrailStop(broker, pos, mid);
+        await this.maybeBreakevenStop(broker, pos, quote, beProgress);
+        await this.maybeTrailStop(broker, pos, quote);
         continue;
       }
 
@@ -184,7 +184,7 @@ export class PositionManager {
         volume: pos.size,
         pnl,
         fees: 0,
-        slippage: Math.abs(exit - mid),
+        slippage: Math.abs(exit - quote.mid),
         mae: pos.mae,
         mfe: pos.mfe,
         r_multiple: pnlPts / riskDist,
@@ -209,14 +209,15 @@ export class PositionManager {
   private async maybeBreakevenStop(
     broker: MasterBroker,
     pos: ManagedPosition,
-    mid: number,
+    quote: Quote,
     progressNeed: number
   ): Promise<void> {
     if (!broker.modifyPosition || progressNeed <= 0) return;
     if (pos.take_profit == null) return;
     const tpDist = Math.abs(pos.take_profit - pos.entry);
     if (tpDist < 1e-9) return;
-    const fav = favorableMove(pos.side, pos.entry, mid);
+    const mark = protectiveMark(pos.side, quote);
+    const fav = favorableMove(pos.side, pos.entry, mark);
     if (fav / tpDist < progressNeed) return;
     const be = pos.entry;
     const cur = pos.stop_loss;
@@ -227,8 +228,8 @@ export class PositionManager {
           ? be > cur
           : be < cur;
     if (!tighter) return;
-    if (pos.side === 'BUY' && be >= mid) return;
-    if (pos.side === 'SELL' && be <= mid) return;
+    if (pos.side === 'BUY' && be >= mark) return;
+    if (pos.side === 'SELL' && be <= mark) return;
     const mod = await broker.modifyPosition({
       position_id: pos.position_id,
       stop_level: be,
@@ -243,7 +244,7 @@ export class PositionManager {
   private async maybeTrailStop(
     broker: MasterBroker,
     pos: ManagedPosition,
-    mid: number
+    quote: Quote
   ): Promise<void> {
     if (!broker.modifyPosition) return;
     const absEntry = Math.max(Math.abs(pos.entry), 1e-9);
@@ -260,9 +261,10 @@ export class PositionManager {
           ? trailed > cur
           : trailed < cur;
     if (!tighter) return;
-    // Don't trail through current mid (would instant-stop)
-    if (pos.side === 'BUY' && trailed >= mid) return;
-    if (pos.side === 'SELL' && trailed <= mid) return;
+    const mark = protectiveMark(pos.side, quote);
+    // Don't trail through exitable mark (would instant-stop)
+    if (pos.side === 'BUY' && trailed >= mark) return;
+    if (pos.side === 'SELL' && trailed <= mark) return;
     const mod = await broker.modifyPosition({
       position_id: pos.position_id,
       stop_level: trailed,
@@ -368,17 +370,49 @@ function mapRegimeToPlaybook(regime: string): 'LONG' | 'SCALP' | 'FADE' {
   return 'SCALP';
 }
 
+/** Price used to detect SL/TP hits — BUY exits on bid, SELL on ask. */
+export function protectiveMark(
+  side: Side,
+  quote: Pick<Quote, 'bid' | 'ask' | 'mid'>
+): number {
+  if (side === 'BUY') return quote.bid;
+  if (side === 'SELL') return quote.ask;
+  return quote.mid;
+}
+
+/**
+ * Shift planned SL/TP by fill−plannedEntry so risk geometry matches real fill
+ * (ask/bid fill vs mid-planned, plus slippage).
+ */
+export function rebaseStopsFromFill(
+  plannedEntry: number,
+  fill: number,
+  stop: number | null,
+  tp: number | null
+): { stop_loss: number | null; take_profit: number | null } {
+  if (!Number.isFinite(plannedEntry) || !Number.isFinite(fill)) {
+    return { stop_loss: stop, take_profit: tp };
+  }
+  const d = fill - plannedEntry;
+  if (Math.abs(d) < 1e-12) return { stop_loss: stop, take_profit: tp };
+  return {
+    stop_loss: stop != null ? stop + d : null,
+    take_profit: tp != null ? tp + d : null,
+  };
+}
+
 /** Price-cross SL/TP — returns exit verdict or null when levels not breached. */
 export function protectiveExit(
   pos: Pick<ManagedPosition, 'side' | 'stop_loss' | 'take_profit'>,
-  mid: number
+  quote: Pick<Quote, 'bid' | 'ask' | 'mid'>
 ): { exit: true; reason: string } | null {
+  const mark = protectiveMark(pos.side, quote);
   if (pos.stop_loss != null) {
-    const hit = pos.side === 'BUY' ? mid <= pos.stop_loss : mid >= pos.stop_loss;
+    const hit = pos.side === 'BUY' ? mark <= pos.stop_loss : mark >= pos.stop_loss;
     if (hit) return { exit: true, reason: 'STOP_HIT' };
   }
   if (pos.take_profit != null) {
-    const hit = pos.side === 'BUY' ? mid >= pos.take_profit : mid <= pos.take_profit;
+    const hit = pos.side === 'BUY' ? mark >= pos.take_profit : mark <= pos.take_profit;
     if (hit) return { exit: true, reason: 'TP_HIT' };
   }
   return null;
@@ -391,5 +425,5 @@ function protectiveFillPrice(
 ): number {
   if (reason === 'STOP_HIT' && pos.stop_loss != null) return pos.stop_loss;
   if (reason === 'TP_HIT' && pos.take_profit != null) return pos.take_profit;
-  return pos.side === 'BUY' ? quote.bid : quote.ask;
+  return protectiveMark(pos.side, quote);
 }

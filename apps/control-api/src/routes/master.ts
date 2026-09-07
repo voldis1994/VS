@@ -243,8 +243,24 @@ export async function registerMasterRoutes(app: FastifyInstance) {
     const broker = new Mt4FileBroker(root);
     const connected = await broker.connect();
     if (!connected.ok) return { ok: false, detail: connected.detail };
+    // Stop Yahoo paper feed — MT4 bridge owns LIVE market/execution
+    masterRuntime.stop();
     masterRuntime.attachBroker(broker);
-    return { ok: true, broker: broker.name, root, detail: connected.detail };
+    const liveOk = process.env.MASTER_LIVE_ENABLED === 'true';
+    if (liveOk) masterRuntime.setMode('LIVE');
+    else masterRuntime.setMode('PAPER');
+    await masterRuntime.start({ broker, live_feed: false });
+    return {
+      ok: true,
+      broker: broker.name,
+      root,
+      mode: masterRuntime.cfg.mode,
+      running: masterRuntime.running,
+      live_enabled: liveOk,
+      detail: liveOk
+        ? connected.detail
+        : `${connected.detail || 'ok'};LIVE gate off — MASTER_LIVE_ENABLED required for LIVE mode`,
+    };
   });
 
   app.post<{
@@ -389,6 +405,7 @@ async function refresh(){
       card('Broker',s.broker||'—'),
       card('Broker detail',s.broker_detail||'—'),
       card('Owns pipeline',s.owns_pipeline?'YES':'no'),
+      card('Entries',s.entries_armed===false?('PAUSED'+(s.entries_pause_reason?' · '+s.entries_pause_reason:'')):'armed',s.entries_armed===false?'bad':'ok'),
       card('AI mode',s.ai_mode||'—'),
       card('Running',s.running?'YES':'NO',s.running?'ok':''),
       card('Regime',s.regime),

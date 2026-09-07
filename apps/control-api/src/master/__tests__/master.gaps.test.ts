@@ -388,6 +388,78 @@ describe('manageTick close_failed visibility', () => {
   });
 });
 
+describe('protective mark + fill rebase', () => {
+  it('STOP_HIT uses bid for BUY (mid above SL is not enough)', async () => {
+    const { protectiveExit } = await import('../positionManager.js');
+    const pos = { side: 'BUY' as const, stop_loss: 4400, take_profit: 4420 };
+    // Mid still above SL, but bid has crossed — must exit
+    expect(
+      protectiveExit(pos, { bid: 4399.5, ask: 4400.5, mid: 4400.0 })?.reason
+    ).toBe('STOP_HIT');
+    // Bid still above SL — hold even if mid equals SL from ask pressure
+    expect(protectiveExit(pos, { bid: 4400.2, ask: 4401.0, mid: 4400.6 })).toBeNull();
+  });
+
+  it('rebaseStopsFromFill shifts SL/TP by fill slip', async () => {
+    const { rebaseStopsFromFill } = await import('../positionManager.js');
+    const r = rebaseStopsFromFill(4400, 4400.5, 4395, 4410);
+    expect(r.stop_loss).toBeCloseTo(4395.5, 8);
+    expect(r.take_profit).toBeCloseTo(4410.5, 8);
+  });
+
+  it('buildCandidates uses ask/bid entries not mid', () => {
+    const { buy, sell } = buildCandidates(
+      baseAnalysis({ regime: 'TREND', trend_dir: 'UP', momentum_dir: 'UP', trend_strength: 0.7 }),
+      { bid: 4399, ask: 4401, mid: 4400, spread: 2, ts_ms: Date.now() },
+      { ...DEFAULT_MASTER_CONFIG, min_score: 0.1, block_off_hours: false }
+    );
+    expect(buy.entry).toBe(4401);
+    expect(sell.entry).toBe(4399);
+  });
+});
+
+describe('runtime gates persist', () => {
+  it('save/load last_loss and reject cooldown', async () => {
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = mkdtempSync(join(tmpdir(), 'vs-gates-'));
+    const { saveRuntimeGates, loadRuntimeGates } = await import('../runtimeGates.js');
+    expect(saveRuntimeGates({ last_loss_ms: 12345, reject_until_ms: 67890 })).toBe(true);
+    expect(loadRuntimeGates()).toEqual({ last_loss_ms: 12345, reject_until_ms: 67890 });
+    if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+    else process.env.MASTER_STATE_DIR = prev;
+  });
+});
+
+describe('runMasterFromDesk integration', () => {
+  it('ticks manage path with desk bars when owns-pipeline and entries armed', async () => {
+    const prev = process.env.MASTER_OWNS_PIPELINE;
+    process.env.MASTER_OWNS_PIPELINE = 'true';
+    masterRuntime.setMode('PAPER');
+    masterRuntime.ensurePaperBroker();
+    masterRuntime.setEntriesArmed(true);
+    const { runMasterFromDesk } = await import('../deskBridge.js');
+    const minutes = Array.from({ length: 12 }, (_, i) => ({
+      open: 4400 + i * 0.5,
+      high: 4401 + i * 0.5,
+      low: 4399 + i * 0.5,
+      close: 4400.4 + i * 0.5,
+      snapshotTime: new Date(Date.now() - (12 - i) * 60_000).toISOString(),
+    }));
+    const res = await runMasterFromDesk({
+      epic: 'GOLD',
+      bid: 4406,
+      ask: 4406.4,
+      mid: 4406.2,
+      minuteCandles: minutes as any,
+      closed10s: { open: 4406, high: 4407, low: 4405, close: 4406.2, ts_ms: Date.now() } as any,
+    });
+    expect(res.active).toBe(true);
+    expect(res.detail).toMatch(/MASTER/);
+    if (prev === undefined) delete process.env.MASTER_OWNS_PIPELINE;
+    else process.env.MASTER_OWNS_PIPELINE = prev;
+  });
+});
+
 describe('buildMasterBars 10s hygiene', () => {
   it('skips flat 10s append that would poison 1m ATR', async () => {
     const { buildMasterBars } = await import('../deskBridge.js');

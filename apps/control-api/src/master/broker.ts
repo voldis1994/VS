@@ -249,6 +249,11 @@ export class CapitalBroker implements MasterBroker {
   readonly paper = false;
   private session: any = null;
   private processed = new Set<string>();
+  /** Last dealingRules seen per epic from markets quote */
+  private dealRulesByEpic = new Map<
+    string,
+    { minSize: number; maxSize: number; step: number }
+  >();
 
   constructor(
     private readonly deps: {
@@ -290,6 +295,28 @@ export class CapitalBroker implements MasterBroker {
     if (!this.session) return null;
     const q = await this.deps.quote(this.session, epic);
     if (q.bid == null || q.ask == null || q.mid == null) return null;
+    if (
+      q.min_deal_size != null &&
+      Number.isFinite(q.min_deal_size) &&
+      q.min_deal_size > 0
+    ) {
+      const { sanitizeCapitalDealRules } = await import('./capitalSize.js');
+      const key = String(q.epic || epic).toUpperCase();
+      this.dealRulesByEpic.set(
+        key,
+        sanitizeCapitalDealRules(key, {
+          minSize: Number(q.min_deal_size),
+          maxSize:
+            q.max_deal_size != null && Number(q.max_deal_size) > 0
+              ? Number(q.max_deal_size)
+              : 500,
+          step:
+            q.deal_size_step != null && Number(q.deal_size_step) > 0
+              ? Number(q.deal_size_step)
+              : Number(q.min_deal_size),
+        })
+      );
+    }
     return {
       bid: q.bid,
       ask: q.ask,
@@ -398,9 +425,20 @@ export class CapitalBroker implements MasterBroker {
     this.processed.add(input.intent_id);
 
     const { isCapitalStopLevelReject } = await import('./capitalConfirm.js');
-    const { normalizeSizeForEpic, isCapitalSizeError } = await import('./capitalSize.js');
-    let orderSize = normalizeSizeForEpic(input.epic, input.size).size;
-    const sized = normalizeSizeForEpic(input.epic, input.size);
+    const {
+      normalizeSizeForEpic,
+      normalizeCapitalDealSize,
+      isCapitalSizeError,
+    } = await import('./capitalSize.js');
+    const epicKey = String(input.epic || '').toUpperCase();
+    const liveRules = this.dealRulesByEpic.get(epicKey);
+    const sized = liveRules
+      ? {
+          ...normalizeCapitalDealSize(input.size, liveRules),
+          rules: liveRules,
+        }
+      : normalizeSizeForEpic(input.epic, input.size);
+    let orderSize = sized.size;
 
     let opened = await this.deps.create(this.session, {
       epic: input.epic,
@@ -412,7 +450,10 @@ export class CapitalBroker implements MasterBroker {
 
     // Size reject → retry once at epic min
     if (!opened.ok && isCapitalSizeError(String(opened.detail || ''))) {
-      const minSized = normalizeSizeForEpic(input.epic, sized.rules.minSize);
+      const minRaw = sized.rules.minSize;
+      const minSized = liveRules
+        ? normalizeCapitalDealSize(minRaw, liveRules)
+        : normalizeSizeForEpic(input.epic, minRaw);
       orderSize = minSized.size;
       opened = await this.deps.create(this.session, {
         epic: input.epic,

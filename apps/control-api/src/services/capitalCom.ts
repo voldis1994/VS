@@ -631,6 +631,10 @@ export interface CapitalMarketQuote {
   point_size?: number | null;
   /** Minimum stop distance in PRICE units */
   min_stop_distance?: number | null;
+  /** Live dealingRules size constraints when present on markets payload */
+  min_deal_size?: number | null;
+  max_deal_size?: number | null;
+  deal_size_step?: number | null;
 }
 
 function inferPointSize(json: any, mid: number | null): number {
@@ -754,6 +758,13 @@ export async function fetchCapitalMarketQuote(
     else mid = numOrNull(snap.mid ?? snap.lastTraded);
     const spread = bid != null && ask != null ? ask - bid : null;
     const stops = parseStopRules(res.json, mid);
+    const dealing = (res.json?.dealingRules || res.json?.dealing_rules || {}) as Record<
+      string,
+      any
+    >;
+    const minDeal = numOrNull(dealing.minDealSize?.value ?? dealing.minDealSize);
+    const maxDeal = numOrNull(dealing.maxDealSize?.value ?? dealing.maxDealSize);
+    const stepDeal = numOrNull(dealing.dealSizeStep?.value ?? dealing.dealSizeStep);
 
     return {
       epic: candidate,
@@ -771,6 +782,9 @@ export async function fetchCapitalMarketQuote(
       min_stop_unit: stops.min_stop_unit,
       point_size: stops.point_size,
       min_stop_distance: stops.min_stop_distance,
+      min_deal_size: minDeal,
+      max_deal_size: maxDeal,
+      deal_size_step: stepDeal,
       detail: bid == null && ask == null ? 'Snapshot returned without bid/offer' : undefined,
     };
   };

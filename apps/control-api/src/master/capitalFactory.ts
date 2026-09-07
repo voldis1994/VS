@@ -39,6 +39,11 @@ export function createCapitalBroker(creds: CapitalBrokerCreds): CapitalBroker {
         epic: q.epic || epic,
         raw_ok: q.raw_ok,
         detail: q.detail,
+        min_deal_size: q.min_deal_size,
+        max_deal_size: q.max_deal_size,
+        deal_size_step: q.deal_size_step,
+        point_size: q.point_size,
+        min_stop_distance: q.min_stop_distance,
       };
     },
     list: async (session) => listCapitalOpenPositions(session),
