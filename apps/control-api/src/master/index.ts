@@ -15,6 +15,7 @@ export * from './broker.js';
 export * from './execution.js';
 export * from './positionManager.js';
 export * from './persist.js';
+export * from './filePersist.js';
 export * from './capitalFactory.js';
 export * from './capitalConfirm.js';
 export * from './deskBridge.js';

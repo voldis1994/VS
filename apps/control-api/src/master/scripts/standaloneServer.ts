@@ -1,6 +1,6 @@
 /**
  * Standalone VS MASTER HTTP server — no Postgres required.
- * Serves real dashboard + paper tick loop.
+ * Serves real dashboard + paper tick loop + file restart recovery.
  *
  *   npx tsx src/master/scripts/standaloneServer.ts
  *   open http://127.0.0.1:3040/master
@@ -9,6 +9,7 @@ import Fastify from 'fastify';
 import { registerMasterRoutes } from '../../routes/master.js';
 import { masterRuntime } from '../runtime.js';
 import { DEFAULT_MASTER_CONFIG } from '../pipeline.js';
+import { installFilePersist } from '../filePersist.js';
 import type { Bar } from '../types.js';
 
 const PORT = parseInt(process.env.MASTER_STANDALONE_PORT || '3040', 10);
@@ -20,7 +21,7 @@ function synthBars(n: number, start = 4400, drift = 0.6): Bar[] {
   const t0 = Date.now() - n * 60_000;
   for (let i = 0; i < n; i++) {
     const o = px;
-    const c = o + drift + (Math.sin(i / 3) * 0.15);
+    const c = o + drift + Math.sin(i / 3) * 0.15;
     out.push({
       open: o,
       high: Math.max(o, c) + 0.4,
@@ -34,24 +35,33 @@ function synthBars(n: number, start = 4400, drift = 0.6): Bar[] {
 }
 
 async function main() {
-  // Memory persist only — no DB
   process.env.MASTER_STANDALONE = 'true';
-  masterRuntime.cfg = { ...DEFAULT_MASTER_CONFIG, mode: 'PAPER', min_score: 0.4, ai_mode: 'advisory' };
+  const stateDir = process.env.MASTER_STATE_DIR || '/tmp/vs-master-state';
+  installFilePersist(stateDir);
+
+  masterRuntime.cfg = {
+    ...DEFAULT_MASTER_CONFIG,
+    mode: 'PAPER',
+    min_score: 0.4,
+    ai_mode: 'advisory',
+  };
   masterRuntime.ensurePaperBroker();
-  await masterRuntime.start();
+  await masterRuntime.start(); // recovers from file persist
 
   const app = Fastify({ logger: false });
   await registerMasterRoutes(app);
+  app.get('/health', async () => ({
+    ok: true,
+    master: true,
+    standalone: true,
+    state_dir: stateDir,
+  }));
 
-  app.get('/health', async () => ({ ok: true, master: true, standalone: true }));
-
-  // Auto paper feed — proves live dashboard updates
   let bars = synthBars(40, 4400, 0.7);
   let tickN = 0;
   setInterval(() => {
     tickN += 1;
     const last = bars.at(-1)!;
-    // After ~25 ticks, reverse into a dump so exits fire
     const drift = tickN < 25 ? 0.55 : -2.2;
     const o = last.close;
     const c = o + drift;
@@ -78,6 +88,7 @@ async function main() {
 
   await app.listen({ port: PORT, host: HOST });
   console.log(`VS MASTER standalone on http://${HOST}:${PORT}/master`);
+  console.log(`state dir: ${stateDir}`);
 }
 
 main().catch((e) => {
