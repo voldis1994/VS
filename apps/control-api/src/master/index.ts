@@ -40,3 +40,5 @@ export * from './capitalLoginLock.js';
 export * from './newsCalendar.js';
 export * from './manageConfig.js';
 export * from './capitalStream.js';
+export * from './tradeAckJournal.js';
+export * from './runtimeGates.js';

@@ -4,6 +4,11 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync, readdir
 import { join } from 'path';
 import { createLoginLockState, withLoginLock } from './capitalLoginLock.js';
 import { CapitalQuoteStream } from './capitalStream.js';
+import {
+  findOpenSuccessUnbooked,
+  logTradeIntent,
+  updateTradeAck,
+} from './tradeAckJournal.js';
 import type { Side } from './types.js';
 
 export type BrokerQuote = {
@@ -1258,6 +1263,18 @@ export class Mt4FileBroker implements MasterBroker {
       magic: 50001,
       reason: 'VS_MASTER',
     };
+    // Reader: durable INTENT before control publish (crash between write and register)
+    logTradeIntent({
+      command_id: id,
+      intent_id: input.intent_id,
+      action: 'OPEN',
+      side: input.side,
+      volume: input.size,
+      epic: input.epic,
+      sl: input.stop_level ?? null,
+      tp: input.profit_level ?? null,
+      reason: 'INTENT',
+    });
     const folder = join(this.bridgeRoot, 'commands');
     mkdirSync(folder, { recursive: true });
     const tmp = join(folder, `cmd_${id}.tmp`);
@@ -1271,11 +1288,19 @@ export class Mt4FileBroker implements MasterBroker {
       const opens = await this.listOpenPositions(input.epic);
       const hit =
         opens.positions.find((p) => p.position_id === ticket) || opens.positions[0];
+      const position_id = ticket || hit?.position_id || null;
+      const fill_price = hit?.open_level ?? null;
+      updateTradeAck(id, {
+        ack_status: 'SUCCESS',
+        ticket: position_id,
+        fill_price,
+        detail: 'ACK_SUCCESS',
+      });
       return {
         ok: true,
         order_id: id,
-        position_id: ticket || hit?.position_id || null,
-        fill_price: hit?.open_level ?? null,
+        position_id,
+        fill_price,
         fill_size: hit?.size ?? input.size,
         detail: `mt4_filled ticket=${ticket || hit?.position_id}`,
         paper: false,
@@ -1283,6 +1308,10 @@ export class Mt4FileBroker implements MasterBroker {
     }
     if (waited.ack && !waited.ok) {
       this.expireCommand(id);
+      updateTradeAck(id, {
+        ack_status: 'FAILED',
+        detail: waited.detail || 'ACK_FAILED',
+      });
       return {
         ok: false,
         order_id: id,
@@ -1299,6 +1328,12 @@ export class Mt4FileBroker implements MasterBroker {
       (p) => p.side === input.side && Math.abs(p.size - input.size) < 1e-6
     );
     if (late) {
+      updateTradeAck(id, {
+        ack_status: 'SUCCESS',
+        ticket: late.position_id,
+        fill_price: late.open_level,
+        detail: 'ACK_LATE_FILL',
+      });
       return {
         ok: true,
         order_id: id,
@@ -1310,6 +1345,10 @@ export class Mt4FileBroker implements MasterBroker {
       };
     }
     this.expireCommand(id);
+    updateTradeAck(id, {
+      ack_status: 'TIMEOUT',
+      detail: 'ACK_TIMEOUT',
+    });
     return {
       ok: false,
       order_id: id,
@@ -1400,6 +1439,7 @@ export class Mt4FileBroker implements MasterBroker {
   /**
    * Reader/Check- style restart recovery — archive acked cmds, expire stale unacked.
    * Call before position sync so status orphans from late fills are adopted cleanly.
+   * Also upgrades INTENT journal rows when ack files are discovered.
    */
   recoverPendingCommands(maxAgeMs = 120_000): {
     applied: number;
@@ -1414,7 +1454,15 @@ export class Mt4FileBroker implements MasterBroker {
     for (const f of readdirSync(folder)) {
       if (!f.startsWith('cmd_') || !f.endsWith('.json')) continue;
       const path = join(folder, f);
-      let payload: { id?: string; action?: string };
+      let payload: {
+        id?: string;
+        action?: string;
+        symbol?: string;
+        side?: string;
+        lot?: number;
+        sl?: number;
+        tp?: number;
+      };
       try {
         payload = JSON.parse(readFileSync(path, 'utf8'));
       } catch {
@@ -1429,6 +1477,26 @@ export class Mt4FileBroker implements MasterBroker {
           const ack = JSON.parse(readFileSync(ackPath, 'utf8'));
           result.applied += 1;
           result.details.push(`${action}:${id}:ack_ok=${!!ack.ok}`);
+          if (action === 'OPEN') {
+            if (ack.ok) {
+              updateTradeAck(id, {
+                ack_status: 'SUCCESS',
+                ticket: String(ack.ticket || '') || null,
+                fill_price:
+                  ack.fill != null
+                    ? Number(ack.fill)
+                    : ack.price != null
+                      ? Number(ack.price)
+                      : null,
+                detail: 'RECOVER_ACK_SUCCESS',
+              });
+            } else {
+              updateTradeAck(id, {
+                ack_status: 'FAILED',
+                detail: `RECOVER_ACK_FAIL:${ack.detail || ''}`,
+              });
+            }
+          }
         } catch {
           result.applied += 1;
           result.details.push(`${action}:${id}:ack_corrupt`);
@@ -1446,12 +1514,66 @@ export class Mt4FileBroker implements MasterBroker {
         this.expireCommand(id);
         result.expired += 1;
         result.details.push(`${action}:${id}:expired_age_ms=${age}`);
+        if (action === 'OPEN') {
+          updateTradeAck(id, {
+            ack_status: 'TIMEOUT',
+            detail: 'RECOVER_EXPIRED',
+          });
+        }
       } else {
         result.still_pending += 1;
         result.details.push(`${action}:${id}:pending_age_ms=${age}`);
       }
     }
     return result;
+  }
+
+  /**
+   * Reader apply_ack_to_instance_state — OPEN SUCCESS tickets not yet in local book.
+   * Prefer journal (survives cmd expire); supplement with live ack files if present.
+   */
+  adoptOpenFromAckJournal(bookedIds: Set<string>): {
+    adopted: Array<{
+      command_id: string;
+      intent_id: string;
+      ticket: string;
+      side: Side;
+      volume: number;
+      epic: string;
+      fill_price: number | null;
+      sl: number | null;
+      tp: number | null;
+    }>;
+  } {
+    const fromJournal = findOpenSuccessUnbooked(bookedIds);
+    const adopted: Array<{
+      command_id: string;
+      intent_id: string;
+      ticket: string;
+      side: Side;
+      volume: number;
+      epic: string;
+      fill_price: number | null;
+      sl: number | null;
+      tp: number | null;
+    }> = [];
+    const seen = new Set<string>();
+    for (const r of fromJournal) {
+      if (!r.ticket || !r.side || seen.has(r.ticket)) continue;
+      seen.add(r.ticket);
+      adopted.push({
+        command_id: r.command_id,
+        intent_id: r.intent_id,
+        ticket: r.ticket,
+        side: r.side,
+        volume: r.volume,
+        epic: r.epic,
+        fill_price: r.fill_price,
+        sl: r.sl,
+        tp: r.tp,
+      });
+    }
+    return { adopted };
   }
 }
 

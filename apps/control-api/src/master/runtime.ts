@@ -28,6 +28,7 @@ import {
   floatingUnrealizedPnl,
   PositionManager,
   protectiveMark,
+  stableRecoverUuid,
   type ManagedPosition,
 } from './positionManager.js';
 import { evaluateRisk } from './risk.js';
@@ -909,6 +910,63 @@ class MasterRuntime {
         this.broker_detail = [
           this.broker_detail,
           `mt4_recover:applied=${pending.applied},expired=${pending.expired},pending=${pending.still_pending}`,
+        ]
+          .filter(Boolean)
+          .join(';');
+      }
+      // Reader apply_ack_to_instance_state — OPEN SUCCESS before status sync
+      const booked = new Set(this.positions.list().map((p) => p.position_id));
+      const fromAck = this.broker.adoptOpenFromAckJournal(booked);
+      for (const row of fromAck.adopted) {
+        if (this.positions.get(row.ticket)) continue;
+        const recoverId = stableRecoverUuid(row.ticket);
+        this.positions.register({
+          position_id: row.ticket,
+          opportunity_id: recoverId,
+          intent_id: row.intent_id || row.command_id,
+          epic: row.epic || this.epic,
+          side: row.side,
+          size: row.volume,
+          entry: row.fill_price ?? 0,
+          stop_loss: row.sl,
+          take_profit: row.tp,
+          decision: {
+            decision_id: recoverId,
+            kind: row.side,
+            side: row.side,
+            score: 0,
+            block_reason: null,
+            buy: null as never,
+            sell: null as never,
+            analysis: {
+              regime: 'UNKNOWN',
+              market_state: 'ack_recover',
+              momentum_score: 0,
+              momentum_dir: 'NEUTRAL',
+              trend_dir: 'SIDEWAYS',
+              trend_strength: 0,
+              structure_bias: 'NEUTRAL',
+              swing_high: row.fill_price ?? 0,
+              swing_low: row.fill_price ?? 0,
+              buy_pressure: 0,
+              sell_pressure: 0,
+              behavior_bull: 0,
+              behavior_bear: 0,
+              impact_score: 0,
+              context_quality: 0,
+              volatility: 0,
+              atr: 0,
+              data_quality: 0.5,
+              session: 'UNKNOWN',
+            },
+            expectancy: null,
+          },
+        });
+      }
+      if (fromAck.adopted.length) {
+        this.broker_detail = [
+          this.broker_detail,
+          `ack_adopt:${fromAck.adopted.length}`,
         ]
           .filter(Boolean)
           .join(';');
