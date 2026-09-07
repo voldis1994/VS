@@ -1547,4 +1547,116 @@ describe('partial_close persist + Check be_start', () => {
     expect(managed.closed.some((c) => /SOFT_TRAIL/.test(c.reason))).toBe(true);
     expect(pm.count()).toBe(0);
   });
+
+  it('10%/20% scalp pct chase raises BUY SL toward mark', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    const mark = entry + 40; // deep profit → chase SL = mark - 0.2*40 = entry+32
+    broker.setQuote({
+      bid: mark - 0.05,
+      ask: mark + 0.05,
+      mid: mark,
+      spread: 0.1,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'scalp-chase-bbbbbbbbbbbb',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: entry - entry * 0.1,
+      profit_level: entry + 80,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-scalp-chase',
+      intent_id: 'scalp-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry,
+      stop_loss: entry - entry * 0.1,
+      take_profit: entry + 80,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis(),
+        expectancy: null,
+      },
+    });
+    await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: mark - 0.05,
+        ask: mark + 0.05,
+        mid: mark,
+        spread: 0.1,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      scalp_pct_chase: true,
+      scalp_lock_pct: 0.2,
+      breakeven_progress: 0,
+      max_hold_ms: 0,
+      allow_close: false, // keep open so chase can modify SL
+    });
+    expect(pm.count()).toBe(1);
+    const sl = pm.get(placed.position_id!)!.stop_loss!;
+    // 20% lock: mark - 0.2*(mark-entry) = 4440 - 8 = 4432
+    expect(sl).toBeGreaterThan(entry);
+    expect(sl).toBeCloseTo(mark - 0.2 * (mark - entry), 1);
+  });
+
+  it('scalp_strict_entry blocks BUY into bearish last-5 candles', () => {
+    const bearBars = [
+      { open: 4410, high: 4411, low: 4405, close: 4406, ts_ms: 1 },
+      { open: 4406, high: 4407, low: 4401, close: 4402, ts_ms: 2 },
+      { open: 4402, high: 4403, low: 4397, close: 4398, ts_ms: 3 },
+      { open: 4398, high: 4399, low: 4393, close: 4394, ts_ms: 4 },
+      { open: 4394, high: 4395, low: 4389, close: 4390, ts_ms: 5 },
+      { open: 4390, high: 4391, low: 4385, close: 4386, ts_ms: 6 },
+    ];
+    const a = baseAnalysis({
+      regime: 'TREND',
+      momentum_dir: 'UP',
+      trend_dir: 'UP',
+      trend_strength: 0.8,
+      structure_bias: 'BULLISH',
+      buy_pressure: 0.9,
+      sell_pressure: 0.1,
+      behavior_bull: 0.9,
+      momentum_score: 0.8,
+      atr: 2,
+      context_quality: 0.9,
+      impact_score: 0.8,
+    });
+    const q: Quote = {
+      bid: 4386,
+      ask: 4386.4,
+      mid: 4386.2,
+      spread: 0.4,
+      ts_ms: Date.now(),
+    };
+    const cfg = {
+      ...DEFAULT_MASTER_CONFIG,
+      min_score: 0.4,
+      block_off_hours: false,
+      block_high_impact_news: false,
+      scalp_strict_entry: true,
+      scalp_min_edge: 0.05,
+    };
+    const { buy } = buildCandidates(a, q, cfg, bearBars);
+    expect(buy.valid).toBe(false);
+    expect(buy.filter_reason).toMatch(/scalp_|bull|bear|falling|micro|edge/);
+  });
 });

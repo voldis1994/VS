@@ -253,6 +253,10 @@ export const DEFAULT_MASTER_CONFIG: MasterConfig = {
   breakeven_activation_money: 0,
   soft_trail_money_arm: 0,
   soft_trail_pips: 0.3,
+  scalp_pct_chase: false,
+  scalp_lock_pct: 0.2,
+  scalp_strict_entry: false,
+  scalp_min_edge: 0.12,
 };
 
 export const GOLD_SPEC: InstrumentSpec = {

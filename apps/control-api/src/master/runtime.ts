@@ -13,7 +13,10 @@ import {
   saveOpenPositions,
   saveSeenIntents,
 } from './persist.js';
-import { syncPositionsWithBroker } from './positionSync.js';
+import {
+  syncPositionsWithBroker,
+  type EmptyBrokerDebounce,
+} from './positionSync.js';
 import {
   DEFAULT_MASTER_CONFIG,
   GOLD_SPEC,
@@ -130,6 +133,8 @@ class MasterRuntime {
   /** Reader relative-spread rolling history */
   private spreadLookback = DEFAULT_MASTER_CONFIG.spread_lookback_bars;
   private spreadHistory = new SpreadHistory(this.spreadLookback);
+  /** VS-System: 5 consecutive empty successful lists before ghost wipe */
+  private emptyBrokerDebounce: EmptyBrokerDebounce = { consecutive_empty: 0 };
   epic = GOLD_SPEC.epic;
 
   setMode(mode: Mode) {
@@ -389,8 +394,16 @@ class MasterRuntime {
     const spreadSnap = this.spreadHistory.push(quote.spread);
 
     // 0) Reconcile broker truth every tick — drop ghosts, adopt orphans (VS-System-)
-    const sync = await syncPositionsWithBroker(this.positions, broker, this.epic);
-    if (!sync.skipped) this.applySyncJournal(sync, quote);
+    // Empty-book ghost wipe requires 5 consecutive successful empties (debounce).
+    const sync = await syncPositionsWithBroker(
+      this.positions,
+      broker,
+      this.epic,
+      this.emptyBrokerDebounce
+    );
+    if (!sync.skipped && !sync.ghost_drop_deferred) {
+      this.applySyncJournal(sync, quote);
+    }
 
     this.account.open_positions = this.positions.count();
     const instrument = specForEpic(this.epic);
@@ -432,6 +445,8 @@ class MasterRuntime {
       breakeven_activation_money: this.cfg.breakeven_activation_money,
       soft_trail_money_arm: this.cfg.soft_trail_money_arm,
       soft_trail_pips: this.cfg.soft_trail_pips,
+      scalp_pct_chase: this.cfg.scalp_pct_chase,
+      scalp_lock_pct: this.cfg.scalp_lock_pct,
     });
     const exit_reasons = managed.closed.map((c) => c.reason);
     if (exit_reasons.length) this.last_exit_reason = exit_reasons.at(-1)!;
@@ -730,8 +745,15 @@ class MasterRuntime {
     }
 
     if (this.broker) {
-      const sync = await syncPositionsWithBroker(this.positions, this.broker, this.epic);
-      if (!sync.skipped) this.applySyncJournal(sync);
+      const sync = await syncPositionsWithBroker(
+        this.positions,
+        this.broker,
+        this.epic,
+        this.emptyBrokerDebounce
+      );
+      if (!sync.skipped && !sync.ghost_drop_deferred) {
+        this.applySyncJournal(sync);
+      }
     }
 
     // Hydrate last exit for dashboard after restart

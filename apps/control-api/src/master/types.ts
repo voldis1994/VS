@@ -295,4 +295,18 @@ export type MasterConfig = {
   soft_trail_money_arm: number;
   /** Soft-trail pullback distance in pips once armed (VS-System default 0.3). */
   soft_trail_pips: number;
+  /**
+   * VS-System 10%/20% broker SL chase (SCALP_INITIAL_SL_PCT / SCALP_LOCK_PCT).
+   * Soft trail alone is software-only — enable this for Capital/MT4 stopLevel chase.
+   */
+  scalp_pct_chase: boolean;
+  /** Lock fraction of favorable move left as cushion (default 0.2 = 20%). */
+  scalp_lock_pct: number;
+  /**
+   * VS-System strict candle-bias entry gate (falling-knife / weak-edge kill).
+   * Scores are 0..1 — use scalp_min_edge accordingly.
+   */
+  scalp_strict_entry: boolean;
+  /** Min |buy−sell| score edge for scalp_strict_entry (default 0.12). */
+  scalp_min_edge: number;
 };

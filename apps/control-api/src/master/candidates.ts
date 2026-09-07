@@ -1,4 +1,5 @@
 /** Dual BUY/SELL candidates — independent component scores (heuristic, not probability). */
+import { candleBiasFromBars, scalpStrictEntryAllowed } from './candleBias.js';
 import { applyMarketFilters } from './filters.js';
 import { isLateMoveOnBars } from './lateMove.js';
 import type {
@@ -104,6 +105,33 @@ export function buildCandidates(
   const buyLate = isLateMoveOnBars('BUY', bars);
   const sellLate = isLateMoveOnBars('SELL', bars);
 
+  // VS-System strict scalp candle gate (opt-in)
+  let buyScalpBlock: string | null = null;
+  let sellScalpBlock: string | null = null;
+  if (cfg.scalp_strict_entry) {
+    const { tf, micro } = candleBiasFromBars(bars);
+    const buyGate = scalpStrictEntryAllowed({
+      signal: 'BUY',
+      tfBias: tf.bias,
+      tfNetPct: tf.netPct,
+      microBias: micro.bias,
+      buyScore,
+      sellScore,
+      minEdge: cfg.scalp_min_edge,
+    });
+    const sellGate = scalpStrictEntryAllowed({
+      signal: 'SELL',
+      tfBias: tf.bias,
+      tfNetPct: tf.netPct,
+      microBias: micro.bias,
+      buyScore,
+      sellScore,
+      minEdge: cfg.scalp_min_edge,
+    });
+    if (!buyGate.ok) buyScalpBlock = buyGate.skip || 'scalp_strict_entry';
+    if (!sellGate.ok) sellScalpBlock = sellGate.skip || 'scalp_strict_entry';
+  }
+
   const buy: TradeCandidate = {
     side: 'BUY',
     valid:
@@ -111,20 +139,21 @@ export function buildCandidates(
       filter.ok &&
       a.regime !== 'UNSTABLE' &&
       !buyAgainstDump &&
-      !buyLate,
+      !buyLate &&
+      !buyScalpBlock,
     score: buyScore,
     components: buyComp,
     entry: buyEntry,
     stop_loss: buySl,
     take_profit: buyEntry + buyRisk * cfg.reward_ratio,
-    filter_ok: filter.ok && !buyAgainstDump && !buyLate,
+    filter_ok: filter.ok && !buyAgainstDump && !buyLate && !buyScalpBlock,
     filter_reason: !filter.ok
       ? filter.reason
       : buyAgainstDump
         ? 'against_flow_dump'
         : buyLate
           ? 'late_move'
-          : null,
+          : buyScalpBlock,
   };
   const sell: TradeCandidate = {
     side: 'SELL',
@@ -133,20 +162,21 @@ export function buildCandidates(
       filter.ok &&
       a.regime !== 'UNSTABLE' &&
       !sellAgainstRally &&
-      !sellLate,
+      !sellLate &&
+      !sellScalpBlock,
     score: sellScore,
     components: sellComp,
     entry: sellEntry,
     stop_loss: sellSl,
     take_profit: sellEntry - sellRisk * cfg.reward_ratio,
-    filter_ok: filter.ok && !sellAgainstRally && !sellLate,
+    filter_ok: filter.ok && !sellAgainstRally && !sellLate && !sellScalpBlock,
     filter_reason: !filter.ok
       ? filter.reason
       : sellAgainstRally
         ? 'against_flow_rally'
         : sellLate
           ? 'late_move'
-          : null,
+          : sellScalpBlock,
   };
   return { buy, sell };
 }

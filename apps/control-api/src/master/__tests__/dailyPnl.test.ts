@@ -93,7 +93,7 @@ describe('MASTER daily pnl day boundary', () => {
 });
 
 describe('MASTER per-tick ghost sync', () => {
-  it('drops local ghost when broker flat and journals broker_flat', async () => {
+  it('drops local ghost only after 5 consecutive empty broker lists', async () => {
     masterRuntime.stop();
     masterRuntime.pipeline = new MasterPipeline('PAPER');
     masterRuntime.positions = new PositionManager();
@@ -126,7 +126,27 @@ describe('MASTER per-tick ghost sync', () => {
     });
     expect(masterRuntime.positions.count()).toBe(1);
 
-    const sync = await syncPositionsWithBroker(masterRuntime.positions, broker, 'GOLD');
+    const debounce = { consecutive_empty: 0 };
+    const deferred = await syncPositionsWithBroker(
+      masterRuntime.positions,
+      broker,
+      'GOLD',
+      debounce
+    );
+    expect(deferred.ghost_drop_deferred).toBe(true);
+    expect(deferred.orphans_local.length).toBe(0);
+    expect(masterRuntime.positions.count()).toBe(1);
+
+    let sync = deferred;
+    for (let i = 0; i < 4; i++) {
+      sync = await syncPositionsWithBroker(
+        masterRuntime.positions,
+        broker,
+        'GOLD',
+        debounce
+      );
+    }
+    expect(sync.ghost_drop_deferred).toBe(false);
     expect(sync.orphans_local.length).toBe(1);
     expect(masterRuntime.positions.count()).toBe(0);
 
@@ -151,13 +171,16 @@ describe('MASTER per-tick ghost sync', () => {
       epic: 'GOLD',
       ts_ms: Date.now(),
     });
-    await masterRuntime.tick(bars, {
+    const q = {
       bid: 4415,
       ask: 4415.4,
       mid: 4415.2,
       spread: 0.4,
       ts_ms: Date.now(),
-    });
+    };
+    for (let i = 0; i < 5; i++) {
+      await masterRuntime.tick(bars, q);
+    }
     expect(masterRuntime.positions.count()).toBe(0);
     expect(
       masterRuntime.pipeline.journal.opportunities.some(

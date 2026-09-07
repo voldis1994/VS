@@ -34,3 +34,5 @@ export * from './slTp.js';
 export * from './capitalStop.js';
 export * from './multiTp.js';
 export * from './moneyExit.js';
+export * from './scalpPctChase.js';
+export * from './candleBias.js';

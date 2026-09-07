@@ -23,6 +23,12 @@ import {
   updateSoftTrailPeak,
 } from './moneyExit.js';
 import type { MasterPipeline } from './pipeline.js';
+import {
+  SCALP_LOCK_PCT,
+  SCALP_SL_CHASE_MIN_INTERVAL_MS,
+  scalpChaseIsImprovement,
+  scalpPctLockBrokerStop,
+} from './scalpPctChase.js';
 import type {
   MasterDecision,
   Quote,
@@ -76,6 +82,8 @@ export class PositionManager {
   private open = new Map<string, ManagedPosition>();
   /** VS-System: skip resending the same rejected trail/BE level until backoff expires */
   private modifyBackoff = new Map<string, { until: number; level: number }>();
+  /** VS-System scalp chase rate-limit (last successful/attempted improve ms) */
+  private scalpChaseAt = new Map<string, number>();
 
   list(): ManagedPosition[] {
     return [...this.open.values()];
@@ -179,6 +187,10 @@ export class PositionManager {
     soft_trail_money_arm?: number;
     /** Soft-trail pullback distance in pips (default 0.3) */
     soft_trail_pips?: number;
+    /** VS-System 10%/20% broker SL chase */
+    scalp_pct_chase?: boolean;
+    /** Lock fraction (default 0.2) */
+    scalp_lock_pct?: number;
   }): Promise<ManageTickResult> {
     const { broker, pipeline, quote } = input;
     const pv = input.instrument_point_value ?? 1;
@@ -189,6 +201,14 @@ export class PositionManager {
     const beMoney = input.breakeven_activation_money ?? 0;
     const softMoneyArm = input.soft_trail_money_arm ?? 0;
     const softPips = input.soft_trail_pips ?? 0.3;
+    const scalpChase = input.scalp_pct_chase === true;
+    const scalpLock =
+      input.scalp_lock_pct != null &&
+      Number.isFinite(input.scalp_lock_pct) &&
+      input.scalp_lock_pct > 0 &&
+      input.scalp_lock_pct <= 1
+        ? Number(input.scalp_lock_pct)
+        : SCALP_LOCK_PCT;
     const trailStart = input.trail_start ?? 0;
     const trailLock = input.trail_lock ?? 0;
     const partialProgress = input.partial_close_progress ?? 0;
@@ -472,14 +492,21 @@ export class PositionManager {
           pointValue: pv,
           min_stop_distance: minStopDist,
         });
-        await this.maybeTrailStop(broker, pos, quote, {
-          swing_low: swingLow,
-          swing_high: swingHigh,
-          trailing_buffer: trailBuf,
-          trail_start: trailStart,
-          trail_lock: trailLock,
-          min_stop_distance: minStopDist,
-        });
+        if (scalpChase) {
+          await this.maybeScalpPctChaseStop(broker, pos, quote, {
+            lockPct: scalpLock,
+            min_stop_distance: minStopDist,
+          });
+        } else {
+          await this.maybeTrailStop(broker, pos, quote, {
+            swing_low: swingLow,
+            swing_high: swingHigh,
+            trailing_buffer: trailBuf,
+            trail_start: trailStart,
+            trail_lock: trailLock,
+            min_stop_distance: minStopDist,
+          });
+        }
         continue;
       }
 
@@ -501,14 +528,21 @@ export class PositionManager {
           pointValue: pv,
           min_stop_distance: minStopDist,
         });
-        await this.maybeTrailStop(broker, pos, quote, {
-          swing_low: swingLow,
-          swing_high: swingHigh,
-          trailing_buffer: trailBuf,
-          trail_start: trailStart,
-          trail_lock: trailLock,
-          min_stop_distance: minStopDist,
-        });
+        if (scalpChase) {
+          await this.maybeScalpPctChaseStop(broker, pos, quote, {
+            lockPct: scalpLock,
+            min_stop_distance: minStopDist,
+          });
+        } else {
+          await this.maybeTrailStop(broker, pos, quote, {
+            swing_low: swingLow,
+            swing_high: swingHigh,
+            trailing_buffer: trailBuf,
+            trail_start: trailStart,
+            trail_lock: trailLock,
+            min_stop_distance: minStopDist,
+          });
+        }
         continue;
       }
 
@@ -744,6 +778,91 @@ export class PositionManager {
       level: clamped,
     });
     return false;
+  }
+
+  /**
+   * VS-System 10%/20% SCALPING broker SL chase — improve-only Capital stopLevel.
+   * Replaces structure/MFE trail when scalp_pct_chase is enabled.
+   */
+  private async maybeScalpPctChaseStop(
+    broker: MasterBroker,
+    pos: ManagedPosition,
+    quote: Quote,
+    opts: { lockPct: number; min_stop_distance?: number | null }
+  ): Promise<void> {
+    if (!broker.modifyPosition) return;
+    const mark = protectiveMark(pos.side, quote);
+    const now = Date.now();
+    const last = this.scalpChaseAt.get(pos.position_id) ?? 0;
+    if (now - last < SCALP_SL_CHASE_MIN_INTERVAL_MS) return;
+
+    const candidate = scalpPctLockBrokerStop({
+      symbol: pos.epic,
+      direction: pos.side,
+      entry: pos.entry,
+      livePrice: mark,
+      lockPct: opts.lockPct,
+      min_distance: opts.min_stop_distance,
+    });
+    if (candidate == null) return;
+
+    if (
+      !scalpChaseIsImprovement({
+        direction: pos.side,
+        candidate,
+        current: pos.stop_loss,
+      })
+    ) {
+      return;
+    }
+
+    const backoff = this.modifyBackoff.get(pos.position_id);
+    if (
+      backoff &&
+      now < backoff.until &&
+      Math.abs(backoff.level - candidate) < 1e-9
+    ) {
+      return;
+    }
+
+    // Already Capital-legal from scalpPctLockBrokerStop — still clamp for live min
+    const clamped = clampStopForCapitalMark({
+      side: pos.side,
+      stop: candidate,
+      mark,
+      symbol: pos.epic,
+      current_stop: pos.stop_loss,
+      min_distance: opts.min_stop_distance,
+    });
+    // When clamp rejects because candidate is still below entry while mark is
+    // close (favorable < minD), push candidate directly if still improve-only
+    // and valid vs mark soft floor.
+    const stop = clamped ?? candidate;
+    if (
+      !scalpChaseIsImprovement({
+        direction: pos.side,
+        candidate: stop,
+        current: pos.stop_loss,
+      })
+    ) {
+      return;
+    }
+
+    this.scalpChaseAt.set(pos.position_id, now);
+    const mod = await broker.modifyPosition({
+      position_id: pos.position_id,
+      stop_level: stop,
+    });
+    if (mod.ok) {
+      pos.stop_loss = stop;
+      this.modifyBackoff.delete(pos.position_id);
+      return;
+    }
+    const { capitalModifyRejectBackoffMs } = await import('./capitalConfirm.js');
+    this.modifyBackoff.set(pos.position_id, {
+      until: now + capitalModifyRejectBackoffMs(mod.detail || ''),
+      level: stop,
+    });
   }
 
   /**
