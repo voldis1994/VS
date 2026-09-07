@@ -4,6 +4,7 @@ import { analyzeBars } from './analysis.js';
 import { decide, setupKey } from './decision.js';
 import { ExpectancyStore } from './expectancy.js';
 import { MasterJournal } from './journal.js';
+import { validateMarket, type MarketValidation } from './marketData.js';
 import { evaluateRisk } from './risk.js';
 import type {
   AccountSnapshot,
@@ -33,6 +34,7 @@ export type PipelineResult = {
   decision: MasterDecision;
   risk: RiskVerdict;
   opportunity: OpportunityRecord;
+  market: MarketValidation;
 };
 
 export class MasterPipeline {
@@ -42,17 +44,57 @@ export class MasterPipeline {
 
   constructor(public mode: Mode = 'PAPER') {}
 
-  /** MARKET → … → DECISION → RISK (execution is explicit next step). */
+  /** MARKET → VALIDATION → ANALYSIS → DECISION → RISK (execution is next step). */
   runCycle(input: PipelineInput): PipelineResult {
-    const analysis = analyzeBars(input.bars, input.quote.spread, input.now_ms);
-    const decision = decide(analysis, input.quote, input.cfg, (k) =>
+    const market = validateMarket(input.bars, input.quote, {
+      stale_ms: input.cfg.stale_quote_ms,
+      max_spread_abs: Math.max(input.cfg.max_spread_abs * 4, 5),
+      now_ms: input.now_ms,
+    });
+
+    if (!market.ok || !market.quote) {
+      const analysis = analyzeBars(
+        market.bars.length ? market.bars : input.bars,
+        input.quote.spread,
+        input.now_ms
+      );
+      analysis.data_quality = market.quality;
+      analysis.market_state = `invalid:${market.reasons.join('|') || 'market'}`;
+      const decision = decide(
+        analysis,
+        input.quote,
+        { ...input.cfg, kill_switch: true },
+        () => null
+      );
+      decision.kind = 'BLOCK';
+      decision.side = null;
+      decision.block_reason = `market_validation:${market.reasons.join(',')}`;
+      const risk: RiskVerdict = {
+        allowed: false,
+        volume: 0,
+        risk_amount: 0,
+        reasons: ['market_validation', ...market.reasons],
+      };
+      const opportunity = this.journal.recordOpportunity({
+        mode: input.cfg.mode,
+        epic: input.instrument.epic,
+        decision,
+        risk,
+        executed: false,
+      });
+      return { decision, risk, opportunity, market };
+    }
+
+    const analysis = analyzeBars(market.bars, market.quote.spread, input.now_ms);
+    analysis.data_quality = Math.min(analysis.data_quality, market.quality);
+    const decision = decide(analysis, market.quote, input.cfg, (k) =>
       this.expectancy.lookup(k)
     );
     const risk = evaluateRisk(
       decision,
       input.account,
       input.instrument,
-      input.quote,
+      market.quote,
       input.cfg,
       {
         last_loss_ms: input.last_loss_ms,
@@ -67,7 +109,7 @@ export class MasterPipeline {
       risk,
       executed: false,
     });
-    return { decision, risk, opportunity };
+    return { decision, risk, opportunity, market };
   }
 
   /** Idempotent intent claim — same intent_id cannot execute twice. */
@@ -124,6 +166,7 @@ export const GOLD_SPEC: InstrumentSpec = {
   epic: 'GOLD',
   display_name: 'Gold',
   point: 0.01,
+  /** Currency PnL per 1.0 point × 1.0 lot */
   value_per_point_per_lot: 1,
   volume_step: 0.01,
   min_volume: 0.01,

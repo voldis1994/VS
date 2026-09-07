@@ -278,7 +278,7 @@ describe('VS MASTER replay / walk-forward / monte carlo', () => {
 });
 
 describe('VS MASTER pipeline end-to-end', () => {
-  it('runs MARKET→DECISION→RISK in one cycle', () => {
+  it('runs MARKET→VALIDATION→DECISION→RISK in one cycle', () => {
     const pipe = new MasterPipeline('PAPER');
     const bars = barsTrendUp();
     const result = pipe.runCycle({
@@ -289,9 +289,24 @@ describe('VS MASTER pipeline end-to-end', () => {
       cfg: DEFAULT_MASTER_CONFIG,
     });
     expect(result.decision.decision_id).toBeTruthy();
+    expect(result.market.ok).toBe(true);
     expect(result.decision.buy.components).toBeDefined();
     expect(result.decision.sell.components).toBeDefined();
     expect(result.opportunity.executed).toBe(false);
     expect(['BUY', 'SELL', 'WAIT', 'BLOCK']).toContain(result.decision.kind);
+  });
+
+  it('blocks on invalid market data', () => {
+    const pipe = new MasterPipeline('PAPER');
+    const result = pipe.runCycle({
+      bars: [{ open: 1, high: 1, low: 1, close: 1 }],
+      quote: { bid: 1, ask: 1.01, mid: 1.005, spread: 0.01, ts_ms: Date.now() },
+      account,
+      instrument: GOLD_SPEC,
+      cfg: DEFAULT_MASTER_CONFIG,
+    });
+    expect(result.market.ok).toBe(false);
+    expect(result.decision.kind).toBe('BLOCK');
+    expect(result.decision.block_reason).toMatch(/market_validation/);
   });
 });
