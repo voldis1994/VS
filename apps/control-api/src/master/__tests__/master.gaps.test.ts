@@ -889,7 +889,14 @@ describe('partial close scale-out', () => {
   });
 
   it('Mt4FileBroker partial CLOSE proves size reduction (EA lot honor)', async () => {
+    const prevFast = process.env.MASTER_CONFIRM_FAST;
+    const prevState = process.env.MASTER_STATE_DIR;
+    const prevPoll = process.env.MASTER_MT4_ACK_POLL_MS;
+    const prevPolls = process.env.MASTER_MT4_ACK_POLLS;
     process.env.MASTER_CONFIRM_FAST = 'true';
+    process.env.MASTER_STATE_DIR = mkdtempSync(join(tmpdir(), 'mt4-partial-state-'));
+    process.env.MASTER_MT4_ACK_POLL_MS = '20';
+    process.env.MASTER_MT4_ACK_POLLS = '80';
     const root = mkdtempSync(join(tmpdir(), 'mt4-partial-'));
     const sim = new Mt4BridgeSimulator(root);
     sim.setQuote(4400, 4400.4);
@@ -899,7 +906,7 @@ describe('partial close scale-out', () => {
     expect(broker.supportsPartialClose).toBe(true);
     try {
       const placed = await broker.placeOrder({
-        intent_id: 'mt4partialintent000000001',
+        intent_id: `mt4partial${Date.now()}`,
         epic: 'XAUUSD',
         side: 'BUY',
         size: 0.1,
@@ -913,7 +920,14 @@ describe('partial close scale-out', () => {
       expect(listed.positions[0]!.size).toBeCloseTo(0.06, 5);
     } finally {
       sim.stop();
-      delete process.env.MASTER_CONFIRM_FAST;
+      if (prevFast === undefined) delete process.env.MASTER_CONFIRM_FAST;
+      else process.env.MASTER_CONFIRM_FAST = prevFast;
+      if (prevState === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prevState;
+      if (prevPoll === undefined) delete process.env.MASTER_MT4_ACK_POLL_MS;
+      else process.env.MASTER_MT4_ACK_POLL_MS = prevPoll;
+      if (prevPolls === undefined) delete process.env.MASTER_MT4_ACK_POLLS;
+      else process.env.MASTER_MT4_ACK_POLLS = prevPolls;
     }
   });
 });
