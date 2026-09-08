@@ -635,6 +635,167 @@ describe('VS MASTER MT4 file bridge', () => {
     }
   });
 
+  it('MODIFY ack timeout late-proves status levels (no false reject)', async () => {
+    const prevPolls = process.env.MASTER_MT4_ACK_POLLS;
+    const prevMs = process.env.MASTER_MT4_ACK_POLL_MS;
+    process.env.MASTER_MT4_ACK_POLLS = '6';
+    process.env.MASTER_MT4_ACK_POLL_MS = '30';
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-modlate-'));
+    const sim = new Mt4BridgeSimulator(root);
+    sim.modifyWithoutAck = true;
+    sim.keepCommandsAfterAck = true;
+    sim.setQuote(4400, 4400.4);
+    sim.start(25);
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    try {
+      const placed = await broker.placeOrder({
+        intent_id: 'modlateintent000000000001',
+        epic: 'XAUUSD',
+        side: 'BUY',
+        size: 0.02,
+        stop_level: 4390,
+        profit_level: 4420,
+      });
+      expect(placed.ok).toBe(true);
+      const mod = await broker.modifyPosition({
+        position_id: placed.position_id!,
+        stop_level: 4395,
+        profit_level: 4425,
+      });
+      expect(mod.ok).toBe(true);
+      expect(mod.detail).toBe('mt4_modify_acked_late');
+      const opens = await broker.listOpenPositions('XAUUSD');
+      const hit = opens.positions.find((p) => p.position_id === placed.position_id);
+      expect(hit?.stop_level).toBe(4395);
+      expect(hit?.profit_level).toBe(4425);
+    } finally {
+      sim.stop();
+      if (prevPolls === undefined) delete process.env.MASTER_MT4_ACK_POLLS;
+      else process.env.MASTER_MT4_ACK_POLLS = prevPolls;
+      if (prevMs === undefined) delete process.env.MASTER_MT4_ACK_POLL_MS;
+      else process.env.MASTER_MT4_ACK_POLL_MS = prevMs;
+    }
+  });
+
+  it('CLOSE ack timeout waits for status flat (sim closeWithoutAck)', async () => {
+    const prevPolls = process.env.MASTER_MT4_ACK_POLLS;
+    const prevMs = process.env.MASTER_MT4_ACK_POLL_MS;
+    process.env.MASTER_MT4_ACK_POLLS = '6';
+    process.env.MASTER_MT4_ACK_POLL_MS = '30';
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-closenoack-'));
+    const sim = new Mt4BridgeSimulator(root);
+    sim.closeWithoutAck = true;
+    sim.keepCommandsAfterAck = true;
+    sim.setQuote(4400, 4400.4);
+    sim.start(25);
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    try {
+      const placed = await broker.placeOrder({
+        intent_id: 'closenoackintent000000001',
+        epic: 'XAUUSD',
+        side: 'BUY',
+        size: 0.02,
+        stop_level: 4390,
+      });
+      expect(placed.ok).toBe(true);
+      const closed = await broker.closePosition(placed.position_id!);
+      expect(closed.ok).toBe(true);
+      expect(closed.detail).toMatch(/mt4_closed_late/);
+      const opens = await broker.listOpenPositions('XAUUSD');
+      expect(opens.positions.length).toBe(0);
+    } finally {
+      sim.stop();
+      if (prevPolls === undefined) delete process.env.MASTER_MT4_ACK_POLLS;
+      else process.env.MASTER_MT4_ACK_POLLS = prevPolls;
+      if (prevMs === undefined) delete process.env.MASTER_MT4_ACK_POLL_MS;
+      else process.env.MASTER_MT4_ACK_POLL_MS = prevMs;
+    }
+  });
+
+  it('recoverPendingCommands late-reconciles CLOSE and MODIFY from status', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-recover-cm-'));
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    mkdirSync(join(root, 'commands'), { recursive: true });
+    mkdirSync(join(root, 'status'), { recursive: true });
+    writeFileSync(
+      join(root, 'commands', 'cmd_rcl.json'),
+      JSON.stringify({ id: 'rcl', action: 'CLOSE', ticket: 555002, lot: 0.1 })
+    );
+    writeFileSync(
+      join(root, 'commands', 'cmd_rmod.json'),
+      JSON.stringify({
+        id: 'rmod',
+        action: 'MODIFY',
+        ticket: 555003,
+        sl: 4395,
+        tp: 4425,
+      })
+    );
+    writeFileSync(
+      join(root, 'status', 'latest.json'),
+      JSON.stringify({
+        equity: 10000,
+        balance: 10000,
+        positions: [
+          {
+            ticket: 555003,
+            symbol: 'XAUUSD',
+            side: 'BUY',
+            lot: 0.05,
+            open: 4400,
+            sl: 4395,
+            tp: 4425,
+          },
+        ],
+      })
+    );
+    const { utimesSync } = await import('fs');
+    const old = new Date(Date.now() - 200_000);
+    utimesSync(join(root, 'commands', 'cmd_rcl.json'), old, old);
+    utimesSync(join(root, 'commands', 'cmd_rmod.json'), old, old);
+
+    const { clearTradeAckJournalForTest, logTradeIntent, loadTradeAckJournal } =
+      await import('../tradeAckJournal.js');
+    const state = mkdtempSync(join(tmpdir(), 'vs-recover-cm-state-'));
+    process.env.MASTER_STATE_DIR = state;
+    clearTradeAckJournalForTest();
+    logTradeIntent({
+      command_id: 'rcl',
+      intent_id: 'rcl-intent',
+      action: 'CLOSE',
+      side: null,
+      volume: 0,
+      epic: 'XAUUSD',
+      ticket: '555002',
+      sl: null,
+      tp: null,
+      reason: 'INTENT',
+    });
+    logTradeIntent({
+      command_id: 'rmod',
+      intent_id: 'rmod-intent',
+      action: 'MODIFY',
+      side: null,
+      volume: 0,
+      epic: 'XAUUSD',
+      ticket: '555003',
+      sl: 4395,
+      tp: 4425,
+      reason: 'INTENT',
+    });
+
+    const report = broker.recoverPendingCommands(120_000);
+    expect(report.applied).toBe(2);
+    expect(report.details.some((d) => d.includes('late_close'))).toBe(true);
+    expect(report.details.some((d) => d.includes('late_modify'))).toBe(true);
+    const rows = loadTradeAckJournal();
+    expect(rows.find((r) => r.command_id === 'rcl')?.ack_status).toBe('SUCCESS');
+    expect(rows.find((r) => r.command_id === 'rmod')?.ack_status).toBe('SUCCESS');
+  });
+
   it('listOpenPositions drops missing/zero open_level (no invent entry=0)', async () => {
     const prev = process.env.MASTER_MT4_STATUS_STALE_MS;
     process.env.MASTER_MT4_STATUS_STALE_MS = '60000';

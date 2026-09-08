@@ -2520,47 +2520,45 @@ export class Mt4FileBroker implements MasterBroker {
       return { ok: false, detail: waited.detail };
     }
     this.expireCommand(id);
-    // Late close reconcile — EA may have closed without readable ack (VS-System idempotent)
-    try {
-      const listed = await this.listOpenPositions();
-      if (listed.ok) {
-        const still = listed.positions.find(
-          (p) => p.position_id === String(position_id)
-        );
-        if (!still) {
-          updateTradeAck(id, {
-            ack_status: 'SUCCESS',
-            ticket: String(position_id),
-            detail: 'ACK_LATE_CLOSE',
-          });
-          return {
-            ok: true,
-            detail: `mt4_closed_late ticket=${position_id}`,
-            fill_price: null,
-            remaining_size: 0,
-          };
-        }
-        if (
-          partial &&
-          beforeSize != null &&
-          Number.isFinite(still.size) &&
-          still.size < beforeSize - 1e-9
-        ) {
-          updateTradeAck(id, {
-            ack_status: 'SUCCESS',
-            ticket: String(position_id),
-            detail: 'ACK_LATE_PARTIAL',
-          });
-          return {
-            ok: true,
-            detail: `mt4_partial_closed_late ticket=${position_id}`,
-            fill_price: null,
-            remaining_size: still.size,
-          };
-        }
+    // Late close reconcile — EA may have closed without readable ack (VS-System idempotent).
+    // Multi-attempt like ACK success (status export can lag a single read).
+    if (partial && beforeSize != null) {
+      const reduced = await this.waitForTicketSizeReduced(
+        String(position_id),
+        beforeSize,
+        closeLot
+      );
+      if (reduced.ok) {
+        updateTradeAck(id, {
+          ack_status: 'SUCCESS',
+          ticket: String(position_id),
+          detail: 'ACK_LATE_PARTIAL',
+        });
+        return {
+          ok: true,
+          detail:
+            reduced.remaining === 0
+              ? `mt4_partial_became_full_late ticket=${position_id}`
+              : `mt4_partial_closed_late ticket=${position_id} rem=${reduced.remaining}`,
+          fill_price: null,
+          remaining_size: reduced.remaining,
+        };
       }
-    } catch {
-      /* fall through to timeout fail */
+    } else {
+      const flat = await this.waitForTicketFlat(String(position_id));
+      if (flat.ok) {
+        updateTradeAck(id, {
+          ack_status: 'SUCCESS',
+          ticket: String(position_id),
+          detail: 'ACK_LATE_CLOSE',
+        });
+        return {
+          ok: true,
+          detail: `mt4_closed_late ticket=${position_id}`,
+          fill_price: null,
+          remaining_size: 0,
+        };
+      }
     }
     updateTradeAck(id, {
       ack_status: 'TIMEOUT',
@@ -2696,17 +2694,60 @@ export class Mt4FileBroker implements MasterBroker {
       return { ok: false, detail: waited.detail, order_id: id };
     }
     this.expireCommand(id);
+    // Lost ACK after EA OrderModify — late-prove status levels (same as ACK success path).
+    // Otherwise noteModifyReject permanently skips a stop that may already be on the chart.
+    const proveSl = slRounded ?? resolvedSl ?? null;
+    const proveTp = tpRounded ?? resolvedTp ?? null;
+    let lateOk = true;
+    let lateDetail = '';
+    if (proveSl != null && Number.isFinite(proveSl) && proveSl > 0) {
+      const proved = await this.waitForStatusStop(
+        String(input.position_id),
+        Number(proveSl)
+      );
+      if (!proved.ok) {
+        lateOk = false;
+        lateDetail = `mt4_modify_sl_unverified: want=${proveSl} got=${proved.observed}`;
+      }
+    }
+    if (lateOk && proveTp != null && Number.isFinite(proveTp) && proveTp > 0) {
+      const proved = await this.waitForStatusProfit(
+        String(input.position_id),
+        Number(proveTp)
+      );
+      if (!proved.ok) {
+        lateOk = false;
+        lateDetail = `mt4_modify_tp_unverified: want=${proveTp} got=${proved.observed}`;
+      }
+    }
+    if (lateOk && (proveSl != null && proveSl > 0 || proveTp != null && proveTp > 0)) {
+      updateTradeAck(id, {
+        ack_status: 'SUCCESS',
+        ticket: String(input.position_id),
+        detail: 'ACK_LATE_MODIFY',
+      });
+      return { ok: true, detail: 'mt4_modify_acked_late', order_id: id };
+    }
     updateTradeAck(id, {
       ack_status: 'TIMEOUT',
-      detail: 'ACK_TIMEOUT',
+      detail: lateDetail || 'ACK_TIMEOUT',
     });
     logMasterError({
       module: 'mt4.modifyPosition',
       error_type: 'ACK_TIMEOUT',
       message: 'mt4_modify_ack_timeout',
-      context: { command_id: id, action: 'MODIFY', ticket: input.position_id },
+      context: {
+        command_id: id,
+        action: 'MODIFY',
+        ticket: input.position_id,
+        late_detail: lateDetail || null,
+      },
     });
-    return { ok: false, detail: 'mt4_modify_ack_timeout', order_id: id };
+    return {
+      ok: false,
+      detail: lateDetail || 'mt4_modify_ack_timeout',
+      order_id: id,
+    };
   }
 
   /**
@@ -2733,6 +2774,7 @@ export class Mt4FileBroker implements MasterBroker {
         symbol?: string;
         side?: string;
         lot?: number;
+        ticket?: number | string;
         sl?: number;
         tp?: number;
       };
@@ -2823,6 +2865,64 @@ export class Mt4FileBroker implements MasterBroker {
               result.applied += 1;
               result.details.push(`${action}:${id}:late_fill ticket=${ticket}`);
               continue;
+            }
+          }
+        }
+        // CLOSE/MODIFY: status late-reconcile (sync snapshot — recover is sync)
+        if (action === 'CLOSE' || action === 'MODIFY') {
+          const st = this.readStatusFile();
+          if (st && !this.isStatusStale(st.age_ms)) {
+            const raw = Array.isArray(st.data?.positions) ? st.data.positions : [];
+            const ticketWant = String(payload.ticket ?? '');
+            if (action === 'CLOSE' && ticketWant) {
+              const still = raw.some(
+                (p: any) => String(p.ticket ?? p.Ticket ?? '') === ticketWant
+              );
+              if (!still) {
+                updateTradeAck(id, {
+                  ack_status: 'SUCCESS',
+                  ticket: ticketWant,
+                  detail: 'RECOVER_LATE_CLOSE',
+                });
+                this.expireCommand(id);
+                result.applied += 1;
+                result.details.push(`${action}:${id}:late_close ticket=${ticketWant}`);
+                continue;
+              }
+            }
+            if (action === 'MODIFY' && ticketWant) {
+              const hit = raw.find(
+                (p: any) => String(p.ticket ?? p.Ticket ?? '') === ticketWant
+              );
+              if (hit) {
+                const wantSl = Number(payload.sl ?? 0);
+                const wantTp = Number(payload.tp ?? 0);
+                const gotSl = Number(hit.sl ?? hit.SL ?? NaN);
+                const gotTp = Number(hit.tp ?? hit.TP ?? NaN);
+                const slOk =
+                  !(wantSl > 0) ||
+                  (Number.isFinite(gotSl) &&
+                    Math.abs(gotSl - wantSl) <=
+                      Math.max(0.05, Math.abs(wantSl) * 1e-5, 1e-6));
+                const tpOk =
+                  !(wantTp > 0) ||
+                  (Number.isFinite(gotTp) &&
+                    Math.abs(gotTp - wantTp) <=
+                      Math.max(0.05, Math.abs(wantTp) * 1e-5, 1e-6));
+                if (slOk && tpOk && (wantSl > 0 || wantTp > 0)) {
+                  updateTradeAck(id, {
+                    ack_status: 'SUCCESS',
+                    ticket: ticketWant,
+                    detail: 'RECOVER_LATE_MODIFY',
+                  });
+                  this.expireCommand(id);
+                  result.applied += 1;
+                  result.details.push(
+                    `${action}:${id}:late_modify ticket=${ticketWant}`
+                  );
+                  continue;
+                }
+              }
             }
           }
         }

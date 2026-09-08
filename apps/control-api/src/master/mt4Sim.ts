@@ -31,6 +31,8 @@ export class Mt4BridgeSimulator {
   private bid = 4470;
   private ask = 4470.4;
   private timer: ReturnType<typeof setInterval> | null = null;
+  /** EA g_last_processed_command_id — do not re-fire the same cmd_ when left on disk. */
+  private processedIds = new Set<string>();
 
   /** Test fault: OPEN ignores payload SL (naked ticket until MODIFY). */
   ignoreOpenSl = false;
@@ -44,6 +46,10 @@ export class Mt4BridgeSimulator {
   keepCommandsAfterAck = false;
   /** Test fault: OPEN fills status but writes no ACK (prove late-fill path). */
   openWithoutAck = false;
+  /** Test fault: MODIFY applies levels but writes no ACK (prove late status). */
+  modifyWithoutAck = false;
+  /** Test fault: CLOSE removes ticket but writes no ACK (prove late flat). */
+  closeWithoutAck = false;
   /** Test fault: ACK fill differs from status open (prove fill preference). */
   ackFillOverride: number | null = null;
 
@@ -176,6 +182,7 @@ export class Mt4BridgeSimulator {
   }
 
   private handle(payload: any, id: string) {
+    if (this.processedIds.has(id)) return;
     const action = String(payload.action || '').toUpperCase();
     if (action === 'OPEN') {
       const side = String(payload.side || 'BUY').toUpperCase() === 'SELL' ? 'SELL' : 'BUY';
@@ -200,15 +207,18 @@ export class Mt4BridgeSimulator {
           : open;
       if (this.openWithoutAck) {
         // Ticket live in status; host must late-fill + expire cmd (no EA re-OPEN).
+        this.processedIds.add(id);
         return;
       }
       this.writeAck(id, true, ticket, 'opened', { fill, profit: 0 });
+      this.processedIds.add(id);
       return;
     }
     if (action === 'CLOSE') {
       const ticket = Number(payload.ticket);
       const p = this.positions.get(ticket);
       if (!p) {
+        this.processedIds.add(id);
         this.writeAck(id, false, ticket, 'not_found');
         return;
       }
@@ -229,9 +239,13 @@ export class Mt4BridgeSimulator {
         (p.side === 'BUY' ? (fill - p.open) * closeLot : (p.open - fill) * closeLot);
       if (closeLot < p.lot - 1e-9) {
         p.lot = p.lot - closeLot;
+        this.processedIds.add(id);
+        if (this.closeWithoutAck) return;
         this.writeAck(id, true, ticket, 'partial_closed', { fill, profit });
       } else {
         this.positions.delete(ticket);
+        this.processedIds.add(id);
+        if (this.closeWithoutAck) return;
         this.writeAck(id, true, ticket, 'closed', { fill, profit });
       }
       return;
@@ -240,6 +254,7 @@ export class Mt4BridgeSimulator {
       const ticket = Number(payload.ticket);
       const p = this.positions.get(ticket);
       if (!p) {
+        this.processedIds.add(id);
         this.writeAck(id, false, ticket, 'not_found');
         return;
       }
@@ -247,6 +262,8 @@ export class Mt4BridgeSimulator {
         if (payload.sl != null) p.sl = Number(payload.sl);
         if (payload.tp != null) p.tp = Number(payload.tp);
       }
+      this.processedIds.add(id);
+      if (this.modifyWithoutAck) return;
       this.writeAck(id, true, ticket, 'modified');
       return;
     }
