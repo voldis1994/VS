@@ -6,7 +6,7 @@ import { buildCandidates } from '../candidates.js';
 import { masterOwnsManageSafely, masterOwnsPipeline, syncMasterEntryOwnership } from '../deskBridge.js';
 import { applyMarketFilters } from '../filters.js';
 import { DEFAULT_MASTER_CONFIG, MasterPipeline } from '../pipeline.js';
-import { PositionManager, mapRegimeToPlaybook, toDeskRegime } from '../positionManager.js';
+import { PositionManager, mapRegimeToPlaybook, toDeskRegime, entrySetupFromRegime } from '../positionManager.js';
 import { Mt4FileBroker, PaperBroker, epicsMatch, normalizeEpicKey } from '../broker.js';
 import { Mt4BridgeSimulator } from '../mt4Sim.js';
 import { syncPositionsWithBroker } from '../positionSync.js';
@@ -198,6 +198,129 @@ describe('MASTER filters + dual flow', () => {
     expect(mapRegimeToPlaybook('RANGE')).toBe('FADE');
     expect(mapRegimeToPlaybook('BREAKOUT_UP')).toBe('SCALP');
     expect(mapRegimeToPlaybook('LOW_VOLATILITY')).toBe('SCALP'); // COMPRESSION→WAIT→SCALP
+    expect(entrySetupFromRegime('TREND_UP')).toBe('CONTINUATION');
+    expect(entrySetupFromRegime('BREAKOUT_UP')).toBe('BREAKOUT');
+    expect(entrySetupFromRegime('RANGE')).toBe('FADE');
+    expect(entrySetupFromRegime('LOW_VOLATILITY')).toBe('SCALP');
+  });
+
+  it('Capital unread UPL still fires HardInvalidation (not PeakProtect)', async () => {
+    const broker = {
+      name: 'CAPITAL',
+      paper: false,
+      async closePosition() {
+        return { ok: true, fill_price: 4388, fill_pnl: null, detail: 'closed' };
+      },
+      async modifyPosition() {
+        return { ok: true, detail: 'ok' };
+      },
+    } as never;
+    const pipe = new MasterPipeline('LIVE');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: 'deal-hardinv',
+      opportunity_id: 'opp-hi',
+      intent_id: 'hi-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4400,
+      stop_loss: 4300, // wide — HardInv should fire before STOP_HIT
+      take_profit: 4600,
+      entry_at: new Date(Date.now() - 120_000).toISOString(),
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis({ regime: 'TREND_UP', trend_dir: 'UP' }),
+        expectancy: null,
+      },
+    });
+    const pos = pm.get('deal-hardinv')!;
+    pos.broker_upl = null;
+    pos.playbook_at_entry = 'LONG';
+    pos.entry_setup = 'CONTINUATION';
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: 4388,
+        ask: 4388.4,
+        mid: 4388.2,
+        spread: 0.4,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      max_hold_ms: 0,
+      breakeven_progress: 0,
+      allow_close: true,
+    });
+    expect(managed.closed.some((c) => /HardInvalidation/i.test(c.reason))).toBe(
+      true
+    );
+  });
+
+  it('ema3_side freezes while Capital UPL unread', async () => {
+    const broker = {
+      name: 'CAPITAL',
+      paper: false,
+      async closePosition() {
+        return { ok: false, detail: 'no' };
+      },
+      async modifyPosition() {
+        return { ok: true, detail: 'ok' };
+      },
+    } as never;
+    const pipe = new MasterPipeline('LIVE');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: 'deal-ema3-freeze',
+      opportunity_id: 'opp-e3',
+      intent_id: 'e3-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4400,
+      stop_loss: 4390,
+      take_profit: 4600,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis({ regime: 'TREND_UP' }),
+        expectancy: null,
+      },
+    });
+    const pos = pm.get('deal-ema3-freeze')!;
+    pos.broker_upl = null;
+    pos.ema3_side = 'above';
+    await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: 4395,
+        ask: 4395.4,
+        mid: 4395.2,
+        spread: 0.4,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      max_hold_ms: 0,
+      breakeven_progress: 0,
+      ema3: 4400,
+      ema1: 4395,
+      ema1_prev: 4401,
+      ema3_prev: 4400,
+    });
+    expect(pos.ema3_side).toBe('above');
   });
 
   it('BestOutcome ThesisFailure fires on live TREND_UP vs LONG SELL', async () => {

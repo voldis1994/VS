@@ -290,11 +290,10 @@ export class PositionManager {
         input.decision.analysis.regime,
         input.decision.analysis
       ),
-      entry_setup:
-        mapRegimeToPlaybook(input.decision.analysis.regime, input.decision.analysis) ===
-        'FADE'
-          ? 'FADE'
-          : 'CONTINUATION',
+      entry_setup: entrySetupFromRegime(
+        input.decision.analysis.regime,
+        input.decision.analysis
+      ),
       partial_close_applied: false,
       multi_tp_levels: levels,
     };
@@ -756,7 +755,10 @@ export class PositionManager {
                 prevSide: pos.ema3_side,
               })
             : { exit: false, reason: '' };
-        pos.ema3_side = ema3PriceSide(mark, ema3);
+        // Freeze side while UPL unread — advancing would miss PRICE_THROUGH after UPL returns
+        if (capitalUplReady) {
+          pos.ema3_side = ema3PriceSide(mark, ema3);
+        }
         const exitHit = cross.exit
           ? cross
           : thru.exit
@@ -958,8 +960,34 @@ export class PositionManager {
       // Hard protective fills before soft BestOutcome / TIME_STOP
       const protective = protectiveExit(pos, quote);
 
-      // Capital LIVE: BestOutcome is mark-path — refuse while venue UPL unread
-      // (STOP_HIT / TP_HIT / TIME_STOP still fire).
+      // Always evaluate BestOutcome; Capital unread UPL keeps only HardInvalidation
+      // (desk loser-cap). PeakProtect / Target / harvest / TimeDecay stay gated.
+      const bestOutcome = decideBestOutcomeExit(
+        {
+          open_side: pos.side,
+          entry_price: pos.entry,
+          entry_at: pos.entry_at,
+          mfe: pos.mfe,
+          mae: pos.mae,
+          peak_retention,
+          regime: toDeskRegime(
+            input.live_regime || pos.decision.analysis.regime,
+            pos.decision.analysis
+          ),
+          playbook:
+            pos.playbook_at_entry ??
+            mapRegimeToPlaybook(pos.regime_at_entry, pos.decision.analysis),
+          entry_setup: pos.entry_setup ?? 'CONTINUATION',
+        },
+        mark
+      );
+      const softBest =
+        capitalUplReady
+          ? bestOutcome
+          : bestOutcome.exit && /HardInvalidation/i.test(bestOutcome.reason)
+            ? bestOutcome
+            : { exit: false, reason: '' };
+
       let verdict =
         protective ??
         (maxHold > 0 && heldMs >= maxHold
@@ -967,27 +995,7 @@ export class PositionManager {
               exit: true,
               reason: `TIME_STOP · held ${Math.round(heldMs / 1000)}s ≥ ${Math.round(maxHold / 1000)}s`,
             }
-          : capitalUplReady
-            ? decideBestOutcomeExit(
-                {
-                  open_side: pos.side,
-                  entry_price: pos.entry,
-                  entry_at: pos.entry_at,
-                  mfe: pos.mfe,
-                  mae: pos.mae,
-                  peak_retention,
-                  regime: toDeskRegime(
-                    input.live_regime || pos.decision.analysis.regime,
-                    pos.decision.analysis
-                  ),
-                  playbook:
-                    pos.playbook_at_entry ??
-                    mapRegimeToPlaybook(pos.regime_at_entry, pos.decision.analysis),
-                  entry_setup: pos.entry_setup ?? 'CONTINUATION',
-                },
-                mark
-              )
-            : { exit: false, reason: '' });
+          : softBest);
 
       if (!verdict.exit) {
         await this.runManageProtectiveLocks({
@@ -2219,6 +2227,30 @@ export function mapRegimeToPlaybook(
   const book = playbookFromRegime(toDeskRegime(regime, analysis));
   if (book === 'WAIT') return 'SCALP';
   return book;
+}
+
+/**
+ * Lock entry setup at register for BestOutcome exitParamsForTrade.
+ * BREAKOUT/PULLBACK/CONTINUATION share with-move override; FADE tight; SCALP uses base.
+ */
+export function entrySetupFromRegime(
+  regime: string,
+  analysis?: { trend_dir?: string; structure_bias?: string } | null
+): string {
+  const desk = toDeskRegime(regime, analysis);
+  const book = mapRegimeToPlaybook(regime, analysis);
+  if (
+    book === 'FADE' ||
+    desk === 'RANGE' ||
+    desk.startsWith('FAILED_BREAKOUT') ||
+    desk === 'TRANSITION'
+  ) {
+    return 'FADE';
+  }
+  if (desk.startsWith('BREAKOUT') || desk === 'EXPANSION') return 'BREAKOUT';
+  if (desk.startsWith('PULLBACK')) return 'PULLBACK';
+  if (book === 'SCALP') return 'SCALP';
+  return 'CONTINUATION';
 }
 
 /** Floating UPL across open positions using protective marks + broker UPL when known. */

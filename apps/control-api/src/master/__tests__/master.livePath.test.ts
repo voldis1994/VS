@@ -5181,13 +5181,13 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     const pos = pm.get('deal-bo-unread')!;
     pos.broker_upl = null;
     pos.mfe = 5;
-    pos.mae = 15;
-    // Aged entry so BestOutcome HardInvalidation / harvest can fire on mark
+    pos.mae = 0.5;
+    // Aged entry — PeakProtect/harvest would fire if UPL ready; mild loss must NOT HardInv
     pos.entry_at = new Date(Date.now() - 30 * 60_000).toISOString();
     const quote = {
-      bid: 4388,
-      ask: 4388.4,
-      mid: 4388.2,
+      bid: 4409.5,
+      ask: 4409.9,
+      mid: 4409.7,
       spread: 0.4,
       epic: 'GOLD',
       ts_ms: Date.now(),
@@ -5204,6 +5204,7 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
       close_all_loss: 0,
       breakeven_progress: 0,
     });
+    // Soft BestOutcome (PeakProtect/Target/harvest) gated; mild loss ≠ HardInvalidation
     expect(managed.closed.length).toBe(0);
     expect(closed.length).toBe(0);
     expect(pm.count()).toBe(1);
@@ -5251,14 +5252,14 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     pm.get('deal-ema-unread')!.broker_upl = null;
     pm.get('deal-ema-unread')!.ema3_side = 'above';
     const quote = {
-      bid: 4404.8,
-      ask: 4405.2,
-      mid: 4405,
+      bid: 4409.6,
+      ask: 4410.0,
+      mid: 4409.8,
       spread: 0.4,
       epic: 'GOLD',
       ts_ms: Date.now(),
     };
-    // Bearish EMA1×EMA3 cross for BUY → would exit if UPL ready
+    // Bearish EMA1×EMA3 cross for BUY → would exit if UPL ready; mild mark ≠ HardInv
     const managed = await pm.manageTick({
       broker,
       pipeline: pipe,
@@ -5280,6 +5281,7 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(managed.closed.length).toBe(0);
     expect(closed.length).toBe(0);
     expect(pm.count()).toBe(1);
+    expect(pm.get('deal-ema-unread')!.ema3_side).toBe('above');
   });
 
   it('Capital soft-trail refuses when broker_upl=0 (usable UPL unread)', async () => {
