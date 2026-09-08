@@ -545,9 +545,20 @@ describe('VS MASTER MT4 file bridge', () => {
       const broker = new Mt4FileBroker(root);
       await broker.connect();
       mkdirSync(join(root, 'market'), { recursive: true });
+      mkdirSync(join(root, 'status'), { recursive: true });
       writeFileSync(
         join(root, 'market', 'latest.json'),
         JSON.stringify({ bid: 4400, ask: 4400.4, symbol: 'XAUUSD' })
+      );
+      writeFileSync(
+        join(root, 'status', 'latest.json'),
+        JSON.stringify({
+          equity: 10000,
+          balance: 10000,
+          connected: true,
+          trading_allowed: true,
+          positions: [],
+        })
       );
       const placed = await broker.placeOrder({
         intent_id: 'noackintent0000000000001',
@@ -571,6 +582,31 @@ describe('VS MASTER MT4 file bridge', () => {
       if (prevMs === undefined) delete process.env.MASTER_MT4_ACK_POLL_MS;
       else process.env.MASTER_MT4_ACK_POLL_MS = prevMs;
     }
+  });
+
+  it('OPEN refuses when pre-OPEN status snapshot unavailable', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-nosnap-'));
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    mkdirSync(join(root, 'market'), { recursive: true });
+    writeFileSync(
+      join(root, 'market', 'latest.json'),
+      JSON.stringify({ bid: 4400, ask: 4400.4, symbol: 'XAUUSD' })
+    );
+    // No status/latest.json → listOpenPositions fails → must not publish OPEN
+    const placed = await broker.placeOrder({
+      intent_id: 'nosnapintent0000000000001',
+      epic: 'XAUUSD',
+      side: 'BUY',
+      size: 0.01,
+      stop_level: 4390,
+    });
+    expect(placed.ok).toBe(false);
+    expect(placed.detail).toMatch(/mt4_preopen_snapshot_unavailable/);
+    const cmds = existsSync(join(root, 'commands'))
+      ? readdirSync(join(root, 'commands')).filter((f) => f.startsWith('cmd_'))
+      : [];
+    expect(cmds).toHaveLength(0);
   });
 
   it('CLOSE ack timeout treats missing ticket as late success', async () => {
@@ -837,6 +873,22 @@ describe('VS MASTER MT4 file bridge', () => {
     process.env.MASTER_MT4_ACK_POLLS = '8';
     try {
       mkdirSync(join(root, 'acks'), { recursive: true });
+      mkdirSync(join(root, 'market'), { recursive: true });
+      mkdirSync(join(root, 'status'), { recursive: true });
+      writeFileSync(
+        join(root, 'market', 'latest.json'),
+        JSON.stringify({ bid: 4400, ask: 4400.4, symbol: 'XAUUSD' })
+      );
+      writeFileSync(
+        join(root, 'status', 'latest.json'),
+        JSON.stringify({
+          equity: 10000,
+          balance: 10000,
+          connected: true,
+          trading_allowed: true,
+          positions: [],
+        })
+      );
       const intent = 'ackerrintent0000000000001';
       const id = intent.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24);
       writeFileSync(
@@ -1256,6 +1308,10 @@ describe('VS MASTER MT4 file bridge', () => {
         lot: 0.07,
       })
     );
+    const { utimesSync } = await import('fs');
+    const old = new Date(Date.now() - 200_000);
+    utimesSync(join(root, 'commands', 'cmd_late1.json'), old, old);
+    // Ticket opened after cmd mtime (late fill), not a pre-existing orphan
     writeFileSync(
       join(root, 'status', 'latest.json'),
       JSON.stringify({
@@ -1270,13 +1326,11 @@ describe('VS MASTER MT4 file bridge', () => {
             open: 4401.5,
             sl: 4390,
             tp: 0,
+            open_time: Math.floor(Date.now() / 1000),
           },
         ],
       })
     );
-    const { utimesSync } = await import('fs');
-    const old = new Date(Date.now() - 200_000);
-    utimesSync(join(root, 'commands', 'cmd_late1.json'), old, old);
 
     const { clearTradeAckJournalForTest, logTradeIntent, loadTradeAckJournal } =
       await import('../tradeAckJournal.js');
@@ -1304,6 +1358,129 @@ describe('VS MASTER MT4 file bridge', () => {
     expect(hit?.ack_status).toBe('SUCCESS');
     expect(hit?.ticket).toBe('888001');
     expect(hit?.fill_price).toBe(4401.5);
+  });
+
+  it('recoverPendingCommands ignores older same side/lot ticket', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-recover-old-'));
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    mkdirSync(join(root, 'commands'), { recursive: true });
+    mkdirSync(join(root, 'status'), { recursive: true });
+    writeFileSync(
+      join(root, 'commands', 'cmd_lateold.json'),
+      JSON.stringify({
+        id: 'lateold',
+        action: 'OPEN',
+        symbol: 'XAUUSD',
+        side: 'BUY',
+        lot: 0.07,
+      })
+    );
+    const { utimesSync } = await import('fs');
+    const cmdAge = new Date(Date.now() - 200_000);
+    utimesSync(join(root, 'commands', 'cmd_lateold.json'), cmdAge, cmdAge);
+    // Position opened long before cmd — must not RECOVER_LATE_FILL
+    writeFileSync(
+      join(root, 'status', 'latest.json'),
+      JSON.stringify({
+        equity: 10000,
+        balance: 10000,
+        positions: [
+          {
+            ticket: 888002,
+            symbol: 'XAUUSD',
+            side: 'BUY',
+            lot: 0.07,
+            open: 4401.5,
+            sl: 4390,
+            tp: 0,
+            open_time: Math.floor((Date.now() - 400_000) / 1000),
+          },
+        ],
+      })
+    );
+    const { clearTradeAckJournalForTest, logTradeIntent, loadTradeAckJournal } =
+      await import('../tradeAckJournal.js');
+    const state = mkdtempSync(join(tmpdir(), 'vs-late-old-state-'));
+    process.env.MASTER_STATE_DIR = state;
+    clearTradeAckJournalForTest();
+    logTradeIntent({
+      command_id: 'lateold',
+      intent_id: 'late-old-intent',
+      action: 'OPEN',
+      side: 'BUY',
+      volume: 0.07,
+      epic: 'XAUUSD',
+      sl: 4390,
+      tp: null,
+      reason: 'INTENT',
+    });
+    const report = broker.recoverPendingCommands(120_000);
+    expect(report.applied).toBe(0);
+    expect(report.expired).toBe(1);
+    expect(report.details.some((d) => d.includes('late_fill'))).toBe(false);
+    const hit = loadTradeAckJournal().find((r) => r.command_id === 'lateold');
+    expect(hit?.ack_status).toBe('TIMEOUT');
+  });
+
+  it('OPEN ACK without ticket does not bind positions[0]', async () => {
+    const prevPolls = process.env.MASTER_MT4_ACK_POLLS;
+    const prevMs = process.env.MASTER_MT4_ACK_POLL_MS;
+    process.env.MASTER_MT4_ACK_POLLS = '8';
+    process.env.MASTER_MT4_ACK_POLL_MS = '25';
+    try {
+      const root = mkdtempSync(join(tmpdir(), 'vs-mt4-nobind-'));
+      const broker = new Mt4FileBroker(root);
+      await broker.connect();
+      mkdirSync(join(root, 'market'), { recursive: true });
+      mkdirSync(join(root, 'status'), { recursive: true });
+      mkdirSync(join(root, 'acks'), { recursive: true });
+      writeFileSync(
+        join(root, 'market', 'latest.json'),
+        JSON.stringify({ bid: 4400, ask: 4400.4, symbol: 'XAUUSD' })
+      );
+      writeFileSync(
+        join(root, 'status', 'latest.json'),
+        JSON.stringify({
+          equity: 10000,
+          balance: 10000,
+          connected: true,
+          trading_allowed: true,
+          positions: [
+            {
+              ticket: 111001,
+              symbol: 'XAUUSD',
+              side: 'BUY',
+              lot: 0.05,
+              open: 4395,
+              sl: 4380,
+              tp: 0,
+            },
+          ],
+        })
+      );
+      const intent = 'nobindintent0000000000001';
+      const id = intent.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24);
+      writeFileSync(
+        join(root, 'acks', `ack_${id}.json`),
+        JSON.stringify({ id, ok: true, ticket: 0, fill: 4400 })
+      );
+      const placed = await broker.placeOrder({
+        intent_id: intent,
+        epic: 'XAUUSD',
+        side: 'BUY',
+        size: 0.05,
+        stop_level: 4390,
+      });
+      expect(placed.ok).toBe(false);
+      expect(placed.detail).toBe('mt4_ack_no_bindable_ticket');
+      expect(placed.position_id).toBeNull();
+    } finally {
+      if (prevPolls === undefined) delete process.env.MASTER_MT4_ACK_POLLS;
+      else process.env.MASTER_MT4_ACK_POLLS = prevPolls;
+      if (prevMs === undefined) delete process.env.MASTER_MT4_ACK_POLL_MS;
+      else process.env.MASTER_MT4_ACK_POLL_MS = prevMs;
+    }
   });
 
   it('refuses OPEN when durable journal already has SUCCESS for intent', async () => {
@@ -1358,6 +1535,22 @@ describe('VS MASTER MT4 file bridge', () => {
       const broker = new Mt4FileBroker(root);
       await broker.connect();
       mkdirSync(join(root, 'acks'), { recursive: true });
+      mkdirSync(join(root, 'market'), { recursive: true });
+      mkdirSync(join(root, 'status'), { recursive: true });
+      writeFileSync(
+        join(root, 'market', 'latest.json'),
+        JSON.stringify({ bid: 4400, ask: 4400.4, symbol: 'XAUUSD' })
+      );
+      writeFileSync(
+        join(root, 'status', 'latest.json'),
+        JSON.stringify({
+          equity: 10000,
+          balance: 10000,
+          connected: true,
+          trading_allowed: true,
+          positions: [],
+        })
+      );
       // Poison: write mismatched ack before placeOrder finishes — race via watcher
       const intent = 'ackmismatchintent00000001';
       const id = intent.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24);

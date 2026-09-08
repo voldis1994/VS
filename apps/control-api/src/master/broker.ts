@@ -1854,6 +1854,17 @@ export class Mt4FileBroker implements MasterBroker {
     return null;
   }
 
+  /** EA status open_time → epoch ms (null if missing/unparseable). */
+  private statusPositionOpenMs(p: any): number | null {
+    const rawT = p?.open_time ?? p?.OpenTime ?? p?.time ?? p?.Time ?? null;
+    if (rawT == null || rawT === '') return null;
+    if (typeof rawT === 'number' && Number.isFinite(rawT)) {
+      return rawT < 1e12 ? rawT * 1000 : rawT;
+    }
+    const d = new Date(String(rawT));
+    return Number.isFinite(d.getTime()) ? d.getTime() : null;
+  }
+
   /**
    * Wanted protective SL (+ optional TP) after OPEN — prove status levels,
    * else MODIFY+prove, else fail-close. Never treat SL-only proof as TP attached.
@@ -2165,6 +2176,24 @@ export class Mt4FileBroker implements MasterBroker {
       magic: Number(process.env.MASTER_MT4_MAGIC || 50001) || 50001,
       reason: 'VS_MASTER',
     };
+    // Snapshot tickets before INTENT/publish — late-fill must adopt only a *new* ticket.
+    // Fail closed if status unread (empty set would wrongly adopt pre-existing).
+    const preOpenTickets = new Set<string>();
+    {
+      const listed = await this.listOpenPositions(input.epic);
+      if (!listed.ok) {
+        this.processed.delete(input.intent_id);
+        return {
+          ok: false,
+          order_id: null,
+          position_id: null,
+          fill_price: null,
+          detail: `mt4_preopen_snapshot_unavailable:${listed.detail || 'unknown'}`,
+          paper: false,
+        };
+      }
+      for (const p of listed.positions) preOpenTickets.add(p.position_id);
+    }
     // Reader: durable INTENT before control publish (crash between write and register)
     logTradeIntent({
       command_id: id,
@@ -2177,15 +2206,6 @@ export class Mt4FileBroker implements MasterBroker {
       tp: tpRounded ?? input.profit_level ?? null,
       reason: 'INTENT',
     });
-    // Snapshot tickets before publish — late-fill must adopt only a *new* ticket
-    // (same side/size already open must not count as this OPEN's fill).
-    const preOpenTickets = new Set<string>();
-    {
-      const listed = await this.listOpenPositions(input.epic);
-      if (listed.ok) {
-        for (const p of listed.positions) preOpenTickets.add(p.position_id);
-      }
-    }
     this.writeCommandAtomic(id, payload);
 
     const waited = await this.waitAck(id);
@@ -2195,14 +2215,39 @@ export class Mt4FileBroker implements MasterBroker {
       this.expireCommand(id);
       const ticket = String(waited.ack.ticket || '');
       const opens = await this.listOpenPositions(input.epic);
-      const hit =
-        opens.positions.find((p) => p.position_id === ticket) || opens.positions[0];
+      let hit =
+        ticket && opens.ok
+          ? opens.positions.find((p) => p.position_id === ticket)
+          : undefined;
+      if (!hit && !ticket && opens.ok) {
+        // No ack ticket — only a *new* same side/size row (never positions[0]).
+        hit = opens.positions.find(
+          (p) =>
+            !preOpenTickets.has(p.position_id) &&
+            p.side === input.side &&
+            Math.abs(p.size - input.size) < 1e-6
+        );
+      }
       const position_id = ticket || hit?.position_id || null;
+      if (!position_id) {
+        updateTradeAck(id, {
+          ack_status: 'FAILED',
+          detail: 'mt4_ack_no_bindable_ticket',
+        });
+        return {
+          ok: false,
+          order_id: id,
+          position_id: null,
+          fill_price: null,
+          detail: 'mt4_ack_no_bindable_ticket',
+          paper: false,
+        };
+      }
       const fill_price = this.resolveOpenFill(waited.ack, hit?.open_level);
 
       const wantProtectiveSl =
         input.stop_level != null && Number.isFinite(input.stop_level);
-      if (position_id && wantProtectiveSl) {
+      if (wantProtectiveSl) {
         const guard = await this.ensureOpenStopOrFail({
           position_id,
           want_sl: slRounded ?? Number(input.stop_level),
@@ -2743,6 +2788,12 @@ export class Mt4FileBroker implements MasterBroker {
         if (action === 'OPEN') {
           const side = String(payload.side || '').toUpperCase() === 'SELL' ? 'SELL' : 'BUY';
           const lot = Number(payload.lot || 0);
+          let cmdMtime = now - age;
+          try {
+            cmdMtime = statSync(path).mtimeMs;
+          } catch {
+            /* keep estimate */
+          }
           const st = this.readStatusFile();
           if (st && !this.isStatusStale(st.age_ms)) {
             const raw = Array.isArray(st.data?.positions) ? st.data.positions : [];
@@ -2753,7 +2804,11 @@ export class Mt4FileBroker implements MasterBroker {
                 ? 'SELL'
                 : 'BUY';
               const pLot = Number(p.lot ?? p.Lots ?? 0);
-              return pSide === side && Math.abs(pLot - lot) < 1e-6;
+              if (pSide !== side || Math.abs(pLot - lot) >= 1e-6) return false;
+              // Require open_time at/after cmd publish (5s skew) — never adopt older orphans
+              const ot = this.statusPositionOpenMs(p);
+              if (ot == null) return false;
+              return ot + 5_000 >= cmdMtime;
             });
             if (late) {
               const ticket = String(late.ticket ?? late.Ticket ?? '');

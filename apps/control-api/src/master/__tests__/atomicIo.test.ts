@@ -172,6 +172,22 @@ describe('MT4 ack prune + ACK_TIMEOUT error journal', () => {
       const root = mkdtempSync(join(tmpdir(), 'vs-ack-to-'));
       const broker = new Mt4FileBroker(root);
       await broker.connect();
+      mkdirSync(join(root, 'market'), { recursive: true });
+      mkdirSync(join(root, 'status'), { recursive: true });
+      writeFileSync(
+        join(root, 'market', 'latest.json'),
+        JSON.stringify({ bid: 4400, ask: 4400.4, symbol: 'XAUUSD' })
+      );
+      writeFileSync(
+        join(root, 'status', 'latest.json'),
+        JSON.stringify({
+          equity: 10000,
+          balance: 10000,
+          connected: true,
+          trading_allowed: true,
+          positions: [],
+        })
+      );
       const placed = await broker.placeOrder({
         intent_id: 'timeoutintent000000000001',
         epic: 'XAUUSD',
