@@ -4009,6 +4009,154 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(fresh.health).toBe('LIVE_RUNNING');
   });
 
+  it('status demotes LIVE_ARMED to LIVE_QUOTE_STALE when stopped with aged quote', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-armed-stale' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+        update_time: new Date().toISOString(),
+      }),
+      account: async () => ({ equity: 12_000, balance: 12_000, currency: 'GBP' }),
+      list: async () => ({ ok: true, positions: [], detail: '0' }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({ ok: false, detail: 'unused' }),
+    });
+    await broker.connect();
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('LIVE');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    masterRuntime.cfg = {
+      ...DEFAULT_MASTER_CONFIG,
+      mode: 'LIVE',
+      stale_quote_ms: 5_000,
+    };
+    masterRuntime.account = { ...account };
+    masterRuntime.running = false;
+    (masterRuntime as any).capitalAccountProven = true;
+    masterRuntime.last_quote = {
+      bid: 4410,
+      ask: 4410.4,
+      mid: 4410.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now() - 8_000,
+    };
+    masterRuntime.persist_ok = true;
+    const stale = masterRuntime.status();
+    expect(stale.health).toBe('LIVE_QUOTE_STALE');
+    expect(stale.running).toBe(false);
+    expect(stale.quote?.stale).toBe(true);
+
+    masterRuntime.last_quote = {
+      ...masterRuntime.last_quote!,
+      ts_ms: Date.now(),
+    };
+    const armed = masterRuntime.status();
+    expect(armed.health).toBe('LIVE_ARMED');
+  });
+
+  it('recover Capital proven does not invent equity/peak from journal PnL', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const { writeFileSync } = await import('fs');
+    const { installFilePersist } = await import('../filePersist.js');
+    const { setPersistClient } = await import('../persist.js');
+    const { saveRuntimeGates } = await import('../runtimeGates.js');
+    const dir = process.env.MASTER_STATE_DIR!;
+    const today = new Date().toISOString();
+    writeFileSync(
+      join(dir, 'master_state.json'),
+      JSON.stringify({
+        opportunities: [],
+        positions: [],
+        intents: [],
+        outcomes: [
+          {
+            opportunity_id: '00000000-0000-4000-8000-00000000c001',
+            setup_key: 'TREND:BUY',
+            created_at: today,
+            outcome: {
+              position_id: 'deal-cap-eq',
+              side: 'BUY',
+              entry: 4410,
+              exit: 4420,
+              volume: 0.1,
+              pnl: 250,
+              fees: 0,
+              slippage: 0,
+              mae: 0,
+              mfe: 10,
+              r_multiple: 1,
+              hold_ms: 60_000,
+              exit_reason: 'TakeProfit',
+              pnl_proven: true,
+            },
+          },
+        ],
+      })
+    );
+    installFilePersist(dir);
+    saveRuntimeGates({
+      last_loss_ms: 0,
+      reject_until_ms: 0,
+      day_start_equity: 50_000,
+      peak_equity: 50_000,
+      daily_pnl_day: today.slice(0, 10),
+      capital_day_gates_seeded: true,
+    });
+
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-eq-recover' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      account: async () => ({ equity: 50_000, balance: 50_000, currency: 'GBP' }),
+      list: async () => ({ ok: true, positions: [], detail: '0' }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({ ok: false, detail: 'unused' }),
+    });
+    await broker.connect();
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('LIVE');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    masterRuntime.cfg = { ...DEFAULT_MASTER_CONFIG, mode: 'LIVE' };
+    // Mid-session recover after venue already proved — balance is Capital truth
+    masterRuntime.account = {
+      ...account,
+      equity: 50_000,
+      balance: 50_000,
+      peak_equity: 50_000,
+      day_start_equity: 50_000,
+      daily_pnl: 0,
+      daily_pnl_day: today.slice(0, 10),
+    };
+    (masterRuntime as any).capitalAccountProven = true;
+    (masterRuntime as any).capitalDayGatesSeeded = true;
+    masterRuntime.recovered = false;
+
+    const r = await masterRuntime.recover();
+    expect(r.outcomes).toBeGreaterThanOrEqual(1);
+    // Venue balance already includes realized PnL — do not add journal again
+    expect(masterRuntime.account.equity).toBe(50_000);
+    expect(masterRuntime.account.peak_equity).toBe(50_000);
+    expect(masterRuntime.account.daily_pnl).toBe(250);
+    setPersistClient(null);
+  });
+
   it('status floating_pnl is null when Capital LIVE opens lack broker UPL', async () => {
     process.env.MASTER_LIVE_ENABLED = 'true';
     const broker = new CapitalBroker({

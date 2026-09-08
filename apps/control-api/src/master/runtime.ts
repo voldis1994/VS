@@ -2068,14 +2068,10 @@ class MasterRuntime {
       this.account.day_start_equity =
         this.account.day_start_equity || this.account.balance;
     }
-    // Capital unproven: do not invent equity from paper balance + journal
-    if (
-      this.broker instanceof CapitalBroker &&
-      !this.broker.paper &&
-      !this.capitalAccountProven
-    ) {
-      // leave equity for tick getAccount; avoid paper £10k sizing baseline
-    } else {
+    // Capital LIVE (proven or not): venue balance already includes realized PnL —
+    // never invent equity/peak from balance + journal (double-counts when proven).
+    // Leave equity/peak for tick getAccount; paper path still rebuilds from journal.
+    if (!(this.broker instanceof CapitalBroker && !this.broker.paper)) {
       this.account.equity = this.account.balance + pnlAll;
       if (this.account.equity > this.account.peak_equity) {
         this.account.peak_equity = this.account.equity;
@@ -2970,10 +2966,10 @@ class MasterRuntime {
     const quoteAgeMs = quote
       ? Math.max(0, Date.now() - (quote.ts_ms || 0))
       : null;
+    // Armed or running — stale quote must not advertise LIVE_ARMED as healthy
     const liveQuoteStale =
       this.cfg.mode === 'LIVE' &&
       capitalLiveAttached &&
-      this.running &&
       (quote == null ||
         quoteAgeMs == null ||
         quoteAgeMs > this.cfg.stale_quote_ms);
