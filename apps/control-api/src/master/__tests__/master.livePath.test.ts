@@ -3989,12 +3989,17 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
       mid: 4410.2,
       spread: 0.4,
       epic: 'GOLD',
-      ts_ms: Date.now() - 60_000,
+      // 8s > cfg 5s but < hardcoded 15s dashboard threshold
+      ts_ms: Date.now() - 8_000,
     };
     masterRuntime.persist_ok = true;
     const stale = masterRuntime.status();
     expect(stale.health).toBe('LIVE_QUOTE_STALE');
     expect(stale.quote?.age_ms).toBeGreaterThan(5_000);
+    expect(stale.quote?.stale_quote_ms).toBe(5_000);
+    expect(stale.quote?.stale).toBe(true);
+    // age in (5s, 15s] would disagree with hardcoded 15s dashboard threshold
+    expect(stale.quote!.age_ms).toBeLessThan(15_000);
 
     masterRuntime.last_quote = {
       ...masterRuntime.last_quote!,

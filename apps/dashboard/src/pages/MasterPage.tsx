@@ -87,6 +87,8 @@ type MasterStatus = {
     ask: number;
     spread: number;
     age_ms: number;
+    stale_quote_ms?: number;
+    stale?: boolean;
     stream_healthy: boolean | null;
   } | null;
   floating_pnl?: number | null;
@@ -213,7 +215,11 @@ export function MasterPage() {
     status?.health === 'LIVE_ACCOUNT_UNPROVEN' ||
     status?.health === 'LIVE_QUOTE_STALE' ||
     status?.persist_ok === false;
-  const quoteStale = (status?.quote?.age_ms ?? 0) > 15_000;
+  const quoteStale =
+    status?.quote?.stale === true ||
+    (status?.quote?.stale == null &&
+      (status?.quote?.age_ms ?? 0) >
+        (status?.quote?.stale_quote_ms ?? 15_000));
 
   const cards: Array<{ k: string; v: string; bad?: boolean; ok?: boolean }> = status
     ? [

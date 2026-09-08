@@ -126,6 +126,10 @@ export type MasterStatus = {
     ask: number;
     spread: number;
     age_ms: number;
+    /** Same threshold used for LIVE_QUOTE_STALE / entry stale gate */
+    stale_quote_ms: number;
+    /** age_ms > stale_quote_ms — dashboard Quote card must match health */
+    stale: boolean;
     stream_healthy: boolean | null;
   } | null;
   floating_pnl: number | null;
@@ -3091,6 +3095,10 @@ class MasterRuntime {
             ask: quote.ask,
             spread: quote.spread,
             age_ms: Math.max(0, Date.now() - (quote.ts_ms || 0)),
+            stale_quote_ms: this.cfg.stale_quote_ms,
+            stale:
+              Math.max(0, Date.now() - (quote.ts_ms || 0)) >
+              this.cfg.stale_quote_ms,
             stream_healthy: streamHealthy,
           }
         : null,
