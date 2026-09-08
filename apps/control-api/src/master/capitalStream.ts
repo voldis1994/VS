@@ -3,6 +3,7 @@
  * REST getQuote remains fallback when WS is down.
  */
 import WebSocket from 'ws';
+import { capitalQuoteTsMs } from './capitalQuoteAge.js';
 
 export type CapitalStreamQuote = {
   epic: string;
@@ -38,12 +39,15 @@ export function parseCapitalStreamQuote(raw: string): CapitalStreamQuote | null 
   }
   const bidN = bid != null && Number.isFinite(bid) ? bid : (ofr as number);
   const ofrN = ofr != null && Number.isFinite(ofr) ? ofr : (bid as number);
+  // Venue payload.timestamp — never forge Date.now() (hides stale stream marks)
+  const venueTs =
+    msg.payload.timestamp ?? msg.payload.updateTime ?? msg.payload.update_time;
   return {
     epic,
     bid: bidN,
     offer: ofrN,
     mid: (bidN + ofrN) / 2,
-    ts_ms: Date.now(),
+    ts_ms: capitalQuoteTsMs(venueTs as string | number | null | undefined),
   };
 }
 

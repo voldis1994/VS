@@ -21,6 +21,7 @@ import {
   type LoginLockState,
 } from './capitalLoginLock.js';
 import { CapitalQuoteStream } from './capitalStream.js';
+import { capitalQuoteTsMs } from './capitalQuoteAge.js';
 import { logMasterError } from './errorJournal.js';
 import { stableReadJson } from './atomicIo.js';
 import { estimateTradeFees } from './moneyExit.js';
@@ -33,6 +34,8 @@ import {
   updateTradeAck,
 } from './tradeAckJournal.js';
 import type { Side } from './types.js';
+
+export { capitalQuoteTsMs } from './capitalQuoteAge.js';
 
 /** Shared OPEN SUCCESS adopt rows for Capital + MT4 restart recovery. */
 export function adoptOpenFromAckJournalShared(bookedIds: Set<string>): {
@@ -182,38 +185,6 @@ export function capitalApiEpic(epic: string): string {
   if (key === 'XAUUSD') return 'GOLD';
   if (key === 'XAGUSD') return 'SILVER';
   return s.toUpperCase();
-}
-
-/**
- * Capital REST snapshot update_time → quote ts_ms.
- * Fail-closed when missing/unparseable: stamp older than typical stale_quote_ms
- * so DATA_STALE gates fire (never forge Date.now() freshness).
- */
-export function capitalQuoteTsMs(
-  updateTime: string | number | null | undefined,
-  nowMs = Date.now()
-): number {
-  if (updateTime == null || updateTime === '') {
-    return nowMs - 60_000;
-  }
-  if (typeof updateTime === 'number' && Number.isFinite(updateTime)) {
-    const n = updateTime > 1e12 ? updateTime : updateTime * 1000;
-    return n > 0 && n <= nowMs + 5_000 ? n : nowMs - 60_000;
-  }
-  const s = String(updateTime).trim();
-  if (!s) return nowMs - 60_000;
-  if (/^\d+(\.\d+)?$/.test(s)) {
-    const n = Number(s);
-    if (Number.isFinite(n)) {
-      const ms = n > 1e12 ? n : n * 1000;
-      return ms > 0 && ms <= nowMs + 5_000 ? ms : nowMs - 60_000;
-    }
-  }
-  const parsed = Date.parse(s);
-  if (Number.isFinite(parsed) && parsed > 0 && parsed <= nowMs + 5_000) {
-    return parsed;
-  }
-  return nowMs - 60_000;
 }
 
 export type BrokerHistoryBars = {
@@ -2596,7 +2567,9 @@ export class CapitalBroker implements MasterBroker {
         // stopDistance / native trail: require SL moved or trailingStop===true.
         // Never prove from gap≈dist alone — even with ACCEPTED confirm, a static
         // stop near mark±dist would falsely arm native_trail_armed.
-        const moved = beforeSl == null || Math.abs(gotSl - beforeSl) > tolAbs;
+        // beforeSl==null: cannot prove a move — only trailing_stop===true counts.
+        const moved =
+          beforeSl != null && Math.abs(gotSl - beforeSl) > tolAbs;
         const trailFlag = hit.trailing_stop === true;
         slOk = moved || trailFlag;
       }

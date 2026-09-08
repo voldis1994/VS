@@ -3601,4 +3601,156 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     });
     expect(mod.ok).toBe(true);
   });
+
+  it('native trail refuses when before SL missing and trailing_stop not true', async () => {
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number;
+        stop_level?: number | null;
+        trailingStop?: boolean | null;
+      }
+    >();
+    // Before list omits stop_level — must not treat null-before as "moved"
+    positions.set('d-null-before', {
+      deal_id: 'd-null-before',
+      epic: 'GOLD',
+      direction: 'BUY',
+      size: 0.1,
+      open_level: 4410,
+      stop_level: null,
+      trailingStop: false,
+    });
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({
+        ok: true,
+        session: { id: 's-null-before' },
+        detail: 'ok',
+      }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({
+        ok: true,
+        positions: [...positions.values()].map((p) => ({
+          deal_id: p.deal_id,
+          epic: p.epic,
+          direction: p.direction,
+          size: p.size,
+          open_level: p.open_level,
+          stop_level: p.stop_level ?? null,
+          trailingStop: p.trailingStop ?? false,
+        })),
+        detail: '',
+      }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({ ok: false, detail: 'unused' }),
+      modify: async () => {
+        positions.set('d-null-before', {
+          ...positions.get('d-null-before')!,
+          stop_level: 4408,
+          trailingStop: false,
+        });
+        return {
+          ok: true,
+          deal_reference: 'null-before-ref',
+          detail: 'submitted',
+        };
+      },
+      confirm: async () => ({ ok: true, pending: false, detail: 'ACCEPTED' }),
+    });
+    await broker.connect();
+    const mod = await broker.modifyPosition({
+      position_id: 'd-null-before',
+      trailing_stop: true,
+      stop_distance: 2,
+    });
+    expect(mod.ok).toBe(false);
+    expect(mod.detail).toMatch(/modify_sl|unchanged|unverified/i);
+  });
+
+  it('native trail ok when before SL missing but trailing_stop proven true', async () => {
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number;
+        stop_level?: number | null;
+        trailingStop?: boolean | null;
+      }
+    >();
+    positions.set('d-null-trail', {
+      deal_id: 'd-null-trail',
+      epic: 'GOLD',
+      direction: 'BUY',
+      size: 0.1,
+      open_level: 4410,
+      stop_level: null,
+      trailingStop: false,
+    });
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({
+        ok: true,
+        session: { id: 's-null-trail' },
+        detail: 'ok',
+      }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({
+        ok: true,
+        positions: [...positions.values()].map((p) => ({
+          deal_id: p.deal_id,
+          epic: p.epic,
+          direction: p.direction,
+          size: p.size,
+          open_level: p.open_level,
+          stop_level: p.stop_level ?? null,
+          trailingStop: p.trailingStop ?? false,
+        })),
+        detail: '',
+      }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({ ok: false, detail: 'unused' }),
+      modify: async () => {
+        positions.set('d-null-trail', {
+          ...positions.get('d-null-trail')!,
+          stop_level: 4408,
+          trailingStop: true,
+        });
+        return {
+          ok: true,
+          deal_reference: 'null-trail-ref',
+          detail: 'submitted',
+        };
+      },
+      confirm: async () => ({ ok: true, pending: false, detail: 'ACCEPTED' }),
+    });
+    await broker.connect();
+    const mod = await broker.modifyPosition({
+      position_id: 'd-null-trail',
+      trailing_stop: true,
+      stop_distance: 2,
+    });
+    expect(mod.ok).toBe(true);
+  });
 });

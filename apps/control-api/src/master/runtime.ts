@@ -2538,13 +2538,18 @@ class MasterRuntime {
         new Promise<null>((resolve) => setTimeout(() => resolve(null), 2_000)),
       ]);
       if (live && Number.isFinite(live.mid) && live.mid > 0) {
+        // Missing ts_ms → fail closed (aged), never forge Date.now() freshness
+        const liveTs =
+          live.ts_ms != null && Number.isFinite(live.ts_ms) && live.ts_ms > 0
+            ? live.ts_ms
+            : Date.now() - 60_000;
         quote = {
           bid: live.bid,
           ask: live.ask,
           mid: live.mid,
           spread: live.spread,
           epic: live.epic || this.epic,
-          ts_ms: live.ts_ms ?? Date.now(),
+          ts_ms: liveTs,
           min_stop_distance: live.min_stop_distance ?? quote.min_stop_distance,
           digits: live.digits ?? quote.digits,
           point: live.point ?? quote.point,

@@ -29,8 +29,48 @@ describe('Capital stream parse', () => {
       epic: 'GOLD',
       bid: 4400.1,
       offer: 4400.4,
+      ts_ms: 1660297190627,
     });
     expect(q!.mid).toBeCloseTo(4400.25, 5);
+  });
+
+  it('missing stream timestamp fails closed (aged, not Date.now)', () => {
+    const before = Date.now();
+    const q = parseCapitalStreamQuote(
+      JSON.stringify({
+        status: 'OK',
+        destination: 'quote',
+        payload: {
+          epic: 'GOLD',
+          bid: 4400.1,
+          ofr: 4400.4,
+        },
+      })
+    );
+    const after = Date.now();
+    expect(q).not.toBeNull();
+    expect(q!.ts_ms).toBeLessThanOrEqual(after - 55_000);
+    expect(q!.ts_ms).toBeGreaterThanOrEqual(before - 65_000);
+  });
+
+  it('stale stream timestamp keeps isHealthy(epic) false', () => {
+    const stream = new CapitalQuoteStream();
+    (stream as any).ws = { readyState: WebSocket.OPEN };
+    (stream as any).lastQuoteAt = Date.now();
+    const parsed = parseCapitalStreamQuote(
+      JSON.stringify({
+        destination: 'quote',
+        payload: {
+          epic: 'GOLD',
+          bid: 4400,
+          ofr: 4400.4,
+          timestamp: Date.now() - 120_000,
+        },
+      })
+    );
+    expect(parsed).not.toBeNull();
+    (stream as any).latest = new Map([['GOLD', parsed!]]);
+    expect(stream.isHealthy(30_000, 'GOLD')).toBe(false);
   });
 
   it('ignores non-quote messages', () => {
