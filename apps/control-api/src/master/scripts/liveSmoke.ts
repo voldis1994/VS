@@ -1,12 +1,14 @@
 /**
- * LIVE smoke — attempts real Capital session when CAPITAL_* present.
- * Exits 0 with skipped=true when credentials missing (honest, not fake LIVE).
+ * LIVE smoke — attempts real Capital session when CAPITAL_* env OR Brokers DB
+ * desk credentials are available (same resolve path as Start LIVE).
+ * Exits 0 with skipped=true when neither source has credentials (honest, not fake LIVE).
  *
  *   npx tsx src/master/scripts/liveSmoke.ts
  */
 import 'dotenv/config';
 import { writeFileSync, mkdirSync } from 'fs';
 import { capitalEnvPresent, resolveBrokerFromEnv } from '../envBroker.js';
+import { classifyLiveSmokeBroker } from '../liveSmokeGate.js';
 import { GOLD_SPEC } from '../pipeline.js';
 
 async function main() {
@@ -16,17 +18,6 @@ async function main() {
     master_live_enabled: process.env.MASTER_LIVE_ENABLED === 'true',
   };
 
-  if (!capitalEnvPresent()) {
-    report.status = 'SKIPPED';
-    report.detail =
-      'CAPITAL_API_KEY / CAPITAL_IDENTIFIER / CAPITAL_API_PASSWORD not set — cannot prove live Capital network path in this environment';
-    console.log(JSON.stringify(report, null, 2));
-    const dir = process.env.ARTIFACT_DIR || '/opt/cursor/artifacts';
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(`${dir}/vs_master_live_smoke.json`, JSON.stringify(report, null, 2));
-    return;
-  }
-
   if (process.env.MASTER_LIVE_ENABLED !== 'true') {
     process.env.MASTER_LIVE_ENABLED = 'true';
     report.note = 'temporarily set MASTER_LIVE_ENABLED for smoke';
@@ -35,15 +26,30 @@ async function main() {
   const resolved = await resolveBrokerFromEnv();
   report.broker = resolved.broker.name;
   report.mode = resolved.mode;
-  report.detail = resolved.detail;
+  report.resolve_detail = resolved.detail;
+  report.resolve_ok = resolved.ok;
 
-  if (resolved.broker.name !== 'CAPITAL' || resolved.mode !== 'LIVE') {
+  const gate = classifyLiveSmokeBroker(resolved);
+  if (gate.action === 'skip') {
+    report.status = 'SKIPPED';
+    report.detail = gate.detail;
+    console.log(JSON.stringify(report, null, 2));
+    const dir = process.env.ARTIFACT_DIR || '/opt/cursor/artifacts';
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(`${dir}/vs_master_live_smoke.json`, JSON.stringify(report, null, 2));
+    return;
+  }
+
+  if (gate.action === 'fail') {
     report.status = 'FAIL';
-    report.reason = 'expected CAPITAL LIVE broker';
+    report.reason = gate.detail;
     console.log(JSON.stringify(report, null, 2));
     process.exitCode = 1;
     return;
   }
+
+  report.credential_source = gate.credentialSource;
+  report.detail = resolved.detail;
 
   const quote = await resolved.broker.getQuote(process.env.MASTER_EPIC || GOLD_SPEC.epic);
   const acct = await resolved.broker.getAccount();

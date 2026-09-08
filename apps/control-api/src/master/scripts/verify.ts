@@ -89,19 +89,22 @@ async function main() {
     });
   }
 
-  // 4) LIVE Capital smoke (may SKIP without credentials — recorded honestly)
+  // 4) LIVE Capital smoke (may SKIP without env OR Brokers desk creds — recorded honestly)
   {
     const r = run('npm', ['run', 'master:live-smoke'], 60_000);
     const smoke = readJson(join(artifactDir, 'vs_master_live_smoke.json'));
     const status = smoke?.status || 'MISSING';
+    const credSrc =
+      typeof smoke?.credential_source === 'string' ? ` source=${smoke.credential_source}` : '';
     checks.push({
       id: 'live_capital_network',
-      requirement: 'LIVE broker mode against Capital.com network',
+      requirement:
+        'LIVE broker mode against Capital.com network (CAPITAL_* env or Brokers DB desk creds)',
       ok: status === 'OK_LIVE_CONNECTED' || status === 'CONNECTED_PARTIAL',
       detail:
         status === 'SKIPPED'
-          ? `SKIPPED (no CAPITAL_*): ${smoke?.detail || ''}`
-          : JSON.stringify(smoke),
+          ? `SKIPPED (no CAPITAL_* env and no Brokers desk Capital): ${smoke?.detail || ''}`
+          : `${JSON.stringify(smoke)}${credSrc}`,
       // Note: SKIPPED means not verified — ok=false
     });
   }
@@ -147,6 +150,7 @@ async function main() {
       'src/master/moneyExit.ts',
       'src/master/capitalLoginLock.ts',
       'src/master/capitalDeskCreds.ts',
+      'src/master/liveSmokeGate.ts',
       'src/master/capitalMarket.ts',
       'src/master/newsCalendar.ts',
       'src/master/capitalStream.ts',
@@ -204,7 +208,7 @@ async function main() {
       note: capitalLive
         ? 'All objective requirements verified including Capital.com network LIVE (primary venue)'
         : allCore
-          ? 'Paper + live-data + mocked Capital verified; primary LIVE is Capital.com — set CAPITAL_* credentials (not MT4 bridge)'
+          ? 'Paper + live-data + mocked Capital verified; primary LIVE is Capital.com — set CAPITAL_* env or Brokers-page Capital credentials (not MT4 bridge)'
           : 'One or more core requirements failed',
     },
   };
