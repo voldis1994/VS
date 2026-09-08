@@ -56,3 +56,11 @@ describe('liveSmokeGate — env + Brokers desk honesty', () => {
     expect(credentialSourceFromDetail('other')).toBe('unknown');
   });
 });
+
+describe('formatDeskDbError', () => {
+  it('uses AggregateError code when message is empty', async () => {
+    const { formatDeskDbError } = await import('../capitalDeskCreds.js');
+    const e = Object.assign(new AggregateError([], ''), { code: 'ECONNREFUSED' });
+    expect(formatDeskDbError(e)).toBe('ECONNREFUSED');
+  });
+});

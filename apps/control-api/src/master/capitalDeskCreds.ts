@@ -24,6 +24,18 @@ type DeskLoader = (connectionId?: number | null) => Promise<DeskCapitalLoadResul
 
 let testLoader: DeskLoader | null = null;
 
+/** Format pool/query failures — AggregateError often has empty message + useful code. */
+export function formatDeskDbError(e: unknown): string {
+  const err = e as { message?: string; code?: string; name?: string };
+  return (
+    (err?.message && String(err.message).trim()) ||
+    (err?.code ? String(err.code) : '') ||
+    (e instanceof Error ? e.name : '') ||
+    String(e) ||
+    'unknown'
+  );
+}
+
 /** Vitest inject — bypass Postgres. */
 export function setDeskCapitalCredLoaderForTests(loader: DeskLoader | null) {
   testLoader = loader;
@@ -133,7 +145,7 @@ export async function loadDeskCapitalCredentials(
   } catch (e) {
     return {
       ok: false,
-      detail: `desk_db_unavailable:${e instanceof Error ? e.message : String(e)}`,
+      detail: `desk_db_unavailable:${formatDeskDbError(e)}`,
     };
   }
 }
