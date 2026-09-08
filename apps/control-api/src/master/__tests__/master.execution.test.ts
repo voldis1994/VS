@@ -313,6 +313,14 @@ describe('VS MASTER MT4 file bridge', () => {
       expect(opens.positions.some((p) => p.position_id === placed.position_id)).toBe(true);
       const hit = opens.positions.find((p) => p.position_id === placed.position_id)!;
       expect(hit.stop_level).toBe(4420);
+
+      // Move quote into profit then CLOSE — ACK must carry fill + profit
+      sim.setQuote(4380, 4380.4);
+      const closed = await broker.closePosition(placed.position_id!);
+      expect(closed.ok).toBe(true);
+      expect(closed.fill_price).toBeCloseTo(4380.4, 5); // SELL closes at ask
+      expect(closed.fill_pnl).not.toBeNull();
+      expect(Number(closed.fill_pnl)).toBeGreaterThan(0);
     } finally {
       sim.stop();
     }

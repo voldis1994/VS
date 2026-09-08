@@ -107,10 +107,19 @@ export class Mt4BridgeSimulator {
     renameSync(tmp, path);
   }
 
-  private writeAck(id: string, ok: boolean, ticket = 0, detail = '') {
+  private writeAck(
+    id: string,
+    ok: boolean,
+    ticket = 0,
+    detail = '',
+    extra?: { fill?: number | null; profit?: number | null }
+  ) {
     const path = join(this.root, 'acks', `ack_${id}.json`);
     const tmp = path + '.tmp';
-    writeFileSync(tmp, JSON.stringify({ id, ok, ticket, detail }) + '\n');
+    const body: Record<string, unknown> = { id, ok, ticket, detail, error: detail };
+    if (extra?.fill != null && Number.isFinite(extra.fill)) body.fill = extra.fill;
+    if (extra?.profit != null && Number.isFinite(extra.profit)) body.profit = extra.profit;
+    writeFileSync(tmp, JSON.stringify(body) + '\n');
     renameSync(tmp, path);
   }
 
@@ -159,17 +168,22 @@ export class Mt4BridgeSimulator {
         tp: Number(payload.tp || 0),
         profit: 0,
       });
-      this.writeAck(id, true, ticket, 'opened');
+      this.writeAck(id, true, ticket, 'opened', { fill: open, profit: 0 });
       return;
     }
     if (action === 'CLOSE') {
       const ticket = Number(payload.ticket);
-      if (!this.positions.has(ticket)) {
+      const p = this.positions.get(ticket);
+      if (!p) {
         this.writeAck(id, false, ticket, 'not_found');
         return;
       }
+      this.markProfits();
+      const fill = p.side === 'BUY' ? this.bid : this.ask;
+      const profit =
+        p.side === 'BUY' ? (fill - p.open) * p.lot : (p.open - fill) * p.lot;
       this.positions.delete(ticket);
-      this.writeAck(id, true, ticket, 'closed');
+      this.writeAck(id, true, ticket, 'closed', { fill, profit });
       return;
     }
     if (action === 'MODIFY') {

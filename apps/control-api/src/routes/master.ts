@@ -394,6 +394,11 @@ export async function registerMasterRoutes(app: FastifyInstance) {
     };
   });
 
+  app.get('/api/master/errors', async () => {
+    const { loadMasterErrors } = await import('../master/errorJournal.js');
+    return { errors: loadMasterErrors(50) };
+  });
+
   // Live dashboard — polls status; start/stop controls; shows why trading / not
   app.get('/master', async (_req, reply) => {
     const html = `<!doctype html>
@@ -475,6 +480,9 @@ async function refresh(){
       card('Available',s.account?.available_to_deal!=null?Number(s.account.available_to_deal).toFixed(2):'—'),
       card('News',s.news_window?.window_active?(s.news_window.impact+' · '+s.news_window.source):'clear',s.news_window?.window_active&&s.news_window?.impact==='high'?'bad':''),
       card('Daily PnL',s.account?.daily_pnl!=null?Number(s.account.daily_pnl).toFixed(2):'—'),
+      card('Day start eq',s.account?.day_start_equity!=null?Number(s.account.day_start_equity).toFixed(2):'—'),
+      card('Peak eq',s.account?.peak_equity!=null?Number(s.account.peak_equity).toFixed(2):'—'),
+      card('Reject cool',(s.reject_cooldown_ms||0)>0?(Math.ceil((s.reject_cooldown_ms||0)/1000)+'s'):'—',(s.reject_cooldown_ms||0)>0?'bad':''),
       card('Open',s.open_positions),
       card('Trades',s.traded),
       card('Blocked',s.blocked),
@@ -483,6 +491,7 @@ async function refresh(){
       card('Recovered',s.recovered?'YES':'—'),
       card('Persist',s.persist_ok===false?'DEGRADED':'OK',s.persist_ok===false?'bad':'ok'),
       card('Persist err',s.last_persist_error||'—',s.last_persist_error?'bad':''),
+      card('Last error',(s.recent_errors&&s.recent_errors[0])?(s.recent_errors[0].error_type+': '+s.recent_errors[0].message).slice(0,72):'—',(s.recent_errors&&s.recent_errors.length)?'bad':''),
     ].join('');
     const pos=await fetch('/api/master/positions').then(r=>r.json());
     const list=pos.positions||[];
