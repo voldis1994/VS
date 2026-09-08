@@ -14,6 +14,17 @@ export function masterOwnsPipeline(): boolean {
   return masterRuntime.ownsPipelineEffective();
 }
 
+/**
+ * Desk Capital CST pool id — when MASTER owns pipeline, share env/MASTER pool
+ * (900001) so desk quote session and CapitalBroker never fork CST on one login.
+ * Legacy desk-only keeps the DB connection_id.
+ */
+export function deskCapitalPoolConnectionId(dbConnectionId?: number | null): number {
+  if (masterOwnsPipeline()) return masterCapitalConnectionId();
+  const n = Number(dbConnectionId);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : masterCapitalConnectionId();
+}
+
 export function candlesToBars(candles: CapitalPriceCandle[]): Bar[] {
   return candles
     .filter((c) => c.close != null)

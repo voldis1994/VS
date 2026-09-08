@@ -37,7 +37,8 @@ export function createCapitalBroker(creds: CapitalBrokerCreds): CapitalBroker {
   return new CapitalBroker({
     credentials: {
       ...creds,
-      connectionId: masterCapitalConnectionId(creds.connectionId ?? null),
+      // Always MASTER pool — never fork on desk DB connection_id (VS CST rule)
+      connectionId: masterCapitalConnectionId(),
     },
     acquire: async (input) => {
       const opened = await acquireCapitalSession(input);

@@ -48,6 +48,7 @@ import {
   type MultiFeedLeg,
 } from './robotReader.js';
 import {
+  deskCapitalPoolConnectionId,
   ensureMasterCapitalBroker,
   masterOwnsManageSafely,
   syncMasterEntryOwnership,
@@ -1085,12 +1086,15 @@ async function robotCycle(s: Internal) {
   const capitalAccountId =
     (accRow.rows[0]?.external_account_id as string | null | undefined) || null;
 
+  // When MASTER owns pipeline, share MASTER CST pool (900001) — never fork on DB id
+  const capitalPoolId = deskCapitalPoolConnectionId(s.connection_id);
+
   const opened = await acquireCapitalSession({
     environment: conn.environment,
     apiKey: creds.api_key || '',
     identifier: (conn.identifier || '').trim(),
     password: creds.password || '',
-    connectionId: s.connection_id,
+    connectionId: capitalPoolId,
     capitalAccountId,
   });
   if (!opened.ok) {
@@ -1163,7 +1167,7 @@ async function robotCycle(s: Internal) {
       try {
         s.multiFeed = await readMultiFeedPrice(s.epic, {
           anchorMid: quote.mid,
-          connectionId: s.connection_id,
+          connectionId: capitalPoolId,
         });
       } catch {
         /* keep previous multiFeed snapshot */
@@ -1265,7 +1269,7 @@ async function robotCycle(s: Internal) {
         apiKey: creds.api_key || '',
         identifier: (conn.identifier || '').trim(),
         password: creds.password || '',
-        connectionId: s.connection_id,
+        connectionId: capitalPoolId,
         capitalAccountId,
       });
       syncMasterEntryOwnership(!!brokerOpen);
