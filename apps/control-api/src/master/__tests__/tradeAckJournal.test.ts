@@ -577,4 +577,93 @@ describe('INTENT→ACK trade journal (Reader)', () => {
     expect(masterRuntime.positions.count()).toBe(0);
     expect(r.positions).toBe(0);
   });
+
+  it('Capital recover adopts other-epic ticket via venue-wide list', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const state = mkdtempSync(join(tmpdir(), 'vs-cap-venue-'));
+    process.env.MASTER_STATE_DIR = state;
+    clearTradeAckJournalForTest();
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number;
+        stop_level?: number | null;
+        profit_level?: number | null;
+      }
+    >();
+    // Ticket is SILVER while runtime epic defaults to GOLD — epic-filtered list would miss it
+    positions.set('deal-sil-1', {
+      deal_id: 'deal-sil-1',
+      epic: 'SILVER',
+      direction: 'BUY',
+      size: 0.1,
+      open_level: 30.5,
+      stop_level: null,
+      profit_level: null,
+    });
+    logTradeIntent({
+      command_id: 'cap_recsilver1',
+      intent_id: 'capital-silver-intent-01',
+      action: 'OPEN',
+      side: 'BUY',
+      volume: 0.1,
+      epic: 'SILVER',
+      sl: 30.0,
+      tp: 31.0,
+      reason: 'INTENT',
+    });
+    updateTradeAck('cap_recsilver1', {
+      ack_status: 'SUCCESS',
+      ticket: 'deal-sil-1',
+      fill_price: 30.5,
+      detail: 'ACK_SUCCESS',
+    });
+
+    const mods: number[] = [];
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 'sil' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 30.4,
+        ask: 30.6,
+        mid: 30.5,
+        epic,
+        raw_ok: true,
+        market_status: 'TRADEABLE',
+      }),
+      list: async () => ({ ok: true, positions: [...positions.values()], detail: '' }),
+      create: async () => ({ ok: false, detail: 'no_create' }),
+      confirm: async () => ({ ok: false, detail: 'no' }),
+      modify: async (_s, input: any) => {
+        mods.push(1);
+        const p = positions.get(input.dealId);
+        if (p && input.stopLevel != null) p.stop_level = input.stopLevel;
+        if (p && input.profitLevel != null) p.profit_level = input.profitLevel;
+        return { ok: true, detail: 'ok' };
+      },
+      close: async (_s, id) => {
+        positions.delete(id);
+        return { ok: true, detail: 'closed' };
+      },
+    });
+    await broker.connect();
+
+    masterRuntime.pipeline = new MasterPipeline('LIVE');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.cfg = { ...masterRuntime.cfg, mode: 'LIVE' };
+    masterRuntime.epic = 'GOLD';
+    masterRuntime.attachBroker(broker);
+    masterRuntime.recovered = false;
+    const r = await masterRuntime.recover();
+    expect(r.positions).toBeGreaterThanOrEqual(1);
+    const pos = masterRuntime.positions.get('deal-sil-1');
+    expect(pos).toBeTruthy();
+    expect(pos!.epic).toBe('SILVER');
+    expect(mods.length).toBeGreaterThan(0);
+  });
 });

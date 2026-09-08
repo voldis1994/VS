@@ -1876,7 +1876,10 @@ class MasterRuntime {
       let capitalListUnproven = false;
       if (fromAck.adopted.length) {
         try {
-          const listed = await this.broker.listOpenPositions(this.epic);
+          // Capital: venue-wide list — epic filter cannot prove ticket gone / present
+          const listed = await this.broker.listOpenPositions(
+            this.broker instanceof CapitalBroker ? undefined : this.epic
+          );
           if (listed.ok) {
             statusByTicket = new Map(
               listed.positions.map((p) => [
@@ -2028,7 +2031,11 @@ class MasterRuntime {
                 /* stillLive check below */
               }
             }
-            const listed = await this.broker.listOpenPositions(row.epic || this.epic);
+            const listed = await this.broker.listOpenPositions(
+              this.broker instanceof CapitalBroker
+                ? undefined
+                : row.epic || this.epic
+            );
             // Fail-closed: unread/failed list must keep the ticket locally (same as
             // failCloseOpenResult keeping position_id when close/list is unproven).
             // Only drop when Capital list proves the deal is gone.
@@ -2120,7 +2127,7 @@ class MasterRuntime {
       const sync = await syncPositionsWithBroker(
         this.positions,
         this.broker,
-        this.epic,
+        this.broker instanceof CapitalBroker ? undefined : this.epic,
         this.emptyBrokerDebounce
       );
       // Journal confirmed ghosts/orphans even when other tickets are still in miss-debounce.
@@ -2530,10 +2537,11 @@ class MasterRuntime {
     }
     // Reconcile broker truth on the 1s manage loop too — otherwise SL/TP fills
     // leave a ghost open until the next full tick (~2.5s) with mark-based PnL.
+    // Capital: venue-wide (same as full tick) so other-epic orphans reconcile.
     const sync = await syncPositionsWithBroker(
       this.positions,
       broker,
-      this.epic,
+      broker instanceof CapitalBroker ? undefined : this.epic,
       this.emptyBrokerDebounce
     );
     // Journal confirmed ghosts/orphans even when other tickets are still in miss-debounce.

@@ -661,6 +661,137 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(positions.size).toBe(0);
   });
 
+  it('ACCEPTED deal_id that was pre-open falls through to new match (not orphan bind)', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number;
+        stop_level?: number | null;
+        opened_at?: string;
+      }
+    >();
+    positions.set('old-orphan', {
+      deal_id: 'old-orphan',
+      epic: 'GOLD',
+      direction: 'BUY',
+      size: 0.1,
+      open_level: 4400,
+      stop_level: 4390,
+      opened_at: new Date(Date.now() - 120_000).toISOString(),
+    });
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-pre' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({
+        ok: true,
+        positions: [...positions.values()].map((p) => ({
+          deal_id: p.deal_id,
+          epic: p.epic,
+          direction: p.direction,
+          size: p.size,
+          open_level: p.open_level,
+          stop_level: p.stop_level ?? null,
+          opened_at: p.opened_at ?? null,
+        })),
+        detail: '',
+      }),
+      create: async () => {
+        positions.set('new-fill', {
+          deal_id: 'new-fill',
+          epic: 'GOLD',
+          direction: 'BUY',
+          size: 0.1,
+          open_level: 4410.4,
+          stop_level: null,
+          opened_at: new Date().toISOString(),
+        });
+        return { ok: true, deal_reference: 'ref-pre', detail: 'posted' };
+      },
+      confirm: async (_s, ref) => {
+        if (String(ref).startsWith('mod')) {
+          return { ok: true, deal_id: 'mod', detail: 'ok' };
+        }
+        // Stale confirm points at pre-open orphan — must not bind it
+        return {
+          ok: true,
+          deal_id: 'old-orphan',
+          fill_level: 4400,
+          detail: 'ACCEPTED',
+        };
+      },
+      modify: async (_s, input) => {
+        const p = positions.get(input.dealId);
+        if (p && input.stopLevel != null) p.stop_level = Number(input.stopLevel);
+        return { ok: true, deal_reference: 'mod-1', detail: 'ok' };
+      },
+      close: async (id) => {
+        if (id === 'old-orphan') return { ok: false, detail: 'must_not_close_preopen' };
+        positions.delete(id);
+        return { ok: true, detail: 'closed' };
+      },
+    });
+    await broker.connect();
+    const place = await broker.placeOrder({
+      intent_id: 'intent-preopen-aaaaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: 4400,
+    });
+    expect(place.ok).toBe(true);
+    expect(place.position_id).toBe('new-fill');
+    expect(positions.has('old-orphan')).toBe(true);
+    expect(positions.get('new-fill')!.stop_level).toBe(4400);
+  });
+
+  it('ensureProtectiveLevelsOrFail refuses when side unproven', async () => {
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-side' }, detail: 'ok' }),
+      quote: async () => null,
+      list: async () => ({
+        ok: true,
+        positions: [
+          {
+            deal_id: 'side-less',
+            epic: 'GOLD',
+            direction: null,
+            size: 0.1,
+            open_level: 4410,
+            stop_level: null,
+          },
+        ],
+      }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({ ok: false, detail: 'unused' }),
+      modify: async () => ({ ok: true, detail: 'ok' }),
+    });
+    await broker.connect();
+    const guard = await broker.ensureProtectiveLevelsOrFail({
+      position_id: 'side-less',
+      want_sl: 4400,
+      order_id: 'o1',
+      epic: 'GOLD',
+      // no side — and list omits unproven direction from positions[]
+    });
+    expect(guard.ok).toBe(false);
+    expect(guard.detail).toBe('capital_sl_attach_side_unproven');
+  });
+
   it('SL attach fail reports capital_fail_close_unproven when DELETE leaves deal open', async () => {
     process.env.MASTER_LIVE_ENABLED = 'true';
     process.env.MASTER_CONFIRM_FAST = 'true';

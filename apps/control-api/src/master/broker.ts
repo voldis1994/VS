@@ -1614,8 +1614,11 @@ export class CapitalBroker implements MasterBroker {
           };
         }
       } else if (conf.ok && conf.deal_id) {
-        position_id = conf.deal_id;
-        fill_price = conf.fill_level ?? null;
+        // Never bind a pre-open orphan from ACCEPTED dealId — fall through to match
+        if (!preOpenIds.has(conf.deal_id)) {
+          position_id = conf.deal_id;
+          fill_price = conf.fill_level ?? null;
+        }
       }
     }
 
@@ -1817,10 +1820,10 @@ export class CapitalBroker implements MasterBroker {
           Math.max(0.05, Math.abs(wantTp) * 1e-5));
     if (alreadyProtected && !tpMissing) return { ok: true };
 
-    const side =
-      input.side ||
-      cur0?.side ||
-      ('BUY' as Side);
+    const side = input.side || cur0?.side || null;
+    if (!side) {
+      return { ok: false, detail: 'capital_sl_attach_side_unproven' };
+    }
     let attached = false;
     for (let widen = 0; widen < 4 && !attached; widen++) {
       const mid = input.fill_price ?? cur0?.open_level ?? wantSlNum;
