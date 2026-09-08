@@ -28,6 +28,28 @@ export function atr(bars: Bar[], n = 14): number {
   return mean(usable.length ? usable : trs);
 }
 
+/** Simple EMA — VS-System EMA3 trail uses period 3 on closes. */
+export function ema(values: number[], period: number): number | null {
+  if (!(period >= 1) || values.length < period) return null;
+  const k = 2 / (period + 1);
+  // Seed with SMA of first `period` samples (standard)
+  let e = 0;
+  for (let i = 0; i < period; i++) e += values[i]!;
+  e /= period;
+  for (let i = period; i < values.length; i++) {
+    e = values[i]! * k + e * (1 - k);
+  }
+  return e;
+}
+
+/** EMA of bar closes — null when insufficient history. */
+export function emaFromBars(bars: Bar[], period = 3): number | null {
+  const closes = bars
+    .map((b) => b.close)
+    .filter((c) => Number.isFinite(c) && c > 0);
+  return ema(closes, period);
+}
+
 export function analyzeBars(bars: Bar[], spread = 0, nowMs = Date.now()): AnalysisSnapshot {
   if (bars.length < 5) {
     return {

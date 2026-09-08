@@ -1,5 +1,5 @@
 /** MASTER runtime — full PAPER/LIVE cycle owner + dashboard facade. */
-import { analyzeBars } from './analysis.js';
+import { analyzeBars, emaFromBars } from './analysis.js';
 import type { MasterBroker } from './broker.js';
 import { CapitalBroker, Mt4FileBroker, PaperBroker } from './broker.js';
 import { decide } from './decision.js';
@@ -799,6 +799,7 @@ class MasterRuntime {
       structure && structure.atr > 0
         ? structure.atr * this.cfg.trailing_buffer_atr_mult
         : 0;
+    const ema3 = bars.length >= 3 ? emaFromBars(bars, 3) : null;
 
     // 1) Manage exits first (position manager owns open risk)
     const liveMinStop =
@@ -822,6 +823,7 @@ class MasterRuntime {
       swing_low: structure?.swing_low ?? null,
       swing_high: structure?.swing_high ?? null,
       trailing_buffer: trailBuf,
+      ema3,
       allow_close:
         this.cfg.ai_mode === 'off' ? true : this.last_ai_allow_close,
       close_all_profit: this.cfg.close_all_profit,

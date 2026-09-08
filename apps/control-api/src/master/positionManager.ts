@@ -236,6 +236,8 @@ export class PositionManager {
     scalp_pct_chase?: boolean;
     /** Lock fraction (default 0.2) */
     scalp_lock_pct?: number;
+    /** VS-System EMA3 trail level (from live bars) */
+    ema3?: number | null;
     /**
      * When set, quotes older than this skip soft manage (BE/trail/TIME_STOP/partial)
      * but still attempt naked SL recovery — Check- stale bridge gate.
@@ -267,6 +269,10 @@ export class PositionManager {
     const swingLow = input.swing_low ?? null;
     const swingHigh = input.swing_high ?? null;
     const trailBuf = input.trailing_buffer ?? 0;
+    const ema3 =
+      input.ema3 != null && Number.isFinite(input.ema3) && input.ema3 > 0
+        ? Number(input.ema3)
+        : null;
     const minStopDist = input.min_stop_distance ?? quote.min_stop_distance ?? null;
     const allowClose = input.allow_close !== false;
     const closeAllProfit = input.close_all_profit ?? 0;
@@ -628,6 +634,12 @@ export class PositionManager {
             min_stop_distance: minStopDist,
           });
         }
+        if (ema3 != null) {
+          await this.maybeEma3Trail(broker, pos, quote, {
+            ema3,
+            min_stop_distance: minStopDist,
+          });
+        }
         continue;
       }
 
@@ -665,6 +677,12 @@ export class PositionManager {
             trailing_buffer: trailBuf,
             trail_start: trailStart,
             trail_lock: trailLock,
+            min_stop_distance: minStopDist,
+          });
+        }
+        if (ema3 != null) {
+          await this.maybeEma3Trail(broker, pos, quote, {
+            ema3,
             min_stop_distance: minStopDist,
           });
         }
@@ -1258,6 +1276,50 @@ export class PositionManager {
       until: now + capitalModifyRejectBackoffMs(mod.detail || ''),
       level: be,
     });
+  }
+
+  /**
+   * VS-System EMA3 trail — tighten SL toward EMA(3) of closes.
+   * Never places SL on the wrong side of mark (instant stop / Capital reject).
+   */
+  private async maybeEma3Trail(
+    broker: MasterBroker,
+    pos: ManagedPosition,
+    quote: Quote,
+    opts: { ema3: number; min_stop_distance?: number | null }
+  ): Promise<void> {
+    if (!broker.modifyPosition) return;
+    const ema3 = opts.ema3;
+    if (!(ema3 > 0) || !Number.isFinite(ema3)) return;
+    const mark = protectiveMark(pos.side, quote);
+    let next: number | null = null;
+    if (pos.side === 'BUY') {
+      // Only move SL up toward EMA3; never at/through mark
+      if (ema3 < mark && (pos.stop_loss == null || ema3 > pos.stop_loss)) {
+        next = ema3;
+      }
+    } else {
+      if (ema3 > mark && (pos.stop_loss == null || ema3 < pos.stop_loss)) {
+        next = ema3;
+      }
+    }
+    if (next == null) return;
+    const mod = await this.brokerModify(
+      broker,
+      pos,
+      { stop_level: next },
+      'ema3_trail'
+    );
+    if (mod.ok) {
+      pos.stop_loss = next;
+      this.modifyBackoff.delete(pos.position_id);
+    } else {
+      const { capitalModifyRejectBackoffMs } = await import('./capitalConfirm.js');
+      this.modifyBackoff.set(pos.position_id, {
+        until: Date.now() + capitalModifyRejectBackoffMs(mod.detail || ''),
+        level: next,
+      });
+    }
   }
 
   /**

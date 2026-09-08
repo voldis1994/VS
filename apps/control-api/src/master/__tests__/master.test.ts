@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { analyzeBars } from '../analysis.js';
+import { analyzeBars, ema, emaFromBars } from '../analysis.js';
 import { buildBuyComponents, buildSellComponents, buildCandidates } from '../candidates.js';
 import { decide, pickPreferred } from '../decision.js';
 import { ExpectancyStore } from '../expectancy.js';
@@ -90,6 +90,84 @@ describe('VS MASTER analysis', () => {
     expect(d.buy.score).toBeLessThanOrEqual(1);
     // score exists; no fabricated "72% probability" field
     expect((d as { probability?: number }).probability).toBeUndefined();
+  });
+
+  it('ema / emaFromBars match VS-System period-3 trail input', () => {
+    expect(ema([1, 2, 3], 3)).toBeCloseTo(2, 8);
+    const bars = barsTrendUp(10);
+    const e = emaFromBars(bars, 3);
+    expect(e).not.toBeNull();
+    expect(e!).toBeGreaterThan(bars[0]!.close);
+    expect(e!).toBeLessThanOrEqual(bars.at(-1)!.close + 1e-9);
+  });
+});
+
+describe('VS MASTER EMA3 trail manage', () => {
+  it('raises BUY stop toward EMA3 below mark', async () => {
+    const { PaperBroker } = await import('../broker.js');
+    const { PositionManager } = await import('../positionManager.js');
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    broker.setQuote({
+      bid: 4410,
+      ask: 4410.4,
+      mid: 4410.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'ema3-trail-bbbbbbbbbbbb',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: entry - 5,
+      profit_level: entry + 20,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-ema3',
+      intent_id: 'ema3-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry,
+      stop_loss: entry - 5,
+      take_profit: entry + 20,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: analyzeBars(barsTrendUp(), 0.4),
+        expectancy: null,
+      },
+    });
+    const ema3 = 4408; // above current SL 4395, below mark bid 4410
+    await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        spread: 0.4,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      ema3,
+      scalp_pct_chase: false,
+      breakeven_progress: 0,
+      max_hold_ms: 0,
+      allow_close: false,
+    });
+    expect(pm.get(placed.position_id!)!.stop_loss).toBeCloseTo(ema3, 5);
   });
 });
 
