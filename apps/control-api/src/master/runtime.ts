@@ -6,7 +6,8 @@ import {
   emaTickLiveFromBars,
 } from './analysis.js';
 import type { MasterBroker } from './broker.js';
-import { CapitalBroker, Mt4FileBroker, PaperBroker, epicsMatch } from './broker.js';
+import { CapitalBroker, Mt4FileBroker, PaperBroker, capitalApiEpic, epicsMatch } from './broker.js';
+import { capitalEnvPresent } from './envBroker.js';
 import { decide } from './decision.js';
 import { executeDecision } from './execution.js';
 import {
@@ -83,6 +84,12 @@ export type MasterStatus = {
   owns_pipeline: boolean;
   broker: string | null;
   broker_detail: string | null;
+  /** Primary LIVE venue — Capital.com API direct (not MT4 bridge) */
+  primary_live_venue: 'capital.com_api_direct';
+  /** Whether CAPITAL_* env secrets are present in this process */
+  capital_env_present: boolean;
+  /** True when MASTER has CAPITAL broker in LIVE mode */
+  capital_live_attached: boolean;
   last_decision: ReturnType<typeof decide> | null;
   last_risk: ReturnType<typeof evaluateRisk> | null;
   last_block_reason: string | null;
@@ -233,7 +240,13 @@ class MasterRuntime {
   }
 
   setEpic(epic: string) {
-    this.epic = epic;
+    const raw = String(epic || '').trim();
+    // Capital.com markets epic is GOLD/SILVER — keep runtime aligned with API
+    if (this.broker?.name === 'CAPITAL') {
+      this.epic = capitalApiEpic(raw) || raw || 'GOLD';
+    } else {
+      this.epic = raw;
+    }
   }
 
   /** Apply + persist manage/exit knobs (dashboard / operator). */
@@ -707,6 +720,10 @@ class MasterRuntime {
     if (broker instanceof Mt4FileBroker) {
       this.syncEpicFromMt4Chart(broker);
     }
+    // Capital: normalize XAUUSD→GOLD (API epic) so quote/open/stream share one id
+    if (broker instanceof CapitalBroker) {
+      this.setEpic(this.epic);
+    }
   }
 
   /** Check- parity: OrderSend uses chart symbol; keep runtime epic in sync. */
@@ -714,6 +731,14 @@ class MasterRuntime {
     const chart = broker.chartSymbol();
     if (chart && epicsMatch(chart, this.epic) && chart !== this.epic) {
       this.setEpic(chart);
+    }
+  }
+
+  /** Capital quote epic (GOLD) wins over MT4-style aliases when they match. */
+  private syncEpicFromCapitalQuote(q: { epic?: string | null }) {
+    const api = String(q.epic || '').trim();
+    if (api && epicsMatch(api, this.epic) && api !== this.epic) {
+      this.setEpic(api);
     }
   }
 
@@ -1899,6 +1924,9 @@ class MasterRuntime {
         if (this.broker instanceof Mt4FileBroker) {
           this.syncEpicFromMt4Chart(this.broker);
         }
+        if (this.broker instanceof CapitalBroker) {
+          this.syncEpicFromCapitalQuote(q);
+        }
         if (!seeded) {
           // Structure: Capital OHLC when broker provides it; else Yahoo; ticks from broker.
           // Vitest uses synthetic seed to avoid flaky Yahoo network in unit tests.
@@ -2317,6 +2345,10 @@ class MasterRuntime {
       owns_pipeline: this.ownsPipelineEffective(),
       broker: this.broker?.name ?? null,
       broker_detail: this.broker_detail,
+      primary_live_venue: 'capital.com_api_direct',
+      capital_env_present: capitalEnvPresent(),
+      capital_live_attached:
+        this.broker?.name === 'CAPITAL' && this.cfg.mode === 'LIVE' && !this.broker.paper,
       last_decision: this.last_decision,
       last_risk: this.last_risk,
       last_block_reason:

@@ -552,6 +552,7 @@ async function refresh(){
       card('Health',s.health,s.health.includes('KILL')?'bad':'ok'),
       card('Broker',s.broker||'—'),
       card('Broker detail',s.broker_detail||'—'),
+      card('Capital LIVE',s.capital_live_attached?'ATTACHED':(s.capital_env_present?'creds env':'need keys'),s.capital_live_attached?'ok':(s.mode==='LIVE'?'bad':'')),
       card('Quote',s.quote?(Number(s.quote.mid).toFixed(2)+' · '+Math.round((s.quote.age_ms||0)/1000)+'s'+(s.quote.stream_healthy===true?' · WS':s.quote.stream_healthy===false?' · REST':'')):'—', (s.quote&&s.quote.age_ms>15000)?'bad':'ok'),
       card('Float UPL',s.floating_pnl!=null?Number(s.floating_pnl).toFixed(2):'—', s.floating_pnl==null?'':(s.floating_pnl<0?'bad':(s.floating_pnl>0?'ok':'')),
       card('Manage',s.manage&&s.manage.scalp_pct_chase?'SCALP chase on':'structure/MFE'),

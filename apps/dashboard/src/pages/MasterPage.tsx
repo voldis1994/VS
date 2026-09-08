@@ -10,6 +10,9 @@ type MasterStatus = {
   owns_pipeline: boolean;
   broker: string | null;
   broker_detail: string | null;
+  primary_live_venue?: string;
+  capital_env_present?: boolean;
+  capital_live_attached?: boolean;
   last_decision: { kind?: string } | null;
   last_block_reason: string | null;
   last_execution_detail: string | null;
@@ -209,6 +212,16 @@ export function MasterPage() {
         { k: 'Health', v: status.health, bad: healthBad, ok: !healthBad },
         { k: 'Broker', v: status.broker || '—' },
         { k: 'Broker detail', v: status.broker_detail || '—' },
+        {
+          k: 'Capital LIVE',
+          v: status.capital_live_attached
+            ? 'ATTACHED'
+            : status.capital_env_present
+              ? 'creds env · not attached'
+              : 'need CAPITAL_* or Brokers keys',
+          ok: !!status.capital_live_attached,
+          bad: !status.capital_live_attached && status.mode === 'LIVE',
+        },
         {
           k: 'Quote',
           v: status.quote
