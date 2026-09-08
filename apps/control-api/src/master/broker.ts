@@ -681,9 +681,9 @@ export class CapitalBroker implements MasterBroker {
     // Prefer fresh streaming mark when healthy (VS-System ensureMarketStream)
     void this.stream.ensure([epic]);
     const streamed = this.stream.getLatest(epic);
-    const cachedStatus = this.cachedMarketStatus(epic);
+    let cachedStatus = this.cachedMarketStatus(epic);
     const { capitalMarketAllowsTrading } = await import('./capitalMarket.js');
-    const knownClosed =
+    let knownClosed =
       cachedStatus != null && !capitalMarketAllowsTrading(cachedStatus);
 
     // Stream path — but if REST already said CLOSED, force REST (don't entry on WS ticks)
@@ -694,20 +694,44 @@ export class CapitalBroker implements MasterBroker {
       if (Number.isFinite(mid) && mid > 0) {
         this.lastMidByEpic.set(String(streamed.epic || epic).toUpperCase(), mid);
       }
-      // Background REST status refresh — stream frames never carry marketStatus
-      if (this.marketStatusNeedsRefresh(epic)) {
-        void this.refreshMarketStatus(epic);
+      const statusKey = String(epic || '').toUpperCase();
+      const neverFetched = !(this.marketStatusFetchedAt.get(statusKey) || 0);
+      // First tick: await REST status before allowing stream-only (null would skip CLOSED gate)
+      if (neverFetched) {
+        await this.refreshMarketStatus(epic);
+        cachedStatus = this.cachedMarketStatus(epic);
+        knownClosed =
+          cachedStatus != null && !capitalMarketAllowsTrading(cachedStatus);
+        if (knownClosed) {
+          // Fall through to full REST quote path below
+        } else {
+          return {
+            bid: streamed.bid,
+            ask: streamed.offer,
+            mid: streamed.mid,
+            spread: streamed.offer - streamed.bid,
+            epic: streamed.epic || epic,
+            ts_ms: streamed.ts_ms,
+            min_stop_distance: this.liveMinStopDistance(epic),
+            market_status: cachedStatus,
+          };
+        }
+      } else {
+        // Background refresh on interval — stream frames never carry marketStatus
+        if (this.marketStatusNeedsRefresh(epic)) {
+          void this.refreshMarketStatus(epic);
+        }
+        return {
+          bid: streamed.bid,
+          ask: streamed.offer,
+          mid: streamed.mid,
+          spread: streamed.offer - streamed.bid,
+          epic: streamed.epic || epic,
+          ts_ms: streamed.ts_ms,
+          min_stop_distance: this.liveMinStopDistance(epic),
+          market_status: cachedStatus,
+        };
       }
-      return {
-        bid: streamed.bid,
-        ask: streamed.offer,
-        mid: streamed.mid,
-        spread: streamed.offer - streamed.bid,
-        epic: streamed.epic || epic,
-        ts_ms: streamed.ts_ms,
-        min_stop_distance: this.liveMinStopDistance(epic),
-        market_status: cachedStatus,
-      };
     }
 
     const ensured = await this.ensureSession();

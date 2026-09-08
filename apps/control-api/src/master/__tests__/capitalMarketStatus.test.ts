@@ -88,4 +88,38 @@ describe('CapitalBroker market_status cache (stream path)', () => {
     expect(restCalls).toBe(2);
     expect(q?.market_status).toBe('TRADEABLE');
   });
+
+  it('awaits first REST marketStatus before stream-only return', async () => {
+    let restCalls = 0;
+    const broker = makeBroker(async () => {
+      restCalls += 1;
+      return {
+        bid: 4400,
+        ask: 4400.4,
+        mid: 4400.2,
+        epic: 'GOLD',
+        market_status: 'CLOSED',
+      };
+    });
+    (broker as any).session = { id: 's' };
+
+    const stream = (broker as any).stream;
+    stream.getLatest = () => ({
+      epic: 'GOLD',
+      bid: 4401,
+      offer: 4401.3,
+      mid: 4401.15,
+      ts_ms: Date.now(),
+    });
+    stream.isHealthy = () => true;
+    stream.ensure = () => {};
+
+    // No prior REST — must not return stream mid with null status (would skip CLOSED gate)
+    const q = await broker.getQuote('GOLD');
+    expect(restCalls).toBeGreaterThanOrEqual(1);
+    expect(broker.cachedMarketStatus('GOLD')).toBe('CLOSED');
+    // After discovering CLOSED, falls through to REST full quote
+    expect(q?.market_status).toBe('CLOSED');
+    expect(q?.mid).toBeCloseTo(4400.2, 5);
+  });
 });
