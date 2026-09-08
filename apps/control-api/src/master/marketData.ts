@@ -144,13 +144,15 @@ export function validateMarket(
   if (reasons.includes('stale_quote')) quality -= 0.25;
   if (reasons.includes('spread_insane')) quality -= 0.2;
   if (reasons.includes('quote_bar_desync')) quality -= 0.15;
-  if (reasons.includes('flat_tape')) quality -= 0.1;
+  if (reasons.includes('flat_tape')) quality -= 0.35;
   quality = Math.max(0, Math.min(1, quality));
 
+  // Flat public tape must not trade — soft −0.1 still left entries open on dead mids
   const hardFail =
     reasons.includes('insufficient_bars') ||
     reasons.includes('invalid_quote') ||
-    reasons.includes('spread_insane');
+    reasons.includes('spread_insane') ||
+    reasons.includes('flat_tape');
 
   return {
     ok: !hardFail && quality >= 0.35,

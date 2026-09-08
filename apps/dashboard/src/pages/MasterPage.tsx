@@ -19,7 +19,11 @@ type MasterStatus = {
   capital_account_proven?: boolean | null;
   capital_venue_opens?: number;
   capital_venue_opens_proven?: boolean;
-  last_decision: { kind?: string } | null;
+  last_decision: {
+    kind?: string;
+    buy?: { score?: number; filter_ok?: boolean; filter_reason?: string | null; valid?: boolean };
+    sell?: { score?: number; filter_ok?: boolean; filter_reason?: string | null; valid?: boolean };
+  } | null;
   last_block_reason: string | null;
   last_execution_detail: string | null;
   last_exit_reason: string | null;
@@ -32,6 +36,18 @@ type MasterStatus = {
   last_ai_allow_close?: boolean;
   buy_score: number;
   sell_score: number;
+  buy_filter?: {
+    ok: boolean;
+    reason: string | null;
+    score: number;
+    valid: boolean;
+  } | null;
+  sell_filter?: {
+    ok: boolean;
+    reason: string | null;
+    score: number;
+    valid: boolean;
+  } | null;
   regime: string;
   market_state: string;
   last_market?: {
@@ -454,6 +470,11 @@ export function MasterPage() {
         },
         { k: 'Regime', v: status.regime },
         {
+          k: 'Market state',
+          v: status.market_state || '—',
+          bad: !!status.market_state?.startsWith?.('invalid:'),
+        },
+        {
           k: 'Norm',
           v: status.last_market
             ? `Q=${status.last_market.quality.toFixed(2)} · ${status.last_market.bars_out}/${status.last_market.bars_in}${
@@ -466,7 +487,27 @@ export function MasterPage() {
           ok: !!status.last_market?.ok && (status.last_market.quality ?? 0) >= 0.5,
         },
         { k: 'BUY', v: Number(status.buy_score || 0).toFixed(3) },
+        {
+          k: 'BUY filter',
+          v: status.buy_filter
+            ? status.buy_filter.ok
+              ? `ok · ${Number(status.buy_filter.score).toFixed(3)}`
+              : `${status.buy_filter.reason || 'fail'} · ${Number(status.buy_filter.score).toFixed(3)}`
+            : '—',
+          bad: !!status.buy_filter && !status.buy_filter.ok,
+          ok: !!status.buy_filter?.ok,
+        },
         { k: 'SELL', v: Number(status.sell_score || 0).toFixed(3) },
+        {
+          k: 'SELL filter',
+          v: status.sell_filter
+            ? status.sell_filter.ok
+              ? `ok · ${Number(status.sell_filter.score).toFixed(3)}`
+              : `${status.sell_filter.reason || 'fail'} · ${Number(status.sell_filter.score).toFixed(3)}`
+            : '—',
+          bad: !!status.sell_filter && !status.sell_filter.ok,
+          ok: !!status.sell_filter?.ok,
+        },
         { k: 'Decision', v: status.last_decision?.kind || '—' },
         {
           k: 'Why',

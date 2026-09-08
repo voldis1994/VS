@@ -121,6 +121,19 @@ export type MasterStatus = {
   last_ai_allow_close: boolean;
   buy_score: number;
   sell_score: number;
+  /** Dual-candidate filter stage — dashboard must show BUY/SELL gate, not scores alone */
+  buy_filter: {
+    ok: boolean;
+    reason: string | null;
+    score: number;
+    valid: boolean;
+  } | null;
+  sell_filter: {
+    ok: boolean;
+    reason: string | null;
+    score: number;
+    valid: boolean;
+  } | null;
   regime: string;
   market_state: string;
   /** Last market validation/normalization snapshot (quality + drop reasons). */
@@ -3950,6 +3963,22 @@ class MasterRuntime {
         this.cfg.ai_mode === 'off' ? true : this.last_ai_allow_close,
       buy_score: this.last_decision?.buy?.score ?? 0,
       sell_score: this.last_decision?.sell?.score ?? 0,
+      buy_filter: this.last_decision?.buy
+        ? {
+            ok: !!this.last_decision.buy.filter_ok,
+            reason: this.last_decision.buy.filter_reason ?? null,
+            score: this.last_decision.buy.score ?? 0,
+            valid: !!this.last_decision.buy.valid,
+          }
+        : null,
+      sell_filter: this.last_decision?.sell
+        ? {
+            ok: !!this.last_decision.sell.filter_ok,
+            reason: this.last_decision.sell.filter_reason ?? null,
+            score: this.last_decision.sell.score ?? 0,
+            valid: !!this.last_decision.sell.valid,
+          }
+        : null,
       regime: this.last_decision?.analysis.regime ?? 'UNKNOWN',
       market_state: this.last_decision?.analysis.market_state ?? '—',
       last_market: this.last_market,
