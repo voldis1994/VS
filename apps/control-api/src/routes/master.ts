@@ -14,7 +14,7 @@ export async function registerMasterRoutes(app: FastifyInstance) {
   masterRuntime.hydrateManageConfig();
   masterRuntime.hydrateMonitorFromDisk();
 
-  app.get('/api/master/status', async () => masterRuntime.status());
+  app.get('/api/master/status', async () => masterRuntime.statusAsync());
 
   app.get('/api/master/config', async () => ({
     ...masterRuntime.cfg,
@@ -607,6 +607,7 @@ async function refresh(){
       card('Peak eq',s.account?.peak_equity!=null?Number(s.account.peak_equity).toFixed(2):'—'),
       card('Reject cool',(s.reject_cooldown_ms||0)>0?(Math.ceil((s.reject_cooldown_ms||0)/1000)+'s'):'—',(s.reject_cooldown_ms||0)>0?'bad':''),
       card('Open',s.open_positions),
+      card('Venue',s.capital_live_attached?(s.capital_venue_opens_proven===false?'unproven':String(s.capital_venue_opens||0)):'—',s.capital_live_attached&&(s.capital_venue_opens_proven===false||(s.capital_venue_opens||0)>0)?'bad':''),
       card('Trades',s.traded),
       card('Blocked',s.blocked),
       card('Expectancy',s.performance?.trades?Number(s.performance.expectancy||0).toFixed(3):'—'),
@@ -663,7 +664,7 @@ async function refresh(){
     }).join(''):card('Journal','no closed trades yet');
   }catch(e){pushLog('status error '+e)}
 }
-document.getElementById('btnStart').onclick=async()=>{const s=await fetch('/api/master/status').then(r=>r.json());if(s.capital_live_attached&&(s.open_positions||0)>0){pushLog('refuse Start PAPER — Flatten all Capital opens first');return;}await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'PAPER'})});const r=await fetch('/api/master/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'PAPER'})}).then(r=>r.json());pushLog('start PAPER ok='+r.ok+' '+(r.detail||''));refresh()};
+document.getElementById('btnStart').onclick=async()=>{const s=await fetch('/api/master/status').then(r=>r.json());if(s.capital_live_attached&&((s.open_positions||0)>0||(s.capital_venue_opens||0)>0||s.capital_venue_opens_proven===false)){pushLog('refuse Start PAPER — Flatten all Capital opens first');return;}await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'PAPER'})});const r=await fetch('/api/master/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'PAPER'})}).then(r=>r.json());pushLog('start PAPER ok='+r.ok+' '+(r.detail||''));refresh()};
 document.getElementById('btnLive').onclick=async()=>{await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'LIVE'})});const r=await fetch('/api/master/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'LIVE'})}).then(r=>r.json());pushLog('start LIVE ok='+r.ok+' '+(r.detail||'')+' mode='+(r.status&&r.status.mode));refresh()};
 document.getElementById('btnStop').onclick=async()=>{const r=await fetch('/api/master/stop',{method:'POST'}).then(r=>r.json());pushLog('stop');refresh()};
 document.getElementById('btnRecover').onclick=async()=>{const r=await fetch('/api/master/recover',{method:'POST'}).then(r=>r.json());pushLog('recover positions='+r.positions+' journal='+r.opportunities);refresh()};

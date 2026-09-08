@@ -90,6 +90,10 @@ export type MasterStatus = {
   capital_env_present: boolean;
   /** True when MASTER has CAPITAL broker in LIVE mode */
   capital_live_attached: boolean;
+  /** Capital venue open count (local book alone can miss orphans). */
+  capital_venue_opens: number;
+  /** False when last Capital list failed — do not treat venue as flat. */
+  capital_venue_opens_proven: boolean;
   last_decision: ReturnType<typeof decide> | null;
   last_risk: ReturnType<typeof evaluateRisk> | null;
   last_block_reason: string | null;
@@ -201,6 +205,10 @@ class MasterRuntime {
    * Env presence is still read live from CAPITAL_* each status().
    */
   private capitalDeskCredsSeen = false;
+  /** Last proven Capital venue open count (positions + presence). */
+  private capitalVenueOpens = 0;
+  /** False when last Capital list failed — UI must not treat venue as flat. */
+  private capitalVenueOpensProven = true;
   /** When false, manage exits still run but new entries are blocked (desk dual-brain guard). */
   entries_armed = true;
   entries_pause_reason: string | null = null;
@@ -439,6 +447,8 @@ class MasterRuntime {
             if (r.ok) closed += 1;
             else failed.push(`${id}:venue:${r.detail || 'close_failed'}`);
           }
+          // Re-list so status capital_venue_opens reflects post-flatten truth
+          await this.refreshCapitalVenueOpens();
         }
       }
       return { ok: failed.length === 0, closed, failed };
@@ -743,6 +753,12 @@ class MasterRuntime {
 
   /** Attach broker — PAPER uses in-memory PaperBroker by default. */
   attachBroker(broker: MasterBroker) {
+    if (
+      this.broker instanceof CapitalBroker &&
+      this.broker !== broker
+    ) {
+      this.broker.stopMarketStream();
+    }
     this.broker = broker;
     // MT4: align desk epic to EA chart Symbol() when aliases match (GOLD→XAUUSD)
     if (broker instanceof Mt4FileBroker) {
@@ -751,6 +767,10 @@ class MasterRuntime {
     // Capital: normalize XAUUSD→GOLD (API epic) so quote/open/stream share one id
     if (broker instanceof CapitalBroker) {
       this.setEpic(this.epic);
+    }
+    if (!(broker instanceof CapitalBroker) || broker.paper) {
+      this.capitalVenueOpens = 0;
+      this.capitalVenueOpensProven = true;
     }
   }
 
@@ -808,10 +828,15 @@ class MasterRuntime {
     { ok: true } | { ok: false; detail: string }
   > {
     const b = this.broker;
-    if (!b || b.name !== 'CAPITAL' || b.paper) return { ok: true };
+    if (!b || b.name !== 'CAPITAL' || b.paper) {
+      this.capitalVenueOpens = 0;
+      this.capitalVenueOpensProven = true;
+      return { ok: true };
+    }
     const local = this.positions.count();
     const listed = await b.listOpenPositions();
     if (!listed.ok) {
+      this.capitalVenueOpensProven = false;
       return {
         ok: false,
         detail: `refuse_paper_capital_list_unproven:${listed.detail || 'list_failed'} — cannot prove Capital flat`,
@@ -825,6 +850,8 @@ class MasterRuntime {
       if (id) venueIds.add(id);
     }
     const venue = venueIds.size;
+    this.capitalVenueOpens = venue;
+    this.capitalVenueOpensProven = true;
     const opens = Math.max(local, venue);
     if (opens > 0) {
       return {
@@ -833,6 +860,37 @@ class MasterRuntime {
       };
     }
     return { ok: true };
+  }
+
+  /** Refresh Capital venue open count for dashboard / status honesty. */
+  async refreshCapitalVenueOpens(): Promise<number> {
+    const b = this.broker;
+    if (!b || b.name !== 'CAPITAL' || b.paper) {
+      this.capitalVenueOpens = 0;
+      this.capitalVenueOpensProven = true;
+      return 0;
+    }
+    const listed = await b.listOpenPositions();
+    if (!listed.ok) {
+      this.capitalVenueOpensProven = false;
+      return this.capitalVenueOpens;
+    }
+    const venueIds = new Set<string>();
+    for (const p of listed.positions) {
+      if (p.position_id) venueIds.add(p.position_id);
+    }
+    for (const id of listed.presence_ids ?? []) {
+      if (id) venueIds.add(id);
+    }
+    this.capitalVenueOpens = venueIds.size;
+    this.capitalVenueOpensProven = true;
+    return this.capitalVenueOpens;
+  }
+
+  /** Status with a fresh Capital venue list when Capital LIVE is attached. */
+  async statusAsync(): Promise<MasterStatus> {
+    await this.refreshCapitalVenueOpens();
+    return this.status();
   }
 
   /** Stop Capital stream then switch to paper (caller must pass refuseDetachCapitalWithOpens). */
@@ -1904,10 +1962,13 @@ class MasterRuntime {
               }
             }
             const listed = await this.broker.listOpenPositions(row.epic || this.epic);
+            // Fail-closed: unread/failed list must keep the ticket locally (same as
+            // failCloseOpenResult keeping position_id when close/list is unproven).
+            // Only drop when Capital list proves the deal is gone.
             const stillLive =
-              listed.ok &&
-              (listed.positions.some((p) => p.position_id === row.ticket) ||
-                (listed.presence_ids ?? []).includes(row.ticket));
+              !listed.ok ||
+              listed.positions.some((p) => p.position_id === row.ticket) ||
+              (listed.presence_ids ?? []).includes(row.ticket);
             if (!stillLive) continue;
           } else {
             attachOk += 1;
@@ -2285,6 +2346,9 @@ class MasterRuntime {
     }
     this.stopLiveFeed();
     this.clearManageLoop();
+    if (this.broker instanceof CapitalBroker) {
+      this.broker.stopMarketStream();
+    }
     // Refuse empty overwrite before recover — otherwise Stop on a fresh
     // process wipes durable opens that recover() has not loaded yet.
     if (this.positions.count() === 0 && !this.recovered) {
@@ -2534,6 +2598,8 @@ class MasterRuntime {
       capital_credential_source: this.capitalCredentialSource(),
       capital_creds_available: capitalEnvPresent() || this.capitalDeskCredsSeen,
       capital_live_attached: this.capitalLiveAttached(),
+      capital_venue_opens: this.capitalVenueOpens,
+      capital_venue_opens_proven: this.capitalVenueOpensProven,
       last_decision: this.last_decision,
       last_risk: this.last_risk,
       last_block_reason:

@@ -1785,6 +1785,84 @@ export class CapitalBroker implements MasterBroker {
     return { ok: true };
   }
 
+  /**
+   * Partial close with unconfirmed deal: one reduced-size list can flake.
+   * Require consecutive lists showing size still below beforeSize (or flat).
+   */
+  private async proveReducedSizeDebounce(
+    position_id: string,
+    beforeSize: number,
+    observationsAlready: number,
+    lastRemaining: number,
+    meta: {
+      deal_reference?: string;
+      fill_price: number | null;
+      fill_pnl: number | null;
+    }
+  ): Promise<
+    | { ok: true; remaining_size: number | null }
+    | {
+        ok: false;
+        detail: string;
+        deal_reference?: string;
+        fill_price: number | null;
+        fill_pnl: number | null;
+        remaining_size?: number;
+      }
+  > {
+    const need = EMPTY_BROKER_GHOST_DEBOUNCE;
+    let n = observationsAlready;
+    let remaining: number | null = lastRemaining;
+    const delayMs =
+      process.env.VITEST || process.env.MASTER_CONFIRM_FAST === 'true' ? 1 : 200;
+    while (n < need) {
+      await new Promise((r) => setTimeout(r, delayMs));
+      const again = await this.listOpenPositions();
+      if (!again.ok) {
+        return {
+          ok: false,
+          detail: `close_partial_unconfirmed_list_failed:${again.detail || 'list_failed'}`,
+          deal_reference: meta.deal_reference,
+          fill_price: meta.fill_price,
+          fill_pnl: meta.fill_pnl,
+        };
+      }
+      const againUsable = again.positions.find(
+        (p) => p.position_id === position_id
+      );
+      const againPresent =
+        againUsable != null ||
+        (again.presence_ids ?? []).includes(position_id);
+      if (!againPresent) {
+        remaining = 0;
+        n += 1;
+        continue;
+      }
+      if (!againUsable) {
+        return {
+          ok: false,
+          detail: 'close_partial_not_confirmed_still_open_no_level',
+          deal_reference: meta.deal_reference,
+          fill_price: meta.fill_price,
+          fill_pnl: meta.fill_pnl,
+        };
+      }
+      if (!(againUsable.size < beforeSize - 1e-9)) {
+        return {
+          ok: false,
+          detail: `close_not_confirmed_size_debounce:${n}/${need}`,
+          deal_reference: meta.deal_reference,
+          fill_price: meta.fill_price,
+          fill_pnl: meta.fill_pnl,
+          remaining_size: againUsable.size,
+        };
+      }
+      remaining = againUsable.size;
+      n += 1;
+    }
+    return { ok: true, remaining_size: remaining };
+  }
+
   private async closePositionLocked(
     position_id: string,
     opts?: { size?: number }
@@ -1851,6 +1929,7 @@ export class CapitalBroker implements MasterBroker {
       listed.ok &&
       (stillUsable != null ||
         (listed.presence_ids ?? []).includes(position_id));
+    let remainingAfter: number | null | undefined;
     if (!partial) {
       // VS-System: confirm timeout / unread book must not be treated as closed
       if (!listed.ok) {
@@ -1917,6 +1996,19 @@ export class CapitalBroker implements MasterBroker {
             remaining_size: stillUsable.size,
           };
         }
+        if (!confirmAccepted && beforeSize != null) {
+          const proved = await this.proveReducedSizeDebounce(
+            position_id,
+            beforeSize,
+            1,
+            stillUsable.size,
+            { deal_reference, fill_price, fill_pnl }
+          );
+          if (!proved.ok) return proved;
+          remainingAfter = proved.remaining_size;
+        } else {
+          remainingAfter = stillUsable.size;
+        }
       } else if (!confirmAccepted) {
         // Partial closed the whole deal on first list — same flake risk as full close
         const proved = await this.proveFlatEmptyDebounce(position_id, 1, {
@@ -1925,6 +2017,9 @@ export class CapitalBroker implements MasterBroker {
           fill_pnl,
         });
         if (!proved.ok) return proved;
+        remainingAfter = 0;
+      } else {
+        remainingAfter = 0;
       }
     }
 
@@ -1940,7 +2035,10 @@ export class CapitalBroker implements MasterBroker {
       fill_price,
       fill_pnl,
       deal_reference,
-      remaining_size: stillUsable?.size ?? (partial ? null : 0),
+      remaining_size:
+        remainingAfter !== undefined
+          ? remainingAfter
+          : stillUsable?.size ?? (partial ? null : 0),
     };
   }
 

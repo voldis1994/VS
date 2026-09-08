@@ -12,7 +12,7 @@ import { DEFAULT_MASTER_CONFIG, GOLD_SPEC, MasterPipeline } from '../pipeline.js
 import { PositionManager } from '../positionManager.js';
 import type { AccountSnapshot, Bar, Quote } from '../types.js';
 import { masterRuntime } from '../runtime.js';
-import { clearTradeAckJournalForTest } from '../tradeAckJournal.js';
+import { clearTradeAckJournalForTest, logTradeIntent, updateTradeAck } from '../tradeAckJournal.js';
 
 function barsTrendUp(n = 40): Bar[] {
   const out: Bar[] = [];
@@ -2017,5 +2017,189 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(place.detail).toMatch(/fail_closed/);
     expect(closed).toEqual(['buy-ghost']);
     expect(positions.has('sell-sibling')).toBe(true);
+  });
+
+  it('partial CLOSE confirm timeout refuses size-reduction flake', async () => {
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    let listCalls = 0;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-szflake' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => {
+        listCalls += 1;
+        // before + first reduced proof, then size snaps back (flake)
+        if (listCalls === 1 || listCalls >= 3) {
+          return {
+            ok: true,
+            positions: [
+              {
+                deal_id: 'sz-deal',
+                epic: 'GOLD',
+                direction: 'BUY',
+                size: 0.2,
+                open_level: 4410,
+              },
+            ],
+          };
+        }
+        return {
+          ok: true,
+          positions: [
+            {
+              deal_id: 'sz-deal',
+              epic: 'GOLD',
+              direction: 'BUY',
+              size: 0.1,
+              open_level: 4410,
+            },
+          ],
+        };
+      },
+      create: async () => ({ ok: true, deal_reference: 'x', detail: 'ok' }),
+      confirm: async () => ({ ok: false, pending: true, detail: 'pending' }),
+      close: async () => ({ ok: true, deal_reference: 'sz-ref', detail: 'submitted' }),
+    });
+    await broker.connect();
+    const closed = await broker.closePosition('sz-deal', { size: 0.1 });
+    expect(closed.ok).toBe(false);
+    expect(closed.detail).toMatch(/close_not_confirmed_size_debounce/);
+  });
+
+  it('recover attach-fail keeps Capital ticket when post-close list fails', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = mkdtempSync(join(tmpdir(), 'vs-ack-cap-listfail-'));
+    clearTradeAckJournalForTest();
+    logTradeIntent({
+      command_id: 'cap-attach-listfail',
+      intent_id: 'recover-cap-listfail',
+      action: 'OPEN',
+      side: 'BUY',
+      volume: 0.1,
+      epic: 'GOLD',
+      sl: 4390,
+      tp: 4420,
+      reason: 'INTENT',
+    });
+    updateTradeAck('cap-attach-listfail', {
+      ack_status: 'SUCCESS',
+      ticket: 'deal-listfail',
+      fill_price: 4410,
+      detail: 'RECOVER_LATE_FILL',
+    });
+
+    let listCalls = 0;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-listfail' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => {
+        listCalls += 1;
+        // Adopt + attach attempts see the naked deal; after fail-close, list unread
+        if (listCalls <= 8) {
+          return {
+            ok: true,
+            positions: [
+              {
+                deal_id: 'deal-listfail',
+                epic: 'GOLD',
+                direction: 'BUY',
+                size: 0.1,
+                open_level: 4410,
+                stop_level: null,
+                profit_level: null,
+              },
+            ],
+            detail: '1',
+          };
+        }
+        return { ok: false, positions: [], detail: 'list_transport_down' };
+      },
+      create: async () => ({ ok: true, deal_reference: 'x', detail: 'ok' }),
+      confirm: async () => ({ ok: true, deal_id: 'x', detail: 'ok' }),
+      modify: async () => ({ ok: false, detail: 'modify_denied' }),
+      close: async () => ({ ok: false, detail: 'close_denied' }),
+    });
+    await broker.connect();
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('LIVE');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.cfg = { ...DEFAULT_MASTER_CONFIG, mode: 'LIVE' };
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    masterRuntime.recovered = false;
+    const r = await masterRuntime.recover();
+    expect(r.positions).toBeGreaterThanOrEqual(1);
+    expect(masterRuntime.positions.get('deal-listfail')).toBeTruthy();
+    expect(String(masterRuntime.broker_detail || '')).toMatch(/ack_attach_fail/);
+    if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+    else process.env.MASTER_STATE_DIR = prev;
+  });
+
+  it('statusAsync exposes Capital venue opens for dashboard Flatten/PAPER gates', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number;
+      }
+    >();
+    positions.set('venue-only', {
+      deal_id: 'venue-only',
+      epic: 'GOLD',
+      direction: 'BUY',
+      size: 0.1,
+      open_level: 4410,
+    });
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-venue-st' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({
+        ok: true,
+        positions: [...positions.values()],
+        detail: `${positions.size}`,
+      }),
+      create: async () => ({ ok: true, deal_reference: 'x', detail: 'ok' }),
+      confirm: async () => ({ ok: true, deal_id: 'x', detail: 'ok' }),
+      close: async (_s, id) => {
+        positions.delete(id);
+        return { ok: true, deal_reference: `c-${id}`, detail: 'closed' };
+      },
+    });
+    await broker.connect();
+    masterRuntime.stop();
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    const st = await masterRuntime.statusAsync();
+    expect(st.capital_live_attached).toBe(true);
+    expect(st.open_positions).toBe(0);
+    expect(st.capital_venue_opens).toBe(1);
+    expect(st.capital_venue_opens_proven).toBe(true);
   });
 });

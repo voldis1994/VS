@@ -16,6 +16,8 @@ type MasterStatus = {
   capital_credential_source?: 'env' | 'desk' | null;
   capital_creds_available?: boolean;
   capital_live_attached?: boolean;
+  capital_venue_opens?: number;
+  capital_venue_opens_proven?: boolean;
   last_decision: { kind?: string } | null;
   last_block_reason: string | null;
   last_execution_detail: string | null;
@@ -331,6 +333,19 @@ export function MasterPage() {
           bad: (status.reject_cooldown_ms ?? 0) > 0,
         },
         { k: 'Open', v: String(status.open_positions) },
+        {
+          k: 'Venue',
+          v:
+            status.capital_live_attached
+              ? status.capital_venue_opens_proven === false
+                ? 'unproven'
+                : String(status.capital_venue_opens ?? 0)
+              : '—',
+          bad:
+            !!status.capital_live_attached &&
+            (status.capital_venue_opens_proven === false ||
+              (status.capital_venue_opens ?? 0) > 0),
+        },
         { k: 'Trades', v: String(status.traded) },
         { k: 'Blocked', v: String(status.blocked) },
         {
@@ -500,10 +515,16 @@ export function MasterPage() {
           className="btn btn-primary"
           disabled={
             busy ||
-            (!!status?.capital_live_attached && (status?.open_positions ?? 0) > 0)
+            (!!status?.capital_live_attached &&
+              ((status?.open_positions ?? 0) > 0 ||
+                (status?.capital_venue_opens ?? 0) > 0 ||
+                status?.capital_venue_opens_proven === false))
           }
           title={
-            status?.capital_live_attached && (status?.open_positions ?? 0) > 0
+            status?.capital_live_attached &&
+            ((status?.open_positions ?? 0) > 0 ||
+              (status?.capital_venue_opens ?? 0) > 0 ||
+              status?.capital_venue_opens_proven === false)
               ? 'Flatten all Capital opens before Start PAPER'
               : undefined
           }
@@ -600,7 +621,12 @@ export function MasterPage() {
         <button
           type="button"
           className="btn"
-          disabled={busy || positions.length === 0}
+          disabled={
+            busy ||
+            (positions.length === 0 &&
+              (status?.capital_venue_opens ?? 0) === 0 &&
+              status?.capital_venue_opens_proven !== false)
+          }
           onClick={() =>
             void act('flatten', () => apiFetch('/api/master/flatten', { method: 'POST' }))
           }
