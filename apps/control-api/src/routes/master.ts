@@ -680,16 +680,18 @@ async function refresh(){
     }).join(''):card('Decisions','no cycle events yet');
     const te=(s.recent_trades||[]).slice(0,8);
     trades.innerHTML=te.length?te.map(t=>{
-      const pn=t.pnl!=null?Number(t.pnl).toFixed(2):'—';
-      const fees=t.fees!=null&&t.fees>0?' · fees '+Number(t.fees).toFixed(2):'';
+      const unproven=t.pnl==null||/pnl_unproven|capital_close_pnl_unproven/i.test(String(t.detail||''));
+      const pn=unproven?'—':(t.pnl!=null?Number(t.pnl).toFixed(2):'—');
+      const fees=!unproven&&t.fees!=null&&t.fees>0?' · fees '+Number(t.fees).toFixed(2):'';
       const opp=t.opportunity_id?' · opp '+String(t.opportunity_id).slice(0,8):'';
-      return card(t.event+' · '+t.broker+(t.ok?'':' · FAIL'), pn+fees+' · '+String(t.detail||'').slice(0,36)+opp+(t.ts?' · '+String(t.ts).slice(11,19):''), t.ok?(t.pnl!=null&&t.pnl<0?'bad':'ok'):'bad');
+      return card(t.event+' · '+t.broker+(t.ok?'':' · FAIL')+(unproven&&t.ok?' · UNPROVEN':''), pn+fees+' · '+String(t.detail||'').slice(0,36)+opp+(t.ts?' · '+String(t.ts).slice(11,19):''), t.ok?(unproven?'':(t.pnl!=null&&t.pnl<0?'bad':'ok')):'bad');
     }).join(''):card('Trades','no trade events yet');
     const j=await fetch('/api/master/journal').then(r=>r.json());
     const traded=(j.opportunities||[]).filter(o=>o.executed&&o.outcome).slice(-8).reverse();
     journal.innerHTML=traded.length?traded.map(o=>{
-      const pn=Number(o.outcome.pnl);
-      return card(o.decision?.kind+' '+o.epic, pn.toFixed(2)+' · '+String(o.outcome.exit_reason||'').slice(0,40), pn>=0?'ok':'bad');
+      const unproven=o.outcome.pnl_proven===false;
+      const pn=unproven?'—':Number(o.outcome.pnl).toFixed(2);
+      return card(o.decision?.kind+' '+o.epic+(unproven?' · UNPROVEN':''), pn+' · '+String(o.outcome.exit_reason||'').slice(0,40), unproven?'':(Number(o.outcome.pnl)>=0?'ok':'bad'));
     }).join(''):card('Journal','no closed trades yet');
   }catch(e){pushLog('status error '+e)}
 }

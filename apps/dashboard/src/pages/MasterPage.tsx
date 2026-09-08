@@ -149,7 +149,12 @@ type JournalOpp = {
   epic: string;
   executed: boolean;
   decision?: { kind?: string };
-  outcome?: { pnl: number; exit_reason: string; position_id?: string };
+  outcome?: {
+    pnl: number;
+    exit_reason: string;
+    position_id?: string;
+    pnl_proven?: boolean;
+  };
 };
 
 export function MasterPage() {
@@ -878,26 +883,34 @@ export function MasterPage() {
         {!status?.recent_trades?.length ? (
           <div className="card">no trade events yet</div>
         ) : (
-          status.recent_trades.map((t, i) => (
+          status.recent_trades.map((t, i) => {
+            const unproven =
+              t.pnl == null ||
+              /pnl_unproven|capital_close_pnl_unproven/i.test(String(t.detail || ''));
+            return (
             <div key={`${t.ts}-${i}`} className="card">
               <div style={{ fontWeight: 600 }}>
                 {t.event} · {t.broker}
                 {!t.ok ? ' · FAIL' : ''}
+                {unproven && t.ok ? ' · UNPROVEN' : ''}
               </div>
               <div
                 style={{
                   fontSize: 13,
                   marginTop: 4,
-                  color:
-                    t.pnl != null
+                  color: unproven
+                    ? 'var(--text-secondary)'
+                    : t.pnl != null
                       ? t.pnl >= 0
                         ? 'var(--ok, #2a7)'
                         : 'var(--bad, #c44)'
                       : 'var(--text-secondary)',
                 }}
               >
-                {t.pnl != null ? t.pnl.toFixed(2) : '—'}
-                {t.fees != null && t.fees > 0 ? ` · fees ${Number(t.fees).toFixed(2)}` : ''}
+                {unproven ? '—' : t.pnl != null ? t.pnl.toFixed(2) : '—'}
+                {!unproven && t.fees != null && t.fees > 0
+                  ? ` · fees ${Number(t.fees).toFixed(2)}`
+                  : ''}
                 {t.detail ? ` · ${String(t.detail).slice(0, 40)}` : ''}
               </div>
               <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
@@ -907,7 +920,8 @@ export function MasterPage() {
                   : ''}
               </div>
             </div>
-          ))
+            );
+          })
         )}
       </div>
 
@@ -917,19 +931,26 @@ export function MasterPage() {
           <div className="card">no closed trades yet</div>
         ) : (
           journal.map((o) => {
+            const unproven = o.outcome?.pnl_proven === false;
             const pn = Number(o.outcome?.pnl ?? 0);
             return (
               <div key={o.id} className="card">
                 <div style={{ fontWeight: 600 }}>
                   {o.decision?.kind} {o.epic}
+                  {unproven ? ' · UNPROVEN' : ''}
                 </div>
                 <div
                   style={{
                     fontSize: 13,
-                    color: pn >= 0 ? 'var(--ok, #2a7)' : 'var(--bad, #c44)',
+                    color: unproven
+                      ? 'var(--text-secondary)'
+                      : pn >= 0
+                        ? 'var(--ok, #2a7)'
+                        : 'var(--bad, #c44)',
                   }}
                 >
-                  {pn.toFixed(2)} · {String(o.outcome?.exit_reason || '').slice(0, 48)}
+                  {unproven ? '—' : pn.toFixed(2)} ·{' '}
+                  {String(o.outcome?.exit_reason || '').slice(0, 48)}
                 </div>
               </div>
             );
