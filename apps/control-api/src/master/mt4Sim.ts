@@ -31,6 +31,13 @@ export class Mt4BridgeSimulator {
   private ask = 4470.4;
   private timer: ReturnType<typeof setInterval> | null = null;
 
+  /** Test fault: OPEN ignores payload SL (naked ticket until MODIFY). */
+  ignoreOpenSl = false;
+  /** Test fault: MODIFY ACK without mutating SL/TP (prove status verification). */
+  ackModifyWithoutApply = false;
+  /** Test fault: ACK fill differs from status open (prove fill preference). */
+  ackFillOverride: number | null = null;
+
   constructor(private readonly root: string) {
     mkdirSync(join(root, 'commands'), { recursive: true });
     mkdirSync(join(root, 'acks'), { recursive: true });
@@ -158,17 +165,23 @@ export class Mt4BridgeSimulator {
       const side = String(payload.side || 'BUY').toUpperCase() === 'SELL' ? 'SELL' : 'BUY';
       const ticket = ++this.ticketSeq;
       const open = side === 'BUY' ? this.ask : this.bid;
+      const sl = this.ignoreOpenSl ? 0 : Number(payload.sl || 0);
+      const tp = Number(payload.tp || 0);
       this.positions.set(ticket, {
         ticket,
         symbol: String(payload.symbol || 'XAUUSD'),
         side,
         lot: Number(payload.lot || 0.01),
         open,
-        sl: Number(payload.sl || 0),
-        tp: Number(payload.tp || 0),
+        sl,
+        tp,
         profit: 0,
       });
-      this.writeAck(id, true, ticket, 'opened', { fill: open, profit: 0 });
+      const fill =
+        this.ackFillOverride != null && Number.isFinite(this.ackFillOverride)
+          ? this.ackFillOverride
+          : open;
+      this.writeAck(id, true, ticket, 'opened', { fill, profit: 0 });
       return;
     }
     if (action === 'CLOSE') {
@@ -193,8 +206,10 @@ export class Mt4BridgeSimulator {
         this.writeAck(id, false, ticket, 'not_found');
         return;
       }
-      if (payload.sl != null) p.sl = Number(payload.sl);
-      if (payload.tp != null) p.tp = Number(payload.tp);
+      if (!this.ackModifyWithoutApply) {
+        if (payload.sl != null) p.sl = Number(payload.sl);
+        if (payload.tp != null) p.tp = Number(payload.tp);
+      }
       this.writeAck(id, true, ticket, 'modified');
       return;
     }

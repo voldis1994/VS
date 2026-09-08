@@ -920,6 +920,30 @@ class MasterRuntime {
           if (!mod.ok) {
             this.broker_detail =
               `post_fill_sl_sync_fail:${mod.detail}`.slice(0, 400);
+            logMasterError({
+              module: 'runtime.entry',
+              error_type: 'post_fill_sl_sync_fail',
+              message: String(mod.detail || 'modify_failed'),
+              context: {
+                position_id: place.position_id,
+                want_sl: rebased.stop_loss,
+              },
+            });
+            // LIVE + protective SL required → fail-close unprotected book (VS-System)
+            const needProtective =
+              !broker.paper &&
+              rebased.stop_loss != null &&
+              Number.isFinite(rebased.stop_loss);
+            if (needProtective) {
+              const closed = await this.closePositionManual(
+                place.position_id,
+                'POST_FILL_SL_SYNC_FAIL'
+              );
+              executed = false;
+              execution_detail = `post_fill_sl_sync_fail_closed:${mod.detail};close=${closed.ok ? 'ok' : closed.detail}`;
+              this.last_execution_detail = execution_detail;
+              this.last_exit_reason = 'POST_FILL_SL_SYNC_FAIL';
+            }
           }
         }
       } else if (!execution.accepted) {

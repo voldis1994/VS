@@ -1396,6 +1396,81 @@ export class Mt4FileBroker implements MasterBroker {
     return { ok: false, ack: null, detail: 'mt4_ack_timeout' };
   }
 
+  /** Cap/Check honesty: ACK alone is not enough — status stop_level must match. */
+  private stopVerifyTol(wantSl: number): number {
+    return Math.max(0.05, Math.abs(wantSl) * 1e-5, 1e-6);
+  }
+
+  private async waitForStatusStop(
+    positionId: string,
+    wantSl: number
+  ): Promise<{ ok: boolean; observed: number | null }> {
+    const tol = this.stopVerifyTol(wantSl);
+    const attempts =
+      process.env.VITEST || process.env.MASTER_CONFIRM_FAST === 'true' ? 4 : 8;
+    let observed: number | null = null;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) =>
+          setTimeout(
+            r,
+            process.env.VITEST || process.env.MASTER_CONFIRM_FAST === 'true'
+              ? 15 + 10 * attempt
+              : 80 + 60 * attempt
+          )
+        );
+      }
+      const listed = await this.listOpenPositions();
+      const hit = listed.ok
+        ? listed.positions.find((p) => p.position_id === String(positionId))
+        : undefined;
+      if (!hit) continue;
+      if (hit.stop_level == null || !Number.isFinite(hit.stop_level)) continue;
+      observed = Number(hit.stop_level);
+      if (Math.abs(observed - wantSl) <= tol) {
+        return { ok: true, observed };
+      }
+    }
+    return { ok: false, observed };
+  }
+
+  /** Prefer ACK fill/price over status open_level (EA fill is broker truth). */
+  private resolveOpenFill(ack: any | null, statusOpen: number | null | undefined): number | null {
+    const ackFill = numOrNull(ack?.fill ?? ack?.price);
+    if (ackFill != null && ackFill > 0) return ackFill;
+    if (statusOpen != null && Number.isFinite(statusOpen) && statusOpen > 0) {
+      return Number(statusOpen);
+    }
+    return null;
+  }
+
+  /**
+   * Wanted protective SL after OPEN — prove status stop, else MODIFY+prove, else fail-close.
+   */
+  private async ensureOpenStopOrFail(input: {
+    position_id: string;
+    want_sl: number;
+    want_tp?: number | null;
+    order_id: string;
+    epic: string;
+  }): Promise<{ ok: true } | { ok: false; detail: string }> {
+    const proved = await this.waitForStatusStop(input.position_id, input.want_sl);
+    if (proved.ok) return { ok: true };
+
+    const mod = await this.modifyPosition({
+      position_id: input.position_id,
+      stop_level: input.want_sl,
+      profit_level: input.want_tp ?? undefined,
+    });
+    if (mod.ok) return { ok: true };
+
+    const closed = await this.closePosition(input.position_id);
+    return {
+      ok: false,
+      detail: `MT4_SL_ATTACH_FAILED:mod=${mod.detail};close=${closed.ok ? 'ok' : closed.detail}`,
+    };
+  }
+
   async getQuote(epic: string): Promise<BrokerQuote | null> {
     const rel = join('market', 'latest.json');
     const path = join(this.bridgeRoot, rel);
@@ -1556,7 +1631,36 @@ export class Mt4FileBroker implements MasterBroker {
       const hit =
         opens.positions.find((p) => p.position_id === ticket) || opens.positions[0];
       const position_id = ticket || hit?.position_id || null;
-      const fill_price = hit?.open_level ?? null;
+      const fill_price = this.resolveOpenFill(waited.ack, hit?.open_level);
+
+      const wantProtectiveSl =
+        input.stop_level != null && Number.isFinite(input.stop_level);
+      if (position_id && wantProtectiveSl) {
+        const guard = await this.ensureOpenStopOrFail({
+          position_id,
+          want_sl: Number(input.stop_level),
+          want_tp: input.profit_level ?? null,
+          order_id: id,
+          epic: input.epic,
+        });
+        if (!guard.ok) {
+          updateTradeAck(id, {
+            ack_status: 'FAILED',
+            ticket: position_id,
+            fill_price,
+            detail: guard.detail,
+          });
+          return {
+            ok: false,
+            order_id: id,
+            position_id: null,
+            fill_price: null,
+            detail: guard.detail,
+            paper: false,
+          };
+        }
+      }
+
       updateTradeAck(id, {
         ack_status: 'SUCCESS',
         ticket: position_id,
@@ -1595,17 +1699,45 @@ export class Mt4FileBroker implements MasterBroker {
       (p) => p.side === input.side && Math.abs(p.size - input.size) < 1e-6
     );
     if (late) {
+      const fill_price = late.open_level;
+      const wantProtectiveSl =
+        input.stop_level != null && Number.isFinite(input.stop_level);
+      if (wantProtectiveSl) {
+        const guard = await this.ensureOpenStopOrFail({
+          position_id: late.position_id,
+          want_sl: Number(input.stop_level),
+          want_tp: input.profit_level ?? null,
+          order_id: id,
+          epic: input.epic,
+        });
+        if (!guard.ok) {
+          updateTradeAck(id, {
+            ack_status: 'FAILED',
+            ticket: late.position_id,
+            fill_price,
+            detail: guard.detail,
+          });
+          return {
+            ok: false,
+            order_id: id,
+            position_id: null,
+            fill_price: null,
+            detail: guard.detail,
+            paper: false,
+          };
+        }
+      }
       updateTradeAck(id, {
         ack_status: 'SUCCESS',
         ticket: late.position_id,
-        fill_price: late.open_level,
+        fill_price,
         detail: 'ACK_LATE_FILL',
       });
       return {
         ok: true,
         order_id: id,
         position_id: late.position_id,
-        fill_price: late.open_level,
+        fill_price,
         fill_size: late.size,
         detail: `mt4_filled_late ticket=${late.position_id}`,
         paper: false,
@@ -1638,6 +1770,19 @@ export class Mt4FileBroker implements MasterBroker {
     const folder = join(this.bridgeRoot, 'commands');
     mkdirSync(folder, { recursive: true });
     const payload = { id, action: 'CLOSE', ticket: Number(position_id), reason: 'VS_MASTER' };
+    // Reader: durable INTENT before control publish
+    logTradeIntent({
+      command_id: id,
+      intent_id: `close:${position_id}:${id}`,
+      action: 'CLOSE',
+      side: null,
+      volume: 0,
+      epic: '',
+      ticket: String(position_id),
+      sl: null,
+      tp: null,
+      reason: 'INTENT',
+    });
     const tmp = join(folder, `cmd_${id}.tmp`);
     const path = join(folder, `cmd_${id}.json`);
     writeFileSync(tmp, JSON.stringify(payload) + '\n', 'utf8');
@@ -1657,16 +1802,27 @@ export class Mt4FileBroker implements MasterBroker {
         waited.ack?.profit ?? waited.ack?.Profit ?? waited.ack?.pnl
       );
       const fill_pnl = Number.isFinite(profitRaw) ? profitRaw : null;
+      const fill_price = fill != null && Number.isFinite(fill) ? fill : null;
+      updateTradeAck(id, {
+        ack_status: 'SUCCESS',
+        ticket: String(position_id),
+        fill_price,
+        detail: 'ACK_SUCCESS',
+      });
       return {
         ok: true,
         detail: `mt4_closed ticket=${waited.ack?.ticket || position_id}${
           fill_pnl != null ? ` pnl=${fill_pnl}` : ''
         }`,
-        fill_price: fill != null && Number.isFinite(fill) ? fill : null,
+        fill_price,
         fill_pnl,
       };
     }
     if (waited.ack) {
+      updateTradeAck(id, {
+        ack_status: 'FAILED',
+        detail: waited.detail || 'ACK_FAILED',
+      });
       return { ok: false, detail: waited.detail };
     }
     this.expireCommand(id);
@@ -1676,6 +1832,11 @@ export class Mt4FileBroker implements MasterBroker {
       if (listed.ok) {
         const still = listed.positions.some((p) => p.position_id === String(position_id));
         if (!still) {
+          updateTradeAck(id, {
+            ack_status: 'SUCCESS',
+            ticket: String(position_id),
+            detail: 'ACK_LATE_CLOSE',
+          });
           return {
             ok: true,
             detail: `mt4_closed_late ticket=${position_id}`,
@@ -1686,10 +1847,14 @@ export class Mt4FileBroker implements MasterBroker {
     } catch {
       /* fall through to timeout fail */
     }
+    updateTradeAck(id, {
+      ack_status: 'TIMEOUT',
+      detail: 'ACK_TIMEOUT',
+    });
     return { ok: false, detail: 'mt4_close_written_ack_timeout' };
   }
 
-  /** Check- protocol MODIFY — wait for ack like OPEN/CLOSE (never lie ok:true on write). */
+  /** Check- protocol MODIFY — wait for ack + prove status stop_level (never ACK-only). */
   async modifyPosition(input: {
     position_id: string;
     stop_level?: number;
@@ -1709,6 +1874,18 @@ export class Mt4FileBroker implements MasterBroker {
       tp: input.profit_level ?? 0,
       reason: 'VS_MASTER',
     };
+    logTradeIntent({
+      command_id: id,
+      intent_id: `modify:${input.position_id}:${id}`,
+      action: 'MODIFY',
+      side: null,
+      volume: 0,
+      epic: '',
+      ticket: String(input.position_id),
+      sl: input.stop_level ?? null,
+      tp: input.profit_level ?? null,
+      reason: 'INTENT',
+    });
     const tmp = join(folder, `cmd_${id}.tmp`);
     const path = join(folder, `cmd_${id}.json`);
     writeFileSync(tmp, JSON.stringify(payload) + '\n', 'utf8');
@@ -1716,13 +1893,42 @@ export class Mt4FileBroker implements MasterBroker {
 
     const waited = await this.waitAck(id);
     if (waited.ok) {
+      const wantSl = input.stop_level;
+      if (wantSl != null && Number.isFinite(wantSl)) {
+        const proved = await this.waitForStatusStop(String(input.position_id), Number(wantSl));
+        if (!proved.ok) {
+          updateTradeAck(id, {
+            ack_status: 'FAILED',
+            ticket: String(input.position_id),
+            detail: `mt4_modify_sl_unverified: want=${wantSl} got=${proved.observed}`,
+          });
+          return {
+            ok: false,
+            detail: `mt4_modify_sl_unverified: want=${wantSl} got=${proved.observed}`,
+            order_id: id,
+          };
+        }
+      }
+      updateTradeAck(id, {
+        ack_status: 'SUCCESS',
+        ticket: String(input.position_id),
+        detail: 'ACK_SUCCESS',
+      });
       return { ok: true, detail: 'mt4_modify_acked', order_id: id };
     }
     if (waited.ack) {
       this.expireCommand(id);
+      updateTradeAck(id, {
+        ack_status: 'FAILED',
+        detail: waited.detail || 'ACK_FAILED',
+      });
       return { ok: false, detail: waited.detail, order_id: id };
     }
     this.expireCommand(id);
+    updateTradeAck(id, {
+      ack_status: 'TIMEOUT',
+      detail: 'ACK_TIMEOUT',
+    });
     return { ok: false, detail: 'mt4_modify_ack_timeout', order_id: id };
   }
 
@@ -1767,7 +1973,7 @@ export class Mt4FileBroker implements MasterBroker {
           const ack = JSON.parse(readFileSync(ackPath, 'utf8'));
           result.applied += 1;
           result.details.push(`${action}:${id}:ack_ok=${!!ack.ok}`);
-          if (action === 'OPEN') {
+          if (action === 'OPEN' || action === 'CLOSE' || action === 'MODIFY') {
             if (ack.ok) {
               updateTradeAck(id, {
                 ack_status: 'SUCCESS',
@@ -1801,10 +2007,42 @@ export class Mt4FileBroker implements MasterBroker {
         /* treat as stale */
       }
       if (age >= maxAgeMs) {
+        // OPEN expire: last-chance late fill (same as live ACK_LATE_FILL)
+        if (action === 'OPEN') {
+          const side = String(payload.side || '').toUpperCase() === 'SELL' ? 'SELL' : 'BUY';
+          const lot = Number(payload.lot || 0);
+          const st = this.readStatusFile();
+          if (st && !this.isStatusStale(st.age_ms)) {
+            const raw = Array.isArray(st.data?.positions) ? st.data.positions : [];
+            const late = raw.find((p: any) => {
+              const pSide = String(p.side || p.type || '')
+                .toUpperCase()
+                .includes('SELL')
+                ? 'SELL'
+                : 'BUY';
+              const pLot = Number(p.lot ?? p.Lots ?? 0);
+              return pSide === side && Math.abs(pLot - lot) < 1e-6;
+            });
+            if (late) {
+              const ticket = String(late.ticket ?? late.Ticket ?? '');
+              const fill = numOrNull(late.open ?? late.OpenPrice);
+              updateTradeAck(id, {
+                ack_status: 'SUCCESS',
+                ticket: ticket || null,
+                fill_price: fill,
+                detail: 'RECOVER_LATE_FILL',
+              });
+              this.expireCommand(id);
+              result.applied += 1;
+              result.details.push(`${action}:${id}:late_fill ticket=${ticket}`);
+              continue;
+            }
+          }
+        }
         this.expireCommand(id);
         result.expired += 1;
         result.details.push(`${action}:${id}:expired_age_ms=${age}`);
-        if (action === 'OPEN') {
+        if (action === 'OPEN' || action === 'CLOSE' || action === 'MODIFY') {
           updateTradeAck(id, {
             ack_status: 'TIMEOUT',
             detail: 'RECOVER_EXPIRED',

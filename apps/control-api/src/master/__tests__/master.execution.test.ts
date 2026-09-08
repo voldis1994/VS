@@ -472,6 +472,177 @@ describe('VS MASTER MT4 file bridge', () => {
     expect(mod.ok).toBe(false);
     expect(mod.detail).toBe('mt4_pending_control_command');
   });
+
+  it('OPEN prefers ACK fill over status open_level', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-ackfill-'));
+    const sim = new Mt4BridgeSimulator(root);
+    sim.ackFillOverride = 4399.25;
+    sim.setQuote(4400, 4400.4);
+    sim.start(30);
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    try {
+      const placed = await broker.placeOrder({
+        intent_id: 'ackfillpreferintent000001',
+        epic: 'XAUUSD',
+        side: 'SELL',
+        size: 0.02,
+      });
+      expect(placed.ok).toBe(true);
+      expect(placed.fill_price).toBeCloseTo(4399.25, 5);
+      const opens = await broker.listOpenPositions('XAUUSD');
+      const hit = opens.positions.find((p) => p.position_id === placed.position_id);
+      expect(hit?.open_level).toBeCloseTo(4400, 5); // status open ≠ ack fill
+    } finally {
+      sim.stop();
+    }
+  });
+
+  it('MODIFY rejects ACK when status stop never moved', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-modproof-'));
+    const sim = new Mt4BridgeSimulator(root);
+    sim.setQuote(4400, 4400.4);
+    sim.start(30);
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    try {
+      const placed = await broker.placeOrder({
+        intent_id: 'modproofintent00000000001',
+        epic: 'XAUUSD',
+        side: 'BUY',
+        size: 0.03,
+        stop_level: 4390,
+      });
+      expect(placed.ok).toBe(true);
+      sim.ackModifyWithoutApply = true;
+      const mod = await broker.modifyPosition({
+        position_id: placed.position_id!,
+        stop_level: 4385,
+      });
+      expect(mod.ok).toBe(false);
+      expect(mod.detail).toMatch(/mt4_modify_sl_unverified/);
+    } finally {
+      sim.stop();
+    }
+  });
+
+  it('OPEN attach-or-fail closes when protective SL cannot be proven', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-slattach-'));
+    const sim = new Mt4BridgeSimulator(root);
+    sim.ignoreOpenSl = true;
+    sim.ackModifyWithoutApply = true;
+    sim.setQuote(4400, 4400.4);
+    sim.start(30);
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    try {
+      const placed = await broker.placeOrder({
+        intent_id: 'slattachfailintent0000001',
+        epic: 'XAUUSD',
+        side: 'BUY',
+        size: 0.04,
+        stop_level: 4390,
+        profit_level: 4420,
+      });
+      expect(placed.ok).toBe(false);
+      expect(placed.detail).toMatch(/MT4_SL_ATTACH_FAILED/);
+      const opens = await broker.listOpenPositions('XAUUSD');
+      expect(opens.positions.length).toBe(0);
+    } finally {
+      sim.stop();
+    }
+  });
+
+  it('OPEN attaches SL via MODIFY when EA opens naked', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-slfix-'));
+    const sim = new Mt4BridgeSimulator(root);
+    sim.ignoreOpenSl = true;
+    sim.setQuote(4400, 4400.4);
+    sim.start(30);
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    try {
+      const placed = await broker.placeOrder({
+        intent_id: 'slattachokintent000000001',
+        epic: 'XAUUSD',
+        side: 'BUY',
+        size: 0.04,
+        stop_level: 4390,
+      });
+      expect(placed.ok).toBe(true);
+      const opens = await broker.listOpenPositions('XAUUSD');
+      const hit = opens.positions.find((p) => p.position_id === placed.position_id);
+      expect(hit?.stop_level).toBe(4390);
+    } finally {
+      sim.stop();
+    }
+  });
+
+  it('recoverPendingCommands marks OPEN late fill instead of TIMEOUT', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-latefill-'));
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    mkdirSync(join(root, 'commands'), { recursive: true });
+    mkdirSync(join(root, 'status'), { recursive: true });
+    writeFileSync(
+      join(root, 'commands', 'cmd_late1.json'),
+      JSON.stringify({
+        id: 'late1',
+        action: 'OPEN',
+        symbol: 'XAUUSD',
+        side: 'BUY',
+        lot: 0.07,
+      })
+    );
+    writeFileSync(
+      join(root, 'status', 'latest.json'),
+      JSON.stringify({
+        equity: 10000,
+        balance: 10000,
+        positions: [
+          {
+            ticket: 888001,
+            symbol: 'XAUUSD',
+            side: 'BUY',
+            lot: 0.07,
+            open: 4401.5,
+            sl: 4390,
+            tp: 0,
+          },
+        ],
+      })
+    );
+    const { utimesSync } = await import('fs');
+    const old = new Date(Date.now() - 200_000);
+    utimesSync(join(root, 'commands', 'cmd_late1.json'), old, old);
+
+    const { clearTradeAckJournalForTest, logTradeIntent, loadTradeAckJournal } =
+      await import('../tradeAckJournal.js');
+    const state = mkdtempSync(join(tmpdir(), 'vs-late-state-'));
+    process.env.MASTER_STATE_DIR = state;
+    clearTradeAckJournalForTest();
+    logTradeIntent({
+      command_id: 'late1',
+      intent_id: 'late-intent-1',
+      action: 'OPEN',
+      side: 'BUY',
+      volume: 0.07,
+      epic: 'XAUUSD',
+      sl: 4390,
+      tp: null,
+      reason: 'INTENT',
+    });
+
+    const report = broker.recoverPendingCommands(120_000);
+    expect(report.applied).toBe(1);
+    expect(report.expired).toBe(0);
+    expect(report.details.some((d) => d.includes('late_fill'))).toBe(true);
+    const rows = loadTradeAckJournal();
+    const hit = rows.find((r) => r.command_id === 'late1');
+    expect(hit?.ack_status).toBe('SUCCESS');
+    expect(hit?.ticket).toBe('888001');
+    expect(hit?.fill_price).toBe(4401.5);
+  });
 });
 
 describe('VS MASTER full paper tick loop', () => {

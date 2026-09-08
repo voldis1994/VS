@@ -89,6 +89,13 @@ describe('INTENT→ACK trade journal (Reader)', () => {
       const rows = loadTradeAckJournal();
       expect(rows.some((r) => r.ack_status === 'SUCCESS' && r.action === 'OPEN')).toBe(true);
       expect(rows[0]!.ticket || placed.position_id).toBeTruthy();
+
+      const closed = await broker.closePosition(placed.position_id!);
+      expect(closed.ok).toBe(true);
+      const after = loadTradeAckJournal();
+      expect(after.some((r) => r.action === 'CLOSE' && r.ack_status === 'SUCCESS')).toBe(
+        true
+      );
     } finally {
       sim.stop();
     }
