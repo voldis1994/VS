@@ -1100,24 +1100,13 @@ export class PositionManager {
     reason: string
   ): Promise<{ ok: boolean; detail?: string; order_id?: string | null }> {
     if (!broker.modifyPosition) return { ok: false, detail: 'no_modify' };
-    // MT4 EA OrderModify sets both legs — when only SL (or only TP) is patched,
-    // carry the other from managed state so chart TP/SL is not wiped to 0.
-    const stopLevel =
-      patch.stop_level !== undefined
-        ? patch.stop_level
-        : patch.profit_level !== undefined
-          ? (pos.stop_loss ?? undefined)
-          : undefined;
-    const profitLevel =
-      patch.profit_level !== undefined
-        ? patch.profit_level
-        : patch.stop_level !== undefined
-          ? (pos.take_profit ?? undefined)
-          : undefined;
+    // Pass only the patched legs. MT4 preserves omitted SL/TP from live status
+    // (local prefill would bypass that and rewrite chart from stale managed state).
+    // Capital/Paper only apply provided fields.
     const mod = await broker.modifyPosition({
       position_id: pos.position_id,
-      stop_level: stopLevel,
-      profit_level: profitLevel,
+      stop_level: patch.stop_level,
+      profit_level: patch.profit_level,
       stop_distance: patch.stop_distance,
       trailing_stop: patch.trailing_stop,
     });

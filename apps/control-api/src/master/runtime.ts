@@ -1943,10 +1943,35 @@ class MasterRuntime {
 
   private async manageOnlyUnlocked(bars: Bar[], quoteIn: Quote): Promise<void> {
     if (!this.running || this.positions.count() === 0) return;
-    const quote: Quote = { ...quoteIn, epic: quoteIn.epic || this.epic };
+    const broker = this.broker || this.ensurePaperBroker();
+    // VS-System 1s trail: pull a fresh broker tick — do not reuse frozen last_quote.
+    let quote: Quote = { ...quoteIn, epic: quoteIn.epic || this.epic };
+    try {
+      const live = await Promise.race([
+        broker.getQuote(this.epic),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 2_000)),
+      ]);
+      if (live && Number.isFinite(live.mid) && live.mid > 0) {
+        quote = {
+          bid: live.bid,
+          ask: live.ask,
+          mid: live.mid,
+          spread: live.spread,
+          epic: live.epic || this.epic,
+          ts_ms: live.ts_ms ?? Date.now(),
+          min_stop_distance: live.min_stop_distance ?? quote.min_stop_distance,
+          digits: live.digits ?? quote.digits,
+          point: live.point ?? quote.point,
+        };
+      }
+    } catch {
+      /* keep quoteIn */
+    }
     this.last_bars = bars;
     this.last_quote = quote;
-    const broker = this.broker || this.ensurePaperBroker();
+    if (broker instanceof Mt4FileBroker) {
+      this.syncEpicFromMt4Chart(broker);
+    }
     if (broker instanceof PaperBroker) {
       broker.setQuote({
         bid: quote.bid,

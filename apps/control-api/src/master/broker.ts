@@ -2205,6 +2205,7 @@ export class Mt4FileBroker implements MasterBroker {
             fill_price,
             detail: guard.detail,
           });
+          this.expireCommand(id);
           return {
             ok: false,
             order_id: id,
@@ -2222,6 +2223,7 @@ export class Mt4FileBroker implements MasterBroker {
         fill_price,
         detail: 'ACK_SUCCESS',
       });
+      this.expireCommand(id);
       return {
         ok: true,
         order_id: id,
@@ -2272,6 +2274,7 @@ export class Mt4FileBroker implements MasterBroker {
             fill_price,
             detail: guard.detail,
           });
+          this.expireCommand(id);
           return {
             ok: false,
             order_id: id,
@@ -2288,6 +2291,7 @@ export class Mt4FileBroker implements MasterBroker {
         fill_price,
         detail: 'ACK_LATE_FILL',
       });
+      this.expireCommand(id);
       return {
         ok: true,
         order_id: id,
@@ -2412,6 +2416,7 @@ export class Mt4FileBroker implements MasterBroker {
               ? 'ACK_SUCCESS_PARTIAL_FULL'
               : 'ACK_SUCCESS_PARTIAL',
         });
+        this.expireCommand(id);
         return {
           ok: true,
           detail:
@@ -2432,6 +2437,7 @@ export class Mt4FileBroker implements MasterBroker {
           fill_price,
           detail: flat.detail,
         });
+        this.expireCommand(id);
         return { ok: false, detail: flat.detail, fill_price, fill_pnl };
       }
       updateTradeAck(id, {
@@ -2440,6 +2446,7 @@ export class Mt4FileBroker implements MasterBroker {
         fill_price,
         detail: 'ACK_SUCCESS',
       });
+      this.expireCommand(id);
       return {
         ok: true,
         detail: `mt4_closed ticket=${waited.ack?.ticket || position_id}${
@@ -2455,6 +2462,7 @@ export class Mt4FileBroker implements MasterBroker {
         ack_status: 'FAILED',
         detail: waited.detail || 'ACK_FAILED',
       });
+      this.expireCommand(id);
       return { ok: false, detail: waited.detail };
     }
     this.expireCommand(id);
@@ -2621,6 +2629,7 @@ export class Mt4FileBroker implements MasterBroker {
         ticket: String(input.position_id),
         detail: 'ACK_SUCCESS',
       });
+      this.expireCommand(id);
       return { ok: true, detail: 'mt4_modify_acked', order_id: id };
     }
     if (waited.ack) {

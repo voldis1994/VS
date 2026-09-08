@@ -40,6 +40,8 @@ export class Mt4BridgeSimulator {
   ackModifyWithoutApply = false;
   /** Test fault: CLOSE ignores partial lot and full-closes (Check- EA parity). */
   forceFullCloseOnPartial = false;
+  /** Test fault: leave cmd_ on disk after ACK (prove host expireCommand). */
+  keepCommandsAfterAck = false;
   /** Test fault: ACK fill differs from status open (prove fill preference). */
   ackFillOverride: number | null = null;
 
@@ -154,11 +156,13 @@ export class Mt4BridgeSimulator {
       const id = String(payload.id || f);
       try {
         this.handle(payload, id);
-        unlinkSync(full);
+        if (!this.keepCommandsAfterAck) {
+          unlinkSync(full);
+        }
       } catch (e) {
         this.writeAck(id, false, 0, e instanceof Error ? e.message : String(e));
         try {
-          unlinkSync(full);
+          if (!this.keepCommandsAfterAck) unlinkSync(full);
         } catch {
           /* ignore */
         }

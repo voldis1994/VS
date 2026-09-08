@@ -284,6 +284,34 @@ describe('VS MASTER MT4 file bridge', () => {
     expect(ea).toMatch(/JsonGetNum\(json, "lot"\)/);
   });
 
+  it('OPEN expireCommand archives cmd after ACK success (no EA restart re-fire)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-expire-'));
+    const sim = new Mt4BridgeSimulator(root);
+    sim.keepCommandsAfterAck = true;
+    sim.setQuote(4400, 4400.4);
+    sim.start(30);
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    try {
+      const placed = await broker.placeOrder({
+        intent_id: 'expirecmdintent00000000001',
+        epic: 'XAUUSD',
+        side: 'BUY',
+        size: 0.02,
+        stop_level: 4390,
+      });
+      expect(placed.ok).toBe(true);
+      expect(existsSync(join(root, 'commands', `cmd_${placed.order_id}.json`))).toBe(
+        false
+      );
+      expect(
+        existsSync(join(root, 'commands', 'expired', `cmd_${placed.order_id}.json`))
+      ).toBe(true);
+    } finally {
+      sim.stop();
+    }
+  });
+
   it('OPEN uses chart Symbol() from market (GOLD alias → XAUUSD)', async () => {
     const root = mkdtempSync(join(tmpdir(), 'vs-mt4-chartsym-'));
     const sim = new Mt4BridgeSimulator(root);
