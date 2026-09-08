@@ -318,6 +318,13 @@ export async function loadJournalHistory(limit = 500): Promise<JournalHistory> {
             : {}),
       } as TradeOutcome,
     }));
+    // Pre-migration PG: column null but opportunity payload still has pnl_proven
+    for (const o of outcomes) {
+      if (o.outcome.pnl_proven === false || o.outcome.pnl_proven === true) continue;
+      const opp = opportunities.find((x) => x.id === o.opportunity_id);
+      const flag = opp?.outcome?.pnl_proven;
+      if (flag === false || flag === true) o.outcome.pnl_proven = flag;
+    }
     // Join ALL outcome slices onto opportunities so multi-TP / external partials
     // survive restart. Aggregate when multiple slices share an opportunity_id.
     const slicesByOpp = new Map<string, TradeOutcome[]>();
@@ -327,6 +334,12 @@ export async function loadJournalHistory(limit = 500): Promise<JournalHistory> {
       slicesByOpp.set(o.opportunity_id, list);
     }
     for (const opp of opportunities) {
+      const payloadFlag =
+        opp.outcome?.pnl_proven === false
+          ? false
+          : opp.outcome?.pnl_proven === true
+            ? true
+            : null;
       const slices = slicesByOpp.get(opp.id);
       if (!slices?.length) continue;
       const fromDb = slices.reduce((acc, s) =>
@@ -337,6 +350,18 @@ export async function loadJournalHistory(limit = 500): Promise<JournalHistory> {
       } else if (slices.length > 1) {
         // Prefer full slice sum over single payload rewrite
         opp.outcome = fromDb;
+      } else if (
+        opp.outcome.pnl_proven == null &&
+        fromDb.pnl_proven != null
+      ) {
+        opp.outcome = { ...opp.outcome, pnl_proven: fromDb.pnl_proven };
+      }
+      if (
+        opp.outcome &&
+        opp.outcome.pnl_proven == null &&
+        (payloadFlag === false || payloadFlag === true)
+      ) {
+        opp.outcome.pnl_proven = payloadFlag;
       }
     }
     return { opportunities, outcomes };

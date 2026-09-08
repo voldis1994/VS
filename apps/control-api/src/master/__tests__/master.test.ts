@@ -843,6 +843,64 @@ describe('VS MASTER expectancy + journal', () => {
       'TIME_STOP'
     );
   });
+
+  it('surfaceForApi traded_count skips pnl_proven:false closes', () => {
+    const j = new MasterJournal();
+    const base = {
+      mode: 'LIVE' as const,
+      epic: 'GOLD',
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY' as const,
+        side: 'BUY' as const,
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {} as never,
+        expectancy: null,
+      },
+      risk: { allowed: true, volume: 1, risk_amount: 10, reasons: [] },
+      executed: true,
+    };
+    const a = j.recordOpportunity({ ...base, id: 'proven-close' });
+    j.attachOutcome(a.id, {
+      position_id: 'p1',
+      side: 'BUY',
+      entry: 1,
+      exit: 2,
+      volume: 1,
+      pnl: 5,
+      fees: 0,
+      slippage: 0,
+      mae: 0,
+      mfe: 1,
+      r_multiple: 1,
+      hold_ms: 1,
+      exit_reason: 'TP',
+      pnl_proven: true,
+    });
+    const b = j.recordOpportunity({ ...base, id: 'unproven-close' });
+    j.attachOutcome(b.id, {
+      position_id: 'p2',
+      side: 'BUY',
+      entry: 1,
+      exit: 1,
+      volume: 1,
+      pnl: 0,
+      fees: 0,
+      slippage: 0,
+      mae: 0,
+      mfe: 0,
+      r_multiple: 0,
+      hold_ms: 1,
+      exit_reason: 'OPERATOR_CLOSE · capital_close_pnl_unproven',
+      pnl_proven: false,
+    });
+    const surface = j.surfaceForApi();
+    expect(surface.traded_count).toBe(1);
+    expect(surface.opportunities.some((o) => o.id === 'unproven-close')).toBe(true);
+  });
 });
 
 describe('VS MASTER replay / walk-forward / monte carlo', () => {

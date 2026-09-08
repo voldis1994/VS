@@ -418,7 +418,7 @@ class MasterRuntime {
         this.account.consecutive_losses = 0;
       }
     }
-    this.last_exit_reason = reason;
+    this.last_exit_reason = outcome.exit_reason;
     const sk = pos.decision?.side
       ? setupKey(pos.decision.analysis, pos.decision.side)
       : null;
@@ -435,11 +435,16 @@ class MasterRuntime {
       intent_id: pos.intent_id,
       opportunity_id: pos.opportunity_id,
       ok: true,
-      detail: reason,
-      pnl: outcome.pnl,
+      detail: outcome.exit_reason,
+      pnl: priced.pnl_proven ? outcome.pnl : undefined,
       fees: outcome.fees,
     });
-    return { ok: true, detail: reason, pnl: outcome.pnl };
+    return {
+      ok: true,
+      detail: outcome.exit_reason,
+      // Omit pnl when unproven — do not advertise forged 0 as a flat close
+      ...(priced.pnl_proven ? { pnl: outcome.pnl } : {}),
+    };
   }
 
   async flattenAll(reason = 'OPERATOR_FLATTEN'): Promise<{

@@ -50,6 +50,38 @@ export class DualPersist implements PersistClient {
           return mirrorResult;
         }
       }
+      // PG may have legacy rows with null pnl_proven while file mirror has false —
+      // merge fail-close flags so DualPersist does not invent proven closes.
+      if (
+        Array.isArray(primaryResult.rows) &&
+        primaryResult.rows.length > 0 &&
+        /master_trade_outcomes/i.test(sql)
+      ) {
+        try {
+          const mirrorResult = await this.mirror.query(sql, params);
+          if (Array.isArray(mirrorResult.rows) && mirrorResult.rows.length > 0) {
+            const byKey = new Map<string, any>();
+            for (const m of mirrorResult.rows) {
+              const k = `${m.opportunity_id}|${m.position_id ?? ''}|${m.created_at ?? ''}`;
+              byKey.set(k, m);
+              // Also index by opportunity alone (last write wins)
+              byKey.set(String(m.opportunity_id), m);
+            }
+            for (const row of primaryResult.rows) {
+              if (row.pnl_proven === false || row.pnl_proven === true) continue;
+              const hit =
+                byKey.get(
+                  `${row.opportunity_id}|${row.position_id ?? ''}|${row.created_at ?? ''}`
+                ) || byKey.get(String(row.opportunity_id));
+              if (hit && (hit.pnl_proven === false || hit.pnl_proven === true)) {
+                row.pnl_proven = hit.pnl_proven;
+              }
+            }
+          }
+        } catch {
+          /* keep primary */
+        }
+      }
       return primaryResult;
     } catch {
       return this.mirror.query(sql, params);

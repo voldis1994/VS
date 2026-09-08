@@ -62,16 +62,19 @@ export class MasterJournal {
   /**
    * Dashboard window: always keep recent closed trades visible.
    * A naive last-N slice can be all WAIT noise while traded_count > 0.
+   * traded_count skips Capital unproven closes (pnl_proven:false).
    */
   surfaceForApi(tradedCap = 50, restCap = 150): {
     opportunities: OpportunityRecord[];
     traded_count: number;
   } {
     const traded = this.traded();
+    const provenTraded = traded.filter((o) => o.outcome?.pnl_proven !== false);
+    const provenSlices = this.closeOutcomes.filter((o) => o.pnl_proven !== false);
     const rest = this.opportunities.filter((o) => !(o.executed && o.outcome));
     return {
       opportunities: [...traded.slice(-tradedCap), ...rest.slice(-restCap)],
-      traded_count: Math.max(traded.length, this.closeOutcomes.length),
+      traded_count: Math.max(provenTraded.length, provenSlices.length),
     };
   }
 

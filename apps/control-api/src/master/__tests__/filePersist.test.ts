@@ -378,6 +378,77 @@ describe('VS MASTER dual persist (DB fail → file mirror)', () => {
     expect(loaded.length).toBe(1);
     expect(loaded[0]!.position_id).toBe('empty-pg-pos');
   });
+
+  it('merges pnl_proven:false from file mirror onto PG null rows', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vs-master-dual-pnl-'));
+    const mirror = new FilePersist(dir);
+    const oppId = '00000000-0000-4000-8000-00000000d001';
+    // Seed mirror with unproven flag
+    await mirror.query(
+      `INSERT INTO master_trade_outcomes (
+         id, opportunity_id, side, entry_price, exit_price, volume, pnl,
+         fees, slippage, mae, mfe, r_multiple, hold_ms, exit_reason, setup_key,
+         position_id, pnl_proven
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+      [
+        'id1',
+        oppId,
+        'BUY',
+        4410,
+        4410,
+        0.1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        'capital_close_pnl_unproven',
+        'TREND:BUY',
+        'deal-1',
+        false,
+      ]
+    );
+    // Primary returns same row shape without pnl_proven (legacy PG)
+    const primary: PersistClientLike = {
+      async query(sql: string) {
+        if (/SELECT/i.test(sql) && /master_trade_outcomes/i.test(sql)) {
+          return {
+            rows: [
+              {
+                opportunity_id: oppId,
+                position_id: 'deal-1',
+                side: 'BUY',
+                entry_price: 4410,
+                exit_price: 4410,
+                volume: 0.1,
+                pnl: 0,
+                fees: 0,
+                slippage: 0,
+                mae: 0,
+                mfe: 0,
+                r_multiple: 0,
+                hold_ms: 1,
+                exit_reason: 'capital_close_pnl_unproven',
+                setup_key: 'TREND:BUY',
+                created_at: new Date().toISOString(),
+                pnl_proven: null,
+              },
+            ],
+          };
+        }
+        if (/SELECT/i.test(sql) && /master_opportunities/i.test(sql)) {
+          return { rows: [] };
+        }
+        return { rows: [] };
+      },
+    };
+    setPersistClient(new DualPersist(primary as any, mirror));
+    const hist = await loadJournalHistory();
+    expect(hist.outcomes.length).toBe(1);
+    expect(hist.outcomes[0]!.outcome.pnl_proven).toBe(false);
+  });
 });
 
 describe('VS MASTER stop() empty-wipe guard', () => {

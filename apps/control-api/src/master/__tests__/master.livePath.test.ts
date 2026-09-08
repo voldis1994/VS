@@ -4709,6 +4709,68 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(pm.count()).toBe(1);
   });
 
+  it('operator close Capital unproven does not advertise proven flat pnl', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-op-u' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      account: async () => ({ equity: 12_000, balance: 12_000, currency: 'GBP' }),
+      list: async () => ({ ok: true, positions: [], detail: '0' }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({ ok: true, fill_price: 4410, detail: 'closed' }), // no fill_pnl
+    });
+    await broker.connect();
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('LIVE');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    masterRuntime.cfg = { ...DEFAULT_MASTER_CONFIG, mode: 'LIVE' };
+    (masterRuntime as any).capitalAccountProven = true;
+    (masterRuntime as any).capitalVenueOpensProven = true;
+    masterRuntime.running = true;
+    masterRuntime.last_quote = {
+      bid: 4410,
+      ask: 4410.4,
+      mid: 4410.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    };
+    masterRuntime.positions.register({
+      position_id: 'deal-op-u',
+      opportunity_id: 'opp-op-u',
+      intent_id: 'intent-op-u',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4410,
+      stop_loss: 4400,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        block_reason: null,
+        analysis: { regime: 'TREND' },
+        buy: { valid: true, filter_ok: true, score: 0.9 },
+        sell: { valid: false, filter_ok: false, score: 0 },
+      } as any,
+    });
+    // no broker_upl — Capital LIVE money unproven
+    const r = await masterRuntime.closePositionManual('deal-op-u', 'OPERATOR_CLOSE');
+    expect(r.ok).toBe(true);
+    expect(r.detail).toMatch(/capital_close_pnl_unproven/);
+    expect(r.pnl).toBeUndefined();
+    expect(masterRuntime.last_exit_reason).toMatch(/capital_close_pnl_unproven/);
+  });
+
   it('mid-session Capital getAccount fail zeros leftover equity', async () => {
     process.env.MASTER_LIVE_ENABLED = 'true';
     let equity = 50_000;
