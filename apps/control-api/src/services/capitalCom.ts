@@ -451,6 +451,12 @@ let loginChain: Promise<void> = Promise.resolve();
 let lastLoginAt = 0;
 const MIN_LOGIN_GAP_MS = 3500;
 const COOLDOWN_429_MS = 120_000;
+/** Soft TTL — extend via ping; never DELETE a still-live CST held by CapitalBroker. */
+function capitalPoolTtlMs(): number {
+  const fromEnv = Number(process.env.MASTER_CAPITAL_POOL_TTL_MS || '');
+  if (Number.isFinite(fromEnv) && fromEnv >= 20) return Math.floor(fromEnv);
+  return 8 * 60_000;
+}
 
 /** Isolate pool per broker connection so multi-client never shares sessions. */
 function capitalPoolKey(connectionId: number): string {
@@ -651,16 +657,37 @@ export async function acquireCapitalSession(input: {
       session = cached.session;
       raw = cached.raw;
       ownedClose = cached.ownedClose;
-    } else {
-      if (cached?.raw) {
+    } else if (cached?.session && cached.raw) {
+      // Soft TTL elapsed — ping to keep the same CST (CapitalBroker may still hold it).
+      // DELETE+relogin would invalidate LIVE holders still pointing at this object.
+      try {
+        const ping = await cached.session.get('/api/v1/session');
+        if (ping.ok) {
+          session = cached.session;
+          raw = cached.raw;
+          ownedClose = cached.ownedClose;
+        }
+      } catch {
+        /* fall through to reopen */
+      }
+      if (!session) {
         try {
           await (cached.ownedClose ?? cached.raw.close)();
         } catch {
           /* ignore */
         }
+        capitalSessionPool.delete(key);
+      }
+    } else if (cached?.raw) {
+      try {
+        await (cached.ownedClose ?? cached.raw.close)();
+      } catch {
+        /* ignore */
       }
       capitalSessionPool.delete(key);
+    }
 
+    if (!session) {
       const opened = await withLoginThrottle(() =>
         openCapitalSession({
           environment: input.environment,
@@ -714,7 +741,7 @@ export async function acquireCapitalSession(input: {
       session,
       raw,
       ownedClose,
-      expiresAt: Date.now() + 8 * 60_000,
+      expiresAt: Date.now() + capitalPoolTtlMs(),
       cooldownUntil: 0,
       activeCapitalAccountId: wantedAccount || session?.currentAccountId || null,
     });

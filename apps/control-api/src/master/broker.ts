@@ -580,11 +580,16 @@ export class CapitalBroker implements MasterBroker {
     return this.deps.ensureAccount(this.session);
   }
 
-  async connect() {
+  /**
+   * Re-pull pooled session (slides soft TTL; keeps this.session === pool object).
+   * VS-System ensureSession — never trade on a CST the pool already replaced.
+   */
+  private async ensureSession(): Promise<{ ok: boolean; detail: string }> {
     const opened = await this.deps.acquire(this.deps.credentials);
-    if (!opened.ok || !opened.session) return { ok: false, detail: opened.detail };
+    if (!opened.ok || !opened.session) {
+      return { ok: false, detail: opened.detail || 'acquire_failed' };
+    }
     this.session = opened.session;
-    // Wire streaming tokens (CST/security) — REST remains fallback
     if (opened.session.cst && opened.session.securityToken && opened.session.base) {
       this.stream.setTokens({
         cst: String(opened.session.cst),
@@ -592,7 +597,13 @@ export class CapitalBroker implements MasterBroker {
         baseUrl: String(opened.session.base),
       });
     }
-    return { ok: true, detail: 'capital connected' };
+    return { ok: true, detail: 'ok' };
+  }
+
+  async connect() {
+    return this.ensureSession().then((r) =>
+      r.ok ? { ok: true as const, detail: 'capital connected' } : r
+    );
   }
 
   /** VS-System: true when WS is open and a quote arrived recently. */
@@ -610,8 +621,9 @@ export class CapitalBroker implements MasterBroker {
   }
 
   async getHistoryBars(epic: string, maxBars = 60): Promise<BrokerHistoryBars> {
-    if (!this.session || !this.deps.prices) {
-      return { ok: false, bars: [], detail: 'capital_prices_unavailable' };
+    const ensured = await this.ensureSession();
+    if (!ensured.ok || !this.session || !this.deps.prices) {
+      return { ok: false, bars: [], detail: ensured.ok ? 'capital_prices_unavailable' : ensured.detail };
     }
     const res = await this.deps.prices(this.session, epic, 'MINUTE', maxBars);
     if (!res.ok || !res.candles.length) {
@@ -638,6 +650,8 @@ export class CapitalBroker implements MasterBroker {
     void this.stream.ensure([epic]);
     const streamed = this.stream.getLatest(epic);
     if (streamed && this.stream.isHealthy()) {
+      // Slide pool TTL without blocking the mark
+      void this.ensureSession();
       const mid = streamed.mid;
       if (Number.isFinite(mid) && mid > 0) {
         this.lastMidByEpic.set(String(streamed.epic || epic).toUpperCase(), mid);
@@ -653,7 +667,8 @@ export class CapitalBroker implements MasterBroker {
       };
     }
 
-    if (!this.session) return null;
+    const ensured = await this.ensureSession();
+    if (!ensured.ok || !this.session) return null;
     const q = await this.deps.quote(this.session, epic);
     if (q.bid == null || q.ask == null || q.mid == null) return null;
     if (Number.isFinite(q.mid) && Number(q.mid) > 0) {
@@ -706,7 +721,8 @@ export class CapitalBroker implements MasterBroker {
   }
 
   async getAccount(): Promise<BrokerAccount | null> {
-    if (!this.session) return null;
+    const ensured = await this.ensureSession();
+    if (!ensured.ok || !this.session) return null;
     if (this.deps.account) {
       const a = await this.deps.account(this.session);
       if (a) return a;
@@ -715,8 +731,9 @@ export class CapitalBroker implements MasterBroker {
   }
 
   async listOpenPositions(epic?: string): Promise<ListOpenResult> {
-    if (!this.session) {
-      return { ok: false, positions: [], detail: 'not_connected' };
+    const ensured = await this.ensureSession();
+    if (!ensured.ok || !this.session) {
+      return { ok: false, positions: [], detail: ensured.detail || 'not_connected' };
     }
     const pinned = await this.ensureActiveAccount();
     if (!pinned.ok) {
@@ -949,13 +966,14 @@ export class CapitalBroker implements MasterBroker {
   }
 
   private async placeOrderLocked(input: PlaceOrderInput): Promise<PlaceOrderResult> {
-    if (!this.session) {
+    const ensured = await this.ensureSession();
+    if (!ensured.ok || !this.session) {
       return {
         ok: false,
         order_id: null,
         position_id: null,
         fill_price: null,
-        detail: 'not_connected',
+        detail: ensured.detail || 'not_connected',
         paper: false,
       };
     }
@@ -1334,7 +1352,10 @@ export class CapitalBroker implements MasterBroker {
     position_id: string,
     opts?: { size?: number }
   ) {
-    if (!this.session) return { ok: false, detail: 'not_connected' };
+    const ensured = await this.ensureSession();
+    if (!ensured.ok || !this.session) {
+      return { ok: false, detail: ensured.detail || 'not_connected' };
+    }
     const pinned = await this.ensureActiveAccount();
     if (!pinned.ok) return { ok: false, detail: `account_pin:${pinned.detail}` };
 
@@ -1482,7 +1503,10 @@ export class CapitalBroker implements MasterBroker {
     trailing_stop?: boolean;
     stop_distance?: number;
   }) {
-    if (!this.session) return { ok: false, detail: 'not_connected' };
+    const ensured = await this.ensureSession();
+    if (!ensured.ok || !this.session) {
+      return { ok: false, detail: ensured.detail || 'not_connected' };
+    }
     if (!this.deps.modify) return { ok: false, detail: 'modify_not_wired' };
     const pinned = await this.ensureActiveAccount();
     if (!pinned.ok) return { ok: false, detail: `account_pin:${pinned.detail}` };

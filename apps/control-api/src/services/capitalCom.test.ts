@@ -359,6 +359,71 @@ describe('Capital session pool identity', () => {
     expect(sessionPosts).toBe(1);
     invalidateCapitalSession(900088);
   });
+
+  it('soft TTL ping reuses same CST object (no DELETE while broker holds it)', async () => {
+    const { acquireCapitalSession, invalidateCapitalSession } = await import(
+      './capitalCom.js'
+    );
+    process.env.MASTER_CAPITAL_POOL_TTL_MS = '40';
+    let sessionPosts = 0;
+    let sessionDeletes = 0;
+    let sessionGets = 0;
+    vi.stubGlobal(
+      'fetch',
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = (init?.method || 'GET').toUpperCase();
+        if (url.includes('/session/encryptionKey')) {
+          return new Response('{}', { status: 404 });
+        }
+        if (url.endsWith('/api/v1/session') && method === 'POST') {
+          sessionPosts += 1;
+          const headers = new Headers({
+            CST: `cst-ttl-${sessionPosts}`,
+            'X-SECURITY-TOKEN': `sec-ttl-${sessionPosts}`,
+          });
+          return new Response(JSON.stringify({ accountId: 'a1' }), {
+            status: 200,
+            headers,
+          });
+        }
+        if (url.endsWith('/api/v1/session') && method === 'GET') {
+          sessionGets += 1;
+          return new Response(JSON.stringify({ accountId: 'a1' }), { status: 200 });
+        }
+        if (url.endsWith('/api/v1/session') && method === 'DELETE') {
+          sessionDeletes += 1;
+          return new Response('{}', { status: 200 });
+        }
+        return new Response('{}', { status: 200 });
+      }
+    );
+    const a = await acquireCapitalSession({
+      environment: 'demo',
+      apiKey: 'k',
+      identifier: 'user@example.com',
+      password: 'api-pass-not-otp',
+      connectionId: 900077,
+    });
+    expect(a.ok).toBe(true);
+    if (!a.ok) return;
+    await new Promise((r) => setTimeout(r, 55)); // past soft TTL
+    const b = await acquireCapitalSession({
+      environment: 'demo',
+      apiKey: 'k',
+      identifier: 'user@example.com',
+      password: 'api-pass-not-otp',
+      connectionId: 900077,
+    });
+    expect(b.ok).toBe(true);
+    if (!b.ok) return;
+    expect(b.session).toBe(a.session); // same object — CapitalBroker-safe
+    expect(sessionPosts).toBe(1);
+    expect(sessionGets).toBeGreaterThanOrEqual(1);
+    expect(sessionDeletes).toBe(0);
+    invalidateCapitalSession(900077);
+    delete process.env.MASTER_CAPITAL_POOL_TTL_MS;
+  });
 });
 
 describe('resolveEpicViaSearch', () => {
