@@ -621,22 +621,10 @@ export async function fetchCapitalAccountEquity(
   const listed = await listCapitalAccounts(session);
   if (!listed.ok || !listed.accounts.length) return null;
   const pref = (preferredAccountId || session.currentAccountId || '').trim();
-  const accountEquityScore = (a: {
-    balance?: number | null;
-    available?: number | null;
-    profitLoss?: number | null;
-    equity?: number | null;
-  }) => capitalEquityFromAccountFields(a).equity;
-  // Fail-closed: never size from richest sibling when preferred CFD is missing
-  let hit = pref
-    ? listed.accounts.find((a) => a.accountId === pref)
-    : undefined;
-  if (pref && !hit) return null;
-  if (!hit) {
-    hit = listed.accounts.reduce((best, a) =>
-      accountEquityScore(a) >= accountEquityScore(best) ? a : best
-    );
-  }
+  // Fail-closed: never size from richest sibling — require an explicit CFD target
+  if (!pref) return null;
+  const hit = listed.accounts.find((a) => a.accountId === pref);
+  if (!hit) return null;
   const scored = capitalEquityFromAccountFields(hit);
   const pl = Number(hit.profitLoss ?? 0);
   if (!(scored.equity > 0)) {

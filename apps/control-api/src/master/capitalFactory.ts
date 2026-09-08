@@ -93,8 +93,13 @@ export function createCapitalBroker(creds: CapitalBrokerCreds): CapitalBroker {
     prices: async (session, epic, resolution, max) =>
       fetchCapitalPrices(session, epic, resolution, max),
     ensureAccount: async (session) => {
-      const id = String(credentials.capitalAccountId || '').trim();
-      if (!id) return { ok: true, detail: 'no_account_id' };
+      let id = String(credentials.capitalAccountId || '').trim();
+      if (!id) {
+        // Freeze login CST account as pin — never mutate/list on an unpinned shared pool
+        id = String(session.currentAccountId || '').trim();
+        if (!id) return { ok: false, detail: 'capital_account_id_required' };
+        credentials.capitalAccountId = id;
+      }
       const { switchCapitalAccount } = await import('../services/capitalCom.js');
       return switchCapitalAccount(session, id);
     },

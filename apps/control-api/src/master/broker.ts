@@ -2303,7 +2303,6 @@ export class CapitalBroker implements MasterBroker {
     if (!res.ok) {
       return { ok: false, detail: res.detail || 'modify_failed', order_id: res.deal_reference };
     }
-    let confirmAccepted = false;
     if (res.deal_reference) {
       const conf = await this.waitConfirm(res.deal_reference);
       if (conf.rejected) {
@@ -2313,7 +2312,6 @@ export class CapitalBroker implements MasterBroker {
           order_id: res.deal_reference,
         };
       }
-      if (conf.ok) confirmAccepted = true;
     }
 
     if (!needsSlProof && !needsTpProof) {
@@ -2431,27 +2429,12 @@ export class CapitalBroker implements MasterBroker {
           }
         }
       } else if (needsSlProof && !hasLevel && gotSl != null) {
-        // stopDistance / native trail: require SL moved or trailingStop flag.
-        // Unchanged SL + gap≈dist alone is NOT proof when confirm timed out —
-        // a static stop near mark±dist would falsely arm native_trail_armed.
+        // stopDistance / native trail: require SL moved or trailingStop===true.
+        // Never prove from gap≈dist alone — even with ACCEPTED confirm, a static
+        // stop near mark±dist would falsely arm native_trail_armed.
         const moved = beforeSl == null || Math.abs(gotSl - beforeSl) > tolAbs;
         const trailFlag = hit.trailing_stop === true;
-        if (moved || trailFlag) {
-          slOk = true;
-        } else if (
-          confirmAccepted &&
-          hasDist &&
-          trailDist != null &&
-          hitEpic
-        ) {
-          const q = await this.getQuote(hitEpic);
-          if (q && Number.isFinite(q.mid)) {
-            const gap = Math.abs(q.mid - gotSl);
-            slOk =
-              gap <= Number(trailDist) * 1.6 + 0.05 &&
-              gap + 1e-9 >= Math.min(Number(trailDist), 0.45) * 0.5;
-          }
-        }
+        slOk = moved || trailFlag;
       }
 
       let tpOk = !needsTpProof;

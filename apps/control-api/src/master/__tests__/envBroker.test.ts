@@ -321,4 +321,47 @@ describe('VS MASTER env broker resolve', () => {
     expect(r.ok).toBe(true);
     expect(pinned).toBe('cfd-C');
   });
+
+  it('factory ensureAccount freezes session.currentAccountId when CFD unset', async () => {
+    snap();
+    const broker = createCapitalBroker({
+      environment: 'demo',
+      apiKey: 'k',
+      identifier: 'i',
+      password: 'p',
+      // no capitalAccountId
+    });
+    const deps = broker as unknown as {
+      deps: {
+        ensureAccount: (s: any) => Promise<{ ok: boolean; detail: string }>;
+        credentials: { capitalAccountId?: string | null };
+      };
+    };
+    const session = {
+      currentAccountId: 'login-cfd',
+      put: async () => {
+        throw new Error('should_not_switch_when_already_on_account');
+      },
+    };
+    const r = await deps.deps.ensureAccount(session);
+    expect(r.ok).toBe(true);
+    expect(r.detail).toMatch(/Already on account login-cfd|login-cfd/);
+    expect(deps.deps.credentials.capitalAccountId).toBe('login-cfd');
+  });
+
+  it('factory ensureAccount refuses when no CFD and no session account', async () => {
+    snap();
+    const broker = createCapitalBroker({
+      environment: 'demo',
+      apiKey: 'k',
+      identifier: 'i',
+      password: 'p',
+    });
+    const deps = broker as unknown as {
+      deps: { ensureAccount: (s: any) => Promise<{ ok: boolean; detail: string }> };
+    };
+    const r = await deps.deps.ensureAccount({ currentAccountId: '' });
+    expect(r.ok).toBe(false);
+    expect(r.detail).toMatch(/capital_account_id_required/);
+  });
 });

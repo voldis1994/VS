@@ -180,6 +180,30 @@ describe('fetchCapitalAccountEquity preferred CFD', () => {
     expect(eq).toBeNull();
   });
 
+  it('returns null when no preferred and no session.currentAccountId', async () => {
+    const { fetchCapitalAccountEquity } = await import('./capitalCom.js');
+    const session = {
+      currentAccountId: '',
+      get: async () => ({
+        ok: true,
+        status: 200,
+        json: {
+          accounts: [
+            {
+              accountId: 'rich-sibling',
+              accountType: 'CFD',
+              balance: { balance: 50_000, available: 50_000, profitLoss: 0 },
+              currency: 'GBP',
+            },
+          ],
+        },
+        text: '',
+      }),
+    } as any;
+    const eq = await fetchCapitalAccountEquity(session, null);
+    expect(eq).toBeNull();
+  });
+
   it('uses preferred account when present', async () => {
     const { fetchCapitalAccountEquity } = await import('./capitalCom.js');
     const session = {
