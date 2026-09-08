@@ -5,7 +5,7 @@
  *   npx tsx src/master/scripts/livePaperDemo.ts
  *
  * Honesty: never force a synthetic BUY when filters block.
- *   PASS_LIVE_DATA_CLOSED  — natural fill + exit + journaled trade
+ *   PASS_LIVE_DATA_CLOSED  — one natural fill + tick-observed exit + journaled trade
  *   PASS_LIVE_DATA_TRADED  — natural fill (open or closed) without proven exit path
  *   PASS_LIVE_DATA_DECIDED — live quote + decision, no fill
  */
@@ -15,6 +15,13 @@ import { DEFAULT_MASTER_CONFIG } from '../pipeline.js';
 import { installFilePersist } from '../filePersist.js';
 import { fetchLiveMarket, LiveBarBuilder } from '../liveFeed.js';
 import { setPersistClient } from '../persist.js';
+import {
+  isHonestLivePaperClosed,
+  type LivePaperDemoReport,
+} from '../livePaperHonesty.js';
+
+export type { LivePaperDemoReport } from '../livePaperHonesty.js';
+export { isHonestLivePaperClosed } from '../livePaperHonesty.js';
 
 async function sleep(ms: number) {
   await new Promise((r) => setTimeout(r, ms));
@@ -45,6 +52,8 @@ async function main() {
     block_off_hours: false,
     block_high_impact_news: false,
     require_positive_expectancy: false,
+    // Longer post-exit so a single fill cannot immediately re-enter in the same proof
+    post_exit_cooldown_ms: 60_000,
   };
   masterRuntime.last_loss_ms = 0;
   masterRuntime.reject_until_ms = 0;
@@ -53,6 +62,8 @@ async function main() {
   masterRuntime.setEntriesArmed(true);
   masterRuntime.ensurePaperBroker();
   await masterRuntime.start({ live_feed: false });
+  // Entry phase: no silent 1s manage closes between polls — exit must be tick-observed
+  masterRuntime.pauseBackgroundManage();
 
   const first = await fetchLiveMarket('GOLD');
   if (!first.ok || !first.quote) {
@@ -77,8 +88,9 @@ async function main() {
   let decided = 0;
   let lastMid = first.quote.mid;
 
-  // ~12 live cycles — enough to prove live quote → natural paper fill path
+  // Live cycles until first natural fill — then stop (no churn flood on flat mid)
   for (let i = 0; i < 12; i++) {
+    masterRuntime.pauseBackgroundManage();
     const snap = i === 0 ? first : await fetchLiveMarket('GOLD');
     if (!snap.ok || !snap.quote) {
       ticks.push({ i, ok: false, detail: snap.detail });
@@ -89,6 +101,7 @@ async function main() {
     lastMid = quote.mid;
     const { bars } = builder.pushTick(quote.mid);
     const result = await masterRuntime.tick(bars, quote);
+    masterRuntime.pauseBackgroundManage();
     if (result.executed) executed += 1;
     exits += result.exits;
     if (result.decision?.kind) decided += 1;
@@ -107,6 +120,8 @@ async function main() {
         result.risk.reasons.join(',') ||
         result.decision.kind,
     });
+    // One natural fill is enough — break before sleep so manage cannot steal the case
+    if (result.executed || masterRuntime.positions.count() > 0) break;
     await sleep(2000);
   }
 
@@ -114,14 +129,16 @@ async function main() {
   // (entry was live-natural — exit proves position→exit→journal, not a forced BUY).
   let exitPhase = false;
   let exitReason: string | null = null;
-  if (masterRuntime.positions.count() > 0 && exits === 0) {
+  if (masterRuntime.positions.count() > 0) {
     exitPhase = true;
+    masterRuntime.pauseBackgroundManage();
     const pos = masterRuntime.positions.list()[0]!;
     const sl =
       pos.stop_loss != null && Number.isFinite(pos.stop_loss) && pos.stop_loss > 0
         ? pos.stop_loss
         : null;
     for (let j = 0; j < 24 && masterRuntime.positions.count() > 0; j++) {
+      masterRuntime.pauseBackgroundManage();
       // Step mid through protective SL (or away from entry if SL missing)
       const step = (j + 1) * 1.5;
       const mid =
@@ -142,6 +159,7 @@ async function main() {
       };
       const { bars } = builder.pushTick(quote.mid);
       const result = await masterRuntime.tick(bars, quote);
+      masterRuntime.pauseBackgroundManage();
       exits += result.exits;
       ticks.push({
         i: `exit-${j}`,
@@ -163,18 +181,21 @@ async function main() {
   const status = masterRuntime.status();
   const naturalTrade =
     executed > 0 || status.traded > 0 || status.open_positions > 0;
-  // Journaled closed trades prove exit→performance even when manage-loop
-  // (not tick().exits) performed the close between live polls.
-  const closedProven =
+  const exitReasonFinal = exitReason || status.last_exit_reason || null;
+  const closedCandidate =
     naturalTrade &&
     status.open_positions === 0 &&
     (status.traded ?? 0) >= 1 &&
     (status.performance?.trades ?? 0) >= 1 &&
-    !!(exitReason || status.last_exit_reason);
-  const report = {
+    !!exitReasonFinal &&
+    (exitPhase || exits >= 1) &&
+    executed >= 1 &&
+    executed <= 2;
+
+  const report: LivePaperDemoReport = {
     status: !first.ok
       ? 'FAIL'
-      : closedProven
+      : closedCandidate
         ? 'PASS_LIVE_DATA_CLOSED'
         : naturalTrade
           ? 'PASS_LIVE_DATA_TRADED'
@@ -190,7 +211,7 @@ async function main() {
     forced_live_paper_fill: false,
     exit_phase: exitPhase,
     exit_cycles: exits,
-    exit_reason: exitReason || status.last_exit_reason || null,
+    exit_reason: exitReasonFinal,
     open_positions: status.open_positions,
     traded: status.traded,
     performance_trades: status.performance?.trades ?? 0,
@@ -200,6 +221,12 @@ async function main() {
     last_decision: status.last_decision?.kind,
     ticks,
   };
+
+  // Final honesty gate — never emit CLOSED if the structured checks fail
+  if (report.status === 'PASS_LIVE_DATA_CLOSED' && !isHonestLivePaperClosed(report)) {
+    report.status = naturalTrade ? 'PASS_LIVE_DATA_TRADED' : 'FAIL';
+    report.honesty_downgrade = 'closed_failed_isHonestLivePaperClosed';
+  }
 
   console.log(JSON.stringify(report, null, 2));
   writeFileSync(`${dir}/vs_master_live_paper_demo.json`, JSON.stringify(report, null, 2));
