@@ -2,6 +2,9 @@
  * Relative spread model — Reader update_spread_model / evaluate_spread_filter.
  * z-score of current spread vs lookback history.
  */
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { join } from 'path';
+
 export type SpreadModelSnapshot = {
   history: number[];
   mean_spread: number;
@@ -59,15 +62,33 @@ export function relativeSpreadAcceptable(
   return relativeSpread <= threshold;
 }
 
+function stateDir(): string {
+  return (
+    process.env.MASTER_STATE_DIR ||
+    process.env.MASTER_GATES_DIR ||
+    join(process.cwd(), '.master-state')
+  );
+}
+
+function spreadPath(): string {
+  return join(stateDir(), 'spread_history.json');
+}
+
 /** Rolling spread history for LIVE/PAPER runtime. */
 export class SpreadHistory {
   private values: number[] = [];
+  private persistEvery = 0;
 
   constructor(private readonly lookback = 20) {}
 
   push(spread: number): SpreadModelSnapshot {
     const snap = updateSpreadModel(this.values, spread, this.lookback);
     this.values = snap.history;
+    // Persist every push once warm (≥3) so restart keeps relative-spread gate
+    this.persistEvery += 1;
+    if (this.values.length >= 3 && this.persistEvery % 1 === 0) {
+      this.save();
+    }
     return snap;
   }
 
@@ -77,5 +98,47 @@ export class SpreadHistory {
 
   clear() {
     this.values = [];
+  }
+
+  /** Reader recover_spread_model_from_sensor — restore lookback across restart. */
+  load(): number {
+    try {
+      const path = spreadPath();
+      if (!existsSync(path)) return 0;
+      const raw = JSON.parse(readFileSync(path, 'utf8')) as {
+        history?: unknown;
+        lookback?: number;
+      };
+      const hist = Array.isArray(raw.history)
+        ? raw.history
+            .map((n) => Number(n))
+            .filter((n) => Number.isFinite(n) && n >= 0)
+        : [];
+      this.values = hist.slice(-Math.max(1, this.lookback));
+      return this.values.length;
+    } catch {
+      return 0;
+    }
+  }
+
+  save(): boolean {
+    try {
+      mkdirSync(stateDir(), { recursive: true });
+      writeFileSync(
+        spreadPath(),
+        JSON.stringify({
+          lookback: this.lookback,
+          history: this.values.slice(-Math.max(1, this.lookback)),
+          ts: new Date().toISOString(),
+        })
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  size(): number {
+    return this.values.length;
   }
 }

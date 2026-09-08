@@ -10,7 +10,7 @@ import { PositionManager } from '../positionManager.js';
 import { Mt4FileBroker, PaperBroker, epicsMatch, normalizeEpicKey } from '../broker.js';
 import { syncPositionsWithBroker } from '../positionSync.js';
 import { masterRuntime } from '../runtime.js';
-import { updateSpreadModel } from '../spreadModel.js';
+import { SpreadHistory, updateSpreadModel } from '../spreadModel.js';
 import type { AnalysisSnapshot, Quote } from '../types.js';
 import { calculateRelativeVolatility } from '../volatility.js';
 
@@ -338,6 +338,26 @@ describe('MASTER filters + dual flow', () => {
     );
     expect(fail.ok).toBe(false);
     expect(fail.reason).toBe('relative_spread');
+  });
+
+  it('SpreadHistory persists and restores across restart (Reader)', () => {
+    const prev = process.env.MASTER_STATE_DIR;
+    const dir = mkdtempSync(join(tmpdir(), 'vs-spread-'));
+    process.env.MASTER_STATE_DIR = dir;
+    try {
+      const a = new SpreadHistory(20);
+      for (let i = 0; i < 10; i++) a.push(0.25 + i * 0.001);
+      expect(a.size()).toBe(10);
+      expect(a.save()).toBe(true);
+      const b = new SpreadHistory(20);
+      expect(b.load()).toBe(10);
+      expect(b.size()).toBe(10);
+      const snap = b.snapshot(1.5);
+      expect(snap.relative_spread).toBeGreaterThan(1);
+    } finally {
+      if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prev;
+    }
   });
 });
 
@@ -1848,6 +1868,7 @@ describe('partial_close persist + Check be_start', () => {
       block_off_hours: false,
       block_high_impact_news: false,
       max_relative_volatility: 100,
+      max_relative_spread: 100,
       cooldown_ms_after_loss: 0,
       max_daily_loss_pct: 0.99,
       max_drawdown_pct: 0.99,

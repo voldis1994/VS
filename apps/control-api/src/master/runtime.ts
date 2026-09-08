@@ -670,7 +670,15 @@ class MasterRuntime {
     // Reader relative spread — update history every tick
     if (this.cfg.spread_lookback_bars !== this.spreadLookback) {
       this.spreadLookback = this.cfg.spread_lookback_bars;
+      const prev = this.spreadHistory;
       this.spreadHistory = new SpreadHistory(this.spreadLookback);
+      // Keep in-memory samples when lookback changes mid-run
+      if (prev.size() > 0) {
+        const snap = prev.snapshot(quote.spread);
+        for (const v of snap.history.slice(0, -1)) this.spreadHistory.push(v);
+      } else {
+        this.spreadHistory.load();
+      }
     }
     const spreadSnap = this.spreadHistory.push(quote.spread);
 
@@ -1073,6 +1081,20 @@ class MasterRuntime {
       this.account.peak_equity = this.account.equity;
     }
     this.persistRuntimeGates();
+
+    // Reader recover_spread_model — relative-spread gate must not cold-open after restart
+    this.spreadLookback = this.cfg.spread_lookback_bars;
+    this.spreadHistory = new SpreadHistory(this.spreadLookback);
+    const spreadRestored = this.spreadHistory.load();
+    if (spreadRestored > 0) {
+      this.broker_detail = [
+        this.broker_detail,
+        `spread_restore:${spreadRestored}`,
+      ]
+        .filter(Boolean)
+        .join(';')
+        .slice(0, 400);
+    }
 
     // PAPER restart: empty in-memory book must be reseeded before sync or every
     // restored open looks like a ghost and is wiped as broker_flat.
