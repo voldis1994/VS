@@ -523,6 +523,53 @@ describe('VS MASTER MT4 file bridge', () => {
     expect(mod.detail).toBe('mt4_pending_control_command');
   });
 
+  it('refuses OPEN while unacked CLOSE/MODIFY pending (Check- WAIT_CMD)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-open-mutex-'));
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    mkdirSync(join(root, 'commands'), { recursive: true });
+    mkdirSync(join(root, 'acks'), { recursive: true });
+    writeFileSync(
+      join(root, 'commands', 'cmd_pend_close.json'),
+      JSON.stringify({ id: 'pend_close', action: 'CLOSE', ticket: 99, lot: 0.1 })
+    );
+    const opened = await broker.placeOrder({
+      intent_id: 'openwhileclosepending000001',
+      epic: 'XAUUSD',
+      side: 'BUY',
+      size: 0.02,
+      stop_level: 4390,
+    });
+    expect(opened.ok).toBe(false);
+    expect(opened.detail).toBe('mt4_pending_control_command');
+  });
+
+  it('refuses OPEN while unacked OPEN pending as mt4_pending_open', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-open-open-mutex-'));
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    mkdirSync(join(root, 'commands'), { recursive: true });
+    mkdirSync(join(root, 'acks'), { recursive: true });
+    writeFileSync(
+      join(root, 'commands', 'cmd_pend_open.json'),
+      JSON.stringify({
+        id: 'pend_open',
+        action: 'OPEN',
+        symbol: 'XAUUSD',
+        side: 'BUY',
+        lot: 0.1,
+      })
+    );
+    const opened = await broker.placeOrder({
+      intent_id: 'openwhileopenpending0000001',
+      epic: 'XAUUSD',
+      side: 'SELL',
+      size: 0.02,
+    });
+    expect(opened.ok).toBe(false);
+    expect(opened.detail).toBe('mt4_pending_open');
+  });
+
   it('OPEN prefers status open_level over ACK request fill (broker truth)', async () => {
     const root = mkdtempSync(join(tmpdir(), 'vs-mt4-ackfill-'));
     const sim = new Mt4BridgeSimulator(root);

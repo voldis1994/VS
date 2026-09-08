@@ -1250,7 +1250,7 @@ class MasterRuntime {
         // Ambiguous OPEN — keep inflight so we do not double-open while EA may
         // still fill (Check- holds pending_open / WAIT_CMD until ACK/timeout).
         const ambiguousTimeout =
-          /ack_timeout|ACK_TIMEOUT|not_confirmed|unconfirmed|confirm_timeout|mt4_pending_open|mt4_intent_already_pending/i.test(
+          /ack_timeout|ACK_TIMEOUT|not_confirmed|unconfirmed|confirm_timeout|mt4_pending_open|mt4_intent_already_pending|mt4_pending_control_command/i.test(
             execution.detail || ''
           );
         if (!ambiguousTimeout) {
@@ -1258,9 +1258,10 @@ class MasterRuntime {
           this.persistRuntimeGates();
         } else {
           // Capital/MT4 ambiguous OPEN — durable ACK_TIMEOUT / pending for cycle alert
-          const pendingOpen = /mt4_pending_open|mt4_intent_already_pending/i.test(
-            execution.detail || ''
-          );
+          const pendingOpen =
+            /mt4_pending_open|mt4_intent_already_pending|mt4_pending_control_command/i.test(
+              execution.detail || ''
+            );
           if (pendingOpen) {
             this.inflight_until_ms = Math.max(
               this.inflight_until_ms,
@@ -1276,7 +1277,7 @@ class MasterRuntime {
           this.persistRuntimeGates();
         }
         if (
-          /reject|RISK_CHECK|not_confirmed|CAPITAL_SL|unconfirmed|ack_timeout|ACK_TIMEOUT|confirm_timeout|mt4_pending_open|mt4_intent_already_pending/i.test(
+          /reject|RISK_CHECK|not_confirmed|CAPITAL_SL|unconfirmed|ack_timeout|ACK_TIMEOUT|confirm_timeout|mt4_pending_open|mt4_intent_already_pending|mt4_pending_control_command/i.test(
             execution.detail
           )
         ) {

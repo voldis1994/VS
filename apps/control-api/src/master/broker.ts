@@ -2020,13 +2020,16 @@ export class Mt4FileBroker implements MasterBroker {
         paper: false,
       };
     }
-    if (this.hasPendingOpenCommand()) {
+    // Check- WAIT_CMD: refuse OPEN while any unacked control cmd is live
+    // (CLOSE/MODIFY already mutex; OPEN used to only check pending OPEN).
+    if (this.hasPendingCommand(['OPEN', 'CLOSE', 'MODIFY'])) {
+      const openOnly = this.hasPendingOpenCommand();
       return {
         ok: false,
         order_id: null,
         position_id: null,
         fill_price: null,
-        detail: 'mt4_pending_open',
+        detail: openOnly ? 'mt4_pending_open' : 'mt4_pending_control_command',
         paper: false,
       };
     }
