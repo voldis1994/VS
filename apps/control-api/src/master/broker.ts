@@ -502,6 +502,18 @@ export class CapitalBroker implements MasterBroker {
     }
   }
 
+  /**
+   * Stable Capital venue identity — used to refuse account/env swaps while opens remain.
+   */
+  identityKey(): string {
+    const c = (this.deps.credentials || {}) as Record<string, unknown>;
+    const env = String(c.environment ?? '').trim().toLowerCase();
+    const id = String(c.identifier ?? '').trim().toLowerCase();
+    const acct = String(c.capitalAccountId ?? '').trim();
+    const api = String(c.apiKey ?? '').trim();
+    return `${env}|${id}|${acct}|${api}`;
+  }
+
   /** Bind + re-acquire + pin (fail closed when id supplied but switch fails). */
   async rebindCapitalAccount(
     accountId: string | null | undefined

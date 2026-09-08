@@ -902,6 +902,30 @@ class MasterRuntime {
   }
 
   /**
+   * Refuse attaching a *different* Capital identity (env/account/api) while venue
+   * opens remain — Start LIVE / capital attach must not abandon the prior book.
+   * Same-identity re-attach is allowed so LIVE restart can keep managing opens.
+   */
+  async refuseCapitalIdentitySwap(
+    next: MasterBroker
+  ): Promise<{ ok: true } | { ok: false; detail: string }> {
+    const cur = this.broker;
+    if (!(cur instanceof CapitalBroker) || cur.paper) return { ok: true };
+    if (!(next instanceof CapitalBroker) || next.paper) {
+      return this.refuseDetachCapitalWithOpens();
+    }
+    if (cur.identityKey() === next.identityKey()) return { ok: true };
+    const gate = await this.refuseDetachCapitalWithOpens();
+    if (!gate.ok) {
+      return {
+        ok: false,
+        detail: `refuse_capital_identity_swap:${gate.detail}`,
+      };
+    }
+    return { ok: true };
+  }
+
+  /**
    * Desk dual-brain guard: when Capital LIVE manage is deferred to desk,
    * pause MASTER autonomous entries while exits still run.
    */
@@ -1020,6 +1044,7 @@ class MasterRuntime {
 
     // Refresh equity from whatever broker is attached (paper or Capital)
     const acct = await broker.getAccount();
+    let capitalAccountUnproven = false;
     if (acct && acct.equity > 0) {
       this.account.equity = acct.equity;
       this.account.balance = acct.balance;
@@ -1043,6 +1068,12 @@ class MasterRuntime {
       ) {
         this.persistRuntimeGates();
       }
+    } else if (broker instanceof CapitalBroker && !broker.paper) {
+      // Fail-closed: never size LIVE from stale paper £10k when Capital equity unread
+      capitalAccountUnproven = true;
+      this.broker_detail = `${this.broker_detail || ''};capital_account_unproven`.slice(
+        -400
+      );
     }
 
     // Capital: fail-closed marketStatus every tick (not only feed wrapper side-effect)
@@ -1050,7 +1081,8 @@ class MasterRuntime {
       const { capitalMarketAllowsTrading } = await import('./capitalMarket.js');
       const status =
         quote.market_status ?? broker.cachedMarketStatus(this.epic);
-      this.account.trade_allowed = capitalMarketAllowsTrading(status);
+      this.account.trade_allowed =
+        capitalMarketAllowsTrading(status) && !capitalAccountUnproven;
     }
 
     // Reader relative spread — update history every tick
@@ -1075,11 +1107,12 @@ class MasterRuntime {
     await refreshNewsCalendar().catch(() => undefined);
 
     // 0) Reconcile broker truth every tick — drop ghosts, adopt orphans (VS-System-)
+    // Capital: venue-wide (all epics) so other-epic orphans block/manage correctly.
     // Empty-book ghost wipe requires 5 consecutive successful empties (debounce).
     const sync = await syncPositionsWithBroker(
       this.positions,
       broker,
-      this.epic,
+      broker instanceof CapitalBroker ? undefined : this.epic,
       this.emptyBrokerDebounce
     );
     // Journal confirmed ghosts/orphans even when other tickets are still in miss-debounce.
@@ -1290,9 +1323,12 @@ class MasterRuntime {
     ) {
       // VS-System fail-closed: force-list broker opens before entry — local book
       // alone is unsafe when sync was skipped or ghosts lag.
+      // Capital: venue-wide list (no epic filter) so other-epic orphans block OPEN.
       let brokerVerifyOk = true;
       try {
-        const listed = await broker.listOpenPositions(this.epic);
+        const listed = await broker.listOpenPositions(
+          broker instanceof CapitalBroker ? undefined : this.epic
+        );
         if (!listed.ok) {
           brokerVerifyOk = false;
           execution_detail = `broker_verify_failed:${listed.detail || 'list_failed'}`;

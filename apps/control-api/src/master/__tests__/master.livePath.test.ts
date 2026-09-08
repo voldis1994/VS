@@ -2307,4 +2307,190 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     if (prev === undefined) delete process.env.MASTER_STATE_DIR;
     else process.env.MASTER_STATE_DIR = prev;
   });
+
+  it('refuseCapitalIdentitySwap blocks different Capital identity while opens remain', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number;
+      }
+    >();
+    positions.set('deal-a', {
+      deal_id: 'deal-a',
+      epic: 'GOLD',
+      direction: 'BUY',
+      size: 0.1,
+      open_level: 4410,
+    });
+    const make = (apiKey: string) =>
+      new CapitalBroker({
+        credentials: {
+          environment: 'demo',
+          apiKey,
+          identifier: 'user-a',
+          password: 'p',
+          capitalAccountId: 'acct-1',
+        },
+        acquire: async () => ({ ok: true, session: { id: `s-${apiKey}` }, detail: 'ok' }),
+        quote: async (_s, epic) => ({
+          bid: 4410,
+          ask: 4410.4,
+          mid: 4410.2,
+          epic,
+          raw_ok: true,
+          market_status: 'TRADEABLE',
+        }),
+        account: async () => ({ equity: 12_000, balance: 12_000, currency: 'GBP' }),
+        list: async () => ({
+          ok: true,
+          positions: [...positions.values()],
+          detail: `${positions.size}`,
+        }),
+        create: async () => ({ ok: true, deal_reference: 'x', detail: 'ok' }),
+        confirm: async () => ({ ok: true, deal_id: 'x', detail: 'ok' }),
+        close: async () => ({ ok: true, detail: 'closed' }),
+      });
+    const cur = make('key-AAA');
+    const next = make('key-BBB');
+    await cur.connect();
+    await next.connect();
+    expect(cur.identityKey()).not.toBe(next.identityKey());
+    masterRuntime.stop();
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.attachBroker(cur);
+    masterRuntime.setMode('LIVE');
+    const gate = await masterRuntime.refuseCapitalIdentitySwap(next);
+    expect(gate.ok).toBe(false);
+    if (!gate.ok) expect(gate.detail).toMatch(/refuse_capital_identity_swap/);
+
+    // Same identity re-attach allowed
+    const same = make('key-AAA');
+    await same.connect();
+    expect((await masterRuntime.refuseCapitalIdentitySwap(same)).ok).toBe(true);
+  });
+
+  it('Capital entry verify blocks other-epic venue opens (venue-wide)', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-oepic' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+        market_status: 'TRADEABLE',
+      }),
+      account: async () => ({ equity: 12_500, balance: 12_000, currency: 'GBP' }),
+      list: async () => ({
+        ok: true,
+        positions: [
+          {
+            deal_id: 'silver-orphan',
+            epic: 'SILVER',
+            direction: 'BUY',
+            size: 1,
+            open_level: 30,
+          },
+        ],
+        detail: '1',
+      }),
+      create: async () => ({ ok: true, deal_reference: 'x', detail: 'ok' }),
+      confirm: async () => ({ ok: true, deal_id: 'x', detail: 'ok' }),
+      close: async () => ({ ok: true, detail: 'closed' }),
+    });
+    await broker.connect();
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('LIVE');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    masterRuntime.cfg = {
+      ...DEFAULT_MASTER_CONFIG,
+      mode: 'LIVE',
+      min_score: 0.25,
+      block_off_hours: false,
+      block_high_impact_news: false,
+      max_relative_volatility: 100,
+      max_relative_spread: 100,
+      cooldown_ms_after_loss: 0,
+      max_daily_loss_pct: 0.99,
+      max_drawdown_pct: 0.99,
+    };
+    masterRuntime.account = { ...account, equity: 12_500, balance: 12_000 };
+    masterRuntime.running = true;
+    masterRuntime.entries_armed = true;
+    masterRuntime.persist_ok = true;
+    (masterRuntime as unknown as { inflight_until_ms: number }).inflight_until_ms = 0;
+    (masterRuntime as unknown as { reject_until_ms: number }).reject_until_ms = 0;
+    (masterRuntime as unknown as { post_exit_until_ms: number }).post_exit_until_ms = 0;
+    (masterRuntime as unknown as { last_entry_fingerprint: string | null }).last_entry_fingerprint =
+      null;
+    const bars = barsTrendUp(50);
+    const quote = {
+      ...quoteFrom(bars.at(-1)!),
+      epic: 'GOLD',
+      market_status: 'TRADEABLE',
+      ts_ms: Date.now(),
+    };
+    const r = await masterRuntime.tick(bars, quote);
+    expect(r.executed).toBe(false);
+    // Venue-wide sync adopts the SILVER orphan into local book and/or entry verify blocks
+    expect(
+      masterRuntime.positions.count() > 0 ||
+        /one_trade_broker_open|one_trade_open/.test(String(r.execution_detail || ''))
+    ).toBe(true);
+  });
+
+  it('Capital account fetch failure parks trade_allowed (no paper £10k sizing)', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-acct0' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+        market_status: 'TRADEABLE',
+      }),
+      // No account dep → getAccount returns equity 0
+      list: async () => ({ ok: true, positions: [], detail: '0' }),
+      create: async () => ({ ok: true, deal_reference: 'x', detail: 'ok' }),
+      confirm: async () => ({ ok: true, deal_id: 'x', detail: 'ok' }),
+      close: async () => ({ ok: true, detail: 'closed' }),
+    });
+    await broker.connect();
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('LIVE');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    masterRuntime.cfg = {
+      ...DEFAULT_MASTER_CONFIG,
+      mode: 'LIVE',
+      min_score: 0.99,
+      block_off_hours: false,
+    };
+    masterRuntime.account = { ...account };
+    masterRuntime.running = true;
+    const bars = barsTrendUp(30);
+    const quote = {
+      ...quoteFrom(bars.at(-1)!),
+      epic: 'GOLD',
+      market_status: 'TRADEABLE',
+      ts_ms: Date.now(),
+    };
+    await masterRuntime.tick(bars, quote);
+    expect(masterRuntime.account.trade_allowed).toBe(false);
+    expect(String(masterRuntime.broker_detail || '')).toMatch(/capital_account_unproven/);
+  });
 });

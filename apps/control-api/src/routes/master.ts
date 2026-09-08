@@ -182,6 +182,18 @@ export async function registerMasterRoutes(app: FastifyInstance) {
           status: masterRuntime.status(),
         };
       }
+      // Do not swap Capital env/account while LIVE opens remain on the prior identity
+      if (wantLive && liveOk) {
+        const swap = await masterRuntime.refuseCapitalIdentitySwap(resolved.broker);
+        if (!swap.ok) {
+          return {
+            ok: false,
+            detail: swap.detail,
+            broker: masterRuntime.broker?.name ?? null,
+            status: masterRuntime.status(),
+          };
+        }
+      }
       // Stop first so PAPER Yahoo feed cannot stick after Capital attach
       masterRuntime.stop();
       masterRuntime.attachBroker(resolved.broker);
@@ -366,6 +378,14 @@ export async function registerMasterRoutes(app: FastifyInstance) {
         detail: resolved.detail,
         broker: resolved.broker.name,
         mode: resolved.mode,
+      };
+    }
+    const swap = await masterRuntime.refuseCapitalIdentitySwap(resolved.broker);
+    if (!swap.ok) {
+      return {
+        ok: false,
+        detail: swap.detail,
+        broker: masterRuntime.broker?.name ?? null,
       };
     }
     masterRuntime.stop();
