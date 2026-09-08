@@ -311,4 +311,9 @@ export type MasterConfig = {
   scalp_strict_entry: boolean;
   /** Min |buy−sell| score edge for scalp_strict_entry (default 0.12). */
   scalp_min_edge: number;
+  /**
+   * VS-System EMA_TICK fresh-cross entry gate (struct/closed EMA1×EMA3 + divergence).
+   * Soft scores alone cannot open while waiting for a fresh cross.
+   */
+  ema_tick_entry: boolean;
 };

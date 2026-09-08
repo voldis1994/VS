@@ -257,6 +257,7 @@ export const DEFAULT_MASTER_CONFIG: MasterConfig = {
   scalp_lock_pct: 0.2,
   scalp_strict_entry: false,
   scalp_min_edge: 0.12,
+  ema_tick_entry: false,
 };
 
 export const GOLD_SPEC: InstrumentSpec = {

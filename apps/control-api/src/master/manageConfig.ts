@@ -13,6 +13,7 @@ export type ManageConfigPatch = Partial<
     | 'scalp_lock_pct'
     | 'scalp_strict_entry'
     | 'scalp_min_edge'
+    | 'ema_tick_entry'
     | 'soft_trail_money_arm'
     | 'soft_trail_pips'
     | 'breakeven_activation_money'
@@ -40,6 +41,7 @@ const KEYS: (keyof ManageConfigPatch)[] = [
   'scalp_lock_pct',
   'scalp_strict_entry',
   'scalp_min_edge',
+  'ema_tick_entry',
   'soft_trail_money_arm',
   'soft_trail_pips',
   'breakeven_activation_money',
@@ -79,6 +81,7 @@ export const SCALP_MANAGE_PRESET: ManageConfigPatch = {
   scalp_lock_pct: 0.2,
   scalp_strict_entry: true,
   scalp_min_edge: 0.12,
+  ema_tick_entry: true,
   soft_trail_money_arm: 0.05,
   soft_trail_pips: 0.3,
   breakeven_activation_money: 0.05,

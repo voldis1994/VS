@@ -200,10 +200,22 @@ export class Mt4BridgeSimulator {
       }
       this.markProfits();
       const fill = p.side === 'BUY' ? this.bid : this.ask;
+      const lotReq = Number(payload.lot || payload.volume || 0);
+      let closeLot = p.lot;
+      if (lotReq > 0 && lotReq < p.lot - 1e-9) {
+        closeLot = Math.min(p.lot, lotReq);
+        // Leave dust below 0.01 → full close
+        if (p.lot - closeLot < 0.01 - 1e-9) closeLot = p.lot;
+      }
       const profit =
-        p.side === 'BUY' ? (fill - p.open) * p.lot : (p.open - fill) * p.lot;
-      this.positions.delete(ticket);
-      this.writeAck(id, true, ticket, 'closed', { fill, profit });
+        (p.side === 'BUY' ? (fill - p.open) * closeLot : (p.open - fill) * closeLot);
+      if (closeLot < p.lot - 1e-9) {
+        p.lot = p.lot - closeLot;
+        this.writeAck(id, true, ticket, 'partial_closed', { fill, profit });
+      } else {
+        this.positions.delete(ticket);
+        this.writeAck(id, true, ticket, 'closed', { fill, profit });
+      }
       return;
     }
     if (action === 'MODIFY') {

@@ -1,4 +1,5 @@
 /** Dual BUY/SELL candidates — independent component scores (heuristic, not probability). */
+import { ema13FreshEntry, emaPairFromBars } from './analysis.js';
 import { candleBiasFromBars, scalpStrictEntryAllowed } from './candleBias.js';
 import { applyMarketFilters } from './filters.js';
 import { isLateMoveOnBars } from './lateMove.js';
@@ -132,6 +133,41 @@ export function buildCandidates(
     if (!sellGate.ok) sellScalpBlock = sellGate.skip || 'scalp_strict_entry';
   }
 
+  // VS-System EMA_TICK fresh-cross entry (opt-in) — soft scores cannot open while waiting
+  let buyEmaBlock: string | null = null;
+  let sellEmaBlock: string | null = null;
+  if (cfg.ema_tick_entry) {
+    const e1 = emaPairFromBars(bars ?? [], 1);
+    const e3 = emaPairFromBars(bars ?? [], 3);
+    if (!e1 || !e3) {
+      buyEmaBlock = 'ema13_wait_cross';
+      sellEmaBlock = 'ema13_wait_cross';
+    } else {
+      const buyGate = ema13FreshEntry({
+        side: 'BUY',
+        price: buyEntry,
+        ema1: e1.cur,
+        ema3: e3.cur,
+        ema1Prev: e1.prev,
+        ema3Prev: e3.prev,
+        ema1Prev2: e1.prev2,
+        ema3Prev2: e3.prev2,
+      });
+      const sellGate = ema13FreshEntry({
+        side: 'SELL',
+        price: sellEntry,
+        ema1: e1.cur,
+        ema3: e3.cur,
+        ema1Prev: e1.prev,
+        ema3Prev: e3.prev,
+        ema1Prev2: e1.prev2,
+        ema3Prev2: e3.prev2,
+      });
+      if (!buyGate.ok) buyEmaBlock = buyGate.gate;
+      if (!sellGate.ok) sellEmaBlock = sellGate.gate;
+    }
+  }
+
   const buy: TradeCandidate = {
     side: 'BUY',
     valid:
@@ -140,20 +176,24 @@ export function buildCandidates(
       a.regime !== 'UNSTABLE' &&
       !buyAgainstDump &&
       !buyLate &&
-      !buyScalpBlock,
+      !buyScalpBlock &&
+      !buyEmaBlock,
     score: buyScore,
     components: buyComp,
     entry: buyEntry,
     stop_loss: buySl,
     take_profit: buyEntry + buyRisk * cfg.reward_ratio,
-    filter_ok: filter.ok && !buyAgainstDump && !buyLate && !buyScalpBlock,
+    filter_ok:
+      filter.ok && !buyAgainstDump && !buyLate && !buyScalpBlock && !buyEmaBlock,
     filter_reason: !filter.ok
       ? filter.reason
       : buyAgainstDump
         ? 'against_flow_dump'
         : buyLate
           ? 'late_move'
-          : buyScalpBlock,
+          : buyScalpBlock
+            ? buyScalpBlock
+            : buyEmaBlock,
   };
   const sell: TradeCandidate = {
     side: 'SELL',
@@ -163,20 +203,28 @@ export function buildCandidates(
       a.regime !== 'UNSTABLE' &&
       !sellAgainstRally &&
       !sellLate &&
-      !sellScalpBlock,
+      !sellScalpBlock &&
+      !sellEmaBlock,
     score: sellScore,
     components: sellComp,
     entry: sellEntry,
     stop_loss: sellSl,
     take_profit: sellEntry - sellRisk * cfg.reward_ratio,
-    filter_ok: filter.ok && !sellAgainstRally && !sellLate && !sellScalpBlock,
+    filter_ok:
+      filter.ok &&
+      !sellAgainstRally &&
+      !sellLate &&
+      !sellScalpBlock &&
+      !sellEmaBlock,
     filter_reason: !filter.ok
       ? filter.reason
       : sellAgainstRally
         ? 'against_flow_rally'
         : sellLate
           ? 'late_move'
-          : sellScalpBlock,
+          : sellScalpBlock
+            ? sellScalpBlock
+            : sellEmaBlock,
   };
   return { buy, sell };
 }

@@ -293,9 +293,27 @@ bool DoClose(string json, string id)
       return(false);
    }
    double price = (OrderType() == OP_BUY ? Bid : Ask);
+   double lots = OrderLots();
+   double closeLots = lots;
+   // Optional partial — honor lot when >0 and below full (multi-TP / Reader scale-out)
+   double lotReq = JsonGetNum(json, "lot");
+   if(lotReq <= 0) lotReq = JsonGetNum(json, "volume");
+   if(lotReq > 0 && lotReq < lots - 1e-8)
+   {
+      double step = MarketInfo(OrderSymbol(), MODE_LOTSTEP);
+      if(step <= 0) step = 0.01;
+      double minLot = MarketInfo(OrderSymbol(), MODE_MINLOT);
+      if(minLot <= 0) minLot = 0.01;
+      closeLots = MathFloor(lotReq / step + 1e-12) * step;
+      if(closeLots < minLot) closeLots = minLot;
+      // Leaving dust below min lot → full close (broker cannot hold remainder)
+      if(lots - closeLots < minLot - 1e-8) closeLots = lots;
+   }
    // Capture PnL before close — OrderProfit invalid after OrderClose
    double profit = OrderProfit() + OrderSwap() + OrderCommission();
-   if(!OrderClose(ticket, OrderLots(), price, 30, clrAqua))
+   if(closeLots < lots - 1e-8)
+      profit = profit * (closeLots / lots);
+   if(!OrderClose(ticket, closeLots, price, 30, clrAqua))
    {
       AckSimple(id, false, ticket, "close " + IntegerToString(GetLastError()));
       return(false);
@@ -343,7 +361,7 @@ int OnInit()
       Alert("VS_MASTER: attach to M1 chart");
    BootDirs();
    EventSetTimer(MathMax(1, ExportSec));
-   Comment("VS MASTER bridge v6.1 | ", g_root);
+   Comment("VS MASTER bridge v6.2 | ", g_root);
    return(INIT_SUCCEEDED);
 }
 

@@ -1399,8 +1399,8 @@ export class CapitalBroker implements MasterBroker {
 export class Mt4FileBroker implements MasterBroker {
   readonly name = 'MT4_FILE';
   readonly paper = false;
-  /** Check- EA closes full OrderLots — never request partial (would full-close). */
-  readonly supportsPartialClose = false;
+  /** Partial CLOSE supported when EA honors `lot` (VS_MASTER v6.2+). */
+  readonly supportsPartialClose = true;
   private processed = new Set<string>();
 
   constructor(private readonly bridgeRoot: string) {}
@@ -1606,6 +1606,56 @@ export class Mt4FileBroker implements MasterBroker {
   /** Cap/Check honesty: ACK alone is not enough — status stop_level must match. */
   private stopVerifyTol(wantSl: number): number {
     return Math.max(0.05, Math.abs(wantSl) * 1e-5, 1e-6);
+  }
+
+  private async waitForTicketSizeReduced(
+    positionId: string,
+    beforeSize: number,
+    wantClose: number
+  ): Promise<{ ok: boolean; detail: string; remaining: number | null }> {
+    const attempts =
+      process.env.VITEST || process.env.MASTER_CONFIRM_FAST === 'true' ? 4 : 8;
+    let lastDetail = 'mt4_status_unread';
+    let remaining: number | null = null;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) =>
+          setTimeout(
+            r,
+            process.env.VITEST || process.env.MASTER_CONFIRM_FAST === 'true'
+              ? 15 + 10 * attempt
+              : 80 + 60 * attempt
+          )
+        );
+      }
+      const listed = await this.listOpenPositions();
+      if (!listed.ok) {
+        lastDetail = listed.detail || 'mt4_status_unread';
+        continue;
+      }
+      const still = listed.positions.find(
+        (p) => p.position_id === String(positionId)
+      );
+      if (!still) return { ok: true, detail: 'flat', remaining: 0 };
+      remaining = Number(still.size);
+      if (
+        Number.isFinite(remaining) &&
+        remaining < beforeSize - 1e-9 &&
+        remaining <= beforeSize - Math.min(wantClose, beforeSize) + 1e-6
+      ) {
+        return { ok: true, detail: 'reduced', remaining };
+      }
+      // Any proven shrink is enough (broker lot-step may round)
+      if (Number.isFinite(remaining) && remaining < beforeSize - 1e-9) {
+        return { ok: true, detail: 'reduced', remaining };
+      }
+      lastDetail = 'mt4_partial_size_unchanged';
+    }
+    return {
+      ok: false,
+      detail: `mt4_partial_unverified:${lastDetail}`,
+      remaining,
+    };
   }
 
   private async waitForTicketFlat(
@@ -2078,23 +2128,38 @@ export class Mt4FileBroker implements MasterBroker {
     };
   }
 
-  async closePosition(position_id: string, _opts?: { size?: number }) {
-    // MT4 bridge CLOSE is full ticket close (EA protocol); partial not supported yet
-    if (_opts?.size != null) {
-      return { ok: false, detail: 'mt4_partial_close_unsupported' };
-    }
+  async closePosition(position_id: string, opts?: { size?: number }) {
     if (this.hasPendingCommand(['OPEN', 'CLOSE', 'MODIFY'])) {
       return { ok: false, detail: 'mt4_pending_control_command' };
     }
+    const partial =
+      opts?.size != null && Number.isFinite(opts.size) && opts.size > 0;
+    let beforeSize: number | null = null;
+    {
+      const beforeList = await this.listOpenPositions();
+      const before = beforeList.ok
+        ? beforeList.positions.find((p) => p.position_id === String(position_id))
+        : undefined;
+      if (before && Number.isFinite(before.size) && before.size > 0) {
+        beforeSize = Number(before.size);
+      }
+    }
     const id = randomUUID().slice(0, 12);
-    const payload = { id, action: 'CLOSE', ticket: Number(position_id), reason: 'VS_MASTER' };
+    const closeLot = partial ? Number(opts!.size) : 0;
+    const payload: Record<string, unknown> = {
+      id,
+      action: 'CLOSE',
+      ticket: Number(position_id),
+      reason: 'VS_MASTER',
+    };
+    if (partial) payload.lot = closeLot;
     // Reader: durable INTENT before control publish
     logTradeIntent({
       command_id: id,
       intent_id: `close:${position_id}:${id}`,
       action: 'CLOSE',
       side: null,
-      volume: 0,
+      volume: partial ? closeLot : 0,
       epic: '',
       ticket: String(position_id),
       sl: null,
@@ -2118,6 +2183,49 @@ export class Mt4FileBroker implements MasterBroker {
       const fill_pnl = numOrNull(
         waited.ack?.profit ?? waited.ack?.Profit ?? waited.ack?.pnl
       );
+      if (partial) {
+        if (beforeSize == null) {
+          return {
+            ok: false,
+            detail: 'mt4_partial_no_before_size',
+            fill_price,
+            fill_pnl,
+          };
+        }
+        const reduced = await this.waitForTicketSizeReduced(
+          String(position_id),
+          beforeSize,
+          closeLot
+        );
+        if (!reduced.ok) {
+          updateTradeAck(id, {
+            ack_status: 'FAILED',
+            ticket: String(position_id),
+            fill_price,
+            detail: reduced.detail,
+          });
+          return {
+            ok: false,
+            detail: reduced.detail,
+            fill_price,
+            fill_pnl,
+            remaining_size: reduced.remaining,
+          };
+        }
+        updateTradeAck(id, {
+          ack_status: 'SUCCESS',
+          ticket: String(position_id),
+          fill_price,
+          detail: 'ACK_SUCCESS_PARTIAL',
+        });
+        return {
+          ok: true,
+          detail: `mt4_partial_closed ticket=${position_id} rem=${reduced.remaining}`,
+          fill_price,
+          fill_pnl,
+          remaining_size: reduced.remaining,
+        };
+      }
       // ACK alone is not enough — prove ticket gone from status (Cap/Check honesty)
       const flat = await this.waitForTicketFlat(String(position_id));
       if (!flat.ok) {
@@ -2142,6 +2250,7 @@ export class Mt4FileBroker implements MasterBroker {
         }`,
         fill_price,
         fill_pnl,
+        remaining_size: 0,
       };
     }
     if (waited.ack) {
@@ -2156,7 +2265,9 @@ export class Mt4FileBroker implements MasterBroker {
     try {
       const listed = await this.listOpenPositions();
       if (listed.ok) {
-        const still = listed.positions.some((p) => p.position_id === String(position_id));
+        const still = listed.positions.find(
+          (p) => p.position_id === String(position_id)
+        );
         if (!still) {
           updateTradeAck(id, {
             ack_status: 'SUCCESS',
@@ -2167,6 +2278,25 @@ export class Mt4FileBroker implements MasterBroker {
             ok: true,
             detail: `mt4_closed_late ticket=${position_id}`,
             fill_price: null,
+            remaining_size: 0,
+          };
+        }
+        if (
+          partial &&
+          beforeSize != null &&
+          Number.isFinite(still.size) &&
+          still.size < beforeSize - 1e-9
+        ) {
+          updateTradeAck(id, {
+            ack_status: 'SUCCESS',
+            ticket: String(position_id),
+            detail: 'ACK_LATE_PARTIAL',
+          });
+          return {
+            ok: true,
+            detail: `mt4_partial_closed_late ticket=${position_id}`,
+            fill_price: null,
+            remaining_size: still.size,
           };
         }
       }

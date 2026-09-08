@@ -8,6 +8,7 @@ import { applyMarketFilters } from '../filters.js';
 import { DEFAULT_MASTER_CONFIG, MasterPipeline } from '../pipeline.js';
 import { PositionManager } from '../positionManager.js';
 import { Mt4FileBroker, PaperBroker, epicsMatch, normalizeEpicKey } from '../broker.js';
+import { Mt4BridgeSimulator } from '../mt4Sim.js';
 import { syncPositionsWithBroker } from '../positionSync.js';
 import { masterRuntime } from '../runtime.js';
 import { SpreadHistory, updateSpreadModel } from '../spreadModel.js';
@@ -887,14 +888,33 @@ describe('partial close scale-out', () => {
     expect(closeCalls === 0 || managed.closed.every((c) => !/PARTIAL/.test(c.reason))).toBe(true);
   });
 
-  it('Mt4FileBroker refuses partial close (Check- EA is full-lots only)', async () => {
+  it('Mt4FileBroker partial CLOSE proves size reduction (EA lot honor)', async () => {
+    process.env.MASTER_CONFIRM_FAST = 'true';
     const root = mkdtempSync(join(tmpdir(), 'mt4-partial-'));
+    const sim = new Mt4BridgeSimulator(root);
+    sim.setQuote(4400, 4400.4);
+    sim.start(20);
     const broker = new Mt4FileBroker(root);
     await broker.connect();
-    expect(broker.supportsPartialClose).toBe(false);
-    const res = await broker.closePosition('42', { size: 0.05 });
-    expect(res.ok).toBe(false);
-    expect(res.detail).toBe('mt4_partial_close_unsupported');
+    expect(broker.supportsPartialClose).toBe(true);
+    try {
+      const placed = await broker.placeOrder({
+        intent_id: 'mt4partialintent000000001',
+        epic: 'XAUUSD',
+        side: 'BUY',
+        size: 0.1,
+        stop_level: 4390,
+      });
+      expect(placed.ok).toBe(true);
+      const part = await broker.closePosition(placed.position_id!, { size: 0.04 });
+      expect(part.ok).toBe(true);
+      expect(part.remaining_size).toBeCloseTo(0.06, 5);
+      const listed = await broker.listOpenPositions('XAUUSD');
+      expect(listed.positions[0]!.size).toBeCloseTo(0.06, 5);
+    } finally {
+      sim.stop();
+      delete process.env.MASTER_CONFIRM_FAST;
+    }
   });
 });
 
@@ -1933,6 +1953,51 @@ describe('partial_close persist + Check be_start', () => {
     const { buy } = buildCandidates(a, q, cfg, bearBars);
     expect(buy.valid).toBe(false);
     expect(buy.filter_reason).toMatch(/scalp_|bull|bear|falling|micro|edge/);
+  });
+
+  it('ema_tick_entry blocks BUY without fresh EMA1×EMA3 cross', () => {
+    // Identical closes — no cross and no divergence
+    const flatBars = [];
+    for (let i = 0; i < 12; i++) {
+      flatBars.push({
+        open: 4400,
+        high: 4400.2,
+        low: 4399.8,
+        close: 4400,
+        ts_ms: i * 60_000,
+      });
+    }
+    const a = baseAnalysis({
+      regime: 'TREND',
+      momentum_dir: 'UP',
+      trend_dir: 'UP',
+      trend_strength: 0.8,
+      structure_bias: 'BULLISH',
+      buy_pressure: 0.9,
+      sell_pressure: 0.1,
+      behavior_bull: 0.9,
+      momentum_score: 0.8,
+      atr: 2,
+      context_quality: 0.9,
+      impact_score: 0.8,
+    });
+    const q: Quote = {
+      bid: 4400,
+      ask: 4400.4,
+      mid: 4400.2,
+      spread: 0.4,
+      ts_ms: Date.now(),
+    };
+    const cfg = {
+      ...DEFAULT_MASTER_CONFIG,
+      min_score: 0.4,
+      block_off_hours: false,
+      block_high_impact_news: false,
+      ema_tick_entry: true,
+    };
+    const { buy } = buildCandidates(a, q, cfg, flatBars);
+    expect(buy.valid).toBe(false);
+    expect(buy.filter_reason).toMatch(/ema13_wait/);
   });
 
   it('pre-entry broker verify blocks when listOpen fails (VS-System fail-closed)', async () => {

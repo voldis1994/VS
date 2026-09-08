@@ -142,6 +142,52 @@ export function ema13CrossExit(input: {
   return { exit: false, reason: '' };
 }
 
+/**
+ * VS-System EMA_TICK fresh-cross ENTRY — struct/closed cross + divergence + price side.
+ */
+export function ema13FreshEntry(input: {
+  side: 'BUY' | 'SELL';
+  price: number;
+  ema1: number;
+  ema3: number;
+  ema1Prev: number;
+  ema3Prev: number;
+  ema1Prev2?: number | null;
+  ema3Prev2?: number | null;
+}): { ok: boolean; gate: string } {
+  const { ema1, ema3, ema1Prev, ema3Prev, price } = input;
+  if (![ema1, ema3, ema1Prev, ema3Prev, price].every((n) => Number.isFinite(n))) {
+    return { ok: false, gate: 'ema13_wait_cross' };
+  }
+  const gap = Math.abs(ema1 - ema3);
+  const gapPrev = Math.abs(ema1Prev - ema3Prev);
+  const diverging = gap > gapPrev;
+  const structCrossUp = ema1Prev <= ema3Prev && ema1 > ema3;
+  const structCrossDown = ema1Prev >= ema3Prev && ema1 < ema3;
+  const p2ok =
+    input.ema1Prev2 != null &&
+    input.ema3Prev2 != null &&
+    Number.isFinite(input.ema1Prev2) &&
+    Number.isFinite(input.ema3Prev2);
+  const closedCrossUp =
+    p2ok && input.ema1Prev2! <= input.ema3Prev2! && ema1Prev > ema3Prev;
+  const closedCrossDown =
+    p2ok && input.ema1Prev2! >= input.ema3Prev2! && ema1Prev < ema3Prev;
+
+  if (input.side === 'BUY') {
+    const fresh =
+      (structCrossUp || closedCrossUp) && diverging && price > ema3;
+    return fresh
+      ? { ok: true, gate: 'ema13_cross_up' }
+      : { ok: false, gate: 'ema13_wait_fresh_cross' };
+  }
+  const fresh =
+    (structCrossDown || closedCrossDown) && diverging && price < ema3;
+  return fresh
+    ? { ok: true, gate: 'ema13_cross_down' }
+    : { ok: false, gate: 'ema13_wait_fresh_cross' };
+}
+
 export function analyzeBars(bars: Bar[], spread = 0, nowMs = Date.now()): AnalysisSnapshot {
   if (bars.length < 5) {
     return {
