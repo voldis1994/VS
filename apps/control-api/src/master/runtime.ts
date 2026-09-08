@@ -648,6 +648,24 @@ class MasterRuntime {
     return process.env.MASTER_OWNS_PIPELINE === 'true';
   }
 
+  /**
+   * Capital LIVE single-owner: default-on when unset; refuse when operator
+   * explicitly turned owns_pipeline OFF (dual-brain with Robot Desk).
+   */
+  ensureOwnsPipelineForCapitalLive(): { ok: true } | { ok: false; detail: string } {
+    if (this.owns_pipeline_pref === false) {
+      return {
+        ok: false,
+        detail:
+          'LIVE refused — MASTER owns_pipeline is OFF (dual-brain with Robot Desk). Turn Owns ON first.',
+      };
+    }
+    if (!this.ownsPipelineEffective()) {
+      this.setOwnsPipeline(true);
+    }
+    return { ok: true };
+  }
+
   hydrateOwnsPipelinePref() {
     const pref = loadOwnsPipelinePref();
     if (pref != null) this.owns_pipeline_pref = pref;

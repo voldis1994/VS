@@ -276,7 +276,7 @@ export function MasterPage() {
             ? `SCALP chase · soft£${status.manage.soft_trail_money_arm ?? 0} · TP×${status.manage.multi_tp_count ?? 0}`
             : 'structure/MFE (preset off)',
         },
-        { k: 'Owns pipeline', v: status.owns_pipeline ? 'YES' : 'no' },
+        { k: 'Owns pipeline', v: status.owns_pipeline ? 'YES' : 'no', ok: !!status.owns_pipeline, bad: status.mode === 'LIVE' && !status.owns_pipeline },
         {
           k: 'Entries',
           v: status.entries_armed === false
@@ -615,6 +615,13 @@ export function MasterPage() {
           disabled={busy}
           onClick={() =>
             void act('start-live', async () => {
+              // Capital LIVE single-owner — enable owns before arming LIVE
+              if (!status?.owns_pipeline) {
+                await apiFetch('/api/master/control', {
+                  method: 'POST',
+                  body: JSON.stringify({ owns_pipeline: true }),
+                });
+              }
               await apiFetch('/api/master/control', {
                 method: 'POST',
                 body: JSON.stringify({ mode: 'LIVE', epic: epicInput }),
@@ -748,12 +755,18 @@ export function MasterPage() {
           className="btn"
           disabled={busy}
           onClick={() =>
-            void act('capital-attach', () =>
-              apiFetch('/api/master/broker/capital/attach', {
+            void act('capital-attach', async () => {
+              if (!status?.owns_pipeline) {
+                await apiFetch('/api/master/control', {
+                  method: 'POST',
+                  body: JSON.stringify({ owns_pipeline: true }),
+                });
+              }
+              return apiFetch('/api/master/broker/capital/attach', {
                 method: 'POST',
                 body: '{}',
-              })
-            )
+              });
+            })
           }
         >
           Attach Capital

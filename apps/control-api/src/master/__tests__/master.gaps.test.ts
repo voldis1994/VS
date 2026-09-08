@@ -791,6 +791,29 @@ describe('MASTER paper recover + protective fills + close stub', () => {
 });
 
 describe('masterOwnsManageSafely', () => {
+  it('ensureOwnsPipelineForCapitalLive defaults ON and refuses explicit OFF', () => {
+    const prev = process.env.MASTER_OWNS_PIPELINE;
+    const prevPref = masterRuntime.owns_pipeline_pref;
+    try {
+      masterRuntime.owns_pipeline_pref = null;
+      delete process.env.MASTER_OWNS_PIPELINE;
+      expect(masterRuntime.ownsPipelineEffective()).toBe(false);
+      const on = masterRuntime.ensureOwnsPipelineForCapitalLive();
+      expect(on.ok).toBe(true);
+      expect(masterRuntime.ownsPipelineEffective()).toBe(true);
+
+      masterRuntime.setOwnsPipeline(false);
+      const off = masterRuntime.ensureOwnsPipelineForCapitalLive();
+      expect(off.ok).toBe(false);
+      if (!off.ok) expect(off.detail).toMatch(/owns_pipeline is OFF/);
+      expect(masterRuntime.ownsPipelineEffective()).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.MASTER_OWNS_PIPELINE;
+      else process.env.MASTER_OWNS_PIPELINE = prev;
+      masterRuntime.owns_pipeline_pref = prevPref;
+    }
+  });
+
   it('defers when owns-pipeline but live Capital position and no CAPITAL broker', () => {
     const prev = process.env.MASTER_OWNS_PIPELINE;
     const prevPref = masterRuntime.owns_pipeline_pref;

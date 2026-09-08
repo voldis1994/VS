@@ -90,6 +90,12 @@ export async function registerMasterRoutes(app: FastifyInstance) {
             status: masterRuntime.status(),
           };
         }
+        if (body.mode === 'LIVE') {
+          const owns = masterRuntime.ensureOwnsPipelineForCapitalLive();
+          if (!owns.ok) {
+            return { ok: false, detail: owns.detail, status: masterRuntime.status() };
+          }
+        }
         masterRuntime.setMode(body.mode);
       }
       if (typeof body.kill_switch === 'boolean') {
@@ -190,6 +196,19 @@ export async function registerMasterRoutes(app: FastifyInstance) {
           broker: resolved.broker.name,
           status: masterRuntime.status(),
         };
+      }
+      // Single-owner: Capital LIVE defaults owns_pipeline ON; refuse explicit OFF
+      if (wantLive && liveOk) {
+        const owns = masterRuntime.ensureOwnsPipelineForCapitalLive();
+        if (!owns.ok) {
+          masterRuntime.setMode('PAPER');
+          return {
+            ok: false,
+            detail: owns.detail,
+            broker: resolved.broker.name,
+            status: masterRuntime.status(),
+          };
+        }
       }
       // Do not swap Capital env/account while LIVE opens remain on the prior identity
       if (wantLive && liveOk) {
@@ -397,6 +416,15 @@ export async function registerMasterRoutes(app: FastifyInstance) {
         broker: masterRuntime.broker?.name ?? null,
       };
     }
+    const owns = masterRuntime.ensureOwnsPipelineForCapitalLive();
+    if (!owns.ok) {
+      return {
+        ok: false,
+        detail: owns.detail,
+        broker: resolved.broker.name,
+        mode: resolved.mode,
+      };
+    }
     masterRuntime.stop();
     masterRuntime.attachBroker(resolved.broker);
     masterRuntime.broker_detail = resolved.detail;
@@ -409,6 +437,7 @@ export async function registerMasterRoutes(app: FastifyInstance) {
       mode: masterRuntime.cfg.mode,
       running: masterRuntime.running,
       detail: resolved.detail,
+      owns_pipeline: masterRuntime.ownsPipelineEffective(),
     };
   });
 
@@ -617,7 +646,7 @@ async function refresh(){
       card('Quote',s.quote?(Number(s.quote.mid).toFixed(2)+' · '+Math.round((s.quote.age_ms||0)/1000)+'s'+(s.quote.stream_healthy===true?' · WS':s.quote.stream_healthy===false?' · REST':'')):'—', (s.quote&&(s.quote.stale===true||(s.quote.stale==null&&s.quote.age_ms>(s.quote.stale_quote_ms||15000))))?'bad':'ok'),
       card('Float UPL',s.floating_pnl!=null?Number(s.floating_pnl).toFixed(2):'—', s.floating_pnl==null?'':(s.floating_pnl<0?'bad':(s.floating_pnl>0?'ok':'')),
       card('Manage',s.manage&&s.manage.scalp_pct_chase?'SCALP chase on':'structure/MFE'),
-      card('Owns pipeline',s.owns_pipeline?'YES':'no'),
+      card('Owns pipeline',s.owns_pipeline?'YES':'no',s.owns_pipeline?'ok':(s.mode==='LIVE'?'bad':'')),
       card('Entries',s.entries_armed===false?('PAUSED'+(s.entries_pause_reason?' · '+s.entries_pause_reason:'')):'armed',s.entries_armed===false?'bad':'ok'),
       card('AI mode',s.ai_mode||'—'),
       card('Running',s.running?'YES':'NO',s.running?'ok':''),
@@ -697,7 +726,7 @@ async function refresh(){
   }catch(e){pushLog('status error '+e)}
 }
 document.getElementById('btnStart').onclick=async()=>{const s=await fetch('/api/master/status').then(r=>r.json());if(s.capital_live_attached&&((s.open_positions||0)>0||(s.capital_venue_opens||0)>0||s.capital_venue_opens_proven===false)){pushLog('refuse Start PAPER — Flatten all Capital opens first');return;}await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'PAPER'})});const r=await fetch('/api/master/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'PAPER'})}).then(r=>r.json());pushLog('start PAPER ok='+r.ok+' '+(r.detail||''));refresh()};
-document.getElementById('btnLive').onclick=async()=>{await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'LIVE'})});const r=await fetch('/api/master/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'LIVE'})}).then(r=>r.json());pushLog('start LIVE ok='+r.ok+' '+(r.detail||'')+' mode='+(r.status&&r.status.mode));refresh()};
+document.getElementById('btnLive').onclick=async()=>{const s0=await fetch('/api/master/status').then(r=>r.json());if(!s0.owns_pipeline){await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({owns_pipeline:true})});}await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'LIVE'})});const r=await fetch('/api/master/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'LIVE'})}).then(r=>r.json());pushLog('start LIVE ok='+r.ok+' '+(r.detail||'')+' mode='+(r.status&&r.status.mode));refresh()};
 document.getElementById('btnStop').onclick=async()=>{const r=await fetch('/api/master/stop',{method:'POST'}).then(r=>r.json());pushLog('stop');refresh()};
 document.getElementById('btnRecover').onclick=async()=>{const r=await fetch('/api/master/recover',{method:'POST'}).then(r=>r.json());pushLog('recover positions='+r.positions+' journal='+r.opportunities);refresh()};
 document.getElementById('btnKill').onclick=async()=>{kill=!kill;await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kill_switch:kill})});pushLog('kill_switch='+kill);refresh()};
@@ -706,7 +735,7 @@ document.getElementById('btnFlatten').onclick=async()=>{const r=await fetch('/ap
 document.getElementById('btnAi').onclick=async()=>{ai=ai==='off'?'advisory':'off';await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ai_mode:ai})});pushLog('ai_mode='+ai);refresh()};
 document.getElementById('btnOwns').onclick=async()=>{const s=await fetch('/api/master/status').then(r=>r.json());const on=!s.owns_pipeline;await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({owns_pipeline:on})});pushLog('owns_pipeline='+on);refresh()};
 document.getElementById('btnCapital').onclick=async()=>{const r=await fetch('/api/master/broker/capital/probe',{method:'POST'}).then(r=>r.json());pushLog('capital probe '+JSON.stringify(r).slice(0,200));refresh()};
-document.getElementById('btnCapitalAttach').onclick=async()=>{const r=await fetch('/api/master/broker/capital/attach',{method:'POST',headers:{'content-type':'application/json'},body:'{}'}).then(r=>r.json());pushLog('capital attach '+JSON.stringify(r).slice(0,200));refresh()};
+document.getElementById('btnCapitalAttach').onclick=async()=>{const s0=await fetch('/api/master/status').then(r=>r.json());if(!s0.owns_pipeline){await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({owns_pipeline:true})});}const r=await fetch('/api/master/broker/capital/attach',{method:'POST',headers:{'content-type':'application/json'},body:'{}'}).then(r=>r.json());pushLog('capital attach '+JSON.stringify(r).slice(0,200));refresh()};
 document.getElementById('btnMt4').onclick=async()=>{const bridge=prompt('MT4 bridge root path','/tmp/vs-mt4-bridge');if(!bridge)return;const r=await fetch('/api/master/broker/mt4',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bridge_root:bridge})}).then(r=>r.json());pushLog('mt4 '+JSON.stringify(r).slice(0,200));refresh()};
 refresh();setInterval(refresh,2000);
 </script>
