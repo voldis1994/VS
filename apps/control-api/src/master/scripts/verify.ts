@@ -209,7 +209,7 @@ async function main() {
       legacy_mt4_optional_ok: mt4Legacy,
       capital_live_network_ok: capitalLive,
       note: capitalLive
-        ? 'All objective requirements verified including Capital.com network LIVE (primary venue)'
+        ? 'Capital.com network connectivity proven (quote+equity+open-list). Live mutate covered by mocked livePath — not a live-mutate network proof'
         : allCore
           ? 'Paper + live-data + mocked Capital verified; primary LIVE is Capital.com — set CAPITAL_* env or Brokers-page Capital credentials (not MT4 bridge)'
           : 'One or more core requirements failed',

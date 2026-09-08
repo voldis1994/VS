@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  CapitalQuoteStream,
   capitalStreamEndpoint,
   parseCapitalStreamQuote,
 } from '../capitalStream.js';
@@ -7,6 +8,7 @@ import { modifyCapitalPosition } from '../../services/capitalCom.js';
 import { PaperBroker } from '../broker.js';
 import { PositionManager } from '../positionManager.js';
 import { MasterPipeline } from '../pipeline.js';
+import WebSocket from 'ws';
 
 describe('Capital stream parse', () => {
   it('parses quote destination with ofr', () => {
@@ -44,6 +46,44 @@ describe('Capital stream parse', () => {
     expect(capitalStreamEndpoint('https://api-capital.backend-capital.com')).toContain(
       'api-streaming'
     );
+  });
+
+  it('isHealthy(epic) requires that epic tick — foreign ticks do not keep GOLD healthy', () => {
+    const stream = new CapitalQuoteStream();
+    (stream as any).ws = { readyState: WebSocket.OPEN };
+    (stream as any).lastQuoteAt = Date.now();
+    (stream as any).latest = new Map([
+      [
+        'SILVER',
+        {
+          epic: 'SILVER',
+          bid: 30,
+          offer: 30.1,
+          mid: 30.05,
+          ts_ms: Date.now(),
+        },
+      ],
+    ]);
+    expect(stream.isHealthy(30_000)).toBe(true);
+    expect(stream.isHealthy(30_000, 'SILVER')).toBe(true);
+    expect(stream.isHealthy(30_000, 'GOLD')).toBe(false);
+
+    (stream as any).latest.set('GOLD', {
+      epic: 'GOLD',
+      bid: 4400,
+      offer: 4400.4,
+      mid: 4400.2,
+      ts_ms: Date.now() - 60_000,
+    });
+    expect(stream.isHealthy(30_000, 'GOLD')).toBe(false);
+    (stream as any).latest.set('GOLD', {
+      epic: 'GOLD',
+      bid: 4400,
+      offer: 4400.4,
+      mid: 4400.2,
+      ts_ms: Date.now(),
+    });
+    expect(stream.isHealthy(30_000, 'GOLD')).toBe(true);
   });
 });
 
@@ -284,5 +324,92 @@ describe('native trail arm on scalp chase', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('absolute SL modify clears native_trail_armed after trail-off success', async () => {
+    const broker = new PaperBroker();
+    (broker as { supportsNativeTrailingStop?: boolean }).supportsNativeTrailingStop = true;
+    await broker.connect();
+    const entry = 4400;
+    const mark = entry + 20;
+    broker.setQuote({
+      bid: mark - 0.05,
+      ask: mark + 0.05,
+      mid: mark,
+      spread: 0.1,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'clear-trail-aaaaaaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: entry - 40,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-ct',
+      intent_id: 'ct-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry,
+      stop_loss: entry - 40,
+      take_profit: entry + 80,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {
+          regime: 'TREND',
+          market_state: 't',
+          momentum_score: 0.5,
+          momentum_dir: 'UP',
+          trend_dir: 'UP',
+          trend_strength: 0.8,
+          structure_bias: 'BULLISH',
+          swing_high: entry + 50,
+          swing_low: entry - 50,
+          buy_pressure: 0.7,
+          sell_pressure: 0.3,
+          behavior_bull: 0.7,
+          behavior_bear: 0.3,
+          impact_score: 0.5,
+          context_quality: 0.8,
+          volatility: 0.001,
+          atr: 2,
+        },
+        expectancy: null,
+      },
+    });
+    const pos = pm.get(placed.position_id!)!;
+    pos.native_trail_armed = true;
+    // Force BE path: money need low + absolute stop_level modify
+    await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: mark - 0.05,
+        ask: mark + 0.05,
+        mid: mark,
+        spread: 0.1,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      scalp_pct_chase: false,
+      breakeven_progress: 0.1,
+      breakeven_offset: 0,
+      be_start: 1,
+      max_hold_ms: 0,
+      allow_close: false,
+    });
+    expect(pm.get(placed.position_id!)!.native_trail_armed).toBe(false);
   });
 });

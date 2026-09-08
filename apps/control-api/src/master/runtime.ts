@@ -2254,7 +2254,8 @@ class MasterRuntime {
           }
           seeded = true;
           const streamNote =
-            this.broker instanceof CapitalBroker && this.broker.isMarketStreamHealthy()
+            this.broker instanceof CapitalBroker &&
+            this.broker.isMarketStreamHealthy(undefined, this.epic)
               ? 'stream:ok'
               : 'stream:rest';
           this.broker_detail = `${this.broker_detail || brokerName};broker_feed:${brokerName};seed:${seedDetail};${streamNote}`.slice(
@@ -2637,7 +2638,7 @@ class MasterRuntime {
       : null;
     const streamHealthy =
       this.broker instanceof CapitalBroker
-        ? this.broker.isMarketStreamHealthy()
+        ? this.broker.isMarketStreamHealthy(undefined, this.epic)
         : null;
     const monitoring = this.monitor.snapshot(
       quote ? Math.max(0, Date.now() - (quote.ts_ms || 0)) : null

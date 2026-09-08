@@ -711,9 +711,9 @@ export class CapitalBroker implements MasterBroker {
     );
   }
 
-  /** VS-System: true when WS is open and a quote arrived recently. */
-  isMarketStreamHealthy(maxAgeMs = 30_000): boolean {
-    return this.stream.isHealthy(maxAgeMs);
+  /** VS-System: true when WS is open and a quote arrived recently (optionally per-epic). */
+  isMarketStreamHealthy(maxAgeMs = 30_000, epic?: string): boolean {
+    return this.stream.isHealthy(maxAgeMs, epic);
   }
 
   /** Subscribe epics on Capital streaming WS (best-effort). */
@@ -764,8 +764,8 @@ export class CapitalBroker implements MasterBroker {
     let knownNotTradeable =
       statusFetched() && !capitalMarketAllowsTrading(cachedStatus);
 
-    // Stream path — but if REST already said not TRADEABLE/OPEN, force REST
-    if (streamed && this.stream.isHealthy() && !knownNotTradeable) {
+    // Stream path — require THIS epic's tick fresh (foreign ticks must not keep GOLD "healthy")
+    if (streamed && this.stream.isHealthy(undefined, apiEpic) && !knownNotTradeable) {
       // Slide pool TTL without blocking the mark
       void this.ensureSession();
       const mid = streamed.mid;
@@ -2260,6 +2260,9 @@ export class CapitalBroker implements MasterBroker {
     let gotSl: number | null = null;
     let gotTp: number | null = null;
     let hitEpic: string | null = null;
+    let stillTrailing = false;
+    const absoluteSlOffTrail =
+      hasLevel && input.trailing_stop !== true;
     for (let attempt = 0; attempt < attempts; attempt++) {
       if (attempt > 0) {
         await new Promise((r) =>
@@ -2333,6 +2336,13 @@ export class CapitalBroker implements MasterBroker {
       let slOk = !needsSlProof;
       if (needsSlProof && hasLevel && wantSl != null && gotSl != null) {
         slOk = Math.abs(gotSl - wantSl) <= tolAbs;
+        // Absolute stop after native trail: SL match alone is not enough if trail still on
+        if (slOk && absoluteSlOffTrail && hit.trailing_stop === true) {
+          stillTrailing = true;
+          slOk = false;
+        } else if (slOk && absoluteSlOffTrail) {
+          stillTrailing = false;
+        }
       } else if (needsSlProof && !hasLevel && gotSl != null) {
         // stopDistance / native trail: require SL moved or trailingStop flag.
         // Unchanged SL + gap≈dist alone is NOT proof when confirm timed out —
@@ -2396,6 +2406,17 @@ export class CapitalBroker implements MasterBroker {
       };
     }
     if (hasLevel && wantSl != null && needsSlProof) {
+      if (
+        stillTrailing &&
+        gotSl != null &&
+        Math.abs(gotSl - wantSl) <= tolAbs
+      ) {
+        return {
+          ok: false,
+          detail: 'modify_sl_still_trailing',
+          order_id: res.deal_reference,
+        };
+      }
       return {
         ok: false,
         detail: `modify_sl_unverified: want=${wantSl} got=${gotSl}`,

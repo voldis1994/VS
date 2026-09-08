@@ -77,13 +77,19 @@ export class CapitalQuoteStream {
     this.tokens = tokens;
   }
 
-  isHealthy(maxAgeMs = 30_000): boolean {
-    return (
-      !!this.ws &&
-      this.ws.readyState === WebSocket.OPEN &&
-      this.lastQuoteAt > 0 &&
-      Date.now() - this.lastQuoteAt < maxAgeMs
-    );
+  isHealthy(maxAgeMs = 30_000, epic?: string): boolean {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
+    // Per-epic freshness — a quote on SILVER must not keep GOLD stream "healthy"
+    if (epic) {
+      const q = this.getLatest(epic);
+      return (
+        !!q &&
+        Number.isFinite(q.ts_ms) &&
+        q.ts_ms > 0 &&
+        Date.now() - q.ts_ms < maxAgeMs
+      );
+    }
+    return this.lastQuoteAt > 0 && Date.now() - this.lastQuoteAt < maxAgeMs;
   }
 
   getLatest(epic: string): CapitalStreamQuote | null {

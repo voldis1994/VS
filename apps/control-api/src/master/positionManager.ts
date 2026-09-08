@@ -1154,6 +1154,15 @@ export class PositionManager {
       ok: !!mod.ok,
       detail: `${reason}${mod.detail ? `:${mod.detail}` : ''}`,
     });
+    // Absolute SL (BE/scalp/EMA trail) proved off native trail — clear local arm flag
+    if (
+      mod.ok &&
+      patch.stop_level != null &&
+      Number.isFinite(patch.stop_level) &&
+      patch.trailing_stop !== true
+    ) {
+      pos.native_trail_armed = false;
+    }
     return mod;
   }
 
