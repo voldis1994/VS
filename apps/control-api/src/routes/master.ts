@@ -463,7 +463,7 @@ async function refresh(){
     const s=await fetch('/api/master/status').then(r=>r.json());
     kill=!!s.kill_switch;
     const why=s.last_block_reason||s.last_execution_detail||s.last_decision?.kind||'—';
-    const whyCls=s.last_block_reason?'bad':'ok';
+    const whyCls=(s.last_block_reason||s.monitoring?.entry_block_reason)?'bad':'ok';
     cards.innerHTML=[
       card('Mode',s.mode),
       card('Epic',s.epic||'—'),

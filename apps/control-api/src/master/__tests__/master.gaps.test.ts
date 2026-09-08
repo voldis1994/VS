@@ -985,6 +985,7 @@ describe('runtime gates persist', () => {
       saveRuntimeGates({
         last_loss_ms: 12345,
         reject_until_ms: 67890,
+        inflight_until_ms: 99999,
         day_start_equity: 10_250.5,
         peak_equity: 11_000,
         daily_pnl_day: '2026-09-07',
@@ -993,6 +994,7 @@ describe('runtime gates persist', () => {
     expect(loadRuntimeGates()).toEqual({
       last_loss_ms: 12345,
       reject_until_ms: 67890,
+      inflight_until_ms: 99999,
       day_start_equity: 10_250.5,
       peak_equity: 11_000,
       daily_pnl_day: '2026-09-07',
@@ -2160,5 +2162,80 @@ describe('partial_close persist + Check be_start', () => {
     });
     expect(managed.closed.length).toBe(0);
     expect(pm.count()).toBe(1);
+  });
+});
+
+describe('cycle alerts block entries on stale tick', () => {
+  it('stale quote sets alert block and refuses OPEN', async () => {
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = mkdtempSync(join(tmpdir(), 'vs-stale-alert-'));
+    const { ALERT_DATA_STALE } = await import('../cycleAlerts.js');
+
+    masterRuntime.pipeline = new MasterPipeline('PAPER');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.running = true;
+    masterRuntime.entries_armed = true;
+    masterRuntime.last_loss_ms = 0;
+    masterRuntime.reject_until_ms = 0;
+    (masterRuntime as unknown as { inflight_until_ms: number }).inflight_until_ms = 0;
+    masterRuntime.account = {
+      equity: 10_000,
+      balance: 10_000,
+      currency: 'GBP',
+      open_positions: 0,
+      daily_pnl: 0,
+      daily_pnl_day: new Date().toISOString().slice(0, 10),
+      day_start_equity: 10_000,
+      peak_equity: 10_000,
+      consecutive_losses: 0,
+      trade_allowed: true,
+    };
+    masterRuntime.cfg = {
+      ...DEFAULT_MASTER_CONFIG,
+      mode: 'PAPER',
+      min_score: 0.25,
+      stale_quote_ms: 15_000,
+      block_off_hours: false,
+      block_high_impact_news: false,
+      max_relative_volatility: 100,
+      max_relative_spread: 100,
+      cooldown_ms_after_loss: 0,
+      max_daily_loss_pct: 0.99,
+      max_drawdown_pct: 0.99,
+    };
+    const broker = masterRuntime.ensurePaperBroker();
+    const bars = Array.from({ length: 50 }, (_, i) => {
+      const o = 4400 + i * 1.5;
+      return {
+        open: o,
+        high: o + 2,
+        low: o - 0.2,
+        close: o + 1.4,
+        ts_ms: Date.UTC(2026, 8, 7, 12, i),
+      };
+    });
+    const quote = {
+      bid: 4475,
+      ask: 4475.4,
+      mid: 4475.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now() - 60_000, // stale vs 15s threshold
+    };
+    broker.setQuote(quote);
+    const r = await masterRuntime.tick(bars, quote);
+    expect(r.executed).toBe(false);
+    expect(String(r.execution_detail || '')).toMatch(
+      new RegExp(`alert:${ALERT_DATA_STALE}`)
+    );
+    const st = masterRuntime.status();
+    expect(st.monitoring?.entry_block_reason).toMatch(
+      new RegExp(`alert:${ALERT_DATA_STALE}`)
+    );
+    expect(String(st.last_block_reason || '')).toMatch(
+      new RegExp(`alert:${ALERT_DATA_STALE}`)
+    );
+    if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+    else process.env.MASTER_STATE_DIR = prev;
   });
 });

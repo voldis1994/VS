@@ -726,6 +726,11 @@ export class CapitalBroker implements MasterBroker {
         continue;
       }
     }
+    logMasterError({
+      module: 'capital.waitConfirm',
+      error_type: 'ACK_TIMEOUT',
+      message: `confirm_timeout ref=${dealReference}`,
+    });
     return { ok: false, detail: `confirm_timeout ref=${dealReference}` };
   }
 
@@ -992,23 +997,35 @@ export class CapitalBroker implements MasterBroker {
       );
       if (ghost) {
         await this.deps.close(this.session, ghost.position_id);
+        const detail = `capital_unconfirmed_fail_closed:${opened.detail}`;
+        logMasterError({
+          module: 'capital.placeOrder',
+          error_type: 'ACK_TIMEOUT',
+          message: detail,
+        });
         return {
           ok: false,
           order_id: opened.deal_reference || null,
           position_id: null,
           fill_price: null,
           fill_size: null,
-          detail: `capital_unconfirmed_fail_closed:${opened.detail}`,
+          detail,
           paper: false,
         };
       }
+      const detail = `capital_unconfirmed:${opened.detail}`;
+      logMasterError({
+        module: 'capital.placeOrder',
+        error_type: 'ACK_TIMEOUT',
+        message: detail,
+      });
       return {
         ok: false,
         order_id: opened.deal_reference || null,
         position_id: null,
         fill_price: null,
         fill_size: null,
-        detail: `capital_unconfirmed:${opened.detail}`,
+        detail,
         paper: false,
       };
     }

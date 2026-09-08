@@ -245,7 +245,7 @@ export function MasterPage() {
         { k: 'BUY', v: Number(status.buy_score || 0).toFixed(3) },
         { k: 'SELL', v: Number(status.sell_score || 0).toFixed(3) },
         { k: 'Decision', v: status.last_decision?.kind || '—' },
-        { k: 'Why', v: why, bad: !!status.last_block_reason },
+        { k: 'Why', v: why, bad: !!status.last_block_reason || !!status.monitoring?.entry_block_reason },
         { k: 'Last exit', v: status.last_exit_reason || '—' },
         {
           k: 'Equity',

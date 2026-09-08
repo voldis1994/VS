@@ -425,6 +425,7 @@ class MasterRuntime {
         saveRuntimeGates({
           last_loss_ms: this.last_loss_ms,
           reject_until_ms: this.reject_until_ms,
+          inflight_until_ms: this.inflight_until_ms,
           day_start_equity: this.account.day_start_equity ?? null,
           peak_equity: this.account.peak_equity,
           daily_pnl_day: this.account.daily_pnl_day ?? null,
@@ -998,6 +999,7 @@ class MasterRuntime {
 
       if (brokerVerifyOk) {
       this.inflight_until_ms = Date.now() + 90_000;
+      this.persistRuntimeGates();
       const { execution, place } = await executeDecision({
         broker,
         pipeline: this.pipeline,
@@ -1034,6 +1036,7 @@ class MasterRuntime {
       if (execution.accepted && place?.position_id) {
         executed = true;
         this.inflight_until_ms = 0;
+        this.persistRuntimeGates();
         this.seenIntentSnapshot.push(execution.intent_id);
         const fill =
           place.fill_price ??
@@ -1142,14 +1145,24 @@ class MasterRuntime {
         // Ambiguous OPEN ACK timeout — keep inflight so we do not double-open
         // while EA may still fill (Check- holds pending_open until ACK/timeout window).
         const ambiguousTimeout =
-          /ack_timeout|ACK_TIMEOUT|not_confirmed|unconfirmed/i.test(
+          /ack_timeout|ACK_TIMEOUT|not_confirmed|unconfirmed|confirm_timeout/i.test(
             execution.detail || ''
           );
         if (!ambiguousTimeout) {
           this.inflight_until_ms = 0;
+          this.persistRuntimeGates();
+        } else {
+          // Capital/MT4 ambiguous OPEN — durable ACK_TIMEOUT for cycle alert gate after restart
+          logMasterError({
+            module: 'runtime.entry',
+            error_type: 'ACK_TIMEOUT',
+            message: execution.detail || 'ACK_TIMEOUT',
+            context: { epic: this.epic, broker: broker.name },
+          });
+          this.persistRuntimeGates();
         }
         if (
-          /reject|RISK_CHECK|not_confirmed|CAPITAL_SL|unconfirmed|ack_timeout|ACK_TIMEOUT/i.test(
+          /reject|RISK_CHECK|not_confirmed|CAPITAL_SL|unconfirmed|ack_timeout|ACK_TIMEOUT|confirm_timeout/i.test(
             execution.detail
           )
         ) {
@@ -1249,6 +1262,10 @@ class MasterRuntime {
       this.reject_until_ms = Math.max(
         this.reject_until_ms,
         gates.reject_until_ms || 0
+      );
+      this.inflight_until_ms = Math.max(
+        this.inflight_until_ms,
+        gates.inflight_until_ms || 0
       );
       if (gates.daily_pnl_day) {
         this.account.daily_pnl_day = gates.daily_pnl_day;
@@ -1512,12 +1529,10 @@ class MasterRuntime {
           q = null;
         }
         if (!q) {
-          // Feed miss must not freeze exits — manage on last bars/quote
+          // Feed miss must not freeze exits — manage on last bars/quote.
+          // Keep aged ts_ms so DATA_STALE / entry gates stay honest (do not forge freshness).
           if (this.last_bars.length >= 5 && this.last_quote) {
-            await this.tick(this.last_bars, {
-              ...this.last_quote,
-              ts_ms: Date.now(),
-            });
+            await this.tick(this.last_bars, this.last_quote);
           }
           return;
         }
@@ -1621,13 +1636,11 @@ class MasterRuntime {
         } catch {
           snap = null;
         }
-        // Feed failure must not freeze exits (TIME_STOP / SL) — manage on last bars
+        // Feed failure must not freeze exits (TIME_STOP / SL) — manage on last bars.
+        // Keep aged ts_ms so DATA_STALE / entry gates stay honest (do not forge freshness).
         if (!snap?.ok || !snap.quote) {
           if (this.last_bars.length >= 5 && this.last_quote) {
-            await this.tick(this.last_bars, {
-              ...this.last_quote,
-              ts_ms: Date.now(),
-            });
+            await this.tick(this.last_bars, this.last_quote);
           }
           return;
         }
@@ -1713,6 +1726,9 @@ class MasterRuntime {
       this.broker instanceof CapitalBroker
         ? this.broker.isMarketStreamHealthy()
         : null;
+    const monitoring = this.monitor.snapshot(
+      quote ? Math.max(0, Date.now() - (quote.ts_ms || 0)) : null
+    );
     return {
       mode: this.cfg.mode,
       running: this.running,
@@ -1726,6 +1742,7 @@ class MasterRuntime {
       last_risk: this.last_risk,
       last_block_reason:
         this.last_decision?.block_reason ||
+        monitoring.entry_block_reason ||
         this.last_risk?.reasons.join(',') ||
         null,
       last_execution_detail: this.last_execution_detail,
@@ -1780,9 +1797,7 @@ class MasterRuntime {
         message: e.message,
       })),
       manage: pickManageConfig(this.cfg),
-      monitoring: this.monitor.snapshot(
-        quote ? Math.max(0, Date.now() - (quote.ts_ms || 0)) : null
-      ),
+      monitoring,
       recent_decisions: loadDecisionEvents(12).map((e) => ({
         ts: e.ts,
         kind: e.kind,

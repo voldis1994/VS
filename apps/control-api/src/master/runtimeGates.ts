@@ -9,6 +9,8 @@ import { atomicWriteJson } from './atomicIo.js';
 export type RuntimeGates = {
   last_loss_ms: number;
   reject_until_ms: number;
+  /** Ambiguous OPEN window — survive restart so we do not double-open */
+  inflight_until_ms?: number | null;
   /** Equity baseline for daily $ gates — must survive restart */
   day_start_equity?: number | null;
   peak_equity?: number | null;
@@ -36,6 +38,10 @@ export function saveRuntimeGates(gates: RuntimeGates): boolean {
     return atomicWriteJson(gatesPath(), {
       last_loss_ms: gates.last_loss_ms || 0,
       reject_until_ms: gates.reject_until_ms || 0,
+      inflight_until_ms:
+        gates.inflight_until_ms != null && Number.isFinite(gates.inflight_until_ms)
+          ? Math.max(0, Math.floor(Number(gates.inflight_until_ms)))
+          : 0,
       day_start_equity:
         gates.day_start_equity != null && Number.isFinite(gates.day_start_equity)
           ? Number(gates.day_start_equity)
@@ -66,6 +72,7 @@ export function loadRuntimeGates(): RuntimeGates | null {
     return {
       last_loss_ms: Number(raw.last_loss_ms) || 0,
       reject_until_ms: Number(raw.reject_until_ms) || 0,
+      inflight_until_ms: Number(raw.inflight_until_ms) || 0,
       day_start_equity: Number.isFinite(dayStart) && dayStart > 0 ? dayStart : null,
       peak_equity: Number.isFinite(peak) && peak > 0 ? peak : null,
       daily_pnl_day:
