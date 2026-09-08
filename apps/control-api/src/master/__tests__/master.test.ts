@@ -175,6 +175,73 @@ describe('VS MASTER EMA3 trail manage', () => {
     expect(mods.length).toBeGreaterThan(0);
     expect(mods.some((e) => e.opportunity_id === 'opp-ema3')).toBe(true);
   });
+
+  it('lowers SELL stop toward EMA3 above mark', async () => {
+    const { PaperBroker } = await import('../broker.js');
+    const { PositionManager } = await import('../positionManager.js');
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    broker.setQuote({
+      bid: 4390,
+      ask: 4390.4,
+      mid: 4390.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'ema3-trail-sellbbbbbbbb',
+      epic: 'GOLD',
+      side: 'SELL',
+      size: 0.1,
+      stop_level: entry + 5,
+      profit_level: entry - 20,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-ema3-sell',
+      intent_id: 'ema3-sell-1',
+      epic: 'GOLD',
+      side: 'SELL',
+      size: 0.1,
+      entry,
+      stop_loss: entry + 5,
+      take_profit: entry - 20,
+      decision: {
+        decision_id: 'd',
+        kind: 'SELL',
+        side: 'SELL',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: analyzeBars(barsTrendDown(), 0.4),
+        expectancy: null,
+      },
+    });
+    const ema3 = 4392; // below current SL 4405, above mark ask 4390.4
+    await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: 4390,
+        ask: 4390.4,
+        mid: 4390.2,
+        spread: 0.4,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      ema3,
+      scalp_pct_chase: false,
+      breakeven_progress: 0,
+      max_hold_ms: 0,
+      allow_close: false,
+    });
+    expect(pm.get(placed.position_id!)!.stop_loss).toBeCloseTo(ema3, 5);
+  });
 });
 
 describe('VS MASTER decision + risk', () => {

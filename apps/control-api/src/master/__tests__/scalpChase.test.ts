@@ -322,4 +322,58 @@ describe('scalp chase throttle durability', () => {
     expect(loaded).toHaveLength(1);
     expect(loaded[0]!.scalp_chase_at_ms).toBe(stamped);
   });
+
+  it('soft_trail_armed_at + peak survive file persist round-trip', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vs-soft-fp-'));
+    process.env.MASTER_STATE_DIR = dir;
+    const { installFilePersist } = await import('../filePersist.js');
+    const { saveOpenPositions, loadOpenPositions } = await import('../persist.js');
+    const { PositionManager } = await import('../positionManager.js');
+    installFilePersist(dir);
+    const pm = new PositionManager();
+    pm.register({
+      position_id: 'soft-fp-1',
+      opportunity_id: 'opp-soft',
+      intent_id: 'i-soft',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4400,
+      stop_loss: 4390,
+      take_profit: 4420,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {
+          regime: 'TREND',
+          market_state: 'UP',
+          session: 'LONDON',
+          volatility: 0.001,
+          atr: 1,
+          trend: 'UP',
+          structure_bias: 'BULLISH',
+          data_quality: 1,
+          bar_count: 50,
+          last_close: 4400,
+          spread: 0.2,
+          swing_high: 4410,
+          swing_low: 4390,
+        } as never,
+        expectancy: null,
+      },
+    });
+    const armed = new Date().toISOString();
+    pm.get('soft-fp-1')!.soft_trail_armed_at = armed;
+    pm.get('soft-fp-1')!.soft_trail_peak = 4412.5;
+    expect(await saveOpenPositions(pm.list())).toBe(true);
+    const loaded = await loadOpenPositions();
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]!.soft_trail_armed_at).toBe(armed);
+    expect(loaded[0]!.soft_trail_peak).toBeCloseTo(4412.5, 8);
+  });
 });

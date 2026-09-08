@@ -1968,11 +1968,11 @@ export class Mt4FileBroker implements MasterBroker {
             : waited.ack?.close != null
               ? Number(waited.ack.close)
               : null;
-      const profitRaw = Number(
+      const fill_price = fill != null && Number.isFinite(fill) ? fill : null;
+      // Missing ack profit must stay null — Number(null) would invent fill_pnl=0
+      const fill_pnl = numOrNull(
         waited.ack?.profit ?? waited.ack?.Profit ?? waited.ack?.pnl
       );
-      const fill_pnl = Number.isFinite(profitRaw) ? profitRaw : null;
-      const fill_price = fill != null && Number.isFinite(fill) ? fill : null;
       // ACK alone is not enough — prove ticket gone from status (Cap/Check honesty)
       const flat = await this.waitForTicketFlat(String(position_id));
       if (!flat.ok) {
@@ -2298,8 +2298,15 @@ export class Mt4FileBroker implements MasterBroker {
 }
 
 function numOrNull(v: unknown): number | null {
-  const n = Number(v);
+  // Number(null) and Number('') are 0 — treat missing fields as null
+  if (v == null || v === '') return null;
+  const n = typeof v === 'number' ? v : Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+/** @internal exported for unit tests */
+export function mt4NumOrNull(v: unknown): number | null {
+  return numOrNull(v);
 }
 
 export function listMt4AckFiles(bridgeRoot: string): string[] {

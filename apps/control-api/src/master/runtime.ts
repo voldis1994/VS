@@ -338,7 +338,10 @@ class MasterRuntime {
       this.account.consecutive_losses = 0;
     }
     this.last_exit_reason = reason;
-    this.trackPersist('outcome', persistOutcome(pos.opportunity_id, outcome, null));
+    const sk = pos.decision?.side
+      ? setupKey(pos.decision.analysis, pos.decision.side)
+      : null;
+    this.trackPersist('outcome', persistOutcome(pos.opportunity_id, outcome, sk));
     this.trackPersist('open_positions', saveOpenPositions(this.positions.list()));
     logTradeEvent({
       event: 'CLOSE',
@@ -498,9 +501,12 @@ class MasterRuntime {
         epic: ghost.epic,
       });
       this.account.daily_pnl += outcome.pnl;
+      const sk = ghost.decision?.side
+        ? setupKey(ghost.decision.analysis, ghost.decision.side)
+        : null;
       this.trackPersist(
         'outcome',
-        persistOutcome(ghost.opportunity_id, outcome, null)
+        persistOutcome(ghost.opportunity_id, outcome, sk)
       );
       logTradeEvent({
         event: 'CLOSE',
@@ -585,9 +591,12 @@ class MasterRuntime {
         epic: partial.epic,
       });
       this.account.daily_pnl += outcome.pnl;
+      const sk = partial.decision?.side
+        ? setupKey(partial.decision.analysis, partial.decision.side)
+        : null;
       this.trackPersist(
         'external_partial',
-        persistOutcome(partial.opportunity_id, outcome, null)
+        persistOutcome(partial.opportunity_id, outcome, sk)
       );
       logTradeEvent({
         event: 'CLOSE',
@@ -1225,10 +1234,12 @@ class MasterRuntime {
       hist.outcomes.map((o) => o.outcome)
     );
     this.pipeline.expectancy.hydrate(
-      hist.outcomes.map((o) => ({
-        setup_key: o.setup_key || 'unknown',
-        outcome: o.outcome,
-      }))
+      hist.outcomes
+        .filter((o) => !!o.setup_key && !!o.outcome)
+        .map((o) => ({
+          setup_key: String(o.setup_key),
+          outcome: o.outcome,
+        }))
     );
     // Recompute account daily/peak from recovered outcomes (today only for daily_pnl)
     // Load gates BEFORE roll so same-day day_start_equity / peak survive restart.
