@@ -1143,6 +1143,17 @@ export class CapitalBroker implements MasterBroker {
               `capital_rejected_fail_closed:${conf.detail}`
             );
           }
+          // Level-less new fill: only in presence_ids — still fail-close
+          const presenceGhost = (listed.presence_ids ?? []).find(
+            (id) => !preOpenIds.has(id)
+          );
+          if (presenceGhost) {
+            return await this.failCloseOpenResult(
+              presenceGhost,
+              opened.deal_reference || null,
+              `capital_rejected_fail_closed:${conf.detail}`
+            );
+          }
           return {
             ok: false,
             order_id: opened.deal_reference || null,
@@ -1184,6 +1195,22 @@ export class CapitalBroker implements MasterBroker {
       if (ghost) {
         const fail = await this.failCloseOpenResult(
           ghost.position_id,
+          opened.deal_reference || null,
+          `capital_unconfirmed_fail_closed:${opened.detail}`
+        );
+        logMasterError({
+          module: 'capital.placeOrder',
+          error_type: 'ACK_TIMEOUT',
+          message: fail.detail,
+        });
+        return fail;
+      }
+      const presenceGhost = (listed.presence_ids ?? []).find(
+        (id) => !preOpenIds.has(id)
+      );
+      if (presenceGhost) {
+        const fail = await this.failCloseOpenResult(
+          presenceGhost,
           opened.deal_reference || null,
           `capital_unconfirmed_fail_closed:${opened.detail}`
         );

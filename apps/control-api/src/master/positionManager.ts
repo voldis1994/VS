@@ -1214,7 +1214,11 @@ export class PositionManager {
         brokerFound = null;
       } else {
         const match = listed.positions.find((p) => p.position_id === pos.position_id);
-        brokerFound = !!match;
+        const presentOnly =
+          !match && (listed.presence_ids ?? []).includes(pos.position_id);
+        // Presence-only = still live (level-less); treat as found with unknown SL
+        // so soft close stays fail-closed until chart stop is visible.
+        brokerFound = match ? true : presentOnly ? true : false;
         brokerStop = match?.stop_level ?? null;
       }
     } catch {

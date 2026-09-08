@@ -128,6 +128,11 @@ export async function syncPositionsWithBroker(
     for (const p of local) {
       if (brokerIds.has(p.position_id)) {
         if (miss) delete miss[p.position_id];
+        // Level-less live deal: in presence_ids but not positions[] — retain local
+        // so reconcileFromBroker does not wipe managed ownership.
+        if (!brokerPositions.some((bp) => bp.position_id === p.position_id)) {
+          retainIds.add(p.position_id);
+        }
         continue;
       }
       const n = (miss?.[p.position_id] ?? 0) + 1;

@@ -1592,6 +1592,69 @@ describe('partial_close persist + Check be_start', () => {
     broker.modifyPosition = mod;
   });
 
+  it('soft TIME_STOP refuses close when deal is presence-only (level-less live)', async () => {
+    const entry = 4400;
+    const broker = new PaperBroker();
+    await broker.connect();
+    broker.setQuote({
+      bid: entry,
+      ask: entry + 0.2,
+      mid: entry + 0.1,
+      spread: 0.2,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    // No real paper fill — force presence-only list so soft close sees live-but-level-less
+    broker.listOpenPositions = async () => ({
+      ok: true,
+      positions: [],
+      presence_ids: ['pres-only-1'],
+      detail: 'ok',
+    });
+    broker.modifyPosition = async () => ({ ok: false, detail: 'modify_denied' });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    const pos = pm.register({
+      position_id: 'pres-only-1',
+      opportunity_id: 'opp-pres-sl',
+      intent_id: 'pres-sl-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry,
+      stop_loss: null,
+      take_profit: entry + 10,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis(),
+        expectancy: null,
+      },
+    });
+    pos.entry_at = new Date(Date.now() - 120_000).toISOString();
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: entry,
+        ask: entry + 0.2,
+        mid: entry + 0.1,
+        spread: 0.2,
+        ts_ms: Date.now(),
+      },
+      max_hold_ms: 60_000,
+      breakeven_progress: 0,
+    });
+    expect(managed.closed.length).toBe(0);
+    expect(managed.close_failed.some((f) => f.detail === 'close_requires_sl')).toBe(true);
+    expect(pm.count()).toBe(1);
+  });
+
   it('naked recovery attaches 10% SL then TIME_STOP can close', async () => {
     const broker = new PaperBroker();
     await broker.connect();

@@ -434,4 +434,88 @@ describe('VS MASTER recovery SL + trail', () => {
     expect(pm.count()).toBe(1);
     expect(pm.get('keep-me')).toBeTruthy();
   });
+
+  it('retains local when deal is presence-only (level-less, not in positions)', async () => {
+    const pm = new PositionManager();
+    pm.register({
+      position_id: 'deal-level-less',
+      opportunity_id: 'opp-pres',
+      intent_id: 'pres-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4410,
+      stop_loss: 4400,
+      take_profit: 4420,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {
+          regime: 'RANGE',
+          market_state: 'test',
+          momentum_score: 0,
+          momentum_dir: 'NEUTRAL',
+          trend_dir: 'SIDEWAYS',
+          trend_strength: 0,
+          structure_bias: 'NEUTRAL',
+          swing_high: 4405,
+          swing_low: 4395,
+          buy_pressure: 0.5,
+          sell_pressure: 0.5,
+          behavior_bull: 0.5,
+          behavior_bear: 0.5,
+          impact_score: 0.5,
+          context_quality: 0.5,
+          volatility: 0.001,
+          atr: 1,
+          data_quality: 0.5,
+          session: 'UNKNOWN',
+        },
+        expectancy: null,
+      },
+    });
+    const broker = {
+      name: 'MOCK_PRESENCE',
+      paper: false,
+      async connect() {
+        return { ok: true, detail: 'ok' };
+      },
+      async getQuote() {
+        return null;
+      },
+      async getAccount() {
+        return null;
+      },
+      async listOpenPositions() {
+        return {
+          ok: true,
+          positions: [],
+          presence_ids: ['deal-level-less'],
+          detail: 'ok',
+        };
+      },
+      async placeOrder() {
+        return {
+          ok: false,
+          order_id: null,
+          position_id: null,
+          fill_price: null,
+          detail: 'n/a',
+          paper: false,
+        };
+      },
+      async closePosition() {
+        return { ok: false, detail: 'n/a' };
+      },
+    };
+    const sync = await syncPositionsWithBroker(pm, broker as any, 'GOLD');
+    expect(sync.dropped).toBe(0);
+    expect(pm.count()).toBe(1);
+    expect(pm.get('deal-level-less')).toBeTruthy();
+  });
 });

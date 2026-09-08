@@ -1461,4 +1461,59 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     if (prev === undefined) delete process.env.MASTER_STATE_DIR;
     else process.env.MASTER_STATE_DIR = prev;
   });
+
+  it('named reject fail-closes presence-only new fill (level-less, no mid)', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number | null;
+      }
+    >();
+    const closed: string[] = [];
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-pres-ghost' }, detail: 'ok' }),
+      quote: async () => null, // no mid → level-less stays out of positions[]
+      list: async () => ({ ok: true, positions: [...positions.values()], detail: '' }),
+      create: async () => {
+        positions.set('level-less-new', {
+          deal_id: 'level-less-new',
+          epic: 'GOLD',
+          direction: 'BUY',
+          size: 0.1,
+          open_level: null,
+        });
+        return { ok: true, deal_reference: 'ref-pres', detail: 'posted' };
+      },
+      confirm: async () => ({
+        ok: false,
+        rejected: true,
+        reject_reason: 'MINIMUM_STOP_DISTANCE',
+        detail: 'Capital rejected: MINIMUM_STOP_DISTANCE',
+      }),
+      close: async (_s, id) => {
+        closed.push(id);
+        positions.delete(id);
+        return { ok: true, detail: 'closed' };
+      },
+    });
+    await broker.connect();
+    const place = await broker.placeOrder({
+      intent_id: 'intent-pres-ghost',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: 4400,
+    });
+    expect(place.ok).toBe(false);
+    expect(place.detail).toMatch(/fail_closed/);
+    expect(closed).toEqual(['level-less-new']);
+    expect(positions.size).toBe(0);
+  });
 });
