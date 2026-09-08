@@ -105,6 +105,12 @@ export type BrokerPosition = {
   side: Side;
   size: number;
   open_level: number;
+  /**
+   * true when open_level came from venue list; false when provisional mid /
+   * market_mid was invented for sync ownership. OPEN SUCCESS must not treat
+   * provisional levels as proven fills.
+   */
+  open_level_proven?: boolean;
   stop_level: number | null;
   profit_level: number | null;
   upl: number | null;
@@ -499,7 +505,7 @@ export class CapitalBroker implements MasterBroker {
    */
   private marketStatusByEpic = new Map<string, string | null>();
   private marketStatusFetchedAt = new Map<string, number>();
-  private static readonly MARKET_STATUS_REFRESH_MS = 60_000;
+  private static readonly MARKET_STATUS_REFRESH_MS = 10_000;
 
   /**
    * VS-System bindCapitalAccount — mutable CFD target on shared CST pool.
@@ -1044,15 +1050,22 @@ export class CapitalBroker implements MasterBroker {
       const openRaw = Number(p.open_level);
       let open_level =
         Number.isFinite(openRaw) && openRaw > 0 ? openRaw : null;
+      let open_level_proven = open_level != null;
       // Level-less live deal — provisional mid so sync/recover can own it (never invent 0)
       if (open_level == null) {
         const mid = await midFor(String(p.epic || epic || ''));
-        if (Number.isFinite(mid) && mid > 0) open_level = mid;
+        if (Number.isFinite(mid) && mid > 0) {
+          open_level = mid;
+          open_level_proven = false;
+        }
       }
       // Positions-row market bid/offer (VS-System always maps deals with market mark)
       if (open_level == null) {
         const mm = Number(p.market_mid);
-        if (Number.isFinite(mm) && mm > 0) open_level = mm;
+        if (Number.isFinite(mm) && mm > 0) {
+          open_level = mm;
+          open_level_proven = false;
+        }
       }
       if (open_level == null || !(open_level > 0)) continue;
       const sideRaw = String(p.direction || p.side || '').toUpperCase();
@@ -1070,6 +1083,7 @@ export class CapitalBroker implements MasterBroker {
         side,
         size: p.size,
         open_level,
+        open_level_proven,
         stop_level: protectiveLevelOrNull(p.stop_level),
         profit_level: protectiveLevelOrNull(p.profit_level),
         upl: p.upl ?? null,
@@ -1879,6 +1893,25 @@ export class CapitalBroker implements MasterBroker {
         }
       }
       lastLevelsFail = null;
+      // Prefer confirm fill; else venue list open_level — never SUCCESS with null
+      // fill or provisional mid invented for sync ownership.
+      const listOpen =
+        filled?.open_level != null &&
+        filled.open_level_proven !== false &&
+        Number.isFinite(Number(filled.open_level)) &&
+        Number(filled.open_level) > 0
+          ? Number(filled.open_level)
+          : null;
+      if (
+        (fill_price == null || !Number.isFinite(fill_price) || fill_price <= 0) &&
+        listOpen != null
+      ) {
+        fill_price = listOpen;
+      }
+      if (fill_price == null || !Number.isFinite(fill_price) || fill_price <= 0) {
+        lastLevelsFail = 'capital_open_fill_unproven';
+        continue;
+      }
       updateTradeAck(command_id, {
         ack_status: 'SUCCESS',
         ticket: position_id,
@@ -1891,7 +1924,7 @@ export class CapitalBroker implements MasterBroker {
         position_id,
         fill_price,
         fill_size: fill_size ?? filled?.size ?? orderSize,
-        detail: `capital_open deal=${position_id}${fill_price != null ? ` fill=${fill_price}` : ''}`,
+        detail: `capital_open deal=${position_id} fill=${fill_price}`,
         paper: false,
       };
     }

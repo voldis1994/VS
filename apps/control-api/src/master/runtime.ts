@@ -1422,9 +1422,32 @@ class MasterRuntime {
         this.inflight_until_ms = 0;
         this.persistRuntimeGates();
         this.seenIntentSnapshot.push(execution.intent_id);
+        const provenFill =
+          place.fill_price != null &&
+          Number.isFinite(place.fill_price) &&
+          place.fill_price > 0
+            ? place.fill_price
+            : null;
+        // Capital LIVE: never forge entry from live ask/bid — broker must prove fill
         const fill =
-          place.fill_price ??
-          (cycle.decision.side === 'BUY' ? quote.ask : quote.bid);
+          provenFill ??
+          (broker instanceof CapitalBroker && !broker.paper
+            ? null
+            : cycle.decision.side === 'BUY'
+              ? quote.ask
+              : quote.bid);
+        if (fill == null || !Number.isFinite(fill) || fill <= 0) {
+          executed = false;
+          const closed = await this.closePositionManualUnlocked(
+            place.position_id,
+            'CAPITAL_FILL_UNPROVEN'
+          );
+          execution_detail = `capital_fill_price_unproven;close=${
+            closed.ok ? 'ok' : closed.detail
+          }`;
+          this.last_execution_detail = execution_detail;
+          this.last_exit_reason = 'CAPITAL_FILL_UNPROVEN';
+        } else {
         const cand =
           cycle.decision.side === 'BUY' ? cycle.decision.buy : cycle.decision.sell;
         const { rebaseStopsFromFill } = await import('./positionManager.js');
@@ -1538,6 +1561,7 @@ class MasterRuntime {
           this.last_entry_fingerprint = signalFp;
           this.persistRuntimeGates();
         }
+        } // end proven-fill register
       } else if (!execution.accepted) {
         // Fail-close left a live Capital deal — register + keep inflight + re-close
         const unprovenLive =
@@ -1548,9 +1572,43 @@ class MasterRuntime {
         if (unprovenLive && place?.position_id) {
           const cand =
             cycle.decision.side === 'BUY' ? cycle.decision.buy : cycle.decision.sell;
+          const provenFill =
+            place.fill_price != null &&
+            Number.isFinite(place.fill_price) &&
+            place.fill_price > 0
+              ? place.fill_price
+              : null;
+          // Capital: prefer proven fill or planned entry — never live mark forge
           const fill =
-            place.fill_price ??
-            (cycle.decision.side === 'BUY' ? quote.ask : quote.bid);
+            provenFill ??
+            (broker instanceof CapitalBroker && !broker.paper
+              ? cand?.entry != null &&
+                Number.isFinite(cand.entry) &&
+                cand.entry > 0
+                ? cand.entry
+                : null
+              : cycle.decision.side === 'BUY'
+                ? quote.ask
+                : quote.bid);
+          if (fill == null || !Number.isFinite(fill) || fill <= 0) {
+            execution_detail = `capital_fail_close_unproven_no_fill:${place.position_id}`;
+            this.last_execution_detail = execution_detail;
+            this.inflight_until_ms = Math.max(
+              this.inflight_until_ms,
+              Date.now() + 90_000
+            );
+            this.persistRuntimeGates();
+            const closed = await this.closePositionManualUnlocked(
+              place.position_id,
+              'CAPITAL_FAIL_CLOSE_UNPROVEN_RETRY'
+            );
+            execution_detail = closed.ok
+              ? `capital_fail_close_unproven_retried_closed:${place.position_id}`
+              : `capital_fail_close_unproven_no_fill:${place.position_id};retry=${closed.detail}`;
+            this.last_execution_detail = execution_detail;
+            this.reject_until_ms = Date.now() + 30_000;
+            this.persistRuntimeGates();
+          } else {
           const { rebaseStopsFromFill } = await import('./positionManager.js');
           const rebased = rebaseStopsFromFill(
             cand?.entry ?? fill,
@@ -1600,6 +1658,7 @@ class MasterRuntime {
           this.last_execution_detail = execution_detail;
           this.reject_until_ms = Date.now() + 30_000;
           this.persistRuntimeGates();
+          }
         } else {
         // Ambiguous OPEN — keep inflight so we do not double-open while EA may
         // still fill (Check- holds pending_open / WAIT_CMD until ACK/timeout).

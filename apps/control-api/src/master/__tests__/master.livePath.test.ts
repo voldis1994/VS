@@ -3003,6 +3003,124 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(closed).toBeGreaterThanOrEqual(1);
   });
 
+  it('ACCEPTED without confirm level binds fill from list open_level', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    let dealLive = false;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-listfill' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => {
+        if (!dealLive) return { ok: true, positions: [], detail: '0' };
+        return {
+          ok: true,
+          positions: [
+            {
+              deal_id: 'deal-listfill',
+              epic: 'GOLD',
+              direction: 'BUY',
+              size: 0.1,
+              open_level: 4410.55,
+              stop_level: 4400,
+            },
+          ],
+          detail: '1',
+        };
+      },
+      create: async () => ({ ok: true, deal_reference: 'ref-listfill', detail: 'posted' }),
+      confirm: async () => {
+        dealLive = true;
+        return {
+          ok: true,
+          deal_id: 'deal-listfill',
+          // no fill_level — must bind list open_level before SUCCESS
+          detail: 'ACCEPTED',
+        };
+      },
+      modify: async () => ({ ok: true, deal_reference: 'm-listfill', detail: 'ok' }),
+      close: async () => ({ ok: true, detail: 'closed' }),
+    });
+    await broker.connect();
+    const place = await broker.placeOrder({
+      intent_id: 'intent-listfill',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: 4400,
+    });
+    expect(place.ok).toBe(true);
+    expect(place.fill_price).toBe(4410.55);
+    expect(place.detail).toMatch(/fill=4410\.55/);
+  });
+
+  it('ACCEPTED refuses SUCCESS when fill missing from confirm and list', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    let dealLive = false;
+    let closed = 0;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-nofill' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => {
+        if (!dealLive) return { ok: true, positions: [], detail: '0' };
+        return {
+          ok: true,
+          positions: [
+            {
+              deal_id: 'deal-nofill',
+              epic: 'GOLD',
+              direction: 'BUY',
+              size: 0.1,
+              // open_level omitted — cannot prove fill
+              stop_level: 4400,
+            },
+          ],
+          detail: '1',
+        };
+      },
+      create: async () => ({ ok: true, deal_reference: 'ref-nofill', detail: 'posted' }),
+      confirm: async () => {
+        dealLive = true;
+        return {
+          ok: true,
+          deal_id: 'deal-nofill',
+          detail: 'ACCEPTED',
+        };
+      },
+      modify: async () => ({ ok: true, deal_reference: 'm-nofill', detail: 'ok' }),
+      close: async () => {
+        closed += 1;
+        dealLive = false;
+        return { ok: true, detail: 'closed' };
+      },
+    });
+    await broker.connect();
+    const place = await broker.placeOrder({
+      intent_id: 'intent-nofill',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: 4400,
+    });
+    expect(place.ok).toBe(false);
+    expect(place.detail).toMatch(/capital_open_fill_unproven/);
+    expect(closed).toBeGreaterThanOrEqual(1);
+  });
+
   it('recover Capital SUCCESS ack still attach-or-fails when adopt list fails', async () => {
     process.env.MASTER_LIVE_ENABLED = 'true';
     process.env.MASTER_CONFIRM_FAST = 'true';

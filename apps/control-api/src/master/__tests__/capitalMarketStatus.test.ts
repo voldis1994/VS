@@ -205,6 +205,46 @@ describe('CapitalBroker market_status cache (stream path)', () => {
     expect(q?.mid).toBeCloseTo(4400.2, 5);
   });
 
+  it('stale TRADEABLE cache (~15s) refreshes CLOSED before stream-only', async () => {
+    let restCalls = 0;
+    const broker = makeBroker(async () => {
+      restCalls += 1;
+      return {
+        bid: 4400,
+        ask: 4400.4,
+        mid: 4400.2,
+        epic: 'GOLD',
+        market_status: restCalls === 1 ? 'TRADEABLE' : 'CLOSED',
+      };
+    });
+    (broker as any).session = { id: 's' };
+    await broker.getQuote('GOLD');
+    expect(broker.cachedMarketStatus('GOLD')).toBe('TRADEABLE');
+
+    // Past 10s MARKET_STATUS_REFRESH_MS — must not keep TRADEABLE for ~60s
+    for (const k of ['GOLD', 'XAUUSD', 'XAU']) {
+      (broker as any).marketStatusFetchedAt.set(k, Date.now() - 15_000);
+    }
+
+    const stream = (broker as any).stream;
+    stream.getLatest = () => ({
+      epic: 'GOLD',
+      bid: 4401,
+      offer: 4401.3,
+      mid: 4401.15,
+      ts_ms: Date.now(),
+    });
+    stream.isHealthy = () => true;
+    stream.ensure = () => {};
+
+    const q = await broker.getQuote('GOLD');
+    expect(restCalls).toBeGreaterThanOrEqual(2);
+    expect(broker.cachedMarketStatus('GOLD')).toBe('CLOSED');
+    expect(q?.market_status).toBe('CLOSED');
+    // CLOSED forces REST mid, not stream-only
+    expect(q?.mid).toBeCloseTo(4400.2, 5);
+  });
+
   it('maps XAUUSD → GOLD before REST quote', async () => {
     let seenEpic = '';
     const broker = makeBroker(async (epic) => {
