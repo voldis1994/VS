@@ -29,6 +29,7 @@ import {
   softTrailExitHit,
   softTrailExitLevel,
   updateSoftTrailPeak,
+  usableBrokerUpl,
 } from './moneyExit.js';
 import { closeAllowedByStopLoss } from './closeRequiresSl.js';
 import type { MasterPipeline } from './pipeline.js';
@@ -415,7 +416,7 @@ export class PositionManager {
     const close_failed: ManageTickResult['close_failed'] = [];
 
     // Check- stale market: skip mark-based soft manage / portfolio closes on dead quotes.
-    // TIME_STOP still runs — clock-based, does not need a fresh mark for the verdict.
+    // Hard STOP_HIT / TP_HIT still fire (protective levels are binding). TIME_STOP still runs.
     const staleMs = input.stale_quote_ms ?? 0;
     const quoteStale =
       staleMs > 0 &&
@@ -427,45 +428,57 @@ export class PositionManager {
           await this.maybeRecoverNakedStop(broker, pos, quote, minStopDist);
         }
       }
-      if (maxHold > 0) {
-        for (const pos of [...this.open.values()]) {
-          const heldMs = Date.now() - new Date(pos.entry_at).getTime();
-          if (heldMs < maxHold) continue;
-          const reason = `TIME_STOP · held ${Math.round(heldMs / 1000)}s ≥ ${Math.round(maxHold / 1000)}s`;
-          if (!allowClose) {
-            close_failed.push({
-              position_id: pos.position_id,
-              exit_reason: reason,
-              detail: 'ai_veto_close',
-            });
-            continue;
-          }
-          if (await this.softCloseRequiresSlBlocked(broker, pos)) {
-            close_failed.push({
-              position_id: pos.position_id,
-              exit_reason: reason,
-              detail: 'close_requires_sl',
-            });
-            continue;
-          }
-          const closeRes = await broker.closePosition(pos.position_id);
-          if (!closeRes.ok) {
-            close_failed.push({
-              position_id: pos.position_id,
-              exit_reason: reason,
-              detail: closeRes.detail || 'close_failed',
-            });
-            continue;
-          }
-          const mark = protectiveMark(pos.side, quote);
-          const { exit: fill, fill_proven } = resolveCloseExitFill({
-            fill_price: closeRes.fill_price,
-            mark,
-            entry: pos.entry,
-            capitalLive,
+      for (const pos of [...this.open.values()]) {
+        const heldMs = Date.now() - new Date(pos.entry_at).getTime();
+        const protective = protectiveExit(pos, quote);
+        const timeStop =
+          !protective && maxHold > 0 && heldMs >= maxHold
+            ? {
+                exit: true as const,
+                reason: `TIME_STOP · held ${Math.round(heldMs / 1000)}s ≥ ${Math.round(maxHold / 1000)}s`,
+              }
+            : null;
+        const verdict = protective ?? timeStop;
+        if (!verdict) continue;
+        const hardProtective = !!protective;
+        // Soft TIME_STOP honors AI veto / close_requires_sl; hard SL/TP do not
+        if (!hardProtective && !allowClose) {
+          close_failed.push({
+            position_id: pos.position_id,
+            exit_reason: verdict.reason,
+            detail: 'ai_veto_close',
           });
-          const priced = priceResolvedCloseMoney({
-            ...resolveCloseMoneyPnl({
+          continue;
+        }
+        if (!hardProtective && (await this.softCloseRequiresSlBlocked(broker, pos))) {
+          close_failed.push({
+            position_id: pos.position_id,
+            exit_reason: verdict.reason,
+            detail: 'close_requires_sl',
+          });
+          continue;
+        }
+        const closeRes = await broker.closePosition(pos.position_id);
+        if (!closeRes.ok) {
+          close_failed.push({
+            position_id: pos.position_id,
+            exit_reason: verdict.reason,
+            detail: closeRes.detail || 'close_failed',
+          });
+          continue;
+        }
+        const mark = protectiveMark(pos.side, quote);
+        const { exit: fill, fill_proven } = resolveCloseExitFill({
+          fill_price: closeRes.fill_price,
+          mark,
+          entry: pos.entry,
+          capitalLive,
+          hard_reason: protective?.reason ?? null,
+          stop_loss: pos.stop_loss,
+          take_profit: pos.take_profit,
+        });
+        const priced = priceResolvedCloseMoney({
+          ...resolveCloseMoneyPnl({
             side: pos.side,
             entry: pos.entry,
             fill,
@@ -476,42 +489,40 @@ export class PositionManager {
               broker_upl: pos.broker_upl,
             }),
             capitalLive,
-            }),
-            volume: pos.size,
-          });
-          const outcome: TradeOutcome = {
-            position_id: pos.position_id,
-            side: pos.side,
-            entry: pos.entry,
-            exit: fill,
-            volume: pos.size,
-            pnl: priced.pnl,
-            fees: priced.fees,
-            pnl_proven: priced.pnl_proven,
-            slippage: fill_proven ? Math.abs(fill - quote.mid) : 0,
-            mae: pos.mae,
-            mfe: pos.mfe,
-            r_multiple: 0,
-            hold_ms: heldMs,
-            exit_reason: capitalCloseExitReason(reason, priced.pnl_proven),
-          };
-          pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome, {
-            epic: pos.epic,
-          });
-          this.open.delete(pos.position_id);
-          closed.push({ position: pos, outcome, reason: outcome.exit_reason });
-        }
+          }),
+          volume: pos.size,
+        });
+        const outcome: TradeOutcome = {
+          position_id: pos.position_id,
+          side: pos.side,
+          entry: pos.entry,
+          exit: fill,
+          volume: pos.size,
+          pnl: priced.pnl,
+          fees: priced.fees,
+          pnl_proven: priced.pnl_proven,
+          slippage: fill_proven ? Math.abs(fill - quote.mid) : 0,
+          mae: pos.mae,
+          mfe: pos.mfe,
+          r_multiple: 0,
+          hold_ms: heldMs,
+          exit_reason: capitalCloseExitReason(verdict.reason, priced.pnl_proven),
+        };
+        pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome, {
+          epic: pos.epic,
+        });
+        this.clearModifyReject(pos);
+        this.open.delete(pos.position_id);
+        closed.push({ position: pos, outcome, reason: outcome.exit_reason });
       }
-      return { closed, close_failed, modified: 0 };
+      return { held: this.list(), closed, close_failed };
     }
 
     // Check- portfolio close-all on floating PnL (before per-position manage)
-    // Capital LIVE: refuse portfolio money exits while any open lacks venue UPL
+    // Capital LIVE: refuse portfolio money exits while any open lacks usable venue UPL
     const capitalFloatReady =
       !capitalLive ||
-      this.list().every(
-        (p) => p.broker_upl != null && Number.isFinite(p.broker_upl)
-      );
+      this.list().every((p) => usableBrokerUpl(p.broker_upl) != null);
     const floatPnl = capitalFloatReady
       ? floatingUnrealizedPnl(this.list(), quote, pv, capitalLive)
       : 0;
@@ -590,7 +601,7 @@ export class PositionManager {
         this.open.delete(pos.position_id);
         closed.push({ position: pos, outcome, reason: outcome.exit_reason });
       }
-      return { closed, close_failed, open_count: this.open.size };
+      return { held: this.list(), closed, close_failed };
     }
 
     for (const pos of [...this.open.values()]) {
@@ -617,10 +628,9 @@ export class PositionManager {
         await this.maybeRecoverNakedStop(broker, pos, quote, minStopDist);
       }
 
-      // Capital LIVE: soft mark exits (EMA / BestOutcome / geometry BE) need venue UPL
+      // Capital LIVE: soft mark exits need usable venue UPL (0 ≡ unread, like money helpers)
       const capitalUplReady =
-        !capitalLive ||
-        (pos.broker_upl != null && Number.isFinite(pos.broker_upl));
+        !capitalLive || usableBrokerUpl(pos.broker_upl) != null;
 
       // VS-System soft trail — SCALPING manage only, after money arm (not Capital min-stop trail)
       // Capital LIVE: refuse soft-trail (incl. already_armed) when venue UPL unread
@@ -821,8 +831,10 @@ export class PositionManager {
       }
 
       // VS-System multi-TP ladder (app-managed) before single Reader partial
+      // Capital LIVE: refuse scale-outs while venue UPL unread (same as soft exits)
       if (
         allowClose &&
+        capitalUplReady &&
         broker.supportsPartialClose !== false &&
         pos.multi_tp_levels &&
         pos.multi_tp_levels.length >= 2
@@ -847,6 +859,7 @@ export class PositionManager {
         // Reader partial scale-out before full exit (once)
         // Skip when broker cannot partial (Check- MT4 full-lots CLOSE only)
         allowClose &&
+        capitalUplReady &&
         broker.supportsPartialClose !== false &&
         !pos.partial_close_applied &&
         partialProgress > 0 &&
@@ -1712,10 +1725,9 @@ export class PositionManager {
     const mark = protectiveMark(pos.side, quote);
     const fav = favorableMove(pos.side, pos.entry, mark);
     const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
-    // Parity with soft-trail: money-BE must not arm on mark profit while UPL unread
+    // Parity with soft-trail: money-BE must not arm on mark profit while UPL unread/zero
     const capitalUplReady =
-      !capitalLive ||
-      (pos.broker_upl != null && Number.isFinite(pos.broker_upl));
+      !capitalLive || usableBrokerUpl(pos.broker_upl) != null;
     const money = resolveFloatingMoneyPnl({
       side: pos.side,
       entry: pos.entry,
@@ -2068,6 +2080,8 @@ export class PositionManager {
           expectancy: null,
         },
         regime_at_entry: 'UNKNOWN',
+        playbook_at_entry: 'SCALP',
+        entry_setup: 'CONTINUATION',
         partial_close_applied: false,
       });
     }

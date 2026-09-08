@@ -1751,6 +1751,79 @@ describe('partial_close persist + Check be_start', () => {
     );
   });
 
+  it('Capital LIVE multi-TP refuses scale-out while venue UPL unread', async () => {
+    const { buildEqualMultiTpPlan } = await import('../multiTp.js');
+    const entry = 4400;
+    const plan = buildEqualMultiTpPlan({
+      side: 'BUY',
+      entry,
+      initial_volume: 0.03,
+      count: 3,
+      atr: 3,
+      atr_tp_mult: 1,
+      volume_step: 0.01,
+    });
+    let closed = 0;
+    const broker = {
+      name: 'CAPITAL',
+      paper: false,
+      supportsPartialClose: true,
+      async closePosition() {
+        closed += 1;
+        return { ok: true, fill_price: plan[2]!.price + 0.1, fill_pnl: 1, remaining_size: 0.02 };
+      },
+      async modifyPosition() {
+        return { ok: true, detail: 'ok' };
+      },
+    } as never;
+    const pipe = new MasterPipeline('LIVE');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: 'deal-mtp-upl',
+      opportunity_id: 'opp-mtp-upl',
+      intent_id: 'mtp-upl',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.03,
+      entry,
+      stop_loss: entry - 2,
+      take_profit: plan[2]!.price,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis({ atr: 3 }),
+        expectancy: null,
+      },
+      multi_tp_levels: plan,
+    });
+    const pos = pm.get('deal-mtp-upl')!;
+    pos.broker_upl = null; // unread — must not scale out
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: plan[0]!.price + 0.1,
+        ask: plan[0]!.price + 0.2,
+        mid: plan[0]!.price + 0.15,
+        spread: 0.1,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      volume_step: 0.01,
+      max_hold_ms: 0,
+      breakeven_progress: 0,
+    });
+    // Intermediate TP1 hit but unread UPL → no multi-TP scale; hard final TP not hit either
+    expect(closed).toBe(0);
+    expect(managed.closed.filter((c) => /MULTI_TP/.test(c.reason)).length).toBe(0);
+    expect(pm.count()).toBe(1);
+  });
+
   it('soft TIME_STOP refuses close without SL (close_requires_sl)', async () => {
     const broker = new PaperBroker();
     await broker.connect();
@@ -3050,6 +3123,71 @@ describe('partial_close persist + Check be_start', () => {
     });
     expect(managed.closed.length).toBe(1);
     expect(managed.closed[0]!.reason).toMatch(/TIME_STOP/);
+    expect(pm.count()).toBe(0);
+  });
+
+  it('stale quote still honors hard STOP_HIT (not only TIME_STOP)', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    const stop = 4395;
+    broker.setQuote({
+      bid: stop - 1,
+      ask: stop - 0.8,
+      mid: stop - 0.9,
+      spread: 0.2,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'stale-stop-hitttttttttt',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: stop,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-stale-sl',
+      intent_id: 'ssl-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry,
+      stop_loss: stop,
+      take_profit: entry + 20,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis(),
+        expectancy: null,
+      },
+    });
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: stop - 1,
+        ask: stop - 0.8,
+        mid: stop - 0.9,
+        spread: 0.2,
+        epic: 'GOLD',
+        ts_ms: Date.now() - 120_000,
+      },
+      instrument_point_value: 1,
+      max_hold_ms: 0,
+      allow_close: false, // AI veto must not block hard STOP
+      stale_quote_ms: 30_000,
+    });
+    expect(managed.closed.length).toBe(1);
+    expect(managed.closed[0]!.reason).toMatch(/STOP_HIT/);
     expect(pm.count()).toBe(0);
   });
 });

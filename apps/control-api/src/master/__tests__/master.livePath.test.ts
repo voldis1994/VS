@@ -5282,10 +5282,9 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(pm.count()).toBe(1);
   });
 
-  it('Capital soft-trail close with broker_upl=0 tags unproven and omits trade-event pnl', async () => {
+  it('Capital soft-trail refuses when broker_upl=0 (usable UPL unread)', async () => {
     process.env.MASTER_LIVE_ENABLED = 'true';
     const { PositionManager } = await import('../positionManager.js');
-    const { loadTradeEvents } = await import('../tradeEventJournal.js');
     const pm = new PositionManager();
     const broker = {
       name: 'CAPITAL',
@@ -5321,8 +5320,7 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
       } as any,
     });
     const pos = pm.get('deal-soft-flat-upl')!;
-    // Venue UPL exactly 0: soft-trail capitalUplReady true, but usableBrokerUpl
-    // treats 0 as missing → close money unproven
+    // Venue UPL exactly 0 ≡ unread (usableBrokerUpl) — soft-trail must refuse
     pos.broker_upl = 0;
     pos.soft_trail_armed_at = new Date().toISOString();
     pos.soft_trail_peak = 4430;
@@ -5346,37 +5344,8 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
       close_all_profit: 100,
       close_all_loss: 100,
     });
-    expect(managed.closed.length).toBe(1);
-    expect(managed.closed[0]!.outcome.pnl_proven).toBe(false);
-    expect(managed.closed[0]!.outcome.exit_reason).toMatch(
-      /capital_close_pnl_unproven/
-    );
-
-    // Simulate manageLoop trade-event honesty (same spread as runtime)
-    const c = managed.closed[0]!;
-    const { logTradeEvent } = await import('../tradeEventJournal.js');
-    logTradeEvent({
-      event: 'CLOSE',
-      broker: 'CAPITAL',
-      epic: c.position.epic,
-      side: c.position.side,
-      volume: c.outcome.volume,
-      price: c.outcome.exit,
-      position_id: c.position.position_id,
-      intent_id: c.position.intent_id,
-      opportunity_id: c.position.opportunity_id,
-      ok: true,
-      detail: c.reason,
-      ...(c.outcome.pnl_proven !== false
-        ? { pnl: c.outcome.pnl, fees: c.outcome.fees }
-        : {}),
-    });
-    const ev = loadTradeEvents(20).find(
-      (e) => e.position_id === 'deal-soft-flat-upl' && e.event === 'CLOSE'
-    );
-    expect(ev).toBeTruthy();
-    expect(ev!.detail).toMatch(/capital_close_pnl_unproven/);
-    expect(ev!.pnl == null).toBe(true);
+    expect(managed.closed.length).toBe(0);
+    expect(pm.count()).toBe(1);
   });
 
   it('operator close Capital unproven does not advertise proven flat pnl', async () => {
