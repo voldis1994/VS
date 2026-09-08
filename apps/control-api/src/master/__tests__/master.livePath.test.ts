@@ -1955,4 +1955,67 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(closed).toEqual(['level-less-new']);
     expect(positions.size).toBe(0);
   });
+
+  it('named reject does not fail-close wrong-side presence-only sibling', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number | null;
+      }
+    >();
+    const closed: string[] = [];
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-pres-sib' }, detail: 'ok' }),
+      quote: async () => null,
+      list: async () => ({ ok: true, positions: [...positions.values()], detail: '' }),
+      create: async () => {
+        // Concurrent wrong-side + matching BUY ghost — only BUY must be fail-closed
+        positions.set('sell-sibling', {
+          deal_id: 'sell-sibling',
+          epic: 'GOLD',
+          direction: 'SELL',
+          size: 0.1,
+          open_level: null,
+        });
+        positions.set('buy-ghost', {
+          deal_id: 'buy-ghost',
+          epic: 'GOLD',
+          direction: 'BUY',
+          size: 0.1,
+          open_level: null,
+        });
+        return { ok: true, deal_reference: 'ref-sib', detail: 'posted' };
+      },
+      confirm: async () => ({
+        ok: false,
+        rejected: true,
+        reject_reason: 'MINIMUM_STOP_DISTANCE',
+        detail: 'Capital rejected: MINIMUM_STOP_DISTANCE',
+      }),
+      close: async (_s, id) => {
+        closed.push(id);
+        positions.delete(id);
+        return { ok: true, detail: 'closed' };
+      },
+    });
+    await broker.connect();
+    const place = await broker.placeOrder({
+      intent_id: 'intent-pres-sib',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: 4400,
+    });
+    expect(place.ok).toBe(false);
+    expect(place.detail).toMatch(/fail_closed/);
+    expect(closed).toEqual(['buy-ghost']);
+    expect(positions.has('sell-sibling')).toBe(true);
+  });
 });

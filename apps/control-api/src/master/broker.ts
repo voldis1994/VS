@@ -1015,6 +1015,37 @@ export class CapitalBroker implements MasterBroker {
     return { ok: true, positions, presence_ids };
   }
 
+  /**
+   * Level-less new fill (in presence_ids only): bind fail-close target by
+   * epic+side+size from raw Capital rows — never the first unrelated new id.
+   */
+  private async findNewPresenceGhost(input: {
+    epic: string;
+    side: Side;
+    sizes: number[];
+    excludeIds: Set<string>;
+  }): Promise<string | undefined> {
+    if (!this.session) return undefined;
+    const listed = await this.deps.list(this.session);
+    if (!listed?.ok || !Array.isArray(listed.positions)) return undefined;
+    const newRows = (listed.positions as any[]).filter((p) => {
+      if (!epicsMatch(p.epic, input.epic)) return false;
+      const id = String(p.deal_id || p.position_id || '').trim();
+      return Boolean(id) && !input.excludeIds.has(id);
+    });
+    const matched = newRows.find((p) => {
+      const side = String(p.direction || p.side || '').toUpperCase();
+      const size = Number(p.size);
+      if (side !== input.side) return false;
+      if (!Number.isFinite(size)) return false;
+      return input.sizes.some((s) => Math.abs(size - s) < 1e-6);
+    });
+    if (matched) {
+      return String(matched.deal_id || matched.position_id || '').trim() || undefined;
+    }
+    return undefined;
+  }
+
   private async waitConfirm(
     dealReference: string,
     opts?: { /** When true, journal ACK_TIMEOUT (OPEN only — not CLOSE/MODIFY). */ ackTimeoutAlert?: boolean }
@@ -1437,10 +1468,13 @@ export class CapitalBroker implements MasterBroker {
               `capital_rejected_fail_closed:${conf.detail}`
             );
           }
-          // Level-less new fill: only in presence_ids — still fail-close
-          const presenceGhost = (listed.presence_ids ?? []).find(
-            (id) => !preOpenIds.has(id)
-          );
+          // Level-less new fill: only in presence_ids — fail-close only side+size match
+          const presenceGhost = await this.findNewPresenceGhost({
+            epic: input.epic,
+            side: input.side,
+            sizes: [orderSize, input.size],
+            excludeIds: preOpenIds,
+          });
           if (presenceGhost) {
             return await ackFailClose(
               presenceGhost,
@@ -1500,9 +1534,12 @@ export class CapitalBroker implements MasterBroker {
         });
         return fail;
       }
-      const presenceGhost = (listed.presence_ids ?? []).find(
-        (id) => !preOpenIds.has(id)
-      );
+      const presenceGhost = await this.findNewPresenceGhost({
+        epic: input.epic,
+        side: input.side,
+        sizes: [orderSize, input.size],
+        excludeIds: preOpenIds,
+      });
       if (presenceGhost) {
         const fail = await ackFailClose(
           presenceGhost,
