@@ -3464,6 +3464,78 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(managed.closed[0]!.outcome.pnl).toBe(-8.5);
   });
 
+  it('manage STOP Capital LIVE without profit/UPL does not invent mark PnL', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-unproven-pnl' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4380,
+        ask: 4380.4,
+        mid: 4380.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({ ok: true, positions: [], detail: '0' }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({
+        ok: true,
+        deal_reference: 'unproven-ref',
+        detail: 'submitted',
+      }),
+      confirm: async () => ({
+        ok: false,
+        closed_gone: true,
+        deal_id: 'deal-unproven-pnl',
+        detail: 'confirm_closed_gone:DELETED',
+      }),
+    });
+    await broker.connect();
+    const pipe = new MasterPipeline('LIVE');
+    const pm = new PositionManager();
+    const decision = {
+      decision_id: 'd-unproven',
+      kind: 'BUY' as const,
+      side: 'BUY' as const,
+      block_reason: null,
+      analysis: { regime: 'TREND' as const },
+      buy: { valid: true, filter_ok: true, score: 0.9, stop_loss: 4400 },
+      sell: { valid: false, filter_ok: false, score: 0, stop_loss: null },
+    };
+    pm.register({
+      position_id: 'deal-unproven-pnl',
+      opportunity_id: 'opp-unproven',
+      intent_id: 'intent-unproven',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4410,
+      stop_loss: 4400,
+      decision: decision as any,
+    });
+    // no broker_upl — must not invent (4400-4410)*0.1 = -1
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: 4380,
+        ask: 4380.4,
+        mid: 4380.2,
+        spread: 0.4,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+    });
+    expect(managed.closed).toHaveLength(1);
+    expect(managed.closed[0]!.outcome.pnl_proven).toBe(false);
+    expect(managed.closed[0]!.outcome.pnl).toBe(0);
+    expect(managed.closed[0]!.outcome.fees).toBe(0);
+    expect(managed.closed[0]!.reason).toMatch(/capital_close_pnl_unproven/);
+    // Exit may be STOP proxy, but money stays unproven
+    expect(managed.closed[0]!.outcome.exit).toBe(4400);
+  });
+
   it('recover ack without proven fill fail-closes — never forges quote mid as entry', async () => {
     process.env.MASTER_LIVE_ENABLED = 'true';
     process.env.MASTER_CONFIRM_FAST = 'true';

@@ -29,6 +29,40 @@ describe('preferCloseFillPnl', () => {
   });
 });
 
+describe('Capital LIVE close money fail-close', () => {
+  it('refuses pts×size as realized when capitalLive and fill_pnl missing', async () => {
+    const { resolveCloseMoneyPnl, priceResolvedCloseMoney } = await import(
+      '../moneyExit.js'
+    );
+    const forged = resolveCloseMoneyPnl({
+      side: 'BUY',
+      entry: 4410,
+      fill: 4400, // STOP proxy
+      size: 0.1,
+      value_per_point_per_lot: 1,
+      fill_pnl: null,
+      capitalLive: true,
+    });
+    expect(forged.pnl_proven).toBe(false);
+    expect(forged.pnl).toBe(0);
+    const priced = priceResolvedCloseMoney({ ...forged, volume: 0.1 });
+    expect(priced.fees).toBe(0);
+    expect(priced.pnl).toBe(0);
+
+    const paper = resolveCloseMoneyPnl({
+      side: 'BUY',
+      entry: 4410,
+      fill: 4400,
+      size: 0.1,
+      value_per_point_per_lot: 1,
+      fill_pnl: null,
+      capitalLive: false,
+    });
+    expect(paper.pnl_proven).toBe(true);
+    expect(paper.pnl).toBeCloseTo(-1.0, 8);
+  });
+});
+
 describe('close fee honesty (replay parity)', () => {
   it('estimates commission from MASTER_COMMISSION_PER_LOT', () => {
     const prev = process.env.MASTER_COMMISSION_PER_LOT;

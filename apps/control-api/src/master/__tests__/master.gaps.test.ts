@@ -1934,7 +1934,7 @@ describe('partial_close persist + Check be_start', () => {
         value_per_point_per_lot: 1,
         fill_pnl: 42.5,
       })
-    ).toEqual({ pnl: 42.5, pnl_pts: 10, from_broker: true });
+    ).toEqual({ pnl: 42.5, pnl_pts: 10, from_broker: true, pnl_proven: true });
     // Too close to mark for Capital live min 0.5 → defer
     expect(
       capitalSafeBreakEvenStop({

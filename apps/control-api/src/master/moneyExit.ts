@@ -38,7 +38,8 @@ export function resolveFloatingMoneyPnl(input: {
 
 /**
  * Prefer Capital confirm.profit (account currency) when the broker returns it.
- * Falls back to price-path money PnL when confirm profit is absent.
+ * Falls back to price-path money PnL when confirm profit is absent — except on
+ * Capital LIVE, where inventing pts×size would fail-open daily-loss / streak.
  *
  * Floating UPL of exactly 0 is often stale — callers must not pass it as
  * fill_pnl unless it came from a real close confirm (see usableBrokerUpl).
@@ -50,16 +51,72 @@ export function resolveCloseMoneyPnl(input: {
   size: number;
   value_per_point_per_lot: number;
   fill_pnl?: number | null;
-}): { pnl: number; pnl_pts: number; from_broker: boolean } {
+  /** Capital LIVE: refuse mark/SL geometry as realized money when fill_pnl missing */
+  capitalLive?: boolean;
+}): {
+  pnl: number;
+  pnl_pts: number;
+  from_broker: boolean;
+  /** false = do not update daily_pnl / consecutive_losses */
+  pnl_proven: boolean;
+} {
   const pnl_pts =
     input.side === 'BUY' ? input.fill - input.entry : input.entry - input.fill;
   if (input.fill_pnl != null && Number.isFinite(input.fill_pnl)) {
-    return { pnl: Number(input.fill_pnl), pnl_pts, from_broker: true };
+    return {
+      pnl: Number(input.fill_pnl),
+      pnl_pts,
+      from_broker: true,
+      pnl_proven: true,
+    };
+  }
+  if (input.capitalLive) {
+    return { pnl: 0, pnl_pts, from_broker: false, pnl_proven: false };
   }
   return {
     pnl: pnl_pts * input.size * input.value_per_point_per_lot,
     pnl_pts,
     from_broker: false,
+    pnl_proven: true,
+  };
+}
+
+/**
+ * Apply model fees after resolveCloseMoneyPnl. Unproven Capital closes stay 0/0.
+ */
+export function priceResolvedCloseMoney(input: {
+  pnl: number;
+  pnl_pts: number;
+  from_broker: boolean;
+  pnl_proven: boolean;
+  volume: number;
+}): {
+  pnl: number;
+  pnl_pts: number;
+  from_broker: boolean;
+  pnl_proven: boolean;
+  fees: number;
+} {
+  if (!input.pnl_proven) {
+    return {
+      pnl: 0,
+      pnl_pts: input.pnl_pts,
+      from_broker: false,
+      pnl_proven: false,
+      fees: 0,
+    };
+  }
+  const priced = applyCloseFees({
+    pnl: input.pnl,
+    volume: input.volume,
+    from_broker: input.from_broker,
+  });
+  return {
+    pnl: priced.pnl,
+    pnl_pts: input.pnl_pts,
+    from_broker: input.from_broker,
+    pnl_proven: true,
+    fees: priced.fees,
   };
 }
 

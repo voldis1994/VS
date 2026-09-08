@@ -188,6 +188,12 @@ export type TradeOutcome = {
   r_multiple: number;
   hold_ms: number;
   exit_reason: string;
+  /**
+   * Capital LIVE: false when realized money was not venue-proven (no confirm
+   * profit / usable UPL). Callers must not update daily_pnl / loss streak.
+   * Omit/undefined = proven (paper mark path and broker-confirmed closes).
+   */
+  pnl_proven?: boolean;
 };
 
 export type MasterConfig = {

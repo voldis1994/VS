@@ -41,6 +41,7 @@ import { evaluateRisk } from './risk.js';
 import { setupKey } from './decision.js';
 import {
   preferCloseFillPnl,
+  priceResolvedCloseMoney,
   resolveCloseMoneyPnl,
   resolveCloseExitFill,
   resolveFloatingMoneyPnl,
@@ -352,22 +353,21 @@ class MasterRuntime {
       capitalLive,
     });
     const instrument = specForEpic(pos.epic);
-    const resolved = resolveCloseMoneyPnl({
-      side: pos.side,
-      entry: pos.entry,
-      fill,
-      size: pos.size,
-      value_per_point_per_lot: instrument.value_per_point_per_lot,
-      // Prefer close confirm; else last synced UPL (never treat UPL===0 as realized)
-      fill_pnl: preferCloseFillPnl({
-        fill_pnl: closeRes.fill_pnl,
-        broker_upl: pos.broker_upl,
+    const priced = priceResolvedCloseMoney({
+      ...resolveCloseMoneyPnl({
+        side: pos.side,
+        entry: pos.entry,
+        fill,
+        size: pos.size,
+        value_per_point_per_lot: instrument.value_per_point_per_lot,
+        // Prefer close confirm; else last synced UPL (never treat UPL===0 as realized)
+        fill_pnl: preferCloseFillPnl({
+          fill_pnl: closeRes.fill_pnl,
+          broker_upl: pos.broker_upl,
+        }),
+        capitalLive,
       }),
-    });
-    const priced = applyCloseFees({
-      pnl: resolved.pnl,
       volume: pos.size,
-      from_broker: resolved.from_broker,
     });
     const heldMs = Date.now() - new Date(pos.entry_at).getTime();
     const riskDist = Math.max(
@@ -382,23 +382,28 @@ class MasterRuntime {
       volume: pos.size,
       pnl: priced.pnl,
       fees: priced.fees,
+      pnl_proven: priced.pnl_proven,
       slippage: fill_proven ? Math.abs(fill - quote.mid) : 0,
       mae: pos.mae,
       mfe: pos.mfe,
-      r_multiple: resolved.pnl_pts / riskDist,
+      r_multiple: priced.pnl_pts / riskDist,
       hold_ms: heldMs,
-      exit_reason: reason,
+      exit_reason: priced.pnl_proven
+        ? reason
+        : `${reason} · capital_close_pnl_unproven`,
     };
     this.pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome, {
       epic: pos.epic,
     });
     this.positions.drop(positionId);
-    this.account.daily_pnl += outcome.pnl;
-    if (outcome.pnl < 0) {
-      this.account.consecutive_losses += 1;
-      this.last_loss_ms = Date.now();
-    } else {
-      this.account.consecutive_losses = 0;
+    if (priced.pnl_proven) {
+      this.account.daily_pnl += outcome.pnl;
+      if (outcome.pnl < 0) {
+        this.account.consecutive_losses += 1;
+        this.last_loss_ms = Date.now();
+      } else {
+        this.account.consecutive_losses = 0;
+      }
     }
     this.last_exit_reason = reason;
     const sk = pos.decision?.side
@@ -553,26 +558,33 @@ class MasterRuntime {
 
   /** Journal stubs for broker orphans + synthetic flat for local ghosts after sync. */
   private applySyncJournal(sync: Awaited<ReturnType<typeof syncPositionsWithBroker>>, quote?: Quote) {
+    const capitalLive =
+      this.broker instanceof CapitalBroker && !(this.broker.paper ?? false);
     for (const ghost of sync.orphans_local) {
-      const exit = quote
+      const mark = quote
         ? ghost.side === 'BUY'
           ? quote.bid
           : quote.ask
         : ghost.entry;
-      const instrument = specForEpic(ghost.epic);
-      const resolved = resolveCloseMoneyPnl({
-        side: ghost.side,
+      const { exit } = resolveCloseExitFill({
+        fill_price: null,
+        mark,
         entry: ghost.entry,
-        fill: exit,
-        size: ghost.size,
-        value_per_point_per_lot: instrument.value_per_point_per_lot,
-        // Prefer last non-zero broker UPL when fill is only a mark proxy
-        fill_pnl: usableBrokerUpl(ghost.broker_upl),
+        capitalLive,
       });
-      const priced = applyCloseFees({
-        pnl: resolved.pnl,
+      const instrument = specForEpic(ghost.epic);
+      const priced = priceResolvedCloseMoney({
+        ...resolveCloseMoneyPnl({
+          side: ghost.side,
+          entry: ghost.entry,
+          fill: exit,
+          size: ghost.size,
+          value_per_point_per_lot: instrument.value_per_point_per_lot,
+          // Prefer last non-zero broker UPL when fill is only a mark proxy
+          fill_pnl: usableBrokerUpl(ghost.broker_upl),
+          capitalLive,
+        }),
         volume: ghost.size,
-        from_broker: resolved.from_broker,
       });
       const outcome = {
         position_id: ghost.position_id,
@@ -582,12 +594,15 @@ class MasterRuntime {
         volume: ghost.size,
         pnl: priced.pnl,
         fees: priced.fees,
+        pnl_proven: priced.pnl_proven,
         slippage: 0,
         mae: ghost.mae,
         mfe: ghost.mfe,
         r_multiple: 0,
         hold_ms: Date.now() - new Date(ghost.entry_at).getTime(),
-        exit_reason: 'broker_flat',
+        exit_reason: priced.pnl_proven
+          ? 'broker_flat'
+          : 'broker_flat · capital_close_pnl_unproven',
       };
       const exists = this.pipeline.journal.opportunities.some((o) => o.id === ghost.opportunity_id);
       if (!exists) {
@@ -617,7 +632,9 @@ class MasterRuntime {
       this.pipeline.recordTradeClose(ghost.opportunity_id, ghost.decision, outcome, {
         epic: ghost.epic,
       });
-      this.account.daily_pnl += outcome.pnl;
+      if (priced.pnl_proven) {
+        this.account.daily_pnl += outcome.pnl;
+      }
       const sk = ghost.decision?.side
         ? setupKey(ghost.decision.analysis, ghost.decision.side)
         : null;
@@ -636,7 +653,7 @@ class MasterRuntime {
         intent_id: ghost.intent_id,
         opportunity_id: ghost.opportunity_id,
         ok: true,
-        detail: 'broker_flat',
+        detail: outcome.exit_reason,
         pnl: outcome.pnl,
         fees: outcome.fees,
       });
@@ -644,23 +661,28 @@ class MasterRuntime {
     // Reader EXTERNAL_PARTIAL_CLOSE — journal closed slice when broker size shrinks
     for (const partial of sync.external_partials || []) {
       const instrument = specForEpic(partial.epic);
-      const exit = quote
+      const mark = quote
         ? partial.side === 'BUY'
           ? quote.bid
           : quote.ask
         : partial.mark_proxy;
-      const resolved = resolveCloseMoneyPnl({
-        side: partial.side,
+      const { exit, fill_proven: _fp } = resolveCloseExitFill({
+        fill_price: null,
+        mark,
         entry: partial.entry,
-        fill: exit,
-        size: partial.closed_size,
-        value_per_point_per_lot: instrument.value_per_point_per_lot,
-        fill_pnl: usableBrokerUpl(partial.broker_upl_closed),
+        capitalLive,
       });
-      const priced = applyCloseFees({
-        pnl: resolved.pnl,
+      const priced = priceResolvedCloseMoney({
+        ...resolveCloseMoneyPnl({
+          side: partial.side,
+          entry: partial.entry,
+          fill: exit,
+          size: partial.closed_size,
+          value_per_point_per_lot: instrument.value_per_point_per_lot,
+          fill_pnl: usableBrokerUpl(partial.broker_upl_closed),
+          capitalLive,
+        }),
         volume: partial.closed_size,
-        from_broker: resolved.from_broker,
       });
       const outcome = {
         position_id: partial.position_id,
@@ -670,12 +692,15 @@ class MasterRuntime {
         volume: partial.closed_size,
         pnl: priced.pnl,
         fees: priced.fees,
+        pnl_proven: priced.pnl_proven,
         slippage: 0,
         mae: partial.mae,
         mfe: partial.mfe,
         r_multiple: 0,
         hold_ms: 0,
-        exit_reason: 'EXTERNAL_PARTIAL_CLOSE',
+        exit_reason: priced.pnl_proven
+          ? 'EXTERNAL_PARTIAL_CLOSE'
+          : 'EXTERNAL_PARTIAL_CLOSE · capital_close_pnl_unproven',
       };
       const exists = this.pipeline.journal.opportunities.some(
         (o) => o.id === partial.opportunity_id
@@ -707,7 +732,9 @@ class MasterRuntime {
       this.pipeline.recordTradeClose(partial.opportunity_id, partial.decision, outcome, {
         epic: partial.epic,
       });
-      this.account.daily_pnl += outcome.pnl;
+      if (priced.pnl_proven) {
+        this.account.daily_pnl += outcome.pnl;
+      }
       const sk = partial.decision?.side
         ? setupKey(partial.decision.analysis, partial.decision.side)
         : null;
@@ -726,7 +753,7 @@ class MasterRuntime {
         intent_id: partial.intent_id,
         opportunity_id: partial.opportunity_id,
         ok: true,
-        detail: 'EXTERNAL_PARTIAL_CLOSE',
+        detail: outcome.exit_reason,
         pnl: outcome.pnl,
         fees: outcome.fees,
       });
@@ -1257,13 +1284,15 @@ class MasterRuntime {
       }
     }
     for (const c of managed.closed) {
-      this.account.daily_pnl += c.outcome.pnl;
-      if (c.outcome.pnl < 0) {
-        this.account.consecutive_losses += 1;
-        this.last_loss_ms = Date.now();
-        this.persistRuntimeGates();
-      } else {
-        this.account.consecutive_losses = 0;
+      if (c.outcome.pnl_proven !== false) {
+        this.account.daily_pnl += c.outcome.pnl;
+        if (c.outcome.pnl < 0) {
+          this.account.consecutive_losses += 1;
+          this.last_loss_ms = Date.now();
+          this.persistRuntimeGates();
+        } else {
+          this.account.consecutive_losses = 0;
+        }
       }
       const sk = c.position.decision.side
         ? setupKey(c.position.decision.analysis, c.position.decision.side)
@@ -2783,12 +2812,14 @@ class MasterRuntime {
       stale_quote_ms: this.cfg.stale_quote_ms,
     });
     for (const c of managed.closed) {
-      this.account.daily_pnl += c.outcome.pnl;
-      if (c.outcome.pnl < 0) {
-        this.account.consecutive_losses += 1;
-        this.last_loss_ms = Date.now();
-      } else {
-        this.account.consecutive_losses = 0;
+      if (c.outcome.pnl_proven !== false) {
+        this.account.daily_pnl += c.outcome.pnl;
+        if (c.outcome.pnl < 0) {
+          this.account.consecutive_losses += 1;
+          this.last_loss_ms = Date.now();
+        } else {
+          this.account.consecutive_losses = 0;
+        }
       }
       this.last_exit_reason = c.reason;
       const sk = c.position.decision.side
