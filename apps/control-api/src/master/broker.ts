@@ -1645,8 +1645,8 @@ export class CapitalBroker implements MasterBroker {
           ok: false,
           detail:
             tpMissing && alreadyProtected
-              ? `CAPITAL_TP_ATTACH_FAILED:${mod.detail}`
-              : `CAPITAL_SL_ATTACH_FAILED:${mod.detail}`,
+              ? 'CAPITAL_TP_ATTACH_FAILED'
+              : 'CAPITAL_SL_ATTACH_FAILED',
         };
       }
     }

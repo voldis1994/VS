@@ -12,6 +12,7 @@ import { DEFAULT_MASTER_CONFIG, GOLD_SPEC, MasterPipeline } from '../pipeline.js
 import { PositionManager } from '../positionManager.js';
 import type { AccountSnapshot, Bar, Quote } from '../types.js';
 import { masterRuntime } from '../runtime.js';
+import { clearTradeAckJournalForTest } from '../tradeAckJournal.js';
 
 function barsTrendUp(n = 40): Bar[] {
   const out: Bar[] = [];
@@ -139,14 +140,20 @@ function mockCapitalBroker(opts?: { rejectConfirm?: boolean; lagConfirm?: boolea
 
 describe('VS MASTER LIVE Capital path (mocked)', () => {
   const prevLive = process.env.MASTER_LIVE_ENABLED;
+  const prevState = process.env.MASTER_STATE_DIR;
 
   beforeEach(() => {
     delete process.env.MASTER_LIVE_ENABLED;
+    process.env.MASTER_STATE_DIR = mkdtempSync(join(tmpdir(), 'vs-live-path-'));
+    clearTradeAckJournalForTest();
   });
 
   afterEach(() => {
     if (prevLive === undefined) delete process.env.MASTER_LIVE_ENABLED;
     else process.env.MASTER_LIVE_ENABLED = prevLive;
+    if (prevState === undefined) delete process.env.MASTER_STATE_DIR;
+    else process.env.MASTER_STATE_DIR = prevState;
+    clearTradeAckJournalForTest();
     masterRuntime.stop();
   });
 
