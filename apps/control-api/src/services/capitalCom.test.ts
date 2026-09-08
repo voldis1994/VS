@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   capitalComBaseUrl,
   capitalEquityFromAccountFields,
+  capitalRestTimeoutMs,
   encryptCapitalPassword,
   openCapitalSession,
   resolveEpicViaSearch,
@@ -9,6 +10,92 @@ import {
 } from './capitalCom.js';
 import { generateKeyPairSync } from 'crypto';
 import { masterCapitalConnectionId } from '../master/capitalFactory.js';
+
+describe('capitalRestTimeoutMs', () => {
+  afterEach(() => {
+    delete process.env.CAPITAL_REST_TIMEOUT_MS;
+  });
+
+  it('defaults to 12s and clamps env override', () => {
+    expect(capitalRestTimeoutMs()).toBe(12_000);
+    process.env.CAPITAL_REST_TIMEOUT_MS = '500';
+    expect(capitalRestTimeoutMs()).toBe(500);
+    process.env.CAPITAL_REST_TIMEOUT_MS = '50';
+    expect(capitalRestTimeoutMs()).toBe(12_000);
+  });
+});
+
+describe('Capital session REST abort timeout', () => {
+  afterEach(() => {
+    delete process.env.CAPITAL_REST_TIMEOUT_MS;
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('request path returns capital_rest_timeout when fetch hangs', async () => {
+    process.env.CAPITAL_REST_TIMEOUT_MS = '300';
+    const headers = (h: Record<string, string>) => ({
+      get: (k: string) => h[k] || h[k.toLowerCase()] || null,
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const u = String(url);
+        if (u.includes('/encryptionKey')) {
+          return {
+            ok: false,
+            status: 404,
+            headers: headers({}),
+            text: async () => '',
+          };
+        }
+        if (u.includes('/api/v1/session') && (init?.method || 'GET') === 'POST') {
+          return {
+            ok: true,
+            status: 200,
+            headers: headers({
+              CST: 'cst-t',
+              'X-SECURITY-TOKEN': 'sec-t',
+            }),
+            text: async () =>
+              JSON.stringify({ currentAccountId: 'acc-1', accountType: 'CFD' }),
+          };
+        }
+        // Hang until AbortSignal fires
+        await new Promise((_, reject) => {
+          const s = init?.signal;
+          if (!s) return;
+          if (s.aborted) {
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+            return;
+          }
+          s.addEventListener('abort', () => {
+            reject(Object.assign(new Error('aborted'), { name: 'TimeoutError' }));
+          });
+        });
+        return {
+          ok: false,
+          status: 0,
+          headers: headers({}),
+          text: async () => '',
+        };
+      })
+    );
+
+    const opened = await openCapitalSession({
+      environment: 'demo',
+      apiKey: 'k',
+      identifier: 'i',
+      password: 'p',
+    });
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    const res = await opened.session.get('/api/v1/accounts');
+    expect(res.ok).toBe(false);
+    expect(res.status).toBe(0);
+    expect(res.text).toBe('capital_rest_timeout');
+  });
+});
 
 describe('capitalEquityFromAccountFields', () => {
   it('includes floating profitLoss so underwater equity is below cash balance', () => {

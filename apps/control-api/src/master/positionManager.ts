@@ -332,8 +332,8 @@ export class PositionManager {
     ema1_prev2?: number | null;
     ema3_prev2?: number | null;
     /**
-     * When set, quotes older than this skip soft manage (BE/trail/TIME_STOP/partial)
-     * but still attempt naked SL recovery — Check- stale bridge gate.
+     * When set, quotes older than this skip mark-based soft manage (BE/trail/partial/
+     * BestOutcome) but still run TIME_STOP + naked SL recovery — feed-miss exits.
      */
     stale_quote_ms?: number;
   }): Promise<ManageTickResult> {
@@ -391,7 +391,8 @@ export class PositionManager {
     const closed: ManageTickResult['closed'] = [];
     const close_failed: ManageTickResult['close_failed'] = [];
 
-    // Check- stale market: no soft manage / portfolio closes on dead quotes
+    // Check- stale market: skip mark-based soft manage / portfolio closes on dead quotes.
+    // TIME_STOP still runs — clock-based, does not need a fresh mark for the verdict.
     const staleMs = input.stale_quote_ms ?? 0;
     const quoteStale =
       staleMs > 0 &&
@@ -401,6 +402,76 @@ export class PositionManager {
       for (const pos of this.list()) {
         if (pos.stop_loss == null) {
           await this.maybeRecoverNakedStop(broker, pos, quote, minStopDist);
+        }
+      }
+      if (maxHold > 0) {
+        for (const pos of [...this.open.values()]) {
+          const heldMs = Date.now() - new Date(pos.entry_at).getTime();
+          if (heldMs < maxHold) continue;
+          const reason = `TIME_STOP · held ${Math.round(heldMs / 1000)}s ≥ ${Math.round(maxHold / 1000)}s`;
+          if (!allowClose) {
+            close_failed.push({
+              position_id: pos.position_id,
+              exit_reason: reason,
+              detail: 'ai_veto_close',
+            });
+            continue;
+          }
+          if (await this.softCloseRequiresSlBlocked(broker, pos)) {
+            close_failed.push({
+              position_id: pos.position_id,
+              exit_reason: reason,
+              detail: 'close_requires_sl',
+            });
+            continue;
+          }
+          const closeRes = await broker.closePosition(pos.position_id);
+          if (!closeRes.ok) {
+            close_failed.push({
+              position_id: pos.position_id,
+              exit_reason: reason,
+              detail: closeRes.detail || 'close_failed',
+            });
+            continue;
+          }
+          const mark = protectiveMark(pos.side, quote);
+          const fill =
+            closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
+              ? Number(closeRes.fill_price)
+              : mark;
+          const { pnl, from_broker } = resolveCloseMoneyPnl({
+            side: pos.side,
+            entry: pos.entry,
+            fill,
+            size: pos.size,
+            value_per_point_per_lot: pv,
+            fill_pnl: closeRes.fill_pnl,
+          });
+          const priced = applyCloseFees({
+            pnl,
+            volume: pos.size,
+            from_broker,
+          });
+          const outcome: TradeOutcome = {
+            position_id: pos.position_id,
+            side: pos.side,
+            entry: pos.entry,
+            exit: fill,
+            volume: pos.size,
+            pnl: priced.pnl,
+            fees: priced.fees,
+            slippage: Math.abs(fill - quote.mid),
+            mae: pos.mae,
+            mfe: pos.mfe,
+            r_multiple: 0,
+            hold_ms: heldMs,
+            exit_reason: reason,
+          };
+          pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome, {
+            epic: pos.epic,
+          });
+          this.open.delete(pos.position_id);
+          closed.push({ position: pos, outcome, reason });
         }
       }
       return { closed, close_failed, modified: 0 };

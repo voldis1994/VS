@@ -2262,23 +2262,34 @@ class MasterRuntime {
             -400
           );
         } else if (!process.env.VITEST) {
-          let brokerHist: Awaited<ReturnType<NonNullable<MasterBroker['getHistoryBars']>>> | null =
-            null;
-          if (typeof this.broker.getHistoryBars === 'function') {
+          // Only pull Capital OHLC when structure refresh is due — every-cycle
+          // getHistoryBars held the CST login lock and could starve closes.
+          const structureEveryMs = 120_000;
+          const structureDue =
+            Date.now() - builder.last_structure_refresh_ms >= structureEveryMs;
+          let brokerHist: Awaited<
+            ReturnType<NonNullable<MasterBroker['getHistoryBars']>>
+          > | null = null;
+          if (structureDue && typeof this.broker.getHistoryBars === 'function') {
             try {
-              brokerHist = await this.broker.getHistoryBars(this.epic, 60);
+              brokerHist = await Promise.race([
+                this.broker.getHistoryBars(this.epic, 60),
+                new Promise<null>((resolve) => setTimeout(() => resolve(null), 8_000)),
+              ]);
             } catch {
               brokerHist = null;
             }
           }
-          const refreshed = await builder.refreshStructureIfStale(
-            this.epic,
-            q.mid,
-            120_000,
-            brokerHist
-          );
-          if (refreshed) {
-            this.broker_detail = `${this.broker_detail || ''};${refreshed}`.slice(-400);
+          if (structureDue) {
+            const refreshed = await builder.refreshStructureIfStale(
+              this.epic,
+              q.mid,
+              structureEveryMs,
+              brokerHist
+            );
+            if (refreshed) {
+              this.broker_detail = `${this.broker_detail || ''};${refreshed}`.slice(-400);
+            }
           }
         }
         const { bars } = builder.pushTick(q.mid);

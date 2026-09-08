@@ -2664,7 +2664,7 @@ describe('partial_close persist + Check be_start', () => {
     expect(q!.ts_ms).toBeLessThan(Date.now() - 60_000);
   });
 
-  it('stale quote skips soft manage (TIME_STOP) but keeps position', async () => {
+  it('stale quote still honors TIME_STOP but skips mark-based soft manage', async () => {
     const broker = new PaperBroker();
     await broker.connect();
     const entry = 4400;
@@ -2707,7 +2707,7 @@ describe('partial_close persist + Check be_start', () => {
         expectancy: null,
       },
     });
-    // Backdate entry so TIME_STOP would fire if soft manage ran
+    // Backdate entry so TIME_STOP fires even when quote is stale
     (pos as { entry_at: string }).entry_at = new Date(
       Date.now() - 3_600_000
     ).toISOString();
@@ -2727,8 +2727,9 @@ describe('partial_close persist + Check be_start', () => {
       allow_close: true,
       stale_quote_ms: 30_000,
     });
-    expect(managed.closed.length).toBe(0);
-    expect(pm.count()).toBe(1);
+    expect(managed.closed.length).toBe(1);
+    expect(managed.closed[0]!.reason).toMatch(/TIME_STOP/);
+    expect(pm.count()).toBe(0);
   });
 });
 

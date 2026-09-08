@@ -8,6 +8,28 @@ export function capitalComBaseUrl(environment: string): string {
     : 'https://demo-api-capital.backend-capital.com';
 }
 
+/**
+ * Hard ceiling so hung Capital REST cannot hold MASTER withLoginLock forever.
+ * Outer Promise.race does not abort fetch — this does.
+ * Override via CAPITAL_REST_TIMEOUT_MS (250..120000).
+ */
+export function capitalRestTimeoutMs(): number {
+  const n = Number(process.env.CAPITAL_REST_TIMEOUT_MS);
+  if (Number.isFinite(n) && n >= 250 && n <= 120_000) return Math.floor(n);
+  return 12_000;
+}
+
+async function capitalFetch(
+  url: string,
+  init: RequestInit,
+  timeoutMs = capitalRestTimeoutMs()
+): Promise<Response> {
+  return fetch(url, {
+    ...init,
+    signal: init.signal ?? AbortSignal.timeout(timeoutMs),
+  });
+}
+
 export interface CapitalComSessionResult {
   ok: boolean;
   status: number;
@@ -110,7 +132,7 @@ async function createSession(
   password: string,
   encryptedPassword: boolean
 ): Promise<{ res: Response; text: string; json: Record<string, unknown> }> {
-  const res = await fetch(`${base}/api/v1/session`, {
+  const res = await capitalFetch(`${base}/api/v1/session`, {
     method: 'POST',
     headers: {
       Accept: 'application/json',
@@ -140,7 +162,7 @@ async function resolveLoginPassword(
 ): Promise<Array<{ encrypted: boolean; password: string; label: string }>> {
   const attempts: Array<{ encrypted: boolean; password: string; label: string }> = [];
   try {
-    const encRes = await fetch(`${base}/api/v1/session/encryptionKey`, {
+    const encRes = await capitalFetch(`${base}/api/v1/session/encryptionKey`, {
       method: 'GET',
       headers: { Accept: 'application/json', 'X-CAP-API-KEY': apiKey },
     });
@@ -306,7 +328,7 @@ export async function openCapitalSession(input: {
           if (pref) {
             // Direct PUT (bypass request 401 recursion while still inside relogin).
             try {
-              const pinRes = await fetch(`${base}/api/v1/session`, {
+              const pinRes = await capitalFetch(`${base}/api/v1/session`, {
                 method: 'PUT',
                 headers: authHeaders,
                 body: JSON.stringify({ accountId: pref }),
@@ -352,11 +374,29 @@ export async function openCapitalSession(input: {
       retried = false
     ): Promise<{ ok: boolean; status: number; json: any; text: string }> => {
       const url = path.startsWith('http') ? path : `${base}${path}`;
-      const r = await fetch(url, {
-        method,
-        headers: authHeaders,
-        body: body === undefined ? undefined : JSON.stringify(body),
-      });
+      let r: Response;
+      try {
+        r = await capitalFetch(url, {
+          method,
+          headers: authHeaders,
+          body: body === undefined ? undefined : JSON.stringify(body),
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const name = e instanceof Error ? e.name : '';
+        const timedOut =
+          name === 'TimeoutError' ||
+          name === 'AbortError' ||
+          /aborted|timeout/i.test(msg);
+        return {
+          ok: false,
+          status: 0,
+          json: {},
+          text: timedOut
+            ? 'capital_rest_timeout'
+            : `capital_rest_error:${msg.slice(0, 160)}`,
+        };
+      }
       // Refresh tokens if Capital returns rotated headers
       const rotCst = r.headers.get('CST') || r.headers.get('cst');
       const rotSec =
@@ -403,7 +443,7 @@ export async function openCapitalSession(input: {
       preferredAccountId: accountId,
       async close() {
         try {
-          await fetch(`${base}/api/v1/session`, {
+          await capitalFetch(`${base}/api/v1/session`, {
             method: 'DELETE',
             headers: {
               'X-CAP-API-KEY': apiKey,
