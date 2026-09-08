@@ -33,7 +33,12 @@ import {
 } from './positionManager.js';
 import { evaluateRisk } from './risk.js';
 import { setupKey } from './decision.js';
-import { resolveCloseMoneyPnl, resolveFloatingMoneyPnl, applyCloseFees } from './moneyExit.js';
+import {
+  resolveCloseMoneyPnl,
+  resolveFloatingMoneyPnl,
+  applyCloseFees,
+  usableBrokerUpl,
+} from './moneyExit.js';
 import { loadMasterErrors, logMasterError } from './errorJournal.js';
 import { CycleMonitor } from './monitoring.js';
 import { logDecisionEvent, loadDecisionEvents } from './decisionJournal.js';
@@ -288,7 +293,11 @@ class MasterRuntime {
       fill,
       size: pos.size,
       value_per_point_per_lot: instrument.value_per_point_per_lot,
-      fill_pnl: closeRes.fill_pnl ?? pos.broker_upl,
+      // Prefer close confirm; never treat floating UPL===0 as realized
+      fill_pnl:
+        closeRes.fill_pnl != null && Number.isFinite(closeRes.fill_pnl)
+          ? Number(closeRes.fill_pnl)
+          : usableBrokerUpl(pos.broker_upl),
     });
     const priced = applyCloseFees({
       pnl: resolved.pnl,
@@ -423,8 +432,8 @@ class MasterRuntime {
         fill: exit,
         size: ghost.size,
         value_per_point_per_lot: instrument.value_per_point_per_lot,
-        // Prefer last broker UPL when fill price is only a mark proxy (Check- pattern)
-        fill_pnl: ghost.broker_upl,
+        // Prefer last non-zero broker UPL when fill is only a mark proxy
+        fill_pnl: usableBrokerUpl(ghost.broker_upl),
       });
       const priced = applyCloseFees({
         pnl: resolved.pnl,
@@ -509,7 +518,7 @@ class MasterRuntime {
         fill: exit,
         size: partial.closed_size,
         value_per_point_per_lot: instrument.value_per_point_per_lot,
-        fill_pnl: partial.broker_upl_closed,
+        fill_pnl: usableBrokerUpl(partial.broker_upl_closed),
       });
       const priced = applyCloseFees({
         pnl: resolved.pnl,
@@ -1263,6 +1272,9 @@ class MasterRuntime {
     }
     this.persistRuntimeGates();
 
+    // Dashboard honesty after restart — seed monitoring from durable snapshot
+    this.monitor.hydrateFromDisk();
+
     // Reader recover_spread_model — relative-spread gate must not cold-open after restart
     this.spreadLookback = this.cfg.spread_lookback_bars;
     this.spreadHistory = new SpreadHistory(this.spreadLookback);
@@ -1750,6 +1762,7 @@ class MasterRuntime {
         ok: e.ok,
         detail: e.detail,
         pnl: e.pnl,
+        fees: e.fees,
         opportunity_id: e.opportunity_id,
       })),
     };

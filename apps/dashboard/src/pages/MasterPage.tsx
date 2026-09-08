@@ -86,6 +86,7 @@ type MasterStatus = {
     executed: boolean;
     block_reason: string | null;
     execution_detail: string | null;
+    opportunity_id?: string | null;
   }>;
   recent_trades?: Array<{
     ts: string;
@@ -94,6 +95,8 @@ type MasterStatus = {
     ok: boolean;
     detail: string | null;
     pnl: number | null;
+    fees?: number | null;
+    opportunity_id?: string | null;
   }>;
   manage?: {
     scalp_pct_chase?: boolean;
@@ -371,6 +374,16 @@ export function MasterPage() {
           k: 'Alert block',
           v: status.monitoring?.entry_block_reason || '—',
           bad: !!status.monitoring?.entry_block_reason,
+        },
+        {
+          k: 'Alerts',
+          v: status.monitoring?.active_alerts?.length
+            ? status.monitoring.active_alerts
+                .slice(0, 3)
+                .map((a) => a.code)
+                .join(' · ')
+            : '—',
+          bad: (status.monitoring?.active_alerts?.length || 0) > 0,
         },
         {
           k: 'Err/min',
@@ -711,13 +724,16 @@ export function MasterPage() {
               </div>
               <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
                 {d.ts ? new Date(d.ts).toISOString().slice(11, 19) : '—'}
+                {d.opportunity_id
+                  ? ` · opp ${String(d.opportunity_id).slice(0, 8)}`
+                  : ''}
               </div>
             </div>
           ))
         )}
       </div>
 
-      <h2 className="section-title">Trade events (OPEN/CLOSE)</h2>
+      <h2 className="section-title">Trade events (OPEN/MODIFY/CLOSE)</h2>
       <div className="grid grid-3" style={{ gap: 10, marginBottom: 20 }}>
         {!status?.recent_trades?.length ? (
           <div className="card">no trade events yet</div>
@@ -741,10 +757,14 @@ export function MasterPage() {
                 }}
               >
                 {t.pnl != null ? t.pnl.toFixed(2) : '—'}
+                {t.fees != null && t.fees > 0 ? ` · fees ${Number(t.fees).toFixed(2)}` : ''}
                 {t.detail ? ` · ${String(t.detail).slice(0, 40)}` : ''}
               </div>
               <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
                 {t.ts ? new Date(t.ts).toISOString().slice(11, 19) : '—'}
+                {t.opportunity_id
+                  ? ` · opp ${String(t.opportunity_id).slice(0, 8)}`
+                  : ''}
               </div>
             </div>
           ))

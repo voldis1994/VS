@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtempSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import {
   evaluateCandleBiasFive,
   scalpStrictEntryAllowed,
@@ -266,5 +269,57 @@ describe('scalp chase throttle durability', () => {
     const pm2 = new PositionManager();
     pm2.fromJSON(snap);
     expect(pm2.get('chase-persist-1')!.scalp_chase_at_ms).toBe(stamped);
+  });
+
+  it('scalp_chase_at_ms survives file persist round-trip', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vs-chase-fp-'));
+    process.env.MASTER_STATE_DIR = dir;
+    const { installFilePersist } = await import('../filePersist.js');
+    const { saveOpenPositions, loadOpenPositions } = await import('../persist.js');
+    const { PositionManager } = await import('../positionManager.js');
+    installFilePersist(dir);
+    const pm = new PositionManager();
+    pm.register({
+      position_id: 'chase-fp-1',
+      opportunity_id: 'opp-fp',
+      intent_id: 'i-fp',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4400,
+      stop_loss: 4390,
+      take_profit: 4420,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {
+          regime: 'TREND',
+          market_state: 'UP',
+          session: 'LONDON',
+          volatility: 0.001,
+          atr: 1,
+          trend: 'UP',
+          structure_bias: 'BULLISH',
+          data_quality: 1,
+          bar_count: 50,
+          last_close: 4400,
+          spread: 0.2,
+          swing_high: 4410,
+          swing_low: 4390,
+        } as never,
+        expectancy: null,
+      },
+    });
+    const stamped = Date.now() - 2_500;
+    pm.get('chase-fp-1')!.scalp_chase_at_ms = stamped;
+    expect(await saveOpenPositions(pm.list())).toBe(true);
+    const loaded = await loadOpenPositions();
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]!.scalp_chase_at_ms).toBe(stamped);
   });
 });

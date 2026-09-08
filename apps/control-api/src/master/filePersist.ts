@@ -64,6 +64,7 @@ export class FilePersist implements PersistClient {
           soft_trail_armed_at: p.soft_trail_armed_at ?? null,
           soft_trail_peak: p.soft_trail_peak ?? null,
           native_trail_armed: !!p.native_trail_armed,
+          scalp_chase_at_ms: p.scalp_chase_at_ms ?? null,
         },
       }));
       this.mem.intents = new Set(raw.intents || []);
@@ -165,6 +166,8 @@ export class FilePersist implements PersistClient {
         native_trail_armed: !!(
           p.native_trail_armed ?? p.payload?.native_trail_armed
         ),
+        scalp_chase_at_ms:
+          p.scalp_chase_at_ms ?? p.payload?.scalp_chase_at_ms ?? null,
       })),
       intents: [...this.mem.intents],
     };

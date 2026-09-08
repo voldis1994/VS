@@ -39,6 +39,9 @@ export function resolveFloatingMoneyPnl(input: {
 /**
  * Prefer Capital confirm.profit (account currency) when the broker returns it.
  * Falls back to price-path money PnL when confirm profit is absent.
+ *
+ * Floating UPL of exactly 0 is often stale — callers must not pass it as
+ * fill_pnl unless it came from a real close confirm (see usableBrokerUpl).
  */
 export function resolveCloseMoneyPnl(input: {
   side: 'BUY' | 'SELL';
@@ -60,6 +63,16 @@ export function resolveCloseMoneyPnl(input: {
   };
 }
 
+/**
+ * Use floating/orphan broker UPL as realized only when non-zero.
+ * Zero is treated as missing so mark PnL + model fees can run.
+ * Real close confirms that return 0 should be passed via fill_pnl directly.
+ */
+export function usableBrokerUpl(upl: number | null | undefined): number | null {
+  if (upl == null || !Number.isFinite(upl) || upl === 0) return null;
+  return Number(upl);
+}
+
 /** Round-trip commission model (replay default 0.05 / lot). Override via MASTER_COMMISSION_PER_LOT. */
 export function estimateTradeFees(volume: number): number {
   const raw = Number(process.env.MASTER_COMMISSION_PER_LOT ?? 0.05);
@@ -71,17 +84,18 @@ export function estimateTradeFees(volume: number): number {
 
 /**
  * Apply model commission when PnL is mark-computed.
- * Broker fill_pnl is treated as already net — fees=0 to avoid double-count.
+ * Broker fill_pnl is treated as already net — pnl is not reduced again, but
+ * estimated fees are still recorded for dashboard total_fees / KPI honesty.
  */
 export function applyCloseFees(input: {
   pnl: number;
   volume: number;
   from_broker?: boolean;
 }): { pnl: number; fees: number } {
-  if (input.from_broker) {
-    return { pnl: input.pnl, fees: 0 };
-  }
   const fees = estimateTradeFees(input.volume);
+  if (input.from_broker) {
+    return { pnl: input.pnl, fees };
+  }
   return { pnl: input.pnl - fees, fees };
 }
 

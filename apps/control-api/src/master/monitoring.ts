@@ -149,4 +149,33 @@ export class CycleMonitor {
       return null;
     }
   }
+
+  /**
+   * Restart hydrate — seed last metrics/alerts so dashboard is not cold-empty
+   * until the first tick. Does not invent cycles count (unknown after crash).
+   */
+  hydrateFromDisk(): boolean {
+    const raw = this.loadPersisted();
+    if (!raw) return false;
+    if (typeof raw.cycle_latency_ms === 'number' && Number.isFinite(raw.cycle_latency_ms)) {
+      this.last_cycle_ms = Math.max(0, Math.round(raw.cycle_latency_ms));
+    }
+    if (typeof raw.timestamp_utc === 'string' && raw.timestamp_utc) {
+      this.last_cycle_at = raw.timestamp_utc;
+    }
+    if (typeof raw.relative_spread === 'number' && Number.isFinite(raw.relative_spread)) {
+      this.relative_spread = Number(raw.relative_spread);
+    }
+    if (Array.isArray(raw.active_alerts)) {
+      this.lastAlerts = raw.active_alerts as CycleAlert[];
+    }
+    if (
+      typeof raw.entry_block_reason === 'string' ||
+      raw.entry_block_reason === null
+    ) {
+      this.lastEntryBlock =
+        raw.entry_block_reason == null ? null : String(raw.entry_block_reason);
+    }
+    return true;
+  }
 }

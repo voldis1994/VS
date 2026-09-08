@@ -5,6 +5,17 @@ import { join } from 'path';
 import { applyCloseFees, estimateTradeFees } from '../moneyExit.js';
 import { CycleMonitor } from '../monitoring.js';
 
+describe('usableBrokerUpl', () => {
+  it('treats 0/null as missing so mark PnL can run', async () => {
+    const { usableBrokerUpl } = await import('../moneyExit.js');
+    expect(usableBrokerUpl(null)).toBeNull();
+    expect(usableBrokerUpl(undefined)).toBeNull();
+    expect(usableBrokerUpl(0)).toBeNull();
+    expect(usableBrokerUpl(1.25)).toBe(1.25);
+    expect(usableBrokerUpl(-2)).toBe(-2);
+  });
+});
+
 describe('close fee honesty (replay parity)', () => {
   it('estimates commission from MASTER_COMMISSION_PER_LOT', () => {
     const prev = process.env.MASTER_COMMISSION_PER_LOT;
@@ -14,12 +25,12 @@ describe('close fee honesty (replay parity)', () => {
     else process.env.MASTER_COMMISSION_PER_LOT = prev;
   });
 
-  it('subtracts fees for mark PnL but not broker fill_pnl', () => {
+  it('subtracts fees for mark PnL; broker fill_pnl keeps pnl, records fee estimate', () => {
     const mark = applyCloseFees({ pnl: 10, volume: 1, from_broker: false });
     expect(mark.fees).toBeGreaterThan(0);
     expect(mark.pnl).toBeLessThan(10);
     const broker = applyCloseFees({ pnl: 10, volume: 1, from_broker: true });
-    expect(broker.fees).toBe(0);
+    expect(broker.fees).toBeGreaterThan(0);
     expect(broker.pnl).toBe(10);
   });
 
@@ -118,6 +129,35 @@ describe('CycleMonitor', () => {
     expect(snap.instance_health).toBe('OK');
     expect(snap.error_rate_per_min).toBe(0);
     expect(existsSync(join(dir, 'monitoring_snapshot.json'))).toBe(true);
+  });
+
+  it('hydrateFromDisk restores alerts and cycle latency after restart', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vs-mon-hyd-'));
+    process.env.MASTER_STATE_DIR = dir;
+    const m = new CycleMonitor();
+    m.noteCycle(42);
+    m.noteRelativeSpread(1.1);
+    const { ALERT_DATA_STALE } = await import('../cycleAlerts.js');
+    m.noteAlerts(
+      [
+        {
+          code: ALERT_DATA_STALE,
+          level: 'WARNING',
+          message: 'stale',
+          ts: new Date().toISOString(),
+        },
+      ],
+      `alert:${ALERT_DATA_STALE}`
+    );
+    m.snapshot(9000);
+    const m2 = new CycleMonitor();
+    expect(m2.hydrateFromDisk()).toBe(true);
+    expect(m2.last_cycle_ms).toBe(42);
+    expect(m2.relative_spread).toBe(1.1);
+    const snap = m2.snapshot(null);
+    expect(snap.entry_block_reason).toBe(`alert:${ALERT_DATA_STALE}`);
+    expect(snap.active_alerts.some((a) => a.code === ALERT_DATA_STALE)).toBe(true);
+    expect(snap.instance_health).not.toBe('OK');
   });
 });
 

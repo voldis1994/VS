@@ -11,7 +11,10 @@ export class ExpectancyStore {
   private readonly bySetup = new Map<string, SetupOutcome[]>();
 
   record(setup_key: string, outcome: TradeOutcome) {
-    const costs = Math.max(0, outcome.fees) + Math.max(0, Math.abs(outcome.slippage));
+    // outcome.pnl is already net of model fees (or broker-net). Fees here are
+    // metadata for avg costs only — never re-subtracted from EV. Slippage is a
+    // price distance, not money, so it is excluded from costs.
+    const costs = Math.max(0, Number(outcome.fees) || 0);
     const list = this.bySetup.get(setup_key) || [];
     list.push({ setup_key, pnl: outcome.pnl, costs });
     this.bySetup.set(setup_key, list);
@@ -29,7 +32,9 @@ export class ExpectancyStore {
       ? Math.abs(losses.reduce((s, x) => s + x.pnl, 0) / losses.length)
       : 0;
     const costs = list.reduce((s, x) => s + x.costs, 0) / list.length;
-    const ev = p_win * avg_win - p_loss * avg_loss - costs;
+    // Mean net pnl ≡ p_win*avg_win − p_loss*avg_loss when avg_* use signed nets.
+    // Do not subtract costs again (fees already in pnl).
+    const ev = p_win * avg_win - p_loss * avg_loss;
     return {
       setup_key,
       samples: list.length,

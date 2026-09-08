@@ -168,6 +168,12 @@ describe('VS MASTER EMA3 trail manage', () => {
       allow_close: false,
     });
     expect(pm.get(placed.position_id!)!.stop_loss).toBeCloseTo(ema3, 5);
+    const { loadTradeEvents } = await import('../tradeEventJournal.js');
+    const mods = loadTradeEvents(20).filter(
+      (e) => e.event === 'MODIFY' && e.detail?.includes('ema3_trail')
+    );
+    expect(mods.length).toBeGreaterThan(0);
+    expect(mods.some((e) => e.opportunity_id === 'opp-ema3')).toBe(true);
   });
 });
 
@@ -448,7 +454,9 @@ describe('VS MASTER expectancy + journal', () => {
     const snap = store.lookup('BUY|TREND|UP|LONDON')!;
     expect(snap.samples).toBe(3);
     expect(snap.p_win).toBeCloseTo(2 / 3, 5);
-    expect(snap.ev).toBeDefined();
+    // Mean net pnl (10+10-8)/3 — fees already in pnl, not subtracted again
+    expect(snap.ev).toBeCloseTo(4, 8);
+    expect(snap.costs).toBeCloseTo(0.5, 8);
   });
 
   it('surfaceForApi keeps closed trades visible amid WAIT noise', () => {

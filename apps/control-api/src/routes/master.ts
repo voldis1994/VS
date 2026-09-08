@@ -441,7 +441,7 @@ h2{font-size:13px;color:#9fb0c0;margin:22px 0 8px;text-transform:uppercase;lette
 <div class="grid" id="positions"></div>
 <h2>Decision journal (recent cycles)</h2>
 <div class="grid" id="decisions"></div>
-<h2>Trade events (OPEN/CLOSE)</h2>
+<h2>Trade events (OPEN/MODIFY/CLOSE)</h2>
 <div class="grid" id="trades"></div>
 <h2>Journal (recent traded)</h2>
 <div class="grid" id="journal"></div>
@@ -503,6 +503,7 @@ async function refresh(){
       card('Cycle ms',s.monitoring?.last_cycle_ms!=null?String(s.monitoring.last_cycle_ms):'—'),
       card('Inst health',s.monitoring?.instance_health||'—',s.monitoring?.instance_health==='CRITICAL'||s.monitoring?.instance_health==='DEGRADED'?'bad':s.monitoring?.instance_health==='OK'?'ok':''),
       card('Alert block',s.monitoring?.entry_block_reason||'—',s.monitoring?.entry_block_reason?'bad':''),
+      card('Alerts',(s.monitoring?.active_alerts&&s.monitoring.active_alerts.length)?s.monitoring.active_alerts.slice(0,3).map(a=>a.code).join(' · '):'—',(s.monitoring?.active_alerts&&s.monitoring.active_alerts.length)?'bad':''),
       card('Err/min',s.monitoring?.error_rate_per_min!=null?String(s.monitoring.error_rate_per_min):'—',(s.monitoring?.error_rate_per_min||0)>0?'bad':''),
       card('Max DD',Number(s.performance?.max_drawdown||0).toFixed(2)),
       card('Recovered',s.recovered?'YES':'—'),
@@ -525,12 +526,15 @@ async function refresh(){
     const dec=(s.recent_decisions||[]).slice(0,8);
     decisions.innerHTML=dec.length?dec.map(d=>{
       const detail=d.block_reason||d.execution_detail||'—';
-      return card(d.kind+(d.executed?' · FILL':''), String(detail).slice(0,48)+(d.ts?' · '+String(d.ts).slice(11,19):''), d.executed?'ok':(d.block_reason?'bad':''));
+      const opp=d.opportunity_id?' · opp '+String(d.opportunity_id).slice(0,8):'';
+      return card(d.kind+(d.executed?' · FILL':''), String(detail).slice(0,48)+opp+(d.ts?' · '+String(d.ts).slice(11,19):''), d.executed?'ok':(d.block_reason?'bad':''));
     }).join(''):card('Decisions','no cycle events yet');
     const te=(s.recent_trades||[]).slice(0,8);
     trades.innerHTML=te.length?te.map(t=>{
       const pn=t.pnl!=null?Number(t.pnl).toFixed(2):'—';
-      return card(t.event+' · '+t.broker+(t.ok?'':' · FAIL'), pn+' · '+String(t.detail||'').slice(0,40)+(t.ts?' · '+String(t.ts).slice(11,19):''), t.ok?(t.pnl!=null&&t.pnl<0?'bad':'ok'):'bad');
+      const fees=t.fees!=null&&t.fees>0?' · fees '+Number(t.fees).toFixed(2):'';
+      const opp=t.opportunity_id?' · opp '+String(t.opportunity_id).slice(0,8):'';
+      return card(t.event+' · '+t.broker+(t.ok?'':' · FAIL'), pn+fees+' · '+String(t.detail||'').slice(0,36)+opp+(t.ts?' · '+String(t.ts).slice(11,19):''), t.ok?(t.pnl!=null&&t.pnl<0?'bad':'ok'):'bad');
     }).join(''):card('Trades','no trade events yet');
     const j=await fetch('/api/master/journal').then(r=>r.json());
     const traded=(j.opportunities||[]).filter(o=>o.executed&&o.outcome).slice(-8).reverse();

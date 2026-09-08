@@ -133,6 +133,7 @@ export async function saveOpenPositions(positions: ManagedPosition[]): Promise<b
             soft_trail_armed_at: p.soft_trail_armed_at ?? null,
             soft_trail_peak: p.soft_trail_peak ?? null,
             native_trail_armed: !!p.native_trail_armed,
+            scalp_chase_at_ms: p.scalp_chase_at_ms ?? null,
           }),
         ]
       );
@@ -175,6 +176,10 @@ export async function loadOpenPositions(): Promise<ManagedPosition[]> {
         soft_trail_peak:
           payload.soft_trail_peak != null ? Number(payload.soft_trail_peak) : null,
         native_trail_armed: !!payload.native_trail_armed,
+        scalp_chase_at_ms:
+          payload.scalp_chase_at_ms != null && Number.isFinite(Number(payload.scalp_chase_at_ms))
+            ? Number(payload.scalp_chase_at_ms)
+            : null,
       } as ManagedPosition;
     });
   } catch {
