@@ -168,6 +168,8 @@ export type MasterStatus = {
   blocked: number;
   health: string;
   recovered: boolean;
+  /** Operator intended running before crash — durable via runtime_gates */
+  desired_running: boolean;
   persist_ok: boolean;
   last_persist_error: string | null;
   entries_armed: boolean;
@@ -240,6 +242,8 @@ class MasterRuntime {
   positions = new PositionManager();
   cfg: MasterConfig = { ...DEFAULT_MASTER_CONFIG };
   running = false;
+  /** Durable intent to run cycles — survives crash; resume on boot when true */
+  desired_running = false;
   broker: MasterBroker | null = null;
   paperBroker = new PaperBroker();
   account: AccountSnapshot = {
@@ -445,6 +449,9 @@ class MasterRuntime {
     if (gates.last_close_failed && typeof gates.last_close_failed === 'object') {
       this.last_close_failed = gates.last_close_failed;
     }
+    if (typeof gates.desired_running === 'boolean') {
+      this.desired_running = gates.desired_running;
+    }
     if (typeof gates.last_ai_allow_close === 'boolean') {
       this.last_ai_allow_close = gates.last_ai_allow_close;
     } else if (this.cfg.ai_mode !== 'off') {
@@ -487,6 +494,47 @@ class MasterRuntime {
    */
   async bootstrapManageAfterRecoverPublic(): Promise<void> {
     await this.bootstrapManageAfterRecover();
+  }
+
+  /**
+   * Resume feed/entries after crash when durable desired_running is set.
+   * PAPER uses public live feed; LIVE only when Capital/MT4 broker already attached
+   * (never invents Capital credentials).
+   */
+  async resumeDesiredSession(): Promise<{ resumed: boolean; detail: string }> {
+    if (!this.desired_running) {
+      // Opens must still be managed even when operator had Stopped
+      if (this.positions.count() > 0) {
+        if (!this.broker) {
+          if (this.cfg.mode === 'LIVE') {
+            // Never paper-manage Capital LIVE opens
+            return { resumed: false, detail: 'live_opens_need_capital' };
+          }
+          this.ensurePaperBroker();
+        }
+        await this.bootstrapManageAfterRecover();
+        return { resumed: false, detail: 'manage_opens_only' };
+      }
+      return { resumed: false, detail: 'not_desired' };
+    }
+    if (this.running) {
+      return { resumed: false, detail: 'already_running' };
+    }
+    if (this.cfg.kill_switch) {
+      return { resumed: false, detail: 'kill_switch' };
+    }
+    if (this.cfg.mode === 'LIVE') {
+      const liveBroker =
+        !!this.broker && !this.broker.paper && this.broker.name !== 'PAPER';
+      if (!liveBroker) {
+        // Leave desired_running sticky — operator must Attach Capital then Start/Recover
+        return { resumed: false, detail: 'live_needs_capital' };
+      }
+      await this.start({ live_feed: false });
+      return { resumed: true, detail: 'live_broker_feed' };
+    }
+    await this.start({ live_feed: true });
+    return { resumed: true, detail: 'paper_live_feed' };
   }
 
   /**
@@ -1165,6 +1213,7 @@ class MasterRuntime {
           entries_armed: this.entries_armed,
           entries_pause_reason: this.entries_pause_reason,
           last_close_failed: this.last_close_failed,
+          desired_running: this.desired_running,
         })
       )
     );
@@ -3077,6 +3126,8 @@ class MasterRuntime {
     if (this.broker) await this.broker.connect();
     await this.recover();
     this.running = true;
+    this.desired_running = true;
+    this.persistRuntimeGates();
     // Opens must not sit unmanaged until the first poll — seed quote/bars now
     await this.bootstrapManageAfterRecover();
     const ms = opts?.interval_ms ?? 0;
@@ -3378,12 +3429,19 @@ class MasterRuntime {
 
   stop() {
     this.running = false;
+    this.desired_running = false;
+    this.persistRuntimeGates();
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
     }
     this.stopLiveFeed();
-    this.clearManageLoop();
+    // Keep manage loop while opens remain — Stop must not orphan exits
+    if (this.positions.count() > 0) {
+      this.ensureManageLoop();
+    } else {
+      this.clearManageLoop();
+    }
     if (this.broker instanceof CapitalBroker) {
       this.broker.stopMarketStream();
     }
@@ -3398,15 +3456,16 @@ class MasterRuntime {
   /**
    * VS-System trail-only loop (~1s) while a position is open.
    * Skips when a full entry tick ran recently; never places OPEN.
+   * Runs even when !running so Recover/Stop-with-opens still exit.
    */
   private ensureManageLoop() {
-    if (!this.running || this.positions.count() === 0) {
+    if (this.positions.count() === 0) {
       this.clearManageLoop();
       return;
     }
     if (this.manageTimer) return;
     this.manageTimer = setInterval(() => {
-      if (!this.running || this.positions.count() === 0) {
+      if (this.positions.count() === 0) {
         this.clearManageLoop();
         return;
       }
@@ -3450,18 +3509,28 @@ class MasterRuntime {
    * (or disk market_cache) and run one manage-only tick so stops/exits are not blind.
    */
   private async bootstrapManageAfterRecover(): Promise<void> {
-    if (!this.broker || this.positions.count() === 0) return;
-    // Disk cache first — covers history fetch miss / slow Capital OHLC
-    this.hydrateMarketCacheFromDisk();
-    if (this.last_bars.length >= 5 && this.last_quote) {
-      await this.manageOnlyTick(this.last_bars, this.last_quote);
+    if (this.positions.count() === 0) {
+      this.clearManageLoop();
       return;
     }
+    if (!this.broker) {
+      if (this.cfg.mode === 'LIVE') {
+        // LIVE opens without venue broker — fail closed (do not paper-manage)
+        return;
+      }
+      this.ensurePaperBroker();
+    }
     try {
+      // Disk cache first — covers history fetch miss / slow Capital OHLC
+      this.hydrateMarketCacheFromDisk();
+      if (this.last_bars.length >= 5 && this.last_quote) {
+        await this.manageOnlyTick(this.last_bars, this.last_quote);
+        return;
+      }
       let q: Awaited<ReturnType<MasterBroker['getQuote']>> = null;
       try {
         q = await Promise.race([
-          this.broker.getQuote(this.epic),
+          this.broker!.getQuote(this.epic),
           new Promise<null>((resolve) => setTimeout(() => resolve(null), 8_000)),
         ]);
       } catch {
@@ -3486,11 +3555,11 @@ class MasterRuntime {
       let bars: Bar[] = this.last_bars;
       if (
         bars.length < 5 &&
-        typeof this.broker.getHistoryBars === 'function'
+        typeof this.broker!.getHistoryBars === 'function'
       ) {
         try {
           const hist = await Promise.race([
-            this.broker.getHistoryBars!(this.epic, 60),
+            this.broker!.getHistoryBars!(this.epic, 60),
             new Promise<null>((resolve) => setTimeout(() => resolve(null), 10_000)),
           ]);
           if (hist && hist.ok && Array.isArray(hist.bars) && hist.bars.length >= 5) {
@@ -3523,6 +3592,9 @@ class MasterRuntime {
         message: e instanceof Error ? e.message : String(e),
         context: { epic: this.epic, opens: this.positions.count() },
       });
+    } finally {
+      // Always arm manage loop when opens exist — Recover must not leave them unmanaged
+      this.ensureManageLoop();
     }
   }
 
@@ -3565,7 +3637,8 @@ class MasterRuntime {
   }
 
   private async manageOnlyUnlocked(bars: Bar[], quoteIn: Quote): Promise<void> {
-    if (!this.running || this.positions.count() === 0) return;
+    // Opens must manage/exit even when runtime_stopped — Recover bootstrap + Stop-with-opens
+    if (this.positions.count() === 0) return;
     const broker = this.broker || this.ensurePaperBroker();
     // VS-System 1s trail: pull a fresh broker tick — do not reuse frozen last_quote.
     let quote: Quote = { ...quoteIn, epic: quoteIn.epic || this.epic };
@@ -3942,10 +4015,17 @@ class MasterRuntime {
                     : this.running
                       ? 'LIVE_NO_CAPITAL'
                       : 'LIVE_UNATTACHED'
-                  : this.running
-                    ? 'PAPER_RUNNING'
-                    : 'OK',
+                  : this.positions.count() > 0 && !this.running
+                    ? this.manageTimer
+                      ? 'OPENS_MANAGE_ONLY'
+                      : 'OPENS_UNMANAGED'
+                    : this.desired_running && !this.running
+                      ? 'RESUME_PENDING'
+                      : this.running
+                        ? 'PAPER_RUNNING'
+                        : 'OK',
       recovered: this.recovered,
+      desired_running: this.desired_running,
       persist_ok: this.persist_ok,
       last_persist_error: this.last_persist_error,
       entries_armed: this.entries_armed,

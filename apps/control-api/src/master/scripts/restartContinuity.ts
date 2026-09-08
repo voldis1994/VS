@@ -125,13 +125,20 @@ async function main() {
     hydrateSnap.open_positions_status === 1;
 
   const recovered = await masterRuntime.recover();
+  // Recover must bootstrap manage even when not running
+  await masterRuntime.bootstrapManageAfterRecoverPublic();
   const stRecover = masterRuntime.status();
+  const manageArmed = !!(
+    masterRuntime as unknown as { manageTimer: NodeJS.Timeout | null }
+  ).manageTimer;
   const recoverOk =
     masterRuntime.recovered === true &&
     recovered.positions === 1 &&
     recovered.opportunities >= 1 &&
     recovered.outcomes >= 1 &&
-    stRecover.recovered === true;
+    stRecover.recovered === true &&
+    manageArmed &&
+    (stRecover.health === 'OPENS_MANAGE_ONLY' || stRecover.running);
 
   const report = {
     status: hydrateOk && recoverOk ? 'PASS_RESTART_CONTINUITY' : 'FAIL',
@@ -141,9 +148,11 @@ async function main() {
       positions: recovered.positions,
       opportunities: recovered.opportunities,
       outcomes: recovered.outcomes,
+      manage_armed: manageArmed,
+      health: stRecover.health,
     },
     detail: hydrateOk && recoverOk
-      ? 'boot hydrate restored opens+journal; recover reconciled without empty forge'
+      ? 'boot hydrate restored opens+journal; recover manage armed without empty forge'
       : `hydrate_ok=${hydrateOk} recover_ok=${recoverOk}`,
   };
 
@@ -152,11 +161,20 @@ async function main() {
     JSON.stringify(report, null, 2)
   );
   console.log(JSON.stringify(report, null, 2));
+  // Manage timers keep the event loop alive — clear opens and stop before exit
+  masterRuntime.positions = new PositionManager();
+  masterRuntime.stop();
   setPersistClient(null);
-  if (report.status !== 'PASS_RESTART_CONTINUITY') process.exitCode = 1;
+  process.exit(report.status === 'PASS_RESTART_CONTINUITY' ? 0 : 1);
 }
 
 main().catch((e) => {
   console.error(e);
-  process.exitCode = 1;
+  try {
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.stop();
+  } catch {
+    /* ignore */
+  }
+  process.exit(1);
 });

@@ -16,6 +16,8 @@ export async function registerMasterRoutes(app: FastifyInstance) {
   masterRuntime.hydrateMonitorFromDisk();
   // Opens/journal KPIs — do not leave dashboard forged-empty until Recover
   await masterRuntime.hydrateBookFromDisk();
+  // Crash resume: feed/entries when desired_running; always manage leftover opens
+  await masterRuntime.resumeDesiredSession();
 
   app.get('/api/master/status', async () => masterRuntime.statusAsync());
 
@@ -264,7 +266,9 @@ export async function registerMasterRoutes(app: FastifyInstance) {
     const r = await masterRuntime.recover();
     // Opens must not sit unmanaged until Start — same bootstrap as start()
     await masterRuntime.bootstrapManageAfterRecoverPublic();
-    return { ok: true, ...r, status: masterRuntime.status() };
+    // If operator was running before crash, resume feed/entries (PAPER/public or attached LIVE)
+    const resume = await masterRuntime.resumeDesiredSession();
+    return { ok: true, ...r, resume, status: masterRuntime.status() };
   });
 
   app.post<{
@@ -682,7 +686,7 @@ async function refresh(){
     cards.innerHTML=[
       card('Mode',s.mode),
       card('Epic',s.epic||'—'),
-      card('Health',s.health,(s.health.includes('KILL')||s.health==='PERSIST_DEGRADED'||s.health==='LIVE_NO_CAPITAL'||s.health==='LIVE_UNATTACHED'||s.health==='LIVE_ACCOUNT_UNPROVEN'||s.health==='LIVE_QUOTE_STALE'||s.health==='LIVE_VENUE_UNPROVEN')?'bad':'ok'),
+      card('Health',s.health,(s.health.includes('KILL')||s.health==='PERSIST_DEGRADED'||s.health==='LIVE_NO_CAPITAL'||s.health==='LIVE_UNATTACHED'||s.health==='LIVE_ACCOUNT_UNPROVEN'||s.health==='LIVE_QUOTE_STALE'||s.health==='LIVE_VENUE_UNPROVEN'||s.health==='OPENS_UNMANAGED'||s.health==='RESUME_PENDING')?'bad':'ok'),
       card('Broker',s.broker||'—'),
       card('Broker detail',s.broker_detail||'—'),
       card('Capital LIVE',s.capital_live_attached?'ATTACHED':(s.capital_creds_available?(s.capital_credential_source==='desk'?'creds Brokers':'creds env'):'need keys'),s.capital_live_attached?'ok':(s.mode==='LIVE'?'bad':'')),
@@ -695,6 +699,7 @@ async function refresh(){
       card('AI allow close',s.ai_mode==='off'?'n/a':(s.last_ai_allow_close===false?'VETO':s.last_ai_allow_close===true?'allow':'—'),s.ai_mode!=='off'&&s.last_ai_allow_close===false?'bad':''),
       card('Close fail',s.last_close_failed?((s.last_close_failed.exit_reason||'')+' · '+(s.last_close_failed.detail||'')).slice(0,80):'—',s.last_close_failed?'bad':''),
       card('Running',s.running?'YES':'NO',s.running?'ok':''),
+      card('Desired run',s.desired_running?'YES':'no',s.desired_running&&!s.running?'bad':s.desired_running&&s.running?'ok':''),
       card('Regime',s.regime),
       card('BUY',Number(s.buy_score||0).toFixed(3)),
       card('SELL',Number(s.sell_score||0).toFixed(3)),
@@ -710,7 +715,7 @@ async function refresh(){
       card('Peak eq',s.capital_account_proven===false?'UNPROVEN':(s.account?.peak_equity!=null?Number(s.account.peak_equity).toFixed(2):'—'),s.capital_account_proven===false?'bad':''),
       card('Reject cool',(s.reject_cooldown_ms||0)>0?(Math.ceil((s.reject_cooldown_ms||0)/1000)+'s'):'—',(s.reject_cooldown_ms||0)>0?'bad':''),
       card('Post-exit cool',(s.post_exit_cooldown_ms||0)>0?(Math.ceil((s.post_exit_cooldown_ms||0)/1000)+'s'):'—',(s.post_exit_cooldown_ms||0)>0?'bad':''),
-      card('Open',s.open_positions),
+      card('Open',s.open_positions,(s.open_positions||0)>0&&(!s.running||s.health==='OPENS_UNMANAGED'||s.health==='OPENS_MANAGE_ONLY')?'bad':''),
       card('Venue',s.capital_live_attached?(s.capital_venue_opens_proven===false?'unproven':String(s.capital_venue_opens||0)):'—',s.capital_live_attached&&(s.capital_venue_opens_proven===false||(s.capital_venue_opens||0)>0)?'bad':''),
       card('Trades',s.traded),
       card('Blocked',s.blocked),

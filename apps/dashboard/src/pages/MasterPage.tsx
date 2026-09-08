@@ -103,6 +103,7 @@ type MasterStatus = {
   blocked: number;
   health: string;
   recovered: boolean;
+  desired_running?: boolean;
   persist_ok: boolean;
   last_persist_error: string | null;
   entries_armed: boolean;
@@ -331,6 +332,8 @@ export function MasterPage() {
     status?.health === 'LIVE_ACCOUNT_UNPROVEN' ||
     status?.health === 'LIVE_QUOTE_STALE' ||
     status?.health === 'LIVE_VENUE_UNPROVEN' ||
+    status?.health === 'OPENS_UNMANAGED' ||
+    status?.health === 'RESUME_PENDING' ||
     status?.persist_ok === false;
   const quoteStale =
     status?.quote?.stale === true ||
@@ -443,6 +446,12 @@ export function MasterPage() {
           bad: !!status.last_close_failed,
         },
         { k: 'Running', v: status.running ? 'YES' : 'NO', ok: status.running },
+        {
+          k: 'Desired run',
+          v: status.desired_running ? 'YES' : 'no',
+          ok: !!status.desired_running && status.running,
+          bad: !!status.desired_running && !status.running,
+        },
         { k: 'Regime', v: status.regime },
         {
           k: 'Norm',
@@ -603,7 +612,16 @@ export function MasterPage() {
               : '—',
           bad: (status.post_exit_cooldown_ms ?? 0) > 0,
         },
-        { k: 'Open', v: String(status.open_positions) },
+        {
+          k: 'Open',
+          v: String(status.open_positions),
+          bad:
+            (status.open_positions ?? 0) > 0 &&
+            (!status.running ||
+              status.health === 'OPENS_UNMANAGED' ||
+              status.health === 'OPENS_MANAGE_ONLY'),
+          ok: (status.open_positions ?? 0) > 0 && status.running,
+        },
         {
           k: 'Venue',
           v:

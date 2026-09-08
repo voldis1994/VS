@@ -50,6 +50,11 @@ export type RuntimeGates = {
     detail: string;
     ts: string;
   } | null;
+  /**
+   * Operator wanted the cycle running before crash — resume feed/entries on boot.
+   * Distinct from in-memory `running` (always false until start/resume).
+   */
+  desired_running?: boolean | null;
 };
 
 function gatesDir(): string {
@@ -135,6 +140,7 @@ export function saveRuntimeGates(gates: RuntimeGates): boolean {
         if (!position_id && !detail) return null;
         return { position_id, exit_reason, detail, ts };
       })(),
+      desired_running: gates.desired_running === true,
     });
   } catch {
     return false;
@@ -208,6 +214,7 @@ export function loadRuntimeGates(): RuntimeGates | null {
         if (!position_id && !detail) return null;
         return { position_id, exit_reason, detail, ts };
       })(),
+      desired_running: raw.desired_running === true,
     };
   } catch {
     return null;

@@ -1787,6 +1787,7 @@ describe('runtime gates persist', () => {
       entries_armed: null,
       entries_pause_reason: null,
       last_close_failed: null,
+      desired_running: false,
     });
     if (prev === undefined) delete process.env.MASTER_STATE_DIR;
     else process.env.MASTER_STATE_DIR = prev;
@@ -2063,6 +2064,85 @@ describe('runtime gates persist', () => {
       masterRuntime.entries_pause_reason = prevReason;
       (masterRuntime as unknown as { post_exit_until_ms: number }).post_exit_until_ms =
         prevPost;
+      if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prev;
+    }
+  });
+
+  it('desired_running survives gates hydrate; manage works while stopped with opens', async () => {
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = mkdtempSync(join(tmpdir(), 'vs-desired-run-'));
+    const { saveRuntimeGates, loadRuntimeGates } = await import('../runtimeGates.js');
+    const prevDesired = masterRuntime.desired_running;
+    const prevRunning = masterRuntime.running;
+    const prevMode = masterRuntime.cfg.mode;
+    try {
+      saveRuntimeGates({
+        last_loss_ms: 0,
+        reject_until_ms: 0,
+        desired_running: true,
+        mode: 'PAPER',
+      });
+      masterRuntime.desired_running = false;
+      masterRuntime.running = false;
+      expect(masterRuntime.hydrateRuntimeGatesFromDisk()).toBe(true);
+      expect(masterRuntime.desired_running).toBe(true);
+      expect(loadRuntimeGates()?.desired_running).toBe(true);
+
+      // Simulate Stop-with-opens: manage loop + health must not claim OK
+      masterRuntime.cfg = { ...masterRuntime.cfg, mode: 'PAPER' };
+      masterRuntime.pipeline = new MasterPipeline('PAPER');
+      masterRuntime.positions = new PositionManager();
+      masterRuntime.positions.register({
+        position_id: 'manage-while-stop-1',
+        opportunity_id: 'opp-mws',
+        intent_id: 'intent-mws-aaaaaaaa',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 0.1,
+        entry: 4400,
+        decision: {
+          decision_id: 'd-mws',
+          kind: 'BUY',
+          side: 'BUY',
+          score: 0.7,
+          block_reason: null,
+          buy: null as never,
+          sell: null as never,
+          analysis: baseAnalysis({ regime: 'TREND' }),
+          expectancy: null,
+        },
+      });
+      masterRuntime.running = false;
+      masterRuntime.desired_running = false;
+      masterRuntime.ensurePaperBroker();
+      masterRuntime.last_bars = Array.from({ length: 40 }, (_, i) => {
+        const o = 4400 + i * 0.2;
+        return { open: o, high: o + 1, low: o - 0.5, close: o + 0.3, ts_ms: i * 60_000 };
+      });
+      masterRuntime.last_quote = {
+        bid: 4405,
+        ask: 4405.4,
+        mid: 4405.2,
+        spread: 0.4,
+        ts_ms: Date.now(),
+      };
+      await masterRuntime.bootstrapManageAfterRecoverPublic();
+      const st = masterRuntime.status();
+      expect(st.open_positions).toBe(1);
+      expect(st.running).toBe(false);
+      expect(['OPENS_MANAGE_ONLY', 'OPENS_UNMANAGED']).toContain(st.health);
+      // Manage timer should be armed after bootstrap
+      expect(
+        (masterRuntime as unknown as { manageTimer: NodeJS.Timeout | null }).manageTimer
+      ).toBeTruthy();
+      expect(st.health).toBe('OPENS_MANAGE_ONLY');
+    } finally {
+      masterRuntime.positions = new PositionManager();
+      masterRuntime.stop();
+      masterRuntime.desired_running = prevDesired;
+      masterRuntime.running = prevRunning;
+      masterRuntime.cfg = { ...masterRuntime.cfg, mode: prevMode };
       if (prev === undefined) delete process.env.MASTER_STATE_DIR;
       else process.env.MASTER_STATE_DIR = prev;
     }
