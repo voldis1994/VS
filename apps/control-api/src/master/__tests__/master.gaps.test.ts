@@ -814,6 +814,35 @@ describe('masterOwnsManageSafely', () => {
     }
   });
 
+  it('desk Capital structure seed marks capital_ohlc and clears seed pause', () => {
+    const prevMode = masterRuntime.cfg.mode;
+    const prevArmed = masterRuntime.entries_armed;
+    const prevReason = masterRuntime.entries_pause_reason;
+    const prevSeed = masterRuntime.structure_seed_source;
+    const prevBroker = masterRuntime.broker;
+    try {
+      masterRuntime.setMode('LIVE');
+      // Minimal Capital-shaped broker so applyStructureSeedGate treats LIVE Capital
+      masterRuntime.broker = {
+        name: 'CAPITAL',
+        paper: false,
+      } as never;
+      masterRuntime.setEntriesArmed(false, 'structure_seed_not_capital:yahoo_ohlc');
+      masterRuntime.structure_seed_source = 'yahoo_ohlc';
+      masterRuntime.applyStructureSeedGate('capital_ohlc');
+      expect(masterRuntime.structure_seed_source).toBe('capital_ohlc');
+      expect(masterRuntime.entries_armed).toBe(true);
+      expect(masterRuntime.entries_pause_reason).toBeNull();
+      masterRuntime.preferDeskMarketFeed();
+    } finally {
+      masterRuntime.setMode(prevMode);
+      masterRuntime.entries_armed = prevArmed;
+      masterRuntime.entries_pause_reason = prevReason;
+      masterRuntime.structure_seed_source = prevSeed;
+      masterRuntime.broker = prevBroker;
+    }
+  });
+
   it('defers when owns-pipeline but live Capital position and no CAPITAL broker', () => {
     const prev = process.env.MASTER_OWNS_PIPELINE;
     const prevPref = masterRuntime.owns_pipeline_pref;

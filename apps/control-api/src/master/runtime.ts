@@ -1221,8 +1221,8 @@ class MasterRuntime {
     this.structure_seed_source = seed_source as MasterRuntime['structure_seed_source'];
     const capitalLive =
       this.cfg.mode === 'LIVE' &&
-      this.broker instanceof CapitalBroker &&
-      !this.broker.paper;
+      this.broker?.name === 'CAPITAL' &&
+      !(this.broker as { paper?: boolean }).paper;
     if (!capitalLive) return;
     const allowSynthetic =
       !!process.env.VITEST || process.env.MASTER_BROKER_FEED_SYNTHETIC === 'true';
@@ -2608,7 +2608,13 @@ class MasterRuntime {
     };
   }
 
-  async start(opts?: { interval_ms?: number; broker?: MasterBroker; live_feed?: boolean }) {
+  async start(opts?: {
+    interval_ms?: number;
+    broker?: MasterBroker;
+    live_feed?: boolean;
+    /** Desk-driven ticks supply quote/bars — do not start broker/Yahoo poll */
+    skip_market_feed?: boolean;
+  }) {
     if (opts?.broker) this.attachBroker(opts.broker);
     else if (!this.broker) this.ensurePaperBroker();
     if (this.broker) await this.broker.connect();
@@ -2620,6 +2626,10 @@ class MasterRuntime {
         if (!this.running || !this.last_bars.length || !this.last_quote) return;
         void this.tick(this.last_bars, this.last_quote);
       }, ms);
+    }
+    if (opts?.skip_market_feed) {
+      this.stopLiveFeed();
+      return;
     }
     const wantPublicFeed =
       opts?.live_feed === true || process.env.MASTER_AUTO_LIVE_FEED === 'true';
@@ -2642,6 +2652,14 @@ class MasterRuntime {
       clearInterval(this.liveFeedTimer);
       this.liveFeedTimer = null;
     }
+  }
+
+  /**
+   * Desk Capital path owns quote/bars — stop broker/Yahoo poll so it cannot
+   * Yahoo-seed and pause entries while desk already has venue OHLC.
+   */
+  preferDeskMarketFeed() {
+    this.stopLiveFeed();
   }
 
   /**

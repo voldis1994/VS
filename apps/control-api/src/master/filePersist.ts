@@ -71,6 +71,8 @@ export class FilePersist implements PersistClient {
           intended_stop_loss: p.intended_stop_loss ?? null,
           intended_take_profit: p.intended_take_profit ?? null,
           naked_recovery_level: p.naked_recovery_level ?? null,
+          playbook_at_entry: (p as ManagedPosition).playbook_at_entry ?? null,
+          entry_setup: (p as ManagedPosition).entry_setup ?? null,
         },
       }));
       this.mem.intents = new Set(raw.intents || []);
@@ -216,6 +218,14 @@ export class FilePersist implements PersistClient {
           return v != null && Number.isFinite(Number(v))
             ? Math.max(0, Math.floor(Number(v)))
             : null;
+        })(),
+        playbook_at_entry: (() => {
+          const v = p.playbook_at_entry ?? p.payload?.playbook_at_entry;
+          return v === 'LONG' || v === 'SCALP' || v === 'FADE' ? v : undefined;
+        })(),
+        entry_setup: (() => {
+          const v = p.entry_setup ?? p.payload?.entry_setup;
+          return typeof v === 'string' && v.trim() ? String(v) : undefined;
         })(),
       })),
       intents: [...this.mem.intents],

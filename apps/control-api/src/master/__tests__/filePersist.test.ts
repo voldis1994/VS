@@ -119,6 +119,8 @@ describe('VS MASTER file persist restart', () => {
     expect(loaded.length).toBe(1);
     expect(loaded[0]!.position_id).toBe('file-pos-1');
     expect(loaded[0]!.decision).toBeTruthy();
+    expect(loaded[0]!.playbook_at_entry).toBeTruthy();
+    expect(loaded[0]!.entry_setup).toBeTruthy();
     expect(intents).toContain('file-intent-1');
     expect(hist.opportunities.length).toBeGreaterThanOrEqual(1);
     expect(hist.outcomes.length).toBeGreaterThanOrEqual(1);

@@ -223,9 +223,21 @@ export async function runMasterFromDesk(input: {
     quote = { ...quote, ts_ms: Date.now() - 60_000 };
   }
   masterRuntime.setEpic(input.epic);
+  // Desk Capital minute OHLC is venue structure — do not let Yahoo/broker feed
+  // pause entries while desk already owns Capital bars.
+  if (input.minuteCandles.length >= 10) {
+    masterRuntime.applyStructureSeedGate('capital_ohlc');
+  }
   if (!masterRuntime.running) {
     if (!masterRuntime.broker) masterRuntime.ensurePaperBroker();
-    await masterRuntime.start();
+    // Desk supplies quote/bars — do not start broker/Yahoo OHLC poll
+    await masterRuntime.start({ skip_market_feed: true });
+    if (input.minuteCandles.length >= 10) {
+      masterRuntime.applyStructureSeedGate('capital_ohlc');
+    }
+  } else {
+    // Already running (e.g. Capital attach) — stop conflicting Yahoo/broker poll
+    masterRuntime.preferDeskMarketFeed();
   }
   const result = await masterRuntime.tick(bars, quote);
   const why =

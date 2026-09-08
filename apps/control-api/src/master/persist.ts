@@ -146,6 +146,8 @@ export async function saveOpenPositions(positions: ManagedPosition[]): Promise<b
             intended_stop_loss: p.intended_stop_loss ?? null,
             intended_take_profit: p.intended_take_profit ?? null,
             naked_recovery_level: p.naked_recovery_level ?? null,
+            playbook_at_entry: p.playbook_at_entry ?? null,
+            entry_setup: p.entry_setup ?? null,
           }),
         ]
       );
@@ -221,6 +223,16 @@ export async function loadOpenPositions(): Promise<ManagedPosition[]> {
           Number.isFinite(Number(payload.naked_recovery_level))
             ? Math.max(0, Math.floor(Number(payload.naked_recovery_level)))
             : null,
+        playbook_at_entry:
+          payload.playbook_at_entry === 'LONG' ||
+          payload.playbook_at_entry === 'SCALP' ||
+          payload.playbook_at_entry === 'FADE'
+            ? payload.playbook_at_entry
+            : undefined,
+        entry_setup:
+          typeof payload.entry_setup === 'string' && payload.entry_setup.trim()
+            ? String(payload.entry_setup)
+            : undefined,
       } as ManagedPosition;
     });
   } catch {
