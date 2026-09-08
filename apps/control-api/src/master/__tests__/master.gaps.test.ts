@@ -5032,6 +5032,48 @@ describe('SELL manageTick partial_close + Check trail', () => {
     expect(typeof s.bars_available).toBe('number');
     expect(Array.isArray(masterRuntime.barsSnapshot(10))).toBe(true);
   });
+
+  it('status exposes dual BUY/SELL filter stage fields', async () => {
+    const { MasterPipeline, DEFAULT_MASTER_CONFIG, GOLD_SPEC } = await import(
+      '../pipeline.js'
+    );
+    const pipe = new MasterPipeline('PAPER');
+    const bars = Array.from({ length: 40 }, (_, i) => {
+      const o = 4400 + i * 0.4;
+      return { open: o, high: o + 1, low: o - 0.3, close: o + 0.2, ts_ms: i * 60_000 };
+    });
+    const cycle = await pipe.runCycle({
+      bars,
+      quote: {
+        bid: 4415.8,
+        ask: 4416.2,
+        mid: 4416,
+        spread: 0.4,
+        ts_ms: Date.now(),
+        epic: 'GOLD',
+      },
+      account: {
+        equity: 10_000,
+        balance: 10_000,
+        currency: 'GBP',
+        open_positions: 0,
+        daily_pnl: 0,
+        peak_equity: 10_000,
+        consecutive_losses: 0,
+      },
+      instrument: GOLD_SPEC,
+      cfg: { ...DEFAULT_MASTER_CONFIG, mode: 'PAPER', block_off_hours: false },
+    });
+    masterRuntime.last_decision = cycle.decision;
+    const s = masterRuntime.status();
+    expect(s.buy_filter).toBeTruthy();
+    expect(s.sell_filter).toBeTruthy();
+    expect(typeof s.buy_filter!.ok).toBe('boolean');
+    expect(typeof s.sell_filter!.ok).toBe('boolean');
+    expect(typeof s.buy_filter!.score).toBe('number');
+    expect(typeof s.sell_filter!.score).toBe('number');
+    expect(s.market_state).toBeTruthy();
+  });
 });
 
 describe('replay exit order vs live manageTick', () => {
