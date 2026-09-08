@@ -298,16 +298,20 @@ class MasterRuntime {
     return this.positions.list().map((p) => {
       if (!quote) return { ...p, upl: null, mark: null };
       const mark = protectiveMark(p.side, quote);
-      const upl = resolveFloatingMoneyPnl({
-        side: p.side,
-        entry: p.entry,
-        mark,
-        size: p.size,
-        value_per_point_per_lot: pv,
-        broker_upl: p.broker_upl,
-        capitalLive:
-          this.broker instanceof CapitalBroker && !this.broker.paper,
-      });
+      const capitalLive =
+        this.broker instanceof CapitalBroker && !this.broker.paper;
+      const upl =
+        capitalLive && (p.broker_upl == null || !Number.isFinite(p.broker_upl))
+          ? null
+          : resolveFloatingMoneyPnl({
+              side: p.side,
+              entry: p.entry,
+              mark,
+              size: p.size,
+              value_per_point_per_lot: pv,
+              broker_upl: p.broker_upl,
+              capitalLive,
+            });
       return { ...p, upl, mark };
     });
   }
@@ -334,6 +338,11 @@ class MasterRuntime {
     if (!broker) return { ok: false, detail: 'no_broker' };
     const pos = this.positions.get(positionId);
     if (!pos) return { ok: false, detail: 'not_found' };
+    const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
+    // Capital LIVE: never forge entry-as-quote mark when last_quote is missing
+    if (capitalLive && !this.last_quote) {
+      return { ok: false, detail: 'no_quote_capital_live' };
+    }
     const quote = this.last_quote || {
       bid: pos.entry,
       ask: pos.entry,
@@ -346,7 +355,6 @@ class MasterRuntime {
     if (!closeRes.ok) {
       return { ok: false, detail: closeRes.detail || 'close_failed' };
     }
-    const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
     const { exit: fill, fill_proven } = resolveCloseExitFill({
       fill_price: closeRes.fill_price,
       mark,
@@ -2953,14 +2961,36 @@ class MasterRuntime {
       : this.pipeline.journal.traded().map((t) => t.outcome!.pnl);
     const quote = this.last_quote;
     const pv = specForEpic(this.epic).value_per_point_per_lot;
-    const floating = quote
+    const capitalLiveAttached =
+      this.broker instanceof CapitalBroker && !this.broker.paper;
+    const quoteAgeMs = quote
+      ? Math.max(0, Date.now() - (quote.ts_ms || 0))
+      : null;
+    const liveQuoteStale =
+      this.cfg.mode === 'LIVE' &&
+      capitalLiveAttached &&
+      this.running &&
+      (quote == null ||
+        quoteAgeMs == null ||
+        quoteAgeMs > this.cfg.stale_quote_ms);
+    const floatingRaw = quote
       ? floatingUnrealizedPnl(
           this.positions.list(),
           quote,
           pv,
-          this.broker instanceof CapitalBroker && !this.broker.paper
+          capitalLiveAttached
         )
       : null;
+    // Capital LIVE: unknown venue UPL → null float (never show forged 0.00 as flat)
+    const opens = this.positions.list();
+    const floating =
+      capitalLiveAttached &&
+      opens.length > 0 &&
+      opens.some(
+        (p) => p.broker_upl == null || !Number.isFinite(p.broker_upl)
+      )
+        ? null
+        : floatingRaw;
     const streamHealthy =
       this.broker instanceof CapitalBroker
         ? this.broker.isMarketStreamHealthy(undefined, this.epic)
@@ -3033,19 +3063,21 @@ class MasterRuntime {
             this.capitalLiveAttached() &&
             !this.capitalAccountProven
           ? 'LIVE_ACCOUNT_UNPROVEN'
-          : !this.persist_ok
-            ? 'PERSIST_DEGRADED'
-            : this.cfg.mode === 'LIVE'
-              ? this.capitalLiveAttached()
-                ? this.running
-                  ? 'LIVE_RUNNING'
-                  : 'LIVE_ARMED'
+          : liveQuoteStale
+            ? 'LIVE_QUOTE_STALE'
+            : !this.persist_ok
+              ? 'PERSIST_DEGRADED'
+              : this.cfg.mode === 'LIVE'
+                ? this.capitalLiveAttached()
+                  ? this.running
+                    ? 'LIVE_RUNNING'
+                    : 'LIVE_ARMED'
+                  : this.running
+                    ? 'LIVE_NO_CAPITAL'
+                    : 'LIVE_UNATTACHED'
                 : this.running
-                  ? 'LIVE_NO_CAPITAL'
-                  : 'LIVE_UNATTACHED'
-              : this.running
-                ? 'PAPER_RUNNING'
-                : 'OK',
+                  ? 'PAPER_RUNNING'
+                  : 'OK',
       recovered: this.recovered,
       persist_ok: this.persist_ok,
       last_persist_error: this.last_persist_error,

@@ -68,6 +68,7 @@ function mockCapitalBroker(opts?: { rejectConfirm?: boolean; lagConfirm?: boolea
       mid: 4410.2,
       epic,
       raw_ok: true,
+      update_time: new Date().toISOString(),
     }),
     account: async () => ({ equity: 12_500, balance: 12_000, currency: 'GBP' }),
     list: async () => ({
@@ -3947,6 +3948,122 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(st.persist_ok).toBe(false);
     expect(st.account.equity).toBe(0);
     expect(st.account.trade_allowed).toBe(false);
+  });
+
+  it('status demotes LIVE_RUNNING to LIVE_QUOTE_STALE when quote aged', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-stale-h' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+        update_time: new Date().toISOString(),
+      }),
+      account: async () => ({ equity: 12_000, balance: 12_000, currency: 'GBP' }),
+      list: async () => ({ ok: true, positions: [], detail: '0' }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({ ok: false, detail: 'unused' }),
+    });
+    await broker.connect();
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('LIVE');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    masterRuntime.cfg = {
+      ...DEFAULT_MASTER_CONFIG,
+      mode: 'LIVE',
+      stale_quote_ms: 5_000,
+    };
+    masterRuntime.account = { ...account };
+    masterRuntime.running = true;
+    // Prove account so UNPROVEN does not mask quote stale
+    (masterRuntime as any).capitalAccountProven = true;
+    masterRuntime.last_quote = {
+      bid: 4410,
+      ask: 4410.4,
+      mid: 4410.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now() - 60_000,
+    };
+    masterRuntime.persist_ok = true;
+    const stale = masterRuntime.status();
+    expect(stale.health).toBe('LIVE_QUOTE_STALE');
+    expect(stale.quote?.age_ms).toBeGreaterThan(5_000);
+
+    masterRuntime.last_quote = {
+      ...masterRuntime.last_quote!,
+      ts_ms: Date.now(),
+    };
+    const fresh = masterRuntime.status();
+    expect(fresh.health).toBe('LIVE_RUNNING');
+  });
+
+  it('status floating_pnl is null when Capital LIVE opens lack broker UPL', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-float-null' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4420,
+        ask: 4420.4,
+        mid: 4420.2,
+        epic,
+        raw_ok: true,
+      }),
+      account: async () => ({ equity: 12_000, balance: 12_000, currency: 'GBP' }),
+      list: async () => ({ ok: true, positions: [], detail: '0' }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({ ok: false, detail: 'unused' }),
+    });
+    await broker.connect();
+    masterRuntime.stop();
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    masterRuntime.cfg = { ...DEFAULT_MASTER_CONFIG, mode: 'LIVE' };
+    (masterRuntime as any).capitalAccountProven = true;
+    masterRuntime.running = true;
+    masterRuntime.last_quote = {
+      bid: 4420,
+      ask: 4420.4,
+      mid: 4420.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    };
+    masterRuntime.positions.register({
+      position_id: 'deal-float-null',
+      opportunity_id: 'opp-float-null',
+      intent_id: 'intent-float-null',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4410,
+      stop_loss: 4400,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        block_reason: null,
+        analysis: { regime: 'TREND' },
+        buy: { valid: true, filter_ok: true, score: 0.9 },
+        sell: { valid: false, filter_ok: false, score: 0 },
+      } as any,
+    });
+    // no broker_upl — mark would invent ~+1.0
+    const st = masterRuntime.status();
+    expect(st.floating_pnl).toBeNull();
+    expect(masterRuntime.positionsForApi()[0]!.upl).toBeNull();
+
+    masterRuntime.positions.get('deal-float-null')!.broker_upl = 0.85;
+    const proven = masterRuntime.status();
+    expect(proven.floating_pnl).toBeCloseTo(0.85, 5);
   });
 
   it('native trail MODIFY refuses gap-only proof when confirm timed out', async () => {
