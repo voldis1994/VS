@@ -424,6 +424,13 @@ export class CapitalBroker implements MasterBroker {
   private minStopByEpic = new Map<string, number>();
   /** Last good mid per epic — provisional entry when open_level missing and live quote flakes */
   private lastMidByEpic = new Map<string, number>();
+  /**
+   * Last Capital marketStatus per epic from REST — stream quotes omit status.
+   * Without this cache, healthy WS path always returned market_status:null and never gated CLOSED.
+   */
+  private marketStatusByEpic = new Map<string, string | null>();
+  private marketStatusFetchedAt = new Map<string, number>();
+  private static readonly MARKET_STATUS_REFRESH_MS = 60_000;
 
   /**
    * VS-System bindCapitalAccount — mutable CFD target on shared CST pool.
@@ -674,12 +681,22 @@ export class CapitalBroker implements MasterBroker {
     // Prefer fresh streaming mark when healthy (VS-System ensureMarketStream)
     void this.stream.ensure([epic]);
     const streamed = this.stream.getLatest(epic);
-    if (streamed && this.stream.isHealthy()) {
+    const cachedStatus = this.cachedMarketStatus(epic);
+    const { capitalMarketAllowsTrading } = await import('./capitalMarket.js');
+    const knownClosed =
+      cachedStatus != null && !capitalMarketAllowsTrading(cachedStatus);
+
+    // Stream path — but if REST already said CLOSED, force REST (don't entry on WS ticks)
+    if (streamed && this.stream.isHealthy() && !knownClosed) {
       // Slide pool TTL without blocking the mark
       void this.ensureSession();
       const mid = streamed.mid;
       if (Number.isFinite(mid) && mid > 0) {
         this.lastMidByEpic.set(String(streamed.epic || epic).toUpperCase(), mid);
+      }
+      // Background REST status refresh — stream frames never carry marketStatus
+      if (this.marketStatusNeedsRefresh(epic)) {
+        void this.refreshMarketStatus(epic);
       }
       return {
         bid: streamed.bid,
@@ -689,7 +706,7 @@ export class CapitalBroker implements MasterBroker {
         epic: streamed.epic || epic,
         ts_ms: streamed.ts_ms,
         min_stop_distance: this.liveMinStopDistance(epic),
-        market_status: null,
+        market_status: cachedStatus,
       };
     }
 
@@ -729,6 +746,7 @@ export class CapitalBroker implements MasterBroker {
     if (minStop != null && minStop > 0) {
       this.minStopByEpic.set(String(q.epic || epic).toUpperCase(), minStop);
     }
+    this.noteMarketStatus(q.epic || epic, q.market_status);
     return {
       bid: q.bid,
       ask: q.ask,
@@ -737,7 +755,7 @@ export class CapitalBroker implements MasterBroker {
       epic: q.epic || epic,
       ts_ms: Date.now(),
       min_stop_distance: minStop,
-      market_status: q.market_status ?? null,
+      market_status: this.cachedMarketStatus(q.epic || epic),
     };
   }
 
@@ -745,6 +763,51 @@ export class CapitalBroker implements MasterBroker {
   liveMinStopDistance(epic: string): number | null {
     const v = this.minStopByEpic.get(String(epic || '').toUpperCase());
     return v != null && v > 0 ? v : null;
+  }
+
+  /** Last REST marketStatus for epic (stream path reuses this). */
+  cachedMarketStatus(epic: string): string | null {
+    const v = this.marketStatusByEpic.get(String(epic || '').toUpperCase());
+    return v == null || v === '' ? null : v;
+  }
+
+  private noteMarketStatus(epic: string, status: string | null | undefined) {
+    const key = String(epic || '').toUpperCase();
+    if (!key) return;
+    const s = status == null ? '' : String(status).trim();
+    if (!s) {
+      // Still mark fetch time so we don't hammer REST when Capital omits status
+      this.marketStatusFetchedAt.set(key, Date.now());
+      return;
+    }
+    this.marketStatusByEpic.set(key, s);
+    this.marketStatusFetchedAt.set(key, Date.now());
+  }
+
+  private marketStatusNeedsRefresh(epic: string): boolean {
+    const key = String(epic || '').toUpperCase();
+    const at = this.marketStatusFetchedAt.get(key) || 0;
+    if (!at) return true;
+    return Date.now() - at > CapitalBroker.MARKET_STATUS_REFRESH_MS;
+  }
+
+  /** Non-blocking REST markets snapshot to keep marketStatus fresh while WS is healthy. */
+  private async refreshMarketStatus(epic: string): Promise<void> {
+    try {
+      const ensured = await this.ensureSession();
+      if (!ensured.ok || !this.session) return;
+      const q = await this.deps.quote(this.session, epic);
+      this.noteMarketStatus(q?.epic || epic, q?.market_status);
+      const minStop =
+        q?.min_stop_distance != null && Number.isFinite(Number(q.min_stop_distance))
+          ? Number(q.min_stop_distance)
+          : null;
+      if (minStop != null && minStop > 0) {
+        this.minStopByEpic.set(String(q?.epic || epic).toUpperCase(), minStop);
+      }
+    } catch {
+      /* keep last known status */
+    }
   }
 
   async getAccount(): Promise<BrokerAccount | null> {
