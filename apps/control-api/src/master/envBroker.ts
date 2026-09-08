@@ -34,14 +34,26 @@ export function mt4LegacyAllowed(): boolean {
   return (process.env.MASTER_ALLOW_MT4_LEGACY || '').trim() === 'true';
 }
 
-async function connectCapitalLive(input: {
+type CapitalLiveConnectInput = {
   environment: string;
   apiKey: string;
   identifier: string;
   password: string;
   capitalAccountId?: string | null;
   sourceDetail: string;
-}): Promise<EnvBrokerResult> {
+};
+
+type CapitalLiveConnectFn = (input: CapitalLiveConnectInput) => Promise<EnvBrokerResult>;
+
+let capitalLiveConnectForTests: CapitalLiveConnectFn | null = null;
+
+/** Vitest: skip real Capital network login (fake keys would 401 for ~3s each). */
+export function setCapitalLiveConnectForTests(fn: CapitalLiveConnectFn | null) {
+  capitalLiveConnectForTests = fn;
+}
+
+async function connectCapitalLive(input: CapitalLiveConnectInput): Promise<EnvBrokerResult> {
+  if (capitalLiveConnectForTests) return capitalLiveConnectForTests(input);
   const connectionId = masterCapitalConnectionId();
   const broker = createCapitalBroker({
     environment: input.environment,

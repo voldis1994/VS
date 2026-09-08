@@ -114,12 +114,28 @@ describe('CapitalBroker market_status cache (stream path)', () => {
     stream.isHealthy = () => true;
     stream.ensure = () => {};
 
-    // No prior REST — must not return stream mid with null status (would skip CLOSED gate)
     const q = await broker.getQuote('GOLD');
     expect(restCalls).toBeGreaterThanOrEqual(1);
     expect(broker.cachedMarketStatus('GOLD')).toBe('CLOSED');
-    // After discovering CLOSED, falls through to REST full quote
     expect(q?.market_status).toBe('CLOSED');
     expect(q?.mid).toBeCloseTo(4400.2, 5);
+  });
+
+  it('maps XAUUSD → GOLD before REST quote', async () => {
+    let seenEpic = '';
+    const broker = makeBroker(async (epic) => {
+      seenEpic = epic;
+      return {
+        bid: 4400,
+        ask: 4400.4,
+        mid: 4400.2,
+        epic: 'GOLD',
+        market_status: 'TRADEABLE',
+      };
+    });
+    (broker as any).session = { id: 's' };
+    const q = await broker.getQuote('XAUUSD');
+    expect(seenEpic).toBe('GOLD');
+    expect(q?.epic).toBe('GOLD');
   });
 });

@@ -3,7 +3,12 @@ import { setDeskCapitalCredLoaderForTests } from '../capitalDeskCreds.js';
 import { createCapitalBroker, masterCapitalConnectionId } from '../capitalFactory.js';
 import { sharedLoginLockForConnection } from '../capitalLoginLock.js';
 import { deskCapitalPoolConnectionId } from '../deskBridge.js';
-import { capitalEnvPresent, mt4LegacyAllowed, resolveBrokerFromEnv } from '../envBroker.js';
+import {
+  capitalEnvPresent,
+  mt4LegacyAllowed,
+  resolveBrokerFromEnv,
+  setCapitalLiveConnectForTests,
+} from '../envBroker.js';
 import { masterRuntime } from '../runtime.js';
 
 describe('VS MASTER env broker resolve', () => {
@@ -22,6 +27,7 @@ describe('VS MASTER env broker resolve', () => {
 
   afterEach(() => {
     setDeskCapitalCredLoaderForTests(null);
+    setCapitalLiveConnectForTests(null);
     for (const k of keys) {
       if (saved[k] === undefined) delete process.env[k];
       else process.env[k] = saved[k]!;
@@ -31,6 +37,25 @@ describe('VS MASTER env broker resolve', () => {
 
   function snap() {
     for (const k of keys) saved[k] = process.env[k];
+  }
+
+  /** Stub Capital login — unit tests must not hit Capital.com with fake keys. */
+  function stubCapitalConnectOk() {
+    setCapitalLiveConnectForTests(async (input) => {
+      const broker = createCapitalBroker({
+        environment: input.environment,
+        apiKey: input.apiKey,
+        identifier: input.identifier,
+        password: input.password,
+        capitalAccountId: input.capitalAccountId ?? null,
+      });
+      return {
+        ok: true,
+        broker,
+        mode: 'LIVE',
+        detail: `${input.sourceDetail}:pool=${masterCapitalConnectionId()}`,
+      };
+    });
   }
 
   it('defaults to paper when no Capital env', async () => {
@@ -66,6 +91,7 @@ describe('VS MASTER env broker resolve', () => {
     snap();
     for (const k of keys) delete process.env[k];
     process.env.MASTER_LIVE_ENABLED = 'true';
+    stubCapitalConnectOk();
     setDeskCapitalCredLoaderForTests(async () => ({
       ok: true,
       creds: {
@@ -79,9 +105,10 @@ describe('VS MASTER env broker resolve', () => {
       },
     }));
     const r = await resolveBrokerFromEnv();
+    expect(r.ok).toBe(true);
     expect(r.broker.name).toBe('CAPITAL');
     expect(r.mode).toBe('LIVE');
-    expect(r.detail).toMatch(/capital_desk_connected|desk_db/);
+    expect(r.detail).toMatch(/capital_desk_connected/);
   });
 
   it('env CAPITAL_* preferred over Brokers DB when both available', async () => {
@@ -91,6 +118,7 @@ describe('VS MASTER env broker resolve', () => {
     process.env.CAPITAL_API_KEY = 'env-k';
     process.env.CAPITAL_IDENTIFIER = 'env-i';
     process.env.CAPITAL_API_PASSWORD = 'env-p';
+    stubCapitalConnectOk();
     let deskCalled = false;
     setDeskCapitalCredLoaderForTests(async () => {
       deskCalled = true;
@@ -122,6 +150,7 @@ describe('VS MASTER env broker resolve', () => {
     process.env.CAPITAL_API_KEY = 'k';
     process.env.CAPITAL_IDENTIFIER = 'i';
     process.env.CAPITAL_API_PASSWORD = 'p';
+    stubCapitalConnectOk();
     const r = await resolveBrokerFromEnv();
     expect(r.broker.name).toBe('CAPITAL');
     expect(r.mode).toBe('LIVE');
@@ -163,6 +192,7 @@ describe('VS MASTER env broker resolve', () => {
     process.env.MASTER_LIVE_ENABLED = 'true';
     process.env.MASTER_MT4_BRIDGE = '/tmp/vs-mt4-should-lose';
     process.env.MASTER_ALLOW_MT4_LEGACY = 'true';
+    stubCapitalConnectOk();
     setDeskCapitalCredLoaderForTests(async () => ({
       ok: true,
       creds: {
@@ -177,12 +207,12 @@ describe('VS MASTER env broker resolve', () => {
     }));
     const r = await resolveBrokerFromEnv();
     expect(r.broker.name).toBe('CAPITAL');
-    expect(r.detail).toMatch(/capital_desk_connected|desk_db/);
+    expect(r.detail).toMatch(/capital_desk_connected/);
   });
+
   it('desk MASTER pool ignores DB connectionId (shares env 900001 CST lock)', () => {
     snap();
     delete process.env.MASTER_CAPITAL_CONNECTION_ID;
-    // envBroker + deskBridge both call masterCapitalConnectionId() with no desk DB id
     const envPool = masterCapitalConnectionId();
     const deskPool = masterCapitalConnectionId();
     const dbFork = masterCapitalConnectionId(777001);
@@ -249,7 +279,6 @@ describe('VS MASTER env broker resolve', () => {
     const poolId = deskCapitalPoolConnectionId(dbId);
     expect(poolId).toBe(900001);
     expect(poolId).not.toBe(dbId);
-    // Same login lock as createCapitalBroker / env MASTER
     expect(sharedLoginLockForConnection(poolId)).toBe(
       sharedLoginLockForConnection(masterCapitalConnectionId())
     );
@@ -266,13 +295,11 @@ describe('VS MASTER env broker resolve', () => {
       password: 'p',
       capitalAccountId: 'cfd-A',
     });
-    // Replace ensure path by binding then reading credentials
     broker.bindCapitalAccount('cfd-B');
     expect(
       (broker as unknown as { deps: { credentials: { capitalAccountId: string } } }).deps
         .credentials.capitalAccountId
     ).toBe('cfd-B');
-    // Mock session pin via rebind with stubbed acquire/ensure
     (broker as unknown as { deps: { acquire: Function; ensureAccount: Function } }).deps.acquire =
       async () => ({
         ok: true,

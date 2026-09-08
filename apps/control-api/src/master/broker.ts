@@ -123,6 +123,19 @@ export function epicsMatch(a: string, b: string): boolean {
   return normalizeEpicKey(a) === normalizeEpicKey(b);
 }
 
+/**
+ * Capital.com markets epic — API uses GOLD/SILVER, not MT4-style XAUUSD/XAGUSD.
+ * Prefer this before REST/WS so LIVE does not pay a failed-quote + search round-trip.
+ */
+export function capitalApiEpic(epic: string): string {
+  const s = String(epic || '').trim();
+  if (!s) return s;
+  const key = normalizeEpicKey(s);
+  if (key === 'XAUUSD') return 'GOLD';
+  if (key === 'XAGUSD') return 'SILVER';
+  return s.toUpperCase();
+}
+
 export type BrokerHistoryBars = {
   ok: boolean;
   bars: Array<{
@@ -645,7 +658,7 @@ export class CapitalBroker implements MasterBroker {
 
   /** Subscribe epics on Capital streaming WS (best-effort). */
   async ensureMarketStream(epics: string[]): Promise<'streaming' | 'fallback'> {
-    return this.stream.ensure(epics);
+    return this.stream.ensure(epics.map((e) => capitalApiEpic(e)));
   }
 
   stopMarketStream() {
@@ -653,11 +666,12 @@ export class CapitalBroker implements MasterBroker {
   }
 
   async getHistoryBars(epic: string, maxBars = 60): Promise<BrokerHistoryBars> {
+    const apiEpic = capitalApiEpic(epic);
     const ensured = await this.ensureSession();
     if (!ensured.ok || !this.session || !this.deps.prices) {
       return { ok: false, bars: [], detail: ensured.ok ? 'capital_prices_unavailable' : ensured.detail };
     }
-    const res = await this.deps.prices(this.session, epic, 'MINUTE', maxBars);
+    const res = await this.deps.prices(this.session, apiEpic, 'MINUTE', maxBars);
     if (!res.ok || !res.candles.length) {
       return { ok: false, bars: [], detail: res.detail || 'capital_no_candles' };
     }
@@ -678,10 +692,11 @@ export class CapitalBroker implements MasterBroker {
   }
 
   async getQuote(epic: string): Promise<BrokerQuote | null> {
+    const apiEpic = capitalApiEpic(epic);
     // Prefer fresh streaming mark when healthy (VS-System ensureMarketStream)
-    void this.stream.ensure([epic]);
-    const streamed = this.stream.getLatest(epic);
-    let cachedStatus = this.cachedMarketStatus(epic);
+    void this.stream.ensure([apiEpic]);
+    const streamed = this.stream.getLatest(apiEpic);
+    let cachedStatus = this.cachedMarketStatus(apiEpic);
     const { capitalMarketAllowsTrading } = await import('./capitalMarket.js');
     let knownClosed =
       cachedStatus != null && !capitalMarketAllowsTrading(cachedStatus);
@@ -692,14 +707,14 @@ export class CapitalBroker implements MasterBroker {
       void this.ensureSession();
       const mid = streamed.mid;
       if (Number.isFinite(mid) && mid > 0) {
-        this.lastMidByEpic.set(String(streamed.epic || epic).toUpperCase(), mid);
+        this.lastMidByEpic.set(String(streamed.epic || apiEpic).toUpperCase(), mid);
       }
-      const statusKey = String(epic || '').toUpperCase();
+      const statusKey = String(apiEpic || '').toUpperCase();
       const neverFetched = !(this.marketStatusFetchedAt.get(statusKey) || 0);
       // First tick: await REST status before allowing stream-only (null would skip CLOSED gate)
       if (neverFetched) {
-        await this.refreshMarketStatus(epic);
-        cachedStatus = this.cachedMarketStatus(epic);
+        await this.refreshMarketStatus(apiEpic);
+        cachedStatus = this.cachedMarketStatus(apiEpic);
         knownClosed =
           cachedStatus != null && !capitalMarketAllowsTrading(cachedStatus);
         if (knownClosed) {
@@ -710,25 +725,25 @@ export class CapitalBroker implements MasterBroker {
             ask: streamed.offer,
             mid: streamed.mid,
             spread: streamed.offer - streamed.bid,
-            epic: streamed.epic || epic,
+            epic: streamed.epic || apiEpic,
             ts_ms: streamed.ts_ms,
-            min_stop_distance: this.liveMinStopDistance(epic),
+            min_stop_distance: this.liveMinStopDistance(apiEpic),
             market_status: cachedStatus,
           };
         }
       } else {
         // Background refresh on interval — stream frames never carry marketStatus
-        if (this.marketStatusNeedsRefresh(epic)) {
-          void this.refreshMarketStatus(epic);
+        if (this.marketStatusNeedsRefresh(apiEpic)) {
+          void this.refreshMarketStatus(apiEpic);
         }
         return {
           bid: streamed.bid,
           ask: streamed.offer,
           mid: streamed.mid,
           spread: streamed.offer - streamed.bid,
-          epic: streamed.epic || epic,
+          epic: streamed.epic || apiEpic,
           ts_ms: streamed.ts_ms,
-          min_stop_distance: this.liveMinStopDistance(epic),
+          min_stop_distance: this.liveMinStopDistance(apiEpic),
           market_status: cachedStatus,
         };
       }
@@ -736,10 +751,10 @@ export class CapitalBroker implements MasterBroker {
 
     const ensured = await this.ensureSession();
     if (!ensured.ok || !this.session) return null;
-    const q = await this.deps.quote(this.session, epic);
+    const q = await this.deps.quote(this.session, apiEpic);
     if (q.bid == null || q.ask == null || q.mid == null) return null;
     if (Number.isFinite(q.mid) && Number(q.mid) > 0) {
-      this.lastMidByEpic.set(String(q.epic || epic).toUpperCase(), Number(q.mid));
+      this.lastMidByEpic.set(String(q.epic || apiEpic).toUpperCase(), Number(q.mid));
     }
     if (
       q.min_deal_size != null &&
@@ -747,7 +762,7 @@ export class CapitalBroker implements MasterBroker {
       q.min_deal_size > 0
     ) {
       const { sanitizeCapitalDealRules } = await import('./capitalSize.js');
-      const key = String(q.epic || epic).toUpperCase();
+      const key = String(q.epic || apiEpic).toUpperCase();
       this.dealRulesByEpic.set(
         key,
         sanitizeCapitalDealRules(key, {
@@ -768,18 +783,18 @@ export class CapitalBroker implements MasterBroker {
         ? Number(q.min_stop_distance)
         : null;
     if (minStop != null && minStop > 0) {
-      this.minStopByEpic.set(String(q.epic || epic).toUpperCase(), minStop);
+      this.minStopByEpic.set(String(q.epic || apiEpic).toUpperCase(), minStop);
     }
-    this.noteMarketStatus(q.epic || epic, q.market_status);
+    this.noteMarketStatus(q.epic || apiEpic, q.market_status);
     return {
       bid: q.bid,
       ask: q.ask,
       mid: q.mid,
       spread: q.ask - q.bid,
-      epic: q.epic || epic,
+      epic: q.epic || apiEpic,
       ts_ms: Date.now(),
       min_stop_distance: minStop,
-      market_status: this.cachedMarketStatus(q.epic || epic),
+      market_status: this.cachedMarketStatus(q.epic || apiEpic),
     };
   }
 
@@ -1080,6 +1095,8 @@ export class CapitalBroker implements MasterBroker {
   }
 
   private async placeOrderLocked(input: PlaceOrderInput): Promise<PlaceOrderResult> {
+    // Capital markets epic (GOLD) — avoid XAUUSD failed quote + search round-trip
+    input = { ...input, epic: capitalApiEpic(input.epic) };
     const ensured = await this.ensureSession();
     if (!ensured.ok || !this.session) {
       return {
