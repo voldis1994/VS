@@ -93,11 +93,11 @@ export class CapitalQuoteStream {
   }
 
   getLatest(epic: string): CapitalStreamQuote | null {
-    const key = String(epic || '').toUpperCase();
+    const key = String(epic || '').trim().toUpperCase();
+    if (!key) return null;
+    // Exact / case-insensitive only — never substring (GOLDMICRO must not feed GOLD)
     for (const [k, v] of this.latest) {
-      if (k.toUpperCase() === key || k.toUpperCase().includes(key) || key.includes(k.toUpperCase())) {
-        return v;
-      }
+      if (k.toUpperCase() === key) return v;
     }
     return this.latest.get(epic) ?? null;
   }

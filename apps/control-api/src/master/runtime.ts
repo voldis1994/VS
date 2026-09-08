@@ -2212,10 +2212,10 @@ class MasterRuntime {
           q = null;
         }
         if (!q) {
-          // Feed miss must not freeze exits — manage on last bars/quote.
+          // Feed miss must not freeze exits — manage-only on last bars/quote (no OPEN).
           // Keep aged ts_ms so DATA_STALE / entry gates stay honest (do not forge freshness).
           if (this.last_bars.length >= 5 && this.last_quote) {
-            await this.tick(this.last_bars, this.last_quote);
+            await this.manageOnlyTick(this.last_bars, this.last_quote);
           }
           return;
         }
@@ -2345,11 +2345,11 @@ class MasterRuntime {
         } catch {
           snap = null;
         }
-        // Feed failure must not freeze exits (TIME_STOP / SL) — manage on last bars.
+        // Feed failure must not freeze exits (TIME_STOP / SL) — manage-only on last bars (no OPEN).
         // Keep aged ts_ms so DATA_STALE / entry gates stay honest (do not forge freshness).
         if (!snap?.ok || !snap.quote) {
           if (this.last_bars.length >= 5 && this.last_quote) {
-            await this.tick(this.last_bars, this.last_quote);
+            await this.manageOnlyTick(this.last_bars, this.last_quote);
           }
           return;
         }

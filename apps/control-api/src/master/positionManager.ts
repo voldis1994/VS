@@ -1137,6 +1137,11 @@ export class PositionManager {
       profit_level: patch.profit_level,
       stop_distance: patch.stop_distance,
       trailing_stop: patch.trailing_stop,
+      require_trail_off:
+        !!pos.native_trail_armed &&
+        patch.stop_level != null &&
+        Number.isFinite(patch.stop_level) &&
+        patch.trailing_stop !== true,
     });
     logTradeEvent({
       event: 'MODIFY',

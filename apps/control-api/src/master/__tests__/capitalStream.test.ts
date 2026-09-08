@@ -84,6 +84,24 @@ describe('Capital stream parse', () => {
       ts_ms: Date.now(),
     });
     expect(stream.isHealthy(30_000, 'GOLD')).toBe(true);
+
+    // Substring must not win — GOLDMICRO tick is not a GOLD mark
+    (stream as any).latest = new Map([
+      [
+        'GOLDMICRO',
+        {
+          epic: 'GOLDMICRO',
+          bid: 44,
+          offer: 44.1,
+          mid: 44.05,
+          ts_ms: Date.now(),
+        },
+      ],
+    ]);
+    (stream as any).lastQuoteAt = Date.now();
+    expect(stream.isHealthy(30_000, 'GOLD')).toBe(false);
+    expect(stream.getLatest('GOLD')).toBeNull();
+    expect(stream.getLatest('GOLDMICRO')?.mid).toBeCloseTo(44.05, 5);
   });
 });
 

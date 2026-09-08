@@ -2623,9 +2623,84 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     const mod = await broker.modifyPosition({
       position_id: 'd-abs',
       stop_level: 4405,
+      require_trail_off: true,
     });
     expect(mod.ok).toBe(false);
-    expect(mod.detail).toBe('modify_sl_still_trailing');
+    expect(mod.detail).toBe('modify_sl_trail_unproven');
+  });
+
+  it('absolute SL after trail fails when trailing_stop omitted (unproven)', async () => {
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number;
+        stop_level?: number | null;
+        trailingStop?: boolean | null;
+      }
+    >();
+    positions.set('d-abs-null', {
+      deal_id: 'd-abs-null',
+      epic: 'GOLD',
+      direction: 'BUY',
+      size: 0.1,
+      open_level: 4410,
+      stop_level: 4400,
+      trailingStop: true,
+    });
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-abs-null' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({
+        ok: true,
+        positions: [...positions.values()].map((p) => {
+          const row: Record<string, unknown> = {
+            deal_id: p.deal_id,
+            epic: p.epic,
+            direction: p.direction,
+            size: p.size,
+            open_level: p.open_level,
+            stop_level: p.stop_level ?? null,
+          };
+          // Omit trailingStop when null — Capital often drops the field
+          if (p.trailingStop === true || p.trailingStop === false) {
+            row.trailingStop = p.trailingStop;
+          }
+          return row;
+        }),
+        detail: '',
+      }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({ ok: false, detail: 'unused' }),
+      modify: async () => {
+        positions.set('d-abs-null', {
+          ...positions.get('d-abs-null')!,
+          stop_level: 4405,
+          trailingStop: null,
+        });
+        return { ok: true, deal_reference: 'abs-null-ref', detail: 'submitted' };
+      },
+      confirm: async () => ({ ok: true, pending: false, detail: 'ACCEPTED' }),
+    });
+    await broker.connect();
+    const mod = await broker.modifyPosition({
+      position_id: 'd-abs-null',
+      stop_level: 4405,
+      require_trail_off: true,
+    });
+    expect(mod.ok).toBe(false);
+    expect(mod.detail).toBe('modify_sl_trail_unproven');
   });
 
   it('absolute SL after trail succeeds when trailing_stop proven off', async () => {
@@ -2690,6 +2765,7 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     const mod = await broker.modifyPosition({
       position_id: 'd-abs2',
       stop_level: 4405,
+      require_trail_off: true,
     });
     expect(mod.ok).toBe(true);
   });

@@ -240,6 +240,11 @@ export interface MasterBroker {
     trailing_stop?: boolean;
     /** Absolute price distance for Capital stopDistance / trailingStop */
     stop_distance?: number;
+    /**
+     * Absolute stopLevel after native trail — require list trailing_stop===false
+     * (null/true = modify_sl_trail_unproven). Set by PositionManager when armed.
+     */
+    require_trail_off?: boolean;
   }): Promise<{ ok: boolean; detail: string; order_id?: string }>;
 }
 
@@ -2174,6 +2179,7 @@ export class CapitalBroker implements MasterBroker {
     profit_level?: number;
     trailing_stop?: boolean;
     stop_distance?: number;
+    require_trail_off?: boolean;
   }) {
     return withLoginLock(this.loginLock, () => this.modifyPositionLocked(input));
   }
@@ -2184,6 +2190,7 @@ export class CapitalBroker implements MasterBroker {
     profit_level?: number;
     trailing_stop?: boolean;
     stop_distance?: number;
+    require_trail_off?: boolean;
   }) {
     const ensured = await this.ensureSession();
     if (!ensured.ok || !this.session) {
@@ -2207,6 +2214,7 @@ export class CapitalBroker implements MasterBroker {
     // Snapshot SL/TP before PUT — VS-System detects ACK-but-unchanged
     let beforeSl: number | null = null;
     let beforeTp: number | null = null;
+    let beforeTrailing: boolean | null = null;
     {
       const beforeList = await this.listOpenPositions();
       const before = beforeList.ok
@@ -2217,6 +2225,9 @@ export class CapitalBroker implements MasterBroker {
       }
       if (before?.profit_level != null && Number.isFinite(before.profit_level)) {
         beforeTp = Number(before.profit_level);
+      }
+      if (before?.trailing_stop === true || before?.trailing_stop === false) {
+        beforeTrailing = before.trailing_stop;
       }
     }
 
@@ -2261,8 +2272,11 @@ export class CapitalBroker implements MasterBroker {
     let gotTp: number | null = null;
     let hitEpic: string | null = null;
     let stillTrailing = false;
+    // Only when Capital showed trail OR manage asked for trail-off after native arm
     const absoluteSlOffTrail =
-      hasLevel && input.trailing_stop !== true;
+      hasLevel &&
+      input.trailing_stop !== true &&
+      (beforeTrailing === true || input.require_trail_off === true);
     for (let attempt = 0; attempt < attempts; attempt++) {
       if (attempt > 0) {
         await new Promise((r) =>
@@ -2336,12 +2350,15 @@ export class CapitalBroker implements MasterBroker {
       let slOk = !needsSlProof;
       if (needsSlProof && hasLevel && wantSl != null && gotSl != null) {
         slOk = Math.abs(gotSl - wantSl) <= tolAbs;
-        // Absolute stop after native trail: SL match alone is not enough if trail still on
-        if (slOk && absoluteSlOffTrail && hit.trailing_stop === true) {
-          stillTrailing = true;
-          slOk = false;
-        } else if (slOk && absoluteSlOffTrail) {
-          stillTrailing = false;
+        // Absolute stop after native trail: require proven trail-off (false).
+        // null = Capital omitted flag → unproven (do NOT clear native_trail_armed).
+        if (slOk && absoluteSlOffTrail) {
+          if (hit.trailing_stop === false) {
+            stillTrailing = false;
+          } else {
+            stillTrailing = true;
+            slOk = false;
+          }
         }
       } else if (needsSlProof && !hasLevel && gotSl != null) {
         // stopDistance / native trail: require SL moved or trailingStop flag.
@@ -2413,7 +2430,7 @@ export class CapitalBroker implements MasterBroker {
       ) {
         return {
           ok: false,
-          detail: 'modify_sl_still_trailing',
+          detail: 'modify_sl_trail_unproven',
           order_id: res.deal_reference,
         };
       }
