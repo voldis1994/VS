@@ -27,6 +27,11 @@ export type RuntimeGates = {
    * Prevents paper £10k gates from poisoning Capital LIVE after attach/restart.
    */
   capital_day_gates_seeded?: boolean;
+  /**
+   * Last AI soft-exit allow_close. When ai_mode !== 'off' and missing after
+   * restart, manage must fail-closed (false) until a cycle proves allow.
+   */
+  last_ai_allow_close?: boolean | null;
 };
 
 function gatesDir(): string {
@@ -74,6 +79,10 @@ export function saveRuntimeGates(gates: RuntimeGates): boolean {
           ? Math.max(0, Math.floor(Number(gates.consecutive_losses)))
           : null,
       capital_day_gates_seeded: gates.capital_day_gates_seeded === true,
+      last_ai_allow_close:
+        typeof gates.last_ai_allow_close === 'boolean'
+          ? gates.last_ai_allow_close
+          : null,
     });
   } catch {
     return false;
@@ -111,6 +120,10 @@ export function loadRuntimeGates(): RuntimeGates | null {
             ? Math.floor(streak)
             : null,
       capital_day_gates_seeded: raw.capital_day_gates_seeded === true,
+      last_ai_allow_close:
+        typeof raw.last_ai_allow_close === 'boolean'
+          ? raw.last_ai_allow_close
+          : null,
     };
   } catch {
     return null;

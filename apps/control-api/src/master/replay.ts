@@ -13,6 +13,7 @@ import {
   ema3PriceSide,
   ema3PriceThroughExit,
   emaPairFromBars,
+  analyzeBars,
 } from './analysis.js';
 import {
   buildEqualMultiTpPlan,
@@ -33,6 +34,7 @@ import {
   entrySetupFromRegime,
   evaluatePartialClose,
   mapRegimeToPlaybook,
+  protectiveMark,
   toDeskRegime,
 } from './positionManager.js';
 import { setupKey } from './decision.js';
@@ -170,7 +172,8 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
     if (open) {
       const hi = last.high;
       const lo = last.low;
-      const mark = last.close;
+      // Live manageTick uses protective mark (BUY=bid / SELL=ask), not mid/close
+      const mark = protectiveMark(open.side, quote);
       const fav =
         open.side === 'BUY' ? mark - open.entry : open.entry - mark;
       open.mfe = Math.max(open.mfe, fav);
@@ -237,19 +240,76 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
           if (open.side === 'BUY' && chase > open.sl) open.sl = chase;
           if (open.side === 'SELL' && chase < open.sl) open.sl = chase;
         }
-      } else if (
-        !cfg.scalp_pct_chase &&
-        (cfg.trail_start ?? 0) > 0 &&
-        (cfg.trail_lock ?? 0) > 0 &&
-        fav >= (cfg.trail_start ?? 0)
-      ) {
+      } else {
         // Check- point trail (tighten-only)
-        const trailed =
-          open.side === 'BUY'
-            ? mark - (cfg.trail_lock ?? 0)
-            : mark + (cfg.trail_lock ?? 0);
-        if (open.side === 'BUY' && trailed > open.sl) open.sl = trailed;
-        if (open.side === 'SELL' && trailed < open.sl) open.sl = trailed;
+        if (
+          (cfg.trail_start ?? 0) > 0 &&
+          (cfg.trail_lock ?? 0) > 0 &&
+          fav >= (cfg.trail_start ?? 0)
+        ) {
+          const trailed =
+            open.side === 'BUY'
+              ? mark - (cfg.trail_lock ?? 0)
+              : mark + (cfg.trail_lock ?? 0);
+          if (open.side === 'BUY' && trailed > open.sl) open.sl = trailed;
+          if (open.side === 'SELL' && trailed < open.sl) open.sl = trailed;
+        }
+        // Reader structure swing + MFE 50% ratchet (live maybeTrailStop)
+        {
+          const a = analyzeBars(visible, spread, quote.ts_ms);
+          const buf =
+            (cfg.trailing_buffer_atr_mult ?? 0.15) * Math.max(0, a.atr || 0);
+          let trailed: number | null = null;
+          if (open.side === 'BUY') {
+            const swing = a.swing_low;
+            if (swing > 0 && Number.isFinite(swing)) {
+              const cand = swing - buf;
+              if (cand < mark && cand > open.sl) trailed = cand;
+            }
+          } else {
+            const swing = a.swing_high;
+            if (swing > 0 && Number.isFinite(swing)) {
+              const cand = swing + buf;
+              if (cand > mark && (open.sl == null || cand < open.sl)) {
+                trailed = cand;
+              }
+            }
+          }
+          if (trailed == null) {
+            const absEntry = Math.max(Math.abs(open.entry), 1e-9);
+            const mfeFloor = Math.max(absEntry * 0.00025, 0.8);
+            if (open.mfe >= mfeFloor) {
+              const lock = open.mfe * 0.5;
+              const mfeTrail =
+                open.side === 'BUY' ? open.entry + lock : open.entry - lock;
+              const mfeOk =
+                open.side === 'BUY' ? mfeTrail < mark : mfeTrail > mark;
+              const tighter =
+                open.side === 'BUY' ? mfeTrail > open.sl : mfeTrail < open.sl;
+              if (mfeOk && tighter) trailed = mfeTrail;
+            }
+          }
+          if (trailed != null) open.sl = trailed;
+        }
+        // VS-System EMA3 trail tighten-only
+        {
+          const e3 = emaPairFromBars(visible, 3);
+          if (e3 && e3.cur > 0 && Number.isFinite(e3.cur)) {
+            if (
+              open.side === 'BUY' &&
+              e3.cur < mark &&
+              e3.cur > open.sl
+            ) {
+              open.sl = e3.cur;
+            } else if (
+              open.side === 'SELL' &&
+              e3.cur > mark &&
+              e3.cur < open.sl
+            ) {
+              open.sl = e3.cur;
+            }
+          }
+        }
       }
 
       const softArm = cfg.soft_trail_money_arm ?? 0;

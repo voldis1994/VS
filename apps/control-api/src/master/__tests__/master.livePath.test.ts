@@ -5528,6 +5528,12 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     masterRuntime.positions.get('deal-float-null')!.broker_upl = 0.85;
     const proven = masterRuntime.status();
     expect(proven.floating_pnl).toBeCloseTo(0.85, 5);
+
+    // Venue UPL exactly 0 ≡ unread — must not paint dashboard as flat £0
+    masterRuntime.positions.get('deal-float-null')!.broker_upl = 0;
+    const zeroUnread = masterRuntime.status();
+    expect(zeroUnread.floating_pnl).toBeNull();
+    expect(masterRuntime.positionsForApi()[0]!.upl).toBeNull();
   });
 
   it('native trail MODIFY refuses gap-only proof when confirm timed out', async () => {

@@ -367,7 +367,7 @@ class MasterRuntime {
       const capitalLive =
         this.broker instanceof CapitalBroker && !this.broker.paper;
       const upl =
-        capitalLive && (p.broker_upl == null || !Number.isFinite(p.broker_upl))
+        capitalLive && usableBrokerUpl(p.broker_upl) == null
           ? null
           : resolveFloatingMoneyPnl({
               side: p.side,
@@ -798,6 +798,7 @@ class MasterRuntime {
           daily_pnl_day: this.account.daily_pnl_day ?? null,
           consecutive_losses: this.account.consecutive_losses,
           capital_day_gates_seeded: this.capitalDayGatesSeeded,
+          last_ai_allow_close: this.last_ai_allow_close,
         })
       )
     );
@@ -1684,6 +1685,7 @@ class MasterRuntime {
       bars_out: cycle.market.bars.length,
     };
     this.last_ai_allow_close = cycle.ai.allow_close !== false;
+    this.persistRuntimeGates();
     this.trackPersist('opportunity', persistOpportunity(cycle.opportunity));
 
     // Reader cycle alerts — block new entries on stale / not-tradeable / ACK timeout
@@ -2261,6 +2263,12 @@ class MasterRuntime {
       if (gates.daily_pnl_day) {
         this.account.daily_pnl_day = gates.daily_pnl_day;
       }
+      // Soft-exit AI veto — fail-closed when advisory and gate missing
+      if (typeof gates.last_ai_allow_close === 'boolean') {
+        this.last_ai_allow_close = gates.last_ai_allow_close;
+      } else if (this.cfg.ai_mode !== 'off') {
+        this.last_ai_allow_close = false;
+      }
       const capitalAttached =
         this.broker instanceof CapitalBroker && !this.broker.paper;
       // Only restore day/peak when Capital-seeded (or non-Capital). Paper £10k
@@ -2286,6 +2294,9 @@ class MasterRuntime {
         this.account.peak_equity = 0;
         this.capitalDayGatesSeeded = false;
       }
+    } else if (this.cfg.ai_mode !== 'off') {
+      // No gates file — soft exits fail-closed until a cycle proves allow
+      this.last_ai_allow_close = false;
     }
     this.rollDailyPnl();
     const today = this.account.daily_pnl_day!;
@@ -3430,14 +3441,12 @@ class MasterRuntime {
           capitalLiveAttached
         )
       : null;
-    // Capital LIVE: unknown venue UPL → null float (never show forged 0.00 as flat)
+    // Capital LIVE: unknown / unread venue UPL (null or 0) → null float
     const opens = this.positions.list();
     const floating =
       capitalLiveAttached &&
       opens.length > 0 &&
-      opens.some(
-        (p) => p.broker_upl == null || !Number.isFinite(p.broker_upl)
-      )
+      opens.some((p) => usableBrokerUpl(p.broker_upl) == null)
         ? null
         : floatingRaw;
     const streamHealthy =

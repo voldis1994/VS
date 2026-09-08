@@ -35,7 +35,8 @@ export function resolveFloatingMoneyPnl(input: {
   const computed = instrumentMoneyPnl(input);
   const broker = input.broker_upl;
   if (input.capitalLive) {
-    if (broker != null && Number.isFinite(broker)) return Number(broker);
+    const usable = usableBrokerUpl(broker);
+    if (usable != null) return usable;
     return 0;
   }
   if (broker == null || !Number.isFinite(broker)) return computed;

@@ -1723,6 +1723,7 @@ describe('runtime gates persist', () => {
         day_start_equity: 10_250.5,
         peak_equity: 11_000,
         daily_pnl_day: '2026-09-07',
+        last_ai_allow_close: false,
       })
     ).toBe(true);
     expect(loadRuntimeGates()).toEqual({
@@ -1736,9 +1737,28 @@ describe('runtime gates persist', () => {
       daily_pnl_day: '2026-09-07',
       consecutive_losses: null,
       capital_day_gates_seeded: false,
+      last_ai_allow_close: false,
     });
     if (prev === undefined) delete process.env.MASTER_STATE_DIR;
     else process.env.MASTER_STATE_DIR = prev;
+  });
+
+  it('recover fail-closes soft AI allow when advisory and gate missing', async () => {
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = mkdtempSync(join(tmpdir(), 'vs-ai-gate-'));
+    const prevAi = masterRuntime.last_ai_allow_close;
+    const prevMode = masterRuntime.cfg.ai_mode;
+    try {
+      masterRuntime.cfg = { ...masterRuntime.cfg, ai_mode: 'advisory' };
+      masterRuntime.last_ai_allow_close = true;
+      await masterRuntime.recover();
+      expect(masterRuntime.last_ai_allow_close).toBe(false);
+    } finally {
+      masterRuntime.last_ai_allow_close = prevAi;
+      masterRuntime.cfg = { ...masterRuntime.cfg, ai_mode: prevMode };
+      if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prev;
+    }
   });
 });
 
