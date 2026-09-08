@@ -1186,10 +1186,12 @@ export async function confirmCapitalDeal(
   detail: string;
   rejected?: boolean;
   pending?: boolean;
+  /** Close confirm DELETED/CLOSED — not OPEN success; CLOSE waitConfirm may accept */
+  closed_gone?: boolean;
   /** Raw confirm reason when REJECTED (empty ⇒ sibling empty-REJECTED match path) */
   reject_reason?: string;
 }> {
-  const { parseCapitalConfirm, isCapitalConfirmTerminal, isCapitalConfirmAccepted, formatCapitalConfirmRejection } =
+  const { parseCapitalConfirm, isCapitalConfirmTerminal, isCapitalConfirmAccepted, isCapitalConfirmClosedGone, formatCapitalConfirmRejection } =
     await import('../master/capitalConfirm.js');
   const ref = dealReference.trim();
   if (!ref) return { ok: false, detail: 'Empty dealReference' };
@@ -1210,26 +1212,38 @@ export async function confirmCapitalDeal(
       deal_status: parsed.dealStatus || parsed.status,
     };
   }
-  if (!isCapitalConfirmAccepted(parsed)) {
+  if (isCapitalConfirmAccepted(parsed)) {
+    return {
+      ok: true,
+      deal_id: parsed.dealId,
+      fill_level: parsed.level,
+      profit: parsed.profit,
+      deal_status: parsed.dealStatus || parsed.status,
+      detail: `Confirmed dealId=${parsed.dealId}${parsed.level != null ? ` fill=${parsed.level}` : ''}${
+        parsed.profit != null ? ` pnl=${parsed.profit}` : ''
+      }`,
+    };
+  }
+  // Close-only: DELETED/CLOSED — not OPEN/MODIFY success (caller opts.acceptClosedGone)
+  if (isCapitalConfirmClosedGone(parsed)) {
     return {
       ok: false,
-      rejected: true,
-      deal_status: parsed.dealStatus || parsed.status,
-      detail: formatCapitalConfirmRejection(parsed),
-      profit: parsed.profit,
+      closed_gone: true,
+      deal_id: parsed.dealId,
       fill_level: parsed.level,
-      reject_reason: parsed.reason,
+      profit: parsed.profit,
+      deal_status: parsed.dealStatus || parsed.status,
+      detail: `confirm_closed_gone:${parsed.status || parsed.dealStatus}`,
     };
   }
   return {
-    ok: true,
-    deal_id: parsed.dealId,
-    fill_level: parsed.level,
-    profit: parsed.profit,
+    ok: false,
+    rejected: true,
     deal_status: parsed.dealStatus || parsed.status,
-    detail: `Confirmed dealId=${parsed.dealId}${parsed.level != null ? ` fill=${parsed.level}` : ''}${
-      parsed.profit != null ? ` pnl=${parsed.profit}` : ''
-    }`,
+    detail: formatCapitalConfirmRejection(parsed),
+    profit: parsed.profit,
+    fill_level: parsed.level,
+    reject_reason: parsed.reason,
   };
 }
 

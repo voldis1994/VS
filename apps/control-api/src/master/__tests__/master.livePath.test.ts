@@ -1181,8 +1181,10 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
         return {
           ok: false,
           rejected: true,
-          detail: 'Capital rejected: REJECTED',
-          // empty reason → match-accept path
+          // detail embeds fill "level" JSON — must NOT classify as named SL reject
+          detail:
+            'Capital rejected: {"dealStatus":"REJECTED","status":"OPEN","level":4410.5,"dealId":"ghost-fill"}',
+          // empty reject_reason → match-accept path
         };
       },
     });
@@ -1200,6 +1202,40 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(place.detail).toMatch(/capital_open/);
     expect(positions.get('ghost-fill')!.stop_level).toBe(4400);
     expect(positions.has('old-orphan')).toBe(true);
+  });
+
+  it('closePosition accepts closed_gone DELETED confirm', async () => {
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-cg' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({ ok: true, positions: [] }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({
+        ok: true,
+        deal_reference: 'cg-ref',
+        detail: 'submitted',
+      }),
+      confirm: async () => ({
+        ok: false,
+        closed_gone: true,
+        deal_id: 'was-open',
+        fill_level: 4410.1,
+        profit: -1.25,
+        detail: 'confirm_closed_gone:DELETED',
+      }),
+    });
+    await broker.connect();
+    const closed = await broker.closePosition('was-open');
+    expect(closed.ok).toBe(true);
+    expect(closed.fill_pnl).toBe(-1.25);
   });
 
   it('named reject does not fail-close pre-open same-size orphan', async () => {

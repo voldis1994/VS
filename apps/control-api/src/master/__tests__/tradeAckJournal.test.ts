@@ -522,4 +522,59 @@ describe('INTENT→ACK trade journal (Reader)', () => {
       sim.stop();
     }
   });
+
+  it('Capital recover does not seed phantom when list proves ticket gone', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const state = mkdtempSync(join(tmpdir(), 'vs-cap-gone-'));
+    process.env.MASTER_STATE_DIR = state;
+    clearTradeAckJournalForTest();
+
+    logTradeIntent({
+      command_id: 'cap_gone1',
+      intent_id: 'capital-gone-intent-01',
+      action: 'OPEN',
+      side: 'BUY',
+      volume: 0.1,
+      epic: 'GOLD',
+      sl: 4390,
+      tp: 4440,
+      reason: 'INTENT',
+    });
+    updateTradeAck('cap_gone1', {
+      ack_status: 'SUCCESS',
+      ticket: 'deal-gone-1',
+      fill_price: 4410,
+      detail: 'ACK_SUCCESS',
+    });
+
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 'gone' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+        market_status: 'TRADEABLE',
+      }),
+      list: async () => ({ ok: true, positions: [], detail: '0 open' }),
+      create: async () => ({ ok: false, detail: 'no_create' }),
+      confirm: async () => ({ ok: false, detail: 'no' }),
+      modify: async () => ({ ok: true, detail: 'ok' }),
+      close: async () => ({ ok: true, detail: 'closed' }),
+    });
+    await broker.connect();
+
+    masterRuntime.pipeline = new MasterPipeline('LIVE');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.cfg = { ...masterRuntime.cfg, mode: 'LIVE' };
+    masterRuntime.attachBroker(broker);
+    masterRuntime.recovered = false;
+    const r = await masterRuntime.recover();
+    expect(masterRuntime.positions.get('deal-gone-1')).toBeNull();
+    expect(masterRuntime.positions.count()).toBe(0);
+    expect(r.positions).toBe(0);
+  });
 });

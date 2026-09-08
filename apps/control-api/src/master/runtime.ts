@@ -1968,6 +1968,14 @@ class MasterRuntime {
           }
           continue;
         }
+        // Capital list proved ticket gone — never seed a phantom local open from ack fill
+        if (
+          this.broker instanceof CapitalBroker &&
+          !capitalListUnproven &&
+          !presentOnBroker
+        ) {
+          continue;
+        }
         const recoverId = stableRecoverUuid(row.ticket);
         const openedAt = status?.opened_at ?? null;
         const wantSl =

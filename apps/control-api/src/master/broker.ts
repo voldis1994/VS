@@ -561,6 +561,7 @@ export class CapitalBroker implements MasterBroker {
         detail: string;
         rejected?: boolean;
         pending?: boolean;
+        closed_gone?: boolean;
         reject_reason?: string;
       }>;
       account?: (
@@ -653,6 +654,7 @@ export class CapitalBroker implements MasterBroker {
       detail: string;
       rejected?: boolean;
       pending?: boolean;
+      closed_gone?: boolean;
       reject_reason?: string;
     }>;
     account?: (
@@ -1118,7 +1120,12 @@ export class CapitalBroker implements MasterBroker {
 
   private async waitConfirm(
     dealReference: string,
-    opts?: { /** When true, journal ACK_TIMEOUT (OPEN only — not CLOSE/MODIFY). */ ackTimeoutAlert?: boolean }
+    opts?: {
+      /** When true, journal ACK_TIMEOUT (OPEN only — not CLOSE/MODIFY). */
+      ackTimeoutAlert?: boolean;
+      /** CLOSE only — treat confirm DELETED/CLOSED as success (deal gone). */
+      acceptClosedGone?: boolean;
+    }
   ): Promise<{
     ok: boolean;
     deal_id?: string;
@@ -1146,6 +1153,16 @@ export class CapitalBroker implements MasterBroker {
         };
       }
       if (conf.ok && conf.deal_id) {
+        return {
+          ok: true,
+          deal_id: conf.deal_id,
+          fill_level: conf.fill_level,
+          profit: conf.profit,
+          detail: conf.detail,
+        };
+      }
+      // OPEN/MODIFY must not treat DELETED as fill — CLOSE opts in
+      if (opts?.acceptClosedGone && conf.closed_gone && conf.deal_id) {
         return {
           ok: true,
           deal_id: conf.deal_id,
@@ -1497,13 +1514,13 @@ export class CapitalBroker implements MasterBroker {
         // Named rejects (RISK_CHECK / min-stop / …) still fail-close ghosts.
         const { isCapitalStopLevelReject: isSlReject } = await import('./capitalConfirm.js');
         const { isCapitalRiskCheckError } = await import('./capitalSize.js');
-        const reasonBlob = `${conf.reject_reason || ''} ${conf.detail || ''}`;
+        // Classify only on structured reject_reason — never detail/rawHint JSON
+        // (empty REJECTED embeds "level":fill and would match bare LEVEL).
+        const reasonBlob = String(conf.reject_reason || '').trim();
         const namedReject =
           isCapitalRiskCheckError(reasonBlob) ||
           isSlReject(reasonBlob) ||
-          (conf.reject_reason != null &&
-            String(conf.reject_reason).trim().length > 0 &&
-            String(conf.reject_reason).toUpperCase() !== 'REJECTED');
+          (reasonBlob.length > 0 && reasonBlob.toUpperCase() !== 'REJECTED');
         const emptyReject = !namedReject;
         if (emptyReject) {
           await this.ensureActiveAccount();
@@ -2042,7 +2059,9 @@ export class CapitalBroker implements MasterBroker {
     let confirmAccepted = false;
     const deal_reference = res.deal_reference || undefined;
     if (deal_reference && this.deps.confirm) {
-      const conf = await this.waitConfirm(deal_reference);
+      const conf = await this.waitConfirm(deal_reference, {
+        acceptClosedGone: true,
+      });
       if (conf.rejected) {
         return {
           ok: false,

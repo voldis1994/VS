@@ -103,7 +103,7 @@ describe('confirmCapitalDeal DELETED close status', () => {
     vi.restoreAllMocks();
   });
 
-  it('treats status DELETED as accepted (not rejected)', async () => {
+  it('DELETED is closed_gone (not open accept, not rejected)', async () => {
     const { confirmCapitalDeal } = await import('./capitalCom.js');
     const session = {
       get: async () => ({
@@ -119,8 +119,9 @@ describe('confirmCapitalDeal DELETED close status', () => {
       }),
     } as any;
     const conf = await confirmCapitalDeal(session, 'ref-del');
-    expect(conf.ok).toBe(true);
+    expect(conf.ok).toBe(false);
     expect(conf.rejected).toBeFalsy();
+    expect(conf.closed_gone).toBe(true);
     expect(conf.deal_id).toBe('d-gone');
     expect(conf.profit).toBe(-3.25);
   });

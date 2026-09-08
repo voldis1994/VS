@@ -115,11 +115,26 @@ export function isCapitalConfirmAccepted(c: CapitalConfirm): boolean {
   const st = (c.status ?? '').toUpperCase();
   if (ds === 'ACCEPTED') return true;
   if (st === 'OPEN' || st === 'ACCEPTED') return true;
-  // Close confirms often land as DELETED/CLOSED (deal gone) without dealStatus=ACCEPTED
-  if (st === 'DELETED' || st === 'CLOSED' || st === 'CANCELLED') return true;
-  if (ds === 'DELETED' || ds === 'CLOSED' || ds === 'CANCELLED') return true;
+  // DELETED/CLOSED/CANCELLED are NOT open/modify success — see isCapitalConfirmClosedGone
   if (!ds && !st) return true;
   return false;
+}
+
+/** Close confirms often land as DELETED/CLOSED (deal gone) without dealStatus=ACCEPTED. */
+export function isCapitalConfirmClosedGone(c: CapitalConfirm): boolean {
+  if ((c.dealStatus ?? '').toUpperCase() === 'REJECTED') return false;
+  if ((c.status ?? '').toUpperCase() === 'REJECTED') return false;
+  if (!c.dealId) return false;
+  const ds = (c.dealStatus ?? '').toUpperCase();
+  const st = (c.status ?? '').toUpperCase();
+  return (
+    st === 'DELETED' ||
+    st === 'CLOSED' ||
+    st === 'CANCELLED' ||
+    ds === 'DELETED' ||
+    ds === 'CLOSED' ||
+    ds === 'CANCELLED'
+  );
 }
 
 export function formatCapitalConfirmRejection(c: CapitalConfirm): string {
@@ -133,16 +148,19 @@ export function formatCapitalConfirmRejection(c: CapitalConfirm): string {
 /** Stop / min-distance / attached-order reject — widen or fail-close. */
 export function isCapitalStopLevelReject(message: string): boolean {
   const r = String(message ?? '').toUpperCase();
+  // Do NOT match bare "LEVEL" — empty REJECTED rawHint JSON has "level": fill and
+  // would misclassify real fills as named SL rejects (skipping match-accept).
   return (
     r.includes('STOP') ||
     r.includes('ATTACHED') ||
     r.includes('MINIMUM') ||
     r.includes('MIN_DISTANCE') ||
-    r.includes('LEVEL') ||
+    r.includes('MIN_LEVEL') ||
+    r.includes('STOP_LEVEL') ||
+    r.includes('STOPLEVEL') ||
     r.includes('DISTANCE') ||
     r.includes('GUARANTEED') ||
     r.includes('SL NOT MOVED') ||
-    r.includes('STOPLEVEL') ||
     r.includes('DID NOT ACCEPT')
   );
 }

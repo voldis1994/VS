@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   isCapitalConfirmAccepted,
+  isCapitalConfirmClosedGone,
   isCapitalConfirmTerminal,
   isCapitalStopLevelReject,
   parseCapitalConfirm,
@@ -70,7 +71,7 @@ describe('VS MASTER capital confirm (VS-System-)', () => {
     expect(isCapitalConfirmTerminal(c)).toBe(true);
   });
 
-  it('accepts DELETED/CLOSED close confirms as success (not reject)', () => {
+  it('DELETED/CLOSED are closed-gone for CLOSE, not OPEN accept', () => {
     const deleted = parseCapitalConfirm({
       dealId: 'deal-closed',
       status: 'DELETED',
@@ -78,13 +79,15 @@ describe('VS MASTER capital confirm (VS-System-)', () => {
       profit: -1.5,
     });
     expect(isCapitalConfirmTerminal(deleted)).toBe(true);
-    expect(isCapitalConfirmAccepted(deleted)).toBe(true);
+    expect(isCapitalConfirmAccepted(deleted)).toBe(false);
+    expect(isCapitalConfirmClosedGone(deleted)).toBe(true);
 
     const closed = parseCapitalConfirm({
       dealId: 'deal-closed-2',
       status: 'CLOSED',
     });
-    expect(isCapitalConfirmAccepted(closed)).toBe(true);
+    expect(isCapitalConfirmAccepted(closed)).toBe(false);
+    expect(isCapitalConfirmClosedGone(closed)).toBe(true);
 
     const rejectedDeleted = parseCapitalConfirm({
       dealId: 'deal-x',
@@ -93,6 +96,19 @@ describe('VS MASTER capital confirm (VS-System-)', () => {
       reason: 'ERROR',
     });
     expect(isCapitalConfirmAccepted(rejectedDeleted)).toBe(false);
+    expect(isCapitalConfirmClosedGone(rejectedDeleted)).toBe(false);
+  });
+
+  it('empty REJECTED rawHint with level is not a stop-level reject', () => {
+    const hint = JSON.stringify({
+      dealStatus: 'REJECTED',
+      status: 'DELETED',
+      level: 4410.5,
+      dealId: 'x',
+    });
+    expect(isCapitalStopLevelReject(hint)).toBe(false);
+    expect(isCapitalStopLevelReject('MINIMUM_STOP_DISTANCE')).toBe(true);
+    expect(isCapitalStopLevelReject('STOP_LEVEL')).toBe(true);
   });
 
   it('detects stop-level rejects and VS-System- backoff', () => {
