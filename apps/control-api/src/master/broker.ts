@@ -302,8 +302,20 @@ export class PaperBroker implements MasterBroker {
         open_level: r.open_level,
         stop_level: r.stop_level ?? null,
         profit_level: r.profit_level ?? null,
-        upl: 0,
+        upl: null,
       });
+    }
+  }
+
+  /** Restore paper equity/balance after journal recover (VS-System paper hydrate). */
+  hydrateAccount(input: { equity?: number; balance?: number }) {
+    if (input.equity != null && Number.isFinite(input.equity) && input.equity > 0) {
+      this.equity = Number(input.equity);
+    }
+    if (input.balance != null && Number.isFinite(input.balance) && input.balance > 0) {
+      this.balance = Number(input.balance);
+    } else if (input.equity != null && Number.isFinite(input.equity) && input.equity > 0) {
+      this.balance = Number(input.equity);
     }
   }
 
@@ -368,6 +380,7 @@ export class CapitalBroker implements MasterBroker {
         detail: string;
         rejected?: boolean;
         pending?: boolean;
+        reject_reason?: string;
       }>;
       account?: (
         session: any
@@ -454,6 +467,7 @@ export class CapitalBroker implements MasterBroker {
       detail: string;
       rejected?: boolean;
       pending?: boolean;
+      reject_reason?: string;
     }>;
     account?: (
       session: any
@@ -656,6 +670,7 @@ export class CapitalBroker implements MasterBroker {
     profit?: number;
     detail: string;
     rejected?: boolean;
+    reject_reason?: string;
   }> {
     if (!this.deps.confirm) {
       return { ok: false, detail: 'no_confirm_dep' };
@@ -671,6 +686,7 @@ export class CapitalBroker implements MasterBroker {
           detail: conf.detail,
           fill_level: conf.fill_level,
           profit: conf.profit,
+          reject_reason: conf.reject_reason,
         };
       }
       if (conf.ok && conf.deal_id) {
@@ -688,6 +704,48 @@ export class CapitalBroker implements MasterBroker {
       }
     }
     return { ok: false, detail: `confirm_timeout ref=${dealReference}` };
+  }
+
+  /**
+   * VS-System findRecentOpenPosition — near-exact size + recent opened_at.
+   * Used for empty-REJECTED match-accept and unconfirmed open recovery.
+   */
+  private async findRecentOpenMatch(input: {
+    epic: string;
+    side: Side;
+    size: number;
+  }): Promise<BrokerPosition | undefined> {
+    const tol = Math.max(input.size * 0.001, 1e-8);
+    const maxAgeMs = 60_000;
+    const now = Date.now();
+    const attempts =
+      process.env.VITEST || process.env.MASTER_CONFIRM_FAST === 'true' ? 2 : 4;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) =>
+          setTimeout(r, process.env.VITEST ? 5 * attempt : 250 * attempt)
+        );
+      }
+      const listed = await this.listOpenPositions(input.epic);
+      if (!listed.ok) continue;
+      const candidates = listed.positions
+        .filter((p) => {
+          if (p.side !== input.side) return false;
+          if (Math.abs(p.size - input.size) > tol) return false;
+          if (p.opened_at) {
+            const opened = Date.parse(p.opened_at);
+            if (Number.isFinite(opened) && now - opened > maxAgeMs) return false;
+          }
+          return true;
+        })
+        .sort((a, b) => {
+          const ta = a.opened_at ? Date.parse(a.opened_at) : 0;
+          const tb = b.opened_at ? Date.parse(b.opened_at) : 0;
+          return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0);
+        });
+      if (candidates[0]) return candidates[0];
+    }
+    return undefined;
   }
 
   /**
@@ -822,55 +880,84 @@ export class CapitalBroker implements MasterBroker {
 
     let position_id: string | null = null;
     let fill_price: number | null = null;
+    let fill_size: number | null = null;
     if (opened.deal_reference) {
       const conf = await this.waitConfirm(opened.deal_reference);
       if (conf.rejected) {
-        // Confirm rejected — still fail-close any same-side fill that landed
-        const listed = await this.listOpenPositions(input.epic);
-        const ghost = listed.positions.find(
-          (p) =>
-            p.side === input.side &&
-            (Math.abs(p.size - orderSize) < 1e-6 || Math.abs(p.size - input.size) < 1e-6)
-        );
-        if (ghost) {
-          await this.deps.close(this.session, ghost.position_id);
+        // Empty REJECTED (no named reason) often = sibling session / pin glitch with a
+        // real fill already open — match-accept; NEVER blind re-POST.
+        // Named rejects (RISK_CHECK / min-stop / …) still fail-close ghosts.
+        const { isCapitalStopLevelReject } = await import('./capitalConfirm.js');
+        const { isCapitalRiskCheckError } = await import('./capitalSize.js');
+        const reasonBlob = `${conf.reject_reason || ''} ${conf.detail || ''}`;
+        const namedReject =
+          isCapitalRiskCheckError(reasonBlob) ||
+          isCapitalStopLevelReject(reasonBlob) ||
+          (conf.reject_reason != null &&
+            String(conf.reject_reason).trim().length > 0 &&
+            String(conf.reject_reason).toUpperCase() !== 'REJECTED');
+        const emptyReject = !namedReject;
+        if (emptyReject) {
+          await this.ensureActiveAccount();
+          await new Promise((r) =>
+            setTimeout(r, process.env.VITEST || process.env.MASTER_CONFIRM_FAST === 'true' ? 5 : 400)
+          );
+          const match = await this.findRecentOpenMatch({
+            epic: input.epic,
+            side: input.side,
+            size: orderSize,
+          });
+          if (match) {
+            position_id = match.position_id;
+            fill_price = match.open_level || null;
+            fill_size = match.size;
+          }
+        }
+        if (!position_id) {
+          // Named reject — fail-close any same-side fill that landed (ghost)
+          const listed = await this.listOpenPositions(input.epic);
+          const ghost = listed.positions.find(
+            (p) =>
+              p.side === input.side &&
+              (Math.abs(p.size - orderSize) < 1e-6 || Math.abs(p.size - input.size) < 1e-6)
+          );
+          if (ghost) {
+            await this.deps.close(this.session, ghost.position_id);
+            return {
+              ok: false,
+              order_id: opened.deal_reference || null,
+              position_id: null,
+              fill_price: null,
+              fill_size: null,
+              detail: `capital_rejected_fail_closed:${conf.detail}`,
+              paper: false,
+            };
+          }
           return {
             ok: false,
             order_id: opened.deal_reference || null,
             position_id: null,
             fill_price: null,
-            fill_size: null,
-            detail: `capital_rejected_fail_closed:${conf.detail}`,
+            detail: conf.detail,
             paper: false,
           };
         }
-        return {
-          ok: false,
-          order_id: opened.deal_reference || null,
-          position_id: null,
-          fill_price: null,
-          detail: conf.detail,
-          paper: false,
-        };
-      }
-      if (conf.ok && conf.deal_id) {
+      } else if (conf.ok && conf.deal_id) {
         position_id = conf.deal_id;
         fill_price = conf.fill_level ?? null;
       }
     }
 
     if (!position_id) {
-      const listed = await this.listOpenPositions(input.epic);
-      const hit =
-        listed.positions.find(
-          (p) => p.side === input.side && Math.abs(p.size - orderSize) < 1e-6
-        ) ||
-        listed.positions.find(
-          (p) => p.side === input.side && Math.abs(p.size - input.size) < 1e-6
-        );
+      const hit = await this.findRecentOpenMatch({
+        epic: input.epic,
+        side: input.side,
+        size: orderSize,
+      });
       if (hit) {
         position_id = hit.position_id;
         fill_price = hit.open_level || null;
+        fill_size = hit.size;
       }
     }
 
@@ -950,7 +1037,7 @@ export class CapitalBroker implements MasterBroker {
       order_id: opened.deal_reference || null,
       position_id,
       fill_price,
-      fill_size: filled?.size ?? orderSize,
+      fill_size: fill_size ?? filled?.size ?? orderSize,
       detail: `capital_open deal=${position_id}${fill_price != null ? ` fill=${fill_price}` : ''}`,
       paper: false,
     };
@@ -1028,6 +1115,26 @@ export class CapitalBroker implements MasterBroker {
     if (!this.deps.modify) return { ok: false, detail: 'modify_not_wired' };
     const pinned = await this.ensureActiveAccount();
     if (!pinned.ok) return { ok: false, detail: `account_pin:${pinned.detail}` };
+
+    const wantSl = input.stop_level;
+    const trailDist = input.stop_distance;
+    const hasLevel = wantSl != null && Number.isFinite(wantSl);
+    const hasDist =
+      trailDist != null && Number.isFinite(trailDist) && Number(trailDist) > 0;
+    const needsSlProof = hasLevel || hasDist || input.trailing_stop === true;
+
+    // Snapshot SL before PUT — VS-System detects ACK-but-unchanged
+    let beforeSl: number | null = null;
+    {
+      const beforeList = await this.listOpenPositions();
+      const before = beforeList.ok
+        ? beforeList.positions.find((p) => p.position_id === input.position_id)
+        : undefined;
+      if (before?.stop_level != null && Number.isFinite(before.stop_level)) {
+        beforeSl = Number(before.stop_level);
+      }
+    }
+
     const res = await this.deps.modify(this.session, {
       dealId: input.position_id,
       stopLevel: input.stop_level,
@@ -1047,23 +1154,97 @@ export class CapitalBroker implements MasterBroker {
           order_id: res.deal_reference,
         };
       }
-      if (!conf.ok && input.stop_level != null && !input.trailing_stop) {
-        // Timeout / lag — only accept if broker stop moved near request
-        const listed = await this.listOpenPositions();
-        const hit = listed.positions.find((p) => p.position_id === input.position_id);
-        const want = input.stop_level;
-        const got = hit?.stop_level;
-        const tol = Math.max(0.05, Math.abs(want) * 1e-5);
-        if (got == null || !Number.isFinite(got) || Math.abs(got - want) > tol) {
+    }
+
+    if (!needsSlProof) {
+      return { ok: true, detail: res.detail || '', order_id: res.deal_reference };
+    }
+
+    const tolAbs =
+      hasLevel && wantSl != null
+        ? Math.max(0.05, Math.abs(wantSl) * 1e-5)
+        : 0.05;
+    const attempts =
+      process.env.VITEST || process.env.MASTER_CONFIRM_FAST === 'true' ? 3 : 5;
+    let gotSl: number | null = null;
+    let hitEpic: string | null = null;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) =>
+          setTimeout(
+            r,
+            process.env.VITEST || process.env.MASTER_CONFIRM_FAST === 'true'
+              ? 5 + 5 * attempt
+              : 120 + 80 * attempt
+          )
+        );
+      }
+      const listed = await this.listOpenPositions();
+      const hit = listed.ok
+        ? listed.positions.find((p) => p.position_id === input.position_id)
+        : undefined;
+      if (!hit) continue;
+      hitEpic = hit.epic;
+      if (hit.stop_level == null || !Number.isFinite(hit.stop_level)) continue;
+      gotSl = Number(hit.stop_level);
+
+      if (hasLevel && wantSl != null) {
+        if (Math.abs(gotSl - wantSl) <= tolAbs) {
           return {
-            ok: false,
-            detail: conf.detail || 'modify_confirm_unverified',
+            ok: true,
+            detail: res.detail || `sl_verified=${gotSl}`,
             order_id: res.deal_reference,
           };
         }
+        continue;
+      }
+
+      // stopDistance / native trail: accept when SL moved or gap≈dist vs mark
+      const moved = beforeSl == null || Math.abs(gotSl - beforeSl) > tolAbs;
+      if (moved) {
+        return {
+          ok: true,
+          detail: res.detail || `sl_moved=${gotSl}`,
+          order_id: res.deal_reference,
+        };
+      }
+      if (hasDist && trailDist != null && hitEpic) {
+        const q = await this.getQuote(hitEpic);
+        if (q && Number.isFinite(q.mid)) {
+          const gap = Math.abs(q.mid - gotSl);
+          const gapOk =
+            gap <= Number(trailDist) * 1.6 + 0.05 &&
+            gap + 1e-9 >= Math.min(Number(trailDist), 0.45) * 0.5;
+          if (gapOk) {
+            return {
+              ok: true,
+              detail: res.detail || `sl_gap_ok=${gotSl}`,
+              order_id: res.deal_reference,
+            };
+          }
+        }
       }
     }
-    return { ok: true, detail: res.detail || '', order_id: res.deal_reference };
+
+    if (gotSl == null) {
+      return {
+        ok: false,
+        detail: 'modify_sl_not_visible',
+        order_id: res.deal_reference,
+      };
+    }
+    if (hasLevel && wantSl != null) {
+      return {
+        ok: false,
+        detail: `modify_sl_unverified: want=${wantSl} got=${gotSl}`,
+        order_id: res.deal_reference,
+      };
+    }
+    return {
+      ok: false,
+      detail: `modify_sl_unchanged: before=${beforeSl} got=${gotSl}`,
+      order_id: res.deal_reference,
+    };
   }
 }
 
@@ -1100,6 +1281,35 @@ export class Mt4FileBroker implements MasterBroker {
     } catch {
       return null;
     }
+  }
+
+  /** Status file + age — Check-/Reader refuse stale bridge books. */
+  private readStatusFile(): { data: any; age_ms: number } | null {
+    const rel = join('status', 'latest.json');
+    const path = join(this.bridgeRoot, rel);
+    if (!existsSync(path)) return null;
+    let mtime = Date.now();
+    try {
+      mtime = statSync(path).mtimeMs;
+    } catch {
+      /* keep now */
+    }
+    const data = this.readJson(rel);
+    if (!data) return null;
+    return { data, age_ms: Math.max(0, Date.now() - mtime) };
+  }
+
+  private statusStaleMs(): number {
+    const raw = Number(
+      process.env.MASTER_MT4_STATUS_STALE_MS ||
+        process.env.MASTER_STALE_QUOTE_MS ||
+        30_000
+    );
+    return Number.isFinite(raw) && raw > 0 ? raw : 30_000;
+  }
+
+  private isStatusStale(ageMs: number): boolean {
+    return ageMs > this.statusStaleMs();
   }
 
   private ackBudget() {
@@ -1198,8 +1408,10 @@ export class Mt4FileBroker implements MasterBroker {
   }
 
   async getAccount(): Promise<BrokerAccount | null> {
-    const s = this.readJson(join('status', 'latest.json'));
-    if (!s) return null;
+    const st = this.readStatusFile();
+    if (!st) return null;
+    if (this.isStatusStale(st.age_ms)) return null;
+    const s = st.data;
     const equity = Number(s.equity ?? s.Equity ?? 0);
     const balance = Number(s.balance ?? s.Balance ?? 0);
     const margin = Number(s.margin ?? s.Margin ?? NaN);
@@ -1225,11 +1437,19 @@ export class Mt4FileBroker implements MasterBroker {
   }
 
   async listOpenPositions(epic?: string): Promise<ListOpenResult> {
-    const s = this.readJson(join('status', 'latest.json'));
-    if (!s) {
+    const st = this.readStatusFile();
+    if (!st) {
       // Missing status file is ambiguous — treat as transport/bridge unread, not flat book
       return { ok: false, positions: [], detail: 'mt4_status_missing' };
     }
+    if (this.isStatusStale(st.age_ms)) {
+      return {
+        ok: false,
+        positions: [],
+        detail: `mt4_status_stale age_ms=${Math.round(st.age_ms)}`,
+      };
+    }
+    const s = st.data;
     const raw = Array.isArray(s?.positions) ? s.positions : [];
     const positions = raw
       .map((p: any) => ({

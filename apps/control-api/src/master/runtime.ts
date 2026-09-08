@@ -33,6 +33,7 @@ import {
 } from './positionManager.js';
 import { evaluateRisk } from './risk.js';
 import { setupKey } from './decision.js';
+import { resolveCloseMoneyPnl } from './moneyExit.js';
 import { loadRuntimeGates, saveRuntimeGates } from './runtimeGates.js';
 import { loadOwnsPipelinePref, saveOwnsPipelinePref } from './ownsPipelinePref.js';
 import { resolveNewsWindow, type NewsWindowState } from './newsGate.js';
@@ -345,15 +346,23 @@ class MasterRuntime {
           ? quote.bid
           : quote.ask
         : ghost.entry;
-      const pnlPts = ghost.side === 'BUY' ? exit - ghost.entry : ghost.entry - exit;
       const instrument = specForEpic(ghost.epic);
+      const { pnl } = resolveCloseMoneyPnl({
+        side: ghost.side,
+        entry: ghost.entry,
+        fill: exit,
+        size: ghost.size,
+        value_per_point_per_lot: instrument.value_per_point_per_lot,
+        // Prefer last broker UPL when fill price is only a mark proxy (Check- pattern)
+        fill_pnl: ghost.broker_upl,
+      });
       const outcome = {
         position_id: ghost.position_id,
         side: ghost.side,
         entry: ghost.entry,
         exit,
         volume: ghost.size,
-        pnl: pnlPts * ghost.size * instrument.value_per_point_per_lot,
+        pnl,
         fees: 0,
         slippage: 0,
         mae: ghost.mae,
@@ -403,15 +412,21 @@ class MasterRuntime {
           ? quote.bid
           : quote.ask
         : partial.mark_proxy;
-      const pnlPts =
-        partial.side === 'BUY' ? exit - partial.entry : partial.entry - exit;
+      const { pnl } = resolveCloseMoneyPnl({
+        side: partial.side,
+        entry: partial.entry,
+        fill: exit,
+        size: partial.closed_size,
+        value_per_point_per_lot: instrument.value_per_point_per_lot,
+        fill_pnl: partial.broker_upl_closed,
+      });
       const outcome = {
         position_id: partial.position_id,
         side: partial.side,
         entry: partial.entry,
         exit,
         volume: partial.closed_size,
-        pnl: pnlPts * partial.closed_size * instrument.value_per_point_per_lot,
+        pnl,
         fees: 0,
         slippage: 0,
         mae: partial.mae,
@@ -991,6 +1006,10 @@ class MasterRuntime {
     // PAPER restart: empty in-memory book must be reseeded before sync or every
     // restored open looks like a ghost and is wiped as broker_flat.
     if (this.broker instanceof PaperBroker) {
+      this.broker.hydrateAccount({
+        equity: this.account.equity,
+        balance: this.account.balance,
+      });
       this.broker.seedOpens(
         this.positions.list().map((p) => ({
           position_id: p.position_id,

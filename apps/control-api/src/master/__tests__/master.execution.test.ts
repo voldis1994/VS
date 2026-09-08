@@ -381,6 +381,37 @@ describe('VS MASTER MT4 file bridge', () => {
       else process.env.MASTER_MT4_ACK_POLL_MS = prevMs;
     }
   });
+
+  it('listOpenPositions fails closed on stale status file', async () => {
+    const prev = process.env.MASTER_MT4_STATUS_STALE_MS;
+    process.env.MASTER_MT4_STATUS_STALE_MS = '50';
+    try {
+      const root = mkdtempSync(join(tmpdir(), 'vs-mt4-stale-'));
+      const broker = new Mt4FileBroker(root);
+      await broker.connect();
+      mkdirSync(join(root, 'status'), { recursive: true });
+      const statusPath = join(root, 'status', 'latest.json');
+      writeFileSync(
+        statusPath,
+        JSON.stringify({
+          positions: [{ ticket: 1, symbol: 'XAUUSD', side: 'BUY', lot: 0.1, open: 4400 }],
+          equity: 10000,
+          balance: 10000,
+        })
+      );
+      const { utimesSync } = await import('fs');
+      const old = new Date(Date.now() - 5_000);
+      utimesSync(statusPath, old, old);
+      const listed = await broker.listOpenPositions('GOLD');
+      expect(listed.ok).toBe(false);
+      expect(listed.detail).toMatch(/mt4_status_stale/);
+      expect(listed.positions).toEqual([]);
+    } finally {
+      if (prev === undefined) delete process.env.MASTER_MT4_STATUS_STALE_MS;
+      else process.env.MASTER_MT4_STATUS_STALE_MS = prev;
+    }
+  });
+
   it('recoverPendingCommands archives acked cmds and expires stale unacked', async () => {
     const root = mkdtempSync(join(tmpdir(), 'vs-mt4-recover-'));
     const broker = new Mt4FileBroker(root);

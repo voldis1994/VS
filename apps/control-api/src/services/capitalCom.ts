@@ -914,6 +914,8 @@ export async function confirmCapitalDeal(
   detail: string;
   rejected?: boolean;
   pending?: boolean;
+  /** Raw confirm reason when REJECTED (empty ⇒ sibling empty-REJECTED match path) */
+  reject_reason?: string;
 }> {
   const { parseCapitalConfirm, isCapitalConfirmTerminal, isCapitalConfirmAccepted, formatCapitalConfirmRejection } =
     await import('../master/capitalConfirm.js');
@@ -944,6 +946,7 @@ export async function confirmCapitalDeal(
       detail: formatCapitalConfirmRejection(parsed),
       profit: parsed.profit,
       fill_level: parsed.level,
+      reject_reason: parsed.reason,
     };
   }
   return {

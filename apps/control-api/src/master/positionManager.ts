@@ -100,6 +100,8 @@ export type ExternalPartialEvent = {
   decision: MasterDecision;
   mae: number;
   mfe: number;
+  /** Scaled slice of last-known broker UPL for honest journal PnL */
+  broker_upl_closed?: number | null;
 };
 
 export class PositionManager {
@@ -1288,6 +1290,13 @@ export class PositionManager {
       if (existing) {
         // External/manual/missed-ACK shrink → journal closed slice (Reader)
         if (bp.size > 0 && bp.size < existing.size - 1e-9) {
+          const closed_size = existing.size - bp.size;
+          const broker_upl_closed =
+            existing.broker_upl != null &&
+            Number.isFinite(existing.broker_upl) &&
+            existing.size > 1e-12
+              ? (Number(existing.broker_upl) * closed_size) / existing.size
+              : null;
           external_partials.push({
             position_id: existing.position_id,
             opportunity_id: existing.opportunity_id,
@@ -1295,12 +1304,13 @@ export class PositionManager {
             epic: existing.epic,
             side: existing.side,
             entry: existing.entry,
-            closed_size: existing.size - bp.size,
+            closed_size,
             remaining_size: bp.size,
             mark_proxy: bp.open_level,
             decision: existing.decision,
             mae: existing.mae,
             mfe: existing.mfe,
+            broker_upl_closed,
           });
           existing.partial_close_applied = true;
         }

@@ -514,4 +514,140 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(mod.ok).toBe(false);
     expect(mod.detail).toMatch(/modify_confirm_rejected/);
   });
+
+  it('modifyPosition rejects ACCEPTED when broker SL never moved', async () => {
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number;
+        stop_level?: number | null;
+      }
+    >();
+    positions.set('d1', {
+      deal_id: 'd1',
+      epic: 'GOLD',
+      direction: 'BUY',
+      size: 0.1,
+      open_level: 4410,
+      stop_level: 4400,
+    });
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({
+        ok: true,
+        positions: [...positions.values()].map((p) => ({
+          deal_id: p.deal_id,
+          epic: p.epic,
+          direction: p.direction,
+          size: p.size,
+          open_level: p.open_level,
+          stop_level: p.stop_level ?? null,
+        })),
+        detail: '',
+      }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({ ok: false, detail: 'unused' }),
+      modify: async () => ({
+        ok: true,
+        deal_reference: 'mod-ack-1',
+        detail: 'accepted_http',
+      }),
+      confirm: async () => ({
+        ok: true,
+        deal_id: 'mod-deal',
+        detail: 'ACCEPTED',
+      }),
+    });
+    await broker.connect();
+    const mod = await broker.modifyPosition({
+      position_id: 'd1',
+      stop_level: 4405,
+    });
+    expect(mod.ok).toBe(false);
+    expect(mod.detail).toMatch(/modify_sl_unverified/);
+  });
+
+  it('empty REJECTED confirm match-accepts recent same-size open', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number;
+        opened_at?: string;
+      }
+    >();
+    // Already open from empty-REJECTED sibling glitch
+    positions.set('ghost-fill', {
+      deal_id: 'ghost-fill',
+      epic: 'GOLD',
+      direction: 'BUY',
+      size: 0.1,
+      open_level: 4410.4,
+      opened_at: new Date().toISOString(),
+    });
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({
+        ok: true,
+        positions: [...positions.values()].map((p) => ({
+          deal_id: p.deal_id,
+          epic: p.epic,
+          direction: p.direction,
+          size: p.size,
+          open_level: p.open_level,
+          stop_level: null,
+          opened_at: p.opened_at ?? null,
+        })),
+        detail: '',
+      }),
+      create: async () => ({
+        ok: true,
+        deal_reference: 'ref-empty-rej',
+        detail: 'posted',
+      }),
+      close: async () => ({ ok: false, detail: 'should_not_close' }),
+      confirm: async () => ({
+        ok: false,
+        rejected: true,
+        detail: 'Capital rejected: REJECTED',
+        // empty reason → match-accept path
+      }),
+    });
+    await broker.connect();
+    const place = await broker.placeOrder({
+      intent_id: 'intent-empty-rej',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: 4400,
+    });
+    expect(place.ok).toBe(true);
+    expect(place.position_id).toBe('ghost-fill');
+    expect(place.fill_price).toBe(4410.4);
+    expect(place.detail).toMatch(/capital_open/);
+  });
 });

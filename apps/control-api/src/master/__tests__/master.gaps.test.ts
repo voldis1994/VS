@@ -1465,6 +1465,7 @@ describe('partial_close persist + Check be_start', () => {
       },
     });
     expect(pm.get('ext-1')!.partial_close_applied).toBe(false);
+    pm.get('ext-1')!.broker_upl = 14.5; // last known full-size UPL before shrink
     const { external_partials } = pm.reconcileFromBroker([
       {
         position_id: 'ext-1',
@@ -1482,6 +1483,19 @@ describe('partial_close persist + Check be_start', () => {
     expect(pm.get('ext-1')!.broker_upl).toBe(7.25);
     expect(external_partials).toHaveLength(1);
     expect(external_partials[0]!.closed_size).toBeCloseTo(0.05, 6);
+    // Scaled last-known UPL for journal honesty (half size closed → half prior UPL)
+    expect(external_partials[0]!.broker_upl_closed).toBeCloseTo(7.25, 8);
+  });
+
+  it('PaperBroker.hydrateAccount restores equity after recover seed', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    expect(broker.equity).toBe(10_000);
+    broker.hydrateAccount({ equity: 9_420.5, balance: 9_400 });
+    expect(broker.equity).toBe(9_420.5);
+    expect(broker.balance).toBe(9_400);
+    const acct = await broker.getAccount();
+    expect(acct?.equity).toBe(9_420.5);
   });
 
   it('money BE arms at £0.05 floating and defers illegal clamp', async () => {
