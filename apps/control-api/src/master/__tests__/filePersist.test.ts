@@ -614,6 +614,106 @@ describe('VS MASTER stop() empty-wipe guard', () => {
     const owns = JSON.parse(readFileSync(join(dir, 'owns_pipeline.json'), 'utf8'));
     expect(owns.owns_pipeline).toBe(true);
   });
+
+  it('saveRuntimeGates embeds desired_running; survives sidecar wipe', async () => {
+    const { writeFileSync, unlinkSync } = require('fs') as typeof import('fs');
+    const prev = process.env.MASTER_STATE_DIR;
+    const dir = mkdtempSync(join(tmpdir(), 'master-gates-embed-'));
+    process.env.MASTER_STATE_DIR = dir;
+    try {
+      writeFileSync(
+        join(dir, 'master_state.json'),
+        JSON.stringify({
+          opportunities: [],
+          outcomes: [],
+          positions: [],
+          intents: [],
+          operator_meta: { owns_pipeline: true },
+        })
+      );
+      const { saveRuntimeGates, loadRuntimeGates } = await import('../runtimeGates.js');
+      expect(
+        saveRuntimeGates({
+          last_loss_ms: 0,
+          reject_until_ms: 0,
+          desired_running: true,
+          kill_switch: true,
+          mode: 'PAPER',
+          epic: 'GOLD',
+        })
+      ).toBe(true);
+      const state = JSON.parse(readFileSync(join(dir, 'master_state.json'), 'utf8'));
+      expect(state.operator_meta?.owns_pipeline).toBe(true);
+      expect(state.operator_meta?.gates?.desired_running).toBe(true);
+      expect(state.operator_meta?.gates?.kill_switch).toBe(true);
+      expect(state.operator_meta?.gates?.mode).toBe('PAPER');
+      unlinkSync(join(dir, 'runtime_gates.json'));
+      expect(existsSync(join(dir, 'runtime_gates.json'))).toBe(false);
+      expect(ensureOperatorMetaFromStateDir(dir)).toBe(true);
+      expect(loadRuntimeGates()?.desired_running).toBe(true);
+      expect(loadRuntimeGates()?.kill_switch).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prev;
+    }
+  });
+
+  it('saveManageConfig/saveOwnsPipelinePref embed; partial wipe keeps other fields', async () => {
+    const { writeFileSync, unlinkSync } = require('fs') as typeof import('fs');
+    const prev = process.env.MASTER_STATE_DIR;
+    const dir = mkdtempSync(join(tmpdir(), 'master-manage-owns-embed-'));
+    process.env.MASTER_STATE_DIR = dir;
+    try {
+      writeFileSync(
+        join(dir, 'master_state.json'),
+        JSON.stringify({
+          opportunities: [],
+          outcomes: [],
+          positions: [],
+          intents: [],
+          operator_meta: {},
+        })
+      );
+      const { saveManageConfig, loadManageConfig } = await import('../manageConfig.js');
+      const { saveOwnsPipelinePref, loadOwnsPipelinePref } = await import(
+        '../ownsPipelinePref.js'
+      );
+      const { saveRuntimeGates } = await import('../runtimeGates.js');
+      expect(saveOwnsPipelinePref(true)).toBe(true);
+      expect(saveManageConfig({ soft_trail_money_arm: 0.07, multi_tp_count: 2 })).toBe(
+        true
+      );
+      expect(
+        saveRuntimeGates({
+          last_loss_ms: 1,
+          reject_until_ms: 2,
+          desired_running: true,
+        })
+      ).toBe(true);
+      let state = JSON.parse(readFileSync(join(dir, 'master_state.json'), 'utf8'));
+      expect(state.operator_meta?.owns_pipeline).toBe(true);
+      expect(state.operator_meta?.manage?.soft_trail_money_arm).toBe(0.07);
+      expect(state.operator_meta?.gates?.desired_running).toBe(true);
+
+      // Wipe only gates — flush must not null manage/owns in operator_meta
+      unlinkSync(join(dir, 'runtime_gates.json'));
+      const fp = new FilePersist(dir);
+      fp.flush();
+      state = JSON.parse(readFileSync(join(dir, 'master_state.json'), 'utf8'));
+      expect(state.operator_meta?.gates?.desired_running).toBe(true);
+      expect(state.operator_meta?.manage?.multi_tp_count).toBe(2);
+      expect(state.operator_meta?.owns_pipeline).toBe(true);
+
+      unlinkSync(join(dir, 'master_manage_config.json'));
+      unlinkSync(join(dir, 'owns_pipeline.json'));
+      expect(ensureOperatorMetaFromStateDir(dir)).toBe(true);
+      expect(loadManageConfig()?.soft_trail_money_arm).toBe(0.07);
+      expect(loadOwnsPipelinePref()).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prev;
+    }
+  });
 });
 
 type PersistClientLike = {

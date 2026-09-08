@@ -5,6 +5,7 @@
 import { mkdirSync, readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { atomicWriteJson } from './atomicIo.js';
+import { embedOperatorMetaPatch } from './operatorMetaEmbed.js';
 
 export type RuntimeGates = {
   last_loss_ms: number;
@@ -69,79 +70,89 @@ function gatesPath(): string {
   return join(gatesDir(), 'runtime_gates.json');
 }
 
+function normalizeRuntimeGates(gates: RuntimeGates): RuntimeGates {
+  return {
+    last_loss_ms: gates.last_loss_ms || 0,
+    reject_until_ms: gates.reject_until_ms || 0,
+    inflight_until_ms:
+      gates.inflight_until_ms != null && Number.isFinite(gates.inflight_until_ms)
+        ? Math.max(0, Math.floor(Number(gates.inflight_until_ms)))
+        : 0,
+    post_exit_until_ms:
+      gates.post_exit_until_ms != null && Number.isFinite(gates.post_exit_until_ms)
+        ? Math.max(0, Math.floor(Number(gates.post_exit_until_ms)))
+        : 0,
+    last_entry_fingerprint:
+      gates.last_entry_fingerprint != null &&
+      String(gates.last_entry_fingerprint).trim()
+        ? String(gates.last_entry_fingerprint).trim().slice(0, 80)
+        : null,
+    day_start_equity:
+      gates.day_start_equity != null && Number.isFinite(gates.day_start_equity)
+        ? Number(gates.day_start_equity)
+        : null,
+    peak_equity:
+      gates.peak_equity != null && Number.isFinite(gates.peak_equity)
+        ? Number(gates.peak_equity)
+        : null,
+    daily_pnl_day: gates.daily_pnl_day ?? null,
+    consecutive_losses:
+      gates.consecutive_losses != null && Number.isFinite(gates.consecutive_losses)
+        ? Math.max(0, Math.floor(Number(gates.consecutive_losses)))
+        : null,
+    capital_day_gates_seeded: gates.capital_day_gates_seeded === true,
+    last_ai_allow_close:
+      typeof gates.last_ai_allow_close === 'boolean'
+        ? gates.last_ai_allow_close
+        : null,
+    ai_mode:
+      gates.ai_mode === 'off' ||
+      gates.ai_mode === 'advisory' ||
+      gates.ai_mode === 'required'
+        ? gates.ai_mode
+        : null,
+    kill_switch: gates.kill_switch === true,
+    mode:
+      gates.mode === 'PAPER' ||
+      gates.mode === 'LIVE' ||
+      gates.mode === 'BACKTEST'
+        ? gates.mode
+        : null,
+    epic:
+      gates.epic != null && String(gates.epic).trim()
+        ? String(gates.epic).trim().slice(0, 40)
+        : null,
+    entries_armed:
+      typeof gates.entries_armed === 'boolean' ? gates.entries_armed : null,
+    entries_pause_reason:
+      gates.entries_pause_reason != null &&
+      String(gates.entries_pause_reason).trim()
+        ? String(gates.entries_pause_reason).trim().slice(0, 120)
+        : null,
+    last_close_failed: (() => {
+      const f = gates.last_close_failed;
+      if (!f || typeof f !== 'object') return null;
+      const position_id = String(f.position_id || '').trim().slice(0, 80);
+      const exit_reason = String(f.exit_reason || '').trim().slice(0, 80);
+      const detail = String(f.detail || '').trim().slice(0, 200);
+      const ts = String(f.ts || '').trim().slice(0, 40);
+      if (!position_id && !detail) return null;
+      return { position_id, exit_reason, detail, ts };
+    })(),
+    desired_running: gates.desired_running === true,
+  };
+}
+
 export function saveRuntimeGates(gates: RuntimeGates): boolean {
   try {
     mkdirSync(gatesDir(), { recursive: true });
-    return atomicWriteJson(gatesPath(), {
-      last_loss_ms: gates.last_loss_ms || 0,
-      reject_until_ms: gates.reject_until_ms || 0,
-      inflight_until_ms:
-        gates.inflight_until_ms != null && Number.isFinite(gates.inflight_until_ms)
-          ? Math.max(0, Math.floor(Number(gates.inflight_until_ms)))
-          : 0,
-      post_exit_until_ms:
-        gates.post_exit_until_ms != null && Number.isFinite(gates.post_exit_until_ms)
-          ? Math.max(0, Math.floor(Number(gates.post_exit_until_ms)))
-          : 0,
-      last_entry_fingerprint:
-        gates.last_entry_fingerprint != null &&
-        String(gates.last_entry_fingerprint).trim()
-          ? String(gates.last_entry_fingerprint).trim().slice(0, 80)
-          : null,
-      day_start_equity:
-        gates.day_start_equity != null && Number.isFinite(gates.day_start_equity)
-          ? Number(gates.day_start_equity)
-          : null,
-      peak_equity:
-        gates.peak_equity != null && Number.isFinite(gates.peak_equity)
-          ? Number(gates.peak_equity)
-          : null,
-      daily_pnl_day: gates.daily_pnl_day ?? null,
-      consecutive_losses:
-        gates.consecutive_losses != null && Number.isFinite(gates.consecutive_losses)
-          ? Math.max(0, Math.floor(Number(gates.consecutive_losses)))
-          : null,
-      capital_day_gates_seeded: gates.capital_day_gates_seeded === true,
-      last_ai_allow_close:
-        typeof gates.last_ai_allow_close === 'boolean'
-          ? gates.last_ai_allow_close
-          : null,
-      ai_mode:
-        gates.ai_mode === 'off' ||
-        gates.ai_mode === 'advisory' ||
-        gates.ai_mode === 'required'
-          ? gates.ai_mode
-          : null,
-      kill_switch: gates.kill_switch === true,
-      mode:
-        gates.mode === 'PAPER' ||
-        gates.mode === 'LIVE' ||
-        gates.mode === 'BACKTEST'
-          ? gates.mode
-          : null,
-      epic:
-        gates.epic != null && String(gates.epic).trim()
-          ? String(gates.epic).trim().slice(0, 40)
-          : null,
-      entries_armed:
-        typeof gates.entries_armed === 'boolean' ? gates.entries_armed : null,
-      entries_pause_reason:
-        gates.entries_pause_reason != null &&
-        String(gates.entries_pause_reason).trim()
-          ? String(gates.entries_pause_reason).trim().slice(0, 120)
-          : null,
-      last_close_failed: (() => {
-        const f = gates.last_close_failed;
-        if (!f || typeof f !== 'object') return null;
-        const position_id = String(f.position_id || '').trim().slice(0, 80);
-        const exit_reason = String(f.exit_reason || '').trim().slice(0, 80);
-        const detail = String(f.detail || '').trim().slice(0, 200);
-        const ts = String(f.ts || '').trim().slice(0, 40);
-        if (!position_id && !detail) return null;
-        return { position_id, exit_reason, detail, ts };
-      })(),
-      desired_running: gates.desired_running === true,
-    });
+    const payload = normalizeRuntimeGates(gates);
+    const ok = atomicWriteJson(gatesPath(), payload);
+    if (ok) {
+      // Keep operator_meta in sync even when no position write flushes FilePersist
+      embedOperatorMetaPatch({ gates: payload });
+    }
+    return ok;
   } catch {
     return false;
   }
