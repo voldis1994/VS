@@ -7,6 +7,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { atomicWriteJson } from './atomicIo.js';
+import { embedOperatorMetaPatch } from './operatorMetaEmbed.js';
 import type { Bar, Quote } from './types.js';
 
 export type MarketCacheState = {
@@ -34,24 +35,7 @@ export function embedMarketCacheInOperatorMeta(
   state: MarketCacheState,
   root?: string
 ): boolean {
-  try {
-    const dir = marketCacheDir(root);
-    const statePath = join(dir, 'master_state.json');
-    if (!existsSync(statePath)) return false;
-    const raw = JSON.parse(readFileSync(statePath, 'utf8')) as {
-      operator_meta?: Record<string, unknown> | null;
-      [k: string]: unknown;
-    };
-    raw.operator_meta = {
-      ...(raw.operator_meta && typeof raw.operator_meta === 'object'
-        ? raw.operator_meta
-        : {}),
-      market_cache: state,
-    };
-    return atomicWriteJson(statePath, raw);
-  } catch {
-    return false;
-  }
+  return embedOperatorMetaPatch({ market_cache: state }, root);
 }
 
 export function saveMarketCache(

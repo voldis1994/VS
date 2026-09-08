@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import type { MasterConfig } from './types.js';
 import { atomicWriteJson } from './atomicIo.js';
+import { embedOperatorMetaPatch } from './operatorMetaEmbed.js';
 
 export type ManageConfigPatch = Partial<
   Pick<
@@ -124,7 +125,12 @@ export function saveManageConfig(patch: ManageConfigPatch): boolean {
   try {
     const dir = stateDir();
     mkdirSync(dir, { recursive: true });
-    return atomicWriteJson(configPath(), patch);
+    const ok = atomicWriteJson(configPath(), patch);
+    if (ok) {
+      // Keep operator_meta in sync even when no position write flushes FilePersist
+      embedOperatorMetaPatch({ manage: patch as Record<string, unknown> });
+    }
+    return ok;
   } catch {
     return false;
   }

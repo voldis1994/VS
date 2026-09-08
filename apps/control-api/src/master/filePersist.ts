@@ -210,18 +210,22 @@ export class FilePersist implements PersistClient {
         return null;
       }
     };
-    const manage = readJson('master_manage_config.json');
+    const manageRaw = readJson('master_manage_config.json');
     const ownsRaw = readJson('owns_pipeline.json');
-    const gates = readJson('runtime_gates.json');
+    const gatesRaw = readJson('runtime_gates.json');
     const marketCacheRaw = readJson('market_cache.json');
+    // Per-field fallback: partial sidecar wipe must not null out embedded meta
+    const manage =
+      manageRaw ?? this.lastOperatorMeta?.manage ?? null;
+    const owns =
+      ownsRaw && typeof ownsRaw.owns_pipeline === 'boolean'
+        ? (ownsRaw.owns_pipeline as boolean)
+        : this.lastOperatorMeta?.owns_pipeline ?? null;
+    const gates = gatesRaw ?? this.lastOperatorMeta?.gates ?? null;
     const market_cache =
       marketCacheRaw && Array.isArray(marketCacheRaw.bars)
         ? (marketCacheRaw as unknown as MarketCacheState)
         : this.lastOperatorMeta?.market_cache ?? null;
-    const owns =
-      ownsRaw && typeof ownsRaw.owns_pipeline === 'boolean'
-        ? (ownsRaw.owns_pipeline as boolean)
-        : null;
     if (!manage && owns == null && !gates && !market_cache) {
       // Sidecars wiped — keep prior meta so flush does not erase backup
       return this.lastOperatorMeta;

@@ -4,6 +4,7 @@
 import { mkdirSync, readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { atomicWriteJson } from './atomicIo.js';
+import { embedOperatorMetaPatch } from './operatorMetaEmbed.js';
 
 function stateDir(): string {
   return (
@@ -20,7 +21,12 @@ function prefPath(): string {
 export function saveOwnsPipelinePref(on: boolean): boolean {
   try {
     mkdirSync(stateDir(), { recursive: true });
-    return atomicWriteJson(prefPath(), { owns_pipeline: on });
+    const ok = atomicWriteJson(prefPath(), { owns_pipeline: on });
+    if (ok) {
+      // Keep operator_meta in sync even when no position write flushes FilePersist
+      embedOperatorMetaPatch({ owns_pipeline: on });
+    }
+    return ok;
   } catch {
     return false;
   }
