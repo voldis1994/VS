@@ -824,23 +824,47 @@ export class CapitalBroker implements MasterBroker {
 
   /**
    * Fail-close with confirm + list-flat proof (never raw DELETE alone).
-   * If the deal is still open after close, detail includes capital_fail_close_unproven.
+   * If the deal is still open after close, detail includes capital_fail_close_unproven
+   * and position_id stays populated so runtime can register + re-close.
    */
   private async failCloseOpenResult(
     position_id: string,
     order_id: string | null,
-    reason: string
+    reason: string,
+    fill?: { fill_price?: number | null; fill_size?: number | null }
   ): Promise<PlaceOrderResult> {
     const closed = await this.closePosition(position_id);
-    let detail = reason;
     if (!closed.ok) {
       const listed = await this.listOpenPositions();
-      const still =
-        listed.ok &&
-        listed.positions.some((p) => p.position_id === position_id);
-      detail = still
-        ? `${reason}:capital_fail_close_unproven:${closed.detail}`
-        : `${reason}:close=${closed.detail}`;
+      const live = listed.ok
+        ? listed.positions.find((p) => p.position_id === position_id)
+        : undefined;
+      if (live) {
+        const openLevel =
+          live.open_level != null &&
+          Number.isFinite(live.open_level) &&
+          live.open_level > 0
+            ? live.open_level
+            : null;
+        return {
+          ok: false,
+          order_id,
+          position_id: live.position_id,
+          fill_price: fill?.fill_price ?? openLevel,
+          fill_size: fill?.fill_size ?? live.size ?? null,
+          detail: `${reason}:capital_fail_close_unproven:${closed.detail}`,
+          paper: false,
+        };
+      }
+      return {
+        ok: false,
+        order_id,
+        position_id: null,
+        fill_price: null,
+        fill_size: null,
+        detail: `${reason}:close=${closed.detail}`,
+        paper: false,
+      };
     }
     return {
       ok: false,
@@ -848,7 +872,7 @@ export class CapitalBroker implements MasterBroker {
       position_id: null,
       fill_price: null,
       fill_size: null,
-      detail,
+      detail: reason,
       paper: false,
     };
   }
@@ -1157,7 +1181,8 @@ export class CapitalBroker implements MasterBroker {
             opened.deal_reference || null,
             tpMissing && alreadyProtected
               ? 'CAPITAL_TP_ATTACH_FAILED'
-              : 'CAPITAL_SL_ATTACH_FAILED'
+              : 'CAPITAL_SL_ATTACH_FAILED',
+            { fill_price, fill_size }
           );
         }
       }
@@ -1166,7 +1191,8 @@ export class CapitalBroker implements MasterBroker {
       return await this.failCloseOpenResult(
         position_id,
         opened.deal_reference || null,
-        'CAPITAL_SL_ATTACH_FAILED'
+        'CAPITAL_SL_ATTACH_FAILED',
+        { fill_price, fill_size }
       );
     }
 

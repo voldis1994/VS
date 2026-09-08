@@ -1293,6 +1293,66 @@ class MasterRuntime {
           this.persistRuntimeGates();
         }
       } else if (!execution.accepted) {
+        // Fail-close left a live Capital deal — register + keep inflight + re-close
+        const unprovenLive =
+          !!place?.position_id &&
+          /capital_fail_close_unproven/i.test(execution.detail || '');
+        if (unprovenLive && place?.position_id) {
+          const cand =
+            cycle.decision.side === 'BUY' ? cycle.decision.buy : cycle.decision.sell;
+          const fill =
+            place.fill_price ??
+            (cycle.decision.side === 'BUY' ? quote.ask : quote.bid);
+          const { rebaseStopsFromFill } = await import('./positionManager.js');
+          const rebased = rebaseStopsFromFill(
+            cand?.entry ?? fill,
+            fill,
+            cand?.stop_loss ?? null,
+            cand?.take_profit ?? null
+          );
+          if (!this.positions.get(place.position_id)) {
+            this.positions.register({
+              position_id: place.position_id,
+              opportunity_id: cycle.opportunity.id,
+              intent_id: execution.intent_id,
+              epic:
+                broker instanceof Mt4FileBroker && broker.chartSymbol()
+                  ? broker.chartSymbol()!
+                  : this.epic,
+              side: cycle.decision.side!,
+              size: place.fill_size ?? cycle.risk.volume,
+              entry: fill,
+              stop_loss: rebased.stop_loss,
+              take_profit: rebased.take_profit,
+              decision: cycle.decision,
+            });
+          }
+          this.inflight_until_ms = Math.max(
+            this.inflight_until_ms,
+            Date.now() + 90_000
+          );
+          this.persistRuntimeGates();
+          logMasterError({
+            module: 'runtime.entry',
+            error_type: 'CAPITAL_FAIL_CLOSE_UNPROVEN',
+            message: execution.detail || 'capital_fail_close_unproven',
+            context: {
+              epic: this.epic,
+              broker: broker.name,
+              position_id: place.position_id,
+            },
+          });
+          const closed = await this.closePositionManualUnlocked(
+            place.position_id,
+            'CAPITAL_FAIL_CLOSE_UNPROVEN_RETRY'
+          );
+          execution_detail = closed.ok
+            ? `capital_fail_close_unproven_retried_closed:${place.position_id}`
+            : `capital_fail_close_unproven_registered:${place.position_id};retry=${closed.detail}`;
+          this.last_execution_detail = execution_detail;
+          this.reject_until_ms = Date.now() + 30_000;
+          this.persistRuntimeGates();
+        } else {
         // Ambiguous OPEN — keep inflight so we do not double-open while EA may
         // still fill (Check- holds pending_open / WAIT_CMD until ACK/timeout).
         const ambiguousTimeout =
@@ -1333,6 +1393,7 @@ class MasterRuntime {
             : capitalModifyRejectBackoffMs(execution.detail);
           this.reject_until_ms = Date.now() + backoff;
           this.persistRuntimeGates();
+        }
         }
       }
       } // brokerVerifyOk

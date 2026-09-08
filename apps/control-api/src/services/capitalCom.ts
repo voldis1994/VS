@@ -23,6 +23,8 @@ export interface CapitalSession {
   securityToken: string;
   accountType?: string;
   currentAccountId?: string | null;
+  /** Pinned CFD sub-account — re-applied after every fresh CST (401 re-login). */
+  preferredAccountId?: string | null;
   close: () => Promise<void>;
   get: (path: string) => Promise<{ ok: boolean; status: number; json: any; text: string }>;
   post: (
@@ -295,6 +297,44 @@ export async function openCapitalSession(input: {
           again.res.headers.get('x-security-token');
         if (!nc || !ns) return false;
         applyTokens(nc, ns);
+        // Fresh CST lands on login-default CFD — clear stale pin so switch must PUT.
+        if (sessionRef) {
+          sessionRef.currentAccountId = null;
+          const pref = String(sessionRef.preferredAccountId || '').trim();
+          if (pref) {
+            // Direct PUT (bypass request 401 recursion while still inside relogin).
+            try {
+              const pinRes = await fetch(`${base}/api/v1/session`, {
+                method: 'PUT',
+                headers: authHeaders,
+                body: JSON.stringify({ accountId: pref }),
+              });
+              const rotCst =
+                pinRes.headers.get('CST') || pinRes.headers.get('cst');
+              const rotSec =
+                pinRes.headers.get('X-SECURITY-TOKEN') ||
+                pinRes.headers.get('x-security-token');
+              if (rotCst && rotSec) applyTokens(rotCst, rotSec);
+              const pinText = await pinRes.text();
+              let pinCode = '';
+              try {
+                pinCode = String(JSON.parse(pinText)?.errorCode || '');
+              } catch {
+                pinCode = '';
+              }
+              if (
+                pinRes.ok ||
+                /not-different\.accountId/i.test(pinText) ||
+                /not-different\.accountId/i.test(pinCode)
+              ) {
+                sessionRef.currentAccountId = pref;
+              }
+              // else leave null — ensureActiveAccount / switchCapitalAccount retries
+            } catch {
+              // leave unpinned; caller will re-pin
+            }
+          }
+        }
         return true;
       } catch {
         return false;
@@ -391,7 +431,9 @@ export async function openCapitalSession(input: {
 
 type PooledCapital = {
   session: CapitalSession | null;
+  /** Same object as session — pool owns DELETE via ownedClose. */
   raw: CapitalSession | null;
+  ownedClose?: () => Promise<void>;
   expiresAt: number;
   cooldownUntil: number;
   activeCapitalAccountId: string | null;
@@ -527,11 +569,18 @@ export async function switchCapitalAccount(
 ): Promise<{ ok: boolean; detail: string }> {
   const id = capitalAccountId.trim();
   if (!id) return { ok: false, detail: 'capital accountId required' };
+  session.preferredAccountId = id;
   if (session.currentAccountId && session.currentAccountId === id) {
     return { ok: true, detail: `Already on account ${id}` };
   }
   const res = await session.put('/api/v1/session', { accountId: id });
   if (!res.ok) {
+    const code = String(res.json?.errorCode || '');
+    // Already on desired CFD (stale currentAccountId after re-login can miss this)
+    if (/not-different\.accountId/i.test(code) || /not-different\.accountId/i.test(res.text)) {
+      session.currentAccountId = id;
+      return { ok: true, detail: `Already on account ${id}` };
+    }
     return {
       ok: false,
       detail: `Switch account ${id} failed HTTP ${res.status}: ${
@@ -584,14 +633,16 @@ export async function acquireCapitalSession(input: {
 
     let session: CapitalSession | null = null;
     let raw: CapitalSession | null = null;
+    let ownedClose: (() => Promise<void>) | undefined;
 
     if (cached?.session && cached.expiresAt > now) {
       session = cached.session;
       raw = cached.raw;
+      ownedClose = cached.ownedClose;
     } else {
       if (cached?.raw) {
         try {
-          await cached.raw.close();
+          await (cached.ownedClose ?? cached.raw.close)();
         } catch {
           /* ignore */
         }
@@ -623,16 +674,17 @@ export async function acquireCapitalSession(input: {
         return opened;
       }
 
+      // Same object identity — shallow copy forked currentAccountId from CST pin.
       raw = opened.session;
-      session = {
-        ...raw,
-        close: async () => {
-          /* no-op — pool owns lifetime */
-        },
+      ownedClose = raw.close.bind(raw);
+      raw.close = async () => {
+        /* no-op — pool owns lifetime via ownedClose */
       };
+      session = raw;
     }
 
     if (wantedAccount && session) {
+      session.preferredAccountId = wantedAccount;
       const sw = await switchCapitalAccount(session, wantedAccount);
       if (!sw.ok) {
         return {
@@ -645,6 +697,7 @@ export async function acquireCapitalSession(input: {
     capitalSessionPool.set(key, {
       session,
       raw,
+      ownedClose,
       expiresAt: Date.now() + 8 * 60_000,
       cooldownUntil: 0,
       activeCapitalAccountId: wantedAccount || session?.currentAccountId || null,
@@ -658,7 +711,8 @@ export function invalidateCapitalSession(connectionId: number): void {
   const key = capitalPoolKey(connectionId);
   const cached = capitalSessionPool.get(key);
   if (!cached) return;
-  void cached.raw?.close().catch(() => undefined);
+  void (cached.ownedClose ?? (() => cached.raw?.close()))()
+    .catch(() => undefined);
   capitalSessionPool.delete(key);
 }
 

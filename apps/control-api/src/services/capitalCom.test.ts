@@ -108,6 +108,136 @@ describe('Capital session 401 re-login', () => {
     expect(positionsGets).toBe(2); // 401 then retry
     expect(opened.session.cst).toBe('cst-2');
   });
+
+  it('re-pins preferred CFD account after 401 re-login (clears stale currentAccountId)', async () => {
+    let sessionPosts = 0;
+    let sessionPuts = 0;
+    let lastPutBody: string | null = null;
+    let positionsGets = 0;
+    vi.stubGlobal(
+      'fetch',
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = (init?.method || 'GET').toUpperCase();
+        if (url.includes('/session/encryptionKey')) {
+          return new Response('{}', { status: 404 });
+        }
+        if (url.endsWith('/api/v1/session') && method === 'POST') {
+          sessionPosts += 1;
+          const headers = new Headers({
+            CST: `cst-${sessionPosts}`,
+            'X-SECURITY-TOKEN': `sec-${sessionPosts}`,
+          });
+          // Fresh login always lands on default CFD "default-cfd"
+          return new Response(JSON.stringify({ accountId: 'default-cfd' }), {
+            status: 200,
+            headers,
+          });
+        }
+        if (url.endsWith('/api/v1/session') && method === 'PUT') {
+          sessionPuts += 1;
+          lastPutBody = typeof init?.body === 'string' ? init.body : null;
+          return new Response(JSON.stringify({}), { status: 200 });
+        }
+        if (url.includes('/positions') && method === 'GET') {
+          positionsGets += 1;
+          if (positionsGets === 1) {
+            return new Response('{"errorCode":"error.invalid.session"}', {
+              status: 401,
+            });
+          }
+          return new Response(JSON.stringify({ positions: [] }), { status: 200 });
+        }
+        return new Response('unexpected', { status: 500 });
+      }
+    );
+
+    const opened = await openCapitalSession({
+      environment: 'demo',
+      apiKey: 'k',
+      identifier: 'user@example.com',
+      password: 'api-pass-not-otp',
+    });
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    // Simulate prior pin (stale after CST death) — without clear, switch would skip PUT
+    opened.session.currentAccountId = 'preferred-cfd';
+    opened.session.preferredAccountId = 'preferred-cfd';
+    const listed = await opened.session.get('/api/v1/positions');
+    expect(listed.ok).toBe(true);
+    expect(sessionPosts).toBe(2);
+    expect(sessionPuts).toBe(1);
+    expect(lastPutBody).toContain('preferred-cfd');
+    expect(opened.session.currentAccountId).toBe('preferred-cfd');
+    expect(opened.session.cst).toBe('cst-2');
+  });
+});
+
+describe('Capital session pool identity', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.MASTER_CAPITAL_CONNECTION_ID;
+  });
+
+  it('acquireCapitalSession returns same object as raw (no shallow-copy fork)', async () => {
+    const { acquireCapitalSession, invalidateCapitalSession } = await import(
+      './capitalCom.js'
+    );
+    let sessionPosts = 0;
+    vi.stubGlobal(
+      'fetch',
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = (init?.method || 'GET').toUpperCase();
+        if (url.includes('/session/encryptionKey')) {
+          return new Response('{}', { status: 404 });
+        }
+        if (url.endsWith('/api/v1/session') && method === 'POST') {
+          sessionPosts += 1;
+          const headers = new Headers({
+            CST: `cst-pool-${sessionPosts}`,
+            'X-SECURITY-TOKEN': `sec-pool-${sessionPosts}`,
+          });
+          return new Response(JSON.stringify({ accountId: 'a-default' }), {
+            status: 200,
+            headers,
+          });
+        }
+        if (url.endsWith('/api/v1/session') && method === 'PUT') {
+          return new Response(JSON.stringify({}), { status: 200 });
+        }
+        return new Response('{}', { status: 200 });
+      }
+    );
+
+    const a = await acquireCapitalSession({
+      environment: 'demo',
+      apiKey: 'k',
+      identifier: 'user@example.com',
+      password: 'api-pass-not-otp',
+      connectionId: 900099,
+      capitalAccountId: 'cfd-B',
+    });
+    expect(a.ok).toBe(true);
+    if (!a.ok) return;
+    a.session.currentAccountId = 'mutated-on-session';
+    const b = await acquireCapitalSession({
+      environment: 'demo',
+      apiKey: 'k',
+      identifier: 'user@example.com',
+      password: 'api-pass-not-otp',
+      connectionId: 900099,
+      capitalAccountId: 'cfd-B',
+    });
+    expect(b.ok).toBe(true);
+    if (!b.ok) return;
+    // Same identity — mutation visible on re-acquire (pool cache)
+    expect(b.session).toBe(a.session);
+    expect(b.session.currentAccountId).toBe('cfd-B'); // switch re-applied
+    expect(b.session.preferredAccountId).toBe('cfd-B');
+    expect(sessionPosts).toBe(1); // cached, no second login
+    invalidateCapitalSession(900099);
+  });
 });
 
 describe('masterCapitalConnectionId', () => {

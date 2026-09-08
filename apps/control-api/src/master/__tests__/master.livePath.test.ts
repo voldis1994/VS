@@ -482,6 +482,8 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     });
     expect(placed.ok).toBe(false);
     expect(placed.detail).toMatch(/capital_fail_close_unproven/);
+    expect(placed.position_id).toBe(`deal-ref-unproven-2`);
+    expect(placed.fill_price).toBe(4410.4);
     expect(positions.size).toBe(1);
   });
 
