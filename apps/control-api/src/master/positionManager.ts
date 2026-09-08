@@ -607,8 +607,15 @@ export class PositionManager {
     for (const pos of [...this.open.values()]) {
       const mark = protectiveMark(pos.side, quote);
       const fav = favorableMove(pos.side, pos.entry, mark);
-      pos.mfe = Math.max(pos.mfe, fav);
-      pos.mae = Math.max(pos.mae, -fav);
+      // Capital LIVE: soft mark exits need usable venue UPL (0 ≡ unread, like money helpers)
+      const capitalUplReady =
+        !capitalLive || usableBrokerUpl(pos.broker_upl) != null;
+      // Do not ratchet MFE/MAE on unproven marks — BestOutcome must not PeakProtect
+      // from excursions the venue never reported.
+      if (capitalUplReady) {
+        pos.mfe = Math.max(pos.mfe, fav);
+        pos.mae = Math.max(pos.mae, -fav);
+      }
       const peak_retention =
         pos.mfe > 1e-9 ? Math.max(0, Math.min(1, fav / pos.mfe)) : null;
       const heldMs = Date.now() - new Date(pos.entry_at).getTime();
@@ -627,10 +634,6 @@ export class PositionManager {
       if (pos.stop_loss == null && broker.modifyPosition) {
         await this.maybeRecoverNakedStop(broker, pos, quote, minStopDist);
       }
-
-      // Capital LIVE: soft mark exits need usable venue UPL (0 ≡ unread, like money helpers)
-      const capitalUplReady =
-        !capitalLive || usableBrokerUpl(pos.broker_upl) != null;
 
       // VS-System soft trail — SCALPING manage only, after money arm (not Capital min-stop trail)
       // Capital LIVE: refuse soft-trail (incl. already_armed) when venue UPL unread
@@ -1989,11 +1992,12 @@ export class PositionManager {
       upl?: number | null;
       opened_at?: string | null;
     }>,
-    opts?: { retainIds?: Set<string> }
+    opts?: { retainIds?: Set<string>; capitalLive?: boolean }
   ): { external_partials: ExternalPartialEvent[] } {
     const external_partials: ExternalPartialEvent[] = [];
     const brokerIds = new Set(brokerPositions.map((p) => p.position_id));
     const retain = opts?.retainIds;
+    const capitalLive = opts?.capitalLive === true;
     for (const id of [...this.open.keys()]) {
       if (!brokerIds.has(id) && !retain?.has(id)) this.open.delete(id);
     }
@@ -2057,8 +2061,21 @@ export class PositionManager {
           existing.entry = bp.open_level;
         }
         if (bp.upl !== undefined) {
-          existing.broker_upl =
-            bp.upl != null && Number.isFinite(bp.upl) ? Number(bp.upl) : null;
+          if (capitalLive) {
+            const usable = usableBrokerUpl(bp.upl);
+            if (usable == null) {
+              // Successful list with null/0 UPL — same disarm as list-fail
+              existing.broker_upl = null;
+              existing.soft_trail_armed_at = null;
+              existing.soft_trail_peak = null;
+              existing.native_trail_armed = false;
+            } else {
+              existing.broker_upl = usable;
+            }
+          } else {
+            existing.broker_upl =
+              bp.upl != null && Number.isFinite(bp.upl) ? Number(bp.upl) : null;
+          }
         }
         // Venue side is truth — fix local invent / bad adopt so protective marks match
         if (

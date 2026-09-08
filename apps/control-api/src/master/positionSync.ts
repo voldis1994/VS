@@ -130,14 +130,21 @@ export async function syncPositionsWithBroker(
         if (miss) delete miss[p.position_id];
         // Level-less live deal: in presence_ids but not positions[] — retain local
         // so reconcileFromBroker does not wipe managed ownership.
+        // Keep last local SL/TP for protective marks; chart still unproven so
+        // close_requires_sl blocks soft closes (brokerFound + null brokerStop).
         if (!brokerPositions.some((bp) => bp.position_id === p.position_id)) {
           retainIds.add(p.position_id);
-          // Chart SL/TP unproven while level-less — clear painted locals so
-          // naked recovery / intended attach can re-protect (keep intended_*).
           const managed = manager.get(p.position_id);
-          if (managed) {
-            managed.stop_loss = null;
-            managed.take_profit = null;
+          if (
+            managed &&
+            broker.name === 'CAPITAL' &&
+            !(broker as { paper?: boolean }).paper
+          ) {
+            // Presence-only has no venue UPL — disarm money trails like list-fail
+            managed.broker_upl = null;
+            managed.soft_trail_armed_at = null;
+            managed.soft_trail_peak = null;
+            managed.native_trail_armed = false;
           }
         }
         continue;
@@ -175,7 +182,10 @@ export async function syncPositionsWithBroker(
       upl: p.upl,
       opened_at: p.opened_at,
     })),
-    retainIds.size > 0 ? { retainIds } : undefined
+    {
+      ...(retainIds.size > 0 ? { retainIds } : {}),
+      capitalLive: broker.name === 'CAPITAL' && !(broker as { paper?: boolean }).paper,
+    }
   );
 
   let safety_sl_attached = 0;

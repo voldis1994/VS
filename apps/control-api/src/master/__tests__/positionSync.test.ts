@@ -518,9 +518,10 @@ describe('VS MASTER recovery SL + trail', () => {
     expect(sync.dropped).toBe(0);
     expect(pm.count()).toBe(1);
     expect(pm.get('deal-level-less')).toBeTruthy();
-    // Painted chart levels cleared while presence-only so naked recovery can re-protect
-    expect(pm.get('deal-level-less')!.stop_loss).toBeNull();
-    expect(pm.get('deal-level-less')!.take_profit).toBeNull();
+    // Keep last local SL/TP for protective marks while presence-only
+    // (chart still unproven → close_requires_sl blocks soft closes)
+    expect(pm.get('deal-level-less')!.stop_loss).toBe(4400);
+    expect(pm.get('deal-level-less')!.take_profit).toBe(4420);
   });
 
   it('presence-only retain re-attaches intended SL via MODIFY', async () => {
@@ -533,7 +534,7 @@ describe('VS MASTER recovery SL + trail', () => {
       side: 'BUY',
       size: 0.1,
       entry: 4410,
-      stop_loss: 4400, // painted — will clear on presence-only retain
+      stop_loss: 4400, // kept while presence-only; intended MODIFY still refreshes
       take_profit: 4420,
       decision: {
         decision_id: 'd',
