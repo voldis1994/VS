@@ -807,7 +807,7 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(mod.detail).toMatch(/modify_tp_(not_visible|unverified)/);
   });
 
-  it('empty REJECTED confirm match-accepts recent same-size open', async () => {
+  it('empty REJECTED confirm match-accepts *new* same-size open (not pre-open)', async () => {
     process.env.MASTER_LIVE_ENABLED = 'true';
     const positions = new Map<
       string,
@@ -821,15 +821,15 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
         opened_at?: string;
       }
     >();
-    // Already open from empty-REJECTED sibling glitch (naked until attach)
-    positions.set('ghost-fill', {
-      deal_id: 'ghost-fill',
+    // Pre-existing orphan must NOT be bound/fail-closed
+    positions.set('old-orphan', {
+      deal_id: 'old-orphan',
       epic: 'GOLD',
       direction: 'BUY',
       size: 0.1,
-      open_level: 4410.4,
-      stop_level: null,
-      opened_at: new Date().toISOString(),
+      open_level: 4400,
+      stop_level: 4390,
+      opened_at: new Date(Date.now() - 120_000).toISOString(),
     });
     const broker = new CapitalBroker({
       credentials: {},
@@ -854,12 +854,28 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
         })),
         detail: '',
       }),
-      create: async () => ({
-        ok: true,
-        deal_reference: 'ref-empty-rej',
-        detail: 'posted',
-      }),
-      close: async () => ({ ok: false, detail: 'should_not_close' }),
+      create: async () => {
+        // Fill lands despite empty REJECTED confirm
+        positions.set('ghost-fill', {
+          deal_id: 'ghost-fill',
+          epic: 'GOLD',
+          direction: 'BUY',
+          size: 0.1,
+          open_level: 4410.4,
+          stop_level: null,
+          opened_at: new Date().toISOString(),
+        });
+        return {
+          ok: true,
+          deal_reference: 'ref-empty-rej',
+          detail: 'posted',
+        };
+      },
+      close: async (id) => {
+        if (id === 'old-orphan') return { ok: false, detail: 'must_not_close_preopen' };
+        positions.delete(id);
+        return { ok: true, detail: 'closed' };
+      },
       modify: async (_s, input) => {
         const p = positions.get(input.dealId);
         if (p && input.stopLevel != null) p.stop_level = Number(input.stopLevel);
@@ -890,6 +906,59 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(place.fill_price).toBe(4410.4);
     expect(place.detail).toMatch(/capital_open/);
     expect(positions.get('ghost-fill')!.stop_level).toBe(4400);
+    expect(positions.has('old-orphan')).toBe(true);
+  });
+
+  it('named reject does not fail-close pre-open same-size orphan', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number;
+      }
+    >();
+    positions.set('pre-open', {
+      deal_id: 'pre-open',
+      epic: 'GOLD',
+      direction: 'BUY',
+      size: 0.1,
+      open_level: 4410,
+    });
+    let closed: string[] = [];
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-pre' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({ bid: 4410, ask: 4410.4, mid: 4410.2, epic, raw_ok: true }),
+      list: async () => ({ ok: true, positions: [...positions.values()], detail: '' }),
+      create: async () => ({ ok: true, deal_reference: 'ref-named', detail: 'posted' }),
+      confirm: async () => ({
+        ok: false,
+        rejected: true,
+        reject_reason: 'MINIMUM_STOP_DISTANCE',
+        detail: 'Capital rejected: MINIMUM_STOP_DISTANCE',
+      }),
+      close: async (_s, id) => {
+        closed.push(id);
+        positions.delete(id);
+        return { ok: true, detail: 'closed' };
+      },
+    });
+    await broker.connect();
+    const place = await broker.placeOrder({
+      intent_id: 'intent-named-preopen',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: 4400,
+    });
+    expect(place.ok).toBe(false);
+    expect(closed).toEqual([]);
+    expect(positions.has('pre-open')).toBe(true);
   });
 
   it('empty REJECTED match fail-closes when protective SL cannot attach', async () => {
@@ -906,15 +975,6 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
         opened_at?: string;
       }
     >();
-    positions.set('naked-fill', {
-      deal_id: 'naked-fill',
-      epic: 'GOLD',
-      direction: 'BUY',
-      size: 0.1,
-      open_level: 4410.4,
-      stop_level: null,
-      opened_at: new Date().toISOString(),
-    });
     let closed = 0;
     const broker = new CapitalBroker({
       credentials: {},
@@ -939,11 +999,22 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
         })),
         detail: '',
       }),
-      create: async () => ({
-        ok: true,
-        deal_reference: 'ref-naked',
-        detail: 'posted',
-      }),
+      create: async () => {
+        positions.set('naked-fill', {
+          deal_id: 'naked-fill',
+          epic: 'GOLD',
+          direction: 'BUY',
+          size: 0.1,
+          open_level: 4410.4,
+          stop_level: null,
+          opened_at: new Date().toISOString(),
+        });
+        return {
+          ok: true,
+          deal_reference: 'ref-naked',
+          detail: 'posted',
+        };
+      },
       close: async (_s, id) => {
         closed += 1;
         positions.delete(id);
@@ -1086,7 +1157,7 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(closed).toBe(false);
   });
 
-  it('listOpenPositions drops missing/zero open_level (no invent entry=0)', async () => {
+  it('listOpenPositions uses quote mid for level-less deals (never invent 0)', async () => {
     const broker = new CapitalBroker({
       credentials: {},
       acquire: async () => ({ ok: true, session: { id: 's-ol' }, detail: 'ok' }),
@@ -1139,13 +1210,58 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     await broker.connect();
     const listed = await broker.listOpenPositions('GOLD');
     expect(listed.ok).toBe(true);
-    expect(listed.positions).toHaveLength(1);
-    expect(listed.positions[0]!.position_id).toBe('good');
-    expect(listed.positions[0]!.open_level).toBeCloseTo(4410.5, 5);
-    // Level-less deals stay in presence_ids for close/ghost proof
+    // Real level + provisional mid for null/zero (recover ownership)
+    expect(listed.positions.map((p) => p.position_id).sort()).toEqual([
+      'bad-null',
+      'bad-zero',
+      'good',
+    ]);
+    expect(listed.positions.find((p) => p.position_id === 'good')!.open_level).toBeCloseTo(
+      4410.5,
+      5
+    );
+    expect(listed.positions.find((p) => p.position_id === 'bad-null')!.open_level).toBeCloseTo(
+      4410.2,
+      5
+    );
     expect(listed.presence_ids).toEqual(
       expect.arrayContaining(['good', 'bad-null', 'bad-zero'])
     );
+  });
+
+  it('listOpenPositions drops level-less when quote mid unavailable', async () => {
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-ol2' }, detail: 'ok' }),
+      quote: async () => null,
+      list: async () => ({
+        ok: true,
+        positions: [
+          {
+            deal_id: 'good',
+            epic: 'GOLD',
+            direction: 'BUY',
+            size: 0.1,
+            open_level: 4410.5,
+          },
+          {
+            deal_id: 'bad-null',
+            epic: 'GOLD',
+            direction: 'BUY',
+            size: 0.1,
+            open_level: null,
+          },
+        ],
+      }),
+      create: async () => ({ ok: true, deal_reference: 'x', detail: 'ok' }),
+      close: async () => ({ ok: true, detail: 'ok' }),
+    });
+    await broker.connect();
+    const listed = await broker.listOpenPositions('GOLD');
+    expect(listed.ok).toBe(true);
+    expect(listed.positions).toHaveLength(1);
+    expect(listed.positions[0]!.position_id).toBe('good');
+    expect(listed.presence_ids).toEqual(expect.arrayContaining(['good', 'bad-null']));
   });
 
   it('CLOSE treats level-less presence as still open (not flat)', async () => {

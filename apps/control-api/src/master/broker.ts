@@ -728,26 +728,44 @@ export class CapitalBroker implements MasterBroker {
     const presence_ids = rawRows
       .map((p) => String(p.deal_id || p.position_id || '').trim())
       .filter(Boolean);
-    const positions = rawRows
-      .map((p) => {
-        const openRaw = Number(p.open_level);
-        const open_level =
-          Number.isFinite(openRaw) && openRaw > 0 ? openRaw : null;
-        return {
-          position_id: String(p.deal_id || p.position_id || ''),
-          epic: p.epic,
-          side: p.direction as Side,
-          size: p.size,
-          // Never invent 0 — orphan adopt must see missing entry as null/NaN skip
-          open_level: open_level ?? Number.NaN,
-          stop_level: protectiveLevelOrNull(p.stop_level),
-          profit_level: protectiveLevelOrNull(p.profit_level),
-          upl: p.upl ?? null,
-          opened_at: p.opened_at ?? null,
-        };
-      })
-      // Drop rows without a usable entry — safer than adopting entry=0
-      .filter((p) => Number.isFinite(p.open_level) && p.open_level > 0);
+    const epicMid = new Map<string, number>();
+    const midFor = async (ep: string): Promise<number> => {
+      const key = String(ep || '');
+      if (epicMid.has(key)) return epicMid.get(key)!;
+      try {
+        const q = await this.getQuote(key);
+        const m =
+          q && Number.isFinite(q.mid) && q.mid > 0 ? Number(q.mid) : Number.NaN;
+        epicMid.set(key, m);
+        return m;
+      } catch {
+        epicMid.set(key, Number.NaN);
+        return Number.NaN;
+      }
+    };
+    const positions: BrokerPosition[] = [];
+    for (const p of rawRows) {
+      const openRaw = Number(p.open_level);
+      let open_level =
+        Number.isFinite(openRaw) && openRaw > 0 ? openRaw : null;
+      // Level-less live deal — provisional mid so sync/recover can own it (never invent 0)
+      if (open_level == null) {
+        const mid = await midFor(String(p.epic || epic || ''));
+        if (Number.isFinite(mid) && mid > 0) open_level = mid;
+      }
+      if (open_level == null || !(open_level > 0)) continue;
+      positions.push({
+        position_id: String(p.deal_id || p.position_id || ''),
+        epic: p.epic,
+        side: (p.direction || p.side) as Side,
+        size: p.size,
+        open_level,
+        stop_level: protectiveLevelOrNull(p.stop_level),
+        profit_level: protectiveLevelOrNull(p.profit_level),
+        upl: p.upl ?? null,
+        opened_at: p.opened_at ?? null,
+      });
+    }
     return { ok: true, positions, presence_ids };
   }
 
@@ -808,15 +826,18 @@ export class CapitalBroker implements MasterBroker {
   /**
    * VS-System findRecentOpenPosition — near-exact size + recent opened_at.
    * Used for empty-REJECTED match-accept and unconfirmed open recovery.
+   * excludeIds = pre-OPEN snapshot so we never bind/fail-close a pre-existing ticket.
    */
   private async findRecentOpenMatch(input: {
     epic: string;
     side: Side;
     size: number;
+    excludeIds?: Set<string>;
   }): Promise<BrokerPosition | undefined> {
     const tol = Math.max(input.size * 0.001, 1e-8);
     const maxAgeMs = 60_000;
     const now = Date.now();
+    const exclude = input.excludeIds;
     const attempts =
       process.env.VITEST || process.env.MASTER_CONFIRM_FAST === 'true' ? 2 : 4;
     for (let attempt = 0; attempt < attempts; attempt++) {
@@ -829,6 +850,7 @@ export class CapitalBroker implements MasterBroker {
       if (!listed.ok) continue;
       const candidates = listed.positions
         .filter((p) => {
+          if (exclude?.has(p.position_id)) return false;
           if (p.side !== input.side) return false;
           if (Math.abs(p.size - input.size) > tol) return false;
           if (p.opened_at) {
@@ -1004,6 +1026,26 @@ export class CapitalBroker implements MasterBroker {
     }
     let orderSize = sized.size;
 
+    // Snapshot live deals before any create — match/fail-close only *new* ids (MT4 parity).
+    // Fail closed if list unread (empty set would wrongly bind/close pre-existing).
+    const preOpenIds = new Set<string>();
+    {
+      const snap = await this.listOpenPositions(input.epic);
+      if (!snap.ok) {
+        return {
+          ok: false,
+          order_id: null,
+          position_id: null,
+          fill_price: null,
+          detail: `capital_preopen_snapshot_unavailable:${snap.detail || 'unknown'}`,
+          paper: false,
+        };
+      }
+      for (const id of snap.presence_ids ?? snap.positions.map((p) => p.position_id)) {
+        if (id) preOpenIds.add(id);
+      }
+    }
+
     let opened = await this.deps.create(this.session, {
       epic: input.epic,
       direction: input.side,
@@ -1091,6 +1133,7 @@ export class CapitalBroker implements MasterBroker {
             epic: input.epic,
             side: input.side,
             size: orderSize,
+            excludeIds: preOpenIds,
           });
           if (match) {
             position_id = match.position_id;
@@ -1099,10 +1142,11 @@ export class CapitalBroker implements MasterBroker {
           }
         }
         if (!position_id) {
-          // Named reject — fail-close any same-side fill that landed (ghost)
+          // Named reject — fail-close only a *new* same-side fill (never pre-open orphan)
           const listed = await this.listOpenPositions(input.epic);
           const ghost = listed.positions.find(
             (p) =>
+              !preOpenIds.has(p.position_id) &&
               p.side === input.side &&
               (Math.abs(p.size - orderSize) < 1e-6 || Math.abs(p.size - input.size) < 1e-6)
           );
@@ -1133,6 +1177,7 @@ export class CapitalBroker implements MasterBroker {
         epic: input.epic,
         side: input.side,
         size: orderSize,
+        excludeIds: preOpenIds,
       });
       if (hit) {
         position_id = hit.position_id;
@@ -1141,11 +1186,14 @@ export class CapitalBroker implements MasterBroker {
       }
     }
 
-    // Never accept dealReference alone as a live fill — fail-close same-size ghost if present
+    // Never accept dealReference alone as a live fill — fail-close same-size *new* ghost
     if (!position_id) {
       const listed = await this.listOpenPositions(input.epic);
       const ghost = listed.positions.find(
-        (p) => p.side === input.side && Math.abs(p.size - orderSize) < 1e-6
+        (p) =>
+          !preOpenIds.has(p.position_id) &&
+          p.side === input.side &&
+          Math.abs(p.size - orderSize) < 1e-6
       );
       if (ghost) {
         const fail = await this.failCloseOpenResult(
