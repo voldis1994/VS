@@ -154,6 +154,7 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     if (prevState === undefined) delete process.env.MASTER_STATE_DIR;
     else process.env.MASTER_STATE_DIR = prevState;
     clearTradeAckJournalForTest();
+    (masterRuntime as any).capitalDeskCredsSeen = false;
     masterRuntime.stop();
   });
 
@@ -320,6 +321,70 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(masterRuntime.broker_detail || '').toMatch(/broker_feed:CAPITAL/);
     expect(masterRuntime.last_quote?.mid).toBeCloseTo(4410.2, 5);
     masterRuntime.stop();
+  });
+
+  it('PAPER public feed is replaced by Capital broker feed on LIVE start', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_BROKER_FEED_SYNTHETIC = 'true';
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('PAPER');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.setMode('PAPER');
+    masterRuntime.cfg = {
+      ...DEFAULT_MASTER_CONFIG,
+      mode: 'PAPER',
+      min_score: 0.99,
+      block_off_hours: false,
+    };
+    masterRuntime.setEpic('GOLD');
+    // Start PAPER with a fake public feed timer already running
+    await masterRuntime.start({
+      broker: masterRuntime.ensurePaperBroker(),
+      live_feed: false,
+    });
+    // Manually plant a public-style timer that would otherwise stick
+    (masterRuntime as any).stopLiveFeed?.();
+    let publicTicks = 0;
+    (masterRuntime as any).liveFeedTimer = setInterval(() => {
+      publicTicks += 1;
+    }, 20);
+
+    const broker = mockCapitalBroker();
+    await broker.connect();
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    masterRuntime.cfg = { ...masterRuntime.cfg, mode: 'LIVE' };
+    await masterRuntime.start({ broker, live_feed: false });
+    const before = publicTicks;
+    await new Promise((r) => setTimeout(r, 60));
+    // Stuck public timer would keep incrementing; stopLiveFeed must have cleared it
+    expect(publicTicks).toBe(before);
+    expect(masterRuntime.broker_detail || '').toMatch(/broker_feed:CAPITAL/);
+    expect(masterRuntime.last_quote?.mid).toBeCloseTo(4410.2, 5);
+    expect(masterRuntime.status().capital_live_attached).toBe(true);
+    masterRuntime.persist_ok = true;
+    expect(masterRuntime.status().health).toBe('LIVE_RUNNING');
+    masterRuntime.stop();
+    delete process.env.MASTER_BROKER_FEED_SYNTHETIC;
+  });
+
+  it('LIVE mode without Capital attach reports LIVE_UNATTACHED health', () => {
+    masterRuntime.stop();
+    masterRuntime.ensurePaperBroker();
+    masterRuntime.setMode('LIVE');
+    masterRuntime.persist_ok = true;
+    const st = masterRuntime.status();
+    expect(st.capital_live_attached).toBe(false);
+    expect(st.health).toBe('LIVE_UNATTACHED');
+  });
+
+  it('noteCapitalCredentialSource marks Brokers desk creds available', () => {
+    masterRuntime.stop();
+    masterRuntime.noteCapitalCredentialSource('capital_desk_connected:id=7');
+    const st = masterRuntime.status();
+    expect(st.capital_desk_creds_seen).toBe(true);
+    expect(st.capital_creds_available).toBe(true);
+    expect(st.capital_credential_source).toBe('desk');
   });
 
   it('runtime LIVE tick opens when MASTER_LIVE_ENABLED and mocked Capital attached', async () => {

@@ -12,6 +12,9 @@ type MasterStatus = {
   broker_detail: string | null;
   primary_live_venue?: string;
   capital_env_present?: boolean;
+  capital_desk_creds_seen?: boolean;
+  capital_credential_source?: 'env' | 'desk' | null;
+  capital_creds_available?: boolean;
   capital_live_attached?: boolean;
   last_decision: { kind?: string } | null;
   last_block_reason: string | null;
@@ -202,6 +205,8 @@ export function MasterPage() {
   const healthBad =
     !!status?.health?.includes('KILL') ||
     status?.health === 'PERSIST_DEGRADED' ||
+    status?.health === 'LIVE_NO_CAPITAL' ||
+    status?.health === 'LIVE_UNATTACHED' ||
     status?.persist_ok === false;
   const quoteStale = (status?.quote?.age_ms ?? 0) > 15_000;
 
@@ -216,8 +221,10 @@ export function MasterPage() {
           k: 'Capital LIVE',
           v: status.capital_live_attached
             ? 'ATTACHED'
-            : status.capital_env_present
-              ? 'creds env · not attached'
+            : status.capital_creds_available
+              ? status.capital_credential_source === 'desk'
+                ? 'creds Brokers · not attached'
+                : 'creds env · not attached'
               : 'need CAPITAL_* or Brokers keys',
           ok: !!status.capital_live_attached,
           bad: !status.capital_live_attached && status.mode === 'LIVE',

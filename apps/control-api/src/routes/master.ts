@@ -18,7 +18,7 @@ export async function registerMasterRoutes(app: FastifyInstance) {
 
   app.get('/api/master/config', async () => ({
     ...masterRuntime.cfg,
-    note: 'Scores are heuristic 0..1 — not calibrated trade probabilities. Primary LIVE venue = Capital.com API. LIVE requires MASTER_LIVE_ENABLED=true + CAPITAL_*.',
+    note: 'Scores are heuristic 0..1 — not calibrated trade probabilities. Primary LIVE venue = Capital.com API. LIVE requires MASTER_LIVE_ENABLED=true + CAPITAL_* env or Brokers-page Capital credentials.',
     owns_pipeline: process.env.MASTER_OWNS_PIPELINE === 'true',
     live_enabled: process.env.MASTER_LIVE_ENABLED === 'true',
     manage: masterRuntime.status().manage,
@@ -172,8 +172,11 @@ export async function registerMasterRoutes(app: FastifyInstance) {
           status: masterRuntime.status(),
         };
       }
+      // Stop first so PAPER Yahoo feed cannot stick after Capital attach
+      masterRuntime.stop();
       masterRuntime.attachBroker(resolved.broker);
       masterRuntime.broker_detail = resolved.detail;
+      masterRuntime.noteCapitalCredentialSource(resolved.detail);
       if (liveOk) masterRuntime.setMode('LIVE');
       else masterRuntime.setMode('PAPER');
       const live_feed =
@@ -358,6 +361,7 @@ export async function registerMasterRoutes(app: FastifyInstance) {
     masterRuntime.stop();
     masterRuntime.attachBroker(resolved.broker);
     masterRuntime.broker_detail = resolved.detail;
+    masterRuntime.noteCapitalCredentialSource(resolved.detail);
     masterRuntime.setMode('LIVE');
     await masterRuntime.start({ broker: resolved.broker, live_feed: false });
     return {
@@ -559,10 +563,10 @@ async function refresh(){
     cards.innerHTML=[
       card('Mode',s.mode),
       card('Epic',s.epic||'—'),
-      card('Health',s.health,s.health.includes('KILL')?'bad':'ok'),
+      card('Health',s.health,(s.health.includes('KILL')||s.health==='PERSIST_DEGRADED'||s.health==='LIVE_NO_CAPITAL'||s.health==='LIVE_UNATTACHED')?'bad':'ok'),
       card('Broker',s.broker||'—'),
       card('Broker detail',s.broker_detail||'—'),
-      card('Capital LIVE',s.capital_live_attached?'ATTACHED':(s.capital_env_present?'creds env':'need keys'),s.capital_live_attached?'ok':(s.mode==='LIVE'?'bad':'')),
+      card('Capital LIVE',s.capital_live_attached?'ATTACHED':(s.capital_creds_available?(s.capital_credential_source==='desk'?'creds Brokers':'creds env'):'need keys'),s.capital_live_attached?'ok':(s.mode==='LIVE'?'bad':'')),
       card('Quote',s.quote?(Number(s.quote.mid).toFixed(2)+' · '+Math.round((s.quote.age_ms||0)/1000)+'s'+(s.quote.stream_healthy===true?' · WS':s.quote.stream_healthy===false?' · REST':'')):'—', (s.quote&&s.quote.age_ms>15000)?'bad':'ok'),
       card('Float UPL',s.floating_pnl!=null?Number(s.floating_pnl).toFixed(2):'—', s.floating_pnl==null?'':(s.floating_pnl<0?'bad':(s.floating_pnl>0?'ok':'')),
       card('Manage',s.manage&&s.manage.scalp_pct_chase?'SCALP chase on':'structure/MFE'),

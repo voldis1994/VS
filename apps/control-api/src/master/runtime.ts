@@ -196,6 +196,11 @@ class MasterRuntime {
   /** VS-System-: cool down after broker reject (e.g. RISK_CHECK). */
   private reject_until_ms = 0;
   broker_detail: string | null = null;
+  /**
+   * Brokers-page Capital creds seen via resolve/attach (desk path).
+   * Env presence is still read live from CAPITAL_* each status().
+   */
+  private capitalDeskCredsSeen = false;
   /** When false, manage exits still run but new entries are blocked (desk dual-brain guard). */
   entries_armed = true;
   entries_pause_reason: string | null = null;
@@ -724,6 +729,29 @@ class MasterRuntime {
     if (broker instanceof CapitalBroker) {
       this.setEpic(this.epic);
     }
+  }
+
+  /**
+   * Record Capital credential source from resolve/attach detail so status can
+   * show Brokers-DB readiness when CAPITAL_* env is empty.
+   */
+  noteCapitalCredentialSource(detail: string | null | undefined) {
+    const d = String(detail || '');
+    if (/capital_desk/i.test(d)) this.capitalDeskCredsSeen = true;
+  }
+
+  private capitalLiveAttached(): boolean {
+    return (
+      this.broker?.name === 'CAPITAL' &&
+      this.cfg.mode === 'LIVE' &&
+      !this.broker.paper
+    );
+  }
+
+  private capitalCredentialSource(): 'env' | 'desk' | null {
+    if (capitalEnvPresent()) return 'env';
+    if (this.capitalDeskCredsSeen) return 'desk';
+    return null;
   }
 
   /** Check- parity: OrderSend uses chart symbol; keep runtime epic in sync. */
@@ -1899,11 +1927,24 @@ class MasterRuntime {
     }
     const wantPublicFeed =
       opts?.live_feed === true || process.env.MASTER_AUTO_LIVE_FEED === 'true';
+    const wantBrokerFeed = !wantPublicFeed && !!this.broker && !this.broker.paper;
+    // PAPER→LIVE (or reverse) must replace the mark source — do not keep Yahoo stuck
+    if (wantPublicFeed || wantBrokerFeed) {
+      this.stopLiveFeed();
+    }
     if (wantPublicFeed) {
       await this.startPublicLiveFeed();
-    } else if (this.broker && !this.broker.paper) {
+    } else if (wantBrokerFeed) {
       // LIVE Capital/MT4: poll broker quotes — do not leave runtime silent
       await this.startBrokerLiveFeed();
+    }
+  }
+
+  /** Clear public/broker quote loop without stopping the runtime. */
+  private stopLiveFeed() {
+    if (this.liveFeedTimer) {
+      clearInterval(this.liveFeedTimer);
+      this.liveFeedTimer = null;
     }
   }
 
@@ -2133,10 +2174,7 @@ class MasterRuntime {
       clearInterval(this.timer);
       this.timer = null;
     }
-    if (this.liveFeedTimer) {
-      clearInterval(this.liveFeedTimer);
-      this.liveFeedTimer = null;
-    }
+    this.stopLiveFeed();
     this.clearManageLoop();
     // Refuse empty overwrite before recover — otherwise Stop on a fresh
     // process wipes durable opens that recover() has not loaded yet.
@@ -2383,8 +2421,10 @@ class MasterRuntime {
       broker_detail: this.broker_detail,
       primary_live_venue: 'capital.com_api_direct',
       capital_env_present: capitalEnvPresent(),
-      capital_live_attached:
-        this.broker?.name === 'CAPITAL' && this.cfg.mode === 'LIVE' && !this.broker.paper,
+      capital_desk_creds_seen: this.capitalDeskCredsSeen,
+      capital_credential_source: this.capitalCredentialSource(),
+      capital_creds_available: capitalEnvPresent() || this.capitalDeskCredsSeen,
+      capital_live_attached: this.capitalLiveAttached(),
       last_decision: this.last_decision,
       last_risk: this.last_risk,
       last_block_reason:
@@ -2413,9 +2453,13 @@ class MasterRuntime {
         : !this.persist_ok
           ? 'PERSIST_DEGRADED'
           : this.cfg.mode === 'LIVE'
-            ? this.running
-              ? 'LIVE_RUNNING'
-              : 'LIVE_ARMED'
+            ? this.capitalLiveAttached()
+              ? this.running
+                ? 'LIVE_RUNNING'
+                : 'LIVE_ARMED'
+              : this.running
+                ? 'LIVE_NO_CAPITAL'
+                : 'LIVE_UNATTACHED'
             : this.running
               ? 'PAPER_RUNNING'
               : 'OK',
