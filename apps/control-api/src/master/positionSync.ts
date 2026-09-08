@@ -198,17 +198,17 @@ export async function syncPositionsWithBroker(
           intended_levels_attached += 1;
           continue;
         }
+        // Intended MODIFY failed this tick — fall through to soft if still naked
       }
-      // Soft safety only when still naked and no intended structure SL
+      // Soft safety when still naked (including after intended reject this tick)
       if (bp.stop_level != null) continue;
       if (managed.stop_loss != null) continue;
-      if (wantSl != null) continue;
       const stop = safetyStopLevel(bp.side, bp.open_level);
-      const mod = await broker.modifyPosition({
+      const soft = await broker.modifyPosition({
         position_id: bp.position_id,
         stop_level: stop,
       });
-      if (mod.ok) {
+      if (soft.ok) {
         managed.stop_loss = stop;
         safety_sl_attached += 1;
       }

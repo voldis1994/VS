@@ -278,8 +278,18 @@ class MasterRuntime {
   /**
    * Operator close — bypass soft close_requires_sl for emergency flatten.
    * Still journals outcome against opportunity when present.
+   * Serialized on tickChain so manage/sync cannot race CLOSE/journal.
    */
   async closePositionManual(
+    positionId: string,
+    reason = 'OPERATOR_CLOSE'
+  ): Promise<{ ok: boolean; detail: string; pnl?: number }> {
+    return this.runOnTickChain(() =>
+      this.closePositionManualUnlocked(positionId, reason)
+    );
+  }
+
+  private async closePositionManualUnlocked(
     positionId: string,
     reason = 'OPERATOR_CLOSE'
   ): Promise<{ ok: boolean; detail: string; pnl?: number }> {
@@ -367,7 +377,7 @@ class MasterRuntime {
       price: fill,
       position_id: pos.position_id,
       intent_id: pos.intent_id,
-        opportunity_id: pos.opportunity_id,
+      opportunity_id: pos.opportunity_id,
       ok: true,
       detail: reason,
       pnl: outcome.pnl,
@@ -381,15 +391,27 @@ class MasterRuntime {
     closed: number;
     failed: string[];
   }> {
-    const ids = this.positions.list().map((p) => p.position_id);
-    const failed: string[] = [];
-    let closed = 0;
-    for (const id of ids) {
-      const r = await this.closePositionManual(id, reason);
-      if (r.ok) closed += 1;
-      else failed.push(`${id}:${r.detail}`);
-    }
-    return { ok: failed.length === 0, closed, failed };
+    return this.runOnTickChain(async () => {
+      const ids = this.positions.list().map((p) => p.position_id);
+      const failed: string[] = [];
+      let closed = 0;
+      for (const id of ids) {
+        const r = await this.closePositionManualUnlocked(id, reason);
+        if (r.ok) closed += 1;
+        else failed.push(`${id}:${r.detail}`);
+      }
+      return { ok: failed.length === 0, closed, failed };
+    });
+  }
+
+  /** Serialize operator/manage/full-tick work on one chain. */
+  private runOnTickChain<T>(fn: () => Promise<T>): Promise<T> {
+    const result = this.tickChain.then(fn, fn);
+    this.tickChain = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
   }
 
   /** Desk single-owner toggle — persists preference for restart. */

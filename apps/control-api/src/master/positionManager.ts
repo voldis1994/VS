@@ -1275,13 +1275,26 @@ export class PositionManager {
         }
         // TP-only intended attached — still naked SL → soft cushion below
       } else if (wantSl != null) {
-        // Failed structure SL must not soft-attach (would block sync retry)
+        // Failed structure SL: do not soft-attach on the *first* reject (keeps
+        // sync/manage free to retry intended). After escalate (level≥1), fall
+        // through to soft cushion / native trail so chart is not permanently naked
+        // with close_requires_sl blocking exits.
         await this.noteModifyReject(
           pos,
           wantSl,
           intended.detail || ''
         );
-        return;
+        const esc =
+          this.nakedRecoveryLevel.get(pos.position_id) ??
+          (pos.naked_recovery_level != null && Number.isFinite(pos.naked_recovery_level)
+            ? Math.max(0, Math.floor(Number(pos.naked_recovery_level)))
+            : 0);
+        if (esc < 1) {
+          this.nakedRecoveryLevel.set(pos.position_id, 1);
+          pos.naked_recovery_level = 1;
+          return;
+        }
+        // Fall through to soft / native escalate
       }
       // TP-only intended failed — still allow soft SL cushion
     }

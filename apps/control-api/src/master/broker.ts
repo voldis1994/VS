@@ -856,8 +856,13 @@ export class CapitalBroker implements MasterBroker {
   /**
    * Open with stopLevel; on min-distance/ATTACHED reject open bare then attach via modify
    * (VS-System- pattern). Never treat dealReference alone as a fill.
+   * Entire place→confirm→attach→fail-close holds login lock (VS-System outer wrap).
    */
   async placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResult> {
+    return withLoginLock(this.loginLock, () => this.placeOrderLocked(input));
+  }
+
+  private async placeOrderLocked(input: PlaceOrderInput): Promise<PlaceOrderResult> {
     if (!this.session) {
       return {
         ok: false,
@@ -1179,6 +1184,15 @@ export class CapitalBroker implements MasterBroker {
   }
 
   async closePosition(position_id: string, opts?: { size?: number }) {
+    return withLoginLock(this.loginLock, () =>
+      this.closePositionLocked(position_id, opts)
+    );
+  }
+
+  private async closePositionLocked(
+    position_id: string,
+    opts?: { size?: number }
+  ) {
     if (!this.session) return { ok: false, detail: 'not_connected' };
     const pinned = await this.ensureActiveAccount();
     if (!pinned.ok) return { ok: false, detail: `account_pin:${pinned.detail}` };
@@ -1297,6 +1311,16 @@ export class CapitalBroker implements MasterBroker {
   }
 
   async modifyPosition(input: {
+    position_id: string;
+    stop_level?: number;
+    profit_level?: number;
+    trailing_stop?: boolean;
+    stop_distance?: number;
+  }) {
+    return withLoginLock(this.loginLock, () => this.modifyPositionLocked(input));
+  }
+
+  private async modifyPositionLocked(input: {
     position_id: string;
     stop_level?: number;
     profit_level?: number;

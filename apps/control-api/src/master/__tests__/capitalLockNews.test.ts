@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { CapitalBroker } from '../broker.js';
 import {
   createLoginLockState,
   loginLockHeld,
@@ -32,6 +33,77 @@ describe('Capital login lock', () => {
 
     await Promise.all([a, b]);
     expect(order).toEqual(['A-start', 'A-end', 'B-start', 'B-end']);
+  });
+
+  it('CapitalBroker placeOrder outer lock queues concurrent close', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const order: string[] = [];
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number;
+        stop_level?: number | null;
+      }
+    >();
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 'lock' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({ ok: true, positions: [...positions.values()], detail: '' }),
+      create: async () => {
+        order.push('create');
+        return { ok: true, deal_reference: 'ref-lock', detail: 'ok' };
+      },
+      confirm: async (_s, ref) => {
+        order.push('confirm_start');
+        await new Promise((r) => setTimeout(r, 40));
+        order.push('confirm_end');
+        const deal_id = `deal-${ref}`;
+        positions.set(deal_id, {
+          deal_id,
+          epic: 'GOLD',
+          direction: 'BUY',
+          size: 0.1,
+          open_level: 4410.4,
+          stop_level: 4400,
+        });
+        return { ok: true, deal_id, fill_level: 4410.4, detail: 'ok' };
+      },
+      modify: async () => ({ ok: true, detail: 'ok' }),
+      close: async (_s, id) => {
+        order.push('close');
+        positions.delete(id);
+        return { ok: true, detail: 'closed' };
+      },
+    });
+    await broker.connect();
+    const placeP = broker.placeOrder({
+      intent_id: 'lock-outer-place',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: 4400,
+    });
+    await new Promise((r) => setTimeout(r, 5));
+    const closeP = broker.closePosition('deal-ref-lock');
+    await Promise.all([placeP, closeP]);
+    const iStart = order.indexOf('confirm_start');
+    const iEnd = order.indexOf('confirm_end');
+    const iClose = order.indexOf('close');
+    expect(iStart).toBeGreaterThanOrEqual(0);
+    expect(iEnd).toBeGreaterThan(iStart);
+    expect(iClose).toBeGreaterThan(iEnd);
   });
 
   it('allows nested reentry in the same async context', async () => {
