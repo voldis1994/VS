@@ -22,6 +22,31 @@ describe('VS-System scalp pct chase math', () => {
     expect(scalpInitialStopDistance(4400)).toBe(440);
   });
 
+  it('scalpMinStopImprovement is at least 3 pips / 15% of min stop', async () => {
+    const { scalpMinStopImprovement, scalpChaseIsImprovement } = await import(
+      '../scalpPctChase.js'
+    );
+    const bump = scalpMinStopImprovement('GOLD');
+    expect(bump).toBeGreaterThan(0);
+    // Tiny epsilon tighten is NOT enough once minBump is required
+    expect(
+      scalpChaseIsImprovement({
+        direction: 'BUY',
+        candidate: 4410.001,
+        current: 4410,
+        minBump: bump,
+      })
+    ).toBe(false);
+    expect(
+      scalpChaseIsImprovement({
+        direction: 'BUY',
+        candidate: 4410 + bump,
+        current: 4410,
+        minBump: bump,
+      })
+    ).toBe(true);
+  });
+
   it('candidate SL trails mark by 20% of favorable move', () => {
     const entry = 4400;
     const mark = 4440;

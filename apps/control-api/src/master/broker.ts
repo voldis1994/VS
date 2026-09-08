@@ -1542,7 +1542,9 @@ export class Mt4FileBroker implements MasterBroker {
           };
         }
         if (!ack.ok) {
-          return { ok: false, ack, detail: `mt4_reject:${ack.detail || 'nack'}` };
+          const reason =
+            ack.detail || ack.error || ack.error_message || 'nack';
+          return { ok: false, ack, detail: `mt4_reject:${reason}` };
         }
         this.clearOldAcks(40);
         return { ok: true, ack, detail: 'acked' };
@@ -1652,13 +1654,16 @@ export class Mt4FileBroker implements MasterBroker {
     return { ok: false, observed };
   }
 
-  /** Prefer ACK fill/price over status open_level (EA fill is broker truth). */
+  /**
+   * Prefer status open_level (OrderOpenPrice) over ACK fill.
+   * Live EA historically ACK'd request Bid/Ask which hides slippage; status is broker truth.
+   */
   private resolveOpenFill(ack: any | null, statusOpen: number | null | undefined): number | null {
-    const ackFill = numOrNull(ack?.fill ?? ack?.price);
-    if (ackFill != null && ackFill > 0) return ackFill;
     if (statusOpen != null && Number.isFinite(statusOpen) && statusOpen > 0) {
       return Number(statusOpen);
     }
+    const ackFill = numOrNull(ack?.fill ?? ack?.price);
+    if (ackFill != null && ackFill > 0) return ackFill;
     return null;
   }
 
@@ -1816,6 +1821,45 @@ export class Mt4FileBroker implements MasterBroker {
     return { ok: true, positions };
   }
 
+  /**
+   * Prefer EA-exported M1 bars from market/latest.json (chart truth) over Yahoo seed.
+   */
+  async getHistoryBars(_epic: string, maxBars = 60): Promise<BrokerHistoryBars> {
+    const market = this.readJson(join('market', 'latest.json'));
+    if (!market) {
+      return { ok: false, bars: [], detail: 'mt4_market_missing' };
+    }
+    const raw = Array.isArray(market.bars_m1) ? market.bars_m1 : [];
+    const bars = raw
+      .map((b: any) => ({
+        open: Number(b.open ?? b.Open),
+        high: Number(b.high ?? b.High),
+        low: Number(b.low ?? b.Low),
+        close: Number(b.close ?? b.Close),
+        ts_ms: (() => {
+          const t = b.ts_ms ?? b.time ?? b.Time ?? b.t;
+          if (t == null || t === '') return undefined;
+          if (typeof t === 'number' && Number.isFinite(t)) {
+            return t < 1e12 ? t * 1000 : t;
+          }
+          const d = Date.parse(String(t));
+          return Number.isFinite(d) ? d : undefined;
+        })(),
+      }))
+      .filter((b: { open: number; high: number; low: number; close: number }) =>
+        [b.open, b.high, b.low, b.close].every((n) => Number.isFinite(n) && n > 0)
+      )
+      .slice(-Math.max(10, maxBars));
+    return {
+      ok: bars.length >= 10,
+      bars,
+      detail:
+        bars.length >= 10
+          ? `mt4_bars_m1_${bars.length}`
+          : `mt4_bars_m1_short_${bars.length}`,
+    };
+  }
+
   async placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResult> {
     if (this.processed.has(input.intent_id)) {
       return {
@@ -1859,7 +1903,7 @@ export class Mt4FileBroker implements MasterBroker {
       lot: input.size,
       sl: input.stop_level ?? 0,
       tp: input.profit_level ?? 0,
-      magic: 50001,
+      magic: Number(process.env.MASTER_MT4_MAGIC || 50001) || 50001,
       reason: 'VS_MASTER',
     };
     // Reader: durable INTENT before control publish (crash between write and register)
@@ -2260,7 +2304,7 @@ export class Mt4FileBroker implements MasterBroker {
             } else {
               updateTradeAck(id, {
                 ack_status: 'FAILED',
-                detail: `RECOVER_ACK_FAIL:${ack.detail || ''}`,
+                detail: `RECOVER_ACK_FAIL:${ack.detail || ack.error || ack.error_message || ''}`,
               });
             }
           }

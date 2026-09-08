@@ -149,17 +149,30 @@ export function scalpPctLockBrokerStop(input: {
   });
 }
 
-/** Improve-only check for chase vs live/local stop. */
+/** Minimum SL improvement (price units) before another Capital/MT4 modify. */
+export function scalpMinStopImprovement(symbol: string): number {
+  const pip = instrumentPipSize(symbol);
+  const minD = capitalMinStopDistance(symbol);
+  return Math.max(pip * 3, minD * 0.15);
+}
+
+/** Improve-only check for chase vs live/local stop (optional min bump). */
 export function scalpChaseIsImprovement(input: {
   direction: 'BUY' | 'SELL';
   candidate: number;
   current: number | null | undefined;
+  /** When set, require at least this much tighten (VS-System anti-spam). */
+  minBump?: number;
 }): boolean {
   const cand = Number(input.candidate);
   if (!Number.isFinite(cand)) return false;
   const cur = input.current;
   if (cur == null || !Number.isFinite(cur) || cur === 0) return true;
-  return input.direction === 'BUY' ? cand > cur + 1e-12 : cand < cur - 1e-12;
+  const bump =
+    input.minBump != null && Number.isFinite(input.minBump) && input.minBump > 0
+      ? input.minBump
+      : 1e-12;
+  return input.direction === 'BUY' ? cand >= cur + bump : cand <= cur - bump;
 }
 
 export {

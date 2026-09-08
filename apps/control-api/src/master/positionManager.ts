@@ -33,6 +33,7 @@ import {
   scalpChaseIsImprovement,
   scalpInitialBrokerStop,
   scalpInitialStopDistance,
+  scalpMinStopImprovement,
   scalpPctLockBrokerStop,
 } from './scalpPctChase.js';
 import type {
@@ -112,12 +113,48 @@ export class PositionManager {
   private open = new Map<string, ManagedPosition>();
   /** VS-System: skip resending the same rejected trail/BE level until backoff expires */
   private modifyBackoff = new Map<string, { until: number; level: number }>();
+  /** Permanent skip of identical rejected stop until a different candidate (VS-System). */
+  private rejectedStopLevel = new Map<string, number>();
   /** VS-System naked SL recovery throttle */
   private nakedRecoveryAt = new Map<string, number>();
   /** VS-System escalate distance on reject: multipliers [1,2,3,5] */
   private nakedRecoveryLevel = new Map<string, number>();
   private static readonly NAKED_RECOVERY_MS = 8_000;
   private static readonly NAKED_RECOVERY_MULTS = [1, 2, 3, 5] as const;
+
+  private clearModifyReject(positionId: string) {
+    this.modifyBackoff.delete(positionId);
+    this.rejectedStopLevel.delete(positionId);
+  }
+
+  private async noteModifyReject(
+    positionId: string,
+    level: number,
+    detail: string
+  ): Promise<void> {
+    const { capitalModifyRejectBackoffMs } = await import('./capitalConfirm.js');
+    this.modifyBackoff.set(positionId, {
+      until: Date.now() + capitalModifyRejectBackoffMs(detail || ''),
+      level,
+    });
+    this.rejectedStopLevel.set(positionId, level);
+  }
+
+  /** True when this exact stop was rejected (permanent) or still in time backoff. */
+  private shouldSkipModifyLevel(
+    positionId: string,
+    level: number,
+    opts?: { timeGateAll?: boolean }
+  ): boolean {
+    const rejected = this.rejectedStopLevel.get(positionId);
+    if (rejected != null && Math.abs(rejected - level) < 1e-9) return true;
+    const backoff = this.modifyBackoff.get(positionId);
+    if (!backoff) return false;
+    const now = Date.now();
+    if (now >= backoff.until) return false;
+    if (opts?.timeGateAll) return true;
+    return Math.abs(backoff.level - level) < 1e-9;
+  }
 
   list(): ManagedPosition[] {
     return [...this.open.values()];
@@ -129,6 +166,9 @@ export class PositionManager {
 
   /** Operator / manual close — remove from local book after broker close succeeds. */
   drop(position_id: string): boolean {
+    this.clearModifyReject(position_id);
+    this.nakedRecoveryAt.delete(position_id);
+    this.nakedRecoveryLevel.delete(position_id);
     return this.open.delete(position_id);
   }
 
@@ -957,13 +997,7 @@ export class PositionManager {
     });
     if (clamped == null) return false;
 
-    const backoff = this.modifyBackoff.get(pos.position_id);
-    const now = Date.now();
-    if (
-      backoff &&
-      now < backoff.until &&
-      Math.abs(backoff.level - clamped) < 1e-9
-    ) {
+    if (this.shouldSkipModifyLevel(pos.position_id, clamped)) {
       return false;
     }
 
@@ -975,14 +1009,10 @@ export class PositionManager {
     );
     if (mod.ok) {
       pos.stop_loss = clamped;
-      this.modifyBackoff.delete(pos.position_id);
+      this.clearModifyReject(pos.position_id);
       return true;
     }
-    const { capitalModifyRejectBackoffMs } = await import('./capitalConfirm.js');
-    this.modifyBackoff.set(pos.position_id, {
-      until: now + capitalModifyRejectBackoffMs(mod.detail || ''),
-      level: clamped,
-    });
+    await this.noteModifyReject(pos.position_id, clamped, mod.detail || '');
     return false;
   }
 
@@ -1066,16 +1096,12 @@ export class PositionManager {
     );
     if (mod.ok) {
       pos.stop_loss = recovery;
-      this.modifyBackoff.delete(pos.position_id);
+      this.clearModifyReject(pos.position_id);
       this.nakedRecoveryLevel.delete(pos.position_id);
       return;
     }
     this.nakedRecoveryLevel.set(pos.position_id, level + 1);
-    const { capitalModifyRejectBackoffMs } = await import('./capitalConfirm.js');
-    this.modifyBackoff.set(pos.position_id, {
-      until: now + capitalModifyRejectBackoffMs(mod.detail || ''),
-      level: recovery,
-    });
+    await this.noteModifyReject(pos.position_id, recovery, mod.detail || '');
   }
 
   /**
@@ -1144,17 +1170,14 @@ export class PositionManager {
         direction: pos.side,
         candidate,
         current: pos.stop_loss,
+        minBump: scalpMinStopImprovement(pos.epic),
       })
     ) {
       return;
     }
 
-    const backoff = this.modifyBackoff.get(pos.position_id);
-    if (
-      backoff &&
-      now < backoff.until &&
-      Math.abs(backoff.level - candidate) < 1e-9
-    ) {
+    // Time-gate all chase during backoff; never retry identical rejected level
+    if (this.shouldSkipModifyLevel(pos.position_id, candidate, { timeGateAll: true })) {
       return;
     }
 
@@ -1176,8 +1199,12 @@ export class PositionManager {
         direction: pos.side,
         candidate: stop,
         current: pos.stop_loss,
+        minBump: scalpMinStopImprovement(pos.epic),
       })
     ) {
+      return;
+    }
+    if (this.shouldSkipModifyLevel(pos.position_id, stop, { timeGateAll: true })) {
       return;
     }
 
@@ -1190,14 +1217,10 @@ export class PositionManager {
     );
     if (mod.ok) {
       pos.stop_loss = stop;
-      this.modifyBackoff.delete(pos.position_id);
+      this.clearModifyReject(pos.position_id);
       return;
     }
-    const { capitalModifyRejectBackoffMs } = await import('./capitalConfirm.js');
-    this.modifyBackoff.set(pos.position_id, {
-      until: now + capitalModifyRejectBackoffMs(mod.detail || ''),
-      level: stop,
-    });
+    await this.noteModifyReject(pos.position_id, stop, mod.detail || '');
   }
 
   /**
@@ -1255,9 +1278,7 @@ export class PositionManager {
     });
     if (be == null) return;
 
-    const backoff = this.modifyBackoff.get(pos.position_id);
-    const now = Date.now();
-    if (backoff && now < backoff.until && Math.abs(backoff.level - be) < 1e-9) {
+    if (this.shouldSkipModifyLevel(pos.position_id, be)) {
       return;
     }
     const mod = await this.brokerModify(
@@ -1268,14 +1289,10 @@ export class PositionManager {
     );
     if (mod.ok) {
       pos.stop_loss = be;
-      this.modifyBackoff.delete(pos.position_id);
+      this.clearModifyReject(pos.position_id);
       return;
     }
-    const { capitalModifyRejectBackoffMs } = await import('./capitalConfirm.js');
-    this.modifyBackoff.set(pos.position_id, {
-      until: now + capitalModifyRejectBackoffMs(mod.detail || ''),
-      level: be,
-    });
+    await this.noteModifyReject(pos.position_id, be, mod.detail || '');
   }
 
   /**
@@ -1304,6 +1321,7 @@ export class PositionManager {
       }
     }
     if (next == null) return;
+    if (this.shouldSkipModifyLevel(pos.position_id, next)) return;
     const mod = await this.brokerModify(
       broker,
       pos,
@@ -1312,13 +1330,9 @@ export class PositionManager {
     );
     if (mod.ok) {
       pos.stop_loss = next;
-      this.modifyBackoff.delete(pos.position_id);
+      this.clearModifyReject(pos.position_id);
     } else {
-      const { capitalModifyRejectBackoffMs } = await import('./capitalConfirm.js');
-      this.modifyBackoff.set(pos.position_id, {
-        until: Date.now() + capitalModifyRejectBackoffMs(mod.detail || ''),
-        level: next,
-      });
+      await this.noteModifyReject(pos.position_id, next, mod.detail || '');
     }
   }
 

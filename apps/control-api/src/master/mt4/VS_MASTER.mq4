@@ -8,7 +8,8 @@
 #property strict
 
 extern string BridgePath = "";
-extern int    MagicNumber = 60001;
+// Must match Mt4FileBroker OPEN magic (Check- 50001). Mismatch → status filter hides live tickets.
+extern int    MagicNumber = 50001;
 extern int    MaxBarsM1   = 300;
 extern int    ExportSec   = 1;
 
@@ -254,7 +255,11 @@ bool DoOpen(string json, string id)
       AckSimple(id, false, 0, "OrderSend " + IntegerToString(GetLastError()));
       return(false);
    }
-   Ack(id, true, ticket, "", price, 0);
+   // Broker open price is truth — request Bid/Ask is only a hint and hides slippage
+   double fill = price;
+   if(OrderSelect(ticket, SELECT_BY_TICKET))
+      fill = OrderOpenPrice();
+   Ack(id, true, ticket, "", fill, 0);
    return(true);
 }
 
