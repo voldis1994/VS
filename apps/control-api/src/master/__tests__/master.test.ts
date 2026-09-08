@@ -70,7 +70,7 @@ describe('VS MASTER analysis', () => {
     const bars = barsTrendUp();
     const a = analyzeBars(bars, 0.4);
     expect(a.trend_dir).toBe('UP');
-    expect(['TREND', 'BREAKOUT', 'HIGH_VOLATILITY', 'LOW_VOLATILITY']).toContain(a.regime);
+    expect(['TREND', 'TREND_UP', 'TREND_DOWN', 'BREAKOUT', 'BREAKOUT_UP', 'BREAKOUT_DOWN', 'HIGH_VOLATILITY', 'LOW_VOLATILITY']).toContain(a.regime);
     const buy = buildBuyComponents(a);
     const sell = buildSellComponents(a);
     expect(buy.momentum).toBeGreaterThan(sell.momentum);

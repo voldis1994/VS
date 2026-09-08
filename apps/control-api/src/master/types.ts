@@ -6,8 +6,12 @@ export type DecisionKind = 'BUY' | 'SELL' | 'WAIT' | 'BLOCK';
 
 export type MarketRegime =
   | 'TREND'
+  | 'TREND_UP'
+  | 'TREND_DOWN'
   | 'RANGE'
   | 'BREAKOUT'
+  | 'BREAKOUT_UP'
+  | 'BREAKOUT_DOWN'
   | 'HIGH_VOLATILITY'
   | 'LOW_VOLATILITY'
   | 'UNSTABLE'

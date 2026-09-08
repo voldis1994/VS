@@ -75,6 +75,7 @@ type MasterStatus = {
   last_persist_error: string | null;
   entries_armed: boolean;
   entries_pause_reason: string | null;
+  structure_seed_source?: string;
   news_window?: {
     impact: string;
     window_active: boolean;
@@ -283,6 +284,21 @@ export function MasterPage() {
             : 'armed',
           bad: status.entries_armed === false,
           ok: status.entries_armed !== false,
+        },
+        {
+          k: 'Structure seed',
+          v: status.structure_seed_source || '—',
+          bad:
+            status.mode === 'LIVE' &&
+            !!status.capital_live_attached &&
+            !!status.structure_seed_source &&
+            status.structure_seed_source !== 'capital_ohlc' &&
+            status.structure_seed_source !== 'none',
+          ok:
+            !status.capital_live_attached ||
+            !status.structure_seed_source ||
+            status.structure_seed_source === 'capital_ohlc' ||
+            status.structure_seed_source === 'none',
         },
         { k: 'AI mode', v: status.ai_mode || '—' },
         { k: 'Running', v: status.running ? 'YES' : 'NO', ok: status.running },

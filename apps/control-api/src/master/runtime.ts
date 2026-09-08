@@ -39,6 +39,7 @@ import {
 } from './positionManager.js';
 import { evaluateRisk } from './risk.js';
 import { setupKey } from './decision.js';
+import { capitalLiveEntriesAllowed } from './liveFeed.js';
 import {
   capitalCloseExitReason,
   preferCloseFillPnl,
@@ -129,6 +130,8 @@ export type MasterStatus = {
   last_persist_error: string | null;
   entries_armed: boolean;
   entries_pause_reason: string | null;
+  /** Live structure seed provenance (capital_ohlc required for Capital LIVE entries) */
+  structure_seed_source: string;
   news_window: NewsWindowState;
   /** Live quote snapshot for dashboard freshness */
   quote: {
@@ -236,6 +239,17 @@ class MasterRuntime {
   /** When false, manage exits still run but new entries are blocked (desk dual-brain guard). */
   entries_armed = true;
   entries_pause_reason: string | null = null;
+  /**
+   * Live structure OHLC provenance — Capital LIVE entries require capital_ohlc.
+   * Yahoo/synthetic/mt4 must not drive regime against Capital marks.
+   */
+  structure_seed_source:
+    | 'yahoo_ohlc'
+    | 'capital_ohlc'
+    | 'mt4_ohlc'
+    | 'broker_ohlc'
+    | 'synthetic_fallback'
+    | 'none' = 'none';
   /**
    * Last AI allow_close from pipeline cycle — soft exits on next manageTick.
    * Defaults true (AI off / unknown).
@@ -1181,6 +1195,29 @@ class MasterRuntime {
     }
   }
 
+  /**
+   * Capital LIVE: pause new entries when structure is not venue OHLC.
+   * Clears only our own structure_seed_* pause when seed recovers.
+   */
+  applyStructureSeedGate(seed_source: string) {
+    this.structure_seed_source = seed_source as MasterRuntime['structure_seed_source'];
+    const capitalLive =
+      this.cfg.mode === 'LIVE' &&
+      this.broker instanceof CapitalBroker &&
+      !this.broker.paper;
+    if (!capitalLive) return;
+    const allowSynthetic =
+      !!process.env.VITEST || process.env.MASTER_BROKER_FEED_SYNTHETIC === 'true';
+    const ok = capitalLiveEntriesAllowed(seed_source, { allowSynthetic });
+    if (!ok) {
+      this.setEntriesArmed(false, `structure_seed_not_capital:${seed_source}`);
+      return;
+    }
+    if (this.entries_pause_reason?.startsWith('structure_seed_not_capital')) {
+      this.setEntriesArmed(true);
+    }
+  }
+
   /** Pure evaluation for dashboard — does not send orders (same cycle as tick, no execute). */
   async evaluate(bars: Bar[], quote: Quote) {
     this.last_bars = bars;
@@ -1461,6 +1498,7 @@ class MasterRuntime {
       scalp_pct_chase: this.cfg.scalp_pct_chase,
       scalp_lock_pct: this.cfg.scalp_lock_pct,
       stale_quote_ms: this.cfg.stale_quote_ms,
+      live_regime: structure?.regime ?? null,
     });
     const exit_reasons = managed.closed.map((c) => c.reason);
     if (exit_reasons.length) this.last_exit_reason = exit_reasons.at(-1)!;
@@ -2680,6 +2718,7 @@ class MasterRuntime {
             );
           }
           seeded = true;
+          this.applyStructureSeedGate(builder.seed_source);
           const streamNote =
             this.broker instanceof CapitalBroker &&
             this.broker.isMarketStreamHealthy(undefined, this.epic)
@@ -2714,10 +2753,13 @@ class MasterRuntime {
               structureEveryMs,
               brokerHist
             );
+            this.applyStructureSeedGate(builder.seed_source);
             if (refreshed) {
               this.broker_detail = `${this.broker_detail || ''};${refreshed}`.slice(-400);
             }
           }
+        } else {
+          this.applyStructureSeedGate(builder.seed_source);
         }
         const { bars } = builder.pushTick(quote.mid);
         if (bars.length < 5) return;
@@ -3031,6 +3073,7 @@ class MasterRuntime {
       scalp_pct_chase: this.cfg.scalp_pct_chase,
       scalp_lock_pct: this.cfg.scalp_lock_pct,
       stale_quote_ms: this.cfg.stale_quote_ms,
+      live_regime: structure?.regime ?? null,
     });
     for (const c of managed.closed) {
       if (c.outcome.pnl_proven !== false) {
@@ -3223,6 +3266,7 @@ class MasterRuntime {
       last_persist_error: this.last_persist_error,
       entries_armed: this.entries_armed,
       entries_pause_reason: this.entries_pause_reason,
+      structure_seed_source: this.structure_seed_source,
       news_window: resolveNewsWindow(Date.now(), this.epic),
       quote: quote
         ? {

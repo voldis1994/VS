@@ -156,6 +156,23 @@ export function isMeaningfulBar(b: Bar, minRangeAbs = 0.05): boolean {
  * Rolling bar builder from live ticks.
  * Yahoo structure OHLC is preserved; flat 10s closes never displace it.
  */
+/**
+ * Capital LIVE entries require venue OHLC structure — Yahoo/synthetic must not
+ * drive regime/candidates against Capital marks. Manage-only stays allowed.
+ * Test/demo synthetic feeds opt out via allowSynthetic.
+ */
+export function capitalLiveEntriesAllowed(
+  seed_source: string,
+  opts?: { allowSynthetic?: boolean }
+): boolean {
+  const s = String(seed_source || 'none');
+  if (s === 'capital_ohlc') return true;
+  if (opts?.allowSynthetic && (s === 'synthetic_fallback' || s === 'none')) {
+    return true;
+  }
+  return false;
+}
+
 export class LiveBarBuilder {
   /** Real Yahoo (or synthetic seed) structure — analysis backbone */
   private structureBars: Bar[] = [];
@@ -180,6 +197,18 @@ export class LiveBarBuilder {
     private readonly maxBars = 80,
     private readonly maxTickOverlay = 8
   ) {}
+
+  /**
+   * Capital LIVE entries require venue OHLC structure — Yahoo/synthetic must not
+   * drive regime/candidates against Capital marks. Manage-only stays allowed.
+   * Test/demo synthetic feeds opt out via allowSynthetic.
+   */
+  static capitalLiveEntriesAllowed(
+    seed_source: LiveBarBuilder['seed_source'] | string,
+    opts?: { allowSynthetic?: boolean }
+  ): boolean {
+    return capitalLiveEntriesAllowed(seed_source, opts);
+  }
 
   /** Install real OHLC history (preferred). */
   seedBars(bars: Bar[], source: LiveBarBuilder['seed_source'] = 'yahoo_ohlc') {

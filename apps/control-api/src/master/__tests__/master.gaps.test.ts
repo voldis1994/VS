@@ -6,7 +6,7 @@ import { buildCandidates } from '../candidates.js';
 import { masterOwnsManageSafely, masterOwnsPipeline, syncMasterEntryOwnership } from '../deskBridge.js';
 import { applyMarketFilters } from '../filters.js';
 import { DEFAULT_MASTER_CONFIG, MasterPipeline } from '../pipeline.js';
-import { PositionManager } from '../positionManager.js';
+import { PositionManager, mapRegimeToPlaybook, toDeskRegime } from '../positionManager.js';
 import { Mt4FileBroker, PaperBroker, epicsMatch, normalizeEpicKey } from '../broker.js';
 import { Mt4BridgeSimulator } from '../mt4Sim.js';
 import { syncPositionsWithBroker } from '../positionSync.js';
@@ -189,6 +189,86 @@ describe('MASTER filters + dual flow', () => {
       if (prev === undefined) delete process.env.MASTER_NEWS_IMPACT;
       else process.env.MASTER_NEWS_IMPACT = prev;
     }
+  });
+
+  it('mapRegimeToPlaybook: TREND→LONG, RANGE→FADE, BREAKOUT→SCALP (desk parity)', () => {
+    expect(mapRegimeToPlaybook('TREND_UP')).toBe('LONG');
+    expect(mapRegimeToPlaybook('TREND', { trend_dir: 'DOWN' })).toBe('LONG');
+    expect(toDeskRegime('TREND', { trend_dir: 'DOWN' })).toBe('TREND_DOWN');
+    expect(mapRegimeToPlaybook('RANGE')).toBe('FADE');
+    expect(mapRegimeToPlaybook('BREAKOUT_UP')).toBe('SCALP');
+    expect(mapRegimeToPlaybook('LOW_VOLATILITY')).toBe('SCALP'); // COMPRESSION→WAIT→SCALP
+  });
+
+  it('BestOutcome ThesisFailure fires on live TREND_UP vs LONG SELL', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    broker.setQuote({
+      bid: entry - 0.05,
+      ask: entry + 0.05,
+      mid: entry,
+      spread: 0.1,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'thesis-selllllllllllll',
+      epic: 'GOLD',
+      side: 'SELL',
+      size: 0.01,
+      stop_level: entry + 5,
+      profit_level: entry - 10,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-thesis',
+      intent_id: 'thesis-1',
+      epic: 'GOLD',
+      side: 'SELL',
+      size: 0.01,
+      entry,
+      stop_loss: entry + 5,
+      take_profit: entry - 10,
+      entry_at: new Date(Date.now() - 120_000).toISOString(),
+      decision: {
+        decision_id: 'd',
+        kind: 'SELL',
+        side: 'SELL',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis({
+          regime: 'TREND_DOWN',
+          trend_dir: 'DOWN',
+          structure_bias: 'BEARISH',
+        }),
+        expectancy: null,
+      },
+    });
+    const pos = pm.get(placed.position_id!)!;
+    expect(pos.playbook_at_entry).toBe('LONG');
+    expect(pos.regime_at_entry).toBe('TREND_DOWN');
+    // Slightly underwater so thesis can fire (fav <= 0); live regime flipped against SELL
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: entry + 0.2,
+        ask: entry + 0.3,
+        mid: entry + 0.25,
+        spread: 0.1,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      max_hold_ms: 0,
+      breakeven_progress: 0,
+      live_regime: 'TREND_UP',
+    });
+    expect(managed.closed.some((c) => /ThesisFailure/.test(c.reason))).toBe(true);
   });
 
   it('blocks BUY against dump but can leave SELL valid', () => {
@@ -1534,6 +1614,84 @@ describe('partial_close persist + Check be_start', () => {
       breakeven_progress: 0,
     });
     // Gap-through should clear all three levels in one tick
+    expect(managed.closed.length).toBeGreaterThanOrEqual(2);
+    expect(pm.count()).toBe(0);
+    expect(managed.closed.some((c) => /MULTI_TP_.*FINAL|MULTI_TP_3/.test(c.reason))).toBe(
+      true
+    );
+  });
+
+  it('VS-System multi-TP SELL scales then finals on gap-through', async () => {
+    const { buildEqualMultiTpPlan } = await import('../multiTp.js');
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    const plan = buildEqualMultiTpPlan({
+      side: 'SELL',
+      entry,
+      initial_volume: 0.03,
+      count: 3,
+      atr: 3,
+      atr_tp_mult: 1,
+      volume_step: 0.01,
+    });
+    expect(plan.length).toBe(3);
+    broker.setQuote({
+      bid: plan[2]!.price - 0.2,
+      ask: plan[2]!.price - 0.1,
+      mid: plan[2]!.price - 0.15,
+      spread: 0.1,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'multi-tp-selllllllllllll',
+      epic: 'GOLD',
+      side: 'SELL',
+      size: 0.03,
+      stop_level: entry + 2,
+      profit_level: plan[2]!.price,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-mtp-sell',
+      intent_id: 'mtp-sell-1',
+      epic: 'GOLD',
+      side: 'SELL',
+      size: 0.03,
+      entry,
+      stop_loss: entry + 2,
+      take_profit: plan[2]!.price,
+      decision: {
+        decision_id: 'd',
+        kind: 'SELL',
+        side: 'SELL',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis({ atr: 3, regime: 'TREND_DOWN', trend_dir: 'DOWN' }),
+        expectancy: null,
+      },
+      multi_tp_levels: plan,
+    });
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: plan[2]!.price - 0.2,
+        ask: plan[2]!.price - 0.1,
+        mid: plan[2]!.price - 0.15,
+        spread: 0.1,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      volume_step: 0.01,
+      max_hold_ms: 0,
+      breakeven_progress: 0,
+    });
     expect(managed.closed.length).toBeGreaterThanOrEqual(2);
     expect(pm.count()).toBe(0);
     expect(managed.closed.some((c) => /MULTI_TP_.*FINAL|MULTI_TP_3/.test(c.reason))).toBe(

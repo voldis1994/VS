@@ -4,6 +4,7 @@
  */
 import { createHash } from 'crypto';
 import { decideBestOutcomeExit, favorableMove } from '../services/exitManage.js';
+import { playbookFromRegime } from '../services/playbooks.js';
 import { ema13CrossExit, ema3PriceSide, ema3PriceThroughExit } from './analysis.js';
 import type { MasterBroker } from './broker.js';
 import { epicsMatch } from './broker.js';
@@ -73,6 +74,10 @@ export type ManagedPosition = {
   mae: number;
   decision: MasterDecision;
   regime_at_entry: string;
+  /** Locked playbook at entry (desk LONG/SCALP/FADE) */
+  playbook_at_entry?: 'LONG' | 'SCALP' | 'FADE';
+  /** Locked setup kind at entry — CONTINUATION / FADE / … */
+  entry_setup?: string;
   /** Reader-style: one scale-out already taken (or external shrink) */
   partial_close_applied?: boolean;
   /** VS-System multi-TP ladder (app-managed intermediates) */
@@ -276,7 +281,19 @@ export class PositionManager {
       mfe: 0,
       mae: 0,
       decision: input.decision,
-      regime_at_entry: input.decision.analysis.regime,
+      regime_at_entry: toDeskRegime(
+        input.decision.analysis.regime,
+        input.decision.analysis
+      ),
+      playbook_at_entry: mapRegimeToPlaybook(
+        input.decision.analysis.regime,
+        input.decision.analysis
+      ),
+      entry_setup:
+        mapRegimeToPlaybook(input.decision.analysis.regime, input.decision.analysis) ===
+        'FADE'
+          ? 'FADE'
+          : 'CONTINUATION',
       partial_close_applied: false,
       multi_tp_levels: levels,
     };
@@ -339,6 +356,8 @@ export class PositionManager {
      * BestOutcome) but still run TIME_STOP + naked SL recovery — feed-miss exits.
      */
     stale_quote_ms?: number;
+    /** Live analysis regime for ThesisFailure (desk RegimeName when available) */
+    live_regime?: string | null;
   }): Promise<ManageTickResult> {
     const { broker, pipeline, quote } = input;
     const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
@@ -941,9 +960,14 @@ export class PositionManager {
                   mfe: pos.mfe,
                   mae: pos.mae,
                   peak_retention,
-                  regime: pos.decision.analysis.regime,
-                  playbook: mapRegimeToPlaybook(pos.regime_at_entry),
-                  entry_setup: 'CONTINUATION',
+                  regime: toDeskRegime(
+                    input.live_regime || pos.decision.analysis.regime,
+                    pos.decision.analysis
+                  ),
+                  playbook:
+                    pos.playbook_at_entry ??
+                    mapRegimeToPlaybook(pos.regime_at_entry, pos.decision.analysis),
+                  entry_setup: pos.entry_setup ?? 'CONTINUATION',
                 },
                 mark
               )
@@ -2061,10 +2085,41 @@ export class PositionManager {
   }
 }
 
-function mapRegimeToPlaybook(regime: string): 'LONG' | 'SCALP' | 'FADE' {
-  if (regime === 'TREND' || regime === 'BREAKOUT') return 'LONG';
-  if (regime === 'RANGE' || regime === 'LOW_VOLATILITY') return 'SCALP';
-  return 'SCALP';
+/**
+ * Map MASTER coarse/directional regime → desk RegimeName so
+ * thesisFailureForPlaybook / playbookFromRegime match.
+ */
+export function toDeskRegime(
+  regime: string,
+  analysis?: { trend_dir?: string; structure_bias?: string } | null
+): string {
+  const r = String(regime || '').trim().toUpperCase();
+  if (r === 'TREND') {
+    if (analysis?.trend_dir === 'DOWN' || analysis?.structure_bias === 'BEARISH') {
+      return 'TREND_DOWN';
+    }
+    return 'TREND_UP';
+  }
+  if (r === 'BREAKOUT') {
+    if (analysis?.trend_dir === 'DOWN' || analysis?.structure_bias === 'BEARISH') {
+      return 'BREAKOUT_DOWN';
+    }
+    return 'BREAKOUT_UP';
+  }
+  if (r === 'HIGH_VOLATILITY') return 'EXPANSION';
+  if (r === 'LOW_VOLATILITY') return 'COMPRESSION';
+  if (r === 'UNSTABLE' || r === 'UNKNOWN' || !r) return 'RANGE';
+  return r;
+}
+
+/** Desk playbook from MASTER/desk regime labels (RANGE → FADE). */
+export function mapRegimeToPlaybook(
+  regime: string,
+  analysis?: { trend_dir?: string; structure_bias?: string } | null
+): 'LONG' | 'SCALP' | 'FADE' {
+  const book = playbookFromRegime(toDeskRegime(regime, analysis));
+  if (book === 'WAIT') return 'SCALP';
+  return book;
 }
 
 /** Floating UPL across open positions using protective marks + broker UPL when known. */

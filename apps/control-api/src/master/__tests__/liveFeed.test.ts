@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { analyzeBars } from '../analysis.js';
-import { isMeaningfulBar, LiveBarBuilder } from '../liveFeed.js';
+import { capitalLiveEntriesAllowed, isMeaningfulBar, LiveBarBuilder } from '../liveFeed.js';
 import { PaperBroker } from '../broker.js';
 import { DEFAULT_MASTER_CONFIG, GOLD_SPEC, MasterPipeline } from '../pipeline.js';
 import { PositionManager } from '../positionManager.js';
@@ -81,6 +81,14 @@ describe('VS MASTER live bar builder', () => {
     });
     expect(detail).toBe('mt4_bars_m1_15');
     expect(b.seed_source).toBe('mt4_ohlc');
+  });
+
+  it('capitalLiveEntriesAllowed requires capital_ohlc (synthetic only when opted in)', () => {
+    expect(capitalLiveEntriesAllowed('capital_ohlc')).toBe(true);
+    expect(capitalLiveEntriesAllowed('yahoo_ohlc')).toBe(false);
+    expect(capitalLiveEntriesAllowed('synthetic_fallback')).toBe(false);
+    expect(capitalLiveEntriesAllowed('mt4_ohlc')).toBe(false);
+    expect(capitalLiveEntriesAllowed('synthetic_fallback', { allowSynthetic: true })).toBe(true);
   });
 
   it('ATR ignores micro TRs mixed into structure (10s onto 5m)', () => {

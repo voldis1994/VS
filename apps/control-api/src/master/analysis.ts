@@ -439,8 +439,15 @@ function classifyRegime(input: {
   const broke =
     input.last.close > input.swing_high - span * 0.02 ||
     input.last.close < input.swing_low + span * 0.02;
-  if (broke && input.trend_strength > 0.45) return 'BREAKOUT';
-  if (input.trend_dir !== 'SIDEWAYS' && input.trend_strength >= 0.35) return 'TREND';
+  // Directional labels match desk RegimeName so BestOutcome ThesisFailure can fire.
+  if (broke && input.trend_strength > 0.45) {
+    const down =
+      input.trend_dir === 'DOWN' || input.structure_bias === 'BEARISH';
+    return down ? 'BREAKOUT_DOWN' : 'BREAKOUT_UP';
+  }
+  if (input.trend_dir !== 'SIDEWAYS' && input.trend_strength >= 0.35) {
+    return input.trend_dir === 'DOWN' ? 'TREND_DOWN' : 'TREND_UP';
+  }
   if (input.trend_strength < 0.2) return 'RANGE';
   return 'UNKNOWN';
 }
