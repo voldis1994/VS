@@ -930,6 +930,110 @@ describe('partial close scale-out', () => {
       else process.env.MASTER_MT4_ACK_POLLS = prevPolls;
     }
   });
+
+  it('partial that full-closes journals entire size (Check- EA parity)', async () => {
+    const prevFast = process.env.MASTER_CONFIRM_FAST;
+    const prevState = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    process.env.MASTER_STATE_DIR = mkdtempSync(join(tmpdir(), 'mt4-fullpartial-state-'));
+    const root = mkdtempSync(join(tmpdir(), 'mt4-fullpartial-'));
+    const sim = new Mt4BridgeSimulator(root);
+    sim.forceFullCloseOnPartial = true;
+    sim.setQuote(4410, 4410.4);
+    sim.start(20);
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    try {
+      const placed = await broker.placeOrder({
+        intent_id: `mt4fullpart${Date.now()}`,
+        epic: 'XAUUSD',
+        side: 'BUY',
+        size: 0.1,
+        stop_level: 4390,
+        profit_level: 4420,
+      });
+      expect(placed.ok).toBe(true);
+      const pm = new PositionManager();
+      const pipe = new MasterPipeline('PAPER');
+      pm.register({
+        position_id: placed.position_id!,
+        opportunity_id: 'opp-full-partial',
+        intent_id: 'fp-1',
+        epic: 'XAUUSD',
+        side: 'BUY',
+        size: 0.1,
+        entry: 4400,
+        stop_loss: 4390,
+        take_profit: 4420,
+        decision: {
+          decision_id: 'd',
+          kind: 'BUY',
+          side: 'BUY',
+          score: 0.7,
+          block_reason: null,
+          buy: null as never,
+          sell: null as never,
+          analysis: {
+            regime: 'TREND',
+            market_state: 't',
+            momentum_score: 0.5,
+            momentum_dir: 'UP',
+            trend_dir: 'UP',
+            trend_strength: 0.8,
+            structure_bias: 'BULLISH',
+            swing_high: 4420,
+            swing_low: 4390,
+            buy_pressure: 0.7,
+            sell_pressure: 0.3,
+            behavior_bull: 0.7,
+            behavior_bear: 0.3,
+            impact_score: 0.5,
+            context_quality: 0.8,
+            volatility: 0.001,
+            atr: 2,
+          },
+          expectancy: null,
+        },
+      });
+      pipe.journal.recordOpportunity({
+        id: 'opp-full-partial',
+        mode: 'LIVE',
+        epic: 'XAUUSD',
+        decision: pm.get(placed.position_id!)!.decision,
+        risk: { allowed: true, volume: 0.1, risk_amount: 0, reasons: [] },
+        executed: true,
+      });
+      const managed = await pm.manageTick({
+        broker,
+        pipeline: pipe,
+        quote: {
+          bid: 4410,
+          ask: 4410.4,
+          mid: 4410.2,
+          spread: 0.4,
+          ts_ms: Date.now(),
+        },
+        instrument_point_value: 1,
+        partial_close_progress: 0.5,
+        partial_close_volume: 0.5,
+        breakeven_progress: 0,
+        max_hold_ms: 0,
+        allow_close: true,
+      });
+      expect(managed.closed).toHaveLength(1);
+      expect(managed.closed[0]!.outcome.volume).toBeCloseTo(0.1, 6);
+      expect(managed.closed[0]!.outcome.exit_reason).toMatch(/FULL/);
+      expect(pm.count()).toBe(0);
+      const part = await broker.listOpenPositions('XAUUSD');
+      expect(part.positions.length).toBe(0);
+    } finally {
+      sim.stop();
+      if (prevFast === undefined) delete process.env.MASTER_CONFIRM_FAST;
+      else process.env.MASTER_CONFIRM_FAST = prevFast;
+      if (prevState === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prevState;
+    }
+  });
 });
 
 describe('manageTick close_failed visibility', () => {

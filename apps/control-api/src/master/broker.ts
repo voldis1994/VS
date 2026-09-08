@@ -1850,9 +1850,12 @@ export class Mt4FileBroker implements MasterBroker {
     });
     if (!mod.ok) {
       const closed = await this.closePosition(input.position_id);
+      const kind = /tp_unverified/i.test(String(mod.detail || ''))
+        ? 'MT4_TP_ATTACH_FAILED'
+        : 'MT4_SL_ATTACH_FAILED';
       return {
         ok: false,
-        detail: `MT4_SL_ATTACH_FAILED:mod=${mod.detail};close=${closed.ok ? 'ok' : closed.detail}`,
+        detail: `${kind}:mod=${mod.detail};close=${closed.ok ? 'ok' : closed.detail}`,
       };
     }
 
@@ -2359,11 +2362,17 @@ export class Mt4FileBroker implements MasterBroker {
           ack_status: 'SUCCESS',
           ticket: String(position_id),
           fill_price,
-          detail: 'ACK_SUCCESS_PARTIAL',
+          detail:
+            reduced.remaining != null && reduced.remaining <= 1e-9
+              ? 'ACK_SUCCESS_PARTIAL_FULL'
+              : 'ACK_SUCCESS_PARTIAL',
         });
         return {
           ok: true,
-          detail: `mt4_partial_closed ticket=${position_id} rem=${reduced.remaining}`,
+          detail:
+            reduced.remaining != null && reduced.remaining <= 1e-9
+              ? `mt4_partial_became_full ticket=${position_id} before=${beforeSize} want=${closeLot}`
+              : `mt4_partial_closed ticket=${position_id} rem=${reduced.remaining}`,
           fill_price,
           fill_pnl,
           remaining_size: reduced.remaining,
@@ -2522,18 +2531,42 @@ export class Mt4FileBroker implements MasterBroker {
 
     const waited = await this.waitAck(id);
     if (waited.ok) {
-      const wantSl = input.stop_level;
-      if (wantSl != null && Number.isFinite(wantSl)) {
-        const proved = await this.waitForStatusStop(String(input.position_id), Number(wantSl));
+      // Prove every protective level we actually wrote (not ACK-only).
+      // Use resolved payload values so preserved TP/SL cannot silently wipe.
+      const proveSl = slRounded ?? resolvedSl ?? null;
+      if (proveSl != null && Number.isFinite(proveSl) && proveSl > 0) {
+        const proved = await this.waitForStatusStop(
+          String(input.position_id),
+          Number(proveSl)
+        );
         if (!proved.ok) {
           updateTradeAck(id, {
             ack_status: 'FAILED',
             ticket: String(input.position_id),
-            detail: `mt4_modify_sl_unverified: want=${wantSl} got=${proved.observed}`,
+            detail: `mt4_modify_sl_unverified: want=${proveSl} got=${proved.observed}`,
           });
           return {
             ok: false,
-            detail: `mt4_modify_sl_unverified: want=${wantSl} got=${proved.observed}`,
+            detail: `mt4_modify_sl_unverified: want=${proveSl} got=${proved.observed}`,
+            order_id: id,
+          };
+        }
+      }
+      const proveTp = tpRounded ?? resolvedTp ?? null;
+      if (proveTp != null && Number.isFinite(proveTp) && proveTp > 0) {
+        const proved = await this.waitForStatusProfit(
+          String(input.position_id),
+          Number(proveTp)
+        );
+        if (!proved.ok) {
+          updateTradeAck(id, {
+            ack_status: 'FAILED',
+            ticket: String(input.position_id),
+            detail: `mt4_modify_tp_unverified: want=${proveTp} got=${proved.observed}`,
+          });
+          return {
+            ok: false,
+            detail: `mt4_modify_tp_unverified: want=${proveTp} got=${proved.observed}`,
             order_id: id,
           };
         }

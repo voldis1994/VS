@@ -880,6 +880,35 @@ describe('VS MASTER MT4 file bridge', () => {
     }
   });
 
+  it('MODIFY TP-only rejects ACK when status TP never moved', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-tpproof-'));
+    const sim = new Mt4BridgeSimulator(root);
+    sim.setQuote(4400, 4400.4);
+    sim.start(30);
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    try {
+      const placed = await broker.placeOrder({
+        intent_id: 'tpproofintent000000000001',
+        epic: 'XAUUSD',
+        side: 'BUY',
+        size: 0.03,
+        stop_level: 4390,
+        profit_level: 4420,
+      });
+      expect(placed.ok).toBe(true);
+      sim.ackModifyWithoutApply = true;
+      const mod = await broker.modifyPosition({
+        position_id: placed.position_id!,
+        profit_level: 4430,
+      });
+      expect(mod.ok).toBe(false);
+      expect(mod.detail).toMatch(/mt4_modify_tp_unverified/);
+    } finally {
+      sim.stop();
+    }
+  });
+
   it('MODIFY refuses trailingStop-only (no Capital native trail on MT4)', async () => {
     const root = mkdtempSync(join(tmpdir(), 'vs-mt4-no-native-'));
     const sim = new Mt4BridgeSimulator(root);

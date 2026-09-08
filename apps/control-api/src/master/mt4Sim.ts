@@ -38,6 +38,8 @@ export class Mt4BridgeSimulator {
   ignoreOpenTp = false;
   /** Test fault: MODIFY ACK without mutating SL/TP (prove status verification). */
   ackModifyWithoutApply = false;
+  /** Test fault: CLOSE ignores partial lot and full-closes (Check- EA parity). */
+  forceFullCloseOnPartial = false;
   /** Test fault: ACK fill differs from status open (prove fill preference). */
   ackFillOverride: number | null = null;
 
@@ -204,7 +206,11 @@ export class Mt4BridgeSimulator {
       const fill = p.side === 'BUY' ? this.bid : this.ask;
       const lotReq = Number(payload.lot || payload.volume || 0);
       let closeLot = p.lot;
-      if (lotReq > 0 && lotReq < p.lot - 1e-9) {
+      if (
+        !this.forceFullCloseOnPartial &&
+        lotReq > 0 &&
+        lotReq < p.lot - 1e-9
+      ) {
         closeLot = Math.min(p.lot, lotReq);
         // Leave dust below 0.01 → full close
         if (p.lot - closeLot < 0.01 - 1e-9) closeLot = p.lot;

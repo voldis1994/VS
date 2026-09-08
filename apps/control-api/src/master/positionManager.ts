@@ -707,17 +707,25 @@ export class PositionManager {
                 closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
                   ? Number(closeRes.fill_price)
                   : mark;
+              const rem =
+                closeRes.remaining_size != null && Number.isFinite(closeRes.remaining_size)
+                  ? Number(closeRes.remaining_size)
+                  : Math.max(0, pos.size - partial.close_size);
+              // Flat after a partial request = broker full-closed (Check- / dust) —
+              // journal the entire position size, not just the requested slice.
+              const closedVol =
+                rem <= 1e-9 ? pos.size : Math.max(0, pos.size - rem);
               const { pnl, from_broker } = resolveCloseMoneyPnl({
                 side: pos.side,
                 entry: pos.entry,
                 fill,
-                size: partial.close_size,
+                size: closedVol,
                 value_per_point_per_lot: pv,
                 fill_pnl: closeRes.fill_pnl,
               });
               const priced = applyCloseFees({
                 pnl,
-                volume: partial.close_size,
+                volume: closedVol,
                 from_broker,
               });
               const outcome: TradeOutcome = {
@@ -725,7 +733,7 @@ export class PositionManager {
                 side: pos.side,
                 entry: pos.entry,
                 exit: fill,
-                volume: partial.close_size,
+                volume: closedVol,
                 pnl: priced.pnl,
                 fees: priced.fees,
                 slippage: Math.abs(fill - quote.mid),
@@ -733,23 +741,22 @@ export class PositionManager {
                 mfe: pos.mfe,
                 r_multiple: 0,
                 hold_ms: heldMs,
-                exit_reason: partial.reason,
+                exit_reason:
+                  rem <= 1e-9 && closedVol > partial.close_size + 1e-9
+                    ? `${partial.reason}_FULL`
+                    : partial.reason,
               };
               pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome, {
                 epic: pos.epic,
               });
-              const rem =
-                closeRes.remaining_size != null && Number.isFinite(closeRes.remaining_size)
-                  ? Number(closeRes.remaining_size)
-                  : Math.max(0, pos.size - partial.close_size);
               if (rem > 1e-9) {
                 pos.size = rem;
                 pos.partial_close_applied = true;
-                closed.push({ position: { ...pos }, outcome, reason: partial.reason });
+                closed.push({ position: { ...pos }, outcome, reason: outcome.exit_reason });
                 continue;
               }
               this.open.delete(pos.position_id);
-              closed.push({ position: pos, outcome, reason: partial.reason });
+              closed.push({ position: pos, outcome, reason: outcome.exit_reason });
               continue;
             }
             // Partial failed — fall through to full manage (do not mark applied)
@@ -1018,7 +1025,17 @@ export class PositionManager {
         closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
           ? Number(closeRes.fill_price)
           : mark;
-      const vol = isFinal ? pos.size : closeSize;
+      const rem =
+        closeRes.remaining_size != null && Number.isFinite(closeRes.remaining_size)
+          ? Number(closeRes.remaining_size)
+          : isFinal
+            ? 0
+            : Math.max(0, pos.size - closeSize);
+      // Intermediate that went flat (Check- full-lot / dust) → credit full size
+      const vol =
+        isFinal || rem <= 1e-9
+          ? pos.size
+          : Math.max(0, pos.size - rem);
       const { pnl, from_broker } = resolveCloseMoneyPnl({
         side: pos.side,
         entry: pos.entry,
@@ -1045,7 +1062,9 @@ export class PositionManager {
         mfe: pos.mfe,
         r_multiple: 0,
         hold_ms: heldMs,
-        exit_reason: `MULTI_TP_${level.index}${isFinal ? '_FINAL' : ''}`,
+        exit_reason: `MULTI_TP_${level.index}${
+          isFinal || rem <= 1e-9 ? '_FINAL' : ''
+        }`,
       };
       pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome, {
         epic: pos.epic,
@@ -1053,21 +1072,13 @@ export class PositionManager {
       level.status = 'EXECUTED';
       closed.push({ position: { ...pos }, outcome, reason: outcome.exit_reason });
 
-      if (isFinal) {
+      if (isFinal || rem <= 1e-9) {
         this.open.delete(pos.position_id);
         return { handled: true, removed: true, closed, close_failed };
       }
 
-      const rem =
-        closeRes.remaining_size != null && Number.isFinite(closeRes.remaining_size)
-          ? Number(closeRes.remaining_size)
-          : Math.max(0, pos.size - closeSize);
       pos.size = rem;
       pos.partial_close_applied = true;
-      if (rem <= 1e-9) {
-        this.open.delete(pos.position_id);
-        return { handled: true, removed: true, closed, close_failed };
-      }
     }
 
     return { handled: any, removed: false, closed, close_failed };
