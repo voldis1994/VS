@@ -598,11 +598,13 @@ export class PositionManager {
         await this.maybeRecoverNakedStop(broker, pos, quote, minStopDist);
       }
 
-      // VS-System soft trail — SCALPING manage only, after money arm (not Capital min-stop trail)
-      // Capital LIVE: refuse soft-trail (incl. already_armed) when venue UPL unread
+      // Capital LIVE: soft mark exits (EMA / BestOutcome / geometry BE) need venue UPL
       const capitalUplReady =
         !capitalLive ||
         (pos.broker_upl != null && Number.isFinite(pos.broker_upl));
+
+      // VS-System soft trail — SCALPING manage only, after money arm (not Capital min-stop trail)
+      // Capital LIVE: refuse soft-trail (incl. already_armed) when venue UPL unread
       if (allowClose && softMoneyArm > 0 && scalpChase && capitalUplReady) {
         const arm = decideSoftTrailArm({
           money_pnl: moneyPnl,
@@ -699,6 +701,7 @@ export class PositionManager {
       if (ema3 != null) {
         const cross =
           allowClose &&
+          capitalUplReady &&
           ema1 != null &&
           ema1Prev != null &&
           ema3Prev != null
@@ -712,14 +715,15 @@ export class PositionManager {
                 ema3Prev2,
               })
             : { exit: false, reason: '' };
-        const thru = allowClose
-          ? ema3PriceThroughExit({
-              side: pos.side,
-              mark,
-              ema3,
-              prevSide: pos.ema3_side,
-            })
-          : { exit: false, reason: '' };
+        const thru =
+          allowClose && capitalUplReady
+            ? ema3PriceThroughExit({
+                side: pos.side,
+                mark,
+                ema3,
+                prevSide: pos.ema3_side,
+              })
+            : { exit: false, reason: '' };
         pos.ema3_side = ema3PriceSide(mark, ema3);
         const exitHit = cross.exit
           ? cross
@@ -919,6 +923,8 @@ export class PositionManager {
       // Hard protective fills before soft BestOutcome / TIME_STOP
       const protective = protectiveExit(pos, quote);
 
+      // Capital LIVE: BestOutcome is mark-path — refuse while venue UPL unread
+      // (STOP_HIT / TP_HIT / TIME_STOP still fire).
       let verdict =
         protective ??
         (maxHold > 0 && heldMs >= maxHold
@@ -926,20 +932,22 @@ export class PositionManager {
               exit: true,
               reason: `TIME_STOP · held ${Math.round(heldMs / 1000)}s ≥ ${Math.round(maxHold / 1000)}s`,
             }
-          : decideBestOutcomeExit(
-              {
-                open_side: pos.side,
-                entry_price: pos.entry,
-                entry_at: pos.entry_at,
-                mfe: pos.mfe,
-                mae: pos.mae,
-                peak_retention,
-                regime: pos.decision.analysis.regime,
-                playbook: mapRegimeToPlaybook(pos.regime_at_entry),
-                entry_setup: 'CONTINUATION',
-              },
-              mark
-            ));
+          : capitalUplReady
+            ? decideBestOutcomeExit(
+                {
+                  open_side: pos.side,
+                  entry_price: pos.entry,
+                  entry_at: pos.entry_at,
+                  mfe: pos.mfe,
+                  mae: pos.mae,
+                  peak_retention,
+                  regime: pos.decision.analysis.regime,
+                  playbook: mapRegimeToPlaybook(pos.regime_at_entry),
+                  entry_setup: 'CONTINUATION',
+                },
+                mark
+              )
+            : { exit: false, reason: '' });
 
       if (!verdict.exit) {
         await this.maybeBreakevenStop(broker, pos, quote, {
@@ -1696,8 +1704,10 @@ export class PositionManager {
 
     let armed = false;
     if (moneyNeed > 0 && capitalUplReady && money >= moneyNeed) armed = true;
-    if (!armed && beStart > 0) armed = fav >= beStart;
-    if (!armed && progressNeed > 0 && pos.take_profit != null) {
+    // Capital LIVE: geometry BE (be_start / progress) also needs venue UPL —
+    // mark profit alone must not lock SL while the book is unread.
+    if (!armed && capitalUplReady && beStart > 0) armed = fav >= beStart;
+    if (!armed && capitalUplReady && progressNeed > 0 && pos.take_profit != null) {
       const tpDist = Math.abs(pos.take_profit - pos.entry);
       if (tpDist >= 1e-9 && fav / tpDist >= progressNeed) armed = true;
     }

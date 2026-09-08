@@ -181,51 +181,126 @@ async function main() {
   });
   stages.execution_broker = {
     ok: !!execution.accepted && !!place?.position_id,
-    detail: execution.detail,
+    detail: `${forced.side}:${execution.detail}`,
   };
 
+  const fillSide = (forced.side === 'SELL' ? 'SELL' : 'BUY') as 'BUY' | 'SELL';
   const pm = new PositionManager();
   if (place?.position_id) {
+    const fill = place.fill_price!;
     pm.register({
       position_id: place.position_id,
       opportunity_id: cycle.opportunity.id,
       intent_id: execution.intent_id,
       epic: 'GOLD',
-      side: 'BUY',
+      side: fillSide,
       size: 0.2,
-      entry: place.fill_price!,
-      stop_loss: place.fill_price! - 2,
+      entry: fill,
+      stop_loss: fillSide === 'BUY' ? fill - 2 : fill + 2,
       decision: forced,
     });
   }
   stages.position_manager = {
     ok: pm.count() === 1,
-    detail: `open=${pm.count()}`,
+    detail: `open=${pm.count()} side=${fillSide}`,
   };
 
-  const crash = {
-    bid: (place?.fill_price || quote.mid) - 25,
-    ask: (place?.fill_price || quote.mid) - 24.6,
-    mid: (place?.fill_price || quote.mid) - 24.8,
-    spread: 0.4,
-    ts_ms: Date.now(),
-  };
-  broker.setQuote({ ...crash, epic: 'GOLD' });
+  const fillPx = place?.fill_price || quote.mid;
+  const adverse =
+    fillSide === 'BUY'
+      ? {
+          bid: fillPx - 25,
+          ask: fillPx - 24.6,
+          mid: fillPx - 24.8,
+          spread: 0.4,
+          ts_ms: Date.now(),
+        }
+      : {
+          bid: fillPx + 24.6,
+          ask: fillPx + 25,
+          mid: fillPx + 24.8,
+          spread: 0.4,
+          ts_ms: Date.now(),
+        };
+  broker.setQuote({ ...adverse, epic: 'GOLD' });
   const managed = await pm.manageTick({
     broker,
     pipeline: pipe,
-    quote: crash,
+    quote: adverse,
     instrument_point_value: 1,
   });
   stages.exit = {
     ok: managed.closed.length === 1,
-    detail: managed.closed[0]?.reason || 'no_exit',
+    detail: `${fillSide}:${managed.closed[0]?.reason || 'no_exit'}`,
   };
 
-  const perf = computePerformance(pipe.journal.traded());
+  // Explicit SELL paper leg — prove dual-side manage even when cycle forced BUY
+  const sellBroker = new PaperBroker();
+  await sellBroker.connect();
+  const sellEntry = quote.mid;
+  sellBroker.setQuote({
+    bid: sellEntry - 0.2,
+    ask: sellEntry + 0.2,
+    mid: sellEntry,
+    spread: 0.4,
+    epic: 'GOLD',
+    ts_ms: Date.now(),
+  });
+  const sellPlace = await sellBroker.placeOrder({
+    intent_id: 'audit-sell-leg-bbbbbbbbbbbb',
+    epic: 'GOLD',
+    side: 'SELL',
+    size: 0.2,
+    stop_level: sellEntry + 2,
+    profit_level: sellEntry - 5,
+  });
+  const sellPipe = new MasterPipeline('PAPER');
+  const sellPm = new PositionManager();
+  const sellDecision = {
+    ...forced,
+    kind: 'SELL' as const,
+    side: 'SELL' as const,
+    block_reason: null,
+  };
+  if (sellPlace.ok && sellPlace.position_id) {
+    sellPm.register({
+      position_id: sellPlace.position_id,
+      opportunity_id: 'opp-audit-sell',
+      intent_id: 'audit-sell-leg-bbbbbbbbbbbb',
+      epic: 'GOLD',
+      side: 'SELL',
+      size: 0.2,
+      entry: sellPlace.fill_price!,
+      stop_loss: sellPlace.fill_price! + 2,
+      decision: sellDecision as typeof forced,
+    });
+  }
+  const sellAdverse = {
+    bid: sellEntry + 24.6,
+    ask: sellEntry + 25,
+    mid: sellEntry + 24.8,
+    spread: 0.4,
+    ts_ms: Date.now(),
+  };
+  sellBroker.setQuote({ ...sellAdverse, epic: 'GOLD' });
+  const sellManaged = await sellPm.manageTick({
+    broker: sellBroker,
+    pipeline: sellPipe,
+    quote: sellAdverse,
+    instrument_point_value: 1,
+  });
+  stages.exit_sell = {
+    ok: sellManaged.closed.length === 1,
+    detail: sellManaged.closed[0]?.reason || 'no_sell_exit',
+  };
+
+  const perf = computePerformance([
+    ...pipe.journal.traded(),
+    ...sellPipe.journal.traded(),
+  ]);
   stages.journal_performance = {
-    ok: perf.trades >= 1,
-    detail: `trades=${perf.trades} pnl=${perf.total_pnl.toFixed(4)} exp=${perf.expectancy.toFixed(4)}`,
+    ok: perf.trades >= 1 && stages.exit_sell.ok,
+    detail: `trades=${perf.trades} pnl=${perf.total_pnl.toFixed(4)} exp=${perf.expectancy.toFixed(4)} sell=${stages.exit_sell.ok}`,
   };
 
   const allOk = Object.values(stages).every((s) => s.ok);
