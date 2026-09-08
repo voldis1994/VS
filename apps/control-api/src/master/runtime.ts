@@ -33,7 +33,8 @@ import {
 } from './positionManager.js';
 import { evaluateRisk } from './risk.js';
 import { setupKey } from './decision.js';
-import { resolveCloseMoneyPnl } from './moneyExit.js';
+import { resolveCloseMoneyPnl, resolveFloatingMoneyPnl } from './moneyExit.js';
+import { loadMasterErrors, logMasterError } from './errorJournal.js';
 import { loadRuntimeGates, saveRuntimeGates } from './runtimeGates.js';
 import { loadOwnsPipelinePref, saveOwnsPipelinePref } from './ownsPipelinePref.js';
 import { resolveNewsWindow, type NewsWindowState } from './newsGate.js';
@@ -98,6 +99,15 @@ export type MasterStatus = {
     stream_healthy: boolean | null;
   } | null;
   floating_pnl: number;
+  /** Remaining reject cooldown ms (0 = clear) */
+  reject_cooldown_ms: number;
+  /** Newest durable cycle/broker errors */
+  recent_errors: Array<{
+    ts: string;
+    module: string;
+    error_type: string;
+    message: string;
+  }>;
   manage: ManageConfigPatch;
 };
 
@@ -205,8 +215,15 @@ class MasterRuntime {
     return this.positions.list().map((p) => {
       if (!quote) return { ...p, upl: 0, mark: null };
       const mark = protectiveMark(p.side, quote);
-      const pts = p.side === 'BUY' ? mark - p.entry : p.entry - mark;
-      return { ...p, upl: pts * p.size * pv, mark };
+      const upl = resolveFloatingMoneyPnl({
+        side: p.side,
+        entry: p.entry,
+        mark,
+        size: p.size,
+        value_per_point_per_lot: pv,
+        broker_upl: p.broker_upl,
+      });
+      return { ...p, upl, mark };
     });
   }
 
@@ -239,8 +256,14 @@ class MasterRuntime {
         ? Number(closeRes.fill_price)
         : mark;
     const instrument = specForEpic(pos.epic);
-    const pnlPts = pos.side === 'BUY' ? fill - pos.entry : pos.entry - fill;
-    const pnl = pnlPts * pos.size * instrument.value_per_point_per_lot;
+    const { pnl, pnl_pts: pnlPts } = resolveCloseMoneyPnl({
+      side: pos.side,
+      entry: pos.entry,
+      fill,
+      size: pos.size,
+      value_per_point_per_lot: instrument.value_per_point_per_lot,
+      fill_pnl: closeRes.fill_pnl ?? pos.broker_upl,
+    });
     const heldMs = Date.now() - new Date(pos.entry_at).getTime();
     const riskDist = Math.max(
       Math.abs((pos.stop_loss ?? pos.entry) - pos.entry),
@@ -576,7 +599,19 @@ class MasterRuntime {
    * Serialized — concurrent callers share one chain (live feed + /tick + desk).
    */
   async tick(bars: Bar[], quote: Quote): Promise<TickResult> {
-    const run = () => this.tickUnlocked(bars, quote);
+    const run = async () => {
+      try {
+        return await this.tickUnlocked(bars, quote);
+      } catch (e) {
+        logMasterError({
+          module: 'runtime.tick',
+          error_type: 'cycle_failed',
+          message: e instanceof Error ? e.message : String(e),
+          context: { epic: this.epic, mode: this.cfg.mode },
+        });
+        throw e;
+      }
+    };
     const result = this.tickChain.then(run, run);
     this.tickChain = result.then(
       () => undefined,
@@ -772,6 +807,12 @@ class MasterRuntime {
           brokerVerifyOk = false;
           execution_detail = `broker_verify_failed:${listed.detail || 'list_failed'}`;
           this.last_execution_detail = execution_detail;
+          logMasterError({
+            module: 'runtime.entry',
+            error_type: 'broker_verify_failed',
+            message: execution_detail,
+            context: { epic: this.epic },
+          });
         } else if (listed.positions.length > 0) {
           brokerVerifyOk = false;
           execution_detail = `one_trade_broker_open:${listed.positions.length}`;
@@ -781,6 +822,12 @@ class MasterRuntime {
         brokerVerifyOk = false;
         execution_detail = `broker_verify_failed:${err instanceof Error ? err.message : 'list_threw'}`;
         this.last_execution_detail = execution_detail;
+        logMasterError({
+          module: 'runtime.entry',
+          error_type: 'broker_verify_threw',
+          message: execution_detail,
+          context: { epic: this.epic },
+        });
       }
 
       if (brokerVerifyOk) {
@@ -1435,6 +1482,13 @@ class MasterRuntime {
           }
         : null,
       floating_pnl: floating,
+      reject_cooldown_ms: Math.max(0, this.reject_until_ms - Date.now()),
+      recent_errors: loadMasterErrors(8).map((e) => ({
+        ts: e.ts,
+        module: e.module,
+        error_type: e.error_type,
+        message: e.message,
+      })),
       manage: pickManageConfig(this.cfg),
     };
   }

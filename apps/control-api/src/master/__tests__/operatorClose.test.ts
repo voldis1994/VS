@@ -57,7 +57,7 @@ describe('operator close + manage config', () => {
       epic: 'GOLD',
       side: 'BUY',
       size: 0.1,
-      entry: 4410,
+      entry: placed.fill_price!,
       stop_loss: 4400,
       take_profit: 4430,
       decision: {
@@ -91,6 +91,15 @@ describe('operator close + manage config', () => {
       },
     });
     expect(masterRuntime.positions.count()).toBe(1);
+    // Move mark into clear profit before operator close (spread already paid on entry)
+    broker.setQuote({
+      bid: 4420,
+      ask: 4420.4,
+      mid: 4420.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
     const r = await masterRuntime.closePositionManual(
       placed.position_id!,
       'OPERATOR_CLOSE'

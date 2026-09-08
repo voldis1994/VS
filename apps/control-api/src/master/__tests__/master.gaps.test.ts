@@ -982,6 +982,32 @@ describe('runtime gates persist', () => {
   });
 });
 
+describe('error journal', () => {
+  it('appends and tails durable cycle errors', async () => {
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = mkdtempSync(join(tmpdir(), 'vs-errj-'));
+    const { logMasterError, loadMasterErrors } = await import('../errorJournal.js');
+    const a = logMasterError({
+      module: 'runtime.tick',
+      error_type: 'cycle_failed',
+      message: 'boom',
+      context: { epic: 'GOLD' },
+    });
+    expect(a.error_id).toBeTruthy();
+    logMasterError({
+      module: 'runtime.entry',
+      error_type: 'broker_verify_failed',
+      message: 'mt4_status_stale',
+    });
+    const rows = loadMasterErrors(10);
+    expect(rows.length).toBe(2);
+    expect(rows[0]!.error_type).toBe('broker_verify_failed');
+    expect(rows[1]!.message).toBe('boom');
+    if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+    else process.env.MASTER_STATE_DIR = prev;
+  });
+});
+
 describe('runMasterFromDesk integration', () => {
   it('ticks manage path with desk bars when owns-pipeline and entries armed', async () => {
     const prev = process.env.MASTER_OWNS_PIPELINE;

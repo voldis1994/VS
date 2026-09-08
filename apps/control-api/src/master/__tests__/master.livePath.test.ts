@@ -42,7 +42,15 @@ const account: AccountSnapshot = {
 function mockCapitalBroker(opts?: { rejectConfirm?: boolean; lagConfirm?: boolean }) {
   const positions = new Map<
     string,
-    { deal_id: string; epic: string; direction: 'BUY' | 'SELL'; size: number; open_level: number }
+    {
+      deal_id: string;
+      epic: string;
+      direction: 'BUY' | 'SELL';
+      size: number;
+      open_level: number;
+      stop_level?: number | null;
+      profit_level?: number | null;
+    }
   >();
   let confirmAttempts = 0;
   const session = { id: 'mock-session' };
@@ -60,7 +68,15 @@ function mockCapitalBroker(opts?: { rejectConfirm?: boolean; lagConfirm?: boolea
     account: async () => ({ equity: 12_500, balance: 12_000, currency: 'GBP' }),
     list: async () => ({
       ok: true,
-      positions: [...positions.values()],
+      positions: [...positions.values()].map((p) => ({
+        deal_id: p.deal_id,
+        epic: p.epic,
+        direction: p.direction,
+        size: p.size,
+        open_level: p.open_level,
+        stop_level: p.stop_level ?? null,
+        profit_level: p.profit_level ?? null,
+      })),
       detail: `${positions.size}`,
     }),
     create: async (_s, input) => ({
@@ -79,6 +95,9 @@ function mockCapitalBroker(opts?: { rejectConfirm?: boolean; lagConfirm?: boolea
           detail: `Close confirmed ${ref}`,
         };
       }
+      if (String(ref).startsWith('mref-')) {
+        return { ok: true, deal_id: `mod-${ref}`, detail: 'ACCEPTED' };
+      }
       if (opts?.rejectConfirm) {
         return { ok: false, rejected: true, detail: 'Capital rejected: RISK_CHECK' };
       }
@@ -92,8 +111,16 @@ function mockCapitalBroker(opts?: { rejectConfirm?: boolean; lagConfirm?: boolea
         direction: 'BUY',
         size: 0.1,
         open_level: 4410.4,
+        stop_level: null,
       });
       return { ok: true, deal_id, fill_level: 4410.4, detail: `Confirmed ${deal_id}` };
+    },
+    modify: async (_s, input) => {
+      const p = positions.get(input.dealId);
+      if (!p) return { ok: false, detail: 'missing' };
+      if (input.stopLevel != null) p.stop_level = Number(input.stopLevel);
+      if (input.profitLevel != null) p.profit_level = Number(input.profitLevel);
+      return { ok: true, deal_reference: `mref-${input.dealId}`, detail: 'modified' };
     },
     close: async (_s, dealId) => {
       if (!positions.has(dealId)) return { ok: false, detail: 'missing' };
@@ -589,16 +616,18 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
         direction: 'BUY' | 'SELL';
         size: number;
         open_level: number;
+        stop_level?: number | null;
         opened_at?: string;
       }
     >();
-    // Already open from empty-REJECTED sibling glitch
+    // Already open from empty-REJECTED sibling glitch (naked until attach)
     positions.set('ghost-fill', {
       deal_id: 'ghost-fill',
       epic: 'GOLD',
       direction: 'BUY',
       size: 0.1,
       open_level: 4410.4,
+      stop_level: null,
       opened_at: new Date().toISOString(),
     });
     const broker = new CapitalBroker({
@@ -619,7 +648,7 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
           direction: p.direction,
           size: p.size,
           open_level: p.open_level,
-          stop_level: null,
+          stop_level: p.stop_level ?? null,
           opened_at: p.opened_at ?? null,
         })),
         detail: '',
@@ -630,12 +659,22 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
         detail: 'posted',
       }),
       close: async () => ({ ok: false, detail: 'should_not_close' }),
-      confirm: async () => ({
-        ok: false,
-        rejected: true,
-        detail: 'Capital rejected: REJECTED',
-        // empty reason → match-accept path
-      }),
+      modify: async (_s, input) => {
+        const p = positions.get(input.dealId);
+        if (p && input.stopLevel != null) p.stop_level = Number(input.stopLevel);
+        return { ok: true, deal_reference: 'mod-attach', detail: 'ok' };
+      },
+      confirm: async (_s, ref) => {
+        if (String(ref) === 'mod-attach') {
+          return { ok: true, deal_id: 'mod-deal', detail: 'ACCEPTED' };
+        }
+        return {
+          ok: false,
+          rejected: true,
+          detail: 'Capital rejected: REJECTED',
+          // empty reason → match-accept path
+        };
+      },
     });
     await broker.connect();
     const place = await broker.placeOrder({
@@ -649,5 +688,94 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(place.position_id).toBe('ghost-fill');
     expect(place.fill_price).toBe(4410.4);
     expect(place.detail).toMatch(/capital_open/);
+    expect(positions.get('ghost-fill')!.stop_level).toBe(4400);
+  });
+
+  it('empty REJECTED match fail-closes when protective SL cannot attach', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number;
+        stop_level?: number | null;
+        opened_at?: string;
+      }
+    >();
+    positions.set('naked-fill', {
+      deal_id: 'naked-fill',
+      epic: 'GOLD',
+      direction: 'BUY',
+      size: 0.1,
+      open_level: 4410.4,
+      stop_level: null,
+      opened_at: new Date().toISOString(),
+    });
+    let closed = 0;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({
+        ok: true,
+        positions: [...positions.values()].map((p) => ({
+          deal_id: p.deal_id,
+          epic: p.epic,
+          direction: p.direction,
+          size: p.size,
+          open_level: p.open_level,
+          stop_level: p.stop_level ?? null,
+          opened_at: p.opened_at ?? null,
+        })),
+        detail: '',
+      }),
+      create: async () => ({
+        ok: true,
+        deal_reference: 'ref-naked',
+        detail: 'posted',
+      }),
+      close: async (_s, id) => {
+        closed += 1;
+        positions.delete(id);
+        return { ok: true, detail: 'closed' };
+      },
+      modify: async () => ({
+        ok: true,
+        deal_reference: 'mod-noop',
+        detail: 'accepted_http',
+      }),
+      confirm: async (_s, ref) => {
+        if (String(ref) === 'mod-noop') {
+          // ACK but SL never moves → modifyPosition rejects
+          return { ok: true, deal_id: 'mod-deal', detail: 'ACCEPTED' };
+        }
+        return {
+          ok: false,
+          rejected: true,
+          detail: 'Capital rejected: REJECTED',
+        };
+      },
+    });
+    await broker.connect();
+    const place = await broker.placeOrder({
+      intent_id: 'intent-naked-match',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: 4400,
+    });
+    expect(place.ok).toBe(false);
+    expect(place.detail).toBe('CAPITAL_SL_ATTACH_FAILED');
+    expect(closed).toBe(1);
+    expect(positions.size).toBe(0);
   });
 });

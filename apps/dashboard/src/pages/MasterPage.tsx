@@ -22,6 +22,8 @@ type MasterStatus = {
     equity: number;
     balance: number;
     daily_pnl: number;
+    day_start_equity?: number | null;
+    peak_equity?: number;
     available_to_deal?: number | null;
   } | null;
   open_positions: number;
@@ -50,6 +52,13 @@ type MasterStatus = {
     stream_healthy: boolean | null;
   } | null;
   floating_pnl?: number;
+  reject_cooldown_ms?: number;
+  recent_errors?: Array<{
+    ts: string;
+    module: string;
+    error_type: string;
+    message: string;
+  }>;
   manage?: {
     scalp_pct_chase?: boolean;
     soft_trail_money_arm?: number;
@@ -69,6 +78,7 @@ type ManagedPos = {
   stop_loss: number | null;
   take_profit?: number | null;
   upl?: number;
+  broker_upl?: number | null;
   mark?: number | null;
   soft_trail_armed_at?: string | null;
   native_trail_armed?: boolean;
@@ -220,6 +230,28 @@ export function MasterPage() {
           k: 'Daily PnL',
           v: status.account?.daily_pnl != null ? Number(status.account.daily_pnl).toFixed(2) : '—',
         },
+        {
+          k: 'Day start eq',
+          v:
+            status.account?.day_start_equity != null
+              ? Number(status.account.day_start_equity).toFixed(2)
+              : '—',
+        },
+        {
+          k: 'Peak eq',
+          v:
+            status.account?.peak_equity != null
+              ? Number(status.account.peak_equity).toFixed(2)
+              : '—',
+        },
+        {
+          k: 'Reject cool',
+          v:
+            (status.reject_cooldown_ms ?? 0) > 0
+              ? `${Math.ceil((status.reject_cooldown_ms || 0) / 1000)}s`
+              : '—',
+          bad: (status.reject_cooldown_ms ?? 0) > 0,
+        },
         { k: 'Open', v: String(status.open_positions) },
         { k: 'Trades', v: String(status.traded) },
         { k: 'Blocked', v: String(status.blocked) },
@@ -242,6 +274,16 @@ export function MasterPage() {
           k: 'Persist err',
           v: status.last_persist_error || '—',
           bad: !!status.last_persist_error,
+        },
+        {
+          k: 'Last error',
+          v: status.recent_errors?.[0]
+            ? `${status.recent_errors[0].error_type}: ${status.recent_errors[0].message}`.slice(
+                0,
+                72
+              )
+            : '—',
+          bad: !!status.recent_errors?.length,
         },
       ]
     : [];

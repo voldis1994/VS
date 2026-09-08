@@ -990,44 +990,62 @@ export class CapitalBroker implements MasterBroker {
       };
     }
 
-    // Attach / verify SL after fill
-    if (input.stop_level != null && this.deps.modify) {
-      const wantSl = input.stop_level;
-      let attached = false;
-      for (let widen = 0; widen < 4 && !attached; widen++) {
-        const mid = fill_price ?? wantSl;
-        const pad = widen * Math.max(0.5, Math.abs(mid) * 0.0005);
-        const sl =
-          input.side === 'BUY' ? wantSl - pad : wantSl + pad;
-        const mod = await this.deps.modify(this.session, {
-          dealId: position_id,
-          stopLevel: sl,
-          profitLevel: input.profit_level ?? null,
-        });
-        if (mod.ok && mod.deal_reference) {
-          await this.waitConfirm(mod.deal_reference);
+    // Attach / verify protective SL after ANY accepted fill (bare open OR empty-REJECTED match).
+    // Wanted SL + missing chart stop ⇒ attach via modifyPosition (confirm + list proof);
+    // fail-close if still naked — never leave LIVE unprotected.
+    const wantProtectiveSl = input.stop_level != null && Number.isFinite(input.stop_level);
+    if (wantProtectiveSl && position_id) {
+      const listed0 = await this.listOpenPositions(input.epic);
+      const cur0 = listed0.ok
+        ? listed0.positions.find((p) => p.position_id === position_id)
+        : undefined;
+      const alreadyProtected =
+        cur0?.stop_level != null && Number.isFinite(cur0.stop_level);
+      if (!alreadyProtected) {
+        needAttach = true;
+        const wantSl = Number(input.stop_level);
+        let attached = false;
+        for (let widen = 0; widen < 4 && !attached; widen++) {
+          const mid = fill_price ?? wantSl;
+          const pad = widen * Math.max(0.5, Math.abs(mid) * 0.0005);
+          const sl = input.side === 'BUY' ? wantSl - pad : wantSl + pad;
+          // Use modifyPosition so ACCEPTED-but-unchanged is rejected (VS-System)
+          const mod = await this.modifyPosition({
+            position_id,
+            stop_level: sl,
+            profit_level: input.profit_level,
+          });
+          if (mod.ok) {
+            attached = true;
+            break;
+          }
+          if (!isCapitalStopLevelReject(mod.detail || '')) break;
         }
-        const listed = await this.listOpenPositions(input.epic);
-        const hit = listed.positions.find((p) => p.position_id === position_id);
-        if (hit?.stop_level != null && Number.isFinite(hit.stop_level)) {
-          attached = true;
-          break;
+        if (!attached) {
+          await this.deps.close(this.session, position_id);
+          return {
+            ok: false,
+            order_id: opened.deal_reference || null,
+            position_id: null,
+            fill_price: null,
+            fill_size: null,
+            detail: 'CAPITAL_SL_ATTACH_FAILED',
+            paper: false,
+          };
         }
-        if (!mod.ok && !isCapitalStopLevelReject(mod.detail)) break;
       }
-      if (!attached && needAttach) {
-        // Fail-close naked position — never leave unprotected after forced bare open
-        await this.deps.close(this.session, position_id);
-        return {
-          ok: false,
-          order_id: opened.deal_reference || null,
-          position_id: null,
-          fill_price: null,
-          fill_size: null,
-          detail: 'CAPITAL_SL_ATTACH_FAILED',
-          paper: false,
-        };
-      }
+    } else if (needAttach && position_id) {
+      // Bare-open path without stop_level in input — still fail-close naked
+      await this.deps.close(this.session, position_id);
+      return {
+        ok: false,
+        order_id: opened.deal_reference || null,
+        position_id: null,
+        fill_price: null,
+        fill_size: null,
+        detail: 'CAPITAL_SL_ATTACH_FAILED',
+        paper: false,
+      };
     }
 
     const listedFinal = await this.listOpenPositions(input.epic);
@@ -1635,10 +1653,17 @@ export class Mt4FileBroker implements MasterBroker {
             : waited.ack?.close != null
               ? Number(waited.ack.close)
               : null;
+      const profitRaw = Number(
+        waited.ack?.profit ?? waited.ack?.Profit ?? waited.ack?.pnl
+      );
+      const fill_pnl = Number.isFinite(profitRaw) ? profitRaw : null;
       return {
         ok: true,
-        detail: `mt4_closed ticket=${waited.ack?.ticket || position_id}`,
+        detail: `mt4_closed ticket=${waited.ack?.ticket || position_id}${
+          fill_pnl != null ? ` pnl=${fill_pnl}` : ''
+        }`,
         fill_price: fill != null && Number.isFinite(fill) ? fill : null,
+        fill_pnl,
       };
     }
     if (waited.ack) {
