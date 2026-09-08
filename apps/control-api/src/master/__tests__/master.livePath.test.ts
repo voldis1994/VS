@@ -1684,6 +1684,7 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     const prev = process.env.MASTER_STATE_DIR;
     process.env.MASTER_STATE_DIR = mkdtempSync(join(tmpdir(), 'vs-close-ack-'));
     const { loadMasterErrors } = await import('../errorJournal.js');
+    let listCalls = 0;
     const broker = new CapitalBroker({
       credentials: {},
       acquire: async () => ({ ok: true, session: { id: 's-cto' }, detail: 'ok' }),
@@ -1694,18 +1695,99 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
         epic,
         raw_ok: true,
       }),
-      list: async () => ({ ok: true, positions: [] }),
+      list: async () => {
+        listCalls += 1;
+        return { ok: true, positions: [] };
+      },
       create: async () => ({ ok: true, deal_reference: 'x', detail: 'ok' }),
       confirm: async () => ({ ok: false, pending: true, detail: 'pending' }),
       close: async () => ({ ok: true, deal_reference: 'cto-ref', detail: 'submitted' }),
     });
     await broker.connect();
     const closed = await broker.closePosition('deal-gone');
-    expect(closed.ok).toBe(true); // flat list proves closed despite confirm timeout
+    // Confirm timed out — need consecutive empty lists (ghost debounce), not one flake empty
+    expect(closed.ok).toBe(true);
+    expect(listCalls).toBeGreaterThanOrEqual(5);
     const errs = loadMasterErrors(50);
     expect(errs.some((e) => e.error_type === 'ACK_TIMEOUT')).toBe(false);
     if (prev === undefined) delete process.env.MASTER_STATE_DIR;
     else process.env.MASTER_STATE_DIR = prev;
+  });
+
+  it('CLOSE confirm timeout refuses flat proof when empty list flakes (deal reappears)', async () => {
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    let listCalls = 0;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-flake' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => {
+        listCalls += 1;
+        // First post-close list empty (flake); then deal still LIVE
+        if (listCalls <= 2) return { ok: true, positions: [] };
+        return {
+          ok: true,
+          positions: [
+            {
+              deal_id: 'deal-still-live',
+              epic: 'GOLD',
+              direction: 'BUY',
+              size: 0.1,
+              open_level: 4410,
+            },
+          ],
+        };
+      },
+      create: async () => ({ ok: true, deal_reference: 'x', detail: 'ok' }),
+      confirm: async () => ({ ok: false, pending: true, detail: 'pending' }),
+      close: async () => ({ ok: true, deal_reference: 'flake-ref', detail: 'submitted' }),
+    });
+    await broker.connect();
+    const closed = await broker.closePosition('deal-still-live');
+    expect(closed.ok).toBe(false);
+    expect(closed.detail).toMatch(/close_not_confirmed_empty_debounce/);
+    expect(listCalls).toBeGreaterThan(2);
+  });
+
+  it('CLOSE with ACCEPTED confirm treats one empty list as flat', async () => {
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    let listCalls = 0;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-acc' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => {
+        listCalls += 1;
+        return { ok: true, positions: [] };
+      },
+      create: async () => ({ ok: true, deal_reference: 'x', detail: 'ok' }),
+      confirm: async () => ({
+        ok: true,
+        deal_id: 'closed-deal',
+        fill_level: 4411,
+        profit: 1.2,
+        detail: 'ACCEPTED',
+      }),
+      close: async () => ({ ok: true, deal_reference: 'acc-ref', detail: 'submitted' }),
+    });
+    await broker.connect();
+    const closed = await broker.closePosition('was-open');
+    expect(closed.ok).toBe(true);
+    // beforeSize snapshot + post-close proof = 2 lists; no debounce when ACCEPTED
+    expect(listCalls).toBe(2);
+    expect(closed.fill_price).toBe(4411);
   });
 
   it('named reject fail-closes presence-only new fill (level-less, no mid)', async () => {

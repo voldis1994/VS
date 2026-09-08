@@ -25,6 +25,7 @@ import { logMasterError } from './errorJournal.js';
 import { stableReadJson } from './atomicIo.js';
 import { estimateTradeFees } from './moneyExit.js';
 import { specForEpic } from './pipeline.js';
+import { EMPTY_BROKER_GHOST_DEBOUNCE } from './positionSync.js';
 import {
   findOpenIntentBlocker,
   findOpenSuccessUnbooked,
@@ -1723,6 +1724,8 @@ export class CapitalBroker implements MasterBroker {
 
     let fill_price: number | null = null;
     let fill_pnl: number | null = null;
+    /** True only when deal confirm book returned ACCEPTED — one empty list is then enough. */
+    let confirmAccepted = false;
     const deal_reference = res.deal_reference || undefined;
     if (deal_reference && this.deps.confirm) {
       const conf = await this.waitConfirm(deal_reference);
@@ -1735,6 +1738,7 @@ export class CapitalBroker implements MasterBroker {
           fill_pnl: conf.profit ?? null,
         };
       }
+      if (conf.ok) confirmAccepted = true;
       if (conf.fill_level != null && Number.isFinite(conf.fill_level)) {
         fill_price = conf.fill_level;
       }
@@ -1770,6 +1774,45 @@ export class CapitalBroker implements MasterBroker {
           fill_price,
           fill_pnl,
         };
+      }
+      // Confirm timeout / no ACCEPTED: one empty list can be a flake (deal still LIVE).
+      // Match position-sync ghost debounce — require consecutive successful empties.
+      if (!confirmAccepted) {
+        const need = EMPTY_BROKER_GHOST_DEBOUNCE;
+        let empties = 1;
+        const delayMs =
+          process.env.VITEST || process.env.MASTER_CONFIRM_FAST === 'true'
+            ? 1
+            : 200;
+        while (empties < need) {
+          await new Promise((r) => setTimeout(r, delayMs));
+          const again = await this.listOpenPositions();
+          if (!again.ok) {
+            return {
+              ok: false,
+              detail: `close_unconfirmed_list_failed:${again.detail || 'list_failed'}`,
+              deal_reference,
+              fill_price,
+              fill_pnl,
+            };
+          }
+          const againUsable = again.positions.find(
+            (p) => p.position_id === position_id
+          );
+          const againPresent =
+            againUsable != null ||
+            (again.presence_ids ?? []).includes(position_id);
+          if (againPresent) {
+            return {
+              ok: false,
+              detail: `close_not_confirmed_empty_debounce:${empties}/${need}`,
+              deal_reference,
+              fill_price,
+              fill_pnl,
+            };
+          }
+          empties += 1;
+        }
       }
     } else {
       // Partial: require list proof of size reduction (or flat)
