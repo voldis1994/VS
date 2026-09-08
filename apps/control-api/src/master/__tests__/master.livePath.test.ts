@@ -3,6 +3,9 @@
  * Proves MASTER_LIVE_ENABLED gate → confirm fill → position manage → exit close.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdtempSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { CapitalBroker } from '../broker.js';
 import { executeDecision } from '../execution.js';
 import { DEFAULT_MASTER_CONFIG, GOLD_SPEC, MasterPipeline } from '../pipeline.js';
@@ -800,5 +803,147 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     const closed = await broker.closePosition('deal-99');
     expect(closed.ok).toBe(false);
     expect(closed.detail).toMatch(/close_unconfirmed_list_failed/);
+  });
+
+  it('partial close requires size reduction proof', async () => {
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    let size = 0.1;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-partial' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({
+        ok: true,
+        positions: [
+          {
+            deal_id: 'deal-p1',
+            epic: 'GOLD',
+            direction: 'BUY',
+            size,
+            open_level: 4410,
+            stop_level: null,
+            profit_level: null,
+            upl: null,
+          },
+        ],
+      }),
+      create: async () => ({ ok: true, deal_reference: 'x', detail: 'ok' }),
+      confirm: async () => ({
+        ok: true,
+        deal_id: 'deal-p1',
+        fill_level: 4412,
+        profit: 0.5,
+        detail: 'ok',
+      }),
+      close: async () => ({ ok: true, deal_reference: 'partial-ref', detail: 'submitted' }),
+    });
+    await broker.connect();
+    // Size unchanged after close → refuse
+    const bad = await broker.closePosition('deal-p1', { size: 0.05 });
+    expect(bad.ok).toBe(false);
+    expect(bad.detail).toMatch(/close_partial_not_confirmed_size_unchanged/);
+
+    // Shrink on close submission so post-list proves reduction
+    (broker as unknown as { deps: { close: Function } }).deps.close = async () => {
+      size = 0.05;
+      return { ok: true, deal_reference: 'partial-ref-2', detail: 'submitted' };
+    };
+    size = 0.1;
+    const ok = await broker.closePosition('deal-p1', { size: 0.05 });
+    expect(ok.ok).toBe(true);
+    expect(ok.remaining_size).toBeCloseTo(0.05, 6);
+  });
+
+  it('listOpenPositions drops missing/zero open_level (no invent entry=0)', async () => {
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-ol' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({
+        ok: true,
+        positions: [
+          {
+            deal_id: 'good',
+            epic: 'GOLD',
+            direction: 'BUY',
+            size: 0.1,
+            open_level: 4410.5,
+            stop_level: null,
+            profit_level: null,
+            upl: 1,
+          },
+          {
+            deal_id: 'bad-null',
+            epic: 'GOLD',
+            direction: 'BUY',
+            size: 0.1,
+            open_level: null,
+            stop_level: null,
+            profit_level: null,
+            upl: 0,
+          },
+          {
+            deal_id: 'bad-zero',
+            epic: 'GOLD',
+            direction: 'SELL',
+            size: 0.1,
+            open_level: 0,
+            stop_level: null,
+            profit_level: null,
+            upl: null,
+          },
+        ],
+      }),
+      create: async () => ({ ok: true, deal_reference: 'x', detail: 'ok' }),
+      confirm: async () => ({ ok: true, deal_id: 'x', detail: 'ok' }),
+      close: async () => ({ ok: true, detail: 'ok' }),
+    });
+    await broker.connect();
+    const listed = await broker.listOpenPositions('GOLD');
+    expect(listed.ok).toBe(true);
+    expect(listed.positions).toHaveLength(1);
+    expect(listed.positions[0]!.position_id).toBe('good');
+    expect(listed.positions[0]!.open_level).toBeCloseTo(4410.5, 5);
+  });
+
+  it('CLOSE confirm timeout does not journal ACK_TIMEOUT (OPEN-only alert)', async () => {
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = mkdtempSync(join(tmpdir(), 'vs-close-ack-'));
+    const { loadMasterErrors } = await import('../errorJournal.js');
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-cto' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({ ok: true, positions: [] }),
+      create: async () => ({ ok: true, deal_reference: 'x', detail: 'ok' }),
+      confirm: async () => ({ ok: false, pending: true, detail: 'pending' }),
+      close: async () => ({ ok: true, deal_reference: 'cto-ref', detail: 'submitted' }),
+    });
+    await broker.connect();
+    const closed = await broker.closePosition('deal-gone');
+    expect(closed.ok).toBe(true); // flat list proves closed despite confirm timeout
+    const errs = loadMasterErrors(50);
+    expect(errs.some((e) => e.error_type === 'ACK_TIMEOUT')).toBe(false);
+    if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+    else process.env.MASTER_STATE_DIR = prev;
   });
 });

@@ -1473,7 +1473,10 @@ export class PositionManager {
         }
         continue;
       }
-      // Orphan broker position — adopt broker SL/TP + open time when available
+      // Orphan broker position — adopt only with a real entry (never entry=0)
+      if (!(bp.open_level > 0) || !Number.isFinite(bp.open_level)) {
+        continue;
+      }
       const recoverId = stableRecoverUuid(bp.position_id);
       const entryAt =
         bp.opened_at && Number.isFinite(Date.parse(bp.opened_at))

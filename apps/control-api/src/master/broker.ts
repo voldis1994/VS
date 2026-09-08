@@ -672,21 +672,32 @@ export class CapitalBroker implements MasterBroker {
     }
     const positions = (listed.positions as any[])
       .filter((p) => !epic || epicsMatch(p.epic, epic))
-      .map((p) => ({
-        position_id: p.deal_id,
-        epic: p.epic,
-        side: p.direction as Side,
-        size: p.size,
-        open_level: p.open_level ?? 0,
-        stop_level: p.stop_level ?? null,
-        profit_level: p.profit_level ?? null,
-        upl: p.upl ?? null,
-        opened_at: p.opened_at ?? null,
-      }));
+      .map((p) => {
+        const openRaw = Number(p.open_level);
+        const open_level =
+          Number.isFinite(openRaw) && openRaw > 0 ? openRaw : null;
+        return {
+          position_id: p.deal_id,
+          epic: p.epic,
+          side: p.direction as Side,
+          size: p.size,
+          // Never invent 0 — orphan adopt must see missing entry as null/NaN skip
+          open_level: open_level ?? Number.NaN,
+          stop_level: p.stop_level ?? null,
+          profit_level: p.profit_level ?? null,
+          upl: p.upl ?? null,
+          opened_at: p.opened_at ?? null,
+        };
+      })
+      // Drop rows without a usable entry — safer than adopting entry=0
+      .filter((p) => Number.isFinite(p.open_level) && p.open_level > 0);
     return { ok: true, positions };
   }
 
-  private async waitConfirm(dealReference: string): Promise<{
+  private async waitConfirm(
+    dealReference: string,
+    opts?: { /** When true, journal ACK_TIMEOUT (OPEN only — not CLOSE/MODIFY). */ ackTimeoutAlert?: boolean }
+  ): Promise<{
     ok: boolean;
     deal_id?: string;
     fill_level?: number;
@@ -726,11 +737,14 @@ export class CapitalBroker implements MasterBroker {
         continue;
       }
     }
-    logMasterError({
-      module: 'capital.waitConfirm',
-      error_type: 'ACK_TIMEOUT',
-      message: `confirm_timeout ref=${dealReference}`,
-    });
+    // Only OPEN confirm timeouts should trip cycle-alert entry blocks
+    if (opts?.ackTimeoutAlert) {
+      logMasterError({
+        module: 'capital.waitConfirm',
+        error_type: 'ACK_TIMEOUT',
+        message: `confirm_timeout ref=${dealReference}`,
+      });
+    }
     return { ok: false, detail: `confirm_timeout ref=${dealReference}` };
   }
 
@@ -910,7 +924,9 @@ export class CapitalBroker implements MasterBroker {
     let fill_price: number | null = null;
     let fill_size: number | null = null;
     if (opened.deal_reference) {
-      const conf = await this.waitConfirm(opened.deal_reference);
+      const conf = await this.waitConfirm(opened.deal_reference, {
+        ackTimeoutAlert: true,
+      });
       if (conf.rejected) {
         // Empty REJECTED (no named reason) often = sibling session / pin glitch with a
         // real fill already open — match-accept; NEVER blind re-POST.
@@ -1105,6 +1121,21 @@ export class CapitalBroker implements MasterBroker {
     if (!this.session) return { ok: false, detail: 'not_connected' };
     const pinned = await this.ensureActiveAccount();
     if (!pinned.ok) return { ok: false, detail: `account_pin:${pinned.detail}` };
+
+    const partial =
+      opts?.size != null && Number.isFinite(opts.size) && opts.size > 0;
+    // Snapshot size before close so partials can prove reduction
+    let beforeSize: number | null = null;
+    {
+      const beforeList = await this.listOpenPositions();
+      const before = beforeList.ok
+        ? beforeList.positions.find((p) => p.position_id === position_id)
+        : undefined;
+      if (before && Number.isFinite(before.size) && before.size > 0) {
+        beforeSize = Number(before.size);
+      }
+    }
+
     const res = await this.deps.close(this.session, position_id, opts?.size);
     if (!res.ok) return { ok: false, detail: res.detail || 'close_failed' };
 
@@ -1134,8 +1165,6 @@ export class CapitalBroker implements MasterBroker {
     const still = listed.ok
       ? listed.positions.find((p) => p.position_id === position_id)
       : undefined;
-    const partial =
-      opts?.size != null && Number.isFinite(opts.size) && opts.size > 0;
     if (!partial) {
       // VS-System: confirm timeout / unread book must not be treated as closed
       if (!listed.ok) {
@@ -1155,6 +1184,33 @@ export class CapitalBroker implements MasterBroker {
           fill_price,
           fill_pnl,
         };
+      }
+    } else {
+      // Partial: require list proof of size reduction (or flat)
+      if (!listed.ok) {
+        return {
+          ok: false,
+          detail: `close_partial_unconfirmed_list_failed:${listed.detail || 'list_failed'}`,
+          deal_reference,
+          fill_price,
+          fill_pnl,
+        };
+      }
+      if (still) {
+        const reduced =
+          beforeSize != null &&
+          Number.isFinite(still.size) &&
+          still.size < beforeSize - 1e-9;
+        if (!reduced) {
+          return {
+            ok: false,
+            detail: 'close_partial_not_confirmed_size_unchanged',
+            deal_reference,
+            fill_price,
+            fill_pnl,
+            remaining_size: still.size,
+          };
+        }
       }
     }
 
