@@ -54,6 +54,7 @@ describe('MASTER Capital epic + status venue', () => {
     expect(live.account.equity).toBeNull();
     expect(live.account.balance).toBeNull();
     expect(live.account.daily_pnl).toBeNull();
+    expect(live.account.consecutive_losses).toBeNull();
     expect(live.account.trade_allowed).toBe(false);
     expect(live.capital_venue_opens_proven).toBe(false);
   });

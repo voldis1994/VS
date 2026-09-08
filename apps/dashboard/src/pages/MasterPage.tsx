@@ -35,7 +35,7 @@ type MasterStatus = {
     peak_equity?: number | null;
     available_to_deal?: number | null;
     trade_allowed?: boolean | null;
-    consecutive_losses?: number;
+    consecutive_losses?: number | null;
   } | null;
   open_positions: number;
   performance: {
@@ -423,10 +423,14 @@ export function MasterPage() {
         {
           k: 'Loss streak',
           v:
-            status.account?.consecutive_losses != null
-              ? String(status.account.consecutive_losses)
-              : '—',
-          bad: (status.account?.consecutive_losses || 0) >= 3,
+            status.capital_account_proven === false
+              ? '—'
+              : status.account?.consecutive_losses != null
+                ? String(status.account.consecutive_losses)
+                : '—',
+          bad:
+            status.capital_account_proven !== false &&
+            (status.account?.consecutive_losses || 0) >= 3,
         },
         {
           k: 'MC p50',

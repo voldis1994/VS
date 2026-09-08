@@ -90,6 +90,19 @@ export function resolveCloseMoneyPnl(input: {
 }
 
 /**
+ * Tag Capital LIVE closes whose money is unproven so trade cards / journal
+ * never look like a flat £0 proven exit.
+ */
+export function capitalCloseExitReason(
+  base: string,
+  pnl_proven: boolean
+): string {
+  if (pnl_proven) return base;
+  if (/capital_close_pnl_unproven/i.test(base)) return base;
+  return `${base} · capital_close_pnl_unproven`;
+}
+
+/**
  * Apply model fees after resolveCloseMoneyPnl. Unproven Capital closes stay 0/0.
  */
 export function priceResolvedCloseMoney(input: {

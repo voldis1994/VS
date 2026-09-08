@@ -16,6 +16,7 @@ import {
   type MultiTpLevel,
 } from './multiTp.js';
 import {
+  capitalCloseExitReason,
   capitalSafeBreakEvenStop,
   decideSoftTrailArm,
   preferCloseFillPnl,
@@ -473,13 +474,13 @@ export class PositionManager {
             mfe: pos.mfe,
             r_multiple: 0,
             hold_ms: heldMs,
-            exit_reason: reason,
+            exit_reason: capitalCloseExitReason(reason, priced.pnl_proven),
           };
           pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome, {
             epic: pos.epic,
           });
           this.open.delete(pos.position_id);
-          closed.push({ position: pos, outcome, reason });
+          closed.push({ position: pos, outcome, reason: outcome.exit_reason });
         }
       }
       return { closed, close_failed, modified: 0 };
@@ -562,13 +563,13 @@ export class PositionManager {
           mfe: pos.mfe,
           r_multiple: pnlPts / riskDist,
           hold_ms: heldMs,
-          exit_reason: portfolioReason,
+          exit_reason: capitalCloseExitReason(portfolioReason, priced.pnl_proven),
         };
         pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome, {
           epic: pos.epic,
         });
         this.open.delete(pos.position_id);
-        closed.push({ position: pos, outcome, reason: portfolioReason });
+        closed.push({ position: pos, outcome, reason: outcome.exit_reason });
       }
       return { closed, close_failed, open_count: this.open.size };
     }
@@ -668,7 +669,10 @@ export class PositionManager {
                   mfe: pos.mfe,
                   r_multiple: 0,
                   hold_ms: heldMs,
-                  exit_reason: `SOFT_TRAIL · money≥${softMoneyArm} pullback ${softPips}pip`,
+                  exit_reason: capitalCloseExitReason(
+                    `SOFT_TRAIL · money≥${softMoneyArm} pullback ${softPips}pip`,
+                    priced.pnl_proven
+                  ),
                 };
                 pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome, {
                   epic: pos.epic,
@@ -767,7 +771,10 @@ export class PositionManager {
                 mfe: pos.mfe,
                 r_multiple: 0,
                 hold_ms: heldMs,
-                exit_reason: exitHit.reason,
+                exit_reason: capitalCloseExitReason(
+                  exitHit.reason,
+                  priced.pnl_proven
+                ),
               };
               pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome, {
                 epic: pos.epic,
@@ -884,10 +891,12 @@ export class PositionManager {
                 mfe: pos.mfe,
                 r_multiple: 0,
                 hold_ms: heldMs,
-                exit_reason:
+                exit_reason: capitalCloseExitReason(
                   rem <= 1e-9 && closedVol > partial.close_size + 1e-9
                     ? `${partial.reason}_FULL`
                     : partial.reason,
+                  priced.pnl_proven
+                ),
               };
               pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome, {
                 epic: pos.epic,
@@ -1087,9 +1096,7 @@ export class PositionManager {
         mfe: pos.mfe,
         r_multiple: pnlPts / riskDist,
         hold_ms: heldMs,
-        exit_reason: priced.pnl_proven
-          ? verdict.reason
-          : `${verdict.reason} · capital_close_pnl_unproven`,
+        exit_reason: capitalCloseExitReason(verdict.reason, priced.pnl_proven),
       };
 
       pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome, {
@@ -1223,9 +1230,12 @@ export class PositionManager {
         mfe: pos.mfe,
         r_multiple: 0,
         hold_ms: heldMs,
-        exit_reason: `MULTI_TP_${level.index}${
-          isFinal || rem <= 1e-9 ? '_FINAL' : ''
-        }`,
+        exit_reason: capitalCloseExitReason(
+          `MULTI_TP_${level.index}${
+            isFinal || rem <= 1e-9 ? '_FINAL' : ''
+          }`,
+          priced.pnl_proven
+        ),
       };
       pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome, {
         epic: pos.epic,

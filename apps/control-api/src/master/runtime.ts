@@ -40,6 +40,7 @@ import {
 import { evaluateRisk } from './risk.js';
 import { setupKey } from './decision.js';
 import {
+  capitalCloseExitReason,
   preferCloseFillPnl,
   priceResolvedCloseMoney,
   resolveCloseMoneyPnl,
@@ -108,12 +109,13 @@ export type MasterStatus = {
   /** Null money fields when Capital LIVE account is unproven (never forged £0). */
   account: (Omit<
     AccountSnapshot,
-    'equity' | 'balance' | 'daily_pnl' | 'peak_equity'
+    'equity' | 'balance' | 'daily_pnl' | 'peak_equity' | 'consecutive_losses'
   > & {
     equity: number | null;
     balance: number | null;
     daily_pnl: number | null;
     peak_equity: number | null;
+    consecutive_losses: number | null;
   }) | null;
   open_positions: number;
   performance: ReturnType<typeof computePerformance>;
@@ -445,8 +447,10 @@ class MasterRuntime {
       opportunity_id: pos.opportunity_id,
       ok: true,
       detail: outcome.exit_reason,
-      pnl: priced.pnl_proven ? outcome.pnl : undefined,
-      fees: outcome.fees,
+      // Omit pnl/fees when unproven — do not advertise forged 0 as a flat close
+      ...(priced.pnl_proven
+        ? { pnl: outcome.pnl, fees: outcome.fees }
+        : {}),
     });
     return {
       ok: true,
@@ -569,8 +573,9 @@ class MasterRuntime {
               opportunity_id: null,
               ok: true,
               detail: this.last_exit_reason,
-              pnl: priced.pnl,
-              fees: priced.fees,
+              ...(priced.pnl_proven
+                ? { pnl: priced.pnl, fees: priced.fees }
+                : {}),
             });
           }
           // Re-list so status capital_venue_opens reflects post-flatten truth
@@ -709,9 +714,7 @@ class MasterRuntime {
         mfe: ghost.mfe,
         r_multiple: 0,
         hold_ms: Date.now() - new Date(ghost.entry_at).getTime(),
-        exit_reason: priced.pnl_proven
-          ? 'broker_flat'
-          : 'broker_flat · capital_close_pnl_unproven',
+        exit_reason: capitalCloseExitReason('broker_flat', priced.pnl_proven),
       };
       const exists = this.pipeline.journal.opportunities.some((o) => o.id === ghost.opportunity_id);
       if (!exists) {
@@ -770,8 +773,9 @@ class MasterRuntime {
         opportunity_id: ghost.opportunity_id,
         ok: true,
         detail: outcome.exit_reason,
-        pnl: outcome.pnl,
-        fees: outcome.fees,
+        ...(outcome.pnl_proven !== false
+          ? { pnl: outcome.pnl, fees: outcome.fees }
+          : {}),
       });
     }
     // Reader EXTERNAL_PARTIAL_CLOSE — journal closed slice when broker size shrinks
@@ -814,9 +818,10 @@ class MasterRuntime {
         mfe: partial.mfe,
         r_multiple: 0,
         hold_ms: 0,
-        exit_reason: priced.pnl_proven
-          ? 'EXTERNAL_PARTIAL_CLOSE'
-          : 'EXTERNAL_PARTIAL_CLOSE · capital_close_pnl_unproven',
+        exit_reason: capitalCloseExitReason(
+          'EXTERNAL_PARTIAL_CLOSE',
+          priced.pnl_proven
+        ),
       };
       const exists = this.pipeline.journal.opportunities.some(
         (o) => o.id === partial.opportunity_id
@@ -877,8 +882,9 @@ class MasterRuntime {
         opportunity_id: partial.opportunity_id,
         ok: true,
         detail: outcome.exit_reason,
-        pnl: outcome.pnl,
-        fees: outcome.fees,
+        ...(outcome.pnl_proven !== false
+          ? { pnl: outcome.pnl, fees: outcome.fees }
+          : {}),
       });
     }
     for (const orphan of sync.orphans_broker) {
@@ -1468,8 +1474,9 @@ class MasterRuntime {
         opportunity_id: c.position.opportunity_id,
         ok: true,
         detail: c.reason,
-        pnl: c.outcome.pnl,
-        fees: c.outcome.fees,
+        ...(c.outcome.pnl_proven !== false
+          ? { pnl: c.outcome.pnl, fees: c.outcome.fees }
+          : {}),
       });
     }
     // VS-System: after any CLOSE, settle before allowing same-cycle / immediate re-entry
@@ -3028,8 +3035,9 @@ class MasterRuntime {
         opportunity_id: c.position.opportunity_id,
         ok: true,
         detail: c.reason,
-        pnl: c.outcome.pnl,
-        fees: c.outcome.fees,
+        ...(c.outcome.pnl_proven !== false
+          ? { pnl: c.outcome.pnl, fees: c.outcome.fees }
+          : {}),
       });
     }
     if (managed.closed.length > 0) {
@@ -3147,6 +3155,7 @@ class MasterRuntime {
               day_start_equity: null,
               peak_equity: null,
               daily_pnl: null,
+              consecutive_losses: null,
             }
           : this.account,
       open_positions: this.positions.count(),
