@@ -68,6 +68,7 @@ export function createCapitalBroker(creds: CapitalBrokerCreds): CapitalBroker {
         deal_size_step: q.deal_size_step,
         point_size: q.point_size,
         min_stop_distance: q.min_stop_distance,
+        market_status: q.market_status,
       };
     },
     list: async (session) => listCapitalOpenPositions(session),

@@ -33,6 +33,8 @@ export type Quote = {
   epic?: string;
   /** Optional live Capital min-stop distance from dealingRules */
   min_stop_distance?: number | null;
+  /** Optional Capital marketStatus (TRADEABLE/OPEN/…) */
+  market_status?: string | null;
   /** Optional MT4 Digits from market/latest.json */
   digits?: number | null;
   /** Optional MT4 Point from market/latest.json */

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { setDeskCapitalCredLoaderForTests } from '../capitalDeskCreds.js';
 import { createCapitalBroker, masterCapitalConnectionId } from '../capitalFactory.js';
 import { sharedLoginLockForConnection } from '../capitalLoginLock.js';
 import { deskCapitalPoolConnectionId } from '../deskBridge.js';
@@ -20,6 +21,7 @@ describe('VS MASTER env broker resolve', () => {
   const prevOwnsPref = masterRuntime.owns_pipeline_pref;
 
   afterEach(() => {
+    setDeskCapitalCredLoaderForTests(null);
     for (const k of keys) {
       if (saved[k] === undefined) delete process.env[k];
       else process.env[k] = saved[k]!;
@@ -34,6 +36,10 @@ describe('VS MASTER env broker resolve', () => {
   it('defaults to paper when no Capital env', async () => {
     snap();
     for (const k of keys) delete process.env[k];
+    setDeskCapitalCredLoaderForTests(async () => ({
+      ok: false,
+      detail: 'desk_capital_no_enabled_connection',
+    }));
     expect(capitalEnvPresent()).toBe(false);
     const r = await resolveBrokerFromEnv();
     expect(r.broker.name).toBe('PAPER');
@@ -43,12 +49,68 @@ describe('VS MASTER env broker resolve', () => {
   it('falls back to paper when LIVE requested without credentials', async () => {
     snap();
     for (const k of keys) delete process.env[k];
+    setDeskCapitalCredLoaderForTests(async () => ({
+      ok: false,
+      detail: 'desk_capital_no_enabled_connection',
+    }));
     process.env.MASTER_LIVE_ENABLED = 'true';
     const r = await resolveBrokerFromEnv();
     expect(r.ok).toBe(false);
     expect(r.broker.paper).toBe(true);
     expect(r.mode).toBe('PAPER');
     expect(r.detail).toMatch(/CAPITAL_/);
+    expect(r.detail).toMatch(/desk_capital/);
+  });
+
+  it('LIVE uses Brokers DB Capital when CAPITAL_* env missing', async () => {
+    snap();
+    for (const k of keys) delete process.env[k];
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    setDeskCapitalCredLoaderForTests(async () => ({
+      ok: true,
+      creds: {
+        environment: 'demo',
+        apiKey: 'desk-key',
+        identifier: 'desk-id',
+        password: 'desk-pw',
+        dbConnectionId: 42,
+        capitalAccountId: 'cfd-desk',
+        detail: 'desk_db:conn=42',
+      },
+    }));
+    const r = await resolveBrokerFromEnv();
+    expect(r.broker.name).toBe('CAPITAL');
+    expect(r.mode).toBe('LIVE');
+    expect(r.detail).toMatch(/capital_desk_connected|desk_db/);
+  });
+
+  it('env CAPITAL_* preferred over Brokers DB when both available', async () => {
+    snap();
+    for (const k of keys) delete process.env[k];
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.CAPITAL_API_KEY = 'env-k';
+    process.env.CAPITAL_IDENTIFIER = 'env-i';
+    process.env.CAPITAL_API_PASSWORD = 'env-p';
+    let deskCalled = false;
+    setDeskCapitalCredLoaderForTests(async () => {
+      deskCalled = true;
+      return {
+        ok: true,
+        creds: {
+          environment: 'demo',
+          apiKey: 'desk-key',
+          identifier: 'desk-id',
+          password: 'desk-pw',
+          dbConnectionId: 99,
+          capitalAccountId: null,
+          detail: 'desk_db:conn=99',
+        },
+      };
+    });
+    const r = await resolveBrokerFromEnv();
+    expect(r.broker.name).toBe('CAPITAL');
+    expect(deskCalled).toBe(false);
+    expect(r.detail).toMatch(/capital_env_connected/);
   });
 
   it('prefers Capital over MT4 bridge when LIVE + CAPITAL_* set', async () => {
@@ -69,6 +131,10 @@ describe('VS MASTER env broker resolve', () => {
   it('refuses MT4 bridge without MASTER_ALLOW_MT4_LEGACY', async () => {
     snap();
     for (const k of keys) delete process.env[k];
+    setDeskCapitalCredLoaderForTests(async () => ({
+      ok: false,
+      detail: 'desk_capital_no_enabled_connection',
+    }));
     process.env.MASTER_MT4_BRIDGE = '/tmp/vs-mt4-legacy-test';
     expect(mt4LegacyAllowed()).toBe(false);
     const r = await resolveBrokerFromEnv();
@@ -80,6 +146,10 @@ describe('VS MASTER env broker resolve', () => {
   it('allows MT4 only as legacy when Capital missing + ALLOW flag', async () => {
     snap();
     for (const k of keys) delete process.env[k];
+    setDeskCapitalCredLoaderForTests(async () => ({
+      ok: false,
+      detail: 'desk_capital_no_enabled_connection',
+    }));
     process.env.MASTER_MT4_BRIDGE = '/tmp/vs-mt4-legacy-ok';
     process.env.MASTER_ALLOW_MT4_LEGACY = 'true';
     const r = await resolveBrokerFromEnv();
@@ -87,6 +157,28 @@ describe('VS MASTER env broker resolve', () => {
     expect(r.detail).toMatch(/mt4_legacy/);
   });
 
+  it('LIVE prefers Brokers DB Capital over MT4 legacy', async () => {
+    snap();
+    for (const k of keys) delete process.env[k];
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_MT4_BRIDGE = '/tmp/vs-mt4-should-lose';
+    process.env.MASTER_ALLOW_MT4_LEGACY = 'true';
+    setDeskCapitalCredLoaderForTests(async () => ({
+      ok: true,
+      creds: {
+        environment: 'demo',
+        apiKey: 'desk-key',
+        identifier: 'desk-id',
+        password: 'desk-pw',
+        dbConnectionId: 7,
+        capitalAccountId: null,
+        detail: 'desk_db:conn=7',
+      },
+    }));
+    const r = await resolveBrokerFromEnv();
+    expect(r.broker.name).toBe('CAPITAL');
+    expect(r.detail).toMatch(/capital_desk_connected|desk_db/);
+  });
   it('desk MASTER pool ignores DB connectionId (shares env 900001 CST lock)', () => {
     snap();
     delete process.env.MASTER_CAPITAL_CONNECTION_ID;

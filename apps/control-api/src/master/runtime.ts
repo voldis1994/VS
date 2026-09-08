@@ -1956,6 +1956,14 @@ class MasterRuntime {
         }
         const { bars } = builder.pushTick(q.mid);
         if (bars.length < 5) return;
+        // Desk parity: non-TRADEABLE Capital market → ACCOUNT_NOT_TRADEABLE (block entries, still manage)
+        if (q.market_status != null) {
+          const { capitalMarketAllowsTrading } = await import('./capitalMarket.js');
+          this.account.trade_allowed = capitalMarketAllowsTrading(q.market_status);
+          if (!this.account.trade_allowed) {
+            this.broker_detail = `${this.broker_detail || ''};market:${q.market_status}`.slice(-400);
+          }
+        }
         await this.tick(bars, {
           bid: q.bid,
           ask: q.ask,
@@ -1964,6 +1972,7 @@ class MasterRuntime {
           epic: q.epic || this.epic,
           ts_ms: q.ts_ms,
           min_stop_distance: q.min_stop_distance,
+          market_status: q.market_status,
           digits: q.digits,
           point: q.point,
         });

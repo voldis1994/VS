@@ -97,7 +97,9 @@ export async function registerMasterRoutes(app: FastifyInstance) {
     }
   );
 
-  app.post<{ Body: { mode?: 'PAPER' | 'LIVE' | 'BACKTEST'; live_feed?: boolean } }>(
+  app.post<{
+    Body: { mode?: 'PAPER' | 'LIVE' | 'BACKTEST'; live_feed?: boolean; connection_id?: number };
+  }>(
     '/api/master/start',
     async (req) => {
       const wantMode = req.body?.mode;
@@ -130,7 +132,9 @@ export async function registerMasterRoutes(app: FastifyInstance) {
         return { ok: false, detail: 'LIVE blocked — MASTER_LIVE_ENABLED not set', status: masterRuntime.status() };
       }
       const { resolveBrokerFromEnv } = await import('../master/envBroker.js');
-      const resolved = await resolveBrokerFromEnv();
+      const resolved = await resolveBrokerFromEnv({
+        deskConnectionId: req.body?.connection_id ?? null,
+      });
       if (!resolved.ok) {
         masterRuntime.setMode('PAPER');
         return {
@@ -258,29 +262,48 @@ export async function registerMasterRoutes(app: FastifyInstance) {
   });
 
   /** Credential-free Capital connectivity probe — fails closed honestly without secrets.
-   * Uses shared MASTER CST pool — never bare openCapitalSession (second POST kills LIVE). */
+   * Uses shared MASTER CST pool — never bare openCapitalSession (second POST kills LIVE).
+   * Tries env CAPITAL_* first, then Brokers-page DB credentials. */
   app.post('/api/master/broker/capital/probe', async () => {
     const { acquireCapitalSession } = await import('../services/capitalCom.js');
     const { capitalEnvPresent } = await import('../master/envBroker.js');
     const { masterCapitalConnectionId } = await import('../master/capitalFactory.js');
+    const { loadDeskCapitalCredentials } = await import('../master/capitalDeskCreds.js');
+
+    let environment = (process.env.CAPITAL_ENVIRONMENT || 'demo').trim();
+    let apiKey = (process.env.CAPITAL_API_KEY || '').trim();
+    let identifier = (process.env.CAPITAL_IDENTIFIER || '').trim();
+    let password = (
+      process.env.CAPITAL_API_PASSWORD ||
+      process.env.CAPITAL_PASSWORD ||
+      ''
+    ).trim();
+    let source = 'env';
+
     if (!capitalEnvPresent()) {
-      return {
-        ok: false,
-        status: 'NO_CREDENTIALS',
-        detail:
-          'CAPITAL_API_KEY / CAPITAL_IDENTIFIER / CAPITAL_API_PASSWORD not set — cannot open live Capital session',
-      };
+      const desk = await loadDeskCapitalCredentials();
+      if (!desk.ok) {
+        return {
+          ok: false,
+          status: 'NO_CREDENTIALS',
+          detail:
+            'CAPITAL_* env missing and no Brokers-page Capital credentials — cannot open live Capital session',
+          desk_detail: desk.detail,
+        };
+      }
+      environment = desk.creds.environment;
+      apiKey = desk.creds.apiKey;
+      identifier = desk.creds.identifier;
+      password = desk.creds.password;
+      source = desk.creds.detail;
     }
+
     const connectionId = masterCapitalConnectionId();
     const opened = await acquireCapitalSession({
-      environment: (process.env.CAPITAL_ENVIRONMENT || 'demo').trim(),
-      apiKey: (process.env.CAPITAL_API_KEY || '').trim(),
-      identifier: (process.env.CAPITAL_IDENTIFIER || '').trim(),
-      password: (
-        process.env.CAPITAL_API_PASSWORD ||
-        process.env.CAPITAL_PASSWORD ||
-        ''
-      ).trim(),
+      environment,
+      apiKey,
+      identifier,
+      password,
       connectionId,
     });
     // Leave session in pool — do not close/DELETE
@@ -288,10 +311,51 @@ export async function registerMasterRoutes(app: FastifyInstance) {
       ok: opened.ok,
       status: opened.ok ? 'CONNECTED' : 'CONNECT_FAILED',
       detail: opened.ok
-        ? `session_ok:pool=${connectionId}`
+        ? `session_ok:pool=${connectionId}:source=${source}`
         : opened.result.detail,
-      environment: process.env.CAPITAL_ENVIRONMENT || 'demo',
+      environment,
       connectionId,
+      source,
+    };
+  });
+
+  /**
+   * Attach Capital.com broker into MASTER from env or Brokers DB.
+   * Primary LIVE venue — not MT4. Requires MASTER_LIVE_ENABLED for LIVE mode.
+   */
+  app.post<{ Body: { connection_id?: number } }>('/api/master/broker/capital/attach', async (req) => {
+    const { resolveBrokerFromEnv } = await import('../master/envBroker.js');
+    const prevLive = process.env.MASTER_LIVE_ENABLED;
+    if (prevLive !== 'true') {
+      return {
+        ok: false,
+        detail:
+          'Capital attach refused — set MASTER_LIVE_ENABLED=true (primary LIVE = Capital.com API)',
+      };
+    }
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const resolved = await resolveBrokerFromEnv({
+      deskConnectionId: req.body?.connection_id ?? null,
+    });
+    if (!resolved.ok || resolved.broker.name !== 'CAPITAL') {
+      return {
+        ok: false,
+        detail: resolved.detail,
+        broker: resolved.broker.name,
+        mode: resolved.mode,
+      };
+    }
+    masterRuntime.stop();
+    masterRuntime.attachBroker(resolved.broker);
+    masterRuntime.broker_detail = resolved.detail;
+    masterRuntime.setMode('LIVE');
+    await masterRuntime.start({ broker: resolved.broker, live_feed: false });
+    return {
+      ok: true,
+      broker: resolved.broker.name,
+      mode: masterRuntime.cfg.mode,
+      running: masterRuntime.running,
+      detail: resolved.detail,
     };
   });
 
@@ -452,6 +516,7 @@ h2{font-size:13px;color:#9fb0c0;margin:22px 0 8px;text-transform:uppercase;lette
   <button id="btnAi">AI advisory toggle</button>
   <button id="btnOwns">MASTER owns toggle</button>
   <button id="btnCapital">Capital probe</button>
+  <button id="btnCapitalAttach">Attach Capital</button>
   <button id="btnMt4">MT4 legacy</button>
 </div>
 <div class="grid" id="cards"></div>
@@ -575,6 +640,7 @@ document.getElementById('btnFlatten').onclick=async()=>{const r=await fetch('/ap
 document.getElementById('btnAi').onclick=async()=>{ai=ai==='off'?'advisory':'off';await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ai_mode:ai})});pushLog('ai_mode='+ai);refresh()};
 document.getElementById('btnOwns').onclick=async()=>{const s=await fetch('/api/master/status').then(r=>r.json());const on=!s.owns_pipeline;await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({owns_pipeline:on})});pushLog('owns_pipeline='+on);refresh()};
 document.getElementById('btnCapital').onclick=async()=>{const r=await fetch('/api/master/broker/capital/probe',{method:'POST'}).then(r=>r.json());pushLog('capital probe '+JSON.stringify(r).slice(0,200));refresh()};
+document.getElementById('btnCapitalAttach').onclick=async()=>{const r=await fetch('/api/master/broker/capital/attach',{method:'POST',headers:{'content-type':'application/json'},body:'{}'}).then(r=>r.json());pushLog('capital attach '+JSON.stringify(r).slice(0,200));refresh()};
 document.getElementById('btnMt4').onclick=async()=>{const bridge=prompt('MT4 bridge root path','/tmp/vs-mt4-bridge');if(!bridge)return;const r=await fetch('/api/master/broker/mt4',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bridge_root:bridge})}).then(r=>r.json());pushLog('mt4 '+JSON.stringify(r).slice(0,200));refresh()};
 refresh();setInterval(refresh,2000);
 </script>

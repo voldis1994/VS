@@ -146,6 +146,8 @@ async function main() {
       'src/master/candleBias.ts',
       'src/master/moneyExit.ts',
       'src/master/capitalLoginLock.ts',
+      'src/master/capitalDeskCreds.ts',
+      'src/master/capitalMarket.ts',
       'src/master/newsCalendar.ts',
       'src/master/capitalStream.ts',
       'src/master/manageConfig.ts',

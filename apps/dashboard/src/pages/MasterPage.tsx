@@ -628,6 +628,21 @@ export function MasterPage() {
           className="btn"
           disabled={busy}
           onClick={() =>
+            void act('capital-attach', () =>
+              apiFetch('/api/master/broker/capital/attach', {
+                method: 'POST',
+                body: '{}',
+              })
+            )
+          }
+        >
+          Attach Capital
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={busy}
+          onClick={() =>
             void act('mt4-attach', () =>
               apiFetch('/api/master/broker/mt4', { method: 'POST', body: '{}' })
             )

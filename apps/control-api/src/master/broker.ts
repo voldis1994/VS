@@ -42,6 +42,8 @@ export type BrokerQuote = {
   ts_ms: number;
   /** Live Capital dealingRules min stop distance when known */
   min_stop_distance?: number | null;
+  /** Capital marketStatus when known (TRADEABLE/OPEN/CLOSED/…) */
+  market_status?: string | null;
   /** MT4 EA market/latest.json Digits — for SL/OHLC rounding */
   digits?: number | null;
   /** MT4 EA Point — instrument tick size */
@@ -687,6 +689,7 @@ export class CapitalBroker implements MasterBroker {
         epic: streamed.epic || epic,
         ts_ms: streamed.ts_ms,
         min_stop_distance: this.liveMinStopDistance(epic),
+        market_status: null,
       };
     }
 
@@ -734,6 +737,7 @@ export class CapitalBroker implements MasterBroker {
       epic: q.epic || epic,
       ts_ms: Date.now(),
       min_stop_distance: minStop,
+      market_status: q.market_status ?? null,
     };
   }
 
