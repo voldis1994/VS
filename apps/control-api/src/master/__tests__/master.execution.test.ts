@@ -326,6 +326,106 @@ describe('VS MASTER MT4 file bridge', () => {
     }
   });
 
+  it('OPEN late-fill expires cmd ASAP so attach MODIFY is not blocked', async () => {
+    const prevPolls = process.env.MASTER_MT4_ACK_POLLS;
+    const prevMs = process.env.MASTER_MT4_ACK_POLL_MS;
+    process.env.MASTER_MT4_ACK_POLLS = '8';
+    process.env.MASTER_MT4_ACK_POLL_MS = '40';
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-lateasap-'));
+    const sim = new Mt4BridgeSimulator(root);
+    // Fill ticket without ACK; leave cmd_ so host must expire before MODIFY attach
+    sim.openWithoutAck = true;
+    sim.keepCommandsAfterAck = true;
+    sim.ignoreOpenSl = true;
+    sim.setQuote(4400, 4400.4);
+    sim.start(25);
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    try {
+      const placed = await broker.placeOrder({
+        intent_id: 'lateasapintent000000000001',
+        epic: 'XAUUSD',
+        side: 'BUY',
+        size: 0.03,
+        stop_level: 4390,
+        profit_level: 4420,
+      });
+      expect(placed.ok).toBe(true);
+      expect(placed.detail).toMatch(/mt4_filled_late/);
+      expect(placed.position_id).toBeTruthy();
+      // Without ASAP expire, ensureOpenStopOrFail→MODIFY would hit mt4_pending_control_command
+      expect(existsSync(join(root, 'commands', `cmd_${placed.order_id}.json`))).toBe(
+        false
+      );
+      expect(
+        existsSync(join(root, 'commands', 'expired', `cmd_${placed.order_id}.json`))
+      ).toBe(true);
+      const opens = await broker.listOpenPositions('XAUUSD');
+      const hit = opens.positions.find((p) => p.position_id === placed.position_id);
+      expect(hit?.stop_level).toBe(4390);
+      expect(hit?.profit_level).toBe(4420);
+    } finally {
+      sim.stop();
+      if (prevPolls === undefined) delete process.env.MASTER_MT4_ACK_POLLS;
+      else process.env.MASTER_MT4_ACK_POLLS = prevPolls;
+      if (prevMs === undefined) delete process.env.MASTER_MT4_ACK_POLL_MS;
+      else process.env.MASTER_MT4_ACK_POLL_MS = prevMs;
+    }
+  });
+
+  it('OPEN late-fill ignores pre-existing same side/size ticket', async () => {
+    const prevPolls = process.env.MASTER_MT4_ACK_POLLS;
+    const prevMs = process.env.MASTER_MT4_ACK_POLL_MS;
+    process.env.MASTER_MT4_ACK_POLLS = '6';
+    process.env.MASTER_MT4_ACK_POLL_MS = '30';
+    try {
+      const root = mkdtempSync(join(tmpdir(), 'vs-mt4-preexist-'));
+      const broker = new Mt4FileBroker(root);
+      await broker.connect();
+      mkdirSync(join(root, 'market'), { recursive: true });
+      mkdirSync(join(root, 'status'), { recursive: true });
+      writeFileSync(
+        join(root, 'market', 'latest.json'),
+        JSON.stringify({ bid: 4400, ask: 4400.4, symbol: 'XAUUSD' })
+      );
+      writeFileSync(
+        join(root, 'status', 'latest.json'),
+        JSON.stringify({
+          equity: 10000,
+          balance: 10000,
+          connected: true,
+          trading_allowed: true,
+          positions: [
+            {
+              ticket: 777001,
+              symbol: 'XAUUSD',
+              side: 'BUY',
+              lot: 0.02,
+              open: 4399,
+              sl: 4380,
+              tp: 0,
+            },
+          ],
+        })
+      );
+      const placed = await broker.placeOrder({
+        intent_id: 'preexistintent00000000001',
+        epic: 'XAUUSD',
+        side: 'BUY',
+        size: 0.02,
+        stop_level: 4390,
+      });
+      expect(placed.ok).toBe(false);
+      expect(placed.detail).toBe('mt4_command_written_ack_timeout');
+      expect(placed.position_id).toBeNull();
+    } finally {
+      if (prevPolls === undefined) delete process.env.MASTER_MT4_ACK_POLLS;
+      else process.env.MASTER_MT4_ACK_POLLS = prevPolls;
+      if (prevMs === undefined) delete process.env.MASTER_MT4_ACK_POLL_MS;
+      else process.env.MASTER_MT4_ACK_POLL_MS = prevMs;
+    }
+  });
+
   it('OPEN uses chart Symbol() from market (GOLD alias → XAUUSD)', async () => {
     const root = mkdtempSync(join(tmpdir(), 'vs-mt4-chartsym-'));
     const sim = new Mt4BridgeSimulator(root);

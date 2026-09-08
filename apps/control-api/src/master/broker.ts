@@ -2177,6 +2177,15 @@ export class Mt4FileBroker implements MasterBroker {
       tp: tpRounded ?? input.profit_level ?? null,
       reason: 'INTENT',
     });
+    // Snapshot tickets before publish — late-fill must adopt only a *new* ticket
+    // (same side/size already open must not count as this OPEN's fill).
+    const preOpenTickets = new Set<string>();
+    {
+      const listed = await this.listOpenPositions(input.epic);
+      if (listed.ok) {
+        for (const p of listed.positions) preOpenTickets.add(p.position_id);
+      }
+    }
     this.writeCommandAtomic(id, payload);
 
     const waited = await this.waitAck(id);
@@ -2254,9 +2263,15 @@ export class Mt4FileBroker implements MasterBroker {
     // Timeout — last-chance: EA may have filled without readable ack yet
     const opens = await this.listOpenPositions(input.epic);
     const late = opens.positions.find(
-      (p) => p.side === input.side && Math.abs(p.size - input.size) < 1e-6
+      (p) =>
+        !preOpenTickets.has(p.position_id) &&
+        p.side === input.side &&
+        Math.abs(p.size - input.size) < 1e-6
     );
     if (late) {
+      // Archive immediately — attach/prove calls MODIFY/CLOSE; live cmd_ would
+      // trip hasPendingCommand → mt4_pending_control_command and block attach.
+      this.expireCommand(id);
       const fill_price = late.open_level;
       const wantProtectiveSl =
         input.stop_level != null && Number.isFinite(input.stop_level);
@@ -2275,7 +2290,6 @@ export class Mt4FileBroker implements MasterBroker {
             fill_price,
             detail: guard.detail,
           });
-          this.expireCommand(id);
           return {
             ok: false,
             order_id: id,
@@ -2292,7 +2306,6 @@ export class Mt4FileBroker implements MasterBroker {
         fill_price,
         detail: 'ACK_LATE_FILL',
       });
-      this.expireCommand(id);
       return {
         ok: true,
         order_id: id,

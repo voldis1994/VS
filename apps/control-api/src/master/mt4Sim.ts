@@ -42,6 +42,8 @@ export class Mt4BridgeSimulator {
   forceFullCloseOnPartial = false;
   /** Test fault: leave cmd_ on disk after ACK (prove host expireCommand). */
   keepCommandsAfterAck = false;
+  /** Test fault: OPEN fills status but writes no ACK (prove late-fill path). */
+  openWithoutAck = false;
   /** Test fault: ACK fill differs from status open (prove fill preference). */
   ackFillOverride: number | null = null;
 
@@ -196,6 +198,10 @@ export class Mt4BridgeSimulator {
         this.ackFillOverride != null && Number.isFinite(this.ackFillOverride)
           ? this.ackFillOverride
           : open;
+      if (this.openWithoutAck) {
+        // Ticket live in status; host must late-fill + expire cmd (no EA re-OPEN).
+        return;
+      }
       this.writeAck(id, true, ticket, 'opened', { fill, profit: 0 });
       return;
     }
