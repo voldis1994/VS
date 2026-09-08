@@ -1134,6 +1134,8 @@ export class CapitalBroker implements MasterBroker {
     detail: string;
     rejected?: boolean;
     reject_reason?: string;
+    /** DELETED/CLOSED — ok for CLOSE but must NOT skip empty-list debounce. */
+    closed_gone?: boolean;
   }> {
     if (!this.deps.confirm) {
       return { ok: false, detail: 'no_confirm_dep' };
@@ -1169,6 +1171,7 @@ export class CapitalBroker implements MasterBroker {
           fill_level: conf.fill_level,
           profit: conf.profit,
           detail: conf.detail,
+          closed_gone: true,
         };
       }
       if (!conf.pending) {
@@ -2069,7 +2072,11 @@ export class CapitalBroker implements MasterBroker {
 
     let fill_price: number | null = null;
     let fill_pnl: number | null = null;
-    /** True only when deal confirm book returned ACCEPTED — one empty list is then enough. */
+    /**
+     * True only for deal-book ACCEPTED — one empty list is then enough.
+     * closed_gone (DELETED/CLOSED) is ok for CLOSE but must still debounce empties;
+     * Capital close confirms are usually DELETED, and a flake empty must not prove flat.
+     */
     let confirmAccepted = false;
     const deal_reference = res.deal_reference || undefined;
     if (deal_reference && this.deps.confirm) {
@@ -2085,7 +2092,7 @@ export class CapitalBroker implements MasterBroker {
           fill_pnl: conf.profit ?? null,
         };
       }
-      if (conf.ok) confirmAccepted = true;
+      if (conf.ok && !conf.closed_gone) confirmAccepted = true;
       if (conf.fill_level != null && Number.isFinite(conf.fill_level)) {
         fill_price = conf.fill_level;
       }

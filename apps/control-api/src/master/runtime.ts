@@ -2692,9 +2692,9 @@ class MasterRuntime {
       capital_creds_available: capitalEnvPresent() || this.capitalDeskCredsSeen,
       capital_live_attached: this.capitalLiveAttached(),
       capital_account_proven:
-        !(this.broker instanceof CapitalBroker) ||
-        this.broker.paper ||
-        this.capitalAccountProven,
+        this.broker instanceof CapitalBroker && !this.broker.paper
+          ? this.capitalAccountProven
+          : null,
       capital_venue_opens: this.capitalVenueOpens,
       capital_venue_opens_proven: this.capitalVenueOpensProven,
       last_decision: this.last_decision,

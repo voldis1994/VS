@@ -16,7 +16,7 @@ type MasterStatus = {
   capital_credential_source?: 'env' | 'desk' | null;
   capital_creds_available?: boolean;
   capital_live_attached?: boolean;
-  capital_account_proven?: boolean;
+  capital_account_proven?: boolean | null;
   capital_venue_opens?: number;
   capital_venue_opens_proven?: boolean;
   last_decision: { kind?: string } | null;

@@ -1369,6 +1369,57 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(closed.fill_pnl).toBe(-1.25);
   });
 
+  it('closed_gone DELETED still debounces empty list (flake reopen refuses)', async () => {
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    let lists = 0;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-cg-flake' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => {
+        lists += 1;
+        // before-size snapshot + first post-close empty, then deal still LIVE
+        if (lists <= 2) return { ok: true, positions: [] };
+        return {
+          ok: true,
+          positions: [
+            {
+              deal_id: 'still-live',
+              epic: 'GOLD',
+              direction: 'BUY',
+              size: 0.1,
+              open_level: 4410,
+            },
+          ],
+        };
+      },
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({
+        ok: true,
+        deal_reference: 'cg-flake-ref',
+        detail: 'submitted',
+      }),
+      confirm: async () => ({
+        ok: false,
+        closed_gone: true,
+        deal_id: 'still-live',
+        fill_level: 4410.1,
+        profit: -0.5,
+        detail: 'confirm_closed_gone:DELETED',
+      }),
+    });
+    await broker.connect();
+    const closed = await broker.closePosition('still-live');
+    expect(closed.ok).toBe(false);
+    expect(closed.detail).toMatch(/close_not_confirmed|still_open|debounce/i);
+  });
+
   it('named reject does not fail-close pre-open same-size orphan', async () => {
     process.env.MASTER_LIVE_ENABLED = 'true';
     process.env.MASTER_CONFIRM_FAST = 'true';
