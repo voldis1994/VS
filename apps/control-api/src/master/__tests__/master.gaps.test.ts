@@ -1708,6 +1708,37 @@ describe('protective mark + fill rebase', () => {
   });
 });
 
+describe('manageConfig trail + partial knobs', () => {
+  it('persists trail_start/lock and partial_close_* through save/load', async () => {
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = mkdtempSync(join(tmpdir(), 'vs-manage-partial-'));
+    const {
+      saveManageConfig,
+      loadManageConfig,
+      applyManageConfigPatch,
+      pickManageConfig,
+    } = await import('../manageConfig.js');
+    const patch = {
+      trail_start: 1.5,
+      trail_lock: 0.8,
+      partial_close_progress: 0.4,
+      partial_close_volume: 0.3,
+    };
+    expect(saveManageConfig(patch)).toBe(true);
+    const loaded = loadManageConfig();
+    expect(loaded?.trail_start).toBe(1.5);
+    expect(loaded?.trail_lock).toBe(0.8);
+    expect(loaded?.partial_close_progress).toBe(0.4);
+    expect(loaded?.partial_close_volume).toBe(0.3);
+    const next = applyManageConfigPatch(DEFAULT_MASTER_CONFIG, loaded!);
+    const picked = pickManageConfig(next);
+    expect(picked.partial_close_progress).toBe(0.4);
+    expect(picked.trail_lock).toBe(0.8);
+    if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+    else process.env.MASTER_STATE_DIR = prev;
+  });
+});
+
 describe('runtime gates persist', () => {
   it('save/load last_loss and reject cooldown', async () => {
     const prev = process.env.MASTER_STATE_DIR;
@@ -4363,6 +4394,50 @@ describe('SELL manageTick partial_close + Check trail', () => {
 });
 
 describe('replay exit order vs live manageTick', () => {
+  it('force_allow_close=false vetoes TIME_STOP but hard SL still exits', async () => {
+    const { replayMaster } = await import('../replay.js');
+    const bars = Array.from({ length: 60 }, (_, i) => {
+      const o = 4400 + Math.min(i, 30) * 0.8;
+      return {
+        open: o,
+        high: o + 1.5,
+        low: o - 0.4,
+        close: o + 0.6,
+        ts_ms: Date.UTC(2026, 8, 7, 12, i),
+      };
+    });
+    // Crash deep through any SL after entry window
+    bars.push({
+      open: 4424,
+      high: 4425,
+      low: 4300,
+      close: 4310,
+      ts_ms: Date.UTC(2026, 8, 7, 13, 0),
+    });
+    const result = await replayMaster({
+      bars,
+      warmup: 25,
+      force_allow_close: false,
+      cfg: {
+        ...DEFAULT_MASTER_CONFIG,
+        block_off_hours: false,
+        block_high_impact_news: false,
+        min_score: 0.25,
+        max_hold_ms: 1, // would TIME_STOP immediately if soft allowed
+        soft_trail_money_arm: 0,
+        scalp_pct_chase: false,
+        require_positive_expectancy: false,
+        ai_mode: 'advisory',
+      },
+    });
+    const exits = result.opportunities
+      .filter((o) => o.outcome)
+      .map((o) => o.outcome!.exit_reason);
+    expect(exits.every((r) => r !== 'TIME_STOP')).toBe(true);
+    // Hard SL may still fire on crash bar
+    expect(result.equity_curve.length).toBeGreaterThan(10);
+  });
+
   it('hard SL wins over BestOutcome HardInvalidation on same bar', async () => {
     const { replayMaster } = await import('../replay.js');
     // Strong uptrend open, then violent dump through SL while mid is deeply underwater

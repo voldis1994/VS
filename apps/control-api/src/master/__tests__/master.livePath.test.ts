@@ -5284,6 +5284,148 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(pm.get('deal-ema-unread')!.ema3_side).toBe('above');
   });
 
+  it('Capital EMA_TICK SELL soft close refused when broker_upl unread + side freeze', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const { PositionManager } = await import('../positionManager.js');
+    const pm = new PositionManager();
+    const closed: string[] = [];
+    const broker = {
+      name: 'CAPITAL',
+      paper: false,
+      async closePosition(id: string) {
+        closed.push(id);
+        return { ok: true, fill_price: 4415, fill_pnl: null, detail: 'closed' };
+      },
+      async modifyPosition() {
+        return { ok: true, detail: 'ok' };
+      },
+      async listOpenPositions() {
+        return { ok: true, positions: [], detail: '0' };
+      },
+    } as any;
+    const pipe = new MasterPipeline('LIVE');
+    pm.register({
+      position_id: 'deal-ema-sell-unread',
+      opportunity_id: 'opp-ema-sell-unread',
+      intent_id: 'intent-ema-sell-unread',
+      epic: 'GOLD',
+      side: 'SELL',
+      size: 0.1,
+      entry: 4410,
+      stop_loss: 4500,
+      decision: {
+        decision_id: 'd',
+        kind: 'SELL',
+        side: 'SELL',
+        block_reason: null,
+        analysis: { regime: 'TREND' },
+        buy: { valid: false, filter_ok: false, score: 0 },
+        sell: { valid: true, filter_ok: true, score: 0.9 },
+      } as any,
+    });
+    pm.get('deal-ema-sell-unread')!.broker_upl = null;
+    pm.get('deal-ema-sell-unread')!.ema3_side = 'below';
+    const quote = {
+      bid: 4410.0,
+      ask: 4410.4,
+      mid: 4410.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    };
+    // Bullish EMA1×EMA3 cross vs SELL would exit if UPL ready
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote,
+      instrument_point_value: 1,
+      soft_trail_money_arm: 0,
+      scalp_pct_chase: false,
+      allow_close: true,
+      close_all_profit: 0,
+      close_all_loss: 0,
+      breakeven_progress: 0,
+      ema3: 4408,
+      ema1: 4414,
+      ema1_prev: 4406,
+      ema3_prev: 4410,
+      ema1_prev2: 4405,
+      ema3_prev2: 4411,
+    });
+    expect(managed.closed.length).toBe(0);
+    expect(closed.length).toBe(0);
+    expect(pm.count()).toBe(1);
+    // Side must freeze while UPL unread (not advance to miss PRICE_THROUGH later)
+    expect(pm.get('deal-ema-sell-unread')!.ema3_side).toBe('below');
+  });
+
+  it('Capital SELL partial_close refused when broker_upl unread', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const { PositionManager } = await import('../positionManager.js');
+    const pm = new PositionManager();
+    const closed: string[] = [];
+    const broker = {
+      name: 'CAPITAL',
+      paper: false,
+      supportsPartialClose: true,
+      async closePosition(id: string, opts?: { size?: number }) {
+        closed.push(`${id}:${opts?.size ?? 'full'}`);
+        return { ok: true, fill_price: 4395, fill_pnl: null, detail: 'partial' };
+      },
+      async modifyPosition() {
+        return { ok: true, detail: 'ok' };
+      },
+      async listOpenPositions() {
+        return { ok: true, positions: [], detail: '0' };
+      },
+    } as any;
+    const pipe = new MasterPipeline('LIVE');
+    pm.register({
+      position_id: 'deal-partial-sell-unread',
+      opportunity_id: 'opp-partial-sell-unread',
+      intent_id: 'intent-partial-sell-unread',
+      epic: 'GOLD',
+      side: 'SELL',
+      size: 0.1,
+      entry: 4400,
+      stop_loss: 4410,
+      take_profit: 4380,
+      decision: {
+        decision_id: 'd',
+        kind: 'SELL',
+        side: 'SELL',
+        block_reason: null,
+        analysis: { regime: 'TREND' },
+        buy: { valid: false, filter_ok: false, score: 0 },
+        sell: { valid: true, filter_ok: true, score: 0.9 },
+      } as any,
+    });
+    pm.get('deal-partial-sell-unread')!.broker_upl = 0; // unread
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: 4389.6,
+        ask: 4390,
+        mid: 4389.8,
+        spread: 0.4,
+        epic: 'GOLD',
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      partial_close_progress: 0.5,
+      partial_close_volume: 0.5,
+      volume_step: 0.01,
+      allow_close: true,
+      max_hold_ms: 0,
+      breakeven_progress: 0,
+    });
+    expect(managed.closed.every((c) => !/PARTIAL_CLOSE/.test(c.reason))).toBe(true);
+    expect(closed.length).toBe(0);
+    expect(pm.list()[0]!.size).toBeCloseTo(0.1, 8);
+    expect(pm.list()[0]!.partial_close_applied).toBe(false);
+  });
+
   it('Capital soft-trail refuses when broker_upl=0 (usable UPL unread)', async () => {
     process.env.MASTER_LIVE_ENABLED = 'true';
     const { PositionManager } = await import('../positionManager.js');

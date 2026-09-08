@@ -155,6 +155,10 @@ type MasterStatus = {
     require_positive_expectancy?: boolean;
     min_expectancy_samples?: number;
     be_start?: number;
+    trail_start?: number;
+    trail_lock?: number;
+    partial_close_progress?: number;
+    partial_close_volume?: number;
     min_score?: number;
     daily_loss_limit?: number;
     block_high_impact_news?: boolean;
@@ -1004,6 +1008,52 @@ export function MasterPage() {
             />
           </label>
           <label style={{ fontSize: 12 }}>
+            trail_start{' '}
+            <input
+              type="number"
+              step="0.1"
+              min={0}
+              defaultValue={status?.manage?.trail_start ?? 0}
+              id="cfg-trail-start"
+              style={{ width: 64 }}
+            />
+          </label>
+          <label style={{ fontSize: 12 }}>
+            trail_lock{' '}
+            <input
+              type="number"
+              step="0.1"
+              min={0}
+              defaultValue={status?.manage?.trail_lock ?? 0}
+              id="cfg-trail-lock"
+              style={{ width: 64 }}
+            />
+          </label>
+          <label style={{ fontSize: 12 }}>
+            partial_prog{' '}
+            <input
+              type="number"
+              step="0.05"
+              min={0}
+              max={1}
+              defaultValue={status?.manage?.partial_close_progress ?? 0.5}
+              id="cfg-partial-prog"
+              style={{ width: 56 }}
+            />
+          </label>
+          <label style={{ fontSize: 12 }}>
+            partial_vol{' '}
+            <input
+              type="number"
+              step="0.05"
+              min={0}
+              max={1}
+              defaultValue={status?.manage?.partial_close_volume ?? 0.5}
+              id="cfg-partial-vol"
+              style={{ width: 56 }}
+            />
+          </label>
+          <label style={{ fontSize: 12 }}>
             daily_loss_limit{' '}
             <input
               type="number"
@@ -1121,6 +1171,10 @@ export function MasterPage() {
                   body: JSON.stringify({
                     min_score: num('cfg-min-score'),
                     be_start: num('cfg-be-start'),
+                    trail_start: num('cfg-trail-start'),
+                    trail_lock: num('cfg-trail-lock'),
+                    partial_close_progress: num('cfg-partial-prog'),
+                    partial_close_volume: num('cfg-partial-vol'),
                     breakeven_activation_money: num('cfg-be-money'),
                     daily_loss_limit: num('cfg-daily-loss'),
                     soft_trail_money_arm: num('cfg-soft-arm'),

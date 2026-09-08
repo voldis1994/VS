@@ -22,6 +22,8 @@ export type ManageConfigPatch = Partial<
     | 'be_start'
     | 'trail_start'
     | 'trail_lock'
+    | 'partial_close_progress'
+    | 'partial_close_volume'
     | 'multi_tp_count'
     | 'multi_tp_atr_mult'
     | 'close_all_profit'
@@ -52,6 +54,8 @@ const KEYS: (keyof ManageConfigPatch)[] = [
   'be_start',
   'trail_start',
   'trail_lock',
+  'partial_close_progress',
+  'partial_close_volume',
   'multi_tp_count',
   'multi_tp_atr_mult',
   'close_all_profit',

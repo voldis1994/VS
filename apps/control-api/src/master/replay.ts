@@ -40,6 +40,7 @@ import {
 import { setupKey } from './decision.js';
 import { decideBestOutcomeExit } from '../services/exitManage.js';
 import { scalpPctLockBrokerStop } from './scalpPctChase.js';
+import { resolveAdvisor } from './ai.js';
 import type {
   Bar,
   MasterConfig,
@@ -59,6 +60,11 @@ export type ReplayOptions = {
   latency_bars?: number;
   /** Seed expectancy before replay (walk-forward OOS from IS trades). */
   expectancy_seed?: Array<{ setup_key: string; outcome: TradeOutcome }>;
+  /**
+   * Test/operator override for soft-exit AI gate.
+   * When set, skips resolveAdvisor and uses this value (hard SL/TP still fire).
+   */
+  force_allow_close?: boolean;
 };
 
 /**
@@ -91,6 +97,8 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
   let daily_pnl = 0;
   let consecutive_losses = 0;
   let last_loss_ms = 0;
+  /** Soft-exit AI gate — refreshed each bar when ai_mode !== 'off' (live last_ai_allow_close). */
+  let allow_close = cfg.ai_mode === 'off';
   let open: {
     oppId: string;
     decision: OpportunityRecord['decision'];
@@ -174,6 +182,16 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
       const lo = last.low;
       // Live manageTick uses protective mark (BUY=bid / SELL=ask), not mid/close
       const mark = protectiveMark(open.side, quote);
+      // Refresh Reader AI soft-exit gate (no journal pollution — resolveAdvisor only)
+      if (opts.force_allow_close != null) {
+        allow_close = opts.force_allow_close;
+      } else if (cfg.ai_mode === 'off') {
+        allow_close = true;
+      } else {
+        const aGate = analyzeBars(visible, spread, quote.ts_ms);
+        const adv = await resolveAdvisor(aGate, cfg.ai_mode);
+        allow_close = adv.advisor == null ? false : adv.advisor.allow_close !== false;
+      }
       const fav =
         open.side === 'BUY' ? mark - open.entry : open.entry - mark;
       open.mfe = Math.max(open.mfe, fav);
@@ -189,7 +207,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
           close_all_profit: cfg.close_all_profit,
           close_all_loss: cfg.close_all_loss,
         });
-        if (portfolio.close) {
+        if (portfolio.close && allow_close) {
           closeSlice(open, mark, open.volume, portfolio.reason, i, quote.ts_ms);
           open = null;
           equity_curve.push(equity);
@@ -336,6 +354,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
 
       // Reader partial scale-out (once) — skip when multi-TP owns ladder
       if (
+        allow_close &&
         !open.partial_close_applied &&
         !(open.multi_tp_levels && open.multi_tp_levels.length >= 2) &&
         (cfg.partial_close_progress ?? 0) > 0 &&
@@ -377,7 +396,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
       }
 
       // Multi-TP intermediate scale-outs (live parity)
-      if (open.multi_tp_levels?.length) {
+      if (allow_close && open.multi_tp_levels?.length) {
         let idx = multiTpPendingIndex(open.multi_tp_levels);
         while (idx >= 0 && open) {
           const lvl = open.multi_tp_levels[idx]!;
@@ -437,6 +456,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
         }
         if (
           exitPx == null &&
+          allow_close &&
           cfg.max_hold_ms > 0 &&
           quote.ts_ms - open.open_ts >= cfg.max_hold_ms
         ) {
@@ -445,8 +465,8 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
         }
       }
 
-      // Soft exits only when hard protective did not fire (live softBest order)
-      if (exitPx == null) {
+      // Soft exits only when AI allow_close and hard protective did not fire
+      if (exitPx == null && allow_close) {
         const e1 = emaPairFromBars(visible, 1);
         const e3 = emaPairFromBars(visible, 3);
         if (e3) {
@@ -477,10 +497,15 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
             reason = thru.reason;
           }
         }
+      } else if (exitPx == null) {
+        // Still freeze EMA side when AI vetoes soft close (live capitalUplReady freeze peer)
+        const e3 = emaPairFromBars(visible, 3);
+        if (e3) open.ema3_side = ema3PriceSide(mark, e3.cur);
       }
 
       if (
         exitPx == null &&
+        allow_close &&
         open.soft_trail_armed &&
         open.soft_trail_peak != null &&
         Number.isFinite(open.soft_trail_peak)
@@ -492,7 +517,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
           reason = 'SOFT_TRAIL';
         }
       }
-      if (exitPx == null) {
+      if (exitPx == null && allow_close) {
         const heldMs = Math.max(0, quote.ts_ms - open.open_ts);
         const bo = decideBestOutcomeExit(
           {
@@ -604,6 +629,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
           ema3_side: null,
           partial_close_applied: false,
         };
+        allow_close = cycle.ai.allow_close !== false;
         if (open.multi_tp_levels?.length) {
           const final = multiTpFinalPrice(open.multi_tp_levels);
           if (final != null) open.tp = final;
