@@ -2102,6 +2102,99 @@ describe('partial_close persist + Check be_start', () => {
     expect(pm.count()).toBe(0);
   });
 
+  it('SELL soft trail exits after money arm + adverse pullback', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    // SELL in profit (price dropped) enough to arm (£0.05 at 0.1 lot → 0.5 pts)
+    broker.setQuote({
+      bid: entry - 0.7,
+      ask: entry - 0.6,
+      mid: entry - 0.65,
+      spread: 0.1,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'soft-trail-sell-bbbbbbbb',
+      epic: 'GOLD',
+      side: 'SELL',
+      size: 0.1,
+      stop_level: entry + 2,
+      profit_level: entry - 10,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-st-sell',
+      intent_id: 'st-sell-1',
+      epic: 'GOLD',
+      side: 'SELL',
+      size: 0.1,
+      entry,
+      stop_loss: entry + 2,
+      take_profit: entry - 10,
+      decision: {
+        decision_id: 'd',
+        kind: 'SELL',
+        side: 'SELL',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis(),
+        expectancy: null,
+      },
+    });
+    await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: entry - 0.7,
+        ask: entry - 0.6,
+        mid: entry - 0.65,
+        spread: 0.1,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      soft_trail_money_arm: 0.05,
+      soft_trail_pips: 0.3,
+      scalp_pct_chase: true,
+      breakeven_progress: 0,
+      max_hold_ms: 0,
+    });
+    expect(pm.get(placed.position_id!)!.soft_trail_armed_at).toBeTruthy();
+    // Pull back up through soft exit
+    broker.setQuote({
+      bid: entry - 0.2,
+      ask: entry - 0.1,
+      mid: entry - 0.15,
+      spread: 0.1,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: entry - 0.2,
+        ask: entry - 0.1,
+        mid: entry - 0.15,
+        spread: 0.1,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      soft_trail_money_arm: 0.05,
+      soft_trail_pips: 0.3,
+      scalp_pct_chase: true,
+      breakeven_progress: 0,
+      max_hold_ms: 0,
+    });
+    expect(managed.closed.some((c) => /SOFT_TRAIL/.test(c.reason))).toBe(true);
+    expect(pm.count()).toBe(0);
+  });
+
   it('soft trail refuses to arm without scalp manage (VS-System 10s SCALPING gate)', async () => {
     const broker = new PaperBroker();
     await broker.connect();

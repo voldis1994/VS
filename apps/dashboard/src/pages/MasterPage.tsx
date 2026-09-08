@@ -414,11 +414,12 @@ export function MasterPage() {
         },
         {
           k: 'Profit factor',
-          v:
-            status.performance?.profit_factor != null &&
-            Number.isFinite(status.performance.profit_factor)
+          v: status.performance?.trades
+            ? status.performance?.profit_factor != null &&
+              Number.isFinite(status.performance.profit_factor)
               ? Number(status.performance.profit_factor).toFixed(2)
-              : '—',
+              : '—'
+            : '—',
         },
         {
           k: 'Loss streak',

@@ -59,6 +59,43 @@ describe('VS-System scalp pct chase math', () => {
     expect(cand).toBeCloseTo(4432, 8);
   });
 
+  it('SELL candidate SL trails mark by 20% of favorable move (tightens from above)', () => {
+    const entry = 4400;
+    const mark = 4360;
+    const cand = scalpPctLockCandidateSl({
+      direction: 'SELL',
+      entry,
+      livePrice: mark,
+      lockPct: 0.2,
+    });
+    // Favorable 40pts → cand = mark + 0.2*40 = 4368 (below entry)
+    expect(cand).toBeCloseTo(4368, 8);
+    expect(cand).toBeLessThan(entry);
+  });
+
+  it('SELL scalpChaseIsImprovement only tightens (lower SL toward mark)', async () => {
+    const { scalpMinStopImprovement, scalpChaseIsImprovement } = await import(
+      '../scalpPctChase.js'
+    );
+    const bump = scalpMinStopImprovement('GOLD');
+    expect(
+      scalpChaseIsImprovement({
+        direction: 'SELL',
+        candidate: 4410 + bump,
+        current: 4410,
+        minBump: bump,
+      })
+    ).toBe(false); // loosened (moved up / away from mark)
+    expect(
+      scalpChaseIsImprovement({
+        direction: 'SELL',
+        candidate: 4410 - bump,
+        current: 4410,
+        minBump: bump,
+      })
+    ).toBe(true); // tightened toward mark from above
+  });
+
   it('flat/loss returns initial 10% protective broker stop', () => {
     const sl = scalpPctLockBrokerStop({
       symbol: 'GOLD',

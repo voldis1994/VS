@@ -704,6 +704,89 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     masterRuntime.stop();
   });
 
+  it('Capital SELL placeOrder confirms fill and attaches SL above entry', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number;
+        stop_level?: number | null;
+        profit_level?: number | null;
+      }
+    >();
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-sell' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+        market_status: 'TRADEABLE',
+      }),
+      list: async () => ({
+        ok: true,
+        positions: [...positions.values()].map((p) => ({
+          deal_id: p.deal_id,
+          epic: p.epic,
+          direction: p.direction,
+          size: p.size,
+          open_level: p.open_level,
+          stop_level: p.stop_level ?? null,
+          profit_level: p.profit_level ?? null,
+        })),
+        detail: '',
+      }),
+      create: async (_s, input) => {
+        expect(String(input.direction || '').toUpperCase()).toBe('SELL');
+        return { ok: true, deal_reference: 'ref-sell-1', detail: 'opened' };
+      },
+      confirm: async () => {
+        positions.set('deal-sell-1', {
+          deal_id: 'deal-sell-1',
+          epic: 'GOLD',
+          direction: 'SELL',
+          size: 0.1,
+          open_level: 4410,
+          stop_level: 4420,
+          profit_level: 4390,
+        });
+        return { ok: true, deal_id: 'deal-sell-1', fill_level: 4410, detail: 'ok' };
+      },
+      modify: async (_s, input: { dealId?: string; stopLevel?: number; profitLevel?: number }) => {
+        const p = positions.get(String(input.dealId || ''));
+        if (!p) return { ok: false, detail: 'missing' };
+        if (input.stopLevel != null) p.stop_level = input.stopLevel;
+        if (input.profitLevel != null) p.profit_level = input.profitLevel;
+        return { ok: true, detail: 'ok' };
+      },
+      close: async () => ({ ok: true, detail: 'closed' }),
+      account: async () => ({ equity: 10_000, balance: 10_000, currency: 'GBP' }),
+    });
+    await broker.connect();
+    const placed = await broker.placeOrder({
+      intent_id: 'sell-open-sl-aaaaaaaaaa',
+      epic: 'GOLD',
+      side: 'SELL',
+      size: 0.1,
+      stop_level: 4420,
+      profit_level: 4390,
+    });
+    expect(placed.ok).toBe(true);
+    expect(placed.position_id).toBe('deal-sell-1');
+    expect(placed.fill_price).toBe(4410);
+    const open = positions.get('deal-sell-1')!;
+    expect(open.direction).toBe('SELL');
+    expect(open.stop_level!).toBeGreaterThan(open.open_level);
+    expect(open.profit_level!).toBeLessThan(open.open_level);
+  });
+
   it('bare-open then SL attach fail closes naked position (VS-System-)', async () => {
     process.env.MASTER_LIVE_ENABLED = 'true';
     const positions = new Map<

@@ -3334,7 +3334,7 @@ export class Mt4FileBroker implements MasterBroker {
     };
   }
 
-  async listOpenPositions(epic?: string): Promise<ListOpenResult> {
+  async listOpenPositions(filterEpic?: string): Promise<ListOpenResult> {
     const st = this.readStatusFile();
     if (!st) {
       // Missing status file is ambiguous — treat as transport/bridge unread, not flat book
@@ -3349,41 +3349,41 @@ export class Mt4FileBroker implements MasterBroker {
     }
     const s = st.data;
     const raw = Array.isArray(s?.positions) ? s.positions : [];
-    const positions = raw
-      .map((p: any) => {
-        const openRaw = numOrNull(p.open ?? p.OpenPrice);
-        return {
-          position_id: String(p.ticket ?? p.Ticket ?? ''),
-          epic: String(p.symbol ?? p.Symbol ?? ''),
-          side: String(p.side || p.type || '').toUpperCase().includes('SELL')
-            ? ('SELL' as const)
-            : ('BUY' as const),
-          size: Number(p.lot ?? p.Lots ?? 0),
-          // Never invent 0 — orphan adopt must see missing entry as skip
-          open_level: openRaw != null && openRaw > 0 ? openRaw : Number.NaN,
-          stop_level: protectiveLevelOrNull(p.sl ?? p.SL),
-          profit_level: protectiveLevelOrNull(p.tp ?? p.TP),
-          upl: numOrNull(p.profit ?? p.Profit),
-          opened_at: (() => {
-            const rawT = p.open_time ?? p.OpenTime ?? p.time ?? p.Time ?? null;
-            if (rawT == null || rawT === '') return null;
-            if (typeof rawT === 'number' && Number.isFinite(rawT)) {
-              const ms = rawT < 1e12 ? rawT * 1000 : rawT;
-              return new Date(ms).toISOString();
-            }
-            const d = new Date(String(rawT));
-            return Number.isFinite(d.getTime()) ? d.toISOString() : null;
-          })(),
-        };
-      })
-      .filter(
-        (p: BrokerPosition) =>
-          p.position_id &&
-          Number.isFinite(p.open_level) &&
-          p.open_level > 0 &&
-          (!epic || epicsMatch(p.epic, epic))
-      );
-    return { ok: true, positions };
+    const presence_ids: string[] = [];
+    const positions: BrokerPosition[] = [];
+    for (const p of raw) {
+      const position_id = String(p.ticket ?? p.Ticket ?? '');
+      if (!position_id) continue;
+      presence_ids.push(position_id);
+      const openRaw = numOrNull(p.open ?? p.OpenPrice);
+      if (openRaw == null || !(openRaw > 0)) continue;
+      const side = parseMt4PositionSide(p.side ?? p.type ?? p.Type ?? p.cmd);
+      // Unproven side → presence_ids only (never invent BUY)
+      if (!side) continue;
+      const epic = String(p.symbol ?? p.Symbol ?? '');
+      if (filterEpic && !epicsMatch(epic, filterEpic)) continue;
+      positions.push({
+        position_id,
+        epic,
+        side,
+        size: Number(p.lot ?? p.Lots ?? 0),
+        open_level: openRaw,
+        stop_level: protectiveLevelOrNull(p.sl ?? p.SL),
+        profit_level: protectiveLevelOrNull(p.tp ?? p.TP),
+        upl: numOrNull(p.profit ?? p.Profit),
+        opened_at: (() => {
+          const rawT = p.open_time ?? p.OpenTime ?? p.time ?? p.Time ?? null;
+          if (rawT == null || rawT === '') return null;
+          if (typeof rawT === 'number' && Number.isFinite(rawT)) {
+            const ms = rawT < 1e12 ? rawT * 1000 : rawT;
+            return new Date(ms).toISOString();
+          }
+          const d = new Date(String(rawT));
+          return Number.isFinite(d.getTime()) ? d.toISOString() : null;
+        })(),
+      });
+    }
+    return { ok: true, positions, presence_ids };
   }
 
   /**
@@ -4175,13 +4175,10 @@ export class Mt4FileBroker implements MasterBroker {
           if (st && !this.isStatusStale(st.age_ms)) {
             const raw = Array.isArray(st.data?.positions) ? st.data.positions : [];
             const late = raw.find((p: any) => {
-              const pSide = String(p.side || p.type || '')
-                .toUpperCase()
-                .includes('SELL')
-                ? 'SELL'
-                : 'BUY';
+              const pSide = parseMt4PositionSide(p.side ?? p.type ?? p.Type ?? p.cmd);
+              if (pSide == null || pSide !== side) return false;
               const pLot = Number(p.lot ?? p.Lots ?? 0);
-              if (pSide !== side || Math.abs(pLot - lot) >= 1e-6) return false;
+              if (Math.abs(pLot - lot) >= 1e-6) return false;
               // Require open_time at/after cmd publish (5s skew) — never adopt older orphans
               const ot = this.statusPositionOpenMs(p);
               if (ot == null) return false;
@@ -4308,6 +4305,22 @@ function numOrNull(v: unknown): number | null {
   if (v == null || v === '') return null;
   const n = typeof v === 'number' ? v : Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Parse MT4/Check status side. Never invent BUY when side/type is missing.
+ * Accepts BUY/SELL strings, B/S, and classic OP_BUY=0 / OP_SELL=1.
+ */
+export function parseMt4PositionSide(raw: unknown): 'BUY' | 'SELL' | null {
+  if (raw === 0 || raw === '0') return 'BUY';
+  if (raw === 1 || raw === '1') return 'SELL';
+  const s = String(raw ?? '')
+    .trim()
+    .toUpperCase();
+  if (!s) return null;
+  if (s === 'S' || s === 'SELL' || s.includes('SELL')) return 'SELL';
+  if (s === 'B' || s === 'BUY' || s.includes('BUY')) return 'BUY';
+  return null;
 }
 
 /**

@@ -234,7 +234,7 @@ async function main() {
     detail: `${fillSide}:${managed.closed[0]?.reason || 'no_exit'}`,
   };
 
-  // Explicit SELL paper leg — prove dual-side manage even when cycle forced BUY
+  // Explicit SELL via executeDecision — prove risk→intent→broker→STOP path
   const sellBroker = new PaperBroker();
   await sellBroker.connect();
   const sellEntry = quote.mid;
@@ -246,33 +246,53 @@ async function main() {
     epic: 'GOLD',
     ts_ms: Date.now(),
   });
-  const sellPlace = await sellBroker.placeOrder({
-    intent_id: 'audit-sell-leg-bbbbbbbbbbbb',
-    epic: 'GOLD',
-    side: 'SELL',
-    size: 0.2,
-    stop_level: sellEntry + 2,
-    profit_level: sellEntry - 5,
-  });
   const sellPipe = new MasterPipeline('PAPER');
-  const sellPm = new PositionManager();
-  const sellDecision = {
+  const sellForced = {
     ...forced,
     kind: 'SELL' as const,
     side: 'SELL' as const,
     block_reason: null,
+    sell: {
+      ...(forced.sell || forced.buy),
+      valid: true,
+      filter_ok: true,
+      score: 0.9,
+    },
   };
-  if (sellPlace.ok && sellPlace.position_id) {
+  const sellOpp = sellPipe.journal.recordOpportunity({
+    id: 'opp-audit-sell-exec',
+    mode: 'PAPER',
+    epic: 'GOLD',
+    decision: sellForced as typeof forced,
+    risk: { allowed: true, volume: 0.2, risk_amount: 20, reasons: [] },
+    executed: false,
+    execution: null,
+  });
+  const { execution: sellExec, place: sellPlace } = await executeDecision({
+    broker: sellBroker,
+    pipeline: sellPipe,
+    opportunity: sellOpp,
+    decision: sellForced as typeof forced,
+    risk: { allowed: true, volume: 0.2, risk_amount: 20, reasons: [] },
+    epic: 'GOLD',
+    allow_live: true,
+  });
+  stages.execution_sell = {
+    ok: !!sellExec.accepted && !!sellPlace?.position_id,
+    detail: sellExec.detail || 'no_sell_fill',
+  };
+  const sellPm = new PositionManager();
+  if (sellPlace?.ok && sellPlace.position_id) {
     sellPm.register({
       position_id: sellPlace.position_id,
-      opportunity_id: 'opp-audit-sell',
-      intent_id: 'audit-sell-leg-bbbbbbbbbbbb',
+      opportunity_id: sellOpp.id,
+      intent_id: sellExec.intent_id,
       epic: 'GOLD',
       side: 'SELL',
       size: 0.2,
       entry: sellPlace.fill_price!,
       stop_loss: sellPlace.fill_price! + 2,
-      decision: sellDecision as typeof forced,
+      decision: sellForced as typeof forced,
     });
   }
   const sellAdverse = {
@@ -299,8 +319,8 @@ async function main() {
     ...sellPipe.journal.traded(),
   ]);
   stages.journal_performance = {
-    ok: perf.trades >= 1 && stages.exit_sell.ok,
-    detail: `trades=${perf.trades} pnl=${perf.total_pnl.toFixed(4)} exp=${perf.expectancy.toFixed(4)} sell=${stages.exit_sell.ok}`,
+    ok: perf.trades >= 1 && stages.exit_sell.ok && stages.execution_sell.ok,
+    detail: `trades=${perf.trades} pnl=${perf.total_pnl.toFixed(4)} exp=${perf.expectancy.toFixed(4)} sell_exec=${stages.execution_sell.ok} sell_exit=${stages.exit_sell.ok}`,
   };
 
   const allOk = Object.values(stages).every((s) => s.ok);

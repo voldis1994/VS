@@ -642,7 +642,7 @@ async function refresh(){
       card('Expectancy',s.performance?.trades?Number(s.performance.expectancy||0).toFixed(3):'—'),
       card('Fees',s.performance?.trades?Number(s.performance.total_fees||0).toFixed(2):'—'),
       card('Win rate',s.performance?.trades?((Number(s.performance.win_rate||0)*100).toFixed(1)+'%'):'—'),
-      card('Profit factor',s.performance?.profit_factor!=null&&Number.isFinite(s.performance.profit_factor)?Number(s.performance.profit_factor).toFixed(2):'—'),
+      card('Profit factor',s.performance?.trades&&s.performance?.profit_factor!=null&&Number.isFinite(s.performance.profit_factor)?Number(s.performance.profit_factor).toFixed(2):'—'),
       card('Loss streak',s.capital_account_proven===false?'—':(s.account?.consecutive_losses!=null?String(s.account.consecutive_losses):'—'),s.capital_account_proven!==false&&(s.account?.consecutive_losses||0)>=3?'bad':''),
       card('MC p50',s.monte_carlo?.equity_p50!=null?Number(s.monte_carlo.equity_p50).toFixed(2):(s.monte_carlo?.p50!=null?Number(s.monte_carlo.p50).toFixed(2):'—')),
       card('Rel spread',s.monitoring?.relative_spread!=null?Number(s.monitoring.relative_spread).toFixed(2):'—',s.monitoring?.relative_spread!=null&&s.monitoring.relative_spread>1.5?'bad':''),
