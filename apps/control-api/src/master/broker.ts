@@ -1420,6 +1420,8 @@ export class Mt4FileBroker implements MasterBroker {
   private lastDigits: number | null = null;
   /** Last Point from market/latest.json */
   private lastPoint: number | null = null;
+  /** Last chart Symbol() from market/latest.json (Check- OPEN identity) */
+  private lastChartSymbol: string | null = null;
 
   constructor(private readonly bridgeRoot: string) {}
 
@@ -1436,6 +1438,11 @@ export class Mt4FileBroker implements MasterBroker {
     return null;
   }
 
+  /** EA chart symbol when known (OrderSend must use this, not Capital GOLD alias). */
+  chartSymbol(): string | null {
+    return this.lastChartSymbol;
+  }
+
   private noteMarketMeta(m: Record<string, unknown> | null | undefined) {
     if (!m || typeof m !== 'object') return;
     const dig = Number(m.digits ?? m.Digits);
@@ -1446,6 +1453,32 @@ export class Mt4FileBroker implements MasterBroker {
     if (Number.isFinite(pt) && pt > 0) {
       this.lastPoint = pt;
     }
+    const sym = String(m.symbol ?? m.Symbol ?? '').trim();
+    if (sym) this.lastChartSymbol = sym;
+  }
+
+  /**
+   * Check- parity: OPEN uses market.symbol (EA Symbol()), not Capital/desk alias.
+   * GOLD ↔ XAUUSD aliases resolve to the chart string; hard mismatches fail closed.
+   */
+  private resolveOpenSymbol(
+    inputEpic: string
+  ): { ok: true; symbol: string } | { ok: false; detail: string } {
+    const market = this.readJson(join('market', 'latest.json'));
+    this.noteMarketMeta(market as Record<string, unknown> | null);
+    const chart = String(
+      (market as any)?.symbol ?? (market as any)?.Symbol ?? this.lastChartSymbol ?? ''
+    ).trim();
+    if (!chart) {
+      return { ok: true, symbol: inputEpic };
+    }
+    if (epicsMatch(chart, inputEpic)) {
+      return { ok: true, symbol: chart };
+    }
+    return {
+      ok: false,
+      detail: `mt4_symbol_mismatch:chart=${chart} want=${inputEpic}`,
+    };
   }
 
   private roundPrice(v: number | null | undefined): number | null {
@@ -2107,12 +2140,24 @@ export class Mt4FileBroker implements MasterBroker {
     }
     this.processed.add(input.intent_id);
     const id = input.intent_id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24) || randomUUID().slice(0, 12);
+    const openSym = this.resolveOpenSymbol(input.epic);
+    if (!openSym.ok) {
+      this.processed.delete(input.intent_id);
+      return {
+        ok: false,
+        order_id: null,
+        position_id: null,
+        fill_price: null,
+        detail: openSym.detail,
+        paper: false,
+      };
+    }
     const slRounded = this.roundPrice(input.stop_level ?? null);
     const tpRounded = this.roundPrice(input.profit_level ?? null);
     const payload = {
       id,
       action: 'OPEN',
-      symbol: input.epic,
+      symbol: openSym.symbol,
       side: input.side,
       lot: input.size,
       sl: slRounded ?? input.stop_level ?? 0,
@@ -2127,7 +2172,7 @@ export class Mt4FileBroker implements MasterBroker {
       action: 'OPEN',
       side: input.side,
       volume: input.size,
-      epic: input.epic,
+      epic: openSym.symbol,
       sl: slRounded ?? input.stop_level ?? null,
       tp: tpRounded ?? input.profit_level ?? null,
       reason: 'INTENT',

@@ -284,6 +284,55 @@ describe('VS MASTER MT4 file bridge', () => {
     expect(ea).toMatch(/JsonGetNum\(json, "lot"\)/);
   });
 
+  it('OPEN uses chart Symbol() from market (GOLD alias → XAUUSD)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-chartsym-'));
+    const sim = new Mt4BridgeSimulator(root);
+    sim.setQuote(4400, 4400.4);
+    sim.start(30);
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    try {
+      // Desk/Capital epic is GOLD; EA chart is XAUUSD — OrderSend must use chart
+      const placed = await broker.placeOrder({
+        intent_id: 'chartsymintent000000000001',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 0.03,
+        stop_level: 4390,
+        profit_level: 4420,
+      });
+      expect(placed.ok).toBe(true);
+      expect(broker.chartSymbol()).toBe('XAUUSD');
+      const opens = await broker.listOpenPositions('GOLD');
+      expect(opens.ok).toBe(true);
+      const hit = opens.positions.find((p) => p.position_id === placed.position_id);
+      expect(hit?.epic).toBe('XAUUSD');
+      expect(hit?.stop_level).toBe(4390);
+    } finally {
+      sim.stop();
+    }
+  });
+
+  it('OPEN refuses hard chart/epic mismatch', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-symmis-'));
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    mkdirSync(join(root, 'market'), { recursive: true });
+    writeFileSync(
+      join(root, 'market', 'latest.json'),
+      JSON.stringify({ bid: 1.1, ask: 1.1002, symbol: 'EURUSD' })
+    );
+    const placed = await broker.placeOrder({
+      intent_id: 'symmismatchintent000000001',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.03,
+      stop_level: 4390,
+    });
+    expect(placed.ok).toBe(false);
+    expect(placed.detail).toMatch(/mt4_symbol_mismatch/);
+  });
+
   it('OPEN fills via Check- ack (simulator) and MODIFY writes protocol JSON', async () => {
     const root = mkdtempSync(join(tmpdir(), 'vs-mt4-'));
     const sim = new Mt4BridgeSimulator(root);

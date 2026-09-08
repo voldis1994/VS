@@ -6,7 +6,7 @@ import {
   emaTickLiveFromBars,
 } from './analysis.js';
 import type { MasterBroker } from './broker.js';
-import { CapitalBroker, Mt4FileBroker, PaperBroker } from './broker.js';
+import { CapitalBroker, Mt4FileBroker, PaperBroker, epicsMatch } from './broker.js';
 import { decide } from './decision.js';
 import { executeDecision } from './execution.js';
 import {
@@ -678,6 +678,18 @@ class MasterRuntime {
   /** Attach broker — PAPER uses in-memory PaperBroker by default. */
   attachBroker(broker: MasterBroker) {
     this.broker = broker;
+    // MT4: align desk epic to EA chart Symbol() when aliases match (GOLD→XAUUSD)
+    if (broker instanceof Mt4FileBroker) {
+      this.syncEpicFromMt4Chart(broker);
+    }
+  }
+
+  /** Check- parity: OrderSend uses chart symbol; keep runtime epic in sync. */
+  private syncEpicFromMt4Chart(broker: Mt4FileBroker) {
+    const chart = broker.chartSymbol();
+    if (chart && epicsMatch(chart, this.epic) && chart !== this.epic) {
+      this.setEpic(chart);
+    }
   }
 
   ensurePaperBroker(): PaperBroker {
@@ -1695,6 +1707,9 @@ class MasterRuntime {
             await this.tick(this.last_bars, this.last_quote);
           }
           return;
+        }
+        if (this.broker instanceof Mt4FileBroker) {
+          this.syncEpicFromMt4Chart(this.broker);
         }
         if (!seeded) {
           // Structure: Capital OHLC when broker provides it; else Yahoo; ticks from broker.
