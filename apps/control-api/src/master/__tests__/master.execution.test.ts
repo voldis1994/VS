@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -282,6 +282,20 @@ describe('VS MASTER MT4 file bridge', () => {
     expect(ea).toMatch(/g_last_processed_command_id/);
     expect(ea).toMatch(/MagicNumber = 50001/);
     expect(ea).toMatch(/JsonGetNum\(json, "lot"\)/);
+  });
+
+  it('partial CLOSE refuses when before-size snapshot unavailable', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-nobefore-'));
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    // No status → cannot snapshot before size → must not publish CLOSE
+    const part = await broker.closePosition('999001', { size: 0.04 });
+    expect(part.ok).toBe(false);
+    expect(part.detail).toMatch(/mt4_partial_no_before_size/);
+    const cmds = existsSync(join(root, 'commands'))
+      ? readdirSync(join(root, 'commands')).filter((f) => f.startsWith('cmd_'))
+      : [];
+    expect(cmds).toHaveLength(0);
   });
 
   it('OPEN expireCommand archives cmd after ACK success (no EA restart re-fire)', async () => {

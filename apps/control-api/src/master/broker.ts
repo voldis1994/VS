@@ -2181,6 +2181,9 @@ export class Mt4FileBroker implements MasterBroker {
 
     const waited = await this.waitAck(id);
     if (waited.ok && waited.ack) {
+      // Archive immediately after ACK — attach/prove can take seconds; do not leave
+      // cmd_ for EA restart re-OPEN while ensureOpenStopOrFail runs.
+      this.expireCommand(id);
       const ticket = String(waited.ack.ticket || '');
       const opens = await this.listOpenPositions(input.epic);
       const hit =
@@ -2205,7 +2208,6 @@ export class Mt4FileBroker implements MasterBroker {
             fill_price,
             detail: guard.detail,
           });
-          this.expireCommand(id);
           return {
             ok: false,
             order_id: id,
@@ -2223,7 +2225,6 @@ export class Mt4FileBroker implements MasterBroker {
         fill_price,
         detail: 'ACK_SUCCESS',
       });
-      this.expireCommand(id);
       return {
         ok: true,
         order_id: id,
@@ -2339,6 +2340,11 @@ export class Mt4FileBroker implements MasterBroker {
         beforeSize = Number(before.size);
       }
     }
+    // Never publish partial CLOSE without a proven before-size — EA may reduce
+    // lots while host retries and over-closes.
+    if (partial && beforeSize == null) {
+      return { ok: false, detail: 'mt4_partial_no_before_size' };
+    }
     const id = randomUUID().slice(0, 12);
     const closeLot = partial ? Number(opts!.size) : 0;
     const payload: Record<string, unknown> = {
@@ -2365,6 +2371,7 @@ export class Mt4FileBroker implements MasterBroker {
 
     const waited = await this.waitAck(id);
     if (waited.ok) {
+      this.expireCommand(id);
       const fill =
         waited.ack?.fill != null
           ? Number(waited.ack.fill)
@@ -2379,17 +2386,9 @@ export class Mt4FileBroker implements MasterBroker {
         waited.ack?.profit ?? waited.ack?.Profit ?? waited.ack?.pnl
       );
       if (partial) {
-        if (beforeSize == null) {
-          return {
-            ok: false,
-            detail: 'mt4_partial_no_before_size',
-            fill_price,
-            fill_pnl,
-          };
-        }
         const reduced = await this.waitForTicketSizeReduced(
           String(position_id),
-          beforeSize,
+          beforeSize!,
           closeLot
         );
         if (!reduced.ok) {
@@ -2416,7 +2415,6 @@ export class Mt4FileBroker implements MasterBroker {
               ? 'ACK_SUCCESS_PARTIAL_FULL'
               : 'ACK_SUCCESS_PARTIAL',
         });
-        this.expireCommand(id);
         return {
           ok: true,
           detail:
@@ -2437,7 +2435,6 @@ export class Mt4FileBroker implements MasterBroker {
           fill_price,
           detail: flat.detail,
         });
-        this.expireCommand(id);
         return { ok: false, detail: flat.detail, fill_price, fill_pnl };
       }
       updateTradeAck(id, {
@@ -2446,7 +2443,6 @@ export class Mt4FileBroker implements MasterBroker {
         fill_price,
         detail: 'ACK_SUCCESS',
       });
-      this.expireCommand(id);
       return {
         ok: true,
         detail: `mt4_closed ticket=${waited.ack?.ticket || position_id}${
@@ -2584,6 +2580,8 @@ export class Mt4FileBroker implements MasterBroker {
 
     const waited = await this.waitAck(id);
     if (waited.ok) {
+      // Archive ASAP after ACK — prove can take seconds; avoid restart re-MODIFY.
+      this.expireCommand(id);
       // Prove every protective level we actually wrote (not ACK-only).
       // Use resolved payload values so preserved TP/SL cannot silently wipe.
       const proveSl = slRounded ?? resolvedSl ?? null;
@@ -2629,7 +2627,6 @@ export class Mt4FileBroker implements MasterBroker {
         ticket: String(input.position_id),
         detail: 'ACK_SUCCESS',
       });
-      this.expireCommand(id);
       return { ok: true, detail: 'mt4_modify_acked', order_id: id };
     }
     if (waited.ack) {
