@@ -51,20 +51,22 @@ export function fromOutcomes(outcomes: TradeOutcome[]): PerformanceReport {
     total_pnl: 0,
     total_fees: 0,
   };
-  if (!outcomes.length) return empty;
+  // Unproven Capital closes (often pnl=0) must not score as flat losses
+  const proven = outcomes.filter((o) => o.pnl_proven !== false);
+  if (!proven.length) return empty;
 
-  const wins = outcomes.filter((o) => o.pnl > 0);
-  const losses = outcomes.filter((o) => o.pnl <= 0);
-  const total_pnl = outcomes.reduce((s, o) => s + o.pnl, 0);
-  const total_fees = outcomes.reduce((s, o) => s + Math.max(0, Number(o.fees) || 0), 0);
+  const wins = proven.filter((o) => o.pnl > 0);
+  const losses = proven.filter((o) => o.pnl <= 0);
+  const total_pnl = proven.reduce((s, o) => s + o.pnl, 0);
+  const total_fees = proven.reduce((s, o) => s + Math.max(0, Number(o.fees) || 0), 0);
   const average_win = wins.length ? wins.reduce((s, o) => s + o.pnl, 0) / wins.length : 0;
   const average_loss = losses.length
     ? Math.abs(losses.reduce((s, o) => s + o.pnl, 0) / losses.length)
     : 0;
-  const win_rate = wins.length / outcomes.length;
+  const win_rate = wins.length / proven.length;
   const expectancy = win_rate * average_win - (1 - win_rate) * average_loss;
   const avg_r =
-    outcomes.reduce((s, o) => s + o.r_multiple, 0) / outcomes.length;
+    proven.reduce((s, o) => s + o.r_multiple, 0) / proven.length;
   const grossWin = wins.reduce((s, o) => s + o.pnl, 0);
   const grossLoss = Math.abs(losses.reduce((s, o) => s + o.pnl, 0));
   const profit_factor = grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? Infinity : 0;
@@ -75,7 +77,7 @@ export function fromOutcomes(outcomes: TradeOutcome[]): PerformanceReport {
   let streak = 0;
   let longest = 0;
   const rets: number[] = [];
-  for (const o of outcomes) {
+  for (const o of proven) {
     equity += o.pnl;
     rets.push(o.pnl);
     peak = Math.max(peak, equity);
@@ -100,7 +102,7 @@ export function fromOutcomes(outcomes: TradeOutcome[]): PerformanceReport {
   const recovery_factor = max_drawdown > 0 ? total_pnl / max_drawdown : total_pnl > 0 ? Infinity : 0;
 
   return {
-    trades: outcomes.length,
+    trades: proven.length,
     wins: wins.length,
     losses: losses.length,
     win_rate,
@@ -113,8 +115,8 @@ export function fromOutcomes(outcomes: TradeOutcome[]): PerformanceReport {
     sharpe,
     sortino,
     recovery_factor: Number.isFinite(recovery_factor) ? recovery_factor : 0,
-    avg_mae: outcomes.reduce((s, o) => s + o.mae, 0) / outcomes.length,
-    avg_mfe: outcomes.reduce((s, o) => s + o.mfe, 0) / outcomes.length,
+    avg_mae: proven.reduce((s, o) => s + o.mae, 0) / proven.length,
+    avg_mfe: proven.reduce((s, o) => s + o.mfe, 0) / proven.length,
     longest_losing_streak: longest,
     total_pnl,
     total_fees,

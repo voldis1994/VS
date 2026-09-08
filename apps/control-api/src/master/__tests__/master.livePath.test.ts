@@ -298,7 +298,7 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(managed.closed[0]!.outcome.exit).toBe(4399.5);
     // Prefer Capital confirm.profit over recomputed pts×size
     expect(managed.closed[0]!.outcome.pnl).toBe(-1.09);
-    expect(await broker.listOpenPositions()).toEqual({
+    expect(await broker.listOpenPositions()).toMatchObject({
       ok: true,
       positions: [],
       presence_ids: [],
@@ -645,6 +645,71 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(masterRuntime.account.daily_pnl).toBe(-4.25);
     expect(masterRuntime.account.consecutive_losses).toBe(1);
     expect(String(masterRuntime.last_exit_reason || '')).toMatch(/venue_orphan/);
+  });
+
+  it('flatten presence-only SELL orphan never invents BUY or lot=1', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const live = new Set(['pres-sell-1']);
+    const closed: string[] = [];
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-pres-flat' }, detail: 'ok' }),
+      // Unusable mid → level-less deal stays presence-only
+      quote: async (_s, epic) => ({
+        bid: Number.NaN,
+        ask: Number.NaN,
+        mid: Number.NaN,
+        epic,
+        raw_ok: false,
+      }),
+      list: async () => ({
+        ok: true,
+        positions: [...live].map((deal_id) => ({
+          deal_id,
+          epic: 'GOLD',
+          direction: 'SELL',
+          size: 0.25,
+        })),
+        detail: 'presence_only',
+      }),
+      create: async () => ({ ok: false, detail: 'n/a' }),
+      confirm: async () => ({ ok: false, detail: 'n/a' }),
+      close: async (_s, id) => {
+        closed.push(id);
+        live.delete(id);
+        return { ok: true, fill_price: 4410, fill_pnl: 1.5, detail: 'closed' };
+      },
+      account: async () => ({ equity: 10_000, balance: 10_000, currency: 'GBP' }),
+    });
+    await broker.connect();
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('LIVE');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    masterRuntime.last_quote = null;
+    const listed = await broker.listOpenPositions();
+    expect(listed.ok).toBe(true);
+    expect(listed.positions).toHaveLength(0);
+    expect(listed.presence_ids).toContain('pres-sell-1');
+    expect(listed.presence_meta?.find((m) => m.position_id === 'pres-sell-1')).toEqual(
+      expect.objectContaining({ side: 'SELL', size: 0.25 })
+    );
+    const { loadTradeEvents } = await import('../tradeEventJournal.js');
+    const flat = await masterRuntime.flattenAll('TEST_FLATTEN_PRESENCE_SELL');
+    expect({ ok: flat.ok, closed: flat.closed, failed: flat.failed }).toEqual({
+      ok: true,
+      closed: 1,
+      failed: [],
+    });
+    expect(closed).toEqual(['pres-sell-1']);
+    const ev = loadTradeEvents(20).find(
+      (e) => e.position_id === 'pres-sell-1' && e.event === 'CLOSE'
+    );
+    expect(ev).toBeTruthy();
+    expect(ev!.side).toBe('SELL');
+    expect(ev!.volume).toBe(0.25);
   });
 
   it('runtime LIVE tick opens when MASTER_LIVE_ENABLED and mocked Capital attached', async () => {

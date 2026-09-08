@@ -175,6 +175,16 @@ export type ListOpenResult = {
    * live deals as absent.
    */
   presence_ids?: string[];
+  /**
+   * Side/size for every presence id (incl. level-less / unproven-side rows).
+   * Flatten/orphan close must use this — never invent BUY or lot=1.
+   */
+  presence_meta?: Array<{
+    position_id: string;
+    side: 'BUY' | 'SELL' | null;
+    size: number | null;
+    epic?: string | null;
+  }>;
   detail?: string;
 };
 
@@ -1037,6 +1047,26 @@ export class CapitalBroker implements MasterBroker {
     const presence_ids = rawRows
       .map((p) => String(p.deal_id || p.position_id || '').trim())
       .filter(Boolean);
+    const presence_meta = rawRows
+      .map((p) => {
+        const position_id = String(p.deal_id || p.position_id || '').trim();
+        if (!position_id) return null;
+        const sideRaw = String(p.direction || p.side || '').toUpperCase();
+        const side: Side | null =
+          sideRaw === 'SELL' || sideRaw === 'S'
+            ? 'SELL'
+            : sideRaw === 'BUY' || sideRaw === 'B'
+              ? 'BUY'
+              : null;
+        const sizeN = Number(p.size);
+        return {
+          position_id,
+          side,
+          size: Number.isFinite(sizeN) && sizeN > 0 ? sizeN : null,
+          epic: p.epic != null ? String(p.epic) : null,
+        };
+      })
+      .filter((m): m is NonNullable<typeof m> => m != null);
     const epicMid = new Map<string, number>();
     const midFor = async (ep: string): Promise<number> => {
       const key = String(ep || '');
@@ -1117,7 +1147,7 @@ export class CapitalBroker implements MasterBroker {
               : null,
       });
     }
-    return { ok: true, positions, presence_ids };
+    return { ok: true, positions, presence_ids, presence_meta };
   }
 
   /**
@@ -3350,14 +3380,22 @@ export class Mt4FileBroker implements MasterBroker {
     const s = st.data;
     const raw = Array.isArray(s?.positions) ? s.positions : [];
     const presence_ids: string[] = [];
+    const presence_meta: NonNullable<ListOpenResult['presence_meta']> = [];
     const positions: BrokerPosition[] = [];
     for (const p of raw) {
       const position_id = String(p.ticket ?? p.Ticket ?? '');
       if (!position_id) continue;
       presence_ids.push(position_id);
+      const side = parseMt4PositionSide(p.side ?? p.type ?? p.Type ?? p.cmd);
+      const sizeN = Number(p.lot ?? p.Lots ?? 0);
+      presence_meta.push({
+        position_id,
+        side,
+        size: Number.isFinite(sizeN) && sizeN > 0 ? sizeN : null,
+        epic: String(p.symbol ?? p.Symbol ?? '') || null,
+      });
       const openRaw = numOrNull(p.open ?? p.OpenPrice);
       if (openRaw == null || !(openRaw > 0)) continue;
-      const side = parseMt4PositionSide(p.side ?? p.type ?? p.Type ?? p.cmd);
       // Unproven side → presence_ids only (never invent BUY)
       if (!side) continue;
       const epic = String(p.symbol ?? p.Symbol ?? '');
@@ -3383,7 +3421,7 @@ export class Mt4FileBroker implements MasterBroker {
         })(),
       });
     }
-    return { ok: true, positions, presence_ids };
+    return { ok: true, positions, presence_ids, presence_meta };
   }
 
   /**

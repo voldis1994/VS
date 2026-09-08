@@ -514,6 +514,7 @@ describe('VS MASTER recovery SL + trail', () => {
       },
     };
     const sync = await syncPositionsWithBroker(pm, broker as any, 'GOLD');
+    expect(sync.broker_count).toBe(1);
     expect(sync.dropped).toBe(0);
     expect(pm.count()).toBe(1);
     expect(pm.get('deal-level-less')).toBeTruthy();

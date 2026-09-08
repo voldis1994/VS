@@ -93,7 +93,7 @@ export async function syncPositionsWithBroker(
     if (debounce) debounce.consecutive_empty = n;
     if (n < EMPTY_BROKER_GHOST_DEBOUNCE) {
       return {
-        broker_count: 0,
+        broker_count: presenceIds.size,
         local_count_before: before,
         local_count_after: before,
         adopted: 0,
@@ -297,7 +297,7 @@ export async function syncPositionsWithBroker(
   }
 
   return {
-    broker_count: brokerPositions.length,
+    broker_count: presenceIds.size,
     local_count_before: before,
     local_count_after: manager.count(),
     adopted: orphans_broker.length,

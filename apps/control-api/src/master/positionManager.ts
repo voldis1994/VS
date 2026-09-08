@@ -1956,6 +1956,20 @@ export class PositionManager {
           existing.broker_upl =
             bp.upl != null && Number.isFinite(bp.upl) ? Number(bp.upl) : null;
         }
+        // Venue side is truth — fix local invent / bad adopt so protective marks match
+        if (
+          (bp.side === 'BUY' || bp.side === 'SELL') &&
+          existing.side !== bp.side
+        ) {
+          existing.side = bp.side;
+          if (existing.decision) {
+            existing.decision = {
+              ...existing.decision,
+              side: bp.side,
+              kind: bp.side,
+            };
+          }
+        }
         continue;
       }
       // Orphan broker position — adopt only with venue-proven entry (never provisional mid)

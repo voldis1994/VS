@@ -500,13 +500,38 @@ class MasterRuntime {
             closed += 1;
             // Journal venue-orphan flatten money when confirm/UPL proves it —
             // otherwise day gates would fail-open (close without realized PnL).
-            const side = listedPos?.side ?? 'BUY';
-            const size =
+            const meta = (listed.presence_meta ?? []).find(
+              (m) => m.position_id === id
+            );
+            const side = listedPos?.side ?? meta?.side ?? null;
+            const sizeRaw =
               listedPos?.size != null &&
               Number.isFinite(listedPos.size) &&
               listedPos.size > 0
                 ? Number(listedPos.size)
-                : 0;
+                : meta?.size != null &&
+                    Number.isFinite(meta.size) &&
+                    meta.size > 0
+                  ? Number(meta.size)
+                  : null;
+            // Never invent BUY or lot=1 for presence-only / unknown book rows
+            if (!side || sizeRaw == null) {
+              this.last_exit_reason = `${reason}:venue_orphan · capital_close_meta_unproven`;
+              logTradeEvent({
+                event: 'CLOSE',
+                broker: broker.name,
+                epic: listedPos?.epic || meta?.epic || this.epic,
+                side,
+                volume: sizeRaw,
+                price: r.fill_price ?? null,
+                position_id: id,
+                intent_id: null,
+                opportunity_id: null,
+                ok: true,
+                detail: this.last_exit_reason,
+              });
+              continue;
+            }
             const entryProven =
               listedPos != null &&
               listedPos.open_level_proven !== false &&
@@ -531,8 +556,10 @@ class MasterRuntime {
               entry: entry ?? (mark > 0 ? mark : 0),
               capitalLive: true,
             });
-            const instrument = specForEpic(listedPos?.epic || this.epic);
-            const vol = size > 0 ? size : 1;
+            const instrument = specForEpic(
+              listedPos?.epic || meta?.epic || this.epic
+            );
+            const vol = sizeRaw;
             const priced = priceResolvedCloseMoney({
               ...resolveCloseMoneyPnl({
                 side,
@@ -564,7 +591,7 @@ class MasterRuntime {
             logTradeEvent({
               event: 'CLOSE',
               broker: broker.name,
-              epic: listedPos?.epic || this.epic,
+              epic: listedPos?.epic || meta?.epic || this.epic,
               side,
               volume: vol,
               price: exit,

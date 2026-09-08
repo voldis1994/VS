@@ -126,4 +126,35 @@ describe('multi-slice journal recover → Fees KPI', () => {
     expect(mergeOutcomeSlices(proven, unproven).pnl_proven).toBe(false);
     expect(mergeOutcomeSlices(unproven, proven).pnl_proven).toBe(false);
   });
+
+  it('fromOutcomes skips pnl_proven:false closes (no forged flat losses)', () => {
+    const proven: TradeOutcome = {
+      position_id: 'p1',
+      side: 'BUY',
+      entry: 100,
+      exit: 101,
+      volume: 1,
+      pnl: 10,
+      fees: 0.05,
+      slippage: 0,
+      mae: 0,
+      mfe: 1,
+      r_multiple: 1,
+      hold_ms: 1,
+      exit_reason: 'TP_HIT',
+      pnl_proven: true,
+    };
+    const unproven: TradeOutcome = {
+      ...proven,
+      position_id: 'p2',
+      pnl: 0,
+      fees: 0,
+      exit_reason: 'capital_close_pnl_unproven',
+      pnl_proven: false,
+    };
+    const perf = fromOutcomes([proven, unproven]);
+    expect(perf.trades).toBe(1);
+    expect(perf.total_pnl).toBe(10);
+    expect(perf.wins).toBe(1);
+  });
 });
