@@ -159,6 +159,9 @@ type MasterStatus = {
     trail_lock?: number;
     partial_close_progress?: number;
     partial_close_volume?: number;
+    close_all_profit?: number;
+    close_all_loss?: number;
+    max_hold_ms?: number;
     min_score?: number;
     daily_loss_limit?: number;
     block_high_impact_news?: boolean;
@@ -1054,6 +1057,39 @@ export function MasterPage() {
             />
           </label>
           <label style={{ fontSize: 12 }}>
+            close_all_profit{' '}
+            <input
+              type="number"
+              step="1"
+              min={0}
+              defaultValue={status?.manage?.close_all_profit ?? 0}
+              id="cfg-close-all-profit"
+              style={{ width: 72 }}
+            />
+          </label>
+          <label style={{ fontSize: 12 }}>
+            close_all_loss{' '}
+            <input
+              type="number"
+              step="1"
+              min={0}
+              defaultValue={status?.manage?.close_all_loss ?? 0}
+              id="cfg-close-all-loss"
+              style={{ width: 72 }}
+            />
+          </label>
+          <label style={{ fontSize: 12 }}>
+            max_hold_min{' '}
+            <input
+              type="number"
+              step="1"
+              min={0}
+              defaultValue={Math.round((status?.manage?.max_hold_ms ?? 0) / 60_000)}
+              id="cfg-max-hold-min"
+              style={{ width: 56 }}
+            />
+          </label>
+          <label style={{ fontSize: 12 }}>
             daily_loss_limit{' '}
             <input
               type="number"
@@ -1175,6 +1211,12 @@ export function MasterPage() {
                     trail_lock: num('cfg-trail-lock'),
                     partial_close_progress: num('cfg-partial-prog'),
                     partial_close_volume: num('cfg-partial-vol'),
+                    close_all_profit: num('cfg-close-all-profit'),
+                    close_all_loss: num('cfg-close-all-loss'),
+                    max_hold_ms: (() => {
+                      const m = num('cfg-max-hold-min');
+                      return m != null && Number.isFinite(m) ? Math.max(0, m) * 60_000 : undefined;
+                    })(),
                     breakeven_activation_money: num('cfg-be-money'),
                     daily_loss_limit: num('cfg-daily-loss'),
                     soft_trail_money_arm: num('cfg-soft-arm'),

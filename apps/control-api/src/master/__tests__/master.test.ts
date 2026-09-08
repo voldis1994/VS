@@ -307,7 +307,7 @@ describe('VS MASTER EMA3 trail manage', () => {
         expectancy: null,
       },
     });
-    // Seed side above EMA3 (no close yet)
+    // Seed side above EMA3 without EMA3 trail lock (trail would move SL to EMA3 → STOP_HIT)
     await pm.manageTick({
       broker,
       pipeline: pipe,
@@ -319,12 +319,13 @@ describe('VS MASTER EMA3 trail manage', () => {
         ts_ms: Date.now(),
       },
       instrument_point_value: 1,
-      ema3: 4410,
       scalp_pct_chase: false,
       breakeven_progress: 0,
       max_hold_ms: 0,
       allow_close: false,
     });
+    pm.get(placed.position_id!)!.ema3_side = 'above';
+    pm.get(placed.position_id!)!.stop_loss = entry - 20;
     expect(pm.get(placed.position_id!)!.ema3_side).toBe('above');
     // Cross below EMA3
     broker.setQuote({

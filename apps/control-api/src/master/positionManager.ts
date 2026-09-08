@@ -645,9 +645,20 @@ export class PositionManager {
         await this.maybeRecoverNakedStop(broker, pos, quote, minStopDist);
       }
 
+      // Hard STOP before soft trail/EMA (Check-/replay parity).
+      // TP_HIT still allows multi-TP ladder gap-through before single hard TP close.
+      const hardHitEarly = protectiveExit(pos, quote);
+      const hardStopHit = hardHitEarly?.reason === 'STOP_HIT';
+
       // VS-System soft trail — SCALPING manage only, after money arm (not Capital min-stop trail)
       // Capital LIVE: refuse soft-trail (incl. already_armed) when venue UPL unread
-      if (allowClose && softMoneyArm > 0 && scalpChase && capitalUplReady) {
+      if (
+        !hardHitEarly &&
+        allowClose &&
+        softMoneyArm > 0 &&
+        scalpChase &&
+        capitalUplReady
+      ) {
         const arm = decideSoftTrailArm({
           money_pnl: moneyPnl,
           money_arm: softMoneyArm,
@@ -740,7 +751,7 @@ export class PositionManager {
       }
 
       // VS-System EMA_TICK: soft CLOSE on EMA1×EMA3 opposite cross or price-through EMA3
-      if (ema3 != null) {
+      if (!hardHitEarly && ema3 != null) {
         const cross =
           allowClose &&
           capitalUplReady &&
@@ -849,6 +860,7 @@ export class PositionManager {
       // VS-System multi-TP ladder (app-managed) before single Reader partial
       // Capital LIVE: refuse scale-outs while venue UPL unread (same as soft exits)
       if (
+        !hardStopHit &&
         allowClose &&
         capitalUplReady &&
         broker.supportsPartialClose !== false &&
@@ -874,6 +886,7 @@ export class PositionManager {
       } else if (
         // Reader partial scale-out before full exit (once)
         // Skip when broker cannot partial (Check- MT4 full-lots CLOSE only)
+        !hardHitEarly &&
         allowClose &&
         capitalUplReady &&
         broker.supportsPartialClose !== false &&

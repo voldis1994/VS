@@ -3391,6 +3391,29 @@ class MasterRuntime {
           : {}),
       });
     }
+    if (managed.close_failed.length) {
+      const fail = managed.close_failed[0]!;
+      this.broker_detail = `close_fail:${fail.position_id}:${fail.detail}`.slice(
+        0,
+        400
+      );
+      if (!managed.closed.length) {
+        this.last_exit_reason = `CLOSE_FAIL · ${fail.exit_reason} · ${fail.detail}`;
+      }
+      for (const failRow of managed.close_failed) {
+        logTradeEvent({
+          event: 'CLOSE',
+          broker: broker.name,
+          epic: this.epic,
+          side: null,
+          volume: null,
+          price: null,
+          position_id: failRow.position_id,
+          ok: false,
+          detail: `${failRow.exit_reason} · ${failRow.detail}`,
+        });
+      }
+    }
     if (managed.closed.length > 0) {
       const cool = Math.max(0, this.cfg.post_exit_cooldown_ms || 0);
       this.post_exit_until_ms = Math.max(

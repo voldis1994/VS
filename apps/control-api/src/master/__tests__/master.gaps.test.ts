@@ -2337,6 +2337,148 @@ describe('partial_close persist + Check be_start', () => {
     expect(pm.count()).toBe(1);
   });
 
+  it('Capital LIVE SELL multi-TP refuses scale-out while venue UPL unread', async () => {
+    const { buildEqualMultiTpPlan } = await import('../multiTp.js');
+    const entry = 4400;
+    const plan = buildEqualMultiTpPlan({
+      side: 'SELL',
+      entry,
+      initial_volume: 0.03,
+      count: 3,
+      atr: 3,
+      atr_tp_mult: 1,
+      volume_step: 0.01,
+    });
+    let closed = 0;
+    const broker = {
+      name: 'CAPITAL',
+      paper: false,
+      supportsPartialClose: true,
+      async closePosition() {
+        closed += 1;
+        return { ok: true, fill_price: plan[0]!.price - 0.1, fill_pnl: 1, remaining_size: 0.02 };
+      },
+      async modifyPosition() {
+        return { ok: true, detail: 'ok' };
+      },
+    } as never;
+    const pipe = new MasterPipeline('LIVE');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: 'deal-mtp-sell-upl',
+      opportunity_id: 'opp-mtp-sell-upl',
+      intent_id: 'mtp-sell-upl',
+      epic: 'GOLD',
+      side: 'SELL',
+      size: 0.03,
+      entry,
+      stop_loss: entry + 2,
+      take_profit: plan[2]!.price,
+      decision: {
+        decision_id: 'd',
+        kind: 'SELL',
+        side: 'SELL',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis({ atr: 3 }),
+        expectancy: null,
+      },
+      multi_tp_levels: plan,
+    });
+    pm.get('deal-mtp-sell-upl')!.broker_upl = null;
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: plan[0]!.price - 0.2,
+        ask: plan[0]!.price - 0.1,
+        mid: plan[0]!.price - 0.15,
+        spread: 0.1,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      volume_step: 0.01,
+      max_hold_ms: 0,
+      breakeven_progress: 0,
+    });
+    expect(closed).toBe(0);
+    expect(managed.closed.filter((c) => /MULTI_TP/.test(c.reason)).length).toBe(0);
+    expect(pm.count()).toBe(1);
+  });
+
+  it('hard STOP_HIT wins over armed soft-trail on same tick', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    const sl = 4390;
+    broker.setQuote({
+      bid: sl - 0.5,
+      ask: sl - 0.3,
+      mid: sl - 0.4,
+      spread: 0.2,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'hard-before-soft-aaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      stop_level: sl,
+      profit_level: entry + 20,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-hard-before-soft',
+      intent_id: 'hard-before-soft-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      entry,
+      stop_loss: sl,
+      take_profit: entry + 20,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis({ regime: 'TREND' }),
+        expectancy: null,
+      },
+    });
+    const pos = pm.get(placed.position_id!)!;
+    pos.soft_trail_armed_at = new Date().toISOString();
+    pos.soft_trail_peak = entry + 15;
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: sl - 0.5,
+        ask: sl - 0.3,
+        mid: sl - 0.4,
+        spread: 0.2,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      soft_trail_money_arm: 0.05,
+      soft_trail_pips: 0.3,
+      scalp_pct_chase: true,
+      allow_close: true,
+      max_hold_ms: 0,
+      breakeven_progress: 0,
+    });
+    expect(managed.closed.length).toBe(1);
+    expect(managed.closed[0]!.reason).toMatch(/STOP_HIT/);
+    expect(managed.closed[0]!.reason).not.toMatch(/SOFT_TRAIL/);
+  });
+
   it('soft TIME_STOP refuses close without SL (close_requires_sl)', async () => {
     const broker = new PaperBroker();
     await broker.connect();
@@ -2868,6 +3010,8 @@ describe('partial_close persist + Check be_start', () => {
       max_hold_ms: 0,
     });
     expect(pm.get(placed.position_id!)!.soft_trail_armed_at).toBeTruthy();
+    // Keep SL wide so soft-trail pullback is not labeled STOP_HIT after scalp chase
+    pm.get(placed.position_id!)!.stop_loss = entry - 50;
     // Pull back through soft exit (0.3 pip = 0.003 on GOLD — use larger for clear hit)
     broker.setQuote({
       bid: entry + 0.1,
@@ -2961,6 +3105,8 @@ describe('partial_close persist + Check be_start', () => {
       max_hold_ms: 0,
     });
     expect(pm.get(placed.position_id!)!.soft_trail_armed_at).toBeTruthy();
+    // Keep SL wide so soft-trail pullback is not labeled STOP_HIT after scalp chase
+    pm.get(placed.position_id!)!.stop_loss = entry + 50;
     // Pull back up through soft exit
     broker.setQuote({
       bid: entry - 0.2,
