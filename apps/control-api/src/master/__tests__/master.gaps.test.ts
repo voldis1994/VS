@@ -1596,6 +1596,44 @@ describe('partial_close persist + Check be_start', () => {
     expect(external_partials[0]!.broker_upl_closed).toBeCloseTo(7.25, 8);
   });
 
+  it('reconcile refreshes entry from broker open_level (Reader status entry)', () => {
+    const pm = new PositionManager();
+    pm.register({
+      position_id: 'entry-fix',
+      opportunity_id: '00000000-0000-4000-8000-00000000eeee',
+      intent_id: 'entry-fix-intent',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 0, // bad ACK Bid/Ask / recover zero
+      stop_loss: 4390,
+      take_profit: 4420,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis(),
+        expectancy: null,
+      },
+    });
+    pm.reconcileFromBroker([
+      {
+        position_id: 'entry-fix',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 0.1,
+        open_level: 4401.5,
+        stop_level: 4390,
+        profit_level: 4420,
+      },
+    ]);
+    expect(pm.get('entry-fix')!.entry).toBeCloseTo(4401.5, 8);
+  });
+
   it('PaperBroker.hydrateAccount restores equity after recover seed', async () => {
     const broker = new PaperBroker();
     await broker.connect();

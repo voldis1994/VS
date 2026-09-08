@@ -1644,6 +1644,15 @@ export class PositionManager {
         }
         if (bp.profit_level != null) existing.take_profit = bp.profit_level;
         if (bp.size > 0) existing.size = bp.size;
+        // Reader _apply_status_position_to_state — always refresh entry from broker
+        // when open_level is real (never keep 0 / stale ACK Bid/Ask after recover).
+        if (
+          bp.open_level != null &&
+          Number.isFinite(bp.open_level) &&
+          bp.open_level > 0
+        ) {
+          existing.entry = bp.open_level;
+        }
         if (bp.upl !== undefined) {
           existing.broker_upl =
             bp.upl != null && Number.isFinite(bp.upl) ? Number(bp.upl) : null;

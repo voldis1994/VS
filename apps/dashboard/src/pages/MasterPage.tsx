@@ -308,7 +308,9 @@ export function MasterPage() {
         { k: 'Blocked', v: String(status.blocked) },
         {
           k: 'Expectancy',
-          v: Number(status.performance?.expectancy || 0).toFixed(3),
+          v: status.performance?.trades
+            ? Number(status.performance?.expectancy || 0).toFixed(3)
+            : '—',
         },
         {
           k: 'Fees',
@@ -403,7 +405,9 @@ export function MasterPage() {
         },
         {
           k: 'Max DD',
-          v: Number(status.performance?.max_drawdown || 0).toFixed(2),
+          v: status.performance?.trades
+            ? Number(status.performance?.max_drawdown || 0).toFixed(2)
+            : '—',
         },
         { k: 'Recovered', v: status.recovered ? 'YES' : '—' },
         {

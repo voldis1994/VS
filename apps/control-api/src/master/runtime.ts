@@ -1225,27 +1225,36 @@ class MasterRuntime {
           this.persistRuntimeGates();
         }
       } else if (!execution.accepted) {
-        // Ambiguous OPEN ACK timeout — keep inflight so we do not double-open
-        // while EA may still fill (Check- holds pending_open until ACK/timeout window).
+        // Ambiguous OPEN — keep inflight so we do not double-open while EA may
+        // still fill (Check- holds pending_open / WAIT_CMD until ACK/timeout).
         const ambiguousTimeout =
-          /ack_timeout|ACK_TIMEOUT|not_confirmed|unconfirmed|confirm_timeout/i.test(
+          /ack_timeout|ACK_TIMEOUT|not_confirmed|unconfirmed|confirm_timeout|mt4_pending_open|mt4_intent_already_pending/i.test(
             execution.detail || ''
           );
         if (!ambiguousTimeout) {
           this.inflight_until_ms = 0;
           this.persistRuntimeGates();
         } else {
-          // Capital/MT4 ambiguous OPEN — durable ACK_TIMEOUT for cycle alert gate after restart
+          // Capital/MT4 ambiguous OPEN — durable ACK_TIMEOUT / pending for cycle alert
+          const pendingOpen = /mt4_pending_open|mt4_intent_already_pending/i.test(
+            execution.detail || ''
+          );
+          if (pendingOpen) {
+            this.inflight_until_ms = Math.max(
+              this.inflight_until_ms,
+              Date.now() + 90_000
+            );
+          }
           logMasterError({
             module: 'runtime.entry',
-            error_type: 'ACK_TIMEOUT',
+            error_type: pendingOpen ? 'MT4_PENDING_OPEN' : 'ACK_TIMEOUT',
             message: execution.detail || 'ACK_TIMEOUT',
             context: { epic: this.epic, broker: broker.name },
           });
           this.persistRuntimeGates();
         }
         if (
-          /reject|RISK_CHECK|not_confirmed|CAPITAL_SL|unconfirmed|ack_timeout|ACK_TIMEOUT|confirm_timeout/i.test(
+          /reject|RISK_CHECK|not_confirmed|CAPITAL_SL|unconfirmed|ack_timeout|ACK_TIMEOUT|confirm_timeout|mt4_pending_open|mt4_intent_already_pending/i.test(
             execution.detail
           )
         ) {
@@ -1463,16 +1472,30 @@ class MasterRuntime {
           .filter(Boolean)
           .join(';');
       }
+      // Check- WAIT_CMD / pending_open — re-arm inflight so restart does not spam OPEN
+      if (pending.still_pending > 0) {
+        this.inflight_until_ms = Math.max(
+          this.inflight_until_ms,
+          Date.now() + 90_000
+        );
+        this.persistRuntimeGates();
+      }
       // Reader apply_ack_to_instance_state — OPEN SUCCESS before status sync
       const booked = new Set(this.positions.list().map((p) => p.position_id));
       const fromAck = this.broker.adoptOpenFromAckJournal(booked);
-      let statusByTicket = new Map<string, { opened_at?: string | null }>();
+      let statusByTicket = new Map<
+        string,
+        { opened_at?: string | null; open_level?: number | null }
+      >();
       if (fromAck.adopted.length) {
         try {
           const listed = await this.broker.listOpenPositions(this.epic);
           if (listed.ok) {
             statusByTicket = new Map(
-              listed.positions.map((p) => [p.position_id, { opened_at: p.opened_at }])
+              listed.positions.map((p) => [
+                p.position_id,
+                { opened_at: p.opened_at, open_level: p.open_level },
+              ])
             );
           }
         } catch {
@@ -1481,8 +1504,24 @@ class MasterRuntime {
       }
       for (const row of fromAck.adopted) {
         if (this.positions.get(row.ticket)) continue;
+        const status = statusByTicket.get(row.ticket);
+        const statusOpen =
+          status?.open_level != null &&
+          Number.isFinite(status.open_level) &&
+          status.open_level > 0
+            ? Number(status.open_level)
+            : null;
+        const ackFill =
+          row.fill_price != null &&
+          Number.isFinite(row.fill_price) &&
+          row.fill_price > 0
+            ? Number(row.fill_price)
+            : null;
+        // Prefer broker OrderOpenPrice (Reader status entry); never invent 0
+        const entry = statusOpen ?? ackFill;
+        if (entry == null) continue;
         const recoverId = stableRecoverUuid(row.ticket);
-        const openedAt = statusByTicket.get(row.ticket)?.opened_at ?? null;
+        const openedAt = status?.opened_at ?? null;
         this.positions.register({
           position_id: row.ticket,
           opportunity_id: recoverId,
@@ -1490,7 +1529,7 @@ class MasterRuntime {
           epic: row.epic || this.epic,
           side: row.side,
           size: row.volume,
-          entry: row.fill_price ?? 0,
+          entry,
           stop_loss: row.sl,
           take_profit: row.tp,
           entry_at: openedAt,
@@ -1510,8 +1549,8 @@ class MasterRuntime {
               trend_dir: 'SIDEWAYS',
               trend_strength: 0,
               structure_bias: 'NEUTRAL',
-              swing_high: row.fill_price ?? 0,
-              swing_low: row.fill_price ?? 0,
+              swing_high: entry,
+              swing_low: entry,
               buy_pressure: 0,
               sell_pressure: 0,
               behavior_bull: 0,
