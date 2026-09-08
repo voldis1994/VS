@@ -79,9 +79,18 @@ async function main() {
   report.open_positions = positions.ok ? positions.positions.length : null;
   report.list_ok = positions.ok;
   report.list_detail = positions.detail || null;
-  // Full Capital LIVE proof requires usable quote + equity — partial is not COMPLETE
+  // Full Capital LIVE proof requires usable quote + equity + positions list
+  // (entry/sync/flatten/close all depend on list success).
   report.status =
-    quote && acct && acct.equity > 0 ? 'OK_LIVE_CONNECTED' : 'CONNECTED_PARTIAL';
+    quote && acct && acct.equity > 0 && positions.ok
+      ? 'OK_LIVE_CONNECTED'
+      : 'CONNECTED_PARTIAL';
+  if (report.status === 'CONNECTED_PARTIAL' && quote && acct && acct.equity > 0 && !positions.ok) {
+    report.detail = `${report.detail || ''};list_unproven:${positions.detail || 'list_failed'}`.slice(
+      0,
+      400
+    );
+  }
 
   console.log(JSON.stringify(report, null, 2));
   writeSmokeArtifact(report);

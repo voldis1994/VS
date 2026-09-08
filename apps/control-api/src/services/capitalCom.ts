@@ -533,6 +533,11 @@ export async function listCapitalAccounts(
         accountType: a.accountType ? String(a.accountType) : undefined,
         balance: numOrNull(bal?.balance ?? a.balance),
         available: numOrNull(bal?.available ?? a.available),
+        /** Floating PnL — required so equity ≠ cash balance while underwater */
+        profitLoss: numOrNull(
+          bal?.profitLoss ?? bal?.profit_loss ?? a.profitLoss ?? a.profit_loss
+        ),
+        equity: numOrNull(bal?.equity ?? a.equity),
         currency: a.currency ? String(a.currency) : undefined,
       };
     })
@@ -540,7 +545,29 @@ export async function listCapitalAccounts(
   return { ok: true, accounts, detail: `${accounts.length} accounts` };
 }
 
-/** Equity snapshot for MASTER sizing — equity = account balance (VS-System- pattern). */
+/** Balance + floating PnL (or explicit equity) for LIVE risk gates. */
+export function capitalEquityFromAccountFields(hit: {
+  balance?: number | null;
+  available?: number | null;
+  profitLoss?: number | null;
+  equity?: number | null;
+}): { equity: number; balance: number } {
+  const balance = Number(hit.balance ?? hit.available ?? 0);
+  const pl = Number(hit.profitLoss ?? 0);
+  let equity =
+    hit.equity != null && Number.isFinite(Number(hit.equity)) && Number(hit.equity) > 0
+      ? Number(hit.equity)
+      : (Number.isFinite(balance) ? balance : 0) + (Number.isFinite(pl) ? pl : 0);
+  if (!(equity > 0) && Number.isFinite(Number(hit.available)) && Number(hit.available) > 0) {
+    equity = Number(hit.available);
+  }
+  return {
+    equity: Number.isFinite(equity) ? equity : 0,
+    balance: Number.isFinite(balance) && balance > 0 ? balance : Number.isFinite(equity) ? equity : 0,
+  };
+}
+
+/** Equity snapshot for MASTER sizing — equity = balance + floating profitLoss. */
 export async function fetchCapitalAccountEquity(
   session: CapitalSession,
   preferredAccountId?: string | null
@@ -554,25 +581,28 @@ export async function fetchCapitalAccountEquity(
   const listed = await listCapitalAccounts(session);
   if (!listed.ok || !listed.accounts.length) return null;
   const pref = (preferredAccountId || session.currentAccountId || '').trim();
+  const accountEquityScore = (a: {
+    balance?: number | null;
+    available?: number | null;
+    profitLoss?: number | null;
+    equity?: number | null;
+  }) => capitalEquityFromAccountFields(a).equity;
   const hit =
     (pref && listed.accounts.find((a) => a.accountId === pref)) ||
-    listed.accounts.reduce((best, a) => {
-      const e = Number(a.balance ?? a.available ?? 0);
-      const be = Number(best.balance ?? best.available ?? 0);
-      return e >= be ? a : best;
-    });
-  // Use balance for equity sizing — available is free margin and understates risk budget
-  const balance = Number(hit.balance ?? hit.available ?? 0);
-  const equity = Number.isFinite(balance) && balance > 0 ? balance : Number(hit.available ?? 0);
-  if (!Number.isFinite(equity) || equity <= 0) {
+    listed.accounts.reduce((best, a) =>
+      accountEquityScore(a) >= accountEquityScore(best) ? a : best
+    );
+  const scored = capitalEquityFromAccountFields(hit);
+  const pl = Number(hit.profitLoss ?? 0);
+  if (!(scored.equity > 0)) {
     return { equity: 0, balance: 0, currency: hit.currency || 'GBP', detail: 'no_balance_on_account' };
   }
   return {
-    equity,
-    balance: Number.isFinite(balance) ? balance : equity,
+    equity: scored.equity,
+    balance: scored.balance,
     available: numOrNull(hit.available),
     currency: hit.currency || 'GBP',
-    detail: `account=${hit.accountId}`,
+    detail: `account=${hit.accountId}${Number.isFinite(pl) && pl !== 0 ? `;upl=${pl}` : ''}`,
   };
 }
 
@@ -1076,6 +1106,12 @@ export async function listCapitalOpenPositions(
       upl: numOrNull(pos.upl ?? pos.unrealizedProfit ?? pos.profit),
       stop_level: numOrNull(pos.stopLevel ?? pos.stop_level),
       profit_level: numOrNull(pos.profitLevel ?? pos.profit_level),
+      trailing_stop:
+        typeof pos.trailingStop === 'boolean'
+          ? pos.trailingStop
+          : typeof pos.trailing_stop === 'boolean'
+            ? pos.trailing_stop
+            : null,
       opened_at: (() => {
         const raw = pos.createdDate ?? pos.created ?? pos.openDate ?? null;
         if (raw == null || raw === '') return null;

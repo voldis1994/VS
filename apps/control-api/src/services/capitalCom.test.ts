@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   capitalComBaseUrl,
+  capitalEquityFromAccountFields,
   encryptCapitalPassword,
   openCapitalSession,
   resolveEpicViaSearch,
@@ -8,6 +9,27 @@ import {
 } from './capitalCom.js';
 import { generateKeyPairSync } from 'crypto';
 import { masterCapitalConnectionId } from '../master/capitalFactory.js';
+
+describe('capitalEquityFromAccountFields', () => {
+  it('includes floating profitLoss so underwater equity is below cash balance', () => {
+    const r = capitalEquityFromAccountFields({
+      balance: 10_000,
+      available: 8_000,
+      profitLoss: -1_500,
+    });
+    expect(r.balance).toBe(10_000);
+    expect(r.equity).toBe(8_500);
+  });
+
+  it('prefers explicit equity when present', () => {
+    const r = capitalEquityFromAccountFields({
+      balance: 10_000,
+      profitLoss: -500,
+      equity: 9_200,
+    });
+    expect(r.equity).toBe(9_200);
+  });
+});
 
 describe('capitalComBaseUrl', () => {
   it('uses live host for live', () => {

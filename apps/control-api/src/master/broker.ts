@@ -107,6 +107,8 @@ export type BrokerPosition = {
   upl: number | null;
   /** Broker open time when known — preserve TIME_STOP clock on orphan adopt */
   opened_at?: string | null;
+  /** Capital trailingStop when positions list exposes it */
+  trailing_stop?: boolean | null;
 };
 
 export type PlaceOrderInput = {
@@ -1045,6 +1047,15 @@ export class CapitalBroker implements MasterBroker {
         profit_level: protectiveLevelOrNull(p.profit_level),
         upl: p.upl ?? null,
         opened_at: p.opened_at ?? null,
+        trailing_stop:
+          p.trailing_stop === true ||
+          p.trailingStop === true ||
+          String(p.trailingStop || p.trailing_stop || '').toLowerCase() ===
+            'true'
+            ? true
+            : p.trailing_stop === false || p.trailingStop === false
+              ? false
+              : null,
       });
     }
     return { ok: true, positions, presence_ids };
@@ -2219,6 +2230,7 @@ export class CapitalBroker implements MasterBroker {
     if (!res.ok) {
       return { ok: false, detail: res.detail || 'modify_failed', order_id: res.deal_reference };
     }
+    let confirmAccepted = false;
     if (res.deal_reference) {
       const conf = await this.waitConfirm(res.deal_reference);
       if (conf.rejected) {
@@ -2228,6 +2240,7 @@ export class CapitalBroker implements MasterBroker {
           order_id: res.deal_reference,
         };
       }
+      if (conf.ok) confirmAccepted = true;
     }
 
     if (!needsSlProof && !needsTpProof) {
@@ -2298,6 +2311,12 @@ export class CapitalBroker implements MasterBroker {
               stop_level: protectiveLevelOrNull(row.stop_level),
               profit_level: protectiveLevelOrNull(row.profit_level),
               upl: row.upl ?? null,
+              trailing_stop:
+                row.trailing_stop === true || row.trailingStop === true
+                  ? true
+                  : row.trailing_stop === false || row.trailingStop === false
+                    ? false
+                    : null,
             };
           }
         }
@@ -2315,11 +2334,19 @@ export class CapitalBroker implements MasterBroker {
       if (needsSlProof && hasLevel && wantSl != null && gotSl != null) {
         slOk = Math.abs(gotSl - wantSl) <= tolAbs;
       } else if (needsSlProof && !hasLevel && gotSl != null) {
-        // stopDistance / native trail: accept when SL moved or gap≈dist vs mark
+        // stopDistance / native trail: require SL moved or trailingStop flag.
+        // Unchanged SL + gap≈dist alone is NOT proof when confirm timed out —
+        // a static stop near mark±dist would falsely arm native_trail_armed.
         const moved = beforeSl == null || Math.abs(gotSl - beforeSl) > tolAbs;
-        if (moved) {
+        const trailFlag = hit.trailing_stop === true;
+        if (moved || trailFlag) {
           slOk = true;
-        } else if (hasDist && trailDist != null && hitEpic) {
+        } else if (
+          confirmAccepted &&
+          hasDist &&
+          trailDist != null &&
+          hitEpic
+        ) {
           const q = await this.getQuote(hitEpic);
           if (q && Number.isFinite(q.mid)) {
             const gap = Math.abs(q.mid - gotSl);
