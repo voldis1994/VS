@@ -242,6 +242,119 @@ describe('VS MASTER EMA3 trail manage', () => {
     });
     expect(pm.get(placed.position_id!)!.stop_loss).toBeCloseTo(ema3, 5);
   });
+
+  it('BUY soft-closes on EMA3 price-through (above→below)', async () => {
+    const { PaperBroker } = await import('../broker.js');
+    const { PositionManager } = await import('../positionManager.js');
+    const { ema3PriceThroughExit } = await import('../analysis.js');
+    expect(
+      ema3PriceThroughExit({
+        side: 'BUY',
+        mark: 4405,
+        ema3: 4410,
+        prevSide: 'above',
+      }).exit
+    ).toBe(true);
+    expect(
+      ema3PriceThroughExit({
+        side: 'BUY',
+        mark: 4415,
+        ema3: 4410,
+        prevSide: null,
+      }).exit
+    ).toBe(false);
+
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    broker.setQuote({
+      bid: 4412,
+      ask: 4412.4,
+      mid: 4412.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'ema3-thru-bbbbbbbbbbbb',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: entry - 20,
+      profit_level: entry + 40,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-ema3-thru',
+      intent_id: 'ema3-thru-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry,
+      stop_loss: entry - 20,
+      take_profit: entry + 40,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: analyzeBars(barsTrendUp(), 0.4),
+        expectancy: null,
+      },
+    });
+    // Seed side above EMA3 (no close yet)
+    await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: 4412,
+        ask: 4412.4,
+        mid: 4412.2,
+        spread: 0.4,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      ema3: 4410,
+      scalp_pct_chase: false,
+      breakeven_progress: 0,
+      max_hold_ms: 0,
+      allow_close: false,
+    });
+    expect(pm.get(placed.position_id!)!.ema3_side).toBe('above');
+    // Cross below EMA3
+    broker.setQuote({
+      bid: 4405,
+      ask: 4405.4,
+      mid: 4405.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const r = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: 4405,
+        ask: 4405.4,
+        mid: 4405.2,
+        spread: 0.4,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      ema3: 4410,
+      scalp_pct_chase: false,
+      breakeven_progress: 0,
+      max_hold_ms: 0,
+      allow_close: true,
+    });
+    expect(r.closed.some((c) => c.reason === 'EMA3_PRICE_THROUGH')).toBe(true);
+    expect(pm.get(placed.position_id!)).toBeNull();
+  });
 });
 
 describe('VS MASTER decision + risk', () => {

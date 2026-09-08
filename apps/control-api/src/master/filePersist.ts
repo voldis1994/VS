@@ -65,6 +65,9 @@ export class FilePersist implements PersistClient {
           soft_trail_peak: p.soft_trail_peak ?? null,
           native_trail_armed: !!p.native_trail_armed,
           scalp_chase_at_ms: p.scalp_chase_at_ms ?? null,
+          ema3_side: p.ema3_side ?? null,
+          modify_reject_level: p.modify_reject_level ?? null,
+          modify_backoff_until_ms: p.modify_backoff_until_ms ?? null,
         },
       }));
       this.mem.intents = new Set(raw.intents || []);
@@ -168,6 +171,19 @@ export class FilePersist implements PersistClient {
         ),
         scalp_chase_at_ms:
           p.scalp_chase_at_ms ?? p.payload?.scalp_chase_at_ms ?? null,
+        ema3_side: (() => {
+          const s = p.ema3_side ?? p.payload?.ema3_side ?? null;
+          return s === 'above' || s === 'below' ? s : null;
+        })(),
+        modify_reject_level: (() => {
+          const v = p.modify_reject_level ?? p.payload?.modify_reject_level;
+          return v != null && Number.isFinite(Number(v)) ? Number(v) : null;
+        })(),
+        modify_backoff_until_ms: (() => {
+          const v =
+            p.modify_backoff_until_ms ?? p.payload?.modify_backoff_until_ms;
+          return v != null && Number.isFinite(Number(v)) ? Number(v) : null;
+        })(),
       })),
       intents: [...this.mem.intents],
     };

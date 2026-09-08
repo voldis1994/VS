@@ -50,6 +50,39 @@ export function emaFromBars(bars: Bar[], period = 3): number | null {
   return ema(closes, period);
 }
 
+/** Price side vs EMA3 — VS-System EMA_TICK edge detect. */
+export function ema3PriceSide(
+  mark: number,
+  ema3: number
+): 'above' | 'below' | null {
+  if (!(mark > 0) || !Number.isFinite(mark) || !(ema3 > 0) || !Number.isFinite(ema3)) {
+    return null;
+  }
+  return mark >= ema3 ? 'above' : 'below';
+}
+
+/**
+ * VS-System EMA_TICK price-through exit: opposite edge through EMA3.
+ * Requires a prior side so the first tick after open/restart does not false-exit.
+ */
+export function ema3PriceThroughExit(input: {
+  side: 'BUY' | 'SELL';
+  mark: number;
+  ema3: number;
+  prevSide: 'above' | 'below' | null | undefined;
+}): { exit: boolean; reason: string } {
+  const sideNow = ema3PriceSide(input.mark, input.ema3);
+  const prev = input.prevSide ?? null;
+  if (!sideNow || !prev) return { exit: false, reason: '' };
+  if (input.side === 'BUY' && prev === 'above' && sideNow === 'below') {
+    return { exit: true, reason: 'EMA3_PRICE_THROUGH' };
+  }
+  if (input.side === 'SELL' && prev === 'below' && sideNow === 'above') {
+    return { exit: true, reason: 'EMA3_PRICE_THROUGH' };
+  }
+  return { exit: false, reason: '' };
+}
+
 export function analyzeBars(bars: Bar[], spread = 0, nowMs = Date.now()): AnalysisSnapshot {
   if (bars.length < 5) {
     return {

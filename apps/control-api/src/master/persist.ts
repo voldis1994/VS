@@ -135,6 +135,9 @@ export async function saveOpenPositions(positions: ManagedPosition[]): Promise<b
             soft_trail_peak: p.soft_trail_peak ?? null,
             native_trail_armed: !!p.native_trail_armed,
             scalp_chase_at_ms: p.scalp_chase_at_ms ?? null,
+            ema3_side: p.ema3_side ?? null,
+            modify_reject_level: p.modify_reject_level ?? null,
+            modify_backoff_until_ms: p.modify_backoff_until_ms ?? null,
           }),
         ]
       );
@@ -154,6 +157,7 @@ export async function loadOpenPositions(): Promise<ManagedPosition[]> {
     );
     return rows.map((r) => {
       const payload = typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload || {};
+      const emaSide = payload.ema3_side;
       return {
         position_id: r.position_id,
         opportunity_id: r.opportunity_id,
@@ -180,6 +184,17 @@ export async function loadOpenPositions(): Promise<ManagedPosition[]> {
         scalp_chase_at_ms:
           payload.scalp_chase_at_ms != null && Number.isFinite(Number(payload.scalp_chase_at_ms))
             ? Number(payload.scalp_chase_at_ms)
+            : null,
+        ema3_side: emaSide === 'above' || emaSide === 'below' ? emaSide : null,
+        modify_reject_level:
+          payload.modify_reject_level != null &&
+          Number.isFinite(Number(payload.modify_reject_level))
+            ? Number(payload.modify_reject_level)
+            : null,
+        modify_backoff_until_ms:
+          payload.modify_backoff_until_ms != null &&
+          Number.isFinite(Number(payload.modify_backoff_until_ms))
+            ? Number(payload.modify_backoff_until_ms)
             : null,
       } as ManagedPosition;
     });

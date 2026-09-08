@@ -4,6 +4,7 @@
  */
 import { createHash } from 'crypto';
 import { decideBestOutcomeExit, favorableMove } from '../services/exitManage.js';
+import { ema3PriceSide, ema3PriceThroughExit } from './analysis.js';
 import type { MasterBroker } from './broker.js';
 import { clampStopForCapitalMark, effectiveMinStopDistance } from './capitalStop.js';
 import {
@@ -80,6 +81,12 @@ export type ManagedPosition = {
   native_trail_armed?: boolean;
   /** Last scalp % chase attempt ms — durable so restart does not MODIFY-hammer */
   scalp_chase_at_ms?: number | null;
+  /** Last price side vs EMA3 (above/below) for price-through exit */
+  ema3_side?: 'above' | 'below' | null;
+  /** Durable identical rejected stop level (survives restart) */
+  modify_reject_level?: number | null;
+  /** Durable modify time-backoff until ms */
+  modify_backoff_until_ms?: number | null;
   /** Last broker-reported UPL (account currency) when known */
   broker_upl?: number | null;
 };
@@ -122,38 +129,46 @@ export class PositionManager {
   private static readonly NAKED_RECOVERY_MS = 8_000;
   private static readonly NAKED_RECOVERY_MULTS = [1, 2, 3, 5] as const;
 
-  private clearModifyReject(positionId: string) {
-    this.modifyBackoff.delete(positionId);
-    this.rejectedStopLevel.delete(positionId);
+  private clearModifyReject(pos: ManagedPosition) {
+    this.modifyBackoff.delete(pos.position_id);
+    this.rejectedStopLevel.delete(pos.position_id);
+    pos.modify_reject_level = null;
+    pos.modify_backoff_until_ms = null;
   }
 
   private async noteModifyReject(
-    positionId: string,
+    pos: ManagedPosition,
     level: number,
     detail: string
   ): Promise<void> {
     const { capitalModifyRejectBackoffMs } = await import('./capitalConfirm.js');
-    this.modifyBackoff.set(positionId, {
-      until: Date.now() + capitalModifyRejectBackoffMs(detail || ''),
-      level,
-    });
-    this.rejectedStopLevel.set(positionId, level);
+    const until = Date.now() + capitalModifyRejectBackoffMs(detail || '');
+    this.modifyBackoff.set(pos.position_id, { until, level });
+    this.rejectedStopLevel.set(pos.position_id, level);
+    pos.modify_reject_level = level;
+    pos.modify_backoff_until_ms = until;
   }
 
   /** True when this exact stop was rejected (permanent) or still in time backoff. */
   private shouldSkipModifyLevel(
-    positionId: string,
+    pos: ManagedPosition,
     level: number,
     opts?: { timeGateAll?: boolean }
   ): boolean {
-    const rejected = this.rejectedStopLevel.get(positionId);
+    const rejected =
+      pos.modify_reject_level ?? this.rejectedStopLevel.get(pos.position_id);
     if (rejected != null && Math.abs(rejected - level) < 1e-9) return true;
-    const backoff = this.modifyBackoff.get(positionId);
-    if (!backoff) return false;
+    const until =
+      pos.modify_backoff_until_ms ??
+      this.modifyBackoff.get(pos.position_id)?.until;
+    const backoffLevel =
+      pos.modify_reject_level ??
+      this.modifyBackoff.get(pos.position_id)?.level;
+    if (until == null || !Number.isFinite(until)) return false;
     const now = Date.now();
-    if (now >= backoff.until) return false;
+    if (now >= until) return false;
     if (opts?.timeGateAll) return true;
-    return Math.abs(backoff.level - level) < 1e-9;
+    return backoffLevel != null && Math.abs(backoffLevel - level) < 1e-9;
   }
 
   list(): ManagedPosition[] {
@@ -166,7 +181,8 @@ export class PositionManager {
 
   /** Operator / manual close — remove from local book after broker close succeeds. */
   drop(position_id: string): boolean {
-    this.clearModifyReject(position_id);
+    const pos = this.open.get(position_id);
+    if (pos) this.clearModifyReject(pos);
     this.nakedRecoveryAt.delete(position_id);
     this.nakedRecoveryLevel.delete(position_id);
     return this.open.delete(position_id);
@@ -513,6 +529,80 @@ export class PositionManager {
                 detail: closeRes.detail || 'soft_trail_close_failed',
               });
             }
+          }
+        }
+      }
+
+      // VS-System EMA_TICK: soft CLOSE when price edges through EMA3 opposite side
+      if (ema3 != null) {
+        const thru = allowClose
+          ? ema3PriceThroughExit({
+              side: pos.side,
+              mark,
+              ema3,
+              prevSide: pos.ema3_side,
+            })
+          : { exit: false, reason: '' };
+        pos.ema3_side = ema3PriceSide(mark, ema3);
+        if (thru.exit) {
+          if (await this.softCloseRequiresSlBlocked(broker, pos)) {
+            close_failed.push({
+              position_id: pos.position_id,
+              exit_reason: thru.reason,
+              detail: 'close_requires_sl',
+            });
+          } else {
+            const closeRes = await broker.closePosition(pos.position_id);
+            if (closeRes.ok) {
+              const fill =
+                closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
+                  ? Number(closeRes.fill_price)
+                  : mark;
+              const { pnl, from_broker } = resolveCloseMoneyPnl({
+                side: pos.side,
+                entry: pos.entry,
+                fill,
+                size: pos.size,
+                value_per_point_per_lot: pv,
+                fill_pnl: closeRes.fill_pnl,
+              });
+              const priced = applyCloseFees({
+                pnl,
+                volume: pos.size,
+                from_broker,
+              });
+              const outcome: TradeOutcome = {
+                position_id: pos.position_id,
+                side: pos.side,
+                entry: pos.entry,
+                exit: fill,
+                volume: pos.size,
+                pnl: priced.pnl,
+                fees: priced.fees,
+                slippage: Math.abs(fill - quote.mid),
+                mae: pos.mae,
+                mfe: pos.mfe,
+                r_multiple: 0,
+                hold_ms: heldMs,
+                exit_reason: thru.reason,
+              };
+              pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome, {
+                epic: pos.epic,
+              });
+              this.clearModifyReject(pos);
+              this.open.delete(pos.position_id);
+              closed.push({
+                position: pos,
+                outcome,
+                reason: outcome.exit_reason,
+              });
+              continue;
+            }
+            close_failed.push({
+              position_id: pos.position_id,
+              exit_reason: thru.reason,
+              detail: closeRes.detail || 'ema3_price_through_close_failed',
+            });
           }
         }
       }
@@ -997,7 +1087,7 @@ export class PositionManager {
     });
     if (clamped == null) return false;
 
-    if (this.shouldSkipModifyLevel(pos.position_id, clamped)) {
+    if (this.shouldSkipModifyLevel(pos, clamped)) {
       return false;
     }
 
@@ -1009,10 +1099,10 @@ export class PositionManager {
     );
     if (mod.ok) {
       pos.stop_loss = clamped;
-      this.clearModifyReject(pos.position_id);
+      this.clearModifyReject(pos);
       return true;
     }
-    await this.noteModifyReject(pos.position_id, clamped, mod.detail || '');
+    await this.noteModifyReject(pos, clamped, mod.detail || '');
     return false;
   }
 
@@ -1096,7 +1186,7 @@ export class PositionManager {
     );
     if (mod.ok) {
       pos.stop_loss = recovery;
-      this.clearModifyReject(pos.position_id);
+      this.clearModifyReject(pos);
       this.nakedRecoveryLevel.delete(pos.position_id);
       return;
     }
@@ -1114,13 +1204,13 @@ export class PositionManager {
         pos.native_trail_armed = true;
         const guess = pos.side === 'BUY' ? mark - minD : mark + minD;
         if (Number.isFinite(guess)) pos.stop_loss = guess;
-        this.clearModifyReject(pos.position_id);
+        this.clearModifyReject(pos);
         this.nakedRecoveryLevel.delete(pos.position_id);
         return;
       }
     }
     this.nakedRecoveryLevel.set(pos.position_id, level + 1);
-    await this.noteModifyReject(pos.position_id, recovery, mod.detail || '');
+    await this.noteModifyReject(pos, recovery, mod.detail || '');
   }
 
   /**
@@ -1196,7 +1286,7 @@ export class PositionManager {
     }
 
     // Time-gate all chase during backoff; never retry identical rejected level
-    if (this.shouldSkipModifyLevel(pos.position_id, candidate, { timeGateAll: true })) {
+    if (this.shouldSkipModifyLevel(pos, candidate, { timeGateAll: true })) {
       return;
     }
 
@@ -1223,7 +1313,7 @@ export class PositionManager {
     ) {
       return;
     }
-    if (this.shouldSkipModifyLevel(pos.position_id, stop, { timeGateAll: true })) {
+    if (this.shouldSkipModifyLevel(pos, stop, { timeGateAll: true })) {
       return;
     }
 
@@ -1236,10 +1326,10 @@ export class PositionManager {
     );
     if (mod.ok) {
       pos.stop_loss = stop;
-      this.clearModifyReject(pos.position_id);
+      this.clearModifyReject(pos);
       return;
     }
-    await this.noteModifyReject(pos.position_id, stop, mod.detail || '');
+    await this.noteModifyReject(pos, stop, mod.detail || '');
   }
 
   /**
@@ -1297,7 +1387,7 @@ export class PositionManager {
     });
     if (be == null) return;
 
-    if (this.shouldSkipModifyLevel(pos.position_id, be)) {
+    if (this.shouldSkipModifyLevel(pos, be)) {
       return;
     }
     const mod = await this.brokerModify(
@@ -1308,10 +1398,10 @@ export class PositionManager {
     );
     if (mod.ok) {
       pos.stop_loss = be;
-      this.clearModifyReject(pos.position_id);
+      this.clearModifyReject(pos);
       return;
     }
-    await this.noteModifyReject(pos.position_id, be, mod.detail || '');
+    await this.noteModifyReject(pos, be, mod.detail || '');
   }
 
   /**
@@ -1340,7 +1430,7 @@ export class PositionManager {
       }
     }
     if (next == null) return;
-    if (this.shouldSkipModifyLevel(pos.position_id, next)) return;
+    if (this.shouldSkipModifyLevel(pos, next)) return;
     const mod = await this.brokerModify(
       broker,
       pos,
@@ -1349,9 +1439,9 @@ export class PositionManager {
     );
     if (mod.ok) {
       pos.stop_loss = next;
-      this.clearModifyReject(pos.position_id);
+      this.clearModifyReject(pos);
     } else {
-      await this.noteModifyReject(pos.position_id, next, mod.detail || '');
+      await this.noteModifyReject(pos, next, mod.detail || '');
     }
   }
 
