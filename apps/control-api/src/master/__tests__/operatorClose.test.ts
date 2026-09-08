@@ -23,6 +23,7 @@ describe('operator close + manage config', () => {
     masterRuntime.setMode('PAPER');
     masterRuntime.running = true;
     masterRuntime.last_loss_ms = 0;
+    masterRuntime.last_close_failed = null;
     // Clear private cooldown gates so recover()/close cannot poison later suite tests
     const rt = masterRuntime as unknown as {
       post_exit_until_ms: number;
@@ -117,11 +118,88 @@ describe('operator close + manage config', () => {
     expect(r.ok).toBe(true);
     expect(masterRuntime.positions.count()).toBe(0);
     expect(masterRuntime.last_exit_reason).toBe('OPERATOR_CLOSE');
+    expect(masterRuntime.last_close_failed).toBeNull();
+    expect(
+      (masterRuntime as unknown as { post_exit_until_ms: number }).post_exit_until_ms
+    ).toBeGreaterThan(Date.now() - 1000);
     expect(r.pnl).toBeGreaterThan(0);
     const opp = masterRuntime.pipeline.journal.opportunities.find(
       (o) => o.outcome?.exit_reason === 'OPERATOR_CLOSE'
     );
     expect(opp?.outcome?.r_multiple).toBeGreaterThan(0);
+  });
+
+  it('operator close failure sets last_close_failed + journals ok:false', async () => {
+    const broker = masterRuntime.ensurePaperBroker();
+    broker.setQuote({
+      bid: 4410,
+      ask: 4410.4,
+      mid: 4410.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'op-fail-aaaaaaaaaaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: 4400,
+      profit_level: 4430,
+    });
+    masterRuntime.positions.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-op-fail',
+      intent_id: 'op-fail-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: placed.fill_price!,
+      stop_loss: 4400,
+      take_profit: 4430,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {
+          regime: 'RANGE',
+          market_state: 't',
+          momentum_score: 0,
+          momentum_dir: 'NEUTRAL',
+          trend_dir: 'SIDEWAYS',
+          trend_strength: 0.2,
+          structure_bias: 'NEUTRAL',
+          swing_high: 4420,
+          swing_low: 4400,
+          buy_pressure: 0.5,
+          sell_pressure: 0.5,
+          behavior_bull: 0.5,
+          behavior_bear: 0.5,
+          impact_score: 0.5,
+          context_quality: 0.5,
+          volatility: 0.001,
+          atr: 1,
+        },
+        expectancy: null,
+      },
+    });
+    const orig = broker.closePosition.bind(broker);
+    broker.closePosition = async () => ({ ok: false, detail: 'operator_sim_fail' });
+    const r = await masterRuntime.closePositionManual(
+      placed.position_id!,
+      'OPERATOR_CLOSE'
+    );
+    broker.closePosition = orig;
+    expect(r.ok).toBe(false);
+    expect(masterRuntime.positions.count()).toBe(1);
+    expect(masterRuntime.last_close_failed?.detail).toBe('operator_sim_fail');
+    expect(masterRuntime.status().last_close_failed?.detail).toBe(
+      'operator_sim_fail'
+    );
   });
 
   it('post-fill fail-close uses unlocked close (no tickChain deadlock)', () => {
@@ -283,5 +361,19 @@ describe('operator close + manage config', () => {
     expect(next.min_score).toBe(DEFAULT_MASTER_CONFIG.min_score);
     expect(SCALP_MANAGE_PRESET.scalp_lock_pct).toBe(0.2);
     expect(saveManageConfig({ scalp_pct_chase: false })).toBe(true);
+  });
+
+  it('saveManageConfig persists profit_lock/equity_floor atomically', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'master-day-risk-'));
+    process.env.MASTER_STATE_DIR = dir;
+    expect(
+      saveManageConfig({ profit_lock: 120, equity_floor: 9500, daily_loss_limit: 80 })
+    ).toBe(true);
+    const loaded = loadManageConfig();
+    expect(loaded?.profit_lock).toBe(120);
+    expect(loaded?.equity_floor).toBe(9500);
+    expect(loaded?.daily_loss_limit).toBe(80);
+    const { existsSync } = require('fs') as typeof import('fs');
+    expect(existsSync(join(dir, 'master_manage_config.json.tmp'))).toBe(false);
   });
 });

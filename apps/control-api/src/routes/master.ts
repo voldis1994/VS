@@ -679,6 +679,7 @@ async function refresh(){
       card('Owns pipeline',s.owns_pipeline?'YES':'no',s.owns_pipeline?'ok':(s.mode==='LIVE'?'bad':'')),
       card('Entries',s.entries_armed===false?('PAUSED'+(s.entries_pause_reason?' · '+s.entries_pause_reason:'')):'armed',s.entries_armed===false?'bad':'ok'),
       card('AI mode',s.ai_mode||'—'),
+      card('AI allow close',s.ai_mode==='off'?'n/a':(s.last_ai_allow_close===false?'VETO':s.last_ai_allow_close===true?'allow':'—'),s.ai_mode!=='off'&&s.last_ai_allow_close===false?'bad':''),
       card('Close fail',s.last_close_failed?((s.last_close_failed.exit_reason||'')+' · '+(s.last_close_failed.detail||'')).slice(0,80):'—',s.last_close_failed?'bad':''),
       card('Running',s.running?'YES':'NO',s.running?'ok':''),
       card('Regime',s.regime),

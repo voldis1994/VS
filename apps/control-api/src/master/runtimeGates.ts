@@ -34,6 +34,8 @@ export type RuntimeGates = {
   last_ai_allow_close?: boolean | null;
   /** Operator AI gate mode — survive restart (control API mutates live cfg). */
   ai_mode?: 'off' | 'advisory' | 'required' | null;
+  /** Hard kill — must survive crash/restart or recover resumes entries. */
+  kill_switch?: boolean | null;
 };
 
 function gatesDir(): string {
@@ -91,6 +93,7 @@ export function saveRuntimeGates(gates: RuntimeGates): boolean {
         gates.ai_mode === 'required'
           ? gates.ai_mode
           : null,
+      kill_switch: gates.kill_switch === true,
     });
   } catch {
     return false;
@@ -138,6 +141,7 @@ export function loadRuntimeGates(): RuntimeGates | null {
         raw.ai_mode === 'required'
           ? raw.ai_mode
           : null,
+      kill_switch: raw.kill_switch === true,
     };
   } catch {
     return null;

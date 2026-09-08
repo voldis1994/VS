@@ -41,6 +41,7 @@ import { setupKey } from './decision.js';
 import { decideBestOutcomeExit } from '../services/exitManage.js';
 import { scalpPctLockBrokerStop } from './scalpPctChase.js';
 import { resolveAdvisor } from './ai.js';
+import { closeAllowedByStopLoss } from './closeRequiresSl.js';
 import type {
   Bar,
   MasterConfig,
@@ -48,6 +49,15 @@ import type {
   Quote,
   TradeOutcome,
 } from './types.js';
+
+/** Paper/replay peer of live softCloseRequiresSlBlocked (broker unread → need local SL). */
+function replaySoftCloseAllowed(sl: number | null | undefined): boolean {
+  return closeAllowedByStopLoss({
+    brokerFound: null,
+    brokerStopLoss: null,
+    dbStopLoss: sl,
+  });
+}
 
 export type ReplayOptions = {
   bars: Bar[];
@@ -105,7 +115,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
     side: 'BUY' | 'SELL';
     entry: number;
     volume: number;
-    sl: number;
+    sl: number | null;
     tp: number;
     open_i: number;
     open_ts: number;
@@ -138,7 +148,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
         ? (px - o.entry) * volume
         : (o.entry - px) * volume;
     const pnl = pnlGross - commission * (volume / Math.max(o.volume, 1e-9));
-    const risk = Math.abs(o.entry - o.sl) * volume || 1;
+    const risk = Math.abs(o.entry - (o.sl ?? o.entry)) * volume || 1;
     const outcome: TradeOutcome = {
       position_id: `bt-${o.open_i}`,
       side: o.side,
@@ -207,7 +217,11 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
           close_all_profit: cfg.close_all_profit,
           close_all_loss: cfg.close_all_loss,
         });
-        if (portfolio.close && allow_close) {
+        if (
+          portfolio.close &&
+          allow_close &&
+          replaySoftCloseAllowed(open.sl)
+        ) {
           closeSlice(open, mark, open.volume, portfolio.reason, i, quote.ts_ms);
           open = null;
           equity_curve.push(equity);
@@ -255,8 +269,12 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
           min_distance: null,
         });
         if (chase != null) {
-          if (open.side === 'BUY' && chase > open.sl) open.sl = chase;
-          if (open.side === 'SELL' && chase < open.sl) open.sl = chase;
+          if (open.side === 'BUY' && (open.sl == null || chase > open.sl)) {
+            open.sl = chase;
+          }
+          if (open.side === 'SELL' && (open.sl == null || chase < open.sl)) {
+            open.sl = chase;
+          }
         }
       } else {
         // Check- point trail (tighten-only)
@@ -269,8 +287,12 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
             open.side === 'BUY'
               ? mark - (cfg.trail_lock ?? 0)
               : mark + (cfg.trail_lock ?? 0);
-          if (open.side === 'BUY' && trailed > open.sl) open.sl = trailed;
-          if (open.side === 'SELL' && trailed < open.sl) open.sl = trailed;
+          if (open.side === 'BUY' && (open.sl == null || trailed > open.sl)) {
+            open.sl = trailed;
+          }
+          if (open.side === 'SELL' && (open.sl == null || trailed < open.sl)) {
+            open.sl = trailed;
+          }
         }
         // Reader structure swing + MFE 50% ratchet (live maybeTrailStop)
         {
@@ -282,7 +304,9 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
             const swing = a.swing_low;
             if (swing > 0 && Number.isFinite(swing)) {
               const cand = swing - buf;
-              if (cand < mark && cand > open.sl) trailed = cand;
+              if (cand < mark && (open.sl == null || cand > open.sl)) {
+                trailed = cand;
+              }
             }
           } else {
             const swing = a.swing_high;
@@ -303,7 +327,9 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
               const mfeOk =
                 open.side === 'BUY' ? mfeTrail < mark : mfeTrail > mark;
               const tighter =
-                open.side === 'BUY' ? mfeTrail > open.sl : mfeTrail < open.sl;
+                open.side === 'BUY'
+                  ? open.sl == null || mfeTrail > open.sl
+                  : open.sl == null || mfeTrail < open.sl;
               if (mfeOk && tighter) trailed = mfeTrail;
             }
           }
@@ -316,13 +342,13 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
             if (
               open.side === 'BUY' &&
               e3.cur < mark &&
-              e3.cur > open.sl
+              (open.sl == null || e3.cur > open.sl)
             ) {
               open.sl = e3.cur;
             } else if (
               open.side === 'SELL' &&
               e3.cur > mark &&
-              e3.cur < open.sl
+              (open.sl == null || e3.cur < open.sl)
             ) {
               open.sl = e3.cur;
             }
@@ -355,6 +381,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
       // Reader partial scale-out (once) — skip when multi-TP owns ladder
       if (
         allow_close &&
+        replaySoftCloseAllowed(open.sl) &&
         !open.partial_close_applied &&
         !(open.multi_tp_levels && open.multi_tp_levels.length >= 2) &&
         (cfg.partial_close_progress ?? 0) > 0 &&
@@ -396,7 +423,11 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
       }
 
       // Multi-TP intermediate scale-outs (live parity)
-      if (allow_close && open.multi_tp_levels?.length) {
+      if (
+        allow_close &&
+        replaySoftCloseAllowed(open.sl) &&
+        open.multi_tp_levels?.length
+      ) {
         let idx = multiTpPendingIndex(open.multi_tp_levels);
         while (idx >= 0 && open) {
           const lvl = open.multi_tp_levels[idx]!;
@@ -438,7 +469,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
             ? multiTpFinalPrice(open.multi_tp_levels) ?? open.tp
             : open.tp;
         if (open.side === 'BUY') {
-          if (lo <= open.sl) {
+          if (open.sl != null && lo <= open.sl) {
             exitPx = open.sl;
             reason = 'SL';
           } else if (hi >= hardTp) {
@@ -446,7 +477,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
             reason = 'TP';
           }
         } else {
-          if (hi >= open.sl) {
+          if (open.sl != null && hi >= open.sl) {
             exitPx = open.sl;
             reason = 'SL';
           } else if (lo <= hardTp) {
@@ -454,9 +485,10 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
             reason = 'TP';
           }
         }
+        const softOk = allow_close && replaySoftCloseAllowed(open.sl);
         if (
           exitPx == null &&
-          allow_close &&
+          softOk &&
           cfg.max_hold_ms > 0 &&
           quote.ts_ms - open.open_ts >= cfg.max_hold_ms
         ) {
@@ -465,8 +497,9 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
         }
       }
 
-      // Soft exits only when AI allow_close and hard protective did not fire
-      if (exitPx == null && allow_close) {
+      // Soft exits only when AI allow_close + local SL present and hard protective did not fire
+      const softOk = allow_close && replaySoftCloseAllowed(open.sl);
+      if (exitPx == null && softOk) {
         const e1 = emaPairFromBars(visible, 1);
         const e3 = emaPairFromBars(visible, 3);
         if (e3) {
@@ -505,7 +538,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
 
       if (
         exitPx == null &&
-        allow_close &&
+        softOk &&
         open.soft_trail_armed &&
         open.soft_trail_peak != null &&
         Number.isFinite(open.soft_trail_peak)
@@ -517,20 +550,18 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
           reason = 'SOFT_TRAIL';
         }
       }
-      if (exitPx == null && allow_close) {
-        const heldMs = Math.max(0, quote.ts_ms - open.open_ts);
+      if (exitPx == null && softOk) {
+        // Live manageTick: BestOutcome uses live bar regime, not entry-only
+        const liveA = analyzeBars(visible, spread, quote.ts_ms);
         const bo = decideBestOutcomeExit(
           {
             open_side: open.side,
             entry_price: open.entry,
-            entry_at: new Date(Date.now() - heldMs).toISOString(),
+            entry_at: new Date(Date.now() - Math.max(0, quote.ts_ms - open.open_ts)).toISOString(),
             mfe: open.mfe,
             mae: Math.abs(Math.min(0, open.mae)),
             peak_retention: peakRetention,
-            regime: toDeskRegime(
-              open.decision.analysis.regime,
-              open.decision.analysis
-            ),
+            regime: toDeskRegime(liveA.regime, liveA),
             playbook: open.playbook,
             entry_setup: open.entry_setup,
           },
@@ -598,7 +629,12 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
           side,
           entry: raw,
           volume: cycle.risk.volume,
-          sl: cand.stop_loss,
+          sl:
+            cand.stop_loss != null &&
+            Number.isFinite(cand.stop_loss) &&
+            cand.stop_loss > 0
+              ? cand.stop_loss
+              : null,
           tp: cand.take_profit,
           open_i: fillIndex,
           open_ts: fillBar.ts_ms ?? fillIndex * 60_000,
@@ -653,7 +689,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
         ? (fill - open.entry) * open.volume
         : (open.entry - fill) * open.volume;
     const pnl = pnlGross - commission;
-    const risk = Math.abs(open.entry - open.sl) * open.volume || 1;
+    const risk = Math.abs(open.entry - (open.sl ?? open.entry)) * open.volume || 1;
     pipe.recordTradeClose(open.oppId, open.decision, {
       position_id: `bt-eod`,
       side: open.side,

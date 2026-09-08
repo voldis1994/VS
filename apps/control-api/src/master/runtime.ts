@@ -116,6 +116,8 @@ export type MasterStatus = {
     detail: string;
     ts: string;
   } | null;
+  /** Soft-exit AI gate — false means soft exits vetoed until cycle proves allow */
+  last_ai_allow_close: boolean;
   buy_score: number;
   sell_score: number;
   regime: string;
@@ -339,6 +341,7 @@ class MasterRuntime {
 
   setKillSwitch(on: boolean) {
     this.cfg = { ...this.cfg, kill_switch: on };
+    this.persistRuntimeGates();
   }
 
   setEpic(epic: string) {
@@ -447,7 +450,29 @@ class MasterRuntime {
     const mark = protectiveMark(pos.side, quote);
     const closeRes = await broker.closePosition(positionId);
     if (!closeRes.ok) {
-      return { ok: false, detail: closeRes.detail || 'close_failed' };
+      const detail = closeRes.detail || 'close_failed';
+      this.broker_detail = `close_fail:${positionId}:${detail}`.slice(0, 400);
+      this.last_exit_reason = `CLOSE_FAIL · ${reason} · ${detail}`;
+      this.last_close_failed = {
+        position_id: positionId,
+        exit_reason: reason,
+        detail,
+        ts: new Date().toISOString(),
+      };
+      logTradeEvent({
+        event: 'CLOSE',
+        broker: broker.name,
+        epic: pos.epic,
+        side: pos.side,
+        volume: pos.size,
+        price: null,
+        position_id: positionId,
+        intent_id: pos.intent_id,
+        opportunity_id: pos.opportunity_id,
+        ok: false,
+        detail: `${reason} · ${detail}`,
+      });
+      return { ok: false, detail };
     }
     const { exit: fill, fill_proven } = resolveCloseExitFill({
       fill_price: closeRes.fill_price,
@@ -509,6 +534,13 @@ class MasterRuntime {
       }
     }
     this.last_exit_reason = outcome.exit_reason;
+    this.last_close_failed = null;
+    const cool = Math.max(0, this.cfg.post_exit_cooldown_ms || 0);
+    this.post_exit_until_ms = Math.max(
+      this.post_exit_until_ms,
+      Date.now() + cool
+    );
+    this.persistRuntimeGates();
     const sk = pos.decision?.side
       ? setupKey(pos.decision.analysis, pos.decision.side)
       : null;
@@ -828,6 +860,7 @@ class MasterRuntime {
           capital_day_gates_seeded: this.capitalDayGatesSeeded,
           last_ai_allow_close: this.last_ai_allow_close,
           ai_mode: this.cfg.ai_mode,
+          kill_switch: this.cfg.kill_switch,
         })
       )
     );
@@ -2320,6 +2353,9 @@ class MasterRuntime {
       ) {
         this.cfg = { ...this.cfg, ai_mode: gates.ai_mode };
       }
+      if (typeof gates.kill_switch === 'boolean') {
+        this.cfg = { ...this.cfg, kill_switch: gates.kill_switch };
+      }
       // Soft-exit AI veto — fail-closed when advisory and gate missing
       if (typeof gates.last_ai_allow_close === 'boolean') {
         this.last_ai_allow_close = gates.last_ai_allow_close;
@@ -3574,6 +3610,8 @@ class MasterRuntime {
       last_execution_detail: this.last_execution_detail,
       last_exit_reason: this.last_exit_reason,
       last_close_failed: this.last_close_failed,
+      last_ai_allow_close:
+        this.cfg.ai_mode === 'off' ? true : this.last_ai_allow_close,
       buy_score: this.last_decision?.buy?.score ?? 0,
       sell_score: this.last_decision?.sell?.score ?? 0,
       regime: this.last_decision?.analysis.regime ?? 'UNKNOWN',

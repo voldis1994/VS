@@ -29,6 +29,7 @@ type MasterStatus = {
     detail: string;
     ts: string;
   } | null;
+  last_ai_allow_close?: boolean;
   buy_score: number;
   sell_score: number;
   regime: string;
@@ -170,6 +171,8 @@ type MasterStatus = {
     max_hold_ms?: number;
     min_score?: number;
     daily_loss_limit?: number;
+    profit_lock?: number;
+    equity_floor?: number;
     block_high_impact_news?: boolean;
     block_off_hours?: boolean;
   };
@@ -406,6 +409,21 @@ export function MasterPage() {
           ok: (status.bars_available ?? 0) >= 40,
         },
         { k: 'AI mode', v: status.ai_mode || '—' },
+        {
+          k: 'AI allow close',
+          v:
+            status.ai_mode === 'off'
+              ? 'n/a (AI off)'
+              : status.last_ai_allow_close === false
+                ? 'VETO soft exits'
+                : status.last_ai_allow_close === true
+                  ? 'allow'
+                  : '—',
+          bad:
+            status.ai_mode !== 'off' && status.last_ai_allow_close === false,
+          ok:
+            status.ai_mode === 'off' || status.last_ai_allow_close === true,
+        },
         {
           k: 'Close fail',
           v: status.last_close_failed
@@ -1122,6 +1140,28 @@ export function MasterPage() {
             />
           </label>
           <label style={{ fontSize: 12 }}>
+            profit_lock{' '}
+            <input
+              type="number"
+              step="10"
+              min={0}
+              defaultValue={status?.manage?.profit_lock ?? 0}
+              id="cfg-profit-lock"
+              style={{ width: 72 }}
+            />
+          </label>
+          <label style={{ fontSize: 12 }}>
+            equity_floor{' '}
+            <input
+              type="number"
+              step="10"
+              min={0}
+              defaultValue={status?.manage?.equity_floor ?? 0}
+              id="cfg-equity-floor"
+              style={{ width: 72 }}
+            />
+          </label>
+          <label style={{ fontSize: 12 }}>
             be_money{' '}
             <input
               type="number"
@@ -1240,6 +1280,8 @@ export function MasterPage() {
                     })(),
                     breakeven_activation_money: num('cfg-be-money'),
                     daily_loss_limit: num('cfg-daily-loss'),
+                    profit_lock: num('cfg-profit-lock'),
+                    equity_floor: num('cfg-equity-floor'),
                     soft_trail_money_arm: num('cfg-soft-arm'),
                     soft_trail_pips: num('cfg-soft-pips'),
                     scalp_pct_chase: chk('cfg-scalp-chase'),

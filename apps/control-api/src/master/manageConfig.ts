@@ -2,9 +2,10 @@
  * Persist operator-tunable MASTER manage knobs (survive restart).
  * Full MasterConfig is large — only manage/exit/risk toggles are stored.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import type { MasterConfig } from './types.js';
+import { atomicWriteJson } from './atomicIo.js';
 
 export type ManageConfigPatch = Partial<
   Pick<
@@ -123,8 +124,7 @@ export function saveManageConfig(patch: ManageConfigPatch): boolean {
   try {
     const dir = stateDir();
     mkdirSync(dir, { recursive: true });
-    writeFileSync(configPath(), JSON.stringify(patch, null, 2));
-    return true;
+    return atomicWriteJson(configPath(), patch);
   } catch {
     return false;
   }
