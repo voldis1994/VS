@@ -69,6 +69,7 @@ export function createCapitalBroker(creds: CapitalBrokerCreds): CapitalBroker {
         point_size: q.point_size,
         min_stop_distance: q.min_stop_distance,
         market_status: q.market_status,
+        update_time: q.update_time,
       };
     },
     list: async (session) => listCapitalOpenPositions(session),

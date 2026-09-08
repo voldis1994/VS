@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { CapitalBroker } from '../broker.js';
+import { CapitalBroker, capitalQuoteTsMs } from '../broker.js';
 import { executeDecision } from '../execution.js';
 import { DEFAULT_MASTER_CONFIG, GOLD_SPEC, MasterPipeline } from '../pipeline.js';
 import { PositionManager } from '../positionManager.js';
@@ -156,6 +156,41 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     clearTradeAckJournalForTest();
     (masterRuntime as any).capitalDeskCredsSeen = false;
     masterRuntime.stop();
+  });
+
+  it('capitalQuoteTsMs prefers update_time and fails closed when missing', () => {
+    const now = Date.UTC(2026, 8, 8, 12, 0, 0);
+    expect(capitalQuoteTsMs('2026-09-08T11:59:30.000Z', now)).toBe(
+      Date.parse('2026-09-08T11:59:30.000Z')
+    );
+    expect(capitalQuoteTsMs(null, now)).toBe(now - 60_000);
+    expect(capitalQuoteTsMs('not-a-time', now)).toBe(now - 60_000);
+  });
+
+  it('REST getQuote stamps ts_ms from update_time (not Date.now)', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const updateIso = new Date(Date.now() - 45_000).toISOString();
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-ts' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+        update_time: updateIso,
+        market_status: 'TRADEABLE',
+      }),
+      list: async () => ({ ok: true, positions: [] }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({ ok: false, detail: 'unused' }),
+    });
+    await broker.connect();
+    const q = await broker.getQuote('GOLD');
+    expect(q).not.toBeNull();
+    expect(q!.ts_ms).toBe(Date.parse(updateIso));
+    expect(Date.now() - q!.ts_ms).toBeGreaterThan(30_000);
   });
 
   it('blocks LIVE execution without MASTER_LIVE_ENABLED', async () => {
@@ -2882,6 +2917,89 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     });
     expect(place.ok).toBe(false);
     expect(place.detail).toMatch(/capital_open_list_unproven/);
+    expect(closed).toBeGreaterThanOrEqual(1);
+  });
+
+  it('ACCEPTED open refuses SUCCESS when TP stripped after attach (levels unproven)', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    let afterConfirmLists = 0;
+    let closed = 0;
+    let dealLive = false;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-tpstrip' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => {
+        if (!dealLive) return { ok: true, positions: [], detail: '0' };
+        afterConfirmLists += 1;
+        // First list: SL+TP for ensure; later: SL only (TP stripped) → refuse SUCCESS
+        if (afterConfirmLists === 1) {
+          return {
+            ok: true,
+            positions: [
+              {
+                deal_id: 'deal-tpstrip',
+                epic: 'GOLD',
+                direction: 'BUY',
+                size: 0.1,
+                open_level: 4410.4,
+                stop_level: 4400,
+                profit_level: 4500,
+              },
+            ],
+            detail: '1',
+          };
+        }
+        return {
+          ok: true,
+          positions: [
+            {
+              deal_id: 'deal-tpstrip',
+              epic: 'GOLD',
+              direction: 'BUY',
+              size: 0.1,
+              open_level: 4410.4,
+              stop_level: 4400,
+              // profit_level omitted
+            },
+          ],
+          detail: '1',
+        };
+      },
+      create: async () => ({ ok: true, deal_reference: 'ref-tpstrip', detail: 'posted' }),
+      confirm: async () => {
+        dealLive = true;
+        return {
+          ok: true,
+          deal_id: 'deal-tpstrip',
+          fill_level: 4410.4,
+          detail: 'ACCEPTED',
+        };
+      },
+      modify: async () => ({ ok: true, deal_reference: 'm-tpstrip', detail: 'ok' }),
+      close: async () => {
+        closed += 1;
+        return { ok: true, detail: 'closed' };
+      },
+    });
+    await broker.connect();
+    const place = await broker.placeOrder({
+      intent_id: 'intent-tpstrip',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: 4400,
+      profit_level: 4500,
+    });
+    expect(place.ok).toBe(false);
+    expect(place.detail).toMatch(/capital_open_tp_unproven/);
     expect(closed).toBeGreaterThanOrEqual(1);
   });
 

@@ -184,6 +184,38 @@ export function capitalApiEpic(epic: string): string {
   return s.toUpperCase();
 }
 
+/**
+ * Capital REST snapshot update_time → quote ts_ms.
+ * Fail-closed when missing/unparseable: stamp older than typical stale_quote_ms
+ * so DATA_STALE gates fire (never forge Date.now() freshness).
+ */
+export function capitalQuoteTsMs(
+  updateTime: string | number | null | undefined,
+  nowMs = Date.now()
+): number {
+  if (updateTime == null || updateTime === '') {
+    return nowMs - 60_000;
+  }
+  if (typeof updateTime === 'number' && Number.isFinite(updateTime)) {
+    const n = updateTime > 1e12 ? updateTime : updateTime * 1000;
+    return n > 0 && n <= nowMs + 5_000 ? n : nowMs - 60_000;
+  }
+  const s = String(updateTime).trim();
+  if (!s) return nowMs - 60_000;
+  if (/^\d+(\.\d+)?$/.test(s)) {
+    const n = Number(s);
+    if (Number.isFinite(n)) {
+      const ms = n > 1e12 ? n : n * 1000;
+      return ms > 0 && ms <= nowMs + 5_000 ? ms : nowMs - 60_000;
+    }
+  }
+  const parsed = Date.parse(s);
+  if (Number.isFinite(parsed) && parsed > 0 && parsed <= nowMs + 5_000) {
+    return parsed;
+  }
+  return nowMs - 60_000;
+}
+
 export type BrokerHistoryBars = {
   ok: boolean;
   bars: Array<{
@@ -864,13 +896,15 @@ export class CapitalBroker implements MasterBroker {
       this.cacheSet(this.minStopByEpic, q.epic || apiEpic, minStop);
     }
     this.noteMarketStatus(q.epic || apiEpic, q.market_status);
+    // Prefer Capital snapshot update_time — Date.now() would hide stale REST marks
+    const ts_ms = capitalQuoteTsMs(q.update_time);
     return {
       bid: q.bid,
       ask: q.ask,
       mid: q.mid,
       spread: q.ask - q.bid,
       epic: q.epic || apiEpic,
-      ts_ms: Date.now(),
+      ts_ms,
       min_stop_distance: minStop,
       market_status: this.cachedMarketStatus(q.epic || apiEpic),
     };
@@ -1805,18 +1839,35 @@ export class CapitalBroker implements MasterBroker {
       );
     }
 
-    // Prove deal present on venue BEFORE SUCCESS ack — ACCEPTED/match alone is not enough
-    // (list flake empty or unread must not journal SUCCESS / return ok:true).
+    // Prove deal present + protective levels BEFORE SUCCESS ack.
+    // Presence-alone after ensure can still be level-less (Capital stripped TP/SL).
     const proveAttempts =
       process.env.VITEST || process.env.MASTER_CONFIRM_FAST === 'true'
         ? 3
         : EMPTY_BROKER_GHOST_DEBOUNCE;
     const proveDelayMs =
       process.env.VITEST || process.env.MASTER_CONFIRM_FAST === 'true' ? 1 : 120;
+    const wantSlFinal = wantProtectiveSl ? Number(input.stop_level) : null;
+    const wantTpFinal =
+      input.profit_level != null &&
+      Number.isFinite(input.profit_level) &&
+      Number(input.profit_level) > 0
+        ? Number(input.profit_level)
+        : null;
+    const slTolFinal =
+      wantSlFinal != null ? Math.max(0.05, Math.abs(wantSlFinal) * 1e-5) : 0;
+    const tpTolFinal =
+      wantTpFinal != null ? Math.max(0.05, Math.abs(wantTpFinal) * 1e-5) : 0;
     let filled:
-      | { size?: number; open_level?: number | null }
+      | {
+          size?: number;
+          open_level?: number | null;
+          stop_level?: number | null;
+          profit_level?: number | null;
+        }
       | undefined;
     let lastListFail: string | null = null;
+    let lastLevelsFail: string | null = null;
     for (let i = 0; i < proveAttempts; i++) {
       if (i > 0) await new Promise((r) => setTimeout(r, proveDelayMs));
       // Venue-wide — epic filter must not hide the bound ticket
@@ -1830,29 +1881,62 @@ export class CapitalBroker implements MasterBroker {
       const present =
         filled != null ||
         (listedFinal.presence_ids ?? []).includes(position_id!);
-      if (present) {
-        updateTradeAck(command_id, {
-          ack_status: 'SUCCESS',
-          ticket: position_id,
-          fill_price,
-          detail: 'ACK_SUCCESS',
-        });
-        return {
-          ok: true,
-          order_id: opened.deal_reference || null,
-          position_id,
-          fill_price,
-          fill_size: fill_size ?? filled?.size ?? orderSize,
-          detail: `capital_open deal=${position_id}${fill_price != null ? ` fill=${fill_price}` : ''}`,
-          paper: false,
-        };
+      if (!present) {
+        lastLevelsFail = null;
+        continue;
       }
+      if (wantSlFinal != null) {
+        const gotSl = filled?.stop_level;
+        if (
+          gotSl == null ||
+          !Number.isFinite(gotSl) ||
+          Math.abs(Number(gotSl) - wantSlFinal) > slTolFinal
+        ) {
+          lastLevelsFail = 'capital_open_sl_unproven';
+          continue;
+        }
+      }
+      if (wantTpFinal != null) {
+        const gotTp = filled?.profit_level;
+        if (
+          gotTp == null ||
+          !Number.isFinite(gotTp) ||
+          Math.abs(Number(gotTp) - wantTpFinal) > tpTolFinal
+        ) {
+          lastLevelsFail = 'capital_open_tp_unproven';
+          continue;
+        }
+      }
+      lastLevelsFail = null;
+      updateTradeAck(command_id, {
+        ack_status: 'SUCCESS',
+        ticket: position_id,
+        fill_price,
+        detail: 'ACK_SUCCESS',
+      });
+      return {
+        ok: true,
+        order_id: opened.deal_reference || null,
+        position_id,
+        fill_price,
+        fill_size: fill_size ?? filled?.size ?? orderSize,
+        detail: `capital_open deal=${position_id}${fill_price != null ? ` fill=${fill_price}` : ''}`,
+        paper: false,
+      };
     }
     if (lastListFail) {
       return await ackFailClose(
         position_id!,
         opened.deal_reference || null,
         `capital_open_list_unproven:${lastListFail}`,
+        { fill_price, fill_size }
+      );
+    }
+    if (lastLevelsFail) {
+      return await ackFailClose(
+        position_id!,
+        opened.deal_reference || null,
+        lastLevelsFail,
         { fill_price, fill_size }
       );
     }

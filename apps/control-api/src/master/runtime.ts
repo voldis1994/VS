@@ -2221,6 +2221,8 @@ class MasterRuntime {
     const builder = new LiveBarBuilder(10_000, 80);
     let seeded = false;
     let busy = false;
+    let lastMid: number | null = null;
+    let frozenPolls = 0;
     const brokerName = this.broker.name;
 
     // Prefer Capital streaming when available — faster manage ticks
@@ -2257,6 +2259,20 @@ class MasterRuntime {
         }
         if (this.broker instanceof CapitalBroker) {
           this.syncEpicFromCapitalQuote(q);
+        }
+        // Frozen mid (~24 polls): age ts_ms so DATA_STALE / entry gates stay honest
+        if (lastMid != null && Math.abs(q.mid - lastMid) < 1e-9) {
+          frozenPolls += 1;
+        } else {
+          frozenPolls = 0;
+        }
+        lastMid = q.mid;
+        const quote =
+          frozenPolls >= 24 ? { ...q, ts_ms: Date.now() - 60_000 } : q;
+        if (frozenPolls >= 24 && frozenPolls % 24 === 0) {
+          this.broker_detail = `${this.broker_detail || ''};frozen_mid:${frozenPolls}`.slice(
+            -400
+          );
         }
         if (!seeded) {
           // Structure: Capital OHLC when broker provides it; else Yahoo; ticks from broker.
@@ -2325,35 +2341,35 @@ class MasterRuntime {
             }
           }
         }
-        const { bars } = builder.pushTick(q.mid);
+        const { bars } = builder.pushTick(quote.mid);
         if (bars.length < 5) return;
         // Desk parity: Capital market must be TRADEABLE/OPEN — unknown/CLOSED parks entries
         if (this.broker instanceof CapitalBroker) {
           const { capitalMarketAllowsTrading } = await import('./capitalMarket.js');
-          this.account.trade_allowed = capitalMarketAllowsTrading(q.market_status);
+          this.account.trade_allowed = capitalMarketAllowsTrading(quote.market_status);
           if (!this.account.trade_allowed) {
             this.broker_detail = `${this.broker_detail || ''};market:${
-              q.market_status || 'UNKNOWN'
+              quote.market_status || 'UNKNOWN'
             }`.slice(-400);
           }
-        } else if (q.market_status != null) {
+        } else if (quote.market_status != null) {
           const { capitalMarketAllowsTrading } = await import('./capitalMarket.js');
-          this.account.trade_allowed = capitalMarketAllowsTrading(q.market_status);
+          this.account.trade_allowed = capitalMarketAllowsTrading(quote.market_status);
           if (!this.account.trade_allowed) {
-            this.broker_detail = `${this.broker_detail || ''};market:${q.market_status}`.slice(-400);
+            this.broker_detail = `${this.broker_detail || ''};market:${quote.market_status}`.slice(-400);
           }
         }
         await this.tick(bars, {
-          bid: q.bid,
-          ask: q.ask,
-          mid: q.mid,
-          spread: q.spread,
-          epic: q.epic || this.epic,
-          ts_ms: q.ts_ms,
-          min_stop_distance: q.min_stop_distance,
-          market_status: q.market_status,
-          digits: q.digits,
-          point: q.point,
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          spread: quote.spread,
+          epic: quote.epic || this.epic,
+          ts_ms: quote.ts_ms,
+          min_stop_distance: quote.min_stop_distance,
+          market_status: quote.market_status,
+          digits: quote.digits,
+          point: quote.point,
         });
       } finally {
         busy = false;
