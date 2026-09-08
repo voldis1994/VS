@@ -1232,6 +1232,7 @@ export async function confirmCapitalDeal(
   return {
     ok: false,
     rejected: true,
+    deal_id: parsed.dealId,
     deal_status: parsed.dealStatus || parsed.status,
     detail: formatCapitalConfirmRejection(parsed),
     profit: parsed.profit,

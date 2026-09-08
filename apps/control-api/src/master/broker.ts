@@ -1154,6 +1154,7 @@ export class CapitalBroker implements MasterBroker {
         return {
           ok: false,
           rejected: true,
+          deal_id: conf.deal_id,
           detail: conf.detail,
           fill_level: conf.fill_level,
           profit: conf.profit,
@@ -1536,16 +1537,50 @@ export class CapitalBroker implements MasterBroker {
           await new Promise((r) =>
             setTimeout(r, process.env.VITEST || process.env.MASTER_CONFIRM_FAST === 'true' ? 5 : 400)
           );
-          const match = await this.findRecentOpenMatch({
-            epic: input.epic,
-            side: input.side,
-            size: orderSize,
-            excludeIds: preOpenIds,
-          });
-          if (match) {
-            position_id = match.position_id;
-            fill_price = match.open_level || null;
-            fill_size = match.size;
+          // Prefer confirm dealId when present — never fuzzy-bind a sibling same-size
+          const confDeal = String(conf.deal_id || '').trim();
+          if (confDeal && !preOpenIds.has(confDeal)) {
+            const listed = await this.listOpenPositions();
+            if (!listed.ok) {
+              const detail = `capital_rejected_list_unproven:${conf.detail}:${listed.detail || 'list_failed'}`;
+              ackFail(detail);
+              logMasterError({
+                module: 'capital.placeOrder',
+                error_type: 'LIST_UNPROVEN',
+                message: detail,
+              });
+              return {
+                ok: false,
+                order_id: opened.deal_reference || null,
+                position_id: null,
+                fill_price: null,
+                detail,
+                paper: false,
+              };
+            }
+            const hit = listed.positions.find((p) => p.position_id === confDeal);
+            const present =
+              hit != null || (listed.presence_ids ?? []).includes(confDeal);
+            if (present) {
+              position_id = confDeal;
+              fill_price =
+                conf.fill_level != null && Number.isFinite(conf.fill_level)
+                  ? Number(conf.fill_level)
+                  : hit?.open_level || null;
+              fill_size = hit?.size ?? null;
+            }
+          } else if (!confDeal) {
+            const match = await this.findRecentOpenMatch({
+              epic: input.epic,
+              side: input.side,
+              size: orderSize,
+              excludeIds: preOpenIds,
+            });
+            if (match) {
+              position_id = match.position_id;
+              fill_price = match.open_level || null;
+              fill_size = match.size;
+            }
           }
         }
         if (!position_id) {

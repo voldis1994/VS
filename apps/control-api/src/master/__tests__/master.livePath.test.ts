@@ -1312,6 +1312,8 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
         return {
           ok: false,
           rejected: true,
+          deal_id: 'ghost-fill',
+          fill_level: 4410.4,
           // detail embeds fill "level" JSON — must NOT classify as named SL reject
           detail:
             'Capital rejected: {"dealStatus":"REJECTED","status":"OPEN","level":4410.5,"dealId":"ghost-fill"}',
@@ -1333,6 +1335,133 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(place.detail).toMatch(/capital_open/);
     expect(positions.get('ghost-fill')!.stop_level).toBe(4400);
     expect(positions.has('old-orphan')).toBe(true);
+  });
+
+  it('empty REJECTED with deal_id binds that ticket not a same-size sibling', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number;
+        stop_level?: number | null;
+        opened_at?: string;
+      }
+    >();
+    // Concurrent same-size sibling — fuzzy match would prefer this if deal_id ignored
+    positions.set('sibling-wrong', {
+      deal_id: 'sibling-wrong',
+      epic: 'GOLD',
+      direction: 'BUY',
+      size: 0.1,
+      open_level: 4401,
+      stop_level: 4390,
+      opened_at: new Date().toISOString(),
+    });
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-did' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({
+        ok: true,
+        positions: [...positions.values()].map((p) => ({
+          deal_id: p.deal_id,
+          epic: p.epic,
+          direction: p.direction,
+          size: p.size,
+          open_level: p.open_level,
+          stop_level: p.stop_level ?? null,
+          opened_at: p.opened_at ?? null,
+        })),
+        detail: '',
+      }),
+      create: async () => {
+        positions.set('real-fill', {
+          deal_id: 'real-fill',
+          epic: 'GOLD',
+          direction: 'BUY',
+          size: 0.1,
+          open_level: 4410.4,
+          stop_level: null,
+          opened_at: new Date().toISOString(),
+        });
+        return { ok: true, deal_reference: 'ref-did', detail: 'posted' };
+      },
+      close: async (id) => {
+        if (id === 'sibling-wrong') return { ok: false, detail: 'must_not_close_sibling' };
+        positions.delete(id);
+        return { ok: true, detail: 'closed' };
+      },
+      modify: async (_s, input) => {
+        const p = positions.get(input.dealId);
+        if (p && input.stopLevel != null) p.stop_level = Number(input.stopLevel);
+        return { ok: true, deal_reference: 'mod-did', detail: 'ok' };
+      },
+      confirm: async (_s, ref) => {
+        if (String(ref) === 'mod-did') {
+          return { ok: true, deal_id: 'mod-ok', detail: 'ACCEPTED' };
+        }
+        return {
+          ok: false,
+          rejected: true,
+          deal_id: 'real-fill',
+          fill_level: 4410.4,
+          detail: 'Capital rejected: REJECTED',
+        };
+      },
+    });
+    await broker.connect();
+    const place = await broker.placeOrder({
+      intent_id: 'intent-did-bind',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: 4400,
+    });
+    expect(place.ok).toBe(true);
+    expect(place.position_id).toBe('real-fill');
+    expect(positions.has('sibling-wrong')).toBe(true);
+    expect(positions.get('real-fill')!.stop_level).toBe(4400);
+  });
+
+  it('LIVE tick without Capital attached refuses OPEN (live_no_capital)', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    masterRuntime.stop();
+    masterRuntime.ensurePaperBroker();
+    masterRuntime.setMode('LIVE');
+    masterRuntime.cfg = {
+      ...DEFAULT_MASTER_CONFIG,
+      mode: 'LIVE',
+      min_score: 0.3,
+      block_off_hours: false,
+    };
+    masterRuntime.account = { ...account, trade_allowed: true };
+    masterRuntime.running = true;
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.pipeline = new MasterPipeline('LIVE');
+    const bars = barsTrendUp(40);
+    const quote = {
+      ...quoteFrom(bars.at(-1)!),
+      epic: 'GOLD',
+      market_status: 'TRADEABLE',
+      ts_ms: Date.now(),
+    };
+    const r = await masterRuntime.tick(bars, quote);
+    expect(r.executed).toBe(false);
+    expect(String(r.execution_detail || masterRuntime.last_execution_detail || '')).toMatch(
+      /live_no_capital/
+    );
+    expect(masterRuntime.positions.count()).toBe(0);
   });
 
   it('closePosition accepts closed_gone DELETED confirm', async () => {

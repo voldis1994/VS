@@ -125,6 +125,28 @@ describe('confirmCapitalDeal DELETED close status', () => {
     expect(conf.deal_id).toBe('d-gone');
     expect(conf.profit).toBe(-3.25);
   });
+
+  it('REJECTED confirm still returns deal_id for empty-reject bind', async () => {
+    const { confirmCapitalDeal } = await import('./capitalCom.js');
+    const session = {
+      get: async () => ({
+        ok: true,
+        status: 200,
+        json: {
+          dealId: 'd-rej',
+          dealStatus: 'REJECTED',
+          status: 'OPEN',
+          level: 4410.4,
+        },
+        text: '',
+      }),
+    } as any;
+    const conf = await confirmCapitalDeal(session, 'ref-rej');
+    expect(conf.ok).toBe(false);
+    expect(conf.rejected).toBe(true);
+    expect(conf.deal_id).toBe('d-rej');
+    expect(conf.fill_level).toBe(4410.4);
+  });
 });
 
 describe('capitalEquityFromAccountFields', () => {

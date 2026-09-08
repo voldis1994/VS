@@ -796,6 +796,11 @@ class MasterRuntime {
     );
   }
 
+  /** True when Capital non-paper broker is attached (mode may still be PAPER until set). */
+  capitalBrokerAttached(): boolean {
+    return this.broker?.name === 'CAPITAL' && !this.broker.paper;
+  }
+
   private capitalCredentialSource(): 'env' | 'desk' | null {
     if (capitalEnvPresent()) return 'env';
     if (this.capitalDeskCredsSeen) return 'desk';
@@ -1285,9 +1290,11 @@ class MasterRuntime {
     const alertBlock = alertsBlockEntries(cycleAlerts);
     this.monitor.noteAlerts(cycleAlerts, alertBlock);
 
-    // 3) Execution gate
+    // 3) Execution gate — LIVE requires Capital attached (refuse paper-as-LIVE)
     const allow_live =
-      this.cfg.mode === 'LIVE' && process.env.MASTER_LIVE_ENABLED === 'true';
+      this.cfg.mode === 'LIVE' &&
+      process.env.MASTER_LIVE_ENABLED === 'true' &&
+      this.capitalBrokerAttached();
     let executed = false;
     let execution_detail: string | null = null;
 
@@ -1660,7 +1667,9 @@ class MasterRuntime {
                       : !cycle.risk.allowed
                         ? `risk:${cycle.risk.reasons.join(',')}`
                         : this.cfg.mode === 'LIVE' && !allow_live
-                          ? 'live_gate_off'
+                          ? !this.capitalBrokerAttached()
+                            ? 'live_no_capital'
+                            : 'live_gate_off'
                           : 'not_armed';
       this.last_execution_detail = execution_detail;
     }

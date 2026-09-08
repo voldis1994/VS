@@ -81,6 +81,15 @@ export async function registerMasterRoutes(app: FastifyInstance) {
               'LIVE blocked — set MASTER_LIVE_ENABLED=true explicitly. Safe default is PAPER/BACKTEST.',
           };
         }
+        // Refuse paper-as-LIVE — Attach Capital first (Start LIVE already refuses)
+        if (body.mode === 'LIVE' && !masterRuntime.capitalBrokerAttached()) {
+          return {
+            ok: false,
+            detail:
+              'LIVE blocked — Capital.com not attached (refusing paper-as-LIVE). Attach Capital first.',
+            status: masterRuntime.status(),
+          };
+        }
         masterRuntime.setMode(body.mode);
       }
       if (typeof body.kill_switch === 'boolean') {
