@@ -420,6 +420,8 @@ export class CapitalBroker implements MasterBroker {
   >();
   /** Live min-stop distance per epic from markets quote */
   private minStopByEpic = new Map<string, number>();
+  /** Last good mid per epic — provisional entry when open_level missing and live quote flakes */
+  private lastMidByEpic = new Map<string, number>();
 
   constructor(
     rawDeps: {
@@ -636,6 +638,10 @@ export class CapitalBroker implements MasterBroker {
     void this.stream.ensure([epic]);
     const streamed = this.stream.getLatest(epic);
     if (streamed && this.stream.isHealthy()) {
+      const mid = streamed.mid;
+      if (Number.isFinite(mid) && mid > 0) {
+        this.lastMidByEpic.set(String(streamed.epic || epic).toUpperCase(), mid);
+      }
       return {
         bid: streamed.bid,
         ask: streamed.offer,
@@ -650,6 +656,9 @@ export class CapitalBroker implements MasterBroker {
     if (!this.session) return null;
     const q = await this.deps.quote(this.session, epic);
     if (q.bid == null || q.ask == null || q.mid == null) return null;
+    if (Number.isFinite(q.mid) && Number(q.mid) > 0) {
+      this.lastMidByEpic.set(String(q.epic || epic).toUpperCase(), Number(q.mid));
+    }
     if (
       q.min_deal_size != null &&
       Number.isFinite(q.min_deal_size) &&
@@ -731,17 +740,26 @@ export class CapitalBroker implements MasterBroker {
     const epicMid = new Map<string, number>();
     const midFor = async (ep: string): Promise<number> => {
       const key = String(ep || '');
+      const ukey = key.toUpperCase();
       if (epicMid.has(key)) return epicMid.get(key)!;
       try {
         const q = await this.getQuote(key);
         const m =
           q && Number.isFinite(q.mid) && q.mid > 0 ? Number(q.mid) : Number.NaN;
-        epicMid.set(key, m);
-        return m;
+        if (Number.isFinite(m) && m > 0) {
+          epicMid.set(key, m);
+          return m;
+        }
       } catch {
-        epicMid.set(key, Number.NaN);
-        return Number.NaN;
+        /* fall through to cache */
       }
+      const cached = this.lastMidByEpic.get(ukey);
+      if (cached != null && Number.isFinite(cached) && cached > 0) {
+        epicMid.set(key, cached);
+        return cached;
+      }
+      epicMid.set(key, Number.NaN);
+      return Number.NaN;
     };
     const positions: BrokerPosition[] = [];
     for (const p of rawRows) {
@@ -2110,7 +2128,7 @@ export class Mt4FileBroker implements MasterBroker {
     want_tp?: number | null;
     order_id: string;
     epic: string;
-  }): Promise<{ ok: true } | { ok: false; detail: string }> {
+  }): Promise<{ ok: true } | { ok: false; detail: string; still_open?: boolean }> {
     const wantTp =
       input.want_tp != null && Number.isFinite(input.want_tp) && Number(input.want_tp) > 0
         ? Number(input.want_tp)
@@ -2122,38 +2140,58 @@ export class Mt4FileBroker implements MasterBroker {
       : { ok: true as const, observed: null };
     if (provedSl.ok && provedTp.ok) return { ok: true };
 
+    const failClose = async (kind: string, reason: string) => {
+      const closed = await this.closePosition(input.position_id);
+      if (closed.ok) {
+        return {
+          ok: false as const,
+          detail: `${kind}:${reason};close=ok`,
+        };
+      }
+      const listed = await this.listOpenPositions(input.epic);
+      const still =
+        listed.ok &&
+        (listed.positions.some((p) => p.position_id === input.position_id) ||
+          (listed.presence_ids ?? []).includes(input.position_id));
+      if (still) {
+        return {
+          ok: false as const,
+          detail: `${kind}:mt4_fail_close_unproven:${closed.detail};${reason}`,
+          still_open: true,
+        };
+      }
+      return {
+        ok: false as const,
+        detail: `${kind}:${reason};close=${closed.detail}`,
+      };
+    };
+
     const mod = await this.modifyPosition({
       position_id: input.position_id,
       stop_level: input.want_sl,
       profit_level: wantTp ?? undefined,
     });
     if (!mod.ok) {
-      const closed = await this.closePosition(input.position_id);
       const kind = /tp_unverified/i.test(String(mod.detail || ''))
         ? 'MT4_TP_ATTACH_FAILED'
         : 'MT4_SL_ATTACH_FAILED';
-      return {
-        ok: false,
-        detail: `${kind}:mod=${mod.detail};close=${closed.ok ? 'ok' : closed.detail}`,
-      };
+      return failClose(kind, `mod=${mod.detail}`);
     }
 
     const sl2 = await this.waitForStatusStop(input.position_id, input.want_sl);
     if (!sl2.ok) {
-      const closed = await this.closePosition(input.position_id);
-      return {
-        ok: false,
-        detail: `MT4_SL_ATTACH_FAILED:sl_unverified want=${input.want_sl} got=${sl2.observed};close=${closed.ok ? 'ok' : closed.detail}`,
-      };
+      return failClose(
+        'MT4_SL_ATTACH_FAILED',
+        `sl_unverified want=${input.want_sl} got=${sl2.observed}`
+      );
     }
     if (wantTp != null) {
       const tp2 = await this.waitForStatusProfit(input.position_id, wantTp);
       if (!tp2.ok) {
-        const closed = await this.closePosition(input.position_id);
-        return {
-          ok: false,
-          detail: `MT4_TP_ATTACH_FAILED:want=${wantTp} got=${tp2.observed};close=${closed.ok ? 'ok' : closed.detail}`,
-        };
+        return failClose(
+          'MT4_TP_ATTACH_FAILED',
+          `want=${wantTp} got=${tp2.observed}`
+        );
       }
     }
     return { ok: true };
@@ -2491,8 +2529,10 @@ export class Mt4FileBroker implements MasterBroker {
           epic: input.epic,
         });
         if (!guard.ok) {
+          const unproven = !!guard.still_open;
           updateTradeAck(id, {
-            ack_status: 'FAILED',
+            // SUCCESS so restart recover can adopt live naked ticket
+            ack_status: unproven ? 'SUCCESS' : 'FAILED',
             ticket: position_id,
             fill_price,
             detail: guard.detail,
@@ -2500,8 +2540,9 @@ export class Mt4FileBroker implements MasterBroker {
           return {
             ok: false,
             order_id: id,
-            position_id: null,
-            fill_price: null,
+            position_id: unproven ? position_id : null,
+            fill_price: unproven ? fill_price : null,
+            fill_size: unproven ? hit?.size ?? input.size : null,
             detail: guard.detail,
             paper: false,
           };
@@ -2564,8 +2605,9 @@ export class Mt4FileBroker implements MasterBroker {
           epic: input.epic,
         });
         if (!guard.ok) {
+          const unproven = !!guard.still_open;
           updateTradeAck(id, {
-            ack_status: 'FAILED',
+            ack_status: unproven ? 'SUCCESS' : 'FAILED',
             ticket: late.position_id,
             fill_price,
             detail: guard.detail,
@@ -2573,8 +2615,9 @@ export class Mt4FileBroker implements MasterBroker {
           return {
             ok: false,
             order_id: id,
-            position_id: null,
-            fill_price: null,
+            position_id: unproven ? late.position_id : null,
+            fill_price: unproven ? fill_price : null,
+            fill_size: unproven ? late.size : null,
             detail: guard.detail,
             paper: false,
           };

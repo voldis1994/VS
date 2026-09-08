@@ -1296,7 +1296,9 @@ class MasterRuntime {
         // Fail-close left a live Capital deal — register + keep inflight + re-close
         const unprovenLive =
           !!place?.position_id &&
-          /capital_fail_close_unproven/i.test(execution.detail || '');
+          /capital_fail_close_unproven|mt4_fail_close_unproven/i.test(
+            execution.detail || ''
+          );
         if (unprovenLive && place?.position_id) {
           const cand =
             cycle.decision.side === 'BUY' ? cycle.decision.buy : cycle.decision.sell;

@@ -40,6 +40,8 @@ export class Mt4BridgeSimulator {
   ignoreOpenTp = false;
   /** Test fault: MODIFY ACK without mutating SL/TP (prove status verification). */
   ackModifyWithoutApply = false;
+  /** Test fault: CLOSE writes NACK and leaves ticket (unproven fail-close). */
+  refuseClose = false;
   /** Test fault: CLOSE ignores partial lot and full-closes (Check- EA parity). */
   forceFullCloseOnPartial = false;
   /** Test fault: leave cmd_ on disk after ACK (prove host expireCommand). */
@@ -253,6 +255,11 @@ export class Mt4BridgeSimulator {
       if (!p) {
         this.processedIds.add(id);
         this.writeAck(id, false, ticket, 'not_found');
+        return;
+      }
+      if (this.refuseClose) {
+        this.processedIds.add(id);
+        this.writeAck(id, false, ticket, 'close_refused');
         return;
       }
       this.markProfits();

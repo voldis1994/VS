@@ -1264,6 +1264,78 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(listed.presence_ids).toEqual(expect.arrayContaining(['good', 'bad-null']));
   });
 
+  it('listOpenPositions uses cached last mid when live quote flakes', async () => {
+    let quoteN = 0;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-cache' }, detail: 'ok' }),
+      quote: async (_s, epic) => {
+        quoteN += 1;
+        if (quoteN === 1) {
+          return { bid: 4410, ask: 4410.4, mid: 4410.2, epic, raw_ok: true };
+        }
+        return null;
+      },
+      list: async () => ({
+        ok: true,
+        positions: [
+          {
+            deal_id: 'level-less',
+            epic: 'GOLD',
+            direction: 'BUY',
+            size: 0.1,
+            open_level: null,
+          },
+        ],
+      }),
+      create: async () => ({ ok: true, deal_reference: 'x', detail: 'ok' }),
+      close: async () => ({ ok: true, detail: 'ok' }),
+    });
+    await broker.connect();
+    await broker.getQuote('GOLD'); // seed lastMidByEpic
+    const listed = await broker.listOpenPositions('GOLD');
+    expect(listed.ok).toBe(true);
+    expect(listed.positions).toHaveLength(1);
+    expect(listed.positions[0]!.position_id).toBe('level-less');
+    expect(listed.positions[0]!.open_level).toBeCloseTo(4410.2, 5);
+  });
+
+  it('listOpenPositions uses lastMid cache when live quote flakes', async () => {
+    let quoteN = 0;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-cache' }, detail: 'ok' }),
+      quote: async (_s, epic) => {
+        quoteN += 1;
+        if (quoteN === 1) {
+          return { bid: 4410, ask: 4410.4, mid: 4410.2, epic, raw_ok: true };
+        }
+        return { bid: null, ask: null, mid: null, epic, raw_ok: false };
+      },
+      list: async () => ({
+        ok: true,
+        positions: [
+          {
+            deal_id: 'cached-mid',
+            epic: 'GOLD',
+            direction: 'BUY',
+            size: 0.1,
+            open_level: null,
+          },
+        ],
+      }),
+      create: async () => ({ ok: true, deal_reference: 'x', detail: 'ok' }),
+      close: async () => ({ ok: true, detail: 'ok' }),
+    });
+    await broker.connect();
+    await broker.getQuote('GOLD'); // warm lastMid cache
+    const listed = await broker.listOpenPositions('GOLD');
+    expect(listed.ok).toBe(true);
+    expect(listed.positions).toHaveLength(1);
+    expect(listed.positions[0]!.position_id).toBe('cached-mid');
+    expect(listed.positions[0]!.open_level).toBeCloseTo(4410.2, 5);
+  });
+
   it('CLOSE treats level-less presence as still open (not flat)', async () => {
     process.env.MASTER_LIVE_ENABLED = 'true';
     const broker = new CapitalBroker({

@@ -970,7 +970,7 @@ export async function resolveEpicViaSearch(
       score = 60;
     if (!best || score > best.score) best = { epic, score };
   }
-  return best && best.score >= 60 ? best.epic : String(markets[0].epic || '') || null;
+  return best && best.score >= 60 ? best.epic : null;
 }
 
 export type CapitalOpenPosition = {

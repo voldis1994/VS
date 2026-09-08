@@ -3,6 +3,7 @@ import {
   capitalComBaseUrl,
   encryptCapitalPassword,
   openCapitalSession,
+  resolveEpicViaSearch,
   testCapitalComSession,
 } from './capitalCom.js';
 import { generateKeyPairSync } from 'crypto';
@@ -304,6 +305,48 @@ describe('Capital session pool identity', () => {
   });
 });
 
+describe('resolveEpicViaSearch', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('returns null when best score is below 60 (no markets[0] fallback)', async () => {
+    const session = {
+      get: async () => ({
+        ok: true,
+        status: 200,
+        json: {
+          markets: [
+            { epic: 'SILVER', instrumentName: 'Silver Spot' },
+            { epic: 'OIL', instrumentName: 'US Crude' },
+          ],
+        },
+        text: '',
+      }),
+    } as any;
+    const epic = await resolveEpicViaSearch(session, 'PLATINUMXYZ');
+    expect(epic).toBeNull();
+  });
+
+  it('returns gold epic when name matches', async () => {
+    const session = {
+      get: async () => ({
+        ok: true,
+        status: 200,
+        json: {
+          markets: [
+            { epic: 'SILVER', instrumentName: 'Silver' },
+            { epic: 'GOLD', instrumentName: 'Gold Spot' },
+          ],
+        },
+        text: '',
+      }),
+    } as any;
+    const epic = await resolveEpicViaSearch(session, 'gold');
+    expect(epic).toBe('GOLD');
+  });
+});
+
 describe('masterCapitalConnectionId', () => {
   afterEach(() => {
     delete process.env.MASTER_CAPITAL_CONNECTION_ID;
@@ -321,5 +364,101 @@ describe('masterCapitalConnectionId', () => {
     process.env.MASTER_CAPITAL_CONNECTION_ID = '777';
     expect(masterCapitalConnectionId()).toBe(777);
     expect(masterCapitalConnectionId(42)).toBe(42); // explicit wins
+  });
+});
+
+describe('resolveEpicViaSearch', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('refuses weak match instead of returning markets[0]', async () => {
+    vi.stubGlobal(
+      'fetch',
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = (init?.method || 'GET').toUpperCase();
+        if (url.includes('/session/encryptionKey')) {
+          return new Response('{}', { status: 404 });
+        }
+        if (url.endsWith('/api/v1/session') && method === 'POST') {
+          const headers = new Headers({
+            CST: 'cst-1',
+            'X-SECURITY-TOKEN': 'sec-1',
+          });
+          return new Response(JSON.stringify({ accountId: 'a1' }), {
+            status: 200,
+            headers,
+          });
+        }
+        if (url.includes('/markets?searchTerm=')) {
+          return new Response(
+            JSON.stringify({
+              markets: [
+                { epic: 'COPPER', instrumentName: 'Copper' },
+                { epic: 'NATURALGAS', instrumentName: 'Natural Gas' },
+              ],
+            }),
+            { status: 200 }
+          );
+        }
+        return new Response('{}', { status: 200 });
+      }
+    );
+    const opened = await openCapitalSession({
+      environment: 'demo',
+      apiKey: 'k',
+      identifier: 'user@example.com',
+      password: 'api-pass-not-otp',
+    });
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    const epic = await resolveEpicViaSearch(opened.session, 'GOLD');
+    expect(epic).toBeNull();
+  });
+
+  it('returns high-score epic when name matches', async () => {
+    vi.stubGlobal(
+      'fetch',
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = (init?.method || 'GET').toUpperCase();
+        if (url.includes('/session/encryptionKey')) {
+          return new Response('{}', { status: 404 });
+        }
+        if (url.endsWith('/api/v1/session') && method === 'POST') {
+          const headers = new Headers({
+            CST: 'cst-1',
+            'X-SECURITY-TOKEN': 'sec-1',
+          });
+          return new Response(JSON.stringify({ accountId: 'a1' }), {
+            status: 200,
+            headers,
+          });
+        }
+        if (url.includes('/markets?searchTerm=')) {
+          return new Response(
+            JSON.stringify({
+              markets: [
+                { epic: 'COPPER', instrumentName: 'Copper' },
+                { epic: 'GOLD', instrumentName: 'Gold' },
+              ],
+            }),
+            { status: 200 }
+          );
+        }
+        return new Response('{}', { status: 200 });
+      }
+    );
+    const opened = await openCapitalSession({
+      environment: 'demo',
+      apiKey: 'k',
+      identifier: 'user@example.com',
+      password: 'api-pass-not-otp',
+    });
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    const epic = await resolveEpicViaSearch(opened.session, 'GOLD');
+    expect(epic).toBe('GOLD');
   });
 });

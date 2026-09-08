@@ -1421,6 +1421,36 @@ describe('VS MASTER MT4 file bridge', () => {
     }
   });
 
+  it('OPEN attach-fail returns live ticket when CLOSE leaves it open', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-unproven-'));
+    const sim = new Mt4BridgeSimulator(root);
+    sim.ignoreOpenSl = true;
+    sim.ackModifyWithoutApply = true;
+    sim.refuseClose = true;
+    sim.setQuote(4400, 4400.4);
+    sim.start(30);
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    try {
+      const placed = await broker.placeOrder({
+        intent_id: 'slattachunprovenintent0001',
+        epic: 'XAUUSD',
+        side: 'BUY',
+        size: 0.04,
+        stop_level: 4390,
+        profit_level: 4420,
+      });
+      expect(placed.ok).toBe(false);
+      expect(placed.detail).toMatch(/mt4_fail_close_unproven/);
+      expect(placed.position_id).toBeTruthy();
+      const opens = await broker.listOpenPositions('XAUUSD');
+      expect(opens.positions.length).toBe(1);
+      expect(opens.positions[0]!.position_id).toBe(placed.position_id);
+    } finally {
+      sim.stop();
+    }
+  });
+
   it('OPEN attaches SL via MODIFY when EA opens naked', async () => {
     const root = mkdtempSync(join(tmpdir(), 'vs-mt4-slfix-'));
     const sim = new Mt4BridgeSimulator(root);
