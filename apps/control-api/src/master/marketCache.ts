@@ -1,6 +1,8 @@
 /**
  * Persist last OHLC + quote so restart manage is not blind when broker
  * history is slow/unavailable. Quote is only reused when still fresh.
+ * Also embeds into master_state.json operator_meta so DualPersist / sidecar
+ * wipe cannot leave manage blind while positions recover from PG.
  */
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
@@ -25,6 +27,31 @@ export function marketCacheDir(root?: string): string {
     process.env.MASTER_STATE_DIR ||
     join(process.cwd(), '.master-state')
   );
+}
+
+/** Embed compact market_cache into master_state operator_meta (best-effort). */
+export function embedMarketCacheInOperatorMeta(
+  state: MarketCacheState,
+  root?: string
+): boolean {
+  try {
+    const dir = marketCacheDir(root);
+    const statePath = join(dir, 'master_state.json');
+    if (!existsSync(statePath)) return false;
+    const raw = JSON.parse(readFileSync(statePath, 'utf8')) as {
+      operator_meta?: Record<string, unknown> | null;
+      [k: string]: unknown;
+    };
+    raw.operator_meta = {
+      ...(raw.operator_meta && typeof raw.operator_meta === 'object'
+        ? raw.operator_meta
+        : {}),
+      market_cache: state,
+    };
+    return atomicWriteJson(statePath, raw);
+  } catch {
+    return false;
+  }
 }
 
 export function saveMarketCache(
@@ -55,6 +82,8 @@ export function saveMarketCache(
       saved_at_ms: Date.now(),
     };
     atomicWriteJson(cachePath(dir), state);
+    // Keep operator_meta in sync even when no position write flushes FilePersist
+    embedMarketCacheInOperatorMeta(state, dir);
     return true;
   } catch {
     return false;

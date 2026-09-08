@@ -12,6 +12,7 @@ import {
   type PersistClient,
 } from './persist.js';
 import { atomicWriteJson } from './atomicIo.js';
+import type { MarketCacheState } from './marketCache.js';
 
 export type FilePersistState = {
   opportunities: OpportunityRecord[];
@@ -24,11 +25,13 @@ export type FilePersistState = {
   }>;
   positions: ManagedPosition[];
   intents: string[];
-  /** Manage/owns/gates — survive with positions when sidecar JSON is wiped */
+  /** Manage/owns/gates/market_cache — survive with positions when sidecar JSON is wiped */
   operator_meta?: {
     manage?: Record<string, unknown> | null;
     owns_pipeline?: boolean | null;
     gates?: Record<string, unknown> | null;
+    /** Compact OHLC+quote — PG path / sidecar wipe must not leave manage blind */
+    market_cache?: MarketCacheState | null;
   };
 };
 
@@ -178,6 +181,10 @@ export class FilePersist implements PersistClient {
       if (meta.gates && !existsSync(gatesPath)) {
         atomicWriteJson(gatesPath, meta.gates);
       }
+      const cachePath = join(this.root, 'market_cache.json');
+      if (meta.market_cache && !existsSync(cachePath)) {
+        atomicWriteJson(cachePath, meta.market_cache);
+      }
     } catch {
       /* best-effort */
     }
@@ -197,15 +204,20 @@ export class FilePersist implements PersistClient {
     const manage = readJson('master_manage_config.json');
     const ownsRaw = readJson('owns_pipeline.json');
     const gates = readJson('runtime_gates.json');
+    const marketCacheRaw = readJson('market_cache.json');
+    const market_cache =
+      marketCacheRaw && Array.isArray(marketCacheRaw.bars)
+        ? (marketCacheRaw as unknown as MarketCacheState)
+        : this.lastOperatorMeta?.market_cache ?? null;
     const owns =
       ownsRaw && typeof ownsRaw.owns_pipeline === 'boolean'
         ? (ownsRaw.owns_pipeline as boolean)
         : null;
-    if (!manage && owns == null && !gates) {
+    if (!manage && owns == null && !gates && !market_cache) {
       // Sidecars wiped — keep prior meta so flush does not erase backup
       return this.lastOperatorMeta;
     }
-    const meta = { manage, owns_pipeline: owns, gates };
+    const meta = { manage, owns_pipeline: owns, gates, market_cache };
     this.lastOperatorMeta = meta;
     return meta;
   }
@@ -344,8 +356,9 @@ export function installFilePersist(root?: string): FilePersist {
 }
 
 /**
- * Before recover hydrate: restore manage/owns/gates sidecars from master_state.json
- * when they were wiped mid-process (DualPersist mirror or standalone FilePersist).
+ * Before recover hydrate: restore manage/owns/gates/market_cache sidecars from
+ * master_state.json when they were wiped mid-process (DualPersist mirror or
+ * standalone FilePersist).
  */
 export function ensureOperatorMetaFromStateDir(root?: string): boolean {
   const dir =
@@ -373,6 +386,10 @@ export function ensureOperatorMetaFromStateDir(root?: string): boolean {
     const gatesPath = join(dir, 'runtime_gates.json');
     if (raw.operator_meta.gates && !existsSync(gatesPath)) {
       atomicWriteJson(gatesPath, raw.operator_meta.gates);
+    }
+    const cachePath = join(dir, 'market_cache.json');
+    if (raw.operator_meta.market_cache && !existsSync(cachePath)) {
+      atomicWriteJson(cachePath, raw.operator_meta.market_cache);
     }
     return true;
   } catch {

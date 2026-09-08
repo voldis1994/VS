@@ -32,6 +32,8 @@ export type RuntimeGates = {
    * restart, manage must fail-closed (false) until a cycle proves allow.
    */
   last_ai_allow_close?: boolean | null;
+  /** Operator AI gate mode — survive restart (control API mutates live cfg). */
+  ai_mode?: 'off' | 'advisory' | 'required' | null;
 };
 
 function gatesDir(): string {
@@ -83,6 +85,12 @@ export function saveRuntimeGates(gates: RuntimeGates): boolean {
         typeof gates.last_ai_allow_close === 'boolean'
           ? gates.last_ai_allow_close
           : null,
+      ai_mode:
+        gates.ai_mode === 'off' ||
+        gates.ai_mode === 'advisory' ||
+        gates.ai_mode === 'required'
+          ? gates.ai_mode
+          : null,
     });
   } catch {
     return false;
@@ -123,6 +131,12 @@ export function loadRuntimeGates(): RuntimeGates | null {
       last_ai_allow_close:
         typeof raw.last_ai_allow_close === 'boolean'
           ? raw.last_ai_allow_close
+          : null,
+      ai_mode:
+        raw.ai_mode === 'off' ||
+        raw.ai_mode === 'advisory' ||
+        raw.ai_mode === 'required'
+          ? raw.ai_mode
           : null,
     };
   } catch {

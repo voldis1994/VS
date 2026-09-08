@@ -1690,6 +1690,17 @@ describe('protective mark + fill rebase', () => {
     expect(protectiveExit(pos, { bid: 4400.2, ask: 4401.0, mid: 4400.6 })).toBeNull();
   });
 
+  it('STOP_HIT uses ask for SELL (mid below SL is not enough)', async () => {
+    const { protectiveExit } = await import('../positionManager.js');
+    const pos = { side: 'SELL' as const, stop_loss: 4400, take_profit: 4380 };
+    // Mid still below SL, but ask has crossed — must exit
+    expect(
+      protectiveExit(pos, { bid: 4399.5, ask: 4400.5, mid: 4400.0 })?.reason
+    ).toBe('STOP_HIT');
+    // Ask still below SL — hold even if mid equals SL from bid pressure
+    expect(protectiveExit(pos, { bid: 4399.0, ask: 4399.8, mid: 4399.4 })).toBeNull();
+  });
+
   it('rebaseStopsFromFill shifts SL/TP by fill slip', async () => {
     const { rebaseStopsFromFill } = await import('../positionManager.js');
     const r = rebaseStopsFromFill(4400, 4400.5, 4395, 4410);
@@ -1769,6 +1780,7 @@ describe('runtime gates persist', () => {
       consecutive_losses: null,
       capital_day_gates_seeded: false,
       last_ai_allow_close: false,
+      ai_mode: null,
     });
     if (prev === undefined) delete process.env.MASTER_STATE_DIR;
     else process.env.MASTER_STATE_DIR = prev;
@@ -1784,6 +1796,31 @@ describe('runtime gates persist', () => {
       masterRuntime.last_ai_allow_close = true;
       await masterRuntime.recover();
       expect(masterRuntime.last_ai_allow_close).toBe(false);
+    } finally {
+      masterRuntime.last_ai_allow_close = prevAi;
+      masterRuntime.cfg = { ...masterRuntime.cfg, ai_mode: prevMode };
+      if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prev;
+    }
+  });
+
+  it('setAiMode persists mode and fail-closes soft exits when enabling', async () => {
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = mkdtempSync(join(tmpdir(), 'vs-ai-mode-'));
+    const { loadRuntimeGates } = await import('../runtimeGates.js');
+    const prevAi = masterRuntime.last_ai_allow_close;
+    const prevMode = masterRuntime.cfg.ai_mode;
+    try {
+      masterRuntime.cfg = { ...masterRuntime.cfg, ai_mode: 'off' };
+      masterRuntime.last_ai_allow_close = true;
+      masterRuntime.setAiMode('advisory');
+      expect(masterRuntime.cfg.ai_mode).toBe('advisory');
+      expect(masterRuntime.last_ai_allow_close).toBe(false);
+      const gates = loadRuntimeGates();
+      expect(gates?.ai_mode).toBe('advisory');
+      expect(gates?.last_ai_allow_close).toBe(false);
+      masterRuntime.setAiMode('required');
+      expect(loadRuntimeGates()?.ai_mode).toBe('required');
     } finally {
       masterRuntime.last_ai_allow_close = prevAi;
       masterRuntime.cfg = { ...masterRuntime.cfg, ai_mode: prevMode };

@@ -569,6 +569,39 @@ describe('VS MASTER stop() empty-wipe guard', () => {
     expect(fp.ensureOperatorMetaFromState()).toBe(true);
     expect(existsSync(join(dir, 'master_manage_config.json'))).toBe(true);
   });
+
+  it('operator_meta restores market_cache sidecar when wiped', () => {
+    const { writeFileSync, unlinkSync } = require('fs') as typeof import('fs');
+    const dir = mkdtempSync(join(tmpdir(), 'master-opmeta-mkt-'));
+    const fp = new FilePersist(dir);
+    writeFileSync(
+      join(dir, 'market_cache.json'),
+      JSON.stringify({
+        epic: 'GOLD',
+        bars: [
+          { open: 4400, high: 4401, low: 4399, close: 4400.5, ts_ms: 1 },
+          { open: 4401, high: 4402, low: 4400, close: 4401.5, ts_ms: 2 },
+          { open: 4402, high: 4403, low: 4401, close: 4402.5, ts_ms: 3 },
+          { open: 4403, high: 4404, low: 4402, close: 4403.5, ts_ms: 4 },
+          { open: 4404, high: 4405, low: 4403, close: 4404.5, ts_ms: 5 },
+        ],
+        quote: null,
+        structure_seed_source: 'capital_ohlc',
+        saved_at_ms: Date.now(),
+      })
+    );
+    fp.flush();
+    const state = JSON.parse(readFileSync(join(dir, 'master_state.json'), 'utf8'));
+    expect(state.operator_meta?.market_cache?.bars?.length).toBe(5);
+    expect(state.operator_meta?.market_cache?.epic).toBe('GOLD');
+    unlinkSync(join(dir, 'market_cache.json'));
+    expect(existsSync(join(dir, 'market_cache.json'))).toBe(false);
+    expect(ensureOperatorMetaFromStateDir(dir)).toBe(true);
+    expect(existsSync(join(dir, 'market_cache.json'))).toBe(true);
+    const cache = JSON.parse(readFileSync(join(dir, 'market_cache.json'), 'utf8'));
+    expect(cache.bars.length).toBe(5);
+    expect(cache.structure_seed_source).toBe('capital_ohlc');
+  });
 });
 
 type PersistClientLike = {

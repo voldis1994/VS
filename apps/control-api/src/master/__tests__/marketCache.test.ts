@@ -46,4 +46,36 @@ describe('market_cache persist', () => {
     ).toBe(false);
     expect(loadMarketCache(dir)).toBeNull();
   });
+
+  it('embeds market_cache into master_state operator_meta on save', () => {
+    const { writeFileSync, readFileSync } = require('fs') as typeof import('fs');
+    const dir = mkdtempSync(join(tmpdir(), 'master-mkt-embed-'));
+    writeFileSync(
+      join(dir, 'master_state.json'),
+      JSON.stringify({
+        opportunities: [],
+        outcomes: [],
+        positions: [],
+        intents: [],
+        operator_meta: { owns_pipeline: true },
+      })
+    );
+    const bars = Array.from({ length: 6 }, (_, i) => ({
+      open: 4400 + i,
+      high: 4401 + i,
+      low: 4399 + i,
+      close: 4400.5 + i,
+      ts_ms: Date.now() - (6 - i) * 60_000,
+    }));
+    expect(
+      saveMarketCache(
+        { epic: 'GOLD', bars, quote: null, structure_seed_source: 'broker_history' },
+        dir
+      )
+    ).toBe(true);
+    const state = JSON.parse(readFileSync(join(dir, 'master_state.json'), 'utf8'));
+    expect(state.operator_meta?.owns_pipeline).toBe(true);
+    expect(state.operator_meta?.market_cache?.bars?.length).toBe(6);
+    expect(state.operator_meta?.market_cache?.epic).toBe('GOLD');
+  });
 });

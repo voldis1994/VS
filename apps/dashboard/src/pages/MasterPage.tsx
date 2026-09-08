@@ -23,6 +23,12 @@ type MasterStatus = {
   last_block_reason: string | null;
   last_execution_detail: string | null;
   last_exit_reason: string | null;
+  last_close_failed?: {
+    position_id: string;
+    exit_reason: string;
+    detail: string;
+    ts: string;
+  } | null;
   buy_score: number;
   sell_score: number;
   regime: string;
@@ -400,6 +406,16 @@ export function MasterPage() {
           ok: (status.bars_available ?? 0) >= 40,
         },
         { k: 'AI mode', v: status.ai_mode || '—' },
+        {
+          k: 'Close fail',
+          v: status.last_close_failed
+            ? `${status.last_close_failed.exit_reason} · ${status.last_close_failed.detail}`.slice(
+                0,
+                80
+              )
+            : '—',
+          bad: !!status.last_close_failed,
+        },
         { k: 'Running', v: status.running ? 'YES' : 'NO', ok: status.running },
         { k: 'Regime', v: status.regime },
         {
@@ -884,17 +900,22 @@ export function MasterPage() {
           className="btn"
           disabled={busy}
           onClick={() =>
-            void act('ai', () =>
-              apiFetch('/api/master/control', {
+            void act('ai', () => {
+              const cur = status?.ai_mode || 'off';
+              const next =
+                cur === 'off'
+                  ? 'advisory'
+                  : cur === 'advisory'
+                    ? 'required'
+                    : 'off';
+              return apiFetch('/api/master/control', {
                 method: 'POST',
-                body: JSON.stringify({
-                  ai_mode: status?.ai_mode === 'off' ? 'advisory' : 'off',
-                }),
-              })
-            )
+                body: JSON.stringify({ ai_mode: next }),
+              });
+            })
           }
         >
-          AI advisory toggle
+          AI mode cycle
         </button>
         <button
           type="button"

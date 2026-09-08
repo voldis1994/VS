@@ -101,7 +101,7 @@ export async function registerMasterRoutes(app: FastifyInstance) {
       }
       if (body.epic) masterRuntime.setEpic(body.epic);
       if (body.ai_mode) {
-        masterRuntime.cfg = { ...masterRuntime.cfg, ai_mode: body.ai_mode };
+        masterRuntime.setAiMode(body.ai_mode);
       }
       if (typeof body.owns_pipeline === 'boolean') {
         const owns = masterRuntime.setOwnsPipeline(body.owns_pipeline);
@@ -633,7 +633,7 @@ h2{font-size:13px;color:#9fb0c0;margin:22px 0 8px;text-transform:uppercase;lette
   <button id="btnKill">Kill switch</button>
   <button id="btnScalp">Arm SCALP manage</button>
   <button id="btnFlatten">Flatten all</button>
-  <button id="btnAi">AI advisory toggle</button>
+  <button id="btnAi">AI mode cycle</button>
   <button id="btnOwns">MASTER owns toggle</button>
   <button id="btnCapital">Capital probe</button>
   <button id="btnCapitalAttach">Attach Capital</button>
@@ -679,6 +679,7 @@ async function refresh(){
       card('Owns pipeline',s.owns_pipeline?'YES':'no',s.owns_pipeline?'ok':(s.mode==='LIVE'?'bad':'')),
       card('Entries',s.entries_armed===false?('PAUSED'+(s.entries_pause_reason?' · '+s.entries_pause_reason:'')):'armed',s.entries_armed===false?'bad':'ok'),
       card('AI mode',s.ai_mode||'—'),
+      card('Close fail',s.last_close_failed?((s.last_close_failed.exit_reason||'')+' · '+(s.last_close_failed.detail||'')).slice(0,80):'—',s.last_close_failed?'bad':''),
       card('Running',s.running?'YES':'NO',s.running?'ok':''),
       card('Regime',s.regime),
       card('BUY',Number(s.buy_score||0).toFixed(3)),
@@ -762,7 +763,7 @@ document.getElementById('btnRecover').onclick=async()=>{const r=await fetch('/ap
 document.getElementById('btnKill').onclick=async()=>{kill=!kill;await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kill_switch:kill})});pushLog('kill_switch='+kill);refresh()};
 document.getElementById('btnScalp').onclick=async()=>{const r=await fetch('/api/master/config/scalp-preset',{method:'POST'}).then(r=>r.json());pushLog('scalp-preset ok='+r.ok);refresh()};
 document.getElementById('btnFlatten').onclick=async()=>{const r=await fetch('/api/master/flatten',{method:'POST'}).then(r=>r.json());pushLog('flatten closed='+r.closed+' failed='+(r.failed||[]).length);refresh()};
-document.getElementById('btnAi').onclick=async()=>{ai=ai==='off'?'advisory':'off';await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ai_mode:ai})});pushLog('ai_mode='+ai);refresh()};
+document.getElementById('btnAi').onclick=async()=>{const cur=ai||'off';ai=cur==='off'?'advisory':cur==='advisory'?'required':'off';await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({ai_mode:ai})});pushLog('ai_mode='+ai);refresh()};
 document.getElementById('btnOwns').onclick=async()=>{const s=await fetch('/api/master/status').then(r=>r.json());const on=!s.owns_pipeline;await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({owns_pipeline:on})});pushLog('owns_pipeline='+on);refresh()};
 document.getElementById('btnCapital').onclick=async()=>{const r=await fetch('/api/master/broker/capital/probe',{method:'POST'}).then(r=>r.json());pushLog('capital probe '+JSON.stringify(r).slice(0,200));refresh()};
 document.getElementById('btnCapitalAttach').onclick=async()=>{const s0=await fetch('/api/master/status').then(r=>r.json());if(!s0.owns_pipeline){await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({owns_pipeline:true})});}const r=await fetch('/api/master/broker/capital/attach',{method:'POST',headers:{'content-type':'application/json'},body:'{}'}).then(r=>r.json());pushLog('capital attach '+JSON.stringify(r).slice(0,200));refresh()};

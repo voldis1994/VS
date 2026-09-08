@@ -109,6 +109,13 @@ export type MasterStatus = {
   last_block_reason: string | null;
   last_execution_detail: string | null;
   last_exit_reason: string | null;
+  /** Last manage close failure (broker refused / AI veto) — dashboard honesty */
+  last_close_failed: {
+    position_id: string;
+    exit_reason: string;
+    detail: string;
+    ts: string;
+  } | null;
   buy_score: number;
   sell_score: number;
   regime: string;
@@ -248,6 +255,13 @@ class MasterRuntime {
   last_quote: Quote | null = null;
   last_execution_detail: string | null = null;
   last_exit_reason: string | null = null;
+  /** Sticky last close_failed for status/dashboard until a successful close clears it. */
+  last_close_failed: {
+    position_id: string;
+    exit_reason: string;
+    detail: string;
+    ts: string;
+  } | null = null;
   last_loss_ms = 0;
   recovered = false;
   persist_ok = true;
@@ -353,6 +367,20 @@ class MasterRuntime {
   hydrateManageConfig() {
     const saved = loadManageConfig();
     if (saved) this.cfg = applyManageConfigPatch(this.cfg, saved);
+  }
+
+  /**
+   * Operator AI mode — durable via runtime_gates.
+   * Enabling AI (off → advisory/required) fail-closes soft exits until a cycle proves allow.
+   */
+  setAiMode(mode: MasterConfig['ai_mode']): MasterConfig {
+    const prev = this.cfg.ai_mode;
+    this.cfg = { ...this.cfg, ai_mode: mode };
+    if (mode !== 'off' && prev === 'off') {
+      this.last_ai_allow_close = false;
+    }
+    this.persistRuntimeGates();
+    return this.cfg;
   }
 
   /** Positions enriched with live UPL for dashboard — null UPL when quote missing (never invent 0). */
@@ -799,6 +827,7 @@ class MasterRuntime {
           consecutive_losses: this.account.consecutive_losses,
           capital_day_gates_seeded: this.capitalDayGatesSeeded,
           last_ai_allow_close: this.last_ai_allow_close,
+          ai_mode: this.cfg.ai_mode,
         })
       )
     );
@@ -1605,6 +1634,25 @@ class MasterRuntime {
       if (!exit_reasons.length) {
         this.last_exit_reason = `CLOSE_FAIL · ${fail.exit_reason} · ${fail.detail}`;
       }
+      this.last_close_failed = {
+        position_id: fail.position_id,
+        exit_reason: fail.exit_reason,
+        detail: fail.detail,
+        ts: new Date().toISOString(),
+      };
+      for (const failRow of managed.close_failed) {
+        logTradeEvent({
+          event: 'CLOSE',
+          broker: broker.name,
+          epic: this.epic,
+          side: null,
+          volume: null,
+          price: null,
+          position_id: failRow.position_id,
+          ok: false,
+          detail: `${failRow.exit_reason} · ${failRow.detail}`,
+        });
+      }
     }
     for (const c of managed.closed) {
       if (c.outcome.pnl_proven !== false) {
@@ -1617,6 +1665,7 @@ class MasterRuntime {
           this.account.consecutive_losses = 0;
         }
       }
+      this.last_close_failed = null;
       const sk = c.position.decision.side
         ? setupKey(c.position.decision.analysis, c.position.decision.side)
         : null;
@@ -2262,6 +2311,14 @@ class MasterRuntime {
       }
       if (gates.daily_pnl_day) {
         this.account.daily_pnl_day = gates.daily_pnl_day;
+      }
+      // AI mode survives control-API restart (not only in-memory cfg)
+      if (
+        gates.ai_mode === 'off' ||
+        gates.ai_mode === 'advisory' ||
+        gates.ai_mode === 'required'
+      ) {
+        this.cfg = { ...this.cfg, ai_mode: gates.ai_mode };
       }
       // Soft-exit AI veto — fail-closed when advisory and gate missing
       if (typeof gates.last_ai_allow_close === 'boolean') {
@@ -3400,6 +3457,12 @@ class MasterRuntime {
       if (!managed.closed.length) {
         this.last_exit_reason = `CLOSE_FAIL · ${fail.exit_reason} · ${fail.detail}`;
       }
+      this.last_close_failed = {
+        position_id: fail.position_id,
+        exit_reason: fail.exit_reason,
+        detail: fail.detail,
+        ts: new Date().toISOString(),
+      };
       for (const failRow of managed.close_failed) {
         logTradeEvent({
           event: 'CLOSE',
@@ -3415,6 +3478,7 @@ class MasterRuntime {
       }
     }
     if (managed.closed.length > 0) {
+      this.last_close_failed = null;
       const cool = Math.max(0, this.cfg.post_exit_cooldown_ms || 0);
       this.post_exit_until_ms = Math.max(
         this.post_exit_until_ms,
@@ -3509,6 +3573,7 @@ class MasterRuntime {
         null,
       last_execution_detail: this.last_execution_detail,
       last_exit_reason: this.last_exit_reason,
+      last_close_failed: this.last_close_failed,
       buy_score: this.last_decision?.buy?.score ?? 0,
       sell_score: this.last_decision?.sell?.score ?? 0,
       regime: this.last_decision?.analysis.regime ?? 'UNKNOWN',
@@ -3632,16 +3697,28 @@ class MasterRuntime {
       })),
       manage: pickManageConfig(this.cfg),
       monitoring,
-      recent_decisions: loadDecisionEvents(12).map((e) => ({
-        ts: e.ts,
-        kind: e.kind,
-        executed: e.executed,
-        block_reason: e.block_reason,
-        execution_detail: e.execution_detail,
-        opportunity_id: e.opportunity_id,
-        buy_score: e.buy_score,
-        sell_score: e.sell_score,
-      })),
+      recent_decisions: (() => {
+        // Prefer BLOCK/TRADE over WAIT floods so dashboard shows actionable audit
+        const scanned = loadDecisionEvents(96);
+        const important = scanned.filter(
+          (e) =>
+            e.executed ||
+            e.kind === 'BLOCK' ||
+            e.kind === 'TRADE' ||
+            (e.block_reason != null && String(e.block_reason).trim() !== '')
+        );
+        const waits = scanned.filter((e) => !important.includes(e));
+        return [...important, ...waits].slice(0, 12).map((e) => ({
+          ts: e.ts,
+          kind: e.kind,
+          executed: e.executed,
+          block_reason: e.block_reason,
+          execution_detail: e.execution_detail,
+          opportunity_id: e.opportunity_id,
+          buy_score: e.buy_score,
+          sell_score: e.sell_score,
+        }));
+      })(),
       recent_trades: loadTradeEvents(12).map((e) => ({
         ts: e.ts,
         event: e.event,
