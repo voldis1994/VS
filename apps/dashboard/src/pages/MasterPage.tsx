@@ -173,6 +173,12 @@ type MasterStatus = {
     daily_loss_limit?: number;
     profit_lock?: number;
     equity_floor?: number;
+    scalp_lock_pct?: number;
+    scalp_strict_entry?: boolean;
+    ema_tick_entry?: boolean;
+    multi_tp_atr_mult?: number;
+    breakeven_progress?: number;
+    breakeven_offset?: number;
     block_high_impact_news?: boolean;
     block_off_hours?: boolean;
   };
@@ -1203,6 +1209,34 @@ export function MasterPage() {
             scalp_pct_chase
           </label>
           <label style={{ fontSize: 12 }}>
+            scalp_lock_pct{' '}
+            <input
+              type="number"
+              step="0.05"
+              min={0}
+              max={1}
+              defaultValue={status?.manage?.scalp_lock_pct ?? 0.2}
+              id="cfg-scalp-lock"
+              style={{ width: 56 }}
+            />
+          </label>
+          <label style={{ fontSize: 12 }}>
+            <input
+              type="checkbox"
+              id="cfg-scalp-strict"
+              defaultChecked={!!status?.manage?.scalp_strict_entry}
+            />{' '}
+            scalp_strict_entry
+          </label>
+          <label style={{ fontSize: 12 }}>
+            <input
+              type="checkbox"
+              id="cfg-ema-tick"
+              defaultChecked={!!status?.manage?.ema_tick_entry}
+            />{' '}
+            ema_tick_entry
+          </label>
+          <label style={{ fontSize: 12 }}>
             multi_tp{' '}
             <input
               type="number"
@@ -1212,6 +1246,40 @@ export function MasterPage() {
               defaultValue={status?.manage?.multi_tp_count ?? 0}
               id="cfg-multi-tp"
               style={{ width: 48 }}
+            />
+          </label>
+          <label style={{ fontSize: 12 }}>
+            multi_tp_atr{' '}
+            <input
+              type="number"
+              step="0.1"
+              min={0}
+              defaultValue={status?.manage?.multi_tp_atr_mult ?? 1.5}
+              id="cfg-multi-tp-atr"
+              style={{ width: 56 }}
+            />
+          </label>
+          <label style={{ fontSize: 12 }}>
+            be_progress{' '}
+            <input
+              type="number"
+              step="0.05"
+              min={0}
+              max={1}
+              defaultValue={status?.manage?.breakeven_progress ?? 0}
+              id="cfg-be-progress"
+              style={{ width: 56 }}
+            />
+          </label>
+          <label style={{ fontSize: 12 }}>
+            be_offset{' '}
+            <input
+              type="number"
+              step="0.1"
+              min={0}
+              defaultValue={status?.manage?.breakeven_offset ?? 0}
+              id="cfg-be-offset"
+              style={{ width: 56 }}
             />
           </label>
           <label style={{ fontSize: 12 }}>
@@ -1285,7 +1353,13 @@ export function MasterPage() {
                     soft_trail_money_arm: num('cfg-soft-arm'),
                     soft_trail_pips: num('cfg-soft-pips'),
                     scalp_pct_chase: chk('cfg-scalp-chase'),
+                    scalp_lock_pct: num('cfg-scalp-lock'),
+                    scalp_strict_entry: chk('cfg-scalp-strict'),
+                    ema_tick_entry: chk('cfg-ema-tick'),
                     multi_tp_count: num('cfg-multi-tp'),
+                    multi_tp_atr_mult: num('cfg-multi-tp-atr'),
+                    breakeven_progress: num('cfg-be-progress'),
+                    breakeven_offset: num('cfg-be-offset'),
                     require_positive_expectancy: chk('cfg-exp-gate'),
                     min_expectancy_samples: num('cfg-exp-samples'),
                     block_high_impact_news: chk('cfg-news'),

@@ -337,6 +337,7 @@ class MasterRuntime {
   setMode(mode: Mode) {
     this.cfg = { ...this.cfg, mode };
     this.pipeline.mode = mode;
+    this.persistRuntimeGates();
   }
 
   setKillSwitch(on: boolean) {
@@ -350,8 +351,9 @@ class MasterRuntime {
     if (this.broker?.name === 'CAPITAL') {
       this.epic = capitalApiEpic(raw) || raw || 'GOLD';
     } else {
-      this.epic = raw;
+      this.epic = raw || this.epic;
     }
+    this.persistRuntimeGates();
   }
 
   /** Apply + persist manage/exit knobs (dashboard / operator). */
@@ -472,6 +474,7 @@ class MasterRuntime {
         ok: false,
         detail: `${reason} · ${detail}`,
       });
+      this.persistRuntimeGates();
       return { ok: false, detail };
     }
     const { exit: fill, fill_proven } = resolveCloseExitFill({
@@ -591,7 +594,18 @@ class MasterRuntime {
       if (broker && broker.name === 'CAPITAL' && !broker.paper) {
         const listed = await broker.listOpenPositions();
         if (!listed.ok) {
-          failed.push(`venue_list:${listed.detail || 'list_failed'}`);
+          const detail = listed.detail || 'list_failed';
+          failed.push(`venue_list:${detail}`);
+          this.capitalVenueOpensProven = false;
+          this.broker_detail = `close_fail:venue_list:${detail}`.slice(0, 400);
+          this.last_close_failed = {
+            position_id: 'venue_list',
+            exit_reason: reason,
+            detail,
+            ts: new Date().toISOString(),
+          };
+          this.last_exit_reason = `CLOSE_FAIL · ${reason} · venue_list · ${detail}`;
+          this.persistRuntimeGates();
         } else {
           const venueIds = new Set<string>();
           for (const p of listed.positions) {
@@ -605,7 +619,28 @@ class MasterRuntime {
             const listedPos = listed.positions.find((p) => p.position_id === id);
             const r = await broker.closePosition(id);
             if (!r.ok) {
-              failed.push(`${id}:venue:${r.detail || 'close_failed'}`);
+              const detail = r.detail || 'close_failed';
+              failed.push(`${id}:venue:${detail}`);
+              this.broker_detail = `close_fail:${id}:venue:${detail}`.slice(0, 400);
+              this.last_close_failed = {
+                position_id: id,
+                exit_reason: reason,
+                detail: `venue:${detail}`,
+                ts: new Date().toISOString(),
+              };
+              this.last_exit_reason = `CLOSE_FAIL · ${reason} · venue · ${detail}`;
+              this.persistRuntimeGates();
+              logTradeEvent({
+                event: 'CLOSE',
+                broker: broker.name,
+                epic: listedPos?.epic || this.epic,
+                side: listedPos?.side ?? null,
+                volume: listedPos?.size ?? null,
+                price: null,
+                position_id: id,
+                ok: false,
+                detail: `${reason} · venue:${detail}`,
+              });
               continue;
             }
             closed += 1;
@@ -844,6 +879,33 @@ class MasterRuntime {
 
   /** Persist cooldowns + equity baselines so restart keeps daily $ gates honest. */
   private persistRuntimeGates() {
+    const existing = loadRuntimeGates();
+    const capitalAttached =
+      this.broker instanceof CapitalBroker && !this.broker.paper;
+    // Session setters (mode/epic/entries) must not clobber proven Capital day/peak
+    // with unproven zeros before equity is seeded.
+    let dayStart = this.account.day_start_equity ?? null;
+    let peak = this.account.peak_equity;
+    let seeded = this.capitalDayGatesSeeded;
+    let day = this.account.daily_pnl_day ?? null;
+    let streak = this.account.consecutive_losses;
+    if (capitalAttached && !this.capitalDayGatesSeeded && existing) {
+      if (existing.day_start_equity != null && existing.day_start_equity > 0) {
+        dayStart = existing.day_start_equity;
+      }
+      if (existing.peak_equity != null && existing.peak_equity > 0) {
+        peak = Math.max(peak || 0, existing.peak_equity);
+      }
+      if (existing.capital_day_gates_seeded === true) {
+        seeded = true;
+      }
+      if (existing.daily_pnl_day) day = existing.daily_pnl_day;
+      if (existing.consecutive_losses != null) {
+        streak = Math.max(streak || 0, existing.consecutive_losses);
+      }
+    } else if (existing?.peak_equity != null && peak != null) {
+      peak = Math.max(peak, existing.peak_equity);
+    }
     this.trackPersist(
       'runtime_gates',
       Promise.resolve(
@@ -853,14 +915,19 @@ class MasterRuntime {
           inflight_until_ms: this.inflight_until_ms,
           post_exit_until_ms: this.post_exit_until_ms,
           last_entry_fingerprint: this.last_entry_fingerprint,
-          day_start_equity: this.account.day_start_equity ?? null,
-          peak_equity: this.account.peak_equity,
-          daily_pnl_day: this.account.daily_pnl_day ?? null,
-          consecutive_losses: this.account.consecutive_losses,
-          capital_day_gates_seeded: this.capitalDayGatesSeeded,
+          day_start_equity: dayStart,
+          peak_equity: peak,
+          daily_pnl_day: day,
+          consecutive_losses: streak,
+          capital_day_gates_seeded: seeded,
           last_ai_allow_close: this.last_ai_allow_close,
           ai_mode: this.cfg.ai_mode,
           kill_switch: this.cfg.kill_switch,
+          mode: this.cfg.mode,
+          epic: this.epic,
+          entries_armed: this.entries_armed,
+          entries_pause_reason: this.entries_pause_reason,
+          last_close_failed: this.last_close_failed,
         })
       )
     );
@@ -1349,6 +1416,7 @@ class MasterRuntime {
         -400
       );
     }
+    this.persistRuntimeGates();
   }
 
   /**
@@ -2355,6 +2423,28 @@ class MasterRuntime {
       }
       if (typeof gates.kill_switch === 'boolean') {
         this.cfg = { ...this.cfg, kill_switch: gates.kill_switch };
+      }
+      // Session identity — mode/epic/entries survive crash (wrong-epic LIVE is unsafe)
+      if (
+        gates.mode === 'PAPER' ||
+        gates.mode === 'LIVE' ||
+        gates.mode === 'BACKTEST'
+      ) {
+        // LIVE restore is cfg only — Start still requires Capital attach / MASTER_LIVE_ENABLED
+        this.cfg = { ...this.cfg, mode: gates.mode };
+        this.pipeline.mode = gates.mode;
+      }
+      if (gates.epic && String(gates.epic).trim()) {
+        this.epic = String(gates.epic).trim();
+      }
+      if (typeof gates.entries_armed === 'boolean') {
+        this.entries_armed = gates.entries_armed;
+        this.entries_pause_reason = gates.entries_armed
+          ? null
+          : gates.entries_pause_reason || 'entries_paused';
+      }
+      if (gates.last_close_failed && typeof gates.last_close_failed === 'object') {
+        this.last_close_failed = gates.last_close_failed;
       }
       // Soft-exit AI veto — fail-closed when advisory and gate missing
       if (typeof gates.last_ai_allow_close === 'boolean') {

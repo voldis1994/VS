@@ -1,8 +1,9 @@
 /**
  * Persist MASTER owns-pipeline preference across restart (dashboard toggle).
  */
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs';
+import { mkdirSync, readFileSync, existsSync } from 'fs';
 import { join } from 'path';
+import { atomicWriteJson } from './atomicIo.js';
 
 function stateDir(): string {
   return (
@@ -19,8 +20,7 @@ function prefPath(): string {
 export function saveOwnsPipelinePref(on: boolean): boolean {
   try {
     mkdirSync(stateDir(), { recursive: true });
-    writeFileSync(prefPath(), JSON.stringify({ owns_pipeline: on }));
-    return true;
+    return atomicWriteJson(prefPath(), { owns_pipeline: on });
   } catch {
     return false;
   }

@@ -36,6 +36,20 @@ export type RuntimeGates = {
   ai_mode?: 'off' | 'advisory' | 'required' | null;
   /** Hard kill — must survive crash/restart or recover resumes entries. */
   kill_switch?: boolean | null;
+  /** Operator mode — PAPER/LIVE/BACKTEST session survives restart. */
+  mode?: 'PAPER' | 'LIVE' | 'BACKTEST' | null;
+  /** Trading epic — wrong-epic window after crash is unsafe on Capital. */
+  epic?: string | null;
+  /** Desk dual-brain: pause new entries while exits still run. */
+  entries_armed?: boolean | null;
+  entries_pause_reason?: string | null;
+  /** Sticky last close/flatten fail for dashboard after restart. */
+  last_close_failed?: {
+    position_id: string;
+    exit_reason: string;
+    detail: string;
+    ts: string;
+  } | null;
 };
 
 function gatesDir(): string {
@@ -94,6 +108,33 @@ export function saveRuntimeGates(gates: RuntimeGates): boolean {
           ? gates.ai_mode
           : null,
       kill_switch: gates.kill_switch === true,
+      mode:
+        gates.mode === 'PAPER' ||
+        gates.mode === 'LIVE' ||
+        gates.mode === 'BACKTEST'
+          ? gates.mode
+          : null,
+      epic:
+        gates.epic != null && String(gates.epic).trim()
+          ? String(gates.epic).trim().slice(0, 40)
+          : null,
+      entries_armed:
+        typeof gates.entries_armed === 'boolean' ? gates.entries_armed : null,
+      entries_pause_reason:
+        gates.entries_pause_reason != null &&
+        String(gates.entries_pause_reason).trim()
+          ? String(gates.entries_pause_reason).trim().slice(0, 120)
+          : null,
+      last_close_failed: (() => {
+        const f = gates.last_close_failed;
+        if (!f || typeof f !== 'object') return null;
+        const position_id = String(f.position_id || '').trim().slice(0, 80);
+        const exit_reason = String(f.exit_reason || '').trim().slice(0, 80);
+        const detail = String(f.detail || '').trim().slice(0, 200);
+        const ts = String(f.ts || '').trim().slice(0, 40);
+        if (!position_id && !detail) return null;
+        return { position_id, exit_reason, detail, ts };
+      })(),
     });
   } catch {
     return false;
@@ -142,6 +183,31 @@ export function loadRuntimeGates(): RuntimeGates | null {
           ? raw.ai_mode
           : null,
       kill_switch: raw.kill_switch === true,
+      mode:
+        raw.mode === 'PAPER' || raw.mode === 'LIVE' || raw.mode === 'BACKTEST'
+          ? raw.mode
+          : null,
+      epic:
+        raw.epic != null && String(raw.epic).trim()
+          ? String(raw.epic).trim().slice(0, 40)
+          : null,
+      entries_armed:
+        typeof raw.entries_armed === 'boolean' ? raw.entries_armed : null,
+      entries_pause_reason:
+        raw.entries_pause_reason != null &&
+        String(raw.entries_pause_reason).trim()
+          ? String(raw.entries_pause_reason).trim().slice(0, 120)
+          : null,
+      last_close_failed: (() => {
+        const f = raw.last_close_failed as RuntimeGates['last_close_failed'];
+        if (!f || typeof f !== 'object') return null;
+        const position_id = String(f.position_id || '').trim().slice(0, 80);
+        const exit_reason = String(f.exit_reason || '').trim().slice(0, 80);
+        const detail = String(f.detail || '').trim().slice(0, 200);
+        const ts = String(f.ts || '').trim().slice(0, 40);
+        if (!position_id && !detail) return null;
+        return { position_id, exit_reason, detail, ts };
+      })(),
     };
   } catch {
     return null;

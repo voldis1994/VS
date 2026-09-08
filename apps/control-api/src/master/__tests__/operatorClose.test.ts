@@ -376,4 +376,16 @@ describe('operator close + manage config', () => {
     const { existsSync } = require('fs') as typeof import('fs');
     expect(existsSync(join(dir, 'master_manage_config.json.tmp'))).toBe(false);
   });
+
+  it('saveOwnsPipelinePref is atomic (no leftover tmp)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'master-owns-atomic-'));
+    process.env.MASTER_STATE_DIR = dir;
+    const { saveOwnsPipelinePref, loadOwnsPipelinePref } = await import(
+      '../ownsPipelinePref.js'
+    );
+    expect(saveOwnsPipelinePref(true)).toBe(true);
+    expect(loadOwnsPipelinePref()).toBe(true);
+    const { existsSync } = require('fs') as typeof import('fs');
+    expect(existsSync(join(dir, 'owns_pipeline.json.tmp'))).toBe(false);
+  });
 });

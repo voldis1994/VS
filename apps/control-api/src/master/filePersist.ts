@@ -169,20 +169,29 @@ export class FilePersist implements PersistClient {
   ) {
     if (!meta) return;
     try {
+      const needsRestore = (path: string): boolean => {
+        if (!existsSync(path)) return true;
+        try {
+          JSON.parse(readFileSync(path, 'utf8'));
+          return false;
+        } catch {
+          return true; // corrupt — heal from operator_meta
+        }
+      };
       const managePath = join(this.root, 'master_manage_config.json');
-      if (meta.manage && !existsSync(managePath)) {
+      if (meta.manage && needsRestore(managePath)) {
         atomicWriteJson(managePath, meta.manage);
       }
       const ownsPath = join(this.root, 'owns_pipeline.json');
-      if (typeof meta.owns_pipeline === 'boolean' && !existsSync(ownsPath)) {
+      if (typeof meta.owns_pipeline === 'boolean' && needsRestore(ownsPath)) {
         atomicWriteJson(ownsPath, { owns_pipeline: meta.owns_pipeline });
       }
       const gatesPath = join(this.root, 'runtime_gates.json');
-      if (meta.gates && !existsSync(gatesPath)) {
+      if (meta.gates && needsRestore(gatesPath)) {
         atomicWriteJson(gatesPath, meta.gates);
       }
       const cachePath = join(this.root, 'market_cache.json');
-      if (meta.market_cache && !existsSync(cachePath)) {
+      if (meta.market_cache && needsRestore(cachePath)) {
         atomicWriteJson(cachePath, meta.market_cache);
       }
     } catch {
@@ -370,25 +379,34 @@ export function ensureOperatorMetaFromStateDir(root?: string): boolean {
     if (!existsSync(path)) return false;
     const raw = JSON.parse(readFileSync(path, 'utf8')) as FilePersistState;
     if (!raw.operator_meta) return false;
+    const needsRestore = (p: string): boolean => {
+      if (!existsSync(p)) return true;
+      try {
+        JSON.parse(readFileSync(p, 'utf8'));
+        return false;
+      } catch {
+        return true;
+      }
+    };
     const managePath = join(dir, 'master_manage_config.json');
-    if (raw.operator_meta.manage && !existsSync(managePath)) {
+    if (raw.operator_meta.manage && needsRestore(managePath)) {
       atomicWriteJson(managePath, raw.operator_meta.manage);
     }
     const ownsPath = join(dir, 'owns_pipeline.json');
     if (
       typeof raw.operator_meta.owns_pipeline === 'boolean' &&
-      !existsSync(ownsPath)
+      needsRestore(ownsPath)
     ) {
       atomicWriteJson(ownsPath, {
         owns_pipeline: raw.operator_meta.owns_pipeline,
       });
     }
     const gatesPath = join(dir, 'runtime_gates.json');
-    if (raw.operator_meta.gates && !existsSync(gatesPath)) {
+    if (raw.operator_meta.gates && needsRestore(gatesPath)) {
       atomicWriteJson(gatesPath, raw.operator_meta.gates);
     }
     const cachePath = join(dir, 'market_cache.json');
-    if (raw.operator_meta.market_cache && !existsSync(cachePath)) {
+    if (raw.operator_meta.market_cache && needsRestore(cachePath)) {
       atomicWriteJson(cachePath, raw.operator_meta.market_cache);
     }
     return true;

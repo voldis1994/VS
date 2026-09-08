@@ -602,6 +602,18 @@ describe('VS MASTER stop() empty-wipe guard', () => {
     expect(cache.bars.length).toBe(5);
     expect(cache.structure_seed_source).toBe('capital_ohlc');
   });
+
+  it('heals corrupt owns_pipeline.json from operator_meta', () => {
+    const { writeFileSync } = require('fs') as typeof import('fs');
+    const dir = mkdtempSync(join(tmpdir(), 'master-owns-corrupt-'));
+    const fp = new FilePersist(dir);
+    writeFileSync(join(dir, 'owns_pipeline.json'), JSON.stringify({ owns_pipeline: true }));
+    fp.flush();
+    writeFileSync(join(dir, 'owns_pipeline.json'), '{not-json');
+    expect(ensureOperatorMetaFromStateDir(dir)).toBe(true);
+    const owns = JSON.parse(readFileSync(join(dir, 'owns_pipeline.json'), 'utf8'));
+    expect(owns.owns_pipeline).toBe(true);
+  });
 });
 
 type PersistClientLike = {

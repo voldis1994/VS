@@ -68,6 +68,8 @@ export type ReplayOptions = {
   slippage_pts?: number;
   commission?: number;
   latency_bars?: number;
+  /** Trading epic for exit geometry (live uses pos.epic — default GOLD). */
+  epic?: string;
   /** Seed expectancy before replay (walk-forward OOS from IS trades). */
   expectancy_seed?: Array<{ setup_key: string; outcome: TradeOutcome }>;
   /**
@@ -131,7 +133,9 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
   } | null = null;
 
   const equity_curve: number[] = [equity];
-  const pv = GOLD_SPEC.value_per_point_per_lot;
+  const epic = String(opts.epic || GOLD_SPEC.epic || 'GOLD').trim() || 'GOLD';
+  const instrument = specForEpic(epic);
+  const pv = instrument.value_per_point_per_lot;
 
   const closeSlice = (
     o: NonNullable<typeof open>,
@@ -251,7 +255,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
             side: open.side,
             entry: open.entry,
             mark,
-            symbol: 'GOLD',
+            symbol: epic,
             offset: cfg.breakeven_offset || 0,
             current_stop: open.sl,
             min_distance: null,
@@ -261,7 +265,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
       }
       if (cfg.scalp_pct_chase && open.mfe > 0) {
         const chase = scalpPctLockBrokerStop({
-          symbol: 'GOLD',
+          symbol: epic,
           direction: open.side,
           entry: open.entry,
           livePrice: mark,
@@ -543,7 +547,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
         open.soft_trail_peak != null &&
         Number.isFinite(open.soft_trail_peak)
       ) {
-        const dist = softTrailDistancePrice('GOLD', cfg.soft_trail_pips ?? 0.3);
+        const dist = softTrailDistancePrice(epic, cfg.soft_trail_pips ?? 0.3);
         const exitLvl = softTrailExitLevel(open.side, open.soft_trail_peak, dist);
         if (softTrailExitHit(open.side, mark, exitLvl)) {
           exitPx = mark;
@@ -595,7 +599,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
         peak_equity: peak,
         consecutive_losses,
       },
-      instrument: specForEpic(GOLD_SPEC.epic),
+      instrument,
       cfg,
       last_loss_ms,
       now_ms: quote.ts_ms,

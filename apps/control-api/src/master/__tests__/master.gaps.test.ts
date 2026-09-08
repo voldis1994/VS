@@ -1782,6 +1782,11 @@ describe('runtime gates persist', () => {
       last_ai_allow_close: false,
       ai_mode: null,
       kill_switch: false,
+      mode: null,
+      epic: null,
+      entries_armed: null,
+      entries_pause_reason: null,
+      last_close_failed: null,
     });
     if (prev === undefined) delete process.env.MASTER_STATE_DIR;
     else process.env.MASTER_STATE_DIR = prev;
@@ -1847,6 +1852,42 @@ describe('runtime gates persist', () => {
       masterRuntime.setKillSwitch(false);
     } finally {
       masterRuntime.cfg = { ...masterRuntime.cfg, kill_switch: prevKill };
+      if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prev;
+    }
+  });
+
+  it('mode/epic/entries_armed survive restart via runtime_gates', async () => {
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = mkdtempSync(join(tmpdir(), 'vs-session-gate-'));
+    const prevMode = masterRuntime.cfg.mode;
+    const prevEpic = masterRuntime.epic;
+    const prevArmed = masterRuntime.entries_armed;
+    const prevPause = masterRuntime.entries_pause_reason;
+    try {
+      masterRuntime.setMode('PAPER');
+      masterRuntime.setEpic('SILVER');
+      masterRuntime.setEntriesArmed(false, 'operator_pause_test');
+      const { loadRuntimeGates } = await import('../runtimeGates.js');
+      const g = loadRuntimeGates();
+      expect(g?.mode).toBe('PAPER');
+      expect(g?.epic).toBe('SILVER');
+      expect(g?.entries_armed).toBe(false);
+      expect(g?.entries_pause_reason).toBe('operator_pause_test');
+      masterRuntime.cfg = { ...masterRuntime.cfg, mode: 'BACKTEST' };
+      masterRuntime.epic = 'GOLD';
+      masterRuntime.entries_armed = true;
+      masterRuntime.entries_pause_reason = null;
+      await masterRuntime.recover();
+      expect(masterRuntime.cfg.mode).toBe('PAPER');
+      expect(masterRuntime.epic).toBe('SILVER');
+      expect(masterRuntime.entries_armed).toBe(false);
+      expect(masterRuntime.entries_pause_reason).toBe('operator_pause_test');
+    } finally {
+      masterRuntime.cfg = { ...masterRuntime.cfg, mode: prevMode };
+      masterRuntime.epic = prevEpic;
+      masterRuntime.entries_armed = prevArmed;
+      masterRuntime.entries_pause_reason = prevPause;
       if (prev === undefined) delete process.env.MASTER_STATE_DIR;
       else process.env.MASTER_STATE_DIR = prev;
     }
@@ -4774,5 +4815,7 @@ describe('replay exit order vs live manageTick', () => {
     const src = readFileSync(join(__dirname, '../replay.ts'), 'utf8');
     expect(src).toMatch(/replaySoftCloseAllowed\(open\.sl\)/);
     expect(src).toMatch(/toDeskRegime\(liveA\.regime/);
+    expect(src).toMatch(/softTrailDistancePrice\(epic/);
+    expect(src).toMatch(/opts\.epic/);
   });
 });
