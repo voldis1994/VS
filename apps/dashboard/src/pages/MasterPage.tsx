@@ -166,6 +166,7 @@ type JournalOpp = {
   id: string;
   epic: string;
   executed: boolean;
+  block_reason?: string | null;
   decision?: { kind?: string; side?: string; block_reason?: string | null };
   outcome?: {
     pnl: number;
@@ -1331,7 +1332,9 @@ export function MasterPage() {
                   {o.decision?.kind || 'WAIT'} {o.epic}
                 </div>
                 <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
-                  {String(o.decision?.block_reason || 'blocked').slice(0, 64)}
+                  {String(
+                    o.block_reason || o.decision?.block_reason || 'blocked'
+                  ).slice(0, 64)}
                 </div>
               </div>
             ))}

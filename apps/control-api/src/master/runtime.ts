@@ -31,10 +31,13 @@ import {
 } from './pipeline.js';
 import { computePerformance, fromOutcomes, monteCarlo } from './performance.js';
 import {
+  entrySetupFromRegime,
   floatingUnrealizedPnl,
+  mapRegimeToPlaybook,
   PositionManager,
   protectiveMark,
   stableRecoverUuid,
+  toDeskRegime,
   type ManagedPosition,
 } from './positionManager.js';
 import { evaluateRisk } from './risk.js';
@@ -115,6 +118,13 @@ export type MasterStatus = {
     bars_in: number;
     bars_out: number;
   } | null;
+  /** Setups that would trip require_positive_expectancy if armed. */
+  expectancy_would_block: Array<{
+    setup_key: string;
+    ev: number;
+    samples: number;
+  }>;
+  expectancy_gate_armed: boolean;
   /** Null money fields when Capital LIVE account is unproven (never forged £0). */
   account: (Omit<
     AccountSnapshot,
@@ -2166,9 +2176,28 @@ class MasterRuntime {
     outcomes: number;
   }> {
     this.hydrateManageConfig();
+    this.hydrateOwnsPipelinePref();
     const loaded = await loadOpenPositions();
     const valid = loaded.filter((p) => p.decision && p.position_id);
     this.positions.fromJSON(valid);
+    // Lock orphan BestOutcome identity from recovered analysis when still unset
+    for (const p of this.positions.list()) {
+      if (!p.playbook_at_entry && p.decision?.analysis) {
+        p.playbook_at_entry = mapRegimeToPlaybook(
+          p.decision.analysis.regime,
+          p.decision.analysis
+        );
+        p.entry_setup =
+          p.entry_setup ??
+          entrySetupFromRegime(p.decision.analysis.regime, p.decision.analysis);
+        if (!p.regime_at_entry || p.regime_at_entry === 'UNKNOWN') {
+          p.regime_at_entry = toDeskRegime(
+            p.decision.analysis.regime,
+            p.decision.analysis
+          );
+        }
+      }
+    }
 
     const intents = await loadSeenIntents();
     for (const id of intents) this.pipeline.claimIntent(id);
@@ -3309,6 +3338,18 @@ class MasterRuntime {
       regime: this.last_decision?.analysis.regime ?? 'UNKNOWN',
       market_state: this.last_decision?.analysis.market_state ?? '—',
       last_market: this.last_market,
+      expectancy_would_block: this.pipeline.expectancy
+        .all()
+        .filter(
+          (e) =>
+            e.samples >= this.cfg.min_expectancy_samples && !e.positive
+        )
+        .map((e) => ({
+          setup_key: e.setup_key,
+          ev: e.ev,
+          samples: e.samples,
+        })),
+      expectancy_gate_armed: !!this.cfg.require_positive_expectancy,
       account:
         this.broker instanceof CapitalBroker &&
         !this.broker.paper &&

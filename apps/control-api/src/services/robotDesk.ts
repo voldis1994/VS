@@ -1301,6 +1301,8 @@ async function robotCycle(s: Internal) {
         return;
       }
       // Fall through to desk Best-Outcome manage — MASTER cannot safely own live exits
+      // Prefer desk Capital OHLC so MASTER Yahoo poll does not dual-manage in parallel
+      masterRuntime.preferDeskMarketFeed();
       pushTick(s, {
         phase: brokerOpen ? 'MANAGE' : 'DECIDE',
         bid: quote.bid,

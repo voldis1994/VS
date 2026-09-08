@@ -19,6 +19,7 @@ import {
 import {
   capitalCloseExitReason,
   capitalSafeBreakEvenStop,
+  decidePortfolioCloseAll,
   decideSoftTrailArm,
   preferCloseFillPnl,
   priceResolvedCloseMoney,
@@ -525,16 +526,26 @@ export class PositionManager {
     const floatPnl = capitalFloatReady
       ? floatingUnrealizedPnl(this.list(), quote, pv, capitalLive)
       : 0;
-    const portfolioReason =
-      capitalFloatReady && closeAllProfit > 0 && floatPnl >= closeAllProfit
-        ? `AUTO_PROFIT_${floatPnl.toFixed(2)}`
-        : capitalFloatReady && closeAllLoss > 0 && floatPnl <= -closeAllLoss
-          ? `AUTO_LOSS_${floatPnl.toFixed(2)}`
-          : null;
+    const portfolio = capitalFloatReady
+      ? decidePortfolioCloseAll({
+          float_pnl: floatPnl ?? 0,
+          close_all_profit: closeAllProfit,
+          close_all_loss: closeAllLoss,
+        })
+      : { close: false, reason: '' };
+    const portfolioReason = portfolio.close ? portfolio.reason : null;
     if (portfolioReason) {
       for (const pos of [...this.open.values()]) {
         const mark = protectiveMark(pos.side, quote);
         const heldMs = Date.now() - new Date(pos.entry_at).getTime();
+        if (!allowClose) {
+          close_failed.push({
+            position_id: pos.position_id,
+            exit_reason: portfolioReason,
+            detail: 'ai_veto_close',
+          });
+          continue;
+        }
         if (await this.softCloseRequiresSlBlocked(broker, pos)) {
           close_failed.push({
             position_id: pos.position_id,

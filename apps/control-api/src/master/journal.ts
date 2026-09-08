@@ -65,15 +65,30 @@ export class MasterJournal {
    * traded_count skips Capital unproven closes (pnl_proven:false).
    */
   surfaceForApi(tradedCap = 50, restCap = 150): {
-    opportunities: OpportunityRecord[];
+    opportunities: Array<
+      OpportunityRecord & { block_reason: string | null }
+    >;
     traded_count: number;
   } {
     const traded = this.traded();
     const provenTraded = traded.filter((o) => o.outcome?.pnl_proven !== false);
     const provenSlices = this.closeOutcomes.filter((o) => o.pnl_proven !== false);
     const rest = this.opportunities.filter((o) => !(o.executed && o.outcome));
+    const enrich = (o: OpportunityRecord) => ({
+      ...o,
+      block_reason:
+        o.decision.block_reason ??
+        (o.risk?.allowed === false
+          ? `risk:${(o.risk.reasons || []).join(',')}`
+          : null) ??
+        o.execution?.detail ??
+        null,
+    });
     return {
-      opportunities: [...traded.slice(-tradedCap), ...rest.slice(-restCap)],
+      opportunities: [
+        ...traded.slice(-tradedCap).map(enrich),
+        ...rest.slice(-restCap).map(enrich),
+      ],
       traded_count: Math.max(provenTraded.length, provenSlices.length),
     };
   }

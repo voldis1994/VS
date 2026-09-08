@@ -1,14 +1,19 @@
 /** Event-driven replay — same analysis/decision/risk code as production. No look-ahead. */
-import { decideBestOutcomeExit } from '../services/exitManage.js';
-import { setupKey } from './decision.js';
 import {
   capitalSafeBreakEvenStop,
+  decidePortfolioCloseAll,
   decideSoftTrailArm,
   softTrailDistancePrice,
   softTrailExitHit,
   softTrailExitLevel,
   updateSoftTrailPeak,
 } from './moneyExit.js';
+import {
+  ema13CrossExit,
+  ema3PriceSide,
+  ema3PriceThroughExit,
+  emaPairFromBars,
+} from './analysis.js';
 import {
   buildEqualMultiTpPlan,
   clampCloseVolume,
@@ -29,6 +34,8 @@ import {
   mapRegimeToPlaybook,
   toDeskRegime,
 } from './positionManager.js';
+import { setupKey } from './decision.js';
+import { decideBestOutcomeExit } from '../services/exitManage.js';
 import type {
   Bar,
   MasterConfig,
@@ -97,6 +104,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
     soft_trail_armed: boolean;
     soft_trail_peak: number | null;
     multi_tp_levels: MultiTpLevel[] | null;
+    ema3_side: 'above' | 'below' | null;
   } | null = null;
 
   const equity_curve: number[] = [equity];
@@ -167,6 +175,21 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
       const moneyPnl = fav * open.volume * pv;
       const peakRetention =
         open.mfe > 1e-9 ? Math.max(0, Math.min(1, fav / open.mfe)) : null;
+
+      // Portfolio close-all (single open = book) — same helper as live
+      {
+        const portfolio = decidePortfolioCloseAll({
+          float_pnl: moneyPnl,
+          close_all_profit: cfg.close_all_profit,
+          close_all_loss: cfg.close_all_loss,
+        });
+        if (portfolio.close) {
+          closeSlice(open, mark, open.volume, portfolio.reason, i, quote.ts_ms);
+          open = null;
+          equity_curve.push(equity);
+          continue;
+        }
+      }
 
       // Money-BE + be_start + progress — Capital-safe geometry (defer illegal)
       {
@@ -266,7 +289,43 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
 
       let exitPx: number | null = null;
       let reason = '';
+
+      // EMA_TICK soft exits (live PositionManager parity — always when EMA available)
+      {
+        const e1 = emaPairFromBars(visible, 1);
+        const e3 = emaPairFromBars(visible, 3);
+        if (e3) {
+          const cross =
+            e1 != null
+              ? ema13CrossExit({
+                  side: open.side,
+                  ema1: e1.cur,
+                  ema3: e3.cur,
+                  ema1Prev: e1.prev,
+                  ema3Prev: e3.prev,
+                  ema1Prev2: e1.prev2,
+                  ema3Prev2: e3.prev2,
+                })
+              : { exit: false, reason: '' };
+          const thru = ema3PriceThroughExit({
+            side: open.side,
+            mark,
+            ema3: e3.cur,
+            prevSide: open.ema3_side,
+          });
+          open.ema3_side = ema3PriceSide(mark, e3.cur);
+          if (cross.exit) {
+            exitPx = mark;
+            reason = cross.reason;
+          } else if (thru.exit) {
+            exitPx = mark;
+            reason = thru.reason;
+          }
+        }
+      }
+
       if (
+        exitPx == null &&
         open.soft_trail_armed &&
         open.soft_trail_peak != null &&
         Number.isFinite(open.soft_trail_peak)
@@ -413,6 +472,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
                   volume_step: 0.01,
                 })
               : null,
+          ema3_side: null,
         };
         if (open.multi_tp_levels?.length) {
           const final = multiTpFinalPrice(open.multi_tp_levels);

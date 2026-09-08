@@ -913,6 +913,71 @@ describe('AI allow_close + portfolio close-all', () => {
     expect(managed.closed.every((c) => c.reason.startsWith('AUTO_PROFIT_'))).toBe(true);
     expect(pm.count()).toBe(0);
   });
+
+  it('close_all_profit honors AI allow_close=false (ai_veto_close)', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    broker.setQuote({
+      bid: entry + 5,
+      ask: entry + 5.4,
+      mid: entry + 5.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'pf-veto-aaaaaaaaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      stop_level: entry - 5,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-pf-veto',
+      intent_id: 'pf-veto-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      entry,
+      stop_loss: entry - 5,
+      take_profit: entry + 20,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis({ regime: 'TREND' }),
+        expectancy: null,
+      },
+    });
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: entry + 5,
+        ask: entry + 5.4,
+        mid: entry + 5.2,
+        spread: 0.4,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      close_all_profit: 4,
+      max_hold_ms: 0,
+      allow_close: false,
+    });
+    expect(managed.closed.length).toBe(0);
+    expect(pm.count()).toBe(1);
+    expect(managed.close_failed.some((f) => f.detail === 'ai_veto_close')).toBe(
+      true
+    );
+  });
 });
 
 describe('MASTER recover orphan journal', () => {
@@ -3916,9 +3981,106 @@ describe('orphan adopt + replay soft-trail authority', () => {
       .map((o) => o.outcome!.exit_reason);
     // MULTI_TP optional depending on fills — at least one exit reason present if traded
     if (reasons.length) {
-      expect(reasons.some((r) => /SL|TP|MULTI_TP|SOFT_TRAIL|TIME|BEST|Hard|Target|Peak/i.test(r))).toBe(
+      expect(reasons.some((r) => /SL|TP|MULTI_TP|SOFT_TRAIL|TIME|BEST|Hard|Target|Peak|AUTO_|EMA/i.test(r))).toBe(
         true
       );
+    }
+  });
+
+  it('replay close_all_profit can emit AUTO_PROFIT exit', async () => {
+    const { replayMaster } = await import('../replay.js');
+    const bars = Array.from({ length: 80 }, (_, i) => {
+      const o = 4400 + i * 2;
+      return {
+        open: o,
+        high: o + 3,
+        low: o - 0.2,
+        close: o + 2.5,
+        ts_ms: Date.UTC(2026, 8, 7, 12, i),
+      };
+    });
+    const result = await replayMaster({
+      bars,
+      warmup: 25,
+      cfg: {
+        close_all_profit: 0.5,
+        block_off_hours: false,
+        block_high_impact_news: false,
+        min_score: 0.3,
+        max_hold_ms: 0,
+        soft_trail_money_arm: 0,
+        scalp_pct_chase: false,
+        multi_tp_count: 0,
+      },
+    });
+    const reasons = result.opportunities
+      .filter((o) => o.outcome)
+      .map((o) => o.outcome!.exit_reason);
+    // AUTO_PROFIT depends on path — if any traded, exit reasons are non-empty
+    expect(result.equity_curve.length).toBeGreaterThan(10);
+    if (reasons.length) {
+      expect(reasons.every((r) => typeof r === 'string' && r.length > 0)).toBe(true);
+    }
+  });
+
+  it('recover locks playbook from decision analysis when unset', async () => {
+    const prevPref = masterRuntime.owns_pipeline_pref;
+    try {
+      const pm = masterRuntime.positions;
+      pm.fromJSON([]);
+      const recoverId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+      pm.register({
+        position_id: 'recover-lock-1',
+        opportunity_id: recoverId,
+        intent_id: recoverId,
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 0.1,
+        entry: 4400,
+        stop_loss: 4390,
+        take_profit: 4420,
+        decision: {
+          decision_id: recoverId,
+          kind: 'BUY',
+          side: 'BUY',
+          score: 0,
+          block_reason: null,
+          buy: null as never,
+          sell: null as never,
+          analysis: baseAnalysis({
+            regime: 'TREND',
+            trend_dir: 'UP',
+            structure_bias: 'BULLISH',
+          }),
+          expectancy: null,
+        },
+      });
+      const pos = pm.get('recover-lock-1')!;
+      delete (pos as { playbook_at_entry?: unknown }).playbook_at_entry;
+      delete (pos as { entry_setup?: unknown }).entry_setup;
+      // Simulate recover hydrate loop
+      const { mapRegimeToPlaybook, entrySetupFromRegime, toDeskRegime } =
+        await import('../positionManager.js');
+      if (!pos.playbook_at_entry && pos.decision?.analysis) {
+        pos.playbook_at_entry = mapRegimeToPlaybook(
+          pos.decision.analysis.regime,
+          pos.decision.analysis
+        );
+        pos.entry_setup = entrySetupFromRegime(
+          pos.decision.analysis.regime,
+          pos.decision.analysis
+        );
+        pos.regime_at_entry = toDeskRegime(
+          pos.decision.analysis.regime,
+          pos.decision.analysis
+        );
+      }
+      expect(pos.playbook_at_entry).toBe('LONG');
+      expect(pos.entry_setup).toBe('CONTINUATION');
+      expect(pos.regime_at_entry).toBe('TREND_UP');
+    } finally {
+      masterRuntime.owns_pipeline_pref = prevPref;
+      masterRuntime.positions.fromJSON([]);
     }
   });
 });

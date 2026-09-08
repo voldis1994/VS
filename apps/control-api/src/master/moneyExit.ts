@@ -346,3 +346,25 @@ export function softTrailExitHit(
 ): boolean {
   return side === 'BUY' ? mark <= exitLevel : mark >= exitLevel;
 }
+
+/**
+ * Check- portfolio close-all on floating book PnL.
+ * Shared by live PositionManager + replay so AUTO_* reasons stay aligned.
+ */
+export function decidePortfolioCloseAll(input: {
+  float_pnl: number;
+  close_all_profit?: number;
+  close_all_loss?: number;
+}): { close: boolean; reason: string } {
+  const profit = Math.max(0, Number(input.close_all_profit) || 0);
+  const loss = Math.max(0, Number(input.close_all_loss) || 0);
+  const pnl = Number(input.float_pnl);
+  if (!Number.isFinite(pnl)) return { close: false, reason: '' };
+  if (profit > 0 && pnl >= profit) {
+    return { close: true, reason: `AUTO_PROFIT_${pnl.toFixed(2)}` };
+  }
+  if (loss > 0 && pnl <= -loss) {
+    return { close: true, reason: `AUTO_LOSS_${pnl.toFixed(2)}` };
+  }
+  return { close: false, reason: '' };
+}
