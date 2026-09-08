@@ -103,6 +103,31 @@ describe('Capital stream parse', () => {
     expect(stream.getLatest('GOLD')).toBeNull();
     expect(stream.getLatest('GOLDMICRO')?.mid).toBeCloseTo(44.05, 5);
   });
+
+  it('stop clears quote cache so reconnect cannot claim healthy on stale ticks', () => {
+    const stream = new CapitalQuoteStream();
+    (stream as any).ws = { readyState: WebSocket.OPEN };
+    (stream as any).lastQuoteAt = Date.now();
+    (stream as any).latest = new Map([
+      [
+        'GOLD',
+        {
+          epic: 'GOLD',
+          bid: 4400,
+          offer: 4400.4,
+          mid: 4400.2,
+          ts_ms: Date.now(),
+        },
+      ],
+    ]);
+    expect(stream.isHealthy(30_000, 'GOLD')).toBe(true);
+    stream.stop();
+    expect(stream.getLatest('GOLD')).toBeNull();
+    // Socket reappears without a fresh quote — must not use pre-stop cache
+    (stream as any).ws = { readyState: WebSocket.OPEN };
+    expect(stream.isHealthy(30_000, 'GOLD')).toBe(false);
+    expect(stream.isHealthy(30_000)).toBe(false);
+  });
 });
 
 describe('native Capital trailingStop modify', () => {

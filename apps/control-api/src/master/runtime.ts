@@ -209,8 +209,8 @@ class MasterRuntime {
   private capitalVenueOpens = 0;
   /** False when last Capital list failed — UI must not treat venue as flat. */
   private capitalVenueOpensProven = true;
-  /** False when Capital equity unread / preferred CFD missing — do not trust sizing equity. */
-  private capitalAccountProven = true;
+  /** False until Capital equity read proves preferred CFD — do not trust sizing equity. */
+  private capitalAccountProven = false;
   /** When false, manage exits still run but new entries are blocked (desk dual-brain guard). */
   entries_armed = true;
   entries_pause_reason: string | null = null;
@@ -769,6 +769,9 @@ class MasterRuntime {
     // Capital: normalize XAUUSD→GOLD (API epic) so quote/open/stream share one id
     if (broker instanceof CapitalBroker) {
       this.setEpic(this.epic);
+      // Fail-closed until first successful equity read — Start LIVE must not
+      // advertise LIVE_RUNNING / proven before getAccount proves preferred CFD.
+      if (!broker.paper) this.capitalAccountProven = false;
     }
     if (!(broker instanceof CapitalBroker) || broker.paper) {
       this.capitalVenueOpens = 0;

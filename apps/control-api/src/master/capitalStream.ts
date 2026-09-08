@@ -135,6 +135,12 @@ export class CapitalQuoteStream {
     return 'streaming';
   }
 
+  /** Drop cached quotes so reconnect cannot claim healthy on pre-disconnect ticks. */
+  private clearQuoteCache() {
+    this.latest.clear();
+    this.lastQuoteAt = 0;
+  }
+
   stop() {
     if (this.pingTimer) {
       clearInterval(this.pingTimer);
@@ -150,7 +156,7 @@ export class CapitalQuoteStream {
     }
     this.epics.clear();
     this.connecting = null;
-    this.lastQuoteAt = 0;
+    this.clearQuoteCache();
   }
 
   private async connect(): Promise<void> {
@@ -173,6 +179,8 @@ export class CapitalQuoteStream {
           clearTimeout(timer);
           this.ws = ws;
           this.epics.clear();
+          // New socket — ignore quotes from a prior connection
+          this.clearQuoteCache();
           if (this.pingTimer) clearInterval(this.pingTimer);
           this.pingTimer = setInterval(() => this.send('ping'), 4 * 60_000);
           resolve();
@@ -190,6 +198,7 @@ export class CapitalQuoteStream {
           if (this.ws === ws) this.ws = null;
           this.epics.clear();
           this.connecting = null;
+          this.clearQuoteCache();
         });
 
         ws.on('error', () => {
