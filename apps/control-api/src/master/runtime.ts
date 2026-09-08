@@ -40,6 +40,7 @@ import {
 import { evaluateRisk } from './risk.js';
 import { setupKey } from './decision.js';
 import {
+  preferCloseFillPnl,
   resolveCloseMoneyPnl,
   resolveCloseExitFill,
   resolveFloatingMoneyPnl,
@@ -357,11 +358,11 @@ class MasterRuntime {
       fill,
       size: pos.size,
       value_per_point_per_lot: instrument.value_per_point_per_lot,
-      // Prefer close confirm; never treat floating UPL===0 as realized
-      fill_pnl:
-        closeRes.fill_pnl != null && Number.isFinite(closeRes.fill_pnl)
-          ? Number(closeRes.fill_pnl)
-          : usableBrokerUpl(pos.broker_upl),
+      // Prefer close confirm; else last synced UPL (never treat UPL===0 as realized)
+      fill_pnl: preferCloseFillPnl({
+        fill_pnl: closeRes.fill_pnl,
+        broker_upl: pos.broker_upl,
+      }),
     });
     const priced = applyCloseFees({
       pnl: resolved.pnl,
@@ -2108,17 +2109,8 @@ class MasterRuntime {
           row.fill_price > 0
             ? Number(row.fill_price)
             : null;
-        // Prefer proven ack fill, then venue-proven list open — never provisional over ack
-        let entry = ackFill ?? statusOpen;
-        // Capital level-less live deal — provisional mid only when no proven fill
-        if (entry == null && presentOnBroker && this.broker instanceof CapitalBroker) {
-          try {
-            const q = await this.broker.getQuote(row.epic || this.epic);
-            if (q && Number.isFinite(q.mid) && q.mid > 0) entry = Number(q.mid);
-          } catch {
-            /* fall through */
-          }
-        }
+        // Prefer proven ack fill, then venue-proven list open — never forge quote mid as entry
+        const entry = ackFill ?? statusOpen;
         if (entry == null) {
           // Live Capital ticket with no usable entry → fail-close rather than skip unmanaged
           if (presentOnBroker && this.broker instanceof CapitalBroker) {

@@ -16,6 +16,19 @@ describe('usableBrokerUpl', () => {
   });
 });
 
+describe('preferCloseFillPnl', () => {
+  it('prefers confirm profit, else scales non-zero broker UPL', async () => {
+    const { preferCloseFillPnl } = await import('../moneyExit.js');
+    expect(preferCloseFillPnl({ fill_pnl: -1.09, broker_upl: -8 })).toBe(-1.09);
+    expect(preferCloseFillPnl({ fill_pnl: 0, broker_upl: -8 })).toBe(0);
+    expect(preferCloseFillPnl({ fill_pnl: null, broker_upl: -8.5 })).toBe(-8.5);
+    expect(preferCloseFillPnl({ fill_pnl: null, broker_upl: 0 })).toBeNull();
+    expect(
+      preferCloseFillPnl({ fill_pnl: null, broker_upl: 10, size_ratio: 0.5 })
+    ).toBeCloseTo(5, 8);
+  });
+});
+
 describe('close fee honesty (replay parity)', () => {
   it('estimates commission from MASTER_COMMISSION_PER_LOT', () => {
     const prev = process.env.MASTER_COMMISSION_PER_LOT;

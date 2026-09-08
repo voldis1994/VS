@@ -74,6 +74,31 @@ export function usableBrokerUpl(upl: number | null | undefined): number | null {
 }
 
 /**
+ * Prefer DELETED/confirm profit; else last synced non-zero broker UPL.
+ * Partial closes scale UPL by closed/full size when confirm profit is absent.
+ */
+export function preferCloseFillPnl(input: {
+  fill_pnl?: number | null;
+  broker_upl?: number | null;
+  /** closed_size / full_size; default 1 (full close) */
+  size_ratio?: number;
+}): number | null {
+  if (input.fill_pnl != null && Number.isFinite(input.fill_pnl)) {
+    return Number(input.fill_pnl);
+  }
+  const upl = usableBrokerUpl(input.broker_upl);
+  if (upl == null) return null;
+  const ratio =
+    input.size_ratio != null &&
+    Number.isFinite(input.size_ratio) &&
+    input.size_ratio > 0
+      ? Math.min(1, Number(input.size_ratio))
+      : 1;
+  if (ratio >= 1 - 1e-12) return upl;
+  return upl * ratio;
+}
+
+/**
  * Resolve journal exit price after CLOSE.
  * Capital LIVE: never forge live bid/ask as fill — prefer confirm fill, then
  * hard STOP/TP level, else entry placeholder (PnL from fill_pnl when present).

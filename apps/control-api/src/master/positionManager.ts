@@ -18,6 +18,7 @@ import {
 import {
   capitalSafeBreakEvenStop,
   decideSoftTrailArm,
+  preferCloseFillPnl,
   resolveCloseMoneyPnl,
   resolveCloseExitFill,
   resolveFloatingMoneyPnl,
@@ -449,7 +450,10 @@ export class PositionManager {
             fill,
             size: pos.size,
             value_per_point_per_lot: pv,
-            fill_pnl: closeRes.fill_pnl,
+            fill_pnl: preferCloseFillPnl({
+              fill_pnl: closeRes.fill_pnl,
+              broker_upl: pos.broker_upl,
+            }),
           });
           const priced = applyCloseFees({
             pnl,
@@ -523,7 +527,10 @@ export class PositionManager {
           fill,
           size: pos.size,
           value_per_point_per_lot: pv,
-          fill_pnl: closeRes.fill_pnl,
+          fill_pnl: preferCloseFillPnl({
+            fill_pnl: closeRes.fill_pnl,
+            broker_upl: pos.broker_upl,
+          }),
         });
         const priced = applyCloseFees({
           pnl,
@@ -626,7 +633,10 @@ export class PositionManager {
                   fill,
                   size: pos.size,
                   value_per_point_per_lot: pv,
-                  fill_pnl: closeRes.fill_pnl,
+                  fill_pnl: preferCloseFillPnl({
+                    fill_pnl: closeRes.fill_pnl,
+                    broker_upl: pos.broker_upl,
+                  }),
                 });
                 const priced = applyCloseFees({
                   pnl,
@@ -723,7 +733,10 @@ export class PositionManager {
                 fill,
                 size: pos.size,
                 value_per_point_per_lot: pv,
-                fill_pnl: closeRes.fill_pnl,
+                fill_pnl: preferCloseFillPnl({
+                  fill_pnl: closeRes.fill_pnl,
+                  broker_upl: pos.broker_upl,
+                }),
               });
               const priced = applyCloseFees({
                 pnl,
@@ -837,7 +850,11 @@ export class PositionManager {
                 fill,
                 size: closedVol,
                 value_per_point_per_lot: pv,
-                fill_pnl: closeRes.fill_pnl,
+                fill_pnl: preferCloseFillPnl({
+                  fill_pnl: closeRes.fill_pnl,
+                  broker_upl: pos.broker_upl,
+                  size_ratio: pos.size > 0 ? closedVol / pos.size : 1,
+                }),
               });
               const priced = applyCloseFees({
                 pnl,
@@ -1033,7 +1050,10 @@ export class PositionManager {
         fill: exit,
         size: pos.size,
         value_per_point_per_lot: pv,
-        fill_pnl: closeRes.fill_pnl,
+        fill_pnl: preferCloseFillPnl({
+          fill_pnl: closeRes.fill_pnl,
+          broker_upl: pos.broker_upl,
+        }),
       });
       const priced = applyCloseFees({
         pnl,
@@ -1167,7 +1187,11 @@ export class PositionManager {
         fill,
         size: vol,
         value_per_point_per_lot: pv,
-        fill_pnl: closeRes.fill_pnl,
+        fill_pnl: preferCloseFillPnl({
+          fill_pnl: closeRes.fill_pnl,
+          broker_upl: pos.broker_upl,
+          size_ratio: pos.size > 0 ? vol / pos.size : 1,
+        }),
       });
       const priced = applyCloseFees({
         pnl,

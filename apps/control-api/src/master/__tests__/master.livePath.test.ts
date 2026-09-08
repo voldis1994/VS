@@ -3394,6 +3394,159 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(place.fill_price).toBe(4410.77);
   });
 
+  it('manage STOP uses last broker_upl when DELETED profit missing', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-upl-close' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4380,
+        ask: 4380.4,
+        mid: 4380.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({ ok: true, positions: [], detail: '0' }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({
+        ok: true,
+        deal_reference: 'upl-ref',
+        detail: 'submitted',
+      }),
+      confirm: async () => ({
+        ok: false,
+        closed_gone: true,
+        deal_id: 'deal-upl',
+        // no profit — manage must fall back to synced broker_upl
+        detail: 'confirm_closed_gone:DELETED',
+      }),
+    });
+    await broker.connect();
+    const pipe = new MasterPipeline('LIVE');
+    const pm = new PositionManager();
+    const decision = {
+      decision_id: 'd-upl',
+      kind: 'BUY' as const,
+      side: 'BUY' as const,
+      block_reason: null,
+      analysis: { regime: 'TREND' as const },
+      buy: { valid: true, filter_ok: true, score: 0.9, stop_loss: 4400 },
+      sell: { valid: false, filter_ok: false, score: 0, stop_loss: null },
+    };
+    pm.register({
+      position_id: 'deal-upl',
+      opportunity_id: 'opp-upl',
+      intent_id: 'intent-upl',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4410,
+      stop_loss: 4400,
+      decision: decision as any,
+    });
+    pm.get('deal-upl')!.broker_upl = -8.5;
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: 4380,
+        ask: 4380.4,
+        mid: 4380.2,
+        spread: 0.4,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+    });
+    expect(managed.closed).toHaveLength(1);
+    expect(managed.closed[0]!.reason).toBe('STOP_HIT');
+    // Without UPL fallback, STOP proxy would invent pts×size ≈ -1.0
+    expect(managed.closed[0]!.outcome.pnl).toBe(-8.5);
+  });
+
+  it('recover ack without proven fill fail-closes — never forges quote mid as entry', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = mkdtempSync(join(tmpdir(), 'vs-ack-no-entry-'));
+    clearTradeAckJournalForTest();
+    logTradeIntent({
+      command_id: 'cap-ack-no-entry',
+      intent_id: 'recover-ack-no-entry',
+      action: 'OPEN',
+      side: 'BUY',
+      volume: 0.1,
+      epic: 'GOLD',
+      sl: 4390,
+      tp: 4420,
+      reason: 'INTENT',
+    });
+    updateTradeAck('cap-ack-no-entry', {
+      ack_status: 'SUCCESS',
+      ticket: 'deal-no-entry',
+      // no fill_price — must not invent mid
+      detail: 'RECOVER_LATE_FILL',
+    });
+
+    let closeCalls = 0;
+    let closed = false;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-no-entry' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4499,
+        ask: 4499.4,
+        mid: 4499.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => {
+        if (closed) return { ok: true, positions: [], detail: '0' };
+        return {
+          ok: true,
+          positions: [
+            {
+              deal_id: 'deal-no-entry',
+              epic: 'GOLD',
+              direction: 'BUY',
+              size: 0.1,
+              open_level: null, // provisional mid only — not venue-proven
+              stop_level: null,
+              profit_level: null,
+            },
+          ],
+          detail: '1',
+        };
+      },
+      create: async () => ({ ok: true, deal_reference: 'x', detail: 'ok' }),
+      confirm: async () => ({ ok: true, deal_id: 'x', detail: 'ok' }),
+      modify: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => {
+        closeCalls += 1;
+        closed = true;
+        return { ok: true, detail: 'fail_closed_no_entry' };
+      },
+    });
+    await broker.connect();
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('LIVE');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.cfg = { ...DEFAULT_MASTER_CONFIG, mode: 'LIVE' };
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    masterRuntime.broker_detail = '';
+    masterRuntime.recovered = false;
+    const r = await masterRuntime.recover();
+    expect(masterRuntime.positions.get('deal-no-entry')).toBeNull();
+    expect(r.positions).toBe(0);
+    expect(closeCalls).toBeGreaterThan(0);
+    expect(String(masterRuntime.broker_detail || '')).toMatch(/ack_presence_no_entry/);
+    // Must not seed local open at forged mid 4499.2
+    expect(masterRuntime.positions.list().every((p) => p.entry !== 4499.2)).toBe(true);
+    if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+    else process.env.MASTER_STATE_DIR = prev;
+  });
+
   it('recover Capital SUCCESS ack still attach-or-fails when adopt list fails', async () => {
     process.env.MASTER_LIVE_ENABLED = 'true';
     process.env.MASTER_CONFIRM_FAST = 'true';
