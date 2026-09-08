@@ -88,12 +88,20 @@ export function parseCapitalConfirm(
   };
 }
 
-/** True when confirm is a final ACCEPTED/REJECTED (or OPEN with dealId). */
+/** True when confirm is a final ACCEPTED/REJECTED (or OPEN/DELETED with dealId). */
 export function isCapitalConfirmTerminal(c: CapitalConfirm): boolean {
   const ds = (c.dealStatus ?? '').toUpperCase();
   if (ds === 'ACCEPTED' || ds === 'REJECTED') return true;
+  if (ds === 'DELETED' || ds === 'CLOSED' || ds === 'CANCELLED') return true;
   const st = (c.status ?? '').toUpperCase();
-  if (c.dealId && (st === 'OPEN' || st === 'DELETED' || st === 'ACCEPTED')) {
+  if (
+    c.dealId &&
+    (st === 'OPEN' ||
+      st === 'DELETED' ||
+      st === 'ACCEPTED' ||
+      st === 'CLOSED' ||
+      st === 'CANCELLED')
+  ) {
     return true;
   }
   return false;
@@ -107,6 +115,9 @@ export function isCapitalConfirmAccepted(c: CapitalConfirm): boolean {
   const st = (c.status ?? '').toUpperCase();
   if (ds === 'ACCEPTED') return true;
   if (st === 'OPEN' || st === 'ACCEPTED') return true;
+  // Close confirms often land as DELETED/CLOSED (deal gone) without dealStatus=ACCEPTED
+  if (st === 'DELETED' || st === 'CLOSED' || st === 'CANCELLED') return true;
+  if (ds === 'DELETED' || ds === 'CLOSED' || ds === 'CANCELLED') return true;
   if (!ds && !st) return true;
   return false;
 }

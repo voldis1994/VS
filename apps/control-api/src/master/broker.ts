@@ -1042,10 +1042,19 @@ export class CapitalBroker implements MasterBroker {
         if (Number.isFinite(mm) && mm > 0) open_level = mm;
       }
       if (open_level == null || !(open_level > 0)) continue;
+      const sideRaw = String(p.direction || p.side || '').toUpperCase();
+      const side: Side | null =
+        sideRaw === 'SELL' || sideRaw === 'S'
+          ? 'SELL'
+          : sideRaw === 'BUY' || sideRaw === 'B'
+            ? 'BUY'
+            : null;
+      // Unproven side → presence_ids only (never invent BUY)
+      if (!side) continue;
       positions.push({
         position_id: String(p.deal_id || p.position_id || ''),
         epic: p.epic,
-        side: (p.direction || p.side) as Side,
+        side,
         size: p.size,
         open_level,
         stop_level: protectiveLevelOrNull(p.stop_level),
@@ -1191,10 +1200,10 @@ export class CapitalBroker implements MasterBroker {
           if (exclude?.has(p.position_id)) return false;
           if (p.side !== input.side) return false;
           if (Math.abs(p.size - input.size) > tol) return false;
-          if (p.opened_at) {
-            const opened = Date.parse(p.opened_at);
-            if (Number.isFinite(opened) && now - opened > maxAgeMs) return false;
-          }
+          // Require finite opened_at within window — null age must not match-accept
+          if (!p.opened_at) return false;
+          const opened = Date.parse(p.opened_at);
+          if (!Number.isFinite(opened) || now - opened > maxAgeMs) return false;
           return true;
         })
         .sort((a, b) => {
@@ -2319,10 +2328,18 @@ export class CapitalBroker implements MasterBroker {
               );
               if (cached != null && cached > 0) open_level = cached;
             }
+            const sideRaw = String(row.direction || row.side || '').toUpperCase();
+            const side: Side | null =
+              sideRaw === 'SELL' || sideRaw === 'S'
+                ? 'SELL'
+                : sideRaw === 'BUY' || sideRaw === 'B'
+                  ? 'BUY'
+                  : null;
+            if (!side) continue; // do not invent BUY for modify proof
             hit = {
               position_id: input.position_id,
               epic: String(row.epic || hitEpic || ''),
-              side: (row.direction || row.side || 'BUY') as Side,
+              side,
               size: Number(row.size) || 0,
               open_level: open_level && open_level > 0 ? open_level : 0,
               stop_level: protectiveLevelOrNull(row.stop_level),

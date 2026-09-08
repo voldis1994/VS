@@ -97,6 +97,35 @@ describe('Capital session REST abort timeout', () => {
   });
 });
 
+describe('confirmCapitalDeal DELETED close status', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('treats status DELETED as accepted (not rejected)', async () => {
+    const { confirmCapitalDeal } = await import('./capitalCom.js');
+    const session = {
+      get: async () => ({
+        ok: true,
+        status: 200,
+        json: {
+          dealId: 'd-gone',
+          status: 'DELETED',
+          level: 4410.5,
+          profit: -3.25,
+        },
+        text: '',
+      }),
+    } as any;
+    const conf = await confirmCapitalDeal(session, 'ref-del');
+    expect(conf.ok).toBe(true);
+    expect(conf.rejected).toBeFalsy();
+    expect(conf.deal_id).toBe('d-gone');
+    expect(conf.profit).toBe(-3.25);
+  });
+});
+
 describe('capitalEquityFromAccountFields', () => {
   it('includes floating profitLoss so underwater equity is below cash balance', () => {
     const r = capitalEquityFromAccountFields({

@@ -70,6 +70,31 @@ describe('VS MASTER capital confirm (VS-System-)', () => {
     expect(isCapitalConfirmTerminal(c)).toBe(true);
   });
 
+  it('accepts DELETED/CLOSED close confirms as success (not reject)', () => {
+    const deleted = parseCapitalConfirm({
+      dealId: 'deal-closed',
+      status: 'DELETED',
+      level: 4410.2,
+      profit: -1.5,
+    });
+    expect(isCapitalConfirmTerminal(deleted)).toBe(true);
+    expect(isCapitalConfirmAccepted(deleted)).toBe(true);
+
+    const closed = parseCapitalConfirm({
+      dealId: 'deal-closed-2',
+      status: 'CLOSED',
+    });
+    expect(isCapitalConfirmAccepted(closed)).toBe(true);
+
+    const rejectedDeleted = parseCapitalConfirm({
+      dealId: 'deal-x',
+      status: 'DELETED',
+      dealStatus: 'REJECTED',
+      reason: 'ERROR',
+    });
+    expect(isCapitalConfirmAccepted(rejectedDeleted)).toBe(false);
+  });
+
   it('detects stop-level rejects and VS-System- backoff', () => {
     expect(isCapitalStopLevelReject('MINIMUM_STOP_DISTANCE')).toBe(true);
     expect(isCapitalStopLevelReject('attached order rejected')).toBe(true);

@@ -1091,7 +1091,8 @@ export type CapitalOpenPosition = {
   deal_id: string;
   deal_reference: string | null;
   epic: string;
-  direction: 'BUY' | 'SELL';
+  /** null = Capital omitted/malformed direction — presence-only until proven */
+  direction: 'BUY' | 'SELL' | null;
   size: number;
   open_level: number | null;
   upl: number | null;
@@ -1100,6 +1101,7 @@ export type CapitalOpenPosition = {
   opened_at: string | null;
   /** Mid from positions row market bid/offer — provisional entry when level missing */
   market_mid?: number | null;
+  trailing_stop?: boolean | null;
 };
 
 /** All open Capital.com positions (REST). */
@@ -1125,7 +1127,13 @@ export async function listCapitalOpenPositions(
     const epic = String(market.epic || pos.epic || '').trim();
     if (!dealId || !epic) continue;
     const dirRaw = String(pos.direction || '').toUpperCase();
-    const direction: 'BUY' | 'SELL' = dirRaw === 'SELL' ? 'SELL' : 'BUY';
+    // Fail closed: never invent BUY when Capital omits/malforms direction
+    const direction: 'BUY' | 'SELL' | null =
+      dirRaw === 'SELL' || dirRaw === 'S'
+        ? 'SELL'
+        : dirRaw === 'BUY' || dirRaw === 'B'
+          ? 'BUY'
+          : null;
     const bid = numOrNull(market.bid);
     const ask = numOrNull(market.offer ?? market.ask);
     const market_mid =
