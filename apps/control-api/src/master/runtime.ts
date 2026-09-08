@@ -1108,9 +1108,23 @@ class MasterRuntime {
       // Reader apply_ack_to_instance_state — OPEN SUCCESS before status sync
       const booked = new Set(this.positions.list().map((p) => p.position_id));
       const fromAck = this.broker.adoptOpenFromAckJournal(booked);
+      let statusByTicket = new Map<string, { opened_at?: string | null }>();
+      if (fromAck.adopted.length) {
+        try {
+          const listed = await this.broker.listOpenPositions(this.epic);
+          if (listed.ok) {
+            statusByTicket = new Map(
+              listed.positions.map((p) => [p.position_id, { opened_at: p.opened_at }])
+            );
+          }
+        } catch {
+          /* adopt without broker open_time */
+        }
+      }
       for (const row of fromAck.adopted) {
         if (this.positions.get(row.ticket)) continue;
         const recoverId = stableRecoverUuid(row.ticket);
+        const openedAt = statusByTicket.get(row.ticket)?.opened_at ?? null;
         this.positions.register({
           position_id: row.ticket,
           opportunity_id: recoverId,
@@ -1121,6 +1135,7 @@ class MasterRuntime {
           entry: row.fill_price ?? 0,
           stop_loss: row.sl,
           take_profit: row.tp,
+          entry_at: openedAt,
           decision: {
             decision_id: recoverId,
             kind: row.side,

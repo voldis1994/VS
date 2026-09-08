@@ -59,10 +59,24 @@ string IsoNow() { return(TimeToStr(TimeCurrent(), TIME_DATE|TIME_SECONDS)); }
 
 int FileWriteText(string rel, string body)
 {
-   int h = FileOpen(rel, FILE_WRITE|FILE_TXT|FILE_ANSI);
+   // Atomic replace — avoid torn JSON reads under concurrent Node polls (Reader)
+   string tmp = rel + ".tmp";
+   int h = FileOpen(tmp, FILE_WRITE|FILE_TXT|FILE_ANSI);
    if(h < 0) return(-1);
    FileWriteString(h, body);
+   FileFlush(h);
    FileClose(h);
+   if(FileIsExist(rel)) FileDelete(rel);
+   if(!FileMove(tmp, 0, rel, 0))
+   {
+      // Fallback: direct write if move fails on some builds
+      h = FileOpen(rel, FILE_WRITE|FILE_TXT|FILE_ANSI);
+      if(h < 0) return(-1);
+      FileWriteString(h, body);
+      FileFlush(h);
+      FileClose(h);
+      FileDelete(tmp);
+   }
    return(0);
 }
 
@@ -182,6 +196,7 @@ void ExportStatus()
          + "\"sl\":" + JNum(OrderStopLoss(), Digits) + ","
          + "\"tp\":" + JNum(OrderTakeProfit(), Digits) + ","
          + "\"profit\":" + JNum(OrderProfit() + OrderSwap() + OrderCommission(), 2) + ","
+         + "\"open_time\":" + IntegerToString((int)OrderOpenTime()) + ","
          + "\"price\":" + JNum((OrderType()==OP_BUY?Bid:Ask), Digits)
          + "}";
    }

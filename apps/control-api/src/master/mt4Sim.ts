@@ -22,6 +22,7 @@ export type SimPosition = {
   sl: number;
   tp: number;
   profit: number;
+  open_time: number;
 };
 
 export class Mt4BridgeSimulator {
@@ -108,6 +109,7 @@ export class Mt4BridgeSimulator {
           sl: p.sl,
           tp: p.tp,
           profit: p.profit,
+          open_time: p.open_time,
         })),
       }) + '\n'
     );
@@ -176,6 +178,7 @@ export class Mt4BridgeSimulator {
         sl,
         tp,
         profit: 0,
+        open_time: Math.floor(Date.now() / 1000),
       });
       const fill =
         this.ackFillOverride != null && Number.isFinite(this.ackFillOverride)

@@ -266,6 +266,17 @@ describe('VS MASTER persist + recovery', () => {
 });
 
 describe('VS MASTER MT4 file bridge', () => {
+  let prevStateDir: string | undefined;
+  beforeEach(() => {
+    prevStateDir = process.env.MASTER_STATE_DIR;
+    const state = mkdtempSync(join(tmpdir(), 'vs-mt4-state-'));
+    process.env.MASTER_STATE_DIR = state;
+  });
+  afterEach(() => {
+    if (prevStateDir === undefined) delete process.env.MASTER_STATE_DIR;
+    else process.env.MASTER_STATE_DIR = prevStateDir;
+  });
+
   it('OPEN fills via Check- ack (simulator) and MODIFY writes protocol JSON', async () => {
     const root = mkdtempSync(join(tmpdir(), 'vs-mt4-'));
     const sim = new Mt4BridgeSimulator(root);
@@ -642,6 +653,106 @@ describe('VS MASTER MT4 file bridge', () => {
     expect(hit?.ack_status).toBe('SUCCESS');
     expect(hit?.ticket).toBe('888001');
     expect(hit?.fill_price).toBe(4401.5);
+  });
+
+  it('refuses OPEN when durable journal already has SUCCESS for intent', async () => {
+    const state = mkdtempSync(join(tmpdir(), 'vs-intent-block-'));
+    process.env.MASTER_STATE_DIR = state;
+    const { clearTradeAckJournalForTest, logTradeIntent, updateTradeAck } =
+      await import('../tradeAckJournal.js');
+    clearTradeAckJournalForTest();
+    logTradeIntent({
+      command_id: 'spentcmd1',
+      intent_id: 'spent-intent-aaaaaaaaaaaa',
+      action: 'OPEN',
+      side: 'BUY',
+      volume: 0.1,
+      epic: 'XAUUSD',
+      sl: 4390,
+      tp: null,
+      reason: 'INTENT',
+    });
+    updateTradeAck('spentcmd1', {
+      ack_status: 'SUCCESS',
+      ticket: '999001',
+      fill_price: 4400,
+      detail: 'ACK_SUCCESS',
+    });
+
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-spent-'));
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    const placed = await broker.placeOrder({
+      intent_id: 'spent-intent-aaaaaaaaaaaa',
+      epic: 'XAUUSD',
+      side: 'BUY',
+      size: 0.1,
+    });
+    expect(placed.ok).toBe(false);
+    expect(placed.detail).toBe('mt4_intent_already_success');
+    expect(placed.position_id).toBe('999001');
+  });
+
+  it('rejects ACK whose id does not match command id', async () => {
+    const prevPolls = process.env.MASTER_MT4_ACK_POLLS;
+    const prevMs = process.env.MASTER_MT4_ACK_POLL_MS;
+    process.env.MASTER_MT4_ACK_POLLS = '8';
+    process.env.MASTER_MT4_ACK_POLL_MS = '25';
+    const state = mkdtempSync(join(tmpdir(), 'vs-ack-mismatch-state-'));
+    process.env.MASTER_STATE_DIR = state;
+    const { clearTradeAckJournalForTest } = await import('../tradeAckJournal.js');
+    clearTradeAckJournalForTest();
+    try {
+      const root = mkdtempSync(join(tmpdir(), 'vs-mt4-ackmismatch-'));
+      const broker = new Mt4FileBroker(root);
+      await broker.connect();
+      mkdirSync(join(root, 'acks'), { recursive: true });
+      // Poison: write mismatched ack before placeOrder finishes — race via watcher
+      const intent = 'ackmismatchintent00000001';
+      const id = intent.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24);
+      // Pre-write wrong-id ack at expected path so waitAck reads it immediately
+      writeFileSync(
+        join(root, 'acks', `ack_${id}.json`),
+        JSON.stringify({ id: 'OTHER_CMD', ok: true, ticket: 1, fill: 4400 })
+      );
+      const placed = await broker.placeOrder({
+        intent_id: intent,
+        epic: 'XAUUSD',
+        side: 'BUY',
+        size: 0.01,
+      });
+      expect(placed.ok).toBe(false);
+      expect(placed.detail).toMatch(/mt4_ack_id_mismatch/);
+    } finally {
+      if (prevPolls === undefined) delete process.env.MASTER_MT4_ACK_POLLS;
+      else process.env.MASTER_MT4_ACK_POLLS = prevPolls;
+      if (prevMs === undefined) delete process.env.MASTER_MT4_ACK_POLL_MS;
+      else process.env.MASTER_MT4_ACK_POLL_MS = prevMs;
+    }
+  });
+
+  it('listOpenPositions exports opened_at from open_time for TIME_STOP clock', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-opentime-'));
+    const sim = new Mt4BridgeSimulator(root);
+    sim.setQuote(4400, 4400.4);
+    sim.start(30);
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    try {
+      const placed = await broker.placeOrder({
+        intent_id: 'opentimeintent00000000001',
+        epic: 'XAUUSD',
+        side: 'BUY',
+        size: 0.02,
+      });
+      expect(placed.ok).toBe(true);
+      const opens = await broker.listOpenPositions('XAUUSD');
+      const hit = opens.positions.find((p) => p.position_id === placed.position_id);
+      expect(hit?.opened_at).toBeTruthy();
+      expect(Number.isFinite(Date.parse(hit!.opened_at!))).toBe(true);
+    } finally {
+      sim.stop();
+    }
   });
 });
 

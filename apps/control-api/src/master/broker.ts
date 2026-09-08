@@ -1,10 +1,22 @@
 /** Unified broker interface — strategy never talks to a concrete broker directly. */
 import { randomUUID } from 'crypto';
-import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync, readdirSync, statSync } from 'fs';
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from 'fs';
 import { join } from 'path';
 import { createLoginLockState, withLoginLock } from './capitalLoginLock.js';
 import { CapitalQuoteStream } from './capitalStream.js';
 import {
+  findOpenIntentBlocker,
   findOpenSuccessUnbooked,
   logTradeIntent,
   updateTradeAck,
@@ -1385,6 +1397,15 @@ export class Mt4FileBroker implements MasterBroker {
       if (!existsSync(ackPath)) continue;
       try {
         const ack = JSON.parse(readFileSync(ackPath, 'utf8'));
+        // Reader validate_ack_record — reject mismatched command id body
+        const ackId = ack?.id != null ? String(ack.id) : '';
+        if (ackId && ackId !== id) {
+          return {
+            ok: false,
+            ack,
+            detail: `mt4_ack_id_mismatch: want=${id} got=${ackId}`,
+          };
+        }
         if (!ack.ok) {
           return { ok: false, ack, detail: `mt4_reject:${ack.detail || 'nack'}` };
         }
@@ -1394,6 +1415,36 @@ export class Mt4FileBroker implements MasterBroker {
       }
     }
     return { ok: false, ack: null, detail: 'mt4_ack_timeout' };
+  }
+
+  /** Reader atomic_write_text — fsync tmp then rename so INTENT and cmd agree on crash. */
+  private writeCommandAtomic(id: string, payload: Record<string, unknown>) {
+    const folder = join(this.bridgeRoot, 'commands');
+    mkdirSync(folder, { recursive: true });
+    const tmp = join(folder, `cmd_${id}.tmp`);
+    const path = join(folder, `cmd_${id}.json`);
+    writeFileSync(tmp, JSON.stringify(payload) + '\n', 'utf8');
+    try {
+      const fd = openSync(tmp, 'r+');
+      try {
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+    } catch {
+      /* best-effort fsync */
+    }
+    renameSync(tmp, path);
+    try {
+      const fd = openSync(path, 'r+');
+      try {
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+    } catch {
+      /* best-effort fsync */
+    }
   }
 
   /** Cap/Check honesty: ACK alone is not enough — status stop_level must match. */
@@ -1582,6 +1633,18 @@ export class Mt4FileBroker implements MasterBroker {
         paper: false,
       };
     }
+    // Durable republish guard (survives restart — memory Set alone does not)
+    const blocked = findOpenIntentBlocker(input.intent_id);
+    if (blocked) {
+      return {
+        ok: false,
+        order_id: blocked.command_id,
+        position_id: blocked.ticket,
+        fill_price: blocked.fill_price,
+        detail: `mt4_intent_already_${blocked.ack_status.toLowerCase()}`,
+        paper: false,
+      };
+    }
     if (this.hasPendingOpenCommand()) {
       return {
         ok: false,
@@ -1617,12 +1680,7 @@ export class Mt4FileBroker implements MasterBroker {
       tp: input.profit_level ?? null,
       reason: 'INTENT',
     });
-    const folder = join(this.bridgeRoot, 'commands');
-    mkdirSync(folder, { recursive: true });
-    const tmp = join(folder, `cmd_${id}.tmp`);
-    const path = join(folder, `cmd_${id}.json`);
-    writeFileSync(tmp, JSON.stringify(payload) + '\n', 'utf8');
-    renameSync(tmp, path);
+    this.writeCommandAtomic(id, payload);
 
     const waited = await this.waitAck(id);
     if (waited.ok && waited.ack) {
@@ -1767,8 +1825,6 @@ export class Mt4FileBroker implements MasterBroker {
       return { ok: false, detail: 'mt4_pending_control_command' };
     }
     const id = randomUUID().slice(0, 12);
-    const folder = join(this.bridgeRoot, 'commands');
-    mkdirSync(folder, { recursive: true });
     const payload = { id, action: 'CLOSE', ticket: Number(position_id), reason: 'VS_MASTER' };
     // Reader: durable INTENT before control publish
     logTradeIntent({
@@ -1783,10 +1839,7 @@ export class Mt4FileBroker implements MasterBroker {
       tp: null,
       reason: 'INTENT',
     });
-    const tmp = join(folder, `cmd_${id}.tmp`);
-    const path = join(folder, `cmd_${id}.json`);
-    writeFileSync(tmp, JSON.stringify(payload) + '\n', 'utf8');
-    renameSync(tmp, path);
+    this.writeCommandAtomic(id, payload);
 
     const waited = await this.waitAck(id);
     if (waited.ok) {
@@ -1864,8 +1917,6 @@ export class Mt4FileBroker implements MasterBroker {
       return { ok: false, detail: 'mt4_pending_control_command' };
     }
     const id = randomUUID().slice(0, 12);
-    const folder = join(this.bridgeRoot, 'commands');
-    mkdirSync(folder, { recursive: true });
     const payload = {
       id,
       action: 'MODIFY',
@@ -1886,10 +1937,7 @@ export class Mt4FileBroker implements MasterBroker {
       tp: input.profit_level ?? null,
       reason: 'INTENT',
     });
-    const tmp = join(folder, `cmd_${id}.tmp`);
-    const path = join(folder, `cmd_${id}.json`);
-    writeFileSync(tmp, JSON.stringify(payload) + '\n', 'utf8');
-    renameSync(tmp, path);
+    this.writeCommandAtomic(id, payload);
 
     const waited = await this.waitAck(id);
     if (waited.ok) {

@@ -155,6 +155,8 @@ export class PositionManager {
     take_profit?: number | null;
     decision: MasterDecision;
     multi_tp_levels?: MultiTpLevel[];
+    /** Broker open time when known — preserve TIME_STOP clock on recover/adopt */
+    entry_at?: string | null;
   }) {
     let take_profit = input.take_profit ?? null;
     const levels = input.multi_tp_levels?.length
@@ -164,6 +166,10 @@ export class PositionManager {
       const final = multiTpFinalPrice(levels);
       if (final != null) take_profit = final;
     }
+    const entryAt =
+      input.entry_at && Number.isFinite(Date.parse(input.entry_at))
+        ? new Date(input.entry_at).toISOString()
+        : new Date().toISOString();
     const pos: ManagedPosition = {
       position_id: input.position_id,
       opportunity_id: input.opportunity_id,
@@ -172,7 +178,7 @@ export class PositionManager {
       side: input.side,
       size: input.size,
       entry: input.entry,
-      entry_at: new Date().toISOString(),
+      entry_at: entryAt,
       stop_loss: input.stop_loss ?? null,
       take_profit,
       mfe: 0,

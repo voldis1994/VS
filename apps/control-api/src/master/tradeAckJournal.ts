@@ -161,6 +161,21 @@ export function findOpenSuccessUnbooked(
   );
 }
 
+/**
+ * Reader-style republish guard — refuse OPEN when INTENT already PENDING/SUCCESS
+ * for the same intent_id (survives process restart; memory Set alone does not).
+ */
+export function findOpenIntentBlocker(intentId: string): TradeAckRecord | null {
+  if (!intentId) return null;
+  const hit = loadTradeAckJournal().find(
+    (r) =>
+      r.action === 'OPEN' &&
+      r.intent_id === intentId &&
+      (r.ack_status === 'PENDING' || r.ack_status === 'SUCCESS')
+  );
+  return hit ?? null;
+}
+
 /** Test helper — wipe journal file. */
 export function clearTradeAckJournalForTest(): void {
   writeAll({});
