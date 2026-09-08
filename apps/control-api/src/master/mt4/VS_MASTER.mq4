@@ -208,7 +208,8 @@ void ExportStatus()
       + "\"balance\":" + JNum(AccountBalance(), 2) + ","
       + "\"equity\":" + JNum(AccountEquity(), 2) + ","
       + "\"margin\":" + JNum(AccountMargin(), 2) + ","
-      + "\"connected\":true,"
+      + "\"margin_free\":" + JNum(AccountFreeMargin(), 2) + ","
+      + "\"connected\":" + (IsConnected() ? "true" : "false") + ","
       + "\"trading_allowed\":" + (IsTradeAllowed() ? "true" : "false") + ","
       + "\"positions\":" + pos
       + "}";

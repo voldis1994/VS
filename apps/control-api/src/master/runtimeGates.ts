@@ -13,6 +13,8 @@ export type RuntimeGates = {
   peak_equity?: number | null;
   /** UTC day that day_start_equity / daily_pnl belong to */
   daily_pnl_day?: string | null;
+  /** Trailing loss streak — Check- persists; rebuild from journal can be order-wrong */
+  consecutive_losses?: number | null;
 };
 
 function gatesDir(): string {
@@ -44,6 +46,10 @@ export function saveRuntimeGates(gates: RuntimeGates): boolean {
             ? Number(gates.peak_equity)
             : null,
         daily_pnl_day: gates.daily_pnl_day ?? null,
+        consecutive_losses:
+          gates.consecutive_losses != null && Number.isFinite(gates.consecutive_losses)
+            ? Math.max(0, Math.floor(Number(gates.consecutive_losses)))
+            : null,
       })
     );
     return true;
@@ -59,6 +65,7 @@ export function loadRuntimeGates(): RuntimeGates | null {
     const raw = JSON.parse(readFileSync(path, 'utf8')) as RuntimeGates;
     const dayStart = Number(raw.day_start_equity);
     const peak = Number(raw.peak_equity);
+    const streak = Number(raw.consecutive_losses);
     return {
       last_loss_ms: Number(raw.last_loss_ms) || 0,
       reject_until_ms: Number(raw.reject_until_ms) || 0,
@@ -68,6 +75,12 @@ export function loadRuntimeGates(): RuntimeGates | null {
         raw.daily_pnl_day != null && String(raw.daily_pnl_day).trim()
           ? String(raw.daily_pnl_day).trim().slice(0, 10)
           : null,
+      consecutive_losses:
+        raw.consecutive_losses == null || raw.consecutive_losses === ''
+          ? null
+          : Number.isFinite(streak) && streak >= 0
+            ? Math.floor(streak)
+            : null,
     };
   } catch {
     return null;

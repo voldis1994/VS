@@ -778,4 +778,27 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(closed).toBe(1);
     expect(positions.size).toBe(0);
   });
+
+  it('closePosition fails when confirm times out and listOpen fails', async () => {
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-close' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({ ok: false, positions: [], detail: 'transport_down' }),
+      create: async () => ({ ok: true, deal_reference: 'x', detail: 'ok' }),
+      confirm: async () => ({ ok: false, pending: true, detail: 'pending' }),
+      close: async () => ({ ok: true, deal_reference: 'close-ref-1', detail: 'submitted' }),
+    });
+    await broker.connect();
+    const closed = await broker.closePosition('deal-99');
+    expect(closed.ok).toBe(false);
+    expect(closed.detail).toMatch(/close_unconfirmed_list_failed/);
+  });
 });

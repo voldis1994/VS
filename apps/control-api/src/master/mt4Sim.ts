@@ -100,6 +100,10 @@ export class Mt4BridgeSimulator {
         equity: 10_000 + [...this.positions.values()].reduce((s, p) => s + p.profit, 0),
         balance: 10_000,
         currency: 'USD',
+        margin: 0,
+        margin_free: 10_000,
+        connected: true,
+        trading_allowed: true,
         positions: [...this.positions.values()].map((p) => ({
           ticket: p.ticket,
           symbol: p.symbol,

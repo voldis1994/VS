@@ -1108,14 +1108,26 @@ export class CapitalBroker implements MasterBroker {
       : undefined;
     const partial =
       opts?.size != null && Number.isFinite(opts.size) && opts.size > 0;
-    if (!partial && listed.ok && still) {
-      return {
-        ok: false,
-        detail: 'close_not_confirmed_still_open',
-        deal_reference,
-        fill_price,
-        fill_pnl,
-      };
+    if (!partial) {
+      // VS-System: confirm timeout / unread book must not be treated as closed
+      if (!listed.ok) {
+        return {
+          ok: false,
+          detail: `close_unconfirmed_list_failed:${listed.detail || 'list_failed'}`,
+          deal_reference,
+          fill_price,
+          fill_pnl,
+        };
+      }
+      if (still) {
+        return {
+          ok: false,
+          detail: 'close_not_confirmed_still_open',
+          deal_reference,
+          fill_price,
+          fill_pnl,
+        };
+      }
     }
 
     return {
@@ -1452,6 +1464,37 @@ export class Mt4FileBroker implements MasterBroker {
     return Math.max(0.05, Math.abs(wantSl) * 1e-5, 1e-6);
   }
 
+  private async waitForTicketFlat(
+    positionId: string
+  ): Promise<{ ok: boolean; detail: string }> {
+    const attempts =
+      process.env.VITEST || process.env.MASTER_CONFIRM_FAST === 'true' ? 4 : 8;
+    let lastDetail = 'mt4_status_unread';
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) =>
+          setTimeout(
+            r,
+            process.env.VITEST || process.env.MASTER_CONFIRM_FAST === 'true'
+              ? 15 + 10 * attempt
+              : 80 + 60 * attempt
+          )
+        );
+      }
+      const listed = await this.listOpenPositions();
+      if (!listed.ok) {
+        lastDetail = listed.detail || 'mt4_status_unread';
+        continue;
+      }
+      const still = listed.positions.some(
+        (p) => p.position_id === String(positionId)
+      );
+      if (!still) return { ok: true, detail: 'flat' };
+      lastDetail = 'mt4_close_still_open';
+    }
+    return { ok: false, detail: `mt4_close_unverified:${lastDetail}` };
+  }
+
   private async waitForStatusStop(
     positionId: string,
     wantSl: number
@@ -1559,24 +1602,41 @@ export class Mt4FileBroker implements MasterBroker {
     const equity = Number(s.equity ?? s.Equity ?? 0);
     const balance = Number(s.balance ?? s.Balance ?? 0);
     const margin = Number(s.margin ?? s.Margin ?? NaN);
-    // Check- EA exports used margin — free ≈ equity - margin
+    const marginFree = Number(s.margin_free ?? s.MarginFree ?? s.free_margin ?? NaN);
+    // Reader: prefer AccountFreeMargin export over equity-margin estimate
     let available: number | null = null;
-    if (Number.isFinite(margin) && Number.isFinite(equity)) {
+    if (Number.isFinite(marginFree)) {
+      available = Math.max(0, marginFree);
+    } else if (Number.isFinite(margin) && Number.isFinite(equity)) {
       available = Math.max(0, equity - margin);
     }
+    const connected =
+      typeof s.connected === 'boolean'
+        ? s.connected
+        : typeof s.Connected === 'boolean'
+          ? s.Connected
+          : true;
+    const tradingFlag =
+      typeof s.trading_allowed === 'boolean'
+        ? s.trading_allowed
+        : typeof s.trade_allowed === 'boolean'
+          ? s.trade_allowed
+          : typeof s.TradingAllowed === 'boolean'
+            ? s.TradingAllowed
+            : null;
+    // Reader tradeable = connected && trade_allowed
+    const trade_allowed =
+      connected === false
+        ? false
+        : typeof tradingFlag === 'boolean'
+          ? tradingFlag
+          : null;
     return {
       equity,
       balance,
       currency: String(s.currency || 'USD'),
       available,
-      trade_allowed:
-        typeof s.trading_allowed === 'boolean'
-          ? s.trading_allowed
-          : typeof s.trade_allowed === 'boolean'
-            ? s.trade_allowed
-            : typeof s.TradingAllowed === 'boolean'
-              ? s.TradingAllowed
-              : null,
+      trade_allowed,
     };
   }
 
@@ -1856,6 +1916,17 @@ export class Mt4FileBroker implements MasterBroker {
       );
       const fill_pnl = Number.isFinite(profitRaw) ? profitRaw : null;
       const fill_price = fill != null && Number.isFinite(fill) ? fill : null;
+      // ACK alone is not enough — prove ticket gone from status (Cap/Check honesty)
+      const flat = await this.waitForTicketFlat(String(position_id));
+      if (!flat.ok) {
+        updateTradeAck(id, {
+          ack_status: 'FAILED',
+          ticket: String(position_id),
+          fill_price,
+          detail: flat.detail,
+        });
+        return { ok: false, detail: flat.detail, fill_price, fill_pnl };
+      }
       updateTradeAck(id, {
         ack_status: 'SUCCESS',
         ticket: String(position_id),

@@ -356,6 +356,7 @@ class MasterRuntime {
           day_start_equity: this.account.day_start_equity ?? null,
           peak_equity: this.account.peak_equity,
           daily_pnl_day: this.account.daily_pnl_day ?? null,
+          consecutive_losses: this.account.consecutive_losses,
         })
       )
     );
@@ -1062,18 +1063,32 @@ class MasterRuntime {
     this.rollDailyPnl();
     const today = this.account.daily_pnl_day!;
     let pnlToday = 0;
-    let losses = 0;
     let pnlAll = 0;
-    for (const o of hist.outcomes) {
+    // Sort ASC by created_at — file persist may be DESC after reverse; streak needs newest-last
+    const outcomesAsc = [...hist.outcomes].sort((a, b) => {
+      const ta = Date.parse(String(a.created_at || '')) || 0;
+      const tb = Date.parse(String(b.created_at || '')) || 0;
+      return ta - tb;
+    });
+    for (const o of outcomesAsc) {
       pnlAll += o.outcome.pnl;
       const day = String(o.created_at || '').slice(0, 10);
       // Only today's outcomes — never treat missing/epoch created_at as today
       if (day === today) pnlToday += o.outcome.pnl;
-      if (o.outcome.pnl < 0) losses += 1;
-      else losses = 0;
     }
+    // Trailing loss streak from newest (Check- consecutive_losses)
+    let losses = 0;
+    for (let i = outcomesAsc.length - 1; i >= 0; i--) {
+      if (outcomesAsc[i]!.outcome.pnl < 0) losses += 1;
+      else break;
+    }
+    // Prefer max(journal streak, gate) so a mid-restart gate write is not wiped by empty hist
+    const gatedStreak =
+      gates?.consecutive_losses != null && Number.isFinite(gates.consecutive_losses)
+        ? Math.max(0, Math.floor(gates.consecutive_losses))
+        : 0;
     this.account.daily_pnl = pnlToday;
-    this.account.consecutive_losses = losses;
+    this.account.consecutive_losses = Math.max(losses, gatedStreak);
     this.account.day_start_equity =
       this.account.day_start_equity || this.account.balance;
     this.account.equity = this.account.balance + pnlAll;

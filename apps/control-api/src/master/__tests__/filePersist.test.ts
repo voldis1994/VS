@@ -190,6 +190,55 @@ describe('VS MASTER file persist restart', () => {
     // −500 must NOT inflate today's daily loss
     expect(masterRuntime.account.daily_pnl).toBe(0);
   });
+
+  it('recover keeps trailing consecutive_losses even when outcomes arrive newest-first', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vs-master-fp-streak-'));
+    process.env.MASTER_STATE_DIR = dir;
+    installFilePersist(dir);
+    const now = Date.now();
+    const mk = (id: string, pnl: number, minsAgo: number) => ({
+      opportunity_id: id,
+      setup_key: 'TREND:BUY',
+      created_at: new Date(now - minsAgo * 60_000).toISOString(),
+      outcome: {
+        position_id: `p-${id}`,
+        side: 'BUY' as const,
+        entry: 100,
+        exit: pnl < 0 ? 90 : 110,
+        volume: 1,
+        pnl,
+        fees: 0,
+        slippage: 0,
+        mae: 1,
+        mfe: 1,
+        r_multiple: pnl < 0 ? -1 : 1,
+        hold_ms: 1000,
+        exit_reason: 'STOP_HIT',
+      },
+    });
+    // Insert newest-first (file/memory reverse hazard) — streak must still be 2
+    const { writeFileSync } = await import('fs');
+    writeFileSync(
+      join(dir, 'master_state.json'),
+      JSON.stringify({
+        opportunities: [],
+        outcomes: [
+          mk('00000000-0000-4000-8000-000000000003', -10, 1),
+          mk('00000000-0000-4000-8000-000000000002', -20, 5),
+          mk('00000000-0000-4000-8000-000000000001', 50, 10),
+        ],
+        positions: [],
+        intents: [],
+      })
+    );
+    installFilePersist(dir);
+    masterRuntime.pipeline = new MasterPipeline('PAPER');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.broker = null;
+    masterRuntime.account.consecutive_losses = 0;
+    await masterRuntime.recover();
+    expect(masterRuntime.account.consecutive_losses).toBe(2);
+  });
 });
 
 describe('VS MASTER dual persist (DB fail → file mirror)', () => {

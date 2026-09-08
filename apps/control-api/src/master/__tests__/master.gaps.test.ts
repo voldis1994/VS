@@ -996,6 +996,7 @@ describe('runtime gates persist', () => {
       day_start_equity: 10_250.5,
       peak_equity: 11_000,
       daily_pnl_day: '2026-09-07',
+      consecutive_losses: null,
     });
     if (prev === undefined) delete process.env.MASTER_STATE_DIR;
     else process.env.MASTER_STATE_DIR = prev;
@@ -1095,6 +1096,28 @@ describe('MASTER epic alias sync', () => {
     const acct = await broker.getAccount();
     expect(acct?.equity).toBe(10_000);
     expect(acct?.available).toBe(8800);
+  });
+
+  it('MT4 getAccount prefers margin_free and connected∧trade_allowed', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-mfree-'));
+    mkdirSync(join(root, 'status'), { recursive: true });
+    writeFileSync(
+      join(root, 'status', 'latest.json'),
+      JSON.stringify({
+        equity: 10_000,
+        balance: 10_000,
+        margin: 2_000,
+        margin_free: 7_500,
+        connected: false,
+        trading_allowed: true,
+        positions: [],
+      })
+    );
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    const acct = await broker.getAccount();
+    expect(acct?.available).toBe(7500);
+    expect(acct?.trade_allowed).toBe(false);
   });
 
   it('MT4 getAccount parses trading_allowed=false', async () => {
