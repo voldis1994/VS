@@ -1836,6 +1836,8 @@ class MasterRuntime {
         }
       >();
       let presenceIds = new Set<string>();
+      /** Capital list failed/threw — SUCCESS ack must still run attach-or-fail, not skip as absent. */
+      let capitalListUnproven = false;
       if (fromAck.adopted.length) {
         try {
           const listed = await this.broker.listOpenPositions(this.epic);
@@ -1857,9 +1859,27 @@ class MasterRuntime {
                 Boolean
               )
             );
+          } else if (this.broker instanceof CapitalBroker) {
+            capitalListUnproven = true;
+            this.broker_detail = [
+              this.broker_detail,
+              `ack_list_unproven:${listed.detail || 'list_failed'}`,
+            ]
+              .filter(Boolean)
+              .join(';')
+              .slice(0, 400);
           }
-        } catch {
-          /* adopt without broker open_time */
+        } catch (err) {
+          if (this.broker instanceof CapitalBroker) {
+            capitalListUnproven = true;
+            this.broker_detail = [
+              this.broker_detail,
+              `ack_list_unproven:${err instanceof Error ? err.message : 'throw'}`,
+            ]
+              .filter(Boolean)
+              .join(';')
+              .slice(0, 400);
+          }
         }
       }
       let attachFailed = 0;
@@ -1867,7 +1887,10 @@ class MasterRuntime {
       for (const row of fromAck.adopted) {
         if (this.positions.get(row.ticket)) continue;
         const status = statusByTicket.get(row.ticket);
-        const presentOnBroker = status != null || presenceIds.has(row.ticket);
+        const presentOnBroker =
+          status != null ||
+          presenceIds.has(row.ticket) ||
+          (capitalListUnproven && this.broker instanceof CapitalBroker);
         const statusOpen =
           status?.open_level != null &&
           Number.isFinite(status.open_level) &&

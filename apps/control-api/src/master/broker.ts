@@ -779,20 +779,27 @@ export class CapitalBroker implements MasterBroker {
           };
         }
       } else {
-        // Background refresh on interval — stream frames never carry marketStatus
+        // Refresh on interval — stream frames never carry marketStatus.
+        // Await when stale so omit/CLOSED cannot leave TRADEABLE armed.
         if (this.marketStatusNeedsRefresh(apiEpic)) {
-          void this.refreshMarketStatus(apiEpic);
+          await this.refreshMarketStatus(apiEpic);
+          cachedStatus = this.cachedMarketStatus(apiEpic);
+          knownNotTradeable =
+            statusFetched() && !capitalMarketAllowsTrading(cachedStatus);
         }
-        return {
-          bid: streamed.bid,
-          ask: streamed.offer,
-          mid: streamed.mid,
-          spread: streamed.offer - streamed.bid,
-          epic: streamed.epic || apiEpic,
-          ts_ms: streamed.ts_ms,
-          min_stop_distance: this.liveMinStopDistance(apiEpic),
-          market_status: cachedStatus,
-        };
+        if (!knownNotTradeable) {
+          return {
+            bid: streamed.bid,
+            ask: streamed.offer,
+            mid: streamed.mid,
+            spread: streamed.offer - streamed.bid,
+            epic: streamed.epic || apiEpic,
+            ts_ms: streamed.ts_ms,
+            min_stop_distance: this.liveMinStopDistance(apiEpic),
+            market_status: cachedStatus,
+          };
+        }
+        // Fall through to full REST quote when status became non-tradeable/unknown
       }
     }
 
@@ -885,12 +892,24 @@ export class CapitalBroker implements MasterBroker {
     const s = status == null ? '' : String(status).trim();
     const now = Date.now();
     if (!s) {
-      // Still mark fetch time so we don't hammer REST when Capital omits status
-      for (const key of keys) this.marketStatusFetchedAt.set(key, now);
+      // Fail-closed: omit clears prior TRADEABLE/OPEN so entries park until proven
+      for (const key of keys) {
+        this.marketStatusByEpic.delete(key);
+        this.marketStatusFetchedAt.set(key, now);
+      }
       return;
     }
     for (const key of keys) {
       this.marketStatusByEpic.set(key, s);
+      this.marketStatusFetchedAt.set(key, now);
+    }
+  }
+
+  private clearMarketStatus(epic: string) {
+    const keys = this.epicCacheKeys(epic);
+    const now = Date.now();
+    for (const key of keys) {
+      this.marketStatusByEpic.delete(key);
       this.marketStatusFetchedAt.set(key, now);
     }
   }
@@ -905,11 +924,14 @@ export class CapitalBroker implements MasterBroker {
     return Date.now() - at > CapitalBroker.MARKET_STATUS_REFRESH_MS;
   }
 
-  /** Non-blocking REST markets snapshot to keep marketStatus fresh while WS is healthy. */
+  /** REST markets snapshot to keep marketStatus fresh while WS is healthy. */
   private async refreshMarketStatus(epic: string): Promise<void> {
     try {
       const ensured = await this.ensureSession();
-      if (!ensured.ok || !this.session) return;
+      if (!ensured.ok || !this.session) {
+        this.clearMarketStatus(epic);
+        return;
+      }
       const q = await this.deps.quote(this.session, epic);
       this.noteMarketStatus(q?.epic || epic, q?.market_status);
       const minStop =
@@ -920,7 +942,8 @@ export class CapitalBroker implements MasterBroker {
         this.cacheSet(this.minStopByEpic, q?.epic || epic, minStop);
       }
     } catch {
-      /* keep last known status */
+      // Fail-closed: do not keep stale TRADEABLE across refresh failure
+      this.clearMarketStatus(epic);
     }
   }
 
@@ -1018,16 +1041,24 @@ export class CapitalBroker implements MasterBroker {
   /**
    * Level-less new fill (in presence_ids only): bind fail-close target by
    * epic+side+size from raw Capital rows — never the first unrelated new id.
+   * list_ok=false means raw list failed — caller must not treat as "no ghost".
    */
   private async findNewPresenceGhost(input: {
     epic: string;
     side: Side;
     sizes: number[];
     excludeIds: Set<string>;
-  }): Promise<string | undefined> {
-    if (!this.session) return undefined;
+  }): Promise<{ list_ok: boolean; id?: string; detail?: string }> {
+    if (!this.session) {
+      return { list_ok: false, detail: 'no_session' };
+    }
     const listed = await this.deps.list(this.session);
-    if (!listed?.ok || !Array.isArray(listed.positions)) return undefined;
+    if (!listed?.ok || !Array.isArray(listed.positions)) {
+      return {
+        list_ok: false,
+        detail: (listed as { detail?: string })?.detail || 'list_failed',
+      };
+    }
     const newRows = (listed.positions as any[]).filter((p) => {
       if (!epicsMatch(p.epic, input.epic)) return false;
       const id = String(p.deal_id || p.position_id || '').trim();
@@ -1041,9 +1072,11 @@ export class CapitalBroker implements MasterBroker {
       return input.sizes.some((s) => Math.abs(size - s) < 1e-6);
     });
     if (matched) {
-      return String(matched.deal_id || matched.position_id || '').trim() || undefined;
+      const id =
+        String(matched.deal_id || matched.position_id || '').trim() || undefined;
+      return { list_ok: true, id };
     }
-    return undefined;
+    return { list_ok: true };
   }
 
   private async waitConfirm(
@@ -1455,6 +1488,23 @@ export class CapitalBroker implements MasterBroker {
         if (!position_id) {
           // Named reject — fail-close only a *new* same-side fill (never pre-open orphan)
           const listed = await this.listOpenPositions(input.epic);
+          if (!listed.ok) {
+            const detail = `capital_rejected_list_unproven:${conf.detail}:${listed.detail || 'list_failed'}`;
+            ackFail(detail);
+            logMasterError({
+              module: 'capital.placeOrder',
+              error_type: 'LIST_UNPROVEN',
+              message: detail,
+            });
+            return {
+              ok: false,
+              order_id: opened.deal_reference || null,
+              position_id: null,
+              fill_price: null,
+              detail,
+              paper: false,
+            };
+          }
           const ghost = listed.positions.find(
             (p) =>
               !preOpenIds.has(p.position_id) &&
@@ -1475,9 +1525,26 @@ export class CapitalBroker implements MasterBroker {
             sizes: [orderSize, input.size],
             excludeIds: preOpenIds,
           });
-          if (presenceGhost) {
+          if (!presenceGhost.list_ok) {
+            const detail = `capital_rejected_list_unproven:${conf.detail}:${presenceGhost.detail || 'list_failed'}`;
+            ackFail(detail);
+            logMasterError({
+              module: 'capital.placeOrder',
+              error_type: 'LIST_UNPROVEN',
+              message: detail,
+            });
+            return {
+              ok: false,
+              order_id: opened.deal_reference || null,
+              position_id: null,
+              fill_price: null,
+              detail,
+              paper: false,
+            };
+          }
+          if (presenceGhost.id) {
             return await ackFailClose(
-              presenceGhost,
+              presenceGhost.id,
               opened.deal_reference || null,
               `capital_rejected_fail_closed:${conf.detail}`
             );
@@ -1515,6 +1582,24 @@ export class CapitalBroker implements MasterBroker {
     // Never accept dealReference alone as a live fill — fail-close same-size *new* ghost
     if (!position_id) {
       const listed = await this.listOpenPositions(input.epic);
+      if (!listed.ok) {
+        const detail = `capital_unconfirmed_list_unproven:${opened.detail}:${listed.detail || 'list_failed'}`;
+        ackFail(detail, { ack_status: 'TIMEOUT' });
+        logMasterError({
+          module: 'capital.placeOrder',
+          error_type: 'LIST_UNPROVEN',
+          message: detail,
+        });
+        return {
+          ok: false,
+          order_id: opened.deal_reference || null,
+          position_id: null,
+          fill_price: null,
+          fill_size: null,
+          detail,
+          paper: false,
+        };
+      }
       const ghost = listed.positions.find(
         (p) =>
           !preOpenIds.has(p.position_id) &&
@@ -1540,9 +1625,27 @@ export class CapitalBroker implements MasterBroker {
         sizes: [orderSize, input.size],
         excludeIds: preOpenIds,
       });
-      if (presenceGhost) {
+      if (!presenceGhost.list_ok) {
+        const detail = `capital_unconfirmed_list_unproven:${opened.detail}:${presenceGhost.detail || 'list_failed'}`;
+        ackFail(detail, { ack_status: 'TIMEOUT' });
+        logMasterError({
+          module: 'capital.placeOrder',
+          error_type: 'LIST_UNPROVEN',
+          message: detail,
+        });
+        return {
+          ok: false,
+          order_id: opened.deal_reference || null,
+          position_id: null,
+          fill_price: null,
+          fill_size: null,
+          detail,
+          paper: false,
+        };
+      }
+      if (presenceGhost.id) {
         const fail = await ackFailClose(
-          presenceGhost,
+          presenceGhost.id,
           opened.deal_reference || null,
           `capital_unconfirmed_fail_closed:${opened.detail}`
         );

@@ -2202,4 +2202,109 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(st.capital_venue_opens).toBe(1);
     expect(st.capital_venue_opens_proven).toBe(true);
   });
+
+  it('named reject with list failure returns list_unproven (not silent no-fill)', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    let listCalls = 0;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-listunp' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => {
+        listCalls += 1;
+        // Pre-open snapshot must succeed; post-create ghost hunt fails
+        if (listCalls === 1) return { ok: true, positions: [], detail: '0' };
+        return { ok: false, positions: [], detail: 'list_transport_down' };
+      },
+      create: async () => ({ ok: true, deal_reference: 'ref-listunp', detail: 'posted' }),
+      confirm: async () => ({
+        ok: false,
+        rejected: true,
+        reject_reason: 'MINIMUM_STOP_DISTANCE',
+        detail: 'Capital rejected: MINIMUM_STOP_DISTANCE',
+      }),
+      close: async () => ({ ok: true, detail: 'closed' }),
+    });
+    await broker.connect();
+    const place = await broker.placeOrder({
+      intent_id: 'intent-listunp',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: 4400,
+    });
+    expect(place.ok).toBe(false);
+    expect(place.detail).toMatch(/list_unproven/);
+    expect(place.position_id).toBeNull();
+  });
+
+  it('recover Capital SUCCESS ack still attach-or-fails when adopt list fails', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = mkdtempSync(join(tmpdir(), 'vs-ack-adopt-listfail-'));
+    clearTradeAckJournalForTest();
+    logTradeIntent({
+      command_id: 'cap-adopt-listfail',
+      intent_id: 'recover-adopt-listfail',
+      action: 'OPEN',
+      side: 'BUY',
+      volume: 0.1,
+      epic: 'GOLD',
+      sl: 4390,
+      tp: 4420,
+      reason: 'INTENT',
+    });
+    updateTradeAck('cap-adopt-listfail', {
+      ack_status: 'SUCCESS',
+      ticket: 'deal-adopt-listfail',
+      fill_price: 4410,
+      detail: 'RECOVER_LATE_FILL',
+    });
+
+    let modifyCalls = 0;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-adopt-lf' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({ ok: false, positions: [], detail: 'adopt_list_down' }),
+      create: async () => ({ ok: true, deal_reference: 'x', detail: 'ok' }),
+      confirm: async () => ({ ok: true, deal_id: 'x', detail: 'ok' }),
+      modify: async () => {
+        modifyCalls += 1;
+        return { ok: false, detail: 'modify_denied' };
+      },
+      close: async () => ({ ok: false, detail: 'close_denied' }),
+    });
+    await broker.connect();
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('LIVE');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.cfg = { ...DEFAULT_MASTER_CONFIG, mode: 'LIVE' };
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    masterRuntime.recovered = false;
+    const r = await masterRuntime.recover();
+    expect(r.positions).toBeGreaterThanOrEqual(1);
+    expect(masterRuntime.positions.get('deal-adopt-listfail')).toBeTruthy();
+    expect(modifyCalls).toBeGreaterThan(0);
+    expect(String(masterRuntime.broker_detail || '')).toMatch(
+      /ack_list_unproven|ack_attach_fail/
+    );
+    if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+    else process.env.MASTER_STATE_DIR = prev;
+  });
 });
