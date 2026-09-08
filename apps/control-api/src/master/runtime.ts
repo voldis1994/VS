@@ -209,6 +209,8 @@ class MasterRuntime {
   private capitalVenueOpens = 0;
   /** False when last Capital list failed — UI must not treat venue as flat. */
   private capitalVenueOpensProven = true;
+  /** False when Capital equity unread / preferred CFD missing — do not trust sizing equity. */
+  private capitalAccountProven = true;
   /** When false, manage exits still run but new entries are blocked (desk dual-brain guard). */
   entries_armed = true;
   entries_pause_reason: string | null = null;
@@ -1056,6 +1058,9 @@ class MasterRuntime {
       if (typeof acct.trade_allowed === 'boolean') {
         this.account.trade_allowed = acct.trade_allowed;
       }
+      if (broker instanceof CapitalBroker && !broker.paper) {
+        this.capitalAccountProven = true;
+      }
       const prevPeak = this.account.peak_equity;
       const prevDayStart = this.account.day_start_equity;
       this.account.peak_equity = Math.max(this.account.peak_equity, acct.equity);
@@ -1071,6 +1076,7 @@ class MasterRuntime {
     } else if (broker instanceof CapitalBroker && !broker.paper) {
       // Fail-closed: never size LIVE from stale paper £10k when Capital equity unread
       capitalAccountUnproven = true;
+      this.capitalAccountProven = false;
       this.broker_detail = `${this.broker_detail || ''};capital_account_unproven`.slice(
         -400
       );
@@ -2685,6 +2691,10 @@ class MasterRuntime {
       capital_credential_source: this.capitalCredentialSource(),
       capital_creds_available: capitalEnvPresent() || this.capitalDeskCredsSeen,
       capital_live_attached: this.capitalLiveAttached(),
+      capital_account_proven:
+        !(this.broker instanceof CapitalBroker) ||
+        this.broker.paper ||
+        this.capitalAccountProven,
       capital_venue_opens: this.capitalVenueOpens,
       capital_venue_opens_proven: this.capitalVenueOpensProven,
       last_decision: this.last_decision,
@@ -2700,7 +2710,18 @@ class MasterRuntime {
       sell_score: this.last_decision?.sell?.score ?? 0,
       regime: this.last_decision?.analysis.regime ?? 'UNKNOWN',
       market_state: this.last_decision?.analysis.market_state ?? '—',
-      account: this.account,
+      account:
+        this.broker instanceof CapitalBroker &&
+        !this.broker.paper &&
+        !this.capitalAccountProven
+          ? {
+              ...this.account,
+              // Do not advertise stale sizing equity while Capital account unproven
+              equity: 0,
+              available_to_deal: null,
+              trade_allowed: false,
+            }
+          : this.account,
       open_positions: this.positions.count(),
       performance: perf,
       monte_carlo: pnls.length ? monteCarlo(pnls, 200) : null,
@@ -2716,9 +2737,11 @@ class MasterRuntime {
           ? 'PERSIST_DEGRADED'
           : this.cfg.mode === 'LIVE'
             ? this.capitalLiveAttached()
-              ? this.running
-                ? 'LIVE_RUNNING'
-                : 'LIVE_ARMED'
+              ? !this.capitalAccountProven
+                ? 'LIVE_ACCOUNT_UNPROVEN'
+                : this.running
+                  ? 'LIVE_RUNNING'
+                  : 'LIVE_ARMED'
               : this.running
                 ? 'LIVE_NO_CAPITAL'
                 : 'LIVE_UNATTACHED'

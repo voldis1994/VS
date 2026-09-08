@@ -627,11 +627,16 @@ export async function fetchCapitalAccountEquity(
     profitLoss?: number | null;
     equity?: number | null;
   }) => capitalEquityFromAccountFields(a).equity;
-  const hit =
-    (pref && listed.accounts.find((a) => a.accountId === pref)) ||
-    listed.accounts.reduce((best, a) =>
+  // Fail-closed: never size from richest sibling when preferred CFD is missing
+  let hit = pref
+    ? listed.accounts.find((a) => a.accountId === pref)
+    : undefined;
+  if (pref && !hit) return null;
+  if (!hit) {
+    hit = listed.accounts.reduce((best, a) =>
       accountEquityScore(a) >= accountEquityScore(best) ? a : best
     );
+  }
   const scored = capitalEquityFromAccountFields(hit);
   const pl = Number(hit.profitLoss ?? 0);
   if (!(scored.equity > 0)) {

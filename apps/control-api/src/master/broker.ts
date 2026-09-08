@@ -1947,11 +1947,12 @@ export class CapitalBroker implements MasterBroker {
 
   /**
    * Partial close with unconfirmed deal: one reduced-size list can flake.
-   * Require consecutive lists showing size still below beforeSize (or flat).
+   * Require consecutive lists showing remaining ≤ before − wantClose (or flat).
    */
   private async proveReducedSizeDebounce(
     position_id: string,
     beforeSize: number,
+    wantClose: number,
     observationsAlready: number,
     lastRemaining: number,
     meta: {
@@ -1973,6 +1974,8 @@ export class CapitalBroker implements MasterBroker {
     const need = EMPTY_BROKER_GHOST_DEBOUNCE;
     let n = observationsAlready;
     let remaining: number | null = lastRemaining;
+    const targetMax =
+      beforeSize - Math.min(wantClose, beforeSize) + 1e-6;
     const delayMs =
       process.env.VITEST || process.env.MASTER_CONFIRM_FAST === 'true' ? 1 : 200;
     while (n < need) {
@@ -2007,10 +2010,18 @@ export class CapitalBroker implements MasterBroker {
           fill_pnl: meta.fill_pnl,
         };
       }
-      if (!(againUsable.size < beforeSize - 1e-9)) {
+      if (
+        !(
+          againUsable.size < beforeSize - 1e-9 &&
+          againUsable.size <= targetMax
+        )
+      ) {
         return {
           ok: false,
-          detail: `close_not_confirmed_size_debounce:${n}/${need}`,
+          detail:
+            againUsable.size < beforeSize - 1e-9
+              ? `close_partial_size_short:want=${wantClose} rem=${againUsable.size}`
+              : `close_not_confirmed_size_debounce:${n}/${need}`,
           deal_reference: meta.deal_reference,
           fill_price: meta.fill_price,
           fill_pnl: meta.fill_pnl,
@@ -2144,14 +2155,26 @@ export class CapitalBroker implements MasterBroker {
             fill_pnl,
           };
         }
-        const reduced =
+        const wantClose = Number(opts?.size);
+        const targetMax =
+          beforeSize != null
+            ? beforeSize - Math.min(wantClose, beforeSize) + 1e-6
+            : null;
+        const reducedEnough =
           beforeSize != null &&
           Number.isFinite(stillUsable.size) &&
-          stillUsable.size < beforeSize - 1e-9;
-        if (!reduced) {
+          stillUsable.size < beforeSize - 1e-9 &&
+          targetMax != null &&
+          stillUsable.size <= targetMax;
+        if (!reducedEnough) {
           return {
             ok: false,
-            detail: 'close_partial_not_confirmed_size_unchanged',
+            detail:
+              beforeSize != null &&
+              Number.isFinite(stillUsable.size) &&
+              stillUsable.size < beforeSize - 1e-9
+                ? `close_partial_size_short:want=${wantClose} rem=${stillUsable.size}`
+                : 'close_partial_not_confirmed_size_unchanged',
             deal_reference,
             fill_price,
             fill_pnl,
@@ -2162,6 +2185,7 @@ export class CapitalBroker implements MasterBroker {
           const proved = await this.proveReducedSizeDebounce(
             position_id,
             beforeSize,
+            wantClose,
             1,
             stillUsable.size,
             { deal_reference, fill_price, fill_pnl }

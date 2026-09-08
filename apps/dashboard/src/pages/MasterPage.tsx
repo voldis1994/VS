@@ -16,6 +16,7 @@ type MasterStatus = {
   capital_credential_source?: 'env' | 'desk' | null;
   capital_creds_available?: boolean;
   capital_live_attached?: boolean;
+  capital_account_proven?: boolean;
   capital_venue_opens?: number;
   capital_venue_opens_proven?: boolean;
   last_decision: { kind?: string } | null;
@@ -279,14 +280,22 @@ export function MasterPage() {
         { k: 'Last exit', v: status.last_exit_reason || '—' },
         {
           k: 'Equity',
-          v: status.account?.equity != null ? Number(status.account.equity).toFixed(2) : '—',
+          v:
+            status.capital_account_proven === false
+              ? 'UNPROVEN'
+              : status.account?.equity != null
+                ? Number(status.account.equity).toFixed(2)
+                : '—',
+          bad: status.capital_account_proven === false,
         },
         {
           k: 'Available',
           v:
-            status.account?.available_to_deal != null
-              ? Number(status.account.available_to_deal).toFixed(2)
-              : '—',
+            status.capital_account_proven === false
+              ? '—'
+              : status.account?.available_to_deal != null
+                ? Number(status.account.available_to_deal).toFixed(2)
+                : '—',
         },
         {
           k: 'Trade allowed',
@@ -298,6 +307,17 @@ export function MasterPage() {
                 : '—',
           bad: status.account?.trade_allowed === false,
           ok: status.account?.trade_allowed === true,
+        },
+        {
+          k: 'Account proven',
+          v:
+            status.capital_account_proven === false
+              ? 'NO'
+              : status.capital_account_proven === true
+                ? 'YES'
+                : '—',
+          bad: status.capital_account_proven === false,
+          ok: status.capital_account_proven === true,
         },
         {
           k: 'News',

@@ -1589,6 +1589,49 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(ok.remaining_size).toBeCloseTo(0.05, 6);
   });
 
+  it('partial close refuses under-reduction (flake shrink short of wantClose)', async () => {
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    let size = 0.5;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-short' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({
+        ok: true,
+        positions: [
+          {
+            deal_id: 'deal-short',
+            epic: 'GOLD',
+            direction: 'BUY',
+            size,
+            open_level: 4410,
+          },
+        ],
+      }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      confirm: async () => ({
+        ok: true,
+        deal_id: 'deal-short',
+        detail: 'ok',
+      }),
+      close: async () => {
+        // Tiny flake shrink — not the requested 0.2
+        size = 0.49;
+        return { ok: true, deal_reference: 'short-ref', detail: 'submitted' };
+      },
+    });
+    await broker.connect();
+    const bad = await broker.closePosition('deal-short', { size: 0.2 });
+    expect(bad.ok).toBe(false);
+    expect(bad.detail).toMatch(/close_partial_size_short/);
+  });
+
   it('partial close refuses when before-size snapshot unavailable', async () => {
     process.env.MASTER_CONFIRM_FAST = 'true';
     let closed = false;
@@ -2775,6 +2818,11 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     await masterRuntime.tick(bars, quote);
     expect(masterRuntime.account.trade_allowed).toBe(false);
     expect(String(masterRuntime.broker_detail || '')).toMatch(/capital_account_unproven/);
+    const st = masterRuntime.status();
+    expect(st.capital_account_proven).toBe(false);
+    expect(st.health).toBe('LIVE_ACCOUNT_UNPROVEN');
+    expect(st.account.equity).toBe(0);
+    expect(st.account.trade_allowed).toBe(false);
   });
 
   it('native trail MODIFY refuses gap-only proof when confirm timed out', async () => {

@@ -148,6 +148,72 @@ describe('capitalEquityFromAccountFields', () => {
   });
 });
 
+describe('fetchCapitalAccountEquity preferred CFD', () => {
+  it('returns null when preferred accountId is missing (never richest sibling)', async () => {
+    const { fetchCapitalAccountEquity } = await import('./capitalCom.js');
+    const session = {
+      currentAccountId: 'missing-cfd',
+      preferredAccountId: 'missing-cfd',
+      get: async () => ({
+        ok: true,
+        status: 200,
+        json: {
+          accounts: [
+            {
+              accountId: 'rich-sibling',
+              accountType: 'CFD',
+              balance: { balance: 50_000, available: 50_000, profitLoss: 0 },
+              currency: 'GBP',
+            },
+            {
+              accountId: 'small',
+              accountType: 'CFD',
+              balance: { balance: 1_000, available: 1_000, profitLoss: 0 },
+              currency: 'GBP',
+            },
+          ],
+        },
+        text: '',
+      }),
+    } as any;
+    const eq = await fetchCapitalAccountEquity(session, 'missing-cfd');
+    expect(eq).toBeNull();
+  });
+
+  it('uses preferred account when present', async () => {
+    const { fetchCapitalAccountEquity } = await import('./capitalCom.js');
+    const session = {
+      currentAccountId: 'pref',
+      preferredAccountId: 'pref',
+      get: async () => ({
+        ok: true,
+        status: 200,
+        json: {
+          accounts: [
+            {
+              accountId: 'rich-sibling',
+              accountType: 'CFD',
+              balance: { balance: 50_000, available: 50_000, profitLoss: 0 },
+              currency: 'GBP',
+            },
+            {
+              accountId: 'pref',
+              accountType: 'CFD',
+              balance: { balance: 2_000, available: 1_800, profitLoss: -50 },
+              currency: 'GBP',
+            },
+          ],
+        },
+        text: '',
+      }),
+    } as any;
+    const eq = await fetchCapitalAccountEquity(session, 'pref');
+    expect(eq).not.toBeNull();
+    expect(eq!.equity).toBe(1_950);
+    expect(eq!.detail).toMatch(/account=pref/);
+  });
+});
+
 describe('capitalComBaseUrl', () => {
   it('uses live host for live', () => {
     expect(capitalComBaseUrl('live')).toBe('https://api-capital.backend-capital.com');
