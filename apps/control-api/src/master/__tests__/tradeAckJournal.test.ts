@@ -138,8 +138,71 @@ describe('INTENT→ACK trade journal (Reader)', () => {
     expect(r.positions).toBeGreaterThanOrEqual(1);
     expect(masterRuntime.positions.get('777001')).toBeTruthy();
     expect(masterRuntime.positions.get('777001')!.entry).toBe(4405);
+    // Ticket not on broker — do not paint journal SL/TP as chart truth
+    expect(masterRuntime.positions.get('777001')!.stop_loss).toBeNull();
+    expect(masterRuntime.positions.get('777001')!.take_profit).toBeNull();
     // Idempotent
     await masterRuntime.recover();
     expect(masterRuntime.positions.count()).toBe(1);
   });
+
+  it('recover attach-or-fail proves journal SL/TP when ticket live naked', async () => {
+    const state = mkdtempSync(join(tmpdir(), 'vs-ack-attach-'));
+    process.env.MASTER_STATE_DIR = state;
+    clearTradeAckJournalForTest();
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-attach-rec-'));
+    const sim = new Mt4BridgeSimulator(root);
+    sim.setQuote(4400, 4400.4);
+    sim.start(30);
+    const ticket = sim.seedPosition({
+      ticket: 888777,
+      side: 'BUY',
+      lot: 0.05,
+      open: 4401,
+      sl: 0,
+      tp: 0,
+    });
+
+    logTradeIntent({
+      command_id: 'recattach1',
+      intent_id: 'recover-attach-1',
+      action: 'OPEN',
+      side: 'BUY',
+      volume: 0.05,
+      epic: 'XAUUSD',
+      sl: 4390,
+      tp: 4420,
+      reason: 'INTENT',
+    });
+    updateTradeAck('recattach1', {
+      ack_status: 'SUCCESS',
+      ticket: String(ticket),
+      fill_price: 4401,
+      detail: 'RECOVER_LATE_FILL',
+    });
+
+    masterRuntime.pipeline = new MasterPipeline('LIVE');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.cfg = { ...masterRuntime.cfg, mode: 'LIVE' };
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    masterRuntime.attachBroker(broker);
+    masterRuntime.recovered = false;
+    try {
+      const r = await masterRuntime.recover();
+      expect(r.positions).toBeGreaterThanOrEqual(1);
+      const pos = masterRuntime.positions.get(String(ticket));
+      expect(pos).toBeTruthy();
+      expect(pos!.stop_loss).toBe(4390);
+      expect(pos!.take_profit).toBe(4420);
+      const opens = await broker.listOpenPositions('XAUUSD');
+      const hit = opens.positions.find((p) => p.position_id === String(ticket));
+      expect(hit?.stop_level).toBe(4390);
+      expect(hit?.profit_level).toBe(4420);
+      expect(String(masterRuntime.broker_detail || '')).toMatch(/ack_attach_ok/);
+    } finally {
+      sim.stop();
+    }
+  });
+
 });

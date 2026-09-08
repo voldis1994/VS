@@ -1089,7 +1089,16 @@ export class CapitalBroker implements MasterBroker {
         : undefined;
       const alreadyProtected =
         cur0?.stop_level != null && Number.isFinite(cur0.stop_level);
-      if (!alreadyProtected) {
+      const wantTp =
+        input.profit_level != null &&
+        Number.isFinite(input.profit_level) &&
+        Number(input.profit_level) > 0
+          ? Number(input.profit_level)
+          : null;
+      const tpMissing =
+        wantTp != null &&
+        (cur0?.profit_level == null || !Number.isFinite(cur0.profit_level));
+      if (!alreadyProtected || tpMissing) {
         needAttach = true;
         const wantSl = Number(input.stop_level);
         let attached = false;
@@ -1100,8 +1109,8 @@ export class CapitalBroker implements MasterBroker {
           // Use modifyPosition so ACCEPTED-but-unchanged is rejected (VS-System)
           const mod = await this.modifyPosition({
             position_id,
-            stop_level: sl,
-            profit_level: input.profit_level,
+            stop_level: alreadyProtected ? cur0!.stop_level! : sl,
+            profit_level: wantTp ?? input.profit_level,
           });
           if (mod.ok) {
             attached = true;
@@ -1117,7 +1126,7 @@ export class CapitalBroker implements MasterBroker {
             position_id: null,
             fill_price: null,
             fill_size: null,
-            detail: 'CAPITAL_SL_ATTACH_FAILED',
+            detail: tpMissing ? 'CAPITAL_TP_ATTACH_FAILED' : 'CAPITAL_SL_ATTACH_FAILED',
             paper: false,
           };
         }
@@ -1275,14 +1284,19 @@ export class CapitalBroker implements MasterBroker {
     if (!pinned.ok) return { ok: false, detail: `account_pin:${pinned.detail}` };
 
     const wantSl = input.stop_level;
+    const wantTp = input.profit_level;
     const trailDist = input.stop_distance;
     const hasLevel = wantSl != null && Number.isFinite(wantSl);
+    const hasTp =
+      wantTp != null && Number.isFinite(wantTp) && Number(wantTp) > 0;
     const hasDist =
       trailDist != null && Number.isFinite(trailDist) && Number(trailDist) > 0;
     const needsSlProof = hasLevel || hasDist || input.trailing_stop === true;
+    const needsTpProof = hasTp;
 
-    // Snapshot SL before PUT — VS-System detects ACK-but-unchanged
+    // Snapshot SL/TP before PUT — VS-System detects ACK-but-unchanged
     let beforeSl: number | null = null;
+    let beforeTp: number | null = null;
     {
       const beforeList = await this.listOpenPositions();
       const before = beforeList.ok
@@ -1290,6 +1304,9 @@ export class CapitalBroker implements MasterBroker {
         : undefined;
       if (before?.stop_level != null && Number.isFinite(before.stop_level)) {
         beforeSl = Number(before.stop_level);
+      }
+      if (before?.profit_level != null && Number.isFinite(before.profit_level)) {
+        beforeTp = Number(before.profit_level);
       }
     }
 
@@ -1314,7 +1331,7 @@ export class CapitalBroker implements MasterBroker {
       }
     }
 
-    if (!needsSlProof) {
+    if (!needsSlProof && !needsTpProof) {
       return { ok: true, detail: res.detail || '', order_id: res.deal_reference };
     }
 
@@ -1322,9 +1339,14 @@ export class CapitalBroker implements MasterBroker {
       hasLevel && wantSl != null
         ? Math.max(0.05, Math.abs(wantSl) * 1e-5)
         : 0.05;
+    const tpTol =
+      hasTp && wantTp != null
+        ? Math.max(0.05, Math.abs(Number(wantTp)) * 1e-5)
+        : 0.05;
     const attempts =
       process.env.VITEST || process.env.MASTER_CONFIRM_FAST === 'true' ? 3 : 5;
     let gotSl: number | null = null;
+    let gotTp: number | null = null;
     let hitEpic: string | null = null;
     for (let attempt = 0; attempt < attempts; attempt++) {
       if (attempt > 0) {
@@ -1343,55 +1365,71 @@ export class CapitalBroker implements MasterBroker {
         : undefined;
       if (!hit) continue;
       hitEpic = hit.epic;
-      if (hit.stop_level == null || !Number.isFinite(hit.stop_level)) continue;
-      gotSl = Number(hit.stop_level);
-
-      if (hasLevel && wantSl != null) {
-        if (Math.abs(gotSl - wantSl) <= tolAbs) {
-          return {
-            ok: true,
-            detail: res.detail || `sl_verified=${gotSl}`,
-            order_id: res.deal_reference,
-          };
-        }
-        continue;
+      if (hit.stop_level != null && Number.isFinite(hit.stop_level)) {
+        gotSl = Number(hit.stop_level);
+      }
+      if (hit.profit_level != null && Number.isFinite(hit.profit_level)) {
+        gotTp = Number(hit.profit_level);
       }
 
-      // stopDistance / native trail: accept when SL moved or gap≈dist vs mark
-      const moved = beforeSl == null || Math.abs(gotSl - beforeSl) > tolAbs;
-      if (moved) {
-        return {
-          ok: true,
-          detail: res.detail || `sl_moved=${gotSl}`,
-          order_id: res.deal_reference,
-        };
-      }
-      if (hasDist && trailDist != null && hitEpic) {
-        const q = await this.getQuote(hitEpic);
-        if (q && Number.isFinite(q.mid)) {
-          const gap = Math.abs(q.mid - gotSl);
-          const gapOk =
-            gap <= Number(trailDist) * 1.6 + 0.05 &&
-            gap + 1e-9 >= Math.min(Number(trailDist), 0.45) * 0.5;
-          if (gapOk) {
-            return {
-              ok: true,
-              detail: res.detail || `sl_gap_ok=${gotSl}`,
-              order_id: res.deal_reference,
-            };
+      let slOk = !needsSlProof;
+      if (needsSlProof && hasLevel && wantSl != null && gotSl != null) {
+        slOk = Math.abs(gotSl - wantSl) <= tolAbs;
+      } else if (needsSlProof && !hasLevel && gotSl != null) {
+        // stopDistance / native trail: accept when SL moved or gap≈dist vs mark
+        const moved = beforeSl == null || Math.abs(gotSl - beforeSl) > tolAbs;
+        if (moved) {
+          slOk = true;
+        } else if (hasDist && trailDist != null && hitEpic) {
+          const q = await this.getQuote(hitEpic);
+          if (q && Number.isFinite(q.mid)) {
+            const gap = Math.abs(q.mid - gotSl);
+            slOk =
+              gap <= Number(trailDist) * 1.6 + 0.05 &&
+              gap + 1e-9 >= Math.min(Number(trailDist), 0.45) * 0.5;
           }
         }
       }
+
+      let tpOk = !needsTpProof;
+      if (needsTpProof && wantTp != null && gotTp != null) {
+        tpOk = Math.abs(gotTp - Number(wantTp)) <= tpTol;
+      }
+
+      if (slOk && tpOk) {
+        return {
+          ok: true,
+          detail:
+            res.detail ||
+            [
+              gotSl != null ? `sl_verified=${gotSl}` : '',
+              gotTp != null ? `tp_verified=${gotTp}` : '',
+            ]
+              .filter(Boolean)
+              .join(' '),
+          order_id: res.deal_reference,
+        };
+      }
     }
 
-    if (gotSl == null) {
+    if (needsTpProof && (gotTp == null || wantTp == null || Math.abs(Number(gotTp) - Number(wantTp)) > tpTol)) {
+      return {
+        ok: false,
+        detail:
+          gotTp == null
+            ? 'modify_tp_not_visible'
+            : `modify_tp_unverified: want=${wantTp} got=${gotTp}`,
+        order_id: res.deal_reference,
+      };
+    }
+    if (gotSl == null && needsSlProof) {
       return {
         ok: false,
         detail: 'modify_sl_not_visible',
         order_id: res.deal_reference,
       };
     }
-    if (hasLevel && wantSl != null) {
+    if (hasLevel && wantSl != null && needsSlProof) {
       return {
         ok: false,
         detail: `modify_sl_unverified: want=${wantSl} got=${gotSl}`,
@@ -1868,7 +1906,18 @@ export class Mt4FileBroker implements MasterBroker {
   /**
    * Wanted protective SL (+ optional TP) after OPEN — prove status levels,
    * else MODIFY+prove, else fail-close. Never treat SL-only proof as TP attached.
+   * Public for restart ack-adopt (same path as live placeOrder).
    */
+  async ensureProtectiveLevelsOrFail(input: {
+    position_id: string;
+    want_sl: number;
+    want_tp?: number | null;
+    order_id: string;
+    epic: string;
+  }): Promise<{ ok: true } | { ok: false; detail: string }> {
+    return this.ensureOpenStopOrFail(input);
+  }
+
   private async ensureOpenStopOrFail(input: {
     position_id: string;
     want_sl: number;

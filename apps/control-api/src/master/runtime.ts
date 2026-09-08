@@ -1526,7 +1526,12 @@ class MasterRuntime {
       const fromAck = this.broker.adoptOpenFromAckJournal(booked);
       let statusByTicket = new Map<
         string,
-        { opened_at?: string | null; open_level?: number | null }
+        {
+          opened_at?: string | null;
+          open_level?: number | null;
+          stop_level?: number | null;
+          profit_level?: number | null;
+        }
       >();
       if (fromAck.adopted.length) {
         try {
@@ -1535,7 +1540,12 @@ class MasterRuntime {
             statusByTicket = new Map(
               listed.positions.map((p) => [
                 p.position_id,
-                { opened_at: p.opened_at, open_level: p.open_level },
+                {
+                  opened_at: p.opened_at,
+                  open_level: p.open_level,
+                  stop_level: p.stop_level,
+                  profit_level: p.profit_level,
+                },
               ])
             );
           }
@@ -1543,6 +1553,8 @@ class MasterRuntime {
           /* adopt without broker open_time */
         }
       }
+      let attachFailed = 0;
+      let attachOk = 0;
       for (const row of fromAck.adopted) {
         if (this.positions.get(row.ticket)) continue;
         const status = statusByTicket.get(row.ticket);
@@ -1563,6 +1575,52 @@ class MasterRuntime {
         if (entry == null) continue;
         const recoverId = stableRecoverUuid(row.ticket);
         const openedAt = status?.opened_at ?? null;
+        const wantSl =
+          row.sl != null && Number.isFinite(row.sl) && Number(row.sl) > 0
+            ? Number(row.sl)
+            : null;
+        const wantTp =
+          row.tp != null && Number.isFinite(row.tp) && Number(row.tp) > 0
+            ? Number(row.tp)
+            : null;
+        // Ticket live on broker + journal wants SL → same attach-or-fail as live OPEN
+        // (soft safety_sl is not a substitute for intended levels / TP).
+        const onBroker = status != null;
+        if (onBroker && wantSl != null) {
+          const guard = await this.broker.ensureProtectiveLevelsOrFail({
+            position_id: row.ticket,
+            want_sl: wantSl,
+            want_tp: wantTp,
+            order_id: row.command_id,
+            epic: row.epic || this.epic,
+          });
+          if (!guard.ok) {
+            attachFailed += 1;
+            this.broker_detail = [
+              this.broker_detail,
+              `ack_attach_fail:${row.ticket}:${guard.detail}`,
+            ]
+              .filter(Boolean)
+              .join(';')
+              .slice(0, 400);
+            continue;
+          }
+          attachOk += 1;
+        }
+        // Only seed local SL/TP when broker already shows them (or attach just proved).
+        // Never paint journal intent as chart truth on a naked/missing ticket.
+        const provedSl =
+          onBroker && wantSl != null
+            ? wantSl
+            : status?.stop_level != null && Number.isFinite(status.stop_level)
+              ? Number(status.stop_level)
+              : null;
+        const provedTp =
+          onBroker && wantTp != null && wantSl != null
+            ? wantTp
+            : status?.profit_level != null && Number.isFinite(status.profit_level)
+              ? Number(status.profit_level)
+              : null;
         this.positions.register({
           position_id: row.ticket,
           opportunity_id: recoverId,
@@ -1571,8 +1629,8 @@ class MasterRuntime {
           side: row.side,
           size: row.volume,
           entry,
-          stop_loss: row.sl,
-          take_profit: row.tp,
+          stop_loss: provedSl,
+          take_profit: provedTp,
           entry_at: openedAt,
           decision: {
             decision_id: recoverId,
@@ -1611,6 +1669,8 @@ class MasterRuntime {
         this.broker_detail = [
           this.broker_detail,
           `ack_adopt:${fromAck.adopted.length}`,
+          attachOk ? `ack_attach_ok:${attachOk}` : '',
+          attachFailed ? `ack_attach_fail_n:${attachFailed}` : '',
         ]
           .filter(Boolean)
           .join(';');

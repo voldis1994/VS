@@ -83,6 +83,34 @@ export class Mt4BridgeSimulator {
     return [...this.positions.values()];
   }
 
+  /** Test helper: put a live ticket in status without OPEN cmd/ack. */
+  seedPosition(input: {
+    ticket?: number;
+    side?: 'BUY' | 'SELL';
+    lot?: number;
+    open?: number;
+    sl?: number;
+    tp?: number;
+    symbol?: string;
+  }): number {
+    const ticket = input.ticket ?? ++this.ticketSeq;
+    this.positions.set(ticket, {
+      ticket,
+      symbol: input.symbol || 'XAUUSD',
+      side: input.side || 'BUY',
+      lot: input.lot ?? 0.05,
+      open: input.open ?? this.ask,
+      sl: input.sl ?? 0,
+      tp: input.tp ?? 0,
+      profit: 0,
+      open_time: Math.floor(Date.now() / 1000),
+    });
+    this.markProfits();
+    this.writeMarket();
+    this.writeStatus();
+    return ticket;
+  }
+
   private markProfits() {
     const mid = (this.bid + this.ask) / 2;
     for (const p of this.positions.values()) {

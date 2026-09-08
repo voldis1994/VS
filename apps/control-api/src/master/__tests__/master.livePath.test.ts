@@ -609,6 +609,73 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(mod.detail).toMatch(/modify_sl_unverified/);
   });
 
+  it('modifyPosition rejects TP-only ACK when profit_level never moved', async () => {
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number;
+        stop_level?: number | null;
+        profit_level?: number | null;
+      }
+    >();
+    positions.set('d1', {
+      deal_id: 'd1',
+      epic: 'GOLD',
+      direction: 'BUY',
+      size: 0.1,
+      open_level: 4410,
+      stop_level: 4400,
+      profit_level: null,
+    });
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({
+        ok: true,
+        positions: [...positions.values()].map((p) => ({
+          deal_id: p.deal_id,
+          epic: p.epic,
+          direction: p.direction,
+          size: p.size,
+          open_level: p.open_level,
+          stop_level: p.stop_level ?? null,
+          profit_level: p.profit_level ?? null,
+        })),
+        detail: '',
+      }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({ ok: false, detail: 'unused' }),
+      modify: async () => ({
+        ok: true,
+        deal_reference: 'mod-tp-1',
+        detail: 'accepted_http',
+      }),
+      confirm: async () => ({
+        ok: true,
+        deal_id: 'mod-deal',
+        detail: 'ACCEPTED',
+      }),
+    });
+    await broker.connect();
+    const mod = await broker.modifyPosition({
+      position_id: 'd1',
+      profit_level: 4430,
+    });
+    expect(mod.ok).toBe(false);
+    expect(mod.detail).toMatch(/modify_tp_(not_visible|unverified)/);
+  });
+
   it('empty REJECTED confirm match-accepts recent same-size open', async () => {
     process.env.MASTER_LIVE_ENABLED = 'true';
     const positions = new Map<
