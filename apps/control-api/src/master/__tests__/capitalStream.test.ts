@@ -79,6 +79,33 @@ describe('Capital stream parse', () => {
     ).toBeNull();
   });
 
+  it('refuses one-sided stream quotes (no forged 0-spread mid)', () => {
+    expect(
+      parseCapitalStreamQuote(
+        JSON.stringify({
+          destination: 'quote',
+          payload: {
+            epic: 'GOLD',
+            bid: 4400.1,
+            timestamp: 1660297190627,
+          },
+        })
+      )
+    ).toBeNull();
+    expect(
+      parseCapitalStreamQuote(
+        JSON.stringify({
+          destination: 'quote',
+          payload: {
+            epic: 'GOLD',
+            ofr: 4400.4,
+            timestamp: 1660297190627,
+          },
+        })
+      )
+    ).toBeNull();
+  });
+
   it('picks demo vs live stream host', () => {
     expect(capitalStreamEndpoint('https://demo-api-capital.backend-capital.com')).toContain(
       'demo-streaming'

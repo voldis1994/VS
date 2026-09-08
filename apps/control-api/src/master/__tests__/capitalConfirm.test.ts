@@ -71,6 +71,19 @@ describe('VS MASTER capital confirm (VS-System-)', () => {
     expect(isCapitalConfirmTerminal(c)).toBe(true);
   });
 
+  it('dealId alone with empty status is not ACCEPTED (fail closed)', () => {
+    const c = parseCapitalConfirm({
+      dealId: 'deal-ambiguous',
+      level: 4410.5,
+    });
+    expect(c.dealId).toBe('deal-ambiguous');
+    expect(c.dealStatus).toBeUndefined();
+    expect(c.status).toBeUndefined();
+    expect(isCapitalConfirmAccepted(c)).toBe(false);
+    expect(isCapitalConfirmTerminal(c)).toBe(false);
+    expect(isCapitalConfirmClosedGone(c)).toBe(false);
+  });
+
   it('DELETED/CLOSED are closed-gone for CLOSE, not OPEN accept', () => {
     const deleted = parseCapitalConfirm({
       dealId: 'deal-closed',

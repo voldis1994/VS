@@ -37,8 +37,17 @@ export function parseCapitalStreamQuote(raw: string): CapitalStreamQuote | null 
   ) {
     return null;
   }
-  const bidN = bid != null && Number.isFinite(bid) ? bid : (ofr as number);
-  const ofrN = ofr != null && Number.isFinite(ofr) ? ofr : (bid as number);
+  // One-sided quotes forge 0-spread mid — refuse so REST two-sided can win
+  if (
+    bid == null ||
+    !Number.isFinite(bid) ||
+    ofr == null ||
+    !Number.isFinite(ofr)
+  ) {
+    return null;
+  }
+  const bidN = bid;
+  const ofrN = ofr;
   // Venue payload.timestamp — never forge Date.now() (hides stale stream marks)
   const venueTs =
     msg.payload.timestamp ?? msg.payload.updateTime ?? msg.payload.update_time;

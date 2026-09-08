@@ -116,7 +116,7 @@ export function isCapitalConfirmAccepted(c: CapitalConfirm): boolean {
   if (ds === 'ACCEPTED') return true;
   if (st === 'OPEN' || st === 'ACCEPTED') return true;
   // DELETED/CLOSED/CANCELLED are NOT open/modify success — see isCapitalConfirmClosedGone
-  if (!ds && !st) return true;
+  // dealId alone with empty status is ambiguous — keep polling / fail closed
   return false;
 }
 
