@@ -816,6 +816,70 @@ describe('VS MASTER MT4 file bridge', () => {
     }
   });
 
+  it('MODIFY SL-only preserves chart TP (does not wipe tp to 0)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-preserve-tp-'));
+    const sim = new Mt4BridgeSimulator(root);
+    sim.setQuote(4400, 4400.4);
+    sim.start(30);
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    try {
+      const placed = await broker.placeOrder({
+        intent_id: 'preservetpintent0000000001',
+        epic: 'XAUUSD',
+        side: 'BUY',
+        size: 0.03,
+        stop_level: 4390,
+        profit_level: 4420,
+      });
+      expect(placed.ok).toBe(true);
+      const mod = await broker.modifyPosition({
+        position_id: placed.position_id!,
+        stop_level: 4395,
+        // profit_level intentionally omitted — must preserve 4420
+      });
+      expect(mod.ok).toBe(true);
+      // Sim deletes cmd_ after ACK — prove via live status (chart TP must survive)
+      const opens = await broker.listOpenPositions('XAUUSD');
+      const hit = opens.positions.find((p) => p.position_id === placed.position_id);
+      expect(hit?.stop_level).toBe(4395);
+      expect(hit?.profit_level).toBe(4420);
+    } finally {
+      sim.stop();
+    }
+  });
+
+  it('MODIFY TP-only preserves chart SL', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-preserve-sl-'));
+    const sim = new Mt4BridgeSimulator(root);
+    sim.setQuote(4400, 4400.4);
+    sim.start(30);
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    try {
+      const placed = await broker.placeOrder({
+        intent_id: 'preserveslintent0000000001',
+        epic: 'XAUUSD',
+        side: 'BUY',
+        size: 0.03,
+        stop_level: 4390,
+        profit_level: 4420,
+      });
+      expect(placed.ok).toBe(true);
+      const mod = await broker.modifyPosition({
+        position_id: placed.position_id!,
+        profit_level: 4430,
+      });
+      expect(mod.ok).toBe(true);
+      const opens = await broker.listOpenPositions('XAUUSD');
+      const hit = opens.positions.find((p) => p.position_id === placed.position_id);
+      expect(hit?.stop_level).toBe(4390);
+      expect(hit?.profit_level).toBe(4430);
+    } finally {
+      sim.stop();
+    }
+  });
+
   it('OPEN attach-or-fail closes when protective SL cannot be proven', async () => {
     const root = mkdtempSync(join(tmpdir(), 'vs-mt4-slattach-'));
     const sim = new Mt4BridgeSimulator(root);

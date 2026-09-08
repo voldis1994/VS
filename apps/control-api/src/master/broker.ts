@@ -2399,15 +2399,37 @@ export class Mt4FileBroker implements MasterBroker {
     if (this.hasPendingCommand(['OPEN', 'CLOSE', 'MODIFY'])) {
       return { ok: false, detail: 'mt4_pending_control_command' };
     }
+    // EA OrderModify always writes both SL and TP. Omitted legs must be filled from
+    // live status — defaulting missing tp/sl to 0 wipes chart TP on SL-only trails.
+    let resolvedSl = input.stop_level;
+    let resolvedTp = input.profit_level;
+    const needSl = resolvedSl == null;
+    const needTp = resolvedTp == null;
+    if (needSl || needTp) {
+      const listed = await this.listOpenPositions();
+      const cur = listed.ok
+        ? listed.positions.find((p) => p.position_id === String(input.position_id))
+        : undefined;
+      if (!cur) {
+        return {
+          ok: false,
+          detail: listed.ok
+            ? 'mt4_modify_position_not_found'
+            : `mt4_modify_preserve_levels_unavailable:${listed.detail || 'status'}`,
+        };
+      }
+      if (needSl) resolvedSl = cur.stop_level ?? undefined;
+      if (needTp) resolvedTp = cur.profit_level ?? undefined;
+    }
     const id = randomUUID().slice(0, 12);
-    const slRounded = this.roundPrice(input.stop_level ?? null);
-    const tpRounded = this.roundPrice(input.profit_level ?? null);
+    const slRounded = this.roundPrice(resolvedSl ?? null);
+    const tpRounded = this.roundPrice(resolvedTp ?? null);
     const payload = {
       id,
       action: 'MODIFY',
       ticket: Number(input.position_id),
-      sl: slRounded ?? input.stop_level ?? 0,
-      tp: tpRounded ?? input.profit_level ?? 0,
+      sl: slRounded ?? resolvedSl ?? 0,
+      tp: tpRounded ?? resolvedTp ?? 0,
       reason: 'VS_MASTER',
     };
     logTradeIntent({
@@ -2418,8 +2440,8 @@ export class Mt4FileBroker implements MasterBroker {
       volume: 0,
       epic: '',
       ticket: String(input.position_id),
-      sl: slRounded ?? input.stop_level ?? null,
-      tp: tpRounded ?? input.profit_level ?? null,
+      sl: slRounded ?? resolvedSl ?? null,
+      tp: tpRounded ?? resolvedTp ?? null,
       reason: 'INTENT',
     });
     this.writeCommandAtomic(id, payload);
