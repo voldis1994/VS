@@ -98,4 +98,32 @@ describe('multi-slice journal recover → Fees KPI', () => {
     // merge helper sanity
     expect(mergeOutcomeSlices(a, b).pnl).toBeCloseTo(3, 8);
   });
+
+  it('mergeOutcomeSlices fails-closed when any slice is unproven', () => {
+    const proven: TradeOutcome = {
+      position_id: 'p',
+      side: 'BUY',
+      entry: 100,
+      exit: 101,
+      volume: 1,
+      pnl: -5,
+      fees: 0.1,
+      slippage: 0,
+      mae: 1,
+      mfe: 0,
+      r_multiple: -1,
+      hold_ms: 1000,
+      exit_reason: 'PARTIAL',
+      pnl_proven: true,
+    };
+    const unproven: TradeOutcome = {
+      ...proven,
+      pnl: 0,
+      fees: 0,
+      exit_reason: 'capital_close_pnl_unproven',
+      pnl_proven: false,
+    };
+    expect(mergeOutcomeSlices(proven, unproven).pnl_proven).toBe(false);
+    expect(mergeOutcomeSlices(unproven, proven).pnl_proven).toBe(false);
+  });
 });

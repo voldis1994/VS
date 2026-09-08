@@ -51,6 +51,9 @@ describe('MASTER Capital epic + status venue', () => {
     expect(live.persist_ok).toBe(false);
     expect(live.account.day_start_equity).toBe(0);
     expect(live.account.peak_equity).toBe(0);
+    expect(live.account.equity).toBe(0);
+    expect(live.account.trade_allowed).toBe(false);
+    expect(live.capital_venue_opens_proven).toBe(false);
   });
 
   it('Capital attach clears paper day_start; first equity proves reseed', async () => {

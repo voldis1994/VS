@@ -3983,6 +3983,7 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     masterRuntime.running = true;
     // Prove account so UNPROVEN does not mask quote stale
     (masterRuntime as any).capitalAccountProven = true;
+    (masterRuntime as any).capitalVenueOpensProven = true;
     masterRuntime.last_quote = {
       bid: 4410,
       ask: 4410.4,
@@ -4041,6 +4042,7 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     masterRuntime.account = { ...account };
     masterRuntime.running = false;
     (masterRuntime as any).capitalAccountProven = true;
+    (masterRuntime as any).capitalVenueOpensProven = true;
     masterRuntime.last_quote = {
       bid: 4410,
       ask: 4410.4,
@@ -4074,7 +4076,27 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     writeFileSync(
       join(dir, 'master_state.json'),
       JSON.stringify({
-        opportunities: [],
+        opportunities: [
+          {
+            id: '00000000-0000-4000-8000-00000000c001',
+            ts: today,
+            mode: 'LIVE',
+            epic: 'GOLD',
+            decision: {
+              decision_id: 'd-cap-eq',
+              kind: 'BUY',
+              side: 'BUY',
+              score: 0.9,
+              block_reason: null,
+              buy: null,
+              sell: null,
+              analysis: { atr: 2, volatility: 0.001, regime: 'TREND', market_state: 't' },
+              expectancy: null,
+            },
+            risk: { allowed: true, volume: 0.1, risk_amount: 10, reasons: [] },
+            executed: true,
+          },
+        ],
         positions: [],
         intents: [],
         outcomes: [
@@ -4155,6 +4177,229 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(masterRuntime.account.peak_equity).toBe(50_000);
     expect(masterRuntime.account.daily_pnl).toBe(250);
     setPersistClient(null);
+  });
+
+  it('recover Capital LIVE skips paper journal PnL and unproven closes', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const { writeFileSync } = await import('fs');
+    const { installFilePersist } = await import('../filePersist.js');
+    const { setPersistClient } = await import('../persist.js');
+    const dir = process.env.MASTER_STATE_DIR!;
+    const today = new Date().toISOString();
+    const mkOpp = (id: string, mode: 'PAPER' | 'LIVE') => ({
+      id,
+      ts: today,
+      mode,
+      epic: 'GOLD',
+      decision: {
+        decision_id: `d-${id}`,
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.9,
+        block_reason: null,
+        buy: null,
+        sell: null,
+        analysis: { atr: 2, volatility: 0.001, regime: 'TREND', market_state: 't' },
+        expectancy: null,
+      },
+      risk: { allowed: true, volume: 0.1, risk_amount: 10, reasons: [] },
+      executed: true,
+    });
+    writeFileSync(
+      join(dir, 'master_state.json'),
+      JSON.stringify({
+        opportunities: [
+          mkOpp('00000000-0000-4000-8000-00000000p001', 'PAPER'),
+          mkOpp('00000000-0000-4000-8000-00000000l001', 'LIVE'),
+          mkOpp('00000000-0000-4000-8000-00000000l002', 'LIVE'),
+        ],
+        positions: [],
+        intents: [],
+        outcomes: [
+          {
+            opportunity_id: '00000000-0000-4000-8000-00000000p001',
+            created_at: today,
+            outcome: {
+              position_id: 'paper-1',
+              side: 'BUY',
+              entry: 1,
+              exit: 2,
+              volume: 1,
+              pnl: -200,
+              fees: 0,
+              slippage: 0,
+              mae: 0,
+              mfe: 0,
+              r_multiple: -1,
+              hold_ms: 1,
+              exit_reason: 'STOP',
+            },
+          },
+          {
+            opportunity_id: '00000000-0000-4000-8000-00000000l001',
+            created_at: today,
+            outcome: {
+              position_id: 'live-loss',
+              side: 'BUY',
+              entry: 1,
+              exit: 2,
+              volume: 1,
+              pnl: -50,
+              fees: 0,
+              slippage: 0,
+              mae: 0,
+              mfe: 0,
+              r_multiple: -1,
+              hold_ms: 1,
+              exit_reason: 'STOP',
+              pnl_proven: true,
+            },
+          },
+          {
+            opportunity_id: '00000000-0000-4000-8000-00000000l002',
+            created_at: today,
+            outcome: {
+              position_id: 'live-unproven',
+              side: 'BUY',
+              entry: 1,
+              exit: 2,
+              volume: 1,
+              pnl: 0,
+              fees: 0,
+              slippage: 0,
+              mae: 0,
+              mfe: 0,
+              r_multiple: 0,
+              hold_ms: 1,
+              exit_reason: 'capital_close_pnl_unproven',
+              pnl_proven: false,
+            },
+          },
+        ],
+      })
+    );
+    installFilePersist(dir);
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-pnl-filter' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      account: async () => ({ equity: 50_000, balance: 50_000, currency: 'GBP' }),
+      list: async () => ({ ok: true, positions: [], detail: '0' }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({ ok: false, detail: 'unused' }),
+    });
+    await broker.connect();
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('LIVE');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    masterRuntime.cfg = { ...DEFAULT_MASTER_CONFIG, mode: 'LIVE' };
+    masterRuntime.account = {
+      ...account,
+      equity: 50_000,
+      balance: 50_000,
+      peak_equity: 50_000,
+      day_start_equity: 50_000,
+      daily_pnl: -999,
+      daily_pnl_day: today.slice(0, 10),
+      consecutive_losses: 0,
+    };
+    (masterRuntime as any).capitalAccountProven = true;
+    (masterRuntime as any).capitalDayGatesSeeded = true;
+    masterRuntime.recovered = false;
+    await masterRuntime.recover();
+    // Paper −200 ignored; unproven 0 skipped (does not clear streak); proven −50 counts
+    expect(masterRuntime.account.daily_pnl).toBe(-50);
+    expect(masterRuntime.account.consecutive_losses).toBe(1);
+    setPersistClient(null);
+  });
+
+  it('status demotes to LIVE_VENUE_UNPROVEN when list proof missing', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-venue-u' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+        update_time: new Date().toISOString(),
+      }),
+      account: async () => ({ equity: 12_000, balance: 12_000, currency: 'GBP' }),
+      list: async () => ({ ok: false, positions: [], detail: 'list_fail' }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({ ok: false, detail: 'unused' }),
+    });
+    await broker.connect();
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('LIVE');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    masterRuntime.cfg = { ...DEFAULT_MASTER_CONFIG, mode: 'LIVE' };
+    masterRuntime.running = true;
+    masterRuntime.persist_ok = true;
+    (masterRuntime as any).capitalAccountProven = true;
+    (masterRuntime as any).capitalVenueOpensProven = false;
+    masterRuntime.last_quote = {
+      bid: 4410,
+      ask: 4410.4,
+      mid: 4410.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    };
+    const st = masterRuntime.status();
+    expect(st.health).toBe('LIVE_VENUE_UNPROVEN');
+    expect(st.capital_venue_opens_proven).toBe(false);
+  });
+
+  it('Capital attach clears paper equity and trade_allowed before prove', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    masterRuntime.stop();
+    masterRuntime.ensurePaperBroker();
+    masterRuntime.account = {
+      ...account,
+      equity: 10_000,
+      balance: 10_000,
+      daily_pnl: -150,
+      consecutive_losses: 2,
+      trade_allowed: true,
+    };
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-attach-clear' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      account: async () => ({ equity: 50_000, balance: 50_000, currency: 'GBP' }),
+      list: async () => ({ ok: true, positions: [], detail: '0' }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({ ok: false, detail: 'unused' }),
+    });
+    await broker.connect();
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    expect(masterRuntime.account.equity).toBe(0);
+    expect(masterRuntime.account.balance).toBe(0);
+    expect(masterRuntime.account.daily_pnl).toBe(0);
+    expect(masterRuntime.account.consecutive_losses).toBe(0);
+    expect(masterRuntime.account.trade_allowed).toBe(false);
+    expect(masterRuntime.status().health).toBe('LIVE_ACCOUNT_UNPROVEN');
+    expect(masterRuntime.status().capital_venue_opens_proven).toBe(false);
   });
 
   it('status floating_pnl is null when Capital LIVE opens lack broker UPL', async () => {

@@ -113,5 +113,13 @@ export function mergeOutcomeSlices(a: TradeOutcome, b: TradeOutcome): TradeOutco
     r_multiple: Number(b.r_multiple) || Number(a.r_multiple) || 0,
     hold_ms: Math.max(Number(a.hold_ms) || 0, Number(b.hold_ms) || 0),
     exit_reason: [a.exit_reason, b.exit_reason].filter(Boolean).join('|').slice(0, 200),
+    // Any unproven slice fails-closed the merge (omit when both legacy/undefined)
+    ...(a.pnl_proven === false || b.pnl_proven === false
+      ? { pnl_proven: false as const }
+      : a.pnl_proven === true && b.pnl_proven === true
+        ? { pnl_proven: true as const }
+        : a.pnl_proven === true || b.pnl_proven === true
+          ? { pnl_proven: true as const }
+          : {}),
   };
 }

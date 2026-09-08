@@ -306,6 +306,12 @@ export async function loadJournalHistory(limit = 500): Promise<JournalHistory> {
         r_multiple: Number(r.r_multiple) || 0,
         hold_ms: Number(r.hold_ms) || 0,
         exit_reason: String(r.exit_reason || ''),
+        // Memory/file may stamp pnl_proven; Postgres column absent → undefined (legacy proven)
+        ...(r.pnl_proven === false
+          ? { pnl_proven: false as const }
+          : r.pnl_proven === true
+            ? { pnl_proven: true as const }
+            : {}),
       } as TradeOutcome,
     }));
     // Join ALL outcome slices onto opportunities so multi-TP / external partials
@@ -391,6 +397,16 @@ export class MemoryPersist implements PersistClient {
       if (hit) {
         hit.executed = true;
         hit.payload = { ...(hit.payload || {}), ...patch };
+      }
+      // Round-trip pnl_proven onto the latest outcome row (Postgres has no column)
+      const outcome = (patch as { outcome?: TradeOutcome }).outcome;
+      if (outcome && id != null) {
+        const outs = this.outcomes.filter((o) => String(o.opportunity_id) === String(id));
+        const last = outs[outs.length - 1];
+        if (last) {
+          if (outcome.pnl_proven === false) last.pnl_proven = false;
+          else if (outcome.pnl_proven === true) last.pnl_proven = true;
+        }
       }
       return { rows: [] };
     }

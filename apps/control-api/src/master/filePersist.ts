@@ -103,6 +103,13 @@ export class FilePersist implements PersistClient {
         r_multiple: o.outcome.r_multiple,
         hold_ms: o.outcome.hold_ms,
         exit_reason: o.outcome.exit_reason,
+        // Survive restart — recover daily_pnl/streak must skip unproven Capital closes
+        pnl_proven:
+          o.outcome.pnl_proven === false
+            ? false
+            : o.outcome.pnl_proven === true
+              ? true
+              : undefined,
         setup_key: o.setup_key ?? null,
         // Preserve disk timestamp; missing → epoch so recover never counts as "today"
         created_at: o.created_at || '1970-01-01T00:00:00.000Z',
@@ -145,6 +152,11 @@ export class FilePersist implements PersistClient {
           r_multiple: Number(o.r_multiple) || 0,
           hold_ms: Number(o.hold_ms) || 0,
           exit_reason: String(o.exit_reason || ''),
+          ...(o.pnl_proven === false
+            ? { pnl_proven: false as const }
+            : o.pnl_proven === true
+              ? { pnl_proven: true as const }
+              : {}),
         },
       })),
       positions: (this.mem.positions || []).map((p: any) => ({

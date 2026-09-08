@@ -214,6 +214,7 @@ export function MasterPage() {
     status?.health === 'LIVE_UNATTACHED' ||
     status?.health === 'LIVE_ACCOUNT_UNPROVEN' ||
     status?.health === 'LIVE_QUOTE_STALE' ||
+    status?.health === 'LIVE_VENUE_UNPROVEN' ||
     status?.persist_ok === false;
   const quoteStale =
     status?.quote?.stale === true ||
@@ -336,21 +337,32 @@ export function MasterPage() {
         },
         {
           k: 'Daily PnL',
-          v: status.account?.daily_pnl != null ? Number(status.account.daily_pnl).toFixed(2) : '—',
+          v:
+            status.capital_account_proven === false
+              ? '—'
+              : status.account?.daily_pnl != null
+                ? Number(status.account.daily_pnl).toFixed(2)
+                : '—',
         },
         {
           k: 'Day start eq',
           v:
-            status.account?.day_start_equity != null
-              ? Number(status.account.day_start_equity).toFixed(2)
-              : '—',
+            status.capital_account_proven === false
+              ? 'UNPROVEN'
+              : status.account?.day_start_equity != null
+                ? Number(status.account.day_start_equity).toFixed(2)
+                : '—',
+          bad: status.capital_account_proven === false,
         },
         {
           k: 'Peak eq',
           v:
-            status.account?.peak_equity != null
-              ? Number(status.account.peak_equity).toFixed(2)
-              : '—',
+            status.capital_account_proven === false
+              ? 'UNPROVEN'
+              : status.account?.peak_equity != null
+                ? Number(status.account.peak_equity).toFixed(2)
+                : '—',
+          bad: status.capital_account_proven === false,
         },
         {
           k: 'Reject cool',

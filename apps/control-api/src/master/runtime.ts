@@ -729,6 +729,13 @@ class MasterRuntime {
       });
       if (priced.pnl_proven) {
         this.account.daily_pnl += outcome.pnl;
+        if (outcome.pnl < 0) {
+          this.account.consecutive_losses += 1;
+          this.last_loss_ms = Date.now();
+          this.persistRuntimeGates();
+        } else {
+          this.account.consecutive_losses = 0;
+        }
       }
       const sk = ghost.decision?.side
         ? setupKey(ghost.decision.analysis, ghost.decision.side)
@@ -829,6 +836,13 @@ class MasterRuntime {
       });
       if (priced.pnl_proven) {
         this.account.daily_pnl += outcome.pnl;
+        if (outcome.pnl < 0) {
+          this.account.consecutive_losses += 1;
+          this.last_loss_ms = Date.now();
+          this.persistRuntimeGates();
+        } else {
+          this.account.consecutive_losses = 0;
+        }
       }
       const sk = partial.decision?.side
         ? setupKey(partial.decision.analysis, partial.decision.side)
@@ -920,9 +934,17 @@ class MasterRuntime {
       if (!broker.paper) {
         this.capitalAccountProven = false;
         this.capitalDayGatesSeeded = false;
-        // Drop paper £10k day/peak so daily-loss cannot fail-open against Capital
+        this.capitalVenueOpens = 0;
+        this.capitalVenueOpensProven = false;
+        // Drop paper £10k sizing / day gates / journal-poisoned daily money
+        this.account.equity = 0;
+        this.account.balance = 0;
         this.account.day_start_equity = 0;
         this.account.peak_equity = 0;
+        this.account.daily_pnl = 0;
+        this.account.consecutive_losses = 0;
+        this.account.available_to_deal = null;
+        this.account.trade_allowed = false;
       }
     } else {
       this.capitalDayGatesSeeded = false;
@@ -1306,6 +1328,15 @@ class MasterRuntime {
     // Journal confirmed ghosts/orphans even when other tickets are still in miss-debounce.
     if (!sync.skipped) {
       this.applySyncJournal(sync, quote);
+    }
+    // Capital LIVE: successful tick list proves venue open-count; list fail demotes health
+    if (broker instanceof CapitalBroker && !broker.paper) {
+      if (sync.skipped) {
+        this.capitalVenueOpensProven = false;
+      } else {
+        this.capitalVenueOpensProven = true;
+        this.capitalVenueOpens = sync.broker_count;
+      }
     }
 
     this.account.open_positions = this.positions.count();
@@ -2032,6 +2063,11 @@ class MasterRuntime {
     const today = this.account.daily_pnl_day!;
     let pnlToday = 0;
     let pnlAll = 0;
+    const capitalAttached =
+      this.broker instanceof CapitalBroker && !this.broker.paper;
+    const oppMode = new Map(
+      hist.opportunities.map((o) => [String(o.id), String(o.mode || '')])
+    );
     // Sort ASC by created_at — file persist may be DESC after reverse; streak needs newest-last
     const outcomesAsc = [...hist.outcomes].sort((a, b) => {
       const ta = Date.parse(String(a.created_at || '')) || 0;
@@ -2039,6 +2075,12 @@ class MasterRuntime {
       return ta - tb;
     });
     for (const o of outcomesAsc) {
+      // Unproven Capital closes must not move day gates / invent equity
+      if (o.outcome.pnl_proven === false) continue;
+      // Capital LIVE: never import PAPER journal money into venue day gates
+      if (capitalAttached && oppMode.get(String(o.opportunity_id)) !== 'LIVE') {
+        continue;
+      }
       pnlAll += o.outcome.pnl;
       const day = String(o.created_at || '').slice(0, 10);
       // Only today's outcomes — never treat missing/epoch created_at as today
@@ -2047,7 +2089,12 @@ class MasterRuntime {
     // Trailing loss streak from newest (Check- consecutive_losses)
     let losses = 0;
     for (let i = outcomesAsc.length - 1; i >= 0; i--) {
-      if (outcomesAsc[i]!.outcome.pnl < 0) losses += 1;
+      const row = outcomesAsc[i]!;
+      if (row.outcome.pnl_proven === false) continue;
+      if (capitalAttached && oppMode.get(String(row.opportunity_id)) !== 'LIVE') {
+        continue;
+      }
+      if (row.outcome.pnl < 0) losses += 1;
       else break;
     }
     // Prefer max(journal streak, gate) so a mid-restart gate write is not wiped by empty hist
@@ -2411,6 +2458,14 @@ class MasterRuntime {
       // Journal confirmed ghosts/orphans even when other tickets are still in miss-debounce.
       if (!sync.skipped) {
         this.applySyncJournal(sync);
+      }
+      if (this.broker instanceof CapitalBroker && !this.broker.paper) {
+        if (sync.skipped) {
+          this.capitalVenueOpensProven = false;
+        } else {
+          this.capitalVenueOpensProven = true;
+          this.capitalVenueOpens = sync.broker_count;
+        }
       }
     }
 
@@ -3040,10 +3095,12 @@ class MasterRuntime {
               ...this.account,
               // Do not advertise stale sizing equity while Capital account unproven
               equity: 0,
+              balance: 0,
               available_to_deal: null,
               trade_allowed: false,
               day_start_equity: 0,
               peak_equity: 0,
+              daily_pnl: 0,
             }
           : this.account,
       open_positions: this.positions.count(),
@@ -3065,19 +3122,23 @@ class MasterRuntime {
           ? 'LIVE_ACCOUNT_UNPROVEN'
           : liveQuoteStale
             ? 'LIVE_QUOTE_STALE'
-            : !this.persist_ok
-              ? 'PERSIST_DEGRADED'
-              : this.cfg.mode === 'LIVE'
-                ? this.capitalLiveAttached()
-                  ? this.running
-                    ? 'LIVE_RUNNING'
-                    : 'LIVE_ARMED'
+            : this.cfg.mode === 'LIVE' &&
+                this.capitalLiveAttached() &&
+                !this.capitalVenueOpensProven
+              ? 'LIVE_VENUE_UNPROVEN'
+              : !this.persist_ok
+                ? 'PERSIST_DEGRADED'
+                : this.cfg.mode === 'LIVE'
+                  ? this.capitalLiveAttached()
+                    ? this.running
+                      ? 'LIVE_RUNNING'
+                      : 'LIVE_ARMED'
+                    : this.running
+                      ? 'LIVE_NO_CAPITAL'
+                      : 'LIVE_UNATTACHED'
                   : this.running
-                    ? 'LIVE_NO_CAPITAL'
-                    : 'LIVE_UNATTACHED'
-                : this.running
-                  ? 'PAPER_RUNNING'
-                  : 'OK',
+                    ? 'PAPER_RUNNING'
+                    : 'OK',
       recovered: this.recovered,
       persist_ok: this.persist_ok,
       last_persist_error: this.last_persist_error,
