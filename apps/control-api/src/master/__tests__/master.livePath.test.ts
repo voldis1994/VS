@@ -4522,6 +4522,9 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
       } as any,
     });
     masterRuntime.positions.get('deal-upl-clear')!.broker_upl = 50;
+    masterRuntime.positions.get('deal-upl-clear')!.soft_trail_armed_at =
+      new Date().toISOString();
+    masterRuntime.positions.get('deal-upl-clear')!.soft_trail_peak = 4420;
     const bars = barsTrendUp(30);
     const quote = {
       ...quoteFrom(bars.at(-1)!),
@@ -4532,8 +4535,165 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     listOk = false;
     await masterRuntime.tick(bars, quote);
     expect((masterRuntime as any).capitalVenueOpensProven).toBe(false);
-    expect(masterRuntime.positions.get('deal-upl-clear')!.broker_upl).toBeNull();
+    const pos = masterRuntime.positions.get('deal-upl-clear')!;
+    expect(pos.broker_upl).toBeNull();
+    expect(pos.soft_trail_armed_at).toBeNull();
+    expect(pos.soft_trail_peak).toBeNull();
     expect(masterRuntime.status().health).toBe('LIVE_VENUE_UNPROVEN');
+  });
+
+  it('expectancy and status performance skip unproven Capital closes', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const { ExpectancyStore } = await import('../expectancy.js');
+    const store = new ExpectancyStore();
+    store.record('TREND:BUY', {
+      position_id: 'p1',
+      side: 'BUY',
+      entry: 1,
+      exit: 2,
+      volume: 1,
+      pnl: 10,
+      fees: 0,
+      slippage: 0,
+      mae: 0,
+      mfe: 1,
+      r_multiple: 1,
+      hold_ms: 1,
+      exit_reason: 'TP',
+      pnl_proven: true,
+    });
+    store.record('TREND:BUY', {
+      position_id: 'p2',
+      side: 'BUY',
+      entry: 1,
+      exit: 2,
+      volume: 1,
+      pnl: 0,
+      fees: 0,
+      slippage: 0,
+      mae: 0,
+      mfe: 0,
+      r_multiple: 0,
+      hold_ms: 1,
+      exit_reason: 'capital_close_pnl_unproven',
+      pnl_proven: false,
+    });
+    expect(store.lookup('TREND:BUY')?.samples).toBe(1);
+    expect(store.lookup('TREND:BUY')?.ev).toBeCloseTo(10, 5);
+
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-exp' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      account: async () => ({ equity: 12_000, balance: 12_000, currency: 'GBP' }),
+      list: async () => ({ ok: true, positions: [], detail: '0' }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({ ok: false, detail: 'unused' }),
+    });
+    await broker.connect();
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('LIVE');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    masterRuntime.cfg = { ...DEFAULT_MASTER_CONFIG, mode: 'LIVE' };
+    (masterRuntime as any).capitalAccountProven = true;
+    (masterRuntime as any).capitalVenueOpensProven = true;
+    masterRuntime.pipeline.recordTradeClose(
+      '00000000-0000-4000-8000-00000000e001',
+      {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.9,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: { regime: 'TREND', market_state: 't', atr: 1, volatility: 0.001 } as never,
+        expectancy: null,
+      },
+      {
+        position_id: 'deal-u',
+        side: 'BUY',
+        entry: 4410,
+        exit: 4410,
+        volume: 0.1,
+        pnl: 0,
+        fees: 0,
+        slippage: 0,
+        mae: 0,
+        mfe: 0,
+        r_multiple: 0,
+        hold_ms: 1,
+        exit_reason: 'capital_close_pnl_unproven',
+        pnl_proven: false,
+      }
+    );
+    const st = masterRuntime.status();
+    expect(st.performance?.trades ?? 0).toBe(0);
+    expect(masterRuntime.pipeline.expectancy.lookup('TREND:BUY')).toBeNull();
+  });
+
+  it('mid-session Capital getAccount fail zeros leftover equity', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    let equity = 50_000;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-mid-fail' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+        update_time: new Date().toISOString(),
+        market_status: 'TRADEABLE',
+      }),
+      account: async () =>
+        equity > 0
+          ? { equity, balance: equity, currency: 'GBP' }
+          : null,
+      list: async () => ({ ok: true, positions: [], detail: '0' }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({ ok: false, detail: 'unused' }),
+    });
+    await broker.connect();
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('LIVE');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    masterRuntime.cfg = {
+      ...DEFAULT_MASTER_CONFIG,
+      mode: 'LIVE',
+      min_score: 0.99,
+      block_off_hours: false,
+    };
+    masterRuntime.running = true;
+    const bars = barsTrendUp(30);
+    const quote = {
+      ...quoteFrom(bars.at(-1)!),
+      epic: 'GOLD',
+      market_status: 'TRADEABLE' as const,
+      ts_ms: Date.now(),
+    };
+    await masterRuntime.tick(bars, quote);
+    expect(masterRuntime.account.equity).toBe(50_000);
+    expect((masterRuntime as any).capitalAccountProven).toBe(true);
+
+    equity = 0; // getAccount → null
+    await masterRuntime.tick(bars, { ...quote, ts_ms: Date.now() });
+    expect(masterRuntime.account.equity).toBe(0);
+    expect(masterRuntime.account.balance).toBe(0);
+    expect(masterRuntime.account.trade_allowed).toBe(false);
+    expect((masterRuntime as any).capitalAccountProven).toBe(false);
+    expect(masterRuntime.status().health).toBe('LIVE_ACCOUNT_UNPROVEN');
   });
 
   it('status floating_pnl is null when Capital LIVE opens lack broker UPL', async () => {

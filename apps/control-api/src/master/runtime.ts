@@ -1073,10 +1073,12 @@ class MasterRuntime {
     return this.capitalVenueOpens;
   }
 
-  /** Drop stale venue UPL so money arms cannot fire on unread Capital book. */
+  /** Drop stale venue UPL + soft-trail arm so money exits cannot fire on unread Capital book. */
   private clearStaleBrokerUpl() {
     for (const p of this.positions.list()) {
       p.broker_upl = null;
+      p.soft_trail_armed_at = null;
+      p.soft_trail_peak = null;
     }
   }
 
@@ -1285,9 +1287,13 @@ class MasterRuntime {
         }
       }
     } else if (broker instanceof CapitalBroker && !broker.paper) {
-      // Fail-closed: never size LIVE from stale paper £10k when Capital equity unread
+      // Fail-closed: never size LIVE from leftover equity when Capital unread
       capitalAccountUnproven = true;
       this.capitalAccountProven = false;
+      this.account.equity = 0;
+      this.account.balance = 0;
+      this.account.available_to_deal = null;
+      this.account.trade_allowed = false;
       this.broker_detail = `${this.broker_detail || ''};capital_account_unproven`.slice(
         -400
       );
@@ -3029,12 +3035,17 @@ class MasterRuntime {
     // Dashboard honesty before Start/Recover — seed monitor from disk once
     this.ensureMonitorHydrated();
     const closeSlices = this.pipeline.journal.allCloseOutcomes();
-    const perf = closeSlices.length
-      ? fromOutcomes(closeSlices)
-      : computePerformance(this.pipeline.journal.traded());
-    const pnls = closeSlices.length
-      ? closeSlices.map((o) => o.pnl)
-      : this.pipeline.journal.traded().map((t) => t.outcome!.pnl);
+    // Unproven Capital closes (pnl often 0) must not skew expectancy / MC / KPIs
+    const provenSlices = closeSlices.filter((o) => o.pnl_proven !== false);
+    const tradedProven = this.pipeline.journal
+      .traded()
+      .filter((t) => t.outcome && t.outcome.pnl_proven !== false);
+    const perf = provenSlices.length
+      ? fromOutcomes(provenSlices)
+      : computePerformance(tradedProven);
+    const pnls = provenSlices.length
+      ? provenSlices.map((o) => o.pnl)
+      : tradedProven.map((t) => t.outcome!.pnl);
     const quote = this.last_quote;
     const pv = specForEpic(this.epic).value_per_point_per_lot;
     const capitalLiveAttached =

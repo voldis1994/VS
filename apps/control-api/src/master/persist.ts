@@ -69,8 +69,8 @@ export async function persistOutcome(
       `INSERT INTO master_trade_outcomes (
          id, opportunity_id, side, entry_price, exit_price, volume, pnl,
          fees, slippage, mae, mfe, r_multiple, hold_ms, exit_reason, setup_key,
-         position_id
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+         position_id, pnl_proven
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
       [
         randomUUID(),
         opportunityId,
@@ -88,6 +88,11 @@ export async function persistOutcome(
         outcome.exit_reason,
         setupKey ?? null,
         outcome.position_id,
+        outcome.pnl_proven === false
+          ? false
+          : outcome.pnl_proven === true
+            ? true
+            : null,
       ]
     );
     await client.query(
@@ -285,7 +290,7 @@ export async function loadJournalHistory(limit = 500): Promise<JournalHistory> {
 
     const { rows: outRows } = await client.query(
       `SELECT opportunity_id, position_id, side, entry_price, exit_price, volume, pnl, fees, slippage,
-              mae, mfe, r_multiple, hold_ms, exit_reason, setup_key, created_at
+              mae, mfe, r_multiple, hold_ms, exit_reason, setup_key, created_at, pnl_proven
        FROM master_trade_outcomes ORDER BY created_at DESC LIMIT ${Math.max(1, Math.min(limit, 2000))}`
     );
     const outcomes = [...outRows].reverse().map((r) => ({
@@ -306,7 +311,6 @@ export async function loadJournalHistory(limit = 500): Promise<JournalHistory> {
         r_multiple: Number(r.r_multiple) || 0,
         hold_ms: Number(r.hold_ms) || 0,
         exit_reason: String(r.exit_reason || ''),
-        // Memory/file may stamp pnl_proven; Postgres column absent → undefined (legacy proven)
         ...(r.pnl_proven === false
           ? { pnl_proven: false as const }
           : r.pnl_proven === true
@@ -384,6 +388,8 @@ export class MemoryPersist implements PersistClient {
         exit_reason: params[13],
         setup_key: params[14],
         position_id: params[15] != null ? String(params[15]) : String(params[1]),
+        pnl_proven:
+          params[16] === false ? false : params[16] === true ? true : undefined,
         created_at: new Date().toISOString(),
         params,
       });

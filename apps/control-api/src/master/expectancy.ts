@@ -11,6 +11,8 @@ export class ExpectancyStore {
   private readonly bySetup = new Map<string, SetupOutcome[]>();
 
   record(setup_key: string, outcome: TradeOutcome) {
+    // Capital LIVE unproven closes must not poison setup EV / win rate
+    if (outcome.pnl_proven === false) return;
     // outcome.pnl is already net of model fees (or broker-net). Fees here are
     // metadata for avg costs only — never re-subtracted from EV. Slippage is a
     // price distance, not money, so it is excluded from costs.
