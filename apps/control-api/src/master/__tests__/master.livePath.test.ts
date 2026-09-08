@@ -387,6 +387,43 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(st.capital_credential_source).toBe('desk');
   });
 
+  it('tick parks Capital entries when market_status is CLOSED', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const broker = mockCapitalBroker();
+    await broker.connect();
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('LIVE');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    masterRuntime.cfg = {
+      ...DEFAULT_MASTER_CONFIG,
+      mode: 'LIVE',
+      min_score: 0.2,
+      block_off_hours: false,
+    };
+    masterRuntime.account = { ...account };
+    masterRuntime.persist_ok = true;
+    await masterRuntime.start({ broker, live_feed: false });
+
+    const bars = barsTrendUp(50);
+    const q = {
+      ...quoteFrom(bars.at(-1)!),
+      epic: 'GOLD',
+      market_status: 'CLOSED',
+    };
+    const r = await masterRuntime.tick(bars, q);
+    expect(masterRuntime.account.trade_allowed).toBe(false);
+    expect(r.executed).toBe(false);
+    expect(
+      r.risk.reasons.includes('account_not_tradeable') ||
+        r.execution_detail ||
+        r.decision.kind === 'WAIT' ||
+        !r.risk.allowed
+    ).toBe(true);
+    masterRuntime.stop();
+  });
+
   it('runtime LIVE tick opens when MASTER_LIVE_ENABLED and mocked Capital attached', async () => {
     process.env.MASTER_LIVE_ENABLED = 'true';
     const broker = mockCapitalBroker();

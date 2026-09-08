@@ -269,6 +269,94 @@ describe('INTENT→ACK trade journal (Reader)', () => {
     expect(positions.get('deal-rec-1')?.stop_level).toBe(4390);
   });
 
+  it('recover adopts Capital presence-only deal (level-less) and attaches SL', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const state = mkdtempSync(join(tmpdir(), 'vs-cap-presence-'));
+    process.env.MASTER_STATE_DIR = state;
+    clearTradeAckJournalForTest();
+
+    // Raw Capital row with missing open_level → presence_ids only after listOpenPositions
+    const raw = {
+      deal_id: 'deal-presence-1',
+      epic: 'GOLD',
+      direction: 'BUY' as const,
+      size: 0.1,
+      open_level: null as number | null,
+      stop_level: null as number | null,
+      profit_level: null as number | null,
+    };
+
+    logTradeIntent({
+      command_id: 'cap_recpresence1',
+      intent_id: 'capital-presence-intent-01',
+      action: 'OPEN',
+      side: 'BUY',
+      volume: 0.1,
+      epic: 'GOLD',
+      sl: 4390,
+      tp: 4440,
+      reason: 'INTENT',
+    });
+    updateTradeAck('cap_recpresence1', {
+      ack_status: 'SUCCESS',
+      ticket: 'deal-presence-1',
+      fill_price: 4410,
+      detail: 'ACK_SUCCESS',
+    });
+
+    const mods: number[] = [];
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 'pres' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+        market_status: 'TRADEABLE',
+      }),
+      list: async () => ({ ok: true, positions: [raw], detail: '' }),
+      create: async () => ({ ok: false, detail: 'no_create' }),
+      confirm: async () => ({ ok: false, detail: 'no' }),
+      modify: async (_s, input: any) => {
+        mods.push(1);
+        if (input.stopLevel != null) raw.stop_level = input.stopLevel;
+        if (input.profitLevel != null) raw.profit_level = input.profitLevel;
+        // After attach, open_level becomes visible
+        raw.open_level = 4410;
+        return { ok: true, detail: 'ok' };
+      },
+      close: async () => {
+        raw.open_level = null;
+        return { ok: true, detail: 'closed' };
+      },
+    });
+    await broker.connect();
+
+    // Force presence-only list (level-less deal not in positions[]) — Capital crash case
+    broker.listOpenPositions = async () => ({
+      ok: true,
+      positions: [],
+      presence_ids: ['deal-presence-1'],
+    });
+
+    masterRuntime.pipeline = new MasterPipeline('LIVE');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.cfg = { ...masterRuntime.cfg, mode: 'LIVE' };
+    masterRuntime.attachBroker(broker);
+    masterRuntime.recovered = false;
+    const r = await masterRuntime.recover();
+    expect(r.positions).toBeGreaterThanOrEqual(1);
+    const pos = masterRuntime.positions.get('deal-presence-1');
+    expect(pos).toBeTruthy();
+    expect(pos!.entry).toBe(4410); // journal fill_price
+    expect(pos!.stop_loss).toBe(4390);
+    expect(mods.length).toBeGreaterThan(0);
+    expect(String(masterRuntime.broker_detail || '')).toMatch(/ack_attach_ok/);
+  });
+
   it('recover adopts OPEN SUCCESS from journal when local book empty', async () => {
     const state = mkdtempSync(join(tmpdir(), 'vs-ack-rec-'));
     process.env.MASTER_STATE_DIR = state;

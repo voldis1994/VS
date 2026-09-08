@@ -919,6 +919,14 @@ class MasterRuntime {
       }
     }
 
+    // Capital: fail-closed marketStatus every tick (not only feed wrapper side-effect)
+    if (broker instanceof CapitalBroker) {
+      const { capitalMarketAllowsTrading } = await import('./capitalMarket.js');
+      const status =
+        quote.market_status ?? broker.cachedMarketStatus(this.epic);
+      this.account.trade_allowed = capitalMarketAllowsTrading(status);
+    }
+
     // Reader relative spread — update history every tick
     if (this.cfg.spread_lookback_bars !== this.spreadLookback) {
       this.spreadLookback = this.cfg.spread_lookback_bars;
@@ -1701,6 +1709,7 @@ class MasterRuntime {
           side?: string | null;
         }
       >();
+      let presenceIds = new Set<string>();
       if (fromAck.adopted.length) {
         try {
           const listed = await this.broker.listOpenPositions(this.epic);
@@ -1717,6 +1726,11 @@ class MasterRuntime {
                 },
               ])
             );
+            presenceIds = new Set(
+              (listed.presence_ids ?? listed.positions.map((p) => p.position_id)).filter(
+                Boolean
+              )
+            );
           }
         } catch {
           /* adopt without broker open_time */
@@ -1727,6 +1741,7 @@ class MasterRuntime {
       for (const row of fromAck.adopted) {
         if (this.positions.get(row.ticket)) continue;
         const status = statusByTicket.get(row.ticket);
+        const presentOnBroker = status != null || presenceIds.has(row.ticket);
         const statusOpen =
           status?.open_level != null &&
           Number.isFinite(status.open_level) &&
@@ -1740,8 +1755,34 @@ class MasterRuntime {
             ? Number(row.fill_price)
             : null;
         // Prefer broker OrderOpenPrice (Reader status entry); never invent 0
-        const entry = statusOpen ?? ackFill;
-        if (entry == null) continue;
+        let entry = statusOpen ?? ackFill;
+        // Capital level-less live deal (presence_ids only) — provisional mid for attach/book
+        if (entry == null && presentOnBroker && this.broker instanceof CapitalBroker) {
+          try {
+            const q = await this.broker.getQuote(row.epic || this.epic);
+            if (q && Number.isFinite(q.mid) && q.mid > 0) entry = Number(q.mid);
+          } catch {
+            /* fall through */
+          }
+        }
+        if (entry == null) {
+          // Live Capital ticket with no usable entry → fail-close rather than skip unmanaged
+          if (presentOnBroker && this.broker instanceof CapitalBroker) {
+            try {
+              await this.broker.closePosition(row.ticket);
+            } catch {
+              /* ignore */
+            }
+            this.broker_detail = [
+              this.broker_detail,
+              `ack_presence_no_entry:${row.ticket}`,
+            ]
+              .filter(Boolean)
+              .join(';')
+              .slice(0, 400);
+          }
+          continue;
+        }
         const recoverId = stableRecoverUuid(row.ticket);
         const openedAt = status?.opened_at ?? null;
         const wantSl =
@@ -1752,9 +1793,8 @@ class MasterRuntime {
           row.tp != null && Number.isFinite(row.tp) && Number(row.tp) > 0
             ? Number(row.tp)
             : null;
-        // Ticket live on broker + journal wants SL → same attach-or-fail as live OPEN
-        // (soft safety_sl is not a substitute for intended levels / TP).
-        const onBroker = status != null;
+        // Ticket live on broker (incl. presence-only) + journal wants SL → attach-or-fail
+        const onBroker = presentOnBroker;
         let rowAttached = false;
         if (onBroker && wantSl != null) {
           const guardInput: {
@@ -1798,7 +1838,8 @@ class MasterRuntime {
             const listed = await this.broker.listOpenPositions(row.epic || this.epic);
             const stillLive =
               listed.ok &&
-              listed.positions.some((p) => p.position_id === row.ticket);
+              (listed.positions.some((p) => p.position_id === row.ticket) ||
+                (listed.presence_ids ?? []).includes(row.ticket));
             if (!stillLive) continue;
           } else {
             attachOk += 1;
