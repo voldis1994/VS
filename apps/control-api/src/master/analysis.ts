@@ -83,11 +83,11 @@ export function ema3PriceThroughExit(input: {
   return { exit: false, reason: '' };
 }
 
-/** Current + previous EMA of closes (needs period+1 closes). */
+/** Current + previous (+ optional prev2) EMA of closes. */
 export function emaPairFromBars(
   bars: Bar[],
   period: number
-): { cur: number; prev: number } | null {
+): { cur: number; prev: number; prev2: number | null } | null {
   if (!(period >= 1)) return null;
   const closes = bars
     .map((b) => b.close)
@@ -96,11 +96,13 @@ export function emaPairFromBars(
   const cur = ema(closes, period);
   const prev = ema(closes.slice(0, -1), period);
   if (cur == null || prev == null) return null;
-  return { cur, prev };
+  const prev2 =
+    closes.length >= period + 2 ? ema(closes.slice(0, -2), period) : null;
+  return { cur, prev, prev2: prev2 != null && Number.isFinite(prev2) ? prev2 : null };
 }
 
 /**
- * VS-System EMA_TICK structural EMA1×EMA3 cross exit (opposite cross while open).
+ * VS-System EMA_TICK structural EMA1×EMA3 cross exit (forming + last-closed).
  */
 export function ema13CrossExit(input: {
   side: 'BUY' | 'SELL';
@@ -108,6 +110,9 @@ export function ema13CrossExit(input: {
   ema3: number;
   ema1Prev: number;
   ema3Prev: number;
+  /** Optional: EMA on closes[:-2] for closed-bar cross window */
+  ema1Prev2?: number | null;
+  ema3Prev2?: number | null;
 }): { exit: boolean; reason: string } {
   const { ema1, ema3, ema1Prev, ema3Prev } = input;
   if (![ema1, ema3, ema1Prev, ema3Prev].every((n) => Number.isFinite(n))) {
@@ -115,10 +120,23 @@ export function ema13CrossExit(input: {
   }
   const structCrossUp = ema1Prev <= ema3Prev && ema1 > ema3;
   const structCrossDown = ema1Prev >= ema3Prev && ema1 < ema3;
-  if (input.side === 'BUY' && structCrossDown) {
+  const p2ok =
+    input.ema1Prev2 != null &&
+    input.ema3Prev2 != null &&
+    Number.isFinite(input.ema1Prev2) &&
+    Number.isFinite(input.ema3Prev2);
+  const closedCrossUp =
+    p2ok &&
+    input.ema1Prev2! <= input.ema3Prev2! &&
+    ema1Prev > ema3Prev;
+  const closedCrossDown =
+    p2ok &&
+    input.ema1Prev2! >= input.ema3Prev2! &&
+    ema1Prev < ema3Prev;
+  if (input.side === 'BUY' && (structCrossDown || closedCrossDown)) {
     return { exit: true, reason: 'EMA13_CROSS_DOWN' };
   }
-  if (input.side === 'SELL' && structCrossUp) {
+  if (input.side === 'SELL' && (structCrossUp || closedCrossUp)) {
     return { exit: true, reason: 'EMA13_CROSS_UP' };
   }
   return { exit: false, reason: '' };

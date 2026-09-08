@@ -367,6 +367,18 @@ describe('VS MASTER EMA3 trail manage', () => {
         ema3: 4410,
       }).reason
     ).toBe('EMA13_CROSS_DOWN');
+    // Closed-bar cross: prev crossed, live still on exit side of EMA3
+    expect(
+      ema13CrossExit({
+        side: 'BUY',
+        ema1Prev2: 4412,
+        ema3Prev2: 4410,
+        ema1Prev: 4408,
+        ema3Prev: 4410,
+        ema1: 4409,
+        ema3: 4410,
+      }).reason
+    ).toBe('EMA13_CROSS_DOWN');
 
     const { PaperBroker } = await import('../broker.js');
     const { PositionManager } = await import('../positionManager.js');

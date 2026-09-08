@@ -138,6 +138,7 @@ export async function saveOpenPositions(positions: ManagedPosition[]): Promise<b
             ema3_side: p.ema3_side ?? null,
             modify_reject_level: p.modify_reject_level ?? null,
             modify_backoff_until_ms: p.modify_backoff_until_ms ?? null,
+            naked_recovery_level: p.naked_recovery_level ?? null,
           }),
         ]
       );
@@ -195,6 +196,11 @@ export async function loadOpenPositions(): Promise<ManagedPosition[]> {
           payload.modify_backoff_until_ms != null &&
           Number.isFinite(Number(payload.modify_backoff_until_ms))
             ? Number(payload.modify_backoff_until_ms)
+            : null,
+        naked_recovery_level:
+          payload.naked_recovery_level != null &&
+          Number.isFinite(Number(payload.naked_recovery_level))
+            ? Math.max(0, Math.floor(Number(payload.naked_recovery_level)))
             : null,
       } as ManagedPosition;
     });

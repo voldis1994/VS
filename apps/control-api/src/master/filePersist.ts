@@ -68,6 +68,7 @@ export class FilePersist implements PersistClient {
           ema3_side: p.ema3_side ?? null,
           modify_reject_level: p.modify_reject_level ?? null,
           modify_backoff_until_ms: p.modify_backoff_until_ms ?? null,
+          naked_recovery_level: p.naked_recovery_level ?? null,
         },
       }));
       this.mem.intents = new Set(raw.intents || []);
@@ -183,6 +184,12 @@ export class FilePersist implements PersistClient {
           const v =
             p.modify_backoff_until_ms ?? p.payload?.modify_backoff_until_ms;
           return v != null && Number.isFinite(Number(v)) ? Number(v) : null;
+        })(),
+        naked_recovery_level: (() => {
+          const v = p.naked_recovery_level ?? p.payload?.naked_recovery_level;
+          return v != null && Number.isFinite(Number(v))
+            ? Math.max(0, Math.floor(Number(v)))
+            : null;
         })(),
       })),
       intents: [...this.mem.intents],

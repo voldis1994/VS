@@ -87,6 +87,8 @@ export type ManagedPosition = {
   modify_reject_level?: number | null;
   /** Durable modify time-backoff until ms */
   modify_backoff_until_ms?: number | null;
+  /** Durable naked SL recovery escalate level (0..3) across restart */
+  naked_recovery_level?: number | null;
   /** Last broker-reported UPL (account currency) when known */
   broker_upl?: number | null;
 };
@@ -298,6 +300,8 @@ export class PositionManager {
     ema1?: number | null;
     ema1_prev?: number | null;
     ema3_prev?: number | null;
+    ema1_prev2?: number | null;
+    ema3_prev2?: number | null;
     /**
      * When set, quotes older than this skip soft manage (BE/trail/TIME_STOP/partial)
      * but still attempt naked SL recovery — Check- stale bridge gate.
@@ -342,6 +346,14 @@ export class PositionManager {
     const ema3Prev =
       input.ema3_prev != null && Number.isFinite(input.ema3_prev)
         ? Number(input.ema3_prev)
+        : null;
+    const ema1Prev2 =
+      input.ema1_prev2 != null && Number.isFinite(input.ema1_prev2)
+        ? Number(input.ema1_prev2)
+        : null;
+    const ema3Prev2 =
+      input.ema3_prev2 != null && Number.isFinite(input.ema3_prev2)
+        ? Number(input.ema3_prev2)
         : null;
     const minStopDist = input.min_stop_distance ?? quote.min_stop_distance ?? null;
     const allowClose = input.allow_close !== false;
@@ -560,6 +572,8 @@ export class PositionManager {
                 ema3,
                 ema1Prev,
                 ema3Prev,
+                ema1Prev2,
+                ema3Prev2,
               })
             : { exit: false, reason: '' };
         const thru = allowClose
@@ -1181,7 +1195,11 @@ export class PositionManager {
     this.nakedRecoveryAt.set(pos.position_id, now);
 
     const mark = protectiveMark(pos.side, quote);
-    const level = this.nakedRecoveryLevel.get(pos.position_id) ?? 0;
+    const level =
+      this.nakedRecoveryLevel.get(pos.position_id) ??
+      (pos.naked_recovery_level != null && Number.isFinite(pos.naked_recovery_level)
+        ? Math.max(0, Math.floor(Number(pos.naked_recovery_level)))
+        : 0);
     const mult =
       PositionManager.NAKED_RECOVERY_MULTS[
         Math.min(level, PositionManager.NAKED_RECOVERY_MULTS.length - 1)
@@ -1220,6 +1238,7 @@ export class PositionManager {
       pos.stop_loss = recovery;
       this.clearModifyReject(pos);
       this.nakedRecoveryLevel.delete(pos.position_id);
+      pos.naked_recovery_level = null;
       return;
     }
     // VS-System: after first widen fails, try native trailingStop while still naked
@@ -1238,10 +1257,13 @@ export class PositionManager {
         if (Number.isFinite(guess)) pos.stop_loss = guess;
         this.clearModifyReject(pos);
         this.nakedRecoveryLevel.delete(pos.position_id);
+        pos.naked_recovery_level = null;
         return;
       }
     }
-    this.nakedRecoveryLevel.set(pos.position_id, level + 1);
+    const nextLevel = level + 1;
+    this.nakedRecoveryLevel.set(pos.position_id, nextLevel);
+    pos.naked_recovery_level = nextLevel;
     await this.noteModifyReject(pos, recovery, mod.detail || '');
   }
 

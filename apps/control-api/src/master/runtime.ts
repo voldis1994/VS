@@ -862,6 +862,8 @@ class MasterRuntime {
       ema1: ema1Pair?.cur ?? null,
       ema1_prev: ema1Pair?.prev ?? null,
       ema3_prev: ema3Pair?.prev ?? null,
+      ema1_prev2: ema1Pair?.prev2 ?? null,
+      ema3_prev2: ema3Pair?.prev2 ?? null,
       allow_close:
         this.cfg.ai_mode === 'off' ? true : this.last_ai_allow_close,
       close_all_profit: this.cfg.close_all_profit,
