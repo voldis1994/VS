@@ -75,6 +75,45 @@ describe('decision journal durability', () => {
   });
 });
 
+describe('trade event journal durability', () => {
+  it('appends OPEN/CLOSE newest-first for paper+Capital audit', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vs-trade-evt-'));
+    process.env.MASTER_STATE_DIR = dir;
+    const { logTradeEvent, loadTradeEvents } = await import('../tradeEventJournal.js');
+    logTradeEvent({
+      event: 'OPEN',
+      broker: 'PAPER',
+      epic: 'GOLD',
+      side: 'BUY',
+      volume: 0.1,
+      price: 4400,
+      position_id: 'paper-1',
+      intent_id: 'i1',
+      ok: true,
+      detail: 'paper_fill',
+    });
+    logTradeEvent({
+      event: 'CLOSE',
+      broker: 'PAPER',
+      epic: 'GOLD',
+      side: 'BUY',
+      volume: 0.1,
+      price: 4405,
+      position_id: 'paper-1',
+      intent_id: 'i1',
+      ok: true,
+      detail: 'STOP_HIT',
+      pnl: 0.45,
+      fees: 0.05,
+    });
+    const rows = loadTradeEvents(10);
+    expect(rows[0]!.event).toBe('CLOSE');
+    expect(rows[0]!.fees).toBeCloseTo(0.05, 8);
+    expect(rows[1]!.event).toBe('OPEN');
+    expect(existsSync(join(dir, 'trade_event_journal.jsonl'))).toBe(true);
+  });
+});
+
 describe('MT4 ack prune + ACK_TIMEOUT error journal', () => {
   it('clearOldAcks archives older ack files', async () => {
     const root = mkdtempSync(join(tmpdir(), 'vs-ack-prune-'));

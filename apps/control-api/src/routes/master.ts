@@ -441,6 +441,8 @@ h2{font-size:13px;color:#9fb0c0;margin:22px 0 8px;text-transform:uppercase;lette
 <div class="grid" id="positions"></div>
 <h2>Decision journal (recent cycles)</h2>
 <div class="grid" id="decisions"></div>
+<h2>Trade events (OPEN/CLOSE)</h2>
+<div class="grid" id="trades"></div>
 <h2>Journal (recent traded)</h2>
 <div class="grid" id="journal"></div>
 <h2>Activity</h2>
@@ -449,6 +451,7 @@ h2{font-size:13px;color:#9fb0c0;margin:22px 0 8px;text-transform:uppercase;lette
 const cards=document.getElementById('cards');
 const positions=document.getElementById('positions');
 const decisions=document.getElementById('decisions');
+const trades=document.getElementById('trades');
 const journal=document.getElementById('journal');
 const logEl=document.getElementById('log');
 let kill=false, ai='off';
@@ -524,6 +527,11 @@ async function refresh(){
       const detail=d.block_reason||d.execution_detail||'—';
       return card(d.kind+(d.executed?' · FILL':''), String(detail).slice(0,48)+(d.ts?' · '+String(d.ts).slice(11,19):''), d.executed?'ok':(d.block_reason?'bad':''));
     }).join(''):card('Decisions','no cycle events yet');
+    const te=(s.recent_trades||[]).slice(0,8);
+    trades.innerHTML=te.length?te.map(t=>{
+      const pn=t.pnl!=null?Number(t.pnl).toFixed(2):'—';
+      return card(t.event+' · '+t.broker+(t.ok?'':' · FAIL'), pn+' · '+String(t.detail||'').slice(0,40)+(t.ts?' · '+String(t.ts).slice(11,19):''), t.ok?(t.pnl!=null&&t.pnl<0?'bad':'ok'):'bad');
+    }).join(''):card('Trades','no trade events yet');
     const j=await fetch('/api/master/journal').then(r=>r.json());
     const traded=(j.opportunities||[]).filter(o=>o.executed&&o.outcome).slice(-8).reverse();
     journal.innerHTML=traded.length?traded.map(o=>{

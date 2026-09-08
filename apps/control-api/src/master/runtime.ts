@@ -37,6 +37,7 @@ import { resolveCloseMoneyPnl, resolveFloatingMoneyPnl, applyCloseFees } from '.
 import { loadMasterErrors, logMasterError } from './errorJournal.js';
 import { CycleMonitor } from './monitoring.js';
 import { logDecisionEvent, loadDecisionEvents } from './decisionJournal.js';
+import { logTradeEvent, loadTradeEvents } from './tradeEventJournal.js';
 import {
   alertsBlockEntries,
   dispatchCycleAlerts,
@@ -122,6 +123,14 @@ export type MasterStatus = {
     executed: boolean;
     block_reason: string | null;
     execution_detail: string | null;
+  }>;
+  recent_trades: Array<{
+    ts: string;
+    event: string;
+    broker: string;
+    ok: boolean;
+    detail: string | null;
+    pnl: number | null;
   }>;
 };
 
@@ -318,6 +327,20 @@ class MasterRuntime {
     this.last_exit_reason = reason;
     this.trackPersist('outcome', persistOutcome(pos.opportunity_id, outcome, null));
     this.trackPersist('open_positions', saveOpenPositions(this.positions.list()));
+    logTradeEvent({
+      event: 'CLOSE',
+      broker: broker.name,
+      epic: pos.epic,
+      side: pos.side,
+      volume: pos.size,
+      price: fill,
+      position_id: pos.position_id,
+      intent_id: pos.intent_id,
+      ok: true,
+      detail: reason,
+      pnl: outcome.pnl,
+      fees: outcome.fees,
+    });
     return { ok: true, detail: reason, pnl: outcome.pnl };
   }
 
@@ -453,6 +476,20 @@ class MasterRuntime {
         'outcome',
         persistOutcome(ghost.opportunity_id, outcome, null)
       );
+      logTradeEvent({
+        event: 'CLOSE',
+        broker: this.broker?.name || 'UNKNOWN',
+        epic: ghost.epic,
+        side: ghost.side,
+        volume: ghost.size,
+        price: exit,
+        position_id: ghost.position_id,
+        intent_id: ghost.intent_id,
+        ok: true,
+        detail: 'broker_flat',
+        pnl: outcome.pnl,
+        fees: outcome.fees,
+      });
     }
     // Reader EXTERNAL_PARTIAL_CLOSE — journal closed slice when broker size shrinks
     for (const partial of sync.external_partials || []) {
@@ -525,6 +562,20 @@ class MasterRuntime {
         'external_partial',
         persistOutcome(partial.opportunity_id, outcome, null)
       );
+      logTradeEvent({
+        event: 'CLOSE',
+        broker: this.broker?.name || 'UNKNOWN',
+        epic: partial.epic,
+        side: partial.side,
+        volume: partial.closed_size,
+        price: exit,
+        position_id: partial.position_id,
+        intent_id: partial.intent_id,
+        ok: true,
+        detail: 'EXTERNAL_PARTIAL_CLOSE',
+        pnl: outcome.pnl,
+        fees: outcome.fees,
+      });
     }
     for (const orphan of sync.orphans_broker) {
       const pos = this.positions.get(orphan.position_id);
@@ -803,6 +854,20 @@ class MasterRuntime {
         'outcome',
         persistOutcome(c.position.opportunity_id, c.outcome, sk)
       );
+      logTradeEvent({
+        event: 'CLOSE',
+        broker: broker.name,
+        epic: c.position.epic,
+        side: c.position.side,
+        volume: c.outcome.volume,
+        price: c.outcome.exit,
+        position_id: c.position.position_id,
+        intent_id: c.position.intent_id,
+        ok: true,
+        detail: c.reason,
+        pnl: c.outcome.pnl,
+        fees: c.outcome.fees,
+      });
     }
 
     // 2) Decision + risk
@@ -912,6 +977,18 @@ class MasterRuntime {
           execution,
         })
       );
+      logTradeEvent({
+        event: 'OPEN',
+        broker: broker.name,
+        epic: this.epic,
+        side: cycle.decision.side,
+        volume: place?.fill_size ?? cycle.risk.volume,
+        price: place?.fill_price ?? null,
+        position_id: place?.position_id ?? null,
+        intent_id: execution.intent_id || null,
+        ok: execution.accepted,
+        detail: execution.detail,
+      });
 
       if (execution.accepted && place?.position_id) {
         executed = true;
@@ -1641,6 +1718,14 @@ class MasterRuntime {
         executed: e.executed,
         block_reason: e.block_reason,
         execution_detail: e.execution_detail,
+      })),
+      recent_trades: loadTradeEvents(12).map((e) => ({
+        ts: e.ts,
+        event: e.event,
+        broker: e.broker,
+        ok: e.ok,
+        detail: e.detail,
+        pnl: e.pnl,
       })),
     };
   }

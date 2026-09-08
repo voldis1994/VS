@@ -154,6 +154,7 @@ async function main() {
       'src/master/atomicIo.ts',
       'src/master/monitoring.ts',
       'src/master/cycleAlerts.ts',
+      'src/master/tradeEventJournal.ts',
       'src/master/mt4/VS_MASTER.mq4',
       'src/master/persist.ts',
       'src/master/filePersist.ts',

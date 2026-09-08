@@ -87,6 +87,14 @@ type MasterStatus = {
     block_reason: string | null;
     execution_detail: string | null;
   }>;
+  recent_trades?: Array<{
+    ts: string;
+    event: string;
+    broker: string;
+    ok: boolean;
+    detail: string | null;
+    pnl: number | null;
+  }>;
   manage?: {
     scalp_pct_chase?: boolean;
     soft_trail_money_arm?: number;
@@ -703,6 +711,40 @@ export function MasterPage() {
               </div>
               <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
                 {d.ts ? new Date(d.ts).toISOString().slice(11, 19) : '—'}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <h2 className="section-title">Trade events (OPEN/CLOSE)</h2>
+      <div className="grid grid-3" style={{ gap: 10, marginBottom: 20 }}>
+        {!status?.recent_trades?.length ? (
+          <div className="card">no trade events yet</div>
+        ) : (
+          status.recent_trades.map((t, i) => (
+            <div key={`${t.ts}-${i}`} className="card">
+              <div style={{ fontWeight: 600 }}>
+                {t.event} · {t.broker}
+                {!t.ok ? ' · FAIL' : ''}
+              </div>
+              <div
+                style={{
+                  fontSize: 13,
+                  marginTop: 4,
+                  color:
+                    t.pnl != null
+                      ? t.pnl >= 0
+                        ? 'var(--ok, #2a7)'
+                        : 'var(--bad, #c44)'
+                      : 'var(--text-secondary)',
+                }}
+              >
+                {t.pnl != null ? t.pnl.toFixed(2) : '—'}
+                {t.detail ? ` · ${String(t.detail).slice(0, 40)}` : ''}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
+                {t.ts ? new Date(t.ts).toISOString().slice(11, 19) : '—'}
               </div>
             </div>
           ))
