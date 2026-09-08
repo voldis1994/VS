@@ -23,7 +23,7 @@ import {
   MasterPipeline,
   specForEpic,
 } from './pipeline.js';
-import { computePerformance, monteCarlo } from './performance.js';
+import { computePerformance, fromOutcomes, monteCarlo } from './performance.js';
 import {
   floatingUnrealizedPnl,
   PositionManager,
@@ -137,6 +137,7 @@ export type MasterStatus = {
     ok: boolean;
     detail: string | null;
     pnl: number | null;
+    fees: number | null;
     opportunity_id: string | null;
   }>;
 };
@@ -204,6 +205,7 @@ class MasterRuntime {
   /** VS-System: 5 consecutive empty successful lists before ghost wipe */
   private emptyBrokerDebounce: EmptyBrokerDebounce = { consecutive_empty: 0 };
   private monitor = new CycleMonitor();
+  private monitorHydrated = false;
   epic = GOLD_SPEC.epic;
 
   setMode(mode: Mode) {
@@ -386,6 +388,18 @@ class MasterRuntime {
   hydrateOwnsPipelinePref() {
     const pref = loadOwnsPipelinePref();
     if (pref != null) this.owns_pipeline_pref = pref;
+  }
+
+  /** Seed monitoring snapshot for dashboard before Start/Recover. */
+  ensureMonitorHydrated() {
+    if (this.monitorHydrated) return;
+    this.monitor.hydrateFromDisk();
+    this.monitorHydrated = true;
+  }
+
+  hydrateMonitorFromDisk() {
+    this.monitor.hydrateFromDisk();
+    this.monitorHydrated = true;
   }
 
   /** Roll daily_pnl at UTC day boundary; seed day_start_equity for max_daily_loss. */
@@ -1206,7 +1220,10 @@ class MasterRuntime {
     this.seenIntentSnapshot = [...intents];
 
     const hist = await loadJournalHistory();
-    this.pipeline.journal.hydrate(hist.opportunities);
+    this.pipeline.journal.hydrate(
+      hist.opportunities,
+      hist.outcomes.map((o) => o.outcome)
+    );
     this.pipeline.expectancy.hydrate(
       hist.outcomes.map((o) => ({
         setup_key: o.setup_key || 'unknown',
@@ -1273,7 +1290,7 @@ class MasterRuntime {
     this.persistRuntimeGates();
 
     // Dashboard honesty after restart — seed monitoring from durable snapshot
-    this.monitor.hydrateFromDisk();
+    this.hydrateMonitorFromDisk();
 
     // Reader recover_spread_model — relative-spread gate must not cold-open after restart
     this.spreadLookback = this.cfg.spread_lookback_bars;
@@ -1667,10 +1684,15 @@ class MasterRuntime {
   }
 
   status(): MasterStatus {
-    const perf = computePerformance(this.pipeline.journal.traded());
-    const pnls = this.pipeline.journal
-      .traded()
-      .map((t) => t.outcome!.pnl);
+    // Dashboard honesty before Start/Recover — seed monitor from disk once
+    this.ensureMonitorHydrated();
+    const closeSlices = this.pipeline.journal.allCloseOutcomes();
+    const perf = closeSlices.length
+      ? fromOutcomes(closeSlices)
+      : computePerformance(this.pipeline.journal.traded());
+    const pnls = closeSlices.length
+      ? closeSlices.map((o) => o.pnl)
+      : this.pipeline.journal.traded().map((t) => t.outcome!.pnl);
     const quote = this.last_quote;
     const pv = specForEpic(this.epic).value_per_point_per_lot;
     const floating = quote
@@ -1706,7 +1728,10 @@ class MasterRuntime {
       performance: perf,
       monte_carlo: pnls.length ? monteCarlo(pnls, 200) : null,
       opportunities: this.pipeline.journal.opportunities.length,
-      traded: this.pipeline.journal.traded().length,
+      traded: Math.max(
+        this.pipeline.journal.traded().length,
+        this.pipeline.journal.allCloseOutcomes().length
+      ),
       blocked: this.pipeline.journal.blocked().length,
       health: this.cfg.kill_switch
         ? 'KILL_SWITCH'

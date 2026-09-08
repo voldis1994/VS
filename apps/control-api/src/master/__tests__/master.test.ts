@@ -3,8 +3,8 @@ import { analyzeBars, ema, emaFromBars } from '../analysis.js';
 import { buildBuyComponents, buildSellComponents, buildCandidates } from '../candidates.js';
 import { decide, pickPreferred } from '../decision.js';
 import { ExpectancyStore } from '../expectancy.js';
+import { computePerformance, fromOutcomes, monteCarlo } from '../performance.js';
 import { MasterJournal } from '../journal.js';
-import { computePerformance, monteCarlo } from '../performance.js';
 import {
   DEFAULT_MASTER_CONFIG,
   GOLD_SPEC,
@@ -457,6 +457,55 @@ describe('VS MASTER expectancy + journal', () => {
     // Mean net pnl (10+10-8)/3 — fees already in pnl, not subtracted again
     expect(snap.ev).toBeCloseTo(4, 8);
     expect(snap.costs).toBeCloseTo(0.5, 8);
+  });
+
+  it('accumulates multi-TP / partial close slices for Fees KPI', () => {
+    const j = new MasterJournal();
+    const stubDecision = {
+      decision_id: 'd',
+      kind: 'BUY' as const,
+      side: 'BUY' as const,
+      score: 0.7,
+      block_reason: null,
+      buy: null as never,
+      sell: null as never,
+      analysis: {} as never,
+      expectancy: null,
+    };
+    const stubRisk = { allowed: true, volume: 1, risk_amount: 1, reasons: [] };
+    const rec = j.recordOpportunity({
+      mode: 'PAPER',
+      epic: 'GOLD',
+      decision: stubDecision,
+      risk: stubRisk,
+      executed: true,
+      id: 'opp-multi',
+    });
+    const slice = (pnl: number, fees: number, vol: number, reason: string): TradeOutcome => ({
+      position_id: 'p1',
+      side: 'BUY',
+      entry: 4400,
+      exit: 4410,
+      volume: vol,
+      pnl,
+      fees,
+      slippage: 0,
+      mae: 0,
+      mfe: 1,
+      r_multiple: 1,
+      hold_ms: 1000,
+      exit_reason: reason,
+    });
+    j.attachOutcome(rec.id, slice(1, 0.05, 0.5, 'PARTIAL_1'));
+    j.attachOutcome(rec.id, slice(2, 0.05, 0.5, 'TP_FINAL'));
+    expect(j.allCloseOutcomes()).toHaveLength(2);
+    expect(j.traded()).toHaveLength(1);
+    expect(j.traded()[0]!.outcome!.pnl).toBeCloseTo(3, 8);
+    expect(j.traded()[0]!.outcome!.fees).toBeCloseTo(0.1, 8);
+    const perf = fromOutcomes(j.allCloseOutcomes());
+    expect(perf.trades).toBe(2);
+    expect(perf.total_fees).toBeCloseTo(0.1, 8);
+    expect(perf.total_pnl).toBeCloseTo(3, 8);
   });
 
   it('surfaceForApi keeps closed trades visible amid WAIT noise', () => {

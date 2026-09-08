@@ -26,6 +26,16 @@ function pickStr(...vals: unknown[]): string | undefined {
   return undefined;
 }
 
+/**
+ * Parse optional numeric confirm fields.
+ * Number(null) and Number('') are 0 — must NOT treat missing profit as realized 0.
+ */
+export function parseOptionalConfirmNumber(v: unknown): number | undefined {
+  if (v == null || v === '') return undefined;
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+
 export function parseCapitalConfirm(
   raw: Record<string, unknown> | null | undefined
 ): CapitalConfirm {
@@ -69,8 +79,8 @@ export function parseCapitalConfirm(
     dealStatus,
     status,
     level: Number.isFinite(level) ? level : undefined,
-    profit: Number.isFinite(Number(raw.profit)) ? Number(raw.profit) : undefined,
-    size: Number.isFinite(Number(raw.size)) ? Number(raw.size) : undefined,
+    profit: parseOptionalConfirmNumber(raw.profit),
+    size: parseOptionalConfirmNumber(raw.size),
     direction: raw.direction != null ? String(raw.direction) : undefined,
     epic: raw.epic != null ? String(raw.epic) : undefined,
     reason,

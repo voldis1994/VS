@@ -12,6 +12,7 @@ export async function registerMasterRoutes(app: FastifyInstance) {
   ensureMasterPersist();
   masterRuntime.hydrateOwnsPipelinePref();
   masterRuntime.hydrateManageConfig();
+  masterRuntime.hydrateMonitorFromDisk();
 
   app.get('/api/master/status', async () => masterRuntime.status());
 

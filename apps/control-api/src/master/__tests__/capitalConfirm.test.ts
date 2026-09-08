@@ -25,6 +25,28 @@ describe('VS MASTER capital confirm (VS-System-)', () => {
     expect(isCapitalConfirmTerminal(c)).toBe(true);
   });
 
+  it('does not treat missing profit/size as realized 0 (Number(null) trap)', () => {
+    const c = parseCapitalConfirm({
+      dealId: 'deal-null-profit',
+      dealStatus: 'ACCEPTED',
+      level: 4410,
+      profit: null,
+      size: '',
+    });
+    expect(c.profit).toBeUndefined();
+    expect(c.size).toBeUndefined();
+    // Explicit zero remains zero
+    const z = parseCapitalConfirm({
+      dealId: 'deal-zero',
+      dealStatus: 'ACCEPTED',
+      level: 4410,
+      profit: 0,
+      size: 0,
+    });
+    expect(z.profit).toBe(0);
+    expect(z.size).toBe(0);
+  });
+
   it('rejects REJECTED confirms', () => {
     const c = parseCapitalConfirm({
       dealStatus: 'REJECTED',

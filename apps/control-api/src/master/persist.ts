@@ -4,6 +4,7 @@
  */
 import { randomUUID } from 'crypto';
 import { pool } from '../db/pool.js';
+import { mergeOutcomeSlices } from './journal.js';
 import type { ManagedPosition } from './positionManager.js';
 import type { OpportunityRecord, TradeOutcome } from './types.js';
 
@@ -272,13 +273,25 @@ export async function loadJournalHistory(limit = 500): Promise<JournalHistory> {
         exit_reason: String(r.exit_reason || ''),
       } as TradeOutcome,
     }));
-    // Join outcomes onto opportunities so status().performance / traded() survive restart
-    // when payload.outcome was never rewritten (ghost/external stubs persistOutcome-only).
-    const byOpp = new Map(outcomes.map((o) => [o.opportunity_id, o.outcome]));
+    // Join ALL outcome slices onto opportunities so multi-TP / external partials
+    // survive restart. Aggregate when multiple slices share an opportunity_id.
+    const slicesByOpp = new Map<string, TradeOutcome[]>();
+    for (const o of outcomes) {
+      const list = slicesByOpp.get(o.opportunity_id) || [];
+      list.push(o.outcome);
+      slicesByOpp.set(o.opportunity_id, list);
+    }
     for (const opp of opportunities) {
+      const slices = slicesByOpp.get(opp.id);
+      if (!slices?.length) continue;
+      const fromDb = slices.reduce((acc, s) =>
+        acc ? mergeOutcomeSlices(acc, s) : s
+      );
       if (!opp.outcome) {
-        const hit = byOpp.get(opp.id);
-        if (hit) opp.outcome = hit;
+        opp.outcome = fromDb;
+      } else if (slices.length > 1) {
+        // Prefer full slice sum over single payload rewrite
+        opp.outcome = fromDb;
       }
     }
     return { opportunities, outcomes };
