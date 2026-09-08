@@ -76,7 +76,8 @@ export async function ensureMasterCapitalBroker(creds: {
     if (masterRuntime.broker?.name !== 'CAPITAL') {
       const broker = createCapitalBroker({
         ...creds,
-        connectionId: masterCapitalConnectionId(creds.connectionId ?? null),
+        // MASTER shares one CST pool with envBroker — never fork on desk DB connection_id
+        connectionId: masterCapitalConnectionId(),
       });
       const opened = await broker.connect();
       if (!opened.ok) {

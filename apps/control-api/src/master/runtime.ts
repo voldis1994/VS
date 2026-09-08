@@ -1116,9 +1116,16 @@ class MasterRuntime {
             message: execution_detail,
             context: { epic: this.epic },
           });
-        } else if (listed.positions.length > 0) {
+        } else if (
+          listed.positions.length > 0 ||
+          (listed.presence_ids?.length ?? 0) > 0
+        ) {
           brokerVerifyOk = false;
-          execution_detail = `one_trade_broker_open:${listed.positions.length}`;
+          const n =
+            listed.positions.length > 0
+              ? listed.positions.length
+              : listed.presence_ids!.length;
+          execution_detail = `one_trade_broker_open:${n}`;
           this.last_execution_detail = execution_detail;
         }
       } catch (err) {

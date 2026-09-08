@@ -2318,6 +2318,80 @@ describe('partial_close persist + Check be_start', () => {
     }
   });
 
+  it('pre-entry broker verify blocks on presence_ids when positions empty (level-less live deal)', async () => {
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = mkdtempSync(join(tmpdir(), 'vs-presence-one-trade-'));
+    try {
+      masterRuntime.stop();
+      masterRuntime.pipeline = new MasterPipeline('PAPER');
+      masterRuntime.positions = new PositionManager();
+      masterRuntime.last_loss_ms = 0;
+      masterRuntime.reject_until_ms = 0;
+      (masterRuntime as unknown as { inflight_until_ms: number }).inflight_until_ms = 0;
+      (masterRuntime as unknown as { post_exit_until_ms: number }).post_exit_until_ms = 0;
+      masterRuntime.account = {
+        equity: 10_000,
+        balance: 10_000,
+        currency: 'GBP',
+        open_positions: 0,
+        daily_pnl: 0,
+        daily_pnl_day: new Date().toISOString().slice(0, 10),
+        day_start_equity: 10_000,
+        peak_equity: 10_000,
+        consecutive_losses: 0,
+      };
+      masterRuntime.cfg = {
+        ...DEFAULT_MASTER_CONFIG,
+        mode: 'PAPER',
+        min_score: 0.25,
+        block_off_hours: false,
+        block_high_impact_news: false,
+        max_relative_volatility: 100,
+        max_relative_spread: 100,
+        cooldown_ms_after_loss: 0,
+        max_daily_loss_pct: 0.99,
+        max_drawdown_pct: 0.99,
+      };
+      const broker = masterRuntime.ensurePaperBroker();
+      // Level-less Capital deal: not in positions[], but still live in presence_ids
+      broker.listOpenPositions = async () => ({
+        ok: true,
+        positions: [],
+        presence_ids: ['deal-level-less-1'],
+        detail: 'ok',
+      });
+      masterRuntime.running = true;
+      masterRuntime.entries_armed = true;
+      const bars = Array.from({ length: 50 }, (_, i) => {
+        const o = 4400 + i * 1.5;
+        return {
+          open: o,
+          high: o + 2,
+          low: o - 0.2,
+          close: o + 1.4,
+          ts_ms: Date.UTC(2026, 8, 7, 12, i),
+        };
+      });
+      const quote = {
+        bid: 4475,
+        ask: 4475.4,
+        mid: 4475.2,
+        spread: 0.4,
+        epic: 'GOLD',
+        ts_ms: Date.now(),
+      };
+      broker.setQuote(quote);
+      const r = await masterRuntime.tick(bars, quote);
+      expect(r.executed).toBe(false);
+      expect(r.decision.kind === 'BUY' || r.decision.kind === 'SELL').toBe(true);
+      expect(r.risk.allowed).toBe(true);
+      expect(String(r.execution_detail || '')).toMatch(/one_trade_broker_open:1/);
+    } finally {
+      if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prev;
+    }
+  });
+
   it('post_exit_cooldown blocks same-tick re-entry after CLOSE', async () => {
     const prev = process.env.MASTER_STATE_DIR;
     process.env.MASTER_STATE_DIR = mkdtempSync(join(tmpdir(), 'vs-post-exit-'));

@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { createCapitalBroker, masterCapitalConnectionId } from '../capitalFactory.js';
+import { sharedLoginLockForConnection } from '../capitalLoginLock.js';
 import { capitalEnvPresent, resolveBrokerFromEnv } from '../envBroker.js';
 
 describe('VS MASTER env broker resolve', () => {
@@ -8,6 +10,7 @@ describe('VS MASTER env broker resolve', () => {
     'CAPITAL_API_PASSWORD',
     'MASTER_LIVE_ENABLED',
     'MASTER_MT4_BRIDGE',
+    'MASTER_CAPITAL_CONNECTION_ID',
   ];
   const saved: Record<string, string | undefined> = {};
 
@@ -40,5 +43,38 @@ describe('VS MASTER env broker resolve', () => {
     expect(r.broker.paper).toBe(true);
     expect(r.mode).toBe('PAPER');
     expect(r.detail).toMatch(/CAPITAL_/);
+  });
+
+  it('desk MASTER pool ignores DB connectionId (shares env 900001 CST lock)', () => {
+    snap();
+    delete process.env.MASTER_CAPITAL_CONNECTION_ID;
+    // envBroker + deskBridge both call masterCapitalConnectionId() with no desk DB id
+    const envPool = masterCapitalConnectionId();
+    const deskPool = masterCapitalConnectionId();
+    const dbFork = masterCapitalConnectionId(777001);
+    expect(envPool).toBe(900001);
+    expect(deskPool).toBe(envPool);
+    expect(dbFork).not.toBe(envPool);
+    expect(sharedLoginLockForConnection(deskPool)).toBe(
+      sharedLoginLockForConnection(envPool)
+    );
+    expect(sharedLoginLockForConnection(dbFork)).not.toBe(
+      sharedLoginLockForConnection(envPool)
+    );
+    const broker = createCapitalBroker({
+      environment: 'demo',
+      apiKey: 'k',
+      identifier: 'i',
+      password: 'p',
+      connectionId: deskPool,
+    });
+    expect(
+      sharedLoginLockForConnection(
+        Number(
+          (broker as unknown as { deps: { credentials: { connectionId: number } } }).deps
+            .credentials.connectionId
+        )
+      )
+    ).toBe(sharedLoginLockForConnection(envPool));
   });
 });
