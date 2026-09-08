@@ -1174,6 +1174,23 @@ describe('error journal', () => {
 });
 
 describe('runMasterFromDesk integration', () => {
+  it('quoteFromCapital stamps ts_ms from update_time (not Date.now)', async () => {
+    const { quoteFromCapital } = await import('../deskBridge.js');
+    const updateIso = new Date(Date.now() - 45_000).toISOString();
+    const q = quoteFromCapital({
+      bid: 4410,
+      ask: 4410.4,
+      mid: 4410.2,
+      update_time: updateIso,
+    });
+    expect(q).not.toBeNull();
+    expect(q!.ts_ms).toBe(Date.parse(updateIso));
+    expect(Date.now() - q!.ts_ms).toBeGreaterThan(30_000);
+    const missing = quoteFromCapital({ bid: 4410, ask: 4410.4, mid: 4410.2 });
+    expect(missing).not.toBeNull();
+    expect(Date.now() - missing!.ts_ms).toBeGreaterThanOrEqual(50_000);
+  });
+
   it('ticks manage path with desk bars when owns-pipeline and entries armed', async () => {
     const prev = process.env.MASTER_OWNS_PIPELINE;
     process.env.MASTER_OWNS_PIPELINE = 'true';

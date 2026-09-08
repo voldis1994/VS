@@ -610,7 +610,7 @@ async function refresh(){
     cards.innerHTML=[
       card('Mode',s.mode),
       card('Epic',s.epic||'—'),
-      card('Health',s.health,(s.health.includes('KILL')||s.health==='PERSIST_DEGRADED'||s.health==='LIVE_NO_CAPITAL'||s.health==='LIVE_UNATTACHED')?'bad':'ok'),
+      card('Health',s.health,(s.health.includes('KILL')||s.health==='PERSIST_DEGRADED'||s.health==='LIVE_NO_CAPITAL'||s.health==='LIVE_UNATTACHED'||s.health==='LIVE_ACCOUNT_UNPROVEN')?'bad':'ok'),
       card('Broker',s.broker||'—'),
       card('Broker detail',s.broker_detail||'—'),
       card('Capital LIVE',s.capital_live_attached?'ATTACHED':(s.capital_creds_available?(s.capital_credential_source==='desk'?'creds Brokers':'creds env'):'need keys'),s.capital_live_attached?'ok':(s.mode==='LIVE'?'bad':'')),

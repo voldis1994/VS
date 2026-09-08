@@ -210,6 +210,7 @@ export function MasterPage() {
     status?.health === 'PERSIST_DEGRADED' ||
     status?.health === 'LIVE_NO_CAPITAL' ||
     status?.health === 'LIVE_UNATTACHED' ||
+    status?.health === 'LIVE_ACCOUNT_UNPROVEN' ||
     status?.persist_ok === false;
   const quoteStale = (status?.quote?.age_ms ?? 0) > 15_000;
 

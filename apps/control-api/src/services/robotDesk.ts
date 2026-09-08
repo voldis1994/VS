@@ -1280,6 +1280,7 @@ async function robotCycle(s: Internal) {
           bid: quote.bid,
           ask: quote.ask,
           mid: quote.mid,
+          update_time: quote.update_time,
           minuteCandles: s.last_minute_candles,
           closed10s: s.ohlcState.last_closed,
         });

@@ -5,6 +5,7 @@
  */
 import type { CapitalPriceCandle } from '../services/capitalCom.js';
 import type { TenSecBar } from '../services/tenSecondOhlc.js';
+import { capitalQuoteTsMs } from './broker.js';
 import { createCapitalBroker, masterCapitalConnectionId } from './capitalFactory.js';
 import { isMeaningfulBar } from './liveFeed.js';
 import { masterRuntime } from './runtime.js';
@@ -63,6 +64,8 @@ export function quoteFromCapital(input: {
   bid: number | null;
   ask: number | null;
   mid: number | null;
+  /** Capital snapshot update_time — required for honest stale_quote gates */
+  update_time?: string | number | null;
 }): Quote | null {
   if (input.bid == null || input.ask == null || input.mid == null) return null;
   return {
@@ -70,7 +73,8 @@ export function quoteFromCapital(input: {
     ask: input.ask,
     mid: input.mid,
     spread: input.ask - input.bid,
-    ts_ms: Date.now(),
+    // Never forge Date.now() — desk owns-pipeline must age like broker REST
+    ts_ms: capitalQuoteTsMs(input.update_time),
   };
 }
 
@@ -184,18 +188,22 @@ export function syncMasterEntryOwnership(brokerOpen: boolean): void {
  * Run one MASTER tick from desk market data.
  * Returns detail string for desk tick log, or null if bridge inactive.
  */
+let deskLastMid: number | null = null;
+let deskFrozenPolls = 0;
+
 export async function runMasterFromDesk(input: {
   epic: string;
   bid: number | null;
   ask: number | null;
   mid: number | null;
+  update_time?: string | number | null;
   minuteCandles: CapitalPriceCandle[];
   closed10s: TenSecBar | null;
 }): Promise<{ active: boolean; detail: string; executed: boolean }> {
   if (!masterOwnsPipeline()) {
     return { active: false, detail: '', executed: false };
   }
-  const quote = quoteFromCapital(input);
+  let quote = quoteFromCapital(input);
   const bars = buildMasterBars(input.minuteCandles, input.closed10s);
   if (!quote || bars.length < 5) {
     return {
@@ -203,6 +211,16 @@ export async function runMasterFromDesk(input: {
       detail: 'MASTER · waiting bars/quote',
       executed: false,
     };
+  }
+  // Frozen mid across desk ticks — age ts_ms so DATA_STALE / soft-manage stay honest
+  if (deskLastMid != null && Math.abs(quote.mid - deskLastMid) < 1e-9) {
+    deskFrozenPolls += 1;
+  } else {
+    deskFrozenPolls = 0;
+  }
+  deskLastMid = quote.mid;
+  if (deskFrozenPolls >= 24) {
+    quote = { ...quote, ts_ms: Date.now() - 60_000 };
   }
   masterRuntime.setEpic(input.epic);
   if (!masterRuntime.running) {
