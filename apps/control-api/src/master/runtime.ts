@@ -497,6 +497,14 @@ class MasterRuntime {
   }
 
   /**
+   * Demo/tests: stop background manage timer so fill→exit proof is observed
+   * on tick()/exit_drive — not a silent 1s manage close between live polls.
+   */
+  pauseBackgroundManage(): void {
+    this.clearManageLoop();
+  }
+
+  /**
    * Resume feed/entries after crash when durable desired_running is set.
    * PAPER uses public live feed; LIVE only when Capital/MT4 broker already attached
    * (never invents Capital credentials).

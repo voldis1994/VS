@@ -73,19 +73,31 @@ async function main() {
   {
     const r = run('npm', ['run', 'master:live-paper'], 90_000);
     const demo = readJson(join(artifactDir, 'vs_master_live_paper_demo.json'));
+    let honestClosed = false;
+    try {
+      const { isHonestLivePaperClosed } = await import('../livePaperHonesty.js');
+      honestClosed = !!(demo && isHonestLivePaperClosed(demo));
+    } catch {
+      honestClosed = false;
+    }
     const ok =
       r.ok &&
       typeof demo?.status === 'string' &&
       demo.status === 'PASS_LIVE_DATA_CLOSED' &&
       demo.forced_live_paper_fill !== true &&
-      (demo.performance_trades ?? 0) >= 1;
+      (demo.performance_trades ?? 0) >= 1 &&
+      (demo.exit_phase === true || (demo.exit_cycles ?? 0) >= 1) &&
+      (demo.executed_cycles ?? 0) >= 1 &&
+      (demo.executed_cycles ?? 0) <= 2 &&
+      (demo.open_positions ?? 0) === 0 &&
+      honestClosed;
     checks.push({
       id: 'live_market_paper',
       requirement:
-        'Live market data → decision → paper fill → exit → journal/performance',
+        'Live market data → one natural fill → tick-observed exit → journal/performance (no churn)',
       ok,
       detail: demo
-        ? `${demo.status} mid=${demo.first_mid} feed=${demo.feed} executed=${demo.executed_cycles} exits=${demo.exit_cycles} trades=${demo.performance_trades} forced=${!!demo.forced_live_paper_fill}`
+        ? `${demo.status} mid=${demo.first_mid} feed=${demo.feed} executed=${demo.executed_cycles} exit_phase=${!!demo.exit_phase} exits=${demo.exit_cycles} trades=${demo.performance_trades} forced=${!!demo.forced_live_paper_fill} honest=${honestClosed}`
         : r.out.slice(-500),
     });
   }
