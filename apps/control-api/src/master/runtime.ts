@@ -45,7 +45,6 @@ import {
   resolveCloseMoneyPnl,
   resolveCloseExitFill,
   resolveFloatingMoneyPnl,
-  applyCloseFees,
   usableBrokerUpl,
 } from './moneyExit.js';
 import { loadMasterErrors, logMasterError } from './errorJournal.js';
