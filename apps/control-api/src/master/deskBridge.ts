@@ -90,6 +90,22 @@ export async function ensureMasterCapitalBroker(creds: {
       if (typeof broker.rebindCapitalAccount === 'function') {
         const want = String(creds.capitalAccountId || '').trim();
         if (want) {
+          const cur =
+            typeof broker.pinnedAccountId === 'function'
+              ? broker.pinnedAccountId()
+              : '';
+          // Different CFD while opens remain would orphan prior book unmanaged
+          if (want !== cur) {
+            const gate = await masterRuntime.refuseDetachCapitalWithOpens();
+            if (!gate.ok) {
+              masterRuntime.broker_detail = `capital_rebind_refused:${gate.detail}`;
+              return {
+                ok: false,
+                mode: masterRuntime.cfg.mode,
+                detail: masterRuntime.broker_detail,
+              };
+            }
+          }
           const pinned = await broker.rebindCapitalAccount(want);
           if (!pinned.ok) {
             masterRuntime.broker_detail = `capital_rebind_failed:${pinned.detail}`;

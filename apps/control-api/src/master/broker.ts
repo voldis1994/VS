@@ -521,6 +521,12 @@ export class CapitalBroker implements MasterBroker {
     return `${env}|${id}|${acct}|${api}`;
   }
 
+  /** Current CFD pin target (empty when unset). */
+  pinnedAccountId(): string {
+    const c = (this.deps.credentials || {}) as Record<string, unknown>;
+    return String(c.capitalAccountId ?? '').trim();
+  }
+
   /** Bind + re-acquire + pin (fail closed when id supplied but switch fails). */
   async rebindCapitalAccount(
     accountId: string | null | undefined
@@ -1764,24 +1770,63 @@ export class CapitalBroker implements MasterBroker {
       );
     }
 
-    updateTradeAck(command_id, {
-      ack_status: 'SUCCESS',
-      ticket: position_id,
-      fill_price,
-      detail: 'ACK_SUCCESS',
-    });
-
-    const listedFinal = await this.listOpenPositions(input.epic);
-    const filled = listedFinal.positions.find((p) => p.position_id === position_id);
-    return {
-      ok: true,
-      order_id: opened.deal_reference || null,
-      position_id,
-      fill_price,
-      fill_size: fill_size ?? filled?.size ?? orderSize,
-      detail: `capital_open deal=${position_id}${fill_price != null ? ` fill=${fill_price}` : ''}`,
-      paper: false,
-    };
+    // Prove deal present on venue BEFORE SUCCESS ack — ACCEPTED/match alone is not enough
+    // (list flake empty or unread must not journal SUCCESS / return ok:true).
+    const proveAttempts =
+      process.env.VITEST || process.env.MASTER_CONFIRM_FAST === 'true'
+        ? 3
+        : EMPTY_BROKER_GHOST_DEBOUNCE;
+    const proveDelayMs =
+      process.env.VITEST || process.env.MASTER_CONFIRM_FAST === 'true' ? 1 : 120;
+    let filled:
+      | { size?: number; open_level?: number | null }
+      | undefined;
+    let lastListFail: string | null = null;
+    for (let i = 0; i < proveAttempts; i++) {
+      if (i > 0) await new Promise((r) => setTimeout(r, proveDelayMs));
+      // Venue-wide — epic filter must not hide the bound ticket
+      const listedFinal = await this.listOpenPositions();
+      if (!listedFinal.ok) {
+        lastListFail = listedFinal.detail || 'list_failed';
+        continue;
+      }
+      lastListFail = null;
+      filled = listedFinal.positions.find((p) => p.position_id === position_id);
+      const present =
+        filled != null ||
+        (listedFinal.presence_ids ?? []).includes(position_id!);
+      if (present) {
+        updateTradeAck(command_id, {
+          ack_status: 'SUCCESS',
+          ticket: position_id,
+          fill_price,
+          detail: 'ACK_SUCCESS',
+        });
+        return {
+          ok: true,
+          order_id: opened.deal_reference || null,
+          position_id,
+          fill_price,
+          fill_size: fill_size ?? filled?.size ?? orderSize,
+          detail: `capital_open deal=${position_id}${fill_price != null ? ` fill=${fill_price}` : ''}`,
+          paper: false,
+        };
+      }
+    }
+    if (lastListFail) {
+      return await ackFailClose(
+        position_id!,
+        opened.deal_reference || null,
+        `capital_open_list_unproven:${lastListFail}`,
+        { fill_price, fill_size }
+      );
+    }
+    return await ackFailClose(
+      position_id!,
+      opened.deal_reference || null,
+      'capital_open_not_present',
+      { fill_price, fill_size }
+    );
   }
 
   /**

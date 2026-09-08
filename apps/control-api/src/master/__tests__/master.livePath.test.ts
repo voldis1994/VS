@@ -2622,6 +2622,140 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(place.position_id).toBeNull();
   });
 
+  it('ACCEPTED open refuses SUCCESS when deal never appears on list', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    let afterConfirmLists = 0;
+    let closed = 0;
+    let dealLive = false;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-nopres' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => {
+        if (!dealLive) return { ok: true, positions: [], detail: '0' };
+        afterConfirmLists += 1;
+        // One post-confirm list proves attach SL already on book; later lists vanish
+        if (afterConfirmLists === 1) {
+          return {
+            ok: true,
+            positions: [
+              {
+                deal_id: 'ghost-deal',
+                epic: 'GOLD',
+                direction: 'BUY',
+                size: 0.1,
+                open_level: 4410.4,
+                stop_level: 4400,
+              },
+            ],
+            detail: '1',
+          };
+        }
+        return { ok: true, positions: [], detail: '0' };
+      },
+      create: async () => ({ ok: true, deal_reference: 'ref-nopres', detail: 'posted' }),
+      confirm: async () => {
+        dealLive = true;
+        return {
+          ok: true,
+          deal_id: 'ghost-deal',
+          fill_level: 4410.4,
+          detail: 'ACCEPTED',
+        };
+      },
+      modify: async () => ({ ok: true, deal_reference: 'm-nopres', detail: 'ok' }),
+      close: async () => {
+        closed += 1;
+        dealLive = false;
+        return { ok: true, detail: 'closed' };
+      },
+    });
+    await broker.connect();
+    const place = await broker.placeOrder({
+      intent_id: 'intent-nopres',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: 4400,
+    });
+    expect(place.ok).toBe(false);
+    expect(place.detail).toMatch(/capital_open_not_present/);
+    expect(closed).toBeGreaterThanOrEqual(1);
+  });
+
+  it('ACCEPTED open refuses SUCCESS when post-fill list stays unproven', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    let afterConfirmLists = 0;
+    let closed = 0;
+    let dealLive = false;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-listfail' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => {
+        if (!dealLive) return { ok: true, positions: [], detail: '0' };
+        afterConfirmLists += 1;
+        if (afterConfirmLists === 1) {
+          return {
+            ok: true,
+            positions: [
+              {
+                deal_id: 'deal-listfail',
+                epic: 'GOLD',
+                direction: 'BUY',
+                size: 0.1,
+                open_level: 4410.4,
+                stop_level: 4400,
+              },
+            ],
+            detail: '1',
+          };
+        }
+        return { ok: false, positions: [], detail: 'list_transport_down' };
+      },
+      create: async () => ({ ok: true, deal_reference: 'ref-listfail', detail: 'posted' }),
+      confirm: async () => {
+        dealLive = true;
+        return {
+          ok: true,
+          deal_id: 'deal-listfail',
+          fill_level: 4410.4,
+          detail: 'ACCEPTED',
+        };
+      },
+      modify: async () => ({ ok: true, deal_reference: 'm-listfail', detail: 'ok' }),
+      close: async () => {
+        closed += 1;
+        return { ok: true, detail: 'closed' };
+      },
+    });
+    await broker.connect();
+    const place = await broker.placeOrder({
+      intent_id: 'intent-listfail-final',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: 4400,
+    });
+    expect(place.ok).toBe(false);
+    expect(place.detail).toMatch(/capital_open_list_unproven/);
+    expect(closed).toBeGreaterThanOrEqual(1);
+  });
+
   it('recover Capital SUCCESS ack still attach-or-fails when adopt list fails', async () => {
     process.env.MASTER_LIVE_ENABLED = 'true';
     process.env.MASTER_CONFIRM_FAST = 'true';

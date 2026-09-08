@@ -3,6 +3,7 @@ import { setDeskCapitalCredLoaderForTests } from '../capitalDeskCreds.js';
 import { createCapitalBroker, masterCapitalConnectionId } from '../capitalFactory.js';
 import { sharedLoginLockForConnection } from '../capitalLoginLock.js';
 import { deskCapitalPoolConnectionId } from '../deskBridge.js';
+import { CapitalBroker } from '../broker.js';
 import {
   capitalEnvPresent,
   mt4LegacyAllowed,
@@ -363,5 +364,64 @@ describe('VS MASTER env broker resolve', () => {
     const r = await deps.deps.ensureAccount({ currentAccountId: '' });
     expect(r.ok).toBe(false);
     expect(r.detail).toMatch(/capital_account_id_required/);
+  });
+
+  it('desk ensureMasterCapitalBroker refuses CFD rebind while venue opens remain', async () => {
+    snap();
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const positions = new Map([
+      [
+        'deal-open',
+        {
+          deal_id: 'deal-open',
+          epic: 'GOLD',
+          direction: 'BUY' as const,
+          size: 0.1,
+          open_level: 4410,
+        },
+      ],
+    ]);
+    const broker = new CapitalBroker({
+      credentials: {
+        environment: 'demo',
+        apiKey: 'k',
+        identifier: 'i',
+        password: 'p',
+        capitalAccountId: 'cfd-A',
+      },
+      acquire: async () => ({ ok: true, session: { id: 's-desk', currentAccountId: 'cfd-A' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({
+        ok: true,
+        positions: [...positions.values()],
+        detail: '1',
+      }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({ ok: true, detail: 'closed' }),
+      ensureAccount: async () => ({ ok: true, detail: 'pinned' }),
+    });
+    await broker.connect();
+    masterRuntime.stop();
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    const { ensureMasterCapitalBroker } = await import('../deskBridge.js');
+    const r = await ensureMasterCapitalBroker({
+      environment: 'demo',
+      apiKey: 'k',
+      identifier: 'i',
+      password: 'p',
+      capitalAccountId: 'cfd-B',
+    });
+    expect(r.ok).toBe(false);
+    expect(r.detail).toMatch(/capital_rebind_refused/);
+    expect(broker.pinnedAccountId()).toBe('cfd-A');
+    masterRuntime.ensurePaperBroker();
+    masterRuntime.setMode('PAPER');
   });
 });
