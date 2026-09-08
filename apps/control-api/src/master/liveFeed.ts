@@ -166,7 +166,13 @@ export class LiveBarBuilder {
   private low = 0;
   private close = 0;
   private barStart = 0;
-  seed_source: 'yahoo_ohlc' | 'capital_ohlc' | 'broker_ohlc' | 'synthetic_fallback' | 'none' = 'none';
+  seed_source:
+    | 'yahoo_ohlc'
+    | 'capital_ohlc'
+    | 'mt4_ohlc'
+    | 'broker_ohlc'
+    | 'synthetic_fallback'
+    | 'none' = 'none';
   last_structure_refresh_ms = 0;
 
   constructor(
@@ -211,8 +217,18 @@ export class LiveBarBuilder {
     this.last_structure_refresh_ms = Date.now();
   }
 
+  /** Map broker hist detail → honest seed_source label (never claim Capital for MT4). */
+  private brokerSeedSource(
+    detail: string | undefined
+  ): LiveBarBuilder['seed_source'] {
+    const d = String(detail || '');
+    if (/mt4_bars_m1/i.test(d)) return 'mt4_ohlc';
+    if (/capital/i.test(d)) return 'capital_ohlc';
+    return 'broker_ohlc';
+  }
+
   /**
-   * Prefer broker OHLC (Capital LIVE), then Yahoo; fall back to synthetic around mid.
+   * Prefer broker OHLC (Capital/MT4 LIVE), then Yahoo; fall back to synthetic around mid.
    */
   async seedFromBrokerOrPublic(
     epic: string,
@@ -221,7 +237,7 @@ export class LiveBarBuilder {
     brokerBars?: { ok: boolean; bars: Bar[]; detail: string } | null
   ): Promise<string> {
     if (brokerBars?.ok && brokerBars.bars.length >= 10) {
-      this.seedBars(brokerBars.bars, 'capital_ohlc');
+      this.seedBars(brokerBars.bars, this.brokerSeedSource(brokerBars.detail));
       return brokerBars.detail;
     }
     return this.seedFromPublic(epic, liveMid, n);
@@ -248,7 +264,7 @@ export class LiveBarBuilder {
     if (Date.now() - this.last_structure_refresh_ms < everyMs) return null;
     if (brokerBars?.ok && brokerBars.bars.length >= 10) {
       this.structureBars = brokerBars.bars.slice(-this.maxBars);
-      this.seed_source = 'capital_ohlc';
+      this.seed_source = this.brokerSeedSource(brokerBars.detail);
       this.last_structure_refresh_ms = Date.now();
       return `refresh:${brokerBars.detail}`;
     }

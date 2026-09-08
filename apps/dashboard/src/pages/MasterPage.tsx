@@ -38,7 +38,14 @@ type MasterStatus = {
     total_fees?: number;
     total_pnl?: number;
   } | null;
-  monte_carlo?: { p05?: number; p50?: number; p95?: number } | null;
+  monte_carlo?: {
+    p05?: number;
+    p50?: number;
+    p95?: number;
+    equity_p05?: number;
+    equity_p50?: number;
+    equity_p95?: number;
+  } | null;
   monitoring?: {
     last_cycle_ms?: number;
     relative_spread?: number | null;
@@ -344,9 +351,11 @@ export function MasterPage() {
         {
           k: 'MC p50',
           v:
-            status.monte_carlo?.p50 != null
-              ? Number(status.monte_carlo.p50).toFixed(2)
-              : '—',
+            status.monte_carlo?.equity_p50 != null
+              ? Number(status.monte_carlo.equity_p50).toFixed(2)
+              : status.monte_carlo?.p50 != null
+                ? Number(status.monte_carlo.p50).toFixed(2)
+                : '—',
         },
         {
           k: 'Rel spread',

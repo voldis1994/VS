@@ -68,6 +68,21 @@ describe('VS MASTER live bar builder', () => {
     expect(b.structureCount()).toBe(20);
   });
 
+  it('seedFromBrokerOrPublic labels MT4 bars_m1 as mt4_ohlc (not capital)', async () => {
+    const b = new LiveBarBuilder(1000, 40);
+    const mt4Bars = Array.from({ length: 15 }, (_, i) => {
+      const o = 4400 + i;
+      return { open: o, high: o + 1, low: o - 0.5, close: o + 0.5, ts_ms: i * 60_000 };
+    });
+    const detail = await b.seedFromBrokerOrPublic('GOLD', 4420, 40, {
+      ok: true,
+      bars: mt4Bars,
+      detail: 'mt4_bars_m1_15',
+    });
+    expect(detail).toBe('mt4_bars_m1_15');
+    expect(b.seed_source).toBe('mt4_ohlc');
+  });
+
   it('ATR ignores micro TRs mixed into structure (10s onto 5m)', () => {
     const structure = Array.from({ length: 20 }, (_, i) => {
       const o = 4400 + i;

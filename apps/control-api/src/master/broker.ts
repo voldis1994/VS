@@ -1900,10 +1900,11 @@ export class Mt4FileBroker implements MasterBroker {
     const raw = Array.isArray(market.bars_m1) ? market.bars_m1 : [];
     const bars = raw
       .map((b: any) => ({
-        open: Number(b.open ?? b.Open),
-        high: Number(b.high ?? b.High),
-        low: Number(b.low ?? b.Low),
-        close: Number(b.close ?? b.Close),
+        // EA VS_MASTER/CHECK export short keys t,o,h,l,c — accept both shapes
+        open: Number(b.open ?? b.Open ?? b.o),
+        high: Number(b.high ?? b.High ?? b.h),
+        low: Number(b.low ?? b.Low ?? b.l),
+        close: Number(b.close ?? b.Close ?? b.c),
         ts_ms: (() => {
           const t = b.ts_ms ?? b.time ?? b.Time ?? b.t;
           if (t == null || t === '') return undefined;

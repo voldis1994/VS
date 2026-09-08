@@ -609,6 +609,51 @@ describe('VS MASTER MT4 file bridge', () => {
     }
   });
 
+  it('getHistoryBars accepts EA short keys t/o/h/l/c (VS_MASTER.mq4)', async () => {
+    const prev = process.env.MASTER_MT4_STATUS_STALE_MS;
+    process.env.MASTER_MT4_STATUS_STALE_MS = '60000';
+    try {
+      const root = mkdtempSync(join(tmpdir(), 'vs-mt4-bars-short-'));
+      const broker = new Mt4FileBroker(root);
+      await broker.connect();
+      mkdirSync(join(root, 'market'), { recursive: true });
+      const bars = [];
+      const t0 = Math.floor(Date.now() / 1000) - 20 * 60;
+      for (let i = 0; i < 20; i++) {
+        const o = 4400 + i;
+        bars.push({
+          t: t0 + i * 60,
+          o,
+          h: o + 1,
+          l: o - 1,
+          c: o + 0.5,
+          v: 10,
+        });
+      }
+      writeFileSync(
+        join(root, 'market', 'latest.json'),
+        JSON.stringify({
+          bid: 4420,
+          ask: 4420.4,
+          symbol: 'XAUUSD',
+          digits: 2,
+          point: 0.01,
+          bars_m1: bars,
+        })
+      );
+      const hist = await broker.getHistoryBars('XAUUSD', 60);
+      expect(hist.ok).toBe(true);
+      expect(hist.bars.length).toBe(20);
+      expect(hist.detail).toBe('mt4_bars_m1_20');
+      expect(hist.bars[0]!.open).toBe(4400);
+      expect(hist.bars.at(-1)!.close).toBeCloseTo(4419.5, 5);
+      expect(hist.bars.at(-1)!.ts_ms).toBe((t0 + 19 * 60) * 1000);
+    } finally {
+      if (prev === undefined) delete process.env.MASTER_MT4_STATUS_STALE_MS;
+      else process.env.MASTER_MT4_STATUS_STALE_MS = prev;
+    }
+  });
+
   it('MODIFY rejects ACK when status stop never moved', async () => {
     const root = mkdtempSync(join(tmpdir(), 'vs-mt4-modproof-'));
     const sim = new Mt4BridgeSimulator(root);

@@ -499,7 +499,7 @@ async function refresh(){
       card('Win rate',s.performance?.trades?((Number(s.performance.win_rate||0)*100).toFixed(1)+'%'):'—'),
       card('Profit factor',s.performance?.profit_factor!=null&&Number.isFinite(s.performance.profit_factor)?Number(s.performance.profit_factor).toFixed(2):'—'),
       card('Loss streak',s.account?.consecutive_losses!=null?String(s.account.consecutive_losses):'—',(s.account?.consecutive_losses||0)>=3?'bad':''),
-      card('MC p50',s.monte_carlo?.p50!=null?Number(s.monte_carlo.p50).toFixed(2):'—'),
+      card('MC p50',s.monte_carlo?.equity_p50!=null?Number(s.monte_carlo.equity_p50).toFixed(2):(s.monte_carlo?.p50!=null?Number(s.monte_carlo.p50).toFixed(2):'—')),
       card('Rel spread',s.monitoring?.relative_spread!=null?Number(s.monitoring.relative_spread).toFixed(2):'—',s.monitoring?.relative_spread!=null&&s.monitoring.relative_spread>1.5?'bad':''),
       card('Cycle ms',s.monitoring?.last_cycle_ms!=null?String(s.monitoring.last_cycle_ms):'—'),
       card('ACK ms',s.monitoring?.ack_latency_ms!=null?String(s.monitoring.ack_latency_ms):'—'),
