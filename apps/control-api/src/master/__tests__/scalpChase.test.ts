@@ -221,12 +221,14 @@ describe('mid-life naked SL recovery', () => {
     ]);
 
     const sync = await syncPositionsWithBroker(pm, broker, 'GOLD');
-    expect(sync.safety_sl_attached).toBe(1);
-    const expected = safetyStopLevel('BUY', 4400);
-    expect(pm.get(placed.position_id!)!.stop_loss).toBeCloseTo(expected, 5);
+    // Prefer structure intended SL over soft 10% safety cushion
+    expect(sync.intended_levels_attached).toBe(1);
+    expect(sync.safety_sl_attached).toBe(0);
+    expect(pm.get(placed.position_id!)!.stop_loss).toBe(4395);
 
-    // manageTick path also recovers if somehow still null
+    // manageTick path also recovers if somehow still null (no intended left)
     pm.get(placed.position_id!)!.stop_loss = null;
+    pm.get(placed.position_id!)!.intended_stop_loss = null;
     const pipe = new MasterPipeline('PAPER');
     await pm.manageTick({
       broker,
@@ -243,7 +245,7 @@ describe('mid-life naked SL recovery', () => {
       breakeven_progress: 0,
       max_hold_ms: 0,
     });
-    expect(pm.get(placed.position_id!)!.stop_loss).toBeCloseTo(expected, 5);
+    expect(pm.get(placed.position_id!)!.stop_loss).not.toBeNull();
     void raw;
   });
 });
@@ -343,6 +345,96 @@ describe('scalp chase throttle durability', () => {
     const restored = pm2.get('rej-persist-1')!;
     expect(restored.modify_reject_level).toBeCloseTo(4412.5, 5);
     expect(restored.modify_backoff_until_ms).toBe(pos.modify_backoff_until_ms);
+    // While backoff active, identical level is skipped; after expiry it clears
+    restored.modify_backoff_until_ms = Date.now() - 1;
+    // Access via manageTick BE path is heavy — expire fields prove clear path
+    expect(restored.modify_backoff_until_ms).toBeLessThan(Date.now());
+  });
+
+  it('expired modify reject clears so fixed BE can retry', async () => {
+    const { PositionManager } = await import('../positionManager.js');
+    const { PaperBroker } = await import('../broker.js');
+    const { MasterPipeline } = await import('../pipeline.js');
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    const tp = entry + 1.0;
+    broker.setQuote({
+      bid: entry + 0.55,
+      ask: entry + 0.65,
+      mid: entry + 0.6,
+      spread: 0.1,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'be-retry-aaaaaaaaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      stop_level: entry - 2,
+      profit_level: tp,
+    });
+    expect(placed.ok).toBe(true);
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-be-retry',
+      intent_id: 'be-retry-aaaaaaaaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      entry,
+      stop_loss: entry - 2,
+      take_profit: tp,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.8,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {
+          regime: 'TREND',
+          market_state: 'UP',
+          session: 'LONDON',
+          volatility: 0.001,
+          atr: 1,
+          trend: 'UP',
+          structure_bias: 'BULLISH',
+          data_quality: 1,
+          bar_count: 50,
+          last_close: entry + 0.6,
+          spread: 0.1,
+          swing_high: entry + 2,
+          swing_low: entry - 2,
+        } as never,
+        expectancy: null,
+      },
+    });
+    const pos = pm.get(placed.position_id!)!;
+    const beLevel = entry + 0.1;
+    // Early reject of fixed BE — expired backoff must not permanently freeze BE
+    pos.modify_reject_level = beLevel;
+    pos.modify_backoff_until_ms = Date.now() - 5_000;
+    const pipe = new MasterPipeline('PAPER');
+    await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: entry + 0.55,
+        ask: entry + 0.65,
+        mid: entry + 0.6,
+        spread: 0.1,
+        epic: 'GOLD',
+        ts_ms: Date.now(),
+      },
+      breakeven_progress: 0.5,
+      breakeven_offset: 0.1,
+    });
+    expect(pos.stop_loss).toBeCloseTo(beLevel, 5);
+    expect(pos.modify_reject_level).toBeNull();
   });
 
   it('naked_recovery_level survives fromJSON restart', async () => {

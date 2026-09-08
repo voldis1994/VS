@@ -1087,8 +1087,12 @@ export class CapitalBroker implements MasterBroker {
       const cur0 = listed0.ok
         ? listed0.positions.find((p) => p.position_id === position_id)
         : undefined;
+      const wantSlNum = Number(input.stop_level);
+      const slTol = Math.max(0.05, Math.abs(wantSlNum) * 1e-5);
       const alreadyProtected =
-        cur0?.stop_level != null && Number.isFinite(cur0.stop_level);
+        cur0?.stop_level != null &&
+        Number.isFinite(cur0.stop_level) &&
+        Math.abs(Number(cur0.stop_level) - wantSlNum) <= slTol;
       const wantTp =
         input.profit_level != null &&
         Number.isFinite(input.profit_level) &&
@@ -1097,19 +1101,22 @@ export class CapitalBroker implements MasterBroker {
           : null;
       const tpMissing =
         wantTp != null &&
-        (cur0?.profit_level == null || !Number.isFinite(cur0.profit_level));
+        (cur0?.profit_level == null ||
+          !Number.isFinite(cur0.profit_level) ||
+          Math.abs(Number(cur0.profit_level) - wantTp) >
+            Math.max(0.05, Math.abs(wantTp) * 1e-5));
       if (!alreadyProtected || tpMissing) {
         needAttach = true;
-        const wantSl = Number(input.stop_level);
+        const wantSl = wantSlNum;
         let attached = false;
         for (let widen = 0; widen < 4 && !attached; widen++) {
           const mid = fill_price ?? wantSl;
           const pad = widen * Math.max(0.5, Math.abs(mid) * 0.0005);
           const sl = input.side === 'BUY' ? wantSl - pad : wantSl + pad;
-          // Use modifyPosition so ACCEPTED-but-unchanged is rejected (VS-System)
+          // Always drive toward intended SL — do not preserve a soft/wrong leftover stop
           const mod = await this.modifyPosition({
             position_id,
-            stop_level: alreadyProtected ? cur0!.stop_level! : sl,
+            stop_level: alreadyProtected && !tpMissing ? cur0!.stop_level! : sl,
             profit_level: wantTp ?? input.profit_level,
           });
           if (mod.ok) {
@@ -1126,7 +1133,9 @@ export class CapitalBroker implements MasterBroker {
             position_id: null,
             fill_price: null,
             fill_size: null,
-            detail: tpMissing ? 'CAPITAL_TP_ATTACH_FAILED' : 'CAPITAL_SL_ATTACH_FAILED',
+            detail: tpMissing && alreadyProtected
+              ? 'CAPITAL_TP_ATTACH_FAILED'
+              : 'CAPITAL_SL_ATTACH_FAILED',
             paper: false,
           };
         }

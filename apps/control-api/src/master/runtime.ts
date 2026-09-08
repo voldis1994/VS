@@ -1664,6 +1664,12 @@ class MasterRuntime {
             expectancy: null,
           },
         });
+        // Keep journal structure levels as intended even when chart still naked
+        const booked = this.positions.get(row.ticket);
+        if (booked) {
+          if (wantSl != null) booked.intended_stop_loss = wantSl;
+          if (wantTp != null) booked.intended_take_profit = wantTp;
+        }
       }
       if (fromAck.adopted.length) {
         this.broker_detail = [

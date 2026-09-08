@@ -18,6 +18,8 @@ export type SyncReport = {
   dropped: number;
   matched: number;
   safety_sl_attached: number;
+  /** Re-applied structure SL/TP after mid-life strip (before soft safety). */
+  intended_levels_attached: number;
   skipped: boolean;
   skip_reason: string | null;
   /** True when empty book debounce deferred ghost wipe */
@@ -60,6 +62,7 @@ export async function syncPositionsWithBroker(
       dropped: 0,
       matched: 0,
       safety_sl_attached: 0,
+      intended_levels_attached: 0,
       skipped: true,
       skip_reason: listed.detail || 'list_failed',
       ghost_drop_deferred: false,
@@ -85,6 +88,7 @@ export async function syncPositionsWithBroker(
         dropped: 0,
         matched: 0,
         safety_sl_attached: 0,
+        intended_levels_attached: 0,
         skipped: false,
         skip_reason: `empty_broker_debounce_${n}/${EMPTY_BROKER_GHOST_DEBOUNCE}`,
         ghost_drop_deferred: true,
@@ -125,12 +129,51 @@ export async function syncPositionsWithBroker(
   );
 
   let safety_sl_attached = 0;
+  let intended_levels_attached = 0;
   if (broker.modifyPosition) {
-    // Orphans + matched positions that are naked on broker (mid-life strip)
+    // Mid-life strip: prefer re-attaching OPEN structure levels before soft safety cushion.
     for (const bp of brokerPositions) {
-      if (bp.stop_level != null) continue;
       const managed = manager.get(bp.position_id);
-      if (!managed || managed.stop_loss != null) continue;
+      if (!managed) continue;
+      const wantSl =
+        managed.intended_stop_loss != null &&
+        Number.isFinite(managed.intended_stop_loss) &&
+        managed.intended_stop_loss > 0
+          ? Number(managed.intended_stop_loss)
+          : null;
+      const wantTp =
+        managed.intended_take_profit != null &&
+        Number.isFinite(managed.intended_take_profit) &&
+        managed.intended_take_profit > 0
+          ? Number(managed.intended_take_profit)
+          : null;
+      const needSl = bp.stop_level == null && wantSl != null;
+      const needTp = bp.profit_level == null && wantTp != null;
+      if (needSl || needTp) {
+        const mod = await broker.modifyPosition({
+          position_id: bp.position_id,
+          stop_level: needSl
+            ? wantSl!
+            : bp.stop_level != null
+              ? bp.stop_level
+              : undefined,
+          profit_level: needTp
+            ? wantTp!
+            : bp.profit_level != null
+              ? bp.profit_level
+              : undefined,
+        });
+        if (mod.ok) {
+          if (needSl) managed.stop_loss = wantSl;
+          if (needTp) managed.take_profit = wantTp;
+          intended_levels_attached += 1;
+          continue;
+        }
+      }
+      // Soft safety only when still naked and no intended structure SL
+      if (bp.stop_level != null) continue;
+      if (managed.stop_loss != null) continue;
+      if (wantSl != null) continue;
       const stop = safetyStopLevel(bp.side, bp.open_level);
       const mod = await broker.modifyPosition({
         position_id: bp.position_id,
@@ -156,6 +199,7 @@ export async function syncPositionsWithBroker(
     dropped: orphans_local.length,
     matched,
     safety_sl_attached,
+    intended_levels_attached,
     skipped: false,
     skip_reason: null,
     ghost_drop_deferred: false,

@@ -68,6 +68,8 @@ export class FilePersist implements PersistClient {
           ema3_side: p.ema3_side ?? null,
           modify_reject_level: p.modify_reject_level ?? null,
           modify_backoff_until_ms: p.modify_backoff_until_ms ?? null,
+          intended_stop_loss: p.intended_stop_loss ?? null,
+          intended_take_profit: p.intended_take_profit ?? null,
           naked_recovery_level: p.naked_recovery_level ?? null,
         },
       }));
@@ -184,6 +186,18 @@ export class FilePersist implements PersistClient {
           const v =
             p.modify_backoff_until_ms ?? p.payload?.modify_backoff_until_ms;
           return v != null && Number.isFinite(Number(v)) ? Number(v) : null;
+        })(),
+        intended_stop_loss: (() => {
+          const v = p.intended_stop_loss ?? p.payload?.intended_stop_loss;
+          return v != null && Number.isFinite(Number(v)) && Number(v) > 0
+            ? Number(v)
+            : null;
+        })(),
+        intended_take_profit: (() => {
+          const v = p.intended_take_profit ?? p.payload?.intended_take_profit;
+          return v != null && Number.isFinite(Number(v)) && Number(v) > 0
+            ? Number(v)
+            : null;
         })(),
         naked_recovery_level: (() => {
           const v = p.naked_recovery_level ?? p.payload?.naked_recovery_level;

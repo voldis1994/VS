@@ -125,6 +125,82 @@ describe('VS MASTER recovery SL + trail', () => {
     expect(after.positions[0]!.stop_level).toBeCloseTo(expected, 5);
   });
 
+  it('mid-life strip re-attaches intended SL/TP before soft safety', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    broker.setQuote({
+      bid: 4400,
+      ask: 4400.4,
+      mid: 4400.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'intend-reattach-bbbbbbbbb',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.2,
+      stop_level: 4390,
+      profit_level: 4420,
+    });
+    expect(placed.ok).toBe(true);
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-int',
+      intent_id: 'intend-reattach-bbbbbbbbb',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.2,
+      entry: 4400.2,
+      stop_loss: 4390,
+      take_profit: 4420,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {
+          regime: 'TREND',
+          market_state: 'UP',
+          session: 'LONDON',
+          volatility: 0.001,
+          atr: 1,
+          trend: 'UP',
+          structure_bias: 'BULLISH',
+          data_quality: 1,
+          bar_count: 50,
+          last_close: 4400,
+          spread: 0.2,
+          swing_high: 4420,
+          swing_low: 4390,
+        } as never,
+        expectancy: null,
+      },
+    });
+    // Strip broker levels (mid-life Capital strip)
+    const paperPos = (broker as unknown as { positions: Map<string, any> }).positions.get(
+      placed.position_id!
+    );
+    expect(paperPos).toBeTruthy();
+    paperPos.stop_level = null;
+    paperPos.profit_level = null;
+    const sync = await syncPositionsWithBroker(pm, broker, 'GOLD');
+    expect(sync.intended_levels_attached).toBe(1);
+    expect(sync.safety_sl_attached).toBe(0);
+    const pos = pm.get(placed.position_id!)!;
+    expect(pos.stop_loss).toBe(4390);
+    expect(pos.take_profit).toBe(4420);
+    const after = await broker.listOpenPositions('GOLD');
+    const hit = after.positions.find((p) => p.position_id === placed.position_id)!;
+    expect(hit.stop_level).toBe(4390);
+    expect(hit.profit_level).toBe(4420);
+  });
+
   it('trails stop via modifyPosition when MFE clears floor', async () => {
     const bars = barsTrendUp();
     const pipe = new MasterPipeline('PAPER');

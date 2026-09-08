@@ -88,6 +88,12 @@ export type ManagedPosition = {
   modify_reject_level?: number | null;
   /** Durable modify time-backoff until ms */
   modify_backoff_until_ms?: number | null;
+  /**
+   * Structure levels wanted at OPEN — survive mid-life broker strip so sync can
+   * re-attach intended SL/TP instead of only soft safety_sl.
+   */
+  intended_stop_loss?: number | null;
+  intended_take_profit?: number | null;
   /** Durable naked SL recovery escalate level (0..3) across restart */
   naked_recovery_level?: number | null;
   /** Last broker-reported UPL (account currency) when known */
@@ -123,7 +129,7 @@ export class PositionManager {
   private open = new Map<string, ManagedPosition>();
   /** VS-System: skip resending the same rejected trail/BE level until backoff expires */
   private modifyBackoff = new Map<string, { until: number; level: number }>();
-  /** Permanent skip of identical rejected stop until a different candidate (VS-System). */
+  /** Rejected stop level — skip identical candidate only while backoff is active */
   private rejectedStopLevel = new Map<string, number>();
   /** VS-System naked SL recovery throttle */
   private nakedRecoveryAt = new Map<string, number>();
@@ -152,25 +158,35 @@ export class PositionManager {
     pos.modify_backoff_until_ms = until;
   }
 
-  /** True when this exact stop was rejected (permanent) or still in time backoff. */
+  /**
+   * Skip identical rejected stop only while time-backoff is active.
+   * Fixed BE must retry after backoff — permanent blacklist froze Capital BE forever.
+   */
   private shouldSkipModifyLevel(
     pos: ManagedPosition,
     level: number,
     opts?: { timeGateAll?: boolean }
   ): boolean {
-    const rejected =
-      pos.modify_reject_level ?? this.rejectedStopLevel.get(pos.position_id);
-    if (rejected != null && Math.abs(rejected - level) < 1e-9) return true;
     const until =
       pos.modify_backoff_until_ms ??
       this.modifyBackoff.get(pos.position_id)?.until;
-    const backoffLevel =
-      pos.modify_reject_level ??
-      this.modifyBackoff.get(pos.position_id)?.level;
-    if (until == null || !Number.isFinite(until)) return false;
+    const rejected =
+      pos.modify_reject_level ?? this.rejectedStopLevel.get(pos.position_id);
     const now = Date.now();
-    if (now >= until) return false;
+    const backoffActive = until != null && Number.isFinite(until) && now < until;
+
+    if (rejected != null && Math.abs(rejected - level) < 1e-9) {
+      if (!backoffActive) {
+        this.clearModifyReject(pos);
+        return false;
+      }
+      return true;
+    }
+
+    if (!backoffActive) return false;
     if (opts?.timeGateAll) return true;
+    const backoffLevel =
+      this.modifyBackoff.get(pos.position_id)?.level ?? rejected;
     return backoffLevel != null && Math.abs(backoffLevel - level) < 1e-9;
   }
 
@@ -242,6 +258,18 @@ export class PositionManager {
       entry_at: entryAt,
       stop_loss: input.stop_loss ?? null,
       take_profit,
+      intended_stop_loss:
+        input.stop_loss != null &&
+        Number.isFinite(input.stop_loss) &&
+        Number(input.stop_loss) > 0
+          ? Number(input.stop_loss)
+          : null,
+      intended_take_profit:
+        take_profit != null &&
+        Number.isFinite(take_profit) &&
+        Number(take_profit) > 0
+          ? Number(take_profit)
+          : null,
       mfe: 0,
       mae: 0,
       decision: input.decision,
@@ -1710,6 +1738,18 @@ export class PositionManager {
         entry_at: entryAt,
         stop_loss: bp.stop_level ?? null,
         take_profit: bp.profit_level ?? null,
+        intended_stop_loss:
+          bp.stop_level != null &&
+          Number.isFinite(bp.stop_level) &&
+          bp.stop_level > 0
+            ? bp.stop_level
+            : null,
+        intended_take_profit:
+          bp.profit_level != null &&
+          Number.isFinite(bp.profit_level) &&
+          bp.profit_level > 0
+            ? bp.profit_level
+            : null,
         broker_upl:
           bp.upl != null && Number.isFinite(bp.upl) ? Number(bp.upl) : null,
         mfe: 0,
