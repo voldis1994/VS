@@ -303,6 +303,62 @@ describe('Capital session pool identity', () => {
     expect(sessionPosts).toBe(1); // cached, no second login
     invalidateCapitalSession(900099);
   });
+
+  it('testCapitalComSession reuses pool and never DELETE/closes (keeps MASTER CST)', async () => {
+    const { acquireCapitalSession, invalidateCapitalSession } = await import(
+      './capitalCom.js'
+    );
+    let sessionPosts = 0;
+    let sessionDeletes = 0;
+    vi.stubGlobal(
+      'fetch',
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = (init?.method || 'GET').toUpperCase();
+        if (url.includes('/session/encryptionKey')) {
+          return new Response('{}', { status: 404 });
+        }
+        if (url.endsWith('/api/v1/session') && method === 'POST') {
+          sessionPosts += 1;
+          const headers = new Headers({
+            CST: `cst-test-${sessionPosts}`,
+            'X-SECURITY-TOKEN': `sec-test-${sessionPosts}`,
+          });
+          return new Response(JSON.stringify({ accountId: 'a1', accountType: 'CFD' }), {
+            status: 200,
+            headers,
+          });
+        }
+        if (url.endsWith('/api/v1/session') && method === 'DELETE') {
+          sessionDeletes += 1;
+          return new Response('{}', { status: 200 });
+        }
+        return new Response('{}', { status: 200 });
+      }
+    );
+    const r = await testCapitalComSession({
+      environment: 'demo',
+      apiKey: 'k',
+      identifier: 'user@example.com',
+      password: 'api-pass-not-otp',
+      connectionId: 900088,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.detail).toMatch(/pool=900088/);
+    expect(sessionPosts).toBe(1);
+    expect(sessionDeletes).toBe(0);
+    // Re-acquire must hit cache (probe/test left pool warm)
+    const again = await acquireCapitalSession({
+      environment: 'demo',
+      apiKey: 'k',
+      identifier: 'user@example.com',
+      password: 'api-pass-not-otp',
+      connectionId: 900088,
+    });
+    expect(again.ok).toBe(true);
+    expect(sessionPosts).toBe(1);
+    invalidateCapitalSession(900088);
+  });
 });
 
 describe('resolveEpicViaSearch', () => {

@@ -220,6 +220,7 @@ export async function registerBrokerRoutes(app: FastifyInstance): Promise<void> 
         apiKey,
         identifier,
         password,
+        connectionId: deskCapitalPoolConnectionId(conn.id),
       });
 
       if (!result.ok) {

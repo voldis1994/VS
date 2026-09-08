@@ -257,10 +257,12 @@ export async function registerMasterRoutes(app: FastifyInstance) {
     };
   });
 
-  /** Credential-free Capital connectivity probe — fails closed honestly without secrets. */
+  /** Credential-free Capital connectivity probe — fails closed honestly without secrets.
+   * Uses shared MASTER CST pool — never bare openCapitalSession (second POST kills LIVE). */
   app.post('/api/master/broker/capital/probe', async () => {
-    const { openCapitalSession } = await import('../services/capitalCom.js');
+    const { acquireCapitalSession } = await import('../services/capitalCom.js');
     const { capitalEnvPresent } = await import('../master/envBroker.js');
+    const { masterCapitalConnectionId } = await import('../master/capitalFactory.js');
     if (!capitalEnvPresent()) {
       return {
         ok: false,
@@ -269,7 +271,8 @@ export async function registerMasterRoutes(app: FastifyInstance) {
           'CAPITAL_API_KEY / CAPITAL_IDENTIFIER / CAPITAL_API_PASSWORD not set — cannot open live Capital session',
       };
     }
-    const opened = await openCapitalSession({
+    const connectionId = masterCapitalConnectionId();
+    const opened = await acquireCapitalSession({
       environment: (process.env.CAPITAL_ENVIRONMENT || 'demo').trim(),
       apiKey: (process.env.CAPITAL_API_KEY || '').trim(),
       identifier: (process.env.CAPITAL_IDENTIFIER || '').trim(),
@@ -278,12 +281,17 @@ export async function registerMasterRoutes(app: FastifyInstance) {
         process.env.CAPITAL_PASSWORD ||
         ''
       ).trim(),
+      connectionId,
     });
+    // Leave session in pool — do not close/DELETE
     return {
       ok: opened.ok,
       status: opened.ok ? 'CONNECTED' : 'CONNECT_FAILED',
-      detail: opened.ok ? 'session_ok' : opened.result.detail,
+      detail: opened.ok
+        ? `session_ok:pool=${connectionId}`
+        : opened.result.detail,
       environment: process.env.CAPITAL_ENVIRONMENT || 'demo',
+      connectionId,
     };
   });
 

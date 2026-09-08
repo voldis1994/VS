@@ -737,14 +737,31 @@ export async function testCapitalComSession(input: {
   apiKey: string;
   identifier: string;
   password: string;
+  /**
+   * CST pool id — always acquire into the shared pool.
+   * Defaults to MASTER 900001. Never bare open+DELETE (kills LIVE CST).
+   */
+  connectionId?: number;
 }): Promise<CapitalComSessionResult> {
-  const opened = await openCapitalSession(input);
+  const connectionId =
+    input.connectionId != null &&
+    Number.isFinite(Number(input.connectionId)) &&
+    Number(input.connectionId) > 0
+      ? Math.floor(Number(input.connectionId))
+      : 900001;
+  const opened = await acquireCapitalSession({
+    environment: input.environment,
+    apiKey: input.apiKey,
+    identifier: input.identifier,
+    password: input.password,
+    connectionId,
+  });
   if (!opened.ok) return opened.result;
-  await opened.session.close();
+  // Leave pooled session warm — DELETE would invalidate MASTER LIVE CST
   return {
     ok: true,
     status: 200,
-    detail: `Capital.com ${(input.environment || 'demo').toUpperCase()} session OK`,
+    detail: `Capital.com ${(input.environment || 'demo').toUpperCase()} session OK (pool=${connectionId})`,
     accountType: opened.session.accountType,
   };
 }
