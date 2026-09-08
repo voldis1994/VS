@@ -1892,6 +1892,40 @@ describe('runtime gates persist', () => {
       else process.env.MASTER_STATE_DIR = prev;
     }
   });
+
+  it('hydrateRuntimeGatesFromDisk restores kill + last_close_failed without recover', async () => {
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = mkdtempSync(join(tmpdir(), 'vs-boot-gates-'));
+    const { saveRuntimeGates } = await import('../runtimeGates.js');
+    const prevKill = masterRuntime.cfg.kill_switch;
+    const prevFail = masterRuntime.last_close_failed;
+    try {
+      saveRuntimeGates({
+        last_loss_ms: 0,
+        reject_until_ms: 0,
+        kill_switch: true,
+        last_close_failed: {
+          position_id: 'pos-boot',
+          exit_reason: 'OPERATOR_CLOSE',
+          detail: 'boot_sticky',
+          ts: new Date().toISOString(),
+        },
+      });
+      masterRuntime.cfg = { ...masterRuntime.cfg, kill_switch: false };
+      masterRuntime.last_close_failed = null;
+      expect(masterRuntime.hydrateRuntimeGatesFromDisk()).toBe(true);
+      expect(masterRuntime.cfg.kill_switch).toBe(true);
+      expect(masterRuntime.last_close_failed?.detail).toBe('boot_sticky');
+      expect(masterRuntime.status().health).toBe('KILL_SWITCH');
+      expect(masterRuntime.status().last_close_failed?.detail).toBe('boot_sticky');
+    } finally {
+      masterRuntime.cfg = { ...masterRuntime.cfg, kill_switch: prevKill };
+      masterRuntime.last_close_failed = prevFail;
+      masterRuntime.setKillSwitch(false);
+      if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prev;
+    }
+  });
 });
 
 describe('error journal', () => {
@@ -4817,5 +4851,9 @@ describe('replay exit order vs live manageTick', () => {
     expect(src).toMatch(/toDeskRegime\(liveA\.regime/);
     expect(src).toMatch(/softTrailDistancePrice\(epic/);
     expect(src).toMatch(/opts\.epic/);
+    expect(src).toMatch(/post_exit_until_ms/);
+    expect(src).toMatch(/last_entry_fingerprint/);
+    expect(src).toMatch(/relative_spread:/);
+    expect(src).toMatch(/updateSpreadModel/);
   });
 });

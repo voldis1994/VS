@@ -12,6 +12,7 @@ export async function registerMasterRoutes(app: FastifyInstance) {
   ensureMasterPersist();
   masterRuntime.hydrateOwnsPipelinePref();
   masterRuntime.hydrateManageConfig();
+  masterRuntime.hydrateRuntimeGatesFromDisk();
   masterRuntime.hydrateMonitorFromDisk();
 
   app.get('/api/master/status', async () => masterRuntime.statusAsync());
@@ -251,6 +252,8 @@ export async function registerMasterRoutes(app: FastifyInstance) {
 
   app.post('/api/master/recover', async () => {
     const r = await masterRuntime.recover();
+    // Opens must not sit unmanaged until Start — same bootstrap as start()
+    await masterRuntime.bootstrapManageAfterRecoverPublic();
     return { ok: true, ...r, status: masterRuntime.status() };
   });
 

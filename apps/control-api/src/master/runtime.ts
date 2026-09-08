@@ -80,6 +80,7 @@ import type {
   AccountSnapshot,
   Bar,
   MasterConfig,
+  MasterDecision,
   Mode,
   Quote,
   TradeOutcome,
@@ -372,6 +373,113 @@ class MasterRuntime {
   hydrateManageConfig() {
     const saved = loadManageConfig();
     if (saved) this.cfg = applyManageConfigPatch(this.cfg, saved);
+  }
+
+  /**
+   * Boot / status warm: load durable kill/ai/mode/epic/entries/close_fail from
+   * runtime_gates without full recover — dashboard must not show cold defaults
+   * while recent_decisions already read disk.
+   */
+  hydrateRuntimeGatesFromDisk(): boolean {
+    const gates = loadRuntimeGates();
+    if (!gates) return false;
+    this.applyRuntimeGates(gates);
+    return true;
+  }
+
+  /** Apply persisted gates into live runtime fields (recover + boot hydrate). */
+  private applyRuntimeGates(gates: NonNullable<ReturnType<typeof loadRuntimeGates>>) {
+    this.last_loss_ms = Math.max(this.last_loss_ms, gates.last_loss_ms || 0);
+    this.reject_until_ms = Math.max(
+      this.reject_until_ms,
+      gates.reject_until_ms || 0
+    );
+    this.inflight_until_ms = Math.max(
+      this.inflight_until_ms,
+      gates.inflight_until_ms || 0
+    );
+    this.post_exit_until_ms = Math.max(
+      this.post_exit_until_ms,
+      gates.post_exit_until_ms || 0
+    );
+    if (gates.last_entry_fingerprint) {
+      this.last_entry_fingerprint = gates.last_entry_fingerprint;
+    }
+    if (gates.daily_pnl_day) {
+      this.account.daily_pnl_day = gates.daily_pnl_day;
+    }
+    if (
+      gates.ai_mode === 'off' ||
+      gates.ai_mode === 'advisory' ||
+      gates.ai_mode === 'required'
+    ) {
+      this.cfg = { ...this.cfg, ai_mode: gates.ai_mode };
+    }
+    if (typeof gates.kill_switch === 'boolean') {
+      this.cfg = { ...this.cfg, kill_switch: gates.kill_switch };
+    }
+    if (
+      gates.mode === 'PAPER' ||
+      gates.mode === 'LIVE' ||
+      gates.mode === 'BACKTEST'
+    ) {
+      this.cfg = { ...this.cfg, mode: gates.mode };
+      this.pipeline.mode = gates.mode;
+    }
+    if (gates.epic && String(gates.epic).trim()) {
+      this.epic = String(gates.epic).trim();
+    }
+    if (typeof gates.entries_armed === 'boolean') {
+      this.entries_armed = gates.entries_armed;
+      this.entries_pause_reason = gates.entries_armed
+        ? null
+        : gates.entries_pause_reason || 'entries_paused';
+    }
+    if (gates.last_close_failed && typeof gates.last_close_failed === 'object') {
+      this.last_close_failed = gates.last_close_failed;
+    }
+    if (typeof gates.last_ai_allow_close === 'boolean') {
+      this.last_ai_allow_close = gates.last_ai_allow_close;
+    } else if (this.cfg.ai_mode !== 'off') {
+      this.last_ai_allow_close = false;
+    }
+    const capitalAttached =
+      this.broker instanceof CapitalBroker && !this.broker.paper;
+    if (!capitalAttached || gates.capital_day_gates_seeded === true) {
+      if (gates.day_start_equity != null && gates.day_start_equity > 0) {
+        this.account.day_start_equity = gates.day_start_equity;
+      }
+      if (gates.peak_equity != null && gates.peak_equity > 0) {
+        this.account.peak_equity = Math.max(
+          this.account.peak_equity,
+          gates.peak_equity
+        );
+      }
+      if (capitalAttached && gates.capital_day_gates_seeded === true) {
+        this.capitalDayGatesSeeded = true;
+      }
+    } else if (capitalAttached) {
+      this.account.day_start_equity = 0;
+      this.account.peak_equity = 0;
+      this.capitalDayGatesSeeded = false;
+    }
+    if (
+      gates.consecutive_losses != null &&
+      Number.isFinite(gates.consecutive_losses)
+    ) {
+      this.account.consecutive_losses = Math.max(
+        0,
+        Math.floor(gates.consecutive_losses)
+      );
+    }
+  }
+
+  /**
+   * After recover (API or Start): seed manage from cache/broker so opens are not
+   * blind until the first poll. Safe to call when flat (no-op).
+   */
+  async bootstrapManageAfterRecoverPublic(): Promise<void> {
+    await this.bootstrapManageAfterRecover();
   }
 
   /**
@@ -2394,89 +2502,7 @@ class MasterRuntime {
     // Load gates BEFORE roll so same-day day_start_equity / peak survive restart.
     const gates = loadRuntimeGates();
     if (gates) {
-      this.last_loss_ms = Math.max(this.last_loss_ms, gates.last_loss_ms || 0);
-      this.reject_until_ms = Math.max(
-        this.reject_until_ms,
-        gates.reject_until_ms || 0
-      );
-      this.inflight_until_ms = Math.max(
-        this.inflight_until_ms,
-        gates.inflight_until_ms || 0
-      );
-      this.post_exit_until_ms = Math.max(
-        this.post_exit_until_ms,
-        gates.post_exit_until_ms || 0
-      );
-      if (gates.last_entry_fingerprint) {
-        this.last_entry_fingerprint = gates.last_entry_fingerprint;
-      }
-      if (gates.daily_pnl_day) {
-        this.account.daily_pnl_day = gates.daily_pnl_day;
-      }
-      // AI mode survives control-API restart (not only in-memory cfg)
-      if (
-        gates.ai_mode === 'off' ||
-        gates.ai_mode === 'advisory' ||
-        gates.ai_mode === 'required'
-      ) {
-        this.cfg = { ...this.cfg, ai_mode: gates.ai_mode };
-      }
-      if (typeof gates.kill_switch === 'boolean') {
-        this.cfg = { ...this.cfg, kill_switch: gates.kill_switch };
-      }
-      // Session identity — mode/epic/entries survive crash (wrong-epic LIVE is unsafe)
-      if (
-        gates.mode === 'PAPER' ||
-        gates.mode === 'LIVE' ||
-        gates.mode === 'BACKTEST'
-      ) {
-        // LIVE restore is cfg only — Start still requires Capital attach / MASTER_LIVE_ENABLED
-        this.cfg = { ...this.cfg, mode: gates.mode };
-        this.pipeline.mode = gates.mode;
-      }
-      if (gates.epic && String(gates.epic).trim()) {
-        this.epic = String(gates.epic).trim();
-      }
-      if (typeof gates.entries_armed === 'boolean') {
-        this.entries_armed = gates.entries_armed;
-        this.entries_pause_reason = gates.entries_armed
-          ? null
-          : gates.entries_pause_reason || 'entries_paused';
-      }
-      if (gates.last_close_failed && typeof gates.last_close_failed === 'object') {
-        this.last_close_failed = gates.last_close_failed;
-      }
-      // Soft-exit AI veto — fail-closed when advisory and gate missing
-      if (typeof gates.last_ai_allow_close === 'boolean') {
-        this.last_ai_allow_close = gates.last_ai_allow_close;
-      } else if (this.cfg.ai_mode !== 'off') {
-        this.last_ai_allow_close = false;
-      }
-      const capitalAttached =
-        this.broker instanceof CapitalBroker && !this.broker.paper;
-      // Only restore day/peak when Capital-seeded (or non-Capital). Paper £10k
-      // must not poison LIVE daily-loss after Capital attach.
-      if (
-        !capitalAttached ||
-        gates.capital_day_gates_seeded === true
-      ) {
-        if (gates.day_start_equity != null && gates.day_start_equity > 0) {
-          this.account.day_start_equity = gates.day_start_equity;
-        }
-        if (gates.peak_equity != null && gates.peak_equity > 0) {
-          this.account.peak_equity = Math.max(
-            this.account.peak_equity,
-            gates.peak_equity
-          );
-        }
-        if (capitalAttached && gates.capital_day_gates_seeded === true) {
-          this.capitalDayGatesSeeded = true;
-        }
-      } else {
-        this.account.day_start_equity = 0;
-        this.account.peak_equity = 0;
-        this.capitalDayGatesSeeded = false;
-      }
+      this.applyRuntimeGates(gates);
     } else if (this.cfg.ai_mode !== 'off') {
       // No gates file — soft exits fail-closed until a cycle proves allow
       this.last_ai_allow_close = false;
@@ -2893,13 +2919,54 @@ class MasterRuntime {
       }
     }
 
-    // Hydrate last exit for dashboard after restart
+    // Hydrate last exit + cycle cards for dashboard after restart
     if (hist.outcomes.length && !this.last_exit_reason) {
       const latest = [...hist.outcomes].sort((a, b) =>
         String(b.created_at || '').localeCompare(String(a.created_at || ''))
       )[0];
       if (latest?.outcome?.exit_reason) {
         this.last_exit_reason = latest.outcome.exit_reason;
+      }
+    }
+    // Seed last_decision from journal so BUY/SELL/regime cards are not UNKNOWN/0
+    if (!this.last_decision && hist.opportunities.length) {
+      const withDecision = [...hist.opportunities]
+        .filter((o) => o.decision)
+        .sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')));
+      const latestOpp = withDecision[0];
+      if (latestOpp?.decision) {
+        this.last_decision = latestOpp.decision;
+        if (!this.last_execution_detail && latestOpp.execution?.detail) {
+          this.last_execution_detail = String(latestOpp.execution.detail);
+        }
+      }
+    }
+    if (!this.last_decision) {
+      const ev = loadDecisionEvents(1)[0];
+      if (ev) {
+        // Minimal stub — scores/kind for status cards until next live cycle
+        this.last_decision = {
+          decision_id: ev.opportunity_id || 'recovered',
+          kind: (['BUY', 'SELL', 'WAIT', 'BLOCK'].includes(ev.kind)
+            ? ev.kind
+            : 'WAIT') as MasterDecision['kind'],
+          side:
+            ev.kind === 'BUY' || ev.kind === 'SELL'
+              ? (ev.kind as 'BUY' | 'SELL')
+              : null,
+          score: Math.max(ev.buy_score || 0, ev.sell_score || 0),
+          block_reason: ev.block_reason,
+          buy: { score: ev.buy_score || 0 } as MasterDecision['buy'],
+          sell: { score: ev.sell_score || 0 } as MasterDecision['sell'],
+          analysis: {
+            regime: 'UNKNOWN',
+            market_state: 'recovered_from_decision_journal',
+          } as MasterDecision['analysis'],
+          expectancy: null,
+        };
+        if (!this.last_execution_detail && ev.execution_detail) {
+          this.last_execution_detail = ev.execution_detail;
+        }
       }
     }
 

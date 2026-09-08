@@ -42,6 +42,7 @@ import { decideBestOutcomeExit } from '../services/exitManage.js';
 import { scalpPctLockBrokerStop } from './scalpPctChase.js';
 import { resolveAdvisor } from './ai.js';
 import { closeAllowedByStopLoss } from './closeRequiresSl.js';
+import { updateSpreadModel } from './spreadModel.js';
 import type {
   Bar,
   MasterConfig,
@@ -111,6 +112,10 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
   let last_loss_ms = 0;
   /** Soft-exit AI gate — refreshed each bar when ai_mode !== 'off' (live last_ai_allow_close). */
   let allow_close = cfg.ai_mode === 'off';
+  /** Live post-exit / fingerprint rearm — no same-signal re-entry until cool elapses. */
+  let post_exit_until_ms = 0;
+  let last_entry_fingerprint: string | null = null;
+  let spreadHistory: number[] = [];
   let open: {
     oppId: string;
     decision: OpportunityRecord['decision'];
@@ -176,6 +181,9 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
       consecutive_losses += 1;
       last_loss_ms = ts_ms;
     } else consecutive_losses = 0;
+    const cool = Math.max(0, cfg.post_exit_cooldown_ms || 0);
+    post_exit_until_ms = Math.max(post_exit_until_ms, ts_ms + cool);
+    last_entry_fingerprint = `${epic}:${o.side}`;
     return outcome;
   };
 
@@ -587,6 +595,21 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
       continue;
     }
 
+    // Flat + post-exit elapsed → clear sticky fingerprint (live peer)
+    if (
+      quote.ts_ms >= post_exit_until_ms &&
+      last_entry_fingerprint
+    ) {
+      last_entry_fingerprint = null;
+    }
+
+    const spreadSnap = updateSpreadModel(
+      spreadHistory,
+      quote.spread,
+      cfg.spread_lookback_bars ?? 20
+    );
+    spreadHistory = spreadSnap.history;
+
     const cycle = await pipe.runCycle({
       bars: visible,
       quote,
@@ -603,12 +626,27 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
       cfg,
       last_loss_ms,
       now_ms: quote.ts_ms,
+      relative_spread:
+        spreadSnap.history.length >= 3 ? spreadSnap.relative_spread : null,
     });
+
+    const postExitCool = quote.ts_ms < post_exit_until_ms;
+    const signalFp =
+      cycle.decision.kind === 'BUY' || cycle.decision.kind === 'SELL'
+        ? `${epic}:${cycle.decision.kind}`
+        : null;
+    const sameSignal =
+      !!signalFp &&
+      !!last_entry_fingerprint &&
+      last_entry_fingerprint === signalFp &&
+      postExitCool;
 
     if (
       cycle.risk.allowed &&
       (cycle.decision.kind === 'BUY' || cycle.decision.kind === 'SELL') &&
-      cycle.decision.side
+      cycle.decision.side &&
+      !postExitCool &&
+      !sameSignal
     ) {
       const fillIndex = Math.min(opts.bars.length - 1, i + latency);
       // Fill uses only bar at fillIndex open — known after latency, still no look-ahead beyond that bar
@@ -670,6 +708,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
           partial_close_applied: false,
         };
         allow_close = cycle.ai.allow_close !== false;
+        last_entry_fingerprint = `${epic}:${side}`;
         if (open.multi_tp_levels?.length) {
           const final = multiTpFinalPrice(open.multi_tp_levels);
           if (final != null) open.tp = final;
