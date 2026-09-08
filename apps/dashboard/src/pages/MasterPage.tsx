@@ -28,11 +28,11 @@ type MasterStatus = {
   regime: string;
   market_state: string;
   account: {
-    equity: number;
-    balance: number;
-    daily_pnl: number;
+    equity: number | null;
+    balance: number | null;
+    daily_pnl: number | null;
     day_start_equity?: number | null;
-    peak_equity?: number;
+    peak_equity?: number | null;
     available_to_deal?: number | null;
     trade_allowed?: boolean | null;
     consecutive_losses?: number;
@@ -884,9 +884,14 @@ export function MasterPage() {
           <div className="card">no trade events yet</div>
         ) : (
           status.recent_trades.map((t, i) => {
+            // OPEN/MODIFY normally have null pnl — only CLOSE (or explicit
+            // unproven detail) is UNPROVEN, never forged £0 on opens.
+            const ev = String(t.event || '').toUpperCase();
             const unproven =
-              t.pnl == null ||
-              /pnl_unproven|capital_close_pnl_unproven/i.test(String(t.detail || ''));
+              (ev === 'CLOSE' && t.pnl == null) ||
+              /pnl_unproven|capital_close_pnl_unproven/i.test(
+                String(t.detail || '')
+              );
             return (
             <div key={`${t.ts}-${i}`} className="card">
               <div style={{ fontWeight: 600 }}>

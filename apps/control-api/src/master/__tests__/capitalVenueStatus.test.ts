@@ -49,9 +49,11 @@ describe('MASTER Capital epic + status venue', () => {
     expect(live.capital_account_proven).toBe(false);
     expect(live.health).toBe('LIVE_ACCOUNT_UNPROVEN');
     expect(live.persist_ok).toBe(false);
-    expect(live.account.day_start_equity).toBe(0);
-    expect(live.account.peak_equity).toBe(0);
-    expect(live.account.equity).toBe(0);
+    expect(live.account.day_start_equity).toBeNull();
+    expect(live.account.peak_equity).toBeNull();
+    expect(live.account.equity).toBeNull();
+    expect(live.account.balance).toBeNull();
+    expect(live.account.daily_pnl).toBeNull();
     expect(live.account.trade_allowed).toBe(false);
     expect(live.capital_venue_opens_proven).toBe(false);
   });
@@ -102,7 +104,8 @@ describe('MASTER Capital epic + status venue', () => {
     expect(masterRuntime.account.day_start_equity).toBe(0);
     expect(masterRuntime.account.peak_equity).toBe(0);
     const st0 = masterRuntime.status();
-    expect(st0.account.day_start_equity).toBe(0);
+    expect(st0.account.day_start_equity).toBeNull();
+    expect(st0.account.equity).toBeNull();
     expect(st0.capital_account_proven).toBe(false);
 
     const bars = Array.from({ length: 30 }, (_, i) => {

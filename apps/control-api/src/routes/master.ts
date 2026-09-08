@@ -680,7 +680,8 @@ async function refresh(){
     }).join(''):card('Decisions','no cycle events yet');
     const te=(s.recent_trades||[]).slice(0,8);
     trades.innerHTML=te.length?te.map(t=>{
-      const unproven=t.pnl==null||/pnl_unproven|capital_close_pnl_unproven/i.test(String(t.detail||''));
+      const ev=String(t.event||'').toUpperCase();
+      const unproven=(ev==='CLOSE'&&t.pnl==null)||/pnl_unproven|capital_close_pnl_unproven/i.test(String(t.detail||''));
       const pn=unproven?'—':(t.pnl!=null?Number(t.pnl).toFixed(2):'—');
       const fees=!unproven&&t.fees!=null&&t.fees>0?' · fees '+Number(t.fees).toFixed(2):'';
       const opp=t.opportunity_id?' · opp '+String(t.opportunity_id).slice(0,8):'';

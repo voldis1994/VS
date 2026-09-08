@@ -3946,7 +3946,9 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(st.capital_account_proven).toBe(false);
     expect(st.health).toBe('LIVE_ACCOUNT_UNPROVEN');
     expect(st.persist_ok).toBe(false);
-    expect(st.account.equity).toBe(0);
+    expect(st.account.equity).toBeNull();
+    expect(st.account.balance).toBeNull();
+    expect(st.account.daily_pnl).toBeNull();
     expect(st.account.trade_allowed).toBe(false);
   });
 
@@ -4707,6 +4709,142 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(managed.closed.length).toBe(0);
     expect(closed.length).toBe(0);
     expect(pm.count()).toBe(1);
+  });
+
+  it('Capital soft trail SELL already_armed does not close when broker_upl unread', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const { PositionManager } = await import('../positionManager.js');
+    const pm = new PositionManager();
+    const closed: string[] = [];
+    const broker = {
+      name: 'CAPITAL',
+      paper: false,
+      async closePosition(id: string) {
+        closed.push(id);
+        return { ok: true, fill_price: 4405, fill_pnl: null, detail: 'closed' };
+      },
+      async modifyPosition() {
+        return { ok: true, detail: 'ok' };
+      },
+      async listOpenPositions() {
+        return { ok: true, positions: [], detail: '0' };
+      },
+    } as any;
+    const pipe = new MasterPipeline('LIVE');
+    pm.register({
+      position_id: 'deal-soft-sell-unread',
+      opportunity_id: 'opp-soft-sell-unread',
+      intent_id: 'intent-soft-sell-unread',
+      epic: 'GOLD',
+      side: 'SELL',
+      size: 0.1,
+      entry: 4410,
+      stop_loss: 4420,
+      decision: {
+        decision_id: 'd',
+        kind: 'SELL',
+        side: 'SELL',
+        block_reason: null,
+        analysis: { regime: 'TREND' },
+        buy: { valid: false, filter_ok: false, score: 0 },
+        sell: { valid: true, filter_ok: true, score: 0.9 },
+      } as any,
+    });
+    const pos = pm.get('deal-soft-sell-unread')!;
+    pos.broker_upl = null;
+    pos.soft_trail_armed_at = new Date().toISOString();
+    // SELL peak was lower; mark rose → soft trail exit would hit if UPL ready
+    pos.soft_trail_peak = 4390;
+    const quote = {
+      bid: 4404.8,
+      ask: 4405.2,
+      mid: 4405,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    };
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote,
+      instrument_point_value: 1,
+      soft_trail_money_arm: 5,
+      soft_trail_pips: 0.3,
+      scalp_pct_chase: true,
+      allow_close: true,
+      close_all_profit: 100,
+      close_all_loss: 100,
+    });
+    expect(managed.closed.length).toBe(0);
+    expect(closed.length).toBe(0);
+    expect(pm.count()).toBe(1);
+  });
+
+  it('Capital money BE does not arm when broker_upl unread despite mark profit', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const { PositionManager } = await import('../positionManager.js');
+    const pm = new PositionManager();
+    const mods: number[] = [];
+    const broker = {
+      name: 'CAPITAL',
+      paper: false,
+      async closePosition() {
+        return { ok: false, detail: 'no' };
+      },
+      async modifyPosition(_id: string, patch: { stop_level?: number }) {
+        if (patch.stop_level != null) mods.push(patch.stop_level);
+        return { ok: true, detail: 'ok' };
+      },
+      async listOpenPositions() {
+        return { ok: true, positions: [], detail: '0' };
+      },
+    } as any;
+    const pipe = new MasterPipeline('LIVE');
+    pm.register({
+      position_id: 'deal-mbe-unread',
+      opportunity_id: 'opp-mbe-unread',
+      intent_id: 'intent-mbe-unread',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4410,
+      stop_loss: 4400,
+      take_profit: 4430,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        block_reason: null,
+        analysis: { regime: 'TREND' },
+        buy: { valid: true, filter_ok: true, score: 0.9 },
+        sell: { valid: false, filter_ok: false, score: 0 },
+      } as any,
+    });
+    pm.get('deal-mbe-unread')!.broker_upl = null; // unread — money BE must refuse
+    const quote = {
+      bid: 4420,
+      ask: 4420.4,
+      mid: 4420.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    };
+    await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote,
+      instrument_point_value: 1,
+      breakeven_progress: 0,
+      breakeven_activation_money: 0.05,
+      breakeven_offset: 0.1,
+      soft_trail_money_arm: 0,
+      scalp_pct_chase: false,
+      allow_close: true,
+      close_all_profit: 0,
+      close_all_loss: 0,
+    });
+    expect(mods.length).toBe(0);
+    expect(pm.get('deal-mbe-unread')!.stop_loss).toBe(4400);
   });
 
   it('operator close Capital unproven does not advertise proven flat pnl', async () => {

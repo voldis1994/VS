@@ -105,7 +105,16 @@ export type MasterStatus = {
   sell_score: number;
   regime: string;
   market_state: string;
-  account: AccountSnapshot | null;
+  /** Null money fields when Capital LIVE account is unproven (never forged £0). */
+  account: (Omit<
+    AccountSnapshot,
+    'equity' | 'balance' | 'daily_pnl' | 'peak_equity'
+  > & {
+    equity: number | null;
+    balance: number | null;
+    daily_pnl: number | null;
+    peak_equity: number | null;
+  }) | null;
   open_positions: number;
   performance: ReturnType<typeof computePerformance>;
   monte_carlo: ReturnType<typeof monteCarlo> | null;
@@ -3130,14 +3139,14 @@ class MasterRuntime {
         !this.capitalAccountProven
           ? {
               ...this.account,
-              // Do not advertise stale sizing equity while Capital account unproven
-              equity: 0,
-              balance: 0,
+              // Null — never advertise forged £0 as a flat Capital account
+              equity: null,
+              balance: null,
               available_to_deal: null,
               trade_allowed: false,
-              day_start_equity: 0,
-              peak_equity: 0,
-              daily_pnl: 0,
+              day_start_equity: null,
+              peak_equity: null,
+              daily_pnl: null,
             }
           : this.account,
       open_positions: this.positions.count(),

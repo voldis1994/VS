@@ -1669,6 +1669,11 @@ export class PositionManager {
     const progressNeed = opts.progressNeed;
     const mark = protectiveMark(pos.side, quote);
     const fav = favorableMove(pos.side, pos.entry, mark);
+    const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
+    // Parity with soft-trail: money-BE must not arm on mark profit while UPL unread
+    const capitalUplReady =
+      !capitalLive ||
+      (pos.broker_upl != null && Number.isFinite(pos.broker_upl));
     const money = resolveFloatingMoneyPnl({
       side: pos.side,
       entry: pos.entry,
@@ -1676,11 +1681,11 @@ export class PositionManager {
       size: pos.size,
       value_per_point_per_lot: opts.pointValue ?? 1,
       broker_upl: pos.broker_upl,
-      capitalLive: broker.name === 'CAPITAL' && !broker.paper,
+      capitalLive,
     });
 
     let armed = false;
-    if (moneyNeed > 0 && money >= moneyNeed) armed = true;
+    if (moneyNeed > 0 && capitalUplReady && money >= moneyNeed) armed = true;
     if (!armed && beStart > 0) armed = fav >= beStart;
     if (!armed && progressNeed > 0 && pos.take_profit != null) {
       const tpDist = Math.abs(pos.take_profit - pos.entry);
