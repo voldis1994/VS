@@ -966,6 +966,60 @@ describe('VS MASTER MT4 file bridge', () => {
     }
   });
 
+  it('OPEN attaches TP via MODIFY when EA opens without chart TP', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-tpfix-'));
+    const sim = new Mt4BridgeSimulator(root);
+    sim.ignoreOpenTp = true;
+    sim.setQuote(4400, 4400.4);
+    sim.start(30);
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    try {
+      const placed = await broker.placeOrder({
+        intent_id: 'tpattachokintent000000001',
+        epic: 'XAUUSD',
+        side: 'BUY',
+        size: 0.04,
+        stop_level: 4390,
+        profit_level: 4420,
+      });
+      expect(placed.ok).toBe(true);
+      const opens = await broker.listOpenPositions('XAUUSD');
+      const hit = opens.positions.find((p) => p.position_id === placed.position_id);
+      expect(hit?.stop_level).toBe(4390);
+      expect(hit?.profit_level).toBe(4420);
+    } finally {
+      sim.stop();
+    }
+  });
+
+  it('OPEN fail-closes when chart TP cannot be proven', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-tpfail-'));
+    const sim = new Mt4BridgeSimulator(root);
+    sim.ignoreOpenTp = true;
+    sim.ackModifyWithoutApply = true;
+    sim.setQuote(4400, 4400.4);
+    sim.start(30);
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    try {
+      const placed = await broker.placeOrder({
+        intent_id: 'tpattachfailintent0000001',
+        epic: 'XAUUSD',
+        side: 'BUY',
+        size: 0.04,
+        stop_level: 4390,
+        profit_level: 4420,
+      });
+      expect(placed.ok).toBe(false);
+      expect(placed.detail).toMatch(/MT4_TP_ATTACH_FAILED/);
+      const opens = await broker.listOpenPositions('XAUUSD');
+      expect(opens.positions.length).toBe(0);
+    } finally {
+      sim.stop();
+    }
+  });
+
   it('recoverPendingCommands marks OPEN late fill instead of TIMEOUT', async () => {
     const root = mkdtempSync(join(tmpdir(), 'vs-mt4-latefill-'));
     const broker = new Mt4FileBroker(root);

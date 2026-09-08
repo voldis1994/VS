@@ -1937,6 +1937,22 @@ class MasterRuntime {
       });
       broker.markToMarket();
     }
+    // Reconcile broker truth on the 1s manage loop too — otherwise SL/TP fills
+    // leave a ghost open until the next full tick (~2.5s) with mark-based PnL.
+    const sync = await syncPositionsWithBroker(
+      this.positions,
+      broker,
+      this.epic,
+      this.emptyBrokerDebounce
+    );
+    if (!sync.skipped && !sync.ghost_drop_deferred) {
+      this.applySyncJournal(sync, quote);
+    }
+    if (this.positions.count() === 0) {
+      this.account.open_positions = 0;
+      return;
+    }
+    this.account.open_positions = this.positions.count();
     const instrument = this.resolveInstrument(broker, quote);
     const structure = bars.length >= 5 ? analyzeBars(bars, quote.spread) : null;
     const trailBuf =

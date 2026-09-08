@@ -1774,6 +1774,40 @@ export class Mt4FileBroker implements MasterBroker {
     return { ok: false, observed };
   }
 
+  /** Mirror SL proof for chart take-profit after OPEN/MODIFY. */
+  private async waitForStatusProfit(
+    positionId: string,
+    wantTp: number
+  ): Promise<{ ok: boolean; observed: number | null }> {
+    const tol = this.stopVerifyTol(wantTp);
+    const attempts =
+      process.env.VITEST || process.env.MASTER_CONFIRM_FAST === 'true' ? 4 : 8;
+    let observed: number | null = null;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) =>
+          setTimeout(
+            r,
+            process.env.VITEST || process.env.MASTER_CONFIRM_FAST === 'true'
+              ? 15 + 10 * attempt
+              : 80 + 60 * attempt
+          )
+        );
+      }
+      const listed = await this.listOpenPositions();
+      const hit = listed.ok
+        ? listed.positions.find((p) => p.position_id === String(positionId))
+        : undefined;
+      if (!hit) continue;
+      if (hit.profit_level == null || !Number.isFinite(hit.profit_level)) continue;
+      observed = Number(hit.profit_level);
+      if (Math.abs(observed - wantTp) <= tol) {
+        return { ok: true, observed };
+      }
+    }
+    return { ok: false, observed };
+  }
+
   /**
    * Prefer status open_level (OrderOpenPrice) over ACK fill.
    * Live EA historically ACK'd request Bid/Ask which hides slippage; status is broker truth.
@@ -1788,7 +1822,8 @@ export class Mt4FileBroker implements MasterBroker {
   }
 
   /**
-   * Wanted protective SL after OPEN — prove status stop, else MODIFY+prove, else fail-close.
+   * Wanted protective SL (+ optional TP) after OPEN — prove status levels,
+   * else MODIFY+prove, else fail-close. Never treat SL-only proof as TP attached.
    */
   private async ensureOpenStopOrFail(input: {
     position_id: string;
@@ -1797,21 +1832,49 @@ export class Mt4FileBroker implements MasterBroker {
     order_id: string;
     epic: string;
   }): Promise<{ ok: true } | { ok: false; detail: string }> {
-    const proved = await this.waitForStatusStop(input.position_id, input.want_sl);
-    if (proved.ok) return { ok: true };
+    const wantTp =
+      input.want_tp != null && Number.isFinite(input.want_tp) && Number(input.want_tp) > 0
+        ? Number(input.want_tp)
+        : null;
+
+    const provedSl = await this.waitForStatusStop(input.position_id, input.want_sl);
+    const provedTp = wantTp
+      ? await this.waitForStatusProfit(input.position_id, wantTp)
+      : { ok: true as const, observed: null };
+    if (provedSl.ok && provedTp.ok) return { ok: true };
 
     const mod = await this.modifyPosition({
       position_id: input.position_id,
       stop_level: input.want_sl,
-      profit_level: input.want_tp ?? undefined,
+      profit_level: wantTp ?? undefined,
     });
-    if (mod.ok) return { ok: true };
+    if (!mod.ok) {
+      const closed = await this.closePosition(input.position_id);
+      return {
+        ok: false,
+        detail: `MT4_SL_ATTACH_FAILED:mod=${mod.detail};close=${closed.ok ? 'ok' : closed.detail}`,
+      };
+    }
 
-    const closed = await this.closePosition(input.position_id);
-    return {
-      ok: false,
-      detail: `MT4_SL_ATTACH_FAILED:mod=${mod.detail};close=${closed.ok ? 'ok' : closed.detail}`,
-    };
+    const sl2 = await this.waitForStatusStop(input.position_id, input.want_sl);
+    if (!sl2.ok) {
+      const closed = await this.closePosition(input.position_id);
+      return {
+        ok: false,
+        detail: `MT4_SL_ATTACH_FAILED:sl_unverified want=${input.want_sl} got=${sl2.observed};close=${closed.ok ? 'ok' : closed.detail}`,
+      };
+    }
+    if (wantTp != null) {
+      const tp2 = await this.waitForStatusProfit(input.position_id, wantTp);
+      if (!tp2.ok) {
+        const closed = await this.closePosition(input.position_id);
+        return {
+          ok: false,
+          detail: `MT4_TP_ATTACH_FAILED:want=${wantTp} got=${tp2.observed};close=${closed.ok ? 'ok' : closed.detail}`,
+        };
+      }
+    }
+    return { ok: true };
   }
 
   async getQuote(epic: string): Promise<BrokerQuote | null> {

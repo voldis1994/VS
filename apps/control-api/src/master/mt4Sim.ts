@@ -34,6 +34,8 @@ export class Mt4BridgeSimulator {
 
   /** Test fault: OPEN ignores payload SL (naked ticket until MODIFY). */
   ignoreOpenSl = false;
+  /** Test fault: OPEN ignores payload TP (prove attach/preserve). */
+  ignoreOpenTp = false;
   /** Test fault: MODIFY ACK without mutating SL/TP (prove status verification). */
   ackModifyWithoutApply = false;
   /** Test fault: ACK fill differs from status open (prove fill preference). */
@@ -172,7 +174,7 @@ export class Mt4BridgeSimulator {
       const ticket = ++this.ticketSeq;
       const open = side === 'BUY' ? this.ask : this.bid;
       const sl = this.ignoreOpenSl ? 0 : Number(payload.sl || 0);
-      const tp = Number(payload.tp || 0);
+      const tp = this.ignoreOpenTp ? 0 : Number(payload.tp || 0);
       this.positions.set(ticket, {
         ticket,
         symbol: String(payload.symbol || 'XAUUSD'),
