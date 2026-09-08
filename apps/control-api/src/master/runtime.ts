@@ -418,6 +418,29 @@ class MasterRuntime {
         if (r.ok) closed += 1;
         else failed.push(`${id}:${r.detail}`);
       }
+      // Venue orphans (Capital LIVE deals not in local book) — close so Start PAPER
+      // / detach cannot leave unmanaged risk after a "successful" flatten.
+      const broker = this.broker;
+      if (broker && broker.name === 'CAPITAL' && !broker.paper) {
+        const listed = await broker.listOpenPositions();
+        if (!listed.ok) {
+          failed.push(`venue_list:${listed.detail || 'list_failed'}`);
+        } else {
+          const venueIds = new Set<string>();
+          for (const p of listed.positions) {
+            if (p.position_id) venueIds.add(p.position_id);
+          }
+          for (const id of listed.presence_ids ?? []) {
+            if (id) venueIds.add(id);
+          }
+          for (const id of venueIds) {
+            if (ids.includes(id) || this.positions.get(id)) continue;
+            const r = await broker.closePosition(id);
+            if (r.ok) closed += 1;
+            else failed.push(`${id}:venue:${r.detail || 'close_failed'}`);
+          }
+        }
+      }
       return { ok: failed.length === 0, closed, failed };
     });
   }
@@ -776,16 +799,37 @@ class MasterRuntime {
   }
 
   /**
-   * Refuse detaching Capital while local book still has opens — Start PAPER
-   * would seed Capital tickets into PaperBroker and leave venue deals unmanaged.
+   * Refuse detaching Capital while LIVE deals remain — Start PAPER must not
+   * stop the Capital stream with unmanaged venue risk. Prove against venue
+   * list (not local book alone): orphans / pre-recover gaps can empty local
+   * while Capital still has opens.
    */
-  refuseDetachCapitalWithOpens(): { ok: true } | { ok: false; detail: string } {
+  async refuseDetachCapitalWithOpens(): Promise<
+    { ok: true } | { ok: false; detail: string }
+  > {
     const b = this.broker;
-    const opens = this.positions.count();
-    if (b && b.name === 'CAPITAL' && !b.paper && opens > 0) {
+    if (!b || b.name !== 'CAPITAL' || b.paper) return { ok: true };
+    const local = this.positions.count();
+    const listed = await b.listOpenPositions();
+    if (!listed.ok) {
       return {
         ok: false,
-        detail: `refuse_paper_with_capital_opens:${opens} — Flatten all first`,
+        detail: `refuse_paper_capital_list_unproven:${listed.detail || 'list_failed'} — cannot prove Capital flat`,
+      };
+    }
+    const venueIds = new Set<string>();
+    for (const p of listed.positions) {
+      if (p.position_id) venueIds.add(p.position_id);
+    }
+    for (const id of listed.presence_ids ?? []) {
+      if (id) venueIds.add(id);
+    }
+    const venue = venueIds.size;
+    const opens = Math.max(local, venue);
+    if (opens > 0) {
+      return {
+        ok: false,
+        detail: `refuse_paper_with_capital_opens:${opens} (local=${local} venue=${venue}) — Flatten all first`,
       };
     }
     return { ok: true };

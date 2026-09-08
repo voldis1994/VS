@@ -1689,6 +1689,65 @@ export class CapitalBroker implements MasterBroker {
     );
   }
 
+  /**
+   * After first successful empty list when confirm was not ACCEPTED: require
+   * EMPTY_BROKER_GHOST_DEBOUNCE consecutive empties so a flake empty cannot
+   * prove flat while the deal is still LIVE.
+   */
+  private async proveFlatEmptyDebounce(
+    position_id: string,
+    emptiesAlready: number,
+    meta: {
+      deal_reference?: string;
+      fill_price: number | null;
+      fill_pnl: number | null;
+    }
+  ): Promise<
+    | { ok: true }
+    | {
+        ok: false;
+        detail: string;
+        deal_reference?: string;
+        fill_price: number | null;
+        fill_pnl: number | null;
+      }
+  > {
+    const need = EMPTY_BROKER_GHOST_DEBOUNCE;
+    let empties = emptiesAlready;
+    const delayMs =
+      process.env.VITEST || process.env.MASTER_CONFIRM_FAST === 'true' ? 1 : 200;
+    while (empties < need) {
+      await new Promise((r) => setTimeout(r, delayMs));
+      const again = await this.listOpenPositions();
+      if (!again.ok) {
+        return {
+          ok: false,
+          detail: `close_unconfirmed_list_failed:${again.detail || 'list_failed'}`,
+          deal_reference: meta.deal_reference,
+          fill_price: meta.fill_price,
+          fill_pnl: meta.fill_pnl,
+        };
+      }
+      const againUsable = again.positions.find(
+        (p) => p.position_id === position_id
+      );
+      const againPresent =
+        againUsable != null ||
+        (again.presence_ids ?? []).includes(position_id);
+      if (againPresent) {
+        return {
+          ok: false,
+          detail: `close_not_confirmed_empty_debounce:${empties}/${need}`,
+          deal_reference: meta.deal_reference,
+          fill_price: meta.fill_price,
+          fill_pnl: meta.fill_pnl,
+        };
+      }
+      empties += 1;
+    }
+    return { ok: true };
+  }
+
   private async closePositionLocked(
     position_id: string,
     opts?: { size?: number }
@@ -1778,41 +1837,12 @@ export class CapitalBroker implements MasterBroker {
       // Confirm timeout / no ACCEPTED: one empty list can be a flake (deal still LIVE).
       // Match position-sync ghost debounce — require consecutive successful empties.
       if (!confirmAccepted) {
-        const need = EMPTY_BROKER_GHOST_DEBOUNCE;
-        let empties = 1;
-        const delayMs =
-          process.env.VITEST || process.env.MASTER_CONFIRM_FAST === 'true'
-            ? 1
-            : 200;
-        while (empties < need) {
-          await new Promise((r) => setTimeout(r, delayMs));
-          const again = await this.listOpenPositions();
-          if (!again.ok) {
-            return {
-              ok: false,
-              detail: `close_unconfirmed_list_failed:${again.detail || 'list_failed'}`,
-              deal_reference,
-              fill_price,
-              fill_pnl,
-            };
-          }
-          const againUsable = again.positions.find(
-            (p) => p.position_id === position_id
-          );
-          const againPresent =
-            againUsable != null ||
-            (again.presence_ids ?? []).includes(position_id);
-          if (againPresent) {
-            return {
-              ok: false,
-              detail: `close_not_confirmed_empty_debounce:${empties}/${need}`,
-              deal_reference,
-              fill_price,
-              fill_pnl,
-            };
-          }
-          empties += 1;
-        }
+        const proved = await this.proveFlatEmptyDebounce(position_id, 1, {
+          deal_reference,
+          fill_price,
+          fill_pnl,
+        });
+        if (!proved.ok) return proved;
       }
     } else {
       // Partial: require list proof of size reduction (or flat)
@@ -1850,6 +1880,14 @@ export class CapitalBroker implements MasterBroker {
             remaining_size: stillUsable.size,
           };
         }
+      } else if (!confirmAccepted) {
+        // Partial closed the whole deal on first list — same flake risk as full close
+        const proved = await this.proveFlatEmptyDebounce(position_id, 1, {
+          deal_reference,
+          fill_price,
+          fill_pnl,
+        });
+        if (!proved.ok) return proved;
       }
     }
 

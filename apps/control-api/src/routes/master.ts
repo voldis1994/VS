@@ -105,7 +105,7 @@ export async function registerMasterRoutes(app: FastifyInstance) {
       const wantMode = req.body?.mode;
       // Explicit PAPER from UI must not be upgraded to LIVE by env credentials
       if (wantMode === 'PAPER') {
-        const gate = masterRuntime.refuseDetachCapitalWithOpens();
+        const gate = await masterRuntime.refuseDetachCapitalWithOpens();
         if (!gate.ok) {
           return {
             ok: false,
@@ -400,7 +400,7 @@ export async function registerMasterRoutes(app: FastifyInstance) {
     const connected = await broker.connect();
     if (!connected.ok) return { ok: false, detail: connected.detail };
     // Do not detach Capital while LIVE opens remain (orphans venue deals)
-    const gate = masterRuntime.refuseDetachCapitalWithOpens();
+    const gate = await masterRuntime.refuseDetachCapitalWithOpens();
     if (!gate.ok) {
       return { ok: false, detail: gate.detail, broker: masterRuntime.broker?.name ?? null };
     }

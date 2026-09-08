@@ -477,15 +477,72 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
         expectancy: null,
       },
     });
-    const gate = masterRuntime.refuseDetachCapitalWithOpens();
+    const gate = await masterRuntime.refuseDetachCapitalWithOpens();
     expect(gate.ok).toBe(false);
     if (!gate.ok) expect(gate.detail).toMatch(/refuse_paper_with_capital_opens/);
 
-    // After flatten (empty book) detach is allowed
+    // After flatten (empty local + empty venue) detach is allowed
     masterRuntime.positions = new PositionManager();
-    expect(masterRuntime.refuseDetachCapitalWithOpens().ok).toBe(true);
+    expect((await masterRuntime.refuseDetachCapitalWithOpens()).ok).toBe(true);
     masterRuntime.detachToPaperBroker();
     expect(masterRuntime.broker?.name).toBe('PAPER');
+  });
+
+  it('refuseDetachCapitalWithOpens blocks when venue has orphan Capital deal (local empty)', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number;
+      }
+    >();
+    positions.set('venue-orphan', {
+      deal_id: 'venue-orphan',
+      epic: 'GOLD',
+      direction: 'BUY',
+      size: 0.1,
+      open_level: 4410,
+    });
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-orphan' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({
+        ok: true,
+        positions: [...positions.values()],
+        detail: `${positions.size}`,
+      }),
+      create: async () => ({ ok: true, deal_reference: 'x', detail: 'ok' }),
+      confirm: async () => ({ ok: true, deal_id: 'x', detail: 'ok' }),
+      close: async (_s, id) => {
+        positions.delete(id);
+        return { ok: true, deal_reference: `c-${id}`, detail: 'closed' };
+      },
+    });
+    await broker.connect();
+    masterRuntime.stop();
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    const gate = await masterRuntime.refuseDetachCapitalWithOpens();
+    expect(gate.ok).toBe(false);
+    if (!gate.ok) expect(gate.detail).toMatch(/venue=1/);
+
+    const flat = await masterRuntime.flattenAll('TEST_FLATTEN_ORPHAN');
+    expect(flat.ok).toBe(true);
+    expect(flat.closed).toBeGreaterThanOrEqual(1);
+    expect(positions.size).toBe(0);
+    expect((await masterRuntime.refuseDetachCapitalWithOpens()).ok).toBe(true);
   });
 
   it('runtime LIVE tick opens when MASTER_LIVE_ENABLED and mocked Capital attached', async () => {
@@ -1788,6 +1845,60 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     // beforeSize snapshot + post-close proof = 2 lists; no debounce when ACCEPTED
     expect(listCalls).toBe(2);
     expect(closed.fill_price).toBe(4411);
+  });
+
+  it('partial CLOSE confirm timeout refuses flat proof when empty list flakes', async () => {
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    let listCalls = 0;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-pflake' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => {
+        listCalls += 1;
+        // beforeSize: deal present; first post-close: empty flake; then deal back
+        if (listCalls === 1) {
+          return {
+            ok: true,
+            positions: [
+              {
+                deal_id: 'partial-deal',
+                epic: 'GOLD',
+                direction: 'BUY',
+                size: 0.2,
+                open_level: 4410,
+              },
+            ],
+          };
+        }
+        if (listCalls === 2) return { ok: true, positions: [] };
+        return {
+          ok: true,
+          positions: [
+            {
+              deal_id: 'partial-deal',
+              epic: 'GOLD',
+              direction: 'BUY',
+              size: 0.2,
+              open_level: 4410,
+            },
+          ],
+        };
+      },
+      create: async () => ({ ok: true, deal_reference: 'x', detail: 'ok' }),
+      confirm: async () => ({ ok: false, pending: true, detail: 'pending' }),
+      close: async () => ({ ok: true, deal_reference: 'pflake-ref', detail: 'submitted' }),
+    });
+    await broker.connect();
+    const closed = await broker.closePosition('partial-deal', { size: 0.1 });
+    expect(closed.ok).toBe(false);
+    expect(closed.detail).toMatch(/close_not_confirmed_empty_debounce/);
   });
 
   it('named reject fail-closes presence-only new fill (level-less, no mid)', async () => {
