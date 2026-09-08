@@ -3121,6 +3121,142 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(closed).toBeGreaterThanOrEqual(1);
   });
 
+  it('empty REJECTED with provisional-only open_level refuses SUCCESS fill', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    let dealLive = false;
+    let closed = 0;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-provfill' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => {
+        if (!dealLive) return { ok: true, positions: [], detail: '0' };
+        return {
+          ok: true,
+          positions: [
+            {
+              deal_id: 'deal-provfill',
+              epic: 'GOLD',
+              direction: 'BUY',
+              size: 0.1,
+              // level-less — list invents provisional mid; must not SUCCESS
+              stop_level: 4400,
+            },
+          ],
+          detail: '1',
+        };
+      },
+      create: async () => ({ ok: true, deal_reference: 'ref-provfill', detail: 'posted' }),
+      confirm: async () => {
+        dealLive = true;
+        return {
+          ok: false,
+          rejected: true,
+          deal_id: 'deal-provfill',
+          // no fill_level
+          detail: 'Capital rejected: {"dealStatus":"REJECTED"}',
+        };
+      },
+      modify: async () => ({ ok: true, deal_reference: 'm-provfill', detail: 'ok' }),
+      close: async () => {
+        closed += 1;
+        dealLive = false;
+        return { ok: true, detail: 'closed' };
+      },
+    });
+    await broker.connect();
+    const place = await broker.placeOrder({
+      intent_id: 'intent-provfill',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: 4400,
+    });
+    expect(place.ok).toBe(false);
+    expect(place.detail).toMatch(/capital_open_fill_unproven/);
+    expect(closed).toBeGreaterThanOrEqual(1);
+  });
+
+  it('SUCCESS prefers venue open_level over earlier provisional mid stamp', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    let dealLive = false;
+    let lists = 0;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-prefvenue' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => {
+        if (!dealLive) return { ok: true, positions: [], detail: '0' };
+        lists += 1;
+        // First lists after confirm: level-less (provisional). Later: real open_level.
+        if (lists < 3) {
+          return {
+            ok: true,
+            positions: [
+              {
+                deal_id: 'deal-prefvenue',
+                epic: 'GOLD',
+                direction: 'BUY',
+                size: 0.1,
+                stop_level: 4400,
+              },
+            ],
+            detail: '1',
+          };
+        }
+        return {
+          ok: true,
+          positions: [
+            {
+              deal_id: 'deal-prefvenue',
+              epic: 'GOLD',
+              direction: 'BUY',
+              size: 0.1,
+              open_level: 4410.77,
+              stop_level: 4400,
+            },
+          ],
+          detail: '1',
+        };
+      },
+      create: async () => ({ ok: true, deal_reference: 'ref-prefvenue', detail: 'posted' }),
+      confirm: async () => {
+        dealLive = true;
+        return {
+          ok: true,
+          deal_id: 'deal-prefvenue',
+          detail: 'ACCEPTED',
+        };
+      },
+      modify: async () => ({ ok: true, deal_reference: 'm-prefvenue', detail: 'ok' }),
+      close: async () => ({ ok: true, detail: 'closed' }),
+    });
+    await broker.connect();
+    const place = await broker.placeOrder({
+      intent_id: 'intent-prefvenue',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: 4400,
+    });
+    expect(place.ok).toBe(true);
+    expect(place.fill_price).toBe(4410.77);
+  });
+
   it('recover Capital SUCCESS ack still attach-or-fails when adopt list fails', async () => {
     process.env.MASTER_LIVE_ENABLED = 'true';
     process.env.MASTER_CONFIRM_FAST = 'true';

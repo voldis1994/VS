@@ -22,6 +22,11 @@ export type RuntimeGates = {
   daily_pnl_day?: string | null;
   /** Trailing loss streak — Check- persists; rebuild from journal can be order-wrong */
   consecutive_losses?: number | null;
+  /**
+   * true when day_start/peak were seeded from proven Capital equity.
+   * Prevents paper £10k gates from poisoning Capital LIVE after attach/restart.
+   */
+  capital_day_gates_seeded?: boolean;
 };
 
 function gatesDir(): string {
@@ -68,6 +73,7 @@ export function saveRuntimeGates(gates: RuntimeGates): boolean {
         gates.consecutive_losses != null && Number.isFinite(gates.consecutive_losses)
           ? Math.max(0, Math.floor(Number(gates.consecutive_losses)))
           : null,
+      capital_day_gates_seeded: gates.capital_day_gates_seeded === true,
     });
   } catch {
     return false;
@@ -104,6 +110,7 @@ export function loadRuntimeGates(): RuntimeGates | null {
           : Number.isFinite(streak) && streak >= 0
             ? Math.floor(streak)
             : null,
+      capital_day_gates_seeded: raw.capital_day_gates_seeded === true,
     };
   } catch {
     return null;

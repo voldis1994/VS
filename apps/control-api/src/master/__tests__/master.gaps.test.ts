@@ -1141,6 +1141,7 @@ describe('runtime gates persist', () => {
       peak_equity: 11_000,
       daily_pnl_day: '2026-09-07',
       consecutive_losses: null,
+      capital_day_gates_seeded: false,
     });
     if (prev === undefined) delete process.env.MASTER_STATE_DIR;
     else process.env.MASTER_STATE_DIR = prev;

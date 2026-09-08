@@ -211,6 +211,11 @@ class MasterRuntime {
   private capitalVenueOpensProven = true;
   /** False until Capital equity read proves preferred CFD — do not trust sizing equity. */
   private capitalAccountProven = false;
+  /**
+   * After Capital attach, day_start/peak must reseed from first proven equity —
+   * never inherit paper £10k baselines into LIVE daily-loss gates.
+   */
+  private capitalDayGatesSeeded = false;
   /** When false, manage exits still run but new entries are blocked (desk dual-brain guard). */
   entries_armed = true;
   entries_pause_reason: string | null = null;
@@ -501,8 +506,21 @@ class MasterRuntime {
     if (this.account.daily_pnl_day !== day) {
       this.account.daily_pnl = 0;
       this.account.daily_pnl_day = day;
-      this.account.day_start_equity =
-        this.account.equity > 0 ? this.account.equity : this.account.balance;
+      if (
+        this.broker instanceof CapitalBroker &&
+        !this.broker.paper &&
+        !this.capitalAccountProven
+      ) {
+        // Do not seed from paper £10k while Capital equity unproven
+        this.account.day_start_equity = 0;
+        this.capitalDayGatesSeeded = false;
+      } else {
+        this.account.day_start_equity =
+          this.account.equity > 0 ? this.account.equity : this.account.balance;
+        if (this.broker instanceof CapitalBroker && !this.broker.paper) {
+          this.capitalDayGatesSeeded = true;
+        }
+      }
       this.persistRuntimeGates();
     }
   }
@@ -522,6 +540,7 @@ class MasterRuntime {
           peak_equity: this.account.peak_equity,
           daily_pnl_day: this.account.daily_pnl_day ?? null,
           consecutive_losses: this.account.consecutive_losses,
+          capital_day_gates_seeded: this.capitalDayGatesSeeded,
         })
       )
     );
@@ -771,7 +790,15 @@ class MasterRuntime {
       this.setEpic(this.epic);
       // Fail-closed until first successful equity read — Start LIVE must not
       // advertise LIVE_RUNNING / proven before getAccount proves preferred CFD.
-      if (!broker.paper) this.capitalAccountProven = false;
+      if (!broker.paper) {
+        this.capitalAccountProven = false;
+        this.capitalDayGatesSeeded = false;
+        // Drop paper £10k day/peak so daily-loss cannot fail-open against Capital
+        this.account.day_start_equity = 0;
+        this.account.peak_equity = 0;
+      }
+    } else {
+      this.capitalDayGatesSeeded = false;
     }
     if (!(broker instanceof CapitalBroker) || broker.paper) {
       this.capitalVenueOpens = 0;
@@ -1068,18 +1095,38 @@ class MasterRuntime {
       }
       if (broker instanceof CapitalBroker && !broker.paper) {
         this.capitalAccountProven = true;
-      }
-      const prevPeak = this.account.peak_equity;
-      const prevDayStart = this.account.day_start_equity;
-      this.account.peak_equity = Math.max(this.account.peak_equity, acct.equity);
-      if (!this.account.day_start_equity) {
-        this.account.day_start_equity = acct.equity;
-      }
-      if (
-        this.account.peak_equity !== prevPeak ||
-        this.account.day_start_equity !== prevDayStart
-      ) {
-        this.persistRuntimeGates();
+        const prevPeak = this.account.peak_equity;
+        const prevDayStart = this.account.day_start_equity;
+        if (!this.capitalDayGatesSeeded) {
+          // First proven Capital equity — seed day/peak (never keep paper £10k)
+          this.account.day_start_equity = acct.equity;
+          this.account.peak_equity = acct.equity;
+          this.capitalDayGatesSeeded = true;
+        } else {
+          this.account.peak_equity = Math.max(
+            this.account.peak_equity,
+            acct.equity
+          );
+        }
+        if (
+          this.account.peak_equity !== prevPeak ||
+          this.account.day_start_equity !== prevDayStart
+        ) {
+          this.persistRuntimeGates();
+        }
+      } else {
+        const prevPeak = this.account.peak_equity;
+        const prevDayStart = this.account.day_start_equity;
+        this.account.peak_equity = Math.max(this.account.peak_equity, acct.equity);
+        if (!this.account.day_start_equity) {
+          this.account.day_start_equity = acct.equity;
+        }
+        if (
+          this.account.peak_equity !== prevPeak ||
+          this.account.day_start_equity !== prevDayStart
+        ) {
+          this.persistRuntimeGates();
+        }
       }
     } else if (broker instanceof CapitalBroker && !broker.paper) {
       // Fail-closed: never size LIVE from stale paper £10k when Capital equity unread
@@ -1826,14 +1873,30 @@ class MasterRuntime {
       if (gates.daily_pnl_day) {
         this.account.daily_pnl_day = gates.daily_pnl_day;
       }
-      if (gates.day_start_equity != null && gates.day_start_equity > 0) {
-        this.account.day_start_equity = gates.day_start_equity;
-      }
-      if (gates.peak_equity != null && gates.peak_equity > 0) {
-        this.account.peak_equity = Math.max(
-          this.account.peak_equity,
-          gates.peak_equity
-        );
+      const capitalAttached =
+        this.broker instanceof CapitalBroker && !this.broker.paper;
+      // Only restore day/peak when Capital-seeded (or non-Capital). Paper £10k
+      // must not poison LIVE daily-loss after Capital attach.
+      if (
+        !capitalAttached ||
+        gates.capital_day_gates_seeded === true
+      ) {
+        if (gates.day_start_equity != null && gates.day_start_equity > 0) {
+          this.account.day_start_equity = gates.day_start_equity;
+        }
+        if (gates.peak_equity != null && gates.peak_equity > 0) {
+          this.account.peak_equity = Math.max(
+            this.account.peak_equity,
+            gates.peak_equity
+          );
+        }
+        if (capitalAttached && gates.capital_day_gates_seeded === true) {
+          this.capitalDayGatesSeeded = true;
+        }
+      } else {
+        this.account.day_start_equity = 0;
+        this.account.peak_equity = 0;
+        this.capitalDayGatesSeeded = false;
       }
     }
     this.rollDailyPnl();
@@ -1865,11 +1928,29 @@ class MasterRuntime {
         : 0;
     this.account.daily_pnl = pnlToday;
     this.account.consecutive_losses = Math.max(losses, gatedStreak);
-    this.account.day_start_equity =
-      this.account.day_start_equity || this.account.balance;
-    this.account.equity = this.account.balance + pnlAll;
-    if (this.account.equity > this.account.peak_equity) {
-      this.account.peak_equity = this.account.equity;
+    // Capital pending seed: keep day_start 0 — do not fall back to paper balance
+    if (
+      !(
+        this.broker instanceof CapitalBroker &&
+        !this.broker.paper &&
+        !this.capitalDayGatesSeeded
+      )
+    ) {
+      this.account.day_start_equity =
+        this.account.day_start_equity || this.account.balance;
+    }
+    // Capital unproven: do not invent equity from paper balance + journal
+    if (
+      this.broker instanceof CapitalBroker &&
+      !this.broker.paper &&
+      !this.capitalAccountProven
+    ) {
+      // leave equity for tick getAccount; avoid paper £10k sizing baseline
+    } else {
+      this.account.equity = this.account.balance + pnlAll;
+      if (this.account.equity > this.account.peak_equity) {
+        this.account.peak_equity = this.account.equity;
+      }
     }
     this.persistRuntimeGates();
 
@@ -2812,6 +2893,8 @@ class MasterRuntime {
               equity: 0,
               available_to_deal: null,
               trade_allowed: false,
+              day_start_equity: 0,
+              peak_equity: 0,
             }
           : this.account,
       open_positions: this.positions.count(),

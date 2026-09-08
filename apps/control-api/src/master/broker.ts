@@ -37,6 +37,22 @@ import type { Side } from './types.js';
 
 export { capitalQuoteTsMs } from './capitalQuoteAge.js';
 
+/**
+ * Venue-proven open level only — provisional mid / market_mid must not become
+ * OPEN SUCCESS fill_price.
+ */
+export function capitalProvenOpenLevel(
+  p:
+    | { open_level?: number | null; open_level_proven?: boolean }
+    | null
+    | undefined
+): number | null {
+  if (!p) return null;
+  if (p.open_level_proven === false) return null;
+  const n = Number(p.open_level);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 /** Shared OPEN SUCCESS adopt rows for Capital + MT4 restart recovery. */
 export function adoptOpenFromAckJournalShared(bookedIds: Set<string>): {
   adopted: Array<{
@@ -1585,7 +1601,7 @@ export class CapitalBroker implements MasterBroker {
               fill_price =
                 conf.fill_level != null && Number.isFinite(conf.fill_level)
                   ? Number(conf.fill_level)
-                  : hit?.open_level || null;
+                  : capitalProvenOpenLevel(hit);
               fill_size = hit?.size ?? null;
             }
           } else if (!confDeal) {
@@ -1597,7 +1613,7 @@ export class CapitalBroker implements MasterBroker {
             });
             if (match) {
               position_id = match.position_id;
-              fill_price = match.open_level || null;
+              fill_price = capitalProvenOpenLevel(match);
               fill_size = match.size;
             }
           }
@@ -1694,7 +1710,7 @@ export class CapitalBroker implements MasterBroker {
       });
       if (hit) {
         position_id = hit.position_id;
-        fill_price = hit.open_level || null;
+        fill_price = capitalProvenOpenLevel(hit);
         fill_size = hit.size;
       }
     }
@@ -1893,19 +1909,9 @@ export class CapitalBroker implements MasterBroker {
         }
       }
       lastLevelsFail = null;
-      // Prefer confirm fill; else venue list open_level — never SUCCESS with null
-      // fill or provisional mid invented for sync ownership.
-      const listOpen =
-        filled?.open_level != null &&
-        filled.open_level_proven !== false &&
-        Number.isFinite(Number(filled.open_level)) &&
-        Number(filled.open_level) > 0
-          ? Number(filled.open_level)
-          : null;
-      if (
-        (fill_price == null || !Number.isFinite(fill_price) || fill_price <= 0) &&
-        listOpen != null
-      ) {
+      // Prefer latest venue list open_level; never keep provisional mid stamp.
+      const listOpen = capitalProvenOpenLevel(filled);
+      if (listOpen != null) {
         fill_price = listOpen;
       }
       if (fill_price == null || !Number.isFinite(fill_price) || fill_price <= 0) {
