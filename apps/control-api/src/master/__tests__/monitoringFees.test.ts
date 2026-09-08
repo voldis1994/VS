@@ -19,6 +19,85 @@ describe('close fee honesty (replay parity)', () => {
     expect(broker.fees).toBe(0);
     expect(broker.pnl).toBe(10);
   });
+
+  it('PaperBroker close omits fill_pnl so journal can record model fees', async () => {
+    const prev = process.env.MASTER_COMMISSION_PER_LOT;
+    process.env.MASTER_COMMISSION_PER_LOT = '0.05';
+    const { PaperBroker } = await import('../broker.js');
+    const { resolveCloseMoneyPnl, applyCloseFees: price } = await import('../moneyExit.js');
+    const broker = new PaperBroker();
+    await broker.connect();
+    broker.setQuote({
+      bid: 4400,
+      ask: 4400.2,
+      mid: 4400.1,
+      spread: 0.2,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'paper-fee-aaaaaaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      stop_level: 4390,
+      profit_level: 4410,
+    });
+    broker.setQuote({
+      bid: 4410,
+      ask: 4410.2,
+      mid: 4410.1,
+      spread: 0.2,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const closed = await broker.closePosition(placed.position_id!);
+    expect(closed.ok).toBe(true);
+    expect(closed.fill_pnl).toBeNull();
+    expect(closed.fill_price).toBe(4410);
+    // BUY open @ ask 4400.2, close @ bid 4410 → +9.8 − 0.05 fees
+    expect(broker.equity).toBeCloseTo(10_000 + 9.8 - 0.05, 6);
+    const resolved = resolveCloseMoneyPnl({
+      side: 'BUY',
+      entry: placed.fill_price!,
+      fill: closed.fill_price!,
+      size: 1,
+      value_per_point_per_lot: 1,
+      fill_pnl: closed.fill_pnl,
+    });
+    expect(resolved.from_broker).toBe(false);
+    const priced = price({
+      pnl: resolved.pnl,
+      volume: 1,
+      from_broker: resolved.from_broker,
+    });
+    expect(priced.fees).toBeCloseTo(0.05, 8);
+    expect(priced.pnl).toBeCloseTo(9.8 - 0.05, 8);
+    if (prev === undefined) delete process.env.MASTER_COMMISSION_PER_LOT;
+    else process.env.MASTER_COMMISSION_PER_LOT = prev;
+  });
+});
+
+describe('soft trail scalp gate', () => {
+  it('decideSoftTrailArm blocks when scalp_enabled=false', async () => {
+    const { decideSoftTrailArm } = await import('../moneyExit.js');
+    expect(
+      decideSoftTrailArm({
+        money_pnl: 1,
+        money_arm: 0.05,
+        already_armed: false,
+        scalp_enabled: false,
+      }).reason
+    ).toBe('not_scalping');
+    expect(
+      decideSoftTrailArm({
+        money_pnl: 1,
+        money_arm: 0.05,
+        already_armed: false,
+        scalp_enabled: true,
+      }).reason
+    ).toBe('profit_hit');
+  });
 });
 
 describe('CycleMonitor', () => {

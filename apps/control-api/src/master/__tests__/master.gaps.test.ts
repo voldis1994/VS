@@ -1722,6 +1722,7 @@ describe('partial_close persist + Check be_start', () => {
       instrument_point_value: 1,
       soft_trail_money_arm: 0.05,
       soft_trail_pips: 0.3,
+      scalp_pct_chase: true,
       breakeven_progress: 0,
       max_hold_ms: 0,
     });
@@ -1748,11 +1749,76 @@ describe('partial_close persist + Check be_start', () => {
       instrument_point_value: 1,
       soft_trail_money_arm: 0.05,
       soft_trail_pips: 0.3,
+      scalp_pct_chase: true,
       breakeven_progress: 0,
       max_hold_ms: 0,
     });
     expect(managed.closed.some((c) => /SOFT_TRAIL/.test(c.reason))).toBe(true);
     expect(pm.count()).toBe(0);
+  });
+
+  it('soft trail refuses to arm without scalp manage (VS-System 10s SCALPING gate)', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    broker.setQuote({
+      bid: entry,
+      ask: entry + 0.1,
+      mid: entry + 0.05,
+      spread: 0.1,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'soft-trail-no-scalp-bbbb',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: entry - 2,
+      profit_level: entry + 10,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-st-ns',
+      intent_id: 'st-ns',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry,
+      stop_loss: entry - 2,
+      take_profit: entry + 10,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis(),
+        expectancy: null,
+      },
+    });
+    await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: entry + 0.6,
+        ask: entry + 0.7,
+        mid: entry + 0.65,
+        spread: 0.1,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      soft_trail_money_arm: 0.05,
+      soft_trail_pips: 0.3,
+      scalp_pct_chase: false,
+      breakeven_progress: 0,
+      max_hold_ms: 0,
+    });
+    expect(pm.get(placed.position_id!)!.soft_trail_armed_at).toBeFalsy();
   });
 
   it('10%/20% scalp pct chase raises BUY SL toward mark', async () => {

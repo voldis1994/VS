@@ -131,13 +131,27 @@ export function capitalSafeBreakEvenStop(input: {
   return ideal;
 }
 
-/** Soft-trail arm gate — money PnL ≥ arm (or already armed). */
+/**
+ * Soft-trail arm gate — VS-System 10s SCALPING only.
+ * Requires scalp manage (`scalp_enabled`) plus money PnL ≥ arm (or already armed).
+ */
 export function decideSoftTrailArm(input: {
   money_pnl: number;
   money_arm: number;
   already_armed: boolean;
-}): { run: boolean; reason: 'off' | 'below_money_arm' | 'profit_hit' | 'already_armed' } {
+  /** VS-System SCALPING manage — soft trail must not run on structure/MFE modes. */
+  scalp_enabled?: boolean;
+}): {
+  run: boolean;
+  reason:
+    | 'off'
+    | 'not_scalping'
+    | 'below_money_arm'
+    | 'profit_hit'
+    | 'already_armed';
+} {
   if (!(input.money_arm > 0)) return { run: false, reason: 'off' };
+  if (input.scalp_enabled === false) return { run: false, reason: 'not_scalping' };
   if (input.already_armed) return { run: true, reason: 'already_armed' };
   if (Number.isFinite(input.money_pnl) && input.money_pnl >= input.money_arm) {
     return { run: true, reason: 'profit_hit' };

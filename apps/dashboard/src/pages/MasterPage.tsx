@@ -35,6 +35,8 @@ type MasterStatus = {
     trades?: number;
     win_rate?: number;
     profit_factor?: number;
+    total_fees?: number;
+    total_pnl?: number;
   } | null;
   monte_carlo?: { p05?: number; p50?: number; p95?: number } | null;
   monitoring?: {
@@ -291,6 +293,13 @@ export function MasterPage() {
         {
           k: 'Expectancy',
           v: Number(status.performance?.expectancy || 0).toFixed(3),
+        },
+        {
+          k: 'Fees',
+          v:
+            status.performance?.trades
+              ? Number(status.performance.total_fees || 0).toFixed(2)
+              : '—',
         },
         {
           k: 'Win rate',

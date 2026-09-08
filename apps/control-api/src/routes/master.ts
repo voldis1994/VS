@@ -491,6 +491,7 @@ async function refresh(){
       card('Trades',s.traded),
       card('Blocked',s.blocked),
       card('Expectancy',Number(s.performance?.expectancy||0).toFixed(3)),
+      card('Fees',s.performance?.trades?Number(s.performance.total_fees||0).toFixed(2):'—'),
       card('Win rate',s.performance?.trades?((Number(s.performance.win_rate||0)*100).toFixed(1)+'%'):'—'),
       card('Profit factor',s.performance?.profit_factor!=null&&Number.isFinite(s.performance.profit_factor)?Number(s.performance.profit_factor).toFixed(2):'—'),
       card('Loss streak',s.account?.consecutive_losses!=null?String(s.account.consecutive_losses):'—',(s.account?.consecutive_losses||0)>=3?'bad':''),

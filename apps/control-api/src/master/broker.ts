@@ -18,6 +18,8 @@ import { createLoginLockState, withLoginLock } from './capitalLoginLock.js';
 import { CapitalQuoteStream } from './capitalStream.js';
 import { logMasterError } from './errorJournal.js';
 import { stableReadJson } from './atomicIo.js';
+import { estimateTradeFees } from './moneyExit.js';
+import { specForEpic } from './pipeline.js';
 import {
   findOpenIntentBlocker,
   findOpenSuccessUnbooked,
@@ -246,18 +248,22 @@ export class PaperBroker implements MasterBroker {
     if (!p) return { ok: false, detail: 'not_found' };
     const q = this.lastQuote;
     let fill_price: number | null = null;
-    let fill_pnl: number | null = null;
     const closeSize =
       opts?.size != null && Number.isFinite(opts.size) && opts.size > 0
         ? Math.min(opts.size, p.size)
         : p.size;
     if (q) {
       fill_price = p.side === 'BUY' ? q.bid : q.ask;
-      fill_pnl =
+      // Money PnL with instrument point value + round-trip model fees.
+      // Do NOT return fill_pnl — that would mark from_broker and skip journal fees.
+      const pv = specForEpic(p.epic).value_per_point_per_lot;
+      const pts =
         p.side === 'BUY'
-          ? (fill_price - p.open_level) * closeSize
-          : (p.open_level - fill_price) * closeSize;
-      this.equity += fill_pnl;
+          ? fill_price - p.open_level
+          : p.open_level - fill_price;
+      const gross = pts * closeSize * pv;
+      const fees = estimateTradeFees(closeSize);
+      this.equity += gross - fees;
       this.balance = this.equity;
     }
     const remaining = Math.max(0, p.size - closeSize);
@@ -267,7 +273,7 @@ export class PaperBroker implements MasterBroker {
         ok: true,
         detail: `paper_partial_closed rem=${remaining}`,
         fill_price,
-        fill_pnl,
+        fill_pnl: null,
         remaining_size: remaining,
       };
     }
@@ -276,7 +282,7 @@ export class PaperBroker implements MasterBroker {
       ok: true,
       detail: 'paper_closed',
       fill_price,
-      fill_pnl,
+      fill_pnl: null,
       remaining_size: 0,
     };
   }
@@ -334,13 +340,15 @@ export class PaperBroker implements MasterBroker {
     }
   }
 
-  /** Mark-to-market open positions from quote. */
+  /** Mark-to-market open positions from quote (instrument money units). */
   markToMarket() {
     const q = this.lastQuote;
     if (!q) return;
     for (const p of this.positions.values()) {
       const mid = q.mid;
-      p.upl = p.side === 'BUY' ? (mid - p.open_level) * p.size : (p.open_level - mid) * p.size;
+      const pv = specForEpic(p.epic).value_per_point_per_lot;
+      const pts = p.side === 'BUY' ? mid - p.open_level : p.open_level - mid;
+      p.upl = pts * p.size * pv;
     }
   }
 }

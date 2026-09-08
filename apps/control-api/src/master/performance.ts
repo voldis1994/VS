@@ -19,6 +19,8 @@ export type PerformanceReport = {
   avg_mfe: number;
   longest_losing_streak: number;
   total_pnl: number;
+  /** Sum of outcome.fees (model commission when mark-priced). */
+  total_fees: number;
 };
 
 export function computePerformance(records: OpportunityRecord[]): PerformanceReport {
@@ -47,12 +49,14 @@ export function fromOutcomes(outcomes: TradeOutcome[]): PerformanceReport {
     avg_mfe: 0,
     longest_losing_streak: 0,
     total_pnl: 0,
+    total_fees: 0,
   };
   if (!outcomes.length) return empty;
 
   const wins = outcomes.filter((o) => o.pnl > 0);
   const losses = outcomes.filter((o) => o.pnl <= 0);
   const total_pnl = outcomes.reduce((s, o) => s + o.pnl, 0);
+  const total_fees = outcomes.reduce((s, o) => s + Math.max(0, Number(o.fees) || 0), 0);
   const average_win = wins.length ? wins.reduce((s, o) => s + o.pnl, 0) / wins.length : 0;
   const average_loss = losses.length
     ? Math.abs(losses.reduce((s, o) => s + o.pnl, 0) / losses.length)
@@ -113,6 +117,7 @@ export function fromOutcomes(outcomes: TradeOutcome[]): PerformanceReport {
     avg_mfe: outcomes.reduce((s, o) => s + o.mfe, 0) / outcomes.length,
     longest_losing_streak: longest,
     total_pnl,
+    total_fees,
   };
 }
 

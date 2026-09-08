@@ -385,12 +385,13 @@ export class PositionManager {
         await this.maybeRecoverNakedStop(broker, pos, quote, minStopDist);
       }
 
-      // VS-System soft trail — software exit after money arm (not Capital min-stop trail)
-      if (allowClose && softMoneyArm > 0) {
+      // VS-System soft trail — SCALPING manage only, after money arm (not Capital min-stop trail)
+      if (allowClose && softMoneyArm > 0 && scalpChase) {
         const arm = decideSoftTrailArm({
           money_pnl: moneyPnl,
           money_arm: softMoneyArm,
           already_armed: !!pos.soft_trail_armed_at,
+          scalp_enabled: true,
         });
         if (arm.run) {
           if (!pos.soft_trail_armed_at) {
