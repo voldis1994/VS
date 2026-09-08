@@ -16,20 +16,45 @@ function finite(n: unknown): n is number {
   return typeof n === 'number' && Number.isFinite(n);
 }
 
+/** Round price to broker Digits (Reader / Check- parity). */
+export function roundToDigits(value: number, digits: number): number {
+  if (!Number.isFinite(value)) return value;
+  const d = Math.max(0, Math.min(12, Math.floor(digits)));
+  const f = 10 ** d;
+  return Math.round(value * f) / f;
+}
+
 /** Normalize OHLC: ensure high/low envelope open/close; drop non-finite rows. */
-export function normalizeBars(raw: Bar[]): Bar[] {
+export function normalizeBars(
+  raw: Bar[],
+  opts?: { digits?: number | null }
+): Bar[] {
+  const digits =
+    opts?.digits != null && Number.isFinite(opts.digits) && opts.digits >= 0
+      ? Math.floor(Number(opts.digits))
+      : null;
   const out: Bar[] = [];
   for (const b of raw) {
     if (!finite(b.open) || !finite(b.high) || !finite(b.low) || !finite(b.close)) continue;
     if (b.open <= 0 || b.close <= 0) continue;
-    const high = Math.max(b.high, b.open, b.close, b.low);
-    const low = Math.min(b.low, b.open, b.close, b.high);
+    let open = b.open;
+    let high = b.high;
+    let low = b.low;
+    let close = b.close;
+    if (digits != null) {
+      open = roundToDigits(open, digits);
+      high = roundToDigits(high, digits);
+      low = roundToDigits(low, digits);
+      close = roundToDigits(close, digits);
+    }
+    high = Math.max(high, open, close, low);
+    low = Math.min(low, open, close, high);
     if (!(high >= low)) continue;
     out.push({
-      open: b.open,
+      open,
       high,
       low,
-      close: b.close,
+      close,
       bid: finite(b.bid) ? b.bid : undefined,
       ask: finite(b.ask) ? b.ask : undefined,
       ts_ms: finite(b.ts_ms) ? b.ts_ms : undefined,
@@ -45,12 +70,32 @@ export function normalizeQuote(q: Quote): Quote | null {
   if (q.ask < q.bid) return null;
   if (q.mid <= 0) return null;
   const spread = q.ask - q.bid;
+  const digits =
+    q.digits != null && Number.isFinite(q.digits) && q.digits >= 0
+      ? Math.floor(Number(q.digits))
+      : null;
+  const point =
+    q.point != null && Number.isFinite(q.point) && q.point > 0
+      ? Number(q.point)
+      : null;
+  let bid = q.bid;
+  let ask = q.ask;
+  let mid = q.mid;
+  if (digits != null) {
+    bid = roundToDigits(bid, digits);
+    ask = roundToDigits(ask, digits);
+    mid = roundToDigits(mid, digits);
+  }
   return {
-    bid: q.bid,
-    ask: q.ask,
-    mid: q.mid,
-    spread: finite(q.spread) ? q.spread : spread,
+    bid,
+    ask,
+    mid,
+    spread: finite(q.spread) ? q.spread : ask - bid,
     ts_ms: finite(q.ts_ms) ? q.ts_ms : Date.now(),
+    epic: q.epic,
+    min_stop_distance: q.min_stop_distance,
+    digits,
+    point,
   };
 }
 
@@ -69,7 +114,7 @@ export function validateMarket(
   const max_spread = opts?.max_spread_abs ?? 5;
   const now = opts?.now_ms ?? Date.now();
 
-  const bars = normalizeBars(rawBars);
+  const bars = normalizeBars(rawBars, { digits: rawQuote.digits });
   const quote = normalizeQuote(rawQuote);
 
   if (bars.length < min_bars) reasons.push('insufficient_bars');

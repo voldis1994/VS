@@ -703,7 +703,7 @@ class MasterRuntime {
   async evaluate(bars: Bar[], quote: Quote) {
     this.last_bars = bars;
     this.last_quote = quote;
-    const instrument = specForEpic(this.epic);
+    const instrument = this.resolveInstrument(this.broker, quote);
     const cycle = await this.pipeline.runCycle({
       bars,
       quote,
@@ -727,6 +727,28 @@ class MasterRuntime {
       opportunity: cycle.opportunity,
       ai: cycle.ai,
     };
+  }
+
+  /**
+   * Reader update_instance_instrument_state — overlay MT4 Point/Digits when EA exports them.
+   * Keeps catalog value_per_point_per_lot; only tick size (point) comes from broker.
+   */
+  private resolveInstrument(
+    broker: MasterBroker | null,
+    quote?: Quote | null
+  ): import('./types.js').InstrumentSpec {
+    const base = specForEpic(this.epic);
+    const fromQuote =
+      quote?.point != null && Number.isFinite(quote.point) && quote.point > 0
+        ? Number(quote.point)
+        : null;
+    const fromMt4 =
+      broker instanceof Mt4FileBroker ? broker.instrumentTick()?.point ?? null : null;
+    const point = fromQuote ?? fromMt4;
+    if (point != null && point > 0 && Math.abs(point - base.point) > 1e-12) {
+      return { ...base, point };
+    }
+    return base;
   }
 
   /**
@@ -838,7 +860,7 @@ class MasterRuntime {
     }
 
     this.account.open_positions = this.positions.count();
-    const instrument = specForEpic(this.epic);
+    const instrument = this.resolveInstrument(broker, quote);
 
     // Structure for Reader swing trail (from current bars — before entry cycle)
     const structure = bars.length >= 5 ? analyzeBars(bars, quote.spread) : null;
@@ -1738,6 +1760,8 @@ class MasterRuntime {
           epic: q.epic || this.epic,
           ts_ms: q.ts_ms,
           min_stop_distance: q.min_stop_distance,
+          digits: q.digits,
+          point: q.point,
         });
       } finally {
         busy = false;
@@ -1912,7 +1936,7 @@ class MasterRuntime {
       });
       broker.markToMarket();
     }
-    const instrument = specForEpic(this.epic);
+    const instrument = this.resolveInstrument(broker, quote);
     const structure = bars.length >= 5 ? analyzeBars(bars, quote.spread) : null;
     const trailBuf =
       structure && structure.atr > 0

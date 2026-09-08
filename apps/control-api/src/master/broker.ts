@@ -37,6 +37,10 @@ export type BrokerQuote = {
   ts_ms: number;
   /** Live Capital dealingRules min stop distance when known */
   min_stop_distance?: number | null;
+  /** MT4 EA market/latest.json Digits — for SL/OHLC rounding */
+  digits?: number | null;
+  /** MT4 EA Point — instrument tick size */
+  point?: number | null;
 };
 
 export type BrokerPosition = {
@@ -116,6 +120,10 @@ export type BrokerHistoryBars = {
     ts_ms?: number;
   }>;
   detail: string;
+  /** EA Digits when known (MT4 market/latest.json) */
+  digits?: number | null;
+  /** EA Point when known */
+  point?: number | null;
 };
 
 export interface MasterBroker {
@@ -1402,8 +1410,44 @@ export class Mt4FileBroker implements MasterBroker {
   /** Partial CLOSE supported when EA honors `lot` (VS_MASTER v6.2+). */
   readonly supportsPartialClose = true;
   private processed = new Set<string>();
+  /** Last Digits from market/latest.json (EA export) */
+  private lastDigits: number | null = null;
+  /** Last Point from market/latest.json */
+  private lastPoint: number | null = null;
 
   constructor(private readonly bridgeRoot: string) {}
+
+  /** Reader update_instance_instrument_state — tick size from EA when known. */
+  instrumentTick(): { digits: number; point: number } | null {
+    if (
+      this.lastDigits != null &&
+      this.lastPoint != null &&
+      this.lastDigits >= 0 &&
+      this.lastPoint > 0
+    ) {
+      return { digits: this.lastDigits, point: this.lastPoint };
+    }
+    return null;
+  }
+
+  private noteMarketMeta(m: Record<string, unknown> | null | undefined) {
+    if (!m || typeof m !== 'object') return;
+    const dig = Number(m.digits ?? m.Digits);
+    const pt = Number(m.point ?? m.Point);
+    if (Number.isFinite(dig) && dig >= 0 && dig <= 12) {
+      this.lastDigits = Math.floor(dig);
+    }
+    if (Number.isFinite(pt) && pt > 0) {
+      this.lastPoint = pt;
+    }
+  }
+
+  private roundPrice(v: number | null | undefined): number | null {
+    if (v == null || !Number.isFinite(v)) return null;
+    if (this.lastDigits == null) return Number(v);
+    const f = 10 ** this.lastDigits;
+    return Math.round(Number(v) * f) / f;
+  }
 
   async connect() {
     try {
@@ -1605,7 +1649,9 @@ export class Mt4FileBroker implements MasterBroker {
 
   /** Cap/Check honesty: ACK alone is not enough — status stop_level must match. */
   private stopVerifyTol(wantSl: number): number {
-    return Math.max(0.05, Math.abs(wantSl) * 1e-5, 1e-6);
+    const point =
+      this.lastPoint != null && this.lastPoint > 0 ? this.lastPoint : 0.05;
+    return Math.max(point, Math.abs(wantSl) * 1e-5, 1e-6);
   }
 
   private async waitForTicketSizeReduced(
@@ -1767,6 +1813,7 @@ export class Mt4FileBroker implements MasterBroker {
     const path = join(this.bridgeRoot, rel);
     const m = this.readJson(rel);
     if (!m) return null;
+    this.noteMarketMeta(m);
     const bid = Number(m.bid ?? m.Bid);
     const ask = Number(m.ask ?? m.Ask);
     if (!Number.isFinite(bid) || !Number.isFinite(ask)) return null;
@@ -1781,13 +1828,17 @@ export class Mt4FileBroker implements MasterBroker {
     const rawTs = Number(m.ts_ms ?? m.time_ms ?? m.TimeMs ?? m.timestamp);
     if (Number.isFinite(rawTs) && rawTs > 1_000_000_000_000) ts_ms = rawTs;
     else if (Number.isFinite(rawTs) && rawTs > 1_000_000_000) ts_ms = rawTs * 1000;
+    const rb = this.roundPrice(bid) ?? bid;
+    const ra = this.roundPrice(ask) ?? ask;
     return {
-      bid,
-      ask,
-      mid: (bid + ask) / 2,
-      spread: ask - bid,
+      bid: rb,
+      ask: ra,
+      mid: (rb + ra) / 2,
+      spread: ra - rb,
       epic: String(m.symbol || m.Symbol || epic),
       ts_ms,
+      digits: this.lastDigits,
+      point: this.lastPoint,
     };
   }
 
@@ -1897,24 +1948,39 @@ export class Mt4FileBroker implements MasterBroker {
     if (!market) {
       return { ok: false, bars: [], detail: 'mt4_market_missing' };
     }
+    this.noteMarketMeta(market);
+    const digits = this.lastDigits;
     const raw = Array.isArray(market.bars_m1) ? market.bars_m1 : [];
     const bars = raw
-      .map((b: any) => ({
+      .map((b: any) => {
         // EA VS_MASTER/CHECK export short keys t,o,h,l,c — accept both shapes
-        open: Number(b.open ?? b.Open ?? b.o),
-        high: Number(b.high ?? b.High ?? b.h),
-        low: Number(b.low ?? b.Low ?? b.l),
-        close: Number(b.close ?? b.Close ?? b.c),
-        ts_ms: (() => {
-          const t = b.ts_ms ?? b.time ?? b.Time ?? b.t;
-          if (t == null || t === '') return undefined;
-          if (typeof t === 'number' && Number.isFinite(t)) {
-            return t < 1e12 ? t * 1000 : t;
-          }
-          const d = Date.parse(String(t));
-          return Number.isFinite(d) ? d : undefined;
-        })(),
-      }))
+        let open = Number(b.open ?? b.Open ?? b.o);
+        let high = Number(b.high ?? b.High ?? b.h);
+        let low = Number(b.low ?? b.Low ?? b.l);
+        let close = Number(b.close ?? b.Close ?? b.c);
+        if (digits != null) {
+          const f = 10 ** digits;
+          open = Math.round(open * f) / f;
+          high = Math.round(high * f) / f;
+          low = Math.round(low * f) / f;
+          close = Math.round(close * f) / f;
+        }
+        return {
+          open,
+          high,
+          low,
+          close,
+          ts_ms: (() => {
+            const t = b.ts_ms ?? b.time ?? b.Time ?? b.t;
+            if (t == null || t === '') return undefined;
+            if (typeof t === 'number' && Number.isFinite(t)) {
+              return t < 1e12 ? t * 1000 : t;
+            }
+            const d = Date.parse(String(t));
+            return Number.isFinite(d) ? d : undefined;
+          })(),
+        };
+      })
       .filter((b: { open: number; high: number; low: number; close: number }) =>
         [b.open, b.high, b.low, b.close].every((n) => Number.isFinite(n) && n > 0)
       )
@@ -1926,6 +1992,8 @@ export class Mt4FileBroker implements MasterBroker {
         bars.length >= 10
           ? `mt4_bars_m1_${bars.length}`
           : `mt4_bars_m1_short_${bars.length}`,
+      digits: this.lastDigits,
+      point: this.lastPoint,
     };
   }
 
@@ -1964,14 +2032,16 @@ export class Mt4FileBroker implements MasterBroker {
     }
     this.processed.add(input.intent_id);
     const id = input.intent_id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24) || randomUUID().slice(0, 12);
+    const slRounded = this.roundPrice(input.stop_level ?? null);
+    const tpRounded = this.roundPrice(input.profit_level ?? null);
     const payload = {
       id,
       action: 'OPEN',
       symbol: input.epic,
       side: input.side,
       lot: input.size,
-      sl: input.stop_level ?? 0,
-      tp: input.profit_level ?? 0,
+      sl: slRounded ?? input.stop_level ?? 0,
+      tp: tpRounded ?? input.profit_level ?? 0,
       magic: Number(process.env.MASTER_MT4_MAGIC || 50001) || 50001,
       reason: 'VS_MASTER',
     };
@@ -1983,8 +2053,8 @@ export class Mt4FileBroker implements MasterBroker {
       side: input.side,
       volume: input.size,
       epic: input.epic,
-      sl: input.stop_level ?? null,
-      tp: input.profit_level ?? null,
+      sl: slRounded ?? input.stop_level ?? null,
+      tp: tpRounded ?? input.profit_level ?? null,
       reason: 'INTENT',
     });
     this.writeCommandAtomic(id, payload);
@@ -2003,8 +2073,8 @@ export class Mt4FileBroker implements MasterBroker {
       if (position_id && wantProtectiveSl) {
         const guard = await this.ensureOpenStopOrFail({
           position_id,
-          want_sl: Number(input.stop_level),
-          want_tp: input.profit_level ?? null,
+          want_sl: slRounded ?? Number(input.stop_level),
+          want_tp: tpRounded ?? input.profit_level ?? null,
           order_id: id,
           epic: input.epic,
         });
@@ -2070,8 +2140,8 @@ export class Mt4FileBroker implements MasterBroker {
       if (wantProtectiveSl) {
         const guard = await this.ensureOpenStopOrFail({
           position_id: late.position_id,
-          want_sl: Number(input.stop_level),
-          want_tp: input.profit_level ?? null,
+          want_sl: slRounded ?? Number(input.stop_level),
+          want_tp: tpRounded ?? input.profit_level ?? null,
           order_id: id,
           epic: input.epic,
         });
@@ -2327,12 +2397,14 @@ export class Mt4FileBroker implements MasterBroker {
       return { ok: false, detail: 'mt4_pending_control_command' };
     }
     const id = randomUUID().slice(0, 12);
+    const slRounded = this.roundPrice(input.stop_level ?? null);
+    const tpRounded = this.roundPrice(input.profit_level ?? null);
     const payload = {
       id,
       action: 'MODIFY',
       ticket: Number(input.position_id),
-      sl: input.stop_level ?? 0,
-      tp: input.profit_level ?? 0,
+      sl: slRounded ?? input.stop_level ?? 0,
+      tp: tpRounded ?? input.profit_level ?? 0,
       reason: 'VS_MASTER',
     };
     logTradeIntent({
@@ -2343,8 +2415,8 @@ export class Mt4FileBroker implements MasterBroker {
       volume: 0,
       epic: '',
       ticket: String(input.position_id),
-      sl: input.stop_level ?? null,
-      tp: input.profit_level ?? null,
+      sl: slRounded ?? input.stop_level ?? null,
+      tp: tpRounded ?? input.profit_level ?? null,
       reason: 'INTENT',
     });
     this.writeCommandAtomic(id, payload);

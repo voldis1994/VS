@@ -645,9 +645,56 @@ describe('VS MASTER MT4 file bridge', () => {
       expect(hist.ok).toBe(true);
       expect(hist.bars.length).toBe(20);
       expect(hist.detail).toBe('mt4_bars_m1_20');
+      expect(hist.digits).toBe(2);
+      expect(hist.point).toBe(0.01);
       expect(hist.bars[0]!.open).toBe(4400);
       expect(hist.bars.at(-1)!.close).toBeCloseTo(4419.5, 5);
       expect(hist.bars.at(-1)!.ts_ms).toBe((t0 + 19 * 60) * 1000);
+      expect(broker.instrumentTick()).toEqual({ digits: 2, point: 0.01 });
+    } finally {
+      if (prev === undefined) delete process.env.MASTER_MT4_STATUS_STALE_MS;
+      else process.env.MASTER_MT4_STATUS_STALE_MS = prev;
+    }
+  });
+
+  it('getHistoryBars rounds OHLC to Digits=3 and caches Point=0.001', async () => {
+    const prev = process.env.MASTER_MT4_STATUS_STALE_MS;
+    process.env.MASTER_MT4_STATUS_STALE_MS = '60000';
+    try {
+      const root = mkdtempSync(join(tmpdir(), 'vs-mt4-digits3-'));
+      const broker = new Mt4FileBroker(root);
+      await broker.connect();
+      mkdirSync(join(root, 'market'), { recursive: true });
+      const bars = Array.from({ length: 12 }, (_, i) => ({
+        t: 1_700_000_000 + i * 60,
+        o: 4400.1234 + i,
+        h: 4400.1299 + i,
+        l: 4400.1201 + i,
+        c: 4400.1266 + i,
+        v: 1,
+      }));
+      writeFileSync(
+        join(root, 'market', 'latest.json'),
+        JSON.stringify({
+          bid: 4411.1234,
+          ask: 4411.1299,
+          symbol: 'XAUUSD',
+          digits: 3,
+          point: 0.001,
+          bars_m1: bars,
+        })
+      );
+      const hist = await broker.getHistoryBars('XAUUSD', 60);
+      expect(hist.ok).toBe(true);
+      expect(hist.digits).toBe(3);
+      expect(hist.point).toBe(0.001);
+      expect(hist.bars[0]!.open).toBe(4400.123);
+      expect(hist.bars[0]!.close).toBe(4400.127);
+      const q = await broker.getQuote('XAUUSD');
+      expect(q?.digits).toBe(3);
+      expect(q?.point).toBe(0.001);
+      expect(q?.bid).toBe(4411.123);
+      expect(broker.instrumentTick()?.point).toBe(0.001);
     } finally {
       if (prev === undefined) delete process.env.MASTER_MT4_STATUS_STALE_MS;
       else process.env.MASTER_MT4_STATUS_STALE_MS = prev;
