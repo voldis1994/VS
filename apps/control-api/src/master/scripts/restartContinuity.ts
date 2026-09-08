@@ -185,7 +185,27 @@ async function main() {
     !ghostWiped &&
     afterManageOpens === 1;
 
-  // Phase B: desired_running embed survives sidecar wipe → paper_live_feed
+  // Phase B: recover while opens still on disk/memory (before feed resume)
+  const recovered = await masterRuntime.recover();
+  await masterRuntime.bootstrapManageAfterRecoverPublic();
+  const stRecover = masterRuntime.status();
+  const manageArmed = !!(
+    masterRuntime as unknown as { manageTimer: NodeJS.Timeout | null }
+  ).manageTimer;
+  const recoverOk =
+    masterRuntime.recovered === true &&
+    recovered.positions === 1 &&
+    recovered.opportunities >= 1 &&
+    recovered.outcomes >= 1 &&
+    stRecover.recovered === true &&
+    manageArmed &&
+    (stRecover.health === 'OPENS_MANAGE_ONLY' || stRecover.running);
+
+  // Phase C: desired_running embed survives sidecar wipe → paper_live_feed
+  // Do NOT call stop() before save — stop() persists desired_running=false and
+  // would overwrite the embed we are about to prove. Keep seeded PaperBroker so
+  // start()/recover inside resumeDesiredSession cannot ghost-wipe locals.
+  const { ensureOperatorMetaFromStateDir } = await import('../filePersist.js');
   saveRuntimeGates({
     last_loss_ms: 0,
     reject_until_ms: 0,
@@ -199,15 +219,9 @@ async function main() {
   } catch {
     /* ignore */
   }
-  masterRuntime.stop();
   masterRuntime.running = false;
   masterRuntime.desired_running = false;
-  masterRuntime.broker = null;
-  masterRuntime.broker_detail = null;
-  masterRuntime.recovered = false;
-  (masterRuntime as unknown as { bookHydrated: boolean }).bookHydrated = false;
-  // Re-hydrate book + restore gates from operator_meta after wipe
-  await masterRuntime.hydrateBookFromDisk();
+  ensureOperatorMetaFromStateDir(stateDir);
   const gatesHydrated = masterRuntime.hydrateRuntimeGatesFromDisk();
   const resumeFeed = await masterRuntime.resumeDesiredSession();
   const feedOk =
@@ -224,29 +238,10 @@ async function main() {
     resume_detail: resumeFeed.detail,
     resumed: resumeFeed.resumed,
     running: masterRuntime.running,
+    opens: masterRuntime.positions.count(),
   };
 
-  // Stop feed before recover phase so health assertions stay clear
-  masterRuntime.stop();
-  masterRuntime.desired_running = false;
-  masterRuntime.running = false;
-
-  const recovered = await masterRuntime.recover();
-  await masterRuntime.bootstrapManageAfterRecoverPublic();
-  const stRecover = masterRuntime.status();
-  const manageArmed = !!(
-    masterRuntime as unknown as { manageTimer: NodeJS.Timeout | null }
-  ).manageTimer;
-  const recoverOk =
-    masterRuntime.recovered === true &&
-    recovered.positions === 1 &&
-    recovered.opportunities >= 1 &&
-    recovered.outcomes >= 1 &&
-    stRecover.recovered === true &&
-    manageArmed &&
-    (stRecover.health === 'OPENS_MANAGE_ONLY' || stRecover.running);
-
-  const allOk = hydrateOk && manageOnlyOk && feedOk && recoverOk;
+  const allOk = hydrateOk && manageOnlyOk && recoverOk && feedOk;
   const report = {
     status: allOk ? 'PASS_RESTART_CONTINUITY' : 'FAIL',
     hydrate: { ok: hydrateOk, ...hydrateSnap },
@@ -257,7 +252,6 @@ async function main() {
       opens_after_6_manage: afterManageOpens,
       ghost_wiped: ghostWiped,
     },
-    desired_feed: desiredFeedSnap,
     recover: {
       ok: recoverOk,
       positions: recovered.positions,
@@ -266,9 +260,10 @@ async function main() {
       manage_armed: manageArmed,
       health: stRecover.health,
     },
+    desired_feed: desiredFeedSnap,
     detail: allOk
-      ? 'boot hydrate + paper seed + desired_running feed resume; recover manage armed'
-      : `hydrate_ok=${hydrateOk} manage_only_ok=${manageOnlyOk} feed_ok=${feedOk} recover_ok=${recoverOk}`,
+      ? 'boot hydrate + paper seed + recover + desired_running feed resume'
+      : `hydrate_ok=${hydrateOk} manage_only_ok=${manageOnlyOk} recover_ok=${recoverOk} feed_ok=${feedOk}`,
   };
 
   writeFileSync(
