@@ -4453,8 +4453,11 @@ describe('orphan adopt + replay soft-trail authority', () => {
       },
     });
     expect(result.equity_curve.length).toBeGreaterThan(10);
-    // Final equity exists; day roll must not throw / zero out account mid-replay
     expect(Number.isFinite(result.equity_curve.at(-1))).toBe(true);
+    expect(result.daily_pnl_day).toBe('2026-09-08');
+    // After UTC roll, day_start tracks equity at day boundary (not stuck at starting_equity alone)
+    expect(result.day_start_equity).toBeGreaterThan(0);
+    expect(Number.isFinite(result.day_start_equity)).toBe(true);
   });
 
   it('replay multi-TP + money-BE cfg does not throw and can scale', async () => {

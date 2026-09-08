@@ -89,6 +89,8 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
   performance: ReturnType<typeof computePerformance>;
   monte_carlo: ReturnType<typeof monteCarlo>;
   equity_curve: number[];
+  day_start_equity: number;
+  daily_pnl_day: string;
 }> {
   const warmup = opts.warmup ?? 25;
   const cfg: MasterConfig = {
@@ -770,6 +772,9 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
     performance: computePerformance(traded),
     monte_carlo: monteCarlo(pnls, 300),
     equity_curve,
+    /** Last UTC day_start_equity after rolls — live profit_lock / daily_loss parity */
+    day_start_equity,
+    daily_pnl_day,
   };
 }
 
