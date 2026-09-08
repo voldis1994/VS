@@ -2,8 +2,9 @@
  * Persist post-loss / reject cooldowns across restart.
  * File-backed (MASTER_STATE_DIR) — works for standalone and as dual mirror for API.
  */
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs';
+import { mkdirSync, readFileSync, existsSync } from 'fs';
 import { join } from 'path';
+import { atomicWriteJson } from './atomicIo.js';
 
 export type RuntimeGates = {
   last_loss_ms: number;
@@ -32,27 +33,23 @@ function gatesPath(): string {
 export function saveRuntimeGates(gates: RuntimeGates): boolean {
   try {
     mkdirSync(gatesDir(), { recursive: true });
-    writeFileSync(
-      gatesPath(),
-      JSON.stringify({
-        last_loss_ms: gates.last_loss_ms || 0,
-        reject_until_ms: gates.reject_until_ms || 0,
-        day_start_equity:
-          gates.day_start_equity != null && Number.isFinite(gates.day_start_equity)
-            ? Number(gates.day_start_equity)
-            : null,
-        peak_equity:
-          gates.peak_equity != null && Number.isFinite(gates.peak_equity)
-            ? Number(gates.peak_equity)
-            : null,
-        daily_pnl_day: gates.daily_pnl_day ?? null,
-        consecutive_losses:
-          gates.consecutive_losses != null && Number.isFinite(gates.consecutive_losses)
-            ? Math.max(0, Math.floor(Number(gates.consecutive_losses)))
-            : null,
-      })
-    );
-    return true;
+    return atomicWriteJson(gatesPath(), {
+      last_loss_ms: gates.last_loss_ms || 0,
+      reject_until_ms: gates.reject_until_ms || 0,
+      day_start_equity:
+        gates.day_start_equity != null && Number.isFinite(gates.day_start_equity)
+          ? Number(gates.day_start_equity)
+          : null,
+      peak_equity:
+        gates.peak_equity != null && Number.isFinite(gates.peak_equity)
+          ? Number(gates.peak_equity)
+          : null,
+      daily_pnl_day: gates.daily_pnl_day ?? null,
+      consecutive_losses:
+        gates.consecutive_losses != null && Number.isFinite(gates.consecutive_losses)
+          ? Math.max(0, Math.floor(Number(gates.consecutive_losses)))
+          : null,
+    });
   } catch {
     return false;
   }

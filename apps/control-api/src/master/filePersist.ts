@@ -2,7 +2,7 @@
  * File-backed persist for MASTER_STANDALONE (no Postgres).
  * Same recovery contract as DB tables — open positions + seen intents + journal.
  */
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs';
+import { mkdirSync, readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import type { ManagedPosition } from './positionManager.js';
 import type { OpportunityRecord, TradeOutcome } from './types.js';
@@ -11,6 +11,7 @@ import {
   setPersistClient,
   type PersistClient,
 } from './persist.js';
+import { atomicWriteJson } from './atomicIo.js';
 
 export type FilePersistState = {
   opportunities: OpportunityRecord[];
@@ -167,7 +168,7 @@ export class FilePersist implements PersistClient {
       })),
       intents: [...this.mem.intents],
     };
-    writeFileSync(this.statePath(), JSON.stringify(state, null, 2));
+    atomicWriteJson(this.statePath(), state);
   }
 
   async query(sql: string, params: unknown[] = []) {

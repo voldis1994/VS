@@ -10,11 +10,14 @@ import {
   readdirSync,
   renameSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from 'fs';
 import { join } from 'path';
 import { createLoginLockState, withLoginLock } from './capitalLoginLock.js';
 import { CapitalQuoteStream } from './capitalStream.js';
+import { logMasterError } from './errorJournal.js';
+import { stableReadJson } from './atomicIo.js';
 import {
   findOpenIntentBlocker,
   findOpenSuccessUnbooked,
@@ -1317,12 +1320,50 @@ export class Mt4FileBroker implements MasterBroker {
 
   private readJson(rel: string): any | null {
     const path = join(this.bridgeRoot, rel);
-    if (!existsSync(path)) return null;
-    try {
-      return JSON.parse(readFileSync(path, 'utf8'));
-    } catch {
-      return null;
+    // Reader atomic_read — refuse torn / mid-write status/market/acks
+    const data = stableReadJson(path);
+    return data ?? null;
+  }
+
+  /** Check clear_old_acks — keep newest N ack files, archive rest. */
+  clearOldAcks(keep = 40): { kept: number; pruned: number } {
+    const folder = join(this.bridgeRoot, 'acks');
+    const result = { kept: 0, pruned: 0 };
+    if (!existsSync(folder)) return result;
+    const files = readdirSync(folder)
+      .filter((f) => f.startsWith('ack_') && f.endsWith('.json'))
+      .map((f) => {
+        const full = join(folder, f);
+        let mtime = 0;
+        try {
+          mtime = statSync(full).mtimeMs;
+        } catch {
+          /* ignore */
+        }
+        return { f, full, mtime };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+    const archive = join(folder, 'archive');
+    for (let i = 0; i < files.length; i++) {
+      const row = files[i]!;
+      if (i < keep) {
+        result.kept += 1;
+        continue;
+      }
+      try {
+        mkdirSync(archive, { recursive: true });
+        renameSync(row.full, join(archive, row.f));
+        result.pruned += 1;
+      } catch {
+        try {
+          unlinkSync(row.full);
+          result.pruned += 1;
+        } catch {
+          /* ignore */
+        }
+      }
     }
+    return result;
   }
 
   /** Status file + age — Check-/Reader refuse stale bridge books. */
@@ -1408,7 +1449,8 @@ export class Mt4FileBroker implements MasterBroker {
       await new Promise((r) => setTimeout(r, pollMs));
       if (!existsSync(ackPath)) continue;
       try {
-        const ack = JSON.parse(readFileSync(ackPath, 'utf8'));
+        const ack = stableReadJson(ackPath) as any;
+        if (!ack || typeof ack !== 'object') continue;
         // Reader validate_ack_record — reject mismatched command id body
         const ackId = ack?.id != null ? String(ack.id) : '';
         if (ackId && ackId !== id) {
@@ -1421,6 +1463,7 @@ export class Mt4FileBroker implements MasterBroker {
         if (!ack.ok) {
           return { ok: false, ack, detail: `mt4_reject:${ack.detail || 'nack'}` };
         }
+        this.clearOldAcks(40);
         return { ok: true, ack, detail: 'acked' };
       } catch {
         /* keep polling */
@@ -1866,6 +1909,12 @@ export class Mt4FileBroker implements MasterBroker {
       ack_status: 'TIMEOUT',
       detail: 'ACK_TIMEOUT',
     });
+    logMasterError({
+      module: 'mt4.placeOrder',
+      error_type: 'ACK_TIMEOUT',
+      message: 'mt4_command_written_ack_timeout',
+      context: { command_id: id, action: 'OPEN', epic: input.epic },
+    });
     return {
       ok: false,
       order_id: id,
@@ -1975,6 +2024,12 @@ export class Mt4FileBroker implements MasterBroker {
       ack_status: 'TIMEOUT',
       detail: 'ACK_TIMEOUT',
     });
+    logMasterError({
+      module: 'mt4.closePosition',
+      error_type: 'ACK_TIMEOUT',
+      message: 'mt4_close_written_ack_timeout',
+      context: { command_id: id, action: 'CLOSE', ticket: position_id },
+    });
     return { ok: false, detail: 'mt4_close_written_ack_timeout' };
   }
 
@@ -2047,6 +2102,12 @@ export class Mt4FileBroker implements MasterBroker {
     updateTradeAck(id, {
       ack_status: 'TIMEOUT',
       detail: 'ACK_TIMEOUT',
+    });
+    logMasterError({
+      module: 'mt4.modifyPosition',
+      error_type: 'ACK_TIMEOUT',
+      message: 'mt4_modify_ack_timeout',
+      context: { command_id: id, action: 'MODIFY', ticket: input.position_id },
     });
     return { ok: false, detail: 'mt4_modify_ack_timeout', order_id: id };
   }
@@ -2171,6 +2232,10 @@ export class Mt4FileBroker implements MasterBroker {
         result.still_pending += 1;
         result.details.push(`${action}:${id}:pending_age_ms=${age}`);
       }
+    }
+    const pruned = this.clearOldAcks(40);
+    if (pruned.pruned) {
+      result.details.push(`acks_pruned:${pruned.pruned}`);
     }
     return result;
   }

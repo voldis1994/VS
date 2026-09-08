@@ -25,6 +25,7 @@ type MasterStatus = {
     day_start_equity?: number | null;
     peak_equity?: number;
     available_to_deal?: number | null;
+    trade_allowed?: boolean | null;
   } | null;
   open_positions: number;
   performance: { expectancy?: number; max_drawdown?: number; trades?: number } | null;
@@ -218,6 +219,17 @@ export function MasterPage() {
             status.account?.available_to_deal != null
               ? Number(status.account.available_to_deal).toFixed(2)
               : '—',
+        },
+        {
+          k: 'Trade allowed',
+          v:
+            status.account?.trade_allowed === false
+              ? 'NO'
+              : status.account?.trade_allowed === true
+                ? 'YES'
+                : '—',
+          bad: status.account?.trade_allowed === false,
+          ok: status.account?.trade_allowed === true,
         },
         {
           k: 'News',
