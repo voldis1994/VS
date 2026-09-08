@@ -2774,23 +2774,7 @@ class MasterRuntime {
 
     // PAPER restart: empty in-memory book must be reseeded before sync or every
     // restored open looks like a ghost and is wiped as broker_flat.
-    if (this.broker instanceof PaperBroker) {
-      this.broker.hydrateAccount({
-        equity: this.account.equity,
-        balance: this.account.balance,
-      });
-      this.broker.seedOpens(
-        this.positions.list().map((p) => ({
-          position_id: p.position_id,
-          epic: p.epic,
-          side: p.side,
-          size: p.size,
-          open_level: p.entry,
-          stop_level: p.stop_loss,
-          profit_level: p.take_profit,
-        }))
-      );
-    }
+    this.seedPaperBrokerFromPositions();
 
     // MT4: archive acked cmds / expire stale unacked before sync (Reader recover_pending_ack)
     if (this.broker instanceof Mt4FileBroker) {
@@ -3505,8 +3489,9 @@ class MasterRuntime {
   }
 
   /**
-   * After recover: if opens exist but last_bars/quote empty, pull broker quote+history
-   * (or disk market_cache) and run one manage-only tick so stops/exits are not blind.
+   * After recover / hydrate manage: if opens exist but last_bars/quote empty, pull
+   * broker quote+history (or disk market_cache) and run one manage-only tick so
+   * stops/exits are not blind. PAPER must reseed broker book before sync.
    */
   private async bootstrapManageAfterRecover(): Promise<void> {
     if (this.positions.count() === 0) {
@@ -3520,6 +3505,8 @@ class MasterRuntime {
       }
       this.ensurePaperBroker();
     }
+    // Hydrate-only path (no recover): empty PaperBroker would ghost-wipe locals
+    this.seedPaperBrokerFromPositions();
     try {
       // Disk cache first — covers history fetch miss / slow Capital OHLC
       this.hydrateMarketCacheFromDisk();
@@ -3596,6 +3583,32 @@ class MasterRuntime {
       // Always arm manage loop when opens exist — Recover must not leave them unmanaged
       this.ensureManageLoop();
     }
+  }
+
+  /**
+   * PAPER restart / hydrate: reseed in-memory broker book from PositionManager
+   * so sync does not treat restored locals as ghosts (broker_flat wipe).
+   */
+  private seedPaperBrokerFromPositions(): void {
+    if (!(this.broker instanceof PaperBroker)) return;
+    if (this.positions.count() === 0) return;
+    // Prior manage ticks may have left empty-book debounce near wipe threshold
+    this.emptyBrokerDebounce = { consecutive_empty: 0, miss_by_id: {} };
+    this.broker.hydrateAccount({
+      equity: this.account.equity,
+      balance: this.account.balance,
+    });
+    this.broker.seedOpens(
+      this.positions.list().map((p) => ({
+        position_id: p.position_id,
+        epic: p.epic,
+        side: p.side,
+        size: p.size,
+        open_level: p.entry,
+        stop_level: p.stop_loss,
+        profit_level: p.take_profit,
+      }))
+    );
   }
 
   private persistMarketCache(): void {

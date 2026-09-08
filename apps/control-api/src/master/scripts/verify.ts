@@ -99,7 +99,7 @@ async function main() {
         'Paper restart: hydrateBookFromDisk restores opens/journal; recover reconciles',
       ok,
       detail: demo
-        ? `${demo.status} hydrate_pos=${demo.hydrate?.positions} exit=${demo.hydrate?.last_exit_reason} pnl=${demo.hydrate?.daily_pnl} recover_pos=${demo.recover?.positions}`
+        ? `${demo.status} hydrate_pos=${demo.hydrate?.positions} exit=${demo.hydrate?.last_exit_reason} pnl=${demo.hydrate?.daily_pnl} manage_seed=${demo.manage_only?.paper_seeded} recover_pos=${demo.recover?.positions}`
         : r.out.slice(-500),
     });
   }

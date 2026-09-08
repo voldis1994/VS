@@ -1,11 +1,13 @@
 /**
  * Paper restart continuity — durable opens/journal survive boot hydrate
- * without broker recover, then recover still reconciles.
+ * without broker recover; PaperBroker is reseeded so manage sync cannot
+ * ghost-wipe locals; then recover still reconciles.
  *
  *   npm run master:restart-check
  */
 import { mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
+import { PaperBroker } from '../broker.js';
 import { installFilePersist } from '../filePersist.js';
 import {
   persistOpportunity,
@@ -16,6 +18,7 @@ import {
 import { DEFAULT_MASTER_CONFIG, GOLD_SPEC, MasterPipeline } from '../pipeline.js';
 import { PositionManager } from '../positionManager.js';
 import { masterRuntime } from '../runtime.js';
+import { saveMarketCache } from '../marketCache.js';
 
 async function main() {
   const artifactDir = process.env.ARTIFACT_DIR || '/opt/cursor/artifacts';
@@ -66,6 +69,8 @@ async function main() {
     side: 'BUY',
     size: 0.1,
     entry: 4410,
+    stop_loss: 4390,
+    take_profit: 4450,
     decision: cycle.decision,
   });
   await saveOpenPositions(pm.list());
@@ -89,6 +94,20 @@ async function main() {
     },
     'TREND:BUY'
   );
+  // Cached bars/quote so hydrate manage can tick without live feed
+  saveMarketCache({
+    epic: 'GOLD',
+    bars,
+    quote: {
+      bid: 4415,
+      ask: 4415.4,
+      mid: 4415.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    },
+    structure_seed_source: 'restart_check',
+  });
 
   // Simulate process restart — empty in-memory book, durable state on disk
   masterRuntime.pipeline = new MasterPipeline('PAPER');
@@ -96,12 +115,24 @@ async function main() {
   masterRuntime.broker = null;
   masterRuntime.broker_detail = null;
   masterRuntime.running = false;
+  masterRuntime.desired_running = false;
   masterRuntime.recovered = false;
   (masterRuntime as unknown as { bookHydrated: boolean }).bookHydrated = false;
   masterRuntime.last_exit_reason = null;
   masterRuntime.last_decision = null;
   masterRuntime.account.daily_pnl = 0;
-  masterRuntime.cfg = { ...DEFAULT_MASTER_CONFIG, mode: 'PAPER' };
+  // Soft exits off for sync-survival proof — EMA/BestOutcome must not steal the case
+  masterRuntime.cfg = {
+    ...DEFAULT_MASTER_CONFIG,
+    mode: 'PAPER',
+    ai_mode: 'required',
+    scalp_pct_chase: false,
+    soft_trail_money_arm: 0,
+    be_start: 0,
+    trail_start: 0,
+    max_hold_ms: 0,
+  };
+  masterRuntime.last_ai_allow_close = false;
 
   const hydrated = await masterRuntime.hydrateBookFromDisk();
   const stHydrate = masterRuntime.status();
@@ -124,8 +155,34 @@ async function main() {
     hydrateSnap.daily_pnl === 8 &&
     hydrateSnap.open_positions_status === 1;
 
+  // Hydrate-only manage (no recover): must reseed PaperBroker or sync ghost-wipes
+  const resume = await masterRuntime.resumeDesiredSession();
+  let paperSeeded = 0;
+  if (masterRuntime.broker instanceof PaperBroker) {
+    const listed = await masterRuntime.broker.listOpenPositions();
+    paperSeeded = listed.positions?.length || 0;
+  }
+  // ≥5 manage syncs — empty-book debounce would wipe without seedOpens
+  for (let i = 0; i < 6; i++) {
+    masterRuntime.last_quote = {
+      bid: 4415 - i * 0.1,
+      ask: 4415.4 - i * 0.1,
+      mid: 4415.2 - i * 0.1,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    };
+    await masterRuntime.bootstrapManageAfterRecoverPublic();
+  }
+  const afterManageOpens = masterRuntime.positions.count();
+  const ghostWiped = afterManageOpens === 0;
+  const manageOnlyOk =
+    resume.detail === 'manage_opens_only' &&
+    paperSeeded === 1 &&
+    !ghostWiped &&
+    afterManageOpens === 1;
+
   const recovered = await masterRuntime.recover();
-  // Recover must bootstrap manage even when not running
   await masterRuntime.bootstrapManageAfterRecoverPublic();
   const stRecover = masterRuntime.status();
   const manageArmed = !!(
@@ -140,9 +197,17 @@ async function main() {
     manageArmed &&
     (stRecover.health === 'OPENS_MANAGE_ONLY' || stRecover.running);
 
+  const allOk = hydrateOk && manageOnlyOk && recoverOk;
   const report = {
-    status: hydrateOk && recoverOk ? 'PASS_RESTART_CONTINUITY' : 'FAIL',
+    status: allOk ? 'PASS_RESTART_CONTINUITY' : 'FAIL',
     hydrate: { ok: hydrateOk, ...hydrateSnap },
+    manage_only: {
+      ok: manageOnlyOk,
+      resume_detail: resume.detail,
+      paper_seeded: paperSeeded,
+      opens_after_6_manage: afterManageOpens,
+      ghost_wiped: ghostWiped,
+    },
     recover: {
       ok: recoverOk,
       positions: recovered.positions,
@@ -151,9 +216,9 @@ async function main() {
       manage_armed: manageArmed,
       health: stRecover.health,
     },
-    detail: hydrateOk && recoverOk
-      ? 'boot hydrate restored opens+journal; recover manage armed without empty forge'
-      : `hydrate_ok=${hydrateOk} recover_ok=${recoverOk}`,
+    detail: allOk
+      ? 'boot hydrate + paper seed survive manage sync; recover manage armed'
+      : `hydrate_ok=${hydrateOk} manage_only_ok=${manageOnlyOk} recover_ok=${recoverOk}`,
   };
 
   writeFileSync(

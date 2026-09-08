@@ -2090,7 +2090,17 @@ describe('runtime gates persist', () => {
       expect(loadRuntimeGates()?.desired_running).toBe(true);
 
       // Simulate Stop-with-opens: manage loop + health must not claim OK
-      masterRuntime.cfg = { ...masterRuntime.cfg, mode: 'PAPER' };
+      masterRuntime.cfg = {
+        ...masterRuntime.cfg,
+        mode: 'PAPER',
+        ai_mode: 'required',
+        scalp_pct_chase: false,
+        soft_trail_money_arm: 0,
+        be_start: 0,
+        trail_start: 0,
+        max_hold_ms: 0,
+      };
+      masterRuntime.last_ai_allow_close = false;
       masterRuntime.pipeline = new MasterPipeline('PAPER');
       masterRuntime.positions = new PositionManager();
       masterRuntime.positions.register({
@@ -2101,6 +2111,8 @@ describe('runtime gates persist', () => {
         side: 'BUY',
         size: 0.1,
         entry: 4400,
+        stop_loss: 4300,
+        take_profit: 4600,
         decision: {
           decision_id: 'd-mws',
           kind: 'BUY',
@@ -2125,6 +2137,7 @@ describe('runtime gates persist', () => {
         ask: 4405.4,
         mid: 4405.2,
         spread: 0.4,
+        epic: 'GOLD',
         ts_ms: Date.now(),
       };
       await masterRuntime.bootstrapManageAfterRecoverPublic();
@@ -2137,6 +2150,15 @@ describe('runtime gates persist', () => {
         (masterRuntime as unknown as { manageTimer: NodeJS.Timeout | null }).manageTimer
       ).toBeTruthy();
       expect(st.health).toBe('OPENS_MANAGE_ONLY');
+      // PaperBroker must be reseeded — otherwise ≥5 empty syncs ghost-wipe
+      expect(masterRuntime.broker).toBeInstanceOf(PaperBroker);
+      const seeded = await masterRuntime.broker!.listOpenPositions();
+      expect(seeded.positions.length).toBe(1);
+      for (let i = 0; i < 6; i++) {
+        await masterRuntime.bootstrapManageAfterRecoverPublic();
+      }
+      expect(masterRuntime.positions.count()).toBe(1);
+      expect(masterRuntime.status().open_positions).toBe(1);
     } finally {
       masterRuntime.positions = new PositionManager();
       masterRuntime.stop();

@@ -445,7 +445,7 @@ export class PaperBroker implements MasterBroker {
   }
 
   /**
-   * Restart rehydrate — put restored MASTER opens back into the empty paper book
+   * Restart rehydrate — replace paper book with restored MASTER opens
    * so sync does not treat them as ghosts / broker_flat.
    */
   seedOpens(
@@ -459,6 +459,7 @@ export class PaperBroker implements MasterBroker {
       profit_level?: number | null;
     }>
   ) {
+    this.positions.clear();
     for (const r of rows) {
       this.positions.set(r.position_id, {
         position_id: r.position_id,
