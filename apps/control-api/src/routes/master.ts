@@ -439,6 +439,8 @@ h2{font-size:13px;color:#9fb0c0;margin:22px 0 8px;text-transform:uppercase;lette
 <div class="grid" id="cards"></div>
 <h2>Open positions</h2>
 <div class="grid" id="positions"></div>
+<h2>Decision journal (recent cycles)</h2>
+<div class="grid" id="decisions"></div>
 <h2>Journal (recent traded)</h2>
 <div class="grid" id="journal"></div>
 <h2>Activity</h2>
@@ -446,6 +448,7 @@ h2{font-size:13px;color:#9fb0c0;margin:22px 0 8px;text-transform:uppercase;lette
 <script>
 const cards=document.getElementById('cards');
 const positions=document.getElementById('positions');
+const decisions=document.getElementById('decisions');
 const journal=document.getElementById('journal');
 const logEl=document.getElementById('log');
 let kill=false, ai='off';
@@ -512,6 +515,11 @@ async function refresh(){
       const r=await fetch('/api/master/positions/'+encodeURIComponent(id)+'/close',{method:'POST'}).then(r=>r.json());
       pushLog('close '+id+' ok='+r.ok+' '+(r.detail||''));refresh();
     });
+    const dec=(s.recent_decisions||[]).slice(0,8);
+    decisions.innerHTML=dec.length?dec.map(d=>{
+      const detail=d.block_reason||d.execution_detail||'—';
+      return card(d.kind+(d.executed?' · FILL':''), String(detail).slice(0,48)+(d.ts?' · '+String(d.ts).slice(11,19):''), d.executed?'ok':(d.block_reason?'bad':''));
+    }).join(''):card('Decisions','no cycle events yet');
     const j=await fetch('/api/master/journal').then(r=>r.json());
     const traded=(j.opportunities||[]).filter(o=>o.executed&&o.outcome).slice(-8).reverse();
     journal.innerHTML=traded.length?traded.map(o=>{

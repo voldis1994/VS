@@ -420,7 +420,7 @@ export class PositionManager {
                   closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
                     ? Number(closeRes.fill_price)
                     : mark;
-                const { pnl } = resolveCloseMoneyPnl({
+                const { pnl, from_broker } = resolveCloseMoneyPnl({
                   side: pos.side,
                   entry: pos.entry,
                   fill,
@@ -428,14 +428,19 @@ export class PositionManager {
                   value_per_point_per_lot: pv,
                   fill_pnl: closeRes.fill_pnl,
                 });
+                const priced = applyCloseFees({
+                  pnl,
+                  volume: pos.size,
+                  from_broker,
+                });
                 const outcome: TradeOutcome = {
                   position_id: pos.position_id,
                   side: pos.side,
                   entry: pos.entry,
                   exit: fill,
                   volume: pos.size,
-                  pnl,
-                  fees: 0,
+                  pnl: priced.pnl,
+                  fees: priced.fees,
                   slippage: Math.abs(fill - quote.mid),
                   mae: pos.mae,
                   mfe: pos.mfe,
@@ -518,7 +523,7 @@ export class PositionManager {
                 closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
                   ? Number(closeRes.fill_price)
                   : mark;
-              const { pnl } = resolveCloseMoneyPnl({
+              const { pnl, from_broker } = resolveCloseMoneyPnl({
                 side: pos.side,
                 entry: pos.entry,
                 fill,
@@ -526,14 +531,19 @@ export class PositionManager {
                 value_per_point_per_lot: pv,
                 fill_pnl: closeRes.fill_pnl,
               });
+              const priced = applyCloseFees({
+                pnl,
+                volume: partial.close_size,
+                from_broker,
+              });
               const outcome: TradeOutcome = {
                 position_id: pos.position_id,
                 side: pos.side,
                 entry: pos.entry,
                 exit: fill,
                 volume: partial.close_size,
-                pnl,
-                fees: 0,
+                pnl: priced.pnl,
+                fees: priced.fees,
                 slippage: Math.abs(fill - quote.mid),
                 mae: pos.mae,
                 mfe: pos.mfe,

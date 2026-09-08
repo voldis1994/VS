@@ -36,6 +36,7 @@ import { setupKey } from './decision.js';
 import { resolveCloseMoneyPnl, resolveFloatingMoneyPnl, applyCloseFees } from './moneyExit.js';
 import { loadMasterErrors, logMasterError } from './errorJournal.js';
 import { CycleMonitor } from './monitoring.js';
+import { logDecisionEvent, loadDecisionEvents } from './decisionJournal.js';
 import { loadRuntimeGates, saveRuntimeGates } from './runtimeGates.js';
 import { loadOwnsPipelinePref, saveOwnsPipelinePref } from './ownsPipelinePref.js';
 import { resolveNewsWindow, type NewsWindowState } from './newsGate.js';
@@ -111,6 +112,13 @@ export type MasterStatus = {
   }>;
   manage: ManageConfigPatch;
   monitoring: import('./monitoring.js').CycleMonitorSnapshot;
+  recent_decisions: Array<{
+    ts: string;
+    kind: string;
+    executed: boolean;
+    block_reason: string | null;
+    execution_detail: string | null;
+  }>;
 };
 
 export type TickResult = {
@@ -1029,6 +1037,17 @@ class MasterRuntime {
     }
 
     this.monitor.noteCycle(Date.now() - t0);
+    logDecisionEvent({
+      kind: cycle.decision.kind,
+      epic: this.epic,
+      mode: this.cfg.mode,
+      buy_score: cycle.decision.buy?.score,
+      sell_score: cycle.decision.sell?.score,
+      block_reason: cycle.decision.block_reason,
+      executed,
+      execution_detail,
+      cycle_ms: Date.now() - t0,
+    });
     return {
       decision: cycle.decision,
       risk: cycle.risk,
@@ -1594,6 +1613,13 @@ class MasterRuntime {
       monitoring: this.monitor.snapshot(
         quote ? Math.max(0, Date.now() - (quote.ts_ms || 0)) : null
       ),
+      recent_decisions: loadDecisionEvents(12).map((e) => ({
+        ts: e.ts,
+        kind: e.kind,
+        executed: e.executed,
+        block_reason: e.block_reason,
+        execution_detail: e.execution_detail,
+      })),
     };
   }
 }

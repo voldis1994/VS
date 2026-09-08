@@ -74,6 +74,13 @@ type MasterStatus = {
     error_type: string;
     message: string;
   }>;
+  recent_decisions?: Array<{
+    ts: string;
+    kind: string;
+    executed: boolean;
+    block_reason: string | null;
+    execution_detail: string | null;
+  }>;
   manage?: {
     scalp_pct_chase?: boolean;
     soft_trail_money_arm?: number;
@@ -639,6 +646,32 @@ export function MasterPage() {
               </div>
             );
           })
+        )}
+      </div>
+
+      <h2 className="section-title">Decision journal (recent cycles)</h2>
+      <div className="grid grid-3" style={{ gap: 10, marginBottom: 20 }}>
+        {!status?.recent_decisions?.length ? (
+          <div className="card">no cycle events yet</div>
+        ) : (
+          status.recent_decisions.map((d, i) => (
+            <div key={`${d.ts}-${i}`} className="card">
+              <div style={{ fontWeight: 600 }}>
+                {d.kind}
+                {d.executed ? ' · FILL' : ''}
+              </div>
+              <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4 }}>
+                {d.block_reason
+                  ? String(d.block_reason).slice(0, 56)
+                  : d.execution_detail
+                    ? String(d.execution_detail).slice(0, 56)
+                    : '—'}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
+                {d.ts ? new Date(d.ts).toISOString().slice(11, 19) : '—'}
+              </div>
+            </div>
+          ))
         )}
       </div>
 

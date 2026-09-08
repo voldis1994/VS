@@ -5,6 +5,7 @@ import { join } from 'path';
 import { atomicWriteJson, stableReadJson, stableReadText } from '../atomicIo.js';
 import { Mt4FileBroker } from '../broker.js';
 import { logMasterError, loadMasterErrors } from '../errorJournal.js';
+import { logDecisionEvent, loadDecisionEvents } from '../decisionJournal.js';
 
 describe('atomicIo (Reader)', () => {
   it('atomicWriteJson creates readable JSON without leftover tmp', () => {
@@ -36,6 +37,41 @@ describe('error journal durability', () => {
     expect(rows[0]!.error_type).toBe('B');
     expect(rows[1]!.error_type).toBe('A');
     expect(existsSync(join(dir, 'error_journal.jsonl'))).toBe(true);
+  });
+});
+
+describe('decision journal durability', () => {
+  it('appends WAIT/TRADE events newest-first and survives reload', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vs-dec-fsync-'));
+    process.env.MASTER_STATE_DIR = dir;
+    logDecisionEvent({
+      kind: 'WAIT',
+      epic: 'XAUUSD',
+      mode: 'PAPER',
+      buy_score: 0.4,
+      sell_score: 0.2,
+      block_reason: 'spread',
+      executed: false,
+      cycle_ms: 12,
+    });
+    logDecisionEvent({
+      kind: 'BUY',
+      epic: 'XAUUSD',
+      mode: 'PAPER',
+      buy_score: 0.8,
+      sell_score: 0.1,
+      executed: true,
+      execution_detail: 'paper_fill',
+      cycle_ms: 18,
+    });
+    const rows = loadDecisionEvents(10);
+    expect(rows[0]!.kind).toBe('BUY');
+    expect(rows[0]!.executed).toBe(true);
+    expect(rows[1]!.kind).toBe('WAIT');
+    expect(rows[1]!.block_reason).toBe('spread');
+    expect(existsSync(join(dir, 'decision_journal.jsonl'))).toBe(true);
+    const reloaded = loadDecisionEvents(1);
+    expect(reloaded[0]!.execution_detail).toBe('paper_fill');
   });
 });
 

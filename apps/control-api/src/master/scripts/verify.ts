@@ -150,6 +150,7 @@ async function main() {
       'src/master/tradeAckJournal.ts',
       'src/master/closeRequiresSl.ts',
       'src/master/errorJournal.ts',
+      'src/master/decisionJournal.ts',
       'src/master/atomicIo.ts',
       'src/master/monitoring.ts',
       'src/master/mt4/VS_MASTER.mq4',
