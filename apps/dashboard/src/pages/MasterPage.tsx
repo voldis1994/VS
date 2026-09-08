@@ -498,7 +498,15 @@ export function MasterPage() {
         <button
           type="button"
           className="btn btn-primary"
-          disabled={busy}
+          disabled={
+            busy ||
+            (!!status?.capital_live_attached && (status?.open_positions ?? 0) > 0)
+          }
+          title={
+            status?.capital_live_attached && (status?.open_positions ?? 0) > 0
+              ? 'Flatten all Capital opens before Start PAPER'
+              : undefined
+          }
           onClick={() =>
             void act('start', async () => {
               await apiFetch('/api/master/control', {

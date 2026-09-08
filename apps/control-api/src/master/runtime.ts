@@ -776,6 +776,30 @@ class MasterRuntime {
   }
 
   /**
+   * Refuse detaching Capital while local book still has opens — Start PAPER
+   * would seed Capital tickets into PaperBroker and leave venue deals unmanaged.
+   */
+  refuseDetachCapitalWithOpens(): { ok: true } | { ok: false; detail: string } {
+    const b = this.broker;
+    const opens = this.positions.count();
+    if (b && b.name === 'CAPITAL' && !b.paper && opens > 0) {
+      return {
+        ok: false,
+        detail: `refuse_paper_with_capital_opens:${opens} — Flatten all first`,
+      };
+    }
+    return { ok: true };
+  }
+
+  /** Stop Capital stream then switch to paper (caller must pass refuseDetachCapitalWithOpens). */
+  detachToPaperBroker(): PaperBroker {
+    if (this.broker instanceof CapitalBroker) {
+      this.broker.stopMarketStream();
+    }
+    return this.ensurePaperBroker();
+  }
+
+  /**
    * Desk dual-brain guard: when Capital LIVE manage is deferred to desk,
    * pause MASTER autonomous entries while exits still run.
    */

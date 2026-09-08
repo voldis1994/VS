@@ -424,6 +424,70 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     masterRuntime.stop();
   });
 
+  it('refuseDetachCapitalWithOpens blocks Start PAPER while Capital has opens', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const broker = mockCapitalBroker();
+    await broker.connect();
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('LIVE');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    masterRuntime.cfg = { ...DEFAULT_MASTER_CONFIG, mode: 'LIVE' };
+    // Seed a local open as if Capital fill was booked
+    masterRuntime.positions.register({
+      position_id: 'deal-open-1',
+      opportunity_id: 'opp-1',
+      intent_id: 'intent-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4410,
+      stop_loss: 4400,
+      take_profit: 4430,
+      decision: {
+        decision_id: 'd1',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.8,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {
+          regime: 'TREND',
+          market_state: 't',
+          momentum_score: 0.5,
+          momentum_dir: 'UP',
+          trend_dir: 'UP',
+          trend_strength: 0.8,
+          structure_bias: 'BULLISH',
+          swing_high: 4450,
+          swing_low: 4380,
+          buy_pressure: 0.7,
+          sell_pressure: 0.3,
+          behavior_bull: 0.7,
+          behavior_bear: 0.3,
+          impact_score: 0.5,
+          context_quality: 0.8,
+          volatility: 0.001,
+          atr: 2,
+          data_quality: 0.9,
+          session: 'LONDON',
+        },
+        expectancy: null,
+      },
+    });
+    const gate = masterRuntime.refuseDetachCapitalWithOpens();
+    expect(gate.ok).toBe(false);
+    if (!gate.ok) expect(gate.detail).toMatch(/refuse_paper_with_capital_opens/);
+
+    // After flatten (empty book) detach is allowed
+    masterRuntime.positions = new PositionManager();
+    expect(masterRuntime.refuseDetachCapitalWithOpens().ok).toBe(true);
+    masterRuntime.detachToPaperBroker();
+    expect(masterRuntime.broker?.name).toBe('PAPER');
+  });
+
   it('runtime LIVE tick opens when MASTER_LIVE_ENABLED and mocked Capital attached', async () => {
     process.env.MASTER_LIVE_ENABLED = 'true';
     const broker = mockCapitalBroker();

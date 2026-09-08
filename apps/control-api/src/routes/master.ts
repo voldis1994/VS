@@ -1,6 +1,6 @@
 /** VS MASTER dashboard + control API. LIVE off by default for master mode. */
 import type { FastifyInstance } from 'fastify';
-import { Mt4FileBroker } from '../master/broker.js';
+import { CapitalBroker, Mt4FileBroker } from '../master/broker.js';
 import { ensureMasterPersist } from '../master/dualPersist.js';
 import { masterRuntime } from '../master/runtime.js';
 import { replayMaster, walkForward, abCompareAi } from '../master/replay.js';
@@ -105,9 +105,19 @@ export async function registerMasterRoutes(app: FastifyInstance) {
       const wantMode = req.body?.mode;
       // Explicit PAPER from UI must not be upgraded to LIVE by env credentials
       if (wantMode === 'PAPER') {
+        const gate = masterRuntime.refuseDetachCapitalWithOpens();
+        if (!gate.ok) {
+          return {
+            ok: false,
+            detail: gate.detail,
+            broker: masterRuntime.broker?.name ?? null,
+            status: masterRuntime.status(),
+          };
+        }
+        masterRuntime.stop();
         masterRuntime.setMode('PAPER');
-        masterRuntime.ensurePaperBroker();
-        masterRuntime.broker_detail = masterRuntime.broker_detail || 'paper_explicit';
+        masterRuntime.detachToPaperBroker();
+        masterRuntime.broker_detail = 'paper_explicit';
         const live_feed =
           req.body?.live_feed === true ||
           (req.body?.live_feed !== false &&
@@ -389,6 +399,14 @@ export async function registerMasterRoutes(app: FastifyInstance) {
     const broker = new Mt4FileBroker(root);
     const connected = await broker.connect();
     if (!connected.ok) return { ok: false, detail: connected.detail };
+    // Do not detach Capital while LIVE opens remain (orphans venue deals)
+    const gate = masterRuntime.refuseDetachCapitalWithOpens();
+    if (!gate.ok) {
+      return { ok: false, detail: gate.detail, broker: masterRuntime.broker?.name ?? null };
+    }
+    if (masterRuntime.broker instanceof CapitalBroker) {
+      masterRuntime.broker.stopMarketStream();
+    }
     // Legacy path — do not treat as primary LIVE venue
     masterRuntime.stop();
     masterRuntime.attachBroker(broker);
@@ -645,7 +663,7 @@ async function refresh(){
     }).join(''):card('Journal','no closed trades yet');
   }catch(e){pushLog('status error '+e)}
 }
-document.getElementById('btnStart').onclick=async()=>{await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'PAPER'})});const r=await fetch('/api/master/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'PAPER'})}).then(r=>r.json());pushLog('start PAPER ok='+r.ok+' '+(r.detail||''));refresh()};
+document.getElementById('btnStart').onclick=async()=>{const s=await fetch('/api/master/status').then(r=>r.json());if(s.capital_live_attached&&(s.open_positions||0)>0){pushLog('refuse Start PAPER — Flatten all Capital opens first');return;}await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'PAPER'})});const r=await fetch('/api/master/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'PAPER'})}).then(r=>r.json());pushLog('start PAPER ok='+r.ok+' '+(r.detail||''));refresh()};
 document.getElementById('btnLive').onclick=async()=>{await fetch('/api/master/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'LIVE'})});const r=await fetch('/api/master/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'LIVE'})}).then(r=>r.json());pushLog('start LIVE ok='+r.ok+' '+(r.detail||'')+' mode='+(r.status&&r.status.mode));refresh()};
 document.getElementById('btnStop').onclick=async()=>{const r=await fetch('/api/master/stop',{method:'POST'}).then(r=>r.json());pushLog('stop');refresh()};
 document.getElementById('btnRecover').onclick=async()=>{const r=await fetch('/api/master/recover',{method:'POST'}).then(r=>r.json());pushLog('recover positions='+r.positions+' journal='+r.opportunities);refresh()};
