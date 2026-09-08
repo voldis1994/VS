@@ -11,6 +11,25 @@ import { capitalEnvPresent, resolveBrokerFromEnv } from '../envBroker.js';
 import { classifyLiveSmokeBroker } from '../liveSmokeGate.js';
 import { GOLD_SPEC } from '../pipeline.js';
 
+function writeSmokeArtifact(report: Record<string, unknown>): void {
+  const candidates = [
+    process.env.ARTIFACT_DIR,
+    '/opt/cursor/artifacts',
+    '/tmp/vs-master-artifacts',
+  ].filter((d): d is string => !!d && String(d).trim().length > 0);
+  let lastErr: unknown = null;
+  for (const dir of candidates) {
+    try {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(`${dir}/vs_master_live_smoke.json`, JSON.stringify(report, null, 2));
+      return;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  if (lastErr) console.error('live-smoke artifact write failed:', lastErr);
+}
+
 async function main() {
   const report: Record<string, unknown> = {
     ts: new Date().toISOString(),
@@ -34,9 +53,7 @@ async function main() {
     report.status = 'SKIPPED';
     report.detail = gate.detail;
     console.log(JSON.stringify(report, null, 2));
-    const dir = process.env.ARTIFACT_DIR || '/opt/cursor/artifacts';
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(`${dir}/vs_master_live_smoke.json`, JSON.stringify(report, null, 2));
+    writeSmokeArtifact(report);
     return;
   }
 
@@ -44,6 +61,7 @@ async function main() {
     report.status = 'FAIL';
     report.reason = gate.detail;
     console.log(JSON.stringify(report, null, 2));
+    writeSmokeArtifact(report);
     process.exitCode = 1;
     return;
   }
@@ -61,13 +79,12 @@ async function main() {
   report.open_positions = positions.ok ? positions.positions.length : null;
   report.list_ok = positions.ok;
   report.list_detail = positions.detail || null;
+  // Full Capital LIVE proof requires usable quote + equity — partial is not COMPLETE
   report.status =
     quote && acct && acct.equity > 0 ? 'OK_LIVE_CONNECTED' : 'CONNECTED_PARTIAL';
 
   console.log(JSON.stringify(report, null, 2));
-  const dir = process.env.ARTIFACT_DIR || '/opt/cursor/artifacts';
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(`${dir}/vs_master_live_smoke.json`, JSON.stringify(report, null, 2));
+  writeSmokeArtifact(report);
 }
 
 main().catch((e) => {

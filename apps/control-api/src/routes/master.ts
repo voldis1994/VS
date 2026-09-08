@@ -162,6 +162,16 @@ export async function registerMasterRoutes(app: FastifyInstance) {
           status: masterRuntime.status(),
         };
       }
+      // Start LIVE is Capital.com only — MT4 legacy is a separate attach path
+      if (wantLive && liveOk && resolved.broker.name !== 'CAPITAL') {
+        masterRuntime.setMode('PAPER');
+        return {
+          ok: false,
+          detail: `Start LIVE requires Capital.com (got ${resolved.broker.name}) — MT4 only via /api/master/broker/mt4 when MASTER_ALLOW_MT4_LEGACY=true`,
+          broker: resolved.broker.name,
+          status: masterRuntime.status(),
+        };
+      }
       masterRuntime.attachBroker(resolved.broker);
       masterRuntime.broker_detail = resolved.detail;
       if (liveOk) masterRuntime.setMode('LIVE');

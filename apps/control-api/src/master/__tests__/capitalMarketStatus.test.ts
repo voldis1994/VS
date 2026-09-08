@@ -121,6 +121,41 @@ describe('CapitalBroker market_status cache (stream path)', () => {
     expect(q?.mid).toBeCloseTo(4400.2, 5);
   });
 
+  it('omitted market_status after REST keeps stream from skipping gate', async () => {
+    let restCalls = 0;
+    const broker = makeBroker(async () => {
+      restCalls += 1;
+      return {
+        bid: 4400,
+        ask: 4400.4,
+        mid: 4400.2,
+        epic: 'GOLD',
+        // Capital sometimes omits status — fail closed until TRADEABLE/OPEN
+      };
+    });
+    (broker as any).session = { id: 's' };
+    await broker.getQuote('GOLD');
+    const afterFirst = restCalls;
+    expect(afterFirst).toBeGreaterThanOrEqual(1);
+
+    const stream = (broker as any).stream;
+    stream.getLatest = () => ({
+      epic: 'GOLD',
+      bid: 4401,
+      offer: 4401.3,
+      mid: 4401.15,
+      ts_ms: Date.now(),
+    });
+    stream.isHealthy = () => true;
+    stream.ensure = () => {};
+
+    const q = await broker.getQuote('GOLD');
+    // Unknown status → must not return stream-only mid; force another REST
+    expect(restCalls).toBeGreaterThan(afterFirst);
+    expect(q?.mid).toBeCloseTo(4400.2, 5);
+    expect(q?.market_status == null || q?.market_status === '').toBe(true);
+  });
+
   it('maps XAUUSD → GOLD before REST quote', async () => {
     let seenEpic = '';
     const broker = makeBroker(async (epic) => {

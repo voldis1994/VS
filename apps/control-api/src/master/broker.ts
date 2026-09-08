@@ -743,27 +743,27 @@ export class CapitalBroker implements MasterBroker {
     const streamed = this.stream.getLatest(apiEpic);
     let cachedStatus = this.cachedMarketStatus(apiEpic);
     const { capitalMarketAllowsTrading } = await import('./capitalMarket.js');
-    let knownClosed =
-      cachedStatus != null && !capitalMarketAllowsTrading(cachedStatus);
+    const statusFetched = () =>
+      this.epicCacheKeys(apiEpic).some((k) => !!(this.marketStatusFetchedAt.get(k) || 0));
+    // Fail closed: after REST status fetch, unknown/CLOSED parks stream-only path
+    let knownNotTradeable =
+      statusFetched() && !capitalMarketAllowsTrading(cachedStatus);
 
-    // Stream path — but if REST already said CLOSED, force REST (don't entry on WS ticks)
-    if (streamed && this.stream.isHealthy() && !knownClosed) {
+    // Stream path — but if REST already said not TRADEABLE/OPEN, force REST
+    if (streamed && this.stream.isHealthy() && !knownNotTradeable) {
       // Slide pool TTL without blocking the mark
       void this.ensureSession();
       const mid = streamed.mid;
       if (Number.isFinite(mid) && mid > 0) {
         this.cacheSet(this.lastMidByEpic, streamed.epic || apiEpic, mid);
       }
-      const neverFetched = this.epicCacheKeys(apiEpic).every(
-        (k) => !(this.marketStatusFetchedAt.get(k) || 0)
-      );
-      // First tick: await REST status before allowing stream-only (null would skip CLOSED gate)
+      const neverFetched = !statusFetched();
+      // First tick: await REST status before allowing stream-only (null must not skip CLOSED gate)
       if (neverFetched) {
         await this.refreshMarketStatus(apiEpic);
         cachedStatus = this.cachedMarketStatus(apiEpic);
-        knownClosed =
-          cachedStatus != null && !capitalMarketAllowsTrading(cachedStatus);
-        if (knownClosed) {
+        knownNotTradeable = !capitalMarketAllowsTrading(cachedStatus);
+        if (knownNotTradeable) {
           // Fall through to full REST quote path below
         } else {
           return {

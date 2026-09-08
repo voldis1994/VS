@@ -24,10 +24,10 @@ describe('capitalApiEpic', () => {
 });
 
 describe('capitalMarketAllowsTrading', () => {
-  it('allows missing/empty status (Capital often omits)', () => {
-    expect(capitalMarketAllowsTrading(null)).toBe(true);
-    expect(capitalMarketAllowsTrading(undefined)).toBe(true);
-    expect(capitalMarketAllowsTrading('')).toBe(true);
+  it('fails closed on missing/unknown status', () => {
+    expect(capitalMarketAllowsTrading(null)).toBe(false);
+    expect(capitalMarketAllowsTrading(undefined)).toBe(false);
+    expect(capitalMarketAllowsTrading('')).toBe(false);
   });
 
   it('allows TRADEABLE and OPEN', () => {

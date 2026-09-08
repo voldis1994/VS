@@ -1,9 +1,9 @@
-/** Capital.com marketStatus gating — desk parity (robotDesk.marketAllowsTrading). */
+/** Capital.com marketStatus gating for MASTER LIVE entries. */
 export function capitalMarketAllowsTrading(status: string | null | undefined): boolean {
   const s = String(status || '')
     .trim()
     .toUpperCase();
-  // Missing status → do not park (Capital sometimes omits it; streaming marks lack it)
-  if (!s) return true;
+  // Fail closed: unknown/missing ≠ TRADEABLE (CLOSED can omit status briefly).
+  if (!s) return false;
   return s === 'TRADEABLE' || s === 'OPEN';
 }

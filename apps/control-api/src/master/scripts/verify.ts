@@ -100,12 +100,15 @@ async function main() {
       id: 'live_capital_network',
       requirement:
         'LIVE broker mode against Capital.com network (CAPITAL_* env or Brokers DB desk creds)',
-      ok: status === 'OK_LIVE_CONNECTED' || status === 'CONNECTED_PARTIAL',
+      // Only full quote+account proves Capital LIVE — CONNECTED_PARTIAL is not COMPLETE
+      ok: status === 'OK_LIVE_CONNECTED',
       detail:
         status === 'SKIPPED'
           ? `SKIPPED (no CAPITAL_* env and no Brokers desk Capital): ${smoke?.detail || ''}`
-          : `${JSON.stringify(smoke)}${credSrc}`,
-      // Note: SKIPPED means not verified — ok=false
+          : status === 'CONNECTED_PARTIAL'
+            ? `CONNECTED_PARTIAL (quote/account incomplete — not Capital LIVE proof): ${JSON.stringify(smoke)}${credSrc}`
+            : `${JSON.stringify(smoke)}${credSrc}`,
+      // Note: SKIPPED / PARTIAL means not verified — ok=false
     });
   }
 

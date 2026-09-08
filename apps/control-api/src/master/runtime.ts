@@ -2012,8 +2012,16 @@ class MasterRuntime {
         }
         const { bars } = builder.pushTick(q.mid);
         if (bars.length < 5) return;
-        // Desk parity: non-TRADEABLE Capital market → ACCOUNT_NOT_TRADEABLE (block entries, still manage)
-        if (q.market_status != null) {
+        // Desk parity: Capital market must be TRADEABLE/OPEN — unknown/CLOSED parks entries
+        if (this.broker instanceof CapitalBroker) {
+          const { capitalMarketAllowsTrading } = await import('./capitalMarket.js');
+          this.account.trade_allowed = capitalMarketAllowsTrading(q.market_status);
+          if (!this.account.trade_allowed) {
+            this.broker_detail = `${this.broker_detail || ''};market:${
+              q.market_status || 'UNKNOWN'
+            }`.slice(-400);
+          }
+        } else if (q.market_status != null) {
           const { capitalMarketAllowsTrading } = await import('./capitalMarket.js');
           this.account.trade_allowed = capitalMarketAllowsTrading(q.market_status);
           if (!this.account.trade_allowed) {
