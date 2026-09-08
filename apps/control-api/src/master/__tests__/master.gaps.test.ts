@@ -961,8 +961,22 @@ describe('runtime gates persist', () => {
     const prev = process.env.MASTER_STATE_DIR;
     process.env.MASTER_STATE_DIR = mkdtempSync(join(tmpdir(), 'vs-gates-'));
     const { saveRuntimeGates, loadRuntimeGates } = await import('../runtimeGates.js');
-    expect(saveRuntimeGates({ last_loss_ms: 12345, reject_until_ms: 67890 })).toBe(true);
-    expect(loadRuntimeGates()).toEqual({ last_loss_ms: 12345, reject_until_ms: 67890 });
+    expect(
+      saveRuntimeGates({
+        last_loss_ms: 12345,
+        reject_until_ms: 67890,
+        day_start_equity: 10_250.5,
+        peak_equity: 11_000,
+        daily_pnl_day: '2026-09-07',
+      })
+    ).toBe(true);
+    expect(loadRuntimeGates()).toEqual({
+      last_loss_ms: 12345,
+      reject_until_ms: 67890,
+      day_start_equity: 10_250.5,
+      peak_equity: 11_000,
+      daily_pnl_day: '2026-09-07',
+    });
     if (prev === undefined) delete process.env.MASTER_STATE_DIR;
     else process.env.MASTER_STATE_DIR = prev;
   });
@@ -1460,18 +1474,19 @@ describe('partial_close persist + Check be_start', () => {
         open_level: 4400,
         stop_level: 4390,
         profit_level: 4420,
+        upl: 7.25,
       },
     ]);
     expect(pm.get('ext-1')!.size).toBe(0.05);
     expect(pm.get('ext-1')!.partial_close_applied).toBe(true);
+    expect(pm.get('ext-1')!.broker_upl).toBe(7.25);
     expect(external_partials).toHaveLength(1);
     expect(external_partials[0]!.closed_size).toBeCloseTo(0.05, 6);
   });
 
   it('money BE arms at £0.05 floating and defers illegal clamp', async () => {
-    const { capitalSafeBreakEvenStop, resolveFloatingMoneyPnl } = await import(
-      '../moneyExit.js'
-    );
+    const { capitalSafeBreakEvenStop, resolveFloatingMoneyPnl, resolveCloseMoneyPnl } =
+      await import('../moneyExit.js');
     expect(
       resolveFloatingMoneyPnl({
         side: 'BUY',
@@ -1482,6 +1497,16 @@ describe('partial_close persist + Check be_start', () => {
         broker_upl: 0,
       })
     ).toBeCloseTo(0.05, 8);
+    expect(
+      resolveCloseMoneyPnl({
+        side: 'BUY',
+        entry: 4400,
+        fill: 4410,
+        size: 0.1,
+        value_per_point_per_lot: 1,
+        fill_pnl: 42.5,
+      })
+    ).toEqual({ pnl: 42.5, pnl_pts: 10, from_broker: true });
     // Too close to mark for Capital live min 0.5 → defer
     expect(
       capitalSafeBreakEvenStop({

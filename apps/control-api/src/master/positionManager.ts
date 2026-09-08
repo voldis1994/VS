@@ -16,6 +16,7 @@ import {
 import {
   capitalSafeBreakEvenStop,
   decideSoftTrailArm,
+  resolveCloseMoneyPnl,
   resolveFloatingMoneyPnl,
   softTrailDistancePrice,
   softTrailExitHit,
@@ -74,6 +75,8 @@ export type ManagedPosition = {
   soft_trail_peak?: number | null;
   /** VS-System: Capital native trailingStop already armed */
   native_trail_armed?: boolean;
+  /** Last broker-reported UPL (account currency) when known */
+  broker_upl?: number | null;
 };
 
 export type ManageTickResult = {
@@ -309,8 +312,14 @@ export class PositionManager {
           closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
             ? Number(closeRes.fill_price)
             : mark;
-        const pnlPts = pos.side === 'BUY' ? fill - pos.entry : pos.entry - fill;
-        const pnl = pnlPts * pos.size * pv;
+        const { pnl, pnl_pts: pnlPts } = resolveCloseMoneyPnl({
+          side: pos.side,
+          entry: pos.entry,
+          fill,
+          size: pos.size,
+          value_per_point_per_lot: pv,
+          fill_pnl: closeRes.fill_pnl,
+        });
         const riskDist = Math.max(
           Math.abs((pos.stop_loss ?? pos.entry) - pos.entry),
           Number.EPSILON
@@ -354,6 +363,7 @@ export class PositionManager {
         mark,
         size: pos.size,
         value_per_point_per_lot: pv,
+        broker_upl: pos.broker_upl,
       });
 
       // Never-naked: broker-truth null SL → attach 10% protective before soft exits
@@ -396,15 +406,21 @@ export class PositionManager {
                   closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
                     ? Number(closeRes.fill_price)
                     : mark;
-                const pnlPts =
-                  pos.side === 'BUY' ? fill - pos.entry : pos.entry - fill;
+                const { pnl } = resolveCloseMoneyPnl({
+                  side: pos.side,
+                  entry: pos.entry,
+                  fill,
+                  size: pos.size,
+                  value_per_point_per_lot: pv,
+                  fill_pnl: closeRes.fill_pnl,
+                });
                 const outcome: TradeOutcome = {
                   position_id: pos.position_id,
                   side: pos.side,
                   entry: pos.entry,
                   exit: fill,
                   volume: pos.size,
-                  pnl: pnlPts * pos.size * pv,
+                  pnl,
                   fees: 0,
                   slippage: Math.abs(fill - quote.mid),
                   mae: pos.mae,
@@ -488,8 +504,14 @@ export class PositionManager {
                 closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
                   ? Number(closeRes.fill_price)
                   : mark;
-              const pnlPts = pos.side === 'BUY' ? fill - pos.entry : pos.entry - fill;
-              const pnl = pnlPts * partial.close_size * pv;
+              const { pnl } = resolveCloseMoneyPnl({
+                side: pos.side,
+                entry: pos.entry,
+                fill,
+                size: partial.close_size,
+                value_per_point_per_lot: pv,
+                fill_pnl: closeRes.fill_pnl,
+              });
               const outcome: TradeOutcome = {
                 position_id: pos.position_id,
                 side: pos.side,
@@ -658,8 +680,14 @@ export class PositionManager {
       const exit =
         brokerFill ??
         protectiveFillPrice(pos, quote, protective?.reason ?? null);
-      const pnlPts = pos.side === 'BUY' ? exit - pos.entry : pos.entry - exit;
-      const pnl = pnlPts * pos.size * pv;
+      const { pnl, pnl_pts: pnlPts } = resolveCloseMoneyPnl({
+        side: pos.side,
+        entry: pos.entry,
+        fill: exit,
+        size: pos.size,
+        value_per_point_per_lot: pv,
+        fill_pnl: closeRes.fill_pnl,
+      });
       const riskDist = Math.max(
         Math.abs((pos.stop_loss ?? pos.entry) - pos.entry),
         1e-9
@@ -765,15 +793,22 @@ export class PositionManager {
         closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
           ? Number(closeRes.fill_price)
           : mark;
-      const pnlPts = pos.side === 'BUY' ? fill - pos.entry : pos.entry - fill;
       const vol = isFinal ? pos.size : closeSize;
+      const { pnl } = resolveCloseMoneyPnl({
+        side: pos.side,
+        entry: pos.entry,
+        fill,
+        size: vol,
+        value_per_point_per_lot: pv,
+        fill_pnl: closeRes.fill_pnl,
+      });
       const outcome: TradeOutcome = {
         position_id: pos.position_id,
         side: pos.side,
         entry: pos.entry,
         exit: fill,
         volume: vol,
-        pnl: pnlPts * vol * pv,
+        pnl,
         fees: 0,
         slippage: Math.abs(fill - quote.mid),
         mae: pos.mae,
@@ -1097,6 +1132,7 @@ export class PositionManager {
       mark,
       size: pos.size,
       value_per_point_per_lot: opts.pointValue ?? 1,
+      broker_upl: pos.broker_upl,
     });
 
     let armed = false;
@@ -1238,6 +1274,7 @@ export class PositionManager {
       open_level: number;
       stop_level?: number | null;
       profit_level?: number | null;
+      upl?: number | null;
       opened_at?: string | null;
     }>
   ): { external_partials: ExternalPartialEvent[] } {
@@ -1277,6 +1314,10 @@ export class PositionManager {
         }
         if (bp.profit_level != null) existing.take_profit = bp.profit_level;
         if (bp.size > 0) existing.size = bp.size;
+        if (bp.upl !== undefined) {
+          existing.broker_upl =
+            bp.upl != null && Number.isFinite(bp.upl) ? Number(bp.upl) : null;
+        }
         continue;
       }
       // Orphan broker position — adopt broker SL/TP + open time when available
@@ -1296,6 +1337,8 @@ export class PositionManager {
         entry_at: entryAt,
         stop_loss: bp.stop_level ?? null,
         take_profit: bp.profit_level ?? null,
+        broker_upl:
+          bp.upl != null && Number.isFinite(bp.upl) ? Number(bp.upl) : null,
         mfe: 0,
         mae: 0,
         decision: {
@@ -1353,17 +1396,25 @@ function mapRegimeToPlaybook(regime: string): 'LONG' | 'SCALP' | 'FADE' {
   return 'SCALP';
 }
 
-/** Floating UPL across open positions using protective marks. */
+/** Floating UPL across open positions using protective marks + broker UPL when known. */
 export function floatingUnrealizedPnl(
-  positions: Array<Pick<ManagedPosition, 'side' | 'entry' | 'size'>>,
+  positions: Array<
+    Pick<ManagedPosition, 'side' | 'entry' | 'size' | 'broker_upl'>
+  >,
   quote: Quote,
   pointValue = 1
 ): number {
   let sum = 0;
   for (const pos of positions) {
     const mark = protectiveMark(pos.side, quote);
-    const pts = pos.side === 'BUY' ? mark - pos.entry : pos.entry - mark;
-    sum += pts * pos.size * pointValue;
+    sum += resolveFloatingMoneyPnl({
+      side: pos.side,
+      entry: pos.entry,
+      mark,
+      size: pos.size,
+      value_per_point_per_lot: pointValue,
+      broker_upl: pos.broker_upl,
+    });
   }
   return sum;
 }

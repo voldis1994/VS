@@ -36,6 +36,30 @@ export function resolveFloatingMoneyPnl(input: {
   return broker;
 }
 
+/**
+ * Prefer Capital confirm.profit (account currency) when the broker returns it.
+ * Falls back to price-path money PnL when confirm profit is absent.
+ */
+export function resolveCloseMoneyPnl(input: {
+  side: 'BUY' | 'SELL';
+  entry: number;
+  fill: number;
+  size: number;
+  value_per_point_per_lot: number;
+  fill_pnl?: number | null;
+}): { pnl: number; pnl_pts: number; from_broker: boolean } {
+  const pnl_pts =
+    input.side === 'BUY' ? input.fill - input.entry : input.entry - input.fill;
+  if (input.fill_pnl != null && Number.isFinite(input.fill_pnl)) {
+    return { pnl: Number(input.fill_pnl), pnl_pts, from_broker: true };
+  }
+  return {
+    pnl: pnl_pts * input.size * input.value_per_point_per_lot,
+    pnl_pts,
+    from_broker: false,
+  };
+}
+
 /** Soft trail distance in price units (pip × count) — never floored to Capital min-stop. */
 export function softTrailDistancePrice(symbol: string, pips = 0.3): number {
   const pip = instrumentPipSize(symbol);

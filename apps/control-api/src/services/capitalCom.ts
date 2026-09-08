@@ -908,6 +908,8 @@ export async function confirmCapitalDeal(
   ok: boolean;
   deal_id?: string;
   fill_level?: number;
+  /** Capital confirm.profit — account-currency realized PnL when present */
+  profit?: number;
   deal_status?: string;
   detail: string;
   rejected?: boolean;
@@ -940,14 +942,19 @@ export async function confirmCapitalDeal(
       rejected: true,
       deal_status: parsed.dealStatus || parsed.status,
       detail: formatCapitalConfirmRejection(parsed),
+      profit: parsed.profit,
+      fill_level: parsed.level,
     };
   }
   return {
     ok: true,
     deal_id: parsed.dealId,
     fill_level: parsed.level,
+    profit: parsed.profit,
     deal_status: parsed.dealStatus || parsed.status,
-    detail: `Confirmed dealId=${parsed.dealId}${parsed.level != null ? ` fill=${parsed.level}` : ''}`,
+    detail: `Confirmed dealId=${parsed.dealId}${parsed.level != null ? ` fill=${parsed.level}` : ''}${
+      parsed.profit != null ? ` pnl=${parsed.profit}` : ''
+    }`,
   };
 }
 

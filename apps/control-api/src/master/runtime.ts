@@ -315,8 +315,26 @@ class MasterRuntime {
     if (this.account.daily_pnl_day !== day) {
       this.account.daily_pnl = 0;
       this.account.daily_pnl_day = day;
-      this.account.day_start_equity = this.account.equity > 0 ? this.account.equity : this.account.balance;
+      this.account.day_start_equity =
+        this.account.equity > 0 ? this.account.equity : this.account.balance;
+      this.persistRuntimeGates();
     }
+  }
+
+  /** Persist cooldowns + equity baselines so restart keeps daily $ gates honest. */
+  private persistRuntimeGates() {
+    this.trackPersist(
+      'runtime_gates',
+      Promise.resolve(
+        saveRuntimeGates({
+          last_loss_ms: this.last_loss_ms,
+          reject_until_ms: this.reject_until_ms,
+          day_start_equity: this.account.day_start_equity ?? null,
+          peak_equity: this.account.peak_equity,
+          daily_pnl_day: this.account.daily_pnl_day ?? null,
+        })
+      )
+    );
   }
 
   /** Journal stubs for broker orphans + synthetic flat for local ghosts after sync. */
@@ -585,9 +603,17 @@ class MasterRuntime {
       if (typeof acct.trade_allowed === 'boolean') {
         this.account.trade_allowed = acct.trade_allowed;
       }
+      const prevPeak = this.account.peak_equity;
+      const prevDayStart = this.account.day_start_equity;
       this.account.peak_equity = Math.max(this.account.peak_equity, acct.equity);
       if (!this.account.day_start_equity) {
         this.account.day_start_equity = acct.equity;
+      }
+      if (
+        this.account.peak_equity !== prevPeak ||
+        this.account.day_start_equity !== prevDayStart
+      ) {
+        this.persistRuntimeGates();
       }
     }
 
@@ -671,15 +697,7 @@ class MasterRuntime {
       if (c.outcome.pnl < 0) {
         this.account.consecutive_losses += 1;
         this.last_loss_ms = Date.now();
-        this.trackPersist(
-          'runtime_gates',
-          Promise.resolve(
-            saveRuntimeGates({
-              last_loss_ms: this.last_loss_ms,
-              reject_until_ms: this.reject_until_ms,
-            })
-          )
-        );
+        this.persistRuntimeGates();
       } else {
         this.account.consecutive_losses = 0;
       }
@@ -862,15 +880,7 @@ class MasterRuntime {
             ? Math.max(30_000, capitalModifyRejectBackoffMs(execution.detail))
             : capitalModifyRejectBackoffMs(execution.detail);
           this.reject_until_ms = Date.now() + backoff;
-          this.trackPersist(
-            'runtime_gates',
-            Promise.resolve(
-              saveRuntimeGates({
-                last_loss_ms: this.last_loss_ms,
-                reject_until_ms: this.reject_until_ms,
-              })
-            )
-          );
+          this.persistRuntimeGates();
         }
       }
       } // brokerVerifyOk
@@ -934,6 +944,27 @@ class MasterRuntime {
       }))
     );
     // Recompute account daily/peak from recovered outcomes (today only for daily_pnl)
+    // Load gates BEFORE roll so same-day day_start_equity / peak survive restart.
+    const gates = loadRuntimeGates();
+    if (gates) {
+      this.last_loss_ms = Math.max(this.last_loss_ms, gates.last_loss_ms || 0);
+      this.reject_until_ms = Math.max(
+        this.reject_until_ms,
+        gates.reject_until_ms || 0
+      );
+      if (gates.daily_pnl_day) {
+        this.account.daily_pnl_day = gates.daily_pnl_day;
+      }
+      if (gates.day_start_equity != null && gates.day_start_equity > 0) {
+        this.account.day_start_equity = gates.day_start_equity;
+      }
+      if (gates.peak_equity != null && gates.peak_equity > 0) {
+        this.account.peak_equity = Math.max(
+          this.account.peak_equity,
+          gates.peak_equity
+        );
+      }
+    }
     this.rollDailyPnl();
     const today = this.account.daily_pnl_day!;
     let pnlToday = 0;
@@ -955,12 +986,7 @@ class MasterRuntime {
     if (this.account.equity > this.account.peak_equity) {
       this.account.peak_equity = this.account.equity;
     }
-
-    const gates = loadRuntimeGates();
-    if (gates) {
-      this.last_loss_ms = Math.max(this.last_loss_ms, gates.last_loss_ms || 0);
-      this.reject_until_ms = Math.max(this.reject_until_ms, gates.reject_until_ms || 0);
-    }
+    this.persistRuntimeGates();
 
     // PAPER restart: empty in-memory book must be reseeded before sync or every
     // restored open looks like a ghost and is wiped as broker_flat.

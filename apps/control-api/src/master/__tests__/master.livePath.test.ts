@@ -75,6 +75,7 @@ function mockCapitalBroker(opts?: { rejectConfirm?: boolean; lagConfirm?: boolea
           ok: true,
           deal_id: String(ref).slice(5),
           fill_level: 4399.5,
+          profit: -1.09,
           detail: `Close confirmed ${ref}`,
         };
       }
@@ -221,6 +222,8 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(managed.closed[0]!.reason).toBe('STOP_HIT');
     // Journal uses confirmed Capital close fill when present (not synthetic SL)
     expect(managed.closed[0]!.outcome.exit).toBe(4399.5);
+    // Prefer Capital confirm.profit over recomputed pts×size
+    expect(managed.closed[0]!.outcome.pnl).toBe(-1.09);
     expect(await broker.listOpenPositions()).toEqual({ ok: true, positions: [] });
   });
 

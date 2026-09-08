@@ -14,11 +14,13 @@ describe('VS MASTER capital confirm (VS-System-)', () => {
       dealId: 'deal-1',
       dealStatus: 'ACCEPTED',
       level: 4412.5,
+      profit: 12.34,
       size: 0.1,
       direction: 'BUY',
     });
     expect(c.dealId).toBe('deal-1');
     expect(c.level).toBe(4412.5);
+    expect(c.profit).toBe(12.34);
     expect(isCapitalConfirmAccepted(c)).toBe(true);
     expect(isCapitalConfirmTerminal(c)).toBe(true);
   });

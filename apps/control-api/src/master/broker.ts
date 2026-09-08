@@ -123,6 +123,8 @@ export interface MasterBroker {
     ok: boolean;
     detail: string;
     fill_price?: number | null;
+    /** Broker confirm.profit / paper realized — prefer over recomputed pts×size */
+    fill_pnl?: number | null;
     deal_reference?: string;
     remaining_size?: number | null;
   }>;
@@ -229,17 +231,18 @@ export class PaperBroker implements MasterBroker {
     if (!p) return { ok: false, detail: 'not_found' };
     const q = this.lastQuote;
     let fill_price: number | null = null;
+    let fill_pnl: number | null = null;
     const closeSize =
       opts?.size != null && Number.isFinite(opts.size) && opts.size > 0
         ? Math.min(opts.size, p.size)
         : p.size;
     if (q) {
       fill_price = p.side === 'BUY' ? q.bid : q.ask;
-      const pnl =
+      fill_pnl =
         p.side === 'BUY'
           ? (fill_price - p.open_level) * closeSize
           : (p.open_level - fill_price) * closeSize;
-      this.equity += pnl;
+      this.equity += fill_pnl;
       this.balance = this.equity;
     }
     const remaining = Math.max(0, p.size - closeSize);
@@ -249,11 +252,18 @@ export class PaperBroker implements MasterBroker {
         ok: true,
         detail: `paper_partial_closed rem=${remaining}`,
         fill_price,
+        fill_pnl,
         remaining_size: remaining,
       };
     }
     this.positions.delete(position_id);
-    return { ok: true, detail: 'paper_closed', fill_price, remaining_size: 0 };
+    return {
+      ok: true,
+      detail: 'paper_closed',
+      fill_price,
+      fill_pnl,
+      remaining_size: 0,
+    };
   }
 
   async modifyPosition(input: {
@@ -354,6 +364,7 @@ export class CapitalBroker implements MasterBroker {
         ok: boolean;
         deal_id?: string;
         fill_level?: number;
+        profit?: number;
         detail: string;
         rejected?: boolean;
         pending?: boolean;
@@ -439,6 +450,7 @@ export class CapitalBroker implements MasterBroker {
       ok: boolean;
       deal_id?: string;
       fill_level?: number;
+      profit?: number;
       detail: string;
       rejected?: boolean;
       pending?: boolean;
@@ -641,6 +653,7 @@ export class CapitalBroker implements MasterBroker {
     ok: boolean;
     deal_id?: string;
     fill_level?: number;
+    profit?: number;
     detail: string;
     rejected?: boolean;
   }> {
@@ -652,13 +665,20 @@ export class CapitalBroker implements MasterBroker {
       await new Promise((r) => setTimeout(r, delay));
       const conf = await this.deps.confirm(this.session, dealReference);
       if (conf.rejected) {
-        return { ok: false, rejected: true, detail: conf.detail };
+        return {
+          ok: false,
+          rejected: true,
+          detail: conf.detail,
+          fill_level: conf.fill_level,
+          profit: conf.profit,
+        };
       }
       if (conf.ok && conf.deal_id) {
         return {
           ok: true,
           deal_id: conf.deal_id,
           fill_level: conf.fill_level,
+          profit: conf.profit,
           detail: conf.detail,
         };
       }
@@ -944,6 +964,7 @@ export class CapitalBroker implements MasterBroker {
     if (!res.ok) return { ok: false, detail: res.detail || 'close_failed' };
 
     let fill_price: number | null = null;
+    let fill_pnl: number | null = null;
     const deal_reference = res.deal_reference || undefined;
     if (deal_reference && this.deps.confirm) {
       const conf = await this.waitConfirm(deal_reference);
@@ -953,10 +974,14 @@ export class CapitalBroker implements MasterBroker {
           detail: `close_confirm_rejected:${conf.detail}`,
           deal_reference,
           fill_price: conf.fill_level ?? null,
+          fill_pnl: conf.profit ?? null,
         };
       }
       if (conf.fill_level != null && Number.isFinite(conf.fill_level)) {
         fill_price = conf.fill_level;
+      }
+      if (conf.profit != null && Number.isFinite(conf.profit)) {
+        fill_pnl = Number(conf.profit);
       }
     }
 
@@ -972,6 +997,7 @@ export class CapitalBroker implements MasterBroker {
         detail: 'close_not_confirmed_still_open',
         deal_reference,
         fill_price,
+        fill_pnl,
       };
     }
 
@@ -980,9 +1006,12 @@ export class CapitalBroker implements MasterBroker {
       detail: deal_reference
         ? `capital_closed deal=${position_id} ref=${deal_reference}${
             fill_price != null ? ` fill=${fill_price}` : ''
-          }${partial ? ` partial=${opts!.size}` : ''}`
+          }${fill_pnl != null ? ` pnl=${fill_pnl}` : ''}${
+            partial ? ` partial=${opts!.size}` : ''
+          }`
         : `capital_closed deal=${position_id}`,
       fill_price,
+      fill_pnl,
       deal_reference,
       remaining_size: still?.size ?? (partial ? null : 0),
     };
