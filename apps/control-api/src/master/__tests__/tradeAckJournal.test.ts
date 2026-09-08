@@ -1,8 +1,8 @@
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { Mt4FileBroker } from '../broker.js';
+import { CapitalBroker, Mt4FileBroker } from '../broker.js';
 import { Mt4BridgeSimulator } from '../mt4Sim.js';
 import { PositionManager } from '../positionManager.js';
 import { MasterPipeline } from '../pipeline.js';
@@ -99,6 +99,174 @@ describe('INTENT→ACK trade journal (Reader)', () => {
     } finally {
       sim.stop();
     }
+  });
+
+  it('Capital placeOrder writes INTENT then SUCCESS on confirm', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const state = mkdtempSync(join(tmpdir(), 'vs-cap-ack-'));
+    process.env.MASTER_STATE_DIR = state;
+    clearTradeAckJournalForTest();
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number;
+        stop_level?: number | null;
+        profit_level?: number | null;
+      }
+    >();
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 'ack' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+        market_status: 'TRADEABLE',
+      }),
+      list: async () => ({ ok: true, positions: [...positions.values()], detail: '' }),
+      create: async () => ({ ok: true, deal_reference: 'ref-ack-1', detail: 'ok' }),
+      confirm: async () => {
+        positions.set('deal-ack-1', {
+          deal_id: 'deal-ack-1',
+          epic: 'GOLD',
+          direction: 'BUY',
+          size: 0.1,
+          open_level: 4410.4,
+          stop_level: 4400,
+          profit_level: 4430,
+        });
+        return { ok: true, deal_id: 'deal-ack-1', fill_level: 4410.4, detail: 'ok' };
+      },
+      modify: async (_s, input: any) => {
+        const p = positions.get(input.dealId);
+        if (p) {
+          if (input.stopLevel != null) p.stop_level = input.stopLevel;
+          if (input.profitLevel != null) p.profit_level = input.profitLevel;
+        }
+        return { ok: true, detail: 'ok' };
+      },
+      close: async (_s, id) => {
+        positions.delete(id);
+        return { ok: true, detail: 'closed' };
+      },
+    });
+    await broker.connect();
+    const placed = await broker.placeOrder({
+      intent_id: 'capital-ack-journal-intent-01',
+      epic: 'XAUUSD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: 4400,
+      profit_level: 4430,
+    });
+    expect(placed.ok).toBe(true);
+    expect(placed.position_id).toBe('deal-ack-1');
+    const rows = loadTradeAckJournal();
+    const hit = rows.find((r) => r.intent_id === 'capital-ack-journal-intent-01');
+    expect(hit?.ack_status).toBe('SUCCESS');
+    expect(hit?.ticket).toBe('deal-ack-1');
+    expect(hit?.epic).toBe('GOLD');
+    expect(hit?.sl).toBe(4400);
+    expect(hit?.tp).toBe(4430);
+  });
+
+  it('recover adopts Capital OPEN SUCCESS and re-attaches structure SL', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const state = mkdtempSync(join(tmpdir(), 'vs-cap-rec-'));
+    process.env.MASTER_STATE_DIR = state;
+    clearTradeAckJournalForTest();
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number;
+        stop_level?: number | null;
+        profit_level?: number | null;
+      }
+    >();
+    positions.set('deal-rec-1', {
+      deal_id: 'deal-rec-1',
+      epic: 'GOLD',
+      direction: 'BUY',
+      size: 0.1,
+      open_level: 4410,
+      stop_level: null,
+      profit_level: null,
+    });
+    logTradeIntent({
+      command_id: 'cap_reccapital1',
+      intent_id: 'capital-recover-intent-01',
+      action: 'OPEN',
+      side: 'BUY',
+      volume: 0.1,
+      epic: 'GOLD',
+      sl: 4390,
+      tp: 4440,
+      reason: 'INTENT',
+    });
+    updateTradeAck('cap_reccapital1', {
+      ack_status: 'SUCCESS',
+      ticket: 'deal-rec-1',
+      fill_price: 4410,
+      detail: 'ACK_SUCCESS',
+    });
+
+    const mods: number[] = [];
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 'rec' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+        market_status: 'TRADEABLE',
+      }),
+      list: async () => ({ ok: true, positions: [...positions.values()], detail: '' }),
+      create: async () => ({ ok: false, detail: 'no_create' }),
+      confirm: async () => ({ ok: false, detail: 'no' }),
+      modify: async (_s, input: any) => {
+        mods.push(1);
+        const p = positions.get(input.dealId);
+        if (p) {
+          if (input.stopLevel != null) p.stop_level = input.stopLevel;
+          if (input.profitLevel != null) p.profit_level = input.profitLevel;
+        }
+        return { ok: true, detail: 'ok' };
+      },
+      close: async (_s, id) => {
+        positions.delete(id);
+        return { ok: true, detail: 'closed' };
+      },
+    });
+    await broker.connect();
+
+    masterRuntime.pipeline = new MasterPipeline('LIVE');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.cfg = { ...masterRuntime.cfg, mode: 'LIVE' };
+    masterRuntime.attachBroker(broker);
+    masterRuntime.recovered = false;
+    const r = await masterRuntime.recover();
+    expect(r.positions).toBeGreaterThanOrEqual(1);
+    const pos = masterRuntime.positions.get('deal-rec-1');
+    expect(pos).toBeTruthy();
+    expect(pos!.stop_loss).toBe(4390);
+    expect(pos!.take_profit).toBe(4440);
+    expect(mods.length).toBeGreaterThan(0);
+    expect(String(masterRuntime.broker_detail || '')).toMatch(/ack_attach_ok/);
+    expect(positions.get('deal-rec-1')?.stop_level).toBe(4390);
   });
 
   it('recover adopts OPEN SUCCESS from journal when local book empty', async () => {
@@ -266,5 +434,4 @@ describe('INTENT→ACK trade journal (Reader)', () => {
       sim.stop();
     }
   });
-
 });

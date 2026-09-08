@@ -1654,7 +1654,13 @@ class MasterRuntime {
         );
         this.persistRuntimeGates();
       }
-      // Reader apply_ack_to_instance_state — OPEN SUCCESS before status sync
+    }
+
+    // Capital + MT4: Reader apply_ack_to_instance_state — OPEN SUCCESS before status sync
+    if (
+      this.broker instanceof Mt4FileBroker ||
+      this.broker instanceof CapitalBroker
+    ) {
       const booked = new Set(this.positions.list().map((p) => p.position_id));
       const fromAck = this.broker.adoptOpenFromAckJournal(booked);
       let statusByTicket = new Map<
@@ -1664,6 +1670,7 @@ class MasterRuntime {
           open_level?: number | null;
           stop_level?: number | null;
           profit_level?: number | null;
+          side?: string | null;
         }
       >();
       if (fromAck.adopted.length) {
@@ -1678,6 +1685,7 @@ class MasterRuntime {
                   open_level: p.open_level,
                   stop_level: p.stop_level,
                   profit_level: p.profit_level,
+                  side: p.side,
                 },
               ])
             );
@@ -1721,13 +1729,26 @@ class MasterRuntime {
         const onBroker = status != null;
         let rowAttached = false;
         if (onBroker && wantSl != null) {
-          const guard = await this.broker.ensureProtectiveLevelsOrFail({
+          const guardInput: {
+            position_id: string;
+            want_sl: number;
+            want_tp?: number | null;
+            order_id: string;
+            epic: string;
+            side?: 'BUY' | 'SELL';
+            fill_price?: number | null;
+          } = {
             position_id: row.ticket,
             want_sl: wantSl,
             want_tp: wantTp,
             order_id: row.command_id,
             epic: row.epic || this.epic,
-          });
+          };
+          if (this.broker instanceof CapitalBroker) {
+            guardInput.side = row.side;
+            guardInput.fill_price = entry;
+          }
+          const guard = await this.broker.ensureProtectiveLevelsOrFail(guardInput);
           if (!guard.ok) {
             attachFailed += 1;
             this.broker_detail = [
@@ -1737,8 +1758,15 @@ class MasterRuntime {
               .filter(Boolean)
               .join(';')
               .slice(0, 400);
-            // Close may have failed — if ticket still live, register with intended_*
-            // so naked recovery / sync can retry structure levels (not soft-only adopt).
+            // MT4 ensureProtectiveLevelsOrFail already fail-closes; Capital only attaches —
+            // mirror fail-close here so naked LIVE deals do not survive recover.
+            if (this.broker instanceof CapitalBroker) {
+              try {
+                await this.broker.closePosition(row.ticket);
+              } catch {
+                /* stillLive check below */
+              }
+            }
             const listed = await this.broker.listOpenPositions(row.epic || this.epic);
             const stillLive =
               listed.ok &&
@@ -1805,10 +1833,10 @@ class MasterRuntime {
           },
         });
         // Keep journal structure levels as intended even when chart still naked
-        const booked = this.positions.get(row.ticket);
-        if (booked) {
-          if (wantSl != null) booked.intended_stop_loss = wantSl;
-          if (wantTp != null) booked.intended_take_profit = wantTp;
+        const bookedPos = this.positions.get(row.ticket);
+        if (bookedPos) {
+          if (wantSl != null) bookedPos.intended_stop_loss = wantSl;
+          if (wantTp != null) bookedPos.intended_take_profit = wantTp;
         }
       }
       if (fromAck.adopted.length) {

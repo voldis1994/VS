@@ -1,6 +1,6 @@
 /**
- * Reader-style INTENT→ACK journal for MT4 file-bridge crash recovery.
- * Durable rewrite map under MASTER_STATE_DIR — records INTENT before cmd write,
+ * Reader-style INTENT→ACK journal for LIVE crash recovery (Capital + MT4 legacy).
+ * Durable rewrite map under MASTER_STATE_DIR — records INTENT before broker OPEN,
  * updates on SUCCESS/FAILED/TIMEOUT, and supplies OPEN SUCCESS rows for adopt.
  */
 import {

@@ -33,6 +33,51 @@ import {
 } from './tradeAckJournal.js';
 import type { Side } from './types.js';
 
+/** Shared OPEN SUCCESS adopt rows for Capital + MT4 restart recovery. */
+export function adoptOpenFromAckJournalShared(bookedIds: Set<string>): {
+  adopted: Array<{
+    command_id: string;
+    intent_id: string;
+    ticket: string;
+    side: Side;
+    volume: number;
+    epic: string;
+    fill_price: number | null;
+    sl: number | null;
+    tp: number | null;
+  }>;
+} {
+  const fromJournal = findOpenSuccessUnbooked(bookedIds);
+  const adopted: Array<{
+    command_id: string;
+    intent_id: string;
+    ticket: string;
+    side: Side;
+    volume: number;
+    epic: string;
+    fill_price: number | null;
+    sl: number | null;
+    tp: number | null;
+  }> = [];
+  const seen = new Set<string>();
+  for (const r of fromJournal) {
+    if (!r.ticket || !r.side || seen.has(r.ticket)) continue;
+    seen.add(r.ticket);
+    adopted.push({
+      command_id: r.command_id,
+      intent_id: r.intent_id,
+      ticket: r.ticket,
+      side: r.side,
+      volume: r.volume,
+      epic: r.epic,
+      fill_price: r.fill_price,
+      sl: r.sl,
+      tp: r.tp,
+    });
+  }
+  return { adopted };
+}
+
 export type BrokerQuote = {
   bid: number;
   ask: number;
@@ -707,10 +752,11 @@ export class CapitalBroker implements MasterBroker {
       void this.ensureSession();
       const mid = streamed.mid;
       if (Number.isFinite(mid) && mid > 0) {
-        this.lastMidByEpic.set(String(streamed.epic || apiEpic).toUpperCase(), mid);
+        this.cacheSet(this.lastMidByEpic, streamed.epic || apiEpic, mid);
       }
-      const statusKey = String(apiEpic || '').toUpperCase();
-      const neverFetched = !(this.marketStatusFetchedAt.get(statusKey) || 0);
+      const neverFetched = this.epicCacheKeys(apiEpic).every(
+        (k) => !(this.marketStatusFetchedAt.get(k) || 0)
+      );
       // First tick: await REST status before allowing stream-only (null would skip CLOSED gate)
       if (neverFetched) {
         await this.refreshMarketStatus(apiEpic);
@@ -754,7 +800,7 @@ export class CapitalBroker implements MasterBroker {
     const q = await this.deps.quote(this.session, apiEpic);
     if (q.bid == null || q.ask == null || q.mid == null) return null;
     if (Number.isFinite(q.mid) && Number(q.mid) > 0) {
-      this.lastMidByEpic.set(String(q.epic || apiEpic).toUpperCase(), Number(q.mid));
+      this.cacheSet(this.lastMidByEpic, q.epic || apiEpic, Number(q.mid));
     }
     if (
       q.min_deal_size != null &&
@@ -762,28 +808,25 @@ export class CapitalBroker implements MasterBroker {
       q.min_deal_size > 0
     ) {
       const { sanitizeCapitalDealRules } = await import('./capitalSize.js');
-      const key = String(q.epic || apiEpic).toUpperCase();
-      this.dealRulesByEpic.set(
-        key,
-        sanitizeCapitalDealRules(key, {
-          minSize: Number(q.min_deal_size),
-          maxSize:
-            q.max_deal_size != null && Number(q.max_deal_size) > 0
-              ? Number(q.max_deal_size)
-              : 500,
-          step:
-            q.deal_size_step != null && Number(q.deal_size_step) > 0
-              ? Number(q.deal_size_step)
-              : Number(q.min_deal_size),
-        })
-      );
+      const rules = sanitizeCapitalDealRules(String(q.epic || apiEpic).toUpperCase(), {
+        minSize: Number(q.min_deal_size),
+        maxSize:
+          q.max_deal_size != null && Number(q.max_deal_size) > 0
+            ? Number(q.max_deal_size)
+            : 500,
+        step:
+          q.deal_size_step != null && Number(q.deal_size_step) > 0
+            ? Number(q.deal_size_step)
+            : Number(q.min_deal_size),
+      });
+      this.cacheSet(this.dealRulesByEpic, q.epic || apiEpic, rules);
     }
     const minStop =
       q.min_stop_distance != null && Number.isFinite(Number(q.min_stop_distance))
         ? Number(q.min_stop_distance)
         : null;
     if (minStop != null && minStop > 0) {
-      this.minStopByEpic.set(String(q.epic || apiEpic).toUpperCase(), minStop);
+      this.cacheSet(this.minStopByEpic, q.epic || apiEpic, minStop);
     }
     this.noteMarketStatus(q.epic || apiEpic, q.market_status);
     return {
@@ -798,34 +841,65 @@ export class CapitalBroker implements MasterBroker {
     };
   }
 
+  /**
+   * Alias-aware cache keys — GOLD/XAUUSD/XAU must hit the same min-stop / status / mid.
+   * Callers often pass XAUUSD while REST stores under GOLD.
+   */
+  private epicCacheKeys(epic: string): string[] {
+    const raw = String(epic || '')
+      .trim()
+      .toUpperCase();
+    if (!raw) return [];
+    const api = capitalApiEpic(epic).toUpperCase();
+    const family = normalizeEpicKey(epic);
+    return [...new Set([raw, api, family].filter(Boolean))];
+  }
+
+  private cacheGet<T>(map: Map<string, T>, epic: string): T | undefined {
+    for (const k of this.epicCacheKeys(epic)) {
+      if (map.has(k)) return map.get(k);
+    }
+    return undefined;
+  }
+
+  private cacheSet<T>(map: Map<string, T>, epic: string, value: T): void {
+    for (const k of this.epicCacheKeys(epic)) map.set(k, value);
+  }
+
   /** Cached live min-stop for epic (from last quote), if known. */
   liveMinStopDistance(epic: string): number | null {
-    const v = this.minStopByEpic.get(String(epic || '').toUpperCase());
+    const v = this.cacheGet(this.minStopByEpic, epic);
     return v != null && v > 0 ? v : null;
   }
 
   /** Last REST marketStatus for epic (stream path reuses this). */
   cachedMarketStatus(epic: string): string | null {
-    const v = this.marketStatusByEpic.get(String(epic || '').toUpperCase());
+    const v = this.cacheGet(this.marketStatusByEpic, epic);
     return v == null || v === '' ? null : v;
   }
 
   private noteMarketStatus(epic: string, status: string | null | undefined) {
-    const key = String(epic || '').toUpperCase();
-    if (!key) return;
+    const keys = this.epicCacheKeys(epic);
+    if (!keys.length) return;
     const s = status == null ? '' : String(status).trim();
+    const now = Date.now();
     if (!s) {
       // Still mark fetch time so we don't hammer REST when Capital omits status
-      this.marketStatusFetchedAt.set(key, Date.now());
+      for (const key of keys) this.marketStatusFetchedAt.set(key, now);
       return;
     }
-    this.marketStatusByEpic.set(key, s);
-    this.marketStatusFetchedAt.set(key, Date.now());
+    for (const key of keys) {
+      this.marketStatusByEpic.set(key, s);
+      this.marketStatusFetchedAt.set(key, now);
+    }
   }
 
   private marketStatusNeedsRefresh(epic: string): boolean {
-    const key = String(epic || '').toUpperCase();
-    const at = this.marketStatusFetchedAt.get(key) || 0;
+    const keys = this.epicCacheKeys(epic);
+    let at = 0;
+    for (const key of keys) {
+      at = Math.max(at, this.marketStatusFetchedAt.get(key) || 0);
+    }
     if (!at) return true;
     return Date.now() - at > CapitalBroker.MARKET_STATUS_REFRESH_MS;
   }
@@ -842,7 +916,7 @@ export class CapitalBroker implements MasterBroker {
           ? Number(q.min_stop_distance)
           : null;
       if (minStop != null && minStop > 0) {
-        this.minStopByEpic.set(String(q?.epic || epic).toUpperCase(), minStop);
+        this.cacheSet(this.minStopByEpic, q?.epic || epic, minStop);
       }
     } catch {
       /* keep last known status */
@@ -899,7 +973,9 @@ export class CapitalBroker implements MasterBroker {
       } catch {
         /* fall through to cache */
       }
-      const cached = this.lastMidByEpic.get(ukey);
+      const cached =
+        this.cacheGet(this.lastMidByEpic, key) ??
+        this.cacheGet(this.lastMidByEpic, ukey);
       if (cached != null && Number.isFinite(cached) && cached > 0) {
         epicMid.set(key, cached);
         return cached;
@@ -1129,7 +1205,18 @@ export class CapitalBroker implements MasterBroker {
         paper: false,
       };
     }
-    this.processed.add(input.intent_id);
+    // Durable republish guard (survives restart — memory Set alone does not)
+    const blocked = findOpenIntentBlocker(input.intent_id);
+    if (blocked) {
+      return {
+        ok: false,
+        order_id: blocked.command_id,
+        position_id: blocked.ticket,
+        fill_price: blocked.fill_price,
+        detail: `capital_intent_already_${blocked.ack_status.toLowerCase()}`,
+        paper: false,
+      };
+    }
 
     const { isCapitalStopLevelReject } = await import('./capitalConfirm.js');
     const {
@@ -1138,8 +1225,7 @@ export class CapitalBroker implements MasterBroker {
       clampSizeForBuyingPower,
       isCapitalSizeError,
     } = await import('./capitalSize.js');
-    const epicKey = String(input.epic || '').toUpperCase();
-    const liveRules = this.dealRulesByEpic.get(epicKey);
+    const liveRules = this.cacheGet(this.dealRulesByEpic, input.epic);
     let sized = liveRules
       ? {
           ...normalizeCapitalDealSize(input.size, liveRules),
@@ -1186,6 +1272,56 @@ export class CapitalBroker implements MasterBroker {
       }
     }
 
+    const command_id =
+      `cap_${input.intent_id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 28)}` ||
+      `cap_${randomUUID().slice(0, 12)}`;
+    this.processed.add(input.intent_id);
+    // Durable INTENT before REST create (crash between create and local register)
+    logTradeIntent({
+      command_id,
+      intent_id: input.intent_id,
+      action: 'OPEN',
+      side: input.side,
+      volume: orderSize,
+      epic: input.epic,
+      sl: input.stop_level ?? null,
+      tp: input.profit_level ?? null,
+      reason: 'INTENT',
+    });
+
+    const ackFail = (
+      detail: string,
+      extra?: {
+        ack_status?: 'FAILED' | 'TIMEOUT';
+        ticket?: string | null;
+        fill_price?: number | null;
+      }
+    ): void => {
+      updateTradeAck(command_id, {
+        ack_status: extra?.ack_status || 'FAILED',
+        ticket: extra?.ticket,
+        fill_price: extra?.fill_price,
+        detail,
+      });
+    };
+
+    const ackFailClose = async (
+      position_id: string,
+      order_id: string | null,
+      reason: string,
+      fill?: { fill_price?: number | null; fill_size?: number | null }
+    ): Promise<PlaceOrderResult> => {
+      const fail = await this.failCloseOpenResult(position_id, order_id, reason, fill);
+      // Still open after fail-close → SUCCESS so restart can adopt + re-attach
+      updateTradeAck(command_id, {
+        ack_status: fail.position_id ? 'SUCCESS' : 'FAILED',
+        ticket: position_id,
+        fill_price: fill?.fill_price ?? fail.fill_price,
+        detail: fail.detail,
+      });
+      return fail;
+    };
+
     let opened = await this.deps.create(this.session, {
       epic: input.epic,
       direction: input.side,
@@ -1209,12 +1345,14 @@ export class CapitalBroker implements MasterBroker {
         profitLevel: input.profit_level,
       });
       if (!opened.ok) {
+        const detail = `CAPITAL_SIZE_INVALID:${opened.detail}`;
+        ackFail(detail);
         return {
           ok: false,
           order_id: null,
           position_id: null,
           fill_price: null,
-          detail: `CAPITAL_SIZE_INVALID:${opened.detail}`,
+          detail,
           paper: false,
         };
       }
@@ -1233,6 +1371,7 @@ export class CapitalBroker implements MasterBroker {
     }
 
     if (!opened.ok) {
+      ackFail(String(opened.detail || 'create_failed'));
       return {
         ok: false,
         order_id: null,
@@ -1254,12 +1393,12 @@ export class CapitalBroker implements MasterBroker {
         // Empty REJECTED (no named reason) often = sibling session / pin glitch with a
         // real fill already open — match-accept; NEVER blind re-POST.
         // Named rejects (RISK_CHECK / min-stop / …) still fail-close ghosts.
-        const { isCapitalStopLevelReject } = await import('./capitalConfirm.js');
+        const { isCapitalStopLevelReject: isSlReject } = await import('./capitalConfirm.js');
         const { isCapitalRiskCheckError } = await import('./capitalSize.js');
         const reasonBlob = `${conf.reject_reason || ''} ${conf.detail || ''}`;
         const namedReject =
           isCapitalRiskCheckError(reasonBlob) ||
-          isCapitalStopLevelReject(reasonBlob) ||
+          isSlReject(reasonBlob) ||
           (conf.reject_reason != null &&
             String(conf.reject_reason).trim().length > 0 &&
             String(conf.reject_reason).toUpperCase() !== 'REJECTED');
@@ -1291,7 +1430,7 @@ export class CapitalBroker implements MasterBroker {
               (Math.abs(p.size - orderSize) < 1e-6 || Math.abs(p.size - input.size) < 1e-6)
           );
           if (ghost) {
-            return await this.failCloseOpenResult(
+            return await ackFailClose(
               ghost.position_id,
               opened.deal_reference || null,
               `capital_rejected_fail_closed:${conf.detail}`
@@ -1302,12 +1441,13 @@ export class CapitalBroker implements MasterBroker {
             (id) => !preOpenIds.has(id)
           );
           if (presenceGhost) {
-            return await this.failCloseOpenResult(
+            return await ackFailClose(
               presenceGhost,
               opened.deal_reference || null,
               `capital_rejected_fail_closed:${conf.detail}`
             );
           }
+          ackFail(String(conf.detail || 'rejected'));
           return {
             ok: false,
             order_id: opened.deal_reference || null,
@@ -1347,7 +1487,7 @@ export class CapitalBroker implements MasterBroker {
           Math.abs(p.size - orderSize) < 1e-6
       );
       if (ghost) {
-        const fail = await this.failCloseOpenResult(
+        const fail = await ackFailClose(
           ghost.position_id,
           opened.deal_reference || null,
           `capital_unconfirmed_fail_closed:${opened.detail}`
@@ -1363,7 +1503,7 @@ export class CapitalBroker implements MasterBroker {
         (id) => !preOpenIds.has(id)
       );
       if (presenceGhost) {
-        const fail = await this.failCloseOpenResult(
+        const fail = await ackFailClose(
           presenceGhost,
           opened.deal_reference || null,
           `capital_unconfirmed_fail_closed:${opened.detail}`
@@ -1376,6 +1516,7 @@ export class CapitalBroker implements MasterBroker {
         return fail;
       }
       const detail = `capital_unconfirmed:${opened.detail}`;
+      ackFail(detail, { ack_status: 'TIMEOUT' });
       logMasterError({
         module: 'capital.placeOrder',
         error_type: 'ACK_TIMEOUT',
@@ -1393,72 +1534,41 @@ export class CapitalBroker implements MasterBroker {
     }
 
     // Attach / verify protective SL after ANY accepted fill (bare open OR empty-REJECTED match).
-    // Wanted SL + missing chart stop ⇒ attach via modifyPosition (confirm + list proof);
-    // fail-close if still naked — never leave LIVE unprotected.
     const wantProtectiveSl = input.stop_level != null && Number.isFinite(input.stop_level);
     if (wantProtectiveSl && position_id) {
-      const listed0 = await this.listOpenPositions(input.epic);
-      const cur0 = listed0.ok
-        ? listed0.positions.find((p) => p.position_id === position_id)
-        : undefined;
-      const wantSlNum = Number(input.stop_level);
-      const slTol = Math.max(0.05, Math.abs(wantSlNum) * 1e-5);
-      const alreadyProtected =
-        cur0?.stop_level != null &&
-        Number.isFinite(cur0.stop_level) &&
-        Math.abs(Number(cur0.stop_level) - wantSlNum) <= slTol;
-      const wantTp =
-        input.profit_level != null &&
-        Number.isFinite(input.profit_level) &&
-        Number(input.profit_level) > 0
-          ? Number(input.profit_level)
-          : null;
-      const tpMissing =
-        wantTp != null &&
-        (cur0?.profit_level == null ||
-          !Number.isFinite(cur0.profit_level) ||
-          Math.abs(Number(cur0.profit_level) - wantTp) >
-            Math.max(0.05, Math.abs(wantTp) * 1e-5));
-      if (!alreadyProtected || tpMissing) {
-        needAttach = true;
-        const wantSl = wantSlNum;
-        let attached = false;
-        for (let widen = 0; widen < 4 && !attached; widen++) {
-          const mid = fill_price ?? wantSl;
-          const pad = widen * Math.max(0.5, Math.abs(mid) * 0.0005);
-          const sl = input.side === 'BUY' ? wantSl - pad : wantSl + pad;
-          // Always drive toward intended SL — do not preserve a soft/wrong leftover stop
-          const mod = await this.modifyPosition({
-            position_id,
-            stop_level: alreadyProtected && !tpMissing ? cur0!.stop_level! : sl,
-            profit_level: wantTp ?? input.profit_level,
-          });
-          if (mod.ok) {
-            attached = true;
-            break;
-          }
-          if (!isCapitalStopLevelReject(mod.detail || '')) break;
-        }
-        if (!attached) {
-          return await this.failCloseOpenResult(
-            position_id,
-            opened.deal_reference || null,
-            tpMissing && alreadyProtected
-              ? 'CAPITAL_TP_ATTACH_FAILED'
-              : 'CAPITAL_SL_ATTACH_FAILED',
-            { fill_price, fill_size }
-          );
-        }
+      const guard = await this.ensureProtectiveLevelsOrFail({
+        position_id,
+        want_sl: Number(input.stop_level),
+        want_tp: input.profit_level ?? null,
+        order_id: opened.deal_reference || command_id,
+        epic: input.epic,
+        side: input.side,
+        fill_price,
+      });
+      if (!guard.ok) {
+        return await ackFailClose(
+          position_id,
+          opened.deal_reference || null,
+          guard.detail,
+          { fill_price, fill_size }
+        );
       }
     } else if (needAttach && position_id) {
       // Bare-open path without stop_level in input — still fail-close naked
-      return await this.failCloseOpenResult(
+      return await ackFailClose(
         position_id,
         opened.deal_reference || null,
         'CAPITAL_SL_ATTACH_FAILED',
         { fill_price, fill_size }
       );
     }
+
+    updateTradeAck(command_id, {
+      ack_status: 'SUCCESS',
+      ticket: position_id,
+      fill_price,
+      detail: 'ACK_SUCCESS',
+    });
 
     const listedFinal = await this.listOpenPositions(input.epic);
     const filled = listedFinal.positions.find((p) => p.position_id === position_id);
@@ -1471,6 +1581,105 @@ export class CapitalBroker implements MasterBroker {
       detail: `capital_open deal=${position_id}${fill_price != null ? ` fill=${fill_price}` : ''}`,
       paper: false,
     };
+  }
+
+  /**
+   * Wanted protective SL (+ optional TP) after OPEN — prove list levels,
+   * else MODIFY with widen retries, else caller fail-closes.
+   * Public for restart ack-adopt (same path as live placeOrder).
+   */
+  async ensureProtectiveLevelsOrFail(input: {
+    position_id: string;
+    want_sl: number;
+    want_tp?: number | null;
+    order_id: string;
+    epic: string;
+    side?: Side;
+    fill_price?: number | null;
+  }): Promise<{ ok: true } | { ok: false; detail: string }> {
+    const { isCapitalStopLevelReject } = await import('./capitalConfirm.js');
+    const listed0 = await this.listOpenPositions(input.epic);
+    const cur0 = listed0.ok
+      ? listed0.positions.find((p) => p.position_id === input.position_id)
+      : undefined;
+    const wantSlNum = Number(input.want_sl);
+    const slTol = Math.max(0.05, Math.abs(wantSlNum) * 1e-5);
+    const alreadyProtected =
+      cur0?.stop_level != null &&
+      Number.isFinite(cur0.stop_level) &&
+      Math.abs(Number(cur0.stop_level) - wantSlNum) <= slTol;
+    const wantTp =
+      input.want_tp != null &&
+      Number.isFinite(input.want_tp) &&
+      Number(input.want_tp) > 0
+        ? Number(input.want_tp)
+        : null;
+    const tpMissing =
+      wantTp != null &&
+      (cur0?.profit_level == null ||
+        !Number.isFinite(cur0.profit_level) ||
+        Math.abs(Number(cur0.profit_level) - wantTp) >
+          Math.max(0.05, Math.abs(wantTp) * 1e-5));
+    if (alreadyProtected && !tpMissing) return { ok: true };
+
+    const side =
+      input.side ||
+      cur0?.side ||
+      ('BUY' as Side);
+    let attached = false;
+    for (let widen = 0; widen < 4 && !attached; widen++) {
+      const mid = input.fill_price ?? cur0?.open_level ?? wantSlNum;
+      const pad = widen * Math.max(0.5, Math.abs(mid) * 0.0005);
+      const sl = side === 'BUY' ? wantSlNum - pad : wantSlNum + pad;
+      const mod = await this.modifyPosition({
+        position_id: input.position_id,
+        stop_level: alreadyProtected && !tpMissing ? cur0!.stop_level! : sl,
+        profit_level: wantTp ?? undefined,
+      });
+      if (mod.ok) {
+        attached = true;
+        break;
+      }
+      if (!isCapitalStopLevelReject(mod.detail || '')) {
+        return {
+          ok: false,
+          detail:
+            tpMissing && alreadyProtected
+              ? `CAPITAL_TP_ATTACH_FAILED:${mod.detail}`
+              : `CAPITAL_SL_ATTACH_FAILED:${mod.detail}`,
+        };
+      }
+    }
+    if (!attached) {
+      return {
+        ok: false,
+        detail:
+          tpMissing && alreadyProtected
+            ? 'CAPITAL_TP_ATTACH_FAILED'
+            : 'CAPITAL_SL_ATTACH_FAILED',
+      };
+    }
+    return { ok: true };
+  }
+
+  /**
+   * Reader apply_ack_to_instance_state — OPEN SUCCESS deals not yet in local book.
+   * Survives crash between Capital fill confirm and saveOpenPositions.
+   */
+  adoptOpenFromAckJournal(bookedIds: Set<string>): {
+    adopted: Array<{
+      command_id: string;
+      intent_id: string;
+      ticket: string;
+      side: Side;
+      volume: number;
+      epic: string;
+      fill_price: number | null;
+      sl: number | null;
+      tp: number | null;
+    }>;
+  } {
+    return adoptOpenFromAckJournalShared(bookedIds);
   }
 
   async closePosition(position_id: string, opts?: { size?: number }) {
@@ -3442,35 +3651,7 @@ export class Mt4FileBroker implements MasterBroker {
       tp: number | null;
     }>;
   } {
-    const fromJournal = findOpenSuccessUnbooked(bookedIds);
-    const adopted: Array<{
-      command_id: string;
-      intent_id: string;
-      ticket: string;
-      side: Side;
-      volume: number;
-      epic: string;
-      fill_price: number | null;
-      sl: number | null;
-      tp: number | null;
-    }> = [];
-    const seen = new Set<string>();
-    for (const r of fromJournal) {
-      if (!r.ticket || !r.side || seen.has(r.ticket)) continue;
-      seen.add(r.ticket);
-      adopted.push({
-        command_id: r.command_id,
-        intent_id: r.intent_id,
-        ticket: r.ticket,
-        side: r.side,
-        volume: r.volume,
-        epic: r.epic,
-        fill_price: r.fill_price,
-        sl: r.sl,
-        tp: r.tp,
-      });
-    }
-    return { adopted };
+    return adoptOpenFromAckJournalShared(bookedIds);
   }
 }
 
