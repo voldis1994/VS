@@ -437,7 +437,7 @@ export class PositionManager {
           }
           const mark = protectiveMark(pos.side, quote);
           const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
-          const { exit: fill } = resolveCloseExitFill({
+          const { exit: fill, fill_proven } = resolveCloseExitFill({
             fill_price: closeRes.fill_price,
             mark,
             entry: pos.entry,
@@ -464,7 +464,7 @@ export class PositionManager {
             volume: pos.size,
             pnl: priced.pnl,
             fees: priced.fees,
-            slippage: Math.abs(fill - quote.mid),
+            slippage: fill_proven ? Math.abs(fill - quote.mid) : 0,
             mae: pos.mae,
             mfe: pos.mfe,
             r_multiple: 0,
@@ -511,7 +511,7 @@ export class PositionManager {
           continue;
         }
         const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
-        const { exit: fill } = resolveCloseExitFill({
+        const { exit: fill, fill_proven } = resolveCloseExitFill({
           fill_price: closeRes.fill_price,
           mark,
           entry: pos.entry,
@@ -542,7 +542,7 @@ export class PositionManager {
           volume: pos.size,
           pnl: priced.pnl,
           fees: priced.fees,
-          slippage: Math.abs(fill - quote.mid),
+          slippage: fill_proven ? Math.abs(fill - quote.mid) : 0,
           mae: pos.mae,
           mfe: pos.mfe,
           r_multiple: pnlPts / riskDist,
@@ -614,7 +614,7 @@ export class PositionManager {
               const closeRes = await broker.closePosition(pos.position_id);
               if (closeRes.ok) {
                 const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
-                const { exit: fill } = resolveCloseExitFill({
+                const { exit: fill, fill_proven } = resolveCloseExitFill({
                   fill_price: closeRes.fill_price,
                   mark,
                   entry: pos.entry,
@@ -641,7 +641,7 @@ export class PositionManager {
                   volume: pos.size,
                   pnl: priced.pnl,
                   fees: priced.fees,
-                  slippage: Math.abs(fill - quote.mid),
+                  slippage: fill_proven ? Math.abs(fill - quote.mid) : 0,
                   mae: pos.mae,
                   mfe: pos.mfe,
                   r_multiple: 0,
@@ -711,7 +711,7 @@ export class PositionManager {
             const closeRes = await broker.closePosition(pos.position_id);
             if (closeRes.ok) {
               const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
-              const { exit: fill } = resolveCloseExitFill({
+              const { exit: fill, fill_proven } = resolveCloseExitFill({
                 fill_price: closeRes.fill_price,
                 mark,
                 entry: pos.entry,
@@ -738,7 +738,7 @@ export class PositionManager {
                 volume: pos.size,
                 pnl: priced.pnl,
                 fees: priced.fees,
-                slippage: Math.abs(fill - quote.mid),
+                slippage: fill_proven ? Math.abs(fill - quote.mid) : 0,
                 mae: pos.mae,
                 mfe: pos.mfe,
                 r_multiple: 0,
@@ -817,7 +817,7 @@ export class PositionManager {
             });
             if (closeRes.ok) {
               const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
-              const { exit: fill } = resolveCloseExitFill({
+              const { exit: fill, fill_proven } = resolveCloseExitFill({
                 fill_price: closeRes.fill_price,
                 mark,
                 entry: pos.entry,
@@ -852,7 +852,7 @@ export class PositionManager {
                 volume: closedVol,
                 pnl: priced.pnl,
                 fees: priced.fees,
-                slippage: Math.abs(fill - quote.mid),
+                slippage: fill_proven ? Math.abs(fill - quote.mid) : 0,
                 mae: pos.mae,
                 mfe: pos.mfe,
                 r_multiple: 0,
@@ -1018,7 +1018,7 @@ export class PositionManager {
 
       const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
       const hardReason = protective?.reason ?? null;
-      const { exit } = resolveCloseExitFill({
+      const { exit, fill_proven } = resolveCloseExitFill({
         fill_price: closeRes.fill_price,
         mark,
         entry: pos.entry,
@@ -1052,7 +1052,7 @@ export class PositionManager {
         volume: pos.size,
         pnl: priced.pnl,
         fees: priced.fees,
-        slippage: Math.abs(exit - quote.mid),
+        slippage: fill_proven ? Math.abs(exit - quote.mid) : 0,
         mae: pos.mae,
         mfe: pos.mfe,
         r_multiple: pnlPts / riskDist,
@@ -1142,7 +1142,7 @@ export class PositionManager {
       }
 
       const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
-      const { exit: fill } = resolveCloseExitFill({
+      const { exit: fill, fill_proven } = resolveCloseExitFill({
         fill_price: closeRes.fill_price,
         mark,
         entry: pos.entry,
@@ -1182,7 +1182,7 @@ export class PositionManager {
         volume: vol,
         pnl: priced.pnl,
         fees: priced.fees,
-        slippage: Math.abs(fill - quote.mid),
+        slippage: fill_proven ? Math.abs(fill - quote.mid) : 0,
         mae: pos.mae,
         mfe: pos.mfe,
         r_multiple: 0,

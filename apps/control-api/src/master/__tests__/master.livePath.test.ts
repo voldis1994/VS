@@ -887,6 +887,85 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(positions.size).toBe(1);
   });
 
+  it('fail-close does not stamp provisional mid as fill_price', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level?: number | null;
+        stop_level?: number;
+      }
+    >();
+    let createN = 0;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-provfc' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4499,
+        ask: 4499.4,
+        mid: 4499.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({
+        ok: true,
+        positions: [...positions.values()].map((p) => ({
+          deal_id: p.deal_id,
+          epic: p.epic,
+          direction: p.direction,
+          size: p.size,
+          // omit open_level — list invents provisional mid
+          stop_level: p.stop_level ?? null,
+        })),
+        detail: '',
+      }),
+      create: async (_s, input) => {
+        createN += 1;
+        if (createN === 1 && input.stopLevel != null) {
+          return { ok: false, detail: 'MINIMUM_STOP_DISTANCE' };
+        }
+        return { ok: true, deal_reference: `ref-provfc-${createN}`, detail: 'opened_bare' };
+      },
+      confirm: async (_s, ref) => {
+        const deal_id = `deal-${ref}`;
+        if (!positions.has(deal_id)) {
+          positions.set(deal_id, {
+            deal_id,
+            epic: 'GOLD',
+            direction: 'BUY',
+            size: 0.1,
+            open_level: null,
+          });
+        }
+        // No fill_level — only provisional mid on book
+        return { ok: true, deal_id, detail: 'ACCEPTED' };
+      },
+      modify: async () => ({ ok: false, detail: 'MINIMUM_STOP_DISTANCE' }),
+      close: async () => ({ ok: true, detail: 'submitted_noop' }),
+    });
+    await broker.connect();
+    const placed = await broker.placeOrder({
+      intent_id: 'sl-attach-prov-failclose',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: 4409.9,
+    });
+    expect(placed.ok).toBe(false);
+    expect(placed.detail).toMatch(/capital_fail_close_unproven|capital_open_fill_unproven/);
+    // Must not advertise quote mid as proven fill
+    expect(placed.fill_price).not.toBe(4499.2);
+    expect(
+      placed.fill_price == null ||
+        (Number.isFinite(placed.fill_price) && placed.fill_price !== 4499.2)
+    ).toBe(true);
+  });
+
   it('fail-close keeps known position_id when list flakes after close failure', async () => {
     process.env.MASTER_LIVE_ENABLED = 'true';
     process.env.MASTER_CONFIRM_FAST = 'true';
@@ -1578,6 +1657,17 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(fill_proven).toBe(false);
     expect(exit).toBe(4410.55); // entry placeholder — not live mark
     expect(exit).not.toBe(4499);
+
+    const stopProxy = resolveCloseExitFill({
+      fill_price: null,
+      mark: 4499,
+      entry: 4410.55,
+      capitalLive: true,
+      hard_reason: 'STOP_HIT',
+      stop_loss: 4400,
+    });
+    expect(stopProxy.exit).toBe(4400);
+    expect(stopProxy.fill_proven).toBe(false); // local SL ≠ venue-proven fill
   });
 
   it('closed_gone DELETED still debounces empty list (flake reopen refuses)', async () => {

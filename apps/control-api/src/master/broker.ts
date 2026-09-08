@@ -1296,17 +1296,18 @@ export class CapitalBroker implements MasterBroker {
       const live = listed.ok
         ? listed.positions.find((p) => p.position_id === position_id)
         : undefined;
-      const openLevel =
-        live?.open_level != null &&
-        Number.isFinite(live.open_level) &&
-        live.open_level > 0
-          ? live.open_level
+      // Never re-stamp provisional list mid as fill — same bar as OPEN SUCCESS
+      const provenCaller =
+        fill?.fill_price != null &&
+        Number.isFinite(fill.fill_price) &&
+        fill.fill_price > 0
+          ? Number(fill.fill_price)
           : null;
       return {
         ok: false,
         order_id,
         position_id,
-        fill_price: fill?.fill_price ?? openLevel,
+        fill_price: provenCaller ?? capitalProvenOpenLevel(live),
         fill_size: fill?.fill_size ?? live?.size ?? null,
         detail: `${reason}:capital_fail_close_unproven:${closed.detail}${
           !listed.ok ? `:list=${listed.detail || 'list_failed'}` : ''

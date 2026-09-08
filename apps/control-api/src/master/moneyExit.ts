@@ -95,13 +95,14 @@ export function resolveCloseExitFill(input: {
     return { exit: Number(input.fill_price), fill_proven: true };
   }
   if (input.capitalLive) {
+    // Local SL/TP are managed geometry — useful exit proxy, NOT venue-proven fill
     if (
       input.hard_reason === 'STOP_HIT' &&
       input.stop_loss != null &&
       Number.isFinite(input.stop_loss) &&
       input.stop_loss > 0
     ) {
-      return { exit: Number(input.stop_loss), fill_proven: true };
+      return { exit: Number(input.stop_loss), fill_proven: false };
     }
     if (
       input.hard_reason === 'TP_HIT' &&
@@ -109,7 +110,7 @@ export function resolveCloseExitFill(input: {
       Number.isFinite(input.take_profit) &&
       input.take_profit > 0
     ) {
-      return { exit: Number(input.take_profit), fill_proven: true };
+      return { exit: Number(input.take_profit), fill_proven: false };
     }
     return { exit: input.entry, fill_proven: false };
   }
