@@ -1777,6 +1777,49 @@ describe('partial_close persist + Check be_start', () => {
     expect(pm.get('naked-sl')!.take_profit).toBeNull();
   });
 
+  it('reconcile adopts chart epic + countForEpic aliases GOLD↔XAUUSD', () => {
+    const pm = new PositionManager();
+    pm.register({
+      position_id: 'epic-sticky',
+      opportunity_id: '00000000-0000-4000-8000-00000000eeee',
+      intent_id: 'epic-sticky-intent',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4400,
+      stop_loss: 4390,
+      take_profit: 4420,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis(),
+        expectancy: null,
+      },
+    });
+    expect(pm.countForEpic('GOLD')).toBe(1);
+    expect(pm.countForEpic('XAUUSD')).toBe(1);
+    pm.reconcileFromBroker([
+      {
+        position_id: 'epic-sticky',
+        epic: 'XAUUSD',
+        side: 'BUY',
+        size: 0.1,
+        open_level: 4401,
+        stop_level: 4390,
+        profit_level: 4420,
+      },
+    ]);
+    expect(pm.get('epic-sticky')!.epic).toBe('XAUUSD');
+    expect(pm.get('epic-sticky')!.entry).toBeCloseTo(4401, 8);
+    expect(pm.countForEpic('GOLD')).toBe(1);
+    expect(pm.countForEpic('XAUUSD')).toBe(1);
+  });
+
   it('PaperBroker.hydrateAccount restores equity after recover seed', async () => {
     const broker = new PaperBroker();
     await broker.connect();

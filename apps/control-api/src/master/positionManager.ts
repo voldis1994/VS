@@ -6,6 +6,7 @@ import { createHash } from 'crypto';
 import { decideBestOutcomeExit, favorableMove } from '../services/exitManage.js';
 import { ema13CrossExit, ema3PriceSide, ema3PriceThroughExit } from './analysis.js';
 import type { MasterBroker } from './broker.js';
+import { epicsMatch } from './broker.js';
 import { clampStopForCapitalMark, effectiveMinStopDistance } from './capitalStop.js';
 import {
   clampCloseVolume,
@@ -195,7 +196,7 @@ export class PositionManager {
   }
 
   countForEpic(epic: string) {
-    return [...this.open.values()].filter((p) => p.epic === epic).length;
+    return [...this.open.values()].filter((p) => epicsMatch(p.epic, epic)).length;
   }
 
   adopt(pos: ManagedPosition) {
@@ -1681,6 +1682,10 @@ export class PositionManager {
             ? bp.profit_level
             : null;
         if (bp.size > 0) existing.size = bp.size;
+        // Chart/broker symbol is truth — desk GOLD alias must not stick after XAUUSD fill
+        if (bp.epic && String(bp.epic).trim()) {
+          existing.epic = String(bp.epic).trim();
+        }
         // Reader _apply_status_position_to_state — always refresh entry from broker
         // when open_level is real (never keep 0 / stale ACK Bid/Ask after recover).
         if (

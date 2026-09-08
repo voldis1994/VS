@@ -698,7 +698,9 @@ export function MasterPage() {
                   {p.stop_loss != null && Number(p.stop_loss) > 0
                     ? ` · SL ${Number(p.stop_loss).toFixed(2)}`
                     : ' · SL —'}
-                  {p.take_profit != null ? ` · TP ${Number(p.take_profit).toFixed(2)}` : ''}
+                  {p.take_profit != null && Number(p.take_profit) > 0
+                    ? ` · TP ${Number(p.take_profit).toFixed(2)}`
+                    : ''}
                 </div>
                 <div
                   style={{

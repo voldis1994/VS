@@ -798,6 +798,9 @@ class MasterRuntime {
     this.last_quote = quote;
     this.rollDailyPnl();
     const broker = this.broker || this.ensurePaperBroker();
+    if (broker instanceof Mt4FileBroker) {
+      this.syncEpicFromMt4Chart(broker);
+    }
 
     if (broker instanceof PaperBroker) {
       broker.setQuote({
@@ -1182,7 +1185,10 @@ class MasterRuntime {
           position_id: place.position_id,
           opportunity_id: cycle.opportunity.id,
           intent_id: execution.intent_id,
-          epic: this.epic,
+          epic:
+            broker instanceof Mt4FileBroker && broker.chartSymbol()
+              ? broker.chartSymbol()!
+              : this.epic,
           side: cycle.decision.side!,
           size: place.fill_size ?? cycle.risk.volume,
           entry: fill,
