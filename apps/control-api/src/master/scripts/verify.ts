@@ -76,8 +76,7 @@ async function main() {
     const ok =
       r.ok &&
       typeof demo?.status === 'string' &&
-      (demo.status === 'PASS_LIVE_DATA_TRADED' ||
-        demo.status === 'PASS_LIVE_DATA_DECIDED') &&
+      demo.status === 'PASS_LIVE_DATA_TRADED' &&
       demo.forced_live_paper_fill !== true;
     checks.push({
       id: 'live_market_paper',

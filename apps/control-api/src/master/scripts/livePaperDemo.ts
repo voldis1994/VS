@@ -36,17 +36,20 @@ async function main() {
   masterRuntime.cfg = {
     ...DEFAULT_MASTER_CONFIG,
     mode: 'PAPER',
-    min_score: 0.35,
+    min_score: 0.3,
     ai_mode: 'advisory',
     // Demo proves live quote → decision → paper fill; session gates are covered by systemAudit.
     block_off_hours: false,
+    block_high_impact_news: false,
+    require_positive_expectancy: false,
   };
   masterRuntime.last_loss_ms = 0;
   masterRuntime.reject_until_ms = 0;
   masterRuntime.account.consecutive_losses = 0;
   masterRuntime.account.daily_pnl = 0;
+  masterRuntime.setEntriesArmed(true);
   masterRuntime.ensurePaperBroker();
-  await masterRuntime.start();
+  await masterRuntime.start({ live_feed: false });
 
   const first = await fetchLiveMarket('GOLD');
   if (!first.ok || !first.quote) {
@@ -70,8 +73,8 @@ async function main() {
   let exits = 0;
   let decided = 0;
 
-  // ~8 live cycles — enough to prove live quote → decision / natural paper path
-  for (let i = 0; i < 8; i++) {
+  // ~12 live cycles — enough to prove live quote → natural paper fill path
+  for (let i = 0; i < 12; i++) {
     const snap = i === 0 ? first : await fetchLiveMarket('GOLD');
     if (!snap.ok || !snap.quote) {
       ticks.push({ i, ok: false, detail: snap.detail });

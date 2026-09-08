@@ -78,6 +78,10 @@ export type ReplayOptions = {
    * When set, skips resolveAdvisor and uses this value (hard SL/TP still fire).
    */
   force_allow_close?: boolean;
+  /** Seed reject cooldown (quote.ts_ms units) — live reject_until_ms peer */
+  reject_until_ms?: number;
+  /** Seed inflight window — live inflight_until_ms peer */
+  inflight_until_ms?: number;
 };
 
 /**
@@ -119,6 +123,9 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
   /** Live post-exit / fingerprint rearm — no same-signal re-entry until cool elapses. */
   let post_exit_until_ms = 0;
   let last_entry_fingerprint: string | null = null;
+  /** Live reject / inflight peers (broker reject backoff + OPEN-in-flight). */
+  let reject_until_ms = Math.max(0, opts.reject_until_ms || 0);
+  let inflight_until_ms = Math.max(0, opts.inflight_until_ms || 0);
   let spreadHistory: number[] = [];
   let open: {
     oppId: string;
@@ -621,6 +628,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
     );
     spreadHistory = spreadSnap.history;
 
+    const cycleT0 = Date.now();
     const cycle = await pipe.runCycle({
       bars: visible,
       quote,
@@ -643,6 +651,13 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
     });
 
     const postExitCool = quote.ts_ms < post_exit_until_ms;
+    const rejectCool = quote.ts_ms < reject_until_ms;
+    const inflight = quote.ts_ms < inflight_until_ms;
+    const cycleBudgetMs = Number(cfg.cycle_max_duration_ms);
+    const cycleTimedOut =
+      Number.isFinite(cycleBudgetMs) &&
+      cycleBudgetMs > 0 &&
+      Date.now() - cycleT0 > cycleBudgetMs;
     const signalFp =
       cycle.decision.kind === 'BUY' || cycle.decision.kind === 'SELL'
         ? `${epic}:${cycle.decision.kind}`
@@ -658,7 +673,10 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
       (cycle.decision.kind === 'BUY' || cycle.decision.kind === 'SELL') &&
       cycle.decision.side &&
       !postExitCool &&
-      !sameSignal
+      !sameSignal &&
+      !rejectCool &&
+      !inflight &&
+      !cycleTimedOut
     ) {
       const fillIndex = Math.min(opts.bars.length - 1, i + latency);
       // Fill uses only bar at fillIndex open — known after latency, still no look-ahead beyond that bar
@@ -668,6 +686,11 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
       const raw =
         side === 'BUY' ? fillBar.open + spread / 2 + slip : fillBar.open - spread / 2 - slip;
       const intent = pipe.newIntentId(cycle.decision.decision_id);
+      // Live: arm inflight before confirm so restart cannot double-OPEN
+      inflight_until_ms = Math.max(
+        inflight_until_ms,
+        (fillBar.ts_ms ?? quote.ts_ms) + 90_000
+      );
       if (pipe.claimIntent(intent)) {
         pipe.markExecuted(cycle.opportunity.id, {
           intent_id: intent,
@@ -677,6 +700,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
           detail: 'backtest_fill',
           paper: true,
         });
+        inflight_until_ms = 0;
         open = {
           oppId: cycle.opportunity.id,
           decision: cycle.decision,
@@ -729,6 +753,10 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
         }
         // skip ahead to fill bar index to avoid using future beyond fill for entry decision already taken
         i = fillIndex;
+      } else {
+        // Live peer: claim/reject → reject cooldown (30s)
+        reject_until_ms = Math.max(reject_until_ms, quote.ts_ms + 30_000);
+        inflight_until_ms = 0;
       }
     }
 

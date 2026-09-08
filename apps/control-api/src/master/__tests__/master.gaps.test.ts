@@ -4540,6 +4540,83 @@ describe('orphan adopt + replay soft-trail authority', () => {
     expect(Number.isFinite(result.day_start_equity)).toBe(true);
   });
 
+  it('replay reject_until_ms blocks entries like live reject_cooldown', async () => {
+    const { replayMaster } = await import('../replay.js');
+    const bars = Array.from({ length: 80 }, (_, i) => {
+      const o = 4400 + i * 0.8;
+      return {
+        open: o,
+        high: o + 1.5,
+        low: o - 0.3,
+        close: o + 0.7,
+        ts_ms: Date.UTC(2026, 8, 7, 12, i),
+      };
+    });
+    const blocked = await replayMaster({
+      bars,
+      warmup: 25,
+      starting_equity: 10_000,
+      // Far-future reject window — no OPEN while cool
+      reject_until_ms: Date.UTC(2026, 8, 7, 14, 0),
+      cfg: {
+        ...DEFAULT_MASTER_CONFIG,
+        block_off_hours: false,
+        block_high_impact_news: false,
+        min_score: 0.25,
+        max_hold_ms: 0,
+        require_positive_expectancy: false,
+      },
+    });
+    const tradedBlocked = blocked.opportunities.filter((o) => o.outcome || o.execution?.accepted);
+    expect(tradedBlocked.length).toBe(0);
+
+    const open = await replayMaster({
+      bars,
+      warmup: 25,
+      starting_equity: 10_000,
+      reject_until_ms: 0,
+      cfg: {
+        ...DEFAULT_MASTER_CONFIG,
+        block_off_hours: false,
+        block_high_impact_news: false,
+        min_score: 0.25,
+        max_hold_ms: 0,
+        require_positive_expectancy: false,
+      },
+    });
+    // Same bars without reject cool can produce fills (not guaranteed every path)
+    expect(open.equity_curve.length).toBeGreaterThan(10);
+  });
+
+  it('replay inflight_until_ms blocks re-entry like live inflight_order', async () => {
+    const { replayMaster } = await import('../replay.js');
+    const bars = Array.from({ length: 80 }, (_, i) => {
+      const o = 4400 + i * 0.8;
+      return {
+        open: o,
+        high: o + 1.5,
+        low: o - 0.3,
+        close: o + 0.7,
+        ts_ms: Date.UTC(2026, 8, 7, 12, i),
+      };
+    });
+    const blocked = await replayMaster({
+      bars,
+      warmup: 25,
+      inflight_until_ms: Date.UTC(2026, 8, 7, 14, 0),
+      cfg: {
+        ...DEFAULT_MASTER_CONFIG,
+        block_off_hours: false,
+        block_high_impact_news: false,
+        min_score: 0.25,
+        max_hold_ms: 0,
+        require_positive_expectancy: false,
+      },
+    });
+    const fills = blocked.opportunities.filter((o) => o.execution?.accepted);
+    expect(fills.length).toBe(0);
+  });
+
   it('replay multi-TP + money-BE cfg does not throw and can scale', async () => {
     const { replayMaster } = await import('../replay.js');
     const { SCALP_MANAGE_PRESET } = await import('../manageConfig.js');
