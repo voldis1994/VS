@@ -471,7 +471,7 @@ async function refresh(){
       card('Broker',s.broker||'—'),
       card('Broker detail',s.broker_detail||'—'),
       card('Quote',s.quote?(Number(s.quote.mid).toFixed(2)+' · '+Math.round((s.quote.age_ms||0)/1000)+'s'+(s.quote.stream_healthy===true?' · WS':s.quote.stream_healthy===false?' · REST':'')):'—', (s.quote&&s.quote.age_ms>15000)?'bad':'ok'),
-      card('Float UPL',s.floating_pnl!=null?Number(s.floating_pnl).toFixed(2):'—', (s.floating_pnl||0)<0?'bad':(s.floating_pnl||0)>0?'ok':''),
+      card('Float UPL',s.floating_pnl!=null?Number(s.floating_pnl).toFixed(2):'—', s.floating_pnl==null?'':(s.floating_pnl<0?'bad':(s.floating_pnl>0?'ok':'')),
       card('Manage',s.manage&&s.manage.scalp_pct_chase?'SCALP chase on':'structure/MFE'),
       card('Owns pipeline',s.owns_pipeline?'YES':'no'),
       card('Entries',s.entries_armed===false?('PAUSED'+(s.entries_pause_reason?' · '+s.entries_pause_reason:'')):'armed',s.entries_armed===false?'bad':'ok'),
@@ -515,8 +515,10 @@ async function refresh(){
     const pos=await fetch('/api/master/positions').then(r=>r.json());
     const list=pos.positions||[];
     positions.innerHTML=list.length?list.map(p=>{
-      const upl=Number(p.upl||0);
-      return '<div class="card"><div class="k">'+p.side+' '+p.epic+' <button data-close="'+p.position_id+'" style="float:right;font-size:11px;padding:2px 8px">Close</button></div><div class="v">'+Number(p.entry).toFixed(2)+(p.stop_loss!=null?' · SL '+Number(p.stop_loss).toFixed(2):'')+' · UPL <span class="'+(upl>=0?'ok':'bad')+'">'+upl.toFixed(2)+'</span></div></div>';
+      const upl=p.upl;
+      const uplTxt=upl!=null&&Number.isFinite(Number(upl))?Number(upl).toFixed(2):'—';
+      const uplCls=upl==null?'':(Number(upl)>=0?'ok':'bad');
+      return '<div class="card"><div class="k">'+p.side+' '+p.epic+' <button data-close="'+p.position_id+'" style="float:right;font-size:11px;padding:2px 8px">Close</button></div><div class="v">'+Number(p.entry).toFixed(2)+(p.stop_loss!=null?' · SL '+Number(p.stop_loss).toFixed(2):'')+' · UPL <span class="'+uplCls+'">'+uplTxt+'</span></div></div>';
     }).join('')
       :card('Open','FLAT');
     positions.querySelectorAll('[data-close]').forEach(btn=>btn.onclick=async()=>{

@@ -277,6 +277,12 @@ describe('VS MASTER MT4 file bridge', () => {
     else process.env.MASTER_STATE_DIR = prevStateDir;
   });
 
+  it('EA source includes command-id idempotency (Reader g_last_processed)', () => {
+    const ea = readFileSync(join(__dirname, '../mt4/VS_MASTER.mq4'), 'utf8');
+    expect(ea).toMatch(/g_last_processed_command_id/);
+    expect(ea).toMatch(/MagicNumber = 50001/);
+  });
+
   it('OPEN fills via Check- ack (simulator) and MODIFY writes protocol JSON', async () => {
     const root = mkdtempSync(join(tmpdir(), 'vs-mt4-'));
     const sim = new Mt4BridgeSimulator(root);

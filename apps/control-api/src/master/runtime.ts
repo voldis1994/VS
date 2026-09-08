@@ -1,5 +1,5 @@
 /** MASTER runtime — full PAPER/LIVE cycle owner + dashboard facade. */
-import { analyzeBars, emaFromBars } from './analysis.js';
+import { analyzeBars, emaFromBars, emaPairFromBars } from './analysis.js';
 import type { MasterBroker } from './broker.js';
 import { CapitalBroker, Mt4FileBroker, PaperBroker } from './broker.js';
 import { decide } from './decision.js';
@@ -110,7 +110,7 @@ export type MasterStatus = {
     age_ms: number;
     stream_healthy: boolean | null;
   } | null;
-  floating_pnl: number;
+  floating_pnl: number | null;
   /** Remaining reject cooldown ms (0 = clear) */
   reject_cooldown_ms: number;
   /** Newest durable cycle/broker errors */
@@ -239,14 +239,14 @@ class MasterRuntime {
     if (saved) this.cfg = applyManageConfigPatch(this.cfg, saved);
   }
 
-  /** Positions enriched with live UPL for dashboard. */
+  /** Positions enriched with live UPL for dashboard — null UPL when quote missing (never invent 0). */
   positionsForApi(): Array<
-    ManagedPosition & { upl: number; mark: number | null }
+    ManagedPosition & { upl: number | null; mark: number | null }
   > {
     const quote = this.last_quote;
     const pv = specForEpic(this.epic).value_per_point_per_lot;
     return this.positions.list().map((p) => {
-      if (!quote) return { ...p, upl: 0, mark: null };
+      if (!quote) return { ...p, upl: null, mark: null };
       const mark = protectiveMark(p.side, quote);
       const upl = resolveFloatingMoneyPnl({
         side: p.side,
@@ -833,6 +833,8 @@ class MasterRuntime {
         ? structure.atr * this.cfg.trailing_buffer_atr_mult
         : 0;
     const ema3 = bars.length >= 3 ? emaFromBars(bars, 3) : null;
+    const ema1Pair = emaPairFromBars(bars, 1);
+    const ema3Pair = emaPairFromBars(bars, 3);
 
     // 1) Manage exits first (position manager owns open risk)
     const liveMinStop =
@@ -857,6 +859,9 @@ class MasterRuntime {
       swing_high: structure?.swing_high ?? null,
       trailing_buffer: trailBuf,
       ema3,
+      ema1: ema1Pair?.cur ?? null,
+      ema1_prev: ema1Pair?.prev ?? null,
+      ema3_prev: ema3Pair?.prev ?? null,
       allow_close:
         this.cfg.ai_mode === 'off' ? true : this.last_ai_allow_close,
       close_all_profit: this.cfg.close_all_profit,
@@ -1721,7 +1726,7 @@ class MasterRuntime {
     const pv = specForEpic(this.epic).value_per_point_per_lot;
     const floating = quote
       ? floatingUnrealizedPnl(this.positions.list(), quote, pv)
-      : 0;
+      : null;
     const streamHealthy =
       this.broker instanceof CapitalBroker
         ? this.broker.isMarketStreamHealthy()

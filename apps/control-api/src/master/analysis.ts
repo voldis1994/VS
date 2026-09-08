@@ -83,6 +83,47 @@ export function ema3PriceThroughExit(input: {
   return { exit: false, reason: '' };
 }
 
+/** Current + previous EMA of closes (needs period+1 closes). */
+export function emaPairFromBars(
+  bars: Bar[],
+  period: number
+): { cur: number; prev: number } | null {
+  if (!(period >= 1)) return null;
+  const closes = bars
+    .map((b) => b.close)
+    .filter((c) => Number.isFinite(c) && c > 0);
+  if (closes.length < period + 1) return null;
+  const cur = ema(closes, period);
+  const prev = ema(closes.slice(0, -1), period);
+  if (cur == null || prev == null) return null;
+  return { cur, prev };
+}
+
+/**
+ * VS-System EMA_TICK structural EMA1×EMA3 cross exit (opposite cross while open).
+ */
+export function ema13CrossExit(input: {
+  side: 'BUY' | 'SELL';
+  ema1: number;
+  ema3: number;
+  ema1Prev: number;
+  ema3Prev: number;
+}): { exit: boolean; reason: string } {
+  const { ema1, ema3, ema1Prev, ema3Prev } = input;
+  if (![ema1, ema3, ema1Prev, ema3Prev].every((n) => Number.isFinite(n))) {
+    return { exit: false, reason: '' };
+  }
+  const structCrossUp = ema1Prev <= ema3Prev && ema1 > ema3;
+  const structCrossDown = ema1Prev >= ema3Prev && ema1 < ema3;
+  if (input.side === 'BUY' && structCrossDown) {
+    return { exit: true, reason: 'EMA13_CROSS_DOWN' };
+  }
+  if (input.side === 'SELL' && structCrossUp) {
+    return { exit: true, reason: 'EMA13_CROSS_UP' };
+  }
+  return { exit: false, reason: '' };
+}
+
 export function analyzeBars(bars: Bar[], spread = 0, nowMs = Date.now()): AnalysisSnapshot {
   if (bars.length < 5) {
     return {

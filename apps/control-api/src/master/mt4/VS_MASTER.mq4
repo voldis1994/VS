@@ -15,6 +15,8 @@ extern int    ExportSec   = 1;
 
 string g_root;
 datetime g_last_export = 0;
+// Reader-style idempotency — skip re-exec if cmd left after ACK (crash before FileDelete)
+string g_last_processed_command_id = "";
 
 string JoinPath(string a, string b)
 {
@@ -315,12 +317,21 @@ void ProcessCommands()
       string json = FileReadText(rel);
       string id = JsonGetStr(json, "id");
       if(StringLen(id) == 0) id = name;
-      string action = JsonGetStr(json, "action");
-      if(action == "OPEN") DoOpen(json, id);
-      else if(action == "MODIFY") DoModify(json, id);
-      else if(action == "CLOSE") DoClose(json, id);
-      else AckSimple(id, false, 0, "unknown action");
-      FileDelete(rel);
+      // Duplicate leftover after successful run — delete without OrderSend again
+      if(StringLen(g_last_processed_command_id) > 0 && id == g_last_processed_command_id)
+      {
+         FileDelete(rel);
+      }
+      else
+      {
+         string action = JsonGetStr(json, "action");
+         if(action == "OPEN") DoOpen(json, id);
+         else if(action == "MODIFY") DoModify(json, id);
+         else if(action == "CLOSE") DoClose(json, id);
+         else AckSimple(id, false, 0, "unknown action");
+         g_last_processed_command_id = id;
+         FileDelete(rel);
+      }
    }
    while(FileFindNext(h, name));
    FileFindClose(h);
@@ -332,7 +343,7 @@ int OnInit()
       Alert("VS_MASTER: attach to M1 chart");
    BootDirs();
    EventSetTimer(MathMax(1, ExportSec));
-   Comment("VS MASTER bridge v6 | ", g_root);
+   Comment("VS MASTER bridge v6.1 | ", g_root);
    return(INIT_SUCCEEDED);
 }
 

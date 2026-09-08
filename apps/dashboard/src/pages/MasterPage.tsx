@@ -72,7 +72,7 @@ type MasterStatus = {
     age_ms: number;
     stream_healthy: boolean | null;
   } | null;
-  floating_pnl?: number;
+  floating_pnl?: number | null;
   reject_cooldown_ms?: number;
   recent_errors?: Array<{
     ts: string;
@@ -116,7 +116,7 @@ type ManagedPos = {
   mae: number;
   stop_loss: number | null;
   take_profit?: number | null;
-  upl?: number;
+  upl?: number | null;
   broker_upl?: number | null;
   mark?: number | null;
   soft_trail_armed_at?: string | null;
@@ -221,8 +221,8 @@ export function MasterPage() {
             status.floating_pnl != null
               ? Number(status.floating_pnl).toFixed(2)
               : '—',
-          bad: (status.floating_pnl ?? 0) < 0,
-          ok: (status.floating_pnl ?? 0) > 0,
+          bad: status.floating_pnl != null && status.floating_pnl < 0,
+          ok: status.floating_pnl != null && status.floating_pnl > 0,
         },
         {
           k: 'Manage',
@@ -648,7 +648,7 @@ export function MasterPage() {
           <div className="card">FLAT</div>
         ) : (
           positions.map((p) => {
-            const upl = Number(p.upl ?? 0);
+            const upl = p.upl != null && Number.isFinite(Number(p.upl)) ? Number(p.upl) : null;
             return (
               <div key={p.position_id} className="card">
                 <div style={{ fontWeight: 600, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
@@ -681,10 +681,16 @@ export function MasterPage() {
                   style={{
                     fontSize: 13,
                     marginTop: 4,
-                    color: upl >= 0 ? 'var(--ok, #2a7)' : 'var(--bad, #c44)',
+                    color:
+                      upl == null
+                        ? 'var(--text-secondary)'
+                        : upl >= 0
+                          ? 'var(--ok, #2a7)'
+                          : 'var(--bad, #c44)',
                   }}
                 >
-                  UPL {upl.toFixed(2)} · MFE {Number(p.mfe).toFixed(2)} · MAE {Number(p.mae).toFixed(2)}
+                  UPL {upl != null ? upl.toFixed(2) : '—'} · MFE {Number(p.mfe).toFixed(2)} · MAE{' '}
+                  {Number(p.mae).toFixed(2)}
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
                   {[

@@ -4,7 +4,7 @@
  */
 import { createHash } from 'crypto';
 import { decideBestOutcomeExit, favorableMove } from '../services/exitManage.js';
-import { ema3PriceSide, ema3PriceThroughExit } from './analysis.js';
+import { ema13CrossExit, ema3PriceSide, ema3PriceThroughExit } from './analysis.js';
 import type { MasterBroker } from './broker.js';
 import { clampStopForCapitalMark, effectiveMinStopDistance } from './capitalStop.js';
 import {
@@ -294,6 +294,10 @@ export class PositionManager {
     scalp_lock_pct?: number;
     /** VS-System EMA3 trail level (from live bars) */
     ema3?: number | null;
+    /** VS-System EMA1 (≈ last close) for structural cross exit */
+    ema1?: number | null;
+    ema1_prev?: number | null;
+    ema3_prev?: number | null;
     /**
      * When set, quotes older than this skip soft manage (BE/trail/TIME_STOP/partial)
      * but still attempt naked SL recovery — Check- stale bridge gate.
@@ -328,6 +332,16 @@ export class PositionManager {
     const ema3 =
       input.ema3 != null && Number.isFinite(input.ema3) && input.ema3 > 0
         ? Number(input.ema3)
+        : null;
+    const ema1 =
+      input.ema1 != null && Number.isFinite(input.ema1) ? Number(input.ema1) : null;
+    const ema1Prev =
+      input.ema1_prev != null && Number.isFinite(input.ema1_prev)
+        ? Number(input.ema1_prev)
+        : null;
+    const ema3Prev =
+      input.ema3_prev != null && Number.isFinite(input.ema3_prev)
+        ? Number(input.ema3_prev)
         : null;
     const minStopDist = input.min_stop_distance ?? quote.min_stop_distance ?? null;
     const allowClose = input.allow_close !== false;
@@ -533,8 +547,21 @@ export class PositionManager {
         }
       }
 
-      // VS-System EMA_TICK: soft CLOSE when price edges through EMA3 opposite side
+      // VS-System EMA_TICK: soft CLOSE on EMA1×EMA3 opposite cross or price-through EMA3
       if (ema3 != null) {
+        const cross =
+          allowClose &&
+          ema1 != null &&
+          ema1Prev != null &&
+          ema3Prev != null
+            ? ema13CrossExit({
+                side: pos.side,
+                ema1,
+                ema3,
+                ema1Prev,
+                ema3Prev,
+              })
+            : { exit: false, reason: '' };
         const thru = allowClose
           ? ema3PriceThroughExit({
               side: pos.side,
@@ -544,11 +571,16 @@ export class PositionManager {
             })
           : { exit: false, reason: '' };
         pos.ema3_side = ema3PriceSide(mark, ema3);
-        if (thru.exit) {
+        const exitHit = cross.exit
+          ? cross
+          : thru.exit
+            ? thru
+            : { exit: false, reason: '' };
+        if (exitHit.exit) {
           if (await this.softCloseRequiresSlBlocked(broker, pos)) {
             close_failed.push({
               position_id: pos.position_id,
-              exit_reason: thru.reason,
+              exit_reason: exitHit.reason,
               detail: 'close_requires_sl',
             });
           } else {
@@ -584,7 +616,7 @@ export class PositionManager {
                 mfe: pos.mfe,
                 r_multiple: 0,
                 hold_ms: heldMs,
-                exit_reason: thru.reason,
+                exit_reason: exitHit.reason,
               };
               pipeline.recordTradeClose(pos.opportunity_id, pos.decision, outcome, {
                 epic: pos.epic,
@@ -600,8 +632,8 @@ export class PositionManager {
             }
             close_failed.push({
               position_id: pos.position_id,
-              exit_reason: thru.reason,
-              detail: closeRes.detail || 'ema3_price_through_close_failed',
+              exit_reason: exitHit.reason,
+              detail: closeRes.detail || 'ema_tick_close_failed',
             });
           }
         }

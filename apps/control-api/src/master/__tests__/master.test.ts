@@ -355,6 +355,88 @@ describe('VS MASTER EMA3 trail manage', () => {
     expect(r.closed.some((c) => c.reason === 'EMA3_PRICE_THROUGH')).toBe(true);
     expect(pm.get(placed.position_id!)).toBeNull();
   });
+
+  it('BUY soft-closes on EMA1×EMA3 structural cross down', async () => {
+    const { ema13CrossExit } = await import('../analysis.js');
+    expect(
+      ema13CrossExit({
+        side: 'BUY',
+        ema1Prev: 4412,
+        ema3Prev: 4410,
+        ema1: 4408,
+        ema3: 4410,
+      }).reason
+    ).toBe('EMA13_CROSS_DOWN');
+
+    const { PaperBroker } = await import('../broker.js');
+    const { PositionManager } = await import('../positionManager.js');
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    broker.setQuote({
+      bid: 4412,
+      ask: 4412.4,
+      mid: 4412.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'ema13-cross-bbbbbbbbbb',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: entry - 20,
+      profit_level: entry + 40,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-ema13',
+      intent_id: 'ema13-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry,
+      stop_loss: entry - 20,
+      take_profit: entry + 40,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: analyzeBars(barsTrendUp(), 0.4),
+        expectancy: null,
+      },
+    });
+    // Price still above EMA3 so price-through alone would not fire; structural cross does
+    const r = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: 4411,
+        ask: 4411.4,
+        mid: 4411.2,
+        spread: 0.4,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      ema3: 4410,
+      ema1: 4408,
+      ema1_prev: 4412,
+      ema3_prev: 4410,
+      scalp_pct_chase: false,
+      breakeven_progress: 0,
+      max_hold_ms: 0,
+      allow_close: true,
+    });
+    expect(r.closed.some((c) => c.reason === 'EMA13_CROSS_DOWN')).toBe(true);
+    expect(pm.get(placed.position_id!)).toBeNull();
+  });
 });
 
 describe('VS MASTER decision + risk', () => {
