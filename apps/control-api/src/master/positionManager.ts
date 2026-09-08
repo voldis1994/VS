@@ -19,6 +19,7 @@ import {
   capitalSafeBreakEvenStop,
   decideSoftTrailArm,
   resolveCloseMoneyPnl,
+  resolveCloseExitFill,
   resolveFloatingMoneyPnl,
   applyCloseFees,
   softTrailDistancePrice,
@@ -435,10 +436,13 @@ export class PositionManager {
             continue;
           }
           const mark = protectiveMark(pos.side, quote);
-          const fill =
-            closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
-              ? Number(closeRes.fill_price)
-              : mark;
+          const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
+          const { exit: fill } = resolveCloseExitFill({
+            fill_price: closeRes.fill_price,
+            mark,
+            entry: pos.entry,
+            capitalLive,
+          });
           const { pnl, from_broker } = resolveCloseMoneyPnl({
             side: pos.side,
             entry: pos.entry,
@@ -506,10 +510,13 @@ export class PositionManager {
           });
           continue;
         }
-        const fill =
-          closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
-            ? Number(closeRes.fill_price)
-            : mark;
+        const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
+        const { exit: fill } = resolveCloseExitFill({
+          fill_price: closeRes.fill_price,
+          mark,
+          entry: pos.entry,
+          capitalLive,
+        });
         const { pnl, pnl_pts: pnlPts, from_broker } = resolveCloseMoneyPnl({
           side: pos.side,
           entry: pos.entry,
@@ -606,10 +613,13 @@ export class PositionManager {
             } else {
               const closeRes = await broker.closePosition(pos.position_id);
               if (closeRes.ok) {
-                const fill =
-                  closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
-                    ? Number(closeRes.fill_price)
-                    : mark;
+                const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
+                const { exit: fill } = resolveCloseExitFill({
+                  fill_price: closeRes.fill_price,
+                  mark,
+                  entry: pos.entry,
+                  capitalLive,
+                });
                 const { pnl, from_broker } = resolveCloseMoneyPnl({
                   side: pos.side,
                   entry: pos.entry,
@@ -700,10 +710,13 @@ export class PositionManager {
           } else {
             const closeRes = await broker.closePosition(pos.position_id);
             if (closeRes.ok) {
-              const fill =
-                closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
-                  ? Number(closeRes.fill_price)
-                  : mark;
+              const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
+              const { exit: fill } = resolveCloseExitFill({
+                fill_price: closeRes.fill_price,
+                mark,
+                entry: pos.entry,
+                capitalLive,
+              });
               const { pnl, from_broker } = resolveCloseMoneyPnl({
                 side: pos.side,
                 entry: pos.entry,
@@ -803,10 +816,13 @@ export class PositionManager {
               size: partial.close_size,
             });
             if (closeRes.ok) {
-              const fill =
-                closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
-                  ? Number(closeRes.fill_price)
-                  : mark;
+              const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
+              const { exit: fill } = resolveCloseExitFill({
+                fill_price: closeRes.fill_price,
+                mark,
+                entry: pos.entry,
+                capitalLive,
+              });
               const rem =
                 closeRes.remaining_size != null && Number.isFinite(closeRes.remaining_size)
                   ? Number(closeRes.remaining_size)
@@ -1000,13 +1016,17 @@ export class PositionManager {
         continue;
       }
 
-      const brokerFill =
-        closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
-          ? Number(closeRes.fill_price)
-          : null;
-      const exit =
-        brokerFill ??
-        protectiveFillPrice(pos, quote, protective?.reason ?? null);
+      const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
+      const hardReason = protective?.reason ?? null;
+      const { exit } = resolveCloseExitFill({
+        fill_price: closeRes.fill_price,
+        mark,
+        entry: pos.entry,
+        capitalLive,
+        hard_reason: hardReason,
+        stop_loss: pos.stop_loss,
+        take_profit: pos.take_profit,
+      });
       const { pnl, pnl_pts: pnlPts, from_broker } = resolveCloseMoneyPnl({
         side: pos.side,
         entry: pos.entry,
@@ -1121,10 +1141,15 @@ export class PositionManager {
         break;
       }
 
-      const fill =
-        closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
-          ? Number(closeRes.fill_price)
-          : mark;
+      const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
+      const { exit: fill } = resolveCloseExitFill({
+        fill_price: closeRes.fill_price,
+        mark,
+        entry: pos.entry,
+        capitalLive,
+        hard_reason: 'TP_HIT',
+        take_profit: level.price,
+      });
       const rem =
         closeRes.remaining_size != null && Number.isFinite(closeRes.remaining_size)
           ? Number(closeRes.remaining_size)
@@ -1791,6 +1816,8 @@ export class PositionManager {
       side: Side;
       size: number;
       open_level: number;
+      /** false = provisional mid — must not overwrite proven entry */
+      open_level_proven?: boolean;
       stop_level?: number | null;
       profit_level?: number | null;
       upl?: number | null;
@@ -1853,9 +1880,10 @@ export class PositionManager {
         if (bp.epic && String(bp.epic).trim()) {
           existing.epic = String(bp.epic).trim();
         }
-        // Reader _apply_status_position_to_state — always refresh entry from broker
-        // when open_level is real (never keep 0 / stale ACK Bid/Ask after recover).
+        // Refresh entry from venue-proven open_level only — provisional mid must
+        // not stomp a proven OPEN fill (Capital level-less list rows).
         if (
+          bp.open_level_proven !== false &&
           bp.open_level != null &&
           Number.isFinite(bp.open_level) &&
           bp.open_level > 0
@@ -1868,8 +1896,12 @@ export class PositionManager {
         }
         continue;
       }
-      // Orphan broker position — adopt only with a real entry (never entry=0)
-      if (!(bp.open_level > 0) || !Number.isFinite(bp.open_level)) {
+      // Orphan broker position — adopt only with venue-proven entry (never provisional mid)
+      if (
+        bp.open_level_proven === false ||
+        !(bp.open_level > 0) ||
+        !Number.isFinite(bp.open_level)
+      ) {
         continue;
       }
       const recoverId = stableRecoverUuid(bp.position_id);

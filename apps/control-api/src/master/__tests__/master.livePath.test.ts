@@ -1533,6 +1533,53 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(closed.fill_pnl).toBe(-1.25);
   });
 
+  it('Capital closed_gone without fill_level does not journal live mark as exit', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-nofillext' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4499,
+        ask: 4499.4,
+        mid: 4499.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({ ok: true, positions: [], detail: '0' }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({
+        ok: true,
+        deal_reference: 'nofill-ref',
+        detail: 'submitted',
+      }),
+      confirm: async () => ({
+        ok: false,
+        closed_gone: true,
+        deal_id: 'deal-nofillext',
+        // no fill_level — broker returns null fill
+        profit: -12.5,
+        detail: 'confirm_closed_gone:DELETED',
+      }),
+    });
+    await broker.connect();
+    const closed = await broker.closePosition('deal-nofillext');
+    expect(closed.ok).toBe(true);
+    expect(closed.fill_price == null || !(closed.fill_price > 0)).toBe(true);
+    expect(closed.fill_pnl).toBe(-12.5);
+
+    const { resolveCloseExitFill } = await import('../moneyExit.js');
+    const { exit, fill_proven } = resolveCloseExitFill({
+      fill_price: closed.fill_price,
+      mark: 4499,
+      entry: 4410.55,
+      capitalLive: true,
+    });
+    expect(fill_proven).toBe(false);
+    expect(exit).toBe(4410.55); // entry placeholder — not live mark
+    expect(exit).not.toBe(4499);
+  });
+
   it('closed_gone DELETED still debounces empty list (flake reopen refuses)', async () => {
     process.env.MASTER_CONFIRM_FAST = 'true';
     let lists = 0;

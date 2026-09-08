@@ -41,6 +41,7 @@ import { evaluateRisk } from './risk.js';
 import { setupKey } from './decision.js';
 import {
   resolveCloseMoneyPnl,
+  resolveCloseExitFill,
   resolveFloatingMoneyPnl,
   applyCloseFees,
   usableBrokerUpl,
@@ -342,10 +343,13 @@ class MasterRuntime {
     if (!closeRes.ok) {
       return { ok: false, detail: closeRes.detail || 'close_failed' };
     }
-    const fill =
-      closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
-        ? Number(closeRes.fill_price)
-        : mark;
+    const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
+    const { exit: fill, fill_proven } = resolveCloseExitFill({
+      fill_price: closeRes.fill_price,
+      mark,
+      entry: pos.entry,
+      capitalLive,
+    });
     const instrument = specForEpic(pos.epic);
     const resolved = resolveCloseMoneyPnl({
       side: pos.side,
@@ -377,7 +381,7 @@ class MasterRuntime {
       volume: pos.size,
       pnl: priced.pnl,
       fees: priced.fees,
-      slippage: Math.abs(fill - quote.mid),
+      slippage: fill_proven ? Math.abs(fill - quote.mid) : 0,
       mae: pos.mae,
       mfe: pos.mfe,
       r_multiple: resolved.pnl_pts / riskDist,
@@ -2024,6 +2028,7 @@ class MasterRuntime {
         {
           opened_at?: string | null;
           open_level?: number | null;
+          open_level_proven?: boolean;
           stop_level?: number | null;
           profit_level?: number | null;
           side?: string | null;
@@ -2045,6 +2050,7 @@ class MasterRuntime {
                 {
                   opened_at: p.opened_at,
                   open_level: p.open_level,
+                  open_level_proven: p.open_level_proven,
                   stop_level: p.stop_level,
                   profit_level: p.profit_level,
                   side: p.side,
@@ -2089,10 +2095,12 @@ class MasterRuntime {
           presenceIds.has(row.ticket) ||
           (capitalListUnproven && this.broker instanceof CapitalBroker);
         const statusOpen =
-          status?.open_level != null &&
-          Number.isFinite(status.open_level) &&
-          status.open_level > 0
-            ? Number(status.open_level)
+          status != null && status.open_level_proven !== false
+            ? status.open_level != null &&
+              Number.isFinite(status.open_level) &&
+              status.open_level > 0
+              ? Number(status.open_level)
+              : null
             : null;
         const ackFill =
           row.fill_price != null &&
@@ -2100,9 +2108,9 @@ class MasterRuntime {
           row.fill_price > 0
             ? Number(row.fill_price)
             : null;
-        // Prefer broker OrderOpenPrice (Reader status entry); never invent 0
-        let entry = statusOpen ?? ackFill;
-        // Capital level-less live deal (presence_ids only) — provisional mid for attach/book
+        // Prefer proven ack fill, then venue-proven list open — never provisional over ack
+        let entry = ackFill ?? statusOpen;
+        // Capital level-less live deal — provisional mid only when no proven fill
         if (entry == null && presentOnBroker && this.broker instanceof CapitalBroker) {
           try {
             const q = await this.broker.getQuote(row.epic || this.epic);

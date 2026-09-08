@@ -169,6 +169,7 @@ export async function syncPositionsWithBroker(
       side: p.side,
       size: p.size,
       open_level: p.open_level,
+      open_level_proven: p.open_level_proven,
       stop_level: p.stop_level,
       profit_level: p.profit_level,
       upl: p.upl,
@@ -223,7 +224,15 @@ export async function syncPositionsWithBroker(
       // Soft safety when still naked (including after intended reject this tick)
       if (bp.stop_level != null) continue;
       if (managed.stop_loss != null) continue;
-      const stop = safetyStopLevel(bp.side, bp.open_level);
+      // Prefer local proven entry — never attach safety geometry from provisional mid
+      const safetyAnchor =
+        managed.entry > 0 && Number.isFinite(managed.entry)
+          ? managed.entry
+          : bp.open_level_proven !== false
+            ? bp.open_level
+            : null;
+      if (safetyAnchor == null || !(safetyAnchor > 0)) continue;
+      const stop = safetyStopLevel(bp.side, safetyAnchor);
       const soft = await broker.modifyPosition({
         position_id: bp.position_id,
         stop_level: stop,

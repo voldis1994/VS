@@ -73,6 +73,49 @@ export function usableBrokerUpl(upl: number | null | undefined): number | null {
   return Number(upl);
 }
 
+/**
+ * Resolve journal exit price after CLOSE.
+ * Capital LIVE: never forge live bid/ask as fill — prefer confirm fill, then
+ * hard STOP/TP level, else entry placeholder (PnL from fill_pnl when present).
+ */
+export function resolveCloseExitFill(input: {
+  fill_price?: number | null;
+  mark: number;
+  entry: number;
+  capitalLive: boolean;
+  hard_reason?: string | null;
+  stop_loss?: number | null;
+  take_profit?: number | null;
+}): { exit: number; fill_proven: boolean } {
+  if (
+    input.fill_price != null &&
+    Number.isFinite(input.fill_price) &&
+    input.fill_price > 0
+  ) {
+    return { exit: Number(input.fill_price), fill_proven: true };
+  }
+  if (input.capitalLive) {
+    if (
+      input.hard_reason === 'STOP_HIT' &&
+      input.stop_loss != null &&
+      Number.isFinite(input.stop_loss) &&
+      input.stop_loss > 0
+    ) {
+      return { exit: Number(input.stop_loss), fill_proven: true };
+    }
+    if (
+      input.hard_reason === 'TP_HIT' &&
+      input.take_profit != null &&
+      Number.isFinite(input.take_profit) &&
+      input.take_profit > 0
+    ) {
+      return { exit: Number(input.take_profit), fill_proven: true };
+    }
+    return { exit: input.entry, fill_proven: false };
+  }
+  return { exit: input.mark, fill_proven: false };
+}
+
 /** Round-trip commission model (replay default 0.05 / lot). Override via MASTER_COMMISSION_PER_LOT. */
 export function estimateTradeFees(volume: number): number {
   const raw = Number(process.env.MASTER_COMMISSION_PER_LOT ?? 0.05);

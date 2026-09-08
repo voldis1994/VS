@@ -617,4 +617,123 @@ describe('VS MASTER recovery SL + trail', () => {
     expect(pm.get('deal-intend')!.stop_loss).toBe(4395);
     expect(pm.get('deal-intend')!.take_profit).toBe(4425);
   });
+
+  it('provisional open_level does not stomp proven entry or adopt orphan', async () => {
+    const pm = new PositionManager();
+    pm.register({
+      position_id: 'deal-proven',
+      opportunity_id: 'opp-p',
+      intent_id: 'i-p',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4410.55,
+      stop_loss: 4400,
+      take_profit: null,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: { regime: 'TREND', market_state: 't' } as never,
+        expectancy: null,
+      },
+    });
+    // Level-less list invents mid — must keep proven entry
+    pm.reconcileFromBroker([
+      {
+        position_id: 'deal-proven',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 0.1,
+        open_level: 4499,
+        open_level_proven: false,
+        stop_level: 4400,
+        profit_level: null,
+        upl: null,
+      },
+      {
+        position_id: 'orphan-prov',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 0.1,
+        open_level: 4498,
+        open_level_proven: false,
+        stop_level: null,
+        profit_level: null,
+        upl: null,
+      },
+    ]);
+    expect(pm.get('deal-proven')!.entry).toBe(4410.55);
+    expect(pm.get('orphan-prov')).toBeFalsy();
+  });
+
+  it('safety SL uses local entry when list open_level is provisional', async () => {
+    const pm = new PositionManager();
+    pm.register({
+      position_id: 'deal-safe',
+      opportunity_id: 'opp-s',
+      intent_id: 'i-s',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4410,
+      stop_loss: null,
+      take_profit: null,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: { regime: 'TREND', market_state: 't' } as never,
+        expectancy: null,
+      },
+    });
+    let seenStop: number | null = null;
+    const broker = {
+      name: 'CAPITAL',
+      paper: false,
+      async connect() {
+        return { ok: true, detail: 'ok' };
+      },
+      async listOpenPositions() {
+        return {
+          ok: true,
+          positions: [
+            {
+              position_id: 'deal-safe',
+              epic: 'GOLD',
+              side: 'BUY' as const,
+              size: 0.1,
+              open_level: 4499,
+              open_level_proven: false,
+              stop_level: null,
+              profit_level: null,
+              upl: null,
+            },
+          ],
+          presence_ids: ['deal-safe'],
+          detail: '1',
+        };
+      },
+      async closePosition() {
+        return { ok: false, detail: 'n/a' };
+      },
+      async modifyPosition(input: { stop_level?: number }) {
+        seenStop = input.stop_level ?? null;
+        return { ok: true, detail: 'ok' };
+      },
+    };
+    const sync = await syncPositionsWithBroker(pm, broker as any, 'GOLD');
+    expect(sync.safety_sl_attached).toBe(1);
+    const expected = safetyStopLevel('BUY', 4410);
+    expect(seenStop).toBeCloseTo(expected, 5);
+    expect(pm.get('deal-safe')!.entry).toBe(4410);
+  });
 });
