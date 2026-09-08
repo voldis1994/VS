@@ -401,6 +401,38 @@ describe('VS MASTER MT4 file bridge', () => {
     }
   });
 
+  it('listOpenPositions drops missing/zero open_level (no invent entry=0)', async () => {
+    const prev = process.env.MASTER_MT4_STATUS_STALE_MS;
+    process.env.MASTER_MT4_STATUS_STALE_MS = '60000';
+    try {
+      const root = mkdtempSync(join(tmpdir(), 'vs-mt4-ol-'));
+      const broker = new Mt4FileBroker(root);
+      await broker.connect();
+      mkdirSync(join(root, 'status'), { recursive: true });
+      writeFileSync(
+        join(root, 'status', 'latest.json'),
+        JSON.stringify({
+          positions: [
+            { ticket: 1, symbol: 'XAUUSD', side: 'BUY', lot: 0.1, open: 4400.5 },
+            { ticket: 2, symbol: 'XAUUSD', side: 'BUY', lot: 0.1, open: null },
+            { ticket: 3, symbol: 'XAUUSD', side: 'SELL', lot: 0.1, open: 0 },
+            { ticket: 4, symbol: 'XAUUSD', side: 'BUY', lot: 0.1 },
+          ],
+          equity: 10000,
+          balance: 10000,
+        })
+      );
+      const listed = await broker.listOpenPositions('GOLD');
+      expect(listed.ok).toBe(true);
+      expect(listed.positions).toHaveLength(1);
+      expect(listed.positions[0]!.position_id).toBe('1');
+      expect(listed.positions[0]!.open_level).toBeCloseTo(4400.5, 5);
+    } finally {
+      if (prev === undefined) delete process.env.MASTER_MT4_STATUS_STALE_MS;
+      else process.env.MASTER_MT4_STATUS_STALE_MS = prev;
+    }
+  });
+
   it('listOpenPositions fails closed on stale status file', async () => {
     const prev = process.env.MASTER_MT4_STATUS_STALE_MS;
     process.env.MASTER_MT4_STATUS_STALE_MS = '50';

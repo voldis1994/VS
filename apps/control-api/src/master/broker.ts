@@ -1780,29 +1780,39 @@ export class Mt4FileBroker implements MasterBroker {
     const s = st.data;
     const raw = Array.isArray(s?.positions) ? s.positions : [];
     const positions = raw
-      .map((p: any) => ({
-        position_id: String(p.ticket ?? p.Ticket ?? ''),
-        epic: String(p.symbol ?? p.Symbol ?? ''),
-        side: String(p.side || p.type || '').toUpperCase().includes('SELL')
-          ? ('SELL' as const)
-          : ('BUY' as const),
-        size: Number(p.lot ?? p.Lots ?? 0),
-        open_level: Number(p.open ?? p.OpenPrice ?? 0),
-        stop_level: numOrNull(p.sl ?? p.SL),
-        profit_level: numOrNull(p.tp ?? p.TP),
-        upl: numOrNull(p.profit ?? p.Profit),
-        opened_at: (() => {
-          const rawT = p.open_time ?? p.OpenTime ?? p.time ?? p.Time ?? null;
-          if (rawT == null || rawT === '') return null;
-          if (typeof rawT === 'number' && Number.isFinite(rawT)) {
-            const ms = rawT < 1e12 ? rawT * 1000 : rawT;
-            return new Date(ms).toISOString();
-          }
-          const d = new Date(String(rawT));
-          return Number.isFinite(d.getTime()) ? d.toISOString() : null;
-        })(),
-      }))
-      .filter((p: BrokerPosition) => p.position_id && (!epic || epicsMatch(p.epic, epic)));
+      .map((p: any) => {
+        const openRaw = numOrNull(p.open ?? p.OpenPrice);
+        return {
+          position_id: String(p.ticket ?? p.Ticket ?? ''),
+          epic: String(p.symbol ?? p.Symbol ?? ''),
+          side: String(p.side || p.type || '').toUpperCase().includes('SELL')
+            ? ('SELL' as const)
+            : ('BUY' as const),
+          size: Number(p.lot ?? p.Lots ?? 0),
+          // Never invent 0 — orphan adopt must see missing entry as skip
+          open_level: openRaw != null && openRaw > 0 ? openRaw : Number.NaN,
+          stop_level: numOrNull(p.sl ?? p.SL),
+          profit_level: numOrNull(p.tp ?? p.TP),
+          upl: numOrNull(p.profit ?? p.Profit),
+          opened_at: (() => {
+            const rawT = p.open_time ?? p.OpenTime ?? p.time ?? p.Time ?? null;
+            if (rawT == null || rawT === '') return null;
+            if (typeof rawT === 'number' && Number.isFinite(rawT)) {
+              const ms = rawT < 1e12 ? rawT * 1000 : rawT;
+              return new Date(ms).toISOString();
+            }
+            const d = new Date(String(rawT));
+            return Number.isFinite(d.getTime()) ? d.toISOString() : null;
+          })(),
+        };
+      })
+      .filter(
+        (p: BrokerPosition) =>
+          p.position_id &&
+          Number.isFinite(p.open_level) &&
+          p.open_level > 0 &&
+          (!epic || epicsMatch(p.epic, epic))
+      );
     return { ok: true, positions };
   }
 
