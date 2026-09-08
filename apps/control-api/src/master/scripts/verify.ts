@@ -89,6 +89,22 @@ async function main() {
     });
   }
 
+  // 3b) Paper restart continuity — boot hydrate + recover (no forged-empty book)
+  {
+    const r = run('npm', ['run', 'master:restart-check'], 60_000);
+    const demo = readJson(join(artifactDir, 'vs_master_restart_continuity.json'));
+    const ok = r.ok && demo?.status === 'PASS_RESTART_CONTINUITY';
+    checks.push({
+      id: 'paper_restart_continuity',
+      requirement:
+        'Paper restart: hydrateBookFromDisk restores opens/journal; recover reconciles',
+      ok,
+      detail: demo
+        ? `${demo.status} hydrate_pos=${demo.hydrate?.positions} exit=${demo.hydrate?.last_exit_reason} pnl=${demo.hydrate?.daily_pnl} recover_pos=${demo.recover?.positions}`
+        : r.out.slice(-500),
+    });
+  }
+
   // 4) LIVE Capital smoke (may SKIP without env OR Brokers desk creds — recorded honestly)
   {
     const r = run('npm', ['run', 'master:live-smoke'], 60_000);
@@ -169,10 +185,12 @@ async function main() {
       'src/master/mt4/VS_MASTER.mq4',
       'src/master/persist.ts',
       'src/master/filePersist.ts',
+      'src/master/runtimeGates.ts',
       'src/master/liveFeed.ts',
       'src/master/filters.ts',
       'src/master/deskBridge.ts',
       'src/master/mt4Sim.ts',
+      'src/master/scripts/restartContinuity.ts',
       'src/routes/master.ts',
       'src/db/migrations/011_master_journal.sql',
       '../dashboard/src/pages/MasterPage.tsx',
