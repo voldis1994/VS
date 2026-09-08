@@ -4638,6 +4638,75 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     const st = masterRuntime.status();
     expect(st.performance?.trades ?? 0).toBe(0);
     expect(masterRuntime.pipeline.expectancy.lookup('TREND:BUY')).toBeNull();
+    expect(st.traded).toBe(0);
+  });
+
+  it('Capital soft trail already_armed does not close when broker_upl unread', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const { PositionManager } = await import('../positionManager.js');
+    const pm = new PositionManager();
+    const closed: string[] = [];
+    const broker = {
+      name: 'CAPITAL',
+      paper: false,
+      async closePosition(id: string) {
+        closed.push(id);
+        return { ok: true, fill_price: 4415, fill_pnl: null, detail: 'closed' };
+      },
+      async modifyPosition() {
+        return { ok: true, detail: 'ok' };
+      },
+      async listOpenPositions() {
+        return { ok: true, positions: [], detail: '0' };
+      },
+    } as any;
+    const pipe = new MasterPipeline('LIVE');
+    pm.register({
+      position_id: 'deal-soft-unread',
+      opportunity_id: 'opp-soft-unread',
+      intent_id: 'intent-soft-unread',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4410,
+      stop_loss: 4400,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        block_reason: null,
+        analysis: { regime: 'TREND' },
+        buy: { valid: true, filter_ok: true, score: 0.9 },
+        sell: { valid: false, filter_ok: false, score: 0 },
+      } as any,
+    });
+    const pos = pm.get('deal-soft-unread')!;
+    pos.broker_upl = null; // unread
+    pos.soft_trail_armed_at = new Date().toISOString();
+    pos.soft_trail_peak = 4430; // pullback vs mark 4415 would hit soft trail
+    const quote = {
+      bid: 4414.8,
+      ask: 4415.2,
+      mid: 4415,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    };
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote,
+      instrument_point_value: 1,
+      soft_trail_money_arm: 5,
+      soft_trail_pips: 0.3,
+      scalp_pct_chase: true,
+      allow_close: true,
+      close_all_profit: 100,
+      close_all_loss: 100,
+    });
+    expect(managed.closed.length).toBe(0);
+    expect(closed.length).toBe(0);
+    expect(pm.count()).toBe(1);
   });
 
   it('mid-session Capital getAccount fail zeros leftover equity', async () => {

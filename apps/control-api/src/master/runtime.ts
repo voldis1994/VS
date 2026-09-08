@@ -3139,10 +3139,7 @@ class MasterRuntime {
       performance: perf,
       monte_carlo: pnls.length ? monteCarlo(pnls, 200) : null,
       opportunities: this.pipeline.journal.opportunities.length,
-      traded: Math.max(
-        this.pipeline.journal.traded().length,
-        this.pipeline.journal.allCloseOutcomes().length
-      ),
+      traded: Math.max(tradedProven.length, provenSlices.length),
       blocked: this.pipeline.journal.blocked().length,
       health: this.cfg.kill_switch
         ? 'KILL_SWITCH'

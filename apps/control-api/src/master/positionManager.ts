@@ -486,11 +486,19 @@ export class PositionManager {
     }
 
     // Check- portfolio close-all on floating PnL (before per-position manage)
-    const floatPnl = floatingUnrealizedPnl(this.list(), quote, pv, capitalLive);
+    // Capital LIVE: refuse portfolio money exits while any open lacks venue UPL
+    const capitalFloatReady =
+      !capitalLive ||
+      this.list().every(
+        (p) => p.broker_upl != null && Number.isFinite(p.broker_upl)
+      );
+    const floatPnl = capitalFloatReady
+      ? floatingUnrealizedPnl(this.list(), quote, pv, capitalLive)
+      : 0;
     const portfolioReason =
-      closeAllProfit > 0 && floatPnl >= closeAllProfit
+      capitalFloatReady && closeAllProfit > 0 && floatPnl >= closeAllProfit
         ? `AUTO_PROFIT_${floatPnl.toFixed(2)}`
-        : closeAllLoss > 0 && floatPnl <= -closeAllLoss
+        : capitalFloatReady && closeAllLoss > 0 && floatPnl <= -closeAllLoss
           ? `AUTO_LOSS_${floatPnl.toFixed(2)}`
           : null;
     if (portfolioReason) {
@@ -590,7 +598,11 @@ export class PositionManager {
       }
 
       // VS-System soft trail — SCALPING manage only, after money arm (not Capital min-stop trail)
-      if (allowClose && softMoneyArm > 0 && scalpChase) {
+      // Capital LIVE: refuse soft-trail (incl. already_armed) when venue UPL unread
+      const capitalUplReady =
+        !capitalLive ||
+        (pos.broker_upl != null && Number.isFinite(pos.broker_upl));
+      if (allowClose && softMoneyArm > 0 && scalpChase && capitalUplReady) {
         const arm = decideSoftTrailArm({
           money_pnl: moneyPnl,
           money_arm: softMoneyArm,
