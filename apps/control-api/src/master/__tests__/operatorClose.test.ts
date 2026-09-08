@@ -273,9 +273,13 @@ describe('operator close + manage config', () => {
     const next = applyManageConfigPatch(DEFAULT_MASTER_CONFIG, {
       scalp_pct_chase: true,
       close_all_profit: 50,
+      require_positive_expectancy: true,
+      min_expectancy_samples: 5,
     });
     expect(next.scalp_pct_chase).toBe(true);
     expect(next.close_all_profit).toBe(50);
+    expect(next.require_positive_expectancy).toBe(true);
+    expect(next.min_expectancy_samples).toBe(5);
     expect(next.min_score).toBe(DEFAULT_MASTER_CONFIG.min_score);
     expect(SCALP_MANAGE_PRESET.scalp_lock_pct).toBe(0.2);
     expect(saveManageConfig({ scalp_pct_chase: false })).toBe(true);

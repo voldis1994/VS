@@ -19,22 +19,20 @@ export async function registerMasterRoutes(app: FastifyInstance) {
   app.get('/api/master/config', async () => ({
     ...masterRuntime.cfg,
     note: 'Scores are heuristic 0..1 — not calibrated trade probabilities. Primary LIVE venue = Capital.com API. LIVE requires MASTER_LIVE_ENABLED=true + CAPITAL_* env or Brokers-page Capital credentials.',
-    owns_pipeline: process.env.MASTER_OWNS_PIPELINE === 'true',
+    owns_pipeline: masterRuntime.ownsPipelineEffective(),
     live_enabled: process.env.MASTER_LIVE_ENABLED === 'true',
     manage: masterRuntime.status().manage,
   }));
 
   app.patch<{ Body: Record<string, unknown> }>('/api/master/config', async (req) => {
     const body = (req.body || {}) as Record<string, unknown>;
-    const { applyManageConfigPatch, pickManageConfig } = await import(
-      '../master/manageConfig.js'
-    );
-    const patched = applyManageConfigPatch(masterRuntime.cfg, body as never);
-    masterRuntime.cfg = patched;
-    const manage = pickManageConfig(patched);
-    const { saveManageConfig } = await import('../master/manageConfig.js');
-    saveManageConfig(manage);
-    return { ok: true, manage, cfg: masterRuntime.cfg, status: masterRuntime.status() };
+    masterRuntime.patchManageConfig(body as never);
+    return {
+      ok: true,
+      manage: masterRuntime.status().manage,
+      cfg: masterRuntime.cfg,
+      status: masterRuntime.status(),
+    };
   });
 
   app.post('/api/master/config/scalp-preset', async () => {
@@ -106,7 +104,10 @@ export async function registerMasterRoutes(app: FastifyInstance) {
         masterRuntime.cfg = { ...masterRuntime.cfg, ai_mode: body.ai_mode };
       }
       if (typeof body.owns_pipeline === 'boolean') {
-        masterRuntime.setOwnsPipeline(body.owns_pipeline);
+        const owns = masterRuntime.setOwnsPipeline(body.owns_pipeline);
+        if (!owns.ok) {
+          return { ok: false, detail: owns.detail, status: masterRuntime.status() };
+        }
       }
       return { ok: true, status: masterRuntime.status() };
     }
@@ -496,12 +497,17 @@ export async function registerMasterRoutes(app: FastifyInstance) {
   }>('/api/master/replay', async (req) => {
     const bars = req.body?.bars || [];
     if (bars.length < 40) return { ok: false, detail: 'need ≥40 bars for replay' };
+    const { pickManageConfig } = await import('../master/manageConfig.js');
     const result = await replayMaster({
       bars,
       spread: req.body?.spread,
       slippage_pts: req.body?.slippage_pts,
       commission: req.body?.commission,
-      cfg: { ...DEFAULT_MASTER_CONFIG, mode: 'BACKTEST' },
+      cfg: {
+        ...DEFAULT_MASTER_CONFIG,
+        ...pickManageConfig(masterRuntime.cfg),
+        mode: 'BACKTEST',
+      },
     });
     return {
       ok: true,

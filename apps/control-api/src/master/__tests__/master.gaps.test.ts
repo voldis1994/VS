@@ -1153,6 +1153,28 @@ describe('masterOwnsManageSafely', () => {
     }
   });
 
+  it('refuses Owns OFF while Capital LIVE is already running', () => {
+    const prevPref = masterRuntime.owns_pipeline_pref;
+    const prevRunning = masterRuntime.running;
+    const prevMode = masterRuntime.cfg.mode;
+    const prevBroker = masterRuntime.broker;
+    try {
+      masterRuntime.setOwnsPipeline(true);
+      masterRuntime.setMode('LIVE');
+      masterRuntime.running = true;
+      masterRuntime.broker = { name: 'CAPITAL', paper: false } as never;
+      const refused = masterRuntime.setOwnsPipeline(false);
+      expect(refused.ok).toBe(false);
+      if (!refused.ok) expect(refused.detail).toMatch(/Owns OFF refused/);
+      expect(masterRuntime.ownsPipelineEffective()).toBe(true);
+    } finally {
+      masterRuntime.owns_pipeline_pref = prevPref;
+      masterRuntime.running = prevRunning;
+      masterRuntime.cfg.mode = prevMode;
+      masterRuntime.broker = prevBroker;
+    }
+  });
+
   it('desk Capital structure seed marks capital_ohlc and clears seed pause', () => {
     const prevMode = masterRuntime.cfg.mode;
     const prevArmed = masterRuntime.entries_armed;
@@ -2953,6 +2975,139 @@ describe('partial_close persist + Check be_start', () => {
     expect(pm.get(placed.position_id!)!.native_trail_armed).toBeFalsy();
   });
 
+  it('Check be_start arms BE for SELL without take_profit', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    broker.setQuote({
+      bid: entry - 0.7,
+      ask: entry - 0.6,
+      mid: entry - 0.65,
+      spread: 0.1,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'be-start-sell-bbbbbbbbbbbb',
+      epic: 'GOLD',
+      side: 'SELL',
+      size: 1,
+      stop_level: entry + 2,
+      profit_level: undefined,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-be-start-sell',
+      intent_id: 'be-start-sell-1',
+      epic: 'GOLD',
+      side: 'SELL',
+      size: 1,
+      entry,
+      stop_loss: entry + 2,
+      take_profit: null,
+      decision: {
+        decision_id: 'd',
+        kind: 'SELL',
+        side: 'SELL',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis({ regime: 'TREND' }),
+        expectancy: null,
+      },
+    });
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: entry - 0.7,
+        ask: entry - 0.6,
+        mid: entry - 0.65,
+        spread: 0.1,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      breakeven_progress: 0,
+      be_start: 0.5,
+      breakeven_offset: 0.1,
+      max_hold_ms: 0,
+    });
+    expect(managed.closed.length).toBe(0);
+    expect(pm.get(placed.position_id!)!.stop_loss).toBeCloseTo(entry - 0.1, 6);
+  });
+
+  it('10%/20% scalp pct chase lowers SELL SL toward mark', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    const mark = entry - 40; // deep profit for SELL → chase SL = mark + 0.2*40
+    broker.setQuote({
+      bid: mark - 0.05,
+      ask: mark + 0.05,
+      mid: mark,
+      spread: 0.1,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'scalp-chase-sell-bbbbbbbb',
+      epic: 'GOLD',
+      side: 'SELL',
+      size: 0.1,
+      stop_level: entry + entry * 0.1,
+      profit_level: entry - 80,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-scalp-chase-sell',
+      intent_id: 'scalp-sell-1',
+      epic: 'GOLD',
+      side: 'SELL',
+      size: 0.1,
+      entry,
+      stop_loss: entry + entry * 0.1,
+      take_profit: entry - 80,
+      decision: {
+        decision_id: 'd',
+        kind: 'SELL',
+        side: 'SELL',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis(),
+        expectancy: null,
+      },
+    });
+    await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: mark - 0.05,
+        ask: mark + 0.05,
+        mid: mark,
+        spread: 0.1,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      scalp_pct_chase: true,
+      scalp_lock_pct: 0.2,
+      breakeven_progress: 0,
+      max_hold_ms: 0,
+      allow_close: false,
+    });
+    expect(pm.count()).toBe(1);
+    const sl = pm.get(placed.position_id!)!.stop_loss!;
+    expect(sl).toBeLessThan(entry);
+    expect(sl).toBeCloseTo(mark + 0.2 * (entry - mark), 1);
+    expect(pm.get(placed.position_id!)!.native_trail_armed).toBeFalsy();
+  });
+
   it('scalp_strict_entry blocks BUY into bearish last-5 candles', () => {
     const bearBars = [
       { open: 4410, high: 4411, low: 4405, close: 4406, ts_ms: 1 },
@@ -3603,5 +3758,94 @@ describe('cycle alerts block entries on stale tick', () => {
     );
     if (prev === undefined) delete process.env.MASTER_STATE_DIR;
     else process.env.MASTER_STATE_DIR = prev;
+  });
+});
+
+describe('expectancy gate + pure evaluate', () => {
+  it('PATCH-able require_positive_expectancy blocks negative EV setups', async () => {
+    const { decide, setupKey } = await import('../decision.js');
+    const a = baseAnalysis({
+      regime: 'TREND',
+      trend_dir: 'UP',
+      momentum_dir: 'UP',
+      trend_strength: 0.8,
+      structure_bias: 'BULLISH',
+      buy_pressure: 0.9,
+      sell_pressure: 0.1,
+      behavior_bull: 0.9,
+      momentum_score: 0.8,
+      atr: 2,
+      context_quality: 0.9,
+      impact_score: 0.8,
+    });
+    const q: Quote = {
+      bid: 4400,
+      ask: 4400.4,
+      mid: 4400.2,
+      spread: 0.4,
+      ts_ms: Date.now(),
+    };
+    const cfg = {
+      ...DEFAULT_MASTER_CONFIG,
+      min_score: 0.4,
+      block_off_hours: false,
+      require_positive_expectancy: true,
+      min_expectancy_samples: 3,
+    };
+    const key = setupKey(a, 'BUY');
+    const d = decide(a, q, cfg, (k) =>
+      k === key
+        ? {
+            setup_key: key,
+            samples: 5,
+            p_win: 0.2,
+            avg_win: 1,
+            avg_loss: 2,
+            costs: 0.1,
+            ev: -1.4,
+            positive: false,
+          }
+        : null
+    );
+    expect(d.kind).toBe('BLOCK');
+    expect(String(d.block_reason || '')).toMatch(/negative_expectancy/);
+  });
+
+  it('evaluate does not mutate last_ai_allow_close or live journal', async () => {
+    const prevAi = masterRuntime.last_ai_allow_close;
+    const prevDecision = masterRuntime.last_decision;
+    const prevRisk = masterRuntime.last_risk;
+    const oppBefore = masterRuntime.pipeline.journal.opportunities.length;
+    try {
+      masterRuntime.last_ai_allow_close = true;
+      const bars = Array.from({ length: 40 }, (_, i) => {
+        const o = 4400 + i * 0.1;
+        return {
+          open: o,
+          high: o + 1,
+          low: o - 1,
+          close: o + 0.5,
+          ts_ms: Date.UTC(2026, 8, 7, 12, i),
+        };
+      });
+      const q: Quote = {
+        bid: 4404,
+        ask: 4404.4,
+        mid: 4404.2,
+        spread: 0.4,
+        epic: 'GOLD',
+        ts_ms: Date.now(),
+      };
+      const preview = await masterRuntime.evaluate(bars, q);
+      expect(preview.decision).toBeTruthy();
+      expect(masterRuntime.last_ai_allow_close).toBe(true);
+      expect(masterRuntime.last_decision).toBe(prevDecision);
+      expect(masterRuntime.last_risk).toBe(prevRisk);
+      expect(masterRuntime.pipeline.journal.opportunities.length).toBe(oppBefore);
+    } finally {
+      masterRuntime.last_ai_allow_close = prevAi;
+      masterRuntime.last_decision = prevDecision;
+      masterRuntime.last_risk = prevRisk;
+    }
   });
 });

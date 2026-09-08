@@ -1,4 +1,5 @@
 /** Event-driven replay — same analysis/decision/risk code as production. No look-ahead. */
+import { setupKey } from './decision.js';
 import { computePerformance, monteCarlo } from './performance.js';
 import {
   DEFAULT_MASTER_CONFIG,
@@ -7,7 +8,6 @@ import {
   specForEpic,
 } from './pipeline.js';
 import type {
-  AccountSnapshot,
   Bar,
   MasterConfig,
   OpportunityRecord,
@@ -24,6 +24,8 @@ export type ReplayOptions = {
   slippage_pts?: number;
   commission?: number;
   latency_bars?: number;
+  /** Seed expectancy before replay (walk-forward OOS from IS trades). */
+  expectancy_seed?: Array<{ setup_key: string; outcome: TradeOutcome }>;
 };
 
 /**
@@ -43,6 +45,9 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
     mode: 'BACKTEST',
   };
   const pipe = new MasterPipeline('BACKTEST');
+  if (opts.expectancy_seed?.length) {
+    pipe.expectancy.hydrate(opts.expectancy_seed);
+  }
   const spread = opts.spread ?? 0.4;
   const slip = opts.slippage_pts ?? 0.1;
   const commission = opts.commission ?? 0.05;
@@ -62,6 +67,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
     sl: number;
     tp: number;
     open_i: number;
+    open_ts: number;
     mfe: number;
     mae: number;
   } | null = null;
@@ -78,15 +84,6 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
       spread,
       ts_ms: last.ts_ms ?? i * 60_000,
     };
-    const account: AccountSnapshot = {
-      equity,
-      balance: equity,
-      currency: 'GBP',
-      open_positions: open ? 1 : 0,
-      daily_pnl,
-      peak_equity: peak,
-      consecutive_losses,
-    };
 
     // Manage open position on current bar (no future bars)
     if (open) {
@@ -96,9 +93,33 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
         open.side === 'BUY' ? last.close - open.entry : open.entry - last.close;
       open.mfe = Math.max(open.mfe, fav);
       open.mae = Math.min(open.mae, fav);
+
+      // Live-parity manage knobs (subset): BE + scalp chase + time stop
+      if (cfg.be_start > 0 && open.mfe >= cfg.be_start) {
+        const be =
+          open.side === 'BUY'
+            ? open.entry + (cfg.breakeven_offset || 0)
+            : open.entry - (cfg.breakeven_offset || 0);
+        if (open.side === 'BUY' && be > open.sl) open.sl = be;
+        if (open.side === 'SELL' && be < open.sl) open.sl = be;
+      }
+      if (cfg.scalp_pct_chase && open.mfe > 0) {
+        const lock = cfg.scalp_lock_pct ?? 0.2;
+        if (open.side === 'BUY') {
+          const chase = last.close - lock * open.mfe;
+          if (chase > open.sl) open.sl = chase;
+        } else {
+          const chase = last.close + lock * open.mfe;
+          if (chase < open.sl) open.sl = chase;
+        }
+      }
+
       let exitPx: number | null = null;
       let reason = '';
-      if (open.side === 'BUY') {
+      if (cfg.max_hold_ms > 0 && quote.ts_ms - open.open_ts >= cfg.max_hold_ms) {
+        exitPx = last.close;
+        reason = 'TIME_STOP';
+      } else if (open.side === 'BUY') {
         if (lo <= open.sl) {
           exitPx = open.sl;
           reason = 'SL';
@@ -205,6 +226,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
           sl: cand.stop_loss,
           tp: cand.take_profit,
           open_i: fillIndex,
+          open_ts: fillBar.ts_ms ?? fillIndex * 60_000,
           mfe: 0,
           mae: 0,
         };
@@ -238,10 +260,12 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
       mae: Math.abs(Math.min(0, open.mae)),
       mfe: Math.max(0, open.mfe),
       r_multiple: pnl / risk,
-      hold_ms: 0,
+      hold_ms: (opts.bars.length - 1 - open.open_i) * 60_000,
       exit_reason: 'EOD',
     });
     equity += pnl;
+    equity_curve.push(equity);
+    open = null;
   }
 
   const traded = pipe.journal.traded();
@@ -254,7 +278,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
   };
 }
 
-/** Rolling walk-forward: train windows only used for expectancy; test is out-of-sample. */
+/** Rolling walk-forward: train windows seed expectancy; OOS honors require_positive_expectancy. */
 export async function walkForward(opts: {
   bars: Bar[];
   train: number;
@@ -278,18 +302,21 @@ export async function walkForward(opts: {
   for (let start = 0; start + train + test <= opts.bars.length; start += step) {
     const trainBars = opts.bars.slice(start, start + train);
     const testBars = opts.bars.slice(start + train - 25, start + train + test);
-    const is = await replayMaster({ bars: trainBars, cfg: { ...opts.cfg, require_positive_expectancy: false } });
-    // Seed OOS pipeline expectancy from IS trades only
-    const oosPipeCfg = { ...opts.cfg, require_positive_expectancy: false };
-    const oos = await replayMaster({ bars: testBars, cfg: oosPipeCfg });
-    // Re-run OOS with expectancy required using IS store manually
-    const seeded = new MasterPipeline('BACKTEST');
-    for (const t of is.opportunities) {
-      if (t.outcome && t.decision.side) {
-        const key = `${t.decision.side}|${t.decision.analysis.regime}|${t.decision.analysis.trend_dir}|${t.decision.analysis.session}`;
-        seeded.expectancy.record(key, t.outcome);
-      }
-    }
+    const is = await replayMaster({
+      bars: trainBars,
+      cfg: { ...opts.cfg, require_positive_expectancy: false },
+    });
+    const expectancy_seed = is.opportunities
+      .filter((t) => t.outcome && t.decision.side)
+      .map((t) => ({
+        setup_key: setupKey(t.decision.analysis, t.decision.side!),
+        outcome: t.outcome!,
+      }));
+    const oos = await replayMaster({
+      bars: testBars,
+      cfg: opts.cfg,
+      expectancy_seed,
+    });
     windows.push({
       train_from: start,
       train_to: start + train,
@@ -324,4 +351,3 @@ export async function abCompareAi(opts: ReplayOptions): Promise<{
     note: 'Empirical A/B on identical bars — heuristic AI advisory vs off. Not a profit claim.',
   };
 }
-

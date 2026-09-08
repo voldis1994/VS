@@ -123,6 +123,13 @@ type MasterStatus = {
     soft_trail_money_arm?: number;
     multi_tp_count?: number;
     breakeven_activation_money?: number;
+    require_positive_expectancy?: boolean;
+    min_expectancy_samples?: number;
+    be_start?: number;
+    min_score?: number;
+    daily_loss_limit?: number;
+    block_high_impact_news?: boolean;
+    block_off_hours?: boolean;
   };
 };
 
@@ -166,6 +173,7 @@ export function MasterPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [epicInput, setEpicInput] = useState('GOLD');
+  const [replayNote, setReplayNote] = useState<string | null>(null);
 
   const pushLog = useCallback((msg: string) => {
     const t = new Date().toISOString().slice(11, 19);
@@ -199,10 +207,20 @@ export function MasterPage() {
     setBusy(true);
     try {
       const r = await fn();
+      const detail =
+        r && typeof r === 'object' && 'detail' in r
+          ? String((r as { detail?: unknown }).detail || '')
+          : '';
+      const ok =
+        r && typeof r === 'object' && 'ok' in r
+          ? Boolean((r as { ok?: unknown }).ok)
+          : true;
       pushLog(`${label} ${JSON.stringify(r)}`);
+      if (!ok && detail) setError(detail);
       await refresh();
     } catch (e) {
       pushLog(`${label} error ${e instanceof Error ? e.message : String(e)}`);
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -809,6 +827,165 @@ export function MasterPage() {
             </div>
           </div>
         ))}
+      </div>
+
+      <h2 className="section-title">Manage config</h2>
+      <div className="card" style={{ marginBottom: 20, padding: 12 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+          <label style={{ fontSize: 12 }}>
+            min_score{' '}
+            <input
+              type="number"
+              step="0.05"
+              min={0}
+              max={1}
+              defaultValue={status?.manage?.min_score ?? 0.55}
+              id="cfg-min-score"
+              style={{ width: 64 }}
+            />
+          </label>
+          <label style={{ fontSize: 12 }}>
+            be_start{' '}
+            <input
+              type="number"
+              step="0.1"
+              min={0}
+              defaultValue={status?.manage?.be_start ?? 0}
+              id="cfg-be-start"
+              style={{ width: 64 }}
+            />
+          </label>
+          <label style={{ fontSize: 12 }}>
+            daily_loss_limit{' '}
+            <input
+              type="number"
+              step="10"
+              min={0}
+              defaultValue={status?.manage?.daily_loss_limit ?? 0}
+              id="cfg-daily-loss"
+              style={{ width: 72 }}
+            />
+          </label>
+          <label style={{ fontSize: 12 }}>
+            <input
+              type="checkbox"
+              id="cfg-exp-gate"
+              defaultChecked={!!status?.manage?.require_positive_expectancy}
+            />{' '}
+            require_positive_expectancy
+          </label>
+          <label style={{ fontSize: 12 }}>
+            min_samples{' '}
+            <input
+              type="number"
+              step="1"
+              min={1}
+              defaultValue={status?.manage?.min_expectancy_samples ?? 20}
+              id="cfg-exp-samples"
+              style={{ width: 56 }}
+            />
+          </label>
+          <label style={{ fontSize: 12 }}>
+            <input
+              type="checkbox"
+              id="cfg-news"
+              defaultChecked={status?.manage?.block_high_impact_news !== false}
+            />{' '}
+            block news
+          </label>
+          <label style={{ fontSize: 12 }}>
+            <input
+              type="checkbox"
+              id="cfg-hours"
+              defaultChecked={status?.manage?.block_off_hours !== false}
+            />{' '}
+            block off-hours
+          </label>
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            onClick={() =>
+              void act('patch-config', () => {
+                const num = (id: string) => {
+                  const el = document.getElementById(id) as HTMLInputElement | null;
+                  return el ? Number(el.value) : undefined;
+                };
+                const chk = (id: string) => {
+                  const el = document.getElementById(id) as HTMLInputElement | null;
+                  return !!el?.checked;
+                };
+                return apiFetch('/api/master/config', {
+                  method: 'PATCH',
+                  body: JSON.stringify({
+                    min_score: num('cfg-min-score'),
+                    be_start: num('cfg-be-start'),
+                    daily_loss_limit: num('cfg-daily-loss'),
+                    require_positive_expectancy: chk('cfg-exp-gate'),
+                    min_expectancy_samples: num('cfg-exp-samples'),
+                    block_high_impact_news: chk('cfg-news'),
+                    block_off_hours: chk('cfg-hours'),
+                  }),
+                });
+              })
+            }
+          >
+            Save manage knobs
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            onClick={() =>
+              void act('replay-status-bars', async () => {
+                const mid = status?.quote?.mid ?? 4400;
+                const bars = Array.from({ length: 80 }, (_, i) => {
+                  const o = mid - 40 + i * 0.5;
+                  return {
+                    open: o,
+                    high: o + 1.2,
+                    low: o - 0.8,
+                    close: o + 0.4,
+                    ts_ms: Date.now() - (80 - i) * 60_000,
+                  };
+                });
+                const r = await apiFetch<{
+                  ok?: boolean;
+                  detail?: string;
+                  performance?: { trades?: number; expectancy?: number; total_pnl?: number };
+                  traded?: number;
+                  equity_end?: number;
+                }>('/api/master/replay', {
+                  method: 'POST',
+                  body: JSON.stringify({ bars }),
+                });
+                setReplayNote(
+                  r.ok
+                    ? `replay trades=${r.traded ?? r.performance?.trades ?? 0} EV=${(
+                        r.performance?.expectancy ?? 0
+                      ).toFixed(3)} pnl=${(r.performance?.total_pnl ?? 0).toFixed(2)} end=${
+                        r.equity_end ?? '—'
+                      }`
+                    : r.detail || 'replay failed'
+                );
+                return r;
+              })
+            }
+          >
+            Replay (synthetic bars)
+          </button>
+        </div>
+        {replayNote && (
+          <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-secondary)' }}>
+            {replayNote}
+          </div>
+        )}
+        <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-secondary)' }}>
+          Live manage: scalp={String(!!status?.manage?.scalp_pct_chase)} softTrail=
+          {status?.manage?.soft_trail_money_arm ?? '—'} multiTP=
+          {status?.manage?.multi_tp_count ?? 0} expGate=
+          {String(!!status?.manage?.require_positive_expectancy)}
+        </div>
       </div>
 
       <h2 className="section-title">Open positions</h2>

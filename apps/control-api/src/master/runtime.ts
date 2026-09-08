@@ -637,10 +637,26 @@ class MasterRuntime {
     return result;
   }
 
-  /** Desk single-owner toggle — persists preference for restart. */
-  setOwnsPipeline(on: boolean) {
+  /**
+   * Desk single-owner toggle — persists preference for restart.
+   * Refuse Owns OFF while Capital LIVE is already running (dual-brain mid-session).
+   */
+  setOwnsPipeline(on: boolean): { ok: true } | { ok: false; detail: string } {
+    if (
+      !on &&
+      this.running &&
+      this.cfg.mode === 'LIVE' &&
+      this.capitalBrokerAttached()
+    ) {
+      return {
+        ok: false,
+        detail:
+          'Owns OFF refused — Capital LIVE is running (would dual-brain with Robot Desk). Stop MASTER first.',
+      };
+    }
     this.owns_pipeline_pref = on;
     saveOwnsPipelinePref(on);
+    return { ok: true };
   }
 
   ownsPipelineEffective(): boolean {
@@ -1237,12 +1253,17 @@ class MasterRuntime {
     }
   }
 
-  /** Pure evaluation for dashboard — does not send orders (same cycle as tick, no execute). */
+  /**
+   * Pure evaluation for dashboard — does not send orders and does not mutate
+   * live decision/risk/AI close gates or durable journal (preview must not veto soft exits).
+   */
   async evaluate(bars: Bar[], quote: Quote) {
-    this.last_bars = bars;
-    this.last_quote = quote;
     const instrument = this.resolveInstrument(this.broker, quote);
-    const cycle = await this.pipeline.runCycle({
+    const scratch = new MasterPipeline(this.cfg.mode);
+    // Share live EV store for gate preview — runCycle only looks up, never records
+    (scratch as { expectancy: MasterPipeline['expectancy'] }).expectancy =
+      this.pipeline.expectancy;
+    const cycle = await scratch.runCycle({
       bars,
       quote,
       account: {
@@ -1254,10 +1275,6 @@ class MasterRuntime {
       symbol_open: this.positions.countForEpic(this.epic),
       last_loss_ms: this.last_loss_ms,
     });
-    this.last_decision = cycle.decision;
-    this.last_risk = cycle.risk;
-    this.last_ai_allow_close = cycle.ai.allow_close !== false;
-    this.trackPersist('opportunity', persistOpportunity(cycle.opportunity));
     return {
       decision: cycle.decision,
       risk: cycle.risk,

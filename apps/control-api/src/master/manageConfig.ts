@@ -33,6 +33,8 @@ export type ManageConfigPatch = Partial<
     | 'min_score'
     | 'block_high_impact_news'
     | 'block_off_hours'
+    | 'require_positive_expectancy'
+    | 'min_expectancy_samples'
   >
 >;
 
@@ -61,6 +63,8 @@ const KEYS: (keyof ManageConfigPatch)[] = [
   'min_score',
   'block_high_impact_news',
   'block_off_hours',
+  'require_positive_expectancy',
+  'min_expectancy_samples',
 ];
 
 function stateDir(): string {
