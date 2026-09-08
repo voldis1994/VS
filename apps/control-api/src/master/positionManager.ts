@@ -1258,9 +1258,10 @@ export class PositionManager {
       pos.naked_recovery_level = null;
       return;
     }
-    // VS-System: after first widen fails, try native trailingStop while still naked
+    // VS-System: after first widen fails, try Capital native trailingStop while still naked
     // (flat/loss) so chart gets *some* protection when stopLevel keeps rejecting.
-    if (level >= 1) {
+    // MT4 EA has no native trail — skip (would only re-ACK same SL/TP).
+    if (level >= 1 && broker.supportsNativeTrailingStop) {
       const minD = effectiveMinStopDistance(pos.epic, minStopDist);
       const native = await this.brokerModify(
         broker,
@@ -1295,6 +1296,8 @@ export class PositionManager {
     opts: { lockPct: number; min_stop_distance?: number | null }
   ): Promise<void> {
     if (!broker.modifyPosition || pos.native_trail_armed) return;
+    // Capital-only — MT4 OrderModify has no trailingStop; ACK would falsely arm.
+    if (!broker.supportsNativeTrailingStop) return;
     const mark = protectiveMark(pos.side, quote);
     const fav = favorableMove(pos.side, pos.entry, mark);
     const minD = effectiveMinStopDistance(pos.epic, opts.min_stop_distance);

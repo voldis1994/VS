@@ -2005,6 +2005,9 @@ describe('partial_close persist + Check be_start', () => {
     // 20% lock: mark - 0.2*(mark-entry) = 4440 - 8 = 4432
     expect(sl).toBeGreaterThan(entry);
     expect(sl).toBeCloseTo(mark - 0.2 * (mark - entry), 1);
+    // Paper/MT4 have no Capital native trailingStop — must not falsely arm
+    expect(broker.supportsNativeTrailingStop).toBeFalsy();
+    expect(pm.get(placed.position_id!)!.native_trail_armed).toBeFalsy();
   });
 
   it('scalp_strict_entry blocks BUY into bearish last-5 candles', () => {

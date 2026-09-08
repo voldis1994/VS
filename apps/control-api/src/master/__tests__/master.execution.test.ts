@@ -880,6 +880,40 @@ describe('VS MASTER MT4 file bridge', () => {
     }
   });
 
+  it('MODIFY refuses trailingStop-only (no Capital native trail on MT4)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-no-native-'));
+    const sim = new Mt4BridgeSimulator(root);
+    sim.setQuote(4400, 4400.4);
+    sim.start(30);
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    expect(broker.supportsNativeTrailingStop).toBeFalsy();
+    try {
+      const placed = await broker.placeOrder({
+        intent_id: 'nonativetrailintent00000001',
+        epic: 'XAUUSD',
+        side: 'BUY',
+        size: 0.03,
+        stop_level: 4390,
+        profit_level: 4420,
+      });
+      expect(placed.ok).toBe(true);
+      const mod = await broker.modifyPosition!({
+        position_id: placed.position_id!,
+        trailing_stop: true,
+        stop_distance: 1.5,
+      } as { position_id: string; stop_level?: number; profit_level?: number });
+      expect(mod.ok).toBe(false);
+      expect(mod.detail).toMatch(/mt4_modify_requires_stop_or_profit_level/);
+      const opens = await broker.listOpenPositions('XAUUSD');
+      const hit = opens.positions.find((p) => p.position_id === placed.position_id);
+      expect(hit?.stop_level).toBe(4390);
+      expect(hit?.profit_level).toBe(4420);
+    } finally {
+      sim.stop();
+    }
+  });
+
   it('OPEN attach-or-fail closes when protective SL cannot be proven', async () => {
     const root = mkdtempSync(join(tmpdir(), 'vs-mt4-slattach-'));
     const sim = new Mt4BridgeSimulator(root);

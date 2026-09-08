@@ -79,6 +79,8 @@ describe('native Capital trailingStop modify', () => {
 describe('native trail arm on scalp chase', () => {
   it('arms native trailing_stop once in deep profit', async () => {
     const broker = new PaperBroker();
+    // Simulate Capital capability — real Paper/MT4 leave this unset
+    (broker as { supportsNativeTrailingStop?: boolean }).supportsNativeTrailingStop = true;
     await broker.connect();
     const entry = 4400;
     const mark = entry + 40;
@@ -176,6 +178,7 @@ describe('native trail arm on scalp chase', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const broker = new PaperBroker();
+      (broker as { supportsNativeTrailingStop?: boolean }).supportsNativeTrailingStop = true;
       await broker.connect();
       const entry = 4400;
       const mark = entry - 5; // flat/loss — profit trail path must not own this

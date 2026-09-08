@@ -134,6 +134,11 @@ export interface MasterBroker {
    * (Check- MT4 CLOSE always full-lots — partial would be unsafe).
    */
   readonly supportsPartialClose?: boolean;
+  /**
+   * Capital.com native trailingStop / stopDistance. MT4 EA has no native trail —
+   * only OrderModify(sl,tp). When false, skip arming native_trail_armed.
+   */
+  readonly supportsNativeTrailingStop?: boolean;
   connect(): Promise<{ ok: boolean; detail: string }>;
   getQuote(epic: string): Promise<BrokerQuote | null>;
   getAccount(): Promise<BrokerAccount | null>;
@@ -387,6 +392,7 @@ export class CapitalBroker implements MasterBroker {
   readonly name = 'CAPITAL';
   readonly paper = false;
   readonly supportsPartialClose = true;
+  readonly supportsNativeTrailingStop = true;
   private session: any = null;
   private processed = new Set<string>();
   /** VS-System: serialize all Capital REST for this broker instance */
@@ -2398,6 +2404,11 @@ export class Mt4FileBroker implements MasterBroker {
   }) {
     if (this.hasPendingCommand(['OPEN', 'CLOSE', 'MODIFY'])) {
       return { ok: false, detail: 'mt4_pending_control_command' };
+    }
+    // EA only understands sl/tp — refuse Capital-style trailingStop-only patches
+    // that would re-ACK the same levels and falsely arm native_trail.
+    if (input.stop_level == null && input.profit_level == null) {
+      return { ok: false, detail: 'mt4_modify_requires_stop_or_profit_level' };
     }
     // EA OrderModify always writes both SL and TP. Omitted legs must be filled from
     // live status — defaulting missing tp/sl to 0 wipes chart TP on SL-only trails.
