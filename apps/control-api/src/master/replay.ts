@@ -1,5 +1,13 @@
 /** Event-driven replay — same analysis/decision/risk code as production. No look-ahead. */
+import { decideBestOutcomeExit } from '../services/exitManage.js';
 import { setupKey } from './decision.js';
+import {
+  decideSoftTrailArm,
+  softTrailDistancePrice,
+  softTrailExitHit,
+  softTrailExitLevel,
+  updateSoftTrailPeak,
+} from './moneyExit.js';
 import { computePerformance, monteCarlo } from './performance.js';
 import {
   DEFAULT_MASTER_CONFIG,
@@ -7,6 +15,11 @@ import {
   MasterPipeline,
   specForEpic,
 } from './pipeline.js';
+import {
+  entrySetupFromRegime,
+  mapRegimeToPlaybook,
+  toDeskRegime,
+} from './positionManager.js';
 import type {
   Bar,
   MasterConfig,
@@ -70,9 +83,14 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
     open_ts: number;
     mfe: number;
     mae: number;
+    playbook: 'LONG' | 'SCALP' | 'FADE';
+    entry_setup: string;
+    soft_trail_armed: boolean;
+    soft_trail_peak: number | null;
   } | null = null;
 
   const equity_curve: number[] = [equity];
+  const pv = GOLD_SPEC.value_per_point_per_lot;
 
   for (let i = warmup; i < opts.bars.length; i++) {
     const visible = opts.bars.slice(0, i + 1);
@@ -89,12 +107,16 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
     if (open) {
       const hi = last.high;
       const lo = last.low;
+      const mark = last.close;
       const fav =
-        open.side === 'BUY' ? last.close - open.entry : open.entry - last.close;
+        open.side === 'BUY' ? mark - open.entry : open.entry - mark;
       open.mfe = Math.max(open.mfe, fav);
       open.mae = Math.min(open.mae, fav);
+      const moneyPnl = fav * open.volume * pv;
+      const peakRetention =
+        open.mfe > 1e-9 ? Math.max(0, Math.min(1, fav / open.mfe)) : null;
 
-      // Live-parity manage knobs (subset): BE + scalp chase + time stop
+      // Live-parity manage: BE + scalp chase + soft trail + BestOutcome + time stop
       if (cfg.be_start > 0 && open.mfe >= cfg.be_start) {
         const be =
           open.side === 'BUY'
@@ -106,34 +128,94 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
       if (cfg.scalp_pct_chase && open.mfe > 0) {
         const lock = cfg.scalp_lock_pct ?? 0.2;
         if (open.side === 'BUY') {
-          const chase = last.close - lock * open.mfe;
+          const chase = mark - lock * open.mfe;
           if (chase > open.sl) open.sl = chase;
         } else {
-          const chase = last.close + lock * open.mfe;
+          const chase = mark + lock * open.mfe;
           if (chase < open.sl) open.sl = chase;
+        }
+      }
+
+      const softArm = cfg.soft_trail_money_arm ?? 0;
+      if (softArm > 0 && cfg.scalp_pct_chase) {
+        const arm = decideSoftTrailArm({
+          money_pnl: moneyPnl,
+          money_arm: softArm,
+          already_armed: open.soft_trail_armed,
+          scalp_enabled: true,
+        });
+        if (arm.run) {
+          if (!open.soft_trail_armed) {
+            open.soft_trail_armed = true;
+            open.soft_trail_peak = mark;
+          } else {
+            open.soft_trail_peak = updateSoftTrailPeak(
+              open.side,
+              mark,
+              open.soft_trail_peak
+            );
+          }
         }
       }
 
       let exitPx: number | null = null;
       let reason = '';
-      if (cfg.max_hold_ms > 0 && quote.ts_ms - open.open_ts >= cfg.max_hold_ms) {
-        exitPx = last.close;
-        reason = 'TIME_STOP';
-      } else if (open.side === 'BUY') {
-        if (lo <= open.sl) {
-          exitPx = open.sl;
-          reason = 'SL';
-        } else if (hi >= open.tp) {
-          exitPx = open.tp;
-          reason = 'TP';
+      if (
+        open.soft_trail_armed &&
+        open.soft_trail_peak != null &&
+        Number.isFinite(open.soft_trail_peak)
+      ) {
+        const dist = softTrailDistancePrice('GOLD', cfg.soft_trail_pips ?? 0.3);
+        const exitLvl = softTrailExitLevel(open.side, open.soft_trail_peak, dist);
+        if (softTrailExitHit(open.side, mark, exitLvl)) {
+          exitPx = mark;
+          reason = 'SOFT_TRAIL';
         }
-      } else {
-        if (hi >= open.sl) {
-          exitPx = open.sl;
-          reason = 'SL';
-        } else if (lo <= open.tp) {
-          exitPx = open.tp;
-          reason = 'TP';
+      }
+      if (exitPx == null) {
+        const heldMs = Math.max(0, quote.ts_ms - open.open_ts);
+        const bo = decideBestOutcomeExit(
+          {
+            open_side: open.side,
+            entry_price: open.entry,
+            entry_at: new Date(Date.now() - heldMs).toISOString(),
+            mfe: open.mfe,
+            mae: Math.abs(Math.min(0, open.mae)),
+            peak_retention: peakRetention,
+            regime: toDeskRegime(
+              open.decision.analysis.regime,
+              open.decision.analysis
+            ),
+            playbook: open.playbook,
+            entry_setup: open.entry_setup,
+          },
+          mark
+        );
+        if (bo.exit) {
+          exitPx = mark;
+          reason = bo.reason || 'BEST_OUTCOME';
+        }
+      }
+      if (exitPx == null) {
+        if (cfg.max_hold_ms > 0 && quote.ts_ms - open.open_ts >= cfg.max_hold_ms) {
+          exitPx = mark;
+          reason = 'TIME_STOP';
+        } else if (open.side === 'BUY') {
+          if (lo <= open.sl) {
+            exitPx = open.sl;
+            reason = 'SL';
+          } else if (hi >= open.tp) {
+            exitPx = open.tp;
+            reason = 'TP';
+          }
+        } else {
+          if (hi >= open.sl) {
+            exitPx = open.sl;
+            reason = 'SL';
+          } else if (lo <= open.tp) {
+            exitPx = open.tp;
+            reason = 'TP';
+          }
         }
       }
       if (exitPx != null) {
@@ -229,6 +311,16 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
           open_ts: fillBar.ts_ms ?? fillIndex * 60_000,
           mfe: 0,
           mae: 0,
+          playbook: mapRegimeToPlaybook(
+            cycle.decision.analysis.regime,
+            cycle.decision.analysis
+          ),
+          entry_setup: entrySetupFromRegime(
+            cycle.decision.analysis.regime,
+            cycle.decision.analysis
+          ),
+          soft_trail_armed: false,
+          soft_trail_peak: null,
         };
         // skip ahead to fill bar index to avoid using future beyond fill for entry decision already taken
         i = fillIndex;

@@ -53,7 +53,15 @@ export async function syncPositionsWithBroker(
   manager: PositionManager,
   broker: MasterBroker,
   epic?: string,
-  debounce?: EmptyBrokerDebounce
+  debounce?: EmptyBrokerDebounce,
+  live?: {
+    live_regime?: string | null;
+    live_analysis?: {
+      regime?: string;
+      trend_dir?: string;
+      structure_bias?: string;
+    } | null;
+  }
 ): Promise<SyncReport> {
   const before = manager.count();
   const listed = await broker.listOpenPositions(epic);
@@ -185,6 +193,8 @@ export async function syncPositionsWithBroker(
     {
       ...(retainIds.size > 0 ? { retainIds } : {}),
       capitalLive: broker.name === 'CAPITAL' && !(broker as { paper?: boolean }).paper,
+      live_regime: live?.live_regime,
+      live_analysis: live?.live_analysis,
     }
   );
 

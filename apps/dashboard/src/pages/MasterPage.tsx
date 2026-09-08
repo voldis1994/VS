@@ -107,6 +107,8 @@ type MasterStatus = {
     block_reason: string | null;
     execution_detail: string | null;
     opportunity_id?: string | null;
+    buy_score?: number;
+    sell_score?: number;
   }>;
   recent_trades?: Array<{
     ts: string;
@@ -121,6 +123,7 @@ type MasterStatus = {
   manage?: {
     scalp_pct_chase?: boolean;
     soft_trail_money_arm?: number;
+    soft_trail_pips?: number;
     multi_tp_count?: number;
     breakeven_activation_money?: number;
     require_positive_expectancy?: boolean;
@@ -156,19 +159,30 @@ type JournalOpp = {
   id: string;
   epic: string;
   executed: boolean;
-  decision?: { kind?: string };
+  decision?: { kind?: string; side?: string };
   outcome?: {
     pnl: number;
     exit_reason: string;
     position_id?: string;
     pnl_proven?: boolean;
+    r_multiple?: number;
   };
+};
+
+type SetupEv = {
+  setup_key: string;
+  samples: number;
+  ev: number;
+  positive: boolean;
+  p_win?: number;
 };
 
 export function MasterPage() {
   const [status, setStatus] = useState<MasterStatus | null>(null);
   const [positions, setPositions] = useState<ManagedPos[]>([]);
   const [journal, setJournal] = useState<JournalOpp[]>([]);
+  const [blockedJournal, setBlockedJournal] = useState<JournalOpp[]>([]);
+  const [setupEv, setSetupEv] = useState<SetupEv[]>([]);
   const [log, setLog] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -185,12 +199,28 @@ export function MasterPage() {
       const [s, p, j] = await Promise.all([
         apiFetch<MasterStatus>('/api/master/status'),
         apiFetch<{ positions: ManagedPos[] }>('/api/master/positions'),
-        apiFetch<{ opportunities: JournalOpp[] }>('/api/master/journal'),
+        apiFetch<{
+          opportunities: JournalOpp[];
+          expectancy?: SetupEv[];
+        }>('/api/master/journal'),
       ]);
       setStatus(s);
       if (s.epic) setEpicInput(s.epic);
       setPositions(p.positions || []);
-      setJournal((j.opportunities || []).filter((o) => o.executed && o.outcome).slice(-8).reverse());
+      const opps = j.opportunities || [];
+      setJournal(
+        opps
+          .filter((o) => o.executed && o.outcome)
+          .slice(-30)
+          .reverse()
+      );
+      setBlockedJournal(
+        opps
+          .filter((o) => !o.executed)
+          .slice(-20)
+          .reverse()
+      );
+      setSetupEv(j.expectancy || []);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -867,6 +897,48 @@ export function MasterPage() {
             />
           </label>
           <label style={{ fontSize: 12 }}>
+            soft_trail_arm{' '}
+            <input
+              type="number"
+              step="0.01"
+              min={0}
+              defaultValue={status?.manage?.soft_trail_money_arm ?? 0}
+              id="cfg-soft-arm"
+              style={{ width: 64 }}
+            />
+          </label>
+          <label style={{ fontSize: 12 }}>
+            soft_trail_pips{' '}
+            <input
+              type="number"
+              step="0.1"
+              min={0}
+              defaultValue={status?.manage?.soft_trail_pips ?? 0.3}
+              id="cfg-soft-pips"
+              style={{ width: 56 }}
+            />
+          </label>
+          <label style={{ fontSize: 12 }}>
+            <input
+              type="checkbox"
+              id="cfg-scalp-chase"
+              defaultChecked={!!status?.manage?.scalp_pct_chase}
+            />{' '}
+            scalp_pct_chase
+          </label>
+          <label style={{ fontSize: 12 }}>
+            multi_tp{' '}
+            <input
+              type="number"
+              step="1"
+              min={0}
+              max={5}
+              defaultValue={status?.manage?.multi_tp_count ?? 0}
+              id="cfg-multi-tp"
+              style={{ width: 48 }}
+            />
+          </label>
+          <label style={{ fontSize: 12 }}>
             <input
               type="checkbox"
               id="cfg-exp-gate"
@@ -921,6 +993,10 @@ export function MasterPage() {
                     min_score: num('cfg-min-score'),
                     be_start: num('cfg-be-start'),
                     daily_loss_limit: num('cfg-daily-loss'),
+                    soft_trail_money_arm: num('cfg-soft-arm'),
+                    soft_trail_pips: num('cfg-soft-pips'),
+                    scalp_pct_chase: chk('cfg-scalp-chase'),
+                    multi_tp_count: num('cfg-multi-tp'),
                     require_positive_expectancy: chk('cfg-exp-gate'),
                     min_expectancy_samples: num('cfg-exp-samples'),
                     block_high_impact_news: chk('cfg-news'),
@@ -1079,7 +1155,8 @@ export function MasterPage() {
                     : '—'}
               </div>
               <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
-                {d.ts ? new Date(d.ts).toISOString().slice(11, 19) : '—'}
+                B {(d.buy_score ?? 0).toFixed(2)} / S {(d.sell_score ?? 0).toFixed(2)}
+                {d.ts ? ` · ${new Date(d.ts).toISOString().slice(11, 19)}` : ''}
                 {d.opportunity_id
                   ? ` · opp ${String(d.opportunity_id).slice(0, 8)}`
                   : ''}
@@ -1141,6 +1218,41 @@ export function MasterPage() {
         )}
       </div>
 
+      <h2 className="section-title">Setup expectancy</h2>
+      <div className="grid grid-3" style={{ gap: 10, marginBottom: 20 }}>
+        {setupEv.length === 0 ? (
+          <div className="card">no setup samples yet</div>
+        ) : (
+          setupEv.slice(0, 12).map((e) => {
+            const minN = status?.manage?.min_expectancy_samples ?? 20;
+            const gateHit =
+              !!status?.manage?.require_positive_expectancy &&
+              e.samples >= minN &&
+              !e.positive;
+            return (
+              <div key={e.setup_key} className="card">
+                <div style={{ fontWeight: 600, fontSize: 12 }}>{e.setup_key}</div>
+                <div
+                  style={{
+                    fontSize: 13,
+                    marginTop: 4,
+                    color: gateHit
+                      ? 'var(--bad, #c44)'
+                      : e.positive
+                        ? 'var(--ok, #2a7)'
+                        : 'var(--text-secondary)',
+                  }}
+                >
+                  EV {e.ev.toFixed(3)} · n={e.samples}
+                  {e.positive ? ' · +' : ' · −'}
+                  {gateHit ? ' · GATE' : ''}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
       <h2 className="section-title">Journal (recent traded)</h2>
       <div className="grid grid-3" style={{ gap: 10, marginBottom: 20 }}>
         {journal.length === 0 ? (
@@ -1152,7 +1264,7 @@ export function MasterPage() {
             return (
               <div key={o.id} className="card">
                 <div style={{ fontWeight: 600 }}>
-                  {o.decision?.kind} {o.epic}
+                  {o.decision?.side || o.decision?.kind} {o.epic}
                   {unproven ? ' · UNPROVEN' : ''}
                 </div>
                 <div
@@ -1167,12 +1279,30 @@ export function MasterPage() {
                 >
                   {unproven ? '—' : pn.toFixed(2)} ·{' '}
                   {String(o.outcome?.exit_reason || '').slice(0, 48)}
+                  {o.outcome?.r_multiple != null
+                    ? ` · R ${Number(o.outcome.r_multiple).toFixed(2)}`
+                    : ''}
                 </div>
               </div>
             );
           })
         )}
       </div>
+
+      {blockedJournal.length > 0 && (
+        <>
+          <h2 className="section-title">Journal (recent WAIT/BLOCK)</h2>
+          <div className="grid grid-3" style={{ gap: 10, marginBottom: 20 }}>
+            {blockedJournal.map((o) => (
+              <div key={o.id} className="card">
+                <div style={{ fontWeight: 600 }}>
+                  {o.decision?.kind || 'WAIT'} {o.epic}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
 
       <h2 className="section-title">Activity</h2>
       <pre

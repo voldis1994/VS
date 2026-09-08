@@ -165,6 +165,8 @@ export type MasterStatus = {
     block_reason: string | null;
     execution_detail: string | null;
     opportunity_id: string | null;
+    buy_score?: number;
+    sell_score?: number;
   }>;
   recent_trades: Array<{
     ts: string;
@@ -685,6 +687,27 @@ class MasterRuntime {
   hydrateOwnsPipelinePref() {
     const pref = loadOwnsPipelinePref();
     if (pref != null) this.owns_pipeline_pref = pref;
+  }
+
+  /** Live regime/analysis for orphan adopt BestOutcome locks. */
+  private liveAdoptContext(): {
+    live_regime?: string | null;
+    live_analysis?: {
+      regime?: string;
+      trend_dir?: string;
+      structure_bias?: string;
+    } | null;
+  } {
+    const a = this.last_decision?.analysis;
+    if (!a) return {};
+    return {
+      live_regime: a.regime,
+      live_analysis: {
+        regime: a.regime,
+        trend_dir: a.trend_dir,
+        structure_bias: a.structure_bias,
+      },
+    };
   }
 
   /** Seed monitoring snapshot for dashboard before Start/Recover. */
@@ -1456,7 +1479,8 @@ class MasterRuntime {
       this.positions,
       broker,
       broker instanceof CapitalBroker ? undefined : this.epic,
-      this.emptyBrokerDebounce
+      this.emptyBrokerDebounce,
+      this.liveAdoptContext()
     );
     // Journal confirmed ghosts/orphans even when other tickets are still in miss-debounce.
     if (!sync.skipped) {
@@ -2543,13 +2567,14 @@ class MasterRuntime {
             buy: null as never,
             sell: null as never,
             analysis: {
-              regime: 'UNKNOWN',
+              regime: this.last_decision?.analysis?.regime || 'UNKNOWN',
               market_state: 'ack_recover',
-              momentum_score: 0,
-              momentum_dir: 'NEUTRAL',
-              trend_dir: 'SIDEWAYS',
-              trend_strength: 0,
-              structure_bias: 'NEUTRAL',
+              momentum_score: this.last_decision?.analysis?.momentum_score ?? 0,
+              momentum_dir: this.last_decision?.analysis?.momentum_dir || 'NEUTRAL',
+              trend_dir: this.last_decision?.analysis?.trend_dir || 'SIDEWAYS',
+              trend_strength: this.last_decision?.analysis?.trend_strength ?? 0,
+              structure_bias:
+                this.last_decision?.analysis?.structure_bias || 'NEUTRAL',
               swing_high: entry,
               swing_low: entry,
               buy_pressure: 0,
@@ -2561,7 +2586,7 @@ class MasterRuntime {
               volatility: 0,
               atr: 0,
               data_quality: 0.5,
-              session: 'UNKNOWN',
+              session: this.last_decision?.analysis?.session || 'UNKNOWN',
             },
             expectancy: null,
           },
@@ -2590,7 +2615,8 @@ class MasterRuntime {
         this.positions,
         this.broker,
         this.broker instanceof CapitalBroker ? undefined : this.epic,
-        this.emptyBrokerDebounce
+        this.emptyBrokerDebounce,
+        this.liveAdoptContext()
       );
       // Journal confirmed ghosts/orphans even when other tickets are still in miss-debounce.
       if (!sync.skipped) {
@@ -3058,7 +3084,8 @@ class MasterRuntime {
       this.positions,
       broker,
       broker instanceof CapitalBroker ? undefined : this.epic,
-      this.emptyBrokerDebounce
+      this.emptyBrokerDebounce,
+      this.liveAdoptContext()
     );
     // Journal confirmed ghosts/orphans even when other tickets are still in miss-debounce.
     if (!sync.skipped) {
@@ -3353,6 +3380,8 @@ class MasterRuntime {
         block_reason: e.block_reason,
         execution_detail: e.execution_detail,
         opportunity_id: e.opportunity_id,
+        buy_score: e.buy_score,
+        sell_score: e.sell_score,
       })),
       recent_trades: loadTradeEvents(12).map((e) => ({
         ts: e.ts,

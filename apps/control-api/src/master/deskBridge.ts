@@ -132,6 +132,7 @@ export async function ensureMasterCapitalBroker(creds: {
       if (!opened.ok) {
         // Do NOT silently fall back to PAPER — desk must keep managing live Capital risk
         masterRuntime.broker_detail = `capital_connect_failed:${opened.detail}`;
+        masterRuntime.setEntriesArmed(false, 'capital_connect_failed');
         return { ok: false, mode: masterRuntime.cfg.mode, detail: masterRuntime.broker_detail };
       }
       masterRuntime.attachBroker(broker);
@@ -156,11 +157,16 @@ export async function ensureMasterCapitalBroker(creds: {
 /**
  * True only when MASTER can safely own exits for the desk session.
  * If owns-pipeline but Capital LIVE attach failed, desk must keep Best-Outcome manage.
+ * When MASTER_LIVE_ENABLED, never treat PAPER as safe (would dual-brain beside live intent).
  */
 export function masterOwnsManageSafely(brokerOpen: boolean): boolean {
   if (!masterOwnsPipeline()) return false;
   if (masterRuntime.cfg.mode === 'LIVE' && masterRuntime.broker?.name === 'CAPITAL') {
     return true;
+  }
+  // Live intent: PAPER leftover after Capital connect fail must not own desk manage
+  if (process.env.MASTER_LIVE_ENABLED === 'true') {
+    return false;
   }
   // PAPER ownership is fine when desk has no live Capital position to orphan
   if (!brokerOpen && masterRuntime.broker != null) return true;

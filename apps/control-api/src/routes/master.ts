@@ -525,11 +525,17 @@ export async function registerMasterRoutes(app: FastifyInstance) {
   }>('/api/master/walk-forward', async (req) => {
     const bars = req.body?.bars || [];
     if (bars.length < 120) return { ok: false, detail: 'need ≥120 bars' };
+    const { pickManageConfig } = await import('../master/manageConfig.js');
     const wf = await walkForward({
       bars,
       train: req.body?.train ?? 60,
       test: req.body?.test ?? 30,
       step: req.body?.step ?? 40,
+      cfg: {
+        ...DEFAULT_MASTER_CONFIG,
+        ...pickManageConfig(masterRuntime.cfg),
+        mode: 'BACKTEST',
+      },
     });
     return { ok: true, windows: wf.windows };
   });
@@ -539,11 +545,17 @@ export async function registerMasterRoutes(app: FastifyInstance) {
   }>('/api/master/ab-ai', async (req) => {
     const bars = req.body?.bars || [];
     if (bars.length < 40) return { ok: false, detail: 'need ≥40 bars' };
+    const { pickManageConfig } = await import('../master/manageConfig.js');
     const ab = await abCompareAi({
       bars,
       spread: req.body?.spread,
       slippage_pts: req.body?.slippage_pts,
       commission: req.body?.commission,
+      cfg: {
+        ...DEFAULT_MASTER_CONFIG,
+        ...pickManageConfig(masterRuntime.cfg),
+        mode: 'BACKTEST',
+      },
     });
     return {
       ok: true,

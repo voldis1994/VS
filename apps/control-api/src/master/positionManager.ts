@@ -976,8 +976,16 @@ export class PositionManager {
           ),
           playbook:
             pos.playbook_at_entry ??
-            mapRegimeToPlaybook(pos.regime_at_entry, pos.decision.analysis),
-          entry_setup: pos.entry_setup ?? 'CONTINUATION',
+            mapRegimeToPlaybook(
+              input.live_regime || pos.regime_at_entry,
+              pos.decision.analysis
+            ),
+          entry_setup:
+            pos.entry_setup ??
+            entrySetupFromRegime(
+              input.live_regime || pos.regime_at_entry,
+              pos.decision.analysis
+            ),
         },
         mark
       );
@@ -2000,7 +2008,17 @@ export class PositionManager {
       upl?: number | null;
       opened_at?: string | null;
     }>,
-    opts?: { retainIds?: Set<string>; capitalLive?: boolean }
+    opts?: {
+      retainIds?: Set<string>;
+      capitalLive?: boolean;
+      /** Live tick regime/analysis — prefer over forged SCALP on orphan adopt */
+      live_regime?: string | null;
+      live_analysis?: {
+        regime?: string;
+        trend_dir?: string;
+        structure_bias?: string;
+      } | null;
+    }
   ): { external_partials: ExternalPartialEvent[] } {
     const external_partials: ExternalPartialEvent[] = [];
     const brokerIds = new Set(brokerPositions.map((p) => p.position_id));
@@ -2114,6 +2132,36 @@ export class PositionManager {
         bp.opened_at && Number.isFinite(Date.parse(bp.opened_at))
           ? new Date(bp.opened_at).toISOString()
           : new Date().toISOString();
+      const liveRegime =
+        opts?.live_regime ||
+        opts?.live_analysis?.regime ||
+        'UNKNOWN';
+      const liveAnalysis = {
+        regime: liveRegime,
+        market_state: 'recover',
+        momentum_score: 0,
+        momentum_dir: 'NEUTRAL' as const,
+        trend_dir: (opts?.live_analysis?.trend_dir as 'UP' | 'DOWN' | 'SIDEWAYS') || 'SIDEWAYS',
+        trend_strength: 0,
+        structure_bias:
+          (opts?.live_analysis?.structure_bias as 'BULLISH' | 'BEARISH' | 'NEUTRAL') ||
+          'NEUTRAL',
+        swing_high: bp.open_level,
+        swing_low: bp.open_level,
+        buy_pressure: 0,
+        sell_pressure: 0,
+        behavior_bull: 0,
+        behavior_bear: 0,
+        impact_score: 0,
+        context_quality: 0,
+        volatility: 0,
+        atr: 0,
+        data_quality: 0.5,
+        session: 'UNKNOWN' as const,
+      };
+      const hasLive =
+        !!opts?.live_regime ||
+        !!(opts?.live_analysis?.regime && opts.live_analysis.regime !== 'UNKNOWN');
       this.open.set(bp.position_id, {
         position_id: bp.position_id,
         opportunity_id: recoverId,
@@ -2149,32 +2197,17 @@ export class PositionManager {
           block_reason: null,
           buy: null as never,
           sell: null as never,
-          analysis: {
-            regime: 'UNKNOWN',
-            market_state: 'recover',
-            momentum_score: 0,
-            momentum_dir: 'NEUTRAL',
-            trend_dir: 'SIDEWAYS',
-            trend_strength: 0,
-            structure_bias: 'NEUTRAL',
-            swing_high: bp.open_level,
-            swing_low: bp.open_level,
-            buy_pressure: 0,
-            sell_pressure: 0,
-            behavior_bull: 0,
-            behavior_bear: 0,
-            impact_score: 0,
-            context_quality: 0,
-            volatility: 0,
-            atr: 0,
-            data_quality: 0.5,
-            session: 'UNKNOWN',
-          },
+          analysis: liveAnalysis,
           expectancy: null,
         },
-        regime_at_entry: 'UNKNOWN',
-        playbook_at_entry: 'SCALP',
-        entry_setup: 'CONTINUATION',
+        regime_at_entry: toDeskRegime(liveRegime, liveAnalysis),
+        // Only lock playbook/setup when live regime known — else manageTick uses live_regime
+        ...(hasLive
+          ? {
+              playbook_at_entry: mapRegimeToPlaybook(liveRegime, liveAnalysis),
+              entry_setup: entrySetupFromRegime(liveRegime, liveAnalysis),
+            }
+          : {}),
         partial_close_applied: false,
       });
     }
