@@ -37,6 +37,10 @@ import { resolveCloseMoneyPnl, resolveFloatingMoneyPnl, applyCloseFees } from '.
 import { loadMasterErrors, logMasterError } from './errorJournal.js';
 import { CycleMonitor } from './monitoring.js';
 import { logDecisionEvent, loadDecisionEvents } from './decisionJournal.js';
+import {
+  alertsBlockEntries,
+  dispatchCycleAlerts,
+} from './cycleAlerts.js';
 import { loadRuntimeGates, saveRuntimeGates } from './runtimeGates.js';
 import { loadOwnsPipelinePref, saveOwnsPipelinePref } from './ownsPipelinePref.js';
 import { resolveNewsWindow, type NewsWindowState } from './newsGate.js';
@@ -821,6 +825,21 @@ class MasterRuntime {
     this.last_ai_allow_close = cycle.ai.allow_close !== false;
     this.trackPersist('opportunity', persistOpportunity(cycle.opportunity));
 
+    // Reader cycle alerts — block new entries on stale / not-tradeable / ACK timeout
+    const quoteAgeMs = Math.max(0, Date.now() - (quote.ts_ms || 0));
+    const dataQuality = cycle.decision.analysis?.data_quality ?? 1;
+    const cycleAlerts = dispatchCycleAlerts({
+      data_stale: quoteAgeMs > this.cfg.stale_quote_ms,
+      freshness_ms: quoteAgeMs,
+      stale_threshold_ms: this.cfg.stale_quote_ms,
+      account_not_tradeable: this.account.trade_allowed === false,
+      validation_failed: dataQuality < 0.35,
+      validation_message:
+        dataQuality < 0.35 ? `data_quality=${dataQuality}` : null,
+    });
+    const alertBlock = alertsBlockEntries(cycleAlerts);
+    this.monitor.noteAlerts(cycleAlerts, alertBlock);
+
     // 3) Execution gate
     const allow_live =
       this.cfg.mode === 'LIVE' && process.env.MASTER_LIVE_ENABLED === 'true';
@@ -833,6 +852,7 @@ class MasterRuntime {
     if (
       this.running &&
       this.entries_armed &&
+      !alertBlock &&
       (this.cfg.mode === 'PAPER' || allow_live) &&
       (cycle.decision.kind === 'BUY' || cycle.decision.kind === 'SELL') &&
       cycle.risk.allowed &&
@@ -1016,7 +1036,9 @@ class MasterRuntime {
         ? 'runtime_stopped'
         : !this.entries_armed
           ? this.entries_pause_reason || 'entries_paused'
-          : rejectCool
+          : alertBlock
+            ? alertBlock
+            : rejectCool
             ? 'reject_cooldown'
             : inflight
               ? this.positions.count() > 0

@@ -43,7 +43,11 @@ type MasterStatus = {
     last_cycle_ms?: number;
     relative_spread?: number | null;
     error_count?: number;
+    error_rate_per_min?: number;
     data_freshness_ms?: number | null;
+    instance_health?: string;
+    entry_block_reason?: string | null;
+    active_alerts?: Array<{ code: string; level: string; message: string }>;
   };
   opportunities: number;
   traded: number;
@@ -346,6 +350,27 @@ export function MasterPage() {
             status.monitoring?.last_cycle_ms != null
               ? String(status.monitoring.last_cycle_ms)
               : '—',
+        },
+        {
+          k: 'Health',
+          v: status.monitoring?.instance_health || '—',
+          bad:
+            status.monitoring?.instance_health === 'CRITICAL' ||
+            status.monitoring?.instance_health === 'DEGRADED',
+          ok: status.monitoring?.instance_health === 'OK',
+        },
+        {
+          k: 'Alert block',
+          v: status.monitoring?.entry_block_reason || '—',
+          bad: !!status.monitoring?.entry_block_reason,
+        },
+        {
+          k: 'Err/min',
+          v:
+            status.monitoring?.error_rate_per_min != null
+              ? String(status.monitoring.error_rate_per_min)
+              : '—',
+          bad: (status.monitoring?.error_rate_per_min || 0) > 0,
         },
         {
           k: 'Max DD',

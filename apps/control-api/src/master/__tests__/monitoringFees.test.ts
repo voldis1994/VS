@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { existsSync, mkdtempSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { applyCloseFees, estimateTradeFees } from '../moneyExit.js';
 import { CycleMonitor } from '../monitoring.js';
 
@@ -102,6 +105,8 @@ describe('soft trail scalp gate', () => {
 
 describe('CycleMonitor', () => {
   it('records cycle ms and relative spread', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vs-mon-'));
+    process.env.MASTER_STATE_DIR = dir;
     const m = new CycleMonitor();
     m.noteCycle(12.4);
     m.noteRelativeSpread(1.25);
@@ -110,5 +115,57 @@ describe('CycleMonitor', () => {
     expect(snap.cycles).toBe(1);
     expect(snap.relative_spread).toBe(1.25);
     expect(snap.data_freshness_ms).toBe(500);
+    expect(snap.instance_health).toBe('OK');
+    expect(snap.error_rate_per_min).toBe(0);
+    expect(existsSync(join(dir, 'monitoring_snapshot.json'))).toBe(true);
+  });
+});
+
+describe('cycle alerts entry gate', () => {
+  it('blocks entries on DATA_STALE / ACCOUNT_NOT_TRADEABLE / ACK_TIMEOUT', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vs-alert-'));
+    process.env.MASTER_STATE_DIR = dir;
+    const {
+      dispatchCycleAlerts,
+      alertsBlockEntries,
+      healthFromAlerts,
+      ALERT_DATA_STALE,
+      ALERT_ACCOUNT_NOT_TRADEABLE,
+      ALERT_ACK_TIMEOUT,
+    } = await import('../cycleAlerts.js');
+    const { logMasterError } = await import('../errorJournal.js');
+
+    const stale = dispatchCycleAlerts({
+      data_stale: true,
+      freshness_ms: 20_000,
+      stale_threshold_ms: 15_000,
+      account_not_tradeable: false,
+    });
+    expect(stale.some((a) => a.code === ALERT_DATA_STALE)).toBe(true);
+    expect(alertsBlockEntries(stale)).toBe(`alert:${ALERT_DATA_STALE}`);
+    expect(healthFromAlerts(stale)).toBe('DEGRADED');
+
+    const locked = dispatchCycleAlerts({
+      data_stale: false,
+      freshness_ms: 100,
+      stale_threshold_ms: 15_000,
+      account_not_tradeable: true,
+    });
+    expect(alertsBlockEntries(locked)).toBe(`alert:${ALERT_ACCOUNT_NOT_TRADEABLE}`);
+    expect(healthFromAlerts(locked)).toBe('CRITICAL');
+
+    logMasterError({
+      module: 'mt4.placeOrder',
+      error_type: 'ACK_TIMEOUT',
+      message: 'OPEN ACK_TIMEOUT',
+    });
+    const ack = dispatchCycleAlerts({
+      data_stale: false,
+      freshness_ms: 100,
+      stale_threshold_ms: 15_000,
+      account_not_tradeable: false,
+    });
+    expect(ack.some((a) => a.code === ALERT_ACK_TIMEOUT)).toBe(true);
+    expect(alertsBlockEntries(ack)).toBe(`alert:${ALERT_ACK_TIMEOUT}`);
   });
 });
