@@ -171,4 +171,115 @@ describe('native trail arm on scalp chase', () => {
       )
     ).toBe(true);
   });
+
+  it('naked recovery falls back to native trailingStop after stopLevel rejects', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const broker = new PaperBroker();
+      await broker.connect();
+      const entry = 4400;
+      const mark = entry - 5; // flat/loss — profit trail path must not own this
+      broker.setQuote({
+        bid: mark - 0.05,
+        ask: mark + 0.05,
+        mid: mark,
+        spread: 0.1,
+        epic: 'GOLD',
+        ts_ms: Date.now(),
+      });
+      const placed = await broker.placeOrder({
+        intent_id: 'naked-native-aaaaaaaaaaa',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 0.1,
+      });
+      const mods: unknown[] = [];
+      let stopRejects = 0;
+      broker.modifyPosition = async (input) => {
+        mods.push(input);
+        if (input.trailing_stop === true) {
+          return { ok: true, detail: 'native_ok', order_id: 'n1' };
+        }
+        if (input.stop_level != null) {
+          stopRejects += 1;
+          return { ok: false, detail: 'MINIMUM_STOP_DISTANCE' };
+        }
+        return { ok: false, detail: 'unexpected' };
+      };
+      const pipe = new MasterPipeline('PAPER');
+      const pm = new PositionManager();
+      pm.register({
+        position_id: placed.position_id!,
+        opportunity_id: 'opp-nn',
+        intent_id: 'nn-1',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 0.1,
+        entry,
+        stop_loss: null,
+        take_profit: null,
+        decision: {
+          decision_id: 'd',
+          kind: 'BUY',
+          side: 'BUY',
+          score: 0.7,
+          block_reason: null,
+          buy: null as never,
+          sell: null as never,
+          analysis: {
+            regime: 'TREND',
+            market_state: 't',
+            momentum_score: 0.5,
+            momentum_dir: 'UP',
+            trend_dir: 'UP',
+            trend_strength: 0.8,
+            structure_bias: 'BULLISH',
+            swing_high: entry + 50,
+            swing_low: entry - 50,
+            buy_pressure: 0.7,
+            sell_pressure: 0.3,
+            behavior_bull: 0.7,
+            behavior_bear: 0.3,
+            impact_score: 0.5,
+            context_quality: 0.8,
+            volatility: 0.001,
+            atr: 2,
+          },
+          expectancy: null,
+        },
+      });
+      const tick = async () =>
+        pm.manageTick({
+          broker,
+          pipeline: pipe,
+          quote: {
+            bid: mark - 0.05,
+            ask: mark + 0.05,
+            mid: mark,
+            spread: 0.1,
+            ts_ms: Date.now(),
+          },
+          instrument_point_value: 1,
+          scalp_pct_chase: true,
+          scalp_lock_pct: 0.2,
+          breakeven_progress: 0,
+          max_hold_ms: 0,
+          allow_close: false,
+        });
+      await tick(); // level 0 stopLevel reject → escalate
+      expect(stopRejects).toBeGreaterThanOrEqual(1);
+      await vi.advanceTimersByTimeAsync(9_000);
+      await tick(); // level>=1 → native trailing fallback
+      const pos = pm.get(placed.position_id!)!;
+      expect(pos.native_trail_armed).toBe(true);
+      expect(pos.stop_loss).not.toBeNull();
+      expect(
+        mods.some(
+          (m: any) => m.trailing_stop === true && Number(m.stop_distance) > 0
+        )
+      ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

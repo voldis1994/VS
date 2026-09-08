@@ -291,11 +291,29 @@ export class PaperBroker implements MasterBroker {
     position_id: string;
     stop_level?: number;
     profit_level?: number;
+    trailing_stop?: boolean;
+    stop_distance?: number;
   }) {
     const p = this.positions.get(input.position_id);
     if (!p) return { ok: false, detail: 'not_found' };
     if (input.stop_level != null) p.stop_level = input.stop_level;
     if (input.profit_level != null) p.profit_level = input.profit_level;
+    // VS-System naked fallback — paper arms a protective stop from mark ± distance
+    if (
+      input.trailing_stop === true &&
+      input.stop_distance != null &&
+      Number.isFinite(input.stop_distance) &&
+      input.stop_distance > 0
+    ) {
+      const q = this.lastQuote;
+      const mark = q
+        ? p.side === 'BUY'
+          ? q.bid
+          : q.ask
+        : p.open_level;
+      p.stop_level =
+        p.side === 'BUY' ? mark - input.stop_distance : mark + input.stop_distance;
+    }
     return { ok: true, detail: 'paper_modified', order_id: `mod-${input.position_id}` };
   }
 

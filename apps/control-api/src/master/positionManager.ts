@@ -1100,6 +1100,25 @@ export class PositionManager {
       this.nakedRecoveryLevel.delete(pos.position_id);
       return;
     }
+    // VS-System: after first widen fails, try native trailingStop while still naked
+    // (flat/loss) so chart gets *some* protection when stopLevel keeps rejecting.
+    if (level >= 1) {
+      const minD = effectiveMinStopDistance(pos.epic, minStopDist);
+      const native = await this.brokerModify(
+        broker,
+        pos,
+        { trailing_stop: true, stop_distance: minD },
+        'naked_native_trail'
+      );
+      if (native.ok) {
+        pos.native_trail_armed = true;
+        const guess = pos.side === 'BUY' ? mark - minD : mark + minD;
+        if (Number.isFinite(guess)) pos.stop_loss = guess;
+        this.clearModifyReject(pos.position_id);
+        this.nakedRecoveryLevel.delete(pos.position_id);
+        return;
+      }
+    }
     this.nakedRecoveryLevel.set(pos.position_id, level + 1);
     await this.noteModifyReject(pos.position_id, recovery, mod.detail || '');
   }
