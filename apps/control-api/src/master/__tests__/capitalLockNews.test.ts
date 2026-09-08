@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, afterEach } from 'vitest';
 import { CapitalBroker } from '../broker.js';
 import {
+  clearSharedLoginLocks,
   createLoginLockState,
   loginLockHeld,
+  sharedLoginLockForConnection,
   withLoginLock,
 } from '../capitalLoginLock.js';
 import {
@@ -14,6 +16,12 @@ import {
 import { newsBlocksEntries, resolveNewsWindow } from '../newsGate.js';
 
 describe('Capital login lock', () => {
+  afterEach(() => {
+    clearSharedLoginLocks();
+    delete process.env.MASTER_LIVE_ENABLED;
+    delete process.env.MASTER_CONFIRM_FAST;
+  });
+
   it('queues sibling callers instead of barging in', async () => {
     const state = createLoginLockState();
     const order: string[] = [];
@@ -33,6 +41,47 @@ describe('Capital login lock', () => {
 
     await Promise.all([a, b]);
     expect(order).toEqual(['A-start', 'A-end', 'B-start', 'B-end']);
+  });
+
+  it('shares login lock across CapitalBroker instances on same connectionId', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const order: string[] = [];
+    const mk = (tag: string) =>
+      new CapitalBroker({
+        credentials: { connectionId: 900042 },
+        acquire: async () => ({ ok: true, session: { id: tag }, detail: 'ok' }),
+        quote: async (_s, epic) => ({
+          bid: 4410,
+          ask: 4410.4,
+          mid: 4410.2,
+          epic,
+          raw_ok: true,
+        }),
+        list: async () => ({ ok: true, positions: [], detail: '' }),
+        create: async () => ({ ok: false, detail: 'unused' }),
+        close: async () => {
+          order.push(`${tag}-start`);
+          await new Promise((r) => setTimeout(r, 40));
+          order.push(`${tag}-end`);
+          return { ok: true, detail: 'closed' };
+        },
+      });
+    const a = mk('A');
+    const b = mk('B');
+    expect(sharedLoginLockForConnection(900042)).toBe(
+      sharedLoginLockForConnection(900042)
+    );
+    await a.connect();
+    await b.connect();
+    await Promise.all([a.closePosition('x'), b.closePosition('y')]);
+    const aStart = order.indexOf('A-start');
+    const aEnd = order.indexOf('A-end');
+    const bStart = order.indexOf('B-start');
+    const bEnd = order.indexOf('B-end');
+    expect(aStart).toBeGreaterThanOrEqual(0);
+    expect(bStart).toBeGreaterThanOrEqual(0);
+    // Serialized: later start after earlier end (no overlap)
+    expect(Math.max(aStart, bStart)).toBeGreaterThan(Math.min(aEnd, bEnd));
   });
 
   it('CapitalBroker placeOrder outer lock queues concurrent close', async () => {

@@ -171,6 +171,64 @@ describe('Capital session 401 re-login', () => {
     expect(opened.session.currentAccountId).toBe('preferred-cfd');
     expect(opened.session.cst).toBe('cst-2');
   });
+
+  it('does not retry mutate when preferred CFD re-pin fails after 401', async () => {
+    let sessionPosts = 0;
+    let positionsGets = 0;
+    vi.stubGlobal(
+      'fetch',
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = (init?.method || 'GET').toUpperCase();
+        if (url.includes('/session/encryptionKey')) {
+          return new Response('{}', { status: 404 });
+        }
+        if (url.endsWith('/api/v1/session') && method === 'POST') {
+          sessionPosts += 1;
+          const headers = new Headers({
+            CST: `cst-${sessionPosts}`,
+            'X-SECURITY-TOKEN': `sec-${sessionPosts}`,
+          });
+          return new Response(JSON.stringify({ accountId: 'default-cfd' }), {
+            status: 200,
+            headers,
+          });
+        }
+        if (url.endsWith('/api/v1/session') && method === 'PUT') {
+          return new Response(
+            JSON.stringify({ errorCode: 'error.account.unavailable' }),
+            { status: 400 }
+          );
+        }
+        if (url.includes('/positions') && method === 'GET') {
+          positionsGets += 1;
+          if (positionsGets === 1) {
+            return new Response('{"errorCode":"error.invalid.session"}', {
+              status: 401,
+            });
+          }
+          // Must not be reached — failed pin aborts retry
+          return new Response(JSON.stringify({ positions: [] }), { status: 200 });
+        }
+        return new Response('unexpected', { status: 500 });
+      }
+    );
+
+    const opened = await openCapitalSession({
+      environment: 'demo',
+      apiKey: 'k',
+      identifier: 'user@example.com',
+      password: 'api-pass-not-otp',
+    });
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    opened.session.preferredAccountId = 'preferred-cfd';
+    const listed = await opened.session.get('/api/v1/positions');
+    expect(listed.ok).toBe(false);
+    expect(listed.status).toBe(401);
+    expect(positionsGets).toBe(1); // no retry on wrong CFD
+    expect(opened.session.currentAccountId).toBeNull();
+  });
 });
 
 describe('Capital session pool identity', () => {

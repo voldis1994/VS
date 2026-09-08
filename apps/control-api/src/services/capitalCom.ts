@@ -328,10 +328,12 @@ export async function openCapitalSession(input: {
                 /not-different\.accountId/i.test(pinCode)
               ) {
                 sessionRef.currentAccountId = pref;
+              } else {
+                // Prefer fail over mutate-on-wrong-CFD after CST refresh
+                return false;
               }
-              // else leave null — ensureActiveAccount / switchCapitalAccount retries
             } catch {
-              // leave unpinned; caller will re-pin
+              return false;
             }
           }
         }
@@ -450,24 +452,15 @@ function capitalPoolKey(connectionId: number): string {
   return `conn:${connectionId}`;
 }
 
-/** Serialize acquire/switch per connection so account A cannot place while session sits on B. */
-const connectionLocks = new Map<number, Promise<unknown>>();
-
+/**
+ * Serialize acquire/switch with the same CST lock CapitalBroker uses
+ * (sharedLoginLockForConnection) so desk + MASTER cannot race account pin.
+ */
 async function withConnectionLock<T>(connectionId: number, fn: () => Promise<T>): Promise<T> {
-  const prev = connectionLocks.get(connectionId) ?? Promise.resolve();
-  let release!: () => void;
-  const gate = new Promise<void>((r) => {
-    release = r;
-  });
-  const done = prev.then(() => gate);
-  connectionLocks.set(connectionId, done);
-  await prev;
-  try {
-    return await fn();
-  } finally {
-    release();
-    if (connectionLocks.get(connectionId) === done) connectionLocks.delete(connectionId);
-  }
+  const { sharedLoginLockForConnection, withLoginLock } = await import(
+    '../master/capitalLoginLock.js'
+  );
+  return withLoginLock(sharedLoginLockForConnection(connectionId), fn);
 }
 
 async function withLoginThrottle<T>(fn: () => Promise<T>): Promise<T> {

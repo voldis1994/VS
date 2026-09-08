@@ -14,7 +14,12 @@ import {
   writeFileSync,
 } from 'fs';
 import { join } from 'path';
-import { createLoginLockState, withLoginLock } from './capitalLoginLock.js';
+import {
+  createLoginLockState,
+  sharedLoginLockForConnection,
+  withLoginLock,
+  type LoginLockState,
+} from './capitalLoginLock.js';
 import { CapitalQuoteStream } from './capitalStream.js';
 import { logMasterError } from './errorJournal.js';
 import { stableReadJson } from './atomicIo.js';
@@ -395,8 +400,11 @@ export class CapitalBroker implements MasterBroker {
   readonly supportsNativeTrailingStop = true;
   private session: any = null;
   private processed = new Set<string>();
-  /** VS-System: serialize all Capital REST for this broker instance */
-  private readonly loginLock = createLoginLockState();
+  /**
+   * VS-System: serialize all Capital REST for this CST pool.
+   * Shared by connectionId so desk + MASTER never interleave switch/create/close.
+   */
+  private readonly loginLock: LoginLockState;
   /** Capital streaming quotes — REST fallback when unhealthy */
   private readonly stream = new CapitalQuoteStream();
   /** Last dealingRules seen per epic from markets quote */
@@ -467,6 +475,11 @@ export class CapitalBroker implements MasterBroker {
       credentials: any;
     }
   ) {
+    const connId = Number(rawDeps.credentials?.connectionId);
+    this.loginLock =
+      Number.isFinite(connId) && connId > 0
+        ? sharedLoginLockForConnection(Math.floor(connId))
+        : createLoginLockState();
     // VS-System withLoginLock: every Capital REST dep serializes; nested
     // place→confirm→list reenters via AsyncLocalStorage.
     const lock = this.loginLock;
@@ -853,6 +866,25 @@ export class CapitalBroker implements MasterBroker {
           fill_price: fill?.fill_price ?? openLevel,
           fill_size: fill?.fill_size ?? live.size ?? null,
           detail: `${reason}:capital_fail_close_unproven:${closed.detail}`,
+          paper: false,
+        };
+      }
+      // Close failed and list did not prove flat — keep known id (list flake / still_open)
+      const ambiguous =
+        !listed.ok ||
+        /still_open|unconfirmed|list_failed|not_confirmed/i.test(
+          closed.detail || ''
+        );
+      if (ambiguous) {
+        return {
+          ok: false,
+          order_id,
+          position_id,
+          fill_price: fill?.fill_price ?? null,
+          fill_size: fill?.fill_size ?? null,
+          detail: `${reason}:capital_fail_close_unproven:${closed.detail}${
+            !listed.ok ? `:list=${listed.detail || 'list_failed'}` : ''
+          }`,
           paper: false,
         };
       }
