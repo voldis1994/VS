@@ -271,6 +271,103 @@ describe('MASTER filters + dual flow', () => {
     expect(managed.closed.some((c) => /ThesisFailure/.test(c.reason))).toBe(true);
   });
 
+  it('Capital LIVE mark-geometry scalp chase refuses while venue UPL unread', async () => {
+    let modifies = 0;
+    const broker = {
+      name: 'CAPITAL',
+      paper: false,
+      supportsNativeTrailingStop: true,
+      async closePosition() {
+        return { ok: false, detail: 'no' };
+      },
+      async modifyPosition() {
+        modifies += 1;
+        return { ok: true, detail: 'ok' };
+      },
+    } as never;
+    const pipe = new MasterPipeline('LIVE');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: 'deal-chase-upl',
+      opportunity_id: 'opp-chase-upl',
+      intent_id: 'chase-upl',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4400,
+      stop_loss: 4390,
+      take_profit: 4500,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis({ regime: 'TREND_UP', trend_dir: 'UP' }),
+        expectancy: null,
+      },
+    });
+    const pos = pm.get('deal-chase-upl')!;
+    pos.broker_upl = null;
+    await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: 4440,
+        ask: 4440.4,
+        mid: 4440.2,
+        spread: 0.4,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      scalp_pct_chase: true,
+      scalp_lock_pct: 0.2,
+      max_hold_ms: 0,
+      breakeven_progress: 0,
+      allow_close: true,
+    });
+    expect(modifies).toBe(0);
+    expect(pos.native_trail_armed).toBeFalsy();
+  });
+
+  it('clearStaleBrokerUpl also disarms native_trail_armed', () => {
+    masterRuntime.positions = new PositionManager();
+    const pm = masterRuntime.positions;
+    pm.register({
+      position_id: 'deal-native-stale',
+      opportunity_id: 'opp-ns',
+      intent_id: 'ns-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4400,
+      stop_loss: 4390,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis(),
+        expectancy: null,
+      },
+    });
+    const pos = pm.get('deal-native-stale')!;
+    pos.broker_upl = 12;
+    pos.soft_trail_armed_at = new Date().toISOString();
+    pos.soft_trail_peak = 4410;
+    pos.native_trail_armed = true;
+    (masterRuntime as unknown as { clearStaleBrokerUpl: () => void }).clearStaleBrokerUpl();
+    expect(pos.broker_upl).toBeNull();
+    expect(pos.soft_trail_armed_at).toBeNull();
+    expect(pos.soft_trail_peak).toBeNull();
+    expect(pos.native_trail_armed).toBe(false);
+  });
+
   it('blocks BUY against dump but can leave SELL valid', () => {
     const a = baseAnalysis({
       regime: 'TREND',

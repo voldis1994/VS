@@ -987,39 +987,26 @@ export class PositionManager {
             : { exit: false, reason: '' });
 
       if (!verdict.exit) {
-        await this.maybeBreakevenStop(broker, pos, quote, {
-          progressNeed: beProgress,
-          offset: beOffset,
+        await this.runManageProtectiveLocks({
+          broker,
+          pos,
+          quote,
+          capitalUplReady,
+          beProgress,
+          beOffset,
           beStart,
-          moneyNeed: beMoney,
-          pointValue: pv,
-          min_stop_distance: minStopDist,
+          beMoney,
+          pv,
+          minStopDist,
+          scalpChase,
+          scalpLock,
+          swingLow,
+          swingHigh,
+          trailBuf,
+          trailStart,
+          trailLock,
+          ema3,
         });
-        if (scalpChase) {
-          await this.maybeArmNativeTrailingStop(broker, pos, quote, {
-            lockPct: scalpLock,
-            min_stop_distance: minStopDist,
-          });
-          await this.maybeScalpPctChaseStop(broker, pos, quote, {
-            lockPct: scalpLock,
-            min_stop_distance: minStopDist,
-          });
-        } else {
-          await this.maybeTrailStop(broker, pos, quote, {
-            swing_low: swingLow,
-            swing_high: swingHigh,
-            trailing_buffer: trailBuf,
-            trail_start: trailStart,
-            trail_lock: trailLock,
-            min_stop_distance: minStopDist,
-          });
-        }
-        if (ema3 != null) {
-          await this.maybeEma3Trail(broker, pos, quote, {
-            ema3,
-            min_stop_distance: minStopDist,
-          });
-        }
         continue;
       }
 
@@ -1033,39 +1020,26 @@ export class PositionManager {
           exit_reason: verdict.reason,
           detail: 'ai_veto_close',
         });
-        await this.maybeBreakevenStop(broker, pos, quote, {
-          progressNeed: beProgress,
-          offset: beOffset,
+        await this.runManageProtectiveLocks({
+          broker,
+          pos,
+          quote,
+          capitalUplReady,
+          beProgress,
+          beOffset,
           beStart,
-          moneyNeed: beMoney,
-          pointValue: pv,
-          min_stop_distance: minStopDist,
+          beMoney,
+          pv,
+          minStopDist,
+          scalpChase,
+          scalpLock,
+          swingLow,
+          swingHigh,
+          trailBuf,
+          trailStart,
+          trailLock,
+          ema3,
         });
-        if (scalpChase) {
-          await this.maybeArmNativeTrailingStop(broker, pos, quote, {
-            lockPct: scalpLock,
-            min_stop_distance: minStopDist,
-          });
-          await this.maybeScalpPctChaseStop(broker, pos, quote, {
-            lockPct: scalpLock,
-            min_stop_distance: minStopDist,
-          });
-        } else {
-          await this.maybeTrailStop(broker, pos, quote, {
-            swing_low: swingLow,
-            swing_high: swingHigh,
-            trailing_buffer: trailBuf,
-            trail_start: trailStart,
-            trail_lock: trailLock,
-            min_stop_distance: minStopDist,
-          });
-        }
-        if (ema3 != null) {
-          await this.maybeEma3Trail(broker, pos, quote, {
-            ema3,
-            min_stop_distance: minStopDist,
-          });
-        }
         continue;
       }
 
@@ -1076,13 +1050,26 @@ export class PositionManager {
           exit_reason: verdict.reason,
           detail: 'close_requires_sl',
         });
-        await this.maybeBreakevenStop(broker, pos, quote, {
-          progressNeed: beProgress,
-          offset: beOffset,
+        // Still chase/trail so a chart SL can appear and unlock the soft close
+        await this.runManageProtectiveLocks({
+          broker,
+          pos,
+          quote,
+          capitalUplReady,
+          beProgress,
+          beOffset,
           beStart,
-          moneyNeed: beMoney,
-          pointValue: pv,
-          min_stop_distance: minStopDist,
+          beMoney,
+          pv,
+          minStopDist,
+          scalpChase,
+          scalpLock,
+          swingLow,
+          swingHigh,
+          trailBuf,
+          trailStart,
+          trailLock,
+          ema3,
         });
         continue;
       }
@@ -1582,6 +1569,87 @@ export class PositionManager {
    * Arm Capital native trailingStop once in profit (survives process death).
    * App-side 20% chase still runs; native trail is broker-side backup.
    */
+  /**
+   * BE + mark-geometry locks (native trail / scalp chase / structure trail / EMA3).
+   * Capital LIVE: refuse mark-geometry locks while venue UPL unread (BE has its own gate).
+   */
+  private async runManageProtectiveLocks(input: {
+    broker: MasterBroker;
+    pos: ManagedPosition;
+    quote: Quote;
+    capitalUplReady: boolean;
+    beProgress: number;
+    beOffset: number;
+    beStart: number;
+    beMoney: number;
+    pv: number;
+    minStopDist: number | null;
+    scalpChase: boolean;
+    scalpLock: number;
+    swingLow: number | null;
+    swingHigh: number | null;
+    trailBuf: number;
+    trailStart: number;
+    trailLock: number;
+    ema3: number | null;
+  }): Promise<void> {
+    const {
+      broker,
+      pos,
+      quote,
+      capitalUplReady,
+      beProgress,
+      beOffset,
+      beStart,
+      beMoney,
+      pv,
+      minStopDist,
+      scalpChase,
+      scalpLock,
+      swingLow,
+      swingHigh,
+      trailBuf,
+      trailStart,
+      trailLock,
+      ema3,
+    } = input;
+    await this.maybeBreakevenStop(broker, pos, quote, {
+      progressNeed: beProgress,
+      offset: beOffset,
+      beStart,
+      moneyNeed: beMoney,
+      pointValue: pv,
+      min_stop_distance: minStopDist,
+    });
+    // Mark-geometry profit locks need usable venue UPL on Capital LIVE
+    if (!capitalUplReady) return;
+    if (scalpChase) {
+      await this.maybeArmNativeTrailingStop(broker, pos, quote, {
+        lockPct: scalpLock,
+        min_stop_distance: minStopDist,
+      });
+      await this.maybeScalpPctChaseStop(broker, pos, quote, {
+        lockPct: scalpLock,
+        min_stop_distance: minStopDist,
+      });
+    } else {
+      await this.maybeTrailStop(broker, pos, quote, {
+        swing_low: swingLow,
+        swing_high: swingHigh,
+        trailing_buffer: trailBuf,
+        trail_start: trailStart,
+        trail_lock: trailLock,
+        min_stop_distance: minStopDist,
+      });
+    }
+    if (ema3 != null) {
+      await this.maybeEma3Trail(broker, pos, quote, {
+        ema3,
+        min_stop_distance: minStopDist,
+      });
+    }
+  }
+
   private async maybeArmNativeTrailingStop(
     broker: MasterBroker,
     pos: ManagedPosition,

@@ -1152,12 +1152,13 @@ class MasterRuntime {
     return this.capitalVenueOpens;
   }
 
-  /** Drop stale venue UPL + soft-trail arm so money exits cannot fire on unread Capital book. */
+  /** Drop stale venue UPL + soft/native trail arm so money exits cannot fire on unread Capital book. */
   private clearStaleBrokerUpl() {
     for (const p of this.positions.list()) {
       p.broker_upl = null;
       p.soft_trail_armed_at = null;
       p.soft_trail_peak = null;
+      p.native_trail_armed = false;
     }
   }
 
