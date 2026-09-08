@@ -40,11 +40,14 @@ describe('MASTER Capital epic + status venue', () => {
     });
     masterRuntime.attachBroker(broker);
     masterRuntime.setMode('LIVE');
+    masterRuntime.persist_ok = false;
     const live = masterRuntime.status();
     expect(live.capital_live_attached).toBe(true);
     expect(live.broker).toBe('CAPITAL');
     // Before any equity tick — must not advertise LIVE_RUNNING / proven
+    // Persist degrade must not mask unproven Capital account
     expect(live.capital_account_proven).toBe(false);
     expect(live.health).toBe('LIVE_ACCOUNT_UNPROVEN');
+    expect(live.persist_ok).toBe(false);
   });
 });

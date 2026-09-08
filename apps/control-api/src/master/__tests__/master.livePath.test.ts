@@ -3250,9 +3250,12 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     await masterRuntime.tick(bars, quote);
     expect(masterRuntime.account.trade_allowed).toBe(false);
     expect(String(masterRuntime.broker_detail || '')).toMatch(/capital_account_unproven/);
+    // Persist can fail async (DB down) — must not mask LIVE_ACCOUNT_UNPROVEN
+    masterRuntime.persist_ok = false;
     const st = masterRuntime.status();
     expect(st.capital_account_proven).toBe(false);
     expect(st.health).toBe('LIVE_ACCOUNT_UNPROVEN');
+    expect(st.persist_ok).toBe(false);
     expect(st.account.equity).toBe(0);
     expect(st.account.trade_allowed).toBe(false);
   });

@@ -2766,21 +2766,25 @@ class MasterRuntime {
       blocked: this.pipeline.journal.blocked().length,
       health: this.cfg.kill_switch
         ? 'KILL_SWITCH'
-        : !this.persist_ok
-          ? 'PERSIST_DEGRADED'
-          : this.cfg.mode === 'LIVE'
-            ? this.capitalLiveAttached()
-              ? !this.capitalAccountProven
-                ? 'LIVE_ACCOUNT_UNPROVEN'
-                : this.running
+        : // Capital LIVE unproven must not be masked by persist flakiness —
+          // operator needs the account-proof signal; persist_ok stays separate.
+          this.cfg.mode === 'LIVE' &&
+            this.capitalLiveAttached() &&
+            !this.capitalAccountProven
+          ? 'LIVE_ACCOUNT_UNPROVEN'
+          : !this.persist_ok
+            ? 'PERSIST_DEGRADED'
+            : this.cfg.mode === 'LIVE'
+              ? this.capitalLiveAttached()
+                ? this.running
                   ? 'LIVE_RUNNING'
                   : 'LIVE_ARMED'
+                : this.running
+                  ? 'LIVE_NO_CAPITAL'
+                  : 'LIVE_UNATTACHED'
               : this.running
-                ? 'LIVE_NO_CAPITAL'
-                : 'LIVE_UNATTACHED'
-            : this.running
-              ? 'PAPER_RUNNING'
-              : 'OK',
+                ? 'PAPER_RUNNING'
+                : 'OK',
       recovered: this.recovered,
       persist_ok: this.persist_ok,
       last_persist_error: this.last_persist_error,
