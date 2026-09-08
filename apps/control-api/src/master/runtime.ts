@@ -305,6 +305,8 @@ class MasterRuntime {
         size: p.size,
         value_per_point_per_lot: pv,
         broker_upl: p.broker_upl,
+        capitalLive:
+          this.broker instanceof CapitalBroker && !this.broker.paper,
       });
       return { ...p, upl, mark };
     });
@@ -459,9 +461,91 @@ class MasterRuntime {
           }
           for (const id of venueIds) {
             if (ids.includes(id) || this.positions.get(id)) continue;
+            const listedPos = listed.positions.find((p) => p.position_id === id);
             const r = await broker.closePosition(id);
-            if (r.ok) closed += 1;
-            else failed.push(`${id}:venue:${r.detail || 'close_failed'}`);
+            if (!r.ok) {
+              failed.push(`${id}:venue:${r.detail || 'close_failed'}`);
+              continue;
+            }
+            closed += 1;
+            // Journal venue-orphan flatten money when confirm/UPL proves it —
+            // otherwise day gates would fail-open (close without realized PnL).
+            const side = listedPos?.side ?? 'BUY';
+            const size =
+              listedPos?.size != null &&
+              Number.isFinite(listedPos.size) &&
+              listedPos.size > 0
+                ? Number(listedPos.size)
+                : 0;
+            const entryProven =
+              listedPos != null &&
+              listedPos.open_level_proven !== false &&
+              Number.isFinite(listedPos.open_level) &&
+              listedPos.open_level > 0
+                ? Number(listedPos.open_level)
+                : null;
+            const entry =
+              entryProven ??
+              (r.fill_price != null &&
+              Number.isFinite(r.fill_price) &&
+              r.fill_price > 0
+                ? Number(r.fill_price)
+                : null);
+            const quote = this.last_quote;
+            const mark = quote
+              ? protectiveMark(side, quote)
+              : entry ?? 0;
+            const { exit } = resolveCloseExitFill({
+              fill_price: r.fill_price,
+              mark: mark > 0 ? mark : entry ?? 0,
+              entry: entry ?? (mark > 0 ? mark : 0),
+              capitalLive: true,
+            });
+            const instrument = specForEpic(listedPos?.epic || this.epic);
+            const vol = size > 0 ? size : 1;
+            const priced = priceResolvedCloseMoney({
+              ...resolveCloseMoneyPnl({
+                side,
+                entry: entry ?? exit,
+                fill: exit,
+                size: vol,
+                value_per_point_per_lot: instrument.value_per_point_per_lot,
+                fill_pnl: preferCloseFillPnl({
+                  fill_pnl: r.fill_pnl,
+                  broker_upl: listedPos?.upl,
+                }),
+                capitalLive: true,
+              }),
+              volume: vol,
+            });
+            if (priced.pnl_proven) {
+              this.account.daily_pnl += priced.pnl;
+              if (priced.pnl < 0) {
+                this.account.consecutive_losses += 1;
+                this.last_loss_ms = Date.now();
+              } else {
+                this.account.consecutive_losses = 0;
+              }
+              this.persistRuntimeGates();
+            }
+            this.last_exit_reason = priced.pnl_proven
+              ? `${reason}:venue_orphan`
+              : `${reason}:venue_orphan · capital_close_pnl_unproven`;
+            logTradeEvent({
+              event: 'CLOSE',
+              broker: broker.name,
+              epic: listedPos?.epic || this.epic,
+              side,
+              volume: vol,
+              price: exit,
+              position_id: id,
+              intent_id: null,
+              opportunity_id: null,
+              ok: true,
+              detail: this.last_exit_reason,
+              pnl: priced.pnl,
+              fees: priced.fees,
+            });
           }
           // Re-list so status capital_venue_opens reflects post-flatten truth
           await this.refreshCapitalVenueOpens();
@@ -2870,7 +2954,12 @@ class MasterRuntime {
     const quote = this.last_quote;
     const pv = specForEpic(this.epic).value_per_point_per_lot;
     const floating = quote
-      ? floatingUnrealizedPnl(this.positions.list(), quote, pv)
+      ? floatingUnrealizedPnl(
+          this.positions.list(),
+          quote,
+          pv,
+          this.broker instanceof CapitalBroker && !this.broker.paper
+        )
       : null;
     const streamHealthy =
       this.broker instanceof CapitalBroker

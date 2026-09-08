@@ -18,7 +18,9 @@ export function instrumentMoneyPnl(input: {
 }
 
 /**
- * Prefer computed money when broker UPL is stale/zero while price is in profit.
+ * Prefer computed money when broker UPL is stale/zero while price is in profit
+ * (paper / mark-model arms). Capital LIVE: never invent mark profit over
+ * missing/zero venue UPL — money soft-trail / close-all must use broker UPL.
  */
 export function resolveFloatingMoneyPnl(input: {
   side: 'BUY' | 'SELL';
@@ -27,9 +29,15 @@ export function resolveFloatingMoneyPnl(input: {
   size: number;
   value_per_point_per_lot: number;
   broker_upl?: number | null;
+  /** Capital LIVE: trust venue UPL only; refuse mark profit when UPL missing */
+  capitalLive?: boolean;
 }): number {
   const computed = instrumentMoneyPnl(input);
   const broker = input.broker_upl;
+  if (input.capitalLive) {
+    if (broker != null && Number.isFinite(broker)) return Number(broker);
+    return 0;
+  }
   if (broker == null || !Number.isFinite(broker)) return computed;
   if (broker <= 0 && computed > 0) return computed;
   if (computed > 0 || broker > 0) return Math.max(broker, computed);

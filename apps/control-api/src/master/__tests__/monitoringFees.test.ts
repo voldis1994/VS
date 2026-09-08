@@ -63,6 +63,59 @@ describe('Capital LIVE close money fail-close', () => {
   });
 });
 
+describe('Capital LIVE floating money fail-close', () => {
+  it('trusts venue UPL including 0 — never invents mark profit', async () => {
+    const { resolveFloatingMoneyPnl } = await import('../moneyExit.js');
+    // Paper: broker 0 + mark profit → use mark (money BE)
+    expect(
+      resolveFloatingMoneyPnl({
+        side: 'BUY',
+        entry: 4400,
+        mark: 4400.5,
+        size: 0.1,
+        value_per_point_per_lot: 1,
+        broker_upl: 0,
+      })
+    ).toBeCloseTo(0.05, 8);
+    // Capital LIVE: broker 0 stays 0 (no mark invent)
+    expect(
+      resolveFloatingMoneyPnl({
+        side: 'BUY',
+        entry: 4400,
+        mark: 4400.5,
+        size: 0.1,
+        value_per_point_per_lot: 1,
+        broker_upl: 0,
+        capitalLive: true,
+      })
+    ).toBe(0);
+    // Capital LIVE: missing UPL → 0 (fail closed for money arms)
+    expect(
+      resolveFloatingMoneyPnl({
+        side: 'BUY',
+        entry: 4400,
+        mark: 4410,
+        size: 1,
+        value_per_point_per_lot: 1,
+        broker_upl: null,
+        capitalLive: true,
+      })
+    ).toBe(0);
+    // Capital LIVE: real UPL wins
+    expect(
+      resolveFloatingMoneyPnl({
+        side: 'BUY',
+        entry: 4400,
+        mark: 4410,
+        size: 1,
+        value_per_point_per_lot: 1,
+        broker_upl: 1.25,
+        capitalLive: true,
+      })
+    ).toBe(1.25);
+  });
+});
+
 describe('close fee honesty (replay parity)', () => {
   it('estimates commission from MASTER_COMMISSION_PER_LOT', () => {
     const prev = process.env.MASTER_COMMISSION_PER_LOT;

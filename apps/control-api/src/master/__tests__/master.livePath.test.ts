@@ -580,6 +580,72 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect((await masterRuntime.refuseDetachCapitalWithOpens()).ok).toBe(true);
   });
 
+  it('flatten venue orphan journals proven Capital profit into daily_pnl', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number;
+        upl?: number | null;
+      }
+    >();
+    positions.set('venue-orphan-pnl', {
+      deal_id: 'venue-orphan-pnl',
+      epic: 'GOLD',
+      direction: 'BUY',
+      size: 0.1,
+      open_level: 4410,
+      upl: -3.5,
+    });
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-orphan-pnl' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4380,
+        ask: 4380.4,
+        mid: 4380.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({
+        ok: true,
+        positions: [...positions.values()],
+        detail: `${positions.size}`,
+      }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async (_s, id) => {
+        positions.delete(String(id));
+        return { ok: true, deal_reference: `c-${id}`, detail: 'submitted' };
+      },
+      confirm: async () => ({
+        ok: false,
+        closed_gone: true,
+        deal_id: 'venue-orphan-pnl',
+        fill_level: 4380.1,
+        profit: -4.25,
+        detail: 'confirm_closed_gone:DELETED',
+      }),
+    });
+    await broker.connect();
+    masterRuntime.stop();
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.pipeline = new MasterPipeline('LIVE');
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    masterRuntime.account = { ...account, daily_pnl: 0, consecutive_losses: 0 };
+    const flat = await masterRuntime.flattenAll('TEST_FLATTEN_ORPHAN_PNL');
+    expect(flat.ok).toBe(true);
+    expect(flat.closed).toBeGreaterThanOrEqual(1);
+    expect(masterRuntime.account.daily_pnl).toBe(-4.25);
+    expect(masterRuntime.account.consecutive_losses).toBe(1);
+    expect(String(masterRuntime.last_exit_reason || '')).toMatch(/venue_orphan/);
+  });
+
   it('runtime LIVE tick opens when MASTER_LIVE_ENABLED and mocked Capital attached', async () => {
     process.env.MASTER_LIVE_ENABLED = 'true';
     const broker = mockCapitalBroker();
@@ -1558,8 +1624,15 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
       mode: 'LIVE',
       min_score: 0.3,
       block_off_hours: false,
+      cooldown_ms_after_loss: 0,
     };
-    masterRuntime.account = { ...account, trade_allowed: true };
+    masterRuntime.account = {
+      ...account,
+      trade_allowed: true,
+      consecutive_losses: 0,
+      daily_pnl: 0,
+    };
+    masterRuntime.last_loss_ms = 0;
     masterRuntime.running = true;
     masterRuntime.positions = new PositionManager();
     masterRuntime.pipeline = new MasterPipeline('LIVE');

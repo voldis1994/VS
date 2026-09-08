@@ -340,6 +340,7 @@ export class PositionManager {
     stale_quote_ms?: number;
   }): Promise<ManageTickResult> {
     const { broker, pipeline, quote } = input;
+    const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
     const pv = input.instrument_point_value ?? 1;
     const maxHold = input.max_hold_ms ?? 0;
     const beProgress = input.breakeven_progress ?? 0.5;
@@ -437,7 +438,6 @@ export class PositionManager {
             continue;
           }
           const mark = protectiveMark(pos.side, quote);
-          const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
           const { exit: fill, fill_proven } = resolveCloseExitFill({
             fill_price: closeRes.fill_price,
             mark,
@@ -486,7 +486,7 @@ export class PositionManager {
     }
 
     // Check- portfolio close-all on floating PnL (before per-position manage)
-    const floatPnl = floatingUnrealizedPnl(this.list(), quote, pv);
+    const floatPnl = floatingUnrealizedPnl(this.list(), quote, pv, capitalLive);
     const portfolioReason =
       closeAllProfit > 0 && floatPnl >= closeAllProfit
         ? `AUTO_PROFIT_${floatPnl.toFixed(2)}`
@@ -514,7 +514,6 @@ export class PositionManager {
           });
           continue;
         }
-        const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
         const { exit: fill, fill_proven } = resolveCloseExitFill({
           fill_price: closeRes.fill_price,
           mark,
@@ -582,6 +581,7 @@ export class PositionManager {
         size: pos.size,
         value_per_point_per_lot: pv,
         broker_upl: pos.broker_upl,
+        capitalLive,
       });
 
       // Never-naked: broker-truth null SL → attach 10% protective before soft exits
@@ -621,7 +621,6 @@ export class PositionManager {
             } else {
               const closeRes = await broker.closePosition(pos.position_id);
               if (closeRes.ok) {
-                const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
                 const { exit: fill, fill_proven } = resolveCloseExitFill({
                   fill_price: closeRes.fill_price,
                   mark,
@@ -721,7 +720,6 @@ export class PositionManager {
           } else {
             const closeRes = await broker.closePosition(pos.position_id);
             if (closeRes.ok) {
-              const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
               const { exit: fill, fill_proven } = resolveCloseExitFill({
                 fill_price: closeRes.fill_price,
                 mark,
@@ -830,7 +828,6 @@ export class PositionManager {
               size: partial.close_size,
             });
             if (closeRes.ok) {
-              const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
               const { exit: fill, fill_proven } = resolveCloseExitFill({
                 fill_price: closeRes.fill_price,
                 mark,
@@ -1034,7 +1031,6 @@ export class PositionManager {
         continue;
       }
 
-      const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
       const hardReason = protective?.reason ?? null;
       const { exit, fill_proven } = resolveCloseExitFill({
         fill_price: closeRes.fill_price,
@@ -1114,6 +1110,7 @@ export class PositionManager {
     close_failed?: ManageTickResult['close_failed'];
   }> {
     const { broker, pipeline, pos, quote, mark, heldMs, pv, volumeStep } = input;
+    const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
     const levels = pos.multi_tp_levels;
     if (!levels?.length) return { handled: false };
 
@@ -1165,7 +1162,6 @@ export class PositionManager {
         break;
       }
 
-      const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
       const { exit: fill, fill_proven } = resolveCloseExitFill({
         fill_price: closeRes.fill_price,
         mark,
@@ -1668,6 +1664,7 @@ export class PositionManager {
       size: pos.size,
       value_per_point_per_lot: opts.pointValue ?? 1,
       broker_upl: pos.broker_upl,
+      capitalLive: broker.name === 'CAPITAL' && !broker.paper,
     });
 
     let armed = false;
@@ -2025,7 +2022,8 @@ export function floatingUnrealizedPnl(
     Pick<ManagedPosition, 'side' | 'entry' | 'size' | 'broker_upl'>
   >,
   quote: Quote,
-  pointValue = 1
+  pointValue = 1,
+  capitalLive = false
 ): number {
   let sum = 0;
   for (const pos of positions) {
@@ -2037,6 +2035,7 @@ export function floatingUnrealizedPnl(
       size: pos.size,
       value_per_point_per_lot: pointValue,
       broker_upl: pos.broker_upl,
+      capitalLive,
     });
   }
   return sum;
