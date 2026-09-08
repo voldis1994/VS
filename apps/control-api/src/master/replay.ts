@@ -2,12 +2,21 @@
 import { decideBestOutcomeExit } from '../services/exitManage.js';
 import { setupKey } from './decision.js';
 import {
+  capitalSafeBreakEvenStop,
   decideSoftTrailArm,
   softTrailDistancePrice,
   softTrailExitHit,
   softTrailExitLevel,
   updateSoftTrailPeak,
 } from './moneyExit.js';
+import {
+  buildEqualMultiTpPlan,
+  clampCloseVolume,
+  multiTpFinalPrice,
+  multiTpHit,
+  multiTpPendingIndex,
+  type MultiTpLevel,
+} from './multiTp.js';
 import { computePerformance, monteCarlo } from './performance.js';
 import {
   DEFAULT_MASTER_CONFIG,
@@ -87,10 +96,53 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
     entry_setup: string;
     soft_trail_armed: boolean;
     soft_trail_peak: number | null;
+    multi_tp_levels: MultiTpLevel[] | null;
   } | null = null;
 
   const equity_curve: number[] = [equity];
   const pv = GOLD_SPEC.value_per_point_per_lot;
+
+  const closeSlice = (
+    o: NonNullable<typeof open>,
+    fill: number,
+    volume: number,
+    reason: string,
+    i: number,
+    ts_ms: number
+  ) => {
+    const slipSigned = o.side === 'BUY' ? -slip : slip;
+    const px = fill + slipSigned;
+    const pnlGross =
+      o.side === 'BUY'
+        ? (px - o.entry) * volume
+        : (o.entry - px) * volume;
+    const pnl = pnlGross - commission * (volume / Math.max(o.volume, 1e-9));
+    const risk = Math.abs(o.entry - o.sl) * volume || 1;
+    const outcome: TradeOutcome = {
+      position_id: `bt-${o.open_i}`,
+      side: o.side,
+      entry: o.entry,
+      exit: px,
+      volume,
+      pnl,
+      fees: commission * (volume / Math.max(o.volume, 1e-9)),
+      slippage: Math.abs(slipSigned) * volume,
+      mae: Math.abs(Math.min(0, o.mae)),
+      mfe: Math.max(0, o.mfe),
+      r_multiple: pnl / risk,
+      hold_ms: (i - o.open_i) * 60_000,
+      exit_reason: reason,
+    };
+    pipe.recordTradeClose(o.oppId, o.decision, outcome);
+    equity += pnl;
+    daily_pnl += pnl;
+    peak = Math.max(peak, equity);
+    if (pnl <= 0) {
+      consecutive_losses += 1;
+      last_loss_ms = ts_ms;
+    } else consecutive_losses = 0;
+    return outcome;
+  };
 
   for (let i = warmup; i < opts.bars.length; i++) {
     const visible = opts.bars.slice(0, i + 1);
@@ -116,14 +168,35 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
       const peakRetention =
         open.mfe > 1e-9 ? Math.max(0, Math.min(1, fav / open.mfe)) : null;
 
-      // Live-parity manage: BE + scalp chase + soft trail + BestOutcome + time stop
-      if (cfg.be_start > 0 && open.mfe >= cfg.be_start) {
-        const be =
-          open.side === 'BUY'
-            ? open.entry + (cfg.breakeven_offset || 0)
-            : open.entry - (cfg.breakeven_offset || 0);
-        if (open.side === 'BUY' && be > open.sl) open.sl = be;
-        if (open.side === 'SELL' && be < open.sl) open.sl = be;
+      // Money-BE + be_start + progress — Capital-safe geometry (defer illegal)
+      {
+        const moneyNeed = cfg.breakeven_activation_money ?? 0;
+        const beStart = cfg.be_start ?? 0;
+        const progressNeed = cfg.breakeven_progress ?? 0;
+        let armed = false;
+        if (moneyNeed > 0 && moneyPnl >= moneyNeed) armed = true;
+        if (!armed && beStart > 0 && fav >= beStart) armed = true;
+        if (
+          !armed &&
+          progressNeed > 0 &&
+          open.tp != null &&
+          Number.isFinite(open.tp)
+        ) {
+          const tpDist = Math.abs(open.tp - open.entry);
+          if (tpDist >= 1e-9 && fav / tpDist >= progressNeed) armed = true;
+        }
+        if (armed) {
+          const be = capitalSafeBreakEvenStop({
+            side: open.side,
+            entry: open.entry,
+            mark,
+            symbol: 'GOLD',
+            offset: cfg.breakeven_offset || 0,
+            current_stop: open.sl,
+            min_distance: null,
+          });
+          if (be != null) open.sl = be;
+        }
       }
       if (cfg.scalp_pct_chase && open.mfe > 0) {
         const lock = cfg.scalp_lock_pct ?? 0.2;
@@ -155,6 +228,39 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
               open.soft_trail_peak
             );
           }
+        }
+      }
+
+      // Multi-TP intermediate scale-outs (live parity)
+      if (open.multi_tp_levels?.length) {
+        let idx = multiTpPendingIndex(open.multi_tp_levels);
+        while (idx >= 0 && open) {
+          const lvl = open.multi_tp_levels[idx]!;
+          if (!multiTpHit(open.side, mark, lvl.price)) break;
+          const isFinal = idx === open.multi_tp_levels.length - 1;
+          const closeVol = clampCloseVolume(
+            lvl.close_volume,
+            open.volume,
+            0.01,
+            isFinal
+          );
+          if (closeVol == null || closeVol <= 0) {
+            lvl.status = 'FAILED';
+            idx = multiTpPendingIndex(open.multi_tp_levels);
+            continue;
+          }
+          lvl.status = 'EXECUTED';
+          closeSlice(open, lvl.price, closeVol, `MULTI_TP_${lvl.index}`, i, quote.ts_ms);
+          open.volume = Number((open.volume - closeVol).toFixed(8));
+          if (open.volume <= 1e-9 || isFinal) {
+            open = null;
+            break;
+          }
+          idx = multiTpPendingIndex(open.multi_tp_levels);
+        }
+        if (!open) {
+          equity_curve.push(equity);
+          continue;
         }
       }
 
@@ -197,6 +303,10 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
         }
       }
       if (exitPx == null) {
+        const hardTp =
+          open.multi_tp_levels?.length
+            ? multiTpFinalPrice(open.multi_tp_levels) ?? open.tp
+            : open.tp;
         if (cfg.max_hold_ms > 0 && quote.ts_ms - open.open_ts >= cfg.max_hold_ms) {
           exitPx = mark;
           reason = 'TIME_STOP';
@@ -204,52 +314,22 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
           if (lo <= open.sl) {
             exitPx = open.sl;
             reason = 'SL';
-          } else if (hi >= open.tp) {
-            exitPx = open.tp;
+          } else if (hi >= hardTp) {
+            exitPx = hardTp;
             reason = 'TP';
           }
         } else {
           if (hi >= open.sl) {
             exitPx = open.sl;
             reason = 'SL';
-          } else if (lo <= open.tp) {
-            exitPx = open.tp;
+          } else if (lo <= hardTp) {
+            exitPx = hardTp;
             reason = 'TP';
           }
         }
       }
       if (exitPx != null) {
-        const slipSigned = open.side === 'BUY' ? -slip : slip;
-        const fill = exitPx + slipSigned;
-        const pnlGross =
-          open.side === 'BUY'
-            ? (fill - open.entry) * open.volume
-            : (open.entry - fill) * open.volume;
-        const pnl = pnlGross - commission;
-        const risk = Math.abs(open.entry - open.sl) * open.volume || 1;
-        const outcome: TradeOutcome = {
-          position_id: `bt-${open.open_i}`,
-          side: open.side,
-          entry: open.entry,
-          exit: fill,
-          volume: open.volume,
-          pnl,
-          fees: commission,
-          slippage: Math.abs(slipSigned) * open.volume,
-          mae: Math.abs(Math.min(0, open.mae)),
-          mfe: Math.max(0, open.mfe),
-          r_multiple: pnl / risk,
-          hold_ms: (i - open.open_i) * 60_000,
-          exit_reason: reason,
-        };
-        pipe.recordTradeClose(open.oppId, open.decision, outcome);
-        equity += pnl;
-        daily_pnl += pnl;
-        peak = Math.max(peak, equity);
-        if (pnl <= 0) {
-          consecutive_losses += 1;
-          last_loss_ms = quote.ts_ms;
-        } else consecutive_losses = 0;
+        closeSlice(open, exitPx, open.volume, reason, i, quote.ts_ms);
         open = null;
       }
     }
@@ -321,7 +401,25 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
           ),
           soft_trail_armed: false,
           soft_trail_peak: null,
+          multi_tp_levels:
+            cfg.multi_tp_count >= 2
+              ? buildEqualMultiTpPlan({
+                  side,
+                  entry: raw,
+                  initial_volume: cycle.risk.volume,
+                  count: cfg.multi_tp_count,
+                  atr: Math.max(cycle.decision.analysis.atr || 1, 0.5),
+                  atr_tp_mult: cfg.multi_tp_atr_mult || 1.5,
+                  volume_step: 0.01,
+                })
+              : null,
         };
+        if (open.multi_tp_levels?.length) {
+          const final = multiTpFinalPrice(open.multi_tp_levels);
+          if (final != null) open.tp = final;
+        } else {
+          open.multi_tp_levels = null;
+        }
         // skip ahead to fill bar index to avoid using future beyond fill for entry decision already taken
         i = fillIndex;
       }

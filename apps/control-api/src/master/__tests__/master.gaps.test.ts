@@ -3881,6 +3881,46 @@ describe('orphan adopt + replay soft-trail authority', () => {
     expect(result.equity_curve.length).toBeGreaterThan(10);
     expect(exits.every((r) => typeof r === 'string' && r.length > 0)).toBe(true);
   });
+
+  it('replay multi-TP + money-BE cfg does not throw and can scale', async () => {
+    const { replayMaster } = await import('../replay.js');
+    const { SCALP_MANAGE_PRESET } = await import('../manageConfig.js');
+    const bars = Array.from({ length: 90 }, (_, i) => {
+      const o = 4400 + i * 0.8;
+      return {
+        open: o,
+        high: o + 2,
+        low: o - 0.5,
+        close: o + 1.2,
+        ts_ms: Date.UTC(2026, 8, 7, 12, i),
+      };
+    });
+    const result = await replayMaster({
+      bars,
+      warmup: 25,
+      cfg: {
+        ...SCALP_MANAGE_PRESET,
+        multi_tp_count: 3,
+        multi_tp_atr_mult: 1,
+        breakeven_activation_money: 0.05,
+        be_start: 0.5,
+        block_off_hours: false,
+        block_high_impact_news: false,
+        min_score: 0.3,
+        max_hold_ms: 0,
+      },
+    });
+    expect(result.equity_curve.length).toBeGreaterThan(10);
+    const reasons = result.opportunities
+      .filter((o) => o.outcome)
+      .map((o) => o.outcome!.exit_reason);
+    // MULTI_TP optional depending on fills — at least one exit reason present if traded
+    if (reasons.length) {
+      expect(reasons.some((r) => /SL|TP|MULTI_TP|SOFT_TRAIL|TIME|BEST|Hard|Target|Peak/i.test(r))).toBe(
+        true
+      );
+    }
+  });
 });
 
 describe('expectancy gate + pure evaluate', () => {

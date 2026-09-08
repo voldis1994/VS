@@ -504,6 +504,39 @@ describe('VS MASTER stop() empty-wipe guard', () => {
     expect(still.length).toBe(1);
     expect(still[0]!.position_id).toBe('guard-pos-1');
   });
+
+  it('operator_meta in master_state restores manage/owns when sidecars missing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'master-opmeta-'));
+    const fp = new FilePersist(dir);
+    // Seed sidecars then flush into master_state.json
+    const { writeFileSync, unlinkSync } = require('fs') as typeof import('fs');
+    writeFileSync(
+      join(dir, 'master_manage_config.json'),
+      JSON.stringify({ soft_trail_money_arm: 0.05, multi_tp_count: 3 })
+    );
+    writeFileSync(join(dir, 'owns_pipeline.json'), JSON.stringify({ owns_pipeline: true }));
+    writeFileSync(
+      join(dir, 'runtime_gates.json'),
+      JSON.stringify({ last_loss_ms: 42, reject_until_ms: 0 })
+    );
+    fp.flush();
+    const state = JSON.parse(readFileSync(join(dir, 'master_state.json'), 'utf8'));
+    expect(state.operator_meta?.manage?.soft_trail_money_arm).toBe(0.05);
+    expect(state.operator_meta?.owns_pipeline).toBe(true);
+    // Wipe sidecars — reload must restore
+    unlinkSync(join(dir, 'master_manage_config.json'));
+    unlinkSync(join(dir, 'owns_pipeline.json'));
+    unlinkSync(join(dir, 'runtime_gates.json'));
+    const fp2 = new FilePersist(dir);
+    void fp2;
+    expect(existsSync(join(dir, 'master_manage_config.json'))).toBe(true);
+    const manage = JSON.parse(
+      readFileSync(join(dir, 'master_manage_config.json'), 'utf8')
+    );
+    expect(manage.multi_tp_count).toBe(3);
+    const owns = JSON.parse(readFileSync(join(dir, 'owns_pipeline.json'), 'utf8'));
+    expect(owns.owns_pipeline).toBe(true);
+  });
 });
 
 type PersistClientLike = {

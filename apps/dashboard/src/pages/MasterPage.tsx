@@ -27,6 +27,13 @@ type MasterStatus = {
   sell_score: number;
   regime: string;
   market_state: string;
+  last_market?: {
+    ok: boolean;
+    quality: number;
+    reasons: string[];
+    bars_in: number;
+    bars_out: number;
+  } | null;
   account: {
     equity: number | null;
     balance: number | null;
@@ -159,7 +166,7 @@ type JournalOpp = {
   id: string;
   epic: string;
   executed: boolean;
-  decision?: { kind?: string; side?: string };
+  decision?: { kind?: string; side?: string; block_reason?: string | null };
   outcome?: {
     pnl: number;
     exit_reason: string;
@@ -351,6 +358,18 @@ export function MasterPage() {
         { k: 'AI mode', v: status.ai_mode || '—' },
         { k: 'Running', v: status.running ? 'YES' : 'NO', ok: status.running },
         { k: 'Regime', v: status.regime },
+        {
+          k: 'Norm',
+          v: status.last_market
+            ? `Q=${status.last_market.quality.toFixed(2)} · ${status.last_market.bars_out}/${status.last_market.bars_in}${
+                status.last_market.reasons.length
+                  ? ` · ${status.last_market.reasons.slice(0, 2).join('|')}`
+                  : ''
+              }`
+            : '—',
+          bad: !!status.last_market && (!status.last_market.ok || status.last_market.quality < 0.5),
+          ok: !!status.last_market?.ok && (status.last_market.quality ?? 0) >= 0.5,
+        },
         { k: 'BUY', v: Number(status.buy_score || 0).toFixed(3) },
         { k: 'SELL', v: Number(status.sell_score || 0).toFixed(3) },
         { k: 'Decision', v: status.last_decision?.kind || '—' },
@@ -897,6 +916,17 @@ export function MasterPage() {
             />
           </label>
           <label style={{ fontSize: 12 }}>
+            be_money{' '}
+            <input
+              type="number"
+              step="0.01"
+              min={0}
+              defaultValue={status?.manage?.breakeven_activation_money ?? 0}
+              id="cfg-be-money"
+              style={{ width: 64 }}
+            />
+          </label>
+          <label style={{ fontSize: 12 }}>
             soft_trail_arm{' '}
             <input
               type="number"
@@ -992,6 +1022,7 @@ export function MasterPage() {
                   body: JSON.stringify({
                     min_score: num('cfg-min-score'),
                     be_start: num('cfg-be-start'),
+                    breakeven_activation_money: num('cfg-be-money'),
                     daily_loss_limit: num('cfg-daily-loss'),
                     soft_trail_money_arm: num('cfg-soft-arm'),
                     soft_trail_pips: num('cfg-soft-pips'),
@@ -1225,10 +1256,9 @@ export function MasterPage() {
         ) : (
           setupEv.slice(0, 12).map((e) => {
             const minN = status?.manage?.min_expectancy_samples ?? 20;
-            const gateHit =
-              !!status?.manage?.require_positive_expectancy &&
-              e.samples >= minN &&
-              !e.positive;
+            const wouldGate = e.samples >= minN && !e.positive;
+            const gateOn = !!status?.manage?.require_positive_expectancy;
+            const gateHit = gateOn && wouldGate;
             return (
               <div key={e.setup_key} className="card">
                 <div style={{ fontWeight: 600, fontSize: 12 }}>{e.setup_key}</div>
@@ -1238,14 +1268,16 @@ export function MasterPage() {
                     marginTop: 4,
                     color: gateHit
                       ? 'var(--bad, #c44)'
-                      : e.positive
-                        ? 'var(--ok, #2a7)'
-                        : 'var(--text-secondary)',
+                      : wouldGate
+                        ? 'var(--bad, #c44)'
+                        : e.positive
+                          ? 'var(--ok, #2a7)'
+                          : 'var(--text-secondary)',
                   }}
                 >
                   EV {e.ev.toFixed(3)} · n={e.samples}
                   {e.positive ? ' · +' : ' · −'}
-                  {gateHit ? ' · GATE' : ''}
+                  {gateHit ? ' · GATE' : wouldGate ? ' · WOULD_GATE' : ''}
                 </div>
               </div>
             );
@@ -1297,6 +1329,9 @@ export function MasterPage() {
               <div key={o.id} className="card">
                 <div style={{ fontWeight: 600 }}>
                   {o.decision?.kind || 'WAIT'} {o.epic}
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
+                  {String(o.decision?.block_reason || 'blocked').slice(0, 64)}
                 </div>
               </div>
             ))}

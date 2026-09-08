@@ -24,6 +24,12 @@ export type FilePersistState = {
   }>;
   positions: ManagedPosition[];
   intents: string[];
+  /** Manage/owns/gates — survive with positions when sidecar JSON is wiped */
+  operator_meta?: {
+    manage?: Record<string, unknown> | null;
+    owns_pipeline?: boolean | null;
+    gates?: Record<string, unknown> | null;
+  };
 };
 
 export class FilePersist implements PersistClient {
@@ -116,9 +122,55 @@ export class FilePersist implements PersistClient {
         // Preserve disk timestamp; missing → epoch so recover never counts as "today"
         created_at: o.created_at || '1970-01-01T00:00:00.000Z',
       }));
+      // Restore operator knobs into sidecar files when missing (PG-only recovery hole)
+      this.restoreOperatorMeta(raw.operator_meta);
     } catch {
       /* start clean */
     }
+  }
+
+  private restoreOperatorMeta(
+    meta: FilePersistState['operator_meta'] | undefined
+  ) {
+    if (!meta) return;
+    try {
+      const managePath = join(this.root, 'master_manage_config.json');
+      if (meta.manage && !existsSync(managePath)) {
+        atomicWriteJson(managePath, meta.manage);
+      }
+      const ownsPath = join(this.root, 'owns_pipeline.json');
+      if (typeof meta.owns_pipeline === 'boolean' && !existsSync(ownsPath)) {
+        atomicWriteJson(ownsPath, { owns_pipeline: meta.owns_pipeline });
+      }
+      const gatesPath = join(this.root, 'runtime_gates.json');
+      if (meta.gates && !existsSync(gatesPath)) {
+        atomicWriteJson(gatesPath, meta.gates);
+      }
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  private snapshotOperatorMeta(): FilePersistState['operator_meta'] {
+    const readJson = (name: string): Record<string, unknown> | null => {
+      try {
+        const p = join(this.root, name);
+        if (!existsSync(p)) return null;
+        const raw = JSON.parse(readFileSync(p, 'utf8'));
+        return raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : null;
+      } catch {
+        return null;
+      }
+    };
+    const manage = readJson('master_manage_config.json');
+    const ownsRaw = readJson('owns_pipeline.json');
+    const gates = readJson('runtime_gates.json');
+    const owns =
+      ownsRaw && typeof ownsRaw.owns_pipeline === 'boolean'
+        ? (ownsRaw.owns_pipeline as boolean)
+        : null;
+    if (!manage && owns == null && !gates) return undefined;
+    return { manage, owns_pipeline: owns, gates };
   }
 
   flush() {
@@ -229,6 +281,7 @@ export class FilePersist implements PersistClient {
         })(),
       })),
       intents: [...this.mem.intents],
+      operator_meta: this.snapshotOperatorMeta(),
     };
     atomicWriteJson(this.statePath(), state);
   }

@@ -107,6 +107,14 @@ export type MasterStatus = {
   sell_score: number;
   regime: string;
   market_state: string;
+  /** Last market validation/normalization snapshot (quality + drop reasons). */
+  last_market: {
+    ok: boolean;
+    quality: number;
+    reasons: string[];
+    bars_in: number;
+    bars_out: number;
+  } | null;
   /** Null money fields when Capital LIVE account is unproven (never forged £0). */
   account: (Omit<
     AccountSnapshot,
@@ -209,6 +217,7 @@ class MasterRuntime {
   };
   last_decision: ReturnType<typeof decide> | null = null;
   last_risk: ReturnType<typeof evaluateRisk> | null = null;
+  last_market: MasterStatus['last_market'] = null;
   last_bars: Bar[] = [];
   last_quote: Quote | null = null;
   last_execution_detail: string | null = null;
@@ -1640,6 +1649,13 @@ class MasterRuntime {
     });
     this.last_decision = cycle.decision;
     this.last_risk = cycle.risk;
+    this.last_market = {
+      ok: cycle.market.ok,
+      quality: cycle.market.quality,
+      reasons: [...cycle.market.reasons],
+      bars_in: bars.length,
+      bars_out: cycle.market.bars.length,
+    };
     this.last_ai_allow_close = cycle.ai.allow_close !== false;
     this.trackPersist('opportunity', persistOpportunity(cycle.opportunity));
 
@@ -3292,6 +3308,7 @@ class MasterRuntime {
       sell_score: this.last_decision?.sell?.score ?? 0,
       regime: this.last_decision?.analysis.regime ?? 'UNKNOWN',
       market_state: this.last_decision?.analysis.market_state ?? '—',
+      last_market: this.last_market,
       account:
         this.broker instanceof CapitalBroker &&
         !this.broker.paper &&
