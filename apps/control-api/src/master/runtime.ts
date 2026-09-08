@@ -62,6 +62,7 @@ import {
 } from './cycleAlerts.js';
 import { loadRuntimeGates, saveRuntimeGates } from './runtimeGates.js';
 import { loadOwnsPipelinePref, saveOwnsPipelinePref } from './ownsPipelinePref.js';
+import { loadMarketCache, saveMarketCache } from './marketCache.js';
 import { newsBlocksEntries, resolveNewsWindow, type NewsWindowState } from './newsGate.js';
 import { refreshNewsCalendar } from './newsCalendar.js';
 import { SpreadHistory } from './spreadModel.js';
@@ -1396,6 +1397,7 @@ class MasterRuntime {
     const quote: Quote = { ...quoteIn, epic: quoteIn.epic || this.epic };
     this.last_bars = bars;
     this.last_quote = quote;
+    this.persistMarketCache();
     this.rollDailyPnl();
     const broker = this.broker || this.ensurePaperBroker();
     if (broker instanceof Mt4FileBroker) {
@@ -2196,6 +2198,7 @@ class MasterRuntime {
     ensureOperatorMetaFromStateDir();
     this.hydrateManageConfig();
     this.hydrateOwnsPipelinePref();
+    this.hydrateMarketCacheFromDisk();
     const loaded = await loadOpenPositions();
     const valid = loaded.filter((p) => p.decision && p.position_id);
     this.positions.fromJSON(valid);
@@ -3098,10 +3101,12 @@ class MasterRuntime {
 
   /**
    * After recover: if opens exist but last_bars/quote empty, pull broker quote+history
-   * and run one manage-only tick so stops/exits are not blind until the poll loop.
+   * (or disk market_cache) and run one manage-only tick so stops/exits are not blind.
    */
   private async bootstrapManageAfterRecover(): Promise<void> {
     if (!this.broker || this.positions.count() === 0) return;
+    // Disk cache first — covers history fetch miss / slow Capital OHLC
+    this.hydrateMarketCacheFromDisk();
     if (this.last_bars.length >= 5 && this.last_quote) {
       await this.manageOnlyTick(this.last_bars, this.last_quote);
       return;
@@ -3116,7 +3121,13 @@ class MasterRuntime {
       } catch {
         q = null;
       }
-      if (!q) return;
+      if (!q) {
+        // Live quote miss — still manage on fresh-enough cached quote + bars
+        if (this.last_bars.length >= 5 && this.last_quote) {
+          await this.manageOnlyTick(this.last_bars, this.last_quote);
+        }
+        return;
+      }
       const quote: Quote = {
         bid: q.bid,
         ask: q.ask,
@@ -3156,6 +3167,7 @@ class MasterRuntime {
         }
       }
       if (bars.length >= 5) {
+        this.persistMarketCache();
         await this.manageOnlyTick(bars, quote);
       }
     } catch (e) {
@@ -3165,6 +3177,38 @@ class MasterRuntime {
         message: e instanceof Error ? e.message : String(e),
         context: { epic: this.epic, opens: this.positions.count() },
       });
+    }
+  }
+
+  private persistMarketCache(): void {
+    if (!this.last_bars.length && !this.last_quote) return;
+    saveMarketCache({
+      epic: this.epic,
+      bars: this.last_bars,
+      quote: this.last_quote,
+      structure_seed_source: this.structure_seed_source,
+    });
+  }
+
+  /** Restore bars always; quote only when still within stale_quote_ms. */
+  private hydrateMarketCacheFromDisk(): void {
+    const cached = loadMarketCache();
+    if (!cached) return;
+    if (cached.epic && cached.epic !== this.epic) return;
+    if (this.last_bars.length < 5 && cached.bars.length >= 5) {
+      this.last_bars = cached.bars;
+      if (
+        cached.structure_seed_source &&
+        (!this.structure_seed_source || this.structure_seed_source === 'none')
+      ) {
+        this.structure_seed_source = String(cached.structure_seed_source);
+      }
+    }
+    if (!this.last_quote && cached.quote) {
+      const age = Math.max(0, Date.now() - (cached.quote.ts_ms || cached.saved_at_ms || 0));
+      if (age <= this.cfg.stale_quote_ms) {
+        this.last_quote = cached.quote;
+      }
     }
   }
 
@@ -3207,6 +3251,7 @@ class MasterRuntime {
     }
     this.last_bars = bars;
     this.last_quote = quote;
+    this.persistMarketCache();
     if (broker instanceof Mt4FileBroker) {
       this.syncEpicFromMt4Chart(broker);
     }
