@@ -5,7 +5,7 @@
  */
 import type { CapitalPriceCandle } from '../services/capitalCom.js';
 import type { TenSecBar } from '../services/tenSecondOhlc.js';
-import { createCapitalBroker } from './capitalFactory.js';
+import { createCapitalBroker, masterCapitalConnectionId } from './capitalFactory.js';
 import { isMeaningfulBar } from './liveFeed.js';
 import { masterRuntime } from './runtime.js';
 import type { Bar, Quote } from './types.js';
@@ -76,7 +76,7 @@ export async function ensureMasterCapitalBroker(creds: {
     if (masterRuntime.broker?.name !== 'CAPITAL') {
       const broker = createCapitalBroker({
         ...creds,
-        connectionId: creds.connectionId && creds.connectionId > 0 ? creds.connectionId : 900002,
+        connectionId: masterCapitalConnectionId(creds.connectionId ?? null),
       });
       const opened = await broker.connect();
       if (!opened.ok) {

@@ -257,21 +257,80 @@ export async function openCapitalSession(input: {
       continue;
     }
 
-    const authHeaders = {
+    const tokens = { cst, securityToken: sec };
+    const authHeaders: Record<string, string> = {
       Accept: 'application/json',
       'Content-Type': 'application/json',
       'X-CAP-API-KEY': apiKey,
-      CST: cst,
-      'X-SECURITY-TOKEN': sec,
+      CST: tokens.cst,
+      'X-SECURITY-TOKEN': tokens.securityToken,
     };
 
-    const request = async (method: string, path: string, body?: unknown) => {
+    const applyTokens = (nextCst: string, nextSec: string) => {
+      tokens.cst = nextCst;
+      tokens.securityToken = nextSec;
+      authHeaders.CST = nextCst;
+      authHeaders['X-SECURITY-TOKEN'] = nextSec;
+      if (sessionRef) {
+        sessionRef.cst = nextCst;
+        sessionRef.securityToken = nextSec;
+      }
+    };
+
+    // VS-System: 401/403 → one re-POST /session then retry (CST dies on idle / sibling login)
+    const relogin = async (): Promise<boolean> => {
+      try {
+        const again = await createSession(
+          base,
+          apiKey,
+          identifier,
+          attempt.password,
+          attempt.encrypted
+        );
+        if (!again.res.ok) return false;
+        const nc =
+          again.res.headers.get('CST') || again.res.headers.get('cst');
+        const ns =
+          again.res.headers.get('X-SECURITY-TOKEN') ||
+          again.res.headers.get('x-security-token');
+        if (!nc || !ns) return false;
+        applyTokens(nc, ns);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const request = async (
+      method: string,
+      path: string,
+      body?: unknown,
+      retried = false
+    ): Promise<{ ok: boolean; status: number; json: any; text: string }> => {
       const url = path.startsWith('http') ? path : `${base}${path}`;
       const r = await fetch(url, {
         method,
         headers: authHeaders,
         body: body === undefined ? undefined : JSON.stringify(body),
       });
+      // Refresh tokens if Capital returns rotated headers
+      const rotCst = r.headers.get('CST') || r.headers.get('cst');
+      const rotSec =
+        r.headers.get('X-SECURITY-TOKEN') || r.headers.get('x-security-token');
+      if (rotCst && rotSec) applyTokens(rotCst, rotSec);
+
+      const isSessionPath =
+        path === '/api/v1/session' || path.endsWith('/api/v1/session');
+      if (
+        (r.status === 401 || r.status === 403) &&
+        !retried &&
+        !isSessionPath
+      ) {
+        if (await relogin()) {
+          return request(method, path, body, true);
+        }
+      }
+
       const t = await r.text();
       let j: any = {};
       try {
@@ -282,11 +341,12 @@ export async function openCapitalSession(input: {
       return { ok: r.ok, status: r.status, json: j, text: t };
     };
 
+    let sessionRef: CapitalSession | null = null;
     const session: CapitalSession = {
       base,
       apiKey,
-      cst,
-      securityToken: sec,
+      cst: tokens.cst,
+      securityToken: tokens.securityToken,
       accountType: typeof json.accountType === 'string' ? json.accountType : undefined,
       currentAccountId:
         typeof json.currentAccountId === 'string'
@@ -300,8 +360,8 @@ export async function openCapitalSession(input: {
             method: 'DELETE',
             headers: {
               'X-CAP-API-KEY': apiKey,
-              CST: cst,
-              'X-SECURITY-TOKEN': sec,
+              CST: tokens.cst,
+              'X-SECURITY-TOKEN': tokens.securityToken,
             },
           });
         } catch {
@@ -313,6 +373,7 @@ export async function openCapitalSession(input: {
       put: (path: string, body?: unknown) => request('PUT', path, body ?? {}),
       del: (path: string) => request('DELETE', path),
     };
+    sessionRef = session;
 
     return { ok: true, session };
   }

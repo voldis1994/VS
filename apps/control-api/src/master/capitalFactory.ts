@@ -21,9 +21,24 @@ export type CapitalBrokerCreds = {
   capitalAccountId?: string | null;
 };
 
+/**
+ * One Capital login must share one pool connectionId (VS-System CST rule).
+ * Env MASTER_CAPITAL_CONNECTION_ID wins; default 900001 for both env + desk paths.
+ */
+export function masterCapitalConnectionId(explicit?: number | null): number {
+  if (explicit != null && Number.isFinite(explicit) && explicit > 0) {
+    return Math.floor(explicit);
+  }
+  const fromEnv = Number(process.env.MASTER_CAPITAL_CONNECTION_ID || 900001);
+  return Number.isFinite(fromEnv) && fromEnv > 0 ? Math.floor(fromEnv) : 900001;
+}
+
 export function createCapitalBroker(creds: CapitalBrokerCreds): CapitalBroker {
   return new CapitalBroker({
-    credentials: creds,
+    credentials: {
+      ...creds,
+      connectionId: masterCapitalConnectionId(creds.connectionId ?? null),
+    },
     acquire: async (input) => {
       const opened = await acquireCapitalSession(input);
       if (!opened.ok) {

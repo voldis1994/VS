@@ -4,7 +4,7 @@
  * LIVE connect failure does NOT silently fall back to PAPER (deskBridge parity).
  */
 import { PaperBroker, type MasterBroker } from './broker.js';
-import { createCapitalBroker } from './capitalFactory.js';
+import { createCapitalBroker, masterCapitalConnectionId } from './capitalFactory.js';
 import { Mt4FileBroker } from './broker.js';
 
 export type EnvBrokerResult = {
@@ -40,7 +40,7 @@ export async function resolveBrokerFromEnv(): Promise<EnvBrokerResult> {
     (process.env.MASTER_MODE || '').toUpperCase() === 'LIVE';
 
   if (wantLive && capitalEnvPresent()) {
-    const connectionId = Number(process.env.MASTER_CAPITAL_CONNECTION_ID || 900001);
+    const connectionId = masterCapitalConnectionId();
     const broker = createCapitalBroker({
       environment: (process.env.CAPITAL_ENVIRONMENT || 'demo').trim(),
       apiKey: (process.env.CAPITAL_API_KEY || '').trim(),
@@ -51,7 +51,7 @@ export async function resolveBrokerFromEnv(): Promise<EnvBrokerResult> {
         ''
       ).trim(),
       capitalAccountId: process.env.CAPITAL_ACCOUNT_ID || null,
-      connectionId: Number.isFinite(connectionId) && connectionId > 0 ? connectionId : 900001,
+      connectionId,
     });
     const opened = await broker.connect();
     if (!opened.ok) {
