@@ -26,6 +26,7 @@ import {
 } from './moneyExit.js';
 import { closeAllowedByStopLoss } from './closeRequiresSl.js';
 import type { MasterPipeline } from './pipeline.js';
+import { logTradeEvent } from './tradeEventJournal.js';
 import {
   SCALP_LOCK_PCT,
   SCALP_SL_CHASE_MIN_INTERVAL_MS,
@@ -879,6 +880,43 @@ export class PositionManager {
   }
 
   /**
+   * Broker MODIFY + unified trade event journal (Reader OPEN/MODIFY/CLOSE stream).
+   */
+  private async brokerModify(
+    broker: MasterBroker,
+    pos: ManagedPosition,
+    patch: {
+      stop_level?: number;
+      profit_level?: number;
+      stop_distance?: number;
+      trailing_stop?: boolean;
+    },
+    reason: string
+  ): Promise<{ ok: boolean; detail?: string; order_id?: string | null }> {
+    if (!broker.modifyPosition) return { ok: false, detail: 'no_modify' };
+    const mod = await broker.modifyPosition({
+      position_id: pos.position_id,
+      ...patch,
+    });
+    logTradeEvent({
+      event: 'MODIFY',
+      broker: broker.name,
+      epic: pos.epic,
+      side: pos.side,
+      volume: pos.size,
+      price:
+        patch.stop_level ??
+        patch.profit_level ??
+        (patch.stop_distance != null ? patch.stop_distance : null),
+      position_id: pos.position_id,
+      intent_id: pos.intent_id,
+      ok: !!mod.ok,
+      detail: `${reason}${mod.detail ? `:${mod.detail}` : ''}`,
+    });
+    return mod;
+  }
+
+  /**
    * Apply Capital-safe stop modify with per-position reject backoff
    * (VS-System scalpModifyBackoffUntil pattern).
    */
@@ -910,10 +948,12 @@ export class PositionManager {
       return false;
     }
 
-    const mod = await broker.modifyPosition({
-      position_id: pos.position_id,
-      stop_level: clamped,
-    });
+    const mod = await this.brokerModify(
+      broker,
+      pos,
+      { stop_level: clamped },
+      'protective_stop'
+    );
     if (mod.ok) {
       pos.stop_loss = clamped;
       this.modifyBackoff.delete(pos.position_id);
@@ -999,10 +1039,12 @@ export class PositionManager {
           });
     if (recovery == null) return;
 
-    const mod = await broker.modifyPosition({
-      position_id: pos.position_id,
-      stop_level: recovery,
-    });
+    const mod = await this.brokerModify(
+      broker,
+      pos,
+      { stop_level: recovery },
+      'naked_recovery'
+    );
     if (mod.ok) {
       pos.stop_loss = recovery;
       this.modifyBackoff.delete(pos.position_id);
@@ -1035,11 +1077,12 @@ export class PositionManager {
     if (!(fav > minD * 1.5)) return;
 
     const dist = Math.max(minD, fav * opts.lockPct);
-    const mod = await broker.modifyPosition({
-      position_id: pos.position_id,
-      trailing_stop: true,
-      stop_distance: dist,
-    });
+    const mod = await this.brokerModify(
+      broker,
+      pos,
+      { trailing_stop: true, stop_distance: dist },
+      'native_trail'
+    );
     if (mod.ok) {
       pos.native_trail_armed = true;
       // Refresh local SL guess from mark −/+ dist
@@ -1120,10 +1163,12 @@ export class PositionManager {
     }
 
     this.scalpChaseAt.set(pos.position_id, now);
-    const mod = await broker.modifyPosition({
-      position_id: pos.position_id,
-      stop_level: stop,
-    });
+    const mod = await this.brokerModify(
+      broker,
+      pos,
+      { stop_level: stop },
+      'scalp_chase'
+    );
     if (mod.ok) {
       pos.stop_loss = stop;
       this.modifyBackoff.delete(pos.position_id);
@@ -1196,10 +1241,12 @@ export class PositionManager {
     if (backoff && now < backoff.until && Math.abs(backoff.level - be) < 1e-9) {
       return;
     }
-    const mod = await broker.modifyPosition({
-      position_id: pos.position_id,
-      stop_level: be,
-    });
+    const mod = await this.brokerModify(
+      broker,
+      pos,
+      { stop_level: be },
+      'breakeven'
+    );
     if (mod.ok) {
       pos.stop_loss = be;
       this.modifyBackoff.delete(pos.position_id);

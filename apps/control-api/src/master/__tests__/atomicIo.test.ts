@@ -106,10 +106,23 @@ describe('trade event journal durability', () => {
       pnl: 0.45,
       fees: 0.05,
     });
+    logTradeEvent({
+      event: 'MODIFY',
+      broker: 'CAPITAL',
+      epic: 'GOLD',
+      side: 'BUY',
+      volume: 0.1,
+      price: 4398,
+      position_id: 'deal-1',
+      intent_id: 'i2',
+      ok: true,
+      detail: 'breakeven',
+    });
     const rows = loadTradeEvents(10);
-    expect(rows[0]!.event).toBe('CLOSE');
-    expect(rows[0]!.fees).toBeCloseTo(0.05, 8);
-    expect(rows[1]!.event).toBe('OPEN');
+    expect(rows[0]!.event).toBe('MODIFY');
+    expect(rows[1]!.event).toBe('CLOSE');
+    expect(rows[1]!.fees).toBeCloseTo(0.05, 8);
+    expect(rows[2]!.event).toBe('OPEN');
     expect(existsSync(join(dir, 'trade_event_journal.jsonl'))).toBe(true);
   });
 });

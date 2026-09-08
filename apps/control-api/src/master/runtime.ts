@@ -1055,6 +1055,18 @@ class MasterRuntime {
               ? multiLevels[multiLevels.length - 1]!.price
               : rebased.take_profit ?? undefined,
           });
+          logTradeEvent({
+            event: 'MODIFY',
+            broker: broker.name,
+            epic: this.epic,
+            side: cycle.decision.side,
+            volume: place.fill_size ?? cycle.risk.volume,
+            price: rebased.stop_loss,
+            position_id: place.position_id,
+            intent_id: execution.intent_id || null,
+            ok: !!mod.ok,
+            detail: `post_fill_sl_sync${mod.detail ? `:${mod.detail}` : ''}`,
+          });
           if (!mod.ok) {
             this.broker_detail =
               `post_fill_sl_sync_fail:${mod.detail}`.slice(0, 400);
