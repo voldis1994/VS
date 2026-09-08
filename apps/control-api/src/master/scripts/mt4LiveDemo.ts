@@ -1,6 +1,7 @@
 /**
- * LIVE broker proof via Check- MT4 file bridge + local simulator.
- * No Capital credentials required — real OPEN→fill→manage→CLOSE path.
+ * OPTIONAL legacy proof: Check- MT4 file bridge + local simulator.
+ * Not the primary LIVE venue — that is Capital.com API (direct).
+ * Kept to verify ported OPEN→fill→manage→CLOSE behaviors still work offline.
  *
  *   npx tsx src/master/scripts/mt4LiveDemo.ts
  */

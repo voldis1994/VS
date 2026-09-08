@@ -1,11 +1,15 @@
 /**
  * Resolve MASTER broker from environment — enables LIVE without desk/DB.
  * Uses CAPITAL_* (already in .env.example) + MASTER_* gates.
+ *
+ * Primary LIVE venue = Capital.com API (direct).
+ * MT4 file bridge is legacy opt-in only (MASTER_ALLOW_MT4_LEGACY) — never preferred
+ * over Capital. Good MT4/Check- behaviors are ported into MASTER, not bridged.
+ *
  * LIVE connect failure does NOT silently fall back to PAPER (deskBridge parity).
  */
-import { PaperBroker, type MasterBroker } from './broker.js';
+import { PaperBroker, type MasterBroker, Mt4FileBroker } from './broker.js';
 import { createCapitalBroker, masterCapitalConnectionId } from './capitalFactory.js';
-import { Mt4FileBroker } from './broker.js';
 
 export type EnvBrokerResult = {
   ok: boolean;
@@ -22,23 +26,16 @@ export function capitalEnvPresent(): boolean {
   );
 }
 
-export async function resolveBrokerFromEnv(): Promise<EnvBrokerResult> {
-  const mt4 = (process.env.MASTER_MT4_BRIDGE || '').trim();
-  if (mt4) {
-    const broker = new Mt4FileBroker(mt4);
-    const c = await broker.connect();
-    return {
-      ok: c.ok,
-      broker,
-      mode: process.env.MASTER_LIVE_ENABLED === 'true' ? 'LIVE' : 'PAPER',
-      detail: c.ok ? `mt4:${mt4}` : `mt4_fail:${c.detail}`,
-    };
-  }
+export function mt4LegacyAllowed(): boolean {
+  return (process.env.MASTER_ALLOW_MT4_LEGACY || '').trim() === 'true';
+}
 
+export async function resolveBrokerFromEnv(): Promise<EnvBrokerResult> {
   const wantLive =
     process.env.MASTER_LIVE_ENABLED === 'true' ||
     (process.env.MASTER_MODE || '').toUpperCase() === 'LIVE';
 
+  // 1) Primary LIVE: Capital.com API direct
   if (wantLive && capitalEnvPresent()) {
     const connectionId = masterCapitalConnectionId();
     const broker = createCapitalBroker({
@@ -68,6 +65,33 @@ export async function resolveBrokerFromEnv(): Promise<EnvBrokerResult> {
       broker,
       mode: 'LIVE',
       detail: `capital_env_connected:conn=${connectionId}`,
+    };
+  }
+
+  // 2) Legacy opt-in MT4 file bridge — only when explicitly allowed AND Capital missing
+  const mt4 = (process.env.MASTER_MT4_BRIDGE || '').trim();
+  if (mt4 && mt4LegacyAllowed()) {
+    const broker = new Mt4FileBroker(mt4);
+    const c = await broker.connect();
+    return {
+      ok: c.ok,
+      broker,
+      mode: wantLive ? 'LIVE' : 'PAPER',
+      detail: c.ok
+        ? `mt4_legacy:${mt4}`
+        : `mt4_legacy_fail:${c.detail}`,
+    };
+  }
+  if (mt4 && !mt4LegacyAllowed()) {
+    // Honest refuse — do not silently attach MT4 as primary LIVE
+    const paper = new PaperBroker();
+    await paper.connect();
+    return {
+      ok: false,
+      broker: paper,
+      mode: 'PAPER',
+      detail:
+        'MASTER_MT4_BRIDGE set but MASTER_ALLOW_MT4_LEGACY!=true — primary LIVE is Capital.com; refuse MT4 bridge',
     };
   }
 

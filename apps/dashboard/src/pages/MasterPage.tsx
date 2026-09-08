@@ -447,8 +447,8 @@ export function MasterPage() {
     <div>
       <h1 className="page-title">VS MASTER</h1>
       <p style={{ color: 'var(--text-secondary)', marginTop: -8, marginBottom: 16, fontSize: 13 }}>
-        Single authoritative pipeline · scores are heuristic — not probability · LIVE gated unless
-        MASTER_LIVE_ENABLED
+        Primary LIVE = Capital.com API (direct) · MT4 logic ported into MASTER (not a bridge) ·
+        scores heuristic — not probability · LIVE gated unless MASTER_LIVE_ENABLED
       </p>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16, alignItems: 'center' }}>
@@ -522,7 +522,7 @@ export function MasterPage() {
             })
           }
         >
-          Start LIVE
+          Start LIVE (Capital)
         </button>
         <button
           type="button"
@@ -633,7 +633,7 @@ export function MasterPage() {
             )
           }
         >
-          Attach MT4
+          MT4 legacy
         </button>
       </div>
 

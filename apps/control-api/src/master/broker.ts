@@ -1736,7 +1736,9 @@ export class CapitalBroker implements MasterBroker {
 }
 
 /**
- * MT4 file-bridge adapter (from Check- protocol).
+ * Legacy MT4 file-bridge adapter (from Check- protocol).
+ * Opt-in only (MASTER_ALLOW_MT4_LEGACY) — primary LIVE venue is Capital.com API.
+ * Good MT4/Check- behaviors are ported into CapitalBroker + pipeline, not bridged here.
  * Writes OPEN/CLOSE/MODIFY JSON commands under bridgeRoot.
  */
 export class Mt4FileBroker implements MasterBroker {

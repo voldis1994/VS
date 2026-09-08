@@ -117,14 +117,16 @@ async function main() {
     });
   }
 
-  // 6) MT4 LIVE path (Check- file bridge + local simulator — real OPEN→fill→CLOSE)
+  // 6) Legacy MT4 file-bridge demo — optional evidence that ported Open→Close still works.
+  // NOT the primary LIVE venue; Capital.com API is. Failure here does not block COMPLETE.
   {
     const r = run('npm', ['run', 'master:mt4-live'], 90_000);
     const demo = readJson(join(artifactDir, 'vs_master_mt4_live_demo.json'));
     const ok = r.ok && demo?.status === 'PASS_MT4_LIVE';
     checks.push({
-      id: 'live_mt4_bridge',
-      requirement: 'LIVE broker mode via MT4/Check- file bridge (OPEN→ack fill→exit→CLOSE)',
+      id: 'legacy_mt4_bridge_optional',
+      requirement:
+        'OPTIONAL legacy: MT4/Check- file bridge sim (OPEN→ack fill→exit) — not primary LIVE venue',
       ok,
       detail: demo
         ? `${demo.status} ticket=${demo.ticket || demo.position_id} detail=${demo.detail || ''}`
@@ -175,29 +177,32 @@ async function main() {
     });
   }
 
-  const requiredForComplete = checks.filter((c) => c.id !== 'live_capital_network');
-  // Capital network remains an explicit venue check; MT4 LIVE satisfies "live modes"
+  // Primary LIVE venue = Capital.com. MT4 bridge demo is legacy optional (excluded from core).
+  const requiredForComplete = checks.filter(
+    (c) => c.id !== 'live_capital_network' && c.id !== 'legacy_mt4_bridge_optional'
+  );
   const allCore = requiredForComplete.every((c) => c.ok);
   const capitalLive = checks.find((c) => c.id === 'live_capital_network')?.ok === true;
-  const mt4Live = checks.find((c) => c.id === 'live_mt4_bridge')?.ok === true;
+  const mt4Legacy = checks.find((c) => c.id === 'legacy_mt4_bridge_optional')?.ok === true;
 
   const report = {
     ts: new Date().toISOString(),
+    primary_live_venue: 'capital.com_api_direct',
     status:
       allCore && capitalLive
         ? 'COMPLETE'
         : allCore
-          ? 'COMPLETE_MT4_LIVE_CAPITAL_NETWORK_PENDING'
+          ? 'CAPITAL_NETWORK_PENDING'
           : 'INCOMPLETE',
     checks,
     summary: {
       core_ok: allCore,
-      live_mt4_ok: mt4Live,
+      legacy_mt4_optional_ok: mt4Legacy,
       capital_live_network_ok: capitalLive,
       note: capitalLive
-        ? 'All objective requirements verified including Capital network LIVE'
+        ? 'All objective requirements verified including Capital.com network LIVE (primary venue)'
         : allCore
-          ? 'Paper + live-data + MT4 LIVE + mocked Capital verified; Capital.com network still needs CAPITAL_* credentials'
+          ? 'Paper + live-data + mocked Capital verified; primary LIVE is Capital.com — set CAPITAL_* credentials (not MT4 bridge)'
           : 'One or more core requirements failed',
     },
   };

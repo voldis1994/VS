@@ -18,7 +18,7 @@ export async function registerMasterRoutes(app: FastifyInstance) {
 
   app.get('/api/master/config', async () => ({
     ...masterRuntime.cfg,
-    note: 'Scores are heuristic 0..1 — not calibrated trade probabilities. LIVE requires MASTER_LIVE_ENABLED=true.',
+    note: 'Scores are heuristic 0..1 — not calibrated trade probabilities. Primary LIVE venue = Capital.com API. LIVE requires MASTER_LIVE_ENABLED=true + CAPITAL_*.',
     owns_pipeline: process.env.MASTER_OWNS_PIPELINE === 'true',
     live_enabled: process.env.MASTER_LIVE_ENABLED === 'true',
     manage: masterRuntime.status().manage,
@@ -295,7 +295,15 @@ export async function registerMasterRoutes(app: FastifyInstance) {
     };
   });
 
+  /** Legacy MT4 file bridge — opt-in only. Primary LIVE venue is Capital.com API. */
   app.post<{ Body: { bridge_root?: string } }>('/api/master/broker/mt4', async (req) => {
+    if ((process.env.MASTER_ALLOW_MT4_LEGACY || '').trim() !== 'true') {
+      return {
+        ok: false,
+        detail:
+          'MT4 bridge refused — primary LIVE is Capital.com API. Set MASTER_ALLOW_MT4_LEGACY=true only for legacy opt-in.',
+      };
+    }
     const root =
       req.body?.bridge_root ||
       process.env.MASTER_MT4_BRIDGE ||
@@ -303,7 +311,7 @@ export async function registerMasterRoutes(app: FastifyInstance) {
     const broker = new Mt4FileBroker(root);
     const connected = await broker.connect();
     if (!connected.ok) return { ok: false, detail: connected.detail };
-    // Stop Yahoo paper feed — MT4 bridge owns LIVE market/execution
+    // Legacy path — do not treat as primary LIVE venue
     masterRuntime.stop();
     masterRuntime.attachBroker(broker);
     const liveOk = process.env.MASTER_LIVE_ENABLED === 'true';
@@ -317,9 +325,10 @@ export async function registerMasterRoutes(app: FastifyInstance) {
       mode: masterRuntime.cfg.mode,
       running: masterRuntime.running,
       live_enabled: liveOk,
+      legacy: true,
       detail: liveOk
-        ? connected.detail
-        : `${connected.detail || 'ok'};LIVE gate off — MASTER_LIVE_ENABLED required for LIVE mode`,
+        ? `mt4_legacy:${connected.detail}`
+        : `${connected.detail || 'ok'};LIVE gate off — MASTER_LIVE_ENABLED required; primary venue remains Capital.com`,
     };
   });
 
@@ -431,10 +440,10 @@ h2{font-size:13px;color:#9fb0c0;margin:22px 0 8px;text-transform:uppercase;lette
 #log{background:#0a1018;border:1px solid var(--line);border-radius:8px;padding:12px;max-height:180px;overflow:auto;font-size:12px;color:#9fb0c0;white-space:pre-wrap}
 </style></head><body>
 <h1>VS MASTER</h1>
-<p class="muted">Single authoritative pipeline · scores are heuristic — not probability · LIVE gated unless MASTER_LIVE_ENABLED</p>
+<p class="muted">Primary LIVE = Capital.com API (direct) · MT4 only legacy opt-in · scores heuristic — not probability · LIVE gated unless MASTER_LIVE_ENABLED</p>
 <div class="row">
   <button class="primary" id="btnStart">Start PAPER</button>
-  <button id="btnLive">Start LIVE</button>
+  <button id="btnLive">Start LIVE (Capital)</button>
   <button id="btnStop">Stop</button>
   <button id="btnRecover">Recover</button>
   <button id="btnKill">Kill switch</button>
@@ -443,7 +452,7 @@ h2{font-size:13px;color:#9fb0c0;margin:22px 0 8px;text-transform:uppercase;lette
   <button id="btnAi">AI advisory toggle</button>
   <button id="btnOwns">MASTER owns toggle</button>
   <button id="btnCapital">Capital probe</button>
-  <button id="btnMt4">Attach MT4</button>
+  <button id="btnMt4">MT4 legacy</button>
 </div>
 <div class="grid" id="cards"></div>
 <h2>Open positions</h2>

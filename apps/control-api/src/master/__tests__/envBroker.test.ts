@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createCapitalBroker, masterCapitalConnectionId } from '../capitalFactory.js';
 import { sharedLoginLockForConnection } from '../capitalLoginLock.js';
 import { deskCapitalPoolConnectionId } from '../deskBridge.js';
-import { capitalEnvPresent, resolveBrokerFromEnv } from '../envBroker.js';
+import { capitalEnvPresent, mt4LegacyAllowed, resolveBrokerFromEnv } from '../envBroker.js';
 import { masterRuntime } from '../runtime.js';
 
 describe('VS MASTER env broker resolve', () => {
@@ -12,6 +12,7 @@ describe('VS MASTER env broker resolve', () => {
     'CAPITAL_API_PASSWORD',
     'MASTER_LIVE_ENABLED',
     'MASTER_MT4_BRIDGE',
+    'MASTER_ALLOW_MT4_LEGACY',
     'MASTER_CAPITAL_CONNECTION_ID',
     'MASTER_OWNS_PIPELINE',
   ];
@@ -48,6 +49,42 @@ describe('VS MASTER env broker resolve', () => {
     expect(r.broker.paper).toBe(true);
     expect(r.mode).toBe('PAPER');
     expect(r.detail).toMatch(/CAPITAL_/);
+  });
+
+  it('prefers Capital over MT4 bridge when LIVE + CAPITAL_* set', async () => {
+    snap();
+    for (const k of keys) delete process.env[k];
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_MT4_BRIDGE = '/tmp/vs-mt4-should-not-win';
+    process.env.MASTER_ALLOW_MT4_LEGACY = 'true';
+    process.env.CAPITAL_API_KEY = 'k';
+    process.env.CAPITAL_IDENTIFIER = 'i';
+    process.env.CAPITAL_API_PASSWORD = 'p';
+    const r = await resolveBrokerFromEnv();
+    expect(r.broker.name).toBe('CAPITAL');
+    expect(r.mode).toBe('LIVE');
+    expect(r.broker.name).not.toBe('MT4_FILE');
+  });
+
+  it('refuses MT4 bridge without MASTER_ALLOW_MT4_LEGACY', async () => {
+    snap();
+    for (const k of keys) delete process.env[k];
+    process.env.MASTER_MT4_BRIDGE = '/tmp/vs-mt4-legacy-test';
+    expect(mt4LegacyAllowed()).toBe(false);
+    const r = await resolveBrokerFromEnv();
+    expect(r.ok).toBe(false);
+    expect(r.broker.name).toBe('PAPER');
+    expect(r.detail).toMatch(/MASTER_ALLOW_MT4_LEGACY/);
+  });
+
+  it('allows MT4 only as legacy when Capital missing + ALLOW flag', async () => {
+    snap();
+    for (const k of keys) delete process.env[k];
+    process.env.MASTER_MT4_BRIDGE = '/tmp/vs-mt4-legacy-ok';
+    process.env.MASTER_ALLOW_MT4_LEGACY = 'true';
+    const r = await resolveBrokerFromEnv();
+    expect(r.broker.name).toBe('MT4_FILE');
+    expect(r.detail).toMatch(/mt4_legacy/);
   });
 
   it('desk MASTER pool ignores DB connectionId (shares env 900001 CST lock)', () => {
