@@ -517,5 +517,104 @@ describe('VS MASTER recovery SL + trail', () => {
     expect(sync.dropped).toBe(0);
     expect(pm.count()).toBe(1);
     expect(pm.get('deal-level-less')).toBeTruthy();
+    // Painted chart levels cleared while presence-only so naked recovery can re-protect
+    expect(pm.get('deal-level-less')!.stop_loss).toBeNull();
+    expect(pm.get('deal-level-less')!.take_profit).toBeNull();
+  });
+
+  it('presence-only retain re-attaches intended SL via MODIFY', async () => {
+    const pm = new PositionManager();
+    pm.register({
+      position_id: 'deal-intend',
+      opportunity_id: 'opp-intend',
+      intent_id: 'intend-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4410,
+      stop_loss: 4400, // painted — will clear on presence-only retain
+      take_profit: 4420,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {
+          regime: 'RANGE',
+          market_state: 'test',
+          momentum_score: 0,
+          momentum_dir: 'NEUTRAL',
+          trend_dir: 'SIDEWAYS',
+          trend_strength: 0,
+          structure_bias: 'NEUTRAL',
+          swing_high: 4405,
+          swing_low: 4395,
+          buy_pressure: 0.5,
+          sell_pressure: 0.5,
+          behavior_bull: 0.5,
+          behavior_bear: 0.5,
+          impact_score: 0.5,
+          context_quality: 0.5,
+          volatility: 0.001,
+          atr: 1,
+          data_quality: 0.5,
+          session: 'UNKNOWN',
+        },
+        expectancy: null,
+      },
+    });
+    const pos = pm.get('deal-intend')!;
+    pos.intended_stop_loss = 4395;
+    pos.intended_take_profit = 4425;
+    let modified = 0;
+    const broker = {
+      name: 'MOCK_PRESENCE_MOD',
+      paper: false,
+      async connect() {
+        return { ok: true, detail: 'ok' };
+      },
+      async getQuote() {
+        return null;
+      },
+      async getAccount() {
+        return null;
+      },
+      async listOpenPositions() {
+        return {
+          ok: true,
+          positions: [],
+          presence_ids: ['deal-intend'],
+          detail: 'ok',
+        };
+      },
+      async placeOrder() {
+        return {
+          ok: false,
+          order_id: null,
+          position_id: null,
+          fill_price: null,
+          detail: 'n/a',
+          paper: false,
+        };
+      },
+      async closePosition() {
+        return { ok: false, detail: 'n/a' };
+      },
+      async modifyPosition(input: { stop_level?: number; profit_level?: number }) {
+        modified += 1;
+        expect(input.stop_level).toBe(4395);
+        expect(input.profit_level).toBe(4425);
+        return { ok: true, detail: 'ok' };
+      },
+    };
+    const sync = await syncPositionsWithBroker(pm, broker as any, 'GOLD');
+    expect(sync.dropped).toBe(0);
+    expect(modified).toBe(1);
+    expect(sync.intended_levels_attached).toBe(1);
+    expect(pm.get('deal-intend')!.stop_loss).toBe(4395);
+    expect(pm.get('deal-intend')!.take_profit).toBe(4425);
   });
 });

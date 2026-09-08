@@ -132,6 +132,13 @@ export async function syncPositionsWithBroker(
         // so reconcileFromBroker does not wipe managed ownership.
         if (!brokerPositions.some((bp) => bp.position_id === p.position_id)) {
           retainIds.add(p.position_id);
+          // Chart SL/TP unproven while level-less — clear painted locals so
+          // naked recovery / intended attach can re-protect (keep intended_*).
+          const managed = manager.get(p.position_id);
+          if (managed) {
+            managed.stop_loss = null;
+            managed.take_profit = null;
+          }
         }
         continue;
       }
@@ -219,6 +226,53 @@ export async function syncPositionsWithBroker(
       const stop = safetyStopLevel(bp.side, bp.open_level);
       const soft = await broker.modifyPosition({
         position_id: bp.position_id,
+        stop_level: stop,
+      });
+      if (soft.ok) {
+        managed.stop_loss = stop;
+        safety_sl_attached += 1;
+      }
+    }
+
+    // Presence-only locals (level-less, not in positions[]) — still try intended/safety MODIFY
+    for (const id of presenceIds) {
+      if (brokerPositions.some((bp) => bp.position_id === id)) continue;
+      const managed = manager.get(id);
+      if (!managed) continue;
+      const wantSl =
+        managed.intended_stop_loss != null &&
+        Number.isFinite(managed.intended_stop_loss) &&
+        managed.intended_stop_loss > 0
+          ? Number(managed.intended_stop_loss)
+          : null;
+      const wantTp =
+        managed.intended_take_profit != null &&
+        Number.isFinite(managed.intended_take_profit) &&
+        managed.intended_take_profit > 0
+          ? Number(managed.intended_take_profit)
+          : null;
+      if (wantSl != null || wantTp != null) {
+        const mod = await broker.modifyPosition({
+          position_id: id,
+          stop_level: wantSl ?? undefined,
+          profit_level: wantTp ?? undefined,
+        });
+        if (mod.ok) {
+          if (wantSl != null) managed.stop_loss = wantSl;
+          if (wantTp != null) managed.take_profit = wantTp;
+          intended_levels_attached += 1;
+          continue;
+        }
+      }
+      if (managed.stop_loss != null) continue;
+      const entry =
+        Number.isFinite(managed.entry) && managed.entry > 0
+          ? managed.entry
+          : null;
+      if (entry == null) continue;
+      const stop = safetyStopLevel(managed.side, entry);
+      const soft = await broker.modifyPosition({
+        position_id: id,
         stop_level: stop,
       });
       if (soft.ok) {

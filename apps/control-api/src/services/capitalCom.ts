@@ -984,6 +984,8 @@ export type CapitalOpenPosition = {
   stop_level: number | null;
   profit_level: number | null;
   opened_at: string | null;
+  /** Mid from positions row market bid/offer — provisional entry when level missing */
+  market_mid?: number | null;
 };
 
 /** All open Capital.com positions (REST). */
@@ -1010,6 +1012,16 @@ export async function listCapitalOpenPositions(
     if (!dealId || !epic) continue;
     const dirRaw = String(pos.direction || '').toUpperCase();
     const direction: 'BUY' | 'SELL' = dirRaw === 'SELL' ? 'SELL' : 'BUY';
+    const bid = numOrNull(market.bid);
+    const ask = numOrNull(market.offer ?? market.ask);
+    const market_mid =
+      bid != null && ask != null && bid > 0 && ask > 0
+        ? (bid + ask) / 2
+        : bid != null && bid > 0
+          ? bid
+          : ask != null && ask > 0
+            ? ask
+            : null;
     positions.push({
       deal_id: dealId,
       deal_reference: strOrNull(pos.dealReference),
@@ -1026,6 +1038,7 @@ export async function listCapitalOpenPositions(
         const d = new Date(String(raw));
         return Number.isFinite(d.getTime()) ? d.toISOString() : null;
       })(),
+      market_mid,
     });
   }
   return { ok: true, positions, detail: `${positions.length} open` };

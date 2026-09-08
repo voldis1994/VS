@@ -1292,7 +1292,7 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     );
   });
 
-  it('listOpenPositions drops level-less when quote mid unavailable', async () => {
+  it('listOpenPositions drops level-less when quote mid and market_mid unavailable', async () => {
     const broker = new CapitalBroker({
       credentials: {},
       acquire: async () => ({ ok: true, session: { id: 's-ol2' }, detail: 'ok' }),
@@ -1325,6 +1325,79 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(listed.positions).toHaveLength(1);
     expect(listed.positions[0]!.position_id).toBe('good');
     expect(listed.presence_ids).toEqual(expect.arrayContaining(['good', 'bad-null']));
+  });
+
+  it('listOpenPositions uses market_mid when quote mid unavailable', async () => {
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-mmid' }, detail: 'ok' }),
+      quote: async () => null,
+      list: async () => ({
+        ok: true,
+        positions: [
+          {
+            deal_id: 'level-less',
+            epic: 'GOLD',
+            direction: 'BUY',
+            size: 0.1,
+            open_level: null,
+            market_mid: 4411.5,
+            stop_level: 4400,
+          },
+        ],
+      }),
+      create: async () => ({ ok: true, deal_reference: 'x', detail: 'ok' }),
+      close: async () => ({ ok: true, detail: 'ok' }),
+    });
+    await broker.connect();
+    const listed = await broker.listOpenPositions('GOLD');
+    expect(listed.ok).toBe(true);
+    expect(listed.positions).toHaveLength(1);
+    expect(listed.positions[0]!.position_id).toBe('level-less');
+    expect(listed.positions[0]!.open_level).toBeCloseTo(4411.5, 5);
+    expect(listed.positions[0]!.stop_level).toBe(4400);
+  });
+
+  it('modifyPosition proves SL from raw row when deal is presence-only', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    let stopLevel: number | null = null;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-mod-pres' }, detail: 'ok' }),
+      quote: async () => null,
+      list: async () => ({
+        ok: true,
+        positions: [
+          {
+            deal_id: 'pres-mod',
+            epic: 'GOLD',
+            direction: 'BUY',
+            size: 0.1,
+            open_level: null, // level-less → not in positions[] without mid
+            stop_level: stopLevel,
+          },
+        ],
+      }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({ ok: false, detail: 'unused' }),
+      modify: async (_s, input) => {
+        if (input.stopLevel != null) stopLevel = Number(input.stopLevel);
+        return { ok: true, deal_reference: 'mod-pres-ref', detail: 'accepted_http' };
+      },
+      confirm: async () => ({
+        ok: true,
+        deal_id: 'pres-mod',
+        detail: 'ACCEPTED',
+      }),
+    });
+    await broker.connect();
+    const mod = await broker.modifyPosition({
+      position_id: 'pres-mod',
+      stop_level: 4400,
+    });
+    expect(mod.ok).toBe(true);
+    expect(stopLevel).toBe(4400);
   });
 
   it('listOpenPositions uses cached last mid when live quote flakes', async () => {

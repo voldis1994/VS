@@ -771,6 +771,11 @@ export class CapitalBroker implements MasterBroker {
         const mid = await midFor(String(p.epic || epic || ''));
         if (Number.isFinite(mid) && mid > 0) open_level = mid;
       }
+      // Positions-row market bid/offer (VS-System always maps deals with market mark)
+      if (open_level == null) {
+        const mm = Number(p.market_mid);
+        if (Number.isFinite(mm) && mm > 0) open_level = mm;
+      }
       if (open_level == null || !(open_level > 0)) continue;
       positions.push({
         position_id: String(p.deal_id || p.position_id || ''),
@@ -1559,9 +1564,49 @@ export class CapitalBroker implements MasterBroker {
         );
       }
       const listed = await this.listOpenPositions();
-      const hit = listed.ok
+      let hit = listed.ok
         ? listed.positions.find((p) => p.position_id === input.position_id)
         : undefined;
+      // Presence-only: positions[] dropped level-less — prove SL/TP from raw list row
+      if (
+        !hit &&
+        listed.ok &&
+        (listed.presence_ids ?? []).includes(input.position_id)
+      ) {
+        const raw = await this.deps.list(this.session);
+        if (raw?.ok && Array.isArray(raw.positions)) {
+          const row = (raw.positions as any[]).find(
+            (p) =>
+              String(p.deal_id || p.position_id || '').trim() ===
+              input.position_id
+          );
+          if (row) {
+            const openRaw = Number(row.open_level);
+            let open_level =
+              Number.isFinite(openRaw) && openRaw > 0 ? openRaw : null;
+            if (open_level == null) {
+              const mm = Number(row.market_mid);
+              if (Number.isFinite(mm) && mm > 0) open_level = mm;
+            }
+            if (open_level == null) {
+              const cached = this.lastMidByEpic.get(
+                String(row.epic || '').toUpperCase()
+              );
+              if (cached != null && cached > 0) open_level = cached;
+            }
+            hit = {
+              position_id: input.position_id,
+              epic: String(row.epic || hitEpic || ''),
+              side: (row.direction || row.side || 'BUY') as Side,
+              size: Number(row.size) || 0,
+              open_level: open_level && open_level > 0 ? open_level : 0,
+              stop_level: protectiveLevelOrNull(row.stop_level),
+              profit_level: protectiveLevelOrNull(row.profit_level),
+              upl: row.upl ?? null,
+            };
+          }
+        }
+      }
       if (!hit) continue;
       hitEpic = hit.epic;
       if (hit.stop_level != null && Number.isFinite(hit.stop_level)) {
