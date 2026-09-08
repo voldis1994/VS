@@ -3910,7 +3910,7 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
         raw_ok: true,
         market_status: 'TRADEABLE',
       }),
-      // No account dep → getAccount returns equity 0
+      // No account dep → getAccount returns null (never invent equity 0)
       list: async () => ({ ok: true, positions: [], detail: '0' }),
       create: async () => ({ ok: true, deal_reference: 'x', detail: 'ok' }),
       confirm: async () => ({ ok: true, deal_id: 'x', detail: 'ok' }),
@@ -4400,6 +4400,140 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(masterRuntime.account.trade_allowed).toBe(false);
     expect(masterRuntime.status().health).toBe('LIVE_ACCOUNT_UNPROVEN');
     expect(masterRuntime.status().capital_venue_opens_proven).toBe(false);
+  });
+
+  it('getAccount returns null when account unread (never invents equity 0)', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const noDep = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-null-acct' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({ ok: true, positions: [], detail: '0' }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({ ok: false, detail: 'unused' }),
+    });
+    await noDep.connect();
+    expect(await noDep.getAccount()).toBeNull();
+
+    const zeroDep = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-zero-acct' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      account: async () => ({ equity: 0, balance: 0, currency: 'GBP' }),
+      list: async () => ({ ok: true, positions: [], detail: '0' }),
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({ ok: false, detail: 'unused' }),
+    });
+    await zeroDep.connect();
+    expect(await zeroDep.getAccount()).toBeNull();
+
+    const place = await zeroDep.placeOrder({
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: 4400,
+      profit_level: 4420,
+    });
+    expect(place.ok).toBe(false);
+    expect(place.detail).toMatch(/capital_account_unproven/);
+  });
+
+  it('manage clears stale broker_upl when Capital list fails', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    let listOk = true;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-upl-clear' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4420,
+        ask: 4420.4,
+        mid: 4420.2,
+        epic,
+        raw_ok: true,
+        update_time: new Date().toISOString(),
+        market_status: 'TRADEABLE',
+      }),
+      account: async () => ({ equity: 12_000, balance: 12_000, currency: 'GBP' }),
+      list: async () =>
+        listOk
+          ? {
+              ok: true,
+              positions: [
+                {
+                  deal_id: 'deal-upl-clear',
+                  epic: 'GOLD',
+                  direction: 'BUY',
+                  size: 0.1,
+                  open_level: 4410,
+                  stop_level: 4400,
+                  profit: 50,
+                },
+              ],
+              detail: '1',
+            }
+          : { ok: false, positions: [], detail: 'list_fail' },
+      create: async () => ({ ok: false, detail: 'unused' }),
+      close: async () => ({ ok: false, detail: 'unused' }),
+    });
+    await broker.connect();
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('LIVE');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    masterRuntime.cfg = {
+      ...DEFAULT_MASTER_CONFIG,
+      mode: 'LIVE',
+      soft_trail_money_arm: 10,
+      scalp_pct_chase: true,
+      close_all_profit: 20,
+    };
+    masterRuntime.running = true;
+    (masterRuntime as any).capitalAccountProven = true;
+    masterRuntime.positions.register({
+      position_id: 'deal-upl-clear',
+      opportunity_id: 'opp-upl-clear',
+      intent_id: 'intent-upl-clear',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4410,
+      stop_loss: 4400,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        block_reason: null,
+        analysis: { regime: 'TREND' },
+        buy: { valid: true, filter_ok: true, score: 0.9 },
+        sell: { valid: false, filter_ok: false, score: 0 },
+      } as any,
+    });
+    masterRuntime.positions.get('deal-upl-clear')!.broker_upl = 50;
+    const bars = barsTrendUp(30);
+    const quote = {
+      ...quoteFrom(bars.at(-1)!),
+      epic: 'GOLD',
+      market_status: 'TRADEABLE' as const,
+      ts_ms: Date.now(),
+    };
+    listOk = false;
+    await masterRuntime.tick(bars, quote);
+    expect((masterRuntime as any).capitalVenueOpensProven).toBe(false);
+    expect(masterRuntime.positions.get('deal-upl-clear')!.broker_upl).toBeNull();
+    expect(masterRuntime.status().health).toBe('LIVE_VENUE_UNPROVEN');
   });
 
   it('status floating_pnl is null when Capital LIVE opens lack broker UPL', async () => {

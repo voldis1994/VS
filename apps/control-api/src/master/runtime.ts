@@ -1073,6 +1073,13 @@ class MasterRuntime {
     return this.capitalVenueOpens;
   }
 
+  /** Drop stale venue UPL so money arms cannot fire on unread Capital book. */
+  private clearStaleBrokerUpl() {
+    for (const p of this.positions.list()) {
+      p.broker_upl = null;
+    }
+  }
+
   /** Status with a fresh Capital venue list when Capital LIVE is attached. */
   async statusAsync(): Promise<MasterStatus> {
     await this.refreshCapitalVenueOpens();
@@ -1333,6 +1340,8 @@ class MasterRuntime {
     if (broker instanceof CapitalBroker && !broker.paper) {
       if (sync.skipped) {
         this.capitalVenueOpensProven = false;
+        // Stale broker_upl must not arm soft-trail / close-all while list unread
+        this.clearStaleBrokerUpl();
       } else {
         this.capitalVenueOpensProven = true;
         this.capitalVenueOpens = sync.broker_count;
@@ -2658,10 +2667,13 @@ class MasterRuntime {
         }
         const { bars } = builder.pushTick(quote.mid);
         if (bars.length < 5) return;
-        // Desk parity: Capital market must be TRADEABLE/OPEN — unknown/CLOSED parks entries
+        // Desk parity: Capital market must be TRADEABLE/OPEN — unknown/CLOSED parks entries.
+        // Never set trade_allowed from market alone while Capital account unproven.
         if (this.broker instanceof CapitalBroker) {
           const { capitalMarketAllowsTrading } = await import('./capitalMarket.js');
-          this.account.trade_allowed = capitalMarketAllowsTrading(quote.market_status);
+          this.account.trade_allowed =
+            capitalMarketAllowsTrading(quote.market_status) &&
+            this.capitalAccountProven;
           if (!this.account.trade_allowed) {
             this.broker_detail = `${this.broker_detail || ''};market:${
               quote.market_status || 'UNKNOWN'
@@ -2901,6 +2913,15 @@ class MasterRuntime {
     // Journal confirmed ghosts/orphans even when other tickets are still in miss-debounce.
     if (!sync.skipped) {
       this.applySyncJournal(sync, quote);
+    }
+    if (broker instanceof CapitalBroker && !broker.paper) {
+      if (sync.skipped) {
+        this.capitalVenueOpensProven = false;
+        this.clearStaleBrokerUpl();
+      } else {
+        this.capitalVenueOpensProven = true;
+        this.capitalVenueOpens = sync.broker_count;
+      }
     }
     if (this.positions.count() === 0) {
       this.account.open_positions = 0;

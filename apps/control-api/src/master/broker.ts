@@ -1006,9 +1006,11 @@ export class CapitalBroker implements MasterBroker {
     if (!ensured.ok || !this.session) return null;
     if (this.deps.account) {
       const a = await this.deps.account(this.session);
-      if (a) return a;
+      if (a && Number(a.equity) > 0) return a;
+      // Unread / non-positive — never invent {equity:0} as a connected account
+      return null;
     }
-    return { equity: 0, balance: 0, currency: 'GBP' };
+    return null;
   }
 
   async listOpenPositions(epic?: string): Promise<ListOpenResult> {
@@ -1397,9 +1399,20 @@ export class CapitalBroker implements MasterBroker {
           rules: liveRules,
         }
       : normalizeSizeForEpic(input.epic, input.size);
-    // Pre-send buying-power clamp (VS-System- micro-lot) — avoid RISK_CHECK when possible
+    // Pre-send buying-power clamp (VS-System- micro-lot) — avoid RISK_CHECK when possible.
+    // When account dep is wired (production), unread/non-positive equity fail-closes OPEN.
     try {
       const acct = await this.getAccount();
+      if (this.deps.account && (!acct || !(acct.equity > 0))) {
+        return {
+          ok: false,
+          order_id: null,
+          position_id: null,
+          fill_price: null,
+          detail: 'capital_account_unproven',
+          paper: false,
+        };
+      }
       if (acct && acct.equity > 0) {
         const clamped = clampSizeForBuyingPower({
           epic: input.epic,
@@ -1413,7 +1426,16 @@ export class CapitalBroker implements MasterBroker {
         }
       }
     } catch {
-      /* sizing continues with step normalize only */
+      if (this.deps.account) {
+        return {
+          ok: false,
+          order_id: null,
+          position_id: null,
+          fill_price: null,
+          detail: 'capital_account_unproven',
+          paper: false,
+        };
+      }
     }
     let orderSize = sized.size;
 
