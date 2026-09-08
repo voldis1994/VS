@@ -26,9 +26,23 @@ type MasterStatus = {
     peak_equity?: number;
     available_to_deal?: number | null;
     trade_allowed?: boolean | null;
+    consecutive_losses?: number;
   } | null;
   open_positions: number;
-  performance: { expectancy?: number; max_drawdown?: number; trades?: number } | null;
+  performance: {
+    expectancy?: number;
+    max_drawdown?: number;
+    trades?: number;
+    win_rate?: number;
+    profit_factor?: number;
+  } | null;
+  monte_carlo?: { p05?: number; p50?: number; p95?: number } | null;
+  monitoring?: {
+    last_cycle_ms?: number;
+    relative_spread?: number | null;
+    error_count?: number;
+    data_freshness_ms?: number | null;
+  };
   opportunities: number;
   traded: number;
   blocked: number;
@@ -270,6 +284,52 @@ export function MasterPage() {
         {
           k: 'Expectancy',
           v: Number(status.performance?.expectancy || 0).toFixed(3),
+        },
+        {
+          k: 'Win rate',
+          v: status.performance?.trades
+            ? `${(Number(status.performance.win_rate || 0) * 100).toFixed(1)}%`
+            : '—',
+        },
+        {
+          k: 'Profit factor',
+          v:
+            status.performance?.profit_factor != null &&
+            Number.isFinite(status.performance.profit_factor)
+              ? Number(status.performance.profit_factor).toFixed(2)
+              : '—',
+        },
+        {
+          k: 'Loss streak',
+          v:
+            status.account?.consecutive_losses != null
+              ? String(status.account.consecutive_losses)
+              : '—',
+          bad: (status.account?.consecutive_losses || 0) >= 3,
+        },
+        {
+          k: 'MC p50',
+          v:
+            status.monte_carlo?.p50 != null
+              ? Number(status.monte_carlo.p50).toFixed(2)
+              : '—',
+        },
+        {
+          k: 'Rel spread',
+          v:
+            status.monitoring?.relative_spread != null
+              ? Number(status.monitoring.relative_spread).toFixed(2)
+              : '—',
+          bad:
+            status.monitoring?.relative_spread != null &&
+            status.monitoring.relative_spread > 1.5,
+        },
+        {
+          k: 'Cycle ms',
+          v:
+            status.monitoring?.last_cycle_ms != null
+              ? String(status.monitoring.last_cycle_ms)
+              : '—',
         },
         {
           k: 'Max DD',

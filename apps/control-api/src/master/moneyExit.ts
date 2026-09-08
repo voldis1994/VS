@@ -60,6 +60,31 @@ export function resolveCloseMoneyPnl(input: {
   };
 }
 
+/** Round-trip commission model (replay default 0.05 / lot). Override via MASTER_COMMISSION_PER_LOT. */
+export function estimateTradeFees(volume: number): number {
+  const raw = Number(process.env.MASTER_COMMISSION_PER_LOT ?? 0.05);
+  const perLot = Number.isFinite(raw) && raw >= 0 ? raw : 0.05;
+  const v = Number(volume);
+  if (!(v > 0) || !(perLot > 0)) return 0;
+  return perLot * v;
+}
+
+/**
+ * Apply model commission when PnL is mark-computed.
+ * Broker fill_pnl is treated as already net — fees=0 to avoid double-count.
+ */
+export function applyCloseFees(input: {
+  pnl: number;
+  volume: number;
+  from_broker?: boolean;
+}): { pnl: number; fees: number } {
+  if (input.from_broker) {
+    return { pnl: input.pnl, fees: 0 };
+  }
+  const fees = estimateTradeFees(input.volume);
+  return { pnl: input.pnl - fees, fees };
+}
+
 /** Soft trail distance in price units (pip × count) — never floored to Capital min-stop. */
 export function softTrailDistancePrice(symbol: string, pips = 0.3): number {
   const pip = instrumentPipSize(symbol);

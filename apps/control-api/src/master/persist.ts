@@ -267,6 +267,15 @@ export async function loadJournalHistory(limit = 500): Promise<JournalHistory> {
         exit_reason: String(r.exit_reason || ''),
       } as TradeOutcome,
     }));
+    // Join outcomes onto opportunities so status().performance / traded() survive restart
+    // when payload.outcome was never rewritten (ghost/external stubs persistOutcome-only).
+    const byOpp = new Map(outcomes.map((o) => [o.opportunity_id, o.outcome]));
+    for (const opp of opportunities) {
+      if (!opp.outcome) {
+        const hit = byOpp.get(opp.id);
+        if (hit) opp.outcome = hit;
+      }
+    }
     return { opportunities, outcomes };
   } catch {
     return { opportunities: [], outcomes: [] };

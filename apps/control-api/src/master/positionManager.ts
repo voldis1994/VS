@@ -18,6 +18,7 @@ import {
   decideSoftTrailArm,
   resolveCloseMoneyPnl,
   resolveFloatingMoneyPnl,
+  applyCloseFees,
   softTrailDistancePrice,
   softTrailExitHit,
   softTrailExitLevel,
@@ -320,13 +321,18 @@ export class PositionManager {
           closeRes.fill_price != null && Number.isFinite(closeRes.fill_price)
             ? Number(closeRes.fill_price)
             : mark;
-        const { pnl, pnl_pts: pnlPts } = resolveCloseMoneyPnl({
+        const { pnl, pnl_pts: pnlPts, from_broker } = resolveCloseMoneyPnl({
           side: pos.side,
           entry: pos.entry,
           fill,
           size: pos.size,
           value_per_point_per_lot: pv,
           fill_pnl: closeRes.fill_pnl,
+        });
+        const priced = applyCloseFees({
+          pnl,
+          volume: pos.size,
+          from_broker,
         });
         const riskDist = Math.max(
           Math.abs((pos.stop_loss ?? pos.entry) - pos.entry),
@@ -338,8 +344,8 @@ export class PositionManager {
           entry: pos.entry,
           exit: fill,
           volume: pos.size,
-          pnl,
-          fees: 0,
+          pnl: priced.pnl,
+          fees: priced.fees,
           slippage: Math.abs(fill - quote.mid),
           mae: pos.mae,
           mfe: pos.mfe,
@@ -688,13 +694,18 @@ export class PositionManager {
       const exit =
         brokerFill ??
         protectiveFillPrice(pos, quote, protective?.reason ?? null);
-      const { pnl, pnl_pts: pnlPts } = resolveCloseMoneyPnl({
+      const { pnl, pnl_pts: pnlPts, from_broker } = resolveCloseMoneyPnl({
         side: pos.side,
         entry: pos.entry,
         fill: exit,
         size: pos.size,
         value_per_point_per_lot: pv,
         fill_pnl: closeRes.fill_pnl,
+      });
+      const priced = applyCloseFees({
+        pnl,
+        volume: pos.size,
+        from_broker,
       });
       const riskDist = Math.max(
         Math.abs((pos.stop_loss ?? pos.entry) - pos.entry),
@@ -706,8 +717,8 @@ export class PositionManager {
         entry: pos.entry,
         exit,
         volume: pos.size,
-        pnl,
-        fees: 0,
+        pnl: priced.pnl,
+        fees: priced.fees,
         slippage: Math.abs(exit - quote.mid),
         mae: pos.mae,
         mfe: pos.mfe,
@@ -802,7 +813,7 @@ export class PositionManager {
           ? Number(closeRes.fill_price)
           : mark;
       const vol = isFinal ? pos.size : closeSize;
-      const { pnl } = resolveCloseMoneyPnl({
+      const { pnl, from_broker } = resolveCloseMoneyPnl({
         side: pos.side,
         entry: pos.entry,
         fill,
@@ -810,14 +821,19 @@ export class PositionManager {
         value_per_point_per_lot: pv,
         fill_pnl: closeRes.fill_pnl,
       });
+      const priced = applyCloseFees({
+        pnl,
+        volume: vol,
+        from_broker,
+      });
       const outcome: TradeOutcome = {
         position_id: pos.position_id,
         side: pos.side,
         entry: pos.entry,
         exit: fill,
         volume: vol,
-        pnl,
-        fees: 0,
+        pnl: priced.pnl,
+        fees: priced.fees,
         slippage: Math.abs(fill - quote.mid),
         mae: pos.mae,
         mfe: pos.mfe,

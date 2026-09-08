@@ -33,8 +33,9 @@ import {
 } from './positionManager.js';
 import { evaluateRisk } from './risk.js';
 import { setupKey } from './decision.js';
-import { resolveCloseMoneyPnl, resolveFloatingMoneyPnl } from './moneyExit.js';
+import { resolveCloseMoneyPnl, resolveFloatingMoneyPnl, applyCloseFees } from './moneyExit.js';
 import { loadMasterErrors, logMasterError } from './errorJournal.js';
+import { CycleMonitor } from './monitoring.js';
 import { loadRuntimeGates, saveRuntimeGates } from './runtimeGates.js';
 import { loadOwnsPipelinePref, saveOwnsPipelinePref } from './ownsPipelinePref.js';
 import { resolveNewsWindow, type NewsWindowState } from './newsGate.js';
@@ -109,6 +110,7 @@ export type MasterStatus = {
     message: string;
   }>;
   manage: ManageConfigPatch;
+  monitoring: import('./monitoring.js').CycleMonitorSnapshot;
 };
 
 export type TickResult = {
@@ -173,6 +175,7 @@ class MasterRuntime {
   private spreadHistory = new SpreadHistory(this.spreadLookback);
   /** VS-System: 5 consecutive empty successful lists before ghost wipe */
   private emptyBrokerDebounce: EmptyBrokerDebounce = { consecutive_empty: 0 };
+  private monitor = new CycleMonitor();
   epic = GOLD_SPEC.epic;
 
   setMode(mode: Mode) {
@@ -256,13 +259,18 @@ class MasterRuntime {
         ? Number(closeRes.fill_price)
         : mark;
     const instrument = specForEpic(pos.epic);
-    const { pnl, pnl_pts: pnlPts } = resolveCloseMoneyPnl({
+    const resolved = resolveCloseMoneyPnl({
       side: pos.side,
       entry: pos.entry,
       fill,
       size: pos.size,
       value_per_point_per_lot: instrument.value_per_point_per_lot,
       fill_pnl: closeRes.fill_pnl ?? pos.broker_upl,
+    });
+    const priced = applyCloseFees({
+      pnl: resolved.pnl,
+      volume: pos.size,
+      from_broker: resolved.from_broker,
     });
     const heldMs = Date.now() - new Date(pos.entry_at).getTime();
     const riskDist = Math.max(
@@ -275,12 +283,12 @@ class MasterRuntime {
       entry: pos.entry,
       exit: fill,
       volume: pos.size,
-      pnl,
-      fees: 0,
+      pnl: priced.pnl,
+      fees: priced.fees,
       slippage: Math.abs(fill - quote.mid),
       mae: pos.mae,
       mfe: pos.mfe,
-      r_multiple: pnlPts / riskDist,
+      r_multiple: resolved.pnl_pts / riskDist,
       hold_ms: heldMs,
       exit_reason: reason,
     };
@@ -288,8 +296,8 @@ class MasterRuntime {
       epic: pos.epic,
     });
     this.positions.drop(positionId);
-    this.account.daily_pnl += pnl;
-    if (pnl < 0) {
+    this.account.daily_pnl += outcome.pnl;
+    if (outcome.pnl < 0) {
       this.account.consecutive_losses += 1;
       this.last_loss_ms = Date.now();
     } else {
@@ -298,7 +306,7 @@ class MasterRuntime {
     this.last_exit_reason = reason;
     this.trackPersist('outcome', persistOutcome(pos.opportunity_id, outcome, null));
     this.trackPersist('open_positions', saveOpenPositions(this.positions.list()));
-    return { ok: true, detail: reason, pnl };
+    return { ok: true, detail: reason, pnl: outcome.pnl };
   }
 
   async flattenAll(reason = 'OPERATOR_FLATTEN'): Promise<{
@@ -371,7 +379,7 @@ class MasterRuntime {
           : quote.ask
         : ghost.entry;
       const instrument = specForEpic(ghost.epic);
-      const { pnl } = resolveCloseMoneyPnl({
+      const resolved = resolveCloseMoneyPnl({
         side: ghost.side,
         entry: ghost.entry,
         fill: exit,
@@ -380,14 +388,19 @@ class MasterRuntime {
         // Prefer last broker UPL when fill price is only a mark proxy (Check- pattern)
         fill_pnl: ghost.broker_upl,
       });
+      const priced = applyCloseFees({
+        pnl: resolved.pnl,
+        volume: ghost.size,
+        from_broker: resolved.from_broker,
+      });
       const outcome = {
         position_id: ghost.position_id,
         side: ghost.side,
         entry: ghost.entry,
         exit,
         volume: ghost.size,
-        pnl,
-        fees: 0,
+        pnl: priced.pnl,
+        fees: priced.fees,
         slippage: 0,
         mae: ghost.mae,
         mfe: ghost.mfe,
@@ -397,7 +410,7 @@ class MasterRuntime {
       };
       const exists = this.pipeline.journal.opportunities.some((o) => o.id === ghost.opportunity_id);
       if (!exists) {
-        this.pipeline.journal.recordOpportunity({
+        const stub = this.pipeline.journal.recordOpportunity({
           id: ghost.opportunity_id,
           mode: this.cfg.mode,
           epic: ghost.epic,
@@ -418,6 +431,7 @@ class MasterRuntime {
             paper: this.broker?.paper ?? true,
           },
         });
+        this.trackPersist('ghost_stub', persistOpportunity(stub));
       }
       this.pipeline.recordTradeClose(ghost.opportunity_id, ghost.decision, outcome, {
         epic: ghost.epic,
@@ -436,7 +450,7 @@ class MasterRuntime {
           ? quote.bid
           : quote.ask
         : partial.mark_proxy;
-      const { pnl } = resolveCloseMoneyPnl({
+      const resolved = resolveCloseMoneyPnl({
         side: partial.side,
         entry: partial.entry,
         fill: exit,
@@ -444,14 +458,19 @@ class MasterRuntime {
         value_per_point_per_lot: instrument.value_per_point_per_lot,
         fill_pnl: partial.broker_upl_closed,
       });
+      const priced = applyCloseFees({
+        pnl: resolved.pnl,
+        volume: partial.closed_size,
+        from_broker: resolved.from_broker,
+      });
       const outcome = {
         position_id: partial.position_id,
         side: partial.side,
         entry: partial.entry,
         exit,
         volume: partial.closed_size,
-        pnl,
-        fees: 0,
+        pnl: priced.pnl,
+        fees: priced.fees,
         slippage: 0,
         mae: partial.mae,
         mfe: partial.mfe,
@@ -463,7 +482,7 @@ class MasterRuntime {
         (o) => o.id === partial.opportunity_id
       );
       if (!exists) {
-        this.pipeline.journal.recordOpportunity({
+        const stub = this.pipeline.journal.recordOpportunity({
           id: partial.opportunity_id,
           mode: this.cfg.mode,
           epic: partial.epic,
@@ -484,6 +503,7 @@ class MasterRuntime {
             paper: this.broker?.paper ?? true,
           },
         });
+        this.trackPersist('external_partial_stub', persistOpportunity(stub));
       }
       this.pipeline.recordTradeClose(partial.opportunity_id, partial.decision, outcome, {
         epic: partial.epic,
@@ -622,6 +642,7 @@ class MasterRuntime {
   }
 
   private async tickUnlocked(bars: Bar[], quoteIn: Quote): Promise<TickResult> {
+    const t0 = Date.now();
     // Always stamp runtime epic — public/desk quotes often omit it (news targeting).
     const quote: Quote = { ...quoteIn, epic: quoteIn.epic || this.epic };
     this.last_bars = bars;
@@ -682,6 +703,9 @@ class MasterRuntime {
       }
     }
     const spreadSnap = this.spreadHistory.push(quote.spread);
+    this.monitor.noteRelativeSpread(
+      spreadSnap.history.length >= 3 ? spreadSnap.relative_spread : null
+    );
 
     // Refresh Forex Factory news calendar cache (VS-System) before entry filters
     await refreshNewsCalendar().catch(() => undefined);
@@ -1004,6 +1028,7 @@ class MasterRuntime {
       this.trackPersist('seen_intents', saveSeenIntents(this.seenIntentSnapshot));
     }
 
+    this.monitor.noteCycle(Date.now() - t0);
     return {
       decision: cycle.decision,
       risk: cycle.risk,
@@ -1566,6 +1591,9 @@ class MasterRuntime {
         message: e.message,
       })),
       manage: pickManageConfig(this.cfg),
+      monitoring: this.monitor.snapshot(
+        quote ? Math.max(0, Date.now() - (quote.ts_ms || 0)) : null
+      ),
     };
   }
 }
