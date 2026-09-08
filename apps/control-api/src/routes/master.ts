@@ -14,6 +14,8 @@ export async function registerMasterRoutes(app: FastifyInstance) {
   masterRuntime.hydrateManageConfig();
   masterRuntime.hydrateRuntimeGatesFromDisk();
   masterRuntime.hydrateMonitorFromDisk();
+  // Opens/journal KPIs — do not leave dashboard forged-empty until Recover
+  await masterRuntime.hydrateBookFromDisk();
 
   app.get('/api/master/status', async () => masterRuntime.statusAsync());
 
@@ -69,6 +71,8 @@ export async function registerMasterRoutes(app: FastifyInstance) {
       epic?: string;
       ai_mode?: 'off' | 'advisory' | 'required';
       owns_pipeline?: boolean;
+      entries_armed?: boolean;
+      entries_pause_reason?: string;
     };
   }>('/api/master/control', async (req) => {
       const body = req.body || {};
@@ -109,6 +113,12 @@ export async function registerMasterRoutes(app: FastifyInstance) {
         if (!owns.ok) {
           return { ok: false, detail: owns.detail, status: masterRuntime.status() };
         }
+      }
+      if (typeof body.entries_armed === 'boolean') {
+        masterRuntime.setEntriesArmed(
+          body.entries_armed,
+          body.entries_pause_reason || 'operator_entries_pause'
+        );
       }
       return { ok: true, status: masterRuntime.status() };
     }
@@ -699,6 +709,7 @@ async function refresh(){
       card('Day start eq',s.capital_account_proven===false?'UNPROVEN':(s.account?.day_start_equity!=null?Number(s.account.day_start_equity).toFixed(2):'—'),s.capital_account_proven===false?'bad':''),
       card('Peak eq',s.capital_account_proven===false?'UNPROVEN':(s.account?.peak_equity!=null?Number(s.account.peak_equity).toFixed(2):'—'),s.capital_account_proven===false?'bad':''),
       card('Reject cool',(s.reject_cooldown_ms||0)>0?(Math.ceil((s.reject_cooldown_ms||0)/1000)+'s'):'—',(s.reject_cooldown_ms||0)>0?'bad':''),
+      card('Post-exit cool',(s.post_exit_cooldown_ms||0)>0?(Math.ceil((s.post_exit_cooldown_ms||0)/1000)+'s'):'—',(s.post_exit_cooldown_ms||0)>0?'bad':''),
       card('Open',s.open_positions),
       card('Venue',s.capital_live_attached?(s.capital_venue_opens_proven===false?'unproven':String(s.capital_venue_opens||0)):'—',s.capital_live_attached&&(s.capital_venue_opens_proven===false||(s.capital_venue_opens||0)>0)?'bad':''),
       card('Trades',s.traded),

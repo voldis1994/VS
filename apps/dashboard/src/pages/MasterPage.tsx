@@ -127,6 +127,7 @@ type MasterStatus = {
   } | null;
   floating_pnl?: number | null;
   reject_cooldown_ms?: number;
+  post_exit_cooldown_ms?: number;
   recent_errors?: Array<{
     ts: string;
     module: string;
@@ -174,6 +175,7 @@ type MasterStatus = {
     profit_lock?: number;
     equity_floor?: number;
     scalp_lock_pct?: number;
+    scalp_min_edge?: number;
     scalp_strict_entry?: boolean;
     ema_tick_entry?: boolean;
     multi_tp_atr_mult?: number;
@@ -593,6 +595,14 @@ export function MasterPage() {
               : '—',
           bad: (status.reject_cooldown_ms ?? 0) > 0,
         },
+        {
+          k: 'Post-exit cool',
+          v:
+            (status.post_exit_cooldown_ms ?? 0) > 0
+              ? `${Math.ceil((status.post_exit_cooldown_ms || 0) / 1000)}s`
+              : '—',
+          bad: (status.post_exit_cooldown_ms ?? 0) > 0,
+        },
         { k: 'Open', v: String(status.open_positions) },
         {
           k: 'Venue',
@@ -961,6 +971,27 @@ export function MasterPage() {
           className="btn"
           disabled={busy}
           onClick={() =>
+            void act('entries', () =>
+              apiFetch('/api/master/control', {
+                method: 'POST',
+                body: JSON.stringify({
+                  entries_armed: status?.entries_armed === false,
+                  entries_pause_reason:
+                    status?.entries_armed === false
+                      ? undefined
+                      : 'operator_entries_pause',
+                }),
+              })
+            )
+          }
+        >
+          {status?.entries_armed === false ? 'Arm entries' : 'Pause entries'}
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={busy}
+          onClick={() =>
             void act('capital-probe', () =>
               apiFetch('/api/master/broker/capital/probe', { method: 'POST' })
             )
@@ -1221,6 +1252,18 @@ export function MasterPage() {
             />
           </label>
           <label style={{ fontSize: 12 }}>
+            scalp_min_edge{' '}
+            <input
+              type="number"
+              step="0.01"
+              min={0}
+              max={1}
+              defaultValue={status?.manage?.scalp_min_edge ?? 0.12}
+              id="cfg-scalp-edge"
+              style={{ width: 56 }}
+            />
+          </label>
+          <label style={{ fontSize: 12 }}>
             <input
               type="checkbox"
               id="cfg-scalp-strict"
@@ -1354,6 +1397,7 @@ export function MasterPage() {
                     soft_trail_pips: num('cfg-soft-pips'),
                     scalp_pct_chase: chk('cfg-scalp-chase'),
                     scalp_lock_pct: num('cfg-scalp-lock'),
+                    scalp_min_edge: num('cfg-scalp-edge'),
                     scalp_strict_entry: chk('cfg-scalp-strict'),
                     ema_tick_entry: chk('cfg-ema-tick'),
                     multi_tp_count: num('cfg-multi-tp'),

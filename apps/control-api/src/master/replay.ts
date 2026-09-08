@@ -107,7 +107,9 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
 
   let equity = opts.starting_equity ?? 10_000;
   let peak = equity;
+  let day_start_equity = equity;
   let daily_pnl = 0;
+  let daily_pnl_day = '';
   let consecutive_losses = 0;
   let last_loss_ms = 0;
   /** Soft-exit AI gate — refreshed each bar when ai_mode !== 'off' (live last_ai_allow_close). */
@@ -197,6 +199,13 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
       spread,
       ts_ms: last.ts_ms ?? i * 60_000,
     };
+    // Roll UTC day like live — day_start_equity drives profit_lock / daily_loss_limit
+    const day = new Date(quote.ts_ms).toISOString().slice(0, 10);
+    if (daily_pnl_day !== day) {
+      daily_pnl = 0;
+      daily_pnl_day = day;
+      day_start_equity = equity;
+    }
 
     // Manage open position on current bar (no future bars)
     if (open) {
@@ -621,6 +630,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
         daily_pnl,
         peak_equity: peak,
         consecutive_losses,
+        day_start_equity,
       },
       instrument,
       cfg,

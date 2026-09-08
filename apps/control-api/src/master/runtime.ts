@@ -193,6 +193,8 @@ export type MasterStatus = {
   floating_pnl: number | null;
   /** Remaining reject cooldown ms (0 = clear) */
   reject_cooldown_ms: number;
+  /** Remaining post-exit cooldown ms (VS re-entry settle) */
+  post_exit_cooldown_ms: number;
   /** Newest durable cycle/broker errors */
   recent_errors: Array<{
     ts: string;
@@ -319,6 +321,11 @@ class MasterRuntime {
   private seenIntentSnapshot: string[] = [];
   /** Serialize tick() across live-feed / API / desk so opens+persist never race. */
   private tickChain: Promise<unknown> = Promise.resolve();
+  /**
+   * True after boot journal/opens hydrate (not full recover — no broker sync).
+   * Prevents empty dashboard KPIs while durable state exists on disk.
+   */
+  private bookHydrated = false;
   /** Reader relative-spread rolling history */
   private spreadLookback = DEFAULT_MASTER_CONFIG.spread_lookback_bars;
   private spreadHistory = new SpreadHistory(this.spreadLookback);
@@ -480,6 +487,128 @@ class MasterRuntime {
    */
   async bootstrapManageAfterRecoverPublic(): Promise<void> {
     await this.bootstrapManageAfterRecover();
+  }
+
+  /**
+   * Boot warm: load opens + journal + expectancy + daily_pnl from disk without
+   * broker sync. Dashboard must not forge an empty book when durable state exists.
+   * Full recover() still required for Capital venue reconcile.
+   */
+  async hydrateBookFromDisk(): Promise<boolean> {
+    if (this.recovered || this.bookHydrated) return true;
+    try {
+      const { ensureOperatorMetaFromStateDir } = await import('./filePersist.js');
+      ensureOperatorMetaFromStateDir();
+      this.hydrateMarketCacheFromDisk();
+      if (this.positions.count() === 0) {
+        const loaded = await loadOpenPositions();
+        const valid = loaded.filter((p) => p.decision && p.position_id);
+        if (valid.length) this.positions.fromJSON(valid);
+      }
+      if (this.pipeline.journal.opportunities.length === 0) {
+        const hist = await loadJournalHistory();
+        this.pipeline.journal.hydrate(
+          hist.opportunities,
+          hist.outcomes.map((o) => o.outcome)
+        );
+        this.pipeline.expectancy.hydrate(
+          hist.outcomes
+            .filter((o) => !!o.setup_key && !!o.outcome)
+            .map((o) => ({
+              setup_key: String(o.setup_key),
+              outcome: o.outcome,
+            }))
+        );
+        this.seedDashboardFromHistory(hist);
+        // Paper/boot: recompute today's closed daily_pnl (Capital LIVE path still
+        // needs recover for venue-truth equity — do not invent Capital equity here).
+        this.rollDailyPnl();
+        const today = this.account.daily_pnl_day!;
+        let pnlToday = 0;
+        const capitalAttached =
+          this.broker instanceof CapitalBroker && !this.broker.paper;
+        const oppMode = new Map(
+          hist.opportunities.map((o) => [String(o.id), String(o.mode || '')])
+        );
+        for (const o of hist.outcomes) {
+          if (o.outcome.pnl_proven === false) continue;
+          if (capitalAttached && oppMode.get(String(o.opportunity_id)) !== 'LIVE') {
+            continue;
+          }
+          const day = String(o.created_at || '').slice(0, 10);
+          if (day === today) pnlToday += o.outcome.pnl;
+        }
+        if (!capitalAttached || this.capitalDayGatesSeeded) {
+          this.account.daily_pnl = pnlToday;
+        }
+      }
+      this.account.open_positions = this.positions.count();
+      this.bookHydrated = true;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Seed last_exit / last_decision cards from recovered journal history. */
+  private seedDashboardFromHistory(hist: {
+    opportunities: Array<{
+      ts?: string;
+      decision?: MasterDecision | null;
+      execution?: { detail?: string | null } | null;
+    }>;
+    outcomes: Array<{
+      created_at?: string;
+      outcome?: { exit_reason?: string } | null;
+    }>;
+  }) {
+    if (hist.outcomes.length && !this.last_exit_reason) {
+      const latest = [...hist.outcomes].sort((a, b) =>
+        String(b.created_at || '').localeCompare(String(a.created_at || ''))
+      )[0];
+      if (latest?.outcome?.exit_reason) {
+        this.last_exit_reason = latest.outcome.exit_reason;
+      }
+    }
+    if (!this.last_decision && hist.opportunities.length) {
+      const withDecision = [...hist.opportunities]
+        .filter((o) => o.decision)
+        .sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')));
+      const latestOpp = withDecision[0];
+      if (latestOpp?.decision) {
+        this.last_decision = latestOpp.decision;
+        if (!this.last_execution_detail && latestOpp.execution?.detail) {
+          this.last_execution_detail = String(latestOpp.execution.detail);
+        }
+      }
+    }
+    if (!this.last_decision) {
+      const ev = loadDecisionEvents(1)[0];
+      if (ev) {
+        this.last_decision = {
+          decision_id: ev.opportunity_id || 'recovered',
+          kind: (['BUY', 'SELL', 'WAIT', 'BLOCK'].includes(ev.kind)
+            ? ev.kind
+            : 'WAIT') as MasterDecision['kind'],
+          side:
+            ev.kind === 'BUY' || ev.kind === 'SELL'
+              ? (ev.kind as 'BUY' | 'SELL')
+              : null,
+          score: Math.max(ev.buy_score || 0, ev.sell_score || 0),
+          block_reason: ev.block_reason,
+          buy: { score: ev.buy_score || 0 } as MasterDecision['buy'],
+          sell: { score: ev.sell_score || 0 } as MasterDecision['sell'],
+          analysis: {
+            regime: 'UNKNOWN',
+            market_state: 'recovered_from_decision_journal',
+          } as MasterDecision['analysis'],
+          expectancy: null,
+        };
+        if (!this.last_execution_detail && ev.execution_detail) {
+          this.last_execution_detail = ev.execution_detail;
+        }
+      }
+    }
   }
 
   /**
@@ -1476,6 +1605,9 @@ class MasterRuntime {
 
   /** Status with a fresh Capital venue list when Capital LIVE is attached. */
   async statusAsync(): Promise<MasterStatus> {
+    if (!this.recovered && !this.bookHydrated) {
+      await this.hydrateBookFromDisk();
+    }
     await this.refreshCapitalVenueOpens();
     return this.status();
   }
@@ -2920,57 +3052,10 @@ class MasterRuntime {
     }
 
     // Hydrate last exit + cycle cards for dashboard after restart
-    if (hist.outcomes.length && !this.last_exit_reason) {
-      const latest = [...hist.outcomes].sort((a, b) =>
-        String(b.created_at || '').localeCompare(String(a.created_at || ''))
-      )[0];
-      if (latest?.outcome?.exit_reason) {
-        this.last_exit_reason = latest.outcome.exit_reason;
-      }
-    }
-    // Seed last_decision from journal so BUY/SELL/regime cards are not UNKNOWN/0
-    if (!this.last_decision && hist.opportunities.length) {
-      const withDecision = [...hist.opportunities]
-        .filter((o) => o.decision)
-        .sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')));
-      const latestOpp = withDecision[0];
-      if (latestOpp?.decision) {
-        this.last_decision = latestOpp.decision;
-        if (!this.last_execution_detail && latestOpp.execution?.detail) {
-          this.last_execution_detail = String(latestOpp.execution.detail);
-        }
-      }
-    }
-    if (!this.last_decision) {
-      const ev = loadDecisionEvents(1)[0];
-      if (ev) {
-        // Minimal stub — scores/kind for status cards until next live cycle
-        this.last_decision = {
-          decision_id: ev.opportunity_id || 'recovered',
-          kind: (['BUY', 'SELL', 'WAIT', 'BLOCK'].includes(ev.kind)
-            ? ev.kind
-            : 'WAIT') as MasterDecision['kind'],
-          side:
-            ev.kind === 'BUY' || ev.kind === 'SELL'
-              ? (ev.kind as 'BUY' | 'SELL')
-              : null,
-          score: Math.max(ev.buy_score || 0, ev.sell_score || 0),
-          block_reason: ev.block_reason,
-          buy: { score: ev.buy_score || 0 } as MasterDecision['buy'],
-          sell: { score: ev.sell_score || 0 } as MasterDecision['sell'],
-          analysis: {
-            regime: 'UNKNOWN',
-            market_state: 'recovered_from_decision_journal',
-          } as MasterDecision['analysis'],
-          expectancy: null,
-        };
-        if (!this.last_execution_detail && ev.execution_detail) {
-          this.last_execution_detail = ev.execution_detail;
-        }
-      }
-    }
+    this.seedDashboardFromHistory(hist);
 
     this.account.open_positions = this.positions.count();
+    this.bookHydrated = true;
     this.recovered = true;
     return {
       positions: this.positions.count(),
@@ -3884,6 +3969,7 @@ class MasterRuntime {
         : null,
       floating_pnl: floating,
       reject_cooldown_ms: Math.max(0, this.reject_until_ms - Date.now()),
+      post_exit_cooldown_ms: Math.max(0, this.post_exit_until_ms - Date.now()),
       recent_errors: loadMasterErrors(8).map((e) => ({
         ts: e.ts,
         module: e.module,

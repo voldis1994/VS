@@ -1926,6 +1926,147 @@ describe('runtime gates persist', () => {
       else process.env.MASTER_STATE_DIR = prev;
     }
   });
+
+  it('hydrateBookFromDisk seeds journal KPIs without full recover', async () => {
+    const prevDir = process.env.MASTER_STATE_DIR;
+    const dir = mkdtempSync(join(tmpdir(), 'vs-boot-book-'));
+    process.env.MASTER_STATE_DIR = dir;
+    const { installFilePersist } = await import('../filePersist.js');
+    const {
+      persistOpportunity,
+      persistOutcome,
+      saveOpenPositions,
+      setPersistClient,
+    } = await import('../persist.js');
+    const { GOLD_SPEC } = await import('../pipeline.js');
+    installFilePersist(dir);
+
+    const pipe = new MasterPipeline('PAPER');
+    const bars = Array.from({ length: 40 }, (_, i) => {
+      const o = 4400 + i * 0.5;
+      return { open: o, high: o + 1, low: o - 0.2, close: o + 0.4, ts_ms: i * 60_000 };
+    });
+    const cycle = await pipe.runCycle({
+      bars,
+      quote: {
+        bid: 4419.8,
+        ask: 4420.2,
+        mid: 4420,
+        spread: 0.4,
+        ts_ms: Date.now(),
+      },
+      account: {
+        equity: 10_000,
+        balance: 10_000,
+        currency: 'GBP',
+        open_positions: 0,
+        daily_pnl: 0,
+        peak_equity: 10_000,
+        consecutive_losses: 0,
+      },
+      instrument: GOLD_SPEC,
+      cfg: { ...DEFAULT_MASTER_CONFIG, block_off_hours: false },
+    });
+    const pm = new PositionManager();
+    pm.register({
+      position_id: 'boot-pos-1',
+      opportunity_id: cycle.opportunity.id,
+      intent_id: 'boot-intent-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4410,
+      decision: cycle.decision,
+    });
+    await saveOpenPositions(pm.list());
+    await persistOpportunity(cycle.opportunity);
+    await persistOutcome(
+      cycle.opportunity.id,
+      {
+        position_id: 'closed-boot-1',
+        side: 'BUY',
+        entry: 4410,
+        exit: 4418,
+        volume: 0.1,
+        pnl: 8,
+        fees: 0.1,
+        slippage: 0,
+        mae: 1,
+        mfe: 9,
+        r_multiple: 1.2,
+        hold_ms: 30_000,
+        exit_reason: 'TakeProfit',
+      },
+      'TREND:BUY'
+    );
+
+    const prevExit = masterRuntime.last_exit_reason;
+    const prevDec = masterRuntime.last_decision;
+    const prevPnl = masterRuntime.account.daily_pnl;
+    const prevRec = masterRuntime.recovered;
+    try {
+      masterRuntime.pipeline = new MasterPipeline('PAPER');
+      masterRuntime.positions = new PositionManager();
+      masterRuntime.broker = null;
+      masterRuntime.broker_detail = null;
+      masterRuntime.running = false;
+      masterRuntime.recovered = false;
+      (masterRuntime as unknown as { bookHydrated: boolean }).bookHydrated = false;
+      masterRuntime.last_exit_reason = null;
+      masterRuntime.last_decision = null;
+      masterRuntime.account.daily_pnl = 0;
+
+      const ok = await masterRuntime.hydrateBookFromDisk();
+      expect(ok).toBe(true);
+      expect(masterRuntime.recovered).toBe(false);
+      expect(masterRuntime.positions.count()).toBe(1);
+      expect(masterRuntime.pipeline.journal.opportunities.length).toBeGreaterThanOrEqual(1);
+      expect(masterRuntime.last_exit_reason).toBe('TakeProfit');
+      expect(masterRuntime.last_decision).toBeTruthy();
+      expect(masterRuntime.account.daily_pnl).toBe(8);
+      expect(masterRuntime.status().post_exit_cooldown_ms).toBeGreaterThanOrEqual(0);
+      expect(masterRuntime.status().open_positions).toBe(1);
+    } finally {
+      masterRuntime.last_exit_reason = prevExit;
+      masterRuntime.last_decision = prevDec;
+      masterRuntime.account.daily_pnl = prevPnl;
+      masterRuntime.recovered = prevRec;
+      masterRuntime.positions = new PositionManager();
+      masterRuntime.pipeline = new MasterPipeline('PAPER');
+      (masterRuntime as unknown as { bookHydrated: boolean }).bookHydrated = false;
+      setPersistClient(null);
+      if (prevDir === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prevDir;
+    }
+  });
+
+  it('setEntriesArmed control path persists pause and status post_exit field', async () => {
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = mkdtempSync(join(tmpdir(), 'vs-entries-ctl-'));
+    const prevArmed = masterRuntime.entries_armed;
+    const prevReason = masterRuntime.entries_pause_reason;
+    const prevPost = (masterRuntime as unknown as { post_exit_until_ms: number })
+      .post_exit_until_ms;
+    try {
+      masterRuntime.setEntriesArmed(false, 'operator_entries_pause');
+      expect(masterRuntime.entries_armed).toBe(false);
+      expect(masterRuntime.entries_pause_reason).toBe('operator_entries_pause');
+      expect(masterRuntime.status().entries_armed).toBe(false);
+      (masterRuntime as unknown as { post_exit_until_ms: number }).post_exit_until_ms =
+        Date.now() + 12_000;
+      expect(masterRuntime.status().post_exit_cooldown_ms).toBeGreaterThan(0);
+      masterRuntime.setEntriesArmed(true);
+      expect(masterRuntime.entries_armed).toBe(true);
+      expect(masterRuntime.entries_pause_reason).toBeNull();
+    } finally {
+      masterRuntime.entries_armed = prevArmed;
+      masterRuntime.entries_pause_reason = prevReason;
+      (masterRuntime as unknown as { post_exit_until_ms: number }).post_exit_until_ms =
+        prevPost;
+      if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prev;
+    }
+  });
 });
 
 describe('error journal', () => {
@@ -4277,6 +4418,43 @@ describe('orphan adopt + replay soft-trail authority', () => {
     // Soft trail is optional depending on path — assert replay still completes with exits
     expect(result.equity_curve.length).toBeGreaterThan(10);
     expect(exits.every((r) => typeof r === 'string' && r.length > 0)).toBe(true);
+  });
+
+  it('replay rolls day_start_equity across UTC day boundary', async () => {
+    const { replayMaster } = await import('../replay.js');
+    // Day1 flat grind then Day2 — profit_lock / daily_loss use day_start after roll
+    const bars = Array.from({ length: 80 }, (_, i) => {
+      const day2 = i >= 40;
+      const o = 4400 + (day2 ? (i - 40) * 0.6 : i * 0.4);
+      return {
+        open: o,
+        high: o + 1.2,
+        low: o - 0.4,
+        close: o + 0.5,
+        ts_ms: day2
+          ? Date.UTC(2026, 8, 8, 1, i - 40)
+          : Date.UTC(2026, 8, 7, 22, i),
+      };
+    });
+    const result = await replayMaster({
+      bars,
+      warmup: 20,
+      starting_equity: 10_000,
+      spread: 0.3,
+      cfg: {
+        ...DEFAULT_MASTER_CONFIG,
+        block_off_hours: false,
+        block_high_impact_news: false,
+        min_score: 0.25,
+        max_hold_ms: 0,
+        profit_lock: 50,
+        daily_loss_limit: 100,
+        require_positive_expectancy: false,
+      },
+    });
+    expect(result.equity_curve.length).toBeGreaterThan(10);
+    // Final equity exists; day roll must not throw / zero out account mid-replay
+    expect(Number.isFinite(result.equity_curve.at(-1))).toBe(true);
   });
 
   it('replay multi-TP + money-BE cfg does not throw and can scale', async () => {
