@@ -275,6 +275,9 @@ bool DoModify(string json, string id)
       AckSimple(id, false, ticket, "select");
       return(false);
    }
+   // Missing/0 legs from JSON must not wipe chart — preserve live Order SL/TP
+   if(sl <= 0) sl = OrderStopLoss();
+   if(tp <= 0) tp = OrderTakeProfit();
    if(!OrderModify(ticket, OrderOpenPrice(), sl, tp, 0, clrGold))
    {
       AckSimple(id, false, ticket, "modify " + IntegerToString(GetLastError()));

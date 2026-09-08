@@ -199,4 +199,97 @@ describe('MASTER per-tick ghost sync', () => {
     ).toBe(true);
     masterRuntime.setKillSwitch(false);
   });
+
+  it('defers ghost drop ×5 when missing from a non-empty broker book', async () => {
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('PAPER');
+    masterRuntime.positions = new PositionManager();
+    const broker = masterRuntime.ensurePaperBroker();
+    masterRuntime.setMode('PAPER');
+    masterRuntime.running = true;
+
+    broker.seedOpens([
+      {
+        position_id: 'live-other',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 1,
+        open_level: 4410,
+        stop_level: 4400,
+        profit_level: null,
+      },
+    ]);
+    masterRuntime.positions.register({
+      position_id: 'ghost-partial-1',
+      opportunity_id: `ghost-partial-opp-${Date.now()}`,
+      intent_id: 'ghost-partial-intent',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      entry: 4410,
+      stop_loss: 4405,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.5,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {
+          regime: 'RANGE',
+          market_state: 't',
+          momentum_score: 0,
+          momentum_dir: 'NEUTRAL',
+          trend_dir: 'SIDEWAYS',
+          trend_strength: 0,
+          structure_bias: 'NEUTRAL',
+          swing_high: 4420,
+          swing_low: 4400,
+          buy_pressure: 0.5,
+          sell_pressure: 0.5,
+          behavior_bull: 0.5,
+          behavior_bear: 0.5,
+          impact_score: 0.5,
+          context_quality: 0.5,
+          volatility: 0.1,
+          atr: 1,
+        },
+        expectancy: null,
+      },
+    });
+
+    const debounce = { consecutive_empty: 0, miss_by_id: {} as Record<string, number> };
+    const first = await syncPositionsWithBroker(
+      masterRuntime.positions,
+      broker,
+      'GOLD',
+      debounce
+    );
+    expect(first.ghost_drop_deferred).toBe(true);
+    expect(first.orphans_local.length).toBe(0);
+    expect(masterRuntime.positions.get('ghost-partial-1')).toBeTruthy();
+    expect(debounce.miss_by_id['ghost-partial-1']).toBe(1);
+
+    let sync = first;
+    for (let i = 0; i < 3; i++) {
+      sync = await syncPositionsWithBroker(
+        masterRuntime.positions,
+        broker,
+        'GOLD',
+        debounce
+      );
+      expect(sync.ghost_drop_deferred).toBe(true);
+      expect(masterRuntime.positions.get('ghost-partial-1')).toBeTruthy();
+    }
+    sync = await syncPositionsWithBroker(
+      masterRuntime.positions,
+      broker,
+      'GOLD',
+      debounce
+    );
+    expect(sync.ghost_drop_deferred).toBe(false);
+    expect(sync.orphans_local.length).toBe(1);
+    expect(masterRuntime.positions.get('ghost-partial-1')).toBeFalsy();
+  });
 });

@@ -927,6 +927,34 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(ok.remaining_size).toBeCloseTo(0.05, 6);
   });
 
+  it('partial close refuses when before-size snapshot unavailable', async () => {
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    let closed = false;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-partial-miss' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({ ok: false, positions: [], detail: 'list_down' }),
+      create: async () => ({ ok: true, deal_reference: 'x', detail: 'ok' }),
+      confirm: async () => ({ ok: true, deal_id: 'd', detail: 'ok' }),
+      close: async () => {
+        closed = true;
+        return { ok: true, deal_reference: 'should-not-fire', detail: 'submitted' };
+      },
+    });
+    await broker.connect();
+    const bad = await broker.closePosition('deal-missing', { size: 0.05 });
+    expect(bad.ok).toBe(false);
+    expect(bad.detail).toMatch(/capital_partial_no_before_size/);
+    expect(closed).toBe(false);
+  });
+
   it('listOpenPositions drops missing/zero open_level (no invent entry=0)', async () => {
     const broker = new CapitalBroker({
       credentials: {},

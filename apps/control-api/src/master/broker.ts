@@ -1185,6 +1185,11 @@ export class CapitalBroker implements MasterBroker {
         beforeSize = Number(before.size);
       }
     }
+    // Never DELETE a partial without proven before-size (MT4 already refuses).
+    // Otherwise list flakiness lets us fire close and invent reduction proof.
+    if (partial && beforeSize == null) {
+      return { ok: false, detail: 'capital_partial_no_before_size' };
+    }
 
     const res = await this.deps.close(this.session, position_id, opts?.size);
     if (!res.ok) return { ok: false, detail: res.detail || 'close_failed' };

@@ -211,7 +211,10 @@ class MasterRuntime {
   private spreadLookback = DEFAULT_MASTER_CONFIG.spread_lookback_bars;
   private spreadHistory = new SpreadHistory(this.spreadLookback);
   /** VS-System: 5 consecutive empty successful lists before ghost wipe */
-  private emptyBrokerDebounce: EmptyBrokerDebounce = { consecutive_empty: 0 };
+  private emptyBrokerDebounce: EmptyBrokerDebounce = {
+    consecutive_empty: 0,
+    miss_by_id: {},
+  };
   private monitor = new CycleMonitor();
   private monitorHydrated = false;
   /** VS-System post-exit settle — block OPEN until this ms */
@@ -870,7 +873,8 @@ class MasterRuntime {
       this.epic,
       this.emptyBrokerDebounce
     );
-    if (!sync.skipped && !sync.ghost_drop_deferred) {
+    // Journal confirmed ghosts/orphans even when other tickets are still in miss-debounce.
+    if (!sync.skipped) {
       this.applySyncJournal(sync, quote);
     }
 
@@ -1690,7 +1694,8 @@ class MasterRuntime {
         this.epic,
         this.emptyBrokerDebounce
       );
-      if (!sync.skipped && !sync.ghost_drop_deferred) {
+      // Journal confirmed ghosts/orphans even when other tickets are still in miss-debounce.
+      if (!sync.skipped) {
         this.applySyncJournal(sync);
       }
     }
@@ -2057,7 +2062,8 @@ class MasterRuntime {
       this.epic,
       this.emptyBrokerDebounce
     );
-    if (!sync.skipped && !sync.ghost_drop_deferred) {
+    // Journal confirmed ghosts/orphans even when other tickets are still in miss-debounce.
+    if (!sync.skipped) {
       this.applySyncJournal(sync, quote);
     }
     if (this.positions.count() === 0) {

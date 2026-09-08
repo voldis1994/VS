@@ -5,6 +5,8 @@
  * Never treats a failed list call as an empty book (would wipe local opens).
  * Empty successful lists require 5 consecutive snapshots before dropping local ghosts
  * (VS-System emptyBrokerSnapshots debounce — flaky Capital empty must not wipe).
+ * Missing tickets from a *non-empty* book also require 5 consecutive misses before drop
+ * (partial list flakiness must not ghost-wipe a live ticket that briefly vanished).
  */
 import type { MasterBroker, BrokerPosition } from './broker.js';
 import type { PositionManager, ManagedPosition } from './positionManager.js';
@@ -32,6 +34,8 @@ export type SyncReport = {
 /** Mutable debounce counter — hold on MasterRuntime across ticks. */
 export type EmptyBrokerDebounce = {
   consecutive_empty: number;
+  /** Per-position miss counts when broker book is non-empty but ticket absent. */
+  miss_by_id?: Record<string, number>;
 };
 
 /** VS-System: require this many consecutive successful empty lists before ghost wipe. */
@@ -105,13 +109,37 @@ export async function syncPositionsWithBroker(
   const localIds = new Set(local.map((p) => p.position_id));
 
   const orphans_broker = brokerPositions.filter((p) => !localIds.has(p.position_id));
-  // Missing from a non-empty book, OR confirmed flat after debounce — drop locals
-  const orphans_local =
-    brokerPositions.length > 0 ||
-    (debounce?.consecutive_empty ?? EMPTY_BROKER_GHOST_DEBOUNCE) >= EMPTY_BROKER_GHOST_DEBOUNCE ||
+
+  // Per-ticket miss debounce when book is non-empty; full empty uses consecutive_empty above
+  const retainIds = new Set<string>();
+  let partialGhostDeferred = false;
+  let orphans_local: ManagedPosition[] = [];
+  if (brokerPositions.length > 0) {
+    if (debounce && !debounce.miss_by_id) debounce.miss_by_id = {};
+    const miss = debounce?.miss_by_id;
+    for (const p of local) {
+      if (brokerIds.has(p.position_id)) {
+        if (miss) delete miss[p.position_id];
+        continue;
+      }
+      const n = (miss?.[p.position_id] ?? 0) + 1;
+      if (miss) miss[p.position_id] = n;
+      if (n < EMPTY_BROKER_GHOST_DEBOUNCE) {
+        retainIds.add(p.position_id);
+        partialGhostDeferred = true;
+      } else {
+        orphans_local.push(p);
+        if (miss) delete miss[p.position_id];
+      }
+    }
+  } else if (
+    (debounce?.consecutive_empty ?? EMPTY_BROKER_GHOST_DEBOUNCE) >=
+      EMPTY_BROKER_GHOST_DEBOUNCE ||
     local.length === 0
-      ? local.filter((p) => !brokerIds.has(p.position_id))
-      : [];
+  ) {
+    orphans_local = local.filter((p) => !brokerIds.has(p.position_id));
+    if (debounce?.miss_by_id) debounce.miss_by_id = {};
+  }
   const matched = brokerPositions.filter((p) => localIds.has(p.position_id)).length;
 
   const reconcile = manager.reconcileFromBroker(
@@ -125,7 +153,8 @@ export async function syncPositionsWithBroker(
       profit_level: p.profit_level,
       upl: p.upl,
       opened_at: p.opened_at,
-    }))
+    })),
+    retainIds.size > 0 ? { retainIds } : undefined
   );
 
   let safety_sl_attached = 0;
@@ -201,8 +230,10 @@ export async function syncPositionsWithBroker(
     safety_sl_attached,
     intended_levels_attached,
     skipped: false,
-    skip_reason: null,
-    ghost_drop_deferred: false,
+    skip_reason: partialGhostDeferred
+      ? `partial_ghost_debounce/${EMPTY_BROKER_GHOST_DEBOUNCE}`
+      : null,
+    ghost_drop_deferred: partialGhostDeferred,
     orphans_broker,
     orphans_local,
     external_partials: reconcile.external_partials,

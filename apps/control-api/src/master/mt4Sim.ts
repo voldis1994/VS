@@ -287,8 +287,11 @@ export class Mt4BridgeSimulator {
         return;
       }
       if (!this.ackModifyWithoutApply) {
-        if (payload.sl != null) p.sl = Number(payload.sl);
-        if (payload.tp != null) p.tp = Number(payload.tp);
+        // Mirror EA DoModify: missing/0 legs preserve chart levels (no wipe)
+        const slN = payload.sl != null ? Number(payload.sl) : NaN;
+        const tpN = payload.tp != null ? Number(payload.tp) : NaN;
+        if (Number.isFinite(slN) && slN > 0) p.sl = slN;
+        if (Number.isFinite(tpN) && tpN > 0) p.tp = tpN;
       }
       this.processedIds.add(id);
       if (this.modifyWithoutAck) return;

@@ -1240,6 +1240,52 @@ export class PositionManager {
     if (now - last < PositionManager.NAKED_RECOVERY_MS) return;
     this.nakedRecoveryAt.set(pos.position_id, now);
 
+    // Prefer OPEN structure levels before soft 10% cushion. Soft attach after a
+    // failed intended MODIFY would paint chart SL and stop sync from retrying.
+    const wantSl =
+      pos.intended_stop_loss != null &&
+      Number.isFinite(pos.intended_stop_loss) &&
+      pos.intended_stop_loss > 0
+        ? Number(pos.intended_stop_loss)
+        : null;
+    const wantTp =
+      pos.intended_take_profit != null &&
+      Number.isFinite(pos.intended_take_profit) &&
+      pos.intended_take_profit > 0
+        ? Number(pos.intended_take_profit)
+        : null;
+    if (wantSl != null || wantTp != null) {
+      const patch: { stop_level?: number; profit_level?: number } = {};
+      if (wantSl != null) patch.stop_level = wantSl;
+      if (wantTp != null) patch.profit_level = wantTp;
+      const intended = await this.brokerModify(
+        broker,
+        pos,
+        patch,
+        'intended_naked_recovery'
+      );
+      if (intended.ok) {
+        if (wantSl != null) pos.stop_loss = wantSl;
+        if (wantTp != null) pos.take_profit = wantTp;
+        this.clearModifyReject(pos);
+        if (pos.stop_loss != null) {
+          this.nakedRecoveryLevel.delete(pos.position_id);
+          pos.naked_recovery_level = null;
+          return;
+        }
+        // TP-only intended attached — still naked SL → soft cushion below
+      } else if (wantSl != null) {
+        // Failed structure SL must not soft-attach (would block sync retry)
+        await this.noteModifyReject(
+          pos,
+          wantSl,
+          intended.detail || ''
+        );
+        return;
+      }
+      // TP-only intended failed — still allow soft SL cushion
+    }
+
     const mark = protectiveMark(pos.side, quote);
     const level =
       this.nakedRecoveryLevel.get(pos.position_id) ??
@@ -1647,12 +1693,14 @@ export class PositionManager {
       profit_level?: number | null;
       upl?: number | null;
       opened_at?: string | null;
-    }>
+    }>,
+    opts?: { retainIds?: Set<string> }
   ): { external_partials: ExternalPartialEvent[] } {
     const external_partials: ExternalPartialEvent[] = [];
     const brokerIds = new Set(brokerPositions.map((p) => p.position_id));
+    const retain = opts?.retainIds;
     for (const id of [...this.open.keys()]) {
-      if (!brokerIds.has(id)) this.open.delete(id);
+      if (!brokerIds.has(id) && !retain?.has(id)) this.open.delete(id);
     }
     for (const bp of brokerPositions) {
       const existing = this.open.get(bp.position_id);

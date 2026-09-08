@@ -248,6 +248,211 @@ describe('mid-life naked SL recovery', () => {
     expect(pm.get(placed.position_id!)!.stop_loss).not.toBeNull();
     void raw;
   });
+
+  it('manageTick prefers intended SL over soft 10% when naked', async () => {
+    const { PaperBroker } = await import('../broker.js');
+    const { PositionManager } = await import('../positionManager.js');
+    const { MasterPipeline } = await import('../pipeline.js');
+    const { safetyStopLevel } = await import('../positionSync.js');
+
+    const broker = new PaperBroker();
+    await broker.connect();
+    broker.setQuote({
+      bid: 4400,
+      ask: 4400.4,
+      mid: 4400.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'intended-naked-aaaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      stop_level: 4395,
+      profit_level: 4420,
+    });
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-int-naked',
+      intent_id: 'in1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      entry: 4400,
+      stop_loss: 4395,
+      take_profit: 4420,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {
+          regime: 'RANGE',
+          market_state: 't',
+          momentum_score: 0,
+          momentum_dir: 'NEUTRAL',
+          trend_dir: 'SIDEWAYS',
+          trend_strength: 0,
+          structure_bias: 'NEUTRAL',
+          swing_high: 4405,
+          swing_low: 4395,
+          buy_pressure: 0.5,
+          sell_pressure: 0.5,
+          behavior_bull: 0.5,
+          behavior_bear: 0.5,
+          impact_score: 0.5,
+          context_quality: 0.5,
+          volatility: 0.1,
+          atr: 1,
+        },
+        expectancy: null,
+      },
+    });
+    broker.seedOpens([
+      {
+        position_id: placed.position_id!,
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 1,
+        open_level: 4400,
+        stop_level: null,
+        profit_level: null,
+      },
+    ]);
+    const pos = pm.get(placed.position_id!)!;
+    pos.stop_loss = null;
+    pos.take_profit = null;
+    expect(pos.intended_stop_loss).toBe(4395);
+    const soft = safetyStopLevel('BUY', 4400);
+    const pipe = new MasterPipeline('PAPER');
+    await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: 4400,
+        ask: 4400.4,
+        mid: 4400.2,
+        spread: 0.4,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      allow_close: false,
+      breakeven_progress: 0,
+      max_hold_ms: 0,
+    });
+    expect(pos.stop_loss).toBe(4395);
+    expect(pos.stop_loss).not.toBeCloseTo(soft, 5);
+    expect(pos.take_profit).toBe(4420);
+  });
+
+  it('failed intended naked recovery does not soft-attach', async () => {
+    const { PaperBroker } = await import('../broker.js');
+    const { PositionManager } = await import('../positionManager.js');
+    const { MasterPipeline } = await import('../pipeline.js');
+
+    const broker = new PaperBroker();
+    await broker.connect();
+    broker.setQuote({
+      bid: 4400,
+      ask: 4400.4,
+      mid: 4400.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'fail-intended-aaaaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+    });
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-fail-int',
+      intent_id: 'fi1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      entry: 4400,
+      stop_loss: 4395,
+      take_profit: 4420,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {
+          regime: 'RANGE',
+          market_state: 't',
+          momentum_score: 0,
+          momentum_dir: 'NEUTRAL',
+          trend_dir: 'SIDEWAYS',
+          trend_strength: 0,
+          structure_bias: 'NEUTRAL',
+          swing_high: 4405,
+          swing_low: 4395,
+          buy_pressure: 0.5,
+          sell_pressure: 0.5,
+          behavior_bull: 0.5,
+          behavior_bear: 0.5,
+          impact_score: 0.5,
+          context_quality: 0.5,
+          volatility: 0.1,
+          atr: 1,
+        },
+        expectancy: null,
+      },
+    });
+    broker.seedOpens([
+      {
+        position_id: placed.position_id!,
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 1,
+        open_level: 4400,
+        stop_level: null,
+        profit_level: null,
+      },
+    ]);
+    const pos = pm.get(placed.position_id!)!;
+    pos.stop_loss = null;
+    pos.take_profit = null;
+    const orig = broker.modifyPosition!.bind(broker);
+    broker.modifyPosition = async (input) => {
+      if (input.stop_level === 4395) {
+        return { ok: false, detail: 'reject_intended' };
+      }
+      return orig(input);
+    };
+    const pipe = new MasterPipeline('PAPER');
+    await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: 4400,
+        ask: 4400.4,
+        mid: 4400.2,
+        spread: 0.4,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      allow_close: false,
+      breakeven_progress: 0,
+      max_hold_ms: 0,
+    });
+    expect(pos.stop_loss).toBeNull();
+    expect(pos.intended_stop_loss).toBe(4395);
+  });
 });
 
 describe('scalp chase throttle durability', () => {
