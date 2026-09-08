@@ -31,6 +31,7 @@ import {
 } from './pipeline.js';
 import {
   entrySetupFromRegime,
+  evaluatePartialClose,
   mapRegimeToPlaybook,
   toDeskRegime,
 } from './positionManager.js';
@@ -105,6 +106,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
     soft_trail_peak: number | null;
     multi_tp_levels: MultiTpLevel[] | null;
     ema3_side: 'above' | 'below' | null;
+    partial_close_applied: boolean;
   } | null = null;
 
   const equity_curve: number[] = [equity];
@@ -230,6 +232,19 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
           const chase = mark + lock * open.mfe;
           if (chase < open.sl) open.sl = chase;
         }
+      } else if (
+        !cfg.scalp_pct_chase &&
+        (cfg.trail_start ?? 0) > 0 &&
+        (cfg.trail_lock ?? 0) > 0 &&
+        fav >= (cfg.trail_start ?? 0)
+      ) {
+        // Check- point trail (tighten-only)
+        const trailed =
+          open.side === 'BUY'
+            ? mark - (cfg.trail_lock ?? 0)
+            : mark + (cfg.trail_lock ?? 0);
+        if (open.side === 'BUY' && trailed > open.sl) open.sl = trailed;
+        if (open.side === 'SELL' && trailed < open.sl) open.sl = trailed;
       }
 
       const softArm = cfg.soft_trail_money_arm ?? 0;
@@ -250,6 +265,48 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
               mark,
               open.soft_trail_peak
             );
+          }
+        }
+      }
+
+      // Reader partial scale-out (once) — skip when multi-TP owns ladder
+      if (
+        !open.partial_close_applied &&
+        !(open.multi_tp_levels && open.multi_tp_levels.length >= 2) &&
+        (cfg.partial_close_progress ?? 0) > 0 &&
+        (cfg.partial_close_volume ?? 0) > 0 &&
+        open.tp != null
+      ) {
+        const partial = evaluatePartialClose(
+          {
+            side: open.side,
+            entry: open.entry,
+            take_profit: open.tp,
+            size: open.volume,
+            partial_close_applied: false,
+          },
+          mark,
+          {
+            progressNeed: cfg.partial_close_progress ?? 0.5,
+            volumeRatio: cfg.partial_close_volume ?? 0.5,
+            volumeStep: 0.01,
+          }
+        );
+        if (partial) {
+          closeSlice(
+            open,
+            mark,
+            partial.close_size,
+            partial.reason,
+            i,
+            quote.ts_ms
+          );
+          open.volume = Number((open.volume - partial.close_size).toFixed(8));
+          open.partial_close_applied = true;
+          if (open.volume <= 1e-9) {
+            open = null;
+            equity_curve.push(equity);
+            continue;
           }
         }
       }
@@ -473,6 +530,7 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
                 })
               : null,
           ema3_side: null,
+          partial_close_applied: false,
         };
         if (open.multi_tp_levels?.length) {
           const final = multiTpFinalPrice(open.multi_tp_levels);

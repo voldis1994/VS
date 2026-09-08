@@ -4173,3 +4173,169 @@ describe('expectancy gate + pure evaluate', () => {
     }
   });
 });
+
+describe('SELL manageTick partial_close + Check trail', () => {
+  it('evaluatePartialClose + manageTick scale-out for SELL', async () => {
+    const { evaluatePartialClose } = await import('../positionManager.js');
+    const d = evaluatePartialClose(
+      {
+        side: 'SELL',
+        entry: 4400,
+        take_profit: 4390,
+        size: 0.1,
+        partial_close_applied: false,
+      },
+      4395,
+      { progressNeed: 0.5, volumeRatio: 0.5, volumeStep: 0.01 }
+    );
+    expect(d?.close_size).toBe(0.05);
+    expect(d?.reason).toMatch(/PARTIAL_CLOSE/);
+
+    const broker = new PaperBroker();
+    await broker.connect();
+    broker.setQuote({
+      bid: 4394.6,
+      ask: 4395,
+      mid: 4394.8,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const pm = new PositionManager();
+    const pipe = new MasterPipeline('PAPER');
+    pm.register({
+      position_id: 'paper-partial-sell-1',
+      opportunity_id: 'opp-partial-sell',
+      intent_id: 'partial-sell-aaaaaaaa',
+      epic: 'GOLD',
+      side: 'SELL',
+      size: 0.1,
+      entry: 4400,
+      stop_loss: 4405,
+      take_profit: 4390,
+      decision: {
+        decision_id: 'd-ps',
+        kind: 'SELL',
+        side: 'SELL',
+        score: 0.8,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis({ regime: 'TREND' }),
+        expectancy: null,
+      },
+    });
+    broker.seedOpens([
+      {
+        position_id: 'paper-partial-sell-1',
+        epic: 'GOLD',
+        side: 'SELL',
+        size: 0.1,
+        open_level: 4400,
+        stop_level: 4405,
+        profit_level: 4390,
+      },
+    ]);
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: 4394.6,
+        ask: 4395,
+        mid: 4394.8,
+        spread: 0.4,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      partial_close_progress: 0.5,
+      partial_close_volume: 0.5,
+      volume_step: 0.01,
+      max_hold_ms: 0,
+    });
+    expect(managed.closed.length).toBe(1);
+    expect(managed.closed[0]!.reason).toMatch(/PARTIAL_CLOSE/);
+    expect(pm.count()).toBe(1);
+    expect(pm.list()[0]!.size).toBeCloseTo(0.05, 8);
+    expect(pm.list()[0]!.partial_close_applied).toBe(true);
+  });
+
+  it('Check trail_start/trail_lock tightens SELL stop only', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    const markAsk = 4390; // 10 pts favorable for SELL
+    broker.setQuote({
+      bid: markAsk - 0.2,
+      ask: markAsk,
+      mid: markAsk - 0.1,
+      spread: 0.2,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'trail-sell-bbbbbbbbbbbb',
+      epic: 'GOLD',
+      side: 'SELL',
+      size: 1,
+      stop_level: entry + 8,
+      profit_level: entry - 20,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-trail-sell',
+      intent_id: 'trail-sell-1',
+      epic: 'GOLD',
+      side: 'SELL',
+      size: 1,
+      entry,
+      stop_loss: entry + 8,
+      take_profit: entry - 20,
+      decision: {
+        decision_id: 'd-ts',
+        kind: 'SELL',
+        side: 'SELL',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis({ regime: 'TREND' }),
+        expectancy: null,
+      },
+    });
+    const before = pm.get(placed.position_id!)!.stop_loss!;
+    await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: markAsk - 0.2,
+        ask: markAsk,
+        mid: markAsk - 0.1,
+        spread: 0.2,
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      scalp_pct_chase: false,
+      trail_start: 5,
+      trail_lock: 2,
+      breakeven_progress: 0,
+      max_hold_ms: 0,
+      allow_close: false,
+    });
+    const sl = pm.get(placed.position_id!)!.stop_loss!;
+    // trailed = mark + lock = 4390 + 2 = 4392 — tighter than entry+8=4408
+    expect(sl).toBeLessThan(before);
+    expect(sl).toBeCloseTo(markAsk + 2, 5);
+  });
+
+  it('status exposes entry_gates honesty fields', () => {
+    const s = masterRuntime.status();
+    expect(s.entry_gates).toBeTruthy();
+    expect(typeof s.entry_gates.news_cfg_on).toBe('boolean');
+    expect(typeof s.entry_gates.weekend).toBe('boolean');
+    expect(typeof s.entry_gates.hours_ok).toBe('boolean');
+    expect(typeof s.entry_gates.session).toBe('string');
+    expect(Array.isArray(s.expectancy_would_block)).toBe(true);
+  });
+});

@@ -34,6 +34,8 @@ export type FilePersistState = {
 
 export class FilePersist implements PersistClient {
   private mem = new MemoryPersist();
+  /** Last known operator_meta from disk — survives sidecar wipe mid-process. */
+  private lastOperatorMeta: FilePersistState['operator_meta'] | undefined;
 
   constructor(private readonly root: string) {
     mkdirSync(root, { recursive: true });
@@ -123,9 +125,39 @@ export class FilePersist implements PersistClient {
         created_at: o.created_at || '1970-01-01T00:00:00.000Z',
       }));
       // Restore operator knobs into sidecar files when missing (PG-only recovery hole)
-      this.restoreOperatorMeta(raw.operator_meta);
+      if (raw.operator_meta) {
+        this.lastOperatorMeta = raw.operator_meta;
+        this.restoreOperatorMeta(raw.operator_meta);
+      }
     } catch {
       /* start clean */
+    }
+  }
+
+  /** Re-read master_state.json and restore missing sidecar JSON files. */
+  ensureOperatorMetaFromState(): boolean {
+    try {
+      const path = this.statePath();
+      if (!existsSync(path)) {
+        if (this.lastOperatorMeta) {
+          this.restoreOperatorMeta(this.lastOperatorMeta);
+          return true;
+        }
+        return false;
+      }
+      const raw = JSON.parse(readFileSync(path, 'utf8')) as FilePersistState;
+      if (raw.operator_meta) {
+        this.lastOperatorMeta = raw.operator_meta;
+        this.restoreOperatorMeta(raw.operator_meta);
+        return true;
+      }
+      if (this.lastOperatorMeta) {
+        this.restoreOperatorMeta(this.lastOperatorMeta);
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
     }
   }
 
@@ -169,8 +201,13 @@ export class FilePersist implements PersistClient {
       ownsRaw && typeof ownsRaw.owns_pipeline === 'boolean'
         ? (ownsRaw.owns_pipeline as boolean)
         : null;
-    if (!manage && owns == null && !gates) return undefined;
-    return { manage, owns_pipeline: owns, gates };
+    if (!manage && owns == null && !gates) {
+      // Sidecars wiped — keep prior meta so flush does not erase backup
+      return this.lastOperatorMeta;
+    }
+    const meta = { manage, owns_pipeline: owns, gates };
+    this.lastOperatorMeta = meta;
+    return meta;
   }
 
   flush() {
@@ -304,4 +341,41 @@ export function installFilePersist(root?: string): FilePersist {
   const fp = new FilePersist(dir);
   setPersistClient(fp);
   return fp;
+}
+
+/**
+ * Before recover hydrate: restore manage/owns/gates sidecars from master_state.json
+ * when they were wiped mid-process (DualPersist mirror or standalone FilePersist).
+ */
+export function ensureOperatorMetaFromStateDir(root?: string): boolean {
+  const dir =
+    root ||
+    process.env.MASTER_STATE_DIR ||
+    join(process.cwd(), '.master-state');
+  try {
+    const path = join(dir, 'master_state.json');
+    if (!existsSync(path)) return false;
+    const raw = JSON.parse(readFileSync(path, 'utf8')) as FilePersistState;
+    if (!raw.operator_meta) return false;
+    const managePath = join(dir, 'master_manage_config.json');
+    if (raw.operator_meta.manage && !existsSync(managePath)) {
+      atomicWriteJson(managePath, raw.operator_meta.manage);
+    }
+    const ownsPath = join(dir, 'owns_pipeline.json');
+    if (
+      typeof raw.operator_meta.owns_pipeline === 'boolean' &&
+      !existsSync(ownsPath)
+    ) {
+      atomicWriteJson(ownsPath, {
+        owns_pipeline: raw.operator_meta.owns_pipeline,
+      });
+    }
+    const gatesPath = join(dir, 'runtime_gates.json');
+    if (raw.operator_meta.gates && !existsSync(gatesPath)) {
+      atomicWriteJson(gatesPath, raw.operator_meta.gates);
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }

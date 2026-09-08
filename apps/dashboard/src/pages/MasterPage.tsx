@@ -61,7 +61,25 @@ type MasterStatus = {
     equity_p05?: number;
     equity_p50?: number;
     equity_p95?: number;
+    drawdown_p50?: number;
+    drawdown_p95?: number;
   } | null;
+  expectancy_would_block?: Array<{
+    setup_key: string;
+    ev: number;
+    samples: number;
+  }>;
+  expectancy_gate_armed?: boolean;
+  entry_gates?: {
+    news_cfg_on: boolean;
+    news_blocks: boolean;
+    news_detail: string | null;
+    block_off_hours: boolean;
+    weekend: boolean;
+    session: string;
+    session_blocks: boolean;
+    hours_ok: boolean;
+  };
   monitoring?: {
     last_cycle_ms?: number;
     relative_spread?: number | null;
@@ -264,9 +282,19 @@ export function MasterPage() {
     }
   };
 
+  const expWould =
+    status?.expectancy_would_block?.length
+      ? `WOULD_GATE · ${status.expectancy_would_block
+          .slice(0, 2)
+          .map((e) => `${e.setup_key} EV=${e.ev.toFixed(2)} n=${e.samples}`)
+          .join(' · ')}`
+      : null;
   const why =
     status?.last_block_reason ||
+    status?.monitoring?.entry_block_reason ||
+    (status?.expectancy_gate_armed ? expWould : null) ||
     status?.last_execution_detail ||
+    expWould ||
     status?.last_decision?.kind ||
     '—';
   const healthBad =
@@ -374,7 +402,46 @@ export function MasterPage() {
         { k: 'BUY', v: Number(status.buy_score || 0).toFixed(3) },
         { k: 'SELL', v: Number(status.sell_score || 0).toFixed(3) },
         { k: 'Decision', v: status.last_decision?.kind || '—' },
-        { k: 'Why', v: why, bad: !!status.last_block_reason || !!status.monitoring?.entry_block_reason },
+        {
+          k: 'Why',
+          v: why,
+          bad:
+            !!status.last_block_reason ||
+            !!status.monitoring?.entry_block_reason ||
+            (!!status.expectancy_gate_armed &&
+              (status.expectancy_would_block?.length || 0) > 0),
+        },
+        {
+          k: 'Entry gates',
+          v: status.entry_gates
+            ? [
+                status.entry_gates.weekend ? 'weekend' : null,
+                status.entry_gates.session_blocks
+                  ? `session=${status.entry_gates.session}`
+                  : `session=${status.entry_gates.session}`,
+                status.entry_gates.hours_ok ? 'hoursOK' : 'hoursBLOCK',
+                status.entry_gates.news_cfg_on
+                  ? status.entry_gates.news_blocks
+                    ? `newsBLOCK${status.entry_gates.news_detail ? `·${status.entry_gates.news_detail}` : ''}`
+                    : 'newsClear'
+                  : 'newsOff',
+              ]
+                .filter(Boolean)
+                .join(' · ')
+            : '—',
+          bad:
+            !!status.entry_gates &&
+            (status.entry_gates.weekend ||
+              status.entry_gates.session_blocks ||
+              !status.entry_gates.hours_ok ||
+              status.entry_gates.news_blocks),
+          ok:
+            !!status.entry_gates &&
+            !status.entry_gates.weekend &&
+            !status.entry_gates.session_blocks &&
+            status.entry_gates.hours_ok &&
+            !status.entry_gates.news_blocks,
+        },
         { k: 'Last exit', v: status.last_exit_reason || '—' },
         {
           k: 'Equity',
@@ -518,13 +585,26 @@ export function MasterPage() {
             (status.account?.consecutive_losses || 0) >= 3,
         },
         {
-          k: 'MC p50',
+          k: 'MC eq p05/p50/p95',
           v:
             status.monte_carlo?.equity_p50 != null
-              ? Number(status.monte_carlo.equity_p50).toFixed(2)
+              ? `${Number(status.monte_carlo.equity_p05 ?? 0).toFixed(1)} / ${Number(
+                  status.monte_carlo.equity_p50
+                ).toFixed(1)} / ${Number(status.monte_carlo.equity_p95 ?? 0).toFixed(1)}`
               : status.monte_carlo?.p50 != null
-                ? Number(status.monte_carlo.p50).toFixed(2)
+                ? `${Number(status.monte_carlo.p05 ?? 0).toFixed(1)} / ${Number(
+                    status.monte_carlo.p50
+                  ).toFixed(1)} / ${Number(status.monte_carlo.p95 ?? 0).toFixed(1)}`
                 : '—',
+        },
+        {
+          k: 'MC DD p50/p95',
+          v:
+            status.monte_carlo?.drawdown_p50 != null
+              ? `${Number(status.monte_carlo.drawdown_p50).toFixed(1)} / ${Number(
+                  status.monte_carlo.drawdown_p95 ?? 0
+                ).toFixed(1)}`
+              : '—',
         },
         {
           k: 'Rel spread',
@@ -1081,6 +1161,52 @@ export function MasterPage() {
             }
           >
             Replay (synthetic bars)
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            onClick={() =>
+              void act('walk-forward-status-bars', async () => {
+                const mid = status?.quote?.mid ?? 4400;
+                const bars = Array.from({ length: 160 }, (_, i) => {
+                  const wave = Math.sin(i / 12) * 8;
+                  const o = mid - 20 + i * 0.25 + wave;
+                  return {
+                    open: o,
+                    high: o + 1.4,
+                    low: o - 1.0,
+                    close: o + 0.3,
+                    ts_ms: Date.now() - (160 - i) * 60_000,
+                  };
+                });
+                const r = await apiFetch<{
+                  ok?: boolean;
+                  detail?: string;
+                  windows?: Array<{
+                    in_sample?: { trades?: number; expectancy?: number };
+                    out_of_sample?: { trades?: number; expectancy?: number };
+                  }>;
+                }>('/api/master/walk-forward', {
+                  method: 'POST',
+                  body: JSON.stringify({ bars, train: 60, test: 30, step: 40 }),
+                });
+                const n = r.windows?.length ?? 0;
+                const last = r.windows?.[n - 1];
+                setReplayNote(
+                  r.ok
+                    ? `walk-forward windows=${n} last IS EV=${(
+                        last?.in_sample?.expectancy ?? 0
+                      ).toFixed(3)} OOS EV=${(
+                        last?.out_of_sample?.expectancy ?? 0
+                      ).toFixed(3)}`
+                    : r.detail || 'walk-forward failed'
+                );
+                return r;
+              })
+            }
+          >
+            Walk-forward
           </button>
         </div>
         {replayNote && (

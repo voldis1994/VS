@@ -8,6 +8,7 @@ import {
 } from '../dualPersist.js';
 import {
   FilePersist,
+  ensureOperatorMetaFromStateDir,
   installFilePersist,
 } from '../filePersist.js';
 import {
@@ -536,6 +537,37 @@ describe('VS MASTER stop() empty-wipe guard', () => {
     expect(manage.multi_tp_count).toBe(3);
     const owns = JSON.parse(readFileSync(join(dir, 'owns_pipeline.json'), 'utf8'));
     expect(owns.owns_pipeline).toBe(true);
+  });
+
+  it('ensureOperatorMetaFromStateDir restores wiped sidecars mid-process', () => {
+    const { writeFileSync, unlinkSync } = require('fs') as typeof import('fs');
+    const dir = mkdtempSync(join(tmpdir(), 'master-opmeta-mid-'));
+    const fp = new FilePersist(dir);
+    writeFileSync(
+      join(dir, 'master_manage_config.json'),
+      JSON.stringify({ trail_start: 1.5, trail_lock: 0.8 })
+    );
+    writeFileSync(
+      join(dir, 'owns_pipeline.json'),
+      JSON.stringify({ owns_pipeline: false })
+    );
+    fp.flush();
+    unlinkSync(join(dir, 'master_manage_config.json'));
+    unlinkSync(join(dir, 'owns_pipeline.json'));
+    expect(existsSync(join(dir, 'master_manage_config.json'))).toBe(false);
+    const ok = ensureOperatorMetaFromStateDir(dir);
+    expect(ok).toBe(true);
+    expect(existsSync(join(dir, 'master_manage_config.json'))).toBe(true);
+    const manage = JSON.parse(
+      readFileSync(join(dir, 'master_manage_config.json'), 'utf8')
+    );
+    expect(manage.trail_start).toBe(1.5);
+    const owns = JSON.parse(readFileSync(join(dir, 'owns_pipeline.json'), 'utf8'));
+    expect(owns.owns_pipeline).toBe(false);
+    // Instance cache also restores after wipe without re-reading disk meta
+    unlinkSync(join(dir, 'master_manage_config.json'));
+    expect(fp.ensureOperatorMetaFromState()).toBe(true);
+    expect(existsSync(join(dir, 'master_manage_config.json'))).toBe(true);
   });
 });
 

@@ -62,9 +62,11 @@ import {
 } from './cycleAlerts.js';
 import { loadRuntimeGates, saveRuntimeGates } from './runtimeGates.js';
 import { loadOwnsPipelinePref, saveOwnsPipelinePref } from './ownsPipelinePref.js';
-import { resolveNewsWindow, type NewsWindowState } from './newsGate.js';
+import { newsBlocksEntries, resolveNewsWindow, type NewsWindowState } from './newsGate.js';
 import { refreshNewsCalendar } from './newsCalendar.js';
 import { SpreadHistory } from './spreadModel.js';
+import { isWeekendUtc } from './filters.js';
+import { withinTradingHours } from './tradingHours.js';
 import {
   applyManageConfigPatch,
   loadManageConfig,
@@ -125,6 +127,17 @@ export type MasterStatus = {
     samples: number;
   }>;
   expectancy_gate_armed: boolean;
+  /** Live entry gate honesty for dashboard (news/hours/weekend). */
+  entry_gates: {
+    news_cfg_on: boolean;
+    news_blocks: boolean;
+    news_detail: string | null;
+    block_off_hours: boolean;
+    weekend: boolean;
+    session: string;
+    session_blocks: boolean;
+    hours_ok: boolean;
+  };
   /** Null money fields when Capital LIVE account is unproven (never forged £0). */
   account: (Omit<
     AccountSnapshot,
@@ -2175,6 +2188,10 @@ class MasterRuntime {
     opportunities: number;
     outcomes: number;
   }> {
+    // Restore operator sidecars from master_state.json if wiped mid-process
+    // BEFORE hydrate — otherwise missing manage/owns files keep defaults.
+    const { ensureOperatorMetaFromStateDir } = await import('./filePersist.js');
+    ensureOperatorMetaFromStateDir();
     this.hydrateManageConfig();
     this.hydrateOwnsPipelinePref();
     const loaded = await loadOpenPositions();
@@ -3350,6 +3367,30 @@ class MasterRuntime {
           samples: e.samples,
         })),
       expectancy_gate_armed: !!this.cfg.require_positive_expectancy,
+      entry_gates: (() => {
+        const now = Date.now();
+        const weekend = isWeekendUtc(now);
+        const news = newsBlocksEntries(
+          this.cfg.block_high_impact_news,
+          now,
+          this.epic
+        );
+        const hoursOk = withinTradingHours(this.cfg.trading_hours, now);
+        const sessionLabel =
+          this.last_decision?.analysis?.session || 'UNKNOWN';
+        return {
+          news_cfg_on: !!this.cfg.block_high_impact_news,
+          news_blocks: !!news.blocked,
+          news_detail: news.reason || null,
+          block_off_hours: !!this.cfg.block_off_hours,
+          weekend,
+          session: sessionLabel,
+          session_blocks:
+            !!this.cfg.block_off_hours &&
+            (sessionLabel === 'OFF_HOURS' || weekend),
+          hours_ok: hoursOk,
+        };
+      })(),
       account:
         this.broker instanceof CapitalBroker &&
         !this.broker.paper &&
