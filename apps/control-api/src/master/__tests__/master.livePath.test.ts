@@ -254,7 +254,11 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(managed.closed[0]!.outcome.exit).toBe(4399.5);
     // Prefer Capital confirm.profit over recomputed pts×size
     expect(managed.closed[0]!.outcome.pnl).toBe(-1.09);
-    expect(await broker.listOpenPositions()).toEqual({ ok: true, positions: [] });
+    expect(await broker.listOpenPositions()).toEqual({
+      ok: true,
+      positions: [],
+      presence_ids: [],
+    });
   });
 
   it('getHistoryBars maps Capital minute candles to structure bars', async () => {
@@ -1138,6 +1142,44 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(listed.positions).toHaveLength(1);
     expect(listed.positions[0]!.position_id).toBe('good');
     expect(listed.positions[0]!.open_level).toBeCloseTo(4410.5, 5);
+    // Level-less deals stay in presence_ids for close/ghost proof
+    expect(listed.presence_ids).toEqual(
+      expect.arrayContaining(['good', 'bad-null', 'bad-zero'])
+    );
+  });
+
+  it('CLOSE treats level-less presence as still open (not flat)', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-pres' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+      }),
+      list: async () => ({
+        ok: true,
+        positions: [
+          {
+            deal_id: 'level-less',
+            epic: 'GOLD',
+            direction: 'BUY',
+            size: 0.1,
+            open_level: null,
+          },
+        ],
+      }),
+      create: async () => ({ ok: true, deal_reference: 'x', detail: 'ok' }),
+      confirm: async () => ({ ok: true, deal_id: 'x', detail: 'ok' }),
+      close: async () => ({ ok: true, deal_reference: 'c-ref', detail: 'submitted' }),
+    });
+    await broker.connect();
+    const closed = await broker.closePosition('level-less');
+    expect(closed.ok).toBe(false);
+    expect(closed.detail).toMatch(/still_open/);
   });
 
   it('CLOSE confirm timeout does not journal ACK_TIMEOUT (OPEN-only alert)', async () => {

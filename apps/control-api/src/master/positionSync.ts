@@ -77,10 +77,18 @@ export async function syncPositionsWithBroker(
   }
 
   const brokerPositions = listed.positions;
+  const presenceIds = new Set(
+    (listed.presence_ids?.length
+      ? listed.presence_ids
+      : brokerPositions.map((p) => p.position_id)
+    ).filter(Boolean)
+  );
   const local = manager.list();
 
   // Full-empty book with local opens → debounce ghost wipe (VS-System ×5)
-  if (brokerPositions.length === 0 && local.length > 0) {
+  // Use presence (incl. level-less deals) so a live deal without open_level
+  // is never treated as an empty book.
+  if (presenceIds.size === 0 && local.length > 0) {
     const n = (debounce?.consecutive_empty ?? 0) + 1;
     if (debounce) debounce.consecutive_empty = n;
     if (n < EMPTY_BROKER_GHOST_DEBOUNCE) {
@@ -105,7 +113,7 @@ export async function syncPositionsWithBroker(
     debounce.consecutive_empty = 0;
   }
 
-  const brokerIds = new Set(brokerPositions.map((p) => p.position_id));
+  const brokerIds = presenceIds;
   const localIds = new Set(local.map((p) => p.position_id));
 
   const orphans_broker = brokerPositions.filter((p) => !localIds.has(p.position_id));
@@ -114,7 +122,7 @@ export async function syncPositionsWithBroker(
   const retainIds = new Set<string>();
   let partialGhostDeferred = false;
   let orphans_local: ManagedPosition[] = [];
-  if (brokerPositions.length > 0) {
+  if (presenceIds.size > 0) {
     if (debounce && !debounce.miss_by_id) debounce.miss_by_id = {};
     const miss = debounce?.miss_by_id;
     for (const p of local) {

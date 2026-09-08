@@ -94,6 +94,12 @@ export type BrokerAccount = {
 export type ListOpenResult = {
   ok: boolean;
   positions: BrokerPosition[];
+  /**
+   * All deal ids present on the broker (incl. missing/zero open_level).
+   * Used for close/flat proof and ghost detection — never treat level-less
+   * live deals as absent.
+   */
+  presence_ids?: string[];
   detail?: string;
 };
 
@@ -712,17 +718,23 @@ export class CapitalBroker implements MasterBroker {
       return {
         ok: false,
         positions: [],
+        presence_ids: [],
         detail: (listed as { detail?: string }).detail || 'list_failed',
       };
     }
-    const positions = (listed.positions as any[])
-      .filter((p) => !epic || epicsMatch(p.epic, epic))
+    const rawRows = (listed.positions as any[]).filter(
+      (p) => !epic || epicsMatch(p.epic, epic)
+    );
+    const presence_ids = rawRows
+      .map((p) => String(p.deal_id || p.position_id || '').trim())
+      .filter(Boolean);
+    const positions = rawRows
       .map((p) => {
         const openRaw = Number(p.open_level);
         const open_level =
           Number.isFinite(openRaw) && openRaw > 0 ? openRaw : null;
         return {
-          position_id: p.deal_id,
+          position_id: String(p.deal_id || p.position_id || ''),
           epic: p.epic,
           side: p.direction as Side,
           size: p.size,
@@ -736,7 +748,7 @@ export class CapitalBroker implements MasterBroker {
       })
       // Drop rows without a usable entry — safer than adopting entry=0
       .filter((p) => Number.isFinite(p.open_level) && p.open_level > 0);
-    return { ok: true, positions };
+    return { ok: true, positions, presence_ids };
   }
 
   private async waitConfirm(
@@ -852,9 +864,14 @@ export class CapitalBroker implements MasterBroker {
       const live = listed.ok
         ? listed.positions.find((p) => p.position_id === position_id)
         : undefined;
-      if (live) {
+      const present =
+        listed.ok &&
+        (live != null ||
+          (listed.presence_ids ?? []).includes(position_id) ||
+          listed.positions.some((p) => p.position_id === position_id));
+      if (live || present) {
         const openLevel =
-          live.open_level != null &&
+          live?.open_level != null &&
           Number.isFinite(live.open_level) &&
           live.open_level > 0
             ? live.open_level
@@ -862,9 +879,9 @@ export class CapitalBroker implements MasterBroker {
         return {
           ok: false,
           order_id,
-          position_id: live.position_id,
+          position_id,
           fill_price: fill?.fill_price ?? openLevel,
-          fill_size: fill?.fill_size ?? live.size ?? null,
+          fill_size: fill?.fill_size ?? live?.size ?? null,
           detail: `${reason}:capital_fail_close_unproven:${closed.detail}`,
           paper: false,
         };
@@ -1300,9 +1317,13 @@ export class CapitalBroker implements MasterBroker {
     }
 
     const listed = await this.listOpenPositions();
-    const still = listed.ok
+    const stillUsable = listed.ok
       ? listed.positions.find((p) => p.position_id === position_id)
       : undefined;
+    const stillPresent =
+      listed.ok &&
+      (stillUsable != null ||
+        (listed.presence_ids ?? []).includes(position_id));
     if (!partial) {
       // VS-System: confirm timeout / unread book must not be treated as closed
       if (!listed.ok) {
@@ -1314,7 +1335,7 @@ export class CapitalBroker implements MasterBroker {
           fill_pnl,
         };
       }
-      if (still) {
+      if (stillPresent) {
         return {
           ok: false,
           detail: 'close_not_confirmed_still_open',
@@ -1334,11 +1355,21 @@ export class CapitalBroker implements MasterBroker {
           fill_pnl,
         };
       }
-      if (still) {
+      if (stillPresent) {
+        // Need usable size for partial proof — level-less row still counts as open
+        if (!stillUsable) {
+          return {
+            ok: false,
+            detail: 'close_partial_not_confirmed_still_open_no_level',
+            deal_reference,
+            fill_price,
+            fill_pnl,
+          };
+        }
         const reduced =
           beforeSize != null &&
-          Number.isFinite(still.size) &&
-          still.size < beforeSize - 1e-9;
+          Number.isFinite(stillUsable.size) &&
+          stillUsable.size < beforeSize - 1e-9;
         if (!reduced) {
           return {
             ok: false,
@@ -1346,7 +1377,7 @@ export class CapitalBroker implements MasterBroker {
             deal_reference,
             fill_price,
             fill_pnl,
-            remaining_size: still.size,
+            remaining_size: stillUsable.size,
           };
         }
       }
@@ -1364,7 +1395,7 @@ export class CapitalBroker implements MasterBroker {
       fill_price,
       fill_pnl,
       deal_reference,
-      remaining_size: still?.size ?? (partial ? null : 0),
+      remaining_size: stillUsable?.size ?? (partial ? null : 0),
     };
   }
 

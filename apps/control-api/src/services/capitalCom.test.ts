@@ -80,6 +80,10 @@ describe('Capital session 401 re-login', () => {
             headers,
           });
         }
+        // Preferred CFD re-pin after re-login (login-default is preferred)
+        if (url.endsWith('/api/v1/session') && method === 'PUT') {
+          return new Response(JSON.stringify({}), { status: 200 });
+        }
         if (url.includes('/positions') && method === 'GET') {
           positionsGets += 1;
           if (positionsGets === 1) {
@@ -107,6 +111,8 @@ describe('Capital session 401 re-login', () => {
     expect(sessionPosts).toBe(2); // initial + re-login
     expect(positionsGets).toBe(2); // 401 then retry
     expect(opened.session.cst).toBe('cst-2');
+    // Login-default CFD is preferred so later 401s re-pin the same account
+    expect(opened.session.preferredAccountId).toBe('a1');
   });
 
   it('re-pins preferred CFD account after 401 re-login (clears stale currentAccountId)', async () => {
