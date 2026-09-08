@@ -77,6 +77,8 @@ export type ManagedPosition = {
   soft_trail_peak?: number | null;
   /** VS-System: Capital native trailingStop already armed */
   native_trail_armed?: boolean;
+  /** Last scalp % chase attempt ms — durable so restart does not MODIFY-hammer */
+  scalp_chase_at_ms?: number | null;
   /** Last broker-reported UPL (account currency) when known */
   broker_upl?: number | null;
 };
@@ -110,8 +112,6 @@ export class PositionManager {
   private open = new Map<string, ManagedPosition>();
   /** VS-System: skip resending the same rejected trail/BE level until backoff expires */
   private modifyBackoff = new Map<string, { until: number; level: number }>();
-  /** VS-System scalp chase rate-limit (last successful/attempted improve ms) */
-  private scalpChaseAt = new Map<string, number>();
   /** VS-System naked SL recovery throttle */
   private nakedRecoveryAt = new Map<string, number>();
   /** VS-System escalate distance on reject: multipliers [1,2,3,5] */
@@ -910,6 +910,7 @@ export class PositionManager {
         (patch.stop_distance != null ? patch.stop_distance : null),
       position_id: pos.position_id,
       intent_id: pos.intent_id,
+      opportunity_id: pos.opportunity_id,
       ok: !!mod.ok,
       detail: `${reason}${mod.detail ? `:${mod.detail}` : ''}`,
     });
@@ -1107,7 +1108,7 @@ export class PositionManager {
     if (!broker.modifyPosition) return;
     const mark = protectiveMark(pos.side, quote);
     const now = Date.now();
-    const last = this.scalpChaseAt.get(pos.position_id) ?? 0;
+    const last = pos.scalp_chase_at_ms ?? 0;
     if (now - last < SCALP_SL_CHASE_MIN_INTERVAL_MS) return;
 
     const candidate = scalpPctLockBrokerStop({
@@ -1162,7 +1163,7 @@ export class PositionManager {
       return;
     }
 
-    this.scalpChaseAt.set(pos.position_id, now);
+    pos.scalp_chase_at_ms = now;
     const mod = await this.brokerModify(
       broker,
       pos,

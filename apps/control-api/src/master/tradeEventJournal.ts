@@ -31,6 +31,8 @@ export type TradeEvent = {
   price: number | null;
   position_id: string | null;
   intent_id: string | null;
+  /** Join key to decision journal / opportunity (Reader decision_id). */
+  opportunity_id: string | null;
   ok: boolean;
   detail: string | null;
   pnl: number | null;
@@ -88,6 +90,7 @@ export function logTradeEvent(input: {
   price?: number | null;
   position_id?: string | null;
   intent_id?: string | null;
+  opportunity_id?: string | null;
   ok: boolean;
   detail?: string | null;
   pnl?: number | null;
@@ -112,6 +115,9 @@ export function logTradeEvent(input: {
       ? String(input.position_id).slice(0, 80)
       : null,
     intent_id: input.intent_id ? String(input.intent_id).slice(0, 80) : null,
+    opportunity_id: input.opportunity_id
+      ? String(input.opportunity_id).slice(0, 80)
+      : null,
     ok: !!input.ok,
     detail: input.detail ? String(input.detail).slice(0, 400) : null,
     pnl:

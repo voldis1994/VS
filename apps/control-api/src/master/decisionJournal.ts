@@ -23,6 +23,8 @@ export type DecisionEvent = {
   kind: string;
   epic: string;
   mode: string;
+  /** Join key to opportunity / trade events (Reader decision_id). */
+  opportunity_id: string | null;
   buy_score: number;
   sell_score: number;
   block_reason: string | null;
@@ -77,6 +79,7 @@ export function logDecisionEvent(input: {
   kind: string;
   epic: string;
   mode: string;
+  opportunity_id?: string | null;
   buy_score?: number;
   sell_score?: number;
   block_reason?: string | null;
@@ -90,6 +93,9 @@ export function logDecisionEvent(input: {
     kind: String(input.kind || 'WAIT').slice(0, 40),
     epic: String(input.epic || '').slice(0, 40),
     mode: String(input.mode || 'PAPER').slice(0, 16),
+    opportunity_id: input.opportunity_id
+      ? String(input.opportunity_id).slice(0, 80)
+      : null,
     buy_score: Number(input.buy_score) || 0,
     sell_score: Number(input.sell_score) || 0,
     block_reason: input.block_reason ?? null,

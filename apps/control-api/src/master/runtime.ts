@@ -123,6 +123,7 @@ export type MasterStatus = {
     executed: boolean;
     block_reason: string | null;
     execution_detail: string | null;
+    opportunity_id: string | null;
   }>;
   recent_trades: Array<{
     ts: string;
@@ -131,6 +132,7 @@ export type MasterStatus = {
     ok: boolean;
     detail: string | null;
     pnl: number | null;
+    opportunity_id: string | null;
   }>;
 };
 
@@ -336,6 +338,7 @@ class MasterRuntime {
       price: fill,
       position_id: pos.position_id,
       intent_id: pos.intent_id,
+        opportunity_id: pos.opportunity_id,
       ok: true,
       detail: reason,
       pnl: outcome.pnl,
@@ -485,6 +488,7 @@ class MasterRuntime {
         price: exit,
         position_id: ghost.position_id,
         intent_id: ghost.intent_id,
+        opportunity_id: ghost.opportunity_id,
         ok: true,
         detail: 'broker_flat',
         pnl: outcome.pnl,
@@ -571,6 +575,7 @@ class MasterRuntime {
         price: exit,
         position_id: partial.position_id,
         intent_id: partial.intent_id,
+        opportunity_id: partial.opportunity_id,
         ok: true,
         detail: 'EXTERNAL_PARTIAL_CLOSE',
         pnl: outcome.pnl,
@@ -863,6 +868,7 @@ class MasterRuntime {
         price: c.outcome.exit,
         position_id: c.position.position_id,
         intent_id: c.position.intent_id,
+        opportunity_id: c.position.opportunity_id,
         ok: true,
         detail: c.reason,
         pnl: c.outcome.pnl,
@@ -986,6 +992,7 @@ class MasterRuntime {
         price: place?.fill_price ?? null,
         position_id: place?.position_id ?? null,
         intent_id: execution.intent_id || null,
+        opportunity_id: cycle.opportunity.id,
         ok: execution.accepted,
         detail: execution.detail,
       });
@@ -1064,6 +1071,7 @@ class MasterRuntime {
             price: rebased.stop_loss,
             position_id: place.position_id,
             intent_id: execution.intent_id || null,
+            opportunity_id: cycle.opportunity.id,
             ok: !!mod.ok,
             detail: `post_fill_sl_sync${mod.detail ? `:${mod.detail}` : ''}`,
           });
@@ -1152,6 +1160,7 @@ class MasterRuntime {
       kind: cycle.decision.kind,
       epic: this.epic,
       mode: this.cfg.mode,
+        opportunity_id: cycle.opportunity.id,
       buy_score: cycle.decision.buy?.score,
       sell_score: cycle.decision.sell?.score,
       block_reason: cycle.decision.block_reason,
@@ -1730,6 +1739,7 @@ class MasterRuntime {
         executed: e.executed,
         block_reason: e.block_reason,
         execution_detail: e.execution_detail,
+        opportunity_id: e.opportunity_id,
       })),
       recent_trades: loadTradeEvents(12).map((e) => ({
         ts: e.ts,
@@ -1738,6 +1748,7 @@ class MasterRuntime {
         ok: e.ok,
         detail: e.detail,
         pnl: e.pnl,
+        opportunity_id: e.opportunity_id,
       })),
     };
   }

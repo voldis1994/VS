@@ -58,6 +58,7 @@ describe('decision journal durability', () => {
       kind: 'BUY',
       epic: 'XAUUSD',
       mode: 'PAPER',
+      opportunity_id: 'opp-join-1',
       buy_score: 0.8,
       sell_score: 0.1,
       executed: true,
@@ -67,6 +68,7 @@ describe('decision journal durability', () => {
     const rows = loadDecisionEvents(10);
     expect(rows[0]!.kind).toBe('BUY');
     expect(rows[0]!.executed).toBe(true);
+    expect(rows[0]!.opportunity_id).toBe('opp-join-1');
     expect(rows[1]!.kind).toBe('WAIT');
     expect(rows[1]!.block_reason).toBe('spread');
     expect(existsSync(join(dir, 'decision_journal.jsonl'))).toBe(true);
@@ -89,6 +91,7 @@ describe('trade event journal durability', () => {
       price: 4400,
       position_id: 'paper-1',
       intent_id: 'i1',
+      opportunity_id: 'opp-join-1',
       ok: true,
       detail: 'paper_fill',
     });
@@ -101,6 +104,7 @@ describe('trade event journal durability', () => {
       price: 4405,
       position_id: 'paper-1',
       intent_id: 'i1',
+      opportunity_id: 'opp-join-1',
       ok: true,
       detail: 'STOP_HIT',
       pnl: 0.45,
@@ -115,6 +119,7 @@ describe('trade event journal durability', () => {
       price: 4398,
       position_id: 'deal-1',
       intent_id: 'i2',
+      opportunity_id: 'opp-join-2',
       ok: true,
       detail: 'breakeven',
     });
@@ -122,7 +127,9 @@ describe('trade event journal durability', () => {
     expect(rows[0]!.event).toBe('MODIFY');
     expect(rows[1]!.event).toBe('CLOSE');
     expect(rows[1]!.fees).toBeCloseTo(0.05, 8);
+    expect(rows[1]!.opportunity_id).toBe('opp-join-1');
     expect(rows[2]!.event).toBe('OPEN');
+    expect(rows[2]!.opportunity_id).toBe('opp-join-1');
     expect(existsSync(join(dir, 'trade_event_journal.jsonl'))).toBe(true);
   });
 });
