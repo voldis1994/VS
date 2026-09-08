@@ -558,6 +558,69 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(placed.position_id).toMatch(/^deal-ref-flake-/);
   });
 
+  it('fail-close keeps position_id when close fails and list returns empty', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number;
+      }
+    >();
+    let closeCalled = false;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session: { id: 's-empty' }, detail: 'ok' }),
+      quote: async (_s, epic) => ({ bid: 4410, ask: 4410.4, mid: 4410.2, epic, raw_ok: true }),
+      list: async () => {
+        if (closeCalled) {
+          // One flaky empty after failed DELETE — must not treat as flat
+          return { ok: true, positions: [], detail: '' };
+        }
+        return { ok: true, positions: [...positions.values()], detail: '' };
+      },
+      create: async (_s, input) => {
+        if (input.stopLevel != null) {
+          return { ok: false, detail: 'MINIMUM_STOP_DISTANCE' };
+        }
+        return { ok: true, deal_reference: 'ref-empty-list', detail: 'opened_bare' };
+      },
+      confirm: async (_s, ref) => {
+        const deal_id = `deal-${ref}`;
+        if (!positions.has(deal_id)) {
+          positions.set(deal_id, {
+            deal_id,
+            epic: 'GOLD',
+            direction: 'BUY',
+            size: 0.1,
+            open_level: 4410.4,
+          });
+        }
+        return { ok: true, deal_id, fill_level: 4410.4, detail: 'ok' };
+      },
+      modify: async () => ({ ok: false, detail: 'MINIMUM_STOP_DISTANCE' }),
+      close: async () => {
+        closeCalled = true;
+        return { ok: false, detail: 'HTTP 500 close_failed' };
+      },
+    });
+    await broker.connect();
+    const placed = await broker.placeOrder({
+      intent_id: 'sl-attach-empty-list',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: 4409.9,
+    });
+    expect(placed.ok).toBe(false);
+    expect(placed.detail).toMatch(/capital_fail_close_unproven/);
+    expect(placed.position_id).toBe('deal-ref-empty-list');
+  });
+
   it('confirm reject fail-closes same-size ghost fill', async () => {
     process.env.MASTER_LIVE_ENABLED = 'true';
     const positions = new Map<

@@ -900,58 +900,26 @@ export class CapitalBroker implements MasterBroker {
   ): Promise<PlaceOrderResult> {
     const closed = await this.closePosition(position_id);
     if (!closed.ok) {
+      // Failed close → never drop known id (one empty list is not flat proof).
       const listed = await this.listOpenPositions();
       const live = listed.ok
         ? listed.positions.find((p) => p.position_id === position_id)
         : undefined;
-      const present =
-        listed.ok &&
-        (live != null ||
-          (listed.presence_ids ?? []).includes(position_id) ||
-          listed.positions.some((p) => p.position_id === position_id));
-      if (live || present) {
-        const openLevel =
-          live?.open_level != null &&
-          Number.isFinite(live.open_level) &&
-          live.open_level > 0
-            ? live.open_level
-            : null;
-        return {
-          ok: false,
-          order_id,
-          position_id,
-          fill_price: fill?.fill_price ?? openLevel,
-          fill_size: fill?.fill_size ?? live?.size ?? null,
-          detail: `${reason}:capital_fail_close_unproven:${closed.detail}`,
-          paper: false,
-        };
-      }
-      // Close failed and list did not prove flat — keep known id (list flake / still_open)
-      const ambiguous =
-        !listed.ok ||
-        /still_open|unconfirmed|list_failed|not_confirmed/i.test(
-          closed.detail || ''
-        );
-      if (ambiguous) {
-        return {
-          ok: false,
-          order_id,
-          position_id,
-          fill_price: fill?.fill_price ?? null,
-          fill_size: fill?.fill_size ?? null,
-          detail: `${reason}:capital_fail_close_unproven:${closed.detail}${
-            !listed.ok ? `:list=${listed.detail || 'list_failed'}` : ''
-          }`,
-          paper: false,
-        };
-      }
+      const openLevel =
+        live?.open_level != null &&
+        Number.isFinite(live.open_level) &&
+        live.open_level > 0
+          ? live.open_level
+          : null;
       return {
         ok: false,
         order_id,
-        position_id: null,
-        fill_price: null,
-        fill_size: null,
-        detail: `${reason}:close=${closed.detail}`,
+        position_id,
+        fill_price: fill?.fill_price ?? openLevel,
+        fill_size: fill?.fill_size ?? live?.size ?? null,
+        detail: `${reason}:capital_fail_close_unproven:${closed.detail}${
+          !listed.ok ? `:list=${listed.detail || 'list_failed'}` : ''
+        }`,
         paper: false,
       };
     }
@@ -2148,21 +2116,24 @@ export class Mt4FileBroker implements MasterBroker {
           detail: `${kind}:${reason};close=ok`,
         };
       }
+      // Failed CLOSE → keep still_open even if status list flakes/empty (Capital parity)
       const listed = await this.listOpenPositions(input.epic);
-      const still =
+      const provenAbsent =
         listed.ok &&
-        (listed.positions.some((p) => p.position_id === input.position_id) ||
-          (listed.presence_ids ?? []).includes(input.position_id));
-      if (still) {
+        !listed.positions.some((p) => p.position_id === input.position_id) &&
+        !(listed.presence_ids ?? []).includes(input.position_id);
+      if (provenAbsent) {
         return {
           ok: false as const,
-          detail: `${kind}:mt4_fail_close_unproven:${closed.detail};${reason}`,
-          still_open: true,
+          detail: `${kind}:${reason};close=${closed.detail}`,
         };
       }
       return {
         ok: false as const,
-        detail: `${kind}:${reason};close=${closed.detail}`,
+        detail: `${kind}:mt4_fail_close_unproven:${closed.detail}${
+          !listed.ok ? `:list=${listed.detail || 'list_failed'}` : ''
+        };${reason}`,
+        still_open: true,
       };
     };
 
