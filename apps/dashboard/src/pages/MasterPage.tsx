@@ -695,7 +695,9 @@ export function MasterPage() {
                 <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 6 }}>
                   {Number(p.entry).toFixed(2)}
                   {p.mark != null ? ` → ${Number(p.mark).toFixed(2)}` : ''} · sz {p.size}
-                  {p.stop_loss != null ? ` · SL ${Number(p.stop_loss).toFixed(2)}` : ' · SL —'}
+                  {p.stop_loss != null && Number(p.stop_loss) > 0
+                    ? ` · SL ${Number(p.stop_loss).toFixed(2)}`
+                    : ' · SL —'}
                   {p.take_profit != null ? ` · TP ${Number(p.take_profit).toFixed(2)}` : ''}
                 </div>
                 <div

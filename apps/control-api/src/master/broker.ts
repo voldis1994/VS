@@ -709,8 +709,8 @@ export class CapitalBroker implements MasterBroker {
           size: p.size,
           // Never invent 0 — orphan adopt must see missing entry as null/NaN skip
           open_level: open_level ?? Number.NaN,
-          stop_level: p.stop_level ?? null,
-          profit_level: p.profit_level ?? null,
+          stop_level: protectiveLevelOrNull(p.stop_level),
+          profit_level: protectiveLevelOrNull(p.profit_level),
           upl: p.upl ?? null,
           opened_at: p.opened_at ?? null,
         };
@@ -1915,8 +1915,8 @@ export class Mt4FileBroker implements MasterBroker {
           size: Number(p.lot ?? p.Lots ?? 0),
           // Never invent 0 — orphan adopt must see missing entry as skip
           open_level: openRaw != null && openRaw > 0 ? openRaw : Number.NaN,
-          stop_level: numOrNull(p.sl ?? p.SL),
-          profit_level: numOrNull(p.tp ?? p.TP),
+          stop_level: protectiveLevelOrNull(p.sl ?? p.SL),
+          profit_level: protectiveLevelOrNull(p.tp ?? p.TP),
           upl: numOrNull(p.profit ?? p.Profit),
           opened_at: (() => {
             const rawT = p.open_time ?? p.OpenTime ?? p.time ?? p.Time ?? null;
@@ -2653,6 +2653,16 @@ function numOrNull(v: unknown): number | null {
   if (v == null || v === '') return null;
   const n = typeof v === 'number' ? v : Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * MT4 OrderStopLoss/TakeProfit are 0 when naked — Check- treats <=0 as no level.
+ * Never keep 0 as a real protective price.
+ */
+export function protectiveLevelOrNull(v: unknown): number | null {
+  const n = numOrNull(v);
+  if (n == null || !(n > 0)) return null;
+  return n;
 }
 
 /** @internal exported for unit tests */

@@ -1634,6 +1634,45 @@ describe('partial_close persist + Check be_start', () => {
     expect(pm.get('entry-fix')!.entry).toBeCloseTo(4401.5, 8);
   });
 
+  it('reconcile clears local SL when broker reports sl=0 (naked)', () => {
+    const pm = new PositionManager();
+    pm.register({
+      position_id: 'naked-sl',
+      opportunity_id: '00000000-0000-4000-8000-00000000ffff',
+      intent_id: 'naked-sl-intent',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4400,
+      stop_loss: 4390,
+      take_profit: 4420,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: baseAnalysis(),
+        expectancy: null,
+      },
+    });
+    pm.reconcileFromBroker([
+      {
+        position_id: 'naked-sl',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 0.1,
+        open_level: 4400,
+        stop_level: 0 as unknown as number,
+        profit_level: 0 as unknown as number,
+      },
+    ]);
+    expect(pm.get('naked-sl')!.stop_loss).toBeNull();
+    expect(pm.get('naked-sl')!.take_profit).toBeNull();
+  });
+
   it('PaperBroker.hydrateAccount restores equity after recover seed', async () => {
     const broker = new PaperBroker();
     await broker.connect();

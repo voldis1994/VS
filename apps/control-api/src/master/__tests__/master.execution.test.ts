@@ -502,6 +502,46 @@ describe('VS MASTER MT4 file bridge', () => {
     expect(existsSync(join(root, 'commands', 'expired', 'cmd_stale1.json'))).toBe(true);
   });
 
+  it('listOpenPositions treats EA sl/tp 0 as null (naked chart)', async () => {
+    const prev = process.env.MASTER_MT4_STATUS_STALE_MS;
+    process.env.MASTER_MT4_STATUS_STALE_MS = '60000';
+    try {
+      const root = mkdtempSync(join(tmpdir(), 'vs-mt4-naked-sl-'));
+      const broker = new Mt4FileBroker(root);
+      await broker.connect();
+      mkdirSync(join(root, 'status'), { recursive: true });
+      writeFileSync(
+        join(root, 'status', 'latest.json'),
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          equity: 10000,
+          balance: 10000,
+          positions: [
+            {
+              ticket: 555001,
+              symbol: 'XAUUSD',
+              side: 'BUY',
+              lot: 0.1,
+              open: 4400.5,
+              sl: 0,
+              tp: 0,
+              profit: 1.2,
+            },
+          ],
+        })
+      );
+      const listed = await broker.listOpenPositions('XAUUSD');
+      expect(listed.ok).toBe(true);
+      expect(listed.positions).toHaveLength(1);
+      expect(listed.positions[0]!.stop_level).toBeNull();
+      expect(listed.positions[0]!.profit_level).toBeNull();
+      expect(listed.positions[0]!.open_level).toBeCloseTo(4400.5, 5);
+    } finally {
+      if (prev === undefined) delete process.env.MASTER_MT4_STATUS_STALE_MS;
+      else process.env.MASTER_MT4_STATUS_STALE_MS = prev;
+    }
+  });
+
   it('refuses CLOSE/MODIFY while unacked control command pending', async () => {
     const root = mkdtempSync(join(tmpdir(), 'vs-mt4-mutex-'));
     const broker = new Mt4FileBroker(root);

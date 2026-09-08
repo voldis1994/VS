@@ -1635,14 +1635,20 @@ export class PositionManager {
           existing.partial_close_applied = true;
         }
         // Refresh protective levels from broker truth.
-        // Null broker SL clears stale local SL so mid-life naked recovery can fire
-        // (VS-System: never trust DB/local when chart is naked).
-        if (bp.stop_level != null) {
-          existing.stop_loss = bp.stop_level;
-        } else {
-          existing.stop_loss = null;
-        }
-        if (bp.profit_level != null) existing.take_profit = bp.profit_level;
+        // Null / <=0 broker SL|TP clears local so naked recovery / UI stay honest
+        // (Check-: OrderStopLoss()/TakeProfit()=0 means no level).
+        existing.stop_loss =
+          bp.stop_level != null &&
+          Number.isFinite(bp.stop_level) &&
+          bp.stop_level > 0
+            ? bp.stop_level
+            : null;
+        existing.take_profit =
+          bp.profit_level != null &&
+          Number.isFinite(bp.profit_level) &&
+          bp.profit_level > 0
+            ? bp.profit_level
+            : null;
         if (bp.size > 0) existing.size = bp.size;
         // Reader _apply_status_position_to_state — always refresh entry from broker
         // when open_level is real (never keep 0 / stale ACK Bid/Ask after recover).

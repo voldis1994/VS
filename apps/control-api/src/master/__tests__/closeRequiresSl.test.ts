@@ -45,4 +45,26 @@ describe('closeAllowedByStopLoss (VS-System)', () => {
       })
     ).toBe(true);
   });
+
+  it('treats MT4 OrderStopLoss 0 as naked (not a protective stop)', () => {
+    expect(
+      closeAllowedByStopLoss({
+        brokerFound: true,
+        brokerStopLoss: 0,
+        dbStopLoss: 2650,
+      })
+    ).toBe(false);
+    expect(
+      closeAllowedByStopLoss({
+        brokerFound: null,
+        dbStopLoss: 0,
+      })
+    ).toBe(false);
+    expect(
+      closeAllowedByStopLoss({
+        brokerFound: true,
+        brokerStopLoss: '0',
+      })
+    ).toBe(false);
+  });
 });

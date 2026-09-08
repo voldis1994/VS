@@ -12,8 +12,13 @@ export function closeAllowedByStopLoss(input: {
   if (input.brokerFound === false) return true;
   const has = (v: unknown) => {
     if (v == null) return false;
-    if (typeof v === 'number') return Number.isFinite(v);
-    return String(v).trim().length > 0;
+    if (typeof v === 'number') return Number.isFinite(v) && v > 0;
+    const s = String(v).trim();
+    if (!s.length) return false;
+    const n = Number(s);
+    // Numeric string "0" is naked MT4 — not a protective stop
+    if (Number.isFinite(n)) return n > 0;
+    return true;
   };
   if (input.brokerFound === true) return has(input.brokerStopLoss);
   return has(input.dbStopLoss);
