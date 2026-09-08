@@ -101,6 +101,7 @@ type MasterStatus = {
   entries_armed: boolean;
   entries_pause_reason: string | null;
   structure_seed_source?: string;
+  bars_available?: number;
   news_window?: {
     impact: string;
     window_active: boolean;
@@ -294,9 +295,10 @@ export function MasterPage() {
     status?.monitoring?.entry_block_reason ||
     (status?.expectancy_gate_armed ? expWould : null) ||
     status?.last_execution_detail ||
-    expWould ||
     status?.last_decision?.kind ||
     '—';
+  const wouldGateNote =
+    !status?.expectancy_gate_armed && expWould ? expWould : null;
   const healthBad =
     !!status?.health?.includes('KILL') ||
     status?.health === 'PERSIST_DEGRADED' ||
@@ -384,6 +386,12 @@ export function MasterPage() {
             status.structure_seed_source === 'capital_ohlc' ||
             status.structure_seed_source === 'none',
         },
+        {
+          k: 'Bars cache',
+          v: String(status.bars_available ?? 0),
+          bad: (status.bars_available ?? 0) < 40,
+          ok: (status.bars_available ?? 0) >= 40,
+        },
         { k: 'AI mode', v: status.ai_mode || '—' },
         { k: 'Running', v: status.running ? 'YES' : 'NO', ok: status.running },
         { k: 'Regime', v: status.regime },
@@ -411,6 +419,16 @@ export function MasterPage() {
             (!!status.expectancy_gate_armed &&
               (status.expectancy_would_block?.length || 0) > 0),
         },
+        ...(wouldGateNote
+          ? [
+              {
+                k: 'Exp advisory',
+                v: wouldGateNote,
+                bad: false,
+                ok: false,
+              } as { k: string; v: string; bad?: boolean; ok?: boolean },
+            ]
+          : []),
         {
           k: 'Entry gates',
           v: status.entry_gates
@@ -1126,17 +1144,24 @@ export function MasterPage() {
             disabled={busy}
             onClick={() =>
               void act('replay-status-bars', async () => {
-                const mid = status?.quote?.mid ?? 4400;
-                const bars = Array.from({ length: 80 }, (_, i) => {
-                  const o = mid - 40 + i * 0.5;
-                  return {
-                    open: o,
-                    high: o + 1.2,
-                    low: o - 0.8,
-                    close: o + 0.4,
-                    ts_ms: Date.now() - (80 - i) * 60_000,
-                  };
-                });
+                const snap = await apiFetch<{
+                  ok?: boolean;
+                  count?: number;
+                  bars?: Array<{
+                    open: number;
+                    high: number;
+                    low: number;
+                    close: number;
+                    ts_ms: number;
+                  }>;
+                }>('/api/master/bars?limit=120');
+                const bars = snap.bars || [];
+                if (bars.length < 40) {
+                  setReplayNote(
+                    `replay refused — need ≥40 cached bars (have ${snap.count ?? 0}). Start PAPER/LIVE feed first.`
+                  );
+                  return { ok: false, detail: 'insufficient_cached_bars' };
+                }
                 const r = await apiFetch<{
                   ok?: boolean;
                   detail?: string;
@@ -1149,18 +1174,18 @@ export function MasterPage() {
                 });
                 setReplayNote(
                   r.ok
-                    ? `replay trades=${r.traded ?? r.performance?.trades ?? 0} EV=${(
-                        r.performance?.expectancy ?? 0
-                      ).toFixed(3)} pnl=${(r.performance?.total_pnl ?? 0).toFixed(2)} end=${
-                        r.equity_end ?? '—'
-                      }`
+                    ? `replay [live_cache n=${bars.length}] trades=${
+                        r.traded ?? r.performance?.trades ?? 0
+                      } EV=${(r.performance?.expectancy ?? 0).toFixed(3)} pnl=${(
+                        r.performance?.total_pnl ?? 0
+                      ).toFixed(2)} end=${r.equity_end ?? '—'}`
                     : r.detail || 'replay failed'
                 );
                 return r;
               })
             }
           >
-            Replay (synthetic bars)
+            Replay (cached bars)
           </button>
           <button
             type="button"
@@ -1168,18 +1193,24 @@ export function MasterPage() {
             disabled={busy}
             onClick={() =>
               void act('walk-forward-status-bars', async () => {
-                const mid = status?.quote?.mid ?? 4400;
-                const bars = Array.from({ length: 160 }, (_, i) => {
-                  const wave = Math.sin(i / 12) * 8;
-                  const o = mid - 20 + i * 0.25 + wave;
-                  return {
-                    open: o,
-                    high: o + 1.4,
-                    low: o - 1.0,
-                    close: o + 0.3,
-                    ts_ms: Date.now() - (160 - i) * 60_000,
-                  };
-                });
+                const snap = await apiFetch<{
+                  ok?: boolean;
+                  count?: number;
+                  bars?: Array<{
+                    open: number;
+                    high: number;
+                    low: number;
+                    close: number;
+                    ts_ms: number;
+                  }>;
+                }>('/api/master/bars?limit=200');
+                const bars = snap.bars || [];
+                if (bars.length < 120) {
+                  setReplayNote(
+                    `walk-forward refused — need ≥120 cached bars (have ${snap.count ?? 0}). Start PAPER/LIVE feed first.`
+                  );
+                  return { ok: false, detail: 'insufficient_cached_bars' };
+                }
                 const r = await apiFetch<{
                   ok?: boolean;
                   detail?: string;
@@ -1195,7 +1226,7 @@ export function MasterPage() {
                 const last = r.windows?.[n - 1];
                 setReplayNote(
                   r.ok
-                    ? `walk-forward windows=${n} last IS EV=${(
+                    ? `walk-forward [live_cache n=${bars.length}] windows=${n} last IS EV=${(
                         last?.in_sample?.expectancy ?? 0
                       ).toFixed(3)} OOS EV=${(
                         last?.out_of_sample?.expectancy ?? 0

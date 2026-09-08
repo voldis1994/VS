@@ -163,6 +163,8 @@ export type MasterStatus = {
   entries_pause_reason: string | null;
   /** Live structure seed provenance (capital_ohlc required for Capital LIVE entries) */
   structure_seed_source: string;
+  /** Cached OHLC bar count available for replay / manage (0 until feed seeds). */
+  bars_available: number;
   news_window: NewsWindowState;
   /** Live quote snapshot for dashboard freshness */
   quote: {
@@ -2726,6 +2728,8 @@ class MasterRuntime {
     if (this.broker) await this.broker.connect();
     await this.recover();
     this.running = true;
+    // Opens must not sit unmanaged until the first poll — seed quote/bars now
+    await this.bootstrapManageAfterRecover();
     const ms = opts?.interval_ms ?? 0;
     if (ms > 0 && !this.timer) {
       this.timer = setInterval(() => {
@@ -3092,6 +3096,84 @@ class MasterRuntime {
     await result;
   }
 
+  /**
+   * After recover: if opens exist but last_bars/quote empty, pull broker quote+history
+   * and run one manage-only tick so stops/exits are not blind until the poll loop.
+   */
+  private async bootstrapManageAfterRecover(): Promise<void> {
+    if (!this.broker || this.positions.count() === 0) return;
+    if (this.last_bars.length >= 5 && this.last_quote) {
+      await this.manageOnlyTick(this.last_bars, this.last_quote);
+      return;
+    }
+    try {
+      let q: Awaited<ReturnType<MasterBroker['getQuote']>> = null;
+      try {
+        q = await Promise.race([
+          this.broker.getQuote(this.epic),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 8_000)),
+        ]);
+      } catch {
+        q = null;
+      }
+      if (!q) return;
+      const quote: Quote = {
+        bid: q.bid,
+        ask: q.ask,
+        mid: q.mid,
+        spread: q.spread,
+        epic: q.epic || this.epic,
+        ts_ms: q.ts_ms || Date.now(),
+      };
+      this.last_quote = quote;
+      let bars: Bar[] = this.last_bars;
+      if (
+        bars.length < 5 &&
+        typeof this.broker.getHistoryBars === 'function'
+      ) {
+        try {
+          const hist = await Promise.race([
+            this.broker.getHistoryBars!(this.epic, 60),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 10_000)),
+          ]);
+          if (hist && hist.ok && Array.isArray(hist.bars) && hist.bars.length >= 5) {
+            const now = Date.now();
+            bars = hist.bars.map((b, i) => ({
+              open: b.open,
+              high: b.high,
+              low: b.low,
+              close: b.close,
+              ts_ms: b.ts_ms ?? now - (hist.bars.length - i) * 60_000,
+            }));
+            this.last_bars = bars;
+            this.structure_seed_source =
+              this.broker instanceof CapitalBroker && !this.broker.paper
+                ? 'capital_ohlc'
+                : hist.detail || 'broker_history';
+          }
+        } catch {
+          /* keep empty — poll loop will seed */
+        }
+      }
+      if (bars.length >= 5) {
+        await this.manageOnlyTick(bars, quote);
+      }
+    } catch (e) {
+      logMasterError({
+        module: 'runtime.bootstrap_manage',
+        error_type: 'bootstrap_failed',
+        message: e instanceof Error ? e.message : String(e),
+        context: { epic: this.epic, opens: this.positions.count() },
+      });
+    }
+  }
+
+  /** Cached OHLC for dashboard replay — never invents bars. */
+  barsSnapshot(limit = 200): Bar[] {
+    const n = Math.max(1, Math.min(500, Math.floor(limit) || 200));
+    return this.last_bars.slice(-n);
+  }
+
   private async manageOnlyUnlocked(bars: Bar[], quoteIn: Quote): Promise<void> {
     if (!this.running || this.positions.count() === 0) return;
     const broker = this.broker || this.ensurePaperBroker();
@@ -3447,6 +3529,7 @@ class MasterRuntime {
       entries_armed: this.entries_armed,
       entries_pause_reason: this.entries_pause_reason,
       structure_seed_source: this.structure_seed_source,
+      bars_available: this.last_bars.length,
       news_window: resolveNewsWindow(Date.now(), this.epic),
       quote: quote
         ? {

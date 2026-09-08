@@ -37,6 +37,7 @@ import {
 } from './positionManager.js';
 import { setupKey } from './decision.js';
 import { decideBestOutcomeExit } from '../services/exitManage.js';
+import { scalpPctLockBrokerStop } from './scalpPctChase.js';
 import type {
   Bar,
   MasterConfig,
@@ -224,13 +225,17 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
         }
       }
       if (cfg.scalp_pct_chase && open.mfe > 0) {
-        const lock = cfg.scalp_lock_pct ?? 0.2;
-        if (open.side === 'BUY') {
-          const chase = mark - lock * open.mfe;
-          if (chase > open.sl) open.sl = chase;
-        } else {
-          const chase = mark + lock * open.mfe;
-          if (chase < open.sl) open.sl = chase;
+        const chase = scalpPctLockBrokerStop({
+          symbol: 'GOLD',
+          direction: open.side,
+          entry: open.entry,
+          livePrice: mark,
+          lockPct: cfg.scalp_lock_pct ?? 0.2,
+          min_distance: null,
+        });
+        if (chase != null) {
+          if (open.side === 'BUY' && chase > open.sl) open.sl = chase;
+          if (open.side === 'SELL' && chase < open.sl) open.sl = chase;
         }
       } else if (
         !cfg.scalp_pct_chase &&
@@ -347,8 +352,41 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
       let exitPx: number | null = null;
       let reason = '';
 
-      // EMA_TICK soft exits (live PositionManager parity — always when EMA available)
+      // Live manageTick: hard protective before TIME_STOP before soft BestOutcome
       {
+        const hardTp =
+          open.multi_tp_levels?.length
+            ? multiTpFinalPrice(open.multi_tp_levels) ?? open.tp
+            : open.tp;
+        if (open.side === 'BUY') {
+          if (lo <= open.sl) {
+            exitPx = open.sl;
+            reason = 'SL';
+          } else if (hi >= hardTp) {
+            exitPx = hardTp;
+            reason = 'TP';
+          }
+        } else {
+          if (hi >= open.sl) {
+            exitPx = open.sl;
+            reason = 'SL';
+          } else if (lo <= hardTp) {
+            exitPx = hardTp;
+            reason = 'TP';
+          }
+        }
+        if (
+          exitPx == null &&
+          cfg.max_hold_ms > 0 &&
+          quote.ts_ms - open.open_ts >= cfg.max_hold_ms
+        ) {
+          exitPx = mark;
+          reason = 'TIME_STOP';
+        }
+      }
+
+      // Soft exits only when hard protective did not fire (live softBest order)
+      if (exitPx == null) {
         const e1 = emaPairFromBars(visible, 1);
         const e3 = emaPairFromBars(visible, 3);
         if (e3) {
@@ -416,32 +454,6 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
         if (bo.exit) {
           exitPx = mark;
           reason = bo.reason || 'BEST_OUTCOME';
-        }
-      }
-      if (exitPx == null) {
-        const hardTp =
-          open.multi_tp_levels?.length
-            ? multiTpFinalPrice(open.multi_tp_levels) ?? open.tp
-            : open.tp;
-        if (cfg.max_hold_ms > 0 && quote.ts_ms - open.open_ts >= cfg.max_hold_ms) {
-          exitPx = mark;
-          reason = 'TIME_STOP';
-        } else if (open.side === 'BUY') {
-          if (lo <= open.sl) {
-            exitPx = open.sl;
-            reason = 'SL';
-          } else if (hi >= hardTp) {
-            exitPx = hardTp;
-            reason = 'TP';
-          }
-        } else {
-          if (hi >= open.sl) {
-            exitPx = open.sl;
-            reason = 'SL';
-          } else if (lo <= hardTp) {
-            exitPx = hardTp;
-            reason = 'TP';
-          }
         }
       }
       if (exitPx != null) {

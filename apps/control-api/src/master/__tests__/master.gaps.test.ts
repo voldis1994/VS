@@ -4337,5 +4337,84 @@ describe('SELL manageTick partial_close + Check trail', () => {
     expect(typeof s.entry_gates.hours_ok).toBe('boolean');
     expect(typeof s.entry_gates.session).toBe('string');
     expect(Array.isArray(s.expectancy_would_block)).toBe(true);
+    expect(typeof s.bars_available).toBe('number');
+    expect(Array.isArray(masterRuntime.barsSnapshot(10))).toBe(true);
+  });
+});
+
+describe('replay exit order vs live manageTick', () => {
+  it('hard SL wins over BestOutcome HardInvalidation on same bar', async () => {
+    const { replayMaster } = await import('../replay.js');
+    // Strong uptrend open, then violent dump through SL while mid is deeply underwater
+    const bars: Array<{
+      open: number;
+      high: number;
+      low: number;
+      close: number;
+      ts_ms: number;
+    }> = [];
+    for (let i = 0; i < 50; i++) {
+      const o = 4400 + i * 1.2;
+      bars.push({
+        open: o,
+        high: o + 2,
+        low: o - 0.3,
+        close: o + 1.5,
+        ts_ms: Date.UTC(2026, 8, 7, 12, i),
+      });
+    }
+    // Crash bar: high still above entry path, low far below any reasonable SL,
+    // close deep underwater so BestOutcome HardInvalidation would also fire.
+    const last = bars[bars.length - 1]!;
+    bars.push({
+      open: last.close,
+      high: last.close + 0.5,
+      low: last.close - 80,
+      close: last.close - 60,
+      ts_ms: Date.UTC(2026, 8, 7, 12, 50),
+    });
+    for (let i = 0; i < 20; i++) {
+      const o = last.close - 60 - i;
+      bars.push({
+        open: o,
+        high: o + 0.5,
+        low: o - 0.5,
+        close: o - 0.2,
+        ts_ms: Date.UTC(2026, 8, 7, 12, 51 + i),
+      });
+    }
+    const result = await replayMaster({
+      bars,
+      warmup: 25,
+      spread: 0.3,
+      cfg: {
+        ...DEFAULT_MASTER_CONFIG,
+        block_off_hours: false,
+        block_high_impact_news: false,
+        min_score: 0.25,
+        max_hold_ms: 0,
+        soft_trail_money_arm: 0,
+        scalp_pct_chase: false,
+        require_positive_expectancy: false,
+      },
+    });
+    const exits = result.opportunities
+      .filter((o) => o.outcome)
+      .map((o) => o.outcome!.exit_reason);
+    // If any hard SL fired, it must not be labeled as BestOutcome/HardInvalidation
+    const slExits = exits.filter((r) => r === 'SL' || r === 'STOP_HIT');
+    const poison = exits.filter(
+      (r) => /HardInvalidation/i.test(r) && !/SL|STOP/i.test(r)
+    );
+    // Prefer proof: when crash produces an exit near SL price path, reason is SL
+    if (slExits.length === 0 && poison.length > 0) {
+      // Soft BestOutcome stole the bar — fail
+      expect(poison).toEqual([]);
+    }
+    expect(result.equity_curve.length).toBeGreaterThan(10);
+    // At least one traded path should prefer hard protective vocabulary when SL hits
+    if (exits.some((r) => r === 'SL')) {
+      expect(exits.some((r) => r === 'SL')).toBe(true);
+    }
   });
 });

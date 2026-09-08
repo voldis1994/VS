@@ -487,6 +487,18 @@ export async function registerMasterRoutes(app: FastifyInstance) {
     };
   });
 
+  app.get('/api/master/bars', async (req) => {
+    const limRaw = Number((req.query as { limit?: string })?.limit ?? 200);
+    const bars = masterRuntime.barsSnapshot(limRaw);
+    return {
+      ok: true,
+      count: bars.length,
+      bars,
+      epic: masterRuntime.epic,
+      structure_seed_source: masterRuntime.structure_seed_source,
+    };
+  });
+
   app.post<{
     Body: {
       bars: Bar[];
