@@ -1271,7 +1271,9 @@ class MasterRuntime {
               rebased.stop_loss != null &&
               Number.isFinite(rebased.stop_loss);
             if (needProtective) {
-              const closed = await this.closePositionManual(
+              // Must use unlocked close — we are already on tickChain (public
+              // closePositionManual would deadlock behind this tick).
+              const closed = await this.closePositionManualUnlocked(
                 place.position_id,
                 'POST_FILL_SL_SYNC_FAIL'
               );
@@ -1392,8 +1394,18 @@ class MasterRuntime {
     };
   }
 
-  /** Restart recovery — reload positions, intents, journal, expectancy; reconcile broker. */
+  /** Restart recovery — reload positions, intents, journal, expectancy; reconcile broker.
+   * Serialized on tickChain so mid-flight recover cannot race manage/sync/close. */
   async recover(): Promise<{
+    positions: number;
+    intents: number;
+    opportunities: number;
+    outcomes: number;
+  }> {
+    return this.runOnTickChain(() => this.recoverUnlocked());
+  }
+
+  private async recoverUnlocked(): Promise<{
     positions: number;
     intents: number;
     opportunities: number;

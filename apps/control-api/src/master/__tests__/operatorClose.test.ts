@@ -22,6 +22,16 @@ describe('operator close + manage config', () => {
     masterRuntime.ensurePaperBroker();
     masterRuntime.setMode('PAPER');
     masterRuntime.running = true;
+    masterRuntime.last_loss_ms = 0;
+    // Clear private cooldown gates so recover()/close cannot poison later suite tests
+    const rt = masterRuntime as unknown as {
+      post_exit_until_ms: number;
+      reject_until_ms: number;
+      inflight_until_ms: number;
+    };
+    rt.post_exit_until_ms = 0;
+    rt.reject_until_ms = 0;
+    rt.inflight_until_ms = 0;
     masterRuntime.last_quote = {
       bid: 4410,
       ask: 4410.4,
@@ -112,6 +122,73 @@ describe('operator close + manage config', () => {
       (o) => o.outcome?.exit_reason === 'OPERATOR_CLOSE'
     );
     expect(opp?.outcome?.r_multiple).toBeGreaterThan(0);
+  });
+
+  it('post-fill fail-close uses unlocked close (no tickChain deadlock)', () => {
+    const { readFileSync } = require('fs') as typeof import('fs');
+    const { join } = require('path') as typeof import('path');
+    const src = readFileSync(join(__dirname, '../runtime.ts'), 'utf8');
+    const idx = src.indexOf('POST_FILL_SL_SYNC_FAIL');
+    expect(idx).toBeGreaterThan(0);
+    const window = src.slice(Math.max(0, idx - 280), idx + 40);
+    expect(window).toMatch(/closePositionManualUnlocked/);
+    expect(window).not.toMatch(/await this\.closePositionManual\(/);
+  });
+
+  it('unlocked close from inside tickChain completes (no deadlock)', async () => {
+    const order: string[] = [];
+    await (masterRuntime as unknown as { runOnTickChain: <T>(fn: () => Promise<T>) => Promise<T> })
+      .runOnTickChain(async () => {
+        order.push('tick-start');
+        const r = await (
+          masterRuntime as unknown as {
+            closePositionManualUnlocked: (
+              id: string,
+              reason: string
+            ) => Promise<{ ok: boolean }>;
+          }
+        ).closePositionManualUnlocked('no-such', 'TEST_UNLOCKED');
+        order.push(r.ok ? 'ok' : 'missing');
+      });
+    order.push('tick-end');
+    expect(order).toEqual(['tick-start', 'missing', 'tick-end']);
+  });
+
+  it('recover waits behind an in-flight tickChain task', async () => {
+    const prev = process.env.MASTER_STATE_DIR;
+    const state = mkdtempSync(join(tmpdir(), 'vs-recover-chain-'));
+    process.env.MASTER_STATE_DIR = state;
+    const order: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const rt = masterRuntime as unknown as {
+      runOnTickChain: <T>(fn: () => Promise<T>) => Promise<T>;
+      post_exit_until_ms: number;
+      reject_until_ms: number;
+    };
+    try {
+      const hold = rt.runOnTickChain(async () => {
+        order.push('hold-start');
+        await gate;
+        order.push('hold-end');
+      });
+      const recP = masterRuntime.recover().then(() => {
+        order.push('recover-done');
+      });
+      await new Promise((r) => setTimeout(r, 30));
+      expect(order).toEqual(['hold-start']);
+      release();
+      await Promise.all([hold, recP]);
+      expect(order).toEqual(['hold-start', 'hold-end', 'recover-done']);
+    } finally {
+      rt.post_exit_until_ms = 0;
+      rt.reject_until_ms = 0;
+      masterRuntime.last_loss_ms = 0;
+      if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prev;
+    }
   });
 
   it('flattenAll closes every open', async () => {

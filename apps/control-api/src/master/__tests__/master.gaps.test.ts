@@ -2255,6 +2255,7 @@ describe('partial_close persist + Check be_start', () => {
       masterRuntime.last_loss_ms = 0;
       masterRuntime.reject_until_ms = 0;
       (masterRuntime as unknown as { inflight_until_ms: number }).inflight_until_ms = 0;
+      (masterRuntime as unknown as { post_exit_until_ms: number }).post_exit_until_ms = 0;
       masterRuntime.account = {
         equity: 10_000,
         balance: 10_000,
