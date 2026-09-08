@@ -449,3 +449,38 @@ describe('analysis flat pressure', () => {
     expect(a.sell_pressure).toBe(0.5);
   });
 });
+
+describe('emaTickLiveFromBars (VS-System Close[0])', () => {
+  it('replaces forming tip close with live mid and keeps prev on closed bars', async () => {
+    const { closesWithLiveClose0, emaTickLiveFromBars, isFormingBar } =
+      await import('../analysis.js');
+    const now = Date.now();
+    const bars = [
+      { open: 100, high: 101, low: 99, close: 100, ts_ms: now - 30_000 },
+      { open: 100, high: 102, low: 99.5, close: 101, ts_ms: now - 20_000 },
+      { open: 101, high: 103, low: 100.5, close: 102, ts_ms: now - 10_000 },
+      { open: 102, high: 102.5, low: 101.8, close: 102.2, ts_ms: now - 2_000 }, // forming
+    ];
+    expect(isFormingBar(bars[3], now, 10_000)).toBe(true);
+    const series = closesWithLiveClose0(bars, 105, now, 10_000);
+    expect(series.at(-1)).toBe(105);
+    expect(series).toHaveLength(4);
+    const live = emaTickLiveFromBars(bars, 105, now, 10_000)!;
+    expect(live.ema1).toBe(105);
+    expect(live.ema3).not.toBeNull();
+    expect(live.ema1Prev).toBe(102); // last closed close
+    expect(live.ema3Prev).not.toBeNull();
+  });
+
+  it('appends Close[0] when last bar is already closed', async () => {
+    const { closesWithLiveClose0 } = await import('../analysis.js');
+    const now = Date.now();
+    const bars = [
+      { open: 100, high: 101, low: 99, close: 100, ts_ms: now - 40_000 },
+      { open: 100, high: 102, low: 99.5, close: 101, ts_ms: now - 30_000 },
+      { open: 101, high: 103, low: 100.5, close: 102, ts_ms: now - 20_000 },
+    ];
+    const series = closesWithLiveClose0(bars, 108, now, 10_000);
+    expect(series).toEqual([100, 101, 102, 108]);
+  });
+});

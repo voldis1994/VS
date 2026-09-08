@@ -102,6 +102,91 @@ export function emaPairFromBars(
 }
 
 /**
+ * VS-System forming Close[0]: last bar still open when ts_ms is within barMs of now.
+ * Missing ts → treat as forming so live mid replaces the tip (safe for LiveBarBuilder).
+ */
+export function isFormingBar(
+  bar: Bar | undefined,
+  nowMs = Date.now(),
+  barMs = 10_000
+): boolean {
+  if (!bar) return true;
+  const ts = bar.ts_ms;
+  if (ts == null || !Number.isFinite(ts)) return true;
+  const age = nowMs - ts;
+  return age >= 0 && age < barMs;
+}
+
+/**
+ * VS-System closesWithLiveClose0 — replace forming tip with live mid, or append Close[0]
+ * when the last historical bar is already closed.
+ */
+export function closesWithLiveClose0(
+  bars: Bar[],
+  liveMid: number,
+  nowMs = Date.now(),
+  barMs = 10_000
+): number[] {
+  const closes = bars
+    .map((b) => b.close)
+    .filter((c) => Number.isFinite(c) && c > 0);
+  if (!Number.isFinite(liveMid) || liveMid <= 0) return closes;
+  if (closes.length === 0) return [liveMid];
+  const last = bars[bars.length - 1];
+  if (isFormingBar(last, nowMs, barMs)) {
+    return [...closes.slice(0, -1), liveMid];
+  }
+  return [...closes, liveMid];
+}
+
+export type EmaTickLive = {
+  ema1: number;
+  ema3: number | null;
+  /** Prior closed-bar EMA1 (never from previous live tick — anti-chop). */
+  ema1Prev: number | null;
+  ema3Prev: number | null;
+  ema1Prev2: number | null;
+  ema3Prev2: number | null;
+};
+
+/**
+ * VS-System applyEmaTickLivePrice: EMA1 ≈ live mid; EMA3 from Close[0]=mid series;
+ * prev/prev2 stay on closed bars only.
+ */
+export function emaTickLiveFromBars(
+  bars: Bar[],
+  liveMid: number,
+  nowMs = Date.now(),
+  barMs = 10_000
+): EmaTickLive | null {
+  if (!Number.isFinite(liveMid) || liveMid <= 0) return null;
+  const series = closesWithLiveClose0(bars, liveMid, nowMs, barMs);
+  if (series.length < 1) return null;
+  const closedOnly = isFormingBar(bars[bars.length - 1], nowMs, barMs)
+    ? series.slice(0, -1)
+    : bars
+        .map((b) => b.close)
+        .filter((c) => Number.isFinite(c) && c > 0);
+  const ema3Live = series.length >= 3 ? ema(series, 3) : null;
+  const ema1Prev =
+    closedOnly.length >= 1 ? ema(closedOnly, 1) : null;
+  const ema3Prev =
+    closedOnly.length >= 3 ? ema(closedOnly, 3) : null;
+  const ema1Prev2 =
+    closedOnly.length >= 2 ? ema(closedOnly.slice(0, -1), 1) : null;
+  const ema3Prev2 =
+    closedOnly.length >= 4 ? ema(closedOnly.slice(0, -1), 3) : null;
+  return {
+    ema1: liveMid,
+    ema3: ema3Live != null && Number.isFinite(ema3Live) ? ema3Live : null,
+    ema1Prev: ema1Prev != null && Number.isFinite(ema1Prev) ? ema1Prev : null,
+    ema3Prev: ema3Prev != null && Number.isFinite(ema3Prev) ? ema3Prev : null,
+    ema1Prev2: ema1Prev2 != null && Number.isFinite(ema1Prev2) ? ema1Prev2 : null,
+    ema3Prev2: ema3Prev2 != null && Number.isFinite(ema3Prev2) ? ema3Prev2 : null,
+  };
+}
+
+/**
  * VS-System EMA_TICK structural EMA1×EMA3 cross exit (forming + last-closed).
  */
 export function ema13CrossExit(input: {

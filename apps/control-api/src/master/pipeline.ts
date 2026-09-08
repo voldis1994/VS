@@ -258,6 +258,8 @@ export const DEFAULT_MASTER_CONFIG: MasterConfig = {
   scalp_strict_entry: false,
   scalp_min_edge: 0.12,
   ema_tick_entry: false,
+  post_exit_cooldown_ms: 900,
+  cycle_max_duration_ms: 45_000,
 };
 
 export const GOLD_SPEC: InstrumentSpec = {

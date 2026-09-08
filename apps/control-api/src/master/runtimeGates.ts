@@ -11,6 +11,10 @@ export type RuntimeGates = {
   reject_until_ms: number;
   /** Ambiguous OPEN window — survive restart so we do not double-open */
   inflight_until_ms?: number | null;
+  /** VS-System post-exit skip — no same-tick / immediate re-entry after CLOSE */
+  post_exit_until_ms?: number | null;
+  /** epic:SIDE fingerprint set only after protective SL sync confirms */
+  last_entry_fingerprint?: string | null;
   /** Equity baseline for daily $ gates — must survive restart */
   day_start_equity?: number | null;
   peak_equity?: number | null;
@@ -42,6 +46,15 @@ export function saveRuntimeGates(gates: RuntimeGates): boolean {
         gates.inflight_until_ms != null && Number.isFinite(gates.inflight_until_ms)
           ? Math.max(0, Math.floor(Number(gates.inflight_until_ms)))
           : 0,
+      post_exit_until_ms:
+        gates.post_exit_until_ms != null && Number.isFinite(gates.post_exit_until_ms)
+          ? Math.max(0, Math.floor(Number(gates.post_exit_until_ms)))
+          : 0,
+      last_entry_fingerprint:
+        gates.last_entry_fingerprint != null &&
+        String(gates.last_entry_fingerprint).trim()
+          ? String(gates.last_entry_fingerprint).trim().slice(0, 80)
+          : null,
       day_start_equity:
         gates.day_start_equity != null && Number.isFinite(gates.day_start_equity)
           ? Number(gates.day_start_equity)
@@ -69,10 +82,16 @@ export function loadRuntimeGates(): RuntimeGates | null {
     const dayStart = Number(raw.day_start_equity);
     const peak = Number(raw.peak_equity);
     const streak = Number(raw.consecutive_losses);
+    const fp =
+      raw.last_entry_fingerprint != null && String(raw.last_entry_fingerprint).trim()
+        ? String(raw.last_entry_fingerprint).trim().slice(0, 80)
+        : null;
     return {
       last_loss_ms: Number(raw.last_loss_ms) || 0,
       reject_until_ms: Number(raw.reject_until_ms) || 0,
       inflight_until_ms: Number(raw.inflight_until_ms) || 0,
+      post_exit_until_ms: Number(raw.post_exit_until_ms) || 0,
+      last_entry_fingerprint: fp,
       day_start_equity: Number.isFinite(dayStart) && dayStart > 0 ? dayStart : null,
       peak_equity: Number.isFinite(peak) && peak > 0 ? peak : null,
       daily_pnl_day:

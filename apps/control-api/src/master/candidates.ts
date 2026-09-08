@@ -134,6 +134,8 @@ export function buildCandidates(
   }
 
   // VS-System EMA_TICK fresh-cross entry (opt-in) — soft scores cannot open while waiting
+  // Structural EMAs use bar closes (incl. forming tip as stored). Live mid tip replacement
+  // is reserved for manage/exit (runtime emaTickLiveFromBars) so flat books do not false-cross.
   let buyEmaBlock: string | null = null;
   let sellEmaBlock: string | null = null;
   if (cfg.ema_tick_entry) {

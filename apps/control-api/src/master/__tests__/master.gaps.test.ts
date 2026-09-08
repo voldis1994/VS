@@ -1020,6 +1020,8 @@ describe('runtime gates persist', () => {
         last_loss_ms: 12345,
         reject_until_ms: 67890,
         inflight_until_ms: 99999,
+        post_exit_until_ms: 11111,
+        last_entry_fingerprint: 'GOLD:BUY',
         day_start_equity: 10_250.5,
         peak_equity: 11_000,
         daily_pnl_day: '2026-09-07',
@@ -1029,6 +1031,8 @@ describe('runtime gates persist', () => {
       last_loss_ms: 12345,
       reject_until_ms: 67890,
       inflight_until_ms: 99999,
+      post_exit_until_ms: 11111,
+      last_entry_fingerprint: 'GOLD:BUY',
       day_start_equity: 10_250.5,
       peak_equity: 11_000,
       daily_pnl_day: '2026-09-07',
@@ -2080,6 +2084,117 @@ describe('partial_close persist + Check be_start', () => {
       expect(r.decision.kind === 'BUY' || r.decision.kind === 'SELL').toBe(true);
       expect(r.risk.allowed).toBe(true);
       expect(String(r.execution_detail || '')).toMatch(/broker_verify_failed/);
+    } finally {
+      if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prev;
+    }
+  });
+
+  it('post_exit_cooldown blocks same-tick re-entry after CLOSE', async () => {
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = mkdtempSync(join(tmpdir(), 'vs-post-exit-'));
+    try {
+      masterRuntime.stop();
+      masterRuntime.pipeline = new MasterPipeline('PAPER');
+      masterRuntime.positions = new PositionManager();
+      masterRuntime.last_loss_ms = 0;
+      masterRuntime.reject_until_ms = 0;
+      (masterRuntime as unknown as { inflight_until_ms: number }).inflight_until_ms = 0;
+      (masterRuntime as unknown as { post_exit_until_ms: number }).post_exit_until_ms = 0;
+      (masterRuntime as unknown as { last_entry_fingerprint: string | null }).last_entry_fingerprint =
+        null;
+      masterRuntime.account = {
+        equity: 10_000,
+        balance: 10_000,
+        currency: 'GBP',
+        open_positions: 0,
+        daily_pnl: 0,
+        daily_pnl_day: new Date().toISOString().slice(0, 10),
+        day_start_equity: 10_000,
+        peak_equity: 10_000,
+        consecutive_losses: 0,
+      };
+      masterRuntime.cfg = {
+        ...DEFAULT_MASTER_CONFIG,
+        mode: 'PAPER',
+        min_score: 0.25,
+        block_off_hours: false,
+        block_high_impact_news: false,
+        max_relative_volatility: 100,
+        max_relative_spread: 100,
+        cooldown_ms_after_loss: 0,
+        max_daily_loss_pct: 0.99,
+        max_drawdown_pct: 0.99,
+        post_exit_cooldown_ms: 60_000,
+        max_hold_ms: 1, // force TIME_STOP on existing position
+      };
+      const broker = masterRuntime.ensurePaperBroker();
+      masterRuntime.running = true;
+      masterRuntime.entries_armed = true;
+      const bars = Array.from({ length: 50 }, (_, i) => {
+        const o = 4400 + i * 1.5;
+        return {
+          open: o,
+          high: o + 2,
+          low: o - 0.2,
+          close: o + 1.4,
+          ts_ms: Date.UTC(2026, 8, 7, 12, i),
+        };
+      });
+      const quote = {
+        bid: 4475,
+        ask: 4475.4,
+        mid: 4475.2,
+        spread: 0.4,
+        epic: 'GOLD',
+        ts_ms: Date.now(),
+      };
+      broker.setQuote(quote);
+      // Seed a long-held position so manageTick closes via TIME_STOP
+      broker.seedOpens([
+        {
+          position_id: 'post-exit-seed',
+          epic: 'GOLD',
+          side: 'BUY',
+          size: 0.1,
+          open_level: 4400,
+          stop_level: 4390,
+          profit_level: 4500,
+        },
+      ]);
+      masterRuntime.positions.register({
+        position_id: 'post-exit-seed',
+        opportunity_id: 'opp-post-exit',
+        intent_id: 'intent-post-exit',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 0.1,
+        entry: 4400,
+        stop_loss: 4390,
+        take_profit: 4500,
+        entry_at: new Date(Date.now() - 120_000).toISOString(),
+        decision: {
+          id: 'd1',
+          kind: 'BUY',
+          side: 'BUY',
+          buy: null as any,
+          sell: null as any,
+          analysis: baseAnalysis({ atr: 2 }),
+          block_reason: null,
+          ai_mode: 'off',
+          created_at: new Date(Date.now() - 120_000).toISOString(),
+        } as any,
+      });
+      const r = await masterRuntime.tick(bars, quote);
+      expect(r.exits).toBeGreaterThanOrEqual(1);
+      expect(r.executed).toBe(false);
+      // After close, strong signal must not re-open in the same cycle
+      if (r.decision.kind === 'BUY' || r.decision.kind === 'SELL') {
+        expect(String(r.execution_detail || '')).toMatch(/post_exit_cooldown/);
+      }
+      expect(
+        (masterRuntime as unknown as { post_exit_until_ms: number }).post_exit_until_ms
+      ).toBeGreaterThan(Date.now());
     } finally {
       if (prev === undefined) delete process.env.MASTER_STATE_DIR;
       else process.env.MASTER_STATE_DIR = prev;

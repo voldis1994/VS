@@ -316,4 +316,14 @@ export type MasterConfig = {
    * Soft scores alone cannot open while waiting for a fresh cross.
    */
   ema_tick_entry: boolean;
+  /**
+   * VS-System post-CLOSE skip (ms) — no same-tick / immediate re-entry after exit.
+   * Default 900 matches opposite-close settle in strategy-runtime.
+   */
+  post_exit_cooldown_ms: number;
+  /**
+   * Reader cycle_max_duration_ms — skip new OPEN when the cycle already exceeded this.
+   * Does not abort an in-flight placeOrder (double-open risk).
+   */
+  cycle_max_duration_ms: number;
 };

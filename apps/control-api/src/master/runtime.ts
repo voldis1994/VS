@@ -1,5 +1,10 @@
 /** MASTER runtime — full PAPER/LIVE cycle owner + dashboard facade. */
-import { analyzeBars, emaFromBars, emaPairFromBars } from './analysis.js';
+import {
+  analyzeBars,
+  emaFromBars,
+  emaPairFromBars,
+  emaTickLiveFromBars,
+} from './analysis.js';
 import type { MasterBroker } from './broker.js';
 import { CapitalBroker, Mt4FileBroker, PaperBroker } from './broker.js';
 import { decide } from './decision.js';
@@ -196,6 +201,9 @@ class MasterRuntime {
   owns_pipeline_pref: boolean | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private liveFeedTimer: ReturnType<typeof setInterval> | null = null;
+  /** VS-System 1s trail/manage loop while a position is open (entry stays on slower feed). */
+  private manageTimer: ReturnType<typeof setInterval> | null = null;
+  private lastFullTickAt = 0;
   private seenIntentSnapshot: string[] = [];
   /** Serialize tick() across live-feed / API / desk so opens+persist never race. */
   private tickChain: Promise<unknown> = Promise.resolve();
@@ -206,6 +214,10 @@ class MasterRuntime {
   private emptyBrokerDebounce: EmptyBrokerDebounce = { consecutive_empty: 0 };
   private monitor = new CycleMonitor();
   private monitorHydrated = false;
+  /** VS-System post-exit settle — block OPEN until this ms */
+  private post_exit_until_ms = 0;
+  /** epic:SIDE set only after protective SL sync confirms */
+  private last_entry_fingerprint: string | null = null;
   epic = GOLD_SPEC.epic;
 
   setMode(mode: Mode) {
@@ -426,6 +438,8 @@ class MasterRuntime {
           last_loss_ms: this.last_loss_ms,
           reject_until_ms: this.reject_until_ms,
           inflight_until_ms: this.inflight_until_ms,
+          post_exit_until_ms: this.post_exit_until_ms,
+          last_entry_fingerprint: this.last_entry_fingerprint,
           day_start_equity: this.account.day_start_equity ?? null,
           peak_equity: this.account.peak_equity,
           daily_pnl_day: this.account.daily_pnl_day ?? null,
@@ -832,9 +846,17 @@ class MasterRuntime {
       structure && structure.atr > 0
         ? structure.atr * this.cfg.trailing_buffer_atr_mult
         : 0;
-    const ema3 = bars.length >= 3 ? emaFromBars(bars, 3) : null;
+    // VS-System live Close[0]: EMA1≈mid, EMA3 from forming tip; prev from closed only
+    const liveEma = emaTickLiveFromBars(bars, quote.mid, Date.now(), 10_000);
+    const ema3 =
+      liveEma?.ema3 ?? (bars.length >= 3 ? emaFromBars(bars, 3) : null);
     const ema1Pair = emaPairFromBars(bars, 1);
     const ema3Pair = emaPairFromBars(bars, 3);
+    const ema1 = liveEma?.ema1 ?? ema1Pair?.cur ?? null;
+    const ema1_prev = liveEma?.ema1Prev ?? ema1Pair?.prev ?? null;
+    const ema3_prev = liveEma?.ema3Prev ?? ema3Pair?.prev ?? null;
+    const ema1_prev2 = liveEma?.ema1Prev2 ?? ema1Pair?.prev2 ?? null;
+    const ema3_prev2 = liveEma?.ema3Prev2 ?? ema3Pair?.prev2 ?? null;
 
     // 1) Manage exits first (position manager owns open risk)
     const liveMinStop =
@@ -859,11 +881,11 @@ class MasterRuntime {
       swing_high: structure?.swing_high ?? null,
       trailing_buffer: trailBuf,
       ema3,
-      ema1: ema1Pair?.cur ?? null,
-      ema1_prev: ema1Pair?.prev ?? null,
-      ema3_prev: ema3Pair?.prev ?? null,
-      ema1_prev2: ema1Pair?.prev2 ?? null,
-      ema3_prev2: ema3Pair?.prev2 ?? null,
+      ema1,
+      ema1_prev,
+      ema3_prev,
+      ema1_prev2,
+      ema3_prev2,
       allow_close:
         this.cfg.ai_mode === 'off' ? true : this.last_ai_allow_close,
       close_all_profit: this.cfg.close_all_profit,
@@ -917,6 +939,24 @@ class MasterRuntime {
         fees: c.outcome.fees,
       });
     }
+    // VS-System: after any CLOSE, settle before allowing same-cycle / immediate re-entry
+    if (managed.closed.length > 0) {
+      const cool = Math.max(0, this.cfg.post_exit_cooldown_ms || 0);
+      this.post_exit_until_ms = Math.max(
+        this.post_exit_until_ms,
+        Date.now() + cool
+      );
+      this.persistRuntimeGates();
+    }
+    // Flat + post-exit elapsed → clear sticky fingerprint (VS lastFingerprint)
+    if (
+      this.positions.count() === 0 &&
+      Date.now() >= this.post_exit_until_ms &&
+      this.last_entry_fingerprint
+    ) {
+      this.last_entry_fingerprint = null;
+      this.persistRuntimeGates();
+    }
 
     // 2) Decision + risk
     const cycle = await this.pipeline.runCycle({
@@ -962,6 +1002,29 @@ class MasterRuntime {
     const inflight =
       Date.now() < this.inflight_until_ms || this.positions.count() > 0;
     const rejectCool = Date.now() < this.reject_until_ms;
+    const postExitCool = Date.now() < this.post_exit_until_ms;
+    const signalFp =
+      cycle.decision.kind === 'BUY' || cycle.decision.kind === 'SELL'
+        ? `${this.epic}:${cycle.decision.kind}`
+        : null;
+    const sameSignal =
+      !!signalFp &&
+      !!this.last_entry_fingerprint &&
+      this.last_entry_fingerprint === signalFp &&
+      (this.positions.count() > 0 || postExitCool);
+    const cycleBudgetMs = Number(this.cfg.cycle_max_duration_ms);
+    const cycleTimedOut =
+      Number.isFinite(cycleBudgetMs) &&
+      cycleBudgetMs > 0 &&
+      Date.now() - t0 > cycleBudgetMs;
+    if (cycleTimedOut) {
+      logMasterError({
+        module: 'runtime.tick',
+        error_type: 'CYCLE_TIMEOUT',
+        message: `cycle exceeded ${cycleBudgetMs}ms before OPEN`,
+        context: { epic: this.epic, elapsed_ms: Date.now() - t0 },
+      });
+    }
     if (
       this.running &&
       this.entries_armed &&
@@ -970,7 +1033,10 @@ class MasterRuntime {
       (cycle.decision.kind === 'BUY' || cycle.decision.kind === 'SELL') &&
       cycle.risk.allowed &&
       !inflight &&
-      !rejectCool
+      !rejectCool &&
+      !postExitCool &&
+      !sameSignal &&
+      !cycleTimedOut
     ) {
       // VS-System fail-closed: force-list broker opens before entry — local book
       // alone is unsafe when sync was skipped or ghosts lag.
@@ -1007,6 +1073,7 @@ class MasterRuntime {
       if (brokerVerifyOk) {
       this.inflight_until_ms = Date.now() + 90_000;
       this.persistRuntimeGates();
+      const openStarted = Date.now();
       const { execution, place } = await executeDecision({
         broker,
         pipeline: this.pipeline,
@@ -1016,6 +1083,7 @@ class MasterRuntime {
         epic: this.epic,
         allow_live: allow_live || broker.paper,
       });
+      this.monitor.noteAckLatency(Date.now() - openStarted);
       execution_detail = execution.detail;
       this.last_execution_detail = execution.detail;
       this.trackPersist(
@@ -1146,7 +1214,15 @@ class MasterRuntime {
               this.last_execution_detail = execution_detail;
               this.last_exit_reason = 'POST_FILL_SL_SYNC_FAIL';
             }
+          } else if (signalFp) {
+            // VS-System: fingerprint only after SL confirmed — prevents SAVE/re-arm spam
+            this.last_entry_fingerprint = signalFp;
+            this.persistRuntimeGates();
           }
+        } else if (signalFp) {
+          // No modify path (paper / no levels) — treat fill as confirmed
+          this.last_entry_fingerprint = signalFp;
+          this.persistRuntimeGates();
         }
       } else if (!execution.accepted) {
         // Ambiguous OPEN ACK timeout — keep inflight so we do not double-open
@@ -1189,17 +1265,23 @@ class MasterRuntime {
           ? this.entries_pause_reason || 'entries_paused'
           : alertBlock
             ? alertBlock
-            : rejectCool
-            ? 'reject_cooldown'
-            : inflight
-              ? this.positions.count() > 0
-                ? 'one_trade_open'
-                : 'inflight_order'
-              : !cycle.risk.allowed
-                ? `risk:${cycle.risk.reasons.join(',')}`
-                : this.cfg.mode === 'LIVE' && !allow_live
-                  ? 'live_gate_off'
-                  : 'not_armed';
+            : cycleTimedOut
+              ? 'cycle_timeout'
+              : postExitCool
+                ? 'post_exit_cooldown'
+                : sameSignal
+                  ? 'same_signal_fingerprint'
+                  : rejectCool
+                    ? 'reject_cooldown'
+                    : inflight
+                      ? this.positions.count() > 0
+                        ? 'one_trade_open'
+                        : 'inflight_order'
+                      : !cycle.risk.allowed
+                        ? `risk:${cycle.risk.reasons.join(',')}`
+                        : this.cfg.mode === 'LIVE' && !allow_live
+                          ? 'live_gate_off'
+                          : 'not_armed';
       this.last_execution_detail = execution_detail;
     }
 
@@ -1210,6 +1292,8 @@ class MasterRuntime {
     }
 
     this.monitor.noteCycle(Date.now() - t0);
+    this.lastFullTickAt = Date.now();
+    this.ensureManageLoop();
     logDecisionEvent({
       kind: cycle.decision.kind,
       epic: this.epic,
@@ -1274,6 +1358,13 @@ class MasterRuntime {
         this.inflight_until_ms,
         gates.inflight_until_ms || 0
       );
+      this.post_exit_until_ms = Math.max(
+        this.post_exit_until_ms,
+        gates.post_exit_until_ms || 0
+      );
+      if (gates.last_entry_fingerprint) {
+        this.last_entry_fingerprint = gates.last_entry_fingerprint;
+      }
       if (gates.daily_pnl_day) {
         this.account.daily_pnl_day = gates.daily_pnl_day;
       }
@@ -1706,12 +1797,175 @@ class MasterRuntime {
       clearInterval(this.liveFeedTimer);
       this.liveFeedTimer = null;
     }
+    this.clearManageLoop();
     // Refuse empty overwrite before recover — otherwise Stop on a fresh
     // process wipes durable opens that recover() has not loaded yet.
     if (this.positions.count() === 0 && !this.recovered) {
       return;
     }
     this.trackPersist('open_positions', saveOpenPositions(this.positions.list()));
+  }
+
+  /**
+   * VS-System trail-only loop (~1s) while a position is open.
+   * Skips when a full entry tick ran recently; never places OPEN.
+   */
+  private ensureManageLoop() {
+    if (!this.running || this.positions.count() === 0) {
+      this.clearManageLoop();
+      return;
+    }
+    if (this.manageTimer) return;
+    this.manageTimer = setInterval(() => {
+      if (!this.running || this.positions.count() === 0) {
+        this.clearManageLoop();
+        return;
+      }
+      if (Date.now() - this.lastFullTickAt < 800) return;
+      if (!this.last_bars.length || !this.last_quote) return;
+      void this.manageOnlyTick(this.last_bars, this.last_quote);
+    }, 1000);
+  }
+
+  private clearManageLoop() {
+    if (this.manageTimer) {
+      clearInterval(this.manageTimer);
+      this.manageTimer = null;
+    }
+  }
+
+  /** Manage/exit only — serialized on the same chain as full tick (no OPEN). */
+  private async manageOnlyTick(bars: Bar[], quote: Quote): Promise<void> {
+    const run = async () => {
+      try {
+        await this.manageOnlyUnlocked(bars, quote);
+      } catch (e) {
+        logMasterError({
+          module: 'runtime.manage',
+          error_type: 'manage_only_failed',
+          message: e instanceof Error ? e.message : String(e),
+          context: { epic: this.epic },
+        });
+      }
+    };
+    const result = this.tickChain.then(run, run);
+    this.tickChain = result.then(
+      () => undefined,
+      () => undefined
+    );
+    await result;
+  }
+
+  private async manageOnlyUnlocked(bars: Bar[], quoteIn: Quote): Promise<void> {
+    if (!this.running || this.positions.count() === 0) return;
+    const quote: Quote = { ...quoteIn, epic: quoteIn.epic || this.epic };
+    this.last_bars = bars;
+    this.last_quote = quote;
+    const broker = this.broker || this.ensurePaperBroker();
+    if (broker instanceof PaperBroker) {
+      broker.setQuote({
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        spread: quote.spread,
+        epic: this.epic,
+        ts_ms: quote.ts_ms,
+      });
+      broker.markToMarket();
+    }
+    const instrument = specForEpic(this.epic);
+    const structure = bars.length >= 5 ? analyzeBars(bars, quote.spread) : null;
+    const trailBuf =
+      structure && structure.atr > 0
+        ? structure.atr * this.cfg.trailing_buffer_atr_mult
+        : 0;
+    const liveEma = emaTickLiveFromBars(bars, quote.mid, Date.now(), 10_000);
+    const ema3 =
+      liveEma?.ema3 ?? (bars.length >= 3 ? emaFromBars(bars, 3) : null);
+    const ema1Pair = emaPairFromBars(bars, 1);
+    const ema3Pair = emaPairFromBars(bars, 3);
+    const liveMinStop =
+      broker instanceof CapitalBroker
+        ? broker.liveMinStopDistance(this.epic)
+        : quote.min_stop_distance ?? null;
+    const managed = await this.positions.manageTick({
+      broker,
+      pipeline: this.pipeline,
+      quote,
+      instrument_point_value: instrument.value_per_point_per_lot,
+      max_hold_ms: this.cfg.max_hold_ms,
+      breakeven_progress: this.cfg.breakeven_progress,
+      breakeven_offset: this.cfg.breakeven_offset,
+      be_start: this.cfg.be_start,
+      trail_start: this.cfg.trail_start,
+      trail_lock: this.cfg.trail_lock,
+      partial_close_progress: this.cfg.partial_close_progress,
+      partial_close_volume: this.cfg.partial_close_volume,
+      volume_step: instrument.volume_step,
+      swing_low: structure?.swing_low ?? null,
+      swing_high: structure?.swing_high ?? null,
+      trailing_buffer: trailBuf,
+      ema3,
+      ema1: liveEma?.ema1 ?? ema1Pair?.cur ?? null,
+      ema1_prev: liveEma?.ema1Prev ?? ema1Pair?.prev ?? null,
+      ema3_prev: liveEma?.ema3Prev ?? ema3Pair?.prev ?? null,
+      ema1_prev2: liveEma?.ema1Prev2 ?? ema1Pair?.prev2 ?? null,
+      ema3_prev2: liveEma?.ema3Prev2 ?? ema3Pair?.prev2 ?? null,
+      allow_close:
+        this.cfg.ai_mode === 'off' ? true : this.last_ai_allow_close,
+      close_all_profit: this.cfg.close_all_profit,
+      close_all_loss: this.cfg.close_all_loss,
+      min_stop_distance: liveMinStop,
+      breakeven_activation_money: this.cfg.breakeven_activation_money,
+      soft_trail_money_arm: this.cfg.soft_trail_money_arm,
+      soft_trail_pips: this.cfg.soft_trail_pips,
+      scalp_pct_chase: this.cfg.scalp_pct_chase,
+      scalp_lock_pct: this.cfg.scalp_lock_pct,
+      stale_quote_ms: this.cfg.stale_quote_ms,
+    });
+    for (const c of managed.closed) {
+      this.account.daily_pnl += c.outcome.pnl;
+      if (c.outcome.pnl < 0) {
+        this.account.consecutive_losses += 1;
+        this.last_loss_ms = Date.now();
+      } else {
+        this.account.consecutive_losses = 0;
+      }
+      this.last_exit_reason = c.reason;
+      const sk = c.position.decision.side
+        ? setupKey(c.position.decision.analysis, c.position.decision.side)
+        : null;
+      this.trackPersist(
+        'outcome',
+        persistOutcome(c.position.opportunity_id, c.outcome, sk)
+      );
+      logTradeEvent({
+        event: 'CLOSE',
+        broker: broker.name,
+        epic: c.position.epic,
+        side: c.position.side,
+        volume: c.outcome.volume,
+        price: c.outcome.exit,
+        position_id: c.position.position_id,
+        intent_id: c.position.intent_id,
+        opportunity_id: c.position.opportunity_id,
+        ok: true,
+        detail: c.reason,
+        pnl: c.outcome.pnl,
+        fees: c.outcome.fees,
+      });
+    }
+    if (managed.closed.length > 0) {
+      const cool = Math.max(0, this.cfg.post_exit_cooldown_ms || 0);
+      this.post_exit_until_ms = Math.max(
+        this.post_exit_until_ms,
+        Date.now() + cool
+      );
+      this.persistRuntimeGates();
+    }
+    this.account.open_positions = this.positions.count();
+    this.trackPersist('open_positions', saveOpenPositions(this.positions.list()));
+    if (this.positions.count() === 0) this.clearManageLoop();
   }
 
   status(): MasterStatus {

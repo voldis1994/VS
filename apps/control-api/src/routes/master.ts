@@ -502,6 +502,7 @@ async function refresh(){
       card('MC p50',s.monte_carlo?.p50!=null?Number(s.monte_carlo.p50).toFixed(2):'—'),
       card('Rel spread',s.monitoring?.relative_spread!=null?Number(s.monitoring.relative_spread).toFixed(2):'—',s.monitoring?.relative_spread!=null&&s.monitoring.relative_spread>1.5?'bad':''),
       card('Cycle ms',s.monitoring?.last_cycle_ms!=null?String(s.monitoring.last_cycle_ms):'—'),
+      card('ACK ms',s.monitoring?.ack_latency_ms!=null?String(s.monitoring.ack_latency_ms):'—'),
       card('Inst health',s.monitoring?.instance_health||'—',s.monitoring?.instance_health==='CRITICAL'||s.monitoring?.instance_health==='DEGRADED'?'bad':s.monitoring?.instance_health==='OK'?'ok':''),
       card('Alert block',s.monitoring?.entry_block_reason||'—',s.monitoring?.entry_block_reason?'bad':''),
       card('Alerts',(s.monitoring?.active_alerts&&s.monitoring.active_alerts.length)?s.monitoring.active_alerts.slice(0,3).map(a=>a.code).join(' · '):'—',(s.monitoring?.active_alerts&&s.monitoring.active_alerts.length)?'bad':''),

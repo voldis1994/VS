@@ -26,6 +26,8 @@ export type CycleMonitorSnapshot = {
   error_rate_per_min: number;
   data_freshness_ms: number | null;
   relative_spread: number | null;
+  /** INTENT→ACK / confirm latency from last OPEN attempt (ms); null if none yet */
+  ack_latency_ms: number | null;
   instance_health: 'OK' | 'DEGRADED' | 'CRITICAL';
   active_alerts: CycleAlert[];
   entry_block_reason: string | null;
@@ -48,6 +50,7 @@ export class CycleMonitor {
   last_cycle_at: string | null = null;
   cycles = 0;
   relative_spread: number | null = null;
+  ack_latency_ms: number | null = null;
   private lastAlerts: CycleAlert[] = [];
   private lastEntryBlock: string | null = null;
 
@@ -55,6 +58,14 @@ export class CycleMonitor {
     this.last_cycle_ms = Math.max(0, Math.round(ms));
     this.last_cycle_at = new Date().toISOString();
     this.cycles += 1;
+  }
+
+  noteAckLatency(ms: number | null) {
+    if (ms == null || !Number.isFinite(ms) || ms < 0) {
+      this.ack_latency_ms = null;
+      return;
+    }
+    this.ack_latency_ms = Math.max(0, Math.round(ms));
   }
 
   noteRelativeSpread(rel: number | null) {
@@ -91,6 +102,7 @@ export class CycleMonitor {
           ? Math.max(0, Math.round(quoteAgeMs))
           : null,
       relative_spread: this.relative_spread,
+      ack_latency_ms: this.ack_latency_ms,
       instance_health: healthFromAlerts(this.lastAlerts),
       active_alerts: this.lastAlerts.slice(0, 8),
       entry_block_reason: this.lastEntryBlock,
@@ -116,6 +128,7 @@ export class CycleMonitor {
             error_rate_per_min: snap.error_rate_per_min,
             instance_health: snap.instance_health,
             relative_spread: snap.relative_spread,
+            ack_latency_ms: snap.ack_latency_ms,
             entry_block_reason: snap.entry_block_reason,
             active_alerts: snap.active_alerts,
           },
@@ -165,6 +178,9 @@ export class CycleMonitor {
     }
     if (typeof raw.relative_spread === 'number' && Number.isFinite(raw.relative_spread)) {
       this.relative_spread = Number(raw.relative_spread);
+    }
+    if (typeof raw.ack_latency_ms === 'number' && Number.isFinite(raw.ack_latency_ms)) {
+      this.ack_latency_ms = Math.max(0, Math.round(raw.ack_latency_ms));
     }
     if (Array.isArray(raw.active_alerts)) {
       this.lastAlerts = raw.active_alerts as CycleAlert[];

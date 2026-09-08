@@ -42,6 +42,7 @@ type MasterStatus = {
   monitoring?: {
     last_cycle_ms?: number;
     relative_spread?: number | null;
+    ack_latency_ms?: number | null;
     error_count?: number;
     error_rate_per_min?: number;
     data_freshness_ms?: number | null;
@@ -360,6 +361,13 @@ export function MasterPage() {
           v:
             status.monitoring?.last_cycle_ms != null
               ? String(status.monitoring.last_cycle_ms)
+              : '—',
+        },
+        {
+          k: 'ACK ms',
+          v:
+            status.monitoring?.ack_latency_ms != null
+              ? String(status.monitoring.ack_latency_ms)
               : '—',
         },
         {
