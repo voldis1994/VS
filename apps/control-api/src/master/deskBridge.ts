@@ -84,7 +84,25 @@ export async function ensureMasterCapitalBroker(creds: {
   capitalAccountId?: string | null;
 }): Promise<{ ok: boolean; mode: string; detail: string }> {
   if (process.env.MASTER_LIVE_ENABLED === 'true') {
-    if (masterRuntime.broker?.name !== 'CAPITAL') {
+    if (masterRuntime.broker?.name === 'CAPITAL') {
+      // VS-System bindCapitalAccount — re-pin CFD on shared CST (never sticky first-writer)
+      const broker = masterRuntime.broker as import('./broker.js').CapitalBroker;
+      if (typeof broker.rebindCapitalAccount === 'function') {
+        const want = String(creds.capitalAccountId || '').trim();
+        if (want) {
+          const pinned = await broker.rebindCapitalAccount(want);
+          if (!pinned.ok) {
+            masterRuntime.broker_detail = `capital_rebind_failed:${pinned.detail}`;
+            return {
+              ok: false,
+              mode: masterRuntime.cfg.mode,
+              detail: masterRuntime.broker_detail,
+            };
+          }
+          masterRuntime.broker_detail = `capital_desk_rebound:${want}`;
+        }
+      }
+    } else {
       const broker = createCapitalBroker({
         ...creds,
         // MASTER shares one CST pool with envBroker — never fork on desk DB connection_id

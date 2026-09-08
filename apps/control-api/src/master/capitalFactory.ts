@@ -34,14 +34,21 @@ export function masterCapitalConnectionId(explicit?: number | null): number {
 }
 
 export function createCapitalBroker(creds: CapitalBrokerCreds): CapitalBroker {
-  return new CapitalBroker({
-    credentials: {
-      ...creds,
-      // Always MASTER pool — never fork on desk DB connection_id (VS CST rule)
-      connectionId: masterCapitalConnectionId(),
-    },
+  // Mutable credentials bag — bindCapitalAccount updates capitalAccountId in place
+  // so ensureSession/acquire/ensureAccount always pin the live desk CFD target.
+  const credentials: CapitalBrokerCreds & { connectionId: number } = {
+    ...creds,
+    connectionId: masterCapitalConnectionId(),
+    capitalAccountId: creds.capitalAccountId ?? null,
+  };
+  const broker = new CapitalBroker({
+    credentials,
     acquire: async (input) => {
-      const opened = await acquireCapitalSession(input);
+      const opened = await acquireCapitalSession({
+        ...input,
+        capitalAccountId:
+          credentials.capitalAccountId ?? input.capitalAccountId ?? null,
+      });
       if (!opened.ok) {
         return { ok: false, detail: opened.result.detail };
       }
@@ -85,13 +92,13 @@ export function createCapitalBroker(creds: CapitalBrokerCreds): CapitalBroker {
     prices: async (session, epic, resolution, max) =>
       fetchCapitalPrices(session, epic, resolution, max),
     ensureAccount: async (session) => {
-      const id = String(creds.capitalAccountId || '').trim();
+      const id = String(credentials.capitalAccountId || '').trim();
       if (!id) return { ok: true, detail: 'no_account_id' };
       const { switchCapitalAccount } = await import('../services/capitalCom.js');
       return switchCapitalAccount(session, id);
     },
     account: async (session) => {
-      const eq = await fetchCapitalAccountEquity(session, creds.capitalAccountId);
+      const eq = await fetchCapitalAccountEquity(session, credentials.capitalAccountId);
       if (!eq) return null;
       return {
         equity: eq.equity,
@@ -101,4 +108,5 @@ export function createCapitalBroker(creds: CapitalBrokerCreds): CapitalBroker {
       };
     },
   });
+  return broker;
 }

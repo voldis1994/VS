@@ -125,4 +125,44 @@ describe('VS MASTER env broker resolve', () => {
       sharedLoginLockForConnection(masterCapitalConnectionId())
     );
   });
+
+  it('bindCapitalAccount mutates credentials so ensureAccount pins new CFD', async () => {
+    snap();
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    let pinned: string | null = null;
+    const broker = createCapitalBroker({
+      environment: 'demo',
+      apiKey: 'k',
+      identifier: 'i',
+      password: 'p',
+      capitalAccountId: 'cfd-A',
+    });
+    // Replace ensure path by binding then reading credentials
+    broker.bindCapitalAccount('cfd-B');
+    expect(
+      (broker as unknown as { deps: { credentials: { capitalAccountId: string } } }).deps
+        .credentials.capitalAccountId
+    ).toBe('cfd-B');
+    // Mock session pin via rebind with stubbed acquire/ensure
+    (broker as unknown as { deps: { acquire: Function; ensureAccount: Function } }).deps.acquire =
+      async () => ({
+        ok: true,
+        session: { id: 's', preferredAccountId: null },
+        detail: 'ok',
+      });
+    (broker as unknown as { deps: { ensureAccount: Function } }).deps.ensureAccount = async (
+      session: { preferredAccountId: string | null }
+    ) => {
+      const id = String(
+        (broker as unknown as { deps: { credentials: { capitalAccountId: string } } }).deps
+          .credentials.capitalAccountId || ''
+      ).trim();
+      pinned = id;
+      session.preferredAccountId = id;
+      return { ok: true, detail: `switched:${id}` };
+    };
+    const r = await broker.rebindCapitalAccount('cfd-C');
+    expect(r.ok).toBe(true);
+    expect(pinned).toBe('cfd-C');
+  });
 });

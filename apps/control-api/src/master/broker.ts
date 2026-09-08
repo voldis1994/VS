@@ -423,6 +423,29 @@ export class CapitalBroker implements MasterBroker {
   /** Last good mid per epic — provisional entry when open_level missing and live quote flakes */
   private lastMidByEpic = new Map<string, number>();
 
+  /**
+   * VS-System bindCapitalAccount — mutable CFD target on shared CST pool.
+   * Keeps deps.credentials.capitalAccountId in sync so ensureSession/acquire pins correctly.
+   */
+  bindCapitalAccount(accountId: string | null | undefined): void {
+    const id = String(accountId ?? '').trim() || null;
+    if (this.deps.credentials && typeof this.deps.credentials === 'object') {
+      this.deps.credentials.capitalAccountId = id;
+    }
+  }
+
+  /** Bind + re-acquire + pin (fail closed when id supplied but switch fails). */
+  async rebindCapitalAccount(
+    accountId: string | null | undefined
+  ): Promise<{ ok: boolean; detail: string }> {
+    const id = String(accountId ?? '').trim();
+    this.bindCapitalAccount(id || null);
+    const ensured = await this.ensureSession();
+    if (!ensured.ok) return ensured;
+    if (!id) return { ok: true, detail: 'no_account_id' };
+    return this.ensureActiveAccount();
+  }
+
   constructor(
     rawDeps: {
       acquire: (input: any) => Promise<{ ok: boolean; session?: any; detail: string }>;
