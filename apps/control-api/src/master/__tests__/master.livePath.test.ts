@@ -427,6 +427,64 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(positions.size).toBe(0);
   });
 
+  it('SL attach fail reports capital_fail_close_unproven when DELETE leaves deal open', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    process.env.MASTER_CONFIRM_FAST = 'true';
+    const positions = new Map<
+      string,
+      {
+        deal_id: string;
+        epic: string;
+        direction: 'BUY' | 'SELL';
+        size: number;
+        open_level: number;
+        stop_level?: number;
+      }
+    >();
+    const session = { id: 's-unproven' };
+    let createN = 0;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({ ok: true, session, detail: 'ok' }),
+      quote: async (_s, epic) => ({ bid: 4410, ask: 4410.4, mid: 4410.2, epic, raw_ok: true }),
+      list: async () => ({ ok: true, positions: [...positions.values()], detail: '' }),
+      create: async (_s, input) => {
+        createN += 1;
+        if (createN === 1 && input.stopLevel != null) {
+          return { ok: false, detail: 'MINIMUM_STOP_DISTANCE' };
+        }
+        return { ok: true, deal_reference: `ref-unproven-${createN}`, detail: 'opened_bare' };
+      },
+      confirm: async (_s, ref) => {
+        const deal_id = `deal-${ref}`;
+        if (!positions.has(deal_id)) {
+          positions.set(deal_id, {
+            deal_id,
+            epic: 'GOLD',
+            direction: 'BUY',
+            size: 0.1,
+            open_level: 4410.4,
+          });
+        }
+        return { ok: true, deal_id, fill_level: 4410.4, detail: 'ok' };
+      },
+      modify: async () => ({ ok: false, detail: 'MINIMUM_STOP_DISTANCE' }),
+      // DELETE pretends OK but does not remove — no deal_reference so confirm cannot invent a fill
+      close: async () => ({ ok: true, detail: 'submitted_noop' }),
+    });
+    await broker.connect();
+    const placed = await broker.placeOrder({
+      intent_id: 'sl-attach-unproven-close',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      stop_level: 4409.9,
+    });
+    expect(placed.ok).toBe(false);
+    expect(placed.detail).toMatch(/capital_fail_close_unproven/);
+    expect(positions.size).toBe(1);
+  });
+
   it('confirm reject fail-closes same-size ghost fill', async () => {
     process.env.MASTER_LIVE_ENABLED = 'true';
     const positions = new Map<

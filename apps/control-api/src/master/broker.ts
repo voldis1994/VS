@@ -823,6 +823,37 @@ export class CapitalBroker implements MasterBroker {
   }
 
   /**
+   * Fail-close with confirm + list-flat proof (never raw DELETE alone).
+   * If the deal is still open after close, detail includes capital_fail_close_unproven.
+   */
+  private async failCloseOpenResult(
+    position_id: string,
+    order_id: string | null,
+    reason: string
+  ): Promise<PlaceOrderResult> {
+    const closed = await this.closePosition(position_id);
+    let detail = reason;
+    if (!closed.ok) {
+      const listed = await this.listOpenPositions();
+      const still =
+        listed.ok &&
+        listed.positions.some((p) => p.position_id === position_id);
+      detail = still
+        ? `${reason}:capital_fail_close_unproven:${closed.detail}`
+        : `${reason}:close=${closed.detail}`;
+    }
+    return {
+      ok: false,
+      order_id,
+      position_id: null,
+      fill_price: null,
+      fill_size: null,
+      detail,
+      paper: false,
+    };
+  }
+
+  /**
    * Open with stopLevel; on min-distance/ATTACHED reject open bare then attach via modify
    * (VS-System- pattern). Never treat dealReference alone as a fill.
    */
@@ -998,16 +1029,11 @@ export class CapitalBroker implements MasterBroker {
               (Math.abs(p.size - orderSize) < 1e-6 || Math.abs(p.size - input.size) < 1e-6)
           );
           if (ghost) {
-            await this.deps.close(this.session, ghost.position_id);
-            return {
-              ok: false,
-              order_id: opened.deal_reference || null,
-              position_id: null,
-              fill_price: null,
-              fill_size: null,
-              detail: `capital_rejected_fail_closed:${conf.detail}`,
-              paper: false,
-            };
+            return await this.failCloseOpenResult(
+              ghost.position_id,
+              opened.deal_reference || null,
+              `capital_rejected_fail_closed:${conf.detail}`
+            );
           }
           return {
             ok: false,
@@ -1044,22 +1070,17 @@ export class CapitalBroker implements MasterBroker {
         (p) => p.side === input.side && Math.abs(p.size - orderSize) < 1e-6
       );
       if (ghost) {
-        await this.deps.close(this.session, ghost.position_id);
-        const detail = `capital_unconfirmed_fail_closed:${opened.detail}`;
+        const fail = await this.failCloseOpenResult(
+          ghost.position_id,
+          opened.deal_reference || null,
+          `capital_unconfirmed_fail_closed:${opened.detail}`
+        );
         logMasterError({
           module: 'capital.placeOrder',
           error_type: 'ACK_TIMEOUT',
-          message: detail,
+          message: fail.detail,
         });
-        return {
-          ok: false,
-          order_id: opened.deal_reference || null,
-          position_id: null,
-          fill_price: null,
-          fill_size: null,
-          detail,
-          paper: false,
-        };
+        return fail;
       }
       const detail = `capital_unconfirmed:${opened.detail}`;
       logMasterError({
@@ -1126,32 +1147,22 @@ export class CapitalBroker implements MasterBroker {
           if (!isCapitalStopLevelReject(mod.detail || '')) break;
         }
         if (!attached) {
-          await this.deps.close(this.session, position_id);
-          return {
-            ok: false,
-            order_id: opened.deal_reference || null,
-            position_id: null,
-            fill_price: null,
-            fill_size: null,
-            detail: tpMissing && alreadyProtected
+          return await this.failCloseOpenResult(
+            position_id,
+            opened.deal_reference || null,
+            tpMissing && alreadyProtected
               ? 'CAPITAL_TP_ATTACH_FAILED'
-              : 'CAPITAL_SL_ATTACH_FAILED',
-            paper: false,
-          };
+              : 'CAPITAL_SL_ATTACH_FAILED'
+          );
         }
       }
     } else if (needAttach && position_id) {
       // Bare-open path without stop_level in input — still fail-close naked
-      await this.deps.close(this.session, position_id);
-      return {
-        ok: false,
-        order_id: opened.deal_reference || null,
-        position_id: null,
-        fill_price: null,
-        fill_size: null,
-        detail: 'CAPITAL_SL_ATTACH_FAILED',
-        paper: false,
-      };
+      return await this.failCloseOpenResult(
+        position_id,
+        opened.deal_reference || null,
+        'CAPITAL_SL_ATTACH_FAILED'
+      );
     }
 
     const listedFinal = await this.listOpenPositions(input.epic);

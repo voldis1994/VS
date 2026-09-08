@@ -210,7 +210,12 @@ export class Mt4BridgeSimulator {
   }
 
   private handle(payload: any, id: string) {
-    if (this.processedIds.has(id)) return;
+    // Durable ACK on disk ⇒ already executed (mirrors EA FileIsExist(ack_*) after restart)
+    const ackPath = join(this.root, 'acks', `ack_${id}.json`);
+    if (existsSync(ackPath) || this.processedIds.has(id)) {
+      this.processedIds.add(id);
+      return;
+    }
     const action = String(payload.action || '').toUpperCase();
     if (action === 'OPEN') {
       const side = String(payload.side || 'BUY').toUpperCase() === 'SELL' ? 'SELL' : 'BUY';

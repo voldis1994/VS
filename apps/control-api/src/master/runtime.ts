@@ -1590,6 +1590,7 @@ class MasterRuntime {
         // Ticket live on broker + journal wants SL → same attach-or-fail as live OPEN
         // (soft safety_sl is not a substitute for intended levels / TP).
         const onBroker = status != null;
+        let rowAttached = false;
         if (onBroker && wantSl != null) {
           const guard = await this.broker.ensureProtectiveLevelsOrFail({
             position_id: row.ticket,
@@ -1607,24 +1608,30 @@ class MasterRuntime {
               .filter(Boolean)
               .join(';')
               .slice(0, 400);
-            continue;
+            // Close may have failed — if ticket still live, register with intended_*
+            // so naked recovery / sync can retry structure levels (not soft-only adopt).
+            const listed = await this.broker.listOpenPositions(row.epic || this.epic);
+            const stillLive =
+              listed.ok &&
+              listed.positions.some((p) => p.position_id === row.ticket);
+            if (!stillLive) continue;
+          } else {
+            attachOk += 1;
+            rowAttached = true;
           }
-          attachOk += 1;
         }
         // Only seed local SL/TP when broker already shows them (or attach just proved).
         // Never paint journal intent as chart truth on a naked/missing ticket.
-        const provedSl =
-          onBroker && wantSl != null
-            ? wantSl
-            : status?.stop_level != null && Number.isFinite(status.stop_level)
-              ? Number(status.stop_level)
-              : null;
-        const provedTp =
-          onBroker && wantTp != null && wantSl != null
-            ? wantTp
-            : status?.profit_level != null && Number.isFinite(status.profit_level)
-              ? Number(status.profit_level)
-              : null;
+        const provedSl = rowAttached
+          ? wantSl
+          : status?.stop_level != null && Number.isFinite(status.stop_level)
+            ? Number(status.stop_level)
+            : null;
+        const provedTp = rowAttached
+          ? wantTp
+          : status?.profit_level != null && Number.isFinite(status.profit_level)
+            ? Number(status.profit_level)
+            : null;
         this.positions.register({
           position_id: row.ticket,
           opportunity_id: recoverId,

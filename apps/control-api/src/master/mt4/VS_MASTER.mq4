@@ -338,10 +338,15 @@ void ProcessCommands()
       string json = FileReadText(rel);
       string id = JsonGetStr(json, "id");
       if(StringLen(id) == 0) id = name;
+      // Durable ACK on disk ⇒ already executed (survives EA restart; RAM id alone does not)
+      string ackPath = JoinPath(JoinPath(g_root, "acks"), "ack_" + id + ".json");
+      bool alreadyAcked = FileIsExist(ackPath);
       // Duplicate leftover after successful run — delete without OrderSend again
-      if(StringLen(g_last_processed_command_id) > 0 && id == g_last_processed_command_id)
+      if(alreadyAcked || (StringLen(g_last_processed_command_id) > 0 && id == g_last_processed_command_id))
       {
          FileDelete(rel);
+         if(alreadyAcked && StringLen(g_last_processed_command_id) == 0)
+            g_last_processed_command_id = id;
       }
       else
       {

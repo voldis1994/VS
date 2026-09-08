@@ -280,8 +280,55 @@ describe('VS MASTER MT4 file bridge', () => {
   it('EA source includes command-id idempotency (Reader g_last_processed)', () => {
     const ea = readFileSync(join(__dirname, '../mt4/VS_MASTER.mq4'), 'utf8');
     expect(ea).toMatch(/g_last_processed_command_id/);
+    expect(ea).toMatch(/FileIsExist\(ackPath\)/);
     expect(ea).toMatch(/MagicNumber = 50001/);
     expect(ea).toMatch(/JsonGetNum\(json, "lot"\)/);
+  });
+
+  it('leftover cmd with existing ACK does not re-OPEN after RAM clear', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'vs-mt4-ack-idem-'));
+    const sim = new Mt4BridgeSimulator(root);
+    sim.keepCommandsAfterAck = true;
+    sim.setQuote(4400, 4400.4);
+    sim.start(30);
+    const broker = new Mt4FileBroker(root);
+    await broker.connect();
+    try {
+      const placed = await broker.placeOrder({
+        intent_id: 'ackidemintent0000000000001',
+        epic: 'XAUUSD',
+        side: 'BUY',
+        size: 0.02,
+        stop_level: 4390,
+        profit_level: 4420,
+      });
+      expect(placed.ok).toBe(true);
+      const before = await broker.listOpenPositions('XAUUSD');
+      expect(before.positions.length).toBe(1);
+      // Re-plant leftover cmd + keep ACK; clear in-memory idempotency (EA restart)
+      const cmdId = placed.order_id!;
+      writeFileSync(
+        join(root, 'commands', `cmd_${cmdId}.json`),
+        JSON.stringify({
+          id: cmdId,
+          action: 'OPEN',
+          side: 'BUY',
+          lot: 0.02,
+          symbol: 'XAUUSD',
+          sl: 4390,
+          tp: 4420,
+          magic: 50001,
+        }) + '\n'
+      );
+      expect(existsSync(join(root, 'acks', `ack_${cmdId}.json`))).toBe(true);
+      (sim as unknown as { processedIds: Set<string> }).processedIds.clear();
+      await new Promise((r) => setTimeout(r, 120));
+      const after = await broker.listOpenPositions('XAUUSD');
+      expect(after.positions.length).toBe(1);
+      expect(after.positions[0]!.position_id).toBe(before.positions[0]!.position_id);
+    } finally {
+      sim.stop();
+    }
   });
 
   it('partial CLOSE refuses when before-size snapshot unavailable', async () => {
