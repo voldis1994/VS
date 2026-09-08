@@ -1167,7 +1167,8 @@ async function robotCycle(s: Internal) {
       try {
         s.multiFeed = await readMultiFeedPrice(s.epic, {
           anchorMid: quote.mid,
-          connectionId: capitalPoolId,
+          // DB connection id for credential/sender lookup (pool remapped inside getCapitalSession)
+          connectionId: s.connection_id,
         });
       } catch {
         /* keep previous multiFeed snapshot */

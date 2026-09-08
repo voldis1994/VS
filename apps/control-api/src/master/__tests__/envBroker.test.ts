@@ -110,4 +110,19 @@ describe('VS MASTER env broker resolve', () => {
     process.env.MASTER_OWNS_PIPELINE = 'false';
     expect(deskCapitalPoolConnectionId(55)).toBe(55);
   });
+
+  it('owns-pipeline pool remap keeps DB id distinct from pool id (creds vs CST)', () => {
+    snap();
+    delete process.env.MASTER_CAPITAL_CONNECTION_ID;
+    masterRuntime.owns_pipeline_pref = null;
+    process.env.MASTER_OWNS_PIPELINE = 'true';
+    const dbId = 42;
+    const poolId = deskCapitalPoolConnectionId(dbId);
+    expect(poolId).toBe(900001);
+    expect(poolId).not.toBe(dbId);
+    // Same login lock as createCapitalBroker / env MASTER
+    expect(sharedLoginLockForConnection(poolId)).toBe(
+      sharedLoginLockForConnection(masterCapitalConnectionId())
+    );
+  });
 });

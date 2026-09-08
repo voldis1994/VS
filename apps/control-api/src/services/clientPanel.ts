@@ -20,6 +20,7 @@ import {
   acquireCapitalSession,
   listCapitalOpenPositions,
 } from './capitalCom.js';
+import { deskCapitalPoolConnectionId } from '../master/deskBridge.js';
 import { decrypt } from '../security/encryption.js';
 
 export type ClientMarket = {
@@ -280,7 +281,7 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
           apiKey: creds.api_key || '',
           identifier: String(conn.rows[0].identifier || '').trim(),
           password: creds.password || '',
-          connectionId: account.connection_id,
+          connectionId: deskCapitalPoolConnectionId(account.connection_id),
           capitalAccountId: (accExt.rows[0]?.external_account_id as string | null) || null,
         });
         if (opened.ok) {

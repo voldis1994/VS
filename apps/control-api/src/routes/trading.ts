@@ -4,6 +4,7 @@ import { decrypt } from '../security/encryption.js';
 import { logAudit } from '../services/audit.js';
 import { getInstrumentById } from '../config/instruments.js';
 import { fetchAllCapitalMarkets, acquireCapitalSession, createCapitalPosition } from '../services/capitalCom.js';
+import { deskCapitalPoolConnectionId } from '../master/deskBridge.js';
 
 export async function ensureBrokerAccount(connectionId: number, displayName: string): Promise<number> {
   const existing = await pool.query(
@@ -234,7 +235,7 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
         apiKey,
         identifier,
         password,
-        connectionId: conn.connection_id,
+        connectionId: deskCapitalPoolConnectionId(conn.connection_id),
       });
       if (!opened.ok) {
         return reply.code(400).send({ error: opened.result.detail, message: opened.result.detail });
@@ -539,7 +540,7 @@ export async function registerTradingRoutes(app: FastifyInstance): Promise<void>
         apiKey,
         identifier,
         password,
-        connectionId: conn.connection_id,
+        connectionId: deskCapitalPoolConnectionId(conn.connection_id),
         capitalAccountId: conn.external_account_id,
       });
       if (!opened.ok) {

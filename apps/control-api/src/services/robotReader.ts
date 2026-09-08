@@ -1,5 +1,6 @@
 import { pool } from '../db/pool.js';
 import { decrypt } from '../security/encryption.js';
+import { deskCapitalPoolConnectionId } from '../master/deskBridge.js';
 import {
   CapitalSession,
   acquireCapitalSession,
@@ -162,13 +163,13 @@ async function getCapitalSession(connectionId: number): Promise<
     return { ok: false, detail: 'Missing Capital.com credentials' };
   }
 
-  // Shared pool with Robot Desk — isolated per broker connection (multi-client safe)
+  // Shared pool with Robot Desk / MASTER — remap when owns-pipeline (DB id stays for creds)
   const opened = await acquireCapitalSession({
     environment: conn.environment,
     apiKey,
     identifier,
     password,
-    connectionId,
+    connectionId: deskCapitalPoolConnectionId(connectionId),
   });
   if (!opened.ok) return { ok: false, detail: opened.result.detail };
   return { ok: true, session: opened.session };
