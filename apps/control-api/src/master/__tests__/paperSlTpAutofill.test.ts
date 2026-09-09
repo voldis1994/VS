@@ -1,7 +1,12 @@
+import { mkdtempSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { describe, expect, it } from 'vitest';
 import { PaperBroker } from '../broker.js';
+import { DEFAULT_MASTER_CONFIG, MasterPipeline } from '../pipeline.js';
 import { PositionManager } from '../positionManager.js';
 import { syncPositionsWithBroker } from '../positionSync.js';
+import { masterRuntime } from '../runtime.js';
 
 describe('PaperBroker VS-System SL/TP auto-fill on setQuote', () => {
   it('auto-fills STOP_HIT on quote without manageTick', async () => {
@@ -404,5 +409,147 @@ describe('PaperBroker VS-System SL/TP auto-fill on setQuote', () => {
     expect(outcome.pnl).toBeLessThan(0);
     if (prev === undefined) delete process.env.MASTER_COMMISSION_PER_LOT;
     else process.env.MASTER_COMMISSION_PER_LOT = prev;
+  });
+});
+
+describe('Paper full tick manage-before-sync after setQuote auto-fill', () => {
+  it('full tick() returns exits≥1 with STOP_HIT (not sync-only ghost)', async () => {
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = mkdtempSync(
+      join(tmpdir(), 'vs-paper-tick-manage-sync-')
+    );
+    try {
+      masterRuntime.stop();
+      masterRuntime.pipeline = new MasterPipeline('PAPER');
+      masterRuntime.positions = new PositionManager();
+      masterRuntime.last_loss_ms = 0;
+      masterRuntime.reject_until_ms = 0;
+      (masterRuntime as unknown as { inflight_until_ms: number }).inflight_until_ms = 0;
+      (masterRuntime as unknown as { post_exit_until_ms: number }).post_exit_until_ms = 0;
+      masterRuntime.account = {
+        equity: 10_000,
+        balance: 10_000,
+        currency: 'GBP',
+        open_positions: 0,
+        daily_pnl: 0,
+        daily_pnl_day: new Date().toISOString().slice(0, 10),
+        day_start_equity: 10_000,
+        peak_equity: 10_000,
+        consecutive_losses: 0,
+      };
+      masterRuntime.cfg = {
+        ...DEFAULT_MASTER_CONFIG,
+        mode: 'PAPER',
+        min_score: 0.99,
+        block_off_hours: false,
+        block_high_impact_news: false,
+        max_relative_volatility: 100,
+        max_relative_spread: 100,
+        cooldown_ms_after_loss: 0,
+        post_exit_cooldown_ms: 0,
+        max_daily_loss_pct: 0.99,
+        max_drawdown_pct: 0.99,
+        time_stop_max_bars: 0,
+        max_hold_ms: 86_400_000,
+      };
+      const broker = masterRuntime.ensurePaperBroker();
+      masterRuntime.running = true;
+      masterRuntime.entries_armed = false;
+
+      const entry = 4400;
+      const bars = Array.from({ length: 40 }, (_, i) => {
+        const o = entry + i * 0.1;
+        return {
+          open: o,
+          high: o + 0.5,
+          low: o - 0.5,
+          close: o + 0.05,
+          ts_ms: Date.UTC(2026, 8, 9, 12, i),
+        };
+      });
+      broker.setQuote({
+        bid: entry,
+        ask: entry + 0.2,
+        mid: entry + 0.1,
+        spread: 0.2,
+        epic: 'GOLD',
+        ts_ms: Date.now(),
+      });
+      const placed = await broker.placeOrder({
+        intent_id: 'paper-tick-manage-before-sync-a',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 1,
+        stop_level: entry - 2,
+        profit_level: entry + 20,
+      });
+      expect(placed.ok).toBe(true);
+      // Register local open matching venue (decision stub sufficient for manage)
+      const analysis = {
+        regime: 'TREND' as const,
+        market_state: 't',
+        momentum_score: 0.5,
+        momentum_dir: 'UP' as const,
+        trend_dir: 'UP' as const,
+        trend_strength: 0.5,
+        structure_bias: 'BULLISH' as const,
+        swing_high: entry + 5,
+        swing_low: entry - 5,
+        buy_pressure: 0.6,
+        sell_pressure: 0.4,
+        behavior_bull: 0.5,
+        behavior_bear: 0.5,
+        impact_score: 0.5,
+        context_quality: 0.8,
+        volatility: 0.001,
+        atr: 1,
+        data_quality: 0.9,
+        session: 'LONDON' as const,
+      };
+      masterRuntime.positions.register({
+        position_id: placed.position_id!,
+        opportunity_id: 'opp-tick-manage-before-sync',
+        intent_id: 'paper-tick-manage-before-sync-a',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 1,
+        entry: placed.fill_price!,
+        stop_loss: entry - 2,
+        take_profit: entry + 20,
+        decision: {
+          decision_id: 'd-tick-mbs',
+          kind: 'BUY',
+          side: 'BUY',
+          score: 0.7,
+          block_reason: null,
+          buy: null as never,
+          sell: null as never,
+          analysis,
+          expectancy: null,
+        },
+      });
+      expect(masterRuntime.positions.count()).toBe(1);
+
+      // SL cross on tick quote → setQuote auto-fills, then manage-before-sync
+      const crashQuote = {
+        bid: entry - 3,
+        ask: entry - 2.8,
+        mid: entry - 2.9,
+        spread: 0.2,
+        epic: 'GOLD',
+        ts_ms: Date.now(),
+      };
+      const result = await masterRuntime.tick(bars, crashQuote);
+      expect(result.exits).toBeGreaterThanOrEqual(1);
+      expect(
+        result.exit_reasons.some((r) => /STOP_HIT/.test(String(r)))
+      ).toBe(true);
+      expect(masterRuntime.positions.count()).toBe(0);
+      expect(String(masterRuntime.last_exit_reason || '')).toMatch(/STOP_HIT/);
+    } finally {
+      masterRuntime.stop();
+      if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prev;
+    }
   });
 });
