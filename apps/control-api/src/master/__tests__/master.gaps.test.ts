@@ -5291,3 +5291,101 @@ describe('replay exit order vs live manageTick', () => {
     expect(src).toMatch(/updateSpreadModel/);
   });
 });
+
+describe('pipeline_stages honesty — position + journal never forged green', () => {
+  it('position_manager red until manageTick; journal red without evidence or persist', async () => {
+    const prevDir = process.env.MASTER_STATE_DIR;
+    const dir = mkdtempSync(join(tmpdir(), 'vs-stage-honest-'));
+    process.env.MASTER_STATE_DIR = dir;
+    process.env.MASTER_GATES_DIR = dir;
+
+    const prevManage = (masterRuntime as unknown as { last_manage_tick_ms: number })
+      .last_manage_tick_ms;
+    const prevPersist = masterRuntime.persist_ok;
+    const prevPersistErr = masterRuntime.last_persist_error;
+    const prevPositions = masterRuntime.positions;
+    const prevBroker = masterRuntime.broker;
+    const prevPipe = masterRuntime.pipeline;
+
+    try {
+      (masterRuntime as unknown as { last_manage_tick_ms: number }).last_manage_tick_ms = 0;
+      masterRuntime.persist_ok = true;
+      masterRuntime.last_persist_error = null;
+      masterRuntime.positions = new PositionManager();
+      masterRuntime.broker = null;
+      masterRuntime.pipeline = new MasterPipeline('PAPER');
+
+      const cold = masterRuntime.status().pipeline_stages;
+      expect(cold.position_manager.ok).toBe(false);
+      expect(cold.position_manager.detail).toMatch(/manage never ran/);
+      expect(cold.journal_performance.ok).toBe(false);
+      expect(cold.journal_performance.detail).toMatch(/no journal/);
+
+      // Holding without manage evidence stays red
+      masterRuntime.positions.register({
+        position_id: 'stage-pos-1',
+        opportunity_id: 'stage-opp-1',
+        intent_id: 'stage-intent-1',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 0.1,
+        entry: 4400,
+        stop_loss: 4390,
+        take_profit: 4420,
+        decision: {
+          decision_id: 'd1',
+          kind: 'BUY',
+          side: 'BUY',
+          score: 0.8,
+          block_reason: null,
+          buy: { score: 0.8 } as never,
+          sell: { score: 0.2 } as never,
+          analysis: baseAnalysis(),
+          expectancy: null,
+        },
+      });
+      const holding = masterRuntime.status().pipeline_stages;
+      expect(holding.position_manager.ok).toBe(false);
+      expect(holding.position_manager.detail).toMatch(/open=1/);
+
+      // Mark manageTick evidence → green while holding
+      (masterRuntime as unknown as { last_manage_tick_ms: number }).last_manage_tick_ms =
+        Date.now();
+      const managed = masterRuntime.status().pipeline_stages;
+      expect(managed.position_manager.ok).toBe(true);
+      expect(managed.position_manager.detail).toMatch(/managed \d+s ago/);
+
+      // Persist fail → journal stage red even with KPI trades
+      const { logDecisionEvent } = await import('../decisionJournal.js');
+      logDecisionEvent({
+        kind: 'WAIT',
+        epic: 'GOLD',
+        mode: 'PAPER',
+        opportunity_id: 'stage-opp-1',
+        buy_score: 0.1,
+        sell_score: 0.1,
+      });
+      const withJournal = masterRuntime.status().pipeline_stages;
+      expect(withJournal.journal_performance.ok).toBe(true);
+      expect(withJournal.journal_performance.detail).toMatch(/decisions/);
+
+      masterRuntime.persist_ok = false;
+      masterRuntime.last_persist_error = 'disk_full_test';
+      const persistFail = masterRuntime.status().pipeline_stages;
+      expect(persistFail.journal_performance.ok).toBe(false);
+      expect(persistFail.journal_performance.detail).toMatch(/persist fail/);
+    } finally {
+      (masterRuntime as unknown as { last_manage_tick_ms: number }).last_manage_tick_ms =
+        prevManage;
+      masterRuntime.persist_ok = prevPersist;
+      masterRuntime.last_persist_error = prevPersistErr;
+      masterRuntime.positions = prevPositions;
+      masterRuntime.broker = prevBroker;
+      masterRuntime.pipeline = prevPipe;
+      if (prevDir === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prevDir;
+      if (prevDir === undefined) delete process.env.MASTER_GATES_DIR;
+      else process.env.MASTER_GATES_DIR = prevDir;
+    }
+  });
+});
