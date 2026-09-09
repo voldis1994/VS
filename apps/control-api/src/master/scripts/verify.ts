@@ -847,7 +847,7 @@ async function main() {
       runtimeBody.includes('seedPaperBrokerFromPositions') &&
       runtimeBody.includes('Flat book: still reseed PaperBroker equity') &&
       runtimeBody.includes(
-        'overwrites recovered equity with default £10k'
+        "overwrites recovered equity back to PaperBroker's default £10k"
       ) &&
       runtimeBody.includes('Always restore equity/balance from recovered account') &&
       readFileSync(
