@@ -5708,3 +5708,48 @@ describe('pipeline_stages honesty — analysis_regime never forged from hydrate'
     }
   });
 });
+
+describe('pipeline_stages honesty — execution never forged from hydrate', () => {
+  it('hydrated last_execution_detail without last_market keeps Stage·execution red', () => {
+    const prevExec = masterRuntime.last_execution_detail;
+    const prevMarket = masterRuntime.last_market;
+    const prevQuote = masterRuntime.last_quote;
+    const prevBroker = masterRuntime.broker;
+    try {
+      masterRuntime.last_quote = {
+        bid: 4400,
+        ask: 4400.4,
+        mid: 4400.2,
+        spread: 0.4,
+        epic: 'GOLD',
+        ts_ms: Date.now(),
+      };
+      masterRuntime.last_market = null;
+      masterRuntime.last_execution_detail = 'paper_fill';
+      const stages = masterRuntime.status().pipeline_stages;
+      expect(stages.execution.ok).toBe(false);
+      expect(stages.execution.detail).toMatch(/hydrated · paper_fill/);
+
+      masterRuntime.last_market = {
+        ok: true,
+        quality: 0.95,
+        reasons: [],
+        bars_in: 40,
+        bars_out: 40,
+      };
+      const live = masterRuntime.status().pipeline_stages;
+      expect(live.execution.ok).toBe(true);
+      expect(live.execution.detail).toBe('paper_fill');
+
+      masterRuntime.broker = null;
+      const noBroker = masterRuntime.status().pipeline_stages;
+      expect(noBroker.broker.ok).toBe(false);
+      expect(noBroker.broker.detail).toBe('none');
+    } finally {
+      masterRuntime.last_execution_detail = prevExec;
+      masterRuntime.last_market = prevMarket;
+      masterRuntime.last_quote = prevQuote;
+      masterRuntime.broker = prevBroker;
+    }
+  });
+});
