@@ -7,9 +7,10 @@ import {
   type MarketSetup,
   type StructureBook,
 } from '../services/marketSetup.js';
+import type { CapitalPriceCandle } from '../services/capitalCom.js';
 import type { Bar } from './types.js';
 
-export function barsToSetupCandles(bars: Bar[]) {
+export function barsToSetupCandles(bars: Bar[]): CapitalPriceCandle[] {
   return bars.map((b) => ({
     open: b.open,
     high: b.high,
@@ -25,10 +26,12 @@ export function barsToSetupCandles(bars: Bar[]) {
 /**
  * Advance sticky structure + setup from OHLC bars.
  * Call once per cycle so ARMED side is stable across ticks (desk rule).
+ * Optional hour candles restore desk 1h hour_bias (missing → UNKNOWN).
  */
 export function advanceMarketSetup(input: {
   bars: Bar[];
   mid?: number | null;
+  hours?: CapitalPriceCandle[] | Bar[] | null;
   prevStructure?: StructureBook | null;
   prevSetup?: MarketSetup | null;
 }): { structure: StructureBook; setup: MarketSetup } {
@@ -39,8 +42,28 @@ export function advanceMarketSetup(input: {
       setup: emptySetup(`need ≥20 bars · have ${minutes.length}`),
     };
   }
+  const hoursRaw = input.hours;
+  const hours: CapitalPriceCandle[] | null =
+    hoursRaw && hoursRaw.length
+      ? hoursRaw.map((h) => ({
+          open: h.open,
+          high: h.high,
+          low: h.low,
+          close: h.close,
+          snapshotTime:
+            'snapshotTime' in h &&
+            typeof (h as CapitalPriceCandle).snapshotTime === 'string'
+              ? (h as CapitalPriceCandle).snapshotTime
+              : 'ts_ms' in h &&
+                  (h as Bar).ts_ms != null &&
+                  Number.isFinite((h as Bar).ts_ms)
+                ? new Date((h as Bar).ts_ms!).toISOString()
+                : undefined,
+        }))
+      : null;
   const structure = buildStructure({
     minutes,
+    hours,
     mid: input.mid ?? null,
     prev: input.prevStructure ?? null,
   });

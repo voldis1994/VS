@@ -7,9 +7,12 @@ import { ExpectancyStore } from './expectancy.js';
 import { MasterJournal } from './journal.js';
 import { validateMarket, type MarketValidation } from './marketData.js';
 import { evaluateRisk } from './risk.js';
-import { advanceMarketSetup } from './setupDerive.js';
+import { advanceMarketSetup, barsToSetupCandles } from './setupDerive.js';
+import { resolveDeskEntryConfirm } from './deskEntryConfirm.js';
 import { DEFAULT_TRADING_HOURS } from './tradingHours.js';
 import { emptySetup, type MarketSetup, type StructureBook } from '../services/marketSetup.js';
+import type { CapitalPriceCandle } from '../services/capitalCom.js';
+import type { TenSecBar } from '../services/tenSecondOhlc.js';
 import type {
   AccountSnapshot,
   Bar,
@@ -41,6 +44,10 @@ export type PipelineInput = {
    * When omitted, pipeline advances sticky setup from bars each cycle.
    */
   market_setup?: MarketSetup | null;
+  /** Desk Capital 1h candles for structure hour_bias */
+  hour_bars?: CapitalPriceCandle[] | Bar[] | null;
+  /** Just-closed 10s bar for SETUP confirm / MOVE entry (desk path) */
+  closed_10s?: TenSecBar | null;
 };
 
 export type PipelineResult = {
@@ -51,6 +58,8 @@ export type PipelineResult = {
   ai: AiMeta;
   /** Sticky desk SETUP used for this cycle's decide gate */
   market_setup: MarketSetup;
+  /** Desk 10s SETUP/MOVE confirm used this cycle (null if none) */
+  desk_entry: import('./deskEntryConfirm.js').DeskEntryConfirm | null;
 };
 
 export class MasterPipeline {
@@ -69,6 +78,11 @@ export class MasterPipeline {
     return this.marketSetup;
   }
 
+  /** Sticky structure book (for desk MOVE confirm). */
+  getStructureBook(): StructureBook | null {
+    return this.structureBook;
+  }
+
   /** Reset sticky setup (tests / epic change). */
   resetMarketSetup() {
     this.structureBook = null;
@@ -85,21 +99,32 @@ export class MasterPipeline {
     });
 
     const setupBars = market.bars.length ? market.bars : input.bars;
+    const advanced = advanceMarketSetup({
+      bars: setupBars,
+      mid: input.quote.mid,
+      hours: input.hour_bars,
+      prevStructure: this.structureBook,
+      prevSetup:
+        input.market_setup !== undefined ? null : this.marketSetup,
+    });
+    this.structureBook = advanced.structure;
     let marketSetup: MarketSetup;
     if (input.market_setup !== undefined) {
       marketSetup = input.market_setup ?? emptySetup('override_null');
       this.marketSetup = marketSetup;
     } else {
-      const advanced = advanceMarketSetup({
-        bars: setupBars,
-        mid: input.quote.mid,
-        prevStructure: this.structureBook,
-        prevSetup: this.marketSetup,
-      });
-      this.structureBook = advanced.structure;
       this.marketSetup = advanced.setup;
       marketSetup = advanced.setup;
     }
+
+    const minutes = barsToSetupCandles(setupBars);
+    const deskEntry = resolveDeskEntryConfirm({
+      setup: marketSetup,
+      structure: this.structureBook,
+      closed_10s: input.closed_10s,
+      minutes,
+    });
+    const closed10sPresent = !!input.closed_10s;
 
     if (!market.ok || !market.quote) {
       const analysis = analyzeBars(
@@ -116,7 +141,9 @@ export class MasterPipeline {
         () => null,
         market.bars.length ? market.bars : input.bars,
         input.relative_spread,
-        marketSetup
+        marketSetup,
+        null,
+        { closed_10s_present: closed10sPresent }
       );
       decision.kind = 'BLOCK';
       decision.side = null;
@@ -150,6 +177,7 @@ export class MasterPipeline {
           decision_after_ai: 'BLOCK',
         },
         market_setup: marketSetup,
+        desk_entry: deskEntry,
       };
     }
 
@@ -157,6 +185,7 @@ export class MasterPipeline {
     analysis.data_quality = Math.min(analysis.data_quality, market.quality);
     // Desk SETUP gate only when require_armed_setup — paper demos still derive sticky
     // SETUP for status but must not starve fills on opposite ARMED from noisy bars.
+    // Desk 10s confirm/MOVE always considered when closed_10s is provided.
     let decision = decide(
       analysis,
       market.quote,
@@ -164,7 +193,9 @@ export class MasterPipeline {
       (k) => this.expectancy.lookup(k),
       market.bars,
       input.relative_spread,
-      input.cfg.require_armed_setup ? marketSetup : null
+      input.cfg.require_armed_setup ? marketSetup : null,
+      deskEntry,
+      { closed_10s_present: closed10sPresent }
     );
 
     const mode = input.cfg.ai_mode;
@@ -193,7 +224,15 @@ export class MasterPipeline {
       risk,
       executed: false,
     });
-    return { decision, risk, opportunity, market, ai: aiMeta, market_setup: marketSetup };
+    return {
+      decision,
+      risk,
+      opportunity,
+      market,
+      ai: aiMeta,
+      market_setup: marketSetup,
+      desk_entry: deskEntry,
+    };
   }
 
   claimIntent(intent_id: string): boolean {
