@@ -39,7 +39,33 @@ describe('multi-client isolation invariants', () => {
     expect(src).toMatch(/startRobotSession/);
     expect(src).toMatch(/mode: 'own_brain'/);
     expect(src).toMatch(/Does NOT subscribe to shared Market Core/);
+    expect(src).toMatch(/assertClientOwnBrainStartAllowed/);
+    expect(src).toMatch(/masterOwnsPipeline/);
     expect(src).not.toMatch(/\bactivateSubscription\b/);
+  });
+
+  it('refuses Client own-brain START while MASTER owns_pipeline', async () => {
+    const { assertClientOwnBrainStartAllowed } = await import('./clientPanel.js');
+    const { masterRuntime } = await import('../master/runtime.js');
+    const prevPref = masterRuntime.owns_pipeline_pref;
+    const prevEnv = process.env.MASTER_OWNS_PIPELINE;
+    try {
+      masterRuntime.owns_pipeline_pref = null;
+      delete process.env.MASTER_OWNS_PIPELINE;
+      expect(assertClientOwnBrainStartAllowed().ok).toBe(true);
+
+      masterRuntime.setOwnsPipeline(true);
+      const blocked = assertClientOwnBrainStartAllowed();
+      expect(blocked.ok).toBe(false);
+      if (!blocked.ok) expect(blocked.detail).toMatch(/owns_pipeline/);
+
+      masterRuntime.setOwnsPipeline(false);
+      expect(assertClientOwnBrainStartAllowed().ok).toBe(true);
+    } finally {
+      masterRuntime.owns_pipeline_pref = prevPref;
+      if (prevEnv === undefined) delete process.env.MASTER_OWNS_PIPELINE;
+      else process.env.MASTER_OWNS_PIPELINE = prevEnv;
+    }
   });
 
   it('own-brain status ignores Market Core heartbeat', () => {

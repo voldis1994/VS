@@ -20,7 +20,7 @@ import {
   acquireCapitalSession,
   listCapitalOpenPositions,
 } from './capitalCom.js';
-import { deskCapitalPoolConnectionId } from '../master/deskBridge.js';
+import { deskCapitalPoolConnectionId, masterOwnsPipeline } from '../master/deskBridge.js';
 import { decrypt } from '../security/encryption.js';
 
 export type ClientMarket = {
@@ -65,9 +65,33 @@ export type ClientPanelStatus = {
   last_seen_at: string | null;
   /** Human-readable reason for STARTING/ERROR */
   status_reason?: string | null;
+  /** True when VS MASTER owns the single pipeline — Client START must not dual-brain */
+  master_owns_pipeline: boolean;
+  /** Non-null when Client own-brain START is refused (MASTER owns) */
+  start_blocked_reason: string | null;
   /** @deprecated use connection_status */
   connection_ok: boolean;
 };
+
+/**
+ * Refuse Client Panel own-brain START while MASTER owns the pipeline —
+ * otherwise desk entry dual-brains beside MASTER decision→risk→exec.
+ */
+export function assertClientOwnBrainStartAllowed():
+  | { ok: true }
+  | { ok: false; detail: string } {
+  if (!masterOwnsPipeline()) return { ok: true };
+  return {
+    ok: false,
+    detail:
+      'Client own-brain START refused — MASTER owns_pipeline (single authoritative pipeline). Turn Owns OFF or use MASTER dashboard.',
+  };
+}
+
+export function clientStartBlockedReason(): string | null {
+  const gate = assertClientOwnBrainStartAllowed();
+  return gate.ok ? null : gate.detail;
+}
 
 /**
  * Per-client own-brain status.
@@ -354,6 +378,8 @@ export async function getClientPanelStatus(clientId: number): Promise<ClientPane
     account_id: account?.account_id ?? null,
     live_trade,
     last_seen_at: c.last_seen_at ? new Date(c.last_seen_at).toISOString() : null,
+    master_owns_pipeline: masterOwnsPipeline(),
+    start_blocked_reason: clientStartBlockedReason(),
   };
 }
 
@@ -389,8 +415,12 @@ export async function saveClientConfig(
 /**
  * Client START = this client's own desk brain (structure → setup → entry → best outcome).
  * Does NOT subscribe to shared Market Core fan-out — each client trades alone.
+ * Refused while MASTER owns_pipeline (single authoritative pipeline).
  */
 export async function startClientRobot(clientId: number): Promise<ClientPanelStatus> {
+  const gate = assertClientOwnBrainStartAllowed();
+  if (!gate.ok) throw new Error(gate.detail);
+
   const { rows } = await pool.query(
     `SELECT panel_epic, panel_display_name, panel_lot_size, enabled, access_enabled
      FROM clients WHERE id = $1`,
