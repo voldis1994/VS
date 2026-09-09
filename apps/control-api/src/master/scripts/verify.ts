@@ -1575,6 +1575,7 @@ async function main() {
       manageOnlyMtmEquityApi &&
       manageOnlyAccountFieldsApi &&
       closePathAccountSnapshotApi &&
+      paperQuoteEpicStrictApi &&
       livePaperDeskConfirm &&
       setupArmedApi &&
       setupArmedUi &&
