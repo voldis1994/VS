@@ -152,6 +152,14 @@ type MasterStatus = {
     confirm: number;
   } | null;
   setup_gate_armed?: boolean;
+  desk_entry?: {
+    side: 'BUY' | 'SELL';
+    source: 'setup' | 'move';
+    reason: string;
+    setup_kind: string;
+    playbook: string | null;
+  } | null;
+  hour_bias?: 'UP' | 'DOWN' | 'FLAT' | 'UNKNOWN' | null;
   entry_gates?: {
     news_cfg_on: boolean;
     news_blocks: boolean;
@@ -451,7 +459,7 @@ export function MasterPage() {
       (status?.quote?.age_ms ?? 0) >
         (status?.quote?.stale_quote_ms ?? 15_000));
 
-  const cards: Array<{ k: string; v: string; bad?: boolean; ok?: boolean }> = status
+  const cards: Array<{ k: string; v: string; bad?: boolean; ok?: boolean; warn?: boolean }> = status
     ? [
         { k: 'Mode', v: status.mode },
         { k: 'Epic', v: status.epic || '—' },
@@ -641,6 +649,21 @@ export function MasterPage() {
             !!status.setup_gate_armed &&
             (!status.market_setup || status.market_setup.status !== 'ARMED'),
           ok: !!status.market_setup && status.market_setup.status === 'ARMED',
+        },
+        {
+          k: 'Desk entry',
+          v: status.desk_entry
+            ? `${status.desk_entry.source} · ${status.desk_entry.side}${
+                status.desk_entry.setup_kind ? ` · ${status.desk_entry.setup_kind}` : ''
+              }`
+            : '—',
+          ok: !!status.desk_entry,
+        },
+        {
+          k: 'Hour bias',
+          v: status.hour_bias || '—',
+          ok: status.hour_bias === 'UP' || status.hour_bias === 'DOWN',
+          warn: status.hour_bias === 'UNKNOWN',
         },
         {
           k: 'EV gate',
@@ -1481,7 +1504,13 @@ export function MasterPage() {
                 marginTop: 6,
                 fontWeight: 600,
                 wordBreak: 'break-word',
-                color: c.bad ? 'var(--bad, #c44)' : c.ok ? 'var(--ok, #2a7)' : undefined,
+                color: c.bad
+                  ? 'var(--bad, #c44)'
+                  : c.ok
+                    ? 'var(--ok, #2a7)'
+                    : c.warn
+                      ? 'var(--warn, #b8860b)'
+                      : undefined,
               }}
             >
               {c.v}

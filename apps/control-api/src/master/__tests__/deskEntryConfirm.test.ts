@@ -89,6 +89,9 @@ describe('desk hour bias + 10s entry confirm', () => {
     expect(masterRuntime.pipeline.getStructureBook()?.hour_bias).toBe('UNKNOWN');
     await masterRuntime.tick(bars, quoteFrom(bars.at(-1)!), { hour_bars: hours });
     expect(masterRuntime.pipeline.getStructureBook()?.hour_bias).toBe('UP');
+    const st = masterRuntime.status();
+    expect(st.hour_bias).toBe('UP');
+    expect('desk_entry' in st).toBe(true);
     masterRuntime.stop();
   });
 
@@ -189,7 +192,6 @@ describe('desk hour bias + 10s entry confirm', () => {
 
   it('live-feed justClosed → closed_10s arms setup_confirm_pending; absent stays open', async () => {
     const { closed10sFromJustClosed, LiveBarBuilder } = await import('../liveFeed.js');
-    const { masterRuntime } = await import('../runtime.js');
     const b = new LiveBarBuilder(1000, 40);
     b.seedAround(4400, 30);
     const t0 = 5_000_000;
@@ -206,29 +208,36 @@ describe('desk hour bias + 10s entry confirm', () => {
     });
     expect(flatClosed).not.toBeNull();
 
-    masterRuntime.stop();
-    masterRuntime.ensurePaperBroker();
-    masterRuntime.setMode('PAPER');
-    masterRuntime.setEpic('GOLD');
-    await masterRuntime.start({ skip_market_feed: true });
-    // After start/hydrate — force armed gate (PAPER default is off)
-    masterRuntime.cfg = {
-      ...masterRuntime.cfg,
-      mode: 'PAPER',
+    // Use local pipeline (not shared masterRuntime) — vitest workers race the singleton
+    const pipe = new MasterPipeline('PAPER');
+    const bars = pushed.bars;
+    const q = quoteFrom(bars.at(-1)!);
+    const cfg = {
+      ...DEFAULT_MASTER_CONFIG,
+      mode: 'PAPER' as const,
       min_score: 0.25,
       require_armed_setup: true,
       block_off_hours: false,
       block_high_impact_news: false,
     };
-    const bars = pushed.bars;
-    const q = quoteFrom(bars.at(-1)!);
-    // Without closed_10s: armed gate uses setup_none path (not confirm pending)
-    const noClose = await masterRuntime.tick(bars, q, { closed_10s: null });
+    const noClose = await pipe.runCycle({
+      bars,
+      quote: q,
+      account,
+      instrument: GOLD_SPEC,
+      cfg,
+      closed_10s: null,
+    });
     expect(noClose.decision.block_reason).not.toBe('setup_confirm_pending');
-    // With mapped justClosed: same bars/quote → setup_confirm_pending when no MOVE/SETUP confirm
-    const withClose = await masterRuntime.tick(bars, q, { closed_10s: flatClosed });
+    const withClose = await pipe.runCycle({
+      bars,
+      quote: q,
+      account,
+      instrument: GOLD_SPEC,
+      cfg,
+      closed_10s: flatClosed,
+    });
     expect(withClose.decision.kind).toBe('WAIT');
     expect(withClose.decision.block_reason).toBe('setup_confirm_pending');
-    masterRuntime.stop();
   });
 });
