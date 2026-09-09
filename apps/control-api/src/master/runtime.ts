@@ -343,6 +343,10 @@ export type MasterStatus = {
     opportunity_id: string | null;
     buy_score?: number;
     sell_score?: number;
+    desk_entry_source?: 'setup' | 'move' | null;
+    desk_entry_side?: 'BUY' | 'SELL' | null;
+    hour_bias?: 'UP' | 'DOWN' | 'FLAT' | 'UNKNOWN' | null;
+    closed_10s_present?: boolean | null;
   }>;
   recent_trades: Array<{
     ts: string;
@@ -3282,13 +3286,17 @@ class MasterRuntime {
       kind: cycle.decision.kind,
       epic: this.epic,
       mode: this.cfg.mode,
-        opportunity_id: cycle.opportunity.id,
+      opportunity_id: cycle.opportunity.id,
       buy_score: cycle.decision.buy?.score,
       sell_score: cycle.decision.sell?.score,
       block_reason: cycle.decision.block_reason,
       executed,
       execution_detail,
       cycle_ms: Date.now() - t0,
+      desk_entry_source: cycle.desk_entry?.source ?? null,
+      desk_entry_side: cycle.desk_entry?.side ?? null,
+      hour_bias: this.last_hour_bias,
+      closed_10s_present: this.last_closed_10s_present,
     });
     return {
       decision: cycle.decision,
@@ -5414,6 +5422,10 @@ class MasterRuntime {
           opportunity_id: e.opportunity_id,
           buy_score: e.buy_score,
           sell_score: e.sell_score,
+          desk_entry_source: e.desk_entry_source ?? null,
+          desk_entry_side: e.desk_entry_side ?? null,
+          hour_bias: e.hour_bias ?? null,
+          closed_10s_present: e.closed_10s_present ?? null,
         }));
       })(),
       recent_trades: loadTradeEvents(12).map((e) => ({

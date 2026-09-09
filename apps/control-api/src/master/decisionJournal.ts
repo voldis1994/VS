@@ -36,6 +36,13 @@ export type DecisionEvent = {
   executed: boolean;
   execution_detail: string | null;
   cycle_ms: number | null;
+  /** Desk 10s SETUP/MOVE confirm provenance (null = none this cycle). */
+  desk_entry_source: 'setup' | 'move' | null;
+  desk_entry_side: 'BUY' | 'SELL' | null;
+  /** Structure 1h bias at decide time. */
+  hour_bias: 'UP' | 'DOWN' | 'FLAT' | 'UNKNOWN' | null;
+  /** Sticky/desk closed_10s present for armed confirm gate. */
+  closed_10s_present: boolean | null;
 };
 
 const MAX_LINES = 2000;
@@ -91,6 +98,10 @@ export function logDecisionEvent(input: {
   executed?: boolean;
   execution_detail?: string | null;
   cycle_ms?: number | null;
+  desk_entry_source?: 'setup' | 'move' | null;
+  desk_entry_side?: 'BUY' | 'SELL' | null;
+  hour_bias?: 'UP' | 'DOWN' | 'FLAT' | 'UNKNOWN' | null;
+  closed_10s_present?: boolean | null;
 }): DecisionEvent {
   const entry: DecisionEvent = {
     event_id: randomUUID(),
@@ -111,6 +122,25 @@ export function logDecisionEvent(input: {
     cycle_ms:
       input.cycle_ms != null && Number.isFinite(input.cycle_ms)
         ? Math.round(Number(input.cycle_ms))
+        : null,
+    desk_entry_source:
+      input.desk_entry_source === 'setup' || input.desk_entry_source === 'move'
+        ? input.desk_entry_source
+        : null,
+    desk_entry_side:
+      input.desk_entry_side === 'BUY' || input.desk_entry_side === 'SELL'
+        ? input.desk_entry_side
+        : null,
+    hour_bias:
+      input.hour_bias === 'UP' ||
+      input.hour_bias === 'DOWN' ||
+      input.hour_bias === 'FLAT' ||
+      input.hour_bias === 'UNKNOWN'
+        ? input.hour_bias
+        : null,
+    closed_10s_present:
+      typeof input.closed_10s_present === 'boolean'
+        ? input.closed_10s_present
         : null,
   };
   try {
