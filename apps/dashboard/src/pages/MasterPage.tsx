@@ -64,6 +64,8 @@ type MasterStatus = {
   capital_creds_available?: boolean;
   capital_live_attached?: boolean;
   capital_account_proven?: boolean | null;
+  /** True when UTC day-roll deferred — Day start / Daily PnL are sealed prior day. */
+  utc_day_roll_deferred?: boolean;
   capital_venue_opens?: number;
   capital_venue_opens_proven?: boolean;
   last_decision: {
@@ -1086,12 +1088,19 @@ export function MasterPage() {
             status.capital_account_proven === false
               ? '—'
               : status.account?.daily_pnl != null
-                ? `${cyclePending ? 'hydrated · ' : ''}${Number(status.account.daily_pnl).toFixed(2)}`
+                ? `${
+                    status.utc_day_roll_deferred
+                      ? 'deferred · '
+                      : cyclePending
+                        ? 'hydrated · '
+                        : ''
+                  }${Number(status.account.daily_pnl).toFixed(2)}`
                 : '—',
           warn:
-            cyclePending &&
-            status.capital_account_proven !== false &&
-            status.account?.daily_pnl != null,
+            !!status.utc_day_roll_deferred ||
+            (cyclePending &&
+              status.capital_account_proven !== false &&
+              status.account?.daily_pnl != null),
         },
         {
           k: 'Closed PnL',
@@ -1156,13 +1165,33 @@ export function MasterPage() {
             status.capital_account_proven === false
               ? 'UNPROVEN'
               : status.account?.day_start_equity != null
-                ? `${cyclePending ? 'hydrated · ' : ''}${Number(status.account.day_start_equity).toFixed(2)}`
+                ? `${
+                    status.utc_day_roll_deferred
+                      ? 'deferred · '
+                      : cyclePending
+                        ? 'hydrated · '
+                        : ''
+                  }${Number(status.account.day_start_equity).toFixed(2)}`
                 : '—',
           bad: status.capital_account_proven === false,
           warn:
-            cyclePending &&
-            status.capital_account_proven !== false &&
-            status.account?.day_start_equity != null,
+            !!status.utc_day_roll_deferred ||
+            (cyclePending &&
+              status.capital_account_proven !== false &&
+              status.account?.day_start_equity != null),
+        },
+        {
+          k: 'UTC day roll',
+          v: status.utc_day_roll_deferred
+            ? 'DEFERRED'
+            : status.capital_account_proven === false
+              ? 'UNPROVEN'
+              : 'ok',
+          bad: status.capital_account_proven === false,
+          warn: !!status.utc_day_roll_deferred,
+          ok:
+            !status.utc_day_roll_deferred &&
+            status.capital_account_proven !== false,
         },
         {
           k: 'Peak eq',

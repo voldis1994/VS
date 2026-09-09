@@ -324,13 +324,83 @@ describe('MASTER daily pnl day boundary', () => {
       (masterRuntime as unknown as { pendingCalendarDayClosedPnl: number })
         .pendingCalendarDayClosedPnl
     ).toBe(0);
+  });
 
-    masterRuntime.bookHydrated = false;
-    masterRuntime.recovered = false;
-    masterRuntime.last_quote = null;
+  it('status reports utc_day_roll_deferred while open-book mark unproven', async () => {
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('PAPER');
     masterRuntime.positions = new PositionManager();
-    if (prev === undefined) delete process.env.MASTER_STATE_DIR;
-    else process.env.MASTER_STATE_DIR = prev;
+    masterRuntime.ensurePaperBroker();
+    masterRuntime.setMode('PAPER');
+    masterRuntime.account.daily_pnl = -250;
+    masterRuntime.account.daily_pnl_day = '2000-01-01';
+    masterRuntime.account.day_start_equity = 10_000;
+    masterRuntime.account.equity = 9_750;
+    masterRuntime.account.balance = 9_750;
+    masterRuntime.positions.register({
+      position_id: 'status-day-roll-defer',
+      opportunity_id: 'opp-status-day-roll',
+      intent_id: 'intent-status-day-roll',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      entry: 4400,
+      stop_loss: 4350,
+      take_profit: 4450,
+      entry_at: new Date().toISOString(),
+      decision: {
+        decision_id: 'd-status-day-roll',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null,
+        sell: null,
+        analysis: {
+          regime: 'TREND',
+          market_state: 't',
+          momentum_score: 0.5,
+          momentum_dir: 'UP',
+          trend_dir: 'UP',
+          trend_strength: 0.5,
+          structure_bias: 'BULLISH',
+          swing_high: 4405,
+          swing_low: 4395,
+          buy_pressure: 0.6,
+          sell_pressure: 0.4,
+          behavior_bull: 0.5,
+          behavior_bear: 0.5,
+          impact_score: 0.5,
+          context_quality: 0.8,
+          volatility: 0.001,
+          atr: 1,
+          data_quality: 0.9,
+          session: 'LONDON',
+        },
+        expectancy: null,
+      },
+    });
+    masterRuntime.last_quote = null;
+    (
+      masterRuntime as unknown as { quoteFromDiskCache: boolean }
+    ).quoteFromDiskCache = false;
+
+    const deferred = masterRuntime.status();
+    expect(deferred.utc_day_roll_deferred).toBe(true);
+
+    masterRuntime.last_quote = {
+      bid: 4399.5,
+      ask: 4399.7,
+      mid: 4399.6,
+      spread: 0.2,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    };
+    const live = masterRuntime.status();
+    expect(live.utc_day_roll_deferred).toBe(false);
+
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.last_quote = null;
   });
 
   it('manageOnlyTick rolls stale daily_pnl_day before sync-ghost close', async () => {
