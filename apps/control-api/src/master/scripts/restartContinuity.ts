@@ -321,6 +321,19 @@ async function main() {
     exit_stage_detail: stHydrate.pipeline_stages?.exit?.detail ?? null,
     filters_stage_ok: stHydrate.pipeline_stages?.filters?.ok === true,
     filters_stage_detail: stHydrate.pipeline_stages?.filters?.detail ?? null,
+    // Cycle-bound stages must stay red until a live tick sets last_market
+    analysis_stage_ok: stHydrate.pipeline_stages?.analysis_regime?.ok === true,
+    analysis_stage_detail:
+      stHydrate.pipeline_stages?.analysis_regime?.detail ?? null,
+    decision_stage_ok: stHydrate.pipeline_stages?.decision?.ok === true,
+    decision_stage_detail: stHydrate.pipeline_stages?.decision?.detail ?? null,
+    risk_stage_ok: stHydrate.pipeline_stages?.risk?.ok === true,
+    risk_stage_detail: stHydrate.pipeline_stages?.risk?.detail ?? null,
+    execution_stage_ok: stHydrate.pipeline_stages?.execution?.ok === true,
+    execution_stage_detail:
+      stHydrate.pipeline_stages?.execution?.detail ?? null,
+    market_validation_stage_ok:
+      stHydrate.pipeline_stages?.market_validation?.ok === true,
     // Holding with no manage yet must not forge green position_manager
     position_stage_pre_manage_ok:
       stHydrate.pipeline_stages?.position_manager?.ok === true,
@@ -346,6 +359,11 @@ async function main() {
     hydrateSnap.exit_stage_detail === 'TakeProfit' &&
     hydrateSnap.filters_stage_ok === true &&
     hydrateSnap.position_stage_pre_manage_ok === false &&
+    hydrateSnap.analysis_stage_ok === false &&
+    hydrateSnap.decision_stage_ok === false &&
+    hydrateSnap.risk_stage_ok === false &&
+    hydrateSnap.execution_stage_ok === false &&
+    hydrateSnap.market_validation_stage_ok === false &&
     journalHealOk &&
     pgPrimaryHealOk;
 
@@ -461,6 +479,15 @@ async function main() {
       exit_stage_detail: hydrateSnap.exit_stage_detail,
       filters_stage_ok: hydrateSnap.filters_stage_ok,
       filters_stage_detail: hydrateSnap.filters_stage_detail,
+      analysis_stage_ok: hydrateSnap.analysis_stage_ok,
+      analysis_stage_detail: hydrateSnap.analysis_stage_detail,
+      decision_stage_ok: hydrateSnap.decision_stage_ok,
+      decision_stage_detail: hydrateSnap.decision_stage_detail,
+      risk_stage_ok: hydrateSnap.risk_stage_ok,
+      risk_stage_detail: hydrateSnap.risk_stage_detail,
+      execution_stage_ok: hydrateSnap.execution_stage_ok,
+      execution_stage_detail: hydrateSnap.execution_stage_detail,
+      market_validation_stage_ok: hydrateSnap.market_validation_stage_ok,
       heal_ok: journalHealOk,
       heal_via_install: healViaInstall,
       heal_helper: healHelper,
