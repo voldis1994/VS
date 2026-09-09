@@ -4585,6 +4585,12 @@ class MasterRuntime {
    */
   private async bootstrapManageAfterRecover(): Promise<void> {
     if (this.positions.count() === 0) {
+      // Flat book: still reseed PaperBroker equity from journal-rebuilt account
+      // so the next tick does not overwrite recovered equity with default £10k.
+      if (!this.broker && this.cfg.mode !== 'LIVE') {
+        this.ensurePaperBroker();
+      }
+      this.seedPaperBrokerFromPositions();
       this.clearManageLoop();
       return;
     }
@@ -4678,18 +4684,27 @@ class MasterRuntime {
   }
 
   /**
-   * PAPER restart / hydrate: reseed in-memory broker book from PositionManager
-   * so sync does not treat restored locals as ghosts (broker_flat wipe).
+   * PAPER restart / hydrate: reseed in-memory broker equity from journal-rebuilt
+   * account, and reseed opens from PositionManager so sync does not treat
+   * restored locals as ghosts (broker_flat wipe).
+   * Flat books must still hydrateAccount — otherwise the next tick's getAccount
+   * overwrites recovered equity back to PaperBroker's default £10k.
    */
   private seedPaperBrokerFromPositions(): void {
     if (!(this.broker instanceof PaperBroker)) return;
+    // Always restore equity/balance from recovered account (VS-System paper hydrate)
+    if (
+      (this.account.equity > 0 && Number.isFinite(this.account.equity)) ||
+      (this.account.balance > 0 && Number.isFinite(this.account.balance))
+    ) {
+      this.broker.hydrateAccount({
+        equity: this.account.equity,
+        balance: this.account.balance,
+      });
+    }
     if (this.positions.count() === 0) return;
     // Prior manage ticks may have left empty-book debounce near wipe threshold
     this.emptyBrokerDebounce = { consecutive_empty: 0, miss_by_id: {} };
-    this.broker.hydrateAccount({
-      equity: this.account.equity,
-      balance: this.account.balance,
-    });
     this.broker.seedOpens(
       this.positions.list().map((p) => ({
         position_id: p.position_id,

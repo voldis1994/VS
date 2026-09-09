@@ -3458,6 +3458,39 @@ describe('partial_close persist + Check be_start', () => {
     expect(acct?.equity).toBe(9_420.5);
   });
 
+  it('flat paper book reseeds equity so tick does not reset to £10k', async () => {
+    const prev = process.env.MASTER_STATE_DIR;
+    const dir = mkdtempSync(join(tmpdir(), 'vs-paper-equity-flat-'));
+    process.env.MASTER_STATE_DIR = dir;
+    try {
+      masterRuntime.pipeline = new MasterPipeline('PAPER');
+      masterRuntime.positions = new PositionManager();
+      masterRuntime.cfg = { ...DEFAULT_MASTER_CONFIG, mode: 'PAPER' };
+      masterRuntime.ensurePaperBroker();
+      // Simulate journal-rebuilt account after closed trades (flat book)
+      masterRuntime.account.balance = 10_000;
+      masterRuntime.account.equity = 10_250;
+      masterRuntime.account.peak_equity = 10_250;
+      expect(masterRuntime.positions.count()).toBe(0);
+      expect((masterRuntime.broker as PaperBroker).equity).toBe(10_000);
+      await masterRuntime.bootstrapManageAfterRecoverPublic();
+      const paper = masterRuntime.broker as PaperBroker;
+      expect(paper.equity).toBe(10_250);
+      const acct = await paper.getAccount();
+      expect(acct?.equity).toBe(10_250);
+      // Tick path overwrites account from broker — must keep rebuilt equity
+      masterRuntime.account.equity = 10_000;
+      const refreshed = await paper.getAccount();
+      if (refreshed && refreshed.equity > 0) {
+        masterRuntime.account.equity = refreshed.equity;
+      }
+      expect(masterRuntime.account.equity).toBe(10_250);
+    } finally {
+      if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prev;
+    }
+  });
+
   it('money BE arms at £0.05 floating and defers illegal clamp', async () => {
     const { capitalSafeBreakEvenStop, resolveFloatingMoneyPnl, resolveCloseMoneyPnl } =
       await import('../moneyExit.js');

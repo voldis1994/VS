@@ -843,6 +843,17 @@ async function main() {
       livePaperHonestyBody.includes('shouldRetryLivePaperDemo') &&
       verifyBody.includes('shouldRetryLivePaperDemo') &&
       verifyBody.includes('MASTER_VERIFY_LIVE_PAPER_ATTEMPTS');
+    const paperEquityReseedApi =
+      runtimeBody.includes('seedPaperBrokerFromPositions') &&
+      runtimeBody.includes('Flat book: still reseed PaperBroker equity') &&
+      runtimeBody.includes(
+        'overwrites recovered equity with default £10k'
+      ) &&
+      runtimeBody.includes('Always restore equity/balance from recovered account') &&
+      readFileSync(
+        join(root, 'src/master/__tests__/master.gaps.test.ts'),
+        'utf8'
+      ).includes('flat paper book reseeds equity');
     const livePaperDeskConfirm =
       livePaperDemoBody.includes('deskConfirmTickOpts') &&
       livePaperDemoBody.includes('closed10sFromReplayBar') &&
@@ -1279,6 +1290,7 @@ async function main() {
       normDiskHydrateUi &&
       normDiskHydrateEmbed &&
       livePaperRetry &&
+      paperEquityReseedApi &&
       livePaperDeskConfirm &&
       setupArmedApi &&
       setupArmedUi &&
