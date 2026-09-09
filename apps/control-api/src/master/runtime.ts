@@ -2096,6 +2096,19 @@ class MasterRuntime {
         volume: ghost.size,
       });
       const flatReason = paperAuto?.reason ?? 'broker_flat';
+      const riskDist =
+        Number.isFinite(Number(ghost.entry)) &&
+        Number.isFinite(Number(ghost.stop_loss))
+          ? Math.abs(Number(ghost.entry) - Number(ghost.stop_loss))
+          : 0;
+      const signedMove =
+        ghost.side === 'BUY'
+          ? Number(exit) - Number(ghost.entry)
+          : Number(ghost.entry) - Number(exit);
+      const r_multiple =
+        riskDist > 0 && Number.isFinite(signedMove)
+          ? Number((signedMove / riskDist).toFixed(4))
+          : 0;
       const outcome = {
         position_id: ghost.position_id,
         side: ghost.side,
@@ -2108,7 +2121,7 @@ class MasterRuntime {
         slippage: 0,
         mae: ghost.mae,
         mfe: ghost.mfe,
-        r_multiple: 0,
+        r_multiple,
         hold_ms: Date.now() - new Date(ghost.entry_at).getTime(),
         exit_reason: capitalCloseExitReason(flatReason, priced.pnl_proven),
       };
@@ -2891,121 +2904,150 @@ class MasterRuntime {
       }
     }
 
-    // 0) Reconcile broker truth every tick — drop ghosts, adopt orphans (VS-System-)
-    // Capital: venue-wide (all epics) so other-epic orphans block/manage correctly.
-    // Empty-book ghost wipe requires 5 consecutive successful empties (debounce).
-    const sync = await syncPositionsWithBroker(
-      this.positions,
-      broker,
-      broker instanceof CapitalBroker ? undefined : this.epic,
-      this.emptyBrokerDebounce,
-      this.liveAdoptContext()
-    );
-    // Journal confirmed ghosts/orphans even when other tickets are still in miss-debounce.
-    if (!sync.skipped) {
-      this.applySyncJournal(sync, quote);
-    }
-    // Capital LIVE: successful tick list proves venue open-count; list fail demotes health
-    if (broker instanceof CapitalBroker && !broker.paper) {
-      if (sync.skipped) {
-        this.capitalVenueOpensProven = false;
-        // Stale broker_upl must not arm soft-trail / close-all while list unread
-        this.clearStaleBrokerUpl();
-      } else {
-        this.capitalVenueOpensProven = true;
-        this.capitalVenueOpens = sync.broker_count;
+    // 0) Reconcile broker truth / manage exits
+    // Paper: manage BEFORE sync so setQuote auto SL/TP is tick-observed
+    //   (idempotent close → exits≥1), not only applySyncJournal ghost path.
+    // Capital: sync first (venue UPL / empty debounce), then manage.
+    const runTickSync = async () => {
+      const sync = await syncPositionsWithBroker(
+        this.positions,
+        broker,
+        broker instanceof CapitalBroker ? undefined : this.epic,
+        this.emptyBrokerDebounce,
+        this.liveAdoptContext()
+      );
+      // Journal confirmed ghosts/orphans even when other tickets are still in miss-debounce.
+      if (!sync.skipped) {
+        this.applySyncJournal(sync, quote);
       }
-    }
+      // Capital LIVE: successful tick list proves venue open-count; list fail demotes health
+      if (broker instanceof CapitalBroker && !broker.paper) {
+        if (sync.skipped) {
+          this.capitalVenueOpensProven = false;
+          // Stale broker_upl must not arm soft-trail / close-all while list unread
+          this.clearStaleBrokerUpl();
+        } else {
+          this.capitalVenueOpensProven = true;
+          this.capitalVenueOpens = sync.broker_count;
+        }
+      }
+      return sync;
+    };
 
     this.account.open_positions = this.positions.count();
     const instrument = this.resolveInstrument(broker, quote);
 
-    // 1) Manage exits first — every open epic with its own quote (never SILVER on GOLD mid)
-    const managed = await this.runManageAcrossOpenEpics({
-      broker,
-      quote,
-      bars,
-    });
-    this.last_manage_tick_ms = Date.now();
-    const exit_reasons = managed.closed.map((c) => c.reason);
-    if (exit_reasons.length) this.last_exit_reason = exit_reasons.at(-1)!;
-    if (managed.close_failed.length) {
-      const fail = managed.close_failed[0]!;
-      this.broker_detail = `close_fail:${fail.position_id}:${fail.detail}`.slice(0, 400);
-      if (!exit_reasons.length) {
-        this.last_exit_reason = `CLOSE_FAIL · ${fail.exit_reason} · ${fail.detail}`;
+    const runTickManage = async () => {
+      // Manage exits — every open epic with its own quote (never SILVER on GOLD mid)
+      const managed = await this.runManageAcrossOpenEpics({
+        broker,
+        quote,
+        bars,
+      });
+      this.last_manage_tick_ms = Date.now();
+      const exit_reasons = managed.closed.map((c) => c.reason);
+      if (exit_reasons.length) this.last_exit_reason = exit_reasons.at(-1)!;
+      if (managed.close_failed.length) {
+        const fail = managed.close_failed[0]!;
+        this.broker_detail = `close_fail:${fail.position_id}:${fail.detail}`.slice(0, 400);
+        if (!exit_reasons.length) {
+          this.last_exit_reason = `CLOSE_FAIL · ${fail.exit_reason} · ${fail.detail}`;
+        }
+        this.last_close_failed = {
+          position_id: fail.position_id,
+          exit_reason: fail.exit_reason,
+          detail: fail.detail,
+          ts: new Date().toISOString(),
+        };
+        for (const failRow of managed.close_failed) {
+          logTradeEvent({
+            event: 'CLOSE',
+            broker: broker.name,
+            epic: this.epic,
+            side: null,
+            volume: null,
+            price: null,
+            position_id: failRow.position_id,
+            ok: false,
+            detail: `${failRow.exit_reason} · ${failRow.detail}`,
+          });
+        }
       }
-      this.last_close_failed = {
-        position_id: fail.position_id,
-        exit_reason: fail.exit_reason,
-        detail: fail.detail,
-        ts: new Date().toISOString(),
-      };
-      for (const failRow of managed.close_failed) {
+      for (const c of managed.closed) {
+        if (c.outcome.pnl_proven !== false) {
+          this.account.daily_pnl += c.outcome.pnl;
+          if (c.outcome.pnl < 0) {
+            this.account.consecutive_losses += 1;
+            this.last_loss_ms = Date.now();
+            this.persistRuntimeGates();
+          } else {
+            this.account.consecutive_losses = 0;
+          }
+        }
+        this.last_close_failed = null;
+        const sk = c.position.decision.side
+          ? setupKey(
+              c.position.decision.analysis,
+              c.position.decision.side,
+              c.position.epic,
+              c.position.decision.desk_entry_source
+            )
+          : null;
+        this.trackPersist(
+          'outcome',
+          persistOutcome(c.position.opportunity_id, c.outcome, sk)
+        );
         logTradeEvent({
           event: 'CLOSE',
           broker: broker.name,
-          epic: this.epic,
-          side: null,
-          volume: null,
-          price: null,
-          position_id: failRow.position_id,
-          ok: false,
-          detail: `${failRow.exit_reason} · ${failRow.detail}`,
+          epic: c.position.epic,
+          side: c.position.side,
+          volume: c.outcome.volume,
+          price: c.outcome.exit,
+          position_id: c.position.position_id,
+          intent_id: c.position.intent_id,
+          opportunity_id: c.position.opportunity_id,
+          desk_entry_source: c.position.decision?.desk_entry_source,
+          ok: true,
+          detail: c.reason,
+          ...(c.outcome.pnl_proven !== false
+            ? { pnl: c.outcome.pnl, fees: c.outcome.fees }
+            : {}),
         });
       }
-    }
-    for (const c of managed.closed) {
-      if (c.outcome.pnl_proven !== false) {
-        this.account.daily_pnl += c.outcome.pnl;
-        if (c.outcome.pnl < 0) {
-          this.account.consecutive_losses += 1;
-          this.last_loss_ms = Date.now();
-          this.persistRuntimeGates();
-        } else {
-          this.account.consecutive_losses = 0;
+      // VS-System: after any CLOSE, settle before allowing same-cycle / immediate re-entry
+      if (managed.closed.length > 0) {
+        const cool = Math.max(0, this.cfg.post_exit_cooldown_ms || 0);
+        this.post_exit_until_ms = Math.max(
+          this.post_exit_until_ms,
+          Date.now() + cool
+        );
+        this.persistRuntimeGates();
+        // Paper venue equity already updated on auto-fill / close — refresh account
+        try {
+          const acct = await broker.getAccount();
+          if (acct && acct.equity > 0) {
+            this.account.equity = acct.equity;
+            this.account.balance = acct.balance;
+          }
+        } catch {
+          /* keep */
         }
       }
-      this.last_close_failed = null;
-      const sk = c.position.decision.side
-        ? setupKey(
-            c.position.decision.analysis,
-            c.position.decision.side,
-            c.position.epic,
-            c.position.decision.desk_entry_source
-          )
-        : null;
-      this.trackPersist(
-        'outcome',
-        persistOutcome(c.position.opportunity_id, c.outcome, sk)
-      );
-      logTradeEvent({
-        event: 'CLOSE',
-        broker: broker.name,
-        epic: c.position.epic,
-        side: c.position.side,
-        volume: c.outcome.volume,
-        price: c.outcome.exit,
-        position_id: c.position.position_id,
-        intent_id: c.position.intent_id,
-        opportunity_id: c.position.opportunity_id,
-        desk_entry_source: c.position.decision?.desk_entry_source,
-        ok: true,
-        detail: c.reason,
-        ...(c.outcome.pnl_proven !== false
-          ? { pnl: c.outcome.pnl, fees: c.outcome.fees }
-          : {}),
-      });
+      this.account.open_positions = this.positions.count();
+      return managed;
+    };
+
+    let managed: Awaited<ReturnType<typeof this.runManageAcrossOpenEpics>>;
+    if (broker instanceof PaperBroker) {
+      managed = await runTickManage();
+      await runTickSync();
+    } else {
+      await runTickSync();
+      this.account.open_positions = this.positions.count();
+      managed = await runTickManage();
     }
-    // VS-System: after any CLOSE, settle before allowing same-cycle / immediate re-entry
-    if (managed.closed.length > 0) {
-      const cool = Math.max(0, this.cfg.post_exit_cooldown_ms || 0);
-      this.post_exit_until_ms = Math.max(
-        this.post_exit_until_ms,
-        Date.now() + cool
-      );
-      this.persistRuntimeGates();
-    }
+    const exit_reasons = managed.closed.map((c) => c.reason);
     // Flat + post-exit elapsed → clear sticky fingerprint (VS lastFingerprint)
     if (
       this.positions.count() === 0 &&
