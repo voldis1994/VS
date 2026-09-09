@@ -4276,13 +4276,19 @@ class MasterRuntime {
               : '—',
           },
           execution: {
-            ok: !!this.last_execution_detail,
-            detail: this.last_execution_detail || '—',
+            // Never forge green from journal-hydrate alone — need a live cycle
+            ok: !!(this.last_execution_detail && m),
+            detail: !this.last_execution_detail
+              ? '—'
+              : !m
+                ? `hydrated · ${this.last_execution_detail}`
+                : this.last_execution_detail,
           },
           broker: {
-            ok: !!brokerName,
-            detail: brokerName
-              ? `${brokerName}${this.broker?.paper ? ':paper' : ':live'}`
+            // Attached broker only — name string alone is not enough after hydrate
+            ok: !!(this.broker && brokerName),
+            detail: this.broker && brokerName
+              ? `${brokerName}${this.broker.paper ? ':paper' : ':live'}`
               : 'none',
           },
           position_manager: {

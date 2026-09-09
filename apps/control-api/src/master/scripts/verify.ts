@@ -254,6 +254,7 @@ async function main() {
       runtimeBody.includes('stale_quote · age=') &&
       runtimeBody.includes('no cycle ·') &&
       runtimeBody.includes('Never forge green from journal-hydrate alone') &&
+      runtimeBody.includes('hydrated ·') &&
       !runtimeBody.includes('journal_performance:');
     const manageOwnerApi =
       runtimeBody.includes('manage_owner:') &&
