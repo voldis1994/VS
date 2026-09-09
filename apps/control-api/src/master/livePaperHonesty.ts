@@ -56,3 +56,13 @@ export function isHonestLivePaperClosed(report: LivePaperDemoReport): boolean {
   }
   return true;
 }
+
+/**
+ * Verify may retry when live quotes/filters miss a fill (DECIDED/TRADED),
+ * but must not retry forever or after a hard feed FAIL.
+ */
+export function shouldRetryLivePaperDemo(status: string | null | undefined): boolean {
+  return (
+    status === 'PASS_LIVE_DATA_DECIDED' || status === 'PASS_LIVE_DATA_TRADED'
+  );
+}

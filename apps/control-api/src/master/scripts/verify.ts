@@ -69,16 +69,43 @@ async function main() {
     });
   }
 
-  // 3) Live market data PAPER
+  // 3) Live market data PAPER (retry DECIDED/TRADED — never forge fills)
   {
-    const r = run('npm', ['run', 'master:live-paper'], 90_000);
-    const demo = readJson(join(artifactDir, 'vs_master_live_paper_demo.json'));
+    const { shouldRetryLivePaperDemo, isHonestLivePaperClosed } = await import(
+      '../livePaperHonesty.js'
+    );
+    const maxAttempts = Math.max(
+      1,
+      Number(process.env.MASTER_VERIFY_LIVE_PAPER_ATTEMPTS || 3)
+    );
+    let attempts = 0;
+    let demo: any = null;
+    let r = { ok: false, out: '' };
     let honestClosed = false;
-    try {
-      const { isHonestLivePaperClosed } = await import('../livePaperHonesty.js');
-      honestClosed = !!(demo && isHonestLivePaperClosed(demo));
-    } catch {
-      honestClosed = false;
+    while (attempts < maxAttempts) {
+      attempts += 1;
+      r = run('npm', ['run', 'master:live-paper'], 120_000);
+      demo = readJson(join(artifactDir, 'vs_master_live_paper_demo.json'));
+      try {
+        honestClosed = !!(demo && isHonestLivePaperClosed(demo));
+      } catch {
+        honestClosed = false;
+      }
+      const closedOk =
+        r.ok &&
+        typeof demo?.status === 'string' &&
+        demo.status === 'PASS_LIVE_DATA_CLOSED' &&
+        demo.forced_live_paper_fill !== true &&
+        (demo.performance_trades ?? 0) >= 1 &&
+        typeof demo.performance_total_pnl === 'number' &&
+        Number.isFinite(demo.performance_total_pnl) &&
+        (demo.exit_phase === true || (demo.exit_cycles ?? 0) >= 1) &&
+        (demo.executed_cycles ?? 0) >= 1 &&
+        (demo.executed_cycles ?? 0) <= 2 &&
+        (demo.open_positions ?? 0) === 0 &&
+        honestClosed;
+      if (closedOk) break;
+      if (!shouldRetryLivePaperDemo(demo?.status)) break;
     }
     const ok =
       r.ok &&
@@ -99,7 +126,11 @@ async function main() {
         'Live market data → one natural fill → tick-observed exit → journal/performance (no churn)',
       ok,
       detail: demo
-        ? `${demo.status} mid=${demo.first_mid} feed=${demo.feed} executed=${demo.executed_cycles} exit_phase=${!!demo.exit_phase} exits=${demo.exit_cycles} trades=${demo.performance_trades} closed_pnl=${demo.performance_total_pnl} forced=${!!demo.forced_live_paper_fill} honest=${honestClosed}`
+        ? `${demo.status} mid=${demo.first_mid} feed=${demo.feed} executed=${demo.executed_cycles} exit_phase=${!!demo.exit_phase} exits=${demo.exit_cycles} trades=${demo.performance_trades} closed_pnl=${demo.performance_total_pnl} forced=${!!demo.forced_live_paper_fill} honest=${honestClosed} attempts=${attempts}${
+            Array.isArray(demo.entry_whys) && demo.entry_whys.length
+              ? ` whys=${demo.entry_whys.slice(0, 4).join('|')}`
+              : ''
+          }`
         : r.out.slice(-500),
     });
   }
@@ -440,6 +471,24 @@ async function main() {
       masterRouteBody.includes("card('Norm'") &&
       masterRouteBody.includes("normalization.detail") &&
       masterRouteBody.includes("hydrated ·");
+    const livePaperDemoBody = readFileSync(
+      join(root, 'src/master/scripts/livePaperDemo.ts'),
+      'utf8'
+    );
+    const livePaperHonestyBody = readFileSync(
+      join(root, 'src/master/livePaperHonesty.ts'),
+      'utf8'
+    );
+    const verifyBody = readFileSync(
+      join(root, 'src/master/scripts/verify.ts'),
+      'utf8'
+    );
+    const livePaperRetry =
+      livePaperDemoBody.includes('resetLivePaperRuntime') &&
+      livePaperDemoBody.includes('MASTER_LIVE_PAPER_ENTRY_ATTEMPTS') &&
+      livePaperHonestyBody.includes('shouldRetryLivePaperDemo') &&
+      verifyBody.includes('shouldRetryLivePaperDemo') &&
+      verifyBody.includes('MASTER_VERIFY_LIVE_PAPER_ATTEMPTS');
     const deskBody = readFileSync(join(root, 'src/services/robotDesk.ts'), 'utf8');
     const deskBridgeMeta =
       deskBody.includes('manage_owner:') &&
@@ -477,15 +526,16 @@ async function main() {
       exitHydrateEmbed &&
       normDiskHydrateUi &&
       normDiskHydrateEmbed &&
+      livePaperRetry &&
       deskBridgeMeta;
     checks.push({
       id: 'artifacts_present',
       requirement:
-        'Dashboard routes, brokers, recovery, desk bridge, manage_owner + journal_audit + hydrate filter/decision cards + Closed PnL + Quote/Bars disk_cache + Entry gates + Why/monitor hydrate + Float UPL cache + risk seed + Stage·exit hydrate + Norm/validate disk_cache',
+        'Dashboard routes, brokers, recovery, desk bridge, manage_owner + journal_audit + hydrate filter/decision cards + Closed PnL + Quote/Bars disk_cache + Entry gates + Why/monitor hydrate + Float UPL cache + risk seed + Stage·exit hydrate + Norm/validate disk_cache + live-paper retry harden',
       ok: missing.length === 0 && honestyOk,
       detail: missing.length
         ? `missing: ${missing.join(',')}`
-        : `${files.length} core files; pipeline_stages api=${stagesApi} ui=${stagesUi}; manage_owner api=${manageOwnerApi} masterUi=${manageOwnerMasterUi} deskUi=${manageOwnerDeskUi} deskBridge=${deskBridgeMeta}; journal_audit api=${journalAuditApi} ui=${journalAuditUi} embed=${journalAuditEmbed}; filter_hydrate_ui=${filterCardsHydrateUi}; closed_pnl ui=${closedPnlUi} embed=${closedPnlEmbed}; decision_hydrate ui=${decisionCardsHydrateUi} embed=${decisionCardsHydrateEmbed} api=${regimeHydrateApi}; quote_bars_cache ui=${quoteBarsCacheUi} embed=${quoteBarsCacheEmbed} api=${quoteBarsCacheApi}; entry_gates ui=${entryGatesHydrateUi} embed=${entryGatesEmbed} api=${entryGatesHydrateApi}; why_monitor ui=${whyMonitorHydrateUi} embed=${whyMonitorHydrateEmbed} api=${whyMonitorHydrateApi}; float_upl ui=${floatUplCacheUi} embed=${floatUplCacheEmbed} api=${floatUplCacheApi}; risk_seed=${riskSeedApi}; exit_hydrate ui=${exitHydrateUi} embed=${exitHydrateEmbed}; norm_disk ui=${normDiskHydrateUi} embed=${normDiskHydrateEmbed}`,
+        : `${files.length} core files; pipeline_stages api=${stagesApi} ui=${stagesUi}; manage_owner api=${manageOwnerApi} masterUi=${manageOwnerMasterUi} deskUi=${manageOwnerDeskUi} deskBridge=${deskBridgeMeta}; journal_audit api=${journalAuditApi} ui=${journalAuditUi} embed=${journalAuditEmbed}; filter_hydrate_ui=${filterCardsHydrateUi}; closed_pnl ui=${closedPnlUi} embed=${closedPnlEmbed}; decision_hydrate ui=${decisionCardsHydrateUi} embed=${decisionCardsHydrateEmbed} api=${regimeHydrateApi}; quote_bars_cache ui=${quoteBarsCacheUi} embed=${quoteBarsCacheEmbed} api=${quoteBarsCacheApi}; entry_gates ui=${entryGatesHydrateUi} embed=${entryGatesEmbed} api=${entryGatesHydrateApi}; why_monitor ui=${whyMonitorHydrateUi} embed=${whyMonitorHydrateEmbed} api=${whyMonitorHydrateApi}; float_upl ui=${floatUplCacheUi} embed=${floatUplCacheEmbed} api=${floatUplCacheApi}; risk_seed=${riskSeedApi}; exit_hydrate ui=${exitHydrateUi} embed=${exitHydrateEmbed}; norm_disk ui=${normDiskHydrateUi} embed=${normDiskHydrateEmbed}; live_paper_retry=${livePaperRetry}`,
     });
   }
 
