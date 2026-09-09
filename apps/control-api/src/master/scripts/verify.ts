@@ -117,7 +117,9 @@ async function main() {
       demo?.journals?.normalization_stage_ok === false &&
       demo?.journals?.broker_stage_ok === false &&
       demo?.journals?.filters_stage_ok === false &&
-      demo?.journals?.dual_candidates_stage_ok === false;
+      demo?.journals?.dual_candidates_stage_ok === false &&
+      demo?.journals?.buy_filter_ok === false &&
+      demo?.journals?.sell_filter_ok === false;
     checks.push({
       id: 'paper_restart_continuity',
       requirement:
@@ -268,6 +270,8 @@ async function main() {
       runtimeBody.includes('hydrated ·') &&
       runtimeBody.includes('Sticky last_risk without a live cycle') &&
       runtimeBody.includes('account unproven') &&
+      runtimeBody.includes("reason: !this.last_market") &&
+      runtimeBody.includes("? 'hydrated'") &&
       !runtimeBody.includes('journal_performance:');
     const manageOwnerApi =
       runtimeBody.includes('manage_owner:') &&
@@ -281,13 +285,19 @@ async function main() {
       masterPageBody.includes('persist_backend') &&
       masterPageBody.includes('journal_audit') &&
       masterPageBody.includes('Journal audit');
+    const filterCardsHydrateUi =
+      masterPageBody.includes("reason === 'hydrated'") &&
+      masterPageBody.includes('hydrated ·') &&
+      masterPageBody.includes('awaitingCycle');
     const masterRouteBody = readFileSync(join(root, 'src/routes/master.ts'), 'utf8');
     const journalAuditEmbed =
       masterRouteBody.includes('persist_backend') &&
       masterRouteBody.includes('Journal audit') &&
       masterRouteBody.includes('Stage·perf') &&
       masterRouteBody.includes("'journal'") &&
-      masterRouteBody.includes("'performance'");
+      masterRouteBody.includes("'performance'") &&
+      masterRouteBody.includes("reason==='hydrated'") &&
+      masterRouteBody.includes('.warn{');
     const deskBody = readFileSync(join(root, 'src/services/robotDesk.ts'), 'utf8');
     const deskBridgeMeta =
       deskBody.includes('manage_owner:') &&
@@ -302,15 +312,16 @@ async function main() {
       journalAuditApi &&
       journalAuditUi &&
       journalAuditEmbed &&
+      filterCardsHydrateUi &&
       deskBridgeMeta;
     checks.push({
       id: 'artifacts_present',
       requirement:
-        'Dashboard routes, brokers, recovery, desk bridge, manage_owner + journal_audit honesty',
+        'Dashboard routes, brokers, recovery, desk bridge, manage_owner + journal_audit + hydrate filter cards',
       ok: missing.length === 0 && honestyOk,
       detail: missing.length
         ? `missing: ${missing.join(',')}`
-        : `${files.length} core files; pipeline_stages api=${stagesApi} ui=${stagesUi}; manage_owner api=${manageOwnerApi} masterUi=${manageOwnerMasterUi} deskUi=${manageOwnerDeskUi} deskBridge=${deskBridgeMeta}; journal_audit api=${journalAuditApi} ui=${journalAuditUi} embed=${journalAuditEmbed}`,
+        : `${files.length} core files; pipeline_stages api=${stagesApi} ui=${stagesUi}; manage_owner api=${manageOwnerApi} masterUi=${manageOwnerMasterUi} deskUi=${manageOwnerDeskUi} deskBridge=${deskBridgeMeta}; journal_audit api=${journalAuditApi} ui=${journalAuditUi} embed=${journalAuditEmbed}; filter_hydrate_ui=${filterCardsHydrateUi}`,
     });
   }
 

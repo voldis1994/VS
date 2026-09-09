@@ -548,22 +548,33 @@ export function MasterPage() {
         {
           k: 'BUY filter',
           v: status.buy_filter
-            ? status.buy_filter.ok
-              ? `ok · ${Number(status.buy_filter.score).toFixed(3)}`
-              : `${status.buy_filter.reason || 'fail'} · ${Number(status.buy_filter.score).toFixed(3)}`
+            ? status.buy_filter.reason === 'hydrated'
+              ? `hydrated · ${Number(status.buy_filter.score).toFixed(3)}`
+              : status.buy_filter.ok
+                ? `ok · ${Number(status.buy_filter.score).toFixed(3)}`
+                : `${status.buy_filter.reason || 'fail'} · ${Number(status.buy_filter.score).toFixed(3)}`
             : '—',
-          bad: !!status.buy_filter && !status.buy_filter.ok,
+          // Hydrated = await cycle (neutral); live fail = bad; live pass = ok
+          bad:
+            !!status.buy_filter &&
+            !status.buy_filter.ok &&
+            status.buy_filter.reason !== 'hydrated',
           ok: !!status.buy_filter?.ok,
         },
         { k: 'SELL', v: Number(status.sell_score || 0).toFixed(3) },
         {
           k: 'SELL filter',
           v: status.sell_filter
-            ? status.sell_filter.ok
-              ? `ok · ${Number(status.sell_filter.score).toFixed(3)}`
-              : `${status.sell_filter.reason || 'fail'} · ${Number(status.sell_filter.score).toFixed(3)}`
+            ? status.sell_filter.reason === 'hydrated'
+              ? `hydrated · ${Number(status.sell_filter.score).toFixed(3)}`
+              : status.sell_filter.ok
+                ? `ok · ${Number(status.sell_filter.score).toFixed(3)}`
+                : `${status.sell_filter.reason || 'fail'} · ${Number(status.sell_filter.score).toFixed(3)}`
             : '—',
-          bad: !!status.sell_filter && !status.sell_filter.ok,
+          bad:
+            !!status.sell_filter &&
+            !status.sell_filter.ok &&
+            status.sell_filter.reason !== 'hydrated',
           ok: !!status.sell_filter?.ok,
         },
         ...(status.pipeline_stages
@@ -600,11 +611,16 @@ export function MasterPage() {
                 journal: 'Stage·journal',
                 performance: 'Stage·perf',
               };
+              const detail = stage?.detail || '';
+              const awaitingCycle =
+                !!detail &&
+                (/hydrated ·/.test(detail) || /no cycle/.test(detail));
               return {
                 k: labels[id] || id,
                 v: stage ? `${stage.ok ? 'ok' : '—'} · ${stage.detail}` : '—',
                 ok: !!stage?.ok,
-                bad: stage ? !stage.ok : false,
+                // Awaiting live tick is neutral — not a hard failure paint
+                bad: stage ? !stage.ok && !awaitingCycle : false,
               };
             })
           : []),
