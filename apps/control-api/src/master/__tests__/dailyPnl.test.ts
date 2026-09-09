@@ -541,6 +541,73 @@ describe('MASTER daily pnl day boundary', () => {
     masterRuntime.last_quote = null;
   });
 
+  it('status Why surfaces utc_day_roll_deferred while daily_pnl_day lags UTC today', async () => {
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('PAPER');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.ensurePaperBroker();
+    masterRuntime.setMode('PAPER');
+    masterRuntime.last_market = {
+      ok: true,
+      quality: 0.9,
+      reasons: [],
+      bars_in: 30,
+      bars_out: 30,
+    };
+    masterRuntime.last_decision = {
+      decision_id: 'why-day-lag',
+      kind: 'WAIT',
+      side: null,
+      score: 0,
+      block_reason: 'filters:spread',
+      buy: null as never,
+      sell: null as never,
+      analysis: {
+        regime: 'RANGE',
+        market_state: 'r',
+        momentum_score: 0,
+        momentum_dir: 'FLAT',
+        trend_dir: 'FLAT',
+        trend_strength: 0,
+        structure_bias: 'NEUTRAL',
+        swing_high: 4405,
+        swing_low: 4395,
+        buy_pressure: 0.5,
+        sell_pressure: 0.5,
+        behavior_bull: 0.5,
+        behavior_bear: 0.5,
+        impact_score: 0.5,
+        context_quality: 0.5,
+        volatility: 0.001,
+        atr: 1,
+        data_quality: 0.9,
+        session: 'LONDON',
+      },
+      expectancy: null,
+    } as typeof masterRuntime.last_decision;
+    masterRuntime.last_risk = null;
+    masterRuntime.account.daily_pnl = -120;
+    masterRuntime.account.daily_pnl_day = '2000-01-01';
+    masterRuntime.account.day_start_equity = 10_000;
+
+    const lagged = masterRuntime.status();
+    expect(String(lagged.last_block_reason || '')).toMatch(
+      /^utc_day_roll_deferred/
+    );
+    expect(String(lagged.last_block_reason || '')).toContain('filters:spread');
+
+    const today = new Date().toISOString().slice(0, 10);
+    masterRuntime.account.daily_pnl_day = today;
+    const rolled = masterRuntime.status();
+    expect(String(rolled.last_block_reason || '')).toBe('filters:spread');
+    expect(String(rolled.last_block_reason || '')).not.toMatch(
+      /utc_day_roll_deferred/
+    );
+
+    masterRuntime.last_market = null;
+    masterRuntime.last_decision = null;
+  });
+
   it('manageOnlyTick rolls stale daily_pnl_day before sync-ghost close', async () => {
     masterRuntime.stop();
     masterRuntime.pipeline = new MasterPipeline('PAPER');

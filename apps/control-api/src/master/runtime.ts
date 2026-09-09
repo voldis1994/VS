@@ -5715,12 +5715,31 @@ class MasterRuntime {
       this.last_risk?.reasons.join(',') ||
       null;
     // Journal / disk Why must not paint as the current cycle block
-    const lastBlockReason =
+    let lastBlockReason =
       rawBlockReason && cyclePending
         ? String(rawBlockReason).startsWith('hydrated ·')
           ? String(rawBlockReason)
           : `hydrated · ${rawBlockReason}`
         : rawBlockReason;
+    // Operator honesty: evaluateRisk fail-closes while daily_pnl_day lags UTC
+    // today — surface utc_day_roll_deferred on Why even before a risk tick, and
+    // ahead of a stale decision block_reason that would otherwise mask it.
+    const utcDayNow = new Date().toISOString().slice(0, 10);
+    const dailyPnlDayLagged =
+      this.account.daily_pnl_day != null &&
+      String(this.account.daily_pnl_day).trim() !== '' &&
+      String(this.account.daily_pnl_day).slice(0, 10) !== utcDayNow;
+    if (dailyPnlDayLagged) {
+      const bare = lastBlockReason
+        ? String(lastBlockReason).replace(/^hydrated · /, '')
+        : '';
+      if (!bare.includes('utc_day_roll_deferred')) {
+        const merged = bare
+          ? `utc_day_roll_deferred,${bare}`
+          : 'utc_day_roll_deferred';
+        lastBlockReason = cyclePending ? `hydrated · ${merged}` : merged;
+      }
+    }
     return {
       mode: this.cfg.mode,
       running: this.running,
