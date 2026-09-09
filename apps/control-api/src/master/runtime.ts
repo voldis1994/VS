@@ -30,6 +30,7 @@ import {
   specForEpic,
 } from './pipeline.js';
 import { computePerformance, fromOutcomes, monteCarlo, performanceByDeskEntry } from './performance.js';
+import { expectancyByDeskSource } from './expectancy.js';
 import {
   entrySetupFromRegime,
   floatingUnrealizedPnl,
@@ -266,6 +267,8 @@ export type MasterStatus = {
   performance: ReturnType<typeof computePerformance>;
   /** Closed trades sliced by desk 10s confirm source (setup/move/none). */
   performance_by_desk_entry: ReturnType<typeof performanceByDeskEntry>;
+  /** ExpectancyStore rollup by desk confirm suffix on setupKey. */
+  expectancy_by_desk_entry: ReturnType<typeof expectancyByDeskSource>;
   monte_carlo: ReturnType<typeof monteCarlo> | null;
   opportunities: number;
   traded: number;
@@ -4823,6 +4826,7 @@ class MasterRuntime {
       tradedProven.length ? tradedProven : this.pipeline.journal.traded(),
       loadDecisionEvents(500)
     );
+    const deskExpectancy = expectancyByDeskSource(this.pipeline.expectancy.all());
     const pnls = provenSlices.length
       ? provenSlices.map((o) => o.pnl)
       : tradedProven.map((t) => t.outcome!.pnl);
@@ -5327,6 +5331,7 @@ class MasterRuntime {
       open_positions: this.positions.count(),
       performance: perf,
       performance_by_desk_entry: deskEntryPerf,
+      expectancy_by_desk_entry: deskExpectancy,
       monte_carlo: pnls.length ? monteCarlo(pnls, 200) : null,
       opportunities: this.pipeline.journal.opportunities.length,
       traded: Math.max(tradedProven.length, provenSlices.length),

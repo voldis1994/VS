@@ -64,3 +64,47 @@ export class ExpectancyStore {
     }
   }
 }
+
+export type DeskExpectancySlice = {
+  source: 'setup' | 'move' | 'none';
+  setups: number;
+  samples: number;
+  positive_setups: number;
+  /** Sample-weighted mean EV across setup keys in this desk bucket. */
+  avg_ev: number;
+};
+
+/**
+ * Roll up ExpectancyStore snapshots by desk confirm suffix on setupKey
+ * (`…|setup` / `…|move` / `…|none`). Legacy keys without suffix → none.
+ */
+export function expectancyByDeskSource(
+  snaps: ExpectancySnapshot[]
+): DeskExpectancySlice[] {
+  const buckets: Record<'setup' | 'move' | 'none', ExpectancySnapshot[]> = {
+    setup: [],
+    move: [],
+    none: [],
+  };
+  for (const s of snaps) {
+    const parts = String(s.setup_key || '').split('|');
+    const last = parts[parts.length - 1] || '';
+    const src: 'setup' | 'move' | 'none' =
+      last === 'setup' || last === 'move' ? last : 'none';
+    buckets[src].push(s);
+  }
+  return (['setup', 'move', 'none'] as const).map((source) => {
+    const list = buckets[source];
+    const samples = list.reduce((n, x) => n + x.samples, 0);
+    const avg_ev = samples
+      ? list.reduce((n, x) => n + x.ev * x.samples, 0) / samples
+      : 0;
+    return {
+      source,
+      setups: list.length,
+      samples,
+      positive_setups: list.filter((x) => x.positive).length,
+      avg_ev,
+    };
+  });
+}

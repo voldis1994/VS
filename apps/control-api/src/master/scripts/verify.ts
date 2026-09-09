@@ -663,6 +663,17 @@ async function main() {
       masterPageBody.includes('performance_by_desk_entry') &&
       masterPageBody.includes("'Confirm PnL'") &&
       masterRouteBody.includes("card('Confirm PnL'");
+    const expectancyBody = readFileSync(
+      join(root, 'src/master/expectancy.ts'),
+      'utf8'
+    );
+    const deskSourceExpectancyDash =
+      expectancyBody.includes('expectancyByDeskSource') &&
+      runtimeBody.includes('expectancyByDeskSource') &&
+      runtimeBody.includes('expectancy_by_desk_entry') &&
+      masterPageBody.includes('expectancy_by_desk_entry') &&
+      masterPageBody.includes("'Confirm EV'") &&
+      masterRouteBody.includes("card('Confirm EV'");
     const pipelineRouteBody = readFileSync(
       join(root, 'src/routes/pipeline.ts'),
       'utf8'
@@ -800,6 +811,7 @@ async function main() {
       deskEntryJournal &&
       deskEntryPgHydrate &&
       deskEntryPerfJoin &&
+      deskSourceExpectancyDash &&
       marketCoreFailClosed &&
       deskBridgeMeta &&
       deskFeedDivergent &&

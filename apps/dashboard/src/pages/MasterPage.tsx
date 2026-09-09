@@ -135,6 +135,13 @@ type MasterStatus = {
     expectancy: number;
     win_rate: number;
   }>;
+  expectancy_by_desk_entry?: Array<{
+    source: 'setup' | 'move' | 'none';
+    setups: number;
+    samples: number;
+    positive_setups: number;
+    avg_ev: number;
+  }>;
   monte_carlo?: {
     p05?: number;
     p50?: number;
@@ -1024,6 +1031,19 @@ export function MasterPage() {
           })(),
           ok: (status.performance_by_desk_entry || []).some(
             (r) => r.source !== 'none' && r.trades > 0
+          ),
+        },
+        {
+          k: 'Confirm EV',
+          v: (() => {
+            const rows = status.expectancy_by_desk_entry || [];
+            const bits = rows
+              .filter((r) => r.samples > 0)
+              .map((r) => `${r.source}:${r.samples}/${Number(r.avg_ev).toFixed(2)}`);
+            return bits.length ? bits.join(' · ').slice(0, 80) : '—';
+          })(),
+          ok: (status.expectancy_by_desk_entry || []).some(
+            (r) => r.source !== 'none' && r.samples > 0
           ),
         },
         {
