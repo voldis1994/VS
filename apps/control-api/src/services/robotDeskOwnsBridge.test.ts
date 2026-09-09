@@ -91,4 +91,15 @@ describe('desk owns-pipeline bridge honesty', () => {
     expect(src).toMatch(/disableDeskEntryBrainsWhileOwns/);
     expect(src).toMatch(/ENTRY blocked — MASTER owns_pipeline/);
   });
+
+  it('OWN BRAIN entry uses resolveDeskEntryConfirm (single path with MASTER)', () => {
+    const src = readFileSync(
+      fileURLToPath(new URL('./robotDesk.ts', import.meta.url)),
+      'utf8'
+    );
+    expect(src).toMatch(/resolveDeskEntryConfirm/);
+    expect(src).not.toMatch(/decideEntryFromSetup\(/);
+    expect(src).not.toMatch(/decideEntryFromTenSecMove\(/);
+    expect(src).toMatch(/confirm\.source/);
+  });
 });
