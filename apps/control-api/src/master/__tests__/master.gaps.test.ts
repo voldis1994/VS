@@ -5065,6 +5065,14 @@ describe('SELL manageTick partial_close + Check trail', () => {
       cfg: { ...DEFAULT_MASTER_CONFIG, mode: 'PAPER', block_off_hours: false },
     });
     masterRuntime.last_decision = cycle.decision;
+    masterRuntime.last_risk = cycle.risk;
+    masterRuntime.last_market = {
+      ok: cycle.market.ok,
+      quality: cycle.market.quality,
+      reasons: [...cycle.market.reasons],
+      bars_in: bars.length,
+      bars_out: cycle.market.bars.length,
+    };
     const s = masterRuntime.status();
     expect(s.buy_filter).toBeTruthy();
     expect(s.sell_filter).toBeTruthy();
@@ -5073,6 +5081,29 @@ describe('SELL manageTick partial_close + Check trail', () => {
     expect(typeof s.buy_filter!.score).toBe('number');
     expect(typeof s.sell_filter!.score).toBe('number');
     expect(s.market_state).toBeTruthy();
+    // Full pipeline stage map — dashboard authoritative composition
+    const stages = s.pipeline_stages;
+    expect(stages).toBeTruthy();
+    for (const id of [
+      'market_validation',
+      'normalization',
+      'analysis_regime',
+      'dual_candidates',
+      'filters',
+      'decision',
+      'risk',
+      'execution',
+      'broker',
+      'position_manager',
+      'exit',
+      'journal_performance',
+    ] as const) {
+      expect(stages[id]).toBeTruthy();
+      expect(typeof stages[id].ok).toBe('boolean');
+      expect(typeof stages[id].detail).toBe('string');
+    }
+    expect(stages.dual_candidates.ok).toBe(true);
+    expect(stages.analysis_regime.detail).toMatch(/:/);
   });
 });
 

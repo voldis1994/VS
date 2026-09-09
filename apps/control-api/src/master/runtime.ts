@@ -134,6 +134,24 @@ export type MasterStatus = {
     score: number;
     valid: boolean;
   } | null;
+  /**
+   * Authoritative stage map for dashboard — one card per pipeline stage.
+   * Derived from last cycle (never forged).
+   */
+  pipeline_stages: {
+    market_validation: { ok: boolean; detail: string };
+    normalization: { ok: boolean; detail: string };
+    analysis_regime: { ok: boolean; detail: string };
+    dual_candidates: { ok: boolean; detail: string };
+    filters: { ok: boolean; detail: string };
+    decision: { ok: boolean; detail: string };
+    risk: { ok: boolean; detail: string };
+    execution: { ok: boolean; detail: string };
+    broker: { ok: boolean; detail: string };
+    position_manager: { ok: boolean; detail: string };
+    exit: { ok: boolean; detail: string };
+    journal_performance: { ok: boolean; detail: string };
+  };
   regime: string;
   market_state: string;
   /** Last market validation/normalization snapshot (quality + drop reasons). */
@@ -3979,6 +3997,91 @@ class MasterRuntime {
             valid: !!this.last_decision.sell.valid,
           }
         : null,
+      pipeline_stages: (() => {
+        const m = this.last_market;
+        const d = this.last_decision;
+        const r = this.last_risk;
+        const buyOk = d?.buy?.filter_ok !== false;
+        const sellOk = d?.sell?.filter_ok !== false;
+        const filterPass = !!(d && (buyOk || sellOk));
+        const brokerName = this.broker?.name ?? null;
+        const opens = this.positions.count();
+        return {
+          market_validation: {
+            ok: m ? m.ok : false,
+            detail: m
+              ? `Q=${m.quality.toFixed(2)}${m.reasons.length ? ` · ${m.reasons.slice(0, 2).join('|')}` : ''}`
+              : 'no cycle',
+          },
+          normalization: {
+            ok: !!(m && m.bars_out >= 5),
+            detail: m ? `${m.bars_out}/${m.bars_in} bars` : 'no cycle',
+          },
+          analysis_regime: {
+            ok: !!(d?.analysis?.regime && d.analysis.regime !== 'UNKNOWN'),
+            detail: d?.analysis
+              ? `${d.analysis.regime}:${d.analysis.market_state}`
+              : '—',
+          },
+          dual_candidates: {
+            ok: !!(d?.buy && d?.sell),
+            detail: d
+              ? `B${Number(d.buy.score).toFixed(3)}/S${Number(d.sell.score).toFixed(3)}`
+              : '—',
+          },
+          filters: {
+            ok: filterPass,
+            detail: d
+              ? `BUY ${d.buy.filter_ok ? 'ok' : d.buy.filter_reason || 'fail'} · SELL ${d.sell.filter_ok ? 'ok' : d.sell.filter_reason || 'fail'}`
+              : '—',
+          },
+          decision: {
+            ok: !!(
+              d &&
+              (d.kind === 'BUY' ||
+                d.kind === 'SELL' ||
+                d.kind === 'WAIT' ||
+                d.kind === 'BLOCK')
+            ),
+            detail: d
+              ? `${d.kind}${d.block_reason ? ` · ${d.block_reason}` : ''}`
+              : '—',
+          },
+          risk: {
+            ok: r ? r.allowed || r.reasons.length > 0 : false,
+            detail: r
+              ? r.allowed
+                ? `vol=${r.volume}`
+                : r.reasons.slice(0, 2).join('|') || 'blocked'
+              : '—',
+          },
+          execution: {
+            ok: !!this.last_execution_detail,
+            detail: this.last_execution_detail || '—',
+          },
+          broker: {
+            ok: !!brokerName,
+            detail: brokerName
+              ? `${brokerName}${this.broker?.paper ? ':paper' : ':live'}`
+              : 'none',
+          },
+          position_manager: {
+            ok: true,
+            detail: `open=${opens}`,
+          },
+          exit: {
+            ok: !!this.last_exit_reason || opens === 0,
+            detail: this.last_exit_reason || (opens > 0 ? 'holding' : 'flat'),
+          },
+          journal_performance: {
+            ok: true,
+            detail:
+              perf.trades > 0
+                ? `trades=${perf.trades} exp=${Number(perf.expectancy).toFixed(3)}`
+                : 'no trades',
+          },
+        };
+      })(),
       regime: this.last_decision?.analysis.regime ?? 'UNKNOWN',
       market_state: this.last_decision?.analysis.market_state ?? '—',
       last_market: this.last_market,

@@ -707,6 +707,7 @@ async function refresh(){
       card('BUY filter',s.buy_filter?(s.buy_filter.ok?('ok · '+Number(s.buy_filter.score).toFixed(3)):((s.buy_filter.reason||'fail')+' · '+Number(s.buy_filter.score).toFixed(3))):'—',s.buy_filter&&!s.buy_filter.ok?'bad':(s.buy_filter&&s.buy_filter.ok?'ok':'')),
       card('SELL',Number(s.sell_score||0).toFixed(3)),
       card('SELL filter',s.sell_filter?(s.sell_filter.ok?('ok · '+Number(s.sell_filter.score).toFixed(3)):((s.sell_filter.reason||'fail')+' · '+Number(s.sell_filter.score).toFixed(3))):'—',s.sell_filter&&!s.sell_filter.ok?'bad':(s.sell_filter&&s.sell_filter.ok?'ok':'')),
+      ...(s.pipeline_stages?['market_validation','normalization','analysis_regime','dual_candidates','filters','decision','risk','execution','broker','position_manager','exit','journal_performance'].map(function(id){var st=s.pipeline_stages[id];var lab={market_validation:'Stage·validate',normalization:'Stage·normalize',analysis_regime:'Stage·regime',dual_candidates:'Stage·dual',filters:'Stage·filters',decision:'Stage·decision',risk:'Stage·risk',execution:'Stage·exec',broker:'Stage·broker',position_manager:'Stage·position',exit:'Stage·exit',journal_performance:'Stage·journal'}[id]||id;return card(lab,st?((st.ok?'ok':'—')+' · '+st.detail):'—',st&&st.ok?'ok':(st?'bad':''))}):[]),
       card('Decision',s.last_decision?.kind||'—'),
       card('Why',why,whyCls),
       card('Last exit',s.last_exit_reason||'—'),
