@@ -110,9 +110,9 @@ export function decide(
 }
 
 /**
- * Desk sticky SETUP gate.
- * - Always block when ARMED setup side conflicts with preferred (setup_side_mismatch).
- * - When require_armed_setup: also block NONE/FORMING/missing (setup_none).
+ * Desk sticky SETUP gate (callers pass setup only when gate is armed).
+ * - Block when ARMED setup side conflicts with preferred (setup_side_mismatch).
+ * - When requireArmed: also block NONE/FORMING/missing (setup_none).
  */
 export function gatePreferredBySetup(
   preferredSide: 'BUY' | 'SELL',
