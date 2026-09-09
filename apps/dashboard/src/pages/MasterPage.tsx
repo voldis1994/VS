@@ -669,28 +669,46 @@ export function MasterPage() {
           bad:
             !!status.setup_gate_armed &&
             (!status.market_setup || status.market_setup.status !== 'ARMED'),
-          ok: !!status.market_setup && status.market_setup.status === 'ARMED',
+          ok:
+            !cyclePending &&
+            !!status.market_setup &&
+            status.market_setup.status === 'ARMED',
+          warn:
+            cyclePending &&
+            !!status.market_setup &&
+            (status.market_setup.status === 'ARMED' ||
+              String(status.market_setup.reason || '').startsWith('hydrated ·')),
         },
         {
           k: 'Desk entry',
           v: status.desk_entry
-            ? `${status.desk_entry.source} · ${status.desk_entry.side}${
+            ? `${cyclePending ? 'hydrated · ' : ''}${status.desk_entry.source} · ${status.desk_entry.side}${
                 status.desk_entry.setup_kind ? ` · ${status.desk_entry.setup_kind}` : ''
               }`
             : '—',
-          ok: !!status.desk_entry,
+          ok: !cyclePending && !!status.desk_entry,
+          warn: cyclePending && !!status.desk_entry,
         },
         {
           k: 'Hour bias',
-          v: status.hour_bias || '—',
-          ok: status.hour_bias === 'UP' || status.hour_bias === 'DOWN',
-          warn: status.hour_bias === 'UNKNOWN',
+          v: status.hour_bias
+            ? `${cyclePending ? 'hydrated · ' : ''}${status.hour_bias}`
+            : '—',
+          ok:
+            !cyclePending &&
+            (status.hour_bias === 'UP' || status.hour_bias === 'DOWN'),
+          warn:
+            cyclePending && !!status.hour_bias
+              ? true
+              : status.hour_bias === 'UNKNOWN',
         },
         {
           k: 'Closed 10s',
-          v: status.closed_10s_present ? 'present' : 'none',
-          ok: !!status.closed_10s_present,
-          warn: !status.closed_10s_present,
+          v: `${cyclePending ? 'hydrated · ' : ''}${
+            status.closed_10s_present ? 'present' : 'none'
+          }`,
+          ok: !cyclePending && !!status.closed_10s_present,
+          warn: cyclePending || !status.closed_10s_present,
         },
         {
           k: 'EV gate',
