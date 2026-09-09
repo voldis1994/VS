@@ -358,6 +358,7 @@ export class PaperBroker implements MasterBroker {
    */
   takeRecentAutoFill(position_id: string): {
     fill_price: number;
+    fill_pnl: number | null;
     reason: 'STOP_HIT' | 'TP_HIT';
     detail: string;
   } | null {
@@ -366,6 +367,24 @@ export class PaperBroker implements MasterBroker {
     this.recentAutoFills.delete(position_id);
     return {
       fill_price: hit.fill_price,
+      fill_pnl: hit.fill_pnl,
+      reason: hit.reason,
+      detail: hit.detail,
+    };
+  }
+
+  /** Non-consuming peek — sync debounce skip when paper auto-fill already fired. */
+  peekRecentAutoFill(position_id: string): {
+    fill_price: number;
+    fill_pnl: number | null;
+    reason: 'STOP_HIT' | 'TP_HIT';
+    detail: string;
+  } | null {
+    const hit = this.recentAutoFills.get(position_id);
+    if (!hit) return null;
+    return {
+      fill_price: hit.fill_price,
+      fill_pnl: hit.fill_pnl,
       reason: hit.reason,
       detail: hit.detail,
     };
@@ -390,7 +409,8 @@ export class PaperBroker implements MasterBroker {
       p.side === 'BUY' ? fill_price - p.open_level : p.open_level - fill_price;
     const gross = pts * closeSize * pv;
     const fees = estimateTradeFees(closeSize);
-    this.equity += gross - fees;
+    const net = gross - fees;
+    this.equity += net;
     this.balance = this.equity;
     const remaining = Math.max(0, p.size - closeSize);
     if (remaining > 1e-9) {
@@ -407,7 +427,8 @@ export class PaperBroker implements MasterBroker {
     if (reason) {
       this.recentAutoFills.set(p.position_id, {
         fill_price,
-        fill_pnl: null,
+        // Net money after model fees — sync/manage must not prefer stale UPL
+        fill_pnl: net,
         detail,
         reason,
       });

@@ -1216,16 +1216,25 @@ async function main() {
     const paperSlTpAutofillApi =
       brokerBody.includes('processStopsAndTargets') &&
       brokerBody.includes('takeRecentAutoFill') &&
+      brokerBody.includes('peekRecentAutoFill') &&
       brokerBody.includes('paper_auto_') &&
+      readFileSync(join(root, 'src/master/positionSync.ts'), 'utf8').includes(
+        'paperAutofillReady'
+      ) &&
       runtimeBody.includes('takeRecentAutoFill') &&
       runtimeBody.includes('paperAuto?.reason') &&
+      runtimeBody.includes('paperAuto?.fill_pnl') &&
       existsSync(
         join(root, 'src/master/__tests__/paperSlTpAutofill.test.ts')
       ) &&
       readFileSync(
         join(root, 'src/master/__tests__/paperSlTpAutofill.test.ts'),
         'utf8'
-      ).includes('auto-fills STOP_HIT on quote without manageTick');
+      ).includes('auto-fills STOP_HIT on quote without manageTick') &&
+      readFileSync(
+        join(root, 'src/master/__tests__/paperSlTpAutofill.test.ts'),
+        'utf8'
+      ).includes('sync journals STOP_HIT same cycle');
     const multiEpicManageApi =
       positionManagerBody.includes('quoteMatchesPosition') &&
       positionManagerBody.includes('skipped_wrong_epic') &&

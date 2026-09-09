@@ -2086,8 +2086,11 @@ class MasterRuntime {
           fill: exit,
           size: ghost.size,
           value_per_point_per_lot: instrument.value_per_point_per_lot,
-          // Prefer last non-zero broker UPL when fill is only a mark proxy
-          fill_pnl: usableBrokerUpl(ghost.broker_upl),
+          // Prefer paper auto-fill net pnl; else last non-zero broker UPL
+          fill_pnl:
+            paperAuto?.fill_pnl != null && Number.isFinite(paperAuto.fill_pnl)
+              ? Number(paperAuto.fill_pnl)
+              : usableBrokerUpl(ghost.broker_upl),
           capitalLive,
         }),
         volume: ghost.size,
