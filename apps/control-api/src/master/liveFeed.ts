@@ -164,6 +164,40 @@ export function isMeaningfulBar(b: Bar, minRangeAbs = 0.05): boolean {
 }
 
 /**
+ * Map LiveBarBuilder justClosed → desk TenSecBar for SETUP/MOVE confirm.
+ * Flat closes still count as closed_10s present (armed gate honesty); only
+ * null/invalid OHLC is omitted.
+ */
+export function closed10sFromJustClosed(
+  justClosed: Bar | null | undefined
+): import('../services/tenSecondOhlc.js').TenSecBar | null {
+  if (!justClosed) return null;
+  const { open, high, low, close } = justClosed;
+  if (
+    ![open, high, low, close].every((n) => Number.isFinite(n)) ||
+    open <= 0 ||
+    high <= 0 ||
+    low <= 0 ||
+    close <= 0
+  ) {
+    return null;
+  }
+  const open_time_ms =
+    typeof justClosed.ts_ms === 'number' && Number.isFinite(justClosed.ts_ms)
+      ? justClosed.ts_ms
+      : 0;
+  return {
+    open_time_ms,
+    open,
+    high,
+    low,
+    close,
+    // Mid-poll builder has no tick count — one closed OHLC still arms confirm
+    ticks: 1,
+  };
+}
+
+/**
  * Rolling bar builder from live ticks.
  * Yahoo structure OHLC is preserved; flat 10s closes never displace it.
  */

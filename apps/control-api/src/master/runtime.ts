@@ -3818,7 +3818,7 @@ class MasterRuntime {
   async startBrokerLiveFeed(pollMs = 2500) {
     if (this.liveFeedTimer) return;
     if (!this.broker || this.broker.paper) return;
-    const { LiveBarBuilder } = await import('./liveFeed.js');
+    const { LiveBarBuilder, closed10sFromJustClosed } = await import('./liveFeed.js');
     const builder = new LiveBarBuilder(10_000, 80);
     let seeded = false;
     let busy = false;
@@ -3946,7 +3946,7 @@ class MasterRuntime {
         } else {
           this.applyStructureSeedGate(builder.seed_source);
         }
-        const { bars } = builder.pushTick(quote.mid);
+        const { justClosed, bars } = builder.pushTick(quote.mid);
         if (bars.length < 5) return;
         // Desk parity: Capital market must be TRADEABLE/OPEN — unknown/CLOSED parks entries.
         // Never set trade_allowed from market alone while Capital account unproven.
@@ -3967,6 +3967,7 @@ class MasterRuntime {
             this.broker_detail = `${this.broker_detail || ''};market:${quote.market_status}`.slice(-400);
           }
         }
+        const closed_10s = closed10sFromJustClosed(justClosed);
         const referenceMids = await this.refreshPublicReferenceMids(this.epic);
         await this.tick(
           bars,
@@ -3982,7 +3983,10 @@ class MasterRuntime {
             digits: quote.digits,
             point: quote.point,
           },
-          { reference_mids: referenceMids.length ? referenceMids : null }
+          {
+            reference_mids: referenceMids.length ? referenceMids : null,
+            closed_10s,
+          }
         );
       } finally {
         busy = false;
@@ -3998,7 +4002,9 @@ class MasterRuntime {
   /** Attach public internet quote loop so /api/master/start trades without a separate script. */
   async startPublicLiveFeed(pollMs = 2500) {
     if (this.liveFeedTimer) return;
-    const { fetchLiveMarket, LiveBarBuilder } = await import('./liveFeed.js');
+    const { fetchLiveMarket, LiveBarBuilder, closed10sFromJustClosed } = await import(
+      './liveFeed.js'
+    );
     const builder = new LiveBarBuilder(10_000, 80);
     let seeded = false;
     let busy = false;
@@ -4056,10 +4062,11 @@ class MasterRuntime {
             );
           }
         }
-        const { bars } = builder.pushTick(snap.quote.mid);
+        const { justClosed, bars } = builder.pushTick(snap.quote.mid);
         if (bars.length < 5) return;
+        const closed_10s = closed10sFromJustClosed(justClosed);
         // Public consensus quote is already fused — do not self-diverge against the same mids
-        await this.tick(bars, quote);
+        await this.tick(bars, quote, { closed_10s });
       } finally {
         busy = false;
       }

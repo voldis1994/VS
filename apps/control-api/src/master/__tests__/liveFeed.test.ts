@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { analyzeBars } from '../analysis.js';
-import { capitalLiveEntriesAllowed, isMeaningfulBar, LiveBarBuilder } from '../liveFeed.js';
+import {
+  capitalLiveEntriesAllowed,
+  closed10sFromJustClosed,
+  isMeaningfulBar,
+  LiveBarBuilder,
+} from '../liveFeed.js';
 import { PaperBroker } from '../broker.js';
 import { DEFAULT_MASTER_CONFIG, GOLD_SPEC, MasterPipeline } from '../pipeline.js';
 import { PositionManager } from '../positionManager.js';
@@ -17,6 +22,34 @@ describe('VS MASTER live bar builder', () => {
     const c = b.pushTick(4402, t0 + 1001);
     expect(c.justClosed).not.toBeNull();
     expect(c.bars.length).toBeGreaterThan(10);
+  });
+
+  it('closed10sFromJustClosed maps justClosed Bar → TenSecBar', () => {
+    const b = new LiveBarBuilder(1000, 20);
+    b.seedAround(4400, 10);
+    const t0 = 2_000_000;
+    expect(closed10sFromJustClosed(b.pushTick(4401, t0).justClosed)).toBeNull();
+    const closed = b.pushTick(4408, t0 + 1001).justClosed;
+    expect(closed).not.toBeNull();
+    const ten = closed10sFromJustClosed(closed);
+    expect(ten).toEqual({
+      open_time_ms: t0,
+      open: 4401,
+      high: 4408,
+      low: 4401,
+      close: 4408,
+      ticks: 1,
+    });
+    // Flat close still maps (armed confirm honesty) — not null
+    const flat = closed10sFromJustClosed({
+      open: 100,
+      high: 100,
+      low: 100,
+      close: 100,
+      ts_ms: 99,
+    });
+    expect(flat?.open_time_ms).toBe(99);
+    expect(closed10sFromJustClosed(null)).toBeNull();
   });
 
   it('seedBars marks yahoo_ohlc source', () => {
