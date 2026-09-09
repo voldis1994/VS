@@ -918,6 +918,10 @@ class MasterRuntime {
         './tradeAckJournal.js'
       );
       await hydrateTradeAckJournalFromPersist();
+      const { hydrateErrorJournalFromPersist } = await import(
+        './errorJournal.js'
+      );
+      await hydrateErrorJournalFromPersist();
       if (this.positions.count() === 0) {
         const loaded = await loadOpenPositions();
         const valid = loaded.filter((p) => p.decision && p.position_id);
