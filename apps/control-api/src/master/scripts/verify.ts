@@ -658,7 +658,7 @@ async function main() {
     );
     const deskEntryPerfJoin =
       performanceBody.includes('performanceByDeskEntry') &&
-      performanceBody.includes('OpportunityRecord.decision') &&
+      performanceBody.includes('opportunity.decision') &&
       performanceBody.includes('fromOpp') &&
       performanceBody.includes('deskSourceFromSetupKey') &&
       performanceBody.includes('r.setup_key') &&
