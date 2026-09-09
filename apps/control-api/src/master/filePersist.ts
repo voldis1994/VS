@@ -47,6 +47,7 @@ export type FilePersistState = {
     news_window?: Record<string, unknown> | null;
     client_fanout?: Record<string, unknown> | null;
     trade_ack_journal?: Record<string, unknown> | null;
+    news_calendar?: Record<string, unknown> | null;
   };
 };
 
@@ -301,6 +302,10 @@ export class FilePersist implements PersistClient, JournalMirror {
       if (meta.trade_ack_journal && needsRestore(tradeAckPath)) {
         atomicWriteJson(tradeAckPath, meta.trade_ack_journal);
       }
+      const newsCalPath = join(this.root, 'news_calendar.json');
+      if (meta.news_calendar && needsRestore(newsCalPath)) {
+        atomicWriteJson(newsCalPath, meta.news_calendar);
+      }
     } catch {
       /* best-effort */
     }
@@ -327,6 +332,7 @@ export class FilePersist implements PersistClient, JournalMirror {
     const newsRaw = readJson('news_window.json');
     const fanoutRaw = readJson('client_fanout.json');
     const tradeAckRaw = readJson('trade_ack_journal.json');
+    const newsCalRaw = readJson('news_calendar.json');
     // Per-field fallback: partial sidecar wipe must not null out embedded meta
     const manage =
       manageRaw ?? this.lastOperatorMeta?.manage ?? null;
@@ -358,6 +364,10 @@ export class FilePersist implements PersistClient, JournalMirror {
         : this.lastOperatorMeta?.client_fanout ?? null;
     const trade_ack_journal =
       tradeAckRaw ?? this.lastOperatorMeta?.trade_ack_journal ?? null;
+    const news_calendar =
+      newsCalRaw && Array.isArray(newsCalRaw.events)
+        ? newsCalRaw
+        : this.lastOperatorMeta?.news_calendar ?? null;
     if (
       !manage &&
       owns == null &&
@@ -368,7 +378,8 @@ export class FilePersist implements PersistClient, JournalMirror {
       !spread_history &&
       !news_window &&
       !client_fanout &&
-      !trade_ack_journal
+      !trade_ack_journal &&
+      !news_calendar
     ) {
       // Sidecars wiped — keep prior meta so flush does not erase backup
       return this.lastOperatorMeta;
@@ -384,6 +395,7 @@ export class FilePersist implements PersistClient, JournalMirror {
       news_window,
       client_fanout,
       trade_ack_journal,
+      news_calendar,
     };
     this.lastOperatorMeta = meta;
     return meta;
@@ -588,6 +600,16 @@ export class FilePersist implements PersistClient, JournalMirror {
         this.mem.clientFanoutPayload
       );
     }
+    // Dual-write news_calendar sidecar when SQL path updated MemoryPersist
+    if (
+      this.mem.newsCalendarPayload &&
+      Array.isArray(this.mem.newsCalendarPayload.events)
+    ) {
+      atomicWriteJson(join(this.root, 'news_calendar.json'), {
+        events: this.mem.newsCalendarPayload.events,
+        fetched_at_ms: this.mem.newsCalendarPayload.fetched_at_ms ?? Date.now(),
+      });
+    }
   }
 
   async query(sql: string, params: unknown[] = []) {
@@ -721,6 +743,10 @@ export function ensureOperatorMetaFromStateDir(root?: string): boolean {
     const tradeAckPath = join(dir, 'trade_ack_journal.json');
     if (raw.operator_meta.trade_ack_journal && needsRestore(tradeAckPath)) {
       atomicWriteJson(tradeAckPath, raw.operator_meta.trade_ack_journal);
+    }
+    const newsCalPath = join(dir, 'news_calendar.json');
+    if (raw.operator_meta.news_calendar && needsRestore(newsCalPath)) {
+      atomicWriteJson(newsCalPath, raw.operator_meta.news_calendar);
     }
     // Also heal wiped decision/trade jsonl from mirrored tails
     ensureJournalSidecarsFromStateDir(dir);

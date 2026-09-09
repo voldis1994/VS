@@ -1,7 +1,16 @@
 /**
  * Forex Factory weekly calendar (faireconomy mirror) — VS-System NewsCalendarService.
  * Cached sync reads for the filter path; refresh from runtime tick.
+ * Also DualPersist / disk / operator_meta so restart does not fail-open before fetch.
  */
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import {
+  persistNewsCalendarState,
+  loadNewsCalendarFromPersist,
+} from './persist.js';
+import { embedOperatorMetaPatch } from './operatorMetaEmbed.js';
+
 export type CalendarNewsImpact = 'Low' | 'Medium' | 'High' | 'Holiday' | string;
 
 export type CalendarNewsEvent = {
@@ -25,9 +34,87 @@ const DEFAULT_FEED =
   'https://nfs.faireconomy.media/ff_calendar_thisweek.json';
 
 const CACHE_TTL_MS = 5 * 60_000;
+/** Disk cache may be older than TTL but still useful until live refresh. */
+const DISK_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
 
 let cache: { at: number; events: CalendarNewsEvent[] } | null = null;
 let inflight: Promise<CalendarNewsEvent[]> | null = null;
+
+function stateDir(root?: string): string {
+  return (
+    root ||
+    process.env.MASTER_STATE_DIR ||
+    process.env.MASTER_GATES_DIR ||
+    join(process.cwd(), '.master-state')
+  );
+}
+
+function calendarPath(root?: string): string {
+  return join(stateDir(root), 'news_calendar.json');
+}
+
+function normalizeEvents(raw: unknown): CalendarNewsEvent[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (e) =>
+      e &&
+      typeof e === 'object' &&
+      typeof (e as CalendarNewsEvent).title === 'string' &&
+      typeof (e as CalendarNewsEvent).date === 'string'
+  ) as CalendarNewsEvent[];
+}
+
+function saveCalendarDisk(
+  events: CalendarNewsEvent[],
+  fetchedAtMs: number,
+  root?: string
+): boolean {
+  try {
+    const dir = stateDir(root);
+    mkdirSync(dir, { recursive: true });
+    const payload = {
+      events,
+      fetched_at_ms: fetchedAtMs,
+    };
+    writeFileSync(calendarPath(root), JSON.stringify(payload));
+    embedOperatorMetaPatch(
+      { news_calendar: payload as unknown as Record<string, unknown> },
+      dir
+    );
+    void persistNewsCalendarState({
+      events,
+      fetched_at_ms: fetchedAtMs,
+      saved_at_ms: Date.now(),
+    }).catch(() => {});
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function loadCalendarDisk(root?: string): {
+  events: CalendarNewsEvent[];
+  fetched_at_ms: number;
+} | null {
+  try {
+    const path = calendarPath(root);
+    if (!existsSync(path)) return null;
+    const raw = JSON.parse(readFileSync(path, 'utf8')) as {
+      events?: unknown;
+      fetched_at_ms?: number;
+    };
+    const events = normalizeEvents(raw.events);
+    if (!events.length) return null;
+    const fetched =
+      typeof raw.fetched_at_ms === 'number' && Number.isFinite(raw.fetched_at_ms)
+        ? raw.fetched_at_ms
+        : Date.now();
+    if (Date.now() - fetched > DISK_MAX_AGE_MS) return null;
+    return { events, fetched_at_ms: fetched };
+  } catch {
+    return null;
+  }
+}
 
 /** Map broker symbol → currency countries that matter for news. */
 export function currenciesForSymbol(symbol: string): string[] {
@@ -70,7 +157,14 @@ export function impactRank(impact: string): number {
 }
 
 export function getCachedNewsEvents(): CalendarNewsEvent[] {
-  return cache?.events ?? [];
+  if (cache?.events?.length) return cache.events;
+  // Sync cold path — load disk so first filter after restart does not fail-open
+  const disk = loadCalendarDisk();
+  if (disk?.events.length) {
+    cache = { at: disk.fetched_at_ms, events: disk.events };
+    return cache.events;
+  }
+  return [];
 }
 
 /** Inject events for tests. */
@@ -94,6 +188,15 @@ export async function refreshNewsCalendar(force = false): Promise<CalendarNewsEv
   ) {
     return cache.events;
   }
+  if (!cache) {
+    const disk = loadCalendarDisk();
+    if (disk?.events.length) {
+      cache = { at: disk.fetched_at_ms, events: disk.events };
+      if (!force && Date.now() - disk.fetched_at_ms < CACHE_TTL_MS) {
+        return cache.events;
+      }
+    }
+  }
   if (inflight) return inflight;
 
   inflight = (async () => {
@@ -103,20 +206,64 @@ export async function refreshNewsCalendar(force = false): Promise<CalendarNewsEv
         signal: AbortSignal.timeout(12_000),
       });
       if (!res.ok) {
-        return cache?.events ?? [];
+        return cache?.events ?? loadCalendarDisk()?.events ?? [];
       }
       const raw = (await res.json()) as CalendarNewsEvent[];
-      const events = Array.isArray(raw) ? raw : [];
-      cache = { at: Date.now(), events };
+      const events = normalizeEvents(raw);
+      const at = Date.now();
+      cache = { at, events };
+      saveCalendarDisk(events, at);
       return events;
     } catch {
-      return cache?.events ?? [];
+      return cache?.events ?? loadCalendarDisk()?.events ?? [];
     } finally {
       inflight = null;
     }
   })();
 
   return inflight;
+}
+
+/**
+ * When news_calendar.json was wiped but DualPersist/PG primary still holds
+ * events, rewrite sidecar and seed memory before entry filters.
+ */
+export async function hydrateNewsCalendarFromPersist(
+  root?: string
+): Promise<{ restored: boolean; count: number }> {
+  const dir = stateDir(root);
+  const path = calendarPath(root);
+  if (existsSync(path)) {
+    const disk = loadCalendarDisk(root);
+    if (disk?.events.length) {
+      cache = { at: disk.fetched_at_ms, events: disk.events };
+      return { restored: false, count: disk.events.length };
+    }
+  }
+  try {
+    const loaded = await loadNewsCalendarFromPersist();
+    const events = normalizeEvents(loaded?.events);
+    if (!events.length) return { restored: false, count: 0 };
+    const fetched =
+      typeof loaded?.fetched_at_ms === 'number' &&
+      Number.isFinite(loaded.fetched_at_ms)
+        ? loaded.fetched_at_ms
+        : Date.now();
+    if (Date.now() - fetched > DISK_MAX_AGE_MS) {
+      return { restored: false, count: 0 };
+    }
+    mkdirSync(dir, { recursive: true });
+    const payload = { events, fetched_at_ms: fetched };
+    writeFileSync(path, JSON.stringify(payload));
+    embedOperatorMetaPatch(
+      { news_calendar: payload as unknown as Record<string, unknown> },
+      dir
+    );
+    cache = { at: fetched, events };
+    return { restored: true, count: events.length };
+  } catch {
+    return { restored: false, count: 0 };
+  }
 }
 
 /**

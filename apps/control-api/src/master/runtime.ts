@@ -931,6 +931,10 @@ class MasterRuntime {
       if (fanoutHydrate.summary) {
         this.last_client_fanout = fanoutHydrate.summary;
       }
+      const { hydrateNewsCalendarFromPersist } = await import(
+        './newsCalendar.js'
+      );
+      await hydrateNewsCalendarFromPersist();
       if (this.positions.count() === 0) {
         const loaded = await loadOpenPositions();
         const valid = loaded.filter((p) => p.decision && p.position_id);
