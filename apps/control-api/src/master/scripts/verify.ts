@@ -319,7 +319,8 @@ async function main() {
       runtimeBody.includes('Opportunity seed often has decision but no execution') &&
       runtimeBody.includes('account unproven') &&
       runtimeBody.includes('hydrated · none · awaiting attach') &&
-      runtimeBody.includes('hydrated · open=${opens} · awaiting manage') &&
+      runtimeBody.includes('open=${opens} · awaiting manage') &&
+      runtimeBody.includes('flat · manage never ran') &&
       runtimeBody.includes("reason: !this.last_market") &&
       runtimeBody.includes("? 'hydrated'") &&
       runtimeBody.includes('pnl=${Number(perf.total_pnl).toFixed(2)}') &&
