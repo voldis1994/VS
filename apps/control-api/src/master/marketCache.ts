@@ -8,12 +8,16 @@
  * persist beside minute bars so restart does not wait on network for 1h OHLC
  * or a brand-new 10s close before resolveDeskEntryConfirm can fire.
  */
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { atomicWriteJson } from './atomicIo.js';
 import { embedOperatorMetaPatch } from './operatorMetaEmbed.js';
 import type { Bar, Quote } from './types.js';
 import type { TenSecBar } from '../services/tenSecondOhlc.js';
+import {
+  persistMarketCacheState,
+  loadMarketCacheFromPersist,
+} from './persist.js';
 
 function finiteBar(b: Bar | null | undefined): boolean {
   return !!(
@@ -102,10 +106,38 @@ export function saveMarketCache(
     atomicWriteJson(cachePath(dir), state);
     // Keep operator_meta in sync even when no position write flushes FilePersist
     embedMarketCacheInOperatorMeta(state, dir);
+    // DualPersist / MemoryPersist / PG primary — survive full file wipe
+    void persistMarketCacheState(state).catch(() => {});
     return true;
   } catch {
     return false;
   }
+}
+
+function normalizeMarketCacheState(
+  raw: MarketCacheState | null | undefined
+): MarketCacheState | null {
+  if (!raw || !Array.isArray(raw.bars)) return null;
+  const hour_bars = Array.isArray(raw.hour_bars)
+    ? raw.hour_bars.filter(finiteBar)
+    : [];
+  const closed_10s = finiteTenSec(raw.closed_10s) ? raw.closed_10s! : null;
+  return {
+    epic: String(raw.epic || ''),
+    bars: raw.bars.filter(finiteBar),
+    quote:
+      raw.quote &&
+      Number.isFinite(raw.quote.mid) &&
+      Number.isFinite(raw.quote.bid) &&
+      Number.isFinite(raw.quote.ask)
+        ? raw.quote
+        : null,
+    ...(hour_bars.length ? { hour_bars } : {}),
+    hour_bars_detail: raw.hour_bars_detail ?? null,
+    ...(closed_10s ? { closed_10s } : {}),
+    structure_seed_source: raw.structure_seed_source ?? null,
+    saved_at_ms: Number(raw.saved_at_ms) || 0,
+  };
 }
 
 export function loadMarketCache(root?: string): MarketCacheState | null {
@@ -113,28 +145,34 @@ export function loadMarketCache(root?: string): MarketCacheState | null {
     const path = cachePath(marketCacheDir(root));
     if (!existsSync(path)) return null;
     const raw = JSON.parse(readFileSync(path, 'utf8')) as MarketCacheState;
-    if (!raw || !Array.isArray(raw.bars)) return null;
-    const hour_bars = Array.isArray(raw.hour_bars)
-      ? raw.hour_bars.filter(finiteBar)
-      : [];
-    const closed_10s = finiteTenSec(raw.closed_10s) ? raw.closed_10s! : null;
-    return {
-      epic: String(raw.epic || ''),
-      bars: raw.bars.filter(finiteBar),
-      quote:
-        raw.quote &&
-        Number.isFinite(raw.quote.mid) &&
-        Number.isFinite(raw.quote.bid) &&
-        Number.isFinite(raw.quote.ask)
-          ? raw.quote
-          : null,
-      ...(hour_bars.length ? { hour_bars } : {}),
-      hour_bars_detail: raw.hour_bars_detail ?? null,
-      ...(closed_10s ? { closed_10s } : {}),
-      structure_seed_source: raw.structure_seed_source ?? null,
-      saved_at_ms: Number(raw.saved_at_ms) || 0,
-    };
+    return normalizeMarketCacheState(raw);
   } catch {
     return null;
+  }
+}
+
+/**
+ * When market_cache.json was wiped but DualPersist/PG primary still holds the
+ * singleton payload, rewrite the sidecar (+ operator_meta) before disk hydrate.
+ */
+export async function hydrateMarketCacheFromPersist(
+  root?: string
+): Promise<{ restored: boolean }> {
+  const dir = marketCacheDir(root);
+  const path = cachePath(dir);
+  if (existsSync(path)) return { restored: false };
+  try {
+    const loaded = await loadMarketCacheFromPersist();
+    const state = normalizeMarketCacheState(loaded);
+    if (!state) return { restored: false };
+    if (!state.bars.length && !state.quote && !(state.hour_bars?.length) && !state.closed_10s) {
+      return { restored: false };
+    }
+    mkdirSync(dir, { recursive: true });
+    atomicWriteJson(path, state);
+    embedMarketCacheInOperatorMeta(state, dir);
+    return { restored: true };
+  } catch {
+    return { restored: false };
   }
 }

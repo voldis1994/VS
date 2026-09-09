@@ -112,6 +112,52 @@ export async function persistOutcome(
   }
 }
 
+/** DualPersist / MemoryPersist / PG — market_cache singleton for wipe heal. */
+export async function persistMarketCacheState(state: {
+  epic: string;
+  bars: unknown[];
+  quote: unknown;
+  hour_bars?: unknown[];
+  hour_bars_detail?: string | null;
+  closed_10s?: unknown;
+  structure_seed_source?: string | null;
+  saved_at_ms: number;
+}): Promise<boolean> {
+  try {
+    await client.query(
+      `INSERT INTO master_market_cache (id, payload, saved_at_ms)
+       VALUES ($1, $2::jsonb, $3)
+       ON CONFLICT (id) DO UPDATE SET
+         payload = EXCLUDED.payload,
+         saved_at_ms = EXCLUDED.saved_at_ms`,
+      ['singleton', JSON.stringify(state), state.saved_at_ms]
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function loadMarketCacheFromPersist(): Promise<any | null> {
+  try {
+    const { rows } = await client.query(
+      `SELECT payload, saved_at_ms FROM master_market_cache WHERE id = $1 LIMIT 1`,
+      ['singleton']
+    );
+    const row = rows?.[0];
+    if (!row) return null;
+    const payload =
+      typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload;
+    if (!payload || typeof payload !== 'object') return null;
+    return {
+      ...payload,
+      saved_at_ms: Number(row.saved_at_ms) || Number(payload.saved_at_ms) || 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Reader decision audit — DualPersist / MemoryPersist / FilePersist SQL path. */
 export async function persistDecisionEvent(entry: {
   event_id: string;
@@ -652,9 +698,36 @@ export class MemoryPersist implements PersistClient {
   /** Reader audit tails — DualPersist primary when PG tables exist */
   decisionEvents: any[] = [];
   tradeEvents: any[] = [];
+  /** Singleton market_cache payload — DualPersist primary wipe heal */
+  marketCachePayload: any | null = null;
 
   async query(sql: string, params: unknown[] = []) {
     const s = sql.replace(/\s+/g, ' ').trim();
+    if (s.startsWith('INSERT INTO master_market_cache')) {
+      const raw = params[1];
+      this.marketCachePayload =
+        typeof raw === 'string' ? JSON.parse(raw as string) : raw;
+      if (
+        this.marketCachePayload &&
+        typeof this.marketCachePayload === 'object' &&
+        params[2] != null
+      ) {
+        this.marketCachePayload.saved_at_ms = Number(params[2]) || Date.now();
+      }
+      return { rows: [] };
+    }
+    if (s.startsWith('SELECT') && s.includes('master_market_cache')) {
+      if (!this.marketCachePayload) return { rows: [] };
+      return {
+        rows: [
+          {
+            id: 'singleton',
+            payload: this.marketCachePayload,
+            saved_at_ms: Number(this.marketCachePayload.saved_at_ms) || 0,
+          },
+        ],
+      };
+    }
     if (s.startsWith('INSERT INTO master_decision_events')) {
       const event_id = String(params[0]);
       if (!this.decisionEvents.some((e) => e.event_id === event_id)) {

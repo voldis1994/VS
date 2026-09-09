@@ -584,4 +584,100 @@ describe('market_cache hydrate provenance', () => {
       else process.env.MASTER_GATES_DIR = prevGates;
     }
   });
+
+  it('DualPersist MemoryPersist primary heals wiped market_cache sidecar', async () => {
+    const { mkdtempSync, rmSync, existsSync, mkdirSync } = await import('fs');
+    const { unlinkSync } = await import('fs');
+    const {
+      MemoryPersist,
+      setPersistClient,
+      persistMarketCacheState,
+    } = await import('../persist.js');
+    const { DualPersist } = await import('../dualPersist.js');
+    const { FilePersist } = await import('../filePersist.js');
+    const {
+      saveMarketCache,
+      loadMarketCache,
+      hydrateMarketCacheFromPersist,
+    } = await import('../marketCache.js');
+    const dir = mkdtempSync(join(tmpdir(), 'master-mkt-pg-heal-'));
+    const prevState = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = dir;
+    const primary = new MemoryPersist();
+    try {
+      setPersistClient(new DualPersist(primary, new FilePersist(dir)));
+      const hourBars = Array.from({ length: 6 }, (_, i) => ({
+        open: 4300 + i,
+        high: 4302 + i,
+        low: 4298 + i,
+        close: 4301 + i,
+        ts_ms: i + 1,
+      }));
+      const bars = Array.from({ length: 10 }, (_, i) => ({
+        open: 4400 + i,
+        high: 4401 + i,
+        low: 4399 + i,
+        close: 4400.5 + i,
+        ts_ms: Date.now() - (10 - i) * 60_000,
+      }));
+      expect(
+        saveMarketCache({
+          epic: 'GOLD',
+          bars,
+          quote: null,
+          hour_bars: hourBars,
+          hour_bars_detail: 'pg_heal',
+          closed_10s: {
+            open_time_ms: 1000,
+            open: 4400,
+            high: 4401,
+            low: 4399,
+            close: 4400.5,
+            ticks: 2,
+          },
+          structure_seed_source: 'pg_heal',
+        })
+      ).toBe(true);
+      await persistMarketCacheState({
+        epic: 'GOLD',
+        bars,
+        quote: null,
+        hour_bars: hourBars,
+        hour_bars_detail: 'pg_heal',
+        closed_10s: {
+          open_time_ms: 1000,
+          open: 4400,
+          high: 4401,
+          low: 4399,
+          close: 4400.5,
+          ticks: 2,
+        },
+        structure_seed_source: 'pg_heal',
+        saved_at_ms: Date.now(),
+      });
+      expect(primary.marketCachePayload?.hour_bars?.length).toBe(6);
+      // Wipe files — primary MemoryPersist remains
+      setPersistClient(null);
+      rmSync(dir, { recursive: true, force: true });
+      mkdirSync(dir, { recursive: true });
+      setPersistClient(new DualPersist(primary, new FilePersist(dir)));
+      expect(existsSync(join(dir, 'market_cache.json'))).toBe(false);
+      const healed = await hydrateMarketCacheFromPersist(dir);
+      expect(healed.restored).toBe(true);
+      expect(existsSync(join(dir, 'market_cache.json'))).toBe(true);
+      const loaded = loadMarketCache(dir);
+      expect(loaded?.hour_bars?.length).toBe(6);
+      expect(loaded?.closed_10s?.close).toBe(4400.5);
+      expect(loaded?.structure_seed_source).toBe('pg_heal');
+    } finally {
+      setPersistClient(null);
+      if (prevState === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prevState;
+      try {
+        unlinkSync(join(dir, 'market_cache.json'));
+      } catch {
+        /* ignore */
+      }
+    }
+  });
 });

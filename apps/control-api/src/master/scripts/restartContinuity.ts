@@ -330,21 +330,8 @@ async function main() {
   for (const e of [...loadTradeEvents(100)].reverse()) {
     await persistTradeEvent(e);
   }
-  const primaryHadDecisions = primary.decisionEvents.length >= 1;
-  const primaryHadTrades = primary.tradeEvents.length >= 1;
-  const primaryHadOpens = primary.positions.length >= 1;
-  // Wipe ALL file state — only MemoryPersist primary remains
-  setJournalMirror(null);
-  setPersistClient(null);
-  rmSync(stateDir, { recursive: true, force: true });
-  mkdirSync(stateDir, { recursive: true });
-  const mirrorAfterWipe = new FilePersist(stateDir);
-  setPersistClient(new DualPersist(primary, mirrorAfterWipe));
-  const journalsGoneBeforeHydrate =
-    !existsSync(decPath) && !existsSync(tradePath);
-  // Re-seed market cache sidecar (not SQL-mirrored) so later manage has bars.
-  // Aged quote must still hydrate as disk_cache — not live stale_quote.
-  saveMarketCache({
+  // Dual-write market_cache into MemoryPersist primary BEFORE file wipe
+  const cacheForPrimary = {
     epic: 'GOLD',
     bars,
     quote: {
@@ -366,8 +353,35 @@ async function main() {
       ticks: 4,
     },
     structure_seed_source: 'restart_check',
+  };
+  saveMarketCache(cacheForPrimary);
+  const { persistMarketCacheState } = await import('../persist.js');
+  await persistMarketCacheState({
+    ...cacheForPrimary,
+    saved_at_ms: Date.now(),
   });
-  // Re-seed epic cycle stash (same non-SQL sidecar class as market_cache)
+  const primaryHadMarketCache =
+    primary.marketCachePayload != null &&
+    Array.isArray(primary.marketCachePayload.hour_bars) &&
+    primary.marketCachePayload.hour_bars.length >= 6 &&
+    !!primary.marketCachePayload.closed_10s;
+  const primaryHadDecisions = primary.decisionEvents.length >= 1;
+  const primaryHadTrades = primary.tradeEvents.length >= 1;
+  const primaryHadOpens = primary.positions.length >= 1;
+  // Wipe ALL file state — only MemoryPersist primary remains
+  setJournalMirror(null);
+  setPersistClient(null);
+  rmSync(stateDir, { recursive: true, force: true });
+  mkdirSync(stateDir, { recursive: true });
+  const mirrorAfterWipe = new FilePersist(stateDir);
+  setPersistClient(new DualPersist(primary, mirrorAfterWipe));
+  const journalsGoneBeforeHydrate =
+    !existsSync(decPath) && !existsSync(tradePath);
+  const marketCacheGoneBeforeHydrate = !existsSync(
+    join(stateDir, 'market_cache.json')
+  );
+  // Do NOT re-seed market_cache — must heal from DualPersist primary.
+  // Re-seed epic cycle stash (still non-SQL sidecar class for this PR)
   saveEpicCycleStash({
     setups_by_epic: {
       GOLD: {
@@ -530,7 +544,10 @@ async function main() {
     primaryHadDecisions &&
     primaryHadTrades &&
     primaryHadOpens &&
+    primaryHadMarketCache &&
     journalsGoneBeforeHydrate &&
+    marketCacheGoneBeforeHydrate &&
+    existsSync(join(stateDir, 'market_cache.json')) &&
     stHydrate.persist_backend === 'dual' &&
     stHydrate.journal_audit?.healed_from_persist === true &&
     stHydrate.journal_audit?.decision_sidecar === true &&
@@ -1036,6 +1053,10 @@ async function main() {
       heal_helper: healHelper,
       heal_op_meta_called: healOpMeta,
       pg_primary_heal_ok: pgPrimaryHealOk,
+      market_cache_pg_primary_heal_ok:
+        primaryHadMarketCache &&
+        marketCacheGoneBeforeHydrate &&
+        existsSync(join(stateDir, 'market_cache.json')),
       persist_backend: hydrateSnap.persist_backend,
       healed_from_persist: hydrateSnap.healed_from_persist,
     },
