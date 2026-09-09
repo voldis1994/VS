@@ -442,6 +442,13 @@ export class FilePersist implements PersistClient, JournalMirror {
       operator_meta: this.snapshotOperatorMeta(),
     };
     atomicWriteJson(this.statePath(), state);
+    // Dual-write market_cache sidecar when SQL path updated MemoryPersist
+    if (this.mem.marketCachePayload) {
+      atomicWriteJson(
+        join(this.root, 'market_cache.json'),
+        this.mem.marketCachePayload
+      );
+    }
   }
 
   async query(sql: string, params: unknown[] = []) {

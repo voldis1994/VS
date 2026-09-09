@@ -880,6 +880,8 @@ class MasterRuntime {
         wrote_jsonl: auditHydrate.wrote_jsonl,
         at: new Date().toISOString(),
       };
+      const { hydrateMarketCacheFromPersist } = await import('./marketCache.js');
+      await hydrateMarketCacheFromPersist();
       this.hydrateMarketCacheFromDisk();
       this.hydrateEpicCycleStashFromDisk();
       if (this.positions.count() === 0) {

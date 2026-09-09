@@ -154,6 +154,7 @@ async function main() {
       r.ok &&
       demo?.status === 'PASS_RESTART_CONTINUITY' &&
       demo?.journals?.pg_primary_heal_ok === true &&
+      demo?.journals?.market_cache_pg_primary_heal_ok === true &&
       demo?.journals?.decision_stage_ok === false &&
       demo?.journals?.analysis_stage_ok === false &&
       demo?.journals?.execution_stage_ok === false &&
@@ -326,6 +327,7 @@ async function main() {
       'src/db/migrations/011_master_journal.sql',
       'src/db/migrations/014_master_decision_trade_events.sql',
       'src/db/migrations/015_master_decision_desk_entry.sql',
+      'src/db/migrations/017_master_market_cache.sql',
       'src/master/auditJournalHydrate.ts',
       'src/master/persistBackend.ts',
       'src/master/setupDerive.ts',
@@ -358,6 +360,11 @@ async function main() {
     const runtimeBody = readFileSync(join(root, 'src/master/runtime.ts'), 'utf8');
     const marketCacheBody = readFileSync(
       join(root, 'src/master/marketCache.ts'),
+      'utf8'
+    );
+    const persistBody = readFileSync(join(root, 'src/master/persist.ts'), 'utf8');
+    const restartBody = readFileSync(
+      join(root, 'src/master/scripts/restartContinuity.ts'),
       'utf8'
     );
     const stagesApi =
@@ -510,6 +517,14 @@ async function main() {
       runtimeBody.includes('this.last_closed_10s') &&
       marketCacheBody.includes('closed_10s') &&
       marketCacheBody.includes('finiteTenSec');
+    const marketCachePgHealApi =
+      marketCacheBody.includes('hydrateMarketCacheFromPersist') &&
+      marketCacheBody.includes('persistMarketCacheState') &&
+      runtimeBody.includes('hydrateMarketCacheFromPersist') &&
+      persistBody.includes('master_market_cache') &&
+      existsSync(join(root, 'src/db/migrations/017_master_market_cache.sql')) &&
+      restartBody.includes('market_cache_pg_primary_heal_ok') &&
+      restartBody.includes('Do NOT re-seed market_cache');
     const tickStickyDeskArmsApi =
       runtimeBody.includes('hourBarsForCycle') &&
       runtimeBody.includes('closed10sForCycle') &&
@@ -709,7 +724,6 @@ async function main() {
       masterPageBody.includes('desk_entry_source') &&
       masterPageBody.includes('confirm ${d.desk_entry_source') &&
       masterRouteBody.includes('desk_entry_source');
-    const persistBody = readFileSync(join(root, 'src/master/persist.ts'), 'utf8');
     const deskEntryPgMig = readFileSync(
       join(root, 'src/db/migrations/015_master_decision_desk_entry.sql'),
       'utf8'
@@ -757,10 +771,6 @@ async function main() {
       masterPageBody.includes('expectancy_by_desk_entry') &&
       masterPageBody.includes("'Confirm EV'") &&
       masterRouteBody.includes("card('Confirm EV'");
-    const restartBody = readFileSync(
-      join(root, 'src/master/scripts/restartContinuity.ts'),
-      'utf8'
-    );
     const confirmDeskHydrateWarn =
       masterPageBody.includes("'Confirm PnL'") &&
       masterPageBody.includes("'Confirm EV'") &&
@@ -964,6 +974,7 @@ async function main() {
       closed10sCacheUi &&
       closed10sCacheEmbed &&
       closed10sCacheApi &&
+      marketCachePgHealApi &&
       tickStickyDeskArmsApi &&
       entryGatesHydrateUi &&
       entryGatesEmbed &&
@@ -1023,11 +1034,11 @@ async function main() {
     checks.push({
       id: 'artifacts_present',
       requirement:
-        'Dashboard routes, brokers, recovery, desk bridge, manage_owner + journal_audit + hydrate filter/decision cards + Closed PnL + Quote/Bars disk_cache + Hour bars disk_cache + Closed 10s disk_cache + tick sticky desk arms fallback + Entry gates + Why/monitor hydrate + Float UPL cache + risk seed + Stage·exit hydrate + Norm/validate disk_cache + live-paper retry harden + live-paper desk closed_10s/hour_bars setup|move CLOSED + desk SETUP ARMED decide gate + LIVE positive expectancy default + MASTER owns Client fanout + desk 1h/10s entry confirm + live-feed sticky justClosed→closed_10s + live-feed hour_bars hour_bias + desk_entry/hour_bias/closed_10s dashboard + decision journal desk_entry provenance + DualPersist PG desk_entry hydrate + Confirm PnL desk_entry perf join + Confirm EV desk-source expectancy + open desk_entry hydrate/backfill + desk_entry status hydrate + open-pos confirm dash + closed-trade confirm dash + TradeEvent durable desk_entry_source + Confirm PnL/EV hydrate warn + TradeEvent desk restart DualPersist heal + desk confirm card hydrate warn + Market Core EntryReady fail-closed + multi-epic cycle stash + epic-scoped setupKey + desk-source setupKey EV + epic cycle stash restart hydrate + multi-epic manage quote safety + desk feed_divergent + replay closed_10s/hour_bars desk confirm + systemAudit desk closed_10s/hour_bars resolveDeskEntryConfirm',
+        'Dashboard routes, brokers, recovery, desk bridge, manage_owner + journal_audit + hydrate filter/decision cards + Closed PnL + Quote/Bars disk_cache + Hour bars disk_cache + Closed 10s disk_cache + market_cache DualPersist PG heal + tick sticky desk arms fallback + Entry gates + Why/monitor hydrate + Float UPL cache + risk seed + Stage·exit hydrate + Norm/validate disk_cache + live-paper retry harden + live-paper desk closed_10s/hour_bars setup|move CLOSED + desk SETUP ARMED decide gate + LIVE positive expectancy default + MASTER owns Client fanout + desk 1h/10s entry confirm + live-feed sticky justClosed→closed_10s + live-feed hour_bars hour_bias + desk_entry/hour_bias/closed_10s dashboard + decision journal desk_entry provenance + DualPersist PG desk_entry hydrate + Confirm PnL desk_entry perf join + Confirm EV desk-source expectancy + open desk_entry hydrate/backfill + desk_entry status hydrate + open-pos confirm dash + closed-trade confirm dash + TradeEvent durable desk_entry_source + Confirm PnL/EV hydrate warn + TradeEvent desk restart DualPersist heal + desk confirm card hydrate warn + Market Core EntryReady fail-closed + multi-epic cycle stash + epic-scoped setupKey + desk-source setupKey EV + epic cycle stash restart hydrate + multi-epic manage quote safety + desk feed_divergent + replay closed_10s/hour_bars desk confirm + systemAudit desk closed_10s/hour_bars resolveDeskEntryConfirm',
       ok: missing.length === 0 && honestyOk,
       detail: missing.length
         ? `missing: ${missing.join(',')}`
-        : `${files.length} core files; pipeline_stages api=${stagesApi} ui=${stagesUi}; manage_owner api=${manageOwnerApi} masterUi=${manageOwnerMasterUi} deskUi=${manageOwnerDeskUi} deskBridge=${deskBridgeMeta}; desk_feed_divergent=${deskFeedDivergent}; journal_audit api=${journalAuditApi} ui=${journalAuditUi} embed=${journalAuditEmbed}; filter_hydrate_ui=${filterCardsHydrateUi}; closed_pnl ui=${closedPnlUi} embed=${closedPnlEmbed}; decision_hydrate ui=${decisionCardsHydrateUi} embed=${decisionCardsHydrateEmbed} api=${regimeHydrateApi}; quote_bars_cache ui=${quoteBarsCacheUi} embed=${quoteBarsCacheEmbed} api=${quoteBarsCacheApi}; hour_bars_cache ui=${hourBarsCacheUi} embed=${hourBarsCacheEmbed} api=${hourBarsCacheApi}; closed_10s_cache ui=${closed10sCacheUi} embed=${closed10sCacheEmbed} api=${closed10sCacheApi}; tick_sticky_desk_arms=${tickStickyDeskArmsApi}; entry_gates ui=${entryGatesHydrateUi} embed=${entryGatesEmbed} api=${entryGatesHydrateApi}; why_monitor ui=${whyMonitorHydrateUi} embed=${whyMonitorHydrateEmbed} api=${whyMonitorHydrateApi}; float_upl ui=${floatUplCacheUi} embed=${floatUplCacheEmbed} api=${floatUplCacheApi}; risk_seed=${riskSeedApi}; exit_hydrate ui=${exitHydrateUi} embed=${exitHydrateEmbed}; norm_disk ui=${normDiskHydrateUi} embed=${normDiskHydrateEmbed}; live_paper_retry=${livePaperRetry}; live_paper_desk_confirm=${livePaperDeskConfirm}; setup_armed api=${setupArmedApi} ui=${setupArmedUi} embed=${setupArmedEmbed}; live_exp_default api=${liveExpectancyDefaultApi} ui=${liveExpectancyDefaultUi} embed=${liveExpectancyDefaultEmbed}; master_owns_fanout api=${masterOwnsFanoutApi} ui=${masterOwnsFanoutUi} embed=${masterOwnsFanoutEmbed}; desk_entry=${deskEntryApi}; live_feed_closed_10s=${liveFeedClosed10s}; live_feed_hour_bars=${liveFeedHourBars}; desk_entry_dash=${deskEntryDash}; desk_entry_journal=${deskEntryJournal}; desk_entry_pg=${deskEntryPgHydrate}; desk_entry_perf=${deskEntryPerfJoin}; desk_source_expectancy=${deskSourceExpectancyDash}; confirm_desk_hydrate=${confirmDeskHydrateWarn}; trade_desk_restart=${tradeDeskRestartHydrate}; desk_entry_open_hydrate=${deskEntryOpenHydrate}; desk_entry_status_hydrate=${deskEntryStatusHydrate}; open_pos_confirm=${openPosConfirmDash}; closed_trade_confirm=${closedTradeConfirmDash}; trade_event_desk_confirm=${tradeEventDeskConfirm}; desk_confirm_card_hydrate=${deskConfirmCardHydrate}; market_core_failclosed=${marketCoreFailClosed}; multi_epic_cycle api=${multiEpicCycleApi} ui=${multiEpicCycleUi} embed=${multiEpicCycleEmbed}; multi_epic_manage api=${multiEpicManageApi} ui=${multiEpicManageUi} embed=${multiEpicManageEmbed}; epic_stash=${epicCycleStashPersist}; epic_setup_key=${epicScopedSetupKey}; desk_source_setup_key=${deskSourceSetupKey}; replay_desk_confirm=${replayDeskConfirm}; system_audit_desk_confirm=${systemAuditDeskConfirm}`,
+        : `${files.length} core files; pipeline_stages api=${stagesApi} ui=${stagesUi}; manage_owner api=${manageOwnerApi} masterUi=${manageOwnerMasterUi} deskUi=${manageOwnerDeskUi} deskBridge=${deskBridgeMeta}; desk_feed_divergent=${deskFeedDivergent}; journal_audit api=${journalAuditApi} ui=${journalAuditUi} embed=${journalAuditEmbed}; filter_hydrate_ui=${filterCardsHydrateUi}; closed_pnl ui=${closedPnlUi} embed=${closedPnlEmbed}; decision_hydrate ui=${decisionCardsHydrateUi} embed=${decisionCardsHydrateEmbed} api=${regimeHydrateApi}; quote_bars_cache ui=${quoteBarsCacheUi} embed=${quoteBarsCacheEmbed} api=${quoteBarsCacheApi}; hour_bars_cache ui=${hourBarsCacheUi} embed=${hourBarsCacheEmbed} api=${hourBarsCacheApi}; closed_10s_cache ui=${closed10sCacheUi} embed=${closed10sCacheEmbed} api=${closed10sCacheApi}; market_cache_pg_heal=${marketCachePgHealApi}; tick_sticky_desk_arms=${tickStickyDeskArmsApi}; entry_gates ui=${entryGatesHydrateUi} embed=${entryGatesEmbed} api=${entryGatesHydrateApi}; why_monitor ui=${whyMonitorHydrateUi} embed=${whyMonitorHydrateEmbed} api=${whyMonitorHydrateApi}; float_upl ui=${floatUplCacheUi} embed=${floatUplCacheEmbed} api=${floatUplCacheApi}; risk_seed=${riskSeedApi}; exit_hydrate ui=${exitHydrateUi} embed=${exitHydrateEmbed}; norm_disk ui=${normDiskHydrateUi} embed=${normDiskHydrateEmbed}; live_paper_retry=${livePaperRetry}; live_paper_desk_confirm=${livePaperDeskConfirm}; setup_armed api=${setupArmedApi} ui=${setupArmedUi} embed=${setupArmedEmbed}; live_exp_default api=${liveExpectancyDefaultApi} ui=${liveExpectancyDefaultUi} embed=${liveExpectancyDefaultEmbed}; master_owns_fanout api=${masterOwnsFanoutApi} ui=${masterOwnsFanoutUi} embed=${masterOwnsFanoutEmbed}; desk_entry=${deskEntryApi}; live_feed_closed_10s=${liveFeedClosed10s}; live_feed_hour_bars=${liveFeedHourBars}; desk_entry_dash=${deskEntryDash}; desk_entry_journal=${deskEntryJournal}; desk_entry_pg=${deskEntryPgHydrate}; desk_entry_perf=${deskEntryPerfJoin}; desk_source_expectancy=${deskSourceExpectancyDash}; confirm_desk_hydrate=${confirmDeskHydrateWarn}; trade_desk_restart=${tradeDeskRestartHydrate}; desk_entry_open_hydrate=${deskEntryOpenHydrate}; desk_entry_status_hydrate=${deskEntryStatusHydrate}; open_pos_confirm=${openPosConfirmDash}; closed_trade_confirm=${closedTradeConfirmDash}; trade_event_desk_confirm=${tradeEventDeskConfirm}; desk_confirm_card_hydrate=${deskConfirmCardHydrate}; market_core_failclosed=${marketCoreFailClosed}; multi_epic_cycle api=${multiEpicCycleApi} ui=${multiEpicCycleUi} embed=${multiEpicCycleEmbed}; multi_epic_manage api=${multiEpicManageApi} ui=${multiEpicManageUi} embed=${multiEpicManageEmbed}; epic_stash=${epicCycleStashPersist}; epic_setup_key=${epicScopedSetupKey}; desk_source_setup_key=${deskSourceSetupKey}; replay_desk_confirm=${replayDeskConfirm}; system_audit_desk_confirm=${systemAuditDeskConfirm}`,
     });
   }
 
