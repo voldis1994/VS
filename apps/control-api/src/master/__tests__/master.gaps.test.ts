@@ -5366,6 +5366,8 @@ describe('pipeline_stages honesty — position + journal never forged green', ()
       const cold = masterRuntime.status().pipeline_stages;
       expect(cold.position_manager.ok).toBe(false);
       expect(cold.position_manager.detail).toMatch(/manage never ran/);
+      expect(cold.broker.ok).toBe(false);
+      expect(cold.broker.detail).toBe('none');
       expect(cold.exit.ok).toBe(false);
       expect(cold.exit.detail).toMatch(/no exit yet/);
       expect(cold.journal.ok).toBe(false);
@@ -5399,8 +5401,22 @@ describe('pipeline_stages honesty — position + journal never forged green', ()
       const holding = masterRuntime.status().pipeline_stages;
       expect(holding.position_manager.ok).toBe(false);
       expect(holding.position_manager.detail).toMatch(/open=1/);
+      expect(holding.position_manager.detail).toMatch(/awaiting manage|manage never ran/);
       expect(holding.exit.ok).toBe(false);
       expect(holding.exit.detail).toBe('holding');
+
+      // Disk-hydrated book without manage/broker must mark hydrated (not hard-bad)
+      (masterRuntime as unknown as { bookHydrated: boolean }).bookHydrated = true;
+      const hydratedHold = masterRuntime.status().pipeline_stages;
+      expect(hydratedHold.position_manager.ok).toBe(false);
+      expect(hydratedHold.position_manager.detail).toMatch(
+        /^hydrated · open=1 · awaiting manage$/
+      );
+      expect(hydratedHold.broker.ok).toBe(false);
+      expect(hydratedHold.broker.detail).toMatch(
+        /^hydrated · none · awaiting attach$/
+      );
+      (masterRuntime as unknown as { bookHydrated: boolean }).bookHydrated = false;
 
       // Mark manageTick evidence → green while holding
       (masterRuntime as unknown as { last_manage_tick_ms: number }).last_manage_tick_ms =
