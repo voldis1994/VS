@@ -3681,6 +3681,14 @@ describe('partial_close persist + Check be_start', () => {
     });
     expect(managed.closed.some((c) => /SOFT_TRAIL/.test(c.reason))).toBe(true);
     expect(pm.count()).toBe(0);
+    const soft = managed.closed.find((c) => /SOFT_TRAIL/.test(c.reason))!;
+    // Soft trail must journal real R (not hardcoded 0) for expectancy_r honesty
+    // stop was widened to entry-50 before pullback exit
+    const riskDist = 50;
+    const pnlPts = soft.outcome.exit - entry; // BUY
+    expect(Number.isFinite(soft.outcome.r_multiple)).toBe(true);
+    expect(soft.outcome.r_multiple).not.toBe(0);
+    expect(soft.outcome.r_multiple).toBeCloseTo(pnlPts / riskDist, 6);
   });
 
   it('SELL soft trail exits after money arm + adverse pullback', async () => {

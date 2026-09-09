@@ -54,6 +54,7 @@ import {
   resolveCloseMoneyPnl,
   resolveCloseExitFill,
   resolveFloatingMoneyPnl,
+  rMultipleFromClose,
   usableBrokerUpl,
 } from './moneyExit.js';
 import { loadMasterErrors, logMasterError } from './errorJournal.js';
@@ -1278,10 +1279,6 @@ class MasterRuntime {
       volume: pos.size,
     });
     const heldMs = Date.now() - new Date(pos.entry_at).getTime();
-    const riskDist = Math.max(
-      Math.abs((pos.stop_loss ?? pos.entry) - pos.entry),
-      Number.EPSILON
-    );
     const outcome: TradeOutcome = {
       position_id: pos.position_id,
       side: pos.side,
@@ -1294,7 +1291,11 @@ class MasterRuntime {
       slippage: fill_proven ? Math.abs(fill - quote.mid) : 0,
       mae: pos.mae,
       mfe: pos.mfe,
-      r_multiple: priced.pnl_pts / riskDist,
+      r_multiple: rMultipleFromClose({
+        entry: pos.entry,
+        stop_loss: pos.stop_loss,
+        pnl_pts: priced.pnl_pts,
+      }),
       hold_ms: heldMs,
       exit_reason: priced.pnl_proven
         ? reason
@@ -2096,19 +2097,11 @@ class MasterRuntime {
         volume: ghost.size,
       });
       const flatReason = paperAuto?.reason ?? 'broker_flat';
-      const riskDist =
-        Number.isFinite(Number(ghost.entry)) &&
-        Number.isFinite(Number(ghost.stop_loss))
-          ? Math.abs(Number(ghost.entry) - Number(ghost.stop_loss))
-          : 0;
-      const signedMove =
-        ghost.side === 'BUY'
-          ? Number(exit) - Number(ghost.entry)
-          : Number(ghost.entry) - Number(exit);
-      const r_multiple =
-        riskDist > 0 && Number.isFinite(signedMove)
-          ? Number((signedMove / riskDist).toFixed(4))
-          : 0;
+      const r_multiple = rMultipleFromClose({
+        entry: ghost.entry,
+        stop_loss: ghost.stop_loss,
+        pnl_pts: priced.pnl_pts,
+      });
       const outcome = {
         position_id: ghost.position_id,
         side: ghost.side,
@@ -2232,7 +2225,11 @@ class MasterRuntime {
         slippage: 0,
         mae: partial.mae,
         mfe: partial.mfe,
-        r_multiple: 0,
+        r_multiple: rMultipleFromClose({
+          entry: partial.entry,
+          stop_loss: partial.stop_loss,
+          pnl_pts: priced.pnl_pts,
+        }),
         hold_ms: 0,
         exit_reason: capitalCloseExitReason(
           'EXTERNAL_PARTIAL_CLOSE',

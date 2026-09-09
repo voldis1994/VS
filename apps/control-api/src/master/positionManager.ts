@@ -26,6 +26,7 @@ import {
   resolveCloseMoneyPnl,
   resolveCloseExitFill,
   resolveFloatingMoneyPnl,
+  rMultipleFromClose,
   softTrailDistancePrice,
   softTrailExitHit,
   softTrailExitLevel,
@@ -150,6 +151,8 @@ export type ExternalPartialEvent = {
   decision: MasterDecision;
   mae: number;
   mfe: number;
+  /** Local SL at shrink time — for honest r_multiple on EXTERNAL_PARTIAL_CLOSE */
+  stop_loss?: number | null;
   /** Scaled slice of last-known broker UPL for honest journal PnL */
   broker_upl_closed?: number | null;
 };
@@ -611,7 +614,7 @@ export class PositionManager {
           slippage: fill_proven ? Math.abs(fill - quote.mid) : 0,
           mae: pos.mae,
           mfe: pos.mfe,
-          r_multiple: 0,
+          r_multiple: rMultipleFromClose({ entry: pos.entry, stop_loss: pos.stop_loss, pnl_pts: priced.pnl_pts }),
           hold_ms: heldMs,
           exit_reason: capitalCloseExitReason(verdict.reason, priced.pnl_proven),
         };
@@ -681,7 +684,7 @@ export class PositionManager {
           slippage: fill_proven ? Math.abs(fill - quote.mid) : 0,
           mae: pos.mae,
           mfe: pos.mfe,
-          r_multiple: 0,
+          r_multiple: rMultipleFromClose({ entry: pos.entry, stop_loss: pos.stop_loss, pnl_pts: priced.pnl_pts }),
           hold_ms: heldMs,
           exit_reason: capitalCloseExitReason(protective.reason, priced.pnl_proven),
         };
@@ -769,11 +772,6 @@ export class PositionManager {
           }),
           volume: pos.size,
         });
-        const pnlPts = priced.pnl_pts;
-        const riskDist = Math.max(
-          Math.abs((pos.stop_loss ?? pos.entry) - pos.entry),
-          Number.EPSILON
-        );
         const outcome: TradeOutcome = {
           position_id: pos.position_id,
           side: pos.side,
@@ -786,7 +784,11 @@ export class PositionManager {
           slippage: fill_proven ? Math.abs(fill - quote.mid) : 0,
           mae: pos.mae,
           mfe: pos.mfe,
-          r_multiple: pnlPts / riskDist,
+          r_multiple: rMultipleFromClose({
+            entry: pos.entry,
+            stop_loss: pos.stop_loss,
+            pnl_pts: priced.pnl_pts,
+          }),
           hold_ms: heldMs,
           exit_reason: capitalCloseExitReason(portfolioReason, priced.pnl_proven),
         };
@@ -914,7 +916,7 @@ export class PositionManager {
                   slippage: fill_proven ? Math.abs(fill - quote.mid) : 0,
                   mae: pos.mae,
                   mfe: pos.mfe,
-                  r_multiple: 0,
+                  r_multiple: rMultipleFromClose({ entry: pos.entry, stop_loss: pos.stop_loss, pnl_pts: priced.pnl_pts }),
                   hold_ms: heldMs,
                   exit_reason: capitalCloseExitReason(
                     `SOFT_TRAIL · money≥${softMoneyArm} pullback ${softPips}pip`,
@@ -1021,7 +1023,7 @@ export class PositionManager {
                 slippage: fill_proven ? Math.abs(fill - quote.mid) : 0,
                 mae: pos.mae,
                 mfe: pos.mfe,
-                r_multiple: 0,
+                r_multiple: rMultipleFromClose({ entry: pos.entry, stop_loss: pos.stop_loss, pnl_pts: priced.pnl_pts }),
                 hold_ms: heldMs,
                 exit_reason: capitalCloseExitReason(
                   exitHit.reason,
@@ -1146,7 +1148,7 @@ export class PositionManager {
                 slippage: fill_proven ? Math.abs(fill - quote.mid) : 0,
                 mae: pos.mae,
                 mfe: pos.mfe,
-                r_multiple: 0,
+                r_multiple: rMultipleFromClose({ entry: pos.entry, stop_loss: pos.stop_loss, pnl_pts: priced.pnl_pts }),
                 hold_ms: heldMs,
                 exit_reason: capitalCloseExitReason(
                   rem <= 1e-9 && closedVol > partial.close_size + 1e-9
@@ -1343,11 +1345,6 @@ export class PositionManager {
         }),
         volume: pos.size,
       });
-      const pnlPts = priced.pnl_pts;
-      const riskDist = Math.max(
-        Math.abs((pos.stop_loss ?? pos.entry) - pos.entry),
-        1e-9
-      );
       const outcome: TradeOutcome = {
         position_id: pos.position_id,
         side: pos.side,
@@ -1360,7 +1357,11 @@ export class PositionManager {
         slippage: fill_proven ? Math.abs(exit - quote.mid) : 0,
         mae: pos.mae,
         mfe: pos.mfe,
-        r_multiple: pnlPts / riskDist,
+        r_multiple: rMultipleFromClose({
+          entry: pos.entry,
+          stop_loss: pos.stop_loss,
+          pnl_pts: priced.pnl_pts,
+        }),
         hold_ms: heldMs,
         exit_reason: capitalCloseExitReason(verdict.reason, priced.pnl_proven),
       };
@@ -1494,7 +1495,7 @@ export class PositionManager {
         slippage: fill_proven ? Math.abs(fill - quote.mid) : 0,
         mae: pos.mae,
         mfe: pos.mfe,
-        r_multiple: 0,
+        r_multiple: rMultipleFromClose({ entry: pos.entry, stop_loss: pos.stop_loss, pnl_pts: priced.pnl_pts }),
         hold_ms: heldMs,
         exit_reason: capitalCloseExitReason(
           `MULTI_TP_${level.index}${
@@ -2268,6 +2269,7 @@ export class PositionManager {
             decision: existing.decision,
             mae: existing.mae,
             mfe: existing.mfe,
+            stop_loss: existing.stop_loss,
             broker_upl_closed,
           });
           existing.partial_close_applied = true;
