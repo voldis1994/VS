@@ -92,6 +92,20 @@ describe('desk hour bias + 10s entry confirm', () => {
     const st = masterRuntime.status();
     expect(st.hour_bias).toBe('UP');
     expect('desk_entry' in st).toBe(true);
+    expect(st.closed_10s_present).toBe(false);
+    const flat = {
+      open_time_ms: Date.now() - 10_000,
+      open: 4405,
+      high: 4405,
+      low: 4405,
+      close: 4405,
+      ticks: 1,
+    };
+    await masterRuntime.tick(bars, quoteFrom(bars.at(-1)!), {
+      hour_bars: hours,
+      closed_10s: flat,
+    });
+    expect(masterRuntime.status().closed_10s_present).toBe(true);
     masterRuntime.stop();
   });
 
@@ -243,15 +257,19 @@ describe('desk hour bias + 10s entry confirm', () => {
 
   it('sticky closed_10s keeps setup_confirm_pending on next poll without justClosed', async () => {
     const { stickyClosed10s } = await import('../liveFeed.js');
+    const { decide } = await import('../decision.js');
     const bars = barsTrendUp(50);
-    const q = quoteFrom(bars.at(-1)!);
-    const cfg = {
-      ...DEFAULT_MASTER_CONFIG,
-      mode: 'PAPER' as const,
-      min_score: 0.25,
-      require_armed_setup: true,
-      block_off_hours: false,
-      block_high_impact_news: false,
+    const a = analyzeBars(bars, 0.4);
+    const none: MarketSetup = {
+      kind: 'NONE',
+      side: null,
+      playbook: null,
+      status: 'NONE',
+      swing_high: 0,
+      swing_low: 0,
+      reason: 'none',
+      confirm: 0,
+      updated_at: new Date().toISOString(),
     };
     let sticky = stickyClosed10s(null, {
       open: 4405,
@@ -261,18 +279,21 @@ describe('desk hour bias + 10s entry confirm', () => {
       ts_ms: Date.now() - 10_000,
     });
     expect(sticky).not.toBeNull();
-    // Next poll: justClosed null — desk last_closed sticky still arms confirm gate
+    // Next poll: justClosed null — desk last_closed sticky still present
     sticky = stickyClosed10s(sticky, null);
-    const pipe = new MasterPipeline('PAPER');
-    const cycle = await pipe.runCycle({
+    expect(sticky).not.toBeNull();
+    const d = decide(
+      a,
+      quoteFrom(bars.at(-1)!),
+      { ...DEFAULT_MASTER_CONFIG, min_score: 0.3, require_armed_setup: true },
+      () => null,
       bars,
-      quote: q,
-      account,
-      instrument: GOLD_SPEC,
-      cfg,
-      closed_10s: sticky,
-    });
-    expect(cycle.decision.kind).toBe('WAIT');
-    expect(cycle.decision.block_reason).toBe('setup_confirm_pending');
+      null,
+      none,
+      null,
+      { closed_10s_present: !!sticky }
+    );
+    expect(d.kind).toBe('WAIT');
+    expect(d.block_reason).toBe('setup_confirm_pending');
   });
 });
