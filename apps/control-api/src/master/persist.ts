@@ -278,6 +278,54 @@ export async function loadManageConfigFromPersist(): Promise<any | null> {
   }
 }
 
+/** DualPersist / MemoryPersist / PG — owns_pipeline singleton for wipe heal. */
+export async function persistOwnsPipelineState(state: {
+  owns_pipeline: boolean;
+  saved_at_ms: number;
+}): Promise<boolean> {
+  try {
+    await client.query(
+      `INSERT INTO master_owns_pipeline (id, payload, saved_at_ms)
+       VALUES ($1, $2::jsonb, $3)
+       ON CONFLICT (id) DO UPDATE SET
+         payload = EXCLUDED.payload,
+         saved_at_ms = EXCLUDED.saved_at_ms`,
+      [
+        'singleton',
+        JSON.stringify({ owns_pipeline: state.owns_pipeline === true }),
+        state.saved_at_ms,
+      ]
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function loadOwnsPipelineFromPersist(): Promise<{
+  owns_pipeline: boolean;
+  saved_at_ms: number;
+} | null> {
+  try {
+    const { rows } = await client.query(
+      `SELECT payload, saved_at_ms FROM master_owns_pipeline WHERE id = $1 LIMIT 1`,
+      ['singleton']
+    );
+    const row = rows?.[0];
+    if (!row) return null;
+    const payload =
+      typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload;
+    if (!payload || typeof payload !== 'object') return null;
+    if (typeof payload.owns_pipeline !== 'boolean') return null;
+    return {
+      owns_pipeline: payload.owns_pipeline === true,
+      saved_at_ms: Number(row.saved_at_ms) || Number(payload.saved_at_ms) || 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Reader decision audit — DualPersist / MemoryPersist / FilePersist SQL path. */
 export async function persistDecisionEvent(entry: {
   event_id: string;
@@ -826,6 +874,9 @@ export class MemoryPersist implements PersistClient {
   runtimeGatesPayload: any | null = null;
   /** Singleton manage_config payload — DualPersist primary wipe heal */
   manageConfigPayload: any | null = null;
+  /** Singleton owns_pipeline payload — DualPersist primary wipe heal */
+  ownsPipelinePayload: { owns_pipeline: boolean; saved_at_ms?: number } | null =
+    null;
 
   async query(sql: string, params: unknown[] = []) {
     const s = sql.replace(/\s+/g, ' ').trim();
@@ -926,6 +977,30 @@ export class MemoryPersist implements PersistClient {
             id: 'singleton',
             payload: this.manageConfigPayload,
             saved_at_ms: Number(this.manageConfigPayload.saved_at_ms) || 0,
+          },
+        ],
+      };
+    }
+    if (s.startsWith('INSERT INTO master_owns_pipeline')) {
+      const raw = params[1];
+      const parsed =
+        typeof raw === 'string' ? JSON.parse(raw as string) : (raw as any);
+      this.ownsPipelinePayload = {
+        owns_pipeline: parsed?.owns_pipeline === true,
+        saved_at_ms: Number(params[2]) || Date.now(),
+      };
+      return { rows: [] };
+    }
+    if (s.startsWith('SELECT') && s.includes('master_owns_pipeline')) {
+      if (!this.ownsPipelinePayload) return { rows: [] };
+      return {
+        rows: [
+          {
+            id: 'singleton',
+            payload: {
+              owns_pipeline: this.ownsPipelinePayload.owns_pipeline === true,
+            },
+            saved_at_ms: Number(this.ownsPipelinePayload.saved_at_ms) || 0,
           },
         ],
       };

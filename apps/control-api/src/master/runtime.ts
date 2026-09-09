@@ -898,6 +898,11 @@ class MasterRuntime {
       );
       await hydrateManageConfigFromPersist();
       this.hydrateManageConfig();
+      const { hydrateOwnsPipelineFromPersist } = await import(
+        './ownsPipelinePref.js'
+      );
+      await hydrateOwnsPipelineFromPersist();
+      this.hydrateOwnsPipelinePref();
       if (this.positions.count() === 0) {
         const loaded = await loadOpenPositions();
         const valid = loaded.filter((p) => p.decision && p.position_id);
@@ -3542,6 +3547,10 @@ class MasterRuntime {
     const { hydrateManageConfigFromPersist } = await import('./manageConfig.js');
     await hydrateManageConfigFromPersist();
     this.hydrateManageConfig();
+    const { hydrateOwnsPipelineFromPersist } = await import(
+      './ownsPipelinePref.js'
+    );
+    await hydrateOwnsPipelineFromPersist();
     this.hydrateOwnsPipelinePref();
     const { hydrateMarketCacheFromPersist } = await import('./marketCache.js');
     await hydrateMarketCacheFromPersist();
