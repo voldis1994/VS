@@ -30,7 +30,7 @@ import {
   MasterPipeline,
   specForEpic,
 } from './pipeline.js';
-import { computePerformance, fromOutcomes, monteCarlo, performanceByDeskEntry } from './performance.js';
+import { computePerformance, deskSourceFromSetupKey, fromOutcomes, monteCarlo, performanceByDeskEntry } from './performance.js';
 import { expectancyByDeskSource } from './expectancy.js';
 import {
   entrySetupFromRegime,
@@ -363,6 +363,8 @@ export type MasterStatus = {
     pnl: number | null;
     fees: number | null;
     opportunity_id: string | null;
+    /** Desk confirm path for this close (joined from opportunity). */
+    desk_entry_source?: 'setup' | 'move' | 'none' | null;
   }>;
   /** dual | file | memory | pool — where durable state is authoritative */
   persist_backend: 'dual' | 'file' | 'memory' | 'pool' | 'unknown';
@@ -5570,16 +5572,34 @@ class MasterRuntime {
           closed_10s_present: e.closed_10s_present ?? null,
         }));
       })(),
-      recent_trades: loadTradeEvents(12).map((e) => ({
-        ts: e.ts,
-        event: e.event,
-        broker: e.broker,
-        ok: e.ok,
-        detail: e.detail,
-        pnl: e.pnl,
-        fees: e.fees,
-        opportunity_id: e.opportunity_id,
-      })),
+      recent_trades: loadTradeEvents(12).map((e) => {
+        const opp = e.opportunity_id
+          ? this.pipeline.journal.opportunities.find(
+              (o) => o.id === e.opportunity_id
+            )
+          : null;
+        const raw = opp?.decision?.desk_entry_source;
+        const fromDec: 'setup' | 'move' | 'none' | null =
+          raw === 'setup' || raw === 'move' || raw === 'none' ? raw : null;
+        const fromKey = deskSourceFromSetupKey(opp?.setup_key ?? null);
+        const desk_entry_source =
+          fromDec && fromDec !== 'none'
+            ? fromDec
+            : fromKey && fromKey !== 'none'
+              ? fromKey
+              : fromDec || fromKey || null;
+        return {
+          ts: e.ts,
+          event: e.event,
+          broker: e.broker,
+          ok: e.ok,
+          detail: e.detail,
+          pnl: e.pnl,
+          fees: e.fees,
+          opportunity_id: e.opportunity_id,
+          desk_entry_source,
+        };
+      }),
     };
   }
 }

@@ -273,6 +273,7 @@ type MasterStatus = {
     pnl: number | null;
     fees?: number | null;
     opportunity_id?: string | null;
+    desk_entry_source?: 'setup' | 'move' | 'none' | null;
   }>;
   manage?: {
     scalp_pct_chase?: boolean;
@@ -332,7 +333,13 @@ type JournalOpp = {
   epic: string;
   executed: boolean;
   block_reason?: string | null;
-  decision?: { kind?: string; side?: string; block_reason?: string | null };
+  decision?: {
+    kind?: string;
+    side?: string;
+    block_reason?: string | null;
+    desk_entry_source?: 'setup' | 'move' | 'none' | null;
+  };
+  setup_key?: string | null;
   outcome?: {
     pnl: number;
     exit_reason: string;
@@ -2218,6 +2225,9 @@ export function MasterPage() {
               </div>
               <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
                 {t.ts ? new Date(t.ts).toISOString().slice(11, 19) : '—'}
+                {t.desk_entry_source
+                  ? ` · confirm ${t.desk_entry_source}`
+                  : ''}
                 {t.opportunity_id
                   ? ` · opp ${String(t.opportunity_id).slice(0, 8)}`
                   : ''}
@@ -2293,6 +2303,28 @@ export function MasterPage() {
                   {o.outcome?.r_multiple != null
                     ? ` · R ${Number(o.outcome.r_multiple).toFixed(2)}`
                     : ''}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
+                  {(() => {
+                    const raw = o.decision?.desk_entry_source;
+                    const fromDec =
+                      raw === 'setup' || raw === 'move' || raw === 'none'
+                        ? raw
+                        : null;
+                    const sk = String(o.setup_key || '');
+                    const last = sk.split('|').pop() || '';
+                    const fromKey =
+                      last === 'setup' || last === 'move' || last === 'none'
+                        ? last
+                        : null;
+                    const src =
+                      fromDec && fromDec !== 'none'
+                        ? fromDec
+                        : fromKey && fromKey !== 'none'
+                          ? fromKey
+                          : fromDec || fromKey;
+                    return src ? `confirm ${src}` : 'confirm —';
+                  })()}
                 </div>
               </div>
             );
