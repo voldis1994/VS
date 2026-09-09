@@ -5245,13 +5245,14 @@ describe('replay exit order vs live manageTick', () => {
       },
     });
     void withSl;
-    // Source-level: soft TIME_STOP path calls replaySoftCloseAllowed
+    // Source-level: replay exits via live PositionManager.manageTick (one exit brain)
     const { readFileSync } = await import('fs');
     const { join } = await import('path');
     const src = readFileSync(join(__dirname, '../replay.ts'), 'utf8');
-    expect(src).toMatch(/replaySoftCloseAllowed\(open\.sl\)/);
-    expect(src).toMatch(/toDeskRegime\(liveA\.regime/);
-    expect(src).toMatch(/softTrailDistancePrice\(epic/);
+    expect(src).toMatch(/manageTick\(/);
+    expect(src).toMatch(/hard_only:\s*true/);
+    expect(src).toMatch(/PositionManager/);
+    expect(src).toMatch(/adverseProtectiveQuote/);
     expect(src).toMatch(/opts\.epic/);
     expect(src).toMatch(/post_exit_until_ms/);
     expect(src).toMatch(/last_entry_fingerprint/);
