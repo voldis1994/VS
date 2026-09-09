@@ -2162,7 +2162,11 @@ class MasterRuntime {
   async tick(
     bars: Bar[],
     quote: Quote,
-    opts?: { reference_mids?: number[] | null }
+    opts?: {
+      reference_mids?: number[] | null;
+      hour_bars?: import('../services/capitalCom.js').CapitalPriceCandle[] | Bar[] | null;
+      closed_10s?: import('../services/tenSecondOhlc.js').TenSecBar | null;
+    }
   ): Promise<TickResult> {
     const run = async () => {
       try {
@@ -2188,7 +2192,11 @@ class MasterRuntime {
   private async tickUnlocked(
     bars: Bar[],
     quoteIn: Quote,
-    opts?: { reference_mids?: number[] | null }
+    opts?: {
+      reference_mids?: number[] | null;
+      hour_bars?: import('../services/capitalCom.js').CapitalPriceCandle[] | Bar[] | null;
+      closed_10s?: import('../services/tenSecondOhlc.js').TenSecBar | null;
+    }
   ): Promise<TickResult> {
     const t0 = Date.now();
     // Always stamp runtime epic — public/desk quotes often omit it (news targeting).
@@ -2496,6 +2504,8 @@ class MasterRuntime {
       relative_spread:
         spreadSnap.history.length >= 3 ? spreadSnap.relative_spread : null,
       reference_mids: opts?.reference_mids ?? this.lastPublicReferenceMids,
+      hour_bars: opts?.hour_bars,
+      closed_10s: opts?.closed_10s,
     });
     this.last_decision = cycle.decision;
     this.last_risk = cycle.risk;

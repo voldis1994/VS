@@ -1,6 +1,7 @@
 /** Decision engine — BUY / SELL / WAIT / BLOCK. Scores are heuristic, not probability. */
 import { randomUUID } from 'crypto';
 import { buildCandidates } from './candidates.js';
+import type { DeskEntryConfirm } from './deskEntryConfirm.js';
 import type { MarketSetup } from '../services/marketSetup.js';
 import type {
   AnalysisSnapshot,
@@ -19,7 +20,9 @@ export function decide(
   expectancyLookup: (setupKey: string) => ExpectancySnapshot | null,
   bars?: Bar[] | null,
   relativeSpread?: number | null,
-  marketSetup?: MarketSetup | null
+  marketSetup?: MarketSetup | null,
+  deskEntry?: DeskEntryConfirm | null,
+  opts?: { closed_10s_present?: boolean }
 ): MasterDecision {
   const decision_id = randomUUID();
   const { buy, sell } = buildCandidates(analysis, quote, cfg, bars, relativeSpread);
@@ -38,7 +41,41 @@ export function decide(
     );
   }
 
-  const preferred = pickPreferred(buy, sell, cfg.min_score_delta);
+  let preferred = pickPreferred(buy, sell, cfg.min_score_delta);
+
+  // Desk 10s SETUP/MOVE confirm — prefer confirmed side when candidate is valid
+  if (deskEntry) {
+    const confirmed = deskEntry.side === 'BUY' ? buy : sell;
+    if (confirmed.valid && confirmed.filter_ok) {
+      preferred = confirmed;
+    } else if (cfg.require_armed_setup) {
+      return {
+        decision_id,
+        kind: 'WAIT',
+        side: null,
+        score: Math.max(buy.score, sell.score),
+        block_reason: `setup_confirm_blocked:${deskEntry.source}:${deskEntry.side}`,
+        buy,
+        sell,
+        analysis,
+        expectancy: null,
+      };
+    }
+  } else if (cfg.require_armed_setup && opts?.closed_10s_present) {
+    // LIVE desk path: ARMED alone is not enough without closed 10s confirm
+    return {
+      decision_id,
+      kind: 'WAIT',
+      side: null,
+      score: Math.max(buy.score, sell.score),
+      block_reason: 'setup_confirm_pending',
+      buy,
+      sell,
+      analysis,
+      expectancy: null,
+    };
+  }
+
   if (!preferred) {
     const delta = Math.abs(buy.score - sell.score);
     const bothValid = buy.valid && sell.valid;

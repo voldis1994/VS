@@ -207,6 +207,8 @@ type Internal = RobotSession & {
   marketSetup: MarketSetup;
   last_structure_fetch_ms: number;
   last_minute_candles: import('./capitalCom.js').CapitalPriceCandle[];
+  /** Capital 1h candles for structure hour_bias (MASTER desk path) */
+  last_hour_candles: import('./capitalCom.js').CapitalPriceCandle[];
   /** Debounce Capital order spam between attempts */
   last_entry_attempt_ms: number;
   /** Last flat mid — diagnostics only */
@@ -300,6 +302,7 @@ function publicSession(s: Internal): RobotSession {
     marketSetup: _marketSetup,
     last_structure_fetch_ms: _structAt,
     last_minute_candles: _mins,
+    last_hour_candles: _hours,
     last_entry_attempt_ms: _entryAt,
     last_flat_mid: _flatMid,
     last_entry_side: _entrySide,
@@ -403,6 +406,9 @@ async function refreshStructureAndSetup(
     return;
   }
   s.last_minute_candles = hist.candles;
+  if (hours.ok && hours.candles.length) {
+    s.last_hour_candles = hours.candles;
+  }
   s.structureBook = buildStructure({
     minutes: hist.candles,
     hours: hours.ok ? hours.candles : null,
@@ -1345,6 +1351,7 @@ async function robotCycle(s: Internal) {
           mid: quote.mid,
           update_time: quote.update_time,
           minuteCandles: s.last_minute_candles,
+          hourCandles: s.last_hour_candles,
           closed10s: s.ohlcState.last_closed,
         });
         // Keep desk local state aligned with broker so UI still shows side
@@ -1732,6 +1739,7 @@ export async function startRobotSession(input: {
     marketSetup: emptySetup('awaiting structure'),
     last_structure_fetch_ms: 0,
     last_minute_candles: [],
+    last_hour_candles: [],
     last_entry_attempt_ms: 0,
     last_flat_mid: null,
     last_entry_side: null,

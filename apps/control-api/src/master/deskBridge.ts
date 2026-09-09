@@ -214,6 +214,7 @@ export async function runMasterFromDesk(input: {
   update_time?: string | number | null;
   minuteCandles: CapitalPriceCandle[];
   closed10s: TenSecBar | null;
+  hourCandles?: CapitalPriceCandle[] | null;
 }): Promise<{ active: boolean; detail: string; executed: boolean }> {
   if (!masterOwnsPipeline()) {
     return { active: false, detail: '', executed: false };
@@ -254,7 +255,10 @@ export async function runMasterFromDesk(input: {
     // Already running (e.g. Capital attach) — stop conflicting Yahoo/broker poll
     masterRuntime.preferDeskMarketFeed();
   }
-  const result = await masterRuntime.tick(bars, quote);
+  const result = await masterRuntime.tick(bars, quote, {
+    hour_bars: input.hourCandles ?? null,
+    closed_10s: input.closed10s,
+  });
   const why =
     result.execution_detail ||
     result.decision.block_reason ||
