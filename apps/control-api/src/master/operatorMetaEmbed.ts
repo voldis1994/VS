@@ -1,7 +1,7 @@
 /**
  * Best-effort merge into master_state.json operator_meta.
  * Sidecar saves (gates/manage/owns/market_cache/epic_stash/monitoring/spread/
- * news/fanout/trade_ack) call this so a wipe between write and the next
+ * news/fanout/trade_ack/error_journal) call this so a wipe between write and the next
  * FilePersist flush cannot drop durable operator knobs.
  */
 import { existsSync, readFileSync } from 'fs';

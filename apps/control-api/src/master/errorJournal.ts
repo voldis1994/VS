@@ -21,6 +21,7 @@ import {
   persistErrorJournalState,
   loadErrorJournalFromPersist,
 } from './persist.js';
+import { embedOperatorMetaPatch } from './operatorMetaEmbed.js';
 
 export type MasterErrorEntry = {
   error_id: string;
@@ -69,9 +70,14 @@ function readAllEntries(root?: string): MasterErrorEntry[] {
   }
 }
 
-function dualWriteEntries(entries: MasterErrorEntry[]): void {
+function dualWriteEntries(entries: MasterErrorEntry[], root?: string): void {
+  const keep = entries.slice(-MAX_LINES);
+  embedOperatorMetaPatch(
+    { error_journal: { entries: keep } },
+    journalDir(root)
+  );
   void persistErrorJournalState({
-    entries: entries.slice(-MAX_LINES),
+    entries: keep,
     saved_at_ms: Date.now(),
   }).catch(() => {});
 }
@@ -104,7 +110,8 @@ function rotateIfNeeded(root?: string) {
             return null;
           }
         })
-        .filter((e): e is MasterErrorEntry => !!e && !!e.error_id)
+        .filter((e): e is MasterErrorEntry => !!e && !!e.error_id),
+      root
     );
   } catch {
     try {
@@ -201,6 +208,7 @@ export async function hydrateErrorJournalFromPersist(
     const tmp = `${path}.tmp`;
     writeFileSync(tmp, body, 'utf8');
     renameSync(tmp, path);
+    embedOperatorMetaPatch({ error_journal: { entries: keep } }, dir);
     return { restored: true, count: keep.length };
   } catch {
     return { restored: false, count: 0 };

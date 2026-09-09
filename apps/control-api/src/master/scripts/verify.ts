@@ -744,6 +744,8 @@ async function main() {
       filePersistBody.includes('news_window') &&
       filePersistBody.includes('client_fanout') &&
       filePersistBody.includes('trade_ack_journal') &&
+      filePersistBody.includes('error_journal') &&
+      filePersistBody.includes('error_journal.jsonl') &&
       monitoringOpMetaBody.includes('embedOperatorMetaPatch') &&
       monitoringOpMetaBody.includes('monitoring_snapshot') &&
       readFileSync(join(root, 'src/master/spreadModel.ts'), 'utf8').includes(
@@ -754,6 +756,8 @@ async function main() {
       ) &&
       fanoutBody.includes('embedOperatorMetaPatch') &&
       tradeAckBody.includes('embedOperatorMetaPatch') &&
+      errorJournalBody.includes('embedOperatorMetaPatch') &&
+      errorJournalBody.includes('error_journal') &&
       existsSync(
         join(root, 'src/master/__tests__/operatorMetaSidecarParity.test.ts')
       );
