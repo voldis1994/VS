@@ -681,8 +681,10 @@ async function refresh(){
   try{
     const s=await fetch('/api/master/status').then(r=>r.json());
     kill=!!s.kill_switch;
-    const why=s.last_block_reason||s.last_execution_detail||s.last_decision?.kind||'—';
-    const whyCls=(s.last_block_reason||s.monitoring?.entry_block_reason)?'bad':'ok';
+    const cyclePending=!s.last_market;
+    const whyRaw=s.last_block_reason||s.last_execution_detail||s.last_decision?.kind||'—';
+    const why=(cyclePending&&!s.last_block_reason&&whyRaw!=='—')?('hydrated · '+whyRaw):whyRaw;
+    const whyCls=s.last_block_reason||s.monitoring?.entry_block_reason?'bad':(String(why).indexOf('hydrated ·')===0?'warn':'ok');
     cards.innerHTML=[
       card('Mode',s.mode),
       card('Epic',s.epic||'—'),
@@ -703,15 +705,15 @@ async function refresh(){
       card('Close fail',s.last_close_failed?((s.last_close_failed.exit_reason||'')+' · '+(s.last_close_failed.detail||'')).slice(0,80):'—',s.last_close_failed?'bad':''),
       card('Running',s.running?'YES':'NO',s.running?'ok':''),
       card('Desired run',s.desired_running?'YES':'no',s.desired_running&&!s.running?'bad':s.desired_running&&s.running?'ok':''),
-      card('Regime',s.regime),
-      card('Market state',s.market_state||'—',s.market_state&&String(s.market_state).indexOf('invalid:')===0?'bad':''),
+      card('Regime',s.regime,String(s.regime||'').indexOf('hydrated ·')===0?'warn':''),
+      card('Market state',s.market_state||'—',s.market_state&&String(s.market_state).indexOf('invalid:')>=0?'bad':(String(s.market_state||'').indexOf('hydrated ·')===0?'warn':'')),
       card('Norm',s.last_market?('Q='+Number(s.last_market.quality).toFixed(2)+' · '+s.last_market.bars_out+'/'+s.last_market.bars_in+(s.last_market.reasons&&s.last_market.reasons.length?' · '+s.last_market.reasons.slice(0,2).join('|'):'')):'—',s.last_market&&(!s.last_market.ok||s.last_market.quality<0.5)?'bad':(s.last_market&&s.last_market.ok?'ok':'')),
-      card('BUY',Number(s.buy_score||0).toFixed(3)),
+      card('BUY',cyclePending?('hydrated · '+Number(s.buy_score||0).toFixed(3)):Number(s.buy_score||0).toFixed(3),cyclePending?'warn':''),
       card('BUY filter',s.buy_filter?(s.buy_filter.reason==='hydrated'?('hydrated · '+Number(s.buy_filter.score).toFixed(3)):(s.buy_filter.ok?('ok · '+Number(s.buy_filter.score).toFixed(3)):((s.buy_filter.reason||'fail')+' · '+Number(s.buy_filter.score).toFixed(3)))):'—',s.buy_filter&&s.buy_filter.reason==='hydrated'?'warn':(s.buy_filter&&!s.buy_filter.ok?'bad':(s.buy_filter&&s.buy_filter.ok?'ok':''))),
-      card('SELL',Number(s.sell_score||0).toFixed(3)),
+      card('SELL',cyclePending?('hydrated · '+Number(s.sell_score||0).toFixed(3)):Number(s.sell_score||0).toFixed(3),cyclePending?'warn':''),
       card('SELL filter',s.sell_filter?(s.sell_filter.reason==='hydrated'?('hydrated · '+Number(s.sell_filter.score).toFixed(3)):(s.sell_filter.ok?('ok · '+Number(s.sell_filter.score).toFixed(3)):((s.sell_filter.reason||'fail')+' · '+Number(s.sell_filter.score).toFixed(3)))):'—',s.sell_filter&&s.sell_filter.reason==='hydrated'?'warn':(s.sell_filter&&!s.sell_filter.ok?'bad':(s.sell_filter&&s.sell_filter.ok?'ok':''))),
       ...(s.pipeline_stages?['market_validation','normalization','analysis_regime','dual_candidates','filters','decision','risk','execution','broker','position_manager','exit','journal','performance'].map(function(id){var st=s.pipeline_stages[id];var lab={market_validation:'Stage·validate',normalization:'Stage·normalize',analysis_regime:'Stage·regime',dual_candidates:'Stage·dual',filters:'Stage·filters',decision:'Stage·decision',risk:'Stage·risk',execution:'Stage·exec',broker:'Stage·broker',position_manager:'Stage·position',exit:'Stage·exit',journal:'Stage·journal',performance:'Stage·perf'}[id]||id;var det=st?String(st.detail||''):'';var awaiting=det.indexOf('hydrated ·')>=0||det.indexOf('no cycle')>=0;return card(lab,st?((st.ok?'ok':'—')+' · '+st.detail):'—',st&&st.ok?'ok':(st&&awaiting?'warn':(st?'bad':''))}):[]),
-      card('Decision',s.last_decision?.kind||'—'),
+      card('Decision',s.last_decision?(cyclePending?('hydrated · '+s.last_decision.kind):s.last_decision.kind):'—',cyclePending&&s.last_decision?'warn':''),
       card('Why',why,whyCls),
       card('Last exit',s.last_exit_reason||'—'),
       card('Equity',s.capital_account_proven===false?'UNPROVEN':(s.account?.equity!=null?Number(s.account.equity).toFixed(2):'—'),s.capital_account_proven===false?'bad':''),

@@ -5718,6 +5718,8 @@ describe('pipeline_stages honesty — analysis_regime never forged from hydrate'
       expect(st.buy_filter?.reason).toBe('hydrated');
       expect(st.sell_filter?.ok).toBe(false);
       expect(st.sell_filter?.reason).toBe('hydrated');
+      expect(st.regime).toMatch(/^hydrated · TREND_UP$/);
+      expect(st.market_state).toMatch(/^hydrated · TREND_UP:/);
 
       masterRuntime.last_market = {
         ok: true,
@@ -5736,6 +5738,8 @@ describe('pipeline_stages honesty — analysis_regime never forged from hydrate'
       expect(liveSt.buy_filter?.reason).not.toBe('hydrated');
       expect(liveSt.sell_filter?.ok).toBe(false);
       expect(liveSt.sell_filter?.reason).toBe('spread');
+      expect(liveSt.regime).toBe('TREND_UP');
+      expect(liveSt.market_state).toBe('TREND_UP:UP:BULLISH');
 
       masterRuntime.last_market = {
         ok: false,
