@@ -72,21 +72,48 @@ async function loadCreds(connectionId: number): Promise<Record<string, string>> 
 /**
  * ExecutionRouter equivalent (Node): EntryReady intent → subscribed RUNNING clients only.
  * Lot size from each subscription. No decision logic here.
+ *
+ * When MASTER owns the pipeline, Market Core must NOT dual-enter — use
+ * {@link executeMasterOwnedFanout} after MASTER accepts an OPEN instead.
  */
 export async function executePipelineIntent(
   intent: PipelineIntentInput
 ): Promise<FanoutResult> {
   // When MASTER owns the pipeline, Market Core fanout must not dual-enter
   if (masterOwnsPipeline()) {
-    return {
-      epic: String(intent.epic || '').trim(),
-      direction: intent.direction === 'SELL' ? 'SELL' : 'BUY',
-      setup_type: intent.setup_type ? String(intent.setup_type) : null,
-      regime: intent.regime ? String(intent.regime) : null,
-      subscribers: 0,
-      executed: [],
-    };
+    return emptyFanout(intent, 0);
   }
+  return fanoutToActiveSubscribers(intent);
+}
+
+/**
+ * MASTER-owns path: after MASTER accepts an OPEN, fan out the same EntryReady
+ * to Client Panel RUNNING subscriptions (per-account lots). Market Core stays
+ * blocked via {@link executePipelineIntent}.
+ */
+export async function executeMasterOwnedFanout(
+  intent: PipelineIntentInput
+): Promise<FanoutResult> {
+  if (!masterOwnsPipeline()) {
+    return emptyFanout(intent, 0);
+  }
+  return fanoutToActiveSubscribers(intent);
+}
+
+function emptyFanout(intent: PipelineIntentInput, subscribers: number): FanoutResult {
+  return {
+    epic: String(intent.epic || '').trim(),
+    direction: intent.direction === 'SELL' ? 'SELL' : 'BUY',
+    setup_type: intent.setup_type ? String(intent.setup_type) : null,
+    regime: intent.regime ? String(intent.regime) : null,
+    subscribers,
+    executed: [],
+  };
+}
+
+async function fanoutToActiveSubscribers(
+  intent: PipelineIntentInput
+): Promise<FanoutResult> {
   const epic = String(intent.epic || '').trim();
   const direction = intent.direction === 'SELL' ? 'SELL' : 'BUY';
   const setupType = intent.setup_type ? String(intent.setup_type) : null;
