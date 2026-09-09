@@ -297,4 +297,112 @@ describe('PaperBroker VS-System SL/TP auto-fill on setQuote', () => {
     expect(deferred.orphans_local.length).toBe(0);
     expect(pm.count()).toBe(1);
   });
+
+  it('manage TIME_STOP journals net fill_pnl not stale broker_upl', async () => {
+    const prev = process.env.MASTER_COMMISSION_PER_LOT;
+    process.env.MASTER_COMMISSION_PER_LOT = '0.05';
+    const { MasterPipeline } = await import('../pipeline.js');
+    const { PositionManager } = await import('../positionManager.js');
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    broker.setQuote({
+      bid: entry,
+      ask: entry + 0.2,
+      mid: entry + 0.1,
+      spread: 0.2,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'paper-stale-upl-aaaaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      stop_level: entry - 50, // wide — soft TIME_STOP must win
+      profit_level: entry + 50,
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const pm = new PositionManager();
+    const pos = pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-stale-upl',
+      intent_id: 'stale-upl-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      entry: placed.fill_price!,
+      stop_loss: entry - 50,
+      take_profit: entry + 50,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {
+          regime: 'TREND',
+          market_state: 't',
+          momentum_score: 0.5,
+          momentum_dir: 'UP',
+          trend_dir: 'UP',
+          trend_strength: 0.5,
+          structure_bias: 'BULLISH',
+          swing_high: entry + 5,
+          swing_low: entry - 5,
+          buy_pressure: 0.6,
+          sell_pressure: 0.4,
+          behavior_bull: 0.5,
+          behavior_bear: 0.5,
+          impact_score: 0.5,
+          context_quality: 0.8,
+          volatility: 0.001,
+          atr: 1,
+          data_quality: 0.9,
+          session: 'LONDON',
+        },
+        expectancy: null,
+      },
+    });
+    // Stale prior-tick UPL would invent a big win if preferCloseFillPnl used it
+    pos.broker_upl = 99;
+    pos.entry_at = new Date(Date.now() - 5_000).toISOString();
+    // Losing mark inside SL/TP — soft TIME_STOP (wall-clock)
+    broker.setQuote({
+      bid: entry - 1,
+      ask: entry - 0.8,
+      mid: entry - 0.9,
+      spread: 0.2,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const eqBefore = broker.equity;
+    const managed = await pm.manageTick({
+      broker,
+      pipeline: pipe,
+      quote: {
+        bid: entry - 1,
+        ask: entry - 0.8,
+        mid: entry - 0.9,
+        spread: 0.2,
+        epic: 'GOLD',
+        ts_ms: Date.now(),
+      },
+      instrument_point_value: 1,
+      max_hold_ms: 1,
+      time_stop_max_bars: 0,
+      allow_close: true,
+    });
+    expect(managed.closed.length).toBe(1);
+    expect(managed.closed[0]!.reason).toMatch(/TIME_STOP/);
+    const outcome = managed.closed[0]!.outcome;
+    // Must match venue equity delta — not stale broker_upl=99
+    expect(outcome.pnl).toBeCloseTo(broker.equity - eqBefore, 6);
+    expect(Math.abs(outcome.pnl - 99)).toBeGreaterThan(10);
+    expect(outcome.pnl).toBeLessThan(0);
+    if (prev === undefined) delete process.env.MASTER_COMMISSION_PER_LOT;
+    else process.env.MASTER_COMMISSION_PER_LOT = prev;
+  });
 });
