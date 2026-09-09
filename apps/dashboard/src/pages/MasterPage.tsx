@@ -168,6 +168,8 @@ type MasterStatus = {
     stream_healthy: boolean | null;
   } | null;
   floating_pnl?: number | null;
+  /** Disk-cache quote mark — Float UPL must not paint as live MTM */
+  floating_pnl_cached?: boolean;
   reject_cooldown_ms?: number;
   post_exit_cooldown_ms?: number;
   recent_errors?: Array<{
@@ -438,10 +440,17 @@ export function MasterPage() {
           k: 'Float UPL',
           v:
             status.floating_pnl != null
-              ? Number(status.floating_pnl).toFixed(2)
+              ? `${status.floating_pnl_cached ? 'cached · ' : ''}${Number(status.floating_pnl).toFixed(2)}`
               : '—',
-          bad: status.floating_pnl != null && status.floating_pnl < 0,
-          ok: status.floating_pnl != null && status.floating_pnl > 0,
+          // Disk-cache mark must not paint live green/red MTM
+          bad:
+            !status.floating_pnl_cached &&
+            status.floating_pnl != null &&
+            status.floating_pnl < 0,
+          ok:
+            !status.floating_pnl_cached &&
+            status.floating_pnl != null &&
+            status.floating_pnl > 0,
         },
         {
           k: 'Manage',

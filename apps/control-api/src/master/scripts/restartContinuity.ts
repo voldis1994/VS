@@ -297,6 +297,7 @@ async function main() {
   ).lastAuditJournalHydrate = null;
   masterRuntime.last_exit_reason = null;
   masterRuntime.last_decision = null;
+  masterRuntime.last_risk = null;
   masterRuntime.last_quote = null;
   masterRuntime.last_bars = [];
   masterRuntime.last_market = null;
@@ -375,6 +376,11 @@ async function main() {
     decision_stage_detail: stHydrate.pipeline_stages?.decision?.detail ?? null,
     risk_stage_ok: stHydrate.pipeline_stages?.risk?.ok === true,
     risk_stage_detail: stHydrate.pipeline_stages?.risk?.detail ?? null,
+    risk_stage_hydrated: String(
+      stHydrate.pipeline_stages?.risk?.detail || ''
+    ).startsWith('hydrated ·'),
+    floating_pnl: stHydrate.floating_pnl ?? null,
+    floating_pnl_cached: stHydrate.floating_pnl_cached === true,
     execution_stage_ok: stHydrate.pipeline_stages?.execution?.ok === true,
     execution_stage_detail:
       stHydrate.pipeline_stages?.execution?.detail ?? null,
@@ -441,6 +447,10 @@ async function main() {
     hydrateSnap.analysis_stage_ok === false &&
     hydrateSnap.decision_stage_ok === false &&
     hydrateSnap.risk_stage_ok === false &&
+    hydrateSnap.risk_stage_hydrated === true &&
+    hydrateSnap.floating_pnl_cached === true &&
+    hydrateSnap.floating_pnl != null &&
+    Number.isFinite(Number(hydrateSnap.floating_pnl)) &&
     hydrateSnap.execution_stage_ok === false &&
     hydrateSnap.market_validation_stage_ok === false &&
     hydrateSnap.normalization_stage_ok === false &&
@@ -582,6 +592,9 @@ async function main() {
       decision_stage_detail: hydrateSnap.decision_stage_detail,
       risk_stage_ok: hydrateSnap.risk_stage_ok,
       risk_stage_detail: hydrateSnap.risk_stage_detail,
+      risk_stage_hydrated: hydrateSnap.risk_stage_hydrated,
+      floating_pnl: hydrateSnap.floating_pnl,
+      floating_pnl_cached: hydrateSnap.floating_pnl_cached,
       execution_stage_ok: hydrateSnap.execution_stage_ok,
       execution_stage_detail: hydrateSnap.execution_stage_detail,
       market_validation_stage_ok: hydrateSnap.market_validation_stage_ok,

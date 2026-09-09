@@ -241,6 +241,11 @@ export type MasterStatus = {
     stream_healthy: boolean | null;
   } | null;
   floating_pnl: number | null;
+  /**
+   * True when Float UPL was marked from a disk_cache quote — not a live tick.
+   * Dashboard must not paint green/red as live mark-to-market.
+   */
+  floating_pnl_cached: boolean;
   /** Remaining reject cooldown ms (0 = clear) */
   reject_cooldown_ms: number;
   /** Remaining post-exit cooldown ms (VS re-entry settle) */
@@ -700,11 +705,12 @@ class MasterRuntime {
     }
   }
 
-  /** Seed last_exit / last_decision cards from recovered journal history. */
+  /** Seed last_exit / last_decision / last_risk cards from recovered journal history. */
   private seedDashboardFromHistory(hist: {
     opportunities: Array<{
       ts?: string;
       decision?: MasterDecision | null;
+      risk?: ReturnType<typeof evaluateRisk> | null;
       execution?: { detail?: string | null } | null;
     }>;
     outcomes: Array<{
@@ -729,6 +735,20 @@ class MasterRuntime {
         this.last_decision = latestOpp.decision;
         if (!this.last_execution_detail && latestOpp.execution?.detail) {
           this.last_execution_detail = String(latestOpp.execution.detail);
+        }
+        // Seed Stage·risk evidence from journal opportunity — still red until live cycle
+        if (
+          !this.last_risk &&
+          latestOpp.risk &&
+          typeof latestOpp.risk === 'object' &&
+          Array.isArray(latestOpp.risk.reasons)
+        ) {
+          this.last_risk = {
+            allowed: !!latestOpp.risk.allowed,
+            volume: Number(latestOpp.risk.volume) || 0,
+            risk_amount: Number(latestOpp.risk.risk_amount) || 0,
+            reasons: latestOpp.risk.reasons.map(String),
+          };
         }
       }
     }
@@ -4554,6 +4574,10 @@ class MasterRuntime {
           }
         : null,
       floating_pnl: floating,
+      floating_pnl_cached:
+        floating != null &&
+        this.quoteFromDiskCache === true &&
+        opens.length > 0,
       reject_cooldown_ms: Math.max(0, this.reject_until_ms - Date.now()),
       post_exit_cooldown_ms: Math.max(0, this.post_exit_until_ms - Date.now()),
       recent_errors: loadMasterErrors(8).map((e) => ({
