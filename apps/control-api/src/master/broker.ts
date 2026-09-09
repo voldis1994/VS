@@ -253,6 +253,8 @@ export interface MasterBroker {
   getAccount(): Promise<BrokerAccount | null>;
   /** Optional OHLC structure for LIVE analysis (Capital prices API). */
   getHistoryBars?(epic: string, maxBars?: number): Promise<BrokerHistoryBars>;
+  /** Optional 1h OHLC for desk hour_bias (Capital HOUR / EA when available). */
+  getHourBars?(epic: string, maxBars?: number): Promise<BrokerHistoryBars>;
   listOpenPositions(epic?: string): Promise<ListOpenResult>;
   placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResult>;
   closePosition(
@@ -804,6 +806,32 @@ export class CapitalBroker implements MasterBroker {
       ok: bars.length >= 10,
       bars,
       detail: bars.length >= 10 ? `capital_minute_${bars.length}` : `capital_minute_short_${bars.length}`,
+    };
+  }
+
+  async getHourBars(epic: string, maxBars = 48): Promise<BrokerHistoryBars> {
+    const apiEpic = capitalApiEpic(epic);
+    const ensured = await this.ensureSession();
+    if (!ensured.ok || !this.session || !this.deps.prices) {
+      return { ok: false, bars: [], detail: ensured.ok ? 'capital_prices_unavailable' : ensured.detail };
+    }
+    const res = await this.deps.prices(this.session, apiEpic, 'HOUR', maxBars);
+    if (!res.ok || !res.candles.length) {
+      return { ok: false, bars: [], detail: res.detail || 'capital_no_hour_candles' };
+    }
+    const bars = res.candles
+      .map((c) => ({
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+        ts_ms: c.snapshotTime ? Date.parse(c.snapshotTime) : undefined,
+      }))
+      .filter((b) => [b.open, b.high, b.low, b.close].every((n) => Number.isFinite(n) && n > 0));
+    return {
+      ok: bars.length >= 6,
+      bars,
+      detail: bars.length >= 6 ? `capital_hour_${bars.length}` : `capital_hour_short_${bars.length}`,
     };
   }
 

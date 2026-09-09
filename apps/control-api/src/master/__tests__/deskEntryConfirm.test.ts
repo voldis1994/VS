@@ -62,6 +62,36 @@ describe('desk hour bias + 10s entry confirm', () => {
     expect(without.structure.hour_bias).toBe('UNKNOWN');
   });
 
+  it('runtime tick with live hour_bars sets structure hour_bias (desk parity)', async () => {
+    const { masterRuntime } = await import('../runtime.js');
+    const bars = barsTrendUp(40);
+    const hours = [
+      { open: 4300, high: 4350, low: 4290, close: 4340, ts_ms: 1 },
+      { open: 4340, high: 4380, low: 4330, close: 4370, ts_ms: 2 },
+      { open: 4370, high: 4410, low: 4365, close: 4405, ts_ms: 3 },
+      { open: 4405, high: 4430, low: 4400, close: 4420, ts_ms: 4 },
+      { open: 4420, high: 4440, low: 4415, close: 4435, ts_ms: 5 },
+      { open: 4435, high: 4450, low: 4430, close: 4445, ts_ms: 6 },
+    ];
+    masterRuntime.stop();
+    masterRuntime.ensurePaperBroker();
+    masterRuntime.setMode('PAPER');
+    masterRuntime.setEpic('GOLD');
+    await masterRuntime.start({ skip_market_feed: true });
+    masterRuntime.cfg = {
+      ...masterRuntime.cfg,
+      min_score: 0.99,
+      require_armed_setup: false,
+      block_off_hours: false,
+      block_high_impact_news: false,
+    };
+    await masterRuntime.tick(bars, quoteFrom(bars.at(-1)!), { hour_bars: null });
+    expect(masterRuntime.pipeline.getStructureBook()?.hour_bias).toBe('UNKNOWN');
+    await masterRuntime.tick(bars, quoteFrom(bars.at(-1)!), { hour_bars: hours });
+    expect(masterRuntime.pipeline.getStructureBook()?.hour_bias).toBe('UP');
+    masterRuntime.stop();
+  });
+
   it('resolveDeskEntryConfirm returns MOVE SELL on dump 10s with ready structure', () => {
     const bars = barsTrendUp(40);
     const advanced = advanceMarketSetup({ bars, mid: bars.at(-1)!.close });
@@ -165,8 +195,16 @@ describe('desk hour bias + 10s entry confirm', () => {
     const t0 = 5_000_000;
     b.pushTick(4401, t0);
     const pushed = b.pushTick(4410, t0 + 1001);
-    const closed = closed10sFromJustClosed(pushed.justClosed);
-    expect(closed).not.toBeNull();
+    expect(closed10sFromJustClosed(pushed.justClosed)).not.toBeNull();
+    // Flat closed 10s: present for armed gate, but no MOVE/SETUP body → pending
+    const flatClosed = closed10sFromJustClosed({
+      open: 4405,
+      high: 4405,
+      low: 4405,
+      close: 4405,
+      ts_ms: t0,
+    });
+    expect(flatClosed).not.toBeNull();
 
     masterRuntime.stop();
     masterRuntime.ensurePaperBroker();
@@ -188,7 +226,7 @@ describe('desk hour bias + 10s entry confirm', () => {
     const noClose = await masterRuntime.tick(bars, q, { closed_10s: null });
     expect(noClose.decision.block_reason).not.toBe('setup_confirm_pending');
     // With mapped justClosed: same bars/quote → setup_confirm_pending when no MOVE/SETUP confirm
-    const withClose = await masterRuntime.tick(bars, q, { closed_10s: closed });
+    const withClose = await masterRuntime.tick(bars, q, { closed_10s: flatClosed });
     expect(withClose.decision.kind).toBe('WAIT');
     expect(withClose.decision.block_reason).toBe('setup_confirm_pending');
     masterRuntime.stop();

@@ -3818,8 +3818,14 @@ class MasterRuntime {
   async startBrokerLiveFeed(pollMs = 2500) {
     if (this.liveFeedTimer) return;
     if (!this.broker || this.broker.paper) return;
-    const { LiveBarBuilder, closed10sFromJustClosed } = await import('./liveFeed.js');
+    const {
+      LiveBarBuilder,
+      closed10sFromJustClosed,
+      emptyHourBarsCache,
+      refreshHourBarsCache,
+    } = await import('./liveFeed.js');
     const builder = new LiveBarBuilder(10_000, 80);
+    let hourCache = emptyHourBarsCache();
     let seeded = false;
     let busy = false;
     let lastMid: number | null = null;
@@ -3968,6 +3974,25 @@ class MasterRuntime {
           }
         }
         const closed_10s = closed10sFromJustClosed(justClosed);
+        const hourDue =
+          !hourCache.bars || Date.now() - hourCache.last_ms >= 120_000;
+        if (hourDue) {
+          hourCache = await refreshHourBarsCache({
+            epic: this.epic,
+            cache: hourCache,
+            everyMs: 120_000,
+            force: !hourCache.bars,
+            brokerGetHourBars:
+              typeof this.broker.getHourBars === 'function'
+                ? () => this.broker!.getHourBars!(this.epic, 48)
+                : undefined,
+          });
+          if (hourCache.detail && hourCache.bars?.length) {
+            this.broker_detail = `${this.broker_detail || ''};hour:${hourCache.detail}`.slice(
+              -400
+            );
+          }
+        }
         const referenceMids = await this.refreshPublicReferenceMids(this.epic);
         await this.tick(
           bars,
@@ -3986,6 +4011,7 @@ class MasterRuntime {
           {
             reference_mids: referenceMids.length ? referenceMids : null,
             closed_10s,
+            hour_bars: hourCache.bars,
           }
         );
       } finally {
@@ -4002,10 +4028,15 @@ class MasterRuntime {
   /** Attach public internet quote loop so /api/master/start trades without a separate script. */
   async startPublicLiveFeed(pollMs = 2500) {
     if (this.liveFeedTimer) return;
-    const { fetchLiveMarket, LiveBarBuilder, closed10sFromJustClosed } = await import(
-      './liveFeed.js'
-    );
+    const {
+      fetchLiveMarket,
+      LiveBarBuilder,
+      closed10sFromJustClosed,
+      emptyHourBarsCache,
+      refreshHourBarsCache,
+    } = await import('./liveFeed.js');
     const builder = new LiveBarBuilder(10_000, 80);
+    let hourCache = emptyHourBarsCache();
     let seeded = false;
     let busy = false;
     let lastMid: number | null = null;
@@ -4065,8 +4096,26 @@ class MasterRuntime {
         const { justClosed, bars } = builder.pushTick(snap.quote.mid);
         if (bars.length < 5) return;
         const closed_10s = closed10sFromJustClosed(justClosed);
+        const hourDue =
+          !hourCache.bars || Date.now() - hourCache.last_ms >= 120_000;
+        if (hourDue) {
+          hourCache = await refreshHourBarsCache({
+            epic: this.epic,
+            cache: hourCache,
+            everyMs: 120_000,
+            force: !hourCache.bars,
+          });
+          if (hourCache.detail && hourCache.bars?.length) {
+            this.broker_detail = `${this.broker_detail || ''};hour:${hourCache.detail}`.slice(
+              -400
+            );
+          }
+        }
         // Public consensus quote is already fused — do not self-diverge against the same mids
-        await this.tick(bars, quote, { closed_10s });
+        await this.tick(bars, quote, {
+          closed_10s,
+          hour_bars: hourCache.bars,
+        });
       } finally {
         busy = false;
       }

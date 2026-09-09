@@ -52,6 +52,41 @@ describe('VS MASTER live bar builder', () => {
     expect(closed10sFromJustClosed(null)).toBeNull();
   });
 
+  it('refreshHourBarsCache prefers broker HOUR and caches until everyMs', async () => {
+    const {
+      emptyHourBarsCache,
+      refreshHourBarsCache,
+    } = await import('../liveFeed.js');
+    const hourBars = Array.from({ length: 8 }, (_, i) => {
+      const o = 4300 + i * 10;
+      return { open: o, high: o + 5, low: o - 2, close: o + 4, ts_ms: i * 3_600_000 };
+    });
+    let calls = 0;
+    const first = await refreshHourBarsCache({
+      epic: 'GOLD',
+      cache: emptyHourBarsCache(),
+      everyMs: 60_000,
+      brokerGetHourBars: async () => {
+        calls += 1;
+        return { ok: true, bars: hourBars, detail: 'capital_hour_8' };
+      },
+    });
+    expect(first.bars).toHaveLength(8);
+    expect(first.detail).toBe('capital_hour_8');
+    expect(calls).toBe(1);
+    const cached = await refreshHourBarsCache({
+      epic: 'GOLD',
+      cache: first,
+      everyMs: 60_000,
+      brokerGetHourBars: async () => {
+        calls += 1;
+        return { ok: true, bars: hourBars, detail: 'again' };
+      },
+    });
+    expect(calls).toBe(1);
+    expect(cached.detail).toBe('capital_hour_8');
+  });
+
   it('seedBars marks yahoo_ohlc source', () => {
     const b = new LiveBarBuilder(1000, 20);
     b.seedBars([
