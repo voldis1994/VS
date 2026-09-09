@@ -245,6 +245,10 @@ type MasterStatus = {
     opportunity_id?: string | null;
     buy_score?: number;
     sell_score?: number;
+    desk_entry_source?: 'setup' | 'move' | null;
+    desk_entry_side?: 'BUY' | 'SELL' | null;
+    hour_bias?: 'UP' | 'DOWN' | 'FLAT' | 'UNKNOWN' | null;
+    closed_10s_present?: boolean | null;
   }>;
   recent_trades?: Array<{
     ts: string;
@@ -2092,6 +2096,17 @@ export function MasterPage() {
                 {d.opportunity_id
                   ? ` · opp ${String(d.opportunity_id).slice(0, 8)}`
                   : ''}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
+                {d.desk_entry_source
+                  ? `confirm ${d.desk_entry_source}${d.desk_entry_side ? ` ${d.desk_entry_side}` : ''}`
+                  : 'confirm —'}
+                {d.hour_bias ? ` · 1h ${d.hour_bias}` : ''}
+                {d.closed_10s_present === true
+                  ? ' · 10s yes'
+                  : d.closed_10s_present === false
+                    ? ' · 10s no'
+                    : ''}
               </div>
             </div>
           ))

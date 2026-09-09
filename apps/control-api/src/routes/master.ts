@@ -786,7 +786,10 @@ async function refresh(){
     decisions.innerHTML=dec.length?dec.map(d=>{
       const detail=d.block_reason||d.execution_detail||'—';
       const opp=d.opportunity_id?' · opp '+String(d.opportunity_id).slice(0,8):'';
-      return card(d.kind+(d.executed?' · FILL':''), String(detail).slice(0,48)+opp+(d.ts?' · '+String(d.ts).slice(11,19):''), d.executed?'ok':(d.block_reason?'bad':''));
+      const confirm=d.desk_entry_source?(' · confirm '+d.desk_entry_source+(d.desk_entry_side?' '+d.desk_entry_side:'')):'';
+      const hb=d.hour_bias?(' · 1h '+d.hour_bias):'';
+      const c10=d.closed_10s_present===true?' · 10s yes':(d.closed_10s_present===false?' · 10s no':'');
+      return card(d.kind+(d.executed?' · FILL':''), String(detail).slice(0,40)+confirm+hb+c10+opp+(d.ts?' · '+String(d.ts).slice(11,19):''), d.executed?'ok':(d.block_reason?'bad':''));
     }).join(''):card('Decisions','no cycle events yet');
     const te=(s.recent_trades||[]).slice(0,8);
     trades.innerHTML=te.length?te.map(t=>{
