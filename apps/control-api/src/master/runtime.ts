@@ -4375,8 +4375,17 @@ class MasterRuntime {
           },
         };
       })(),
-      regime: this.last_decision?.analysis.regime ?? 'UNKNOWN',
-      market_state: this.last_decision?.analysis.market_state ?? '—',
+      // Regime/market_state cards — never look live from journal hydrate alone
+      regime: (() => {
+        const raw = this.last_decision?.analysis.regime ?? 'UNKNOWN';
+        if (!this.last_market && this.last_decision) return `hydrated · ${raw}`;
+        return raw;
+      })(),
+      market_state: (() => {
+        const raw = this.last_decision?.analysis.market_state ?? '—';
+        if (!this.last_market && this.last_decision) return `hydrated · ${raw}`;
+        return raw;
+      })(),
       last_market: this.last_market,
       expectancy_would_block: this.pipeline.expectancy
         .all()

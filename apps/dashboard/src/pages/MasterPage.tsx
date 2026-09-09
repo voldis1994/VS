@@ -350,13 +350,23 @@ export function MasterPage() {
           .map((e) => `${e.setup_key} EV=${e.ev.toFixed(2)} n=${e.samples}`)
           .join(' · ')}`
       : null;
-  const why =
+  const cyclePending = !!status && !status.last_market;
+  const whyRaw =
     status?.last_block_reason ||
     status?.monitoring?.entry_block_reason ||
     (status?.expectancy_gate_armed ? expWould : null) ||
     status?.last_execution_detail ||
     status?.last_decision?.kind ||
     '—';
+  // Journal-hydrated Why must not read as the current cycle
+  const why =
+    cyclePending &&
+    !status?.last_block_reason &&
+    !status?.monitoring?.entry_block_reason &&
+    whyRaw !== '—'
+      ? `hydrated · ${whyRaw}`
+      : whyRaw;
+  const whyHydrated = cyclePending && why.startsWith('hydrated ·');
   const wouldGateNote =
     !status?.expectancy_gate_armed && expWould ? expWould : null;
   const healthBad =
@@ -526,11 +536,16 @@ export function MasterPage() {
           ok: !!status.desired_running && status.running,
           bad: !!status.desired_running && !status.running,
         },
-        { k: 'Regime', v: status.regime },
+        {
+          k: 'Regime',
+          v: status.regime || '—',
+          // API already prefixes hydrated · when !last_market
+          bad: !!status.regime?.includes?.('invalid:'),
+        },
         {
           k: 'Market state',
           v: status.market_state || '—',
-          bad: !!status.market_state?.startsWith?.('invalid:'),
+          bad: !!status.market_state?.includes?.('invalid:'),
         },
         {
           k: 'Norm',
@@ -544,7 +559,12 @@ export function MasterPage() {
           bad: !!status.last_market && (!status.last_market.ok || status.last_market.quality < 0.5),
           ok: !!status.last_market?.ok && (status.last_market.quality ?? 0) >= 0.5,
         },
-        { k: 'BUY', v: Number(status.buy_score || 0).toFixed(3) },
+        {
+          k: 'BUY',
+          v: cyclePending
+            ? `hydrated · ${Number(status.buy_score || 0).toFixed(3)}`
+            : Number(status.buy_score || 0).toFixed(3),
+        },
         {
           k: 'BUY filter',
           v: status.buy_filter
@@ -561,7 +581,12 @@ export function MasterPage() {
             status.buy_filter.reason !== 'hydrated',
           ok: !!status.buy_filter?.ok,
         },
-        { k: 'SELL', v: Number(status.sell_score || 0).toFixed(3) },
+        {
+          k: 'SELL',
+          v: cyclePending
+            ? `hydrated · ${Number(status.sell_score || 0).toFixed(3)}`
+            : Number(status.sell_score || 0).toFixed(3),
+        },
         {
           k: 'SELL filter',
           v: status.sell_filter
@@ -624,15 +649,23 @@ export function MasterPage() {
               };
             })
           : []),
-        { k: 'Decision', v: status.last_decision?.kind || '—' },
+        {
+          k: 'Decision',
+          v: status.last_decision
+            ? cyclePending
+              ? `hydrated · ${status.last_decision.kind}`
+              : status.last_decision.kind
+            : '—',
+        },
         {
           k: 'Why',
           v: why,
           bad:
-            !!status.last_block_reason ||
-            !!status.monitoring?.entry_block_reason ||
-            (!!status.expectancy_gate_armed &&
-              (status.expectancy_would_block?.length || 0) > 0),
+            !whyHydrated &&
+            (!!status.last_block_reason ||
+              !!status.monitoring?.entry_block_reason ||
+              (!!status.expectancy_gate_armed &&
+                (status.expectancy_would_block?.length || 0) > 0)),
         },
         ...(wouldGateNote
           ? [
