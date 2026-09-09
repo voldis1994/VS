@@ -2271,6 +2271,7 @@ describe('runtime gates persist', () => {
         masterRuntime as unknown as { last_manage_tick_ms: number }
       ).last_manage_tick_ms = 0;
       masterRuntime.account.equity = 10_000;
+      masterRuntime.account.balance = 10_000;
       masterRuntime.account.available_to_deal = null;
       masterRuntime.account.trade_allowed = false;
 

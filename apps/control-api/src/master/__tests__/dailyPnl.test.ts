@@ -679,6 +679,10 @@ describe('MASTER daily pnl day boundary', () => {
     masterRuntime.stop();
     broker.seedOpens([]);
     broker.hydrateAccount({ equity: 10_000, balance: 10_000 });
+    masterRuntime.account.equity = 10_000;
+    masterRuntime.account.balance = 10_000;
+    masterRuntime.account.day_start_equity = 10_000;
+    masterRuntime.last_quote = null;
     if (prev === undefined) delete process.env.MASTER_STATE_DIR;
     else process.env.MASTER_STATE_DIR = prev;
   });
