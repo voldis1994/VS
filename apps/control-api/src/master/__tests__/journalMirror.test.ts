@@ -119,6 +119,10 @@ describe('DualPersist/FilePersist journal mirror', () => {
       sell_score: 0.2,
       executed: true,
       execution_detail: 'pg_primary_seed',
+      desk_entry_source: 'setup',
+      desk_entry_side: 'BUY',
+      hour_bias: 'UP',
+      closed_10s_present: true,
     });
     logTradeEvent({
       event: 'OPEN',
@@ -135,11 +139,13 @@ describe('DualPersist/FilePersist journal mirror', () => {
 
     // Allow fire-and-forget persist to land
     await new Promise((r) => setTimeout(r, 30));
-    expect(
-      (await loadDecisionEventsFromPersist(5)).some(
-        (e) => e.opportunity_id === 'opp-pg-1'
-      )
-    ).toBe(true);
+    const fromPrimary = await loadDecisionEventsFromPersist(5);
+    const seeded = fromPrimary.find((e) => e.opportunity_id === 'opp-pg-1');
+    expect(seeded).toBeTruthy();
+    expect(seeded!.desk_entry_source).toBe('setup');
+    expect(seeded!.desk_entry_side).toBe('BUY');
+    expect(seeded!.hour_bias).toBe('UP');
+    expect(seeded!.closed_10s_present).toBe(true);
     expect(
       (await loadTradeEventsFromPersist(5)).some((e) => e.position_id === 'pos-pg-1')
     ).toBe(true);
@@ -165,9 +171,12 @@ describe('DualPersist/FilePersist journal mirror', () => {
     expect(hydrated.wrote_jsonl).toBe(true);
     expect(existsSync(join(dir, 'decision_journal.jsonl'))).toBe(true);
     expect(existsSync(join(dir, 'trade_event_journal.jsonl'))).toBe(true);
-    expect(loadDecisionEvents(5).some((e) => e.opportunity_id === 'opp-pg-1')).toBe(
-      true
-    );
+    const healed = loadDecisionEvents(5).find((e) => e.opportunity_id === 'opp-pg-1');
+    expect(healed).toBeTruthy();
+    expect(healed!.desk_entry_source).toBe('setup');
+    expect(healed!.desk_entry_side).toBe('BUY');
+    expect(healed!.hour_bias).toBe('UP');
+    expect(healed!.closed_10s_present).toBe(true);
     expect(loadTradeEvents(5).some((e) => e.detail === 'pg_primary_open')).toBe(
       true
     );
