@@ -518,8 +518,12 @@ async function main() {
     const masterOwnsFanoutApi =
       runtimeBody.includes('fanoutAcceptedOpenToClients') &&
       runtimeBody.includes('executeMasterOwnedFanout') &&
+      runtimeBody.includes('journalMasterFanoutFills') &&
       runtimeBody.includes('last_client_fanout') &&
       existsSync(join(root, 'src/master/masterClientFanout.ts')) &&
+      readFileSync(join(root, 'src/master/masterClientFanout.ts'), 'utf8').includes(
+        'journalMasterFanoutFills'
+      ) &&
       readFileSync(join(root, 'src/services/intentFanout.ts'), 'utf8').includes(
         'executeMasterOwnedFanout'
       );

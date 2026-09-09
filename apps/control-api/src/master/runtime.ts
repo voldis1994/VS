@@ -128,6 +128,7 @@ export type MasterStatus = {
     ok_count: number;
     fail_count: number;
     detail: string;
+    journaled_count?: number;
   } | null;
   /** Last manage close failure (broker refused / AI veto) — dashboard honesty */
   last_close_failed: {
@@ -1266,6 +1267,7 @@ class MasterRuntime {
     const {
       buildMasterFanoutIntent,
       summarizeFanoutResult,
+      journalMasterFanoutFills,
     } = await import('./masterClientFanout.js');
     if (!this.ownsPipelineEffective()) {
       const summary = summarizeFanoutResult({ attempted: false });
@@ -1285,10 +1287,36 @@ class MasterRuntime {
         setup_type: input.setup_type,
       });
       const fanout = await executeMasterOwnedFanout(intent);
+      const journaled = journalMasterFanoutFills({
+        journal: this.pipeline.journal,
+        mode: this.cfg.mode,
+        epic: this.epic,
+        side: input.side,
+        intent_id: input.intent_id,
+        decision: this.last_decision,
+        fills: fanout.executed,
+      });
+      for (const rec of journaled) {
+        this.trackPersist('opportunity', persistOpportunity(rec));
+        logTradeEvent({
+          event: 'OPEN',
+          broker: 'CAPITAL',
+          epic: this.epic,
+          side: input.side,
+          volume: rec.risk.volume,
+          price: rec.execution?.fill_price ?? null,
+          position_id: null,
+          intent_id: rec.execution?.intent_id || null,
+          opportunity_id: rec.id,
+          ok: true,
+          detail: rec.execution?.detail || 'client_fanout',
+        });
+      }
       const summary = summarizeFanoutResult({
         attempted: true,
         subscribers: fanout.subscribers,
         executed: fanout.executed,
+        journaled_count: journaled.length,
       });
       this.last_client_fanout = summary;
       if (fanout.subscribers > 0) {
