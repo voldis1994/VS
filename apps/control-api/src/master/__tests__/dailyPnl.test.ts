@@ -1059,6 +1059,8 @@ describe('MASTER daily pnl day boundary', () => {
     // Must NOT advance daily_pnl_day to today without quote MTM
     expect(masterRuntime.account.daily_pnl_day).toBe('2000-01-01');
     expect(masterRuntime.account.day_start_equity).toBe(10_000);
+    // Sealed-day closed PnL must survive defer (not wiped to today's 0)
+    expect(masterRuntime.account.daily_pnl).toBe(-250);
 
     // Quote arrives → manageOnly rolls with cash+UPL
     const markBid = entry - 0.5;
@@ -1305,6 +1307,8 @@ describe('MASTER daily pnl day boundary', () => {
     expect(masterRuntime.positions.count()).toBe(1);
     expect(masterRuntime.account.daily_pnl_day).toBe('2000-01-01');
     expect(masterRuntime.account.day_start_equity).toBe(10_000);
+    // Sealed-day closed PnL must survive defer (not wiped to today's 0)
+    expect(masterRuntime.account.daily_pnl).toBe(-250);
 
     const markBid = entry - 0.5;
     const freshMark = {
