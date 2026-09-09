@@ -204,4 +204,149 @@ describe('MASTER Capital epic + status venue', () => {
     // −£3k vs Capital day_start £50k → fires; paper £10k day_start would look like profit
     expect(risk.reasons).toContain('daily_loss_limit');
   });
+
+  it('recover defers UTC day-roll while Capital account unproven', async () => {
+    process.env.MASTER_LIVE_ENABLED = 'true';
+    const { mkdtempSync } = await import('fs');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const { installFilePersist } = await import('../filePersist.js');
+    const { saveRuntimeGates } = await import('../runtimeGates.js');
+
+    const dir = mkdtempSync(join(tmpdir(), 'vs-capital-defer-day-roll-'));
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = dir;
+    installFilePersist(dir);
+
+    masterRuntime.stop();
+    const { CapitalBroker } = await import('../broker.js');
+    let accountOk = false;
+    let equity = 47_000;
+    const broker = new CapitalBroker({
+      credentials: {},
+      acquire: async () => ({
+        ok: true,
+        session: { id: 's-defer-roll' },
+        detail: 'ok',
+      }),
+      quote: async (_s, epic) => ({
+        bid: 4410,
+        ask: 4410.4,
+        mid: 4410.2,
+        epic,
+        raw_ok: true,
+        market_status: 'TRADEABLE',
+      }),
+      list: async () => ({ ok: true, positions: [], detail: '0' }),
+      create: async () => ({ ok: false, detail: 'no' }),
+      close: async () => ({ ok: false, detail: 'no' }),
+      account: async () =>
+        accountOk
+          ? {
+              ok: true,
+              equity,
+              balance: equity,
+              available: equity - 500,
+              currency: 'GBP',
+              detail: 'ok',
+            }
+          : { ok: false, detail: 'timeout' },
+    });
+    await broker.connect();
+    masterRuntime.attachBroker(broker);
+    masterRuntime.setMode('LIVE');
+    saveRuntimeGates({
+      last_loss_ms: 0,
+      reject_until_ms: 0,
+      inflight_until_ms: 0,
+      post_exit_until_ms: 0,
+      last_entry_fingerprint: null,
+      day_start_equity: 48_000,
+      peak_equity: 52_000,
+      daily_pnl_day: '2000-01-01',
+      consecutive_losses: 1,
+      capital_day_gates_seeded: true,
+      last_ai_allow_close: true,
+      ai_mode: 'off',
+      kill_switch: false,
+      mode: 'LIVE',
+      epic: 'GOLD',
+      entries_armed: true,
+      entries_pause_reason: null,
+      last_close_failed: null,
+      desired_running: false,
+    });
+    masterRuntime.account = {
+      equity: 0,
+      balance: 0,
+      currency: 'GBP',
+      open_positions: 0,
+      daily_pnl: -500,
+      daily_pnl_day: '2000-01-01',
+      day_start_equity: 48_000,
+      peak_equity: 52_000,
+      consecutive_losses: 1,
+    };
+    (
+      masterRuntime as unknown as { capitalAccountProven: boolean }
+    ).capitalAccountProven = false;
+    (
+      masterRuntime as unknown as { capitalDayGatesSeeded: boolean }
+    ).capitalDayGatesSeeded = true;
+
+    await masterRuntime.recover();
+
+    // Must NOT advance day or zero day_start while Capital unread
+    expect(masterRuntime.account.daily_pnl_day).toBe('2000-01-01');
+    expect(masterRuntime.account.day_start_equity).toBe(48_000);
+    expect(
+      (masterRuntime as unknown as { capitalDayGatesSeeded: boolean })
+        .capitalDayGatesSeeded
+    ).toBe(true);
+    expect(
+      (masterRuntime as unknown as { capitalAccountProven: boolean })
+        .capitalAccountProven
+    ).toBe(false);
+
+    // First successful equity proves then rolls with venue baseline
+    const { DEFAULT_MASTER_CONFIG } = await import('../pipeline.js');
+    accountOk = true;
+    masterRuntime.cfg = {
+      ...DEFAULT_MASTER_CONFIG,
+      mode: 'LIVE',
+      min_score: 0.99,
+      block_off_hours: false,
+    };
+    masterRuntime.running = true;
+    const bars = Array.from({ length: 30 }, (_, i) => {
+      const o = 4400 + i * 0.5;
+      return {
+        open: o,
+        high: o + 1,
+        low: o - 0.2,
+        close: o + 0.4,
+        ts_ms: Date.now() - (30 - i) * 60_000,
+      };
+    });
+    await masterRuntime.tick(bars, {
+      bid: 4410,
+      ask: 4410.4,
+      mid: 4410.2,
+      spread: 0.4,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+      market_status: 'TRADEABLE',
+    });
+    const today = new Date().toISOString().slice(0, 10);
+    expect(masterRuntime.account.daily_pnl_day).toBe(today);
+    expect(masterRuntime.account.day_start_equity).toBe(47_000);
+    expect(
+      (masterRuntime as unknown as { capitalAccountProven: boolean })
+        .capitalAccountProven
+    ).toBe(true);
+
+    masterRuntime.stop();
+    if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+    else process.env.MASTER_STATE_DIR = prev;
+  });
 });
