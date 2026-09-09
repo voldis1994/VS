@@ -66,6 +66,7 @@ import {
 import { loadRuntimeGates, saveRuntimeGates } from './runtimeGates.js';
 import { loadOwnsPipelinePref, saveOwnsPipelinePref } from './ownsPipelinePref.js';
 import { loadMarketCache, saveMarketCache } from './marketCache.js';
+import { validateMarket } from './marketData.js';
 import { newsBlocksEntries, resolveNewsWindow, type NewsWindowState } from './newsGate.js';
 import { refreshNewsCalendar } from './newsCalendar.js';
 import { SpreadHistory } from './spreadModel.js';
@@ -4270,6 +4271,17 @@ class MasterRuntime {
           decisionRows.length > 0 ||
           tradeRows.length > 0 ||
           oppCount > 0;
+        // Disk market_cache evidence for validate/normalize — never forge green
+        const diskCacheEvidence =
+          !m &&
+          (this.barsFromDiskCache || this.quoteFromDiskCache) &&
+          this.last_bars.length >= 5 &&
+          quote != null;
+        const diskMv = diskCacheEvidence
+          ? validateMarket(this.last_bars, quote, {
+              stale_ms: this.cfg.stale_quote_ms,
+            })
+          : null;
         return {
           market_validation: {
             ok: !!(m && m.ok && !liveQuoteStaleForStages),
@@ -4277,7 +4289,13 @@ class MasterRuntime {
               ? `stale_quote · age=${Math.round((quoteAgeMs || 0) / 1000)}s`
               : m
                 ? `Q=${m.quality.toFixed(2)}${m.reasons.length ? ` · ${m.reasons.slice(0, 2).join('|')}` : ''}`
-                : 'no cycle',
+                : diskMv
+                  ? `hydrated · disk_cache · Q=${diskMv.quality.toFixed(2)}${
+                      diskMv.reasons.length
+                        ? ` · ${diskMv.reasons.slice(0, 2).join('|')}`
+                        : ''
+                    }`
+                  : 'no cycle',
           },
           normalization: {
             // Never forge green after failed validation (flat_tape / stale quote)
@@ -4292,7 +4310,9 @@ class MasterRuntime {
                         ? ' · invalid'
                         : ''
                   }`
-                : 'no cycle',
+                : diskMv
+                  ? `hydrated · disk_cache · ${diskMv.bars.length}/${this.last_bars.length} bars`
+                  : 'no cycle',
           },
           analysis_regime: {
             // Never forge green from journal-hydrate alone — need proven last_market

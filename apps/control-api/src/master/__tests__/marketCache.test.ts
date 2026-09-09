@@ -180,6 +180,14 @@ describe('market_cache hydrate provenance', () => {
       expect(st.quote?.source).toBe('disk_cache');
       expect(st.floating_pnl).not.toBeNull();
       expect(st.floating_pnl_cached).toBe(true);
+      expect(st.pipeline_stages.market_validation.ok).toBe(false);
+      expect(st.pipeline_stages.market_validation.detail).toMatch(
+        /^hydrated · disk_cache · Q=/
+      );
+      expect(st.pipeline_stages.normalization.ok).toBe(false);
+      expect(st.pipeline_stages.normalization.detail).toMatch(
+        /^hydrated · disk_cache · /
+      );
       // Live tick clears provenance
       await masterRuntime.tick(bars, {
         bid: 4416,
@@ -194,6 +202,12 @@ describe('market_cache hydrate provenance', () => {
       expect(live.quote?.source).toBe('live');
       expect(live.bars_cached).toBe(false);
       expect(live.floating_pnl_cached).toBe(false);
+      expect(live.pipeline_stages.market_validation.detail).not.toMatch(
+        /hydrated · disk_cache/
+      );
+      expect(live.pipeline_stages.normalization.detail).not.toMatch(
+        /hydrated · disk_cache/
+      );
       masterRuntime.positions = prevPositions;
     } finally {
       masterRuntime.last_quote = prevQuote;
