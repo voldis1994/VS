@@ -736,7 +736,11 @@ export function MasterPage() {
             status.entry_gates.hours_ok &&
             !status.entry_gates.news_blocks,
         },
-        { k: 'Last exit', v: status.last_exit_reason || '—' },
+        { k: 'Last exit', v: status.last_exit_reason
+            ? cyclePending
+              ? `hydrated · ${status.last_exit_reason}`
+              : status.last_exit_reason
+            : '—' },
         {
           k: 'Equity',
           v:
