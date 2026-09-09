@@ -4265,8 +4265,13 @@ class MasterRuntime {
                 : 'flat · manage never ran',
           },
           exit: {
-            ok: !!this.last_exit_reason || opens === 0,
-            detail: this.last_exit_reason || (opens > 0 ? 'holding' : 'flat'),
+            // Never forge green on cold flat — require a real exit reason
+            ok: !!this.last_exit_reason,
+            detail: this.last_exit_reason
+              ? this.last_exit_reason
+              : opens > 0
+                ? 'holding'
+                : 'flat · no exit yet',
           },
           journal: {
             // Persist fail or empty audit → not green (never forge empty as ok)

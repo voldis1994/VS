@@ -5338,6 +5338,8 @@ describe('pipeline_stages honesty — position + journal never forged green', ()
       const cold = masterRuntime.status().pipeline_stages;
       expect(cold.position_manager.ok).toBe(false);
       expect(cold.position_manager.detail).toMatch(/manage never ran/);
+      expect(cold.exit.ok).toBe(false);
+      expect(cold.exit.detail).toMatch(/no exit yet/);
       expect(cold.journal.ok).toBe(false);
       expect(cold.journal.detail).toMatch(/no journal/);
       expect(cold.performance.ok).toBe(false);
@@ -5369,6 +5371,8 @@ describe('pipeline_stages honesty — position + journal never forged green', ()
       const holding = masterRuntime.status().pipeline_stages;
       expect(holding.position_manager.ok).toBe(false);
       expect(holding.position_manager.detail).toMatch(/open=1/);
+      expect(holding.exit.ok).toBe(false);
+      expect(holding.exit.detail).toBe('holding');
 
       // Mark manageTick evidence → green while holding
       (masterRuntime as unknown as { last_manage_tick_ms: number }).last_manage_tick_ms =
@@ -5376,6 +5380,14 @@ describe('pipeline_stages honesty — position + journal never forged green', ()
       const managed = masterRuntime.status().pipeline_stages;
       expect(managed.position_manager.ok).toBe(true);
       expect(managed.position_manager.detail).toMatch(/managed \d+s ago/);
+      expect(managed.exit.ok).toBe(false);
+
+      const prevExit = masterRuntime.last_exit_reason;
+      masterRuntime.last_exit_reason = 'TakeProfit';
+      const exited = masterRuntime.status().pipeline_stages;
+      expect(exited.exit.ok).toBe(true);
+      expect(exited.exit.detail).toBe('TakeProfit');
+      masterRuntime.last_exit_reason = prevExit;
 
       // Persist fail → journal stage red even with KPI trades
       const { logDecisionEvent } = await import('../decisionJournal.js');
