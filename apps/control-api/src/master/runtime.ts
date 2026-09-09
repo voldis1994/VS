@@ -2552,6 +2552,34 @@ class MasterRuntime {
     }
   }
 
+  /**
+   * After manage closes: copy venue equity/balance and raise peak_equity (paper wins).
+   * Same-tick risk + manageOnly Peak eq KPI must not lag until the next full tick.
+   */
+  private applyVenueAccountAfterClose(acct: {
+    equity: number;
+    balance: number;
+  }): void {
+    if (!(acct && acct.equity > 0 && Number.isFinite(acct.equity))) return;
+    this.account.equity = acct.equity;
+    this.account.balance = acct.balance;
+    const prevPeak = this.account.peak_equity;
+    const prevDayStart = this.account.day_start_equity;
+    this.account.peak_equity = Math.max(
+      Number(this.account.peak_equity) || 0,
+      acct.equity
+    );
+    if (!this.account.day_start_equity) {
+      this.account.day_start_equity = acct.equity;
+    }
+    if (
+      this.account.peak_equity !== prevPeak ||
+      this.account.day_start_equity !== prevDayStart
+    ) {
+      this.persistRuntimeGates();
+    }
+  }
+
   /** Status with a fresh Capital venue list when Capital LIVE is attached. */
   async statusAsync(): Promise<MasterStatus> {
     if (!this.recovered && !this.bookHydrated) {
@@ -3020,13 +3048,10 @@ class MasterRuntime {
           Date.now() + cool
         );
         this.persistRuntimeGates();
-        // Paper venue equity already updated on auto-fill / close — refresh account
+        // Paper venue equity already updated on auto-fill / close — refresh account + peak
         try {
           const acct = await broker.getAccount();
-          if (acct && acct.equity > 0) {
-            this.account.equity = acct.equity;
-            this.account.balance = acct.balance;
-          }
+          if (acct) this.applyVenueAccountAfterClose(acct);
         } catch {
           /* keep */
         }
@@ -5204,14 +5229,11 @@ class MasterRuntime {
         Date.now() + cool
       );
       this.persistRuntimeGates();
-      // Mirror full tick: refresh equity/balance from venue after manage closes
-      // so 1s manageOnly loop does not leave account.equity stale until next tick.
+      // Mirror full tick: refresh equity/balance/peak from venue after manage closes
+      // so 1s manageOnly loop does not leave Peak eq / risk DD stale until next tick.
       try {
         const acct = await broker.getAccount();
-        if (acct && acct.equity > 0) {
-          this.account.equity = acct.equity;
-          this.account.balance = acct.balance;
-        }
+        if (acct) this.applyVenueAccountAfterClose(acct);
       } catch {
         /* keep */
       }
