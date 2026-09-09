@@ -776,7 +776,8 @@ async function refresh(){
       const upl=p.upl;
       const uplTxt=upl!=null&&Number.isFinite(Number(upl))?Number(upl).toFixed(2):'—';
       const uplCls=upl==null?'':(Number(upl)>=0?'ok':'bad');
-      return '<div class="card"><div class="k">'+p.side+' '+p.epic+' <button data-close="'+p.position_id+'" style="float:right;font-size:11px;padding:2px 8px">Close</button></div><div class="v">'+Number(p.entry).toFixed(2)+(p.stop_loss!=null&&Number(p.stop_loss)>0?' · SL '+Number(p.stop_loss).toFixed(2):' · SL —')+' · UPL <span class="'+uplCls+'">'+uplTxt+'</span></div></div>';
+      const confirm=p.desk_entry_source?(' · confirm '+p.desk_entry_source):'';
+      return '<div class="card"><div class="k">'+p.side+' '+p.epic+' <button data-close="'+p.position_id+'" style="float:right;font-size:11px;padding:2px 8px">Close</button></div><div class="v">'+Number(p.entry).toFixed(2)+(p.stop_loss!=null&&Number(p.stop_loss)>0?' · SL '+Number(p.stop_loss).toFixed(2):' · SL —')+' · UPL <span class="'+uplCls+'">'+uplTxt+'</span>'+confirm+'</div></div>';
     }).join('')
       :card('Open','FLAT');
     positions.querySelectorAll('[data-close]').forEach(btn=>btn.onclick=async()=>{

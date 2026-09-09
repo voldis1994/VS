@@ -992,6 +992,10 @@ class MasterRuntime {
             market_state: 'recovered_from_decision_journal',
           } as MasterDecision['analysis'],
           expectancy: null,
+          desk_entry_source:
+            ev.desk_entry_source === 'setup' || ev.desk_entry_source === 'move'
+              ? ev.desk_entry_source
+              : 'none',
         };
         if (!this.last_execution_detail && ev.execution_detail) {
           this.last_execution_detail = ev.execution_detail;
@@ -1077,12 +1081,19 @@ class MasterRuntime {
 
   /** Positions enriched with live UPL for dashboard — null UPL when quote missing (never invent 0). */
   positionsForApi(): Array<
-    ManagedPosition & { upl: number | null; mark: number | null }
+    ManagedPosition & {
+      upl: number | null;
+      mark: number | null;
+      desk_entry_source: 'setup' | 'move' | 'none' | null;
+    }
   > {
     const quote = this.last_quote;
     const pv = specForEpic(this.epic).value_per_point_per_lot;
     return this.positions.list().map((p) => {
-      if (!quote) return { ...p, upl: null, mark: null };
+      const raw = p.decision?.desk_entry_source;
+      const desk_entry_source: 'setup' | 'move' | 'none' | null =
+        raw === 'setup' || raw === 'move' || raw === 'none' ? raw : null;
+      if (!quote) return { ...p, upl: null, mark: null, desk_entry_source };
       const mark = protectiveMark(p.side, quote);
       const capitalLive =
         this.broker instanceof CapitalBroker && !this.broker.paper;
@@ -1098,7 +1109,7 @@ class MasterRuntime {
               broker_upl: p.broker_upl,
               capitalLive,
             });
-      return { ...p, upl, mark };
+      return { ...p, upl, mark, desk_entry_source };
     });
   }
 
