@@ -91,6 +91,28 @@ export function resolveCloseMoneyPnl(input: {
 }
 
 /**
+ * R multiple from close geometry: signed pnl points / |entry−stop|.
+ * Soft/scalp exits must not hardcode 0 or expectancy_r stays wrong.
+ */
+export function rMultipleFromClose(input: {
+  entry: number;
+  stop_loss?: number | null;
+  pnl_pts: number;
+}): number {
+  const entry = Number(input.entry);
+  const stop =
+    input.stop_loss != null && Number.isFinite(Number(input.stop_loss))
+      ? Number(input.stop_loss)
+      : entry;
+  const riskDist = Math.max(Math.abs(stop - entry), Number.EPSILON);
+  const pts = Number(input.pnl_pts);
+  if (!Number.isFinite(pts) || !Number.isFinite(riskDist) || riskDist <= 0) {
+    return 0;
+  }
+  return pts / riskDist;
+}
+
+/**
  * Tag Capital LIVE closes whose money is unproven so trade cards / journal
  * never look like a flat £0 proven exit.
  */

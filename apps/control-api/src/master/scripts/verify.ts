@@ -1263,6 +1263,15 @@ async function main() {
       ).includes(
         'full tick() returns exits≥1 with STOP_HIT (not sync-only ghost)'
       );
+    const softExitRMultipleApi =
+      moneyExitBody.includes('export function rMultipleFromClose') &&
+      moneyExitBody.includes('Soft/scalp exits must not hardcode 0') &&
+      positionManagerBody.includes('rMultipleFromClose({') &&
+      !positionManagerBody.includes('r_multiple: 0') &&
+      runtimeBody.includes('rMultipleFromClose({') &&
+      gapsTestBody.includes(
+        'Soft trail must journal real R (not hardcoded 0)'
+      );
     const multiEpicManageApi =
       positionManagerBody.includes('quoteMatchesPosition') &&
       positionManagerBody.includes('skipped_wrong_epic') &&
