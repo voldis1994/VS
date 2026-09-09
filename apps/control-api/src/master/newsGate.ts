@@ -18,6 +18,7 @@ import {
   persistNewsWindowState,
   loadNewsWindowFromPersist,
 } from './persist.js';
+import { embedOperatorMetaPatch } from './operatorMetaEmbed.js';
 
 export type NewsImpact = 'off' | 'low' | 'medium' | 'high';
 
@@ -132,6 +133,10 @@ export function saveNewsWindow(
       detail: input.detail ?? null,
     };
     writeFileSync(newsPath(root), JSON.stringify(payload));
+    embedOperatorMetaPatch(
+      { news_window: payload as unknown as Record<string, unknown> },
+      dir
+    );
     void persistNewsWindowState({
       ...payload,
       saved_at_ms: Date.now(),
@@ -287,6 +292,10 @@ export async function hydrateNewsWindowFromPersist(
           : `healed impact=${resolvedImpact}`,
     };
     writeFileSync(path, JSON.stringify(payload));
+    embedOperatorMetaPatch(
+      { news_window: payload as unknown as Record<string, unknown> },
+      dir
+    );
     return { restored: true };
   } catch {
     return { restored: false };

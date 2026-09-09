@@ -21,6 +21,7 @@ import {
   persistTradeAckJournalState,
   loadTradeAckJournalFromPersist,
 } from './persist.js';
+import { embedOperatorMetaPatch } from './operatorMetaEmbed.js';
 
 export type TradeAckStatus = 'PENDING' | 'SUCCESS' | 'FAILED' | 'TIMEOUT';
 
@@ -93,6 +94,10 @@ function writeAll(
     } finally {
       closeSync(fd2);
     }
+    embedOperatorMetaPatch(
+      { trade_ack_journal: map as unknown as Record<string, unknown> },
+      dir
+    );
     // DualPersist / MemoryPersist / PG primary — survive full file wipe
     void persistTradeAckJournalState({
       records: map,
@@ -232,6 +237,10 @@ export async function hydrateTradeAckJournalFromPersist(
     const tmp = `${path}.tmp`;
     writeFileSync(tmp, body, 'utf8');
     renameSync(tmp, path);
+    embedOperatorMetaPatch(
+      { trade_ack_journal: map as unknown as Record<string, unknown> },
+      dir
+    );
     return { restored: true, count: Object.keys(map).length };
   } catch {
     return { restored: false, count: 0 };
