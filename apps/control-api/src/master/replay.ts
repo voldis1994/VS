@@ -25,6 +25,8 @@ import {
 import { resolveAdvisor } from './ai.js';
 import { updateSpreadModel } from './spreadModel.js';
 import { setupKey } from './decision.js';
+import type { CapitalPriceCandle } from '../services/capitalCom.js';
+import type { TenSecBar } from '../services/tenSecondOhlc.js';
 import type {
   Bar,
   MasterConfig,
@@ -56,7 +58,56 @@ export type ReplayOptions = {
   reject_until_ms?: number;
   /** Seed inflight window — live inflight_until_ms peer */
   inflight_until_ms?: number;
+  /**
+   * When false, skip synthetic closed_10s / hour_bars (legacy replay without desk confirm).
+   * Default true — live-parity desk SETUP/MOVE path.
+   */
+  desk_confirm?: boolean;
 };
+
+/** Treat the current replay bar OHLC as a just-closed 10s confirm bar. */
+export function closed10sFromReplayBar(bar: Bar): TenSecBar {
+  const ts = Number(bar.ts_ms) || 0;
+  return {
+    open_time_ms: Math.max(0, ts - 10_000),
+    open: bar.open,
+    high: bar.high,
+    low: bar.low,
+    close: bar.close,
+    ticks: 1,
+  };
+}
+
+/** Aggregate 1m (or finer) bars into hour candles for structure hour_bias. */
+export function hourBarsFromReplayMinutes(bars: Bar[]): CapitalPriceCandle[] {
+  const buckets = new Map<number, Bar[]>();
+  for (const b of bars) {
+    const t = Number(b.ts_ms) || 0;
+    const hour = Math.floor(t / 3_600_000) * 3_600_000;
+    const list = buckets.get(hour) || [];
+    list.push(b);
+    buckets.set(hour, list);
+  }
+  return [...buckets.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([hour, group]) => {
+      const first = group[0]!;
+      const last = group[group.length - 1]!;
+      let high = first.high;
+      let low = first.low;
+      for (const g of group) {
+        if (g.high > high) high = g.high;
+        if (g.low < low) low = g.low;
+      }
+      return {
+        open: first.open,
+        high,
+        low,
+        close: last.close,
+        snapshotTime: new Date(hour).toISOString(),
+      };
+    });
+}
 
 function quoteFromClose(bar: Bar, spread: number, epic: string): Quote {
   const mid = bar.close;
@@ -345,6 +396,12 @@ export async function replayMaster(opts: ReplayOptions): Promise<{
       now_ms: quote.ts_ms,
       relative_spread:
         spreadSnap.history.length >= 3 ? spreadSnap.relative_spread : null,
+      ...(opts.desk_confirm === false
+        ? {}
+        : {
+            closed_10s: closed10sFromReplayBar(last),
+            hour_bars: hourBarsFromReplayMinutes(visible),
+          }),
     });
 
     const postExitCool = quote.ts_ms < post_exit_until_ms;
