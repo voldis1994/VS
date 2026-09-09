@@ -534,6 +534,16 @@ describe('MASTER daily pnl day boundary', () => {
       epic: 'GOLD',
       ts_ms: Date.now(),
     };
+    // Live mark clears open-book defer, but sealed prior day still paints deferred
+    const markLiveDayLagged = masterRuntime.status();
+    expect(markLiveDayLagged.utc_day_roll_deferred).toBe(true);
+    expect(String(markLiveDayLagged.last_block_reason || '')).toMatch(
+      /utc_day_roll_deferred/
+    );
+
+    masterRuntime.account.daily_pnl_day = new Date()
+      .toISOString()
+      .slice(0, 10);
     const live = masterRuntime.status();
     expect(live.utc_day_roll_deferred).toBe(false);
 
@@ -595,6 +605,9 @@ describe('MASTER daily pnl day boundary', () => {
       /^utc_day_roll_deferred/
     );
     expect(String(lagged.last_block_reason || '')).toContain('filters:spread');
+    // Flat book: shouldDeferUtcDayRoll is false, but day lag must still paint deferred
+    expect(masterRuntime.positions.count()).toBe(0);
+    expect(lagged.utc_day_roll_deferred).toBe(true);
 
     const today = new Date().toISOString().slice(0, 10);
     masterRuntime.account.daily_pnl_day = today;
@@ -603,9 +616,45 @@ describe('MASTER daily pnl day boundary', () => {
     expect(String(rolled.last_block_reason || '')).not.toMatch(
       /utc_day_roll_deferred/
     );
+    expect(rolled.utc_day_roll_deferred).toBe(false);
 
     masterRuntime.last_market = null;
     masterRuntime.last_decision = null;
+  });
+
+  it('status utc_day_roll_deferred when flat paper daily_pnl_day lags UTC today', async () => {
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('PAPER');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.ensurePaperBroker();
+    masterRuntime.setMode('PAPER');
+    masterRuntime.last_quote = {
+      bid: 4400,
+      ask: 4400.2,
+      mid: 4400.1,
+      spread: 0.2,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    };
+    (
+      masterRuntime as unknown as { quoteFromDiskCache: boolean }
+    ).quoteFromDiskCache = false;
+    masterRuntime.account.daily_pnl = -40;
+    masterRuntime.account.daily_pnl_day = '2000-01-01';
+    masterRuntime.account.day_start_equity = 10_000;
+    expect(masterRuntime.positions.count()).toBe(0);
+
+    const lagged = masterRuntime.status();
+    expect(lagged.utc_day_roll_deferred).toBe(true);
+    expect(String(lagged.last_block_reason || '')).toMatch(
+      /utc_day_roll_deferred/
+    );
+
+    masterRuntime.account.daily_pnl_day = new Date()
+      .toISOString()
+      .slice(0, 10);
+    expect(masterRuntime.status().utc_day_roll_deferred).toBe(false);
+    masterRuntime.last_quote = null;
   });
 
   it('manageOnlyTick rolls stale daily_pnl_day before sync-ghost close', async () => {
