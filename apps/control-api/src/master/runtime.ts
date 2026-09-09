@@ -4192,8 +4192,17 @@ class MasterRuntime {
               : 'no cycle',
           },
           normalization: {
-            ok: !!(m && m.bars_out >= 5),
-            detail: m ? `${m.bars_out}/${m.bars_in} bars` : 'no cycle',
+            // Never forge green after failed validation (flat_tape etc. can still emit bars)
+            ok: !!(m && m.ok && m.bars_out >= 5),
+            detail: m
+              ? `${m.bars_out}/${m.bars_in} bars${
+                  !m.ok && m.reasons.length
+                    ? ` · ${m.reasons.slice(0, 2).join('|')}`
+                    : !m.ok
+                      ? ' · invalid'
+                      : ''
+                }`
+              : 'no cycle',
           },
           analysis_regime: {
             ok: !!(d?.analysis?.regime && d.analysis.regime !== 'UNKNOWN'),

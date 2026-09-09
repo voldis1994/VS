@@ -5408,3 +5408,38 @@ describe('pipeline_stages honesty — position + journal never forged green', ()
     }
   });
 });
+
+describe('pipeline_stages honesty — normalization never forged green', () => {
+  it('flat_tape / failed validation keeps Stage·normalize red despite bars_out', () => {
+    const prev = masterRuntime.last_market;
+    try {
+      masterRuntime.last_market = {
+        ok: false,
+        quality: 0.3,
+        reasons: ['flat_tape'],
+        bars_in: 12,
+        bars_out: 12,
+      };
+      const stages = masterRuntime.status().pipeline_stages;
+      expect(stages.market_validation.ok).toBe(false);
+      expect(stages.market_validation.detail).toMatch(/flat_tape/);
+      expect(stages.normalization.ok).toBe(false);
+      expect(stages.normalization.detail).toMatch(/12\/12/);
+      expect(stages.normalization.detail).toMatch(/flat_tape/);
+
+      masterRuntime.last_market = {
+        ok: true,
+        quality: 0.95,
+        reasons: [],
+        bars_in: 40,
+        bars_out: 40,
+      };
+      const okStages = masterRuntime.status().pipeline_stages;
+      expect(okStages.market_validation.ok).toBe(true);
+      expect(okStages.normalization.ok).toBe(true);
+      expect(okStages.normalization.detail).toBe('40/40 bars');
+    } finally {
+      masterRuntime.last_market = prev;
+    }
+  });
+});
