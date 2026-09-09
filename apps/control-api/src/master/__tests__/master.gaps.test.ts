@@ -4917,6 +4917,31 @@ describe('orphan adopt + replay soft-trail authority', () => {
 });
 
 describe('expectancy gate + pure evaluate', () => {
+  it('setMode(LIVE) arms require_positive_expectancy; PAPER clears it', () => {
+    const prevMode = masterRuntime.cfg.mode;
+    const prevExp = masterRuntime.cfg.require_positive_expectancy;
+    const prevArmed = masterRuntime.cfg.require_armed_setup;
+    try {
+      masterRuntime.setMode('PAPER');
+      expect(masterRuntime.cfg.require_positive_expectancy).toBe(false);
+      expect(masterRuntime.status().expectancy_gate_armed).toBe(false);
+      masterRuntime.setMode('LIVE');
+      expect(masterRuntime.cfg.require_positive_expectancy).toBe(true);
+      expect(masterRuntime.cfg.require_armed_setup).toBe(true);
+      expect(masterRuntime.status().expectancy_gate_armed).toBe(true);
+      masterRuntime.setMode('PAPER');
+      expect(masterRuntime.cfg.require_positive_expectancy).toBe(false);
+    } finally {
+      masterRuntime.cfg = {
+        ...masterRuntime.cfg,
+        mode: prevMode,
+        require_positive_expectancy: prevExp,
+        require_armed_setup: prevArmed,
+      };
+      masterRuntime.pipeline.mode = prevMode;
+    }
+  });
+
   it('PATCH-able require_positive_expectancy blocks negative EV setups', async () => {
     const { decide, setupKey } = await import('../decision.js');
     const a = baseAnalysis({

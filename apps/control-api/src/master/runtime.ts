@@ -524,6 +524,8 @@ class MasterRuntime {
       mode,
       // Desk SETUP-first: LIVE Capital path requires ARMED side; paper demos stay open
       require_armed_setup: mode === 'LIVE',
+      // LIVE: refuse setups with proven negative EV once sample floor is met
+      require_positive_expectancy: mode === 'LIVE',
     };
     this.pipeline.mode = mode;
     this.persistRuntimeGates();
@@ -681,14 +683,23 @@ class MasterRuntime {
       gates.mode === 'LIVE' ||
       gates.mode === 'BACKTEST'
     ) {
-      // LIVE defaults to desk SETUP ARMED gate; manage config can override
+      // LIVE defaults to desk SETUP ARMED gate + positive expectancy; manage config can override
       const manage = loadManageConfig();
       const armedDefault = gates.mode === 'LIVE';
       const require_armed_setup =
         manage && typeof manage.require_armed_setup === 'boolean'
           ? manage.require_armed_setup
           : armedDefault;
-      this.cfg = { ...this.cfg, mode: gates.mode, require_armed_setup };
+      const require_positive_expectancy =
+        manage && typeof manage.require_positive_expectancy === 'boolean'
+          ? manage.require_positive_expectancy
+          : armedDefault;
+      this.cfg = {
+        ...this.cfg,
+        mode: gates.mode,
+        require_armed_setup,
+        require_positive_expectancy,
+      };
       this.pipeline.mode = gates.mode;
     }
     if (gates.epic && String(gates.epic).trim()) {
