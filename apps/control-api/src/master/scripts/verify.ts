@@ -569,7 +569,9 @@ async function main() {
     const deskBridgeMeta =
       deskBody.includes('manage_owner:') &&
       deskBody.includes('MASTER BRIDGE') &&
-      deskBody.includes('deskSessionStartPolicy');
+      deskBody.includes('deskSessionStartPolicy') &&
+      deskBody.includes('disableDeskEntryBrainsWhileOwns') &&
+      runtimeBody.includes('disableDeskEntryBrainsWhileOwns');
     const honestyOk =
       stagesUi &&
       stagesApi &&

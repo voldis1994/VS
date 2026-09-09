@@ -679,6 +679,8 @@ export function listRobotSessions(): RobotSession[] {
 
 /** True when this account already runs its own entry brain (not manage-only / not fanout). */
 export function hasRunningEntryBrain(accountId: number, epic?: string | null): boolean {
+  // MASTER owns entry — stale desk entry_enabled must not starve Client fanout
+  if (masterOwnsPipeline()) return false;
   const want = epic ? String(epic).trim().toLowerCase() : null;
   for (const s of sessions.values()) {
     if (!s.running || !s.entry_enabled || s.account_id !== accountId) continue;
@@ -686,6 +688,29 @@ export function hasRunningEntryBrain(accountId: number, epic?: string | null): b
     return true;
   }
   return false;
+}
+
+/**
+ * When MASTER owns_pipeline flips ON: force every desk session off OWN BRAIN entry
+ * so Client fanout is not skipped and dual-entry cannot race.
+ */
+export function disableDeskEntryBrainsWhileOwns(): number {
+  if (!masterOwnsPipeline()) return 0;
+  let n = 0;
+  for (const s of sessions.values()) {
+    if (!s.running || !s.entry_enabled) continue;
+    s.entry_enabled = false;
+    n += 1;
+    pushTick(s, {
+      phase: 'INFO',
+      bid: null,
+      ask: null,
+      mid: s.last_mid,
+      detail:
+        'MASTER owns_pipeline ON — OWN BRAIN entry disabled · manage/fanout only',
+    });
+  }
+  return n;
 }
 
 /** Stop only entry brains — never kill a manage-only robot sitting on an open trade. */
@@ -899,6 +924,17 @@ async function enterTrade(
   setupType?: string | null,
   playbook?: TradePlaybook | null
 ) {
+  if (masterOwnsPipeline()) {
+    s.entry_enabled = false;
+    pushTick(s, {
+      phase: 'WAIT',
+      bid: quote.bid,
+      ask: quote.ask,
+      mid: quote.mid,
+      detail: 'ENTRY blocked — MASTER owns_pipeline (no OWN BRAIN / Best Outcome entry)',
+    });
+    return;
+  }
   // HARD RULE: never entry while any trade open on this epic
   const listed = await listCapitalOpenPositions(session);
   if (listed.ok) {
@@ -1372,6 +1408,16 @@ async function robotCycle(s: Internal) {
     // VS MASTER owns manage+entry when MASTER_OWNS_PIPELINE=true (no dual-brain exits)
     // — but only if MASTER actually has a broker that can manage live Capital risk.
     if (masterOwnsPipeline()) {
+      if (s.entry_enabled) {
+        s.entry_enabled = false;
+        pushTick(s, {
+          phase: 'INFO',
+          bid: quote.bid,
+          ask: quote.ask,
+          mid: quote.mid,
+          detail: 'OWN BRAIN entry cleared — MASTER owns_pipeline',
+        });
+      }
       await refreshStructureAndSetup(
         opened.session,
         s,

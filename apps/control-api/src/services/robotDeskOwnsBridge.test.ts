@@ -5,6 +5,8 @@ import { masterRuntime } from '../master/runtime.js';
 import {
   deskSessionStartPolicy,
   robotBoardMeta,
+  hasRunningEntryBrain,
+  disableDeskEntryBrainsWhileOwns,
 } from './robotDesk.js';
 
 describe('desk owns-pipeline bridge honesty', () => {
@@ -34,6 +36,19 @@ describe('desk owns-pipeline bridge honesty', () => {
       masterRuntime.owns_pipeline_pref = prevPref;
       if (prevEnv === undefined) delete process.env.MASTER_OWNS_PIPELINE;
       else process.env.MASTER_OWNS_PIPELINE = prevEnv;
+    }
+  });
+
+  it('hasRunningEntryBrain is false while owns so fanout is not starved', () => {
+    const prevPref = masterRuntime.owns_pipeline_pref;
+    try {
+      masterRuntime.setOwnsPipeline(false);
+      // No sessions → false either way; owns path must short-circuit to false
+      masterRuntime.setOwnsPipeline(true);
+      expect(hasRunningEntryBrain(1, 'GOLD')).toBe(false);
+      expect(disableDeskEntryBrainsWhileOwns()).toBe(0);
+    } finally {
+      masterRuntime.owns_pipeline_pref = prevPref;
     }
   });
 
@@ -73,5 +88,7 @@ describe('desk owns-pipeline bridge honesty', () => {
     expect(src).toMatch(/startPolicy\.brain_label/);
     expect(src).toMatch(/startPolicy\.entry_enabled/);
     expect(src).toMatch(/MASTER BRIDGE/);
+    expect(src).toMatch(/disableDeskEntryBrainsWhileOwns/);
+    expect(src).toMatch(/ENTRY blocked — MASTER owns_pipeline/);
   });
 });

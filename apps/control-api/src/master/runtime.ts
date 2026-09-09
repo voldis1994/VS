@@ -1245,6 +1245,12 @@ class MasterRuntime {
     }
     this.owns_pipeline_pref = on;
     saveOwnsPipelinePref(on);
+    if (on) {
+      // Sync clear stale OWN BRAIN flags so Client fanout is not starved
+      void import('../services/robotDesk.js')
+        .then((m) => m.disableDeskEntryBrainsWhileOwns())
+        .catch(() => undefined);
+    }
     return { ok: true };
   }
 

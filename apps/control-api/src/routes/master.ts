@@ -115,6 +115,12 @@ export async function registerMasterRoutes(app: FastifyInstance) {
         if (!owns.ok) {
           return { ok: false, detail: owns.detail, status: masterRuntime.status() };
         }
+        if (body.owns_pipeline) {
+          const { disableDeskEntryBrainsWhileOwns } = await import(
+            '../services/robotDesk.js'
+          );
+          disableDeskEntryBrainsWhileOwns();
+        }
       }
       if (typeof body.entries_armed === 'boolean') {
         masterRuntime.setEntriesArmed(
