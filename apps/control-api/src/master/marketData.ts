@@ -18,8 +18,8 @@ function finite(n: unknown): n is number {
 }
 
 /**
- * READER-style multi-feed agreement — broker/public mids must not diverge
- * enough to trade on a single lying source.
+ * READER-style multi-feed agreement — broker mid vs public consensus.
+ * Does not drop the broker as an "outlier" (that would hide divergence).
  */
 export function assessFeedDivergence(
   brokerMid: number,
@@ -34,14 +34,21 @@ export function assessFeedDivergence(
   if (!finite(brokerMid) || refs.length === 0) {
     return { agreement: 'NONE', span: 0, contributing: 0 };
   }
-  const fused = fusePriceMids([brokerMid, ...refs], {
+  const fused = fusePriceMids(refs, {
     mixedPublic: opts?.mixedPublic !== false,
   });
-  return {
-    agreement: fused.agreement,
-    span: fused.span,
-    contributing: fused.contributing,
-  };
+  if (fused.mid == null || !Number.isFinite(fused.mid)) {
+    return { agreement: 'INSUFFICIENT', span: 0, contributing: refs.length };
+  }
+  const span = Math.abs(brokerMid - fused.mid);
+  const rel = span / Math.max(Math.abs(fused.mid), 1e-9);
+  const divergeAt = opts?.mixedPublic !== false ? 0.015 : 0.005;
+  const contributing = refs.length + 1;
+  let agreement: 'STRONG' | 'OK' | 'DIVERGENT' | 'INSUFFICIENT' | 'NONE' = 'OK';
+  if (refs.length < 1) agreement = 'INSUFFICIENT';
+  else if (rel < 0.0005) agreement = 'STRONG';
+  else if (rel > divergeAt) agreement = 'DIVERGENT';
+  return { agreement, span, contributing };
 }
 
 /** Round price to broker Digits (Reader / Check- parity). */
