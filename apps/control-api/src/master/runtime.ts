@@ -226,6 +226,16 @@ export type MasterStatus = {
   cycles_by_epic_hydrated: boolean;
   /** True when require_armed_setup is on (LIVE default). */
   setup_gate_armed: boolean;
+  /** Last desk 10s SETUP/MOVE confirm from pipeline (null = none this cycle). */
+  desk_entry: {
+    side: 'BUY' | 'SELL';
+    source: 'setup' | 'move';
+    reason: string;
+    setup_kind: string;
+    playbook: string | null;
+  } | null;
+  /** Desk 1h structure bias (UNKNOWN when hour_bars absent). */
+  hour_bias: 'UP' | 'DOWN' | 'FLAT' | 'UNKNOWN' | null;
   /** Live entry gate honesty for dashboard (news/hours/weekend). */
   entry_gates: {
     news_cfg_on: boolean;
@@ -394,6 +404,10 @@ class MasterRuntime {
   last_market: MasterStatus['last_market'] = null;
   /** Sticky desk SETUP from last pipeline cycle */
   last_market_setup: MasterStatus['market_setup'] = null;
+  /** Last desk 10s SETUP/MOVE confirm (dashboard honesty). */
+  last_desk_entry: MasterStatus['desk_entry'] = null;
+  /** Last structure hour_bias from pipeline (dashboard honesty). */
+  last_hour_bias: MasterStatus['hour_bias'] = null;
   /**
    * Per-epic sticky SETUP/structure — setEpic stashes/restores so GOLD↔SILVER
    * desk ticks do not wipe ARMED setup.
@@ -2762,6 +2776,16 @@ class MasterRuntime {
           confirm: cycle.market_setup.confirm,
         }
       : null;
+    this.last_desk_entry = cycle.desk_entry
+      ? {
+          side: cycle.desk_entry.side,
+          source: cycle.desk_entry.source,
+          reason: cycle.desk_entry.reason,
+          setup_kind: cycle.desk_entry.setup_kind,
+          playbook: cycle.desk_entry.playbook,
+        }
+      : null;
+    this.last_hour_bias = this.pipeline.getStructureBook()?.hour_bias ?? null;
     this.rememberCycleForEpic();
     this.last_ai_allow_close = cycle.ai.allow_close !== false;
     this.persistRuntimeGates();
@@ -5183,6 +5207,8 @@ class MasterRuntime {
       cycles_by_epic: Object.fromEntries(this.cycleByEpic.entries()),
       cycles_by_epic_hydrated: this.epicCycleStashHydrated,
       setup_gate_armed: !!this.cfg.require_armed_setup,
+      desk_entry: this.last_desk_entry,
+      hour_bias: this.last_hour_bias ?? this.pipeline.getStructureBook()?.hour_bias ?? null,
       entry_gates: (() => {
         const now = Date.now();
         const weekend = isWeekendUtc(now);

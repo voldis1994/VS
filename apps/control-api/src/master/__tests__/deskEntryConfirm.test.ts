@@ -89,6 +89,9 @@ describe('desk hour bias + 10s entry confirm', () => {
     expect(masterRuntime.pipeline.getStructureBook()?.hour_bias).toBe('UNKNOWN');
     await masterRuntime.tick(bars, quoteFrom(bars.at(-1)!), { hour_bars: hours });
     expect(masterRuntime.pipeline.getStructureBook()?.hour_bias).toBe('UP');
+    const st = masterRuntime.status();
+    expect(st.hour_bias).toBe('UP');
+    expect('desk_entry' in st).toBe(true);
     masterRuntime.stop();
   });
 
