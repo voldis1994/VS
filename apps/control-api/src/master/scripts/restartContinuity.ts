@@ -452,6 +452,7 @@ async function main() {
     kill_switch: false,
     day_start_equity: 10_000,
     peak_equity: 10_250,
+    consecutive_losses: 3,
     daily_pnl_day: new Date().toISOString().slice(0, 10),
   };
   saveRuntimeGates(gatesForPrimary);
@@ -464,7 +465,9 @@ async function main() {
     primary.runtimeGatesPayload.desired_running === true &&
     primary.runtimeGatesPayload.mode === 'PAPER' &&
     primary.runtimeGatesPayload.epic === 'GOLD' &&
-    Number(primary.runtimeGatesPayload.day_start_equity) === 10_000;
+    Number(primary.runtimeGatesPayload.day_start_equity) === 10_000 &&
+    Number(primary.runtimeGatesPayload.peak_equity) === 10_250 &&
+    Number(primary.runtimeGatesPayload.consecutive_losses) === 3;
   // Dual-write manage_config into MemoryPersist primary BEFORE file wipe
   // Soft exits stay 0 so sync-survival proof is not stolen by EMA/BestOutcome.
   const manageForPrimary = {
@@ -739,6 +742,11 @@ async function main() {
   ).epicCycleStashHydrated = false;
   masterRuntime.owns_pipeline_pref = null;
   masterRuntime.account.daily_pnl = 0;
+  // Cold account — DualPersist runtime_gates must restore peak / streak / day_start
+  masterRuntime.account.peak_equity = 10_000;
+  masterRuntime.account.day_start_equity = 10_000;
+  masterRuntime.account.consecutive_losses = 0;
+  masterRuntime.account.daily_pnl_day = null;
   // Soft exits off for sync-survival proof — EMA/BestOutcome must not steal the case
   masterRuntime.cfg = {
     ...DEFAULT_MASTER_CONFIG,
@@ -797,6 +805,9 @@ async function main() {
     Number(masterRuntime.cfg.min_score) === 0.42 &&
     masterRuntime.cfg.require_armed_setup === true &&
     masterRuntime.owns_pipeline_pref === true &&
+    Number(masterRuntime.account.peak_equity) === 10_250 &&
+    Number(masterRuntime.account.day_start_equity) === 10_000 &&
+    Number(masterRuntime.account.consecutive_losses) === 3 &&
     stHydrate.persist_backend === 'dual' &&
     stHydrate.journal_audit?.healed_from_persist === true &&
     stHydrate.journal_audit?.decision_sidecar === true &&
@@ -809,6 +820,9 @@ async function main() {
     opportunities: masterRuntime.pipeline.journal.opportunities.length,
     last_exit_reason: masterRuntime.last_exit_reason,
     daily_pnl: masterRuntime.account.daily_pnl,
+    peak_equity: masterRuntime.account.peak_equity,
+    day_start_equity: masterRuntime.account.day_start_equity,
+    consecutive_losses: masterRuntime.account.consecutive_losses,
     last_decision_kind: masterRuntime.last_decision?.kind ?? null,
     open_positions_status: stHydrate.open_positions,
     recent_decisions: stHydrate.recent_decisions?.length ?? 0,
@@ -952,6 +966,9 @@ async function main() {
     hydrateSnap.last_exit_reason === 'TakeProfit' &&
     !!masterRuntime.last_decision &&
     hydrateSnap.daily_pnl === 8 &&
+    Number(hydrateSnap.peak_equity) === 10_250 &&
+    Number(hydrateSnap.day_start_equity) === 10_000 &&
+    Number(hydrateSnap.consecutive_losses) === 3 &&
     hydrateSnap.open_positions_status === 1 &&
     hydrateSnap.recent_decisions >= 1 &&
     hydrateSnap.recent_trades >= 2 &&
@@ -1309,7 +1326,15 @@ async function main() {
       runtime_gates_pg_primary_heal_ok:
         primaryHadRuntimeGates &&
         runtimeGatesGoneBeforeHydrate &&
-        existsSync(join(stateDir, 'runtime_gates.json')),
+        existsSync(join(stateDir, 'runtime_gates.json')) &&
+        Number(masterRuntime.account.peak_equity) === 10_250 &&
+        Number(masterRuntime.account.day_start_equity) === 10_000 &&
+        Number(masterRuntime.account.consecutive_losses) === 3,
+      peak_equity_healed_ok: Number(masterRuntime.account.peak_equity) === 10_250,
+      day_start_equity_healed_ok:
+        Number(masterRuntime.account.day_start_equity) === 10_000,
+      consecutive_losses_healed_ok:
+        Number(masterRuntime.account.consecutive_losses) === 3,
       manage_config_pg_primary_heal_ok:
         primaryHadManageConfig &&
         manageConfigGoneBeforeHydrate &&
