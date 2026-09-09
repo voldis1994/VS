@@ -67,20 +67,24 @@ export function evaluateRisk(
   }
 
   // Check- hard $ profit lock / equity floor / daily loss (0 = disabled)
-  // Check uses equity − day_start_equity (floating included) for $ gates
+  // Equity Δ vs day_start (floating) AND closed daily_pnl — after deferred
+  // day-roll, day_start may reseed from post-close equity so equityDaily≈0
+  // while daily_pnl still holds today's closes (parity with max_daily_loss %).
   const equityDaily =
     account.day_start_equity != null &&
     Number.isFinite(account.day_start_equity) &&
     account.day_start_equity > 0
       ? account.equity - account.day_start_equity
       : account.daily_pnl;
-  if (cfg.profit_lock > 0 && equityDaily >= cfg.profit_lock) {
+  const profitDaily = Math.max(equityDaily, account.daily_pnl);
+  const lossDaily = Math.min(equityDaily, account.daily_pnl);
+  if (cfg.profit_lock > 0 && profitDaily >= cfg.profit_lock) {
     reasons.push('profit_lock');
   }
   if (cfg.equity_floor > 0 && account.equity <= cfg.equity_floor) {
     reasons.push('equity_floor');
   }
-  if (cfg.daily_loss_limit > 0 && equityDaily <= -cfg.daily_loss_limit) {
+  if (cfg.daily_loss_limit > 0 && lossDaily <= -cfg.daily_loss_limit) {
     reasons.push('daily_loss_limit');
   }
 
