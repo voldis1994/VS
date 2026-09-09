@@ -109,14 +109,18 @@ async function main() {
     const ok =
       r.ok &&
       demo?.status === 'PASS_RESTART_CONTINUITY' &&
-      demo?.journals?.pg_primary_heal_ok === true;
+      demo?.journals?.pg_primary_heal_ok === true &&
+      demo?.journals?.decision_stage_ok === false &&
+      demo?.journals?.analysis_stage_ok === false &&
+      demo?.journals?.execution_stage_ok === false &&
+      demo?.journals?.market_validation_stage_ok === false;
     checks.push({
       id: 'paper_restart_continuity',
       requirement:
-        'Paper restart: hydrateBookFromDisk restores opens/journal; DualPersist primary heal; recover reconciles',
+        'Paper restart: hydrateBookFromDisk restores opens/journal; DualPersist primary heal; recover reconciles; cycle stages stay red until live tick',
       ok,
       detail: demo
-        ? `${demo.status} hydrate_pos=${demo.hydrate?.positions} exit=${demo.hydrate?.last_exit_reason} pnl=${demo.hydrate?.daily_pnl} manage_seed=${demo.manage_only?.paper_seeded} recover_pos=${demo.recover?.positions} pg_heal=${demo.journals?.pg_primary_heal_ok === true} persist=${demo.journals?.persist_backend || demo.hydrate?.persist_backend || '?'}`
+        ? `${demo.status} hydrate_pos=${demo.hydrate?.positions} exit=${demo.hydrate?.last_exit_reason} pnl=${demo.hydrate?.daily_pnl} manage_seed=${demo.manage_only?.paper_seeded} recover_pos=${demo.recover?.positions} pg_heal=${demo.journals?.pg_primary_heal_ok === true} persist=${demo.journals?.persist_backend || demo.hydrate?.persist_backend || '?'} decision_stage=${demo.journals?.decision_stage_ok} analysis_stage=${demo.journals?.analysis_stage_ok}`
         : r.out.slice(-500),
     });
   }
