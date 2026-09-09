@@ -476,6 +476,13 @@ export class FilePersist implements PersistClient, JournalMirror {
         owns_pipeline: this.mem.ownsPipelinePayload.owns_pipeline === true,
       });
     }
+    // Dual-write monitoring_snapshot sidecar when SQL path updated MemoryPersist
+    if (this.mem.monitoringSnapshotPayload) {
+      atomicWriteJson(
+        join(this.root, 'monitoring_snapshot.json'),
+        this.mem.monitoringSnapshotPayload
+      );
+    }
   }
 
   async query(sql: string, params: unknown[] = []) {

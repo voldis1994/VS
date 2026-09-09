@@ -326,6 +326,45 @@ export async function loadOwnsPipelineFromPersist(): Promise<{
   }
 }
 
+/** DualPersist / MemoryPersist / PG — monitoring_snapshot singleton for wipe heal. */
+export async function persistMonitoringSnapshotState(
+  state: Record<string, unknown> & { saved_at_ms: number }
+): Promise<boolean> {
+  try {
+    await client.query(
+      `INSERT INTO master_monitoring_snapshot (id, payload, saved_at_ms)
+       VALUES ($1, $2::jsonb, $3)
+       ON CONFLICT (id) DO UPDATE SET
+         payload = EXCLUDED.payload,
+         saved_at_ms = EXCLUDED.saved_at_ms`,
+      ['singleton', JSON.stringify(state), state.saved_at_ms]
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function loadMonitoringSnapshotFromPersist(): Promise<any | null> {
+  try {
+    const { rows } = await client.query(
+      `SELECT payload, saved_at_ms FROM master_monitoring_snapshot WHERE id = $1 LIMIT 1`,
+      ['singleton']
+    );
+    const row = rows?.[0];
+    if (!row) return null;
+    const payload =
+      typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload;
+    if (!payload || typeof payload !== 'object') return null;
+    return {
+      ...payload,
+      saved_at_ms: Number(row.saved_at_ms) || Number(payload.saved_at_ms) || 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Reader decision audit — DualPersist / MemoryPersist / FilePersist SQL path. */
 export async function persistDecisionEvent(entry: {
   event_id: string;
@@ -877,6 +916,8 @@ export class MemoryPersist implements PersistClient {
   /** Singleton owns_pipeline payload — DualPersist primary wipe heal */
   ownsPipelinePayload: { owns_pipeline: boolean; saved_at_ms?: number } | null =
     null;
+  /** Singleton monitoring_snapshot payload — DualPersist primary wipe heal */
+  monitoringSnapshotPayload: any | null = null;
 
   async query(sql: string, params: unknown[] = []) {
     const s = sql.replace(/\s+/g, ' ').trim();
@@ -1001,6 +1042,33 @@ export class MemoryPersist implements PersistClient {
               owns_pipeline: this.ownsPipelinePayload.owns_pipeline === true,
             },
             saved_at_ms: Number(this.ownsPipelinePayload.saved_at_ms) || 0,
+          },
+        ],
+      };
+    }
+    if (s.startsWith('INSERT INTO master_monitoring_snapshot')) {
+      const raw = params[1];
+      this.monitoringSnapshotPayload =
+        typeof raw === 'string' ? JSON.parse(raw as string) : raw;
+      if (
+        this.monitoringSnapshotPayload &&
+        typeof this.monitoringSnapshotPayload === 'object' &&
+        params[2] != null
+      ) {
+        this.monitoringSnapshotPayload.saved_at_ms =
+          Number(params[2]) || Date.now();
+      }
+      return { rows: [] };
+    }
+    if (s.startsWith('SELECT') && s.includes('master_monitoring_snapshot')) {
+      if (!this.monitoringSnapshotPayload) return { rows: [] };
+      return {
+        rows: [
+          {
+            id: 'singleton',
+            payload: this.monitoringSnapshotPayload,
+            saved_at_ms:
+              Number(this.monitoringSnapshotPayload.saved_at_ms) || 0,
           },
         ],
       };
