@@ -30,6 +30,18 @@ export function evaluateRisk(
   if (account.open_positions >= cfg.max_open_positions) reasons.push('max_open_positions');
   if ((opts?.symbol_open ?? 0) >= cfg.max_symbol_positions) reasons.push('max_symbol_exposure');
 
+  // Fail-closed while UTC day-roll is deferred: sealed prior-day daily_pnl /
+  // day_start must not size new entries; calendar-today closes may sit only in
+  // pendingCalendarDayClosedPnl until roll (parity with utc_day_roll_deferred).
+  const utcDay = new Date(now).toISOString().slice(0, 10);
+  if (
+    account.daily_pnl_day != null &&
+    String(account.daily_pnl_day).trim() !== '' &&
+    String(account.daily_pnl_day).slice(0, 10) !== utcDay
+  ) {
+    reasons.push('utc_day_roll_deferred');
+  }
+
   const dd =
     account.peak_equity > 0
       ? (account.peak_equity - account.equity) / account.peak_equity
