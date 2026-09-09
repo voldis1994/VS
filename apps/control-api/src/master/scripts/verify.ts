@@ -867,6 +867,18 @@ async function main() {
         join(root, 'src/master/__tests__/filePersist.test.ts'),
         'utf8'
       ).includes('prefers newer mirror open book when non-empty primary is stale');
+    const filePersistSingletonSeedApi =
+      filePersistBody.includes('seedSingletonPayloadsFromDisk') &&
+      filePersistBody.includes(
+        'Sidecars alone must still back DualPersist mirror SELECTs'
+      ) &&
+      filePersistBody.includes('Cold start: sidecar JSON/jsonl must populate') &&
+      readFileSync(
+        join(root, 'src/master/__tests__/filePersist.test.ts'),
+        'utf8'
+      ).includes(
+        'cold FilePersist seeds singleton mem from sidecar JSON for DualPersist SELECT'
+      );
     const livePaperDeskConfirm =
       livePaperDemoBody.includes('deskConfirmTickOpts') &&
       livePaperDemoBody.includes('closed10sFromReplayBar') &&
@@ -1305,6 +1317,7 @@ async function main() {
       livePaperRetry &&
       paperEquityReseedApi &&
       dualPersistNewerMirrorApi &&
+      filePersistSingletonSeedApi &&
       livePaperDeskConfirm &&
       setupArmedApi &&
       setupArmedUi &&
