@@ -34,20 +34,79 @@ export class DualPersist implements PersistClient {
       return primaryResult;
     }
 
+    const recoveryTables =
+      /master_open_positions|master_seen_intents|master_opportunities|master_trade_outcomes|master_decision_events|master_trade_events|master_market_cache|master_epic_cycle_stash|master_runtime_gates|master_manage_config|master_owns_pipeline|master_monitoring_snapshot|master_spread_history|master_trade_ack_journal|master_error_journal|master_news_window|master_client_fanout|master_news_calendar/i;
+    const singletonTables =
+      /master_market_cache|master_epic_cycle_stash|master_runtime_gates|master_manage_config|master_owns_pipeline|master_monitoring_snapshot|master_spread_history|master_trade_ack_journal|master_error_journal|master_news_window|master_client_fanout|master_news_calendar/i;
+
     try {
       const primaryResult = await this.primary.query(sql, params);
-      // Postgres up but empty/stale while mirror still has recovery rows —
+      // Postgres up but empty while mirror still has recovery rows —
       // prefer non-empty mirror so restart does not ghost-wipe opens/journal.
       if (
         Array.isArray(primaryResult.rows) &&
         primaryResult.rows.length === 0 &&
-        /master_open_positions|master_seen_intents|master_opportunities|master_trade_outcomes|master_decision_events|master_trade_events|master_market_cache|master_epic_cycle_stash|master_runtime_gates|master_manage_config|master_owns_pipeline|master_monitoring_snapshot|master_spread_history|master_trade_ack_journal|master_error_journal|master_news_window|master_client_fanout|master_news_calendar/i.test(
-          sql
-        )
+        recoveryTables.test(sql)
       ) {
         const mirrorResult = await this.mirror.query(sql, params);
         if (Array.isArray(mirrorResult.rows) && mirrorResult.rows.length > 0) {
           return mirrorResult;
+        }
+      }
+      // Non-empty stale PG after a failed primary write: mirror is newer —
+      // prefer higher saved_at_ms on singleton sidecars.
+      if (
+        Array.isArray(primaryResult.rows) &&
+        primaryResult.rows.length > 0 &&
+        singletonTables.test(sql)
+      ) {
+        try {
+          const mirrorResult = await this.mirror.query(sql, params);
+          if (
+            Array.isArray(mirrorResult.rows) &&
+            mirrorResult.rows.length > 0
+          ) {
+            const pMs = Number(primaryResult.rows[0]?.saved_at_ms) || 0;
+            const mMs = Number(mirrorResult.rows[0]?.saved_at_ms) || 0;
+            if (mMs > pMs) return mirrorResult;
+          }
+        } catch {
+          /* keep primary */
+        }
+      }
+      // Open book diverged (primary write failed, mirror advanced trail/BE/size) —
+      // prefer mirror fingerprints so manage does not restore stale SL/partials.
+      if (
+        Array.isArray(primaryResult.rows) &&
+        primaryResult.rows.length > 0 &&
+        /master_open_positions/i.test(sql)
+      ) {
+        try {
+          const mirrorResult = await this.mirror.query(sql, params);
+          if (
+            Array.isArray(mirrorResult.rows) &&
+            mirrorResult.rows.length > 0
+          ) {
+            const fingerprint = (rows: any[]) =>
+              rows
+                .map((r) => {
+                  const payload =
+                    typeof r.payload === 'string'
+                      ? r.payload
+                      : JSON.stringify(r.payload ?? {});
+                  return `${r.position_id}|${r.stop_loss}|${r.size}|${payload}`;
+                })
+                .sort()
+                .join('\n');
+            if (
+              fingerprint(mirrorResult.rows) !==
+              fingerprint(primaryResult.rows)
+            ) {
+              return mirrorResult;
+            }
+          }
+        } catch {
+          /* keep primary */
         }
       }
       // PG may have legacy rows with null pnl_proven while file mirror has false —

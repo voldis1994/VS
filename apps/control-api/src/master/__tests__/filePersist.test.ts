@@ -382,6 +382,112 @@ describe('VS MASTER dual persist (DB fail → file mirror)', () => {
     expect(loaded[0]!.position_id).toBe('empty-pg-pos');
   });
 
+  it('prefers newer mirror open book when non-empty primary is stale', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vs-master-dual-stale-opens-'));
+    const primary = new MemoryPersist();
+    const mirror = new FilePersist(dir);
+    const dual = new DualPersist(primary, mirror);
+    setPersistClient(dual);
+    const decision = {
+      decision_id: 'd',
+      kind: 'BUY' as const,
+      side: 'BUY' as const,
+      score: 0.7,
+      block_reason: null,
+      buy: null as never,
+      sell: null as never,
+      analysis: {
+        regime: 'RANGE' as const,
+        market_state: 't',
+        momentum_score: 0,
+        momentum_dir: 'NEUTRAL' as const,
+        trend_dir: 'SIDEWAYS' as const,
+        trend_strength: 0.2,
+        structure_bias: 'NEUTRAL' as const,
+        swing_high: 4420,
+        swing_low: 4400,
+        buy_pressure: 0.5,
+        sell_pressure: 0.5,
+        behavior_bull: 0.5,
+        behavior_bear: 0.5,
+        impact_score: 0.5,
+        context_quality: 0.5,
+        volatility: 0.001,
+        atr: 1,
+      },
+      expectancy: null,
+    };
+    const pm = new PositionManager();
+    pm.register({
+      position_id: 'stale-open-1',
+      opportunity_id: '00000000-0000-4000-8000-0000000000a1',
+      intent_id: 'stale-intent',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 0.1,
+      entry: 4410,
+      stop_loss: 4400,
+      decision,
+    });
+    expect(await saveOpenPositions(pm.list())).toBe(true);
+    // Advance only the mirror (simulate primary write failure mid-manage)
+    const advanced = pm.list().map((p) => ({
+      ...p,
+      stop_loss: 4405,
+      size: 0.05,
+    }));
+    setPersistClient(mirror);
+    expect(await saveOpenPositions(advanced)).toBe(true);
+    // Primary still has old SL/size; DualPersist read must prefer mirror
+    setPersistClient(new DualPersist(primary, new FilePersist(dir)));
+    const loaded = await loadOpenPositions();
+    expect(loaded.length).toBe(1);
+    expect(loaded[0]!.position_id).toBe('stale-open-1');
+    expect(loaded[0]!.stop_loss).toBe(4405);
+    expect(loaded[0]!.size).toBe(0.05);
+  });
+
+  it('prefers newer mirror singleton when primary saved_at_ms is older', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vs-master-dual-stale-single-'));
+    const primary = new MemoryPersist();
+    const mirror = new FilePersist(dir);
+    setPersistClient(new DualPersist(primary, mirror));
+    const { persistRuntimeGatesState, loadRuntimeGatesFromPersist } =
+      await import('../persist.js');
+    await persistRuntimeGatesState({
+      peak_equity: 10_000,
+      consecutive_losses: 1,
+      saved_at_ms: 1_000,
+    });
+    // Stale primary, newer mirror only
+    primary.runtimeGatesPayload = {
+      peak_equity: 10_000,
+      consecutive_losses: 1,
+      saved_at_ms: 1_000,
+    };
+    await mirror.query(
+      `INSERT INTO master_runtime_gates (id, payload, saved_at_ms)
+       VALUES ($1, $2::jsonb, $3)
+       ON CONFLICT (id) DO UPDATE SET
+         payload = EXCLUDED.payload,
+         saved_at_ms = EXCLUDED.saved_at_ms`,
+      [
+        'singleton',
+        JSON.stringify({
+          peak_equity: 12_500,
+          consecutive_losses: 0,
+          saved_at_ms: 9_000,
+        }),
+        9_000,
+      ]
+    );
+    setPersistClient(new DualPersist(primary, mirror));
+    const loaded = await loadRuntimeGatesFromPersist();
+    expect(Number(loaded?.peak_equity)).toBe(12_500);
+    expect(Number(loaded?.consecutive_losses)).toBe(0);
+    expect(Number(loaded?.saved_at_ms)).toBe(9_000);
+  });
+
   it('merges pnl_proven:false from file mirror onto PG null rows', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'vs-master-dual-pnl-'));
     const mirror = new FilePersist(dir);
