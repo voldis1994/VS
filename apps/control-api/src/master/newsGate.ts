@@ -71,6 +71,16 @@ function newsPath(root?: string): string {
 
 function loadNewsFile(root?: string): NewsWindowState | null {
   try {
+    // Vitest without explicit MASTER_STATE_DIR must not inherit cwd sidecar from
+    // prior runtime ticks (would dual-starve filter unit tests).
+    if (
+      !root &&
+      process.env.VITEST &&
+      !process.env.MASTER_STATE_DIR &&
+      !process.env.MASTER_GATES_DIR
+    ) {
+      return null;
+    }
     const path = newsPath(root);
     if (!existsSync(path)) return null;
     const raw = JSON.parse(readFileSync(path, 'utf8')) as {
@@ -230,10 +240,6 @@ export function newsBlocksEntries(
   const state = resolveNewsWindow(nowMs, symbol);
   const high = state.window_active && state.impact === 'high';
   if (blockHighImpact && high) {
-    // Durable remember so Phase K wipe cannot fail-open before calendar refresh
-    if (state.source !== 'env_filter' && state.source !== 'env_impact') {
-      rememberHighImpactNewsWindow(state, nowMs);
-    }
     return {
       blocked: true,
       reason:

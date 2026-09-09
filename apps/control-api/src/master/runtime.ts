@@ -2848,6 +2848,21 @@ class MasterRuntime {
 
     // Refresh Forex Factory news calendar cache (VS-System) before entry filters
     await refreshNewsCalendar().catch(() => undefined);
+    // Durable high-impact window — survive wipe before next calendar refresh
+    {
+      const { resolveNewsWindow, rememberHighImpactNewsWindow } = await import(
+        './newsGate.js'
+      );
+      const nw = resolveNewsWindow(Date.now(), this.epic);
+      if (
+        nw.window_active &&
+        nw.impact === 'high' &&
+        nw.source !== 'env_filter' &&
+        nw.source !== 'env_impact'
+      ) {
+        rememberHighImpactNewsWindow(nw);
+      }
+    }
 
     // 0) Reconcile broker truth every tick — drop ghosts, adopt orphans (VS-System-)
     // Capital: venue-wide (all epics) so other-epic orphans block/manage correctly.
