@@ -154,6 +154,149 @@ export async function fetchYahooMinuteBars(
   return { ok: false, bars: [], detail: lastDetail, symbol };
 }
 
+/**
+ * Dedicated Yahoo 1h OHLC for desk hour_bias — never fall back to minute/5m
+ * (those would fake a false 1h structure).
+ */
+export async function fetchYahooHourBars(
+  epic = 'GOLD',
+  maxBars = 48
+): Promise<YahooBarsResult> {
+  const symbol = epicToYahooSymbol(epic);
+  if (!symbol) {
+    return { ok: false, bars: [], detail: 'no_yahoo_symbol', symbol: null };
+  }
+  const attempts = ['interval=1h&range=1mo', 'interval=1h&range=5d'];
+  let lastDetail = 'yahoo_hour_no_bars';
+  for (const q of attempts) {
+    try {
+      const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?${q}`;
+      const res = await fetch(url, {
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': 'VS-MASTER/1.0 (+live-hour-bars)',
+        },
+      });
+      const json = (await res.json().catch(() => null)) as {
+        chart?: {
+          result?: Array<{
+            timestamp?: number[];
+            indicators?: {
+              quote?: Array<{ open?: number[]; high?: number[]; low?: number[]; close?: number[] }>;
+            };
+          }>;
+        };
+      } | null;
+      const result = json?.chart?.result?.[0];
+      const ts = result?.timestamp || [];
+      const quote = result?.indicators?.quote?.[0];
+      if (!res.ok || !ts.length || !quote) {
+        lastDetail = `yahoo_hour_${q}_http_${res.status}_ts_${ts.length}`;
+        continue;
+      }
+      const bars: Bar[] = [];
+      for (let i = 0; i < ts.length; i++) {
+        const open = Number(quote.open?.[i]);
+        const high = Number(quote.high?.[i]);
+        const low = Number(quote.low?.[i]);
+        const close = Number(quote.close?.[i]);
+        if (![open, high, low, close].every((n) => Number.isFinite(n) && n > 0)) continue;
+        if (!(high >= low)) continue;
+        bars.push({
+          open,
+          high,
+          low,
+          close,
+          ts_ms: Number(ts[i]) * 1000,
+        });
+      }
+      const sliced = bars.slice(-Math.max(6, maxBars));
+      if (sliced.length >= 6) {
+        return {
+          ok: true,
+          bars: sliced,
+          detail: `yahoo_hour_${symbol}_${q}_${sliced.length}_bars`,
+          symbol,
+        };
+      }
+      lastDetail = `yahoo_hour_${q}_finite_${sliced.length}`;
+    } catch (e) {
+      lastDetail = e instanceof Error ? e.message : String(e);
+    }
+  }
+  return { ok: false, bars: [], detail: lastDetail, symbol };
+}
+
+/** Cached 1h OHLC for live-feed desk hour_bias (refreshed on structure cadence). */
+export type HourBarsCache = {
+  bars: Bar[] | null;
+  last_ms: number;
+  detail: string | null;
+};
+
+export function emptyHourBarsCache(): HourBarsCache {
+  return { bars: null, last_ms: 0, detail: null };
+}
+
+/**
+ * Refresh 1h bars: Capital/broker HOUR first, else dedicated Yahoo 1h.
+ * Skips Yahoo under VITEST (no flaky network) unless MASTER_LIVE_HOUR_YAHOO=true.
+ */
+export async function refreshHourBarsCache(input: {
+  epic: string;
+  cache: HourBarsCache;
+  everyMs?: number;
+  force?: boolean;
+  brokerGetHourBars?: () => Promise<{
+    ok: boolean;
+    bars: Bar[];
+    detail: string;
+  } | null>;
+}): Promise<HourBarsCache> {
+  const everyMs = input.everyMs ?? 120_000;
+  const now = Date.now();
+  if (
+    !input.force &&
+    input.cache.bars &&
+    input.cache.bars.length >= 6 &&
+    now - input.cache.last_ms < everyMs
+  ) {
+    return input.cache;
+  }
+
+  if (input.brokerGetHourBars) {
+    try {
+      const hist = await Promise.race([
+        input.brokerGetHourBars(),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 8_000)),
+      ]);
+      if (hist?.ok && hist.bars.length >= 6) {
+        return { bars: hist.bars, last_ms: Date.now(), detail: hist.detail };
+      }
+    } catch {
+      /* fall through to Yahoo */
+    }
+  }
+
+  if (process.env.VITEST && process.env.MASTER_LIVE_HOUR_YAHOO !== 'true') {
+    return {
+      bars: input.cache.bars,
+      last_ms: Date.now(),
+      detail: input.cache.detail || 'vitest_skip_yahoo_hour',
+    };
+  }
+
+  const yahoo = await fetchYahooHourBars(input.epic, 48);
+  if (yahoo.ok && yahoo.bars.length >= 6) {
+    return { bars: yahoo.bars, last_ms: Date.now(), detail: yahoo.detail };
+  }
+  return {
+    bars: input.cache.bars,
+    last_ms: Date.now(),
+    detail: yahoo.detail || 'hour_refresh_failed',
+  };
+}
+
 function barRange(b: Bar): number {
   return Math.max(0, b.high - b.low);
 }
