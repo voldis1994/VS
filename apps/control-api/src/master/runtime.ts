@@ -497,6 +497,12 @@ class MasterRuntime {
    * never inherit paper £10k baselines into LIVE daily-loss gates.
    */
   private capitalDayGatesSeeded = false;
+  /**
+   * Closes credited while daily_pnl_day lagged the calendar UTC day (defer window).
+   * Restored into daily_pnl when rollDailyPnl finally advances the day — otherwise
+   * today's closed losses are wiped and max_daily_loss fail-opens.
+   */
+  private pendingCalendarDayClosedPnl = 0;
   /** When false, manage exits still run but new entries are blocked (desk dual-brain guard). */
   entries_armed = true;
   entries_pause_reason: string | null = null;
@@ -1071,6 +1077,7 @@ class MasterRuntime {
           this.rollDailyPnl();
           // After roll, surface today's closed daily_pnl
           if (!capitalAttached || this.capitalDayGatesSeeded) {
+            this.pendingCalendarDayClosedPnl = 0;
             this.account.daily_pnl = pnlToday;
           }
         } else if (!capitalAttached || this.capitalDayGatesSeeded) {
@@ -1093,6 +1100,7 @@ class MasterRuntime {
             }
             this.account.daily_pnl = pnlSealed;
           }
+          this.pendingCalendarDayClosedPnl = 0;
         }
       }
       // After opens + journal are available — heal missing desk confirm on decision
@@ -1422,7 +1430,7 @@ class MasterRuntime {
     });
     this.positions.drop(positionId);
     if (priced.pnl_proven) {
-      this.account.daily_pnl += outcome.pnl;
+      this.creditClosedDailyPnl(outcome.pnl);
       if (outcome.pnl < 0) {
         this.account.consecutive_losses += 1;
         this.last_loss_ms = Date.now();
@@ -1630,7 +1638,7 @@ class MasterRuntime {
               volume: vol,
             });
             if (priced.pnl_proven) {
-              this.account.daily_pnl += priced.pnl;
+              this.creditClosedDailyPnl(priced.pnl);
               if (priced.pnl < 0) {
                 this.account.consecutive_losses += 1;
                 this.last_loss_ms = Date.now();
@@ -2135,8 +2143,20 @@ class MasterRuntime {
     );
   }
 
+  /**
+   * Credit a proven close into daily_pnl. When the sealed day lags calendar today
+   * (UTC day-roll deferred), also park the PnL so post-roll rebuild keeps it.
+   */
+  private creditClosedDailyPnl(pnl: number) {
+    this.account.daily_pnl += pnl;
+    const today = new Date().toISOString().slice(0, 10);
+    if (this.account.daily_pnl_day && this.account.daily_pnl_day !== today) {
+      this.pendingCalendarDayClosedPnl += pnl;
+    }
+  }
+
   /** Roll daily_pnl at UTC day boundary; seed day_start_equity for max_daily_loss. */
-  private rollDailyPnl(nowMs = Date.now()) {
+  private rollDailyPnl(nowMs = Date.now()): boolean {
     const day = new Date(nowMs).toISOString().slice(0, 10);
     if (this.account.daily_pnl_day !== day) {
       // Capital LIVE unproven: do not advance day or wipe restored day_start —
@@ -2146,9 +2166,14 @@ class MasterRuntime {
         !this.broker.paper &&
         !this.capitalAccountProven
       ) {
-        return;
+        return false;
       }
-      this.account.daily_pnl = 0;
+      // Restore closes that landed during the defer window (calendar today while
+      // daily_pnl_day was still yesterday). Hydrate/recover rebuild from journal;
+      // live tick/manageOnly must not leave daily_pnl at 0 after those closes.
+      const pendingToday = this.pendingCalendarDayClosedPnl;
+      this.pendingCalendarDayClosedPnl = 0;
+      this.account.daily_pnl = pendingToday;
       this.account.daily_pnl_day = day;
       if (this.broker instanceof CapitalBroker && !this.broker.paper) {
         this.account.day_start_equity =
@@ -2159,7 +2184,9 @@ class MasterRuntime {
           this.account.equity > 0 ? this.account.equity : this.account.balance;
       }
       this.persistRuntimeGates();
+      return true;
     }
+    return false;
   }
 
   /** Persist cooldowns + equity baselines so restart keeps daily $ gates honest. */
@@ -2312,7 +2339,7 @@ class MasterRuntime {
       });
       this.last_exit_reason = outcome.exit_reason;
       if (priced.pnl_proven) {
-        this.account.daily_pnl += outcome.pnl;
+        this.creditClosedDailyPnl(outcome.pnl);
         if (outcome.pnl < 0) {
           this.account.consecutive_losses += 1;
           this.last_loss_ms = Date.now();
@@ -2431,7 +2458,7 @@ class MasterRuntime {
         epic: partial.epic,
       });
       if (priced.pnl_proven) {
-        this.account.daily_pnl += outcome.pnl;
+        this.creditClosedDailyPnl(outcome.pnl);
         if (outcome.pnl < 0) {
           this.account.consecutive_losses += 1;
           this.last_loss_ms = Date.now();
@@ -3240,7 +3267,7 @@ class MasterRuntime {
       }
       for (const c of managed.closed) {
         if (c.outcome.pnl_proven !== false) {
-          this.account.daily_pnl += c.outcome.pnl;
+          this.creditClosedDailyPnl(c.outcome.pnl);
           if (c.outcome.pnl < 0) {
             this.account.consecutive_losses += 1;
             this.last_loss_ms = Date.now();
@@ -4083,6 +4110,7 @@ class MasterRuntime {
           this.account.balance;
       }
       // After roll, surface today's closed daily_pnl
+      this.pendingCalendarDayClosedPnl = 0;
       this.account.daily_pnl = pnlToday;
     } else {
       // Defer: keep closed PnL for the still-sealed day — wiping to pnlToday
@@ -4104,6 +4132,7 @@ class MasterRuntime {
         }
         this.account.daily_pnl = pnlSealed;
       }
+      this.pendingCalendarDayClosedPnl = 0;
     }
     this.persistRuntimeGates();
 
@@ -5481,7 +5510,7 @@ class MasterRuntime {
       this.last_manage_tick_ms = Date.now();
       for (const c of managed.closed) {
         if (c.outcome.pnl_proven !== false) {
-          this.account.daily_pnl += c.outcome.pnl;
+          this.creditClosedDailyPnl(c.outcome.pnl);
           if (c.outcome.pnl < 0) {
             this.account.consecutive_losses += 1;
             this.last_loss_ms = Date.now();
