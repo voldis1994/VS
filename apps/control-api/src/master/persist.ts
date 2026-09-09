@@ -183,13 +183,15 @@ export async function persistTradeEvent(entry: {
   detail: string | null;
   pnl: number | null;
   fees: number | null;
+  desk_entry_source?: 'setup' | 'move' | 'none' | null;
 }): Promise<boolean> {
   try {
     await client.query(
       `INSERT INTO master_trade_events (
          event_id, ts, event, broker, epic, side, volume, price,
-         position_id, intent_id, opportunity_id, ok, detail, pnl, fees
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+         position_id, intent_id, opportunity_id, ok, detail, pnl, fees,
+         desk_entry_source
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
        ON CONFLICT (event_id) DO NOTHING`,
       [
         entry.event_id,
@@ -207,6 +209,11 @@ export async function persistTradeEvent(entry: {
         entry.detail,
         entry.pnl,
         entry.fees,
+        entry.desk_entry_source === 'setup' ||
+        entry.desk_entry_source === 'move' ||
+        entry.desk_entry_source === 'none'
+          ? entry.desk_entry_source
+          : null,
       ]
     );
     return true;
@@ -310,12 +317,14 @@ export async function loadTradeEventsFromPersist(
     detail: string | null;
     pnl: number | null;
     fees: number | null;
+    desk_entry_source: 'setup' | 'move' | 'none' | null;
   }>
 > {
   try {
     const { rows } = await client.query(
       `SELECT event_id, ts, event, broker, epic, side, volume, price,
-              position_id, intent_id, opportunity_id, ok, detail, pnl, fees
+              position_id, intent_id, opportunity_id, ok, detail, pnl, fees,
+              desk_entry_source
        FROM master_trade_events
        ORDER BY ts DESC
        LIMIT $1`,
@@ -346,6 +355,12 @@ export async function loadTradeEventsFromPersist(
       fees:
         r.fees != null && Number.isFinite(Number(r.fees))
           ? Number(r.fees)
+          : null,
+      desk_entry_source:
+        r.desk_entry_source === 'setup' ||
+        r.desk_entry_source === 'move' ||
+        r.desk_entry_source === 'none'
+          ? r.desk_entry_source
           : null,
     }));
   } catch {
@@ -687,6 +702,7 @@ export class MemoryPersist implements PersistClient {
           detail: params[12],
           pnl: params[13],
           fees: params[14],
+          desk_entry_source: params[15] ?? null,
         });
         if (this.tradeEvents.length > 500) {
           this.tradeEvents = this.tradeEvents.slice(-500);

@@ -1519,6 +1519,7 @@ export class PositionManager {
       position_id: pos.position_id,
       intent_id: pos.intent_id,
       opportunity_id: pos.opportunity_id,
+      desk_entry_source: pos.decision?.desk_entry_source,
       ok: !!mod.ok,
       detail: `${reason}${mod.detail ? `:${mod.detail}` : ''}`,
     });
