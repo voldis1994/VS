@@ -356,7 +356,7 @@ async function main() {
     structure_seed_source: 'restart_check',
   };
   saveMarketCache(cacheForPrimary);
-  const { persistMarketCacheState, persistEpicCycleStashState, persistRuntimeGatesState, persistManageConfigState, persistOwnsPipelineState, persistMonitoringSnapshotState } =
+  const { persistMarketCacheState, persistEpicCycleStashState, persistRuntimeGatesState, persistManageConfigState, persistOwnsPipelineState, persistMonitoringSnapshotState, persistSpreadHistoryState } =
     await import('../persist.js');
   await persistMarketCacheState({
     ...cacheForPrimary,
@@ -532,6 +532,25 @@ async function main() {
     Number(primary.monitoringSnapshotPayload.relative_spread) === 1.8 &&
     Array.isArray(primary.monitoringSnapshotPayload.active_alerts) &&
     primary.monitoringSnapshotPayload.active_alerts.length >= 1;
+  // Dual-write spread_history into MemoryPersist primary BEFORE file wipe
+  const spreadForPrimary = {
+    lookback: 20,
+    history: [0.35, 0.4, 0.38, 0.42, 0.39, 0.41, 0.37, 0.4],
+    ts: new Date().toISOString(),
+  };
+  writeFileSync(
+    join(stateDir, 'spread_history.json'),
+    JSON.stringify(spreadForPrimary),
+    'utf8'
+  );
+  await persistSpreadHistoryState({
+    ...spreadForPrimary,
+    saved_at_ms: Date.now(),
+  });
+  const primaryHadSpreadHistory =
+    primary.spreadHistoryPayload != null &&
+    Array.isArray(primary.spreadHistoryPayload.history) &&
+    primary.spreadHistoryPayload.history.length >= 3;
   const primaryHadDecisions = primary.decisionEvents.length >= 1;
   const primaryHadTrades = primary.tradeEvents.length >= 1;
   const primaryHadOpens = primary.positions.length >= 1;
@@ -562,12 +581,16 @@ async function main() {
   const monitoringGoneBeforeHydrate = !existsSync(
     join(stateDir, 'monitoring_snapshot.json')
   );
+  const spreadHistoryGoneBeforeHydrate = !existsSync(
+    join(stateDir, 'spread_history.json')
+  );
   // Do NOT re-seed market_cache — must heal from DualPersist primary.
   // Do NOT re-seed epic_cycle_stash — must heal from DualPersist primary.
   // Do NOT re-seed runtime_gates — must heal from DualPersist primary.
   // Do NOT re-seed manage_config — must heal from DualPersist primary.
   // Do NOT re-seed owns_pipeline — must heal from DualPersist primary.
   // Do NOT re-seed monitoring_snapshot — must heal from DualPersist primary.
+  // Do NOT re-seed spread_history — must heal from DualPersist primary.
 
   // Simulate process restart — empty in-memory book, durable state on primary
   masterRuntime.pipeline = new MasterPipeline('PAPER');
@@ -652,6 +675,7 @@ async function main() {
     primaryHadManageConfig &&
     primaryHadOwnsPipeline &&
     primaryHadMonitoring &&
+    primaryHadSpreadHistory &&
     journalsGoneBeforeHydrate &&
     marketCacheGoneBeforeHydrate &&
     epicStashGoneBeforeHydrate &&
@@ -659,12 +683,14 @@ async function main() {
     manageConfigGoneBeforeHydrate &&
     ownsPipelineGoneBeforeHydrate &&
     monitoringGoneBeforeHydrate &&
+    spreadHistoryGoneBeforeHydrate &&
     existsSync(join(stateDir, 'market_cache.json')) &&
     existsSync(join(stateDir, 'epic_cycle_stash.json')) &&
     existsSync(join(stateDir, 'runtime_gates.json')) &&
     existsSync(join(stateDir, 'master_manage_config.json')) &&
     existsSync(join(stateDir, 'owns_pipeline.json')) &&
     existsSync(join(stateDir, 'monitoring_snapshot.json')) &&
+    existsSync(join(stateDir, 'spread_history.json')) &&
     Number(masterRuntime.cfg.profit_lock) === 99 &&
     Number(masterRuntime.cfg.min_score) === 0.42 &&
     masterRuntime.cfg.require_armed_setup === true &&
@@ -1196,6 +1222,10 @@ async function main() {
         primaryHadMonitoring &&
         monitoringGoneBeforeHydrate &&
         existsSync(join(stateDir, 'monitoring_snapshot.json')),
+      spread_history_pg_primary_heal_ok:
+        primaryHadSpreadHistory &&
+        spreadHistoryGoneBeforeHydrate &&
+        existsSync(join(stateDir, 'spread_history.json')),
       persist_backend: hydrateSnap.persist_backend,
       healed_from_persist: hydrateSnap.healed_from_persist,
     },

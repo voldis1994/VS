@@ -908,6 +908,12 @@ class MasterRuntime {
       );
       await hydrateMonitoringSnapshotFromPersist();
       this.hydrateMonitorFromDisk();
+      const { hydrateSpreadHistoryFromPersist, SpreadHistory: SH } =
+        await import('./spreadModel.js');
+      await hydrateSpreadHistoryFromPersist();
+      this.spreadLookback = this.cfg.spread_lookback_bars;
+      this.spreadHistory = new SH(this.spreadLookback);
+      this.spreadHistory.load();
       if (this.positions.count() === 0) {
         const loaded = await loadOpenPositions();
         const valid = loaded.filter((p) => p.decision && p.position_id);
@@ -3701,6 +3707,8 @@ class MasterRuntime {
     // Reader recover_spread_model — relative-spread gate must not cold-open after restart
     this.spreadLookback = this.cfg.spread_lookback_bars;
     this.spreadHistory = new SpreadHistory(this.spreadLookback);
+    const { hydrateSpreadHistoryFromPersist } = await import('./spreadModel.js');
+    await hydrateSpreadHistoryFromPersist();
     const spreadRestored = this.spreadHistory.load();
     if (spreadRestored > 0) {
       this.broker_detail = [

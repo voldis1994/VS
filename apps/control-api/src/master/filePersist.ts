@@ -483,6 +483,13 @@ export class FilePersist implements PersistClient, JournalMirror {
         this.mem.monitoringSnapshotPayload
       );
     }
+    // Dual-write spread_history sidecar when SQL path updated MemoryPersist
+    if (this.mem.spreadHistoryPayload) {
+      atomicWriteJson(
+        join(this.root, 'spread_history.json'),
+        this.mem.spreadHistoryPayload
+      );
+    }
   }
 
   async query(sql: string, params: unknown[] = []) {
