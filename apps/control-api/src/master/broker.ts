@@ -295,6 +295,19 @@ export class PaperBroker implements MasterBroker {
   private quotesByEpic = new Map<string, BrokerQuote>();
   private lastQuote: BrokerQuote | null = null;
   private processed = new Set<string>();
+  /**
+   * VS-System processStopsAndTargets: auto-closed fills kept briefly so
+   * manageTick closePosition stays idempotent and can journal STOP_HIT/TP_HIT.
+   */
+  private recentAutoFills = new Map<
+    string,
+    {
+      fill_price: number;
+      fill_pnl: number | null;
+      detail: string;
+      reason: 'STOP_HIT' | 'TP_HIT';
+    }
+  >();
   equity = 10_000;
   balance = 10_000;
 
@@ -306,6 +319,113 @@ export class PaperBroker implements MasterBroker {
     this.lastQuote = q;
     const key = capitalApiEpic(q.epic) || String(q.epic || '').trim().toUpperCase();
     if (key) this.quotesByEpic.set(key, q);
+    // VS-System: protective fills fire on price update (no manage loop required)
+    this.processStopsAndTargets(q);
+    this.markToMarket(q);
+  }
+
+  /**
+   * Reader/VS-System paper venue: SL/TP fill at protective mark when quote crosses.
+   * Removes the open and records a recent fill for idempotent closePosition.
+   */
+  private processStopsAndTargets(q: BrokerQuote) {
+    for (const p of [...this.positions.values()]) {
+      if (!epicsMatch(p.epic, q.epic)) continue;
+      const mark = p.side === 'BUY' ? q.bid : q.ask;
+      if (!Number.isFinite(mark)) continue;
+      let hit: 'STOP_HIT' | 'TP_HIT' | null = null;
+      if (
+        p.stop_level != null &&
+        Number.isFinite(p.stop_level) &&
+        (p.side === 'BUY' ? mark <= p.stop_level : mark >= p.stop_level)
+      ) {
+        hit = 'STOP_HIT';
+      } else if (
+        p.profit_level != null &&
+        Number.isFinite(p.profit_level) &&
+        (p.side === 'BUY' ? mark >= p.profit_level : mark <= p.profit_level)
+      ) {
+        hit = 'TP_HIT';
+      }
+      if (!hit) continue;
+      this.applyPaperClose(p, p.size, mark, `paper_auto_${hit.toLowerCase()}`, hit);
+    }
+  }
+
+  /**
+   * Sync path: consume auto-fill so broker_flat ghosts journal as STOP_HIT/TP_HIT.
+   * manageTick closePosition uses the same map when sync did not run.
+   */
+  takeRecentAutoFill(position_id: string): {
+    fill_price: number;
+    reason: 'STOP_HIT' | 'TP_HIT';
+    detail: string;
+  } | null {
+    const hit = this.recentAutoFills.get(position_id);
+    if (!hit) return null;
+    this.recentAutoFills.delete(position_id);
+    return {
+      fill_price: hit.fill_price,
+      reason: hit.reason,
+      detail: hit.detail,
+    };
+  }
+
+  /** Apply equity + remove/partial; stash full protective closes for idempotent close/sync. */
+  private applyPaperClose(
+    p: BrokerPosition,
+    closeSize: number,
+    fill_price: number,
+    detail: string,
+    reason?: 'STOP_HIT' | 'TP_HIT'
+  ): {
+    ok: true;
+    detail: string;
+    fill_price: number;
+    fill_pnl: null;
+    remaining_size: number;
+  } {
+    const pv = specForEpic(p.epic).value_per_point_per_lot;
+    const pts =
+      p.side === 'BUY' ? fill_price - p.open_level : p.open_level - fill_price;
+    const gross = pts * closeSize * pv;
+    const fees = estimateTradeFees(closeSize);
+    this.equity += gross - fees;
+    this.balance = this.equity;
+    const remaining = Math.max(0, p.size - closeSize);
+    if (remaining > 1e-9) {
+      p.size = remaining;
+      return {
+        ok: true,
+        detail: `${detail} rem=${remaining}`,
+        fill_price,
+        fill_pnl: null,
+        remaining_size: remaining,
+      };
+    }
+    this.positions.delete(p.position_id);
+    if (reason) {
+      this.recentAutoFills.set(p.position_id, {
+        fill_price,
+        fill_pnl: null,
+        detail,
+        reason,
+      });
+    }
+    return {
+      ok: true,
+      detail,
+      fill_price,
+      fill_pnl: null,
+      remaining_size: 0,
+    };
+  }
+
+  private quoteForEpic(epic: string): BrokerQuote | null {
+    const key = capitalApiEpic(epic) || String(epic || '').trim().toUpperCase();
+    if (key && this.quotesByEpic.has(key)) return this.quotesByEpic.get(key)!;
+    if (this.lastQuote && epicsMatch(this.lastQuote.epic, epic)) return this.lastQuote;
+    return this.lastQuote;
   }
 
   async getQuote(epic: string) {
@@ -345,7 +465,7 @@ export class PaperBroker implements MasterBroker {
       };
     }
     this.processed.add(input.intent_id);
-    const q = this.lastQuote;
+    const q = this.quoteForEpic(input.epic) || this.lastQuote;
     if (!q) {
       return {
         ok: false,
@@ -368,6 +488,7 @@ export class PaperBroker implements MasterBroker {
       profit_level: input.profit_level ?? null,
       upl: 0,
     });
+    this.recentAutoFills.delete(position_id);
     return {
       ok: true,
       order_id: `ord-${input.intent_id}`,
@@ -381,8 +502,21 @@ export class PaperBroker implements MasterBroker {
 
   async closePosition(position_id: string, opts?: { size?: number }) {
     const p = this.positions.get(position_id);
-    if (!p) return { ok: false, detail: 'not_found' };
-    const q = this.lastQuote;
+    if (!p) {
+      const auto = this.recentAutoFills.get(position_id);
+      if (auto) {
+        this.recentAutoFills.delete(position_id);
+        return {
+          ok: true,
+          detail: auto.detail,
+          fill_price: auto.fill_price,
+          fill_pnl: auto.fill_pnl,
+          remaining_size: 0,
+        };
+      }
+      return { ok: false, detail: 'not_found' };
+    }
+    const q = this.quoteForEpic(p.epic);
     let fill_price: number | null = null;
     const closeSize =
       opts?.size != null && Number.isFinite(opts.size) && opts.size > 0
@@ -390,18 +524,9 @@ export class PaperBroker implements MasterBroker {
         : p.size;
     if (q) {
       fill_price = p.side === 'BUY' ? q.bid : q.ask;
-      // Money PnL with instrument point value + round-trip model fees.
-      // Do NOT return fill_pnl — that would mark from_broker and skip journal fees.
-      const pv = specForEpic(p.epic).value_per_point_per_lot;
-      const pts =
-        p.side === 'BUY'
-          ? fill_price - p.open_level
-          : p.open_level - fill_price;
-      const gross = pts * closeSize * pv;
-      const fees = estimateTradeFees(closeSize);
-      this.equity += gross - fees;
-      this.balance = this.equity;
+      return this.applyPaperClose(p, closeSize, fill_price, 'paper_closed');
     }
+    // No quote — still flatten book (test / restart edges)
     const remaining = Math.max(0, p.size - closeSize);
     if (remaining > 1e-9) {
       p.size = remaining;
@@ -441,7 +566,7 @@ export class PaperBroker implements MasterBroker {
       Number.isFinite(input.stop_distance) &&
       input.stop_distance > 0
     ) {
-      const q = this.lastQuote;
+      const q = this.quoteForEpic(p.epic);
       const mark = q
         ? p.side === 'BUY'
           ? q.bid
@@ -469,6 +594,7 @@ export class PaperBroker implements MasterBroker {
     }>
   ) {
     this.positions.clear();
+    this.recentAutoFills.clear();
     for (const r of rows) {
       this.positions.set(r.position_id, {
         position_id: r.position_id,
@@ -495,14 +621,22 @@ export class PaperBroker implements MasterBroker {
     }
   }
 
-  /** Mark-to-market open positions from quote (instrument money units). */
-  markToMarket() {
-    const q = this.lastQuote;
-    if (!q) return;
+  /**
+   * Mark-to-market open positions (instrument money units).
+   * Prefer protective mark (bid/ask) per epic; optional quote scopes one epic.
+   */
+  markToMarket(quote?: BrokerQuote) {
     for (const p of this.positions.values()) {
-      const mid = q.mid;
+      const q = quote
+        ? epicsMatch(p.epic, quote.epic)
+          ? quote
+          : null
+        : this.quoteForEpic(p.epic);
+      if (!q) continue;
+      const mark = p.side === 'BUY' ? q.bid : q.ask;
+      if (!Number.isFinite(mark)) continue;
       const pv = specForEpic(p.epic).value_per_point_per_lot;
-      const pts = p.side === 'BUY' ? mid - p.open_level : p.open_level - mid;
+      const pts = p.side === 'BUY' ? mark - p.open_level : p.open_level - mark;
       p.upl = pts * p.size * pv;
     }
   }
