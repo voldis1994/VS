@@ -312,8 +312,11 @@ async function main() {
     open_positions_status: stHydrate.open_positions,
     recent_decisions: stHydrate.recent_decisions?.length ?? 0,
     recent_trades: stHydrate.recent_trades?.length ?? 0,
-    journal_stage_ok: stHydrate.pipeline_stages?.journal_performance?.ok === true,
-    journal_stage_detail: stHydrate.pipeline_stages?.journal_performance?.detail ?? null,
+    journal_stage_ok: stHydrate.pipeline_stages?.journal?.ok === true,
+    journal_stage_detail: stHydrate.pipeline_stages?.journal?.detail ?? null,
+    performance_stage_ok: stHydrate.pipeline_stages?.performance?.ok === true,
+    performance_stage_detail:
+      stHydrate.pipeline_stages?.performance?.detail ?? null,
     // Holding with no manage yet must not forge green position_manager
     position_stage_pre_manage_ok:
       stHydrate.pipeline_stages?.position_manager?.ok === true,
@@ -334,6 +337,7 @@ async function main() {
     hydrateSnap.recent_decisions >= 1 &&
     hydrateSnap.recent_trades >= 2 &&
     hydrateSnap.journal_stage_ok === true &&
+    hydrateSnap.performance_stage_ok === true &&
     hydrateSnap.position_stage_pre_manage_ok === false &&
     journalHealOk &&
     pgPrimaryHealOk;
@@ -444,6 +448,8 @@ async function main() {
       trades: hydrateSnap.recent_trades,
       journal_stage_ok: hydrateSnap.journal_stage_ok,
       journal_stage_detail: hydrateSnap.journal_stage_detail,
+      performance_stage_ok: hydrateSnap.performance_stage_ok,
+      performance_stage_detail: hydrateSnap.performance_stage_detail,
       heal_ok: journalHealOk,
       heal_via_install: healViaInstall,
       heal_helper: healHelper,

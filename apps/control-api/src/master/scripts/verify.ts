@@ -230,7 +230,9 @@ async function main() {
       : '';
     const stagesUi =
       masterPageBody.includes('pipeline_stages') &&
-      masterPageBody.includes('Stage·validate');
+      masterPageBody.includes('Stage·validate') &&
+      masterPageBody.includes('Stage·journal') &&
+      masterPageBody.includes('Stage·perf');
     const manageOwnerMasterUi =
       masterPageBody.includes('manage_owner') &&
       masterPageBody.includes('Manage owner');
@@ -242,7 +244,10 @@ async function main() {
       runtimeBody.includes('pipeline_stages:') &&
       runtimeBody.includes('market_validation:') &&
       runtimeBody.includes('dual_candidates:') &&
-      runtimeBody.includes('m.ok && m.bars_out >= 5');
+      runtimeBody.includes('m.ok && m.bars_out >= 5') &&
+      runtimeBody.includes('journal:') &&
+      runtimeBody.includes('performance:') &&
+      !runtimeBody.includes('journal_performance:');
     const manageOwnerApi =
       runtimeBody.includes('manage_owner:') &&
       runtimeBody.includes('resolveManageOwnerStatus') &&
@@ -258,7 +263,10 @@ async function main() {
     const masterRouteBody = readFileSync(join(root, 'src/routes/master.ts'), 'utf8');
     const journalAuditEmbed =
       masterRouteBody.includes('persist_backend') &&
-      masterRouteBody.includes('Journal audit');
+      masterRouteBody.includes('Journal audit') &&
+      masterRouteBody.includes('Stage·perf') &&
+      masterRouteBody.includes("'journal'") &&
+      masterRouteBody.includes("'performance'");
     const deskBody = readFileSync(join(root, 'src/services/robotDesk.ts'), 'utf8');
     const deskBridgeMeta =
       deskBody.includes('manage_owner:') &&

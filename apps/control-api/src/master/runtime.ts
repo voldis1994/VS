@@ -158,7 +158,8 @@ export type MasterStatus = {
     broker: { ok: boolean; detail: string };
     position_manager: { ok: boolean; detail: string };
     exit: { ok: boolean; detail: string };
-    journal_performance: { ok: boolean; detail: string };
+    journal: { ok: boolean; detail: string };
+    performance: { ok: boolean; detail: string };
   };
   regime: string;
   market_state: string;
@@ -4267,20 +4268,27 @@ class MasterRuntime {
             ok: !!this.last_exit_reason || opens === 0,
             detail: this.last_exit_reason || (opens > 0 ? 'holding' : 'flat'),
           },
-          journal_performance: {
-            // Persist fail or empty audit → not green (never forge "no trades" as ok)
+          journal: {
+            // Persist fail or empty audit → not green (never forge empty as ok)
             ok: this.persist_ok && hasJournalEvidence,
+            detail: !this.persist_ok
+              ? `persist fail${this.last_persist_error ? ` · ${this.last_persist_error}` : ''}`
+              : decisionRows.length > 0 || tradeRows.length > 0
+                ? `dec=${decisionRows.length} trades_ev=${tradeRows.length} opps=${oppCount}`
+                : oppCount > 0
+                  ? `opps=${oppCount} · awaiting outcome`
+                  : 'no journal',
+          },
+          performance: {
+            // KPI stage — green only with proven closed trades (not decisions alone)
+            ok: this.persist_ok && perf.trades > 0,
             detail: !this.persist_ok
               ? `persist fail${this.last_persist_error ? ` · ${this.last_persist_error}` : ''}`
               : perf.trades > 0
                 ? `trades=${perf.trades} exp=${Number(perf.expectancy).toFixed(3)}`
-                : decisionRows.length > 0
-                  ? `decisions · no closed trades`
-                  : tradeRows.length > 0
-                    ? `trade events · no KPI yet`
-                    : oppCount > 0
-                      ? `opps=${oppCount} · awaiting outcome`
-                      : 'no journal',
+                : hasJournalEvidence
+                  ? 'no KPI · awaiting closed trades'
+                  : 'no performance',
           },
         };
       })(),
