@@ -86,6 +86,8 @@ async function main() {
       demo.status === 'PASS_LIVE_DATA_CLOSED' &&
       demo.forced_live_paper_fill !== true &&
       (demo.performance_trades ?? 0) >= 1 &&
+      typeof demo.performance_total_pnl === 'number' &&
+      Number.isFinite(demo.performance_total_pnl) &&
       (demo.exit_phase === true || (demo.exit_cycles ?? 0) >= 1) &&
       (demo.executed_cycles ?? 0) >= 1 &&
       (demo.executed_cycles ?? 0) <= 2 &&
@@ -97,7 +99,7 @@ async function main() {
         'Live market data → one natural fill → tick-observed exit → journal/performance (no churn)',
       ok,
       detail: demo
-        ? `${demo.status} mid=${demo.first_mid} feed=${demo.feed} executed=${demo.executed_cycles} exit_phase=${!!demo.exit_phase} exits=${demo.exit_cycles} trades=${demo.performance_trades} forced=${!!demo.forced_live_paper_fill} honest=${honestClosed}`
+        ? `${demo.status} mid=${demo.first_mid} feed=${demo.feed} executed=${demo.executed_cycles} exit_phase=${!!demo.exit_phase} exits=${demo.exit_cycles} trades=${demo.performance_trades} closed_pnl=${demo.performance_total_pnl} forced=${!!demo.forced_live_paper_fill} honest=${honestClosed}`
         : r.out.slice(-500),
     });
   }
@@ -119,14 +121,17 @@ async function main() {
       demo?.journals?.filters_stage_ok === false &&
       demo?.journals?.dual_candidates_stage_ok === false &&
       demo?.journals?.buy_filter_ok === false &&
-      demo?.journals?.sell_filter_ok === false;
+      demo?.journals?.sell_filter_ok === false &&
+      demo?.hydrate?.performance_total_pnl === 8 &&
+      typeof demo?.journals?.performance_stage_detail === 'string' &&
+      String(demo.journals.performance_stage_detail).includes('pnl=');
     checks.push({
       id: 'paper_restart_continuity',
       requirement:
-        'Paper restart: hydrateBookFromDisk restores opens/journal; DualPersist primary heal; recover reconciles; cycle stages stay red until live tick',
+        'Paper restart: hydrateBookFromDisk restores opens/journal; DualPersist primary heal; recover reconciles; cycle stages stay red until live tick; Stage·perf surfaces closed pnl=',
       ok,
       detail: demo
-        ? `${demo.status} hydrate_pos=${demo.hydrate?.positions} exit=${demo.hydrate?.last_exit_reason} pnl=${demo.hydrate?.daily_pnl} manage_seed=${demo.manage_only?.paper_seeded} recover_pos=${demo.recover?.positions} pg_heal=${demo.journals?.pg_primary_heal_ok === true} persist=${demo.journals?.persist_backend || demo.hydrate?.persist_backend || '?'} decision_stage=${demo.journals?.decision_stage_ok} analysis_stage=${demo.journals?.analysis_stage_ok}`
+        ? `${demo.status} hydrate_pos=${demo.hydrate?.positions} exit=${demo.hydrate?.last_exit_reason} pnl=${demo.hydrate?.daily_pnl} closed_pnl=${demo.hydrate?.performance_total_pnl} perf_detail=${demo.journals?.performance_stage_detail} manage_seed=${demo.manage_only?.paper_seeded} recover_pos=${demo.recover?.positions} pg_heal=${demo.journals?.pg_primary_heal_ok === true} persist=${demo.journals?.persist_backend || demo.hydrate?.persist_backend || '?'} decision_stage=${demo.journals?.decision_stage_ok} analysis_stage=${demo.journals?.analysis_stage_ok}`
         : r.out.slice(-500),
     });
   }
@@ -272,6 +277,7 @@ async function main() {
       runtimeBody.includes('account unproven') &&
       runtimeBody.includes("reason: !this.last_market") &&
       runtimeBody.includes("? 'hydrated'") &&
+      runtimeBody.includes('pnl=${Number(perf.total_pnl).toFixed(2)}') &&
       !runtimeBody.includes('journal_performance:');
     const manageOwnerApi =
       runtimeBody.includes('manage_owner:') &&
@@ -289,6 +295,9 @@ async function main() {
       masterPageBody.includes("reason === 'hydrated'") &&
       masterPageBody.includes('hydrated ·') &&
       masterPageBody.includes('awaitingCycle');
+    const closedPnlUi =
+      masterPageBody.includes("'Closed PnL'") ||
+      masterPageBody.includes('Closed PnL');
     const masterRouteBody = readFileSync(join(root, 'src/routes/master.ts'), 'utf8');
     const journalAuditEmbed =
       masterRouteBody.includes('persist_backend') &&
@@ -298,6 +307,7 @@ async function main() {
       masterRouteBody.includes("'performance'") &&
       masterRouteBody.includes("reason==='hydrated'") &&
       masterRouteBody.includes('.warn{');
+    const closedPnlEmbed = masterRouteBody.includes('Closed PnL');
     const deskBody = readFileSync(join(root, 'src/services/robotDesk.ts'), 'utf8');
     const deskBridgeMeta =
       deskBody.includes('manage_owner:') &&
@@ -313,15 +323,17 @@ async function main() {
       journalAuditUi &&
       journalAuditEmbed &&
       filterCardsHydrateUi &&
+      closedPnlUi &&
+      closedPnlEmbed &&
       deskBridgeMeta;
     checks.push({
       id: 'artifacts_present',
       requirement:
-        'Dashboard routes, brokers, recovery, desk bridge, manage_owner + journal_audit + hydrate filter cards',
+        'Dashboard routes, brokers, recovery, desk bridge, manage_owner + journal_audit + hydrate filter cards + Closed PnL',
       ok: missing.length === 0 && honestyOk,
       detail: missing.length
         ? `missing: ${missing.join(',')}`
-        : `${files.length} core files; pipeline_stages api=${stagesApi} ui=${stagesUi}; manage_owner api=${manageOwnerApi} masterUi=${manageOwnerMasterUi} deskUi=${manageOwnerDeskUi} deskBridge=${deskBridgeMeta}; journal_audit api=${journalAuditApi} ui=${journalAuditUi} embed=${journalAuditEmbed}; filter_hydrate_ui=${filterCardsHydrateUi}`,
+        : `${files.length} core files; pipeline_stages api=${stagesApi} ui=${stagesUi}; manage_owner api=${manageOwnerApi} masterUi=${manageOwnerMasterUi} deskUi=${manageOwnerDeskUi} deskBridge=${deskBridgeMeta}; journal_audit api=${journalAuditApi} ui=${journalAuditUi} embed=${journalAuditEmbed}; filter_hydrate_ui=${filterCardsHydrateUi}; closed_pnl ui=${closedPnlUi} embed=${closedPnlEmbed}`,
     });
   }
 

@@ -4368,7 +4368,7 @@ class MasterRuntime {
             detail: !this.persist_ok
               ? `persist fail${this.last_persist_error ? ` · ${this.last_persist_error}` : ''}`
               : perf.trades > 0
-                ? `trades=${perf.trades} exp=${Number(perf.expectancy).toFixed(3)}`
+                ? `trades=${perf.trades} pnl=${Number(perf.total_pnl).toFixed(2)} exp=${Number(perf.expectancy).toFixed(3)}`
                 : hasJournalEvidence
                   ? 'no KPI · awaiting closed trades'
                   : 'no performance',
