@@ -167,7 +167,17 @@ async function main() {
     fees: 0.1,
     desk_entry_source: 'setup',
   });
-  // Cached bars/quote so hydrate manage can tick without live feed
+  // Cached bars/quote/hour bars so hydrate manage + desk hour_bias are not blind
+  const hourBars = Array.from({ length: 12 }, (_, i) => {
+    const o = 4300 + i * 8;
+    return {
+      open: o,
+      high: o + 12,
+      low: o - 4,
+      close: o + 6,
+      ts_ms: Date.now() - (12 - i) * 3_600_000,
+    };
+  });
   saveMarketCache({
     epic: 'GOLD',
     bars,
@@ -179,6 +189,8 @@ async function main() {
       epic: 'GOLD',
       ts_ms: Date.now(),
     },
+    hour_bars: hourBars,
+    hour_bars_detail: 'restart_check_hours',
     structure_seed_source: 'restart_check',
   });
   saveEpicCycleStash({
@@ -335,6 +347,8 @@ async function main() {
       epic: 'GOLD',
       ts_ms: Date.now() - 60_000,
     },
+    hour_bars: hourBars,
+    hour_bars_detail: 'restart_check_hours',
     structure_seed_source: 'restart_check',
   });
   // Re-seed epic cycle stash (same non-SQL sidecar class as market_cache)
@@ -616,6 +630,10 @@ async function main() {
     quote_source: stHydrate.quote?.source ?? null,
     bars_available: stHydrate.bars_available ?? 0,
     bars_cached: stHydrate.bars_cached === true,
+    hour_bars_available: stHydrate.hour_bars_available ?? 0,
+    hour_bars_cached: stHydrate.hour_bars_cached === true,
+    hour_bars_source: stHydrate.hour_bars_source ?? null,
+
     entry_gates_session: stHydrate.entry_gates?.session ?? null,
     entry_gates_session_hydrated:
       stHydrate.entry_gates?.session_hydrated === true,
@@ -714,6 +732,9 @@ async function main() {
     hydrateSnap.market_state_hydrated === true &&
     hydrateSnap.quote_cached === true &&
     hydrateSnap.bars_cached === true &&
+    hydrateSnap.hour_bars_cached === true &&
+    (hydrateSnap.hour_bars_available ?? 0) >= 6 &&
+    hydrateSnap.hour_bars_source === 'disk_cache' &&
     hydrateSnap.bars_available >= 40 &&
     hydrateSnap.entry_gates_session_hydrated === true &&
     String(hydrateSnap.entry_gates_session || '').startsWith('hydrated ·') &&
@@ -891,6 +912,9 @@ async function main() {
       quote_source: hydrateSnap.quote_source,
       bars_available: hydrateSnap.bars_available,
       bars_cached: hydrateSnap.bars_cached,
+      hour_bars_available: hydrateSnap.hour_bars_available,
+      hour_bars_cached: hydrateSnap.hour_bars_cached,
+      hour_bars_source: hydrateSnap.hour_bars_source,
       entry_gates_session: hydrateSnap.entry_gates_session,
       entry_gates_session_hydrated: hydrateSnap.entry_gates_session_hydrated,
       monitoring_hydrated: hydrateSnap.monitoring_hydrated,

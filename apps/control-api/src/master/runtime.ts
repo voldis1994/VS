@@ -288,6 +288,12 @@ export type MasterStatus = {
   bars_available: number;
   /** Bars currently from disk market_cache — not a live feed seed. */
   bars_cached: boolean;
+  /** Cached 1h OHLC count for desk hour_bias (0 until feed or disk hydrate). */
+  hour_bars_available: number;
+  /** Hour bars from disk market_cache — not a live HOUR fetch. */
+  hour_bars_cached: boolean;
+  /** disk_cache | live provenance for Hour bars card. */
+  hour_bars_source: 'disk_cache' | 'live' | null;
   news_window: NewsWindowState;
   /** Live quote snapshot for dashboard freshness */
   quote: {
@@ -439,6 +445,9 @@ class MasterRuntime {
   private quoteFromDiskCache = false;
   /** True while last_bars were restored from market_cache (cleared on live bars). */
   private barsFromDiskCache = false;
+  private hourBarsFromDiskCache = false;
+  private last_hour_bars: import('./types.js').Bar[] = [];
+  private last_hour_bars_detail: string | null = null;
   /** Cached public mids for READER-style feed divergence vs broker quote */
   private lastPublicReferenceMids: number[] | null = null;
   private lastPublicReferenceAtMs = 0;
@@ -2638,6 +2647,22 @@ class MasterRuntime {
     // Live cycle quote/bars — never paint as disk_cache
     this.quoteFromDiskCache = false;
     this.barsFromDiskCache = false;
+    // Live HOUR refresh via tick opts — clear disk_cache before persist
+    if (opts?.hour_bars && opts.hour_bars.length >= 6) {
+      this.last_hour_bars = opts.hour_bars.map((b) => ({
+        open: Number((b as { open: number }).open),
+        high: Number((b as { high: number }).high),
+        low: Number((b as { low: number }).low),
+        close: Number((b as { close: number }).close),
+        ts_ms:
+          typeof (b as { ts_ms?: number }).ts_ms === 'number'
+            ? Number((b as { ts_ms?: number }).ts_ms)
+            : 0,
+      }));
+      this.hourBarsFromDiskCache = false;
+      this.last_hour_bars_detail = 'tick';
+    }
+    // Keep hourBarsFromDiskCache until live HOUR refresh replaces hours
     this.persistMarketCache();
     this.rollDailyPnl();
     const broker = this.broker || this.ensurePaperBroker();
@@ -4005,6 +4030,13 @@ class MasterRuntime {
     } = await import('./liveFeed.js');
     const builder = new LiveBarBuilder(10_000, 80);
     let hourCache = emptyHourBarsCache();
+    if (this.last_hour_bars.length >= 6) {
+      hourCache = {
+        bars: this.last_hour_bars,
+        last_ms: Date.now(),
+        detail: this.last_hour_bars_detail || 'disk_cache',
+      };
+    }
     /** Desk last_closed parity — confirm gate stays armed between 10s closes */
     let lastClosed10s: import('../services/tenSecondOhlc.js').TenSecBar | null = null;
     let seeded = false;
@@ -4175,6 +4207,10 @@ class MasterRuntime {
             this.broker_detail = `${this.broker_detail || ''};hour:${hourCache.detail}`.slice(
               -400
             );
+            if (hourCache.detail !== 'disk_cache') {
+              this.hourBarsFromDiskCache = false;
+              this.last_hour_bars_detail = hourCache.detail;
+            }
           }
         }
         const referenceMids = await this.refreshPublicReferenceMids(this.epic);
@@ -4221,6 +4257,13 @@ class MasterRuntime {
     } = await import('./liveFeed.js');
     const builder = new LiveBarBuilder(10_000, 80);
     let hourCache = emptyHourBarsCache();
+    if (this.last_hour_bars.length >= 6) {
+      hourCache = {
+        bars: this.last_hour_bars,
+        last_ms: Date.now(),
+        detail: this.last_hour_bars_detail || 'disk_cache',
+      };
+    }
     /** Desk last_closed parity — confirm gate stays armed between 10s closes */
     let lastClosed10s: import('../services/tenSecondOhlc.js').TenSecBar | null = null;
     let seeded = false;
@@ -4298,6 +4341,10 @@ class MasterRuntime {
             this.broker_detail = `${this.broker_detail || ''};hour:${hourCache.detail}`.slice(
               -400
             );
+            if (hourCache.detail !== 'disk_cache') {
+              this.hourBarsFromDiskCache = false;
+              this.last_hour_bars_detail = hourCache.detail;
+            }
           }
         }
         // Public consensus quote is already fused — do not self-diverge against the same mids
@@ -4520,11 +4567,18 @@ class MasterRuntime {
   }
 
   private persistMarketCache(): void {
-    if (!this.last_bars.length && !this.last_quote) return;
+    if (
+      !this.last_bars.length &&
+      !this.last_quote &&
+      !this.last_hour_bars.length
+    )
+      return;
     saveMarketCache({
       epic: this.epic,
       bars: this.last_bars,
       quote: this.last_quote,
+      hour_bars: this.last_hour_bars.length ? this.last_hour_bars : null,
+      hour_bars_detail: this.last_hour_bars_detail,
       structure_seed_source: this.structure_seed_source,
     });
   }
@@ -4549,6 +4603,17 @@ class MasterRuntime {
       // never silent blank or live stale_quote before a cycle.
       this.last_quote = cached.quote;
       this.quoteFromDiskCache = true;
+    }
+    if (
+      this.last_hour_bars.length < 6 &&
+      Array.isArray(cached.hour_bars) &&
+      cached.hour_bars.length >= 6
+    ) {
+      this.last_hour_bars = cached.hour_bars;
+      this.hourBarsFromDiskCache = true;
+      if (cached.hour_bars_detail) {
+        this.last_hour_bars_detail = String(cached.hour_bars_detail);
+      }
     }
   }
 
@@ -5484,6 +5549,13 @@ class MasterRuntime {
       structure_seed_source: this.structure_seed_source,
       bars_available: this.last_bars.length,
       bars_cached: this.barsFromDiskCache,
+      hour_bars_available: this.last_hour_bars.length,
+      hour_bars_cached: this.hourBarsFromDiskCache,
+      hour_bars_source: this.last_hour_bars.length
+        ? this.hourBarsFromDiskCache
+          ? 'disk_cache'
+          : 'live'
+        : null,
       news_window: resolveNewsWindow(Date.now(), this.epic),
       quote: quote
         ? {
