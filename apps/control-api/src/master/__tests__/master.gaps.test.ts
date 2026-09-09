@@ -5351,6 +5351,7 @@ describe('pipeline_stages honesty — position + journal never forged green', ()
     const prevBroker = masterRuntime.broker;
     const prevPipe = masterRuntime.pipeline;
     const prevExit = masterRuntime.last_exit_reason;
+    const prevMarket = masterRuntime.last_market;
 
     try {
       (masterRuntime as unknown as { last_manage_tick_ms: number }).last_manage_tick_ms = 0;
@@ -5360,6 +5361,7 @@ describe('pipeline_stages honesty — position + journal never forged green', ()
       masterRuntime.broker = null;
       masterRuntime.pipeline = new MasterPipeline('PAPER');
       masterRuntime.last_exit_reason = null;
+      masterRuntime.last_market = null;
 
       const cold = masterRuntime.status().pipeline_stages;
       expect(cold.position_manager.ok).toBe(false);
@@ -5408,10 +5410,23 @@ describe('pipeline_stages honesty — position + journal never forged green', ()
       expect(managed.position_manager.detail).toMatch(/managed \d+s ago/);
       expect(managed.exit.ok).toBe(false);
 
+      // Live exit green only after a cycle (last_market)
+      masterRuntime.last_market = {
+        ok: true,
+        quality: 0.9,
+        reasons: [],
+        bars_in: 40,
+        bars_out: 40,
+      };
       masterRuntime.last_exit_reason = 'TakeProfit';
       const exited = masterRuntime.status().pipeline_stages;
       expect(exited.exit.ok).toBe(true);
       expect(exited.exit.detail).toBe('TakeProfit');
+      // Journal TP without a live cycle must stay hydrated / red
+      masterRuntime.last_market = null;
+      const hydratedExit = masterRuntime.status().pipeline_stages;
+      expect(hydratedExit.exit.ok).toBe(false);
+      expect(hydratedExit.exit.detail).toMatch(/^hydrated · TakeProfit$/);
       masterRuntime.last_exit_reason = null;
 
       // Persist fail → journal stage red even with KPI trades
@@ -5447,6 +5462,7 @@ describe('pipeline_stages honesty — position + journal never forged green', ()
       masterRuntime.broker = prevBroker;
       masterRuntime.pipeline = prevPipe;
       masterRuntime.last_exit_reason = prevExit;
+      masterRuntime.last_market = prevMarket;
       if (prevDir === undefined) delete process.env.MASTER_STATE_DIR;
       else process.env.MASTER_STATE_DIR = prevDir;
       if (prevDir === undefined) delete process.env.MASTER_GATES_DIR;

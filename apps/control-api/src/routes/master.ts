@@ -719,7 +719,7 @@ async function refresh(){
       card('Decision',s.last_decision?(cyclePending?('hydrated · '+s.last_decision.kind):s.last_decision.kind):'—',cyclePending&&s.last_decision?'warn':''),
       card('Why',why,whyCls),
       card('Entry gates',s.entry_gates?([s.entry_gates.weekend?'weekend':null,'session='+s.entry_gates.session,s.entry_gates.hours_ok?'hoursOK':'hoursBLOCK',s.entry_gates.news_cfg_on?(s.entry_gates.news_blocks?('newsBLOCK'+(s.entry_gates.news_detail?'·'+s.entry_gates.news_detail:'')):'newsClear'):'newsOff'].filter(Boolean).join(' · ')):'—',s.entry_gates&&s.entry_gates.session_hydrated?'warn':(s.entry_gates&&(s.entry_gates.weekend||s.entry_gates.session_blocks||!s.entry_gates.hours_ok||s.entry_gates.news_blocks)?'bad':(s.entry_gates?'ok':''))),
-      card('Last exit',s.last_exit_reason||'—'),
+      card('Last exit',s.last_exit_reason?(cyclePending?('hydrated · '+s.last_exit_reason):s.last_exit_reason):'—',cyclePending&&s.last_exit_reason?'warn':''),
       card('Equity',s.capital_account_proven===false?'UNPROVEN':(s.account?.equity!=null?Number(s.account.equity).toFixed(2):'—'),s.capital_account_proven===false?'bad':''),
       card('Available',s.capital_account_proven===false?'—':(s.account?.available_to_deal!=null?Number(s.account.available_to_deal).toFixed(2):'—')),
       card('Trade allowed',s.account?.trade_allowed===false?'NO':s.account?.trade_allowed===true?'YES':'—',s.account?.trade_allowed===false?'bad':s.account?.trade_allowed===true?'ok':''),
