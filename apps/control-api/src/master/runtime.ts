@@ -4681,7 +4681,9 @@ class MasterRuntime {
         return;
       }
       if (Date.now() - this.lastFullTickAt < 800) return;
-      if (!this.last_bars.length || !this.last_quote) return;
+      // Quote is enough for hard STOP/TP + venue account snapshot; OHLC structure
+      // is optional (runManageAcrossOpenEpics already tolerates bars.length < 5).
+      if (!this.last_quote) return;
       void this.manageOnlyTick(this.last_bars, this.last_quote);
     }, 1000);
   }
@@ -4719,6 +4721,8 @@ class MasterRuntime {
    * After recover / hydrate manage: if opens exist but last_bars/quote empty, pull
    * broker quote+history (or disk market_cache) and run one manage-only tick so
    * stops/exits are not blind. PAPER must reseed broker book before sync.
+   * Quote alone is enough for hard STOP/TP + venue account snapshot — do not
+   * wait for bars.length >= 5 (OHLC structure is optional on manageOnly).
    */
   private async bootstrapManageAfterRecover(): Promise<void> {
     if (this.positions.count() === 0) {
@@ -4743,7 +4747,8 @@ class MasterRuntime {
     try {
       // Disk cache first — covers history fetch miss / slow Capital OHLC
       this.hydrateMarketCacheFromDisk();
-      if (this.last_bars.length >= 5 && this.last_quote) {
+      // Manage-on-quote: cached quote is enough (structure needs ≥5 bars later)
+      if (this.last_quote) {
         await this.manageOnlyTick(this.last_bars, this.last_quote);
         return;
       }
@@ -4757,19 +4762,28 @@ class MasterRuntime {
         q = null;
       }
       if (!q) {
-        // Live quote miss — still manage on fresh-enough cached quote + bars
-        if (this.last_bars.length >= 5 && this.last_quote) {
+        // Live quote miss — still manage on cached quote when present
+        if (this.last_quote) {
           await this.manageOnlyTick(this.last_bars, this.last_quote);
         }
         return;
       }
+      // Missing ts_ms → fail closed (aged), never forge Date.now() freshness
+      const quoteTs =
+        q.ts_ms != null && Number.isFinite(q.ts_ms) && q.ts_ms > 0
+          ? q.ts_ms
+          : Date.now() - 60_000;
       const quote: Quote = {
         bid: q.bid,
         ask: q.ask,
         mid: q.mid,
         spread: q.spread,
         epic: q.epic || this.epic,
-        ts_ms: q.ts_ms || Date.now(),
+        ts_ms: quoteTs,
+        min_stop_distance: q.min_stop_distance ?? null,
+        market_status: q.market_status ?? null,
+        digits: q.digits,
+        point: q.point,
       };
       this.last_quote = quote;
       this.quoteFromDiskCache = false;
@@ -4800,13 +4814,13 @@ class MasterRuntime {
                 : hist.detail || 'broker_history';
           }
         } catch {
-          /* keep empty — poll loop will seed */
+          /* keep short/empty — manage-on-quote still runs hard exits */
         }
       }
-      if (bars.length >= 5) {
-        this.persistMarketCache();
-        await this.manageOnlyTick(bars, quote);
-      }
+      if (bars.length >= 5) this.persistMarketCache();
+      // Always manage when we have a live quote — hard STOP/TP + account snapshot
+      // must not wait for OHLC history after Recover / Stop-with-opens.
+      await this.manageOnlyTick(bars, quote);
     } catch (e) {
       logMasterError({
         module: 'runtime.bootstrap_manage',
