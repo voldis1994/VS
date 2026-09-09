@@ -113,7 +113,9 @@ async function main() {
       demo?.journals?.decision_stage_ok === false &&
       demo?.journals?.analysis_stage_ok === false &&
       demo?.journals?.execution_stage_ok === false &&
-      demo?.journals?.market_validation_stage_ok === false;
+      demo?.journals?.market_validation_stage_ok === false &&
+      demo?.journals?.normalization_stage_ok === false &&
+      demo?.journals?.broker_stage_ok === false;
     checks.push({
       id: 'paper_restart_continuity',
       requirement:
@@ -262,6 +264,7 @@ async function main() {
       runtimeBody.includes('Never forge green from journal-hydrate alone') &&
       runtimeBody.includes('hydrated ·') &&
       runtimeBody.includes('Sticky last_risk without a live cycle') &&
+      runtimeBody.includes('account unproven') &&
       !runtimeBody.includes('journal_performance:');
     const manageOwnerApi =
       runtimeBody.includes('manage_owner:') &&

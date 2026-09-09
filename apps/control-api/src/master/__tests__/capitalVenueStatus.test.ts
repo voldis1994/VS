@@ -57,6 +57,8 @@ describe('MASTER Capital epic + status venue', () => {
     expect(live.account.consecutive_losses).toBeNull();
     expect(live.account.trade_allowed).toBe(false);
     expect(live.capital_venue_opens_proven).toBe(false);
+    expect(live.pipeline_stages.broker.ok).toBe(false);
+    expect(live.pipeline_stages.broker.detail).toMatch(/account unproven/);
   });
 
   it('Capital attach clears paper day_start; first equity proves reseed', async () => {
@@ -140,6 +142,10 @@ describe('MASTER Capital epic + status venue', () => {
     expect(masterRuntime.account.day_start_equity).toBe(50_000);
     expect(masterRuntime.account.peak_equity).toBe(50_000);
     expect(masterRuntime.status().capital_account_proven).toBe(true);
+    expect(masterRuntime.status().pipeline_stages.broker.ok).toBe(true);
+    expect(masterRuntime.status().pipeline_stages.broker.detail).toBe(
+      'CAPITAL:live'
+    );
 
     equity = 47_000;
     await masterRuntime.tick(bars, {

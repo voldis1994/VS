@@ -4298,13 +4298,25 @@ class MasterRuntime {
                 ? `hydrated · ${this.last_execution_detail}`
                 : this.last_execution_detail,
           },
-          broker: {
-            // Attached broker only — name string alone is not enough after hydrate
-            ok: !!(this.broker && brokerName),
-            detail: this.broker && brokerName
-              ? `${brokerName}${this.broker.paper ? ':paper' : ':live'}`
-              : 'none',
-          },
+          broker: (() => {
+            if (!this.broker || !brokerName) {
+              return { ok: false, detail: 'none' };
+            }
+            // Capital LIVE: attach alone must not forge green while account unread
+            if (this.broker instanceof CapitalBroker && !this.broker.paper) {
+              if (!this.capitalAccountProven) {
+                return {
+                  ok: false,
+                  detail: `${brokerName}:live · account unproven`,
+                };
+              }
+              return { ok: true, detail: `${brokerName}:live` };
+            }
+            return {
+              ok: true,
+              detail: `${brokerName}${this.broker.paper ? ':paper' : ':live'}`,
+            };
+          })(),
           position_manager: {
             // Holding requires manage evidence; flat is ok only after a real manageTick
             ok: opens > 0 ? managedOnce || manageArmed : managedOnce,

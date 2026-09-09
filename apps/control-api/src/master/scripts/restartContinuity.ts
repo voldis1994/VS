@@ -334,6 +334,10 @@ async function main() {
       stHydrate.pipeline_stages?.execution?.detail ?? null,
     market_validation_stage_ok:
       stHydrate.pipeline_stages?.market_validation?.ok === true,
+    normalization_stage_ok:
+      stHydrate.pipeline_stages?.normalization?.ok === true,
+    broker_stage_ok: stHydrate.pipeline_stages?.broker?.ok === true,
+    broker_stage_detail: stHydrate.pipeline_stages?.broker?.detail ?? null,
     // Holding with no manage yet must not forge green position_manager
     position_stage_pre_manage_ok:
       stHydrate.pipeline_stages?.position_manager?.ok === true,
@@ -364,6 +368,8 @@ async function main() {
     hydrateSnap.risk_stage_ok === false &&
     hydrateSnap.execution_stage_ok === false &&
     hydrateSnap.market_validation_stage_ok === false &&
+    hydrateSnap.normalization_stage_ok === false &&
+    hydrateSnap.broker_stage_ok === false &&
     journalHealOk &&
     pgPrimaryHealOk;
 
@@ -488,6 +494,9 @@ async function main() {
       execution_stage_ok: hydrateSnap.execution_stage_ok,
       execution_stage_detail: hydrateSnap.execution_stage_detail,
       market_validation_stage_ok: hydrateSnap.market_validation_stage_ok,
+      normalization_stage_ok: hydrateSnap.normalization_stage_ok,
+      broker_stage_ok: hydrateSnap.broker_stage_ok,
+      broker_stage_detail: hydrateSnap.broker_stage_detail,
       heal_ok: journalHealOk,
       heal_via_install: healViaInstall,
       heal_helper: healHelper,

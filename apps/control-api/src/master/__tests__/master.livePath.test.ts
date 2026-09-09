@@ -4098,6 +4098,8 @@ describe('VS MASTER LIVE Capital path (mocked)', () => {
     expect(st.account.balance).toBeNull();
     expect(st.account.daily_pnl).toBeNull();
     expect(st.account.trade_allowed).toBe(false);
+    expect(st.pipeline_stages.broker.ok).toBe(false);
+    expect(st.pipeline_stages.broker.detail).toMatch(/account unproven/);
   });
 
   it('status demotes LIVE_RUNNING to LIVE_QUOTE_STALE when quote aged', async () => {
