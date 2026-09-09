@@ -511,6 +511,16 @@ export class FilePersist implements PersistClient, JournalMirror {
       const body = lines ? `${lines}\n` : '';
       writeFileSync(path, body, 'utf8');
     }
+    // Dual-write news_window sidecar when SQL path updated MemoryPersist
+    if (this.mem.newsWindowPayload) {
+      const p = this.mem.newsWindowPayload;
+      atomicWriteJson(join(this.root, 'news_window.json'), {
+        impact: p.impact,
+        until_ms: p.until_ms ?? null,
+        active: p.active === true,
+        detail: p.detail ?? null,
+      });
+    }
   }
 
   async query(sql: string, params: unknown[] = []) {

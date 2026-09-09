@@ -356,7 +356,7 @@ async function main() {
     structure_seed_source: 'restart_check',
   };
   saveMarketCache(cacheForPrimary);
-  const { persistMarketCacheState, persistEpicCycleStashState, persistRuntimeGatesState, persistManageConfigState, persistOwnsPipelineState, persistMonitoringSnapshotState, persistSpreadHistoryState, persistTradeAckJournalState, persistErrorJournalState } =
+  const { persistMarketCacheState, persistEpicCycleStashState, persistRuntimeGatesState, persistManageConfigState, persistOwnsPipelineState, persistMonitoringSnapshotState, persistSpreadHistoryState, persistTradeAckJournalState, persistErrorJournalState, persistNewsWindowState } =
     await import('../persist.js');
   await persistMarketCacheState({
     ...cacheForPrimary,
@@ -609,6 +609,26 @@ async function main() {
     Array.isArray(primary.errorJournalPayload.entries) &&
     primary.errorJournalPayload.entries.length >= 1 &&
     primary.errorJournalPayload.entries[0]?.error_id === 'err-heal-1';
+  // Dual-write news_window into MemoryPersist primary BEFORE file wipe
+  const newsForPrimary = {
+    impact: 'high',
+    until_ms: Date.now() + 60 * 60_000,
+    active: true,
+    detail: 'restart_heal_high_impact',
+  };
+  writeFileSync(
+    join(stateDir, 'news_window.json'),
+    JSON.stringify(newsForPrimary),
+    'utf8'
+  );
+  await persistNewsWindowState({
+    ...newsForPrimary,
+    saved_at_ms: Date.now(),
+  });
+  const primaryHadNewsWindow =
+    primary.newsWindowPayload != null &&
+    primary.newsWindowPayload.impact === 'high' &&
+    primary.newsWindowPayload.active === true;
   const primaryHadDecisions = primary.decisionEvents.length >= 1;
   const primaryHadTrades = primary.tradeEvents.length >= 1;
   const primaryHadOpens = primary.positions.length >= 1;
@@ -648,6 +668,9 @@ async function main() {
   const errorJournalGoneBeforeHydrate = !existsSync(
     join(stateDir, 'error_journal.jsonl')
   );
+  const newsWindowGoneBeforeHydrate = !existsSync(
+    join(stateDir, 'news_window.json')
+  );
   // Do NOT re-seed market_cache — must heal from DualPersist primary.
   // Do NOT re-seed epic_cycle_stash — must heal from DualPersist primary.
   // Do NOT re-seed runtime_gates — must heal from DualPersist primary.
@@ -657,6 +680,7 @@ async function main() {
   // Do NOT re-seed spread_history — must heal from DualPersist primary.
   // Do NOT re-seed trade_ack_journal — must heal from DualPersist primary.
   // Do NOT re-seed error_journal — must heal from DualPersist primary.
+  // Do NOT re-seed news_window — must heal from DualPersist primary.
 
   // Simulate process restart — empty in-memory book, durable state on primary
   masterRuntime.pipeline = new MasterPipeline('PAPER');
@@ -731,6 +755,8 @@ async function main() {
 
   const hydrated = await masterRuntime.hydrateBookFromDisk();
   const stHydrate = masterRuntime.status();
+  const { newsBlocksEntries } = await import('../newsGate.js');
+  const newsHealedBlocks = newsBlocksEntries(true, Date.now(), 'GOLD').blocked === true;
   const pgPrimaryHealOk =
     primaryHadDecisions &&
     primaryHadTrades &&
@@ -744,6 +770,7 @@ async function main() {
     primaryHadSpreadHistory &&
     primaryHadTradeAck &&
     primaryHadErrorJournal &&
+    primaryHadNewsWindow &&
     journalsGoneBeforeHydrate &&
     marketCacheGoneBeforeHydrate &&
     epicStashGoneBeforeHydrate &&
@@ -754,6 +781,7 @@ async function main() {
     spreadHistoryGoneBeforeHydrate &&
     tradeAckGoneBeforeHydrate &&
     errorJournalGoneBeforeHydrate &&
+    newsWindowGoneBeforeHydrate &&
     existsSync(join(stateDir, 'market_cache.json')) &&
     existsSync(join(stateDir, 'epic_cycle_stash.json')) &&
     existsSync(join(stateDir, 'runtime_gates.json')) &&
@@ -763,6 +791,8 @@ async function main() {
     existsSync(join(stateDir, 'spread_history.json')) &&
     existsSync(join(stateDir, 'trade_ack_journal.json')) &&
     existsSync(join(stateDir, 'error_journal.jsonl')) &&
+    existsSync(join(stateDir, 'news_window.json')) &&
+    newsHealedBlocks &&
     Number(masterRuntime.cfg.profit_lock) === 99 &&
     Number(masterRuntime.cfg.min_score) === 0.42 &&
     masterRuntime.cfg.require_armed_setup === true &&
@@ -1306,6 +1336,11 @@ async function main() {
         primaryHadErrorJournal &&
         errorJournalGoneBeforeHydrate &&
         existsSync(join(stateDir, 'error_journal.jsonl')),
+      news_window_pg_primary_heal_ok:
+        primaryHadNewsWindow &&
+        newsWindowGoneBeforeHydrate &&
+        existsSync(join(stateDir, 'news_window.json')) &&
+        newsHealedBlocks,
       persist_backend: hydrateSnap.persist_backend,
       healed_from_persist: hydrateSnap.healed_from_persist,
     },

@@ -922,6 +922,8 @@ class MasterRuntime {
         './errorJournal.js'
       );
       await hydrateErrorJournalFromPersist();
+      const { hydrateNewsWindowFromPersist } = await import('./newsGate.js');
+      await hydrateNewsWindowFromPersist();
       if (this.positions.count() === 0) {
         const loaded = await loadOpenPositions();
         const valid = loaded.filter((p) => p.decision && p.position_id);
