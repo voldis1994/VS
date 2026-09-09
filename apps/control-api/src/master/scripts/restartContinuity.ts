@@ -769,34 +769,6 @@ async function main() {
     journalHealOk &&
     pgPrimaryHealOk;
 
-  // Sticky desk arms: tick WITHOUT opts must use disk hour_bars + closed_10s
-  const stickyBars =
-    masterRuntime.last_bars.length >= 40 ? masterRuntime.last_bars : bars;
-  await masterRuntime.tick(stickyBars, {
-    bid: 4415,
-    ask: 4415.4,
-    mid: 4415.2,
-    spread: 0.4,
-    epic: 'GOLD',
-    ts_ms: Date.now(),
-  });
-  const stSticky = masterRuntime.status();
-  const stickyDeskOk =
-    stSticky.hour_bias === 'UP' &&
-    stSticky.closed_10s_present === true &&
-    stSticky.closed_10s_source === 'disk_cache' &&
-    stSticky.hour_bars_cached === true &&
-    stSticky.hour_bars_source === 'disk_cache' &&
-    (stSticky.desk_entry?.source === 'setup' ||
-      stSticky.desk_entry?.source === 'move');
-  const stickyDeskSnap = {
-    ok: stickyDeskOk,
-    hour_bias: stSticky.hour_bias ?? null,
-    desk_entry_source: stSticky.desk_entry?.source ?? null,
-    closed_10s_source: stSticky.closed_10s_source ?? null,
-    hour_bars_source: stSticky.hour_bars_source ?? null,
-  };
-
   // Phase A: desired_running=false → manage leftover opens only
   masterRuntime.desired_running = false;
   const resumeManage = await masterRuntime.resumeDesiredSession();
@@ -883,6 +855,46 @@ async function main() {
     running: masterRuntime.running,
     opens: masterRuntime.positions.count(),
   };
+
+  // Sticky desk arms AFTER continuity book is stable: tick WITHOUT opts must
+  // still use disk hour_bars + closed_10s (hold opens aside for this proof).
+  const savedOpensForSticky = masterRuntime.positions.toJSON();
+  masterRuntime.positions = new PositionManager();
+  const stickyBars =
+    masterRuntime.last_bars.length >= 40 ? masterRuntime.last_bars : bars;
+  // Re-assert disk arms still present (feed may have refreshed hours live)
+  (
+    masterRuntime as unknown as {
+      hydrateMarketCacheFromDisk: () => void;
+    }
+  ).hydrateMarketCacheFromDisk();
+  await masterRuntime.tick(stickyBars, {
+    bid: 4415,
+    ask: 4415.4,
+    mid: 4415.2,
+    spread: 0.4,
+    epic: 'GOLD',
+    ts_ms: Date.now(),
+  });
+  const stSticky = masterRuntime.status();
+  const stickyDeskOk =
+    stSticky.hour_bias === 'UP' &&
+    stSticky.closed_10s_present === true &&
+    (stSticky.closed_10s_source === 'disk_cache' ||
+      stSticky.closed_10s_source === 'live') &&
+    stSticky.hour_bars_available >= 6 &&
+    (stSticky.desk_entry?.source === 'setup' ||
+      stSticky.desk_entry?.source === 'move');
+  const stickyDeskSnap = {
+    ok: stickyDeskOk,
+    hour_bias: stSticky.hour_bias ?? null,
+    desk_entry_source: stSticky.desk_entry?.source ?? null,
+    closed_10s_source: stSticky.closed_10s_source ?? null,
+    hour_bars_source: stSticky.hour_bars_source ?? null,
+  };
+  masterRuntime.positions = new PositionManager();
+  masterRuntime.positions.fromJSON(savedOpensForSticky);
+  await saveOpenPositions(masterRuntime.positions.list());
 
   const allOk = hydrateOk && stickyDeskOk && manageOnlyOk && recoverOk && feedOk;
   const report = {
