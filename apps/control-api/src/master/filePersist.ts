@@ -456,6 +456,13 @@ export class FilePersist implements PersistClient, JournalMirror {
         this.mem.epicCycleStashPayload
       );
     }
+    // Dual-write runtime_gates sidecar when SQL path updated MemoryPersist
+    if (this.mem.runtimeGatesPayload) {
+      atomicWriteJson(
+        join(this.root, 'runtime_gates.json'),
+        this.mem.runtimeGatesPayload
+      );
+    }
   }
 
   async query(sql: string, params: unknown[] = []) {
