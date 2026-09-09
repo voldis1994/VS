@@ -5463,6 +5463,14 @@ describe('pipeline_stages honesty — position + journal never forged green', ()
       expect(withJournal.performance.ok).toBe(false);
       expect(withJournal.performance.detail).toMatch(/no KPI|awaiting/);
 
+      // Disk-hydrated journal evidence marks hydrated (still green when persist ok)
+      (masterRuntime as unknown as { bookHydrated: boolean }).bookHydrated = true;
+      masterRuntime.last_market = null;
+      const hydJournal = masterRuntime.status().pipeline_stages;
+      expect(hydJournal.journal.ok).toBe(true);
+      expect(hydJournal.journal.detail).toMatch(/^hydrated · dec=/);
+      (masterRuntime as unknown as { bookHydrated: boolean }).bookHydrated = false;
+
       masterRuntime.persist_ok = false;
       masterRuntime.last_persist_error = 'disk_full_test';
       const persistFail = masterRuntime.status().pipeline_stages;

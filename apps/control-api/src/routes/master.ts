@@ -725,7 +725,7 @@ async function refresh(){
       card('Trade allowed',s.account?.trade_allowed===false?'NO':s.account?.trade_allowed===true?'YES':'—',s.account?.trade_allowed===false?'bad':s.account?.trade_allowed===true?'ok':''),
       card('News',s.news_window?.window_active?(s.news_window.impact+' · '+s.news_window.source):'clear',s.news_window?.window_active&&s.news_window?.impact==='high'?'bad':''),
       card('Daily PnL',s.capital_account_proven===false?'—':(s.account?.daily_pnl!=null?Number(s.account.daily_pnl).toFixed(2):'—')),
-      card('Closed PnL',s.performance?.trades?Number(s.performance.total_pnl||0).toFixed(2):'—',s.performance?.trades?(Number(s.performance.total_pnl||0)<0?'bad':(Number(s.performance.total_pnl||0)>0?'ok':'')):''),
+      card('Closed PnL',s.performance?.trades?((cyclePending?'hydrated · ':'')+Number(s.performance.total_pnl||0).toFixed(2)):'—',cyclePending?'warn':(s.performance?.trades?(Number(s.performance.total_pnl||0)<0?'bad':(Number(s.performance.total_pnl||0)>0?'ok':'')):'')),
       card('Day start eq',s.capital_account_proven===false?'UNPROVEN':(s.account?.day_start_equity!=null?Number(s.account.day_start_equity).toFixed(2):'—'),s.capital_account_proven===false?'bad':''),
       card('Peak eq',s.capital_account_proven===false?'UNPROVEN':(s.account?.peak_equity!=null?Number(s.account.peak_equity).toFixed(2):'—'),s.capital_account_proven===false?'bad':''),
       card('Reject cool',(s.reject_cooldown_ms||0)>0?(Math.ceil((s.reject_cooldown_ms||0)/1000)+'s'):'—',(s.reject_cooldown_ms||0)>0?'bad':''),
@@ -751,7 +751,7 @@ async function refresh(){
       card('Recovered',s.recovered?'YES':'—'),
       card('Persist',s.persist_ok===false?'DEGRADED':'OK',s.persist_ok===false?'bad':'ok'),
       card('Persist err',s.last_persist_error||'—',s.last_persist_error?'bad':''),
-      card('Last error',(s.recent_errors&&s.recent_errors[0])?(s.recent_errors[0].error_type+': '+s.recent_errors[0].message).slice(0,72):'—',(s.recent_errors&&s.recent_errors.length)?'bad':''),
+      card('Last error',(s.recent_errors&&s.recent_errors[0])?((cyclePending||monHydrated?'hydrated · ':'')+s.recent_errors[0].error_type+': '+s.recent_errors[0].message).slice(0,80):'—',(!cyclePending&&!monHydrated&&s.recent_errors&&s.recent_errors.length)?'bad':((cyclePending||monHydrated)&&s.recent_errors&&s.recent_errors.length?'warn':'')),
     ].join('');
     const pos=await fetch('/api/master/positions').then(r=>r.json());
     const list=pos.positions||[];
