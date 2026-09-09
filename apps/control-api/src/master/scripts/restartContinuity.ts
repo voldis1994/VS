@@ -298,6 +298,7 @@ async function main() {
   masterRuntime.last_exit_reason = null;
   masterRuntime.last_decision = null;
   masterRuntime.last_risk = null;
+  masterRuntime.last_execution_detail = null;
   masterRuntime.last_quote = null;
   masterRuntime.last_bars = [];
   masterRuntime.last_market = null;
@@ -387,6 +388,9 @@ async function main() {
     execution_stage_ok: stHydrate.pipeline_stages?.execution?.ok === true,
     execution_stage_detail:
       stHydrate.pipeline_stages?.execution?.detail ?? null,
+    execution_stage_hydrated: String(
+      stHydrate.pipeline_stages?.execution?.detail || ''
+    ).startsWith('hydrated ·'),
     market_validation_stage_ok:
       stHydrate.pipeline_stages?.market_validation?.ok === true,
     normalization_stage_ok:
@@ -456,6 +460,8 @@ async function main() {
     hydrateSnap.floating_pnl != null &&
     Number.isFinite(Number(hydrateSnap.floating_pnl)) &&
     hydrateSnap.execution_stage_ok === false &&
+    hydrateSnap.execution_stage_hydrated === true &&
+    String(hydrateSnap.execution_stage_detail || '').startsWith('hydrated ·') &&
     hydrateSnap.market_validation_stage_ok === false &&
     hydrateSnap.normalization_stage_ok === false &&
     hydrateSnap.broker_stage_ok === false &&
@@ -602,6 +608,7 @@ async function main() {
       floating_pnl_cached: hydrateSnap.floating_pnl_cached,
       execution_stage_ok: hydrateSnap.execution_stage_ok,
       execution_stage_detail: hydrateSnap.execution_stage_detail,
+      execution_stage_hydrated: hydrateSnap.execution_stage_hydrated,
       market_validation_stage_ok: hydrateSnap.market_validation_stage_ok,
       normalization_stage_ok: hydrateSnap.normalization_stage_ok,
       broker_stage_ok: hydrateSnap.broker_stage_ok,
