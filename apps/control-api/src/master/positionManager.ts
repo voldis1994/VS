@@ -696,6 +696,10 @@ export class PositionManager {
     }
 
     for (const pos of [...this.open.values()]) {
+      // Multi-epic book: do not manage SILVER with a GOLD quote mid (and vice versa)
+      if (quote.epic && !epicsMatch(pos.epic, quote.epic)) {
+        continue;
+      }
       const mark = protectiveMark(pos.side, quote);
       const fav = favorableMove(pos.side, pos.entry, mark);
       // Capital LIVE: soft mark exits need usable venue UPL (0 ≡ unread, like money helpers)

@@ -89,6 +89,30 @@ export class MasterPipeline {
     this.marketSetup = null;
   }
 
+  /** Snapshot sticky setup+structure for per-epic stash across desk ticks. */
+  snapshotMarketSetup(): {
+    setup: MarketSetup | null;
+    structure: StructureBook | null;
+  } {
+    return {
+      setup: this.marketSetup,
+      structure: this.structureBook,
+    };
+  }
+
+  /** Restore sticky setup+structure when switching back to an epic. */
+  restoreMarketSetup(snap: {
+    setup: MarketSetup | null;
+    structure: StructureBook | null;
+  } | null) {
+    if (!snap) {
+      this.resetMarketSetup();
+      return;
+    }
+    this.marketSetup = snap.setup;
+    this.structureBook = snap.structure;
+  }
+
   /** MARKET → VALIDATION → ANALYSIS → DECISION → AI → RISK */
   async runCycle(input: PipelineInput): Promise<PipelineResult> {
     const market = validateMarket(input.bars, input.quote, {

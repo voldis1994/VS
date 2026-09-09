@@ -199,6 +199,21 @@ export type MasterStatus = {
     reason: string;
     confirm: number;
   } | null;
+  /**
+   * Per-epic cycle snapshots — desk multi-epic ticks must not erase evidence.
+   * Keyed by Capital API epic (GOLD/SILVER aliases collapsed).
+   */
+  cycles_by_epic: Record<
+    string,
+    {
+      at: string;
+      market_setup: MasterStatus['market_setup'];
+      last_market: MasterStatus['last_market'];
+      decision_kind: string | null;
+      buy_score: number | null;
+      sell_score: number | null;
+    }
+  >;
   /** True when require_armed_setup is on (LIVE default). */
   setup_gate_armed: boolean;
   /** Live entry gate honesty for dashboard (news/hours/weekend). */
@@ -354,6 +369,29 @@ class MasterRuntime {
   last_market: MasterStatus['last_market'] = null;
   /** Sticky desk SETUP from last pipeline cycle */
   last_market_setup: MasterStatus['market_setup'] = null;
+  /**
+   * Per-epic sticky SETUP/structure — setEpic stashes/restores so GOLD↔SILVER
+   * desk ticks do not wipe ARMED setup.
+   */
+  private setupByEpic = new Map<
+    string,
+    {
+      setup: import('../services/marketSetup.js').MarketSetup | null;
+      structure: import('../services/marketSetup.js').StructureBook | null;
+    }
+  >();
+  /** Last cycle evidence per epic (dashboard / multi-robot honesty). */
+  private cycleByEpic = new Map<
+    string,
+    {
+      at: string;
+      market_setup: MasterStatus['market_setup'];
+      last_market: MasterStatus['last_market'];
+      decision_kind: string | null;
+      buy_score: number | null;
+      sell_score: number | null;
+    }
+  >();
   last_bars: Bar[] = [];
   last_quote: Quote | null = null;
   /** True while last_quote was restored from market_cache (cleared on live quote). */
@@ -482,13 +520,45 @@ class MasterRuntime {
   setEpic(epic: string) {
     const raw = String(epic || '').trim();
     // Capital.com markets epic is GOLD/SILVER — keep runtime aligned with API
+    let next: string;
     if (this.broker?.name === 'CAPITAL') {
-      this.epic = capitalApiEpic(raw) || raw || 'GOLD';
+      next = capitalApiEpic(raw) || raw || 'GOLD';
     } else {
-      this.epic = raw || this.epic;
+      next = raw || this.epic;
     }
-    this.pipeline.resetMarketSetup();
+    const prevKey = capitalApiEpic(this.epic) || String(this.epic || '').toUpperCase();
+    const nextKey = capitalApiEpic(next) || String(next || '').toUpperCase();
+    if (prevKey && nextKey && prevKey !== nextKey) {
+      const snap = this.pipeline.snapshotMarketSetup();
+      if (snap.setup || snap.structure) {
+        this.setupByEpic.set(prevKey, snap);
+      }
+      const restored = this.setupByEpic.get(nextKey) || null;
+      this.pipeline.restoreMarketSetup(restored);
+    } else if (!this.pipeline.getMarketSetup() && nextKey) {
+      const restored = this.setupByEpic.get(nextKey) || null;
+      if (restored) this.pipeline.restoreMarketSetup(restored);
+    }
+    this.epic = next;
     this.persistRuntimeGates();
+  }
+
+  /** Record last cycle evidence under the active epic key. */
+  private rememberCycleForEpic() {
+    const key = capitalApiEpic(this.epic) || String(this.epic || '').toUpperCase();
+    if (!key) return;
+    this.cycleByEpic.set(key, {
+      at: new Date().toISOString(),
+      market_setup: this.last_market_setup,
+      last_market: this.last_market,
+      decision_kind: this.last_decision?.kind ?? null,
+      buy_score: this.last_decision?.buy?.score ?? null,
+      sell_score: this.last_decision?.sell?.score ?? null,
+    });
+    const snap = this.pipeline.snapshotMarketSetup();
+    if (snap.setup || snap.structure) {
+      this.setupByEpic.set(key, snap);
+    }
   }
 
   /** Apply + persist manage/exit knobs (dashboard / operator). */
@@ -2679,6 +2749,7 @@ class MasterRuntime {
           confirm: cycle.market_setup.confirm,
         }
       : null;
+    this.rememberCycleForEpic();
     this.last_ai_allow_close = cycle.ai.allow_close !== false;
     this.persistRuntimeGates();
     this.trackPersist('opportunity', persistOpportunity(cycle.opportunity));
@@ -4889,6 +4960,7 @@ class MasterRuntime {
         }
         return s;
       })(),
+      cycles_by_epic: Object.fromEntries(this.cycleByEpic.entries()),
       setup_gate_armed: !!this.cfg.require_armed_setup,
       entry_gates: (() => {
         const now = Date.now();
