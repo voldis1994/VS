@@ -470,6 +470,12 @@ export class FilePersist implements PersistClient, JournalMirror {
         this.mem.manageConfigPayload
       );
     }
+    // Dual-write owns_pipeline sidecar when SQL path updated MemoryPersist
+    if (this.mem.ownsPipelinePayload) {
+      atomicWriteJson(join(this.root, 'owns_pipeline.json'), {
+        owns_pipeline: this.mem.ownsPipelinePayload.owns_pipeline === true,
+      });
+    }
   }
 
   async query(sql: string, params: unknown[] = []) {
