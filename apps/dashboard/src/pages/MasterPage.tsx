@@ -128,6 +128,13 @@ type MasterStatus = {
     total_fees?: number;
     total_pnl?: number;
   } | null;
+  performance_by_desk_entry?: Array<{
+    source: 'setup' | 'move' | 'none';
+    trades: number;
+    total_pnl: number;
+    expectancy: number;
+    win_rate: number;
+  }>;
   monte_carlo?: {
     p05?: number;
     p50?: number;
@@ -1005,6 +1012,19 @@ export function MasterPage() {
             !cyclePending &&
             !!status.performance?.trades &&
             Number(status.performance.total_pnl || 0) < 0,
+        },
+        {
+          k: 'Confirm PnL',
+          v: (() => {
+            const rows = status.performance_by_desk_entry || [];
+            const bits = rows
+              .filter((r) => r.trades > 0)
+              .map((r) => `${r.source}:${r.trades}/${Number(r.total_pnl).toFixed(1)}`);
+            return bits.length ? bits.join(' · ').slice(0, 80) : '—';
+          })(),
+          ok: (status.performance_by_desk_entry || []).some(
+            (r) => r.source !== 'none' && r.trades > 0
+          ),
         },
         {
           k: 'Day start eq',

@@ -123,6 +123,62 @@ export function fromOutcomes(outcomes: TradeOutcome[]): PerformanceReport {
   };
 }
 
+/** Desk confirm attribution — join DecisionEvent.opportunity_id → outcome. */
+export type DeskEntryPerfSlice = {
+  source: 'setup' | 'move' | 'none';
+  trades: number;
+  total_pnl: number;
+  expectancy: number;
+  win_rate: number;
+};
+
+/**
+ * Slice closed-trade performance by desk 10s confirm source (setup/move/none).
+ * Unjoined opportunities count as none (legacy / no confirm).
+ */
+export function performanceByDeskEntry(
+  records: OpportunityRecord[],
+  decisions: Array<{
+    opportunity_id: string | null;
+    desk_entry_source?: 'setup' | 'move' | string | null;
+  }>
+): DeskEntryPerfSlice[] {
+  const byOpp = new Map<string, 'setup' | 'move' | 'none'>();
+  for (const d of decisions) {
+    const id = d.opportunity_id ? String(d.opportunity_id) : '';
+    if (!id) continue;
+    const src: 'setup' | 'move' | 'none' =
+      d.desk_entry_source === 'setup' || d.desk_entry_source === 'move'
+        ? d.desk_entry_source
+        : 'none';
+    const prev = byOpp.get(id);
+    // Prefer confirm attribution when any decision for opp carried setup/move
+    if (!prev || (prev === 'none' && src !== 'none')) {
+      byOpp.set(id, src);
+    }
+  }
+  const buckets: Record<'setup' | 'move' | 'none', TradeOutcome[]> = {
+    setup: [],
+    move: [],
+    none: [],
+  };
+  for (const r of records) {
+    if (!r.outcome) continue;
+    const src = byOpp.get(String(r.id)) || 'none';
+    buckets[src].push(r.outcome);
+  }
+  return (['setup', 'move', 'none'] as const).map((source) => {
+    const perf = fromOutcomes(buckets[source]);
+    return {
+      source,
+      trades: perf.trades,
+      total_pnl: perf.total_pnl,
+      expectancy: perf.expectancy,
+      win_rate: perf.win_rate,
+    };
+  });
+}
+
 /** Monte Carlo drawdown / streak from reshuffled trade PnLs (empirical outcomes only). */
 export function monteCarlo(
   pnls: number[],
