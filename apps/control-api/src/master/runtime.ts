@@ -1350,10 +1350,11 @@ class MasterRuntime {
         ? { pnl: outcome.pnl, fees: outcome.fees }
         : {}),
     });
-    // Desk Flatten/Close: refresh equity/balance/peak from venue (same as manage closes)
+    // Desk Flatten/Close: refresh full venue account snapshot (equity/peak +
+    // available/trade_allowed + Capital prove) — same as manageOnly / full tick.
     try {
       const acct = await broker.getAccount();
-      if (acct) this.applyVenueAccountAfterClose(acct);
+      await this.applyVenueAccountSnapshot(broker, acct, quote);
     } catch {
       /* keep */
     }
@@ -2345,7 +2346,8 @@ class MasterRuntime {
       this.trackPersist('recover_orphan', persistOpportunity(stub));
     }
     // Sync-ghost / external-partial closes move venue equity (paper auto-fill)
-    // without manage/manual close — settle like manage: post-exit cool + equity/peak.
+    // without manage/manual close — settle like manage: post-exit cool + full
+    // venue account snapshot (Capital prove / trade gate parity with manageOnly).
     const syncClosed =
       (sync.orphans_local?.length || 0) + (sync.external_partials?.length || 0);
     if (syncClosed > 0) {
@@ -2358,7 +2360,7 @@ class MasterRuntime {
       if (this.broker) {
         try {
           const acct = await this.broker.getAccount();
-          if (acct) this.applyVenueAccountAfterClose(acct);
+          await this.applyVenueAccountSnapshot(this.broker, acct, quote);
         } catch {
           /* keep */
         }
@@ -3115,10 +3117,11 @@ class MasterRuntime {
           Date.now() + cool
         );
         this.persistRuntimeGates();
-        // Paper venue equity already updated on auto-fill / close — refresh account + peak
+        // Paper venue equity already updated on auto-fill / close — full snapshot
+        // (available/trade_allowed + Capital prove), not thinner AfterClose only.
         try {
           const acct = await broker.getAccount();
-          if (acct) this.applyVenueAccountAfterClose(acct);
+          await this.applyVenueAccountSnapshot(broker, acct, quote);
         } catch {
           /* keep */
         }
