@@ -7,6 +7,7 @@ import { DEFAULT_MASTER_CONFIG, MasterPipeline } from '../pipeline.js';
 import { PositionManager } from '../positionManager.js';
 import { syncPositionsWithBroker } from '../positionSync.js';
 import { masterRuntime } from '../runtime.js';
+import { loadRuntimeGates } from '../runtimeGates.js';
 
 describe('PaperBroker VS-System SL/TP auto-fill on setQuote', () => {
   it('auto-fills STOP_HIT on quote without manageTick', async () => {
@@ -955,6 +956,136 @@ describe('manageOnly equity refresh after close', () => {
       expect(
         (masterRuntime as unknown as { post_exit_until_ms: number }).post_exit_until_ms
       ).toBeGreaterThan(Date.now());
+    } finally {
+      try {
+        masterRuntime.ensurePaperBroker().hydrateAccount({
+          equity: 10_000,
+          balance: 10_000,
+        });
+      } catch {
+        /* ignore */
+      }
+      masterRuntime.stop();
+      if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prev;
+    }
+  });
+
+  it('manageOnlyTick clears spent last_entry_fingerprint when flat', async () => {
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = mkdtempSync(
+      join(tmpdir(), 'vs-manage-only-fp-clear-')
+    );
+    try {
+      masterRuntime.stop();
+      masterRuntime.pipeline = new MasterPipeline('PAPER');
+      masterRuntime.positions = new PositionManager();
+      masterRuntime.cfg = {
+        ...DEFAULT_MASTER_CONFIG,
+        mode: 'PAPER',
+        time_stop_max_bars: 0,
+        max_hold_ms: 86_400_000,
+        post_exit_cooldown_ms: 0,
+      };
+      const broker = masterRuntime.ensurePaperBroker();
+      broker.hydrateAccount({ equity: 10_000, balance: 10_000 });
+      masterRuntime.account.equity = 10_000;
+      masterRuntime.running = true;
+      (masterRuntime as unknown as { post_exit_until_ms: number }).post_exit_until_ms = 0;
+      (
+        masterRuntime as unknown as { last_entry_fingerprint: string | null }
+      ).last_entry_fingerprint = 'GOLD:BUY';
+
+      const entry = 4400;
+      const bars = Array.from({ length: 20 }, (_, i) => ({
+        open: entry,
+        high: entry + 1,
+        low: entry - 1,
+        close: entry,
+        ts_ms: Date.UTC(2026, 8, 9, 17, i),
+      }));
+      broker.setQuote({
+        bid: entry,
+        ask: entry + 0.2,
+        mid: entry + 0.1,
+        spread: 0.2,
+        epic: 'GOLD',
+        ts_ms: Date.now(),
+      });
+      const placed = await broker.placeOrder({
+        intent_id: 'manage-only-fp-clear-aaaaaaaa',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 1,
+        stop_level: entry - 2,
+        profit_level: entry + 20,
+      });
+      expect(placed.ok).toBe(true);
+      masterRuntime.positions.register({
+        position_id: placed.position_id!,
+        opportunity_id: 'opp-manage-only-fp-clear',
+        intent_id: 'manage-only-fp-clear-aaaaaaaa',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 1,
+        entry: placed.fill_price!,
+        stop_loss: entry - 2,
+        take_profit: entry + 20,
+        decision: {
+          decision_id: 'd-fp',
+          kind: 'BUY',
+          side: 'BUY',
+          score: 0.7,
+          block_reason: null,
+          buy: null as never,
+          sell: null as never,
+          analysis: {
+            regime: 'TREND',
+            market_state: 't',
+            momentum_score: 0.5,
+            momentum_dir: 'UP',
+            trend_dir: 'UP',
+            trend_strength: 0.5,
+            structure_bias: 'BULLISH',
+            swing_high: entry + 5,
+            swing_low: entry - 5,
+            buy_pressure: 0.6,
+            sell_pressure: 0.4,
+            behavior_bull: 0.5,
+            behavior_bear: 0.5,
+            impact_score: 0.5,
+            context_quality: 0.8,
+            volatility: 0.001,
+            atr: 1,
+            data_quality: 0.9,
+            session: 'LONDON',
+          },
+          expectancy: null,
+        },
+      });
+
+      const crash = {
+        bid: entry - 3,
+        ask: entry - 2.8,
+        mid: entry - 2.9,
+        spread: 0.2,
+        epic: 'GOLD',
+        ts_ms: Date.now(),
+      };
+      broker.setQuote(crash);
+      await (
+        masterRuntime as unknown as {
+          manageOnlyTick: (b: typeof bars, q: typeof crash) => Promise<void>;
+        }
+      ).manageOnlyTick(bars, crash);
+
+      expect(masterRuntime.positions.count()).toBe(0);
+      expect(
+        (masterRuntime as unknown as { last_entry_fingerprint: string | null })
+          .last_entry_fingerprint
+      ).toBeNull();
+      // Persisted gates must not revive a spent fingerprint on restart
+      expect(loadRuntimeGates()?.last_entry_fingerprint ?? null).toBeNull();
     } finally {
       try {
         masterRuntime.ensurePaperBroker().hydrateAccount({
