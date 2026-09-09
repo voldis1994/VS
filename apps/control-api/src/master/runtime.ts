@@ -36,9 +36,11 @@ import {
   mapRegimeToPlaybook,
   PositionManager,
   protectiveMark,
+  quoteMatchesPosition,
   stableRecoverUuid,
   toDeskRegime,
   type ManagedPosition,
+  type ManageTickResult,
 } from './positionManager.js';
 import { evaluateRisk } from './risk.js';
 import { setupKey } from './decision.js';
@@ -292,6 +294,21 @@ export type MasterStatus = {
    * Dashboard must not paint green/red as live mark-to-market.
    */
   floating_pnl_cached: boolean;
+  /**
+   * Float UPL only includes opens matching the active quote epic.
+   * True when other-epic opens exist and were excluded from the mark.
+   */
+  floating_pnl_epic_scoped: boolean;
+  /**
+   * Multi-epic manage honesty — which epics got a quote this manage pass,
+   * and which still open epics lack a usable mark (quote fetch failed).
+   */
+  manage_epics: {
+    managed: string[];
+    quote_fetch_failed: string[];
+    unmanaged_open: string[];
+    at: string | null;
+  };
   /** Remaining reject cooldown ms (0 = clear) */
   reject_cooldown_ms: number;
   /** Remaining post-exit cooldown ms (VS re-entry settle) */
@@ -463,6 +480,12 @@ class MasterRuntime {
   private manageTimer: ReturnType<typeof setInterval> | null = null;
   /** Last successful manageTick wall time — stage honesty (never forge green). */
   private last_manage_tick_ms = 0;
+  /** Last multi-epic manage pass — dashboard honesty for unmanaged opens. */
+  private last_manage_epics: {
+    managed: string[];
+    quote_fetch_failed: string[];
+    at: string;
+  } | null = null;
   private lastFullTickAt = 0;
   private seenIntentSnapshot: string[] = [];
   /** Serialize tick() across live-feed / API / desk so opens+persist never race. */
@@ -2602,64 +2625,11 @@ class MasterRuntime {
     this.account.open_positions = this.positions.count();
     const instrument = this.resolveInstrument(broker, quote);
 
-    // Structure for Reader swing trail (from current bars — before entry cycle)
-    const structure = bars.length >= 5 ? analyzeBars(bars, quote.spread) : null;
-    const trailBuf =
-      structure && structure.atr > 0
-        ? structure.atr * this.cfg.trailing_buffer_atr_mult
-        : 0;
-    // VS-System live Close[0]: EMA1≈mid, EMA3 from forming tip; prev from closed only
-    const liveEma = emaTickLiveFromBars(bars, quote.mid, Date.now(), 10_000);
-    const ema3 =
-      liveEma?.ema3 ?? (bars.length >= 3 ? emaFromBars(bars, 3) : null);
-    const ema1Pair = emaPairFromBars(bars, 1);
-    const ema3Pair = emaPairFromBars(bars, 3);
-    const ema1 = liveEma?.ema1 ?? ema1Pair?.cur ?? null;
-    const ema1_prev = liveEma?.ema1Prev ?? ema1Pair?.prev ?? null;
-    const ema3_prev = liveEma?.ema3Prev ?? ema3Pair?.prev ?? null;
-    const ema1_prev2 = liveEma?.ema1Prev2 ?? ema1Pair?.prev2 ?? null;
-    const ema3_prev2 = liveEma?.ema3Prev2 ?? ema3Pair?.prev2 ?? null;
-
-    // 1) Manage exits first (position manager owns open risk)
-    const liveMinStop =
-      broker instanceof CapitalBroker
-        ? broker.liveMinStopDistance(this.epic)
-        : quote.min_stop_distance ?? null;
-    const managed = await this.positions.manageTick({
+    // 1) Manage exits first — every open epic with its own quote (never SILVER on GOLD mid)
+    const managed = await this.runManageAcrossOpenEpics({
       broker,
-      pipeline: this.pipeline,
       quote,
-      instrument_point_value: instrument.value_per_point_per_lot,
-      max_hold_ms: this.cfg.max_hold_ms,
-      breakeven_progress: this.cfg.breakeven_progress,
-      breakeven_offset: this.cfg.breakeven_offset,
-      be_start: this.cfg.be_start,
-      trail_start: this.cfg.trail_start,
-      trail_lock: this.cfg.trail_lock,
-      partial_close_progress: this.cfg.partial_close_progress,
-      partial_close_volume: this.cfg.partial_close_volume,
-      volume_step: instrument.volume_step,
-      swing_low: structure?.swing_low ?? null,
-      swing_high: structure?.swing_high ?? null,
-      trailing_buffer: trailBuf,
-      ema3,
-      ema1,
-      ema1_prev,
-      ema3_prev,
-      ema1_prev2,
-      ema3_prev2,
-      allow_close:
-        this.cfg.ai_mode === 'off' ? true : this.last_ai_allow_close,
-      close_all_profit: this.cfg.close_all_profit,
-      close_all_loss: this.cfg.close_all_loss,
-      min_stop_distance: liveMinStop,
-      breakeven_activation_money: this.cfg.breakeven_activation_money,
-      soft_trail_money_arm: this.cfg.soft_trail_money_arm,
-      soft_trail_pips: this.cfg.soft_trail_pips,
-      scalp_pct_chase: this.cfg.scalp_pct_chase,
-      scalp_lock_pct: this.cfg.scalp_lock_pct,
-      stale_quote_ms: this.cfg.stale_quote_ms,
-      live_regime: structure?.regime ?? null,
+      bars,
     });
     this.last_manage_tick_ms = Date.now();
     const exit_reasons = managed.closed.map((c) => c.reason);
@@ -4332,6 +4302,195 @@ class MasterRuntime {
     return this.last_bars.slice(-n);
   }
 
+  /**
+   * Manage every open epic with a matching quote.
+   * Primary quote (active cycle) gets structure/EMA from bars; other open epics
+   * fetch their own broker quotes and manage without foreign GOLD structure.
+   */
+  private async runManageAcrossOpenEpics(input: {
+    broker: MasterBroker;
+    quote: Quote;
+    bars: Bar[];
+  }): Promise<ManageTickResult> {
+    const { broker, bars } = input;
+    const primaryQuote: Quote = {
+      ...input.quote,
+      epic: input.quote.epic || this.epic,
+    };
+    const merge = (
+      a: ManageTickResult,
+      b: ManageTickResult
+    ): ManageTickResult => ({
+      held: this.positions.list(),
+      closed: [...a.closed, ...b.closed],
+      close_failed: [...a.close_failed, ...b.close_failed],
+      skipped_wrong_epic: a.skipped_wrong_epic + b.skipped_wrong_epic,
+      skipped_epics: [
+        ...new Set([...a.skipped_epics, ...b.skipped_epics]),
+      ].sort((x, y) => x.localeCompare(y)),
+    });
+
+    const runOne = async (
+      quote: Quote,
+      withStructure: boolean
+    ): Promise<ManageTickResult> => {
+      const epicKey =
+        capitalApiEpic(quote.epic || this.epic) ||
+        String(quote.epic || this.epic).trim().toUpperCase();
+      const instrumentBase = specForEpic(epicKey || this.epic);
+      const fromQuote =
+        quote.point != null && Number.isFinite(quote.point) && quote.point > 0
+          ? Number(quote.point)
+          : null;
+      const instrument =
+        fromQuote != null && fromQuote > 0
+          ? { ...instrumentBase, point: fromQuote }
+          : instrumentBase;
+      const structure =
+        withStructure && bars.length >= 5
+          ? analyzeBars(bars, quote.spread)
+          : null;
+      const trailBuf =
+        structure && structure.atr > 0
+          ? structure.atr * this.cfg.trailing_buffer_atr_mult
+          : 0;
+      const liveEma =
+        withStructure && bars.length
+          ? emaTickLiveFromBars(bars, quote.mid, Date.now(), 10_000)
+          : null;
+      const ema3 = withStructure
+        ? liveEma?.ema3 ?? (bars.length >= 3 ? emaFromBars(bars, 3) : null)
+        : null;
+      const ema1Pair = withStructure ? emaPairFromBars(bars, 1) : null;
+      const ema3Pair = withStructure ? emaPairFromBars(bars, 3) : null;
+      const liveMinStop =
+        broker instanceof CapitalBroker
+          ? broker.liveMinStopDistance(epicKey || this.epic)
+          : quote.min_stop_distance ?? null;
+      return this.positions.manageTick({
+        broker,
+        pipeline: this.pipeline,
+        quote,
+        instrument_point_value: instrument.value_per_point_per_lot,
+        max_hold_ms: this.cfg.max_hold_ms,
+        breakeven_progress: this.cfg.breakeven_progress,
+        breakeven_offset: this.cfg.breakeven_offset,
+        be_start: this.cfg.be_start,
+        trail_start: this.cfg.trail_start,
+        trail_lock: this.cfg.trail_lock,
+        partial_close_progress: this.cfg.partial_close_progress,
+        partial_close_volume: this.cfg.partial_close_volume,
+        volume_step: instrument.volume_step,
+        swing_low: structure?.swing_low ?? null,
+        swing_high: structure?.swing_high ?? null,
+        trailing_buffer: trailBuf,
+        ema3,
+        ema1: withStructure
+          ? liveEma?.ema1 ?? ema1Pair?.cur ?? null
+          : null,
+        ema1_prev: withStructure
+          ? liveEma?.ema1Prev ?? ema1Pair?.prev ?? null
+          : null,
+        ema3_prev: withStructure
+          ? liveEma?.ema3Prev ?? ema3Pair?.prev ?? null
+          : null,
+        ema1_prev2: withStructure
+          ? liveEma?.ema1Prev2 ?? ema1Pair?.prev2 ?? null
+          : null,
+        ema3_prev2: withStructure
+          ? liveEma?.ema3Prev2 ?? ema3Pair?.prev2 ?? null
+          : null,
+        allow_close:
+          this.cfg.ai_mode === 'off' ? true : this.last_ai_allow_close,
+        close_all_profit: this.cfg.close_all_profit,
+        close_all_loss: this.cfg.close_all_loss,
+        min_stop_distance: liveMinStop,
+        breakeven_activation_money: this.cfg.breakeven_activation_money,
+        soft_trail_money_arm: this.cfg.soft_trail_money_arm,
+        soft_trail_pips: this.cfg.soft_trail_pips,
+        scalp_pct_chase: this.cfg.scalp_pct_chase,
+        scalp_lock_pct: this.cfg.scalp_lock_pct,
+        stale_quote_ms: this.cfg.stale_quote_ms,
+        live_regime: structure?.regime ?? null,
+      });
+    };
+
+    let merged = await runOne(primaryQuote, true);
+    const managedKeys = new Set<string>();
+    const primaryKey =
+      capitalApiEpic(primaryQuote.epic) ||
+      String(primaryQuote.epic || '').trim().toUpperCase();
+    if (primaryKey) managedKeys.add(primaryKey);
+
+    const fetchFailed: string[] = [];
+    for (const epic of this.positions.openEpicKeys()) {
+      if (primaryKey && epicsMatch(epic, primaryKey)) continue;
+      let live: Quote | null = null;
+      try {
+        const got = await Promise.race([
+          broker.getQuote(epic),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 2_000)),
+        ]);
+        if (
+          got &&
+          Number.isFinite(got.mid) &&
+          got.mid > 0 &&
+          epicsMatch(got.epic || epic, epic)
+        ) {
+          const liveTs =
+            got.ts_ms != null && Number.isFinite(got.ts_ms) && got.ts_ms > 0
+              ? got.ts_ms
+              : Date.now() - 60_000;
+          live = {
+            bid: got.bid,
+            ask: got.ask,
+            mid: got.mid,
+            spread: got.spread,
+            epic: got.epic || epic,
+            ts_ms: liveTs,
+            min_stop_distance: got.min_stop_distance ?? null,
+            digits: got.digits,
+            point: got.point,
+          };
+        }
+      } catch {
+        live = null;
+      }
+      if (!live) {
+        fetchFailed.push(epic);
+        continue;
+      }
+      if (broker instanceof PaperBroker) {
+        broker.setQuote({
+          bid: live.bid,
+          ask: live.ask,
+          mid: live.mid,
+          spread: live.spread,
+          epic: live.epic || epic,
+          ts_ms: live.ts_ms,
+        });
+      }
+      const secondary = await runOne(live, false);
+      merged = merge(merged, secondary);
+      managedKeys.add(epic);
+    }
+
+    const unmanagedOpen = this.positions
+      .openEpicKeys()
+      .filter((e) => ![...managedKeys].some((m) => epicsMatch(m, e)));
+    this.last_manage_epics = {
+      managed: [...managedKeys].sort((a, b) => a.localeCompare(b)),
+      quote_fetch_failed: [
+        ...new Set([...fetchFailed, ...unmanagedOpen]),
+      ].sort((a, b) => a.localeCompare(b)),
+      at: new Date().toISOString(),
+    };
+    return {
+      ...merged,
+      held: this.positions.list(),
+    };
+  }
+
   private async manageOnlyUnlocked(bars: Bar[], quoteIn: Quote): Promise<void> {
     // Opens must manage/exit even when runtime_stopped — Recover bootstrap + Stop-with-opens
     if (this.positions.count() === 0) return;
@@ -4411,56 +4570,10 @@ class MasterRuntime {
       return;
     }
     this.account.open_positions = this.positions.count();
-    const instrument = this.resolveInstrument(broker, quote);
-    const structure = bars.length >= 5 ? analyzeBars(bars, quote.spread) : null;
-    const trailBuf =
-      structure && structure.atr > 0
-        ? structure.atr * this.cfg.trailing_buffer_atr_mult
-        : 0;
-    const liveEma = emaTickLiveFromBars(bars, quote.mid, Date.now(), 10_000);
-    const ema3 =
-      liveEma?.ema3 ?? (bars.length >= 3 ? emaFromBars(bars, 3) : null);
-    const ema1Pair = emaPairFromBars(bars, 1);
-    const ema3Pair = emaPairFromBars(bars, 3);
-    const liveMinStop =
-      broker instanceof CapitalBroker
-        ? broker.liveMinStopDistance(this.epic)
-        : quote.min_stop_distance ?? null;
-    const managed = await this.positions.manageTick({
+    const managed = await this.runManageAcrossOpenEpics({
       broker,
-      pipeline: this.pipeline,
       quote,
-      instrument_point_value: instrument.value_per_point_per_lot,
-      max_hold_ms: this.cfg.max_hold_ms,
-      breakeven_progress: this.cfg.breakeven_progress,
-      breakeven_offset: this.cfg.breakeven_offset,
-      be_start: this.cfg.be_start,
-      trail_start: this.cfg.trail_start,
-      trail_lock: this.cfg.trail_lock,
-      partial_close_progress: this.cfg.partial_close_progress,
-      partial_close_volume: this.cfg.partial_close_volume,
-      volume_step: instrument.volume_step,
-      swing_low: structure?.swing_low ?? null,
-      swing_high: structure?.swing_high ?? null,
-      trailing_buffer: trailBuf,
-      ema3,
-      ema1: liveEma?.ema1 ?? ema1Pair?.cur ?? null,
-      ema1_prev: liveEma?.ema1Prev ?? ema1Pair?.prev ?? null,
-      ema3_prev: liveEma?.ema3Prev ?? ema3Pair?.prev ?? null,
-      ema1_prev2: liveEma?.ema1Prev2 ?? ema1Pair?.prev2 ?? null,
-      ema3_prev2: liveEma?.ema3Prev2 ?? ema3Pair?.prev2 ?? null,
-      allow_close:
-        this.cfg.ai_mode === 'off' ? true : this.last_ai_allow_close,
-      close_all_profit: this.cfg.close_all_profit,
-      close_all_loss: this.cfg.close_all_loss,
-      min_stop_distance: liveMinStop,
-      breakeven_activation_money: this.cfg.breakeven_activation_money,
-      soft_trail_money_arm: this.cfg.soft_trail_money_arm,
-      soft_trail_pips: this.cfg.soft_trail_pips,
-      scalp_pct_chase: this.cfg.scalp_pct_chase,
-      scalp_lock_pct: this.cfg.scalp_lock_pct,
-      stale_quote_ms: this.cfg.stale_quote_ms,
-      live_regime: structure?.regime ?? null,
+      bars,
     });
     this.last_manage_tick_ms = Date.now();
     for (const c of managed.closed) {
@@ -4570,20 +4683,28 @@ class MasterRuntime {
       (quote == null ||
         quoteAgeMs == null ||
         quoteAgeMs > this.cfg.stale_quote_ms);
+    const opens = this.positions.list();
+    const quoteEpic = quote?.epic || this.epic;
+    const opensMatchingQuote = opens.filter((p) =>
+      quoteMatchesPosition({ epic: quoteEpic }, p.epic)
+    );
+    const otherEpicOpens = opens.filter(
+      (p) => !quoteMatchesPosition({ epic: quoteEpic }, p.epic)
+    );
     const floatingRaw = quote
       ? floatingUnrealizedPnl(
-          this.positions.list(),
+          opensMatchingQuote,
           quote,
           pv,
           capitalLiveAttached
         )
       : null;
     // Capital LIVE: unknown / unread venue UPL (null or 0) → null float
-    const opens = this.positions.list();
+    // Only require UPL on quote-matching opens — other-epic opens are excluded from Float UPL
     const floating =
       capitalLiveAttached &&
-      opens.length > 0 &&
-      opens.some((p) => usableBrokerUpl(p.broker_upl) == null)
+      opensMatchingQuote.length > 0 &&
+      opensMatchingQuote.some((p) => usableBrokerUpl(p.broker_upl) == null)
         ? null
         : floatingRaw;
     const streamHealthy =
@@ -5114,7 +5235,22 @@ class MasterRuntime {
       floating_pnl_cached:
         floating != null &&
         this.quoteFromDiskCache === true &&
-        opens.length > 0,
+        opensMatchingQuote.length > 0,
+      floating_pnl_epic_scoped: otherEpicOpens.length > 0,
+      manage_epics: (() => {
+        const managed = this.last_manage_epics?.managed ?? [];
+        const failed = this.last_manage_epics?.quote_fetch_failed ?? [];
+        const openKeys = this.positions.openEpicKeys();
+        const unmanaged_open = openKeys.filter(
+          (e) => !managed.some((m) => epicsMatch(m, e))
+        );
+        return {
+          managed,
+          quote_fetch_failed: failed,
+          unmanaged_open,
+          at: this.last_manage_epics?.at ?? null,
+        };
+      })(),
       reject_cooldown_ms: Math.max(0, this.reject_until_ms - Date.now()),
       post_exit_cooldown_ms: Math.max(0, this.post_exit_until_ms - Date.now()),
       recent_errors: loadMasterErrors(8).map((e) => ({

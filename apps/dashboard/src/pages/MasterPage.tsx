@@ -210,6 +210,15 @@ type MasterStatus = {
   floating_pnl?: number | null;
   /** Disk-cache quote mark — Float UPL must not paint as live MTM */
   floating_pnl_cached?: boolean;
+  /** Other-epic opens excluded from Float UPL (active quote only) */
+  floating_pnl_epic_scoped?: boolean;
+  /** Multi-epic manage pass honesty */
+  manage_epics?: {
+    managed: string[];
+    quote_fetch_failed: string[];
+    unmanaged_open: string[];
+    at: string | null;
+  };
   reject_cooldown_ms?: number;
   post_exit_cooldown_ms?: number;
   recent_errors?: Array<{
@@ -480,8 +489,12 @@ export function MasterPage() {
           k: 'Float UPL',
           v:
             status.floating_pnl != null
-              ? `${status.floating_pnl_cached ? 'cached · ' : ''}${Number(status.floating_pnl).toFixed(2)}`
-              : '—',
+              ? `${status.floating_pnl_cached ? 'cached · ' : ''}${
+                  status.floating_pnl_epic_scoped ? 'epic · ' : ''
+                }${Number(status.floating_pnl).toFixed(2)}`
+              : status.floating_pnl_epic_scoped
+                ? 'epic · —'
+                : '—',
           // Disk-cache mark must not paint live green/red MTM
           bad:
             !status.floating_pnl_cached &&
@@ -491,6 +504,25 @@ export function MasterPage() {
             !status.floating_pnl_cached &&
             status.floating_pnl != null &&
             status.floating_pnl > 0,
+        },
+        {
+          k: 'Manage epics',
+          v: (() => {
+            const m = status.manage_epics;
+            if (!m) return '—';
+            const managed = (m.managed || []).join(',') || '—';
+            const fail = [
+              ...(m.quote_fetch_failed || []),
+              ...(m.unmanaged_open || []),
+            ];
+            const uniq = [...new Set(fail)];
+            if (!uniq.length) return managed;
+            return `${managed} · skip ${uniq.join(',')}`.slice(0, 80);
+          })(),
+          bad: (status.manage_epics?.unmanaged_open?.length || 0) > 0,
+          ok:
+            (status.manage_epics?.managed?.length || 0) > 0 &&
+            !(status.manage_epics?.unmanaged_open?.length || 0),
         },
         {
           k: 'Manage',

@@ -7,7 +7,7 @@ import { decideBestOutcomeExit, favorableMove } from '../services/exitManage.js'
 import { playbookFromRegime } from '../services/playbooks.js';
 import { ema13CrossExit, ema3PriceSide, ema3PriceThroughExit } from './analysis.js';
 import type { MasterBroker } from './broker.js';
-import { epicsMatch } from './broker.js';
+import { capitalApiEpic, epicsMatch } from './broker.js';
 import { clampStopForCapitalMark, effectiveMinStopDistance } from './capitalStop.js';
 import {
   clampCloseVolume,
@@ -115,7 +115,21 @@ export type ManageTickResult = {
   closed: Array<{ position: ManagedPosition; outcome: TradeOutcome; reason: string }>;
   /** Exit verdict fired but broker.closePosition failed — do not journal as closed */
   close_failed: Array<{ position_id: string; exit_reason: string; detail: string }>;
+  /** Opens skipped because quote.epic does not match position epic (multi-epic book). */
+  skipped_wrong_epic: number;
+  /** Distinct Capital API epics among skipped opens (GOLD/SILVER collapsed). */
+  skipped_epics: string[];
 };
+
+/** True when quote may price/manage this position (missing quote.epic = legacy single-epic). */
+export function quoteMatchesPosition(
+  quote: Pick<Quote, 'epic'> | null | undefined,
+  posEpic: string
+): boolean {
+  const qEpic = quote?.epic;
+  if (!qEpic || !String(qEpic).trim()) return true;
+  return epicsMatch(posEpic, qEpic);
+}
 
 /** Reader EXTERNAL_PARTIAL_CLOSE — closed slice detected via broker size shrink. */
 export type ExternalPartialEvent = {
@@ -223,6 +237,20 @@ export class PositionManager {
 
   countForEpic(epic: string) {
     return [...this.open.values()].filter((p) => epicsMatch(p.epic, epic)).length;
+  }
+
+  /** Distinct Capital API epics currently open (GOLD/SILVER aliases collapsed). */
+  openEpicKeys(): string[] {
+    const keys = new Set<string>();
+    for (const p of this.open.values()) {
+      const k = capitalApiEpic(p.epic) || String(p.epic || '').trim().toUpperCase();
+      if (k) keys.add(k);
+    }
+    return [...keys].sort((a, b) => a.localeCompare(b));
+  }
+
+  listForEpic(epic: string): ManagedPosition[] {
+    return [...this.open.values()].filter((p) => epicsMatch(p.epic, epic));
   }
 
   adopt(pos: ManagedPosition) {
@@ -429,6 +457,21 @@ export class PositionManager {
     const closeAllLoss = input.close_all_loss ?? 0;
     const closed: ManageTickResult['closed'] = [];
     const close_failed: ManageTickResult['close_failed'] = [];
+    const skippedEpicKeys = new Set<string>();
+    let skippedWrongEpic = 0;
+    const noteSkip = (pos: ManagedPosition) => {
+      skippedWrongEpic += 1;
+      const k =
+        capitalApiEpic(pos.epic) || String(pos.epic || '').trim().toUpperCase();
+      if (k) skippedEpicKeys.add(k);
+    };
+    const finish = (): ManageTickResult => ({
+      held: this.list(),
+      closed,
+      close_failed,
+      skipped_wrong_epic: skippedWrongEpic,
+      skipped_epics: [...skippedEpicKeys].sort((a, b) => a.localeCompare(b)),
+    });
 
     // Check- stale market: skip mark-based soft manage / portfolio closes on dead quotes.
     // Hard STOP_HIT / TP_HIT still fire (protective levels are binding). TIME_STOP still runs.
@@ -439,11 +482,16 @@ export class PositionManager {
       nowMs - quote.ts_ms > staleMs;
     if (quoteStale) {
       for (const pos of this.list()) {
+        if (!quoteMatchesPosition(quote, pos.epic)) continue;
         if (pos.stop_loss == null) {
           await this.maybeRecoverNakedStop(broker, pos, quote, minStopDist);
         }
       }
       for (const pos of [...this.open.values()]) {
+        if (!quoteMatchesPosition(quote, pos.epic)) {
+          noteSkip(pos);
+          continue;
+        }
         const heldMs = nowMs - new Date(pos.entry_at).getTime();
         const protective = protectiveExit(pos, quote);
         const timeStop =
@@ -530,12 +578,16 @@ export class PositionManager {
         this.open.delete(pos.position_id);
         closed.push({ position: pos, outcome, reason: outcome.exit_reason });
       }
-      return { held: this.list(), closed, close_failed };
+      return finish();
     }
 
     // hard_only (replay adverse/favorable extremes): STOP/TP only — no soft/portfolio
     if (hardOnly) {
       for (const pos of [...this.open.values()]) {
+        if (!quoteMatchesPosition(quote, pos.epic)) {
+          noteSkip(pos);
+          continue;
+        }
         const protective = protectiveExit(pos, quote);
         if (!protective) continue;
         const closeRes = await broker.closePosition(pos.position_id);
@@ -596,16 +648,20 @@ export class PositionManager {
         this.open.delete(pos.position_id);
         closed.push({ position: pos, outcome, reason: outcome.exit_reason });
       }
-      return { held: this.list(), closed, close_failed };
+      return finish();
     }
 
     // Check- portfolio close-all on floating PnL (before per-position manage)
-    // Capital LIVE: refuse portfolio money exits while any open lacks usable venue UPL
+    // Capital LIVE: refuse portfolio money exits while any *quote-matching* open lacks usable venue UPL
+    // Multi-epic: only price/close positions matching this quote — never SILVER marks from GOLD mid
+    const portfolioUniverse = this.list().filter((p) =>
+      quoteMatchesPosition(quote, p.epic)
+    );
     const capitalFloatReady =
       !capitalLive ||
-      this.list().every((p) => usableBrokerUpl(p.broker_upl) != null);
+      portfolioUniverse.every((p) => usableBrokerUpl(p.broker_upl) != null);
     const floatPnl = capitalFloatReady
-      ? floatingUnrealizedPnl(this.list(), quote, pv, capitalLive)
+      ? floatingUnrealizedPnl(portfolioUniverse, quote, pv, capitalLive)
       : 0;
     const portfolio = capitalFloatReady
       ? decidePortfolioCloseAll({
@@ -617,6 +673,10 @@ export class PositionManager {
     const portfolioReason = portfolio.close ? portfolio.reason : null;
     if (portfolioReason) {
       for (const pos of [...this.open.values()]) {
+        if (!quoteMatchesPosition(quote, pos.epic)) {
+          noteSkip(pos);
+          continue;
+        }
         const mark = protectiveMark(pos.side, quote);
         const heldMs = nowMs - new Date(pos.entry_at).getTime();
         if (!allowClose) {
@@ -692,12 +752,13 @@ export class PositionManager {
         this.open.delete(pos.position_id);
         closed.push({ position: pos, outcome, reason: outcome.exit_reason });
       }
-      return { held: this.list(), closed, close_failed };
+      return finish();
     }
 
     for (const pos of [...this.open.values()]) {
       // Multi-epic book: do not manage SILVER with a GOLD quote mid (and vice versa)
-      if (quote.epic && !epicsMatch(pos.epic, quote.epic)) {
+      if (!quoteMatchesPosition(quote, pos.epic)) {
+        noteSkip(pos);
         continue;
       }
       const mark = protectiveMark(pos.side, quote);
@@ -1266,7 +1327,7 @@ export class PositionManager {
       closed.push({ position: pos, outcome, reason: outcome.exit_reason });
     }
 
-    return { held: this.list(), closed, close_failed };
+    return finish();
   }
 
   /**
