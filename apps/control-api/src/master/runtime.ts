@@ -985,7 +985,12 @@ class MasterRuntime {
           pnlAll += o.outcome.pnl;
         }
         if (!capitalAttached) {
-          this.account.equity = this.account.balance + pnlAll;
+          // Full journal closed PnL from paper start (£10k). Sync balance to
+          // realized cash so seedPaperBroker/MTM do not prefer stale £10k cash.
+          const paperStart = 10_000;
+          const cash = paperStart + pnlAll;
+          this.account.balance = cash;
+          this.account.equity = cash;
           if (this.account.equity > this.account.peak_equity) {
             this.account.peak_equity = this.account.equity;
           }
@@ -3886,14 +3891,17 @@ class MasterRuntime {
     // never invent equity/peak from balance + journal (double-counts when proven).
     // Leave equity/peak for tick getAccount; paper path still rebuilds from journal.
     if (!(this.broker instanceof CapitalBroker && !this.broker.paper)) {
-      this.account.equity = this.account.balance + pnlAll;
+      // Full journal closed PnL from paper start (£10k). Sync balance to realized
+      // cash so seedPaperBroker + markToMarket use cash+UPL (not stale £10k+UPL).
+      const paperStart = 10_000;
+      const cash = paperStart + pnlAll;
+      this.account.balance = cash;
+      this.account.equity = cash;
       if (this.account.equity > this.account.peak_equity) {
         this.account.peak_equity = this.account.equity;
       }
     }
     // PAPER: reseed broker cash/opens before optional MTM + UTC day-roll.
-    // Only MTM when opens exist — flat journal equity is already cash truth;
-    // markToMarket prefers balance as cash and would wipe balance+pnlAll rebuild.
     this.seedPaperBrokerFromPositions();
     if (
       this.broker instanceof PaperBroker &&

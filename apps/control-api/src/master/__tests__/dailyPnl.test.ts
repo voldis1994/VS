@@ -472,11 +472,217 @@ describe('MASTER daily pnl day boundary', () => {
     const today = new Date().toISOString().slice(0, 10);
     expect(masterRuntime.account.daily_pnl_day).toBe(today);
     expect(masterRuntime.account.equity).toBe(9750);
+    expect(masterRuntime.account.balance).toBe(9750);
     // day_start must seed from journal-rebuilt equity, not stale £10k leftovers
     expect(masterRuntime.account.day_start_equity).toBe(9750);
     expect(masterRuntime.account.daily_pnl).toBe(0);
 
     masterRuntime.stop();
+    if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+    else process.env.MASTER_STATE_DIR = prev;
+  });
+
+  it('recover syncs paper cash balance so open-book MTM day_start uses cash+UPL', async () => {
+    const { mkdtempSync, writeFileSync } = await import('fs');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const { installFilePersist } = await import('../filePersist.js');
+    const { saveRuntimeGates } = await import('../runtimeGates.js');
+
+    const dir = mkdtempSync(join(tmpdir(), 'vs-recover-paper-cash-'));
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = dir;
+    installFilePersist(dir);
+
+    const entry = 4400;
+    const markBid = entry - 0.5;
+    writeFileSync(
+      join(dir, 'master_state.json'),
+      JSON.stringify({
+        opportunities: [
+          {
+            id: '00000000-0000-4000-8000-0000000000bb',
+            ts: '2000-01-01T12:00:00.000Z',
+            mode: 'PAPER',
+            epic: 'GOLD',
+          },
+        ],
+        outcomes: [
+          {
+            opportunity_id: '00000000-0000-4000-8000-0000000000bb',
+            setup_key: 'TREND:BUY',
+            created_at: '2000-01-01T12:05:00.000Z',
+            outcome: {
+              position_id: 'p-prior-close',
+              side: 'BUY',
+              entry: 4400,
+              exit: 4390,
+              volume: 1,
+              pnl: -250,
+              fees: 0,
+              slippage: 0,
+              mae: 10,
+              mfe: 0,
+              r_multiple: -1,
+              hold_ms: 1000,
+              exit_reason: 'STOP_HIT',
+            },
+          },
+        ],
+        positions: [
+          {
+            position_id: 'paper-open-cash-mtm',
+            opportunity_id: '00000000-0000-4000-8000-0000000000cc',
+            intent_id: 'recover-paper-cash-aaaaaaaa',
+            epic: 'GOLD',
+            side: 'BUY',
+            size: 1,
+            entry,
+            stop_loss: entry - 50,
+            take_profit: entry + 50,
+            entry_at: '2000-01-01T18:00:00.000Z',
+            decision: {
+              decision_id: 'd-cash',
+              kind: 'BUY',
+              side: 'BUY',
+              score: 0.7,
+              block_reason: null,
+              buy: null,
+              sell: null,
+              analysis: {
+                regime: 'TREND',
+                market_state: 't',
+                momentum_score: 0.5,
+                momentum_dir: 'UP',
+                trend_dir: 'UP',
+                trend_strength: 0.5,
+                structure_bias: 'BULLISH',
+                swing_high: entry + 5,
+                swing_low: entry - 5,
+                buy_pressure: 0.6,
+                sell_pressure: 0.4,
+                behavior_bull: 0.5,
+                behavior_bear: 0.5,
+                impact_score: 0.5,
+                context_quality: 0.8,
+                volatility: 0.001,
+                atr: 1,
+                data_quality: 0.9,
+                session: 'LONDON',
+              },
+              expectancy: null,
+            },
+          },
+        ],
+        intents: [],
+      })
+    );
+    saveRuntimeGates({
+      last_loss_ms: 0,
+      reject_until_ms: 0,
+      inflight_until_ms: 0,
+      post_exit_until_ms: 0,
+      last_entry_fingerprint: null,
+      day_start_equity: 10_000,
+      peak_equity: 10_000,
+      daily_pnl_day: '2000-01-01',
+      consecutive_losses: 1,
+      capital_day_gates_seeded: false,
+      last_ai_allow_close: true,
+      ai_mode: 'off',
+      kill_switch: false,
+      mode: 'PAPER',
+      epic: 'GOLD',
+      entries_armed: true,
+      entries_pause_reason: null,
+      last_close_failed: null,
+      desired_running: false,
+    });
+    installFilePersist(dir);
+
+    masterRuntime.pipeline = new MasterPipeline('PAPER');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.bookHydrated = false;
+    masterRuntime.recovered = false;
+    masterRuntime.account.equity = 10_000;
+    masterRuntime.account.balance = 10_000;
+    masterRuntime.account.peak_equity = 10_000;
+    masterRuntime.account.daily_pnl = -50;
+    masterRuntime.account.daily_pnl_day = '2000-01-01';
+    masterRuntime.account.day_start_equity = 10_000;
+    masterRuntime.cfg = {
+      ...DEFAULT_MASTER_CONFIG,
+      mode: 'PAPER',
+      ai_mode: 'off',
+      soft_trail_money_arm: 0,
+      be_start: 0,
+      trail_start: 0,
+      scalp_pct_chase: false,
+      time_stop_max_bars: 0,
+      max_hold_ms: 86_400_000,
+    };
+    // Attach paper broker + quote so recover MTM runs on the open
+    const broker = masterRuntime.ensurePaperBroker();
+    broker.seedOpens([]);
+    broker.hydrateAccount({ equity: 10_000, balance: 10_000 });
+    const loseMark = {
+      bid: markBid,
+      ask: markBid + 0.2,
+      mid: markBid + 0.1,
+      spread: 0.2,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    };
+    masterRuntime.last_quote = loseMark;
+    masterRuntime.last_bars = [];
+    masterRuntime.stop();
+    saveRuntimeGates({
+      last_loss_ms: 0,
+      reject_until_ms: 0,
+      inflight_until_ms: 0,
+      post_exit_until_ms: 0,
+      last_entry_fingerprint: null,
+      day_start_equity: 10_000,
+      peak_equity: 10_000,
+      daily_pnl_day: '2000-01-01',
+      consecutive_losses: 1,
+      capital_day_gates_seeded: false,
+      last_ai_allow_close: true,
+      ai_mode: 'off',
+      kill_switch: false,
+      mode: 'PAPER',
+      epic: 'GOLD',
+      entries_armed: true,
+      entries_pause_reason: null,
+      last_close_failed: null,
+      desired_running: false,
+    });
+    // stop() nulls desired_running — keep broker + quote for MTM
+    masterRuntime.ensurePaperBroker();
+    masterRuntime.last_quote = loseMark;
+
+    await masterRuntime.recover();
+
+    const today = new Date().toISOString().slice(0, 10);
+    const upl = markBid - entry; // BUY protective mark
+    const expectedCash = 9750;
+    const expectedEquity = expectedCash + upl;
+    expect(masterRuntime.account.daily_pnl_day).toBe(today);
+    expect(masterRuntime.positions.count()).toBe(1);
+    expect(masterRuntime.account.balance).toBe(expectedCash);
+    expect(broker.balance).toBe(expectedCash);
+    expect(masterRuntime.account.equity).toBeCloseTo(expectedEquity, 5);
+    // Must NOT seed from stale £10k+UPL
+    expect(masterRuntime.account.day_start_equity).toBeCloseTo(expectedEquity, 5);
+    expect(masterRuntime.account.day_start_equity).toBeLessThan(10_000);
+
+    masterRuntime.stop();
+    broker.seedOpens([]);
+    broker.hydrateAccount({ equity: 10_000, balance: 10_000 });
+    masterRuntime.account.equity = 10_000;
+    masterRuntime.account.balance = 10_000;
+    masterRuntime.account.day_start_equity = 10_000;
+    masterRuntime.last_quote = null;
     if (prev === undefined) delete process.env.MASTER_STATE_DIR;
     else process.env.MASTER_STATE_DIR = prev;
   });
