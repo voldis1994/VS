@@ -352,6 +352,8 @@ class MasterRuntime {
   private liveFeedTimer: ReturnType<typeof setInterval> | null = null;
   /** VS-System 1s trail/manage loop while a position is open (entry stays on slower feed). */
   private manageTimer: ReturnType<typeof setInterval> | null = null;
+  /** Last successful manageTick wall time — stage honesty (never forge green). */
+  private last_manage_tick_ms = 0;
   private lastFullTickAt = 0;
   private seenIntentSnapshot: string[] = [];
   /** Serialize tick() across live-feed / API / desk so opens+persist never race. */
@@ -2055,6 +2057,7 @@ class MasterRuntime {
       stale_quote_ms: this.cfg.stale_quote_ms,
       live_regime: structure?.regime ?? null,
     });
+    this.last_manage_tick_ms = Date.now();
     const exit_reasons = managed.closed.map((c) => c.reason);
     if (exit_reasons.length) this.last_exit_reason = exit_reasons.at(-1)!;
     if (managed.close_failed.length) {
@@ -3816,6 +3819,7 @@ class MasterRuntime {
       stale_quote_ms: this.cfg.stale_quote_ms,
       live_regime: structure?.regime ?? null,
     });
+    this.last_manage_tick_ms = Date.now();
     for (const c of managed.closed) {
       if (c.outcome.pnl_proven !== false) {
         this.account.daily_pnl += c.outcome.pnl;
@@ -4006,6 +4010,19 @@ class MasterRuntime {
         const filterPass = !!(d && (buyOk || sellOk));
         const brokerName = this.broker?.name ?? null;
         const opens = this.positions.count();
+        const managedOnce = this.last_manage_tick_ms > 0;
+        const manageArmed = !!this.manageTimer;
+        const manageAgeSec = managedOnce
+          ? Math.max(0, Math.round((Date.now() - this.last_manage_tick_ms) / 1000))
+          : null;
+        const decisionRows = loadDecisionEvents(1);
+        const tradeRows = loadTradeEvents(1);
+        const oppCount = this.pipeline.journal.opportunities.length;
+        const hasJournalEvidence =
+          perf.trades > 0 ||
+          decisionRows.length > 0 ||
+          tradeRows.length > 0 ||
+          oppCount > 0;
         return {
           market_validation: {
             ok: m ? m.ok : false,
@@ -4066,19 +4083,34 @@ class MasterRuntime {
               : 'none',
           },
           position_manager: {
-            ok: true,
-            detail: `open=${opens}`,
+            // Holding requires manage evidence; flat is ok only after a real manageTick
+            ok: opens > 0 ? managedOnce || manageArmed : managedOnce,
+            detail: managedOnce
+              ? `open=${opens} · managed ${manageAgeSec}s ago`
+              : opens > 0
+                ? manageArmed
+                  ? `open=${opens} · manage armed`
+                  : `open=${opens} · manage never ran`
+                : 'flat · manage never ran',
           },
           exit: {
             ok: !!this.last_exit_reason || opens === 0,
             detail: this.last_exit_reason || (opens > 0 ? 'holding' : 'flat'),
           },
           journal_performance: {
-            ok: true,
-            detail:
-              perf.trades > 0
+            // Persist fail or empty audit → not green (never forge "no trades" as ok)
+            ok: this.persist_ok && hasJournalEvidence,
+            detail: !this.persist_ok
+              ? `persist fail${this.last_persist_error ? ` · ${this.last_persist_error}` : ''}`
+              : perf.trades > 0
                 ? `trades=${perf.trades} exp=${Number(perf.expectancy).toFixed(3)}`
-                : 'no trades',
+                : decisionRows.length > 0
+                  ? `decisions · no closed trades`
+                  : tradeRows.length > 0
+                    ? `trade events · no KPI yet`
+                    : oppCount > 0
+                      ? `opps=${oppCount} · awaiting outcome`
+                      : 'no journal',
           },
         };
       })(),

@@ -95,6 +95,47 @@ async function main() {
     },
     'TREND:BUY'
   );
+  // Decision + trade audit journals must survive restart (journal→performance stage)
+  const { logDecisionEvent } = await import('../decisionJournal.js');
+  const { logTradeEvent } = await import('../tradeEventJournal.js');
+  logDecisionEvent({
+    kind: cycle.decision.kind,
+    epic: 'GOLD',
+    mode: 'PAPER',
+    opportunity_id: cycle.opportunity.id,
+    buy_score: cycle.decision.buy?.score ?? 0,
+    sell_score: cycle.decision.sell?.score ?? 0,
+    block_reason: cycle.decision.block_reason,
+    executed: true,
+    execution_detail: 'restart_check_seed',
+  });
+  logTradeEvent({
+    event: 'OPEN',
+    broker: 'PAPER',
+    epic: 'GOLD',
+    side: 'BUY',
+    volume: 0.1,
+    price: 4410,
+    position_id: 'restart-pos-1',
+    intent_id: 'restart-intent-1',
+    opportunity_id: cycle.opportunity.id,
+    ok: true,
+    detail: 'restart_check_seed_open',
+  });
+  logTradeEvent({
+    event: 'CLOSE',
+    broker: 'PAPER',
+    epic: 'GOLD',
+    side: 'BUY',
+    volume: 0.1,
+    price: 4418,
+    position_id: 'restart-closed-1',
+    opportunity_id: cycle.opportunity.id,
+    ok: true,
+    detail: 'TakeProfit',
+    pnl: 8,
+    fees: 0.1,
+  });
   // Cached bars/quote so hydrate manage can tick without live feed
   saveMarketCache({
     epic: 'GOLD',
@@ -146,6 +187,13 @@ async function main() {
     daily_pnl: masterRuntime.account.daily_pnl,
     last_decision_kind: masterRuntime.last_decision?.kind ?? null,
     open_positions_status: stHydrate.open_positions,
+    recent_decisions: stHydrate.recent_decisions?.length ?? 0,
+    recent_trades: stHydrate.recent_trades?.length ?? 0,
+    journal_stage_ok: stHydrate.pipeline_stages?.journal_performance?.ok === true,
+    journal_stage_detail: stHydrate.pipeline_stages?.journal_performance?.detail ?? null,
+    // Holding with no manage yet must not forge green position_manager
+    position_stage_pre_manage_ok:
+      stHydrate.pipeline_stages?.position_manager?.ok === true,
   };
   const hydrateOk =
     hydrated === true &&
@@ -155,7 +203,11 @@ async function main() {
     hydrateSnap.last_exit_reason === 'TakeProfit' &&
     !!masterRuntime.last_decision &&
     hydrateSnap.daily_pnl === 8 &&
-    hydrateSnap.open_positions_status === 1;
+    hydrateSnap.open_positions_status === 1 &&
+    hydrateSnap.recent_decisions >= 1 &&
+    hydrateSnap.recent_trades >= 2 &&
+    hydrateSnap.journal_stage_ok === true &&
+    hydrateSnap.position_stage_pre_manage_ok === false;
 
   // Phase A: desired_running=false → manage leftover opens only
   masterRuntime.desired_running = false;
@@ -179,11 +231,15 @@ async function main() {
   }
   const afterManageOpens = masterRuntime.positions.count();
   const ghostWiped = afterManageOpens === 0;
+  const stAfterManage = masterRuntime.status();
+  const positionStageOk =
+    stAfterManage.pipeline_stages?.position_manager?.ok === true;
   const manageOnlyOk =
     resumeManage.detail === 'manage_opens_only' &&
     paperSeeded === 1 &&
     !ghostWiped &&
-    afterManageOpens === 1;
+    afterManageOpens === 1 &&
+    positionStageOk;
 
   // Phase B: recover while opens still on disk/memory (before feed resume)
   const recovered = await masterRuntime.recover();
@@ -251,6 +307,15 @@ async function main() {
       paper_seeded: paperSeeded,
       opens_after_6_manage: afterManageOpens,
       ghost_wiped: ghostWiped,
+      position_stage_ok: positionStageOk,
+      position_stage_detail:
+        stAfterManage.pipeline_stages?.position_manager?.detail ?? null,
+    },
+    journals: {
+      decisions: hydrateSnap.recent_decisions,
+      trades: hydrateSnap.recent_trades,
+      journal_stage_ok: hydrateSnap.journal_stage_ok,
+      journal_stage_detail: hydrateSnap.journal_stage_detail,
     },
     recover: {
       ok: recoverOk,
