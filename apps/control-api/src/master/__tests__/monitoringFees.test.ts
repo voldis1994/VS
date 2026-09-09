@@ -158,9 +158,9 @@ describe('close fee honesty (replay parity)', () => {
       profit_level: 4410,
     });
     broker.setQuote({
-      bid: 4410,
-      ask: 4410.2,
-      mid: 4410.1,
+      bid: 4405,
+      ask: 4405.2,
+      mid: 4405.1,
       spread: 0.2,
       epic: 'GOLD',
       ts_ms: Date.now(),
@@ -168,9 +168,10 @@ describe('close fee honesty (replay parity)', () => {
     const closed = await broker.closePosition(placed.position_id!);
     expect(closed.ok).toBe(true);
     expect(closed.fill_pnl).toBeNull();
-    expect(closed.fill_price).toBe(4410);
-    // BUY open @ ask 4400.2, close @ bid 4410 → +9.8 − 0.05 fees
-    expect(broker.equity).toBeCloseTo(10_000 + 9.8 - 0.05, 6);
+    expect(closed.fill_price).toBe(4405);
+    // BUY open @ ask 4400.2, close @ bid 4405 → +4.8 − 0.05 fees
+    // (quote stays inside SL/TP so auto-fill does not consume the close)
+    expect(broker.equity).toBeCloseTo(10_000 + 4.8 - 0.05, 6);
     const resolved = resolveCloseMoneyPnl({
       side: 'BUY',
       entry: placed.fill_price!,
@@ -186,7 +187,7 @@ describe('close fee honesty (replay parity)', () => {
       from_broker: resolved.from_broker,
     });
     expect(priced.fees).toBeCloseTo(0.05, 8);
-    expect(priced.pnl).toBeCloseTo(9.8 - 0.05, 8);
+    expect(priced.pnl).toBeCloseTo(4.8 - 0.05, 8);
     if (prev === undefined) delete process.env.MASTER_COMMISSION_PER_LOT;
     else process.env.MASTER_COMMISSION_PER_LOT = prev;
   });
