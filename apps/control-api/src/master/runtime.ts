@@ -1350,6 +1350,13 @@ class MasterRuntime {
         ? { pnl: outcome.pnl, fees: outcome.fees }
         : {}),
     });
+    // Desk Flatten/Close: refresh equity/balance/peak from venue (same as manage closes)
+    try {
+      const acct = await broker.getAccount();
+      if (acct) this.applyVenueAccountAfterClose(acct);
+    } catch {
+      /* keep */
+    }
     return {
       ok: true,
       detail: outcome.exit_reason,

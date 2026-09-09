@@ -45,6 +45,7 @@ describe('operator close + manage config', () => {
 
   it('closePositionManual journals and drops local open', async () => {
     const broker = masterRuntime.ensurePaperBroker();
+    broker.hydrateAccount({ equity: 10_000, balance: 10_000 });
     broker.setQuote({
       bid: 4415,
       ask: 4415.4,
@@ -111,6 +112,9 @@ describe('operator close + manage config', () => {
       epic: 'GOLD',
       ts_ms: Date.now(),
     });
+    masterRuntime.account.equity = 10_000;
+    masterRuntime.account.balance = 10_000;
+    masterRuntime.account.peak_equity = 10_000;
     const r = await masterRuntime.closePositionManual(
       placed.position_id!,
       'OPERATOR_CLOSE'
@@ -123,6 +127,10 @@ describe('operator close + manage config', () => {
       (masterRuntime as unknown as { post_exit_until_ms: number }).post_exit_until_ms
     ).toBeGreaterThan(Date.now() - 1000);
     expect(r.pnl).toBeGreaterThan(0);
+    // Desk close must refresh venue equity/peak (not wait for next full tick)
+    expect(broker.equity).toBeGreaterThan(10_000);
+    expect(masterRuntime.account.equity).toBe(broker.equity);
+    expect(masterRuntime.account.peak_equity).toBe(broker.equity);
     const opp = masterRuntime.pipeline.journal.opportunities.find(
       (o) => o.outcome?.exit_reason === 'OPERATOR_CLOSE'
     );
