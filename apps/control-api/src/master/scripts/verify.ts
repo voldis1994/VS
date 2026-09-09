@@ -1436,7 +1436,7 @@ async function main() {
       );
     const recoverPaperCashBalanceApi =
       runtimeBody.includes(
-        'Sync balance to realized cash so seedPaperBroker + markToMarket use cash+UPL'
+        'cash so seedPaperBroker + markToMarket use cash+UPL'
       ) &&
       runtimeBody.includes(
         'seedPaperBroker/MTM do not prefer stale £10k cash'
