@@ -155,6 +155,8 @@ export class MasterPipeline {
 
     const analysis = analyzeBars(market.bars, market.quote.spread, input.now_ms);
     analysis.data_quality = Math.min(analysis.data_quality, market.quality);
+    // Desk SETUP gate only when require_armed_setup — paper demos still derive sticky
+    // SETUP for status but must not starve fills on opposite ARMED from noisy bars.
     let decision = decide(
       analysis,
       market.quote,
@@ -162,7 +164,7 @@ export class MasterPipeline {
       (k) => this.expectancy.lookup(k),
       market.bars,
       input.relative_spread,
-      marketSetup
+      input.cfg.require_armed_setup ? marketSetup : null
     );
 
     const mode = input.cfg.ai_mode;
