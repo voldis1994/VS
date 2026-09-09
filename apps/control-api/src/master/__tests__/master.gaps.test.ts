@@ -5791,3 +5791,66 @@ describe('pipeline_stages honesty — execution never forged from hydrate', () =
     }
   });
 });
+
+describe('pipeline_stages honesty — decision/risk never forged from hydrate', () => {
+  it('hydrated last_decision without last_market keeps Stage·decision and Stage·risk red', () => {
+    const prevDecision = masterRuntime.last_decision;
+    const prevRisk = masterRuntime.last_risk;
+    const prevMarket = masterRuntime.last_market;
+    const prevQuote = masterRuntime.last_quote;
+    try {
+      masterRuntime.last_quote = {
+        bid: 4400,
+        ask: 4400.4,
+        mid: 4400.2,
+        spread: 0.4,
+        epic: 'GOLD',
+        ts_ms: Date.now(),
+      };
+      masterRuntime.last_market = null;
+      masterRuntime.last_decision = {
+        decision_id: 'recovered',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: { score: 0.7 } as never,
+        sell: { score: 0.2 } as never,
+        analysis: {
+          regime: 'UNKNOWN',
+          market_state: 'recovered_from_decision_journal',
+        } as never,
+        expectancy: null,
+      };
+      masterRuntime.last_risk = {
+        allowed: true,
+        volume: 0.05,
+        risk_amount: 10,
+        reasons: [],
+      };
+      const stages = masterRuntime.status().pipeline_stages;
+      expect(stages.decision.ok).toBe(false);
+      expect(stages.decision.detail).toMatch(/hydrated · BUY/);
+      expect(stages.risk.ok).toBe(false);
+      expect(stages.risk.detail).toMatch(/hydrated · vol=0\.05/);
+
+      masterRuntime.last_market = {
+        ok: true,
+        quality: 0.95,
+        reasons: [],
+        bars_in: 40,
+        bars_out: 40,
+      };
+      const live = masterRuntime.status().pipeline_stages;
+      expect(live.decision.ok).toBe(true);
+      expect(live.decision.detail).toBe('BUY');
+      expect(live.risk.ok).toBe(true);
+      expect(live.risk.detail).toBe('vol=0.05');
+    } finally {
+      masterRuntime.last_decision = prevDecision;
+      masterRuntime.last_risk = prevRisk;
+      masterRuntime.last_market = prevMarket;
+      masterRuntime.last_quote = prevQuote;
+    }
+  });
+});
