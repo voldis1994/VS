@@ -583,17 +583,22 @@ export function MasterPage() {
         {
           k: 'Client fanout',
           v: status.last_client_fanout
-            ? status.last_client_fanout.attempted
-              ? status.last_client_fanout.detail || '—'
-              : 'idle'
+            ? `${cyclePending ? 'hydrated · ' : ''}${
+                status.last_client_fanout.attempted
+                  ? status.last_client_fanout.detail || '—'
+                  : 'idle'
+              }`
             : '—',
           ok:
+            !cyclePending &&
             !!status.last_client_fanout?.attempted &&
             (status.last_client_fanout.ok_count ?? 0) > 0,
           bad:
+            !cyclePending &&
             !!status.last_client_fanout?.attempted &&
             (status.last_client_fanout.fail_count ?? 0) > 0 &&
             !(status.last_client_fanout.ok_count > 0),
+          warn: cyclePending && !!status.last_client_fanout,
         },
         {
           k: 'Cycles by epic',
@@ -806,12 +811,13 @@ export function MasterPage() {
         {
           k: 'Close fail',
           v: status.last_close_failed
-            ? `${status.last_close_failed.exit_reason} · ${status.last_close_failed.detail}`.slice(
+            ? `${cyclePending ? 'hydrated · ' : ''}${status.last_close_failed.exit_reason} · ${status.last_close_failed.detail}`.slice(
                 0,
                 80
               )
             : '—',
-          bad: !!status.last_close_failed,
+          bad: !cyclePending && !!status.last_close_failed,
+          warn: cyclePending && !!status.last_close_failed,
         },
         { k: 'Running', v: status.running ? 'YES' : 'NO', ok: status.running },
         {
@@ -1013,9 +1019,13 @@ export function MasterPage() {
             status.capital_account_proven === false
               ? 'UNPROVEN'
               : status.account?.equity != null
-                ? Number(status.account.equity).toFixed(2)
+                ? `${cyclePending ? 'hydrated · ' : ''}${Number(status.account.equity).toFixed(2)}`
                 : '—',
           bad: status.capital_account_proven === false,
+          warn:
+            cyclePending &&
+            status.capital_account_proven !== false &&
+            status.account?.equity != null,
         },
         {
           k: 'Available',
@@ -1023,19 +1033,24 @@ export function MasterPage() {
             status.capital_account_proven === false
               ? '—'
               : status.account?.available_to_deal != null
-                ? Number(status.account.available_to_deal).toFixed(2)
+                ? `${cyclePending ? 'hydrated · ' : ''}${Number(status.account.available_to_deal).toFixed(2)}`
                 : '—',
+          warn:
+            cyclePending &&
+            status.capital_account_proven !== false &&
+            status.account?.available_to_deal != null,
         },
         {
           k: 'Trade allowed',
           v:
             status.account?.trade_allowed === false
-              ? 'NO'
+              ? `${cyclePending ? 'hydrated · ' : ''}NO`
               : status.account?.trade_allowed === true
-                ? 'YES'
+                ? `${cyclePending ? 'hydrated · ' : ''}YES`
                 : '—',
-          bad: status.account?.trade_allowed === false,
-          ok: status.account?.trade_allowed === true,
+          bad: !cyclePending && status.account?.trade_allowed === false,
+          ok: !cyclePending && status.account?.trade_allowed === true,
+          warn: cyclePending && status.account?.trade_allowed != null,
         },
         {
           k: 'Account proven',
@@ -1051,9 +1066,17 @@ export function MasterPage() {
         {
           k: 'News',
           v: status.news_window?.window_active
-            ? `${status.news_window.impact} · ${status.news_window.source}`
-            : 'clear',
-          bad: !!status.news_window?.window_active && status.news_window?.impact === 'high',
+            ? `${cyclePending ? 'hydrated · ' : ''}${status.news_window.impact} · ${status.news_window.source}`
+            : cyclePending && status.news_window
+              ? 'hydrated · clear'
+              : 'clear',
+          bad:
+            !cyclePending &&
+            !!status.news_window?.window_active &&
+            status.news_window?.impact === 'high',
+          warn:
+            cyclePending &&
+            (!!status.news_window?.window_active || status.news_window != null),
         },
         {
           k: 'Daily PnL',
@@ -1157,17 +1180,19 @@ export function MasterPage() {
           k: 'Reject cool',
           v:
             (status.reject_cooldown_ms ?? 0) > 0
-              ? `${Math.ceil((status.reject_cooldown_ms || 0) / 1000)}s`
+              ? `${cyclePending ? 'hydrated · ' : ''}${Math.ceil((status.reject_cooldown_ms || 0) / 1000)}s`
               : '—',
-          bad: (status.reject_cooldown_ms ?? 0) > 0,
+          bad: !cyclePending && (status.reject_cooldown_ms ?? 0) > 0,
+          warn: cyclePending && (status.reject_cooldown_ms ?? 0) > 0,
         },
         {
           k: 'Post-exit cool',
           v:
             (status.post_exit_cooldown_ms ?? 0) > 0
-              ? `${Math.ceil((status.post_exit_cooldown_ms || 0) / 1000)}s`
+              ? `${cyclePending ? 'hydrated · ' : ''}${Math.ceil((status.post_exit_cooldown_ms || 0) / 1000)}s`
               : '—',
-          bad: (status.post_exit_cooldown_ms ?? 0) > 0,
+          bad: !cyclePending && (status.post_exit_cooldown_ms ?? 0) > 0,
+          warn: cyclePending && (status.post_exit_cooldown_ms ?? 0) > 0,
         },
         {
           k: 'Open',
@@ -1192,8 +1217,22 @@ export function MasterPage() {
             (status.capital_venue_opens_proven === false ||
               (status.capital_venue_opens ?? 0) > 0),
         },
-        { k: 'Trades', v: String(status.traded) },
-        { k: 'Blocked', v: String(status.blocked) },
+        {
+          k: 'Trades',
+          v:
+            status.traded != null
+              ? `${cyclePending ? 'hydrated · ' : ''}${String(status.traded)}`
+              : '—',
+          warn: cyclePending && status.traded != null,
+        },
+        {
+          k: 'Blocked',
+          v:
+            status.blocked != null
+              ? `${cyclePending ? 'hydrated · ' : ''}${String(status.blocked)}`
+              : '—',
+          warn: cyclePending && status.blocked != null,
+        },
         {
           k: 'Expectancy',
           v: status.performance?.trades
@@ -1250,23 +1289,28 @@ export function MasterPage() {
           k: 'MC eq p05/p50/p95',
           v:
             status.monte_carlo?.equity_p50 != null
-              ? `${Number(status.monte_carlo.equity_p05 ?? 0).toFixed(1)} / ${Number(
+              ? `${cyclePending ? 'hydrated · ' : ''}${Number(status.monte_carlo.equity_p05 ?? 0).toFixed(1)} / ${Number(
                   status.monte_carlo.equity_p50
                 ).toFixed(1)} / ${Number(status.monte_carlo.equity_p95 ?? 0).toFixed(1)}`
               : status.monte_carlo?.p50 != null
-                ? `${Number(status.monte_carlo.p05 ?? 0).toFixed(1)} / ${Number(
+                ? `${cyclePending ? 'hydrated · ' : ''}${Number(status.monte_carlo.p05 ?? 0).toFixed(1)} / ${Number(
                     status.monte_carlo.p50
                   ).toFixed(1)} / ${Number(status.monte_carlo.p95 ?? 0).toFixed(1)}`
                 : '—',
+          warn:
+            cyclePending &&
+            (status.monte_carlo?.equity_p50 != null ||
+              status.monte_carlo?.p50 != null),
         },
         {
           k: 'MC DD p50/p95',
           v:
             status.monte_carlo?.drawdown_p50 != null
-              ? `${Number(status.monte_carlo.drawdown_p50).toFixed(1)} / ${Number(
+              ? `${cyclePending ? 'hydrated · ' : ''}${Number(status.monte_carlo.drawdown_p50).toFixed(1)} / ${Number(
                   status.monte_carlo.drawdown_p95 ?? 0
                 ).toFixed(1)}`
               : '—',
+          warn: cyclePending && status.monte_carlo?.drawdown_p50 != null,
         },
         {
           k: 'Rel spread',
