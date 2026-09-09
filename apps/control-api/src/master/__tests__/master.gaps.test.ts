@@ -5315,6 +5315,8 @@ describe('pipeline_stages honesty — position + journal never forged green', ()
     const dir = mkdtempSync(join(tmpdir(), 'vs-stage-honest-'));
     process.env.MASTER_STATE_DIR = dir;
     process.env.MASTER_GATES_DIR = dir;
+    const { setJournalMirror } = await import('../journalMirror.js');
+    setJournalMirror(null);
 
     const prevManage = (masterRuntime as unknown as { last_manage_tick_ms: number })
       .last_manage_tick_ms;

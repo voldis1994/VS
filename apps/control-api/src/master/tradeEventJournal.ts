@@ -171,5 +171,5 @@ export function loadTradeEvents(limit = 50): TradeEvent[] {
   } catch {
     /* fall through to DualPersist/FilePersist mirror */
   }
-  return loadMirroredTrades(limit);
+  return loadMirroredTrades(limit, journalDir());
 }

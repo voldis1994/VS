@@ -50,7 +50,7 @@ export class FilePersist implements PersistClient, JournalMirror {
   private decisionEvents: DecisionEvent[] = [];
   private tradeEvents: TradeEvent[] = [];
 
-  constructor(private readonly root: string) {
+  constructor(readonly root: string) {
     mkdirSync(root, { recursive: true });
     this.load();
     setJournalMirror(this);

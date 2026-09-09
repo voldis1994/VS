@@ -7,6 +7,8 @@ import type { DecisionEvent } from './decisionJournal.js';
 import type { TradeEvent } from './tradeEventJournal.js';
 
 export type JournalMirror = {
+  /** MASTER_STATE_DIR this mirror belongs to — ignore if load path differs */
+  root?: string;
   appendDecision(entry: DecisionEvent): void;
   appendTrade(entry: TradeEvent): void;
   loadDecisions(limit: number): DecisionEvent[];
@@ -39,17 +41,31 @@ export function mirrorTradeEvent(entry: TradeEvent) {
   }
 }
 
-export function loadMirroredDecisions(limit: number): DecisionEvent[] {
+function mirrorForDir(dir: string): JournalMirror | null {
+  if (!mirror) return null;
+  if (mirror.root && mirror.root !== dir) return null;
+  return mirror;
+}
+
+export function loadMirroredDecisions(
+  limit: number,
+  stateDir?: string
+): DecisionEvent[] {
   try {
-    return mirror?.loadDecisions(limit) ?? [];
+    const m = stateDir ? mirrorForDir(stateDir) : mirror;
+    return m?.loadDecisions(limit) ?? [];
   } catch {
     return [];
   }
 }
 
-export function loadMirroredTrades(limit: number): TradeEvent[] {
+export function loadMirroredTrades(
+  limit: number,
+  stateDir?: string
+): TradeEvent[] {
   try {
-    return mirror?.loadTrades(limit) ?? [];
+    const m = stateDir ? mirrorForDir(stateDir) : mirror;
+    return m?.loadTrades(limit) ?? [];
   } catch {
     return [];
   }

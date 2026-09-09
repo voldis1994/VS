@@ -155,5 +155,5 @@ export function loadDecisionEvents(limit = 50): DecisionEvent[] {
   } catch {
     /* fall through to DualPersist/FilePersist mirror */
   }
-  return loadMirroredDecisions(limit);
+  return loadMirroredDecisions(limit, journalDir());
 }
