@@ -999,7 +999,11 @@ class MasterRuntime {
         // day_start_equity seeds from cash+UPL — not cash-only before manage.
         // Use a throwaway PaperBroker — do not attach this.broker (restart
         // continuity keeps broker stage hydrated · awaiting attach until Start).
-        if (!capitalAttached && this.positions.count() > 0 && this.last_quote) {
+        if (
+          !capitalAttached &&
+          this.positions.count() > 0 &&
+          this.quoteProvenForOpenDayRoll(this.last_quote)
+        ) {
           const q = this.last_quote;
           const tmp = new PaperBroker();
           tmp.hydrateAccount({
@@ -1046,12 +1050,12 @@ class MasterRuntime {
             /* keep journal cash */
           }
         }
-        // Opens without quote: defer UTC day-roll — cash-only day_start would
-        // seal daily_pnl_day=today and leave max_daily_loss fail-open on UPL.
+        // Opens without a live mark: defer UTC day-roll — disk/stale/missing quote
+        // would cash-or-stale-seal day_start and leave max_daily_loss fail-open.
         const deferOpenDayRoll =
           !capitalAttached &&
           this.positions.count() > 0 &&
-          !this.last_quote;
+          !this.quoteProvenForOpenDayRoll(this.last_quote);
         const calToday = new Date().toISOString().slice(0, 10);
         let pnlToday = 0;
         for (const o of hist.outcomes) {
@@ -2076,6 +2080,25 @@ class MasterRuntime {
   hydrateMonitorFromDisk() {
     this.monitor.hydrateFromDisk();
     this.monitorHydrated = true;
+  }
+
+  /**
+   * Open-book UTC day-roll may seed day_start_equity only from a live mark.
+   * Missing, disk_cache, or age > stale_quote_ms → unproven (defer roll).
+   */
+  private quoteProvenForOpenDayRoll(
+    quote: Quote | null | undefined,
+    nowMs = Date.now()
+  ): boolean {
+    if (!quote) return false;
+    if (this.quoteFromDiskCache) return false;
+    const staleMs = Math.max(0, Number(this.cfg.stale_quote_ms) || 0);
+    if (staleMs > 0) {
+      const ts = Number(quote.ts_ms);
+      if (!Number.isFinite(ts) || ts <= 0) return false;
+      if (nowMs - ts > staleMs) return false;
+    }
+    return true;
   }
 
   /** Roll daily_pnl at UTC day boundary; seed day_start_equity for max_daily_loss. */
@@ -3968,7 +3991,7 @@ class MasterRuntime {
     this.seedPaperBrokerFromPositions();
     if (
       this.broker instanceof PaperBroker &&
-      this.last_quote &&
+      this.quoteProvenForOpenDayRoll(this.last_quote) &&
       this.positions.count() > 0
     ) {
       const q = this.last_quote;
@@ -3988,12 +4011,12 @@ class MasterRuntime {
         /* keep journal equity */
       }
     }
-    // Opens without quote: defer UTC day-roll — cash-only day_start would seal
-    // daily_pnl_day=today and leave max_daily_loss fail-open on floating UPL.
+    // Opens without a live mark: defer UTC day-roll — disk/stale/missing quote
+    // would cash-or-stale-seal day_start and leave max_daily_loss fail-open.
     const deferOpenDayRoll =
       !(this.broker instanceof CapitalBroker && !this.broker.paper) &&
       this.positions.count() > 0 &&
-      !this.last_quote;
+      !this.quoteProvenForOpenDayRoll(this.last_quote);
     if (!deferOpenDayRoll) {
       this.rollDailyPnl();
       // Capital pending seed: keep day_start 0 — do not fall back to paper balance
@@ -5340,7 +5363,15 @@ class MasterRuntime {
     } catch {
       /* keep */
     }
-    this.rollDailyPnl();
+    // Paper opens: defer UTC day-roll until quote is live (not disk/stale) so
+    // day_start_equity is not sealed from an aged market_cache mark.
+    const deferOpenDayRoll =
+      broker instanceof PaperBroker &&
+      this.positions.count() > 0 &&
+      !this.quoteProvenForOpenDayRoll(quote);
+    if (!deferOpenDayRoll) {
+      this.rollDailyPnl();
+    }
 
     const runPaperOrCapitalSync = async () => {
       // Reconcile broker truth on the 1s manage loop too — otherwise SL/TP fills
