@@ -209,11 +209,25 @@ async function main() {
       '../dashboard/src/pages/MasterPage.tsx',
     ];
     const missing = files.filter((f) => !existsSync(join(root, f)));
+    const masterPage = join(root, '../dashboard/src/pages/MasterPage.tsx');
+    const masterPageBody = existsSync(masterPage)
+      ? readFileSync(masterPage, 'utf8')
+      : '';
+    const stagesUi =
+      masterPageBody.includes('pipeline_stages') &&
+      masterPageBody.includes('Stage·validate');
+    const runtimeBody = readFileSync(join(root, 'src/master/runtime.ts'), 'utf8');
+    const stagesApi =
+      runtimeBody.includes('pipeline_stages:') &&
+      runtimeBody.includes('market_validation:') &&
+      runtimeBody.includes('dual_candidates:');
     checks.push({
       id: 'artifacts_present',
       requirement: 'Dashboard routes, brokers, recovery, desk bridge, React Master page present',
-      ok: missing.length === 0,
-      detail: missing.length ? `missing: ${missing.join(',')}` : `${files.length} core files present`,
+      ok: missing.length === 0 && stagesUi && stagesApi,
+      detail: missing.length
+        ? `missing: ${missing.join(',')}`
+        : `${files.length} core files present; pipeline_stages api=${stagesApi} ui=${stagesUi}`,
     });
   }
 

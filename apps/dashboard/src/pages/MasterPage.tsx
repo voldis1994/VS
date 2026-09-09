@@ -48,6 +48,10 @@ type MasterStatus = {
     score: number;
     valid: boolean;
   } | null;
+  pipeline_stages?: Record<
+    string,
+    { ok: boolean; detail: string }
+  > | null;
   regime: string;
   market_state: string;
   last_market?: {
@@ -508,6 +512,46 @@ export function MasterPage() {
           bad: !!status.sell_filter && !status.sell_filter.ok,
           ok: !!status.sell_filter?.ok,
         },
+        ...(status.pipeline_stages
+          ? (
+              [
+                'market_validation',
+                'normalization',
+                'analysis_regime',
+                'dual_candidates',
+                'filters',
+                'decision',
+                'risk',
+                'execution',
+                'broker',
+                'position_manager',
+                'exit',
+                'journal_performance',
+              ] as const
+            ).map((id) => {
+              const stage = status.pipeline_stages![id];
+              const labels: Record<string, string> = {
+                market_validation: 'Stage·validate',
+                normalization: 'Stage·normalize',
+                analysis_regime: 'Stage·regime',
+                dual_candidates: 'Stage·dual',
+                filters: 'Stage·filters',
+                decision: 'Stage·decision',
+                risk: 'Stage·risk',
+                execution: 'Stage·exec',
+                broker: 'Stage·broker',
+                position_manager: 'Stage·position',
+                exit: 'Stage·exit',
+                journal_performance: 'Stage·journal',
+              };
+              return {
+                k: labels[id] || id,
+                v: stage ? `${stage.ok ? 'ok' : '—'} · ${stage.detail}` : '—',
+                ok: !!stage?.ok,
+                bad: stage ? !stage.ok : false,
+              };
+            })
+          : []),
         { k: 'Decision', v: status.last_decision?.kind || '—' },
         {
           k: 'Why',
