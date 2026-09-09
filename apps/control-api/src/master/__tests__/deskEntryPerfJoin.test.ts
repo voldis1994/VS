@@ -80,12 +80,16 @@ describe('performanceByDeskEntry', () => {
     expect(by.move!.total_pnl).toBe(-2);
   });
 
-  it('DecisionEvent setup/move wins over opportunity none', () => {
-    const records = [opp('w', 5, 'none')];
-    const slices = performanceByDeskEntry(records, [
-      { opportunity_id: 'w', desk_entry_source: 'setup' },
-    ]);
-    expect(slices.find((s) => s.source === 'setup')!.trades).toBe(1);
-    expect(slices.find((s) => s.source === 'none')!.trades).toBe(0);
+  it('falls back to opportunity.setup_key desk suffix when decision journals missing', () => {
+    const records = [
+      { ...opp('sk1', 7), setup_key: 'GOLD|BUY|TREND|UP|LONDON|setup' },
+      { ...opp('sk2', -3), setup_key: 'GOLD|BUY|TREND|UP|LONDON|move' },
+    ];
+    const slices = performanceByDeskEntry(records, []);
+    const by = Object.fromEntries(slices.map((s) => [s.source, s]));
+    expect(by.setup!.trades).toBe(1);
+    expect(by.setup!.total_pnl).toBe(7);
+    expect(by.move!.trades).toBe(1);
+    expect(by.move!.total_pnl).toBe(-3);
   });
 });

@@ -134,9 +134,18 @@ export type DeskEntryPerfSlice = {
 
 /**
  * Slice closed-trade performance by desk 10s confirm source (setup/move/none).
- * Prefer DecisionEvent attribution; fall back to OpportunityRecord.decision
- * so Confirm PnL stays aligned with Confirm EV when the decision journal is thin.
+ * Prefer DecisionEvent → opportunity.decision → outcome setup_key suffix so
+ * Confirm PnL stays aligned with Confirm EV when journals are thin.
  */
+export function deskSourceFromSetupKey(
+  setup_key?: string | null
+): 'setup' | 'move' | 'none' | null {
+  if (!setup_key) return null;
+  const last = String(setup_key).split('|').pop() || '';
+  if (last === 'setup' || last === 'move' || last === 'none') return last;
+  return null;
+}
+
 export function performanceByDeskEntry(
   records: OpportunityRecord[],
   decisions: Array<{
@@ -167,10 +176,19 @@ export function performanceByDeskEntry(
       fromOppRaw === 'setup' || fromOppRaw === 'move' || fromOppRaw === 'none'
         ? fromOppRaw
         : null;
-    if (!fromOpp) continue;
-    const prev = byOpp.get(id);
-    if (!prev || (prev === 'none' && fromOpp !== 'none')) {
-      byOpp.set(id, fromOpp);
+    if (fromOpp) {
+      const prev = byOpp.get(id);
+      if (!prev || (prev === 'none' && fromOpp !== 'none')) {
+        byOpp.set(id, fromOpp);
+      }
+    }
+    // Durable outcome setup_key suffix (Confirm EV source of truth)
+    const fromKey = deskSourceFromSetupKey(r.setup_key);
+    if (fromKey) {
+      const prev = byOpp.get(id);
+      if (!prev || (prev === 'none' && fromKey !== 'none')) {
+        byOpp.set(id, fromKey);
+      }
     }
   }
   const buckets: Record<'setup' | 'move' | 'none', TradeOutcome[]> = {
