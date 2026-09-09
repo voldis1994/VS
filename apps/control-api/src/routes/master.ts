@@ -682,9 +682,10 @@ async function refresh(){
     const s=await fetch('/api/master/status').then(r=>r.json());
     kill=!!s.kill_switch;
     const cyclePending=!s.last_market;
-    const whyRaw=s.last_block_reason||s.last_execution_detail||s.last_decision?.kind||'—';
-    const why=(cyclePending&&!s.last_block_reason&&whyRaw!=='—')?('hydrated · '+whyRaw):whyRaw;
-    const whyCls=s.last_block_reason||s.monitoring?.entry_block_reason?'bad':(String(why).indexOf('hydrated ·')===0?'warn':'ok');
+    const whyRaw=s.last_block_reason||s.monitoring?.entry_block_reason||s.last_execution_detail||s.last_decision?.kind||'—';
+    const why=(cyclePending&&whyRaw!=='—')?(String(whyRaw).indexOf('hydrated ·')===0?String(whyRaw):('hydrated · '+whyRaw)):whyRaw;
+    const whyCls=String(why).indexOf('hydrated ·')===0?'warn':(s.last_block_reason||s.monitoring?.entry_block_reason?'bad':'ok');
+    const monHydrated=!!(s.monitoring&&s.monitoring.hydrated)||(cyclePending&&!!(s.monitoring&&(s.monitoring.entry_block_reason||(s.monitoring.active_alerts&&s.monitoring.active_alerts.length)||s.monitoring.relative_spread!=null||s.monitoring.instance_health)));
     cards.innerHTML=[
       card('Mode',s.mode),
       card('Epic',s.epic||'—'),
@@ -739,13 +740,13 @@ async function refresh(){
       card('Profit factor',s.performance?.trades&&s.performance?.profit_factor!=null&&Number.isFinite(s.performance.profit_factor)?Number(s.performance.profit_factor).toFixed(2):'—'),
       card('Loss streak',s.capital_account_proven===false?'—':(s.account?.consecutive_losses!=null?String(s.account.consecutive_losses):'—'),s.capital_account_proven!==false&&(s.account?.consecutive_losses||0)>=3?'bad':''),
       card('MC p50',s.monte_carlo?.equity_p50!=null?Number(s.monte_carlo.equity_p50).toFixed(2):(s.monte_carlo?.p50!=null?Number(s.monte_carlo.p50).toFixed(2):'—')),
-      card('Rel spread',s.monitoring?.relative_spread!=null?Number(s.monitoring.relative_spread).toFixed(2):'—',s.monitoring?.relative_spread!=null&&s.monitoring.relative_spread>1.5?'bad':''),
-      card('Cycle ms',s.monitoring?.last_cycle_ms!=null?String(s.monitoring.last_cycle_ms):'—'),
+      card('Rel spread',s.monitoring?.relative_spread!=null?((monHydrated?'hydrated · ':'')+Number(s.monitoring.relative_spread).toFixed(2)):'—',monHydrated?'warn':(s.monitoring?.relative_spread!=null&&s.monitoring.relative_spread>1.5?'bad':'')),
+      card('Cycle ms',s.monitoring?.last_cycle_ms!=null?((monHydrated?'hydrated · ':'')+String(s.monitoring.last_cycle_ms)):'—',monHydrated?'warn':''),
       card('ACK ms',s.monitoring?.ack_latency_ms!=null?String(s.monitoring.ack_latency_ms):'—'),
-      card('Inst health',s.monitoring?.instance_health||'—',s.monitoring?.instance_health==='CRITICAL'||s.monitoring?.instance_health==='DEGRADED'?'bad':s.monitoring?.instance_health==='OK'?'ok':''),
-      card('Alert block',s.monitoring?.entry_block_reason||'—',s.monitoring?.entry_block_reason?'bad':''),
-      card('Alerts',(s.monitoring?.active_alerts&&s.monitoring.active_alerts.length)?s.monitoring.active_alerts.slice(0,3).map(a=>a.code).join(' · '):'—',(s.monitoring?.active_alerts&&s.monitoring.active_alerts.length)?'bad':''),
-      card('Err/min',s.monitoring?.error_rate_per_min!=null?String(s.monitoring.error_rate_per_min):'—',(s.monitoring?.error_rate_per_min||0)>0?'bad':''),
+      card('Inst health',s.monitoring?.instance_health?((monHydrated?'hydrated · ':'')+s.monitoring.instance_health):'—',monHydrated?'warn':(s.monitoring?.instance_health==='CRITICAL'||s.monitoring?.instance_health==='DEGRADED'?'bad':s.monitoring?.instance_health==='OK'?'ok':'')),
+      card('Alert block',s.monitoring?.entry_block_reason?((String(s.monitoring.entry_block_reason).indexOf('hydrated ·')===0||!monHydrated)?String(s.monitoring.entry_block_reason):('hydrated · '+s.monitoring.entry_block_reason)):'—',monHydrated?'warn':(s.monitoring?.entry_block_reason?'bad':'')),
+      card('Alerts',(s.monitoring?.active_alerts&&s.monitoring.active_alerts.length)?((monHydrated?'hydrated · ':'')+s.monitoring.active_alerts.slice(0,3).map(a=>a.code).join(' · ')):'—',monHydrated?'warn':((s.monitoring?.active_alerts&&s.monitoring.active_alerts.length)?'bad':'')),
+      card('Err/min',s.monitoring?.error_rate_per_min!=null?String(s.monitoring.error_rate_per_min):'—',monHydrated?'warn':((s.monitoring?.error_rate_per_min||0)>0?'bad':'')),
       card('Max DD',s.performance?.trades?Number(s.performance.max_drawdown||0).toFixed(2):'—'),
       card('Recovered',s.recovered?'YES':'—'),
       card('Persist',s.persist_ok===false?'DEGRADED':'OK',s.persist_ok===false?'bad':'ok'),

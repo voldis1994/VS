@@ -255,9 +255,12 @@ describe('CycleMonitor', () => {
     expect(m2.last_cycle_ms).toBe(42);
     expect(m2.relative_spread).toBe(1.1);
     const snap = m2.snapshot(null);
+    expect(snap.hydrated).toBe(true);
     expect(snap.entry_block_reason).toBe(`alert:${ALERT_DATA_STALE}`);
     expect(snap.active_alerts.some((a) => a.code === ALERT_DATA_STALE)).toBe(true);
     expect(snap.instance_health).not.toBe('OK');
+    m2.noteAlerts([], null);
+    expect(m2.snapshot(null).hydrated).toBe(false);
   });
 });
 

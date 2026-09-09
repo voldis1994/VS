@@ -31,6 +31,8 @@ export type CycleMonitorSnapshot = {
   instance_health: 'OK' | 'DEGRADED' | 'CRITICAL';
   active_alerts: CycleAlert[];
   entry_block_reason: string | null;
+  /** True when metrics came from monitoring_snapshot.json and no live cycle yet */
+  hydrated: boolean;
 };
 
 function stateDir(): string {
@@ -51,16 +53,24 @@ export class CycleMonitor {
   cycles = 0;
   relative_spread: number | null = null;
   ack_latency_ms: number | null = null;
+  /** Disk restore — cleared on first live note* so cards stop looking current. */
+  private fromDisk = false;
   private lastAlerts: CycleAlert[] = [];
   private lastEntryBlock: string | null = null;
 
+  private markLive() {
+    this.fromDisk = false;
+  }
+
   noteCycle(ms: number) {
+    this.markLive();
     this.last_cycle_ms = Math.max(0, Math.round(ms));
     this.last_cycle_at = new Date().toISOString();
     this.cycles += 1;
   }
 
   noteAckLatency(ms: number | null) {
+    this.markLive();
     if (ms == null || !Number.isFinite(ms) || ms < 0) {
       this.ack_latency_ms = null;
       return;
@@ -69,11 +79,13 @@ export class CycleMonitor {
   }
 
   noteRelativeSpread(rel: number | null) {
+    this.markLive();
     this.relative_spread =
       rel != null && Number.isFinite(rel) ? Number(rel) : null;
   }
 
   noteAlerts(alerts: CycleAlert[], entryBlock: string | null) {
+    this.markLive();
     this.lastAlerts = alerts;
     this.lastEntryBlock = entryBlock;
   }
@@ -106,6 +118,7 @@ export class CycleMonitor {
       instance_health: healthFromAlerts(this.lastAlerts),
       active_alerts: this.lastAlerts.slice(0, 8),
       entry_block_reason: this.lastEntryBlock,
+      hydrated: this.fromDisk,
     };
     this.persistSnapshot(snap);
     return snap;
@@ -166,6 +179,7 @@ export class CycleMonitor {
   /**
    * Restart hydrate — seed last metrics/alerts so dashboard is not cold-empty
    * until the first tick. Does not invent cycles count (unknown after crash).
+   * Marks fromDisk so Why / Alert block / Rel spread do not paint as live.
    */
   hydrateFromDisk(): boolean {
     const raw = this.loadPersisted();
@@ -192,6 +206,7 @@ export class CycleMonitor {
       this.lastEntryBlock =
         raw.entry_block_reason == null ? null : String(raw.entry_block_reason);
     }
+    this.fromDisk = true;
     return true;
   }
 }
