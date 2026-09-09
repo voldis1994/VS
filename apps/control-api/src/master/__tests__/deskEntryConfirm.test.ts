@@ -67,11 +67,12 @@ describe('desk hour bias + 10s entry confirm', () => {
     const advanced = advanceMarketSetup({ bars, mid: bars.at(-1)!.close });
     // Force a dump bar against high structure
     const dump = {
+      open_time_ms: Date.now() - 10_000,
       open: advanced.structure.swing_high - 0.5,
       high: advanced.structure.swing_high - 0.2,
       low: advanced.structure.swing_high - 3,
       close: advanced.structure.swing_high - 2.5,
-      ts_ms: Date.now(),
+      ticks: 3,
     };
     const confirm = resolveDeskEntryConfirm({
       setup: advanced.setup,
@@ -121,11 +122,12 @@ describe('desk hour bias + 10s entry confirm', () => {
     const q = quoteFrom(bars.at(-1)!);
     const last = bars.at(-1)!;
     const closed10s = {
+      open_time_ms: Date.now() - 10_000,
       open: last.close - 0.2,
       high: last.close + 1.5,
       low: last.close - 0.3,
       close: last.close + 1.2,
-      ts_ms: Date.now(),
+      ticks: 4,
     };
     const cycle = await pipe.runCycle({
       bars,
@@ -153,5 +155,42 @@ describe('desk hour bias + 10s entry confirm', () => {
     expect(pipe.getStructureBook()?.hour_bias).toBe('UP');
     // desk_entry may or may not fire depending on setup/move thresholds — field must exist
     expect('desk_entry' in cycle).toBe(true);
+  });
+
+  it('live-feed justClosed → closed_10s arms setup_confirm_pending; absent stays open', async () => {
+    const { closed10sFromJustClosed, LiveBarBuilder } = await import('../liveFeed.js');
+    const { masterRuntime } = await import('../runtime.js');
+    const b = new LiveBarBuilder(1000, 40);
+    b.seedAround(4400, 30);
+    const t0 = 5_000_000;
+    b.pushTick(4401, t0);
+    const pushed = b.pushTick(4410, t0 + 1001);
+    const closed = closed10sFromJustClosed(pushed.justClosed);
+    expect(closed).not.toBeNull();
+
+    masterRuntime.stop();
+    masterRuntime.ensurePaperBroker();
+    masterRuntime.setMode('PAPER');
+    masterRuntime.setEpic('GOLD');
+    await masterRuntime.start({ skip_market_feed: true });
+    // After start/hydrate — force armed gate (PAPER default is off)
+    masterRuntime.cfg = {
+      ...masterRuntime.cfg,
+      mode: 'PAPER',
+      min_score: 0.25,
+      require_armed_setup: true,
+      block_off_hours: false,
+      block_high_impact_news: false,
+    };
+    const bars = pushed.bars;
+    const q = quoteFrom(bars.at(-1)!);
+    // Without closed_10s: armed gate uses setup_none path (not confirm pending)
+    const noClose = await masterRuntime.tick(bars, q, { closed_10s: null });
+    expect(noClose.decision.block_reason).not.toBe('setup_confirm_pending');
+    // With mapped justClosed: same bars/quote → setup_confirm_pending when no MOVE/SETUP confirm
+    const withClose = await masterRuntime.tick(bars, q, { closed_10s: closed });
+    expect(withClose.decision.kind).toBe('WAIT');
+    expect(withClose.decision.block_reason).toBe('setup_confirm_pending');
+    masterRuntime.stop();
   });
 });
