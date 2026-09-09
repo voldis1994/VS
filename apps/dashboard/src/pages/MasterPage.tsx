@@ -965,7 +965,7 @@ export function MasterPage() {
           k: 'ACK ms',
           v:
             status.monitoring?.ack_latency_ms != null
-              ? String(status.monitoring.ack_latency_ms)
+              ? `${monHydrated ? 'hydrated · ' : ''}${status.monitoring.ack_latency_ms}`
               : '—',
         },
         {
@@ -1005,7 +1005,7 @@ export function MasterPage() {
           k: 'Err/min',
           v:
             status.monitoring?.error_rate_per_min != null
-              ? String(status.monitoring.error_rate_per_min)
+              ? `${monHydrated ? 'hydrated · ' : ''}${status.monitoring.error_rate_per_min}`
               : '—',
           bad: !monHydrated && (status.monitoring?.error_rate_per_min || 0) > 0,
         },

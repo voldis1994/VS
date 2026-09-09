@@ -5723,7 +5723,7 @@ describe('pipeline_stages honesty — analysis_regime never forged from hydrate'
       };
       const stages = masterRuntime.status().pipeline_stages;
       expect(stages.analysis_regime.ok).toBe(false);
-      expect(stages.analysis_regime.detail).toMatch(/no cycle/);
+      expect(stages.analysis_regime.detail).toMatch(/^hydrated ·/);
       expect(stages.analysis_regime.detail).toMatch(/TREND_UP/);
       // Filters/dual are cycle-bound too — hydrate evidence alone stays red
       expect(stages.filters.ok).toBe(false);
@@ -6116,6 +6116,7 @@ describe('Why / monitoring disk-hydrate honesty', () => {
           timestamp_utc: new Date().toISOString(),
           cycle_latency_ms: 33,
           relative_spread: 2.2,
+          ack_latency_ms: 180,
           instance_health: 'DEGRADED',
           entry_block_reason: 'alert:DATA_STALE',
           active_alerts: [
@@ -6174,6 +6175,8 @@ describe('Why / monitoring disk-hydrate honesty', () => {
       );
       expect(String(st.last_block_reason || '')).toMatch(/^hydrated · /);
       expect(st.monitoring.relative_spread).toBe(2.2);
+      expect(st.monitoring.ack_latency_ms).toBe(180);
+      expect(st.monitoring.last_cycle_ms).toBe(33);
 
       masterRuntime.last_market = {
         ok: true,
