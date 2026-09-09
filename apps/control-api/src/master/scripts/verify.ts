@@ -205,29 +205,60 @@ async function main() {
       'src/master/mt4Sim.ts',
       'src/master/scripts/restartContinuity.ts',
       'src/routes/master.ts',
+      'src/routes/robotDesk.ts',
+      'src/services/robotDesk.ts',
+      'src/services/robotDeskOwnsBridge.test.ts',
       'src/db/migrations/011_master_journal.sql',
       '../dashboard/src/pages/MasterPage.tsx',
+      '../dashboard/src/pages/RobotDeskPage.tsx',
     ];
     const missing = files.filter((f) => !existsSync(join(root, f)));
     const masterPage = join(root, '../dashboard/src/pages/MasterPage.tsx');
     const masterPageBody = existsSync(masterPage)
       ? readFileSync(masterPage, 'utf8')
       : '';
+    const robotDeskPage = join(root, '../dashboard/src/pages/RobotDeskPage.tsx');
+    const robotDeskPageBody = existsSync(robotDeskPage)
+      ? readFileSync(robotDeskPage, 'utf8')
+      : '';
     const stagesUi =
       masterPageBody.includes('pipeline_stages') &&
       masterPageBody.includes('Stage·validate');
+    const manageOwnerMasterUi =
+      masterPageBody.includes('manage_owner') &&
+      masterPageBody.includes('Manage owner');
+    const manageOwnerDeskUi =
+      robotDeskPageBody.includes('manage_owner') &&
+      robotDeskPageBody.includes('MANAGE OWNER');
     const runtimeBody = readFileSync(join(root, 'src/master/runtime.ts'), 'utf8');
     const stagesApi =
       runtimeBody.includes('pipeline_stages:') &&
       runtimeBody.includes('market_validation:') &&
       runtimeBody.includes('dual_candidates:');
+    const manageOwnerApi =
+      runtimeBody.includes('manage_owner:') &&
+      runtimeBody.includes('resolveManageOwnerStatus') &&
+      runtimeBody.includes('DESK_DEFERRED_HARD');
+    const deskBody = readFileSync(join(root, 'src/services/robotDesk.ts'), 'utf8');
+    const deskBridgeMeta =
+      deskBody.includes('manage_owner:') &&
+      deskBody.includes('MASTER BRIDGE') &&
+      deskBody.includes('deskSessionStartPolicy');
+    const honestyOk =
+      stagesUi &&
+      stagesApi &&
+      manageOwnerMasterUi &&
+      manageOwnerDeskUi &&
+      manageOwnerApi &&
+      deskBridgeMeta;
     checks.push({
       id: 'artifacts_present',
-      requirement: 'Dashboard routes, brokers, recovery, desk bridge, React Master page present',
-      ok: missing.length === 0 && stagesUi && stagesApi,
+      requirement:
+        'Dashboard routes, brokers, recovery, desk bridge, Master+RobotDesk manage_owner honesty',
+      ok: missing.length === 0 && honestyOk,
       detail: missing.length
         ? `missing: ${missing.join(',')}`
-        : `${files.length} core files present; pipeline_stages api=${stagesApi} ui=${stagesUi}`,
+        : `${files.length} core files; pipeline_stages api=${stagesApi} ui=${stagesUi}; manage_owner api=${manageOwnerApi} masterUi=${manageOwnerMasterUi} deskUi=${manageOwnerDeskUi} deskBridge=${deskBridgeMeta}`,
     });
   }
 

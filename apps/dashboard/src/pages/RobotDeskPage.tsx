@@ -410,6 +410,20 @@ export function RobotDeskPage() {
                 {board?.feed_sender_count ?? (senders.length || '—')}
               </div>
             </div>
+            <div
+              className={`robot-mode-banner ${
+                board?.manage_owner === 'MASTER'
+                  ? 'entry'
+                  : board?.manage_owner === 'DESK_DEFERRED_HARD'
+                    ? 'manage'
+                    : 'flat'
+              }`}
+            >
+              <div className="label">MANAGE OWNER</div>
+              <div className="value" style={{ fontSize: '0.85em' }}>
+                {board?.manage_owner || (board?.owns_pipeline ? '…' : 'DESK')}
+              </div>
+            </div>
           </div>
           <div className="actions">
             <button className="btn btn-primary" type="button" onClick={() => setShowDeploy((v) => !v)}>
