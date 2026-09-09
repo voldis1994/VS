@@ -8,24 +8,67 @@
  *   PASS_LIVE_DATA_CLOSED  — one natural fill + tick-observed exit + journaled trade
  *   PASS_LIVE_DATA_TRADED  — natural fill (open or closed) without proven exit path
  *   PASS_LIVE_DATA_DECIDED — live quote + decision, no fill
+ *
+ * Desk confirm: every tick feeds closed_10s + hour_bars (live-feed parity).
+ * CLOSED honesty requires desk_entry_source setup|move (not |none bypass).
  */
 import { writeFileSync, mkdirSync } from 'fs';
 import { masterRuntime } from '../runtime.js';
 import { DEFAULT_MASTER_CONFIG, MasterPipeline } from '../pipeline.js';
 import { PositionManager } from '../positionManager.js';
 import { installFilePersist } from '../filePersist.js';
-import { fetchLiveMarket, LiveBarBuilder } from '../liveFeed.js';
+import {
+  fetchLiveMarket,
+  fetchYahooHourBars,
+  LiveBarBuilder,
+} from '../liveFeed.js';
 import { setPersistClient } from '../persist.js';
+import {
+  closed10sFromReplayBar,
+  hourBarsFromReplayMinutes,
+} from '../replay.js';
 import {
   isHonestLivePaperClosed,
   type LivePaperDemoReport,
 } from '../livePaperHonesty.js';
+import type { Bar } from '../types.js';
+import type { CapitalPriceCandle } from '../../services/capitalCom.js';
 
 export type { LivePaperDemoReport } from '../livePaperHonesty.js';
 export { isHonestLivePaperClosed } from '../livePaperHonesty.js';
 
 async function sleep(ms: number) {
   await new Promise((r) => setTimeout(r, ms));
+}
+
+/** Desk confirm opts — sticky closed_10s from last bar + hour structure (live-feed parity). */
+export function deskConfirmTickOpts(
+  bars: Bar[],
+  hourBars: CapitalPriceCandle[] | Bar[] | null
+): {
+  closed_10s: ReturnType<typeof closed10sFromReplayBar>;
+  hour_bars: CapitalPriceCandle[] | Bar[];
+} {
+  const last = bars.at(-1);
+  if (!last) {
+    return {
+      closed_10s: closed10sFromReplayBar({
+        open: 0,
+        high: 0,
+        low: 0,
+        close: 0,
+        ts_ms: Date.now(),
+      }),
+      hour_bars: hourBars || [],
+    };
+  }
+  return {
+    closed_10s: closed10sFromReplayBar(last),
+    hour_bars:
+      hourBars && hourBars.length >= 6
+        ? hourBars
+        : hourBarsFromReplayMinutes(bars),
+  };
 }
 
 /** Clear singleton leftovers so prior verify/audit/tests cannot starve fills. */
@@ -135,11 +178,18 @@ async function main() {
   const builder = new LiveBarBuilder(3_000, 60);
   const seedDetail = await builder.seedFromPublic('GOLD', first.quote.mid, 40);
 
+  // Hour structure for desk hour_bias — Yahoo 1h, else aggregate from seed bars
+  const yahooHours = await fetchYahooHourBars('GOLD', 24);
+  let hourBars: CapitalPriceCandle[] | Bar[] | null =
+    yahooHours.ok && yahooHours.bars.length >= 6 ? yahooHours.bars : null;
+
   const ticks: Array<Record<string, unknown>> = [];
   let executed = 0;
   let exits = 0;
   let decided = 0;
   let lastMid = first.quote.mid;
+  let deskConfirmFed = false;
+  let lastDeskSource: string | null = null;
 
   // Live cycles until first natural fill — then stop (no churn flood on flat mid).
   // Extra attempts absorb transient filter/score misses without forging a fill.
@@ -158,11 +208,18 @@ async function main() {
     const quote = { ...snap.quote, epic: snap.quote.epic || 'GOLD' };
     lastMid = quote.mid;
     const { bars } = builder.pushTick(quote.mid);
-    const result = await masterRuntime.tick(bars, quote);
+    if (!hourBars || hourBars.length < 6) {
+      hourBars = hourBarsFromReplayMinutes(bars);
+    }
+    const deskOpts = deskConfirmTickOpts(bars, hourBars);
+    deskConfirmFed = true;
+    const result = await masterRuntime.tick(bars, quote, deskOpts);
     masterRuntime.pauseBackgroundManage();
     if (result.executed) executed += 1;
     exits += result.exits;
     if (result.decision?.kind) decided += 1;
+    const deskSrc = result.decision?.desk_entry_source ?? null;
+    if (deskSrc) lastDeskSource = deskSrc;
     ticks.push({
       i,
       mid: quote.mid,
@@ -172,6 +229,8 @@ async function main() {
       sell: Number(result.decision.sell.score.toFixed(3)),
       executed: result.executed,
       exits: result.exits,
+      desk_entry_source: deskSrc,
+      closed_10s_present: true,
       why:
         result.execution_detail ||
         result.decision.block_reason ||
@@ -191,6 +250,9 @@ async function main() {
     exitPhase = true;
     masterRuntime.pauseBackgroundManage();
     const pos = masterRuntime.positions.list()[0]!;
+    if (pos.decision?.desk_entry_source) {
+      lastDeskSource = pos.decision.desk_entry_source;
+    }
     const sl =
       pos.stop_loss != null && Number.isFinite(pos.stop_loss) && pos.stop_loss > 0
         ? pos.stop_loss
@@ -216,7 +278,8 @@ async function main() {
         ts_ms: Date.now(),
       };
       const { bars } = builder.pushTick(quote.mid);
-      const result = await masterRuntime.tick(bars, quote);
+      const deskOpts = deskConfirmTickOpts(bars, hourBars);
+      const result = await masterRuntime.tick(bars, quote, deskOpts);
       masterRuntime.pauseBackgroundManage();
       exits += result.exits;
       ticks.push({
@@ -237,6 +300,21 @@ async function main() {
   }
 
   const status = masterRuntime.status();
+  // Prefer closed-trade stamp, then opportunity, then last decision tick
+  const tradeDesk = (status.recent_trades || []).find(
+    (t: { desk_entry_source?: string | null }) =>
+      t.desk_entry_source === 'setup' || t.desk_entry_source === 'move'
+  )?.desk_entry_source;
+  const oppDesk = masterRuntime.pipeline.journal.opportunities
+    .map((o) => o.decision?.desk_entry_source)
+    .find((s) => s === 'setup' || s === 'move');
+  const deskEntrySource =
+    tradeDesk ||
+    oppDesk ||
+    lastDeskSource ||
+    status.desk_entry?.source ||
+    null;
+
   const naturalTrade =
     executed > 0 || status.traded > 0 || status.open_positions > 0;
   const exitReasonFinal = exitReason || status.last_exit_reason || null;
@@ -286,6 +364,9 @@ async function main() {
     last_decision: status.last_decision?.kind,
     entry_attempts: entryAttempts,
     entry_whys: entryWhys,
+    desk_confirm_fed: deskConfirmFed,
+    desk_entry_source: deskEntrySource,
+    hour_bars_source: yahooHours.ok ? yahooHours.detail : 'aggregated_minutes',
     ticks,
   };
 
@@ -298,8 +379,8 @@ async function main() {
   console.log(JSON.stringify(report, null, 2));
   writeFileSync(`${dir}/vs_master_live_paper_demo.json`, JSON.stringify(report, null, 2));
   // Clear opens so manage timers do not hold the process
-  const { PositionManager } = await import('../positionManager.js');
-  masterRuntime.positions = new PositionManager();
+  const { PositionManager: PM } = await import('../positionManager.js');
+  masterRuntime.positions = new PM();
   masterRuntime.stop();
   setPersistClient(null);
 

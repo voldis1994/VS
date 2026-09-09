@@ -17,6 +17,8 @@ function baseClosed(over: Partial<LivePaperDemoReport> = {}): LivePaperDemoRepor
     traded: 1,
     performance_trades: 1,
     performance_total_pnl: 1.25,
+    desk_confirm_fed: true,
+    desk_entry_source: 'setup',
     ticks: [
       { mid: 4400, executed: true },
       { mid: 4390, executed: false, phase: 'exit_drive' },
@@ -82,6 +84,24 @@ describe('isHonestLivePaperClosed', () => {
   it('accepts zero closed PnL when trades exist', () => {
     expect(
       isHonestLivePaperClosed(baseClosed({ performance_total_pnl: 0 }))
+    ).toBe(true);
+  });
+
+  it('rejects CLOSED without desk confirm fed', () => {
+    expect(
+      isHonestLivePaperClosed(baseClosed({ desk_confirm_fed: false }))
+    ).toBe(false);
+  });
+
+  it('rejects CLOSED with desk_entry_source none', () => {
+    expect(
+      isHonestLivePaperClosed(baseClosed({ desk_entry_source: 'none' }))
+    ).toBe(false);
+  });
+
+  it('accepts move desk confirm path', () => {
+    expect(
+      isHonestLivePaperClosed(baseClosed({ desk_entry_source: 'move' }))
     ).toBe(true);
   });
 });

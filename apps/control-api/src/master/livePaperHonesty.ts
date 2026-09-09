@@ -15,12 +15,17 @@ export type LivePaperDemoReport = {
   performance_trades?: number;
   /** Closed-book KPI from performance.total_pnl — required for honest CLOSED. */
   performance_total_pnl?: number | null;
+  /** Desk confirm inputs were fed into every entry tick (live-feed parity). */
+  desk_confirm_fed?: boolean;
+  /** Desk confirm source on the closed trade / opportunity (setup|move|none). */
+  desk_entry_source?: 'setup' | 'move' | 'none' | string | null;
   ticks?: Array<{ mid?: number; executed?: boolean; phase?: string }>;
   [k: string]: unknown;
 };
 
 /**
  * CLOSED must mean one clean fill→exit path, not manage-timer churn on a flat mid.
+ * Also requires desk confirm path (setup|move) — not the pre-desk |none bypass.
  */
 export function isHonestLivePaperClosed(report: LivePaperDemoReport): boolean {
   if (report.status !== 'PASS_LIVE_DATA_CLOSED') return false;
@@ -44,6 +49,10 @@ export function isHonestLivePaperClosed(report: LivePaperDemoReport): boolean {
     report.exit_phase === true || (report.exit_cycles ?? 0) >= 1;
   if (!tickObservedExit) return false;
   if (!report.exit_reason) return false;
+  // Desk confirm must be fed and the closed trade must stamp setup|move
+  if (report.desk_confirm_fed !== true) return false;
+  const desk = report.desk_entry_source;
+  if (desk !== 'setup' && desk !== 'move') return false;
   // Reject flat-mid churn floods (identical mid + many executes)
   const liveTicks = (report.ticks || []).filter((t) => t.phase !== 'exit_drive');
   const execMids = liveTicks
