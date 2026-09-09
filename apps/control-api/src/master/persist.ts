@@ -625,6 +625,55 @@ export async function loadClientFanoutFromPersist(): Promise<any | null> {
   }
 }
 
+/** DualPersist / MemoryPersist / PG — news_calendar singleton for wipe heal. */
+export async function persistNewsCalendarState(state: {
+  events: unknown[];
+  fetched_at_ms: number;
+  saved_at_ms: number;
+}): Promise<boolean> {
+  try {
+    const events = Array.isArray(state.events) ? state.events : [];
+    await client.query(
+      `INSERT INTO master_news_calendar (id, payload, saved_at_ms)
+       VALUES ($1, $2::jsonb, $3)
+       ON CONFLICT (id) DO UPDATE SET
+         payload = EXCLUDED.payload,
+         saved_at_ms = EXCLUDED.saved_at_ms`,
+      [
+        'singleton',
+        JSON.stringify({
+          events,
+          fetched_at_ms: Number(state.fetched_at_ms) || Date.now(),
+        }),
+        state.saved_at_ms,
+      ]
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function loadNewsCalendarFromPersist(): Promise<any | null> {
+  try {
+    const { rows } = await client.query(
+      `SELECT payload, saved_at_ms FROM master_news_calendar WHERE id = $1 LIMIT 1`,
+      ['singleton']
+    );
+    const row = rows?.[0];
+    if (!row) return null;
+    const payload =
+      typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload;
+    if (!payload || typeof payload !== 'object') return null;
+    return {
+      ...payload,
+      saved_at_ms: Number(row.saved_at_ms) || Number(payload.saved_at_ms) || 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Reader decision audit — DualPersist / MemoryPersist / FilePersist SQL path. */
 export async function persistDecisionEvent(entry: {
   event_id: string;
@@ -1188,6 +1237,8 @@ export class MemoryPersist implements PersistClient {
   newsWindowPayload: any | null = null;
   /** Singleton client_fanout payload — DualPersist primary wipe heal */
   clientFanoutPayload: any | null = null;
+  /** Singleton news_calendar payload — DualPersist primary wipe heal */
+  newsCalendarPayload: any | null = null;
 
   async query(sql: string, params: unknown[] = []) {
     const s = sql.replace(/\s+/g, ' ').trim();
@@ -1469,6 +1520,32 @@ export class MemoryPersist implements PersistClient {
             id: 'singleton',
             payload: this.clientFanoutPayload,
             saved_at_ms: Number(this.clientFanoutPayload.saved_at_ms) || 0,
+          },
+        ],
+      };
+    }
+    if (s.startsWith('INSERT INTO master_news_calendar')) {
+      const raw = params[1];
+      this.newsCalendarPayload =
+        typeof raw === 'string' ? JSON.parse(raw as string) : raw;
+      if (
+        this.newsCalendarPayload &&
+        typeof this.newsCalendarPayload === 'object' &&
+        params[2] != null
+      ) {
+        this.newsCalendarPayload.saved_at_ms =
+          Number(params[2]) || Date.now();
+      }
+      return { rows: [] };
+    }
+    if (s.startsWith('SELECT') && s.includes('master_news_calendar')) {
+      if (!this.newsCalendarPayload) return { rows: [] };
+      return {
+        rows: [
+          {
+            id: 'singleton',
+            payload: this.newsCalendarPayload,
+            saved_at_ms: Number(this.newsCalendarPayload.saved_at_ms) || 0,
           },
         ],
       };

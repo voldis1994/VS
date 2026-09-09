@@ -5,7 +5,7 @@
  *
  *   npm run master:restart-check
  */
-import { mkdirSync, writeFileSync, rmSync, unlinkSync, existsSync } from 'fs';
+import { mkdirSync, writeFileSync, rmSync, unlinkSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { PaperBroker } from '../broker.js';
 import {
@@ -356,7 +356,7 @@ async function main() {
     structure_seed_source: 'restart_check',
   };
   saveMarketCache(cacheForPrimary);
-  const { persistMarketCacheState, persistEpicCycleStashState, persistRuntimeGatesState, persistManageConfigState, persistOwnsPipelineState, persistMonitoringSnapshotState, persistSpreadHistoryState, persistTradeAckJournalState, persistErrorJournalState, persistNewsWindowState, persistClientFanoutState } =
+  const { persistMarketCacheState, persistEpicCycleStashState, persistRuntimeGatesState, persistManageConfigState, persistOwnsPipelineState, persistMonitoringSnapshotState, persistSpreadHistoryState, persistTradeAckJournalState, persistErrorJournalState, persistNewsWindowState, persistClientFanoutState, persistNewsCalendarState } =
     await import('../persist.js');
   await persistMarketCacheState({
     ...cacheForPrimary,
@@ -655,6 +655,32 @@ async function main() {
     primary.clientFanoutPayload != null &&
     primary.clientFanoutPayload.attempted === true &&
     Number(primary.clientFanoutPayload.ok_count) === 2;
+  // Dual-write news_calendar into MemoryPersist primary BEFORE file wipe
+  const nowCal = Date.now();
+  const newsCalForPrimary = {
+    fetched_at_ms: nowCal,
+    events: [
+      {
+        title: 'FOMC Statement',
+        country: 'USD',
+        date: new Date(nowCal + 5 * 60_000).toISOString(),
+        impact: 'High',
+      },
+    ],
+  };
+  writeFileSync(
+    join(stateDir, 'news_calendar.json'),
+    JSON.stringify(newsCalForPrimary),
+    'utf8'
+  );
+  await persistNewsCalendarState({
+    ...newsCalForPrimary,
+    saved_at_ms: Date.now(),
+  });
+  const primaryHadNewsCalendar =
+    primary.newsCalendarPayload != null &&
+    Array.isArray(primary.newsCalendarPayload.events) &&
+    primary.newsCalendarPayload.events.length >= 1;
   const primaryHadDecisions = primary.decisionEvents.length >= 1;
   const primaryHadTrades = primary.tradeEvents.length >= 1;
   const primaryHadOpens = primary.positions.length >= 1;
@@ -700,6 +726,9 @@ async function main() {
   const clientFanoutGoneBeforeHydrate = !existsSync(
     join(stateDir, 'client_fanout.json')
   );
+  const newsCalendarGoneBeforeHydrate = !existsSync(
+    join(stateDir, 'news_calendar.json')
+  );
   // Do NOT re-seed market_cache — must heal from DualPersist primary.
   // Do NOT re-seed epic_cycle_stash — must heal from DualPersist primary.
   // Do NOT re-seed runtime_gates — must heal from DualPersist primary.
@@ -711,6 +740,7 @@ async function main() {
   // Do NOT re-seed error_journal — must heal from DualPersist primary.
   // Do NOT re-seed news_window — must heal from DualPersist primary.
   // Do NOT re-seed client_fanout — must heal from DualPersist primary.
+  // Do NOT re-seed news_calendar — must heal from DualPersist primary.
 
   // Simulate process restart — empty in-memory book, durable state on primary
   masterRuntime.pipeline = new MasterPipeline('PAPER');
@@ -775,6 +805,8 @@ async function main() {
   masterRuntime.account.consecutive_losses = 0;
   masterRuntime.account.daily_pnl_day = null;
   masterRuntime.last_client_fanout = null;
+  const { clearNewsCalendarCacheForTest } = await import('../newsCalendar.js');
+  clearNewsCalendarCacheForTest();
   // Soft exits off for sync-survival proof — EMA/BestOutcome must not steal the case
   masterRuntime.cfg = {
     ...DEFAULT_MASTER_CONFIG,
@@ -792,6 +824,35 @@ async function main() {
   const hydrated = await masterRuntime.hydrateBookFromDisk();
   const stHydrate = masterRuntime.status();
   const { newsBlocksEntries } = await import('../newsGate.js');
+  const { isNewsCalendarBlocked, clearNewsCalendarCacheForTest: clearCal } =
+    await import('../newsCalendar.js');
+  // Prove calendar heal without relying on news_window sidecar
+  const prevImpact = process.env.MASTER_NEWS_IMPACT;
+  const prevFilter = process.env.MASTER_NEWS_FILTER;
+  delete process.env.MASTER_NEWS_IMPACT;
+  delete process.env.MASTER_NEWS_FILTER;
+  // Temporarily hide news_window so calendar path is exercised
+  const newsWinPath = join(stateDir, 'news_window.json');
+  let newsWinBackup: string | null = null;
+  if (existsSync(newsWinPath)) {
+    newsWinBackup = readFileSync(newsWinPath, 'utf8');
+    unlinkSync(newsWinPath);
+  }
+  clearCal();
+  // Re-load from healed news_calendar.json via getCachedNewsEvents
+  const newsCalHealedBlocks =
+    isNewsCalendarBlocked({
+      symbol: 'GOLD',
+      nowMs: Date.now(),
+      minutesBefore: 30,
+      minutesAfter: 15,
+      minImpact: 'High',
+    }).blocked === true;
+  if (newsWinBackup != null) {
+    writeFileSync(newsWinPath, newsWinBackup, 'utf8');
+  }
+  if (prevImpact !== undefined) process.env.MASTER_NEWS_IMPACT = prevImpact;
+  if (prevFilter !== undefined) process.env.MASTER_NEWS_FILTER = prevFilter;
   const newsHealedBlocks = newsBlocksEntries(true, Date.now(), 'GOLD').blocked === true;
   const pgPrimaryHealOk =
     primaryHadDecisions &&
@@ -808,6 +869,7 @@ async function main() {
     primaryHadErrorJournal &&
     primaryHadNewsWindow &&
     primaryHadClientFanout &&
+    primaryHadNewsCalendar &&
     journalsGoneBeforeHydrate &&
     marketCacheGoneBeforeHydrate &&
     epicStashGoneBeforeHydrate &&
@@ -820,6 +882,7 @@ async function main() {
     errorJournalGoneBeforeHydrate &&
     newsWindowGoneBeforeHydrate &&
     clientFanoutGoneBeforeHydrate &&
+    newsCalendarGoneBeforeHydrate &&
     existsSync(join(stateDir, 'market_cache.json')) &&
     existsSync(join(stateDir, 'epic_cycle_stash.json')) &&
     existsSync(join(stateDir, 'runtime_gates.json')) &&
@@ -831,7 +894,9 @@ async function main() {
     existsSync(join(stateDir, 'error_journal.jsonl')) &&
     existsSync(join(stateDir, 'news_window.json')) &&
     existsSync(join(stateDir, 'client_fanout.json')) &&
+    existsSync(join(stateDir, 'news_calendar.json')) &&
     newsHealedBlocks &&
+    newsCalHealedBlocks &&
     masterRuntime.last_client_fanout?.attempted === true &&
     Number(masterRuntime.last_client_fanout?.ok_count) === 2 &&
     Number(masterRuntime.cfg.profit_lock) === 99 &&
@@ -1406,6 +1471,11 @@ async function main() {
         existsSync(join(stateDir, 'client_fanout.json')) &&
         hydrateSnap.last_client_fanout?.attempted === true &&
         Number(hydrateSnap.last_client_fanout?.ok_count) === 2,
+      news_calendar_pg_primary_heal_ok:
+        primaryHadNewsCalendar &&
+        newsCalendarGoneBeforeHydrate &&
+        existsSync(join(stateDir, 'news_calendar.json')) &&
+        newsCalHealedBlocks,
       persist_backend: hydrateSnap.persist_backend,
       healed_from_persist: hydrateSnap.healed_from_persist,
     },
