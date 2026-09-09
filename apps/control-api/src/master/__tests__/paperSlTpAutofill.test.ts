@@ -662,8 +662,12 @@ describe('manageOnly equity refresh after close', () => {
         epic: 'GOLD',
         ts_ms: Date.now(),
       };
-      // Keep account.equity stale until manageOnly refreshes from venue
+      // Venue auto-fills on setQuote; account.equity stays stale until manageOnly
       masterRuntime.account.equity = 10_000;
+      masterRuntime.account.balance = 10_000;
+      broker.setQuote(crash);
+      expect(broker.equity).toBeLessThan(10_000);
+      expect(masterRuntime.account.equity).toBe(10_000);
       await (
         masterRuntime as unknown as {
           manageOnlyTick: (b: typeof bars, q: typeof crash) => Promise<void>;
