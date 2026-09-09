@@ -2066,7 +2066,10 @@ class MasterRuntime {
   }
 
   /** Journal stubs for broker orphans + synthetic flat for local ghosts after sync. */
-  private applySyncJournal(sync: Awaited<ReturnType<typeof syncPositionsWithBroker>>, quote?: Quote) {
+  private async applySyncJournal(
+    sync: Awaited<ReturnType<typeof syncPositionsWithBroker>>,
+    quote?: Quote
+  ) {
     const capitalLive =
       this.broker instanceof CapitalBroker && !(this.broker.paper ?? false);
     for (const ghost of sync.orphans_local) {
@@ -2340,6 +2343,18 @@ class MasterRuntime {
         },
       });
       this.trackPersist('recover_orphan', persistOpportunity(stub));
+    }
+    // Sync-ghost / external-partial closes move venue equity (paper auto-fill)
+    // without manage/manual close — refresh account + peak so KPIs/risk DD match.
+    const syncClosed =
+      (sync.orphans_local?.length || 0) + (sync.external_partials?.length || 0);
+    if (syncClosed > 0 && this.broker) {
+      try {
+        const acct = await this.broker.getAccount();
+        if (acct) this.applyVenueAccountAfterClose(acct);
+      } catch {
+        /* keep */
+      }
     }
   }
 
@@ -2950,7 +2965,7 @@ class MasterRuntime {
       );
       // Journal confirmed ghosts/orphans even when other tickets are still in miss-debounce.
       if (!sync.skipped) {
-        this.applySyncJournal(sync, quote);
+        await this.applySyncJournal(sync, quote);
       }
       // Capital LIVE: successful tick list proves venue open-count; list fail demotes health
       if (broker instanceof CapitalBroker && !broker.paper) {
@@ -4147,7 +4162,7 @@ class MasterRuntime {
       );
       // Journal confirmed ghosts/orphans even when other tickets are still in miss-debounce.
       if (!sync.skipped) {
-        this.applySyncJournal(sync);
+        await this.applySyncJournal(sync);
       }
       if (this.broker instanceof CapitalBroker && !this.broker.paper) {
         if (sync.skipped) {
@@ -5119,7 +5134,7 @@ class MasterRuntime {
       );
       // Journal confirmed ghosts/orphans even when other tickets are still in miss-debounce.
       if (!sync.skipped) {
-        this.applySyncJournal(sync, quote);
+        await this.applySyncJournal(sync, quote);
       }
       if (broker instanceof CapitalBroker && !broker.paper) {
         if (sync.skipped) {

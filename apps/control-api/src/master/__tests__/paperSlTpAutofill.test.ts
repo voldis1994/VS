@@ -822,4 +822,145 @@ describe('manageOnly equity refresh after close', () => {
       else process.env.MASTER_STATE_DIR = prev;
     }
   });
+
+  it('sync-ghost STOP_HIT refreshes account equity without manage close', async () => {
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = mkdtempSync(
+      join(tmpdir(), 'vs-sync-ghost-equity-')
+    );
+    try {
+      masterRuntime.stop();
+      masterRuntime.pipeline = new MasterPipeline('PAPER');
+      masterRuntime.positions = new PositionManager();
+      masterRuntime.cfg = {
+        ...DEFAULT_MASTER_CONFIG,
+        mode: 'PAPER',
+        time_stop_max_bars: 0,
+        max_hold_ms: 86_400_000,
+        post_exit_cooldown_ms: 0,
+      };
+      const broker = masterRuntime.ensurePaperBroker();
+      broker.hydrateAccount({ equity: 10_000, balance: 10_000 });
+      masterRuntime.account.equity = 10_000;
+      masterRuntime.account.balance = 10_000;
+      masterRuntime.account.peak_equity = 10_000;
+      masterRuntime.running = true;
+
+      const entry = 4400;
+      const bars = Array.from({ length: 20 }, (_, i) => ({
+        open: entry,
+        high: entry + 1,
+        low: entry - 1,
+        close: entry,
+        ts_ms: Date.UTC(2026, 8, 9, 15, i),
+      }));
+      broker.setQuote({
+        bid: entry,
+        ask: entry + 0.2,
+        mid: entry + 0.1,
+        spread: 0.2,
+        epic: 'GOLD',
+        ts_ms: Date.now(),
+      });
+      const placed = await broker.placeOrder({
+        intent_id: 'sync-ghost-equity-aaaaaaaa',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 1,
+        stop_level: entry - 2,
+        profit_level: entry + 20,
+      });
+      expect(placed.ok).toBe(true);
+      masterRuntime.positions.register({
+        position_id: placed.position_id!,
+        opportunity_id: 'opp-sync-ghost-equity',
+        intent_id: 'sync-ghost-equity-aaaaaaaa',
+        epic: 'GOLD',
+        side: 'BUY',
+        size: 1,
+        entry: placed.fill_price!,
+        stop_loss: entry - 2,
+        take_profit: entry + 20,
+        decision: {
+          decision_id: 'd-sge',
+          kind: 'BUY',
+          side: 'BUY',
+          score: 0.7,
+          block_reason: null,
+          buy: null as never,
+          sell: null as never,
+          analysis: {
+            regime: 'TREND',
+            market_state: 't',
+            momentum_score: 0.5,
+            momentum_dir: 'UP',
+            trend_dir: 'UP',
+            trend_strength: 0.5,
+            structure_bias: 'BULLISH',
+            swing_high: entry + 5,
+            swing_low: entry - 5,
+            buy_pressure: 0.6,
+            sell_pressure: 0.4,
+            behavior_bull: 0.5,
+            behavior_bear: 0.5,
+            impact_score: 0.5,
+            context_quality: 0.8,
+            volatility: 0.001,
+            atr: 1,
+            data_quality: 0.9,
+            session: 'LONDON',
+          },
+          expectancy: null,
+        },
+      });
+
+      // Auto-fill on crash, then bounce so manage protective does not fire
+      broker.setQuote({
+        bid: entry - 3,
+        ask: entry - 2.8,
+        mid: entry - 2.9,
+        spread: 0.2,
+        epic: 'GOLD',
+        ts_ms: Date.now(),
+      });
+      expect((await broker.listOpenPositions()).positions.length).toBe(0);
+      expect(broker.equity).toBeLessThan(10_000);
+      const bounce = {
+        bid: entry + 1,
+        ask: entry + 1.2,
+        mid: entry + 1.1,
+        spread: 0.2,
+        epic: 'GOLD',
+        ts_ms: Date.now(),
+      };
+      broker.setQuote(bounce);
+      masterRuntime.account.equity = 10_000;
+      masterRuntime.account.peak_equity = 10_000;
+      expect(masterRuntime.positions.count()).toBe(1);
+
+      await (
+        masterRuntime as unknown as {
+          manageOnlyTick: (b: typeof bars, q: typeof bounce) => Promise<void>;
+        }
+      ).manageOnlyTick(bars, bounce);
+
+      // Sync-ghost path (not manage close) must still settle account from venue
+      expect(masterRuntime.positions.count()).toBe(0);
+      expect(String(masterRuntime.last_exit_reason || '')).toMatch(/STOP_HIT/);
+      expect(masterRuntime.account.equity).toBe(broker.equity);
+      expect(masterRuntime.account.equity).toBeLessThan(10_000);
+    } finally {
+      try {
+        masterRuntime.ensurePaperBroker().hydrateAccount({
+          equity: 10_000,
+          balance: 10_000,
+        });
+      } catch {
+        /* ignore */
+      }
+      masterRuntime.stop();
+      if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prev;
+    }
+  });
 });
