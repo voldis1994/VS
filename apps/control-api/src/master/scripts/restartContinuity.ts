@@ -356,7 +356,7 @@ async function main() {
     structure_seed_source: 'restart_check',
   };
   saveMarketCache(cacheForPrimary);
-  const { persistMarketCacheState, persistEpicCycleStashState, persistRuntimeGatesState, persistManageConfigState, persistOwnsPipelineState, persistMonitoringSnapshotState, persistSpreadHistoryState } =
+  const { persistMarketCacheState, persistEpicCycleStashState, persistRuntimeGatesState, persistManageConfigState, persistOwnsPipelineState, persistMonitoringSnapshotState, persistSpreadHistoryState, persistTradeAckJournalState } =
     await import('../persist.js');
   await persistMarketCacheState({
     ...cacheForPrimary,
@@ -551,6 +551,39 @@ async function main() {
     primary.spreadHistoryPayload != null &&
     Array.isArray(primary.spreadHistoryPayload.history) &&
     primary.spreadHistoryPayload.history.length >= 3;
+  // Dual-write trade_ack_journal into MemoryPersist primary BEFORE file wipe
+  const tradeAckForPrimary = {
+    'cmd-open-1': {
+      command_id: 'cmd-open-1',
+      intent_id: 'intent-heal-1',
+      action: 'OPEN' as const,
+      side: 'BUY' as const,
+      volume: 0.1,
+      epic: 'EURUSD',
+      ack_status: 'SUCCESS' as const,
+      ticket: 'T-HEAL-1',
+      fill_price: 1.085,
+      sl: 1.08,
+      tp: 1.09,
+      reason: 'ACK',
+      ts_intent: new Date().toISOString(),
+      ts_ack: new Date().toISOString(),
+    },
+  };
+  writeFileSync(
+    join(stateDir, 'trade_ack_journal.json'),
+    JSON.stringify(tradeAckForPrimary, null, 2),
+    'utf8'
+  );
+  await persistTradeAckJournalState({
+    records: tradeAckForPrimary,
+    saved_at_ms: Date.now(),
+  });
+  const primaryHadTradeAck =
+    primary.tradeAckJournalPayload != null &&
+    primary.tradeAckJournalPayload.records != null &&
+    typeof primary.tradeAckJournalPayload.records === 'object' &&
+    primary.tradeAckJournalPayload.records['cmd-open-1']?.ticket === 'T-HEAL-1';
   const primaryHadDecisions = primary.decisionEvents.length >= 1;
   const primaryHadTrades = primary.tradeEvents.length >= 1;
   const primaryHadOpens = primary.positions.length >= 1;
@@ -584,6 +617,9 @@ async function main() {
   const spreadHistoryGoneBeforeHydrate = !existsSync(
     join(stateDir, 'spread_history.json')
   );
+  const tradeAckGoneBeforeHydrate = !existsSync(
+    join(stateDir, 'trade_ack_journal.json')
+  );
   // Do NOT re-seed market_cache — must heal from DualPersist primary.
   // Do NOT re-seed epic_cycle_stash — must heal from DualPersist primary.
   // Do NOT re-seed runtime_gates — must heal from DualPersist primary.
@@ -591,6 +627,7 @@ async function main() {
   // Do NOT re-seed owns_pipeline — must heal from DualPersist primary.
   // Do NOT re-seed monitoring_snapshot — must heal from DualPersist primary.
   // Do NOT re-seed spread_history — must heal from DualPersist primary.
+  // Do NOT re-seed trade_ack_journal — must heal from DualPersist primary.
 
   // Simulate process restart — empty in-memory book, durable state on primary
   masterRuntime.pipeline = new MasterPipeline('PAPER');
@@ -676,6 +713,7 @@ async function main() {
     primaryHadOwnsPipeline &&
     primaryHadMonitoring &&
     primaryHadSpreadHistory &&
+    primaryHadTradeAck &&
     journalsGoneBeforeHydrate &&
     marketCacheGoneBeforeHydrate &&
     epicStashGoneBeforeHydrate &&
@@ -684,6 +722,7 @@ async function main() {
     ownsPipelineGoneBeforeHydrate &&
     monitoringGoneBeforeHydrate &&
     spreadHistoryGoneBeforeHydrate &&
+    tradeAckGoneBeforeHydrate &&
     existsSync(join(stateDir, 'market_cache.json')) &&
     existsSync(join(stateDir, 'epic_cycle_stash.json')) &&
     existsSync(join(stateDir, 'runtime_gates.json')) &&
@@ -691,6 +730,7 @@ async function main() {
     existsSync(join(stateDir, 'owns_pipeline.json')) &&
     existsSync(join(stateDir, 'monitoring_snapshot.json')) &&
     existsSync(join(stateDir, 'spread_history.json')) &&
+    existsSync(join(stateDir, 'trade_ack_journal.json')) &&
     Number(masterRuntime.cfg.profit_lock) === 99 &&
     Number(masterRuntime.cfg.min_score) === 0.42 &&
     masterRuntime.cfg.require_armed_setup === true &&
@@ -1226,6 +1266,10 @@ async function main() {
         primaryHadSpreadHistory &&
         spreadHistoryGoneBeforeHydrate &&
         existsSync(join(stateDir, 'spread_history.json')),
+      trade_ack_journal_pg_primary_heal_ok:
+        primaryHadTradeAck &&
+        tradeAckGoneBeforeHydrate &&
+        existsSync(join(stateDir, 'trade_ack_journal.json')),
       persist_backend: hydrateSnap.persist_backend,
       healed_from_persist: hydrateSnap.healed_from_persist,
     },

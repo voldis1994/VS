@@ -914,6 +914,10 @@ class MasterRuntime {
       this.spreadLookback = this.cfg.spread_lookback_bars;
       this.spreadHistory = new SH(this.spreadLookback);
       this.spreadHistory.load();
+      const { hydrateTradeAckJournalFromPersist } = await import(
+        './tradeAckJournal.js'
+      );
+      await hydrateTradeAckJournalFromPersist();
       if (this.positions.count() === 0) {
         const loaded = await loadOpenPositions();
         const valid = loaded.filter((p) => p.decision && p.position_id);
@@ -3750,6 +3754,10 @@ class MasterRuntime {
       this.broker instanceof Mt4FileBroker ||
       this.broker instanceof CapitalBroker
     ) {
+      const { hydrateTradeAckJournalFromPersist } = await import(
+        './tradeAckJournal.js'
+      );
+      await hydrateTradeAckJournalFromPersist();
       const booked = new Set(this.positions.list().map((p) => p.position_id));
       const fromAck = this.broker.adoptOpenFromAckJournal(booked);
       let statusByTicket = new Map<

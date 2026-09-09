@@ -490,6 +490,15 @@ export class FilePersist implements PersistClient, JournalMirror {
         this.mem.spreadHistoryPayload
       );
     }
+    // Dual-write trade_ack_journal sidecar when SQL path updated MemoryPersist
+    if (this.mem.tradeAckJournalPayload) {
+      const records =
+        this.mem.tradeAckJournalPayload.records &&
+        typeof this.mem.tradeAckJournalPayload.records === 'object'
+          ? this.mem.tradeAckJournalPayload.records
+          : this.mem.tradeAckJournalPayload;
+      atomicWriteJson(join(this.root, 'trade_ack_journal.json'), records);
+    }
   }
 
   async query(sql: string, params: unknown[] = []) {

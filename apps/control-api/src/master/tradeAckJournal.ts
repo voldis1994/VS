@@ -2,6 +2,7 @@
  * Reader-style INTENT→ACK journal for LIVE crash recovery (Capital + MT4 legacy).
  * Durable rewrite map under MASTER_STATE_DIR — records INTENT before broker OPEN,
  * updates on SUCCESS/FAILED/TIMEOUT, and supplies OPEN SUCCESS rows for adopt.
+ * Also DualPersist / MemoryPersist / PG primary so a full file wipe heals.
  */
 import {
   closeSync,
@@ -16,6 +17,10 @@ import {
 } from 'fs';
 import { join } from 'path';
 import type { Side } from './types.js';
+import {
+  persistTradeAckJournalState,
+  loadTradeAckJournalFromPersist,
+} from './persist.js';
 
 export type TradeAckStatus = 'PENDING' | 'SUCCESS' | 'FAILED' | 'TIMEOUT';
 
@@ -36,23 +41,27 @@ export type TradeAckRecord = {
   ts_ack: string | null;
 };
 
-function stateDir(): string {
+function stateDir(root?: string): string {
   return (
+    root ||
     process.env.MASTER_STATE_DIR ||
     process.env.MASTER_GATES_DIR ||
     join(process.cwd(), '.master-state')
   );
 }
 
-function journalPath(): string {
-  return join(stateDir(), 'trade_ack_journal.json');
+function journalPath(root?: string): string {
+  return join(stateDir(root), 'trade_ack_journal.json');
 }
 
-function readAll(): Record<string, TradeAckRecord> {
+function readAll(root?: string): Record<string, TradeAckRecord> {
   try {
-    const path = journalPath();
+    const path = journalPath(root);
     if (!existsSync(path)) return {};
-    const raw = JSON.parse(readFileSync(path, 'utf8')) as Record<string, TradeAckRecord>;
+    const raw = JSON.parse(readFileSync(path, 'utf8')) as Record<
+      string,
+      TradeAckRecord
+    >;
     return raw && typeof raw === 'object' ? raw : {};
   } catch {
     return {};
@@ -60,11 +69,14 @@ function readAll(): Record<string, TradeAckRecord> {
 }
 
 /** Atomic write + fsync so INTENT survives crash before cmd rename. */
-function writeAll(map: Record<string, TradeAckRecord>): boolean {
+function writeAll(
+  map: Record<string, TradeAckRecord>,
+  root?: string
+): boolean {
   try {
-    const dir = stateDir();
+    const dir = stateDir(root);
     mkdirSync(dir, { recursive: true });
-    const path = journalPath();
+    const path = journalPath(root);
     const tmp = `${path}.tmp`;
     const body = JSON.stringify(map, null, 2);
     writeFileSync(tmp, body, 'utf8');
@@ -81,10 +93,15 @@ function writeAll(map: Record<string, TradeAckRecord>): boolean {
     } finally {
       closeSync(fd2);
     }
+    // DualPersist / MemoryPersist / PG primary — survive full file wipe
+    void persistTradeAckJournalState({
+      records: map,
+      saved_at_ms: Date.now(),
+    }).catch(() => {});
     return true;
   } catch {
     try {
-      unlinkSync(`${journalPath()}.tmp`);
+      unlinkSync(`${journalPath(root)}.tmp`);
     } catch {
       /* ignore */
     }
@@ -179,4 +196,44 @@ export function findOpenIntentBlocker(intentId: string): TradeAckRecord | null {
 /** Test helper — wipe journal file. */
 export function clearTradeAckJournalForTest(): void {
   writeAll({});
+}
+
+/**
+ * When trade_ack_journal.json was wiped but DualPersist/PG primary still holds
+ * the singleton payload, rewrite the sidecar before adopt/load.
+ */
+export async function hydrateTradeAckJournalFromPersist(
+  root?: string
+): Promise<{ restored: boolean; count: number }> {
+  const dir = stateDir(root);
+  const path = journalPath(root);
+  if (existsSync(path)) return { restored: false, count: 0 };
+  try {
+    const loaded = await loadTradeAckJournalFromPersist();
+    if (!loaded || typeof loaded !== 'object') {
+      return { restored: false, count: 0 };
+    }
+    const recordsRaw =
+      loaded.records && typeof loaded.records === 'object'
+        ? (loaded.records as Record<string, unknown>)
+        : null;
+    if (!recordsRaw) return { restored: false, count: 0 };
+    const map: Record<string, TradeAckRecord> = {};
+    for (const [k, v] of Object.entries(recordsRaw)) {
+      if (!v || typeof v !== 'object') continue;
+      const rec = v as TradeAckRecord;
+      if (!rec.command_id || !rec.action) continue;
+      map[k] = rec;
+    }
+    if (Object.keys(map).length < 1) return { restored: false, count: 0 };
+    mkdirSync(dir, { recursive: true });
+    // Write sidecar only — do not re-INSERT (would no-op / race); primary already has it
+    const body = JSON.stringify(map, null, 2);
+    const tmp = `${path}.tmp`;
+    writeFileSync(tmp, body, 'utf8');
+    renameSync(tmp, path);
+    return { restored: true, count: Object.keys(map).length };
+  } catch {
+    return { restored: false, count: 0 };
+  }
 }
