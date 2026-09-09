@@ -76,6 +76,69 @@ describe('MASTER daily pnl day boundary', () => {
     expect(blocked.reasons).toContain('max_daily_loss');
   });
 
+  it('evaluateRisk blocks entries while daily_pnl_day lags UTC today', async () => {
+    const bars = Array.from({ length: 40 }, (_, i) => {
+      const o = 4400 + i * 0.8;
+      return { open: o, high: o + 1.2, low: o - 0.1, close: o + 0.9, ts_ms: i * 60_000 };
+    });
+    const pipe = new MasterPipeline('PAPER');
+    const cycle = await pipe.runCycle({
+      bars,
+      quote: { bid: 4430, ask: 4430.4, mid: 4430.2, spread: 0.4, ts_ms: Date.now() },
+      account,
+      instrument: GOLD_SPEC,
+      cfg: DEFAULT_MASTER_CONFIG,
+    });
+    const forced = {
+      ...cycle.decision,
+      kind: 'BUY' as const,
+      side: 'BUY' as const,
+      block_reason: null,
+      buy: {
+        ...cycle.decision.buy,
+        valid: true,
+        filter_ok: true,
+        score: 0.9,
+        entry: 4430,
+        stop_loss: 4428,
+        take_profit: 4435,
+      },
+    };
+    const quote: Quote = { bid: 4430, ask: 4430.4, mid: 4430.2, spread: 0.4, ts_ms: Date.now() };
+    const today = new Date().toISOString().slice(0, 10);
+    // Sealed prior day with mild PnL — must not allow entry while roll deferred
+    const deferred = evaluateRisk(
+      forced,
+      {
+        ...account,
+        daily_pnl: -50,
+        daily_pnl_day: '2000-01-01',
+        day_start_equity: 10_000,
+        equity: 9_950,
+      },
+      GOLD_SPEC,
+      quote,
+      { ...DEFAULT_MASTER_CONFIG, max_daily_loss_pct: 0.99 }
+    );
+    expect(deferred.allowed).toBe(false);
+    expect(deferred.reasons).toContain('utc_day_roll_deferred');
+
+    const rolled = evaluateRisk(
+      forced,
+      {
+        ...account,
+        daily_pnl: -80,
+        daily_pnl_day: today,
+        day_start_equity: 9_950,
+        equity: 9_870,
+      },
+      GOLD_SPEC,
+      quote,
+      { ...DEFAULT_MASTER_CONFIG, max_daily_loss_pct: 0.99 }
+    );
+    expect(rolled.reasons).not.toContain('utc_day_roll_deferred');
+  });
+
   it('rollDailyPnl zeros prior-day losses on new UTC day', async () => {
     masterRuntime.stop();
     masterRuntime.pipeline = new MasterPipeline('PAPER');
