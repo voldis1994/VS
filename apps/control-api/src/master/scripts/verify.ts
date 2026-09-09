@@ -247,6 +247,7 @@ async function main() {
       runtimeBody.includes('m.ok && m.bars_out >= 5') &&
       runtimeBody.includes('journal:') &&
       runtimeBody.includes('performance:') &&
+      runtimeBody.includes('flat · no exit yet') &&
       !runtimeBody.includes('journal_performance:');
     const manageOwnerApi =
       runtimeBody.includes('manage_owner:') &&
