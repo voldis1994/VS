@@ -4259,24 +4259,35 @@ class MasterRuntime {
                 : `BUY ${d.buy.filter_ok ? 'ok' : d.buy.filter_reason || 'fail'} · SELL ${d.sell.filter_ok ? 'ok' : d.sell.filter_reason || 'fail'}`,
           },
           decision: {
+            // Never forge green from journal-hydrate alone — need a live cycle
             ok: !!(
+              m &&
               d &&
               (d.kind === 'BUY' ||
                 d.kind === 'SELL' ||
                 d.kind === 'WAIT' ||
                 d.kind === 'BLOCK')
             ),
-            detail: d
-              ? `${d.kind}${d.block_reason ? ` · ${d.block_reason}` : ''}`
-              : '—',
+            detail: !d
+              ? '—'
+              : !m
+                ? `hydrated · ${d.kind}${d.block_reason ? ` · ${d.block_reason}` : ''}`
+                : `${d.kind}${d.block_reason ? ` · ${d.block_reason}` : ''}`,
           },
           risk: {
-            ok: r ? r.allowed || r.reasons.length > 0 : false,
-            detail: r
-              ? r.allowed
-                ? `vol=${r.volume}`
-                : r.reasons.slice(0, 2).join('|') || 'blocked'
-              : '—',
+            // Sticky last_risk without a live cycle must not forge Stage·risk
+            ok: !!(m && r && (r.allowed || r.reasons.length > 0)),
+            detail: !r
+              ? '—'
+              : !m
+                ? `hydrated · ${
+                    r.allowed
+                      ? `vol=${r.volume}`
+                      : r.reasons.slice(0, 2).join('|') || 'blocked'
+                  }`
+                : r.allowed
+                  ? `vol=${r.volume}`
+                  : r.reasons.slice(0, 2).join('|') || 'blocked',
           },
           execution: {
             // Never forge green from journal-hydrate alone — need a live cycle

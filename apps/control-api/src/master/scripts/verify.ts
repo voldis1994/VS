@@ -257,6 +257,7 @@ async function main() {
       runtimeBody.includes('no cycle ·') &&
       runtimeBody.includes('Never forge green from journal-hydrate alone') &&
       runtimeBody.includes('hydrated ·') &&
+      runtimeBody.includes('Sticky last_risk without a live cycle') &&
       !runtimeBody.includes('journal_performance:');
     const manageOwnerApi =
       runtimeBody.includes('manage_owner:') &&
