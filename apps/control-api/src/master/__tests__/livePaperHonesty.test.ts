@@ -15,6 +15,7 @@ function baseClosed(over: Partial<LivePaperDemoReport> = {}): LivePaperDemoRepor
     open_positions: 0,
     traded: 1,
     performance_trades: 1,
+    performance_total_pnl: 1.25,
     ticks: [
       { mid: 4400, executed: true },
       { mid: 4390, executed: false, phase: 'exit_drive' },
@@ -66,5 +67,20 @@ describe('isHonestLivePaperClosed', () => {
     expect(isHonestLivePaperClosed(baseClosed({ open_positions: 1 }))).toBe(
       false
     );
+  });
+
+  it('rejects CLOSED without finite performance_total_pnl', () => {
+    expect(
+      isHonestLivePaperClosed(baseClosed({ performance_total_pnl: null }))
+    ).toBe(false);
+    expect(
+      isHonestLivePaperClosed(baseClosed({ performance_total_pnl: undefined }))
+    ).toBe(false);
+  });
+
+  it('accepts zero closed PnL when trades exist', () => {
+    expect(
+      isHonestLivePaperClosed(baseClosed({ performance_total_pnl: 0 }))
+    ).toBe(true);
   });
 });

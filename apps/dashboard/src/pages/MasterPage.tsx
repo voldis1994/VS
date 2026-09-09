@@ -734,6 +734,18 @@ export function MasterPage() {
                 : '—',
         },
         {
+          k: 'Closed PnL',
+          v: status.performance?.trades
+            ? Number(status.performance.total_pnl || 0).toFixed(2)
+            : '—',
+          ok:
+            !!status.performance?.trades &&
+            Number(status.performance.total_pnl || 0) > 0,
+          bad:
+            !!status.performance?.trades &&
+            Number(status.performance.total_pnl || 0) < 0,
+        },
+        {
           k: 'Day start eq',
           v:
             status.capital_account_proven === false

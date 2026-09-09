@@ -317,6 +317,8 @@ async function main() {
     performance_stage_ok: stHydrate.pipeline_stages?.performance?.ok === true,
     performance_stage_detail:
       stHydrate.pipeline_stages?.performance?.detail ?? null,
+    performance_total_pnl: stHydrate.performance?.total_pnl ?? null,
+    performance_trades: stHydrate.performance?.trades ?? 0,
     exit_stage_ok: stHydrate.pipeline_stages?.exit?.ok === true,
     exit_stage_detail: stHydrate.pipeline_stages?.exit?.detail ?? null,
     filters_stage_ok: stHydrate.pipeline_stages?.filters?.ok === true,
@@ -367,6 +369,9 @@ async function main() {
     hydrateSnap.recent_trades >= 2 &&
     hydrateSnap.journal_stage_ok === true &&
     hydrateSnap.performance_stage_ok === true &&
+    hydrateSnap.performance_total_pnl === 8 &&
+    hydrateSnap.performance_trades >= 1 &&
+    String(hydrateSnap.performance_stage_detail || '').includes('pnl=') &&
     hydrateSnap.exit_stage_ok === true &&
     hydrateSnap.exit_stage_detail === 'TakeProfit' &&
     hydrateSnap.filters_stage_ok === false &&
@@ -492,6 +497,8 @@ async function main() {
       journal_stage_detail: hydrateSnap.journal_stage_detail,
       performance_stage_ok: hydrateSnap.performance_stage_ok,
       performance_stage_detail: hydrateSnap.performance_stage_detail,
+      performance_total_pnl: hydrateSnap.performance_total_pnl,
+      performance_trades: hydrateSnap.performance_trades,
       exit_stage_ok: hydrateSnap.exit_stage_ok,
       exit_stage_detail: hydrateSnap.exit_stage_detail,
       filters_stage_ok: hydrateSnap.filters_stage_ok,

@@ -215,6 +215,7 @@ async function main() {
     open_positions: status.open_positions,
     traded: status.traded,
     performance_trades: status.performance?.trades ?? 0,
+    performance_total_pnl: status.performance?.total_pnl ?? null,
     expectancy: status.performance?.expectancy ?? null,
     equity: status.account?.equity,
     daily_pnl: status.account?.daily_pnl,

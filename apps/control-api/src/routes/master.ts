@@ -719,6 +719,7 @@ async function refresh(){
       card('Trade allowed',s.account?.trade_allowed===false?'NO':s.account?.trade_allowed===true?'YES':'—',s.account?.trade_allowed===false?'bad':s.account?.trade_allowed===true?'ok':''),
       card('News',s.news_window?.window_active?(s.news_window.impact+' · '+s.news_window.source):'clear',s.news_window?.window_active&&s.news_window?.impact==='high'?'bad':''),
       card('Daily PnL',s.capital_account_proven===false?'—':(s.account?.daily_pnl!=null?Number(s.account.daily_pnl).toFixed(2):'—')),
+      card('Closed PnL',s.performance?.trades?Number(s.performance.total_pnl||0).toFixed(2):'—',s.performance?.trades?(Number(s.performance.total_pnl||0)<0?'bad':(Number(s.performance.total_pnl||0)>0?'ok':'')):''),
       card('Day start eq',s.capital_account_proven===false?'UNPROVEN':(s.account?.day_start_equity!=null?Number(s.account.day_start_equity).toFixed(2):'—'),s.capital_account_proven===false?'bad':''),
       card('Peak eq',s.capital_account_proven===false?'UNPROVEN':(s.account?.peak_equity!=null?Number(s.account.peak_equity).toFixed(2):'—'),s.capital_account_proven===false?'bad':''),
       card('Reject cool',(s.reject_cooldown_ms||0)>0?(Math.ceil((s.reject_cooldown_ms||0)/1000)+'s'):'—',(s.reject_cooldown_ms||0)>0?'bad':''),

@@ -13,6 +13,8 @@ export type LivePaperDemoReport = {
   open_positions?: number;
   traded?: number;
   performance_trades?: number;
+  /** Closed-book KPI from performance.total_pnl — required for honest CLOSED. */
+  performance_total_pnl?: number | null;
   ticks?: Array<{ mid?: number; executed?: boolean; phase?: string }>;
   [k: string]: unknown;
 };
@@ -24,6 +26,13 @@ export function isHonestLivePaperClosed(report: LivePaperDemoReport): boolean {
   if (report.status !== 'PASS_LIVE_DATA_CLOSED') return false;
   if (report.forced_live_paper_fill === true) return false;
   if ((report.performance_trades ?? 0) < 1) return false;
+  // Closed book must expose finite total_pnl (0 is ok; missing is not)
+  if (
+    typeof report.performance_total_pnl !== 'number' ||
+    !Number.isFinite(report.performance_total_pnl)
+  ) {
+    return false;
+  }
   if ((report.open_positions ?? 0) !== 0) return false;
   if ((report.traded ?? 0) < 1) return false;
   // One (or at most two) natural fills — flood = churn, not a proof
