@@ -129,8 +129,9 @@ export type MasterStatus = {
   /** False when last Capital list failed — do not treat venue as flat. */
   capital_venue_opens_proven: boolean;
   /**
-   * True when UTC day-roll is deferred (paper open without live mark, or Capital
-   * account unproven). Day start / Daily PnL still belong to sealed prior day.
+   * True when sealed prior-day gates apply for operators: open-book mark /
+   * Capital unproven (roll execution deferred), OR daily_pnl_day lags UTC today
+   * (entries fail-closed — including flat paper before the next roll tick).
    */
   utc_day_roll_deferred: boolean;
   last_decision: ReturnType<typeof decide> | null;
@@ -5766,8 +5767,9 @@ class MasterRuntime {
           : null,
       capital_venue_opens: this.capitalVenueOpens,
       capital_venue_opens_proven: this.capitalVenueOpensProven,
-      // Operator honesty: sealed prior-day gates while mark/Capital unproven
-      utc_day_roll_deferred: this.shouldDeferUtcDayRoll(quote),
+      // Roll-exec defer OR sealed-day lag (flat paper can lag without open-mark defer)
+      utc_day_roll_deferred:
+        this.shouldDeferUtcDayRoll(quote) || dailyPnlDayLagged,
       last_decision: this.last_decision,
       last_risk: this.last_risk,
       last_block_reason: lastBlockReason,
