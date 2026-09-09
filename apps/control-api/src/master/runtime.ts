@@ -5099,6 +5099,18 @@ class MasterRuntime {
     const broker = this.broker || this.ensurePaperBroker();
     // VS-System 1s trail: pull a fresh broker tick — do not reuse frozen last_quote.
     let quote: Quote = { ...quoteIn, epic: quoteIn.epic || this.epic };
+    // Paper: seed venue with caller mark first so getQuote cannot revive a stale
+    // setQuote (tests / feed path that updated last_quote without touching broker).
+    if (broker instanceof PaperBroker) {
+      broker.setQuote({
+        bid: quote.bid,
+        ask: quote.ask,
+        mid: quote.mid,
+        spread: quote.spread,
+        epic: this.epic,
+        ts_ms: quote.ts_ms,
+      });
+    }
     try {
       const live = await Promise.race([
         broker.getQuote(this.epic),
@@ -5275,14 +5287,14 @@ class MasterRuntime {
         Date.now() + cool
       );
       this.persistRuntimeGates();
-      // Mirror full tick: refresh equity/balance/peak from venue after manage closes
-      // so 1s manageOnly loop does not leave Peak eq / risk DD stale until next tick.
-      try {
-        const acct = await broker.getAccount();
-        if (acct) this.applyVenueAccountAfterClose(acct);
-      } catch {
-        /* keep */
-      }
+    }
+    // Always refresh equity/peak after manageOnly MTM — open book (Stop-with-opens)
+    // must not leave Equity/Peak/risk DD stale until the next full tick / close.
+    try {
+      const acct = await broker.getAccount();
+      if (acct) this.applyVenueAccountAfterClose(acct);
+    } catch {
+      /* keep */
     }
     this.account.open_positions = this.positions.count();
     this.trackPersist('open_positions', saveOpenPositions(this.positions.list()));
