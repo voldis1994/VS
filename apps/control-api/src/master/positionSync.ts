@@ -96,26 +96,43 @@ export async function syncPositionsWithBroker(
   // Full-empty book with local opens → debounce ghost wipe (VS-System ×5)
   // Use presence (incl. level-less deals) so a live deal without open_level
   // is never treated as an empty book.
+  // Paper auto-fill: deterministic venue close — skip Capital-style ×5 debounce
+  // when every missing local already has a recent STOP_HIT/TP_HIT fill.
   if (presenceIds.size === 0 && local.length > 0) {
-    const n = (debounce?.consecutive_empty ?? 0) + 1;
-    if (debounce) debounce.consecutive_empty = n;
-    if (n < EMPTY_BROKER_GHOST_DEBOUNCE) {
-      return {
-        broker_count: presenceIds.size,
-        local_count_before: before,
-        local_count_after: before,
-        adopted: 0,
-        dropped: 0,
-        matched: 0,
-        safety_sl_attached: 0,
-        intended_levels_attached: 0,
-        skipped: false,
-        skip_reason: `empty_broker_debounce_${n}/${EMPTY_BROKER_GHOST_DEBOUNCE}`,
-        ghost_drop_deferred: true,
-        orphans_broker: [],
-        orphans_local: [],
-        external_partials: [],
-      };
+    const paperAutofillReady =
+      broker.paper === true &&
+      typeof (broker as { peekRecentAutoFill?: (id: string) => unknown }).peekRecentAutoFill ===
+        'function' &&
+      local.every((p) =>
+        (
+          broker as {
+            peekRecentAutoFill: (id: string) => unknown;
+          }
+        ).peekRecentAutoFill(p.position_id)
+      );
+    if (paperAutofillReady) {
+      if (debounce) debounce.consecutive_empty = EMPTY_BROKER_GHOST_DEBOUNCE;
+    } else {
+      const n = (debounce?.consecutive_empty ?? 0) + 1;
+      if (debounce) debounce.consecutive_empty = n;
+      if (n < EMPTY_BROKER_GHOST_DEBOUNCE) {
+        return {
+          broker_count: presenceIds.size,
+          local_count_before: before,
+          local_count_after: before,
+          adopted: 0,
+          dropped: 0,
+          matched: 0,
+          safety_sl_attached: 0,
+          intended_levels_attached: 0,
+          skipped: false,
+          skip_reason: `empty_broker_debounce_${n}/${EMPTY_BROKER_GHOST_DEBOUNCE}`,
+          ghost_drop_deferred: true,
+          orphans_broker: [],
+          orphans_local: [],
+          external_partials: [],
+        };
+      }
     }
   } else if (debounce) {
     debounce.consecutive_empty = 0;
@@ -159,7 +176,14 @@ export async function syncPositionsWithBroker(
       }
       const n = (miss?.[p.position_id] ?? 0) + 1;
       if (miss) miss[p.position_id] = n;
-      if (n < EMPTY_BROKER_GHOST_DEBOUNCE) {
+      const paperAuto =
+        broker.paper === true &&
+        typeof (broker as { peekRecentAutoFill?: (id: string) => unknown })
+          .peekRecentAutoFill === 'function' &&
+        (
+          broker as { peekRecentAutoFill: (id: string) => unknown }
+        ).peekRecentAutoFill(p.position_id);
+      if (!paperAuto && n < EMPTY_BROKER_GHOST_DEBOUNCE) {
         retainIds.add(p.position_id);
         partialGhostDeferred = true;
       } else {

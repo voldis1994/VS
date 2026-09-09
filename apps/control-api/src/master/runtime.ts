@@ -2086,8 +2086,11 @@ class MasterRuntime {
           fill: exit,
           size: ghost.size,
           value_per_point_per_lot: instrument.value_per_point_per_lot,
-          // Prefer last non-zero broker UPL when fill is only a mark proxy
-          fill_pnl: usableBrokerUpl(ghost.broker_upl),
+          // Prefer paper auto-fill net pnl; else last non-zero broker UPL
+          fill_pnl:
+            paperAuto?.fill_pnl != null && Number.isFinite(paperAuto.fill_pnl)
+              ? Number(paperAuto.fill_pnl)
+              : usableBrokerUpl(ghost.broker_upl),
           capitalLive,
         }),
         volume: ghost.size,
@@ -2137,6 +2140,7 @@ class MasterRuntime {
       this.pipeline.recordTradeClose(ghost.opportunity_id, ghost.decision, outcome, {
         epic: ghost.epic,
       });
+      this.last_exit_reason = outcome.exit_reason;
       if (priced.pnl_proven) {
         this.account.daily_pnl += outcome.pnl;
         if (outcome.pnl < 0) {
@@ -5030,111 +5034,130 @@ class MasterRuntime {
       });
       broker.markToMarket();
     }
-    // Reconcile broker truth on the 1s manage loop too — otherwise SL/TP fills
-    // leave a ghost open until the next full tick (~2.5s) with mark-based PnL.
-    // Capital: venue-wide (same as full tick) so other-epic orphans reconcile.
-    const sync = await syncPositionsWithBroker(
-      this.positions,
-      broker,
-      broker instanceof CapitalBroker ? undefined : this.epic,
-      this.emptyBrokerDebounce,
-      this.liveAdoptContext()
-    );
-    // Journal confirmed ghosts/orphans even when other tickets are still in miss-debounce.
-    if (!sync.skipped) {
-      this.applySyncJournal(sync, quote);
-    }
-    if (broker instanceof CapitalBroker && !broker.paper) {
-      if (sync.skipped) {
-        this.capitalVenueOpensProven = false;
-        this.clearStaleBrokerUpl();
-      } else {
-        this.capitalVenueOpensProven = true;
-        this.capitalVenueOpens = sync.broker_count;
+
+    const runPaperOrCapitalSync = async () => {
+      // Reconcile broker truth on the 1s manage loop too — otherwise SL/TP fills
+      // leave a ghost open until the next full tick (~2.5s) with mark-based PnL.
+      // Capital: venue-wide (same as full tick) so other-epic orphans reconcile.
+      const sync = await syncPositionsWithBroker(
+        this.positions,
+        broker,
+        broker instanceof CapitalBroker ? undefined : this.epic,
+        this.emptyBrokerDebounce,
+        this.liveAdoptContext()
+      );
+      // Journal confirmed ghosts/orphans even when other tickets are still in miss-debounce.
+      if (!sync.skipped) {
+        this.applySyncJournal(sync, quote);
       }
-    }
-    if (this.positions.count() === 0) {
-      this.account.open_positions = 0;
-      return;
-    }
-    this.account.open_positions = this.positions.count();
-    const managed = await this.runManageAcrossOpenEpics({
-      broker,
-      quote,
-      bars,
-    });
-    this.last_manage_tick_ms = Date.now();
-    for (const c of managed.closed) {
-      if (c.outcome.pnl_proven !== false) {
-        this.account.daily_pnl += c.outcome.pnl;
-        if (c.outcome.pnl < 0) {
-          this.account.consecutive_losses += 1;
-          this.last_loss_ms = Date.now();
+      if (broker instanceof CapitalBroker && !broker.paper) {
+        if (sync.skipped) {
+          this.capitalVenueOpensProven = false;
+          this.clearStaleBrokerUpl();
         } else {
-          this.account.consecutive_losses = 0;
+          this.capitalVenueOpensProven = true;
+          this.capitalVenueOpens = sync.broker_count;
         }
       }
-      this.last_exit_reason = c.reason;
-      const sk = c.position.decision.side
-        ? setupKey(
-            c.position.decision.analysis,
-            c.position.decision.side,
-            c.position.epic,
-            c.position.decision.desk_entry_source
-          )
-        : null;
-      this.trackPersist(
-        'outcome',
-        persistOutcome(c.position.opportunity_id, c.outcome, sk)
-      );
-      logTradeEvent({
-        event: 'CLOSE',
-        broker: broker.name,
-        epic: c.position.epic,
-        side: c.position.side,
-        volume: c.outcome.volume,
-        price: c.outcome.exit,
-        position_id: c.position.position_id,
-        intent_id: c.position.intent_id,
-        opportunity_id: c.position.opportunity_id,
-        desk_entry_source: c.position.decision?.desk_entry_source,
-        ok: true,
-        detail: c.reason,
-        ...(c.outcome.pnl_proven !== false
-          ? { pnl: c.outcome.pnl, fees: c.outcome.fees }
-          : {}),
-      });
-    }
-    if (managed.close_failed.length) {
-      const fail = managed.close_failed[0]!;
-      this.broker_detail = `close_fail:${fail.position_id}:${fail.detail}`.slice(
-        0,
-        400
-      );
-      if (!managed.closed.length) {
-        this.last_exit_reason = `CLOSE_FAIL · ${fail.exit_reason} · ${fail.detail}`;
+    };
+
+    const runManageOnlyExits = async (): Promise<{ closed: number }> => {
+      if (this.positions.count() === 0) {
+        this.account.open_positions = 0;
+        return { closed: 0 };
       }
-      this.last_close_failed = {
-        position_id: fail.position_id,
-        exit_reason: fail.exit_reason,
-        detail: fail.detail,
-        ts: new Date().toISOString(),
-      };
-      for (const failRow of managed.close_failed) {
+      this.account.open_positions = this.positions.count();
+      const managed = await this.runManageAcrossOpenEpics({
+        broker,
+        quote,
+        bars,
+      });
+      this.last_manage_tick_ms = Date.now();
+      for (const c of managed.closed) {
+        if (c.outcome.pnl_proven !== false) {
+          this.account.daily_pnl += c.outcome.pnl;
+          if (c.outcome.pnl < 0) {
+            this.account.consecutive_losses += 1;
+            this.last_loss_ms = Date.now();
+          } else {
+            this.account.consecutive_losses = 0;
+          }
+        }
+        this.last_exit_reason = c.reason;
+        const sk = c.position.decision.side
+          ? setupKey(
+              c.position.decision.analysis,
+              c.position.decision.side,
+              c.position.epic,
+              c.position.decision.desk_entry_source
+            )
+          : null;
+        this.trackPersist(
+          'outcome',
+          persistOutcome(c.position.opportunity_id, c.outcome, sk)
+        );
         logTradeEvent({
           event: 'CLOSE',
           broker: broker.name,
-          epic: this.epic,
-          side: null,
-          volume: null,
-          price: null,
-          position_id: failRow.position_id,
-          ok: false,
-          detail: `${failRow.exit_reason} · ${failRow.detail}`,
+          epic: c.position.epic,
+          side: c.position.side,
+          volume: c.outcome.volume,
+          price: c.outcome.exit,
+          position_id: c.position.position_id,
+          intent_id: c.position.intent_id,
+          opportunity_id: c.position.opportunity_id,
+          desk_entry_source: c.position.decision?.desk_entry_source,
+          ok: true,
+          detail: c.reason,
+          ...(c.outcome.pnl_proven !== false
+            ? { pnl: c.outcome.pnl, fees: c.outcome.fees }
+            : {}),
         });
       }
+      if (managed.close_failed.length) {
+        const fail = managed.close_failed[0]!;
+        this.broker_detail = `close_fail:${fail.position_id}:${fail.detail}`.slice(
+          0,
+          400
+        );
+        if (!managed.closed.length) {
+          this.last_exit_reason = `CLOSE_FAIL · ${fail.exit_reason} · ${fail.detail}`;
+        }
+        this.last_close_failed = {
+          position_id: fail.position_id,
+          exit_reason: fail.exit_reason,
+          detail: fail.detail,
+          ts: new Date().toISOString(),
+        };
+        for (const failRow of managed.close_failed) {
+          logTradeEvent({
+            event: 'CLOSE',
+            broker: broker.name,
+            epic: this.epic,
+            side: null,
+            volume: null,
+            price: null,
+            position_id: failRow.position_id,
+            ok: false,
+            detail: `${failRow.exit_reason} · ${failRow.detail}`,
+          });
+        }
+      }
+      this.account.open_positions = this.positions.count();
+      return { closed: managed.closed.length };
+    };
+
+    // Paper: manage before sync so auto-fill STOP_HIT is tick-observed (exit_cycles).
+    // Capital: sync first (venue UPL / empty debounce), then manage.
+    let managedClosed = 0;
+    if (broker instanceof PaperBroker) {
+      managedClosed = (await runManageOnlyExits()).closed;
+      await runPaperOrCapitalSync();
+    } else {
+      await runPaperOrCapitalSync();
+      managedClosed = (await runManageOnlyExits()).closed;
     }
-    if (managed.closed.length > 0) {
+    if (managedClosed > 0) {
       this.last_close_failed = null;
       const cool = Math.max(0, this.cfg.post_exit_cooldown_ms || 0);
       this.post_exit_until_ms = Math.max(

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PaperBroker } from '../broker.js';
+import { PositionManager } from '../positionManager.js';
+import { syncPositionsWithBroker } from '../positionSync.js';
 
 describe('PaperBroker VS-System SL/TP auto-fill on setQuote', () => {
   it('auto-fills STOP_HIT on quote without manageTick', async () => {
@@ -38,11 +40,17 @@ describe('PaperBroker VS-System SL/TP auto-fill on setQuote', () => {
     expect(open.positions.length).toBe(0);
     expect(broker.equity).toBeLessThan(eqBefore);
 
+    const peek = broker.peekRecentAutoFill(placed.position_id!);
+    expect(peek?.reason).toBe('STOP_HIT');
+    expect(peek?.fill_pnl).not.toBeNull();
+    expect(Number(peek!.fill_pnl)).toBeLessThan(0);
+
     // manageTick-style close stays idempotent with the auto fill
     const closed = await broker.closePosition(placed.position_id!);
     expect(closed.ok).toBe(true);
     expect(closed.fill_price).toBe(entry - 2.5);
     expect(String(closed.detail)).toMatch(/paper_auto_stop_hit/);
+    expect(closed.fill_pnl).not.toBeNull();
   });
 
   it('auto-fills TP_HIT on quote for SELL', async () => {
@@ -144,5 +152,149 @@ describe('PaperBroker VS-System SL/TP auto-fill on setQuote', () => {
     expect(pos).toBeTruthy();
     expect(pos!.upl).not.toBeNull();
     expect(Number(pos!.upl)).toBeGreaterThan(0);
+  });
+
+  it('sync journals STOP_HIT same cycle (no ×5 empty debounce) after paper auto-fill', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    const entry = 4400;
+    broker.setQuote({
+      bid: entry,
+      ask: entry + 0.2,
+      mid: entry + 0.1,
+      spread: 0.2,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    const placed = await broker.placeOrder({
+      intent_id: 'paper-ghost-sync-aaaaaaaaa',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      stop_level: entry - 2,
+      profit_level: entry + 10,
+    });
+    const pm = new PositionManager();
+    pm.register({
+      position_id: placed.position_id!,
+      opportunity_id: 'opp-ghost-sync',
+      intent_id: 'ghost-sync-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      entry: placed.fill_price!,
+      stop_loss: entry - 2,
+      take_profit: entry + 10,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {
+          regime: 'TREND',
+          market_state: 't',
+          momentum_score: 0.5,
+          momentum_dir: 'UP',
+          trend_dir: 'UP',
+          trend_strength: 0.5,
+          structure_bias: 'BULLISH',
+          swing_high: entry + 5,
+          swing_low: entry - 5,
+          buy_pressure: 0.6,
+          sell_pressure: 0.4,
+          behavior_bull: 0.5,
+          behavior_bear: 0.5,
+          impact_score: 0.5,
+          context_quality: 0.8,
+          volatility: 0.001,
+          atr: 1,
+          data_quality: 0.9,
+          session: 'LONDON',
+        },
+        expectancy: null,
+      },
+    });
+
+    broker.setQuote({
+      bid: entry - 3,
+      ask: entry - 2.8,
+      mid: entry - 2.9,
+      spread: 0.2,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    expect((await broker.listOpenPositions()).positions.length).toBe(0);
+
+    const debounce = { consecutive_empty: 0 };
+    const sync = await syncPositionsWithBroker(pm, broker, 'GOLD', debounce);
+    expect(sync.ghost_drop_deferred).toBe(false);
+    expect(sync.orphans_local.length).toBe(1);
+    expect(sync.orphans_local[0]!.position_id).toBe(placed.position_id);
+    expect(broker.peekRecentAutoFill(placed.position_id!)?.reason).toBe('STOP_HIT');
+    // Bounce above SL must not revive — venue already flat
+    broker.setQuote({
+      bid: entry + 1,
+      ask: entry + 1.2,
+      mid: entry + 1.1,
+      spread: 0.2,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    });
+    expect((await broker.listOpenPositions()).positions.length).toBe(0);
+  });
+
+  it('paper empty debounce still applies when no auto-fill (Capital-style ghost)', async () => {
+    const broker = new PaperBroker();
+    await broker.connect();
+    const pm = new PositionManager();
+    pm.register({
+      position_id: 'ghost-no-autofill',
+      opportunity_id: 'opp-no-af',
+      intent_id: 'no-af-1',
+      epic: 'GOLD',
+      side: 'BUY',
+      size: 1,
+      entry: 4400,
+      stop_loss: 4390,
+      decision: {
+        decision_id: 'd',
+        kind: 'BUY',
+        side: 'BUY',
+        score: 0.7,
+        block_reason: null,
+        buy: null as never,
+        sell: null as never,
+        analysis: {
+          regime: 'TREND',
+          market_state: 't',
+          momentum_score: 0.5,
+          momentum_dir: 'UP',
+          trend_dir: 'UP',
+          trend_strength: 0.5,
+          structure_bias: 'BULLISH',
+          swing_high: 4405,
+          swing_low: 4395,
+          buy_pressure: 0.6,
+          sell_pressure: 0.4,
+          behavior_bull: 0.5,
+          behavior_bear: 0.5,
+          impact_score: 0.5,
+          context_quality: 0.8,
+          volatility: 0.001,
+          atr: 1,
+          data_quality: 0.9,
+          session: 'LONDON',
+        },
+        expectancy: null,
+      },
+    });
+    const debounce = { consecutive_empty: 0 };
+    const deferred = await syncPositionsWithBroker(pm, broker, 'GOLD', debounce);
+    expect(deferred.ghost_drop_deferred).toBe(true);
+    expect(deferred.orphans_local.length).toBe(0);
+    expect(pm.count()).toBe(1);
   });
 });
