@@ -1072,7 +1072,7 @@ class MasterRuntime {
     );
     this.persistRuntimeGates();
     const sk = pos.decision?.side
-      ? setupKey(pos.decision.analysis, pos.decision.side)
+      ? setupKey(pos.decision.analysis, pos.decision.side, pos.epic)
       : null;
     this.trackPersist('outcome', persistOutcome(pos.opportunity_id, outcome, sk));
     this.trackPersist('open_positions', saveOpenPositions(this.positions.list()));
@@ -1523,7 +1523,7 @@ class MasterRuntime {
     this.pipeline.recordTradeClose(oppId, decision, outcome, {
       epic: input.epic,
     });
-    const sk = decision.side ? setupKey(decision.analysis, decision.side) : null;
+    const sk = decision.side ? setupKey(decision.analysis, decision.side, input.epic) : null;
     this.trackPersist('outcome', persistOutcome(oppId, outcome, sk));
     this.last_exit_reason = outcome.exit_reason;
     this.last_close_failed = null;
@@ -1634,7 +1634,7 @@ class MasterRuntime {
     });
     this.positions.drop(pos.position_id);
     const sk = pos.decision?.side
-      ? setupKey(pos.decision.analysis, pos.decision.side)
+      ? setupKey(pos.decision.analysis, pos.decision.side, pos.epic)
       : null;
     this.trackPersist('outcome', persistOutcome(pos.opportunity_id, outcome, sk));
     this.trackPersist('open_positions', saveOpenPositions(this.positions.list()));
@@ -1865,7 +1865,7 @@ class MasterRuntime {
         }
       }
       const sk = ghost.decision?.side
-        ? setupKey(ghost.decision.analysis, ghost.decision.side)
+        ? setupKey(ghost.decision.analysis, ghost.decision.side, ghost.epic)
         : null;
       this.trackPersist(
         'outcome',
@@ -1974,7 +1974,7 @@ class MasterRuntime {
         }
       }
       const sk = partial.decision?.side
-        ? setupKey(partial.decision.analysis, partial.decision.side)
+        ? setupKey(partial.decision.analysis, partial.decision.side, partial.epic)
         : null;
       this.trackPersist(
         'external_partial',
@@ -2671,7 +2671,7 @@ class MasterRuntime {
       }
       this.last_close_failed = null;
       const sk = c.position.decision.side
-        ? setupKey(c.position.decision.analysis, c.position.decision.side)
+        ? setupKey(c.position.decision.analysis, c.position.decision.side, c.position.epic)
         : null;
       this.trackPersist(
         'outcome',
@@ -4443,7 +4443,7 @@ class MasterRuntime {
       }
       this.last_exit_reason = c.reason;
       const sk = c.position.decision.side
-        ? setupKey(c.position.decision.analysis, c.position.decision.side)
+        ? setupKey(c.position.decision.analysis, c.position.decision.side, c.position.epic)
         : null;
       this.trackPersist(
         'outcome',

@@ -558,7 +558,7 @@ export async function walkForward(opts: {
     const expectancy_seed = is.opportunities
       .filter((t) => t.outcome && t.decision.side)
       .map((t) => ({
-        setup_key: setupKey(t.decision.analysis, t.decision.side!),
+        setup_key: setupKey(t.decision.analysis, t.decision.side!, t.epic),
         outcome: t.outcome!,
       }));
     const oos = await replayMaster({

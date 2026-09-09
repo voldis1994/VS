@@ -167,7 +167,7 @@ export class MasterPipeline {
         input.relative_spread,
         marketSetup,
         null,
-        { closed_10s_present: closed10sPresent }
+        { closed_10s_present: closed10sPresent, epic: input.instrument.epic }
       );
       decision.kind = 'BLOCK';
       decision.side = null;
@@ -219,7 +219,7 @@ export class MasterPipeline {
       input.relative_spread,
       input.cfg.require_armed_setup ? marketSetup : null,
       deskEntry,
-      { closed_10s_present: closed10sPresent }
+      { closed_10s_present: closed10sPresent, epic: input.instrument.epic }
     );
 
     const mode = input.cfg.ai_mode;
@@ -305,7 +305,10 @@ export class MasterPipeline {
     }
     this.journal.attachOutcome(opportunityId, outcome);
     if (decision.side) {
-      this.expectancy.record(setupKey(decision.analysis, decision.side), outcome);
+      this.expectancy.record(
+        setupKey(decision.analysis, decision.side, meta?.epic),
+        outcome
+      );
     }
   }
 

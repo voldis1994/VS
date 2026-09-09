@@ -4939,6 +4939,7 @@ describe('expectancy gate + pure evaluate', () => {
       mid: 4400.2,
       spread: 0.4,
       ts_ms: Date.now(),
+      epic: 'GOLD',
     };
     const cfg = {
       ...DEFAULT_MASTER_CONFIG,
@@ -4947,7 +4948,7 @@ describe('expectancy gate + pure evaluate', () => {
       require_positive_expectancy: true,
       min_expectancy_samples: 3,
     };
-    const key = setupKey(a, 'BUY');
+    const key = setupKey(a, 'BUY', 'GOLD');
     const d = decide(a, q, cfg, (k) =>
       k === key
         ? {
@@ -4964,6 +4965,17 @@ describe('expectancy gate + pure evaluate', () => {
     );
     expect(d.kind).toBe('BLOCK');
     expect(String(d.block_reason || '')).toMatch(/negative_expectancy/);
+    expect(String(d.block_reason || '')).toMatch(/^negative_expectancy:GOLD\|/);
+    // SILVER must not share GOLD's negative EV bucket
+    const silverKey = setupKey(a, 'BUY', 'SILVER');
+    expect(silverKey).not.toBe(key);
+    const dSilver = decide(
+      a,
+      { ...q, epic: 'SILVER' },
+      cfg,
+      (k) => (k === key ? { setup_key: key, samples: 5, p_win: 0.2, avg_win: 1, avg_loss: 2, costs: 0.1, ev: -1.4, positive: false } : null)
+    );
+    expect(dSilver.kind).not.toBe('BLOCK');
   });
 
   it('evaluate does not mutate last_ai_allow_close or live journal', async () => {

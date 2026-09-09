@@ -1,5 +1,6 @@
 /** Decision engine — BUY / SELL / WAIT / BLOCK. Scores are heuristic, not probability. */
 import { randomUUID } from 'crypto';
+import { capitalApiEpic } from './broker.js';
 import { buildCandidates } from './candidates.js';
 import type { DeskEntryConfirm } from './deskEntryConfirm.js';
 import type { MarketSetup } from '../services/marketSetup.js';
@@ -22,7 +23,7 @@ export function decide(
   relativeSpread?: number | null,
   marketSetup?: MarketSetup | null,
   deskEntry?: DeskEntryConfirm | null,
-  opts?: { closed_10s_present?: boolean }
+  opts?: { closed_10s_present?: boolean; epic?: string | null }
 ): MasterDecision {
   const decision_id = randomUUID();
   const { buy, sell } = buildCandidates(analysis, quote, cfg, bars, relativeSpread);
@@ -115,7 +116,11 @@ export function decide(
     };
   }
 
-  const setup_key = setupKey(analysis, preferred.side);
+  const setup_key = setupKey(
+    analysis,
+    preferred.side,
+    opts?.epic || quote.epic
+  );
   const exp = expectancyLookup(setup_key);
   if (
     cfg.require_positive_expectancy &&
@@ -209,6 +214,18 @@ function blocked(
   };
 }
 
-export function setupKey(analysis: AnalysisSnapshot, side: 'BUY' | 'SELL'): string {
-  return `${side}|${analysis.regime}|${analysis.trend_dir}|${analysis.session}`;
+/**
+ * Expectancy / setup identity — epic-scoped so GOLD and SILVER do not share EV.
+ * Format: `EPIC|SIDE|regime|trend|session` (Capital aliases collapsed via capitalApiEpic).
+ */
+export function setupKey(
+  analysis: AnalysisSnapshot,
+  side: 'BUY' | 'SELL',
+  epic?: string | null
+): string {
+  const epicPart =
+    capitalApiEpic(String(epic || '').trim()) ||
+    String(epic || '').trim().toUpperCase() ||
+    'UNKNOWN';
+  return `${epicPart}|${side}|${analysis.regime}|${analysis.trend_dir}|${analysis.session}`;
 }
