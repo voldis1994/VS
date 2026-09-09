@@ -3015,11 +3015,20 @@ class MasterRuntime {
     const t0 = Date.now();
     // Always stamp runtime epic — public/desk quotes often omit it (news targeting).
     const quote: Quote = { ...quoteIn, epic: quoteIn.epic || this.epic };
+    // Interval/desk may replay market_cache marks via tick(last_bars, last_quote).
+    // Do not launder disk_cache provenance (or seal day_start) on that replay.
+    const replayingDiskMark =
+      this.quoteFromDiskCache &&
+      this.last_quote != null &&
+      Number(quoteIn.ts_ms) === Number(this.last_quote.ts_ms) &&
+      Number(quoteIn.mid) === Number(this.last_quote.mid);
     this.last_bars = bars;
     this.last_quote = quote;
-    // Live cycle quote/bars — never paint as disk_cache
-    this.quoteFromDiskCache = false;
-    this.barsFromDiskCache = false;
+    // Live cycle quote/bars — never paint as disk_cache (unless replaying disk mark)
+    if (!replayingDiskMark) {
+      this.quoteFromDiskCache = false;
+      this.barsFromDiskCache = false;
+    }
     // Live HOUR refresh via tick opts — clear disk_cache before persist
     if (opts?.hour_bars && opts.hour_bars.length >= 6) {
       this.last_hour_bars = opts.hour_bars.map((b) => ({
@@ -3078,8 +3087,17 @@ class MasterRuntime {
     // BEFORE UTC day-roll so day_start_equity seeds from live MTM/venue equity.
     const acct = await broker.getAccount();
     await this.applyVenueAccountSnapshot(broker, acct, quote);
-    // Roll UTC day before any manage/sync close mutates daily_pnl
-    this.rollDailyPnl();
+    // Paper opens: defer UTC day-roll until quote is live (not disk/stale) —
+    // interval/desk replay of market_cache marks must not seal day_start_equity
+    // and leave max_daily_loss fail-open (parity with manageOnly/hydrate/recover).
+    const deferOpenDayRoll =
+      broker instanceof PaperBroker &&
+      this.positions.count() > 0 &&
+      !this.quoteProvenForOpenDayRoll(quote);
+    if (!deferOpenDayRoll) {
+      // Roll UTC day before any manage/sync close mutates daily_pnl
+      this.rollDailyPnl();
+    }
 
     // Reader relative spread — update history every tick
     if (this.cfg.spread_lookback_bars !== this.spreadLookback) {
