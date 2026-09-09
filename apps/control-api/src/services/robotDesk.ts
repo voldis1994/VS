@@ -66,6 +66,32 @@ import {
   type TenSecState,
 } from './tenSecondOhlc.js';
 
+/** START wording + entry policy when MASTER owns the single pipeline. */
+export function deskSessionStartPolicy(entryRequested = true): {
+  entry_enabled: boolean;
+  brain_label: 'MASTER BRIDGE' | 'OWN BRAIN';
+  rules_detail: string;
+  owns_pipeline: boolean;
+} {
+  const owns = masterOwnsPipeline();
+  if (owns) {
+    const owner = resolveManageOwner(false);
+    return {
+      entry_enabled: false,
+      brain_label: 'MASTER BRIDGE',
+      owns_pipeline: true,
+      rules_detail: `MASTER owns_pipeline — Capital quote/bars → MASTER cycle · desk HARD manage if deferred (owner=${owner}) · entry OFF · never OWN BRAIN / Best Outcome entry`,
+    };
+  }
+  return {
+    entry_enabled: entryRequested,
+    brain_label: 'OWN BRAIN',
+    owns_pipeline: false,
+    rules_detail:
+      'Rules: this client alone — structure(1h+1m) → sticky SETUP → closed 10s entry → BEST OUTCOME · never shared Market Core fanout',
+  };
+}
+
 export type RobotTick = {
   at: string;
   phase: 'READ' | 'DECIDE' | 'ORDER' | 'WAIT' | 'ERROR' | 'INFO' | 'MANAGE' | 'EXIT';
@@ -411,15 +437,23 @@ export function robotBoardMeta(sessions: RobotSession[]) {
     0
   );
   const contributing = sessions.reduce((n, s) => Math.max(n, s.feed_contributing || 0), 0);
+  const owns = masterOwnsPipeline();
+  const manageOwner = masterRuntime.resolveManageOwnerStatus();
   return {
     regimes: setupCatalog().map((x) => x.name),
     trade_types: ['BUY LONG', 'SELL LONG', 'BUY SCALP', 'SELL SCALP', 'BUY FADE', 'SELL FADE'],
     active_regimes: activeSetups,
     feed_sender_count: maxFeeds,
     feed_contributing: contributing,
-    chain: 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
-    note:
-      'No impulse starve — ARMED with flow/1m always. Soft 10s confirm. BO: keep green · SL≈1.5 · Peak≥3.5.',
+    owns_pipeline: owns,
+    manage_owner: manageOwner,
+    kicker: owns ? 'VS · MASTER PIPELINE BRIDGE' : 'VS · OWN BRAIN PER CLIENT',
+    chain: owns
+      ? 'Capital quote/bars → MASTER pipeline (validate→…→journal) · desk HARD exit if deferred'
+      : 'Capital 1h+1m+10s → STRUCTURE(swing) → SETUP(sticky) → ENTRY(closed 10s) → BEST OUTCOME',
+    note: owns
+      ? `MASTER owns ON · manage_owner=${manageOwner} · desk START = bridge (entry OFF)`
+      : 'No impulse starve — ARMED with flow/1m always. Soft 10s confirm. BO: keep green · SL≈1.5 · Peak≥3.5.',
   };
 }
 
@@ -1602,6 +1636,8 @@ export async function startRobotSession(input: {
   const lot = Number(input.lot_size);
   if (!Number.isFinite(lot) || lot <= 0) throw new Error('lot_size must be > 0');
 
+  const startPolicy = deskSessionStartPolicy(input.entry_enabled !== false);
+
   const id = robotIdFor(acc.id, epic);
   const existing = sessions.get(id);
   if (existing?.running) {
@@ -1643,7 +1679,7 @@ export async function startRobotSession(input: {
     open_side: null,
     safety_sl: null,
     error: null,
-    entry_enabled: input.entry_enabled !== false,
+    entry_enabled: startPolicy.entry_enabled,
     timer: null,
     closed_at_ms: 0,
     peak_favorable: 0,
@@ -1685,15 +1721,14 @@ export async function startRobotSession(input: {
     bid: null,
     ask: null,
     mid: null,
-    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · OWN BRAIN · client=${acc.client_name} · other robots: ${others}`,
+    detail: `ROBOT START · id=${id} · ${displayName} (${epic}) · lot ${lot} · ${acc.environment.toUpperCase()} · ${startPolicy.brain_label} · entry=${session.entry_enabled ? 'ON' : 'OFF'} · client=${acc.client_name} · other robots: ${others}`,
   });
   pushTick(session, {
     phase: 'INFO',
     bid: null,
     ask: null,
     mid: null,
-    detail:
-      'Rules: this client alone — structure(1h+1m) → sticky SETUP → closed 10s entry → BEST OUTCOME · never shared Market Core fanout',
+    detail: startPolicy.rules_detail,
   });
 
   sessions.set(id, session);

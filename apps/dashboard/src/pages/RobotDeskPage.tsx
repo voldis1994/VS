@@ -38,6 +38,9 @@ type BoardMeta = {
   feed_contributing: number;
   chain: string;
   note?: string;
+  owns_pipeline?: boolean;
+  manage_owner?: string;
+  kicker?: string;
 };
 
 type DataSender = {
@@ -376,10 +379,18 @@ export function RobotDeskPage() {
           <div className="robot-arena-brand">
             <Logo size={48} wordmark />
             <div>
-              <div className="robot-arena-kicker">VS · OWN BRAIN PER CLIENT</div>
+              <div className="robot-arena-kicker">
+                {board?.kicker ||
+                  (board?.owns_pipeline
+                    ? 'VS · MASTER PIPELINE BRIDGE'
+                    : 'VS · OWN BRAIN PER CLIENT')}
+              </div>
               <h1 className="robot-arena-title">ROBOT DESK</h1>
               <p className="robot-arena-sub">
-                {board?.note || 'structure → setup → entry → best outcome'}
+                {board?.note ||
+                  (board?.owns_pipeline
+                    ? 'MASTER owns — Capital feed bridge'
+                    : 'structure → setup → entry → best outcome')}
               </p>
             </div>
           </div>
@@ -415,7 +426,9 @@ export function RobotDeskPage() {
 
         {showDeploy && (
           <div className="robot-empty robot-deploy-bar">
-            <div className="section-title">DEPLOY CLIENT ROBOT</div>
+            <div className="section-title">
+              {board?.owns_pipeline ? 'DEPLOY MASTER BRIDGE SESSION' : 'DEPLOY CLIENT ROBOT'}
+            </div>
             <div className="actions" style={{ marginTop: 8, flexWrap: 'wrap' }}>
               <select
                 className="input"
