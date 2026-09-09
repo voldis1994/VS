@@ -7,7 +7,9 @@ import { ExpectancyStore } from './expectancy.js';
 import { MasterJournal } from './journal.js';
 import { validateMarket, type MarketValidation } from './marketData.js';
 import { evaluateRisk } from './risk.js';
+import { advanceMarketSetup } from './setupDerive.js';
 import { DEFAULT_TRADING_HOURS } from './tradingHours.js';
+import { emptySetup, type MarketSetup, type StructureBook } from '../services/marketSetup.js';
 import type {
   AccountSnapshot,
   Bar,
@@ -34,6 +36,11 @@ export type PipelineInput = {
   relative_spread?: number | null;
   /** Public/secondary mids for multi-feed divergence gate */
   reference_mids?: number[] | null;
+  /**
+   * Optional desk SETUP override (tests / external desk brain).
+   * When omitted, pipeline advances sticky setup from bars each cycle.
+   */
+  market_setup?: MarketSetup | null;
 };
 
 export type PipelineResult = {
@@ -42,14 +49,31 @@ export type PipelineResult = {
   opportunity: OpportunityRecord;
   market: MarketValidation;
   ai: AiMeta;
+  /** Sticky desk SETUP used for this cycle's decide gate */
+  market_setup: MarketSetup;
 };
 
 export class MasterPipeline {
   readonly journal = new MasterJournal();
   readonly expectancy = new ExpectancyStore();
   private readonly seenIntents = new Set<string>();
+  /** Sticky structure across cycles (desk buildStructure prev) */
+  private structureBook: StructureBook | null = null;
+  /** Sticky SETUP across cycles (desk updateSetupSticky) */
+  private marketSetup: MarketSetup | null = null;
 
   constructor(public mode: Mode = 'PAPER') {}
+
+  /** Current sticky SETUP (null until first cycle). */
+  getMarketSetup(): MarketSetup | null {
+    return this.marketSetup;
+  }
+
+  /** Reset sticky setup (tests / epic change). */
+  resetMarketSetup() {
+    this.structureBook = null;
+    this.marketSetup = null;
+  }
 
   /** MARKET → VALIDATION → ANALYSIS → DECISION → AI → RISK */
   async runCycle(input: PipelineInput): Promise<PipelineResult> {
@@ -59,6 +83,23 @@ export class MasterPipeline {
       now_ms: input.now_ms,
       reference_mids: input.reference_mids,
     });
+
+    const setupBars = market.bars.length ? market.bars : input.bars;
+    let marketSetup: MarketSetup;
+    if (input.market_setup !== undefined) {
+      marketSetup = input.market_setup ?? emptySetup('override_null');
+      this.marketSetup = marketSetup;
+    } else {
+      const advanced = advanceMarketSetup({
+        bars: setupBars,
+        mid: input.quote.mid,
+        prevStructure: this.structureBook,
+        prevSetup: this.marketSetup,
+      });
+      this.structureBook = advanced.structure;
+      this.marketSetup = advanced.setup;
+      marketSetup = advanced.setup;
+    }
 
     if (!market.ok || !market.quote) {
       const analysis = analyzeBars(
@@ -74,7 +115,8 @@ export class MasterPipeline {
         { ...input.cfg, kill_switch: true },
         () => null,
         market.bars.length ? market.bars : input.bars,
-        input.relative_spread
+        input.relative_spread,
+        marketSetup
       );
       decision.kind = 'BLOCK';
       decision.side = null;
@@ -107,6 +149,7 @@ export class MasterPipeline {
           system_decision_before_ai: 'BLOCK',
           decision_after_ai: 'BLOCK',
         },
+        market_setup: marketSetup,
       };
     }
 
@@ -118,7 +161,8 @@ export class MasterPipeline {
       input.cfg,
       (k) => this.expectancy.lookup(k),
       market.bars,
-      input.relative_spread
+      input.relative_spread,
+      marketSetup
     );
 
     const mode = input.cfg.ai_mode;
@@ -147,7 +191,7 @@ export class MasterPipeline {
       risk,
       executed: false,
     });
-    return { decision, risk, opportunity, market, ai: aiMeta };
+    return { decision, risk, opportunity, market, ai: aiMeta, market_setup: marketSetup };
   }
 
   claimIntent(intent_id: string): boolean {
@@ -263,6 +307,7 @@ export const DEFAULT_MASTER_CONFIG: MasterConfig = {
   ema_tick_entry: false,
   post_exit_cooldown_ms: 900,
   cycle_max_duration_ms: 45_000,
+  require_armed_setup: false,
 };
 
 export const GOLD_SPEC: InstrumentSpec = {

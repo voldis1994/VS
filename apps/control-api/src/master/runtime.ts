@@ -179,6 +179,16 @@ export type MasterStatus = {
     samples: number;
   }>;
   expectancy_gate_armed: boolean;
+  /** Desk sticky SETUP used by decide (kind/side/status). */
+  market_setup: {
+    kind: string;
+    side: 'BUY' | 'SELL' | null;
+    status: string;
+    reason: string;
+    confirm: number;
+  } | null;
+  /** True when require_armed_setup is on (LIVE default). */
+  setup_gate_armed: boolean;
   /** Live entry gate honesty for dashboard (news/hours/weekend). */
   entry_gates: {
     news_cfg_on: boolean;
@@ -330,6 +340,8 @@ class MasterRuntime {
   last_decision: ReturnType<typeof decide> | null = null;
   last_risk: ReturnType<typeof evaluateRisk> | null = null;
   last_market: MasterStatus['last_market'] = null;
+  /** Sticky desk SETUP from last pipeline cycle */
+  last_market_setup: MasterStatus['market_setup'] = null;
   last_bars: Bar[] = [];
   last_quote: Quote | null = null;
   /** True while last_quote was restored from market_cache (cleared on live quote). */
@@ -439,7 +451,12 @@ class MasterRuntime {
   epic = GOLD_SPEC.epic;
 
   setMode(mode: Mode) {
-    this.cfg = { ...this.cfg, mode };
+    this.cfg = {
+      ...this.cfg,
+      mode,
+      // Desk SETUP-first: LIVE Capital path requires ARMED side; paper demos stay open
+      require_armed_setup: mode === 'LIVE',
+    };
     this.pipeline.mode = mode;
     this.persistRuntimeGates();
   }
@@ -457,6 +474,7 @@ class MasterRuntime {
     } else {
       this.epic = raw || this.epic;
     }
+    this.pipeline.resetMarketSetup();
     this.persistRuntimeGates();
   }
 
@@ -526,7 +544,14 @@ class MasterRuntime {
       gates.mode === 'LIVE' ||
       gates.mode === 'BACKTEST'
     ) {
-      this.cfg = { ...this.cfg, mode: gates.mode };
+      // LIVE defaults to desk SETUP ARMED gate; manage config can override
+      const manage = loadManageConfig();
+      const armedDefault = gates.mode === 'LIVE';
+      const require_armed_setup =
+        manage && typeof manage.require_armed_setup === 'boolean'
+          ? manage.require_armed_setup
+          : armedDefault;
+      this.cfg = { ...this.cfg, mode: gates.mode, require_armed_setup };
       this.pipeline.mode = gates.mode;
     }
     if (gates.epic && String(gates.epic).trim()) {
@@ -2028,6 +2053,8 @@ class MasterRuntime {
       cfg: this.cfg,
       symbol_open: this.positions.countForEpic(this.epic),
       last_loss_ms: this.last_loss_ms,
+      // Preview uses live sticky SETUP so gate matches next real tick
+      market_setup: this.pipeline.getMarketSetup(),
     });
     return {
       decision: cycle.decision,
@@ -2035,6 +2062,7 @@ class MasterRuntime {
       analysis: cycle.decision.analysis,
       opportunity: cycle.opportunity,
       ai: cycle.ai,
+      market_setup: cycle.market_setup,
     };
   }
 
@@ -2412,6 +2440,15 @@ class MasterRuntime {
       bars_in: bars.length,
       bars_out: cycle.market.bars.length,
     };
+    this.last_market_setup = cycle.market_setup
+      ? {
+          kind: cycle.market_setup.kind,
+          side: cycle.market_setup.side,
+          status: cycle.market_setup.status,
+          reason: cycle.market_setup.reason,
+          confirm: cycle.market_setup.confirm,
+        }
+      : null;
     this.last_ai_allow_close = cycle.ai.allow_close !== false;
     this.persistRuntimeGates();
     this.trackPersist('opportunity', persistOpportunity(cycle.opportunity));
@@ -4576,6 +4613,33 @@ class MasterRuntime {
           samples: e.samples,
         })),
       expectancy_gate_armed: !!this.cfg.require_positive_expectancy,
+      market_setup: (() => {
+        const s =
+          this.last_market_setup ||
+          (() => {
+            const cur = this.pipeline.getMarketSetup();
+            return cur
+              ? {
+                  kind: cur.kind,
+                  side: cur.side,
+                  status: cur.status,
+                  reason: cur.reason,
+                  confirm: cur.confirm,
+                }
+              : null;
+          })();
+        if (!s) return null;
+        if (!this.last_market) {
+          return {
+            ...s,
+            reason: s.reason.startsWith('hydrated ·')
+              ? s.reason
+              : `hydrated · ${s.reason}`,
+          };
+        }
+        return s;
+      })(),
+      setup_gate_armed: !!this.cfg.require_armed_setup,
       entry_gates: (() => {
         const now = Date.now();
         const weekend = isWeekendUtc(now);

@@ -108,6 +108,7 @@ async function main() {
     block_off_hours: false,
     block_high_impact_news: false,
     require_positive_expectancy: false,
+    require_armed_setup: false,
     // Longer post-exit so a single fill cannot immediately re-enter in the same proof
     post_exit_cooldown_ms: 60_000,
   };

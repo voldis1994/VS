@@ -1,6 +1,7 @@
 /** Decision engine — BUY / SELL / WAIT / BLOCK. Scores are heuristic, not probability. */
 import { randomUUID } from 'crypto';
 import { buildCandidates } from './candidates.js';
+import type { MarketSetup } from '../services/marketSetup.js';
 import type {
   AnalysisSnapshot,
   Bar,
@@ -17,7 +18,8 @@ export function decide(
   cfg: MasterConfig,
   expectancyLookup: (setupKey: string) => ExpectancySnapshot | null,
   bars?: Bar[] | null,
-  relativeSpread?: number | null
+  relativeSpread?: number | null,
+  marketSetup?: MarketSetup | null
 ): MasterDecision {
   const decision_id = randomUUID();
   const { buy, sell } = buildCandidates(analysis, quote, cfg, bars, relativeSpread);
@@ -60,6 +62,22 @@ export function decide(
     };
   }
 
+  // Desk SETUP consolidation — never fight an ARMED opposite-side sticky setup
+  const setupGate = gatePreferredBySetup(preferred.side, marketSetup, cfg.require_armed_setup);
+  if (setupGate) {
+    return {
+      decision_id,
+      kind: 'WAIT',
+      side: null,
+      score: preferred.score,
+      block_reason: setupGate,
+      buy,
+      sell,
+      analysis,
+      expectancy: null,
+    };
+  }
+
   const setup_key = setupKey(analysis, preferred.side);
   const exp = expectancyLookup(setup_key);
   if (
@@ -89,6 +107,30 @@ export function decide(
     analysis,
     expectancy: exp,
   };
+}
+
+/**
+ * Desk sticky SETUP gate.
+ * - Always block when ARMED setup side conflicts with preferred (setup_side_mismatch).
+ * - When require_armed_setup: also block NONE/FORMING/missing (setup_none).
+ */
+export function gatePreferredBySetup(
+  preferredSide: 'BUY' | 'SELL',
+  setup: MarketSetup | null | undefined,
+  requireArmed: boolean
+): string | null {
+  const armed =
+    !!setup &&
+    setup.status === 'ARMED' &&
+    (setup.side === 'BUY' || setup.side === 'SELL') &&
+    setup.kind !== 'NONE';
+  if (armed && setup!.side !== preferredSide) {
+    return `setup_side_mismatch:${setup!.side}`;
+  }
+  if (requireArmed && !armed) {
+    return 'setup_none';
+  }
+  return null;
 }
 
 /** Reader scorer: strict preference; equal/near-tie valid scores → null (WAIT). */
