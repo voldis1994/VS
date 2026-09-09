@@ -686,6 +686,214 @@ describe('MASTER daily pnl day boundary', () => {
     if (prev === undefined) delete process.env.MASTER_STATE_DIR;
     else process.env.MASTER_STATE_DIR = prev;
   });
+
+  it('hydrateBookFromDisk MTM seeds day_start from cash+UPL before UTC day roll', async () => {
+    const { mkdtempSync, writeFileSync } = await import('fs');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const { installFilePersist } = await import('../filePersist.js');
+    const { saveRuntimeGates } = await import('../runtimeGates.js');
+
+    const dir = mkdtempSync(join(tmpdir(), 'vs-hydrate-open-mtm-'));
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = dir;
+    installFilePersist(dir);
+
+    const entry = 4400;
+    const markBid = entry - 0.5;
+    writeFileSync(
+      join(dir, 'master_state.json'),
+      JSON.stringify({
+        opportunities: [
+          {
+            id: '00000000-0000-4000-8000-0000000000dd',
+            ts: '2000-01-01T12:00:00.000Z',
+            mode: 'PAPER',
+            epic: 'GOLD',
+          },
+        ],
+        outcomes: [
+          {
+            opportunity_id: '00000000-0000-4000-8000-0000000000dd',
+            setup_key: 'TREND:BUY',
+            created_at: '2000-01-01T12:05:00.000Z',
+            outcome: {
+              position_id: 'p-hydrate-prior',
+              side: 'BUY',
+              entry: 4400,
+              exit: 4390,
+              volume: 1,
+              pnl: -250,
+              fees: 0,
+              slippage: 0,
+              mae: 10,
+              mfe: 0,
+              r_multiple: -1,
+              hold_ms: 1000,
+              exit_reason: 'STOP_HIT',
+            },
+          },
+        ],
+        positions: [
+          {
+            position_id: 'paper-hydrate-open-mtm',
+            opportunity_id: '00000000-0000-4000-8000-0000000000ee',
+            intent_id: 'hydrate-open-mtm-aaaaaaaa',
+            epic: 'GOLD',
+            side: 'BUY',
+            size: 1,
+            entry,
+            stop_loss: entry - 50,
+            take_profit: entry + 50,
+            entry_at: '2000-01-01T18:00:00.000Z',
+            decision: {
+              decision_id: 'd-hyd',
+              kind: 'BUY',
+              side: 'BUY',
+              score: 0.7,
+              block_reason: null,
+              buy: null,
+              sell: null,
+              analysis: {
+                regime: 'TREND',
+                market_state: 't',
+                momentum_score: 0.5,
+                momentum_dir: 'UP',
+                trend_dir: 'UP',
+                trend_strength: 0.5,
+                structure_bias: 'BULLISH',
+                swing_high: entry + 5,
+                swing_low: entry - 5,
+                buy_pressure: 0.6,
+                sell_pressure: 0.4,
+                behavior_bull: 0.5,
+                behavior_bear: 0.5,
+                impact_score: 0.5,
+                context_quality: 0.8,
+                volatility: 0.001,
+                atr: 1,
+                data_quality: 0.9,
+                session: 'LONDON',
+              },
+              expectancy: null,
+            },
+          },
+        ],
+        intents: [],
+      })
+    );
+    saveRuntimeGates({
+      last_loss_ms: 0,
+      reject_until_ms: 0,
+      inflight_until_ms: 0,
+      post_exit_until_ms: 0,
+      last_entry_fingerprint: null,
+      day_start_equity: 10_000,
+      peak_equity: 10_000,
+      daily_pnl_day: '2000-01-01',
+      consecutive_losses: 1,
+      capital_day_gates_seeded: false,
+      last_ai_allow_close: true,
+      ai_mode: 'off',
+      kill_switch: false,
+      mode: 'PAPER',
+      epic: 'GOLD',
+      entries_armed: true,
+      entries_pause_reason: null,
+      last_close_failed: null,
+      desired_running: false,
+    });
+    installFilePersist(dir);
+
+    masterRuntime.pipeline = new MasterPipeline('PAPER');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.bookHydrated = false;
+    masterRuntime.recovered = false;
+    masterRuntime.account.equity = 10_000;
+    masterRuntime.account.balance = 10_000;
+    masterRuntime.account.peak_equity = 10_000;
+    masterRuntime.account.daily_pnl = -50;
+    masterRuntime.account.daily_pnl_day = '2000-01-01';
+    masterRuntime.account.day_start_equity = 10_000;
+    masterRuntime.cfg = {
+      ...DEFAULT_MASTER_CONFIG,
+      mode: 'PAPER',
+      ai_mode: 'off',
+      soft_trail_money_arm: 0,
+      be_start: 0,
+      trail_start: 0,
+      scalp_pct_chase: false,
+      time_stop_max_bars: 0,
+      max_hold_ms: 86_400_000,
+    };
+    const broker = masterRuntime.ensurePaperBroker();
+    broker.seedOpens([]);
+    broker.hydrateAccount({ equity: 10_000, balance: 10_000 });
+    const loseMark = {
+      bid: markBid,
+      ask: markBid + 0.2,
+      mid: markBid + 0.1,
+      spread: 0.2,
+      epic: 'GOLD',
+      ts_ms: Date.now(),
+    };
+    // Keep quote through hydrateMarketCacheFromDisk (only fills when last_quote null)
+    masterRuntime.last_quote = loseMark;
+    masterRuntime.last_bars = [];
+    masterRuntime.stop();
+    saveRuntimeGates({
+      last_loss_ms: 0,
+      reject_until_ms: 0,
+      inflight_until_ms: 0,
+      post_exit_until_ms: 0,
+      last_entry_fingerprint: null,
+      day_start_equity: 10_000,
+      peak_equity: 10_000,
+      daily_pnl_day: '2000-01-01',
+      consecutive_losses: 1,
+      capital_day_gates_seeded: false,
+      last_ai_allow_close: true,
+      ai_mode: 'off',
+      kill_switch: false,
+      mode: 'PAPER',
+      epic: 'GOLD',
+      entries_armed: true,
+      entries_pause_reason: null,
+      last_close_failed: null,
+      desired_running: false,
+    });
+    masterRuntime.bookHydrated = false;
+    masterRuntime.recovered = false;
+    masterRuntime.ensurePaperBroker();
+    masterRuntime.last_quote = loseMark;
+
+    const ok = await masterRuntime.hydrateBookFromDisk();
+    expect(ok).toBe(true);
+
+    const today = new Date().toISOString().slice(0, 10);
+    const upl = markBid - entry;
+    const expectedCash = 9750;
+    const expectedEquity = expectedCash + upl;
+    expect(masterRuntime.account.daily_pnl_day).toBe(today);
+    expect(masterRuntime.positions.count()).toBe(1);
+    expect(masterRuntime.account.balance).toBe(expectedCash);
+    // Must NOT seed cash-only 9750 — open UPL must be in day_start
+    expect(masterRuntime.account.day_start_equity).toBeCloseTo(expectedEquity, 5);
+    expect(masterRuntime.account.day_start_equity).toBeLessThan(expectedCash);
+    expect(masterRuntime.account.equity).toBeCloseTo(expectedEquity, 5);
+
+    masterRuntime.stop();
+    broker.seedOpens([]);
+    broker.hydrateAccount({ equity: 10_000, balance: 10_000 });
+    masterRuntime.account.equity = 10_000;
+    masterRuntime.account.balance = 10_000;
+    masterRuntime.account.day_start_equity = 10_000;
+    masterRuntime.last_quote = null;
+    masterRuntime.bookHydrated = false;
+    masterRuntime.recovered = false;
+    if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+    else process.env.MASTER_STATE_DIR = prev;
+  });
 });
 
 describe('MASTER per-tick ghost sync', () => {

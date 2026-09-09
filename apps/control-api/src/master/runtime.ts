@@ -995,6 +995,57 @@ class MasterRuntime {
             this.account.peak_equity = this.account.equity;
           }
         }
+        // Open-book hydrate: MTM before UTC day-roll (parity with recover) so
+        // day_start_equity seeds from cash+UPL — not cash-only before manage.
+        // Use a throwaway PaperBroker — do not attach this.broker (restart
+        // continuity keeps broker stage hydrated · awaiting attach until Start).
+        if (!capitalAttached && this.positions.count() > 0 && this.last_quote) {
+          const q = this.last_quote;
+          const tmp = new PaperBroker();
+          tmp.hydrateAccount({
+            equity: this.account.equity,
+            balance: this.account.balance,
+          });
+          tmp.seedOpens(
+            this.positions.list().map((p) => ({
+              position_id: p.position_id,
+              epic: p.epic,
+              side: p.side,
+              size: p.size,
+              open_level: p.entry,
+              stop_level: p.stop_loss,
+              profit_level: p.take_profit,
+            }))
+          );
+          tmp.setQuote({
+            bid: q.bid,
+            ask: q.ask,
+            mid: q.mid,
+            spread: q.spread,
+            epic: q.epic || this.epic,
+            ts_ms: q.ts_ms,
+          });
+          tmp.markToMarket();
+          try {
+            const acctPre = await tmp.getAccount();
+            if (
+              acctPre &&
+              acctPre.equity > 0 &&
+              Number.isFinite(acctPre.equity)
+            ) {
+              this.account.equity = acctPre.equity;
+              if (acctPre.balance > 0 && Number.isFinite(acctPre.balance)) {
+                this.account.balance = acctPre.balance;
+              }
+              this.account.peak_equity = Math.max(
+                Number(this.account.peak_equity) || 0,
+                acctPre.equity
+              );
+            }
+          } catch {
+            /* keep journal cash */
+          }
+        }
         this.rollDailyPnl();
         const today = this.account.daily_pnl_day!;
         let pnlToday = 0;
