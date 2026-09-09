@@ -2599,10 +2599,6 @@ class MasterRuntime {
   }
 
   /**
-   * After manage closes: copy venue equity/balance and raise peak_equity (paper wins).
-   * Same-tick risk + manageOnly Peak eq KPI must not lag until the next full tick.
-   */
-  /**
    * After manage closes: copy venue equity/balance and raise peak_equity.
    * Same-tick risk + manageOnly Peak eq KPI must not lag.
    * Also copies currency / available_to_deal / trade_allowed when the venue
