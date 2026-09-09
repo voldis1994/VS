@@ -2062,13 +2062,18 @@ class MasterRuntime {
     const capitalLive =
       this.broker instanceof CapitalBroker && !(this.broker.paper ?? false);
     for (const ghost of sync.orphans_local) {
+      // Paper VS-System auto SL/TP: prefer venue fill + STOP_HIT/TP_HIT over broker_flat
+      const paperAuto =
+        this.broker instanceof PaperBroker
+          ? this.broker.takeRecentAutoFill(ghost.position_id)
+          : null;
       const mark = quote
         ? ghost.side === 'BUY'
           ? quote.bid
           : quote.ask
         : ghost.entry;
       const { exit } = resolveCloseExitFill({
-        fill_price: null,
+        fill_price: paperAuto?.fill_price ?? null,
         mark,
         entry: ghost.entry,
         capitalLive,
@@ -2087,6 +2092,7 @@ class MasterRuntime {
         }),
         volume: ghost.size,
       });
+      const flatReason = paperAuto?.reason ?? 'broker_flat';
       const outcome = {
         position_id: ghost.position_id,
         side: ghost.side,
@@ -2101,7 +2107,7 @@ class MasterRuntime {
         mfe: ghost.mfe,
         r_multiple: 0,
         hold_ms: Date.now() - new Date(ghost.entry_at).getTime(),
-        exit_reason: capitalCloseExitReason('broker_flat', priced.pnl_proven),
+        exit_reason: capitalCloseExitReason(flatReason, priced.pnl_proven),
       };
       const exists = this.pipeline.journal.opportunities.some((o) => o.id === ghost.opportunity_id);
       if (!exists) {
@@ -2114,7 +2120,7 @@ class MasterRuntime {
             allowed: true,
             volume: ghost.size,
             risk_amount: 0,
-            reasons: ['broker_flat'],
+            reasons: [flatReason],
           },
           executed: true,
           execution: {
@@ -2122,7 +2128,7 @@ class MasterRuntime {
             intent_id: ghost.intent_id,
             order_id: null,
             fill_price: ghost.entry,
-            detail: 'broker_flat',
+            detail: paperAuto?.detail ?? 'broker_flat',
             paper: this.broker?.paper ?? true,
           },
         });
