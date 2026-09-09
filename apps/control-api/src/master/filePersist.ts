@@ -33,13 +33,15 @@ export type FilePersistState = {
   /** Reader audit tails — survive jsonl sidecar wipe under DualPersist mirror */
   decision_events?: DecisionEvent[];
   trade_events?: TradeEvent[];
-  /** Manage/owns/gates/market_cache — survive with positions when sidecar JSON is wiped */
+  /** Manage/owns/gates/market_cache/epic_cycle_stash — survive with positions when sidecar JSON is wiped */
   operator_meta?: {
     manage?: Record<string, unknown> | null;
     owns_pipeline?: boolean | null;
     gates?: Record<string, unknown> | null;
     /** Compact OHLC+quote — PG path / sidecar wipe must not leave manage blind */
     market_cache?: MarketCacheState | null;
+    /** Per-epic SETUP + cycle evidence across restart */
+    epic_cycle_stash?: import('./epicCycleStash.js').EpicCycleStashState | null;
   };
 };
 
@@ -270,6 +272,10 @@ export class FilePersist implements PersistClient, JournalMirror {
       if (meta.market_cache && needsRestore(cachePath)) {
         atomicWriteJson(cachePath, meta.market_cache);
       }
+      const epicStashPath = join(this.root, 'epic_cycle_stash.json');
+      if (meta.epic_cycle_stash && needsRestore(epicStashPath)) {
+        atomicWriteJson(epicStashPath, meta.epic_cycle_stash);
+      }
     } catch {
       /* best-effort */
     }
@@ -290,6 +296,7 @@ export class FilePersist implements PersistClient, JournalMirror {
     const ownsRaw = readJson('owns_pipeline.json');
     const gatesRaw = readJson('runtime_gates.json');
     const marketCacheRaw = readJson('market_cache.json');
+    const epicStashRaw = readJson('epic_cycle_stash.json');
     // Per-field fallback: partial sidecar wipe must not null out embedded meta
     const manage =
       manageRaw ?? this.lastOperatorMeta?.manage ?? null;
@@ -302,11 +309,22 @@ export class FilePersist implements PersistClient, JournalMirror {
       marketCacheRaw && Array.isArray(marketCacheRaw.bars)
         ? (marketCacheRaw as unknown as MarketCacheState)
         : this.lastOperatorMeta?.market_cache ?? null;
-    if (!manage && owns == null && !gates && !market_cache) {
+    const epic_cycle_stash =
+      epicStashRaw &&
+      (epicStashRaw.setups_by_epic || epicStashRaw.cycles_by_epic)
+        ? (epicStashRaw as unknown as import('./epicCycleStash.js').EpicCycleStashState)
+        : this.lastOperatorMeta?.epic_cycle_stash ?? null;
+    if (!manage && owns == null && !gates && !market_cache && !epic_cycle_stash) {
       // Sidecars wiped — keep prior meta so flush does not erase backup
       return this.lastOperatorMeta;
     }
-    const meta = { manage, owns_pipeline: owns, gates, market_cache };
+    const meta = {
+      manage,
+      owns_pipeline: owns,
+      gates,
+      market_cache,
+      epic_cycle_stash,
+    };
     this.lastOperatorMeta = meta;
     return meta;
   }
@@ -533,6 +551,10 @@ export function ensureOperatorMetaFromStateDir(root?: string): boolean {
     const cachePath = join(dir, 'market_cache.json');
     if (raw.operator_meta.market_cache && needsRestore(cachePath)) {
       atomicWriteJson(cachePath, raw.operator_meta.market_cache);
+    }
+    const epicStashPath = join(dir, 'epic_cycle_stash.json');
+    if (raw.operator_meta.epic_cycle_stash && needsRestore(epicStashPath)) {
+      atomicWriteJson(epicStashPath, raw.operator_meta.epic_cycle_stash);
     }
     // Also heal wiped decision/trade jsonl from mirrored tails
     ensureJournalSidecarsFromStateDir(dir);
