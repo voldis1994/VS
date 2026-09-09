@@ -2072,7 +2072,7 @@ class MasterRuntime {
   ): Promise<TickResult> {
     const run = async () => {
       try {
-        return await this.tickUnlocked(bars, quote);
+        return await this.tickUnlocked(bars, quote, opts);
       } catch (e) {
         logMasterError({
           module: 'runtime.tick',
@@ -2091,7 +2091,11 @@ class MasterRuntime {
     return result;
   }
 
-  private async tickUnlocked(bars: Bar[], quoteIn: Quote): Promise<TickResult> {
+  private async tickUnlocked(
+    bars: Bar[],
+    quoteIn: Quote,
+    opts?: { reference_mids?: number[] | null }
+  ): Promise<TickResult> {
     const t0 = Date.now();
     // Always stamp runtime epic — public/desk quotes often omit it (news targeting).
     const quote: Quote = { ...quoteIn, epic: quoteIn.epic || this.epic };
