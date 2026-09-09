@@ -9,6 +9,7 @@ import type { MasterBroker } from './broker.js';
 import { CapitalBroker, Mt4FileBroker, PaperBroker, capitalApiEpic, epicsMatch } from './broker.js';
 import { capitalEnvPresent } from './envBroker.js';
 import { decide } from './decision.js';
+import { backfillDeskEntrySources } from './deskEntryHydrate.js';
 import { executeDecision } from './execution.js';
 import {
   loadJournalHistory,
@@ -900,6 +901,19 @@ class MasterRuntime {
         }
         if (!capitalAttached || this.capitalDayGatesSeeded) {
           this.account.daily_pnl = pnlToday;
+        }
+      }
+      // After opens + journal are available — heal missing desk confirm on decision
+      if (this.positions.count() > 0) {
+        const healed = backfillDeskEntrySources(this.positions.list(), {
+          opportunities: this.pipeline.journal.opportunities,
+          decisions: loadDecisionEvents(500),
+        });
+        if (healed > 0) {
+          this.trackPersist(
+            'open_positions',
+            saveOpenPositions(this.positions.list())
+          );
         }
       }
       this.account.open_positions = this.positions.count();
@@ -3408,6 +3422,19 @@ class MasterRuntime {
           outcome: o.outcome,
         }))
     );
+    // Heal desk confirm provenance on opens before any manage/close can record EV
+    {
+      const healed = backfillDeskEntrySources(this.positions.list(), {
+        opportunities: hist.opportunities,
+        decisions: loadDecisionEvents(500),
+      });
+      if (healed > 0) {
+        this.trackPersist(
+          'open_positions',
+          saveOpenPositions(this.positions.list())
+        );
+      }
+    }
     // Recompute account daily/peak from recovered outcomes (today only for daily_pnl)
     // Load gates BEFORE roll so same-day day_start_equity / peak survive restart.
     const gates = loadRuntimeGates();
