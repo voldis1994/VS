@@ -289,7 +289,7 @@ describe('MASTER TIME_STOP + breakeven', () => {
     expect(managed.closed[0]!.reason).toMatch(/TIME_STOP/);
   });
 
-  it('bars_open TIME_STOP ignores overnight wall clock and fires after N manage ticks', async () => {
+  it('bars_open TIME_STOP ignores wall-clock max_hold_ms and fires after N manage ticks', async () => {
     const broker = new PaperBroker();
     await broker.connect();
     const entry = 4400;
@@ -354,9 +354,10 @@ describe('MASTER TIME_STOP + breakeven', () => {
         expectancy: null,
       },
     });
-    // Overnight wall clock — must NOT instant TIME_STOP when bars mode is on
+    // Wall clock past max_hold_ms but short of BestOutcome TimeDecay —
+    // bars mode must keep the position until bars_open hits the cap.
     const pos = pm.get(placed.position_id!)!;
-    pos.entry_at = new Date(Date.now() - 48 * 3600_000).toISOString();
+    pos.entry_at = new Date(Date.now() - 5_000).toISOString();
     pos.bars_open = 5; // mid-hold restart hydrate
 
     const stillHeld = await pm.manageTick({

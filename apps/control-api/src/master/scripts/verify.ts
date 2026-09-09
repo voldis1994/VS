@@ -1210,7 +1210,7 @@ async function main() {
       runtimeBody.includes('time_stop_max_bars: this.cfg.time_stop_max_bars') &&
       persistBody.includes('bars_open:') &&
       liveFeedTestBody.includes(
-        'bars_open TIME_STOP ignores overnight wall clock'
+        'bars_open TIME_STOP ignores wall-clock max_hold_ms'
       ) &&
       liveFeedTestBody.includes('resolveTimeStop prefers bars mode');
     const multiEpicManageApi =
