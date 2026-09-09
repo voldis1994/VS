@@ -534,6 +534,16 @@ describe('MASTER daily pnl day boundary', () => {
       epic: 'GOLD',
       ts_ms: Date.now(),
     };
+    // Live mark clears open-book defer, but sealed prior day still paints deferred
+    const markLiveDayLagged = masterRuntime.status();
+    expect(markLiveDayLagged.utc_day_roll_deferred).toBe(true);
+    expect(String(markLiveDayLagged.last_block_reason || '')).toMatch(
+      /utc_day_roll_deferred/
+    );
+
+    masterRuntime.account.daily_pnl_day = new Date()
+      .toISOString()
+      .slice(0, 10);
     const live = masterRuntime.status();
     expect(live.utc_day_roll_deferred).toBe(false);
 
