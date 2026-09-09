@@ -580,7 +580,8 @@ export function MasterPage() {
                 'broker',
                 'position_manager',
                 'exit',
-                'journal_performance',
+                'journal',
+                'performance',
               ] as const
             ).map((id) => {
               const stage = status.pipeline_stages![id];
@@ -596,7 +597,8 @@ export function MasterPage() {
                 broker: 'Stage·broker',
                 position_manager: 'Stage·position',
                 exit: 'Stage·exit',
-                journal_performance: 'Stage·journal',
+                journal: 'Stage·journal',
+                performance: 'Stage·perf',
               };
               return {
                 k: labels[id] || id,

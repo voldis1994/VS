@@ -107,8 +107,11 @@ describe('desk hard exit → MASTER journal', () => {
       expect(ev!.detail).toMatch(/HardInvalidation/);
 
       const stages = masterRuntime.status().pipeline_stages;
-      expect(stages.journal_performance.ok).toBe(true);
-      expect(stages.journal_performance.detail).toMatch(/trade events|trades=/);
+      expect(stages.journal.ok).toBe(true);
+      expect(stages.journal.detail).toMatch(/trades_ev|dec=/);
+      // Desk hard close books local ManagedPosition with pnl_proven:false —
+      // Stage·perf stays red until proven KPI trades exist.
+      expect(stages.performance.ok).toBe(false);
     } finally {
       masterRuntime.owns_pipeline_pref = prevPref;
       masterRuntime.positions = prevPositions;

@@ -318,7 +318,11 @@ async function main() {
     ...pipe.journal.traded(),
     ...sellPipe.journal.traded(),
   ]);
-  stages.journal_performance = {
+  stages.journal = {
+    ok: perf.trades >= 1,
+    detail: `audit trades=${perf.trades}`,
+  };
+  stages.performance = {
     ok: perf.trades >= 1 && stages.exit_sell.ok && stages.execution_sell.ok,
     detail: `trades=${perf.trades} pnl=${perf.total_pnl.toFixed(4)} exp=${perf.expectancy.toFixed(4)} sell_exec=${stages.execution_sell.ok} sell_exit=${stages.exit_sell.ok}`,
   };

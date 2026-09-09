@@ -5113,7 +5113,8 @@ describe('SELL manageTick partial_close + Check trail', () => {
       'broker',
       'position_manager',
       'exit',
-      'journal_performance',
+      'journal',
+      'performance',
     ] as const) {
       expect(stages[id]).toBeTruthy();
       expect(typeof stages[id].ok).toBe('boolean');
@@ -5337,8 +5338,10 @@ describe('pipeline_stages honesty — position + journal never forged green', ()
       const cold = masterRuntime.status().pipeline_stages;
       expect(cold.position_manager.ok).toBe(false);
       expect(cold.position_manager.detail).toMatch(/manage never ran/);
-      expect(cold.journal_performance.ok).toBe(false);
-      expect(cold.journal_performance.detail).toMatch(/no journal/);
+      expect(cold.journal.ok).toBe(false);
+      expect(cold.journal.detail).toMatch(/no journal/);
+      expect(cold.performance.ok).toBe(false);
+      expect(cold.performance.detail).toMatch(/no performance|no KPI/);
 
       // Holding without manage evidence stays red
       masterRuntime.positions.register({
@@ -5385,14 +5388,19 @@ describe('pipeline_stages honesty — position + journal never forged green', ()
         sell_score: 0.1,
       });
       const withJournal = masterRuntime.status().pipeline_stages;
-      expect(withJournal.journal_performance.ok).toBe(true);
-      expect(withJournal.journal_performance.detail).toMatch(/decisions/);
+      expect(withJournal.journal.ok).toBe(true);
+      expect(withJournal.journal.detail).toMatch(/dec=/);
+      // Decisions alone must not forge Stage·perf green
+      expect(withJournal.performance.ok).toBe(false);
+      expect(withJournal.performance.detail).toMatch(/no KPI|awaiting/);
 
       masterRuntime.persist_ok = false;
       masterRuntime.last_persist_error = 'disk_full_test';
       const persistFail = masterRuntime.status().pipeline_stages;
-      expect(persistFail.journal_performance.ok).toBe(false);
-      expect(persistFail.journal_performance.detail).toMatch(/persist fail/);
+      expect(persistFail.journal.ok).toBe(false);
+      expect(persistFail.journal.detail).toMatch(/persist fail/);
+      expect(persistFail.performance.ok).toBe(false);
+      expect(persistFail.performance.detail).toMatch(/persist fail/);
     } finally {
       (masterRuntime as unknown as { last_manage_tick_ms: number }).last_manage_tick_ms =
         prevManage;
