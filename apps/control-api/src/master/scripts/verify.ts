@@ -250,6 +250,8 @@ async function main() {
       runtimeBody.includes('flat · no exit yet') &&
       runtimeBody.includes('no filter evidence') &&
       runtimeBody.includes('filter_ok === true') &&
+      runtimeBody.includes('no candidate evidence') &&
+      runtimeBody.includes('buy?.components') &&
       runtimeBody.includes('liveQuoteStaleForStages') &&
       runtimeBody.includes('stale_quote · age=') &&
       runtimeBody.includes('no cycle ·') &&
