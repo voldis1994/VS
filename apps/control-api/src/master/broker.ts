@@ -489,7 +489,14 @@ export class PaperBroker implements MasterBroker {
       this.balance != null && Number.isFinite(this.balance) && this.balance > 0
         ? this.balance
         : this.equity;
-    const equity = cash + floating;
+    // With opens: always recompute from cash+UPL. When flat: keep hydrate/recover
+    // this.equity (journal may restore equity before seedOpens / markToMarket).
+    const equity =
+      this.positions.size > 0
+        ? cash + floating
+        : Number.isFinite(this.equity) && this.equity > 0
+          ? Number(this.equity)
+          : cash;
     // Mirror MTM equity on the field so tests / callers reading .equity stay honest
     this.equity = equity;
     return {
