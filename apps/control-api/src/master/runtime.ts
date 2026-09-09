@@ -1046,17 +1046,29 @@ class MasterRuntime {
             /* keep journal cash */
           }
         }
-        this.rollDailyPnl();
-        const today = this.account.daily_pnl_day!;
+        // Opens without quote: defer UTC day-roll — cash-only day_start would
+        // seal daily_pnl_day=today and leave max_daily_loss fail-open on UPL.
+        const deferOpenDayRoll =
+          !capitalAttached &&
+          this.positions.count() > 0 &&
+          !this.last_quote;
+        const calToday = new Date().toISOString().slice(0, 10);
         let pnlToday = 0;
         for (const o of hist.outcomes) {
           if (o.outcome.pnl_proven === false) continue;
-          if (capitalAttached && oppMode.get(String(o.opportunity_id)) !== 'LIVE') {
+          if (
+            capitalAttached &&
+            oppMode.get(String(o.opportunity_id)) !== 'LIVE'
+          ) {
             continue;
           }
           const day = String(o.created_at || '').slice(0, 10);
-          if (day === today) pnlToday += o.outcome.pnl;
+          if (day === calToday) pnlToday += o.outcome.pnl;
         }
+        if (!deferOpenDayRoll) {
+          this.rollDailyPnl();
+        }
+        // Always surface today's closed daily_pnl (even when day-roll deferred)
         if (!capitalAttached || this.capitalDayGatesSeeded) {
           this.account.daily_pnl = pnlToday;
         }
@@ -3976,22 +3988,30 @@ class MasterRuntime {
         /* keep journal equity */
       }
     }
-    this.rollDailyPnl();
-    // After roll zeros daily_pnl on day change — restore today's closed sum
-    this.account.daily_pnl = pnlToday;
-    // Capital pending seed: keep day_start 0 — do not fall back to paper balance
-    if (
-      !(
-        this.broker instanceof CapitalBroker &&
-        !this.broker.paper &&
-        !this.capitalDayGatesSeeded
-      )
-    ) {
-      this.account.day_start_equity =
-        this.account.day_start_equity ||
-        this.account.equity ||
-        this.account.balance;
+    // Opens without quote: defer UTC day-roll — cash-only day_start would seal
+    // daily_pnl_day=today and leave max_daily_loss fail-open on floating UPL.
+    const deferOpenDayRoll =
+      !(this.broker instanceof CapitalBroker && !this.broker.paper) &&
+      this.positions.count() > 0 &&
+      !this.last_quote;
+    if (!deferOpenDayRoll) {
+      this.rollDailyPnl();
+      // Capital pending seed: keep day_start 0 — do not fall back to paper balance
+      if (
+        !(
+          this.broker instanceof CapitalBroker &&
+          !this.broker.paper &&
+          !this.capitalDayGatesSeeded
+        )
+      ) {
+        this.account.day_start_equity =
+          this.account.day_start_equity ||
+          this.account.equity ||
+          this.account.balance;
+      }
     }
+    // Always surface today's closed daily_pnl (even when day-roll deferred)
+    this.account.daily_pnl = pnlToday;
     this.persistRuntimeGates();
 
     // Dashboard honesty after restart — seed monitoring from durable snapshot
