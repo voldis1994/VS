@@ -582,9 +582,18 @@ export function MasterPage() {
                   ? ` · ${status.last_market.reasons.slice(0, 2).join('|')}`
                   : ''
               }`
-            : '—',
-          bad: !!status.last_market && (!status.last_market.ok || status.last_market.quality < 0.5),
-          ok: !!status.last_market?.ok && (status.last_market.quality ?? 0) >= 0.5,
+            : status.pipeline_stages?.normalization?.detail?.startsWith(
+                  'hydrated ·'
+                )
+              ? status.pipeline_stages.normalization.detail
+              : '—',
+          // Disk-cache Norm must not paint live green/bad
+          bad:
+            !!status.last_market &&
+            (!status.last_market.ok || status.last_market.quality < 0.5),
+          ok:
+            !!status.last_market?.ok &&
+            (status.last_market.quality ?? 0) >= 0.5,
         },
         {
           k: 'BUY',

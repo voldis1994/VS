@@ -393,8 +393,18 @@ async function main() {
     ).startsWith('hydrated ·'),
     market_validation_stage_ok:
       stHydrate.pipeline_stages?.market_validation?.ok === true,
+    market_validation_stage_detail:
+      stHydrate.pipeline_stages?.market_validation?.detail ?? null,
+    market_validation_stage_hydrated: String(
+      stHydrate.pipeline_stages?.market_validation?.detail || ''
+    ).startsWith('hydrated ·'),
     normalization_stage_ok:
       stHydrate.pipeline_stages?.normalization?.ok === true,
+    normalization_stage_detail:
+      stHydrate.pipeline_stages?.normalization?.detail ?? null,
+    normalization_stage_hydrated: String(
+      stHydrate.pipeline_stages?.normalization?.detail || ''
+    ).startsWith('hydrated ·'),
     broker_stage_ok: stHydrate.pipeline_stages?.broker?.ok === true,
     broker_stage_detail: stHydrate.pipeline_stages?.broker?.detail ?? null,
     buy_filter_ok: stHydrate.buy_filter?.ok === true,
@@ -463,7 +473,15 @@ async function main() {
     hydrateSnap.execution_stage_hydrated === true &&
     String(hydrateSnap.execution_stage_detail || '').startsWith('hydrated ·') &&
     hydrateSnap.market_validation_stage_ok === false &&
+    hydrateSnap.market_validation_stage_hydrated === true &&
+    String(hydrateSnap.market_validation_stage_detail || '').includes(
+      'disk_cache'
+    ) &&
     hydrateSnap.normalization_stage_ok === false &&
+    hydrateSnap.normalization_stage_hydrated === true &&
+    String(hydrateSnap.normalization_stage_detail || '').includes(
+      'disk_cache'
+    ) &&
     hydrateSnap.broker_stage_ok === false &&
     hydrateSnap.buy_filter_ok === false &&
     hydrateSnap.sell_filter_ok === false &&
@@ -610,7 +628,12 @@ async function main() {
       execution_stage_detail: hydrateSnap.execution_stage_detail,
       execution_stage_hydrated: hydrateSnap.execution_stage_hydrated,
       market_validation_stage_ok: hydrateSnap.market_validation_stage_ok,
+      market_validation_stage_detail: hydrateSnap.market_validation_stage_detail,
+      market_validation_stage_hydrated:
+        hydrateSnap.market_validation_stage_hydrated,
       normalization_stage_ok: hydrateSnap.normalization_stage_ok,
+      normalization_stage_detail: hydrateSnap.normalization_stage_detail,
+      normalization_stage_hydrated: hydrateSnap.normalization_stage_hydrated,
       broker_stage_ok: hydrateSnap.broker_stage_ok,
       broker_stage_detail: hydrateSnap.broker_stage_detail,
       buy_filter_ok: hydrateSnap.buy_filter_ok,
