@@ -564,6 +564,67 @@ export async function loadNewsWindowFromPersist(): Promise<any | null> {
   }
 }
 
+/** DualPersist / MemoryPersist / PG — client_fanout singleton for wipe heal. */
+export async function persistClientFanoutState(state: {
+  attempted: boolean;
+  subscribers: number;
+  ok_count: number;
+  fail_count: number;
+  detail: string;
+  journaled_count?: number;
+  ts?: string;
+  saved_at_ms: number;
+}): Promise<boolean> {
+  try {
+    await client.query(
+      `INSERT INTO master_client_fanout (id, payload, saved_at_ms)
+       VALUES ($1, $2::jsonb, $3)
+       ON CONFLICT (id) DO UPDATE SET
+         payload = EXCLUDED.payload,
+         saved_at_ms = EXCLUDED.saved_at_ms`,
+      [
+        'singleton',
+        JSON.stringify({
+          attempted: state.attempted === true,
+          subscribers: Math.max(0, Math.floor(Number(state.subscribers) || 0)),
+          ok_count: Math.max(0, Math.floor(Number(state.ok_count) || 0)),
+          fail_count: Math.max(0, Math.floor(Number(state.fail_count) || 0)),
+          detail: String(state.detail || '').slice(0, 400),
+          journaled_count:
+            state.journaled_count != null
+              ? Math.max(0, Math.floor(Number(state.journaled_count) || 0))
+              : 0,
+          ts: state.ts || new Date().toISOString(),
+        }),
+        state.saved_at_ms,
+      ]
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function loadClientFanoutFromPersist(): Promise<any | null> {
+  try {
+    const { rows } = await client.query(
+      `SELECT payload, saved_at_ms FROM master_client_fanout WHERE id = $1 LIMIT 1`,
+      ['singleton']
+    );
+    const row = rows?.[0];
+    if (!row) return null;
+    const payload =
+      typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload;
+    if (!payload || typeof payload !== 'object') return null;
+    return {
+      ...payload,
+      saved_at_ms: Number(row.saved_at_ms) || Number(payload.saved_at_ms) || 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Reader decision audit — DualPersist / MemoryPersist / FilePersist SQL path. */
 export async function persistDecisionEvent(entry: {
   event_id: string;
@@ -1125,6 +1186,8 @@ export class MemoryPersist implements PersistClient {
   errorJournalPayload: any | null = null;
   /** Singleton news_window payload — DualPersist primary wipe heal */
   newsWindowPayload: any | null = null;
+  /** Singleton client_fanout payload — DualPersist primary wipe heal */
+  clientFanoutPayload: any | null = null;
 
   async query(sql: string, params: unknown[] = []) {
     const s = sql.replace(/\s+/g, ' ').trim();
@@ -1380,6 +1443,32 @@ export class MemoryPersist implements PersistClient {
             id: 'singleton',
             payload: this.newsWindowPayload,
             saved_at_ms: Number(this.newsWindowPayload.saved_at_ms) || 0,
+          },
+        ],
+      };
+    }
+    if (s.startsWith('INSERT INTO master_client_fanout')) {
+      const raw = params[1];
+      this.clientFanoutPayload =
+        typeof raw === 'string' ? JSON.parse(raw as string) : raw;
+      if (
+        this.clientFanoutPayload &&
+        typeof this.clientFanoutPayload === 'object' &&
+        params[2] != null
+      ) {
+        this.clientFanoutPayload.saved_at_ms =
+          Number(params[2]) || Date.now();
+      }
+      return { rows: [] };
+    }
+    if (s.startsWith('SELECT') && s.includes('master_client_fanout')) {
+      if (!this.clientFanoutPayload) return { rows: [] };
+      return {
+        rows: [
+          {
+            id: 'singleton',
+            payload: this.clientFanoutPayload,
+            saved_at_ms: Number(this.clientFanoutPayload.saved_at_ms) || 0,
           },
         ],
       };

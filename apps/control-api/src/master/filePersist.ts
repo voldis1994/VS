@@ -521,6 +521,13 @@ export class FilePersist implements PersistClient, JournalMirror {
         detail: p.detail ?? null,
       });
     }
+    // Dual-write client_fanout sidecar when SQL path updated MemoryPersist
+    if (this.mem.clientFanoutPayload) {
+      atomicWriteJson(
+        join(this.root, 'client_fanout.json'),
+        this.mem.clientFanoutPayload
+      );
+    }
   }
 
   async query(sql: string, params: unknown[] = []) {

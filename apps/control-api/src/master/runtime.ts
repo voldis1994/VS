@@ -924,6 +924,13 @@ class MasterRuntime {
       await hydrateErrorJournalFromPersist();
       const { hydrateNewsWindowFromPersist } = await import('./newsGate.js');
       await hydrateNewsWindowFromPersist();
+      const { hydrateClientFanoutFromPersist } = await import(
+        './masterClientFanout.js'
+      );
+      const fanoutHydrate = await hydrateClientFanoutFromPersist();
+      if (fanoutHydrate.summary) {
+        this.last_client_fanout = fanoutHydrate.summary;
+      }
       if (this.positions.count() === 0) {
         const loaded = await loadOpenPositions();
         const valid = loaded.filter((p) => p.decision && p.position_id);
@@ -1594,6 +1601,8 @@ class MasterRuntime {
     if (!this.ownsPipelineEffective()) {
       const summary = summarizeFanoutResult({ attempted: false });
       this.last_client_fanout = summary;
+      const { saveClientFanoutSummary } = await import('./masterClientFanout.js');
+      saveClientFanoutSummary(summary);
       return summary;
     }
     try {
@@ -1642,6 +1651,8 @@ class MasterRuntime {
         journaled_count: journaled.length,
       });
       this.last_client_fanout = summary;
+      const { saveClientFanoutSummary } = await import('./masterClientFanout.js');
+      saveClientFanoutSummary(summary);
       if (fanout.subscribers > 0) {
         this.last_execution_detail = `${this.last_execution_detail || 'open'};client_fanout=${summary.detail}`.slice(
           0,
@@ -1655,6 +1666,8 @@ class MasterRuntime {
         error: err instanceof Error ? err.message : String(err),
       });
       this.last_client_fanout = summary;
+      const { saveClientFanoutSummary } = await import('./masterClientFanout.js');
+      saveClientFanoutSummary(summary);
       return summary;
     }
   }
