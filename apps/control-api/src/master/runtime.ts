@@ -89,6 +89,7 @@ import type {
   Quote,
   TradeOutcome,
 } from './types.js';
+import { buildFanoutCloseOutcome } from './masterClientFanout.js';
 
 export type MasterStatus = {
   mode: Mode;
@@ -1334,6 +1335,123 @@ class MasterRuntime {
       this.last_client_fanout = summary;
       return summary;
     }
+  }
+
+  /**
+   * Client fanout manage-only close → MASTER journal attach.
+   * Does not touch PositionManager (Client lots stay on Client Capital accounts).
+   * PnL stays unproven unless a future Capital confirm path sets proven.
+   */
+  recordFanoutClientClose(input: {
+    opportunity_id: string;
+    position_id: string | null;
+    epic: string;
+    side: string | null;
+    volume: number | null;
+    entry: number | null;
+    exit: number | null;
+    reason: string;
+    ok: boolean;
+    detail?: string | null;
+    mae?: number;
+    mfe?: number;
+    hold_ms?: number;
+  }): { journaled: boolean; booked: boolean } {
+    if (!this.ownsPipelineEffective()) {
+      return { journaled: false, booked: false };
+    }
+    const oppId = String(input.opportunity_id || '').trim();
+    if (!oppId) return { journaled: false, booked: false };
+
+    const detail = `FANOUT_CLIENT · ${input.reason}${
+      input.detail ? ` · ${input.detail}` : ''
+    }`.slice(0, 400);
+    logTradeEvent({
+      event: 'CLOSE',
+      broker: 'CAPITAL',
+      epic: input.epic,
+      side: input.side,
+      volume: input.volume,
+      price: input.exit,
+      position_id: input.position_id,
+      opportunity_id: oppId,
+      ok: input.ok,
+      detail,
+    });
+    if (!input.ok) {
+      this.last_close_failed = {
+        position_id: input.position_id || oppId,
+        exit_reason: input.reason,
+        detail: input.detail || 'fanout_client_close_fail',
+        ts: new Date().toISOString(),
+      };
+      return { journaled: true, booked: false };
+    }
+
+    const opp = this.pipeline.journal.opportunities.find((o) => o.id === oppId);
+    const entryFromOpp =
+      opp?.execution?.fill_price != null && Number.isFinite(opp.execution.fill_price)
+        ? Number(opp.execution.fill_price)
+        : null;
+    const volFromOpp =
+      opp?.risk.volume != null && Number.isFinite(opp.risk.volume)
+        ? Number(opp.risk.volume)
+        : null;
+    const outcome = buildFanoutCloseOutcome({
+      opportunity_id: oppId,
+      position_id: input.position_id,
+      epic: input.epic,
+      side: input.side,
+      volume: input.volume ?? volFromOpp,
+      entry: input.entry ?? entryFromOpp,
+      exit: input.exit,
+      reason: input.reason,
+      mae: input.mae,
+      mfe: input.mfe,
+      hold_ms: input.hold_ms,
+    });
+    const decision: MasterDecision =
+      opp?.decision ??
+      ({
+        decision_id: oppId,
+        kind: outcome.side,
+        side: outcome.side,
+        score: 0,
+        block_reason: null,
+        buy: { score: 0 } as never,
+        sell: { score: 0 } as never,
+        analysis: {
+          regime: 'RANGE',
+          market_state: 'fanout',
+          momentum_score: 0,
+          momentum_dir: 'NEUTRAL',
+          trend_dir: 'SIDEWAYS',
+          trend_strength: 0,
+          structure_bias: 'NEUTRAL',
+          swing_high: outcome.entry,
+          swing_low: outcome.entry,
+          buy_pressure: 0.5,
+          sell_pressure: 0.5,
+          behavior_bull: 0.5,
+          behavior_bear: 0.5,
+          impact_score: 0.5,
+          context_quality: 0.5,
+          volatility: 0.001,
+          atr: 1,
+          data_quality: 0.5,
+          session: 'LONDON',
+        } as never,
+        expectancy: null,
+      } as MasterDecision);
+
+    this.pipeline.recordTradeClose(oppId, decision, outcome, {
+      epic: input.epic,
+    });
+    const sk = decision.side ? setupKey(decision.analysis, decision.side) : null;
+    this.trackPersist('outcome', persistOutcome(oppId, outcome, sk));
+    this.last_exit_reason = outcome.exit_reason;
+    this.last_close_failed = null;
+    return { journaled: true, booked: true };
   }
 
   /** Desk tick reports who owns exits (avoids deskBridge↔runtime import cycle). */

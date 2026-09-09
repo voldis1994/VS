@@ -519,13 +519,20 @@ async function main() {
       runtimeBody.includes('fanoutAcceptedOpenToClients') &&
       runtimeBody.includes('executeMasterOwnedFanout') &&
       runtimeBody.includes('journalMasterFanoutFills') &&
+      runtimeBody.includes('recordFanoutClientClose') &&
       runtimeBody.includes('last_client_fanout') &&
       existsSync(join(root, 'src/master/masterClientFanout.ts')) &&
       readFileSync(join(root, 'src/master/masterClientFanout.ts'), 'utf8').includes(
         'journalMasterFanoutFills'
       ) &&
+      readFileSync(join(root, 'src/master/masterClientFanout.ts'), 'utf8').includes(
+        'buildFanoutCloseOutcome'
+      ) &&
       readFileSync(join(root, 'src/services/intentFanout.ts'), 'utf8').includes(
         'executeMasterOwnedFanout'
+      ) &&
+      readFileSync(join(root, 'src/services/robotDesk.ts'), 'utf8').includes(
+        'recordFanoutClientClose'
       );
     const masterOwnsFanoutUi =
       masterPageBody.includes("'Client fanout'") &&

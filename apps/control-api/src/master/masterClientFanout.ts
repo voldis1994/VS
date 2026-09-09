@@ -113,6 +113,25 @@ export type FanoutFillRow = {
   entry_price: number | null;
 };
 
+/** Deterministic MASTER opportunity id for a Client fanout fill. */
+export function fanoutOpportunityId(
+  intentId: string,
+  accountId: number
+): string {
+  return `fanout-${String(intentId || '').trim()}-${accountId}`.slice(0, 80);
+}
+
+/**
+ * Strip `master:` prefix from fanout idempotency keys.
+ * Non-master ids return null (Market Core fanout is not MASTER-journaled).
+ */
+export function masterIntentIdFromIdem(idem: string | null | undefined): string | null {
+  const raw = String(idem || '').trim();
+  if (!raw.startsWith('master:')) return null;
+  const id = raw.slice('master:'.length).trim();
+  return id || null;
+}
+
 /**
  * Mirror successful Client fanout fills into MASTER journal so
  * journal → performance sees multi-account opens (not status-only).
@@ -153,7 +172,7 @@ export function journalMasterFanoutFills(input: {
       paper: false,
     };
     const rec = input.journal.recordOpportunity({
-      id: `fanout-${input.intent_id}-${row.account_id}`.slice(0, 80),
+      id: fanoutOpportunityId(input.intent_id, row.account_id),
       mode: input.mode,
       epic: input.epic,
       decision: {
@@ -169,4 +188,58 @@ export function journalMasterFanoutFills(input: {
     out.push(rec);
   }
   return out;
+}
+
+export type FanoutCloseInput = {
+  opportunity_id: string;
+  position_id: string | null;
+  epic: string;
+  side: 'BUY' | 'SELL' | string | null;
+  volume: number | null;
+  entry: number | null;
+  exit: number | null;
+  reason: string;
+  mae?: number;
+  mfe?: number;
+  hold_ms?: number;
+};
+
+/**
+ * Build a TradeOutcome for a Client fanout close (pnl unproven until Capital
+ * realized profit is available — same honesty as desk hard exits).
+ */
+export function buildFanoutCloseOutcome(
+  input: FanoutCloseInput
+): import('./types.js').TradeOutcome {
+  const side = input.side === 'SELL' ? 'SELL' : 'BUY';
+  const entry =
+    input.entry != null && Number.isFinite(input.entry)
+      ? Number(input.entry)
+      : input.exit != null && Number.isFinite(input.exit)
+        ? Number(input.exit)
+        : 0;
+  const exit =
+    input.exit != null && Number.isFinite(input.exit)
+      ? Number(input.exit)
+      : entry;
+  const volume =
+    input.volume != null && Number.isFinite(input.volume) && input.volume > 0
+      ? Number(input.volume)
+      : 0;
+  return {
+    position_id: input.position_id || input.opportunity_id,
+    side,
+    entry,
+    exit,
+    volume,
+    pnl: 0,
+    fees: 0,
+    slippage: 0,
+    mae: input.mae ?? 0,
+    mfe: input.mfe ?? 0,
+    r_multiple: 0,
+    hold_ms: input.hold_ms ?? 0,
+    exit_reason: `FANOUT_CLIENT · ${input.reason}`.slice(0, 240),
+    pnl_proven: false,
+  };
 }

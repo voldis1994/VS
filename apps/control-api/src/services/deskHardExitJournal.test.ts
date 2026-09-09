@@ -136,5 +136,8 @@ describe('desk hard exit → MASTER journal', () => {
     expect(src).toMatch(/DESK_DEFERRED_HARD|masterOwnsPipeline\(\)/);
     // both success and fail paths
     expect(src.match(/recordDeskOwnedClose/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+    expect(src).toMatch(/recordFanoutClientClose/);
+    expect(src).toMatch(/fanout_opportunity_id/);
+    expect(src).toMatch(/external_flat/);
   });
 });
