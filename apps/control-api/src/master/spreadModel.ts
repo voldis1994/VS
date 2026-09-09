@@ -1,9 +1,14 @@
 /**
  * Relative spread model — Reader update_spread_model / evaluate_spread_filter.
  * z-score of current spread vs lookback history.
+ * Also DualPersist / MemoryPersist / PG primary so a full file wipe heals.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import {
+  persistSpreadHistoryState,
+  loadSpreadHistoryFromPersist,
+} from './persist.js';
 
 export type SpreadModelSnapshot = {
   history: number[];
@@ -12,6 +17,12 @@ export type SpreadModelSnapshot = {
   median_spread: number;
   current_spread: number;
   relative_spread: number;
+};
+
+export type SpreadHistoryDiskPayload = {
+  lookback: number;
+  history: number[];
+  ts: string;
 };
 
 function median(values: number[]): number {
@@ -35,7 +46,10 @@ export function updateSpreadModel(
 ): SpreadModelSnapshot {
   const lookback = Math.max(1, lookbackBars);
   const cur = Math.max(0, Number(currentSpread) || 0);
-  const combined = [...history.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n >= 0), cur];
+  const combined = [
+    ...history.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n >= 0),
+    cur,
+  ];
   const trimmed = combined.slice(-lookback);
   const mean = trimmed.reduce((s, n) => s + n, 0) / trimmed.length;
   const std = pstdev(trimmed, mean);
@@ -62,16 +76,25 @@ export function relativeSpreadAcceptable(
   return relativeSpread <= threshold;
 }
 
-function stateDir(): string {
+function stateDir(root?: string): string {
   return (
+    root ||
     process.env.MASTER_STATE_DIR ||
     process.env.MASTER_GATES_DIR ||
     join(process.cwd(), '.master-state')
   );
 }
 
-function spreadPath(): string {
-  return join(stateDir(), 'spread_history.json');
+function spreadPath(root?: string): string {
+  return join(stateDir(root), 'spread_history.json');
+}
+
+function normalizeHistory(raw: unknown, lookback: number): number[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((n) => Number(n))
+    .filter((n) => Number.isFinite(n) && n >= 0)
+    .slice(-Math.max(1, lookback));
 }
 
 /** Rolling spread history for LIVE/PAPER runtime. */
@@ -101,37 +124,40 @@ export class SpreadHistory {
   }
 
   /** Reader recover_spread_model_from_sensor — restore lookback across restart. */
-  load(): number {
+  load(root?: string): number {
     try {
-      const path = spreadPath();
+      const path = spreadPath(root);
       if (!existsSync(path)) return 0;
       const raw = JSON.parse(readFileSync(path, 'utf8')) as {
         history?: unknown;
         lookback?: number;
       };
-      const hist = Array.isArray(raw.history)
-        ? raw.history
-            .map((n) => Number(n))
-            .filter((n) => Number.isFinite(n) && n >= 0)
-        : [];
-      this.values = hist.slice(-Math.max(1, this.lookback));
+      const lb =
+        typeof raw.lookback === 'number' && Number.isFinite(raw.lookback)
+          ? Math.max(1, Math.floor(raw.lookback))
+          : this.lookback;
+      this.values = normalizeHistory(raw.history, lb);
       return this.values.length;
     } catch {
       return 0;
     }
   }
 
-  save(): boolean {
+  save(root?: string): boolean {
     try {
-      mkdirSync(stateDir(), { recursive: true });
-      writeFileSync(
-        spreadPath(),
-        JSON.stringify({
-          lookback: this.lookback,
-          history: this.values.slice(-Math.max(1, this.lookback)),
-          ts: new Date().toISOString(),
-        })
-      );
+      const dir = stateDir(root);
+      mkdirSync(dir, { recursive: true });
+      const payload: SpreadHistoryDiskPayload = {
+        lookback: this.lookback,
+        history: this.values.slice(-Math.max(1, this.lookback)),
+        ts: new Date().toISOString(),
+      };
+      writeFileSync(spreadPath(root), JSON.stringify(payload));
+      // DualPersist / MemoryPersist / PG primary — survive full file wipe
+      void persistSpreadHistoryState({
+        ...payload,
+        saved_at_ms: Date.now(),
+      }).catch(() => {});
       return true;
     } catch {
       return false;
@@ -140,5 +166,42 @@ export class SpreadHistory {
 
   size(): number {
     return this.values.length;
+  }
+}
+
+/**
+ * When spread_history.json was wiped but DualPersist/PG primary still holds
+ * the singleton payload, rewrite the sidecar before disk load.
+ */
+export async function hydrateSpreadHistoryFromPersist(
+  root?: string
+): Promise<{ restored: boolean; count: number }> {
+  const dir = stateDir(root);
+  const path = spreadPath(root);
+  if (existsSync(path)) return { restored: false, count: 0 };
+  try {
+    const loaded = await loadSpreadHistoryFromPersist();
+    if (!loaded || typeof loaded !== 'object') {
+      return { restored: false, count: 0 };
+    }
+    const lookback =
+      typeof loaded.lookback === 'number' && Number.isFinite(loaded.lookback)
+        ? Math.max(1, Math.floor(loaded.lookback))
+        : 20;
+    const history = normalizeHistory(loaded.history, lookback);
+    if (history.length < 3) return { restored: false, count: 0 };
+    const payload: SpreadHistoryDiskPayload = {
+      lookback,
+      history,
+      ts:
+        typeof loaded.ts === 'string' && loaded.ts
+          ? loaded.ts
+          : new Date().toISOString(),
+    };
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path, JSON.stringify(payload));
+    return { restored: true, count: history.length };
+  } catch {
+    return { restored: false, count: 0 };
   }
 }
