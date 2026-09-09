@@ -140,6 +140,199 @@ describe('MASTER daily pnl day boundary', () => {
     ).toBe(0);
   });
 
+  it('hydrate rebuilds pending today closes so post-defer roll keeps them', async () => {
+    const { mkdtempSync, writeFileSync } = await import('fs');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const { installFilePersist } = await import('../filePersist.js');
+    const { saveRuntimeGates } = await import('../runtimeGates.js');
+
+    const dir = mkdtempSync(join(tmpdir(), 'vs-defer-pending-rebuild-'));
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = dir;
+    installFilePersist(dir);
+
+    const today = new Date().toISOString().slice(0, 10);
+    const entry = 4400;
+    writeFileSync(
+      join(dir, 'master_state.json'),
+      JSON.stringify({
+        opportunities: [
+          {
+            id: '00000000-0000-4000-8000-0000000000aa',
+            ts: '2000-01-01T12:00:00.000Z',
+            mode: 'PAPER',
+            epic: 'GOLD',
+          },
+          {
+            id: '00000000-0000-4000-8000-0000000000bb',
+            ts: `${today}T08:00:00.000Z`,
+            mode: 'PAPER',
+            epic: 'GOLD',
+          },
+        ],
+        outcomes: [
+          {
+            opportunity_id: '00000000-0000-4000-8000-0000000000aa',
+            setup_key: 'TREND:BUY',
+            created_at: '2000-01-01T12:05:00.000Z',
+            outcome: {
+              position_id: 'p-sealed-prior',
+              side: 'BUY',
+              entry: 4400,
+              exit: 4390,
+              volume: 1,
+              pnl: -250,
+              fees: 0,
+              slippage: 0,
+              mae: 10,
+              mfe: 0,
+              r_multiple: -1,
+              hold_ms: 1000,
+              exit_reason: 'STOP_HIT',
+            },
+          },
+          {
+            opportunity_id: '00000000-0000-4000-8000-0000000000bb',
+            setup_key: 'TREND:BUY',
+            created_at: `${today}T09:00:00.000Z`,
+            outcome: {
+              position_id: 'p-today-during-defer',
+              side: 'BUY',
+              entry: 4400,
+              exit: 4392,
+              volume: 1,
+              pnl: -80,
+              fees: 0,
+              slippage: 0,
+              mae: 8,
+              mfe: 0,
+              r_multiple: -0.8,
+              hold_ms: 1000,
+              exit_reason: 'STOP_HIT',
+            },
+          },
+        ],
+        positions: [
+          {
+            position_id: 'paper-pending-rebuild-open',
+            opportunity_id: '00000000-0000-4000-8000-0000000000cc',
+            intent_id: 'defer-pending-rebuild-aaaaaa',
+            epic: 'GOLD',
+            side: 'BUY',
+            size: 1,
+            entry,
+            stop_loss: entry - 50,
+            take_profit: entry + 50,
+            entry_at: `${today}T10:00:00.000Z`,
+            decision: {
+              decision_id: 'd-pending-rebuild',
+              kind: 'BUY',
+              side: 'BUY',
+              score: 0.7,
+              block_reason: null,
+              buy: null,
+              sell: null,
+              analysis: {
+                regime: 'TREND',
+                market_state: 't',
+                momentum_score: 0.5,
+                momentum_dir: 'UP',
+                trend_dir: 'UP',
+                trend_strength: 0.5,
+                structure_bias: 'BULLISH',
+                swing_high: entry + 5,
+                swing_low: entry - 5,
+                buy_pressure: 0.6,
+                sell_pressure: 0.4,
+                behavior_bull: 0.5,
+                behavior_bear: 0.5,
+                impact_score: 0.5,
+                context_quality: 0.8,
+                volatility: 0.001,
+                atr: 1,
+                data_quality: 0.9,
+                session: 'LONDON',
+              },
+              expectancy: null,
+            },
+          },
+        ],
+        intents: [],
+      })
+    );
+    saveRuntimeGates({
+      last_loss_ms: 0,
+      reject_until_ms: 0,
+      inflight_until_ms: 0,
+      post_exit_until_ms: 0,
+      last_entry_fingerprint: null,
+      day_start_equity: 10_000,
+      peak_equity: 10_000,
+      daily_pnl_day: '2000-01-01',
+      consecutive_losses: 1,
+      capital_day_gates_seeded: false,
+      last_ai_allow_close: true,
+      ai_mode: 'off',
+      kill_switch: false,
+      mode: 'PAPER',
+      epic: 'GOLD',
+      entries_armed: true,
+      entries_pause_reason: null,
+      last_close_failed: null,
+      desired_running: false,
+    });
+    installFilePersist(dir);
+
+    masterRuntime.pipeline = new MasterPipeline('PAPER');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.bookHydrated = false;
+    masterRuntime.recovered = false;
+    masterRuntime.broker = null;
+    masterRuntime.account.equity = 10_000;
+    masterRuntime.account.balance = 10_000;
+    masterRuntime.account.peak_equity = 10_000;
+    masterRuntime.account.daily_pnl = -50;
+    masterRuntime.account.daily_pnl_day = '2000-01-01';
+    masterRuntime.account.day_start_equity = 10_000;
+    masterRuntime.cfg = { ...DEFAULT_MASTER_CONFIG, mode: 'PAPER', ai_mode: 'off' };
+    masterRuntime.last_quote = null;
+    masterRuntime.last_bars = [];
+    (
+      masterRuntime as unknown as { pendingCalendarDayClosedPnl: number }
+    ).pendingCalendarDayClosedPnl = 0;
+    masterRuntime.stop();
+
+    const ok = await masterRuntime.hydrateBookFromDisk();
+    expect(ok).toBe(true);
+    expect(masterRuntime.positions.count()).toBe(1);
+    expect(masterRuntime.account.daily_pnl_day).toBe('2000-01-01');
+    expect(masterRuntime.account.daily_pnl).toBe(-250);
+    // Calendar-today close must be parked for the eventual roll
+    expect(
+      (masterRuntime as unknown as { pendingCalendarDayClosedPnl: number })
+        .pendingCalendarDayClosedPnl
+    ).toBe(-80);
+
+    const rolled = (
+      masterRuntime as unknown as { rollDailyPnl: () => boolean }
+    ).rollDailyPnl();
+    expect(rolled).toBe(true);
+    expect(masterRuntime.account.daily_pnl_day).toBe(today);
+    expect(masterRuntime.account.daily_pnl).toBe(-80);
+    expect(
+      (masterRuntime as unknown as { pendingCalendarDayClosedPnl: number })
+        .pendingCalendarDayClosedPnl
+    ).toBe(0);
+
+    masterRuntime.bookHydrated = false;
+    masterRuntime.recovered = false;
+    masterRuntime.last_quote = null;
+    masterRuntime.positions = new PositionManager();
+    if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+    else process.env.MASTER_STATE_DIR = prev;
+  });
+
   it('manageOnlyTick rolls stale daily_pnl_day before sync-ghost close', async () => {
     masterRuntime.stop();
     masterRuntime.pipeline = new MasterPipeline('PAPER');
