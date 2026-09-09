@@ -671,19 +671,21 @@ export function MasterPage() {
         {
           k: 'Entries',
           v: status.entries_armed === false
-            ? `PAUSED${status.entries_pause_reason ? ` · ${status.entries_pause_reason}` : ''}`
-            : 'armed',
-          bad: status.entries_armed === false,
-          ok: status.entries_armed !== false,
+            ? `${cyclePending ? 'hydrated · ' : ''}PAUSED${status.entries_pause_reason ? ` · ${status.entries_pause_reason}` : ''}`
+            : `${cyclePending ? 'hydrated · ' : ''}armed`,
+          bad: !cyclePending && status.entries_armed === false,
+          ok: !cyclePending && status.entries_armed !== false,
+          warn: cyclePending,
         },
         {
           k: 'SETUP',
           v: status.market_setup
-            ? `${status.setup_gate_armed ? 'gate · ' : ''}${status.market_setup.status}${
+            ? `${cyclePending ? 'hydrated · ' : ''}${status.setup_gate_armed ? 'gate · ' : ''}${status.market_setup.status}${
                 status.market_setup.side ? ` ${status.market_setup.side}` : ''
               } · ${status.market_setup.kind}`
             : '—',
           bad:
+            !cyclePending &&
             !!status.setup_gate_armed &&
             (!status.market_setup || status.market_setup.status !== 'ARMED'),
           ok:
