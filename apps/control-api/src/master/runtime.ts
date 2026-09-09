@@ -883,6 +883,10 @@ class MasterRuntime {
       const { hydrateMarketCacheFromPersist } = await import('./marketCache.js');
       await hydrateMarketCacheFromPersist();
       this.hydrateMarketCacheFromDisk();
+      const { hydrateEpicCycleStashFromPersist } = await import(
+        './epicCycleStash.js'
+      );
+      await hydrateEpicCycleStashFromPersist();
       this.hydrateEpicCycleStashFromDisk();
       if (this.positions.count() === 0) {
         const loaded = await loadOpenPositions();

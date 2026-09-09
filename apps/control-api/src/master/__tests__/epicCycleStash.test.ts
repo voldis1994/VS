@@ -138,4 +138,116 @@ describe('epicCycleStash persist/hydrate', () => {
     const raw = JSON.parse(readFileSync(sidecar, 'utf8'));
     expect(raw.setups_by_epic.GOLD.setup.reason).toBe('heal');
   });
+
+  it('DualPersist MemoryPersist primary heals wiped epic_cycle_stash sidecar', async () => {
+    const { mkdtempSync, rmSync, existsSync, mkdirSync, unlinkSync } =
+      await import('fs');
+    const {
+      MemoryPersist,
+      setPersistClient,
+      persistEpicCycleStashState,
+    } = await import('../persist.js');
+    const { DualPersist } = await import('../dualPersist.js');
+    const { FilePersist } = await import('../filePersist.js');
+    const {
+      saveEpicCycleStash: save,
+      loadEpicCycleStash: load,
+      hydrateEpicCycleStashFromPersist,
+    } = await import('../epicCycleStash.js');
+    const dir = mkdtempSync(join(tmpdir(), 'master-epic-pg-heal-'));
+    const prevState = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = dir;
+    const primary = new MemoryPersist();
+    try {
+      setPersistClient(new DualPersist(primary, new FilePersist(dir)));
+      const setups = {
+        GOLD: {
+          setup: {
+            ...emptySetup('pg_heal_gold'),
+            kind: 'CONTINUATION' as const,
+            side: 'BUY' as const,
+            status: 'ARMED',
+            reason: 'pg_heal_gold',
+            confirm: 2,
+          },
+          structure: null,
+        },
+        SILVER: {
+          setup: {
+            ...emptySetup('pg_heal_silver'),
+            kind: 'CONTINUATION' as const,
+            side: 'SELL' as const,
+            status: 'FORMING',
+            reason: 'pg_heal_silver',
+            confirm: 0,
+          },
+          structure: null,
+        },
+      };
+      const cycles = {
+        GOLD: {
+          at: new Date().toISOString(),
+          market_setup: {
+            kind: 'CONTINUATION',
+            side: 'BUY' as const,
+            status: 'ARMED',
+            reason: 'pg_heal_gold',
+            confirm: 2,
+          },
+          last_market: null,
+          decision_kind: 'BUY',
+          buy_score: 0.8,
+          sell_score: 0.2,
+        },
+        SILVER: {
+          at: new Date().toISOString(),
+          market_setup: {
+            kind: 'CONTINUATION',
+            side: 'SELL' as const,
+            status: 'FORMING',
+            reason: 'pg_heal_silver',
+            confirm: 0,
+          },
+          last_market: null,
+          decision_kind: 'WAIT',
+          buy_score: 0.3,
+          sell_score: 0.5,
+        },
+      };
+      expect(save({ setups_by_epic: setups, cycles_by_epic: cycles })).toBe(
+        true
+      );
+      await persistEpicCycleStashState({
+        at: new Date().toISOString(),
+        setups_by_epic: setups,
+        cycles_by_epic: cycles,
+        saved_at_ms: Date.now(),
+      });
+      expect(primary.epicCycleStashPayload?.setups_by_epic?.GOLD).toBeTruthy();
+      expect(primary.epicCycleStashPayload?.cycles_by_epic?.SILVER).toBeTruthy();
+      setPersistClient(null);
+      rmSync(dir, { recursive: true, force: true });
+      mkdirSync(dir, { recursive: true });
+      setPersistClient(new DualPersist(primary, new FilePersist(dir)));
+      expect(existsSync(join(dir, 'epic_cycle_stash.json'))).toBe(false);
+      const healed = await hydrateEpicCycleStashFromPersist(dir);
+      expect(healed.restored).toBe(true);
+      expect(existsSync(join(dir, 'epic_cycle_stash.json'))).toBe(true);
+      const loaded = load(dir);
+      expect(loaded?.setups_by_epic.GOLD?.setup?.reason).toBe('pg_heal_gold');
+      expect(loaded?.setups_by_epic.SILVER?.setup?.reason).toBe(
+        'pg_heal_silver'
+      );
+      expect(loaded?.cycles_by_epic.GOLD?.decision_kind).toBe('BUY');
+    } finally {
+      setPersistClient(null);
+      if (prevState === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prevState;
+      try {
+        unlinkSync(join(dir, 'epic_cycle_stash.json'));
+      } catch {
+        /* ignore */
+      }
+    }
+  });
 });
