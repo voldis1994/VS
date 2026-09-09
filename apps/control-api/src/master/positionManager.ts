@@ -2369,6 +2369,8 @@ export class PositionManager {
           sell: null as never,
           analysis: liveAnalysis,
           expectancy: null,
+          // Orphan: no confirm provenance — EV close path stays |none (never invent setup/move)
+          desk_entry_source: 'none',
         },
         regime_at_entry: toDeskRegime(liveRegime, liveAnalysis),
         // Only lock playbook/setup when live regime known — else manageTick uses live_regime
