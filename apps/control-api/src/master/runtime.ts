@@ -893,6 +893,11 @@ class MasterRuntime {
       );
       await hydrateRuntimeGatesFromPersist();
       this.hydrateRuntimeGatesFromDisk();
+      const { hydrateManageConfigFromPersist } = await import(
+        './manageConfig.js'
+      );
+      await hydrateManageConfigFromPersist();
+      this.hydrateManageConfig();
       if (this.positions.count() === 0) {
         const loaded = await loadOpenPositions();
         const valid = loaded.filter((p) => p.decision && p.position_id);
@@ -3534,6 +3539,8 @@ class MasterRuntime {
     // BEFORE hydrate — otherwise missing manage/owns files keep defaults.
     const { ensureOperatorMetaFromStateDir } = await import('./filePersist.js');
     ensureOperatorMetaFromStateDir();
+    const { hydrateManageConfigFromPersist } = await import('./manageConfig.js');
+    await hydrateManageConfigFromPersist();
     this.hydrateManageConfig();
     this.hydrateOwnsPipelinePref();
     const { hydrateMarketCacheFromPersist } = await import('./marketCache.js');

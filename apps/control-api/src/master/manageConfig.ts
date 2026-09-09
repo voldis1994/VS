@@ -1,12 +1,17 @@
 /**
  * Persist operator-tunable MASTER manage knobs (survive restart).
  * Full MasterConfig is large — only manage/exit/risk toggles are stored.
+ * Also DualPersist / MemoryPersist / PG primary so a full file wipe heals.
  */
 import { existsSync, mkdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import type { MasterConfig } from './types.js';
 import { atomicWriteJson } from './atomicIo.js';
 import { embedOperatorMetaPatch } from './operatorMetaEmbed.js';
+import {
+  persistManageConfigState,
+  loadManageConfigFromPersist,
+} from './persist.js';
 
 export type ManageConfigPatch = Partial<
   Pick<
@@ -131,6 +136,11 @@ export function saveManageConfig(patch: ManageConfigPatch): boolean {
     if (ok) {
       // Keep operator_meta in sync even when no position write flushes FilePersist
       embedOperatorMetaPatch({ manage: patch as Record<string, unknown> });
+      // DualPersist / MemoryPersist / PG primary — survive full file wipe
+      void persistManageConfigState({
+        ...(patch as Record<string, unknown>),
+        saved_at_ms: Date.now(),
+      }).catch(() => {});
     }
     return ok;
   } catch {
@@ -138,18 +148,55 @@ export function saveManageConfig(patch: ManageConfigPatch): boolean {
   }
 }
 
+function cleanManagePatch(
+  raw: ManageConfigPatch | Record<string, unknown> | null | undefined
+): ManageConfigPatch | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const clean: ManageConfigPatch = {};
+  for (const k of KEYS) {
+    if ((raw as ManageConfigPatch)[k] !== undefined) {
+      (clean as Record<string, unknown>)[k] = (raw as ManageConfigPatch)[k];
+    }
+  }
+  return clean;
+}
+
 export function loadManageConfig(): ManageConfigPatch | null {
   try {
     const path = configPath();
     if (!existsSync(path)) return null;
     const raw = JSON.parse(readFileSync(path, 'utf8')) as ManageConfigPatch;
-    if (!raw || typeof raw !== 'object') return null;
-    const clean: ManageConfigPatch = {};
-    for (const k of KEYS) {
-      if (raw[k] !== undefined) (clean as Record<string, unknown>)[k] = raw[k];
-    }
+    const clean = cleanManagePatch(raw);
     return clean;
   } catch {
     return null;
+  }
+}
+
+/**
+ * When master_manage_config.json was wiped but DualPersist/PG primary still
+ * holds the singleton payload, rewrite the sidecar (+ operator_meta) before
+ * disk hydrate.
+ */
+export async function hydrateManageConfigFromPersist(
+  root?: string
+): Promise<{ restored: boolean }> {
+  const dir =
+    root ||
+    process.env.MASTER_STATE_DIR ||
+    process.env.MASTER_GATES_DIR ||
+    join(process.cwd(), '.master-state');
+  const path = join(dir, 'master_manage_config.json');
+  if (existsSync(path)) return { restored: false };
+  try {
+    const loaded = await loadManageConfigFromPersist();
+    const clean = cleanManagePatch(loaded);
+    if (!clean || !Object.keys(clean).length) return { restored: false };
+    mkdirSync(dir, { recursive: true });
+    atomicWriteJson(path, clean);
+    embedOperatorMetaPatch({ manage: clean as Record<string, unknown> }, dir);
+    return { restored: true };
+  } catch {
+    return { restored: false };
   }
 }
