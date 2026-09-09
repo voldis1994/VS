@@ -51,7 +51,8 @@ function quoteFrom(bar: Bar, spread = 0.4): Quote {
     ask: bar.close + spread / 2,
     mid: bar.close,
     spread,
-    ts_ms: bar.ts_ms ?? Date.now(),
+    // Live quote freshness — bar candle ts must not forge / fail stale_quote gates
+    ts_ms: Date.now(),
   };
 }
 
