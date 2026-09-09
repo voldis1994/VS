@@ -41,7 +41,7 @@ export class DualPersist implements PersistClient {
       if (
         Array.isArray(primaryResult.rows) &&
         primaryResult.rows.length === 0 &&
-        /master_open_positions|master_seen_intents|master_opportunities|master_trade_outcomes/i.test(
+        /master_open_positions|master_seen_intents|master_opportunities|master_trade_outcomes|master_decision_events|master_trade_events/i.test(
           sql
         )
       ) {

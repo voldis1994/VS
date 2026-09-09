@@ -107,6 +107,210 @@ export async function persistOutcome(
   }
 }
 
+/** Reader decision audit — DualPersist / MemoryPersist / FilePersist SQL path. */
+export async function persistDecisionEvent(entry: {
+  event_id: string;
+  ts: string;
+  kind: string;
+  epic: string;
+  mode: string;
+  opportunity_id: string | null;
+  buy_score: number;
+  sell_score: number;
+  block_reason: string | null;
+  executed: boolean;
+  execution_detail: string | null;
+  cycle_ms: number | null;
+}): Promise<boolean> {
+  try {
+    await client.query(
+      `INSERT INTO master_decision_events (
+         event_id, ts, kind, epic, mode, opportunity_id,
+         buy_score, sell_score, block_reason, executed, execution_detail, cycle_ms
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       ON CONFLICT (event_id) DO NOTHING`,
+      [
+        entry.event_id,
+        entry.ts,
+        entry.kind,
+        entry.epic,
+        entry.mode,
+        entry.opportunity_id,
+        entry.buy_score,
+        entry.sell_score,
+        entry.block_reason,
+        entry.executed,
+        entry.execution_detail,
+        entry.cycle_ms,
+      ]
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Reader trade audit — DualPersist / MemoryPersist / FilePersist SQL path. */
+export async function persistTradeEvent(entry: {
+  event_id: string;
+  ts: string;
+  event: string;
+  broker: string;
+  epic: string;
+  side: string | null;
+  volume: number | null;
+  price: number | null;
+  position_id: string | null;
+  intent_id: string | null;
+  opportunity_id: string | null;
+  ok: boolean;
+  detail: string | null;
+  pnl: number | null;
+  fees: number | null;
+}): Promise<boolean> {
+  try {
+    await client.query(
+      `INSERT INTO master_trade_events (
+         event_id, ts, event, broker, epic, side, volume, price,
+         position_id, intent_id, opportunity_id, ok, detail, pnl, fees
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+       ON CONFLICT (event_id) DO NOTHING`,
+      [
+        entry.event_id,
+        entry.ts,
+        entry.event,
+        entry.broker,
+        entry.epic,
+        entry.side,
+        entry.volume,
+        entry.price,
+        entry.position_id,
+        entry.intent_id,
+        entry.opportunity_id,
+        entry.ok,
+        entry.detail,
+        entry.pnl,
+        entry.fees,
+      ]
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function loadDecisionEventsFromPersist(
+  limit = 50
+): Promise<
+  Array<{
+    event_id: string;
+    ts: string;
+    kind: string;
+    epic: string;
+    mode: string;
+    opportunity_id: string | null;
+    buy_score: number;
+    sell_score: number;
+    block_reason: string | null;
+    executed: boolean;
+    execution_detail: string | null;
+    cycle_ms: number | null;
+  }>
+> {
+  try {
+    const { rows } = await client.query(
+      `SELECT event_id, ts, kind, epic, mode, opportunity_id,
+              buy_score, sell_score, block_reason, executed, execution_detail, cycle_ms
+       FROM master_decision_events
+       ORDER BY ts DESC
+       LIMIT $1`,
+      [Math.max(1, Math.min(500, limit))]
+    );
+    return (rows || []).map((r: any) => ({
+      event_id: String(r.event_id),
+      ts: r.ts instanceof Date ? r.ts.toISOString() : String(r.ts),
+      kind: String(r.kind || 'WAIT'),
+      epic: String(r.epic || ''),
+      mode: String(r.mode || 'PAPER'),
+      opportunity_id: r.opportunity_id != null ? String(r.opportunity_id) : null,
+      buy_score: Number(r.buy_score) || 0,
+      sell_score: Number(r.sell_score) || 0,
+      block_reason: r.block_reason != null ? String(r.block_reason) : null,
+      executed: !!r.executed,
+      execution_detail:
+        r.execution_detail != null ? String(r.execution_detail) : null,
+      cycle_ms:
+        r.cycle_ms != null && Number.isFinite(Number(r.cycle_ms))
+          ? Math.round(Number(r.cycle_ms))
+          : null,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+export async function loadTradeEventsFromPersist(
+  limit = 50
+): Promise<
+  Array<{
+    event_id: string;
+    ts: string;
+    event: string;
+    broker: string;
+    epic: string;
+    side: string | null;
+    volume: number | null;
+    price: number | null;
+    position_id: string | null;
+    intent_id: string | null;
+    opportunity_id: string | null;
+    ok: boolean;
+    detail: string | null;
+    pnl: number | null;
+    fees: number | null;
+  }>
+> {
+  try {
+    const { rows } = await client.query(
+      `SELECT event_id, ts, event, broker, epic, side, volume, price,
+              position_id, intent_id, opportunity_id, ok, detail, pnl, fees
+       FROM master_trade_events
+       ORDER BY ts DESC
+       LIMIT $1`,
+      [Math.max(1, Math.min(500, limit))]
+    );
+    return (rows || []).map((r: any) => ({
+      event_id: String(r.event_id),
+      ts: r.ts instanceof Date ? r.ts.toISOString() : String(r.ts),
+      event: String(r.event || 'OPEN'),
+      broker: String(r.broker || 'UNKNOWN'),
+      epic: String(r.epic || ''),
+      side: r.side != null ? String(r.side) : null,
+      volume:
+        r.volume != null && Number.isFinite(Number(r.volume))
+          ? Number(r.volume)
+          : null,
+      price:
+        r.price != null && Number.isFinite(Number(r.price))
+          ? Number(r.price)
+          : null,
+      position_id: r.position_id != null ? String(r.position_id) : null,
+      intent_id: r.intent_id != null ? String(r.intent_id) : null,
+      opportunity_id: r.opportunity_id != null ? String(r.opportunity_id) : null,
+      ok: !!r.ok,
+      detail: r.detail != null ? String(r.detail) : null,
+      pnl:
+        r.pnl != null && Number.isFinite(Number(r.pnl)) ? Number(r.pnl) : null,
+      fees:
+        r.fees != null && Number.isFinite(Number(r.fees))
+          ? Number(r.fees)
+          : null,
+    }));
+  } catch {
+    return [];
+  }
+}
+
 export async function saveOpenPositions(positions: ManagedPosition[]): Promise<boolean> {
   try {
     await client.query(`DELETE FROM master_open_positions`);
@@ -388,9 +592,75 @@ export class MemoryPersist implements PersistClient {
   outcomes: any[] = [];
   positions: any[] = [];
   intents: Set<string> = new Set();
+  /** Reader audit tails — DualPersist primary when PG tables exist */
+  decisionEvents: any[] = [];
+  tradeEvents: any[] = [];
 
   async query(sql: string, params: unknown[] = []) {
     const s = sql.replace(/\s+/g, ' ').trim();
+    if (s.startsWith('INSERT INTO master_decision_events')) {
+      const event_id = String(params[0]);
+      if (!this.decisionEvents.some((e) => e.event_id === event_id)) {
+        this.decisionEvents.push({
+          event_id,
+          ts: params[1],
+          kind: params[2],
+          epic: params[3],
+          mode: params[4],
+          opportunity_id: params[5],
+          buy_score: params[6],
+          sell_score: params[7],
+          block_reason: params[8],
+          executed: params[9],
+          execution_detail: params[10],
+          cycle_ms: params[11],
+        });
+        if (this.decisionEvents.length > 500) {
+          this.decisionEvents = this.decisionEvents.slice(-500);
+        }
+      }
+      return { rows: [] };
+    }
+    if (s.startsWith('INSERT INTO master_trade_events')) {
+      const event_id = String(params[0]);
+      if (!this.tradeEvents.some((e) => e.event_id === event_id)) {
+        this.tradeEvents.push({
+          event_id,
+          ts: params[1],
+          event: params[2],
+          broker: params[3],
+          epic: params[4],
+          side: params[5],
+          volume: params[6],
+          price: params[7],
+          position_id: params[8],
+          intent_id: params[9],
+          opportunity_id: params[10],
+          ok: params[11],
+          detail: params[12],
+          pnl: params[13],
+          fees: params[14],
+        });
+        if (this.tradeEvents.length > 500) {
+          this.tradeEvents = this.tradeEvents.slice(-500);
+        }
+      }
+      return { rows: [] };
+    }
+    if (s.startsWith('SELECT') && s.includes('master_decision_events')) {
+      const lim = Number(params[0]) || 50;
+      const rows = [...this.decisionEvents]
+        .sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')))
+        .slice(0, lim);
+      return { rows };
+    }
+    if (s.startsWith('SELECT') && s.includes('master_trade_events')) {
+      const lim = Number(params[0]) || 50;
+      const rows = [...this.tradeEvents]
+        .sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')))
+        .slice(0, lim);
+      return { rows };
+    }
     if (s.startsWith('INSERT INTO master_opportunities')) {
       const payload = typeof params[15] === 'string' ? JSON.parse(params[15] as string) : params[15];
       const existing = this.opportunities.findIndex((o) => o.id === params[0]);

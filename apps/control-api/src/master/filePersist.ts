@@ -47,8 +47,6 @@ export class FilePersist implements PersistClient, JournalMirror {
   private mem = new MemoryPersist();
   /** Last known operator_meta from disk — survives sidecar wipe mid-process. */
   private lastOperatorMeta: FilePersistState['operator_meta'] | undefined;
-  private decisionEvents: DecisionEvent[] = [];
-  private tradeEvents: TradeEvent[] = [];
 
   constructor(readonly root: string) {
     mkdirSync(root, { recursive: true });
@@ -57,27 +55,33 @@ export class FilePersist implements PersistClient, JournalMirror {
   }
 
   appendDecision(entry: DecisionEvent): void {
-    this.decisionEvents.push(entry);
-    if (this.decisionEvents.length > MAX_MIRRORED_JOURNAL) {
-      this.decisionEvents = this.decisionEvents.slice(-MAX_MIRRORED_JOURNAL);
+    this.mem.decisionEvents.push(entry);
+    if (this.mem.decisionEvents.length > MAX_MIRRORED_JOURNAL) {
+      this.mem.decisionEvents = this.mem.decisionEvents.slice(
+        -MAX_MIRRORED_JOURNAL
+      );
     }
     this.flush();
   }
 
   appendTrade(entry: TradeEvent): void {
-    this.tradeEvents.push(entry);
-    if (this.tradeEvents.length > MAX_MIRRORED_JOURNAL) {
-      this.tradeEvents = this.tradeEvents.slice(-MAX_MIRRORED_JOURNAL);
+    this.mem.tradeEvents.push(entry);
+    if (this.mem.tradeEvents.length > MAX_MIRRORED_JOURNAL) {
+      this.mem.tradeEvents = this.mem.tradeEvents.slice(-MAX_MIRRORED_JOURNAL);
     }
     this.flush();
   }
 
   loadDecisions(limit: number): DecisionEvent[] {
-    return [...this.decisionEvents].reverse().slice(0, Math.max(0, limit));
+    return [...this.mem.decisionEvents]
+      .reverse()
+      .slice(0, Math.max(0, limit)) as DecisionEvent[];
   }
 
   loadTrades(limit: number): TradeEvent[] {
-    return [...this.tradeEvents].reverse().slice(0, Math.max(0, limit));
+    return [...this.mem.tradeEvents]
+      .reverse()
+      .slice(0, Math.max(0, limit)) as TradeEvent[];
   }
 
   /** Rewrite missing decision/trade jsonl from mirrored master_state tails. */
@@ -85,19 +89,19 @@ export class FilePersist implements PersistClient, JournalMirror {
     let wrote = false;
     try {
       const decPath = join(this.root, 'decision_journal.jsonl');
-      if (!existsSync(decPath) && this.decisionEvents.length) {
+      if (!existsSync(decPath) && this.mem.decisionEvents.length) {
         writeFileSync(
           decPath,
-          `${this.decisionEvents.map((e) => JSON.stringify(e)).join('\n')}\n`,
+          `${this.mem.decisionEvents.map((e) => JSON.stringify(e)).join('\n')}\n`,
           'utf8'
         );
         wrote = true;
       }
       const tradePath = join(this.root, 'trade_event_journal.jsonl');
-      if (!existsSync(tradePath) && this.tradeEvents.length) {
+      if (!existsSync(tradePath) && this.mem.tradeEvents.length) {
         writeFileSync(
           tradePath,
-          `${this.tradeEvents.map((e) => JSON.stringify(e)).join('\n')}\n`,
+          `${this.mem.tradeEvents.map((e) => JSON.stringify(e)).join('\n')}\n`,
           'utf8'
         );
         wrote = true;
@@ -196,10 +200,12 @@ export class FilePersist implements PersistClient, JournalMirror {
         this.restoreOperatorMeta(raw.operator_meta);
       }
       if (Array.isArray(raw.decision_events)) {
-        this.decisionEvents = raw.decision_events.slice(-MAX_MIRRORED_JOURNAL);
+        this.mem.decisionEvents = raw.decision_events.slice(
+          -MAX_MIRRORED_JOURNAL
+        );
       }
       if (Array.isArray(raw.trade_events)) {
-        this.tradeEvents = raw.trade_events.slice(-MAX_MIRRORED_JOURNAL);
+        this.mem.tradeEvents = raw.trade_events.slice(-MAX_MIRRORED_JOURNAL);
       }
       this.restoreJournalSidecars();
     } catch {
@@ -413,8 +419,8 @@ export class FilePersist implements PersistClient, JournalMirror {
         })(),
       })),
       intents: [...this.mem.intents],
-      decision_events: this.decisionEvents.slice(-MAX_MIRRORED_JOURNAL),
-      trade_events: this.tradeEvents.slice(-MAX_MIRRORED_JOURNAL),
+      decision_events: this.mem.decisionEvents.slice(-MAX_MIRRORED_JOURNAL),
+      trade_events: this.mem.tradeEvents.slice(-MAX_MIRRORED_JOURNAL),
       operator_meta: this.snapshotOperatorMeta(),
     };
     atomicWriteJson(this.statePath(), state);

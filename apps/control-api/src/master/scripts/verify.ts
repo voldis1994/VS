@@ -210,6 +210,8 @@ async function main() {
       'src/services/robotDesk.ts',
       'src/services/robotDeskOwnsBridge.test.ts',
       'src/db/migrations/011_master_journal.sql',
+      'src/db/migrations/014_master_decision_trade_events.sql',
+      'src/master/auditJournalHydrate.ts',
       '../dashboard/src/pages/MasterPage.tsx',
       '../dashboard/src/pages/RobotDeskPage.tsx',
     ];
