@@ -156,7 +156,8 @@ export async function ensureMasterCapitalBroker(creds: {
 
 /**
  * True only when MASTER can safely own exits for the desk session.
- * If owns-pipeline but Capital LIVE attach failed, desk must keep Best-Outcome manage.
+ * If owns-pipeline but Capital LIVE attach failed, desk keeps hard-protective
+ * manage only (no soft BestOutcome) — see decideHardProtectiveExit.
  * When MASTER_LIVE_ENABLED, never treat PAPER as safe (would dual-brain beside live intent).
  */
 export function masterOwnsManageSafely(brokerOpen: boolean): boolean {
@@ -171,6 +172,14 @@ export function masterOwnsManageSafely(brokerOpen: boolean): boolean {
   // PAPER ownership is fine when desk has no live Capital position to orphan
   if (!brokerOpen && masterRuntime.broker != null) return true;
   return false;
+}
+
+/** Who owns soft+hard exits right now (dashboard / operator honesty). */
+export type ManageOwner = 'MASTER' | 'DESK_DEFERRED_HARD' | 'DESK';
+
+export function resolveManageOwner(brokerOpen: boolean): ManageOwner {
+  if (!masterOwnsPipeline()) return 'DESK';
+  return masterOwnsManageSafely(brokerOpen) ? 'MASTER' : 'DESK_DEFERRED_HARD';
 }
 
 /**

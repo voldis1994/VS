@@ -125,3 +125,30 @@ export function decideBestOutcomeExit(
 
   return { exit: false, reason: '' };
 }
+
+/**
+ * Hard-protective exit only (broker SL cushion + HardInvalidation).
+ * Used when MASTER owns-pipeline but cannot safely own manage — desk must
+ * NOT soft BestOutcome / PeakProtect / TimeDecay / harvest (dual soft-brain).
+ */
+export function decideHardProtectiveExit(
+  s: ExitSnapshot,
+  mid: number
+): { exit: boolean; reason: string } {
+  if (!s.open_side || s.entry_price == null) return { exit: false, reason: '' };
+
+  const book = resolvePlaybook(s);
+  const p = exitParamsForTrade(book, s.entry_setup);
+  const entry = s.entry_price;
+  const fav = favorableMove(s.open_side, entry, mid);
+  const absEntry = Math.max(Math.abs(entry), 1e-9);
+  const sl = Math.min(Math.max(absEntry * p.slPct, p.slFloor), p.slCapAbs);
+
+  if (fav <= -sl) {
+    return {
+      exit: true,
+      reason: `HardInvalidation · ${book} · UPL ${fav.toFixed(5)} ≤ -SL ${sl.toFixed(5)}`,
+    };
+  }
+  return { exit: false, reason: '' };
+}

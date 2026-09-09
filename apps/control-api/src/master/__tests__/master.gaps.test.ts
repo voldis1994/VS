@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { buildCandidates } from '../candidates.js';
-import { masterOwnsManageSafely, masterOwnsPipeline, syncMasterEntryOwnership } from '../deskBridge.js';
+import { masterOwnsManageSafely, masterOwnsPipeline, resolveManageOwner, syncMasterEntryOwnership } from '../deskBridge.js';
 import { applyMarketFilters } from '../filters.js';
 import { DEFAULT_MASTER_CONFIG, MasterPipeline } from '../pipeline.js';
 import { PositionManager, mapRegimeToPlaybook, toDeskRegime, entrySetupFromRegime } from '../positionManager.js';
@@ -1305,6 +1305,9 @@ describe('masterOwnsManageSafely', () => {
       syncMasterEntryOwnership(false);
       expect(masterRuntime.entries_armed).toBe(false);
       expect(masterRuntime.entries_pause_reason).toBe('desk_live_manage_deferred');
+      expect(resolveManageOwner(false)).toBe('DESK_DEFERRED_HARD');
+      masterRuntime.setDeskManageOwnerHint('DESK_DEFERRED_HARD');
+      expect(masterRuntime.status().manage_owner).toBe('DESK_DEFERRED_HARD');
     } finally {
       if (prev === undefined) delete process.env.MASTER_OWNS_PIPELINE;
       else process.env.MASTER_OWNS_PIPELINE = prev;
@@ -1313,7 +1316,21 @@ describe('masterOwnsManageSafely', () => {
       masterRuntime.owns_pipeline_pref = prevPref;
       masterRuntime.entries_armed = prevArmed;
       masterRuntime.entries_pause_reason = prevReason;
+      masterRuntime.setDeskManageOwnerHint('MASTER');
     }
+  });
+
+  it('robotDesk deferred path uses decideHardProtectiveExit (no soft BestOutcome)', async () => {
+    const { readFileSync } = await import('fs');
+    const { join } = await import('path');
+    const src = readFileSync(join(__dirname, '../../services/robotDesk.ts'), 'utf8');
+    expect(src).toMatch(/decideHardProtectiveExit/);
+    expect(src).toMatch(/DESK_DEFERRED_HARD/);
+    expect(src).toMatch(/hard SL only/);
+    // Soft BestOutcome only when not deferred
+    expect(src).toMatch(
+      /deferredHard\s*\?\s*decideHardProtectiveExit[\s\S]*:\s*decideBestOutcomeExit/
+    );
   });
 
   it('pauses MASTER entries when desk owns live manage (no dual-brain)', () => {
