@@ -220,6 +220,8 @@ describe('MASTER daily pnl day boundary', () => {
     expect(masterRuntime.account.daily_pnl).toBeLessThan(0);
     expect(masterRuntime.account.daily_pnl).toBeGreaterThan(-900);
     expect(masterRuntime.positions.count()).toBe(0);
+    masterRuntime.stop();
+    broker.hydrateAccount({ equity: 10_000, balance: 10_000 });
   });
 });
 
