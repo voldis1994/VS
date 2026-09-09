@@ -56,6 +56,9 @@ import { loadMasterErrors, logMasterError } from './errorJournal.js';
 import { CycleMonitor } from './monitoring.js';
 import { logDecisionEvent, loadDecisionEvents } from './decisionJournal.js';
 import { logTradeEvent, loadTradeEvents } from './tradeEventJournal.js';
+import { resolvePersistBackend } from './persistBackend.js';
+import { existsSync } from 'fs';
+import { join } from 'path';
 import {
   alertsBlockEntries,
   dispatchCycleAlerts,
@@ -262,6 +265,22 @@ export type MasterStatus = {
     fees: number | null;
     opportunity_id: string | null;
   }>;
+  /** dual | file | memory | pool — where durable state is authoritative */
+  persist_backend: 'dual' | 'file' | 'memory' | 'pool' | 'unknown';
+  /** Decision/trade audit provenance — sidecars, counts, heal from PG/primary */
+  journal_audit: {
+    decisions: number;
+    trades: number;
+    decision_sidecar: boolean;
+    trade_sidecar: boolean;
+    healed_from_persist: boolean;
+    last_hydrate: {
+      decisions: number;
+      trades: number;
+      wrote_jsonl: boolean;
+      at: string;
+    } | null;
+  };
 };
 
 export type TickResult = {
@@ -374,6 +393,13 @@ class MasterRuntime {
    * Prevents empty dashboard KPIs while durable state exists on disk.
    */
   private bookHydrated = false;
+  /** Last audit-journal hydrate from DualPersist/PG primary (dashboard provenance). */
+  private lastAuditJournalHydrate: {
+    decisions: number;
+    trades: number;
+    wrote_jsonl: boolean;
+    at: string;
+  } | null = null;
   /** Reader relative-spread rolling history */
   private spreadLookback = DEFAULT_MASTER_CONFIG.spread_lookback_bars;
   private spreadHistory = new SpreadHistory(this.spreadLookback);
@@ -603,7 +629,13 @@ class MasterRuntime {
       const { hydrateAuditJournalsFromPersist } = await import(
         './auditJournalHydrate.js'
       );
-      await hydrateAuditJournalsFromPersist();
+      const auditHydrate = await hydrateAuditJournalsFromPersist();
+      this.lastAuditJournalHydrate = {
+        decisions: auditHydrate.decisions,
+        trades: auditHydrate.trades,
+        wrote_jsonl: auditHydrate.wrote_jsonl,
+        at: new Date().toISOString(),
+      };
       this.hydrateMarketCacheFromDisk();
       if (this.positions.count() === 0) {
         const loaded = await loadOpenPositions();
@@ -4372,6 +4404,30 @@ class MasterRuntime {
       })),
       manage: pickManageConfig(this.cfg),
       monitoring,
+      persist_backend: resolvePersistBackend(),
+      journal_audit: (() => {
+        const stateDir =
+          process.env.MASTER_STATE_DIR ||
+          process.env.MASTER_GATES_DIR ||
+          join(process.cwd(), '.master-state');
+        const decisions = loadDecisionEvents(96).length;
+        const trades = loadTradeEvents(50).length;
+        const decision_sidecar = existsSync(
+          join(stateDir, 'decision_journal.jsonl')
+        );
+        const trade_sidecar = existsSync(
+          join(stateDir, 'trade_event_journal.jsonl')
+        );
+        return {
+          decisions,
+          trades,
+          decision_sidecar,
+          trade_sidecar,
+          healed_from_persist:
+            this.lastAuditJournalHydrate?.wrote_jsonl === true,
+          last_hydrate: this.lastAuditJournalHydrate,
+        };
+      })(),
       recent_decisions: (() => {
         // Prefer BLOCK/TRADE over WAIT floods so dashboard shows actionable audit
         const scanned = loadDecisionEvents(96);

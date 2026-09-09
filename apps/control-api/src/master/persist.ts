@@ -19,6 +19,11 @@ export function setPersistClient(c: PersistClient | null) {
   client = c || pool;
 }
 
+/** Current PersistClient (pool / DualPersist / FilePersist / MemoryPersist). */
+export function getPersistClient(): PersistClient {
+  return client;
+}
+
 export async function persistOpportunity(rec: OpportunityRecord): Promise<boolean> {
   try {
     await client.query(
