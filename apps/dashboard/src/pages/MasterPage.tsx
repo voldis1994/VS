@@ -145,6 +145,7 @@ type MasterStatus = {
   entries_pause_reason: string | null;
   structure_seed_source?: string;
   bars_available?: number;
+  bars_cached?: boolean;
   news_window?: {
     impact: string;
     window_active: boolean;
@@ -159,6 +160,8 @@ type MasterStatus = {
     age_ms: number;
     stale_quote_ms?: number;
     stale?: boolean;
+    cached?: boolean;
+    source?: 'live' | 'disk_cache';
     stream_healthy: boolean | null;
   } | null;
   floating_pnl?: number | null;
@@ -408,7 +411,7 @@ export function MasterPage() {
         {
           k: 'Quote',
           v: status.quote
-            ? `${Number(status.quote.mid).toFixed(2)} · spr ${Number(status.quote.spread).toFixed(2)} · ${Math.round(status.quote.age_ms / 1000)}s${
+            ? `${status.quote.cached ? 'cached · ' : ''}${Number(status.quote.mid).toFixed(2)} · spr ${Number(status.quote.spread).toFixed(2)} · ${Math.round(status.quote.age_ms / 1000)}s${
                 status.quote.stream_healthy === true
                   ? ' · WS'
                   : status.quote.stream_healthy === false
@@ -416,8 +419,9 @@ export function MasterPage() {
                     : ''
               }`
             : '—',
+          // Disk cache must not paint green as live feed
           bad: quoteStale,
-          ok: !!status.quote && !quoteStale,
+          ok: !!status.quote && !quoteStale && !status.quote.cached,
         },
         {
           k: 'Float UPL',
@@ -499,9 +503,12 @@ export function MasterPage() {
         },
         {
           k: 'Bars cache',
-          v: String(status.bars_available ?? 0),
+          v: status.bars_cached
+            ? `cached · ${status.bars_available ?? 0}`
+            : String(status.bars_available ?? 0),
+          // Cached bars ready for manage/replay — not a live feed ok paint
           bad: (status.bars_available ?? 0) < 40,
-          ok: (status.bars_available ?? 0) >= 40,
+          ok: (status.bars_available ?? 0) >= 40 && !status.bars_cached,
         },
         { k: 'AI mode', v: status.ai_mode || '—' },
         {

@@ -274,6 +274,21 @@ async function main() {
   ).lastAuditJournalHydrate = null;
   masterRuntime.last_exit_reason = null;
   masterRuntime.last_decision = null;
+  masterRuntime.last_quote = null;
+  masterRuntime.last_bars = [];
+  masterRuntime.last_market = null;
+  (
+    masterRuntime as unknown as {
+      quoteFromDiskCache: boolean;
+      barsFromDiskCache: boolean;
+    }
+  ).quoteFromDiskCache = false;
+  (
+    masterRuntime as unknown as {
+      quoteFromDiskCache: boolean;
+      barsFromDiskCache: boolean;
+    }
+  ).barsFromDiskCache = false;
   masterRuntime.account.daily_pnl = 0;
   // Soft exits off for sync-survival proof — EMA/BestOutcome must not steal the case
   masterRuntime.cfg = {
@@ -355,6 +370,11 @@ async function main() {
     market_state_hydrated: String(stHydrate.market_state || '').startsWith(
       'hydrated ·'
     ),
+    // Disk market_cache must not look like a live feed
+    quote_cached: stHydrate.quote?.cached === true,
+    quote_source: stHydrate.quote?.source ?? null,
+    bars_available: stHydrate.bars_available ?? 0,
+    bars_cached: stHydrate.bars_cached === true,
     // Holding with no manage yet must not forge green position_manager
     position_stage_pre_manage_ok:
       stHydrate.pipeline_stages?.position_manager?.ok === true,
@@ -395,6 +415,9 @@ async function main() {
     hydrateSnap.sell_filter_ok === false &&
     hydrateSnap.regime_hydrated === true &&
     hydrateSnap.market_state_hydrated === true &&
+    hydrateSnap.quote_cached === true &&
+    hydrateSnap.bars_cached === true &&
+    hydrateSnap.bars_available >= 40 &&
     journalHealOk &&
     pgPrimaryHealOk;
 
@@ -534,6 +557,10 @@ async function main() {
       market_state: hydrateSnap.market_state,
       regime_hydrated: hydrateSnap.regime_hydrated,
       market_state_hydrated: hydrateSnap.market_state_hydrated,
+      quote_cached: hydrateSnap.quote_cached,
+      quote_source: hydrateSnap.quote_source,
+      bars_available: hydrateSnap.bars_available,
+      bars_cached: hydrateSnap.bars_cached,
       heal_ok: journalHealOk,
       heal_via_install: healViaInstall,
       heal_helper: healHelper,

@@ -124,16 +124,19 @@ async function main() {
       demo?.journals?.sell_filter_ok === false &&
       demo?.journals?.regime_hydrated === true &&
       demo?.journals?.market_state_hydrated === true &&
+      demo?.journals?.quote_cached === true &&
+      demo?.journals?.bars_cached === true &&
+      (demo?.journals?.bars_available ?? 0) >= 40 &&
       demo?.hydrate?.performance_total_pnl === 8 &&
       typeof demo?.journals?.performance_stage_detail === 'string' &&
       String(demo.journals.performance_stage_detail).includes('pnl=');
     checks.push({
       id: 'paper_restart_continuity',
       requirement:
-        'Paper restart: hydrateBookFromDisk restores opens/journal; DualPersist primary heal; recover reconciles; cycle stages stay red until live tick; Stage·perf surfaces closed pnl=; regime/market_state cards mark hydrated',
+        'Paper restart: hydrateBookFromDisk restores opens/journal; DualPersist primary heal; recover reconciles; cycle stages stay red until live tick; Stage·perf surfaces closed pnl=; regime/market_state cards mark hydrated; Quote/Bars mark disk_cache',
       ok,
       detail: demo
-        ? `${demo.status} hydrate_pos=${demo.hydrate?.positions} exit=${demo.hydrate?.last_exit_reason} pnl=${demo.hydrate?.daily_pnl} closed_pnl=${demo.hydrate?.performance_total_pnl} perf_detail=${demo.journals?.performance_stage_detail} regime=${demo.journals?.regime} market_state=${demo.journals?.market_state} manage_seed=${demo.manage_only?.paper_seeded} recover_pos=${demo.recover?.positions} pg_heal=${demo.journals?.pg_primary_heal_ok === true} persist=${demo.journals?.persist_backend || demo.hydrate?.persist_backend || '?'} decision_stage=${demo.journals?.decision_stage_ok} analysis_stage=${demo.journals?.analysis_stage_ok}`
+        ? `${demo.status} hydrate_pos=${demo.hydrate?.positions} exit=${demo.hydrate?.last_exit_reason} pnl=${demo.hydrate?.daily_pnl} closed_pnl=${demo.hydrate?.performance_total_pnl} perf_detail=${demo.journals?.performance_stage_detail} regime=${demo.journals?.regime} market_state=${demo.journals?.market_state} quote_src=${demo.journals?.quote_source} bars=${demo.journals?.bars_available} bars_cached=${demo.journals?.bars_cached} manage_seed=${demo.manage_only?.paper_seeded} recover_pos=${demo.recover?.positions} pg_heal=${demo.journals?.pg_primary_heal_ok === true} persist=${demo.journals?.persist_backend || demo.hydrate?.persist_backend || '?'} decision_stage=${demo.journals?.decision_stage_ok} analysis_stage=${demo.journals?.analysis_stage_ok}`
         : r.out.slice(-500),
     });
   }
@@ -304,6 +307,10 @@ async function main() {
       masterPageBody.includes('hydrated · ${Number(status.buy_score') &&
       masterPageBody.includes('hydrated · ${status.last_decision.kind}') &&
       masterPageBody.includes('hydrated · ${whyRaw}');
+    const quoteBarsCacheUi =
+      masterPageBody.includes("status.quote.cached ? 'cached · '") &&
+      masterPageBody.includes('status.bars_cached') &&
+      masterPageBody.includes('cached · ${status.bars_available');
     const masterRouteBody = readFileSync(join(root, 'src/routes/master.ts'), 'utf8');
     const journalAuditEmbed =
       masterRouteBody.includes('persist_backend') &&
@@ -318,9 +325,16 @@ async function main() {
       masterRouteBody.includes("cyclePending?('hydrated · '+Number(s.buy_score") &&
       masterRouteBody.includes("cyclePending?('hydrated · '+s.last_decision.kind)") &&
       masterRouteBody.includes("('hydrated · '+whyRaw)");
+    const quoteBarsCacheEmbed =
+      masterRouteBody.includes("s.quote.cached?'cached · '") &&
+      masterRouteBody.includes("s.bars_cached?('cached · '");
     const regimeHydrateApi =
       runtimeBody.includes('hydrated · ${raw}') &&
       runtimeBody.includes('never look live from journal hydrate alone');
+    const quoteBarsCacheApi =
+      runtimeBody.includes('quoteFromDiskCache') &&
+      runtimeBody.includes("source: this.quoteFromDiskCache ? 'disk_cache' : 'live'") &&
+      runtimeBody.includes('bars_cached: this.barsFromDiskCache');
     const deskBody = readFileSync(join(root, 'src/services/robotDesk.ts'), 'utf8');
     const deskBridgeMeta =
       deskBody.includes('manage_owner:') &&
@@ -341,15 +355,18 @@ async function main() {
       decisionCardsHydrateUi &&
       decisionCardsHydrateEmbed &&
       regimeHydrateApi &&
+      quoteBarsCacheUi &&
+      quoteBarsCacheEmbed &&
+      quoteBarsCacheApi &&
       deskBridgeMeta;
     checks.push({
       id: 'artifacts_present',
       requirement:
-        'Dashboard routes, brokers, recovery, desk bridge, manage_owner + journal_audit + hydrate filter/decision cards + Closed PnL',
+        'Dashboard routes, brokers, recovery, desk bridge, manage_owner + journal_audit + hydrate filter/decision cards + Closed PnL + Quote/Bars disk_cache',
       ok: missing.length === 0 && honestyOk,
       detail: missing.length
         ? `missing: ${missing.join(',')}`
-        : `${files.length} core files; pipeline_stages api=${stagesApi} ui=${stagesUi}; manage_owner api=${manageOwnerApi} masterUi=${manageOwnerMasterUi} deskUi=${manageOwnerDeskUi} deskBridge=${deskBridgeMeta}; journal_audit api=${journalAuditApi} ui=${journalAuditUi} embed=${journalAuditEmbed}; filter_hydrate_ui=${filterCardsHydrateUi}; closed_pnl ui=${closedPnlUi} embed=${closedPnlEmbed}; decision_hydrate ui=${decisionCardsHydrateUi} embed=${decisionCardsHydrateEmbed} api=${regimeHydrateApi}`,
+        : `${files.length} core files; pipeline_stages api=${stagesApi} ui=${stagesUi}; manage_owner api=${manageOwnerApi} masterUi=${manageOwnerMasterUi} deskUi=${manageOwnerDeskUi} deskBridge=${deskBridgeMeta}; journal_audit api=${journalAuditApi} ui=${journalAuditUi} embed=${journalAuditEmbed}; filter_hydrate_ui=${filterCardsHydrateUi}; closed_pnl ui=${closedPnlUi} embed=${closedPnlEmbed}; decision_hydrate ui=${decisionCardsHydrateUi} embed=${decisionCardsHydrateEmbed} api=${regimeHydrateApi}; quote_bars_cache ui=${quoteBarsCacheUi} embed=${quoteBarsCacheEmbed} api=${quoteBarsCacheApi}`,
     });
   }
 
