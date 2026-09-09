@@ -390,7 +390,7 @@ export class PaperBroker implements MasterBroker {
     };
   }
 
-  /** Apply equity + remove/partial; stash full protective closes for idempotent close/sync. */
+  /** Apply equity + remove/partial; return net fill_pnl so manage never journals stale UPL. */
   private applyPaperClose(
     p: BrokerPosition,
     closeSize: number,
@@ -401,7 +401,7 @@ export class PaperBroker implements MasterBroker {
     ok: true;
     detail: string;
     fill_price: number;
-    fill_pnl: null;
+    fill_pnl: number;
     remaining_size: number;
   } {
     const pv = specForEpic(p.epic).value_per_point_per_lot;
@@ -419,7 +419,7 @@ export class PaperBroker implements MasterBroker {
         ok: true,
         detail: `${detail} rem=${remaining}`,
         fill_price,
-        fill_pnl: null,
+        fill_pnl: net,
         remaining_size: remaining,
       };
     }
@@ -437,7 +437,7 @@ export class PaperBroker implements MasterBroker {
       ok: true,
       detail,
       fill_price,
-      fill_pnl: null,
+      fill_pnl: net,
       remaining_size: 0,
     };
   }

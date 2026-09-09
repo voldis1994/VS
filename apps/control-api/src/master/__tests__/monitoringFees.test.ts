@@ -134,7 +134,7 @@ describe('close fee honesty (replay parity)', () => {
     expect(broker.pnl).toBe(10);
   });
 
-  it('PaperBroker close omits fill_pnl so journal can record model fees', async () => {
+  it('PaperBroker close returns net fill_pnl (venue money, not stale UPL)', async () => {
     const prev = process.env.MASTER_COMMISSION_PER_LOT;
     process.env.MASTER_COMMISSION_PER_LOT = '0.05';
     const { PaperBroker } = await import('../broker.js');
@@ -167,10 +167,10 @@ describe('close fee honesty (replay parity)', () => {
     });
     const closed = await broker.closePosition(placed.position_id!);
     expect(closed.ok).toBe(true);
-    expect(closed.fill_pnl).toBeNull();
     expect(closed.fill_price).toBe(4405);
-    // BUY open @ ask 4400.2, close @ bid 4405 → +4.8 − 0.05 fees
+    // BUY open @ ask 4400.2, close @ bid 4405 → +4.8 − 0.05 fees (net fill_pnl)
     // (quote stays inside SL/TP so auto-fill does not consume the close)
+    expect(closed.fill_pnl).toBeCloseTo(4.8 - 0.05, 6);
     expect(broker.equity).toBeCloseTo(10_000 + 4.8 - 0.05, 6);
     const resolved = resolveCloseMoneyPnl({
       side: 'BUY',
@@ -180,12 +180,14 @@ describe('close fee honesty (replay parity)', () => {
       value_per_point_per_lot: 1,
       fill_pnl: closed.fill_pnl,
     });
-    expect(resolved.from_broker).toBe(false);
+    expect(resolved.from_broker).toBe(true);
+    expect(resolved.pnl).toBeCloseTo(4.8 - 0.05, 6);
     const priced = price({
       pnl: resolved.pnl,
       volume: 1,
       from_broker: resolved.from_broker,
     });
+    // from_broker: fees recorded for KPI; pnl already net (not double-subtracted)
     expect(priced.fees).toBeCloseTo(0.05, 8);
     expect(priced.pnl).toBeCloseTo(4.8 - 0.05, 8);
     if (prev === undefined) delete process.env.MASTER_COMMISSION_PER_LOT;
