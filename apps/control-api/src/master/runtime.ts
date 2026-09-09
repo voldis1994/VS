@@ -4412,7 +4412,13 @@ class MasterRuntime {
           },
           broker: (() => {
             if (!this.broker || !brokerName) {
-              return { ok: false, detail: 'none' };
+              // Disk-hydrated book before attach must not paint hard-bad `none`
+              return {
+                ok: false,
+                detail: this.bookHydrated
+                  ? 'hydrated · none · awaiting attach'
+                  : 'none',
+              };
             }
             // Capital LIVE: attach alone must not forge green while account unread
             if (this.broker instanceof CapitalBroker && !this.broker.paper) {
@@ -4432,13 +4438,22 @@ class MasterRuntime {
           position_manager: {
             // Holding requires manage evidence; flat is ok only after a real manageTick
             ok: opens > 0 ? managedOnce || manageArmed : managedOnce,
-            detail: managedOnce
-              ? `open=${opens} · managed ${manageAgeSec}s ago`
-              : opens > 0
-                ? manageArmed
-                  ? `open=${opens} · manage armed`
-                  : `open=${opens} · manage never ran`
-                : 'flat · manage never ran',
+            detail: (() => {
+              // Book hydrate before manageTick must not paint hard-bad
+              const hyd =
+                this.bookHydrated && !managedOnce ? 'hydrated · ' : '';
+              if (managedOnce) {
+                return `open=${opens} · managed ${manageAgeSec}s ago`;
+              }
+              if (opens > 0) {
+                return manageArmed
+                  ? `${hyd}open=${opens} · manage armed`
+                  : `${hyd}open=${opens} · awaiting manage`;
+              }
+              return hyd
+                ? `${hyd}flat · awaiting manage`
+                : 'flat · manage never ran';
+            })(),
           },
           exit: {
             // Journal exit_reason alone must not forge green — need a live cycle

@@ -439,6 +439,14 @@ async function main() {
     // Holding with no manage yet must not forge green position_manager
     position_stage_pre_manage_ok:
       stHydrate.pipeline_stages?.position_manager?.ok === true,
+    position_stage_pre_manage_detail:
+      stHydrate.pipeline_stages?.position_manager?.detail ?? null,
+    position_stage_hydrated: String(
+      stHydrate.pipeline_stages?.position_manager?.detail || ''
+    ).startsWith('hydrated ·'),
+    broker_stage_hydrated: String(
+      stHydrate.pipeline_stages?.broker?.detail || ''
+    ).startsWith('hydrated ·'),
     journal_heal_ok: journalHealOk,
     pg_primary_heal_ok: pgPrimaryHealOk,
     persist_backend: stHydrate.persist_backend ?? null,
@@ -466,6 +474,13 @@ async function main() {
     hydrateSnap.filters_stage_ok === false &&
     hydrateSnap.dual_candidates_stage_ok === false &&
     hydrateSnap.position_stage_pre_manage_ok === false &&
+    hydrateSnap.position_stage_hydrated === true &&
+    String(hydrateSnap.position_stage_pre_manage_detail || '').startsWith(
+      'hydrated ·'
+    ) &&
+    hydrateSnap.broker_stage_ok === false &&
+    hydrateSnap.broker_stage_hydrated === true &&
+    String(hydrateSnap.broker_stage_detail || '').startsWith('hydrated ·') &&
     hydrateSnap.analysis_stage_ok === false &&
     hydrateSnap.analysis_stage_hydrated === true &&
     String(hydrateSnap.analysis_stage_detail || '').startsWith('hydrated ·') &&
@@ -494,7 +509,6 @@ async function main() {
     !String(hydrateSnap.normalization_stage_detail || '').includes(
       'stale_quote'
     ) &&
-    hydrateSnap.broker_stage_ok === false &&
     hydrateSnap.buy_filter_ok === false &&
     hydrateSnap.sell_filter_ok === false &&
     hydrateSnap.regime_hydrated === true &&
@@ -649,6 +663,11 @@ async function main() {
       normalization_stage_hydrated: hydrateSnap.normalization_stage_hydrated,
       broker_stage_ok: hydrateSnap.broker_stage_ok,
       broker_stage_detail: hydrateSnap.broker_stage_detail,
+      broker_stage_hydrated: hydrateSnap.broker_stage_hydrated,
+      position_stage_pre_manage_ok: hydrateSnap.position_stage_pre_manage_ok,
+      position_stage_pre_manage_detail:
+        hydrateSnap.position_stage_pre_manage_detail,
+      position_stage_hydrated: hydrateSnap.position_stage_hydrated,
       buy_filter_ok: hydrateSnap.buy_filter_ok,
       buy_filter_reason: hydrateSnap.buy_filter_reason,
       sell_filter_ok: hydrateSnap.sell_filter_ok,
