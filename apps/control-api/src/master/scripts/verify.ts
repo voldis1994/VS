@@ -142,16 +142,20 @@ async function main() {
       demo?.journals?.exit_stage_hydrated === true &&
       typeof demo?.journals?.exit_stage_detail === 'string' &&
       String(demo.journals.exit_stage_detail).startsWith('hydrated ·') &&
+      demo?.journals?.execution_stage_ok === false &&
+      demo?.journals?.execution_stage_hydrated === true &&
+      typeof demo?.journals?.execution_stage_detail === 'string' &&
+      String(demo.journals.execution_stage_detail).startsWith('hydrated ·') &&
       demo?.hydrate?.performance_total_pnl === 8 &&
       typeof demo?.journals?.performance_stage_detail === 'string' &&
       String(demo.journals.performance_stage_detail).includes('pnl=');
     checks.push({
       id: 'paper_restart_continuity',
       requirement:
-        'Paper restart: hydrateBookFromDisk restores opens/journal; DualPersist primary heal; recover reconciles; cycle stages stay red until live tick; Stage·perf surfaces closed pnl=; regime/market_state cards mark hydrated; Quote/Bars mark disk_cache; entry_gates session hydrated; Why/monitor disk hydrate honesty; Stage·risk from opportunity.risk; Float UPL disk_cache; Stage·exit journal hydrate honesty',
+        'Paper restart: hydrateBookFromDisk restores opens/journal; DualPersist primary heal; recover reconciles; cycle stages stay red until live tick; Stage·perf surfaces closed pnl=; regime/market_state cards mark hydrated; Quote/Bars mark disk_cache; entry_gates session hydrated; Why/monitor disk hydrate honesty; Stage·risk from opportunity.risk; Float UPL disk_cache; Stage·exit journal hydrate honesty; Stage·exec decision-journal seed',
       ok,
       detail: demo
-        ? `${demo.status} hydrate_pos=${demo.hydrate?.positions} exit=${demo.hydrate?.last_exit_reason} exit_stage=${demo.journals?.exit_stage_detail} pnl=${demo.hydrate?.daily_pnl} closed_pnl=${demo.hydrate?.performance_total_pnl} perf_detail=${demo.journals?.performance_stage_detail} regime=${demo.journals?.regime} market_state=${demo.journals?.market_state} quote_src=${demo.journals?.quote_source} bars=${demo.journals?.bars_available} bars_cached=${demo.journals?.bars_cached} entry_session=${demo.journals?.entry_gates_session} mon_hydrated=${demo.journals?.monitoring_hydrated} why=${demo.journals?.last_block_reason} risk=${demo.journals?.risk_stage_detail} float=${demo.journals?.floating_pnl} float_cached=${demo.journals?.floating_pnl_cached} manage_seed=${demo.manage_only?.paper_seeded} recover_pos=${demo.recover?.positions} pg_heal=${demo.journals?.pg_primary_heal_ok === true} persist=${demo.journals?.persist_backend || demo.hydrate?.persist_backend || '?'} decision_stage=${demo.journals?.decision_stage_ok} analysis_stage=${demo.journals?.analysis_stage_ok}`
+        ? `${demo.status} hydrate_pos=${demo.hydrate?.positions} exit=${demo.hydrate?.last_exit_reason} exit_stage=${demo.journals?.exit_stage_detail} exec_stage=${demo.journals?.execution_stage_detail} pnl=${demo.hydrate?.daily_pnl} closed_pnl=${demo.hydrate?.performance_total_pnl} perf_detail=${demo.journals?.performance_stage_detail} regime=${demo.journals?.regime} market_state=${demo.journals?.market_state} quote_src=${demo.journals?.quote_source} bars=${demo.journals?.bars_available} bars_cached=${demo.journals?.bars_cached} entry_session=${demo.journals?.entry_gates_session} mon_hydrated=${demo.journals?.monitoring_hydrated} why=${demo.journals?.last_block_reason} risk=${demo.journals?.risk_stage_detail} float=${demo.journals?.floating_pnl} float_cached=${demo.journals?.floating_pnl_cached} manage_seed=${demo.manage_only?.paper_seeded} recover_pos=${demo.recover?.positions} pg_heal=${demo.journals?.pg_primary_heal_ok === true} persist=${demo.journals?.persist_backend || demo.hydrate?.persist_backend || '?'} decision_stage=${demo.journals?.decision_stage_ok} analysis_stage=${demo.journals?.analysis_stage_ok}`
         : r.out.slice(-500),
     });
   }
@@ -296,6 +300,7 @@ async function main() {
       runtimeBody.includes('Never forge green from journal-hydrate alone') &&
       runtimeBody.includes('hydrated ·') &&
       runtimeBody.includes('Sticky last_risk without a live cycle') &&
+      runtimeBody.includes('Opportunity seed often has decision but no execution') &&
       runtimeBody.includes('account unproven') &&
       runtimeBody.includes("reason: !this.last_market") &&
       runtimeBody.includes("? 'hydrated'") &&

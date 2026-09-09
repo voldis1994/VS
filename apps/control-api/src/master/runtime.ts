@@ -779,6 +779,14 @@ class MasterRuntime {
         }
       }
     }
+    // Opportunity seed often has decision but no execution payload — backfill
+    // Stage·exec from decision_journal so restart is not blank (still hydrated).
+    if (!this.last_execution_detail) {
+      const withExec = loadDecisionEvents(24).find((e) => e.execution_detail);
+      if (withExec?.execution_detail) {
+        this.last_execution_detail = String(withExec.execution_detail);
+      }
+    }
   }
 
   /**

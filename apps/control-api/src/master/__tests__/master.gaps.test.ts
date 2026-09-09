@@ -6001,6 +6001,105 @@ describe('pipeline_stages honesty — decision/risk never forged from hydrate', 
       else process.env.MASTER_STATE_DIR = prev;
     }
   });
+
+  it('hydrateBookFromDisk seeds last_execution_detail from decision journal', async () => {
+    const prev = process.env.MASTER_STATE_DIR;
+    const dir = mkdtempSync(join(tmpdir(), 'vs-exec-seed-'));
+    process.env.MASTER_STATE_DIR = dir;
+    const { installFilePersist } = await import('../filePersist.js');
+    const { persistOpportunity, setPersistClient } = await import('../persist.js');
+    const { logDecisionEvent } = await import('../decisionJournal.js');
+    const { GOLD_SPEC } = await import('../pipeline.js');
+    installFilePersist(dir);
+    const pipe = new MasterPipeline('PAPER');
+    const bars = Array.from({ length: 40 }, (_, i) => {
+      const o = 4400 + i * 0.5;
+      return {
+        open: o,
+        high: o + 1,
+        low: o - 0.2,
+        close: o + 0.4,
+        ts_ms: i * 60_000,
+      };
+    });
+    const cycle = await pipe.runCycle({
+      bars,
+      quote: {
+        bid: 4419.8,
+        ask: 4420.2,
+        mid: 4420,
+        spread: 0.4,
+        ts_ms: Date.now(),
+      },
+      account: {
+        equity: 10_000,
+        balance: 10_000,
+        currency: 'GBP',
+        open_positions: 0,
+        daily_pnl: 0,
+        peak_equity: 10_000,
+        consecutive_losses: 0,
+      },
+      instrument: GOLD_SPEC,
+      cfg: { ...DEFAULT_MASTER_CONFIG, block_off_hours: false },
+    });
+    // Opportunity without fill payload — exec detail only in decision journal
+    await persistOpportunity({
+      ...cycle.opportunity,
+      execution: {
+        accepted: false,
+        intent_id: null,
+        order_id: null,
+        fill_price: null,
+        detail: null,
+        paper: true,
+      },
+    } as never);
+    logDecisionEvent({
+      kind: cycle.decision.kind,
+      epic: 'GOLD',
+      mode: 'PAPER',
+      opportunity_id: cycle.opportunity.id,
+      buy_score: cycle.decision.buy?.score ?? 0,
+      sell_score: cycle.decision.sell?.score ?? 0,
+      executed: true,
+      execution_detail: 'paper_fill_journal',
+    });
+    const prevDecision = masterRuntime.last_decision;
+    const prevExec = masterRuntime.last_execution_detail;
+    const prevMarket = masterRuntime.last_market;
+    const prevBook = (masterRuntime as unknown as { bookHydrated: boolean })
+      .bookHydrated;
+    const prevRecovered = masterRuntime.recovered;
+    const prevPipe = masterRuntime.pipeline;
+    try {
+      masterRuntime.pipeline = new MasterPipeline('PAPER');
+      masterRuntime.recovered = false;
+      masterRuntime.last_decision = null;
+      masterRuntime.last_execution_detail = null;
+      masterRuntime.last_market = null;
+      (masterRuntime as unknown as { bookHydrated: boolean }).bookHydrated =
+        false;
+      await masterRuntime.hydrateBookFromDisk();
+      expect(masterRuntime.last_execution_detail).toBe('paper_fill_journal');
+      const st = masterRuntime.status();
+      expect(st.pipeline_stages.execution.ok).toBe(false);
+      expect(st.pipeline_stages.execution.detail).toMatch(
+        /^hydrated · paper_fill_journal$/
+      );
+    } finally {
+      masterRuntime.pipeline = prevPipe;
+      masterRuntime.recovered = prevRecovered;
+      masterRuntime.last_decision = prevDecision;
+      masterRuntime.last_execution_detail = prevExec;
+      masterRuntime.last_market = prevMarket;
+      (masterRuntime as unknown as { bookHydrated: boolean }).bookHydrated =
+        prevBook;
+      setPersistClient(null);
+      if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+      else process.env.MASTER_STATE_DIR = prev;
+    }
+  });
 });
 
 describe('Why / monitoring disk-hydrate honesty', () => {
