@@ -101,6 +101,45 @@ describe('MASTER daily pnl day boundary', () => {
     expect(masterRuntime.account.daily_pnl).toBe(0);
   });
 
+  it('rollDailyPnl restores closes credited during deferred UTC day', async () => {
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('PAPER');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.ensurePaperBroker();
+    masterRuntime.setMode('PAPER');
+    masterRuntime.account.daily_pnl = -250;
+    masterRuntime.account.daily_pnl_day = '2000-01-01';
+    masterRuntime.account.day_start_equity = 10_000;
+    masterRuntime.account.equity = 9_750;
+    masterRuntime.account.balance = 9_750;
+    (
+      masterRuntime as unknown as { pendingCalendarDayClosedPnl: number }
+    ).pendingCalendarDayClosedPnl = 0;
+
+    // Close while day-roll deferred (calendar today, sealed day yesterday)
+    (
+      masterRuntime as unknown as { creditClosedDailyPnl: (n: number) => void }
+    ).creditClosedDailyPnl(-80);
+    expect(masterRuntime.account.daily_pnl).toBe(-330);
+    expect(
+      (masterRuntime as unknown as { pendingCalendarDayClosedPnl: number })
+        .pendingCalendarDayClosedPnl
+    ).toBe(-80);
+
+    const rolled = (
+      masterRuntime as unknown as { rollDailyPnl: () => boolean }
+    ).rollDailyPnl();
+    expect(rolled).toBe(true);
+    const today = new Date().toISOString().slice(0, 10);
+    expect(masterRuntime.account.daily_pnl_day).toBe(today);
+    // Today's deferred close must survive — not wiped to 0
+    expect(masterRuntime.account.daily_pnl).toBe(-80);
+    expect(
+      (masterRuntime as unknown as { pendingCalendarDayClosedPnl: number })
+        .pendingCalendarDayClosedPnl
+    ).toBe(0);
+  });
+
   it('manageOnlyTick rolls stale daily_pnl_day before sync-ghost close', async () => {
     masterRuntime.stop();
     masterRuntime.pipeline = new MasterPipeline('PAPER');
