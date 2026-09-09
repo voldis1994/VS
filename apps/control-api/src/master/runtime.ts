@@ -872,6 +872,7 @@ class MasterRuntime {
           hist.opportunities,
           hist.outcomes.map((o) => o.outcome)
         );
+        this.pipeline.journal.applyOutcomeSetupKeys(hist.outcomes);
         this.pipeline.expectancy.hydrate(
           hist.outcomes
             .filter((o) => !!o.setup_key && !!o.outcome)
@@ -3478,6 +3479,7 @@ class MasterRuntime {
       hist.opportunities,
       hist.outcomes.map((o) => o.outcome)
     );
+    this.pipeline.journal.applyOutcomeSetupKeys(hist.outcomes);
     this.pipeline.expectancy.hydrate(
       hist.outcomes
         .filter((o) => !!o.setup_key && !!o.outcome)

@@ -38,7 +38,11 @@ export class MasterJournal {
     return rec;
   }
 
-  attachOutcome(opportunityId: string, outcome: TradeOutcome) {
+  attachOutcome(
+    opportunityId: string,
+    outcome: TradeOutcome,
+    setupKey?: string | null
+  ) {
     this.closeOutcomes.push(outcome);
     const hit = this.opportunities.find((o) => o.id === opportunityId);
     if (!hit) return;
@@ -47,6 +51,22 @@ export class MasterJournal {
       hit.outcome = mergeOutcomeSlices(hit.outcome, outcome);
     } else {
       hit.outcome = outcome;
+    }
+    if (setupKey && String(setupKey).trim()) {
+      hit.setup_key = String(setupKey).trim();
+    }
+  }
+
+  /** Restart: stamp durable outcome setup_key onto opportunities for Confirm PnL. */
+  applyOutcomeSetupKeys(
+    rows: Array<{ opportunity_id?: string | null; setup_key?: string | null }>
+  ) {
+    for (const row of rows) {
+      const id = row.opportunity_id ? String(row.opportunity_id) : '';
+      const sk = row.setup_key ? String(row.setup_key).trim() : '';
+      if (!id || !sk) continue;
+      const hit = this.opportunities.find((o) => o.id === id);
+      if (hit && !hit.setup_key) hit.setup_key = sk;
     }
   }
 

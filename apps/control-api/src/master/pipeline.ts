@@ -303,17 +303,17 @@ export class MasterPipeline {
         },
       });
     }
-    this.journal.attachOutcome(opportunityId, outcome);
     if (decision.side) {
-      this.expectancy.record(
-        setupKey(
-          decision.analysis,
-          decision.side,
-          meta?.epic,
-          decision.desk_entry_source
-        ),
-        outcome
+      const sk = setupKey(
+        decision.analysis,
+        decision.side,
+        meta?.epic,
+        decision.desk_entry_source
       );
+      this.journal.attachOutcome(opportunityId, outcome, sk);
+      this.expectancy.record(sk, outcome);
+    } else {
+      this.journal.attachOutcome(opportunityId, outcome);
     }
   }
 

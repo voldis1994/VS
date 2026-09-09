@@ -169,6 +169,8 @@ export type OpportunityRecord = {
   executed: boolean;
   execution?: ExecutionResult;
   outcome?: TradeOutcome;
+  /** Durable EV setupKey from last close (desk-source suffix for Confirm PnL). */
+  setup_key?: string | null;
 };
 
 export type ExecutionResult = {
