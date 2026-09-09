@@ -134,7 +134,8 @@ export type DeskEntryPerfSlice = {
 
 /**
  * Slice closed-trade performance by desk 10s confirm source (setup/move/none).
- * Unjoined opportunities count as none (legacy / no confirm).
+ * Prefer DecisionEvent attribution; fall back to OpportunityRecord.decision
+ * so Confirm PnL stays aligned with Confirm EV when the decision journal is thin.
  */
 export function performanceByDeskEntry(
   records: OpportunityRecord[],
@@ -155,6 +156,21 @@ export function performanceByDeskEntry(
     // Prefer confirm attribution when any decision for opp carried setup/move
     if (!prev || (prev === 'none' && src !== 'none')) {
       byOpp.set(id, src);
+    }
+  }
+  // Opportunity.decision fallback — journal wipe / capped DecisionEvent scan
+  for (const r of records) {
+    const id = String(r.id || '');
+    if (!id) continue;
+    const fromOppRaw = r.decision?.desk_entry_source;
+    const fromOpp: 'setup' | 'move' | 'none' | null =
+      fromOppRaw === 'setup' || fromOppRaw === 'move' || fromOppRaw === 'none'
+        ? fromOppRaw
+        : null;
+    if (!fromOpp) continue;
+    const prev = byOpp.get(id);
+    if (!prev || (prev === 'none' && fromOpp !== 'none')) {
+      byOpp.set(id, fromOpp);
     }
   }
   const buckets: Record<'setup' | 'move' | 'none', TradeOutcome[]> = {

@@ -1006,6 +1006,59 @@ class MasterRuntime {
         this.last_execution_detail = String(withExec.execution_detail);
       }
     }
+    // Desk entry / hour_bias / closed_10s cards — seed from DecisionEvent when live cycle absent
+    if (!this.last_desk_entry) {
+      const withConfirm = loadDecisionEvents(96).find(
+        (e) => e.desk_entry_source === 'setup' || e.desk_entry_source === 'move'
+      );
+      if (withConfirm && (withConfirm.desk_entry_side === 'BUY' || withConfirm.desk_entry_side === 'SELL')) {
+        this.last_desk_entry = {
+          side: withConfirm.desk_entry_side,
+          source: withConfirm.desk_entry_source as 'setup' | 'move',
+          reason: `hydrated · ${withConfirm.desk_entry_source}`,
+          setup_kind: 'HYDRATED',
+          playbook: null,
+        };
+      } else {
+        const oppConfirm = [...hist.opportunities]
+          .filter(
+            (o) =>
+              o.decision?.desk_entry_source === 'setup' ||
+              o.decision?.desk_entry_source === 'move'
+          )
+          .sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')))[0];
+        const src = oppConfirm?.decision?.desk_entry_source;
+        const side = oppConfirm?.decision?.side;
+        if (
+          (src === 'setup' || src === 'move') &&
+          (side === 'BUY' || side === 'SELL')
+        ) {
+          this.last_desk_entry = {
+            side,
+            source: src,
+            reason: `hydrated · ${src}`,
+            setup_kind: 'HYDRATED',
+            playbook: null,
+          };
+        }
+      }
+    }
+    if (this.last_hour_bias == null) {
+      const withBias = loadDecisionEvents(96).find(
+        (e) =>
+          e.hour_bias === 'UP' ||
+          e.hour_bias === 'DOWN' ||
+          e.hour_bias === 'FLAT' ||
+          e.hour_bias === 'UNKNOWN'
+      );
+      if (withBias?.hour_bias) this.last_hour_bias = withBias.hour_bias;
+    }
+    if (!this.last_closed_10s_present) {
+      const with10s = loadDecisionEvents(96).find(
+        (e) => e.closed_10s_present === true
+      );
+      if (with10s) this.last_closed_10s_present = true;
+    }
   }
 
   /**
