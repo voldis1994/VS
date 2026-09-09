@@ -7,10 +7,17 @@
  * 3. MASTER_STATE_DIR/news_window.json { impact, until_ms? }
  * 4. Forex Factory weekly calendar cache (VS-System faireconomy) for symbol
  * 5. UTC calendar heuristic (NFP first Friday 12:25–14:30 UTC)
+ *
+ * news_window.json is also DualPersist / MemoryPersist / PG primary so a full
+ * file wipe does not fail-open the high-impact hard-gate.
  */
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { isNewsCalendarBlocked } from './newsCalendar.js';
+import {
+  persistNewsWindowState,
+  loadNewsWindowFromPersist,
+} from './persist.js';
 
 export type NewsImpact = 'off' | 'low' | 'medium' | 'high';
 
@@ -19,6 +26,13 @@ export type NewsWindowState = {
   window_active: boolean;
   source: string;
   detail: string;
+};
+
+export type NewsWindowDiskPayload = {
+  impact: string;
+  until_ms?: number | null;
+  active?: boolean;
+  detail?: string | null;
 };
 
 function parseImpact(raw: unknown): NewsImpact | null {
@@ -42,13 +56,32 @@ export function isNfpWindowUtc(nowMs: number): boolean {
   return mins >= 12 * 60 + 25 && mins < 14 * 60 + 30;
 }
 
-function loadNewsFile(): NewsWindowState | null {
+function stateDir(root?: string): string {
+  return (
+    root ||
+    process.env.MASTER_STATE_DIR ||
+    process.env.MASTER_GATES_DIR ||
+    join(process.cwd(), '.master-state')
+  );
+}
+
+function newsPath(root?: string): string {
+  return join(stateDir(root), 'news_window.json');
+}
+
+function loadNewsFile(root?: string): NewsWindowState | null {
   try {
-    const dir =
-      process.env.MASTER_STATE_DIR ||
-      process.env.MASTER_GATES_DIR ||
-      join(process.cwd(), '.master-state');
-    const path = join(dir, 'news_window.json');
+    // Vitest without explicit MASTER_STATE_DIR must not inherit cwd sidecar from
+    // prior runtime ticks (would dual-starve filter unit tests).
+    if (
+      !root &&
+      process.env.VITEST &&
+      !process.env.MASTER_STATE_DIR &&
+      !process.env.MASTER_GATES_DIR
+    ) {
+      return null;
+    }
+    const path = newsPath(root);
     if (!existsSync(path)) return null;
     const raw = JSON.parse(readFileSync(path, 'utf8')) as {
       impact?: string;
@@ -78,6 +111,58 @@ function loadNewsFile(): NewsWindowState | null {
   } catch {
     return null;
   }
+}
+
+/** Durable write + DualPersist primary — operator / calendar hard-gate. */
+export function saveNewsWindow(
+  input: NewsWindowDiskPayload,
+  root?: string
+): boolean {
+  try {
+    const dir = stateDir(root);
+    mkdirSync(dir, { recursive: true });
+    const impact = parseImpact(input.impact) ?? 'off';
+    const payload: NewsWindowDiskPayload = {
+      impact,
+      until_ms:
+        input.until_ms != null && Number.isFinite(Number(input.until_ms))
+          ? Number(input.until_ms)
+          : null,
+      active: input.active === true || impact === 'high',
+      detail: input.detail ?? null,
+    };
+    writeFileSync(newsPath(root), JSON.stringify(payload));
+    void persistNewsWindowState({
+      ...payload,
+      saved_at_ms: Date.now(),
+    }).catch(() => {});
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Persist an active high-impact window so wipe+restart does not fail-open
+ * before calendar refresh. Extends until_ms ~45m when not provided.
+ */
+export function rememberHighImpactNewsWindow(
+  state: NewsWindowState,
+  nowMs = Date.now(),
+  root?: string
+): boolean {
+  if (!(state.window_active && state.impact === 'high')) return false;
+  // File source already durable; still dual-write primary
+  const until = nowMs + 45 * 60_000;
+  return saveNewsWindow(
+    {
+      impact: 'high',
+      until_ms: until,
+      active: true,
+      detail: state.detail || state.source,
+    },
+    root
+  );
 }
 
 /** Resolve current news window from env / file / calendar. */
@@ -165,4 +250,45 @@ export function newsBlocksEntries(
     };
   }
   return { blocked: false, reason: null, state };
+}
+
+/**
+ * When news_window.json was wiped but DualPersist/PG primary still holds
+ * the singleton payload, rewrite the sidecar before filter / status reads.
+ */
+export async function hydrateNewsWindowFromPersist(
+  root?: string
+): Promise<{ restored: boolean }> {
+  const dir = stateDir(root);
+  const path = newsPath(root);
+  if (existsSync(path)) return { restored: false };
+  try {
+    const loaded = await loadNewsWindowFromPersist();
+    if (!loaded || typeof loaded !== 'object') return { restored: false };
+    const impact = parseImpact(loaded.impact);
+    if (!impact || impact === 'off') {
+      // active:true without impact still means high
+      if (loaded.active !== true) return { restored: false };
+    }
+    const until =
+      loaded.until_ms != null && Number.isFinite(Number(loaded.until_ms))
+        ? Number(loaded.until_ms)
+        : null;
+    if (until != null && Date.now() > until) return { restored: false };
+    const resolvedImpact = impact && impact !== 'off' ? impact : 'high';
+    mkdirSync(dir, { recursive: true });
+    const payload: NewsWindowDiskPayload = {
+      impact: resolvedImpact,
+      until_ms: until,
+      active: true,
+      detail:
+        typeof loaded.detail === 'string' && loaded.detail
+          ? loaded.detail
+          : `healed impact=${resolvedImpact}`,
+    };
+    writeFileSync(path, JSON.stringify(payload));
+    return { restored: true };
+  } catch {
+    return { restored: false };
+  }
 }

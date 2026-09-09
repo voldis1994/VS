@@ -509,6 +509,61 @@ export async function loadErrorJournalFromPersist(): Promise<any | null> {
   }
 }
 
+/** DualPersist / MemoryPersist / PG — news_window singleton for wipe heal. */
+export async function persistNewsWindowState(state: {
+  impact: string;
+  until_ms?: number | null;
+  active?: boolean;
+  detail?: string | null;
+  saved_at_ms: number;
+}): Promise<boolean> {
+  try {
+    await client.query(
+      `INSERT INTO master_news_window (id, payload, saved_at_ms)
+       VALUES ($1, $2::jsonb, $3)
+       ON CONFLICT (id) DO UPDATE SET
+         payload = EXCLUDED.payload,
+         saved_at_ms = EXCLUDED.saved_at_ms`,
+      [
+        'singleton',
+        JSON.stringify({
+          impact: state.impact,
+          until_ms:
+            state.until_ms != null && Number.isFinite(Number(state.until_ms))
+              ? Number(state.until_ms)
+              : null,
+          active: state.active === true,
+          detail: state.detail ?? null,
+        }),
+        state.saved_at_ms,
+      ]
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function loadNewsWindowFromPersist(): Promise<any | null> {
+  try {
+    const { rows } = await client.query(
+      `SELECT payload, saved_at_ms FROM master_news_window WHERE id = $1 LIMIT 1`,
+      ['singleton']
+    );
+    const row = rows?.[0];
+    if (!row) return null;
+    const payload =
+      typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload;
+    if (!payload || typeof payload !== 'object') return null;
+    return {
+      ...payload,
+      saved_at_ms: Number(row.saved_at_ms) || Number(payload.saved_at_ms) || 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Reader decision audit — DualPersist / MemoryPersist / FilePersist SQL path. */
 export async function persistDecisionEvent(entry: {
   event_id: string;
@@ -1068,6 +1123,8 @@ export class MemoryPersist implements PersistClient {
   tradeAckJournalPayload: any | null = null;
   /** Singleton error_journal payload — DualPersist primary wipe heal */
   errorJournalPayload: any | null = null;
+  /** Singleton news_window payload — DualPersist primary wipe heal */
+  newsWindowPayload: any | null = null;
 
   async query(sql: string, params: unknown[] = []) {
     const s = sql.replace(/\s+/g, ' ').trim();
@@ -1298,6 +1355,31 @@ export class MemoryPersist implements PersistClient {
             id: 'singleton',
             payload: this.errorJournalPayload,
             saved_at_ms: Number(this.errorJournalPayload.saved_at_ms) || 0,
+          },
+        ],
+      };
+    }
+    if (s.startsWith('INSERT INTO master_news_window')) {
+      const raw = params[1];
+      this.newsWindowPayload =
+        typeof raw === 'string' ? JSON.parse(raw as string) : raw;
+      if (
+        this.newsWindowPayload &&
+        typeof this.newsWindowPayload === 'object' &&
+        params[2] != null
+      ) {
+        this.newsWindowPayload.saved_at_ms = Number(params[2]) || Date.now();
+      }
+      return { rows: [] };
+    }
+    if (s.startsWith('SELECT') && s.includes('master_news_window')) {
+      if (!this.newsWindowPayload) return { rows: [] };
+      return {
+        rows: [
+          {
+            id: 'singleton',
+            payload: this.newsWindowPayload,
+            saved_at_ms: Number(this.newsWindowPayload.saved_at_ms) || 0,
           },
         ],
       };
