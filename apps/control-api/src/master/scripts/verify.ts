@@ -1213,7 +1213,6 @@ async function main() {
         'bars_open TIME_STOP ignores wall-clock max_hold_ms'
       ) &&
       liveFeedTestBody.includes('resolveTimeStop prefers bars mode');
-    const brokerBody = readFileSync(join(root, 'src/master/broker.ts'), 'utf8');
     const paperSlTpAutofillApi =
       brokerBody.includes('processStopsAndTargets') &&
       brokerBody.includes('takeRecentAutoFill') &&
