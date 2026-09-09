@@ -18,6 +18,7 @@ import { formatTradeLabel } from './tradePresentation.js';
 import { notePipelineRegime } from './regimes.js';
 import { attachManageOnlyRobot, hasRunningEntryBrain } from './robotDesk.js';
 import { masterOwnsPipeline } from '../master/deskBridge.js';
+import { marketCoreEntryIntentsAllowed } from './marketCoreIntentGate.js';
 
 export { stopEntryRobotsForAccount } from './robotDesk.js';
 
@@ -80,7 +81,8 @@ export async function executePipelineIntent(
   intent: PipelineIntentInput
 ): Promise<FanoutResult> {
   // When MASTER owns the pipeline, Market Core fanout must not dual-enter
-  if (masterOwnsPipeline()) {
+  // (HTTP route also 409s — this is the in-process fail-closed).
+  if (!marketCoreEntryIntentsAllowed()) {
     return emptyFanout(intent, 0);
   }
   return fanoutToActiveSubscribers(intent);
@@ -447,7 +449,25 @@ async function executeForSubscription(
 
 export async function ingestAndExecuteIntent(
   intent: PipelineIntentInput
-): Promise<{ intent_id: number | null; fanout: FanoutResult; deduped?: boolean }> {
+): Promise<{
+  intent_id: number | null;
+  fanout: FanoutResult;
+  deduped?: boolean;
+  refused?: boolean;
+  detail?: string;
+}> {
+  if (!marketCoreEntryIntentsAllowed()) {
+    const refusal = (
+      await import('./marketCoreIntentGate.js')
+    ).marketCoreEntryIntentRefusal();
+    return {
+      intent_id: null,
+      fanout: emptyFanout(intent, 0),
+      refused: true,
+      detail: refusal.message,
+    };
+  }
+
   const idem =
     intent.idempotency_key && String(intent.idempotency_key).trim()
       ? String(intent.idempotency_key).trim().slice(0, 190)
