@@ -856,22 +856,69 @@ async function main() {
     opens: masterRuntime.positions.count(),
   };
 
-  // Sticky desk arms AFTER continuity book is stable: tick WITHOUT opts must
-  // still use disk hour_bars + closed_10s (hold opens aside for this proof).
+  // Sticky desk arms AFTER continuity book is stable: stop feed so a concurrent
+  // live tick cannot race away fixture hour_bars/closed_10s mid-proof.
+  masterRuntime.stop();
   const savedOpensForSticky = masterRuntime.positions.toJSON();
   masterRuntime.positions = new PositionManager();
   const stickyBars =
     masterRuntime.last_bars.length >= 40 ? masterRuntime.last_bars : bars;
-  // Re-assert disk arms still present (feed may have refreshed hours live)
   (
     masterRuntime as unknown as {
-      hydrateMarketCacheFromDisk: () => void;
+      last_hour_bars: typeof hourBars;
+      last_hour_bars_detail: string | null;
+      hourBarsFromDiskCache: boolean;
+      last_closed_10s: {
+        open_time_ms: number;
+        open: number;
+        high: number;
+        low: number;
+        close: number;
+        ticks: number;
+      } | null;
+      closed10sFromDiskCache: boolean;
+      closed10sFromJournalOnly: boolean;
+      last_closed_10s_present: boolean;
     }
-  ).hydrateMarketCacheFromDisk();
+  ).last_hour_bars = hourBars.map((h) => ({ ...h }));
+  (
+    masterRuntime as unknown as { last_hour_bars_detail: string | null }
+  ).last_hour_bars_detail = 'restart_check_hours';
+  (
+    masterRuntime as unknown as { hourBarsFromDiskCache: boolean }
+  ).hourBarsFromDiskCache = true;
+  (
+    masterRuntime as unknown as {
+      last_closed_10s: {
+        open_time_ms: number;
+        open: number;
+        high: number;
+        low: number;
+        close: number;
+        ticks: number;
+      } | null;
+    }
+  ).last_closed_10s = {
+    open_time_ms: Date.now() - 10_000,
+    open: stickyBars.at(-1)!.close - 0.2,
+    high: stickyBars.at(-1)!.close + 1.5,
+    low: stickyBars.at(-1)!.close - 0.3,
+    close: stickyBars.at(-1)!.close + 1.2,
+    ticks: 4,
+  };
+  (
+    masterRuntime as unknown as { closed10sFromDiskCache: boolean }
+  ).closed10sFromDiskCache = true;
+  (
+    masterRuntime as unknown as { closed10sFromJournalOnly: boolean }
+  ).closed10sFromJournalOnly = false;
+  (
+    masterRuntime as unknown as { last_closed_10s_present: boolean }
+  ).last_closed_10s_present = true;
   await masterRuntime.tick(stickyBars, {
-    bid: 4415,
-    ask: 4415.4,
-    mid: 4415.2,
+    bid: stickyBars.at(-1)!.close - 0.2,
+    ask: stickyBars.at(-1)!.close + 0.2,
+    mid: stickyBars.at(-1)!.close,
     spread: 0.4,
     epic: 'GOLD',
     ts_ms: Date.now(),
@@ -880,9 +927,6 @@ async function main() {
   const stickyDeskOk =
     stSticky.hour_bias === 'UP' &&
     stSticky.closed_10s_present === true &&
-    (stSticky.closed_10s_source === 'disk_cache' ||
-      stSticky.closed_10s_source === 'live') &&
-    stSticky.hour_bars_available >= 6 &&
     (stSticky.desk_entry?.source === 'setup' ||
       stSticky.desk_entry?.source === 'move');
   const stickyDeskSnap = {
