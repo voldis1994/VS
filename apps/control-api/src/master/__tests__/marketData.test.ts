@@ -55,4 +55,12 @@ describe('validateMarket flat_tape', () => {
     expect(v.ok).toBe(false);
     expect(v.reasons).toContain('insufficient_bars');
   });
+
+  it('hard-fails stale quote (matches DATA_STALE / Stage·validate)', () => {
+    const q = quote(4400);
+    q.ts_ms = Date.now() - 60_000;
+    const v = validateMarket(barsVarying(12), q, { stale_ms: 15_000 });
+    expect(v.reasons).toContain('stale_quote');
+    expect(v.ok).toBe(false);
+  });
 });
