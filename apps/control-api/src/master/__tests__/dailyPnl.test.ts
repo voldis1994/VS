@@ -352,6 +352,107 @@ describe('MASTER daily pnl day boundary', () => {
     broker.seedOpens([]);
     broker.hydrateAccount({ equity: 10_000, balance: 10_000 });
   });
+
+  it('recover seeds day_start_equity from journal equity after UTC day roll', async () => {
+    const { mkdtempSync } = await import('fs');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const { installFilePersist } = await import('../filePersist.js');
+    const { saveRuntimeGates } = await import('../runtimeGates.js');
+    const { writeFileSync } = await import('fs');
+
+    const dir = mkdtempSync(join(tmpdir(), 'vs-recover-day-mtm-'));
+    const prev = process.env.MASTER_STATE_DIR;
+    process.env.MASTER_STATE_DIR = dir;
+    installFilePersist(dir);
+
+    // Prior-day closed −250 → rebuilt equity 9750; must seed day_start (not stale 10k)
+    writeFileSync(
+      join(dir, 'master_state.json'),
+      JSON.stringify({
+        opportunities: [
+          {
+            id: '00000000-0000-4000-8000-0000000000aa',
+            ts: '2000-01-01T12:00:00.000Z',
+            mode: 'PAPER',
+            epic: 'GOLD',
+          },
+        ],
+        outcomes: [
+          {
+            opportunity_id: '00000000-0000-4000-8000-0000000000aa',
+            setup_key: 'TREND:BUY',
+            created_at: '2000-01-01T12:05:00.000Z',
+            outcome: {
+              position_id: 'p-recover-day-mtm',
+              side: 'BUY',
+              entry: 4400,
+              exit: 4390,
+              volume: 1,
+              pnl: -250,
+              fees: 0,
+              slippage: 0,
+              mae: 10,
+              mfe: 0,
+              r_multiple: -1,
+              hold_ms: 1000,
+              exit_reason: 'STOP_HIT',
+            },
+          },
+        ],
+        positions: [],
+        intents: [],
+      })
+    );
+    saveRuntimeGates({
+      last_loss_ms: 0,
+      reject_until_ms: 0,
+      inflight_until_ms: 0,
+      post_exit_until_ms: 0,
+      last_entry_fingerprint: null,
+      day_start_equity: 10_000,
+      peak_equity: 10_000,
+      daily_pnl_day: '2000-01-01',
+      consecutive_losses: 1,
+      capital_day_gates_seeded: false,
+      last_ai_allow_close: true,
+      ai_mode: 'off',
+      kill_switch: false,
+      mode: 'PAPER',
+      epic: 'GOLD',
+      entries_armed: true,
+      entries_pause_reason: null,
+      last_close_failed: null,
+      desired_running: false,
+    });
+    installFilePersist(dir);
+
+    masterRuntime.stop();
+    masterRuntime.pipeline = new MasterPipeline('PAPER');
+    masterRuntime.positions = new PositionManager();
+    masterRuntime.broker = null;
+    masterRuntime.bookHydrated = false;
+    masterRuntime.account.equity = 10_000;
+    masterRuntime.account.balance = 10_000;
+    masterRuntime.account.peak_equity = 10_000;
+    masterRuntime.account.daily_pnl = -50;
+    masterRuntime.account.daily_pnl_day = '2000-01-01';
+    masterRuntime.account.day_start_equity = 10_000;
+    masterRuntime.cfg = { ...DEFAULT_MASTER_CONFIG, mode: 'PAPER', ai_mode: 'off' };
+
+    await masterRuntime.recover();
+
+    const today = new Date().toISOString().slice(0, 10);
+    expect(masterRuntime.account.daily_pnl_day).toBe(today);
+    expect(masterRuntime.account.equity).toBe(9750);
+    // day_start must seed from journal-rebuilt equity, not stale £10k leftovers
+    expect(masterRuntime.account.day_start_equity).toBe(9750);
+    expect(masterRuntime.account.daily_pnl).toBe(0);
+
+    masterRuntime.stop();
+    if (prev === undefined) delete process.env.MASTER_STATE_DIR;
+    else process.env.MASTER_STATE_DIR = prev;
+  });
 });
 
 describe('MASTER per-tick ghost sync', () => {

@@ -968,16 +968,31 @@ class MasterRuntime {
             }))
         );
         this.seedDashboardFromHistory(hist);
-        // Paper/boot: recompute today's closed daily_pnl (Capital LIVE path still
-        // needs recover for venue-truth equity — do not invent Capital equity here).
-        this.rollDailyPnl();
-        const today = this.account.daily_pnl_day!;
-        let pnlToday = 0;
+        // Paper/boot: rebuild equity BEFORE UTC day-roll so day_start_equity seeds
+        // from journal truth (not default £10k). Capital LIVE still needs recover
+        // for venue-truth equity — do not invent Capital equity here.
         const capitalAttached =
           this.broker instanceof CapitalBroker && !this.broker.paper;
         const oppMode = new Map(
           hist.opportunities.map((o) => [String(o.id), String(o.mode || '')])
         );
+        let pnlAll = 0;
+        for (const o of hist.outcomes) {
+          if (o.outcome.pnl_proven === false) continue;
+          if (capitalAttached && oppMode.get(String(o.opportunity_id)) !== 'LIVE') {
+            continue;
+          }
+          pnlAll += o.outcome.pnl;
+        }
+        if (!capitalAttached) {
+          this.account.equity = this.account.balance + pnlAll;
+          if (this.account.equity > this.account.peak_equity) {
+            this.account.peak_equity = this.account.equity;
+          }
+        }
+        this.rollDailyPnl();
+        const today = this.account.daily_pnl_day!;
+        let pnlToday = 0;
         for (const o of hist.outcomes) {
           if (o.outcome.pnl_proven === false) continue;
           if (capitalAttached && oppMode.get(String(o.opportunity_id)) !== 'LIVE') {
@@ -3814,7 +3829,7 @@ class MasterRuntime {
       }
     }
     // Recompute account daily/peak from recovered outcomes (today only for daily_pnl)
-    // Load gates BEFORE roll so same-day day_start_equity / peak survive restart.
+    // Load gates BEFORE equity rebuild/roll so same-day day_start / peak survive restart.
     const gates = loadRuntimeGates();
     if (gates) {
       this.applyRuntimeGates(gates);
@@ -3822,8 +3837,9 @@ class MasterRuntime {
       // No gates file — soft exits fail-closed until a cycle proves allow
       this.last_ai_allow_close = false;
     }
-    this.rollDailyPnl();
-    const today = this.account.daily_pnl_day!;
+    // Calendar today for outcome bucketing — roll AFTER journal equity rebuild so
+    // day_start_equity seeds from live equity (parity with manageOnly/full tick).
+    const today = new Date().toISOString().slice(0, 10);
     let pnlToday = 0;
     let pnlAll = 0;
     const capitalAttached =
@@ -3865,8 +3881,39 @@ class MasterRuntime {
       gates?.consecutive_losses != null && Number.isFinite(gates.consecutive_losses)
         ? Math.max(0, Math.floor(gates.consecutive_losses))
         : 0;
-    this.account.daily_pnl = pnlToday;
     this.account.consecutive_losses = Math.max(losses, gatedStreak);
+    // Capital LIVE (proven or not): venue balance already includes realized PnL —
+    // never invent equity/peak from balance + journal (double-counts when proven).
+    // Leave equity/peak for tick getAccount; paper path still rebuilds from journal.
+    if (!(this.broker instanceof CapitalBroker && !this.broker.paper)) {
+      this.account.equity = this.account.balance + pnlAll;
+      if (this.account.equity > this.account.peak_equity) {
+        this.account.peak_equity = this.account.equity;
+      }
+    }
+    // PAPER: reseed broker cash/opens before optional MTM + UTC day-roll
+    this.seedPaperBrokerFromPositions();
+    if (this.broker instanceof PaperBroker && this.last_quote) {
+      const q = this.last_quote;
+      this.broker.setQuote({
+        bid: q.bid,
+        ask: q.ask,
+        mid: q.mid,
+        spread: q.spread,
+        epic: q.epic || this.epic,
+        ts_ms: q.ts_ms,
+      });
+      this.broker.markToMarket();
+      try {
+        const acctPre = await this.broker.getAccount();
+        await this.applyVenueAccountSnapshot(this.broker, acctPre, q);
+      } catch {
+        /* keep journal equity */
+      }
+    }
+    this.rollDailyPnl();
+    // After roll zeros daily_pnl on day change — restore today's closed sum
+    this.account.daily_pnl = pnlToday;
     // Capital pending seed: keep day_start 0 — do not fall back to paper balance
     if (
       !(
@@ -3876,16 +3923,9 @@ class MasterRuntime {
       )
     ) {
       this.account.day_start_equity =
-        this.account.day_start_equity || this.account.balance;
-    }
-    // Capital LIVE (proven or not): venue balance already includes realized PnL —
-    // never invent equity/peak from balance + journal (double-counts when proven).
-    // Leave equity/peak for tick getAccount; paper path still rebuilds from journal.
-    if (!(this.broker instanceof CapitalBroker && !this.broker.paper)) {
-      this.account.equity = this.account.balance + pnlAll;
-      if (this.account.equity > this.account.peak_equity) {
-        this.account.peak_equity = this.account.equity;
-      }
+        this.account.day_start_equity ||
+        this.account.equity ||
+        this.account.balance;
     }
     this.persistRuntimeGates();
 
