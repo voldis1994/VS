@@ -5518,7 +5518,8 @@ describe('pipeline_stages honesty — filters fail-closed', () => {
       const stages = masterRuntime.status().pipeline_stages;
       expect(stages.filters.ok).toBe(false);
       expect(stages.filters.detail).toMatch(/no filter evidence/);
-      expect(stages.dual_candidates.ok).toBe(true);
+      expect(stages.dual_candidates.ok).toBe(false);
+      expect(stages.dual_candidates.detail).toMatch(/no candidate evidence/);
 
       masterRuntime.last_decision = {
         decision_id: 'live',
@@ -5531,12 +5532,30 @@ describe('pipeline_stages honesty — filters fail-closed', () => {
           filter_ok: true,
           filter_reason: null,
           valid: true,
+          components: {
+            momentum: 0.5,
+            trend: 0.5,
+            structure: 0.5,
+            pressure: 0.5,
+            behavior: 0,
+            impact: 0.5,
+            context: 0.5,
+          },
         } as never,
         sell: {
           score: 0.2,
           filter_ok: false,
           filter_reason: 'spread',
           valid: true,
+          components: {
+            momentum: 0.2,
+            trend: 0.2,
+            structure: 0.2,
+            pressure: 0.2,
+            behavior: 0,
+            impact: 0.2,
+            context: 0.2,
+          },
         } as never,
         analysis: baseAnalysis(),
         expectancy: null,
@@ -5545,6 +5564,7 @@ describe('pipeline_stages honesty — filters fail-closed', () => {
       expect(okStages.filters.ok).toBe(true);
       expect(okStages.filters.detail).toMatch(/BUY ok/);
       expect(okStages.filters.detail).toMatch(/SELL spread|SELL fail/);
+      expect(okStages.dual_candidates.ok).toBe(true);
     } finally {
       masterRuntime.last_decision = prev;
     }
@@ -5625,12 +5645,30 @@ describe('pipeline_stages honesty — analysis_regime never forged from hydrate'
           filter_ok: true,
           filter_reason: null,
           valid: true,
+          components: {
+            momentum: 0.5,
+            trend: 0.5,
+            structure: 0.5,
+            pressure: 0.5,
+            behavior: 0,
+            impact: 0.5,
+            context: 0.5,
+          },
         } as never,
         sell: {
           score: 0.2,
           filter_ok: false,
           filter_reason: 'spread',
           valid: true,
+          components: {
+            momentum: 0.2,
+            trend: 0.2,
+            structure: 0.2,
+            pressure: 0.2,
+            behavior: 0,
+            impact: 0.2,
+            context: 0.2,
+          },
         } as never,
         analysis: {
           ...baseAnalysis(),

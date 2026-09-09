@@ -4242,10 +4242,13 @@ class MasterRuntime {
                     : '—',
           },
           dual_candidates: {
-            ok: !!(d?.buy && d?.sell),
-            detail: d
-              ? `B${Number(d.buy.score).toFixed(3)}/S${Number(d.sell.score).toFixed(3)}`
-              : '—',
+            // Fail-closed: score-only journal hydrate has scores but no components
+            ok: !!(d?.buy?.components && d?.sell?.components),
+            detail: !d
+              ? '—'
+              : d.buy?.components && d.sell?.components
+                ? `B${Number(d.buy.score).toFixed(3)}/S${Number(d.sell.score).toFixed(3)}`
+                : 'no candidate evidence',
           },
           filters: {
             ok: filterPass,
