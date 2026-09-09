@@ -415,6 +415,55 @@ export async function loadSpreadHistoryFromPersist(): Promise<any | null> {
   }
 }
 
+/** DualPersist / MemoryPersist / PG — trade_ack_journal singleton for wipe heal. */
+export async function persistTradeAckJournalState(state: {
+  records: Record<string, unknown>;
+  saved_at_ms: number;
+}): Promise<boolean> {
+  try {
+    await client.query(
+      `INSERT INTO master_trade_ack_journal (id, payload, saved_at_ms)
+       VALUES ($1, $2::jsonb, $3)
+       ON CONFLICT (id) DO UPDATE SET
+         payload = EXCLUDED.payload,
+         saved_at_ms = EXCLUDED.saved_at_ms`,
+      [
+        'singleton',
+        JSON.stringify({
+          records:
+            state.records && typeof state.records === 'object'
+              ? state.records
+              : {},
+        }),
+        state.saved_at_ms,
+      ]
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function loadTradeAckJournalFromPersist(): Promise<any | null> {
+  try {
+    const { rows } = await client.query(
+      `SELECT payload, saved_at_ms FROM master_trade_ack_journal WHERE id = $1 LIMIT 1`,
+      ['singleton']
+    );
+    const row = rows?.[0];
+    if (!row) return null;
+    const payload =
+      typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload;
+    if (!payload || typeof payload !== 'object') return null;
+    return {
+      ...payload,
+      saved_at_ms: Number(row.saved_at_ms) || Number(payload.saved_at_ms) || 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Reader decision audit — DualPersist / MemoryPersist / FilePersist SQL path. */
 export async function persistDecisionEvent(entry: {
   event_id: string;
@@ -970,6 +1019,8 @@ export class MemoryPersist implements PersistClient {
   monitoringSnapshotPayload: any | null = null;
   /** Singleton spread_history payload — DualPersist primary wipe heal */
   spreadHistoryPayload: any | null = null;
+  /** Singleton trade_ack_journal payload — DualPersist primary wipe heal */
+  tradeAckJournalPayload: any | null = null;
 
   async query(sql: string, params: unknown[] = []) {
     const s = sql.replace(/\s+/g, ' ').trim();
@@ -1147,6 +1198,33 @@ export class MemoryPersist implements PersistClient {
             id: 'singleton',
             payload: this.spreadHistoryPayload,
             saved_at_ms: Number(this.spreadHistoryPayload.saved_at_ms) || 0,
+          },
+        ],
+      };
+    }
+    if (s.startsWith('INSERT INTO master_trade_ack_journal')) {
+      const raw = params[1];
+      this.tradeAckJournalPayload =
+        typeof raw === 'string' ? JSON.parse(raw as string) : raw;
+      if (
+        this.tradeAckJournalPayload &&
+        typeof this.tradeAckJournalPayload === 'object' &&
+        params[2] != null
+      ) {
+        this.tradeAckJournalPayload.saved_at_ms =
+          Number(params[2]) || Date.now();
+      }
+      return { rows: [] };
+    }
+    if (s.startsWith('SELECT') && s.includes('master_trade_ack_journal')) {
+      if (!this.tradeAckJournalPayload) return { rows: [] };
+      return {
+        rows: [
+          {
+            id: 'singleton',
+            payload: this.tradeAckJournalPayload,
+            saved_at_ms:
+              Number(this.tradeAckJournalPayload.saved_at_ms) || 0,
           },
         ],
       };
