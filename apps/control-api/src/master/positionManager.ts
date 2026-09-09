@@ -108,6 +108,11 @@ export type ManagedPosition = {
   naked_recovery_level?: number | null;
   /** Last broker-reported UPL (account currency) when known */
   broker_upl?: number | null;
+  /**
+   * Reader position_bars_open — manage cycles since entry. TIME_STOP uses this
+   * (not wall-clock) so restart / overnight does not instant-exit.
+   */
+  bars_open?: number;
 };
 
 export type ManageTickResult = {
@@ -148,6 +153,35 @@ export type ExternalPartialEvent = {
   /** Scaled slice of last-known broker UPL for honest journal PnL */
   broker_upl_closed?: number | null;
 };
+
+/** Reader-style TIME_STOP: prefer bar count; fall back to max_hold_ms when bars mode off. */
+export function resolveTimeStop(input: {
+  bars_open: number;
+  time_stop_max_bars: number;
+  held_ms: number;
+  max_hold_ms: number;
+}): { exit: true; reason: string } | null {
+  const maxBars = Math.max(0, Math.floor(Number(input.time_stop_max_bars) || 0));
+  const bars = Math.max(0, Math.floor(Number(input.bars_open) || 0));
+  if (maxBars > 0) {
+    if (bars >= maxBars) {
+      return {
+        exit: true,
+        reason: `TIME_STOP · bars ${bars} ≥ ${maxBars}`,
+      };
+    }
+    return null;
+  }
+  const maxHold = Number(input.max_hold_ms) || 0;
+  const heldMs = Number(input.held_ms) || 0;
+  if (maxHold > 0 && heldMs >= maxHold) {
+    return {
+      exit: true,
+      reason: `TIME_STOP · held ${Math.round(heldMs / 1000)}s ≥ ${Math.round(maxHold / 1000)}s`,
+    };
+  }
+  return null;
+}
 
 export class PositionManager {
   private open = new Map<string, ManagedPosition>();
@@ -325,6 +359,7 @@ export class PositionManager {
       ),
       partial_close_applied: false,
       multi_tp_levels: levels,
+      bars_open: 0,
     };
     this.open.set(pos.position_id, pos);
     return pos;
@@ -337,6 +372,11 @@ export class PositionManager {
     quote: Quote;
     instrument_point_value?: number;
     max_hold_ms?: number;
+    /**
+     * Reader time_stop_max_bars — when >0, TIME_STOP uses bars_open (not wall clock).
+     * 0 falls back to max_hold_ms.
+     */
+    time_stop_max_bars?: number;
     breakeven_progress?: number;
     /** Check- lock past entry by this many price units */
     breakeven_offset?: number;
@@ -407,6 +447,7 @@ export class PositionManager {
     const capitalLive = broker.name === 'CAPITAL' && !broker.paper;
     const pv = input.instrument_point_value ?? 1;
     const maxHold = input.max_hold_ms ?? 0;
+    const maxBars = input.time_stop_max_bars ?? 0;
     const beProgress = input.breakeven_progress ?? 0.5;
     const beOffset = input.breakeven_offset ?? 0;
     const beStart = input.be_start ?? 0;
@@ -492,15 +533,18 @@ export class PositionManager {
           noteSkip(pos);
           continue;
         }
+        // Count this manage cycle (Reader bars_open) before TIME_STOP
+        pos.bars_open = Math.max(0, Math.floor(Number(pos.bars_open) || 0)) + 1;
         const heldMs = nowMs - new Date(pos.entry_at).getTime();
         const protective = protectiveExit(pos, quote);
-        const timeStop =
-          !protective && maxHold > 0 && heldMs >= maxHold
-            ? {
-                exit: true as const,
-                reason: `TIME_STOP · held ${Math.round(heldMs / 1000)}s ≥ ${Math.round(maxHold / 1000)}s`,
-              }
-            : null;
+        const timeStop = !protective
+          ? resolveTimeStop({
+              bars_open: pos.bars_open ?? 0,
+              time_stop_max_bars: maxBars,
+              held_ms: heldMs,
+              max_hold_ms: maxHold,
+            })
+          : null;
         const verdict = protective ?? timeStop;
         if (!verdict) continue;
         const hardProtective = !!protective;
@@ -761,6 +805,8 @@ export class PositionManager {
         noteSkip(pos);
         continue;
       }
+      // Count this manage cycle (Reader bars_open) — not hard_only wick probes
+      pos.bars_open = Math.max(0, Math.floor(Number(pos.bars_open) || 0)) + 1;
       const mark = protectiveMark(pos.side, quote);
       const fav = favorableMove(pos.side, pos.entry, mark);
       // Capital LIVE: soft mark exits need usable venue UPL (0 ≡ unread, like money helpers)
@@ -1166,14 +1212,13 @@ export class PositionManager {
             ? bestOutcome
             : { exit: false, reason: '' };
 
-      let verdict =
-        protective ??
-        (maxHold > 0 && heldMs >= maxHold
-          ? {
-              exit: true,
-              reason: `TIME_STOP · held ${Math.round(heldMs / 1000)}s ≥ ${Math.round(maxHold / 1000)}s`,
-            }
-          : softBest);
+      const timeStop = resolveTimeStop({
+        bars_open: pos.bars_open ?? 0,
+        time_stop_max_bars: maxBars,
+        held_ms: heldMs,
+        max_hold_ms: maxHold,
+      });
+      let verdict = protective ?? timeStop ?? softBest;
 
       if (!verdict.exit) {
         await this.runManageProtectiveLocks({
@@ -2382,6 +2427,7 @@ export class PositionManager {
             }
           : {}),
         partial_close_applied: false,
+        bars_open: 0,
       });
     }
     return { external_partials };

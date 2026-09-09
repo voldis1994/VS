@@ -340,8 +340,10 @@ export const DEFAULT_MASTER_CONFIG: MasterConfig = {
   sl_buffer_atr_mult: 0.25,
   kill_switch: false,
   cooldown_ms_after_loss: 30_000,
-  /** ~12×5m Reader-style bars — hard TIME_STOP */
+  /** Wall-clock fallback when time_stop_max_bars is 0 (~12×5m) */
   max_hold_ms: 45 * 60_000,
+  /** Reader-style bar-counted TIME_STOP (manage cycles); wins over max_hold_ms */
+  time_stop_max_bars: 12,
   breakeven_progress: 0.5,
   ai_mode: 'off',
   block_off_hours: true,

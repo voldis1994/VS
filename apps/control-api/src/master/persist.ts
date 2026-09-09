@@ -971,6 +971,10 @@ export async function saveOpenPositions(positions: ManagedPosition[]): Promise<b
             naked_recovery_level: p.naked_recovery_level ?? null,
             playbook_at_entry: p.playbook_at_entry ?? null,
             entry_setup: p.entry_setup ?? null,
+            bars_open:
+              p.bars_open != null && Number.isFinite(Number(p.bars_open))
+                ? Math.max(0, Math.floor(Number(p.bars_open)))
+                : 0,
           }),
         ]
       );
@@ -1056,6 +1060,10 @@ export async function loadOpenPositions(): Promise<ManagedPosition[]> {
           typeof payload.entry_setup === 'string' && payload.entry_setup.trim()
             ? String(payload.entry_setup)
             : undefined,
+        bars_open:
+          payload.bars_open != null && Number.isFinite(Number(payload.bars_open))
+            ? Math.max(0, Math.floor(Number(payload.bars_open)))
+            : 0,
       } as ManagedPosition;
     });
   } catch {
