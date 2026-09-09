@@ -1182,13 +1182,17 @@ export function MasterPage() {
         },
         {
           k: 'UTC day roll',
-          v: status.utc_day_roll_deferred
-            ? 'DEFERRED'
-            : status.capital_account_proven === false
+          // Capital unproven must win over defer (shouldDefer≡!proven for LIVE)
+          v:
+            status.capital_account_proven === false
               ? 'UNPROVEN'
-              : 'ok',
+              : status.utc_day_roll_deferred
+                ? 'DEFERRED'
+                : 'ok',
           bad: status.capital_account_proven === false,
-          warn: !!status.utc_day_roll_deferred,
+          warn:
+            status.capital_account_proven !== false &&
+            !!status.utc_day_roll_deferred,
           ok:
             !status.utc_day_roll_deferred &&
             status.capital_account_proven !== false,
