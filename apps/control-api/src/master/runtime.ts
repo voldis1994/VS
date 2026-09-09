@@ -4468,25 +4468,39 @@ class MasterRuntime {
           },
           journal: {
             // Persist fail or empty audit → not green (never forge empty as ok)
+            // Disk-hydrated audit stays green but marks hydrated until a live cycle
             ok: this.persist_ok && hasJournalEvidence,
-            detail: !this.persist_ok
-              ? `persist fail${this.last_persist_error ? ` · ${this.last_persist_error}` : ''}`
-              : decisionRows.length > 0 || tradeRows.length > 0
-                ? `dec=${decisionRows.length} trades_ev=${tradeRows.length} opps=${oppCount}`
-                : oppCount > 0
-                  ? `opps=${oppCount} · awaiting outcome`
-                  : 'no journal',
+            detail: (() => {
+              const hyd = this.bookHydrated && !m ? 'hydrated · ' : '';
+              if (!this.persist_ok) {
+                return `persist fail${this.last_persist_error ? ` · ${this.last_persist_error}` : ''}`;
+              }
+              if (decisionRows.length > 0 || tradeRows.length > 0) {
+                return `${hyd}dec=${decisionRows.length} trades_ev=${tradeRows.length} opps=${oppCount}`;
+              }
+              if (oppCount > 0) {
+                return `${hyd}opps=${oppCount} · awaiting outcome`;
+              }
+              return 'no journal';
+            })(),
           },
           performance: {
             // KPI stage — green only with proven closed trades (not decisions alone)
+            // Disk-hydrated KPIs stay green but mark hydrated until a live cycle
             ok: this.persist_ok && perf.trades > 0,
-            detail: !this.persist_ok
-              ? `persist fail${this.last_persist_error ? ` · ${this.last_persist_error}` : ''}`
-              : perf.trades > 0
-                ? `trades=${perf.trades} pnl=${Number(perf.total_pnl).toFixed(2)} exp=${Number(perf.expectancy).toFixed(3)}`
-                : hasJournalEvidence
-                  ? 'no KPI · awaiting closed trades'
-                  : 'no performance',
+            detail: (() => {
+              const hyd = this.bookHydrated && !m ? 'hydrated · ' : '';
+              if (!this.persist_ok) {
+                return `persist fail${this.last_persist_error ? ` · ${this.last_persist_error}` : ''}`;
+              }
+              if (perf.trades > 0) {
+                return `${hyd}trades=${perf.trades} pnl=${Number(perf.total_pnl).toFixed(2)} exp=${Number(perf.expectancy).toFixed(3)}`;
+              }
+              if (hasJournalEvidence) {
+                return `${hyd}no KPI · awaiting closed trades`;
+              }
+              return 'no performance';
+            })(),
           },
         };
       })(),

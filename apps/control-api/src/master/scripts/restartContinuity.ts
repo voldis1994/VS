@@ -357,9 +357,15 @@ async function main() {
     recent_trades: stHydrate.recent_trades?.length ?? 0,
     journal_stage_ok: stHydrate.pipeline_stages?.journal?.ok === true,
     journal_stage_detail: stHydrate.pipeline_stages?.journal?.detail ?? null,
+    journal_stage_hydrated: String(
+      stHydrate.pipeline_stages?.journal?.detail || ''
+    ).startsWith('hydrated ·'),
     performance_stage_ok: stHydrate.pipeline_stages?.performance?.ok === true,
     performance_stage_detail:
       stHydrate.pipeline_stages?.performance?.detail ?? null,
+    performance_stage_hydrated: String(
+      stHydrate.pipeline_stages?.performance?.detail || ''
+    ).startsWith('hydrated ·'),
     performance_total_pnl: stHydrate.performance?.total_pnl ?? null,
     performance_trades: stHydrate.performance?.trades ?? 0,
     exit_stage_ok: stHydrate.pipeline_stages?.exit?.ok === true,
@@ -464,9 +470,13 @@ async function main() {
     hydrateSnap.recent_decisions >= 1 &&
     hydrateSnap.recent_trades >= 2 &&
     hydrateSnap.journal_stage_ok === true &&
+    hydrateSnap.journal_stage_hydrated === true &&
+    String(hydrateSnap.journal_stage_detail || '').startsWith('hydrated ·') &&
     hydrateSnap.performance_stage_ok === true &&
+    hydrateSnap.performance_stage_hydrated === true &&
     hydrateSnap.performance_total_pnl === 8 &&
     hydrateSnap.performance_trades >= 1 &&
+    String(hydrateSnap.performance_stage_detail || '').startsWith('hydrated ·') &&
     String(hydrateSnap.performance_stage_detail || '').includes('pnl=') &&
     hydrateSnap.exit_stage_ok === false &&
     hydrateSnap.exit_stage_hydrated === true &&
@@ -630,8 +640,10 @@ async function main() {
       trades: hydrateSnap.recent_trades,
       journal_stage_ok: hydrateSnap.journal_stage_ok,
       journal_stage_detail: hydrateSnap.journal_stage_detail,
+      journal_stage_hydrated: hydrateSnap.journal_stage_hydrated,
       performance_stage_ok: hydrateSnap.performance_stage_ok,
       performance_stage_detail: hydrateSnap.performance_stage_detail,
+      performance_stage_hydrated: hydrateSnap.performance_stage_hydrated,
       performance_total_pnl: hydrateSnap.performance_total_pnl,
       performance_trades: hydrateSnap.performance_trades,
       exit_stage_ok: hydrateSnap.exit_stage_ok,

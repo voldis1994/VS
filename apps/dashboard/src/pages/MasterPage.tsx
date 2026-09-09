@@ -810,12 +810,14 @@ export function MasterPage() {
         {
           k: 'Closed PnL',
           v: status.performance?.trades
-            ? Number(status.performance.total_pnl || 0).toFixed(2)
+            ? `${cyclePending ? 'hydrated · ' : ''}${Number(status.performance.total_pnl || 0).toFixed(2)}`
             : '—',
           ok:
+            !cyclePending &&
             !!status.performance?.trades &&
             Number(status.performance.total_pnl || 0) > 0,
           bad:
+            !cyclePending &&
             !!status.performance?.trades &&
             Number(status.performance.total_pnl || 0) < 0,
         },
@@ -1030,12 +1032,16 @@ export function MasterPage() {
         {
           k: 'Last error',
           v: status.recent_errors?.[0]
-            ? `${status.recent_errors[0].error_type}: ${status.recent_errors[0].message}`.slice(
+            ? `${cyclePending || monHydrated ? 'hydrated · ' : ''}${status.recent_errors[0].error_type}: ${status.recent_errors[0].message}`.slice(
                 0,
-                72
+                80
               )
             : '—',
-          bad: !!status.recent_errors?.length,
+          // Disk / pre-cycle error journal must not paint live-bad
+          bad:
+            !cyclePending &&
+            !monHydrated &&
+            !!status.recent_errors?.length,
         },
       ]
     : [];
