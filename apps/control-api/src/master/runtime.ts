@@ -218,6 +218,8 @@ export type MasterStatus = {
   structure_seed_source: string;
   /** Cached OHLC bar count available for replay / manage (0 until feed seeds). */
   bars_available: number;
+  /** Bars currently from disk market_cache — not a live feed seed. */
+  bars_cached: boolean;
   news_window: NewsWindowState;
   /** Live quote snapshot for dashboard freshness */
   quote: {
@@ -230,6 +232,10 @@ export type MasterStatus = {
     stale_quote_ms: number;
     /** age_ms > stale_quote_ms — dashboard Quote card must match health */
     stale: boolean;
+    /** Disk market_cache restore — not a live tick (operator must not treat as live feed) */
+    cached: boolean;
+    /** Provenance for Quote card honesty */
+    source: 'live' | 'disk_cache';
     stream_healthy: boolean | null;
   } | null;
   floating_pnl: number | null;
@@ -318,6 +324,10 @@ class MasterRuntime {
   last_market: MasterStatus['last_market'] = null;
   last_bars: Bar[] = [];
   last_quote: Quote | null = null;
+  /** True while last_quote was restored from market_cache (cleared on live quote). */
+  private quoteFromDiskCache = false;
+  /** True while last_bars were restored from market_cache (cleared on live bars). */
+  private barsFromDiskCache = false;
   last_execution_detail: string | null = null;
   last_exit_reason: string | null = null;
   /** Sticky last close_failed for status/dashboard until a successful close clears it. */
@@ -2019,6 +2029,9 @@ class MasterRuntime {
     const quote: Quote = { ...quoteIn, epic: quoteIn.epic || this.epic };
     this.last_bars = bars;
     this.last_quote = quote;
+    // Live cycle quote/bars — never paint as disk_cache
+    this.quoteFromDiskCache = false;
+    this.barsFromDiskCache = false;
     this.persistMarketCache();
     this.rollDailyPnl();
     const broker = this.broker || this.ensurePaperBroker();
@@ -3742,6 +3755,7 @@ class MasterRuntime {
         ts_ms: q.ts_ms || Date.now(),
       };
       this.last_quote = quote;
+      this.quoteFromDiskCache = false;
       let bars: Bar[] = this.last_bars;
       if (
         bars.length < 5 &&
@@ -3762,6 +3776,7 @@ class MasterRuntime {
               ts_ms: b.ts_ms ?? now - (hist.bars.length - i) * 60_000,
             }));
             this.last_bars = bars;
+            this.barsFromDiskCache = false;
             this.structure_seed_source =
               this.broker instanceof CapitalBroker && !this.broker.paper
                 ? 'capital_ohlc'
@@ -3831,6 +3846,7 @@ class MasterRuntime {
     if (cached.epic && cached.epic !== this.epic) return;
     if (this.last_bars.length < 5 && cached.bars.length >= 5) {
       this.last_bars = cached.bars;
+      this.barsFromDiskCache = true;
       if (
         cached.structure_seed_source &&
         (!this.structure_seed_source || this.structure_seed_source === 'none')
@@ -3842,6 +3858,7 @@ class MasterRuntime {
       const age = Math.max(0, Date.now() - (cached.quote.ts_ms || cached.saved_at_ms || 0));
       if (age <= this.cfg.stale_quote_ms) {
         this.last_quote = cached.quote;
+        this.quoteFromDiskCache = true;
       }
     }
   }
@@ -3880,6 +3897,8 @@ class MasterRuntime {
           digits: live.digits ?? quote.digits,
           point: live.point ?? quote.point,
         };
+        // Fresh broker mark — no longer disk_cache provenance
+        this.quoteFromDiskCache = false;
       }
     } catch {
       /* keep quoteIn */
@@ -4487,6 +4506,7 @@ class MasterRuntime {
       entries_pause_reason: this.entries_pause_reason,
       structure_seed_source: this.structure_seed_source,
       bars_available: this.last_bars.length,
+      bars_cached: this.barsFromDiskCache,
       news_window: resolveNewsWindow(Date.now(), this.epic),
       quote: quote
         ? {
@@ -4499,6 +4519,8 @@ class MasterRuntime {
             stale:
               Math.max(0, Date.now() - (quote.ts_ms || 0)) >
               this.cfg.stale_quote_ms,
+            cached: this.quoteFromDiskCache,
+            source: this.quoteFromDiskCache ? 'disk_cache' : 'live',
             stream_healthy: streamHealthy,
           }
         : null,
