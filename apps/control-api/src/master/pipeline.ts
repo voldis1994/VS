@@ -32,6 +32,8 @@ export type PipelineInput = {
   now_ms?: number;
   /** Reader relative spread z-score when history available */
   relative_spread?: number | null;
+  /** Public/secondary mids for multi-feed divergence gate */
+  reference_mids?: number[] | null;
 };
 
 export type PipelineResult = {
@@ -55,6 +57,7 @@ export class MasterPipeline {
       stale_ms: input.cfg.stale_quote_ms,
       max_spread_abs: Math.max(input.cfg.max_spread_abs * 4, 5),
       now_ms: input.now_ms,
+      reference_mids: input.reference_mids,
     });
 
     if (!market.ok || !market.quote) {
