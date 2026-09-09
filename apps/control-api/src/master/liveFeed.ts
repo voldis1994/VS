@@ -341,6 +341,18 @@ export function closed10sFromJustClosed(
 }
 
 /**
+ * Desk parity: keep last closed 10s sticky across polls (robotDesk last_closed).
+ * justClosed null → retain prev; new close → replace.
+ */
+export function stickyClosed10s(
+  prev: import('../services/tenSecondOhlc.js').TenSecBar | null | undefined,
+  justClosed: Bar | null | undefined
+): import('../services/tenSecondOhlc.js').TenSecBar | null {
+  const next = closed10sFromJustClosed(justClosed);
+  return next ?? prev ?? null;
+}
+
+/**
  * Rolling bar builder from live ticks.
  * Yahoo structure OHLC is preserved; flat 10s closes never displace it.
  */

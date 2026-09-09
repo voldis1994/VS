@@ -92,6 +92,20 @@ describe('desk hour bias + 10s entry confirm', () => {
     const st = masterRuntime.status();
     expect(st.hour_bias).toBe('UP');
     expect('desk_entry' in st).toBe(true);
+    expect(st.closed_10s_present).toBe(false);
+    const flat = {
+      open_time_ms: Date.now() - 10_000,
+      open: 4405,
+      high: 4405,
+      low: 4405,
+      close: 4405,
+      ticks: 1,
+    };
+    await masterRuntime.tick(bars, quoteFrom(bars.at(-1)!), {
+      hour_bars: hours,
+      closed_10s: flat,
+    });
+    expect(masterRuntime.status().closed_10s_present).toBe(true);
     masterRuntime.stop();
   });
 
@@ -239,5 +253,47 @@ describe('desk hour bias + 10s entry confirm', () => {
     });
     expect(withClose.decision.kind).toBe('WAIT');
     expect(withClose.decision.block_reason).toBe('setup_confirm_pending');
+  });
+
+  it('sticky closed_10s keeps setup_confirm_pending on next poll without justClosed', async () => {
+    const { stickyClosed10s } = await import('../liveFeed.js');
+    const { decide } = await import('../decision.js');
+    const bars = barsTrendUp(50);
+    const a = analyzeBars(bars, 0.4);
+    const none: MarketSetup = {
+      kind: 'NONE',
+      side: null,
+      playbook: null,
+      status: 'NONE',
+      swing_high: 0,
+      swing_low: 0,
+      reason: 'none',
+      confirm: 0,
+      updated_at: new Date().toISOString(),
+    };
+    let sticky = stickyClosed10s(null, {
+      open: 4405,
+      high: 4405,
+      low: 4405,
+      close: 4405,
+      ts_ms: Date.now() - 10_000,
+    });
+    expect(sticky).not.toBeNull();
+    // Next poll: justClosed null — desk last_closed sticky still present
+    sticky = stickyClosed10s(sticky, null);
+    expect(sticky).not.toBeNull();
+    const d = decide(
+      a,
+      quoteFrom(bars.at(-1)!),
+      { ...DEFAULT_MASTER_CONFIG, min_score: 0.3, require_armed_setup: true },
+      () => null,
+      bars,
+      null,
+      none,
+      null,
+      { closed_10s_present: !!sticky }
+    );
+    expect(d.kind).toBe('WAIT');
+    expect(d.block_reason).toBe('setup_confirm_pending');
   });
 });

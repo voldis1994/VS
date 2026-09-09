@@ -714,6 +714,7 @@ async function refresh(){
       card('SETUP',s.market_setup?((s.setup_gate_armed?'gate · ':'')+s.market_setup.status+(s.market_setup.side?' '+s.market_setup.side:'')+' · '+s.market_setup.kind):'—',s.setup_gate_armed&&(!s.market_setup||s.market_setup.status!=='ARMED')?'bad':(s.market_setup&&s.market_setup.status==='ARMED'?'ok':(s.market_setup&&String(s.market_setup.reason||'').indexOf('hydrated ·')===0?'warn':''))),
       card('Desk entry',s.desk_entry?(s.desk_entry.source+' · '+s.desk_entry.side+(s.desk_entry.setup_kind?' · '+s.desk_entry.setup_kind:'')):'—',s.desk_entry?'ok':''),
       card('Hour bias',s.hour_bias||'—',s.hour_bias==='UP'||s.hour_bias==='DOWN'?'ok':(s.hour_bias==='UNKNOWN'?'warn':'')),
+      card('Closed 10s',s.closed_10s_present?'present':'none',s.closed_10s_present?'ok':'warn'),
       card('EV gate',s.expectancy_gate_armed?(s.expectancy_would_block&&s.expectancy_would_block.length?('ARMED · block '+s.expectancy_would_block.length):'ARMED'):(s.expectancy_would_block&&s.expectancy_would_block.length?('off · would '+s.expectancy_would_block.length):'off'),s.mode==='LIVE'&&s.expectancy_gate_armed?'ok':(s.mode==='LIVE'&&!s.expectancy_gate_armed&&s.expectancy_would_block&&s.expectancy_would_block.length?'bad':'')),
       card('Structure seed',s.structure_seed_source||'—'),
       card('Bars cache',s.bars_cached?('cached · '+(s.bars_available||0)):String(s.bars_available||0),(s.bars_available||0)<40?'bad':(s.bars_cached?'warn':((s.bars_available||0)>=40?'ok':''))),

@@ -236,6 +236,8 @@ export type MasterStatus = {
   } | null;
   /** Desk 1h structure bias (UNKNOWN when hour_bars absent). */
   hour_bias: 'UP' | 'DOWN' | 'FLAT' | 'UNKNOWN' | null;
+  /** True when last tick had sticky/desk closed_10s (confirm gate armed). */
+  closed_10s_present: boolean;
   /** Live entry gate honesty for dashboard (news/hours/weekend). */
   entry_gates: {
     news_cfg_on: boolean;
@@ -408,6 +410,8 @@ class MasterRuntime {
   last_desk_entry: MasterStatus['desk_entry'] = null;
   /** Last structure hour_bias from pipeline (dashboard honesty). */
   last_hour_bias: MasterStatus['hour_bias'] = null;
+  /** Sticky closed_10s present on last tick (desk last_closed parity). */
+  last_closed_10s_present = false;
   /**
    * Per-epic sticky SETUP/structure — setEpic stashes/restores so GOLD↔SILVER
    * desk ticks do not wipe ARMED setup.
@@ -2786,6 +2790,7 @@ class MasterRuntime {
         }
       : null;
     this.last_hour_bias = this.pipeline.getStructureBook()?.hour_bias ?? null;
+    this.last_closed_10s_present = !!opts?.closed_10s;
     this.rememberCycleForEpic();
     this.last_ai_allow_close = cycle.ai.allow_close !== false;
     this.persistRuntimeGates();
@@ -3844,12 +3849,14 @@ class MasterRuntime {
     if (!this.broker || this.broker.paper) return;
     const {
       LiveBarBuilder,
-      closed10sFromJustClosed,
+      stickyClosed10s,
       emptyHourBarsCache,
       refreshHourBarsCache,
     } = await import('./liveFeed.js');
     const builder = new LiveBarBuilder(10_000, 80);
     let hourCache = emptyHourBarsCache();
+    /** Desk last_closed parity — confirm gate stays armed between 10s closes */
+    let lastClosed10s: import('../services/tenSecondOhlc.js').TenSecBar | null = null;
     let seeded = false;
     let busy = false;
     let lastMid: number | null = null;
@@ -3997,7 +4004,10 @@ class MasterRuntime {
             this.broker_detail = `${this.broker_detail || ''};market:${quote.market_status}`.slice(-400);
           }
         }
-        const closed_10s = closed10sFromJustClosed(justClosed);
+        const closed_10s = (lastClosed10s = stickyClosed10s(
+          lastClosed10s,
+          justClosed
+        ));
         const hourDue =
           !hourCache.bars || Date.now() - hourCache.last_ms >= 120_000;
         if (hourDue) {
@@ -4055,12 +4065,14 @@ class MasterRuntime {
     const {
       fetchLiveMarket,
       LiveBarBuilder,
-      closed10sFromJustClosed,
+      stickyClosed10s,
       emptyHourBarsCache,
       refreshHourBarsCache,
     } = await import('./liveFeed.js');
     const builder = new LiveBarBuilder(10_000, 80);
     let hourCache = emptyHourBarsCache();
+    /** Desk last_closed parity — confirm gate stays armed between 10s closes */
+    let lastClosed10s: import('../services/tenSecondOhlc.js').TenSecBar | null = null;
     let seeded = false;
     let busy = false;
     let lastMid: number | null = null;
@@ -4119,7 +4131,10 @@ class MasterRuntime {
         }
         const { justClosed, bars } = builder.pushTick(snap.quote.mid);
         if (bars.length < 5) return;
-        const closed_10s = closed10sFromJustClosed(justClosed);
+        const closed_10s = (lastClosed10s = stickyClosed10s(
+          lastClosed10s,
+          justClosed
+        ));
         const hourDue =
           !hourCache.bars || Date.now() - hourCache.last_ms >= 120_000;
         if (hourDue) {
@@ -5209,6 +5224,7 @@ class MasterRuntime {
       setup_gate_armed: !!this.cfg.require_armed_setup,
       desk_entry: this.last_desk_entry,
       hour_bias: this.last_hour_bias ?? this.pipeline.getStructureBook()?.hour_bias ?? null,
+      closed_10s_present: this.last_closed_10s_present,
       entry_gates: (() => {
         const now = Date.now();
         const weekend = isWeekendUtc(now);
