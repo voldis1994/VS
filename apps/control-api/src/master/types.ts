@@ -342,4 +342,9 @@ export type MasterConfig = {
    * Does not abort an in-flight placeOrder (double-open risk).
    */
   cycle_max_duration_ms: number;
+  /**
+   * Desk SETUP-first entry: BUY/SELL only when sticky setup is ARMED and side matches.
+   * LIVE Capital path enables this by default; PAPER demos keep false.
+   */
+  require_armed_setup: boolean;
 };

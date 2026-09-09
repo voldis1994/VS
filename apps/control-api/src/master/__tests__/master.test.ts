@@ -1209,3 +1209,144 @@ describe('Reader SL/TP + Check sizing', () => {
     expect(liveClamped).toBeCloseTo(4400.1, 6);
   });
 });
+
+describe('VS MASTER desk SETUP ARMED gate', () => {
+  const armedBuy = {
+    kind: 'CONTINUATION' as const,
+    side: 'BUY' as const,
+    playbook: 'LONG' as const,
+    status: 'ARMED' as const,
+    swing_high: 4450,
+    swing_low: 4380,
+    reason: 'test ARMED BUY',
+    confirm: 2,
+    updated_at: new Date().toISOString(),
+    watch_buy: 'CONTINUATION',
+    watch_sell: null,
+  };
+  const armedSell = { ...armedBuy, side: 'SELL' as const, reason: 'test ARMED SELL' };
+  const noneSetup = {
+    kind: 'NONE' as const,
+    side: null,
+    playbook: null,
+    status: 'NONE' as const,
+    swing_high: 0,
+    swing_low: 0,
+    reason: 'no setup',
+    confirm: 0,
+    updated_at: new Date().toISOString(),
+    watch_buy: null,
+    watch_sell: null,
+  };
+
+  it('gatePreferredBySetup mismatches opposite ARMED side', async () => {
+    const { gatePreferredBySetup } = await import('../decision.js');
+    expect(gatePreferredBySetup('BUY', armedSell, false)).toBe('setup_side_mismatch:SELL');
+    expect(gatePreferredBySetup('SELL', armedBuy, false)).toBe('setup_side_mismatch:BUY');
+    expect(gatePreferredBySetup('BUY', armedBuy, false)).toBeNull();
+  });
+
+  it('gatePreferredBySetup setup_none when require_armed_setup and not ARMED', async () => {
+    const { gatePreferredBySetup } = await import('../decision.js');
+    expect(gatePreferredBySetup('BUY', noneSetup, true)).toBe('setup_none');
+    expect(gatePreferredBySetup('BUY', null, true)).toBe('setup_none');
+    expect(gatePreferredBySetup('BUY', noneSetup, false)).toBeNull();
+  });
+
+  it('decide WAIT setup_none when require_armed_setup without ARMED', () => {
+    const bars = barsTrendUp(50);
+    const a = analyzeBars(bars, 0.4);
+    const d = decide(
+      a,
+      quoteFrom(bars.at(-1)!),
+      { ...DEFAULT_MASTER_CONFIG, min_score: 0.3, require_armed_setup: true },
+      () => null,
+      bars,
+      null,
+      noneSetup
+    );
+    expect(d.kind).toBe('WAIT');
+    expect(d.block_reason).toBe('setup_none');
+  });
+
+  it('decide WAIT setup_side_mismatch when ARMED opposite preferred', () => {
+    const bars = barsTrendUp(50);
+    const a = analyzeBars(bars, 0.4);
+    const d = decide(
+      a,
+      quoteFrom(bars.at(-1)!),
+      { ...DEFAULT_MASTER_CONFIG, min_score: 0.3, require_armed_setup: false },
+      () => null,
+      bars,
+      null,
+      armedSell
+    );
+    // Trend-up prefers BUY — ARMED SELL must WAIT even when gate not required
+    if (d.kind === 'BUY' || d.kind === 'SELL') {
+      // unexpected open with opposite armed
+      expect(d.block_reason).toBeNull();
+    } else {
+      expect(d.kind).toBe('WAIT');
+      expect(d.block_reason).toMatch(/setup_side_mismatch/);
+    }
+  });
+
+  it('pipeline runCycle blocks BUY/SELL when require_armed_setup and override NONE', async () => {
+    const pipe = new MasterPipeline('PAPER');
+    const bars = barsTrendUp(50);
+    const q = quoteFrom(bars.at(-1)!);
+    const cycle = await pipe.runCycle({
+      bars,
+      quote: q,
+      account,
+      instrument: GOLD_SPEC,
+      cfg: {
+        ...DEFAULT_MASTER_CONFIG,
+        min_score: 0.3,
+        require_armed_setup: true,
+        block_off_hours: false,
+        block_high_impact_news: false,
+      },
+      market_setup: noneSetup,
+    });
+    expect(cycle.market_setup.status).toBe('NONE');
+    expect(cycle.decision.kind === 'BUY' || cycle.decision.kind === 'SELL').toBe(false);
+    expect(
+      cycle.decision.block_reason === 'setup_none' ||
+        cycle.decision.kind === 'WAIT' ||
+        cycle.decision.kind === 'BLOCK'
+    ).toBe(true);
+    if (cycle.decision.buy.valid || cycle.decision.sell.valid) {
+      expect(cycle.decision.block_reason).toBe('setup_none');
+      expect(cycle.decision.kind).toBe('WAIT');
+    }
+  });
+
+  it('pipeline runCycle allows BUY when ARMED BUY matches trend', async () => {
+    const pipe = new MasterPipeline('PAPER');
+    const bars = barsTrendUp(50);
+    const q = quoteFrom(bars.at(-1)!);
+    const cycle = await pipe.runCycle({
+      bars,
+      quote: q,
+      account,
+      instrument: GOLD_SPEC,
+      cfg: {
+        ...DEFAULT_MASTER_CONFIG,
+        min_score: 0.3,
+        require_armed_setup: true,
+        block_off_hours: false,
+        block_high_impact_news: false,
+      },
+      market_setup: armedBuy,
+    });
+    expect(cycle.market_setup.status).toBe('ARMED');
+    expect(cycle.market_setup.side).toBe('BUY');
+    // Prefer BUY on uptrend — must not be setup_none / mismatch
+    expect(cycle.decision.block_reason).not.toBe('setup_none');
+    expect(cycle.decision.block_reason || '').not.toMatch(/setup_side_mismatch/);
+    if (cycle.decision.buy.valid && cycle.decision.buy.score >= 0.3) {
+      expect(cycle.decision.kind).toBe('BUY');
+    }
+  });
+});

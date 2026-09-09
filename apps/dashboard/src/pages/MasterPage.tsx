@@ -112,6 +112,14 @@ type MasterStatus = {
     samples: number;
   }>;
   expectancy_gate_armed?: boolean;
+  market_setup?: {
+    kind: string;
+    side: 'BUY' | 'SELL' | null;
+    status: string;
+    reason: string;
+    confirm: number;
+  } | null;
+  setup_gate_armed?: boolean;
   entry_gates?: {
     news_cfg_on: boolean;
     news_blocks: boolean;
@@ -505,6 +513,18 @@ export function MasterPage() {
             : 'armed',
           bad: status.entries_armed === false,
           ok: status.entries_armed !== false,
+        },
+        {
+          k: 'SETUP',
+          v: status.market_setup
+            ? `${status.setup_gate_armed ? 'gate · ' : ''}${status.market_setup.status}${
+                status.market_setup.side ? ` ${status.market_setup.side}` : ''
+              } · ${status.market_setup.kind}`
+            : '—',
+          bad:
+            !!status.setup_gate_armed &&
+            (!status.market_setup || status.market_setup.status !== 'ARMED'),
+          ok: !!status.market_setup && status.market_setup.status === 'ARMED',
         },
         {
           k: 'Structure seed',

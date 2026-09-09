@@ -39,6 +39,7 @@ export type ManageConfigPatch = Partial<
     | 'block_off_hours'
     | 'require_positive_expectancy'
     | 'min_expectancy_samples'
+    | 'require_armed_setup'
   >
 >;
 
@@ -71,6 +72,7 @@ const KEYS: (keyof ManageConfigPatch)[] = [
   'block_off_hours',
   'require_positive_expectancy',
   'min_expectancy_samples',
+  'require_armed_setup',
 ];
 
 function stateDir(): string {
