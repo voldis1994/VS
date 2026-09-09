@@ -585,6 +585,21 @@ describe('VS MASTER stop() empty-wipe guard', () => {
           { open: 4403, high: 4404, low: 4402, close: 4403.5, ts_ms: 4 },
           { open: 4404, high: 4405, low: 4403, close: 4404.5, ts_ms: 5 },
         ],
+        hour_bars: Array.from({ length: 6 }, (_, i) => ({
+          open: 4300 + i,
+          high: 4302 + i,
+          low: 4298 + i,
+          close: 4301 + i,
+          ts_ms: i + 1,
+        })),
+        closed_10s: {
+          open_time_ms: 1_000,
+          open: 4404,
+          high: 4405,
+          low: 4403,
+          close: 4404.5,
+          ticks: 2,
+        },
         quote: null,
         structure_seed_source: 'capital_ohlc',
         saved_at_ms: Date.now(),
@@ -593,6 +608,8 @@ describe('VS MASTER stop() empty-wipe guard', () => {
     fp.flush();
     const state = JSON.parse(readFileSync(join(dir, 'master_state.json'), 'utf8'));
     expect(state.operator_meta?.market_cache?.bars?.length).toBe(5);
+    expect(state.operator_meta?.market_cache?.hour_bars?.length).toBe(6);
+    expect(state.operator_meta?.market_cache?.closed_10s?.close).toBe(4404.5);
     expect(state.operator_meta?.market_cache?.epic).toBe('GOLD');
     unlinkSync(join(dir, 'market_cache.json'));
     expect(existsSync(join(dir, 'market_cache.json'))).toBe(false);
@@ -600,6 +617,8 @@ describe('VS MASTER stop() empty-wipe guard', () => {
     expect(existsSync(join(dir, 'market_cache.json'))).toBe(true);
     const cache = JSON.parse(readFileSync(join(dir, 'market_cache.json'), 'utf8'));
     expect(cache.bars.length).toBe(5);
+    expect(cache.hour_bars.length).toBe(6);
+    expect(cache.closed_10s.close).toBe(4404.5);
     expect(cache.structure_seed_source).toBe('capital_ohlc');
   });
 

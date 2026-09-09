@@ -191,6 +191,14 @@ async function main() {
     },
     hour_bars: hourBars,
     hour_bars_detail: 'restart_check_hours',
+    closed_10s: {
+      open_time_ms: Date.now() - 10_000,
+      open: 4414,
+      high: 4416,
+      low: 4413.5,
+      close: 4415.2,
+      ticks: 4,
+    },
     structure_seed_source: 'restart_check',
   });
   saveEpicCycleStash({
@@ -349,6 +357,14 @@ async function main() {
     },
     hour_bars: hourBars,
     hour_bars_detail: 'restart_check_hours',
+    closed_10s: {
+      open_time_ms: Date.now() - 10_000,
+      open: 4414,
+      high: 4416,
+      low: 4413.5,
+      close: 4415.2,
+      ticks: 4,
+    },
     structure_seed_source: 'restart_check',
   });
   // Re-seed epic cycle stash (same non-SQL sidecar class as market_cache)
@@ -633,6 +649,9 @@ async function main() {
     hour_bars_available: stHydrate.hour_bars_available ?? 0,
     hour_bars_cached: stHydrate.hour_bars_cached === true,
     hour_bars_source: stHydrate.hour_bars_source ?? null,
+    closed_10s_present: stHydrate.closed_10s_present === true,
+    closed_10s_cached: stHydrate.closed_10s_cached === true,
+    closed_10s_source: stHydrate.closed_10s_source ?? null,
 
     entry_gates_session: stHydrate.entry_gates?.session ?? null,
     entry_gates_session_hydrated:
@@ -735,6 +754,9 @@ async function main() {
     hydrateSnap.hour_bars_cached === true &&
     (hydrateSnap.hour_bars_available ?? 0) >= 6 &&
     hydrateSnap.hour_bars_source === 'disk_cache' &&
+    hydrateSnap.closed_10s_present === true &&
+    hydrateSnap.closed_10s_cached === true &&
+    hydrateSnap.closed_10s_source === 'disk_cache' &&
     hydrateSnap.bars_available >= 40 &&
     hydrateSnap.entry_gates_session_hydrated === true &&
     String(hydrateSnap.entry_gates_session || '').startsWith('hydrated ·') &&
@@ -915,6 +937,9 @@ async function main() {
       hour_bars_available: hydrateSnap.hour_bars_available,
       hour_bars_cached: hydrateSnap.hour_bars_cached,
       hour_bars_source: hydrateSnap.hour_bars_source,
+      closed_10s_present: hydrateSnap.closed_10s_present,
+      closed_10s_cached: hydrateSnap.closed_10s_cached,
+      closed_10s_source: hydrateSnap.closed_10s_source,
       entry_gates_session: hydrateSnap.entry_gates_session,
       entry_gates_session_hydrated: hydrateSnap.entry_gates_session_hydrated,
       monitoring_hydrated: hydrateSnap.monitoring_hydrated,

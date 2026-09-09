@@ -35,6 +35,14 @@ describe('market_cache persist', () => {
         },
         hour_bars: hourBars,
         hour_bars_detail: 'capital_hour',
+        closed_10s: {
+          open_time_ms: Date.now() - 10_000,
+          open: 4409,
+          high: 4411,
+          low: 4408,
+          close: 4410.2,
+          ticks: 3,
+        },
         structure_seed_source: 'capital_ohlc',
       },
       dir
@@ -45,6 +53,8 @@ describe('market_cache persist', () => {
     expect(loaded?.bars.length).toBe(10);
     expect(loaded?.hour_bars?.length).toBe(8);
     expect(loaded?.hour_bars_detail).toBe('capital_hour');
+    expect(loaded?.closed_10s?.close).toBeCloseTo(4410.2, 5);
+    expect(loaded?.closed_10s?.ticks).toBe(3);
     expect(loaded?.epic).toBe('GOLD');
     expect(loaded?.structure_seed_source).toBe('capital_ohlc');
     expect(loaded?.quote?.mid).toBeCloseTo(4410.2, 5);
@@ -165,6 +175,14 @@ describe('market_cache hydrate provenance', () => {
             },
             hour_bars: hourBars,
             hour_bars_detail: 'disk_hour_cache',
+            closed_10s: {
+              open_time_ms: Date.now() - 10_000,
+              open: 4414,
+              high: 4416,
+              low: 4413,
+              close: 4415.2,
+              ticks: 4,
+            },
             structure_seed_source: 'restart_check',
           },
           dir
@@ -176,9 +194,14 @@ describe('market_cache hydrate provenance', () => {
       (
         masterRuntime as unknown as {
           last_hour_bars: unknown[];
+          last_closed_10s: unknown;
           hourBarsFromDiskCache: boolean;
+          closed10sFromDiskCache: boolean;
         }
       ).last_hour_bars = [];
+      (
+        masterRuntime as unknown as { last_closed_10s: unknown }
+      ).last_closed_10s = null;
       (
         masterRuntime as unknown as {
           quoteFromDiskCache: boolean;
@@ -194,6 +217,9 @@ describe('market_cache hydrate provenance', () => {
       (
         masterRuntime as unknown as { hourBarsFromDiskCache: boolean }
       ).hourBarsFromDiskCache = false;
+      (
+        masterRuntime as unknown as { closed10sFromDiskCache: boolean }
+      ).closed10sFromDiskCache = false;
       (
         masterRuntime as unknown as { bookHydrated: boolean }
       ).bookHydrated = false;
@@ -238,6 +264,9 @@ describe('market_cache hydrate provenance', () => {
       expect(st.hour_bars_available).toBeGreaterThanOrEqual(6);
       expect(st.hour_bars_cached).toBe(true);
       expect(st.hour_bars_source).toBe('disk_cache');
+      expect(st.closed_10s_present).toBe(true);
+      expect(st.closed_10s_cached).toBe(true);
+      expect(st.closed_10s_source).toBe('disk_cache');
       expect(st.quote?.cached).toBe(true);
       expect(st.quote?.source).toBe('disk_cache');
       expect(st.floating_pnl).not.toBeNull();
@@ -276,6 +305,33 @@ describe('market_cache hydrate provenance', () => {
       expect(live.hour_bars_cached).toBe(false);
       expect(live.hour_bars_source).toBe('live');
       expect(live.hour_bars_available).toBeGreaterThanOrEqual(6);
+      // Sticky reuse of same disk closed_10s bucket keeps disk_cache until new 10s
+      expect(live.closed_10s_cached).toBe(true);
+      expect(live.closed_10s_source).toBe('disk_cache');
+      const live10s = {
+        open_time_ms: Date.now() - 5_000,
+        open: 4415,
+        high: 4417,
+        low: 4414,
+        close: 4416,
+        ticks: 2,
+      };
+      await masterRuntime.tick(
+        bars,
+        {
+          bid: 4416,
+          ask: 4416.4,
+          mid: 4416.2,
+          spread: 0.4,
+          epic: 'GOLD',
+          ts_ms: Date.now(),
+        },
+        { hour_bars: liveHours, closed_10s: live10s }
+      );
+      const live2 = masterRuntime.status();
+      expect(live2.closed_10s_cached).toBe(false);
+      expect(live2.closed_10s_source).toBe('live');
+      expect(live2.closed_10s_present).toBe(true);
       expect(live.floating_pnl_cached).toBe(false);
       expect(live.pipeline_stages.market_validation.detail).not.toMatch(
         /hydrated · disk_cache/
@@ -294,6 +350,12 @@ describe('market_cache hydrate provenance', () => {
       (
         masterRuntime as unknown as { hourBarsFromDiskCache: boolean }
       ).hourBarsFromDiskCache = false;
+      (
+        masterRuntime as unknown as { last_closed_10s: unknown }
+      ).last_closed_10s = null;
+      (
+        masterRuntime as unknown as { closed10sFromDiskCache: boolean }
+      ).closed10sFromDiskCache = false;
       if (prevState === undefined) delete process.env.MASTER_STATE_DIR;
       else process.env.MASTER_STATE_DIR = prevState;
       if (prevGates === undefined) delete process.env.MASTER_GATES_DIR;
