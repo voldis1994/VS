@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   isHonestLivePaperClosed,
+  shouldRetryLivePaperDemo,
   type LivePaperDemoReport,
 } from '../livePaperHonesty.js';
 
@@ -82,5 +83,15 @@ describe('isHonestLivePaperClosed', () => {
     expect(
       isHonestLivePaperClosed(baseClosed({ performance_total_pnl: 0 }))
     ).toBe(true);
+  });
+});
+
+describe('shouldRetryLivePaperDemo', () => {
+  it('retries DECIDED/TRADED only', () => {
+    expect(shouldRetryLivePaperDemo('PASS_LIVE_DATA_DECIDED')).toBe(true);
+    expect(shouldRetryLivePaperDemo('PASS_LIVE_DATA_TRADED')).toBe(true);
+    expect(shouldRetryLivePaperDemo('PASS_LIVE_DATA_CLOSED')).toBe(false);
+    expect(shouldRetryLivePaperDemo('FAIL')).toBe(false);
+    expect(shouldRetryLivePaperDemo(null)).toBe(false);
   });
 });

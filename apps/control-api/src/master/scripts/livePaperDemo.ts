@@ -11,7 +11,8 @@
  */
 import { writeFileSync, mkdirSync } from 'fs';
 import { masterRuntime } from '../runtime.js';
-import { DEFAULT_MASTER_CONFIG } from '../pipeline.js';
+import { DEFAULT_MASTER_CONFIG, MasterPipeline } from '../pipeline.js';
+import { PositionManager } from '../positionManager.js';
 import { installFilePersist } from '../filePersist.js';
 import { fetchLiveMarket, LiveBarBuilder } from '../liveFeed.js';
 import { setPersistClient } from '../persist.js';
@@ -25,6 +26,57 @@ export { isHonestLivePaperClosed } from '../livePaperHonesty.js';
 
 async function sleep(ms: number) {
   await new Promise((r) => setTimeout(r, ms));
+}
+
+/** Clear singleton leftovers so prior verify/audit/tests cannot starve fills. */
+function resetLivePaperRuntime() {
+  try {
+    masterRuntime.stop();
+  } catch {
+    /* ignore */
+  }
+  masterRuntime.pipeline = new MasterPipeline('PAPER');
+  masterRuntime.positions = new PositionManager();
+  masterRuntime.broker = null;
+  masterRuntime.broker_detail = null;
+  masterRuntime.running = false;
+  masterRuntime.desired_running = false;
+  masterRuntime.recovered = false;
+  (masterRuntime as unknown as { bookHydrated: boolean }).bookHydrated = false;
+  (masterRuntime as unknown as { last_manage_tick_ms: number }).last_manage_tick_ms = 0;
+  (
+    masterRuntime as unknown as {
+      quoteFromDiskCache: boolean;
+      barsFromDiskCache: boolean;
+    }
+  ).quoteFromDiskCache = false;
+  (
+    masterRuntime as unknown as {
+      quoteFromDiskCache: boolean;
+      barsFromDiskCache: boolean;
+    }
+  ).barsFromDiskCache = false;
+  masterRuntime.last_market = null;
+  masterRuntime.last_decision = null;
+  masterRuntime.last_risk = null;
+  masterRuntime.last_execution_detail = null;
+  masterRuntime.last_exit_reason = null;
+  masterRuntime.last_close_failed = null;
+  masterRuntime.last_quote = null;
+  masterRuntime.last_bars = [];
+  masterRuntime.last_loss_ms = 0;
+  masterRuntime.reject_until_ms = 0;
+  masterRuntime.account = {
+    equity: 10_000,
+    balance: 10_000,
+    currency: 'GBP',
+    open_positions: 0,
+    daily_pnl: 0,
+    daily_pnl_day: null,
+    day_start_equity: 10_000,
+    peak_equity: 10_000,
+    consecutive_losses: 0,
+  };
 }
 
 async function main() {
@@ -41,7 +93,11 @@ async function main() {
   }
   process.env.MASTER_STATE_DIR = stateDir;
   process.env.MASTER_GATES_DIR = stateDir;
+  // Prior verify steps may leave MASTER_NEWS_IMPACT / synth flags in the parent env
+  delete process.env.MASTER_NEWS_IMPACT;
+  delete process.env.MASTER_BROKER_FEED_SYNTHETIC;
   installFilePersist(stateDir);
+  resetLivePaperRuntime();
 
   masterRuntime.cfg = {
     ...DEFAULT_MASTER_CONFIG,
@@ -55,10 +111,6 @@ async function main() {
     // Longer post-exit so a single fill cannot immediately re-enter in the same proof
     post_exit_cooldown_ms: 60_000,
   };
-  masterRuntime.last_loss_ms = 0;
-  masterRuntime.reject_until_ms = 0;
-  masterRuntime.account.consecutive_losses = 0;
-  masterRuntime.account.daily_pnl = 0;
   masterRuntime.setEntriesArmed(true);
   masterRuntime.ensurePaperBroker();
   await masterRuntime.start({ live_feed: false });
@@ -88,13 +140,18 @@ async function main() {
   let decided = 0;
   let lastMid = first.quote.mid;
 
-  // Live cycles until first natural fill — then stop (no churn flood on flat mid)
-  for (let i = 0; i < 12; i++) {
+  // Live cycles until first natural fill — then stop (no churn flood on flat mid).
+  // Extra attempts absorb transient filter/score misses without forging a fill.
+  const entryAttempts = Math.max(
+    12,
+    Number(process.env.MASTER_LIVE_PAPER_ENTRY_ATTEMPTS || 24)
+  );
+  for (let i = 0; i < entryAttempts; i++) {
     masterRuntime.pauseBackgroundManage();
     const snap = i === 0 ? first : await fetchLiveMarket('GOLD');
     if (!snap.ok || !snap.quote) {
       ticks.push({ i, ok: false, detail: snap.detail });
-      await sleep(2000);
+      await sleep(1500);
       continue;
     }
     const quote = { ...snap.quote, epic: snap.quote.epic || 'GOLD' };
@@ -122,7 +179,7 @@ async function main() {
     });
     // One natural fill is enough — break before sleep so manage cannot steal the case
     if (result.executed || masterRuntime.positions.count() > 0) break;
-    await sleep(2000);
+    await sleep(1500);
   }
 
   // After natural fill: drive manage path through hard SL using builder mids
@@ -192,6 +249,12 @@ async function main() {
     executed >= 1 &&
     executed <= 2;
 
+  const liveTicks = ticks.filter((t) => t.phase !== 'exit_drive');
+  const entryWhys = liveTicks
+    .map((t) => String(t.why || t.decision || ''))
+    .filter(Boolean)
+    .slice(0, 8);
+
   const report: LivePaperDemoReport = {
     status: !first.ok
       ? 'FAIL'
@@ -220,6 +283,8 @@ async function main() {
     equity: status.account?.equity,
     daily_pnl: status.account?.daily_pnl,
     last_decision: status.last_decision?.kind,
+    entry_attempts: entryAttempts,
+    entry_whys: entryWhys,
     ticks,
   };
 
