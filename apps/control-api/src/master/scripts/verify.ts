@@ -354,6 +354,8 @@ async function main() {
       runtimeBody.includes('flat · manage never ran') &&
       runtimeBody.includes('Disk-hydrated audit stays green') &&
       runtimeBody.includes('Disk-hydrated KPIs stay green') &&
+      runtimeBody.includes('refreshPublicReferenceMids') &&
+      runtimeBody.includes('reference_mids:') &&
       runtimeBody.includes("reason: !this.last_market") &&
       runtimeBody.includes("? 'hydrated'") &&
       runtimeBody.includes('pnl=${Number(perf.total_pnl).toFixed(2)}') &&

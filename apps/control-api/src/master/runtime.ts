@@ -336,6 +336,9 @@ class MasterRuntime {
   private quoteFromDiskCache = false;
   /** True while last_bars were restored from market_cache (cleared on live bars). */
   private barsFromDiskCache = false;
+  /** Cached public mids for READER-style feed divergence vs broker quote */
+  private lastPublicReferenceMids: number[] | null = null;
+  private lastPublicReferenceAtMs = 0;
   last_execution_detail: string | null = null;
   last_exit_reason: string | null = null;
   /** Sticky last close_failed for status/dashboard until a successful close clears it. */
@@ -1725,6 +1728,36 @@ class MasterRuntime {
     });
   }
 
+  /**
+   * Refresh public secondary mids (Orbit/READER) for feed_divergent validation.
+   * Cached ~15s so Capital ticks do not hammer public endpoints every cycle.
+   */
+  async refreshPublicReferenceMids(
+    epic = this.epic,
+    force = false
+  ): Promise<number[]> {
+    const now = Date.now();
+    if (
+      !force &&
+      this.lastPublicReferenceMids &&
+      now - this.lastPublicReferenceAtMs < 15_000
+    ) {
+      return this.lastPublicReferenceMids;
+    }
+    try {
+      const { fetchLiveMarket } = await import('./liveFeed.js');
+      const snap = await fetchLiveMarket(epic);
+      const mids = (snap.mids || []).filter(
+        (m) => typeof m === 'number' && Number.isFinite(m)
+      );
+      this.lastPublicReferenceMids = mids.length ? mids : null;
+      this.lastPublicReferenceAtMs = now;
+      return mids;
+    } catch {
+      return this.lastPublicReferenceMids || [];
+    }
+  }
+
   /** Attach broker — PAPER uses in-memory PaperBroker by default. */
   attachBroker(broker: MasterBroker) {
     if (
@@ -2032,10 +2065,14 @@ class MasterRuntime {
    * MARKET → … → DECISION → RISK → EXECUTION → POSITION MANAGE → JOURNAL
    * Serialized — concurrent callers share one chain (live feed + /tick + desk).
    */
-  async tick(bars: Bar[], quote: Quote): Promise<TickResult> {
+  async tick(
+    bars: Bar[],
+    quote: Quote,
+    opts?: { reference_mids?: number[] | null }
+  ): Promise<TickResult> {
     const run = async () => {
       try {
-        return await this.tickUnlocked(bars, quote);
+        return await this.tickUnlocked(bars, quote, opts);
       } catch (e) {
         logMasterError({
           module: 'runtime.tick',
@@ -2054,7 +2091,11 @@ class MasterRuntime {
     return result;
   }
 
-  private async tickUnlocked(bars: Bar[], quoteIn: Quote): Promise<TickResult> {
+  private async tickUnlocked(
+    bars: Bar[],
+    quoteIn: Quote,
+    opts?: { reference_mids?: number[] | null }
+  ): Promise<TickResult> {
     const t0 = Date.now();
     // Always stamp runtime epic — public/desk quotes often omit it (news targeting).
     const quote: Quote = { ...quoteIn, epic: quoteIn.epic || this.epic };
@@ -2360,6 +2401,7 @@ class MasterRuntime {
       last_loss_ms: this.last_loss_ms,
       relative_spread:
         spreadSnap.history.length >= 3 ? spreadSnap.relative_spread : null,
+      reference_mids: opts?.reference_mids ?? this.lastPublicReferenceMids,
     });
     this.last_decision = cycle.decision;
     this.last_risk = cycle.risk;
@@ -3559,18 +3601,23 @@ class MasterRuntime {
             this.broker_detail = `${this.broker_detail || ''};market:${quote.market_status}`.slice(-400);
           }
         }
-        await this.tick(bars, {
-          bid: quote.bid,
-          ask: quote.ask,
-          mid: quote.mid,
-          spread: quote.spread,
-          epic: quote.epic || this.epic,
-          ts_ms: quote.ts_ms,
-          min_stop_distance: quote.min_stop_distance,
-          market_status: quote.market_status,
-          digits: quote.digits,
-          point: quote.point,
-        });
+        const referenceMids = await this.refreshPublicReferenceMids(this.epic);
+        await this.tick(
+          bars,
+          {
+            bid: quote.bid,
+            ask: quote.ask,
+            mid: quote.mid,
+            spread: quote.spread,
+            epic: quote.epic || this.epic,
+            ts_ms: quote.ts_ms,
+            min_stop_distance: quote.min_stop_distance,
+            market_status: quote.market_status,
+            digits: quote.digits,
+            point: quote.point,
+          },
+          { reference_mids: referenceMids.length ? referenceMids : null }
+        );
       } finally {
         busy = false;
       }
@@ -3645,6 +3692,7 @@ class MasterRuntime {
         }
         const { bars } = builder.pushTick(snap.quote.mid);
         if (bars.length < 5) return;
+        // Public consensus quote is already fused — do not self-diverge against the same mids
         await this.tick(bars, quote);
       } finally {
         busy = false;

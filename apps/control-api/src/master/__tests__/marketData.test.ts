@@ -63,4 +63,36 @@ describe('validateMarket flat_tape', () => {
     expect(v.reasons).toContain('stale_quote');
     expect(v.ok).toBe(false);
   });
+
+  it('hard-fails feed_divergent when public mids disagree with quote (READER honesty)', () => {
+    const v = validateMarket(barsVarying(12), quote(4400), {
+      reference_mids: [4400, 4600],
+    });
+    expect(v.reasons).toContain('feed_divergent');
+    expect(v.ok).toBe(false);
+  });
+
+  it('passes when reference mids agree with quote', () => {
+    const mid = 4400 + 11 * 0.5;
+    const v = validateMarket(barsVarying(12), quote(mid), {
+      reference_mids: [mid, mid + 0.5, mid - 0.4],
+    });
+    expect(v.reasons).not.toContain('feed_divergent');
+    expect(v.ok).toBe(true);
+  });
+
+  it('ignores empty reference_mids (single-source path unchanged)', () => {
+    const v = validateMarket(barsVarying(12), quote(4400 + 11 * 0.5), {
+      reference_mids: [],
+    });
+    expect(v.reasons).not.toContain('feed_divergent');
+    expect(v.ok).toBe(true);
+  });
+
+  it('assessFeedDivergence marks DIVERGENT on wide broker vs public span', async () => {
+    const { assessFeedDivergence } = await import('../marketData.js');
+    const d = assessFeedDivergence(4400, [4600, 4610]);
+    expect(d.agreement).toBe('DIVERGENT');
+    expect(d.contributing).toBeGreaterThanOrEqual(2);
+  });
 });

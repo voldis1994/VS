@@ -3,6 +3,7 @@
  * First stages of the MASTER pipeline — reject garbage before analysis.
  */
 import type { Bar, Quote } from './types.js';
+import { fusePriceMids } from '../services/publicInternetFeeds.js';
 
 export type MarketValidation = {
   ok: boolean;
@@ -14,6 +15,40 @@ export type MarketValidation = {
 
 function finite(n: unknown): n is number {
   return typeof n === 'number' && Number.isFinite(n);
+}
+
+/**
+ * READER-style multi-feed agreement — broker mid vs public consensus.
+ * Does not drop the broker as an "outlier" (that would hide divergence).
+ */
+export function assessFeedDivergence(
+  brokerMid: number,
+  referenceMids: number[],
+  opts?: { mixedPublic?: boolean }
+): {
+  agreement: 'STRONG' | 'OK' | 'DIVERGENT' | 'INSUFFICIENT' | 'NONE';
+  span: number;
+  contributing: number;
+} {
+  const refs = referenceMids.filter(finite);
+  if (!finite(brokerMid) || refs.length === 0) {
+    return { agreement: 'NONE', span: 0, contributing: 0 };
+  }
+  const fused = fusePriceMids(refs, {
+    mixedPublic: opts?.mixedPublic !== false,
+  });
+  if (fused.mid == null || !Number.isFinite(fused.mid)) {
+    return { agreement: 'INSUFFICIENT', span: 0, contributing: refs.length };
+  }
+  const span = Math.abs(brokerMid - fused.mid);
+  const rel = span / Math.max(Math.abs(fused.mid), 1e-9);
+  const divergeAt = opts?.mixedPublic !== false ? 0.015 : 0.005;
+  const contributing = refs.length + 1;
+  let agreement: 'STRONG' | 'OK' | 'DIVERGENT' | 'INSUFFICIENT' | 'NONE' = 'OK';
+  if (refs.length < 1) agreement = 'INSUFFICIENT';
+  else if (rel < 0.0005) agreement = 'STRONG';
+  else if (rel > divergeAt) agreement = 'DIVERGENT';
+  return { agreement, span, contributing };
 }
 
 /** Round price to broker Digits (Reader / Check- parity). */
@@ -106,7 +141,14 @@ export function normalizeQuote(q: Quote): Quote | null {
 export function validateMarket(
   rawBars: Bar[],
   rawQuote: Quote,
-  opts?: { min_bars?: number; stale_ms?: number; max_spread_abs?: number; now_ms?: number }
+  opts?: {
+    min_bars?: number;
+    stale_ms?: number;
+    max_spread_abs?: number;
+    now_ms?: number;
+    /** Public / secondary mids for READER-style divergence gate */
+    reference_mids?: number[] | null;
+  }
 ): MarketValidation {
   const reasons: string[] = [];
   const min_bars = opts?.min_bars ?? 5;
@@ -129,6 +171,13 @@ export function validateMarket(
       const drift = Math.abs(last.close - quote.mid) / Math.max(quote.mid, 1e-9);
       if (drift > 0.05) reasons.push('quote_bar_desync');
     }
+    // Multi-source honesty (Orbit/READER) — block entries when feeds disagree
+    const feed = assessFeedDivergence(quote.mid, opts?.reference_mids || [], {
+      mixedPublic: true,
+    });
+    if (feed.agreement === 'DIVERGENT' && feed.contributing >= 2) {
+      reasons.push('feed_divergent');
+    }
   }
 
   // Duplicate / flat tape detection
@@ -145,16 +194,19 @@ export function validateMarket(
   if (reasons.includes('spread_insane')) quality -= 0.2;
   if (reasons.includes('quote_bar_desync')) quality -= 0.15;
   if (reasons.includes('flat_tape')) quality -= 0.35;
+  if (reasons.includes('feed_divergent')) quality -= 0.45;
   quality = Math.max(0, Math.min(1, quality));
 
   // Flat public tape must not trade — soft −0.1 still left entries open on dead mids
   // Stale quote must hard-fail so Stage·validate matches DATA_STALE / Quote card
+  // Divergent multi-feed must hard-fail (READER Orbit honesty)
   const hardFail =
     reasons.includes('insufficient_bars') ||
     reasons.includes('invalid_quote') ||
     reasons.includes('spread_insane') ||
     reasons.includes('flat_tape') ||
-    reasons.includes('stale_quote');
+    reasons.includes('stale_quote') ||
+    reasons.includes('feed_divergent');
 
   return {
     ok: !hardFail && quality >= 0.35,

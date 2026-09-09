@@ -7,6 +7,7 @@
  */
 import {
   epicToYahooSymbol,
+  fusePriceMids,
   readAllPublicFeeds,
   type PublicFeedRead,
 } from '../services/publicInternetFeeds.js';
@@ -17,6 +18,10 @@ export type LiveMarketSnapshot = {
   quote: Quote | null;
   sources: PublicFeedRead[];
   contributing: number;
+  /** Finite public mids used for fusion / divergence gates */
+  mids: number[];
+  agreement: 'STRONG' | 'OK' | 'DIVERGENT' | 'INSUFFICIENT' | 'NONE';
+  span: number;
   detail: string;
 };
 
@@ -30,13 +35,16 @@ export async function fetchLiveMarket(epic = 'GOLD'): Promise<LiveMarketSnapshot
       quote: null,
       sources,
       contributing: 0,
+      mids: [],
+      agreement: 'NONE',
+      span: 0,
       detail: sources.map((s) => `${s.sender_id}:${s.detail || 'fail'}`).join('; ') || 'no_feeds',
     };
   }
 
   const mids = okReads.map((s) => s.mid!);
-  mids.sort((a, b) => a - b);
-  const mid = mids[Math.floor(mids.length / 2)]!;
+  const fused = fusePriceMids(mids, { mixedPublic: true });
+  const mid = fused.mid ?? mids[Math.floor(mids.length / 2)]!;
 
   // Prefer a source that already has bid/ask; else synthesize tight spread
   const withBa = okReads.find((s) => s.bid != null && s.ask != null);
@@ -52,7 +60,10 @@ export async function fetchLiveMarket(epic = 'GOLD'): Promise<LiveMarketSnapshot
     ok: true,
     quote: { bid, ask, mid, spread, ts_ms: Date.now() },
     sources,
-    contributing: okReads.length,
+    contributing: fused.contributing || okReads.length,
+    mids,
+    agreement: fused.agreement,
+    span: fused.span,
     detail: okReads.map((s) => s.sender_id).join('+'),
   };
 }
